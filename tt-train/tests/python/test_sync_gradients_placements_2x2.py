@@ -2,15 +2,19 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""test_sync_gradients_placements.py on a ``[2, 2]`` mesh: DP x TP and HSDP, where a parameter is replicated on one
-data axis and sharded on the other. Each class opens its ``[2, 2]`` through the conftest's ``fresh_device_mesh`` with
-the bundled descriptor, like ``test_ccl_topology.py``, and skips on a host with fewer than four chips."""
+"""test_sync_gradients_placements.py on a ``[2, 2]`` mesh: DP x TP, FSDP x TP and HSDP, where a parameter is
+replicated on one data axis and sharded on the other. Each class opens its ``[2, 2]`` through the conftest's
+``fresh_device_mesh`` with the bundled descriptor, like ``test_ccl_topology.py``, and skips on a host with fewer than
+four chips."""
 
 from __future__ import annotations
+
+import re
 
 import numpy as np
 import pytest
 
+import ttnn
 import ttml
 from sync_gradients_placements_common import (
     DIM,
@@ -27,7 +31,11 @@ from sync_gradients_placements_common import (
     _shards,
     is_sharded_on_axis,
 )
-from tp_block import TPBlock
+from tp_block import TPBlock, gather_like
+from ttml.models import RunnerType
+from ttml.models.deepseek import DeepSeek, DeepSeekConfig
+from ttml.models.deepseek.transformer import DeepSeekMLP
+from ttml.modules import LoraConfig, LoraModel
 
 pytestmark = [
     pytest.mark.requires_device,
@@ -37,9 +45,9 @@ pytestmark = [
 
 
 @pytest.fixture(scope="module")
-def dp_tp_mesh(fresh_device_mesh):
-    """``[2, 2]`` with axes ``("dp", "tp")``."""
-    with fresh_device_mesh((2, 2), ("dp", "tp"), what="DP x TP placements tests", require_mgd=True) as mesh:
+def fsdp_tp_mesh(fresh_device_mesh):
+    """``[2, 2]`` with axes ``("fsdp", "tp")``."""
+    with fresh_device_mesh((2, 2), ("fsdp", "tp"), what="FSDP x TP placements tests", require_mgd=True) as mesh:
         yield mesh
 
 
@@ -77,6 +85,179 @@ class TestDPxTP:
             if name.endswith(TP_SHARDED_SUFFIXES):
                 assert is_sharded_on_axis(grad, tp), f"{name}: the TP shard did not survive the dp all_reduce"
             _assert_mean_over_axis(before[name], _shards(grad), dp_tp_mesh.shape, dp, name)
+
+
+# --- MoE experts on dp, [2, 2] ("dp", "tp") ----------------------------------------------------------------------
+
+MOE_EXPERTS, MOE_SEQ_LEN, MOE_VOCAB = 4, 64, 128
+# Relative Frobenius error. bf16 rounding measured at most 0.012; MoE gradients a factor dp off score about 1.
+MOE_MAX_REL_ERROR = 0.04
+_EP_EXPERT = re.compile(r"(?P<ffn>.*/ffn)/w_(?P<kind>gate|up|down)_(?P<local>\d+)$")
+_DENSE_LINEAR = {"gate": "w1", "up": "w3", "down": "w2"}
+
+
+def _deepseek(moe_type: str, moe_axis_name: str | None) -> DeepSeek:
+    return DeepSeek(
+        DeepSeekConfig(
+            vocab_size=MOE_VOCAB,
+            dim=128,
+            inter_dim=256,
+            moe_inter_dim=64,
+            n_layers=2,
+            n_dense_layers=1,
+            n_heads=4,
+            n_routed_experts=MOE_EXPERTS,
+            n_shared_experts=1,
+            n_activated_experts=MOE_EXPERTS,
+            n_expert_groups=1,
+            n_limited_groups=1,
+            score_func="softmax",
+            route_scale=1.0,
+            moe_type=moe_type,
+            q_lora_rank=0,
+            kv_lora_rank=64,
+            qk_nope_head_dim=32,
+            qk_rope_head_dim=32,
+            v_head_dim=32,
+            max_seq_len=MOE_SEQ_LEN,
+            runner_type=RunnerType.Default,
+            moe_axis_name=moe_axis_name,
+        )
+    )
+
+
+def _from_dense(dense: DeepSeek, name: str, read, ep_size: int) -> np.ndarray:
+    """``read`` of the dense parameters that expert-parallel parameter ``name`` is made of, in rank order."""
+    sources = dense.parameters()
+    match = _EP_EXPERT.match(name)
+    if match is None:
+        return read(sources[name])
+    linear, local = _DENSE_LINEAR[match["kind"]], int(match["local"])
+    experts = range(local, MOE_EXPERTS, MOE_EXPERTS // ep_size)
+    return np.concatenate([read(sources[f"{match['ffn']}/experts/{e}/{linear}/weight"]) for e in experts])
+
+
+def _synced_step(model: DeepSeek, ids: np.ndarray, targets: np.ndarray, mapper) -> None:
+    model.train()
+    ids = ttml.autograd.Tensor.from_numpy(ids, ttnn.Layout.ROW_MAJOR, ttnn.DataType.UINT32, mapper)
+    targets = ttml.autograd.Tensor.from_numpy(targets, ttnn.Layout.ROW_MAJOR, ttnn.DataType.UINT32, mapper)
+    ttml.ops.loss.cross_entropy_loss(model(ids, None), targets).backward(False)
+    ttml.autograd.AutoContext.get_instance().reset_graph()
+    ttml.sync_gradients(model.parameters())
+
+
+class TestExpertParallelMoE:
+    def test_gradients_match_the_dense_moe(self, dp_tp_mesh):
+        dp = ep = dp_tp_mesh.axis_size("dp")
+        ttml.manual_seed(0)
+        dense = _deepseek("dense", None)
+        model = _deepseek("sparse_ep", "dp")
+        params = model.parameters()
+        for name, param in params.items():
+            mapper = ttml.Sharding.from_tensor(param).derive_mapper()
+            ttml.autograd.assign_numpy(
+                param, _from_dense(dense, name, lambda t: gather_like(t.get_value(NATIVE), t), ep), mapper=mapper
+            )
+        rng = np.random.default_rng(7)
+        ids = rng.integers(0, MOE_VOCAB, (dp, 1, 1, MOE_SEQ_LEN)).astype(np.uint32)
+        targets = rng.integers(0, MOE_VOCAB, (dp, MOE_SEQ_LEN)).astype(np.uint32)
+        _synced_step(dense, ids, targets, None)
+        _synced_step(model, ids, targets, dp_tp_mesh.axis_mapper("dp", tdim=0))
+
+        moe = [name for name in params if "/ffn/" in name and "/blocks/1/" in name]
+        assert any(_EP_EXPERT.match(name) for name in moe) and any("shared_experts" in name for name in moe), moe
+        errors = {}
+        for name, param in params.items():
+            expected = _from_dense(dense, name, lambda t: gather_like(t.get_grad(), t), ep)
+            scale = np.linalg.norm(expected)
+            assert scale > 0, f"{name}: zero gradient, agreement would prove nothing"
+            errors[name] = np.linalg.norm(gather_like(param.get_grad(), param) - expected) / scale
+        worst = sorted(errors.items(), key=lambda item: -item[1])[:5]
+        assert worst[0][1] <= MOE_MAX_REL_ERROR, f"relative errors, worst first: {worst}"
+
+
+# --- FSDP x TP on [2, 2] ("fsdp", "tp") --------------------------------------------------------------------------
+
+
+def _lora_block():
+    """LoRA on a TPBlock's column- and row-parallel linears. The column-parallel lora_A is replicated on "tp" and its
+    gradient partial there, rank 32 leaves FSDP shards that end inside a tile, and the frozen base weights get no
+    gradient but must be resharded all the same. lora_B starts random: its zero init would leave lora_A no gradient."""
+    model = LoraModel(TPBlock(DIM), LoraConfig(rank=32, target_modules=["up", "down"]))
+    for name, t in model.parameters().items():
+        if name.endswith("lora_B"):
+            sharding = ttml.Sharding.from_tensor(t)
+            values = np.random.default_rng(1).standard_normal(sharding.global_shape, dtype=np.float32)
+            ttml.autograd.assign_numpy(t, values, mapper=sharding.derive_mapper())
+    return model
+
+
+# Each block, and the trainable parameters FSDP leaves whole: "tp" took their only dim larger than one.
+BLOCKS = {
+    "linears": (lambda: TPBlock(DIM), ("up/bias",)),
+    "lora": (_lora_block, ()),
+    "fused_swiglu": (lambda: DeepSeekMLP(DIM, 2 * DIM, tp_axis_name="tp"), ()),
+}
+STAGES = ("weights", "step 1 gradient", "step 2 gradient", "update")
+# Measured with and without FSDP: the linears and the fused SwiGLU agree bit for bit, LoRA within 4e-4 (relative
+# Frobenius error). At this rate a stale gather would score 0.14 (SwiGLU) to 0.91 (LoRA) at step 2.
+FSDP_TP_LR = 10.0
+FSDP_TP_TOL = 0.005
+
+
+def _train(model, x, weighting) -> list[dict]:
+    """Two SGD steps on ``x``."""
+    params = model.parameters()
+    trainable = {name: t for name, t in params.items() if t.get_requires_grad()}
+    opt = ttml.optimizers.SGD(params, ttml.optimizers.SGDConfig.make(FSDP_TP_LR, 0.0, 0.0, 0.0, False))
+    weights = {name: gather_like(t.get_value(NATIVE), t) for name, t in trainable.items()}
+    stages = [weights]
+    for _ in range(2):
+        opt.zero_grad()
+        ttml.ops.unary.mean(model(x) * weighting).backward(False)
+        ttml.autograd.AutoContext.get_instance().reset_graph()
+        ttml.sync_gradients(params)
+        stages.append({name: gather_like(t.get_grad(), t) for name, t in trainable.items()})
+        opt.step()
+    stages.append({name: gather_like(t.get_value(NATIVE), t) - weights[name] for name, t in trainable.items()})
+    return stages
+
+
+def _relative_error(actual: dict, expected: dict) -> float:
+    """Over all parameters at once. Above some r, it puts at least one parameter's own relative error above r."""
+    error = sum(np.sum((actual[n] - expected[n]) ** 2) for n in expected)
+    return float(np.sqrt(error / sum(np.sum(e**2) for e in expected.values())))
+
+
+class TestFSDPxTP:
+    @pytest.mark.parametrize("block", BLOCKS)
+    def test_training_matches_the_block_without_fsdp(self, fsdp_tp_mesh, block):
+        make, left_whole = BLOCKS[block]
+        fsdp = fsdp_tp_mesh.axis_index("fsdp")
+        shape, mapper = (fsdp_tp_mesh.axis_size("fsdp"), 1, DIM, DIM), fsdp_tp_mesh.axis_mapper("fsdp", tdim=0)
+        x, weighting = _input(shape, mapper, scale=1.0), _input(shape, mapper, seed=1, scale=1.0)
+        runs = []
+        for use_fsdp in (False, True):
+            ttml.common.utils.set_seed(0)
+            model = make()
+            if use_fsdp:
+                ttml.fsdp.fully_shard(model)
+                trainable = {name: t for name, t in model.parameters().items() if t.get_requires_grad()}
+                whole = [name for name, t in trainable.items() if ttml.Sharding.from_tensor(t).shard_dim(fsdp) is None]
+                assert whole == [name for name in trainable if name.endswith(left_whole)], "FSDP left these whole"
+            runs.append(_train(model, x, weighting))
+
+        reference, sharded = runs
+        # A second forward on stale shards repeats step 1's gradients; this is the error they would score at step 2.
+        stale = _relative_error(reference[1], reference[2])
+        assert stale > 10 * FSDP_TP_TOL, f"step 1's gradients are within {stale:.3g} of step 2's: a stale gather passes"
+        for stage, expected, actual in zip(STAGES, reference, sharded):
+            assert actual.keys() == expected.keys(), stage
+            for name, e in expected.items():
+                scale = np.linalg.norm(e)
+                assert scale > 0 or stage == "weights", f"{stage} of {name}: all zero, agreement would prove nothing"
+                error = np.linalg.norm(actual[name] - e)
+                assert error <= FSDP_TP_TOL * scale, f"{stage} of {name}: relative error {error / scale:.3g}"
 
 
 # --- HSDP on [2, 2] ("dp", "fsdp") ------------------------------------------------------------------------------

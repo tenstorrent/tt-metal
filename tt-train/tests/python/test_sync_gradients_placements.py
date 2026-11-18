@@ -20,7 +20,7 @@ import pytest
 
 import ttnn
 import ttml
-from ttml.modules import LinearLayer
+from ttml.modules import ColumnParallelLinear, LinearLayer, RowParallelLinear
 from sync_gradients_placements_common import (
     DIM,
     NATIVE,
@@ -95,7 +95,7 @@ class TestTP:
         forged = _input((1, 1, DIM, DIM)).get_value(NATIVE)
         coords = list(forged.tensor_topology().mesh_coords())
         forged.update_tensor_topology(ttnn.TensorTopology(ttnn.MeshShape([1]), [ttnn.PlacementShard(0)], coords[:1]))
-        with expect_error(RuntimeError, "cannot tell whether the tensor is sharded"):
+        with expect_error(RuntimeError, "cannot read the tensor's placement per mesh axis"):
             is_sharded_on_axis(forged, tp)
 
     def test_constant_inits_are_labelled_per_axis(self, tp_mesh):
@@ -115,6 +115,30 @@ class TestTP:
                 np.testing.assert_array_equal(
                     shard, np.full((1, 1, 1, DIM), value, dtype=shard.dtype), err_msg=f"{name}: device {device}"
                 )
+
+    @pytest.mark.parametrize("fill", [ttml.init.zeros_, ttml.init.normal_], ids=["zeros_", "normal_"])
+    def test_in_place_inits_keep_a_sharded_weight_sharded(self, tp_mesh, fill):
+        up = ColumnParallelLinear(DIM, DIM, has_bias=False)
+        down = RowParallelLinear(DIM, DIM, has_bias=False)
+        before = [str(p) for p in _placements(up.weight.tensor.get_value(NATIVE))]
+        fill(up.weight)
+        value = up.weight.tensor.get_value(NATIVE)
+        assert [str(p) for p in _placements(value)] == before
+        if fill is ttml.init.normal_:
+            first, second = _shards(value)
+            assert not np.array_equal(first, second), "both devices hold the same slice"
+        ttml.ops.unary.mean(down(up(_input((1, 1, DIM, DIM))))).backward(False)
+        ttml.autograd.AutoContext.get_instance().reset_graph()
+
+    @pytest.mark.parametrize("composite", [False, True], ids=["fused", "composite"])
+    def test_swiglu_refuses_dropout_on_a_row_parallel_w2(self, tp_mesh, expect_error, monkeypatch, composite):
+        if composite:
+            monkeypatch.setenv("TTML_SWIGLU_FORCE_COMPOSITE", "1")
+        w1, w3 = (ColumnParallelLinear(DIM, 2 * DIM, has_bias=False) for _ in range(2))
+        w2 = RowParallelLinear(2 * DIM, DIM, has_bias=False)
+        x = _input((1, 1, 32, DIM))
+        with expect_error(RuntimeError, "swiglu cannot apply dropout when w2 is sharded along its input features"):
+            ttml.ops.swiglu.swiglu(x, w1.weight.tensor, w2.weight.tensor, w3.weight.tensor, 0.1)
 
     def test_synchronize_over_tp_leaves_the_tp_shards_alone(self, tp_mesh):
         """``synchronize_gradients(params, [tp])`` averages only the gradients of parameters replicated on tp; a
@@ -197,9 +221,8 @@ class TestFSDP:
             ttnn.TensorTopology(ttnn.MeshShape([len(coords)]), [ttnn.PlacementShard(2)], coords)
         )
         assert len(_placements(weight)) == 1, "precondition: collapsed 1-D label"
-        for axis in range(len(mesh_shape)):
-            fsdp_reading = fsdp_module._already_fsdp_sharded(_placements(weight), axis, mesh_shape)
-            assert fsdp_reading == is_sharded_on_axis(weight, axis), f"mesh axis {axis}"
+        reading = fsdp_module._param_placements(linear.weight)
+        assert [isinstance(p, ttnn.PlacementShard) for p in reading] == [size > 1 for size in mesh_shape], reading
         with expect_error(RuntimeError, "already sharded on mesh axis 'fsdp'"):
             ttml.fsdp.fully_shard(linear)
 

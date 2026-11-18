@@ -504,6 +504,18 @@ class TestMeshPartitionTopology:
         out.backward(False)
         return x.get_grad()
 
+    @pytest.mark.parametrize("shape,dim", [((1, 1, 64, 48), 3), ((1, 1, 48, 64), 2)], ids=["columns", "rows"])
+    def test_part_tile_shares_hold_their_own_elements(self, shape, dim):
+        """ttnn cuts a TILE share that ends inside a tile wrongly (#64626), so the wrapper cuts it in ROW_MAJOR."""
+        tensor = _replicated_tensor(shape, seed=43)
+        data = _compose_by_label(tensor)
+
+        result = ttml.core.distributed.mesh_partition(tensor, dim, cluster_axis=CLUSTER_AXIS)
+
+        assert result.layout == ttnn.Layout.TILE
+        _assert_shard(result, CLUSTER_AXIS, dim, "mesh_partition output")
+        assert np.array_equal(_compose_by_label(result), data)
+
     def test_replicated_input_becomes_sharded_on_the_axis(self):
         grad = _replicated_tensor((1, 1, 64, 128), seed=40)
         data = _compose_by_label(grad)

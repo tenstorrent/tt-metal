@@ -202,7 +202,6 @@ def _build_grad_mapping_distributed(config, root_prefix, tie_word_embeddings):
       "concat_2"       – ColumnParallel weight, sharded dim 2
       "concat_3"       – ColumnParallel bias / RowParallel weight, sharded dim 3
       "replicated"     – identical on all devices, take first
-      "sum_replicated" – replicated weight with partial per-device grads (QK-norm)
     """
     mapping = {}
     inv_transforms = {}
@@ -280,11 +279,11 @@ def _build_grad_mapping_distributed(config, root_prefix, tie_word_embeddings):
 
         mapping[f"{hp}.self_attn.q_norm.weight"] = f"{tp}/self_attn/q_norm/weight"
         inv_transforms[f"{hp}.self_attn.q_norm.weight"] = ("repermute_norm",)
-        gs[f"{hp}.self_attn.q_norm.weight"] = "sum_replicated"
+        gs[f"{hp}.self_attn.q_norm.weight"] = "replicated"  # summed across tp by ttml.sync_gradients
 
         mapping[f"{hp}.self_attn.k_norm.weight"] = f"{tp}/self_attn/k_norm/weight"
         inv_transforms[f"{hp}.self_attn.k_norm.weight"] = ("repermute_norm",)
-        gs[f"{hp}.self_attn.k_norm.weight"] = "sum_replicated"
+        gs[f"{hp}.self_attn.k_norm.weight"] = "replicated"
 
         mapping[f"{hp}.input_layernorm.weight"] = f"{tp}/input_layernorm/weight"
         gs[f"{hp}.input_layernorm.weight"] = "replicated"
@@ -331,13 +330,6 @@ def _extract_grad_distributed(tensor, device, strategy, dp_size=1):
         grad = ttnn.to_torch(grad_tt, mesh_composer=composer).to(torch.float32)
         if dp_size > 1:
             grad = grad[:, :, :, : grad.shape[3] // dp_size]
-        return grad
-    elif strategy == "sum_replicated":
-        composer = ttml.core.distributed.concat_mesh_to_tensor_composer(device, 0)
-        grad = ttnn.to_torch(grad_tt, mesh_composer=composer).to(torch.float32)
-        grad = grad.sum(dim=0, keepdim=True)
-        if dp_size > 1:
-            grad = grad / dp_size
         return grad
     else:  # "replicated" – identical on all devices, take first
         composer = ttml.core.distributed.concat_mesh_to_tensor_composer(device, 0)

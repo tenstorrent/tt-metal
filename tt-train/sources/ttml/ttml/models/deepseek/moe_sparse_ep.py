@@ -35,7 +35,7 @@ import ttnn
 import ttml
 
 from .moe import MoE
-from .autograd_ops import to_layout
+from .autograd_ops import ScaleGrad, to_layout
 
 
 class SparseMoEEP(MoE):
@@ -77,6 +77,10 @@ class SparseMoEEP(MoE):
         # across it — all_gather the full batch so every chip's local experts
         # see all tokens (re-scattered at the end). No-op otherwise: EP normally
         # sits on an axis independent of DP, where the input is already replicated.
+        # Every consumer of the gathered x adds up its partial gradient across the
+        # axis itself (the broadcasts below), so the gradient arriving here is
+        # whole and the same on every chip: REPLICATED takes each chip's slice of
+        # it, where SHARDED would sum the copies.
         mesh = ttml.maybe_mesh()
         dp_gather = (
             self.ep_size > 1
@@ -86,7 +90,13 @@ class SparseMoEEP(MoE):
             and mesh.axis_index("dp") == self.cluster_axis
         )
         if dp_gather:
-            x = ttml.ops.distributed.all_gather(x, 0, self.cluster_axis, ttml.ops.distributed.GradOutputType.SHARDED)
+            # The gather runs this MoE on every dp rank's tokens, so the gradients of its experts, shared experts and
+            # gate are those of the sum of all ranks' losses: dp times the mean that sync_gradients gives every other
+            # parameter. In backward, the ScaleGrad after the closing scatter divides the gradient by dp and the one
+            # here multiplies it back, so these parameters get the mean and x gets its own rank's gradient. Both sit on
+            # this rank's side of the collectives, so they scale only its own rows. (ep_size is the dp size here.)
+            x = ScaleGrad.apply(x, float(self.ep_size))
+            x = ttml.ops.distributed.all_gather(x, 0, self.cluster_axis, ttml.ops.distributed.GradOutputType.REPLICATED)
 
         B, _, S, _dim = list(x.get_value().shape)
         x = self._memory_snapshot(x, "START")
@@ -153,6 +163,25 @@ class SparseMoEEP(MoE):
         output = to_layout(output_rm, ttnn.TILE_LAYOUT)
         output = self._memory_snapshot(output, "AFTER_UNGROUP")
 
+        # Shared experts: MoE.__init__ splits them across the EP axis like a
+        # tensor-parallel MLP, so on x_bc they too give a partial output and a
+        # partial input gradient. Added to the routed partial here, both are
+        # summed by the all_reduce below and by x_bc's broadcast, one collective
+        # each way instead of the shared MLP's own pair.
+        if self.shared_experts is not None:
+            x_shared = self._memory_snapshot(x_bc, "BEFORE_SHARED")
+            shared_out = self.shared_experts.partial_forward(x_shared)
+            shared_out = self._memory_snapshot(shared_out, "AFTER_SHARED")
+            pre_add_output = output
+            output = ttml.ops.binary.add(pre_add_output, shared_out)
+            # binary.add's backward is just d_a = d_b = d_out (no read of inputs),
+            # and neither parent reads its output in backward (the layout
+            # conversion of the routed partial, or the fused SwiGLU, which saves
+            # what its backward needs). These two tensor values are not needed
+            # downstream — release them now.
+            pre_add_output.get_value().deallocate(force=True)
+            shared_out.get_value().deallocate(force=True)
+
         # ── all_reduce across EP axis to combine partial sums ──
         # noop_backward=True: each chip's partial contributes equally to the
         # replicated output, so dL/d(partial_chip) = dL/d(output) flows back
@@ -162,28 +191,12 @@ class SparseMoEEP(MoE):
             output = ttml.ops.distributed.all_reduce(output, noop_backward=True, cluster_axis=self.cluster_axis)
             output = self._memory_snapshot(output, "AFTER_ALL_REDUCE")
 
-        # Shared experts: not EP-sharded by default — they replicate work and
-        # don't need an all_reduce. If a downstream change makes them EP/TP,
-        # plug in the appropriate collective.
-        if self.shared_experts is not None:
-            x_shared = self._memory_snapshot(x, "BEFORE_SHARED")
-            shared_out = self.shared_experts(x_shared)
-            shared_out = self._memory_snapshot(shared_out, "AFTER_SHARED")
-            pre_add_output = output
-            output = ttml.ops.binary.add(pre_add_output, shared_out)
-            # binary.add's backward is just d_a = d_b = d_out (no read of inputs);
-            # the all_reduce above has noop_backward (identity), so its forward
-            # output is never read in bwd either; shared_out's parent linear (w2)
-            # also doesn't read shared_out itself for its weight grad (it reads w2's
-            # input, which is saved separately). All three sources confirm these
-            # two tensor values are not needed downstream — release them now.
-            pre_add_output.get_value().deallocate(force=True)
-            shared_out.get_value().deallocate(force=True)
-
         # Re-shard the (replicated, full-batch) output back onto the DP axis so
-        # downstream layers stay data-parallel. Mirror of the entry all_gather.
+        # downstream layers stay data-parallel. Mirror of the entry all_gather;
+        # the ScaleGrad is explained there.
         if dp_gather:
             output = ttml.ops.distributed.scatter(output, 0, self.cluster_axis)
+            output = ScaleGrad.apply(output, 1.0 / self.ep_size)
 
         output = self._memory_snapshot(output, "END")
         return output

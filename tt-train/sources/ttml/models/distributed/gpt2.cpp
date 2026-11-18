@@ -6,6 +6,7 @@
 
 #include "autograd/graph_utils.hpp"
 #include "autograd/tensor.hpp"
+#include "core/distributed/distributed.hpp"
 #include "core/scoped.hpp"
 #include "core/tt_tensor_utils.hpp"
 #include "init/tensor_initializers.hpp"
@@ -27,14 +28,17 @@ void weights_initialization(DistributedTransformer& model) {
     for (auto& [name, tensor_ptr] : params) {
         const auto& tensor = tensor_ptr->get_value();
         if (name.find("weight") != std::string::npos) {
-            auto tensor_shape = tensor.logical_shape();
             auto* device = &autograd::ctx().get_device();
-            auto num_devices = static_cast<uint32_t>(device->num_devices());
-            tensor_shape[0] *= num_devices;
-            auto weight_xtensor = init::normal_init(tensor_shape, {0.F, 0.02F});
-            const auto mapper = ttnn::distributed::shard_tensor_to_mesh_mapper(*device, 0);
+            auto placements = core::distributed::placements_per_axis(tensor);
+            auto shape = tensor.logical_shape();
+            for (size_t axis = 0; axis < placements.size(); ++axis) {
+                if (const auto dim = core::distributed::shard_dim(placements[axis], static_cast<int>(shape.rank()))) {
+                    shape[*dim] *= device->shape()[axis];
+                }
+            }
+            const auto mapper = ttnn::distributed::TensorToMesh::create(*device, {.placements = std::move(placements)});
             tensor_ptr->set_value(ttml::core::from_xtensor<float, ttnn::DataType::BFLOAT16>(
-                weight_xtensor, device, ttnn::Layout::TILE, mapper.get()));
+                init::normal_init(shape, {0.F, 0.02F}), device, ttnn::Layout::TILE, &mapper));
         } else if (name.find("bias") != std::string::npos) {
             init::constant_init(tensor_ptr, tensor.logical_shape(), 0.F);
         }
@@ -92,14 +96,10 @@ DistributedTransformer::DistributedTransformer(const TransformerConfig& config) 
                 ttml::modules::PositionalEmbeddingConfig{
                     .embedding_dim = embedding_dim,
                     .sequence_length = max_sequence_length,
-                    .dropout_prob = dropout_prob,
-                    .use_dropout_seed_per_device = false});
+                    .dropout_prob = dropout_prob});
         } else {
             return std::make_shared<ttml::modules::PositionalEmbedding>(ttml::modules::PositionalEmbeddingConfig{
-                .embedding_dim = embedding_dim,
-                .sequence_length = max_sequence_length,
-                .dropout_prob = dropout_prob,
-                .use_dropout_seed_per_device = false});
+                .embedding_dim = embedding_dim, .sequence_length = max_sequence_length, .dropout_prob = dropout_prob});
         }
     };
     pos_emb = create_positional_embedding();

@@ -40,7 +40,7 @@ autograd::AutocastTensor create_positional_embedding_tensor(uint32_t sequence_le
 
 PositionalEmbedding::PositionalEmbedding(const PositionalEmbeddingConfig& config) :
     m_sequence_length(config.sequence_length) {
-    m_dropout = std::make_shared<DropoutLayer>(config.dropout_prob, config.use_dropout_seed_per_device);
+    m_dropout = std::make_shared<DropoutLayer>(config.dropout_prob);
     m_positional_embedding = create_positional_embedding_tensor(config.sequence_length, config.embedding_dim);
 
     create_name("positional_embedding");
@@ -75,7 +75,7 @@ void TrainablePositionalEmbedding::initialize_tensors(uint32_t sequence_length, 
 
 TrainablePositionalEmbedding::TrainablePositionalEmbedding(const PositionalEmbeddingConfig& config) :
     m_sequence_length(config.sequence_length) {
-    m_dropout = std::make_shared<DropoutLayer>(config.dropout_prob, config.use_dropout_seed_per_device);
+    m_dropout = std::make_shared<DropoutLayer>(config.dropout_prob);
     initialize_tensors(config.sequence_length, config.embedding_dim);
 
     create_name("trainable_positional_embedding");

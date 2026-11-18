@@ -391,7 +391,8 @@ def _unwrap_tensor(tensor_or_param):
 def _fill_(tensor, init_fn):
     """Fill tensor with values from init_fn, in the dtype the tensor is stored in, and return tensor."""
     inner = _unwrap_tensor(tensor)
-    inner.assign(init_fn(inner.shape()))
+    sharding = ttml.Sharding.from_tensor(inner)
+    inner.assign(init_fn(sharding.global_shape, sharding.derive_mapper()))
     return tensor
 
 

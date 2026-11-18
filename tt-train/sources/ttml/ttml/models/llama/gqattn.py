@@ -13,14 +13,16 @@ import ttml
 from ttml.common.utils import scaled_dot_product_attention_auto
 from ttml.modules import AbstractModuleBase, LinearLayer, ColumnParallelLinear, RowParallelLinear, RunMode
 
+from ttml.parallel import TPStrategy
+
 
 class GroupedQueryAttention(AbstractModuleBase):
     """Grouped-query attention (GQA) with optional tensor-parallel linear layers.
 
     Under tensor parallelism the fused QKV projection uses ``ColumnParallelLinear``
     (output features sharded) with ``gather_output=False``, and the output projection
-    uses ``RowParallelLinear`` with ``input_is_parallel=True``. This avoids redundant
-    communication between the two matmuls.
+    uses ``RowParallelLinear``, which takes the heads sharded as they are. This avoids
+    redundant communication between the two matmuls.
 
     ``use_composite_sdpa`` selects ``scaled_dot_product_attention_composite`` for the
     forward without a KV cache; it also accepts non-broadcast masks such as ``(B, 1, S, S)``.
@@ -35,7 +37,7 @@ class GroupedQueryAttention(AbstractModuleBase):
         dropout: float,
         rope_params: ttml.ops.rope.RotaryEmbeddingParams,
         bias_linears: bool = False,
-        use_tp: bool = False,
+        tp_strategy: TPStrategy = TPStrategy.NONE,
         out_proj_init: Optional[Callable] = None,
         use_composite_sdpa: bool = False,
     ) -> None:
@@ -46,6 +48,9 @@ class GroupedQueryAttention(AbstractModuleBase):
                 "Embedding size must be divisible by the number of attention heads. "
                 f"Provided embedding_size={embedding_size}, num_heads={num_heads}"
             )
+
+        use_tp = tp_strategy.tensor_parallel
+        sequence_parallel = tp_strategy.sequence_parallel
 
         self.embedding_size = embedding_size
         self.dropout_prob = dropout
@@ -85,6 +90,7 @@ class GroupedQueryAttention(AbstractModuleBase):
                 has_bias=bias_linears,
                 bias_init=ttml.init.zeros(),
                 gather_output=False,
+                sequence_parallel=sequence_parallel,
                 axis_name="tp",
             )
             self.out_linear = RowParallelLinear(
@@ -93,7 +99,7 @@ class GroupedQueryAttention(AbstractModuleBase):
                 has_bias=bias_linears,
                 weight_init=out_proj_init,
                 bias_init=ttml.init.zeros(),
-                input_is_parallel=True,
+                sequence_parallel=sequence_parallel,
                 axis_name="tp",
             )
         else:
@@ -131,7 +137,6 @@ class GroupedQueryAttention(AbstractModuleBase):
 
         out = self.out_linear(attention)
 
-        # Apply dropout if in training mode (using RunMode from AbstractModuleBase)
         if self.get_run_mode() == RunMode.TRAIN and self.dropout_prob > 0.0:
             out = ttml.ops.dropout.dropout(out, self.dropout_prob)
 
@@ -179,7 +184,6 @@ class GroupedQueryAttention(AbstractModuleBase):
 
         out = self.out_linear(attention)
 
-        # Apply dropout if in training mode (using RunMode from AbstractModuleBase)
         if self.get_run_mode() == RunMode.TRAIN and self.dropout_prob > 0.0:
             out = ttml.ops.dropout.dropout(out, self.dropout_prob)
 

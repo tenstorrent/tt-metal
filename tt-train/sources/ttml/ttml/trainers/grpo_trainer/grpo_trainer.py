@@ -1551,7 +1551,7 @@ class GRPOTrainer:
           5. ``self._lr_scheduler.step()`` sets the next step's LR.
         """
         if self._batch_layout.fsdp_enabled:
-            ttml.sync_gradients(self.model.parameters(), axis_names=self._batch_layout.fsdp_sync_axes)
+            ttml.sync_gradients(self.model.parameters())
         elif self._batch_layout.ddp_context_enabled:
             # Parallelism-context DDP (Llama): a parallelism context
             # is initialized, so use its gradient sync. ``sync_gradients`` would
@@ -1565,7 +1565,7 @@ class GRPOTrainer:
             # primitive FSDP uses. The loss normalization divides by
             # ``grad_sync_world_size`` (= the "dp" axis size here), matched to
             # this reduction.
-            ttml.sync_gradients(self.model.parameters(), axis_names=("dp",))
+            ttml.sync_gradients(self.model.parameters())
 
         for cb in self.callbacks:
             self._time_callback(cb, "on_before_optimizer_step", self)

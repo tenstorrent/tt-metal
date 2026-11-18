@@ -9,7 +9,7 @@
 # Lazy + FSDP path (lazy_parameter_init=true, enable_fsdp=true): each lazy
 # parameter is allocated *already* FSDP-sharded — the full unsharded weight is
 # never present on device. This is required at this scale; the eager FSDP
-# code path would OOM during the host→device round-trip.
+# code path allocates every full weight on device before partitioning it, and OOMs.
 #
 # Mesh axis assignment (build_mesh: dp -> fsdp -> tp): with enable_fsdp +
 # enable_tp, mesh_shape [4, 8] -> axis 0 = "fsdp" (size 4), axis 1 = "tp"
@@ -37,8 +37,8 @@ training_config:
   gradient_accumulation_steps: 1
   # Required at 70B scale: lets fully_shard rewrite each lazy param's mapper
   # to include the FSDP shard placement, so materialize_module allocates
-  # weights already-sharded. Without this, the eager FSDP path host-roundtrips
-  # the *full* tensor and OOMs.
+  # weights already-sharded. Without this, the eager FSDP path allocates the
+  # *full* tensor on device before partitioning it, and OOMs.
   lazy_parameter_init: true
 
 device_config:

@@ -27,9 +27,9 @@ class TensorMetadata:
 
     ``mapper`` (optional ``ttnn.CppTensorToMesh``): the distribution plan used
     when ``materialize`` runs. Downstream consumers — notably
-    ``ttml.fsdp.fully_shard`` — can introspect the existing sharding via
-    ``mapper.config().placements`` and build a new combined mapper without
-    round-tripping the not-yet-allocated tensor through host. ``None`` means
+    ``ttml.fsdp.fully_shard`` — can read its placement on each mesh axis with
+    ``ttml.core.distributed.placements_per_axis(mapper.config())`` and build a
+    new combined mapper without allocating the tensor. ``None`` means
     "no explicit mapper; treat as fully replicated" (default replicate mapper
     is installed by :func:`ttml.materialize_module`).
     """
@@ -51,14 +51,13 @@ def replace_lazy_mapper(parameter: "Parameter", new_mapper: Any) -> None:
     Used by :func:`ttml.fsdp.fully_shard` to install an FSDP shard placement on
     a lazy parameter without materializing. Errors if ``parameter`` has already
     been materialized — by then the in-memory tensor has the old mapper baked in
-    and a host roundtrip is the only way to redistribute (use the eager FSDP
-    code path instead).
+    and has to be partitioned on device instead (the eager FSDP code path).
     """
     inner = parameter.peek_tensor()
     if not isinstance(inner, TensorMetadata):
         raise RuntimeError(
             "replace_lazy_mapper called on a materialized Parameter; only lazy "
-            "parameters can have their mapper rewritten without a host roundtrip."
+            "parameters can have their mapper rewritten, a materialized one is partitioned on device."
         )
     new_meta = replace(inner, mapper=new_mapper)
     object.__setattr__(parameter, "tensor", new_meta)

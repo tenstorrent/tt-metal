@@ -26,7 +26,7 @@ from ttml.common.utils import (
 from ttml.models.llama import Llama, load_from_safetensors
 from ttml.modules import LoraConfig, LoraModel
 
-from llama_config import PRETRAINED_HELP, fetch_pretrained, llama_config
+from llama_config import PRETRAINED_HELP, fetch_pretrained, llama_config, lora_dropout_on_mesh
 
 MemoryUsageTracker = ttml.core.utils.MemoryUsageTracker
 
@@ -222,6 +222,8 @@ def main():
         mode = "+".join(filter(None, ["DP" if use_ddp else "", "TP" if use_tp else ""]))
         print(f"{mode} enabled: mesh={dict(zip(mesh.axis_names, mesh.shape))}")
 
+    lora_dropout = lora_dropout_on_mesh(LORA_DROPOUT, use_ddp, use_tp)
+
     # ── Model ─────────────────────────────────────────────────────────────────
     yaml_config = None
     if args.model_config is not None:
@@ -253,7 +255,7 @@ def main():
         target_modules=LORA_TARGET_MODULES,
         is_bias_trainable=LORA_IS_BIAS_TRAINABLE,
         trainable_modules=LORA_TRAINABLE_MODULES,
-        lora_dropout=LORA_DROPOUT,
+        lora_dropout=lora_dropout,
     )
     model = LoraModel(model, lora_config)
 
@@ -342,8 +344,7 @@ def main():
 
         autograd_ctx.reset_graph()
 
-        if use_ddp:
-            ttml.sync_gradients(model.parameters())
+        ttml.sync_gradients(model.parameters())
 
         optimizer.step()
         step_ms = (time.perf_counter() - t0) * 1000

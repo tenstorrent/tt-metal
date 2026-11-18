@@ -109,7 +109,7 @@ def load_for_inference(
     """Restore `(model, tokenizer, model_cfg, step)` from a checkpoint. Used to seed inference mode."""
     header = read_header(path)
     model_cfg: ModelConfig = header["model_config"]
-    model = create_model(model_cfg, use_tp=False)
+    model = create_model(model_cfg)  # inference: no tensor parallelism (TPStrategy.NONE)
     load_checkpoint(path, model_params=model.parameters())  # "optimizer" group present in the file is skipped
     return model, header["tokenizer"], model_cfg, int(header["step"])
 

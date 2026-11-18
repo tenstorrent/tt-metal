@@ -11,6 +11,7 @@ from pathlib import Path
 from ttml.common.utils import round_up_to_tile
 from ttml.models import EmbeddingPlacement, RunnerType, WeightTyingType
 from ttml.models.llama import LlamaConfig, LlamaRopeScalingConfig
+from ttml.parallel import TPStrategy
 
 PRETRAINED_HELP = (
     "HuggingFace repo ID (e.g. TinyLlama/TinyLlama-1.1B-Chat-v1.0) or local directory holding its "
@@ -40,6 +41,15 @@ def fetch_pretrained(src: str) -> str:
     return path
 
 
+def lora_dropout_on_mesh(dropout: float, use_ddp: bool, use_tp: bool) -> float:
+    """``dropout``, or 0 under DP+TP: the column-parallel LoRA input is then replicated across tp and sharded across
+    dp, a layout ttml's dropout refuses (its copies need one mask and its shards different ones)."""
+    if use_ddp and use_tp and dropout > 0.0:
+        print(f"LoRA dropout {dropout} -> 0.0: dropout cannot mask DP+TP activations")
+        return 0.0
+    return dropout
+
+
 def llama_config(yaml_config: dict | None, pretrained_path: str | None, num_tokens: int, use_tp: bool) -> LlamaConfig:
     """Return the config of the model to fine-tune."""
     tc = (yaml_config or {}).get("transformer_config", {})
@@ -48,7 +58,7 @@ def llama_config(yaml_config: dict | None, pretrained_path: str | None, num_toke
         attention_dropout=tc.get("dropout_prob", 0.0),
         mlp_dropout=tc.get("dropout_prob", 0.0),
         runner_type=RunnerType.from_string(tc["runner_type"]) if "runner_type" in tc else RunnerType.Default,
-        use_tp=use_tp,
+        tp_strategy=TPStrategy.from_flags(use_tp),
         embedding_placement=EmbeddingPlacement.VocabParallel if use_tp else EmbeddingPlacement.Replicated,
     )
 

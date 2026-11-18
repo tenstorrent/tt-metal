@@ -61,6 +61,7 @@ from model_builders import (
     instantiate_model_from_config,
     parse_model_config,
 )
+from ttml.parallel import TPStrategy
 from callbacks import (
     AverageLossCallback,
     EpochCallback,
@@ -473,10 +474,13 @@ def run_training(
     if tokenizer is not None:
         model_cfg.vocab_size = tokenizer.vocab_size
 
+    # from_flags rejects enable_sp without enable_tp (sequence parallelism rides the tp axis).
+    tp_strategy = TPStrategy.from_flags(device_cfg.enable_tp, enable_sp=device_cfg.enable_sp)
+
     # Lazy alloc only helps when sharding, so default it on under FSDP (--no-lazy to disable).
     lazy_init = device_cfg.enable_fsdp and not args.no_lazy
     print("Building model...", flush=True)
-    model = instantiate_model_from_config(model_cfg, lazy_init=lazy_init, use_tp=device_cfg.enable_tp)
+    model = instantiate_model_from_config(model_cfg, lazy_init=lazy_init, tp_strategy=tp_strategy)
 
     flops_per_token = 0
     flops_fn = FLOPS_REGISTRY.get(model_cfg.model_type)
@@ -582,11 +586,7 @@ def run_training(
     )
 
     def _causal_lm_loss(logits, batch):
-        if mesh.has_axis("tp") and mesh.axis_size("tp") > 1:
-            return ttml.ops.distributed.vocab_parallel_cross_entropy_loss(
-                logits, batch.labels, cluster_axis=mesh.axis_index("tp"), reduce=ttml.ops.ReduceType.MEAN
-            )
-        return ttml.ops.loss.cross_entropy_loss(logits, batch.labels, ttml.ops.ReduceType.MEAN)
+        return ttml.parallel.cross_entropy_loss(logits, batch.labels, ttml.ops.ReduceType.MEAN)
 
     trainer = SFTTrainer(
         model=model,

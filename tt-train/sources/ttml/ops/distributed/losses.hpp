@@ -36,6 +36,7 @@ namespace ttml::ops::distributed {
 //   [B,1,S,1] for NONE — both expand against scaled_softmax [B,1,S,V/tp].
 //
 // logits  : [B, 1, S, local_V] bfloat16, sharded along vocab (last) dim across TP.
+//           The layout is read from the logits' label; any other is refused.
 // targets : [B, 1, S, 1] or [B, S] uint32, integer target indices in [0, full_V),
 //           replicated across TP devices within each DP group.
 // cluster_axis : mesh axis that logits are sharded across (TP axis).

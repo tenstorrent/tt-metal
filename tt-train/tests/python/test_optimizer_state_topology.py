@@ -20,9 +20,9 @@ device op; the composites are built from generic ``ttnn`` binary ops, whose outp
 labels, so they restore the parameter's topology once at the end of the step, over everything the step wrote.
 
 TP: ``TPBlock`` mixes replicated params with weights sharded on dims 2 and 3 and a sharded bias.
-FSDP: ``ttml.fsdp.fully_shard`` installs ``Shard(dim)`` on the ``"fsdp"`` axis of every managed parameter -- by a
-host roundtrip in the eager path, by rewriting the lazy mapper before ``materialize_module`` allocates in the lazy
-path -- and the optimizer is created afterwards. The FSDP hooks swap the gathered weight in for forward/backward and
+FSDP: ``ttml.fsdp.fully_shard`` installs ``Shard(dim)`` on the ``"fsdp"`` axis of every managed parameter -- by
+partitioning it on device in the eager path, by rewriting the lazy mapper before ``materialize_module`` allocates in the
+lazy path -- and the optimizer is created afterwards. The FSDP hooks swap the gathered weight in for forward/backward and
 the cached shard back out afterwards, so after a step the parameter is the shard again; a manual ``unshard()`` /
 ``reshard()`` cycle must likewise leave moments and parameters in agreement. FSDP+TP needs a distinct sharded axis
 for each, i.e. at least a ``[2, 2]`` mesh, and is not covered here.
@@ -96,10 +96,9 @@ def _placement_key(p) -> tuple:
 
 
 def _layout(tensor: ttml.autograd.Tensor) -> tuple:
-    """(placements, dist_shape) of a tensor's live topology, in a form that compares with ``==``."""
-    sharding = ttml.Sharding.from_tensor(tensor)
-    assert sharding.placements is not None, "a tensor on a [1, 2] mesh must report a topology"
-    return tuple(_placement_key(p) for p in sharding.placements), tuple(sharding.dist_shape)
+    """(placements, dist_shape) of a tensor's live topology label as spelled, in a form that compares with ``==``."""
+    topology = tensor.get_value(ttml.autograd.PreferredPrecision.NATIVE).tensor_topology()
+    return tuple(_placement_key(p) for p in topology.placements()), tuple(topology.distribution_shape())
 
 
 def _expected_full_shape(name: str) -> tuple:
@@ -331,7 +330,7 @@ class Model(AbstractModuleBase):
 
 
 def _build_fsdp_model(init: str) -> Model:
-    """``"eager"``: shard materialized params (host roundtrip). ``"lazy"``: rewrite the mappers of not-yet-allocated
+    """``"eager"``: partition materialized params on device. ``"lazy"``: rewrite the mappers of not-yet-allocated
     params so ``materialize_module`` allocates them already sharded."""
     if init == "eager":
         model = Model()

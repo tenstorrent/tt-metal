@@ -2,7 +2,7 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""A tensor's mesh layout: the ttnn composer/mapper for moving a (possibly sharded) tensor on/off the mesh."""
+"""A tensor's mesh layout: its placement per mesh axis, and the ttnn mapper/composer that move it on/off the mesh."""
 
 from __future__ import annotations
 
@@ -36,56 +36,95 @@ def _fatal_message(error: BaseException) -> str:
     return text.splitlines()[0] if text else str(error).splitlines()[0]
 
 
-class Sharding:
-    """A tensor's mesh layout (placements + distribution shape), read from its live topology."""
+def _placement_dim(placement, rank: int) -> int | None:
+    """The dim of a rank-``rank`` tensor that ``placement`` shards along, a negative one counted from the end, or None
+    for Replicate. A dim outside the rank is a stale label (ttnn #52331) and is refused, not wrapped onto a real dim."""
+    if not isinstance(placement, ttnn.PlacementShard):
+        return None
+    dim = placement.dim + rank if placement.dim < 0 else placement.dim
+    if not 0 <= dim < rank:
+        raise ValueError(f"a Shard({placement.dim}) label names no dim of a rank-{rank} tensor")
+    return dim
 
-    def __init__(self, placements: list, dist_shape: list[int]) -> None:
-        self._placements = placements
-        self._dist_shape = dist_shape
+
+def shard_dim(tensor: ttml.autograd.Tensor, axis: int) -> int | None:
+    """The tensor dim ``tensor`` is sharded along across mesh axis ``axis``, or None where it is replicated.
+
+    ``Sharding.from_tensor(tensor).shard_dim(axis)`` without building the whole layout, for checks run on every forward.
+    """
+    value = tensor.get_value(ttml.autograd.PreferredPrecision.NATIVE)
+    return _placement_dim(ttml.core.distributed.placements_per_axis(value)[axis], len(value.shape))
+
+
+class Sharding:
+    """A tensor's mesh layout, read off its label when made."""
+
+    def __init__(self, value: ttnn.Tensor) -> None:
+        topology = value.tensor_topology()
+        self._label_placements = list(topology.placements())
+        self._label_shape = list(topology.distribution_shape())
+        self._local_shape = list(value.shape)
+        self._mesh_shape = []
+        self._placements = ()
+        self._per_axis_error = None
+        try:
+            self._placements = tuple(ttml.core.distributed.placements_per_axis(value))
+        except RuntimeError as e:  # a host or deallocated tensor, or a label that does not cover the mesh
+            self._per_axis_error = _fatal_message(e)
+            return
+        # Only after a successful read: for a host tensor, _mesh_device() would open a device if none is open.
+        self._mesh_shape = list(_mesh_device().shape)
 
     @classmethod
     def from_tensor(cls, tensor: ttml.autograd.Tensor) -> Sharding:
-        """Read off the live topology. A unit mesh reads back as 1-D ``[Replicate]``.
-        NATIVE returns the stored slot as is; the default precision would typecast and cache a copy."""
-        topology = tensor.get_value(ttml.autograd.PreferredPrecision.NATIVE).tensor_topology()
-        return cls(list(topology.placements()), list(topology.distribution_shape()))
+        """The layout of ``tensor``."""
+        return cls(tensor.get_value(ttml.autograd.PreferredPrecision.NATIVE))
 
     @property
-    def placements(self) -> list:
-        """Per-mesh-axis ttnn placements (``PlacementShard`` / ``PlacementReplicate``).
-
-        A mapper-placed tensor carries one entry per mesh axis. A tensor replicated by the default
-        topology may flatten to a single ``Replicate``, so check the length before indexing by axis.
-        """
+    def placements(self) -> tuple:
+        """The ttnn placement (``PlacementShard`` / ``PlacementReplicate``) on each mesh axis."""
+        if self._per_axis_error is not None:
+            raise RuntimeError(self._per_axis_error)
         return self._placements
 
-    @property
-    def dist_shape(self) -> list[int]:
-        """Mesh extent the tensor is laid out over per axis."""
-        return self._dist_shape
+    def shard_dim(self, axis: int) -> int | None:
+        """The tensor dim sharded across mesh axis ``axis``, or None where the tensor is replicated."""
+        return _placement_dim(self.placements[axis], len(self._local_shape))
 
     @property
     def is_fully_replicated(self) -> bool:
         """True if no mesh axis shards this tensor (single device, or replicated on every axis)."""
-        return not any(isinstance(p, ttnn.PlacementShard) for p in self._placements)
+        return all(self.shard_dim(axis) is None for axis in range(len(self.placements)))
+
+    @property
+    def global_shape(self) -> list[int]:
+        """The tensor's shape across the mesh."""
+        shape = list(self._local_shape)
+        for axis in range(len(self.placements)):
+            dim = self.shard_dim(axis)
+            if dim is not None:
+                shape[dim] *= self._mesh_shape[axis]
+        return shape
 
     def describe(self) -> str:
-        """The layout as a short string for messages, e.g. ``[Replicate, Shard(3)] over mesh [1, 2]``."""
-        names = [f"Shard({p.dim})" if isinstance(p, ttnn.PlacementShard) else "Replicate" for p in self._placements]
-        return f"[{', '.join(names)}] over mesh {list(self._dist_shape)}"
+        """The label as a short string for messages, e.g. ``[Replicate, Shard(3)] over mesh [1, 2]``."""
+        names = [
+            f"Shard({p.dim})" if isinstance(p, ttnn.PlacementShard) else "Replicate" for p in self._label_placements
+        ]
+        return f"[{', '.join(names)}] over mesh {list(self._label_shape)}"
 
     def _is_single_device(self) -> bool:
         """True for a 1-device distribution."""
-        return prod(self._dist_shape) <= 1
+        return prod(self._label_shape) <= 1
 
     def derive_mapper(self):
         """``TensorToMesh`` redistributing a host array onto the mesh exactly as the tensor was distributed,
-        or None on a single device. Placements + ``mesh_shape_override`` mirror the live topology
+        or None on a single device. The label's placements + ``mesh_shape_override`` mirror the live topology
         (cf. ``distribute_as._map_nd``); replicate axes keep their full size so the host copy fans out."""
         if self._is_single_device():
             return None
         config = ttnn.MeshMapperConfig(
-            placements=self._placements, mesh_shape_override=ttnn.MeshShape(self._dist_shape)
+            placements=self._label_placements, mesh_shape_override=ttnn.MeshShape(self._label_shape)
         )
         return ttnn.create_mesh_mapper(_mesh_device(), config)
 
@@ -93,7 +132,7 @@ class Sharding:
         """Full host array for ``tensor`` in its native dtype, gathered into a single copy.
 
         On a single device the tensor is one host buffer, read directly. Otherwise every shard is read to the host
-        once and a composer keyed on the tensor's own topology rebuilds the array from that copy (cf.
+        once and a composer keyed on the tensor's label rebuilds the array from that copy (cf.
         ``auto_compose._compose_nd_sharded``): a Shard axis concatenates its shards along the sharded dim, and a
         Replicate axis contributes one copy.
 
@@ -117,14 +156,14 @@ class Sharding:
                     f"labelled {self.describe()}, which does not match its shards ({_fatal_message(e)})"
                 ) from e
         rank = len(value.shape)
-        shard_dims = {p.dim % rank for p in self._placements if isinstance(p, ttnn.PlacementShard)}
+        shard_dims = {p.dim % rank for p in self._label_placements if isinstance(p, ttnn.PlacementShard)}
         free_dims = [d for d in range(rank) if d not in shard_dims]
         dims: list[int] = []
         shape_override: list[int] = []
-        for axis, p in enumerate(self._placements):
+        for axis, p in enumerate(self._label_placements):
             if isinstance(p, ttnn.PlacementShard):
                 dims.append(p.dim)
-                shape_override.append(self._dist_shape[axis])
+                shape_override.append(self._label_shape[axis])
             else:
                 # Replicate: the composer needs a distinct dim per mesh axis, so take one no Shard axis uses; the
                 # size-1 override keeps one copy of that axis.

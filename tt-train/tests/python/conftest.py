@@ -260,6 +260,18 @@ def fsdp_mesh(fresh_device_mesh):
 
 
 # ---------------------------------------------------------------------------
+# Shared [2, 2] DP x TP mesh
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture(scope="module")
+def dp_tp_mesh(fresh_device_mesh):
+    """A ``[2, 2]`` mesh with axes ``("dp", "tp")`` and the bundled descriptor, per requesting module."""
+    with fresh_device_mesh((2, 2), ("dp", "tp"), what="a [2, 2] dp x tp mesh", require_mgd=True) as mesh:
+        yield mesh
+
+
+# ---------------------------------------------------------------------------
 # Strict CCL topology
 # ---------------------------------------------------------------------------
 
