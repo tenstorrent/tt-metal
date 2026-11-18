@@ -654,28 +654,36 @@ void kernel_main() {
                 for (uint32_t r = 0; r < blk_rows; ++r) {
                     uint32_t page = (a_row_base + r) * tensor_k_tiles + k0;
                     uint32_t l1 = act_l1 + r * a_stride * a_tile_bytes;
-                    // GM_A_STAGGER: row r's K tiles go out starting at k = (row) % k_valid (wrapping), so rows -- and
-                    // the cores of an M split -- start on different DRAM banks instead of all on the bank of K tile 0.
-                    const uint32_t k_rot = GM_A_STAGGER ? (a_row_base + r) % k_valid : 0;
-                    for (uint32_t kk = 0; kk < k_valid; ++kk) {
-                        const uint32_t k = (kk + k_rot) < k_valid ? kk + k_rot : kk + k_rot - k_valid;
-                        if constexpr (GM_A_INFLIGHT != 0) {
-                            // The in-flight cap: chunk boundaries retire the chunk two back (same trid).
-                            const uint32_t t = r * k_valid + kk;
-                            if (t % GM_A_INFLIGHT == 0) {
-                                const uint32_t c = t / GM_A_INFLIGHT;
-                                if (c >= 2) {
-                                    dataflow_kernel_lib::async_read_barrier_with_trid(noc, GM_A_TRID0 + c % 2);
-                                }
-                                dataflow_kernel_lib::set_read_trid(noc, GM_A_TRID0 + c % 2);
-                            }
+                    if constexpr (GM_A_INFLIGHT == 0 && GM_A_STAGGER == 0) {
+                        // (the plain issue loop: every regime but the tall M-only split)
+                        for (uint32_t k = 0; k < k_valid; ++k) {
+                            noc_async_read(a_acc.get_noc_addr(page + k), l1, a_tile_bytes);
+                            l1 += a_tile_bytes;
                         }
+                    } else {
+                        // GM_A_STAGGER: row r's K tiles go out starting at k = (row) % k_valid (wrapping), so rows --
+                        // and the cores of an M split -- start on different DRAM banks, not all on K tile 0's.
+                        const uint32_t k_rot = GM_A_STAGGER ? (a_row_base + r) % k_valid : 0;
+                        for (uint32_t kk = 0; kk < k_valid; ++kk) {
+                            const uint32_t k = (kk + k_rot) < k_valid ? kk + k_rot : kk + k_rot - k_valid;
+                            if constexpr (GM_A_INFLIGHT != 0) {
+                                // The in-flight cap: chunk boundaries retire the chunk two back (same trid).
+                                const uint32_t t = r * k_valid + kk;
+                                if (t % GM_A_INFLIGHT == 0) {
+                                    const uint32_t c = t / GM_A_INFLIGHT;
+                                    if (c >= 2) {
+                                        dataflow_kernel_lib::async_read_barrier_with_trid(noc, GM_A_TRID0 + c % 2);
+                                    }
+                                    dataflow_kernel_lib::set_read_trid(noc, GM_A_TRID0 + c % 2);
+                                }
+                            }
 #if defined(GM_EXP_A_LOCAL)
-                        // EXPERIMENT (perf tooling): the same reads from this core's own L1 -- the zero-distance floor
-                        noc_async_read(get_noc_addr(l1 + k * a_tile_bytes), l1 + k * a_tile_bytes, a_tile_bytes);
+                            // EXPERIMENT (perf tooling): the same reads from this core's own L1 (zero-distance floor)
+                            noc_async_read(get_noc_addr(l1 + k * a_tile_bytes), l1 + k * a_tile_bytes, a_tile_bytes);
 #else
-                        noc_async_read(a_acc.get_noc_addr(page + k), l1 + k * a_tile_bytes, a_tile_bytes);
+                            noc_async_read(a_acc.get_noc_addr(page + k), l1 + k * a_tile_bytes, a_tile_bytes);
 #endif
+                        }
                     }
                 }
                 if constexpr (GM_A_INFLIGHT != 0) {
