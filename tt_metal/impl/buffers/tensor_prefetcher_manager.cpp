@@ -528,10 +528,12 @@ struct SelectorLocation {
     uint32_t addr = 0;
 };
 
-// The kernel reads the mask on NOC 0 with virtual coordinates, the convention of the pipes' receiver
+// A DRISC sender reads the mask on NOC 0 with virtual coordinates, the convention of the pipes' receiver
 // table, so a DRAM page names its bank's NOC 0 endpoint -- the one that forwards DRAM reads (see
-// drisc_mode.h). The address is mesh-uniform; the endpoint is resolved per device because DRAM
-// harvesting may move it, and one page serves every device, so the devices must agree.
+// drisc_mode.h). A dispatch-engine sender reads DRAM by bank, so a DRAM page names bank 0 instead. An L1
+// page names its core's virtual coordinates. The address is mesh-uniform. One page serves every device, so
+// the devices must agree on the endpoint, which is resolved per device because DRAM harvesting may move it;
+// bank 0 is the same on every device.
 SelectorLocation resolve_group_selector(
     const MeshDevice& mesh_device,
     const std::vector<IDevice*>& devices,
