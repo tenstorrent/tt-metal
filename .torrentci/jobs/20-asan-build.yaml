@@ -151,16 +151,20 @@ jobs:
         kind: shell
         shell:
           run:
-            # An unchanged restored tree is already stored: remove it so the
-            # platform skips re-uploading it (save records skipped_empty).
-            # What the cache archive refuses: >100k members, links, hard
-            # links, setuid/setgid/sticky bits.
+            # The cache archive refuses symlinks (18 in these sources, e.g.
+            # cadical's src/configure), more than 100k members (about 85k
+            # here, 62k of them Boost), hard links and setuid/setgid bits.
+            # Replace each symlink with a copy of its target; drop dangling
+            # ones.
+            - >-
+              find .cpmcache -type l -exec sh -c 'for l; do
+              t=$(readlink -f "$l") && rm "$l" && cp -rL "$t" "$l" || true; done' _ {} +
+            - find .cpmcache -type l -delete
             - >-
               echo "cpmcache: $(du -sh .cpmcache | cut -f1),
               $(find .cpmcache | wc -l) entries, $(find .cpmcache -type l | wc -l) symlinks,
               $(find .cpmcache -type f -links +1 | wc -l) hard-linked,
-              $(find .cpmcache -type f -perm /7000 | wc -l) special-mode,
-              $(find .cpmcache -name .git | wc -l) .git"
-            - find .cpmcache -mindepth 1 -maxdepth 1 -type d -exec sh -c 'echo "$(find "$1" | wc -l) $1"' _ {} \; | sort -rn | head || true
-            - find .cpmcache -type l | head -20 || true
+              $(find .cpmcache -type f -perm /7000 | wc -l) special-mode"
+            # An unchanged restored tree is already stored: remove it so the
+            # platform skips re-uploading it (save records skipped_empty).
             - if [ -f /tmp/cpm-unchanged ]; then rm -rf .cpmcache; fi
