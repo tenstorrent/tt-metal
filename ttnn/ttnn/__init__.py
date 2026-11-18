@@ -82,7 +82,9 @@ from ttnn._ttnn.multi_device import (
     MeshComposerConfig,
     TensorTopology,
     get_device_tensors,
+    cpu_shards,
     from_host_shards,
+    from_local_host_shards,
     combine_device_tensors,
     replicate_tensor_to_mesh_mapper,
     shard_tensor_to_mesh_mapper,
@@ -412,6 +414,7 @@ from ttnn.core import (
 )
 
 tile_size = ttnn._ttnn.tensor.tile_size
+host_tensor_from_bytes = ttnn._ttnn.tensor.host_tensor_from_bytes
 experimental_create_sram_tensor_view = ttnn._ttnn.tensor.experimental_create_sram_tensor_view
 NodeLocalSpan = ttnn._ttnn.tensor.NodeLocalSpan
 PerNodeDeviceLocalMemorySpan = ttnn._ttnn.tensor.PerNodeDeviceLocalMemorySpan

@@ -21,10 +21,37 @@
 
 namespace prefetcher_validator {
 
-// Overflow poll: long enough to cover a sender's round trip to publish one more entry after this
-// receiver's last pop -- the window an overshoot would show up in -- while still ending the test if
-// none does.
-constexpr uint32_t kExtraPollCycles = 1u << 18;
+// Overflow poll window: long enough to cover a sender's round trip to publish one more entry after this
+// receiver's last pop -- the window an overshoot would show up in -- while still ending the test if none
+// does. On Wormhole and Blackhole that is 2^18 polls, milliseconds of silicon time and far past a DRAM
+// sender's credit round trip under load. Quasar runs on emulators today, where each uncached poll costs
+// so much wall time that 2^18 of them take half an hour, so its window is bounded in this core's cycles
+// instead: 2^16, still well past the round trip.
+#ifdef ARCH_QUASAR
+constexpr uint64_t kExtraPollCycles = 1ull << 16;
+#else
+constexpr uint32_t kExtraPollIterations = 1u << 18;
+#endif
+
+// Polls `has_extra_entry` until it reports an entry or the window closes; returns whether it did.
+template <typename HasExtraEntry>
+FORCE_INLINE bool extra_entry_within_poll_window(HasExtraEntry&& has_extra_entry) {
+#ifdef ARCH_QUASAR
+    const uint64_t end = get_timestamp() + kExtraPollCycles;
+    do {
+        if (has_extra_entry()) {
+            return true;
+        }
+    } while (get_timestamp() < end);
+#else
+    for (uint32_t poll = 0; poll < kExtraPollIterations; ++poll) {
+        if (has_extra_entry()) {
+            return true;
+        }
+    }
+#endif
+    return false;
+}
 
 // What first_mismatching_word returns when the two buffers are identical, so a caller does not have
 // to re-derive the word count just to read the answer.
@@ -63,8 +90,15 @@ FORCE_INLINE void read_expected_block_tiles(
     noc_async_read_barrier();
 }
 
-// One word of an L1 buffer, for reporting the bytes a mismatch was found on.
+// One word of an L1 buffer, for reporting the bytes a mismatch was found on. Both buffers compared here
+// were written over the NoC, which on Quasar does not snoop the data-movement caches, so they are read
+// through the uncached alias: a line cached by the previous block's compare would otherwise read stale.
 FORCE_INLINE uint32_t l1_word(uint32_t base_addr, uint32_t word_index) {
+#ifdef ARCH_QUASAR
+    if (base_addr < MEM_L1_UNCACHED_BASE) {
+        base_addr += MEM_L1_UNCACHED_BASE;
+    }
+#endif
     return reinterpret_cast<volatile tt_l1_ptr uint32_t*>(base_addr)[word_index];
 }
 
