@@ -59,7 +59,7 @@
 
 **Done when**: every interleaved cell with `fp32_dest_acc_en=False`, `dtype=bfloat8_b` or `gamma_dtype=bfloat8_b` (outside INVALID and EXCLUSIONS) is `supported_pass`; the 12 interleaved `_perf_case` loose cases pass their 0.9995 PCC gate; the acceptance and precision-baseline tests stay green; verifier loud categories are 0.
 
-### [ ] Refinement 2 — Sharded placements: HEIGHT / WIDTH / BLOCK_SHARDED, consumed in place
+### [x] Refinement 2 — Sharded placements: HEIGHT / WIDTH / BLOCK_SHARDED, consumed in place
 
 **Goal**: add `ttnn.TensorMemoryLayout.HEIGHT_SHARDED`, `WIDTH_SHARDED` and `BLOCK_SHARDED` to `SUPPORTED["memory_layout"]`, for both TILE and ROW_MAJOR input, with a sharded output that inherits the input's shard spec (the harness passes `memory_config=input.memory_config()`). Per `op_design.md` → "Sharded placements", these are **placements of the two already-built regimes**:
 - HEIGHT_SHARDED → LOCAL. One shard core is one line, `w_split = 1`.

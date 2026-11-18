@@ -55,3 +55,38 @@
   - The three prefill shapes are DRAM-bound and flat within about 1.5%.
 - Issues encountered: `Tensor.element_size()` raises for bfloat8_b. Fixed with the `_element_bytes()` helper. No other issues.
 - Tests added: `tests/ttnn/unit_tests/operations/rms_norm/test_rms_norm_numeric.py` (80 cases: acc-off matrix, bf8b input, bf8b γ, acc-off poisoned padding, perf-profile config at 0.9995, fp32+acc-off refusal).
+
+## Refinement 2 — Sharded placements: HEIGHT / WIDTH / BLOCK_SHARDED, consumed in place
+- Date: 2026-11-18
+- What was done:
+  - **SUPPORTED** `memory_layout` += HEIGHT_SHARDED, WIDTH_SHARDED, BLOCK_SHARDED, for TILE and ROW_MAJOR input. With a sharded input, the output inherits the input's shard spec (`memory_config=None` or that same config). Any other output placement for a sharded input is refused.
+  - **Placement = core assignment.** `shard_placement()` derives the lines from the shard spec (grid, orientation, shard shape):
+    - HEIGHT → one LOCAL line per shard core.
+    - WIDTH → one W_SPLIT line over the whole shard grid, in shard order (multi-row grids included).
+    - BLOCK → one W_SPLIT line per shard-grid row (per column for COL_MAJOR; the Mcast core order follows).
+    - A ragged grid's all-padding shard row is dropped. Valid rows and W per core are runtime args.
+  - **`select_blocking()` sharded branch** derives `w_split`, `core_w_tiles`, `block_rows` (whole shard when it fits) and the new `w_chunk_tiles` from the shard spec. The CB budget is the real region below the resident shard buffers (`min(shard addr) − L1 base − 16 KiB`).
+  - **TILE, zero-copy:** `cb_x` and `cb_y` are backed on the input and output shards (`cb_descriptor_from_sharded_tensor`). The reader only publishes the block, compute packs y straight into the output shard, and the writer only consumes it. No DRAM traffic and no accessor read of the own shard.
+  - **Ragged / poisoned W without touching caller L1.** A ragged shard's tail tiles are skipped: sumsq is `TileAddressing::Strided` over the fully valid tiles. The partial-W tile is squared into a second per-row Σx² slot and folded through a 0/1 lane mask by the collapse reduce (`ReducePartialScaler::only_partial()`, new `cb_wmask`). The test asserts the input shard is bit-identical after the call.
+  - **ROW_MAJOR:** a core-local L1→L1 re-stride (shard stick pitch → tilize pitch) into `cb_x_rm`, and back out of `cb_out_rm` into the output shard.
+    - Shards of 1–19 sticks and 4–40-element W slices both work.
+    - RM γ slices whose byte offset is off the 64 B DRAM read grain are read through an aligned window in `cb_gamma_stage` and moved core-locally (element copy when off the 16 B L1 grain, e.g. fp32 RM shard + bf16 γ).
+  - **W-chunk knob `w_chunk_tiles`** (default = `core_w_tiles`, byte-identical; interleaved never chunks). A HEIGHT shard pins a whole row to one core, so for wide rows (W 3000–11008, or fp32) the full-width γ and RM staging rings no longer fit beside two resident shards. In that case:
+    - γ streams through `cb_gamma` in W-chunks on every normalize pass (TILE: Strided chunk chains packing at final positions; RM: in place, tile-row by tile-row, rinv by Offset).
+    - RM tilize / untilize run as `tilize<wc>(rows·nchunks)` / `untilize<wc>(rows·nchunks)`.
+  - Reused: both regimes, the gather + `ttnn.Mcast` combine, every compute helper chain, the RM tilize / untilize path, γ loaders (now one chunk loader; unchunked = chunk 0). Added: `shard_placement`, `CoreWork` list (shared by interleaved and sharded), sharded `select_blocking` branch, resident sumsq / masked collapse, chunked γ normalize, 2 CBs (`cb_wmask`, `cb_gamma_stage`).
+- Accuracy achieved: all sharded unit cases at PCC ≥ 0.995 (bf16) / 0.999 (fp32), including poisoned padding (1000.0) with fp32 accumulation on and off. The sharded perf-profile config (bf16 / HiFi2 / acc off / TILE γ) reaches PCC ≥ 0.9995 on (1,1,32,{1024,5120,7168}) WIDTH and (1,1,7168,2048) BLOCK [736,192] 11×10.
+- Golden test progress (targeted slices; the harness full run is the record):
+  - All sharded loose cases (`_perf_case`, resilience, pad-poison, `_SHARDED`): 250 passed, 3 infeasible-skipped (input-shard / output L1 OOM), 0 failed.
+  - Cartesian sharded slices over 10 shapes (1x1x32x8192, 2x1x64x4096, 1x1x128x4096, 128x8192, 1x32x8192, 1024x1024, 4x1x512x512, 4x8x32x47, 1x1x17x50, 2x1x100x47): 1129 passed, 0 failed (xfails = the permanent {fp32, acc-off} exclusion).
+  - Host-side descriptor build over every supported sharded cartesian cell: 3536 OK, 0 refused.
+  - Interleaved regression (acceptance + numeric + precision baseline): 200 passed, 6 skipped (unchanged).
+- Perf baseline at the sharded perf-case config (device kernel ns, measured vs `achievable_ns`@1350 MHz):
+  - WIDTH decode, W = 1024 / 2304 / 5120 / 7168: 4317 / 5436 / 5667 / 6556 vs 4110 / 4617 / 5267 / 5481.
+  - BLOCK 640×6144: 17904 vs 19039. BLOCK 640×7168: 22272 vs 21669.
+  - BLOCK 7168×1024: 55400 vs 18871. BLOCK 7168×2048: 66142 vs 25947. BLOCK 8192×1024: 76290 vs 25640.
+  - The tall BLOCK shards (23–32 tile-rows per core, whole shard = one block) are about 3× off. The combine is one un-overlapped rendezvous per block that gathers `rows·k` whole Σx² tiles into each root. That is Refinement 3/4's scope (L4 column-0 gather, sub-block pipelining, compute fusion).
+- Issues encountered:
+  - A `static_assert` in a discarded `if constexpr` branch of a non-template kernel still fires (bf8b γ). Moved it to a gated top-level assert.
+  - The test-only shard config "6 shards on 5 cores" was rejected by TTNN itself (not the op).
+- Tests added: `tests/ttnn/unit_tests/operations/rms_norm/test_rms_norm_sharded.py` (51 cases: HEIGHT/WIDTH/BLOCK × TILE/RM, ragged grids, multi-row WIDTH grids, poisoned padding × acc on/off, RM γ misaligned slices, COL_MAJOR BLOCK, perf-profile config, wide HEIGHT rows via the W-chunk knob, input-shard immutability, default output inherits the shard spec); probe `probes/perf_sharded_probe.py`.

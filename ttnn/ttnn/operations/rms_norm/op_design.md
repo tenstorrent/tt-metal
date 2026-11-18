@@ -168,8 +168,8 @@ Named boundary for the minimum: **DRAM** — x crosses once, y crosses once, γ 
 | **GAMMA_MCAST** — one injector per grid reads γ once and multicasts each slice to the cores that share it | **deferred** — γ traffic is `num_lines·W·es_γ`, at most `(num_lines/tensor_rows_tiles)·(es_γ/es_x)/32 ≤ 1/16` of x's DRAM bytes (row-0-only reads; ≤ 1/32 when γ dtype = x dtype), while it adds one rendezvous per core | as LOCAL / W_SPLIT | unchanged | γ 1× (minimum) | — |
 | **COMBINE_SCATTER** — the `block_rows` tile-rows of a block's combine are spread over the line's cores (reduce-scatter + all-gather) instead of all on the root | **deferred** — the root's combine is `w_split/2` pairwise adds + 1 finalize per tile-row, ≤ the per-core main work for `w_split ≤ 40` with `min_core_w_tiles = 8`; a scatter needs ≥ 2 rendezvous per block, each costing more than the work it moves. Reachable: combine is already its own named op on its own CBs; only the gather slot map and the mcast sender set change | W_SPLIT ∧ `block_rows ≥ w_split` | same | same bytes, root hotspot removed | — |
 | **TREE_COMBINE** — partials reduced up a log₂(k) tree instead of k→1 | **deferred** — a tree adds `log₂(w_split)` serial rendezvous per block; with the Phase 0 `min_core_w_tiles` the root fan-in is ≤ `tensor_w_tiles/8` tiles, so k→1 is one rendezvous against ≥ 3. Reachable: same partial/gather CBs, only sender targets change | W_SPLIT ∧ large `w_split` | same | same total bytes, lower root fan-in | — |
-| **HEIGHT_SHARDED placement of LOCAL** | **deferred** — Phase 0 SUPPORTED is INTERLEAVED; this is placement, not a new algorithm: shard = one line's R-range × full W, `cb_x` backed on the shard (`cb_descriptor_from_sharded_tensor`, zero-copy), block = whole shard (sub-chunked only if `footprint` fails), output written into its own sharded CB | input HEIGHT_SHARDED | whole shard | x 0× DRAM (already in L1) | as LOCAL |
-| **WIDTH / BLOCK_SHARDED placement of W_SPLIT** | **deferred** — same as above; the line = one shard-grid row, `w_split` = shard-grid width, `core_w_tiles` = shard width; the combine already exists, so it is a knob-turn plus placement | input WIDTH/BLOCK_SHARDED | whole shard | x 0× DRAM; combine as W_SPLIT | as W_SPLIT |
+| **HEIGHT_SHARDED placement of LOCAL** | **built (Refinement 2)** — this is placement, not a new algorithm: shard = one line's R-range × full W, `cb_x` backed on the shard (`cb_descriptor_from_sharded_tensor`, zero-copy), block = whole shard (sub-chunked only if `footprint` fails), output written into its own sharded CB | input HEIGHT_SHARDED | whole shard | x 0× DRAM (already in L1) | as LOCAL |
+| **WIDTH / BLOCK_SHARDED placement of W_SPLIT** | **built (Refinement 2)** — same as above; the line = one shard-grid row, `w_split` = shard-grid width, `core_w_tiles` = shard width; the combine already exists, so it is a knob-turn plus placement | input WIDTH/BLOCK_SHARDED | whole shard | x 0× DRAM; combine as W_SPLIT | as W_SPLIT |
 
 Selection function and regime-pinned tests: see Work Distribution.
 
@@ -287,6 +287,16 @@ Semaphores (W_SPLIT only), allocated on all participating cores: `sem_partials` 
 | BLOCK_SHARDED | R and W | R independent, W dependent | knob-turn (combine already built) | W_SPLIT, one line per shard-grid row |
 
 A physical shard is consumed in place through a CB backed on the sharded buffer, never re-read over the NoC.
+
+Built (Refinement 2): `shard_placement()` turns the shard spec into lines (HEIGHT: one per core; WIDTH: the whole grid in
+shard order; BLOCK: one per shard-grid row, per column for COL_MAJOR, with the Mcast core order to match). An
+all-padding shard-grid row of a ragged grid is dropped. `select_blocking()`'s sharded branch derives `w_split`,
+`core_w_tiles` and `block_rows` (the whole shard when it fits the CB region below the shards), plus the W-chunk
+`w_chunk_tiles`. TILE: `cb_x` / `cb_y` are backed on the shards and the reader only publishes the block. Sumsq is
+`Strided` over the slice's fully valid tiles, so a ragged shard's tail tiles are never read. The partial-W tile is
+squared into a second per-row slot and masked by the collapse reduce (`only_partial()`), so the caller's pad lanes are
+never written. RM: a core-local re-stride (L1→L1) in and out. A HEIGHT row too wide to hold γ and the RM staging next
+to its two shards streams γ (and chunks the RM tilize / untilize) in `w_chunk_tiles`.
 
 ## Work Distribution
 
