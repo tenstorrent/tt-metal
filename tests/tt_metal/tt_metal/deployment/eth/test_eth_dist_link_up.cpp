@@ -84,6 +84,11 @@ static bool run_test(
             .expected_count = transfer_count,
         },
     };
+    if (getenv("ETH_TEST_PRECOMPILE")) {
+        precompile(fixture, cores, programs);
+        return true;
+    }
+
     wait_to_finish_eth_timeout_cores(fixture, cores, programs);
 
     bool pass = true;
