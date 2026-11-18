@@ -454,6 +454,7 @@ inline void _llk_unpack_A_uninit_()
  * @tparam unpack_to_dest: Unpack directly into the dest register (32-bit datums).
  * @tparam early_context_poll: Read the context semaphore before the counter reset and flip the context from a local copy (opt in).
  * @tparam z_stride_per_tile: Rewrite the canonical srcA Z stride around each unpack-to-dest tile, as main does (smaller callers).
+ * @tparam math_risc_ack: The math thread takes its MATH_DONE post back itself (main's handshake); wait on UNPACK_TO_DEST instead.
  * @param address: L1 address of the source tile.
  * @param unpack_src_format: Source data format of the operand in L1.
  * @param unpack_dst_format: Destination data format the operand is converted to.
@@ -469,7 +470,8 @@ template <
     EltwiseBinaryReuseDestType binary_reuse_dest = EltwiseBinaryReuseDestType::NONE,
     bool unpack_to_dest                          = false,
     bool early_context_poll                      = false,
-    bool z_stride_per_tile                       = false>
+    bool z_stride_per_tile                       = false,
+    bool math_risc_ack                           = false>
 inline void _llk_unpack_A_(const std::uint32_t address, const std::uint32_t unpack_src_format = 0, const std::uint32_t unpack_dst_format = 0)
 {
     LLK_ASSERT(is_valid_L1_address(address), "L1 address must be in valid L1 memory region");
@@ -498,7 +500,14 @@ inline void _llk_unpack_A_(const std::uint32_t address, const std::uint32_t unpa
             if (is_32bit_input(unpack_src_format, unpack_dst_format))
             {
                 set_dst_write_addr(context);
-                wait_for_dest_available();
+                if constexpr (math_risc_ack)
+                {
+                    wait_for_dest_available_unpack_to_dest_max();
+                }
+                else
+                {
+                    wait_for_dest_available();
+                }
             }
         }
         TTI_STALLWAIT(p_stall::STALL_UNPACK, p_stall::TRISC_CFG);
@@ -551,7 +560,14 @@ inline void _llk_unpack_A_(const std::uint32_t address, const std::uint32_t unpa
             {
                 set_dst_write_addr(unp_cfg_context);
             }
-            wait_for_dest_available();
+            if constexpr (math_risc_ack)
+            {
+                wait_for_dest_available_unpack_to_dest_max();
+            }
+            else
+            {
+                wait_for_dest_available();
+            }
         }
     }
 
@@ -628,7 +644,8 @@ inline void _llk_unpack_A_block_(
         {
             for (std::uint32_t tile = 0; tile < num_tiles; ++tile)
             {
-                _llk_unpack_A_<BType, acc_to_dest, binary_reuse_dest, unpack_to_dest>(address + tile * tile_stride_16B, unpack_src_format, unpack_dst_format);
+                _llk_unpack_A_<BType, acc_to_dest, binary_reuse_dest, unpack_to_dest, false, false, !is_fp32_dest_acc_en>(
+                    address + tile * tile_stride_16B, unpack_src_format, unpack_dst_format);
             }
             return;
         }

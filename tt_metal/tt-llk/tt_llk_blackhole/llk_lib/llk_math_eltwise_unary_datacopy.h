@@ -78,6 +78,7 @@ inline void eltwise_unary_bcast_col_32b_face_pair()
  * @tparam src_b_bcast_type: Broadcast type for source B, values = <NONE/COL/ROW/SCALAR>
  * @tparam unpack_to_dest: Unpack writes directly to dest (vs. via source registers).
  * @tparam unroll_zero_flag_clears: Issue a four-face tile's unpack-to-dest zero-flag clears without the run-time face loop.
+ * @tparam math_risc_ack: Take the MATH_DONE post back on this RISC (main's handshake); the unpack side must pass the same value.
  * @param dst_index: Tile index into the destination register.
  * @param src_format: Source data format (DataFormat enum underlying value).
  * @param dst_format: Destination data format (DataFormat enum underlying value).
@@ -94,7 +95,8 @@ template <
     bool is_fp32_dest_acc_en,
     BroadcastType src_b_bcast_type = BroadcastType::NONE,
     bool unpack_to_dest            = false,
-    bool unroll_zero_flag_clears   = false>
+    bool unroll_zero_flag_clears   = false,
+    bool math_risc_ack             = false>
 inline void _llk_math_eltwise_unary_datacopy_(
     const std::uint32_t dst_index,
     const std::uint32_t src_format,
@@ -109,7 +111,14 @@ inline void _llk_math_eltwise_unary_datacopy_(
     // adjust it to offset in faces for 32bit data.
     if (unpack_to_dest && is_32bit_input(src_format, dst_format))
     {
-        math_unpack_to_dest_math_ready();
+        if constexpr (math_risc_ack)
+        {
+            math_unpack_to_dest_math_ready_risc_ack();
+        }
+        else
+        {
+            math_unpack_to_dest_math_ready();
+        }
         math::set_dst_write_addr<DstTileShape::Tile32x32, UnpackDestination::DestReg>(dst_index);
         math::math_unpack_to_dest_tile_ready();
 
@@ -379,7 +388,7 @@ inline void _llk_math_eltwise_unary_datacopy_block_(
     }
     for (std::uint32_t tile = 0; tile < num_tiles; tile++)
     {
-        _llk_math_eltwise_unary_datacopy_<type, Dst, is_fp32_dest_acc_en, src_b_bcast_type, unpack_to_dest>(
+        _llk_math_eltwise_unary_datacopy_<type, Dst, is_fp32_dest_acc_en, src_b_bcast_type, unpack_to_dest, false, !is_fp32_dest_acc_en>(
             start_dst_index + tile, src_format, dst_format, ckernel::tensor_shape_from_num_faces(ckernel::MAX_FACE_R_DIM, num_faces));
     }
 }

@@ -190,7 +190,9 @@ inline void _llk_unpack_tilize_init_(
  * @param narrow_tile: Whether the tile is narrow (single column of faces). Not supported on the 8-bit path.
  * @note Call @ref _llk_unpack_tilize_init_ before this function, and
  *       @ref _llk_unpack_tilize_uninit_ after it to restore modified state.
+ * @tparam math_risc_ack: The math thread takes its MATH_DONE post back itself (main's handshake); the unpack waits on UNPACK_TO_DEST.
  */
+template <bool math_risc_ack = false>
 inline void _llk_unpack_tilize_(
     const std::uint32_t base_address,
     const std::uint32_t tile_index,
@@ -330,7 +332,14 @@ inline void _llk_unpack_tilize_(
         {
             // Unpack to dest
             set_dst_write_addr(unp_cfg_context, unpack_src_format);
-            wait_for_dest_available();
+            if constexpr (math_risc_ack)
+            {
+                wait_for_dest_available_unpack_to_dest_max();
+            }
+            else
+            {
+                wait_for_dest_available();
+            }
         }
 
         // Stall unpacker until pending CFG writes from Trisc have completed
