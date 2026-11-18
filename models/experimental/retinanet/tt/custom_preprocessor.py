@@ -79,7 +79,7 @@ def preprocess_regression_head_parameters(torch_head, device, mesh_mapper, model
         ttnn.TILE_LAYOUT if model_config["WEIGHTS_DTYPE"] in [ttnn.bfloat8_b, ttnn.bfloat4_b] else ttnn.ROW_MAJOR_LAYOUT
     )
     parameters["conv"] = []
-    for i in range(4):
+    for i in range(len(torch_head.conv)):
         conv_weight = torch_head.conv[i][0].weight.detach().to(torch.bfloat16)
         bias = torch.zeros(conv_weight.shape[0]).to(torch.bfloat16)
 
@@ -217,7 +217,7 @@ def preprocess_classification_head_parameters(torch_head, device, mesh_mapper, m
     )
 
     parameters["conv"] = []
-    for i in range(4):
+    for i in range(len(torch_head.conv)):
         conv_weight = torch_head.conv[i][0].weight.detach().to(torch.bfloat16)
         bias = torch.zeros(conv_weight.shape[0])
 

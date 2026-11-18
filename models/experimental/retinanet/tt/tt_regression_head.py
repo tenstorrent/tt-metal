@@ -156,7 +156,7 @@ def ttnn_retinanet_regression_head(
         conv_config = head_conv_config(device, conv_blocks_config)
 
         conv_blocks = []
-        for conv_idx in range(4):
+        for conv_idx in range(len(parameters["conv"])):
             conv_block = Conv2dNormActivation(
                 parameters=parameters["conv"][conv_idx],
                 device=device,

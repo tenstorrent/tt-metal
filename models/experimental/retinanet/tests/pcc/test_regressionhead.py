@@ -8,6 +8,8 @@ import pickle
 import os
 from loguru import logger
 from torchvision.models.detection import retinanet_resnet50_fpn_v2, RetinaNet_ResNet50_FPN_V2_Weights
+
+from models.experimental.retinanet.num_layers import load_reduced
 from tt_py_test_utils_common.utils_for_testing import assert_with_pcc
 from models.experimental.retinanet.tt.tt_regression_head import ttnn_retinanet_regression_head
 from models.experimental.retinanet.tt.utils import bbox_reg_slice_config, group_norm_channel_chunks
@@ -22,7 +24,7 @@ def create_regression_head_parameters(torch_head, device, model_config):
         ttnn.TILE_LAYOUT if model_config["WEIGHTS_DTYPE"] in [ttnn.bfloat8_b, ttnn.bfloat4_b] else ttnn.ROW_MAJOR_LAYOUT
     )
     parameters["conv"] = []
-    for i in range(4):
+    for i in range(len(torch_head.conv)):
         conv_weight = torch_head.conv[i][0].weight.detach().to(torch.bfloat16)
         bias = torch.zeros(conv_weight.shape[0]).to(torch.bfloat16)
 
@@ -164,6 +166,7 @@ def test_retinanet_v2_regression_head_ttnn_5_fpn_with_real_features(device, pcc,
     # Load pretrained model
     torch_model = retinanet_resnet50_fpn_v2(weights=RetinaNet_ResNet50_FPN_V2_Weights.DEFAULT)
     torch_model.eval()
+    load_reduced(torch_model)
     torch_model = torch_model.to(dtype=torch.bfloat16)
     regression_head = torch_model.head.regression_head
 
