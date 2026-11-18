@@ -11,6 +11,8 @@
 // Writes each unit's output tiles [begin, end) and, from chunk 0 of a row, the forward row state.
 // With chunks > 1 it first publishes this core's partial statistics to DRAM and signals the row's
 // first core. Backward: overwrites each row's selected element with the reconstructed gradient.
+// Cross-entropy forward: chunk 0 writes the row's loss tile. Cross-entropy backward: overwrites each
+// row's target element with its gradient s * expm1(y_t), where the target falls in this unit's columns.
 void kernel_main() {
     constexpr uint32_t wt = get_compile_time_arg_val(0);
     constexpr uint32_t out_fp32 = get_compile_time_arg_val(2), chunks = get_compile_time_arg_val(3);
@@ -24,9 +26,9 @@ void kernel_main() {
     constexpr auto sa = TensorAccessorArgs<oa.next_compile_time_args_offset()>();
     constexpr auto pa = TensorAccessorArgs<sa.next_compile_time_args_offset()>();
     const auto output = TensorAccessor(oa, out);
-    const auto stats = TensorAccessor(sa, state);
+    [[maybe_unused]] const auto stats = TensorAccessor(sa, state);
     const auto parts = TensorAccessor(pa, scratch);
-#ifdef BACKWARD
+#if defined(BACKWARD) && !defined(CROSS_ENTROPY)
     constexpr uint32_t partials = 2;
 #else
     constexpr uint32_t partials = 3;
@@ -36,7 +38,7 @@ void kernel_main() {
     DataflowBuffer ob(16), sb(8), part(23), pivot_grad(21), pivots(22);
     const uint32_t bytes = get_tile_size(16), fp32_bytes = get_tile_size(8);
     for (uint32_t row = start; row < start + count; ++row) {
-#ifdef BACKWARD
+#if defined(BACKWARD) && !defined(CROSS_ENTROPY)
         uint32_t pivot[th];
         pivots.reserve_back(1);
         noc.async_read(stats, pivots, fp32_bytes, {.page_id = row * 3 + 1}, {});
@@ -57,7 +59,29 @@ void kernel_main() {
             part.pop_front(partials);
             noc_semaphore_inc(get_noc_addr(leader_x, leader_y, get_semaphore(arrive_sem)), 1);
         }
+#if defined(CROSS_ENTROPY)
 #ifndef BACKWARD
+        ob.wait_front(1);
+        if (chunk == 0) {
+            noc.async_write(ob, output, bytes, {}, {.page_id = row});
+            noc.async_write_barrier();
+        }
+        ob.pop_front(1);
+        continue;
+#else
+        // pivot[] holds the targets: the substitution below is the same, with the target gradient.
+        uint32_t pivot[th];
+        DataflowBuffer target_rows(26);
+        target_rows.wait_front(1);
+        for (uint32_t r = 0; r < th; ++r) pivot[r] = log_softmax_tile::words(target_rows.get_read_ptr())[r];
+        target_rows.pop_front(1);
+        uint32_t grad_bits[th];
+        pivot_grad.wait_front(1);
+        for (uint32_t r = 0; r < th; ++r)
+            grad_bits[r] = log_softmax_tile::words(pivot_grad.get_read_ptr())[log_softmax_tile::offset(r, 0)];
+        pivot_grad.pop_front(1);
+#endif
+#elif !defined(BACKWARD)
         sb.wait_front(3);
         if (chunk == 0) {
             for (uint32_t i = 0; i < 3; ++i)

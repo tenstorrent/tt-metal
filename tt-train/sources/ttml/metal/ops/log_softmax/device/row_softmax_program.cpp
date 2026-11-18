@@ -5,6 +5,7 @@
 #include "row_softmax_program.hpp"
 
 #include <algorithm>
+#include <bit>
 #include <map>
 #include <memory>
 #include <string>
@@ -30,6 +31,8 @@ constexpr uint32_t kGoSemaphore = 1U;
 constexpr uint32_t kMinChunkTiles = 16;  // Below this the exchange costs more than the extra cores save.
 // Statistics in one core's packed partial record (log_softmax_tile::kPartialStatistics), a column vector each.
 constexpr uint32_t kPartialStatistics = 4;
+// Bytes the reader fetches around each row's target logit: one DRAM-aligned block.
+constexpr uint32_t kTargetSlotBytes = 64;
 
 // Tile geometry for the kernels; the program hash keys the tile through the input spec.
 std::map<std::string, std::string> tile_defines(const tt::tt_metal::Tile& tile) {
@@ -40,10 +43,32 @@ std::map<std::string, std::string> tile_defines(const tt::tt_metal::Tile& tile) 
         {"LOG_SOFTMAX_FACE_HEIGHT", std::to_string(face[0])},
         {"LOG_SOFTMAX_FACE_WIDTH", std::to_string(face[1])}};
 }
+
+bool is_backward(Kind kind) {
+    return kind == Kind::LogSoftmaxBackward || kind == Kind::CrossEntropyBackward;
+}
+bool is_cross_entropy(Kind kind) {
+    return kind == Kind::CrossEntropyForward || kind == Kind::CrossEntropyBackward;
+}
 }  // namespace
 
 bool supports_tile(const tt::tt_metal::Tile& tile) {
     return tile == tt::tt_metal::Tile();
+}
+
+bool can_fuse_upstream(const ttnn::Tensor& input, const ttnn::Tensor& grad) {
+    if (grad.storage_type() != ttnn::StorageType::DEVICE || grad.layout() != ttnn::Layout::TILE ||
+        (grad.dtype() != ttnn::DataType::BFLOAT16 && grad.dtype() != ttnn::DataType::FLOAT32) ||
+        grad.memory_config() != ttnn::DRAM_MEMORY_CONFIG || grad.device() != input.device() ||
+        grad.tensor_spec().tile() != input.tensor_spec().tile()) {
+        return false;
+    }
+    if (grad.logical_shape() == ttnn::Shape({1, 1, 1, 1})) {
+        return true;
+    }
+    auto per_row_shape = input.logical_shape();
+    per_row_shape[-1] = 1U;
+    return grad.logical_shape() == per_row_shape && grad.padded_shape()[-2] == input.padded_shape()[-2];
 }
 
 // Few rows: split each row's columns over several cores. Every core then holds exactly one (row, chunk)
@@ -100,7 +125,8 @@ tt::tt_metal::ProgramDescriptor make_descriptor(
     using namespace tt::tt_metal;
     using RuntimeArg = std::variant<uint32_t, Buffer*>;
     auto* device = input.device();
-    const bool backward = options.kind == Kind::LogSoftmaxBackward;
+    const bool backward = is_backward(options.kind);
+    const bool cross_entropy = is_cross_entropy(options.kind);
     const auto layout = layout_for(input);
     const uint32_t width_tiles = layout.width_tiles, rows = layout.rows, chunks = layout.chunks;
     const auto grid = device->compute_with_storage_grid_size();
@@ -113,7 +139,9 @@ tt::tt_metal::ProgramDescriptor make_descriptor(
     // Stream rings hold two blocks of the largest block size; each core pushes blocks of 4, 2 or 1 tiles,
     // whichever divides its tile count, so every push stays aligned to the ring.
     constexpr uint32_t block = 4;
-    const auto grad_dtype = backward ? options.upstream_dtype : input.dtype();
+    const bool ce_upstream = options.kind == Kind::CrossEntropyBackward && options.upstream_kind != 0;
+    const auto grad_dtype =
+        options.kind == Kind::LogSoftmaxBackward || ce_upstream ? options.upstream_dtype : input.dtype();
     const auto grad_fmt = datatype_to_dataformat_converter(grad_dtype);
     // Bounded, double-buffered streams; scratch size is independent of vocabulary width.
     ProgramDescriptor program;
@@ -134,6 +162,20 @@ tt::tt_metal::ProgramDescriptor make_descriptor(
     const uint32_t record_bytes = kPartialStatistics * tile.get_height() * sizeof(float);
     add_cb(24, tt::DataFormat::Float32, fp32_bytes, (tile.get_width() * record_bytes + fp32_bytes - 1) / fp32_bytes);
     for (uint32_t cb : {8U, 9U, 23U}) add_cb(cb, tt::DataFormat::Float32, fp32_bytes, 3);
+    if (cross_entropy) {
+        // 25: target logits (column 0) and 26: row targets (one per physical row of a tile row) for the writer,
+        // double-buffered so the reader can start the next row; 27: column-0 mask; 28: aligned scratch for the
+        // target-logit reads (one slot per physical row plus alignment slack).
+        add_cb(25, tt::DataFormat::Float32, fp32_bytes, 2);
+        add_cb(26, tt::DataFormat::Float32, tile.get_height() * sizeof(uint32_t), 2);
+        add_cb(27, tt::DataFormat::Float32, fp32_bytes, 1);
+        add_cb(28, tt::DataFormat::Float32, (tile.get_height() + 1) * kTargetSlotBytes, 1);
+    }
+    if (ce_upstream) {
+        // 29: per-row upstream gradient (column 0), 30: the raw upstream tile it is taken from.
+        add_cb(29, tt::DataFormat::Float32, fp32_bytes, 2);
+        add_cb(30, grad_fmt, tile.get_tile_size(grad_fmt), 1);
+    }
     program.semaphores.push_back(make_semaphore_descriptor(kArriveSemaphore, all));
     program.semaphores.push_back(make_semaphore_descriptor(kGoSemaphore, all));
     const uint32_t arrive_sem = kArriveSemaphore, go_sem = kGoSemaphore;
@@ -142,10 +184,17 @@ tt::tt_metal::ProgramDescriptor make_descriptor(
     if (backward) {
         defines["BACKWARD"] = "1";
     }
+    if (cross_entropy) {
+        defines["CROSS_ENTROPY"] = "1";
+    }
+    if (ce_upstream) {
+        defines["UPSTREAM_GRAD"] = std::to_string(options.upstream_kind);
+    }
     // The scratch accessor is always compiled in; without a split it aliases the input and is never used.
     auto* scratch = chunks > 1 ? buffers.scratch : buffers.input;
     TT_FATAL(scratch != nullptr, "Row-split programs need an exchange scratch buffer");
     auto* state = buffers.state != nullptr ? buffers.state : buffers.input;
+    auto* target = buffers.target != nullptr ? buffers.target : buffers.input;
     const uint32_t width = input.logical_shape()[-1];
     std::vector<uint32_t> ra{
         width_tiles,
@@ -155,13 +204,21 @@ tt::tt_metal::ProgramDescriptor make_descriptor(
         grad_dtype == ttnn::DataType::FLOAT32,
         chunks,
         arrive_sem,
-        go_sem};
+        go_sem,
+        options.target_page_bytes,
+        options.target_tiled_height};
     TensorAccessorArgs(buffers.input).append_to(ra);
-    if (backward) {
+    if (options.kind == Kind::LogSoftmaxBackward) {
         TensorAccessorArgs(buffers.upstream).append_to(ra);
         TensorAccessorArgs(state).append_to(ra);
     }
     TensorAccessorArgs(scratch).append_to(ra);
+    if (cross_entropy) {
+        TensorAccessorArgs(target).append_to(ra);
+    }
+    if (ce_upstream) {
+        TensorAccessorArgs(buffers.upstream).append_to(ra);
+    }
     std::vector<uint32_t> wa{width_tiles, block, input.dtype() == ttnn::DataType::FLOAT32, chunks, arrive_sem};
     TensorAccessorArgs(buffers.output).append_to(wa);
     TensorAccessorArgs(state).append_to(wa);
@@ -180,7 +237,7 @@ tt::tt_metal::ProgramDescriptor make_descriptor(
     }
     auto compute = make_compute_kernel_descriptor(
         all,
-        {chunks},
+        {chunks, std::bit_cast<uint32_t>(options.scaler)},
         defines,
         kComputeKernelPath,
         /* fp32_dest_acc_en */ true,
@@ -209,7 +266,8 @@ tt::tt_metal::ProgramDescriptor make_descriptor(
             begin,
             end,
             chunk,
-            core_block};
+            core_block,
+            target};
         if (chunks > 1 && chunk == 0) {
             for (uint32_t g = 0; g < chunks; ++g) {
                 const auto member = device->worker_core_from_logical_core(unit_cores[w.index + g]);

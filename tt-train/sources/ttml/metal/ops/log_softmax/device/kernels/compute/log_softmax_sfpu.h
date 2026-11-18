@@ -154,6 +154,21 @@ inline void calculate_log_softmax_grad() {
         sfpi::dst_reg++;
     }
 }
+
+// Cross-entropy gradient: +0 logits x (overwritten), +1 row maximum m, +2 q = s * exp(-l), both broadcast
+// across the row: dx = exp(x - m) * q = s * softmax(x). Tile padding holds -inf and gets zero.
+inline void calculate_cross_entropy_grad() {
+    constexpr uint32_t off_max = 1 * kDstSlotRows, off_q = 2 * kDstSlotRows;
+#pragma GCC unroll 0
+    for (int i = 0; i < 8; ++i) {
+        const sfpi::vFloat x = sfpi::dst_reg[0];
+        const sfpi::vFloat m = sfpi::dst_reg[off_max];
+        const sfpi::vFloat e = log_softmax_exp(x - m);
+        const sfpi::vFloat q = sfpi::dst_reg[off_q];
+        sfpi::dst_reg[0] = e * q;
+        sfpi::dst_reg++;
+    }
+}
 }  // namespace ckernel::sfpu
 #endif
 namespace ckernel {
@@ -176,6 +191,10 @@ ALWI void log_softmax_output(uint32_t dst) {
 ALWI void log_softmax_grad(uint32_t dst) {
     MATH(SFPU_UNARY_CALL_NO_TEMPLATE_ARGS(
         DST_SYNC_MODE, DST_ACCUM_MODE, calculate_log_softmax_grad, dst, VectorMode::RC));
+}
+ALWI void cross_entropy_grad(uint32_t dst) {
+    MATH(SFPU_UNARY_CALL_NO_TEMPLATE_ARGS(
+        DST_SYNC_MODE, DST_ACCUM_MODE, calculate_cross_entropy_grad, dst, VectorMode::RC));
 }
 // Updates the lane statistics in DST tiles dst..dst+2 with the logits tile at dst+3.
 ALWI void log_softmax_online(uint32_t dst, uint32_t column) {
