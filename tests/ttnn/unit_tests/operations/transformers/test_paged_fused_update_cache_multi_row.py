@@ -292,3 +292,20 @@ def test_multi_row_refuses_more_rows_than_a_tile(device, expect_error):
         ttnn.experimental.paged_fused_update_cache(
             k, ks, v, vs, update_idxs_tensor=_index(device, T), page_table=pt, rows_per_user=T
         )
+
+
+def test_multi_row_refuses_more_heads_than_a_tile(device, expect_error):
+    n, T, hd = 1, 2, 128
+    k, v = (
+        ttnn.from_torch(
+            torch.zeros(NB + 1, 2 * TILE, 64, hd), dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT, device=device
+        )
+        for _ in range(2)
+    )
+    x = _tiles(torch.randn(n, T, 1, hd), n, T, 1, hd)
+    ks, vs = _sharded(x, n, n, T * TILE, device), _sharded(x, 0, n, T * TILE, device)
+    pt = ttnn.from_torch(torch.arange(1, NB + 1, dtype=torch.int32).reshape(1, NB), dtype=ttnn.int32, device=device)
+    with expect_error(RuntimeError, "at most 32 cache heads"):
+        ttnn.experimental.paged_fused_update_cache(
+            k, ks, v, vs, update_idxs_tensor=_index(device, T), page_table=pt, rows_per_user=T
+        )

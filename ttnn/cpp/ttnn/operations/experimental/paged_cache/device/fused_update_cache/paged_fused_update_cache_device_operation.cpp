@@ -197,6 +197,12 @@ void PagedFusedUpdateCacheDeviceOperation::validate_on_program_cache_miss(
                 user_rows,
                 input_tensor.padded_shape()[-2],
                 input_tensor.shard_spec().value().shape[0]);
+            // The multi-row writer reads head h of row j at tile row h of input tile j.
+            TT_FATAL(
+                cache_tensor.padded_shape()[1] <= tt::constants::TILE_HEIGHT,
+                "rows_per_user > 1 supports at most {} cache heads, one input tile per row; got {} heads",
+                tt::constants::TILE_HEIGHT,
+                cache_tensor.padded_shape()[1]);
         }
 
         // Sharding validation
