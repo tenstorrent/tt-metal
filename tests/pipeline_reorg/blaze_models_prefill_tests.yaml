@@ -276,6 +276,312 @@
   sp_config: sc1
 
 
+# The 4x4 [RING, RING] rows (ids torus-xy-4x4-*, 4x4-torus-xy-*, *-xy4-*, torusxy-mesh-4x4-*, SP4xTP4-torus-xy-4x4, ...) run on a
+# 16-chip sub-torus of one Galaxy: run_subtorus_4x4_tests.sh narrows the box with the AttnRes harness's SUBTORUS_4X4_ENV and fails
+# unless the sections pass with nothing skipped. On the unnarrowed 8x4 mesh those rows skip, so no other job here runs them.
+# The helper overrides the profile's TT_MESH_GRAPH_DESC_PATH, so these jobs keep fabric_profile: torus_xy for the rest of its env.
+
+- name: "(all prefill gate models) 4x4 RING-RING sub-torus op, CCL and AttnRes accuracy"
+  fabric_profile: torus_xy
+  cmd: |
+    # Sections stop at the first failure: a failed test can leave the devices unreset (tt-metal#57706).
+
+    subtorus_ccl_attn_res() (
+      export MESH_DEVICE=TG
+      timeout -k 2m 25m mpirun --bind-to none --pernode --tag-output bash -lc '
+        set -e
+        export OMP_NUM_THREADS=$(nproc)
+        models/demos/deepseek_v3_d_p/tests/run_subtorus_4x4_tests.sh --timeout-s 400 tests/ttnn/unit_tests/operations/experimental/test_high_bw_all_gather.py
+        models/demos/deepseek_v3_d_p/tests/run_subtorus_4x4_tests.sh --timeout-s 400 models/demos/deepseek_v3_d_p/tests/attn_res/model/test_attn_res_contract.py
+        models/demos/deepseek_v3_d_p/tests/run_subtorus_4x4_tests.sh --timeout-s 400 tests/ttnn/unit_tests/operations/experimental/test_attn_res_determinism.py
+        models/demos/deepseek_v3_d_p/tests/run_subtorus_4x4_tests.sh --timeout-s 400 tests/ttnn/unit_tests/operations/experimental/test_attn_res_gather_softmax.py
+        models/demos/deepseek_v3_d_p/tests/run_subtorus_4x4_tests.sh --timeout-s 400 tests/ttnn/unit_tests/operations/experimental/test_attn_res_block_stats.py
+      '
+    )
+
+    subtorus_small_ops() (
+      export MESH_DEVICE=TG
+      timeout -k 2m 35m mpirun --bind-to none --pernode --tag-output bash -lc '
+        set -e
+        export OMP_NUM_THREADS=$(nproc)
+        models/demos/deepseek_v3_d_p/tests/run_subtorus_4x4_tests.sh --timeout-s 600 models/demos/deepseek_v3_d_p/tests/op_unit_tests/test_deepseek_prefill_update_padded_kv_cache.py
+        models/demos/deepseek_v3_d_p/tests/run_subtorus_4x4_tests.sh --timeout-s 600 models/demos/deepseek_v3_d_p/tests/op_unit_tests/test_zero_padded_kv_cache.py
+        models/demos/deepseek_v3_d_p/tests/run_subtorus_4x4_tests.sh --timeout-s 300 models/demos/deepseek_v3_d_p/tests/op_unit_tests/test_masked_bincount.py
+        models/demos/deepseek_v3_d_p/tests/run_subtorus_4x4_tests.sh --timeout-s 300 --allow-skip "experts do not divide across" models/demos/deepseek_v3_d_p/tests/op_unit_tests/test_offset_cumsum.py
+        models/demos/deepseek_v3_d_p/tests/run_subtorus_4x4_tests.sh --timeout-s 900 models/demos/deepseek_v3_d_p/tests/op_unit_tests/test_combine_fabric2d.py
+      '
+    )
+
+    subtorus_dispatch_combine() (
+      export MESH_DEVICE=TG
+      timeout -k 2m 50m mpirun --bind-to none --pernode --tag-output bash -lc '
+        set -e
+        export OMP_NUM_THREADS=$(nproc)
+        models/demos/deepseek_v3_d_p/tests/run_subtorus_4x4_tests.sh --timeout-s 1500 --allow-skip "experts do not divide across" models/demos/deepseek_v3_d_p/tests/op_unit_tests/test_prefill_dispatch.py
+        models/demos/deepseek_v3_d_p/tests/run_subtorus_4x4_tests.sh --timeout-s 1800 models/demos/deepseek_v3_d_p/tests/op_unit_tests/test_ttnn_dispatch_combine.py
+      '
+    )
+
+    echo "===== [1/3] subtorus_ccl_attn_res ====="
+    subtorus_ccl_attn_res || exit $?
+    echo "===== [2/3] subtorus_small_ops ====="
+    subtorus_small_ops || exit $?
+    echo "===== [3/3] subtorus_dispatch_combine ====="
+    subtorus_dispatch_combine || exit $?
+    echo "===== all 3 sections passed ====="
+  test_type: subtorus_4x4_ops
+  test_tags: [ccl, kv_cache]
+  test_group: module
+  skus:
+    bh_sc1:
+      # Sum of the section timeouts.
+      timeout: 110
+      tier: 2
+      release_ready: false
+  owner_id: U08RL15T4N8 # Danilo Djekic
+  team: models
+  budget_type: demo
+  sp_config: sc1
+
+
+- name: "(Kimi-K2.7-1T, Kimi-K3-2.8T, GLM-5.3-744B) 4x4 RING-RING sub-torus module and KV cache table accuracy"
+  fabric_profile: torus_xy
+  cmd: |
+    # Sections stop at the first failure: a failed test can leave the devices unreset (tt-metal#57706).
+
+    subtorus_moe() (
+      export MESH_DEVICE=TG
+      timeout -k 2m 30m mpirun --bind-to none --pernode --tag-output bash -lc '
+        set -e
+        export OMP_NUM_THREADS=$(nproc)
+        models/demos/deepseek_v3_d_p/tests/run_subtorus_4x4_tests.sh --timeout-s 1500 models/demos/deepseek_v3_d_p/tests/pcc/test_ttnn_moe.py
+      '
+    )
+
+    subtorus_modules() (
+      export MESH_DEVICE=TG
+      timeout -k 2m 40m mpirun --bind-to none --pernode --tag-output bash -lc '
+        set -e
+        export OMP_NUM_THREADS=$(nproc)
+        models/demos/deepseek_v3_d_p/tests/run_subtorus_4x4_tests.sh --timeout-s 500 models/demos/deepseek_v3_d_p/tests/pcc/test_ffn.py
+        models/demos/deepseek_v3_d_p/tests/run_subtorus_4x4_tests.sh --timeout-s 700 models/demos/deepseek_v3_d_p/tests/pcc/test_moe_gate_prefill2d.py
+        models/demos/deepseek_v3_d_p/tests/run_subtorus_4x4_tests.sh --timeout-s 400 models/demos/deepseek_v3_d_p/tests/pcc/test_moe_routing_setup.py
+        models/demos/deepseek_v3_d_p/tests/run_subtorus_4x4_tests.sh --timeout-s 400 models/demos/deepseek_v3_d_p/tests/pcc/test_parallel_embedding.py
+        models/demos/deepseek_v3_d_p/tests/run_subtorus_4x4_tests.sh --timeout-s 300 models/demos/deepseek_v3_d_p/tests/pcc/test_rmsnorm.py
+        models/demos/deepseek_v3_d_p/tests/run_subtorus_4x4_tests.sh --timeout-s 300 models/demos/deepseek_v3_d_p/tests/pcc/test_shared_expert.py
+        models/demos/deepseek_v3_d_p/tests/run_subtorus_4x4_tests.sh --timeout-s 300 models/demos/deepseek_v3_d_p/tests/test_kv_cache_table.py
+      '
+    )
+
+    echo "===== [1/2] subtorus_moe ====="
+    subtorus_moe || exit $?
+    echo "===== [2/2] subtorus_modules ====="
+    subtorus_modules || exit $?
+    echo "===== all 2 sections passed ====="
+  test_type: subtorus_4x4_pcc
+  test_tags: [moe, ccl, kv_cache]
+  test_group: module
+  skus:
+    bh_sc1:
+      # Sum of the section timeouts.
+      timeout: 70
+      tier: 2
+      release_ready: false
+  owner_id: U08RL15T4N8 # Danilo Djekic
+  team: models
+  budget_type: demo
+  sp_config: sc1
+
+
+- name: "(Kimi-K3-2.8T) 4x4 RING-RING sub-torus KDA component, layer and padding accuracy"
+  fabric_profile: torus_xy
+  cmd: |
+    # Sections stop at the first failure: a failed test can leave the devices unreset (tt-metal#57706).
+
+    subtorus_kda_components() (
+      export MESH_DEVICE=TG
+      timeout -k 2m 20m mpirun --bind-to none --pernode --tag-output bash -lc '
+        set -e
+        export OMP_NUM_THREADS=$(nproc)
+        models/demos/deepseek_v3_d_p/tests/run_subtorus_4x4_tests.sh --timeout-s 600 models/demos/deepseek_v3_d_p/tests/kda/components/test_qkv_convolution_exchange.py
+        models/demos/deepseek_v3_d_p/tests/run_subtorus_4x4_tests.sh --timeout-s 400 models/demos/deepseek_v3_d_p/tests/kda/components/test_recurrence.py
+      '
+    )
+
+    subtorus_kda_layers() (
+      export MESH_DEVICE=TG
+      export KIMI_K3_CKPT=/mnt/weka/model-weights/llm/moonshotai/Kimi-K3-dequantized
+      timeout -k 2m 35m mpirun --bind-to none --pernode --tag-output bash -lc '
+        set -e
+        export OMP_NUM_THREADS=$(nproc)
+        models/demos/deepseek_v3_d_p/tests/run_subtorus_4x4_tests.sh --timeout-s 700 models/demos/deepseek_v3_d_p/tests/kda/layer/test_acceptance.py
+        models/demos/deepseek_v3_d_p/tests/run_subtorus_4x4_tests.sh --timeout-s 500 models/demos/deepseek_v3_d_p/tests/kda/layer/test_actual_start.py
+        models/demos/deepseek_v3_d_p/tests/run_subtorus_4x4_tests.sh --timeout-s 500 models/demos/deepseek_v3_d_p/tests/kda/layer/test_distributed.py
+        models/demos/deepseek_v3_d_p/tests/run_subtorus_4x4_tests.sh --timeout-s 300 models/demos/deepseek_v3_d_p/tests/kda/layer/test_padding_early_exit.py
+        models/demos/deepseek_v3_d_p/tests/run_subtorus_4x4_tests.sh --timeout-s 300 models/demos/deepseek_v3_d_p/tests/kimi_k3/test_kda_padding.py
+      '
+    )
+
+    echo "===== [1/2] subtorus_kda_components ====="
+    subtorus_kda_components || exit $?
+    echo "===== [2/2] subtorus_kda_layers ====="
+    subtorus_kda_layers || exit $?
+    echo "===== all 2 sections passed ====="
+  test_type: subtorus_4x4_kda
+  test_tags: [kimi_k3]
+  test_group: module
+  skus:
+    bh_sc1:
+      # Sum of the section timeouts.
+      timeout: 55
+      tier: 2
+      release_ready: false
+  owner_id: U0ACLAM77PS  # Kosta Grujcic
+  team: models
+  budget_type: demo
+  sp_config: sc1
+
+
+- name: "(GLM-5.3-744B) 4x4 RING-RING sub-torus sparse MLA, prefill block, MTP, prefill transformer and chunked accuracy"
+  fabric_profile: torus_xy
+  cmd: |
+    # Sections stop at the first failure: a failed test can leave the devices unreset (tt-metal#57706).
+
+    subtorus_glm_sparse_mla() (
+      export MESH_DEVICE=TG
+      timeout -k 2m 12m mpirun --bind-to none --pernode --tag-output bash -lc '
+        set -e
+        export OMP_NUM_THREADS=$(nproc)
+        models/demos/deepseek_v3_d_p/tests/run_subtorus_4x4_tests.sh --timeout-s 600 models/demos/deepseek_v3_d_p/tests/sparse_mla/test_sparse_mla.py
+      '
+    )
+
+    subtorus_glm_block() (
+      export MESH_DEVICE=TG
+      export GLM53_HF_MODEL=/mnt/weka/model-weights/llm/zai-org/GLM-5.3-fp8-aca966e4
+      # The 4x4 TTNN caches are built into a scratch directory: the shared ones are laid out for the 8x4 mesh and read-only.
+      export TT_GLM53_PREFILL_TTNN_CACHE=${RUNNER_TEMP:-/tmp}/glm53_4x4_prefill_cache
+      export TT_GLM53_MTP_TTNN_CACHE=${RUNNER_TEMP:-/tmp}/glm53_4x4_mtp_cache
+      timeout -k 2m 15m mpirun --bind-to none --pernode --tag-output bash -lc '
+        set -e
+        export OMP_NUM_THREADS=$(nproc)
+        models/demos/deepseek_v3_d_p/tests/run_subtorus_4x4_tests.sh --timeout-s 800 -k "seq5120 and glm53" models/demos/deepseek_v3_d_p/tests/test_prefill_block.py::test_glm_prefill_block
+      '
+    )
+
+    subtorus_glm_mtp() (
+      export MESH_DEVICE=TG
+      export GLM53_HF_MODEL=/mnt/weka/model-weights/llm/zai-org/GLM-5.3-fp8-aca966e4
+      # The 4x4 TTNN caches are built into a scratch directory: the shared ones are laid out for the 8x4 mesh and read-only.
+      export TT_GLM53_PREFILL_TTNN_CACHE=${RUNNER_TEMP:-/tmp}/glm53_4x4_prefill_cache
+      export TT_GLM53_MTP_TTNN_CACHE=${RUNNER_TEMP:-/tmp}/glm53_4x4_mtp_cache
+      timeout -k 2m 40m mpirun --bind-to none --pernode --tag-output bash -lc '
+        set -e
+        export OMP_NUM_THREADS=$(nproc)
+        models/demos/deepseek_v3_d_p/tests/run_subtorus_4x4_tests.sh --timeout-s 1200 -k "not multiturn and not trunk_tail and (fused or pretrained)" models/demos/deepseek_v3_d_p/tests/mtp_prefill/test_mtp.py
+        models/demos/deepseek_v3_d_p/tests/run_subtorus_4x4_tests.sh --timeout-s 900 -k "pretrained and levels1 and aligned_min" models/demos/deepseek_v3_d_p/tests/mtp_prefill/test_mtp.py::test_mtp_multiturn_pcc
+      '
+    )
+
+    subtorus_glm_prefill_transformer() (
+      export MESH_DEVICE=TG
+      export GLM53_HF_MODEL=/mnt/weka/model-weights/llm/zai-org/GLM-5.3-fp8-aca966e4
+      # The 4x4 TTNN caches are built into a scratch directory: the shared ones are laid out for the 8x4 mesh and read-only.
+      export TT_GLM53_PREFILL_TTNN_CACHE=${RUNNER_TEMP:-/tmp}/glm53_4x4_prefill_cache
+      export TT_GLM53_MTP_TTNN_CACHE=${RUNNER_TEMP:-/tmp}/glm53_4x4_mtp_cache
+      timeout -k 2m 40m mpirun --bind-to none --pernode --tag-output bash -lc '
+        set -e
+        export OMP_NUM_THREADS=$(nproc)
+        models/demos/deepseek_v3_d_p/tests/run_subtorus_4x4_tests.sh --timeout-s 1200 -k "5_layers" models/demos/deepseek_v3_d_p/tests/test_prefill_transformer.py::test_glm_build_ttnn_cache
+        models/demos/deepseek_v3_d_p/tests/run_subtorus_4x4_tests.sh --timeout-s 1500 -k "5_layers and smoke and json_prompts and right_pad" models/demos/deepseek_v3_d_p/tests/test_prefill_transformer.py::test_glm_prefill_transformer
+      '
+    )
+
+    subtorus_glm_chunked() (
+      export MESH_DEVICE=TG
+      export GLM53_HF_MODEL=/mnt/weka/model-weights/llm/zai-org/GLM-5.3-fp8-aca966e4
+      # The 4x4 TTNN caches are built into a scratch directory: the shared ones are laid out for the 8x4 mesh and read-only.
+      export TT_GLM53_PREFILL_TTNN_CACHE=${RUNNER_TEMP:-/tmp}/glm53_4x4_prefill_cache
+      export TT_GLM53_MTP_TTNN_CACHE=${RUNNER_TEMP:-/tmp}/glm53_4x4_mtp_cache
+      timeout -k 2m 40m mpirun --bind-to none --pernode --tag-output bash -lc '
+        set -e
+        export OMP_NUM_THREADS=$(nproc)
+        models/demos/deepseek_v3_d_p/tests/run_subtorus_4x4_tests.sh --timeout-s 1200 -k "L1 and cold_cache and (notrace or traced)" models/demos/deepseek_v3_d_p/tests/test_prefill_transformer_chunked.py::test_glm_prefill_transformer_chunked
+        models/demos/deepseek_v3_d_p/tests/run_subtorus_4x4_tests.sh --timeout-s 1200 -k "L1 and chunks2 and iters1 and (notrace or traced)" models/demos/deepseek_v3_d_p/tests/test_prefill_transformer_chunked.py::test_glm_prefill_transformer_chunked_no_pcc
+      '
+    )
+
+    echo "===== [1/5] subtorus_glm_sparse_mla ====="
+    subtorus_glm_sparse_mla || exit $?
+    echo "===== [2/5] subtorus_glm_block ====="
+    subtorus_glm_block || exit $?
+    echo "===== [3/5] subtorus_glm_mtp ====="
+    subtorus_glm_mtp || exit $?
+    echo "===== [4/5] subtorus_glm_prefill_transformer ====="
+    subtorus_glm_prefill_transformer || exit $?
+    echo "===== [5/5] subtorus_glm_chunked ====="
+    subtorus_glm_chunked || exit $?
+    echo "===== all 5 sections passed ====="
+  test_type: subtorus_4x4_glm
+  test_tags: [glm_5_3, mla, block, mtp, transformer]
+  test_group: module
+  skus:
+    bh_sc1:
+      # Sum of the section timeouts.
+      timeout: 147
+      tier: 2
+      release_ready: false
+  owner_id: U09LK84G4TF  # Nikola Milicevic
+  team: models
+  budget_type: demo
+  sp_config: sc1
+
+
+- name: "(Kimi-K2.7-1T) 4x4 RING-RING sub-torus MLA chunked and DFlash accuracy"
+  fabric_profile: torus_xy
+  cmd: |
+    # Sections stop at the first failure: a failed test can leave the devices unreset (tt-metal#57706).
+
+    subtorus_kimi_mla() (
+      export MESH_DEVICE=TG
+      timeout -k 2m 30m mpirun --bind-to none --pernode --tag-output bash -lc '
+        set -e
+        export OMP_NUM_THREADS=$(nproc)
+        models/demos/deepseek_v3_d_p/tests/run_subtorus_4x4_tests.sh --timeout-s 1500 -k "k2_7 and ((maxedge-1u and cpu and no_determinism) or (plain-5k and func and with_determinism and scalar))" models/demos/deepseek_v3_d_p/tests/test_mla.py::test_mla_chunked_prefill
+      '
+    )
+
+    subtorus_kimi_dflash() (
+      export MESH_DEVICE=TG
+      export DFLASH_HF_MODEL=/mnt/weka/model-weights/llm/moonshotai/Kimi-K2.7-Code-DFlash
+      timeout -k 2m 25m mpirun --bind-to none --pernode --tag-output bash -lc '
+        set -e
+        export OMP_NUM_THREADS=$(nproc)
+        models/demos/deepseek_v3_d_p/tests/run_subtorus_4x4_tests.sh --timeout-s 800 -k "pretrained and ctx5k-1chunk" models/demos/deepseek_v3_d_p/tests/dflash_prefill/test_dflash.py::test_dflash_pcc
+        models/demos/deepseek_v3_d_p/tests/run_subtorus_4x4_tests.sh --timeout-s 800 -k "pretrained and (aligned_min or midchip_straddle or lastchip or rot_partial)" models/demos/deepseek_v3_d_p/tests/dflash_prefill/test_dflash.py::test_dflash_multiturn_pcc
+      '
+    )
+
+    echo "===== [1/2] subtorus_kimi_mla ====="
+    subtorus_kimi_mla || exit $?
+    echo "===== [2/2] subtorus_kimi_dflash ====="
+    subtorus_kimi_dflash || exit $?
+    echo "===== all 2 sections passed ====="
+  test_type: subtorus_4x4_kimi
+  test_tags: [kimi_k2_7, mla, dflash]
+  test_group: module
+  skus:
+    bh_sc1:
+      # Sum of the section timeouts.
+      timeout: 55
+      tier: 2
+      release_ready: false
+  owner_id: U08RL15T4N8 # Danilo Djekic
+  team: models
+  budget_type: demo
+  sp_config: sc1
+
+
 # ===== Kimi-K3-2.8T ====================================================================================
 
 - name: "(Kimi-K3-2.8T) contract gates, KDA 5k, MLA chunked 10k@5k and 55k@5k + K3.1 sparse MLA 5k"
@@ -800,14 +1106,9 @@
         export OMP_NUM_THREADS=$(nproc)
         python3 -m pytest models/demos/deepseek_v3_d_p/tests/op_unit_tests/test_sparse_push_plan.py -vvv --tb=short &&
         python3 -m pytest tests/ttnn/unit_tests/operations/experimental/test_sparse_kv_push.py -vvv --tb=short &&
-        # The xy4 rows (the unnarrowed run above skips them) on a [RING, RING] 4x4 sub-torus of this Galaxy: the
-        # carve is the AttnRes harness SUBTORUS_4X4_ENV. All 10 must run, so the summary has to say 10 passed.
-        (
-          set -o pipefail
-          eval "$(python3 -c "from models.demos.deepseek_v3_d_p.tests.attn_res.model.harness import SUBTORUS_4X4_ENV as E; print(*(f\"export {k}={v}\" for k, v in E.items()), sep=chr(10))")" || exit 1
-          timeout -k 1m 10m python3 -m pytest tests/ttnn/unit_tests/operations/experimental/test_sparse_kv_push.py -k xy4 -vvv --tb=short --timeout=480 -rs 2>&1 | tee /tmp/sparse_kv_push_xy4.log || exit 1
-          grep -qE "(^|[ =])10 passed" /tmp/sparse_kv_push_xy4.log && ! grep -qE "[0-9]+ (skipped|failed|error)" /tmp/sparse_kv_push_xy4.log
-        ) &&
+        # The xy4 rows (the unnarrowed run above skips them) on a [RING, RING] 4x4 sub-torus of this Galaxy. All 10
+        # must run.
+        models/demos/deepseek_v3_d_p/tests/run_subtorus_4x4_tests.sh --timeout-s 600 --expect 10 tests/ttnn/unit_tests/operations/experimental/test_sparse_kv_push.py &&
         python3 -m pytest tests/nightly/blackhole/sdpa/test_sparse_sdpa_kv_push.py::test_sparse_kv_push_real_topk_matches_gather -vvv --tb=short
       '
     )
