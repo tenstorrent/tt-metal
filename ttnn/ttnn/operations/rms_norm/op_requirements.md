@@ -204,7 +204,7 @@ Bullet 3 FAIL: REGRESSION — prior-passing golden cells no longer pass (respons
 **Done when**: the gate passes — zero hangs in SUPPORTED, acceptance + refinement tests pass, golden majority with no regression.
 
 **Outcome**: the R4 kernels were not at fault. All 668 `supported_fail` cells were `error/infra`, "not reported by its device job", from 7 golden chunks (002, 004, 006, 008, 011, 014, 019) that the broker reaped as hung for 300 s of no output. The cause is the R2b one: the precompile warm pass fails with `bench_devfilter` ImportError, and R4's kernel edits invalidated the JIT cache, so every test compiled cold, inline and serially, at ~1.2 s per test. Every cell that ran passed (PASSED=4231 FAILED=0 HANGS=0). A FULL golden run through `eval/eval_test_runner.sh` (same chunked broker path) on the unchanged R4 code gave PASSED=4899 FAILED=0 ERRORS=0 HANGS=0, chunks 23–106 s. `verify_supported`: supported_pass 4886, supported_fail 0, xfail_expected 1229, xfail_wrong_mode 0, invalid_unexpected 0, xpass_drift 0, and 0 regressions against every prior pass. Kernels are unchanged. The structural fix is runtime-arg shape extents, so binaries are shared across shapes and fewer programs need compiling; see the changelog.
-### [ ] Refinement 5 — Speed up the interleaved perf profile (DRAM-bound prefill, latency-bound decode)
+### [x] Refinement 5 — Speed up the interleaved perf profile (DRAM-bound prefill, latency-bound decode)
 
 **Type**: perf
 
@@ -220,3 +220,30 @@ No SUPPORTED change.
 **Verifier notes**: if `/perf-ceiling-dm` shows the prefill shapes within a few percent of the DRAM ceiling, restrict this phase to the decode shapes (latency-bound, small grid occupancy). If those don't move either, close it with the measurement recorded rather than inventing a lever. All knobs here are knob-turns on parameters `select_blocking()` already owns. Change the constant there, not in the kernels.
 
 **Done when**: measured device ns improves on the most-impacted interleaved perf shapes, or the phase is closed with a recorded ceiling measurement showing no headroom. The 0.9995 PCC gate holds, the golden suite is green, and there is no regression across the config-spanning guard set.
+
+**Outcome**:
+- **Measured.** Device-kernel ns on BH p150b at 1350 MHz (`achievable_ns` applies unscaled), exact config (bf16, HiFi2, fp32_dest_acc_en=False, TILE bf16 γ). Before = R4 code, after = 3-run medians. Every case is now 0.04–0.84× of `achievable_ns`; PCC unchanged (≥ 0.99985).
+
+  | Shape | before | after | Δ |
+  |---|---|---|---|
+  | 32×1024 | 4039 | 3791 | −6.1 % |
+  | 32×2304 | 4610 | 4482 | −2.8 % |
+  | 32×5120 | 5601 | 5444 | −2.8 % |
+  | 32×7168 | 6607 | 6393 | −3.2 % |
+  | 640×6144 | 46588 | 41896 | −10.1 % |
+  | 640×7168 | 52704 | 48619 | −7.8 % |
+  | 7168×1024 | 77773 | 74938 | −3.6 % |
+  | 7168×2048 | 151139 | 147833 | −2.2 % |
+  | 8192×1024 | 87356 | 81836 | −6.3 % |
+  | 8192×2304 | 194130 | 183640 | −5.4 % |
+  | 8192×5120 | 425888 | 394654 | −7.3 % |
+  | 8192×7168 | 554101 | 547375 | −1.2 % |
+- **Ceiling.** The `noc_estimate` CLI is not built on this board, so the DRAM ceiling was measured instead: `ttnn.clone` / `ttnn.relu` on the same shapes move the same bytes (x read once, y written once) at 380–414 GB/s (clone 640×6144 37.9 µs, 7168×1024 73.4, 8192×1024 82.2, 8192×5120 411, 8192×7168 590). rms_norm now runs at 0.93–1.10× of clone's time, i.e. 375–430 GB/s, so prefill is DRAM-bound at the board's practical ceiling (≈ 80–84 % of the 512 GB/s GDDR6 peak).
+- **Levers, all kept as host knobs in `select_blocking()` / the descriptor:**
+  - L2 `BALANCED_W_SPLIT` (busiest-core cost model, widen only for ≥ 4 % modelled gain; R < C with k_occ = 1 stays LOCAL) and `LINE_MIN_CORES = 8` / `LINE_MIN_CORE_W_TILES = 4` for narrow rows. 640-row shapes k 5 → 11 (all 110 cores, 36 vs 39 tiles on the busiest core), 8192×5120 / 8192×2304 / 8192×1024 LOCAL → k = 2, 7168×1024 / 7168×2048 → k = 4, Wt ≤ 32 decode rows widen to 4-tile slices.
+  - L9 `BANK_STAGGER`: per-core rotation of each read / write chunk's issue order, gated to lockstep walks; −1.5 to −4 %.
+  - Correctness fix found on the way: the interleaved `cb_y` DEST window must divide `core_w_tiles` (the chain row-blocks its windows); the old block-level check straddled the ring at `core_w_tiles % 8 ≠ 0` (PCC 0.90 on 8192×5120 at a forced w_split = 8; no golden shape reached it).
+  - Measured flat and parked at their defaults: L1 `MIN_BLOCKS_PER_LINE` (2–3 blocks per core), L10 read / write chunk 16 / 32, `Y_DEPTH` 4. `MIN_CORE_W_TILES` 4 / 16 hurt the wide decode rows, so it stays 8.
+- **What binds now.** Prefill is DRAM-bound at the copy ceiling. Decode is a latency chain: DRAM read of the slice → Σx² → gather → combine → rinv multicast → normalize → DRAM write. Its DRAM bytes take ≤ 2.3 µs at 400 GB/s, and the rendezvous accounts for the ~3 µs that WIDTH_SHARDED decode (x already in L1) still spends.
+- **Next steps.** For decode, the R3 rendezvous items: flushed writes + per-sender flag instead of barrier + atomic, root normalizing from its own `cb_rinv_bcast`. Also trid-split read chunks so Σx² starts on the first half of the slice, worth about 0.1–0.2 µs.
+- **Why not done here.** Prefill has no headroom against a pure copy. The decode cases already run at 0.04–0.43× of `achievable_ns`, and the remaining levers are new synchronization protocols with hang risk for single-digit-percent gains.

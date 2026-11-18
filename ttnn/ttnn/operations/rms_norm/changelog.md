@@ -236,3 +236,49 @@
   - Any kernel edit puts the next harness run back in this regime until the cache is re-warmed. Phases that edit kernels should end with one full golden run through `eval/eval_test_runner.sh`; warm, it takes ~10 min.
   - The structural fix is to make the TILE kernels' shape extents runtime args, so binaries are shared across shapes. It was not done here: it rewrites all three kernels, would invalidate the cache this run just warmed, and is a perf-neutral-at-best change outside R4's scope.
 - Tests added: none.
+
+## Refinement 5 — Speed up the interleaved perf profile (DRAM-bound prefill, latency-bound decode)
+- Date: 2026-11-18
+- What was done (host knobs in `select_blocking()` / the descriptor, plus a 3-line rotation in the reader and writer chunk loops; no CB added, no SUPPORTED change):
+  - **Balanced interleaved split (L2).** `BALANCED_W_SPLIT` picks `w_split` with a busiest-core cost model: `ceil(R / lines) · (cw + W_SPLIT_ROW_COST_TILES·[k > 1])`. It widens from the old occupancy choice only for a ≥ 4 % (`BALANCE_MIN_GAIN`) modelled gain. Where R < C and the old rule chose LOCAL, it stays LOCAL: 1024×256 measured 5.0 µs LOCAL vs 6.5 µs at w_split = 2, because the rendezvous is unamortized. `LINE_MIN_CORES = 8` / `LINE_MIN_CORE_W_TILES = 4` let narrow rows (Wt < 64) widen a line to 8 cores of 4 tiles. Decode latency ≈ a·cw + b·k with a ≈ 1.8 b, so the best slice is ~√Wt.
+  - **Bank stagger (L9).** `BANK_STAGGER`: each core rotates its read and write chunk issue order by its index. It is gated to walks where every core's chunks start on the same bank (`Wt` and `core_w_tiles` multiples of the chunk grain). New reader RT arg 11 and writer RT arg 15; 0 means in order.
+  - **Bug fix.** `_norm_block` now picks the largest window ≤ `NORM_DEST_BLOCK` that divides both `core_w_tiles` and the `cb_y` ring. The chain row-blocks its windows, so the old `(block_rows·cw) % 8` check let an 8-window straddle the 16-tile ring whenever `cw % 8 ≠ 0`. That gave PCC 0.90 on 8192×5120 at a forced w_split = 8. It was latent: no golden shape reached it.
+  - **Measured and parked at a byte-identical default:** `MIN_BLOCKS_PER_LINE = 1` (L1: 2–3 blocks per core were flat) and `FORCE_W_SPLIT = 0` (probe override). Also measured and left unchanged: READ_CHUNK_TILES 16 / 32, Y_CHUNK_TILES 16, Y_DEPTH 4 (flat on prefill), READ_CHUNK_TILES 2 / 4 (+8–25 % on decode), MIN_CORE_W_TILES 4 / 16 (worse on wide decode).
+- Perf (device-kernel ns, BH p150b at 1350 MHz; before = R4 code, after = 3-run medians), as (shape: before → after vs `achievable_ns`):
+  - 32×1024: 4039 → 3791 (9149)
+  - 32×2304: 4610 → 4482 (17003)
+  - 32×5120: 5601 → 5444 (75825)
+  - 32×7168: 6607 → 6393 (14894)
+  - 640×6144: 46588 → 41896 (101968)
+  - 640×7168: 52704 → 48619 (119307)
+  - 7168×1024: 77773 → 74938 (89392)
+  - 7168×2048: 151139 → 147833 (172892)
+  - 8192×1024: 87356 → 81836 (96744)
+  - 8192×2304: 194130 → 183640 (211345)
+  - 8192×5120: 425888 → 394654 (738307)
+  - 8192×7168: 554101 → 547375 (1032281)
+- Ceiling: `ttnn.clone` / `ttnn.relu` move the same DRAM bytes at 380–414 GB/s on this board (probe `probes/perf_r5_copy_ref.py`). rms_norm prefill is now at 0.93–1.10× of clone's time, so it is DRAM-bound. See the R5 **Outcome** line for what binds decode.
+- Guard set (R3/R4 probes) shows no regression:
+  - BLOCK: 10.7 / 12.6 / 13.2 / 17.0 / 16.3 µs
+  - HEIGHT 1024×4096: 27.0 µs (26.6 in R4, noise)
+  - RM WIDTH 32×4096: 9.7 µs
+  - interleaved RM 32×4096: 8.8 µs
+  - WIDTH decode: 2870 / 3242 / 3590 / 3650 ns
+  - interleaved 32×4096: 5.14 µs
+- Additional guard measurements for the shapes whose blocking changed:
+  - 32×512: 3.95 → 3.64 µs
+  - 32×768: 4.12 → 3.71 µs
+  - 128×512: 4.5–6.0 → 4.3 µs
+  - 512×512: 5.7–7.4 → 5.7 µs
+  - 64×1024: 4.13 µs, unchanged
+  - 1024×512: 8.1 µs, tie
+- Accuracy achieved: the 12 interleaved perf cases have PCC 0.99985–1.0 at the 0.9995 gate, unchanged from R4.
+- Golden test progress (targeted slices; the harness's full run is the record):
+  - `test_op_loose` on every perf / wide shape, all placements: 24 passed.
+  - `test_op` cartesian on the shapes whose interleaved blocking changed (2x4x128x512, 4x128x512, 128x512): 132 passed, 33 xfailed, 0 failed.
+  - Unit dir: 284 passed, 7 skipped.
+- Issues encountered:
+  - The env-var knob overrides do not reach the device job unless they carry an `EVAL_` prefix. The shim forwards only `TT_` / `EVAL_` / … variables.
+  - The `noc_estimate` CLI is not built, so the ceiling is a measured clone reference.
+  - Kernel edits (reader / writer RT arg) invalidate the JIT cache for every program; see R2b / R4b about cold-compile chunk timeouts.
+- Tests added: probes `probes/perf_r5_interleaved.py` (12 perf shapes at the exact config, with `EVAL_R5_KNOBS` / `EVAL_R5_SHAPES` overrides) and `probes/perf_r5_copy_ref.py` (clone / relu DRAM reference).

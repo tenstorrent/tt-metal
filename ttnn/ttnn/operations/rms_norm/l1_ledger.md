@@ -38,7 +38,7 @@ Page-format rule applied (Refinement 1, ledger audit 3): every compute-produced 
 | `cw` (`core_w_tiles`) | block extent along W = whole per-core slice | `1 ≤ cw ≤ tensor_w_tiles` (+ `wc − 1` RM chunk padding) | interleaved: `cw = ⌈tensor_w_tiles / k⌉` with `k ≥ k_fit` ⇒ `footprint(1, cw, k) ≤ B`. Sharded: `⌈shard_w / 32⌉` (TILE: the shard's tile pitch, fixed); RM `[chunk]`: rounded up to a multiple of `wc` |
 | `wc` (`w_chunk_tiles`) | W-chunk of the γ and RM staging buffers | `1 ≤ wc ≤ cw` | `select_blocking()` sharded branch: the largest `⌈cw/m⌉` (m = 1, 2, …) with `footprint(1, cw, k, wc) ≤ B_sh`; interleaved: `wc = cw` (byte-identical) |
 | `B_sh` | sharded CB budget | `min(L1 addr of the sharded input / output) − L1 allocator base − 16 KiB` | host: the CB region grows up from the allocator base and must end below the resident shard buffers, which the allocator places at the L1 top |
-| `k` (`w_split`) | cores per line | `1 ≤ k ≤ grid_cores` (≤ 140 on any current part) | `k = max(k_fit, k_occ)`, `k ≤ C` by construction; host refuses if `k_fit` does not exist |
+| `k` (`w_split`) | cores per line | `1 ≤ k ≤ grid_cores` (≤ 140 on any current part) | interleaved: `k_occ = max(k_fit, …)`, then (Refinement 5 `BALANCED_W_SPLIT`) widened within `[k_occ (R<C) / k_fit (R≥C), k_hi]` by the busiest-core cost model; `k ≤ C` by construction; host refuses if `k_fit` does not exist. Every candidate is footprint-checked through `k_fit` (a wider line only shrinks per-core CBs) |
 | `B` (`L1_CB_BUDGET_BYTES`) | per-core CB budget | `1 MiB` (constant) | host constant (perf lamp L8) |
 | `x_block_depth`, `x_rm_depth`, `y_depth`, `out_rm_depth` | buffer depths | 2 each | host constants |
 | `y_chunk_tiles` | writer chunk | 8 | host constant |
@@ -90,6 +90,8 @@ Worked values (bf16, γ RM bf16, `B = 1 MiB`):
 | y [sh·rm] | **0** | 1 L1→L1 stick write into its own output shard | 0 |
 | γ | unchunked: as interleaved (once per core). `[chunk]`: `num_blocks·passes` reads of the slice (`passes` = tile-rows per block for RM, 1 for TILE). Only when a HEIGHT-sharded row is too wide to keep γ resident next to its two shards; there the shards hold 1–2 tile-rows, so it is ≈ one read | — | — |
 | partials / rinv [ws] | 0 | — | as W_SPLIT, over the shard-grid line (WIDTH: whole grid; BLOCK: one shard-grid row, column for COL_MAJOR) |
+
+(Refinement 5) No DRAM crossing changed and no CB was added: x and y still cross DRAM once. The interleaved split now picks `w_split` by a busiest-core cost model, so some prefill shapes moved LOCAL → W_SPLIT (e.g. 8192×5120: k 1 → 2) and the 640-row shapes moved k 5 → 11; their footprints are the existing W_SPLIT rows of this ledger at the chosen `k`. The interleaved `cb_y` DEST window is now the largest divisor of both `core_w_tiles` and the `Y_DEPTH·Y_CHUNK_TILES` ring (≤ `NORM_DEST_BLOCK`); it was `NORM_DEST_BLOCK` whenever `block_rows·core_w_tiles` was a multiple, which straddled the ring for `core_w_tiles % 8 ≠ 0` (latent bug, never reached by a golden shape). The reader / writer issue order within a chunk is rotated per core (bank stagger) — same pages, same CB slots.
 
 (Refinement 4) No DRAM crossing changed. `[dense]` cross-core: the partial gather carries `⌈R/32⌉·(k−1)·T_int` (whole dense tiles) instead of `R·(k−1)·T_int/2`, and the rinv multicast `⌈R/32⌉·T_int` instead of `R·T_int` per line; each core re-expands rinv locally (compute only).
 

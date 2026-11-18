@@ -78,10 +78,13 @@ DENSE_GROUP = TILE  # tile-rows per dense tile: one column each
 # LOCAL split whose last ceil(R / C) round runs on R % C cores. BALANCED_W_SPLIT keeps the regime it picks where the
 # rendezvous latency is not amortized (R < C and k_occ == 1 stays LOCAL: e.g. 1024x256 measured 5.0 us LOCAL vs 6.5 us
 # at w_split = 2) and otherwise picks the k in [k_occ, k_hi] (R >= C: [k_fit, k_hi]) minimizing the busiest core's
-# work, ceil(R / lines) · (cw + W_SPLIT_ROW_COST_TILES·[k > 1]) x-tiles (ties -> fewer cores per line). The row cost
-# prices a W_SPLIT tile-row's fixed work (partial, combine, rinv expand). False: k = k_occ.
+# work, ceil(R / lines) · (cw + W_SPLIT_ROW_COST_TILES·[k > 1]) x-tiles. The row cost prices a W_SPLIT tile-row's
+# fixed work (partial, combine, rinv expand). k widens from k_lo only while each step cuts that cost by more than
+# BALANCE_MIN_GAIN: the model is coarse, and a wider line that wins < ~4 % on paper measured flat or slower (8192x7168
+# w_split 5: 556 us vs 2: 551 us; 8192x5120 5: 406 vs 2: 395). False: k = k_occ.
 BALANCED_W_SPLIT = True
 W_SPLIT_ROW_COST_TILES = 1
+BALANCE_MIN_GAIN = 0.04
 # k_hi = max(k_fit, Wt // MIN_CORE_W_TILES, min(Wt // LINE_MIN_CORE_W_TILES, LINE_MIN_CORES)): narrow rows may still
 # widen a W_SPLIT line to LINE_MIN_CORES cores down to LINE_MIN_CORE_W_TILES tiles each — a one-row line is latency-
 # bound, ~a·cw + b·k with a ≈ 1.8 b measured, so its best slice is ~sqrt(Wt) tiles (32x1024: 8 cores x 4 tiles 3.8 us
@@ -362,7 +365,12 @@ def select_blocking(
     if BALANCED_W_SPLIT and (R >= C or k > 1):
         k_lo = k_fit if R >= C else k
         k_hi = min(C, max(k_lo, Wt // MIN_CORE_W_TILES, min(Wt // LINE_MIN_CORE_W_TILES, LINE_MIN_CORES)))
-        k = min(range(k_lo, k_hi + 1), key=lambda k: (_split_cost(R, Wt, C, k), k))
+        best = _split_cost(R, Wt, C, k_lo)
+        k = k_lo
+        for kk in range(k_lo + 1, k_hi + 1):  # widen only for a real gain (the cost model is coarse)
+            c = _split_cost(R, Wt, C, kk)
+            if c < best * (1 - BALANCE_MIN_GAIN):
+                k, best = kk, c
     if FORCE_W_SPLIT:
         k = max(k_fit, FORCE_W_SPLIT)
     cw = _div_up(Wt, k)
