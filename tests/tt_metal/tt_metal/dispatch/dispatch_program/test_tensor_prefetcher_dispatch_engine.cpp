@@ -128,7 +128,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, TensorPrefetcherDramSenderPipesLiveOnD
     config.receiver_domain = CoreRangeSet(CoreRange(receivers[0])).merge(CoreRangeSet(CoreRange(receivers[1])));
     config.ring_size = 4096;
     config.max_receivers_per_pipe = 2;
-    auto space = experimental::CreatePrefetcherPipeSpace(mesh_device, config);
+    auto space = experimental::CreatePrefetcherPipeSpace(mesh_device.mesh_command_queue(0), config);
     const std::vector<std::pair<uint32_t, CoreRangeSet>> bank_to_receivers = {{0, config.receiver_domain}};
     auto pipes = experimental::CreatePrefetcherPipesForTensorPrefetcher(space, bank_to_receivers);
     ASSERT_EQ(pipes.size(), 1u);

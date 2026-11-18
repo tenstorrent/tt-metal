@@ -136,7 +136,7 @@ The `launch_multihost_galaxy` script automatically sets `DEEPSEEK_V3_HF_MODEL` a
 - `--no-stop-at-eos`: Always record `max-new-tokens`, even after EOS. Use this for fixed-length stress or perf runs.
 - `--early_print_first_user`: Stream tokens for the first prompt as they are produced.
 - `--generator {bp}`: Select batch-parallel generator implementation (default: `bp`).
-- `--enable-trace`: Enable tracing for the batch-parallel generator decode path.
+- `--disable-trace`: Disable tracing of the decode forward pass (tracing is on by default).
 - `--random-weights`: Use randomly initialized weights (single dense layer only). Does not require tokenizer or safetensors.
 - `--single-layer {mlp,moe}`: When combined with `--random-weights`, request a single-layer run (`mlp` only).
 - `--token-accuracy`: Enable teacher-forcing decode and report accuracy (requires full-model mode plus tokenizer and reference file).

@@ -98,7 +98,7 @@ struct ReceiverContiguousCase {
         const uint32_t n = num_receivers * kTilesPerReceiver * TILE_WIDTH;
         const uint32_t entry_bytes = kKBlockTiles * kTilesPerReceiver * kBfloat16TileBytes;
         space = std::make_unique<metal_exp::PrefetcherPipeSpace>(metal_exp::CreatePrefetcherPipeSpace(
-            *device,
+            device->mesh_command_queue(0),
             {.num_dram_senders = num_banks,
              .receiver_domain = receiver_domain,
              .ring_size = ring_entries * entry_bytes,
