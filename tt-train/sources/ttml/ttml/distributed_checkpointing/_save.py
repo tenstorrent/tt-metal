@@ -2,11 +2,12 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""Save: read each owned shard off its device once, untilize on the host, write it from its file's own thread.
+"""Save: read each owned shard off its device once, untilize it on the host and write it from its file's own thread.
 
 No tensor is ever gathered, composed or pickled. The main thread issues the device reads (one command-queue batch per
-tensor for the coordinates this host owns after replica deduplication) and the host untilize; writer threads only
-touch numpy views of host buffers and file descriptors. A byte budget bounds the host memory in flight.
+tensor for the coordinates this host owns after replica deduplication); each file's writer thread untilizes the
+shards queued for it on the host (ttnn releases the GIL there, so the files' shards convert in parallel) and writes
+them. A byte budget bounds the host memory in flight.
 """
 
 from __future__ import annotations
@@ -103,13 +104,18 @@ def _one_process_owner(key: str, group: list[Chunk]) -> Chunk:
 
 
 def _writer(jobs: queue.SimpleQueue, crcs: dict, failed: list, stop: threading.Event, budget: _ByteBudget) -> None:
-    """A writer thread: writes the chunks queued for its files in queue order and records each one's CRC32 per
-    (key, file), until it gets None. Once a write or the readback has failed it only releases the budget of what is
-    still queued."""
+    """A writer thread: untilizes the shards queued for its files on the host, writes them in queue order and records
+    each one's CRC32 per (key, file), until it gets None. Once a write or the readback has failed it only releases the
+    budget of what is still queued."""
     while (job := jobs.get()) is not None:
-        key, file_index, fd, offset, view, charged = job
+        key, file_index, fd, offset, shard, sizes, itemsize, charged = job
+        job = None
         try:
             if not stop.is_set():
+                row_major = shard.to(ttnn.ROW_MAJOR_LAYOUT)
+                shard = None
+                data = row_major.host_buffer().get_shard(ttnn.MeshCoordinate(0, 0))  # its one shard
+                view = _logical_bytes(np.from_dlpack(data), sizes, itemsize)
                 pwrite_all(fd, view, offset)
                 crcs[(key, file_index)] = zlib.crc32(view)
         except BaseException as err:
@@ -170,16 +176,15 @@ def _write_plan(
                 budget.acquire(charged)
                 value = live_tensor.tensor.get_value(NATIVE)
                 t_read = time.perf_counter()
-                # One read for the owned coordinates; each shard comes back as a single-device host tensor.
+                # One read for the owned coordinates; each shard comes back as a single-device host tensor, which its
+                # file's writer untilizes.
                 shards = value.cpu_shards([ttnn.MeshCoordinate(list(it.chunk.mesh_coord)) for it in items])
-                shards = [shard.to(ttnn.ROW_MAJOR_LAYOUT) for shard in shards]
                 readback_s += time.perf_counter() - t_read
                 per_item = charged // len(items)
                 for it, shard in zip(items, shards):
-                    data = shard.host_buffer().get_shard(ttnn.MeshCoordinate(0, 0))  # its one shard
-                    view = _logical_bytes(np.from_dlpack(data), it.chunk.box.sizes, info.itemsize)
                     offset = data_start[it.file] + it.data_offset
-                    queue_of[it.file].put((key, it.file, fds[it.file], offset, view, per_item))
+                    job = (key, it.file, fds[it.file], offset, shard, it.chunk.box.sizes, info.itemsize, per_item)
+                    queue_of[it.file].put(job)
                 del shards
         except BaseException:
             stop.set()  # the writers drop what is still queued
