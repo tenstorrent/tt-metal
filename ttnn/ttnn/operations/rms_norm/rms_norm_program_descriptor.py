@@ -73,14 +73,21 @@ COLLAPSE_REDUCE_TILE = True
 DENSE_RINV = True
 DENSE_MIN_ROWS = 4
 DENSE_GROUP = TILE  # tile-rows per dense tile: one column each
-# Interleaved work-split knobs (Refinement 5):
-# w_split = the k in [k_fit, max(k_fit, Wt // MIN_CORE_W_TILES)] minimizing the busiest core's work,
-# ceil(R / lines) · (cw + W_SPLIT_ROW_COST_TILES·[k > 1]) tiles (ties -> fewer cores per line). The row cost prices a
-# W_SPLIT tile-row's fixed work (partial, rendezvous, rinv expand) in x-tile equivalents. False: the pre-R5 occupancy
-# rule k = max(k_fit, min(C // R, Wt // MIN_CORE_W_TILES)), which strands cores whenever C % (lines·k) != 0 and
-# leaves R > C on a LOCAL split whose last ceil(R / C) round runs on R % C cores.
+# Interleaved work-split knobs (Refinement 5). The pre-R5 occupancy rule k_occ = max(k_fit, min(C // R,
+# Wt // MIN_CORE_W_TILES)) (k_occ = k_fit for R >= C) strands cores whenever C % (lines·k) != 0 and leaves R > C on a
+# LOCAL split whose last ceil(R / C) round runs on R % C cores. BALANCED_W_SPLIT keeps the regime it picks where the
+# rendezvous latency is not amortized (R < C and k_occ == 1 stays LOCAL: e.g. 1024x256 measured 5.0 us LOCAL vs 6.5 us
+# at w_split = 2) and otherwise picks the k in [k_occ, k_hi] (R >= C: [k_fit, k_hi]) minimizing the busiest core's
+# work, ceil(R / lines) · (cw + W_SPLIT_ROW_COST_TILES·[k > 1]) x-tiles (ties -> fewer cores per line). The row cost
+# prices a W_SPLIT tile-row's fixed work (partial, combine, rinv expand). False: k = k_occ.
 BALANCED_W_SPLIT = True
 W_SPLIT_ROW_COST_TILES = 1
+# k_hi = max(k_fit, Wt // MIN_CORE_W_TILES, min(Wt // LINE_MIN_CORE_W_TILES, LINE_MIN_CORES)): narrow rows may still
+# widen a W_SPLIT line to LINE_MIN_CORES cores down to LINE_MIN_CORE_W_TILES tiles each — a one-row line is latency-
+# bound, ~a·cw + b·k with a ≈ 1.8 b measured, so its best slice is ~sqrt(Wt) tiles (32x1024: 8 cores x 4 tiles 3.8 us
+# vs 4 x 8 4.0 us; 128x512: 4 x 4 4.2 us vs 2 x 8 4.7-5.0 us). For Wt >= 64 MIN_CORE_W_TILES already gives >= 8 cores.
+LINE_MIN_CORES = 8
+LINE_MIN_CORE_W_TILES = 4
 # Bank stagger (catalog `bank_stagger`, lamp L9): interleaved TILE reader / writer rotate each chunk's issue order by
 # the core's index, so the grid's simultaneous requests start on different DRAM banks. Applied only where the cores
 # walk the banks in lockstep (_bank_stagger: every core's chunks start on a chunk-multiple page); a slice width off
@@ -351,10 +358,11 @@ def select_blocking(
             break
     if k_fit is None:
         raise UnsupportedAxisValue("rms_norm: row too wide to hold resident across the grid")
-    if BALANCED_W_SPLIT:
-        k = min(range(k_fit, min(C, max(k_fit, Wt // MIN_CORE_W_TILES)) + 1), key=lambda k: (_split_cost(R, Wt, C, k), k))
-    else:
-        k = max(k_fit, 1 if R >= C else max(1, min(C // R, Wt // MIN_CORE_W_TILES)))
+    k = max(k_fit, 1 if R >= C else max(1, min(C // R, Wt // MIN_CORE_W_TILES)))  # k_occ
+    if BALANCED_W_SPLIT and (R >= C or k > 1):
+        k_lo = k_fit if R >= C else k
+        k_hi = min(C, max(k_lo, Wt // MIN_CORE_W_TILES, min(Wt // LINE_MIN_CORE_W_TILES, LINE_MIN_CORES)))
+        k = min(range(k_lo, k_hi + 1), key=lambda k: (_split_cost(R, Wt, C, k), k))
     if FORCE_W_SPLIT:
         k = max(k_fit, FORCE_W_SPLIT)
     cw = _div_up(Wt, k)

@@ -12,8 +12,8 @@ SHAPES = [(32, 1024), (32, 2304), (32, 5120), (32, 7168), (640, 6144), (640, 716
           (7168, 1024), (7168, 2048), (8192, 1024), (8192, 2304), (8192, 5120), (8192, 7168)]
 ACH = dict(zip(SHAPES, [9149, 17003, 75825, 14894, 101968, 119307, 89392, 172892, 96744, 211345, 738307, 1032281]))
 _flt = os.environ.get("EVAL_R5_SHAPES")
-if _flt:
-    SHAPES = [s for s in SHAPES if f"{s[0]}x{s[1]}" in _flt.split(",")]
+if _flt:  # any "ROWSxW" list (shapes outside the perf set carry ach=0)
+    SHAPES = [tuple(int(v) for v in t.split("x")) for t in _flt.split(",")]
 
 
 def _knobs():
@@ -59,6 +59,6 @@ def test_perf(device, shape):
     gq = pd.OpGeometry(is_tile=True, has_gamma=True, gamma_is_rm=False, t_in=2048, t_g=2048, es_g=2, t_int=2048)
     grid = device.compute_with_storage_grid_size()
     b = pd.select_blocking(gq, rows // 32, W // 32, grid.x * grid.y)
-    print(f"\nR5PERF {rows}x{W} ns={ns} ach={ACH[shape]} pcc={pcc:.6f} k={b.w_split} cw={b.core_w_tiles} "
+    print(f"\nR5PERF {rows}x{W} ns={ns} ach={ACH.get(shape, 0)} pcc={pcc:.6f} k={b.w_split} cw={b.core_w_tiles} "
           f"lines={b.num_lines} br={b.block_rows} knobs={os.environ.get('EVAL_R5_KNOBS','')}")
     assert pcc >= 0.9995, pcc
