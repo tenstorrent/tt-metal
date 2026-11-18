@@ -39,7 +39,7 @@ constexpr uint32_t PACKET_HEADER_BUFFER_SIZE = 8;
 // The names the per-coordinate programs and the cache-hit override share.
 struct AllToAllAsyncSpecNames {
     tt::tt_metal::DFBSpecName sender_data_dfb{"sender_data"};
-    tt::tt_metal::DFBSpecName packet_header_dfb{"packet_header"};
+    tt::tt_metal::ScratchpadSpecName packet_header_scratchpad{"packet_header"};
     tt::tt_metal::DFBSpecName receiver_data_dfb{"receiver_data"};
     tt::tt_metal::TensorParamName input_param{"input"};
     tt::tt_metal::TensorParamName intermediate_param{"intermediate"};
@@ -83,7 +83,7 @@ std::tuple<uint32_t, uint32_t, uint32_t> calculate_chunk_params(uint32_t pages_p
     }
 }
 
-// Create dataflow buffers for sender cores
+// Create the dataflow buffer and the packet header scratchpad for sender cores
 void create_sender_buffers(
     tt::tt_metal::ProgramSpec& spec, uint32_t dfb_num_pages, uint32_t page_size, tt::DataFormat data_format) {
     const AllToAllAsyncSpecNames names;
@@ -96,11 +96,10 @@ void create_sender_buffers(
     });
 
     // Packet header buffer
-    spec.dataflow_buffers.push_back(tt::tt_metal::DataflowBufferSpec{
-        .unique_id = names.packet_header_dfb,
-        .entry_size = tt::tt_fabric::get_tt_fabric_packet_header_size_bytes(),
-        .num_entries = PACKET_HEADER_BUFFER_SIZE * 2,
-        .data_format_metadata = tt::DataFormat::RawUInt32,
+    spec.scratchpads.push_back(tt::tt_metal::ScratchpadSpec{
+        .unique_id = names.packet_header_scratchpad,
+        .size_per_node = static_cast<uint32_t>(tt::tt_fabric::get_tt_fabric_packet_header_size_bytes()) *
+                         (PACKET_HEADER_BUFFER_SIZE * 2),
     });
 }
 
@@ -375,19 +374,16 @@ ttnn::device_operation::MeshWorkloadArtifacts::PerCoordProgram build_all_to_all_
         .dfb_bindings =
             {
                 DFBBinding{
-                    .dfb_spec_name = names.packet_header_dfb,
-                    .accessor_name = "packet_header",
-                    .endpoint_type = DFBEndpointType::PRODUCER,
-                },
-                DFBBinding{
-                    .dfb_spec_name = names.packet_header_dfb,
-                    .accessor_name = "packet_header",
-                    .endpoint_type = DFBEndpointType::CONSUMER,
-                },
-                DFBBinding{
                     .dfb_spec_name = names.sender_data_dfb,
                     .accessor_name = "sender_data",
                     .endpoint_type = DFBEndpointType::CONSUMER,
+                },
+            },
+        .scratchpad_bindings =
+            {
+                ScratchpadBinding{
+                    .scratchpad_spec_name = names.packet_header_scratchpad,
+                    .accessor_name = "packet_header",
                 },
             },
         .tensor_bindings =

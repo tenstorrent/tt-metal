@@ -5,6 +5,7 @@
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
 #include "api/dataflow/dataflow_buffer.h"
+#include "api/scratchpad.h"
 #include "api/dataflow/global_semaphore.h"
 #include "experimental/kernel_args.h"
 #include "tt_metal/fabric/hw/inc/edm_fabric/edm_fabric_worker_adapters.hpp"
@@ -73,22 +74,29 @@ void kernel_main() {
     }
 
     Noc noc_obj;
-    DataflowBuffer dfb_packet_header(dfb::packet_header);
+    Scratchpad<uint8_t> packet_header(scratch::packet_header);
     DataflowBuffer dfb0(dfb::sender_data);
 
     uint32_t out_row_end = out_row_start + input_shard_row_tiles;
     uint32_t out_col_end = out_col_start + input_shard_col_tiles;
 
-    // packet header dfb
-    dfb_packet_header.reserve_back(1);
-    auto packet_header_buffer_addr_forward = dfb_packet_header.get_write_ptr();
-    dfb_packet_header.push_back(1);
-    dfb_packet_header.reserve_back(1);
-    auto packet_header_buffer_addr_backward = dfb_packet_header.get_write_ptr();
-    dfb_packet_header.push_back(1);
-    dfb_packet_header.reserve_back(1);
-    auto packet_header_buffer_seminc = dfb_packet_header.get_write_ptr();
-    dfb_packet_header.push_back(1);
+    // packet header scratchpad: the forward, backward and seminc headers, one after another
+    constexpr uint32_t packet_header_entry_elems = sizeof(PACKET_HEADER_TYPE);
+    const uint32_t packet_header_base = reinterpret_cast<uint32_t>(&packet_header[0]);
+    uint32_t packet_header_wr = 0;
+    auto packet_header_buffer_addr_forward = packet_header_base + packet_header_wr;
+    packet_header_wr += packet_header_entry_elems;
+    ASSERT(packet_header_wr <= packet_header.size());
+    if (packet_header_wr == packet_header.size()) {
+        packet_header_wr = 0;
+    }
+    auto packet_header_buffer_addr_backward = packet_header_base + packet_header_wr;
+    packet_header_wr += packet_header_entry_elems;
+    ASSERT(packet_header_wr <= packet_header.size());
+    if (packet_header_wr == packet_header.size()) {
+        packet_header_wr = 0;
+    }
+    auto packet_header_buffer_seminc = packet_header_base + packet_header_wr;
 
     // pre-populate packet headers
     volatile PACKET_HEADER_TYPE* pkt_hdr_forward =

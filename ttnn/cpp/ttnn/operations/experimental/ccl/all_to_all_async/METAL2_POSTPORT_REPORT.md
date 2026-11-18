@@ -42,3 +42,69 @@ Nothing was changed, so the before and after trees are the same tree: sentinel s
 - **Quasar implicit sync.** `ttnn::create_reader_datamovement_config()` / `create_writer_datamovement_config()` take
   `disable_dfb_implicit_sync_for_all` (default `false`). Whether to set it is a Quasar-uplift decision for the op owner;
   it has no effect on Gen1.
+
+## Pass 2 — Replace fake-FIFO DM self-loops with a scratchpad (`semantic/dm_self_loop_dfbs.md`)
+
+### Outcome
+
+**APPLIED (1 site).** The packet-header DM self-loop DFB is now a scratchpad. The op has no DM self-loop DFB left.
+
+### Sites
+
+- `packet_header` — sender writer (`device/kernels/interleaved_all_to_all_writer.cpp:77, 83-99`; host
+  `device/all_to_all_async_program_factory.cpp:42, 98-103` spec, `:382-388` binding). Before: three times
+  `reserve_back(1)` → `get_write_ptr()` captured into `packet_header_buffer_addr_forward` / `_backward` / `_seminc` →
+  `push_back(1)`; never waited or popped. After: `Scratchpad<uint8_t> packet_header(scratch::packet_header)`; a byte
+  index `packet_header_wr` replays the write pointer: each address is `base + packet_header_wr` at the point of the old
+  `get_write_ptr()`, and each of the first two `push_back(1)` becomes `packet_header_wr += packet_header_entry_elems`
+  with the FIFO's `ASSERT` / equality wrap. `size_per_node = get_tt_fabric_packet_header_size_bytes() *
+  (PACKET_HEADER_BUFFER_SIZE * 2)` (the DFB's `entry_size * num_entries`).
+
+Survey per the recipe: bound by one DM kernel (`sender_writer`) as PRODUCER and CONSUMER, no other binder; every use is on
+the covered list (`reserve_back`, `get_write_ptr`, `push_back`; the addresses go to `reinterpret_cast<volatile
+PACKET_HEADER_TYPE*>` and to `send_payload_flush_blocking_from_address`); no helper, guard or template takes the handle;
+`borrowed_from` unset; no `dfb_run_overrides` (the op has none). `data_format_metadata` (`RawUInt32`) is consulted by
+nothing — every use is an address grab — so it drops.
+
+**Stride.** The index is read after it advances (the second and third `get_write_ptr()` follow a `push_back`), so a
+stride is needed. The spec's `entry_size` is `tt::tt_fabric::get_tt_fabric_packet_header_size_bytes()`. The kernel
+already uses `sizeof(PACKET_HEADER_TYPE)` as the size of each header (`send_payload_flush_blocking_from_address(…,
+sizeof(PACKET_HEADER_TYPE))`). The two are the same quantity by construction: the host function returns
+`sizeof(<header type>)` for the header type that the fabric config selects (`FabricContext::compute_packet_header_size_bytes`
+→ `visit_packet_header_type(…) { return sizeof(Header); }`, plus `sizeof(UDMControlFields)` in UDM mode, where
+`fabric_edm_packet_header.hpp` `static_assert`s `sizeof(UDMHybridMeshPacketHeader)` equals that sum), and the kernel's
+`PACKET_HEADER_TYPE` is that header type, selected from the same config through `ROUTING_MODE` /
+`FABRIC_1D_PKT_HDR_EXTENSION_WORDS`. So the pass reuses `sizeof(PACKET_HEADER_TYPE)` and adds no compile-time arg.
+**This is the one judgment in the pass; the launcher may prefer to review it** (see Noticed).
+
+**Cleanup applied:** item 1 — the third `push_back(1)` advance is dead (nothing reads the index after it), so it is not
+written. No other cleanup.
+
+**`T` choice.** The kernel only takes addresses (it casts them to `volatile PACKET_HEADER_TYPE*` itself), so
+`T = uint8_t` and the index is a byte offset. The base is `reinterpret_cast<uint32_t>(&packet_header[0])`, the form the
+earlier passes on this branch use (`Scratchpad::get_base_address()`, named by the recipe, does not exist here).
+
+### Verification
+
+Sentinel set green before (6 passed, on `e5e5b7cdc18`; only clang-format reflow and the pass-1 report since) and after
+(6 passed). The sentinel spec was updated to the converted shape (a `ScratchpadSpec` and a `ScratchpadBinding` on the
+sender writer instead of the self-loop DFB) and was run in an empty JIT cache, so all four writer variants were compiled
+against the converted kernel.
+
+### Repaired because the change falsified it
+
+- Kernel comment `// packet header dfb` → `// packet header scratchpad: the forward, backward and seminc headers, one after
+  another` (there is no DFB any more).
+- Host comment `// Create dataflow buffers for sender cores` → `// Create the dataflow buffer and the packet header
+  scratchpad for sender cores` (the helper now creates a scratchpad too).
+
+### Noticed, not done
+
+- **The wrap checks never fire.** The region holds 16 headers and the kernel uses 3, so the two `if (wr == size)` resets
+  are inert. They are kept because the recipe's cleanup list does not cover a live-but-inert wrap.
+- **Oversized packet-header region.** 16 headers reserved (`PACKET_HEADER_BUFFER_SIZE * 2`), 3 used; legacy sizing,
+  carried as is.
+- **Stride judgment.** If the recipe owner reads "same expression" strictly, `sizeof(PACKET_HEADER_TYPE)` vs
+  `get_tt_fabric_packet_header_size_bytes()` is a stop, not a reuse. The argument for reuse is above; the alternative
+  is to leave the self-loop (Quasar debt).
+- **Recipe/API drift:** `Scratchpad::get_base_address()` is named by the recipe but absent here.
