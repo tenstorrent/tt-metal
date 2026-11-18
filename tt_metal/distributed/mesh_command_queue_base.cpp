@@ -18,6 +18,7 @@
 #include "tt_metal/impl/buffers/dispatch.hpp"
 #include "tt_metal/impl/program/dispatch.hpp"
 #include "tt_metal/impl/trace/dispatch.hpp"
+#include "tt_metal/impl/tensor/pinned_upload.hpp"
 #include "tt_metal/impl/threading/thread_pool.hpp"
 #include <tt-metalium/graph_tracking.hpp>
 #include "tt_cluster.hpp"
@@ -117,6 +118,10 @@ uint64_t MeshCommandQueueBase::host_bytes_written(
         }
     }
     return pages * shard_view.page_size();
+}
+
+bool MeshCommandQueueBase::should_pin_write(size_t local_bytes, size_t /*max_shard_bytes*/) const {
+    return local_bytes > pinned_upload::k_pin_write_threshold_bytes;
 }
 
 tt::TargetDevice MeshCommandQueueBase::get_target_device_type() const {

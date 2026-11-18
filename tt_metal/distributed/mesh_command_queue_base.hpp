@@ -160,6 +160,10 @@ public:
         std::shared_ptr<ThreadPool> dispatch_thread_pool,
         std::function<std::lock_guard<std::mutex>()> lock_api_function);
 
+    // Whether a tensor upload should pin its host buffers instead of copying them. local_bytes sums the shards this
+    // host writes and max_shard_bytes is the largest of them.
+    virtual bool should_pin_write(size_t local_bytes, size_t max_shard_bytes) const;
+
     // While one is alive, buffer writes made on this thread count as kernel binary uploads in host transfer stats.
     class ScopedProgramBinaryUpload {
     public:

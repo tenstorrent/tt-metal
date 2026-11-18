@@ -14,6 +14,7 @@
 #include "tt_metal/impl/threading/thread_pool.hpp"
 #include "tt_metal/impl/program/program_impl.hpp"
 #include "tt_metal/impl/program/slow_dispatch.hpp"
+#include "tt_metal/impl/tensor/pinned_upload.hpp"
 #include <mesh_device.hpp>
 #include <mesh_event.hpp>
 #include <tt-metalium/experimental/core_subset_write/buffer_write.hpp>
@@ -118,6 +119,11 @@ std::optional<MeshTraceId> SDMeshCommandQueue::trace_id() const {
     // ("not recording") rather than throwing, so callers can query trace state unconditionally
     // (e.g. QueueTensorPrefetcherRequest deciding capture-vs-send) under slow dispatch.
     return std::nullopt;
+}
+
+bool SDMeshCommandQueue::should_pin_write(size_t /*local_bytes*/, size_t max_shard_bytes) const {
+    // Each device's write threads DMA their own shard, so the pin is worth it when one shard is big enough.
+    return max_shard_bytes >= pinned_upload::k_sd_pin_write_min_bytes_per_device;
 }
 
 bool SDMeshCommandQueue::write_shard_to_device(

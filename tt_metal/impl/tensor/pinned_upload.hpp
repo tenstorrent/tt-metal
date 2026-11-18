@@ -19,4 +19,8 @@ namespace tt::tt_metal::pinned_upload {
 // small tensor through the issue ring. Uploads at or below this size take the copy path.
 inline constexpr size_t k_pin_write_threshold_bytes = 32 * 1024 * 1024;  // 32 MB
 
+// Slow dispatch DMAs each device's shards straight out of the pinned buffer, so its pin pays off per device rather than
+// per upload. Below this many bytes for one device, the bounce-buffer copy was as fast or faster on Blackhole.
+inline constexpr size_t k_sd_pin_write_min_bytes_per_device = 8 * 1024 * 1024;  // 8 MB
+
 }  // namespace tt::tt_metal::pinned_upload
