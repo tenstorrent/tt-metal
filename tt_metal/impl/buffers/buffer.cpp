@@ -848,10 +848,12 @@ uint32_t Buffer::num_dev_pages() const {
     if (!is_sharded(impl_->buffer_layout_)) {
         return this->num_pages();
     }
-    if (impl_->shard_spec_.has_value()) {
-        return impl_->shard_spec_->num_pages() * this->num_cores().value();
+    // Prefer the distribution spec: ShardSpecBuffer assumes one shard per node, which undercounts a node holding
+    // several.
+    if (impl_->buffer_distribution_spec_.has_value()) {
+        return impl_->buffer_distribution_spec_->max_num_dev_pages_per_core() * num_cores().value();
     }
-    return impl_->buffer_distribution_spec_.value().max_num_dev_pages_per_core() * num_cores().value();
+    return impl_->shard_spec_->num_pages() * this->num_cores().value();
 }
 
 HalMemType BufferImpl::memory_type() const {

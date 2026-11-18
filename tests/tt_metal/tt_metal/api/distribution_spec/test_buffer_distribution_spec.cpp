@@ -613,6 +613,21 @@ TEST(BufferDistributionSpecContiguousPages, CPU_NumContiguousPages) {
     EXPECT_EQ(single_page_shard.contiguous_page_stride(), 1u);
 }
 
+// With both specs, the buffer is sized from the distribution spec, which can place several shards on a node.
+TEST_F(BufferDistributionSpecFixture, NumDevPagesFollowsDistributionSpec) {
+    const NodeRangeSet grid(NodeRange({0, 0}, {1, 0}));  // 2 nodes, 4 single-page shards
+    const BufferDistributionSpec spec(Shape{4, 1}, Shape{1, 1}, grid, ShardOrientation::ROW_MAJOR);
+    const ShardSpecBuffer shard_spec(grid, {1, 16}, ShardOrientation::ROW_MAJOR, {1, 16}, {4, 1});
+    const auto mesh_buffer = distributed::MeshBuffer::create(
+        distributed::ReplicatedBufferConfig{.size = 4 * 64},
+        distributed::DeviceLocalBufferConfig{
+            .page_size = 64,
+            .buffer_type = BufferType::L1,
+            .sharding_args = BufferShardingArgs(spec, shard_spec, TensorMemoryLayout::HEIGHT_SHARDED)},
+        mesh_device_.get());
+    EXPECT_EQ(mesh_buffer->num_dev_pages(), 4u);
+}
+
 // A buffer with pages must not have a page size of 0.
 TEST_F(BufferDistributionSpecFixture, ZeroPageSizeIsRejected) {
     EXPECT_ANY_THROW(distributed::MeshBuffer::create(
