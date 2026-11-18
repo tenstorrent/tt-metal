@@ -59,6 +59,13 @@
 // The CB API cannot reserve on behalf of another RISC, hence the index-addressed slots. Hand-outs stay inside the
 // reader's current K-block, whose band it has waited for; under the N-slice-outer order every band is waited first.
 //
+// Strided window (stride 2, see conv2d_3x3_gather_dataflow.hpp WindowGather): a unit is one kernel row's run of input
+// pixels, one read per output-row run, which compute tilizes in place at a 2-pixel row stride; the reader alone gathers
+// (no split). Every unit's last 16 B carry the L1 address compute tilizes it from. On the N-slice-outer walk
+// (window_direct) a full in-image run is not copied at all: its address is the slab run itself, so the slab must
+// outlive compute's tilize, and the reader waits for compute to pop every unit before it frees the slab (slab pop,
+// slab_dead).
+//
 // Short last channel slice (K split, C_in not a multiple of the slice width): tap-major copies whole slab pixels, so
 // the slice's padded lanes must read as zero. They are zeroed once at kernel start and never read into: on TILE the
 // cb_input_tiles slots of the padding tile columns (the ring is whole batches, so each slot keeps its L1 offset),
@@ -158,7 +165,10 @@ void kernel_main() {
     // Split TILE fill (see the file comment): the writer reads the higher shards' tile-rows. Its two counters reuse the
     // split slab fill's ids: fill_done (writer -> reader) and fill_go (reader -> writer).
     constexpr bool tile_fill_split = get_compile_time_arg_val(60) != 0;
-    constexpr auto input_args = TensorAccessorArgs<61>();
+    // Strided window (see the file comment) and its slab-direct units.
+    constexpr bool strided_window = get_compile_time_arg_val(61) != 0;
+    constexpr bool window_direct = get_compile_time_arg_val(62) != 0;
+    constexpr auto input_args = TensorAccessorArgs<63>();
     static_assert(!alias_slab_combine || nslice_outer, "only the N-slice-outer walk aliases the slab");
 
     const uint32_t input_addr = get_arg_val<uint32_t>(0);
@@ -229,6 +239,15 @@ void kernel_main() {
         zero_im2col_once>;
     using TapMajorT =
         conv2d_3x3::TapMajorGather<output_width, input_height, input_width, padding, dilation, c_in_p, block_k_tiles>;
+    using WindowT = conv2d_3x3::WindowGather<output_width, input_height, input_width, padding, c_in_p>;
+    // The unit address word compute tilizes from: the last 16 B of the unit's cb_im2col_rm pages.
+    constexpr uint32_t window_header_offset = block_k_tiles * TILE_DIM * TILE_DIM * ELEM_BYTES - 16;
+    static_assert(
+        !strided_window ||
+            (stride == 2 && dilation == 1 && !tap_major && !face_direct && !row_split && one_k_block_per_kh &&
+             c_in_p % TILE_DIM == 0 && WindowT::unit_bytes <= window_header_offset),
+        "strided window: stride 2, d 1, whole-tile pixels, one K-block per kernel row, gathered by the reader alone");
+    static_assert(!window_direct || (strided_window && nslice_outer), "slab-direct units: the N-slice-outer walk");
     static_assert(!nslice_outer || channel_slice, "the N-slice-outer walk is the K split's");
     // Face-direct under a K split is one whole-K K-block, which already lands in0 as [bm, K].
     constexpr bool tile_row_outer = nslice_outer && !face_direct;
@@ -458,6 +477,16 @@ void kernel_main() {
             reads.begin(TRID_GATHER);
             if constexpr (tap_major) {
                 TapMajorT::tile_row(reads, slab_noc, zero_src_noc, rows_l1, o, o_end, kh, col_lo, slab_x_base[kh]);
+            } else if constexpr (strided_window) {
+                uint32_t src = 0;
+                if constexpr (window_direct) {
+                    src = WindowT::direct_source(slab_l1, o, o_end, kh, slab_x_base[kh]);
+                }
+                if (src == 0) {
+                    WindowT::tile_row(reads, slab_noc, rows_l1, o, o_end, kh, slab_x_base[kh]);
+                    src = rows_l1;
+                }
+                *reinterpret_cast<volatile uint32_t*>(rows_l1 + window_header_offset) = src;
             } else {
                 RowGatherT::tile_row(reads, slab_noc, rows_l1, o, o_end, kh, col_lo, slab_x_base[kh]);
             }
@@ -622,6 +651,10 @@ void kernel_main() {
             }
         }
 
+        if constexpr (window_direct) {
+            // Compute tilizes slab runs in place: the slab is dead only once compute popped every unit.
+            cb_reserve_back(cb_im2col_rm, im2col_rm_depth_rows * block_k_tiles);
+        }
         if constexpr (tile_input) {
             constexpr uint32_t slab_pages = slab_tile_rows * c_in_tiles;
             cb_wait_front(cb_halo_slab, slab_pages);

@@ -7,6 +7,8 @@
 // and finalize_block is empty. ReLU applies only to the final value: the bias-add pack, or the last
 // K-block's pack without bias.
 //
+// Strided-window im2col (stride 2): compute tilizes each unit in place at a 2-pixel row stride (window_tilize).
+//
 // Face-direct im2col: the reader writes the in0 tiles itself, so the matmul runs without the tilize hook. With one
 // K-block per M-block the reader pushes in0 in row groups and compute runs one matmul call per group as it lands,
 // keeping the weights fronted across the calls, and adds the bias once per bias_stream_groups groups, so only the
@@ -47,6 +49,71 @@ namespace ckl = compute_kernel_lib;
 
 namespace {
 
+// Strided-window tilize (see conv2d_3x3_gather_dataflow.hpp WindowGather): a cb_im2col_rm unit is one tile-row x one
+// kernel row laid out as overlapping windows, im2col row i = 3 pixels (3 * c_in_tiles tile columns) from pixel slot
+// 2 * i. The BH fast-tilize unpacker takes its row stride from the init's width and its read width from the chunk, so
+// an init at 2 * c_in_tiles and chunks covering 3 * c_in_tiles read row i's 3 pixels at a 2-pixel stride: the same
+// tiles, in the same order, as tilizing the [32, 3 * c_in_tiles] row-layout block (bit-identical).
+// The unit's last 16 B hold the L1 address to tilize from (the unit itself, or a slab run on the N-slice-outer walk).
+// Raw LLK, UNPACK only (capability): ckl::tilize ties the row stride to the block width and reads at the CB read
+// pointer; the loop is fast_tilize_block's, with the unpacker's base taken from that address.
+#ifdef TRISC_UNPACK
+template <uint32_t cb_in, uint32_t block_tiles>
+inline uint32_t window_unit_source() {
+    invalidate_l1_cache();
+    const uint32_t unit = get_local_cb_interface(get_operand_id(cb_in)).fifo_rd_ptr << 4;
+    return *reinterpret_cast<volatile uint32_t*>(unit + block_tiles * 32 * 32 * 2 - 16);
+}
+
+template <uint32_t cb_in>
+inline void window_unpack_chunk(uint32_t src, uint32_t chunk, uint32_t col_start) {
+    const uint32_t operand_id = get_operand_id(cb_in);
+    const uint32_t src_format = unpack_src_format[operand_id];
+    const uint32_t base = (src >> 4) - 1 + (SCALE_DATUM_SIZE(src_format, col_start * TILE_C_DIM) >> 4);
+    _llk_unpack_fast_tilize_block_(base, 0, src_format, chunk, get_operand_num_faces(operand_id));
+}
+#endif
+
+template <uint32_t c_in_tiles, uint32_t cb_in, uint32_t cb_out>
+ALWI void window_tilize(DataflowBuffer& in, DataflowBuffer& out, uint32_t units) {
+    constexpr uint32_t row_tiles = 2 * c_in_tiles;
+    constexpr uint32_t block_tiles = 3 * c_in_tiles;
+    reconfig_data_format_srca(cb_in);
+    pack_reconfig_data_format(cb_out);
+    fast_tilize_init(cb_in, row_tiles, cb_out);
+    // Every unit has the same chunk sequence: reprogram the unpack width / pack MOP only when the chunk changes.
+    uint32_t prev_chunk = 0;
+    for (uint32_t u = 0; u < units; ++u) {
+        in.wait_front(block_tiles);
+        out.reserve_back(block_tiles);
+        [[maybe_unused]] uint32_t src = 0;
+        UNPACK(src = window_unit_source<cb_in, block_tiles>());
+        PACK((llk_pack_fast_tilize_row_begin(cb_out, 0)));
+        for (uint32_t tiles_done = 0; tiles_done < block_tiles;) {
+            // BH fast-tilize chunks are 2..4 tiles (fast_tilize_block's split: 5 -> 2 + 3).
+            const uint32_t remaining = block_tiles - tiles_done;
+            const uint32_t chunk = (remaining > 5) ? 4 : (remaining == 5) ? 2 : remaining;
+            MATH((llk_math_wait_for_dest_available()));
+            PACK((llk_packer_wait_for_math_done()));
+            if (chunk != prev_chunk) {
+                UNPACK((llk_unpack_fast_tilize_reinit_xdim(chunk)));
+                PACK((llk_pack_fast_tilize_reinit_unit_dim(cb_out, chunk)));
+                prev_chunk = chunk;
+            }
+            UNPACK((window_unpack_chunk<cb_in>(src, chunk, tiles_done)));
+            MATH((llk_math_fast_tilize_block_<DST_ACCUM_MODE>(0, cb_in, 4)));
+            PACK((llk_pack_fast_tilize_row_chunk(0, cb_out, chunk)));
+            MATH((llk_math_dest_section_done<DST_ACCUM_MODE>()));
+            PACK((llk_pack_dest_section_done<DST_ACCUM_MODE>()));
+            tiles_done += chunk;
+        }
+        PACK((llk_pack_fast_tilize_row_end()));
+        out.push_back(block_tiles);
+        in.pop_front(block_tiles);
+    }
+    fast_tilize_uninit(cb_in, cb_out, row_tiles);
+}
+
 // Tilizes one K-block (block_m_tiles tile-rows x block_k_tiles) of gathered im2col rows. The matmul
 // restores its own state afterwards (InitMode::ShortAfterPreKBlock).
 // The reader lays a tile-row out either as one [32, block_k_tiles * 32] row block or tap-major, as
@@ -58,7 +125,9 @@ template <
     uint32_t block_m_tiles,
     uint32_t cb_im2col_rm,
     uint32_t cb_im2col_tiles,
-    bool relu_on_last_matmul_pack>
+    bool relu_on_last_matmul_pack,
+    bool strided_window,
+    uint32_t c_in_tiles>
 struct TilizeIm2colKBlock {
     DataflowBuffer* rm;
     DataflowBuffer* tiles;
@@ -74,8 +143,13 @@ struct TilizeIm2colKBlock {
         {
             // Includes the unpacker's per-tile-row wait on the reader's gather.
             MaybeDeviceZoneScope("compute_tilize");
-            ckl::tilize<tilize_width_tiles, cb_im2col_rm, cb_im2col_tiles>(
-                *rm, *tiles, block_m_tiles * (block_k_tiles / tilize_width_tiles));
+            if constexpr (strided_window) {
+                static_assert(block_k_tiles == 3 * c_in_tiles, "a window unit is one kernel row");
+                window_tilize<c_in_tiles, cb_im2col_rm, cb_im2col_tiles>(*rm, *tiles, block_m_tiles);
+            } else {
+                ckl::tilize<tilize_width_tiles, cb_im2col_rm, cb_im2col_tiles>(
+                    *rm, *tiles, block_m_tiles * (block_k_tiles / tilize_width_tiles));
+            }
         }
         if constexpr (relu_on_last_matmul_pack) {
             if (is_last) {
@@ -123,6 +197,7 @@ void kernel_main() {
     constexpr uint32_t slice_sb_h = get_compile_time_arg_val(32);
     constexpr uint32_t slice_sb_w = get_compile_time_arg_val(33);
     constexpr uint32_t untilize_batch_rows = get_compile_time_arg_val(34);
+    constexpr bool strided_window = get_compile_time_arg_val(35) != 0;
 
     const uint32_t num_m_blocks_this_core = get_arg_val<uint32_t>(0);
     [[maybe_unused]] const bool owns_output_columns = get_arg_val<uint32_t>(1) != 0;
@@ -193,7 +268,9 @@ void kernel_main() {
         block_m_tiles,
         cb_im2col_rm,
         cb_im2col_tiles,
-        relu_on_last_matmul_pack>;
+        relu_on_last_matmul_pack,
+        strided_window,
+        c_in_tiles>;
     auto make_pre_k_block = [&]() {
         if constexpr (face_direct) {
             return ckl::NoPreKBlock{};
@@ -289,8 +366,13 @@ void kernel_main() {
             pack_reconfig_l1_acc(0);
             if constexpr (!face_direct) {
                 MaybeDeviceZoneScope("compute_tilize");
-                ckl::tilize<im2col_tilize_width_tiles, cb_im2col_rm, cb_im2col_tiles>(
-                    im2col_rm_dfb, im2col_tiles_dfb, block_m_tiles * (k_tiles / im2col_tilize_width_tiles));
+                if constexpr (strided_window) {
+                    window_tilize<c_in_tiles, cb_im2col_rm, cb_im2col_tiles>(
+                        im2col_rm_dfb, im2col_tiles_dfb, block_m_tiles * num_k_blocks);
+                } else {
+                    ckl::tilize<im2col_tilize_width_tiles, cb_im2col_rm, cb_im2col_tiles>(
+                        im2col_rm_dfb, im2col_tiles_dfb, block_m_tiles * (k_tiles / im2col_tilize_width_tiles));
+                }
             }
             {
                 MaybeDeviceZoneScope("compute_matmul_walk");

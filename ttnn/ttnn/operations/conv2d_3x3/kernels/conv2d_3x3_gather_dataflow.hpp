@@ -1,8 +1,8 @@
 // SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 // SPDX-License-Identifier: Apache-2.0
 
-// Gather reads shared by the reader (NoC0) and the writer (NoC1): transaction-id tagged NoC reads, and the
-// face-direct im2col gather.
+// Gather reads shared by the reader (NoC0) and the writer (NoC1): transaction-id tagged NoC reads, the im2col
+// gathers (row, tap-major, strided window) and the face-direct im2col gather.
 //
 // Face-direct (stride * C_in_p == 16, bf16 activation, no padded lanes): one output pixel steps through the slab
 // by exactly one 16-element tile-face row, so the 16 im2col rows of a face are one contiguous run of slab pixels,
@@ -365,6 +365,83 @@ struct TapMajorGather {
                 wo = 0;
                 ++ho;
             }
+        }
+    }
+};
+
+// Strided window (stride 2, d 1, C_in_p whole tiles, one K-block per kernel row): im2col row i of a tile-row is the 3
+// consecutive input pixels from 2 * wo_i - padding, and inside one output-row run row i + 1 starts two pixels after row
+// i. So the run's rows are overlapping windows of one input run: pixel slot j of the unit holds input pixel
+// 2 * wo_first - padding + j, and compute tilizes row i from slot 2 * i (row stride 2 pixels, row width 3 pixels), in
+// place. One read per output-row run (plus zero fills at the image edges) replaces one read per output pixel. Two runs
+// of one tile-row share one slot, which the host guarantees is zero for both (left padding / out-of-image right tap).
+// The unit's last 16 B carry the L1 address compute tilizes it from: the unit itself, or (slab-direct) the slab run.
+template <uint32_t output_width, int32_t input_height, int32_t input_width, int32_t padding, uint32_t c_in_p>
+struct WindowGather {
+    static constexpr uint32_t TILE_DIM = 32;
+    static constexpr uint32_t pixel_bytes = c_in_p * 2;
+    // 32 rows two pixels apart plus the last row's third pixel.
+    static constexpr uint32_t unit_bytes = (2 * TILE_DIM + 1) * pixel_bytes;
+
+    // Slab-direct: a full tile-row inside one output row whose whole window lies inside the image row is already a
+    // contiguous run of slab pixels, so compute tilizes it from the slab; returns its L1 address, or 0 (copy it).
+    static uint32_t direct_source(uint32_t slab_l1, uint32_t o, uint32_t o_end, int32_t kh, int32_t slab_x_base_kh) {
+        if (o + TILE_DIM > o_end) {
+            return 0;
+        }
+        const int32_t ho = o / output_width;
+        const int32_t wo = o % output_width;
+        const int32_t h_in = ho * 2 + kh - padding;
+        const int32_t w0 = wo * 2 - padding;
+        if (wo + static_cast<int32_t>(TILE_DIM) > static_cast<int32_t>(output_width) || h_in < 0 ||
+            h_in >= input_height || w0 < 0 || w0 + 2 * static_cast<int32_t>(TILE_DIM) >= input_width) {
+            return 0;
+        }
+        return slab_l1 + (slab_x_base_kh + h_in * input_width + w0) * pixel_bytes;
+    }
+
+    template <typename Reads>
+    __attribute__((noinline)) static void tile_row(
+        Reads& reads,
+        uint64_t slab_noc,
+        uint32_t dst_l1,
+        uint32_t o,
+        uint32_t o_end,
+        int32_t kh,
+        int32_t slab_x_base_kh) {
+        const uint32_t row_end = o + TILE_DIM < o_end ? o + TILE_DIM : o_end;
+        int32_t ho = o / output_width;
+        int32_t wo = o % output_width;
+        uint32_t slot_l1 = dst_l1;
+        for (uint32_t p = o; p < row_end;) {
+            const int32_t run = row_end - p < output_width - wo ? row_end - p : output_width - wo;
+            const int32_t h_in = ho * 2 + kh - padding;
+            const int32_t n_px = 2 * run + 1;
+            if (h_in < 0 || h_in >= input_height) {
+                reads.zero_fill(slot_l1, n_px * pixel_bytes);
+            } else {
+                // Slots [lo, hi) of the run are inside the image row.
+                const int32_t w0 = wo * 2 - padding;
+                const int32_t lo = w0 < 0 ? -w0 : 0;
+                int32_t hi = input_width - w0 < n_px ? input_width - w0 : n_px;
+                hi = hi > lo ? hi : lo;
+                if (lo > 0) {
+                    reads.zero_fill(slot_l1, lo * pixel_bytes);
+                }
+                if (hi > lo) {
+                    reads.read(
+                        slab_noc + (slab_x_base_kh + h_in * input_width + w0 + lo) * pixel_bytes,
+                        slot_l1 + lo * pixel_bytes,
+                        (hi - lo) * pixel_bytes);
+                }
+                if (n_px > hi) {
+                    reads.zero_fill(slot_l1 + hi * pixel_bytes, (n_px - hi) * pixel_bytes);
+                }
+            }
+            slot_l1 += 2 * run * pixel_bytes;
+            p += run;
+            wo = 0;
+            ++ho;
         }
     }
 };

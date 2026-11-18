@@ -83,6 +83,13 @@ COMBINE_SPLIT_NOCS = True
 # pixel (one gather read per pixel per K-block).
 TAP_MAJOR_IM2COL = True
 
+# Strided-window im2col: at stride 2 (unit dilation, whole-tile pixels) im2col row i of a tile-row is the 3 consecutive
+# input pixels from 2 * wo_i - padding, so the rows of one output-row run are overlapping windows of one input run, two
+# pixels apart. The reader lays a kernel row of a tile-row out as that run (one read per run instead of one per output
+# pixel) and compute tilizes it in place at a 2-pixel row stride; on the N-slice-outer walk compute tilizes in-image runs
+# straight from the slab. False keeps the per-pixel row gather.
+STRIDED_WINDOW_IM2COL = True
+
 # Face-direct im2col: when one output pixel's step through the slab (stride * C_in_p channels) is exactly one
 # tile-face row (16 elements), the 16 im2col rows of a 16x16 face are one contiguous run of slab pixels. The
 # reader then writes the bf16 in0 tiles itself, one read per face run, and compute skips the tilize. False keeps
@@ -412,10 +419,28 @@ def _tap_major(g: Conv3x3Geometry, bk):
     return tap_major_capable(g) and bk % g.c_in_tiles == 0
 
 
+def strided_window_capable(g: Conv3x3Geometry):
+    """Strided-window im2col apart from the K-block: stride 2, unit dilation, whole-tile pixels whose every lane is data
+    or zero (a whole-pixel copy carries them). Two output-row runs of one tile-row (W_out not a multiple of 32) share
+    one pixel slot, which must be zero for both: the next row's left padding and the previous row's last right tap."""
+    if not STRIDED_WINDOW_IM2COL or g.stride != 2 or g.dilation != 1 or g.c_in_p % TILE != 0:
+        return False
+    if not (g.c_in == g.k_cols * g.c_in_p or short_slice_lanes_zeroed(g)):
+        return False
+    if g.output_width % TILE != 0:
+        return g.padding >= 1 and 2 * (g.output_width - 1) + 2 - g.padding >= g.input_width
+    return True
+
+
+def _strided_window(g: Conv3x3Geometry, bk):
+    """One K-block per kernel row: a unit (tile-row x K-block) is one kernel row's window run."""
+    return strided_window_capable(g) and bk == g.tensor_kkh_tiles and not face_direct_im2col(g, bk)
+
+
 def _row_split(g: Conv3x3Geometry, bm, bk):
-    """The split row gather: the per-pixel row gather (neither face-direct nor tap-major) with more than one tile-row
-    per K-block; with one there is nothing to hand over (the reader takes each K-block's first unit)."""
-    return bm > 1 and not face_direct_im2col(g, bk) and not _tap_major(g, bk)
+    """The split row gather: the per-pixel row gather (neither face-direct, tap-major nor strided-window) with more than
+    one tile-row per K-block; with one there is nothing to hand over (the reader takes each K-block's first unit)."""
+    return bm > 1 and not face_direct_im2col(g, bk) and not _tap_major(g, bk) and not _strided_window(g, bk)
 
 
 def _im2col_ring_target(g: Conv3x3Geometry, bm, bk, nslice):
@@ -867,6 +892,9 @@ def create_program_descriptor(
     sem_ids += gather_sem_ids if gather_split else ()
     # Split row gather: row_go, row_done, row_limit, row_assigned, then ROW_QUEUE mailbox words.
     row_split = _row_split(g, bm, bk)
+    strided_window = _strided_window(g, bk)
+    # Slab-direct window units (N-slice-outer walk): compute tilizes in-image runs from the slab in place.
+    window_direct = strided_window and b.nslice
     row_sem_ids = tuple(range(len(sem_ids), len(sem_ids) + 5)) if row_split else (0, 0, 0, 0, 0)
     sem_ids += tuple(range(len(sem_ids), len(sem_ids) + 4 + ROW_QUEUE)) if row_split else ()
     k_padded = g.tensor_kkh_tiles * TILE > 3 * g.c_in_p
@@ -935,6 +963,8 @@ def create_program_descriptor(
             int(b.shared_slab_bytes > 0),
             SEM_COMBINE_SEND_GO,
             int(split_core),
+            int(strided_window),
+            int(window_direct),
         ]
         args.extend(ttnn.TensorAccessorArgs(input_tensor).get_compile_time_args())
         return args
@@ -974,6 +1004,7 @@ def create_program_descriptor(
         CB_SLICE_R,
         *_out_subblock(bm, ns),
         b.untilize_batch_rows,
+        int(strided_window),
     ]
 
     writer_ct_args = [

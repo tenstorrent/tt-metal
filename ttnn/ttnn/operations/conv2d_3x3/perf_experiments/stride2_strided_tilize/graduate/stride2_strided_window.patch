@@ -1,0 +1,387 @@
+--- a/ttnn/ttnn/operations/conv2d_3x3/conv2d_3x3_program_descriptor.py
++++ b/ttnn/ttnn/operations/conv2d_3x3/conv2d_3x3_program_descriptor.py
+@@ -83,6 +83,13 @@
+ # pixel (one gather read per pixel per K-block).
+ TAP_MAJOR_IM2COL = True
+ 
++# Strided-window im2col: at stride 2 (unit dilation, whole-tile pixels) im2col row i of a tile-row is the 3 consecutive
++# input pixels from 2 * wo_i - padding, so the rows of one output-row run are overlapping windows of one input run, two
++# pixels apart. The reader lays a kernel row of a tile-row out as that run (one read per run instead of one per output
++# pixel) and compute tilizes it in place at a 2-pixel row stride; on the N-slice-outer walk compute tilizes in-image runs
++# straight from the slab. False keeps the per-pixel row gather.
++STRIDED_WINDOW_IM2COL = True
++
+ # Face-direct im2col: when one output pixel's step through the slab (stride * C_in_p channels) is exactly one
+ # tile-face row (16 elements), the 16 im2col rows of a 16x16 face are one contiguous run of slab pixels. The
+ # reader then writes the bf16 in0 tiles itself, one read per face run, and compute skips the tilize. False keeps
+@@ -412,10 +419,28 @@
+     return tap_major_capable(g) and bk % g.c_in_tiles == 0
+ 
+ 
++def strided_window_capable(g: Conv3x3Geometry):
++    """Strided-window im2col apart from the K-block: stride 2, unit dilation, whole-tile pixels whose every lane is data
++    or zero (a whole-pixel copy carries them). Two output-row runs of one tile-row (W_out not a multiple of 32) share
++    one pixel slot, which must be zero for both: the next row's left padding and the previous row's last right tap."""
++    if not STRIDED_WINDOW_IM2COL or g.stride != 2 or g.dilation != 1 or g.c_in_p % TILE != 0:
++        return False
++    if not (g.c_in == g.k_cols * g.c_in_p or short_slice_lanes_zeroed(g)):
++        return False
++    if g.output_width % TILE != 0:
++        return g.padding >= 1 and 2 * (g.output_width - 1) + 2 - g.padding >= g.input_width
++    return True
++
++
++def _strided_window(g: Conv3x3Geometry, bk):
++    """One K-block per kernel row: a unit (tile-row x K-block) is one kernel row's window run."""
++    return strided_window_capable(g) and bk == g.tensor_kkh_tiles and not face_direct_im2col(g, bk)
++
++
+ def _row_split(g: Conv3x3Geometry, bm, bk):
+-    """The split row gather: the per-pixel row gather (neither face-direct nor tap-major) with more than one tile-row
+-    per K-block; with one there is nothing to hand over (the reader takes each K-block's first unit)."""
+-    return bm > 1 and not face_direct_im2col(g, bk) and not _tap_major(g, bk)
++    """The split row gather: the per-pixel row gather (neither face-direct, tap-major nor strided-window) with more than
++    one tile-row per K-block; with one there is nothing to hand over (the reader takes each K-block's first unit)."""
++    return bm > 1 and not face_direct_im2col(g, bk) and not _tap_major(g, bk) and not _strided_window(g, bk)
+ 
+ 
+ def _im2col_ring_target(g: Conv3x3Geometry, bm, bk, nslice):
+@@ -867,6 +892,9 @@
+     sem_ids += gather_sem_ids if gather_split else ()
+     # Split row gather: row_go, row_done, row_limit, row_assigned, then ROW_QUEUE mailbox words.
+     row_split = _row_split(g, bm, bk)
++    strided_window = _strided_window(g, bk)
++    # Slab-direct window units (N-slice-outer walk): compute tilizes in-image runs from the slab in place.
++    window_direct = strided_window and b.nslice
+     row_sem_ids = tuple(range(len(sem_ids), len(sem_ids) + 5)) if row_split else (0, 0, 0, 0, 0)
+     sem_ids += tuple(range(len(sem_ids), len(sem_ids) + 4 + ROW_QUEUE)) if row_split else ()
+     k_padded = g.tensor_kkh_tiles * TILE > 3 * g.c_in_p
+@@ -935,6 +963,8 @@
+             int(b.shared_slab_bytes > 0),
+             SEM_COMBINE_SEND_GO,
+             int(split_core),
++            int(strided_window),
++            int(window_direct),
+         ]
+         args.extend(ttnn.TensorAccessorArgs(input_tensor).get_compile_time_args())
+         return args
+@@ -974,6 +1004,7 @@
+         CB_SLICE_R,
+         *_out_subblock(bm, ns),
+         b.untilize_batch_rows,
++        int(strided_window),
+     ]
+ 
+     writer_ct_args = [
+--- a/ttnn/ttnn/operations/conv2d_3x3/kernels/conv2d_3x3_reader.cpp
++++ b/ttnn/ttnn/operations/conv2d_3x3/kernels/conv2d_3x3_reader.cpp
+@@ -59,6 +59,12 @@
+ // The CB API cannot reserve on behalf of another RISC, hence the index-addressed slots. Hand-outs stay inside the
+ // reader's current K-block, whose band it has waited for; under the N-slice-outer order every band is waited first.
+ //
++// Strided window (stride 2, see conv2d_3x3_gather_dataflow.hpp WindowGather): a unit is one kernel row's run of input
++// pixels, one read per output-row run, which compute tilizes in place at a 2-pixel row stride; the reader alone gathers
++// (no split). Every unit's last 16 B carry the L1 address compute tilizes it from. On the N-slice-outer walk
++// (window_direct) a full in-image run is not copied at all: its address is the slab run itself, so the slab must outlive
++// compute's tilize, and the reader waits for compute to pop every unit before it frees the slab (slab pop, slab_dead).
++//
+ // Short last channel slice (K split, C_in not a multiple of the slice width): tap-major copies whole slab pixels, so
+ // the slice's padded lanes must read as zero. They are zeroed once at kernel start and never read into: on TILE the
+ // cb_input_tiles slots of the padding tile columns (the ring is whole batches, so each slot keeps its L1 offset),
+@@ -158,7 +164,10 @@
+     // Split TILE fill (see the file comment): the writer reads the higher shards' tile-rows. Its two counters reuse the
+     // split slab fill's ids: fill_done (writer -> reader) and fill_go (reader -> writer).
+     constexpr bool tile_fill_split = get_compile_time_arg_val(60) != 0;
+-    constexpr auto input_args = TensorAccessorArgs<61>();
++    // Strided window (see the file comment) and its slab-direct units.
++    constexpr bool strided_window = get_compile_time_arg_val(61) != 0;
++    constexpr bool window_direct = get_compile_time_arg_val(62) != 0;
++    constexpr auto input_args = TensorAccessorArgs<63>();
+     static_assert(!alias_slab_combine || nslice_outer, "only the N-slice-outer walk aliases the slab");
+ 
+     const uint32_t input_addr = get_arg_val<uint32_t>(0);
+@@ -229,6 +238,14 @@
+         zero_im2col_once>;
+     using TapMajorT =
+         conv2d_3x3::TapMajorGather<output_width, input_height, input_width, padding, dilation, c_in_p, block_k_tiles>;
++    using WindowT = conv2d_3x3::WindowGather<output_width, input_height, input_width, padding, c_in_p>;
++    // The unit address word compute tilizes from: the last 16 B of the unit's cb_im2col_rm pages.
++    constexpr uint32_t window_header_offset = block_k_tiles * TILE_DIM * TILE_DIM * ELEM_BYTES - 16;
++    static_assert(
++        !strided_window || (stride == 2 && dilation == 1 && !tap_major && !face_direct && !row_split &&
++                            one_k_block_per_kh && c_in_p % TILE_DIM == 0 && WindowT::unit_bytes <= window_header_offset),
++        "strided window: stride 2, d 1, whole-tile pixels, one K-block per kernel row, gathered by the reader alone");
++    static_assert(!window_direct || (strided_window && nslice_outer), "slab-direct units: the N-slice-outer walk");
+     static_assert(!nslice_outer || channel_slice, "the N-slice-outer walk is the K split's");
+     // Face-direct under a K split is one whole-K K-block, which already lands in0 as [bm, K].
+     constexpr bool tile_row_outer = nslice_outer && !face_direct;
+@@ -458,6 +475,16 @@
+             reads.begin(TRID_GATHER);
+             if constexpr (tap_major) {
+                 TapMajorT::tile_row(reads, slab_noc, zero_src_noc, rows_l1, o, o_end, kh, col_lo, slab_x_base[kh]);
++            } else if constexpr (strided_window) {
++                uint32_t src = 0;
++                if constexpr (window_direct) {
++                    src = WindowT::direct_source(slab_l1, o, o_end, kh, slab_x_base[kh]);
++                }
++                if (src == 0) {
++                    WindowT::tile_row(reads, slab_noc, rows_l1, o, o_end, kh, slab_x_base[kh]);
++                    src = rows_l1;
++                }
++                *reinterpret_cast<volatile uint32_t*>(rows_l1 + window_header_offset) = src;
+             } else {
+                 RowGatherT::tile_row(reads, slab_noc, rows_l1, o, o_end, kh, col_lo, slab_x_base[kh]);
+             }
+@@ -622,6 +649,10 @@
+             }
+         }
+ 
++        if constexpr (window_direct) {
++            // Compute tilizes slab runs in place: the slab is dead only once compute popped every unit.
++            cb_reserve_back(cb_im2col_rm, im2col_rm_depth_rows * block_k_tiles);
++        }
+         if constexpr (tile_input) {
+             constexpr uint32_t slab_pages = slab_tile_rows * c_in_tiles;
+             cb_wait_front(cb_halo_slab, slab_pages);
+--- a/ttnn/ttnn/operations/conv2d_3x3/kernels/conv2d_3x3_gather_dataflow.hpp
++++ b/ttnn/ttnn/operations/conv2d_3x3/kernels/conv2d_3x3_gather_dataflow.hpp
+@@ -1,8 +1,8 @@
+ // SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+ // SPDX-License-Identifier: Apache-2.0
+ 
+-// Gather reads shared by the reader (NoC0) and the writer (NoC1): transaction-id tagged NoC reads, and the
+-// face-direct im2col gather.
++// Gather reads shared by the reader (NoC0) and the writer (NoC1): transaction-id tagged NoC reads, the im2col
++// gathers (row, tap-major, strided window) and the face-direct im2col gather.
+ //
+ // Face-direct (stride * C_in_p == 16, bf16 activation, no padded lanes): one output pixel steps through the slab
+ // by exactly one 16-element tile-face row, so the 16 im2col rows of a face are one contiguous run of slab pixels,
+@@ -368,6 +368,83 @@
+         }
+     }
+ };
++
++// Strided window (stride 2, d 1, C_in_p whole tiles, one K-block per kernel row): im2col row i of a tile-row is the 3
++// consecutive input pixels from 2 * wo_i - padding, and inside one output-row run row i + 1 starts two pixels after row
++// i. So the run's rows are overlapping windows of one input run: pixel slot j of the unit holds input pixel
++// 2 * wo_first - padding + j, and compute tilizes row i from slot 2 * i (row stride 2 pixels, row width 3 pixels), in
++// place. One read per output-row run (plus zero fills at the image edges) replaces one read per output pixel. Two runs
++// of one tile-row share one slot, which the host guarantees is zero for both (left padding / out-of-image right tap).
++// The unit's last 16 B carry the L1 address compute tilizes it from: the unit itself, or (slab-direct) the slab run.
++template <uint32_t output_width, int32_t input_height, int32_t input_width, int32_t padding, uint32_t c_in_p>
++struct WindowGather {
++    static constexpr uint32_t TILE_DIM = 32;
++    static constexpr uint32_t pixel_bytes = c_in_p * 2;
++    // 32 rows two pixels apart plus the last row's third pixel.
++    static constexpr uint32_t unit_bytes = (2 * TILE_DIM + 1) * pixel_bytes;
++
++    // Slab-direct: a full tile-row inside one output row whose whole window lies inside the image row is already a
++    // contiguous run of slab pixels, so compute tilizes it from the slab; returns its L1 address, or 0 (copy it).
++    static uint32_t direct_source(uint32_t slab_l1, uint32_t o, uint32_t o_end, int32_t kh, int32_t slab_x_base_kh) {
++        if (o + TILE_DIM > o_end) {
++            return 0;
++        }
++        const int32_t ho = o / output_width;
++        const int32_t wo = o % output_width;
++        const int32_t h_in = ho * 2 + kh - padding;
++        const int32_t w0 = wo * 2 - padding;
++        if (wo + static_cast<int32_t>(TILE_DIM) > static_cast<int32_t>(output_width) || h_in < 0 ||
++            h_in >= input_height || w0 < 0 || w0 + 2 * static_cast<int32_t>(TILE_DIM) >= input_width) {
++            return 0;
++        }
++        return slab_l1 + (slab_x_base_kh + h_in * input_width + w0) * pixel_bytes;
++    }
++
++    template <typename Reads>
++    __attribute__((noinline)) static void tile_row(
++        Reads& reads,
++        uint64_t slab_noc,
++        uint32_t dst_l1,
++        uint32_t o,
++        uint32_t o_end,
++        int32_t kh,
++        int32_t slab_x_base_kh) {
++        const uint32_t row_end = o + TILE_DIM < o_end ? o + TILE_DIM : o_end;
++        int32_t ho = o / output_width;
++        int32_t wo = o % output_width;
++        uint32_t slot_l1 = dst_l1;
++        for (uint32_t p = o; p < row_end;) {
++            const int32_t run = row_end - p < output_width - wo ? row_end - p : output_width - wo;
++            const int32_t h_in = ho * 2 + kh - padding;
++            const int32_t n_px = 2 * run + 1;
++            if (h_in < 0 || h_in >= input_height) {
++                reads.zero_fill(slot_l1, n_px * pixel_bytes);
++            } else {
++                // Slots [lo, hi) of the run are inside the image row.
++                const int32_t w0 = wo * 2 - padding;
++                const int32_t lo = w0 < 0 ? -w0 : 0;
++                int32_t hi = input_width - w0 < n_px ? input_width - w0 : n_px;
++                hi = hi > lo ? hi : lo;
++                if (lo > 0) {
++                    reads.zero_fill(slot_l1, lo * pixel_bytes);
++                }
++                if (hi > lo) {
++                    reads.read(
++                        slab_noc + (slab_x_base_kh + h_in * input_width + w0 + lo) * pixel_bytes,
++                        slot_l1 + lo * pixel_bytes,
++                        (hi - lo) * pixel_bytes);
++                }
++                if (n_px > hi) {
++                    reads.zero_fill(slot_l1 + hi * pixel_bytes, (n_px - hi) * pixel_bytes);
++                }
++            }
++            slot_l1 += 2 * run * pixel_bytes;
++            p += run;
++            wo = 0;
++            ++ho;
++        }
++    }
++};
+ 
+ template <
+     uint32_t output_width,
+--- a/ttnn/ttnn/operations/conv2d_3x3/kernels/conv2d_3x3_compute.cpp
++++ b/ttnn/ttnn/operations/conv2d_3x3/kernels/conv2d_3x3_compute.cpp
+@@ -7,6 +7,8 @@
+ // and finalize_block is empty. ReLU applies only to the final value: the bias-add pack, or the last
+ // K-block's pack without bias.
+ //
++// Strided-window im2col (stride 2): compute tilizes each unit in place at a 2-pixel row stride (window_tilize).
++//
+ // Face-direct im2col: the reader writes the in0 tiles itself, so the matmul runs without the tilize hook. With one
+ // K-block per M-block the reader pushes in0 in row groups and compute runs one matmul call per group as it lands,
+ // keeping the weights fronted across the calls, and adds the bias once per bias_stream_groups groups, so only the
+@@ -47,6 +49,71 @@
+ 
+ namespace {
+ 
++// Strided-window tilize (see conv2d_3x3_gather_dataflow.hpp WindowGather): a cb_im2col_rm unit is one tile-row x one
++// kernel row laid out as overlapping windows, im2col row i = 3 pixels (3 * c_in_tiles tile columns) from pixel slot
++// 2 * i. The BH fast-tilize unpacker takes its row stride from the init's width and its read width from the chunk, so
++// an init at 2 * c_in_tiles and chunks covering 3 * c_in_tiles read row i's 3 pixels at a 2-pixel stride: the same
++// tiles, in the same order, as tilizing the [32, 3 * c_in_tiles] row-layout block (bit-identical).
++// The unit's last 16 B hold the L1 address to tilize from (the unit itself, or a slab run on the N-slice-outer walk).
++// Raw LLK, UNPACK only (capability): ckl::tilize ties the row stride to the block width and reads at the CB read
++// pointer; the loop is fast_tilize_block's, with the unpacker's base taken from that address.
++#ifdef TRISC_UNPACK
++template <uint32_t cb_in, uint32_t block_tiles>
++inline uint32_t window_unit_source() {
++    invalidate_l1_cache();
++    const uint32_t unit = get_local_cb_interface(get_operand_id(cb_in)).fifo_rd_ptr << 4;
++    return *reinterpret_cast<volatile uint32_t*>(unit + block_tiles * 32 * 32 * 2 - 16);
++}
++
++template <uint32_t cb_in>
++inline void window_unpack_chunk(uint32_t src, uint32_t chunk, uint32_t col_start) {
++    const uint32_t operand_id = get_operand_id(cb_in);
++    const uint32_t src_format = unpack_src_format[operand_id];
++    const uint32_t base = (src >> 4) - 1 + (SCALE_DATUM_SIZE(src_format, col_start * TILE_C_DIM) >> 4);
++    _llk_unpack_fast_tilize_block_(base, 0, src_format, chunk, get_operand_num_faces(operand_id));
++}
++#endif
++
++template <uint32_t c_in_tiles, uint32_t cb_in, uint32_t cb_out>
++ALWI void window_tilize(DataflowBuffer& in, DataflowBuffer& out, uint32_t units) {
++    constexpr uint32_t row_tiles = 2 * c_in_tiles;
++    constexpr uint32_t block_tiles = 3 * c_in_tiles;
++    reconfig_data_format_srca(cb_in);
++    pack_reconfig_data_format(cb_out);
++    fast_tilize_init(cb_in, row_tiles, cb_out);
++    // Every unit has the same chunk sequence: reprogram the unpack width / pack MOP only when the chunk changes.
++    uint32_t prev_chunk = 0;
++    for (uint32_t u = 0; u < units; ++u) {
++        in.wait_front(block_tiles);
++        out.reserve_back(block_tiles);
++        [[maybe_unused]] uint32_t src = 0;
++        UNPACK(src = window_unit_source<cb_in, block_tiles>());
++        PACK((llk_pack_fast_tilize_row_begin(cb_out, 0)));
++        for (uint32_t tiles_done = 0; tiles_done < block_tiles;) {
++            // BH fast-tilize chunks are 2..4 tiles (fast_tilize_block's split: 5 -> 2 + 3).
++            const uint32_t remaining = block_tiles - tiles_done;
++            const uint32_t chunk = (remaining > 5) ? 4 : (remaining == 5) ? 2 : remaining;
++            MATH((llk_math_wait_for_dest_available()));
++            PACK((llk_packer_wait_for_math_done()));
++            if (chunk != prev_chunk) {
++                UNPACK((llk_unpack_fast_tilize_reinit_xdim(chunk)));
++                PACK((llk_pack_fast_tilize_reinit_unit_dim(cb_out, chunk)));
++                prev_chunk = chunk;
++            }
++            UNPACK((window_unpack_chunk<cb_in>(src, chunk, tiles_done)));
++            MATH((llk_math_fast_tilize_block_<DST_ACCUM_MODE>(0, cb_in, 4)));
++            PACK((llk_pack_fast_tilize_row_chunk(0, cb_out, chunk)));
++            MATH((llk_math_dest_section_done<DST_ACCUM_MODE>()));
++            PACK((llk_pack_dest_section_done<DST_ACCUM_MODE>()));
++            tiles_done += chunk;
++        }
++        PACK((llk_pack_fast_tilize_row_end()));
++        out.push_back(block_tiles);
++        in.pop_front(block_tiles);
++    }
++    fast_tilize_uninit(cb_in, cb_out, row_tiles);
++}
++
+ // Tilizes one K-block (block_m_tiles tile-rows x block_k_tiles) of gathered im2col rows. The matmul
+ // restores its own state afterwards (InitMode::ShortAfterPreKBlock).
+ // The reader lays a tile-row out either as one [32, block_k_tiles * 32] row block or tap-major, as
+@@ -58,7 +125,9 @@
+     uint32_t block_m_tiles,
+     uint32_t cb_im2col_rm,
+     uint32_t cb_im2col_tiles,
+-    bool relu_on_last_matmul_pack>
++    bool relu_on_last_matmul_pack,
++    bool strided_window,
++    uint32_t c_in_tiles>
+ struct TilizeIm2colKBlock {
+     DataflowBuffer* rm;
+     DataflowBuffer* tiles;
+@@ -74,8 +143,13 @@
+         {
+             // Includes the unpacker's per-tile-row wait on the reader's gather.
+             MaybeDeviceZoneScope("compute_tilize");
+-            ckl::tilize<tilize_width_tiles, cb_im2col_rm, cb_im2col_tiles>(
+-                *rm, *tiles, block_m_tiles * (block_k_tiles / tilize_width_tiles));
++            if constexpr (strided_window) {
++                static_assert(block_k_tiles == 3 * c_in_tiles, "a window unit is one kernel row");
++                window_tilize<c_in_tiles, cb_im2col_rm, cb_im2col_tiles>(*rm, *tiles, block_m_tiles);
++            } else {
++                ckl::tilize<tilize_width_tiles, cb_im2col_rm, cb_im2col_tiles>(
++                    *rm, *tiles, block_m_tiles * (block_k_tiles / tilize_width_tiles));
++            }
+         }
+         if constexpr (relu_on_last_matmul_pack) {
+             if (is_last) {
+@@ -123,6 +197,7 @@
+     constexpr uint32_t slice_sb_h = get_compile_time_arg_val(32);
+     constexpr uint32_t slice_sb_w = get_compile_time_arg_val(33);
+     constexpr uint32_t untilize_batch_rows = get_compile_time_arg_val(34);
++    constexpr bool strided_window = get_compile_time_arg_val(35) != 0;
+ 
+     const uint32_t num_m_blocks_this_core = get_arg_val<uint32_t>(0);
+     [[maybe_unused]] const bool owns_output_columns = get_arg_val<uint32_t>(1) != 0;
+@@ -193,7 +268,9 @@
+         block_m_tiles,
+         cb_im2col_rm,
+         cb_im2col_tiles,
+-        relu_on_last_matmul_pack>;
++        relu_on_last_matmul_pack,
++        strided_window,
++        c_in_tiles>;
+     auto make_pre_k_block = [&]() {
+         if constexpr (face_direct) {
+             return ckl::NoPreKBlock{};
+@@ -289,8 +366,13 @@
+             pack_reconfig_l1_acc(0);
+             if constexpr (!face_direct) {
+                 MaybeDeviceZoneScope("compute_tilize");
+-                ckl::tilize<im2col_tilize_width_tiles, cb_im2col_rm, cb_im2col_tiles>(
+-                    im2col_rm_dfb, im2col_tiles_dfb, block_m_tiles * (k_tiles / im2col_tilize_width_tiles));
++                if constexpr (strided_window) {
++                    window_tilize<c_in_tiles, cb_im2col_rm, cb_im2col_tiles>(
++                        im2col_rm_dfb, im2col_tiles_dfb, block_m_tiles * num_k_blocks);
++                } else {
++                    ckl::tilize<im2col_tilize_width_tiles, cb_im2col_rm, cb_im2col_tiles>(
++                        im2col_rm_dfb, im2col_tiles_dfb, block_m_tiles * (k_tiles / im2col_tilize_width_tiles));
++                }
+             }
+             {
+                 MaybeDeviceZoneScope("compute_matmul_walk");
