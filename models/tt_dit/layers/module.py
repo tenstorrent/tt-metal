@@ -303,9 +303,14 @@ class Module(ABC):
         Every slice is cut before any full weight is freed, so the slices pack together instead of each one filling
         the hole its predecessor's full weight left; `gather` then frees them as one block, not as holes scattered
         between the gathered weights.
+
+        Raises, before changing anything, if `mesh_axis` already splits any parameter (see `Parameter.shard`).
         """
+        parameters = list(self._all_parameters())
+        for parameter in parameters:
+            parameter.check_shard_axis(mesh_axis)
         retired: list[ttnn.Tensor] = []
-        for parameter in self._all_parameters():
+        for parameter in parameters:
             parameter.shard(mesh_axis, retired=retired)
         for t in retired:
             ttnn.deallocate(t)
@@ -490,7 +495,9 @@ class Parameter:
             pad_value: See `ttnn.from_torch()`. Defaults to `None`.
             mesh_axes: Maps tensor dimensions to mesh device axes for distribution.
                 For a rank-3 tensor whose second and third dimensions are sharded on mesh axes 0 and
-                1, respectively, use `[None, 0, 1]`.
+                1, respectively, use `[None, 0, 1]`. This is the declared layout (`declared_mesh_axes`),
+                the one the owning module's forward expects; `shard` can split further, on other mesh
+                axes, until `gather` (`mesh_axes` is the current layout).
             on_host: If `True`, keep the tensor in host memory instead of device memory.
         """
         total_shape = tuple(total_shape)
@@ -512,14 +519,14 @@ class Parameter:
         self.dtype = dtype
         self.memory_config = memory_config
         self.pad_value = pad_value
+        self.declared_mesh_axes = mesh_axes
         self.mesh_axes = mesh_axes
         self.on_host = on_host
         self._data = None
-        self._sharded_dim: int | None = None
 
     @property
     def local_shape(self) -> tuple[int, ...]:
-        """Each device's shape of the tensor under the current `mesh_axes`."""
+        """Each device's shape of the tensor in its current layout (`mesh_axes`)."""
         return tuple(
             size if axis is None else size // self.device.shape[axis]
             for size, axis in zip(self.total_shape, self.mesh_axes, strict=True)
@@ -540,7 +547,7 @@ class Parameter:
             dtype=self.dtype,
             memory_config=self.memory_config,
             pad_value=self.pad_value,
-            mesh_axes=self.mesh_axes,
+            mesh_axes=self.declared_mesh_axes,
             on_host=self.on_host,
         )
 
@@ -562,8 +569,9 @@ class Parameter:
         if self._data is None:
             msg = "parameter has no data"
             raise RuntimeError(msg)
-        if self._sharded_dim is not None:
-            msg = f"parameter is sharded over mesh axis {self.mesh_axes[self._sharded_dim]}; gather it first"
+        if self.is_sharded():
+            axes = [self.mesh_axes[d] for d in self.sharded_dims()]
+            msg = f"parameter is sharded over mesh axes {axes} beyond its declared layout; gather it first"
             raise RuntimeError(msg)
         return self._data
 
@@ -577,22 +585,39 @@ class Parameter:
         if self._data is not None:
             ttnn.deallocate(self._data)
             self._data = None
-        if self._sharded_dim is not None:
-            self._set_mesh_axis(self._sharded_dim, None)
-            self._sharded_dim = None
+        self.mesh_axes = self.declared_mesh_axes
 
     def is_sharded(self) -> bool:
-        """Whether `shard` sliced this parameter and `gather` has not restored it."""
-        return self._sharded_dim is not None
+        """Whether `shard` split this parameter beyond its declared layout and `gather` has not restored it."""
+        return self.mesh_axes != self.declared_mesh_axes
+
+    def sharded_dims(self) -> list[int]:
+        """The dims `shard` split beyond the declared layout."""
+        return [d for d, (a, b) in enumerate(zip(self.mesh_axes, self.declared_mesh_axes, strict=True)) if a != b]
+
+    def check_shard_axis(self, mesh_axis: int) -> None:
+        """Raise if `mesh_axis` already splits this parameter: by declaration (the owning module's forward expects
+        that split, so it cannot be gathered away) or by an earlier `shard`."""
+        if mesh_axis in self.declared_mesh_axes:
+            msg = (
+                f"mesh axis {mesh_axis} is declared for this parameter (mesh_axes {self.declared_mesh_axes}); "
+                "shard can only split over an undeclared mesh axis"
+            )
+            raise ValueError(msg)
+        if mesh_axis in self.mesh_axes:
+            msg = f"parameter is already sharded over mesh axis {mesh_axis}"
+            raise ValueError(msg)
 
     def shard(self, mesh_axis: int, /, *, retired: list[ttnn.Tensor] | None = None) -> None:
-        """Keep only this device's slice of one dim not yet split over the mesh, and declare that dim split over
-        `mesh_axis`. Does nothing without device data, if `mesh_axis` is in use or has one device, or if no dim
-        divides evenly (whole tiles, for the last two dims of a tiled tensor).
+        """Keep only this device's slice of one dim not yet split over the mesh, and mark that dim split over
+        `mesh_axis` in `mesh_axes`. Raises as `check_shard_axis` does. Does nothing without device data, if
+        `mesh_axis` has one device, or if no dim divides evenly (whole tiles, for the last two dims of a tiled
+        tensor).
 
         The full tensor is deallocated, or appended to `retired` for the caller to free.
         """
-        if self._data is None or self.on_host or mesh_axis in self.mesh_axes or self._sharded_dim is not None:
+        self.check_shard_axis(mesh_axis)
+        if self._data is None or self.on_host:
             return
         n = self.device.shape[mesh_axis]
         dim = self._shard_dim(n) if n > 1 and len(self.total_shape) <= 4 else None
@@ -608,30 +633,32 @@ class Parameter:
         )
         self._set_mesh_axis(dim, mesh_axis)
         self.data = ttnn.reshape(piece, self.local_shape)
-        self._sharded_dim = dim
         self._retire(full, retired)
 
     def gather(self, ccl_manager: Any, /, *, retired: list[ttnn.Tensor] | None = None) -> None:  # noqa: ANN401
-        """Undo `shard`: all-gather the sliced dim and declare it unsplit again.
+        """Undo `shard`: all-gather every dim split beyond the declared layout, back to that layout.
 
         The slice is deallocated, or appended to `retired` for the caller to free.
         """
-        if self._sharded_dim is None or self._data is None:
+        dims = self.sharded_dims()
+        if not dims or self._data is None:
             return
-        dim, piece = self._sharded_dim, self._data
+        piece = current = self._data
         offset = 4 - len(self.total_shape)
-        full = ccl_manager.all_gather(
-            ttnn.reshape(piece, (1,) * offset + self.local_shape),
-            dim=dim + offset,
-            mesh_axis=self.mesh_axes[dim],
-            use_hyperparams=False,
-        )
-        self._set_mesh_axis(dim, None)
-        self._sharded_dim = None
-        full = ttnn.reshape(full, self.local_shape)
-        if full.memory_config() != self.memory_config:
-            full = ttnn.to_memory_config(full, self.memory_config)
-        self.data = full
+        for dim in dims:
+            gathered = ccl_manager.all_gather(
+                ttnn.reshape(current, (1,) * offset + self.local_shape),
+                dim=dim + offset,
+                mesh_axis=self.mesh_axes[dim],
+                use_hyperparams=False,
+            )
+            if current is not piece:
+                ttnn.deallocate(current)
+            self._set_mesh_axis(dim, self.declared_mesh_axes[dim])
+            current = ttnn.reshape(gathered, self.local_shape)
+        if current.memory_config() != self.memory_config:
+            current = ttnn.to_memory_config(current, self.memory_config)
+        self.data = current
         self._retire(piece, retired)
 
     def _shard_dim(self, n: int) -> int | None:

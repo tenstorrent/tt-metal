@@ -12,6 +12,9 @@ import torch
 import ttnn
 
 from ...layers.module import Module, Parameter
+from ...parallel.manager import CCLManager
+from ...utils.tensor import to_torch
+from ...utils.test import mesh_device_config_to_string
 
 
 class TinyLinear(Module):
@@ -83,3 +86,78 @@ def test_save_and_load(mesh_device: ttnn.MeshDevice) -> None:
     y2 = ttnn.to_torch(model2.forward(x))
 
     assert torch.equal(y1, y2)
+
+
+class ShardableModule(Module):
+    def __init__(self, *, device: ttnn.MeshDevice) -> None:
+        super().__init__()
+
+        self.replicated = Parameter(total_shape=[512, 256], device=device)
+        self.tensor_parallel = Parameter(total_shape=[512, 256], mesh_axes=[None, 0], device=device)
+        self.small = Parameter(total_shape=[32, 32], device=device)
+
+    def forward(self) -> None:
+        pass
+
+
+@pytest.mark.parametrize(
+    "mesh_device, device_params",
+    [
+        (shape, {"fabric_config": ttnn.FabricConfig.FABRIC_1D, "require_exact_physical_num_devices": True})
+        for shape in [(2, 4), (4, 8)]
+    ],
+    ids=mesh_device_config_to_string,
+    indirect=True,
+)
+def test_shard_and_gather(mesh_device: ttnn.MeshDevice, expect_error) -> None:  # noqa: ANN001
+    ccl_manager = CCLManager(mesh_device, topology=ttnn.Topology.Linear)
+    model = ShardableModule(device=mesh_device)
+    state = {name: torch.randn([512, 256], dtype=torch.bfloat16) for name in ("replicated", "tensor_parallel")}
+    state["small"] = torch.randn([32, 32], dtype=torch.bfloat16)
+    model.load_torch_state_dict(state)
+    params = dict(model.named_parameters())
+
+    def assert_layout_matches_data() -> None:
+        for name, p in params.items():
+            assert tuple(p._data.shape) == p.local_shape, name  # noqa: SLF001
+            assert torch.equal(to_torch(p._data, mesh_axes=p.mesh_axes), state[name]), name  # noqa: SLF001
+
+    model.shard(1)
+    assert not model.is_loaded() and model.is_sharded()
+    assert params["replicated"].mesh_axes == (1, None)
+    assert params["tensor_parallel"].mesh_axes == (1, 0)
+    assert params["tensor_parallel"].declared_mesh_axes == (None, 0)
+    assert not params["small"].is_sharded()  # no dim splits into whole tiles
+    assert_layout_matches_data()
+    with expect_error(RuntimeError, "gather it first"):
+        params["replicated"].data  # noqa: B018
+
+    # Axis 0 is declared for `tensor_parallel`, axis 1 already sharded: both refuse, and change nothing.
+    with expect_error(ValueError, "declared"):
+        model.shard(0)
+    with expect_error(ValueError, "already sharded"):
+        model.shard(1)
+    assert params["replicated"].mesh_axes == (1, None)
+
+    model.gather(ccl_manager)
+    assert model.is_loaded() and not model.is_sharded()
+    for name, p in params.items():
+        assert p.mesh_axes == p.declared_mesh_axes, name
+    for name in ("replicated", "small"):
+        for device_tensor in ttnn.get_device_tensors(params[name].data):
+            assert torch.equal(ttnn.to_torch(device_tensor), state[name]), name
+    assert_layout_matches_data()
+
+    # A parameter with no declared split can be sharded over both axes and gathered back in one call.
+    replicated = params["replicated"]
+    replicated.shard(1)
+    replicated.shard(0)
+    assert replicated.mesh_axes == (1, 0)
+    assert_layout_matches_data()
+    replicated.gather(ccl_manager)
+    assert replicated.mesh_axes == (None, None)
+    assert_layout_matches_data()
+
+    replicated.shard(1)
+    replicated.deallocate()
+    assert replicated.mesh_axes == (None, None) and not replicated.is_sharded()
