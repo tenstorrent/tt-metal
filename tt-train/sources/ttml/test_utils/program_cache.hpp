@@ -7,6 +7,7 @@
 #include <gtest/gtest.h>
 
 #include <algorithm>
+#include <array>
 #include <bit>
 #include <cstddef>
 #include <cstdint>
@@ -88,6 +89,20 @@ inline ttnn::Tensor filled_on_device(const std::vector<uint32_t>& shape, float v
 // filled_on_device().
 inline ttnn::Tensor zeros_on_device(const std::vector<uint32_t>& shape) {
     return ttml::core::zeros(ttnn::Shape(shape), &ttml::autograd::ctx().get_device());
+}
+
+// A bf16 TILE tensor of `value` in tiles of tile_shape ({height, width}) instead of the default 32x32 ones.
+inline ttnn::Tensor filled_on_device_in_tiles(
+    const std::vector<uint32_t>& shape, float value, const std::array<uint32_t, 2>& tile_shape) {
+    const ttnn::Shape tensor_shape(shape);
+    const tt::tt_metal::TensorSpec spec(
+        tensor_shape,
+        tt::tt_metal::TensorLayout(
+            ttnn::DataType::BFLOAT16,
+            tt::tt_metal::PageConfig(ttnn::Layout::TILE, tt::tt_metal::Tile(tile_shape)),
+            ttnn::DRAM_MEMORY_CONFIG));
+    return ttnn::Tensor::from_vector(
+        std::vector<float>(tensor_shape.volume(), value), spec, &ttml::autograd::ctx().get_device());
 }
 
 // A later launch's tensor must not share a buffer with an earlier one's, or a hit that kept the old address would pass.

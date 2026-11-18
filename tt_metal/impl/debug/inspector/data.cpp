@@ -6,6 +6,7 @@
 #include "data.hpp"
 #include <cstdlib>
 #include <iterator>
+#include <map>
 #include <stdexcept>
 #include "rpc_server_controller.hpp"
 #include "logger.hpp"
@@ -16,6 +17,7 @@
 #include <system_mesh.hpp>
 #include "jit_build/build_env_manager.hpp"
 #include "device/device_manager.hpp"
+#include "impl/kernels/kernel.hpp"
 #include <llrt/tt_cluster.hpp>
 #include <tt-metalium/experimental/fabric/control_plane.hpp>
 
@@ -122,16 +124,7 @@ void Data::rpc_get_programs(rpc::Inspector::GetProgramsResults::Builder& results
         auto kernels_list = program.initKernels(program_data.kernels.size());
         j = 0;
         for (const auto& [kernel_id, kernel_data] : program_data.kernels) {
-            auto kernel = kernels_list[j++];
-            kernel.setWatcherKernelId(kernel_data.watcher_kernel_id);
-            kernel.setName(kernel_data.name);
-            kernel.setPath(kernel_data.path);
-            kernel.setSource(kernel_data.source);
-            kernel.setProgramId(program_id);
-            auto elf_paths_list = kernel.initProcessorElfPaths(kernel_data.processor_elf_paths.size());
-            for (size_t k = 0; k < kernel_data.processor_elf_paths.size(); ++k) {
-                elf_paths_list.set(k, kernel_data.processor_elf_paths[k]);
-            }
+            populate_kernel(kernels_list[j++], kernel_data, program_id);
         }
 
         auto semaphores_list = program.initSemaphores(program_data.semaphores.size());
@@ -293,17 +286,7 @@ void Data::rpc_get_kernel(rpc::Inspector::GetKernelParams::Reader params, rpc::I
     if (kernel_data_it == program_data->second.kernels.end()) {
         throw std::runtime_error("Kernel not found inside the program");
     }
-    auto& kernel_data = kernel_data_it->second;
-    auto kernel = results.initKernel();
-    kernel.setWatcherKernelId(kernel_data.watcher_kernel_id);
-    kernel.setName(kernel_data.name);
-    kernel.setPath(kernel_data.path);
-    kernel.setSource(kernel_data.source);
-    kernel.setProgramId(program_id);
-    auto elf_paths_list = kernel.initProcessorElfPaths(kernel_data.processor_elf_paths.size());
-    for (size_t k = 0; k < kernel_data.processor_elf_paths.size(); ++k) {
-        elf_paths_list.set(k, kernel_data.processor_elf_paths[k]);
-    }
+    populate_kernel(results.initKernel(), kernel_data_it->second, program_id);
 }
 
 // Get build environment information for all devices
@@ -473,6 +456,106 @@ rpc::BinaryStatus Data::convert_binary_status(ProgramBinaryStatus status) {
         default:
             return rpc::BinaryStatus::NOT_SENT;
     }
+}
+
+void Data::populate_kernel(rpc::KernelData::Builder out, const KernelData& kernel_data, uint64_t program_id) {
+    auto fill = [](auto list, const auto& values) {
+        for (size_t i = 0; i < values.size(); ++i) {
+            list.set(i, values[i]);
+        }
+    };
+    out.setWatcherKernelId(kernel_data.watcher_kernel_id);
+    out.setName(kernel_data.name);
+    out.setPath(kernel_data.path);
+    out.setSource(kernel_data.source);
+    out.setProgramId(program_id);
+    fill(out.initProcessorElfPaths(kernel_data.processor_elf_paths.size()), kernel_data.processor_elf_paths);
+
+    // program_destroyed erases this entry before the program's kernels are destroyed.
+    const auto kernel = kernel_data.kernel.lock();
+    std::vector<std::string> compile_time_arg_names(kernel->compile_time_args().size());
+    const auto named = kernel->named_compile_time_args();
+    std::map<std::string, uint32_t> named_compile_time_args(named.begin(), named.end());
+    // Metal 2.0 names words as the kernel does: by arg name, tensor::<accessor> or scratch::<accessor>.
+    // Varargs have no name.
+    auto rta_names = kernel->get_runtime_arg_names();
+    rta_names.resize(kernel->get_rta_layout().vararg_section_offset);
+    auto crta_names = kernel->get_common_runtime_arg_names();
+    crta_names.resize(kernel->get_crta_layout().vararg_section_offset);
+    for (const auto& binding : kernel->tensor_binding_handles()) {
+        const std::string name = "tensor::" + binding.accessor_name;
+        // A tensor's CTA words run up to the next tensor's.
+        auto cta_end = static_cast<uint32_t>(compile_time_arg_names.size());
+        for (const auto& other : kernel->tensor_binding_handles()) {
+            if (other.cta_offset > binding.cta_offset) {
+                cta_end = std::min(cta_end, other.cta_offset);
+            }
+        }
+        for (uint32_t i = binding.cta_offset; i < cta_end; i++) {
+            compile_time_arg_names.at(i) = fmt::format("{}[{}]", name, i - binding.cta_offset);
+        }
+        if (binding.is_per_node) {
+            rta_names.at(binding.addr_rta_offset / sizeof(uint32_t)) = name;
+            continue;
+        }
+        const uint32_t word = binding.addr_crta_offset / sizeof(uint32_t);
+        crta_names.at(word) = name;
+        for (uint32_t i = 0; i < binding.num_runtime_field_crta_words; i++) {
+            crta_names.at(word + 1 + i) =
+                binding.runtime_field_is_page_size ? name + ".page_size" : fmt::format("{}.shape[{}]", name, i);
+        }
+    }
+    for (const auto& scratchpad : kernel->scratchpad_binding_handles()) {
+        crta_names.at(scratchpad.addr_crta_word) = "scratch::" + scratchpad.accessor_name;
+    }
+
+    // Blaze-only experimental named args (removal tracked by issue #50953)
+    for (const auto& [ns, fields] : kernel->named_ct_arg_namespaces()) {
+        for (const auto& [field, value] : fields) {
+            named_compile_time_args[ns.empty() ? field : ns + "." + field] = value;
+        }
+    }
+    for (const auto& [ns, entries] : kernel->named_runtime_arg_namespaces()) {
+        for (const auto& entry : entries) {
+            auto& names = entry.dispatch == RuntimeArgDispatch::COMMON ? crta_names : rta_names;
+            const std::string name = ns.empty() ? entry.field : ns + "." + entry.field;
+            names.resize(std::max<size_t>(names.size(), entry.index + entry.length));
+            for (uint32_t i = 0; i < entry.length; i++) {
+                names[entry.index + i] = entry.length == 1 ? name : fmt::format("{}[{}]", name, i);
+            }
+        }
+    }
+
+    auto compile_time_args = out.initCompileTimeArgs(compile_time_arg_names.size() + named_compile_time_args.size());
+    uint32_t i = 0;
+    for (const uint32_t value : kernel->compile_time_args()) {
+        auto compile_time_arg = compile_time_args[i];
+        compile_time_arg.setName(compile_time_arg_names[i]);
+        compile_time_arg.setValue(value);
+        i++;
+    }
+    for (const auto& [name, value] : named_compile_time_args) {
+        auto compile_time_arg = compile_time_args[i++];
+        compile_time_arg.setName(name);
+        compile_time_arg.setValue(value);
+    }
+
+    auto runtime_args = out.initRuntimeArgs();
+    fill(runtime_args.initNames(rta_names.size()), rta_names);
+    const auto& cores = kernel->cores_with_runtime_args();
+    auto counts = runtime_args.initCounts(cores.size());
+    i = 0;
+    for (const auto& core : cores) {
+        auto runtime_arg_count = counts[i++];
+        auto logical_core = runtime_arg_count.initCore();
+        logical_core.setX(core.x);
+        logical_core.setY(core.y);
+        runtime_arg_count.setCount(kernel->logical_runtime_arg_count(core));
+    }
+
+    auto common_runtime_args = out.initCommonRuntimeArgs();
+    fill(common_runtime_args.initNames(crta_names.size()), crta_names);
+    common_runtime_args.setCount(kernel->logical_common_runtime_arg_count());
 }
 
 // Helper function to populate the core info

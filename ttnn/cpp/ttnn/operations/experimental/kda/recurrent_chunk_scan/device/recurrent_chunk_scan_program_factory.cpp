@@ -84,11 +84,12 @@ ttnn::device_operation::MeshWorkloadArtifacts RecurrentChunkScanProgramFactory::
     const tt::tt_metal::DFBSpecName final_state_dfb_name{"final_state"};
     const tt::tt_metal::DFBSpecName scratch_dfb_name{"scratch"};
     const tt::tt_metal::DFBSpecName state_carry_dfb_name{"state_carry"};
+    const tt::tt_metal::DFBSpecName identity_dfb_name{"identity"};
     const tt::tt_metal::DFBSpecName summary_head_output_dfb_name{"summary_head_output"};
     const tt::tt_metal::DFBSpecName summary_head_state_dfb_name{"summary_head_state"};
     const tt::tt_metal::DFBSpecName tail_entry_states_dfb_name{"tail_entry_states"};
     const tt::tt_metal::DFBSpecName chunk_base_dfb_name{"chunk_base"};
-    const tt::tt_metal::DFBSpecName final_a_dfb_name{"final_a"};
+    const tt::tt_metal::DFBSpecName final_e_dfb_name{"final_e"};
     const tt::tt_metal::DFBSpecName final_b_dfb_name{"final_b"};
 
     const tt::tt_metal::SemaphoreSpecName ready_semaphore_name{"ready"};
@@ -107,13 +108,13 @@ ttnn::device_operation::MeshWorkloadArtifacts RecurrentChunkScanProgramFactory::
     const tt::tt_metal::TensorParamName output_tensor_name{"output"};
     const tt::tt_metal::TensorParamName final_state_tensor_name{"final_state"};
     const tt::tt_metal::TensorParamName terms_tensor_name{"terms"};
-    const tt::tt_metal::TensorParamName final_a_tensor_name{"final_a"};
+    const tt::tt_metal::TensorParamName final_e_tensor_name{"final_e"};
     const tt::tt_metal::TensorParamName final_b_tensor_name{"final_b"};
 
     const auto fp32 = tt::DataFormat::Float32;
     const auto output_format = tt::DataFormat::Float16_b;
     const tt::tt_metal::DFBSpecName transport_state_dfb_name{"transport_state"};
-    const tt::tt_metal::DFBSpecName identity_scratch_dfb_name{"identity_scratch"};
+    const tt::tt_metal::DFBSpecName zero_tile_dfb_name{"zero_tile"};
     const auto input_format = [](const Tensor& tensor) {
         return tt::tt_metal::datatype_to_dataformat_converter(tensor.dtype());
     };
@@ -148,18 +149,19 @@ ttnn::device_operation::MeshWorkloadArtifacts RecurrentChunkScanProgramFactory::
         // UnpackToDest view of the same FP32 state, accumulated in place beside the ring; it seeds and publishes the
         // state exactly. The ring feeds the matmuls.
         make_dfb(state_carry_dfb_name, state_tiles, fp32),
+        make_dfb(identity_dfb_name, 1, fp32),  // I, seeded by the reader in summary mode
         // ProgramSpec names must exist even when if-constexpr discards their
         // users. Give inactive-mode buffers one tile instead of reserving every
         // summary and recurrent restart payload simultaneously.
         make_dfb(summary_head_output_dfb_name, split_head_tiles, output_format),
         make_dfb(summary_head_state_dfb_name, split_head_tiles, output_format),
         make_dfb(tail_entry_states_dfb_name, tail_entry_states_tiles, fp32),
-        // The summary writer's identity tile for slots without a valid segment.
-        make_dfb(identity_scratch_dfb_name, 1, output_format),
+        // A zero tile from which the summary writer fills slots without a valid segment with the identity map (0, 0).
+        make_dfb(zero_tile_dfb_name, 1, output_format),
         // The emitted output terms: a chunk's rows on both paths (F(0) and F(I)), and the last segment's FP32
         // transform.
         make_dfb(chunk_base_dfb_name, emit ? 2 * paths * cv : 1, fp32),
-        make_dfb(final_a_dfb_name, emit ? kv : 1, fp32),
+        make_dfb(final_e_dfb_name, emit ? kv : 1, fp32),
         make_dfb(final_b_dfb_name, emit ? kv : 1, fp32),
     };
 
@@ -177,6 +179,7 @@ ttnn::device_operation::MeshWorkloadArtifacts RecurrentChunkScanProgramFactory::
                 tt::tt_metal::ProducerOf(q_decay_dfb_name, "q_decay"),
                 tt::tt_metal::ProducerOf(intra_dfb_name, "intra"),
                 tt::tt_metal::ProducerOf(tail_entry_states_dfb_name, "tail_entry_states"),
+                tt::tt_metal::ProducerOf(identity_dfb_name, "identity"),
             },
         .tensor_bindings =
             {
@@ -226,10 +229,10 @@ ttnn::device_operation::MeshWorkloadArtifacts RecurrentChunkScanProgramFactory::
                 tt::tt_metal::ConsumerOf(summary_head_output_dfb_name, "summary_head_output"),
                 tt::tt_metal::ConsumerOf(summary_head_state_dfb_name, "summary_head_state"),
                 tt::tt_metal::ConsumerOf(summary ? final_state_dfb_name : transport_state_dfb_name, "unused_state"),
-                tt::tt_metal::ProducerOf(identity_scratch_dfb_name, "identity_scratch"),
-                tt::tt_metal::ConsumerOf(identity_scratch_dfb_name, "identity_scratch"),
+                tt::tt_metal::ProducerOf(zero_tile_dfb_name, "zero_tile"),
+                tt::tt_metal::ConsumerOf(zero_tile_dfb_name, "zero_tile"),
                 tt::tt_metal::ConsumerOf(chunk_base_dfb_name, "chunk_base"),
-                tt::tt_metal::ConsumerOf(final_a_dfb_name, "final_a"),
+                tt::tt_metal::ConsumerOf(final_e_dfb_name, "final_e"),
                 tt::tt_metal::ConsumerOf(final_b_dfb_name, "final_b"),
             },
         // The packed summary is the only summary output; its writer still parses the recurrence's final_state.
@@ -275,7 +278,7 @@ ttnn::device_operation::MeshWorkloadArtifacts RecurrentChunkScanProgramFactory::
     // The emitted terms' tensors; without them the writer's names alias the output.
     const auto emitted = [&](const tt::tt_metal::TensorParamName& name) { return emit ? name : output_tensor_name; };
     writer.tensor_bindings.push_back(tt::tt_metal::TensorBinding{emitted(terms_tensor_name), "terms"});
-    writer.tensor_bindings.push_back(tt::tt_metal::TensorBinding{emitted(final_a_tensor_name), "final_a"});
+    writer.tensor_bindings.push_back(tt::tt_metal::TensorBinding{emitted(final_e_tensor_name), "final_e"});
     writer.tensor_bindings.push_back(tt::tt_metal::TensorBinding{emitted(final_b_tensor_name), "final_b"});
 
     auto compute_hw = ttnn::to_compute_hardware_config(attrs.compute_kernel_config);
@@ -300,7 +303,8 @@ ttnn::device_operation::MeshWorkloadArtifacts RecurrentChunkScanProgramFactory::
         unpack_modes[name] = tt::tt_metal::UnpackMode::UnpackToSrc;
     }
     // Seeds and the carry reach DST unrounded: they are only copied, never FPU operands, so the FP32 state is exact.
-    for (const auto& name : {state_dfb_name, tail_entry_states_dfb_name, state_carry_dfb_name}) {
+    // The identity tile is only copied too, as in affine_exclusive_scan.
+    for (const auto& name : {state_dfb_name, tail_entry_states_dfb_name, state_carry_dfb_name, identity_dfb_name}) {
         unpack_modes[name] = tt::tt_metal::UnpackMode::UnpackToDest;
     }
     tt::tt_metal::KernelSpec compute{
@@ -333,11 +337,12 @@ ttnn::device_operation::MeshWorkloadArtifacts RecurrentChunkScanProgramFactory::
                 tt::tt_metal::ConsumerOf(scratch_dfb_name, "scratch"),
                 tt::tt_metal::ProducerOf(state_carry_dfb_name, "state_carry"),
                 tt::tt_metal::ConsumerOf(state_carry_dfb_name, "state_carry"),
+                tt::tt_metal::ConsumerOf(identity_dfb_name, "identity"),
                 tt::tt_metal::ProducerOf(summary_head_output_dfb_name, "summary_head_output"),
                 tt::tt_metal::ProducerOf(summary_head_state_dfb_name, "summary_head_state"),
                 tt::tt_metal::ConsumerOf(tail_entry_states_dfb_name, "tail_entry_states"),
                 tt::tt_metal::ProducerOf(chunk_base_dfb_name, "chunk_base"),
-                tt::tt_metal::ProducerOf(final_a_dfb_name, "final_a"),
+                tt::tt_metal::ProducerOf(final_e_dfb_name, "final_e"),
                 tt::tt_metal::ProducerOf(final_b_dfb_name, "final_b"),
             },
         .compile_time_args =
@@ -346,7 +351,7 @@ ttnn::device_operation::MeshWorkloadArtifacts RecurrentChunkScanProgramFactory::
              {"Vt", Vt},
              {"summary", static_cast<uint32_t>(summary)},
              {"emit_outputs", static_cast<uint32_t>(emit)}},
-        .runtime_arg_schema = {.runtime_arg_names = {"num_chunks", "group"}},
+        .runtime_arg_schema = {.runtime_arg_names = {"num_chunks", "group", "value_block"}},
         .hw_config = std::move(compute_hw),
     };
     tt::tt_metal::KernelRunArgs reader_run_args{.kernel = reader_kernel_name};
@@ -386,7 +391,9 @@ ttnn::device_operation::MeshWorkloadArtifacts RecurrentChunkScanProgramFactory::
              {"peer_y1", sender ? peers.y0 : peers.y1},
              {"receivers", value_blocks - 1}});
         tt::tt_metal::AddRuntimeArgsForNode(
-            compute_run_args.runtime_arg_values, core, {{"num_chunks", NC}, {"group", group}});
+            compute_run_args.runtime_arg_values,
+            core,
+            {{"num_chunks", NC}, {"group", group}, {"value_block", value_block}});
     }
 
     tt::tt_metal::Group<tt::tt_metal::TensorParameter> tensor_parameters = {
@@ -405,7 +412,7 @@ ttnn::device_operation::MeshWorkloadArtifacts RecurrentChunkScanProgramFactory::
     if (emit) {
         for (const auto& [index, name] :
              {std::pair{1u, terms_tensor_name},
-              std::pair{2u, final_a_tensor_name},
+              std::pair{2u, final_e_tensor_name},
               std::pair{3u, final_b_tensor_name}}) {
             tensor_parameters.push_back(
                 tt::tt_metal::TensorParameter{.unique_id = name, .spec = outputs[index].mesh_tensor().tensor_spec()});
@@ -459,7 +466,7 @@ ttnn::device_operation::MeshWorkloadArtifacts RecurrentChunkScanProgramFactory::
     }
     if (emit) {
         run_args.tensor_args.emplace(terms_tensor_name, outputs[1].mesh_tensor());
-        run_args.tensor_args.emplace(final_a_tensor_name, outputs[2].mesh_tensor());
+        run_args.tensor_args.emplace(final_e_tensor_name, outputs[2].mesh_tensor());
         run_args.tensor_args.emplace(final_b_tensor_name, outputs[3].mesh_tensor());
     }
     if (!summary) {

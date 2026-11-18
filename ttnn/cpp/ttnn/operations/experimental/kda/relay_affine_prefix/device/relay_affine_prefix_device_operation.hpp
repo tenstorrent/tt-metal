@@ -37,6 +37,9 @@ std::tuple<Tensor, Tensor> relay_affine_prefix(
     uint32_t sequence_parallel_axis,
     uint32_t local_rows,
     uint32_t num_links,
-    const std::vector<tt::tt_metal::CoreCoord>& cores);
+    const std::vector<tt::tt_metal::CoreCoord>& cores,
+    const std::optional<Tensor>& slab_index = std::nullopt,
+    uint32_t slab_index_scale = 1,
+    uint32_t slab_index_offset = 0);
 
 }  // namespace ttnn::experimental::prim

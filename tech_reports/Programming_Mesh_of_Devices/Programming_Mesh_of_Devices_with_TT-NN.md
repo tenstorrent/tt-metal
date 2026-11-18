@@ -395,8 +395,8 @@ Configuration examples:
 - `tt_metal/fabric/mesh_graph_descriptors/tg_mesh_graph_descriptor.textproto` - Galaxy mesh topology (MGD 2.0)
 
 Test scripts demonstrating `tt-run` usage:
-- `tests/scripts/run_t3000_unit_tests.sh` - T3000 multi-process test launcher
-- `tests/scripts/run_dual_galaxy_tests.sh` - Multi-host Galaxy test launcher
+- `tests/scripts/t3000/run_t3000_unit_tests.sh` - T3000 multi-process test launcher
+- `tests/scripts/multihost/run_dual_galaxy_tests.sh` - Multi-host Galaxy test launcher
 - `tests/tt_metal/distributed/multiprocess/run_visible_devices_mp_tests.sh` - Device visibility examples
 
 **Related Documentation**

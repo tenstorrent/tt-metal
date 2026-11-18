@@ -1010,7 +1010,7 @@ RelayPlan make_relay_plan(
     return plan;
 }
 
-// This side's relay state: the plan, the staging tensors (max_slots of them, the same
+// This side's relay state: the plan, the staging tensors (one per segment in each of max_slots slots, the same
 // address on every chip) and, per cable, the relay words on this side's relay core.
 struct RelayCableWords {
     DeviceAddr arrived_base = 0;  // [slot], word_stride apart
@@ -1027,7 +1027,7 @@ struct RelayLocal {
     RelayPlan plan;
     std::map<distributed::MeshCoordinate, tt::tt_fabric::FabricNodeId> sender_nodes;
     std::map<distributed::MeshCoordinate, tt::tt_fabric::FabricNodeId> receiver_nodes;
-    std::vector<Tensor> staging;
+    std::vector<std::vector<Tensor>> staging;  // [slot][segment]
     std::vector<RelayCableWords> words;  // [cable]
     uint32_t word_stride = 0;
     // Service-core L1 the relay words use; freed by the handle destructor.
@@ -1035,7 +1035,8 @@ struct RelayLocal {
     // What build_relay_* needs from the config (it runs after finalize_*).
     CommonPlan common;
     uint32_t max_lanes = 0;
-    std::map<distributed::MeshCoordinate, DeviceAddr> receiver_tensor_addrs;  // sender side only
+    std::map<distributed::MeshCoordinate, std::vector<DeviceAddr>>
+        receiver_tensor_addrs;  // sender side only, [segment]
 
     // Fabric links of every relay-mode connection on this side, claimed in FabricLinkRegistry
     // (claim_relay_links) so that no router serves two workers of one chip. A (node, link)
@@ -1159,6 +1160,8 @@ struct D2DStreamServiceReceiver::Impl {
     // Per-coord service-core L1 words (service cores differ per device).
     std::map<tt::tt_metal::distributed::MeshCoordinate, DeviceAddr> consumed_counter_addrs;
     std::map<tt::tt_metal::distributed::MeshCoordinate, DeviceAddr> termination_addrs;
+    // Per coord, arrived's increments per transfer: one per sender lane, or per relay lane in relay mode.
+    std::map<tt::tt_metal::distributed::MeshCoordinate, uint32_t> num_lanes;
     // Fabric-link lease — mirror of the sender. Single per-coord link_grant word
     // (0 = idle/done, 1 = granted one drain); same ping-pong protocol. Always set
     // from Config in create_pair (this member default never takes effect).
@@ -1352,6 +1355,30 @@ DeviceAddr D2DStreamServiceSender::get_metadata_addr(const tt::tt_metal::distrib
     return it->second;
 }
 
+tt::tt_metal::StreamOutputCounters D2DStreamServiceSender::get_output_counters(
+    const tt::tt_metal::distributed::MeshCoordinate& coord) const {
+    TT_FATAL(impl_->socket.has_value(), "D2DStreamServiceSender::get_output_counters: socket not built");
+    const CoreCoord core = get_service_core(coord);
+    // The config address build_sender_side hands the kernels.
+    const DeviceAddr config_addr = impl_->socket->get_config_buffer()->address();
+    const uint32_t bytes_acked_offset =
+        tt::tt_metal::distributed::MeshSocket::sender_bytes_acked_offset(tt::tt_metal::hal::get_l1_alignment());
+    DeviceAddr forwarded_addr = config_addr + bytes_acked_offset;
+    if (impl_->relay) {
+        // An exit chip runs the exit relay, which the entry relay credits in cable_acked[slot].
+        const auto& relay = *impl_->relay;
+        const auto [p, k] = relay.plan.slot_of.at(coord);
+        if (coord == relay.plan.cables[p].exit_coord) {
+            forwarded_addr = relay.words[p].acked_base + k * relay.word_stride;
+        }
+    }
+    return {
+        .produced = {core, get_data_ready_counter_addr(coord), impl_->num_workers},
+        .pushed = {impl_->worker_cores.start_coord, get_consumed_sem_addr(), 1},
+        .forwarded = {core, forwarded_addr, 1},
+    };
+}
+
 uint32_t D2DStreamServiceSender::get_metadata_size_bytes() const { return impl_->metadata_size_bytes; }
 
 void D2DStreamServiceSender::wait_for_fabric_links() {
@@ -1512,6 +1539,29 @@ DeviceAddr D2DStreamServiceReceiver::get_metadata_addr() const {
     return impl_->metadata_l1_addr;
 }
 
+tt::tt_metal::StreamInputCounters D2DStreamServiceReceiver::get_input_counters(
+    const tt::tt_metal::distributed::MeshCoordinate& coord) const {
+    TT_FATAL(impl_->socket.has_value(), "D2DStreamServiceReceiver::get_input_counters: socket not built");
+    auto it = impl_->num_lanes.find(coord);
+    TT_FATAL(
+        it != impl_->num_lanes.end(), "D2DStreamServiceReceiver::get_input_counters: no receiver at coord {}", coord);
+    const CoreCoord core = get_service_core(coord);
+    // bytes_sent is the first word of the config address build_receiver_side hands the kernels.
+    DeviceAddr arrived_addr = impl_->socket->get_config_buffer()->address();
+    if (impl_->relay) {
+        // An entry chip runs the entry relay, which counts its own coord's landings in arrived[slot].
+        const auto& relay = *impl_->relay;
+        const auto [p, k] = relay.plan.slot_of.at(coord);
+        if (coord == relay.plan.cables[p].entry_coord) {
+            arrived_addr = relay.words[p].arrived_base + k * relay.word_stride;
+        }
+    }
+    return {
+        .arrived = {core, arrived_addr, it->second},
+        .consumed = {core, get_consumed_counter_addr(coord), impl_->num_workers},
+    };
+}
+
 void D2DStreamServiceReceiver::wait_for_fabric_links() {
     TT_FATAL(
         impl_->share_fabric_links,
@@ -1625,9 +1675,31 @@ constexpr tt::CBIndex kPacketHeaderCbIndex = tt::CBIndex::c_1;
 // two lanes consume 2*kSenderReadRingSlots trids, which must fit the 0..15 id space.
 constexpr uint32_t kSenderReadRingSlots = 4;
 
+// A fabric scatter write carries at most this many chunks: NOC_SCATTER_WRITE_MAX_CHUNKS, which
+// d2d_relay_common.hpp asserts. Its header is device-only, so the host keeps a copy.
+constexpr uint32_t kMaxPagesPerPacket = 4;
+
+// Bytes of one read-ring slot: the largest page, or the largest group of pages packed into one
+// fabric packet (up to the scatter chunk limit, power of 2, 16 B multiples). Must match
+// d2d_relay::pages_per_packet, which caps the group at this size.
+uint32_t packed_slot_bytes(uint32_t max_payload, const std::vector<uint32_t>& page_sizes) {
+    uint32_t m = 0;
+    for (const uint32_t page_size : page_sizes) {
+        uint32_t pack = 1;
+        if (page_size > 0 && page_size % 16 == 0) {
+            const uint32_t fit = std::min<uint32_t>(max_payload / page_size, kMaxPagesPerPacket);
+            while (pack * 2 <= fit) {
+                pack *= 2;
+            }
+        }
+        m = std::max(m, pack * page_size);
+    }
+    return m;
+}
+
 // CT-arg layout must stay in sync with persistent_d2d_receiver.cpp.
 Program build_receiver_program(
-    const distributed::MeshDevice& mesh_device,
+    distributed::MeshDevice& mesh_device,
     const Buffer& output_buffer,
     const CoreCoord& service_core,
     uint32_t socket_config_addr,
@@ -1646,7 +1718,7 @@ Program build_receiver_program(
     const tt::tt_fabric::FabricNodeId& receiver_node,
     const tt::tt_fabric::FabricNodeId& sender_node,
     uint32_t link_index) {
-    auto program = CreateProgram();
+    auto program = CreateProgram(mesh_device);
 
     // One packet header is enough for the receiver (control-flow notify only);
     // allocate two to mirror the sender and leave headroom.
@@ -1735,7 +1807,7 @@ struct SenderExtraSegment {
 // the master, streaming the whole tensor. The SAME full CT layout goes to both
 // kernels; per-lane fields differ.
 Program build_sender_program(
-    const distributed::MeshDevice& mesh_device,
+    distributed::MeshDevice& mesh_device,
     const Buffer& input_buffer,
     const CoreCoord& service_core,
     uint32_t socket_config_addr,
@@ -1758,16 +1830,17 @@ Program build_sender_program(
     const tt::tt_fabric::FabricNodeId& sender_node,
     const tt::tt_fabric::FabricNodeId& receiver_node,
     const std::vector<uint32_t>& link_indices) {
-    auto program = CreateProgram();
+    auto program = CreateProgram(mesh_device);
 
     const uint32_t total_pages = plan.num_socket_pages * plan.pages_per_chunk;
     const uint32_t half = (total_pages + 1) / 2;  // lane 0 takes the odd page
     const uint32_t header_size = tt::tt_fabric::get_tt_fabric_packet_header_size_bytes();
     auto accessor_ct = TensorAccessorArgs(input_buffer).get_compile_time_args();
-    uint32_t max_page_size = tensor_page_size;
+    std::vector<uint32_t> page_sizes = {tensor_page_size};
     for (const auto& seg : extra_segments) {
-        max_page_size = std::max(max_page_size, seg.page_size);
+        page_sizes.push_back(seg.page_size);
     }
+    const uint32_t slot_bytes = packed_slot_bytes(fabric_max_payload_size, page_sizes);
 
     // Per-lane CB indices, RISC, and NoC.
     const tt::CBIndex scratch_cbs[2] = {tt::CBIndex::c_0, tt::CBIndex::c_2};
@@ -1780,9 +1853,9 @@ Program build_sender_program(
         const tt::CBIndex header_cb = header_cbs[lane];
 
         // This lane's scratch CB: the trid-ring staging buffer, sized to the ring
-        // (kSenderReadRingSlots of the largest segment page) — NOT the socket page. The
-        // kernel indexes it manually by slot, so the whole CB is one allocation page.
-        const uint32_t scratch_cb_bytes = kSenderReadRingSlots * max_page_size;
+        // (kSenderReadRingSlots slots of the largest packed page group) — NOT the socket page.
+        // The kernel indexes it manually by slot, so the whole CB is one allocation page.
+        const uint32_t scratch_cb_bytes = kSenderReadRingSlots * slot_bytes;
         auto scratch_cfg =
             CircularBufferConfig(scratch_cb_bytes, {{scratch_cb, datatype_to_dataformat_converter(dtype)}})
                 .set_page_size(scratch_cb, scratch_cb_bytes);
@@ -1851,7 +1924,8 @@ Program build_sender_program(
                 .compile_args = ct_args,
                 .named_compile_args =
                     {{"terminate_value", kTerminateValue},
-                     {"num_extra_segments", static_cast<uint32_t>(extra_segments.size())}},
+                     {"num_extra_segments", static_cast<uint32_t>(extra_segments.size())},
+                     {"slot_bytes", slot_bytes}},
             });
 
         // The sender writes bulk data downstream, so its fabric connection runs
@@ -1891,7 +1965,7 @@ std::unique_ptr<distributed::MeshWorkload> build_lease_workload(
 
     auto workload = std::make_unique<distributed::MeshWorkload>();
     for (const auto& [coord, svc_core] : service_cores) {
-        auto program = CreateProgram();
+        auto program = CreateProgram(*mesh);
         // WAIT needs a 1-word L1 staging slot for the NoC read; RELEASE doesn't.
         if (is_wait) {
             auto cb_cfg = CircularBufferConfig(scratch_bytes, {{kLeaseScratchCb, tt::DataFormat::UInt32}})
@@ -1939,7 +2013,7 @@ std::shared_ptr<RelayLocal> allocate_relay(
     const std::shared_ptr<distributed::MeshDevice>& mesh,
     const distributed::MeshSocket& socket,
     const std::map<distributed::MeshCoordinate, CoreCoord>& service_cores,
-    const Tensor& backing,
+    const std::vector<Tensor>& backings,
     const std::vector<distributed::MeshCoordinate>& coords,
     const CommonPlan& common,
     const D2DStreamConfig& cfg,
@@ -1947,7 +2021,6 @@ std::shared_ptr<RelayLocal> allocate_relay(
     TT_FATAL(
         cfg.share_fabric_links, "D2DStreamService relay: needs share_fabric_links (the relays hold links per lease)");
     TT_FATAL(!enabled_stage_gate(cfg), "D2DStreamService relay: stage_gate is not supported");
-    TT_FATAL(cfg.extra_tensors.empty(), "D2DStreamService relay: extra_tensors is not supported");
     TT_FATAL(
         tt::tt_fabric::is_2d_fabric_config(tt::tt_fabric::GetFabricConfig()),
         "D2DStreamService relay: needs a 2D fabric (the relays route by chip id)");
@@ -1969,7 +2042,10 @@ std::shared_ptr<RelayLocal> allocate_relay(
     relay->word_stride = common.l1_alignment;
 
     for (uint32_t k = 0; k < relay->plan.max_slots; ++k) {
-        relay->staging.push_back(create_device_tensor(backing.tensor_spec(), mesh.get(), backing.tensor_topology()));
+        auto& slot = relay->staging.emplace_back();
+        for (const auto& backing : backings) {
+            slot.push_back(create_device_tensor(backing.tensor_spec(), mesh.get(), backing.tensor_topology()));
+        }
     }
 
     auto& svc = tt::tt_metal::internal::service_core_manager(*mesh);
@@ -2104,10 +2180,8 @@ SenderSideResources build_sender_side(
     // Relay mode: allocate the relay state; build_relay_sender builds the programs later.
     std::shared_ptr<RelayLocal> relay;
     if (cfg.relay) {
-        relay = allocate_relay(mesh, sender_socket, service_cores, backing, coords, common, cfg, /*is_sender=*/true);
-        for (const auto& [coord, addrs] : receiver_tensor_addrs) {
-            relay->receiver_tensor_addrs.emplace(coord, addrs.front());
-        }
+        relay = allocate_relay(mesh, sender_socket, service_cores, backings, coords, common, cfg, /*is_sender=*/true);
+        relay->receiver_tensor_addrs = receiver_tensor_addrs;
         claim_relay_links(*mesh, *relay, cfg, /*is_sender=*/true, link_claims);
     }
     const std::vector<distributed::MeshCoordinate> no_coords;
@@ -2207,6 +2281,7 @@ SenderSideResources build_sender_side(
 struct ReceiverSideResources {
     std::map<distributed::MeshCoordinate, DeviceAddr> consumed_counter_addrs;
     std::map<distributed::MeshCoordinate, DeviceAddr> termination_addrs;
+    std::map<distributed::MeshCoordinate, uint32_t> num_lanes;
     std::map<distributed::MeshCoordinate, DeviceAddr> link_grant_addrs;
     std::optional<GlobalSemaphore> data_ready_sem;
     std::shared_ptr<distributed::MeshBuffer> metadata_buffer;
@@ -2223,12 +2298,13 @@ ReceiverSideResources build_receiver_side(
     const std::shared_ptr<distributed::MeshDevice>& mesh,
     const distributed::MeshSocket& receiver_socket,
     const std::map<distributed::MeshCoordinate, CoreCoord>& service_cores,
-    const Tensor& backing,
+    const std::vector<Tensor>& backings,
     const std::vector<distributed::MeshCoordinate>& coords,
     const CommonPlan& common,
     const D2DStreamConfig& cfg,
     const std::map<distributed::MeshCoordinate, uint32_t>& sender_lanes,
     FabricLinkClaims& link_claims) {
+    const Tensor& backing = backings.front();
     auto& svc = tt::tt_metal::internal::service_core_manager(*mesh);
     const uint32_t num_workers = core_range_size(cfg.receiver_worker_cores);
 
@@ -2308,7 +2384,8 @@ ReceiverSideResources build_receiver_side(
     // Relay mode: allocate the relay state; build_relay_receiver builds the programs later.
     std::shared_ptr<RelayLocal> relay;
     if (cfg.relay) {
-        relay = allocate_relay(mesh, receiver_socket, service_cores, backing, coords, common, cfg, /*is_sender=*/false);
+        relay =
+            allocate_relay(mesh, receiver_socket, service_cores, backings, coords, common, cfg, /*is_sender=*/false);
         claim_relay_links(*mesh, *relay, cfg, /*is_sender=*/false, link_claims);
     }
     const std::vector<distributed::MeshCoordinate> no_coords;
@@ -2316,6 +2393,7 @@ ReceiverSideResources build_receiver_side(
     constexpr bool worker_sync_enabled = true;
     auto workload = std::make_unique<distributed::MeshWorkload>();
     const uint32_t socket_config_addr = static_cast<uint32_t>(receiver_socket.get_config_buffer()->address());
+    std::map<distributed::MeshCoordinate, uint32_t> lanes_by_coord;
 
     for (const auto& coord : cfg.relay ? no_coords : coords) {
         const Buffer* recv_buf = backing.mesh_buffer().get_device_buffer(coord);
@@ -2329,6 +2407,7 @@ ReceiverSideResources build_receiver_side(
         // The sender's lane count, as the sender chose it: how many data-landed
         // increments the receiver awaits per transfer (one per sender lane).
         const uint32_t num_lanes = sender_lanes.at(coord);
+        lanes_by_coord.emplace(coord, num_lanes);
 
         const auto ws = make_worker_sync_args(
             device,
@@ -2376,6 +2455,7 @@ ReceiverSideResources build_receiver_side(
     return ReceiverSideResources{
         .consumed_counter_addrs = std::move(consumed_counter_addrs),
         .termination_addrs = std::move(termination_addrs),
+        .num_lanes = std::move(lanes_by_coord),
         .link_grant_addrs = std::move(link_grant_addrs),
         .data_ready_sem = std::move(data_ready_sem),
         .metadata_buffer = std::move(metadata_buffer),
@@ -2406,7 +2486,7 @@ constexpr uint32_t kRelayCableWords = 10;
 
 struct RelayPeer {
     std::vector<RelayPeerCable> cables;
-    std::vector<uint32_t> staging_addrs;  // [slot], the same on every chip of that side
+    std::vector<uint32_t> staging_addrs;  // [slot * segments + segment], the same on every chip of that side
 };
 
 CoreCoord relay_noc(
@@ -2635,21 +2715,24 @@ RelayPeer make_relay_peer(
             .z_lanes = is_sender ? relay_cable_lanes(relay, p) : 0u,
         });
     }
-    for (const auto& t : relay.staging) {
-        peer.staging_addrs.push_back(static_cast<uint32_t>(t.mesh_buffer().address()));
+    for (const auto& slot : relay.staging) {
+        for (const auto& t : slot) {
+            peer.staging_addrs.push_back(static_cast<uint32_t>(t.mesh_buffer().address()));
+        }
     }
     return peer;
 }
 
 // Both plans must name the same cables in the same order, or slot k means two different coords.
 void check_relay_peer(const RelayPeer& peer, const RelayLocal& relay) {
+    const size_t num_staging = static_cast<size_t>(relay.plan.max_slots) * relay.common.segments.size();
     TT_FATAL(
-        peer.cables.size() == relay.plan.cables.size() && peer.staging_addrs.size() == relay.plan.max_slots,
-        "D2DStreamService relay: the peer plan has {} cables / {} slots, this side has {} / {}",
+        peer.cables.size() == relay.plan.cables.size() && peer.staging_addrs.size() == num_staging,
+        "D2DStreamService relay: the peer plan has {} cables / {} staging tensors, this side has {} / {}",
         peer.cables.size(),
         peer.staging_addrs.size(),
         relay.plan.cables.size(),
-        relay.plan.max_slots);
+        num_staging);
     for (uint32_t p = 0; p < peer.cables.size(); ++p) {
         const auto& a = peer.cables[p];
         const auto& b = relay.plan.cables[p];
@@ -2878,6 +2961,31 @@ struct RelayCoordWords {
     uint32_t metadata_addr = 0;  // exit: own sender md buffer; entry: worker md buffer
 };
 
+uint32_t relay_slot_bytes(const CommonPlan& common) {
+    std::vector<uint32_t> page_sizes;
+    page_sizes.reserve(common.segments.size());
+    for (const auto& seg : common.segments) {
+        page_sizes.push_back(seg.page_size);
+    }
+    return packed_slot_bytes(common.fabric_max_payload_size, page_sizes);
+}
+
+// Both relays' compile args: the primary accessor, [page_size, half_pages, total_pages] per extra
+// segment, then one accessor block for all extra segments (they are DRAM interleaved). Layout must
+// stay in sync with d2d_relay::stream_extra_segments.
+std::vector<uint32_t> relay_compile_args(
+    const CommonPlan& common, const std::vector<Tensor>& backings, const distributed::MeshCoordinate& c) {
+    auto args = TensorAccessorArgs(*backings.front().mesh_buffer().get_device_buffer(c)).get_compile_time_args();
+    for (size_t i = 1; i < backings.size(); ++i) {
+        const uint32_t n = common.segments[i].num_pages;
+        args.insert(args.end(), {common.segments[i].page_size, (n + 1) / 2, n});
+    }
+    if (backings.size() > 1) {
+        TensorAccessorArgs(*backings[1].mesh_buffer().get_device_buffer(c)).append_to(args);
+    }
+    return args;
+}
+
 const DataMovementProcessor kRelayProcs[2] = {DataMovementProcessor::RISCV_0, DataMovementProcessor::RISCV_1};
 const NOC kRelayNocs[2] = {NOC::RISCV_0_default, NOC::RISCV_1_default};
 
@@ -2888,10 +2996,11 @@ Program build_exit_relay_program(
     uint32_t p,
     const RelayPeer& peer,
     const std::map<distributed::MeshCoordinate, CoreCoord>& service_cores,
-    const Tensor& backing,
+    const std::vector<Tensor>& backings,
     const WorkerSyncArgs& ws,
     const RelayCoordWords& own,
     uint32_t socket_config_addr) {
+    const Tensor& backing = backings.front();
     const auto& cable = relay.plan.cables[p];
     const auto& words = relay.words[p];
     const auto& common = relay.common;
@@ -2925,12 +3034,13 @@ Program build_exit_relay_program(
         credit_conn[k] = it->second;
     }
 
-    auto program = CreateProgram();
-    create_relay_cbs(program, core, common.tensor_page_size, backing.dtype());
-    const auto accessor_ct = TensorAccessorArgs(*backing.mesh_buffer().get_device_buffer(e)).get_compile_time_args();
+    auto program = CreateProgram(*mesh);
+    const uint32_t max_page_size = relay_slot_bytes(common);
+    const auto num_extra = static_cast<uint32_t>(backings.size() - 1);
+    create_relay_cbs(program, core, max_page_size, backing.dtype());
+    const auto compile_args = relay_compile_args(common, backings, e);
     const uint32_t total_pages = common.plan.num_socket_pages * common.plan.pages_per_chunk;
     const uint32_t half = (total_pages + 1) / 2;
-    const auto backing_addr = static_cast<uint32_t>(backing.mesh_buffer().address());
     const uint32_t acked_addr = sender_bytes_acked_addr(socket_config_addr, common.l1_alignment);
 
     for (uint32_t lane = 0; lane < z_lanes; ++lane) {
@@ -2944,6 +3054,8 @@ Program build_exit_relay_program(
             {"num_slots", num_slots},
             {"own_slot", own_slot},
             {"page_size", common.tensor_page_size},
+            {"max_page_size", max_page_size},
+            {"num_extra_segments", num_extra},
             {"max_payload", common.fabric_max_payload_size},
             {"page_start", master ? 0u : half},
             {"page_end", (master && z_lanes > 1) ? half : total_pages},
@@ -2982,12 +3094,12 @@ Program build_exit_relay_program(
             DataMovementConfig{
                 .processor = kRelayProcs[lane],
                 .noc = kRelayNocs[lane],
-                .compile_args = accessor_ct,
+                .compile_args = compile_args,
                 .named_compile_args = named,
             });
 
         // RT args: the cable connection on this lane's link, the credit connections
-        // (master only), then the per-slot words.
+        // (master only), then the per-slot words, extra segments' (src, dst) pairs last.
         std::vector<uint32_t> rt;
         tt::tt_fabric::append_fabric_connection_rt_args(*mesh, exit_node, entry_node, z_links[lane], program, core, rt);
         if (master) {
@@ -2997,31 +3109,35 @@ Program build_exit_relay_program(
         }
         for (uint32_t k = 0; k < num_slots; ++k) {
             const auto& s = cable.slots[k];
-            // Source: this chip's own backing, or staging k. Destination: the entry chip's
-            // backing when slot k is the entry coord, else the entry side's staging k.
-            rt.push_back(
-                k == own_slot ? backing_addr : static_cast<uint32_t>(relay.staging[k].mesh_buffer().address()));
-            rt.push_back(
-                s == cable.entry_coord ? static_cast<uint32_t>(relay.receiver_tensor_addrs.at(s))
-                                       : peer.staging_addrs[k]);
-            if (!master) {
-                continue;
-            }
-            if (k == own_slot) {
+            // Per segment, source: this chip's own backing, or staging k. Destination: the entry
+            // chip's backing when slot k is the entry coord, else the entry side's staging k.
+            const auto push_addrs = [&](size_t i) {
+                rt.push_back(
+                    k == own_slot ? static_cast<uint32_t>(backings[i].mesh_buffer().address())
+                                  : static_cast<uint32_t>(relay.staging[k][i].mesh_buffer().address()));
+                rt.push_back(
+                    s == cable.entry_coord ? static_cast<uint32_t>(relay.receiver_tensor_addrs.at(s)[i])
+                                           : peer.staging_addrs[(k * backings.size()) + i]);
+            };
+            push_addrs(0);
+            if (master && k == own_slot) {
                 rt.insert(rt.end(), {0u, 0u, 0u, 0u, 0u, 0u, 0u});
-                continue;
+            } else if (master) {
+                const auto src_node = relay.sender_nodes.at(s);
+                const auto src_noc = relay_noc(mesh, service_cores, s);
+                rt.insert(
+                    rt.end(),
+                    {relay_source_lanes(relay, s),
+                     static_cast<uint32_t>(src_node.chip_id),
+                     *src_node.mesh_id,
+                     static_cast<uint32_t>(src_noc.x),
+                     static_cast<uint32_t>(src_noc.y),
+                     acked_addr,
+                     credit_conn[k]});
             }
-            const auto src_node = relay.sender_nodes.at(s);
-            const auto src_noc = relay_noc(mesh, service_cores, s);
-            rt.insert(
-                rt.end(),
-                {relay_source_lanes(relay, s),
-                 static_cast<uint32_t>(src_node.chip_id),
-                 *src_node.mesh_id,
-                 static_cast<uint32_t>(src_noc.x),
-                 static_cast<uint32_t>(src_noc.y),
-                 acked_addr,
-                 credit_conn[k]});
+            for (size_t i = 1; i < backings.size(); ++i) {
+                push_addrs(i);
+            }
         }
         SetRuntimeArgs(program, kernel, core, rt);
     }
@@ -3035,11 +3151,12 @@ Program build_entry_relay_program(
     uint32_t p,
     const RelayPeer& peer,
     const std::map<distributed::MeshCoordinate, CoreCoord>& service_cores,
-    const Tensor& backing,
+    const std::vector<Tensor>& backings,
     const WorkerSyncArgs& ws,
     const RelayCoordWords& own,
     uint32_t socket_config_addr,
     uint32_t socket_fifo_addr) {
+    const Tensor& backing = backings.front();
     const auto& cable = relay.plan.cables[p];
     const auto& words = relay.words[p];
     const auto& common = relay.common;
@@ -3090,9 +3207,11 @@ Program build_entry_relay_program(
         "semaphores for",
         e);
 
-    auto program = CreateProgram();
-    create_relay_cbs(program, core, common.tensor_page_size, backing.dtype());
-    const auto accessor_ct = TensorAccessorArgs(*backing.mesh_buffer().get_device_buffer(e)).get_compile_time_args();
+    auto program = CreateProgram(*mesh);
+    const uint32_t max_page_size = relay_slot_bytes(common);
+    const auto num_extra = static_cast<uint32_t>(backings.size() - 1);
+    create_relay_cbs(program, core, max_page_size, backing.dtype());
+    const auto compile_args = relay_compile_args(common, backings, e);
     const uint32_t total_pages = common.plan.num_socket_pages * common.plan.pages_per_chunk;
     const auto backing_addr = static_cast<uint32_t>(backing.mesh_buffer().address());
 
@@ -3107,6 +3226,8 @@ Program build_entry_relay_program(
             {"num_slots", num_slots},
             {"own_slot", own_slot},
             {"page_size", common.tensor_page_size},
+            {"max_page_size", max_page_size},
+            {"num_extra_segments", num_extra},
             {"max_payload", common.fabric_max_payload_size},
             {"total_pages", total_pages},
             {"half_pages", (total_pages + 1) / 2},
@@ -3145,12 +3266,13 @@ Program build_entry_relay_program(
             DataMovementConfig{
                 .processor = kRelayProcs[lane],
                 .noc = kRelayNocs[lane],
-                .compile_args = accessor_ct,
+                .compile_args = compile_args,
                 .named_compile_args = named,
             });
 
         // RT args: the cable connection (master only, for the credits), this lane's
-        // direction connections, then 11 words per slot (the same for both lanes).
+        // direction connections, then per slot 11 words and a (staging, backing) pair per
+        // extra segment (the same for both lanes).
         std::vector<uint32_t> rt;
         if (master) {
             tt::tt_fabric::append_fabric_connection_rt_args(*mesh, entry_node, exit_node, z_link, program, core, rt);
@@ -3161,6 +3283,7 @@ Program build_entry_relay_program(
         for (uint32_t k = 0; k < num_slots; ++k) {
             if (k == own_slot) {
                 rt.insert(rt.end(), {0u, 0u, 0u, 0u, 0u, 0u, 0u, 0u, 1u, 0u, 0u});
+                rt.insert(rt.end(), 2 * num_extra, 0u);
                 continue;
             }
             const auto& t = cable.slots[k];
@@ -3168,7 +3291,7 @@ Program build_entry_relay_program(
             const auto t_noc = relay_noc(mesh, service_cores, t);
             rt.insert(
                 rt.end(),
-                {static_cast<uint32_t>(relay.staging[k].mesh_buffer().address()),
+                {static_cast<uint32_t>(relay.staging[k][0].mesh_buffer().address()),
                  backing_addr,
                  static_cast<uint32_t>(t_node.chip_id),
                  *t_node.mesh_id,
@@ -3179,6 +3302,12 @@ Program build_entry_relay_program(
                  lanes[k],
                  conn_idx[0][k],
                  conn_idx[1][k]});
+            for (size_t i = 1; i < backings.size(); ++i) {
+                rt.insert(
+                    rt.end(),
+                    {static_cast<uint32_t>(relay.staging[k][i].mesh_buffer().address()),
+                     static_cast<uint32_t>(backings[i].mesh_buffer().address())});
+            }
         }
         SetRuntimeArgs(program, kernel, core, rt);
     }
@@ -3253,12 +3382,13 @@ std::unique_ptr<D2DStreamServiceReceiver> D2DStreamService::finalize_receiver(
     CMAKE_UNIQUE_NAMESPACE::ServiceCoreReleaseGuard guard{mesh, service_cores, ok};
 
     // The receiver kernel never touches tensor data (the sender fabric-writes every
-    // segment straight into these backings), so it is built from segment 0 alone.
+    // segment straight into these backings), so it is built from segment 0 alone. Relay
+    // mode stages every segment, so the relay state takes them all.
     const auto common = CMAKE_UNIQUE_NAMESPACE::derive_common_plan(cfg, backings);
     const auto& coords = backings.front().tensor_topology().mesh_coords();
     CMAKE_UNIQUE_NAMESPACE::FabricLinkClaims link_claims;
     auto res = CMAKE_UNIQUE_NAMESPACE::build_receiver_side(
-        mesh, socket, service_cores, backings.front(), coords, common, cfg, sender_lanes, link_claims);
+        mesh, socket, service_cores, backings, coords, common, cfg, sender_lanes, link_claims);
     const int sender_rank = *socket.get_config().sender_rank;
 
     auto impl = std::make_unique<D2DStreamServiceReceiver::Impl>(D2DStreamServiceReceiver::Impl{
@@ -3275,6 +3405,7 @@ std::unique_ptr<D2DStreamServiceReceiver> D2DStreamService::finalize_receiver(
         .num_workers = CMAKE_UNIQUE_NAMESPACE::core_range_size(cfg.receiver_worker_cores),
         .consumed_counter_addrs = std::move(res.consumed_counter_addrs),
         .termination_addrs = std::move(res.termination_addrs),
+        .num_lanes = std::move(res.num_lanes),
         .share_fabric_links = cfg.share_fabric_links,
         .link_grant_addrs = std::move(res.link_grant_addrs),
         .data_ready_sem = std::move(res.data_ready_sem),
@@ -3324,6 +3455,19 @@ void D2DStreamService::build_relay_sender(D2DStreamServiceSender& sender, const 
     // after that write has landed, or it would overwrite the patch.
     tm_distributed::Finish(mesh->mesh_command_queue());
 
+    // Each extra segment goes to its staging k on the exit chip, like the primary.
+    const auto relay_extra_segments = [&](const tm_distributed::MeshCoordinate& c, uint32_t k) {
+        std::vector<CMAKE_UNIQUE_NAMESPACE::SenderExtraSegment> extra;
+        for (size_t i = 1; i < impl.backing_tensors.size(); ++i) {
+            extra.push_back(CMAKE_UNIQUE_NAMESPACE::SenderExtraSegment{
+                .input_buffer = impl.backing_tensors[i].mesh_buffer().get_device_buffer(c),
+                .page_size = common.segments[i].page_size,
+                .num_pages = common.segments[i].num_pages,
+                .receiver_addr = static_cast<uint32_t>(relay.staging[k][i].mesh_buffer().address())});
+        }
+        return extra;
+    };
+
     auto workload = std::make_unique<tm_distributed::MeshWorkload>();
     // 1. Every coord except an exit chip: the unchanged sender kernel, aimed at its exit relay.
     for (const auto& [c, pk] : plan.slot_of) {
@@ -3366,8 +3510,8 @@ void D2DStreamService::build_relay_sender(D2DStreamServiceSender& sender, const 
                 common.metadata_enabled ? static_cast<uint32_t>(impl.metadata_addrs.at(c)) : 0u,
                 /*share_fabric_links=*/true,
                 static_cast<uint32_t>(impl.link_grant_addrs.at(c)),
-                static_cast<uint32_t>(relay.staging[k].mesh_buffer().address()),
-                /*extra_segments=*/{},
+                static_cast<uint32_t>(relay.staging[k][0].mesh_buffer().address()),
+                relay_extra_segments(c, k),
                 static_cast<uint32_t>(impl.go_count_addrs.at(c)),
                 static_cast<uint32_t>(impl.done_count_addrs.at(c)),
                 lanes,
@@ -3386,7 +3530,7 @@ void D2DStreamService::build_relay_sender(D2DStreamServiceSender& sender, const 
                 p,
                 peer,
                 impl.service_cores,
-                impl.backing_tensors.front(),
+                impl.backing_tensors,
                 ws_for(e),
                 {.termination_addr = static_cast<uint32_t>(impl.termination_addrs.at(e)),
                  .link_grant_addr = static_cast<uint32_t>(impl.link_grant_addrs.at(e)),
@@ -3438,6 +3582,9 @@ void D2DStreamService::build_relay_receiver(D2DStreamServiceReceiver& receiver, 
             static_cast<uint32_t>(relay.words[p].acked_base + k * relay.word_stride),
             entry_node,
             CMAKE_UNIQUE_NAMESPACE::relay_noc(mesh, impl.service_cores, cable.entry_coord));
+        // The entry relay sends one bytes_sent increment per lane it uses for c.
+        const uint32_t lanes = CMAKE_UNIQUE_NAMESPACE::relay_target_lanes(relay, c);
+        impl.num_lanes.emplace(c, lanes);
         workload->add_program(
             tm_distributed::MeshCoordinateRange(c),
             CMAKE_UNIQUE_NAMESPACE::build_receiver_program(
@@ -3454,8 +3601,7 @@ void D2DStreamService::build_relay_receiver(D2DStreamServiceReceiver& receiver, 
                 static_cast<uint32_t>(impl.metadata_l1_addr),
                 /*share_fabric_links=*/true,
                 static_cast<uint32_t>(impl.link_grant_addrs.at(c)),
-                // The entry relay sends one bytes_sent increment per lane it uses for c.
-                CMAKE_UNIQUE_NAMESPACE::relay_target_lanes(relay, c),
+                lanes,
                 std::nullopt,
                 0u,
                 t_node,
@@ -3465,6 +3611,8 @@ void D2DStreamService::build_relay_receiver(D2DStreamServiceReceiver& receiver, 
     // 2. Entry chips: the entry relay, in place of their receiver service.
     for (uint32_t p = 0; p < plan.cables.size(); ++p) {
         const auto e = plan.cables[p].entry_coord;
+        // The exit relay lands each of e's transfers with one increment per cable lane.
+        impl.num_lanes.emplace(e, peer.cables[p].z_lanes);
         workload->add_program(
             tm_distributed::MeshCoordinateRange(e),
             CMAKE_UNIQUE_NAMESPACE::build_entry_relay_program(
@@ -3473,7 +3621,7 @@ void D2DStreamService::build_relay_receiver(D2DStreamServiceReceiver& receiver, 
                 p,
                 peer,
                 impl.service_cores,
-                impl.backing_tensors.front(),
+                impl.backing_tensors,
                 ws_for(e),
                 {.termination_addr = static_cast<uint32_t>(impl.termination_addrs.at(e)),
                  .link_grant_addr = static_cast<uint32_t>(impl.link_grant_addrs.at(e)),

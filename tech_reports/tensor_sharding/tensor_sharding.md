@@ -327,10 +327,9 @@ feature_sharded = ttnn.from_torch(torch_tensor, spec=nd_spec_features, device=de
 # Example 3: Advanced ND sharding with custom shard specification
 # Using NdShardSpec for fine-grained control
 nd_memory_config = ttnn.MemoryConfig(
-    ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
     ttnn.BufferType.L1,
     ttnn.NdShardSpec(
-        shard_shape=[1, 1, 64, 128],  # Shard size in each dimension
+        shard_shape=ttnn.Shape([1, 1, 64, 128]),  # Shard size in each dimension
         grid=core_ranges
     ),
 )
