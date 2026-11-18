@@ -204,7 +204,7 @@ TEST_F(Trisc2RvvMockBlackholeFixture, KnobOffRecipesCarryNoVectorFlags) {
 
 TEST_F(Trisc2RvvMockBlackholeFixture, KnobOnFlagsReachOnlyThePackRecipe) {
     if (!sfpi_supports_bh_vector_tensix()) {
-        GTEST_SKIP() << "bundled sfpi toolchain does not accept " << kBhVectorTensixMCpu;
+        GTEST_SKIP() << "bundled sfpi toolchain does not accept " << kBhVectorTensixMcpu;
     }
     auto kernel_off = compile_rvv_kernel(/*enable_trisc2_rvv=*/false);
     auto kernel_on = compile_rvv_kernel(/*enable_trisc2_rvv=*/true);
