@@ -659,7 +659,7 @@ void Cluster::get_metal_desc_from_tt_desc() {
         tt::umd::SocDescriptor umd_soc =
             chip_soc_descs ? tt::umd::SocDescriptor(
                                  std::make_shared<tt::umd::SocArchDescriptor>(chip_soc_desc_paths[id]),
-                                 tt::umd::ChipInfo{
+                                 tt::ChipInfo{
                                      .noc_translation_enabled = driver_soc.noc_translation_enabled,
                                      .harvesting_masks = driver_soc.harvesting_masks,
                                      .board_type = this->get_cluster_desc()->get_board_type(id),
