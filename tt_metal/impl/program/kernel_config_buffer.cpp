@@ -39,12 +39,6 @@ namespace tt::tt_metal::experimental {
 
 namespace {
 
-uint32_t tensix_index(const Program& program) {
-    return MetalContext::instance(program.impl().get_context_id())
-        .hal()
-        .get_programmable_core_type_index(HalProgrammableCoreType::TENSIX);
-}
-
 void check_no_tensix_semaphores(Program& program) {
     for (const Semaphore& semaphore : program.impl().semaphores()) {
         TT_FATAL(
@@ -57,20 +51,11 @@ void check_no_tensix_semaphores(Program& program) {
     }
 }
 
-void check_slow_dispatch(distributed::MeshDevice& device) {
-    TT_FATAL(
-        !MetalContext::instance(device.impl().get_context_id()).rtoptions().get_fast_dispatch(),
-        "A kernel config buffer needs slow dispatch: fast dispatch places kernel-config blocks in its own ring "
-        "buffer");
-}
-
 }  // namespace
 
 KernelConfigBuffer::KernelConfigBuffer(std::shared_ptr<KernelConfigBufferImpl> impl) : impl_(std::move(impl)) {}
 
-const CoreRangeSet& KernelConfigBuffer::cores() const { return impl_->cores(); }
-
-uint32_t KernelConfigBuffer::size() const { return impl_->size(); }
+uint32_t KernelConfigBuffer::max_size() const { return impl_->max_size(); }
 
 uint32_t KernelConfigBuffer::size(const distributed::MeshCoordinate& device_coord, const CoreCoord& core) const {
     return impl_->size(device_coord, core);
@@ -89,22 +74,18 @@ KernelConfigBufferImpl::KernelConfigBufferImpl(
     for (size_t index = 0; index < shards_.size(); ++index) {
         const Shards& shards = shards_[index];
         const ChipId device_id = shards.buffer->device()->id();
-        auto& on_device = shards_on_device_[device_id];
+        auto& on_device = shard_map_[device_id];
         for (const CoreCoord& core : corerange_to_cores(shards.cores)) {
             const auto [_, inserted] = on_device.emplace(core, index);
             TT_FATAL(inserted, "Kernel config buffer has two shards on device {} core {}", device_id, core);
         }
-        cores_ = cores_.merge(shards.cores);
-        size_ = std::max(size_, shards.size);
-        if (mesh_device_ != nullptr) {
-            device_ids_.emplace(mesh_device_->get_view().find_device(device_id), device_id);
-        }
+        max_size_ = std::max(max_size_, shards.size);
     }
 }
 
 const KernelConfigBufferImpl::Shards* KernelConfigBufferImpl::find(ChipId device_id, const CoreCoord& core) const {
-    const auto device = shards_on_device_.find(device_id);
-    if (device == shards_on_device_.end()) {
+    const auto device = shard_map_.find(device_id);
+    if (device == shard_map_.end()) {
         return nullptr;
     }
     const auto shard = device->second.find(core);
@@ -119,9 +100,11 @@ const KernelConfigBufferImpl::Shards& KernelConfigBufferImpl::at(ChipId device_i
 
 ChipId KernelConfigBufferImpl::device_id(const distributed::MeshCoordinate& device_coord) const {
     TT_FATAL(mesh_device_ != nullptr, "This kernel config buffer is per device: address it by device id");
-    const auto it = device_ids_.find(device_coord);
-    TT_FATAL(it != device_ids_.end(), "Kernel config buffer has no shard on the device at {}", device_coord);
-    return it->second;
+    TT_FATAL(
+        mesh_device_->impl().is_local(device_coord),
+        "Kernel config buffer has no shard on the device at {}, which is not on this host",
+        device_coord);
+    return mesh_device_->impl().get_device(device_coord)->id();
 }
 
 uint32_t KernelConfigBufferImpl::size(ChipId device_id, const CoreCoord& core) const {
@@ -154,47 +137,41 @@ void KernelConfigBufferImpl::deallocate() {
 
 namespace {
 
-void check_hybrid(IDevice& device) {
-    TT_FATAL(
-        device.allocator_impl()->get_config().allocator_mode == AllocatorMode::HYBRID,
-        "Device {}: a kernel config buffer is allocated per core, which needs the HYBRID allocator mode (set "
-        "TT_METAL_ALLOCATOR_MODE_HYBRID=1 before opening the device)",
-        device.id());
-}
-
-// Each core's block in `program` on its device: its kernel group's, aligned to the device's L1 alignment.
-std::unordered_map<CoreCoord, uint32_t> blocks_on_cores(IDevice& device, Program& program) {
+// Gets the required size for the kernel config buffer on each core in a specific program on its device,
+// aligned to the device's L1 alignment.
+std::unordered_map<CoreCoord, uint32_t> get_required_buffer_sizes(IDevice& device, Program& program) {
     const uint32_t alignment = device.allocator_impl()->get_alignment(BufferType::L1);
-    const uint32_t index = tensix_index(program);
-    const ProgramConfig& program_config = program.impl().get_program_config(index);
-    std::unordered_map<CoreCoord, uint32_t> block_on_core;
-    for (const auto& kernel_group : program.impl().get_kernel_groups(index)) {
+    const uint32_t tensix_index = MetalContext::instance(program.impl().get_context_id())
+                                      .hal()
+                                      .get_programmable_core_type_index(HalProgrammableCoreType::TENSIX);
+    const ProgramConfig& program_config = program.impl().get_program_config(tensix_index);
+    std::unordered_map<CoreCoord, uint32_t> buffer_sizes;
+    for (const auto& kernel_group : program.impl().get_kernel_groups(tensix_index)) {
         const uint32_t block = tt::align(kernel_config_footprint(*kernel_group, program_config), alignment);
         for (const CoreCoord& core : corerange_to_cores(kernel_group->core_ranges)) {
-            block_on_core.emplace(core, block);
+            buffer_sizes.emplace(core, block);
         }
     }
-    return block_on_core;
+    return buffer_sizes;
 }
 
 // Allocates the shards for `program` on `device`: one per-core-allocated Buffer per block size, each core in the one of
 // its block. With `lockstep_address`, one Buffer at the largest block, allocated bottom up, which must land at one
 // address on every core: it does when the cores' free L1 starts at the same address.
 std::vector<KernelConfigBufferImpl::Shards> allocate_shards(IDevice& device, Program& program, bool lockstep_address) {
-    check_hybrid(device);
-    const auto block_on_core = blocks_on_cores(device, program);
-    uint32_t largest = 0;
-    for (const auto& [core, block] : block_on_core) {
-        largest = std::max(largest, block);
+    const auto buffer_sizes_on_cores = get_required_buffer_sizes(device, program);
+    uint32_t largest_buffer_size = 0;
+    for (const auto& [_, buffer_size] : buffer_sizes_on_cores) {
+        largest_buffer_size = std::max(largest_buffer_size, buffer_size);
     }
     std::map<uint32_t, std::vector<CoreRange>> cores_by_size;
-    for (const auto& [core, block] : block_on_core) {
-        cores_by_size[lockstep_address ? largest : block].emplace_back(core);
+    for (const auto& [core, buffer_size] : buffer_sizes_on_cores) {
+        cores_by_size[lockstep_address ? largest_buffer_size : buffer_size].emplace_back(core);
     }
 
     std::vector<KernelConfigBufferImpl::Shards> shards;
     std::string sizes;
-    for (const auto& [size, core_list] : cores_by_size) {
+    for (const auto& [buffer_size, core_list] : cores_by_size) {
         const CoreRangeSet cores = CoreRangeSet(core_list).merge_ranges();
         const uint32_t num_cores = cores.num_cores();
         // One page per core, each core allocated on its own, so the buffer takes L1 only on its cores.
@@ -204,8 +181,8 @@ std::vector<KernelConfigBufferImpl::Shards> allocate_shards(IDevice& device, Pro
         per_core_allocation::set_per_core_allocation(sharding_args, true);
         auto buffer = BufferImpl::create(
             &device,
-            static_cast<DeviceAddr>(size) * num_cores,
-            size,
+            static_cast<DeviceAddr>(buffer_size) * num_cores,
+            buffer_size,
             BufferType::L1,
             sharding_args,
             lockstep_address ? std::optional<bool>(true) : std::nullopt);
@@ -213,8 +190,8 @@ std::vector<KernelConfigBufferImpl::Shards> allocate_shards(IDevice& device, Pro
             // Throws if the shards landed at different addresses.
             per_core_allocation::get_shard_base_address(*buffer, cores);
         }
-        sizes += fmt::format(" {} B x {} cores;", size, num_cores);
-        shards.push_back({.cores = cores, .size = size, .buffer = std::move(buffer)});
+        sizes += fmt::format(" {} B x {} cores;", buffer_size, num_cores);
+        shards.push_back({.cores = cores, .size = buffer_size, .buffer = std::move(buffer)});
     }
     log_debug(tt::LogMetal, "Kernel config buffer on device {}:{}", device.id(), sizes);
     return shards;
@@ -222,40 +199,13 @@ std::vector<KernelConfigBufferImpl::Shards> allocate_shards(IDevice& device, Pro
 
 }  // namespace
 
-void ValidateKernelConfigBuffer(Program& program, const KernelConfigBufferImpl& buffer, ChipId device_id) {
-    TT_FATAL(buffer.is_allocated(), "Kernel config buffer was deallocated");
-    if (!buffer.lockstep_address()) {
-        check_no_tensix_semaphores(program);
-    }
-
-    // Each core holds only its kernel group's part of the block, in a shard sized for it.
-    const uint32_t index = tensix_index(program);
-    const ProgramConfig& program_config = program.impl().get_program_config(index);
-    for (const auto& kernel_group : program.impl().get_kernel_groups(index)) {
-        const uint32_t footprint = kernel_config_footprint(*kernel_group, program_config);
-        for (const CoreCoord& core : corerange_to_cores(kernel_group->core_ranges)) {
-            const KernelConfigBufferImpl::Shards* shards = buffer.find(device_id, core);
-            TT_FATAL(
-                shards != nullptr,
-                "Kernel config buffer has no shard on device {} core {}, where the program runs a kernel",
-                device_id,
-                core);
-            TT_FATAL(
-                footprint <= shards->size,
-                "Kernel group on {} needs a {} B kernel config block, but its kernel config buffer has {} B on device "
-                "{} core {}",
-                kernel_group->core_ranges,
-                footprint,
-                shards->size,
-                device_id,
-                core);
-        }
-    }
-}
-
 KernelConfigBuffer CreateKernelConfigBuffer(
     distributed::MeshDevice& device, distributed::MeshWorkload& workload, bool lockstep_address) {
-    check_slow_dispatch(device);
+    TT_FATAL(
+        !MetalContext::instance(device.impl().get_context_id()).rtoptions().get_fast_dispatch(),
+        "A kernel config buffer can only be allocated in slow dispatch mode: fast dispatch places kernel-config blocks "
+        "in its own ring "
+        "buffer");
     if (!lockstep_address) {
         for (auto& [_, program] : workload.get_programs()) {
             check_no_tensix_semaphores(program);
@@ -290,14 +240,37 @@ std::shared_ptr<KernelConfigBufferImpl> CreateKernelConfigBuffer(
     return std::make_shared<KernelConfigBufferImpl>(std::move(shards), lockstep_address);
 }
 
-uint32_t LargestTensixKernelConfigBlock(Program& program) {
-    const uint32_t index = tensix_index(program);
-    const ProgramConfig& program_config = program.impl().get_program_config(index);
-    uint32_t largest = 0;
-    for (const auto& kernel_group : program.impl().get_kernel_groups(index)) {
-        largest = std::max(largest, kernel_config_footprint(*kernel_group, program_config));
+void ValidateKernelConfigBuffer(Program& program, const KernelConfigBufferImpl& buffer, ChipId device_id) {
+    TT_FATAL(buffer.is_allocated(), "Kernel config buffer was deallocated");
+    if (!buffer.lockstep_address()) {
+        check_no_tensix_semaphores(program);
     }
-    return largest;
+
+    // Each core holds only its kernel group's part of the block, in a shard sized for it.
+    const uint32_t tensix_index = MetalContext::instance(program.impl().get_context_id())
+                                      .hal()
+                                      .get_programmable_core_type_index(HalProgrammableCoreType::TENSIX);
+    const ProgramConfig& program_config = program.impl().get_program_config(tensix_index);
+    for (const auto& kernel_group : program.impl().get_kernel_groups(tensix_index)) {
+        const uint32_t footprint = kernel_config_footprint(*kernel_group, program_config);
+        for (const CoreCoord& core : corerange_to_cores(kernel_group->core_ranges)) {
+            const KernelConfigBufferImpl::Shards* shards = buffer.find(device_id, core);
+            TT_FATAL(
+                shards != nullptr,
+                "Kernel config buffer has no shard on device {} core {}, where the program runs a kernel",
+                device_id,
+                core);
+            TT_FATAL(
+                footprint <= shards->size,
+                "Kernel group on {} needs a {} B kernel config block, but its kernel config buffer has {} B on device "
+                "{} core {}",
+                kernel_group->core_ranges,
+                footprint,
+                shards->size,
+                device_id,
+                core);
+        }
+    }
 }
 
 void EnqueueMeshWorkload(
@@ -306,7 +279,11 @@ void EnqueueMeshWorkload(
     const KernelConfigBuffer& buffer,
     bool blocking) {
     distributed::MeshDevice& device = *mesh_cq.device();
-    check_slow_dispatch(device);
+    TT_FATAL(
+        !MetalContext::instance(device.impl().get_context_id()).rtoptions().get_fast_dispatch(),
+        "A kernel config buffer can only be allocated in slow dispatch mode: fast dispatch places kernel-config blocks "
+        "in its own ring "
+        "buffer");
     TT_FATAL(buffer.impl().is_allocated(), "Kernel config buffer was deallocated");
     const distributed::MeshDevice* buffer_device = buffer.impl().mesh_device();
     TT_FATAL(
