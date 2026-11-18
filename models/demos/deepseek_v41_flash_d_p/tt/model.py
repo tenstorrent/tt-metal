@@ -58,7 +58,7 @@ import torch
 import ttnn
 from models.demos.common.bringup.reference.interface import Ctx, run_block
 
-from . import ccl, ffn_feed, host_alloc, lean
+from . import ccl, ffn_feed, history_gather, host_alloc, lean
 from .attention import TtWindowAttention, TtWindowCache, WindowTables, attention_weights, snapshot_cap, window_keep
 from .ccl import dealloc
 from .collapse import TtHcCollapse
@@ -1105,6 +1105,13 @@ class TtDS41Model:
 
             self._engram_pool = ThreadPoolExecutor(1, thread_name_prefix="engram-async")
         self.engram_times = {}
+        # HISTORY_GATHER_HIDE=on (P.75): the chunk's start until prefetch_history ran (begin_chunk -> take_engram_rows)
+        self._hide = (
+            settings.get("HISTORY_GATHER_HIDE") == "on"
+            and settings.get("STATIC_TABLES") == "off"
+            and settings.get("HISTORY_GATHER") == "rows"
+        )
+        self._pf_start = None
         # embedding: [V, H/TP] bf16 ROW_MAJOR per chip (the chip's hidden columns), replicated over SP
         if tail_of is not None:  # (P.31: the decoder tail takes its input from the main model's layers)
             self.vocab, self.embed_w = tail_of.vocab, None
@@ -1398,6 +1405,8 @@ class TtDS41Model:
                 c.truncate(st.cut)
         if st is not None and st.memo is not None:
             st.memo.clear()
+        # HISTORY_GATHER_HIDE=on (P.75): the sources' history gathers wait for the first engram layer's host rows
+        self._pf_start = int(start) if self._hide else None
         if not self.engram:
             return
         self.wait_engram()  # a job of the last chunk whose layer did not run: done before its tensor is freed
@@ -1554,7 +1563,7 @@ class TtDS41Model:
         need = self.history_sources()
         for i, c in state.compress.items():
             if i not in state.shared_compress:
-                c.ckv.hold_history(i in need)
+                c.ckv.hold_history(i in need, i)  # (P.75, HISTORY_GATHER_HIDE=on: a buffer per source layer)
 
     def use_decoder_skip(self, mode: str) -> None:
         """Tests only (tests/bringup/test_window_ring.py, P.32; tests/test_decoder_skip_decode.py, P.51; FIX.28: the
@@ -1614,7 +1623,23 @@ class TtDS41Model:
         times["wait"] = (time.perf_counter() - t0) * 1e3
         self.engram_times[layer] = times
 
+    def prefetch_history(self) -> None:
+        """HISTORY_GATHER_HIDE=on (P.75; STATIC_TABLES=off, HISTORY_GATHER=rows): every gathered source's history
+        [0, c S) of the active state (complete before the chunk) gathered into the source's own buffer
+        (tt/history_gather.prefetch), enqueued at the chunk's first engram wait, where the device idles for the host's
+        rows (P.73). Once a chunk; the sources' layers then gather only the chunk's own periods."""
+        start, self._pf_start = self._pf_start, None
+        st = self.state
+        if start is None or st is None or self.tail_of is not None:
+            return
+        for i in sorted(self.history_sources()):
+            c = st.compress.get(i)
+            if c is not None and i not in st.shared_compress:
+                history_gather.prefetch(c.ckv, start, self.chunk)
+
     def take_engram_rows(self, layer: int) -> ttnn.Tensor:
+        if self._pf_start is not None:  # P.75: before the wait (the first engram layer of the chunk)
+            self.prefetch_history()
         self._wait_job(layer)  # ENGRAM_ASYNC=on: layer 1 waits for its own job only, layer 14 for its own
         t = self._engram_dev.pop(layer, None)
         assert t is not None, f"layer {layer}: no engram rows for this chunk (begin_chunk(tokens, start) first)"

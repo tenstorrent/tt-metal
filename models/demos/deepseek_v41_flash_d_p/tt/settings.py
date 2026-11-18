@@ -243,6 +243,18 @@ TABLE = {
         "SP, untilized; at an odd chunk count the TP gather takes the composite all_gather). All three put the same "
         "bf16 rows under the same keys (the table rows differ only in where an owner's rows sit): bit-identical",
     ),
+    "HISTORY_GATHER_HIDE": Setting(
+        "on",
+        ("on", "off"),
+        "P.75 (owner 2026-11-18; only with STATIC_TABLES=off, HISTORY_GATHER=rows): where a KV source's history "
+        "gather runs. on = the history [0, c S) of every source gathered in the model's mode (c = start / S, complete "
+        "before the chunk) is gathered at the first engram layer's wait for its host rows (the device idles there, "
+        "P.73), each source into a persistent buffer of its own (tt/history_gather.py; shared by every user); at the "
+        "source's layer only the chunk's own periods (1 or 2 an owner) are sliced, gathered into a small persistent "
+        "buffer and slice_written into the same fixed-stride rows (bit-identical table, index and sdpa). Memory: one "
+        "buffer per gathered source instead of one per size. off = P.74 (the whole [0, nb S) gathered at the source's "
+        "layer into the buffer shared by every source of a size)",
+    ),
     "BF16_ACTIVATIONS": Setting(
         "on",
         ("on", "off"),

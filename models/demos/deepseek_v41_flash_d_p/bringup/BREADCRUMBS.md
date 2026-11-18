@@ -2488,3 +2488,58 @@ Measured (8x4, `gate FIX.31 --check`, after the last edit)
   `python -m models.demos.common.bringup.orchestrator measure --task P.74 --part test_decoder_skip_decode` and
   `--part determinism` (the run names: determinism, test_decoder_skip_decode, test_contract, test_skip_positions,
   last).
+
+## P.75 perf (attempt 1): the STATIC_TABLES=off history gather hidden in the engram wait (HISTORY_GATHER_HIDE off | on)
+
+- Expected saving (written before the change; STATIC_TABLES=off, DECODER_SKIP=decode, sources 2 / 8 / 14). Window:
+  the device idles before layer 1's engram rows (P.73: 66.6 ms under the profiler at 1M; P.74's clean host share
+  25-28 ms a chunk at every position). Option (a): enqueue each source's history gather [0, c hs) a chip (c = start /
+  S, complete before the chunk) at layer 1's engram wait; at layer s only the chunk's own periods [c hs, nb hs)
+  (1 or 2 x 80 rows an owner) are sliced, gathered into a small persistent buffer and slice_written into the source's
+  buffer at the same fixed-stride rows: the table stays ONE tensor with P.74's stride R, so _topk_rows and
+  sparse_sdpa are untouched (bit-identical). Per source a chunk, device on the critical path: 1M ~3.5 -> ~0.3 ms,
+  256k ~1.0 -> ~0.3, 51k ~0.3 -> ~0.3 (nothing to hide). Per chunk: ~-9 ms device at 1M, ~-2 at 256k, ~0 at 51k;
+  the wall the same as long as layer 0 + the 3 history gathers fit in the engram wait (~26 ms). Host: +2 ops a
+  source at layer s, +1 at layer 1 (~+0.3-0.5 ms host, the layer-1 part behind the wait). Memory: the history of
+  three sources lives at once, so one buffer per source (shared by every user) instead of one per size: +2 x ~0.5
+  GiB a chip at 1M. Options (b) readback and (c) ring not built: (b) is the same idle span as (a) one step earlier
+  (the next chunk's start), (c) shares the SP routers with the indexer's own ring (P.73).
+- Change (HISTORY_GATHER_HIDE=on, the default; active only with STATIC_TABLES=off, HISTORY_GATHER=rows; off = P.74):
+  tt/history_gather.py (`prefetch`: the history [0, c hs) of a source into its own buffer, `gathered_dim_size` =
+  owners c hs; `gather` takes the tail path when the buffer's prefetch matches (cache, start, version within 1 write):
+  `_tail` = slab.slice_rows(c hs, nb hs) + one high_bw_all_gather into a small persistent buffer [owners m, 512]
+  (m = 1 or 2 periods, 80 / 160 rows an owner at the 8x4) + ttnn.bringup.slice_write of its [1, owners, m, 512] view
+  into the source buffer's [1, owners, R, 512] view (views made once at acquire, asserted no copy); anything else ->
+  the P.74 full gather). tt/compressor.TtServedRows.hold_history(on, layer): key (rows, layer) = one buffer per source
+  (shared by every user/state) + the two tail buffers. tt/model.py: `begin_chunk` notes the start,
+  `take_engram_rows` runs `prefetch_history` (every source of `history_sources()` of the active state) before its
+  wait, once a chunk. No table / index / sdpa change: P.74's stride R stays.
+- Gotcha (DS41-291): the slice of the slab loses its dim-2 sharding topology, so high_bw_all_gather's full-mesh mode
+  TT_FATALs; `update_tensor_topology(slab topology)` (host only). DS41-289 checked: the composite slice keys on the
+  whole slab's H (engine slab 16320 rows; own slabs lcm-rounded), so the tail slice at a 16-row offset stays native and
+  capped. Cores: the tail gather 10 a chip (full-mesh torus, 2 links), slice and slice_write on the capped grid.
+- Model check (devjob p75_hide2, tests/test_history_gather_hide_model.py, one load, DECODER_SKIP=decode, on = prefetch,
+  off = model._hide False: P.74's full gather into the same buffer): layer 19 bit-identical (max abs diff 0.0) at
+  p51200 / p256000 / p1024000, each at start offset 0 and +2048 (a 2-period tail); on side every chunk 3 prefetches +
+  3 tails, 0 full gathers. Indicative synced chunk wall on vs off (median of 5, one process, no profiler): p51200
+  111.1 / 103.4 and +2048 104.3 / 106.5 (noise), p256000 106.3 / 108.0 and 109.8 / 111.4, p1024000 118.3 / 125.7 and
+  125.4 / 129.4 ms.
+- Re-run: `DS41_STATIC_TABLES=off DS41_HISTORY_GATHER_HIDE=on DS41_DECODER_SKIP=decode python -m
+  models.demos.common.bringup.devjob start x -- scripts/run_safe_pytest.sh --run-all --no-precompile
+  models/demos/deepseek_v41_flash_d_p/tests/test_history_gather_hide_model.py -s` (P75_POS, P75_OFF pick points).
+- measure --part test (change on: STATIC_TABLES=off HISTORY_GATHER_HIDE=on): test_decoder_skip_decode rc 0,
+  test_contract rc 0 (contract_checks_failed 0, _decoder_skip 0, unwritten_records_changed 0), test_skip_positions
+  rc 0 (all 6 points fit). Its steady numbers vs P.74's off side (HIDE=off; another run, so a +-3 ms wall noise):
+  attention section 22.59 / 22.77 / 22.69 ms at p51200 / p256000 / p1024000 (P.74: 23.01 / 25.00 / 32.41), the
+  prefetch charged to engram_rows 0.63 / 2.54 / 9.95 (0): per source a chunk ~0.14 / 0.75 / 3.2 ms moved off layer s
+  into the engram wait. Device total unchanged (79.85 / 85.32 / 105.52 vs 80.17 / 84.94 / 105.41: the work moved, it
+  now overlaps the host's engram time); host gap (wall - device) 29.4 / 23.4 / 17.9 (26.9 / 25.3 / 25.9); steady wall
+  109.3 / 108.7 / 123.4 (107.1 / 110.2 / 131.3): ~-8 ms a chunk at 1M, ~-1.5 at 256k, noise at 51k. DRAM state +0.07
+  / +0.26 / +0.99 GiB a chip (two more per-source buffers). Against STATIC_TABLES=on (FIX.36, older tree): wall
+  107.2 .. 123.2 at 51k .. 1M, so off+hide at 1M is within ~0-2 ms of the table's wall; device +8 ms at 1M (now hidden).
+- Final check `orchestrator measure --task P.75` (change on): the three --part runs reused; determinism rc 0
+  (max_abs_diff 0.0, state 0.0); ladder rung last rc 0 (final hidden PCC 0.992, top1 / top5 1.0). The orchestrator's
+  A/B (on vs off) and the gate run after this step.
+- Not built: (b) the token-id readback window (the same idle span one step earlier; (a) already fills most of it at
+  1M: host gap 17.9 ms left) and (c) riding the indexer's ring (shares its SP routers, P.73). No Python-built op added
+  (OV-23); no fork touched or regression-run (OV-25).

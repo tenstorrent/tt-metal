@@ -499,6 +499,8 @@ class TtServedRows:
         # every source / slot / chunk of that size (tt/history_gather.py), held while an attention that reads this
         # source runs in the model's mode (``hold_history``: the state's build and use_decoder_skip; never per chunk)
         self.history_rows = None
+        self.history_key = None  # P.75: (rows, source layer) when HISTORY_GATHER_HIDE=on (a buffer per source)
+        self._history_tails = ()
         self.history_gathered = attn_table and not static_tables() and settings.get("HISTORY_GATHER") == "rows"
         self.history_gathered = self.history_gathered and g.n > 1
         if ratio > 1:  # metadata-path values (load time): starts / valid ends in compressed rows, slot ids
@@ -508,17 +510,28 @@ class TtServedRows:
             )
             self._slot = tables.scalars(1, slots)
 
-    def hold_history(self, on: bool) -> None:
+    def hold_history(self, on: bool, layer: int | None = None) -> None:
         """P.74 (STATIC_TABLES=off, HISTORY_GATHER=rows): hold (or let go of) the shared gather buffer of this
-        cache's size (owners x slab rows; tt/history_gather.py). A no-op for a cache whose history is not gathered."""
+        cache's size (owners x slab rows; tt/history_gather.py). A no-op for a cache whose history is not gathered.
+        P.75 (HISTORY_GATHER_HIDE=on, ``layer`` = the source layer): the buffer of this source (key (rows, layer),
+        shared by every user) and the small tail buffers instead."""
         if not self.history_gathered:
             return
         if on and self.history_rows is None:
             self.history_rows = self.owners * self.slab.rows
-            history_gather.acquire(self.mesh, self.history_rows)
+            hide = layer is not None and settings.get("HISTORY_GATHER_HIDE") == "on"
+            self.history_key = (self.history_rows, int(layer)) if hide else None
+            hs = self.stripe // self.ratio
+            self._history_tails = (hs, 2 * hs) if hide else ()
+            history_gather.acquire(
+                self.mesh, self.history_rows, self.history_key, owners=self.owners, tails=self._history_tails
+            )
         elif not on and self.history_rows is not None:
-            history_gather.release(self.mesh, self.history_rows)
-            self.history_rows = None
+            history_gather.release(
+                self.mesh, self.history_rows, self.history_key, owners=self.owners, tails=self._history_tails
+            )
+            self.history_rows = self.history_key = None
+            self._history_tails = ()
 
     def _own_fp8(self, dedup: bool) -> CacheSlab:
         """An own served tensor of 192-byte rows (the ladder: no engine cache)."""
