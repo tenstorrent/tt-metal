@@ -1809,13 +1809,15 @@ def _async_source(monkeypatch, client, num_batches, max_staleness, weight_sync_e
     )
 
 
-def _drive_async_source(source, steps_per_batch):
-    """Push version 0, then consume every batch and push the step reached, as GRPOTrainer._train_policy does."""
+def _drive_async_source(source, steps_per_batch, num_batches):
+    """Push version 0, then consume every batch and push the step reached except after the last batch, as
+    GRPOTrainer._train_policy does."""
     update_weights_durations = [source.update_weights(None, 0)]
     consumed = []
     for batch_index, scored in enumerate(source, start=1):
         consumed.append((scored.rollout.weight_version, scored.rollouts_dropped))
-        update_weights_durations.append(source.update_weights(None, batch_index * steps_per_batch))
+        if batch_index < num_batches:
+            update_weights_durations.append(source.update_weights(None, batch_index * steps_per_batch))
     return consumed, update_weights_durations
 
 
@@ -1823,7 +1825,7 @@ def test_async_remote_source_drops_stale_rollouts(monkeypatch):
     client = _FakeAsyncClient([0, 0, 1, 1, 2])
     source = _async_source(monkeypatch, client, num_batches=3, max_staleness=0)
 
-    consumed, update_weights_durations = _drive_async_source(source, steps_per_batch=1)
+    consumed, update_weights_durations = _drive_async_source(source, steps_per_batch=1, num_batches=3)
     assert consumed == [(0, 0), (1, 1), (2, 1)]
     assert client.pushed == [0, 1, 2]
     assert all(duration_s >= 0.0 for duration_s in update_weights_durations)
@@ -1833,7 +1835,7 @@ def test_async_remote_source_counts_staleness_in_optimizer_steps(monkeypatch):
     client = _FakeAsyncClient([0, 0, 2, 4])
     source = _async_source(monkeypatch, client, num_batches=3, max_staleness=1)
 
-    consumed, update_weights_durations = _drive_async_source(source, steps_per_batch=2)
+    consumed, update_weights_durations = _drive_async_source(source, steps_per_batch=2, num_batches=3)
     assert consumed == [(0, 0), (2, 1), (4, 0)]
     assert client.pushed == [0, 2, 4]
     assert all(duration_s >= 0.0 for duration_s in update_weights_durations)
