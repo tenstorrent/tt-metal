@@ -61,6 +61,7 @@ enum class HaltCode : uint32_t {
     NotOnCce0 = 0xCCEEF003,              // detail: PF_CTRL_TILE_ID
     BadLinkKind = 0xCCEEF004,            // detail: EthLink::kind
     NocPeerOnOwnTile = 0xCCEEF005,       // detail: EthLink::peer_tile
+    BadTxq = 0xCCEEF006,                 // detail: the TX queue number
 };
 
 // Stops this hart on a fault that ASSERT, compiled out without watcher, would let pass: stores @p detail to the first
@@ -104,6 +105,60 @@ FORCE_INLINE const volatile EthLink& eth_link() {
     return link;
 }
 
+// Keraunos local address of offset 0 of HSIO tile @p tile's CCE0 SRAM.
+constexpr uint64_t sram_local_base(uint32_t tile) {
+    return kHsioLocalBase + tile * kHsioTileStride + kHsioCceSramOffset;
+}
+
+// This hart's copy of the slot's kind, and the addresses a send adds an SRAM offset to, taken by link() in this kernel
+// run. Kernel start-up zeroes it, so latched is false until then.
+struct LinkCopy {
+    uint32_t kind;
+    bool latched;
+    uint64_t src_base;   // offset 0 of this CCE's SRAM, as the command buffer's source
+    uint64_t dest_base;  // offset 0 of the peer CCE0's SRAM: local address on an Ethernet link, system on a NOC link
+};
+inline LinkCopy link_copy;
+
+// Reads the slot through eth_link(), waiting as it does, checks it, and latches it into link_copy. Halts with
+// BadLinkKind on an unknown kind and with NocPeerOnOwnTile on a NOC link whose peer is this CCE's own tile, which has
+// no documented system-address route back. Reads PF_CTRL_TILE_ID on a NOC link.
+[[gnu::cold, gnu::noinline]] inline void latch_link() {
+    const volatile EthLink& slot = eth_link();
+    const uint32_t kind = slot.kind;
+    const uint32_t peer_tile = slot.peer_tile;
+    const uint32_t own_tile = experimental::keraunos::my_hsio();
+    if (kind != ETH_LINK_KIND_ETHERNET && kind != ETH_LINK_KIND_NOC) {
+        halt(HaltCode::BadLinkKind, kind);
+    }
+    if (kind == ETH_LINK_KIND_NOC && peer_tile == own_tile) {
+        halt(HaltCode::NocPeerOnOwnTile, peer_tile);
+    }
+    uint64_t dest_base = sram_local_base(peer_tile);
+    if (kind == ETH_LINK_KIND_NOC) {
+        // Not repeated per send: txq_busy reads each queue's ack count, and no document says a reset keeps it.
+        reset_cmdbuf<kCmdBuf>();
+        dest_base = experimental::keraunos::hsio_sram_addr(peer_tile, 0, 0);
+    }
+    link_copy = LinkCopy{.kind = kind, .latched = true, .src_base = sram_local_base(own_tile), .dest_base = dest_base};
+}
+
+// This hart's link as the slot read on the first call in this kernel run. That call waits for the host to write the
+// slot and may halt (latch_link()); later calls make no uncached load.
+FORCE_INLINE const LinkCopy& link() {
+    if (!link_copy.latched) {
+        latch_link();
+    }
+    return link_copy;
+}
+
+// Halts with BadTxq unless @p q_num is a TX queue. Folds away for a constant queue number.
+FORCE_INLINE void check_txq(uint32_t q_num) {
+    if (q_num >= kNumTxqs) {
+        halt(HaltCode::BadTxq, q_num);
+    }
+}
+
 FORCE_INLINE uint32_t txq_req_vc(uint32_t q_num) {
     ASSERT(q_num < kNumTxqs);
     return kFirstTxqReqVc + q_num;
@@ -139,28 +194,22 @@ FORCE_INLINE uint64_t sram_system_addr(uint32_t tile, uint32_t flat) {
 
 // On an Ethernet link, true while the command buffer has no space on TX queue @p q_num's request VC. On a NOC link,
 // true while its iDMA request VC has no space or the queue's last send is not acked: one send in flight per queue.
-// Never blocks once the host has written the link slot. A kind other than the two halts at the next send.
+// Before the first send of the kernel run latches the link, the Ethernet answer. Never blocks. Halts with BadTxq.
 FORCE_INLINE bool txq_busy(uint32_t q_num) {
-    if (eth_link().kind == ETH_LINK_KIND_NOC) {
+    check_txq(q_num);
+    if (link_copy.latched && link_copy.kind == ETH_LINK_KIND_NOC) {
         return idma_free_space_cmdbuf<kCmdBuf>(noc_req_vc(q_num)) == 0 || !idma_acked_cmdbuf<kCmdBuf>(noc_trid(q_num));
     }
     return idma_free_space_cmdbuf<kCmdBuf>(txq_req_vc(q_num)) == 0;
 }
 
 // Programs the command buffer for a send on TX queue @p q_num to the flat address @p dest on the link peer, by the
-// link's kind. Halts with BadLinkKind on an unknown kind and with NocPeerOnOwnTile on a NOC link to this CCE's own
-// tile, which has no documented system-address route back.
+// link's kind (link()). Halts with BadTxq.
 FORCE_INLINE void setup_send(uint32_t q_num, uint32_t dest) {
-    const volatile EthLink& link = eth_link();
-    const uint32_t kind = link.kind;
-    const uint32_t peer_tile = link.peer_tile;
-    const bool noc = kind == ETH_LINK_KIND_NOC;
-    if (!noc && kind != ETH_LINK_KIND_ETHERNET) {
-        halt(HaltCode::BadLinkKind, kind);
-    }
-    if (noc && peer_tile == hsio_tile()) {
-        halt(HaltCode::NocPeerOnOwnTile, peer_tile);
-    }
+    check_txq(q_num);
+    const LinkCopy& copy = link();
+    const uint32_t peer_tile = copy.peer_tile;
+    const bool noc = copy.kind == ETH_LINK_KIND_NOC;
     reset_cmdbuf<kCmdBuf>();
     idma_setup_as_copy_cmdbuf<kCmdBuf>();
     setup_ongoing_cmdbuf<kCmdBuf>(AutoIncConfig{});
@@ -188,14 +237,15 @@ FORCE_INLINE void send_bytes(uint32_t q_num, uint32_t src, uint32_t dest, uint32
     set_src_cmdbuf<kCmdBuf>(sram_local_addr(hsio_tile(), src));
     set_len_cmdbuf<kCmdBuf>(num_bytes);
     setup_max_bytes_in_packet_cmdbuf<kCmdBuf>(kMaxBytesInPacket);
-    setup_packet_tags_cmdbuf<kCmdBuf>(eth_link().kind == ETH_LINK_KIND_NOC ? PacketTags{} : PacketTags{.snoop = snoop});
+    setup_packet_tags_cmdbuf<kCmdBuf>(link_copy.kind == ETH_LINK_KIND_NOC ? PacketTags{} : PacketTags{.snoop = snoop});
     issue_cmdbuf<kCmdBuf>();
 }
 
 // Write @p val to the 8-byte-aligned @p dest on the link peer on TX queue @p q_num: on an Ethernet link as an inline
 // write, on a NOC link as an 8-byte copy from the queue's word at MEM_IERISC_FABRIC_NOC_DWORD_STAGE_BASE; returns once
 // issued. With @p snoop the peer's NIU snoops its cache for the write on an Ethernet link; a NOC link sets no snoop
-// tag. Assumes !txq_busy(q_num). Halts if @p dest is misaligned or @p val is not below 2^kInlineValueBits.
+// tag. Assumes !txq_busy(q_num). Halts if @p dest is misaligned or @p val is not below 2^kInlineValueBits, and with
+// BadTxq.
 FORCE_INLINE void send_dword(uint32_t q_num, uint32_t dest, uint64_t val, bool snoop = false) {
     if (dest % sizeof(val) != 0) {
         halt(HaltCode::RemoteRegMisaligned, dest);
@@ -203,9 +253,9 @@ FORCE_INLINE void send_dword(uint32_t q_num, uint32_t dest, uint64_t val, bool s
     if ((val >> kInlineValueBits) != 0) {
         halt(HaltCode::RemoteRegValueTooWide, static_cast<uint32_t>(val >> 32));
     }
-    if (eth_link().kind == ETH_LINK_KIND_NOC) {
+    if (link().kind == ETH_LINK_KIND_NOC) {
         // No inline write on an iDMA back-end: it leaves the AW coupler count of GREN-2020.
-        ASSERT(q_num < kNumTxqs);
+        check_txq(q_num);
         const uint32_t stage = MEM_IERISC_FABRIC_NOC_DWORD_STAGE_BASE + q_num * sizeof(val);
         *reinterpret_cast<volatile uint64_t*>(static_cast<uintptr_t>(MEM_IERISC_UNCACHED_BASE + stage)) = val;
         send_bytes(q_num, stage, dest, sizeof(val));
