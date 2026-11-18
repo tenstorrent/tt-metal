@@ -15,6 +15,8 @@ import ttnn
 
 KDIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "hy4_rms_kernels")
 NC, GX, GY = 32, 4, 8
+MAXT = 16  # rows (tile-row capacity of the program)
+_LOGGED = set()
 
 
 def enabled():
@@ -47,7 +49,11 @@ def _kernel(name, core_set, ct, rt, cfg, common=None):
 
 def rms_fused(x, w, eps, res=None, out=None, out_off=0, out_x=False):
     _, _, T, D = (int(v) for v in x.shape)
-    assert 1 <= T <= 16 and x.dtype in (ttnn.float32, ttnn.bfloat16) and w.dtype == ttnn.float32
+    if not 1 <= T <= MAXT:
+        raise ValueError(
+            f"rms_fused supports 1 <= T <= {MAXT} rows (got T={T}); use rms_any / rms_cat_any for larger T"
+        )
+    assert x.dtype in (ttnn.float32, ttnn.bfloat16) and w.dtype == ttnn.float32
     nt = D // 32
     assert nt % NC == 0
     gpc = nt // NC
@@ -149,3 +155,55 @@ def rms_fused(x, w, eps, res=None, out=None, out_off=0, out_x=False):
     )
     ttnn.generic_op([x, r_t, w, out, xo_t], prog)
     return (out, xo) if out_x else out
+
+
+def _log_fallback(T):
+    if "fb" not in _LOGGED:
+        _LOGGED.add("fb")
+        print(
+            f"[hy4_rms_fused] T={T} > {MAXT}: stock fp32 op chain used (prefill-size rows); fused program only for T <= {MAXT}",
+            flush=True,
+        )
+
+
+def _stock(x, w, eps, res=None, out_x=False):
+    """the stock op chain (Hy4MTP._rms6 + typecast/add), any T. w fp32 [1,1,T or 1,D] = weight*sqrt(D)."""
+    D = int(x.shape[3])
+    x32 = x if x.dtype == ttnn.float32 else ttnn.typecast(x, ttnn.float32)
+    if res is not None:
+        x32 = ttnn.add(x32, ttnn.typecast(res, ttnn.float32))
+    sq = ttnn.multiply(x32, x32)
+    ss = ttnn.sum(sq, dim=3, keepdim=True)
+    ttnn.deallocate(sq)
+    r = ttnn.rsqrt(ttnn.add(ss, eps * D))
+    ttnn.deallocate(ss)
+    y = ttnn.multiply(x32, r)
+    ttnn.deallocate(r)
+    z = ttnn.multiply(y, w, dtype=ttnn.bfloat16)
+    ttnn.deallocate(y)
+    if out_x:
+        return z, x32
+    return z
+
+
+def rms_any(x, w, eps, res=None, out_x=False):
+    """rms_fused for T <= MAXT, the stock chain (logged once) for larger T. Same results contract (out [1,1,T,D] bf16 [, fp32 sum])."""
+    T = int(x.shape[2])
+    if T <= MAXT:
+        return rms_fused(x, w, eps, res=res, out_x=out_x)
+    _log_fallback(T)
+    return _stock(x, w, eps, res=res, out_x=out_x)
+
+
+def rms_cat_any(e, we, h, wh, eps):
+    """cat[rms(e) * we, rms(h) * wh] -> bf16 [1,1,T,2D] TILE, any T (the MTP ``pre`` input of eh_proj)."""
+    T, D = int(e.shape[2]), int(e.shape[3])
+    if T <= MAXT:
+        cat = ttnn.allocate_tensor_on_device(
+            ttnn.Shape([1, 1, T, 2 * D]), ttnn.bfloat16, ttnn.TILE_LAYOUT, e.device(), ttnn.DRAM_MEMORY_CONFIG
+        )
+        rms_fused(e, we, eps, out=cat, out_off=0)
+        rms_fused(h, wh, eps, out=cat, out_off=D // 32)
+        return cat
+    _log_fallback(T)
+    return ttnn.concat([_stock(e, we, eps), _stock(h, wh, eps)], dim=3)
