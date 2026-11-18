@@ -305,6 +305,9 @@ sfpi_inline sfpi::vFloat _sfpu_binary_remainder_(sfpi::vFloat a, sfpi::vFloat b)
     sfpi::vFloat b_abs = sfpi::abs(b);
     sfpi::vFloat a_rel = a * sign_b;
     sfpi::vFloat q = a_rel - floor_div * b_abs;
+    // Taken before the sign correction: where that correction fires (q < 0),
+    // diff is negative either way and the magnitude correction doesn't apply.
+    sfpi::vFloat diff = q - b_abs;
 
     // Sign correction: a result of the wrong sign (or a floor one too high) gets +b.
     v_if(q < sfpi::vFloat(0.0f)) { q += b_abs; }
@@ -314,7 +317,6 @@ sfpi_inline sfpi::vFloat _sfpu_binary_remainder_(sfpi::vFloat a, sfpi::vFloat b)
     // make floor() one too low, leaving |result| >= |b|. a_rel >= 0 differs from
     // sign(a) == sign(b) only for a zero (or denormal) a, where q is +0 here.
     v_if(a_rel >= sfpi::vFloat(0.0f)) {
-        sfpi::vFloat diff = q - b_abs;
         v_if(diff >= sfpi::vFloat(0.0f)) { q = diff; }
         v_endif;
     }
