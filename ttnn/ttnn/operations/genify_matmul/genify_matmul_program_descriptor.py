@@ -401,6 +401,10 @@ BS_SPLIT_B_DEPTH = 2
 # split vs one reader): aspp_proj 87 KB 16.8 vs 18.6, res4_reduce 70 KB 18.4 vs 18.8, res4_reduce5 35 KB 12.7 vs
 # 12.2, res4_expand 8.7 KB 13.9 vs 13.1. 0 = split every in-place R3 walk.
 BS_SPLIT_MIN_A_ROUND_BYTES = 64 * 1024
+# ... or the grid is a single row (no B group to share: every core's B reads are the minimum traffic, and the
+# latency-bound walk is the A rounds + per-K-block B read latency in series on one RISC). ASPP pool (8 x 1 grid,
+# M = 1): 9.3 -> 8.8 us with the split and BS_SPLIT_B_DEPTH 8. False: the A-round-bytes gate alone.
+BS_SPLIT_SINGLE_ROW = True
 # Refinement 18, R3a: a single-block walk whose cb_act_tiles can hold all num_k_blocks K-blocks (L1 budget) runs
 # its row's A exchange in one shot -- every core multicasts its shard into its own slot on every row peer at
 # once (handshake-free, counter signal; GM_BS_A_ONE_SHOT) -- instead of num_k_blocks handshaked rounds in turn.
@@ -411,6 +415,11 @@ BS_SPLIT_MIN_A_ROUND_BYTES = 64 * 1024
 # on its links (no faster than the rounds) and the matmul / B reads lose their overlap with them.
 BS_A_ONE_SHOT = False
 BS_A_ONE_SHOT_MAX_KWALK_CYCLES = 1 << 30
+# Refinement 18, R2a: on a one-shot walk (output in place, so BRISC has no writer work) the injector's B round
+# read issue -- RISC-serial, ~27 ns a tile, 2.2 us for res3 expand's 80 tiles before the first byte can be
+# multicast -- is split across both RISCs: a reader instance on the injector's BRISC (GM_BS_ROLE 3) reads the
+# last floor(K / 2) K rows and posts a local semaphore. Needs K >= 2 tiles. False: the reader issues it all.
+SHARDED_B_READ_HELPER = True
 # own_kb sentinel for every regime without a resident own K-slice (R1 / R1a / R4).
 NO_OWN_KB = 0xFFFFFFFF
 # Perf tooling (Refinement 15, /perf-measure ablations): defines appended to every R1-family kernel. Payload stubs
@@ -2811,7 +2820,8 @@ def create_block_sharded_program_descriptor(
     b_channels = [_sharded_b_channel(device, geom, topo, one_shot=one_shot, cores=g, noc=b_noc) for g in b_groups]
     mc_weight = next((ch for ch in b_channels if ch is not None), None)
     a_round_bytes = blk.block_m_tiles * blk.block_k_tiles * geom.a_tile_bytes
-    if split_roles and mc_weight is None and a_round_bytes < BS_SPLIT_MIN_A_ROUND_BYTES:
+    single_row = BS_SPLIT_SINGLE_ROW and topo.rows == 1
+    if split_roles and mc_weight is None and a_round_bytes < BS_SPLIT_MIN_A_ROUND_BYTES and not single_row:
         split_roles = False  # (no channel was built, so nothing is bound to NoC1)
     if mc_weight is None:
         b_round, b_chunks, b_chunk_k, row_tail = 1, 1, 1, 0
@@ -2949,13 +2959,14 @@ def create_block_sharded_program_descriptor(
         rt = ttnn.RuntimeArgs()
         for x, y in cores:
             rt[x][y] = reader_args[(x, y)]
+        whole = len(b_groups) == 1 and role != 3
         k = ttnn.KernelDescriptor(
             kernel_source=str(KERNEL_DIR / "genify_matmul_reader.cpp"),
-            core_ranges=grid if len(b_groups) == 1 else ttnn.CoreRangeSet([ttnn.CoreRange(c, c) for c in cores]),
-            compile_time_args=reader_ct(mc if role != 1 else None, act=role != 2),
+            core_ranges=grid if whole else ttnn.CoreRangeSet([ttnn.CoreRange(c, c) for c in cores]),
+            compile_time_args=reader_ct(mc if role not in (1, 3) else None, act=role not in (2, 3)),
             runtime_args=rt,
-            # NCRISC / NOC_0; the split roles' B half: BRISC / NOC_1 (the writer's slot)
-            config=ttnn.WriterConfigDescriptor() if role == 2 else ttnn.ReaderConfigDescriptor(),
+            # NCRISC / NOC_0; the split roles' B half and the B-read helper: BRISC / NOC_1 (the writer's slot)
+            config=ttnn.WriterConfigDescriptor() if role in (2, 3) else ttnn.ReaderConfigDescriptor(),
         )
         if row_tail and mc is not None and role != 1:
             k.defines = list(k.defines) + [("GM_BS_ROW_TAIL", "1")]
@@ -2969,12 +2980,24 @@ def create_block_sharded_program_descriptor(
         # readers[0]: the A half (NCRISC, act channel); b_readers: the B half (BRISC, weight channel); no writer.
         readers = [reader(list(reader_args), None, role=1)]
         b_readers = [reader(list(reader_args), b_channels[0], role=2)]
+        helpers = []
     else:
         readers = [
             reader(list(reader_args) if g is None else [(c.x, c.y) for c in g], mc)
             for g, mc in zip(b_groups, b_channels)
         ]
         b_readers = readers
+        # R2a B-read helper: BRISC of each multicasting group's injector (its fixed sender: the group's
+        # SHARDED_B_INJECTOR-th core in row-major order; each R2 group is its own Mcast, group index 0).
+        helpers = []
+        if SHARDED_B_READ_HELPER and topo.cols == 1 and in_place and one_shot and blk.block_k_tiles >= 2:
+            injectors = []
+            for g, mc in zip(b_groups, b_channels):
+                if mc is not None:
+                    members = sorted(((c.x, c.y) for c in (g or topo.core_list)), key=lambda c: (c[1], c[0]))
+                    injectors.append(members[SHARDED_B_INJECTOR % len(members)])
+            if injectors:
+                helpers = [reader(injectors, None, role=3)]
     writer = ttnn.KernelDescriptor(
         kernel_source=str(KERNEL_DIR / "genify_matmul_writer.cpp"),
         core_ranges=grid,
@@ -3026,6 +3049,21 @@ def create_block_sharded_program_descriptor(
         ttnn.attach_absent_mcast(readers[0], "weight")
         ttnn.attach_absent_mcast(b_readers[0], "act")
         descriptor.kernels = [*readers, *b_readers, compute]
+        return descriptor
+    if helpers:
+        # One local post word per core (written by the helper, read by the injector's reader); no writer (in place).
+        sem = max([sm.id for sm in descriptor.semaphores], default=-1) + 1
+        descriptor.semaphores = list(descriptor.semaphores) + [
+            ttnn.SemaphoreDescriptor(id=sem, core_ranges=grid, initial_value=0)
+        ]
+        for k in readers:
+            if b_channels[readers.index(k)] is not None:
+                k.defines = list(k.defines) + [("GM_BS_B_HELPER_SEM", str(sem))]
+        for k in helpers:
+            k.defines = list(k.defines) + [("GM_BS_B_HELPER_SEM", str(sem))]
+            ttnn.attach_absent_mcast(k, "act")
+            ttnn.attach_absent_mcast(k, "weight")
+        descriptor.kernels = [*readers, *helpers, compute]
         return descriptor
     ttnn.attach_absent_mcast(writer, "act")  # the writer's R4 A-round role is absent
     descriptor.kernels = [*readers, writer, compute]

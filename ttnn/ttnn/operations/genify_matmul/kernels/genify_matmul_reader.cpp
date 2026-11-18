@@ -184,6 +184,14 @@
 #ifndef GM_BS_A_ONE_SHOT
 #define GM_BS_A_ONE_SHOT 0
 #endif
+// R2a B-read helper (Refinement 18, host SHARDED_B_READ_HELPER): on a one-shot walk's injector the B round's DRAM
+// read issue (RISC-serial, ~27 ns a tile) is split across both RISCs. The injector's BRISC (GM_BS_ROLE 3: no other
+// work there, the output is packed in place) reads the round's last floor(K / 2) K rows into the same slot and posts
+// local semaphore GM_BS_B_HELPER_SEM; the reader (NCRISC) reads the first ceil(K / 2) rows (+ the row tail) and
+// waits for the post before handing the round over and multicasting it. -1 = no helper.
+#ifndef GM_BS_B_HELPER_SEM
+#define GM_BS_B_HELPER_SEM -1
+#endif
 
 namespace {
 
@@ -498,7 +506,7 @@ void kernel_main() {
     constexpr uint32_t bs_role = GM_BS_ROLE;
     constexpr bool bs_does_a = bs_role != 2;
     constexpr bool bs_does_b = bs_role != 1;
-    static_assert(bs_role <= 2 && (bs_role == 0 || block_sharded));
+    static_assert(bs_role <= 3 && (bs_role == 0 || block_sharded));  // (3: the R2a B-read helper)
     static_assert(bs_does_b || !bs_b_mcast);
     static_assert(bs_does_a || !bs_mcast);
     constexpr bool a_one_shot = GM_BS_A_ONE_SHOT != 0;
@@ -581,6 +589,24 @@ void kernel_main() {
             }
         }
     };
+
+    // R2a B-read helper (GM_BS_ROLE 3, BRISC of a one-shot walk's injector): the second half of the walk's only B
+    // round -- its single block's K rows [ceil(K / 2), K) into the same slot -- then the post.
+    constexpr bool b_helper = GM_BS_B_HELPER_SEM >= 0;
+    [[maybe_unused]] const uint32_t b_split_row = tensor_k_tiles - tensor_k_tiles / 2;
+    static_assert(bs_role != 3 || (b_helper && block_sharded && !bs_b_mcast && num_k_blocks == 1));
+    if constexpr (bs_role == 3) {
+        MaybeDeviceZoneScope("rd_b_helper");
+        read_weight(
+            get_write_ptr(cb_weight_tiles) + b_split_row * block_n_tiles * b_tile_bytes,
+            col0,
+            b_split_row,
+            tensor_k_tiles - b_split_row,
+            cols_valid < block_n_tiles ? cols_valid : block_n_tiles);
+        noc_async_read_barrier();
+        *tail_split::word(get_semaphore(GM_BS_B_HELPER_SEM)) = 1;
+        return;
+    }
 
     // R4 B stream (Refinement 6): a ring of `ds_b_ahead` K-blocks in flight, each tagged with its own
     // transaction id, so retiring K-block s waits only its own reads while s+1 .. s+T-1 stay on the wire
@@ -762,8 +788,10 @@ void kernel_main() {
                                         if (r0 >= round_valid) {
                                             break;
                                         }
-                                        const uint32_t rows =
-                                            (round_valid - r0) < b_chunk_k ? (round_valid - r0) : b_chunk_k;
+                                        uint32_t rows = (round_valid - r0) < b_chunk_k ? (round_valid - r0) : b_chunk_k;
+                                        if constexpr (b_helper) {
+                                            rows = b_split_row;  // (one chunk, one round: the helper reads the rest)
+                                        }
                                         dataflow_kernel_lib::set_read_trid(noc, c + 1);
                                         read_weight(weight_l1 + r0 * chunk_row_bytes, b_base, k0 + r0, rows, blk_cols);
                                     }
@@ -837,6 +865,9 @@ void kernel_main() {
                                     const uint32_t rows = (round_rows - r0) < b_chunk_k ? (round_rows - r0) : b_chunk_k;
                                     if (b_injector) {
                                         dataflow_kernel_lib::async_read_barrier_with_trid(noc, c + 1);
+                                        if constexpr (b_helper) {
+                                            tail_split::wait_at_least(get_semaphore(GM_BS_B_HELPER_SEM), 1);
+                                        }
                                     }
                                     if (early_push) {
                                         push_act();
