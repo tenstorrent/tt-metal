@@ -1,0 +1,29 @@
+--- a/ttnn/ttnn/operations/conv2d_3x3/conv2d_3x3_program_descriptor.py
++++ b/ttnn/ttnn/operations/conv2d_3x3/conv2d_3x3_program_descriptor.py
+@@ -683,8 +683,9 @@
+ def _column_weight_mcast(input_tensor, work, m_blocks_per_index):
+     """K split: one weight stream per channel slice, shared by that slice's grid column. Participants are
+     the grid rows that run the most M-blocks (same rounds, as in _weight_mcast_cores); each column is one
+-    group, its first participating row the sender. (receivers, group size, receiver order), or None when a
+-    column would have too few participants or the participants are not one rectangle."""
++    group, whose sender is staggered down a diagonal (McastSenderPlacement.Staggered: group g's sender is its
++    participant g % group size). (receivers, group size, receiver order), or None when a column would have too
++    few participants or the participants are not one rectangle."""
+     most = max(m_blocks_per_index[i] for _, i, _ in work)
+     rows = {i for _, i, _ in work if m_blocks_per_index[i] == most}
+     if len(rows) < max(WEIGHT_MCAST_MIN_CORES, 2):
+@@ -1175,9 +1176,11 @@
+         column_channel = _column_weight_mcast(input_tensor, work, m_blocks_per_index)
+         if column_channel is not None:
+             receivers, group_size, order = column_channel
+-            weight_mcast = ttnn.Mcast(
+-                device, weight_mcast_config, receivers, group_size, ttnn.McastFixedSenderConfig(), order
+-            )
++            # Staggered senders: with every column's sender on one grid row, all the columns' DRAM read responses
++            # share that row's NoC links, and the weight chain is bound there (weights-only chain on aspp.convs.1
++            # @ LoFi: 65.5 us with the senders on row 0, 38.3 us staggered; DRAM bank spread alone: 62.6 us).
++            sender_config = ttnn.McastFixedSenderConfig(sender_index=0, placement=ttnn.McastSenderPlacement.Staggered)
++            weight_mcast = ttnn.Mcast(device, weight_mcast_config, receivers, group_size, sender_config, order)
+     else:
+         if mcast_receivers is not None:
+             weight_mcast = ttnn.Mcast(

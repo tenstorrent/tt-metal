@@ -1,0 +1,64 @@
+--- kernels/conv2d_3x3_compute.cpp	2026-11-18 04:17:33.869892820 +0000
++++ perf_experiments/matmul_subblock_shape/op_copy/kernels/conv2d_3x3_compute.cpp	2026-11-18 04:44:13.895738492 +0000
+@@ -408,6 +408,17 @@
+             weights.pop_front(block_k_tiles * block_n_tiles);
+         } else {
+             MaybeDeviceZoneScope("compute_matmul_walk");
++#ifdef SBS_CALLER_OWNS_PARTIALS
++            // matmul_subblock_shape experiment: with a bias the walk packs Interm, so the partials can be reserved
++            // once and pushed once (the helper's caller-owned pack target, as on the K split) instead of the
++            // per-K-block push + drain round trip.
++            constexpr bool caller_owns = has_bias;
++#else
++            constexpr bool caller_owns = false;
++#endif
++            if constexpr (caller_owns) {
++                partials.reserve_back(partials_tiles);
++            }
+             ckl::matmul_block<
+                 /*transpose=*/false,
+                 /*packer_l1_acc=*/true,
+@@ -417,7 +428,13 @@
+                 ckl::InputPolicy::WaitAndPopPerKBlock,
+                 ckl::InputPolicy::WaitAndPopPerKBlock,
+                 ckl::NoPostCompute,
+-                PreKBlockFn>(
++                PreKBlockFn,
++                ckl::NoPostKBlock,
++                /*untilize_block_ct_dim=*/0,
++                ckl::NoKBlockInnerDimFn,
++                ckl::NoIn0Source,
++                ckl::NoIn1BaseOffset,
++                caller_owns>(
+                 im2col_tiles,
+                 weights,
+                 output_tiles,
+@@ -427,6 +444,9 @@
+                 pre_k_block,
+                 /*in1_per_core_w=*/block_n_tiles,
+                 /*out_row_width=*/block_n_tiles);
++            if constexpr (caller_owns) {
++                partials.push_back(partials_tiles);
++            }
+         }
+
+         if constexpr (has_bias && !k_split && in0_groups == 1) {
+--- conv2d_3x3_program_descriptor.py	2026-11-18 04:17:40.806993094 +0000
++++ perf_experiments/matmul_subblock_shape/op_copy/conv2d_3x3_program_descriptor.py	2026-11-18 04:44:13.895738492 +0000
+@@ -33,6 +33,8 @@
+ import ttnn
+
+ KERNEL_DIR = Path(__file__).parent / "kernels"
++# matmul_subblock_shape experiment knob (module-level, monkeypatched by the experiment test).
++SBS_CALLER_OWNS_PARTIALS = False
+
+ TILE = 32
+ TILE_BYTES_BF16 = 2 * TILE * TILE
+@@ -1159,6 +1161,7 @@
+         core_ranges=cores,
+         compile_time_args=compute_ct_args,
+         runtime_args=compute_rt,
++        defines=[("SBS_CALLER_OWNS_PARTIALS", "1")] if SBS_CALLER_OWNS_PARTIALS else [],
+         config=ttnn.ComputeConfigDescriptor(
+             math_fidelity=compute_kernel_config.math_fidelity,
+             math_approx_mode=compute_kernel_config.math_approx_mode,

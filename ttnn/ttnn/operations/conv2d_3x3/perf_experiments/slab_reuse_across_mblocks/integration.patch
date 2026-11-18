@@ -1,0 +1,376 @@
+--- a/ttnn/ttnn/operations/conv2d_3x3/conv2d_3x3_program_descriptor.py
++++ b/ttnn/ttnn/operations/conv2d_3x3/conv2d_3x3_program_descriptor.py
+@@ -9,7 +9,10 @@
+ 
+ Regime R3 (TILE input) keeps that blocking. The reader streams the M-block's footprint tile-rows
+ into `cb_input_tiles` and compute untilizes them into `cb_halo_slab` (bf16 RM, one tile-row = 32
+-pixels), from which the reader gathers exactly as on the ROW_MAJOR path.
++pixels), from which the reader gathers exactly as on the ROW_MAJOR path. With more than one M-block
++per core the slab is the core's (core_slab): the same plan over the core's whole M range, filled and
++untilized once, so the tile-rows consecutive M-blocks share are untilized once; it is taken wherever
++it is fewer tile-rows and fits the L1 left at the solved blocking (see core_slab_capable).
+ 
+ Regime R2 (HEIGHT_SHARDED input, either layout) keeps the same pipeline on the input shard grid: work
+ index i runs on shard core i and owns output shard i. The reader fills the slab with page runs from
+@@ -283,6 +286,8 @@
+     shared_slab_bytes: int = 0
+     shared_zero_bytes: int = 0
+     slice_depth: int = NSLICE_SLICE_DEPTH
++    # Core-wide TILE slab (see core_slab_capable): slab_tile_rows is the core's, filled and untilized once per core.
++    core_slab: bool = False
+ 
+     @property
+     def slab_px(self):
+@@ -438,8 +443,30 @@
+     return _div_up(max(a_bytes, b_bytes), unit) * unit
+ 
+ 
++def core_slab_capable(g: Conv3x3Geometry, core_m_tiles, bm):
++    """The core-wide TILE slab: with more than one M-block per core, the slab plan of the core's whole M range (the
++    core as one block: its three kernel-row bands, shared where they overlap), filled and untilized once; every
++    M-block gathers from it at the core's slab_x_base. Worth it when it is fewer tile-rows than the busiest core's
++    per-block slabs together (at the block's untilize batch, both rounded to whole batches)."""
++    if not g.tile_input or _div_up(core_m_tiles, bm) < 2:
++        return False
++    band_len, block_rows = _block_extents(g, core_m_tiles, bm)
++    _, core_rows = _block_extents(g, core_m_tiles, core_m_tiles)
++    ub = _default_untilize_batch_rows(g, band_len, block_rows)
++    return _div_up(core_rows, ub) < _div_up(core_m_tiles, bm) * _div_up(block_rows, ub)
++
++
+ def _footprint(
+-    g: Conv3x3Geometry, core_m_tiles, bm, bk, bn, ub_cap=None, nslice=False, im2col_depth=None, shared=False
++    g: Conv3x3Geometry,
++    core_m_tiles,
++    bm,
++    bk,
++    bn,
++    ub_cap=None,
++    nslice=False,
++    im2col_depth=None,
++    shared=False,
++    core_slab=False,
+ ):
+     slice_depth = NSLICE_SHARED_SLICE_DEPTH if shared else NSLICE_SLICE_DEPTH
+     num_k_blocks = g.tensor_k_tiles // bk
+@@ -463,6 +490,9 @@
+         ub = _default_untilize_batch_rows(g, band_len, raw_slab_rows)
+         if ub_cap is not None:
+             ub = min(ub, ub_cap)
++        if core_slab:
++            # The core's whole M range as one slab plan; the untilize batch stays the block's.
++            raw_slab_rows = _block_extents(g, core_m_tiles, core_m_tiles)[1]
+         # The slab is a whole number of batches: every reader push and compute untilize has one quantum.
+         slab_tile_rows = _div_up(max(raw_slab_rows, 1), ub) * ub
+         slab_bytes = slab_tile_rows * g.c_in_tiles * TILE_BYTES_BF16
+@@ -517,6 +547,7 @@
+         shared_slab_bytes=shared_slab_bytes,
+         shared_zero_bytes=shared_zero_bytes,
+         slice_depth=slice_depth,
++        core_slab=core_slab,
+     )
+ 
+ 
+@@ -571,6 +602,23 @@
+                         if deep["footprint_bytes"] <= l1_budget:
+                             fit = deep
+                             break
++                    if core_slab_capable(g, core_m_tiles, bm):
++                        # The core-wide slab only takes L1 left at the solved (bm, bk, ub, im2col depth): it never
++                        # costs a smaller block, batch or ring.
++                        core = _footprint(
++                            g,
++                            core_m_tiles,
++                            bm,
++                            bk,
++                            bn,
++                            ub_cap,
++                            nslice,
++                            im2col_depth=fit["im2col_rm_depth_rows"],
++                            shared=shared,
++                            core_slab=True,
++                        )
++                        if core["footprint_bytes"] <= l1_budget:
++                            fit = core
+                     return Conv3x3Blocking(
+                         grid_x=grid_x,
+                         core_m_tiles=core_m_tiles,
+@@ -935,6 +983,7 @@
+             int(b.shared_slab_bytes > 0),
+             SEM_COMBINE_SEND_GO,
+             int(split_core),
++            int(b.core_slab),
+         ]
+         args.extend(ttnn.TensorAccessorArgs(input_tensor).get_compile_time_args())
+         return args
+@@ -974,6 +1023,7 @@
+         CB_SLICE_R,
+         *_out_subblock(bm, ns),
+         b.untilize_batch_rows,
++        int(b.core_slab),
+     ]
+ 
+     writer_ct_args = [
+@@ -1039,6 +1089,7 @@
+         b.slab_tile_rows,
+         b.untilize_batch_rows,
+         INPUT_TILE_DEPTH_BATCHES,
++        int(b.core_slab),
+     ]
+ 
+     def writer_ct_args_for(slice_channels, split_core=None):
+--- a/ttnn/ttnn/operations/conv2d_3x3/kernels/conv2d_3x3_reader.cpp
++++ b/ttnn/ttnn/operations/conv2d_3x3/kernels/conv2d_3x3_reader.cpp
+@@ -15,6 +15,10 @@
+ //     so each input pixel is read once.
+ //   TILE: the reader streams the band's input tile-rows to compute, which untilizes them into the
+ //     slab (compute -> reader CB). A band starting inside the previous band's tile-rows shares them.
++//     Core-wide slab (core_slab, more than one M-block per core): the plan is the core's whole M range
++//     as one block, streamed and untilized once before the first M-block and popped after the last;
++//     M-block b's band kh lies inside the core's band kh, so it gathers at the core's slab_x_base[kh]
++//     and waits only for the slab row of its own last tile-row.
+ // Both fills read page runs through one TensorAccessor: on a HEIGHT-sharded input a run is the
+ // contiguous part of one owner core's shard (own or remote), so a band costs one NoC read per shard it
+ // crosses; on an interleaved input every page is its own read.
+@@ -158,7 +162,10 @@
+     // Split TILE fill (see the file comment): the writer reads the higher shards' tile-rows. Its two counters reuse the
+     // split slab fill's ids: fill_done (writer -> reader) and fill_go (reader -> writer).
+     constexpr bool tile_fill_split = get_compile_time_arg_val(60) != 0;
+-    constexpr auto input_args = TensorAccessorArgs<61>();
++    // Core-wide TILE slab (see the file comment): one slab plan, fill and untilize for the core's whole M range.
++    constexpr bool core_slab = get_compile_time_arg_val(61) != 0;
++    constexpr auto input_args = TensorAccessorArgs<62>();
++    static_assert(!core_slab || tile_input, "the core-wide slab is the TILE slab");
+     static_assert(!alias_slab_combine || nslice_outer, "only the N-slice-outer walk aliases the slab");
+ 
+     const uint32_t input_addr = get_arg_val<uint32_t>(0);
+@@ -351,6 +358,13 @@
+     };
+ 
+     [[maybe_unused]] uint32_t fill_batches_handed = 0;  // split TILE fill: batches handed to the writer
++    // Core-wide slab: the footprint of the core's whole M range, planned as one block.
++    [[maybe_unused]] const uint32_t core_o_end_tiles = (m_tile_start + actual_m_tiles) * TILE_DIM;
++    [[maybe_unused]] const conv2d_3x3::SlabFootprint core_footprint =
++        conv2d_3x3::block_footprint<output_width, input_width, stride, padding, dilation, band_last_tap>(
++            m_tile_start * TILE_DIM, core_o_end_tiles < num_out_px ? core_o_end_tiles : num_out_px);
++    // Band kh's pixel v sits at slab pixel v + slab_x_base[kh]; a core-wide slab keeps it for every M-block.
++    int32_t slab_x_base[3];
+     for (uint32_t m_block_idx = 0; m_block_idx < num_m_blocks_this_core; ++m_block_idx) {
+         const uint32_t block_tiles_done = m_block_idx * block_m_tiles;
+         const uint32_t block_valid_tiles =
+@@ -362,66 +376,84 @@
+         const conv2d_3x3::SlabFootprint footprint =
+             conv2d_3x3::block_footprint<output_width, input_width, stride, padding, dilation, band_last_tap>(
+                 o_first, o_end);
+-        int32_t slab_x_base[3];
+         [[maybe_unused]] uint32_t slab_ready_pages[3];  // TILE: slab pages that hold band kh once compute pushed them
+ 
+         if constexpr (tile_input) {
+-            // ---- fill_halo_slab (TILE): plan the slab rows, then stream input tile-rows in slab order.
+-            MaybeDeviceZoneScope("reader_fill");
+-            conv2d_3x3::TileSlabPlan plan;
+-            conv2d_3x3::tile_slab_plan<input_width, num_in_px, dilation, c_in_tiles>(footprint, slab_x_base, plan);
+-            const uint32_t num_segs = plan.num_segs;
+-            const uint32_t(&seg_first)[3] = plan.seg_first;
+-            const uint32_t(&seg_count)[3] = plan.seg_count;
+-            for (int32_t kh = 0; kh < 3; ++kh) {
+-                slab_ready_pages[kh] = plan.ready_pages[kh];
+-            }
+-
+-            // Slab rows past the plan's last row are pushed unread: compute untilizes a fixed count.
+-            constexpr uint32_t batch_pages = untilize_batch_rows * c_in_tiles;
+-            uint32_t seg = 0;
+-            uint32_t seg_row = 0;
+-            for (uint32_t batch = 0; batch < slab_tile_rows / untilize_batch_rows; ++batch) {
+-                {
+-                    // Back-pressure from compute's untilize.
+-                    MaybeDeviceZoneScope("reader_fill_reserve");
+-                    cb_reserve_back(cb_input_tiles, batch_pages);
+-                }
+-                // Split fill: hand the reserved batch to the writer first when it holds higher shards' tile-rows.
+-                [[maybe_unused]] bool writer_rows = false;
+-                if constexpr (tile_fill_split) {
+-                    writer_rows = conv2d_3x3::tile_batch_has_rows_from<untilize_batch_rows>(
+-                        plan, batch, (my_shard + 1) * input_shard_rows);
+-                    if (writer_rows) {
+-                        Semaphore<>(slab_free_sem_id).up(1);
++            // The core-wide slab is planned and streamed once, before the first M-block.
++            if (!core_slab || m_block_idx == 0) {
++                // ---- fill_halo_slab (TILE): plan the slab rows, then stream input tile-rows in slab order.
++                MaybeDeviceZoneScope("reader_fill");
++                conv2d_3x3::TileSlabPlan plan;
++                conv2d_3x3::tile_slab_plan<input_width, num_in_px, dilation, c_in_tiles>(
++                    core_slab ? core_footprint : footprint, slab_x_base, plan);
++                const uint32_t num_segs = plan.num_segs;
++                const uint32_t(&seg_first)[3] = plan.seg_first;
++                const uint32_t(&seg_count)[3] = plan.seg_count;
++                for (int32_t kh = 0; kh < 3; ++kh) {
++                    slab_ready_pages[kh] = plan.ready_pages[kh];
++                }
++
++                // Slab rows past the plan's last row are pushed unread: compute untilizes a fixed count.
++                constexpr uint32_t batch_pages = untilize_batch_rows * c_in_tiles;
++                uint32_t seg = 0;
++                uint32_t seg_row = 0;
++                for (uint32_t batch = 0; batch < slab_tile_rows / untilize_batch_rows; ++batch) {
++                    {
++                        // Back-pressure from compute's untilize.
++                        MaybeDeviceZoneScope("reader_fill_reserve");
++                        cb_reserve_back(cb_input_tiles, batch_pages);
+                     }
+-                }
+-                uint32_t l1 = get_write_ptr(cb_input_tiles);
+-                reads.begin(TRID_INPUT_TILES);
+-                for (uint32_t r = 0; r < untilize_batch_rows && seg < num_segs;) {
+-                    // The batch's rows of one segment are consecutive input tile-rows: consecutive pages.
+-                    const uint32_t seg_left = seg_count[seg] - seg_row;
+-                    const uint32_t rows = untilize_batch_rows - r < seg_left ? untilize_batch_rows - r : seg_left;
+-                    const uint32_t row0 = seg_first[seg] + seg_row;
+-                    read_rows(row0, row0 + rows, l1);
+-                    l1 += rows * row_bytes;
+-                    r += rows;
+-                    seg_row += rows;
+-                    if (seg_row == seg_count[seg]) {
+-                        ++seg;
+-                        seg_row = 0;
++                    // Split fill: hand the reserved batch to the writer first when it holds higher shards' tile-rows.
++                    [[maybe_unused]] bool writer_rows = false;
++                    if constexpr (tile_fill_split) {
++                        writer_rows = conv2d_3x3::tile_batch_has_rows_from<untilize_batch_rows>(
++                            plan, batch, (my_shard + 1) * input_shard_rows);
++                        if (writer_rows) {
++                            Semaphore<>(slab_free_sem_id).up(1);
++                        }
+                     }
+-                }
+-                reads.wait(TRID_INPUT_TILES);
+-                if constexpr (tile_fill_split) {
+-                    if (writer_rows) {
+-                        MaybeDeviceZoneScope("reader_fill_fwd_wait");
+-                        Semaphore<>(slab_fwd_done_sem_id).wait_min(++fill_batches_handed);
++                    uint32_t l1 = get_write_ptr(cb_input_tiles);
++                    reads.begin(TRID_INPUT_TILES);
++                    for (uint32_t r = 0; r < untilize_batch_rows && seg < num_segs;) {
++                        // The batch's rows of one segment are consecutive input tile-rows: consecutive pages.
++                        const uint32_t seg_left = seg_count[seg] - seg_row;
++                        const uint32_t rows = untilize_batch_rows - r < seg_left ? untilize_batch_rows - r : seg_left;
++                        const uint32_t row0 = seg_first[seg] + seg_row;
++                        read_rows(row0, row0 + rows, l1);
++                        l1 += rows * row_bytes;
++                        r += rows;
++                        seg_row += rows;
++                        if (seg_row == seg_count[seg]) {
++                            ++seg;
++                            seg_row = 0;
++                        }
+                     }
++                    reads.wait(TRID_INPUT_TILES);
++                    if constexpr (tile_fill_split) {
++                        if (writer_rows) {
++                            MaybeDeviceZoneScope("reader_fill_fwd_wait");
++                            Semaphore<>(slab_fwd_done_sem_id).wait_min(++fill_batches_handed);
++                        }
++                    }
++                    cb_push_back(cb_input_tiles, batch_pages);
+                 }
+-                cb_push_back(cb_input_tiles, batch_pages);
+             }
+-        } else {
++        }
++        if constexpr (core_slab) {
++            // The block's band kh is its own in-image tile-rows, inside the core's band kh: it is ready once compute
++            // pushed the slab row of its last tile-row (slab row = input tile-row + slab_x_base[kh] / 32).
++            constexpr int32_t tile_px = TILE_DIM;  // signed: slab_x_base may be negative
++            for (int32_t kh = 0; kh < 3; ++kh) {
++                const int32_t v_lo = footprint.f + kh * dilation * input_width;
++                const int32_t lo = v_lo > 0 ? v_lo : 0;
++                const int32_t hi = v_lo + footprint.band_len < num_in_px ? v_lo + footprint.band_len : num_in_px;
++                slab_ready_pages[kh] =
++                    lo < hi
++                        ? static_cast<uint32_t>((hi + tile_px - 1) / tile_px + slab_x_base[kh] / tile_px) * c_in_tiles
++                        : 0;
++            }
++        }
++        if constexpr (!tile_input) {
+             // ---- fill_halo_slab (ROW_MAJOR): band kh tagged trid kh + 1; overlapping bands read only their
+             // new tail.
+             MaybeDeviceZoneScope("reader_fill");
+@@ -623,9 +655,12 @@
+         }
+ 
+         if constexpr (tile_input) {
+-            constexpr uint32_t slab_pages = slab_tile_rows * c_in_tiles;
+-            cb_wait_front(cb_halo_slab, slab_pages);
+-            cb_pop_front(cb_halo_slab, slab_pages);
++            // The core-wide slab is released after the core's last M-block.
++            if (!core_slab || m_block_idx + 1 == num_m_blocks_this_core) {
++                constexpr uint32_t slab_pages = slab_tile_rows * c_in_tiles;
++                cb_wait_front(cb_halo_slab, slab_pages);
++                cb_pop_front(cb_halo_slab, slab_pages);
++            }
+         }
+         if constexpr (alias_slab_combine) {
+             // Every gather read of the slab (and zero block) has landed and compute's untilize is complete: the
+--- a/ttnn/ttnn/operations/conv2d_3x3/kernels/conv2d_3x3_compute.cpp
++++ b/ttnn/ttnn/operations/conv2d_3x3/kernels/conv2d_3x3_compute.cpp
+@@ -123,6 +123,8 @@
+     constexpr uint32_t slice_sb_h = get_compile_time_arg_val(32);
+     constexpr uint32_t slice_sb_w = get_compile_time_arg_val(33);
+     constexpr uint32_t untilize_batch_rows = get_compile_time_arg_val(34);
++    // Core-wide TILE slab: the core's slab_tile_rows are untilized once, before the first M-block.
++    constexpr bool core_slab = get_compile_time_arg_val(35) != 0;
+ 
+     const uint32_t num_m_blocks_this_core = get_arg_val<uint32_t>(0);
+     [[maybe_unused]] const bool owns_output_columns = get_arg_val<uint32_t>(1) != 0;
+@@ -261,7 +263,7 @@
+     };
+ 
+     for (uint32_t m_block_idx = 0; m_block_idx < num_m_blocks_this_core; ++m_block_idx) {
+-        if constexpr (tile_input) {
++        if (tile_input && (!core_slab || m_block_idx == 0)) {
+             // untilize_footprint: the reader streams slab_tile_rows input tile-rows in slab order.
+             MaybeDeviceZoneScope("compute_untilize");
+             pack_reconfig_l1_acc(0);
+--- a/ttnn/ttnn/operations/conv2d_3x3/kernels/conv2d_3x3_writer.cpp
++++ b/ttnn/ttnn/operations/conv2d_3x3/kernels/conv2d_3x3_writer.cpp
+@@ -143,7 +143,9 @@
+     constexpr uint32_t slab_tile_rows = get_compile_time_arg_val(61);
+     constexpr uint32_t untilize_batch_rows = get_compile_time_arg_val(62);
+     constexpr uint32_t input_tile_depth_batches = get_compile_time_arg_val(63);
+-    constexpr auto weight_args = TensorAccessorArgs<64>();
++    // Core-wide TILE slab: one slab plan for the core's whole M range (the split fill serves it as one block).
++    constexpr bool core_slab = get_compile_time_arg_val(64) != 0;
++    constexpr auto weight_args = TensorAccessorArgs<65>();
+     [[maybe_unused]] constexpr auto bias_args = TensorAccessorArgs<weight_args.next_compile_time_args_offset()>();
+     [[maybe_unused]] constexpr auto output_args = TensorAccessorArgs<bias_args.next_compile_time_args_offset()>();
+     [[maybe_unused]] constexpr auto input_args = TensorAccessorArgs<output_args.next_compile_time_args_offset()>();
+@@ -214,10 +216,11 @@
+     constexpr uint32_t TRID_FILL = 6;
+     // Moves the cursor to the next batch holding higher shards' rows; false past the last block.
+     [[maybe_unused]] auto fill_next = [&]() -> bool {
+-        while (fill_m < num_m_blocks_this_core) {
++        while (fill_m < (core_slab ? 1 : num_m_blocks_this_core)) {
+             if (fill_plan_m != fill_m) {
+                 const uint32_t block_tiles_done = fill_m * block_m_tiles;
+-                const uint32_t block_valid_tiles = actual_m_tiles - block_tiles_done < block_m_tiles
++                const uint32_t block_valid_tiles = core_slab ? actual_m_tiles
++                                                   : actual_m_tiles - block_tiles_done < block_m_tiles
+                                                        ? actual_m_tiles - block_tiles_done
+                                                        : block_m_tiles;
+                 const uint32_t first = (m_tile_start + block_tiles_done) * 32;
+@@ -704,8 +707,14 @@
+                 o_first, o_end);
+         if constexpr (tile_input) {
+             conv2d_3x3::TileSlabPlan plan;
++            const uint32_t core_end_tiles = (m_tile_start + actual_m_tiles) * 32;
+             conv2d_3x3::tile_slab_plan<input_width, input_height * input_width, dilation, c_in_p / 32>(
+-                footprint, slab_x_base, plan);
++                core_slab
++                    ? conv2d_3x3::block_footprint<output_width, input_width, stride, padding, dilation, band_last_tap>(
++                          m_tile_start * 32, core_end_tiles < num_out_px ? core_end_tiles : num_out_px)
++                    : footprint,
++                slab_x_base,
++                plan);
+         } else {
+             conv2d_3x3::slab_bands<input_width, input_height * input_width, dilation, band_stride_px>(
+                 footprint, slab_x_base, [](int32_t, int32_t, int32_t, int32_t) {});

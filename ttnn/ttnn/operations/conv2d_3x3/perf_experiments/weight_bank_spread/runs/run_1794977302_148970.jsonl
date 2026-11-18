@@ -1,0 +1,4 @@
+{"case": "focus:aspp_convs_1", "variant": "base", "layout": 0, "blocking": {"k_cols": 11, "T": 8, "out_n": 1, "k_col": 54, "bm": 8, "bk": 18, "nk": 3, "mblocks": 1, "nslice": true, "wdepth": 4}, "ablate": "gather,fill,weights"}
+{"case": "focus:aspp_convs_2", "variant": "base", "layout": 0, "blocking": {"k_cols": 11, "T": 8, "out_n": 1, "k_col": 54, "bm": 8, "bk": 18, "nk": 3, "mblocks": 1, "nslice": true, "wdepth": 4}, "ablate": "gather,fill,weights"}
+{"case": "focus:res5_1_conv2", "variant": "base", "layout": 0, "blocking": {"k_cols": 8, "T": 16, "out_n": 2, "k_col": 18, "bm": 7, "bk": 6, "nk": 3, "mblocks": 1, "nslice": true, "wdepth": 4}, "ablate": "gather,fill,weights"}
+{"case": "focus:res5_2_conv2", "variant": "base", "layout": 0, "blocking": {"k_cols": 8, "T": 16, "out_n": 2, "k_col": 18, "bm": 7, "bk": 6, "nk": 3, "mblocks": 1, "nslice": true, "wdepth": 4}, "ablate": "gather,fill,weights"}

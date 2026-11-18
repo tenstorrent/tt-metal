@@ -1,0 +1,2 @@
+{"bm": 5, "bk": 8, "bn": 8, "nkb": 9, "m_blocks": 2, "sb": [1, 4], "nslice": false, "k_split": false, "case": "semantic", "variant": "base", "pcc": 0.999254584312439, "max_abs": 6.0}
+{"bm": 5, "bk": 8, "bn": 8, "nkb": 9, "m_blocks": 2, "sb": [1, 4], "nslice": false, "k_split": false, "case": "semantic", "variant": "own", "pcc": 0.999254584312439, "max_abs": 6.0}

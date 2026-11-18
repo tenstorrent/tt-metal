@@ -1,0 +1,153 @@
+--- a/ttnn/ttnn/operations/conv2d_3x3/conv2d_3x3.py
++++ b/ttnn/ttnn/operations/conv2d_3x3/conv2d_3x3.py
+@@ -235,7 +235,11 @@
+ ):
+     """[C_out, C_in, 3, 3] -> TILE [1, 1, K_p, C_out]; rows (slice, kh, kw, c), c fastest, each kh block
+     of 3*C_in_p rows zero-padded to a multiple of 32. A BLOCK-sharded input has one slice per shard
+-    column (C_in_p = shard width); every other placement has one."""
++    column (C_in_p = shard width); every other placement has one.
++
++    With more than one slice (the K split) the tiles are permuted inside each slice's page range, so that each
++    owner N-slice's tiles are one page run whose part in every DRAM bank is contiguous (k_split_weight_page in the
++    writer); the tensor is built at the padded width and viewed back to C_out."""
+     if torch_weight.dim() != 4 or tuple(torch_weight.shape[2:]) != (3, 3):
+         raise ValueError(f"conv2d_3x3: weight must be [C_out, C_in, 3, 3], got {list(torch_weight.shape)}")
+     c_out, c_in = int(torch_weight.shape[0]), int(torch_weight.shape[1])
+@@ -263,13 +267,56 @@
+     w = w.reshape(slices, 3, 3 * c_in_p, c_out)
+     w = torch.nn.functional.pad(w, (0, 0, 0, kh_rows - 3 * c_in_p))
+     w = w.reshape(1, 1, slices * 3 * kh_rows, c_out)
+-    return ttnn.from_torch(
++    if slices == 1:
++        return ttnn.from_torch(
++            w,
++            dtype=weight_dtype,
++            layout=ttnn.TILE_LAYOUT,
++            device=device,
++            memory_config=ttnn.DRAM_MEMORY_CONFIG,
++        )
++    # Tiles move across tile columns, so a partial last tile column cannot carry them at width C_out: build at the
++    # padded width and view it back (same pages).
++    c_out_p = _round_up(c_out, TILE)
++    k_p = slices * 3 * kh_rows
++    w = torch.nn.functional.pad(w, (0, c_out_p - c_out)).reshape(k_p, c_out_p)
++    k_tiles, n_tiles = k_p // TILE, c_out_p // TILE
++    tiles = w.reshape(k_tiles, TILE, n_tiles, TILE).permute(0, 2, 1, 3).reshape(k_tiles * n_tiles, TILE, TILE)
++    num_banks = ttnn.device.get_memory_view(device, ttnn.BufferType.DRAM).num_banks  # the writer's NUM_DRAM_BANKS
++    out = torch.empty_like(tiles)
++    out[_k_split_page_permutation(slices, k_tiles // slices, n_tiles, num_banks)] = tiles
++    w = out.reshape(k_tiles, n_tiles, TILE, TILE).permute(0, 2, 1, 3).reshape(1, 1, k_p, c_out_p)
++    tt = ttnn.from_torch(
+         w,
+         dtype=weight_dtype,
+         layout=ttnn.TILE_LAYOUT,
+         device=device,
+         memory_config=ttnn.DRAM_MEMORY_CONFIG,
+     )
++    if c_out_p != c_out:
++        tt = ttnn.reshape(tt, ttnn.Shape([1, 1, k_p, c_out]), ttnn.Shape([1, 1, k_p, c_out_p]))
++    return tt
++
++
++def _k_split_page_permutation(slices, col_k_tiles, n_tiles, num_banks):
++    """The K split's page of every row-major weight page p = k * n_tiles + n (index p), as k_split_weight_page."""
++    out_n = -(-n_tiles // slices)
++    perm = [0] * (slices * col_k_tiles * n_tiles)
++    for c in range(slices):
++        for n0 in range(0, n_tiles, out_n):
++            valid = min(out_n, n_tiles - n0)
++            run_page = (c * n_tiles + n0) * col_k_tiles
++            q, r = divmod(col_k_tiles * valid, num_banks)
++            for k in range(col_k_tiles):
++                for dn in range(valid):
++                    j = k * valid + dn
++                    if j < r * (q + 1):
++                        page = run_page + j // (q + 1) + num_banks * (j % (q + 1))
++                    else:
++                        jj = j - r * (q + 1)
++                        page = run_page + r + jj // q + num_banks * (jj % q)
++                    perm[(c * col_k_tiles + k) * n_tiles + n0 + dn] = page
++    return perm
+ 
+ 
+ def prepare_conv2d_bias(
+--- a/ttnn/ttnn/operations/conv2d_3x3/kernels/conv2d_3x3_writer.cpp
++++ b/ttnn/ttnn/operations/conv2d_3x3/kernels/conv2d_3x3_writer.cpp
+@@ -172,6 +172,28 @@
+     const uint32_t weight_tile_bytes = get_tile_size(cb_weights);
+     const auto weights = TensorAccessor(weight_args, weight_addr, weight_tile_bytes);
+ 
++    // K split weight layout (prepare_conv2d_weights): inside a column's page range, owner slice y's tiles (K_col x valid,
++    // dense index j = k * valid + n) are the page run [P_y, P_y + L). Page P_y + m + NUM_DRAM_BANKS * t holds dense tile
++    // cum(m) + t, so the round's tiles in one bank are one contiguous bank range and one contiguous L1 range: a round is
++    // one NoC read per bank. Every other placement keeps row-major pages (k * tensor_n_tiles + n).
++    constexpr uint32_t num_banks = NUM_DRAM_BANKS;
++    constexpr uint32_t col_k_tiles = block_k_tiles * num_k_blocks;  // the column's K-slice
++    const uint32_t col_page_base = weight_k_tile_start * tensor_n_tiles;
++    // Page of tile (k, n) of this column's K-slice under the K split layout.
++    [[maybe_unused]] auto k_split_weight_page = [&](uint32_t k, uint32_t n) -> uint32_t {
++        const uint32_t n0 = (n / out_n_tiles) * out_n_tiles;
++        const uint32_t valid = tensor_n_tiles - n0 < out_n_tiles ? tensor_n_tiles - n0 : out_n_tiles;
++        const uint32_t run_page = col_page_base + n0 * col_k_tiles;
++        const uint32_t j = k * valid + (n - n0);
++        const uint32_t q = col_k_tiles * valid / num_banks;
++        const uint32_t r = col_k_tiles * valid % num_banks;
++        if (j < r * (q + 1)) {
++            return run_page + j / (q + 1) + num_banks * (j % (q + 1));
++        }
++        const uint32_t jj = j - r * (q + 1);
++        return run_page + r + jj / q + num_banks * (jj % q);
++    };
++
+     // ---- prefetch_bias: the core's output columns; stays fronted in cb_bias for the whole kernel. Slots
+     // past the last C_out tile (a short last N-slice) only feed output padding columns. With the split slab fill
+     // it follows the first block's slab reads, which the reader waits on before it can gather.
+@@ -297,7 +319,8 @@
+         for (uint32_t k = 0; k < block_k_tiles; ++k) {
+             const uint32_t row_page = (weight_k_tile_start + k_tile0 + k) * tensor_n_tiles + n_tile_start;
+             for (uint32_t n = 0; n < block_n_tiles; ++n, l1 += weight_tile_bytes) {
+-                noc_async_read_page(row_page + n, weights, l1);
++                noc_async_read_page(
++                    k_split ? k_split_weight_page(k_tile0 + k, n_tile_start + n) : row_page + n, weights, l1);
+             }
+         }
+         noc_async_read_barrier();
+@@ -477,12 +500,33 @@
+         uint32_t l1 = weights_base + (round % nslice_weight_depth) * slice_weight_tiles * weight_tile_bytes;
+         const uint32_t n0 = y * out_n_tiles;
+         const uint32_t valid = tensor_n_tiles - n0 < out_n_tiles ? tensor_n_tiles - n0 : out_n_tiles;
+-        for (uint32_t k = 0; k < nslice_k_tiles; ++k) {
+-            const uint32_t row_page = (weight_k_tile_start + k) * tensor_n_tiles + n0;
+-            for (uint32_t n = 0; n < valid; ++n) {
+-                weight_reads.read(weights.get_noc_addr(row_page + n), l1 + n * weight_tile_bytes, weight_tile_bytes);
++        // One read per bank (see k_split_weight_page): bank chunk m holds dense tiles [cum(m), cum(m) + cnt) at pages
++        // run_page + m + NUM_DRAM_BANKS * t, contiguous in the bank (interleaved page p sits at (p / NUM_DRAM_BANKS) x the
++        // page size in bank p % NUM_DRAM_BANKS; prepare_conv2d_weights emits page size == tile size).
++        const uint32_t run_page = col_page_base + n0 * nslice_k_tiles;
++        const uint32_t len = nslice_k_tiles * valid;
++        const uint32_t q = len / num_banks;
++        const uint32_t r = len % num_banks;
++        const uint32_t chunks = len < num_banks ? len : num_banks;
++        uint32_t j = 0;  // dense tile index, k * valid + n
++        for (uint32_t m = 0; m < chunks; ++m) {
++            uint32_t cnt = q + (m < r ? 1 : 0);
++            uint64_t src = weights.get_noc_addr(run_page + m);
++            if (valid == out_n_tiles) {
++                weight_reads.read(src, l1 + j * weight_tile_bytes, cnt * weight_tile_bytes);
++                j += cnt;
++                continue;
++            }
++            // Short last slice: L1 rows are out_n_tiles apart, so the chunk splits at row ends.
++            while (cnt > 0) {
++                const uint32_t k = j / valid;
++                const uint32_t n = j - k * valid;
++                const uint32_t seg = valid - n < cnt ? valid - n : cnt;
++                weight_reads.read(src, l1 + (k * out_n_tiles + n) * weight_tile_bytes, seg * weight_tile_bytes);
++                src += seg * weight_tile_bytes;
++                j += seg;
++                cnt -= seg;
+             }
+-            l1 += out_n_tiles * weight_tile_bytes;
+         }
+         dataflow_kernel_lib::set_read_trid(weight_reads.noc, 0);
+     };
