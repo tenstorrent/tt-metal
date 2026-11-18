@@ -445,17 +445,23 @@ constexpr std::uint32_t matmul_fe_named_subblock_w() {
 }
 
 #ifdef TRISC_MATH
-// The M block a kernel names as a compile-time arg (minimal_matmul: M_block_tiles), else 0. HiFi2 row forms need M
-// block 4: on M block 2 the faster math lands the compute's L1 bursts under the reader's NoC writes.
-constexpr std::uint32_t matmul_fe_named_m_block() {
+// A compile-time arg the kernel names (minimal_matmul: M_block_tiles, M_blocks_per_core), else 0
+constexpr std::uint32_t matmul_fe_named_arg(const std::string_view name) {
 #ifdef KERNEL_COMPILE_TIME_ARG_MAP
     for (const auto& [arg_name, arg_value] : named_args_map) {
-        if (arg_name == std::string_view("M_block_tiles")) {
+        if (arg_name == name) {
             return arg_value;
         }
     }
 #endif
     return 0;
+}
+
+// HiFi2 row forms need M block 4 (M block 2 lands the compute's L1 bursts under the reader's NoC writes); a core with
+// one M block may run fewer rows than M_block_tiles, so the fp32 row form also needs two M blocks per core.
+constexpr std::uint32_t matmul_fe_named_m_block() { return matmul_fe_named_arg("M_block_tiles"); }
+constexpr bool matmul_fe_named_full_m_blocks() {
+    return matmul_fe_named_m_block() >= 4 && matmul_fe_named_arg("M_blocks_per_core") >= 2;
 }
 
 // llk_math_matmul_tile_mop, and the row form at HiFi2 half sync with a 32-bit DEST in a kernel with a constant block
@@ -518,7 +524,7 @@ constexpr std::uint32_t matmul_fe_rowform_min_kt() {
         return 3;
     } else if constexpr (
         matmul_hifi2_half_wide(MATH_FIDELITY, true, DST_ACCUM_MODE, llk_math_matmul_kernel_has_32bit_cb()) &&
-        matmul_fe_named_m_block() >= 4) {
+        matmul_fe_named_full_m_blocks()) {
         return 2;
     } else {
         return 0;
