@@ -4297,8 +4297,9 @@ def _beta_logits(b, rows, end_f):
 def kda_prefill_tp(kda, x, state, actual_end, valid_end_f, *, scan: str = "op", row_ids=None, snap=None):
     """OptimizedKDA.prefill (Stage 1 / 3's exact chunked path through slot 0 of `state`) for the TP prefill: the same
     resident weights (the chip's head shard), every KDA op told the chunk is not sequence-split (KDA_NO_SP), and the
-    chunk scan as ONE recurrent_chunk_scan program (scan="op"; the per-chunk state decay = the exact fp32
-    exp(sum g) of Stage 1, not the op's biased final_decay) or Stage 1's per-chunk op loop (scan="loop").
+    chunk scan as ONE recurrent_chunk_scan program (scan="op"; the per-chunk state decay = the fp32
+    expm1(sum g) over the valid rows, the scan's complement form S <- S + (dl S + k_dec_t^T U), not the op's BF16
+    final_decay) or Stage 1's per-chunk op loop (scan="loop").
     x [1, 1, C, 4096] bf16 -> o_proj partial [1, 1, C, 4096] bf16. row_ids: [1, 1, >= C, 1] fp32 row positions (the
     KDA object's own table holds 2,048 rows: buckets past 2,048 pass TPPrefill.row_ids).
     snap = (snap_end [1] uint32 device scalar, cut scratch) (GLM53_PF_KDA_SNAPSHOT, one-replay store A): the state after
@@ -4334,13 +4335,15 @@ def kda_prefill_tp(kda, x, state, actual_end, valid_end_f, *, scan: str = "op", 
     v_beta, kd, q_decay, intra, k_dec_t, final_decay, t_inv = ttnn.experimental.kda.prepare_chunk_recurrence(
         q, k, v, ttnn.reshape(g, (1, c, width)), beta_logits, h, memory_config=DRAM,
         compute_kernel_config=kda.ckc_kda, output_bf16_mask=0)  # fmt: skip
-    ttnn.deallocate(final_decay)  # recomputed in fp32 (Stage 1: the op's value is biased for slow channels)
+    ttnn.deallocate(final_decay)  # recomputed in fp32 from the fp32 gate over the valid rows only
     for t_ in (q, k, v, beta_logits):
         ttnn.deallocate(t_)
     g_valid = ttnn.multiply(g32, ttnn.lt(rows, valid_end_f))  # padded rows are identity steps
     g_sum = ttnn.sum(ttnn.reshape(g_valid, (n_chunks, CHUNK, h * d)), dim=1, keepdim=True)  # [N, 1, HD]
-    chunk_decay = ttnn.exp(ttnn.reshape(ttnn.permute(ttnn.reshape(g_sum, (n_chunks, h, d)), (1, 0, 2)),
-                                        (h, n_chunks, d, 1)))  # fmt: skip
+    # the chunk scan / summaries take the decay in complement form dl = expm1(G_last) (tt-metal #62895):
+    # S_{n+1} = S_n + (dl * S_n + k_dec_t^T U_n); 0 = no decay
+    chunk_decay = ttnn.expm1(ttnn.reshape(ttnn.permute(ttnn.reshape(g_sum, (n_chunks, h, d)), (1, 0, 2)),
+                                          (h, n_chunks, d, 1)))  # fmt: skip
     state0 = ttnn.reshape(s0, (h, d, d))
     groups = 1
     if scan == "grouped":  # the largest G <= KDA_GROUPS dividing the chunk count with one summary owner per core
@@ -4361,20 +4364,22 @@ def kda_prefill_tp(kda, x, state, actual_end, valid_end_f, *, scan: str = "op", 
         # the affine summaries / entry states in DRAM by default: L1-sharded summaries (128 KB per owner core) put an
         # L1 buffer under summarize's CBs with the full stack's L1 floor (00:04Z pair mock of the L0-L4 TTFT job: CB end 1,283,296 > buffer at 1,243,648)
         l1 = os.environ.get("GLM53_PF_KDA_GROUPED_MEM", "dram") == "l1"
-        summary_mem = ttnn.create_sharded_memory_config((hg, d, d), core_grid=owners,
+        summary_mem = ttnn.create_sharded_memory_config((hg, 2 * d, 2 * d), core_grid=owners,
                                                         strategy=ttnn.ShardStrategy.HEIGHT,
                                                         orientation=ttnn.ShardOrientation.ROW_MAJOR,
                                                         use_height_and_width_as_shard_shape=True) if l1 else DRAM  # fmt: skip
-        a_, b_, ta, tb = ttnn.experimental.kda.summarize_chunk_recurrence(
+        # the packed summaries [2, H * G, K, K + V]: K rows of [E | B] per group, E = A - I (complement form; an empty
+        # segment = (0, 0)), head transforms in slot 0, tail in slot 1. The ops see the mesh's axis 0 as a sequence-
+        # parallel axis (extent > 1), which needs the tail slot; every chip holds the whole chunk and actual_start 0 is
+        # rank-aligned, so no rank is split: the tail slot stays (0, 0) and the tail seed (state0) is never read
+        summaries = ttnn.experimental.kda.summarize_chunk_recurrence(
             *grouped, groups_per_head=groups, memory_config=summary_mem, compute_kernel_config=kda.ckc_fp32,
-            actual_start=kda.zero_u32)  # fmt: skip
-        ttnn.deallocate(ta)
-        ttnn.deallocate(tb)
+            actual_start=kda.zero_u32, tail=True)  # fmt: skip
         entry = ttnn.experimental.kda.affine_exclusive_scan(
-            a_, b_, state0, groups, memory_config=ttnn.L1_MEMORY_CONFIG if l1 else DRAM, compute_kernel_config=kda.ckc_fp32,
-            actual_start=kda.zero_u32, tail_entry_states=state0, local_rows=c)  # fmt: skip
-        ttnn.deallocate(a_)
-        ttnn.deallocate(b_)
+            summaries, state0, groups, memory_config=ttnn.L1_MEMORY_CONFIG if l1 else DRAM,
+            compute_kernel_config=kda.ckc_fp32, actual_start=kda.zero_u32, tail_entry_states=state0,
+            local_rows=c)  # fmt: skip
+        ttnn.deallocate(summaries)
         y, s_all = ttnn.experimental.kda.recurrent_chunk_scan(
             *grouped, entry, actual_start=kda.zero_u32, tail_entry_states=state0, groups_per_head=groups,
             memory_config=DRAM, compute_kernel_config=kda.ckc_fp32)  # fmt: skip
@@ -4399,7 +4404,8 @@ def kda_prefill_tp(kda, x, state, actual_end, valid_end_f, *, scan: str = "op", 
             )  # noqa: E731
             u = mm(sl(t_inv, CHUNK, CHUNK), ttnn.subtract(sl(v_beta, CHUNK, d), mm(sl(kd, CHUNK, d), st)))
             outs.append(ttnn.add(mm(sl(q_decay, CHUNK, d), st), mm(sl(intra, CHUNK, CHUNK), u)))
-            new_state = ttnn.add(ttnn.multiply(st, sl(chunk_decay, d, 1)), mm(sl(k_dec_t, d, CHUNK), u))
+            delta = ttnn.add(ttnn.multiply(st, sl(chunk_decay, d, 1)), mm(sl(k_dec_t, d, CHUNK), u))
+            new_state = ttnn.add(st, delta)  # complement form: S + (dl S + k_dec_t^T U)
             st = keep_if_dead(live[i], new_state, st)
         y = outs[0] if n_chunks == 1 else ttnn.concat(outs, dim=1)
         final_state = ttnn.reshape(st, (1, h, d, d))
@@ -4482,8 +4488,9 @@ def kda_prefill_packed(kda, x, states, masks, ends, *, scan: str = "op", carry_i
             ttnn.deallocate(t_)
         g_sum = ttnn.sum(ttnn.reshape(g32_k, (n_chunks, CHUNK, h * d)), dim=1, keepdim=True)
         ttnn.deallocate(g32_k)
-        chunk_decay = ttnn.exp(ttnn.reshape(ttnn.permute(ttnn.reshape(g_sum, (n_chunks, h, d)), (1, 0, 2)),
-                                            (h, n_chunks, d, 1)))  # fmt: skip
+        # complement form dl = expm1(G_last), as recurrent_chunk_scan takes it (tt-metal #62895)
+        chunk_decay = ttnn.expm1(ttnn.reshape(ttnn.permute(ttnn.reshape(g_sum, (n_chunks, h, d)), (1, 0, 2)),
+                                              (h, n_chunks, d, 1)))  # fmt: skip
         ttnn.deallocate(g_sum)
         state0 = ttnn.reshape(s0, (h, d, d))
         y, s_fin = ttnn.experimental.kda.recurrent_chunk_scan(
