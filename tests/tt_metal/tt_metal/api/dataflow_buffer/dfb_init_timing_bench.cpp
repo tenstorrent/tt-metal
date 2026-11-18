@@ -47,6 +47,7 @@
 #include "tt_metal/hw/inc/internal/tt-2xx/dataflow_buffer/dataflow_buffer_config.h"
 #include "tt_metal/impl/host_api/temp_quasar_api.hpp"
 #include "distributed/mesh_device_impl.hpp"
+#include "tt_metal/test_utils/launch_program.hpp"
 
 namespace tt::tt_metal {
 

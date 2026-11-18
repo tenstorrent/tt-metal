@@ -19,6 +19,7 @@
 #include "tt_metal/fabric/fabric_context.hpp"
 #include "intermesh_routing_test_utils.hpp"
 #include "tt_metal/impl/dispatch/slow_dispatch.hpp"
+#include "tt_metal/test_utils/launch_program.hpp"
 
 namespace tt::tt_fabric::fabric_router_tests::multihost_utils {
 std::random_device rd;  // Non-deterministic seed source

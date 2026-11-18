@@ -39,6 +39,7 @@
 #include "tt_metal/fabric/fabric_builder_context.hpp"
 #include <tt-umd/types/core_coordinates.hpp>
 #include "test_host_kernel_common.hpp"
+#include "tt_metal/test_utils/launch_program.hpp"
 
 namespace tt::tt_fabric::fabric_router_tests {
 std::random_device rd;  // Non-deterministic seed source

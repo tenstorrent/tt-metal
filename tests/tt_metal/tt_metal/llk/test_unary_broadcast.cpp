@@ -37,7 +37,7 @@
 #include <tt-metalium/tt_backend_api_types.hpp>
 #include <impl/context/metal_context.hpp>
 #include <tt-metalium/tt_metal.hpp>
-#include "impl/program/program_impl.hpp"
+#include "tt_metal/test_utils/launch_program.hpp"
 #include "tt_metal/test_utils/comparison.hpp"
 #include "tt_metal/test_utils/print_helpers.hpp"
 #include "tt_metal/test_utils/df/float32.hpp"

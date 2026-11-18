@@ -20,7 +20,7 @@
 #include "impl/context/metal_context.hpp"
 #include "device_fixture.hpp"
 #include "tt_metal/impl/dispatch/slow_dispatch.hpp"
-#include "impl/program/program_impl.hpp"
+#include "tt_metal/test_utils/launch_program.hpp"
 #include "metal2_host_api/test_helpers.hpp"
 
 namespace tt::tt_metal::experimental {

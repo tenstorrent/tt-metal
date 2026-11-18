@@ -11,7 +11,7 @@
 #include <random>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tt_metal.hpp>
-#include "impl/program/program_impl.hpp"
+#include "tt_metal/test_utils/launch_program.hpp"
 #include <algorithm>
 #include <array>
 #include <cmath>

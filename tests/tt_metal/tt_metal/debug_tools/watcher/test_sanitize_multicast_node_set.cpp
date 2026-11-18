@@ -26,7 +26,7 @@
 #include <tt-metalium/tensor/mesh_tensor.hpp>
 #include "debug_tools_fixture.hpp"
 #include "impl/context/metal_context.hpp"
-#include "impl/program/program_impl.hpp"
+#include "tt_metal/test_utils/launch_program.hpp"
 
 namespace {
 

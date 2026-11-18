@@ -11,6 +11,7 @@
 #include <tt-metalium/bfloat16.hpp>
 #include <tt-metalium/constants.hpp>
 
+#include "impl/program/program_impl.hpp"
 #include "llk_device_fixture.hpp"
 #include "single_core_compute_runners.hpp"
 

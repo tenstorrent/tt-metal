@@ -39,6 +39,7 @@
 #include "impl/context/metal_context.hpp"
 #include "impl/kernels/kernel.hpp"
 #include "distributed/mesh_device_impl.hpp"
+#include "tt_metal/test_utils/launch_program.hpp"
 
 using namespace tt;
 using namespace tt::tt_metal;

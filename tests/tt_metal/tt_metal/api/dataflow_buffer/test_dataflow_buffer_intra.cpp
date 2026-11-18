@@ -14,6 +14,7 @@
 #include <array>
 #include <map>
 #include <string_view>
+#include "tt_metal/test_utils/launch_program.hpp"
 
 namespace tt::tt_metal {
 

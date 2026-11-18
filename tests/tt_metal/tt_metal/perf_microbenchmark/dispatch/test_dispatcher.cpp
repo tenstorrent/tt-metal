@@ -19,7 +19,7 @@
 #include <tt-metalium/math.hpp>
 #include "tt_metal/impl/host_api/temp_quasar_api.hpp"
 #include "tt_metal/impl/dispatch/topology.hpp"
-#include "tt_metal/impl/program/program_impl.hpp"
+#include "tt_metal/test_utils/launch_program.hpp"
 #include "tests/tt_metal/tt_metal/perf_microbenchmark/dispatch/common.h"
 #include "distributed/mesh_device_impl.hpp"
 

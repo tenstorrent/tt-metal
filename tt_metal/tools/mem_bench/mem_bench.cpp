@@ -26,6 +26,7 @@
 #include "tt-metalium/program.hpp"
 #include "tt_metal/impl/dispatch/util/size_literals.hpp"
 #include "tt_metal/impl/dispatch/vector_aligned.hpp"
+#include "tt_metal/test_utils/launch_program.hpp"
 #include "work_thread.hpp"
 
 using namespace tt;

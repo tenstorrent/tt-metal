@@ -15,7 +15,7 @@
 #include <tt-metalium/tt_metal.hpp>
 #include <tt-metalium/circular_buffer_config.hpp>
 #include "tt_metal/impl/dispatch/slow_dispatch.hpp"
-#include "impl/program/program_impl.hpp"
+#include "tt_metal/test_utils/launch_program.hpp"
 #include "tt_metal/test_utils/deprecated/tensor.hpp"
 #include <tt-umd/types/core_coordinates.hpp>
 
