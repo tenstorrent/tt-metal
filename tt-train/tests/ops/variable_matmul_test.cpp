@@ -14,6 +14,7 @@
 #include "ttnn/operations/data_movement/slice/slice.hpp"
 #include "ttnn/operations/experimental/minimal_matmul/minimal_matmul.hpp"
 #include "ttnn/operations/matmul/matmul.hpp"
+#include "ttnn_fixed/trivial_ttnn_ops.hpp"
 
 namespace {
 
@@ -647,4 +648,30 @@ TEST_F(VariableMatmulTest, CacheHit_InputAndOutputRow_FreshTensorsWithOtherMAndK
         }
     }
     EXPECT_EQ(untouched_err, 0.0F) << "the cache hit wrote outside its rows";
+}
+
+// The kernels' compile-time args bake in where each tensor lives, and a cache hit only patches addresses. So a launch
+// on an L1 input after one on a DRAM input of the same shape must compile its own program, or its kernels would read
+// the L1 address in DRAM.
+TEST_F(VariableMatmulTest, CacheMiss_L1InputAfterDramInput) {
+    using ttml::test_utils::CacheExpectation;
+    auto* device = &ttml::test_utils::device_with_empty_program_cache();
+
+    const uint32_t K_parent = 512U, M = 128U, N = 256U;
+    const auto dram_in0 = create_random_device_tensor(K_parent, M, device, /*seed=*/73U);
+    const auto l1_in0 = ttml::ttnn_fixed::to_l1_interleaved(dram_in0);
+    const auto in1 = create_random_device_tensor(K_parent, N, device, /*seed=*/74U);
+    const auto offsets = make_offsets({0U, 64U, 192U, 256U, 512U}, device);  // start 1: K rows [64, 192)
+    auto launch = [&](const ttnn::Tensor& in0) {
+        return ttml::metal::variable_matmul_k_sliced(
+            in0, in1, kConfig, offsets, /*offsets_start_index=*/1U, /*transpose_a=*/true, /*transpose_b=*/false);
+    };
+
+    auto entries = device->num_program_cache_entries();
+    const auto dram_result = launch(dram_in0);
+    ttml::test_utils::expect_cache(entries, CacheExpectation::Miss, "DRAM launch");
+    entries = device->num_program_cache_entries();
+    const auto l1_result = launch(l1_in0);
+    ttml::test_utils::expect_cache(entries, CacheExpectation::Miss, "L1 launch");
+    EXPECT_EQ(max_abs_error(l1_result, dram_result), 0.0F) << "the L1 launch differs from the DRAM launch";
 }
