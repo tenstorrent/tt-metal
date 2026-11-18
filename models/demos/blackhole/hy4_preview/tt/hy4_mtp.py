@@ -51,6 +51,13 @@ class Hy4MTP:
                 k: sd[k + ".weight"].float().reshape(1, 1, 1, HID) for k in ("enorm", "hnorm", "final_layernorm")
             }
         self.shared = ly.shared_dec if getattr(ly, "shared_dec", None) is not None else with_decode_cfg(ly.shared)
+        # B47c (HY4_B47C_RMS=1, default OFF, draft-only numerics like HY4_MTP_NORM=fused): the norm chains of ``pre`` / ``forward`` as 32-core fused programs
+        # (hy4_rms_fused: [residual add +] rms norm, fp32 SFPU maths, one program per norm instead of 6-8 ops)
+        from models.demos.blackhole.hy4_preview.tt import hy4_rms_fused as _RF
+
+        self.rms_fused = _RF.rms_fused if _RF.enabled() else None
+        self._w4 = {}
+        self._sdw = {k: sd[k + ".weight"].float().reshape(1, 1, 1, HID) for k in ("enorm", "hnorm", "final_layernorm")}
 
     def _rms6(self, x32, wsc):
         """x32 [1,1,n,D] fp32, wsc = weight * sqrt(D) (fp32, [1,1,1,D] or [1,1,n,D]) -> bf16 [1,1,n,D]."""
@@ -99,6 +106,18 @@ class Hy4MTP:
             self._wsc[k] = upload(self.md, w.contiguous(), ttnn.float32)
         return self._wsc[k]
 
+    def _w4S(self, key, w32, S):
+        """weight * sqrt(D), fp32, rows replicated [1,1,S,D] (B47c fused norm)."""
+        k = (key, S)
+        if k not in self._w4:
+            w = (
+                self._sdw[key]
+                if key in self._sdw
+                else ttnn.to_torch(ttnn.get_device_tensors(w32)[0]).float().reshape(1, 1, 1, HID)
+            )
+            self._w4[k] = upload(self.md, (w * float(HID) ** 0.5).expand(1, 1, S, HID).contiguous(), ttnn.float32)
+        return self._w4[k]
+
     def embed(self, tok):
         """tok uint32 [1, S] ROW_MAJOR replicated -> bf16 [1,1,S,D] replicated (shared embedding table, vocab column-sharded on the hidden dim)."""
         ch = self.ch
@@ -110,6 +129,18 @@ class Hy4MTP:
     def pre(self, e, h):
         """e bf16 [1,1,S,D] embeddings, h bf16 [1,1,S,D] main hidden -> x fp32 [1,1,S,D] = eh_proj(cat[enorm e, hnorm h])."""
         ch = self.ch
+        if self.rms_fused is not None:
+            S = int(e.shape[2])
+            cat = ttnn.allocate_tensor_on_device(
+                ttnn.Shape([1, 1, S, 2 * HID]), ttnn.bfloat16, ttnn.TILE_LAYOUT, self.md, ttnn.DRAM_MEMORY_CONFIG
+            )
+            self.rms_fused(e, self._w4S("enorm", self.w_e, S), self.eps, out=cat, out_off=0)
+            self.rms_fused(h, self._w4S("hnorm", self.w_h, S), self.eps, out=cat, out_off=HID // 32)
+            x = ttnn.linear(cat, self.ly.eh_proj, compute_kernel_config=self.ckc)
+            ttnn.deallocate(cat)
+            xg = ch.mc.allgather(x, ch.ccl, axis=1, dim=3)
+            ttnn.deallocate(x)
+            return xg  # bf16; the fused norm / residual programs read bf16 x (exact widening)
         e32 = ttnn.typecast(e, ttnn.float32)
         h32 = ttnn.typecast(h, ttnn.float32)
         if self.fused_norm:
@@ -179,6 +210,8 @@ class Hy4MTP:
         e = self.embed(tok)
         x = self.pre(e, h)
         ttnn.deallocate(e)
+        if self.rms_fused is not None and taps is None:
+            return self._forward_rf(x, tabs, dense8)
         tp("x0", x)
         h1 = self._norm(x, ly.w_in32)
         a = ly.attn.decode_step_pool(h1, self.opt, tabs, dense8)
@@ -196,6 +229,23 @@ class Hy4MTP:
         tp("x2", x)
         out = self._norm(x, self.w_fin)
         ttnn.deallocate(x)
+        return out
+
+    def _forward_rf(self, x, tabs, dense8):
+        """B47c: forward after ``pre`` with the fused norm programs (x bf16 [1,1,S,D])."""
+        ly = self.ly
+        S = int(x.shape[2])
+        h1 = self.rms_fused(x, self._w4S(id(ly.w_in32), ly.w_in32, S), self.eps)
+        a = ly.attn.decode_step_pool(h1, self.opt, tabs, dense8)
+        ttnn.deallocate(h1)
+        h2, x1 = self.rms_fused(x, self._w4S(id(ly.w_post32), ly.w_post32, S), self.eps, res=a, out_x=True)
+        ttnn.deallocate(a)
+        ttnn.deallocate(x)
+        y = self.mlp(h2)
+        ttnn.deallocate(h2)
+        out = self.rms_fused(x1, self._w4S("final_layernorm", self.w_fin, S), self.eps, res=y)
+        ttnn.deallocate(y)
+        ttnn.deallocate(x1)
         return out
 
 
