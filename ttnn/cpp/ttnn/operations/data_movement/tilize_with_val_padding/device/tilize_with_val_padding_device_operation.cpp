@@ -113,6 +113,12 @@ void TilizeWithValPaddingDeviceOperation::validate_on_program_cache_miss(
             input_tensor.dtype() == DataType::UINT32 or input_tensor.dtype() == DataType::FLOAT32 or
             input_tensor.dtype() == DataType::UINT16 or input_tensor.dtype() == DataType::FP8_E4M3,
         "Can only tilize bfloat16/float32 or int32/uint32/uint16 or fp8_e4m3 tensors");
+    // Quasar's packer cannot convert Int32 in DEST to a float format.
+    TT_FATAL(
+        !(input_tensor.device()->arch() == tt::ARCH::QUASAR && input_tensor.dtype() == DataType::INT32 &&
+          operation_attributes.output_dtype != DataType::INT32),
+        "INT32 tilize to {} is not supported on Quasar; the output must be INT32",
+        operation_attributes.output_dtype);
     // fp8 tile INPUT unpacks to fp32 in DEST and packs to any float TILE format. Reject non-float outputs:
     // fp8 itself is ROW_MAJOR-only, and integer outputs are meaningless for a float input.
     if (input_tensor.dtype() == DataType::FP8_E4M3) {
