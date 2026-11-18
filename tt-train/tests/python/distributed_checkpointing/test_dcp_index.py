@@ -349,20 +349,18 @@ def test_a_header_save_would_not_write_is_refused(tmp_path, expect_error):
             read_user_header(ckpt)
 
 
-def test_staging_directory_naming(tmp_path, expect_error):
-    """A staging directory is named by its nonce, and only a shared one (a multi-rank save's) may already exist."""
+def test_staging_directory_naming(tmp_path):
+    """A staging directory is named by its nonce, and may already exist: every rank of a multi-rank save creates the
+    directory its ranks agreed on."""
     final = str(tmp_path / "step_0000010")
-    staging = begin_staging(final, nonce=42, shared=False)
+    staging = begin_staging(final, nonce=42)
     assert staging == staging_dir(final, 42) == final + ".partial-42" and os.path.isdir(os.path.join(staging, "data"))
-    # Every rank of a multi-rank save creates the directory its ranks agreed on; a lone save's must be new.
-    assert begin_staging(final, nonce=42, shared=True) == staging
-    with expect_error(FileExistsError, "File exists"):
-        begin_staging(final, nonce=42, shared=False)
+    assert begin_staging(final, nonce=42) == staging
 
 
 def test_staging_becomes_complete_only_at_finalize(tmp_path, expect_error):
     final = str(tmp_path / "step_0000010")
-    staging = begin_staging(final, nonce=100, shared=False)
+    staging = begin_staging(final, nonce=100)
     assert ".partial-" in staging and os.path.isdir(os.path.join(staging, "data"))
     write_header(staging, {"step": 10})
     write_index(staging, _index())
@@ -384,7 +382,7 @@ def test_staging_becomes_complete_only_at_finalize(tmp_path, expect_error):
     with expect_error(IncompleteCheckpointError, "no index.json"):
         read_index(str(tmp_path / "nowhere"))
 
-    staging2 = begin_staging(final, nonce=1, shared=False)
+    staging2 = begin_staging(final, nonce=1)
     write_index(staging2, _index())
     with expect_error(CheckpointError, "already exists"):
         finalize_staging(staging2, final)
@@ -411,7 +409,7 @@ def test_the_crc_column_is_validated(expect_error):
 def test_unreadable_index_or_header_is_incomplete(tmp_path, expect_error):
     """An index or header that is missing, truncated or malformed is an IncompleteCheckpointError."""
     final = str(tmp_path / "step_0000010")
-    staging = begin_staging(final, nonce=2, shared=False)
+    staging = begin_staging(final, nonce=2)
     write_index(staging, _index())
     write_header(staging, {"step": 10})
     finalize_staging(staging, final)
@@ -460,9 +458,9 @@ def test_finalize_keeps_a_checkpoint_committed_meanwhile(tmp_path, monkeypatch, 
     """Without overwrite, a checkpoint another save commits while this one finalizes is kept, and this save is
     refused rather than moving it aside."""
     final = str(tmp_path / "step_0000010")
-    staging = begin_staging(final, nonce=9, shared=False)
+    staging = begin_staging(final, nonce=9)
     write_index(staging, _index())
-    other = begin_staging(final, nonce=10, shared=False)
+    other = begin_staging(final, nonce=10)
     other_index = _index()
     other_index.checkpoint_id = "the other save"
     write_index(other, other_index)
@@ -484,12 +482,12 @@ def test_finalize_keeps_a_checkpoint_committed_meanwhile(tmp_path, monkeypatch, 
 
 def test_a_failed_overwrite_puts_the_previous_checkpoint_back(tmp_path, monkeypatch, expect_error):
     final = str(tmp_path / "step_0000010")
-    staging = begin_staging(final, nonce=3, shared=False)
+    staging = begin_staging(final, nonce=3)
     write_index(staging, _index())
     finalize_staging(staging, final)
     previous = read_index(final).checkpoint_id
 
-    staging2 = begin_staging(final, nonce=4, shared=False)
+    staging2 = begin_staging(final, nonce=4)
     replacement = _index()
     replacement.checkpoint_id = "replacement"
     write_index(staging2, replacement)
@@ -513,10 +511,10 @@ def test_a_failed_overwrite_puts_the_previous_checkpoint_back(tmp_path, monkeypa
 def test_failed_rollback_names_the_previous_checkpoint(tmp_path, monkeypatch, expect_error):
     """An overwrite that fails and cannot roll back says where the previous checkpoint is."""
     final = str(tmp_path / "step_0000010")
-    staging = begin_staging(final, nonce=5, shared=False)
+    staging = begin_staging(final, nonce=5)
     write_index(staging, _index())
     finalize_staging(staging, final)
-    staging2 = begin_staging(final, nonce=6, shared=False)
+    staging2 = begin_staging(final, nonce=6)
     write_index(staging2, _index())
     real_rename = os.rename
 
@@ -538,10 +536,10 @@ def test_failed_rollback_names_the_previous_checkpoint(tmp_path, monkeypatch, ex
 def test_overwrite_warns_if_old_checkpoint_stays(tmp_path, monkeypatch):
     """An overwrite warns when the previous checkpoint, moved aside, cannot be removed."""
     final = str(tmp_path / "step_0000010")
-    staging = begin_staging(final, nonce=7, shared=False)
+    staging = begin_staging(final, nonce=7)
     write_index(staging, _index())
     finalize_staging(staging, final)
-    staging2 = begin_staging(final, nonce=8, shared=False)
+    staging2 = begin_staging(final, nonce=8)
     write_index(staging2, _index())
 
     def busy_rmtree(path, onerror):  # an NFS server keeping an open file as .nfsXXXX
