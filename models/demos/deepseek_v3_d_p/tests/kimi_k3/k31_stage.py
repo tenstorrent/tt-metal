@@ -2,13 +2,15 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """Kimi-K3.1's deployments as the K3.1 tests share them: the runner's mesh, context, chunk and stage split, the
-measured PP4 user capacity, and PP4 rank 0 built with the K3 manifest's knobs.
+measured PP4 user capacity, and any stage of either layout built with the K3 manifest's knobs.
 
 Two layouts: PP4 (one 8x4 stage per galaxy, SP=8 on axis 0, 5120-token chunks), and the manifest's default, K3's
-4x4 stages (two per galaxy, SP=4 on axis 1, TP=4 on axis 0, 2560-token chunks), eight of them for the 93 layers."""
+4x4 stages (two per galaxy, SP=4 on axis 1, TP=4 on axis 0, 2560-token chunks), eight of them for the 93 layers.
+`STAGE_LAYOUTS` holds both; it is the one owner of the layouts in the tests (synthetic.py derives from it)."""
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from pathlib import Path
 
 import pytest
@@ -17,7 +19,7 @@ from loguru import logger
 from models.demos.common.prefill.adapter import PrefillRunParams, get_adapter
 from models.demos.common.prefill.runners.runner_utils import compute_layer_split
 from models.demos.deepseek_v3_d_p.reference.kimi_k3_1_config import KimiK31Config
-from models.demos.deepseek_v3_d_p.tests.fabric_profiles import torus_xy_device_params
+from models.demos.deepseek_v3_d_p.tests.fabric_profiles import torus_x_device_params, torus_xy_device_params
 
 ADAPTER = get_adapter("kimi_k3_1")
 MESH = (8, 4)
@@ -45,7 +47,34 @@ STAGES_4X4 = compute_layer_split(
     KimiK31Config.NUM_LAYERS, NUM_STAGES_4X4, ADAPTER.layer_split_boundaries(KimiK31Config.NUM_LAYERS)
 )
 
-# The runner's mesh: 8x4 torus, the adapter's fabric payload and L1_SMALL, the default trace region.
+
+@dataclass(frozen=True)
+class StageLayout:
+    """One K3.1 layout's stages: the mesh axis SP runs on (TP on the other), the chunk every stage prefills, and
+    each stage's (first layer, layer count)."""
+
+    sp_axis: int
+    # 640 tokens per chip on both layouts: the KDA recurrence's sequence quantum,
+    # TILE(32) * KDA_SUMMARY_GROUP_CHUNKS(20) * SP.
+    chunk: int
+    stages: tuple[tuple[int, int], ...]
+
+    @property
+    def tp_axis(self) -> int:
+        return 1 - self.sp_axis
+
+
+# Mesh shape -> layout: one Galaxy as one 8x4 stage, or one tray half as one 4x4 stage.
+STAGE_LAYOUTS = {
+    MESH: StageLayout(sp_axis=0, chunk=CHUNK, stages=tuple(STAGES)),
+    MESH_4X4: StageLayout(sp_axis=SP_AXIS_4X4, chunk=CHUNK_4X4, stages=tuple(STAGES_4X4)),
+}
+assert STAGE_LAYOUTS[MESH_4X4].tp_axis == TP_AXIS_4X4
+
+# The runner's mesh for each layout, at the adapter's fabric payload and L1_SMALL and the default trace region:
+# 8x4 Ring/Ring; 4x4 Linear/Ring (FABRIC_2D_TORUS_X), which the runner opens for an SP-on-axis-1 rank. The 4x4
+# row needs the Galaxy narrowed to one tray half (TT_VISIBLE_DEVICES and the 4x4 descriptor, set by
+# tests/run_4x4_stage_tests.sh); unnarrowed, the system mesh is 8x4 and requires_mesh_topology skips it.
 PLACEMENT = [
     pytest.param(
         MESH,
@@ -56,45 +85,58 @@ PLACEMENT = [
         ),
         marks=pytest.mark.requires_mesh_topology(mesh_shape=MESH, topology="mesh-8x4"),
         id="torus-xy-8x4",
-    )
+    ),
+    pytest.param(
+        MESH_4X4,
+        torus_x_device_params(
+            fabric_payload_size=ADAPTER.fabric_payload_size(),
+            l1_small_size=ADAPTER.l1_small_size,
+            trace_region_size=TRACE_REGION_SIZE,
+        ),
+        marks=pytest.mark.requires_mesh_topology(mesh_shape=MESH_4X4, topology="mesh-4x4"),
+        id="4x4-sp1",
+    ),
 ]
 
 
-def weight_cache_path() -> Path:
-    """The K3.1 TTNN weight cache the runner reads; skips when there is none."""
-    path = ADAPTER.weight_cache_path(MESH)
+def weight_cache_path(mesh_shape: tuple) -> Path:
+    """The K3.1 TTNN weight cache the runner reads for this layout; skips when there is none."""
+    path = ADAPTER.weight_cache_path(mesh_shape, STAGE_LAYOUTS[mesh_shape].sp_axis)
     if not any(path.resolve().glob(".layer_*.complete")):
         pytest.skip(f"no K3.1 TTNN weight cache at {path}")
     return path.resolve()
 
 
-def first_stage_params(max_seq_len: int):
-    """(hf_config, PrefillRunParams) for PP4 rank 0 (first, not last rank), one user, eager, with the K3
-    manifest's knobs as the runner sets them."""
-    first_layer_idx, num_layers = STAGES[0]
+def stage_params(mesh_shape: tuple, stage: int, max_seq_len: int):
+    """(hf_config, PrefillRunParams) for one stage of the layout on `mesh_shape`, one user, eager, with the K3
+    manifest's knobs as the runner sets them; stage 0 is the first rank, the layout's last stage the last."""
+    layout = STAGE_LAYOUTS[mesh_shape]
+    first_layer_idx, num_layers = layout.stages[stage]
     hf_config = ADAPTER.load_hf_config()
     hf_config.max_seq_len = max_seq_len
     params = PrefillRunParams(
-        mesh_shape=MESH,
+        mesh_shape=mesh_shape,
         num_layers=num_layers,
         first_layer_idx=first_layer_idx,
-        is_first_rank=True,
-        is_last_rank=False,
+        is_first_rank=stage == 0,
+        is_last_rank=stage == len(layout.stages) - 1,
         max_seq_len=max_seq_len,
-        chunk_size=CHUNK,
+        chunk_size=layout.chunk,
         num_users=1,
         capacity_factor=8,  # the runner's PREFILL_CAPACITY_FACTOR default
         num_links=2,
         gate_mode_name=ADAPTER.default_gate_mode,
         kv_only_last_layer=False,
-        weight_cache_path=weight_cache_path(),
+        weight_cache_path=weight_cache_path(mesh_shape),
+        sp_axis=layout.sp_axis,
+        tp_axis=layout.tp_axis,
         tp_shard_kv=True,
         sparse_kv_cache_format=ADAPTER.default_sparse_kv_cache_format,
         use_trace=False,
     )
     logger.info(
-        f"K3.1 PP4 rank 0 layers [{first_layer_idx}, {first_layer_idx + num_layers}) "
-        f"max_seq_len={max_seq_len} kvpe={params.sparse_kv_cache_format} "
-        f"cache={params.weight_cache_path}"
+        f"K3.1 {mesh_shape[0]}x{mesh_shape[1]} stage {stage}: layers [{first_layer_idx}, {first_layer_idx + num_layers}) "
+        f"sp_axis={layout.sp_axis} chunk={layout.chunk} max_seq_len={max_seq_len} "
+        f"kvpe={params.sparse_kv_cache_format} cache={params.weight_cache_path}"
     )
     return hf_config, params

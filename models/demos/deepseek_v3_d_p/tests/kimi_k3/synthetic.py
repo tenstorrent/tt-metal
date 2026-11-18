@@ -20,8 +20,6 @@ Every helper takes its layout from the mesh it runs on (`stage_layout`): an 8x4 
 4x4 stage (one tray half, tests/run_4x4_stage_tests.sh), as the K3.1 manifests lay them out.
 """
 
-from dataclasses import dataclass
-
 import pytest
 import torch
 
@@ -33,6 +31,7 @@ from models.demos.deepseek_v3_d_p.reference.kimi_k3_1_config import KimiK31Confi
 from models.demos.deepseek_v3_d_p.reference.kimi_k3_config import KimiK3Config, kimi_k3_kda_config
 from models.demos.deepseek_v3_d_p.tests.fabric_profiles import torus_x_device_params
 from models.demos.deepseek_v3_d_p.tests.kda.utils import random_weights as random_kda_weights
+from models.demos.deepseek_v3_d_p.tests.kimi_k3.k31_stage import STAGE_LAYOUTS, StageLayout
 from models.demos.deepseek_v3_d_p.tt.attn_res.weights import CHECKPOINT_PREFIX
 from models.demos.deepseek_v3_d_p.tt.kimi_k3.transformer import TtKimiK3Transformer
 from models.demos.deepseek_v3_d_p.tt.mla.utils import blockcyclic_positions
@@ -41,26 +40,9 @@ from models.demos.deepseek_v3_d_p.tt.tt_parallel_embedding import TtParallelEmbe
 from models.demos.deepseek_v3_d_p.utils.test_utils import gather_cache_natural
 
 
-@dataclass(frozen=True)
-class StageLayout:
-    """A prefill stage's mesh layout: the mesh axis SP runs on (TP on the other) and the chunk it prefills."""
-
-    sp_axis: int
-    # The stage's production chunk, 640 tokens per chip: the KDA recurrence's sequence quantum,
-    # TILE(32) * KDA_SUMMARY_GROUP_CHUNKS(20) * SP.
-    chunk: int
-
-    @property
-    def tp_axis(self) -> int:
-        return 1 - self.sp_axis
-
-
-# Mesh shape -> layout, as the K3.1 manifests lay out their stages: one Galaxy as one 8x4 stage (SP=8 on
-# axis 0), or one tray half as one 4x4 stage (SP=4 on the axis-1 ring, TP=4 on the axis-0 line).
-STAGE_LAYOUTS = {(8, 4): StageLayout(sp_axis=0, chunk=5120), (4, 4): StageLayout(sp_axis=1, chunk=2560)}
-
-
 def stage_layout(mesh_device) -> StageLayout:
+    """The K3.1 layout of the mesh's shape (`k31_stage.STAGE_LAYOUTS`): one Galaxy as one 8x4 stage (SP=8 on
+    axis 0), or one tray half as one 4x4 stage (SP=4 on the axis-1 ring, TP=4 on the axis-0 line)."""
     return STAGE_LAYOUTS[tuple(mesh_device.shape)]
 
 
