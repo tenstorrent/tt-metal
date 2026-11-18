@@ -35,8 +35,10 @@ transport accepts it without changes.
 
 from __future__ import annotations
 
+import gc
 import logging
 import os
+import time
 from typing import Any, Optional, Tuple
 
 import torch
@@ -255,6 +257,18 @@ def weights_ref_hf_dict(model) -> dict[str, ttnn.Tensor]:
     if isinstance(model, Llama):
         return _llama_weights_ref_hf_dict(model)
     raise TypeError(f"weights_ref_hf_dict supports ttml Llama and Qwen3 models, got {type(model).__name__}")
+
+
+def push_weights(client: Any, model: Any, version: int) -> float:
+    """Sends the policy weights through ``client`` as ``version``; returns the push time in seconds."""
+    start = time.perf_counter()
+    hf_dict = weights_ref_hf_dict(model)
+    try:
+        client.send_weights(hf_dict, version=version)
+    finally:
+        del hf_dict
+        gc.collect()
+    return time.perf_counter() - start
 
 
 def _llama_weights_ref_hf_dict(model) -> dict[str, ttnn.Tensor]:

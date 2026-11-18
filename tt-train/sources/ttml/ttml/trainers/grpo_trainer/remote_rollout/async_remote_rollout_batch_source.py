@@ -4,10 +4,9 @@
 
 from __future__ import annotations
 
-import time
 from typing import Any, Iterator, Optional, Tuple
 
-from ..grpo_ttml_model import weights_ref_hf_dict
+from ..grpo_ttml_model import push_weights
 from ..rollout_batch_source import RolloutBatchSource, ScoredRolloutBatch, validate_rollout_batch
 from .async_rollout import AsyncRolloutClient
 
@@ -64,14 +63,11 @@ class AsyncRemoteRolloutBatchSource(RolloutBatchSource):
 
     def update_weights(self, model: Any, step: int) -> float:
         self._step = step
-        if self._batches_left == 0:
-            return 0.0
         if self._pushed_version is not None and step - self._pushed_version < self._weight_sync_every:
             return 0.0
-        start = time.perf_counter()
-        self._client.send_weights(weights_ref_hf_dict(model), version=step)
+        duration = push_weights(self._client, model, step)
         self._pushed_version = step
-        return time.perf_counter() - start
+        return duration
 
     def close(self) -> None:
         self._client.shutdown()
