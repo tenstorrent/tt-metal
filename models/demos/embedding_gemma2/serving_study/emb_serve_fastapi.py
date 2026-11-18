@@ -565,7 +565,9 @@ class AsyncEmbeddingPool:
             self.metrics.clear()
             self.batch_sizes.clear()
             self.texts_per_chip = [0] * self.n
-        out: dict = {"count": len(samples), "status": self.status, "texts_per_chip": per_chip}
+        # "chips" names this front-end: with several on one port (--reuse-port) /metrics answers from whichever one
+        # takes the connection, so a caller polls on new connections until it has seen every chip set.
+        out: dict = {"count": len(samples), "status": self.status, "chips": CHIPS[: self.n], "texts_per_chip": per_chip}
         hist: dict = {}
         for s in sizes:
             hist[s] = hist.get(s, 0) + 1
