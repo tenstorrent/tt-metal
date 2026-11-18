@@ -596,6 +596,8 @@ def prepare_unary_inputs(
         return prepare_trig_inputs(src_A, mathop, input_format)
     if mathop == MathOperation.Signbit:
         return prepare_signbit_inputs(src_A, src_B, input_format, output_format)
+    if mathop == MathOperation.Heaviside:
+        return prepare_heaviside_inputs(src_A, src_B, input_format, output_format)
     if mathop in COMP_FORMAT_OPS:
         # Unsigned formats need non-negative stimuli (a signed split would wrap under the unsigned
         # dtype); signed formats use the sign-vs-magnitude builder.
@@ -769,6 +771,108 @@ def _elwadd_datacopy_dest_image(src: torch.Tensor) -> torch.Tensor:
     one (torch's fp32 -> bf16 cast), which would put the sign bit back.
     """
     return torch.where((src == 0) | torch.isnan(src), torch.zeros_like(src), src)
+
+
+# Heaviside edge inputs as raw bits, per float input format: (signed view dtype, bit width, patterns).
+# Both zeros, the smallest and largest denormal and the smallest normal of either sign, both
+# infinities, a quiet NaN of either sign, the largest finite of either sign, and +/-1.0.
+_HEAVISIDE_EDGE_BITS = {
+    DataFormat.Float32: (
+        torch.int32,
+        32,
+        (
+            0x00000000,
+            0x80000000,
+            0x00000001,
+            0x80000001,
+            0x007FFFFF,
+            0x807FFFFF,
+            0x00800000,
+            0x80800000,
+            0x7F800000,
+            0xFF800000,
+            0x7FC00000,
+            0xFFC00000,
+            0x7F7FFFFF,
+            0xFF7FFFFF,
+            0x3F800000,
+            0xBF800000,
+        ),
+    ),
+    DataFormat.Float16_b: (
+        torch.int16,
+        16,
+        (
+            0x0000,
+            0x8000,
+            0x0001,
+            0x8001,
+            0x007F,
+            0x807F,
+            0x0080,
+            0x8080,
+            0x7F80,
+            0xFF80,
+            0x7FC0,
+            0xFFC0,
+            0x7F7F,
+            0xFF7F,
+            0x3F80,
+            0xBF80,
+        ),
+    ),
+}
+# The value calculate_heaviside returns at zero in the tt-llk harness (sfpu_operations_quasar.h).
+HEAVISIDE_VALUE_AT_ZERO = 0.5
+
+
+def prepare_heaviside_inputs(
+    src_A: torch.Tensor,
+    src_B: torch.Tensor,
+    input_format: DataFormat,
+    output_format: DataFormat,
+) -> torch.Tensor:
+    """
+    Comp stimuli (finite values of both signs) with the edge patterns planted in every face.
+
+    The run of patterns starts one lane later in each face, so across a tile every pattern lands in
+    different lanes and in both rows of an SFPU pass.
+    """
+    values = prepare_comp_inputs(src_A, src_B, input_format, output_format)
+    int_dtype, width, patterns = _HEAVISIDE_EDGE_BITS[input_format]
+    flat = values.flatten().clone()
+    bits = flat.view(int_dtype)
+    for face, base in enumerate(range(0, flat.numel(), FACE_ELEMS)):
+        for i, pattern in enumerate(patterns):
+            # Two's-complement spelling, so the write goes through the signed integer view.
+            signed = pattern - (1 << width) if pattern >> (width - 1) else pattern
+            bits[base + 8 + 17 * face + i] = signed
+    return flat.reshape(values.shape)
+
+
+def heaviside_expected(src: torch.Tensor, variant: QuasarSfpuVariant) -> torch.Tensor:
+    """
+    calculate_heaviside on the bits that reach the SFPU: the value at either zero, else 0.0 for a
+    set sign bit and 1.0 for a clear one. Infinities, denormals and NaN dispatch on the sign bit like
+    any other non-zero.
+
+    Unpack-to-Dest delivers the input bits unchanged. The 32-bit-Dest FPU datacopy is an ELWADD (see
+    _drops_zero_and_nan_sign): it clears the sign of -0.0 and of a negative NaN, and ttsim also has it
+    flush a denormal to zero, so there a denormal takes the value at zero and every NaN is 1.0.
+    """
+    int_dtype, width, _ = _HEAVISIDE_EDGE_BITS[variant.formats.input_format]
+    flat = src.flatten().contiguous()
+    bits = flat.view(int_dtype).to(torch.int64)
+    sign_set = bits < 0
+    magnitude = bits & ((1 << (width - 1)) - 1)
+    is_zero = magnitude == 0
+    if variant.uses_fpu:
+        is_denormal = flat.to(torch.float32).abs() < torch.finfo(torch.float32).tiny
+        is_zero = is_zero | is_denormal
+        sign_set = sign_set & ~torch.isnan(flat)
+    expected = torch.where(sign_set, 0.0, 1.0)
+    expected = torch.where(is_zero, HEAVISIDE_VALUE_AT_ZERO, expected)
+    return expected.to(format_dict[variant.formats.output_format])
 
 
 # ---------------------------------------------------------------------------
@@ -1319,6 +1423,8 @@ def run_eltwise_unary_sfpu_quasar(
                 input_dimensions,
                 max_min_scalar=scalar,
             )
+        elif mathop == MathOperation.Heaviside:
+            golden_tensor = heaviside_expected(src_A, format_variant)
         elif format_dict[formats.input_format].is_floating_point:
             generate_golden = get_golden_generator(UnarySFPUGolden)
             golden_tensor = generate_golden(
@@ -1462,6 +1568,13 @@ def run_eltwise_unary_sfpu_quasar(
         assert torch.equal(
             res_tensor, golden_tensor
         ), "hardmish is not bit-exact against the golden"
+
+    if mathop == MathOperation.Heaviside:
+        # Three exact outputs, so nothing short of equality is a pass.
+        mismatch = res_tensor.to(torch.float32) != golden_tensor.to(torch.float32)
+        assert not bool(
+            mismatch.any()
+        ), f"heaviside differs from its bit-level model in {int(mismatch.sum())} lanes"
 
     if mathop == MathOperation.Tan:
         # The suite tolerance passes a tangent whose polynomial coefficients are bound in the
@@ -1694,6 +1807,46 @@ def test_unary_max_min_scalar_quasar(
         DestSync.Half,
         max_min_scalar=max_min_scalar,
         max_min_sign_magnitude=max_min_sign_magnitude,
+        format_variant=format_variant,
+    )
+
+
+def heaviside_edge_variants() -> List[QuasarSfpuVariant]:
+    """
+    Heaviside routes on which the input bits reach Dest without a narrowing unpack: Unpack-to-Dest
+    at the input's own width (16-bit and 32-bit Dest), and the FPU datacopy into a 32-bit Dest.
+    """
+    return [
+        variant
+        for variant in generate_quasar_sfpu_format_variants(
+            MathOperation.Heaviside, SFPU_UNARY_FORMATS, full_format_route_sweep=True
+        )
+        if variant.uses_fpu or variant.unpack_dst == variant.formats.input_format
+    ]
+
+
+@pytest.mark.quasar
+@parametrize(
+    mathop=[MathOperation.Heaviside],
+    format_variant=heaviside_edge_variants(),
+    input_dimensions=runtime(list(TENSOR_DIMS[:1])),
+)
+def test_eltwise_unary_sfpu_heaviside_edges_quasar(
+    mathop,
+    format_variant,
+    input_dimensions,
+):
+    """Heaviside, bit-exact, on both zeros, denormals, infinities and NaN of either sign.
+
+    See prepare_heaviside_inputs for the stimulus and heaviside_expected for the model.
+    """
+    run_eltwise_unary_sfpu_quasar(
+        format_variant.formats,
+        format_variant.dest_acc,
+        mathop,
+        ApproximationMode.No,
+        input_dimensions,
+        DestSync.Half,
         format_variant=format_variant,
     )
 
