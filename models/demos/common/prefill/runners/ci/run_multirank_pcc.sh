@@ -18,12 +18,12 @@ set -- "${POSITIONAL[@]+"${POSITIONAL[@]}"}"
 MODEL="${1:?${USAGE}}"
 RUN_NAME="${MODEL}${VARIANT}"
 # First entry is the default; membership is the validation. These models support sc1 only.
-# Kimi-K3's sc4 and sc1 are 4x4 stages, two per galaxy (its manifest's layout); its _8x4 configs keep the
-# one-stage-per-galaxy layout for hand comparisons. GLM-5.3's sc4 and sc1 are 8x4 stages, its production
+# Kimi-K3's and Kimi-K3.1's sc4 and sc1 are 4x4 stages, two per galaxy (their manifests' layout); their _8x4
+# configs keep the one-stage-per-galaxy layout for hand comparisons. GLM-5.3's sc4 and sc1 are 8x4 stages, its production
 # layout; its _4x4 configs run 4x4 stages, two per galaxy.
 case "${MODEL}" in
   mistral4|gptoss120b) MODEL_CONFIGS="sc1" ;;
-  kimi_k3)             MODEL_CONFIGS="sc4 sc1 sc4_8x4 sc1_8x4" ;;
+  kimi_k3|kimi_k3_1)   MODEL_CONFIGS="sc4 sc1 sc4_8x4 sc1_8x4" ;;
   glm53)               MODEL_CONFIGS="sc4 sc1 sc4_4x4 sc1_4x4" ;;
   *)                   MODEL_CONFIGS="sc4 sc1" ;;
 esac
@@ -216,14 +216,40 @@ case "${MODEL}" in
     SC1_NUM_USERS=${PREFILL_NUM_USERS:-$(manifest_env PREFILL_NUM_USERS)}
     ;;
   kimi_k3_1)
-    # Kimi-K3 with its 24 MLA layers changed to DSA: kimi_k3's depths and gate, on one 8x4 stage per galaxy
-    # (kimi_k3's *_8x4 layout: SP=8 on axis 0, 5120-token chunks) with kimi_k3_1.json's slots.
-    # The adapter's defaults already name the K3.1 weights, cache and golden, so no path is exported.
+    # Kimi-K3 with its 24 MLA layers changed to DSA: kimi_k3's depths, gate and layouts. kimi_k3_1.json holds
+    # the 4x4 stage (SP=4 on mesh axis 1, 2560-token chunks); the *_8x4 configs run one 8x4 stage per galaxy.
+    # The adapter's defaults already name the K3.1 weights and golden, so only the 4x4 cache is resolved here.
     export PIPELINE_DIR="${PREFILL_SUMMARIES/prefill_summaries/kimi_k3_1_prefill_runner_kv}"
     MANIFEST="${MANIFEST_DIR}/kimi_k3_1.json"
     SC1_NUM_LAYERS=24
-    SC1_NUM_USERS=$(manifest_env PREFILL_NUM_USERS)
     RUNNER_ENV="export TT_METAL_SHM_TRACKING_DISABLED=1; export LOGURU_LEVEL=ERROR;"
+    CHUNK_SIZE=$(manifest_env PREFILL_CHUNK_SIZE)
+    case "${CONFIG}" in
+      sc4|sc1)
+        # As kimi_k3: two ranks per galaxy, one per tray half, bound by tt-run discovery against the 4x4
+        # descriptor: 8 stages of 12 layers (9 on the last) for sc4, and sc4's first two for sc1.
+        PP_4X4_HOSTS=1
+        [ "${SCALE}" = sc4 ] && PP_4X4_HOSTS=4
+        PP_RANKS=$((2 * PP_4X4_HOSTS))
+        # The cache the runner resolves for a [4,4] SP-axis-1 stage on 16 visible chips (the adapter's
+        # ttnn_cache_default unless overridden). Checked non-empty, as for kimi_k3.
+        K31_CACHE="${PREFILL_TTNN_CACHE:-/mnt/weka/model-cache/scratch/moonshotai/Kimi-K3.1-Cache/Kimi-K3.1-Cache-prefill}"
+        PP_CACHE_DIR="${K31_CACHE}/kimi_k3_1_bh_16dev/4x4_sp1"
+        RUNNER_ENV+=" export PREFILL_TTNN_CACHE='${K31_CACHE}';"
+        ;;
+      *_8x4)
+        # One 8x4 stage per galaxy, SP=8 on axis 0, at the 8x4 chunk and the 76 slots measured for it.
+        # Exported to runner and producer, ahead of the manifest's 4x4 layout.
+        CHUNK_SIZE=5120
+        : "${PREFILL_NUM_USERS:=76}"
+        export PREFILL_NUM_USERS
+        LAYOUT_8X4="export PREFILL_SP=8; export PREFILL_TP=4; export PREFILL_SP_AXIS=0; export PREFILL_CHUNK_SIZE=${CHUNK_SIZE};"
+        RUNNER_ENV+=" ${LAYOUT_8X4}"
+        PRODUCER_ENV+=" ${LAYOUT_8X4}"
+        ;;
+    esac
+    # sc1 opens sc4's slots.
+    SC1_NUM_USERS=${PREFILL_NUM_USERS:-$(manifest_env PREFILL_NUM_USERS)}
     # The golden is the 8192-token prompt of a vLLM capture, and its span bounds the compare, so no
     # length cap is needed: as for kimi_k3, the span is PCC'd and the tail is timed. Two chunks, so the
     # gate reads one chunk's KV from the next.
