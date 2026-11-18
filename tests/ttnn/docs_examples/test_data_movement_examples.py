@@ -205,6 +205,30 @@ def test_untilize_with_unpadding(device):
     logger.info(f"Untilized Tensor with Unpadding Shape: {untilized_tensor.shape}")  # Shape([1, 1, 64, 32])
 
 
+def test_sharded_to_interleaved_partial(device):
+    # Create a tensor of 128 rows to write into, read as 2 slices of 64 rows
+    cache_tensor = ttnn.zeros((1, 1, 128, 64), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+
+    # Create a 64-row slice, height-sharded in L1 over 2 cores, 32 rows per core
+    shard_spec = ttnn.ShardSpec(
+        ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 0))}),
+        [32, 64],
+        ttnn.ShardOrientation.ROW_MAJOR,
+    )
+    sharded_memory_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, shard_spec)
+    sharded_slice = ttnn.from_torch(
+        torch.rand((1, 1, 64, 64)),
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=sharded_memory_config,
+    )
+
+    # Write it into slice 1 of 2, rows 64 to 127 of cache_tensor; rows 0 to 63 keep their zeros
+    output_tensor = ttnn.sharded_to_interleaved_partial(sharded_slice, cache_tensor, 2, 1)
+    logger.debug(f"Output Tensor Shape: {output_tensor.shape}")  # Shape([1, 1, 128, 64])
+
+
 def test_indexed_fill(device):
     # Define shapes for input tensors
     input_a_shape = (32, 1, 1, 4)
