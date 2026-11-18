@@ -284,3 +284,22 @@ DRAM bytes are R1a's; what changes is who issues them: a line's reads are spread
 | bias / gate (R2 one-shot) | 1 per group | read by the injector into `cb_weight_tiles`' tail, delivered with B | rides B's multicast (+`block_n` tiles per delivery) |
 | B (R3 split) | 1 per grid column (now also below the old 3 MiB traffic gate: `BS_SPLIT_B_MCAST_MIN_SAVED_BYTES = 0`) | the column injector's BRISC reads each K-block once, one K-block per round (`BS_SPLIT_B_ROUND_BYTES`) | multicast down the column on NoC1, concurrent with the A row exchange on NoC0 |
 | A, output, residual | unchanged | | |
+
+## Refinement 19 — tall, narrow M-only splits (R1e): B multicast per rectangle, A in-flight cap
+
+| CB | Size (pages) | Holds | Axis accounting | Dtype | Producer | Consumer | Lifetime | Shares with / why not |
+|----|--------------|-------|-----------------|-------|----------|----------|----------|-----------------------|
+| `cb_weight_tiles` (R1e: `R1_B_MCAST` on an M-only, B-resident walk) | `1 · block_k_tiles · block_n_tiles` **+ `row_tail` pages** (`row_tail = ceil(block_n · row_tile_bytes / b_tile_bytes)` with a bias / gate row, else 0) | the core's only B block (all of K × all of N), plus the walk's bias / gate row in the tail past it | `{b: 1, m: streams (B NOT re-read per M-block), n: spans → N, k: spans → K}`; the tail holds one N-block row | B dtype (the tail is raw bytes of the row's dtype; never pushed) | reader (the rectangle's injector reads B + row into it; the one-shot multicast lands both on every core of the rectangle) | compute (B, retained across the M-blocks); the reader itself (the tail, L1 → L1 into `cb_row` once) | kernel | **Depth 1, not `DEPTH_WEIGHT`**: B is loaded once (weight-resident), so the second slot the solve priced could never fill; the tail rides in the freed bytes. The row must ride in B's delivery: one delivery per walk is what keeps the channel handshake-free. A one-core rectangle (no channel) reads its own B and row into the same layout. |
+
+- **`cb_row` (R1 family, `nb_n == 1`)**: unchanged size (one N-block row). The reader now re-reserves / re-pushes it on every block after the first **without re-reading**: the CB holds exactly one row, so the slot it re-reserves is the one compute just popped, still holding the same row (the core's column range is one N-block). Producer / consumer unchanged.
+- **No other CB change.** The A in-flight cap (`R1_A_INFLIGHT_TILES`, trids 13 / 14) and the bank stagger change only the reader's issue order within `cb_act_tiles`' reserved slot. The distributed B delivery (`R1_B_DISTRIBUTED`, parked) lands in the same `cb_weight_tiles` layout.
+- The `weight` channel adds 2 L1 semaphores per rectangle (one-shot, fixed sender).
+
+**Data-movement budget, Refinement 19 (R1e):**
+
+| Tensor | DRAM crossings | Why that many | Cross-core traffic added |
+|--------|----------------|---------------|--------------------------|
+| A | 1 (DRAM A) / 0 DRAM (L1 A: every core reads its rows from the L1 banks, all-to-all on NoC0) | each core reads its own rows once | none |
+| B | **one per rectangle** of the split (2 on a flat split: the full grid rows + the partial last row; a lone core reads its own) | the rectangle's injector reads it once; before, every core read all of B (res3.0 conv1 on 64 cores: 64 × 35 KB) | one multicast of B (+ row) per rectangle |
+| bias / gate | one per rectangle | rides B's delivery (was: every core, once per M-block — a bank-serialized hot spot) | rides B's multicast |
+| output | once (L1 interleaved for the PDL convs: all-to-all on NoC1 / the tail share on NoC0) | unchanged | none |

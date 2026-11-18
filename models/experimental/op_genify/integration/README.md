@@ -11,6 +11,9 @@ The op on this branch is the output of the follow-up code-gen run (eval run 1151
 - Refinement 14 added A as a list of K segments.
 - Refinements 15-18 and two perf tournaments moved the op toward the #65148 roofline, which is now the
   golden suite's target on every model case.
+- Refinement 19 (eval run 1156, branch `avelickov/2026_11_18_genify_matmul_pdl_interleaved`, e8fce77) spread
+  the tall, narrow interleaved matmuls over all cores. These are the PDL convs whose input `genify_conv.py`
+  reads in place.
 
 FLUX.2 uses the split output and the K-segment input directly. The chunk / concat ops genify needed before
 (25.7 ms per step) are gone.
@@ -29,11 +32,12 @@ traffic at 90% of 512 GB/s). Because it assumes 70% of peak, a compute-bound op 
 | | prefill M = 4096 | 155.85 | 119.80 (1.30x) | 117.32 | 1.02x | 477.9 -> 389.1 |
 | FLUX.2-dev (2x2, SP2 x TP2) | denoising step | 318.06 ms | 268.75 (1.18x) | 303.10 | 0.89x | 370.4 -> 321.3 ms without collectives |
 | | prompt encoding | 69.57 | 52.66 (1.32x) | 53.69 | 0.98x | 99.2 -> 82.7 ms without collectives |
-| Panoptic-DeepLab (1 chip) | inference | 0.990 ms | 0.907 (1.09x); 0.981 vs 1.171 with the data movement around them (1.19x) | 0.33 | 2.75x | 5.759 -> 5.565 ms |
+| Panoptic-DeepLab (1 chip) | inference | 0.990 ms | 0.856 (1.16x); 0.930 vs 1.171 with the data movement around them (1.26x) | 0.33 | 2.59x | 5.759 -> 5.514 ms |
 
 Every Qwen3.8 matmul is faster than stock. Every FLUX.2 matmul is faster except the guidance MLP
 linear_1 (M = 1, 14.7 vs 10.7 us). PDL's sharded 1x1 convs are at stock (0.93-1.03x), and its upsample
-H passes run at 0.55x stock.
+H passes run at 0.55x stock. Qwen3.8 and FLUX.2 were measured with the run 1151 op. Re-profiled with the
+Refinement 19 op they are within +-0.8%.
 
 Accuracy, genify vs stock (unchanged from the first integration):
 - Qwen3.8 (real weights, layers 0 and 3): logits PCC 0.99997 (prefill M = 128, 512) and 0.99999 (decode);
@@ -53,19 +57,24 @@ integration, compiling them out cut Qwen's genify matmul time by 0.3% (decode) t
    - At M = 128 the bank-local weight stream is bound by multicasting the 1.3 MB activation (Refinement 15).
    - At M = 512, the 16 tile rows cap the 2-D split at 80-88 of the 110 cores (Refinement 16). A
      non-rectangular split is the next lever.
-2. PDL: `genify_conv.py` reads some interleaved inputs in place. The op splits those tall, narrow shapes
-   over too few cores:
+2. PDL convs read in place (interleaved input). Refinement 19 moved them from 27-49 cores to 64-86, and the
+   ten calls dropped from ~322 to ~271 us per inference. What is left:
 
-   | Call | genify us | stock us | stock's input sharding us |
-   |---|---:|---:|---:|
-   | decoder project convs | 21.6 | 3.6 | 10.8 |
-   | ASPP 1x1 | 28.6 | 13.8 | 6.6 |
-   | res3.0 conv1 | 41.3 | 9.4 | 24.7 |
+   | Call | genify us | stock's sharded matmul us |
+   |---|---:|---:|
+   | decoder res2 projection | 12.4 | 3.6 |
+   | res3.0 conv1 | 27.7 | 9.4 |
 
-   The golden suite has only PDL's sharded layouts. Sharding these inputs first, as stock does, would save
-   about 50 us per inference.
-3. The upsample H pass, at 66.8 us, sits on its measured output-write floor of 62.6 us (17.8 MB at
-   ~285 GB/s).
+   - Stock's sharded matmul skips the input-sharding step it runs first (10.8 and 24.7 us for these two),
+     which reading in place avoids.
+   - The remaining measured floors:
+     - L1-interleaved output write plus sync: 4.3-10.6 us;
+     - the all-to-all L1 read of A;
+     - for the M = 2048 cases (ASPP 1x1 28.6 us, ASPP projection, res5.0 conv1), 4-8 serialized
+       line-multicast rounds.
+3. PDL's sharded convs are at stock but 2-5x their roofline. Refinement 18 traced the remaining fixed cost to
+   the shared multicast helper's per-round loopback barrier (`kernel_lib`, outside the op). The upsample H
+   pass, at 66.8 us, sits on its measured output-write floor of 62.6 us.
 
 ## Run
 ```
@@ -82,4 +91,4 @@ FLUX.2: `test_flux2_profile.py` / `test_flux2_text_encoder_profile.py` (MISTRAL3
 Mistral-Small-3.1-24B config) + `flux2_perf_table.py`. PDL: `test_tt_model.py --profile` + `pdl_profile_table.py`.
 Profiles behind the tables: stock 2026_11_17_20_25_44 (Qwen), 21_01_23 / 21_09_40 (DiT), 21_05_56 / 21_12_15
 (TE), 20_32_48 (PDL); genify 2026_11_18_11_35_25 (Qwen), 11_39_12 / 11_41_22 (DiT), 11_40_08 / 11_42_16 (TE),
-11_43_27 (PDL).
+14_59_14 (PDL, Refinement 19 op); Refinement 19 re-check 15_02_12 (Qwen), 15_03_47 (DiT), 15_04_45 (TE).

@@ -154,6 +154,34 @@ NONE_RAW_WALK_MIN_RATIO = 1.25
 # (32 x 512x128x1024, bf8b): 4 measured best (8-column B blocks: 2 / 4 / 8 blocks 74.9 / 65.0 /
 # 68.5 us on the 32x2x1 split). 1 = off (the whole region as one block).
 RESIDENT_SPLIT_BLOCKS = 4
+# Refinement 19 (tall, narrow R1 splits: PDL's 1x1 convs read in place). A in-flight cap: a plain R1 core retires its
+# A reads every this many tiles (a two-chunk transaction-id ring, so 1-2x of it are in flight) instead of issuing
+# the whole K-block and one barrier. When every core of a large split bursts its K-block at once, the NoC collapses
+# (all-to-all L1-interleaved reads, every core's barrier ending at the same instant): decoder res2 32768x256x32 on
+# 103 cores 25.9 -> 16.1 us with drain barriers every 8 tiles (4: 16.8, 16: 21.4). With the two-chunk ring and the
+# B multicast, 4 measured best (dec res2 / res3.0 conv1 / dec res3: 2 -> 13.8 / 28.0 / 10.9, 4 -> 12.1 / 27.5 / 9.9,
+# 8 -> 12.3 / 29.6 / 15.1, off -> 21.7 / 30.0 / 20.3 us). 0 = off (one barrier per K-block).
+R1_A_INFLIGHT_TILES = 4
+# ... and its rows' K tiles go out from a per-row rotated start (bank stagger), so the split's cores do not all walk
+# the DRAM banks in the same order (with K a multiple of the 8 banks every row starts on bank 0): res4.0 conv1
+# 21.6 -> 20.6 us, the rest flat.
+R1_A_STAGGER = True
+# ... only on splits of at least this many cores: on a smaller split each core's own read rate binds and the cap costs
+# it (dec res3 8192x512x64 on 37 cores 12.4 -> 16.8 us at 2; res3.0 conv1 on 27 cores 41.2 -> 44.4).
+R1_A_INFLIGHT_MIN_CORES = 64
+# B multicast on a plain R1 walk with B resident (Refinement 19): one injector per rectangle of the split's cores
+# reads B (+ the bias / gate row in cb_weight_tiles' tail) once and multicasts it handshake-free (the walk's only B
+# delivery). False: every core reads all of B and the row itself -- the same pages from every core, a bank-serialized
+# DRAM hot spot on a split over the whole grid (res3.0 conv1 32768x256x128 on 103 cores: ~17 us).
+R1_B_MCAST = True
+R1_B_INJECTOR = 0  # the group core (row-major) that reads and multicasts
+# ... distributed (parked): up to GM_R1_B_SLICES (kernel default 4) group cores each read a K-row slice of B and
+# multicast it in slice order (rotating senders, Counter signal), so the slices' DRAM reads overlap. Correct, but every
+# measured setting loses to the one injector: res4.0 conv1 20.6 us -> 57 with every core sending at once (concurrent
+# multicasts into one rectangle serialize), 23.9 / 25.0 with 2 / 4 ordered slices (res3 shortcut 16.8 -> 19.5 / 21.8).
+# False: one fixed injector per group.
+R1_B_DISTRIBUTED = False
+R1_B_MCAST_GROUPS = 2  # split cost: B reads of a multicast split (its rectangles; a flat split's full rows + the rest)
 # Output write batching knob (Refinement 8, R1): row groups the writer drains per wait / flush / pop
 # (the largest divisor of the block's row groups <= this; cb_output_tiles holds DEPTH_OUT batches).
 # Measured flat to +1.6% on PERF FOCUS 3 at 4 / 8 (the writer never stalled on its per-row-group flush:
@@ -513,6 +541,7 @@ class Geometry:
     r_tile_bytes: int = 0  # residual tile bytes (addcmul), else 0
     a_in_l1: bool = False  # operand A / B is an L1 tensor (split ranking: L1_READ_COST)
     b_in_l1: bool = False
+    out_in_l1: bool = False  # the output is an L1 tensor (Refinement 19: its writes load the NoC, not DRAM)
     fidelity_phases: int = 4  # math fidelity passes per tile-K (split_cost); LoFi 1 .. HiFi4 4
     # Refinement 15: DRAM banks of an interleaved DRAM B whose aligned page is exactly its tile (consecutive pages
     # of a bank are contiguous: the bank-local stream can read bank runs), else 0; output tensors (chunks).
@@ -661,6 +690,7 @@ def _geometry(a, b, out, fp32_dest_acc_en, epilogue="none", row=None, residual=N
         r_tile_bytes=ttnn.tile_size(residual.dtype) if residual is not None else 0,
         a_in_l1=a.memory_config().buffer_type == ttnn.BufferType.L1,
         b_in_l1=b.memory_config().buffer_type == ttnn.BufferType.L1,
+        out_in_l1=out.memory_config().buffer_type == ttnn.BufferType.L1,
         fidelity_phases=_FIDELITY_PHASES.get(math_fidelity, 4),
         b_banks=_bank_run_banks(b),
         out_chunks=len(outs),
@@ -923,6 +953,33 @@ def _attach_k_head_ramp(readers, compute, blk, mode, epilogue, writer=None):
         k.defines = list(k.defines) + defs
 
 
+def r1_b_mcast_split(geom: Geometry, grid: GridChoice):
+    """R1_B_MCAST's split shape: an M-only split (every core owns all of N) of a single shared B over > 1 core."""
+    return (
+        R1_B_MCAST
+        and geom.tensor_batches == 1
+        and grid.grid_n == 1
+        and grid.grid_b * grid.grid_m > 1
+        and grid.placement in ("flat", "rect", "rect_t")
+    )
+
+
+def r1_b_mcast(geom: Geometry, grid: GridChoice, blk: "Blocking"):
+    """R1_B_MCAST: the plain R1 walk with B resident (one B delivery per core) on an M-only split."""
+    return r1_b_mcast_split(geom, grid) and blk.weight_resident and operand_mode(geom, grid, blk) == 0
+
+
+def r1_a_inflight(geom: Geometry, grid: GridChoice, blk: "Blocking"):
+    """R1_A_INFLIGHT_TILES on a plain R1 M-only split (grid_b == grid_n == 1: every core streams its own rows of A)
+    over at least R1_A_INFLIGHT_MIN_CORES cores, else 0 (off). Elsewhere the cap only serializes a core's read
+    latency: the batched guard (32 x 512x128x1024, 32x2x1 cores, A resident) 67 -> 71 us under it."""
+    cores = grid.grid_b * grid.grid_m * grid.grid_n
+    m_only = grid.grid_b == 1 and grid.grid_n == 1
+    if not R1_A_INFLIGHT_TILES or not m_only or cores < R1_A_INFLIGHT_MIN_CORES:
+        return 0
+    return R1_A_INFLIGHT_TILES if operand_mode(geom, grid, blk) == 0 else 0
+
+
 def r1a_prefetch(geom: Geometry, grid: GridChoice, blk: "Blocking"):
     """R1A_INJECTOR_AHEAD: the plain R1a helper walk with rings deep enough for the injector stall-shadow."""
     mode = operand_mode(geom, grid, blk)
@@ -1023,7 +1080,11 @@ def read_traffic(geom: Geometry, grid: GridChoice, blk: "Blocking"):
     if mode == 2:
         # R1b: A read once (by the injector), B per core; the single injector's throughput caps it.
         return max(a_per_core + b_per_core * grid.grid_n, a_per_core * ACT_STREAM_INJECTOR_COST)
-    return (a_per_core + b_per_core) * grid.grid_b * grid.grid_m * grid.grid_n
+    cores = grid.grid_b * grid.grid_m * grid.grid_n
+    if r1_b_mcast(geom, grid, blk):
+        # R1_B_MCAST: B once per B group (about one per grid row the split spans).
+        return a_per_core * cores + b_per_core * min(cores, R1_B_MCAST_GROUPS)
+    return (a_per_core + b_per_core) * cores
 
 
 def _unpack_cycles(tile_bytes):
@@ -1056,6 +1117,8 @@ def split_cost_terms(geom: Geometry, grid: GridChoice, blk: "Blocking"):
     """(K-walk, DRAM stream, busiest core's reads, busiest core's writes) in cycles."""
     walk = padded_work(grid, blk) * geom.tensor_k_tiles * tile_k_cycles(geom, blk.sb_h, blk.sb_w)
     out_bytes = geom.tensor_batches * geom.tensor_m_tiles * geom.out_n_tiles * geom.o_tile_bytes
+    if geom.out_in_l1:
+        out_bytes *= L1_READ_COST  # Refinement 19: an L1 output's writes only load the NoC (as L1 operand reads)
     rate = BANK_LOCAL_DRAM_BYTES_PER_CYCLE if grid.placement == "bank" else DRAM_BYTES_PER_CYCLE
     dram = (read_traffic(geom, grid, blk) + out_bytes) / rate
     # The busiest reading core: R1 reads its own A (once per N-block) and B (once per M-block); an R1a line
@@ -1066,6 +1129,8 @@ def split_cost_terms(geom: Geometry, grid: GridChoice, blk: "Blocking"):
     b_core = grid.core_batches * grid.core_n_tiles * geom.tensor_k_tiles * geom.b_tile_bytes * nb_m
     mode = operand_mode(geom, grid, blk)
     core_bytes = max(a_core, b_core) if mode == 1 else (0 if mode == 2 else a_core + b_core)
+    # (R1_B_MCAST: the group's injector still reads its own A and all of B -- one core's DRAM rate: 64 cores of
+    # ASPP 1x1 2048x2048x256 with a 557 KB B ran 35.5 us against 28.5 on its R1a split.)
     core_cycles = core_bytes / CORE_READ_BYTES_PER_CYCLE
     if grid.placement == "bank":
         # The bank-local split: its busiest core streams its own B run, and its A stream pays a handshake round per
@@ -1356,6 +1421,14 @@ def _choose_blocking(geom: Geometry, grid: GridChoice, budget: int, depths=None)
 
     # S1: whole per-core region, one resident K-block, no accumulator.
     if one_k_block and _footprint(geom, cm, cn, tk, partials=False) <= budget:
+        # R1_B_MCAST (Refinement 19): an M-only split keeps B resident (its one delivery is multicast) and streams
+        # its rows in M-blocks, ahead of the K split below (which would read B per K-block on every core).
+        if r1_b_mcast_split(geom, grid) and block_b == 1:
+            sb_h, _ = choose_subblock(cm, cn, geom.dest_limit, geom)
+            bm = min(cm, _round_up(_cdiv(cm, RESIDENT_SPLIT_BLOCKS), sb_h))
+            resident = replace(_make_blocking(geom, 1, bm, cn, tk), weight_resident=True)
+            if operand_mode(geom, grid, resident) == 0:
+                return resident
         # A core whose whole walk is this single K-block can neither use the second slot of the
         # depth-2 operand CBs nor overlap its read with compute. Split K so compute starts on the
         # first half while the second lands (the two halves fill exactly the old one-slot footprint).
@@ -1681,6 +1754,9 @@ def create_program_descriptor(
 
     out_block_n_tiles = geom.out_block_n(blk.block_n_tiles)  # swiglu halves the output width
     cb_row = CB_GATE_ROW if epilogue == "addcmul" else CB_BIAS_ROW
+    # R1_B_MCAST (Refinement 19): B's one delivery needs one slot (B is resident), plus the row's tail pages.
+    b_mcast = r1_b_mcast(geom, grid, blk)
+    row_tail = _cdiv(blk.block_n_tiles * geom.row_tile_bytes, geom.b_tile_bytes) if b_mcast and row is not None else 0
 
     # ---- CBs: every page count derives from the block / depth knobs ----
     cbs = [
@@ -1691,7 +1767,7 @@ def create_program_descriptor(
             CB_WEIGHT_TILES,
             b.dtype,
             geom.b_tile_bytes,
-            blk.depth_weight * blk.block_k_tiles * blk.block_n_tiles,
+            (1 if b_mcast else blk.depth_weight) * blk.block_k_tiles * blk.block_n_tiles + row_tail,
             core_ranges,
         ),
         _cb(
@@ -1834,12 +1910,17 @@ def create_program_descriptor(
         compute_rt[core.x][core.y] = [nb_b * nb_m * nb_n, NO_OWN_KB, nb_n] + xchg_rt[:1]
 
     # One reader kernel per (a_sends, b_sends) role group: under R1a the line injectors are CT-
-    # specialized, so every core hosts exactly one reader. Plain R1 is a single group (0, 0).
+    # specialized, so every core hosts exactly one reader. Plain R1 is a single group (0, 0); under R1_B_MCAST one
+    # per B group (a rectangle of the split's cores, each its own channel), keyed (0, 0, group).
     groups = {}
-    for (x, y), role in reader_roles.items():
-        groups.setdefault(role, []).append(ttnn.CoreRange(ttnn.CoreCoord(x, y), ttnn.CoreCoord(x, y)))
+    if b_mcast:
+        for gi, g in enumerate(rect_groups([core for _, _, _, core in cores])):
+            groups[(0, 0, gi)] = [ttnn.CoreRange(c, c) for c in g]
+    else:
+        for (x, y), role in reader_roles.items():
+            groups.setdefault(role, []).append(ttnn.CoreRange(ttnn.CoreCoord(x, y), ttnn.CoreCoord(x, y)))
     readers = []
-    for (a_sends, b_sends), ranges in sorted(groups.items()):
+    for (a_sends, b_sends, *_), ranges in sorted(groups.items()):
         group_cores = ttnn.CoreRangeSet(ranges)
         rt = ttnn.RuntimeArgs()
         for r in ranges:
@@ -1892,10 +1973,17 @@ def create_program_descriptor(
             ("GM_LINE_WINDOW", str(R1A_LINE_WINDOW)),
             ("GM_LINE_STARTUP", str(R1A_LINE_STARTUP_SHARE)),
         ]
+    elif b_mcast:
+        _attach_r1_b_mcast(descriptor, readers, device)
     else:
         _attach_operand_channels(
             descriptor, readers, grid, core_ranges, device, operand_mcast, act_offset, weight_offset
         )
+    if r1_a_inflight(geom, grid, blk):
+        for k in readers:
+            k.defines = list(k.defines) + [("GM_A_INFLIGHT", str(r1_a_inflight(geom, grid, blk)))]
+            if R1_A_STAGGER:
+                k.defines = list(k.defines) + [("GM_A_STAGGER", "1")]
     if act_stream:
         rounds = _cdiv(grid.core_m_tiles, blk.block_m_tiles) * _cdiv(grid.core_n_tiles, blk.block_n_tiles)
         # Rotating injectors on the bank-local split only (one rectangle, as the helper's rotating senders need):
@@ -1937,7 +2025,9 @@ def create_program_descriptor(
         for k in readers:
             k.defines = list(k.defines) + defs
     for k in (*readers, writer, compute):
-        k.defines = list(k.defines) + [(d, "1") for d in ABLATE_DEFINES.split("+") if d]
+        k.defines = list(k.defines) + [
+            ((d + ":1").split(":")[0], (d + ":1").split(":")[1]) for d in ABLATE_DEFINES.split("+") if d
+        ]
     descriptor.kernels = [*readers, writer, compute]
     return descriptor
 
@@ -2094,6 +2184,29 @@ def _attach_split_lines(descriptor, readers, writer, grid, core_ranges, device):
     for reader in readers:
         ttnn.attach_absent_mcast(reader, "act")
     mc_weight.attach(descriptor, "weight", readers, mc_act.next_semaphore_id())
+
+
+def _attach_r1_b_mcast(descriptor, readers, device):
+    """R1_B_MCAST: one handshake-free weight channel per B group (its reader kernel's cores, a rectangle) from its
+    R1_B_INJECTOR-th core; a single-core group reads its own B (channel absent). The act channel is absent."""
+    sem = max([sm.id for sm in descriptor.semaphores], default=-1) + 1
+    if R1_B_DISTRIBUTED:
+        # K-row slices from several senders; a Counter data-ready signal counts the slices (handshake-free).
+        sender = ttnn.McastRotatingSenderConfig()
+        config = ttnn.McastConfig(noc=ttnn.NOC.NOC_0, handshake=False, data_ready=ttnn.McastDataReady.Counter)
+    else:
+        sender = ttnn.McastFixedSenderConfig(sender_index=R1_B_INJECTOR, placement=ttnn.McastSenderPlacement.Staggered)
+        config = ttnn.McastConfig(noc=ttnn.NOC.NOC_0, handshake=False)
+    for k in readers:
+        ttnn.attach_absent_mcast(k, "act")
+        size = k.core_ranges.num_cores()
+        if size < 2:
+            ttnn.attach_absent_mcast(k, "weight")
+            continue
+        mc = ttnn.Mcast(device, config, k.core_ranges, size, sender, ttnn.McastCoreOrder.RowMajor)
+        mc.attach(descriptor, "weight", [k], sem)
+        sem = mc.next_semaphore_id()
+        k.defines = list(k.defines) + [("GM_R1_B_MCAST", "2" if R1_B_DISTRIBUTED else "1")]
 
 
 def _attach_operand_channels(
@@ -2595,7 +2708,9 @@ def create_dram_sharded_program_descriptor(a, b, out, compute_config, epilogue="
     for r in readers:
         ttnn.attach_absent_mcast(r, "weight")
     for k in (*readers, *writers, compute):
-        k.defines = list(k.defines) + [(d, "1") for d in ABLATE_DEFINES.split("+") if d]
+        k.defines = list(k.defines) + [
+            ((d + ":1").split(":")[0], (d + ":1").split(":")[1]) for d in ABLATE_DEFINES.split("+") if d
+        ]
     descriptor.kernels = [*readers, *writers, compute]
     return descriptor
 
@@ -2885,8 +3000,14 @@ def sharded_b_groups(topo: BlockShardedTopology):
     (one channel over the whole core set: R3's grid columns, R2's single group)."""
     if not topo.core_list or not SHARDED_B_RECT_GROUPS:
         return [None]
+    return rect_groups(topo.core_list, SHARDED_B_GROUP_ROWS)
+
+
+def rect_groups(core_list, max_rows=None):
+    """A core list split into multicastable rectangles: runs of grid rows with the same contiguous column span, at
+    most `max_rows` rows each (None: unbounded). Each group is its cores in row-major order."""
     by_row = {}
-    for c in topo.core_list:
+    for c in core_list:
         by_row.setdefault(c.y, []).append(c.x)
     spans = []  # (y, x0, x1) contiguous column runs per grid row
     for y in sorted(by_row):
@@ -2898,7 +3019,7 @@ def sharded_b_groups(topo: BlockShardedTopology):
                 if i < len(xs):
                     x0 = xs[i]
     groups = []  # [y0, y1, x0, x1]
-    cap = SHARDED_B_GROUP_ROWS or len(by_row)
+    cap = max_rows or len(by_row)
     for y, x0, x1 in spans:
         g = next((g for g in groups if g[1] == y - 1 and g[2] == x0 and g[3] == x1 and g[1] - g[0] + 1 < cap), None)
         if g is None:
@@ -3237,7 +3358,9 @@ def create_block_sharded_program_descriptor(
         config=compute_config,
     )
     for k in {id(k): k for k in (*readers, *b_readers, writer, compute)}.values():
-        k.defines = list(k.defines) + [(d, "1") for d in ABLATE_DEFINES.split("+") if d]
+        k.defines = list(k.defines) + [
+            ((d + ":1").split(":")[0], (d + ":1").split(":")[1]) for d in ABLATE_DEFINES.split("+") if d
+        ]
     descriptor = ttnn.ProgramDescriptor(kernels=[], semaphores=[], cbs=cbs)
     if row_mcast:
         # One channel group per grid row (RowMajor groups of `cols` cores); the senders rotate through
