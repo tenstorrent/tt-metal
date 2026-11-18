@@ -9,79 +9,74 @@
 
 #include <nanobind/nanobind.h>
 #include <nanobind/stl/detail/nb_dict.h>
+#include <nanobind/stl/string.h>
 
 #include <tt-metalium/workload/utils/arg_value.hpp>
-#include <tt-metalium/workload/specification/dataflow_buffer_spec.hpp>
-#include <tt-metalium/workload/specification/kernel_spec.hpp>
-#include <tt-metalium/workload/specification/scratchpad_spec.hpp>
-#include <tt-metalium/workload/specification/semaphore_spec.hpp>
-#include <tt-metalium/workload/specification/tensor_parameter.hpp>
 #include <tt-metalium/workload/utils/table.hpp>
 #include <tt_stl/strong_type.hpp>
 
-namespace nanobind::detail {
+NAMESPACE_BEGIN(NB_NAMESPACE)
+NAMESPACE_BEGIN(detail)
 
-// Table<K, V> <-> dict. Table exposes clear()/emplace(k, v) and iterates as
-// pair<const K, V>, which is what dict_caster needs.
-template <typename K, typename V>
-struct type_caster<tt::tt_metal::Table<K, V>>
-    : dict_caster<tt::tt_metal::Table<K, V>, K, V> {};
-
-// The Metal 2.0 spec names are string StrongTypes; expose them as plain Python strings.
-// Specialized one type at a time rather than for StrongType<T, Tag> generally: a catch-all
-// would also intercept StrongTypes that are bound as classes elsewhere (ttnn.QueueId).
-template <typename SpecName>
-struct spec_name_caster {
-    using StringCaster = make_caster<std::string>;
-
-    NB_TYPE_CASTER(SpecName, StringCaster::Name)
+// The Metal 2.0 name types (KernelSpecName, DFBSpecName, ...) are string StrongTypes; Python passes and reads
+// them as str.
+template <typename Tag>
+struct type_caster<ttsl::StrongType<std::string, Tag>> {
+    using NameType = ttsl::StrongType<std::string, Tag>;
+    NB_TYPE_CASTER(NameType, const_name("str"))
 
     bool from_python(handle src, uint8_t flags, cleanup_list* cleanup) noexcept {
-        StringCaster caster;
-        if (!caster.from_python(src, flags_for_local_caster<std::string>(flags), cleanup) ||
-            !StringCaster::template can_cast<std::string>()) {
+        make_caster<std::string> caster;
+        if (!caster.from_python(src, flags, cleanup)) {
             return false;
         }
-        value = SpecName(caster.operator cast_t<std::string>());
+        value = NameType(std::move(caster.value));
         return true;
     }
 
-    static handle from_cpp(const SpecName& src, rv_policy policy, cleanup_list* cleanup) {
-        return StringCaster::from_cpp(*src, policy, cleanup);
+    static handle from_cpp(const NameType& name, rv_policy policy, cleanup_list* cleanup) noexcept {
+        return make_caster<std::string>::from_cpp(*name, policy, cleanup);
     }
 };
 
-#define TTNN_SPEC_NAME_CASTER(NAME) \
-    template <>                     \
-    struct type_caster<tt::tt_metal::NAME> : spec_name_caster<tt::tt_metal::NAME> {}
-
-TTNN_SPEC_NAME_CASTER(DFBSpecName);
-TTNN_SPEC_NAME_CASTER(KernelSpecName);
-TTNN_SPEC_NAME_CASTER(SemaphoreSpecName);
-TTNN_SPEC_NAME_CASTER(ScratchpadSpecName);
-TTNN_SPEC_NAME_CASTER(TensorParamName);
-
-#undef TTNN_SPEC_NAME_CASTER
-
-// Kernel argument values (compile-time and runtime args) are ArgValue; expose them as plain Python ints.
+// Kernel argument values are uint32_t on the device; Python passes and reads them as int.
 template <>
 struct type_caster<tt::tt_metal::ArgValue> {
-    using U32Caster = make_caster<std::uint32_t>;
-
-    NB_TYPE_CASTER(tt::tt_metal::ArgValue, U32Caster::Name)
+    NB_TYPE_CASTER(tt::tt_metal::ArgValue, const_name("int"))
 
     bool from_python(handle src, uint8_t flags, cleanup_list* cleanup) noexcept {
-        U32Caster caster;
-        if (!caster.from_python(src, flags_for_local_caster<std::uint32_t>(flags), cleanup)) {
+        make_caster<uint32_t> caster;
+        if (!caster.from_python(src, flags, cleanup)) {
             return false;
         }
-        value = caster.operator cast_t<std::uint32_t>();
+        value = caster.value;
         return true;
     }
 
-    static handle from_cpp(const tt::tt_metal::ArgValue& src, rv_policy policy, cleanup_list* cleanup) {
-        return U32Caster::from_cpp(src.to_uint32(), policy, cleanup);
+    static handle from_cpp(const tt::tt_metal::ArgValue& arg, rv_policy policy, cleanup_list* cleanup) noexcept {
+        return make_caster<uint32_t>::from_cpp(arg.to_uint32(), policy, cleanup);
     }
 };
 
-}  // namespace nanobind::detail
+// Table<K, V> is a map with unique keys; Python passes and reads it as a dict.
+template <typename K, typename V>
+struct type_caster<tt::tt_metal::Table<K, V>> : dict_caster<tt::tt_metal::Table<K, V>, K, V> {
+    using Base = dict_caster<tt::tt_metal::Table<K, V>, K, V>;
+
+    bool from_python(handle src, uint8_t flags, cleanup_list* cleanup) noexcept {
+        if (!Base::from_python(src, flags, cleanup)) {
+            return false;
+        }
+        // Table keeps the first of two Python keys that convert to one C++ key, such as (0, 0) and
+        // ttnn.CoreCoord(0, 0), and drops the other value. Reject such a dict instead.
+        const Py_ssize_t size = PyObject_Length(src.ptr());
+        if (size < 0) {
+            PyErr_Clear();
+            return false;
+        }
+        return static_cast<Py_ssize_t>(this->value.size()) == size;
+    }
+};
+
+NAMESPACE_END(detail)
+NAMESPACE_END(NB_NAMESPACE)

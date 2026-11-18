@@ -68,69 +68,73 @@ def create_program_artifacts(a: ttnn.Tensor, b: ttnn.Tensor, out: ttnn.Tensor, *
     core_set, assignment = _split_tiles(num_tiles, grid_size, tile_limit=tile_limit)
 
     dfbs = [
-        ttnn.DataflowBufferSpec(unique_id=name, entry_size=tile_bytes, num_entries=2, data_format=dtype)
+        ttnn.experimental.DataflowBufferSpec(
+            unique_id=name, entry_size=tile_bytes, num_entries=2, data_format_metadata=dtype
+        )
         for name, dtype in ((DFB_A, a.dtype), (DFB_B, b.dtype), (DFB_OUT, out.dtype))
     ]
 
     tensor_parameters = [
-        ttnn.TensorParameter(unique_id=TP_A, spec=a.spec),
-        ttnn.TensorParameter(unique_id=TP_B, spec=b.spec),
-        ttnn.TensorParameter(unique_id=TP_OUT, spec=out.spec),
+        ttnn.experimental.TensorParameter(unique_id=TP_A, spec=a.spec),
+        ttnn.experimental.TensorParameter(unique_id=TP_B, spec=b.spec),
+        ttnn.experimental.TensorParameter(unique_id=TP_OUT, spec=out.spec),
     ]
 
-    reader = ttnn.KernelSpec(
+    reader = ttnn.experimental.KernelSpec(
         unique_id=K_READER,
         source=str(KERNEL_DIR / "reader.cpp"),
-        hw_config=ttnn.create_reader_dm_config(),
+        hw_config=ttnn.experimental.create_reader_datamovement_config(),
         dfb_bindings=[
-            ttnn.producer_of(DFB_A, "in_a"),
-            ttnn.producer_of(DFB_B, "in_b"),
+            ttnn.experimental.producer_of(DFB_A, "in_a"),
+            ttnn.experimental.producer_of(DFB_B, "in_b"),
         ],
         tensor_bindings=[
-            ttnn.TensorBinding(TP_A, "a"),
-            ttnn.TensorBinding(TP_B, "b"),
+            ttnn.experimental.TensorBinding(tensor_parameter_name=TP_A, accessor_name="a"),
+            ttnn.experimental.TensorBinding(tensor_parameter_name=TP_B, accessor_name="b"),
         ],
-        runtime_arg_schema=ttnn.RuntimeArgSchema(runtime_arg_names=["num_tiles", "start_id"]),
+        runtime_arg_schema=ttnn.experimental.KernelSpec.RuntimeArgSchema(runtime_arg_names=["num_tiles", "start_id"]),
     )
 
-    compute = ttnn.KernelSpec(
+    compute = ttnn.experimental.KernelSpec(
         unique_id=K_COMPUTE,
         source=str(KERNEL_DIR / "compute.cpp"),
-        hw_config=ttnn.ComputeHardwareConfig(),
+        hw_config=ttnn.experimental.ComputeHardwareConfig(),
         dfb_bindings=[
-            ttnn.consumer_of(DFB_A, "in_a"),
-            ttnn.consumer_of(DFB_B, "in_b"),
-            ttnn.producer_of(DFB_OUT, "out"),
+            ttnn.experimental.consumer_of(DFB_A, "in_a"),
+            ttnn.experimental.consumer_of(DFB_B, "in_b"),
+            ttnn.experimental.producer_of(DFB_OUT, "out"),
         ],
-        runtime_arg_schema=ttnn.RuntimeArgSchema(runtime_arg_names=["num_tiles"]),
+        runtime_arg_schema=ttnn.experimental.KernelSpec.RuntimeArgSchema(runtime_arg_names=["num_tiles"]),
     )
 
-    writer = ttnn.KernelSpec(
+    writer = ttnn.experimental.KernelSpec(
         unique_id=K_WRITER,
         source=str(KERNEL_DIR / "writer.cpp"),
-        hw_config=ttnn.create_writer_dm_config(),
-        dfb_bindings=[ttnn.consumer_of(DFB_OUT, "out")],
-        tensor_bindings=[ttnn.TensorBinding(TP_OUT, "out")],
-        runtime_arg_schema=ttnn.RuntimeArgSchema(runtime_arg_names=["num_tiles", "start_id"]),
+        hw_config=ttnn.experimental.create_writer_datamovement_config(),
+        dfb_bindings=[ttnn.experimental.consumer_of(DFB_OUT, "out")],
+        tensor_bindings=[ttnn.experimental.TensorBinding(tensor_parameter_name=TP_OUT, accessor_name="out")],
+        runtime_arg_schema=ttnn.experimental.KernelSpec.RuntimeArgSchema(runtime_arg_names=["num_tiles", "start_id"]),
     )
 
-    spec = ttnn.ProgramSpec(
+    spec = ttnn.experimental.ProgramSpec(
         name="toy_spec_mul",
         kernels=[reader, compute, writer],
         dataflow_buffers=dfbs,
         tensor_parameters=tensor_parameters,
-        work_units=[ttnn.WorkUnitSpec(name="main", kernels=[K_READER, K_COMPUTE, K_WRITER], target_nodes=core_set)],
+        work_units=[
+            ttnn.experimental.WorkUnitSpec(name="main", kernels=[K_READER, K_COMPUTE, K_WRITER], target_nodes=core_set)
+        ],
     )
 
     num_tiles_by_core = {core: count for core, count, _ in assignment}
     start_id_by_core = {core: start for core, _, start in assignment}
     dm_args = {"num_tiles": num_tiles_by_core, "start_id": start_id_by_core}
 
-    run_args = ttnn.ProgramRunArgs(
+    run_args = ttnn.experimental.ProgramRunArgs(
         kernel_run_args=[
-            ttnn.KernelRunArgs(kernel=K_READER, runtime_arg_values=dm_args),
-            ttnn.KernelRunArgs(kernel=K_COMPUTE, runtime_arg_values={"num_tiles": num_tiles_by_core}),
-            ttnn.KernelRunArgs(kernel=K_WRITER, runtime_arg_values=dm_args),
+            ttnn.experimental.KernelRunArgs(kernel=K_READER, runtime_arg_values=dm_args),
+            ttnn.experimental.KernelRunArgs(kernel=K_COMPUTE, runtime_arg_values={"num_tiles": num_tiles_by_core}),
+            ttnn.experimental.KernelRunArgs(kernel=K_WRITER, runtime_arg_values=dm_args),
         ]
     )
 

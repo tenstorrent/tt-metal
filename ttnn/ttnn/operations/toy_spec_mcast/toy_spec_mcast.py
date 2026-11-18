@@ -72,45 +72,47 @@ def create_program_artifacts(inp: ttnn.Tensor, rows: int, cols: int):
         ttnn.McastFixedSenderConfig(sender_index=0),
     )
 
-    spec = ttnn.ProgramSpec(
+    spec = ttnn.experimental.ProgramSpec(
         name="toy_spec_mcast",
         kernels=[
-            ttnn.KernelSpec(
+            ttnn.experimental.KernelSpec(
                 unique_id=K_READER,
                 source=str(KERNEL_DIR / "reader.cpp"),
-                hw_config=ttnn.create_reader_dm_config(),
-                dfb_bindings=[ttnn.producer_of(DFB_TILE, DFB_TILE)],
-                tensor_bindings=[ttnn.TensorBinding(TP_IN, TP_IN)],
-                runtime_arg_schema=ttnn.RuntimeArgSchema(runtime_arg_names=["row_page"]),
+                hw_config=ttnn.experimental.create_reader_datamovement_config(),
+                dfb_bindings=[ttnn.experimental.producer_of(DFB_TILE, DFB_TILE)],
+                tensor_bindings=[ttnn.experimental.TensorBinding(tensor_parameter_name=TP_IN, accessor_name=TP_IN)],
+                runtime_arg_schema=ttnn.experimental.KernelSpec.RuntimeArgSchema(runtime_arg_names=["row_page"]),
             ),
-            ttnn.KernelSpec(
+            ttnn.experimental.KernelSpec(
                 unique_id=K_WRITER,
                 source=str(KERNEL_DIR / "writer.cpp"),
-                hw_config=ttnn.create_writer_dm_config(),
-                dfb_bindings=[ttnn.consumer_of(DFB_TILE, DFB_TILE)],
-                tensor_bindings=[ttnn.TensorBinding(TP_OUT, TP_OUT)],
-                runtime_arg_schema=ttnn.RuntimeArgSchema(runtime_arg_names=["out_page"]),
+                hw_config=ttnn.experimental.create_writer_datamovement_config(),
+                dfb_bindings=[ttnn.experimental.consumer_of(DFB_TILE, DFB_TILE)],
+                tensor_bindings=[ttnn.experimental.TensorBinding(tensor_parameter_name=TP_OUT, accessor_name=TP_OUT)],
+                runtime_arg_schema=ttnn.experimental.KernelSpec.RuntimeArgSchema(runtime_arg_names=["out_page"]),
             ),
         ],
         dataflow_buffers=[
-            ttnn.DataflowBufferSpec(unique_id=DFB_TILE, entry_size=tile_bytes, num_entries=1, data_format=ttnn.bfloat16)
+            ttnn.experimental.DataflowBufferSpec(
+                unique_id=DFB_TILE, entry_size=tile_bytes, num_entries=1, data_format_metadata=ttnn.bfloat16
+            )
         ],
         tensor_parameters=[
-            ttnn.TensorParameter(unique_id=TP_IN, spec=inp.spec),
-            ttnn.TensorParameter(unique_id=TP_OUT, spec=out.spec),
+            ttnn.experimental.TensorParameter(unique_id=TP_IN, spec=inp.spec),
+            ttnn.experimental.TensorParameter(unique_id=TP_OUT, spec=out.spec),
         ],
-        work_units=[ttnn.WorkUnitSpec(name="main", kernels=[K_READER, K_WRITER], target_nodes=grid)],
+        work_units=[ttnn.experimental.WorkUnitSpec(name="main", kernels=[K_READER, K_WRITER], target_nodes=grid)],
     )
 
-    run_args = ttnn.ProgramRunArgs(
+    run_args = ttnn.experimental.ProgramRunArgs(
         kernel_run_args=[
-            ttnn.KernelRunArgs(
+            ttnn.experimental.KernelRunArgs(
                 kernel=K_READER,
                 runtime_arg_values={
                     "row_page": {c: c.y for c in cores},
                 },
             ),
-            ttnn.KernelRunArgs(
+            ttnn.experimental.KernelRunArgs(
                 kernel=K_WRITER,
                 runtime_arg_values={"out_page": {c: c.y * cols + c.x for c in cores}},
             ),
@@ -165,47 +167,51 @@ def create_2d_program_artifacts(inp: ttnn.Tensor, rows: int, cols: int, sender=N
     out = ttnn.allocate_tensor_on_device(out_spec, device)
     tile_bytes = inp.buffer_page_size()
 
-    spec = ttnn.ProgramSpec(
+    spec = ttnn.experimental.ProgramSpec(
         name="toy_spec_mcast_2d",
         kernels=[
-            ttnn.KernelSpec(
+            ttnn.experimental.KernelSpec(
                 unique_id=K_READER,
                 source=str(KERNEL_DIR / "reader.cpp"),
-                hw_config=ttnn.create_reader_dm_config(),
-                dfb_bindings=[ttnn.producer_of(DFB_TILE, DFB_TILE)],
-                tensor_bindings=[ttnn.TensorBinding(TP_IN, TP_IN)],
-                runtime_arg_schema=ttnn.RuntimeArgSchema(runtime_arg_names=["row_page"]),
+                hw_config=ttnn.experimental.create_reader_datamovement_config(),
+                dfb_bindings=[ttnn.experimental.producer_of(DFB_TILE, DFB_TILE)],
+                tensor_bindings=[ttnn.experimental.TensorBinding(tensor_parameter_name=TP_IN, accessor_name=TP_IN)],
+                runtime_arg_schema=ttnn.experimental.KernelSpec.RuntimeArgSchema(runtime_arg_names=["row_page"]),
             ),
-            ttnn.KernelSpec(
+            ttnn.experimental.KernelSpec(
                 unique_id=K_WRITER,
                 source=str(KERNEL_DIR / "writer.cpp"),
-                hw_config=ttnn.create_writer_dm_config(),
-                dfb_bindings=[ttnn.consumer_of(DFB_TILE, DFB_TILE)],
-                tensor_bindings=[ttnn.TensorBinding(TP_OUT, TP_OUT)],
-                runtime_arg_schema=ttnn.RuntimeArgSchema(runtime_arg_names=["out_page"]),
+                hw_config=ttnn.experimental.create_writer_datamovement_config(),
+                dfb_bindings=[ttnn.experimental.consumer_of(DFB_TILE, DFB_TILE)],
+                tensor_bindings=[ttnn.experimental.TensorBinding(tensor_parameter_name=TP_OUT, accessor_name=TP_OUT)],
+                runtime_arg_schema=ttnn.experimental.KernelSpec.RuntimeArgSchema(runtime_arg_names=["out_page"]),
             ),
         ],
         dataflow_buffers=[
-            ttnn.DataflowBufferSpec(unique_id=DFB_TILE, entry_size=tile_bytes, num_entries=1, data_format=ttnn.bfloat16)
+            ttnn.experimental.DataflowBufferSpec(
+                unique_id=DFB_TILE, entry_size=tile_bytes, num_entries=1, data_format_metadata=ttnn.bfloat16
+            )
         ],
         tensor_parameters=[
-            ttnn.TensorParameter(unique_id=TP_IN, spec=inp.spec),
-            ttnn.TensorParameter(unique_id=TP_OUT, spec=out.spec),
+            ttnn.experimental.TensorParameter(unique_id=TP_IN, spec=inp.spec),
+            ttnn.experimental.TensorParameter(unique_id=TP_OUT, spec=out.spec),
         ],
         work_units=[
-            ttnn.WorkUnitSpec(name="main", kernels=[K_READER, K_WRITER], target_nodes=mcast.participating_cores())
+            ttnn.experimental.WorkUnitSpec(
+                name="main", kernels=[K_READER, K_WRITER], target_nodes=mcast.participating_cores()
+            )
         ],
     )
 
-    run_args = ttnn.ProgramRunArgs(
+    run_args = ttnn.experimental.ProgramRunArgs(
         kernel_run_args=[
-            ttnn.KernelRunArgs(
+            ttnn.experimental.KernelRunArgs(
                 kernel=K_READER,
                 runtime_arg_values={
                     "row_page": {c: 0 for c in cores},
                 },
             ),
-            ttnn.KernelRunArgs(
+            ttnn.experimental.KernelRunArgs(
                 kernel=K_WRITER,
                 runtime_arg_values={"out_page": {c: i for i, c in enumerate(cores)}},
             ),

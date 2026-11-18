@@ -12,6 +12,8 @@
 satisfy with a single element.
 """
 
+from __future__ import annotations
+
 import struct
 from pathlib import Path
 
@@ -75,14 +77,14 @@ def _plan(tensor: ttnn.Tensor):
     return tile_bytes, core_set, num_tiles_by_core, start_id_by_core
 
 
-def _writer_kernel(tensor_parameter: str) -> ttnn.KernelSpec:
-    return ttnn.KernelSpec(
+def _writer_kernel(tensor_parameter: str) -> ttnn.experimental.KernelSpec:
+    return ttnn.experimental.KernelSpec(
         unique_id=K_WRITER,
         source=str(KERNEL_DIR / "writer.cpp"),
-        hw_config=ttnn.create_writer_dm_config(),
-        dfb_bindings=[ttnn.consumer_of(DFB_OUT, "out")],
-        tensor_bindings=[ttnn.TensorBinding(tensor_parameter, "out")],
-        runtime_arg_schema=ttnn.RuntimeArgSchema(runtime_arg_names=["num_tiles", "start_id"]),
+        hw_config=ttnn.experimental.create_writer_datamovement_config(),
+        dfb_bindings=[ttnn.experimental.consumer_of(DFB_OUT, "out")],
+        tensor_bindings=[ttnn.experimental.TensorBinding(tensor_parameter_name=tensor_parameter, accessor_name="out")],
+        runtime_arg_schema=ttnn.experimental.KernelSpec.RuntimeArgSchema(runtime_arg_names=["num_tiles", "start_id"]),
     )
 
 
@@ -90,32 +92,34 @@ def create_fill_artifacts(out: ttnn.Tensor, value: float):
     """Write-only program: `out` is the only tensor, and no kernel reads a tensor."""
     tile_bytes, core_set, num_tiles_by_core, start_id_by_core = _plan(out)
 
-    fill = ttnn.KernelSpec(
+    fill = ttnn.experimental.KernelSpec(
         unique_id=K_FILL,
         source=str(KERNEL_DIR / "fill.cpp"),
-        hw_config=ttnn.create_reader_dm_config(),
-        dfb_bindings=[ttnn.producer_of(DFB_OUT, "out")],
-        runtime_arg_schema=ttnn.RuntimeArgSchema(runtime_arg_names=["num_tiles", "fill_bits"]),
+        hw_config=ttnn.experimental.create_reader_datamovement_config(),
+        dfb_bindings=[ttnn.experimental.producer_of(DFB_OUT, "out")],
+        runtime_arg_schema=ttnn.experimental.KernelSpec.RuntimeArgSchema(runtime_arg_names=["num_tiles", "fill_bits"]),
     )
 
-    spec = ttnn.ProgramSpec(
+    spec = ttnn.experimental.ProgramSpec(
         name="toy_spec_fill",
         kernels=[fill, _writer_kernel(TP_OUT)],
         dataflow_buffers=[
-            ttnn.DataflowBufferSpec(unique_id=DFB_OUT, entry_size=tile_bytes, num_entries=2, data_format=out.dtype)
+            ttnn.experimental.DataflowBufferSpec(
+                unique_id=DFB_OUT, entry_size=tile_bytes, num_entries=2, data_format_metadata=out.dtype
+            )
         ],
-        tensor_parameters=[ttnn.TensorParameter(unique_id=TP_OUT, spec=out.spec)],
-        work_units=[ttnn.WorkUnitSpec(name="main", kernels=[K_FILL, K_WRITER], target_nodes=core_set)],
+        tensor_parameters=[ttnn.experimental.TensorParameter(unique_id=TP_OUT, spec=out.spec)],
+        work_units=[ttnn.experimental.WorkUnitSpec(name="main", kernels=[K_FILL, K_WRITER], target_nodes=core_set)],
     )
 
     fill_bits_by_core = {core: bf16_bits(value) for core in num_tiles_by_core}
-    run_args = ttnn.ProgramRunArgs(
+    run_args = ttnn.experimental.ProgramRunArgs(
         kernel_run_args=[
-            ttnn.KernelRunArgs(
+            ttnn.experimental.KernelRunArgs(
                 kernel=K_FILL,
                 runtime_arg_values={"num_tiles": num_tiles_by_core, "fill_bits": fill_bits_by_core},
             ),
-            ttnn.KernelRunArgs(
+            ttnn.experimental.KernelRunArgs(
                 kernel=K_WRITER,
                 runtime_arg_values={"num_tiles": num_tiles_by_core, "start_id": start_id_by_core},
             ),
@@ -131,44 +135,48 @@ def create_square_artifacts(t: ttnn.Tensor):
     """In-place program: one TensorParameter, read by the reader and written by the writer."""
     tile_bytes, core_set, num_tiles_by_core, start_id_by_core = _plan(t)
 
-    reader = ttnn.KernelSpec(
+    reader = ttnn.experimental.KernelSpec(
         unique_id=K_READER,
         source=str(KERNEL_DIR / "reader.cpp"),
-        hw_config=ttnn.create_reader_dm_config(),
-        dfb_bindings=[ttnn.producer_of(DFB_A, "in_a"), ttnn.producer_of(DFB_B, "in_b")],
-        tensor_bindings=[ttnn.TensorBinding(TP_T, "t")],
-        runtime_arg_schema=ttnn.RuntimeArgSchema(runtime_arg_names=["num_tiles", "start_id"]),
+        hw_config=ttnn.experimental.create_reader_datamovement_config(),
+        dfb_bindings=[ttnn.experimental.producer_of(DFB_A, "in_a"), ttnn.experimental.producer_of(DFB_B, "in_b")],
+        tensor_bindings=[ttnn.experimental.TensorBinding(tensor_parameter_name=TP_T, accessor_name="t")],
+        runtime_arg_schema=ttnn.experimental.KernelSpec.RuntimeArgSchema(runtime_arg_names=["num_tiles", "start_id"]),
     )
 
-    compute = ttnn.KernelSpec(
+    compute = ttnn.experimental.KernelSpec(
         unique_id=K_COMPUTE,
         source=str(KERNEL_DIR / "compute.cpp"),
-        hw_config=ttnn.ComputeHardwareConfig(),
+        hw_config=ttnn.experimental.ComputeHardwareConfig(),
         dfb_bindings=[
-            ttnn.consumer_of(DFB_A, "in_a"),
-            ttnn.consumer_of(DFB_B, "in_b"),
-            ttnn.producer_of(DFB_OUT, "out"),
+            ttnn.experimental.consumer_of(DFB_A, "in_a"),
+            ttnn.experimental.consumer_of(DFB_B, "in_b"),
+            ttnn.experimental.producer_of(DFB_OUT, "out"),
         ],
-        runtime_arg_schema=ttnn.RuntimeArgSchema(runtime_arg_names=["num_tiles"]),
+        runtime_arg_schema=ttnn.experimental.KernelSpec.RuntimeArgSchema(runtime_arg_names=["num_tiles"]),
     )
 
-    spec = ttnn.ProgramSpec(
+    spec = ttnn.experimental.ProgramSpec(
         name="toy_spec_square_inplace",
         kernels=[reader, compute, _writer_kernel(TP_T)],
         dataflow_buffers=[
-            ttnn.DataflowBufferSpec(unique_id=name, entry_size=tile_bytes, num_entries=2, data_format=t.dtype)
+            ttnn.experimental.DataflowBufferSpec(
+                unique_id=name, entry_size=tile_bytes, num_entries=2, data_format_metadata=t.dtype
+            )
             for name in (DFB_A, DFB_B, DFB_OUT)
         ],
-        tensor_parameters=[ttnn.TensorParameter(unique_id=TP_T, spec=t.spec)],
-        work_units=[ttnn.WorkUnitSpec(name="main", kernels=[K_READER, K_COMPUTE, K_WRITER], target_nodes=core_set)],
+        tensor_parameters=[ttnn.experimental.TensorParameter(unique_id=TP_T, spec=t.spec)],
+        work_units=[
+            ttnn.experimental.WorkUnitSpec(name="main", kernels=[K_READER, K_COMPUTE, K_WRITER], target_nodes=core_set)
+        ],
     )
 
     dm_args = {"num_tiles": num_tiles_by_core, "start_id": start_id_by_core}
-    run_args = ttnn.ProgramRunArgs(
+    run_args = ttnn.experimental.ProgramRunArgs(
         kernel_run_args=[
-            ttnn.KernelRunArgs(kernel=K_READER, runtime_arg_values=dm_args),
-            ttnn.KernelRunArgs(kernel=K_COMPUTE, runtime_arg_values={"num_tiles": num_tiles_by_core}),
-            ttnn.KernelRunArgs(kernel=K_WRITER, runtime_arg_values=dm_args),
+            ttnn.experimental.KernelRunArgs(kernel=K_READER, runtime_arg_values=dm_args),
+            ttnn.experimental.KernelRunArgs(kernel=K_COMPUTE, runtime_arg_values={"num_tiles": num_tiles_by_core}),
+            ttnn.experimental.KernelRunArgs(kernel=K_WRITER, runtime_arg_values=dm_args),
         ]
     )
 

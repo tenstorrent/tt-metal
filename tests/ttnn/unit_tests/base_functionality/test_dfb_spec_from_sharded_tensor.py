@@ -2,7 +2,7 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""ttnn.dfb_spec_from_sharded_tensor: derive a Metal 2.0 DataflowBufferSpec from a sharded tensor.
+"""ttnn.experimental.dfb_spec_from_sharded_tensor: derive a Metal 2.0 DataflowBufferSpec from a sharded tensor.
 
 The Metal 2.0 counterpart of ttnn.cb_descriptor_from_sharded_tensor. Every entry-format field of
 a DataflowBufferSpec (entry_size, num_entries, data_format_metadata, tile_format_metadata) used to
@@ -47,12 +47,14 @@ def _height_sharded(device, shape, shard_shape, cores, *, layout, dtype, buffer_
 
 
 def _data_format_of(dtype):
-    """The tt::DataFormat integer the DFB constructor derives from a ttnn.DataType.
+    """The data_format_metadata the DFB constructor stores for a ttnn.DataType.
 
-    data_format_metadata is surfaced as a raw enum integer, so build the reference through the
-    constructor rather than hardcoding the value.
+    It reads back as a ttnn.DataType, which is not always the one passed in (int8 reads back as
+    uint8), so build the reference through the constructor rather than hardcoding the value.
     """
-    return ttnn.DataflowBufferSpec(unique_id="ref", entry_size=1, num_entries=1, data_format=dtype).data_format_metadata
+    return ttnn.experimental.DataflowBufferSpec(
+        unique_id="ref", entry_size=1, num_entries=1, data_format_metadata=dtype
+    ).data_format_metadata
 
 
 # ---------------------------------------------------------------- tiled tensors
@@ -64,7 +66,7 @@ def test_tiled_shard_derives_one_entry_per_tile(device, dtype):
     # 4 tile rows x 2 tile cols, height-split over 2 cores -> 2x2 = 4 tiles per core.
     tensor = _height_sharded(device, (1, 1, 128, 64), (64, 64), _two_cores(), layout=ttnn.TILE_LAYOUT, dtype=dtype)
 
-    dfb = ttnn.dfb_spec_from_sharded_tensor("in", tensor)
+    dfb = ttnn.experimental.dfb_spec_from_sharded_tensor("in", tensor)
 
     assert dfb.unique_id == "in"
     assert dfb.entry_size == ttnn.tile_size(dtype)
@@ -81,12 +83,15 @@ def test_tiled_shard_agrees_with_cb_descriptor_helper(device):
         device, (1, 1, 128, 64), (64, 64), _two_cores(), layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16
     )
 
-    dfb = ttnn.dfb_spec_from_sharded_tensor("in", tensor)
+    dfb = ttnn.experimental.dfb_spec_from_sharded_tensor("in", tensor)
     cb = ttnn.cb_descriptor_from_sharded_tensor(0, tensor)
 
     assert dfb.entry_size == cb.format_descriptors[0].page_size
     assert dfb.entry_size * dfb.num_entries == cb.total_size
-    assert dfb.data_format_metadata == cb.format_descriptors[0].data_format_as_uint8
+    dfb_format = ttnn.CBFormatDescriptor(
+        buffer_index=0, data_format=dfb.data_format_metadata, page_size=dfb.entry_size
+    ).data_format_as_uint8
+    assert dfb_format == cb.format_descriptors[0].data_format_as_uint8
 
 
 def test_page_as_tile_is_a_noop_for_a_tiled_tensor(device):
@@ -95,8 +100,8 @@ def test_page_as_tile_is_a_noop_for_a_tiled_tensor(device):
         device, (1, 1, 128, 64), (64, 64), _two_cores(), layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16
     )
 
-    plain = ttnn.dfb_spec_from_sharded_tensor("in", tensor)
-    as_tile = ttnn.dfb_spec_from_sharded_tensor("in", tensor, page_as_tile=True)
+    plain = ttnn.experimental.dfb_spec_from_sharded_tensor("in", tensor)
+    as_tile = ttnn.experimental.dfb_spec_from_sharded_tensor("in", tensor, page_as_tile=True)
 
     assert (as_tile.entry_size, as_tile.num_entries) == (plain.entry_size, plain.num_entries)
     assert as_tile.tile_format_metadata == plain.tile_format_metadata
@@ -111,7 +116,7 @@ def test_row_major_shard_derives_one_entry_per_stick(device):
         device, (1, 1, 32, 64), (32, 64), _one_core(), layout=ttnn.ROW_MAJOR_LAYOUT, dtype=ttnn.bfloat16
     )
 
-    dfb = ttnn.dfb_spec_from_sharded_tensor("in", tensor)
+    dfb = ttnn.experimental.dfb_spec_from_sharded_tensor("in", tensor)
 
     assert dfb.entry_size == 64 * 2  # one 64-wide bfloat16 stick
     assert dfb.num_entries == 32  # 32 sticks in the shard
@@ -125,8 +130,8 @@ def test_page_as_tile_repages_a_row_major_shard(device):
         device, (1, 1, 32, 32), (32, 32), _one_core(), layout=ttnn.ROW_MAJOR_LAYOUT, dtype=ttnn.bfloat16
     )
 
-    sticks = ttnn.dfb_spec_from_sharded_tensor("in", tensor)
-    tiles = ttnn.dfb_spec_from_sharded_tensor("in", tensor, page_as_tile=True)
+    sticks = ttnn.experimental.dfb_spec_from_sharded_tensor("in", tensor)
+    tiles = ttnn.experimental.dfb_spec_from_sharded_tensor("in", tensor, page_as_tile=True)
 
     assert (sticks.entry_size, sticks.num_entries) == (32 * 2, 32)
     assert (tiles.entry_size, tiles.num_entries) == (ttnn.tile_size(ttnn.bfloat16), 1)
@@ -145,7 +150,9 @@ def test_page_as_tile_on_a_sub_tile_shard_falls_back_to_one_partial_entry(device
         device, (1, 1, 16, 32), (16, 32), _one_core(), layout=ttnn.ROW_MAJOR_LAYOUT, dtype=ttnn.bfloat16
     )
 
-    dfb = ttnn.dfb_spec_from_sharded_tensor("in", tensor, page_as_tile=True, tile_format=ttnn.Tile([16, 32]))
+    dfb = ttnn.experimental.dfb_spec_from_sharded_tensor(
+        "in", tensor, page_as_tile=True, tile_format=ttnn.Tile([16, 32])
+    )
 
     assert dfb.entry_size == 16 * 32 * 2  # the whole shard, less than one tile
     assert dfb.num_entries == 1
@@ -161,7 +168,7 @@ def test_borrowed_from_is_recorded(device):
         device, (1, 1, 64, 64), (64, 64), _one_core(), layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16
     )
 
-    dfb = ttnn.dfb_spec_from_sharded_tensor("in", tensor, borrowed_from="a")
+    dfb = ttnn.experimental.dfb_spec_from_sharded_tensor("in", tensor, borrowed_from="a")
 
     assert dfb.borrowed_from == "a"
     assert dfb.entry_size * dfb.num_entries == 4 * ttnn.tile_size(ttnn.bfloat16)
@@ -173,8 +180,8 @@ def test_num_entries_override_keeps_the_derived_entry_size(device):
         device, (1, 1, 64, 64), (64, 64), _one_core(), layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16
     )
 
-    derived = ttnn.dfb_spec_from_sharded_tensor("stage", tensor)
-    staged = ttnn.dfb_spec_from_sharded_tensor("stage", tensor, num_entries=2)
+    derived = ttnn.experimental.dfb_spec_from_sharded_tensor("stage", tensor)
+    staged = ttnn.experimental.dfb_spec_from_sharded_tensor("stage", tensor, num_entries=2)
 
     assert derived.num_entries == 4
     assert staged.num_entries == 2
@@ -195,7 +202,7 @@ def test_interleaved_tensor_is_rejected(device, expect_error):
     )
 
     with expect_error(RuntimeError, "tensor must be sharded"):
-        ttnn.dfb_spec_from_sharded_tensor("in", tensor)
+        ttnn.experimental.dfb_spec_from_sharded_tensor("in", tensor)
 
 
 def test_borrowed_dfb_larger_than_the_shard_is_rejected(device, expect_error):
@@ -205,10 +212,10 @@ def test_borrowed_dfb_larger_than_the_shard_is_rejected(device, expect_error):
     )
 
     with expect_error(RuntimeError, "does not fit in the shard it borrows"):
-        ttnn.dfb_spec_from_sharded_tensor("in", tensor, num_entries=5, borrowed_from="a")
+        ttnn.experimental.dfb_spec_from_sharded_tensor("in", tensor, num_entries=5, borrowed_from="a")
 
     # Not borrowing: the depth is the caller's business, no sizing claim is made against the tensor.
-    deep = ttnn.dfb_spec_from_sharded_tensor("stage", tensor, num_entries=5)
+    deep = ttnn.experimental.dfb_spec_from_sharded_tensor("stage", tensor, num_entries=5)
     assert deep.num_entries == 5
 
 
@@ -221,4 +228,4 @@ def test_host_tensor_is_rejected(device, expect_error):
     host = ttnn.from_torch(torch.randn(1, 1, 64, 64, dtype=torch.bfloat16), dtype=ttnn.bfloat16)
 
     with expect_error(RuntimeError, "must be sharded"):
-        ttnn.dfb_spec_from_sharded_tensor("in", host)
+        ttnn.experimental.dfb_spec_from_sharded_tensor("in", host)

@@ -115,5 +115,7 @@ def test_spec_hash_is_structural(device):
     assert ttnn.compute_program_spec_hash(spec1) == ttnn.compute_program_spec_hash(spec2)
 
     spec3, _, _ = create_program_artifacts(a, b, out)
-    spec3.dataflow_buffers[0].num_entries = 4
+    dataflow_buffers = spec3.dataflow_buffers
+    dataflow_buffers[0].num_entries = 4
+    spec3.dataflow_buffers = dataflow_buffers
     assert ttnn.compute_program_spec_hash(spec3) != ttnn.compute_program_spec_hash(spec1)
