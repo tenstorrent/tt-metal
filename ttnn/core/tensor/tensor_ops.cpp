@@ -533,6 +533,12 @@ Tensor view_device(const Tensor& input_tensor, const Shape& new_logical_shape, c
         return Tensor(std::move(view_storage));
     }
 
+    // A per-core allocated buffer has a different address on each core, and this view would take the mesh buffer's
+    // address, which it reports as 0.
+    TT_FATAL(
+        !tt::tt_metal::experimental::per_core_allocation::is_per_core_allocation(input_tensor.memory_config()),
+        "Reshaping a sharded ROW_MAJOR tensor with per-core allocation into a different last dimension is not "
+        "supported");
     tt::tt_metal::ShardSpec new_shard_spec = output_memory_config.shard_spec().value();
     std::array<uint32_t, 2> shard_page_shape = {1, new_shard_spec.shape[1]};
     std::array<uint32_t, 2> tensor2d_shape_in_pages = {

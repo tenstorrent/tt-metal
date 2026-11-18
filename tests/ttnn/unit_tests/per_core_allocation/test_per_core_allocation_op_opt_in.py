@@ -97,3 +97,29 @@ def test_lockstep_input_unaffected(per_core_mesh_device, lockstep_width_sharded_
 
     tiled = ttnn.tilize(row_major, memory_config=lockstep_config)
     assert torch.equal(ttnn.to_torch(tiled), torch_input), "tilize corrupted the data"
+
+
+@requires_hybrid_allocator
+def test_row_major_sharded_view_rejects_per_core_input(per_core_mesh_device, expect_error):
+    """A view that changes the last dimension of a sharded ROW_MAJOR tensor takes the mesh buffer's single address,
+    which a per-core tensor doesn't have."""
+    shard_height, width = 32, 64
+    grid = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(*GRID_START), ttnn.CoreCoord(*GRID_END))])
+    mem_config = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+        ttnn.BufferType.L1,
+        ttnn.ShardSpec(grid, [shard_height, width], ttnn.ShardOrientation.ROW_MAJOR),
+    )
+    mem_config.experimental_set_per_core_allocation(True)
+    row_major = ttnn.from_torch(
+        torch.randn(shard_height * NUM_CORES, width, dtype=torch.bfloat16),
+        dtype=ttnn.bfloat16,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        memory_config=mem_config,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(per_core_mesh_device),
+        device=per_core_mesh_device,
+    )
+    assert row_major.is_per_core_allocated(), "precondition failed: ROW_MAJOR input is not per-core"
+
+    with expect_error(RuntimeError, "Reshaping a sharded ROW_MAJOR tensor with per-core allocation"):
+        ttnn.experimental.view(row_major, (shard_height * NUM_CORES // 2, width * 2))
