@@ -22,6 +22,7 @@
 
 #include "impl/context/metal_context.hpp"
 #include "impl/dispatch/slow_dispatch.hpp"
+#include "impl/kernels/kernel.hpp"
 #include "impl/program/program_impl.hpp"
 #include "dev_mem_map.h"
 #include "tt_metal/tt_fabric/keraunos/vcluster/descriptors.hpp"
