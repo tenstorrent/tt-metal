@@ -7,7 +7,7 @@
 #include "ttnn/tensor/tensor_ops.hpp"
 
 #include <tt-metalium/constants.hpp>
-#include <tt-metalium/experimental/metal2_host_api/tensor_spec_relaxations.hpp>
+#include <tt-metalium/workload/specification/tensor_spec_relaxations.hpp>
 #include <ttnn/operation.hpp>
 
 namespace ttnn::prim {
@@ -99,17 +99,17 @@ ttsl::hash::hash_t InterleavedToShardedPartialDeviceOperation::compute_program_h
     // override_runtime_arguments patches only the address and starting offset, and the input buffer
     // type selects the TensorAccessorArgs compile-time words, the scratch CB's existence and the input
     // CB page size. The non-partial sibling already keys both. The input is keyed as Metal 2.0 matches it
-    // under match_padded_shape_only, which covers both: its whole TensorLayout (Alignment included, which
-    // Metal 2.0 requires to match exactly on every hit) plus its padded shape (#59915). Its logical shape
-    // is left out: the factory works only from the padded shape.
+    // under match_padded_shape_only + relax_tensor_layout_alignment, which covers both: its padded shape
+    // and the rest of its TensorLayout (dtype, page config, memory config) (#59915). Its logical shape and
+    // Alignment are left out: the factory works only from the padded shape.
     return tt::tt_metal::operation::hash_operation<InterleavedToShardedPartialDeviceOperation>(
         operation_attributes.grid_size,
         operation_attributes.shard_spec,
         operation_attributes.num_slices,
         operation_attributes.output_mem_config,
         operation_attributes.output_dtype,
-        tt::tt_metal::experimental::hash_tensorspec_with_relaxation(
-            input_tensor.tensor_spec(), {.match_padded_shape_only = true}));
+        tt::tt_metal::hash_tensorspec_with_relaxation(
+            input_tensor.tensor_spec(), {.match_padded_shape_only = true, .relax_tensor_layout_alignment = true}));
 }
 
 Tensor interleaved_to_sharded_partial(

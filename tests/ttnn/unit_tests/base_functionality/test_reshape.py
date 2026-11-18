@@ -384,8 +384,9 @@ def test_reshape_hw_rm_with_program_cache(device, n, c, h, w):
 
 
 def test_reshape_on_device_tile_same_padded_shape_different_alignment(device):
-    """Two tiled inputs that share a padded shape but differ in logical shape and Alignment must not share a cached
-    program. Metal 2.0 compares every tensor's layout exactly on a cache hit, so the key must cover it (#59915)."""
+    """Two tiled inputs that share a padded shape but differ in logical shape and Alignment share one cached program:
+    the factories work only from the padded shape, so the key frees Alignment via relax_tensor_layout_alignment
+    (#59915). The cache-hit output must match a freshly built program's output."""
     torch.manual_seed(0)
     # Padded to [1, 1, 64, 64] by the default 32x32 tile alignment.
     tt_default = ttnn.from_torch(
@@ -399,10 +400,17 @@ def test_reshape_on_device_tile_same_padded_shape_different_alignment(device):
     )
     assert list(tt_default.padded_shape) == list(tt_explicit.padded_shape) == [1, 1, 64, 64]
 
+    # References from freshly built programs. The tile path reshapes the padded data, so a logical torch
+    # reshape is not a valid reference.
+    device.disable_and_clear_program_cache()
+    expected = [ttnn.to_torch(ttnn.reshape_on_device(t, 1, 1, 15, 128)) for t in (tt_default, tt_explicit)]
+    device.enable_program_cache()
+
     with device.cache_entries_counter.measure():
-        ttnn.reshape_on_device(tt_default, 1, 1, 15, 128)
-        ttnn.reshape_on_device(tt_explicit, 1, 1, 15, 128)
-    assert device.cache_entries_counter.total == 2
+        outputs = [ttnn.to_torch(ttnn.reshape_on_device(t, 1, 1, 15, 128)) for t in (tt_default, tt_explicit)]
+    assert device.cache_entries_counter.total == 1
+    for output, reference in zip(outputs, expected):
+        assert torch.equal(output, reference)
 
 
 @pytest.mark.parametrize("h", [32])
