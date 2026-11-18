@@ -2,11 +2,12 @@
 # SPDX-FileCopyrightText: 2026 Tenstorrent USA, Inc.
 """Host test of the update-2 `single-user` packaged class (tt/package_boot_pb3.py), no device and no ttnn: the module's
 source is parsed, not imported (importing PB3 imports ttnn). It must subclass Gemma4ResidentSpecPB3ForCausalLM, and its
-initialize_vllm_model must run package_boot.ensure_resident_cache() before the PB3 construction; the bundle must name it.
+initialize_vllm_model must run package_boot.ensure_resident_cache() before the PB3 construction. Update 4: PB3Packaged
+is no longer a profile's class (its bundle and update 1's qb2_pb bundle are removed); it stays as the base of update 4's
+`single-user` class (tt/package_boot_pb4.py, tests/test_package_boot_pb4.py), so its bundle test is gone.
     pytest -q models/demos/gemma4_31b_qb2/tests/test_package_boot_pb3.py"""
 
 import ast
-import json
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -34,11 +35,3 @@ def test_cache_before_construction():
     assert body == ["ensure_resident_cache()",
                     "return super().initialize_vllm_model(hf_config, mesh_device, max_batch_size, **kwargs)"]
 
-
-def test_bundle_names_the_packaged_class():
-    meta = json.loads((ROOT / "vllm_models" / "resident_spec_pb3" / "vllm_metadata.json").read_text())
-    assert meta == {"arch": "Gemma4QB2ResidentSpecPB3ForCausalLM",
-                    "main_class": "models.demos.gemma4_31b_qb2.tt.package_boot_pb3:Gemma4ResidentSpecPB3Packaged"}
-    meta = json.loads((ROOT / "vllm_models" / "qb2_pb" / "vllm_metadata.json").read_text())
-    assert meta == {"arch": "Gemma4QB2PBForCausalLM",
-                    "main_class": "models.demos.gemma4_31b_qb2.tt.generator_vllm_pb:Gemma4ForCausalLMPB"}

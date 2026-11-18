@@ -285,14 +285,6 @@ def test_the_packaged_class_ensures_the_cache_before_building_the_model(monkeypa
     assert order == ["cache", ("model", pb.Gemma4ResidentSpecPackaged, 1, {"max_seq_len": 262144})]
 
 
-def test_the_package_bundle_names_the_packaged_class():
-    meta = json.loads((ROOT / "models/demos/gemma4_31b_qb2/vllm_models/resident_spec/vllm_metadata.json").read_text())
-    module, name = meta["main_class"].split(":")
-    import importlib
-
-    assert getattr(importlib.import_module(module), name) is pb.Gemma4ResidentSpecPackaged
-    assert meta["arch"] == "Gemma4QB2ResidentSpecForCausalLM"
-
 
 # ---------------------------------------------------------------- kill tests (SIGKILL, so no cleanup code runs)
 

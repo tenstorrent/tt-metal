@@ -1,20 +1,27 @@
 # tt-model.yaml — google/gemma-4-31B-it on a QuietBox 2 (P300x2: 2x P300 boards = 4 Blackhole chips, (1, 4) mesh, TP4)
-# via vLLM + the stock vllm-tt-plugin. Rendered from bench/packaging/update3/{tt-model_u3_2.yaml,card_v5a.md} by
-# render_manifest_u3_2.py.
+# via vLLM + the stock vllm-tt-plugin. Rendered from bench/packaging/update4/{tt-model_u4.yaml,card_v6_x.md} by
+# render_manifest_u4.py.
 #
 #   single-user          DEFAULT: one user on the resident persistent-kernel decode engine (resident_m3_2) with
 #                        DFlash2 speculative decoding (RedHatAI/gemma-4-31B-it-speculator.dflash2, block 8, R=8 verify),
 #                        262,144-token context. = stage-2 regression config D (M2 adapter + M2 delta), with update 2's
-#                        paged-bucket prefill (PB3: tt/generator_resident_spec_vllm_pb3.py; LEAD_DECISIONS_PKG P34, P37).
+#                        paged-bucket prefill (PB3: tt/generator_resident_spec_vllm_pb3.py; LEAD_DECISIONS_PKG P34, P37);
+#                        update 4: PB4 = PB3 + the continuation pre-warm (tt/package_boot_pb4.py, tt/contwarm.py).
 #   batch                update 3: up to 32 users on the resident batch engine (resident_m5_11) through the S3.2
 #                        adapter with the paged-bucket prefill (S3-PB: tt/generator_resident_multi_s3_2_pb_vllm.py),
 #                        option S (decode width R = 1 / 8 / 32 by live rows), no speculation, 262,144-token context.
 #                        = option A's evidence config (bench/resident/s1 H6-H9, the S3-PB subset and L3-only holds;
-#                        update3/UPDATE3_PLAN.md section 3); LEAD_DECISIONS_PKG P48, P49.
+#                        update3/UPDATE3_PLAN.md section 3); LEAD_DECISIONS_PKG P48, P49. Update 4: option C's KV layout
+#                        (tt/generator_resident_multi_s3_2_pb_ring_vllm.py: full-attention blocks in vLLM's pool, the
+#                        sliding layers in a fixed per-user ring) + the continuation pre-warm (tt/package_boot_s3pb_ring.py).
 #
-# Update 3.2 (2026-11-17; LEAD_DECISIONS_PKG P84-P86, the user's decision): the `batch-b32` profile (update 2's `batch`,
-# B32-PB) is removed; the Hub's `update-2` revision keeps it. Its code (tt/generator_vllm_pb.py, vllm_models/qb2_pb)
-# stays shipped and unused until update 4's cleanup. Nothing else changes from update 3.1 (1c932f77b76) but the card.
+# Update 4 (2026-11-19; LEAD_DECISIONS_PKG P99-P122): `batch` = option C's ring class (P103, P107; the ring class refuses
+# update 3's KV-pool variable, so no env block sets it, P110), both profiles pre-build every continuation prefill
+# program at the first start after a kernel change (a marker in the kernel cache skips it later;
+# GEMMA4_CONT_PREWARM=auto|off|force, default auto; P106, P112), and the unused code goes (P100, P115):
+# tt/generator_vllm_pb.py, tt/package_boot_s3pb.py and the bundles qb2_pb, qb2, resident_spec, resident_spec_pb3,
+# resident_multi_s3pb. The Hub's `update-3` revision keeps update 3's `batch` (S3-PB without the ring). Update 3.2
+# (P84-P86) removed the `batch-b32` profile.
 #
 # Update 2 (2026-11-15; LEAD_DECISIONS_PKG P36-P38): the paged-bucket prefill (tt/prefill_paged.py) on both profiles.
 # Prefill programs are keyed by a fixed bucket set built at boot, so serving many distinct prompt lengths no longer
@@ -51,9 +58,8 @@ source:
     - models/demos/gemma4_31b_qb2/tt               # ttnn model (prefill + batch32 decode), adapters, drafters, taps, PB prefill
     - models/demos/gemma4_31b_qb2/resident_m3_2    # the engine stage-2 D validated (frozen SUMS 4677ca02): single-user
     - models/demos/gemma4_31b_qb2/resident_m5_11   # update 3: the batch engine (frozen SUMS b128d3df, D43 isolation)
-    - models/demos/gemma4_31b_qb2/vllm_models      # this package's EXTRA_MODELS_DIR (five bundles; the profiles use
-                                                   # resident_spec_pb3 and resident_multi_s3pb; qb2_pb (3.1's batch-b32)
-                                                   # and update 1's qb2 and resident_spec stay, unused)
+    - models/demos/gemma4_31b_qb2/vllm_models      # this package's EXTRA_MODELS_DIR: exactly the two profiles' bundles,
+                                                   # resident_spec_pb4 and resident_multi_s3pb_ring (update 4)
     - models/demos/gemma4/__init__.py              # spec_policy (generator_resident_spec_vllm.py imports it)
     - models/demos/gemma4/tt/__init__.py
     - models/demos/gemma4/tt/spec_policy.py
@@ -113,18 +119,19 @@ serve_profiles:
       GEMMA4_RESIDENT_ENGINE_PACKAGE: resident_m3_2       # = stage-2 D
       GEMMA4_RESIDENT_DRAFTER: dflash2
       # The resident engine's converted weights (raw BF4/BF8 blocks, 22 GB), in the /tensor-cache mount
-      # (~/.cache/tt-model/gemma4-31b-it-dflash/tensors on the host). vllm_models/resident_spec names
-      # tt/package_boot.py:Gemma4ResidentSpecPackaged, which converts them on the first start and checks them on every
-      # start (COMPLETE.json: weights revision, engine + converter hashes, precision, file manifest). Update 2:
-      # vllm_models/resident_spec_pb3 names tt/package_boot_pb3.py:Gemma4ResidentSpecPB3Packaged, the same boot step
-      # (ensure_resident_cache) in front of PB3 (PB prefill + drafter-seed pre-warm + seed-path guard).
+      # (~/.cache/tt-model/gemma4-31b-it-dflash/tensors on the host). vllm_models/resident_spec_pb4 names
+      # tt/package_boot_pb4.py:Gemma4ResidentSpecPB4Packaged (update 4): update 2's PB3Packaged (tt/package_boot_pb3.py:
+      # package_boot.ensure_resident_cache, which converts them on the first start and checks them on every start
+      # (COMPLETE.json: weights revision, engine + converter hashes, precision, file manifest), in front of PB3: PB
+      # prefill + drafter-seed pre-warm + seed-path guard) plus the continuation pre-warm (64 programs, start 1,280; a
+      # marker in the kernel cache, tt/contwarm.py).
       GRES_CACHE: /tensor-cache/gemma4_resident_raw_bf4
       GEMMA4_RESIDENT_PRECISION: bf4                   # must match the converter's dtypes (refused otherwise)
       # The drafter (5.2 GB) is a second checkpoint the single `weights` pointer cannot carry: tt/dflash2.py resolves
       # RedHatAI/gemma-4-31B-it-speculator.dflash2 at its pinned commit b0cd01b4 from the /hf cache, offline
       # (snapshot_download local_files_only). The card's quickstart downloads it first.
     args:
-      - [--hf-overrides, '{"architectures":["TTGemma4QB2ResidentSpecPB3ForCausalLM"]}']   # update 2: PB3
+      - [--hf-overrides, '{"architectures":["TTGemma4QB2ResidentSpecPB4ForCausalLM"]}']   # update 4: PB4 (PB3 + pre-warm)
       - [--revision, 842da3794eaa0b77d5f08bae87a17459d91ff475]
       - [--tokenizer-revision, 842da3794eaa0b77d5f08bae87a17459d91ff475]
       - [--max-num-batched-tokens, "8192"]
@@ -152,24 +159,25 @@ serve_profiles:
       # (vllm_tt_plugin/worker.py:535-536). Proof v5 run 3 C5, 32 users: 277.5 ms per step with one repetition_penalty
       # request among 31 default-sampled ones, 26.9 ms all-greedy.
       OMP_NUM_THREADS: "8"                            # host-sampled steps, as update 1 (and as every A hold)
-      # Option A's RES set (bench/resident/s1/run_s3_h6_v2.sh; the S3-PB subset and L3-only specs), verbatim:
+      # Option A's RES set (bench/resident/s1/run_s3_h6_v2.sh; the S3-PB subset and L3-only specs) minus update 3's
+      # KV-pool variable, which the ring class refuses (update 4; P107, P110; = the ring chain's session env):
       GEMMA4_RESIDENT_ENGINE_PACKAGE: resident_m5_11
       GEMMA4_RESIDENT_SPEC_POLICY: never
       GEMMA4_RESIDENT_ENGINE_TAPS: "0"
       GEMMA4_RESIDENT_ENGINE_BLOCKS: "1"
-      GEMMA4_RESIDENT_KV_POOL: b32
       GEMMA4_RESIDENT_BF8_PARTIALS: "1"
       GEMMA4_RESIDENT_R_DOWN_STEPS: "32"
       GEMMA4_RESIDENT_R_IDLE_RESET: "1"
       # GRES_ISO / GRES_ISO_SKIPFOLD stay unset: m5_11's safe defaults (1 / 0), checked by the validator's iso pin.
       # The converted weights, in the /tensor-cache mount: package_boot keys a cache by engine package and engine tree,
       # so this profile has its own directory (sharing single-user's would reconvert on every profile switch).
-      # vllm_models/resident_multi_s3pb names tt/package_boot_s3pb.py:Gemma4ResidentMultiS32PBPackaged, which converts
-      # them on the first start and checks them on every start.
+      # vllm_models/resident_multi_s3pb_ring names tt/package_boot_s3pb_ring.py:Gemma4ResidentMultiS32PBRingPackaged
+      # (update 4), which converts them on the first start and checks them on every start, then pre-builds the 640
+      # continuation prefill programs on the first start after a kernel change (tt/contwarm.py).
       GRES_CACHE: /tensor-cache/gemma4_resident_raw_bf4_m5_11
       GEMMA4_RESIDENT_PRECISION: bf4                  # must match the converter's dtypes (refused otherwise)
     args:
-      - [--hf-overrides, '{"architectures":["TTGemma4QB2ResidentMultiS32PBForCausalLM"]}']   # update 3: S3-PB (vllm_models/resident_multi_s3pb)
+      - [--hf-overrides, '{"architectures":["TTGemma4QB2ResidentMultiS32PBRingForCausalLM"]}']   # update 4: the ring class (vllm_models/resident_multi_s3pb_ring)
       - [--revision, 842da3794eaa0b77d5f08bae87a17459d91ff475]
       - [--tokenizer-revision, 842da3794eaa0b77d5f08bae87a17459d91ff475]
       - [--max-num-batched-tokens, "8192"]
@@ -185,7 +193,7 @@ default_profile: single-user          # lead 2026-11-11 (qwen v2 names); multi-u
 
 card:
   description: |
-    [google/gemma-4-31B-it](https://huggingface.co/google/gemma-4-31B-it) on a QuietBox 2 (P300x2, 4 Blackhole chips) with vLLM. The default profile serves one user on a resident decode engine (one persistent program per chip per decode step) with [DFlash2](https://huggingface.co/RedHatAI/gemma-4-31B-it-speculator.dflash2) speculative decoding, up to 262K context. `batch` serves up to 32 users on a resident batch engine that keeps per-user decode fast at long context, up to 262K. Both profiles use a paged-bucket prefill: a fixed set of prefill programs built at start-up, so device memory no longer grows with the number of distinct prompt lengths served.
+    [google/gemma-4-31B-it](https://huggingface.co/google/gemma-4-31B-it) on a QuietBox 2 (P300x2, 4 Blackhole chips) with vLLM. The default profile serves one user on a resident decode engine (one persistent program per chip per decode step) with [DFlash2](https://huggingface.co/RedHatAI/gemma-4-31B-it-speculator.dflash2) speculative decoding, up to 262K context. `batch` serves up to 32 users on a resident batch engine that keeps per-user decode fast at long context, up to 262K. Both profiles use a paged-bucket prefill: a fixed set of prefill programs built at start-up, so device memory no longer grows with the number of distinct prompt lengths served. Update 4 also builds every continuation prefill program a long prompt can need at the first start, and gives `batch` a KV layout that admits more users at long context.
   quickstart: |
     ### At a glance
     - Weights: [google/gemma-4-31B-it](https://huggingface.co/google/gemma-4-31B-it) @ `842da37`; drafter
@@ -205,6 +213,26 @@ card:
       tool calling.
     - `batch` (update 3): the resident batch engine. It picks its decode width by the number of live users (R = 1 / 8 /
       32) and does not speculate.
+    - Update 4: continuation prefill programs are built once, at the first start after installation or a kernel change;
+      `batch` keeps its sliding-window layers in a fixed per-user ring, so vLLM admits more users at long context.
+
+    ### Update 4: programs built at the first start; more long-context users on `batch`
+    - **Continuation programs are pre-built.** Both profiles build every prefill program a long prompt's continuation
+      can need on the first start after installation or a kernel change (`single-user` 64, `batch` 640). Later starts
+      skip it: a marker in the kernel cache records that it was done. Measured before packaging, on the same code with a
+      fresh kernel cache:
+      - first start, time spent pre-building: 90.8 s (`single-user`), 494.9 s (`batch`);
+      - device memory the pre-built programs use: 3.5 MiB per chip (`single-user`), 8.3 MiB per chip (`batch`);
+      - later starts, the marker check: 0.003 s.
+      After that, a prompt longer than one 8,192-token chunk compiled no kernels at its first continuation. Set
+      `GEMMA4_CONT_PREWARM=off` to skip the pre-build (continuation programs are then built on first use, as in update 3).
+    - **`batch` KV layout.** The full-attention layers use vLLM's block pool; the sliding-window layers use a fixed
+      per-user ring. vLLM's start-up line reads "TT KV cache size: 699,136 tokens", "Maximum concurrency for 262,144
+      tokens per request: 2.67x". Users vLLM ran at once, measured on the same code before packaging (2026-11-18):
+      32 at 16,384 tokens, 21 at 32,768, 10 at 65,536, 5 at 131,072, 2 at 262,016. This release's proof re-measures them
+      on the packaged image.
+    - `batch`'s result tables below are re-measured on this release's image in its proof and published with it.
+    - The `update-3` revision on the Hub keeps update 3's `batch` (without the ring layout and the pre-build).
 
     ### Update 2: paged-bucket prefill
     - Both profiles now build their prefill programs for a fixed set of length buckets at start-up. Update 1 compiled a
@@ -214,12 +242,8 @@ card:
     - Start-up cost, measured with the kernels already compiled: about 5 s more for `single-user`, which also pre-builds
       the drafter's seed programs (about 6.5 MB per chip). The extra compile time on a first start has not been measured
       yet.
-    - A prompt longer than one 8,192-token chunk builds a few programs the first time a new continuation length class is
-      seen (lazy, on every profile). `single-user` ignores `GEMMA4_PREFILL_WARM_CONT=1` (its continuation programs are
-      always built on first use, and its drafter seed pre-warm is always on); `batch` refuses to start with it set.
-    - Measured first-sight cost of a new continuation length class, on a fresh kernel cache: about +1.05 s TTFT on
-      `single-user` (kernel compilation, once per host per class); about 10 ms once the kernels are on disk. Not measured
-      on `batch`.
+    - Continuation programs: update 2 built them on first use; update 4 builds them at the first start (above).
+      `single-user` ignores `GEMMA4_PREFILL_WARM_CONT=1`; `batch` refuses to start with it set.
 
     ### Update 3: the resident batch engine (`batch`)
     `--profile batch` now selects the resident batch engine. The previous `batch-b32` profile was removed; the `update-2` revision keeps it.
@@ -325,14 +349,19 @@ card:
       per-token time by up to about 1.3–1.45× while it lasts (measured on earlier builds). Every table on this card
       notes the clock dips during its run.
     - **`batch`: host decode guard.** The engine refuses a decode mix whose conservative attention bound exceeds 40 units
-      per core. With its KV pool (4,320 blocks, about 553K positions) no reachable mix comes near it (at most 25 of 40); it
-      would matter only with a pool about 4.5 times larger (above 19,648 blocks).
+      per core. It would matter only with a full-attention pool above 19,648 blocks; update 4's pool is 5,462 blocks.
+    - **First use of host sampling.** The first request that needs host sampling (logprobs, penalties) may spend about
+      1 s compiling a few kernels, once per host; it is outside the start-up pre-build.
+    - **Boot topology fault.** A boot can occasionally fail at mesh open with `TT_FATAL … could not fit in the discovered
+      physical topology`, an intermittent host link-training fault. Reset the chips (`tt-smi -r 0,1,2,3`) and start again.
+    - **No default physical grouping descriptor.** The image boots without tt-metal's default physical grouping descriptor
+      and logs 'mapping without a PGD'; every proof of this package ran that way.
     - **Update 2 evidence scope.** The paged-bucket prefill's runtime guard and its gating runs check program-cache growth
       and outputs; they did not record device buffer addresses. The drafter seed pre-warm's first-start (cold kernel
       cache) time is not measured.
 
     ### Results (tt-inference-server `--workflow benchmarks`)
-    The first three tables were measured in one session on 2026-11-17 on update 3.1's image (`7b6dd89c97bd`), whose code is identical to this release's (update 3.2 changes only the manifest: this card and the profile list): each profile in its own `tt-model serve --profile …` container on port 8000, with the same tt-inference-server invocations, specs and points as update 1's tables of 2026-11-11, which remain in the `update-2` revision on the Hub. The fourth was measured in a second session on 2026-11-17, on the same image.
+    The `single-user` tables were measured in one session on 2026-11-17 on update 3.1's image (`7b6dd89c97bd`); update 4 changes `single-user` only by the start-up pre-build, whose outputs were checked bitwise against the same code without it. Each profile in its own `tt-model serve --profile …` container on port 8000, with the same tt-inference-server invocations, specs and points as update 1's tables of 2026-11-11, which remain in the `update-2` revision on the Hub. `batch`'s tables are re-measured on this release's image in its proof.
 
     #### `single-user`
     | ISL | OSL | Concurrency | Num Requests | TTFT (ms) | TPOT (ms) | Tput User (t/s/u = 1000/TPOT) | Tput Output (t/s) |
@@ -364,74 +393,22 @@ card:
 
     Run 2026-11-17 15:58–16:28 (KST), tt-inference-server 0.26.1 `--workflow benchmarks --spec-decode` against `tt-model serve --profile single-user`: SPEED-Bench prompts (AIPerf; the requests carry no sampling fields, so the server's defaults apply: temperature 1.0, top_p 0.95, top_k 20, thinking on). Each answer runs to its natural end (throughput sets capped at 8,192 tokens). One of the QuietBox's two fans was dead during the run (not yet replaced); a chip's clock was below 1,323 MHz for coding 0.1% of decode time; throughput_32k 0.5% of decode time (76% of prefill).
 
-    #### `batch` (the resident batch engine)
-    | ISL | OSL | Concurrency | Num Requests | TTFT (ms) | TPOT (ms) | Tput User (t/s/u = 1000/TPOT) | Decode t/s/u (1000/median ITL)¹ | Tput Output (t/s) |
-    |---|---|---|---|---|---|---|---|---|
-    | 128 | 128 | 1 | 8 | 65.1 | 10.1 | 99.3 | 98.9 | 95.2 |
-    | 128 | 128 | 32 | 256 | 1471.8 | 26.9 | 37.2 | 37.2 | 838.6 |
-    | 128 | 1024 | 1 | 4 | 64.9 | 10.8 | 92.5 | 89.6 | 92.1 |
-    | 128 | 1024 | 32 | 128 | 1464.0 | 29.3 | 34.1 | 34.5 | 1041.8 |
-    | 1024 | 128 | 1 | 4 | 148.1 | 11.4 | 88.0 | 88.0 | 80.4 |
-    | 1024 | 128 | 32 | 128 | 3026.1 | 41.8 | 23.9 | 30.6 | 491.4 |
-    | 2048 | 128 | 1 | 4 | 291.6 | 11.4 | 87.8 | 87.8 | 73.7 |
-    | 2048 | 128 | 32 | 128 | 4534.8 | 67.0 | 14.9 | 29.7 | 313.7 |
-    | 4096 | 128 | 1 | 4 | 578.2 | 11.5 | 87.2 | 87.0 | 62.9 |
-    | 4096 | 128 | 32 | 128 | 6225.0 | 127.8 | 7.8 | 27.8 | 182.2 |
-    | 8192 | 128 | 1 | 2 | 1185.0 | 11.7 | 85.4 | 85.2 | 47.9 |
-    | 8192 | 128 | 31 | 62 | 12485.7 | 225.8 | 4.4 | 25.7 | 96.1 |
-    | 8192 | 1024 | 1 | 2 | 1189.2 | 11.8 | 84.9 | 84.9 | 77.3 |
-    | 8192 | 1024 | 28 | 56 | 11620.7 | 57.8 | 17.3 | 26.9 | 404.7 |
-    | 10000 | 1024 | 1 | 2 | 1519.8 | 11.9 | 83.7 | 83.7 | 74.5 |
-    | 10000 | 1024 | 23 | 46 | 12789.5 | 57.6 | 17.4 | 28.1 | 328.1 |
-    | 16384 | 128 | 1 | 2 | 2535.3 | 12.2 | 82.2 | 81.7 | 31.4 |
-    | 16384 | 128 | 15 | 30 | 14173.7 | 218.3 | 4.6 | 29.4 | 45.7 |
-    | 32768 | 128 | 1 | 1 | 5679.0 | 12.2 | 81.7 | 80.6 | 17.7 |
-    | 32768 | 128 | 7 | 7 | 22652.5 | 154.3 | 6.5 | 45.6 | 21.1 |
-    | 65536 | 128 | 1 | 1 | 13779.0 | 12.9 | 77.7 | 75.7 | 8.3 |
-    | 65536 | 128 | 3 | 3 | 27443.0 | 126.4 | 7.9 | 51.3 | 8.8 |
-    | 131072 | 128 | 1 | 1 | 36994.8 | 14.4 | 69.7 | 67.0 | 3.3 |
-    | 196608 | 128 | 1 | 1 | 70081.0 | 15.6 | 64.2 | 60.7 | 1.8 |
-    | 262016 | 128 | 1 | 1 | 112199.5 | 16.9 | 59.3 | 55.3 | 1.1 |
-
-    Run 2026-11-17 15:06–15:33 (KST), tt-inference-server 0.26.1 `--workflow benchmarks` against `tt-model serve --profile batch`; random prompts, greedy (temperature 0), thinking on (server default). One of the QuietBox's two fans was dead during the run (not yet replaced); a chip's clock was below 1,323 MHz during decode at 14 of 25 points (chips 0, 1, 2, 3; up to 87% of decode time: 1024/128 c1, 1024/128 c32, 2048/128 c1, 2048/128 c32, 4096/128 c32, 8192/128 c31, 8192/1024 c1, 8192/1024 c28, 10000/1024 c1, 10000/1024 c23, 16384/128 c15, 32768/128 c1, 32768/128 c7, 65536/128 c3).
-
-    ¹ Decode t/s/u is 1000 / the median gap between consecutive streamed tokens (the point file's `median_itl_ms`): the
-    decode rate without the pauses that other users' prefills add to TPOT. At concurrency 1 there are no such pauses;
-    there the two columns differ by at most 7.2% (262,016/128: 55.3 vs 59.3). `single-user`'s tables have no such column,
-    because speculative decoding streams several tokens at a time.
-
-    #### `batch`: most concurrent users admitted at once per context length (vLLM KV accounting)
-    | ISL | OSL | Concurrency (target)² | Achieved concurrency² | Num Requests | TTFT (ms)² | TPOT (ms) | Tput User (t/s/u = 1000/TPOT) | Decode t/s/u (1000/median ITL)¹ | Tput Output (t/s) |
-    |---|---|---|---|---|---|---|---|---|---|
-    | 16384 | 128 | 17 | 16 | 34 | 14332.0 | 256.3 | 3.9 | 28.2 | 46.3 |
-    | 32768 | 128 | 10 | 10 | 10 | 30997.0 | 232.4 | 4.3 | 28.2 | 21.1 |
-    | 65536 | 128 | 6 | 6 | 6 | 47919.5 | 293.0 | 3.4 | 37.8 | 9.0 |
-    | 131072 | 128 | 3 | 3 | 3 | 73832.9 | 313.2 | 3.2 | 39.9 | 3.4 |
-
-    Run 2026-11-17 17:02–17:06 (KST, start of each point), the `vllm bench serve` invocation tt-inference-server 0.26.1 issues for its points, against `tt-model serve --profile batch`; random prompts, greedy (temperature 0), thinking on (server default). One of the QuietBox's two fans was dead during the run (not yet replaced); a chip's clock was below 1,323 MHz during decode at 4 of 4 points (chips 0, 1, 2, 3; up to 87% of decode time: 16384/128 c17, 32768/128 c10, 65536/128 c6, 131072/128 c3).
-
-    ² tt-inference-server's own points cap concurrency at 262,144 / (ISL + OSL), one maximum context in total. These points
-    ask instead for the most users vLLM admits at once: the target is vLLM's runtime admission rule, calibrated
-    on the `batch` session above (est.). vLLM's KV accounting reports a capacity of 414,365 tokens: it
-    charges `batch`'s five sliding-window layer groups against the same pool of 4,320 blocks of 128 tokens as the
-    full-attention layers, so fewer users fit than the full-attention blocks alone would hold. By the same
-    accounting a second 262,016-token request does not fit while one runs (the table above has that point at one
-    user). "Achieved concurrency" is the most requests running together (vLLM's
-    10 s stats): at 16,384 tokens 16 of the 17 ran together, and every other point ran at its target. The users' prefills run one after another, so later users' TTFT includes the earlier prefills.
-    ¹ As in the table above.
+    #### `batch`
+    Re-measured on this release's image in its proof and published with it.
 
 verify:
-  - "from models.demos.gemma4_31b_qb2.tt.package_boot import Gemma4ResidentSpecPackaged, ensure_resident_cache; assert Gemma4ResidentSpecPackaged"
+  - "from models.demos.gemma4_31b_qb2.tt.package_boot import ensure_resident_cache; assert ensure_resident_cache"
   # the first-boot converter's key resolves for the shipped engine and precision (no checkpoint needed for this)
   - "from models.demos.gemma4_31b_qb2.tt import package_boot as pb; import inspect, importlib; c = importlib.import_module('models.demos.gemma4_31b_qb2.resident_m3_2.weights').convert; assert set(pb.CONVERT_ARGS) <= set(inspect.signature(c).parameters)"
-  - "from models.demos.gemma4_31b_qb2.tt.generator_vllm import Gemma4ForCausalLM; assert Gemma4ForCausalLM"
-  # update 2: the classes update 2's two profiles named (vllm_models/resident_spec_pb3; vllm_models/qb2_pb, unused since 3.2)
-  # and their PB bases
+  # update 4's single-user class (vllm_models/resident_spec_pb4) on update 2's PB3 class (kept as its base), its PB base,
+  # and the continuation pre-warm's marker module
   - "from models.demos.gemma4_31b_qb2.tt.package_boot_pb3 import Gemma4ResidentSpecPB3Packaged as P; from models.demos.gemma4_31b_qb2.tt.generator_resident_spec_vllm_pb3 import Gemma4ResidentSpecPB3ForCausalLM as B; assert issubclass(P, B)"
-  - "from models.demos.gemma4_31b_qb2.tt.generator_vllm_pb import Gemma4ForCausalLMPB; from models.demos.gemma4_31b_qb2.tt.generator_vllm import Gemma4ForCausalLM; assert issubclass(Gemma4ForCausalLMPB, Gemma4ForCausalLM)"
-  - "import json, os, models.demos.gemma4_31b_qb2 as q; d = os.path.join(os.path.dirname(q.__file__), 'vllm_models'); got = {json.load(open(os.path.join(d, b, 'vllm_metadata.json')))['arch'] for b in os.listdir(d)}; assert {'Gemma4QB2PBForCausalLM', 'Gemma4QB2ResidentSpecPB3ForCausalLM', 'Gemma4QB2ResidentMultiS32PBForCausalLM'} <= got, got"
-  # update 3: the batch class (vllm_models/resident_multi_s3pb), its S3-PB base, and the m5_11 engine with its kernels
-  - "from models.demos.gemma4_31b_qb2.tt.package_boot_s3pb import Gemma4ResidentMultiS32PBPackaged as P; from models.demos.gemma4_31b_qb2.tt.generator_resident_multi_s3_2_pb_vllm import Gemma4ResidentMultiS32PBForCausalLM as B; assert issubclass(P, B)"
+  - "from models.demos.gemma4_31b_qb2.tt.package_boot_pb4 import Gemma4ResidentSpecPB4Packaged as P; from models.demos.gemma4_31b_qb2.tt.package_boot_pb3 import Gemma4ResidentSpecPB3Packaged as B; assert issubclass(P, B) and P.ENGINE_PACKAGE == 'resident_m3_2'"
+  - "from models.demos.gemma4_31b_qb2.tt import contwarm; assert contwarm.ENV == 'GEMMA4_CONT_PREWARM' and contwarm.mode() == 'auto'"
+  - "import json, os, models.demos.gemma4_31b_qb2 as q; d = os.path.join(os.path.dirname(q.__file__), 'vllm_models'); got = {json.load(open(os.path.join(d, b, 'vllm_metadata.json')))['arch'] for b in os.listdir(d)}; assert got == {'Gemma4QB2ResidentSpecPB4ForCausalLM', 'Gemma4QB2ResidentMultiS32PBRingForCausalLM'}, got"
+  # update 4: the batch class (vllm_models/resident_multi_s3pb_ring), the ring class on its S3-PB base, and the m5_11
+  # engine with its kernels
+  - "from models.demos.gemma4_31b_qb2.tt.package_boot_s3pb_ring import Gemma4ResidentMultiS32PBRingPackaged as P; from models.demos.gemma4_31b_qb2.tt.generator_resident_multi_s3_2_pb_ring_vllm import Gemma4ResidentMultiS32PBRingForCausalLM as R; from models.demos.gemma4_31b_qb2.tt.generator_resident_multi_s3_2_pb_vllm import Gemma4ResidentMultiS32PBForCausalLM as B; assert issubclass(P, R) and issubclass(R, B) and P.ENGINE_PACKAGE == 'resident_m5_11'"
   - "from models.demos.gemma4_31b_qb2.tt import package_boot as pb; import inspect, importlib; c = importlib.import_module('models.demos.gemma4_31b_qb2.resident_m5_11.weights').convert; assert set(pb.CONVERT_ARGS) <= set(inspect.signature(c).parameters)"
   - "import os, importlib; e = importlib.import_module('models.demos.gemma4_31b_qb2.resident_m5_11.engine'); [importlib.import_module('models.demos.gemma4_31b_qb2.resident_m5_11.' + m) for m in ('model', 'k2a', 'k2a_sched', 'weights')]; from models.demos.gemma4_31b_qb2.resident_m5_11 import PKG_DIR; ks = ('attn_common.hpp', 'attn_compute.cpp', 'attn_reader.cpp', 'attn_writer.cpp', 'hub_dm.cpp', 'k2a_common.hpp', 'k2a_harness_streamer.cpp', 'k2a_head_compute.cpp', 'k2a_head_reader.cpp', 'k2a_head_writer.cpp', 'k2a_unit_compute.cpp', 'k2a_unit_reader.cpp', 'k2a_unit_writer.cpp', 'm1l0_reader.cpp', 'slice_compute.cpp', 'slice_dm.cpp', 'slice_mc.cpp', 'streamer_common.hpp', 'streamer_compute.cpp', 'streamer_reader.cpp', 'streamer_writer.cpp', 'table_scatter.cpp'); missing = [k for k in ks if not os.path.isfile(os.path.join(PKG_DIR, 'kernels', k))]; assert not missing and e.ResidentEngine, missing"
   # the engine is imported lazily by package name: import it here, and check its kernel sources shipped beside it

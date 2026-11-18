@@ -1,0 +1,4 @@
+{
+  "arch": "Gemma4QB2ResidentSpecPB4ForCausalLM",
+  "main_class": "models.demos.gemma4_31b_qb2.tt.package_boot_pb4:Gemma4ResidentSpecPB4Packaged"
+}

@@ -1,4 +1,0 @@
-{
-  "arch": "Gemma4QB2ResidentMultiS32PBForCausalLM",
-  "main_class": "models.demos.gemma4_31b_qb2.tt.package_boot_s3pb:Gemma4ResidentMultiS32PBPackaged"
-}
