@@ -156,6 +156,36 @@ def _place(live: LiveTensor, arrays: dict[tuple, np.ndarray], device) -> None:
     check_label_unchanged(live, "after set_value")
 
 
+class _DataFiles:
+    """The data files a load reads, opened and checked while the load is planned, so that a missing or truncated file
+    stops the load before it places a tensor; open until the load ends."""
+
+    def __init__(self) -> None:
+        self.fds: dict[int, int] = {}
+        self.data_start: dict[int, int] = {}
+        self.paths: dict[int, str] = {}
+
+    def open(self, ckpt_dir: str, index: Index, plan: LoadPlan) -> None:
+        for file_index in sorted({r.file for kp in plan.keys.values() for r in kp.reads}):
+            record = index.files[file_index]
+            path = self.paths[file_index] = os.path.join(ckpt_dir, record.path)
+            if not os.path.isfile(path):
+                raise CheckpointError(f"data file {path} listed in the index is missing")
+            self.fds[file_index] = os.open(path, os.O_RDONLY)
+            size = os.fstat(self.fds[file_index]).st_size
+            if size != record.nbytes:
+                raise IncompleteCheckpointError(
+                    f"data file {path} is {size} bytes but the index records {record.nbytes}; the checkpoint is "
+                    "truncated or corrupt"
+                )
+            _, self.data_start[file_index] = read_file_header(path)
+
+    def close(self) -> None:
+        for fd in self.fds.values():
+            os.close(fd)
+        self.fds.clear()
+
+
 def _raise_partly_restored(err: Exception, at: str, placed: list[str], total: int) -> None:
     """Re-raise ``err``, as a ``CheckpointError`` that says the live state is partly restored once a tensor was
     placed."""
@@ -165,6 +195,67 @@ def _raise_partly_restored(err: Exception, at: str, placed: list[str], total: in
         f"load failed at {at} ({type(err).__name__}: {err}) after {len(placed)} of {total} tensors were placed (the "
         f"first: {placed[0]}); the model and optimizer are partly restored: load again or discard them"
     ) from err
+
+
+def _read_and_place(
+    plan: LoadPlan, files: _DataFiles, by_key: dict[str, LiveTensor], threads: int | None
+) -> tuple[int, int, float, float, list[str]]:
+    """Read every planned key into host arrays and place it on the device; returns the bytes read, the number of reads,
+    the seconds spent waiting for reads and placing, and the keys placed. A failure once a tensor was placed raises a
+    ``CheckpointError`` that says the live state is partly restored."""
+    fds, data_start, paths = files.fds, files.data_start, files.paths
+    placed: list[str] = []
+    device = mesh_device()
+    bytes_read = 0
+    reads = 0
+    read_s = place_s = 0.0
+    workers = 32 if threads is None else threads
+    with ThreadPoolExecutor(max_workers=workers) as pool:
+
+        def submit(kplan: KeyPlan):
+            """Allocate a key's destination shards and submit its reads; returns (arrays, futures)."""
+            info = kplan.info
+            carrier = NUMPY_CARRIERS[info.dtype]
+            arrays = {group: np.zeros(box.sizes, dtype=carrier) for group, box in kplan.boxes.items()}
+            by_chunk: dict[int, list[ReadItem]] = {}
+            for r in kplan.reads:
+                by_chunk.setdefault(r.chunk, []).append(r)
+            futures = [
+                pool.submit(
+                    _read_chunk,
+                    fds[its[0].file],
+                    data_start[its[0].file],
+                    kplan,
+                    its,
+                    info.itemsize,
+                    carrier,
+                    arrays,
+                    paths[its[0].file],
+                )
+                for its in by_chunk.values()
+            ]
+            return arrays, futures
+
+        # The reads of the next key run while the current key is placed on the device, so file I/O and placement
+        # overlap; at most two keys' host arrays are alive at a time.
+        keys = list(plan.keys.items())
+        pending = submit(keys[0][1]) if keys else None
+        for position, (key, kplan) in enumerate(keys):
+            try:
+                arrays, futures = pending
+                t_key = time.perf_counter()
+                for future in futures:
+                    bytes_read += future.result()
+                t_read_done = time.perf_counter()
+                pending = submit(keys[position + 1][1]) if position + 1 < len(keys) else None
+                _place(by_key[key], arrays, device)
+            except Exception as err:
+                _raise_partly_restored(err, key, placed, len(keys))
+            placed.append(key)
+            read_s += t_read_done - t_key
+            place_s += time.perf_counter() - t_read_done
+            reads += len(futures)
+    return bytes_read, reads, read_s, place_s, placed
 
 
 def load(
@@ -225,82 +316,15 @@ def load(
         check_undeclared_fusion(by_key[key], kplan.entry)
     if optimizer is not None:
         check_param_groups(optimizer, index.scalars, strict)  # before anything is placed
-    stats: dict[str, float] = {"plan_s": time.perf_counter() - t0}
-
-    fds: dict[int, int] = {}
-    data_start: dict[int, int] = {}
-    paths: dict[int, str] = {}
-    placed: list[str] = []
-    device = mesh_device()
-    bytes_read = 0
-    t1 = time.perf_counter()
+    files = _DataFiles()
     try:
-        needed = {r.file for kp in plan.keys.values() for r in kp.reads}
-        for file_index in sorted(needed):
-            record = index.files[file_index]
-            path = paths[file_index] = os.path.join(ckpt_dir, record.path)
-            if not os.path.isfile(path):
-                raise CheckpointError(f"data file {path} listed in the index is missing")
-            fds[file_index] = os.open(path, os.O_RDONLY)
-            size = os.fstat(fds[file_index]).st_size
-            if size != record.nbytes:
-                raise IncompleteCheckpointError(
-                    f"data file {path} is {size} bytes but the index records {record.nbytes}; the checkpoint is "
-                    "truncated or corrupt"
-                )
-            _, data_start[file_index] = read_file_header(path)
-        workers = 32 if threads is None else threads
-        read_s = place_s = 0.0
-        reads = 0
-        with ThreadPoolExecutor(max_workers=workers) as pool:
-
-            def submit(kplan: KeyPlan):
-                """Allocate a key's destination shards and submit its reads; returns (arrays, futures)."""
-                info = kplan.info
-                carrier = NUMPY_CARRIERS[info.dtype]
-                arrays = {group: np.zeros(box.sizes, dtype=carrier) for group, box in kplan.boxes.items()}
-                by_chunk: dict[int, list[ReadItem]] = {}
-                for r in kplan.reads:
-                    by_chunk.setdefault(r.chunk, []).append(r)
-                futures = [
-                    pool.submit(
-                        _read_chunk,
-                        fds[its[0].file],
-                        data_start[its[0].file],
-                        kplan,
-                        its,
-                        info.itemsize,
-                        carrier,
-                        arrays,
-                        paths[its[0].file],
-                    )
-                    for its in by_chunk.values()
-                ]
-                return arrays, futures
-
-            # The reads of the next key run while the current key is placed on the device, so file I/O and placement
-            # overlap; at most two keys' host arrays are alive at a time.
-            keys = list(plan.keys.items())
-            pending = submit(keys[0][1]) if keys else None
-            for position, (key, kplan) in enumerate(keys):
-                try:
-                    arrays, futures = pending
-                    t_key = time.perf_counter()
-                    for future in futures:
-                        bytes_read += future.result()
-                    t_read_done = time.perf_counter()
-                    pending = submit(keys[position + 1][1]) if position + 1 < len(keys) else None
-                    _place(by_key[key], arrays, device)
-                except Exception as err:
-                    _raise_partly_restored(err, key, placed, len(keys))
-                placed.append(key)
-                read_s += t_read_done - t_key
-                place_s += time.perf_counter() - t_read_done
-                reads += len(futures)
+        files.open(ckpt_dir, index, plan)  # before anything is placed
+        stats: dict[str, float] = {"plan_s": time.perf_counter() - t0}
+        t1 = time.perf_counter()
+        bytes_read, reads, read_s, place_s, placed = _read_and_place(plan, files, by_key, threads)
+        stats["read_and_place_s"] = time.perf_counter() - t1
     finally:
-        for fd in fds.values():
-            os.close(fd)
-    stats["read_and_place_s"] = time.perf_counter() - t1
+        files.close()  # every descriptor opened, whatever ended the load
     stats["read_s"] = read_s
     stats["place_s"] = place_s
     stats["reads"] = float(reads)
