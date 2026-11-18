@@ -25,22 +25,35 @@ ttnn::Tensor sharded_to_interleaved_wrapper(
         input_tensor, memory_config.value_or(operation::DEFAULT_OUTPUT_MEMORY_CONFIG), output_dtype);
 }
 
-// TODO: Add more descriptions to the arguments
 void bind_sharded_to_interleaved(nb::module_& mod) {
     const auto* doc = R"doc(
-        Converts a tensor from sharded to interleaved memory layout
+        Copies a sharded tensor into an interleaved tensor with the memory configuration `memory_config`. The output
+        has the input's shape, layout and values. `output_dtype` converts a TILE input to another dtype.
 
         Args:
-            input_tensor (ttnn.Tensor): input tensor
-            memory_config (ttnn.MemoryConfig): Memory configuration for the operation, must be Interleaved.
+            input_tensor (ttnn.Tensor): the sharded input tensor, see Memory Support. A TILE input must have 32x32 tiles. For a ROW_MAJOR input, the shard width in bytes must be a multiple of 16.
+            memory_config (ttnn.MemoryConfig, optional): interleaved memory configuration of the output, see Memory Support. Defaults to `None`, which gives an interleaved DRAM output.
+            output_dtype (ttnn.DataType, optional): Data type of the output. Defaults to `None`, which keeps the input dtype. A TILE input of BFLOAT16, FLOAT32 or BFLOAT8_B can be converted to any of these three dtypes. Input values must not be NaN when the dtype changes.
 
-        Keyword Args:
-            output_dtype (Optional[ttnn.DataType]): Output data type, defaults to same as input.
+        Returns:
+            ttnn.Tensor: the interleaved output tensor, with the input's shape and layout.
 
-        Example:
+        Note:
+            Supported dtypes and layouts:
 
-            >>> interleaved_tensor = ttnn.sharded_to_interleaved(tensor, ttnn.DRAM_MEMORY_CONFIG)
+            .. list-table::
+               :header-rows: 1
 
+               * - Dtypes
+                 - Layouts
+               * - BFLOAT16, FLOAT32, INT32, UINT32, UINT16, UINT8
+                 - TILE, ROW_MAJOR
+               * - BFLOAT8_B, BFLOAT4_B
+                 - TILE
+
+        Memory Support:
+            - Input: HEIGHT_SHARDED, WIDTH_SHARDED and BLOCK_SHARDED in L1
+            - Output: interleaved DRAM and L1
         )doc";
 
     ttnn::bind_function<"sharded_to_interleaved">(
