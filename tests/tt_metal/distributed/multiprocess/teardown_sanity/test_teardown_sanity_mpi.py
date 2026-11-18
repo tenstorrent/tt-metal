@@ -186,12 +186,12 @@ def test_ttrun_abort_ends():
 def test_ttrun_dead_peer_survivors_abort():
     """A rank is SIGKILLed, the survivors get MPI_ERR_PROC_FAILED from the barrier and call MPI_Abort — the way
     tt-metal's DistributedContext reacts to a dead peer (see the comment at the MPI_Abort in sanity_mpi_probe.cpp).
-    tt-run must end the whole job non-zero with nothing left; its failsafe (LaunchedJob.wait) ends a launcher that
-    the prrte#2815 race leaves hung, so this should normally pass.
+    tt-run should end the whole job non-zero with nothing left.
 
-    The race is intermittent and the failsafe is not guaranteed on PRRTE 3.0.8, so the row tolerates ONLY that
-    one shape — the job hanging past the harness deadline after the survivors reached MPI_Abort — and fails on
-    anything else, so a genuine teardown regression is never masked by a blanket xfail."""
+    On the PRRTE this image ships that is not guaranteed — the prrte#2815 race can leave prterun up after the
+    ranks are gone, and this harness's deadline then bounds the row. So it tolerates ONLY that one shape — the job
+    hanging past the deadline after the survivors reached MPI_Abort — and fails on anything else, so a genuine
+    teardown regression is never masked by a blanket xfail."""
     r = run_case(
         "ttrun_dead_peer_abort",
         {**NP, "PROBE_SCENARIO": "victim_sigkill", "PROBE_SURVIVOR_ACTION": "abort"},
@@ -204,8 +204,8 @@ def test_ttrun_dead_peer_survivors_abort():
         clean(r)
     except AssertionError:
         # The fingerprint of openpmix/prrte#2815: the survivors reached MPI_Abort and the job then hung past the
-        # deadline (prterun stayed up with the ranks gone, and the failsafe could not reap it). Tolerate only
-        # that; re-raise anything else — a wrong exit code, a leftover with no hang — as a real failure.
+        # deadline (prterun stayed up with the ranks gone). Tolerate only that; re-raise anything else — a wrong
+        # exit code, a leftover with no hang — as a real failure.
         if r.timed_out and "survivor MPI_Abort" in r.log:
             pytest.xfail(
                 "openpmix/prrte#2815: prterun left up after a killed peer + the survivors' MPI_Abort "

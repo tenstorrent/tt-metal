@@ -1503,55 +1503,51 @@ class TestJobOwnership:
             for p in (dead, live):
                 shutil.rmtree(p, ignore_errors=True)
 
-    def test_wait_ends_a_launcher_that_outlives_its_ranks(self, monkeypatch):
+    def test_wait_forces_down_a_launcher_that_ignores_a_forwarded_signal(self, monkeypatch):
+        import signal
         import subprocess
         import time
 
         from ttnn.distributed import ttrun as m
 
-        # The prrte#2815 failsafe: wait() must end a launcher that is still up after its ranks are all gone,
-        # instead of blocking forever. Simulate it with a real process that never exits on its own (the hung
-        # launcher) and a _survivors that reports a rank once (so the watchdog arms) and then nothing.
-        monkeypatch.setattr(m, "LAUNCHER_HANG_GRACE_S", 1.0)
-        job = m.LaunchedJob(["sleep", "600"], Path("."))
-        job.proc = subprocess.Popen(["sleep", "600"], start_new_session=True)
+        # Bounded cancellation: after tt-run forwards a stop signal, a launcher that ignores it must be forced
+        # down, not waited on forever. Use a launcher that ignores SIGTERM; wait() should SIGKILL it after the
+        # grace and return non-zero.
+        monkeypatch.setattr(m, "SIGNAL_FORWARD_GRACE_S", 1.0)
+        job = m.LaunchedJob(["ignorer"], Path("."))
+        job.proc = subprocess.Popen(
+            [
+                sys.executable,
+                "-c",
+                "import signal,time; signal.signal(signal.SIGTERM, signal.SIG_IGN); time.sleep(600)",
+            ],
+            start_new_session=True,
+        )
         try:
-            job.sid, job.pgid = os.getsid(job.proc.pid), os.getpgid(job.proc.pid)
-            calls = {"n": 0}
-
-            def fake_survivors():
-                calls["n"] += 1
-                return [10_000_000] if calls["n"] == 1 else []  # ranks seen once, then all gone
-
-            monkeypatch.setattr(job, "_survivors", fake_survivors)
-
+            job.forwarded = [signal.SIGTERM]  # pretend _relay already forwarded a stop signal
             t0 = time.time()
             rc = job.wait()
-            elapsed = time.time() - t0
-
-            assert job.proc.poll() is not None, "the hung launcher was not ended"
-            assert rc != 0, "a job whose launcher had to be force-ended must not report success"
-            assert elapsed < 15, f"the watchdog did not fire promptly ({elapsed:.0f}s)"
+            assert job.proc.poll() is not None, "an unresponsive launcher was not forced down"
+            assert rc != 0, "a launcher that had to be force-killed must not report success"
+            assert time.time() - t0 < 20, "force-down took too long"
         finally:
             if job.proc.poll() is None:
                 job.proc.kill()
                 job.proc.wait()
 
-    def test_wait_does_not_end_a_launcher_whose_ranks_are_still_running(self, monkeypatch):
+    def test_wait_does_not_force_down_a_running_job_with_no_forwarded_signal(self, monkeypatch):
         import subprocess
-        import time
 
         from ttnn.distributed import ttrun as m
 
-        # The watchdog must NOT fire while ranks are alive: a launcher that exits normally shortly after its
-        # ranks keep showing up is returned, not killed.
-        monkeypatch.setattr(m, "LAUNCHER_HANG_GRACE_S", 1.0)
+        # The safety property: with no signal forwarded, wait() never force-kills — it just returns the launcher's
+        # own code. A healthy job (multi-host included) that nobody asked to stop is never touched.
+        monkeypatch.setattr(m, "SIGNAL_FORWARD_GRACE_S", 1.0)
         job = m.LaunchedJob(["true"], Path("."))
-        job.proc = subprocess.Popen(["sleep", "3"], start_new_session=True)  # exits on its own
+        job.proc = subprocess.Popen(["sleep", "3"], start_new_session=True)  # exits on its own; job.forwarded == []
         try:
-            monkeypatch.setattr(job, "_survivors", lambda: [10_000_000])  # ranks always present
             rc = job.wait()
-            assert rc == 0, "a launcher that exits cleanly must return its own code, not be force-ended"
+            assert rc == 0, "a job nobody asked to stop must return the launcher's own code"
         finally:
             if job.proc.poll() is None:
                 job.proc.kill()

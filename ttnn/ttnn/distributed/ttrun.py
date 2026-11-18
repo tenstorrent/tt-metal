@@ -44,11 +44,9 @@ INTERRUPTED_EXIT_CODE = 130  # 128 + SIGINT
 # the DistributedContext instead (the per-call operation timeout, plan P16).
 PRTE_TIMEOUT_EXIT_CODE = 241
 
-# How long the launcher may outlive ALL of its ranks before tt-run decides it is hung and ends it. The PRRTE this
-# image ships can leave prterun up with every rank already gone after a killed peer + the survivors' MPI_Abort
-# (openpmix/prrte#2815); without this, tt-run's wait() would block forever. Generous, because a healthy launcher
-# exits within a second of its last rank, so a real job never reaches it.
-LAUNCHER_HANG_GRACE_S = 20.0
+# How long tt-run lets the launcher ignore a signal it forwarded (SIGINT/SIGTERM) before forcing it down. Only
+# ever armed after we relayed a stop signal, so it never acts on a job nobody asked to stop.
+SIGNAL_FORWARD_GRACE_S = 10.0
 
 
 def remove_stale_launcher_leftovers() -> int:
@@ -197,35 +195,27 @@ class LaunchedJob:
     def wait(self) -> int:
         """Wait for the launcher; return its exit code, a death by signal normalized to the shell's 128 + signum.
 
-        Failsafe for the PRRTE hang (openpmix/prrte#2815): a killed peer plus the survivors' MPI_Abort can leave
-        prterun up with every rank already gone, so a plain blocking wait would never return. We poll, and once
-        the job's ranks have been seen and then ALL vanish while the launcher is still alive for
-        LAUNCHER_HANG_GRACE_S, we end the launcher (``_shutdown_launcher``) and return — the job's work is done,
-        only the hung launcher remains. The watchdog arms only after ranks have run (``seen_ranks``), so a slow
-        multi-host startup, where no rank exists yet, never trips it; a healthy job returns the instant the
-        launcher exits, adding only a 1 s poll.
+        Bounded cancellation: once a signal we forwarded (SIGINT/SIGTERM, via ``_relay``) has gone unanswered for
+        SIGNAL_FORWARD_GRACE_S — the launcher is ignoring the stop — force it down (``_shutdown_launcher``) instead
+        of blocking. This keys ONLY on a signal we relayed, never on the job's progress, so it cannot act on a
+        healthy job (multi-host included) that nobody asked to stop. With no signal forwarded it is a 1 s poll of
+        the launcher (no /proc scan), returning the instant the launcher exits.
         """
-        seen_ranks = False
-        hang_since = None
+        forced_deadline = None
         while True:
             try:
                 rc = self.proc.wait(timeout=1.0)
                 return 128 - rc if rc < 0 else rc
             except subprocess.TimeoutExpired:
                 pass
-            if self._survivors():  # ranks are running: the launcher is doing its job
-                seen_ranks = True
-                hang_since = None
+            if not self.forwarded:  # nobody asked to stop the job — just keep waiting
                 continue
-            if not seen_ranks:  # the job has not started its ranks yet — do not arm the watchdog
-                continue
-            now = time.time()
-            if hang_since is None:
-                hang_since = now
-            elif now - hang_since >= LAUNCHER_HANG_GRACE_S:
+            if forced_deadline is None:
+                forced_deadline = time.time() + SIGNAL_FORWARD_GRACE_S
+            elif time.time() >= forced_deadline:
                 logger.error(
-                    f"{TT_RUN_PREFIX} the launcher (pid {self.proc.pid}) is still up {LAUNCHER_HANG_GRACE_S:.0f}s "
-                    "after every rank of its job is gone; this is the PRRTE hang (openpmix/prrte#2815). Ending it."
+                    f"{TT_RUN_PREFIX} the launcher (pid {self.proc.pid}) did not exit "
+                    f"{SIGNAL_FORWARD_GRACE_S:.0f}s after the forwarded signal; forcing it down"
                 )
                 self._shutdown_launcher()
                 rc = self.proc.poll()
