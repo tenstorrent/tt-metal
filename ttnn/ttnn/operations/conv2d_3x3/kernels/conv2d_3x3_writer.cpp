@@ -515,15 +515,20 @@ void kernel_main() {
     uint32_t k_blocks_issued = 0;
     auto read_weight_k_block = [&](uint32_t l1) {
 #ifdef CONV2D_3X3_KW_FOLD
-        // kw-fold: column round kw holds W'[kh Ct + c, kw N + n] = prepared tile ((kh * 3 + kw) Ct + c, n),
-        // (kh, c)-major, n-fastest (block_k_tiles = Ct, block_n_tiles = 3 N: the same round size). Rounds go kw = 1,
-        // 0, 2 (kw_fold.hpp KW_ROUND_ORDER: Q_1 is the overwrite the other two accumulate onto).
+        // kw-fold: round s holds column kw of the output columns [n0, n0 + rw): W'[kh Ct + c, kw N + n0 + n] =
+        // prepared tile ((kh * 3 + kw) Ct + c, n0 + n), (kh, c)-major, n-fastest (block_k_tiles = Ct, block_n_tiles =
+        // 3 rw: the same round size). rw is one n-group (K-blocked sub-rounds) or all of C_out (whole-K, one n-group
+        // of rounds); round s is n-group s / 3, kw = (1, 0, 2)[s % 3] (kw_fold.hpp KW_ROUND_ORDER: Q_1 is the
+        // overwrite the other two accumulate onto).
         constexpr uint32_t kw_round_order[3] = {1, 0, 2};
-        const uint32_t kw = kw_round_order[k_blocks_issued % num_k_blocks];
+        constexpr uint32_t kwf_rw = block_n_tiles / 3;
+        const uint32_t s = k_blocks_issued % num_k_blocks;
+        const uint32_t kw = kw_round_order[s % 3];
+        const uint32_t n0 = (s / 3) * kwf_rw;
         for (uint32_t kh = 0; kh < 3; ++kh) {
             for (uint32_t c = 0; c < block_k_tiles; ++c) {
-                const uint32_t row_page = ((kh * 3 + kw) * block_k_tiles + c) * tensor_n_tiles;
-                for (uint32_t n = 0; n < tensor_n_tiles; ++n, l1 += weight_tile_bytes) {
+                const uint32_t row_page = ((kh * 3 + kw) * block_k_tiles + c) * tensor_n_tiles + n0;
+                for (uint32_t n = 0; n < kwf_rw; ++n, l1 += weight_tile_bytes) {
                     noc_async_read_page(row_page + n, weights, l1);
                 }
             }
@@ -746,12 +751,14 @@ void kernel_main() {
         ++k_blocks_issued;
         if constexpr (weight_servers) {
             if constexpr (kw_fold) {
+                // The first n-group's final pass needs the bias: complete it once that group's three rounds are out
+                // (the writer may block on a slot only a later n-group frees).
                 if (k_blocks_issued == 1) {
                     if (!late_bias_issued) {
                         issue_late_bias();
                     }
                     try_finish_late_bias();
-                } else if (k_blocks_issued == num_k_blocks) {
+                } else if (k_blocks_issued == 3) {
                     finish_late_bias();
                 } else {
                     try_finish_late_bias();
@@ -1135,14 +1142,16 @@ void kernel_main() {
                 if constexpr (gather_split) {
                     gather_odd_groups(k_blocks_issued - 1);
                 }
-            }
 #ifdef CONV2D_3X3_KW_FOLD
-            if constexpr (!(weight_servers && !slab_split)) {
-                if (m_block_idx == 0) {
-                    kwf_bias_read();
+                // The first n-group's final pass needs the bias: read it once that group's three rounds are out, before
+                // the writer can block on a weight slot only a later n-group frees.
+                if constexpr (!(weight_servers && !slab_split)) {
+                    if (k_blocks_issued == 3) {
+                        kwf_bias_read();
+                    }
                 }
-            }
 #endif
+            }
             if constexpr (k_split) {
                 combine_round(m_block_idx);
             }

@@ -1154,21 +1154,33 @@ FIDELITY_PHASES = {
 
 
 def kw_fold_mode(g, b, has_bias, l1_budget, math_fidelity):
+    return kw_fold_plan(g, b, has_bias, l1_budget, math_fidelity) is not None
+
+
+def kw_fold_plan(g, b, has_bias, l1_budget, math_fidelity):
+    """kw-fold's blocking, or None where it does not apply, fit or pay. Its bm is the largest divisor of the core's
+    tile-rows whose kw-fold CBs fit, whatever bm the walk `b` solved to: fewer M-blocks recompute fewer halo rows and
+    stream the weights fewer times (sem res2.fuse_conv.1: bm 5 x 2 blocks 96.1 us, bm 10 89.7 us). The gate weighs
+    that blocking's halo against the im2col of the walk `b`."""
     if not (KW_FOLD and has_bias and g.tile_input and g.sharded_output and not g.k_split):
-        return False
+        return None
     if g.stride != 1 or g.padding != g.dilation or not 1 <= g.dilation <= 32:
-        return False
+        return None
     if g.input_width % TILE or g.c_in % TILE or g.c_in_p != g.c_in:
-        return False
-    return _kw_fold_pays(g, b, math_fidelity) and _kw_fold_cb_bytes(g, _kw_fold_blocking(g, b)) <= l1_budget
+        return None
+    for bm in (d for d in range(b.core_m_tiles, 0, -1) if b.core_m_tiles % d == 0):
+        kb = _kw_fold_blocking(g, b, bm)
+        if _kw_fold_cb_bytes(g, kb) <= l1_budget:
+            return kb if _kw_fold_pays(g, b, kb, math_fidelity) else None
+    return None
 
 
-def _kw_fold_pays(g, b, math_fidelity):
-    """Whether kw-fold beats the K-blocked walk `b` would run (see KW_FOLD_MAX_HALO_SHARE)."""
+def _kw_fold_pays(g, b, kb, math_fidelity):
+    """Whether kw-fold at blocking `kb` beats the K-blocked walk `b` would run (see KW_FOLD_MAX_HALO_SHARE)."""
     ct, n, bm = g.c_in_tiles, g.tensor_n_tiles, b.block_m_tiles
     taps = 6 if b.center_mode != CENTER_NONE else 9
     im2col_ns = b.max_m_blocks_per_core * (taps * ct * bm + b.slab_tile_rows * ct) * IM2COL_NS_PER_TILE
-    halo_ns = b.max_m_blocks_per_core * 6 * ct * n * FIDELITY_PHASES[math_fidelity] * LOFI_NS_PER_TILE_MAC
+    halo_ns = kb.max_m_blocks_per_core * 6 * ct * n * FIDELITY_PHASES[math_fidelity] * LOFI_NS_PER_TILE_MAC
     return halo_ns <= KW_FOLD_MAX_HALO_SHARE * im2col_ns
 
 
@@ -1188,6 +1200,8 @@ def _kw_fold_cb_bytes(g, kb):
 # start at round 0; whole-K on the K-blocked LoFi cases measured flat (res3.x 14.94 -> 14.48, inst res2 fc1 28.09 ->
 # 28.14 us, medians of 3).
 KW_FOLD_KBLOCK_MIN_WEIGHT_TILES = 128
+# kw-fold's slab fill batch: tile-rows per reader push (compute waits for the rows each subblock reads).
+KW_FOLD_FILL_BATCH_ROWS = 4
 
 
 def kw_fold_kblocked(g):
@@ -1199,17 +1213,24 @@ def _kw_fold_subblock(n_tiles):
     return sbw, DEST_TILES_FP32_HALF_SYNC // sbw
 
 
-def _kw_fold_blocking(g, b):
-    bm, ct, n = b.block_m_tiles, g.c_in_tiles, g.tensor_n_tiles
+def _kw_fold_blocking(g, b, bm):
+    """kw-fold at bm tile-rows per M-block (a divisor of core_m_tiles): the walk's blocking re-solved at bm (its
+    per-block extents), then kw-fold's weight rounds and slab."""
+    ct, n = g.c_in_tiles, g.tensor_n_tiles
+    if bm != b.block_m_tiles:
+        b = replace(b, block_m_tiles=bm, **_footprint(g, b.core_m_tiles, bm, b.block_k_tiles, b.block_n_tiles))
     r = g.dilation * g.input_width // TILE
-    ub = b.untilize_batch_rows if not b.ring else 4
+    ub = KW_FOLD_FILL_BATCH_ROWS
     slab_rows = _div_up(bm + 2 + 2 * r, ub) * ub
+    # One weight round: K-blocked, one column kw x one n-group of sbw output column tiles ([3 C_in, sbw] tiles,
+    # streamed double-buffered); whole-K, one column kw x all of C_out (the three rounds resident).
+    sbw, _ = _kw_fold_subblock(n)
+    rw = sbw if kw_fold_kblocked(g) else n
     return replace(
         b,
         block_k_tiles=ct,
-        block_n_tiles=3 * n,
-        num_k_blocks=3,
-        # Whole-K keeps the three column rounds resident; K-blocked streams them (double-buffered).
+        block_n_tiles=3 * rw,
+        num_k_blocks=3 * (n // rw),
         weight_depth=2 if kw_fold_kblocked(g) else 3,
         center_mode=CENTER_NONE,
         center_slot_blocks=1,
@@ -1220,18 +1241,13 @@ def _kw_fold_blocking(g, b):
     )
 
 
-def _kw_fold_plane_bytes(g, bm):
-    """One ACC column plane: [rows, sbw * 32] fp32; rows bound every core's rowbase(bm + 1) + 32 + d."""
+def _kw_fold_acc_bytes(g, bm):
+    """ACC: one column plane (the n-groups take turns), [rows, sbw * 32] fp32; rows bound every core's
+    rowbase(bm + 1) + 32 + d."""
     tpr = g.input_width // TILE
     rows = TILE * (bm + 3) + g.dilation * ((bm + 2) // tpr + 3)
     sbw, _ = _kw_fold_subblock(g.tensor_n_tiles)
-    return rows * sbw * TILE * 4
-
-
-def _kw_fold_acc_bytes(g, bm):
-    sbw, _ = _kw_fold_subblock(g.tensor_n_tiles)
-    total = (g.tensor_n_tiles // sbw) * _kw_fold_plane_bytes(g, bm)
-    return _div_up(total, TILE_BYTES_FP32) * TILE_BYTES_FP32
+    return _div_up(rows * sbw * TILE * 4, TILE_BYTES_FP32) * TILE_BYTES_FP32
 
 
 def create_program_descriptor(
@@ -1253,11 +1269,12 @@ def create_program_descriptor(
         if g.sharded_output and g.tile_input
         else 0
     )
-    kwf = kw_fold_mode(g, b, has_bias, l1_cb_budget_bytes(resident), compute_kernel_config.math_fidelity)
+    kwf_args = (g, b, has_bias, l1_cb_budget_bytes(resident), compute_kernel_config.math_fidelity)
+    kwf = kw_fold_mode(*kwf_args)
     # The reader keeps the original K-blocking in its CT args (it only fills the slab: its K-block asserts stay true).
     reader_bk, reader_nkb = b.block_k_tiles, b.num_k_blocks
     if kwf:
-        b = _kw_fold_blocking(g, b)
+        b = kw_fold_plan(*kwf_args)
     pixel_bytes = g.c_in_p * BF16_BYTES
     input_page_bytes = g.in0_tile_bytes if g.tile_input else pixel_bytes
     if input_tensor.buffer_aligned_page_size() != input_page_bytes:
@@ -1393,9 +1410,9 @@ def create_program_descriptor(
             cbs.append(_cb(CB_COMBINED, ttnn.float32, TILE_BYTES_FP32, bm * ns, cores))
 
     if kwf:
-        # kw-fold CBs: the whole slab (input tiles), the whole weights (3 K-blocks of [C_in, 3 C_out] tiles), the fp32
-        # accumulator, the bias (the writer's read), its fp32 rows (the reader's decode; final-pass srcB) and the output
-        # shard.
+        # kw-fold CBs: the whole slab (input tiles), the weights (whole-K: the three [3 C_in, C_out] column rounds;
+        # K-blocked: two [3 C_in, sbw] sub-round slots), the fp32 accumulator plane, the bias (the writer's read), its
+        # fp32 rows (the reader's decode; final-pass srcB) and the output shard.
         alias_ring = False
         input_ring_batches = (2 if b.max_m_blocks_per_core > 1 else 1) * (b.slab_tile_rows // b.untilize_batch_rows)
         cbs = [
@@ -1853,7 +1870,6 @@ def create_program_descriptor(
             ("KWF_SBH", str(_sbh)),
             ("KWF_M_TILES", str(g.tensor_m_tiles)),
             ("KWF_KBLOCKED", str(int(kw_fold_kblocked(g)))),
-            ("KWF_PLANE_BYTES", str(_kw_fold_plane_bytes(g, bm))),
             # Out-of-line subblock (see conv2d_3x3_kw_fold.hpp): whole-K with multi-row subblocks.
             ("KWF_NOINLINE", str(int(not kw_fold_kblocked(g) and _sbh > 1))),
         ]
@@ -1934,7 +1950,7 @@ def create_program_descriptor(
             ttnn.KernelDescriptor(
                 kernel_source=str(KERNEL_DIR / "conv2d_3x3_weight_server_reader.cpp"),
                 core_ranges=server_cores,
-                compile_time_args=[CB_WEIGHTS, bk, bn, b.num_k_blocks, num_chunks, int(kwf)]
+                compile_time_args=[CB_WEIGHTS, bk, bn, b.num_k_blocks, num_chunks, int(kwf), g.tensor_n_tiles]
                 + list(ttnn.TensorAccessorArgs(weight_tensor).get_compile_time_args()),
                 runtime_args=server_reader_rt,
                 config=ttnn.ReaderConfigDescriptor(),

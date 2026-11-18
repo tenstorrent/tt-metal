@@ -242,6 +242,9 @@ def test_conv2d_3x3_height_sharded_weight_mcast_ragged_core(dtype, layout, devic
 
     monkeypatch.setattr(_op_module, "select_blocking", one_tile_row_blocks)
     monkeypatch.setattr(_pd, "_weight_mcast_cores", recording_mcast_cores)
+    # kw-fold (the TILE case) picks its own bm, the largest that fits: keep it at the forced one-tile-row blocks.
+    real_kw_fold_blocking = _pd._kw_fold_blocking
+    monkeypatch.setattr(_pd, "_kw_fold_blocking", lambda g, b, bm: real_kw_fold_blocking(g, b, b.block_m_tiles))
     _run(((H, W, c_in), c_out, 1, 1, 1), dtype, layout, config, device, with_bias=True, relu=True)
 
     ((receivers, core_list),) = channels

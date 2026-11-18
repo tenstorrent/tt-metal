@@ -1,0 +1,80 @@
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+// SPDX-License-Identifier: Apache-2.0
+
+// conv2d_3x3 weight server, reader half (NCRISC / NoC0). A spare core outside the work grid streams the weight rounds
+// of one channel rectangle (one K-block of bk x bn tiles per round, all the participants' rounds in order) from DRAM
+// into cb_weights, whose slots sit at the same L1 address as the receivers'. Reads go out on NoC0, the read-preferred
+// NoC, while the server writer multicasts on NoC1 from another RISC, so the reads of round r + 1 run under the
+// multicast of round r. Each round is read in num_chunks chunks, each under its own transaction id and pushed as soon
+// as it landed while the next chunk's reads are in flight, so the multicast of a round starts before its last read.
+// One reader issuing one-tile reads is bound by the NIU's outstanding reads (~34 GB/s at 1088 B tiles), not by
+// the issue loop.
+
+#include <cstdint>
+
+#include "api/dataflow/dataflow_api.h"
+#include "ttnn/cpp/ttnn/kernel_lib/perf_instrumentation.hpp"
+#include "conv2d_3x3_gather_dataflow.hpp"
+
+void kernel_main() {
+    constexpr uint32_t cb_weights = get_compile_time_arg_val(0);
+    constexpr uint32_t block_k_tiles = get_compile_time_arg_val(1);
+    constexpr uint32_t block_n_tiles = get_compile_time_arg_val(2);
+    constexpr uint32_t num_k_blocks = get_compile_time_arg_val(3);
+    constexpr uint32_t num_chunks = get_compile_time_arg_val(4);
+    // kw-fold (conv2d_3x3_kw_fold.hpp): round kb is one sub-round, weight column kw and n-group g ([3 C_in, sbw] tiles
+    // in (kh, c, n) order; block_k_tiles = C_in, block_n_tiles = 3 sbw: the same round size). 1: column rounds
+    // (kw = (1, 0, 2)[kb / NG], g = kb % NG); 2: n-groups outer (g = kb / 3, kw = (1, 0, 2)[kb % 3]).
+    constexpr uint32_t kw_fold = get_compile_time_arg_val(5);
+    constexpr uint32_t tensor_n_tiles = get_compile_time_arg_val(6);
+    constexpr auto weight_args = TensorAccessorArgs<7>();
+    constexpr uint32_t round_tiles = block_k_tiles * block_n_tiles;
+    static_assert(num_chunks >= 1 && num_chunks <= 8 && round_tiles % num_chunks == 0);
+    constexpr uint32_t chunk_tiles = round_tiles / num_chunks;
+
+    const uint32_t weight_addr = get_arg_val<uint32_t>(0);
+    const uint32_t num_rounds = get_arg_val<uint32_t>(1);
+    const uint32_t tile_bytes = get_tile_size(cb_weights);
+    const auto weights = TensorAccessor(weight_args, weight_addr, tile_bytes);
+    conv2d_3x3::TaggedReads<false> reads;
+
+    for (uint32_t r = 0; r < num_rounds; ++r) {
+        cb_reserve_back(cb_weights, round_tiles);
+        const uint32_t l1 = get_write_ptr(cb_weights);
+        MaybeDeviceZoneScope("server_read");
+        // The K-block's tiles are consecutive pages (bn is the whole C_out on this path); kw-fold's round of column kw
+        // reads the prepared tile ((kh * 3 + kw) C_in + c, n) for slot (kh, c, n).
+        const uint32_t kb = r % num_k_blocks;
+        const uint32_t page0 = kb * round_tiles;
+        auto page_of = [&](uint32_t t) -> uint32_t {
+            if constexpr (kw_fold != 0) {
+                // Guarded: this branch is compiled on every shape (block_n_tiles may be < 3 off kw-fold).
+                constexpr uint32_t sbw = block_n_tiles >= 3 ? block_n_tiles / 3 : 1;
+                constexpr uint32_t ng = tensor_n_tiles / sbw > 0 ? tensor_n_tiles / sbw : 1;
+                const uint32_t n = t % sbw;
+                const uint32_t kc = t / sbw;
+                const uint32_t kh = kc / block_k_tiles;
+                const uint32_t col = kw_fold == 2 ? kb % 3 : kb / ng;
+                const uint32_t kw = col == 0 ? 1 : (col == 1 ? 0 : 2);  // kw_fold.hpp KW_ROUND_ORDER
+                const uint32_t g = kw_fold == 2 ? kb / 3 : kb % ng;
+                return ((kh * 3 + kw) * block_k_tiles + (kc - kh * block_k_tiles)) * tensor_n_tiles + g * sbw + n;
+            } else {
+                return page0 + t;
+            }
+        };
+        // Issue chunk c, then hand over chunk c - 1.
+        for (uint32_t c = 0; c <= num_chunks; ++c) {
+            if (c < num_chunks) {
+                reads.begin(1 + c);
+                for (uint32_t t = c * chunk_tiles; t < (c + 1) * chunk_tiles; ++t) {
+                    reads.read(weights.get_noc_addr(page_of(t)), l1 + t * tile_bytes, tile_bytes);
+                }
+                dataflow_kernel_lib::set_read_trid(reads.noc, 0);
+            }
+            if (c > 0) {
+                reads.wait(c);
+                cb_push_back(cb_weights, chunk_tiles);
+            }
+        }
+    }
+}

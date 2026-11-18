@@ -11,20 +11,26 @@
 // [max(0, t0 - 1 - R), ...), consecutive). One matmul with K' = 3 C_in ((kh, c), c fastest) and N' = 3 C_out
 // ((kw, n), n fastest) gives [Q_0 | Q_1 | Q_2] at exactly the conv's MAC count (plus one halo tile-row each side whose
 // Q_0 / Q_2 spills d rows into this core's range), and out[o] = bias + Q_1[o] + [w >= d] Q_0[o - d] + [w < W - d]
-// Q_2[o + d]. The weights stream in column rounds, kw = 1 first, then 0, then 2: round kw is W'[(kh, c), kw, n]
-// (3 C_in x C_out tiles, (kh, c, n) order), the prepared [K_p, C_out] tensor read tile-permuted (slot (kh, c, n) is
-// prepared tile ((kh * 3 + kw) Ct + c, n)). Each Q_kw tile-row accumulates all its in-image kernel rows in DEST and is
-// packed once.
+// Q_2[o + d]. The output columns are walked in n-groups of sbw tiles (the subblock width), one pass each; within a
+// pass the columns kw go 1 first, then 0, then 2. The weights of column kw are W'[(kh, c), kw, n] (3 C_in x C_out
+// tiles, (kh, c, n) order), the prepared [K_p, C_out] tensor read tile-permuted (slot (kh, c, n) is prepared tile
+// ((kh * 3 + kw) Ct + c, n)). K-blocked, they stream in sub-rounds of one column and one n-group (3 C_in x sbw tiles),
+// in pass order; whole-K, the three column rounds stay resident. Each Q_kw tile-row accumulates all its in-image
+// kernel rows in DEST and is packed once.
 //
-// The shift: each Q_kw tile-row is pack-untilized (fp32 rows) into one fp32 accumulator ACC (cb_acc) at row
-// rowbase(t) + (1 - kw) d, so the kw shift sums in fp32 in the packer (K in fp32 DEST). ACC leaves a d-row gap after
-// every image row: the wrapped rows of Q_0 (w >= W - d) and Q_2 (w < d) land there and are never read (the masks cost
-// nothing). Q_1 covers every valid ACC row exactly once and its round comes first, so it packs as an overwrite (packer
-// L1 accumulation off) and Q_0 / Q_2, which spill d rows into the neighbouring row regions, accumulate onto it. Gap and
-// halo rows take accumulations onto garbage, and nothing reads them. With a full-width subblock (sbw == N) each
-// subblock is one packer stream (one close, not one per row). Last, each output tile is tilized from ACC (srcA, tf32)
-// plus the bias (srcB) and packed with ReLU. The bias therefore has no reader seed and no wait before the first pack:
-// the writer reads it after the weights and the reader decodes it into fp32 rows (cb_bias_rows) once its fill is done.
+// The shift: each Q_kw tile-row of the pass's n-group is pack-untilized (fp32 rows) into one fp32 accumulator plane
+// ACC (cb_acc, [rows, sbw * 32]) at row rowbase(t) + (1 - kw) d, so the kw shift sums in fp32 in the packer (K in fp32
+// DEST). ACC leaves a d-row gap after every image row: the wrapped rows of Q_0 (w >= W - d) and Q_2 (w < d) land there
+// and are never read (the masks cost nothing). Q_1 covers every valid ACC row exactly once and its round comes first,
+// so it packs as an overwrite (packer L1 accumulation off) and Q_0 / Q_2, which spill d rows into the neighbouring row
+// regions, accumulate onto it. Gap and halo rows take accumulations onto garbage, and nothing reads them. A subblock
+// covers the plane's full width, so each subblock is one packer stream (one close, not one per row). Last, each output
+// tile of the n-group is tilized from ACC (srcA, tf32) plus the bias (srcB) and packed with ReLU; the next pass's Q_1
+// overwrites the plane. The bias therefore has no reader seed and no wait before the first pack: the writer reads it
+// after the first pass's weights and the reader decodes it into fp32 rows (cb_bias_rows) once its fill is done.
+// One ACC plane (not N / sbw) and one sub-round per weight slot let kw-fold run sem res2.fuse_conv.0 / .1 (C_out 256)
+// in one M-block per core. Measured (Blackhole p150b, LoFi, against the K-blocked tap-direct walk they ran before):
+// 135.9 -> 100.4 and 108.8 -> 89.7 us; all planes resident measured the same (89.4 us) at 215 KB more L1.
 //
 // Raw LLK (capability): compute_kernel_lib::matmul_block reads in0 as one contiguous [M, K] block and packs at a CB's
 // write pointer; here a tile-row's K' comes from three slab tile-rows (whole input rows apart, one in0 base per kernel
@@ -209,15 +215,20 @@ template <
     uint32_t slab_pages,
     uint32_t m_tiles,
     bool kblocked,
-    uint32_t plane_bytes,
     bool noinline>
 ALWI void run(uint32_t m_tile_start, uint32_t actual_m_tiles, uint32_t num_blocks) {
     constexpr uint32_t R = d * tpr;
-    // ACC is N / sbw column planes of [rows, sbw * 32] fp32: a subblock covers the full width of its plane, so every
-    // subblock pack is one contiguous stream.
+    // ACC is one plane of [rows, sbw * 32] fp32: a subblock covers its full width, so every subblock pack is one
+    // contiguous stream.
     constexpr uint32_t PITCH = sbw * 32 * 4;
-    constexpr uint32_t PLANE = plane_bytes;
     static_assert(N % sbw == 0 && sbw * sbh <= 4 && d >= 1 && d <= 32);
+    // One pass per n-group of sbw output column tiles: its columns kw = 1, 0, 2 onto the ACC plane, then its final
+    // pass. K-blocked weights stream in sub-rounds of one column and one n-group, sub-round s = (n-group s / 3, kw =
+    // KW_ROUND_ORDER[s % 3]): 3 Ct x sbw tiles, (kh, c, n) order. Whole-K keeps the three column rounds (3 Ct x N tiles
+    // each) resident. With N == sbw (one n-group) both are the column rounds.
+    constexpr uint32_t NG = N / sbw;
+    constexpr uint32_t RW = kblocked ? sbw : N;  // output column tiles of one weight round
+    constexpr uint32_t ROUND_TILES = 3 * Ct * RW;
 
     CircularBuffer in(cb_in);
     CircularBuffer w(cb_w);
@@ -238,179 +249,187 @@ ALWI void run(uint32_t m_tile_start, uint32_t actual_m_tiles, uint32_t num_block
             t0 * 32, (t0 + valid) * 32, base);
         const bool halo_top = t0 % tpr != 0;
         const bool halo_bot = (t0 + valid) % tpr != 0 && t0 + valid < m_tiles;
-        {
-            MaybeDeviceZoneScope("compute_kwf_matmul_shift");
-            // One pass per weight column round, in round order kw = 1, 0, 2, as the round lands: Q_kw's rows each
-            // accumulate every in-image kernel row in DEST and are packed onto ACC once (Q_1: the valid rows, as an
-            // overwrite; Q_0: tile-rows t0 - 1 .. t_end - 1 and Q_2: t0 .. t_end, accumulating). K-blocked: one round
-            // at a time (double-buffered, popped after its pass). Whole-K: the rounds stay resident across M-blocks;
-            // pass s waits only for rounds 0 .. s.
-            constexpr uint32_t round_tiles = 3 * Ct * N;
-            reconfig_data_format(cb_w, cb_in);
-            pack_reconfig_data_format(cb_acc);
-            pack_untilize_dest_init<sbw, sbw>(cb_acc);
-            PACK((stream_mop_config<sbw>()));
-            uint32_t init_rows = sbh;
-            matmul_block_init(cb_in, cb_w, false, sbw, sbh, Ct);
-            uint32_t landed = 0;
-            // Rows [i0, i0 + h) (tile-row t0 - 1 + i), one kw, columns [n0, n0 + sbw).
-            auto subblock_body = [&](uint32_t i0, uint32_t h, uint32_t kw, uint32_t n0) {
-                const uint32_t t_first = t0 - 1 + i0;
-                // Slab pages up to the last in0 row this subblock reads (the highest in-image kernel row), clamped to
-                // the slab.
-                {
-                    const uint32_t last_kh = t_first + h - 1 + R < m_tiles ? 2 : 1;
-                    uint32_t last = t_first + h - 1 + last_kh * R - R;
-                    last = last < m_tiles ? last : m_tiles - 1;
-                    uint32_t pages = (static_cast<uint32_t>(static_cast<int32_t>(last) + base[last_kh]) + 1) * Ct;
-                    pages = pages < slab_pages ? pages : slab_pages;
-                    if (pages > landed) {
-                        in.wait_front(pages);
-                        landed = pages;
+        uint32_t landed = 0;
+        for (uint32_t g = 0; g < NG; ++g) {
+            {
+                MaybeDeviceZoneScope("compute_kwf_matmul_shift");
+                // n-group g's columns kw = 1, 0, 2, each as its weights land: Q_kw's rows each accumulate every
+                // in-image kernel row in DEST and are packed onto ACC once (Q_1: the valid rows, as an overwrite; Q_0:
+                // tile-rows t0 - 1 .. t_end - 1 and Q_2: t0 .. t_end, accumulating). K-blocked: one sub-round at a time
+                // (double-buffered, popped after its walk). Whole-K: the rounds stay resident across M-blocks; column
+                // step waits only for rounds 0 .. step.
+                reconfig_data_format(cb_w, cb_in);
+                pack_reconfig_data_format(cb_acc);
+                pack_untilize_dest_init<sbw, sbw>(cb_acc);
+                PACK((stream_mop_config<sbw>()));
+                uint32_t init_rows = sbh;
+                matmul_block_init(cb_in, cb_w, false, sbw, sbh, Ct);
+                // Rows [i0, i0 + h) (tile-row t0 - 1 + i), one kw, the n-group's columns from in1 index w0 (row
+                // stride RW).
+                auto subblock_body = [&](uint32_t i0, uint32_t h, uint32_t kw, uint32_t w0) {
+                    const uint32_t t_first = t0 - 1 + i0;
+                    // Slab pages up to the last in0 row this subblock reads (the highest in-image kernel row), clamped
+                    // to the slab.
+                    {
+                        const uint32_t last_kh = t_first + h - 1 + R < m_tiles ? 2 : 1;
+                        uint32_t last = t_first + h - 1 + last_kh * R - R;
+                        last = last < m_tiles ? last : m_tiles - 1;
+                        uint32_t pages = (static_cast<uint32_t>(static_cast<int32_t>(last) + base[last_kh]) + 1) * Ct;
+                        pages = pages < slab_pages ? pages : slab_pages;
+                        if (pages > landed) {
+                            in.wait_front(pages);
+                            landed = pages;
+                        }
+                    }
+                    tile_regs_acquire();
+                    for (uint32_t kh = 0; kh < 3; ++kh) {
+                        // Rows of the group whose kernel row kh is inside the image: a contiguous [a, b).
+                        uint32_t a = 0;
+                        uint32_t b = h;
+                        while (a < b && t_first + a + kh * R < R) {
+                            ++a;
+                        }
+                        while (b > a && t_first + (b - 1) + kh * R >= m_tiles + R) {
+                            --b;
+                        }
+                        if (a == b) {
+                            continue;
+                        }
+                        if (b - a != init_rows) {
+                            matmul_block_init(cb_in, cb_w, false, sbw, b - a, Ct);
+                            init_rows = b - a;
+                        }
+                        const uint32_t in0 =
+                            static_cast<uint32_t>(static_cast<int32_t>(t_first + a + kh * R - R) + base[kh]) * Ct;
+                        const uint32_t in1 = w0 + kh * Ct * RW;
+                        for (uint32_t c = 0; c < Ct; ++c) {
+                            matmul_block(cb_in, cb_w, in0 + c, in1 + c * RW, a * sbw, false, sbw, b - a, Ct);
+                        }
+                    }
+                    tile_regs_commit();
+                    tile_regs_wait();
+                    // One stream per run of rows that are consecutive in ACC (an image-row gap splits it).
+                    for (uint32_t r = 0; r < h;) {
+                        uint32_t e = r + 1;
+                        while (e < h && rowbase<d, tpr>(t0, i0 + e) == rowbase<d, tpr>(t0, i0 + r) + 32 * (e - r)) {
+                            ++e;
+                        }
+                        PACK((
+                            pack_stream<sbw>(acc_base + (rowbase<d, tpr>(t0, i0 + r) + d - kw * d) * PITCH, r, e - r)));
+                        r = e;
+                    }
+                    tile_regs_release();
+                };
+                // TRISC code size is a measured lever here: with noinline the subblock code exists once (stem.conv2
+                // 45.6 -> 40.6 us, an unrolled kernel-row loop instead: 49.2 us), but on 1-row subblocks the call cost
+                // more than it saved before column rounds (inst res2.fuse_conv.1 36.2 -> 42.0 us) and is flat with
+                // them (28.1 vs 28.3 us). The descriptor picks it (noinline): whole-K with multi-row subblocks.
+                auto subblock_out_of_line = [&](uint32_t i0, uint32_t h, uint32_t kw, uint32_t w0)
+                                                __attribute__((noinline)) { subblock_body(i0, h, kw, w0); };
+                auto subblock = [&](uint32_t i0, uint32_t h, uint32_t kw, uint32_t w0) {
+                    if constexpr (noinline) {
+                        subblock_out_of_line(i0, h, kw, w0);
+                    } else {
+                        subblock_body(i0, h, kw, w0);
+                    }
+                };
+                for (uint32_t step = 0; step < 3; ++step) {
+                    const uint32_t kw = KW_ROUND_ORDER[step];
+                    // Q_1 (step 0) overwrites; Q_0 and Q_2 accumulate onto it.
+                    if (step < 2) {
+                        pack_reconfig_l1_acc(step);
+                    }
+                    // Q_0 reaches back to the halo tile-row above (t0 - 1), Q_2 to the one below (t_end).
+                    const uint32_t i_lo = kw == 0 && halo_top ? 0 : 1;
+                    const uint32_t i_end = valid + (kw == 2 && halo_bot ? 2 : 1);
+                    {
+                        // K-blocked: this sub-round at the front (the previous one was popped), so its in1 tiles start
+                        // at index 0. Whole-K: rounds 0 .. step.
+                        MaybeDeviceZoneScope("compute_kwf_weight_wait");
+                        w.wait_front(kblocked ? ROUND_TILES : (step + 1) * ROUND_TILES);
+                    }
+                    const uint32_t w0 = kblocked ? 0 : step * ROUND_TILES + g * sbw;
+                    for (uint32_t i0 = i_lo; i0 < i_end; i0 += sbh) {
+                        const uint32_t h = i_end - i0 < sbh ? i_end - i0 : sbh;
+                        subblock(i0, h, kw, w0);
+                    }
+                    if constexpr (kblocked) {
+                        w.pop_front(ROUND_TILES);
                     }
                 }
-                tile_regs_acquire();
-                for (uint32_t kh = 0; kh < 3; ++kh) {
-                    // Rows of the group whose kernel row kh is inside the image: a contiguous [a, b).
-                    uint32_t a = 0;
-                    uint32_t b = h;
-                    while (a < b && t_first + a + kh * R < R) {
-                        ++a;
-                    }
-                    while (b > a && t_first + (b - 1) + kh * R >= m_tiles + R) {
-                        --b;
-                    }
-                    if (a == b) {
-                        continue;
-                    }
-                    if (b - a != init_rows) {
-                        matmul_block_init(cb_in, cb_w, false, sbw, b - a, Ct);
-                        init_rows = b - a;
-                    }
-                    const uint32_t in0 =
-                        static_cast<uint32_t>(static_cast<int32_t>(t_first + a + kh * R - R) + base[kh]) * Ct;
-                    // Whole-K: round kw sits at slot kw_round_slot(kw) of the resident rounds.
-                    const uint32_t in1 = (kblocked ? 0 : kw_round_slot(kw) * round_tiles) + kh * Ct * N + n0;
-                    for (uint32_t c = 0; c < Ct; ++c) {
-                        matmul_block(cb_in, cb_w, in0 + c, in1 + c * N, a * sbw, false, sbw, b - a, Ct);
-                    }
-                }
-                tile_regs_commit();
-                tile_regs_wait();
-                // One stream per run of rows that are consecutive in ACC (an image-row gap splits it).
-                for (uint32_t r = 0; r < h;) {
-                    uint32_t e = r + 1;
-                    while (e < h && rowbase<d, tpr>(t0, i0 + e) == rowbase<d, tpr>(t0, i0 + r) + 32 * (e - r)) {
-                        ++e;
-                    }
-                    PACK((pack_stream<sbw>(
-                        acc_base + (n0 / sbw) * PLANE + (rowbase<d, tpr>(t0, i0 + r) + d - kw * d) * PITCH, r, e - r)));
-                    r = e;
-                }
-                tile_regs_release();
-            };
-            // TRISC code size is a measured lever here: with noinline the subblock code exists once (stem.conv2 45.6
-            // -> 40.6 us, an unrolled kernel-row loop instead: 49.2 us), but on 1-row subblocks the call cost more than
-            // it saved before column rounds (inst res2.fuse_conv.1 36.2 -> 42.0 us) and is flat with them (28.1 vs
-            // 28.3 us). The descriptor picks it (noinline): whole-K with multi-row subblocks.
-            auto subblock_out_of_line = [&](uint32_t i0, uint32_t h, uint32_t kw, uint32_t n0)
-                                            __attribute__((noinline)) { subblock_body(i0, h, kw, n0); };
-            auto subblock = [&](uint32_t i0, uint32_t h, uint32_t kw, uint32_t n0) {
-                if constexpr (noinline) {
-                    subblock_out_of_line(i0, h, kw, n0);
-                } else {
-                    subblock_body(i0, h, kw, n0);
-                }
-            };
-            for (uint32_t step = 0; step < 3; ++step) {
-                const uint32_t kw = KW_ROUND_ORDER[step];
-                {
-                    // K-blocked: this round at the front (the previous one was popped), so its in1 tiles start at
-                    // index 0. Whole-K: rounds 0 .. step.
-                    MaybeDeviceZoneScope("compute_kwf_weight_wait");
-                    w.wait_front(kblocked ? round_tiles : (step + 1) * round_tiles);
-                }
-                // Q_1 (step 0) overwrites; Q_0 and Q_2 accumulate onto it.
-                if (step < 2) {
-                    pack_reconfig_l1_acc(step);
-                }
-                // Q_0 reaches back to the halo tile-row above (t0 - 1), Q_2 to the one below (t_end).
-                const uint32_t i_lo = kw == 0 && halo_top ? 0 : 1;
-                const uint32_t i_end = valid + (kw == 2 && halo_bot ? 2 : 1);
-                for (uint32_t i0 = i_lo; i0 < i_end; i0 += sbh) {
-                    const uint32_t h = i_end - i0 < sbh ? i_end - i0 : sbh;
-                    for (uint32_t n0 = 0; n0 < N; n0 += sbw) {
-                        subblock(i0, h, kw, n0);
-                    }
-                }
-                if constexpr (kblocked) {
-                    w.pop_front(round_tiles);
-                }
+                pack_untilize_uninit(cb_acc);
+                pack_reconfig_l1_acc(0);
+                // The final pass unpacks ACC: its rows must have landed. A CB push from the pack thread is stored only
+                // after the packer drained (llk_push_to_brisc), so the unpacker's wait below orders its reads after
+                // every ACC write. The next n-group's (or M-block's) Q_1 overwrite of the plane is packed after its
+                // matmul, whose operands the unpacker reads after every read of this final pass.
+                acc_ready.reserve_back(1);
+                acc_ready.push_back(1);
             }
-            pack_untilize_uninit(cb_acc);
-            pack_reconfig_l1_acc(0);
-            // The final pass unpacks ACC: its rows must have landed. A CB push from the pack thread is stored only
-            // after the packer drained (llk_push_to_brisc), so the unpacker's wait below orders its reads after every
-            // ACC write.
-            acc_ready.reserve_back(1);
-            acc_ready.push_back(1);
-        }
 
-        // ---- output tile = tilize(ACC rows) + bias, ReLU on the pack.
-        {
-            MaybeDeviceZoneScope("compute_kwf_final");
-            acc_ready.wait_front(1);
-            [[maybe_unused]] uint32_t acc_rd = 0;
-            [[maybe_unused]] uint32_t rows_rd = 0;
-            UNPACK((acc_rd = get_local_cb_interface(get_operand_id(cb_acc)).fifo_rd_ptr << 4));
-            UNPACK((rows_rd = get_local_cb_interface(get_operand_id(cb_bias_rows)).fifo_rd_ptr << 4));
-            // The reader's fp32 bias rows (one 512 B page per output column tile: 4 copies of [b_0 .. b_31]).
-            bias_rows.wait_front(N);
-            reconfig_data_format(cb_acc, cb_bias_rows);
-            pack_reconfig_data_format(cb_out);
-            if constexpr (relu) {
-                pack_relu_config(ReluConfig::zero());
-            }
-            tilize_init(cb_acc, sbw, cb_out);
-            UNPACK((tilize_bias_mop_config()));
-            constexpr uint32_t ROWS_BYTES = 4 * 32 * 4;  // one column tile's 4 fp32 bias rows
-            out.reserve_back(bm * N);
-            const uint32_t total = valid * N;
-            for (uint32_t f0 = 0; f0 < total; f0 += FINAL_BATCH) {
-                const uint32_t cnt = total - f0 < FINAL_BATCH ? total - f0 : FINAL_BATCH;
-                MATH((llk_math_wait_for_dest_available()));
-                PACK((llk_packer_wait_for_math_done()));
-                for (uint32_t j = 0; j < cnt; ++j) {
-                    const uint32_t u = (f0 + j) / N;
-                    const uint32_t n = (f0 + j) - u * N;
-                    UNPACK((unpack_tilize_bias_at<cb_acc>(
-                        acc_rd + (n / sbw) * PLANE + rowbase<d, tpr>(t0, u + 1) * PITCH,
-                        n % sbw,
-                        rows_rd + n * ROWS_BYTES)));
-                    MATH((llk_math_eltwise_unary_datacopy<
-                          DataCopyType::A2D,
-                          DST_ACCUM_MODE,
-                          BroadcastType::NONE,
-                          UnpackToDestEn>(j, cb_acc)));
+            // ---- output tile = tilize(ACC rows) + bias, ReLU on the pack: the n-group's sbw output columns.
+            {
+                MaybeDeviceZoneScope("compute_kwf_final");
+                acc_ready.wait_front(1);
+                [[maybe_unused]] uint32_t acc_rd = 0;
+                [[maybe_unused]] uint32_t rows_rd = 0;
+                UNPACK((acc_rd = get_local_cb_interface(get_operand_id(cb_acc)).fifo_rd_ptr << 4));
+                UNPACK((rows_rd = get_local_cb_interface(get_operand_id(cb_bias_rows)).fifo_rd_ptr << 4));
+                // The reader's fp32 bias rows (one 512 B page per output column tile: 4 copies of [b_0 .. b_31]).
+                if (blk == 0 && g == 0) {
+                    bias_rows.wait_front(N);
                 }
-                for (uint32_t j = 0; j < cnt; ++j) {
-                    PACK((llk_pack<DST_ACCUM_MODE, true, PackMode::Default>(j, cb_out, f0 + j)));
+                reconfig_data_format(cb_acc, cb_bias_rows);
+                pack_reconfig_data_format(cb_out);
+                if constexpr (relu) {
+                    pack_relu_config(ReluConfig::zero());
                 }
-                MATH((llk_math_dest_section_done<DST_ACCUM_MODE>()));
-                PACK((llk_pack_dest_section_done<DST_ACCUM_MODE>()));
-            }
-            out.push_back(bm * N);
-            acc_ready.pop_front(1);
-            tilize_uninit(cb_acc, cb_out);
-            if constexpr (relu) {
-                pack_relu_config(ReluConfig::none());
+                tilize_init(cb_acc, sbw, cb_out);
+                UNPACK((tilize_bias_mop_config()));
+                constexpr uint32_t ROWS_BYTES = 4 * 32 * 4;  // one column tile's 4 fp32 bias rows
+                if (g == 0) {
+                    out.reserve_back(bm * N);
+                }
+                const uint32_t n_first = g * sbw;
+                const uint32_t total = valid * sbw;
+                for (uint32_t f0 = 0; f0 < total; f0 += FINAL_BATCH) {
+                    const uint32_t cnt = total - f0 < FINAL_BATCH ? total - f0 : FINAL_BATCH;
+                    MATH((llk_math_wait_for_dest_available()));
+                    PACK((llk_packer_wait_for_math_done()));
+                    for (uint32_t j = 0; j < cnt; ++j) {
+                        const uint32_t u = (f0 + j) / sbw;
+                        const uint32_t nn = (f0 + j) - u * sbw;  // column tile within the n-group
+                        UNPACK((unpack_tilize_bias_at<cb_acc>(
+                            acc_rd + rowbase<d, tpr>(t0, u + 1) * PITCH, nn, rows_rd + (n_first + nn) * ROWS_BYTES)));
+                        MATH((llk_math_eltwise_unary_datacopy<
+                              DataCopyType::A2D,
+                              DST_ACCUM_MODE,
+                              BroadcastType::NONE,
+                              UnpackToDestEn>(j, cb_acc)));
+                    }
+                    for (uint32_t j = 0; j < cnt; ++j) {
+                        const uint32_t u = (f0 + j) / sbw;
+                        const uint32_t nn = (f0 + j) - u * sbw;
+                        PACK((llk_pack<DST_ACCUM_MODE, true, PackMode::Default>(j, cb_out, u * N + n_first + nn)));
+                    }
+                    MATH((llk_math_dest_section_done<DST_ACCUM_MODE>()));
+                    PACK((llk_pack_dest_section_done<DST_ACCUM_MODE>()));
+                }
+                if (g + 1 == NG) {
+                    out.push_back(bm * N);
+                }
+                acc_ready.pop_front(1);
+                tilize_uninit(cb_acc, cb_out);
+                if constexpr (relu) {
+                    pack_relu_config(ReluConfig::none());
+                }
             }
         }
         in.wait_front(slab_pages);
         in.pop_front(slab_pages);
     }
     if constexpr (!kblocked) {
-        w.pop_front(9 * Ct * N);
+        w.pop_front(3 * ROUND_TILES);
     }
     bias_rows.pop_front(N);
 }

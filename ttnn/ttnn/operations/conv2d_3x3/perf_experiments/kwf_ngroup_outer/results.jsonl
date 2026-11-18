@@ -1,0 +1,8 @@
+{"kind": "focus", "case": "semantic3", "base_us": [107.63, 108.75], "cand_v2_ngouter_us": [89.96, 89.67], "grad_us": 89.71, "note": "op_copy V2 bm10; grad = HEAD+graduation.patch"}
+{"kind": "option", "case": "semantic3", "variant": "V1 kw-outer, all N/sbw ACC planes resident, bm10", "us": 89.44, "l1_kib": 897}
+{"kind": "option", "case": "semantic3", "variant": "V2 n-group-outer, one ACC plane, bm10", "us": 89.96, "l1_kib": 682}
+{"kind": "option", "case": "semantic3", "variant": "V2 bm5 (2 M-blocks, weights streamed twice)", "us": 96.12}
+{"kind": "option", "case": "semantic3", "variant": "V2 bm10 weight depth 3", "us": 89.9}
+{"kind": "sweep", "order": ["stem_conv2", "stem_conv3", "res2", "res3_123", "semantic0", "instance0", "semantic1", "semantic2", "instance1", "semantic3", "instance2", "center_head_1"], "base_us": [34.31, 48.96, 14.53, 15.26, 44.85, 25.02, 36.12, 135.91, 32.45, 108.75, 27.19, 11.68], "cand_us": [33.64, 48.95, 13.68, 14.93, 44.88, 25.1, 35.94, 100.43, 32.43, 89.67, 27.22, 11.71]}
+{"kind": "recheck_median3", "order": ["stem_conv2", "res2", "res3_123"], "base_runs": [[34.31, 34.31, 34.32], [14.53, 14.21, 13.63], [15.26, 15.13, 14.88]], "cand_runs": [[33.64, 33.62, 33.6], [13.68, 13.69, 13.75], [14.93, 15.1, 15.43]], "base_med": [34.31, 14.21, 15.13], "cand_med": [33.62, 13.69, 15.1]}
+{"kind": "focus", "case": "semantic2", "base_us": 135.91, "cand_us": 100.43, "grad_us": 100.25}
