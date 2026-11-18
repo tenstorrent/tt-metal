@@ -508,3 +508,5 @@ inline void _llk_math_reduce_init_(const ckernel::TensorShape& tensor_shape)
 inline void _llk_math_reduce_uninit_()
 {
 }
+
+// trial: a comment-only change, so the gate runs on an unchanged suite
