@@ -131,6 +131,7 @@ class Demo:
 
     def run_torch_inference(self, input_tensor, model_config):
         """Run PyTorch inference."""
+        self.decoder = TTDetectionDecoder(device, image_size=tuple(input_tensor.shape[-2:]))
         retinanet = retinanet_resnet50_fpn_v2(weights=RetinaNet_ResNet50_FPN_V2_Weights.DEFAULT)
         retinanet.eval()
         self.torch_backbone = retinanet.backbone
@@ -209,8 +210,7 @@ class Demo:
             optimization_profile="optimized",
         )
 
-        decoder = TTDetectionDecoder(device, image_size=(input_tensor.shape[1], input_tensor.shape[2]))
-        return decoder(classification_output, regression_output)
+        return self.decoder(classification_output, regression_output)
 
     def preprocess_image(self, image_path: str, device, target_size=(800, 800)):
         """PREPROCESS IMAGE"""

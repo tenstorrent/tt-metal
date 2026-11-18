@@ -7,15 +7,17 @@
 The device selects the ``topk_candidates`` best (anchor, class) pairs of every pyramid level and
 decodes their boxes, so the host receives a few thousand candidates instead of every anchor's
 class logits. The host keeps the candidates above the score threshold and runs NMS, whose output
-size depends on the data. Together they compute torchvision's ``RetinaNet.postprocess_detections``.
+size depends on the data. Together they compute torchvision's ``RetinaNet.postprocess_detections``,
+which thresholds before its top-k: the score is monotonic in the logit, so the top-k of the
+candidates above the threshold are the top-k candidates that are above it.
 """
 
 import math
 
 import torch
 import ttnn
+from torchvision.models.detection.anchor_utils import AnchorGenerator
 from torchvision.models.detection.image_list import ImageList
-from torchvision.models.detection.retinanet import _default_anchorgen
 from torchvision.ops import boxes as box_ops
 
 NUM_CLASSES = 91
@@ -35,12 +37,20 @@ def level_sizes(image_size):
     return sizes
 
 
+def anchor_generator():
+    """torchvision's RetinaNet anchor generator: three sizes per octave from 32 px on P3, and
+    three aspect ratios."""
+    anchor_sizes = tuple((x, int(x * 2 ** (1.0 / 3)), int(x * 2 ** (2.0 / 3))) for x in [32, 64, 128, 256, 512])
+    aspect_ratios = ((0.5, 1.0, 2.0),) * len(anchor_sizes)
+    return AnchorGenerator(anchor_sizes, aspect_ratios)
+
+
 def retinanet_anchors(image_size):
     """torchvision's RetinaNet anchors for ``image_size``, one [H*W*A, 4] xyxy tensor per level."""
     sizes = level_sizes(image_size)
     images = ImageList(torch.zeros(1, 3, *image_size), [tuple(image_size)])
     features = [torch.zeros(1, 1, height, width) for height, width in sizes]
-    anchors = _default_anchorgen()(images, features)[0]
+    anchors = anchor_generator()(images, features)[0]
     return list(anchors.split([height * width * NUM_ANCHORS for height, width in sizes]))
 
 
@@ -51,14 +61,15 @@ class TTDetectionDecoder:
     def __init__(self, device, image_size=(512, 512), topk_candidates=1000):
         self.device = device
         self.image_size = tuple(image_size)
-        self.anchors_per_level = [len(anchors) for anchors in retinanet_anchors(self.image_size)]
+        anchors_per_level = retinanet_anchors(self.image_size)
+        self.anchors_per_level = [len(anchors) for anchors in anchors_per_level]
         self.topk = [min(topk_candidates, count * NUM_CLASSES) for count in self.anchors_per_level]
 
         # Boxes are decoded with one coordinate per row and one anchor per column, so the gather
         # runs along the last dimension and every row pair shares the same elementwise ops.
         self.anchor_centers = []
         self.anchor_sizes = []
-        for anchors in retinanet_anchors(self.image_size):
+        for anchors in anchors_per_level:
             sizes = anchors[:, 2:] - anchors[:, :2]
             centers = anchors[:, :2] + 0.5 * sizes
             self.anchor_centers.append(self._to_device(centers.T))
@@ -80,6 +91,11 @@ class TTDetectionDecoder:
         """``classification`` [1, anchors, 91] and ``regression`` [1, anchors, 4], the heads'
         outputs over all levels. Returns per level the boxes [1, 1, 4, k] (rows x1, y1, x2, y2),
         scores [1, 1, 1, k] and labels [1, 1, 1, k], still on device."""
+        num_anchors = sum(self.anchors_per_level)
+        assert classification.shape[1] == num_anchors and regression.shape[1] == num_anchors, (
+            f"The heads' outputs have {classification.shape[1]} and {regression.shape[1]} anchors; "
+            f"a {self.image_size} image has {num_anchors}"
+        )
         boxes, scores, labels = [], [], []
         start = 0
         for level, count in enumerate(self.anchors_per_level):
