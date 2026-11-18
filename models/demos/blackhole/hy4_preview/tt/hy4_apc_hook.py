@@ -16,6 +16,10 @@ import numpy as np
 
 
 class Hy4ApcHook:
+    wants_request_ids = True  # with plugin.patch (b45h): prefill_forward receives request_ids, so finished_ids can free the right row (without the patch the hook is exact one scheduler step late)
+
+    wants_request_ids = True  # with plugin.patch (b45h) prefill_forward receives request_ids, so finished_ids frees the right row; without it the hook is one scheduler step late
+
     def __init__(self, engine, rows=None):
         self.eng = engine
         self.rows = int(rows if rows is not None else len(engine.ret))
