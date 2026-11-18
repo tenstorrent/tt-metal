@@ -507,6 +507,13 @@ notes:
     determinism 0. Stop at a hang (the safe runner resets without sys-triage, ~5 min). Keep the switch name HISTORY_GATHER_OVERLAP
     for now (tasks.yaml''s A/B names it; the overseer renames it after the A/B). The engram-window injection stays the next
     step, not this attempt.'
+- id: OV-49
+  tasks:
+  - X.6
+  status: open
+  t: '2026-11-18T21:54:10'
+  text: 'The overseer stopped attempt 1 (fix): overseer: X.6''s units all passed; the gate failed on metric names the overseer
+    wrote wrong in tasks.yaml (framework/ledger), nothing to fix in code'
 fixes:
 - id: FIX.1
   title: 'Owner order: no padding to get around a kernel limit'
@@ -1239,8 +1246,40 @@ fixes:
   - models/demos/deepseek_v41_flash_d_p/bringup
   released: '2026-11-18T17:33:12'
   placed: '2026-11-18T17:34:33'
+- id: FIX.39
+  title: 'Outside-written history: clear the prefetch marker at chunk start, and a test that proves the served-state path'
+  gate:
+  - X.4
+  status: placed
+  t: '2026-11-18T18:33:11'
+  text: 'Review feedback (owner 2026-11-18). (A) Latent bug: tt/history_gather.py gather() (:170-177) reuses a prefetched
+    history (buf.pre) when (cache id, start) match and ckv_cache.version moved by <= 1; version is a host counter that writes
+    from OUTSIDE the process (the KV Manager filling the served cache after a store load / d2p pull) never bump. The full
+    model is safe (layer 1''s engram wait re-prefetches every chunk), but a pipeline stage that starts mid-model (no prefetch
+    before its sources) could reuse rows gathered before an outside write. Fix: clear every history buffer''s pre at chunk
+    start (begin_chunk), one line; bit-identical on the normal path. (B) nothing to do (FIX.38''s units did run on the new
+    default in its gate --check at 17:37-17:53, FIX.38.check.log; the final gate line ''reused'' refers to those runs).
+    (C) Add the missing test: tests/test_outside_history.py: run a request''s chunks k and k+1 in slot A (self-written);
+    in slot B write the served caches of chunk k from OUTSIDE the model (copy slot A''s served records into slot B with
+    a raw DRAM copy, as the KV Manager would; nothing through the model''s write path, no load_host), then run chunk k+1
+    in slot B with the same ids, and compare every layer''s output and every served record written by chunk k+1 between
+    A and B. Expected: bit-identical with STATIC_TABLES=off (today''s default); record what differs with STATIC_TABLES=on
+    (the replicated table) and with INDEX_K_SOURCE=private (k8) to document items 3 and 4; the engram tail (item 1) and
+    window ring (item 2) need the replay / host ids, so run the comparison from a chunk start where the window carry and
+    the engram tail are the same for both (or replay 128 rows with global_write_start) and say how. Metrics: outside_history_max_abs_diff
+    (== 0 for the shipped defaults). DECODER_SKIP=decode. One model load.'
+  hold: after P.76
+  paths:
+  - models/demos/deepseek_v41_flash_d_p/tt
+  - models/demos/deepseek_v41_flash_d_p/tests
+  released: '2026-11-18T20:12:17'
+  placed: '2026-11-18T20:27:18'
 classified:
   L.smoke:
     kind: framework
     why: ''
     t: '2026-10-27T08:49:15'
+  X.6:
+    kind: framework
+    why: ''
+    t: '2026-11-18T21:54:34'

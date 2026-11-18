@@ -1895,3 +1895,21 @@ https://claude.ai/artifact/V6jTfy2imD5wQz6UQXPPbR.
 - 22:07-22:26 OWNER (via Mac): verify the units X.5 / FIX.39 / FIX.38 recorded as "reused" by RUNNING them on the pushed tree 1eb81cf47e2 (working tree's tt / tests / ttnn / tt_metal / common byte-identical to it; P.77 had not started, the stale X.6 orchestrator killed and its fix-2 agent's notes moved to /scratch/dnijemcevic/phase_1117/x6_stray). Fresh runs through the safe runner, logs /scratch/dnijemcevic/phase_1117/verify_1eb81cf/: framework test_determinism PASS (all diffs 0.0); model test_determinism PASS (0.0 incl. decoder skip, 4 + 5 chunks); test_outside_history PASS (shipped 0.0; static_on 242 from L2, index_private 245 from L2, no_prefix_ids 220 from L1, window_carry 229 from L0; 0 markers left); test_decoder_skip_decode PASS (served_bytes_differ 0). Unaccounted RAM 80.1 -> 81.6 -> 82.4 -> 84.9 -> 84.6 GiB. The reuse records were right this time (they came from FIX.39's gate --check at 20:49-20:56 and a hand run at 20:39 on the same code), but the reuse key drops test env such as SKIP_POS (X.6's wrong reuse): framework fix F270 next.
 - 22:5x FRAMEWORK F270 (ec4339162ab, CPU): the reuse key = measuring env + every VAR=value on the unit's command + every env knob its test files read that is set (SKIP_POS etc.); hand runs reused only with the same full prefix; the log names the reuse source (task / hand run, time, code key, env key); selftest test_reuse_env_key 6/6 (4 fail without the fix); 233 pass / 17 fail across the touched selftests, the 17 failing without the change too. Every safe-runner record re-measures once. Launching P.77.
 - 23:3x P.77 A/B (history bf16 vs bfp4 records, pack-before-gather): wall 51k 105.7/103.9, 142k 110.0/106.5, 256k 113.1/106.8, 1M 123.1/118.5 ms; device 1M 106.8/99.1; DRAM 1M 19.42/18.40 GiB; gather bytes 3.2x fewer (1M ~3.2 -> ~1.0 ms a source + ~0.5 ms pack); err_final_hidden 0.127 -> 0.135 (limit 0.242), top5 1.0, determinism 0; tightest: err_state_window_kv_L20 0.136 / 0.151 (0.90 of the limit; bf16 0.58). Accepted as the default (owner decision: everything on the 4-bit path). Then X.7 (profile at 142k).
+
+## 2026-11-19 00:30 UTC: 142k profile done, roofline, perf queue
+
+- X.7 (one profile of a steady 5120-token chunk at 142k on the 4-bit default): device 82.2 ms, 794 op rows, determinism
+  0.0. Its gate first failed on my metric names (no `_nonlast`, the X.6 slip again); the orchestrator started a fix
+  agent, which found the same; stopped it, renamed, gate --continue -> PASS 7d12a8870f0. Framework at the cause:
+  F272, `validate` and the gate refuse a position profile's metric gated without its role suffix (selftest).
+- Roofline: `results/X.7_roofline.md` (+ `X.7_roofline.py`). Floor ~40 ms vs 82.2 ms device, wall 106.5 ms.
+  Gaps: host not hidden ~23, attention ~13.6, MoE experts + combine ~13, MoE head ~7.3, dispatch ~6 (9 in fp8),
+  mHC ~5, the rest < 2 each. Target ~60 ms device, ~85k tok/s.
+- F271: BRINGUP_CHUNK sets a measurement run's chunk (the sweep); serving.max_chunk is checked on the written spec.
+- Queued, serial on the device: X.8 chunk sweep (1536 / 2560 / 5120 / 8192 at ~142k), then P.78 host hiding, P.79
+  experts + combine to the DRAM roofline, P.80 fp8 dispatch, P.81 attention, P.82 MoE head, P.83 mHC residency. Each
+  with its roofline target, A/B gate (ladder accuracy, determinism, decoder skip, contract, outside history, steady
+  walls at 142k and 1M) and a stop rule.
+- Open: test_profile's clean wall reads ~155 ms at 142k vs the steady 106.5 ms (not cProfile: that runs after the
+  timed runs); walls come from test_skip_positions until explained.
+- RAM unaccounted after X.7: 94.9 GiB.
