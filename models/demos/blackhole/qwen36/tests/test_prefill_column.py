@@ -161,10 +161,6 @@ class ColumnPrefill:
         """Persistent buffers of one bucket (all allocated before any trace is captured)."""
         m, a = self.model, self.a
         cfg = m._alloc_batched_short_cfg(Tb, 1, 64)
-        rd = int(cfg.cos.shape[-1])
-        cfg.cos_rows, cfg.sin_rows = [ttnn.clone(cfg.cos)], [ttnn.clone(cfg.sin)]
-        cfg.cos_cat = self._dev(torch.ones(1, 1, Tb, rd), ttnn.bfloat16)
-        cfg.sin_cat = self._dev(torch.zeros(1, 1, Tb, rd), ttnn.bfloat16)
         shard = ttnn.ShardTensor2dMesh(self.mesh, dims=(None, -1), mesh_shape=a.cluster_shape)
         cfg.vis = ttnn.from_torch(
             torch.zeros(1, 1, Tb, a.dim),
@@ -186,20 +182,18 @@ class ColumnPrefill:
         pg = dict(
             Bg=1,
             Tb=Tb,
-            cos=cfg.cos_rows,
-            sin=cfg.sin_rows,
+            cos=cfg.cos,
+            sin=cfg.sin,
             csi=cfg.csi,
             full_pts=cfg.full_pts,
             chunk_pts=cfg.chunk_pts,
             gdn_masks=cfg.gdn_masks,
             gdn_scratch=m._batched_gdn_scratch[1],
             gdn_init=self.init,
-            cos_cat=cfg.cos_cat,
-            sin_cat=cfg.sin_cat,
             conv_sel_tail=conv_sel_tail,
         )
         for layer in m.layers:
-            xn = layer.forward(x, cos=cfg.cos_rows[0], sin=cfg.sin_rows[0], mode="prefill", prefill_group=pg)
+            xn = layer.forward(x, cos=cfg.cos, sin=cfg.sin, mode="prefill", prefill_group=pg)
             ttnn.deallocate(x)
             x = xn
         hidden = ttnn.reshape(x, (1, 1, Tb, x.shape[-1]))
@@ -268,8 +262,8 @@ class ColumnPrefill:
                 cfg.chunk_pts[0],
                 self.rep,
             ),
-            (cos, ttnn.bfloat16, ttnn.TILE_LAYOUT, cfg.cos_cat, self.rep),
-            (sin, ttnn.bfloat16, ttnn.TILE_LAYOUT, cfg.sin_cat, self.rep),
+            (cos, ttnn.bfloat16, ttnn.TILE_LAYOUT, cfg.cos, self.rep),
+            (sin, ttnn.bfloat16, ttnn.TILE_LAYOUT, cfg.sin, self.rep),
             (bg, ttnn.float32, ttnn.TILE_LAYOUT, cfg.m_bg, self.rep),
             (conv_sel, ttnn.bfloat16, ttnn.TILE_LAYOUT, cfg.conv_sel, self.rep),
             (sel, ttnn.bfloat16, ttnn.TILE_LAYOUT, cfg.sel, self.rep),

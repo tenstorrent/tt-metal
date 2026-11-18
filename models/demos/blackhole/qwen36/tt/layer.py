@@ -262,10 +262,10 @@ class Qwen36DecoderLayer:
         # prefill_group (TP prefill only): dict for a GROUPED short prefill of Bg users x Tb bucket rows laid out
         # user-major in x [1,1,Bg*Tb,dim]: keys Bg, Tb, cos, sin, csi, full_pts / chunk_pts (per-user device page
         # tables), gdn_masks, gdn_scratch ({id(gdn layer): alloc_group_scratch(Bg)}). Full attention runs per user on
-        # its row slice (own KV pages), GDN runs once for the whole group (forward_prefill_group). Optional keys:
-        # cos_cat / sin_cat (the rows' rope tables back to back: attention batched over the rows), gdn_init (per GDN
-        # layer {"rec", "pad" | "hist"}: rows resumed from a prefix state), conv_sel_tail (the caller guarantees every
-        # row's valid length is >= Tb - conv_sel_tail + 3: the GDN conv-state select reads only those last rows).
+        # its row slice (own KV pages), GDN runs once for the whole group (forward_prefill_group). Optional keys (Bg = 1):
+        # gdn_init (per GDN layer {"rec", "hist"}: the row resumed from a prefix state), conv_sel_tail (the caller
+        # guarantees the row's valid length is >= Tb - conv_sel_tail + 3: the GDN conv-state select reads only those
+        # last rows).
         # Validate up front: attention/norm treat non-"prefill" as decode while the MoE experts
         # treat non-"decode" as prefill, so an unsupported mode would split the two down opposite
         # paths. Fail fast instead.
@@ -327,37 +327,31 @@ class Qwen36DecoderLayer:
             # TP modules: input is the gathered (full-dim) norm output [1,1,B/S,dim];
             # output is fractured along dim=3. cos/sin are in rope_tp format.
             if self.is_full_attention:
-                if mode == "prefill" and prefill_group is not None and prefill_group.get("cos_cat") is not None:
-                    pg = prefill_group
-                    attn_output = self.attention.forward_prefill_paged_group(
-                        attn_input,
-                        pg["cos_cat"],
-                        pg["sin_cat"],
-                        pg["Bg"],
-                        pg["Tb"],
-                        pg["full_pts"],
-                        pg["chunk_pts"],
-                        pg["csi"],
-                    )
-                elif mode == "prefill" and prefill_group is not None:
+                if mode == "prefill" and prefill_group is not None:
                     pg = prefill_group
                     Bg, Tb = pg["Bg"], pg["Tb"]
                     D = attn_input.shape[-1]
                     outs = []
                     for i in range(Bg):
-                        xi = ttnn.slice(attn_input, (0, 0, i * Tb, 0), (1, 1, (i + 1) * Tb, D))
+                        # Bg == 1: the row is the whole input, no slice copy
+                        xi = (
+                            attn_input
+                            if Bg == 1
+                            else ttnn.slice(attn_input, (0, 0, i * Tb, 0), (1, 1, (i + 1) * Tb, D))
+                        )
                         oi = self.attention.forward_prefill_paged(
                             xi,
-                            pg["cos"][i] if isinstance(pg["cos"], (list, tuple)) else pg["cos"],
-                            pg["sin"][i] if isinstance(pg["sin"], (list, tuple)) else pg["sin"],
+                            pg["cos"],
+                            pg["sin"],
                             pg["full_pts"][i],
                             chunk_page_table=pg["chunk_pts"][i],
                             chunk_start_idx=0,
                             chunk_start_idx_tensor=pg["csi"],
                         )
-                        ttnn.deallocate(xi)
+                        if xi is not attn_input:
+                            ttnn.deallocate(xi)
                         outs.append(oi)
-                    if len(outs) == 1:  # Bg == 1: concat of one tensor would return it (then freed below)
+                    if Bg == 1:
                         attn_output = outs[0]
                     else:
                         attn_output = ttnn.concat(outs, dim=2, memory_config=ttnn.DRAM_MEMORY_CONFIG)
