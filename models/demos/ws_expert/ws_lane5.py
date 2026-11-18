@@ -72,6 +72,9 @@ class L5Cfg:
     # yc: the east half's collectors (DRAM column x 9 east of them) write on NOC0 from the BRISC instead of NOC1 the
     # long way round; outside the NoC rule (the fence's acks return through the rectangles on NOC0), diagnostics
     yc_n0: int = 0
+    # the group NCRISCs record what held up the weight forwards (idle loop time by blocker: arrival, downstream slot
+    # credit, mux space, slot refill; first / last forward), stamp words 477-483; diagnostics
+    why: int = 0
     # group g: top-left logical core, its muxes' column (west of the group) and rows (direction 0, direction 1). The tray
     # (11 x 10, G 2) uses the first two; a Galaxy chip (12 x 10, logical columns 0-6 and 7-11 NoC contiguous) all four
     origins: tuple = ((1, 0), (1, 5), (7, 0), (7, 5))
@@ -391,6 +394,7 @@ def build_lane5(
                             )
                             + ([("WL5_HMC2", "1")] if l5.hmc == 2 else [])
                             + ([("WL5_ONEMUX", "1")] if onemux else [])
+                            + ([("WL5_WHY", "1")] if l5.why else [])
                             + ho_defs
                             + ([("WL5_GATHER0", "1")] if l5.hmc == 2 and l5.gather0 else []),
                             config=dm(1),

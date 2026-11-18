@@ -270,7 +270,9 @@ void kernel_main() {
     };
     // ---- QF / QR
     uint32_t rr = 0, n_fwd = 0, n_credit = 0;
+    uint32_t why = 0;  // (WL5_WHY: what blocked the forwards when none went: 1 arrival, 2 credit, 4 mux space)
     auto qf = [&]() -> bool {
+        why = 0;
         for (uint32_t t = 0; t < 2 * K; ++t) {
             const uint32_t s = (rr + t) % K, d = ((rr + t) / K) % 2;
             if (!((cur_fwd[s] >> d) & 1) || sent[s][d] >= PK) {
@@ -278,13 +280,16 @@ void kernel_main() {
             }
             const uint32_t u = sent[s][d];
             if (warr[s * 4] < base[s] + u + 1) {
+                why |= 1;
                 continue;
             }
             const uint32_t s2 = cur_dst[s][d] & 7, k2 = cur_dst[s][d] >> 3;
             if (u == 0 && cred[(d * K + s2) * 4] < k2) {
+                why |= 2;
                 continue;
             }
             if (!MUXD(d).edm_has_space_for_packet()) {
+                why |= 4;
                 continue;
             }
             noc_async_writes_flushed();  // (the previous send's header and payload out of L1)
@@ -911,6 +916,9 @@ void kernel_main() {
     auto wall = []() { return *reinterpret_cast<volatile uint32_t*>(RISCV_DEBUG_REG_WALL_CLOCK_L); };
     const uint32_t t_start = wall();
     uint32_t tq[7] = {0, 0, 0, 0, 0, 0, 0}, tb[6] = {0, 0, 0, 0, 0, 0};
+#if defined(WL5_WHY)
+    uint32_t twhy[5] = {0, 0, 0, 0, 0}, t_first = 0, t_last = 0;
+#endif
     while (true) {
         bool did[7], dib[6];
         uint32_t t[8], u[7];
@@ -948,6 +956,23 @@ void kernel_main() {
         dib[5] = qo();
         u[6] = wall();
         bool any = false;
+#if defined(WL5_WHY)
+        if (!did[0] && !dib[5]) {  // (no forward, no own read: charge the iteration to what blocked the forwards)
+            const uint32_t dt = u[6] - t[0];
+            bool rpend = false;  // (a slot sent all, waiting to be refilled: compute or its mux)
+            for (uint32_t s = 0; s < K; ++s) {
+                rpend |= live[s] && !(((cur_fwd[s] & 1) && sent[s][0] < PK) || ((cur_fwd[s] & 2) && sent[s][1] < PK));
+            }
+            const uint32_t k = (why & 4) ? 3 : (why & 2) ? 2 : (why & 1) ? 1 : rpend ? 4 : 0;
+            twhy[k] += dt;
+        }
+        if (did[0]) {
+            if (n_fwd && !t_first) {
+                t_first = t[1] - t_start;
+            }
+            t_last = t[1] - t_start;
+        }
+#endif
         for (uint32_t i = 0; i < 7; ++i) {
             if (did[i]) {
                 tq[i] += t[i + 1] - t[i];
@@ -1016,6 +1041,13 @@ void kernel_main() {
     }
 #endif
     st[56] = n_own;
+#if defined(WL5_WHY)
+    for (uint32_t i = 0; i < 5; ++i) {  // (idle iterations by blocker: nothing / arrival / credit / mux / refill)
+        st[477 + i] = twhy[i];
+    }
+    st[482] = t_first;
+    st[483] = t_last;
+#endif
     st[484] = wall() - t_start;
     st[485] = t_start;
 #if !defined(WL5_HMC2)
