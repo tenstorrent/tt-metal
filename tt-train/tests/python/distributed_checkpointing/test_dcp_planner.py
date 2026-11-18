@@ -507,14 +507,21 @@ def test_a_live_tensor_matching_an_entry_of_another_role_is_refused(expect_error
 
 
 def test_a_reshard_reads_only_the_chunks_it_needs():
-    # Rows to columns: every destination shard needs a piece of every saved chunk; columns to columns: one each.
+    """Eight row shards to eight column shards: every destination shard needs a piece of every saved chunk; to four
+    row shards: two each. The read count cannot tell the grid lookup from a scan of every chunk, since intersecting
+    drops the chunks a shard does not overlap, so the lookup is checked to return exactly the overlapping ones."""
     canonical = arange((1, 1, 64, 64))
-    for dst_label, reads_per_shard in ((world([R(), S(3)], (1, 8)), 8), (world([R(), S(2)], (1, 8)), 1)):
+    for dst_label, reads_per_shard in ((world([R(), S(3)], (1, 8)), 8), (world([R(), S(2)], (1, 4)), 2)):
         ckpt = FakeCheckpoint()
         ckpt.save({"w": (canonical, world([R(), S(2)], (1, 8)), Identity())})
         plan, shards = ckpt.load({"w": (dst_label, Identity(), canonical.shape)})
-        assert len(plan.keys["w"].reads) == 8 * reads_per_shard
+        kplan = plan.keys["w"]
+        assert len(kplan.reads) == len(kplan.boxes) * reads_per_shard
         assert_shards_equal(shards["w"], expected_shards(canonical, dst_label))
+        lookup = _ChunkLookup(kplan.entry)
+        for box in kplan.boxes.values():
+            overlapping = [i for i, c in enumerate(kplan.entry.chunks) if c.box.intersect(box) is not None]
+            assert len(overlapping) == reads_per_shard and sorted(lookup.overlapping(box)) == overlapping, box
 
 
 def test_save_planning_is_cached_per_label_and_shape(expect_error):
