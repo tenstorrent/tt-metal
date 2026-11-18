@@ -135,6 +135,24 @@ class Hy4IHCGen:
 
     @staticmethod
     def collapse(x4, pre):
+        if os.environ.get("HY4_B49_IHC", "0") != "0":
+            # B49: sum_i pre_i x_i as 4 slice * bcast-multiply + 3 adds (the stock ttnn.sum over the stream dim 1 of [1,4,n,D] fp32 costs 5.1 ms at n=512, this 0.82 ms; fp32 reorder only)
+            n, Dd = x4.shape[2], x4.shape[3]
+            acc = None
+            for i in range(NSTREAM):
+                xi = ttnn.slice(x4, [0, i, 0, 0], [1, i + 1, n, Dd])
+                pi = ttnn.slice(pre, [0, i, 0, 0], [1, i + 1, n, 1])
+                t = ttnn.multiply(xi, pi)
+                ttnn.deallocate(xi)
+                ttnn.deallocate(pi)
+                if acc is None:
+                    acc = t
+                else:
+                    a2 = ttnn.add(acc, t)
+                    ttnn.deallocate(acc)
+                    ttnn.deallocate(t)
+                    acc = a2
+            return acc
         w = ttnn.multiply(x4, pre)
         h = ttnn.sum(w, dim=1, keepdim=True)  # [1,1,n,D] fp32
         ttnn.deallocate(w)
