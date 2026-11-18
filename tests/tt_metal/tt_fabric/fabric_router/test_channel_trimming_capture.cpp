@@ -301,6 +301,21 @@ TEST_F(ChannelTrimming1DFixture, L1AllocationOrdering) {
     // Capture buffer + its size should not exceed the handshake address
     size_t capture_end = config.datapath_usage_l1_address + config.datapath_usage_buffer_size;
     EXPECT_LE(capture_end, config.handshake_addr);
+
+    const auto& builder_ctx = control_plane.get_fabric_context().get_builder_context();
+    const auto clear_regions = builder_ctx.get_fabric_router_addresses_to_clear();
+    EXPECT_GE(clear_regions.size(), 3u);
+    for (size_t i = 0; i < 3; ++i) {
+        EXPECT_EQ(clear_regions[i].second, 1u);
+    }
+    if (config.multi_txq_enabled()) {
+        ASSERT_EQ(clear_regions.size(), 7u);
+        for (size_t i = 3; i < 7; ++i) {
+            EXPECT_EQ(clear_regions[i].second, config.router_buffer_clear_size_words);
+            const size_t clear_end = clear_regions[i].first + clear_regions[i].second * sizeof(uint32_t);
+            EXPECT_LE(clear_end, config.edm_channel_ack_addr);
+        }
+    }
 }
 
 // Test: DiagnosticBufferMap shows channel_trimming_capture enabled via FabricBuilderContext
