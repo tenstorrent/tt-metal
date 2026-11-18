@@ -18,6 +18,7 @@ from __future__ import annotations
 import json
 import os
 import struct
+from math import prod
 from typing import Sequence
 
 ALIGNMENT = 4096
@@ -32,42 +33,40 @@ def build_header(
     Returns the header bytes including the length prefix, each tensor's ``(begin, end)`` within the data section,
     and the total size of the data section. ``metadata`` becomes the file's ``__metadata__``, whose values safetensors
     requires to be strings.
+
+    Each tensor's entry is formatted as one string, the JSON ``json.dumps`` would give its dict: a save on 32
+    devices writes headers of about 16k tensors each, where building a dict per tensor for the encoder to walk took
+    twice as long.
     """
     offsets: dict[str, tuple[int, int]] = {}
-    entries: dict = {}
+    parts: list[str] = []
     if metadata is not None:
         for key, value in metadata.items():
             if not isinstance(value, str):
                 raise ValueError(f"safetensors: metadata {key!r} must be a string, not {type(value).__name__}")
-        entries["__metadata__"] = dict(metadata)
+        parts.append('"__metadata__":' + json.dumps(metadata, separators=(",", ":")))
     cursor = 0
     for name, dtype, shape, nbytes in tensors:
-        if name in entries:
+        if name in offsets or (name == "__metadata__" and metadata is not None):
             raise ValueError(f"safetensors: tensor {name!r} listed twice in one file")
-        if dtype not in ITEMSIZE:
+        itemsize = ITEMSIZE.get(dtype)
+        if itemsize is None:
             raise ValueError(f"safetensors: unsupported dtype {dtype!r}")
-        if int(nbytes) != ITEMSIZE[dtype] * _volume(shape):
+        dims = [int(s) for s in shape]
+        nbytes = int(nbytes)
+        if nbytes != itemsize * prod(dims):
             raise ValueError(
-                f"safetensors: {name!r} has {nbytes} bytes but shape {list(shape)} of {dtype} needs {ITEMSIZE[dtype] * _volume(shape)}"
+                f"safetensors: {name!r} has {nbytes} bytes but shape {dims} of {dtype} needs {itemsize * prod(dims)}"
             )
-        offsets[name] = (cursor, cursor + int(nbytes))
-        entries[name] = {
-            "dtype": dtype,
-            "shape": [int(s) for s in shape],
-            "data_offsets": [cursor, cursor + int(nbytes)],
-        }
-        cursor += int(nbytes)
-    body = json.dumps(entries, separators=(",", ":")).encode("utf-8")
+        end = cursor + nbytes
+        offsets[name] = (cursor, end)
+        shape_json = ",".join(map(str, dims))
+        parts.append(f'{json.dumps(name)}:{{"dtype":"{dtype}","shape":[{shape_json}],"data_offsets":[{cursor},{end}]}}')
+        cursor = end
+    body = ("{" + ",".join(parts) + "}").encode("utf-8")
     padding = (-(8 + len(body))) % ALIGNMENT
     body += b" " * padding
     return struct.pack("<Q", len(body)) + body, offsets, cursor
-
-
-def _volume(shape: Sequence[int]) -> int:
-    volume = 1
-    for s in shape:
-        volume *= int(s)
-    return volume
 
 
 def create_file(path: str, header: bytes, data_bytes: int) -> int:

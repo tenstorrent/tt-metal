@@ -37,6 +37,21 @@ def test_header_fixes_offsets_and_aligns_the_data_section(expect_error):
         build_header([("x", "F8", (1, 1, 1, 2), 2)])
 
 
+def test_header_is_the_json_of_its_entries(expect_error):
+    # Entries are formatted as strings, so a name JSON must escape is where they could part from json.dumps.
+    name = 'model/"quoted"\\é'
+    header, offsets, data_bytes = build_header([(name, "F32", (1, 2), 8), ("b", "BF16", [1, 1, 2], 4)], {"k": "v"})
+    expected = {
+        "__metadata__": {"k": "v"},
+        name: {"dtype": "F32", "shape": [1, 2], "data_offsets": [0, 8]},
+        "b": {"dtype": "BF16", "shape": [1, 1, 2], "data_offsets": [8, 12]},
+    }
+    assert header[8:].rstrip(b" ") == json.dumps(expected, separators=(",", ":")).encode("utf-8")
+    assert offsets == {name: (0, 8), "b": (8, 12)} and data_bytes == 12
+    with expect_error(ValueError, "tensor '__metadata__' listed twice"):
+        build_header([("__metadata__", "F32", (1, 2), 8)], {"k": "v"})
+
+
 def test_short_and_truncated_files_are_refused(tmp_path, expect_error):
     header, _, data_bytes = build_header([("x", "F32", (1, 1, 1, 4), 16)])
     path = str(tmp_path / "w000_m0_d0.safetensors")
