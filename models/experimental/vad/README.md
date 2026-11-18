@@ -91,13 +91,27 @@ runs over bands of output rows, each through the same L1 conv with only the inpu
 and a conv whose weights alone leave a band no room runs from DRAM. A banded block-sharded conv is
 width sharded with the full grid's channel blocks, since the block width decides how often its
 partial sums are rounded. The fused multi-scale deformable attention takes the per-query counts from
-a device tensor rather than its runtime arguments. The end-to-end test passes on two worker cores:
+a device tensor rather than its runtime arguments.
+
+Two grids are supported: the full grid and 2x1. With a cold kernel cache the end-to-end test on 2x1
+takes about 20 minutes on a Blackhole P100, with stretches of several minutes without output:
 
 ```sh
 TT_METAL_CORE_GRID_OVERRIDE_TODEPRECATE=1,0 pytest --disable-warnings models/experimental/vad/tests/pcc/test_tt_vad.py
 ```
 
-The override is the inclusive end coordinate of the worker grid, so `1,0` is a 2x1 grid.
+Other grids fail before the first frame:
+
+| Grid | Failure |
+|---|---|
+| 3x1, 4x3 | The device does not open: the L1 allocator needs a power-of-two bank count. |
+| 1x1 | A layer4 conv run from DRAM finds no height slice that fits one core's L1. |
+| 2x2 | An FPN conv's circular buffers clash with live L1 buffers. |
+| 4x2, 4x4 | Layer4's strided 3x3 conv fits the activation budget, but its circular buffers outgrow L1. |
+| 8x4, 8x8 | A backbone 1x1 conv's circular buffers clash with live L1 buffers. |
+
+On these grids the memory plan budgets a conv's input and output, not its own circular buffers or
+the tensors already in L1.
 
 ### Reduced layer count
 
