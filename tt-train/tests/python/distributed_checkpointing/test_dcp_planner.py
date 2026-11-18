@@ -259,20 +259,7 @@ def test_same_world_reads_every_shard_whole(monkeypatch):
 
 def test_save_plan_spreads_owners_and_offsets():
     """The save plan spreads the owners of replicated chunks over every device file and fixes their offsets."""
-    infos = [
-        TensorInfo(
-            f"model/blocks/{i}/w",
-            "param",
-            "BF16",
-            "TILE",
-            TP8_DP4,
-            (1, 1, 32, 64),
-            Identity(),
-            (f"model/blocks/{i}/w",),
-            tp_split=tp_split_of(TP8_DP4, 4),
-        )
-        for i in range(64)
-    ]
+    infos = [info(f"model/blocks/{i}/w", TP8_DP4, (1, 1, 256, 64), Identity(), dtype="BF16") for i in range(64)]
     plan = create_save_plan(infos, lambda c: data_file_name(0, 0, c), one_process_owner)
     assert len(plan.files) == 32 and all(f.items for f in plan.files), "every device file gets some chunks"
     assert plan.bytes_written == 64 * 8 * 32 * 64 * 2
@@ -307,15 +294,13 @@ def test_save_plan_writes_only_owned_chunks():
 
 def test_two_live_tensors_under_one_key_are_refused(expect_error):
     # A dict by key would keep one of them and silently not save or not load the other.
-    info = TensorInfo(
-        "w", "param", "F32", "TILE", SINGLE, (1, 1, 64, 32), Identity(), ("w",), tp_split=tp_split_of(SINGLE, 4)
-    )
+    w = info("w", SINGLE, (1, 1, 64, 32), Identity())
     with expect_error(CheckpointError, "w: two live tensors have this key; only one of them would be saved"):
-        create_save_plan([info, info], lambda c: data_file_name(0, 0, c), one_process_owner)
+        create_save_plan([w, w], lambda c: data_file_name(0, 0, c), one_process_owner)
     ckpt = FakeCheckpoint()
     ckpt.save({"w": (arange((1, 1, 64, 32)), SINGLE, Identity())})
     with expect_error(CheckpointError, "only one of them would be loaded"):
-        create_load_plan(ckpt.index, [info, info])
+        create_load_plan(ckpt.index, [w, w])
 
 
 def test_mismatches_are_refused_before_any_read(expect_error):
@@ -325,19 +310,7 @@ def test_mismatches_are_refused_before_any_read(expect_error):
     with expect_error(ShapeMismatchError, "canonical shape"):
         ckpt.load({"w": (SINGLE, Identity(), (1, 1, 64, 64))})
     with expect_error(DtypeMismatchError, "checkpoint holds"):
-        dests = [
-            TensorInfo(
-                "w",
-                "param",
-                "BF16",
-                "TILE",
-                SINGLE,
-                (1, 1, 64, 32),
-                Identity(),
-                ("w",),
-                tp_split=tp_split_of(SINGLE, 4),
-            )
-        ]
+        dests = [info("w", SINGLE, (1, 1, 64, 32), Identity(), dtype="BF16")]
         from ttml.distributed_checkpointing._planner import create_load_plan
 
         create_load_plan(ckpt.index, dests)
@@ -367,10 +340,15 @@ def test_rank_plans_only_its_coordinates():
         return sorted(reads, key=lambda r: (r.group, r.chunk))
 
     assert by_group(parts[0].reads + parts[1].reads) == by_group(whole.reads)
-    # A replicated group is planned by every rank holding one of its coordinates: DP row 0 holds one of each.
-    row0 = {c for c in TP8_DP4.mesh_coords if c[0] == 0}
-    replicated = create_load_plan(ckpt.index, [info("w", TP8_DP4, canonical.shape, Identity())], local_coords=row0)
-    assert len(replicated.keys["w"].boxes) == 8
+    # A replicated group is planned by every rank holding one of its coordinates, not only the rank holding its first
+    # replica: each DP row holds one replica of every group, and the last TP column one group in every row.
+    tp8_dp4 = [info("w", TP8_DP4, canonical.shape, Identity())]
+    for row in range(4):
+        coords = {c for c in TP8_DP4.mesh_coords if c[0] == row}
+        planned = create_load_plan(ckpt.index, tp8_dp4, local_coords=coords).keys["w"]
+        assert sorted(planned.boxes) == [(j,) for j in range(8)], f"DP row {row}"
+    last_column = {c for c in TP8_DP4.mesh_coords if c[1] == 7}
+    assert list(create_load_plan(ckpt.index, tp8_dp4, local_coords=last_column).keys["w"].boxes) == [(7,)]
 
 
 def test_a_missing_chunk_is_a_coverage_error(expect_error):
@@ -426,11 +404,7 @@ def test_roles_scope_the_unexpected_keys_of_a_load():
         {"w": (arange((1, 1, 64, 32)), SINGLE, Identity()), "opt/w": (arange((1, 1, 64, 32)), SINGLE, Identity())}
     )
     ckpt.index.entries["opt/w"].role = "optimizer_state"
-    model_only = [
-        TensorInfo(
-            "w", "param", "F32", "TILE", SINGLE, (1, 1, 64, 32), Identity(), ("w",), tp_split=tp_split_of(SINGLE, 4)
-        )
-    ]
+    model_only = [info("w", SINGLE, (1, 1, 64, 32), Identity())]
     assert create_load_plan(ckpt.index, model_only).unexpected == ["opt/w"]
     plan = create_load_plan(ckpt.index, model_only, roles=["param"])
     assert plan.unexpected == [] and list(plan.keys) == ["w"], "optimizer state is out of a model-only load's scope"
@@ -471,19 +445,9 @@ def test_save_refuses_shard_dim_out_of_range(expect_error):
     # writes duplicate chunks and every later load fails on coverage.
     for dim in (-1, 4):
         label = Label((Placement.replicate(), Placement.shard(dim)), (1, 2), tuple(dist_coords((1, 2))))
-        info = TensorInfo(
-            "model/w",
-            "param",
-            "BF16",
-            "TILE",
-            label,
-            (1, 1, 4, 4),
-            Identity(),
-            ("model/w",),
-            tp_split=tp_split_of(label, 4),
-        )
+        w = info("model/w", label, (1, 1, 4, 4), Identity(), dtype="BF16")
         with expect_error(TopologyError, "model/w: distribution axis 1 shards dim"):
-            create_save_plan([info], lambda c: data_file_name(0, 0, c), one_process_owner)
+            create_save_plan([w], lambda c: data_file_name(0, 0, c), one_process_owner)
 
 
 def test_load_refuses_chunks_that_do_not_tile(expect_error):
@@ -503,17 +467,7 @@ def test_load_refuses_an_entry_of_another_role(expect_error):
     canonical = arange((1, 1, 64, 32))
     ckpt = FakeCheckpoint()
     ckpt.save({"w": (canonical, SINGLE, Identity())})
-    state = TensorInfo(
-        "w",
-        "optimizer_state",
-        "F32",
-        "TILE",
-        SINGLE,
-        (1, 1, 64, 32),
-        Identity(),
-        ("w",),
-        tp_split=tp_split_of(SINGLE, 4),
-    )
+    state = info("w", SINGLE, (1, 1, 64, 32), Identity(), role="optimizer_state")
     with expect_error(RoleMismatchError, "w: resolves to checkpoint entry 'w', a 'param'"):
         create_load_plan(ckpt.index, [state])
 
@@ -595,23 +549,67 @@ def test_keys_of_one_layout_share_its_reads(monkeypatch):
     assert len(layouts_planned) == 2
 
 
+def test_keys_that_differ_in_one_part_of_their_layout_do_not_share_it(monkeypatch):
+    """Each pair agrees on every part of a layout but one, so a layout missing that part would hand the second key
+    the first key's reads. Qwen3-1.7B's q_proj and fused kv_proj are such a pair: same shape and label, different
+    transforms. All eight keys load at once, and each must plan its own layout and hold its own data."""
+    tp2, tp4 = world([R(), S(2)], (1, 2)), world([R(), S(2)], (1, 4))
+    rows8, cols8 = world([R(), S(2)], (1, 8)), world([R(), S(3)], (1, 8))
+    rows_cols, cols_rows = world([S(2), S(3)], (2, 2)), world([S(3), S(2)], (2, 2))  # the same shards, transposed
+    fused = {n: fused_segments(2, QKV, n) for n in (2, 4)}
+    c = {k: arange((1, 1, 256, 4)) + 1000 * i for i, k in enumerate(("a_plain", "a_fused", "b_plain", "b_fused"))}
+    c.update({k: arange((1, 1, 64, 64)) + 1000 * i for i, k in enumerate(("c_rows", "c_cols", "d_rc", "d_cr"), 4)})
+    ckpt = FakeCheckpoint()
+    ckpt.save(
+        {
+            # a: only the saved transform differs (one plain, one fused at TP2; both loaded onto one device).
+            "a_plain": (c["a_plain"], tp2, Identity()),
+            "a_fused": (per_shard_fused(c["a_fused"], QKV, 2, dim=2), tp2, fused[2]),
+            # b: only the destination transform differs (both saved on one device, loaded at TP4).
+            "b_plain": (c["b_plain"], SINGLE, Identity()),
+            "b_fused": (c["b_fused"], SINGLE, Identity()),
+            # c: only the saved chunk boxes differ (rows and columns over eight devices, loaded onto one).
+            "c_rows": (c["c_rows"], rows8, Identity()),
+            "c_cols": (c["c_cols"], cols8, Identity()),
+            # d: only the destination label differs (the same local shape and replica groups, the boxes transposed).
+            "d_rc": (c["d_rc"], SINGLE, Identity()),
+            "d_cr": (c["d_cr"], SINGLE, Identity()),
+        }
+    )
+    layouts_planned = []
+    real = planner_module._plan_layout
+    monkeypatch.setattr(planner_module, "_plan_layout", lambda *a: layouts_planned.append(a[1].key) or real(*a))
+    _, shards = ckpt.load(
+        {
+            "a_plain": (SINGLE, Identity(), (1, 1, 256, 4)),
+            "a_fused": (SINGLE, Identity(), (1, 1, 256, 4)),
+            "b_plain": (tp4, Identity(), (1, 1, 256, 4)),
+            "b_fused": (tp4, fused[4], (1, 1, 256, 4)),
+            "c_rows": (SINGLE, Identity(), (1, 1, 64, 64)),
+            "c_cols": (SINGLE, Identity(), (1, 1, 64, 64)),
+            "d_rc": (rows_cols, Identity(), (1, 1, 64, 64)),
+            "d_cr": (cols_rows, Identity(), (1, 1, 64, 64)),
+        }
+    )
+    assert sorted(layouts_planned) == sorted(c), "every key plans its own layout"
+    expected = {
+        "a_plain": expected_shards(c["a_plain"], SINGLE),
+        "a_fused": expected_shards(c["a_fused"], SINGLE),
+        "b_plain": expected_shards(c["b_plain"], tp4),
+        "b_fused": expected_shards(per_shard_fused(c["b_fused"], QKV, 4, dim=2), tp4),
+        "c_rows": expected_shards(c["c_rows"], SINGLE),
+        "c_cols": expected_shards(c["c_cols"], SINGLE),
+        "d_rc": expected_shards(c["d_rc"], rows_cols),
+        "d_cr": expected_shards(c["d_cr"], cols_rows),
+    }
+    for key, shard in expected.items():
+        assert_shards_equal(shards[key], shard)
+
+
 def test_save_planning_is_cached_per_label_and_shape(expect_error):
     from ttml.distributed_checkpointing._planner import _replica_layout
 
-    infos = [
-        TensorInfo(
-            f"model/blocks/{i}/w",
-            "param",
-            "BF16",
-            "TILE",
-            TP8_DP4,
-            (1, 1, 32, 64),
-            Identity(),
-            (),
-            tp_split=tp_split_of(TP8_DP4, 4),
-        )
-        for i in range(16)
-    ]
+    infos = [info(f"model/blocks/{i}/w", TP8_DP4, (1, 1, 256, 64), Identity(), dtype="BF16") for i in range(16)]
     _replica_layout.cache_clear()
     first = create_save_plan(infos, lambda c: data_file_name(0, 0, c), one_process_owner)
     second = create_save_plan(infos, lambda c: data_file_name(0, 0, c), one_process_owner)
@@ -626,11 +624,9 @@ def test_save_planning_is_cached_per_label_and_shape(expect_error):
     bad = Label((Placement.replicate(), Placement.shard(5)), (1, 2), tuple(dist_coords((1, 2))))
     before = _replica_layout.cache_info()
     for key in ("model/a", "model/b"):
-        info = TensorInfo(
-            key, "param", "BF16", "TILE", bad, (1, 1, 4, 4), Identity(), (key,), tp_split=tp_split_of(bad, 4)
-        )
+        w = info(key, bad, (1, 1, 4, 4), Identity(), dtype="BF16")
         with expect_error(TopologyError, f"{key}: distribution axis 1 shards dim 5"):
-            create_save_plan([info], lambda c: data_file_name(0, 0, c), one_process_owner)
+            create_save_plan([w], lambda c: data_file_name(0, 0, c), one_process_owner)
     after = _replica_layout.cache_info()
     assert (
         after.misses - before.misses == 1 and after.hits - before.hits == 1

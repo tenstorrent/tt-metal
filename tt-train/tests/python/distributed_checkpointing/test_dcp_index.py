@@ -7,6 +7,7 @@
 import gc
 import json
 import os
+import re
 import shutil
 import warnings
 
@@ -187,13 +188,25 @@ def test_a_malformed_tp_split_is_refused(expect_error):
         ("sizes", [[1, 1, 96, "16"]], r"malformed chunk sizes \[1, 1, 96, '16'\]"),
         ("global_shape", [1, 1, 192, -16], r"malformed global_shape \[1, 1, 192, -16\]"),
         ("canonical_shape", [1, 130, 16], r"malformed canonical_shape \[1, 130, 16\]"),
+        # A chunk's file indexes the file table: -1 would quietly read the last file, 99 none.
+        ("file", [0, -1], r"malformed file column \[0, -1\]"),
+        ("file", [0, 99], "chunk file 99 is not one of the index's 4 files"),
+        # A transform's dim must be one of the tensor's, and the transform must give the recorded canonical shape.
+        (
+            "transform",
+            {"kind": "pad", "dim": 7, "logical": 130, "padded": 192},
+            r"transform .* names dim 7 of a rank-4",
+        ),
+        ("transform", {"kind": "pad", "dim": -2, "logical": 130, "padded": 192}, r"transform .* names dim -2 of a"),
+        ("transform", {"kind": "pad", "dim": 3, "logical": 8, "padded": 192}, "pad: global extent 16 on dim 3 is not"),
+        ("transform", {"kind": "identity"}, r"its transform gives canonical shape \[1, 1, 192, 16\], not the recorded"),
     ],
 )
 def test_malformed_shapes_and_chunk_boxes_are_refused(field, value, message, expect_error):
     # Boxes are built unchecked, so decoding the index is where a bad shape or box must be caught.
     encoded = json.loads(json.dumps(_index().to_json()))
     entry = encoded["state"]["model/Llama/fc/weight"]
-    (entry["chunks"] if field in ("offsets", "sizes") else entry)[field] = value
+    (entry["chunks"] if field in ("offsets", "sizes", "file") else entry)[field] = value
     with expect_error(CheckpointError, "index entry 'model/Llama/fc/weight': " + message):
         Index.from_json(encoded)
 
@@ -247,7 +260,7 @@ def test_naming(expect_error):
         step_dir_name(-1)  # "step_-000001" would never parse back, so find_latest would not find it
 
 
-@pytest.mark.filterwarnings("ignore:.*left by saves that did not finish")
+@pytest.mark.filterwarnings("ignore:.*left by saves that did not finish", "ignore:.*is the only copy of")
 def test_find_latest_orders_by_parsed_step_and_skips_partials(tmp_path):
     for name in [
         "step_0000005",
@@ -277,14 +290,22 @@ def test_find_latest_orders_by_parsed_step_and_skips_partials(tmp_path):
 
 def test_find_latest_warns_about_leftovers(tmp_path):
     """find_latest warns about the .partial- and .replaced- directories of its prefix, naming each, and removes
-    none of them."""
+    none of them. A .replaced- directory whose step has no final directory is that step's only copy: the warning
+    says to rename it back, not to remove it."""
     names = ["step_0000005", "step_0000010.partial-7", "step_0000005.replaced-3", "other_step_0000020.partial-1"]
+    names.append("step_0000008.replaced-4")  # an overwrite of step 8 killed between its two renames
     for name in names:
         (tmp_path / name).mkdir()
-    (tmp_path / "step_0000005" / "index.json").write_text("{}")
+    for name in ("step_0000005", "step_0000008.replaced-4"):
+        (tmp_path / name / "index.json").write_text("{}")
     leftovers = r"2 directories left by saves that did not finish: step_0000005\.replaced-3, step_0000010\.partial-7\. "
-    with pytest.warns(UserWarning, match=leftovers):
-        assert find_latest(str(tmp_path)) == str(tmp_path / "step_0000005")
+    only_copy = r"step_0000008\.replaced-4 is the only copy of step_0000008: .* Rename it back to step_0000008 rather"
+    # Each call warns twice: once about the leftovers to remove, once about the only copy to rename back.
+    for include_replaced, latest in ((False, "step_0000005"), (True, "step_0000008.replaced-4")):
+        with pytest.warns(UserWarning) as record:
+            assert find_latest(str(tmp_path), include_replaced=include_replaced) == str(tmp_path / latest)
+        messages = [str(w.message) for w in record]
+        assert len(messages) == 2 and re.search(leftovers, messages[0]) and re.search(only_copy, messages[1])
     with pytest.warns(
         UserWarning, match=r"1 directory left by saves that did not finish: other_step_0000020\.partial-1"
     ):
@@ -337,20 +358,18 @@ def test_a_header_save_would_not_write_is_refused(tmp_path, expect_error):
             read_user_header(ckpt)
 
 
-def test_staging_directory_naming(tmp_path, expect_error):
-    """A staging directory is named by its nonce, and only a shared one (a multi-rank save's) may already exist."""
+def test_staging_directory_naming(tmp_path):
+    """A staging directory is named by its nonce, and may already exist: every rank of a multi-rank save creates the
+    directory its ranks agreed on."""
     final = str(tmp_path / "step_0000010")
-    staging = begin_staging(final, nonce=42, shared=False)
+    staging = begin_staging(final, nonce=42)
     assert staging == staging_dir(final, 42) == final + ".partial-42" and os.path.isdir(os.path.join(staging, "data"))
-    # Every rank of a multi-rank save creates the directory its ranks agreed on; a lone save's must be new.
-    assert begin_staging(final, nonce=42, shared=True) == staging
-    with expect_error(FileExistsError, "File exists"):
-        begin_staging(final, nonce=42, shared=False)
+    assert begin_staging(final, nonce=42) == staging
 
 
 def test_staging_becomes_complete_only_at_finalize(tmp_path, expect_error):
     final = str(tmp_path / "step_0000010")
-    staging = begin_staging(final, nonce=100, shared=False)
+    staging = begin_staging(final, nonce=100)
     assert ".partial-" in staging and os.path.isdir(os.path.join(staging, "data"))
     write_header(staging, {"step": 10})
     write_index(staging, _index())
@@ -372,7 +391,7 @@ def test_staging_becomes_complete_only_at_finalize(tmp_path, expect_error):
     with expect_error(IncompleteCheckpointError, "no index.json"):
         read_index(str(tmp_path / "nowhere"))
 
-    staging2 = begin_staging(final, nonce=1, shared=False)
+    staging2 = begin_staging(final, nonce=1)
     write_index(staging2, _index())
     with expect_error(CheckpointError, "already exists"):
         finalize_staging(staging2, final)
@@ -399,7 +418,7 @@ def test_the_crc_column_is_validated(expect_error):
 def test_unreadable_index_or_header_is_incomplete(tmp_path, expect_error):
     """An index or header that is missing, truncated or malformed is an IncompleteCheckpointError."""
     final = str(tmp_path / "step_0000010")
-    staging = begin_staging(final, nonce=2, shared=False)
+    staging = begin_staging(final, nonce=2)
     write_index(staging, _index())
     write_header(staging, {"step": 10})
     finalize_staging(staging, final)
@@ -448,9 +467,9 @@ def test_finalize_keeps_a_checkpoint_committed_meanwhile(tmp_path, monkeypatch, 
     """Without overwrite, a checkpoint another save commits while this one finalizes is kept, and this save is
     refused rather than moving it aside."""
     final = str(tmp_path / "step_0000010")
-    staging = begin_staging(final, nonce=9, shared=False)
+    staging = begin_staging(final, nonce=9)
     write_index(staging, _index())
-    other = begin_staging(final, nonce=10, shared=False)
+    other = begin_staging(final, nonce=10)
     other_index = _index()
     other_index.checkpoint_id = "the other save"
     write_index(other, other_index)
@@ -472,12 +491,12 @@ def test_finalize_keeps_a_checkpoint_committed_meanwhile(tmp_path, monkeypatch, 
 
 def test_a_failed_overwrite_puts_the_previous_checkpoint_back(tmp_path, monkeypatch, expect_error):
     final = str(tmp_path / "step_0000010")
-    staging = begin_staging(final, nonce=3, shared=False)
+    staging = begin_staging(final, nonce=3)
     write_index(staging, _index())
     finalize_staging(staging, final)
     previous = read_index(final).checkpoint_id
 
-    staging2 = begin_staging(final, nonce=4, shared=False)
+    staging2 = begin_staging(final, nonce=4)
     replacement = _index()
     replacement.checkpoint_id = "replacement"
     write_index(staging2, replacement)
@@ -501,10 +520,10 @@ def test_a_failed_overwrite_puts_the_previous_checkpoint_back(tmp_path, monkeypa
 def test_failed_rollback_names_the_previous_checkpoint(tmp_path, monkeypatch, expect_error):
     """An overwrite that fails and cannot roll back says where the previous checkpoint is."""
     final = str(tmp_path / "step_0000010")
-    staging = begin_staging(final, nonce=5, shared=False)
+    staging = begin_staging(final, nonce=5)
     write_index(staging, _index())
     finalize_staging(staging, final)
-    staging2 = begin_staging(final, nonce=6, shared=False)
+    staging2 = begin_staging(final, nonce=6)
     write_index(staging2, _index())
     real_rename = os.rename
 
@@ -526,10 +545,10 @@ def test_failed_rollback_names_the_previous_checkpoint(tmp_path, monkeypatch, ex
 def test_overwrite_warns_if_old_checkpoint_stays(tmp_path, monkeypatch):
     """An overwrite warns when the previous checkpoint, moved aside, cannot be removed."""
     final = str(tmp_path / "step_0000010")
-    staging = begin_staging(final, nonce=7, shared=False)
+    staging = begin_staging(final, nonce=7)
     write_index(staging, _index())
     finalize_staging(staging, final)
-    staging2 = begin_staging(final, nonce=8, shared=False)
+    staging2 = begin_staging(final, nonce=8)
     write_index(staging2, _index())
 
     def busy_rmtree(path, onerror):  # an NFS server keeping an open file as .nfsXXXX
