@@ -304,7 +304,8 @@ struct GatherUnits {
 
 // Tap-major (stride 1, whole unpadded or zero-lane taps): tap kw of the tile-row is a [32 pixels, c_in_p] block. The
 // pixels of one output image row read consecutive slab pixels, so each in-image run is one read; out-of-image pixels
-// read a 32-pixel zero block at zero_src_noc, one read per run.
+// read a 32-pixel zero block at zero_src_noc, one read per run. skip_kw (>= 0): that tap's block is left unwritten
+// (center-tap direct: the reader writes its in0 tiles itself).
 template <
     uint32_t output_width,
     int32_t input_height,
@@ -312,7 +313,8 @@ template <
     int32_t padding,
     int32_t dilation,
     uint32_t c_in_p,
-    uint32_t block_k_tiles>
+    uint32_t block_k_tiles,
+    int32_t skip_kw = -1>
 struct TapMajorGather {
     static constexpr uint32_t TILE_DIM = 32;
     static constexpr uint32_t pixel_bytes = c_in_p * 2;
@@ -335,6 +337,9 @@ struct TapMajorGather {
         const int32_t kw_last = data_hi > col_lo ? (data_hi - 1) / c_in_p : -1;
         const uint32_t row_end = o + TILE_DIM < o_end ? o + TILE_DIM : o_end;
         for (int32_t kw = kw_first; kw <= kw_last; ++kw) {
+            if (kw == skip_kw) {
+                continue;
+            }
             uint32_t dst = rows_l1 + (kw - kw_first) * TILE_DIM * pixel_bytes;
             int32_t ho = o / output_width;
             int32_t wo = o % output_width;

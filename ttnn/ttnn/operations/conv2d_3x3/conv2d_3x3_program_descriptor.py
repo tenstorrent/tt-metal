@@ -65,6 +65,8 @@ CB_COMBINED = 9
 CB_SLICE_R = 10
 # Tap-major only: 32 zero pixels, so an out-of-image tap run is one read instead of one per 512 B MEM_ZEROS chunk.
 CB_ZERO_SRC = 11
+# Center-tap direct in0 (see CENTER_TAP_DIRECT): the kw = 1 K-blocks' input tiles, copied by the reader.
+CB_CENTER_TILES = 12
 
 # R4 reduce-scatter semaphores; the weight multicast channel allocates its own after them.
 SEM_COMBINE_CREDIT = 0
@@ -89,6 +91,21 @@ TAP_MAJOR_IM2COL = True
 # pixel) and compute tilizes it in place at a 2-pixel row stride; on the N-slice-outer walk compute tilizes in-image runs
 # straight from the slab. False keeps the per-pixel row gather.
 STRIDED_WINDOW_IM2COL = True
+
+# Center-tap direct in0 (sharded TILE input, stride 1, padding == dilation, W % 32 == 0): the kw = 1 tap of kernel row
+# kh reads input pixel o + (kh*d - p)*W for output pixel o, a whole-tile-row shift, so its in0 tiles ARE input tile-rows
+# (same format as cb_im2col_tiles) or zero tile-rows above / below the image. The reader copies them from the own or a
+# neighbour shard and compute skips their untilize -> gather -> tilize round trip (3 of the 9 taps):
+#   one tap per K-block: the kw = 1 K-blocks come from cb_center_tiles (matmul_block's In0SourceFn);
+#   one kernel row per K-block (CENTER_TAP_SLOTS): the reader writes each tile-row's kw = 1 tiles straight into their
+#     cb_im2col_tiles slots, and compute's tilize reserves and pushes those slots unpacked. K-blocked walk (bm >= 2):
+#     cb_im2col_tiles holds two K-blocks, so the reader writes K-block k's center tiles while compute still multiplies
+#     K-block k - 1 (reserving K-block k's first im2col row already implies the matmul of K-block k - 2 is done).
+#     N-slice-outer K split: the resident [bm, K] in0 holds the slots, no extra L1.
+# On the K-blocked walks both take bm * bk more in0 tiles, and only from the L1 left at the solved blocking, so they never
+# change bm, bk, the untilize batch or the im2col ring. False keeps the tilize for every K-block.
+CENTER_TAP_DIRECT = True
+CENTER_TAP_SLOTS = True
 
 # Face-direct im2col: when one output pixel's step through the slab (stride * C_in_p channels) is exactly one
 # tile-face row (16 elements), the 16 im2col rows of a 16x16 face are one contiguous run of slab pixels. The
@@ -290,6 +307,10 @@ class Conv3x3Blocking:
     shared_slab_bytes: int = 0
     shared_zero_bytes: int = 0
     slice_depth: int = NSLICE_SLICE_DEPTH
+    # Center-tap direct mode in effect (CENTER_NONE / CENTER_K_BLOCK / CENTER_SLOTS), and the K-blocks cb_im2col_tiles
+    # holds (2 under CENTER_SLOTS on the K-blocked walk).
+    center_mode: int = 0
+    center_slot_blocks: int = 1
 
     @property
     def slab_px(self):
@@ -435,6 +456,40 @@ def strided_window_capable(g: Conv3x3Geometry):
 def _strided_window(g: Conv3x3Geometry, bk):
     """One K-block per kernel row: a unit (tile-row x K-block) is one kernel row's window run."""
     return strided_window_capable(g) and bk == g.tensor_kkh_tiles and not face_direct_im2col(g, bk)
+
+
+CENTER_NONE, CENTER_K_BLOCK, CENTER_SLOTS = 0, 1, 2
+
+
+def center_tap_mode(g: Conv3x3Geometry, bm, bk, nslice=False):
+    """How the kw = 1 taps skip the tilize (see CENTER_TAP_DIRECT): they are whole input tile-rows (a vertical-only
+    shift by whole tile-rows). Not on the K split's K-blocked walk, whose L1-accumulating packs are ordered only by the
+    tilize between K-blocks.
+      CENTER_K_BLOCK  one tap per K-block: K-block k with k % 3 == 1 comes from cb_center_tiles.
+      CENTER_SLOTS    one kernel row per K-block: the reader writes each tile-row's center tiles into their in0 slots
+                      (K-blocked walk, bm >= 2: a second in0 K-block; N-slice-outer: the resident [bm, K] in0), and they
+                      land before the reader pushes the K-block's (M-block's) last im2col row."""
+    if g.k_split and not nslice:
+        return CENTER_NONE
+    # Sharded input only: the center tiles are then L1 copies from the own or a neighbour shard. On an interleaved input
+    # they are a second DRAM read of tile-rows the fill already streams (measured 7-16% slower).
+    if not (
+        CENTER_TAP_DIRECT
+        and g.tile_input
+        and g.sharded_output
+        and g.stride == 1
+        and g.padding == g.dilation
+        and g.input_width % TILE == 0
+        and _tap_major(g, bk)
+    ):
+        return CENTER_NONE
+    if nslice:
+        return CENTER_SLOTS if CENTER_TAP_SLOTS and bk == 3 * g.c_in_tiles else CENTER_NONE
+    if bk == g.c_in_tiles:
+        return CENTER_K_BLOCK
+    if CENTER_TAP_SLOTS and bk == 3 * g.c_in_tiles and bm >= 2:
+        return CENTER_SLOTS
+    return CENTER_NONE
 
 
 def _row_split(g: Conv3x3Geometry, bm, bk):
@@ -596,6 +651,19 @@ def select_blocking(g: Conv3x3Geometry, grid, l1_budget) -> Conv3x3Blocking:
                         if deep["footprint_bytes"] <= l1_budget:
                             fit = deep
                             break
+                    # Center-tap direct: bm * bk more in0 tiles, from the L1 left after everything else.
+                    mode = center_tap_mode(g, bm, bk, nslice)
+                    extra = bm * bk * g.in0_tile_bytes
+                    if nslice:
+                        # The resident [bm, K] in0 holds the slots already: no extra L1.
+                        fit = dict(fit, center_mode=mode)
+                    elif mode != CENTER_NONE and fit["footprint_bytes"] + extra <= l1_budget:
+                        fit = dict(
+                            fit,
+                            center_mode=mode,
+                            center_slot_blocks=2 if mode == CENTER_SLOTS else 1,
+                            footprint_bytes=fit["footprint_bytes"] + extra,
+                        )
                     return Conv3x3Blocking(
                         grid_x=grid_x,
                         core_m_tiles=core_m_tiles,
@@ -798,7 +866,13 @@ def create_program_descriptor(
         cbs.append(_cb(CB_IM2COL_RM, ttnn.bfloat16, TILE_BYTES_BF16, b.im2col_rm_depth_rows * bk, cores))
     cbs += [
         # Face-direct: the reader writes these tiles; it relies on every K-block starting at the CB base.
-        _cb(CB_IM2COL_TILES, input_tensor.dtype, g.in0_tile_bytes, bm * (g.tensor_k_tiles if b.nslice else bk), cores),
+        _cb(
+            CB_IM2COL_TILES,
+            input_tensor.dtype,
+            g.in0_tile_bytes,
+            bm * (g.tensor_k_tiles if b.nslice else bk * b.center_slot_blocks),
+            cores,
+        ),
         _cb(
             CB_WEIGHTS,
             weight_tensor.dtype,
@@ -853,6 +927,9 @@ def create_program_descriptor(
         )
     elif tap_major_im2col(g, b):
         cbs.append(_cb(CB_ZERO_SRC, ttnn.bfloat16, pixel_bytes, TILE, cores))
+    center_mode = b.center_mode
+    if center_mode == CENTER_K_BLOCK:
+        cbs.append(_cb(CB_CENTER_TILES, input_tensor.dtype, g.in0_tile_bytes, bm * bk, cores))
     if g.k_split:
         if not b.shared_slab_bytes:
             cbs.append(_cb(CB_COMBINE_SLOTS, ttnn.float32, TILE_BYTES_FP32, g.k_cols * bm * ns, cores))
@@ -965,6 +1042,9 @@ def create_program_descriptor(
             int(split_core),
             int(strided_window),
             int(window_direct),
+            center_mode,
+            CB_CENTER_TILES,
+            b.center_slot_blocks,
         ]
         args.extend(ttnn.TensorAccessorArgs(input_tensor).get_compile_time_args())
         return args
@@ -1005,6 +1085,8 @@ def create_program_descriptor(
         *_out_subblock(bm, ns),
         b.untilize_batch_rows,
         int(strided_window),
+        center_mode,
+        CB_CENTER_TILES,
     ]
 
     writer_ct_args = [

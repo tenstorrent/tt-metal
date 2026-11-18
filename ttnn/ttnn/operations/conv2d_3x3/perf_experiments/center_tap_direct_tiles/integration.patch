@@ -1,0 +1,694 @@
+diff --git a/ttnn/ttnn/operations/conv2d_3x3/conv2d_3x3_program_descriptor.py b/ttnn/ttnn/operations/conv2d_3x3/conv2d_3x3_program_descriptor.py
+index ee417c13d9b..cc89a58ffc9 100644
+--- a/ttnn/ttnn/operations/conv2d_3x3/conv2d_3x3_program_descriptor.py
++++ b/ttnn/ttnn/operations/conv2d_3x3/conv2d_3x3_program_descriptor.py
+@@ -65,6 +65,8 @@ CB_COMBINED = 9
+ CB_SLICE_R = 10
+ # Tap-major only: 32 zero pixels, so an out-of-image tap run is one read instead of one per 512 B MEM_ZEROS chunk.
+ CB_ZERO_SRC = 11
++# Center-tap direct in0 (see CENTER_TAP_DIRECT): the kw = 1 K-blocks' input tiles, copied by the reader.
++CB_CENTER_TILES = 12
+ 
+ # R4 reduce-scatter semaphores; the weight multicast channel allocates its own after them.
+ SEM_COMBINE_CREDIT = 0
+@@ -83,6 +85,28 @@ COMBINE_SPLIT_NOCS = True
+ # pixel (one gather read per pixel per K-block).
+ TAP_MAJOR_IM2COL = True
+ 
++# Center-tap direct in0 (sharded TILE input, stride 1, padding == dilation, W % 32 == 0): the kw = 1 tap of kernel row
++# kh reads input pixel o + (kh*d - p)*W for output pixel o, a whole-tile-row shift, so its in0 tiles ARE input tile-rows
++# (same format as cb_im2col_tiles) or zero tile-rows above / below the image. The reader copies them from the own or a
++# neighbour shard and compute skips their untilize -> gather -> tilize round trip (3 of the 9 taps):
++#   one tap per K-block: the kw = 1 K-blocks come from cb_center_tiles (matmul_block's In0SourceFn);
++#   one kernel row per K-block (CENTER_TAP_SLOTS): the reader writes each tile-row's kw = 1 tiles straight into their
++#     cb_im2col_tiles slots, and compute's tilize reserves and pushes those slots unpacked. K-blocked walk (bm >= 2):
++#     cb_im2col_tiles holds two K-blocks, so the reader writes K-block k's center tiles while compute still multiplies
++#     K-block k - 1 (reserving K-block k's first im2col row already implies the matmul of K-block k - 2 is done).
++#     N-slice-outer K split: the resident [bm, K] in0 holds the slots, no extra L1.
++# On the K-blocked walks both take bm * bk more in0 tiles, and only from the L1 left at the solved blocking, so they never
++# change bm, bk, the untilize batch or the im2col ring. False keeps the tilize for every K-block.
++CENTER_TAP_DIRECT = True
++CENTER_TAP_SLOTS = True
++# Menu options, measured, not the default:
++#   CENTER_SLOTS_SINGLE: the slots single-buffered where no L1 is left (the reader issues the center reads once
++#     compute's tilize of the K-block began, polled between rows): flat to -2% (the copy is exposed on a short K-block).
++#   CENTER_KB_IN_SOLVE: cb_center_tiles counted inside the solve (it may shrink the im2col ring): flat on
++#     sem res2.fuse_conv.0 (C_in 288, ring 5 -> 3), the one layer it changes.
++CENTER_SLOTS_SINGLE = False
++CENTER_KB_IN_SOLVE = False
++
+ # Face-direct im2col: when one output pixel's step through the slab (stride * C_in_p channels) is exactly one
+ # tile-face row (16 elements), the 16 im2col rows of a 16x16 face are one contiguous run of slab pixels. The
+ # reader then writes the bf16 in0 tiles itself, one read per face run, and compute skips the tilize. False keeps
+@@ -283,6 +307,10 @@ class Conv3x3Blocking:
+     shared_slab_bytes: int = 0
+     shared_zero_bytes: int = 0
+     slice_depth: int = NSLICE_SLICE_DEPTH
++    # Center-tap direct mode in effect (CENTER_NONE / CENTER_K_BLOCK / CENTER_SLOTS), and the K-blocks cb_im2col_tiles
++    # holds (2 under CENTER_SLOTS unless single-buffered).
++    center_mode: int = 0
++    center_slot_blocks: int = 1
+ 
+     @property
+     def slab_px(self):
+@@ -412,6 +440,44 @@ def _tap_major(g: Conv3x3Geometry, bk):
+     return tap_major_capable(g) and bk % g.c_in_tiles == 0
+ 
+ 
++CENTER_NONE, CENTER_K_BLOCK, CENTER_SLOTS = 0, 1, 2
++
++
++def center_tap_mode(g: Conv3x3Geometry, bm, bk, nslice=False):
++    """How the kw = 1 taps skip the tilize (see CENTER_TAP_DIRECT): they are whole input tile-rows (a vertical-only
++    shift by whole tile-rows). Not on the K split's K-blocked walk, whose L1-accumulating packs are ordered only by the
++    tilize between K-blocks.
++      CENTER_K_BLOCK  one tap per K-block: K-block k with k % 3 == 1 comes from cb_center_tiles.
++      CENTER_SLOTS    one kernel row per K-block: the reader writes each tile-row's center tiles into their in0 slots
++                      (K-blocked walk, bm >= 2: a second in0 K-block; N-slice-outer: the resident [bm, K] in0), and they
++                      land before the reader pushes the K-block's (M-block's) last im2col row."""
++    if g.k_split and not nslice:
++        return CENTER_NONE
++    # Sharded input only: the center tiles are then L1 copies from the own or a neighbour shard. On an interleaved input
++    # they are a second DRAM read of tile-rows the fill already streams (measured 7-16% slower).
++    if not (
++        CENTER_TAP_DIRECT
++        and g.tile_input
++        and g.sharded_output
++        and g.stride == 1
++        and g.padding == g.dilation
++        and g.input_width % TILE == 0
++        and _tap_major(g, bk)
++    ):
++        return CENTER_NONE
++    if nslice:
++        return CENTER_SLOTS if CENTER_TAP_SLOTS and bk == 3 * g.c_in_tiles else CENTER_NONE
++    if bk == g.c_in_tiles:
++        return CENTER_K_BLOCK
++    if CENTER_TAP_SLOTS and bk == 3 * g.c_in_tiles and bm >= 2:
++        return CENTER_SLOTS
++    return CENTER_NONE
++
++
++def center_tap_direct(g: Conv3x3Geometry, bk, bm=2):
++    return center_tap_mode(g, bm, bk) != CENTER_NONE
++
++
+ def _row_split(g: Conv3x3Geometry, bm, bk):
+     """The split row gather: the per-pixel row gather (neither face-direct nor tap-major) with more than one tile-row
+     per K-block; with one there is nothing to hand over (the reader takes each K-block's first unit)."""
+@@ -492,6 +558,7 @@ def _footprint(
+         + (0 if face_direct_im2col(g, bk) else im2col_rm_depth_rows * bk * TILE_BYTES_BF16)
+         + zero_src_bytes
+         + bm * (g.tensor_k_tiles if nslice else bk) * g.in0_tile_bytes
++        + (bm * bk * g.in0_tile_bytes if CENTER_KB_IN_SOLVE and center_tap_mode(g, bm, bk) == CENTER_K_BLOCK else 0)
+         + weight_depth * (g.tensor_k_tiles * ns if nslice else bk * bn) * g.weight_tile_bytes
+         + (ns * g.weight_tile_bytes if g.has_bias else 0)
+         + (2 * slice_depth * bm * ns if nslice else bm * bn) * TILE_BYTES_FP32
+@@ -571,6 +638,23 @@ def select_blocking(g: Conv3x3Geometry, grid, l1_budget) -> Conv3x3Blocking:
+                         if deep["footprint_bytes"] <= l1_budget:
+                             fit = deep
+                             break
++                    # Center-tap direct: bm * bk more in0 tiles, from the L1 left after everything else.
++                    mode = center_tap_mode(g, bm, bk, nslice)
++                    extra = bm * bk * g.in0_tile_bytes
++                    if nslice:
++                        # The resident [bm, K] in0 holds the slots already: no extra L1.
++                        fit = dict(fit, center_mode=mode)
++                    elif mode == CENTER_K_BLOCK and CENTER_KB_IN_SOLVE:
++                        fit = dict(fit, center_mode=mode)
++                    elif mode != CENTER_NONE and fit["footprint_bytes"] + extra <= l1_budget:
++                        fit = dict(
++                            fit,
++                            center_mode=mode,
++                            center_slot_blocks=2 if mode == CENTER_SLOTS else 1,
++                            footprint_bytes=fit["footprint_bytes"] + extra,
++                        )
++                    elif mode == CENTER_SLOTS and CENTER_SLOTS_SINGLE:
++                        fit = dict(fit, center_mode=mode)
+                     return Conv3x3Blocking(
+                         grid_x=grid_x,
+                         core_m_tiles=core_m_tiles,
+@@ -773,7 +857,13 @@ def create_program_descriptor(
+         cbs.append(_cb(CB_IM2COL_RM, ttnn.bfloat16, TILE_BYTES_BF16, b.im2col_rm_depth_rows * bk, cores))
+     cbs += [
+         # Face-direct: the reader writes these tiles; it relies on every K-block starting at the CB base.
+-        _cb(CB_IM2COL_TILES, input_tensor.dtype, g.in0_tile_bytes, bm * (g.tensor_k_tiles if b.nslice else bk), cores),
++        _cb(
++            CB_IM2COL_TILES,
++            input_tensor.dtype,
++            g.in0_tile_bytes,
++            bm * (g.tensor_k_tiles if b.nslice else bk * b.center_slot_blocks),
++            cores,
++        ),
+         _cb(
+             CB_WEIGHTS,
+             weight_tensor.dtype,
+@@ -828,6 +918,9 @@ def create_program_descriptor(
+         )
+     elif tap_major_im2col(g, b):
+         cbs.append(_cb(CB_ZERO_SRC, ttnn.bfloat16, pixel_bytes, TILE, cores))
++    center_mode = b.center_mode
++    if center_mode == CENTER_K_BLOCK:
++        cbs.append(_cb(CB_CENTER_TILES, input_tensor.dtype, g.in0_tile_bytes, bm * bk, cores))
+     if g.k_split:
+         if not b.shared_slab_bytes:
+             cbs.append(_cb(CB_COMBINE_SLOTS, ttnn.float32, TILE_BYTES_FP32, g.k_cols * bm * ns, cores))
+@@ -935,6 +1028,9 @@ def create_program_descriptor(
+             int(b.shared_slab_bytes > 0),
+             SEM_COMBINE_SEND_GO,
+             int(split_core),
++            center_mode,
++            CB_CENTER_TILES,
++            b.center_slot_blocks,
+         ]
+         args.extend(ttnn.TensorAccessorArgs(input_tensor).get_compile_time_args())
+         return args
+@@ -974,6 +1070,8 @@ def create_program_descriptor(
+         CB_SLICE_R,
+         *_out_subblock(bm, ns),
+         b.untilize_batch_rows,
++        center_mode,
++        CB_CENTER_TILES,
+     ]
+ 
+     writer_ct_args = [
+diff --git a/ttnn/ttnn/operations/conv2d_3x3/kernels/conv2d_3x3_reader.cpp b/ttnn/ttnn/operations/conv2d_3x3/kernels/conv2d_3x3_reader.cpp
+index 208a92b1576..976920744a9 100644
+--- a/ttnn/ttnn/operations/conv2d_3x3/kernels/conv2d_3x3_reader.cpp
++++ b/ttnn/ttnn/operations/conv2d_3x3/kernels/conv2d_3x3_reader.cpp
+@@ -64,6 +64,18 @@
+ // cb_input_tiles slots of the padding tile columns (the ring is whole batches, so each slot keeps its L1 offset),
+ // on ROW_MAJOR the whole slab, after which every pixel fill reads only its real channels.
+ //
++// Center-tap direct in0 (the descriptor's CENTER_TAP_DIRECT; sharded TILE input, stride 1, padding == dilation,
++// W % 32 == 0): output tile-row t's kw = 1 tap of kernel row kh is input tile-row t + (kh*d - p) * W / 32, or a zero
++// tile-row outside the image, already in in0's tile format. The reader copies those tiles from the own or a neighbour
++// shard (one accessor lookup per in-shard run) instead of gathering the tap, and compute does not tilize it.
++//   center_mode 1 (one tap per K-block): K-blocks k % 3 == 1 go whole into cb_center_tiles (compute's In0SourceFn).
++//   center_mode 2 (one kernel row per K-block): each tile-row's kw = 1 tiles go straight into their cb_im2col_tiles
++//     slots; the tap-major gather leaves that tap's block of the im2col row empty, and compute's tilize reserves and
++//     pushes the slots unpacked. The copy (own transaction id) lands before the K-block's (N-slice-outer: M-block's)
++//     last im2col row is pushed, and starts only once the matmul that last read the slots is done: with a
++//     double-buffered in0 that is implied by reserving the K-block's first im2col row, otherwise the reader waits
++//     for compute to pop a page of it.
++//
+ // Lanes C_in..C_in_p of a slab pixel are not data (DRAM page padding or tile padding) and may hold
+ // NaN. The gather copies only the C_in real channels of each tap; the lanes of an im2col row are
+ // zero either from a one-time zeroing of cb_im2col_rm (when every K-block has the same column
+@@ -88,6 +100,7 @@ constexpr uint32_t TILE_DIM = 32;
+ constexpr uint32_t ELEM_BYTES = 2;        // bf16 slab and im2col rows
+ constexpr uint32_t TRID_GATHER = 4;       // ROW_MAJOR bands use trids 1..3
+ constexpr uint32_t TRID_INPUT_TILES = 5;  // TILE footprint batches
++constexpr uint32_t TRID_CENTER = 6;       // center-tap slots
+ 
+ }  // namespace
+ 
+@@ -158,7 +171,15 @@ void kernel_main() {
+     // Split TILE fill (see the file comment): the writer reads the higher shards' tile-rows. Its two counters reuse the
+     // split slab fill's ids: fill_done (writer -> reader) and fill_go (reader -> writer).
+     constexpr bool tile_fill_split = get_compile_time_arg_val(60) != 0;
+-    constexpr auto input_args = TensorAccessorArgs<61>();
++    // Center-tap direct in0 (see the descriptor's CENTER_TAP_DIRECT): the kw = 1 K-blocks are input tile-rows.
++    // 1: one tap per K-block, the kw = 1 K-blocks go to cb_center_tiles. 2: one kernel row per K-block, the kw = 1 tiles
++    // of every tile-row go straight into their cb_im2col_tiles slots.
++    constexpr uint32_t center_mode = get_compile_time_arg_val(61);
++    constexpr uint32_t cb_center_tiles = get_compile_time_arg_val(62);
++    constexpr bool center_direct = center_mode != 0;
++    // Center slots: K-blocks cb_im2col_tiles holds (2: K-block k sits at slot k % 2).
++    constexpr uint32_t center_slot_blocks = get_compile_time_arg_val(63);
++    constexpr auto input_args = TensorAccessorArgs<64>();
+     static_assert(!alias_slab_combine || nslice_outer, "only the N-slice-outer walk aliases the slab");
+ 
+     const uint32_t input_addr = get_arg_val<uint32_t>(0);
+@@ -204,6 +225,17 @@ void kernel_main() {
+     static_assert(
+         !tap_major || (stride == 1 && !k_padded && block_k_cols % c_in_p == 0),
+         "tap-major rows are whole taps read in unit-stride pixel runs");
++    constexpr bool tile_row_outer_ct = nslice_outer && !face_direct;
++    static_assert(
++        !center_direct ||
++            (tile_input && tap_major && !face_direct && !row_split && (!channel_slice || tile_row_outer_ct) &&
++             block_k_tiles == (center_mode == 1 ? 1 : 3) * (c_in_p / TILE_DIM) && padding == dilation &&
++             input_width % TILE_DIM == 0 && output_width == input_width &&
++             (center_mode == 1 || tile_row_outer_ct || block_m_tiles >= 2) && (center_mode == 2 || !tile_row_outer_ct)),
++        "center-tap direct: one tap per K-block, and the kw = 1 tap is a whole-tile-row vertical shift");
++    static_assert(
++        center_slot_blocks == 1 || (center_mode == 2 && center_slot_blocks == 2 && im2col_rm_depth_rows <= block_m_tiles),
++        "double-buffered center slots: reserving a K-block's first im2col row must imply compute began the previous one");
+ 
+     using FaceGather = conv2d_3x3::FaceGather<
+         output_width,
+@@ -227,8 +259,15 @@ void kernel_main() {
+         c_in_p,
+         block_k_tiles,
+         zero_im2col_once>;
+-    using TapMajorT =
+-        conv2d_3x3::TapMajorGather<output_width, input_height, input_width, padding, dilation, c_in_p, block_k_tiles>;
++    using TapMajorT = conv2d_3x3::TapMajorGather<
++        output_width,
++        input_height,
++        input_width,
++        padding,
++        dilation,
++        c_in_p,
++        block_k_tiles,
++        center_mode == 2 ? 1 : -1>;
+     static_assert(!nslice_outer || channel_slice, "the N-slice-outer walk is the K split's");
+     // Face-direct under a K split is one whole-K K-block, which already lands in0 as [bm, K].
+     constexpr bool tile_row_outer = nslice_outer && !face_direct;
+@@ -261,6 +300,10 @@ void kernel_main() {
+     constexpr uint32_t writer_groups_per_k_block = gather_split ? in0_groups / 2 : 0;
+ 
+     const auto input = TensorAccessor(input_args, input_addr, input_page_bytes);
++    // Center-tap slots: cb_im2col_tiles' base (compute produces it; every K-block starts there).
++    [[maybe_unused]] const uint32_t im2col_tiles_base = center_mode == 2 ? get_write_ptr(cb_im2col_tiles) : 0;
++    static_assert(
++        center_mode != 2 || !nslice_outer || center_slot_blocks == 1, "the resident [bm, K] in0 is one block");
+     // TILE: compute pushes exactly slab_tile_rows tile-rows per M-block and the reader pops them all,
+     // so the slab always starts at the CB base.
+     const uint32_t slab_l1 = tile_input ? get_read_ptr(cb_halo_slab) : get_write_ptr(cb_halo_slab);
+@@ -351,6 +394,7 @@ void kernel_main() {
+     };
+ 
+     [[maybe_unused]] uint32_t fill_batches_handed = 0;  // split TILE fill: batches handed to the writer
++    [[maybe_unused]] uint32_t rm_units_pushed = 0;      // center slots: im2col rows pushed so far
+     for (uint32_t m_block_idx = 0; m_block_idx < num_m_blocks_this_core; ++m_block_idx) {
+         const uint32_t block_tiles_done = m_block_idx * block_m_tiles;
+         const uint32_t block_valid_tiles =
+@@ -468,6 +512,87 @@ void kernel_main() {
+             gather_into(k_block_idx, tile_row, get_write_ptr(cb_im2col_rm));
+             cb_push_back(cb_im2col_rm, block_k_tiles);
+         };
++        // Center-tap slots (center_mode 2): the kw = 1 tiles of kernel row kh of every tile-row of the M-block, straight
++        // into their cb_im2col_tiles slots: tile-row r's at l1_first + r * l1_row_stride. Issued under TRID_CENTER and
++        // waited only before the K-block's (N-slice-outer: the M-block's) last im2col row is pushed, which compute
++        // tilizes before its matmul reads the slots. A row's source is c_in_tiles consecutive L1 pages of one owner
++        // shard (HEIGHT: pages t * c_in_tiles...; channel slice: this column's slice of input row t), so one accessor
++        // lookup per in-shard run. A short channel slice copies its real tiles and zeroes the padded ones.
++        [[maybe_unused]] auto issue_center_rows = [&](int32_t kh, uint32_t l1_first, uint32_t l1_row_stride) {
++            constexpr uint32_t row_tile_bytes = c_in_tiles * input_page_bytes;
++            constexpr uint32_t real_tile_bytes = (c_in / TILE_DIM) * input_page_bytes;
++            constexpr int32_t tile_rows_per_image_row = input_width / TILE_DIM;
++            const int32_t shift_rows = (kh * dilation - padding) * tile_rows_per_image_row;
++            const uint32_t t_first = m_tile_start + block_tiles_done;
++            uint32_t l1 = l1_first;
++            reads.begin(TRID_CENTER);
++            for (uint32_t r = 0; r < block_m_tiles;) {
++                const uint32_t t = t_first + r;
++                const int32_t h_in = static_cast<int32_t>(t / tile_rows_per_image_row) + kh * dilation - padding;
++                if (r >= block_valid_tiles || h_in < 0 || h_in >= input_height) {
++                    reads.read(zero_src_noc, l1, row_tile_bytes);
++                    l1 += l1_row_stride;
++                    ++r;
++                    continue;
++                }
++                // Rows below stay in the image up to its last row.
++                const uint32_t rows_left_in_image =
++                    static_cast<uint32_t>(input_height - h_in) * tile_rows_per_image_row - t % tile_rows_per_image_row;
++                uint32_t run = block_valid_tiles - r;
++                run = run < rows_left_in_image ? run : rows_left_in_image;
++                const uint32_t src_row = t + shift_rows;
++                uint32_t contig_rows;
++                uint64_t src;
++                if constexpr (channel_slice) {
++                    const uint32_t shard_end = (src_row / input_shard_rows + 1) * input_shard_rows;
++                    contig_rows = src_row + run < shard_end ? run : shard_end - src_row;
++                    src = input.get_noc_addr(src_row * row_page_stride + slice_page_offset);
++                } else {
++                    const uint32_t page = src_row * c_in_tiles;
++                    const uint32_t contig_pages = input.contiguous_page_stride() == 1
++                                                      ? input.num_contiguous_pages(page, page + run * c_in_tiles)
++                                                      : 1;
++                    contig_rows = contig_pages / c_in_tiles;
++                    if (contig_rows == 0) {
++                        // Interleaved pages: one read per page of this row.
++                        for (uint32_t c = 0; c < c_in_tiles; ++c) {
++                            reads.read(input.get_noc_addr(page + c), l1 + c * input_page_bytes, input_page_bytes);
++                        }
++                        l1 += l1_row_stride;
++                        ++r;
++                        continue;
++                    }
++                    src = input.get_noc_addr(page);
++                }
++                for (uint32_t i = 0; i < contig_rows; ++i) {
++                    if constexpr (real_tile_bytes < row_tile_bytes) {
++                        reads.read(src, l1, real_tile_bytes);
++                        reads.read(zero_src_noc, l1 + real_tile_bytes, row_tile_bytes - real_tile_bytes);
++                    } else {
++                        reads.read(src, l1, row_tile_bytes);
++                    }
++                    src += row_tile_bytes;
++                    l1 += l1_row_stride;
++                }
++                r += contig_rows;
++            }
++        };
++        // Center slots: the in0 slots are free once the matmul that last read them is done, which a compute that popped
++        // a page of im2col row first_unit has (it tilizes only after that matmul). True when, with rows_in_flight of
++        // this K-block (or M-block) pushed, that page is popped; blocking waits for it.
++        [[maybe_unused]] auto center_slots_free = [&](uint32_t rows_in_flight, bool blocking) -> bool {
++            constexpr int32_t ring_pages = im2col_rm_depth_rows * block_k_tiles;
++            const int32_t n = ring_pages - static_cast<int32_t>(rows_in_flight * block_k_tiles - 1);
++            if (n <= 0) {
++                return true;
++            }
++            if (blocking) {
++                MaybeDeviceZoneScope("reader_center_wait");
++                cb_reserve_back(cb_im2col_rm, n);
++                return true;
++            }
++            return rows_in_flight > 0 && cb_pages_reservable_at_back(cb_im2col_rm, n);
++        };
+ 
+         // ---- Split row gather. The reader alone moves cb_im2col_rm's pointers and pushes units in sequence order,
+         // a writer unit once row_done counted it.
+@@ -536,6 +661,35 @@ void kernel_main() {
+                 while (assign_cursor < m_seq_end) {
+                     take_unit(m_seq_end);
+                 }
++            } else if constexpr (center_mode == 2) {
++                // The resident [bm, K] in0 starts at the CB base every M-block; its slots are free from the start on the
++                // first M-block, and once compute began tilizing this M-block on a later one (see center_slots_free).
++                constexpr uint32_t k_tiles = num_k_blocks * block_k_tiles;
++                const uint32_t first_unit = rm_units_pushed;
++                bool issued = false;
++                for (uint32_t tile_row = 0; tile_row < block_m_tiles; ++tile_row) {
++                    for (uint32_t k_block_idx = 0; k_block_idx < num_k_blocks; ++k_block_idx) {
++                        const bool last = tile_row + 1 == block_m_tiles && k_block_idx + 1 == num_k_blocks;
++                        cb_reserve_back(cb_im2col_rm, block_k_tiles);
++                        if (!issued) {
++                            issued = m_block_idx == 0 || center_slots_free(rm_units_pushed - first_unit, last);
++                            if (issued) {
++                                for (int32_t band = 0; band < 3; ++band) {
++                                    issue_center_rows(
++                                        band,
++                                        im2col_tiles_base + (band * block_k_tiles + c_in_tiles) * input_page_bytes,
++                                        k_tiles * input_page_bytes);
++                                }
++                            }
++                        }
++                        gather_into(k_block_idx, tile_row, get_write_ptr(cb_im2col_rm));
++                        if (last) {
++                            reads.wait(TRID_CENTER);
++                        }
++                        cb_push_back(cb_im2col_rm, block_k_tiles);
++                        ++rm_units_pushed;
++                    }
++                }
+             } else {
+                 for (uint32_t tile_row = 0; tile_row < block_m_tiles; ++tile_row) {
+                     for (uint32_t k_block_idx = 0; k_block_idx < num_k_blocks; ++k_block_idx) {
+@@ -548,6 +702,51 @@ void kernel_main() {
+             const uint32_t k_tile0 = k_block_idx * block_k_tiles;
+             const int32_t kh = k_tile0 / tensor_kkh_tiles;
+             const uint32_t col_lo = (k_tile0 - kh * tensor_kkh_tiles) * TILE_DIM;
++            if constexpr (center_mode == 1) {
++                if (k_block_idx % 3 == 1) {
++                    // ---- center tap (kh, 1): output tile-row t reads input tile-row t + (kh*d - p) * W / 32, or zeros
++                    // above / below the image (and past the core's last tile-row). Copied as whole tile-rows; the
++                    // reader never touches the slab for it.
++                    MaybeDeviceZoneScope("reader_center");
++                    constexpr uint32_t row_tile_pages = c_in_tiles;
++                    constexpr uint32_t row_tile_bytes = row_tile_pages * input_page_bytes;
++                    constexpr int32_t tile_rows_per_image_row = input_width / TILE_DIM;
++                    const int32_t shift_rows = (kh * dilation - padding) * tile_rows_per_image_row;
++                    cb_reserve_back(cb_center_tiles, block_m_tiles * block_k_tiles);
++                    uint32_t l1 = get_write_ptr(cb_center_tiles);
++                    const uint32_t t_first = m_tile_start + block_tiles_done;
++                    reads.begin(TRID_GATHER);
++                    for (uint32_t r = 0; r < block_m_tiles;) {
++                        const uint32_t t = t_first + r;
++                        const int32_t h_in = static_cast<int32_t>(t / tile_rows_per_image_row) + kh * dilation - padding;
++                        if (r >= block_valid_tiles || h_in < 0 || h_in >= input_height) {
++                            reads.read(zero_src_noc, l1, row_tile_bytes);
++                            l1 += row_tile_bytes;
++                            ++r;
++                            continue;
++                        }
++                        // Tile-rows of this image row and below stay inside the image up to its last row.
++                        const uint32_t rows_left_in_image =
++                            static_cast<uint32_t>(input_height - h_in) * tile_rows_per_image_row -
++                            t % tile_rows_per_image_row;
++                        uint32_t run = block_valid_tiles - r;
++                        run = run < rows_left_in_image ? run : rows_left_in_image;
++                        uint32_t page = (t + shift_rows) * row_tile_pages;
++                        const uint32_t end_page = page + run * row_tile_pages;
++                        while (page < end_page) {
++                            const uint32_t n =
++                                input.contiguous_page_stride() == 1 ? input.num_contiguous_pages(page, end_page) : 1;
++                            reads.read(input.get_noc_addr(page), l1, n * input_page_bytes);
++                            page += n;
++                            l1 += n * input_page_bytes;
++                        }
++                        r += run;
++                    }
++                    reads.wait(TRID_GATHER);
++                    cb_push_back(cb_center_tiles, block_m_tiles * block_k_tiles);
++                    continue;
++                }
++            }
+             if (col_lo == 0) {
+                 // The band's slab rows: compute's untilize (TILE) or this core's own band reads (ROW_MAJOR).
+                 MaybeDeviceZoneScope("reader_band_wait");
+@@ -609,6 +808,34 @@ void kernel_main() {
+                 while (assign_cursor < kb_end) {
+                     take_unit(kb_end);
+                 }
++            } else if constexpr (center_mode == 2) {
++                // Double-buffered in0: reserving this K-block's first im2col row already implies compute began the
++                // previous K-block (the ring is at most bm rows), so the matmul of K-block k - 2 (slot k % 2) is done.
++                // Single-buffered: wait for compute's tilize of this K-block to begin (see center_slots_free).
++                const uint32_t k_block_seq = m_block_idx * num_k_blocks + k_block_idx;
++                const uint32_t first_unit = rm_units_pushed;
++                bool issued = false;
++                for (uint32_t tile_row = 0; tile_row < block_m_tiles; ++tile_row) {
++                    cb_reserve_back(cb_im2col_rm, block_k_tiles);
++                    if (!issued) {
++                        issued = center_slot_blocks == 2 ||
++                                 center_slots_free(rm_units_pushed - first_unit, tile_row + 1 == block_m_tiles);
++                        if (issued) {
++                            issue_center_rows(
++                                kh,
++                                im2col_tiles_base +
++                                    ((k_block_seq % center_slot_blocks) * block_m_tiles * block_k_tiles + c_in_tiles) *
++                                        input_page_bytes,
++                                block_k_tiles * input_page_bytes);
++                        }
++                    }
++                    gather_into(k_block_idx, tile_row, get_write_ptr(cb_im2col_rm));
++                    if (tile_row + 1 == block_m_tiles) {
++                        reads.wait(TRID_CENTER);
++                    }
++                    cb_push_back(cb_im2col_rm, block_k_tiles);
++                    ++rm_units_pushed;
++                }
+             } else {
+                 for (uint32_t tile_row = 0; tile_row < block_m_tiles; ++tile_row) {
+                     gather_unit(k_block_idx, tile_row);
+diff --git a/ttnn/ttnn/operations/conv2d_3x3/kernels/conv2d_3x3_compute.cpp b/ttnn/ttnn/operations/conv2d_3x3/kernels/conv2d_3x3_compute.cpp
+index 073891f6131..21fc9aa32d4 100644
+--- a/ttnn/ttnn/operations/conv2d_3x3/kernels/conv2d_3x3_compute.cpp
++++ b/ttnn/ttnn/operations/conv2d_3x3/kernels/conv2d_3x3_compute.cpp
+@@ -47,6 +47,36 @@ namespace ckl = compute_kernel_lib;
+ 
+ namespace {
+ 
++// Center-tap direct modes (the descriptor's center_tap_mode).
++constexpr uint32_t CENTER_K_BLOCK = 1;
++constexpr uint32_t CENTER_SLOTS = 2;
++
++// Center-tap slots: tilizes num_rows im2col rows of three taps (tap-major, each a [32, tw * 32] block), except tap 1, whose
++// tw tiles the reader wrote into their in0 slots: those are reserved and pushed unpacked, and the row's empty tap-1 block
++// is popped unread. One tilize init / uninit for all of it, as in the one-call form.
++template <uint32_t tw, uint32_t cb_rm, uint32_t cb_tiles>
++ALWI void tilize_rows_skip_center(DataflowBuffer& rm, DataflowBuffer& tiles, uint32_t num_rows) {
++    namespace tc = ckl::tilize_config;
++    constexpr auto NoRc = tc::ReconfigureRegisterDatatypeMode::NoReconfigure;
++    for (uint32_t r = 0; r < num_rows; ++r) {
++        if (r == 0) {
++            ckl::tilize<tw, cb_rm, cb_tiles, tc::InitUninitMode::InitOnly>(rm, tiles, 1);
++        } else {
++            ckl::tilize<tw, cb_rm, cb_tiles, tc::InitUninitMode::Neither, tc::WaitMode::WaitBlock, NoRc>(rm, tiles, 1);
++        }
++        tiles.reserve_back(tw);
++        tiles.push_back(tw);
++        rm.wait_front(tw);
++        rm.pop_front(tw);
++        if (r + 1 == num_rows) {
++            ckl::tilize<tw, cb_rm, cb_tiles, tc::InitUninitMode::UninitOnly, tc::WaitMode::WaitBlock, NoRc>(
++                rm, tiles, 1);
++        } else {
++            ckl::tilize<tw, cb_rm, cb_tiles, tc::InitUninitMode::Neither, tc::WaitMode::WaitBlock, NoRc>(rm, tiles, 1);
++        }
++    }
++}
++
+ // Tilizes one K-block (block_m_tiles tile-rows x block_k_tiles) of gathered im2col rows. The matmul
+ // restores its own state afterwards (InitMode::ShortAfterPreKBlock).
+ // The reader lays a tile-row out either as one [32, block_k_tiles * 32] row block or tap-major, as
+@@ -58,12 +88,20 @@ template <
+     uint32_t block_m_tiles,
+     uint32_t cb_im2col_rm,
+     uint32_t cb_im2col_tiles,
+-    bool relu_on_last_matmul_pack>
++    bool relu_on_last_matmul_pack,
++    uint32_t center_mode>
+ struct TilizeIm2colKBlock {
+     DataflowBuffer* rm;
+     DataflowBuffer* tiles;
+ 
+-    ALWI void operator()(uint32_t /*block*/, uint32_t /*num_k_blocks*/, bool is_last) const {
++    ALWI void operator()(uint32_t block, uint32_t /*num_k_blocks*/, bool is_last) const {
++        if constexpr (center_mode == CENTER_K_BLOCK) {
++            // The reader copied this center-tap K-block's input tiles into cb_center_tiles (CenterTapIn0); there is
++            // nothing to tilize. Never the last K-block (kw = 2 is), and the matmul sets its own L1-acc state per pack.
++            if (block % 3 == 1) {
++                return;
++            }
++        }
+         // The previous K-block's pack left packer L1 accumulation on; the tilize pack must overwrite.
+         pack_reconfig_l1_acc(0);
+         if constexpr (relu_on_last_matmul_pack) {
+@@ -71,7 +109,11 @@ struct TilizeIm2colKBlock {
+             pack_relu_config(ReluConfig::none());
+         }
+         static_assert(block_k_tiles % tilize_width_tiles == 0);
+-        {
++        if constexpr (center_mode == CENTER_SLOTS) {
++            static_assert(block_k_tiles == 3 * tilize_width_tiles && block_m_tiles >= 2);
++            MaybeDeviceZoneScope("compute_tilize");
++            tilize_rows_skip_center<tilize_width_tiles, cb_im2col_rm, cb_im2col_tiles>(*rm, *tiles, block_m_tiles);
++        } else {
+             // Includes the unpacker's per-tile-row wait on the reader's gather.
+             MaybeDeviceZoneScope("compute_tilize");
+             ckl::tilize<tilize_width_tiles, cb_im2col_rm, cb_im2col_tiles>(
+@@ -85,6 +127,19 @@ struct TilizeIm2colKBlock {
+     }
+ };
+ 
++// Center-tap direct in0: K-block k is tap (k / 3, k % 3) (one tap per K-block); the kw = 1 ones are the reader's
++// input-tile copy in cb_center_tiles, which shares cb_im2col_tiles' data format (the input dtype).
++template <uint32_t center_mode, uint32_t cb_center_tiles>
++struct CenterTapIn0 {
++    ALWI uint32_t operator()(uint32_t block, uint32_t in0_cb_id) const {
++        if constexpr (center_mode == CENTER_K_BLOCK) {
++            return block % 3 == 1 ? cb_center_tiles : in0_cb_id;
++        } else {
++            return in0_cb_id;
++        }
++    }
++};
++
+ }  // namespace
+ 
+ void kernel_main() {
+@@ -123,6 +178,10 @@ void kernel_main() {
+     constexpr uint32_t slice_sb_h = get_compile_time_arg_val(32);
+     constexpr uint32_t slice_sb_w = get_compile_time_arg_val(33);
+     constexpr uint32_t untilize_batch_rows = get_compile_time_arg_val(34);
++    constexpr uint32_t center_mode = get_compile_time_arg_val(35);
++    constexpr uint32_t cb_center_tiles = get_compile_time_arg_val(36);
++    static_assert(
++        center_mode == 0 || (tile_input && !face_direct && (!k_split || (nslice_outer && center_mode == CENTER_SLOTS))));
+ 
+     const uint32_t num_m_blocks_this_core = get_arg_val<uint32_t>(0);
+     [[maybe_unused]] const bool owns_output_columns = get_arg_val<uint32_t>(1) != 0;
+@@ -193,7 +252,8 @@ void kernel_main() {
+         block_m_tiles,
+         cb_im2col_rm,
+         cb_im2col_tiles,
+-        relu_on_last_matmul_pack>;
++        relu_on_last_matmul_pack,
++        center_mode>;
+     auto make_pre_k_block = [&]() {
+         if constexpr (face_direct) {
+             return ckl::NoPreKBlock{};
+@@ -211,7 +271,11 @@ void kernel_main() {
+     // finalize_block over `shape`'s rows of the matmul partials: + bias, ReLU on this pack only.
+     auto add_bias = [&](const ckl::BiasAddShape& shape) {
+         MaybeDeviceZoneScope("compute_bias_add");
+-        // matmul_block leaves packer L1 accumulation on after its last K-block.
++        // Center-tap direct in0 (see the reader's file comment): center_mode 1 skips the tilize of K-blocks k % 3 == 1 and
++// matmul_block's In0SourceFn reads them from cb_center_tiles (same data format as cb_im2col_tiles); center_mode 2 tilizes
++// taps 0 and 2 of every im2col row and reserves + pushes tap 1's slots unpacked (the reader wrote them).
++//
++// matmul_block leaves packer L1 accumulation on after its last K-block.
+         pack_reconfig_l1_acc(0);
+         if constexpr (apply_relu) {
+             pack_relu_config(ReluConfig::zero());
+@@ -287,7 +351,14 @@ void kernel_main() {
+             static_assert(block_m_tiles % slice_sb_h == 0 && out_n_tiles % slice_sb_w == 0);
+             // The tilize packs must overwrite (the previous M-block's combine may have left L1 accumulation on).
+             pack_reconfig_l1_acc(0);
+-            if constexpr (!face_direct) {
++            if constexpr (center_mode == CENTER_SLOTS) {
++                // One im2col row per (tile-row, kernel row): three taps, tap 1 the reader's. (kernel_main is not a
++                // template: this branch is compiled on every path.)
++                static_assert(center_mode != CENTER_SLOTS || block_k_tiles == 3 * im2col_tilize_width_tiles);
++                MaybeDeviceZoneScope("compute_tilize");
++                tilize_rows_skip_center<im2col_tilize_width_tiles, cb_im2col_rm, cb_im2col_tiles>(
++                    im2col_rm_dfb, im2col_tiles_dfb, block_m_tiles * num_k_blocks);
++            } else if constexpr (!face_direct) {
+                 MaybeDeviceZoneScope("compute_tilize");
+                 ckl::tilize<im2col_tilize_width_tiles, cb_im2col_rm, cb_im2col_tiles>(
+                     im2col_rm_dfb, im2col_tiles_dfb, block_m_tiles * (k_tiles / im2col_tilize_width_tiles));
+@@ -417,7 +488,11 @@ void kernel_main() {
+                 ckl::InputPolicy::WaitAndPopPerKBlock,
+                 ckl::InputPolicy::WaitAndPopPerKBlock,
+                 ckl::NoPostCompute,
+-                PreKBlockFn>(
++                PreKBlockFn,
++                ckl::NoPostKBlock,
++                /*untilize_block_ct_dim=*/0,
++                ckl::NoKBlockInnerDimFn,
++                CenterTapIn0<center_mode, cb_center_tiles>>(
+                 im2col_tiles,
+                 weights,
+                 output_tiles,
+@@ -426,7 +501,10 @@ void kernel_main() {
+                 {},
+                 pre_k_block,
+                 /*in1_per_core_w=*/block_n_tiles,
+-                /*out_row_width=*/block_n_tiles);
++                /*out_row_width=*/block_n_tiles,
++                {},
++                {},
++                CenterTapIn0<center_mode, cb_center_tiles>{});
+         }
+ 
+         if constexpr (has_bias && !k_split && in0_groups == 1) {
+diff --git a/ttnn/ttnn/operations/conv2d_3x3/kernels/conv2d_3x3_gather_dataflow.hpp b/ttnn/ttnn/operations/conv2d_3x3/kernels/conv2d_3x3_gather_dataflow.hpp
+index 6cdcd808a32..ef5b7620082 100644
+--- a/ttnn/ttnn/operations/conv2d_3x3/kernels/conv2d_3x3_gather_dataflow.hpp
++++ b/ttnn/ttnn/operations/conv2d_3x3/kernels/conv2d_3x3_gather_dataflow.hpp
+@@ -304,7 +304,8 @@ struct GatherUnits {
+ 
+ // Tap-major (stride 1, whole unpadded or zero-lane taps): tap kw of the tile-row is a [32 pixels, c_in_p] block. The
+ // pixels of one output image row read consecutive slab pixels, so each in-image run is one read; out-of-image pixels
+-// read a 32-pixel zero block at zero_src_noc, one read per run.
++// read a 32-pixel zero block at zero_src_noc, one read per run. skip_kw (>= 0): that tap's block is left unwritten
++// (center-tap direct: the reader writes its in0 tiles itself).
+ template <
+     uint32_t output_width,
+     int32_t input_height,
+@@ -312,7 +313,8 @@ template <
+     int32_t padding,
+     int32_t dilation,
+     uint32_t c_in_p,
+-    uint32_t block_k_tiles>
++    uint32_t block_k_tiles,
++    int32_t skip_kw = -1>
+ struct TapMajorGather {
+     static constexpr uint32_t TILE_DIM = 32;
+     static constexpr uint32_t pixel_bytes = c_in_p * 2;
+@@ -335,6 +337,9 @@ struct TapMajorGather {
+         const int32_t kw_last = data_hi > col_lo ? (data_hi - 1) / c_in_p : -1;
+         const uint32_t row_end = o + TILE_DIM < o_end ? o + TILE_DIM : o_end;
+         for (int32_t kw = kw_first; kw <= kw_last; ++kw) {
++            if (kw == skip_kw) {
++                continue;
++            }
+             uint32_t dst = rows_l1 + (kw - kw_first) * TILE_DIM * pixel_bytes;
+             int32_t ho = o / output_width;
+             int32_t wo = o % output_width;

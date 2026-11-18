@@ -9,6 +9,10 @@
 //
 // Strided-window im2col (stride 2): compute tilizes each unit in place at a 2-pixel row stride (window_tilize).
 //
+// Center-tap direct in0 (see the reader's file comment): center_mode 1 skips the tilize of K-blocks k % 3 == 1 and
+// matmul_block's In0SourceFn reads them from cb_center_tiles (same data format as cb_im2col_tiles); center_mode 2
+// tilizes taps 0 and 2 of every im2col row and reserves + pushes tap 1's slots unpacked (the reader wrote them).
+//
 // Face-direct im2col: the reader writes the in0 tiles itself, so the matmul runs without the tilize hook. With one
 // K-block per M-block the reader pushes in0 in row groups and compute runs one matmul call per group as it lands,
 // keeping the weights fronted across the calls, and adds the bias once per bias_stream_groups groups, so only the
@@ -114,6 +118,36 @@ ALWI void window_tilize(DataflowBuffer& in, DataflowBuffer& out, uint32_t units)
     fast_tilize_uninit(cb_in, cb_out, row_tiles);
 }
 
+// Center-tap direct modes (the descriptor's center_tap_mode).
+constexpr uint32_t CENTER_K_BLOCK = 1;
+constexpr uint32_t CENTER_SLOTS = 2;
+
+// Center-tap slots: tilizes num_rows im2col rows of three taps (tap-major, each a [32, tw * 32] block), except tap 1,
+// whose tw tiles the reader wrote into their in0 slots: those are reserved and pushed unpacked, and the row's empty
+// tap-1 block is popped unread. One tilize init / uninit for all of it, as in the one-call form.
+template <uint32_t tw, uint32_t cb_rm, uint32_t cb_tiles>
+ALWI void tilize_rows_skip_center(DataflowBuffer& rm, DataflowBuffer& tiles, uint32_t num_rows) {
+    namespace tc = ckl::tilize_config;
+    constexpr auto NoRc = tc::ReconfigureRegisterDatatypeMode::NoReconfigure;
+    for (uint32_t r = 0; r < num_rows; ++r) {
+        if (r == 0) {
+            ckl::tilize<tw, cb_rm, cb_tiles, tc::InitUninitMode::InitOnly>(rm, tiles, 1);
+        } else {
+            ckl::tilize<tw, cb_rm, cb_tiles, tc::InitUninitMode::Neither, tc::WaitMode::WaitBlock, NoRc>(rm, tiles, 1);
+        }
+        tiles.reserve_back(tw);
+        tiles.push_back(tw);
+        rm.wait_front(tw);
+        rm.pop_front(tw);
+        if (r + 1 == num_rows) {
+            ckl::tilize<tw, cb_rm, cb_tiles, tc::InitUninitMode::UninitOnly, tc::WaitMode::WaitBlock, NoRc>(
+                rm, tiles, 1);
+        } else {
+            ckl::tilize<tw, cb_rm, cb_tiles, tc::InitUninitMode::Neither, tc::WaitMode::WaitBlock, NoRc>(rm, tiles, 1);
+        }
+    }
+}
+
 // Tilizes one K-block (block_m_tiles tile-rows x block_k_tiles) of gathered im2col rows. The matmul
 // restores its own state afterwards (InitMode::ShortAfterPreKBlock).
 // The reader lays a tile-row out either as one [32, block_k_tiles * 32] row block or tap-major, as
@@ -127,12 +161,20 @@ template <
     uint32_t cb_im2col_tiles,
     bool relu_on_last_matmul_pack,
     bool strided_window,
-    uint32_t c_in_tiles>
+    uint32_t c_in_tiles,
+    uint32_t center_mode>
 struct TilizeIm2colKBlock {
     DataflowBuffer* rm;
     DataflowBuffer* tiles;
 
-    ALWI void operator()(uint32_t /*block*/, uint32_t /*num_k_blocks*/, bool is_last) const {
+    ALWI void operator()(uint32_t block, uint32_t /*num_k_blocks*/, bool is_last) const {
+        if constexpr (center_mode == CENTER_K_BLOCK) {
+            // The reader copied this center-tap K-block's input tiles into cb_center_tiles (CenterTapIn0); there is
+            // nothing to tilize. Never the last K-block (kw = 2 is), and the matmul sets its own L1-acc state per pack.
+            if (block % 3 == 1) {
+                return;
+            }
+        }
         // The previous K-block's pack left packer L1 accumulation on; the tilize pack must overwrite.
         pack_reconfig_l1_acc(0);
         if constexpr (relu_on_last_matmul_pack) {
@@ -140,7 +182,11 @@ struct TilizeIm2colKBlock {
             pack_relu_config(ReluConfig::none());
         }
         static_assert(block_k_tiles % tilize_width_tiles == 0);
-        {
+        if constexpr (center_mode == CENTER_SLOTS) {
+            static_assert(block_k_tiles == 3 * tilize_width_tiles && block_m_tiles >= 2);
+            MaybeDeviceZoneScope("compute_tilize");
+            tilize_rows_skip_center<tilize_width_tiles, cb_im2col_rm, cb_im2col_tiles>(*rm, *tiles, block_m_tiles);
+        } else {
             // Includes the unpacker's per-tile-row wait on the reader's gather.
             MaybeDeviceZoneScope("compute_tilize");
             if constexpr (strided_window) {
@@ -155,6 +201,19 @@ struct TilizeIm2colKBlock {
             if (is_last) {
                 pack_relu_config(ReluConfig::zero());
             }
+        }
+    }
+};
+
+// Center-tap direct in0: K-block k is tap (k / 3, k % 3) (one tap per K-block); the kw = 1 ones are the reader's
+// input-tile copy in cb_center_tiles, which shares cb_im2col_tiles' data format (the input dtype).
+template <uint32_t center_mode, uint32_t cb_center_tiles>
+struct CenterTapIn0 {
+    ALWI uint32_t operator()(uint32_t block, uint32_t in0_cb_id) const {
+        if constexpr (center_mode == CENTER_K_BLOCK) {
+            return block % 3 == 1 ? cb_center_tiles : in0_cb_id;
+        } else {
+            return in0_cb_id;
         }
     }
 };
@@ -198,6 +257,11 @@ void kernel_main() {
     constexpr uint32_t slice_sb_w = get_compile_time_arg_val(33);
     constexpr uint32_t untilize_batch_rows = get_compile_time_arg_val(34);
     constexpr bool strided_window = get_compile_time_arg_val(35) != 0;
+    constexpr uint32_t center_mode = get_compile_time_arg_val(36);
+    constexpr uint32_t cb_center_tiles = get_compile_time_arg_val(37);
+    static_assert(
+        center_mode == 0 ||
+        (tile_input && !face_direct && (!k_split || (nslice_outer && center_mode == CENTER_SLOTS))));
 
     const uint32_t num_m_blocks_this_core = get_arg_val<uint32_t>(0);
     [[maybe_unused]] const bool owns_output_columns = get_arg_val<uint32_t>(1) != 0;
@@ -270,7 +334,8 @@ void kernel_main() {
         cb_im2col_tiles,
         relu_on_last_matmul_pack,
         strided_window,
-        c_in_tiles>;
+        c_in_tiles,
+        center_mode>;
     auto make_pre_k_block = [&]() {
         if constexpr (face_direct) {
             return ckl::NoPreKBlock{};
@@ -364,7 +429,14 @@ void kernel_main() {
             static_assert(block_m_tiles % slice_sb_h == 0 && out_n_tiles % slice_sb_w == 0);
             // The tilize packs must overwrite (the previous M-block's combine may have left L1 accumulation on).
             pack_reconfig_l1_acc(0);
-            if constexpr (!face_direct) {
+            if constexpr (center_mode == CENTER_SLOTS) {
+                // One im2col row per (tile-row, kernel row): three taps, tap 1 the reader's. (kernel_main is not a
+                // template: this branch is compiled on every path.)
+                static_assert(center_mode != CENTER_SLOTS || block_k_tiles == 3 * im2col_tilize_width_tiles);
+                MaybeDeviceZoneScope("compute_tilize");
+                tilize_rows_skip_center<im2col_tilize_width_tiles, cb_im2col_rm, cb_im2col_tiles>(
+                    im2col_rm_dfb, im2col_tiles_dfb, block_m_tiles * num_k_blocks);
+            } else if constexpr (!face_direct) {
                 MaybeDeviceZoneScope("compute_tilize");
                 if constexpr (strided_window) {
                     window_tilize<c_in_tiles, cb_im2col_rm, cb_im2col_tiles>(
@@ -499,7 +571,11 @@ void kernel_main() {
                 ckl::InputPolicy::WaitAndPopPerKBlock,
                 ckl::InputPolicy::WaitAndPopPerKBlock,
                 ckl::NoPostCompute,
-                PreKBlockFn>(
+                PreKBlockFn,
+                ckl::NoPostKBlock,
+                /*untilize_block_ct_dim=*/0,
+                ckl::NoKBlockInnerDimFn,
+                CenterTapIn0<center_mode, cb_center_tiles>>(
                 im2col_tiles,
                 weights,
                 output_tiles,
@@ -508,7 +584,10 @@ void kernel_main() {
                 {},
                 pre_k_block,
                 /*in1_per_core_w=*/block_n_tiles,
-                /*out_row_width=*/block_n_tiles);
+                /*out_row_width=*/block_n_tiles,
+                {},
+                {},
+                CenterTapIn0<center_mode, cb_center_tiles>{});
         }
 
         if constexpr (has_bias && !k_split && in0_groups == 1) {
