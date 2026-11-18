@@ -44,14 +44,15 @@ ALWI void rmsnorm_row(
 
     sum.reserve_back(1);
     for (uint32_t g = 0; g < groups; g++) {
-        in.wait_front(group);
+        const uint32_t first = g * group;
+        in.wait_front(first + group);
         squares.reserve_back(group);
         reconfig_data_format(cb.in, cb.in);
         pack_reconfig_data_format(cb.squares);
         mul_init(cb.in, cb.in);
         tile_regs_acquire();
         for (uint32_t i = 0; i < group; i++) {
-            mul_tiles(cb.in, cb.in, i, i, i);
+            mul_tiles(cb.in, cb.in, first + i, first + i, i);
         }
         tile_regs_commit();
         tile_regs_wait();
@@ -60,7 +61,6 @@ ALWI void rmsnorm_row(
         }
         tile_regs_release();
         squares.push_back(group);
-        in.pop_front(group);
 
         squares.wait_front(group);
         reconfig_data_format(cb.scaler, cb.squares);
@@ -102,14 +102,14 @@ ALWI void rmsnorm_row(
 
     rstd.wait_front(1);
     for (uint32_t g = 0; g < groups; g++) {
-        in.wait_front(group);
+        const uint32_t first = g * group;
         scaled.reserve_back(group);
         reconfig_data_format(cb.in, cb.rstd);
         pack_reconfig_data_format(cb.scaled);
         mul_bcast_cols_init(cb.in, cb.rstd);
         tile_regs_acquire();
         for (uint32_t i = 0; i < group; i++) {
-            mul_tiles_bcast_cols(cb.in, cb.rstd, i, 0, i);
+            mul_tiles_bcast_cols(cb.in, cb.rstd, first + i, 0, i);
         }
         tile_regs_commit();
         tile_regs_wait();
@@ -118,7 +118,6 @@ ALWI void rmsnorm_row(
         }
         tile_regs_release();
         scaled.push_back(group);
-        in.pop_front(group);
 
         scaled.wait_front(group);
         weight.wait_front(group);
@@ -141,4 +140,5 @@ ALWI void rmsnorm_row(
         weight.pop_front(group);
     }
     rstd.pop_front(1);
+    in.pop_front(row_tiles);
 }

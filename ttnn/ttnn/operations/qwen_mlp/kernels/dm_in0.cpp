@@ -23,18 +23,20 @@ void kernel_main() {
     chain.valid.set(VALID);
 
     fill_reduce_scaler(noc, CT_ARG("cb_norm_scaler"), tile_bytes);
+    load_norm_weights(noc, w_norm, CT_ARG("cb_norm_weight_cache"), gate_up.in0_row_tiles);
     read_norm_rows(
         noc,
         h,
-        w_norm,
         CT_ARG("cb_norm_in"),
-        CT_ARG("cb_norm_weight"),
         gate_up.in0_row_tiles,
         CT_ARG("norm_chunk"),
         tile_bytes,
         RT_ARG("norm_first_row"),
         CT_ARG("norm_row_stride"),
-        RT_ARG("norm_rows"));
+        RT_ARG("norm_rows"),
+        CT_ARG("cb_norm_weight_cache"),
+        CT_ARG("cb_norm_weight"),
+        CT_ARG("norm_group"));
 
     if (chain.is_injector) {
         wait_group_written(norm_written);

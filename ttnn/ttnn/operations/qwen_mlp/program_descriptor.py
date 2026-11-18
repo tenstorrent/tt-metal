@@ -22,6 +22,7 @@ NORM_CHUNK = 16
 BF16_TILE_BYTES = 2048
 BFP4_TILE_BYTES = 576
 FP32_TILE_BYTES = 4096
+WEIGHT_TILE_BYTES = 128
 
 
 @dataclass(frozen=True)
@@ -60,6 +61,7 @@ CB_DOWN_IN1 = 11
 CB_DOWN_OUT = 12
 CB_DOWN_PARTIAL = 13
 CB_NORM_OUT = 14
+CB_NORM_WEIGHT_CACHE = 15
 
 SEMAPHORES = [
     "in0_sender",
@@ -202,23 +204,33 @@ def create_program_descriptor(h, w_norm, w_gate_up, w_down, n, a, y):
         assert phase.N_core % phase.blocks.N == 0
         assert phase.K_tiles % phase.blocks.K == 0
         assert phase.blocks.M % phase.blocks.sub_h == 0 and phase.blocks.N % phase.blocks.sub_w == 0
-    assert gate_up.in0_block_tiles == down.in0_block_tiles
     assert H_tiles % NORM_CHUNK == 0
 
     cores = ttnn.CoreRangeSet(
         [ttnn.CoreRange(ttnn.CoreCoord(0, FIRST_Y), ttnn.CoreCoord(GRID_X - 1, FIRST_Y + GRID_Y - 1))]
     )
     bf16, bfp4, fp32 = ttnn.bfloat16, ttnn.bfloat4_b, ttnn.float32
+    in0_block_tiles = [phase.in0_block_tiles for phase in phases]
+    norm_in_tiles = H_tiles
+    in0_shares_norm_in = all(norm_in_tiles % tiles == 0 for tiles in in0_block_tiles)
+    assert max(in0_block_tiles) % min(in0_block_tiles) == 0
+    in0_ring_tiles = norm_in_tiles if in0_shares_norm_in else RING_BLOCKS * max(in0_block_tiles)
+    in0_formats = [ttnn.CBFormatDescriptor(buffer_index=CB_IN0, data_format=bf16, page_size=BF16_TILE_BYTES)]
+    norm_in_format = ttnn.CBFormatDescriptor(buffer_index=CB_NORM_IN, data_format=bf16, page_size=BF16_TILE_BYTES)
     cbs = [
-        _cb(CB_IN0, bf16, BF16_TILE_BYTES, RING_BLOCKS * gate_up.in0_block_tiles, cores),
+        ttnn.CBDescriptor(
+            total_size=in0_ring_tiles * BF16_TILE_BYTES,
+            core_ranges=cores,
+            format_descriptors=in0_formats + ([norm_in_format] if in0_shares_norm_in else []),
+        ),
         _cb(CB_GATE_UP_IN1, bfp4, BFP4_TILE_BYTES, RING_BLOCKS * gate_up.in1_block_tiles, cores),
         _cb(CB_GATE_UP_OUT, bf16, BF16_TILE_BYTES, 2 * gate_up.out_block_tiles, cores),
         _cb(CB_GATE_UP_PARTIAL, fp32, FP32_TILE_BYTES, gate_up.partial_block_tiles, cores),
         _cb(CB_DOWN_IN1, bfp4, BFP4_TILE_BYTES, RING_BLOCKS * down.in1_block_tiles, cores),
         _cb(CB_DOWN_OUT, bf16, BF16_TILE_BYTES, 2 * down.out_block_tiles, cores),
         _cb(CB_DOWN_PARTIAL, fp32, FP32_TILE_BYTES, down.partial_block_tiles, cores),
-        _cb(CB_NORM_IN, bf16, BF16_TILE_BYTES, 2 * NORM_CHUNK, cores),
-        _cb(CB_NORM_WEIGHT, bf16, BF16_TILE_BYTES, 2 * NORM_CHUNK, cores),
+        _cb(CB_NORM_WEIGHT, bf16, BF16_TILE_BYTES, 4 * NORM_GROUP, cores),
+        _cb(CB_NORM_WEIGHT_CACHE, bf16, BF16_TILE_BYTES, ceil(H_tiles * WEIGHT_TILE_BYTES / BF16_TILE_BYTES), cores),
         _cb(CB_NORM_SCALER, bf16, BF16_TILE_BYTES, 1, cores),
         _cb(CB_NORM_SQUARES, bf16, BF16_TILE_BYTES, 2 * NORM_GROUP, cores),
         _cb(CB_NORM_SUM, fp32, FP32_TILE_BYTES, 1, cores),
@@ -226,6 +238,8 @@ def create_program_descriptor(h, w_norm, w_gate_up, w_down, n, a, y):
         _cb(CB_NORM_SCALED, bf16, BF16_TILE_BYTES, 2 * NORM_GROUP, cores),
         _cb(CB_NORM_OUT, bf16, BF16_TILE_BYTES, 2 * NORM_GROUP, cores),
     ]
+    if not in0_shares_norm_in:
+        cbs.append(_cb(CB_NORM_IN, bf16, BF16_TILE_BYTES, norm_in_tiles, cores))
     semaphores = [ttnn.SemaphoreDescriptor(id=i, core_ranges=cores, initial_value=0) for i in range(len(SEMAPHORES))]
 
     tensors = dict(zip(TENSORS, [h, w_norm, w_gate_up, w_down, n, a, y]))
@@ -239,6 +253,7 @@ def create_program_descriptor(h, w_norm, w_gate_up, w_down, n, a, y):
         "cb_in0": CB_IN0,
         "cb_norm_in": CB_NORM_IN,
         "cb_norm_weight": CB_NORM_WEIGHT,
+        "cb_norm_weight_cache": CB_NORM_WEIGHT_CACHE,
         "cb_norm_scaler": CB_NORM_SCALER,
         "cb_norm_squares": CB_NORM_SQUARES,
         "cb_norm_sum": CB_NORM_SUM,
