@@ -143,6 +143,16 @@ def test_tilize_with_val_padding(device):
     logger.info(f"Tilized Tensor Padded Shape: {tilized_tensor.padded_shape}")  # Shape([1, 1, 64, 64])
 
 
+def test_tilize_with_zero_padding(device):
+    # Create a ROW_MAJOR tensor whose last two dimensions are not multiples of 32
+    input_tensor = ttnn.rand((1, 1, 50, 70), dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+
+    # Tilize the tensor, padding its last two dimensions with zeros up to multiples of 32
+    tilized_tensor = ttnn.tilize_with_zero_padding(input_tensor)
+    logger.debug(f"Tilized Tensor Shape: {tilized_tensor.shape}")  # Shape([1, 1, 50, 70])
+    logger.debug(f"Tilized Tensor Padded Shape: {tilized_tensor.padded_shape}")  # Shape([1, 1, 64, 96])
+
+
 def test_fill_rm(device):
     # Define tensor dimensions
     N = 2
