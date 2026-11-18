@@ -5,6 +5,7 @@
 #include "tt_metal/fabric/builder/fabric_master_router_selection.hpp"
 
 #include <algorithm>
+#include <bit>
 #include <tuple>
 
 #include <tt_stl/assert.hpp>
@@ -13,24 +14,16 @@ namespace tt::tt_fabric {
 
 namespace {
 
+// The number of live downstreams of a 2D router facing FACING.
 template <eth_chan_directions FACING>
-uint32_t count_live_2d_downstreams(uint32_t downstream_count, bool turns_packets) {
-    constexpr bool east_west = FACING == eth_chan_directions::EAST || FACING == eth_chan_directions::WEST;
-    constexpr auto downstream_directions = Routing2DCodec::fwd_dirs<FACING>();
-
-    const size_t entries = std::min<size_t>(downstream_count, downstream_directions.size());
-    uint32_t live = 0;
-    for (size_t entry = 0; entry < entries; entry++) {
-        const auto name = downstream_directions[entry];
-        const bool is_north_south = name == eth_chan_directions::NORTH || name == eth_chan_directions::SOUTH;
-        if (!(east_west && !turns_packets && is_north_south)) {
-            live++;
-        }
-    }
-    return live;
+uint32_t count_live_2d_downstreams(
+    uint32_t downstream_count, bool is_intermesh_router, bool is_intramesh_router_on_edge) {
+    return static_cast<uint32_t>(std::popcount(
+        Routing2DCodec::live_downstreams<FACING>(downstream_count, is_intermesh_router, is_intramesh_router_on_edge)));
 }
 
-// The number of downstreams a router facing `facing` forwards to on a VC.
+// The number of live downstreams a router facing `facing` forwards to on a VC; `downstream_count` is the size of the
+// router's downstream array for that VC. In 1D, the one downstream, if there is any.
 uint32_t count_live_downstreams(
     eth_chan_directions facing,
     bool is_2d_fabric,
@@ -40,18 +33,22 @@ uint32_t count_live_downstreams(
     if (!is_2d_fabric) {
         return downstream_count > 0 ? 1 : 0;
     }
-    const bool turns_packets = is_intermesh_router || is_intramesh_router_on_edge;
     switch (facing) {
         case eth_chan_directions::EAST:
-            return count_live_2d_downstreams<eth_chan_directions::EAST>(downstream_count, turns_packets);
+            return count_live_2d_downstreams<eth_chan_directions::EAST>(
+                downstream_count, is_intermesh_router, is_intramesh_router_on_edge);
         case eth_chan_directions::WEST:
-            return count_live_2d_downstreams<eth_chan_directions::WEST>(downstream_count, turns_packets);
+            return count_live_2d_downstreams<eth_chan_directions::WEST>(
+                downstream_count, is_intermesh_router, is_intramesh_router_on_edge);
         case eth_chan_directions::NORTH:
-            return count_live_2d_downstreams<eth_chan_directions::NORTH>(downstream_count, turns_packets);
+            return count_live_2d_downstreams<eth_chan_directions::NORTH>(
+                downstream_count, is_intermesh_router, is_intramesh_router_on_edge);
         case eth_chan_directions::SOUTH:
-            return count_live_2d_downstreams<eth_chan_directions::SOUTH>(downstream_count, turns_packets);
+            return count_live_2d_downstreams<eth_chan_directions::SOUTH>(
+                downstream_count, is_intermesh_router, is_intramesh_router_on_edge);
         case eth_chan_directions::Z:
-            return count_live_2d_downstreams<eth_chan_directions::Z>(downstream_count, turns_packets);
+            return count_live_2d_downstreams<eth_chan_directions::Z>(
+                downstream_count, is_intermesh_router, is_intramesh_router_on_edge);
         case eth_chan_directions::COUNT: break;
     }
     TT_THROW("Router facing {} has no downstream order", static_cast<uint32_t>(facing));
@@ -76,6 +73,11 @@ uint32_t count_forwarding_downstreams(const MasterRouterCandidate& candidate) {
 chan_id_t pick_local_handshake_master_router(std::span<const MasterRouterCandidate> candidates) {
     TT_FATAL(!candidates.empty(), "A chip's local handshake master is chosen from at least one router");
 
+    // Smaller sorts first, so the smallest router is the minimum. The three keys, in order:
+    // 1. Whether the router is an intramesh router on an exit chip (false first): its decode also checks for leaving
+    //    the mesh, which makes its kernel larger.
+    // 2. How many forwarding downstreams it has: each one adds a copy of the forwarding code.
+    // 3. The eth channel, so that routers tied on the first two give the lowest channel.
     const auto size_order = [](const MasterRouterCandidate& candidate) {
         return std::make_tuple(
             candidate.is_intramesh_router_on_edge, count_forwarding_downstreams(candidate), candidate.eth_chan);
@@ -83,11 +85,6 @@ chan_id_t pick_local_handshake_master_router(std::span<const MasterRouterCandida
 
     const auto smallest = std::min_element(
         candidates.begin(), candidates.end(), [&](const MasterRouterCandidate& a, const MasterRouterCandidate& b) {
-            // Two step comparison:
-            // 1. Is the router an intramesh edge router? If so, it has a larger kernel due to the extra checks
-            // for leaving the mesh.
-            // 2. Which router has the fewest forwarding downstreams? Routers with fewer downstreams have less instances
-            // of code for forwarding packets.
             return size_order(a) < size_order(b);
         });
     return smallest->eth_chan;

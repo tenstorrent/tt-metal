@@ -427,6 +427,29 @@ struct Routing2DCodec {
         }
     }
 
+    // The live downstreams of a 2D router facing MY_DIR on one VC, as a mask with bit d set for direction d (an
+    // action bit). `entry_count` is the size of its downstream array on that VC (the first entries of fwd_dirs). Every
+    // entry is live except, on an E/W-facing router that does not turn packets, the N and S ones. A router turns
+    // packets when it is an intermesh router (a landing decodes Y first) or an intramesh router on an exit chip (a
+    // packet may leave the mesh in any direction); any other E/W router decodes Y first and never turns one onto N/S.
+    template <eth_chan_directions MY_DIR>
+    static constexpr std::uint32_t live_downstreams(
+        std::size_t entry_count, bool is_intermesh_router, bool is_intramesh_router_on_edge) {
+        const bool turns_packets = is_intermesh_router || is_intramesh_router_on_edge;
+        constexpr bool east_west = MY_DIR == eth_chan_directions::EAST || MY_DIR == eth_chan_directions::WEST;
+        constexpr auto directions = fwd_dirs<MY_DIR>();
+        std::uint32_t live = 0;
+        for (std::size_t entry = 0; entry < entry_count && entry < directions.size(); entry++) {
+            const auto direction = directions[entry];
+            const bool is_north_south =
+                direction == eth_chan_directions::NORTH || direction == eth_chan_directions::SOUTH;
+            if (!(east_west && !turns_packets && is_north_south)) {
+                live |= 1u << static_cast<std::uint32_t>(direction);
+            }
+        }
+        return live;
+    }
+
     // This chip is the mesh's exit when the maps say deliver here but the final mesh is elsewhere.
     // Both halves matter: mesh-id inequality alone also matches packets merely transiting the chip.
     static bool action_is_intermesh_exit(std::uint8_t action, std::uint16_t dst_mesh_id, std::uint16_t my_mesh_id) {
