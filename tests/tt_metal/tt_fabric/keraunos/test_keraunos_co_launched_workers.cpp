@@ -15,7 +15,6 @@
 #include <fmt/format.h>
 
 #include <algorithm>
-#include <array>
 #include <chrono>
 #include <cstdint>
 #include <random>
@@ -28,6 +27,7 @@
 #include <tt-metalium/experimental/fabric/fabric.hpp>
 
 #include "fabric_fixture.hpp"
+#include "hostdev/eth_link.h"
 #include "impl/context/metal_context.hpp"
 #include "impl/program/program_impl.hpp"
 #include "tt_metal/fabric/erisc_datamover_builder.hpp"
