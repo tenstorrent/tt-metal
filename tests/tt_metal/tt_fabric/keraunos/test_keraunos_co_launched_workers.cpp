@@ -17,6 +17,7 @@
 #include <fmt/ranges.h>
 
 #include <algorithm>
+#include <array>
 #include <chrono>
 #include <cstdint>
 #include <map>
@@ -33,6 +34,7 @@
 
 #include "fabric_fixture.hpp"
 #include "hostdev/eth_link.h"
+#include "internal/tt-2xx/quasar/dev_mem_map.h"
 #include "impl/context/metal_context.hpp"
 #include "impl/kernels/kernel.hpp"
 #include "impl/program/program_impl.hpp"
@@ -202,14 +204,35 @@ void add_line_workers(
 }
 
 // A router whose link record the extension set to the NOC kind, and the record as the extension found it.
-struct NocRouter {
+// A fabric router as the extension prepared it: its record as found, whether its link is on the NOC, and whether it
+// sends the line's traffic on that link, toward the line's last chip.
+struct PreparedRouter {
     ChipId chip;
     CoreCoord virtual_core;
     EthLink as_found;
+    bool noc;
+    bool downstream;
 };
+
+// The router's 8-byte staging word of each Ethernet TX queue: a single-word send on a NOC link goes through them, a
+// send on an Ethernet link never touches them (eth_cce_send.h send_dword).
+constexpr uint32_t kNocStageWords = MEM_IERISC_FABRIC_NOC_DWORD_STAGE_SIZE / sizeof(uint64_t);
+using NocStage = std::array<uint64_t, kNocStageWords>;
 
 uint64_t eth_link_address() {
     return MetalContext::instance().hal().get_dev_addr(HalProgrammableCoreType::ACTIVE_ETH, HalL1MemAddrType::ETH_LINK);
+}
+
+// The staging words sit directly after the link record (dev_mem_map.h); the HAL has no entry for them.
+uint64_t noc_stage_address() {
+    const uint64_t address = eth_link_address() + MetalContext::instance().hal().get_dev_size(
+                                                      HalProgrammableCoreType::ACTIVE_ETH, HalL1MemAddrType::ETH_LINK);
+    TT_FATAL(
+        address == MEM_IERISC_FABRIC_NOC_DWORD_STAGE_BASE,
+        "NOC staging words at {:#x} after the HAL's link record, {:#x} in dev_mem_map.h",
+        address,
+        MEM_IERISC_FABRIC_NOC_DWORD_STAGE_BASE);
+    return address;
 }
 
 EthLink read_eth_link(ChipId chip, const CoreCoord& virtual_core) {
@@ -219,30 +242,39 @@ EthLink read_eth_link(ChipId chip, const CoreCoord& virtual_core) {
     return link;
 }
 
-// Sets the NOC kind in the record of every fabric router of `chip` whose link is in `noc_links`, and returns those
-// routers. Called from the extension under std::call_once, after device init wrote the records and before any device
-// is configured (PLAN-0008 § Where the Phase 1 test writes `kind`, hub 62db7e799795-D8).
-std::vector<NocRouter> set_noc_links(ChipId chip, const NocLinks& noc_links) {
+NocStage read_noc_stage(ChipId chip, const CoreCoord& virtual_core) {
+    NocStage stage{};
+    MetalContext::instance().get_cluster().read_core(
+        stage.data(), sizeof(stage), tt_cxy_pair(chip, virtual_core), noc_stage_address());
+    return stage;
+}
+
+// Zeroes the NOC staging words of every fabric router of `chip`, sets the NOC kind in the record of each whose link is
+// in `noc_links`, and returns them all. Called from the extension under std::call_once, after device init wrote the
+// records and before any device is configured (PLAN-0008 § Where the Phase 1 test writes `kind`, hub
+// 62db7e799795-D8).
+std::vector<PreparedRouter> prepare_routers(ChipId chip, const NocLinks& noc_links) {
     const auto& control_plane = MetalContext::instance().get_control_plane();
     const auto& cluster = MetalContext::instance().get_cluster();
     const FabricNodeId node = control_plane.get_fabric_node_id_from_physical_chip_id(chip);
-    std::vector<NocRouter> routers;
+    const NocStage zeros{};
+    std::vector<PreparedRouter> routers;
     for (const auto& [chan, direction] : control_plane.get_active_fabric_eth_channels(node)) {
         const FabricNodeId peer = control_plane.get_connected_mesh_chip_chan_ids(node, chan).first;
         const bool noc = std::any_of(noc_links.begin(), noc_links.end(), [&](const auto& link) {
             return (link.first == node.chip_id && link.second == peer.chip_id) ||
                    (link.second == node.chip_id && link.first == peer.chip_id);
         });
-        if (!noc) {
-            continue;
-        }
         const CoreCoord logical = cluster.get_soc_desc(chip).get_eth_core_for_channel(chan, tt::CoordSystem::LOGICAL);
         const CoreCoord virtual_core =
             cluster.get_virtual_coordinate_from_logical_coordinates(chip, logical, CoreType::ETH);
-        NocRouter router{chip, virtual_core, read_eth_link(chip, virtual_core)};
-        EthLink record = router.as_found;
-        record.kind = ETH_LINK_KIND_NOC;
-        cluster.write_core_immediate(&record, sizeof(record), tt_cxy_pair(chip, virtual_core), eth_link_address());
+        PreparedRouter router{chip, virtual_core, read_eth_link(chip, virtual_core), noc, peer.chip_id > node.chip_id};
+        cluster.write_core_immediate(zeros.data(), sizeof(zeros), tt_cxy_pair(chip, virtual_core), noc_stage_address());
+        if (noc) {
+            EthLink record = router.as_found;
+            record.kind = ETH_LINK_KIND_NOC;
+            cluster.write_core_immediate(&record, sizeof(record), tt_cxy_pair(chip, virtual_core), eth_link_address());
+        }
         routers.push_back(router);
     }
     return routers;
@@ -396,22 +428,22 @@ void KeraunosCoLaunchedWorkers::run_line_unicast(const NocLinks& noc_links) {
 
     std::mutex programs_mutex;
     std::map<ChipId, tt::tt_metal::Program*> programs;
-    std::vector<NocRouter> noc_routers;
-    std::once_flag noc_links_written;
+    std::vector<PreparedRouter> prepared;
+    std::once_flag routers_prepared;
     set_fabric_program_extension([&](tt::tt_metal::IDevice* device, tt::tt_metal::Program& program) {
         add_line_workers(device, program, nonce, seed);
-        // Every call waits here, so the records of every chip are written before the first device is configured. A
-        // throw lets a waiting call rerun the write, which can append duplicate entries to noc_routers.
-        std::call_once(noc_links_written, [&] {
+        // Every call waits here, so the records and staging words of every chip are written before the first device
+        // is configured. A throw lets a waiting call rerun the write, which can append duplicate entries to prepared.
+        std::call_once(routers_prepared, [&] {
             if (is_mock()) {
                 return;
             }
             const auto& control_plane = MetalContext::instance().get_control_plane();
             const MeshId mesh = control_plane.get_fabric_node_id_from_physical_chip_id(0).mesh_id;
             for (uint32_t i = 0; i < num_chips; ++i) {
-                const auto routers = set_noc_links(
+                const auto routers = prepare_routers(
                     control_plane.get_physical_chip_id_from_fabric_node_id(FabricNodeId(mesh, i)), noc_links);
-                noc_routers.insert(noc_routers.end(), routers.begin(), routers.end());
+                prepared.insert(prepared.end(), routers.begin(), routers.end());
             }
         });
         const std::scoped_lock lock(programs_mutex);
@@ -448,26 +480,39 @@ void KeraunosCoLaunchedWorkers::run_line_unicast(const NocLinks& noc_links) {
                         "nothing launches.";
     }
 
+    // Fabric is up, so this run launched every router, and none has been told to terminate. A router's status word
+    // survives from the case before on the same server, so TERMINATED here is that case's, and without this check the
+    // TERMINATED after close below could be too.
+    const auto routers = all_routers();
+    for (const auto& router : routers) {
+        EXPECT_NE(read_edm_status(router), static_cast<uint32_t>(tt::tt_fabric::EDMStatus::TERMINATED))
+            << "chip " << router.chip << " router " << router.logical.str() << " reads TERMINATED as fabric comes up";
+    }
+
     // Each record the extension set was valid when it found it, so device init had written it, and still holds the NOC
     // kind after launch. Every other record holds the Ethernet kind device init writes today. One router per end of
     // each chosen link: the mesh descriptors have one channel between neighbours.
-    EXPECT_EQ(noc_routers.size(), 2 * noc_links.size());
-    for (const auto& router : all_routers()) {
-        const auto noc = std::find_if(noc_routers.begin(), noc_routers.end(), [&](const NocRouter& r) {
+    ASSERT_EQ(prepared.size(), routers.size()) << "the extension did not prepare every router";
+    EXPECT_EQ(
+        static_cast<size_t>(std::count_if(prepared.begin(), prepared.end(), [](const auto& r) { return r.noc; })),
+        2 * noc_links.size());
+    const auto prepared_router = [&](const BaseFabricFixture::MasterRouter& router) {
+        const auto it = std::find_if(prepared.begin(), prepared.end(), [&](const PreparedRouter& r) {
             return r.chip == router.chip && r.virtual_core == router.virtual_core;
         });
+        TT_FATAL(it != prepared.end(), "chip {} router {} was not prepared", router.chip, router.logical.str());
+        return *it;
+    };
+    for (const auto& router : routers) {
+        const PreparedRouter& prep = prepared_router(router);
         const EthLink now = read_eth_link(router.chip, router.virtual_core);
         const std::string where = fmt::format("chip {} router {}", router.chip, router.logical.str());
         log_info(
             tt::LogTest, "{} link record peer_tile {} valid {:#x} kind {}", where, now.peer_tile, now.valid, now.kind);
         EXPECT_EQ(now.valid, ETH_LINK_VALID) << where;
-        if (noc == noc_routers.end()) {
-            EXPECT_EQ(now.kind, ETH_LINK_KIND_ETHERNET) << where;
-            continue;
-        }
-        EXPECT_EQ(noc->as_found.valid, ETH_LINK_VALID) << where;
-        EXPECT_EQ(noc->as_found.kind, ETH_LINK_KIND_ETHERNET) << where;
-        EXPECT_EQ(now.kind, ETH_LINK_KIND_NOC) << where;
+        EXPECT_EQ(prep.as_found.valid, ETH_LINK_VALID) << where;
+        EXPECT_EQ(prep.as_found.kind, ETH_LINK_KIND_ETHERNET) << where;
+        EXPECT_EQ(now.kind, prep.noc ? ETH_LINK_KIND_NOC : ETH_LINK_KIND_ETHERNET) << where;
     }
 
     const auto deadline = std::chrono::steady_clock::now() + kTimeout;
@@ -479,7 +524,23 @@ void KeraunosCoLaunchedWorkers::run_line_unicast(const NocLinks& noc_links) {
         EXPECT_EQ(bytes_of(results), expected_bytes) << role;
     }
 
-    const auto routers = all_routers();
+    // The path each link took (PLAN-0008 § What 1c showed). The extension zeroed every staging word before launch. A
+    // router on an Ethernet link never writes them. A router that sends the line's packets on a NOC link stages one
+    // word a packet, and one word then holds the packet count. Whether the router at the other end of a NOC link
+    // returns its credits through a staging word is not established, so its words are logged, not asserted.
+    for (const auto& router : routers) {
+        const PreparedRouter& prep = prepared_router(router);
+        const NocStage stage = read_noc_stage(router.chip, router.virtual_core);
+        const std::string where = fmt::format("chip {} router {}", router.chip, router.logical.str());
+        log_info(tt::LogTest, "{} NOC staging words {:#x}", where, fmt::join(stage, " "));
+        if (!prep.noc) {
+            EXPECT_EQ(stage, NocStage{}) << where << ": Ethernet link, yet a staging word was written";
+        } else if (prep.downstream) {
+            EXPECT_EQ(*std::max_element(stage.begin(), stage.end()), uint64_t{kNumPackets})
+                << where << ": sends the line's " << kNumPackets << " packets on a NOC link";
+        }
+    }
+
     DoTearDownTestSuite();
     for (const auto& router : routers) {
         EXPECT_EQ(
