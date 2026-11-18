@@ -131,7 +131,11 @@ uint32_t get_cpu_core_for_physical_device(ContextId context_id, uint32_t physica
                 num_devices);
         });
     }
-    static std::unordered_map<int, int> logical_cpu_id_per_numa_node = {};
+    static std::unordered_map<int, size_t> next_cpu_per_numa_node = {};
+    // Workers placed per CPU. A node with no allowed CPU takes CPUs from the allowed ones, which other nodes' lists
+    // hold too, so each pick is the least-used CPU of the list: its workers then avoid the CPUs other nodes' workers
+    // took.
+    static std::unordered_map<uint32_t, uint32_t> workers_per_cpu = {};
     // Initialize to an invalid value. Determine the NUMA Node based on the physical device id.
     // If a NUMA Node is not found, use a round robin policy.
     int numa_node = -1;
@@ -154,8 +158,22 @@ uint32_t get_cpu_core_for_physical_device(ContextId context_id, uint32_t physica
                         : physical_device_id % 2;
     }
     if (cpu_cores_per_numa_node.contains(numa_node)) {
-        auto& cpu_cores_on_node = cpu_cores_per_numa_node[numa_node];
-        return cpu_cores_on_node[(logical_cpu_id_per_numa_node[numa_node]++) % cpu_cores_on_node.size()];
+        const auto& cpu_cores_on_node = cpu_cores_per_numa_node[numa_node];
+        uint32_t least_used = UINT32_MAX;
+        for (const uint32_t cpu : cpu_cores_on_node) {
+            least_used = std::min(least_used, workers_per_cpu[cpu]);
+        }
+        // Round robin over the node's CPUs, skipping those with more workers than the least-used one.
+        size_t& next = next_cpu_per_numa_node[numa_node];
+        for (size_t i = 0;; i++) {
+            const size_t index = (next + i) % cpu_cores_on_node.size();
+            const uint32_t cpu = cpu_cores_on_node[index];
+            if (workers_per_cpu[cpu] == least_used) {
+                next = index + 1;
+                workers_per_cpu[cpu]++;
+                return cpu;
+            }
+        }
     }
     if (!allowed_cpus.empty()) {
         return allowed_cpus[physical_device_id % allowed_cpus.size()];
