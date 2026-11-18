@@ -1806,7 +1806,7 @@ def test_async_rollout_client_shuts_down_at_exit(monkeypatch):
     assert bridge.closed and queue_.closed
 
 
-class _RendezvousContext(_LoopbackContext):
+class _BlockingSendContext(_LoopbackContext):
     """A _LoopbackContext whose send returns only once the peer has received the message, as MPI_Send may."""
 
     def send(self, data, dest, tag):
@@ -1861,8 +1861,8 @@ def _finishes(fn, timeout_s=10.0):
 
 
 @pytest.fixture(params=[1, 3], ids=["capacity1", "capacity3"])
-def async_rollout_over_rendezvous(request, monkeypatch):
-    """The real AsyncRolloutClient and AsyncRolloutServer over rendezvous sends; the server serves in a thread.
+def async_rollout_over_blocking_sends(request, monkeypatch):
+    """The real AsyncRolloutClient and AsyncRolloutServer over blocking sends; the server serves in a thread.
 
     Returns (client, sampler, server thread) once both local rollout queues are full of version-0 batches.
     """
@@ -1889,9 +1889,9 @@ def async_rollout_over_rendezvous(request, monkeypatch):
         monkeypatch.setattr(module, "exit_on_error", record_errors)
     bridge_queues, rollout_queues = collections.defaultdict(queue.Queue), collections.defaultdict(queue.Queue)
     monkeypatch.setattr(
-        threaded_weight_bridge, "duplicate_distributed_context", lambda: _RendezvousContext(bridge_queues)
+        threaded_weight_bridge, "duplicate_distributed_context", lambda: _BlockingSendContext(bridge_queues)
     )
-    monkeypatch.setattr(rollout_queue, "duplicate_distributed_context", lambda: _RendezvousContext(rollout_queues))
+    monkeypatch.setattr(rollout_queue, "duplicate_distributed_context", lambda: _BlockingSendContext(rollout_queues))
     monkeypatch.setattr(
         async_rollout,
         "_require_distributed_context",
@@ -1936,8 +1936,10 @@ def _queue_full_warnings(caplog):
     ]
 
 
-def test_async_rollout_weight_pushes_continue_while_the_rollout_queue_is_full(async_rollout_over_rendezvous, caplog):
-    client, sampler, server_thread = async_rollout_over_rendezvous
+def test_async_rollout_weight_pushes_continue_while_the_rollout_queue_is_full(
+    async_rollout_over_blocking_sends, caplog
+):
+    client, sampler, server_thread = async_rollout_over_blocking_sends
 
     def push_versions_1_to_3():
         for version in (1, 2, 3):
@@ -1957,9 +1959,9 @@ def test_async_rollout_weight_pushes_continue_while_the_rollout_queue_is_full(as
 
 
 def test_async_rollout_shuts_down_with_a_weight_push_in_flight_and_a_full_rollout_queue(
-    async_rollout_over_rendezvous,
+    async_rollout_over_blocking_sends,
 ):
-    client, sampler, server_thread = async_rollout_over_rendezvous
+    client, sampler, server_thread = async_rollout_over_blocking_sends
     client.send_weights({"w": _HostPad([1])}, version=1)
     client.send_weights({"w": _HostPad([1])}, version=2)
     assert _finishes(client.shutdown)
@@ -1970,9 +1972,9 @@ def test_async_rollout_shuts_down_with_a_weight_push_in_flight_and_a_full_rollou
 
 @pytest.mark.parametrize("weight_sync_every, num_iterations, max_staleness", [(1, 1, 2), (2, 2, 4)])
 def test_async_remote_source_trains_every_batch_over_a_full_rollout_queue(
-    monkeypatch, async_rollout_over_rendezvous, weight_sync_every, num_iterations, max_staleness
+    monkeypatch, async_rollout_over_blocking_sends, weight_sync_every, num_iterations, max_staleness
 ):
-    client, sampler, _ = async_rollout_over_rendezvous
+    client, sampler, _ = async_rollout_over_blocking_sends
 
     def slow_copy(host, pad, cq_id):
         time.sleep(0.3)
