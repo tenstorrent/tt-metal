@@ -297,9 +297,10 @@ def _topk_agreement(dev: torch.Tensor, gold: torch.Tensor, start: int) -> float:
         # The GLM-5.3 dev / numerics layout (``glm_prefill_sp8_tp4``): SP 8 x TP 4, 16 heads per chip for the
         # projections. ttMLA is built directly here (no ``resolve_layout``), so the TP32 fail-fast does not apply.
         pytest.param((8, 4), torus_xy_device_params(l1_small_size=L1_SMALL), 0, id="sp8xtp4"),
-        # The TP32 layout's head split (``tp32``, SC1 #65884 / #65885): 8 heads per chip over the mesh's 8-chip axis
-        # (TP on axis 0 of the physical 8x4 torus; a logical (4, 8) view over the 8x4 fabric descriptor hangs in the
-        # TP all-to-all). The other axis carries sequence (ttMLA's SP x TP), not SC1's 2D-TP hidden split (#65885).
+        # 8 heads per chip, TP32's per-chip head count (#65884), in ttMLA's 1D form: TP 8 on axis 0 of the physical
+        # 8x4 torus (a logical (4, 8) view over the 8x4 fabric descriptor hangs in the TP all-to-all), sequence on
+        # the 4-chip axis 1. It is not the tp32 layout, which keeps the sequence on axis 0 with the heads and splits
+        # the hidden over axis 1 (2D TP, ttMLA2DTP, #65885); it covers ttMLA with SP on mesh axis 1.
         pytest.param((8, 4), torus_xy_device_params(l1_small_size=L1_SMALL), 1, id="sp4xtp8"),
     ],
     indirect=["mesh_device", "device_params"],
