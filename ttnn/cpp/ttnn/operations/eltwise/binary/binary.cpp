@@ -735,6 +735,40 @@ inline auto invoke_binary_ng_impl(
             }
         }
     }
+    const std::optional<DataType> requested_dtype =
+        output_preallocated ? std::optional<DataType>{output->dtype()} : std::optional<DataType>{dtype};
+    const bool widen_uint16 = [&] {
+        using enum operations::binary::BinaryOpType;
+        switch (binary_op_type) {
+            case ADD:
+            case SUB:
+            case MUL:
+            case EQ:
+            case NE:
+            case GT:
+            case GE:
+            case LT:
+            case LE:
+            case LOGICAL_AND:
+            case LOGICAL_OR:
+            case LOGICAL_XOR:
+            case MAXIMUM:
+            case MINIMUM: return true;
+            default: return false;
+        }
+    }();
+    if (widen_uint16 && a_dtype == DataType::UINT16 && b_dtype == DataType::UINT16 && requested_dtype.has_value() &&
+        (is_32bit_int(*requested_dtype) || *requested_dtype == DataType::FLOAT32)) {
+        const bool unsigned_result =
+            *requested_dtype == DataType::UINT32 ||
+            (*requested_dtype == DataType::FLOAT32 && (binary_op_type == operations::binary::BinaryOpType::MUL ||
+                                                       binary_op_type == operations::binary::BinaryOpType::ADD));
+        const auto wide = unsigned_result ? DataType::UINT32 : DataType::INT32;
+        lhs_promoted = ttnn::typecast(lhs, wide);
+        if constexpr (requires { rhs.dtype(); }) {
+            rhs_promoted = ttnn::typecast(rhs, wide);
+        }
+    }
     const Tensor& lhs_eff = lhs_promoted.has_value() ? *lhs_promoted : lhs;
     decltype(auto) rhs_eff = [&]() -> decltype(auto) {
         if constexpr (requires { rhs.dtype(); }) {
@@ -772,15 +806,15 @@ inline auto invoke_binary_ng_impl(
     // ends with isclose's rtol/atol/equal_nan, the scalar one with scalar_is_lhs. No single call
     // can satisfy both, and while these were two separate call sites the flag was passed on one and
     // forgotten on the other. This lambda is the only place either overload is invoked.
-    auto dispatch = [&](const auto& a, const auto& b) {
+    auto dispatch = [&](const auto& a, const auto& b, DataType dt, const std::optional<Tensor>& out) {
         if constexpr (requires { b.dtype(); }) {
             return ttnn::prim::binary_ng(
                 a,
                 b,
                 binary_op_type,
-                out_dtype,
+                dt,
                 memory_config,
-                output,
+                out,
                 fast_and_approximate_mode,
                 lhs_activations,
                 rhs_activations,
@@ -793,9 +827,9 @@ inline auto invoke_binary_ng_impl(
                 a,
                 b,
                 binary_op_type,
-                out_dtype,
+                dt,
                 memory_config,
-                output,
+                out,
                 fast_and_approximate_mode,
                 lhs_activations,
                 rhs_activations,
@@ -809,13 +843,40 @@ inline auto invoke_binary_ng_impl(
 
     if (input_a_rm and input_b_rm and not input_a_sharded and not input_b_sharded) {
         // is_layout_or_scalar reports a scalar as row-major, so a scalar first operand reaches here too.
-        return dispatch(lhs_eff, rhs_eff);
+        return dispatch(lhs_eff, rhs_eff, out_dtype, output);
     }
     // Either one or both are tiles
     const auto input_a = operations::binary::detail::to_layout(lhs_eff, Layout::TILE, sub_core_grids);
     const auto input_b = operations::binary::detail::to_layout(rhs_eff, Layout::TILE, sub_core_grids);
 
-    auto result = dispatch(input_a, input_b);
+    std::optional<Tensor> repadded;
+    if (binary_op_type == operations::binary::BinaryOpType::DIV &&
+        operations::binary::detail::is_block_format(out_dtype) && !sub_core_grids.has_value() &&
+        !sub_device_id.has_value() && !input_a.is_sharded() &&
+        !(memory_config.has_value() && memory_config->is_sharded()) && !(output.has_value() && output->is_sharded())) {
+        std::optional<DataType> wide;
+        if constexpr (requires { rhs.dtype(); }) {
+            const auto rhs_width = rhs_eff.logical_shape()[-1];
+            if (!input_b.is_sharded() && rhs_width % tt::constants::FACE_WIDTH != 0 &&
+                (rhs_width != 1 || lhs_eff.logical_shape()[-1] == 1)) {
+                wide = lhs_eff.dtype() == DataType::FLOAT32 || rhs_eff.dtype() == DataType::FLOAT32
+                           ? DataType::FLOAT32
+                           : DataType::BFLOAT16;
+            }
+        } else {
+            if (scalar_is_lhs && lhs_eff.logical_shape()[-1] % tt::constants::FACE_WIDTH != 0) {
+                wide = lhs_eff.dtype() == DataType::FLOAT32 ? DataType::FLOAT32 : DataType::BFLOAT16;
+            }
+        }
+        if (wide.has_value()) {
+            repadded = ttnn::typecast(
+                ttnn::fill_implicit_tile_padding(dispatch(input_a, input_b, *wide, std::nullopt), 0.0f),
+                out_dtype,
+                memory_config,
+                output);
+        }
+    }
+    auto result = repadded.has_value() ? *repadded : dispatch(input_a, input_b, out_dtype, output);
 
     // if both inputs are in row major, convert the output to row major
     // since there's no consensus here, avoiding the conversion if we have an excuse to is likely the best option
@@ -1353,6 +1414,92 @@ Tensor divide_(
         sub_core_grids,
         sub_device_id);
 }
+namespace {
+
+// Fused SFPU ops for multiply(activation(gate), up), one row per op, board and form of the activation's call.
+struct FusedActivationRoute {
+    operations::unary::UnaryOpType gate_activation;
+    // The activation's one parameter, where it selects a mode of the same function (GELU_TANH's fast form); none
+    // for the plain call.
+    std::optional<float> gate_parameter;
+    operations::binary::BinaryOpType op;
+    tt::ARCH arch;
+};
+
+constexpr std::array fused_activation_routes{
+    FusedActivationRoute{
+        operations::unary::UnaryOpType::GELU_TANH,
+        std::nullopt,
+        operations::binary::BinaryOpType::GEGLU_TANH,
+        tt::ARCH::BLACKHOLE},
+    FusedActivationRoute{
+        operations::unary::UnaryOpType::GELU_TANH,
+        0.0f,
+        operations::binary::BinaryOpType::GEGLU_TANH,
+        tt::ARCH::BLACKHOLE},
+    FusedActivationRoute{
+        operations::unary::UnaryOpType::GELU_TANH,
+        1.0f,
+        operations::binary::BinaryOpType::GEGLU_TANH,
+        tt::ARCH::BLACKHOLE},
+};
+
+struct FusedActivationOperands {
+    operations::binary::BinaryOpType op;
+    bool lhs_is_gate;
+};
+
+std::optional<FusedActivationOperands> fused_activation_operands(
+    const Tensor& lhs,
+    const Tensor& rhs,
+    const std::optional<const DataType>& output_dtype,
+    const std::optional<MemoryConfig>& memory_config,
+    const std::optional<Tensor>& output,
+    ttsl::Span<const operations::unary::EltwiseUnaryWithParam> post_activations,
+    ttsl::Span<const operations::unary::EltwiseUnaryWithParam> lhs_activations,
+    ttsl::Span<const operations::unary::EltwiseUnaryWithParam> rhs_activations,
+    const std::optional<bool>& fast_and_approximate_mode) {
+    // The kernels read BF16 data in DEST: BFLOAT16 tiles, and BFLOAT8_B tiles, which unpack to BF16. The packer
+    // stores the BF16 result in either.
+    const auto bf16_dest = [](DataType dtype) { return dtype == DataType::BFLOAT16 || dtype == DataType::BFLOAT8_B; };
+    if (lhs.device() == nullptr || lhs.dtype() != rhs.dtype() || !bf16_dest(lhs.dtype()) ||
+        !bf16_dest(output_dtype.value_or(lhs.dtype())) || output.has_value() || !post_activations.empty() ||
+        fast_and_approximate_mode.value_or(false)) {
+        return std::nullopt;
+    }
+    const auto arch = lhs.device()->arch();
+    const auto routed = [arch](
+                            ttsl::Span<const operations::unary::EltwiseUnaryWithParam> gate,
+                            ttsl::Span<const operations::unary::EltwiseUnaryWithParam> up)
+        -> std::optional<operations::binary::BinaryOpType> {
+        if (gate.size() != 1 || !up.empty()) {
+            return std::nullopt;
+        }
+        const auto parameters = gate[0].get_params_if<float>();
+        for (const auto& route : fused_activation_routes) {
+            const bool same_call = route.gate_parameter.has_value()
+                                       ? parameters.size() == 1 && parameters[0] == *route.gate_parameter
+                                       : !gate[0].has_parameter();
+            if (route.gate_activation == gate[0].type() && route.arch == arch && same_call) {
+                return route.op;
+            }
+        }
+        return std::nullopt;
+    };
+    if (const auto op = routed(lhs_activations, rhs_activations)) {
+        return FusedActivationOperands{*op, true};
+    }
+    // Operand A sets the output's placement when memory_config is unset, so the swapped order needs equal ones.
+    if (memory_config.has_value() || lhs.memory_config() == rhs.memory_config()) {
+        if (const auto op = routed(rhs_activations, lhs_activations)) {
+            return FusedActivationOperands{*op, false};
+        }
+    }
+    return std::nullopt;
+}
+
+}  // namespace
+
 Tensor multiply(
     const Tensor& lhs,
     const Tensor& rhs,
@@ -1365,6 +1512,30 @@ Tensor multiply(
     const std::optional<bool>& fast_and_approximate_mode,
     const std::optional<CoreRangeSet>& sub_core_grids,
     const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id) {
+    if (const auto fused = fused_activation_operands(
+            lhs,
+            rhs,
+            output_dtype,
+            memory_config,
+            output,
+            post_activations,
+            lhs_activations,
+            rhs_activations,
+            fast_and_approximate_mode)) {
+        return ttnn::detail::invoke_binary_ng(
+            fused->lhs_is_gate ? lhs : rhs,
+            fused->lhs_is_gate ? rhs : lhs,
+            fused->op,
+            output_dtype,
+            memory_config,
+            std::nullopt,
+            {},
+            {},
+            {},
+            std::nullopt,
+            sub_core_grids,
+            sub_device_id);
+    }
     bool is_block_fmt_inp = (is_block_float(lhs.dtype()) || is_block_float(rhs.dtype()));
     bool fast_and_approx = is_block_fmt_inp ? true : fast_and_approximate_mode.value_or(false);
     return ttnn::detail::invoke_binary_ng(
