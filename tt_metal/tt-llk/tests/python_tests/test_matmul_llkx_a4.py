@@ -23,7 +23,9 @@ _prev = _t.get_golden_generator
 def _golden(op1, op2, out_fmt, fidelity, **k):
     if out_fmt not in _QUANT:
         return _prev(_t.MatmulGolden)(op1, op2, out_fmt, fidelity, **k)
-    return _QUANT[out_fmt](_prev(_t.MatmulGolden)(op1, op2, DataFormat.Float16, fidelity, **k))
+    return _QUANT[out_fmt](
+        _prev(_t.MatmulGolden)(op1, op2, DataFormat.Float16, fidelity, **k)
+    )
 
 
 _t.get_golden_generator = lambda cls: _golden if cls is _t.MatmulGolden else _prev(cls)
@@ -32,7 +34,8 @@ _passed_prev = _t.passed_test
 
 def _passed(golden, res, fmt, *a, **k):
     """Sums of three K tiles of [0, 1) stimuli sit in one binade a few Bfp4 steps wide, where two valid quantisations correlate at about 0.94:
-    the block lattice compare (one step per 16 datums) carries the check, as the PCC floor of Bfp2 does."""
+    the block lattice compare (one step per 16 datums) carries the check, as the PCC floor of Bfp2 does.
+    """
     if fmt == DataFormat.Bfp4:
         k.setdefault("custom_pcc_threshold", 0.9)
     return _passed_prev(golden, res, fmt, *a, **k)
@@ -50,7 +53,21 @@ def _cases():
                     for sy in "HF":
                         fi = _a4._FIDS[_a4._hash("g4" + a + b + o + acc + sy) % 4]
                         for rt, ct, kt in ((1, 2, 1), (2, 2, 3)):
-                            out.append((a, b, o, acc, sy, getattr(MathFidelity, fi), 32, 32, rt, ct, kt))
+                            out.append(
+                                (
+                                    a,
+                                    b,
+                                    o,
+                                    acc,
+                                    sy,
+                                    getattr(MathFidelity, fi),
+                                    32,
+                                    32,
+                                    rt,
+                                    ct,
+                                    kt,
+                                )
+                            )
     return out
 
 
@@ -74,7 +91,8 @@ def _marks(c):
         pytest.param(
             c,
             marks=_marks(c),
-            id="in1fmt_%s_in0fmt_%s_out_%s_acc_%s_sync_%s_%s_%dx%dx%d" % (c[0], c[1], c[2], c[3], c[4], c[5].name, c[8], c[9], c[10]),
+            id="in1fmt_%s_in0fmt_%s_out_%s_acc_%s_sync_%s_%s_%dx%dx%d"
+            % (c[0], c[1], c[2], c[3], c[4], c[5].name, c[8], c[9], c[10]),
         )
         for c in _cases()
     ],
