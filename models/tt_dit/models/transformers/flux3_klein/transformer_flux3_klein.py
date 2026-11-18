@@ -93,38 +93,70 @@ register_fused_mmrs_configs(
 )
 
 
+DP4_MLP_ROWS = (
+    2048,
+    2304,
+    2560,
+    3072,
+    4096,
+    4352,
+    4608,
+    5120,
+    5376,
+    5632,
+    6144,
+    8448,
+    8704,
+    9216,
+    16384,
+    16640,
+    16896,
+    17408,
+    17920,
+    18432,
+    20736,
+    20992,
+    21504,
+)
 # SP8 x TP4 MLP shapes (M, 3072, N) whose heuristic blocking overflows L1 on the 12x9 worker grid of a Galaxy. M is the
 # single stage's rows per device: (image + reference bucket + text bucket) / 8, e.g. 4608 = 2048 output + a 4 MP
 # reference bucket + 4096 text rows, 10368 = 4096 output + a 4 MP reference bucket + 1024 text rows; the blockings
 # follow the neighbouring shapes
-register_matmul_configs(
-    {
-        "12x9": {
-            (2560, 3072, 4608): (4, 8, 16, (1, 4)),
-            (3072, 3072, 4608): (4, 8, 16, (1, 4)),
-            (4224, 3072, 2304): (4, 8, 8, (1, 4)),
-            (4224, 3072, 4608): (4, 8, 16, (1, 4)),
-            (4352, 3072, 2304): (4, 8, 8, (1, 4)),
-            (4352, 3072, 4608): (4, 8, 16, (1, 4)),
-            (4608, 3072, 2304): (4, 8, 8, (1, 4)),
-            (4608, 3072, 4608): (4, 8, 16, (1, 4)),
-            (8192, 3072, 2304): (11, 8, 8, (1, 4)),
-            (8192, 3072, 4608): (6, 8, 16, (1, 4)),
-            (8448, 3072, 2304): (8, 8, 8, (1, 4)),
-            (8448, 3072, 4608): (6, 8, 16, (1, 4)),
-            (8704, 3072, 2304): (8, 8, 8, (1, 4)),
-            (8704, 3072, 4608): (6, 8, 16, (1, 4)),
-            (9216, 3072, 2304): (8, 8, 8, (1, 4)),
-            (9216, 3072, 4608): (6, 8, 16, (1, 4)),
-            (10368, 3072, 2304): (8, 8, 8, (1, 4)),
-            (10368, 3072, 4608): (6, 8, 16, (1, 4)),
-            (10496, 3072, 2304): (8, 8, 8, (1, 4)),
-            (10496, 3072, 4608): (6, 8, 16, (1, 4)),
-            (10752, 3072, 2304): (8, 8, 8, (1, 4)),
-            (10752, 3072, 4608): (6, 8, 16, (1, 4)),
-        }
-    }
-)
+SP8_MLP_BLOCKINGS = {
+    (2560, 3072, 4608): (4, 8, 16, (1, 4)),
+    (3072, 3072, 4608): (4, 8, 16, (1, 4)),
+    (4224, 3072, 2304): (4, 8, 8, (1, 4)),
+    (4224, 3072, 4608): (4, 8, 16, (1, 4)),
+    (4352, 3072, 2304): (4, 8, 8, (1, 4)),
+    (4352, 3072, 4608): (4, 8, 16, (1, 4)),
+    (4608, 3072, 2304): (4, 8, 8, (1, 4)),
+    (4608, 3072, 4608): (4, 8, 16, (1, 4)),
+    (8192, 3072, 2304): (11, 8, 8, (1, 4)),
+    (8192, 3072, 4608): (6, 8, 16, (1, 4)),
+    (8448, 3072, 2304): (8, 8, 8, (1, 4)),
+    (8448, 3072, 4608): (6, 8, 16, (1, 4)),
+    (8704, 3072, 2304): (8, 8, 8, (1, 4)),
+    (8704, 3072, 4608): (6, 8, 16, (1, 4)),
+    (9216, 3072, 2304): (8, 8, 8, (1, 4)),
+    (9216, 3072, 4608): (6, 8, 16, (1, 4)),
+    (10368, 3072, 2304): (8, 8, 8, (1, 4)),
+    (10368, 3072, 4608): (6, 8, 16, (1, 4)),
+    (10496, 3072, 2304): (8, 8, 8, (1, 4)),
+    (10496, 3072, 4608): (6, 8, 16, (1, 4)),
+    (10752, 3072, 2304): (8, 8, 8, (1, 4)),
+    (10752, 3072, 4608): (6, 8, 16, (1, 4)),
+}
+register_matmul_configs({"12x9": SP8_MLP_BLOCKINGS})
+# SP4 x TP2 (DP4 groups, (4, 2) submeshes): M_block 6 at the single-stage row counts of the served sizes, reference and
+# text buckets, and at the 4096 / 16384 image rows, where SP8 x TP4 has no entry of the same shape; N 4608 leaves the
+# rows 2048 / 2304 on the heuristic. Registered for SP4 x TP2 only (register_layout_shape_configs): DP4's QKV shares
+# N 4608 with SP8 x TP4's MLP-in.
+DP4_MLP_BLOCKINGS = {
+    (m, 3072, n): (6, 8, 16, (1, 4))
+    for m in DP4_MLP_ROWS
+    for n in (4608, 9216)
+    if (n == 9216 or m not in (2048, 2304)) and (m, 3072, n) not in SP8_MLP_BLOCKINGS
+}
 
 
 # Untabled (M, 3072, N) shapes whose heuristic blocking overflows L1 on the 12x9 grid: the 10-reference early stage
@@ -180,6 +212,8 @@ SP8_AGMM_SHAPE_CONFIGS = {
 def register_layout_shape_configs(sp_factor: int, tp_factor: int) -> None:
     if (sp_factor, tp_factor) == (8, 4):
         register_shape_configs(agmm=SP8_AGMM_SHAPE_CONFIGS)
+    elif (sp_factor, tp_factor) == (4, 2):
+        register_matmul_configs({"12x9": DP4_MLP_BLOCKINGS})
 
 
 @dataclass(frozen=True)
