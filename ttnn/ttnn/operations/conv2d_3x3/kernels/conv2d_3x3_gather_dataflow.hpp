@@ -70,6 +70,13 @@ struct TaggedReads {
         count_packets(1);
     }
 
+    // A stateful read run reprogrammed the read command buffer.
+    FORCE_INLINE void drop_fixed_state() {
+        if constexpr (fixed_reads) {
+            fixed_state_bytes = 0;
+        }
+    }
+
     // Zeros from the hardware zero region, which is MEM_ZEROS_SIZE bytes long.
     FORCE_INLINE void zero_fill(uint32_t dst_l1_addr, uint32_t bytes) {
         while (bytes > 0) {
@@ -88,9 +95,15 @@ struct TaggedReads {
 // writer never stores them. The row gather is a real call (inlined into kernel_main, its per-pixel loop measured
 // slower: register pressure on the data-movement RISC); the tap-major body, a handful of runs, measured faster inlined.
 
-// Row gather: one im2col row per output pixel ([32, block_k_cols]). A d = 1 in-image row with no padded lanes is one
-// combined read of its taps; otherwise one read per in-image tap plus zero-fills for out-of-image taps, padded lanes
-// (unless zeroed once) and kernel-row K padding.
+// Row gather: one im2col row per output pixel ([32, block_k_cols]), walked in runs of one output image row.
+//   - A run whose kernel row lies outside the image is all zero, and its rows are adjacent: one zero fill.
+//   - In a d = 1 run with no padded lanes, the pixels whose combined read (the K-block's touched taps, consecutive slab
+//     pixels) lies in the image form one window, found once per run. They read a fixed byte count from slab pixels
+//     stride apart into im2col rows im2col_row_bytes apart, so the read command buffer keeps its source and size
+//     (set_read_state) and each read only rewrites its two addresses (read_with_state).
+//   - The other pixels (edges, dilated rows, padded lanes, a K-padding tail zeroed per row) take the per-tap body: one
+//     read per in-image tap plus zero-fills for out-of-image taps, padded lanes (unless zeroed once) and kernel-row K
+//     padding.
 template <
     uint32_t output_width,
     int32_t input_height,
@@ -110,30 +123,44 @@ struct RowGather {
     static constexpr uint32_t tap_cols = 3 * c_in_p;
     static constexpr uint32_t pixel_bytes = c_in_p * ELEM_BYTES;
     static constexpr bool lanes_padded = c_in < c_in_p;
+    // A row-gather K-block lies inside one kernel row (bk divides its tile count) and only the row's last K-block
+    // reaches the K padding, so a combined read is one of two sizes.
+    static constexpr uint32_t kkh_cols = (tap_cols + TILE_DIM - 1) / TILE_DIM * TILE_DIM;
+    static constexpr uint32_t full_read_bytes = block_k_cols * ELEM_BYTES;
+    static constexpr uint32_t tail_read_bytes = (tap_cols + block_k_cols - kkh_cols) * ELEM_BYTES;
+    static constexpr bool fixed_capable =
+        !lanes_padded && dilation == 1 && full_read_bytes <= NOC_MAX_BURST_SIZE && block_k_cols <= kkh_cols;
 
+    // n fixed-size reads: src_l1, src_l1 + stride * pixel_bytes, ... into dst_l1, dst_l1 + im2col_row_bytes, ...
+    template <uint32_t bytes, typename Reads>
+    FORCE_INLINE static void fixed_run(Reads& reads, uint32_t src_l1, uint32_t dst_l1, uint32_t n) {
+        reads.drop_fixed_state();
+        dataflow_kernel_lib::set_read_state<bytes>(reads.noc, src_l1);
+        for (uint32_t i = 0; i < n; ++i) {
+            dataflow_kernel_lib::read_with_state<bytes>(reads.noc, dst_l1, src_l1);
+            reads.count_packets(1);
+            src_l1 += stride * pixel_bytes;
+            dst_l1 += im2col_row_bytes;
+        }
+    }
+
+    // n consecutive pixels of one output image row, tap by tap: pixel i reads kernel row h_in at w_in0 + i * stride
+    // (slab pixel slab_x0 + i * stride) into row_l1 + i * im2col_row_bytes.
     template <typename Reads>
-    __attribute__((noinline)) static void tile_row(
+    FORCE_INLINE static void generic_pixels(
         Reads& reads,
         uint64_t slab_noc,
-        uint32_t rows_l1,
-        uint32_t o,
-        uint32_t o_end,
-        int32_t kh,
-        uint32_t col_lo,
-        int32_t slab_x_base_kh) {
+        uint32_t row_l1,
+        uint32_t n,
+        bool row_in_image,
+        int32_t w_in0,
+        int32_t slab_x0,
+        uint32_t col_lo) {
         const uint32_t col_hi = col_lo + block_k_cols;
         const uint32_t data_hi = col_hi < tap_cols ? col_hi : tap_cols;
         const int32_t kw_first = col_lo < tap_cols ? col_lo / c_in_p : 3;
         const int32_t kw_last = data_hi > col_lo ? (data_hi - 1) / c_in_p : -1;
-        int32_t ho = o / output_width;
-        int32_t wo = o % output_width;
-        for (uint32_t r = 0; r < TILE_DIM && o < o_end; ++r, ++o) {
-            const uint32_t row_l1 = rows_l1 + r * im2col_row_bytes;
-            const int32_t h_in = ho * stride + kh * dilation - padding;
-            const int32_t w_in0 = wo * stride - padding;
-            const bool row_in_image = h_in >= 0 && h_in < input_height;
-            const int32_t slab_x0 = slab_x_base_kh + h_in * input_width + w_in0;
-
+        for (uint32_t i = 0; i < n; ++i, row_l1 += im2col_row_bytes, w_in0 += stride, slab_x0 += stride) {
             const bool combined = !lanes_padded && dilation == 1 && row_in_image && w_in0 + kw_first >= 0 &&
                                   w_in0 + kw_last < input_width && kw_first <= kw_last;
             if (combined) {
@@ -174,11 +201,88 @@ struct RowGather {
                     reads.zero_fill(row_l1 + (pad_lo - col_lo) * ELEM_BYTES, (col_hi - pad_lo) * ELEM_BYTES);
                 }
             }
+        }
+    }
 
-            if (++wo == static_cast<int32_t>(output_width)) {
-                wo = 0;
-                ++ho;
+    template <typename Reads>
+    __attribute__((noinline)) static void tile_row(
+        Reads& reads,
+        uint64_t slab_noc,
+        uint32_t rows_l1,
+        uint32_t o,
+        uint32_t o_end,
+        int32_t kh,
+        uint32_t col_lo,
+        int32_t slab_x_base_kh) {
+        const uint32_t col_hi = col_lo + block_k_cols;
+        const uint32_t data_hi = col_hi < tap_cols ? col_hi : tap_cols;
+        const int32_t kw_first = col_lo < tap_cols ? col_lo / c_in_p : 3;
+        const int32_t kw_last = data_hi > col_lo ? (data_hi - 1) / c_in_p : -1;
+        // The fixed window needs a combined read and no per-row K-padding zero fill between two reads.
+        const bool fixed_ok = kw_first <= kw_last && (zero_im2col_once || col_hi <= tap_cols);
+        // Output columns wo whose combined read lies in the image row: [wo_lo, wo_hi) (d = 1).
+        const int32_t left = padding - kw_first;
+        const int32_t wo_lo = left <= 0 ? 0 : (left + stride - 1) / stride;
+        const int32_t right = input_width - 1 + padding - kw_last;
+        const int32_t wo_hi = right < 0 ? 0 : right / stride + 1;
+        const uint32_t slab_l1 = static_cast<uint32_t>(slab_noc);
+        const uint32_t row_end = o + TILE_DIM < o_end ? o + TILE_DIM : o_end;
+        int32_t ho = o / output_width;
+        int32_t wo = o % output_width;
+        uint32_t row_l1 = rows_l1;
+        for (uint32_t p = o; p < row_end;) {
+            const int32_t run = row_end - p < output_width - wo ? row_end - p : output_width - wo;
+            const int32_t h_in = ho * stride + kh * dilation - padding;
+            const bool row_in_image = h_in >= 0 && h_in < input_height;
+            const int32_t w_in0 = wo * stride - padding;
+            const int32_t slab_x0 = slab_x_base_kh + h_in * input_width + w_in0;
+            if (!row_in_image) {
+                // Every column of every row of the run is zero.
+                reads.zero_fill(row_l1, run * im2col_row_bytes);
+            } else {
+                // Pixels [i_lo, i_hi) of the run take the fixed window, the rest the per-tap body.
+                int32_t i_lo = 0;
+                int32_t i_hi = 0;
+                if constexpr (fixed_capable) {
+                    if (fixed_ok) {
+                        i_lo = wo_lo - wo < 0 ? 0 : (wo_lo - wo < run ? wo_lo - wo : run);
+                        i_hi = wo_hi - wo < i_lo ? i_lo : (wo_hi - wo < run ? wo_hi - wo : run);
+                    }
+                }
+                if (i_hi == i_lo) {
+                    generic_pixels(reads, slab_noc, row_l1, run, true, w_in0, slab_x0, col_lo);
+                } else {
+                    if (i_lo > 0) {
+                        generic_pixels(reads, slab_noc, row_l1, i_lo, true, w_in0, slab_x0, col_lo);
+                    }
+                    if constexpr (fixed_capable) {
+                        const uint32_t src = slab_l1 + (slab_x0 + i_lo * stride) * pixel_bytes + col_lo * ELEM_BYTES;
+                        const uint32_t dst = row_l1 + i_lo * im2col_row_bytes;
+                        if constexpr (full_read_bytes == tail_read_bytes) {
+                            fixed_run<full_read_bytes>(reads, src, dst, i_hi - i_lo);
+                        } else if (col_hi <= tap_cols) {
+                            fixed_run<full_read_bytes>(reads, src, dst, i_hi - i_lo);
+                        } else {
+                            fixed_run<tail_read_bytes>(reads, src, dst, i_hi - i_lo);
+                        }
+                    }
+                    if (run > i_hi) {
+                        generic_pixels(
+                            reads,
+                            slab_noc,
+                            row_l1 + i_hi * im2col_row_bytes,
+                            run - i_hi,
+                            true,
+                            w_in0 + i_hi * stride,
+                            slab_x0 + i_hi * stride,
+                            col_lo);
+                    }
+                }
             }
+            row_l1 += run * im2col_row_bytes;
+            p += run;
+            wo = 0;
+            ++ho;
         }
     }
 };
