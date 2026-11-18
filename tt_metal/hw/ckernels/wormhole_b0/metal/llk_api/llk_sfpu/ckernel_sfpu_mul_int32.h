@@ -11,6 +11,44 @@
 
 namespace ckernel::sfpu {
 
+#ifndef DISABLE_SFPLOADMACRO
+// t = 2..21 of the schedule in mul_int32; b2 (top, then the result) is LREG5 or LREG7.
+template <int b2, int b2_next>
+inline void mul_int32_row(const uint offset0, const uint offset1, const uint offset_out, const bool load_next) {
+    constexpr int a0 = p_sfpu::LREG0;
+    constexpr int b0 = p_sfpu::LREG1;
+    constexpr int a1 = p_sfpu::LREG2;
+    constexpr int b1 = p_sfpu::LREG3;  // becomes mid
+    constexpr int a2 = p_sfpu::LREG4;
+    constexpr int low = p_sfpu::LREG6;
+
+    TT_SFPLOADMACRO((0 << 2) | (a0 & 3), InstrModLoadStore::INT32, ADDR_MOD_3, offset0 | (a0 >> 2));
+    TTI_SFPAND(0, p_sfpu::LREG12, a0, 0);
+    TT_SFPLOADMACRO((3 << 2) | (a1 & 3), InstrModLoadStore::INT32, ADDR_MOD_3, offset0 | (a1 >> 2));
+    TTI_SFPMAD(a0, b2, p_sfpu::LREG13, b2, 0);
+    TTI_SFPAND(0, p_sfpu::LREG12, a1, 0);
+    TT_SFPLOADMACRO((0 << 2) | (b0 & 3), InstrModLoadStore::INT32, ADDR_MOD_3, offset1 | (b0 >> 2));
+    TTI_SFPAND(0, p_sfpu::LREG12, b0, 0);
+    TT_SFPLOADMACRO((1 << 2) | (b1 & 3), InstrModLoadStore::INT32, ADDR_MOD_3, offset1 | (b1 >> 2));
+    TTI_SFPMAD(a0, b0, p_sfpu::LREG14, low, 0);
+    TTI_SFPAND(0, p_sfpu::LREG12, b1, 0);
+    TT_SFPLOADMACRO((2 << 2) | (a2 & 3), InstrModLoadStore::INT32, ADDR_MOD_3, offset0 | (a2 >> 2));
+    TTI_SFPMAD(a1, b1, b2, b2, 0);
+    if (load_next) {
+        TT_SFPLOADMACRO((2 << 2) | (b2_next & 3), InstrModLoadStore::INT32, ADDR_MOD_3, (offset1 + 2) | (b2_next >> 2));
+    } else {
+        TTI_SFPNOP;
+    }
+    TTI_SFPMAD(a2, b0, b2, b2, 0);
+    TTI_SFPMAD(a1, b0, b1, b1, 0);
+    TTI_SFPSHFT(22, 0, b2, 1);
+    TTI_SFPSHFT(11, 0, b1, 1);
+    TTI_SFPIADD(0, low, b2, sfpi::SFPIADD_MOD1_CC_NONE);
+    TTI_SFPIADD(0, b1, b2, sfpi::SFPIADD_MOD1_CC_NONE);
+    TT_SFPSTORE(b2, InstrModLoadStore::INT32, ADDR_MOD_2, offset_out);
+}
+#endif
+
 template <bool APPROXIMATION_MODE, int ITERATIONS = 8>
 inline void mul_int32(const uint dst_index_in0, const uint dst_index_in1, const uint dst_index_out) {
     constexpr uint dst_tile_size = 64;
@@ -156,38 +194,20 @@ inline void mul_int32(const uint dst_index_in0, const uint dst_index_in1, const 
     //   1: b1      >>11 at +1, cast at +3, mid = a0*b1 + 2**23 in place at +5
     //   2: a2, b2  >>22 at +1, cast at +2
     //   3: a1      >>11 at +1, cast at +3
-    constexpr int a0 = p_sfpu::LREG0;
-    constexpr int b0 = p_sfpu::LREG1;
-    constexpr int a1 = p_sfpu::LREG2;
-    constexpr int b1 = p_sfpu::LREG3;  // becomes mid
-    constexpr int a2 = p_sfpu::LREG4;
-    constexpr int b2 = p_sfpu::LREG5;  // becomes top, then the result
-    constexpr int low = p_sfpu::LREG6;
-
-#pragma GCC unroll 8
-    for (int d = 0; d < ITERATIONS; d++) {
-        TT_SFPLOADMACRO((2 << 2) | (b2 & 3), InstrModLoadStore::INT32, ADDR_MOD_3, offset1 | (b2 >> 2));
-        TTI_SFPNOP;
-        TT_SFPLOADMACRO((0 << 2) | (a0 & 3), InstrModLoadStore::INT32, ADDR_MOD_3, offset0 | (a0 >> 2));
-        TTI_SFPAND(0, p_sfpu::LREG12, a0, 0);
-        TT_SFPLOADMACRO((3 << 2) | (a1 & 3), InstrModLoadStore::INT32, ADDR_MOD_3, offset0 | (a1 >> 2));
-        TTI_SFPMAD(a0, b2, p_sfpu::LREG13, b2, 0);
-        TTI_SFPAND(0, p_sfpu::LREG12, a1, 0);
-        TT_SFPLOADMACRO((0 << 2) | (b0 & 3), InstrModLoadStore::INT32, ADDR_MOD_3, offset1 | (b0 >> 2));
-        TTI_SFPAND(0, p_sfpu::LREG12, b0, 0);
-        TT_SFPLOADMACRO((1 << 2) | (b1 & 3), InstrModLoadStore::INT32, ADDR_MOD_3, offset1 | (b1 >> 2));
-        TTI_SFPMAD(a0, b0, p_sfpu::LREG14, low, 0);
-        TTI_SFPAND(0, p_sfpu::LREG12, b1, 0);
-        TT_SFPLOADMACRO((2 << 2) | (a2 & 3), InstrModLoadStore::INT32, ADDR_MOD_3, offset0 | (a2 >> 2));
-        TTI_SFPMAD(a1, b1, b2, b2, 0);
-        TTI_SFPNOP;
-        TTI_SFPMAD(a2, b0, b2, b2, 0);
-        TTI_SFPMAD(a1, b0, b1, b1, 0);
-        TTI_SFPSHFT(22, 0, b2, 1);
-        TTI_SFPSHFT(11, 0, b1, 1);
-        TTI_SFPIADD(0, low, b2, sfpi::SFPIADD_MOD1_CC_NONE);
-        TTI_SFPIADD(0, b1, b2, sfpi::SFPIADD_MOD1_CC_NONE);
-        TT_SFPSTORE(b2, InstrModLoadStore::INT32, ADDR_MOD_2, offset_out);
+    //
+    // Rows overlap by one load: the t = 14 slot loads the next row's b2 (Dst address
+    // + 2, which the row's own store reaches through ADDR_MOD_2) into the other one of
+    // LREG5 / LREG7, so only the first row issues t = 0 and t = 1; every later row is
+    // t = 2..21 (20 slots), and the last row keeps the t = 14 nop.
+    TT_SFPLOADMACRO(
+        (2 << 2) | (p_sfpu::LREG5 & 3), InstrModLoadStore::INT32, ADDR_MOD_3, offset1 | (p_sfpu::LREG5 >> 2));
+    TTI_SFPNOP;
+#pragma GCC unroll 4
+    for (int d = 0; d < ITERATIONS; d += 2) {
+        mul_int32_row<p_sfpu::LREG5, p_sfpu::LREG7>(offset0, offset1, offset_out, d + 1 < ITERATIONS);
+        if (d + 1 < ITERATIONS) {
+            mul_int32_row<p_sfpu::LREG7, p_sfpu::LREG5>(offset0, offset1, offset_out, d + 2 < ITERATIONS);
+        }
     }
 #endif
 }
