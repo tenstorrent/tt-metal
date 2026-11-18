@@ -511,11 +511,10 @@ void kernel_main() {
     conv2d_3x3::kw_fold::run<
         get_compile_time_arg_val(14),  // cb_input_tiles: the slab
         get_compile_time_arg_val(2),   // cb_weights
-        get_compile_time_arg_val(3),   // cb_bias
+        get_compile_time_arg_val(3),   // cb_bias (kw-fold: the writer's scratch)
         get_compile_time_arg_val(5),   // cb_output_tiles
         get_compile_time_arg_val(4),   // cb_matmul_partials: the fp32 accumulator
-        get_compile_time_arg_val(23),  // cb_combined: the fp32 bias block
-        get_compile_time_arg_val(31),  // cb_ring_token: seeded-region tokens
+        get_compile_time_arg_val(23),  // cb_combined: the fp32 bias rows (srcB of the final pass)
         get_compile_time_arg_val(40),  // cb_src_table: ACC-ready token (pack -> unpack)
         get_compile_time_arg_val(21),  // N
         get_compile_time_arg_val(17),  // C_in tiles

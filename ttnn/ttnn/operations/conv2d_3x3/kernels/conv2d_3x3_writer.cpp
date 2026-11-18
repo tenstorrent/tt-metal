@@ -228,8 +228,15 @@ void kernel_main() {
             cb_push_back(cb_bias, out_n_tiles);
         }
     };
+#ifdef CONV2D_3X3_KW_FOLD
+    // kw-fold adds the bias in its final pass: read it late (below), so every core reading the same bias pages does
+    // not hold the weight stream behind it.
+    constexpr bool kw_fold = true;
+#else
+    constexpr bool kw_fold = false;
+#endif
     // With the polling split TILE fill the bias reads are issued later, serving the first block's hand-overs.
-    if constexpr (!slab_split && !tile_fill_split && !weight_servers) {
+    if constexpr (!slab_split && !tile_fill_split && !weight_servers && !kw_fold) {
         prefetch_bias();
     }
 
@@ -497,8 +504,10 @@ void kernel_main() {
     auto read_weight_k_block = [&](uint32_t l1) {
 #ifdef CONV2D_3X3_KW_FOLD
         // kw-fold: column round kw holds W'[kh Ct + c, kw N + n] = prepared tile ((kh * 3 + kw) Ct + c, n),
-        // (kh, c)-major, n-fastest (block_k_tiles = Ct, block_n_tiles = 3 N: the same round size).
-        const uint32_t kw = k_blocks_issued % num_k_blocks;
+        // (kh, c)-major, n-fastest (block_k_tiles = Ct, block_n_tiles = 3 N: the same round size). Rounds go kw = 1,
+        // 0, 2 (kw_fold.hpp KW_ROUND_ORDER: Q_1 is the overwrite the other two accumulate onto).
+        constexpr uint32_t kw_round_order[3] = {1, 0, 2};
+        const uint32_t kw = kw_round_order[k_blocks_issued % num_k_blocks];
         for (uint32_t kh = 0; kh < 3; ++kh) {
             for (uint32_t c = 0; c < block_k_tiles; ++c) {
                 const uint32_t row_page = ((kh * 3 + kw) * block_k_tiles + c) * tensor_n_tiles;
@@ -576,25 +585,60 @@ void kernel_main() {
             cb_push_back(cb_bias, out_n_tiles);
         }
     };
-    if constexpr (!slab_split && tile_fill_split && !weight_servers) {
+    if constexpr (!slab_split && tile_fill_split && !weight_servers && !kw_fold) {
         prefetch_bias_serving();
     }
+#ifdef CONV2D_3X3_KW_FOLD
+    // kw-fold adds the bias in its final pass (srcB rows the reader decodes from cb_bias, conv2d_3x3_kw_fold.hpp).
+    // With weight servers it takes the late reads below (issued after round 0, completed after the block's last round).
+    // Without, it is read after the first M-block's weight rounds, so the cores reading the same bias pages do not hold
+    // the weight stream behind it (stem.conv2 / conv3, in-grid sender: 40.6 -> 37.6 / 60.0 -> 53.3 us). A blocking
+    // read there on server receivers put ~2.8 us of bias (~100 cores on the same DRAM pages) between the last round
+    // and the final pass: res2 13.9 -> 14.8, center_head.1 12.1 -> 12.6 us.
+    [[maybe_unused]] auto kwf_bias_read = [&]() {
+        if constexpr (has_bias) {
+            if constexpr (tile_fill_split) {
+                prefetch_bias_serving();
+            } else {
+                prefetch_bias();
+            }
+        }
+    };
+#endif
     // Weight servers: the bias reads go out now and complete after the first weight round (see the file comment).
+    // kw-fold needs the bias only in its final pass, and its first matmul waits for round 0: its reads go out once
+    // round 0 landed (~100 cores reading the same bias pages slowed round 0 by ~1 us when issued at kernel start) and
+    // are pushed as soon as they land, polled inside the round waits; the first M-block's last round blocks on them.
     constexpr uint32_t TRID_BIAS_LATE = 7;
     conv2d_3x3::TaggedReads<false> late_bias_reads;
     [[maybe_unused]] bool late_bias_pending = false;
-    if constexpr (weight_servers && has_bias && !slab_split) {
-        const uint32_t bias_tile_bytes = get_tile_size(cb_bias);
-        const auto bias = TensorAccessor(bias_args, bias_addr, bias_tile_bytes);
-        cb_reserve_back(cb_bias, out_n_tiles);
-        uint32_t l1 = get_write_ptr(cb_bias);
-        late_bias_reads.begin(TRID_BIAS_LATE);
-        for (uint32_t n = 0; n < out_valid_tiles; ++n, l1 += bias_tile_bytes) {
-            late_bias_reads.read(bias.get_noc_addr(out_n_tile_start + n), l1, bias_tile_bytes);
+    [[maybe_unused]] auto issue_late_bias = [&]() {
+        if constexpr (weight_servers && has_bias && !slab_split) {
+            const uint32_t bias_tile_bytes = get_tile_size(cb_bias);
+            const auto bias = TensorAccessor(bias_args, bias_addr, bias_tile_bytes);
+            cb_reserve_back(cb_bias, out_n_tiles);
+            uint32_t l1 = get_write_ptr(cb_bias);
+            late_bias_reads.begin(TRID_BIAS_LATE);
+            for (uint32_t n = 0; n < out_valid_tiles; ++n, l1 += bias_tile_bytes) {
+                late_bias_reads.read(bias.get_noc_addr(out_n_tile_start + n), l1, bias_tile_bytes);
+            }
+            dataflow_kernel_lib::set_read_trid(late_bias_reads.noc, 0);
+            late_bias_pending = true;
         }
-        dataflow_kernel_lib::set_read_trid(late_bias_reads.noc, 0);
-        late_bias_pending = true;
+    };
+    if constexpr (!kw_fold) {
+        issue_late_bias();
     }
+    // kw-fold: push the late bias as soon as it landed, from inside the weight waits (the reader decodes it into the
+    // final pass's fp32 rows at ~1.3 us per tile, so it must not wait for the block's last round).
+    [[maybe_unused]] auto try_finish_late_bias = [&]() {
+        if (late_bias_pending &&
+            ncrisc_noc_read_with_transaction_id_flushed(late_bias_reads.noc.get_noc_id(), TRID_BIAS_LATE)) {
+            late_bias_reads.wait(TRID_BIAS_LATE);
+            cb_push_back(cb_bias, out_n_tiles);
+            late_bias_pending = false;
+        }
+    };
     [[maybe_unused]] auto finish_late_bias = [&]() {
         if (late_bias_pending) {
             MaybeDeviceZoneScope("writer_bias");
@@ -614,10 +658,6 @@ void kernel_main() {
         server_ack_noc = get_noc_addr(server_x, server_y, get_semaphore(server_ack_sem_id));
         noc_semaphore_inc(server_ack_noc, 1);
     }
-#ifdef CONV2D_3X3_KW_FOLD
-    // kw-fold seeds its accumulator with the bias before the first pack, so the bias cannot wait for round 0.
-    finish_late_bias();
-#endif
     auto issue_weight_k_block = [&]() {
         {
             // Back-pressure from compute's matmul.
@@ -646,6 +686,9 @@ void kernel_main() {
                     break;
                 }
                 serve_fill();
+                if constexpr (kw_fold) {
+                    try_finish_late_bias();
+                }
             }
             *flag = INVALID;
         } else if (weight_sender && weight_mcast.should_send(k_blocks_issued)) {
@@ -663,7 +706,17 @@ void kernel_main() {
         cb_push_back(cb_weights, weight_k_block_tiles);
         ++k_blocks_issued;
         if constexpr (weight_servers) {
-            finish_late_bias();
+            if constexpr (kw_fold) {
+                if (k_blocks_issued == 1) {
+                    issue_late_bias();
+                } else if (k_blocks_issued == num_k_blocks) {
+                    finish_late_bias();
+                } else {
+                    try_finish_late_bias();
+                }
+            } else {
+                finish_late_bias();
+            }
         }
     };
 
@@ -1041,6 +1094,13 @@ void kernel_main() {
                     gather_odd_groups(k_blocks_issued - 1);
                 }
             }
+#ifdef CONV2D_3X3_KW_FOLD
+            if constexpr (!(weight_servers && !slab_split)) {
+                if (m_block_idx == 0) {
+                    kwf_bias_read();
+                }
+            }
+#endif
             if constexpr (k_split) {
                 combine_round(m_block_idx);
             }

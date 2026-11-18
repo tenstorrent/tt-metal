@@ -1127,6 +1127,8 @@ def _work_items(input_tensor, g: Conv3x3Geometry, b: Conv3x3Blocking):
 # 12.1, inst res2.fuse_conv.0 44.4 -> 33.3, inst res2.fuse_conv.1 34.7 -> 28.1, inst res3.fuse_conv.0 29.0 -> 25.6,
 # res2 16.7 -> 13.7 us. Where it does not pay (_kw_fold_pays) the K-blocked walk runs.
 KW_FOLD = True
+# kw-fold's final pass adds the bias as 8 srcB rows: 4 copies of the fp32 bias row of one output column tile.
+KWF_BIAS_ROWS_BYTES = 4 * TILE * 4
 IM2COL_NS_PER_TILE = 25
 # Either form recomputes the two halo tile-rows' products, about 6 * Ct * N extra tile-MACs per M-block, at the user's
 # fidelity, to save the im2col (tilized taps plus the untilized slab, ~25 ns per tile). The weights stream in column
@@ -1171,7 +1173,7 @@ def _kw_fold_cb_bytes(g, kb):
     total = slabs * kb.slab_tile_rows * g.c_in_tiles * g.in0_tile_bytes
     total += kb.weight_depth * kb.block_k_tiles * kb.block_n_tiles * g.weight_tile_bytes
     total += _kw_fold_acc_bytes(g, kb.block_m_tiles)
-    total += g.tensor_n_tiles * (g.weight_tile_bytes + TILE_BYTES_FP32) + kb.block_m_tiles * RING_TOKEN_BYTES
+    total += g.tensor_n_tiles * (g.weight_tile_bytes + KWF_BIAS_ROWS_BYTES)
     total += TILE * g.c_in_p * BF16_BYTES  # cb_zero_src (tap-major reader start)
     return total
 
@@ -1387,7 +1389,8 @@ def create_program_descriptor(
 
     if kwf:
         # kw-fold CBs: the whole slab (input tiles), the whole weights (3 K-blocks of [C_in, 3 C_out] tiles), the fp32
-        # accumulator, the fp32 bias block, the seeded-region tokens, the bias and the output shard.
+        # accumulator, the bias (the writer's read), its fp32 rows (the reader's decode; final-pass srcB) and the output
+        # shard.
         alias_ring = False
         input_ring_batches = (2 if b.max_m_blocks_per_core > 1 else 1) * (b.slab_tile_rows // b.untilize_batch_rows)
         cbs = [
@@ -1403,8 +1406,7 @@ def create_program_descriptor(
             _cb(CB_MATMUL_PARTIALS, ttnn.float32, TILE_BYTES_FP32, _kw_fold_acc_bytes(g, bm) // TILE_BYTES_FP32, cores),
             output_cb,
             _cb(CB_BIAS, bias_tensor.dtype, g.weight_tile_bytes, ns, cores),
-            _cb(CB_COMBINED, ttnn.float32, ns * TILE_BYTES_FP32, 1, cores),
-            _cb(CB_RING_TOKEN, ttnn.float32, RING_TOKEN_BYTES, bm, cores),
+            _cb(CB_COMBINED, ttnn.float32, KWF_BIAS_ROWS_BYTES, ns, cores),
             # ACC-ready token, compute pack -> compute unpack, once per M-block.
             _cb(CB_SRC_TABLE, ttnn.float32, RING_TOKEN_BYTES, 1, cores),
         ]
@@ -1830,15 +1832,11 @@ def create_program_descriptor(
         _tpr = g.input_width // TILE
         _kwf_dm_defines = [
             ("CONV2D_3X3_KW_FOLD", "1"),
-            ("KWF_N", str(g.tensor_n_tiles)),
-            ("KWF_D", str(g.dilation)),
-            ("KWF_TPR", str(_tpr)),
-            ("KWF_CB_ACC", str(CB_MATMUL_PARTIALS)),
-            ("KWF_CB_BIAS_RM", str(CB_COMBINED)),
-            ("KWF_CB_TOK", str(CB_RING_TOKEN)),
-            ("KWF_SBW", str(_sbw)),
-            ("KWF_PLANE_BYTES", str(_kw_fold_plane_bytes(g, bm))),
             ("KWF_KBLOCKED", str(int(kw_fold_kblocked(g)))),
+            ("KWF_CB_BIAS_ROWS", str(CB_COMBINED)),
+            ("KWF_CB_BIAS", str(CB_BIAS)),
+            ("KWF_N", str(g.tensor_n_tiles)),
+            ("KWF_BIAS_BFP8", str(int(bias_tensor.dtype == ttnn.bfloat8_b))),
         ]
         _kwf_compute_defines = [
             ("CONV2D_3X3_KW_FOLD", "1"),

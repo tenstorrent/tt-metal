@@ -11,23 +11,32 @@
 // [max(0, t0 - 1 - R), ...), consecutive). One matmul with K' = 3 C_in ((kh, c), c fastest) and N' = 3 C_out
 // ((kw, n), n fastest) gives [Q_0 | Q_1 | Q_2] at exactly the conv's MAC count (plus one halo tile-row each side whose
 // Q_0 / Q_2 spills d rows into this core's range), and out[o] = bias + Q_1[o] + [w >= d] Q_0[o - d] + [w < W - d]
-// Q_2[o + d]. The weights stream in column rounds: round kw is W'[(kh, c), kw, n] (3 C_in x C_out tiles, (kh, c, n)
-// order), the prepared [K_p, C_out] tensor read tile-permuted (slot (kh, c, n) is prepared tile ((kh * 3 + kw) Ct +
-// c, n)). Each Q_kw tile-row accumulates all its in-image kernel rows in DEST and is packed once.
+// Q_2[o + d]. The weights stream in column rounds, kw = 1 first, then 0, then 2: round kw is W'[(kh, c), kw, n]
+// (3 C_in x C_out tiles, (kh, c, n) order), the prepared [K_p, C_out] tensor read tile-permuted (slot (kh, c, n) is
+// prepared tile ((kh * 3 + kw) Ct + c, n)). Each Q_kw tile-row accumulates all its in-image kernel rows in DEST and is
+// packed once.
 //
 // The shift: each Q_kw tile-row is pack-untilized (fp32 rows) into one fp32 accumulator ACC (cb_acc) at row
-// rowbase(t) + (1 - kw) d with packer L1 accumulation, so bias and kw shift sum in fp32 in the packer (K in fp32 DEST).
-// ACC leaves a d-row gap after every image row: the wrapped rows of Q_0 (w >= W - d) and Q_2 (w < d) land there and are
-// never read (the masks cost nothing). The reader seeds each valid ACC region with the fp32 bias rows compute packs
-// once (cb_bias_rm) and hands it over (cb_tok), so no pack ever overwrites. With a full-width subblock (sbw == N) each
-// subblock is one packer stream (one close, not one per row). Last, each output tile is tilized from ACC (srcA, tf32:
-// the same rounding today's bias add applies to the fp32 partials) and packed with ReLU.
+// rowbase(t) + (1 - kw) d, so the kw shift sums in fp32 in the packer (K in fp32 DEST). ACC leaves a d-row gap after
+// every image row: the wrapped rows of Q_0 (w >= W - d) and Q_2 (w < d) land there and are never read (the masks cost
+// nothing). Q_1 covers every valid ACC row exactly once and its round comes first, so it packs as an overwrite (packer
+// L1 accumulation off) and Q_0 / Q_2, which spill d rows into the neighbouring row regions, accumulate onto it. Gap and
+// halo rows take accumulations onto garbage, and nothing reads them. With a full-width subblock (sbw == N) each
+// subblock is one packer stream (one close, not one per row). Last, each output tile is tilized from ACC (srcA, tf32)
+// plus the bias (srcB) and packed with ReLU. The bias therefore has no reader seed and no wait before the first pack:
+// the writer reads it after the weights and the reader decodes it into fp32 rows (cb_bias_rows) once its fill is done.
 //
 // Raw LLK (capability): compute_kernel_lib::matmul_block reads in0 as one contiguous [M, K] block and packs at a CB's
 // write pointer; here a tile-row's K' comes from three slab tile-rows (whole input rows apart, one in0 base per kernel
 // row, all accumulated in DEST before the one pack of a column round), out-of-image kernel rows are skipped, and each
 // subblock is pack-untilized at a computed ACC row offset (llk_pack_untilize_impl / a stream MOP with an explicit
 // base). compute_kernel_lib::tilize reads at the CB read pointer; the final pass tilizes from computed ACC rows.
+// The final pass's bias add (capability): compute_kernel_lib::tilize has no second operand, and an add after it
+// (binary_dest_reuse_tiles) needs an unpacker re-init per DEST batch and a second unpack + FPU pass per tile. The
+// fp32-DEST tilize copy is already an ELWADD of the tilized srcA and a zeroed srcB, so the tilize MOP's srcB op becomes
+// a real unpack of 8 rows of fp32 bias (raw UNPACR at unpacker 1's base address); the math is the stock copy.
+// Measured (Blackhole p150b, LoFi, against the reader-seeded accumulator): stem.conv2 40.6 -> 37.6, stem.conv3 60.0 ->
+// 53.3 us; the final pass took 3.0 us on stem.conv2 with and without the add.
 
 #pragma once
 
@@ -45,6 +54,11 @@
 namespace conv2d_3x3::kw_fold {
 
 constexpr uint32_t FINAL_BATCH = 4;  // output tiles per DEST section in the final pass
+
+// Column rounds stream kw = 1 first: Q_1 covers every valid ACC row once, so it packs as an overwrite that Q_0 / Q_2
+// accumulate onto (no bias seed). The writer and the weight server read the rounds in this order.
+constexpr uint32_t KW_ROUND_ORDER[3] = {1, 0, 2};
+constexpr uint32_t kw_round_slot(uint32_t kw) { return kw == 1 ? 0 : (kw == 0 ? 1 : 2); }
 
 // ACC row of tile-row index i (tile-row t0 - 1 + i): d leading rows, 32 rows per tile-row, a d-row gap per image row.
 template <uint32_t d, uint32_t tpr>
@@ -113,17 +127,34 @@ inline void pack_stream(uint32_t addr, uint32_t r0, uint32_t h) {
 #endif
 
 #ifdef TRISC_UNPACK
+// The tilize MOP (_llk_unpack_tilize_mop_config_, non-8-bit) with its srcB op a real unpack instead of the zeroed srcB
+// the fp32-DEST copy (ELWADD, srcB rows 0-7 for every 8-row step) adds. The BH tilize unpack leaves tile row r in srcA
+// rows 2r (columns 0-15) and 2r + 1 (16-31), so 8 srcB rows of the row-major bias row [b_0..b_31] (4 rows of it) add
+// the bias to every row.
+inline void tilize_bias_mop_config() {
+    static constexpr uint32_t unpack_srca =
+        TT_OP_UNPACR(SrcA, 0b1, 0, 0, 0, 1, 1, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1);
+    static constexpr uint32_t unpack_srcb =
+        TT_OP_UNPACR(SrcB, 0b0, 0, 0, 0, 1, 1, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1);
+    ckernel_template tmp(1, 1, unpack_srcb);
+    tmp.set_start_op(unpack_srca);
+    tmp.program();
+    TTI_SETADCXX(p_setadc::UNP_B, 8 * FACE_C_DIM - 1, 0x0);
+}
+// _llk_unpack_tilize_ (non-8-bit, srcA) for column tile col_tile of the rows at addr, plus srcB from addr_b.
 template <uint32_t cb_acc>
-inline void unpack_tilize_at(uint32_t addr, uint32_t col_tile) {
+inline void unpack_tilize_bias_at(uint32_t addr, uint32_t col_tile, uint32_t addr_b) {
     const uint32_t id = get_operand_id(cb_acc);
-    llk_unpack_tilize_impl(
-        (addr >> 4) - 1,
-        col_tile,
-        unpack_src_format[id],
-        unpack_dst_format[id],
-        get_operand_face_r_dim(id),
-        get_operand_num_faces(id),
-        get_operand_narrow_tile(id));
+    const uint32_t a = (addr >> 4) - 1 + (SCALE_DATUM_SIZE(unpack_src_format[id], col_tile) << 1);
+    volatile uint32_t tt_reg_ptr* cfg = get_cfg_pointer();
+    TTI_SETADCZW(p_setadc::UNP_AB, 0, 0, 0, 0, 0b1111);
+    wait_for_next_context(2);
+    _llk_unpack_configure_addresses_(a, (addr_b >> 4) - 1, cfg);
+    semaphore_post(semaphore::UNPACK_SYNC);
+    TTI_STALLWAIT(p_stall::STALL_UNPACK, p_stall::TRISC_CFG);
+    ckernel::ckernel_template::run();
+    t6_semaphore_get(semaphore::UNPACK_SYNC);
+    switch_config_context(unp_cfg_context);
 }
 #endif
 
@@ -165,8 +196,7 @@ template <
     uint32_t cb_bias,
     uint32_t cb_out,
     uint32_t cb_acc,
-    uint32_t cb_bias_rm,
-    uint32_t cb_tok,
+    uint32_t cb_bias_rows,
     uint32_t cb_acc_ready,
     uint32_t N,
     uint32_t Ct,
@@ -191,43 +221,15 @@ ALWI void run(uint32_t m_tile_start, uint32_t actual_m_tiles, uint32_t num_block
 
     CircularBuffer in(cb_in);
     CircularBuffer w(cb_w);
-    CircularBuffer bias(cb_bias);
     CircularBuffer out(cb_out);
-    CircularBuffer bias_rm(cb_bias_rm);
-    CircularBuffer tok(cb_tok);
+    CircularBuffer bias_rows(cb_bias_rows);
     CircularBuffer acc_ready(cb_acc_ready);
 
-    // ---- bias block: [32, N * 32] fp32 rows = bias (row broadcast in DEST, exact), pack-untilized once.
-    compute_kernel_hw_startup(cb_bias, cb_bias_rm);
-    {
-        MaybeDeviceZoneScope("compute_kwf_bias_block");
-        bias.wait_front(N);
-        unary_bcast_init<BroadcastType::ROW>(cb_bias);
-        pack_reconfig_data_format(cb_bias_rm);
-        pack_untilize_dest_init<sbw, sbw>(cb_bias_rm);
-        PACK((stream_mop_config<sbw>()));
-        bias_rm.reserve_back(1);
-        [[maybe_unused]] uint32_t bias_rm_base = 0;
-        PACK((bias_rm_base = get_local_cb_interface(get_output_id(cb_bias_rm)).fifo_wr_ptr << 4));
-        for (uint32_t n0 = 0; n0 < N; n0 += sbw) {
-            tile_regs_acquire();
-            for (uint32_t j = 0; j < sbw; ++j) {
-                unary_bcast<BroadcastType::ROW>(cb_bias, n0 + j, j);
-            }
-            tile_regs_commit();
-            tile_regs_wait();
-            // Plane n0 / sbw of the block: [32, sbw * 32] rows, planes back to back.
-            PACK((pack_stream<sbw>(bias_rm_base + (n0 / sbw) * 32 * PITCH, 0, 1)));
-            tile_regs_release();
-        }
-        bias_rm.push_back(1);
-        pack_untilize_uninit(cb_bias_rm);
-    }
-
+    compute_kernel_hw_startup(cb_w, cb_in, cb_acc);
     [[maybe_unused]] uint32_t acc_base = 0;
     PACK((acc_base = get_local_cb_interface(get_output_id(cb_acc)).fifo_wr_ptr << 4));
-    // M-blocks of bm tile-rows (one ACC, re-seeded per block: the reader waits for the previous block's tokens to be
-    // popped, which happens after its final pass). Whole-K keeps the weights resident across blocks (streamed once).
+    // M-blocks of bm tile-rows (one ACC: a block's Q_1 overwrite packs follow the previous block's final pass on the
+    // same thread). Whole-K keeps the weights resident across blocks (streamed once).
     for (uint32_t blk = 0; blk < num_blocks; ++blk) {
         const uint32_t t0 = m_tile_start + blk * bm;
         const uint32_t valid = actual_m_tiles - blk * bm < bm ? actual_m_tiles - blk * bm : bm;
@@ -238,19 +240,18 @@ ALWI void run(uint32_t m_tile_start, uint32_t actual_m_tiles, uint32_t num_block
         const bool halo_bot = (t0 + valid) % tpr != 0 && t0 + valid < m_tiles;
         {
             MaybeDeviceZoneScope("compute_kwf_matmul_shift");
-            // One pass per weight column round kw, as the round lands: Q_kw's rows each accumulate every in-image
-            // kernel row in DEST and are packed onto ACC once (Q_0: tile-rows t0 - 1 .. t_end - 1, Q_1: the valid
-            // rows, Q_2: t0 .. t_end). K-blocked: one round at a time (double-buffered, popped after its pass).
-            // Whole-K: the rounds stay resident across M-blocks; pass kw waits only for rounds 0 .. kw.
+            // One pass per weight column round, in round order kw = 1, 0, 2, as the round lands: Q_kw's rows each
+            // accumulate every in-image kernel row in DEST and are packed onto ACC once (Q_1: the valid rows, as an
+            // overwrite; Q_0: tile-rows t0 - 1 .. t_end - 1 and Q_2: t0 .. t_end, accumulating). K-blocked: one round
+            // at a time (double-buffered, popped after its pass). Whole-K: the rounds stay resident across M-blocks;
+            // pass s waits only for rounds 0 .. s.
             constexpr uint32_t round_tiles = 3 * Ct * N;
             reconfig_data_format(cb_w, cb_in);
             pack_reconfig_data_format(cb_acc);
             pack_untilize_dest_init<sbw, sbw>(cb_acc);
             PACK((stream_mop_config<sbw>()));
-            pack_reconfig_l1_acc(1);
             uint32_t init_rows = sbh;
             matmul_block_init(cb_in, cb_w, false, sbw, sbh, Ct);
-            uint32_t ready = 0;
             uint32_t landed = 0;
             // Rows [i0, i0 + h) (tile-row t0 - 1 + i), one kw, columns [n0, n0 + sbw).
             auto subblock_body = [&](uint32_t i0, uint32_t h, uint32_t kw, uint32_t n0) {
@@ -266,15 +267,6 @@ ALWI void run(uint32_t m_tile_start, uint32_t actual_m_tiles, uint32_t num_block
                     if (pages > landed) {
                         in.wait_front(pages);
                         landed = pages;
-                    }
-                }
-                // Q_0 of the last row spills d rows into the next region: it must be seeded first.
-                {
-                    uint32_t need = i0 + h;
-                    need = need < 1 ? 1 : (need > valid ? valid : need);
-                    if (need > ready) {
-                        tok.wait_front(need);
-                        ready = need;
                     }
                 }
                 tile_regs_acquire();
@@ -297,7 +289,8 @@ ALWI void run(uint32_t m_tile_start, uint32_t actual_m_tiles, uint32_t num_block
                     }
                     const uint32_t in0 =
                         static_cast<uint32_t>(static_cast<int32_t>(t_first + a + kh * R - R) + base[kh]) * Ct;
-                    const uint32_t in1 = (kblocked ? 0 : kw * round_tiles) + kh * Ct * N + n0;
+                    // Whole-K: round kw sits at slot kw_round_slot(kw) of the resident rounds.
+                    const uint32_t in1 = (kblocked ? 0 : kw_round_slot(kw) * round_tiles) + kh * Ct * N + n0;
                     for (uint32_t c = 0; c < Ct; ++c) {
                         matmul_block(cb_in, cb_w, in0 + c, in1 + c * N, a * sbw, false, sbw, b - a, Ct);
                     }
@@ -329,12 +322,17 @@ ALWI void run(uint32_t m_tile_start, uint32_t actual_m_tiles, uint32_t num_block
                     subblock_body(i0, h, kw, n0);
                 }
             };
-            for (uint32_t kw = 0; kw < 3; ++kw) {
+            for (uint32_t step = 0; step < 3; ++step) {
+                const uint32_t kw = KW_ROUND_ORDER[step];
                 {
                     // K-blocked: this round at the front (the previous one was popped), so its in1 tiles start at
-                    // index 0. Whole-K: rounds 0 .. kw.
+                    // index 0. Whole-K: rounds 0 .. step.
                     MaybeDeviceZoneScope("compute_kwf_weight_wait");
-                    w.wait_front(kblocked ? round_tiles : (kw + 1) * round_tiles);
+                    w.wait_front(kblocked ? round_tiles : (step + 1) * round_tiles);
+                }
+                // Q_1 (step 0) overwrites; Q_0 and Q_2 accumulate onto it.
+                if (step < 2) {
+                    pack_reconfig_l1_acc(step);
                 }
                 // Q_0 reaches back to the halo tile-row above (t0 - 1), Q_2 to the one below (t_end).
                 const uint32_t i_lo = kw == 0 && halo_top ? 0 : 1;
@@ -358,18 +356,24 @@ ALWI void run(uint32_t m_tile_start, uint32_t actual_m_tiles, uint32_t num_block
             acc_ready.push_back(1);
         }
 
-        // ---- output tile = tilize(ACC rows) + ReLU on the pack.
+        // ---- output tile = tilize(ACC rows) + bias, ReLU on the pack.
         {
             MaybeDeviceZoneScope("compute_kwf_final");
             acc_ready.wait_front(1);
             [[maybe_unused]] uint32_t acc_rd = 0;
+            [[maybe_unused]] uint32_t rows_rd = 0;
             UNPACK((acc_rd = get_local_cb_interface(get_operand_id(cb_acc)).fifo_rd_ptr << 4));
-            reconfig_data_format_srca(cb_acc);
+            UNPACK((rows_rd = get_local_cb_interface(get_operand_id(cb_bias_rows)).fifo_rd_ptr << 4));
+            // The reader's fp32 bias rows (one 512 B page per output column tile: 4 copies of [b_0 .. b_31]).
+            bias_rows.wait_front(N);
+            reconfig_data_format(cb_acc, cb_bias_rows);
             pack_reconfig_data_format(cb_out);
             if constexpr (relu) {
                 pack_relu_config(ReluConfig::zero());
             }
             tilize_init(cb_acc, sbw, cb_out);
+            UNPACK((tilize_bias_mop_config()));
+            constexpr uint32_t ROWS_BYTES = 4 * 32 * 4;  // one column tile's 4 fp32 bias rows
             out.reserve_back(bm * N);
             const uint32_t total = valid * N;
             for (uint32_t f0 = 0; f0 < total; f0 += FINAL_BATCH) {
@@ -379,8 +383,10 @@ ALWI void run(uint32_t m_tile_start, uint32_t actual_m_tiles, uint32_t num_block
                 for (uint32_t j = 0; j < cnt; ++j) {
                     const uint32_t u = (f0 + j) / N;
                     const uint32_t n = (f0 + j) - u * N;
-                    UNPACK((unpack_tilize_at<cb_acc>(
-                        acc_rd + (n / sbw) * PLANE + rowbase<d, tpr>(t0, u + 1) * PITCH, n % sbw)));
+                    UNPACK((unpack_tilize_bias_at<cb_acc>(
+                        acc_rd + (n / sbw) * PLANE + rowbase<d, tpr>(t0, u + 1) * PITCH,
+                        n % sbw,
+                        rows_rd + n * ROWS_BYTES)));
                     MATH((llk_math_eltwise_unary_datacopy<
                           DataCopyType::A2D,
                           DST_ACCUM_MODE,
@@ -400,15 +406,13 @@ ALWI void run(uint32_t m_tile_start, uint32_t actual_m_tiles, uint32_t num_block
                 pack_relu_config(ReluConfig::none());
             }
         }
-        tok.wait_front(valid);
-        tok.pop_front(valid);
         in.wait_front(slab_pages);
         in.pop_front(slab_pages);
     }
     if constexpr (!kblocked) {
         w.pop_front(9 * Ct * N);
     }
-    bias.pop_front(N);
+    bias_rows.pop_front(N);
 }
 
 }  // namespace conv2d_3x3::kw_fold

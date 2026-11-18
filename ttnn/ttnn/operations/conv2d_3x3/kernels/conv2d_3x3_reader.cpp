@@ -798,33 +798,52 @@ void kernel_main() {
         }
 
 #ifdef CONV2D_3X3_KW_FOLD
-        {
-            // kw-fold (conv2d_3x3_kw_fold.hpp): no gather. Seed each valid ACC region (32 rows of one output tile-row)
-            // with the fp32 bias rows compute packed once, one self-aimed read per region, and hand it to compute.
-            MaybeDeviceZoneScope("reader_kwf_seed");
-            // ACC and the bias block are KWF_N / KWF_SBW column planes of sbw * 32 fp32 columns.
-            constexpr uint32_t pitch = KWF_SBW * 32 * 4;
-            constexpr uint32_t planes = KWF_N / KWF_SBW;
-            // Per M-block (the ACC is reused: a region's token reserve waits until compute popped the previous
-            // block's tokens, after its final pass read the ACC).
-            cb_wait_front(KWF_CB_BIAS_RM, 1);
-            const uint64_t src = get_noc_addr(get_read_ptr(KWF_CB_BIAS_RM));
-            const uint32_t acc = get_write_ptr(KWF_CB_ACC);
-            const uint32_t t0 = o_first / TILE_DIM;
-            const uint32_t img0 = (t0 - 1 + KWF_TPR) / KWF_TPR;
-            for (uint32_t i = 1; i <= block_valid_tiles; ++i) {
-                const uint32_t img = (t0 - 1 + i + KWF_TPR) / KWF_TPR;
-                const uint32_t row = KWF_D + 32 * i + KWF_D * (img - img0);
-                cb_reserve_back(KWF_CB_TOK, 1);
-                for (uint32_t p = 0; p < planes; ++p) {
-                    noc_async_read(src + p * 32 * pitch, acc + p * KWF_PLANE_BYTES + row * pitch, 32 * pitch);
+        // kw-fold (conv2d_3x3_kw_fold.hpp): no gather, and no accumulator seed (compute packs Q_1 as an overwrite).
+        if (m_block_idx == 0) {
+            // kw-fold's final pass adds the bias as srcB rows: per output column tile n, 4 copies of the fp32 row
+            // [b_0 .. b_31] (KWF_CB_BIAS_ROWS page n), decoded from the bias tiles the writer reads into cb_bias after
+            // its first M-block's weights. Done after the first block's fill, not at kernel end: a later block's fill
+            // can wait for the first block's slab, which compute frees only after the final pass that adds this bias.
+            // Row 0 of a tile is row 0 of faces 0 and 1: bf16 at datum c % 16 (+ 256 for face 1); bf8_b
+            // (KWF_BIAS_BFP8): 64 exponent bytes, one per face row (face f row 0 at byte 16 f), then sign-magnitude
+            // bytes m, value (-1)^s (m & 127) 2^(e - 133), from byte 64 (+ 256 for face 1).
+            MaybeDeviceZoneScope("reader_kwf_bias_rows");
+            cb_wait_front(KWF_CB_BIAS, KWF_N);
+            invalidate_l1_cache();
+            cb_reserve_back(KWF_CB_BIAS_ROWS, KWF_N);
+            const uint32_t raw = get_read_ptr(KWF_CB_BIAS);
+            const uint32_t tile_bytes = get_tile_size(KWF_CB_BIAS);
+            uint32_t* rows = reinterpret_cast<uint32_t*>(get_write_ptr(KWF_CB_BIAS_ROWS));
+            for (uint32_t n = 0; n < KWF_N; ++n, rows += 128) {
+                const uint32_t t = raw + n * tile_bytes;
+                for (uint32_t c = 0; c < 32; ++c) {
+#if KWF_BIAS_BFP8
+                    const uint32_t e = reinterpret_cast<const uint8_t*>(t)[16 * (c / 16)];
+                    const uint32_t m = reinterpret_cast<const uint8_t*>(t)[64 + 256 * (c / 16) + c % 16];
+                    const uint32_t mag = m & 0x7f;
+                    uint32_t v = 0;
+                    if (mag != 0) {
+                        // Normalize the 7-bit magnitude to bit 6 (at most 6 shifts; no clz libcall).
+                        uint32_t mm = mag;
+                        uint32_t sh = 0;
+                        while (!(mm & 0x40)) {
+                            mm <<= 1;
+                            ++sh;
+                        }
+                        v = ((m & 0x80) << 24) | ((e - sh) << 23) | ((mm & 0x3f) << 17);
+                    }
+#else
+                    const uint32_t v =
+                        static_cast<uint32_t>(reinterpret_cast<const uint16_t*>(t)[256 * (c / 16) + c % 16]) << 16;
+#endif
+                    rows[c] = v;
+                    rows[32 + c] = v;
+                    rows[64 + c] = v;
+                    rows[96 + c] = v;
                 }
-                noc_async_read_barrier();
-                cb_push_back(KWF_CB_TOK, 1);
             }
-            if (m_block_idx + 1 == num_m_blocks_this_core) {
-                cb_pop_front(KWF_CB_BIAS_RM, 1);
-            }
+            cb_push_back(KWF_CB_BIAS_ROWS, KWF_N);
+            cb_pop_front(KWF_CB_BIAS, KWF_N);
         }
         continue;
 #endif
