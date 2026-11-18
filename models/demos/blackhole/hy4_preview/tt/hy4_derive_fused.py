@@ -17,13 +17,21 @@ def _acc(t):
     return list(ttnn.TensorAccessorArgs(t).get_compile_time_args())
 
 
-def derive_geom(p, own_col, wr, kvcnt, colinfo, ih, il, upd_rows, S, CH, SL, B2):
+def rope_enabled():
+    return os.environ.get("HY4_B47D_ROPE", "0") == "1"
+
+
+def derive_geom(p, own_col, wr, kvcnt, colinfo, ih, il, upd_rows, S, CH, SL, B2, rope=None):
+    """rope (B47d): None or (cos_tab, sin_tab, cos_out, sin_out, c128_out, s128_out, first, pmax): the same program also gathers the bf16 cos / sin rows of
+    positions p + j from the final-value tables ([P, 64] bf16 RM, replicated) and writes the four persistent rope tabs (TILE bf16 [S, 64] / [S, 128]).
+    """
     assert 1 <= S <= 4 and len(upd_rows) >= S
     core = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))])
+    cbsz = 64 * 16 if rope is None else 4096
     cb = ttnn.CBDescriptor(
-        total_size=64 * 16,
+        total_size=cbsz,
         core_ranges=core,
-        format_descriptors=[ttnn.CBFormatDescriptor(buffer_index=0, data_format=ttnn.int32, page_size=64 * 16)],
+        format_descriptors=[ttnn.CBFormatDescriptor(buffer_index=0, data_format=ttnn.int32, page_size=cbsz)],
     )
     ups = [upd_rows[j] for j in range(S)]
     ct = (
@@ -38,6 +46,13 @@ def derive_geom(p, own_col, wr, kvcnt, colinfo, ih, il, upd_rows, S, CH, SL, B2)
         + _acc(ups[0])
     )
     common = [t.buffer_address() for t in (p, own_col, wr, kvcnt, colinfo, ih, il)] + [t.buffer_address() for t in ups]
+    rts = []
+    if rope is not None:
+        rts = list(rope[:6])
+        ct = ct + [1, int(bool(rope[6])), int(rope[7])] + sum((_acc(t) for t in rts), [])
+        common = common + [0] * (11 - len(common)) + [t.buffer_address() for t in rts]
+    else:
+        ct = ct + [0, 0, 0] + _acc(p) * 6  # unused accessor slots (never constructed at ROPE=0)
     k = ttnn.KernelDescriptor(
         kernel_source=f"{KDIR}/derive_geom.cpp",
         source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
@@ -49,7 +64,7 @@ def derive_geom(p, own_col, wr, kvcnt, colinfo, ih, il, upd_rows, S, CH, SL, B2)
     )
     prog = ttnn.ProgramDescriptor(kernels=[k], semaphores=[], cbs=[cb])
     prog.custom_program_hash = (0x4B40 << 40) | (hash(tuple(ct)) & ((1 << 40) - 1))
-    ttnn.generic_op([p, own_col, wr, kvcnt, colinfo, ih, il] + ups, prog)
+    ttnn.generic_op([p, own_col, wr, kvcnt, colinfo, ih, il] + ups + rts, prog)
 
 
 def tail_enabled():

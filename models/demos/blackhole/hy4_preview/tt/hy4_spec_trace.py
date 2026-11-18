@@ -64,6 +64,54 @@ class SpecDerive:
         if self._b40 is not None:  # B40: persistent rope hi / lo index rows (uint32 [1, S] per mesh row)
             zi = lambda: upload(md, torch.zeros(R, S, dtype=torch.int32), ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT, row_dim=0)
             self.ih_b40, self.il_b40 = zi(), zi()
+        self._b47d = None
+        if self._b40 is not None and _b40.rope_enabled():
+            # B47d: final bf16 cos / sin tables [P, 64] (built ONCE with the stock two-level fp32 ops -> bit-identical by construction), gathered inside the derive_geom program
+            ct_, st_ = self._build_rope_final(rope, P=B2 * B2)
+            self._b47d = (
+                upload(md, ct_, ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT),
+                upload(md, st_, ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT),
+                B2 * B2 - 1,
+            )
+
+    def _stock_rope_rows(self, ih, il, N):
+        """stock two-level cos / sin (bf16 [1,1,N,64]) of the positions with hi / lo index rows ih, il (uint32 RM [1,N])."""
+        D = self.D
+
+        def g(tbl, idx):
+            e = ttnn.reshape(ttnn.embedding(idx, tbl, layout=ttnn.TILE_LAYOUT), [1, 1, N, 4 * D])
+            f = ttnn.typecast(e, ttnn.float32)
+            sl = lambda i: ttnn.slice(f, [0, 0, 0, i * D], [1, 1, N, (i + 1) * D])
+            return ttnn.add(sl(0), sl(1)), ttnn.add(sl(2), sl(3))
+
+        (ch_, sh_), (cl_, sl_) = g(self.rt[0], ih), g(self.rt[1], il)
+        cos = ttnn.subtract(ttnn.multiply(ch_, cl_), ttnn.multiply(sh_, sl_))
+        sin = ttnn.add(ttnn.multiply(sh_, cl_), ttnn.multiply(ch_, sl_))
+        return ttnn.typecast(cos, ttnn.bfloat16), ttnn.typecast(sin, ttnn.bfloat16)
+
+    def _build_rope_final(self, rope, P, N=8192):
+        import hashlib
+
+        key = hashlib.md5(f"{rope.dim}_{rope.theta}_{rope.interleave}_{P}".encode()).hexdigest()[:12]
+        cdir = os.environ.get("HY4_B47D_ROPE_CACHE", "")
+        cf = os.path.join(cdir, f"rope_final_{key}.pt") if cdir else ""
+        if cf and os.path.exists(cf):
+            d = torch.load(cf)
+            return d["cos"], d["sin"]
+        cs, ss = [], []
+        for c0 in range(0, P, N):
+            pos = torch.arange(c0, c0 + N, dtype=torch.int64)
+            mk = lambda v: upload(self.md, v.to(torch.int32).reshape(1, N), ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT)
+            cb_, sb_ = self._stock_rope_rows(mk(pos // B2), mk(pos % B2), N)
+            h = lambda t: ttnn.to_torch(ttnn.get_device_tensors(t)[0]).reshape(N, self.D).clone()
+            cs.append(h(cb_))
+            ss.append(h(sb_))
+        out = torch.cat(cs, 0).contiguous(), torch.cat(ss, 0).contiguous()
+        if cf:
+            os.makedirs(cdir, exist_ok=True)
+            torch.save({"cos": out[0], "sin": out[1]}, cf + ".tmp")
+            os.replace(cf + ".tmp", cf)
+        return out
 
     def tabs(self):
         return (self.cos, self.sin, self.cos, self.sin, self.c128, self.s128)
@@ -77,7 +125,27 @@ class SpecDerive:
         ctx, S, cp = self.ctx, self.S, ttnn.copy
         pv = None if self._b40 is not None else ttnn.add(p, self.ar16)  # [1,1,1,16]: position of row j in element j
         # --- rope (two-level tables)
-        if self._b40 is not None:
+        if self._b47d is not None:
+            ct_, st_, pmax = self._b47d
+            self._b40.derive_geom(
+                p,
+                self.own_col,
+                ctx.wr,
+                ctx.kvcnt,
+                ctx.colinfo,
+                self.ih_b40,
+                self.il_b40,
+                ctx.upd_rows,
+                S,
+                CH,
+                SL,
+                B2,
+                rope=(ct_, st_, self.cos, self.sin, self.c128, self.s128, self.first, pmax),
+            )
+            if ctx.mode == "dense":
+                self._dense_ids(p)
+            return
+        elif self._b40 is not None:
             self._b40.derive_geom(
                 p, self.own_col, ctx.wr, ctx.kvcnt, ctx.colinfo, self.ih_b40, self.il_b40, ctx.upd_rows, S, CH, SL, B2
             )
@@ -138,10 +206,16 @@ class SpecDerive:
         # --- dense ids [S,1,1,K]: row j sees tokens 0..p+j
         if self._b40 is not None and ctx.mode != "dense":
             return  # B40: the dense ids are only read in mode "dense"
+        self._dense_ids(p)
+
+    def _dense_ids(self, p):
         pj = ttnn.add(p, self.arS)  # [S,1,1,1]
         valid = ttnn.le(self.arK, pj)
         ids = ttnn.subtract(ttnn.multiply(valid, ttnn.add(self.arK, 1.0)), 1.0)
-        cp(ttnn.to_layout(ttnn.typecast(ttnn.typecast(ids, ttnn.int32), ttnn.uint32), ttnn.ROW_MAJOR_LAYOUT), ctx.ids_g)
+        ttnn.copy(
+            ttnn.to_layout(ttnn.typecast(ttnn.typecast(ids, ttnn.int32), ttnn.uint32), ttnn.ROW_MAJOR_LAYOUT),
+            self.ctx.ids_g,
+        )
 
 
 def accept(a_row, d_row, cap, k, ar16, oh0, maskS):
