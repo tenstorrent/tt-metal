@@ -2,8 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// The virtual-cluster manifest's loader and its checks before the device is touched, from SPEC-0011 (docs 1966509)
-// § Manifest and § Checks before the device is touched, and its § Verification 1: one accepted manifest, one manifest
+// The virtual-cluster manifest's loader and its checks before the device is touched, from SPEC-0011 § Manifest and
+// § Checks before the device is touched, and its § Verification 1: one accepted manifest, one manifest
 // per row that trips that row and no other, one per kind of load error. No device. Rows 9 to 11 need a capture and
 // are not covered.
 //
@@ -11,6 +11,7 @@
 
 #include <gtest/gtest.h>
 
+#include <algorithm>
 #include <cstdint>
 #include <filesystem>
 #include <fstream>
@@ -19,7 +20,9 @@
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <tuple>
 #include <utility>
+#include <vector>
 
 #include "tt_metal/tt_fabric/keraunos/vcluster/manifest.hpp"
 
@@ -84,16 +87,33 @@ std::string edit(std::initializer_list<std::pair<std::string_view, std::string_v
     return text;
 }
 
-// SPEC-0011 § Checks: "The loader fails and reports no row." The loader's contract: it throws ManifestLoadError,
-// listing every load error. Any other exception is not a load error and fails the test.
-bool load_fails(std::string_view yaml) {
+// SPEC-0011 § Checks: "The loader fails, listing every load error it found, and reports no row." The loader throws
+// ManifestLoadError. Returns its errors; fails the test when `yaml` loads.
+std::vector<std::string> load_errors(std::string_view yaml) {
     try {
         parse_manifest(yaml);
     } catch (const ManifestLoadError& error) {
         EXPECT_FALSE(error.errors().empty());
-        return true;
+        return error.errors();
     }
-    return false;
+    ADD_FAILURE() << "loaded, expected a load error";
+    return {};
+}
+
+std::string joined(const std::vector<std::string>& errors) {
+    std::string text;
+    for (const auto& error : errors) {
+        text += "\n  " + error;
+    }
+    return text;
+}
+
+// `yaml` fails to load with exactly one error, which names `needle`: the key or value the one edit broke. A needle is
+// a key or a value, not wording, so the check survives a reworded message.
+void expect_load_error(std::string_view yaml, std::string_view needle) {
+    const auto errors = load_errors(yaml);
+    ASSERT_EQ(errors.size(), 1u) << joined(errors);
+    EXPECT_NE(errors[0].find(needle), std::string::npos) << "no '" << needle << "' in" << joined(errors);
 }
 
 Manifest load(std::string_view yaml) {
@@ -105,13 +125,22 @@ Manifest load(std::string_view yaml) {
     }
 }
 
-// The rows check_manifest() reports for `yaml`, which must load.
+// The findings check_manifest() reports for `yaml`, which must load.
+std::vector<ManifestFinding> findings(std::string_view yaml, const PackageFacts& facts = mmk()) {
+    return check_manifest(load(yaml), facts);
+}
+
+// The rows check_manifest() reports for `yaml`.
 std::set<uint32_t> rows(std::string_view yaml, const PackageFacts& facts = mmk()) {
     std::set<uint32_t> found;
-    for (const auto& finding : check_manifest(load(yaml), facts)) {
+    for (const auto& finding : findings(yaml, facts)) {
         found.insert(static_cast<uint32_t>(finding.check));
     }
     return found;
+}
+
+size_t count_of(const std::vector<ManifestFinding>& found, ManifestCheck row) {
+    return std::count_if(found.begin(), found.end(), [&](const ManifestFinding& f) { return f.check == row; });
 }
 
 using Rows = std::set<uint32_t>;
@@ -163,6 +192,17 @@ TEST(VclusterManifest, LoadManifestFromFile) {
     const Manifest m = load_manifest(path);
     EXPECT_EQ(m.capture, dir / "line3.capture");
     EXPECT_EQ(m.devices.size(), 3u);
+    std::filesystem::remove_all(dir);
+}
+
+// An absolute `capture` is kept as written.
+TEST(VclusterManifest, LoadManifestAbsoluteCapture) {
+    const auto dir = std::filesystem::path(::testing::TempDir()) / "vcluster_manifest_abs_test";
+    std::filesystem::create_directories(dir);
+    const auto path = dir / "line3.yaml";
+    std::ofstream(path) << edit({{"version: 1\n", "version: 1\ncapture: /captures/line3.capture\n"}});
+    const Manifest m = load_manifest(path);
+    EXPECT_EQ(m.capture, std::filesystem::path("/captures/line3.capture"));
     std::filesystem::remove_all(dir);
 }
 
@@ -281,14 +321,20 @@ TEST(VclusterManifest, Row1EndsBeforeStageB) {
 
 // --- Stage C: rows 3 to 8 and 13 ---------------------------------------------------------------------------------
 
-// Row 3: two slots name one (tile, cce, hart).
+// Row 3: two slots name one (tile, cce, hart), "reported once for the second and each later slot": two slots on a
+// hart give one finding, three give two.
 TEST(VclusterManifest, Row3SharedHart) {
-    EXPECT_EQ(
-        rows(edit(
-            {{"      - {tile: 3, cce: 0, hart: 1, role: worker}\n",
-              "      - {tile: 3, cce: 0, hart: 1, role: worker}\n      - {tile: 3, cce: 0, hart: 1, role: "
-              "worker}\n"}})),
-        Rows{3});
+    const std::string two = edit(
+        {{"      - {tile: 3, cce: 0, hart: 1, role: worker}\n",
+          "      - {tile: 3, cce: 0, hart: 1, role: worker}\n      - {tile: 3, cce: 0, hart: 1, role: worker}\n"}});
+    EXPECT_EQ(rows(two), Rows{3});
+    EXPECT_EQ(count_of(findings(two), ManifestCheck::Slot), 1u);
+    const std::string three = edit(
+        {{"      - {tile: 3, cce: 0, hart: 1, role: worker}\n",
+          "      - {tile: 3, cce: 0, hart: 1, role: worker}\n      - {tile: 3, cce: 0, hart: 1, role: worker}\n"
+          "      - {tile: 3, cce: 0, hart: 1, role: worker}\n"}});
+    EXPECT_EQ(rows(three), Rows{3});
+    EXPECT_EQ(count_of(findings(three), ManifestCheck::Slot), 2u);
 }
 
 // Row 3: a hart not below the CCE's hart count (4 in mmk()); hart 3 is the last that passes.
@@ -353,9 +399,12 @@ TEST(VclusterManifest, Row6WorkerOnRoutersHart) {
         (Rows{3, 6}));
 }
 
-// Row 7, each clause alone.
+// Row 7, each clause alone. A link end naming no device reports that and nothing else for that end; B's port 0, now
+// in no link, is the other finding. The link is ethernet, and row 8 skips a link with an unresolved end.
 TEST(VclusterManifest, Row7UnknownDevice) {
-    EXPECT_EQ(rows(edit({{"b: {device: B, port: 0}", "b: {device: C, port: 0}"}})), Rows{7});
+    const std::string yaml = edit({{"b: {device: B, port: 0}", "b: {device: C, port: 0}"}});
+    EXPECT_EQ(rows(yaml), Rows{7});
+    EXPECT_EQ(count_of(findings(yaml), ManifestCheck::Link), 2u);
 }
 
 TEST(VclusterManifest, Row7UnknownPort) {
@@ -405,8 +454,17 @@ TEST(VclusterManifest, Row8EthernetTilesNotWired) {
 // Row 8 reads the wired pairs from the facts: without {2, 3}, the line's M to B ethernet link fails.
 TEST(VclusterManifest, Row8FromFacts) {
     PackageFacts facts = mmk();
-    facts.ethernet_tile_pairs = {{1, 0}};  // either order
+    facts.ethernet_tile_pairs = {{0, 1}};
     EXPECT_EQ(rows(kLine, facts), Rows{8});
+}
+
+// Row 8: a wired pair matches in either order. The line's M to B link joins tiles 2 and 3, and the A to M link, made
+// ethernet, tiles 0 and 1; each pair is stored the other way round.
+TEST(VclusterManifest, Row8PairEitherOrder) {
+    PackageFacts facts = mmk();
+    facts.ethernet_tile_pairs = {{3, 2}, {1, 0}};
+    EXPECT_EQ(rows(kLine, facts), Rows{});
+    EXPECT_EQ(rows(edit({{"backend: noc", "backend: ethernet"}}), facts), Rows{});
 }
 
 // Row 13: a device with no slots, and a device with workers only (whose worker also has no router, row 6).
@@ -421,10 +479,13 @@ TEST(VclusterManifest, Row13DeviceWithoutRouter) {
     EXPECT_EQ(rows(workers_only, mmk_with_tile_4()), (Rows{6, 13}));
 }
 
-// § Checks: every stage C row that holds is reported. One manifest trips rows 3, 4, 5, 7 and 8.
+// § Checks: every stage C row that holds is reported. One manifest trips rows 3, 4, 5, 6, 7, 8 and 13.
 TEST(VclusterManifest, StageCReportsEveryRow) {
     const std::string yaml = edit({
-        {"{tile: 3, cce: 0, hart: 1, role: worker}", "{tile: 3, cce: 0, hart: 4, role: worker}"},          // row 3
+        {"links:\n",
+         "  - name: C\n    fabric_chip: 3\n    slots:\n      - {tile: 4, cce: 0, hart: 1, role: worker}\n"
+         "    regions:\n      - {tile: 4, cce: 0, base: 0x0, size: 0x400000}\nlinks:\n"},          // rows 6 and 13
+        {"{tile: 3, cce: 0, hart: 1, role: worker}", "{tile: 3, cce: 0, hart: 4, role: worker}"},  // row 3
         {"{tile: 0, cce: 0, base: 0x0, size: 0x400000}", "{tile: 0, cce: 0, base: 0x0, size: 0x400001}"},  // row 4
         {"      - {tile: 2, cce: 0, base: 0x0, size: 0x400000}\n", ""},                                    // row 5
         {"b: {device: M, port: 0}, backend: noc", "b: {device: M, port: 1}, backend: noc"},  // row 7: M port 0 unlinked
@@ -432,7 +493,7 @@ TEST(VclusterManifest, StageCReportsEveryRow) {
          "{a: {device: A, port: 0}, b: {device: B, port: 0}, backend: ethernet}"},  // row 8: tiles 0, 3; row 7: A port
                                                                                     // 0 twice
     });
-    EXPECT_EQ(rows(yaml), (Rows{3, 4, 5, 7, 8}));
+    EXPECT_EQ(rows(yaml, mmk_with_tile_4()), (Rows{3, 4, 5, 6, 7, 8, 13}));
 }
 
 // Stage B ends the check before stage C: a row-12 duplicate with a row-3 hart reports row 12 alone.
@@ -445,48 +506,56 @@ TEST(VclusterManifest, StageBEndsBeforeStageC) {
 }
 
 // --- Load errors: the loader fails and reports no row ------------------------------------------------------------
+//
+// Each case is one edit, so the loader must report exactly one error, and it must name the key or value edited.
 
 TEST(VclusterManifest, LoadErrorUnreadableFile) {
     EXPECT_THROW(load_manifest(std::filesystem::path("/nonexistent/vcluster/line3.yaml")), ManifestLoadError);
 }
 
-TEST(VclusterManifest, LoadErrorNotYaml) { EXPECT_TRUE(load_fails("version: 1\ndevices: [\n")); }
+TEST(VclusterManifest, LoadErrorNotYaml) { EXPECT_EQ(load_errors("version: 1\ndevices: [\n").size(), 1u); }
 
 TEST(VclusterManifest, LoadErrorVersion) {
-    EXPECT_TRUE(load_fails(edit({{"version: 1\n", "version: 2\n"}})));
-    EXPECT_TRUE(load_fails(edit({{"version: 1\n", ""}})));
+    expect_load_error(edit({{"version: 1\n", "version: 2\n"}}), "version");
+    expect_load_error(edit({{"version: 1\n", ""}}), "version");
 }
 
 TEST(VclusterManifest, LoadErrorMissingKey) {
-    for (const auto& [from, to] : std::initializer_list<std::pair<std::string_view, std::string_view>>{
-             {"  - name: A\n    fabric_chip: 0\n", "  - fabric_chip: 0\n"},
-             {"    fabric_chip: 1\n", ""},
-             {"{tile: 0, cce: 0, hart: 1, role: worker}", "{cce: 0, hart: 1, role: worker}"},
-             {"{tile: 3, cce: 0, hart: 1, role: worker}", "{tile: 3, cce: 0, role: worker}"},
-             {"{tile: 3, cce: 0, hart: 1, role: worker}", "{tile: 3, cce: 0, hart: 1}"},
-             {"{tile: 0, cce: 0, base: 0x0, size: 0x400000}", "{tile: 0, cce: 0, base: 0x0}"},
-             {"b: {device: B, port: 0}, backend: ethernet", "b: {device: B, port: 0}"},
-             {"b: {device: B, port: 0}, backend: ethernet", "backend: ethernet"},
-             {"b: {device: B, port: 0}", "b: {device: B}"},
+    for (const auto& [from, to, needle] :
+         std::initializer_list<std::tuple<std::string_view, std::string_view, std::string_view>>{
+             {"  - name: A\n    fabric_chip: 0\n", "  - fabric_chip: 0\n", "name"},
+             {"    fabric_chip: 1\n", "", "fabric_chip"},
+             {"{tile: 0, cce: 0, hart: 1, role: worker}", "{cce: 0, hart: 1, role: worker}", "tile"},
+             {"{tile: 3, cce: 0, hart: 1, role: worker}", "{tile: 3, cce: 0, role: worker}", "hart"},
+             {"{tile: 3, cce: 0, hart: 1, role: worker}", "{tile: 3, cce: 0, hart: 1}", "role"},
+             {"{tile: 0, cce: 0, base: 0x0, size: 0x400000}", "{tile: 0, cce: 0, base: 0x0}", "size"},
+             {"b: {device: B, port: 0}, backend: ethernet", "b: {device: B, port: 0}", "backend"},
+             {"b: {device: B, port: 0}, backend: ethernet", "backend: ethernet", "b"},
+             {"b: {device: B, port: 0}", "b: {device: B}", "port"},
          }) {
-        EXPECT_TRUE(load_fails(edit({{from, to}}))) << to;
+        SCOPED_TRACE(to);
+        expect_load_error(edit({{from, to}}), needle);
     }
 }
 
-// SPEC-0011 (docs 1966509): `links`, and each device's `slots` and `regions`, are required; empty is well formed.
+// § Checks: `links`, and each device's `slots` and `regions`, are required; an empty list is well formed.
 TEST(VclusterManifest, LoadErrorMissingList) {
-    EXPECT_TRUE(load_fails(edit(
-        {{"links:\n  - {a: {device: A, port: 0}, b: {device: M, port: 0}, backend: noc}\n"
-          "  - {a: {device: M, port: 1}, b: {device: B, port: 0}, backend: ethernet}\n",
-          ""}})));
-    EXPECT_TRUE(load_fails(edit(
-        {{"    slots:\n      - {tile: 3, cce: 0, hart: 0, role: router, port: 0}\n"
-          "      - {tile: 3, cce: 0, hart: 1, role: worker}\n",
-          ""}})));
-    EXPECT_TRUE(load_fails(edit({{"    regions:\n      - {tile: 3, cce: 0, base: 0x0, size: 0x400000}\n", ""}})));
+    expect_load_error(
+        edit(
+            {{"links:\n  - {a: {device: A, port: 0}, b: {device: M, port: 0}, backend: noc}\n"
+              "  - {a: {device: M, port: 1}, b: {device: B, port: 0}, backend: ethernet}\n",
+              ""}}),
+        "links");
+    expect_load_error(
+        edit(
+            {{"    slots:\n      - {tile: 3, cce: 0, hart: 0, role: router, port: 0}\n"
+              "      - {tile: 3, cce: 0, hart: 1, role: worker}\n",
+              ""}}),
+        "slots");
+    expect_load_error(edit({{"    regions:\n      - {tile: 3, cce: 0, base: 0x0, size: 0x400000}\n", ""}}), "regions");
 }
 
-// SPEC-0011 (docs 1966509): integers are decimal, or hexadecimal with a `0x` prefix; `0` is accepted.
+// § Checks: an integer is decimal, or hexadecimal after a lowercase `0x`; `0` is accepted.
 TEST(VclusterManifest, IntegersDecimalOrHex) {
     const Manifest m = load(edit(
         {{"{tile: 3, cce: 0, base: 0x0, size: 0x400000}", "{tile: 3, cce: 0, base: 0, size: 4194304}"},
@@ -500,70 +569,168 @@ TEST(VclusterManifest, IntegersDecimalOrHex) {
     EXPECT_EQ(b.slots[1].hart, 1u);
 }
 
-// SPEC-0011 (docs 1966509): a decimal with a leading zero, other than `0`, is a load error, not octal.
-TEST(VclusterManifest, LoadErrorLeadingZero) {
-    EXPECT_TRUE(load_fails(edit({{"fabric_chip: 2", "fabric_chip: 010"}})));
-    EXPECT_TRUE(
-        load_fails(edit({{"{tile: 3, cce: 0, hart: 1, role: worker}", "{tile: 03, cce: 0, hart: 1, role: worker}"}})));
-    EXPECT_TRUE(load_fails(
-        edit({{"{tile: 3, cce: 0, base: 0x0, size: 0x400000}", "{tile: 3, cce: 0, base: 00, size: 0x400000}"}})));
+// § Checks: a value too large for its field is a load error, 32 bits for every number but a region's `base` and
+// `size`, which are 64. The largest value of each width loads.
+TEST(VclusterManifest, IntegerWidths) {
+    expect_load_error(
+        edit({{"{tile: 3, cce: 0, hart: 1, role: worker}", "{tile: 4294967296, cce: 0, hart: 1, role: worker}"}}),
+        "tile");
+    expect_load_error(edit({{"fabric_chip: 2", "fabric_chip: 0x100000000"}}), "fabric_chip");
+    expect_load_error(
+        edit(
+            {{"{tile: 3, cce: 0, base: 0x0, size: 0x400000}",
+              "{tile: 3, cce: 0, base: 18446744073709551616, size: 0x400000}"}}),
+        "base");
+    expect_load_error(
+        edit(
+            {{"{tile: 3, cce: 0, base: 0x0, size: 0x400000}",
+              "{tile: 3, cce: 0, base: 0x0, size: 0x10000000000000000}"}}),
+        "size");
+    const Manifest m = load(edit(
+        {{"{tile: 3, cce: 0, hart: 1, role: worker}", "{tile: 4294967295, cce: 0, hart: 1, role: worker}"},
+         {"{tile: 3, cce: 0, base: 0x0, size: 0x400000}",
+          "{tile: 3, cce: 0, base: 0xffffffffffffffff, size: 18446744073709551615}"}}));
+    EXPECT_EQ(m.devices[2].slots[1].tile, 4294967295u);
+    EXPECT_EQ(m.devices[2].regions[0].base, UINT64_MAX);
+    EXPECT_EQ(m.devices[2].regions[0].size, UINT64_MAX);
+}
+
+// Rows 1 and 4 compare `base + size` with the SRAM without overflow: a region whose sum wraps past 2^64 ends beyond
+// the SRAM (row 4), not inside it (row 1, which a wrapped sum would give).
+TEST(VclusterManifest, Row4RegionNearUint64Max) {
+    for (const std::string_view region : {
+             "{tile: 0, cce: 0, base: 0xffffffffffffffff, size: 0x1}",
+             "{tile: 0, cce: 0, base: 0x1, size: 0xffffffffffffffff}",
+             "{tile: 0, cce: 0, base: 0xffffffffffffffff, size: 0xffffffffffffffff}",
+             "{tile: 0, cce: 0, base: 0xfffffffffffffff0, size: 0x400010}",
+         }) {
+        SCOPED_TRACE(region);
+        EXPECT_EQ(rows(edit({{"{tile: 0, cce: 0, base: 0x0, size: 0x400000}", region}})), Rows{4});
+    }
+}
+
+// § Checks: these are load errors, not octal, hex, signed or string numbers.
+TEST(VclusterManifest, LoadErrorIntegerSyntax) {
+    for (const auto& [from, to, needle] :
+         std::initializer_list<std::tuple<std::string_view, std::string_view, std::string_view>>{
+             {"fabric_chip: 2", "fabric_chip: 010", "fabric_chip"},  // a leading zero
+             {"{tile: 3, cce: 0, hart: 1, role: worker}", "{tile: 03, cce: 0, hart: 1, role: worker}", "tile"},
+             {"{tile: 3, cce: 0, base: 0x0, size: 0x400000}", "{tile: 3, cce: 0, base: 00, size: 0x400000}", "base"},
+             {"{tile: 3, cce: 0, hart: 1, role: worker}", "{tile: 0X3, cce: 0, hart: 1, role: worker}", "tile"},
+             {"{tile: 3, cce: 0, base: 0x0, size: 0x400000}", "{tile: 3, cce: 0, base: 0x0, size: 0X400000}", "size"},
+             {"{tile: 3, cce: 0, hart: 1, role: worker}", "{tile: 3, cce: 0, hart: +1, role: worker}", "hart"},
+             {"{tile: 3, cce: 0, hart: 1, role: worker}", "{tile: 3, cce: 0, hart: -1, role: worker}", "hart"},
+             {"fabric_chip: 2", "fabric_chip: -2", "fabric_chip"},
+             {"b: {device: B, port: 0}", "b: {device: B, port: -1}", "port"},
+             {"{tile: 3, cce: 0, hart: 1, role: worker}", "{tile: \"3\", cce: 0, hart: 1, role: worker}", "tile"},
+             {"fabric_chip: 2", "fabric_chip: '2'", "fabric_chip"},
+         }) {
+        SCOPED_TRACE(to);
+        expect_load_error(edit({{from, to}}), needle);
+    }
 }
 
 TEST(VclusterManifest, LoadErrorRouterWithoutPort) {
-    EXPECT_TRUE(load_fails(
-        edit({{"{tile: 2, cce: 0, hart: 0, role: router, port: 1}", "{tile: 2, cce: 0, hart: 0, role: router}"}})));
+    expect_load_error(
+        edit({{"{tile: 2, cce: 0, hart: 0, role: router, port: 1}", "{tile: 2, cce: 0, hart: 0, role: router}"}}),
+        "port");
 }
 
 TEST(VclusterManifest, LoadErrorWorkerWithPort) {
-    EXPECT_TRUE(load_fails(
-        edit({{"{tile: 3, cce: 0, hart: 1, role: worker}", "{tile: 3, cce: 0, hart: 1, role: worker, port: 1}"}})));
+    expect_load_error(
+        edit({{"{tile: 3, cce: 0, hart: 1, role: worker}", "{tile: 3, cce: 0, hart: 1, role: worker, port: 1}"}}),
+        "port");
 }
 
 TEST(VclusterManifest, LoadErrorUnknownKey) {
-    EXPECT_TRUE(load_fails(edit({{"version: 1\n", "version: 1\ntopology: line\n"}})));
-    EXPECT_TRUE(load_fails(edit({{"    fabric_chip: 1\n", "    fabric_chip: 1\n    color: red\n"}})));
-    EXPECT_TRUE(load_fails(
-        edit({{"{tile: 3, cce: 0, hart: 1, role: worker}", "{tile: 3, cce: 0, hart: 1, role: worker, cpu: 1}"}})));
-    EXPECT_TRUE(load_fails(edit(
-        {{"{tile: 3, cce: 0, base: 0x0, size: 0x400000}",
-          "{tile: 3, cce: 0, base: 0x0, size: 0x400000, end: 0x400000}"}})));
-    EXPECT_TRUE(load_fails(edit({{"backend: noc}", "backend: noc, vc: 2}"}})));
+    expect_load_error(edit({{"version: 1\n", "version: 1\ntopology: line\n"}}), "topology");
+    expect_load_error(edit({{"    fabric_chip: 1\n", "    fabric_chip: 1\n    color: red\n"}}), "color");
+    expect_load_error(
+        edit({{"{tile: 3, cce: 0, hart: 1, role: worker}", "{tile: 3, cce: 0, hart: 1, role: worker, cpu: 1}"}}),
+        "cpu");
+    expect_load_error(
+        edit(
+            {{"{tile: 3, cce: 0, base: 0x0, size: 0x400000}",
+              "{tile: 3, cce: 0, base: 0x0, size: 0x400000, end: 0x400000}"}}),
+        "end");
+    expect_load_error(edit({{"backend: noc}", "backend: noc, vc: 2}"}}), "vc");
 }
 
 TEST(VclusterManifest, LoadErrorWrongType) {
-    for (const auto& [from, to] : std::initializer_list<std::pair<std::string_view, std::string_view>>{
-             {"version: 1\n", "version: one\n"},
-             {"fabric_chip: 2", "fabric_chip: [2]"},
-             {"name: A", "name: {first: A}"},
-             {"{tile: 3, cce: 0, hart: 1, role: worker}", "{tile: three, cce: 0, hart: 1, role: worker}"},
-             {"{tile: 0, cce: 0, base: 0x0, size: 0x400000}", "{tile: 0, cce: 0, base: 0x0, size: big}"},
+    for (const auto& [from, to, needle] :
+         std::initializer_list<std::tuple<std::string_view, std::string_view, std::string_view>>{
+             {"version: 1\n", "version: one\n", "version"},
+             {"fabric_chip: 2", "fabric_chip: [2]", "fabric_chip"},
+             {"name: A", "name: {first: A}", "name"},
+             {"{tile: 3, cce: 0, hart: 1, role: worker}", "{tile: three, cce: 0, hart: 1, role: worker}", "tile"},
+             {"{tile: 0, cce: 0, base: 0x0, size: 0x400000}", "{tile: 0, cce: 0, base: 0x0, size: big}", "size"},
              {"    slots:\n      - {tile: 3, cce: 0, hart: 0, role: router, port: 0}\n      - {tile: 3, cce: 0, hart: "
-              "1, role: worker}\n",
-              "    slots: 3\n"},
-             {"b: {device: B, port: 0}", "b: B"},
+              "1, "
+              "role: worker}\n",
+              "    slots: 3\n",
+              "slots"},
+             {"b: {device: B, port: 0}", "b: B", "b"},
          }) {
-        EXPECT_TRUE(load_fails(edit({{from, to}}))) << to;
+        SCOPED_TRACE(to);
+        expect_load_error(edit({{from, to}}), needle);
     }
-    EXPECT_TRUE(load_fails("- version: 1\n"));  // the root is not a map
-}
-
-TEST(VclusterManifest, LoadErrorNegative) {
-    EXPECT_TRUE(
-        load_fails(edit({{"{tile: 3, cce: 0, hart: 1, role: worker}", "{tile: 3, cce: 0, hart: -1, role: worker}"}})));
-    EXPECT_TRUE(load_fails(edit({{"fabric_chip: 2", "fabric_chip: -2"}})));
-    EXPECT_TRUE(load_fails(edit({{"b: {device: B, port: 0}", "b: {device: B, port: -1}"}})));
+    EXPECT_EQ(load_errors("- version: 1\n").size(), 1u);  // the root is not a map
 }
 
 TEST(VclusterManifest, LoadErrorUnknownRoleOrBackend) {
-    EXPECT_TRUE(
-        load_fails(edit({{"{tile: 3, cce: 0, hart: 1, role: worker}", "{tile: 3, cce: 0, hart: 1, role: master}"}})));
-    EXPECT_TRUE(load_fails(edit({{"backend: ethernet", "backend: pcie"}})));
+    expect_load_error(
+        edit({{"{tile: 3, cce: 0, hart: 1, role: worker}", "{tile: 3, cce: 0, hart: 1, role: master}"}}), "master");
+    expect_load_error(edit({{"backend: ethernet", "backend: pcie"}}), "pcie");
 }
 
-TEST(VclusterManifest, LoadErrorNoDevices) { EXPECT_TRUE(load_fails("version: 1\ndevices: []\nlinks: []\n")); }
+// § Checks: "A slot with an unknown `role` is a load error whatever else it holds", a `port` included. Whether the
+// port is a second error is not stated, so only the role's is required.
+TEST(VclusterManifest, LoadErrorUnknownRoleWithPort) {
+    const auto errors = load_errors(
+        edit({{"{tile: 3, cce: 0, hart: 1, role: worker}", "{tile: 3, cce: 0, hart: 1, role: master, port: 1}"}}));
+    EXPECT_TRUE(std::any_of(errors.begin(), errors.end(), [](const std::string& e) {
+        return e.find("master") != std::string::npos;
+    })) << joined(errors);
+}
 
-// A load error is not a row: what the loader refuses never reaches check_manifest(), so there is nothing to assert
-// on rows. The row tests above show the converse, that each rejected manifest loads.
+TEST(VclusterManifest, LoadErrorNoDevices) { expect_load_error("version: 1\ndevices: []\nlinks: []\n", "devices"); }
+
+// An empty `capture` is a load error.
+TEST(VclusterManifest, LoadErrorEmptyCapture) {
+    expect_load_error(edit({{"version: 1\n", "version: 1\ncapture: \"\"\n"}}), "capture");
+}
+
+// A key repeated in one map, a file of more than one YAML document, and a tagged scalar where a number is expected
+// are load errors.
+TEST(VclusterManifest, LoadErrorRepeatedKey) {
+    expect_load_error(
+        edit({{"{tile: 3, cce: 0, hart: 1, role: worker}", "{tile: 3, tile: 3, cce: 0, hart: 1, role: worker}"}}),
+        "tile");
+    expect_load_error(edit({{"    fabric_chip: 1\n", "    fabric_chip: 1\n    fabric_chip: 1\n"}}), "fabric_chip");
+}
+
+TEST(VclusterManifest, LoadErrorMultipleDocuments) {
+    EXPECT_EQ(load_errors(std::string(kLine) + "---\n" + std::string(kLine)).size(), 1u);
+}
+
+TEST(VclusterManifest, LoadErrorTaggedScalar) {
+    expect_load_error(
+        edit({{"{tile: 3, cce: 0, hart: 1, role: worker}", "{tile: !!int 3, cce: 0, hart: 1, role: worker}"}}), "tile");
+}
+
+// § Checks: the loader lists every load error it found. Two independent edits in different items give two errors.
+TEST(VclusterManifest, LoadErrorListsEvery) {
+    const auto errors = load_errors(edit(
+        {{"    fabric_chip: 1\n", "    fabric_chip: 1\n    color: red\n"},
+         {"{tile: 3, cce: 0, hart: 1, role: worker}", "{tile: 3, cce: 0, hart: 1, role: master}"}}));
+    ASSERT_EQ(errors.size(), 2u) << joined(errors);
+    const auto names = [&](std::string_view needle) {
+        return std::count_if(
+            errors.begin(), errors.end(), [&](const std::string& e) { return e.find(needle) != std::string::npos; });
+    };
+    EXPECT_EQ(names("color"), 1) << joined(errors);
+    EXPECT_EQ(names("master"), 1) << joined(errors);
+}
 
 }  // namespace
 }  // namespace tt::tt_fabric::vcluster
