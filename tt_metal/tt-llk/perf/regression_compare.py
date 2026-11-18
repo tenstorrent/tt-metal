@@ -109,7 +109,8 @@ def _canonical_columns(frame):
                 continue
             if new not in frame.columns:
                 frame[new] = pd.NA
-            frame.loc[rows, new] = frame.loc[rows, new].fillna(frame.loc[rows, old])
+            current = frame.loc[rows, new]
+            frame.loc[rows, new] = current.where(current.notna(), frame.loc[rows, old])
             frame.loc[rows, old] = pd.NA
     # Only columns emptied above go; a column no alias touched stays as it was.
     return frame.drop(

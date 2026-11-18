@@ -104,7 +104,7 @@ def _run_pack_l1_acc_test(
     run_types=None,
     loop_factor=1,
 ):
-    """Shared body for the functional and perf destination-bank tests.
+    """Shared body for the functional and perf L1-accumulation pack tests.
 
     ``blocks`` overrides the (num_blocks, num_tiles_in_block) split that Dest
     capacity would otherwise choose.
