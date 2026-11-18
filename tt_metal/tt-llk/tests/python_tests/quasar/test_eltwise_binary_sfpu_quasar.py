@@ -787,10 +787,6 @@ def test_eltwise_binary_sfpu_add_top_row_quasar(
 
 
 # ===========================================================================
-# Family 3 — max / min (float + Int32). Ported from test_binary_max_min_quasar.py.
-# Layout in0=Dest[0], in1=Dest[1], out=Dest[2]; dual unpack path; torch golden.
-# ===========================================================================
-# ===========================================================================
 # Float fmod(a, b): a - trunc(a / b) * b on the magnitudes, the sign of a applied once.
 # ===========================================================================
 # The kernel estimates trunc(a / b) through a reciprocal and then corrects a remainder that
@@ -884,16 +880,10 @@ def test_eltwise_binary_sfpu_fmod_quasar(formats, dest_acc, tile_indices):
 
     def _check_fmod(res_tensor):
         result = res_tensor.to(torch.float64)
-        # A zero remainder is +0 whatever the sign of a: the sign is applied by a multiply, and
-        # SFPMUL adds +0. That includes fmod(-0, b), which the signed kernel returned as -0.
-        zero = result == 0
-        assert not bool(
-            torch.signbit(res_tensor[zero]).any()
-        ), "fmod returned -0 for a zero remainder"
-        # A non-zero remainder is below |b| and carries the sign of a.
+        # The remainder is below |b| and carries the sign of a, a zero remainder included.
         assert bool((result.abs() < b.abs()).all()), "fmod result is not below |b|"
         assert bool(
-            (torch.signbit(result[~zero]) == torch.signbit(a[~zero])).all()
+            (torch.signbit(result) == torch.signbit(a)).all()
         ), "fmod result does not carry the sign of a"
         # General lanes: the product trunc(a / b) * b rounds, so allow that in steps of a.
         general = slice(0, _FMOD_LANES_PER_CASE)
@@ -921,6 +911,10 @@ def test_eltwise_binary_sfpu_fmod_quasar(formats, dest_acc, tile_indices):
     )
 
 
+# ===========================================================================
+# Family 3 — max / min (float + Int32). Ported from test_binary_max_min_quasar.py.
+# Layout in0=Dest[0], in1=Dest[1], out=Dest[2]; dual unpack path; torch golden.
+# ===========================================================================
 SFPU_BINARY_MAX_MIN_FLOAT_FORMATS = input_output_formats(
     [
         DataFormat.Float16_b,

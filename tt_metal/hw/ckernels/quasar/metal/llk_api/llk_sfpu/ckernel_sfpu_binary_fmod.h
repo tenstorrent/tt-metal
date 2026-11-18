@@ -36,11 +36,7 @@ sfpi_inline void calculate_fmod_int32_body(
 
 template <bool is_fp32_dest_acc_en>
 sfpi_inline sfpi::vFloat _sfpu_binary_fmod_(sfpi::vFloat a, sfpi::vFloat b) {
-    // fmod(a, b) = a - trunc(a/b) * b, evaluated on the magnitudes. The reciprocal
-    // (SFPNONLINEAR seed + Newton steps), the multiply and the MAD round symmetrically,
-    // and _trunc_body_ masks the sign bit through, so every lane of this chain equals
-    // the signed chain up to the sign of a. That collapses the four sign-dependent
-    // correction branches into unsigned ones; the sign of a is applied once at the end.
+    // fmod(a, b) = a - trunc(a/b) * b on the magnitudes; the sign of a is applied once at the end.
     sfpi::vFloat a_abs = sfpi::abs(a);
     sfpi::vFloat b_abs = sfpi::abs(b);
 
@@ -48,11 +44,8 @@ sfpi_inline sfpi::vFloat _sfpu_binary_fmod_(sfpi::vFloat a, sfpi::vFloat b) {
     sfpi::vFloat trunc_div = _trunc_body_(a_abs * recip);
     sfpi::vFloat result = a_abs - trunc_div * b_abs;
 
-    // Post-correction: the reciprocal error can put trunc(a/b) one (or, for quotients
-    // above 2^22, several) unit(s) off. The result must satisfy 0 <= result < |b|:
-    // result >= |b| means the truncation was too low, result < 0 too high. The second
-    // negative step keeps the correction identical to the signed kernel, which adds |b|
-    // once for |result| >= |b| and once more for a result still below zero.
+    // The reciprocal error can leave trunc(a/b) one too low, or up to two too high (quotients above
+    // 2^24), so step the remainder back into [0, |b|).
     v_if(result >= b_abs) { result = result - b_abs; }
     v_endif;
     v_if(result < sfpi::vFloat(0.0f)) { result = result + b_abs; }
@@ -65,10 +58,8 @@ sfpi_inline sfpi::vFloat _sfpu_binary_fmod_(sfpi::vFloat a, sfpi::vFloat b) {
     v_if(a == b) { result = sfpi::vFloat(0.0f); }
     v_endif;
 
-    // fmod takes the sign of a. SFPMUL rather than copysgn: a zero result stays +0, as
-    // the signed MAD chain produced it, since SFPMAD flushes -0 to +0. Placed after the
-    // a == b override so that a dies here and the sign copy needs no register move.
-    result = result * sfpi::copysgn(sfpi::vFloat(1.0f), a);
+    // fmod takes the sign of a, a zero remainder included (fmod(-6, 3) = -0, as std::fmod).
+    result = sfpi::copysgn(result, a);
 
     // Handle division by zero - return NaN
     v_if(b == sfpi::vFloat(0.0f)) { result = sfpi::vFloat(std::numeric_limits<float>::quiet_NaN()); }
