@@ -346,6 +346,22 @@ def test_alias_view_bf8_whole_pages_per_block(device, block_size, expect_error):
     assert changed == [b, b + 1]
 
 
+def test_alias_view_slices_follow_the_input_shape_not_its_buffer(device, expect_error):
+    """An input that is itself a smaller view keeps its source buffer, so its slices must come from its own shape.
+
+    The input has half the blocks of its buffer, and each block holds 8.5 float32 pages per bank. Slices taken from
+    the buffer's page count would be two blocks, 17 whole float32 pages per bank, and the float32 view would pass
+    even though each of its slices straddles two blocks of the input.
+    """
+    banks = _num_banks(device)
+    half = _bf8_aligned_block_size(banks) // 2
+    k = _bf8_owner(device, NUM_BLOCKS, half)
+    first = ttnn.experimental.view(k, ttnn.Shape([NUM_BLOCKS // 2, 1, half, 256]))
+    assert first.buffer_address() == k.buffer_address()
+    with expect_error(RuntimeError, "not a multiple of the view's"):
+        ttnn.experimental.alias_view(first, ttnn.Shape([NUM_BLOCKS // 2, 1, 32, 32 * banks]), ttnn.float32)
+
+
 def test_alias_view_on_mesh(mesh_device):
     """Every device of the mesh sees its own shard through the view; block b stays block b on each of them."""
     n = mesh_device.get_num_devices()
