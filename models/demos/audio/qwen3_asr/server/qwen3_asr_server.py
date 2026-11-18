@@ -69,7 +69,8 @@ def _parse(text):
 def _load():
     snap = os.path.join(SNAP_BASE, os.listdir(SNAP_BASE)[0])
     t0 = time.time()
-    dev = ttnn.open_device(device_id=0, trace_region_size=200000000, l1_small_size=65536)
+    # The decoder reads EOS back on command queue 1 (qwen3_asr_decoder.USE_2CQ).
+    dev = ttnn.open_device(device_id=0, trace_region_size=200000000, l1_small_size=65536, num_command_queues=2)
     w = ref.load_audio_tower_weights(snap_dir=snap, dtype=torch.float32)
     enc_params = tt_enc.preprocess_weights(w, dev)
     args = ModelArgs(dev, max_batch_size=1, max_seq_len=2048)
@@ -109,10 +110,8 @@ def _ensure_warm():
     ww, _ = sf.read(wpath, dtype="float32")
     if ww.ndim > 1:
         ww = ww.mean(1)
-    # Now that EVERY _infer runs at the fixed FIXED_INFER_SEC length, warmup is safe (single
-    # prefill shape — the earlier warmup corruption came from VARYING lengths) and it compiles
-    # the exact kernel all requests use, so the first real request / stream segment is warm
-    # (no cold-JIT burst). Two passes to also compile the decode loop.
+    # Compiles the prefill and decode kernels so the first real request / stream segment is
+    # warm (no cold-JIT burst). Two passes to also compile the decode loop.
     try:
         _infer(ww, None)
         _infer(ww, None)
@@ -121,23 +120,15 @@ def _ensure_warm():
     print(f"[server] warm in {time.time()-tw:.1f}s", flush=True)
 
 
-FIXED_INFER_SEC = 14.0  # every _infer runs at EXACTLY this audio length (see below)
-
-
 def _infer(wav, force, max_new_tokens=200):
     """Run the full TT pipeline on a 16k mono float32 waveform. Returns (text, lang, secs).
 
-    ROOT-CAUSE FIX (variable-prefill-length corruption): in the long-lived encoder+decoder
-    pipeline, mixing requests of DIFFERENT prefill lengths corrupts the decoder — it "locks"
-    to the first request's length and emits only the language tag + EOS (empty transcript) for
-    other lengths (encoder-alone and decoder-alone are each stable; the interleaving with a
-    varying real sequence length is the trigger — a length-keyed program/state issue in
-    tt-metal). Pinning every request to ONE fixed audio length (pad short with silence, cap
-    long) makes the prefill length constant -> all requests transcribe fully. Verified: varied
-    14s clips and 6s-padded-to-14s clips all transcribe; the old 6s/30s mix truncated."""
+    Audio is padded to a whole second so the mel frame count is a multiple of 100, which
+    matches the encoder's audio-token count. Prefill length varies per request; the decoder
+    pads it (Qwen3ASRDecoder.prefill_logits)."""
     t0 = time.time()
-    n = int(FIXED_INFER_SEC * SR)
-    wav = wav[:n] if len(wav) >= n else np.concatenate([wav, np.zeros(n - len(wav), dtype=np.float32)])
+    n = int(np.ceil(len(wav) / SR)) * SR
+    wav = np.concatenate([wav, np.zeros(n - len(wav), dtype=np.float32)])
     prompt = _build_prompt(STATE["proc"], force)
     inputs = STATE["proc"](text=[prompt], audio=[wav], return_tensors="pt", padding=True)
     input_ids = inputs["input_ids"][0].long()
@@ -167,15 +158,9 @@ def _infer(wav, force, max_new_tokens=200):
 
 # --- Tier-2 long-form: silence-aware chunking + hallucination/non-speech gating ---
 SR = 16000
-# CRITICAL: keep EVERY segment <= ~32s so its prefill pads to exactly 512 tokens (one MLP
-# reshape bucket, S//512==1). The decoder MLP reshapes prefill x to [1, S_pad//512, 512, -1];
-# 512-pad (bucket 1) and 1024-pad (bucket 2, for >~37s) take different program shapes, and
-# MIXING buckets across requests in the long-lived server corrupts later requests (they return
-# empty) — the same failure class as the old 256-vs-512 mix. Capping all segments to one bucket
-# (512) makes the server stable. Longer audio is chunked; nothing is single-shot above the cap.
-SINGLE_CAP = FIXED_INFER_SEC  # <= this -> single-shot; longer -> chunk. Segments are <=FIXED_INFER_SEC
-# so _infer's fixed-length pin never drops real audio. Constant prefill length across all requests
-# is what keeps the pipeline stable (see _infer). Longer audio is silence-chunked into <=14s windows.
+# Segments stay well under ~32s, so on Blackhole every prefill stays in the one 512-token bucket
+# that prefill_logits relies on there. Longer audio is chunked; nothing is single-shot above the cap.
+SINGLE_CAP = 14.0  # <= this -> single-shot; longer -> silence-chunked into <=SEG_MAX windows.
 SEG_TARGET, SEG_MAX, SEG_MIN = 12.0, 14.0, 7.0
 SIL_RMS = 0.005  # per-frame silence detection for segment CUTTING (not speech gating)
 SPEECH_MIN = 0.008  # speech-presence gate on the 90th-pctile of short-window RMS
@@ -312,9 +297,8 @@ async def transcribe(file: UploadFile = File(...), model: str = Form("qwen3-asr"
 # {"text","language","seg_end_s"} as soon as each phrase ends (silence) or hits max_seg.
 # Single device -> inference runs in a thread executor so audio keeps being received.
 # Fine segmentation for LOW LATENCY: cut at the first pause after MIN_SEG, force at MAX_SEG.
-# Each segment is padded to FIXED_INFER_SEC(14s) inside _infer anyway (constant prefill -> stable),
-# and 14s-padded inference of a short segment is cheap (~0.5s << segment length), so shrinking the
-# window directly cuts time-to-caption (~3-6s here vs the old 6-14s) while staying real-time.
+# Inference of a short segment is cheap (~0.5s << segment length), so a short window cuts
+# time-to-caption while staying real-time.
 STREAM_MIN_SEG, STREAM_MAX_SEG = 3.0, 6.0
 STREAM_SIL_SEC, STREAM_SIL_RMS = 0.35, 0.01
 
