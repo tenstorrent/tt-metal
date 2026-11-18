@@ -513,6 +513,33 @@ class Hy4Engine:
         except Exception as e:  # noqa: BLE001
             logger.info(f"HY4 L1MAP[{tag}]: failed {e!r}")
 
+    def _l1_wrap_moe(self):
+        """HY4_L1_MAP=1: log the L1 allocator probe (~ lowest occupied L1 address) before every distinct moe_compute call signature, i.e. the state its fabric-mux fit sees at program build and at later calls."""
+        if os.environ.get("HY4_L1_MAP", "0") != "1" or getattr(self, "_moe_wrapped", False):
+            return
+        self._moe_wrapped = True
+        orig = ttnn.experimental.moe_compute
+        seen = {}
+        eng = self
+
+        def wrapped(*a, **k):
+            try:
+                if not getattr(eng, "_capturing", False):
+                    pr = ttnn.allocate_tensor_on_device(
+                        ttnn.Shape([1, 1, 32, 32]), ttnn.bfloat16, ttnn.TILE_LAYOUT, eng.md, ttnn.L1_MEMORY_CONFIG
+                    )
+                    addr = pr.buffer_address()
+                    ttnn.deallocate(pr)
+                    key = (tuple(a[0].shape) if a and hasattr(a[0], "shape") else None, addr)
+                    seen[key] = seen.get(key, 0) + 1
+                    if seen[key] == 1 and len(seen) <= 400:
+                        logger.info(f"HY4 L1MAP moe_compute call: in0 {key[0]} probe {addr} (distinct #{len(seen)})")
+            except Exception as e:  # noqa: BLE001
+                logger.info(f"HY4 L1MAP moe wrap failed {e!r}")
+            return orig(*a, **k)
+
+        ttnn.experimental.moe_compute = wrapped
+
     def _l1_guard_hold(self):
         n = int(os.environ.get("HY4_L1_GUARD_PAD", "0"))
         self._l1_guard = None
@@ -580,6 +607,7 @@ class Hy4Engine:
         self.warm_done = True
         t0 = time.time()
         self._l1_guard_hold()
+        self._l1_wrap_moe()
         self._l1_probe("warm start")
         g = torch.Generator().manual_seed(0)
         n = min(3072, self.max_seq_len - 8)
@@ -633,11 +661,13 @@ class Hy4Engine:
                 ttnn.synchronize_device(self.md)
             self._dram("after eager bodies")
             self._l1_probe("after eager bodies")
+            self._capturing = True
             self.runner.capture("G")
             self._dram("after G capture")
             if self.sampled:
                 self.runner.capture("S")
                 self._dram("after S capture")
+            self._capturing = False
             self._l1_probe("after captures (guard held)")
             self._l1_guard_release()
             self._l1_report()
