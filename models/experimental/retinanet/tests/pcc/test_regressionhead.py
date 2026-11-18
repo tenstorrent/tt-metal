@@ -9,7 +9,7 @@ import os
 from loguru import logger
 from torchvision.models.detection import retinanet_resnet50_fpn_v2, RetinaNet_ResNet50_FPN_V2_Weights
 from tt_py_test_utils_common.utils_for_testing import assert_with_pcc
-from models.experimental.retinanet.tt.tt_regression_head import ttnn_retinanet_regression_head
+from models.experimental.retinanet.tt.tt_regression_head import BBOX_REG_SLICE_CONFIG, ttnn_retinanet_regression_head
 
 
 def create_regression_head_parameters(torch_head, device, model_config):
@@ -37,7 +37,7 @@ def create_regression_head_parameters(torch_head, device, model_config):
         prepared_weight = ttnn.prepare_conv_weights(
             weight_tensor=ttnn.from_torch(conv_weight, dtype=ttnn.bfloat16),
             input_memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            input_layout=ttnn.ROW_MAJOR_LAYOUT,
+            input_layout=ttnn.TILE_LAYOUT,
             weights_format="OIHW",
             in_channels=conv_weight.shape[1],
             out_channels=conv_weight.shape[0],
@@ -57,7 +57,7 @@ def create_regression_head_parameters(torch_head, device, model_config):
         prepared_bias = ttnn.prepare_conv_bias(
             bias_tensor=ttnn.from_torch(bias.reshape(1, 1, 1, -1), dtype=ttnn.bfloat16),
             input_memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            input_layout=ttnn.ROW_MAJOR_LAYOUT,
+            input_layout=ttnn.TILE_LAYOUT,
             in_channels=conv_weight.shape[1],
             out_channels=conv_weight.shape[0],
             batch_size=1,
@@ -106,7 +106,7 @@ def create_regression_head_parameters(torch_head, device, model_config):
         prepared_bbox_weight = ttnn.prepare_conv_weights(
             weight_tensor=bbox_weight_ttnn,
             input_memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            input_layout=ttnn.ROW_MAJOR_LAYOUT,
+            input_layout=ttnn.TILE_LAYOUT,
             weights_format="OIHW",
             in_channels=256,
             out_channels=bbox_weight.shape[0],
@@ -123,13 +123,14 @@ def create_regression_head_parameters(torch_head, device, model_config):
             input_dtype=ttnn.bfloat16,
             output_dtype=model_config["WEIGHTS_DTYPE"],
             conv_config=ttnn.Conv2dConfig(weights_dtype=model_config["WEIGHTS_DTYPE"]),
+            slice_config=BBOX_REG_SLICE_CONFIG,
             compute_config=None,
         )
         # Prepare the bias using prepare_conv_bias
         prepared_bbox_bias = ttnn.prepare_conv_bias(
             bias_tensor=bbox_bias_ttnn,
             input_memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            input_layout=ttnn.ROW_MAJOR_LAYOUT,
+            input_layout=ttnn.TILE_LAYOUT,
             in_channels=256,
             out_channels=bbox_weight.shape[0],
             batch_size=1,
@@ -143,6 +144,7 @@ def create_regression_head_parameters(torch_head, device, model_config):
             device=device,
             input_dtype=ttnn.bfloat16,
             conv_config=ttnn.Conv2dConfig(weights_dtype=model_config["WEIGHTS_DTYPE"]),
+            slice_config=BBOX_REG_SLICE_CONFIG,
         )
         parameters["bbox_reg"] = {
             "weight": prepared_bbox_weight,
