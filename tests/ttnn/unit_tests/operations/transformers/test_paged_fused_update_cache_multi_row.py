@@ -83,6 +83,10 @@ def _run(device, n, T, num_heads, head_dim, block_size, cache_dtype, case):
     num_blocks = n * nb + 1  # + a never-written spare
     perm = torch.randperm(num_blocks - 1) + 1
     page_table = perm[: n * nb].reshape(n, nb).to(torch.int32)
+    if case == "dup" and block_size == TILE:
+        # Virtual blocks 0 and 1 of each user share one physical tile, so rows of two virtual blocks
+        # must merge into one read-modify-write pass of that tile.
+        page_table[:, 1] = page_table[:, 0]
     cache_shape = [num_blocks, num_heads, block_size, head_dim]
     k0 = torch.randn(cache_shape).bfloat16().float()
     v0 = torch.randn(cache_shape).bfloat16().float()
