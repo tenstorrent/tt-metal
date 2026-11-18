@@ -56,6 +56,8 @@ FORCE_INLINE void transpose_tile_block(In0TransposeDFB& in0_transpose_cb, In0DFB
     for (uint32_t block_idx = 0; block_idx < num_blocks; ++block_idx) {
         in0_transpose_cb.wait_front(block_size);
         tile_regs_acquire();
+        // The transpose unpacks through SrcA: release the section to math (see tile_regs_handoff).
+        tile_regs_handoff();
         for (uint32_t tile_idx = 0; tile_idx < block_size; tile_idx++) {
             transpose_tile(in0_transpose_cb_id, tile_idx, tile_idx);
         }
@@ -74,6 +76,8 @@ FORCE_INLINE void transpose_tile_block(In0TransposeDFB& in0_transpose_cb, In0DFB
     if constexpr (last_block_size > 0) {
         in0_transpose_cb.wait_front(last_block_size);
         tile_regs_acquire();
+        // The transpose unpacks through SrcA: release the section to math (see tile_regs_handoff).
+        tile_regs_handoff();
         for (uint32_t tile_idx = 0; tile_idx < last_block_size; tile_idx++) {
             transpose_tile(in0_transpose_cb_id, tile_idx, tile_idx);
         }
@@ -394,6 +398,9 @@ void kernel_main() {
                                     out_subblock_h,
                                     in0_block_w);
                             }
+                            // The partials reload is the section's only unpack-to-dest; release the section to math
+                            // now so the matmul unpacks (SrcA/SrcB) after this point are consumed as they arrive.
+                            tile_regs_handoff();
 
 #ifndef SKIP_COMPUTE
                             // Compute output sub-block
@@ -557,6 +564,8 @@ void kernel_main() {
                         // Redundant wait since we know data was just pushed
                         mm_partials_cb.wait_front(out_subblock_num_tiles);
                         tile_regs_acquire();
+                        // The bias add unpacks both operands through SrcA/SrcB (see tile_regs_handoff).
+                        tile_regs_handoff();
                         for (uint32_t i = 0, j = 0; j < out_subblock_h; j++) {
                             uint32_t bias_tile_idx = in1_index_subblock_offset;
                             for (uint32_t k = 0; k < out_subblock_w; k++, i++) {

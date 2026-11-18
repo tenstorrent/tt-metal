@@ -625,6 +625,12 @@ ttnn::device_operation::ProgramArtifacts MatmulMultiCoreReuseOptimizedProgramFac
         .tensor_parameters = std::move(tensor_parameters),
         .work_units = std::move(work_units),
     };
+    // No fused bias here, so fp32 partials are always reloaded through unpack-to-dest.
+    operations::experimental::quasar::matmul::utilities::set_fp32_dest_unpack_modes(
+        spec,
+        RO_INTERM0_DFB,
+        operations::experimental::quasar::matmul::utilities::partials_unpack_to_dest(
+            fp32_dest_acc_en, /*bias_fused=*/false));
 
     ProgramRunArgs run_args{
         .kernel_run_args = {std::move(reader_run_args), std::move(reader_writer_run_args)},

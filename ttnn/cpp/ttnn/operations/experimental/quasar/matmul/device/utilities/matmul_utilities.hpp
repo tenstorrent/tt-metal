@@ -8,6 +8,8 @@
 #include <optional>
 #include <vector>
 
+#include <tt-metalium/workload/specification/program_spec.hpp>
+
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/distributed/types.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
@@ -53,6 +55,35 @@ uint32_t estimate_interm_tile_size(
 // would re-quantize the running sum on every K block, and the reload path (copy_block of the partials into Dest)
 // has only been run with bf16 / fp32 partials.
 tt::DataFormat get_interm_data_format(bool packer_l1_acc_en, bool fp32_dest_acc_en, tt::DataFormat output_data_format);
+
+/**
+ * Whether the fp32 partials ring can be reloaded into Dest through unpack-to-dest. Not when the bias is fused:
+ * the bias add reads the partials as an FPU operand (SrcA), which cannot take a to-dest DFB. Such a matmul
+ * accumulates its partials in L1 instead (see use_packer_l1_acc), so the partials are never reloaded.
+ */
+inline bool partials_unpack_to_dest(bool fp32_dest_acc_en, bool bias_fused) { return fp32_dest_acc_en && !bias_fused; }
+
+/**
+ * Whether the packer accumulates the partials in L1 across K blocks: when requested, and always for an fp32
+ * matmul with a fused bias, whose partials cannot be reloaded into Dest at full precision (see
+ * partials_unpack_to_dest). L1 accumulation adds in fp32 and has no reload; the bias add then reads the sum once.
+ */
+inline bool use_packer_l1_acc(bool packer_l1_acc, bool fp32_dest_acc_en, bool bias_fused, uint32_t num_blocks) {
+    return (packer_l1_acc || (fp32_dest_acc_en && bias_fused)) && num_blocks > 1;
+}
+
+/**
+ * Gives every compute kernel of a 32-bit-Dest matmul an unpack mode for each Float32 DFB it consumes, as the
+ * Metal 2.0 validator requires. partials_dfb goes to Dest when partials_to_dest (the reload is a data copy, and
+ * unpacking it to Dest keeps the fp32 partial exact instead of rounding it to TF32 in SrcA); every other Float32
+ * operand feeds the FPU through SrcA / SrcB. Run on the finished spec: each kernel only gets entries for DFBs it
+ * binds, and entries a factory already set are kept.
+ *
+ * A to-dest entry turns on unpack-to-dest for the whole kernel on Quasar, so the kernel must call
+ * tile_regs_handoff() in every Dest section that unpacks through SrcA / SrcB.
+ */
+void set_fp32_dest_unpack_modes(
+    tt::tt_metal::ProgramSpec& spec, const tt::tt_metal::DFBSpecName& partials_dfb, bool partials_to_dest);
 
 /**
  * L1 stride of an interleaved operand's tiles in the reader buffers: the tile size rounded up to the NOC's DRAM
