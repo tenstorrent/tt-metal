@@ -1489,8 +1489,22 @@ tt-metal-ep4 on bh-lb-19 (2 x 4 p150b, FABRIC_2D, 2 links, links train 400G). Ho
 speed-of-light ep4_targets.py.
 
 ### Stage 0: tree up, baselines (bh-lb-19)
+- bh-lb-19 reflashed (user's procedure) with stock 19.12.0 patched to tensix disable-count 1: 13 Tensix columns, a
+  12 x 10 compute grid with FABRIC_2D, the Galaxy chip's. Links still train 400G on every in-box link. A software-only
+  unharvest does not work: the firmware programs the NoC translation tables for its harvest mask (x 7 and 10 moved to
+  the end), so a host-side mask override disagrees with the hardware on every column from x 7 on.
 - sparse_dispatch_2d (tests/.../sparse_dispatch_2d/test_sparse_dispatch_2d.py, 2x4 FABRIC_2D): W3584 and W6144 PASS
   (bit-exact against the torch model, program-cache hit on new buffers).
+- test_ws_fab.py step 1 (test_ws_fab_recv): G 1 M 586 80.8%, G 4 M 586 79.6% (163 GB/s of weights in), G 4 M 2048 82.4%,
+  PCC 0.99994 (the stage 5 numbers above: 80.4 / 76.9 / 78.7%).
+- test_ws_lane5 tray (2 x 4 snake, 2 lanes, G 2, T 8192, 5 + 3 launches, AICLK 1350): 32 experts M 586 54.4% median,
+  PCC 0.99988. 640 experts (320 a lane) hung in its first launch: every core polling, no progress. 160 / 320 experts
+  passed, 544 hung -> cause: l5_compute stamps expert n's end at word 256 + n of a 512-word stamps tensor, so from 256
+  experts a lane it wrote past the tensor (and from 214 over the NCRISC's own stamps at 470+) into the next L1
+  tensor. Fix: the expert stamps at 512 + n, the tensor sized for the lane's experts (chip_time(x0=512) for lane5).
+  After it: 544 experts 53.6% PCC 0.99988; 640 experts 53.6% (53.3-54.1), PCC 0.99987, 39.0 ms a launch.
+- test_ws_layer_chip e640t8192 (one chip, proxy lane, NoC split): PASS; device ms shared 1.40, stream 17.73, end 2.23;
+  wall total 28.24 ms (eager, 3 + 3).
 
 ### Stage 1: host reference and readiness model (ep4_ref.py, tests/test_ep4_ref.py; no device)
 - Routings: uniform (top-12 of N(0, 1) logits) and zipf (logit bias -0.25 log(rank) over a random expert order;

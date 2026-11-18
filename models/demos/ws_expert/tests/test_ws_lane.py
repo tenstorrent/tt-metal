@@ -335,14 +335,14 @@ def chip_pcc(refs, X, G, out_chip):
     return min(vals) if vals else 1.0
 
 
-def chip_time(cfg, Ms, T, X, st_chip):
+def chip_time(cfg, Ms, T, X, st_chip, x0=256):
     """(cycles per expert in the steady state, tile utilization, mean UNPACK waits in K cycles, end-to-end cycles) of
     one chip: steady state from the latest end of any core's first expert to the latest end of its last; end to end
     from the earliest loop start of any group core's RISC (compute, BRISC, NCRISC) to the latest compute end."""
     NC, E = cfg.G * cfg.GC, T["E"]
     s = (ttnn.to_torch(st_chip).to(torch.int64) & 0xFFFFFFFF).reshape(NC, -1)
     rel = ((s - int(s[0, 0]) + (1 << 31)) & 0xFFFFFFFF) - (1 << 31)
-    first, last = int(rel[:, 256].max()), int(rel[:, 256 + E - 1].max())
+    first, last = int(rel[:, x0].max()), int(rel[:, x0 + E - 1].max())
     span = max(last - first, 1)
     ops = 0
     for g in range(cfg.G):

@@ -15,15 +15,15 @@ import time
 
 import pytest
 import torch
+from loguru import logger
 
-import ttnn
 import models.demos.ws_expert.tests.test_ws_lane5 as L5
-from models.demos.ws_expert.bench_util import quantize, to_dev
+import ttnn
+from models.demos.ws_expert.bench_util import quantize
 from models.demos.ws_expert.tests.test_ws_fab_bench import TORUS
 from models.demos.ws_expert.ws_expert import interleave_gu
 from models.demos.ws_expert.ws_lane5 import slice_layout5
 from models.demos.ws_expert.ws_sf import torus_cycles
-from loguru import logger
 
 
 def oaff_mask():
@@ -127,6 +127,7 @@ def pcc_chip(refs, ci, G, out_chip):
     if not mask:
         return _chip_pcc(refs, ci, G, out_chip)
     import torch
+
     from models.demos.ws_expert.bench_util import pcc
 
     phys = ttnn.to_torch(out_chip).float()
@@ -209,7 +210,17 @@ def test_ws_lane5_glx_soak(mesh_device):
 
     def launch():
         mpd, io, st = L5.build_lane5(
-            mesh_device, cfg, lc, l5, dev["x_t"], dev["idx_t"], dev["counts_t"], dev["ws_t"], dev["out_t"], tab_t, T,
+            mesh_device,
+            cfg,
+            lc,
+            l5,
+            dev["x_t"],
+            dev["idx_t"],
+            dev["counts_t"],
+            dev["ws_t"],
+            dev["out_t"],
+            tab_t,
+            T,
             out_rows,
         )
         ttnn.synchronize_device(mesh_device)
@@ -221,7 +232,7 @@ def test_ws_lane5_glx_soak(mesh_device):
 
     def check(n, t, st):
         sts = ttnn.get_device_tensors(st)
-        e2e = max(L5.chip_time(cfg, Ms, T, ci, sts[ci])[3] for ci in (0, N - 1)) / clk
+        e2e = max(L5.chip_time(cfg, Ms, T, ci, sts[ci], x0=512)[3] for ci in (0, N - 1)) / clk
         outs = ttnn.get_device_tensors(dev["out_t"])
         pcs = {ci: pcc_chip(refs, ci, cfg.G, outs[ci]) for ci in (0, N - 1)}
         del sts, outs
@@ -255,6 +266,7 @@ def test_ws_lane5_glx_soak(mesh_device):
         f"{e2es[-1]:.1f} / median {statistics.median(e2es):.1f} / max {max(e2es):.1f} us, AICLK at the checks median "
         f"{statistics.median(r[4] for r in rows):.0f} min {min(r[5] for r in rows)} MHz"
     )
+
 
 def group_report(cfg, st_chip, tag):
     """Per group of one chip (stamps of the last launch, K cycles): the latest compute end and NCRISC loop end from the
@@ -340,6 +352,7 @@ def test_ws_lane5_glx_yrm(mesh_device):
     last) over every expert's rows. WS_L5 yc: through the row collectors; the time ends with the collectors' last end
     (each fenced its row writes) when that is later than the compute's, and a line a collector of chip 0 is logged."""
     import torch
+
     from models.demos.ws_expert.bench_util import pcc
 
     M = int(os.environ["WSW_M"])
@@ -379,11 +392,17 @@ def test_ws_lane5_glx_yrm(mesh_device):
                 dests[X, e, : Ms[e]] = perm[off : off + Ms[e]].to(torch.int32)
                 off += Ms[e]
     dest_t = ttnn.from_torch(
-        dests.reshape(N * cfg.nexp, -1), dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT, device=mesh_device,
+        dests.reshape(N * cfg.nexp, -1),
+        dtype=ttnn.uint32,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=mesh_device,
         mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=0),
     )
     res_t = ttnn.zeros(
-        [rows + 16, cfg.H], dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=mesh_device,
+        [rows + 16, cfg.H],
+        dtype=ttnn.bfloat16,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=mesh_device,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
     dev["out_t"] = res_t
@@ -393,15 +412,27 @@ def test_ws_lane5_glx_yrm(mesh_device):
     e2e, yc_lat = [], []
     for i in range(warm + meas):
         mpd, io, st = L5.build_lane5(
-            mesh_device, cfg, lc, l5, dev["x_t"], dev["idx_t"], dev["counts_t"], dev["ws_t"], res_t, tab_t, T, out_rows,
-            dest_t=dest_t, fence_row=rows,
+            mesh_device,
+            cfg,
+            lc,
+            l5,
+            dev["x_t"],
+            dev["idx_t"],
+            dev["counts_t"],
+            dev["ws_t"],
+            res_t,
+            tab_t,
+            T,
+            out_rows,
+            dest_t=dest_t,
+            fence_row=rows,
         )
         ttnn.synchronize_device(mesh_device)
         ttnn.generic_op(io, mpd)
         ttnn.synchronize_device(mesh_device)
         if i >= warm:
             sts = ttnn.get_device_tensors(st)
-            ends = [L5.chip_time(cfg, Ms, T, ci, sts[ci])[3] for ci in range(N)]
+            ends = [L5.chip_time(cfg, Ms, T, ci, sts[ci], x0=512)[3] for ci in range(N)]
             if l5.yc:
                 ysts = ttnn.get_device_tensors(io[-1])
                 yends = [yc_report(cfg, l5, sts[ci], ysts[ci]) for ci in range(N)]
@@ -428,6 +459,10 @@ def test_ws_lane5_glx_yrm(mesh_device):
     logger.info(
         f"WL5Y SUMMARY dest {mode}: {warm} warm-up + {meas} measured launches, aiclk {clk} MHz, end to end (slowest "
         f"chip) median {statistics.median(e2e):.1f} us (samples {[round(v, 1) for v in e2e]}), pcc {pcs}"
-        + (f"; collectors yc {l5.yc} sink {l5.yc_sink}: their end minus the compute's (latest over chips) median {statistics.median(yc_lat):.1f} us" if l5.yc else "")
+        + (
+            f"; collectors yc {l5.yc} sink {l5.yc_sink}: their end minus the compute's (latest over chips) median {statistics.median(yc_lat):.1f} us"
+            if l5.yc
+            else ""
+        )
     )
     assert not pcs or min(pcs.values()) > 0.999

@@ -139,6 +139,9 @@ class LCfg:
     # weight packets' fused arrival increment without the router's write-ack wait (WL_ARR_NF; ordering rests on the
     # router's write and increment reaching the same core in order; mux bench: 43.7 vs 26.2 GB/s a link)
     arr_nf: bool = False
+    # cycles are disjoint sub-cycles that together cover every chip once (EP-4: one a mesh column, of any length >= 2),
+    # instead of Hamiltonian cycles: each lane is the set of them on its link, every chip in the one sub-cycle it is in
+    subcycles: bool = False
 
 
 # G <= 2 (the tray): columns (4, 5) and (9, 10), muxes in 3 and 8. Measured on the tray (K split, M 586): 62.5% against
@@ -166,16 +169,36 @@ def mux_core(g, d, G=4):
 
 
 def lanes(shape, lc: LCfg):
-    """Lane g: (cycle as a list of mesh coordinates, link index); direction 0 follows the list, 1 goes back."""
+    """Lane g: (cycle as a list of mesh coordinates, link index); direction 0 follows the list, 1 goes back. With
+    subcycles: (the list of sub-cycles, link index) - lane_cycle() picks a chip's."""
     R, Cn = shape
+    every = sorted((r, c) for r in range(R) for c in range(Cn))
+    if lc.subcycles:
+        subs = [list(c) for c in lc.cycles]
+        assert sorted(x for c in subs for x in c) == every, "the sub-cycles cover every chip once"
+        assert len({len(c) for c in subs}) == 1, "sub-cycles of one length"
+        return [(subs, link) for link in range(lc.NL)]
     cycles = [list(c) for c in (lc.cycles or [snake(shape)])]
     out = []
     for cyc in cycles:
-        every = sorted((r, c) for r in range(R) for c in range(Cn))
         assert lc.nofab or sorted(cyc) == every, "a cycle visits every chip once"
         for link in range(lc.NL):
             out.append((cyc, link))
     return out
+
+
+def lane_cycles(lane):
+    """The cycles of a lane (a list: one, or its sub-cycles)."""
+    cyc = lane[0]
+    return cyc if cyc and isinstance(cyc[0], list) else [cyc]
+
+
+def lane_cycle(lane, me):
+    """The cycle of a lane that chip me (r, c) is on."""
+    for cyc in lane_cycles(lane):
+        if tuple(me) in [tuple(x) for x in cyc]:
+            return cyc
+    raise AssertionError(f"chip {me} on no cycle of the lane")
 
 
 def slot_packets(cfg: GCfg, lc: LCfg):
@@ -193,28 +216,30 @@ def make_tables(shape, cfg: GCfg, lc: LCfg):
     """Per chip and group the table of kernels/wl_reader.cpp, and per chip its own experts (global ids, in the order
     of their local index in the chip's slices tensor). Lane g holds the experts e = i G + g (lane-local i)."""
     R, Cn = shape
-    N, G = R * Cn, cfg.G
+    G = cfg.G
     ln = lanes(shape, lc)
     assert len(ln) >= G, f"{len(ln)} lanes for {G} groups"
     assert cfg.nexp % G == 0
     E = cfg.nexp // G
+    N = len(lane_cycles(ln[0])[0])  # (positions on a cycle; R Cn, or a sub-cycle's length)
     sch = schedule(N, E, cfg, lc)
     K = len(slot_types(lc.slots))
     assert K <= 7 and 1 + 2 * K <= 16, "3-bit slot fields, header below word 16"
     owners, kf = sch["owners"], sch["kf"]
     TLW = -(-(16 + 5 * E) // 16) * 16  # words a table (64 B multiple)
-    tabs = torch.zeros(N, G, TLW, dtype=torch.int64)
-    own = [[] for _ in range(N)]  # chip -> [(g, i)]
+    NX = R * Cn
+    tabs = torch.zeros(NX, G, TLW, dtype=torch.int64)
+    own = [[] for _ in range(NX)]  # chip -> [(g, i)]
     meta = {}
     for g in range(G):
-        cyc = ln[g][0]
-        chip_at = [r * Cn + c for r, c in cyc]
-        for pos in range(N):
-            for i in range(E):
-                if owners[i] == pos:
-                    own[chip_at[pos]].append((g, i))
+        for cyc in lane_cycles(ln[g]):
+            chip_at = [r * Cn + c for r, c in cyc]
+            for pos in range(N):
+                for i in range(E):
+                    if owners[i] == pos:
+                        own[chip_at[pos]].append((g, i))
     own = [sorted(o) for o in own]
-    own_idx = {(X, g, i): k for X in range(N) for k, (g, i) in enumerate(own[X])}
+    own_idx = {(X, g, i): k for X in range(NX) for k, (g, i) in enumerate(own[X])}
 
     def arrives(i, pos):
         """(kind, directions it goes on from pos) of lane-local expert i at position pos."""
@@ -233,8 +258,7 @@ def make_tables(shape, cfg: GCfg, lc: LCfg):
         for k, i in enumerate(lst):
             assert (pos, i) not in where, "an expert is held once a chip"
             where[(pos, i)] = (s, k)
-    for g in range(G):
-        cyc = ln[g][0]
+    for g, cyc in [(g, cyc) for g in range(G) for cyc in lane_cycles(ln[g])]:
         chip_at = [r * Cn + c for r, c in cyc]
         for pos in range(N):
             X = chip_at[pos]
@@ -588,9 +612,7 @@ def build_lane(
                         defines=FAB_DEFS,
                         config=ttnn.DataMovementConfigDescriptor(
                             processor=ttnn.DataMovementProcessor.RISCV_0,
-                            noc=(
-                                ttnn.NOC.RISCV_1_default if lc.mux_noc1 or lc.noc_split else ttnn.NOC.RISCV_0_default
-                            ),
+                            noc=(ttnn.NOC.RISCV_1_default if lc.mux_noc1 or lc.noc_split else ttnn.NOC.RISCV_0_default),
                         ),
                         opt_level=fabric_mux.KernelBuildOptLevel.O3,
                     )

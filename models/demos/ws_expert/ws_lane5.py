@@ -27,7 +27,7 @@ from models.demos.ws_expert.ws_expert import noc, sharded_l1
 from models.demos.ws_expert.ws_fab import FAB_DEFS, node
 from models.demos.ws_expert.ws_g5 import NCOL, NR, OWN_ROWS, core_geom, row_geom
 from models.demos.ws_expert.ws_group import GCfg
-from models.demos.ws_expert.ws_lane import LCfg, lanes
+from models.demos.ws_expert.ws_lane import LCfg, lane_cycle, lane_cycles, lanes
 
 fabric_mux = ttnn.experimental.fabric_mux
 GC5 = NR * NCOL
@@ -61,7 +61,9 @@ class L5Cfg:
     # the compute's pack-untilize of the down rows (WL_Y_RM on the compute only) regardless of the output path: -1 with
     # yrm (and not yt), 0 never, 1 always (diagnostics: untilize cost with tile writes, row writes without untilize)
     cu: int = -1
-    ystate: int = 0  # yrm: a row tile's row writes grouped by DRAM bank with the stateful one-packet writes (WL5_YSTATE)
+    ystate: int = (
+        0  # yrm: a row tile's row writes grouped by DRAM bank with the stateful one-packet writes (WL5_YSTATE)
+    )
     # yrm: the rows through yc row collectors a group (l5_ycoll.cpp, WL5_YC): spare cores in the muxes' column, which
     # gather each row tile's column slices from the 25 cores and write every row whole; yc_sink: without the row writes
     # (a diagnostic: the cores' traffic and the protocol only)
@@ -127,7 +129,20 @@ def slice_layout5(cfg, CHT, wg, wu, wd):
 
 
 def build_lane5(
-    mesh, cfg: GCfg, lc: LCfg, l5: L5Cfg, x_t, idx_t, counts_t, ws_t, out_t, tab_t, T, out_rows, dest_t=None, fence_row=None
+    mesh,
+    cfg: GCfg,
+    lc: LCfg,
+    l5: L5Cfg,
+    x_t,
+    idx_t,
+    counts_t,
+    ws_t,
+    out_t,
+    tab_t,
+    T,
+    out_rows,
+    dest_t=None,
+    fence_row=None,
 ):
     """generic_op mesh program of the 5 x 5 lane design; returns (mesh program, io tensors, stamps). With l5.yrm, out_t
     is the row-major result buffer [rows, H] and dest_t the destination lists [nexp, RMAX 32] uint32 (out_rows unused);
@@ -139,9 +154,12 @@ def build_lane5(
     assert not l5.yrm or (l5.hmc == 2 and dest_t is not None and not l5.oaff), "yrm: hmc 2, dest_t, no oaff"
     assert not l5.yc or (l5.yrm and not l5.yt and not l5.ystate and fence_row is not None), "yc: yrm rows, fenced"
     ln = lanes((R, Cn), lc)
+    # (a 2-chip cycle: both directions lead to the same chip over the group's link - one mux a group, WL5_ONEMUX)
+    onemux = len(lane_cycles(ln[0])[0]) == 2
+    nmux = 1 if onemux else 2
     groups = [g5_lane_cores(l5, g) for g in range(G)]
     C = [c for gr in groups for c in gr]
-    muxes = [(l5.mux_cols[g], l5.mux_rows[g][d]) for g in range(G) for d in range(2)]
+    muxes = [(l5.mux_cols[g], l5.mux_rows[g][d]) for g in range(G) for d in range(nmux)]
     assert not set(muxes) & set(C)
     # yc: group g's collectors - the first yc spare cores of its muxes' column within its rows (outside the rectangle;
     # the cores reach them west on NOC1); every collector transfer on NOC1 (the row writes, the destination reads, the
@@ -198,7 +216,8 @@ def build_lane5(
         ytab = sharded_l1(mesh, ycores, [1, TLW + 16], U, RM, torch.int32)
         yst = stamps_tensor(mesh, ycores)
         yw_b = a64(yw.buffer_address())
-    st = stamps_tensor(mesh, C)
+    # (a core's stamps: words 0-511 the RISCs', 512 + n the n-th expert's end)
+    st = stamps_tensor(mesh, C, words=max(64, -(-(512 + T["E"]) // 128) * 16))
     mcfg = fabric_mux.Config(
         num_full_size_channels=GC5,
         num_header_only_channels=0,
@@ -233,9 +252,10 @@ def build_lane5(
             nxt = {}
             hmc_rt = {}
             for g, gr in enumerate(groups):
-                cyc, link = ln[g]
+                link = ln[g][1]
+                cyc = [tuple(v) for v in lane_cycle(ln[g], me_rc)]
                 i = cyc.index(me_rc)
-                nxt[g] = (cyc[(i + 1) % N], cyc[(i - 1) % N])
+                nxt[g] = (cyc[(i + 1) % len(cyc)], cyc[(i - 1) % len(cyc)])
                 nid = [int(node(mesh, nxt[g][d]).chip_id) for d in range(2)]
                 cx = [noc(mesh, *gr[NR * k])[0] for k in range(NCOL)]
                 ry = [noc(mesh, *gr[k])[1] for k in range(NR)]
@@ -277,36 +297,54 @@ def build_lane5(
                             hmc_rt[(x, y)] += [counts_t.buffer_address(), k0, tab_t.buffer_address()]
                             hmc_rt[(x, y)] += [ws_t.buffer_address(), ch0[j]]
                             hmc_rt[(x, y)] += [dest_t.buffer_address()] if l5.yrm else []
-                            hmc_rt[(x, y)] += [(lambda q: q[0] | q[1] << 8)(noc(mesh, *xy)) for xy in colls[g]] if l5.yc else []
+                            hmc_rt[(x, y)] += (
+                                [(lambda q: q[0] | q[1] << 8)(noc(mesh, *xy)) for xy in colls[g]] if l5.yc else []
+                            )
                     if l5.hmc == 2:
                         for j, (x, y) in sub:
                             (hx0, hy0), (hx1, hy1) = noc(mesh, *gr[0]), noc(mesh, *gr[-1])
                             assert (hx1 - hx0, hy1 - hy0) == (NCOL - 1, NR - 1), "a group rectangle NoC contiguous"
                             wr_rt[x][y].extend([hx0, hy0, hx1, hy1])
                     if l5.hmc != 1:
-                      kernels.append(
-                        ttnn.KernelDescriptor(
-                            kernel_source=kpath("l5h_writer.cpp" if l5.hmc == 2 else "l5_writer.cpp"),
-                            core_ranges=cs,
-                            compile_time_args=[ksl, dc, own, l5.NXR, xring.buffer_address(), xflags.buffer_address()]
-                            + [xcred.buffer_address(), xtile, l5.D, land.buffer_address(), lflags.buffer_address()]
-                            + [lcred.buffer_address(), ptile, scr.buffer_address(), KTD, NS, hring.buffer_address()]
-                            + [hflags.buffer_address(), htile, cnt_base, tab_base, TB, cfg.RMAX, cfg.H * 2, idx_addr]
-                            + [cfg.nexp, wring.buffer_address(), warr.buffer_address(), freew.buffer_address()]
-                            + [lc.CHT, wtile, l5.RD, hcred.buffer_address(), K, PKE]
-                            + list(ttnn.TensorAccessorArgs(x_t).get_compile_time_args())
-                            + list(ttnn.TensorAccessorArgs(idx_t).get_compile_time_args())
-                            + list(ttnn.TensorAccessorArgs(counts_t).get_compile_time_args())
-                            + list(ttnn.TensorAccessorArgs(tab_t).get_compile_time_args())
-                            + list(ttnn.TensorAccessorArgs(ws_t).get_compile_time_args())
-                            + ([hcons.buffer_address(), hcolf.buffer_address()] if l5.hmc == 2 else [])
-                            + ([ysh.buffer_address()] if l5.yrm and l5.yt else []),
-                            defines=([("WL5_GATHER0", "1")] if l5.hmc == 2 and l5.gather0 else [])
-                            + ([("WL5_YT", "1")] if l5.yrm and l5.yt else []),
-                            runtime_args=wr_rt,
-                            config=dm(0),
+                        kernels.append(
+                            ttnn.KernelDescriptor(
+                                kernel_source=kpath("l5h_writer.cpp" if l5.hmc == 2 else "l5_writer.cpp"),
+                                core_ranges=cs,
+                                compile_time_args=[
+                                    ksl,
+                                    dc,
+                                    own,
+                                    l5.NXR,
+                                    xring.buffer_address(),
+                                    xflags.buffer_address(),
+                                ]
+                                + [xcred.buffer_address(), xtile, l5.D, land.buffer_address(), lflags.buffer_address()]
+                                + [lcred.buffer_address(), ptile, scr.buffer_address(), KTD, NS, hring.buffer_address()]
+                                + [
+                                    hflags.buffer_address(),
+                                    htile,
+                                    cnt_base,
+                                    tab_base,
+                                    TB,
+                                    cfg.RMAX,
+                                    cfg.H * 2,
+                                    idx_addr,
+                                ]
+                                + [cfg.nexp, wring.buffer_address(), warr.buffer_address(), freew.buffer_address()]
+                                + [lc.CHT, wtile, l5.RD, hcred.buffer_address(), K, PKE]
+                                + list(ttnn.TensorAccessorArgs(x_t).get_compile_time_args())
+                                + list(ttnn.TensorAccessorArgs(idx_t).get_compile_time_args())
+                                + list(ttnn.TensorAccessorArgs(counts_t).get_compile_time_args())
+                                + list(ttnn.TensorAccessorArgs(tab_t).get_compile_time_args())
+                                + list(ttnn.TensorAccessorArgs(ws_t).get_compile_time_args())
+                                + ([hcons.buffer_address(), hcolf.buffer_address()] if l5.hmc == 2 else [])
+                                + ([ysh.buffer_address()] if l5.yrm and l5.yt else []),
+                                defines=([("WL5_GATHER0", "1")] if l5.hmc == 2 and l5.gather0 else [])
+                                + ([("WL5_YT", "1")] if l5.yrm and l5.yt else []),
+                                runtime_args=wr_rt,
+                                config=dm(0),
+                            )
                         )
-                      )
                     rd_idx[(g, own)] = len(kernels)
                     hmc_ct = []
                     if l5.hmc:
@@ -341,6 +379,7 @@ def build_lane5(
                                 else []
                             )
                             + ([("WL5_HMC2", "1")] if l5.hmc == 2 else [])
+                            + ([("WL5_ONEMUX", "1")] if onemux else [])
                             + ([("WL5_GATHER0", "1")] if l5.hmc == 2 and l5.gather0 else []),
                             config=dm(1),
                         )
@@ -372,7 +411,13 @@ def build_lane5(
                     split = 1 if l5.yc_n0 and l5.mux_cols[g] != 0 else 0
                     for ci, (x, y) in enumerate(cl):
                         args = [g, ci, l5.yc, E, counts_t.buffer_address(), tab_t.buffer_address()]
-                        args += [dest_t.buffer_address(), out_t.buffer_address(), fence_row, yst.buffer_address(), split]
+                        args += [
+                            dest_t.buffer_address(),
+                            out_t.buffer_address(),
+                            fence_row,
+                            yst.buffer_address(),
+                            split,
+                        ]
                         args += [(lambda q: q[0] | q[1] << 8)(noc(mesh, *xy)) for xy in groups[g]]
                         y_rt[x][y] = args
                         if split:
@@ -445,7 +490,12 @@ def build_lane5(
             )
             mux_idx = {}
             for n1 in (0, 1):
-                ms = [(l5.mux_cols[g], l5.mux_rows[g][d]) for g in range(G) for d in range(2) if bool(mux_n1(g)) == bool(n1)]
+                ms = [
+                    (l5.mux_cols[g], l5.mux_rows[g][d])
+                    for g in range(G)
+                    for d in range(nmux)
+                    if bool(mux_n1(g)) == bool(n1)
+                ]
                 if not ms:
                     continue
                 mrt = ttnn.RuntimeArgs()
@@ -469,8 +519,8 @@ def build_lane5(
             sems = [ttnn.SemaphoreDescriptor(id=s, core_ranges=cset, initial_value=0) for s in range(2)]
             p = ttnn.ProgramDescriptor(kernels=kernels, semaphores=sems, cbs=cbs)
             for g, gr in enumerate(groups):
-                cyc, link = ln[g]
-                for d in range(2):
+                link = ln[g][1]
+                for d in range(nmux):
                     m = (l5.mux_cols[g], l5.mux_rows[g][d])
                     p.kernels[mux_idx[m]].runtime_args[m[0]][m[1]].extend(
                         mcfg.kernel_runtime_args(
@@ -481,7 +531,13 @@ def build_lane5(
                             mux_logical_core=ttnn.CoreCoord(*m),
                         )
                     )
+                d0_args = {}
                 for d in range(2):
+                    if d >= nmux:  # (onemux: direction 1's RT args are direction 0's, unused)
+                        for j, (x, y) in enumerate(gr):
+                            own = 1 if core_geom(cfg, j)[6] else 0
+                            p.kernels[rd_idx[(g, own)]].runtime_args[x][y].extend(d0_args[j])
+                        continue
                     m = (l5.mux_cols[g], l5.mux_rows[g][d])
                     mux_vc = mesh.worker_core_from_logical_core(ttnn.CoreCoord(*m))
                     master_vc = mesh.worker_core_from_logical_core(ttnn.CoreCoord(*gr[0]))
@@ -501,6 +557,7 @@ def build_lane5(
                         )
                         if j == 0:
                             term_sem = args[10]
+                        d0_args[j] = list(args)
                         own = 1 if core_geom(cfg, j)[6] else 0
                         p.kernels[rd_idx[(g, own)]].runtime_args[x][y].extend(args)
             if l5.hmc:  # (l5h_reader.cpp's extra RT args, after both directions' mux client args)

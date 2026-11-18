@@ -120,7 +120,7 @@ def run5(mesh, cfg, lc, l5, Ms, tag, warm=WARM, meas=MEAS):
         ttnn.synchronize_device(mesh)
         if i >= warm:
             sts = ttnn.get_device_tensors(st)
-            row = {ci: chip_time(cfg, Ms, T, ci, sts[ci]) for ci in chips}
+            row = {ci: chip_time(cfg, Ms, T, ci, sts[ci], x0=512) for ci in chips}
             rows.append(row)
             logger.info(
                 f"WL5 {tag} launch {i - warm + 1}/{meas}: util tile per chip {[round(100 * row[ci][1], 1) for ci in chips]}"
@@ -192,4 +192,15 @@ def test_ws_lane5_glx(mesh_device, nexp, T, M):
     lc.cycles = torus_cycles(*tuple(mesh_device.shape))
     Ms = [M] * cfg.nexp
     rows, pcs = run5(mesh_device, cfg, lc, l5, Ms, f"glx {nexp} experts M {M}")
+    assert min(pcs.values()) > 0.999
+
+
+@pytest.mark.parametrize("mesh_device", [(2, 4)], indirect=True)
+@pytest.mark.parametrize("device_params", [FAB], indirect=True)
+def test_ws_lane5_tray_e640(mesh_device):
+    """The full expert count on the tray: 640 experts (320 a lane; WS_NEXP overrides), T 8192, M 586, every expert
+    checked."""
+    cfg, lc, l5 = configs(int(os.environ.get("WS_NEXP", "640")), 2, 8192)
+    Ms = [586] * cfg.nexp
+    rows, pcs = run5(mesh_device, cfg, lc, l5, Ms, "tray 640 experts M 586", warm=2, meas=3)
     assert min(pcs.values()) > 0.999

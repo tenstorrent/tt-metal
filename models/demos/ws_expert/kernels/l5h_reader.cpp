@@ -140,12 +140,20 @@ void kernel_main() {
         total_rows += rows_of(n);
     }
 
-    // ---- mux connections (index d: to the next chip in direction d), headers
+    // ---- mux connections (index d: to the next chip in direction d), headers. WL5_ONEMUX (a 2-chip cycle: both
+    // directions lead to the same chip over the same link, and a router direction takes one worker connection): one
+    // mux, both directions' packets and credits through it (the RT args of direction 1 are present, unused)
+#ifdef WL5_ONEMUX
+    constexpr uint32_t NMUX = 1;
+#else
+    constexpr uint32_t NMUX = 2;
+#endif
+#define MUXD(d) mux[NMUX == 1 ? 0 : (d)]
     tt::tt_fabric::WorkerToFabricMuxSender<mux_nbuf> mux[2];
     bool master[2];
     uint32_t term_sync[2], tmx[2], tmy[2];
     uint8_t muxx[2], muxy[2];
-    for (uint32_t d = 0; d < 2; ++d) {
+    for (uint32_t d = 0; d < NMUX; ++d) {
         size_t a_ = 20 + 17 * d;
         a_++;  // connection valid
         master[d] = get_arg_val<uint32_t>(a_++) != 0;
@@ -270,12 +278,12 @@ void kernel_main() {
             if (u == 0 && cred[(d * K + s2) * 4] < k2) {
                 continue;
             }
-            if (!mux[d].edm_has_space_for_packet()) {
+            if (!MUXD(d).edm_has_space_for_packet()) {
                 continue;
             }
             noc_async_writes_flushed();  // (the previous send's header and payload out of L1)
             fabric_unicast_noc_fused_unicast_with_atomic_inc(
-                &mux[d],
+                &MUXD(d),
                 hdr[d],
                 nchip[d],
                 my_mesh,
@@ -301,7 +309,7 @@ void kernel_main() {
                 continue;
             }
             const uint32_t nk = cur_nk[s], next = occ[s] + 1;
-            if (nk >= 2 && !mux[1 - (nk - 2)].edm_has_space_for_packet()) {
+            if (nk >= 2 && !MUXD(1 - (nk - 2)).edm_has_space_for_packet()) {
                 continue;
             }
             noc_async_writes_flushed();  // (every forward of the slot has left L1 before it is refilled)
@@ -310,7 +318,7 @@ void kernel_main() {
             } else if (nk >= 2) {
                 const uint32_t d = nk - 2;
                 fabric_unicast_noc_unicast_inline_write(
-                    &mux[1 - d],
+                    &MUXD(1 - d),
                     hcr,
                     nchip[1 - d],
                     my_mesh,
@@ -972,7 +980,7 @@ void kernel_main() {
     noc_async_write_barrier();
 #endif
 #endif
-    for (uint32_t d = 0; d < 2; ++d) {
+    for (uint32_t d = 0; d < NMUX; ++d) {
         tt::tt_fabric::fabric_client_disconnect(mux[d]);
         if (master[d]) {
             noc_semaphore_wait(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(term_sync[d]), mux_clients - 1);

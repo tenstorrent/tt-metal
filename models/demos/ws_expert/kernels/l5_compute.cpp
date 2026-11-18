@@ -6,7 +6,8 @@
 // (order entry n: expert | weight slot s << 16, table L1 + 64, loaded by the BRISC), the weights read from slot s of
 // the K-slot rings (use_slot), and every expert finished on its own (its remaining folds and downs drained before the
 // next expert's weights are waited for) so that its slot frees without the next expert (the lane schedule's rule).
-// Stamps: 256 + n the end of the n-th expert, 0 start, 63 end.
+// Stamps: 512 + n the end of the n-th expert (past the RISCs' stamps; ws_lane5 sizes the tensor for every expert), 0
+// start, 63 end.
 // Base: ws_expert 5 x 5 K-split groups compute (ws_g5.py; ks_compute.cpp generalized). Core (c, r), j = 5 c + r:
 // gate/up partials of its column's 4 pairs over its K slice (KSL tiles; 2 blocks of 1 x 4 -> 8 partial tiles a row, CB
 // 18); owners (rows 0-3, OWN) fold the 5 contributions of their pair (CB 4) in fp32 DEST, apply SwiGLU and produce the
@@ -322,7 +323,7 @@ void kernel_main() {
             pop_finished_down(n + 1);
         }
         pop_finished_down(n + 1);
-        PACK(stamps[256 + n] = wall());
+        PACK(stamps[512 + n] = wall());
     }
     while (folded < total_rows) {
         fold_row();
