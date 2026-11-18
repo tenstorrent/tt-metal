@@ -73,6 +73,13 @@ DENSE_RINV = True
 DENSE_MIN_ROWS = 4
 DENSE_GROUP = TILE  # tile-rows per dense tile: one column each
 # Interleaved work-split knobs (Refinement 5):
+# w_split = the k in [k_fit, max(k_fit, Wt // MIN_CORE_W_TILES)] minimizing the busiest core's work,
+# ceil(R / lines) · (cw + W_SPLIT_ROW_COST_TILES·[k > 1]) tiles (ties -> fewer cores per line). The row cost prices a
+# W_SPLIT tile-row's fixed work (partial, rendezvous, rinv expand) in x-tile equivalents. False: the pre-R5 occupancy
+# rule k = max(k_fit, min(C // R, Wt // MIN_CORE_W_TILES)), which strands cores whenever C % (lines·k) != 0 and
+# leaves R > C on a LOCAL split whose last ceil(R / C) round runs on R % C cores.
+BALANCED_W_SPLIT = True
+W_SPLIT_ROW_COST_TILES = 1
 FORCE_W_SPLIT = 0  # probe override of the interleaved w_split (0 = auto)
 MIN_BLOCKS_PER_LINE = 1  # cap block_rows so each line streams >= this many blocks (1 = whole line per block)
 
@@ -281,6 +288,14 @@ def _xg_prescale(g: OpGeometry, br: int, cw: int, wc: int, k: int, budget: int, 
     return base + br * cw * g.t_int <= budget
 
 
+def _split_cost(R: int, Wt: int, C: int, k: int) -> int:
+    """Busiest core's work (x-tile equivalents) of an interleaved split with k cores per line."""
+    cw = _div_up(Wt, k)
+    w_split = _div_up(Wt, cw)
+    lines = min(R, C // w_split)
+    return _div_up(R, lines) * (cw + (W_SPLIT_ROW_COST_TILES if w_split > 1 else 0))
+
+
 def select_blocking(
     g: OpGeometry, R: int, Wt: int, C: int, shard: ShardPlacement = None, budget: int = L1_CB_BUDGET_BYTES
 ) -> Blocking:
@@ -325,8 +340,10 @@ def select_blocking(
             break
     if k_fit is None:
         raise UnsupportedAxisValue("rms_norm: row too wide to hold resident across the grid")
-    k_occ = 1 if R >= C else max(1, min(C // R, Wt // MIN_CORE_W_TILES))
-    k = max(k_fit, k_occ)
+    if BALANCED_W_SPLIT:
+        k = min(range(k_fit, min(C, max(k_fit, Wt // MIN_CORE_W_TILES)) + 1), key=lambda k: (_split_cost(R, Wt, C, k), k))
+    else:
+        k = max(k_fit, 1 if R >= C else max(1, min(C // R, Wt // MIN_CORE_W_TILES)))
     if FORCE_W_SPLIT:
         k = max(k_fit, FORCE_W_SPLIT)
     cw = _div_up(Wt, k)
