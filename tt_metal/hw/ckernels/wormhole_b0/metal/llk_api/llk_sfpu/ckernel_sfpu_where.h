@@ -32,18 +32,18 @@ inline void _calculate_where_(
         data_format == DataFormat::Float16_b ? InstrModLoadStore::LO16 : InstrModLoadStore::INT32;
 
     // Only Float32 is unpacked directly to Dest (unpack_to_dest=true), preserving IEEE-754 -0.0 (0x80000000).
-    // Float16_b unpacks via srcA (MOVA2D) which flushes -0.0 before Dest, and Int32/UInt32 have no signed zero.
-    constexpr bool is_fp32 = (data_format == DataFormat::Float32);
+    // Int32/UInt32 have no signed zero; floating-point formats (Float32 and Float16_b) clear -0.0's sign bit.
+    constexpr bool is_fp = (data_format == DataFormat::Float32) || (data_format == DataFormat::Float16_b);
 
 #ifdef DISABLE_SFPLOADMACRO
     int offset3 = (dst_index_out * 32) << 1;
 
-    constexpr int replay_len = is_fp32 ? 7 : 6;
+    constexpr int replay_len = is_fp ? 7 : 6;
     lltt::record(0, replay_len);
     TT_SFPLOAD(p_sfpu::LREG0, mod0, ADDR_MOD_3, offset0);
     TT_SFPLOAD(p_sfpu::LREG1, mod0, ADDR_MOD_3, offset1);
-    if constexpr (is_fp32) {
-        // Drop the IEEE-754 sign bit so that -0.0 (0x80000000) evaluates to 0 (false)
+    if constexpr (is_fp) {
+        // Drop the IEEE-754 sign bit so that -0.0 evaluates to 0 (false)
         TTI_SFPSHFT(1, p_sfpu::LREG0, p_sfpu::LREG0, 1);
     }
     TTI_SFPSETCC(0, p_sfpu::LREG0, 0, sfpi::SFPSETCC_MOD1_LREG_EQ0);
@@ -57,20 +57,20 @@ inline void _calculate_where_(
     }
 #else
     if (dst_index_out == dst_index_in0) {
-        // Non-Float32 uses macros 0 and 2 (3 cycles per row); Float32 uses macros 3 and 2 (4 cycles per row)
+        // Int32/UInt32 use macros 0 and 2 (3 cycles per row); Float32/Float16_b use macros 3 and 2 (4 cycles per row)
         // to insert SFPSHFT clearing the sign bit of -0.0 before SFPSETCC:
         //
         // Load Unit               | Simple Unit                       | Store Unit
         // SFPLOAD L0=Dst[offset0] |                                   |
-        // - (Float32 only)        | SFPSHFT (clears sign bit: ±0->0)  |
+        // - (FP only)             | SFPSHFT (clears sign bit: ±0->0)  |
         // SFPLOAD L0=Dst[offset1] | SFPSETCC LaneEnabled=(L0 EQ 0)    |
         // SFPLOAD L0=Dst[offset2] | SFPENCC (LaneEnabled=true)        |
         // (next SFPLOAD L0)       |                                   | SFPSTORE Dst[offset0]=L0
 
-        constexpr int replay_len = is_fp32 ? 4 : 3;
+        constexpr int replay_len = is_fp ? 4 : 3;
 
         lltt::record(0, replay_len);
-        if constexpr (is_fp32) {
+        if constexpr (is_fp) {
             TT_SFPLOADMACRO((3 << 2), mod0, ADDR_MOD_3, offset0);
             TTI_SFPSHFT(1, p_sfpu::LREG0, p_sfpu::LREG0, 1);
         } else {
@@ -84,27 +84,27 @@ inline void _calculate_where_(
             lltt::replay(0, replay_len);
         }
     } else {
-        // Non-Float32 uses macros 1 and 2 (4 cycles per row); Float32 adds SFPSHFT (5 cycles per row):
+        // Int32/UInt32 use macros 1 and 2 (4 cycles per row); Float32/Float16_b add SFPSHFT (5 cycles per row):
         //
         // Load Unit               | Simple Unit                       | Store Unit
         // SFPLOAD L0=Dst[offset0] |                                   |
-        // - (Float32 only)        | SFPSHFT (clears sign bit: ±0->0)  |
+        // - (FP only)             | SFPSHFT (clears sign bit: ±0->0)  |
         // SFPLOAD L0=Dst[offset1] | SFPSETCC LaneEnabled=(L0 EQ 0)    |
         // SFPLOAD L0=Dst[offset2] | SFPENCC (LaneEnabled=true)        |
         // -                       |                                   | SFPSTORE Dst[offset3]=L0
         // (next SFPLOAD L0)       |                                   |
 
         int offset3 = (dst_index_out * 32) << 1;
-        constexpr int replay_len = is_fp32 ? 5 : 4;
+        constexpr int replay_len = is_fp ? 5 : 4;
 
-        if constexpr (is_fp32) {
+        if constexpr (is_fp) {
             TTI_SFPCONFIG((1 << 3) | 4, 4 + 1, 1);
             TTI_SFPNOP;
         }
 
         lltt::record(0, replay_len);
         TT_SFPLOADMACRO((1 << 2), mod0, ADDR_MOD_3, offset0);
-        if constexpr (is_fp32) {
+        if constexpr (is_fp) {
             TTI_SFPSHFT(1, p_sfpu::LREG0, p_sfpu::LREG0, 1);
         }
         TT_SFPLOADMACRO((2 << 2), mod0, ADDR_MOD_3, offset1);
@@ -116,7 +116,7 @@ inline void _calculate_where_(
             lltt::replay(0, replay_len);
         }
 
-        if constexpr (is_fp32) {
+        if constexpr (is_fp) {
             TTI_SFPCONFIG((0 << 3) | 4, 4 + 1, 1);
         }
     }
