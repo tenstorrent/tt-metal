@@ -36,8 +36,6 @@ inline void calculate_binary_comp_fp32_equal(
     constexpr uint a = p_sfpu::LREG0;
     constexpr uint b = p_sfpu::LREG1;
     constexpr uint abs_a = p_sfpu::LREG2;
-    constexpr uint abs_b = p_sfpu::LREG3;
-    constexpr uint sum = p_sfpu::LREG4;
     constexpr uint inf = p_sfpu::LREG5;
     constexpr uint default_result = RELATIONAL_OP == SfpuType::eq ? p_sfpu::LCONST_0 : p_sfpu::LCONST_1;
     constexpr uint equal_result = RELATIONAL_OP == SfpuType::eq ? p_sfpu::LCONST_1 : p_sfpu::LCONST_0;
@@ -51,19 +49,18 @@ inline void calculate_binary_comp_fp32_equal(
         TT_SFPLOAD(b, InstrModLoadStore::DEFAULT, ADDR_MOD_3, dst_index_in1 * dst_tile_size);
         TT_SFPSTORE(default_result, InstrModLoadStore::DEFAULT, ADDR_MOD_3, dst_index_out * dst_tile_size);
 
-        TTI_SFPSETSGN(0, b, abs_b, 1);  // SFPSETSGN_MOD1_ARG_IMM
         TTI_SFPSETSGN(0, a, abs_a, 1);  // SFPSETSGN_MOD1_ARG_IMM
         // Canonicalise: a = 1*a + 0, b = 1*b + 0. SFPMAD treats a subnormal input as zero and
         // flushes a -0/subnormal result to +0, and is exact otherwise, so a ^ b below is zero iff
-        // the values are bitwise identical or both are in {±0, ±subnormal} (the pair the old
-        // abs(a) + abs(b) == 0 test accepted). One conditional store instead of two.
+        // the values are bitwise identical or both are in {±0, ±subnormal}. A NaN stays NaN and a
+        // non-NaN never becomes one, so when a ^ b == 0 either both are NaN or neither is: the NaN
+        // test only needs abs(a).
         TTI_SFPMAD(p_sfpu::LCONST_1, a, p_sfpu::LCONST_0, a, 0);
         TTI_SFPMAD(p_sfpu::LCONST_1, b, p_sfpu::LCONST_0, b, 0);
-        TTI_SFPMAD(p_sfpu::LCONST_1, abs_a, abs_b, sum, 0);
-        TTI_SFPXOR(0, b, a, 0);
 
-        // if abs(a) + abs(b) <= inf; rejects NaN
-        TTI_SFPIADD(0, inf, sum, sfpi::SFPIADD_MOD1_ARG_2SCOMP_LREG_DST | sfpi::SFPIADD_MOD1_CC_GTE0);
+        // if abs(a) <= inf; rejects NaN
+        TTI_SFPIADD(0, inf, abs_a, sfpi::SFPIADD_MOD1_ARG_2SCOMP_LREG_DST | sfpi::SFPIADD_MOD1_CC_GTE0);
+        TTI_SFPXOR(0, b, a, 0);
         // if a ^ b == 0; equal after canonicalisation
         TTI_SFPSETCC(0, a, 0, sfpi::SFPSETCC_MOD1_LREG_EQ0);
         TT_SFPSTORE(equal_result, InstrModLoadStore::DEFAULT, ADDR_MOD_2, dst_index_out * dst_tile_size);
