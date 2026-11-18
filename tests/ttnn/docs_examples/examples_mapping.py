@@ -382,6 +382,7 @@ FUNCTION_TO_EXAMPLES_MAPPING_DICT = {
     "ttnn.nonzero": data_movement.test_nonzero,
     "ttnn.pad": data_movement.test_pad,
     "ttnn.permute": data_movement.test_permute,
+    "ttnn.reshape_on_device": data_movement.test_reshape_on_device,
     "ttnn.reshape": data_movement.test_reshape,
     "ttnn.scatter": data_movement.test_scatter,
     "ttnn.scatter_add": data_movement.test_scatter_add,
