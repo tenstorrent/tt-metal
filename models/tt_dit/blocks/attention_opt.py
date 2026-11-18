@@ -19,6 +19,7 @@ from ..utils.matmul import get_matmul_config, get_matmul_core_grid
 from ..utils.mochi import get_rot_transformation_mat
 from ..utils.padding import PaddingConfig, pad_weight_tensor
 from ..utils.substate import pop_substate
+from ..utils.tensor import from_torch
 
 if TYPE_CHECKING:
     pass
@@ -39,6 +40,18 @@ _FLUX2_MATMUL_CORE_GRIDS: dict[tuple[int, int, int], tuple[int, int]] = {
     (1024, 6144, 2304): ttnn.CoreCoord(12, 9),
     (512, 6144, 2304): ttnn.CoreCoord(12, 9),
 }
+
+
+def token_count_tensor(count: int, mesh_device: ttnn.MeshDevice, *, on_host: bool = False) -> ttnn.Tensor:
+    """The token count as the one-element uint32 tensor, replicated on the mesh, that the ring SDPA
+    reads at run time; on the host with ``on_host``, for a trace input."""
+    return from_torch(
+        torch.tensor([count], dtype=torch.int64).reshape(1, 1, 1, 1),
+        device=mesh_device,
+        dtype=ttnn.uint32,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        on_host=on_host,
+    )
 
 
 # adapted from https://github.com/huggingface/diffusers/blob/v0.31.0/src/diffusers/models/attention_processor.py
@@ -158,7 +171,6 @@ class Attention(Module):
         )
 
         self.ring_sdpa_program_config = {}
-        self._logical_n_tensors: dict[int, ttnn.Tensor] = {}
         self.sdpa_compute_kernel_config = ttnn.init_device_compute_kernel_config(
             self.mesh_device.arch(),
             math_fidelity=ttnn.MathFidelity.HiFi2,
@@ -322,25 +334,14 @@ class Attention(Module):
         else:
             return (full_grid.x, full_grid.y - 1)
 
-    def _logical_n_tensor(self, logical_n: int) -> ttnn.Tensor:
-        """`logical_n` as the one-element uint32 device tensor that `dynamic_local_n` reads, one per value."""
-        tensor = self._logical_n_tensors.get(logical_n)
-        if tensor is None:
-            host = ttnn.from_torch(
-                torch.tensor([logical_n], dtype=torch.int64).reshape(1, 1, 1, 1),
-                dtype=ttnn.uint32,
-                layout=ttnn.ROW_MAJOR_LAYOUT,
-                mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
-            )
-            tensor = ttnn.to_device(host, self.mesh_device)
-            self._logical_n_tensors[logical_n] = tensor
-        return tensor
-
-    def _ring_sdpa_dynamic(self, q: ttnn.Tensor, k: ttnn.Tensor, v: ttnn.Tensor, *, logical_n: int) -> ttnn.Tensor:
+    def _ring_sdpa_dynamic(
+        self, q: ttnn.Tensor, k: ttnn.Tensor, v: ttnn.Tensor, *, logical_n: ttnn.Tensor
+    ) -> ttnn.Tensor:
         """Ring SDPA without a joint stream that takes the token count at run time.
 
         `dynamic_local_n` leaves the rows per device out of the program, so one program serves every
-        token count up to `row_capacity` rows per device. Its masks cover only the global tail, so the
+        token count up to `row_capacity` rows per device. `logical_n` is the token count as a
+        one-element uint32 device tensor (`token_count_tensor`). Its masks cover only the global tail, so the
         rows per device must be whole tiles, all real but the tail of the last device. The program
         config and the gather buffers are the same for every token count.
         """
@@ -357,7 +358,7 @@ class Attention(Module):
             persistent_output_buffer_k=self.ccl_manager.get_ag_ping_pong_buffer(k.shape, 2, sp_axis, capacity=capacity),
             persistent_output_buffer_v=self.ccl_manager.get_ag_ping_pong_buffer(v.shape, 2, sp_axis, capacity=capacity),
             joint_strategy="rear",
-            logical_n=self._logical_n_tensor(logical_n),
+            logical_n=logical_n,
             program_config=self.get_ring_sdpa_program_config(-1),
             compute_kernel_config=self.sdpa_compute_kernel_config,
             dim=2,
@@ -581,12 +582,16 @@ class Attention(Module):
         addcmul_spatial_gate: ttnn.Tensor | None = None,
         addcmul_prompt_residual: ttnn.Tensor | None = None,
         addcmul_prompt_gate: ttnn.Tensor | None = None,
+        token_count: ttnn.Tensor | None = None,
     ) -> tuple[ttnn.Tensor, ttnn.Tensor | None]:
         """Forward with optional fused to_out + addcmul.
 
         Ring callers pass spatial/prompt fractured on TP (fused AG+matmul inside);
         Linear callers must all-gather first. addcmul_*_residual+gate fuse the
-        out projection's residual+gate when both are provided.
+        out projection's residual+gate when both are provided. With `row_capacity`, `token_count`
+        holds the attended token count (sequence_1_length, plus sequence_2_length with a prompt
+        projection) as a `token_count_tensor`, for the ring SDPA that takes the token count at run
+        time; without it, that SDPA builds one for this call, so a traced caller must pass it.
         """
 
         assert len(sequence_1.shape) == 3
@@ -707,6 +712,10 @@ class Attention(Module):
             and (not has_prompt or _whole_tiles(add_q, add_k, add_v))
         )
 
+        if dynamic_sdpa and token_count is None:
+            count = sequence_1_length + sequence_2_length if has_prompt else sequence_1_length
+            token_count = token_count_tensor(count, self.mesh_device)
+
         if dynamic_sdpa and has_prompt:
             # Attention is the same for any order of the keys, so the prompt shard is folded in front
             # of each device's spatial shard; with whole tiles per device, nothing needs masking.
@@ -715,14 +724,14 @@ class Attention(Module):
                 ttnn.concat([add_q, q], dim=2),
                 ttnn.concat([add_k, k], dim=2),
                 ttnn.concat([add_v, v], dim=2),
-                logical_n=sequence_1_length + sequence_2_length,
+                logical_n=token_count,
             )
             heads, rows, head_dim = out.shape[1], out.shape[2], out.shape[3]
             sequence_2 = ttnn.slice(out, [0, 0, 0, 0], [1, heads, prompt_rows, head_dim])
             spatial = ttnn.slice(out, [0, 0, prompt_rows, 0], [1, heads, rows, head_dim])
             ttnn.deallocate(out)
         elif dynamic_sdpa:
-            spatial = self._ring_sdpa_dynamic(q, k, v, logical_n=sequence_1_length)
+            spatial = self._ring_sdpa_dynamic(q, k, v, logical_n=token_count)
             sequence_2 = None
         elif self.parallel_config.sequence_parallel.factor > 1:
             spatial, sequence_2, _lse = ttnn.transformer.ring_joint_scaled_dot_product_attention(

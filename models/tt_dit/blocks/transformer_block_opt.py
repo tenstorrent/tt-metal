@@ -243,10 +243,13 @@ class TransformerBlock(Module):
         temb_mod_params_img: tuple[ttnn.Tensor, ...] | None = None,
         temb_mod_params_txt: tuple[ttnn.Tensor, ...] | None = None,
         skip_time_embed_activation_fn: bool = False,
+        token_count: ttnn.Tensor | None = None,
     ) -> tuple[ttnn.Tensor, ttnn.Tensor | None]:
         """Run the model forward.
 
         Args:
+            token_count: spatial_sequence_length + prompt_sequence_length as a `token_count_tensor`,
+                for the attention with `row_capacity`.
             spatial: Tensor with shape [batch_size, spatial_sequence_length / sp_factor, query_dim / tp_factor].
             prompt: Tensor with shape [batch_size, prompt_sequence_length, query_dim / tp_factor] (sequence is not sharded!).
             time_embed: Tensor with shape [batch_size, 1, query_dim].
@@ -357,6 +360,7 @@ class TransformerBlock(Module):
             addcmul_spatial_gate=spatial_gate_attn,
             addcmul_prompt_residual=prompt if not self.context_pre_only else None,
             addcmul_prompt_gate=prompt_gate_attn,
+            token_count=token_count,
         )
 
         if prompt_attn is not None:

@@ -10,7 +10,7 @@ import torch
 
 import ttnn
 
-from ...blocks.attention_opt import Attention
+from ...blocks.attention_opt import Attention, token_count_tensor
 from ...blocks.transformer_block_opt import TransformerBlock
 from ...layers.embeddings import CombinedTimestepGuidanceTextProjEmbeddings
 from ...layers.linear import ColParallelLinear, Linear, RowParallelLinear, prepare_chunked_linear_output
@@ -162,6 +162,7 @@ class Flux2SingleTransformerBlock(Module):
         skip_time_embed_activation_fn: bool = False,
         spatial_sequence_length: int,
         compute_prompt_output: bool = True,
+        token_count: ttnn.Tensor | None = None,
     ) -> tuple[ttnn.Tensor, ttnn.Tensor | None]:
         """Run a single-stream block.
 
@@ -182,6 +183,7 @@ class Flux2SingleTransformerBlock(Module):
             sequence_1=x_c,
             sequence_1_rope=combined_rope,
             sequence_1_length=spatial_sequence_length,
+            token_count=token_count,
         )
 
         # slice out spatial only. Prompt not needed. The variable names are left to prevent code bloat. But this is just spatial after the slice.
@@ -234,6 +236,8 @@ class Flux2Transformer(Module):
 
         inner_dim = num_attention_heads * attention_head_dim
         tp_axis = parallel_config.tensor_parallel.mesh_axis
+        self._row_capacity = row_capacity
+        self._mesh_device = device
 
         self.time_guidance_embed = CombinedTimestepGuidanceTextProjEmbeddings(
             embedding_dim=inner_dim,
@@ -379,6 +383,7 @@ class Flux2Transformer(Module):
         spatial_sequence_length: int,
         prompt_sequence_length: int,
         compute_prompt_output: bool = False,
+        token_count: ttnn.Tensor | None = None,
     ) -> ttnn.Tensor:
         """Run the model forward.
 
@@ -397,7 +402,13 @@ class Flux2Transformer(Module):
             spatial_sequence_length: int.
             prompt_sequence_length: int.
             compute_prompt_output: bool. Whether to compute the prompt output. Final prompt output is typically unused.
+            token_count: spatial_sequence_length + prompt_sequence_length as a `token_count_tensor`,
+                for the attention with `row_capacity`. Without it, the transformer builds one for this
+                call, which allocates and writes during trace capture, so a traced caller must pass
+                it as a trace input.
         """
+        if token_count is None and self._row_capacity is not None:
+            token_count = token_count_tensor(spatial_sequence_length + prompt_sequence_length, self._mesh_device)
         time_embed = self.time_guidance_embed(timestep=timestep, guidance=guidance)
         ttnn.silu(time_embed, output_tensor=time_embed)
         time_embed = time_embed.reshape([time_embed.shape[-2], 1, time_embed.shape[-1]])
@@ -427,6 +438,7 @@ class Flux2Transformer(Module):
                 spatial_sequence_length=spatial_sequence_length,
                 prompt_sequence_length=prompt_sequence_length,
                 skip_time_embed_activation_fn=True,
+                token_count=token_count,
             )
 
             # if i % 6 == 0:
@@ -447,6 +459,7 @@ class Flux2Transformer(Module):
                 temb_mod_params=single_stream_mod,
                 spatial_sequence_length=spatial_prompt_sequence_length,
                 skip_time_embed_activation_fn=True,
+                token_count=token_count,
                 compute_prompt_output=(i < num_single_blocks)
                 or compute_prompt_output,  # prompt is unused for the last block.
             )
