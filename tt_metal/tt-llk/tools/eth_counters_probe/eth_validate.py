@@ -41,7 +41,7 @@ def run_test(binary, test, env_extra, profiler_dir):
     env.pop("TT_METAL_PROFILE_ETH_COUNTERS", None)
     env.update(env_extra)
     return subprocess.run(
-        [binary, f"--gtest_filter={test}"],
+        [c.executable(binary), f"--gtest_filter={test}"],
         env=env,
         capture_output=True,
         text=True,
