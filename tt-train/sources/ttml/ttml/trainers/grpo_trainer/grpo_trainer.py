@@ -247,7 +247,8 @@ class GRPOConfig:
     # ttt_remote_sync and ttt_remote_async: rollout rank settings, from the top-level
     # remote_rollout_config yaml section.
     remote_rollout: Optional[RemoteRolloutConfig] = None
-    # ttt_remote_async: drop a batch generated with weights more than max_staleness optimizer steps older than the policy.
+    # ttt_remote_async: drop a batch generated with weights more than max_staleness optimizer steps older than
+    # the policy.
     max_staleness: int = 0
 
     def __post_init__(self) -> None:
