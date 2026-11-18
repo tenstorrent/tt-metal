@@ -75,6 +75,17 @@ def test_scatter(device):
     logger.info(f"Scatter operation result: {output}")
 
 
+def test_fill_implicit_tile_padding(device):
+    # Create a TILE tensor of shape [1, 1, 40, 20]: its 32x32 tiles span [1, 1, 64, 32], and the rest is tile padding
+    input_tensor = ttnn.rand((1, 1, 40, 20), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+
+    # Write -inf into the tile padding; the values inside the shape are unchanged
+    output = ttnn.fill_implicit_tile_padding(input_tensor, float("-inf"))
+    padded = ttnn.from_device(output).to_torch_with_padded_shape()
+    logger.info(f"Padding Value: {padded[0, 0, -1, -1].item()}")  # -inf
+    logger.info(f"Padded Shape: {output.padded_shape}")  # Shape([1, 1, 64, 32])
+
+
 def test_scatter_add(device):
     # Create input, index, and source tensors for scatter_add
     input_torch = torch.tensor([[1, 2], [3, 4]], dtype=torch.float32)
