@@ -11,6 +11,12 @@ Regimes (both built):
   W_SPLIT (w_split  > 1): lines of `w_split` consecutive cores (row-major) share an R-range; each core holds its
                           W-slice resident; Σx² partials are gathered to the line root (cores[0] of the line), the
                           root combines + finalizes rinv and multicasts it back to every core of the line.
+
+Placements (Refinement 2): an INTERLEAVED input lets select_blocking() choose the cores; a sharded input fixes them —
+the shard grid IS the core assignment (`ShardPlacement`): HEIGHT -> one LOCAL line per shard core, WIDTH -> one W_SPLIT
+line over the whole shard grid, BLOCK -> one W_SPLIT line per shard-grid row (column for COL_MAJOR orientation).
+TILE shards are consumed in place: cb_x / cb_y are backed zero-copy on the input / output shard. ROW_MAJOR shards are
+re-strided core-locally (L1 -> L1) into cb_x_rm and back out of cb_out_rm (tilize needs a `core_w_tiles·32` stride).
 """
 
 from __future__ import annotations
@@ -49,6 +55,8 @@ CB_RINV_BCAST = 8
 CB_RINV = 9
 CB_Y = 10
 CB_OUT_RM = 11
+CB_WMASK = 12  # sharded TILE + non-aligned W: 0/1 lane mask for the partial-W tile (collapse reduce scaler slot)
+CB_GAMMA_STAGE = 13  # RM γ whose slice offset is not DRAM-aligned (RM shards): aligned DRAM window staging
 
 # ---- semaphore ids ----
 SEM_PARTIALS = 0  # root: count of partials landed in cb_gathered (cumulative)
@@ -81,6 +89,10 @@ class OpGeometry:
     t_g: int  # gamma tile bytes
     es_g: int  # gamma element bytes
     t_int: int  # intermediate-CB tile bytes (Float32 when fp32 DEST is on, Float16_b when off)
+    x_resident: bool = False  # TILE sharded input: cb_x backed on the shard (no allocator budget)
+    y_resident: bool = False  # TILE sharded output: cb_y backed on the shard (no allocator budget)
+    sumsq_parts: int = 1  # raw Σx² tiles per tile-row (2 when a resident partial-W tile is squared apart + masked)
+    gamma_stage_bytes: int = 0  # cb_gamma_stage bytes (0 = absent)
 
 
 @dataclass(frozen=True)
@@ -92,11 +104,25 @@ class Blocking:
     block_rows: int
 
 
+@dataclass(frozen=True)
+class ShardPlacement:
+    """The core assignment a sharded input fixes (op_design.md -> Sharded placements). Rows are tile-rows (TILE) or
+    sticks (ROW_MAJOR); `lines[i]` lists the cores of line i in W order (position 0 = the line root)."""
+
+    lines: tuple  # tuple[tuple[CoreCoord, ...], ...]
+    line_units: tuple  # per line: (first row unit, valid row units)  -- tile-rows (TILE) / sticks (RM)
+    shard_w: int  # shard width in elements
+    core_w_tiles: int  # ⌈shard_w / 32⌉
+    w_split: int  # cores per line
+    col_major: bool  # COL_MAJOR orientation (lines are shard-grid columns)
+
+
 def _per_row_bytes(g: OpGeometry, cw: int, k: int) -> int:
     ws = k > 1
     b = 0
-    b += (X_BLOCK_DEPTH * cw * g.t_in) if g.is_tile else (cw * g.t_in)  # cb_x
-    b += 3 * g.t_int  # cb_sumsq_raw, cb_rinv_col, cb_rinv
+    if not g.x_resident:
+        b += (X_BLOCK_DEPTH * cw * g.t_in) if g.is_tile else (cw * g.t_in)  # cb_x
+    b += (g.sumsq_parts + 2) * g.t_int  # cb_sumsq_raw (parts per tile-row), cb_rinv_col, cb_rinv
     if ws:
         b += (2 + k) * g.t_int  # cb_partial, cb_rinv_bcast, cb_gathered
     return b
@@ -109,9 +135,13 @@ def _fixed_bytes(g: OpGeometry, cw: int) -> int:
         if g.gamma_is_rm:
             b += cw * TILE * g.es_g  # cb_gamma_rm
     if g.is_tile:
-        b += Y_DEPTH * Y_CHUNK_TILES * g.t_in  # cb_y
+        if not g.y_resident:
+            b += Y_DEPTH * Y_CHUNK_TILES * g.t_in  # cb_y
     else:
         b += X_RM_DEPTH * cw * g.t_in + OUT_RM_DEPTH * cw * g.t_in  # cb_x_rm, cb_out_rm
+    if g.sumsq_parts > 1:
+        b += g.t_int  # cb_wmask
+    b += g.gamma_stage_bytes  # cb_gamma_stage
     return b
 
 
@@ -119,16 +149,35 @@ def _footprint(g: OpGeometry, br: int, cw: int, k: int) -> int:
     return br * _per_row_bytes(g, cw, k) + _fixed_bytes(g, cw)
 
 
-def select_blocking(g: OpGeometry, R: int, Wt: int, C: int) -> Blocking:
-    """The single source of every knob (op_design.md select_blocking)."""
+def select_blocking(
+    g: OpGeometry, R: int, Wt: int, C: int, shard: ShardPlacement = None, budget: int = L1_CB_BUDGET_BYTES
+) -> Blocking:
+    """The single source of every knob (op_design.md select_blocking).
+
+    Interleaved: chooses w_split / core_w_tiles / num_lines over the grid. Sharded: the shard spec fixes them
+    (w_split = cores per line, core_w_tiles = shard width in tiles, num_lines = lines with rows); only block_rows is
+    chosen — the whole resident shard when it fits `budget` (the CB region below the resident shard buffers),
+    sub-chunked otherwise."""
+    from ttnn.operations._op_contract import UnsupportedAxisValue
+
+    if shard is not None:
+        k, cw = shard.w_split, shard.core_w_tiles
+        per_row = _per_row_bytes(g, cw, k)
+        br_fit = (budget - _fixed_bytes(g, cw)) // per_row
+        if br_fit < 1:
+            raise UnsupportedAxisValue("rms_norm: shard too wide for one tile-row of working CBs in L1")
+        rows_unit = 1 if g.is_tile else TILE
+        line_rows_max = max(_div_up(n, rows_unit) for (_, n) in shard.line_units)
+        block_rows = max(1, min(line_rows_max, br_fit))
+        regime = "LOCAL" if k == 1 else "W_SPLIT"
+        return Blocking(regime, k, cw, len(shard.lines), block_rows)
+
     k_fit = None
     for k in range(1, C + 1):
         if _footprint(g, 1, _div_up(Wt, k), k) <= L1_CB_BUDGET_BYTES:
             k_fit = k
             break
     if k_fit is None:
-        from ttnn.operations._op_contract import UnsupportedAxisValue
-
         raise UnsupportedAxisValue("rms_norm: row too wide to hold resident across the grid")
     k_occ = 1 if R >= C else max(1, min(C // R, Wt // MIN_CORE_W_TILES))
     k = max(k_fit, k_occ)
@@ -143,7 +192,7 @@ def select_blocking(g: OpGeometry, R: int, Wt: int, C: int) -> Blocking:
 
 
 def _core_range_set(cores):
-    """Merge a row-major list of cores into per-row contiguous CoreRanges."""
+    """Merge a list of cores into per-row contiguous CoreRanges."""
     by_row = {}
     for c in cores:
         by_row.setdefault(c.y, []).append(c.x)
@@ -168,6 +217,81 @@ def _cb(index, num_pages, page_size, dtype, crs):
     )
 
 
+def _is_sharded(t) -> bool:
+    return t.memory_config().memory_layout != ttnn.TensorMemoryLayout.INTERLEAVED
+
+
+def shard_placement(input_tensor, is_tile: bool, total_units: int, W: int) -> ShardPlacement:
+    """Lines / positions / row ranges from the input's shard spec (op_design.md -> Sharded placements).
+
+    `total_units` = tile-rows (TILE) or sticks (ROW_MAJOR) of the physical 2-D tensor. A shard-grid line whose rows
+    are all padding (ragged grid) is dropped; a shard holding no valid W is refused (it cannot join a line's combine).
+    """
+    from ttnn.operations._op_contract import UnsupportedAxisValue
+
+    mc = input_tensor.memory_config()
+    ml = mc.memory_layout
+    ss = mc.shard_spec
+    if ss is None or mc.buffer_type != ttnn.BufferType.L1:
+        raise UnsupportedAxisValue("rms_norm: sharded input must be an L1 shard with a shard spec")
+    col_major = ss.orientation == ttnn.ShardOrientation.COL_MAJOR
+    sh, sw = int(ss.shape[0]), int(ss.shape[1])
+    if is_tile and (sh % TILE or sw % TILE):
+        raise UnsupportedAxisValue("rms_norm: TILE shard extents must be tile multiples")
+    sh_units = sh // TILE if is_tile else sh
+    cores = ttnn.corerange_to_cores(ss.grid, row_wise=not col_major)
+
+    if ml == ttnn.TensorMemoryLayout.HEIGHT_SHARDED:
+        grid_lines = [[c] for c in cores]  # shard i -> i-th core
+    elif ml == ttnn.TensorMemoryLayout.WIDTH_SHARDED:
+        grid_lines = [list(cores)]  # one line; shard j -> j-th core
+    else:  # BLOCK: shard (row i, col j) -> core (x0 + j, y0 + i) [ROW_MAJOR] / (x0 + i, y0 + j) [COL_MAJOR]
+        bb = ss.grid.bounding_box()
+        x0, y0 = bb.start.x, bb.start.y
+        by_line = {}
+        for c in cores:
+            line, pos = (c.x - x0, c.y - y0) if col_major else (c.y - y0, c.x - x0)
+            by_line.setdefault(line, {})[pos] = c
+        grid_lines = []
+        for li in range(max(by_line) + 1):
+            row = by_line.get(li, {})
+            if sorted(row) != list(range(len(row))) or not row:
+                raise UnsupportedAxisValue("rms_norm: BLOCK shard grid must be a rectangle")
+            grid_lines.append([row[p] for p in range(len(row))])
+
+    lines, line_units = [], []
+    for li, line in enumerate(grid_lines):
+        u0 = li * sh_units
+        n = min(sh_units, total_units - u0)
+        if n <= 0:
+            continue  # ragged grid: an all-padding shard row
+        for pos in range(len(line)):
+            if pos * sw >= W:
+                raise UnsupportedAxisValue("rms_norm: a shard holds no valid W (shard grid wider than the tensor)")
+        lines.append(tuple(line))
+        line_units.append((u0, n))
+    k = len(lines[0])
+    if any(len(l) != k for l in lines):
+        raise UnsupportedAxisValue("rms_norm: shard-grid lines differ in length")
+    return ShardPlacement(tuple(lines), tuple(line_units), sw, _div_up(sw, TILE), k, col_major)
+
+
+@dataclass
+class CoreWork:
+    core: object
+    pos: int  # position in its line (0 = root)
+    root: object
+    row_start: int  # first tile-row (global)
+    line_rows: int  # tile-rows of this line
+    stick_start: int  # RM: first stick (global)
+    stick_end: int  # RM: one past the last valid stick
+    w_start: int  # first W tile of the slice (global tile column)
+    w_start_elems: int  # first W element of the slice
+    w_valid: int  # tiles of the slice holding valid data
+    w_valid_elems: int  # valid elements of the slice
+    owns_partial_last: int  # slice holds the global last tile and W % 32 != 0
+
+
 def create_program_descriptor(input_tensor, gamma, output_tensor, epsilon, compute_config):
     device = input_tensor.device()
     shape = [int(d) for d in input_tensor.shape]
@@ -182,22 +306,14 @@ def create_program_descriptor(input_tensor, gamma, output_tensor, epsilon, compu
     gamma_is_rm = has_gamma and gamma.layout == ttnn.ROW_MAJOR_LAYOUT
     g_dtype = gamma.dtype if has_gamma else dtype
     gamma_is_block_float = has_gamma and g_dtype == ttnn.bfloat8_b
+    x_sharded = _is_sharded(input_tensor)
+    y_sharded = _is_sharded(output_tensor)
 
     # The ONE intermediate-format decision (numeric-formats §4): every intermediate CB (Σx² raw / partial / gathered,
     # rinv col / bcast / tile) follows the DEST width. Feeds the CB descriptors, the L1 budget (_per_row_bytes) and
     # the writer's gather / multicast byte counts.
     int_fmt = ttnn.float32 if compute_config.fp32_dest_acc_en else ttnn.bfloat16
     t_int = ttnn.tile_size(int_fmt)
-
-    geo = OpGeometry(
-        is_tile=is_tile,
-        has_gamma=has_gamma,
-        gamma_is_rm=gamma_is_rm,
-        t_in=ttnn.tile_size(dtype),
-        t_g=ttnn.tile_size(g_dtype),
-        es_g=_element_bytes(gamma) if has_gamma else es,
-        t_int=t_int,
-    )
 
     # ---- shape-derived extents (alignment-aware) ----
     Wt = _div_up(W, TILE)
@@ -213,11 +329,109 @@ def create_program_descriptor(input_tensor, gamma, output_tensor, epsilon, compu
     gx, gy = grid.x, grid.y
     C = gx * gy
 
-    blk = select_blocking(geo, R, Wt, C)
+    # ---- placement: the shard grid fixes the cores of a sharded input ----
+    shard = shard_placement(input_tensor, is_tile, R if is_tile else num_sticks, W) if x_sharded else None
+    x_resident = x_sharded and is_tile  # TILE shard consumed in place (cb_x backed on it)
+    y_resident = y_sharded and is_tile  # TILE output shard produced in place (cb_y backed on it)
+    # A resident partial-W tile cannot be zeroed in place (it is the caller's tensor): its squares are packed as a
+    # second per-row Σx² tile and masked by the collapse reduce's 0/1 lane mask (CB_WMASK).
+    mask_partial = x_resident and w_valid_last < TILE
+
+    # RM γ is read as a stick slice at byte offset w_start_elems·es_γ; RM shards put that offset on a 16 B (L1) grain,
+    # which a DRAM read cannot start on -> stage an aligned window, then copy the slice core-locally.
+    dram_align = int(ttnn._ttnn.device.get_dram_alignment())
+    es_g = _element_bytes(gamma) if has_gamma else es
+    gamma_rm_staged = bool(
+        gamma_is_rm and shard is not None and (shard.shard_w * es_g) % dram_align != 0 and shard.w_split > 1
+    )
+    if has_gamma and not gamma_is_rm and shard is not None and shard.shard_w % TILE:
+        raise ValueError("rms_norm: TILE γ needs tile-aligned W slices (ROW_MAJOR shards pair with ROW_MAJOR γ)")
+
+    geo = OpGeometry(
+        is_tile=is_tile,
+        has_gamma=has_gamma,
+        gamma_is_rm=gamma_is_rm,
+        t_in=ttnn.tile_size(dtype),
+        t_g=ttnn.tile_size(g_dtype),
+        es_g=es_g,
+        t_int=t_int,
+        x_resident=x_resident,
+        y_resident=y_resident,
+        sumsq_parts=2 if mask_partial else 1,
+        gamma_stage_bytes=0,
+    )
+    if gamma_rm_staged:
+        cw_ = shard.core_w_tiles
+        geo = OpGeometry(**{**geo.__dict__, "gamma_stage_bytes": cw_ * TILE * es_g + 2 * dram_align})
+
+    # CB region budget: below every L1-resident buffer this program touches (sharded I/O lives at the L1 top).
+    budget = L1_CB_BUDGET_BYTES
+    l1_addrs = [t.buffer_address() for t in (input_tensor, output_tensor) if _is_sharded(t)]
+    if l1_addrs:
+        l1_base = int(ttnn._ttnn.device.GetAllocatorBaseAddress(device, ttnn.BufferType.L1))
+        budget = min(budget, min(l1_addrs) - l1_base)
+
+    blk = select_blocking(geo, R, Wt, C, shard=shard, budget=budget)
     k, cw, br = blk.w_split, blk.core_w_tiles, blk.block_rows
     is_ws = blk.regime == "W_SPLIT"
 
-    cores = ttnn.grid_to_cores(blk.num_lines * k, gx, gy, row_wise=True)
+    # ---- per-core work: (line, position, row range, W slice) ----
+    work = []
+    if shard is None:
+        cores = ttnn.grid_to_cores(blk.num_lines * k, gx, gy, row_wise=True)
+        base_rows, extra_rows = divmod(R, blk.num_lines)
+        row_start = 0
+        for line in range(blk.num_lines):
+            line_rows = base_rows + (1 if line < extra_rows else 0)
+            line_cores = cores[line * k : (line + 1) * k]
+            for pos, core in enumerate(line_cores):
+                w_start = pos * cw
+                work.append(
+                    CoreWork(
+                        core=core,
+                        pos=pos,
+                        root=line_cores[0],
+                        row_start=row_start,
+                        line_rows=line_rows,
+                        stick_start=row_start * TILE,
+                        stick_end=min((row_start + line_rows) * TILE, num_sticks),
+                        w_start=w_start,
+                        w_start_elems=w_start * TILE,
+                        w_valid=min(cw, Wt - w_start),
+                        w_valid_elems=min(cw * TILE, W - w_start * TILE),
+                        owns_partial_last=0,
+                    )
+                )
+            row_start += line_rows
+    else:
+        for line_cores, (u0, n) in zip(shard.lines, shard.line_units):
+            if is_tile:
+                row_start, line_rows, s0, s1 = u0, n, u0 * TILE, (u0 + n) * TILE
+            else:
+                row_start, line_rows, s0, s1 = u0 // TILE, _div_up(n, TILE), u0, u0 + n
+            for pos, core in enumerate(line_cores):
+                e0 = pos * shard.shard_w
+                ev = min(shard.shard_w, W - e0)
+                work.append(
+                    CoreWork(
+                        core=core,
+                        pos=pos,
+                        root=line_cores[0],
+                        row_start=row_start,
+                        line_rows=line_rows,
+                        stick_start=s0,
+                        stick_end=s1,
+                        w_start=e0 // TILE,
+                        w_start_elems=e0,
+                        w_valid=_div_up(ev, TILE),
+                        w_valid_elems=ev,
+                        owns_partial_last=0,
+                    )
+                )
+        cores = [w.core for w in work]
+    for w in work:
+        if is_tile and w_valid_last < TILE and w.w_start + w.w_valid == Wt:
+            w.owns_partial_last = 1
     crs = _core_range_set(cores)
 
     # ---- CBs (identical descriptors on every participating core: uniform addresses) ----
@@ -225,12 +439,19 @@ def create_program_descriptor(input_tensor, gamma, output_tensor, epsilon, compu
     cbs = []
     if not is_tile:
         cbs.append(_cb(CB_X_RM, X_RM_DEPTH * cw, t_in, dtype, crs))
-    cbs.append(_cb(CB_X, (X_BLOCK_DEPTH * br * cw) if is_tile else (br * cw), t_in, dtype, crs))
+    if x_resident:
+        cbs.append(ttnn.cb_descriptor_from_sharded_tensor(CB_X, input_tensor, core_ranges=crs))
+    else:
+        cbs.append(_cb(CB_X, (X_BLOCK_DEPTH * br * cw) if is_tile else (br * cw), t_in, dtype, crs))
     if has_gamma:
         if gamma_is_rm:
             cbs.append(_cb(CB_GAMMA_RM, 1, cw * TILE * geo.es_g, g_dtype, crs))
         cbs.append(_cb(CB_GAMMA, cw, geo.t_g, g_dtype, crs))
-    cbs.append(_cb(CB_SUMSQ_RAW, br, t_int, int_fmt, crs))
+    if gamma_rm_staged:
+        cbs.append(_cb(CB_GAMMA_STAGE, 1, geo.gamma_stage_bytes, g_dtype, crs))
+    cbs.append(_cb(CB_SUMSQ_RAW, geo.sumsq_parts * br, t_int, int_fmt, crs))
+    if mask_partial:
+        cbs.append(_cb(CB_WMASK, 1, t_int, int_fmt, crs))
     if is_ws:
         cbs.append(_cb(CB_PARTIAL, br, t_int, int_fmt, crs))
         cbs.append(_cb(CB_GATHERED, k * br, t_int, int_fmt, crs))
@@ -238,7 +459,10 @@ def create_program_descriptor(input_tensor, gamma, output_tensor, epsilon, compu
     cbs.append(_cb(CB_RINV_COL, br, t_int, int_fmt, crs))
     cbs.append(_cb(CB_RINV, br, t_int, int_fmt, crs))
     if is_tile:
-        cbs.append(_cb(CB_Y, Y_DEPTH * Y_CHUNK_TILES, t_in, dtype, crs))
+        if y_resident:
+            cbs.append(ttnn.cb_descriptor_from_sharded_tensor(CB_Y, output_tensor, core_ranges=crs))
+        else:
+            cbs.append(_cb(CB_Y, Y_DEPTH * Y_CHUNK_TILES, t_in, dtype, crs))
     else:
         cbs.append(_cb(CB_OUT_RM, OUT_RM_DEPTH * cw, t_in, dtype, crs))
 
@@ -247,7 +471,7 @@ def create_program_descriptor(input_tensor, gamma, output_tensor, epsilon, compu
         semaphores.append(ttnn.SemaphoreDescriptor(id=SEM_PARTIALS, core_ranges=crs, initial_value=0))
         semaphores.append(ttnn.SemaphoreDescriptor(id=SEM_RINV_LOCAL, core_ranges=crs, initial_value=0))
 
-    # ---- per-core work split ----
+    # ---- runtime args ----
     x_page = input_tensor.buffer_page_size()
     y_page = output_tensor.buffer_page_size()
     g_page = gamma.buffer_page_size() if has_gamma else 0
@@ -261,46 +485,51 @@ def create_program_descriptor(input_tensor, gamma, output_tensor, epsilon, compu
     inv_w_bits = _f32_bits(1.0 / W)
     eps_bits = _f32_bits(epsilon)
 
-    base_rows, extra_rows = divmod(R, blk.num_lines)
-    row_start = 0
-    for line in range(blk.num_lines):
-        line_rows = base_rows + (1 if line < extra_rows else 0)
-        line_cores = cores[line * k : (line + 1) * k]
-        root = line_cores[0]
-        root_v = device.worker_core_from_logical_core(root)
-        for pos, core in enumerate(line_cores):
-            w_start = pos * cw
-            w_valid = min(cw, Wt - w_start)
-            w_valid_elems = min(cw * TILE, W - w_start * TILE)
-            is_root = 1 if pos == 0 else 0
-            owns_partial_last = 1 if (w_start + w_valid == Wt and w_valid_last < TILE) else 0
-            reader_rt_by_core[(core.x, core.y)] = [
-                x_addr,
-                row_start,
-                line_rows,
-                w_start,
-                w_valid,
-                w_valid_elems,
-                owns_partial_last,
-                is_root,
-                num_sticks,
-            ]
-            writer_rt[core.x][core.y] = [
-                y_addr,
-                g_addr,
-                row_start,
-                line_rows,
-                w_start,
-                w_valid,
-                w_valid_elems,
-                is_root,
-                pos,
-                root_v.x,
-                root_v.y,
-                num_sticks,
-            ]
-            compute_rt[core.x][core.y] = [line_rows, is_root, inv_w_bits, eps_bits]
-        row_start += line_rows
+    for w in work:
+        core = w.core
+        root_v = device.worker_core_from_logical_core(w.root)
+        is_root = 1 if w.pos == 0 else 0
+        # byte offset of the slice inside one interleaved stick (sharded sticks hold only the slice)
+        x_col_off = 0 if x_sharded else w.w_start_elems * es
+        y_col_off = 0 if y_sharded else w.w_start_elems * es
+        reader_rt_by_core[(core.x, core.y)] = [
+            x_addr,
+            w.row_start,
+            w.line_rows,
+            w.w_start,
+            w.w_valid,
+            w.w_valid_elems,
+            w.owns_partial_last,
+            is_root,
+            w.stick_start,
+            w.stick_end,
+            x_col_off,
+        ]
+        writer_rt[core.x][core.y] = [
+            y_addr,
+            g_addr,
+            w.row_start,
+            w.line_rows,
+            w.w_start,
+            w.w_valid,
+            w.w_valid_elems,
+            is_root,
+            w.pos,
+            root_v.x,
+            root_v.y,
+            w.stick_start,
+            w.stick_end,
+            w.w_start_elems * geo.es_g,  # RM γ byte offset of the slice
+            y_col_off,
+        ]
+        compute_rt[core.x][core.y] = [
+            w.line_rows,
+            is_root,
+            inv_w_bits,
+            eps_bits,
+            w.w_valid - w.owns_partial_last,  # resident: fully valid tiles of the slice
+            w.owns_partial_last,
+        ]
 
     # ---- kernels ----
     reader_ct = [
@@ -314,11 +543,13 @@ def create_program_descriptor(input_tensor, gamma, output_tensor, epsilon, compu
         t_in,  # 7 tile bytes of cb_x / cb_x_rm pages
         es,  # 8 input element bytes
         w_valid_last,  # 9
-        x_page,  # 10 accessor page size
+        x_page,  # 10 accessor page size (sharded RM: shard stick stride)
         Wt,  # 11
         k,  # 12 w_split
         SEM_PARTIALS,  # 13
         SEM_RINV_LOCAL,  # 14
+        int(x_sharded),  # 15 input is an L1 shard (TILE: resident cb_x; RM: core-local re-stride)
+        int(mask_partial),  # 16 owner of the partial-W tile fills cb_wmask
     ]
     reader_ct.extend(ttnn.TensorAccessorArgs(input_tensor).get_compile_time_args())
 
@@ -337,8 +568,8 @@ def create_program_descriptor(input_tensor, gamma, output_tensor, epsilon, compu
     # W_SPLIT: the line roots' readers never touch the multicast channel (the root is its sender; its own copy
     # is signalled by SEM_RINV_LOCAL), and the Mcast adapter requires every kernel attached on a sender core to
     # run on the channel's NoC — so the roots get their own reader descriptor with an absent channel.
-    root_cores = [c for i, c in enumerate(cores) if i % k == 0] if is_ws else []
-    member_cores = [c for i, c in enumerate(cores) if i % k != 0] if is_ws else list(cores)
+    root_cores = [w.core for w in work if w.pos == 0] if is_ws else []
+    member_cores = [w.core for w in work if w.pos != 0] if is_ws else list(cores)
     readers_absent = [_reader(root_cores)] if root_cores else []
     readers_attached = [_reader(member_cores)] if member_cores else []
 
@@ -353,7 +584,7 @@ def create_program_descriptor(input_tensor, gamma, output_tensor, epsilon, compu
         Y_DEPTH,  # 7
         t_in,  # 8 output tile bytes
         es,  # 9 output element bytes
-        y_page,  # 10 output accessor page size
+        y_page,  # 10 output accessor page size (sharded RM: shard stick stride)
         g_page,  # 11 gamma accessor page size
         geo.es_g,  # 12 gamma element bytes
         geo.t_g,  # 13 gamma tile bytes
@@ -363,6 +594,9 @@ def create_program_descriptor(input_tensor, gamma, output_tensor, epsilon, compu
         SEM_RINV_LOCAL,  # 17
         t_int,  # 18 intermediate tile bytes (gather / multicast)
         int(gamma_is_block_float),  # 19 TILE γ is block-float -> read whole tiles
+        int(y_sharded),  # 20 output is an L1 shard (TILE: resident cb_y; RM: core-local re-stride)
+        int(gamma_rm_staged),  # 21 RM γ slice read through an aligned staging window
+        dram_align,  # 22
     ]
     writer_ct.extend(ttnn.TensorAccessorArgs(output_tensor).get_compile_time_args())
     writer_ct.extend(
@@ -387,6 +621,8 @@ def create_program_descriptor(input_tensor, gamma, output_tensor, epsilon, compu
         cw,  # 5 core_w_tiles
         k,  # 6 w_split
         int(bool(compute_config.math_approx_mode)),  # 7 rsqrt approx
+        int(x_resident),  # 8 cb_x is the resident input shard (strided sumsq over valid tiles)
+        int(mask_partial),  # 9 partial-W tile squared apart and masked in the collapse
     ]
     compute = ttnn.KernelDescriptor(
         kernel_source=str(KERNEL_DIR / "rms_norm_compute.cpp"),
@@ -398,15 +634,17 @@ def create_program_descriptor(input_tensor, gamma, output_tensor, epsilon, compu
 
     descriptor = ttnn.ProgramDescriptor(cbs=cbs, semaphores=semaphores)
     if is_ws:
-        # rinv broadcast: one fixed in-group sender (the line root = cores[0] of each group of w_split
-        # consecutive row-major cores), driven from the writer (NoC of WriterConfigDescriptor).
+        # rinv broadcast: one fixed in-group sender (the line root = position 0 of each group of w_split
+        # consecutive cores in the line order), driven from the writer (NoC of WriterConfigDescriptor). Lines are
+        # row-major groups (interleaved, ROW_MAJOR shards) or column-major groups (COL_MAJOR BLOCK/WIDTH shards).
+        order = ttnn.McastCoreOrder.ColumnMajor if (shard is not None and shard.col_major) else ttnn.McastCoreOrder.RowMajor
         mcast = ttnn.Mcast(
             device,
             ttnn.McastConfig(noc=ttnn.NOC.NOC_1),
             crs,
             k,
             ttnn.McastFixedSenderConfig(sender_index=0),
-            ttnn.McastCoreOrder.RowMajor,
+            order,
         )
         mcast.attach(descriptor, MCAST_PREFIX, readers_attached + [writer], SEM_MCAST_FIRST)
     else:

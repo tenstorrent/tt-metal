@@ -6,7 +6,12 @@
 //  load_x_block  TILE: x tiles of this core's (R-range x W-slice) -> cb_x, read_chunk_tiles per barrier+push,
 //                      one block of lookahead (cb_x holds x_block_depth blocks) so the next block streams in
 //                      while compute normalizes / waits for the W_SPLIT combine.
-//                RM:   sticks of this core's W-slice -> cb_x_rm, one tile-row (32 sticks) per push.
+//                TILE sharded: cb_x IS the resident input shard (backed zero-copy) -> publish the block, no read.
+//                RM:   sticks of this core's W-slice -> cb_x_rm, one tile-row (32 sticks) per push; from DRAM
+//                      (interleaved, TensorAccessor) or core-locally L1 -> L1 from the own shard (sharded: re-stride
+//                      from the shard's stick pitch to tilize's core_w_tiles*32 pitch — never an accessor read).
+//  wmask         sharded TILE + non-aligned W: the owner of the partial-W tile fills the 0/1 lane mask the
+//                collapse reduce applies to that tile's squares (the shard's pad lanes are never written).
 //  W_SPLIT root: gather rendezvous -> push cb_gathered (partials land by remote writes from every line core).
 //  W_SPLIT all:  rinv receive -> push cb_rinv (non-root: Mcast receiver; root: its own writer's loopback send,
 //                signalled through the local SEM_RINV_LOCAL counter — the Mcast sender holds no receiver role).
@@ -24,6 +29,7 @@
 #include "api/tensor/noc_traits.h"
 #include "hostdevcommon/common_values.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/l1_helpers.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_dataflow.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/mcast/kernel/mcast_args.hpp"
 
 using namespace dataflow_kernel_lib;
@@ -32,6 +38,7 @@ constexpr uint32_t cb_x_rm = 0;
 constexpr uint32_t cb_x = 1;
 constexpr uint32_t cb_gathered = 6;
 constexpr uint32_t cb_rinv = 9;
+constexpr uint32_t cb_wmask = 12;
 
 constexpr uint32_t TILE_DIM = 32;
 constexpr uint32_t FACE_DIM = 16;
@@ -70,7 +77,10 @@ void kernel_main() {
     constexpr uint32_t w_split = get_compile_time_arg_val(12);
     constexpr uint32_t sem_partials_id = get_compile_time_arg_val(13);
     constexpr uint32_t sem_rinv_local_id = get_compile_time_arg_val(14);
-    constexpr auto x_args = TensorAccessorArgs<15>();
+    constexpr bool x_sharded = get_compile_time_arg_val(15) != 0;
+    constexpr bool mask_partial = get_compile_time_arg_val(16) != 0;
+    constexpr bool x_resident = x_sharded && !is_rm;
+    constexpr auto x_args = TensorAccessorArgs<17>();
     // Block-float input (bf8b: tile_bytes != 32*32*es) has no per-element addressing: the RM stick path and the
     // pad-lane zeroing must never be reached for it (host guard in create_program_descriptor).
     constexpr bool is_block_float = tile_bytes != TILE_DIM * TILE_DIM * es;
@@ -87,7 +97,9 @@ void kernel_main() {
     const uint32_t w_valid_elems = get_arg_val<uint32_t>(5);
     const uint32_t owns_partial_last = get_arg_val<uint32_t>(6);
     const uint32_t is_root = get_arg_val<uint32_t>(7);
-    const uint32_t num_sticks = get_arg_val<uint32_t>(8);
+    const uint32_t stick_start = get_arg_val<uint32_t>(8);
+    const uint32_t stick_end = get_arg_val<uint32_t>(9);
+    const uint32_t x_col_offset = get_arg_val<uint32_t>(10);  // interleaved RM: slice byte offset in a stick
 
     const auto x_acc = TensorAccessor(x_args, x_addr, x_page_bytes);
     Noc noc;
@@ -99,7 +111,7 @@ void kernel_main() {
         CircularBuffer x_rm_buf(cb_x_rm);
         noc.async_write_zeros(x_rm_buf, x_rm_depth * core_w_tiles * tile_bytes);
         noc.write_zeros_l1_barrier();
-    } else {
+    } else if constexpr (!x_resident) {
         if (w_valid < core_w_tiles) {
             // Nominal tail tiles (never read) of every block slot of cb_x.
             CircularBuffer x_buf(cb_x);
@@ -113,25 +125,40 @@ void kernel_main() {
         }
     }
 
+    // Sharded TILE + non-aligned W: the 0/1 mask for the partial-W tile (once; compute never pops it until the end).
+    if constexpr (mask_partial) {
+        if (owns_partial_last) {
+            prepare_reduce_mask<cb_wmask, ReduceDim::REDUCE_ROW>(w_valid_last);
+        }
+    }
+
     auto load_x_block = [&](uint32_t block_idx) {
         const uint32_t row0 = block_idx * block_rows;
         const uint32_t rows = (line_rows - row0 < block_rows) ? (line_rows - row0) : block_rows;
         if constexpr (is_rm) {
             constexpr uint32_t stick_stride = core_w_tiles * TILE_DIM * es;
             const uint32_t valid_bytes = w_valid_elems * es;
-            const uint32_t col_offset = w_start * TILE_DIM * es;
             for (uint32_t r = 0; r < rows; ++r) {
-                const uint32_t stick0 = (row_start + row0 + r) * TILE_DIM;
+                const uint32_t stick0 = stick_start + (row0 + r) * TILE_DIM;
                 cb_reserve_back(cb_x_rm, core_w_tiles);
                 const uint32_t l1 = get_write_ptr(cb_x_rm);
-                for (uint32_t s = 0; s < TILE_DIM; ++s) {
-                    if (stick0 + s < num_sticks) {
-                        noc_async_read(x_acc.get_noc_addr(stick0 + s, col_offset), l1 + s * stick_stride, valid_bytes);
+                for (uint32_t s = 0; s < TILE_DIM && stick0 + s < stick_end; ++s) {
+                    uint64_t src;
+                    if constexpr (x_sharded) {
+                        // own shard, core-local: stick pitch = shard page (x_page_bytes), slice starts at byte 0
+                        src = get_noc_addr(x_addr + (stick0 + s - stick_start) * x_page_bytes);
+                    } else {
+                        src = x_acc.get_noc_addr(stick0 + s, x_col_offset);
                     }
+                    noc_async_read(src, l1 + s * stick_stride, valid_bytes);
                 }
                 noc_async_read_barrier();
                 cb_push_back(cb_x_rm, core_w_tiles);
             }
+        } else if constexpr (x_resident) {
+            // The block is already resident: cb_x is backed on the input shard. Publish it (no NoC traffic).
+            cb_reserve_back(cb_x, rows * core_w_tiles);
+            cb_push_back(cb_x, rows * core_w_tiles);
         } else {
             const uint32_t block_tiles = rows * core_w_tiles;
             for (uint32_t i0 = 0; i0 < block_tiles; i0 += read_chunk_tiles) {
@@ -167,6 +194,7 @@ void kernel_main() {
     // TILE: one block of lookahead (cb_x depth); RM: none (cb_x_rm holds only tile-rows of the current block and
     // compute cannot tilize block b+1 before untilizing block b, so a lookahead read would starve the rinv receive).
     constexpr uint32_t lookahead = is_rm ? 0 : 1;
+
     static_assert(is_rm || x_block_depth >= 2, "TILE lookahead needs cb_x to hold two blocks");
 
     Semaphore<> sem_partials(sem_partials_id);

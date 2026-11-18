@@ -7,7 +7,11 @@
 //  gather_partials_block W_SPLIT: cb_partial -> root's cb_gathered slot (r*w_split + line_pos), barrier, sem inc.
 //  broadcast_rinv_block  W_SPLIT root: cb_rinv_bcast -> every line core's cb_rinv (Mcast helper, loopback incl.).
 //  store_y_block         TILE: cb_y -> DRAM in y_chunk_tiles chunks (one barrier each, never straddling the ring);
-//                        RM: cb_out_rm -> DRAM, one tile-row of sticks (valid W-slice bytes) per barrier.
+//                        TILE sharded: cb_y IS the output shard (compute packed y in place) -> consume the block;
+//                        RM: cb_out_rm -> DRAM (interleaved) or core-locally into the own output shard (sharded),
+//                        one tile-row of sticks (valid W-slice bytes) per barrier.
+//  RM γ of a sharded slice whose byte offset is off the DRAM read grain: read the aligned DRAM window into
+//  cb_gamma_stage, then copy the slice core-locally into cb_gamma_rm.
 //
 // Raw NoC for the DRAM / gather paths (no kernel_lib helper covers them: op_design.md "Helpers considered and
 // rejected"); the multicast goes through dataflow_kernel_lib::McastArgs.
@@ -33,6 +37,7 @@ constexpr uint32_t cb_rinv_bcast = 8;
 constexpr uint32_t cb_rinv = 9;
 constexpr uint32_t cb_y = 10;
 constexpr uint32_t cb_out_rm = 11;
+constexpr uint32_t cb_gamma_stage = 13;
 
 constexpr uint32_t TILE_DIM = 32;
 constexpr uint32_t FACE_DIM = 16;
@@ -59,7 +64,11 @@ void kernel_main() {
     constexpr uint32_t int_tile_bytes = get_compile_time_arg_val(18);  // intermediate-CB tile (DEST-width format)
     constexpr bool gamma_is_block_float = get_compile_time_arg_val(19) != 0;
     static_assert(!(gamma_is_block_float && gamma_is_rm), "block-float γ has no ROW_MAJOR form");
-    constexpr auto y_args = TensorAccessorArgs<20>();
+    constexpr bool y_sharded = get_compile_time_arg_val(20) != 0;
+    constexpr bool gamma_rm_staged = get_compile_time_arg_val(21) != 0;
+    constexpr uint32_t dram_align = get_compile_time_arg_val(22);
+    constexpr bool y_resident = y_sharded && !is_rm;
+    constexpr auto y_args = TensorAccessorArgs<23>();
     constexpr auto g_args = TensorAccessorArgs<y_args.next_compile_time_args_offset()>();
     constexpr auto mcast = McastArgs<
         get_named_compile_time_arg_val("rinv_mcast_ct_offset"),
@@ -76,7 +85,10 @@ void kernel_main() {
     const uint32_t line_pos = get_arg_val<uint32_t>(8);
     const uint32_t root_x = get_arg_val<uint32_t>(9);
     const uint32_t root_y = get_arg_val<uint32_t>(10);
-    const uint32_t num_sticks = get_arg_val<uint32_t>(11);
+    const uint32_t stick_start = get_arg_val<uint32_t>(11);
+    const uint32_t stick_end = get_arg_val<uint32_t>(12);
+    const uint32_t g_col_offset = get_arg_val<uint32_t>(13);  // RM γ: byte offset of the slice in the γ stick
+    const uint32_t y_col_offset = get_arg_val<uint32_t>(14);  // interleaved RM y: slice byte offset in a stick
 
     const auto y_acc = TensorAccessor(y_args, y_addr, y_page_bytes);
     Noc noc;
@@ -91,8 +103,31 @@ void kernel_main() {
             cb_reserve_back(cb_gamma_rm, 1);
             noc.async_write_zeros(g_rm_buf, core_w_tiles * TILE_DIM * es_g);
             noc.write_zeros_l1_barrier();
-            noc_async_read(
-                g_acc.get_noc_addr(0, w_start * TILE_DIM * es_g), get_write_ptr(cb_gamma_rm), w_valid_elems * es_g);
+            const uint32_t g_bytes = w_valid_elems * es_g;
+            if constexpr (gamma_rm_staged) {
+                // DRAM reads need src ≡ dst (mod dram_align): land the aligned window at an aligned stage address,
+                // then move the slice core-locally (both ends on the 16 B L1 grain: shard pages are L1-aligned).
+                const uint32_t aligned_off = g_col_offset & ~(dram_align - 1);
+                const uint32_t lead = g_col_offset - aligned_off;
+                const uint32_t stage = (get_write_ptr(cb_gamma_stage) + dram_align - 1) & ~(dram_align - 1);
+                noc_async_read(g_acc.get_noc_addr(0, aligned_off), stage, lead + g_bytes);
+                noc_async_read_barrier();
+                if ((lead & (NOC_L1_READ_ALIGNMENT_BYTES - 1)) == 0) {
+                    noc_async_read(get_noc_addr(stage + lead), get_write_ptr(cb_gamma_rm), g_bytes);
+                } else {
+                    // slice offset off the 16 B L1 grain (e.g. fp32 RM shard + bf16 γ): one slice-sized
+                    // element copy, once per kernel.
+                    static_assert(es_g % 2 == 0, "RM γ elements are 2 or 4 bytes");
+                    volatile tt_l1_ptr uint16_t* src = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(stage + lead);
+                    volatile tt_l1_ptr uint16_t* dst =
+                        reinterpret_cast<volatile tt_l1_ptr uint16_t*>(get_write_ptr(cb_gamma_rm));
+                    for (uint32_t i = 0; i < g_bytes / 2; ++i) {
+                        dst[i] = src[i];
+                    }
+                }
+            } else {
+                noc_async_read(g_acc.get_noc_addr(0, g_col_offset), get_write_ptr(cb_gamma_rm), g_bytes);
+            }
             noc_async_read_barrier();
             cb_push_back(cb_gamma_rm, 1);
         } else if constexpr (gamma_is_block_float) {
@@ -183,19 +218,27 @@ void kernel_main() {
         if constexpr (is_rm) {
             constexpr uint32_t stick_stride = core_w_tiles * TILE_DIM * es;
             const uint32_t valid_bytes = w_valid_elems * es;
-            const uint32_t col_offset = w_start * TILE_DIM * es;
             for (uint32_t r = 0; r < rows; ++r) {
-                const uint32_t stick0 = (row_start + row0 + r) * TILE_DIM;
+                const uint32_t stick0 = stick_start + (row0 + r) * TILE_DIM;
                 cb_wait_front(cb_out_rm, core_w_tiles);
                 const uint32_t l1 = get_read_ptr(cb_out_rm);
-                for (uint32_t s = 0; s < TILE_DIM; ++s) {
-                    if (stick0 + s < num_sticks) {
-                        noc_async_write(l1 + s * stick_stride, y_acc.get_noc_addr(stick0 + s, col_offset), valid_bytes);
+                for (uint32_t s = 0; s < TILE_DIM && stick0 + s < stick_end; ++s) {
+                    uint64_t dst;
+                    if constexpr (y_sharded) {
+                        // own output shard, core-local: stick pitch = shard page (y_page_bytes)
+                        dst = get_noc_addr(y_addr + (stick0 + s - stick_start) * y_page_bytes);
+                    } else {
+                        dst = y_acc.get_noc_addr(stick0 + s, y_col_offset);
                     }
+                    noc_async_write(l1 + s * stick_stride, dst, valid_bytes);
                 }
                 noc_async_write_barrier();
                 cb_pop_front(cb_out_rm, core_w_tiles);
             }
+        } else if constexpr (y_resident) {
+            // compute packed y straight into the output shard (cb_y is backed on it): consume the block.
+            cb_wait_front(cb_y, rows * core_w_tiles);
+            cb_pop_front(cb_y, rows * core_w_tiles);
         } else {
             const uint32_t block_tiles = rows * core_w_tiles;
             uint32_t i0 = 0;

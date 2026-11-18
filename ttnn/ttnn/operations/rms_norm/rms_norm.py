@@ -9,7 +9,8 @@ computed over the last dimension of `x`. Design: op_design.md (LOCAL and W_SPLIT
 
 Inputs
     input_tensor  rank >= 2; float32 / bfloat16 / bfloat8_b; TILE or ROW_MAJOR; any H and W (tile-aligned or not);
-                  bfloat8_b is TILE + tile-aligned only (block-float); interleaved.
+                  bfloat8_b is TILE + tile-aligned only (block-float); interleaved or L1-sharded
+                  (HEIGHT / WIDTH / BLOCK — the shard grid is the core assignment, consumed in place).
     gamma         optional; shape [1, 1, 1, W]; float32 / bfloat16 / bfloat8_b (may differ from x); ROW_MAJOR or
                   TILE (bfloat8_b: TILE only).
     epsilon       added to the mean of squares before the reciprocal square root.
@@ -18,7 +19,9 @@ Inputs
                   HiFi4, fp32 DEST accumulation on, approx off). math_fidelity / math_approx_mode are honoured as
                   given; fp32_dest_acc_en=False switches every intermediate CB to Float16_b (refused for float32
                   input — EXCLUSIONS).
-    memory_config the output's placement; None means DRAM interleaved. Phase 0: interleaved only.
+    memory_config the output's placement. Interleaved input: None / any interleaved config (default DRAM). Sharded
+                  input (HEIGHT / WIDTH / BLOCK, L1): the output inherits the input's shard spec (None or that same
+                  config) and is produced in place, shard for shard.
 
 Output
     Same shape, dtype and layout as the input.
@@ -113,7 +116,12 @@ SUPPORTED = {
     "gamma_mode": ["gamma", "no_gamma"],
     "gamma_dtype": [ttnn.float32, ttnn.bfloat16, ttnn.bfloat8_b, "none"],
     "gamma_layout": [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT, "none"],
-    "memory_layout": [ttnn.TensorMemoryLayout.INTERLEAVED],
+    "memory_layout": [
+        ttnn.TensorMemoryLayout.INTERLEAVED,
+        ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+        ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+        ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+    ],
 }
 
 EXCLUSIONS = [
@@ -181,9 +189,22 @@ def validate(
 
     if gamma is not None and gamma.memory_config().memory_layout != ttnn.TensorMemoryLayout.INTERLEAVED:
         raise UnsupportedAxisValue("rms_norm: gamma must be interleaved")
-    if memory_config is not None and memory_config.memory_layout != ttnn.TensorMemoryLayout.INTERLEAVED:
-        raise UnsupportedAxisValue(f"rms_norm: output memory_config {memory_config.memory_layout} not supported")
+    if memory_config is not None and memory_config != _default_output_memory_config(input_tensor):
+        in_mc = input_tensor.memory_config()
+        if in_mc.memory_layout != ttnn.TensorMemoryLayout.INTERLEAVED:
+            # A sharded input produces its output in place, shard for shard: the output must carry the same spec.
+            raise UnsupportedAxisValue("rms_norm: a sharded input requires the output to inherit its shard spec")
+        if memory_config.memory_layout != ttnn.TensorMemoryLayout.INTERLEAVED:
+            raise UnsupportedAxisValue(f"rms_norm: output memory_config {memory_config.memory_layout} not supported")
     return cfg
+
+
+def _default_output_memory_config(input_tensor: ttnn.Tensor) -> ttnn.MemoryConfig:
+    """Interleaved input -> DRAM interleaved; sharded input -> the input's own shard spec (produced in place)."""
+    in_mc = input_tensor.memory_config()
+    if in_mc.memory_layout == ttnn.TensorMemoryLayout.INTERLEAVED:
+        return ttnn.DRAM_MEMORY_CONFIG
+    return in_mc
 
 
 # ---------------------------------------------------------------------------
@@ -204,7 +225,7 @@ def rms_norm(
     from .rms_norm_program_descriptor import create_program_descriptor
 
     device = input_tensor.device()
-    output_memory_config = memory_config if memory_config is not None else ttnn.DRAM_MEMORY_CONFIG
+    output_memory_config = memory_config if memory_config is not None else _default_output_memory_config(input_tensor)
     output_tensor = ttnn.allocate_tensor_on_device(
         input_tensor.shape,
         input_tensor.dtype,
