@@ -3,6 +3,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
+#include <cstdlib>
+#include <cstdint>
 #include <tt_stl/reflection.hpp>
 
 #include <cstdint>
@@ -15,6 +17,16 @@
 #include "ttnn/types.hpp"
 
 namespace ttnn::experimental::prim {
+
+// Opt-in guard for the fused combine's fabric-mux L1 map (see MoEComputeParams::mux_l1_key). Quantum in bytes from env
+// TT_MOE_MUX_L1_FIT_Q (0 / unset = off: behaviour identical to before). Read once per process.
+inline uint32_t moe_mux_l1_fit_quantum() {
+    static const uint32_t q = [] {
+        const char* v = std::getenv("TT_MOE_MUX_L1_FIT_Q");
+        return v ? static_cast<uint32_t>(std::strtoul(v, nullptr, 10)) : 0u;
+    }();
+    return q;
+}
 
 struct SelectiveReduceCombineParams {
     uint32_t hidden_size;

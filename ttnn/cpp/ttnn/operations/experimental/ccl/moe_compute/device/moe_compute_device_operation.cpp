@@ -755,6 +755,15 @@ std::vector<ttnn::Tensor> moe_compute(
             .optional_cross_device_semaphore = optional_cross_device_semaphore};
     }
 
+    // Mux L1 map guard (opt-in): key the program on the lowest occupied L1 address at call time (see types header).
+    uint32_t mux_l1_key = 0;
+    if (const uint32_t q = ttnn::experimental::prim::moe_mux_l1_fit_quantum();
+        q != 0 && !compute_only && !single_device && !single_cluster) {
+        const size_t lowest =
+            mesh_device->lowest_occupied_compute_l1_address().value_or(ttnn::ccl::l1_small_floor_address(*mesh_device));
+        mux_l1_key = static_cast<uint32_t>(lowest / q) + 1;
+    }
+
     return ttnn::device_operation::launch<OperationType>(
         OperationType::operation_attributes_t{
             .layer_id = layer_id,
@@ -773,7 +782,8 @@ std::vector<ttnn::Tensor> moe_compute(
             .activation_type = activation_type.value_or(experimental::prim::detail::MoEActivationFunction::SILU),
             .activation_limit = activation_limit,
             .math_fidelity = math_fidelity,
-            .fp32_dest_acc_en = fp32_dest_acc_en},
+            .fp32_dest_acc_en = fp32_dest_acc_en,
+            .mux_l1_key = mux_l1_key},
         OperationType::tensor_args_t{
             .tilize_input_tensor = tilize_input_tensor,
             .tilize_expert_indices_tensor = tilize_expert_indices_tensor,

@@ -253,8 +253,14 @@ auto plan_mux_workers(
     // below whatever the allocator has already handed out in L1. A live occupancy reading is always the
     // tighter of the two -- the L1 bank sits entirely below L1_SMALL -- but it is only a build-time
     // snapshot, and with nothing allocated yet the static floor is all there is to go on.
-    const size_t usable_l1_end_address =
+    size_t usable_l1_end_address =
         mesh_device.lowest_occupied_compute_l1_address().value_or(ttnn::ccl::l1_small_floor_address(mesh_device));
+    // Opt-in (TT_MOE_MUX_L1_FIT_Q): the program is keyed on floor(lowest_occupied / Q) at call time (moe_compute), so
+    // fit Q bytes below this build's own snapshot: every later call with the same key has its outputs no more than Q
+    // lower, and a larger drop of the L1 bottom changes the key and rebuilds the program with a refitted map.
+    if (const uint32_t q = ttnn::experimental::prim::moe_mux_l1_fit_quantum(); q != 0) {
+        usable_l1_end_address = usable_l1_end_address > q ? usable_l1_end_address - q : 0;
+    }
 
     auto [mux_config, num_buffers_per_channel] = get_fabric_mux_config(
         mesh_device,
