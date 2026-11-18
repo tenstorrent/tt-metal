@@ -63,11 +63,12 @@ SC1_CHIPS = 32
 # (256 / 32 = 8 per chip) already run in the dev layout, which is the same 8x4 mesh with the same SP / TP axes.
 TP32_BLOCKERS = (
     (
-        "2D TP attention: ttMLA shards q_a / q_b / kv_a / wkv_b / o_proj / g_proj over the TP mesh axis only (axis "
-        "1, 4 chips: 16 heads per chip) and replicates them over the SP axis (axis 0, 8 chips), which TP32 uses for "
-        "the heads, 8 per chip, next to the sequence (mla.py _convert_and_cache_weights). The output gate likewise "
-        "all-gathers the hidden over TP before g_proj (ttMLA._output_gate); with the hidden split its partial "
-        "x @ W_gate must be reduced over TP before the sigmoid",
+        "2D TP attention in the prefill block: the projections, output gate and sink are 2D TP in ttMLA2DTP "
+        "(tt/mla/mla_2d.py: every attention weight sharded once over all 32 chips, the hidden over TP (axis 1, 4 "
+        "chips), 8 heads per chip over SP (axis 0, 8 chips), validated against HF as a module) and it takes and "
+        "returns the block's residual [S/sp, hidden/tp] = [S/8, 6144/4], as TtMlp2D (#65890) does, but "
+        "TtPrefillBlock still builds ttMLA (mla_class(config) with config.mla_2d_tp selects it) and ttMLA2DTP does "
+        "not build the DSA indexer (#65887)",
         "#65885",
     ),
     (
