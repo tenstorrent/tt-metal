@@ -29,6 +29,7 @@ class AsyncRolloutClient:
         self._bridge.connect()
         self._queue.connect()
         self._shut_down = False
+        atexit.register(self.shutdown)
 
     def send_weights(self, hf_dict: dict, *, version: int) -> None:
         self._bridge.send_weights(hf_dict, version)
