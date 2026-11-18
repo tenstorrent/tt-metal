@@ -691,8 +691,8 @@ class KDARecurrence:
 
     def reserve_affine_relay(self) -> None:
         """Allocate the SP relay's L1 landing buffer for the next call (RelayAffinePrefix.reserve): a layer calls it
-        before its first program, since the predecessor's relay may write into it while this rank is still ahead
-        of its own. Without the relay, a no-op."""
+        before an SP barrier that precedes the recurrence, since the predecessor's relay may write into it while this
+        rank is still ahead of its own. Without the relay, a no-op."""
         if self._affine_relay is not None:
             self._affine_relay.reserve()
 
