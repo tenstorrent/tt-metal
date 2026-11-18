@@ -60,6 +60,10 @@ class Table {
     // pair with a reference member writes through the reference rather than
     // repointing it.
     static_assert(!std::is_reference_v<V>, "Table does not support reference mapped types (V)");
+    static_assert(
+        requires(const K& key) {
+            { std::hash<K>{}(key) } -> std::convertible_to<std::size_t>;
+        }, "Table requires a std::hash specialization for the key type (K)");
 
 public:
     using key_type = K;
@@ -201,8 +205,9 @@ public:
         if (found.position == entries_.size()) {
             return 0;
         }
+        Index index = make_index(entries_, index_.size(), found.position);
         entries_.erase(entries_.begin() + found.position);
-        index_ = make_index(entries_, index_.size());
+        index_ = std::move(index);
         return 1;
     }
 
@@ -284,12 +289,18 @@ private:
 
     // Appends an entry built from `args` and returns an iterator to it.
     // precondition: `absent` is the result of lookup() for the entry's key, and that key is absent.
+    // postcondition: if std::hash<K> throws, the table is unchanged.
     template <typename... Args>
     iterator append(const Lookup& absent, Args&&... args) {
         TT_ASSERT(absent.position == entries_.size());
         entries_.emplace_back(std::forward<Args>(args)...);
         if (2 * entries_.size() > index_.size()) {
-            index_ = make_index(entries_, std::max(kMinIndexSlots, 2 * index_.size()));
+            try {
+                index_ = make_index(entries_, std::max(kMinIndexSlots, 2 * index_.size()));
+            } catch (...) {
+                entries_.pop_back();
+                throw;
+            }
         } else {
             index_[absent.slot] = static_cast<std::uint32_t>(entries_.size());
         }
@@ -308,14 +319,25 @@ private:
     // Returns an index of `slot_count` slots that refers to every entry of `entries`.
     // precondition: slot_count is a power of two, and is larger than entries.size().
     [[nodiscard]] static Index make_index(const Storage& entries, std::size_t slot_count) {
+        return make_index(entries, slot_count, entries.size());
+    }
+
+    // Returns an index of `slot_count` slots that refers to every entry of `entries` except the one at
+    // `removed`, at the positions that the entries have after that entry is erased.
+    // precondition: slot_count is a power of two, and is larger than entries.size().
+    [[nodiscard]] static Index make_index(const Storage& entries, std::size_t slot_count, size_type removed) {
         Index index(slot_count, 0);
         const std::size_t mask = slot_count - 1;
         for (size_type position = 0; position < entries.size(); ++position) {
+            if (position == removed) {
+                continue;
+            }
+            const size_type position_after_erase = position < removed ? position : position - 1;
             std::size_t slot = home_slot(entries[position].first, slot_count);
             while (index[slot] != 0) {
                 slot = (slot + 1) & mask;
             }
-            index[slot] = static_cast<std::uint32_t>(position + 1);
+            index[slot] = static_cast<std::uint32_t>(position_after_erase + 1);
         }
         return index;
     }

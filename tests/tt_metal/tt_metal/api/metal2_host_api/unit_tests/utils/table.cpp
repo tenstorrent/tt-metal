@@ -17,6 +17,7 @@
 #include <iterator>
 #include <map>
 #include <span>
+#include <stdexcept>
 #include <string>
 #include <tuple>
 #include <unordered_map>
@@ -453,6 +454,13 @@ struct KeyWithChosenHash {
     bool operator==(const KeyWithChosenHash&) const = default;
 };
 
+// A key type whose std::hash throws while the flag that the key points at is set.
+struct KeyWithFailingHash {
+    int id = 0;
+    const bool* hash_fails = nullptr;
+    bool operator==(const KeyWithFailingHash& other) const { return id == other.id; }
+};
+
 }  // namespace
 
 template <>
@@ -463,6 +471,16 @@ struct std::hash<CollidingKey> {
 template <>
 struct std::hash<KeyWithChosenHash> {
     std::size_t operator()(const KeyWithChosenHash& key) const noexcept { return key.hash; }
+};
+
+template <>
+struct std::hash<KeyWithFailingHash> {
+    std::size_t operator()(const KeyWithFailingHash& key) const {
+        if (*key.hash_fails) {
+            throw std::runtime_error("KeyWithFailingHash: hash failed");
+        }
+        return std::hash<int>{}(key.id);
+    }
 };
 
 namespace {
@@ -805,6 +823,39 @@ TEST_P(TableWithSharedHashTest, CPU_KeysThatShareTheHashValueAreAllFound) {
         const auto value = table.get(KeyWithChosenHash{id, shared_hash});
         ASSERT_TRUE(value);
         EXPECT_EQ(*value, id);
+    }
+}
+
+// ---- std::hash that throws ---------------------------------------------------
+
+TEST(TableFailingHashTest, CPU_InsertThatFailsToHashAddsNoEntry) {
+    // If std::hash throws while the 9th entry grows the Table, the Table keeps only its first 8 entries.
+    bool hash_fails = false;
+    const bool new_key_hash_fails = false;
+    m2::Table<KeyWithFailingHash, int> table;
+    for (int id = 0; id < 8; ++id) {
+        table[KeyWithFailingHash{id, &hash_fails}] = id;
+    }
+    hash_fails = true;
+    EXPECT_THROW((table[KeyWithFailingHash{8, &new_key_hash_fails}] = 8), std::runtime_error);
+    hash_fails = false;
+    EXPECT_EQ(table.size(), 8u);
+    EXPECT_FALSE(table.contains(KeyWithFailingHash{8, &hash_fails}));
+}
+
+TEST(TableFailingHashTest, CPU_EraseThatFailsToHashRemovesNoEntry) {
+    // If std::hash throws while erase() rebuilds the Table, every entry stays in the Table.
+    bool hash_fails = false;
+    const bool erased_key_hash_fails = false;
+    m2::Table<KeyWithFailingHash, int> table{{KeyWithFailingHash{0, &erased_key_hash_fails}, 0}};
+    for (int id = 1; id < 4; ++id) {
+        table[KeyWithFailingHash{id, &hash_fails}] = id;
+    }
+    hash_fails = true;
+    EXPECT_THROW(table.erase(KeyWithFailingHash{0, &erased_key_hash_fails}), std::runtime_error);
+    hash_fails = false;
+    for (int id = 0; id < 4; ++id) {
+        EXPECT_TRUE(table.contains(KeyWithFailingHash{id, &hash_fails})) << "id " << id;
     }
 }
 
