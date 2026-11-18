@@ -5,7 +5,6 @@
 #include <gtest/gtest.h>
 
 #include <algorithm>
-#include <chrono>
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
@@ -21,6 +20,7 @@
 #include "jit_build/pch.hpp"
 #include "llrt/hal.hpp"
 #include "llrt/rtoptions.hpp"
+#include "sfpi_probe.hpp"
 
 namespace tt::tt_metal {
 namespace {
@@ -87,43 +87,22 @@ public:
     }
 };
 
-// Probe whether the sfpi g++ can build what the Quasar test needs: the PCH umbrella's standard-library headers,
-// compiled for the Quasar TENSIX DM -mcpu. A preprocess-only check would pass on toolchains that lack the rv64
-// libstdc++ and then fail the test (rather than skip it) on every runner. Uses a local RunTimeOptions (not
-// MetalContext) and the shell-free exec_command launcher.
-bool sfpi_supports_quasar_dm_mcpu() {
-    const std::string root = llrt::RunTimeOptions().get_root_dir();
-    std::string gxx;
-    for (const std::string& sfpi_root : {root + "runtime/sfpi", std::string("/opt/tenstorrent/sfpi")}) {
-        const auto candidate = sfpi_root + "/compiler/bin/riscv-tt-elf-g++";
-        if (std::filesystem::exists(candidate)) {
-            gxx = candidate;
-            break;
-        }
-    }
-    if (gxx.empty()) {
-        return false;
-    }
-    const auto scratch =
-        std::filesystem::temp_directory_path() /
-        ("tt_metal_qsr_mcpu_probe_" + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
-    std::filesystem::create_directories(scratch);
-    const std::vector<std::string> args = {
-        gxx,
-        "-mcpu=tt-qsr64-rocc",
-        "-std=c++17",
-        "-c",
-        "-x",
-        "c++",
-        "-include",
-        root + std::string(tt::jit_build::PCH_UMBRELLA),
-        "/dev/null",
-        "-o",
-        (scratch / "probe.o").string()};
-    const bool ok = jit_build::utils::exec_command(args, scratch.string(), (scratch / "probe.log").string());
-    std::error_code ec;
-    std::filesystem::remove_all(scratch, ec);
-    return ok;
+// Whether the sfpi g++ can compile the PCH umbrella's standard-library headers for the Quasar TENSIX DM
+// -mcpu. A preprocess-only check would pass on toolchains that lack the rv64 libstdc++ and then fail the
+// test (rather than skip it) on every runner.
+bool sfpi_supports_quasar_dm_mcpu(const std::string& root) {
+    return jit_build_test::sfpi_gxx_accepts(
+        root,
+        {"-mcpu=tt-qsr64-rocc",
+         "-std=c++17",
+         "-c",
+         "-x",
+         "c++",
+         "-include",
+         root + std::string(tt::jit_build::PCH_UMBRELLA),
+         "/dev/null",
+         "-o",
+         "probe.o"});  // Relative: lands in the probe's scratch directory.
 }
 
 TEST(PchBuildDeathTest, SharesWithinArchitectureAndSeparatesHalTargetFlags) {
@@ -184,10 +163,11 @@ TEST(PchBuildDeathTest, SharesWithinArchitectureAndSeparatesHalTargetFlags) {
 
 TEST(PchBuildDeathTest, QuasarPchSeparatesFromOtherArchs) {
     namespace fs = std::filesystem;
-    if (llrt::RunTimeOptions().get_streaming_profiler_enabled()) {
+    const llrt::RunTimeOptions parent_options;
+    if (parent_options.get_streaming_profiler_enabled()) {
         GTEST_SKIP() << "TT_METAL_STREAMING_PROFILER is not supported on Quasar (JitBuildEnv::init fatals)";
     }
-    if (!sfpi_supports_quasar_dm_mcpu()) {
+    if (!sfpi_supports_quasar_dm_mcpu(parent_options.get_root_dir())) {
         GTEST_SKIP() << "sfpi g++ not found or cannot compile the PCH umbrella for -mcpu=tt-qsr64-rocc";
     }
     auto pattern = (fs::temp_directory_path() / "pch_build_qsr_XXXXXX").string();

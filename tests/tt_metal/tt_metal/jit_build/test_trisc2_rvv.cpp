@@ -16,17 +16,14 @@
 //    knob-off compile of the same source contains none. Gated on the bundled sfpi toolchain
 //    accepting the Zve32f march string (older sfpi releases skip rather than fail).
 //
-// The fixture follows the runner's architecture (jit_build_device_fixture.hpp): a mock Blackhole on
-// Wormhole, Blackhole and CPU-only hosts, so compilation is pure host-side JIT with no silicon; the
-// real device on a Quasar runner (simulator or silicon). Kernels are compiled, never dispatched.
-// On Quasar only the knob-off recipe check runs, built through Metal 2.0: enable_trisc2_rvv is
-// Blackhole-only (Quasar's opt-in is enable_unpack_rvv on TRISC0).
+// See jit_build_device_fixture.hpp for which device each runner uses. On Quasar only the knob-off
+// recipe check runs, built through Metal 2.0: enable_trisc2_rvv is Blackhole-only (Quasar's opt-in is
+// enable_unpack_rvv on TRISC0).
 
 #include <gtest/gtest.h>
 
 #include <elf.h>
 
-#include <chrono>
 #include <cstdint>
 #include <cstring>
 #include <filesystem>
@@ -48,6 +45,7 @@
 #include "jit_build/jit_build_utils.hpp"
 #include "llrt/rtoptions.hpp"
 #include "jit_build_device_fixture.hpp"
+#include "sfpi_probe.hpp"
 
 namespace tt::tt_metal {
 
@@ -62,40 +60,14 @@ constexpr const char* kBhTensixMcpu = "-mcpu=tt-bh-tensix";
 constexpr uint32_t kVaddScratchBase = 512 * 1024;
 constexpr uint32_t kVaddNumElements = 64;
 constexpr const char* kQuasarBlackholeOnly =
-    "enable_trisc2_rvv is Blackhole-only; Quasar's RVV opt-in is enable_unpack_rvv on TRISC0, and this "
-    "test kernel only uses vector code under TRISC_PACK (the legacy CreateKernel/ComputeConfig path it uses is "
-    "also rejected on Quasar, kernel.hpp:814)";
-
-// Resolve the sfpi g++ the JIT build uses (local runtime/sfpi, then system sfpi).
-std::string sfpi_gxx_path() {
-    const std::string root = MetalContext::instance().rtoptions().get_root_dir();
-    for (const std::string& sfpi_root : {root + "runtime/sfpi", std::string("/opt/tenstorrent/sfpi")}) {
-        auto gxx = sfpi_root + "/compiler/bin/riscv-tt-elf-g++";
-        if (std::filesystem::exists(gxx)) {
-            return gxx;
-        }
-    }
-    return {};
-}
+    "enable_trisc2_rvv is Blackhole-only (Quasar's RVV opt-in is enable_unpack_rvv on TRISC0), and the legacy "
+    "ComputeConfig path this test uses is rejected on Quasar";
 
 // True when the bundled sfpi compiler accepts the Blackhole-tensix + Zve32f march string.
-// Probed via the JIT build system's own shell-free process launcher (posix_spawn with a
-// fixed argv — nothing is interpreted by a shell).
 bool sfpi_supports_bh_zve32f() {
-    const std::string gxx = sfpi_gxx_path();
-    if (gxx.empty()) {
-        return false;
-    }
-    const auto scratch =
-        std::filesystem::temp_directory_path() /
-        ("tt_metal_rvv_march_probe_" + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
-    std::filesystem::create_directories(scratch);
-    const std::vector<std::string> args = {
-        gxx, kBhTensixMcpu, kBhRvvMarch, "-E", "-x", "c++", "/dev/null", "-o", "/dev/null"};
-    const bool ok = tt::jit_build::utils::exec_command(args, scratch.string(), (scratch / "probe.log").string());
-    std::error_code ec;
-    std::filesystem::remove_all(scratch, ec);
-    return ok;
+    return jit_build_test::sfpi_gxx_accepts(
+        MetalContext::instance().rtoptions().get_root_dir(),
+        {kBhTensixMcpu, kBhRvvMarch, "-E", "-x", "c++", "/dev/null", "-o", "/dev/null"});
 }
 
 // In-process check for RISC-V Vector instructions: parse the ELF32 section headers and scan
