@@ -32,6 +32,8 @@ from models.common.utility_functions import is_blackhole
 from models.demos.common.prefill.runners.runner_utils import MTP_PAD_TOKEN_ID
 from models.demos.deepseek_v3_d_p.tests.kimi_k3 import k31_stage
 from models.demos.deepseek_v3_d_p.tests.kimi_k3.golden import TRACE_K31, resolve_trace
+from models.demos.deepseek_v3_d_p.tt.attn_res.attn_res_stream import BLOCK_SIZE
+from models.demos.deepseek_v3_d_p.tt.kimi_k3.transformer import TtKimiK3Transformer
 
 FIRST_LAYER, NUM_LAYERS = 0, 4
 # The runner's single 10K request (sc1): 10240 tokens.
@@ -54,7 +56,15 @@ def _metadata_msg(mesh_device, slot_id: int, actual_start: int, actual_end: int)
 @pytest.mark.skipif(not is_blackhole(), reason="Kimi-K3.1 runs on Blackhole only")
 @pytest.mark.timeout(0)
 @pytest.mark.parametrize("mesh_device, device_params", k31_stage.PLACEMENT, indirect=["mesh_device", "device_params"])
-def test_k31_layer_profile(mesh_device, device_params):
+def test_k31_layer_profile(mesh_device, device_params, monkeypatch):
+    # A production stage ends on an AttnRes block boundary, where `outbound_planes` (1 + end // BLOCK_SIZE) counts
+    # its seals; this window ends inside block 0, after layer 0's seal, so it hands on 1 + ceil(end / BLOCK_SIZE).
+    # Only the handoff's shape changes, not any layer's work.
+    monkeypatch.setattr(
+        TtKimiK3Transformer,
+        "outbound_planes",
+        property(lambda self: 1 + -(-(self.first_layer_idx + self.num_layers) // BLOCK_SIZE)),
+    )
     profiling = os.environ.get("TT_METAL_DEVICE_PROFILER") == "1"
     trace = resolve_trace(TRACE_K31)
     assert trace is not None, f"no K3.1 golden at {TRACE_K31}"
