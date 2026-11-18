@@ -34,37 +34,33 @@ namespace ckernel::sfpu {
 // each consumer still issues >= 2 slots after its producer, and the per-element
 // instruction sequence and operand order are unchanged.
 //
-// Distinct slots between kernels are required so a single compute kernel
-// can mix all three ops without each init clobbering the others' recordings.
-// Each init must still run before its op since the LREG constants are shared.
-// Int8 output records a longer body (the extra SFPXORs) into the same family
-// slot; slot spacing uses each family's max body length so the three ops can
-// still coexist.
+// All three ops record at slot 0. The ops share LREG2 (and LREG5/LREG12/LREG13) with different
+// meanings, so a compute kernel that mixes them must run each op's init before switching to it,
+// and that init re-records the body. Sharing the slot keeps every body inside the SFPU half of the
+// replay buffer ([0, 16)); math-thread FPU LLKs (matmul, reduce, transpose_dest) record from
+// ckernel::math::replay_buf_offset = 16.
 //
 // Body content (see the inits for the exact emission order; r0/r1 = row 0/1).
-// <clamp + convert> is SFPSWAP (max lo) r0/r1, SFPSWAP (min hi) r0/r1, SFPIADD r0/r1 (see RNE_MAGIC_FP32).
-// The hardware stalls one cycle after each SFPSWAP, so the clamp costs two cycles per SFPSWAP either way.
+// <clamp + convert> is SFPSWAP (max lo) r0/r1, then for Int32 output SFPSWAP (min hi) r0/r1 and SFPIADD r0/r1,
+// for UInt8 / Int8 output SFPIADD r0/r1 and SFP_STOCH_RND (saturate to 255) r0/r1 (see RNE_MAGIC_FP32).
+// The hardware stalls one cycle after each SFPSWAP, so each SFPSWAP costs two cycles.
 //   QUANT   (8)             : SFPMAD r0/r1, <clamp + convert>                                  (int32 / uint8 output)
 //   QUANT   (int8-out, 10)  : SFPMAD r0/r1, <clamp + convert>, SFPXOR r0/r1
 //   REQUANT (12)            : SFPCAST r0/r1, SFPMAD r0/r1, SFPADD r0/r1, <clamp + convert>
 //   REQUANT (int8-out, 14)  : SFPCAST r0/r1, SFPMAD r0/r1, SFPADD r0/r1, <clamp + convert>, SFPXOR r0/r1
 //   DEQUANT (6)             : SFPCAST r0/r1, SFPADD r0/r1, SFPMUL r0/r1
-//
-// The int32 and uint8 outputs differ only in the clamp constants and share one body length.
 constexpr std::uint32_t QUANT_REPLAY_SLOT = 0;
 constexpr std::uint32_t QUANT_REPLAY_LEN = 8;
 constexpr std::uint32_t QUANT_REPLAY_LEN_INT8_OUT = 10;
-constexpr std::uint32_t QUANT_REPLAY_LEN_MAX = QUANT_REPLAY_LEN_INT8_OUT;
 
-constexpr std::uint32_t REQUANT_REPLAY_SLOT = QUANT_REPLAY_SLOT + QUANT_REPLAY_LEN_MAX;
+constexpr std::uint32_t REQUANT_REPLAY_SLOT = 0;
 constexpr std::uint32_t REQUANT_REPLAY_LEN = 12;
 constexpr std::uint32_t REQUANT_REPLAY_LEN_INT8_OUT = 14;
-constexpr std::uint32_t REQUANT_REPLAY_LEN_MAX = REQUANT_REPLAY_LEN_INT8_OUT;
 
-constexpr std::uint32_t DEQUANT_REPLAY_SLOT = REQUANT_REPLAY_SLOT + REQUANT_REPLAY_LEN_MAX;
+constexpr std::uint32_t DEQUANT_REPLAY_SLOT = 0;
 constexpr std::uint32_t DEQUANT_REPLAY_LEN = 6;
 
-static_assert(DEQUANT_REPLAY_SLOT + DEQUANT_REPLAY_LEN <= 32, "quant replay bodies exceed the 32-entry replay buffer");
+static_assert(REQUANT_REPLAY_LEN_INT8_OUT <= 16, "quant replay bodies must stay in the SFPU half of the replay buffer");
 
 // Row-pair register plan (see the replay-body comment above).
 constexpr std::uint32_t QUANT_ROW0_A = p_sfpu::LREG0;
