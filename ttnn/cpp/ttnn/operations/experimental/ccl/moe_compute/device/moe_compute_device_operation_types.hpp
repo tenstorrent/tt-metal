@@ -70,6 +70,15 @@ struct MoEComputeParams {
     tt::tt_metal::MathFidelity math_fidelity = tt::tt_metal::MathFidelity::LoFi;
     bool fp32_dest_acc_en = false;
 
+    // Fabric-mux L1 map guard (opt-in, env TT_MOE_MUX_L1_FIT_Q=<bytes>; 0 = off, bit-identical to before). The mux map
+    // of the fused combine is raw L1 outside the allocator, fitted once under the lowest occupied L1 address of the
+    // first build. The program cache did not key on that address, so a later drop of the persistent L1 bottom overran
+    // the map (hang). When enabled this holds floor(lowest_occupied_at_call / Q) + 1 and is part of the program hash,
+    // so the program is rebuilt (and the map refitted) whenever the bottom moves down by a quantum; the build fits the
+    // map Q bytes below its own lowest occupied address, so any later call that hashes the same key still has the map
+    // clear.
+    uint32_t mux_l1_key = 0;
+
     // Same value as combine_params->axis (single source of truth when combine_params is set).
     // ComputeOnly path returns nullopt; Full-path call-sites must unwrap with .value().
     std::optional<uint32_t> cluster_axis() const {
@@ -94,6 +103,9 @@ struct MoEComputeParams {
         attrs.emplace_back("activation_limit", activation_limit);
         attrs.emplace_back("math_fidelity", static_cast<uint32_t>(math_fidelity));
         attrs.emplace_back("fp32_dest_acc_en", fp32_dest_acc_en);
+        if (mux_l1_key != 0) {
+            attrs.emplace_back("mux_l1_key", mux_l1_key);
+        }
         return attrs;
     }
 };
