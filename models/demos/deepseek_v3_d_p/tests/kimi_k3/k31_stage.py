@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """Kimi-K3.1's deployments as the K3.1 tests share them: the runner's mesh, context, chunk and stage split, the
-measured PP4 user capacity, and any stage of either layout built with the K3 manifest's knobs.
+measured user capacity of each layout, and any stage of either layout built with the K3 manifest's knobs.
 
 Two layouts: PP4 (one 8x4 stage per galaxy, SP=8 on axis 0, 5120-token chunks), and the manifest's default, K3's
 4x4 stages (two per galaxy, SP=4 on axis 1, TP=4 on axis 0, 2560-token chunks), eight of them for the 93 layers.
@@ -36,6 +36,13 @@ STAGES = compute_layer_split(
 # The most users PP4 fits at MAX_SEQ_LEN, measured on bh-glx-110-c10u14 with each stage built and traced as the
 # runner builds it (one more fails): stage 0 is the bound at 76; stages 1-3 fit 77 / 77 / 93.
 PP4_MAX_USERS = 76
+# The most users the first 4x4 stage (layers 0-11, SP=4 on axis 1) fits at MAX_SEQ_LEN, measured on a Blackhole Galaxy
+# through run_multirank_pcc.sh kimi_k3_1 sc1 (2x[4,4], rank 0 = stage 0 exactly), pass at N and fail at N+1 as K3's
+# 4x4 count was (#61481): 96 serves one full 1,049,600-token request; 97 fails in compile, the DSA indexer's score
+# buffer (42.6 MB per DRAM bank) finding no contiguous block (largest 38.4 MB of 63.3 MB free): fragmentation, not
+# total DRAM. 98 fails there too, 100 at the MoE dispatch buffer, 104 at the KDA slabs, 112 and up at the kvpe cache.
+# K3 allocates two slots under its limit (127 of 129); K3.1 allocates its measured maximum, at 4x4 and 8x4.
+STAGE0_4X4_MAX_USERS = 96
 
 # The 4x4 stage of kimi_k3_1.json: SP on the tray half's axis-1 ring, TP on axis 0.
 MESH_4X4 = (4, 4)
