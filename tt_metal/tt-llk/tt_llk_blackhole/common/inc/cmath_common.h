@@ -245,10 +245,12 @@ inline void set_math_semaphores()
 
 // Publish the DEST slot of the next unpack-to-dest tile: the post leaves this thread's stream once every earlier math and SFPU
 // instruction has completed, and the unpack thread waits for it before the MOP that writes DEST (wait_for_dest_available).
+// The RISC waits for the post, as main does: without that wait sharded fp32 groupnorm with gamma and beta ran 1.6 % slower.
 inline void math_unpack_to_dest_math_ready()
 {
     t6_semaphore_wait_on_max<p_stall::STALL_SYNC>(semaphore::MATH_DONE);
     t6_semaphore_post<p_stall::MATH | p_stall::WAIT_SFPU>(semaphore::MATH_DONE);
+    tensix_sync();
 }
 
 // Pairs with wait_for_dest_available_unpack_to_dest_max: the RISC waits for its own MATH_DONE post to land and takes it back.
