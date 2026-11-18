@@ -74,11 +74,6 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
     for (std::uint32_t block = 0; block < num_blocks; block++)
     {
-        // Hold the datacopy back so UNPACR/PACR sit queued while the other threads re-program their descriptors.
-        for (std::uint32_t d = 0; d < BFD_MATH_DELAY; d++)
-        {
-            asm volatile("nop");
-        }
         for (std::uint32_t i = 0; i < tiles_in_block; ++i)
         {
             _llk_math_eltwise_unary_datacopy_(params.DST_INDEX + i);

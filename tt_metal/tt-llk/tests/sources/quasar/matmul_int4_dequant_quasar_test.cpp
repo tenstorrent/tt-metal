@@ -272,6 +272,16 @@ void run_kernel(RUNTIME_PARAMETERS params)
     constexpr std::uint8_t bfd_a_scale    = ckernel::trisc::BFD_ID_UNP2_SLICE1;
     constexpr std::uint8_t bfd_pack       = ckernel::trisc::BFD_ID_PACK1;
     constexpr std::uint8_t bfd_scratch    = ckernel::trisc::BFD_ID_PACK1;
+    const ckernel::TensorShape srcs_shape = ckernel::make_tensor_shape(static_cast<std::uint8_t>(srcs_ydim), srcs_dims::XDIM, srcs_dims::ZDIM, srcs_dims::ZDIM);
+    // s_w: one slice per (group, tile column, 16-column half). The halves get BFDs one slice apart because
+    // moving the L1 index between the two UNPACR2s made both read the second half.
+    constexpr std::uint32_t slice_bytes_16B = 4 /*rows*/ * 16 /*cols*/ * 4 /*bytes*/ / 16;
+    auto program_group_bfds                 = [&]()
+    {
+        ckernel::trisc::program_bfd<bfd_w_scale_lo>(srcs_shape, L1_ADDRESS(buffer_C[0]), ckernel::to_underlying(fp32));
+        ckernel::trisc::program_bfd<bfd_w_scale_hi>(srcs_shape, L1_ADDRESS(buffer_C[0]) + slice_bytes_16B, ckernel::to_underlying(fp32));
+        ckernel::trisc::program_bfd<bfd_scratch>(srcs_shape, L1_ADDRESS(buffer_S[0]), ckernel::to_underlying(fp32));
+    };
     {
         START_PERF_MEASURE("INIT")
         if constexpr (full)
@@ -304,6 +314,11 @@ void run_kernel(RUNTIME_PARAMETERS params)
             // LREG4/5: columns 0-15 even/odd, LREG6/7: columns 16-31 even/odd.
             record_face_seq<FACE_SEQ_SLOT[0], p_sfpu::LREG4, p_sfpu::LREG5>();
             record_face_seq<FACE_SEQ_SLOT[1], p_sfpu::LREG6, p_sfpu::LREG7>();
+
+            if constexpr (!full)
+            {
+                program_group_bfds(); // nothing re-programs them: once is enough
+            }
         }
         PROFILER_SYNC();
     }
@@ -311,16 +326,12 @@ void run_kernel(RUNTIME_PARAMETERS params)
         START_PERF_MEASURE("TILE_LOOP")
         if constexpr (active)
         {
-            const ckernel::TensorShape srcs_shape =
-                ckernel::make_tensor_shape(static_cast<std::uint8_t>(srcs_ydim), srcs_dims::XDIM, srcs_dims::ZDIM, srcs_dims::ZDIM);
-            // s_w: one slice per (group, tile column, 16-column half). The halves get BFDs one slice apart because
-            // moving the L1 index between the two UNPACR2s made both read the second half.
-            constexpr std::uint32_t slice_bytes_16B = 4 /*rows*/ * 16 /*cols*/ * 4 /*bytes*/ / 16;
             for (std::uint32_t loop = 0; loop < LOOP_FACTOR; loop++)
             {
-                ckernel::trisc::program_bfd<bfd_w_scale_lo>(srcs_shape, L1_ADDRESS(buffer_C[0]), ckernel::to_underlying(fp32));
-                ckernel::trisc::program_bfd<bfd_w_scale_hi>(srcs_shape, L1_ADDRESS(buffer_C[0]) + slice_bytes_16B, ckernel::to_underlying(fp32));
-                ckernel::trisc::program_bfd<bfd_scratch>(srcs_shape, L1_ADDRESS(buffer_S[0]), ckernel::to_underlying(fp32));
+                if constexpr (full)
+                {
+                    program_group_bfds(); // the epilogue re-programs these ids every loop
+                }
                 // ---- Per group: Dest partial -> float(partial) * s_w[g, n], in place ----
                 for (std::uint32_t group = 0; group < num_groups; ++group)
                 {

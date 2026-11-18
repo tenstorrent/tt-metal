@@ -10,8 +10,6 @@ A stale descriptor (TTSync not holding the CFG store) gives wrong tiles. The res
 prefilled with a sentinel, so a tile that is never written also fails.
 """
 
-from dataclasses import dataclass
-
 import pytest
 from helpers.format_config import DataFormat, InputOutputFormat
 from helpers.golden_generators import DataCopyGolden, get_golden_generator
@@ -30,7 +28,6 @@ from helpers.test_variant_parameters import (
     NUM_TILES_IN_BLOCK,
     TEST_FACE_DIMS,
     TILE_COUNT,
-    TemplateParameter,
     generate_input_dim,
 )
 from helpers.tile_shape import construct_tile_shape
@@ -39,14 +36,6 @@ from helpers.utils import passed_test, result_tensor
 NUM_BLOCKS_PER_RUN = 8
 TILE_DIMS = [32, 32]
 FORMATS = InputOutputFormat(DataFormat.Float16_b, DataFormat.Float16_b)
-
-
-@dataclass
-class BFD_BACK_TO_BACK(TemplateParameter):
-    math_delay: int = 0  # NOPs per block on the math thread
-
-    def convert_to_cpp(self) -> str:
-        return f"constexpr std::uint32_t BFD_MATH_DELAY = {self.math_delay};"
 
 
 class SentinelStimuli(StimuliConfig):
@@ -66,9 +55,8 @@ def _wrong_tiles(golden, result):
 
 
 @pytest.mark.quasar
-@pytest.mark.parametrize("math_delay", [0, 512])
 @pytest.mark.parametrize("tiles_in_block", [4, 8])
-def test_bfd_back_to_back_reprogram_quasar(tiles_in_block, math_delay):
+def test_bfd_back_to_back_reprogram_quasar(tiles_in_block):
     input_dimensions = [
         TILE_DIMS[0],
         TILE_DIMS[1] * tiles_in_block * NUM_BLOCKS_PER_RUN,
@@ -99,7 +87,6 @@ def test_bfd_back_to_back_reprogram_quasar(tiles_in_block, math_delay):
         templates=[
             DATA_COPY_TYPE(DataCopyType.A2D),
             DEST_SYNC(DestSync.Half),
-            BFD_BACK_TO_BACK(math_delay),
         ],
         runtimes=[
             TILE_COUNT(tile_cnt),

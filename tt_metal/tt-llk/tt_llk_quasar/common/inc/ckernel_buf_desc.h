@@ -31,24 +31,10 @@ enum class L1AccessMode : std::uint8_t
     Strided    = 1,
 };
 
-// Buffer descriptor (BFD) ids: one fixed table entry per TDMA engine, re-programmed by every op
-// init and baked into the MOP by id. BFD ids are an LLK-internal resource: nothing above the LLK API
-// layer may hold or pass one. The ids sit inside each TRISC's documented partition of the table,
-// so threads never write each other's entries:
-//
-//   unpack thread -> ids [0, 16):  UNP0 = 0, UNP1 = 1
-//   math thread   -> none (math issues no TDMA)
-//   pack thread   -> ids [16, 24): PACK0 = 16
-//   SFPU thread   -> ids [24, 32): PACK1 = 24, UNP2_SLICE0 = 25, UNP2_SLICE1 = 26
-//
-// UNP2_SLICE0/UNP2_SLICE1 are one engine (UNPACR2), not two: a binary SrcS op needs both input
-// descriptors live at once.
-//
-// REQUIREMENT: correctness relies on Tensix TTSync global-CFG tracking (TRACK_GLOBAL_CFG, see
-// set_ttsync_enables in ckernel.h) being ENABLED on the unpack, pack and SFPU threads (it is on at
-// reset). It makes the TRISC store that re-programs a BD entry wait for any in-flight UNPACR/PACR
-// still using that entry. With it disabled, a re-init can overwrite an entry under an in-flight op
-// and the op runs with a stale descriptor (corrupt data).
+// One fixed BFD id per TDMA engine, inside the owning thread's partition of the table; LLK-internal.
+// Correctness needs TTSync TRACK_GLOBAL_CFG enabled (on at reset, see set_ttsync_enables): it makes a
+// BD re-program wait for in-flight UNPACR/PACR using that entry.
+//   unpack: UNP0=0, UNP1=1 | pack: PACK0=16 | SFPU thread: PACK1=24, UNP2_SLICE0/1=25/26 (one engine, UNPACR2)
 constexpr std::uint8_t BFD_ID_UNP0        = 0;
 constexpr std::uint8_t BFD_ID_UNP1        = 1;
 constexpr std::uint8_t BFD_ID_PACK0       = 16;
@@ -104,25 +90,6 @@ inline void validate_buffer_desc(const std::uint8_t x_dim, const std::uint8_t y_
 }
 
 /**
- * @brief Populates buffer table entry for TDMA engines
- * @param buf_desc_id: Buffer descriptor id into the buffer descriptor table
- * @param word0: Encoded L1 base address and data format
- * @param word1: Encoded L1 limit address (left 0 by construct_buf_desc) and X dimension
- * @param word2: Encoded Y and Z dimensions
- * @note Each engine re-programs one fixed entry (BFD_ID_* above). Safe only while TTSync
- *       TRACK_GLOBAL_CFG is enabled on this thread: the store then waits for in-flight UNPACR/PACR
- *       using the entry (see the REQUIREMENT note at BFD_ID_UNP0).
- */
-inline void _configure_buf_desc_table_(const std::uint32_t buf_desc_id, const std::uint32_t word0, const std::uint32_t word1, const std::uint32_t word2)
-{
-    // Guards any OOB id from a wild write into cfg space.
-    LLK_ASSERT(buf_desc_id < BD_TABLE_NUM_ENTRIES, "buf_desc_id out of range");
-    bd_table[buf_desc_id].words[0] = word0;
-    bd_table[buf_desc_id].words[1] = word1;
-    bd_table[buf_desc_id].words[2] = word2;
-}
-
-/**
  * @brief Creates a buffer descriptor from TensorShape and other needed parameters
  * Currently supported buffer descriptor dimensions are:
  * x=16; y=[1, 2, 4, 8, 16]; z=1; or x=16; y=16; z=4; these are hardware constraints.
@@ -157,6 +124,8 @@ inline buffer_descriptor_u construct_buf_desc(const TensorShape& tensor_shape, u
  * @param tensor_shape: Tile/face dimensions and shape of the buffer
  * @param l1_base_addr: base address of the buffer in L1 (16B units)
  * @param l1_data_format: L1 data encoding format
+ * @note Safe only while TTSync TRACK_GLOBAL_CFG is enabled on this thread: the store waits for in-flight
+ *       UNPACR/PACR using the entry (see BFD_ID_UNP0).
  */
 template <std::uint8_t BFD_ID, L1AccessMode MODE = L1AccessMode::Continuous>
 inline void program_bfd(const TensorShape& tensor_shape, const std::uint32_t l1_base_addr, const std::uint32_t l1_data_format)
@@ -167,7 +136,9 @@ inline void program_bfd(const TensorShape& tensor_shape, const std::uint32_t l1_
             (ckernel::TRISC_ID == 3 && BFD_ID >= BFD_ID_PACK1 && BFD_ID <= BFD_ID_UNP2_SLICE1),
         "BFD id not owned by the compiling thread (math owns none)");
     const auto buf_desc = construct_buf_desc<MODE>(tensor_shape, l1_base_addr, l1_data_format);
-    _configure_buf_desc_table_(BFD_ID, buf_desc.words[0], buf_desc.words[1], buf_desc.words[2]);
+    bd_table[BFD_ID].words[0] = buf_desc.words[0];
+    bd_table[BFD_ID].words[1] = buf_desc.words[1];
+    bd_table[BFD_ID].words[2] = buf_desc.words[2];
 }
 
 } // namespace ckernel::trisc
