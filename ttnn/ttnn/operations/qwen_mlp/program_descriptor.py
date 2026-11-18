@@ -15,6 +15,7 @@ GRID_X = 11
 GRID_Y = 9
 FIRST_Y = 1
 
+RING_BLOCKS = 2
 NORM_GROUP = 4
 NORM_CHUNK = 16
 
@@ -209,11 +210,11 @@ def create_program_descriptor(h, w_norm, w_gate_up, w_down, n, a, y):
     )
     bf16, bfp4, fp32 = ttnn.bfloat16, ttnn.bfloat4_b, ttnn.float32
     cbs = [
-        _cb(CB_IN0, bf16, BF16_TILE_BYTES, 2 * gate_up.in0_block_tiles, cores),
-        _cb(CB_GATE_UP_IN1, bfp4, BFP4_TILE_BYTES, 2 * gate_up.in1_block_tiles, cores),
+        _cb(CB_IN0, bf16, BF16_TILE_BYTES, RING_BLOCKS * gate_up.in0_block_tiles, cores),
+        _cb(CB_GATE_UP_IN1, bfp4, BFP4_TILE_BYTES, RING_BLOCKS * gate_up.in1_block_tiles, cores),
         _cb(CB_GATE_UP_OUT, bf16, BF16_TILE_BYTES, 2 * gate_up.out_block_tiles, cores),
         _cb(CB_GATE_UP_PARTIAL, fp32, FP32_TILE_BYTES, gate_up.partial_block_tiles, cores),
-        _cb(CB_DOWN_IN1, bfp4, BFP4_TILE_BYTES, 2 * down.in1_block_tiles, cores),
+        _cb(CB_DOWN_IN1, bfp4, BFP4_TILE_BYTES, RING_BLOCKS * down.in1_block_tiles, cores),
         _cb(CB_DOWN_OUT, bf16, BF16_TILE_BYTES, 2 * down.out_block_tiles, cores),
         _cb(CB_DOWN_PARTIAL, fp32, FP32_TILE_BYTES, down.partial_block_tiles, cores),
         _cb(CB_NORM_IN, bf16, BF16_TILE_BYTES, 2 * NORM_CHUNK, cores),
