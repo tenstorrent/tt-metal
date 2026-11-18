@@ -392,6 +392,42 @@ def _ring_subblock(block_m_tiles, out_n_tiles):
     return _out_subblock(block_m_tiles, out_n_tiles)
 
 
+def _nslice_kh_masks(g: Conv3x3Geometry, bm, sb_h, m_tile_start, actual_m_tiles, num_m_blocks):
+    """N-slice kernel-row skip (compute runtime args 3..): per M-block, ceil(groups / 10) words of 3-bit masks, ring row
+    group gi at bits 3 * (gi % 10) of word gi // 10. Bit kh: kernel row kh is in the image for some output pixel of the
+    group's valid rows (input row oy * stride + kh * d - p in [0, H)); the walk skips the others, whose in0 K tiles are
+    all zeros. The groups are rows [gi * sb_h, ...) of the M-block for every owner (ring_group_row0 only reorders them).
+    The walk runs a contiguous range: a group with no valid row takes kernel row 1, one with rows 0 and 2 but not 1 all
+    three (both only add zeros), so every group runs a matmul.
+    Measured (Blackhole p150b, LoFi, median of 3): aspp.convs.3 (d = 18, a third of every core's tile-MACs) 33729 ->
+    27297 ns. Where the middle grid rows keep all three kernel rows (aspp.convs.1/2, res5.x, res4) the edge rows' walks
+    shrink but the op time is flat."""
+    groups = _div_up(bm, sb_h)
+    words_per_block = _div_up(groups, 10)
+    args = []
+    for m in range(num_m_blocks):
+        t0 = m_tile_start + m * bm
+        valid = max(0, min(bm, actual_m_tiles - m * bm))
+        o_end = min((t0 + valid) * TILE, g.num_out_px)
+        words = [0] * words_per_block
+        for gi in range(groups):
+            mask = 0
+            for r in range(gi * sb_h, min((gi + 1) * sb_h, bm)):
+                o_a = (t0 + r) * TILE
+                o_b = min(o_a + TILE, o_end)
+                if o_a >= o_b:
+                    continue
+                for oy in range(o_a // g.output_width, (o_b - 1) // g.output_width + 1):
+                    for kh in range(3):
+                        if 0 <= oy * g.stride + kh * g.dilation - g.padding < g.input_height:
+                            mask |= 1 << kh
+            mask = mask or 0b010
+            mask = 0b111 if mask == 0b101 else mask
+            words[gi // 10] |= mask << (3 * (gi % 10))
+        args += words
+    return args
+
+
 def m_split(g: Conv3x3Geometry, num_cores):
     """(core_m_tiles, num_m_groups): contiguous output tile-row ranges over `num_cores` cores. On a sharded
     input this is also the output shard: roundup32(ceil(M / n)) / 32 == ceil(ceil(M / 32) / n)."""
@@ -1757,6 +1793,12 @@ def create_program_descriptor(
             + [int(split_of(core))]
         )
         compute_args = [num_m_blocks_this_core, int(out_valid_tiles > 0), col]
+        if g.k_split and b.nslice and not kwf:
+            # The N-slice ring walk's kernel-row masks (args 3..: no ring slab under a K split).
+            assert not b.ring
+            compute_args += _nslice_kh_masks(
+                g, bm, _ring_subblock(bm, ns)[0], m_tile_start, actual_m_tiles, num_m_blocks_this_core
+            )
         if kwf:
             compute_args += [m_tile_start, actual_m_tiles]
         if b.ring:

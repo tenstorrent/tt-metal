@@ -17,6 +17,10 @@
 // (in0 [bm, 6 * c_in_tiles]) and the ring walk reads the kw = 1 taps from cb_center_tiles ([3, bm, c_in_tiles], the
 // reader's copy of the input tiles), in the same K order (bit-identical).
 //
+// N-slice kernel-row skip: the ring walk multiplies, per row group, only the range of kernel rows that is in the image
+// for some row of the group (runtime args 3..: the host's masks, see the ring walk). The others are all-zero K tiles of
+// in0.
+//
 // Face-direct im2col: the reader writes the in0 tiles itself, so the matmul runs without the tilize hook. With one
 // K-block per M-block the reader pushes in0 in row groups and compute runs one matmul call per group as it lands,
 // keeping the weights fronted across the calls, and adds the bias once per bias_stream_groups groups, so only the
@@ -803,6 +807,30 @@ void kernel_main() {
             constexpr uint32_t num_owning_cols = (block_n_tiles + out_n_tiles - 1) / out_n_tiles;
             static_assert(out_n_tiles % slice_sb_w == 0 && (slice_sb_w == 1 || block_m_tiles % slice_sb_h == 0));
             constexpr uint32_t ring_groups = (block_m_tiles + slice_sb_h - 1) / slice_sb_h;
+            // Kernel-row skip: ring row group g (rows [g * slice_sb_h, ...): every owner's walk has the same
+            // groups, only their order differs, so a group is r0 / slice_sb_h) multiplies kernel rows
+            // [kh_lo[g], kh_hi[g]) only, the range that is in the image for some row of the group. A kernel row
+            // outside the image for all of a group's rows is all zeros in in0 (the reader publishes the zero block and
+            // zero center rows for it, which the prelude still tilizes: the prelude is paced by the reader's gather,
+            // and skipping those tilizes measured flat). Only exact zero products are removed: bit-identical. The host
+            // sends one 3-bit kernel-row mask per group, 10 per word, ceil(ring_groups / 10) words per M-block
+            // (_nslice_kh_masks in the descriptor), always a contiguous range of at least one kernel row. The loops
+            // keep the base loops' form: a per-kernel-row mask test measured +2.7% on a 4 + 1-row group walk with
+            // nothing to skip.
+            // Raw LLK (capability), as the rest of this walk: compute_kernel_lib::matmul_block multiplies the whole K
+            // of every subblock; it has no per-subblock K range. aspp.convs.3 @ LoFi (d = 18: 1/3 of every core's
+            // tile-MACs are out-of-image kernel rows) 33729 -> 27297 ns (Blackhole p150b, median of 3).
+            uint8_t kh_lo[ring_groups];
+            uint8_t kh_hi[ring_groups];
+            {
+                constexpr uint32_t words = (ring_groups + 9) / 10;
+                for (uint32_t g = 0; g < ring_groups; ++g) {
+                    const uint32_t word = get_arg_val<uint32_t>(3 + m_block_idx * words + g / 10);
+                    const uint32_t mask = (word >> (3 * (g % 10))) & 7;
+                    kh_lo[g] = static_cast<uint8_t>((mask & 1) ? 0 : ((mask & 2) ? 1 : 2));
+                    kh_hi[g] = static_cast<uint8_t>((mask & 4) ? 3 : ((mask & 2) ? 2 : 1));
+                }
+            }
             // The tilize packs must overwrite (the previous M-block's combine may have left L1 accumulation on).
             pack_reconfig_l1_acc(0);
             if constexpr (!face_direct) {
@@ -853,6 +881,8 @@ void kernel_main() {
                     for (uint32_t g = 0; g < ring_groups; ++g) {
                         const uint32_t r0 = conv2d_3x3::ring_group_row0<block_m_tiles, slice_sb_h>(owner, g);
                         const uint32_t rows = block_m_tiles - r0 < slice_sb_h ? block_m_tiles - r0 : slice_sb_h;
+                        const uint32_t lo = kh_lo[r0 / slice_sb_h];
+                        const uint32_t hi = kh_hi[r0 / slice_sb_h];
                         if (rows != init_rows) {
                             ckernel::matmul_block_init(cb_im2col_tiles, cb_weights, false, slice_sb_w, rows, k_tiles);
                             init_rows = rows;
@@ -865,12 +895,11 @@ void kernel_main() {
                                 // K order unchanged (kh, kw, c). One loop per source, each with constant CB ids (a
                                 // single loop choosing the CB per k measured res5.1 +5.6%).
                                 constexpr uint32_t ct = c_in_tiles;
-                                uint32_t in0_index = r0 * in0_k_tiles;
-                                uint32_t ctr_index = r0 * ct;
-                                for (uint32_t kh = 0; kh < 3; ++kh) {
-                                    if (kh == 0) {
-                                        UNPACK((set_matmul_in0_row_stride(in0_k_tiles)));
-                                    }
+                                uint32_t in0_index = r0 * in0_k_tiles + lo * 2 * ct;
+                                uint32_t ctr_index = r0 * ct + lo * block_m_tiles * ct;
+                                in1_index += lo * 3 * ct * out_n_tiles;
+                                UNPACK((set_matmul_in0_row_stride(in0_k_tiles)));
+                                for (uint32_t kh = lo; kh < hi; ++kh) {
                                     for (uint32_t c = 0; c < ct; ++c) {
                                         ckernel::matmul_block(
                                             cb_im2col_tiles,
@@ -915,8 +944,14 @@ void kernel_main() {
                                     }
                                 }
                             } else {
-                                uint32_t in0_index = r0 * k_tiles;
-                                for (uint32_t k = 0; k < k_tiles; ++k) {
+                                // K order (kh, kw, c): kernel rows [lo, hi) are K tiles [lo * kkh, hi * kkh).
+                                static_assert(k_tiles % 3 == 0);
+                                constexpr uint32_t kkh = k_tiles / 3;
+                                const uint32_t k_lo = lo * kkh;
+                                const uint32_t k_hi = hi * kkh;
+                                uint32_t in0_index = r0 * k_tiles + k_lo;
+                                in1_index += k_lo * out_n_tiles;
+                                for (uint32_t k = k_lo; k < k_hi; ++k) {
                                     ckernel::matmul_block(
                                         cb_im2col_tiles,
                                         cb_weights,
