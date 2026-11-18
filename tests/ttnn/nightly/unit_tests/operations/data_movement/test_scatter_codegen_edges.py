@@ -23,6 +23,14 @@ _force_codegen = ttnn._ttnn.operations.data_movement.scatter_force_codegen
 _TORCH_DTYPE = {ttnn.bfloat16: torch.bfloat16, ttnn.float32: torch.float32}
 
 
+@pytest.fixture(autouse=True)
+def _codegen_arch_only(device):
+    # Every test here pins a seam of the codegen route, which ttnn::scatter() takes on Wormhole and
+    # Blackhole only (codegen_supported_on_arch); elsewhere every call lands on native.
+    if not (ttnn.device.is_wormhole_b0(device) or ttnn.device.is_blackhole(device)):
+        pytest.skip("scatter routes native off Wormhole and Blackhole")
+
+
 def _unique_index(index_shape, axis, axis_len):
     # Unique along `axis` and spanning the whole input extent. With a duplicate in a lane the
     # winning source element is whichever the implementation visits last, which neither route
@@ -503,3 +511,33 @@ def test_scatter_codegen_program_cache_key_follows_the_l1_frontier(device):
     ttnn.deallocate(blocker)
     assert_equal(golden, ttnn.to_torch(out))
     assert device.num_program_cache_entries() == entries_before + 2, "a moved L1 frontier replayed the cached program"
+
+
+def test_scatter_codegen_wide_rows_with_a_wide_index_keep_the_row_split(device):
+    # Forty tile rows underfill the grid, but each row carries eight index tiles: a column split would
+    # read and scan those eight pairs once per output tile, 80x the row split's work on the busiest
+    # core, and measured 18x slower than native on Blackhole. The row split is one program beyond
+    # native's and stays within a small factor of native on wall clock even with host noise.
+    import statistics
+    import time
+
+    xt, it, st = _make_case([1, 1, 1280, 3200], [1, 1, 1280, 256], -1, ttnn.TILE_LAYOUT, device)
+    _, added = _run_auto_against_native(device, xt, it, st, -1)
+    assert added == 1, "expected the codegen TILE factory's one program beyond native's"
+
+    def median_ms(fn, n=10):
+        fn()
+        ttnn.synchronize_device(device)
+        samples = []
+        for _ in range(n):
+            t0 = time.perf_counter()
+            fn()
+            ttnn.synchronize_device(device)
+            samples.append((time.perf_counter() - t0) * 1e3)
+        return statistics.median(samples)
+
+    native_ms = median_ms(lambda: _force_native(xt, -1, it, st))
+    codegen_ms = median_ms(lambda: ttnn.scatter(xt, -1, it, st))
+    assert (
+        codegen_ms < 3 * native_ms
+    ), f"codegen {codegen_ms:.3f} ms against native {native_ms:.3f} ms: the column split is back"

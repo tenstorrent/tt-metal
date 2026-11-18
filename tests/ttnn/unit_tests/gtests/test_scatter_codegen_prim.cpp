@@ -128,19 +128,30 @@ TEST_F(ScatterCodegenPrimFixture, AcceptsADestinationThatAliasesTheInput) {
 
 TEST_F(ScatterCodegenPrimFixture, SelectsTheFactoryEachMergeGateCaseIsNamedFor) {
     // The merge-gate unit cases carry their factory in the id, but a forced call cannot observe which
-    // one ran: on the default grid more output columns than the two tile rows selects the
-    // column-split streaming factory; a two-core grid keeps the row resident.
-    const Operands ops = make_operands_of(device_, ttnn::Shape({1, 1, 64, 200}), ttnn::Shape({1, 1, 64, 100}), 200);
-    const ttnn::prim::ScatterCodegenInputs inputs{ops.input, ops.index, ops.src, std::nullopt};
-    const auto factory_on = [&](const std::optional<CoreRangeSet>& grid) {
+    // one ran. One tile row with seven output columns and one index tile: on the default grid the
+    // column split gives a core one tile and one index scan against the row split's seven tiles and
+    // one scan, while a two-core grid hands each core four columns and four scans and the row split
+    // wins.
+    const Operands ops = make_operands_of(device_, ttnn::Shape({1, 1, 32, 200}), ttnn::Shape({1, 1, 32, 32}), 200);
+    const auto factory_on = [&](const Operands& o, const std::optional<CoreRangeSet>& grid) {
         return ttnn::prim::ScatterCodegenDeviceOperation::select_program_factory(
             ttnn::prim::build_scatter_codegen_params(
-                ops.input, ops.index, ops.src, kReductionNone, ops.input.memory_config(), grid),
-            inputs);
+                o.input, o.index, o.src, kReductionNone, o.input.memory_config(), grid),
+            ttnn::prim::ScatterCodegenInputs{o.input, o.index, o.src, std::nullopt});
     };
     const CoreRangeSet two_cores(CoreRange(CoreCoord(0, 0), CoreCoord(1, 0)));
-    EXPECT_TRUE(std::holds_alternative<ttnn::prim::ScatterCodegenProgramFactoryInterleaved>(factory_on(two_cores)));
-    EXPECT_TRUE(std::holds_alternative<ttnn::prim::ScatterCodegenProgramFactoryStreaming>(factory_on(std::nullopt)));
+    EXPECT_TRUE(
+        std::holds_alternative<ttnn::prim::ScatterCodegenProgramFactoryInterleaved>(factory_on(ops, two_cores)));
+    EXPECT_TRUE(
+        std::holds_alternative<ttnn::prim::ScatterCodegenProgramFactoryStreaming>(factory_on(ops, std::nullopt)));
+    // Forty tile rows underfill the grid too, but with eight index tiles per row a column-split core
+    // would read and scan the eight pairs once per output tile instead of once per row: the row
+    // split keeps the busiest core at a fraction of that work, so it is selected although rows are
+    // fewer than cores.
+    const Operands wide =
+        make_operands_of(device_, ttnn::Shape({1, 1, 1280, 3200}), ttnn::Shape({1, 1, 1280, 256}), 3200);
+    EXPECT_TRUE(
+        std::holds_alternative<ttnn::prim::ScatterCodegenProgramFactoryInterleaved>(factory_on(wide, std::nullopt)));
     // The same pair's 400 B stick is not 32 B aligned, which is what keeps it off the row-major
     // detour; a 128 B stick with one tile row is served by it.
     const auto detour = [&](const Operands& o) {
@@ -155,6 +166,38 @@ TEST_F(ScatterCodegenPrimFixture, SelectsTheFactoryEachMergeGateCaseIsNamedFor) 
     };
     EXPECT_FALSE(detour(ops));
     EXPECT_TRUE(detour(make_operands(device_, 64)));
+}
+
+TEST_F(ScatterCodegenPrimFixture, ColumnSplitCostFollowsTheRescans) {
+    // Per core, the row split costs rows x (2 x Wt_output + 18 x Wt_index) and the column split
+    // columns x Ht x (2 + 18 x Wt_index) weighted tile operations; the split with less work on its
+    // busiest core wins. Two rows already favour the row split (one scan per core against two), and
+    // a single output column or a single core never splits by column.
+    using ttnn::prim::scatter_prefers_column_split;
+    EXPECT_TRUE(scatter_prefers_column_split(/*Ht=*/1, /*Wt_output=*/64, /*Wt_index=*/1, /*cores=*/110));
+    EXPECT_TRUE(scatter_prefers_column_split(1, 7, 1, 110));
+    EXPECT_FALSE(scatter_prefers_column_split(1, 7, 1, 2));
+    EXPECT_FALSE(scatter_prefers_column_split(2, 7, 1, 110));
+    EXPECT_FALSE(scatter_prefers_column_split(40, 100, 8, 110));
+    EXPECT_FALSE(scatter_prefers_column_split(40, 100, 1, 110));
+    EXPECT_FALSE(scatter_prefers_column_split(1, 1, 1, 110));
+    EXPECT_FALSE(scatter_prefers_column_split(1, 64, 1, 1));
+    EXPECT_FALSE(scatter_prefers_column_split(0, 64, 1, 110));
+}
+
+TEST_F(ScatterCodegenPrimFixture, RejectsRankZeroRowMajorOperands) {
+    // The ROW_MAJOR stick geometry reads the last dim before validate runs; a scalar has none, so the
+    // call must be refused there instead of walking off the empty shape.
+    const auto scalar = [&](DataType dtype) {
+        const tt::tt_metal::TensorSpec spec(
+            ttnn::Shape({}),
+            tt::tt_metal::TensorLayout(
+                dtype, tt::tt_metal::PageConfig(Layout::ROW_MAJOR), tt::tt_metal::MemoryConfig{}));
+        return dtype == DataType::INT32 ? Tensor::from_vector(std::vector<int32_t>{0}, spec, device_)
+                                        : Tensor::from_vector(std::vector<::bfloat16>{::bfloat16(1.0f)}, spec, device_);
+    };
+    const Operands ops{scalar(DataType::BFLOAT16), scalar(DataType::INT32), scalar(DataType::BFLOAT16)};
+    EXPECT_THROW(run(ops, std::nullopt), std::exception);
 }
 
 TEST_F(ScatterCodegenPrimFixture, DemotesAUnitRowWhenTheDetourCannotFitLiveL1) {
