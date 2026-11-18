@@ -59,6 +59,7 @@ def _config(d: Hy4AttnDims, hidden: int, **extra):
         qk_rope_head_dim=d.qk_rope_head_dim,
         v_head_dim=d.v_head_dim,
         rms_norm_eps=d.rms_norm_eps,
+        mla_low_rank_norm_eps=d.low_rank_norm_eps,
         rope_theta=d.rope_theta,
         mla_use_output_gate=True,
         mla_learnable_sink=True,
@@ -109,7 +110,7 @@ def _emulate_2d(hn: torch.Tensor, w_hf: dict, topk: torch.Tensor, d: Hy4AttnDims
     # q_a: K (hidden) over TP, N over SP -> reduce over TP, gather both axes -> q_a_layernorm on the full row.
     qa = torch.cat([sum(x[t] @ W("q_a_proj", s, t) for t in range(tp)) for s in range(sp)], dim=1)
     q_ln = host["q_a_layernorm"][0].reshape(-1).to(F32)
-    qn = qa * torch.rsqrt(qa.square().mean(-1, keepdim=True) + d.rms_norm_eps) * q_ln
+    qn = qa * torch.rsqrt(qa.square().mean(-1, keepdim=True) + d.low_rank_norm_eps) * q_ln
     # q_b: K (q_lora) over TP, N = SP head block s -> reduce-scatter over TP: chunk t, 2 heads per chip.
     q_chip = {}
     for s in range(sp):
@@ -119,7 +120,7 @@ def _emulate_2d(hn: torch.Tensor, w_hf: dict, topk: torch.Tensor, d: Hy4AttnDims
     # kv_a: K over both axes, reduced over all chips.
     kv = sum(x[t].chunk(sp, dim=1)[s] @ W("kv_a_proj_with_mqa", s, t)[0, 0] for s, t in chips)
     kv_ln = host["kv_a_layernorm"][0].reshape(-1).to(F32)
-    latent = kv[:, :L] * torch.rsqrt(kv[:, :L].square().mean(-1, keepdim=True) + d.rms_norm_eps) * kv_ln
+    latent = kv[:, :L] * torch.rsqrt(kv[:, :L].square().mean(-1, keepdim=True) + d.low_rank_norm_eps) * kv_ln
     cos, sin = rope_cos_sin(torch.arange(S), R, d.rope_theta)
     k_pe = apply_rope_half_split(kv[:, L:], cos, sin)
     # The sink is replicated, stored in core head order as sparse_sdpa's bf16 sink / scale (rounding covered by the
