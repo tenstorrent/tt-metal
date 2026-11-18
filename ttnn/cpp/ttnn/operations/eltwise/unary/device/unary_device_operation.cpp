@@ -9,6 +9,7 @@
 #include "ttnn/operation.hpp"
 #include "ttnn/tensor/tensor_utils.hpp"
 #include "ttnn/tensor/tensor_ops.hpp"
+#include <tt-metalium/constants.hpp>
 
 #include <bit>
 #include <cstdint>
@@ -93,6 +94,8 @@ bool unary_op_supports_integer_dtype(UnaryOpType op_type, DataType dtype) {
     }
 }
 
+}  // namespace
+
 void validate_integer_input_dtype(const std::vector<EltwiseUnaryWithParam>& op_chain, DataType input_dtype) {
     if (!is_integer_dtype(input_dtype)) {
         return;
@@ -111,8 +114,6 @@ void validate_integer_input_dtype(const std::vector<EltwiseUnaryWithParam>& op_c
             input_dtype);
     }
 }
-
-}  // namespace
 
 ttsl::hash::hash_t UnaryDeviceOperation::operation_attributes_t::to_hash() const {
     // Params are embedded bit-for-bit in kernel defines, but std::hash<float> equates +0.0 and -0.0.
@@ -157,6 +158,25 @@ void UnaryDeviceOperation::validate_on_program_cache_miss(
     TT_FATAL(
         input_tensor.is_allocated(), "Unary: Operands need to be allocated in buffers on the device. Buffer is null.");
 
+    auto validate_tile_shape = [](const Tensor& tensor, const char* name) {
+        if (tensor.layout() != Layout::TILE) {
+            return;
+        }
+        const auto tile_shape = tensor.tensor_spec().tile().get_tile_shape();
+        TT_FATAL(
+            tile_shape[0] == tt::constants::TILE_HEIGHT && tile_shape[1] == tt::constants::TILE_WIDTH,
+            "Unary supports only {}x{} tiles, but {} has a {}x{} tile",
+            tt::constants::TILE_HEIGHT,
+            tt::constants::TILE_WIDTH,
+            name,
+            tile_shape[0],
+            tile_shape[1]);
+    };
+    validate_tile_shape(input_tensor, "the input tensor");
+    if (output_tensor.has_value()) {
+        validate_tile_shape(*output_tensor, "the output tensor");
+    }
+
     validate_integer_input_dtype(args.op_chain, input_tensor.dtype());
 
     // The compute kernel and its scalar runtime args come from op_chain[0] alone, and dedicated kernels
@@ -197,6 +217,28 @@ void UnaryDeviceOperation::validate_on_program_cache_miss(
                 "Unary: LGAMMA requires BFLOAT16 or FLOAT32 output, got dtype {}",
                 static_cast<int>(effective_out));
             break;
+        }
+    }
+
+    // QUICK_GELU exists only as a generated kernel, which the unary program selects for a lone op on
+    // BFLOAT16 input and output with FP32 DEST off; it has no kernel of its own for any other call.
+    for (const auto& op : args.op_chain) {
+        if (op.type() == operations::unary::UnaryOpType::QUICK_GELU) {
+            const DataType effective_out = output_tensor.has_value() ? output_tensor->dtype() : args.output_dtype;
+            TT_FATAL(
+                utils::get_bf16_kernel_defines(
+                    args.op_chain,
+                    input_tensor.dtype(),
+                    effective_out,
+                    args.fp32_dest_acc_en,
+                    input_tensor.device()->arch())
+                    .has_value(),
+                "Unary: QUICK_GELU runs only as the only op of its chain, on BFLOAT16 input and output with FP32 "
+                "DEST off, on Blackhole (chain has {} ops, "
+                "input dtype {}, output dtype {})",
+                args.op_chain.size(),
+                input_tensor.dtype(),
+                effective_out);
         }
     }
 
