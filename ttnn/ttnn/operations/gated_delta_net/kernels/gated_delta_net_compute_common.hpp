@@ -452,6 +452,10 @@ ALWI void silu_tile_bf16(uint32_t dst) {
 #ifndef GDN_RSQRT_COL0
 #define GDN_RSQRT_COL0 0
 #endif
+// Host ROW_SUM_EVEN: row sums whose rounding does not depend on the row (see row_sum_even).
+#ifndef GDN_ROWSUM_EVEN
+#define GDN_ROWSUM_EVEN 0
+#endif
 #ifndef GDN_SILU_MID
 #define GDN_SILU_MID 0
 #endif
@@ -1029,8 +1033,71 @@ struct RsqrtPost {
     }
 };
 
+// GDN_ROWSUM_EVEN: the row sum with every row's 32 columns added in one order. The SFPU row reduce behind
+// ckl::reduce (perform_reduce_row_face_pair) folds the four 4-row groups of a face pair in one merged butterfly, in
+// which a group's 8 column partials are paired by the group's index (group 0 adds columns (0,1), group 1 (1,2), ...):
+// the same row data sums to a different last bit in another group. Sequences that share a tile row (batched calls)
+// then get results that depend on their row offset. Here each pair of 4-row groups takes the plain butterfly
+// (rotate by 4, 2, 1; horizontal_reduce), the same for every group. Else as ckl::reduce's Accurate fp32 row path:
+// the tiles added in DEST (fp32 SFPU), reduced in place, post_op, packed with the column-0 mask.
+template <uint32_t sq_cb, uint32_t out_cb, typename PostOp>
+ALWI void row_sum_even(Buffers& bufs, DataflowBuffer& sq_buf, DataflowBuffer& out_buf, uint32_t width, PostOp post_op) {
+    // A role that never runs this instantiates it with a CB it does not have (format Invalid).
+    constexpr DataFormat src_fmt = static_cast<DataFormat>(unpack_src_format[sq_cb]);
+    constexpr DataFormat fmt = src_fmt == DataFormat::Invalid ? DataFormat::Float32 : src_fmt;
+    reconfig_data_format(sq_cb, cb_reduce_scaler);
+    pack_reconfig_data_format(out_cb);
+    copy_init(sq_cb);
+    bufs.scaler.wait_front(1);
+    PACK((llk_pack_reduce_mask_config<ReduceDim::REDUCE_ROW, PackMode::Default>(out_cb)));
+    sq_buf.wait_front(width);
+    tile_regs_acquire();
+    if (width > 1) {
+        add_binary_tile_init();
+    }
+    copy_tile(sq_cb, 0, 0);
+    for (uint32_t wt = 1; wt < width; ++wt) {
+        copy_tile(sq_cb, wt, 1);
+        add_binary_tile(0, 1, 0);
+    }
+    sfpu_reduce_init<PoolType::SUM, fmt>();  // the vertical tree add in replay slots [0, 6)
+#ifdef TRISC_MATH
+    {
+        using namespace ckernel;
+        using namespace ckernel::sfpu;
+        constexpr InstrModLoadStore mode = GetSfpLoadStoreInstrMod<fmt, DST_ACCUM_MODE>();
+        _llk_math_eltwise_sfpu_start_(0);
+#pragma GCC unroll 4
+        for (uint32_t pair = 0; pair < 4; ++pair) {  // tile rows [8 * pair, 8 * pair + 8)
+            const uint32_t a = (pair >> 1) * 2 * ROWS_PER_FACE + (pair & 1) * 2 * ROWS_PER_LOAD;
+            const uint32_t b = a + ROWS_PER_LOAD;
+            load_row_group<p_sfpu::LREG0, mode, false, false>(a);
+            load_row_group<p_sfpu::LREG4, mode, false, false>(b);
+            lltt::replay(0, 6);
+            horizontal_reduce();
+            TT_SFPSTORE(p_sfpu::LREG0, mode, ADDR_MOD_7, a);
+            TT_SFPSTORE(p_sfpu::LREG4, mode, ADDR_MOD_7, b);
+        }
+        _llk_math_eltwise_sfpu_done_();
+    }
+#endif
+    post_op(0);
+    out_buf.reserve_back(1);
+    tile_regs_commit();
+    tile_regs_wait();
+    pack_tile(0, out_cb);
+    tile_regs_release();
+    out_buf.push_back(1);
+    sq_buf.pop_front(width);
+    PACK((llk_pack_reduce_mask_clear()));
+}
+
 template <uint32_t sq_cb, uint32_t out_cb, typename PostOp>
 ALWI void row_sum(Buffers& bufs, DataflowBuffer& sq_buf, DataflowBuffer& out_buf, uint32_t width, PostOp post_op) {
+    if constexpr (GDN_ROWSUM_EVEN != 0) {
+        row_sum_even<sq_cb, out_cb>(bufs, sq_buf, out_buf, width, post_op);
+        return;
+    }
     ckl::reduce<
         PoolType::SUM,
         ReduceDim::REDUCE_ROW,
