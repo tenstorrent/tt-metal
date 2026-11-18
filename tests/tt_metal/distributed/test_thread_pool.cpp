@@ -19,6 +19,7 @@
 
 #include <tt-metalium/mesh_device.hpp>
 
+#include "tt_metal/impl/threading/thread_binding.hpp"
 #include "tt_metal/impl/threading/thread_pool.hpp"
 #include "impl/context/metal_context.hpp"
 #include "impl/context/context_types.hpp"
