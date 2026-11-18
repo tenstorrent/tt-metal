@@ -37,6 +37,20 @@ def test_sink_pushes_one_message_per_span():
     ]
 
 
+def test_chunk_failed_pushes_one_flagged_message():
+    producer = FakeProducer()
+    make(producer).chunk_failed(slot_id=5, pos_start=5120, pos_end=10213)
+    assert producer.attempts == [
+        dict(slot_id=5, pos_start=5120, pos_end=10213, layer_start=0, layer_end=0, flags=writer_mod.CHUNK_FAILED)
+    ]
+
+
+def test_chunk_failed_matches_the_binding():
+    from ttnn._experimental.layer_completion import CHUNK_FAILED
+
+    assert writer_mod.CHUNK_FAILED == CHUNK_FAILED
+
+
 def test_sink_waits_on_a_full_ring_and_warns_at_a_cadence(monkeypatch):
     """A full ring is backpressure, not an error: wait, one warning on entry and one per
     LOG_EVERY_S while waiting, never a raise."""

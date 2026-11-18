@@ -33,6 +33,7 @@ void bind_layer_completion_api(nb::module_& mod) {
     using tt::tt_metal::internal::LayerCompletionRouterConfig;
 
     mod.doc() = "Pipelined-prefill layer-completion ring/router.";
+    mod.attr("CHUNK_FAILED") = tt::tt_metal::internal::kLayerCompletionChunkFailed;
 
     nb::class_<LayerCompletionQueue>(mod, "LayerCompletionQueue")
         .def_static(
@@ -54,14 +55,15 @@ void bind_layer_completion_api(nb::module_& mod) {
                uint32_t pos_start,
                uint32_t pos_end,
                uint32_t layer_start,
-               uint32_t layer_end) {
+               uint32_t layer_end,
+               uint32_t flags) {
                 return self.try_push(LayerCompletionMessage{
                     slot_id,
                     pos_start,
                     pos_end,
                     layer_start,
                     layer_end,
-                    0u,
+                    flags,
                     tt::tt_metal::internal::layer_completion_host_timestamp_ns()});
             },
             nb::arg("slot_id"),
@@ -69,7 +71,9 @@ void bind_layer_completion_api(nb::module_& mod) {
             nb::arg("pos_end"),
             nb::arg("layer_start"),
             nb::arg("layer_end"),
-            "Producer push, stamped with the host time. Returns False (no write) when the ring is full.")
+            nb::arg("flags") = 0u,
+            "Producer push, stamped with the host time. flags is 0 for a completion or CHUNK_FAILED. Returns False (no "
+            "write) when the ring is full.")
         .def(
             "try_pop",
             [](LayerCompletionQueue& self)

@@ -13,6 +13,7 @@ from loguru import logger
 
 LAYER_COMPLETION_PUSH_SPIN_LOG_EVERY_S = 10.0
 LAYER_COMPLETION_PUSH_SPIN_SLEEP_S = 0.001
+CHUNK_FAILED = 1  # ttnn._experimental.layer_completion.CHUNK_FAILED, kept here so this module stays ttnn-free
 
 
 def _push_with_spin(try_push, *, what: str, is_shutdown) -> None:
@@ -38,6 +39,12 @@ class LayerCompletionSink(ABC):
     def layers_completed(self, layer_start: int, layer_end: int, slot_id: int, pos_start: int, pos_end: int) -> None:
         """Global layers [layer_start, layer_end) of the chunk (slot_id, positions [pos_start, pos_end))."""
 
+    @abstractmethod
+    def chunk_failed(self, slot_id: int, pos_start: int, pos_end: int) -> None:
+        """Fail the request whose chunk this is; its layers are still reported. Only stage 0 (the master rank by
+        default) calls it, before the forward's first layer, so it reaches the consumer before the chunk's last layer
+        completion."""
+
 
 class LayerCompletionRingWriter(LayerCompletionSink):
     """One message per span into the rank's ring."""
@@ -50,8 +57,16 @@ class LayerCompletionRingWriter(LayerCompletionSink):
         fields = dict(
             slot_id=slot_id, pos_start=pos_start, pos_end=pos_end, layer_start=layer_start, layer_end=layer_end
         )
+        self._push(fields, f"slot {slot_id} [{pos_start},{pos_end}) layers [{layer_start},{layer_end})")
+
+    def chunk_failed(self, slot_id, pos_start, pos_end) -> None:
+        fields = dict(
+            slot_id=slot_id, pos_start=pos_start, pos_end=pos_end, layer_start=0, layer_end=0, flags=CHUNK_FAILED
+        )
+        self._push(fields, f"slot {slot_id} [{pos_start},{pos_end}) failed")
+
+    def _push(self, fields: dict, what: str) -> None:
         if not self._producer.try_push(**fields):
-            what = f"slot {slot_id} [{pos_start},{pos_end}) layers [{layer_start},{layer_end})"
             _push_with_spin(lambda: self._producer.try_push(**fields), what=what, is_shutdown=self._is_shutdown)
 
 
@@ -59,4 +74,7 @@ class NullLayerCompletionSink(LayerCompletionSink):
     """No-op sink for warm passes (see TtPrefillRuntime.compile)."""
 
     def layers_completed(self, layer_start, layer_end, slot_id, pos_start, pos_end) -> None:
+        return None
+
+    def chunk_failed(self, slot_id, pos_start, pos_end) -> None:
         return None
