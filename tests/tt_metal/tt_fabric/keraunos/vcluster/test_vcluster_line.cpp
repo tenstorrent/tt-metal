@@ -10,6 +10,9 @@
 
 #include <gtest/gtest.h>
 
+#include <fmt/format.h>
+#include <yaml-cpp/yaml.h>
+
 #include <cstdint>
 #include <cstdlib>
 #include <filesystem>
@@ -40,16 +43,6 @@ const char* env(const char* name) {
     return value != nullptr && *value != '\0' ? value : nullptr;
 }
 
-// The router slot of `device` at Ethernet channel `port`, if any.
-std::optional<vc::Slot> router_at(const vc::Device& device, uint32_t port) {
-    for (const auto& slot : device.slots) {
-        if (slot.role == vc::SlotRole::Router && slot.port == port) {
-            return slot;
-        }
-    }
-    return std::nullopt;
-}
-
 const vc::Device& device_of_chip(const vc::Manifest& manifest, uint32_t fabric_chip) {
     for (const auto& device : manifest.devices) {
         if (device.fabric_chip == fabric_chip) {
@@ -60,7 +53,18 @@ const vc::Device& device_of_chip(const vc::Manifest& manifest, uint32_t fabric_c
 }
 
 // The opened cluster is the manifest's, and the failure names the first difference.
-void expect_cluster_is_manifest(const vc::Manifest& manifest) {
+// The core keraunos.cores of the package SoC descriptor gives CCE `cce` of HSIO tile `tile`, as "x-y"; empty when it
+// lists none.
+std::string package_core(const YAML::Node& package, uint32_t tile, uint32_t cce) {
+    for (const auto& entry : package["keraunos"]["cores"]) {
+        if (entry["hsio"].as<uint32_t>() == tile && entry["cce"].as<uint32_t>() == cce) {
+            return entry["core"].as<std::string>();
+        }
+    }
+    return "";
+}
+
+void expect_cluster_is_manifest(const vc::Manifest& manifest, const YAML::Node& package) {
     const auto& control_plane = MetalContext::instance().get_control_plane();
     const auto& cluster = MetalContext::instance().get_cluster();
     const auto num_chips = static_cast<uint32_t>(tt::tt_metal::GetNumAvailableDevices());
@@ -92,25 +96,22 @@ void expect_cluster_is_manifest(const vc::Manifest& manifest) {
         for (const uint32_t port : ports) {
             const vc::Slot slot = *vc::find_router(manifest, {device.name, port});
             const CoreCoord core = cluster.get_soc_desc(chip).get_eth_core_for_channel(port, tt::CoordSystem::NOC0);
-            ASSERT_EQ(core, CoreCoord(4 + slot.cce, slot.tile))
-                << "device " << device.name << " port " << port << ": router core " << core.str() << ", slot is tile "
-                << slot.tile << " cce " << slot.cce;
+            // The package's core for the slot's CCE, as "x-y"; empty when keraunos.cores lists none.
+            const YAML::Node entry = vc::keraunos_core_entry(package["keraunos"]["cores"], {slot.tile, slot.cce});
+            const std::string expected = entry ? entry["core"].as<std::string>() : "";
+            ASSERT_EQ(fmt::format("{}-{}", core.x, core.y), expected)
+                << "device " << device.name << " port " << port << ": router core " << core.str()
+                << ", the package's core for the slot's tile " << slot.tile << " cce " << slot.cce << " is '"
+                << expected << "'";
         }
     }
 
     // The cluster's connection of each link's two ports joins exactly those two.
     for (size_t i = 0; i < manifest.links.size(); ++i) {
         const auto& link = manifest.links[i];
-        uint32_t a_chip = 0;
-        uint32_t b_chip = 0;
-        for (const auto& device : manifest.devices) {
-            if (device.name == link.a.device) {
-                a_chip = device.fabric_chip;
-            }
-            if (device.name == link.b.device) {
-                b_chip = device.fabric_chip;
-            }
-        }
+        // check_manifest() refuses a link end naming no device.
+        const uint32_t a_chip = vc::find_device(manifest, link.a.device)->fabric_chip;
+        const uint32_t b_chip = vc::find_device(manifest, link.b.device)->fabric_chip;
         const auto [peer, peer_chan] =
             control_plane.get_connected_mesh_chip_chan_ids(FabricNodeId(mesh, a_chip), link.a.port);
         ASSERT_EQ(peer, FabricNodeId(mesh, b_chip))
@@ -151,7 +152,12 @@ void expect_workers_are_the_lines(const vc::Manifest& manifest) {
     EXPECT_EQ(workers, expected) << "the workers are not beside the routers that face the line on its two ends";
 }
 
-class VclusterLine : public KeraunosCoLaunchedWorkers {};
+// With TT_VCLUSTER_MANIFEST set, every skip but Mock's is a failure, so this fixture does not skip in SetUp when fewer
+// than two devices are open (BaseFabricFixture::SetUp); FromManifest checks the device count itself.
+class VclusterLine : public KeraunosCoLaunchedWorkers {
+protected:
+    void SetUp() override {}
+};
 
 TEST_F(VclusterLine, FromManifest) {
     const char* manifest_path = env("TT_VCLUSTER_MANIFEST");
@@ -168,19 +174,29 @@ TEST_F(VclusterLine, FromManifest) {
         ADD_FAILURE() << "row " << static_cast<uint32_t>(finding.check) << ": " << finding.detail;
     }
     ASSERT_TRUE(findings.empty()) << "the manifest fails the checks";
+    const YAML::Node package_desc = YAML::LoadFile(package.string());
+
+    // run_line_unicast() skips off Quasar and when a NOC link's chip is beyond the open chips; with a manifest set,
+    // either means the environment is not the manifest's (env.emu or env.mock not exported), so it fails here instead.
+    ASSERT_EQ(MetalContext::instance().get_cluster().arch(), tt::ARCH::QUASAR) << "the open cluster is not Keraunos";
+    ASSERT_EQ(tt::tt_metal::GetNumAvailableDevices(), manifest.devices.size())
+        << "the open chips are not the manifest's devices; export the generated env.emu or env.mock";
 
     // The open, with the cluster and worker checks after it and before any traffic; the traffic and its checks follow
     // in run_line_unicast().
     bool checked_after_open = false;
     run_line_unicast(vc::noc_links(manifest), [&] {
         checked_after_open = true;
-        expect_cluster_is_manifest(manifest);
+        expect_cluster_is_manifest(manifest, package_desc);
         if (HasFatalFailure()) {
             return;
         }
         expect_workers_are_the_lines(manifest);
     });
-    if (!IsSkipped() && !HasFatalFailure()) {
+    if (IsSkipped() && !is_mock()) {
+        ADD_FAILURE() << "run_line_unicast() skipped off Mock with a manifest set";
+    }
+    if (!HasFatalFailure()) {
         EXPECT_TRUE(checked_after_open) << "run_line_unicast() did not run the checks after the open";
     }
 }
