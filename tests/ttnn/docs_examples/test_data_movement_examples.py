@@ -238,6 +238,16 @@ def test_gather(device):
     logger.info(f"Gathered Tensor Shape: {gathered_tensor.shape}")  # Shape([4, 2])
 
 
+def test_stack(device):
+    # Create two tensors of the same shape
+    tensor1 = ttnn.rand((2, 2), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, seed=1)
+    tensor2 = ttnn.rand((2, 2), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, seed=2)
+
+    # Stack them along a new dimension 1
+    stacked_tensor = ttnn.stack([tensor1, tensor2], dim=1)
+    logger.debug(f"Stacked Tensor Shape: {stacked_tensor.shape}")  # Shape([2, 2, 2])
+
+
 def test_sort(device):
     # Create a tensor
     input_tensor = torch.Tensor([[3, 1, 2], [3, 1, 2]])
