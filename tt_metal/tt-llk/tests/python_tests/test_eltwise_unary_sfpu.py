@@ -8,7 +8,6 @@ from itertools import product
 
 import pytest
 import torch
-from conftest import wormhole_only
 from helpers.chip_architecture import ChipArchitecture
 from helpers.constraints import distinct_dest_accumulation_modes
 from helpers.data_format_inference import (
@@ -1445,7 +1444,6 @@ def _compare_zero_bit_stimulus(input_format, num_elements):
     return values.repeat(num_elements // values.numel() + 1)[:num_elements]
 
 
-@wormhole_only
 @parametrize(
     formats=[
         InputOutputFormat(DataFormat.Float32, DataFormat.Float32),
