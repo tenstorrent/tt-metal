@@ -6,6 +6,7 @@
 #include "paged_fused_update_cache_device_operation_types.hpp"
 #include "ttnn/device_operation.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
+#include "ttnn/operations/core/program_cache_l1.hpp"
 #include <tt-metalium/buffer.hpp>
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/core_coord.hpp>
@@ -277,6 +278,22 @@ void PagedFusedUpdateCacheDeviceOperation::validate_on_program_cache_miss(
         "input_tensor1 ({}) and input_tensor2 ({}) must have same number of cores",
         input1_cores,
         input2_cores);
+
+    if (operation_attributes.rows_per_user > 1) {
+        // The multi-row untilized-input buffer grows with rows_per_user * head_dim, so a valid shape can
+        // outgrow the L1 below the input shards; refuse it here instead of failing in buffer allocation.
+        const uint64_t needed_l1 =
+            PagedTiledFusedUpdateCacheProgramFactory::program_l1_bytes_per_core(operation_attributes, tensor_args);
+        const uint64_t free_l1 = ttnn::operations::core::available_program_l1_capacity(input_tensor1.device());
+        TT_FATAL(
+            needed_l1 <= free_l1,
+            "rows_per_user ({}) with head_dim {} needs {} B of L1 per core for the program's buffers, but only {} B "
+            "are free below the allocated L1 tensors",
+            operation_attributes.rows_per_user,
+            cache_tensor1.padded_shape()[-1],
+            needed_l1,
+            free_l1);
+    }
 }
 
 PagedFusedUpdateCacheDeviceOperation::spec_return_value_t PagedFusedUpdateCacheDeviceOperation::compute_output_specs(

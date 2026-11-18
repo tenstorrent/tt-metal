@@ -309,3 +309,17 @@ def test_multi_row_refuses_more_heads_than_a_tile(device, expect_error):
         ttnn.experimental.paged_fused_update_cache(
             k, ks, v, vs, update_idxs_tensor=_index(device, T), page_table=pt, rows_per_user=T
         )
+
+
+def test_multi_row_refuses_buffers_larger_than_l1(device, expect_error):
+    """32 rows of head_dim 256: the untilized-input buffer alone takes 512 KB of L1 per core, beside two 512 KB input
+    shards."""
+    n, T, hd = 1, 32, 256
+    k, v = _paged_caches(device, n, hd)
+    x = _tiles(torch.randn(n, T, 1, hd), n, T, 1, hd)
+    ks, vs = _sharded(x, n, n, T * TILE, device), _sharded(x, 0, n, T * TILE, device)
+    pt = ttnn.from_torch(torch.arange(1, NB + 1, dtype=torch.int32).reshape(1, NB), dtype=ttnn.int32, device=device)
+    with expect_error(RuntimeError, "B of L1 per core"):
+        ttnn.experimental.paged_fused_update_cache(
+            k, ks, v, vs, update_idxs_tensor=_index(device, T), page_table=pt, rows_per_user=T
+        )
