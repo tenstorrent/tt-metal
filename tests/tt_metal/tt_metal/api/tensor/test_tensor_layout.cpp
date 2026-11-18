@@ -473,6 +473,26 @@ INSTANTIATE_TEST_SUITE_P(
             .expected_alignment = tt::tt_metal::Alignment({32, 96}),
         }));
 
+// A 2D-sharded tensor keeps the given height padding; a TILE one also keeps the given width padding, while a
+// ROW_MAJOR one is padded to its shard width.
+TEST(TensorLayoutTests, FromPaddedShapeKeepsPaddingOf2DShardedTensors) {
+    const NodeRangeSet nodes(NodeRange{NodeCoord{0, 0}, NodeCoord{1, 0}});
+    const auto padded_shape_of =
+        [](const Layout layout, const MemoryConfig& memory_config, const Shape& shape, const Shape& padded_shape) {
+            const TensorLayout tensor_layout = tt::tt_metal::experimental::tensor_layout_from_padded_shape(
+                DataType::BFLOAT16, PageConfig(layout), memory_config, shape, padded_shape);
+            return tensor_layout.impl().compute_padded_shape(shape);
+        };
+
+    const MemoryConfig tile_config{
+        TensorMemoryLayout::HEIGHT_SHARDED, BufferType::L1, ShardSpec{nodes, {32, 64}, ShardOrientation::ROW_MAJOR}};
+    EXPECT_EQ(padded_shape_of(Layout::TILE, tile_config, Shape{30, 40}, Shape{64, 64}), Shape({64, 64}));
+
+    const MemoryConfig row_major_config{
+        TensorMemoryLayout::HEIGHT_SHARDED, BufferType::L1, ShardSpec{nodes, {16, 16}, ShardOrientation::ROW_MAJOR}};
+    EXPECT_EQ(padded_shape_of(Layout::ROW_MAJOR, row_major_config, Shape{30, 10}, Shape{32, 12}), Shape({32, 16}));
+}
+
 // A custom alignment is combined with the default one so that the padded shape is a multiple of both.
 TEST(TensorLayoutTests, CustomAlignmentCombinesWithDefaultByLcm) {
     const MemoryConfig memory_config(

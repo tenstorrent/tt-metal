@@ -57,23 +57,19 @@ Alignment legacyShapeToAlignment(
         alignment_can_be_2D &= logical_shape[i] == legacy_padded_shape[i];
     }
 
-    // 2D SHARDED
+    // 2D SHARDED: check, then use the same height/width alignment as interleaved tensors below.
     if (memory_config.shard_spec().has_value()) {
         TT_FATAL(
             alignment_can_be_2D,
             "Tensor with shape {} ({}) cannot be sharded because alignment will have rank greater than 2!",
             logical_shape,
             legacy_padded_shape);
-        if (page_config.get_layout() == Layout::ROW_MAJOR) {
-            const auto& shard_spec = memory_config.shard_spec().value();
-            return Alignment{shard_spec.shape[1]};
-        }
-        return Alignment{};
     }
 
     const auto [height_overpadded, width_overpadded] =
         get_inner_hw_overpadded(logical_shape, legacy_padded_shape, page_config);
-    // INTERLEAVED with only height/width padding
+    // Only height/width padding: interleaved and 2D-sharded tensors use the same alignment, so a 2D-sharded tensor
+    // keeps the given padding.
     if (alignment_can_be_2D) {
         ttsl::SmallVector<uint32_t> values(std::min((int)padded_rank, 2));
         const auto alignment_size = values.size();
