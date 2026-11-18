@@ -7,6 +7,8 @@
 #include "api/dataflow/noc.h"
 #include "api/dataflow/circular_buffer.h"
 #include "api/dataflow/noc_semaphore.h"
+#include "api/dataflow/endpoints.h"
+#include "api/core_local_mem.h"
 #include "api/buffer_types.hpp"
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_connection_manager.hpp"
 #include "tt_metal/fabric/hw/inc/noc_addr.h"
@@ -137,18 +139,31 @@ void kernel_main() {
         cb0.wait_front(num_tiles_to_read_this_core);
         size_t l1_read_addr = cb0.get_read_ptr();
 
-        uint64_t noc0_dest_noc_addr =
-            get_noc_addr(core_noc_x[core_id], core_noc_y[core_id], tensor_address0, 0 /*noc_id*/);
-        noc0_dest_noc_addr += shard_tile_id * tensor0_page_size;
+        const uint32_t dest_addr = tensor_address0 + shard_tile_id * tensor0_page_size;
+        uint64_t noc0_dest_noc_addr = get_noc_addr(core_noc_x[core_id], core_noc_y[core_id], dest_addr, 0 /*noc_id*/);
+        const uint32_t payload_size_bytes = num_tiles_to_read_this_core * tensor0_page_size;
 
+        // Write the payload to this device's output, then send it to the forward and backward devices.
+        noc_obj.async_write(
+            CoreLocalMem<uint8_t>(l1_read_addr),
+            UnicastEndpoint{},
+            payload_size_bytes,
+            {},
+            {.noc_x = core_noc_x[core_id], .noc_y = core_noc_y[core_id], .addr = dest_addr});
+        if (fabric_connection.has_forward_connection()) {
+            pkt_hdr_forward->to_noc_unicast_write(
+                tt::tt_fabric::NocUnicastCommandHeader{noc0_dest_noc_addr}, payload_size_bytes);
+            perform_payload_send(
+                fabric_connection.get_forward_connection(), l1_read_addr, payload_size_bytes, pkt_hdr_forward);
+        }
+        if (fabric_connection.has_backward_connection()) {
+            pkt_hdr_backward->to_noc_unicast_write(
+                tt::tt_fabric::NocUnicastCommandHeader{noc0_dest_noc_addr}, payload_size_bytes);
+            perform_payload_send(
+                fabric_connection.get_backward_connection(), l1_read_addr, payload_size_bytes, pkt_hdr_backward);
+        }
         // This issues a flush barrier
-        write_and_advance_local_read_address_for_fabric_write(
-            noc0_dest_noc_addr,
-            pkt_hdr_forward,
-            pkt_hdr_backward,
-            fabric_connection,
-            l1_read_addr,
-            num_tiles_to_read_this_core * tensor0_page_size);
+        noc_obj.async_writes_flushed();
 
         cb0.pop_front(num_tiles_to_read_this_core);
         tiles_read += num_tiles_to_read_this_core;
