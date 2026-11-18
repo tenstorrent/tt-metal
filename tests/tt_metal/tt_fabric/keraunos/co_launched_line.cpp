@@ -9,7 +9,6 @@
 #include <fmt/format.h>
 
 #include <algorithm>
-#include <array>
 #include <chrono>
 #include <cstdint>
 #include <random>
@@ -22,6 +21,7 @@
 #include <tt-metalium/experimental/fabric/fabric.hpp>
 
 #include "fabric_fixture.hpp"
+#include "hostdev/eth_link.h"
 #include "impl/context/metal_context.hpp"
 #include "impl/context/metal_env_accessor.hpp"
 #include "impl/context/metal_env_impl.hpp"
