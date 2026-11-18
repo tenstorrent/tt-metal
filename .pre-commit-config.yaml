@@ -317,6 +317,24 @@ repos:
           tt_metal/hw/ckernels/(wormhole_b0|blackhole)/metal/.*\.(h|hpp)|
           tt_metal/tt-llk/infra/check_format_field_mask\.py
         )$
+    - id: llk-quasar-no-src-set-stride
+      name: "llk: no set-stride unpack to SrcA/SrcB on Quasar (tt-metal#60241 item 3)"
+      language: pygrep
+      # Set-stride unpacking leaves Src register writes strided, so a later MOVD2A/MOVD2B can be
+      # scattered. Bans the THCON_UNPACKER{0,1} UNPACR_STRIDE_SET_STRIDE config field and
+      # UNPACR_TILE_MISC Unpack_Type 001 (SrcA) / 010 (SrcB) given as a literal. Plain UNPACR_STRIDE
+      # (strided L1 read) is fine.
+      entry: '(UNPACR_STRIDE_SET_STRIDE|UNPACR_TILE_MISC\(\s*(0b0*1|0b0*10|0x0*[12]|[12])\s*(/\*[^*]*\*/\s*)?[,)])'
+      files: |
+        (?x)^(
+          tt_metal/tt-llk/tt_llk_quasar/.*|
+          tt_metal/hw/ckernels/quasar/.*|
+          tt_metal/hw/inc/.*|
+          tt_metal/tt-llk/tests/sources/quasar/.*|
+          ttnn/.*
+        )\.(h|hpp|c|cc|cpp)$
+      # The register-map and instruction-definition headers define these names.
+      exclude: (^|/)(cfg_defines\.h|ckernel_ops\.h)$
     - id: llk-xthread-cfg-wormhole
       name: "llk: cross-thread config write (wormhole)"
       entry: python3 tt_metal/tt-llk/infra/check_cross_thread_cfg.py
