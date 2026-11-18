@@ -25,8 +25,8 @@
 #include "impl/kernels/kernel.hpp"
 
 #include <tt-metalium/experimental/metal2_host_api/program.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
+#include <tt-metalium/workload/run_args/program_run_args.hpp>
+#include <tt-metalium/workload/specification/program_spec.hpp>
 #include <filesystem>
 #include "distributed/mesh_device_impl.hpp"
 #include "impl/context/metal_context.hpp"
@@ -445,13 +445,13 @@ public:
     std::string dprint_file_name;
 
     // Hardware config for a single-threaded data-movement kernel, portable across generations.
-    static experimental::DataMovementHardwareConfig SingleThreadDmConfig(tt::ARCH arch) {
+    static DataMovementHardwareConfig SingleThreadDmConfig(tt::ARCH arch) {
         if (arch == tt::ARCH::QUASAR) {
-            return experimental::DataMovementHardwareConfig{};
+            return DataMovementHardwareConfig{};
         }
-        return experimental::DataMovementHardwareConfig{
+        return DataMovementHardwareConfig{
             .config_1xx =
-                experimental::DataMovementHardwareConfig::DataMovement1XXConfig{
+                DataMovementHardwareConfig::DataMovement1XXConfig{
                     .processor = DataMovementProcessor::RISCV_0,
                     .noc = NOC::NOC_0,
                 },
@@ -520,15 +520,14 @@ public:
     }
 
 private:
-    static constexpr experimental::NodeCoord kPrintNode{0, 0};
-    static inline const experimental::KernelSpecName kPrintKernelName{"dprint"};
+    static constexpr NodeCoord kPrintNode{0, 0};
+    static inline const KernelSpecName kPrintKernelName{"dprint"};
 
     // A one-kernel data-movement ProgramSpec for the DPRINT tests.
-    static experimental::ProgramSpec MakeSingleDmPrintSpec(
-        tt::ARCH arch, const std::string& kernel_path, size_t num_args) {
-        return experimental::ProgramSpec{
+    static ProgramSpec MakeSingleDmPrintSpec(tt::ARCH arch, const std::string& kernel_path, size_t num_args) {
+        return ProgramSpec{
             .name = "dprint",
-            .kernels = {experimental::KernelSpec{
+            .kernels = {KernelSpec{
                 .unique_id = kPrintKernelName,
                 .source = std::filesystem::path{kernel_path},
                 .num_threads = 1,
@@ -536,8 +535,7 @@ private:
                 .advanced_options =
                     experimental::KernelAdvancedOptions{.num_runtime_varargs = static_cast<uint32_t>(num_args)},
             }},
-            .work_units = {experimental::WorkUnitSpec{
-                .name = "main", .kernels = {kPrintKernelName}, .target_nodes = kPrintNode}},
+            .work_units = {WorkUnitSpec{.name = "main", .kernels = {kPrintKernelName}, .target_nodes = kPrintNode}},
         };
     }
 
@@ -547,11 +545,11 @@ private:
         if (runtime_args.empty()) {
             return;
         }
-        experimental::ProgramRunArgs::KernelRunArgs kernel_run_args{.kernel = kPrintKernelName};
+        ProgramRunArgs::KernelRunArgs kernel_run_args{.kernel = kPrintKernelName};
         kernel_run_args.advanced_options.runtime_varargs[kPrintNode] =
             std::vector<uint32_t>(runtime_args.begin(), runtime_args.end());
 
-        experimental::ProgramRunArgs run_args;
+        ProgramRunArgs run_args;
         run_args.kernel_run_args.push_back(std::move(kernel_run_args));
         experimental::SetProgramRunArgs(program, run_args);
     }

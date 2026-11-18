@@ -156,12 +156,12 @@ constexpr auto to_underlying(T t) noexcept
 template <ThreadId thread_id>
 constexpr bool IS_TRISC_THREAD = thread_id == MathThreadId || thread_id == PackThreadId || thread_id == UnpackThreadId;
 
-inline constexpr static std::uint32_t masked_data_format(std::uint32_t data_format)
+inline constexpr std::uint32_t masked_data_format(std::uint32_t data_format)
 {
     return data_format & DATA_FORMAT_CONFIG_MASK;
 }
 
-constexpr static std::uint32_t GET_L1_HEADERLESS_TILE_SIZE(std::uint32_t format)
+constexpr std::uint32_t GET_L1_HEADERLESS_TILE_SIZE(std::uint32_t format)
 {
     switch (masked_data_format(format))
     {
@@ -189,7 +189,7 @@ constexpr static std::uint32_t GET_L1_HEADERLESS_TILE_SIZE(std::uint32_t format)
     }
 }
 
-constexpr static bool IS_BFP_FORMAT(std::uint32_t format)
+constexpr bool IS_BFP_FORMAT(std::uint32_t format)
 {
     switch (masked_data_format(format))
     {
@@ -205,7 +205,7 @@ constexpr static bool IS_BFP_FORMAT(std::uint32_t format)
     }
 }
 
-constexpr static bool IS_BFP_A_FORMAT(std::uint32_t format)
+constexpr bool IS_BFP_A_FORMAT(std::uint32_t format)
 {
     switch (masked_data_format(format))
     {
@@ -218,7 +218,7 @@ constexpr static bool IS_BFP_A_FORMAT(std::uint32_t format)
     }
 }
 
-constexpr static bool IS_A_FORMAT(std::uint32_t format)
+constexpr bool IS_A_FORMAT(std::uint32_t format)
 {
     switch (masked_data_format(format))
     {
@@ -233,7 +233,7 @@ constexpr static bool IS_A_FORMAT(std::uint32_t format)
     }
 }
 
-constexpr static bool IS_8BIT_FORMAT(std::uint32_t format)
+constexpr bool IS_8BIT_FORMAT(std::uint32_t format)
 {
     // We can't use masked_data_format here since we require a whole byte for format recognition in this case
     // in order to get exactly Fp8_e4m3.
@@ -249,7 +249,7 @@ constexpr static bool IS_8BIT_FORMAT(std::uint32_t format)
     }
 }
 
-constexpr static std::uint32_t SCALE_DATUM_SIZE(std::uint32_t format, std::uint32_t datum_count)
+constexpr std::uint32_t SCALE_DATUM_SIZE(std::uint32_t format, std::uint32_t datum_count)
 {
     switch (static_cast<DataFormat>(masked_data_format(format)))
     {
@@ -271,13 +271,13 @@ constexpr static std::uint32_t SCALE_DATUM_SIZE(std::uint32_t format, std::uint3
 // Distinct from SCALE_DATUM_SIZE above: that switches on the full masked format and has no Tf32 case
 // (returns 1 for Tf32), whereas this keys on (fmt & 0x3) and returns 4 for Tf32 -- the behavior
 // register strides need. The two agree on every other format, so they are NOT interchangeable.
-constexpr static std::uint32_t datum_size_in_bytes(const std::uint32_t format)
+constexpr std::uint32_t datum_size_in_bytes(const std::uint32_t format)
 {
     return (format & 0x3) == to_underlying(DataFormat::Float32) ? 4 : (format & 0x3) == to_underlying(DataFormat::Float16) ? 2 : 1;
 }
 
 // True if the format is Int8 or Int32 -- the formats that enable INT8 math (ALU_ACC_CTRL_INT8_math_enabled).
-constexpr static bool is_int8_or_int32_format(const std::uint32_t format)
+constexpr bool is_int8_or_int32_format(const std::uint32_t format)
 {
     return (masked_data_format(format) == to_underlying(DataFormat::Int8)) || (format == to_underlying(DataFormat::Int32));
 }

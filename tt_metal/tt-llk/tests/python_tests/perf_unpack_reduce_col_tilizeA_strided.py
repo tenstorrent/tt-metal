@@ -8,8 +8,8 @@ from helpers.perf.core import ALL_PERF_RUN_TYPES
 from helpers.tile_constants import MAX_FACE_R_DIM
 from test_unpack_reduce_col_tilizeA_strided import (
     UNPACK_REDUCE_COL_TILIZEA_STRIDED_FORMATS,
-    UNPACK_REDUCE_COL_TILIZEA_STRIDED_NUM_FACES,
     UNPACK_REDUCE_COL_TILIZEA_STRIDED_POOL_TYPES,
+    UNPACK_REDUCE_COL_TILIZEA_STRIDED_TILE_DIMENSIONS,
 )
 from test_unpack_reduce_col_tilizeA_strided import (
     test_unpack_reduce_col_tilizeA_strided as run_unpack_reduce_col_tilizeA_strided,
@@ -25,7 +25,13 @@ from test_unpack_reduce_col_tilizeA_strided import (
     formats=UNPACK_REDUCE_COL_TILIZEA_STRIDED_FORMATS,
     dest_acc=unpack_reduce_col_tilizeA_strided_dest_acc,
     max_tiles_per_iter=unpack_reduce_col_tilizeA_strided_max_tiles_per_iter,
-    num_faces=UNPACK_REDUCE_COL_TILIZEA_STRIDED_NUM_FACES,
+    # Perf runs full-face tiles only; the functional sweep also covers the 8x32 and 4x32 partial
+    # face heights.
+    tile_dimensions=[
+        dims
+        for dims in UNPACK_REDUCE_COL_TILIZEA_STRIDED_TILE_DIMENSIONS
+        if dims[0] >= MAX_FACE_R_DIM
+    ],
     pool_type=UNPACK_REDUCE_COL_TILIZEA_STRIDED_POOL_TYPES,
     dest_sync=[DestSync.Half],
     run_types=[ALL_PERF_RUN_TYPES],
@@ -36,7 +42,7 @@ def test_perf_unpack_reduce_col_tilizeA_strided(
     formats,
     dest_acc,
     max_tiles_per_iter,
-    num_faces,
+    tile_dimensions,
     pool_type,
     dest_sync,
     run_types,
@@ -46,9 +52,8 @@ def test_perf_unpack_reduce_col_tilizeA_strided(
         formats,
         dest_acc,
         max_tiles_per_iter,
-        num_faces,
+        tile_dimensions,
         pool_type,
-        MAX_FACE_R_DIM,
         dest_sync,
         is_perf=True,
         perf_report=perf_report,

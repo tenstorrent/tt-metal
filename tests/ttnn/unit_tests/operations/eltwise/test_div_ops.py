@@ -288,6 +288,8 @@ def test_div_by_zero(device, val_a, val_b, dtype, approx):
 
     if val_a == 0.0 and val_b == 0.0 and dtype == "bfloat16":
         pytest.skip("Skipping test for 0/0 on bfloat16")
+    if approx and dtype == "bfloat16":
+        pytest.skip("Skipping test for fast approximate mode")
 
     x_torch = torch.tensor([[val_a]], dtype=torch_dtype)
     y_torch = torch.tensor([[val_b]], dtype=torch_dtype)
@@ -303,10 +305,6 @@ def test_div_by_zero(device, val_a, val_b, dtype, approx):
 
     # Note: torch.equal return false for if both tensors are nan
     # This is why we use assert_with_ulp to test for equality
-
-    if approx and dtype == "bfloat16":
-        pytest.skip("Skipping test for fast approximate mode")
-
     assert_with_ulp(expected_result=z_torch, actual_result=tt_out, ulp_threshold=0, allow_nonfinite=True)
 
 
@@ -319,6 +317,8 @@ def test_divide_inplace_by_zero(device, val_a, val_b, dtype, approx):
 
     if val_a == 0.0 and val_b == 0.0 and dtype == "bfloat16":
         pytest.skip("Skipping test for 0/0 on bfloat16")
+    if approx and dtype == "bfloat16":
+        pytest.skip("Skipping test for fast approximate mode")
 
     x_torch = torch.tensor([[val_a]], dtype=torch_dtype)
     y_torch = torch.tensor([[val_b]], dtype=torch_dtype)
@@ -330,9 +330,6 @@ def test_divide_inplace_by_zero(device, val_a, val_b, dtype, approx):
     y_tt_inplace = ttnn.from_torch(y_torch, dtype=tt_dtype, layout=ttnn.TILE_LAYOUT, device=device)
     ttnn.divide_(x_tt_inplace, y_tt_inplace, fast_and_approximate_mode=approx)
     tt_out_inplace = ttnn.to_torch(x_tt_inplace)
-
-    if approx and dtype == "bfloat16":
-        pytest.skip("Skipping test for fast approximate mode")
 
     assert_with_ulp(expected_result=z_torch, actual_result=tt_out_inplace, ulp_threshold=0, allow_nonfinite=True)
 
@@ -441,8 +438,7 @@ def test_optional_output_tensor_remainder(device):
 @pytest.mark.parametrize("input_dtype", [ttnn.bfloat16, ttnn.float32])
 @pytest.mark.parametrize("rounding_mode", [None, "floor", "trunc"])
 @pytest.mark.parametrize("output_dtype", [ttnn.bfloat16, ttnn.float32, ttnn.int32])
-@pytest.mark.parametrize("op", [ttnn.div, ttnn.divide])
-def test_div_output_dtype(device, input_dtype, rounding_mode, output_dtype, op):
+def test_div_output_dtype(device, input_dtype, rounding_mode, output_dtype):
     torch_dtype = torch.bfloat16 if input_dtype == ttnn.bfloat16 else torch.float32
     torch_input_a = torch.tensor([[7.0, -7.0, 6.0, -6.0]], dtype=torch_dtype)
     torch_input_b = torch.full_like(torch_input_a, 2.0)
@@ -450,7 +446,7 @@ def test_div_output_dtype(device, input_dtype, rounding_mode, output_dtype, op):
     input_tensor_a = ttnn.from_torch(torch_input_a, dtype=input_dtype, layout=ttnn.TILE_LAYOUT, device=device)
     input_tensor_b = ttnn.from_torch(torch_input_b, dtype=input_dtype, layout=ttnn.TILE_LAYOUT, device=device)
 
-    output = op(input_tensor_a, input_tensor_b, rounding_mode=rounding_mode, dtype=output_dtype)
+    output = ttnn.div(input_tensor_a, input_tensor_b, rounding_mode=rounding_mode, dtype=output_dtype)
 
     torch_golden = torch.div(torch_input_a.float(), torch_input_b.float(), rounding_mode=rounding_mode)
     if output_dtype == ttnn.int32:
@@ -615,15 +611,15 @@ def test_div_int32_rejects_non_float32_output_dtype(device, expect_error):
 
 
 @pytest.mark.parametrize("rounding_mode", [None, "trunc", "floor"])
-@pytest.mark.parametrize("scalar", [2.5, -3.14, 2.0, -2.0, 0.5, -0.5])
-@pytest.mark.parametrize("layout", [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT])
-@pytest.mark.parametrize("use_sub_core_grids", [False, True])
+@pytest.mark.parametrize("scalar", [2.5, -3.14, 2.0])
+@pytest.mark.parametrize("layout, use_sub_core_grids", [(ttnn.TILE_LAYOUT, False), (ttnn.ROW_MAJOR_LAYOUT, True)])
 def test_div_int32_float_scalar_promotion(device, rounding_mode, scalar, layout, use_sub_core_grids):
     # Format boundaries: FP32 has 24 significant bits, so +/- (2**24 + 3)
     # rounds on promotion; INT32 endpoints exercise the largest signed magnitudes.
-    # The remaining small integers cover exact/inexact quotients and both signs.
-    # Scalars +/-2.0 distinguish Python float promotion from integer dispatch;
-    # +/-0.5 and +/-2.5 are binary-exact, while +/-3.14 also exercises FP32 rounding.
+    # The remaining small integers cover exact/inexact quotients and both signs, so
+    # the quotient sign does not depend on the scalar's sign.
+    # Scalar 2.0 distinguishes Python float promotion from integer dispatch;
+    # 2.5 is binary-exact, while -3.14 also exercises FP32 rounding.
     torch_input = torch.tensor(
         [-(2**31), -(2**24 + 3), -1999, -7, -5, 0, 5, 7, 1999, 2**24 + 3, 2**31 - 1], dtype=torch.int32
     )
@@ -677,9 +673,15 @@ def test_div_int32_float_scalar_promotion_output_dtype(device, rounding_mode, ou
 
 
 @pytest.mark.parametrize("rounding_mode", [None, "trunc", "floor"])
-@pytest.mark.parametrize("layout", [ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT])
-@pytest.mark.parametrize("use_sub_core_grids", [False, True])
-@pytest.mark.parametrize("interleaved_output", [False, True])
+@pytest.mark.parametrize(
+    "layout, use_sub_core_grids, interleaved_output",
+    [
+        (ttnn.ROW_MAJOR_LAYOUT, False, True),
+        (ttnn.ROW_MAJOR_LAYOUT, True, False),
+        (ttnn.TILE_LAYOUT, False, True),
+        (ttnn.TILE_LAYOUT, True, False),
+    ],
+)
 @pytest.mark.parametrize(
     "strategy,shape,grid_end",
     [

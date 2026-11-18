@@ -46,10 +46,7 @@ where `L` is the rank's KDA layer count and the leading index is `slot * L + lay
 (user-major, as the kvpe cache). The convolution slab's 384-byte page `row0[64c:64c+64] |
 row1[...] | row2[...]` is byte-identical to the ND `[1, 1, (K-1) * 64]` shard, and an interleaved page `p`
 sits at bank `p % N`, offset `(p // N) * 384`, where ND shard `s = p` would sit; the two forms are
-interchangeable for the table. The interleaved form keeps each batch's rows contiguous logical pages,
-so one whole-batch copy writes them. The native convolution tail uses the same `[SEG, (K-1) * 64]`
-rows, so a slab batch is a byte copy of the native tensor and the per-layer convolution export and
-import are one `indexed_entry_copy` each, with no relayout.
+interchangeable for the table. The native convolution tail uses the same `[SEG, (K-1) * 64]` rows.
 
 ## Segment numbering
 
@@ -68,18 +65,15 @@ replicas     one device group per TP column g // H_local, spanning every SP row
 The convolution order is the golden's `[all q | all k | all v]`. The recurrent golden is stored
 `[heads, v, k]`, the transpose of the device's `[k, v]`.
 
-`models/demos/deepseek_v3_d_p/tt/kda/state_adapter.py` owns the geometry, the maps, the per-layer
-export (one `indexed_entry_copy` each of the native recurrent tiles and of the native convolution
-tail, whose pages are the slab's segments), the import (the same copies back into a native carry) and the
-host decoders (`recurrent_segment_to_torch`, `convolution_segment_to_torch`, `assemble_*`). Both take
-the slot as a device tensor and resolve batch `slot * L + layer_position` on device, so a captured
-load or store follows the slot in the traced metadata. The slabs are the KDA carries' only store:
-every K3 KDA layer loads its slot's carry from them and stores the replacement back inside the
-captured region, so the state a reader sees is the one after the last committed chunk, and it lands
-before any later MLA layer acks that chunk, and before the KDA layer's own ack. Nothing clears a
-slot: a request's head chunk (`actual_start == 0`, evaluated on device) loads zeros instead of the
-slot's carry, so from the head until a layer's first store its regions still hold the previous
-request's state, and the slabs start uninitialized.
+`models/demos/deepseek_v3_d_p/tt/kda/state_adapter.py` owns the geometry, the maps, the slabs and the
+host decoders (`recurrent_segment_to_torch`, `convolution_segment_to_torch`, `assemble_*`). Every K3 KDA
+layer (`ttKDA.forward` on `KdaStates.entry`) runs on the slabs directly: the convolution, the SP relay
+and the final carry read batch `slot * L + layer_position` (slot read on device) and write the
+replacement back in place inside the captured region, so the state a reader sees is the one after the
+last committed chunk, and it lands before any later MLA layer acks that chunk, and before the KDA
+layer's own ack. Nothing clears a slot: on a request's head chunk (`actual_start == 0`, evaluated on
+device) the ops start from zeros, so from the head until a layer's first store its regions still hold
+the previous request's state, and the slabs start uninitialized.
 
 ## Reading it back
 
@@ -102,16 +96,3 @@ devices, so run it once per host of a multi-rank run.
 * The state is a fold over the prefix, not position-addressed: decode must resume at exactly the
   prefilled length; replaying a chunk advances it twice.
 * Only the final state after the last chunk is meaningful; per-chunk copies are valid but wasted.
-
-## Measured cost (PR #56443, 8 Blackhole devices, real layer-1 weights, T = 5120)
-
-Whole-tensor round trip native -> contract -> native, bit-identical on every layout:
-
-| layout | layer (ms) | export + import (us) | of layer |
-|---|---:|---:|---:|
-| SP1xTP8 | 9.63 | 29.6 | 0.31% |
-| SP2xTP4 | 9.56 | 36.6 | 0.38% |
-| SP4xTP2 | 9.98 | 56.5 | 0.57% |
-
-The row-major page redistribution in the copy op was parallelised across aligned page units for this
-(`copy_default_row_major_program_factory.cpp`), which is what brought the convolution half down.

@@ -555,7 +555,15 @@ void add_fabric_mux_v2_to_program(
     uint32_t link_idx,
     tt::tt_metal::NOC forwarder_noc = tt::tt_metal::NOC::RISCV_0_default);
 
-// Returns the eth direction in which the data should be forwarded from the src to reach the dest
+// Returns the eth direction in which the data should be forwarded from the src to reach the dest, in
+// `mesh_device`'s context. The device only selects the context: src and dst don't have to belong to it.
+std::optional<eth_chan_directions> get_eth_forwarding_direction(
+    const tt::tt_metal::distributed::MeshDevice& mesh_device,
+    FabricNodeId src_fabric_node_id,
+    FabricNodeId dst_fabric_node_id);
+
+// Same, in the default context.
+[[deprecated("Use the overload that takes a MeshDevice instead. This API will be removed after 2026-12-31.")]]
 std::optional<eth_chan_directions> get_eth_forwarding_direction(
     FabricNodeId src_fabric_node_id, FabricNodeId dst_fabric_node_id);
 

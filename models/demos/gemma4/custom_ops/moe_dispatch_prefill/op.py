@@ -212,7 +212,7 @@ class _FabricPlan:
                     if peer == tuple(coord) or not same_group:
                         continue
                     node = self.node(peer)
-                    direction = ttnn.get_eth_forwarding_direction(src, node)
+                    direction = ttnn.get_eth_forwarding_direction(self.mesh_device, src, node)
                     assert direction is not None, f"no Fabric2D forwarding direction from {coord} to {peer}"
                     if direction not in used:
                         used.add(direction)

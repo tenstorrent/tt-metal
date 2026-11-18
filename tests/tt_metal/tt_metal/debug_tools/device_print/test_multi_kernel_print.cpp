@@ -52,21 +52,20 @@ Program& add_empty_program(distributed::MeshDevice& mesh_device, distributed::Me
 // One print kernel per node, each its own KernelSpec in its own WorkUnit. These tests are about a
 // program carrying several distinct kernels, so this deliberately does not collapse them into a
 // single kernel fanned out over a node range.
-Program make_worker_print_program(
-    distributed::MeshDevice& mesh_device, const std::vector<experimental::NodeCoord>& nodes) {
-    experimental::ProgramSpec spec{.name = "dprint_multi_kernel"};
+Program make_worker_print_program(distributed::MeshDevice& mesh_device, const std::vector<NodeCoord>& nodes) {
+    ProgramSpec spec{.name = "dprint_multi_kernel"};
     for (size_t i = 0; i < nodes.size(); i++) {
-        const experimental::KernelSpecName name{"worker_print_" + std::to_string(i)};
-        spec.kernels.push_back(experimental::KernelSpec{
+        const KernelSpecName name{"worker_print_" + std::to_string(i)};
+        spec.kernels.push_back(KernelSpec{
             .unique_id = name,
             .source = std::filesystem::path{kWorkerKernel},
             .num_threads = 1,
             .hw_config = DevicePrintFixture::SingleThreadDmConfig(mesh_device.arch()),
         });
         spec.work_units.push_back(
-            experimental::WorkUnitSpec{.name = "wu_" + std::to_string(i), .kernels = {name}, .target_nodes = nodes[i]});
+            WorkUnitSpec{.name = "wu_" + std::to_string(i), .kernels = {name}, .target_nodes = nodes[i]});
     }
-    return experimental::MakeProgramFromSpec(mesh_device, spec);
+    return tt_metal::experimental::MakeProgramFromSpec(mesh_device, spec);
 }
 
 EthernetConfig make_active_eth_config() {

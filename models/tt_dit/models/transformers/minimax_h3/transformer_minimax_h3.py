@@ -19,6 +19,7 @@ from ....parallel.manager import CCLManager
 from ....utils.matmul import get_matmul_config, get_matmul_core_grid
 from ....utils.tensor import from_torch, pad_single
 from ....utils.tracing import StateTensor, traced_function
+from .agmm_config import AgmmMode
 from .token_refiner_minimax_h3 import MiniMaxH3TokenRefiner
 from .transformer_block_minimax_h3 import MODALITY_NUM, MiniMaxH3TransformerBlock, onehot_identity
 
@@ -226,9 +227,11 @@ class MiniMaxH3Transformer3DModel(Module):
         kv_gather_capacity: int | None = None,
         use_persistent_ccl_buffers: bool = True,
         dynamic_length: bool = False,
+        agmm_mode: AgmmMode | str | None = None,
     ) -> None:
         """`dynamic_length`: every length-keyed program choice is frozen at construction and the fused norms
-        are sized for `kv_gather_capacity / sp` rows per device. Defaults to the legacy, length-keyed behaviour."""
+        are sized for `kv_gather_capacity / sp` rows per device. Defaults to the legacy, length-keyed behaviour.
+        `agmm_mode` picks that path's all-gather matmul pins (`resolve_agmm_mode`)."""
         super().__init__()
 
         self.hidden_size = hidden_size
@@ -335,6 +338,7 @@ class MiniMaxH3Transformer3DModel(Module):
                     use_persistent_ccl_buffers=use_persistent_ccl_buffers,
                     dynamic_length=dynamic_length,
                     norm_row_capacity=norm_row_capacity,
+                    agmm_mode=agmm_mode,
                 )
                 for _ in range(num_layers)
             ]
