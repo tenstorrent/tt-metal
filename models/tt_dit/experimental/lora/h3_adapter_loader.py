@@ -273,6 +273,8 @@ def _register_fused(attn, qkvs, scale, name, alphas, file_alpha, stack, idx) -> 
         block = torch.zeros(attn.inner_dim, 3 * rank, dtype=b.dtype)
         block[:, position * rank : (position + 1) * rank] = b
         padded.append(block)
+    # Under VSA to_qkv also carries the coarse gate, which the adapter's LoRA does not touch.
+    padded += [torch.zeros_like(padded[0])] * (attn.qkv_chunks - 3)
     b_fused = _interleave_heads_rows(
         padded, attn.n_local_heads, attn.head_dim, attn.parallel_config.tensor_parallel.factor
     )

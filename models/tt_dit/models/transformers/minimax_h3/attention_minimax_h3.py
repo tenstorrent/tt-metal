@@ -144,11 +144,13 @@ class MiniMaxH3Attention(Module):
 
         # Fused QKV: one matmul, output split into three. The state dict is rearranged in
         # `_prepare_torch_state` so that column-parallel fracturing hands each device the same
-        # 14 heads of q, k and v.
+        # 14 heads of q, k and v. Under VSA the coarse gate projection reads the same input, so it
+        # rides along as a fourth chunk with the same head layout.
+        self.qkv_chunks = 3 if vsa_config is None else 4
         self.to_qkv = ColParallelLinear(
             hidden_size,
-            3 * self.inner_dim,
-            chunks=3,
+            self.qkv_chunks * self.inner_dim,
+            chunks=self.qkv_chunks,
             bias=False,
             mesh_device=mesh_device,
             mesh_axis=self.tp_mesh_axis,
@@ -184,17 +186,6 @@ class MiniMaxH3Attention(Module):
         # (`set_vsa_prepass`). The sequence must then be in that geometry's tile order.
         self.vsa_config = vsa_config
         self.vsa_prepass: VSAPrepass | None = None
-        if vsa_config is not None:
-            # Column fracturing hands device d heads [d*n_local, (d+1)*n_local), the heads of its V shard.
-            self.to_gate_compress = ColParallelLinear(
-                hidden_size,
-                self.inner_dim,
-                bias=False,
-                mesh_device=mesh_device,
-                mesh_axis=self.tp_mesh_axis,
-                fsdp_mesh_axis=fsdp_mesh_axis,
-                ccl_manager=ccl_manager,
-            )
 
         # all_gather_minimal_matmul_async folds the TP all-gather into the matmul. Ring only: on a
         # line topology WanAttention measured the unfused path faster, so match that condition.
@@ -245,17 +236,12 @@ class MiniMaxH3Attention(Module):
     def _prepare_torch_state(self, state: dict[str, torch.Tensor]) -> None:
         rename_substate(state, "to_out.0", "to_out")
 
-        if self.vsa_config is not None:
-            if "to_gate_compress.weight" not in state:
-                # The base H3 checkpoint carries no gate; a zero gate makes the coarse branch contribute nothing.
-                state["to_gate_compress.weight"] = torch.zeros(self.inner_dim, self.hidden_size)
-
         def _interleave_heads(tensors: list[torch.Tensor]) -> torch.Tensor:
             """Reorder [out, in] weights so TP column-fracturing gives each device matching heads.
 
             Out dim is `num_heads * head_dim`. Reshaping it to [n_dev, n_local_heads, head_dim] and
-            concatenating the tensors on the heads axis puts device `d`'s q, k and v heads
-            contiguously inside shard `d`, which is also the order `chunks=3` splits them back out in.
+            concatenating the tensors on the heads axis puts device `d`'s q, k, v (and gate) heads
+            contiguously inside shard `d`, which is also the order `chunks` splits them back out in.
             Device `d` therefore owns canonical heads `[d * n_local, (d + 1) * n_local)`, so simply
             all-gathering the attention output on TP rebuilds the canonical 7168-channel order that
             `to_out` expects.
@@ -279,9 +265,12 @@ class MiniMaxH3Attention(Module):
             # [out, in] with out == num_heads * head_dim; permute within each head.
             return weight.reshape(self.num_heads, self.head_dim, -1)[:, perm].reshape(weight.shape)
 
-        state["to_qkv.weight"] = _interleave_heads(
-            [_permute_rotary(q_state["weight"]), _permute_rotary(k_state["weight"]), v_state["weight"]]
-        )
+        weights = [_permute_rotary(q_state["weight"]), _permute_rotary(k_state["weight"]), v_state["weight"]]
+        if self.vsa_config is not None:
+            # The base H3 checkpoint carries no gate; a zero gate makes the coarse branch contribute nothing.
+            gate = state.pop("to_gate_compress.weight", None)
+            weights.append(torch.zeros(self.inner_dim, self.hidden_size) if gate is None else gate)
+        state["to_qkv.weight"] = _interleave_heads(weights)
 
         # The reference's QK-norm affine is one head_dim vector shared by every head. The fused op
         # wants it spanning the whole inner dim, so permute it the same way and repeat per head.
@@ -585,12 +574,14 @@ class MiniMaxH3Attention(Module):
 
         sync = self.mesh_device
         with _timed(timings, "to_qkv", sync=sync):
-            q_1BNF, k_1BNF, v_1BNF = self.to_qkv(
+            q_1BNF, k_1BNF, v_1BNF, *gate = self.to_qkv(
                 spatial_1BND,
                 compute_kernel_config=self.mm_compute_kernel_config,
                 parallel_config=matmul_parallel_config,
                 default_block_size=(
-                    agmm_block_size(self.hidden_size, 3 * self.inner_dim // tp_factor, spatial_1BND.padded_shape[-2])
+                    agmm_block_size(
+                        self.hidden_size, self.qkv_chunks * self.inner_dim // tp_factor, spatial_1BND.padded_shape[-2]
+                    )
                     if self.use_fused_agmm
                     else None
                 ),
@@ -621,7 +612,6 @@ class MiniMaxH3Attention(Module):
             k_BHNE = self.norm_k(k_1BNF, **norm_kwargs)
             v_BHNE = create_heads(v_1BNF)
 
-        block_input_1BND = spatial_1BND
         coarse_1BND = None
         # Sequence is fractured across SP, so attention must gather K/V around the ring.
         # The packed sequence is one attention document and logical_n masks the pad tail, so no mask.
@@ -708,19 +698,10 @@ class MiniMaxH3Attention(Module):
             spatial_1BND = ttnn.unsqueeze(spatial_1BND, 0)
             if coarse_1BND is not None:
                 # Gate and coarse output are both [1, 1, rows, H * D], so the gated add needs no head split.
-                gate_1BND = self.to_gate_compress(
-                    block_input_1BND,
-                    compute_kernel_config=self.mm_compute_kernel_config,
-                    parallel_config=matmul_parallel_config,
-                    default_block_size=agmm_block_size(
-                        self.hidden_size, self.inner_dim // tp_factor, block_input_1BND.padded_shape[-2]
-                    ),
-                    force_transpose=False,
-                    use_persistent_buffer=self.use_persistent_ccl_buffers,
-                )
-                spatial_1BND = ttnn.addcmul(spatial_1BND, gate_1BND, coarse_1BND)
-                ttnn.deallocate(gate_1BND)
+                spatial_1BND = ttnn.addcmul(spatial_1BND, gate[0], coarse_1BND)
                 ttnn.deallocate(coarse_1BND)
+            for g in gate:
+                ttnn.deallocate(g)
 
         # Each device holds canonical heads [d * n_local, (d+1) * n_local), so gathering on TP
         # rebuilds the full inner_dim in canonical order for to_out -- fused into the matmul when

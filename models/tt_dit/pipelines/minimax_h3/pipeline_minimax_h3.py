@@ -84,6 +84,7 @@ from ...parallel.manager import CCLManager
 from ...utils import cache, dram_probe
 from ...utils.conv3d import conv3d_blocking_hash
 from ...utils.tensor import bf16_tensor, from_torch, local_device_to_torch, pad_single
+from ...utils.torch_threads import cap_torch_threads_to_half_the_cpus
 from ...utils.tracing import StateTensor
 from ..events import DenoiseStep, PipelineEventCallback, event_section, null_callback
 from .conditioning import MINIMAX_H3_PIXEL_MEAN as _MINIMAX_H3_PIXEL_MEAN
@@ -1416,8 +1417,9 @@ class MiniMaxH3Pipeline:
         cache.load_model(
             self._transformer,
             model_name=MODEL_NAME,
-            # VSA adds the zero-init `to_gate_compress` weights, so it caches apart.
-            subfolder=f"{self.transformer_subfolder}_{self._dit_weight_mode()}" + ("_vsa" if self.vsa_config else ""),
+            # VSA folds the `to_gate_compress` weights into `to_qkv` as a fourth chunk, so it caches apart.
+            subfolder=f"{self.transformer_subfolder}_{self._dit_weight_mode()}"
+            + ("_vsa_qkvg" if self.vsa_config else ""),
             parallel_config=self.dit_parallel_config,
             mesh_shape=tuple(self.mesh_device.shape),
             mesh_device=self.mesh_device,
@@ -1837,6 +1839,7 @@ class MiniMaxH3Pipeline:
     # ------------------------------------------------------------------ the call
 
     @torch.no_grad()
+    @cap_torch_threads_to_half_the_cpus()
     def __call__(
         self,
         prompt: str,

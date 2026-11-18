@@ -51,6 +51,7 @@ def _attn():
         rotary_dim=HEAD_DIM,
         inner_dim=INNER_DIM,
         n_local_heads=NUM_HEADS,
+        qkv_chunks=3,
         parallel_config=SimpleNamespace(tensor_parallel=SimpleNamespace(factor=1)),
         to_qkv=_CaptureQKV(),
     )
