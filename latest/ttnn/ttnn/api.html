@@ -2100,11 +2100,11 @@ use <code class="docutils literal notranslate"><span class="pre">align_shape_to_
 </div>
 <div class="tt-api-card docutils container">
 <p class="tt-api-card-name"><a class="reference internal" href="api/ttnn.fill_ones_rm.html#ttnn.fill_ones_rm" title="ttnn.fill_ones_rm"><code class="xref py py-obj docutils literal notranslate"><span class="pre">ttnn.fill_ones_rm</span></code></a></p>
-<p class="tt-api-card-desc">Same as <code class="docutils literal notranslate"><span class="pre">fill_rm</span></code>, but <code class="docutils literal notranslate"><span class="pre">val_hi</span></code> is set to <code class="docutils literal notranslate"><span class="pre">1</span></code> and <code class="docutils literal notranslate"><span class="pre">val_lo</span></code> is <code class="docutils literal notranslate"><span class="pre">0</span></code>.</p>
+<p class="tt-api-card-desc">Same as <code class="docutils literal notranslate"><span class="pre">ttnn.fill_rm</span></code> with <cite>val_hi</cite> 1 and <cite>val_lo</cite> 0: creates an <code class="docutils literal notranslate"><span class="pre">[N,</span> <span class="pre">C,</span> <span class="pre">H,</span> <span class="pre">W]</span></code> BFLOAT16 tensor on the device of <cite>any</cite> whose top-left <code class="docutils literal notranslate"><span class="pre">hOnes</span> <span class="pre">x</span> <span class="pre">wOnes</span></code> block in each <code class="docutils literal notranslate"><span class="pre">H</span> <span class="pre">x</span> <span class="pre">W</span></code> plane is 1, and every other element 0.</p>
 </div>
 <div class="tt-api-card docutils container">
 <p class="tt-api-card-name"><a class="reference internal" href="api/ttnn.fill_rm.html#ttnn.fill_rm" title="ttnn.fill_rm"><code class="xref py py-obj docutils literal notranslate"><span class="pre">ttnn.fill_rm</span></code></a></p>
-<p class="tt-api-card-desc">Generates an NCHW row-major tensor and fill it with high values up to hOnes, wOnes in each HW tile with the rest padded with high values.</p>
+<p class="tt-api-card-desc">Creates an <code class="docutils literal notranslate"><span class="pre">[N,</span> <span class="pre">C,</span> <span class="pre">H,</span> <span class="pre">W]</span></code> BFLOAT16 tensor on the device of <cite>any</cite>. In each <code class="docutils literal notranslate"><span class="pre">H</span> <span class="pre">x</span> <span class="pre">W</span></code> plane, the top-left <code class="docutils literal notranslate"><span class="pre">hOnes</span> <span class="pre">x</span> <span class="pre">wOnes</span></code> block holds <cite>val_hi</cite> and every other element holds <cite>val_lo</cite>. For example, with <code class="docutils literal notranslate"><span class="pre">H=3</span></code>, <code class="docutils literal notranslate"><span class="pre">W=4</span></code>, <code class="docutils literal notranslate"><span class="pre">hOnes=1</span></code> and <code class="docutils literal notranslate"><span class="pre">wOnes=2</span></code>, each plane is::.</p>
 </div>
 <div class="tt-api-card docutils container">
 <p class="tt-api-card-name"><a class="reference internal" href="api/ttnn.fold.html#ttnn.fold" title="ttnn.fold"><code class="xref py py-obj docutils literal notranslate"><span class="pre">ttnn.fold</span></code></a></p>
@@ -2216,11 +2216,11 @@ use <code class="docutils literal notranslate"><span class="pre">align_shape_to_
 </div>
 <div class="tt-api-card docutils container">
 <p class="tt-api-card-name"><a class="reference internal" href="api/ttnn.tilize.html#ttnn.tilize" title="ttnn.tilize"><code class="xref py py-obj docutils literal notranslate"><span class="pre">ttnn.tilize</span></code></a></p>
-<p class="tt-api-card-desc">Changes data layout of input tensor to TILE.</p>
+<p class="tt-api-card-desc">Changes the layout of the input tensor from ROW_MAJOR to TILE.</p>
 </div>
 <div class="tt-api-card docutils container">
 <p class="tt-api-card-name"><a class="reference internal" href="api/ttnn.tilize_with_val_padding.html#ttnn.tilize_with_val_padding" title="ttnn.tilize_with_val_padding"><code class="xref py py-obj docutils literal notranslate"><span class="pre">ttnn.tilize_with_val_padding</span></code></a></p>
-<p class="tt-api-card-desc">Changes data layout of input tensor to TILE.</p>
+<p class="tt-api-card-desc">Changes the layout of the input tensor from ROW_MAJOR to TILE, padding it to <cite>output_tensor_shape</cite> with <cite>pad_value</cite>.</p>
 </div>
 <div class="tt-api-card docutils container">
 <p class="tt-api-card-name"><a class="reference internal" href="api/ttnn.tilize_with_zero_padding.html#ttnn.tilize_with_zero_padding" title="ttnn.tilize_with_zero_padding"><code class="xref py py-obj docutils literal notranslate"><span class="pre">ttnn.tilize_with_zero_padding</span></code></a></p>
@@ -2239,11 +2239,11 @@ use <code class="docutils literal notranslate"><span class="pre">align_shape_to_
 </div>
 <div class="tt-api-card docutils container">
 <p class="tt-api-card-name"><a class="reference internal" href="api/ttnn.untilize.html#ttnn.untilize" title="ttnn.untilize"><code class="xref py py-obj docutils literal notranslate"><span class="pre">ttnn.untilize</span></code></a></p>
-<p class="tt-api-card-desc">Changes data layout of input tensor to ROW_MAJOR.</p>
+<p class="tt-api-card-desc">Changes the layout of the input tensor from TILE to ROW_MAJOR.</p>
 </div>
 <div class="tt-api-card docutils container">
 <p class="tt-api-card-name"><a class="reference internal" href="api/ttnn.untilize_with_unpadding.html#ttnn.untilize_with_unpadding" title="ttnn.untilize_with_unpadding"><code class="xref py py-obj docutils literal notranslate"><span class="pre">ttnn.untilize_with_unpadding</span></code></a></p>
-<p class="tt-api-card-desc">Changes data layout of input tensor to ROW_MAJOR and unpads/removes elements from the tensor.</p>
+<p class="tt-api-card-desc">Changes the layout of the input tensor from TILE to ROW_MAJOR, keeping indices 0 through <code class="docutils literal notranslate"><span class="pre">output_tensor_end[i]</span></code> of each dimension <code class="docutils literal notranslate"><span class="pre">i</span></code>.</p>
 </div>
 <div class="tt-api-card docutils container">
 <p class="tt-api-card-name"><a class="reference internal" href="api/ttnn.view.html#ttnn.view" title="ttnn.view"><code class="xref py py-obj docutils literal notranslate"><span class="pre">ttnn.view</span></code></a></p>

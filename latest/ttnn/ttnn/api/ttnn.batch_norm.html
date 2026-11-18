@@ -425,6 +425,7 @@ matches the input dtype. All parameter tensors must share the same dtype with ea
 <dd>
 <ul class="simple">
 <li><p>All input tensors must be tilized, interleaved, rank 4, and on-device.</p></li>
+<li><p>When any input or parameter tensor is <code class="docutils literal notranslate"><span class="pre">FLOAT32</span></code>, <code class="docutils literal notranslate"><span class="pre">compute_kernel_config</span></code> must keep <code class="docutils literal notranslate"><span class="pre">fp32_dest_acc_en=True</span></code> (the default).</p></li>
 </ul>
 </dd>
 </dl>

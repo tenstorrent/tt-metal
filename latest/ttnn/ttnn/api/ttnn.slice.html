@@ -389,7 +389,7 @@ takes the <code class="docutils literal notranslate"><span class="pre">slice_dim
 <li><p><span class="tt-api-param-name"><strong>input_tensor</strong> (<em>ttnn.Tensor</em>)</span><span class="tt-api-param-desc">Input tensor, on device.</span></p></li>
 <li><p><span class="tt-api-param-name"><strong>slice_start</strong> (<em>List</em><em>[</em><em>int</em><em>]</em>)</span><span class="tt-api-param-desc">Start indices of input tensor. Negative values count from the end of the dim; other values must be in <code class="docutils literal notranslate"><span class="pre">[0,</span> <span class="pre">input_tensor_shape[i])</span></code>.</span></p></li>
 <li><p><span class="tt-api-param-name"><strong>slice_end</strong> (<em>List</em><em>[</em><em>int</em><em>]</em>)</span><span class="tt-api-param-desc">End indices of input tensor (exclusive). Negative values count from the end of the dim; other values must be in <code class="docutils literal notranslate"><span class="pre">(0,</span> <span class="pre">input_tensor_shape[i]]</span></code>.</span></p></li>
-<li><p><span class="tt-api-param-name"><strong>slice_step</strong> (<em>List</em><em>[</em><em>int</em><em>]</em><em>, </em><em>optional</em>)</span><span class="tt-api-param-desc">Step size for each dim. Defaults to <cite>None</cite>, which uses a step of 1 for every dim.</span></p></li>
+<li><p><span class="tt-api-param-name"><strong>slice_step</strong> (<em>List</em><em>[</em><em>int</em><em>]</em><em>, </em><em>optional</em>)</span><span class="tt-api-param-desc">Step size for each dim. Each value must be positive. Defaults to <cite>None</cite>, which uses a step of 1 for every dim.</span></p></li>
 </ul>
 </dd>
 <dt class="field-even">Keyword Arguments<span class="colon">:</span>

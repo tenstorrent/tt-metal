@@ -375,35 +375,69 @@
 </h1>
 <span class="target" id="id1"></span><dl class="py function">
 <dt class="sig sig-object py" id="ttnn.tilize_with_val_padding">
-<span class="sig-prename descclassname"><span class="pre">ttnn.</span></span><span class="sig-name descname"><span class="pre">tilize_with_val_padding</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">input_tensor:</span> <span class="pre">ttnn.Tensor</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">output_tensor_shape:</span> <span class="pre">shape</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">pad_value:</span> <span class="pre">number</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">*</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">memory_config:</span> <span class="pre">ttnn.MemoryConfig</span> <span class="pre">=</span> <span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">dtype:</span> <span class="pre">data</span> <span class="pre">type</span> <span class="pre">=</span> <span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">use_multicore:</span> <span class="pre">bool</span> <span class="pre">=</span> <span class="pre">True</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">→</span> <span class="sig-return-typehint"><span class="pre">ttnn.Tensor</span></span></span><a class="headerlink" href="#ttnn.tilize_with_val_padding" title="Permalink to this definition"></a>
+<span class="sig-prename descclassname"><span class="pre">ttnn.</span></span><span class="sig-name descname"><span class="pre">tilize_with_val_padding</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">input_tensor</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">ttnn.Tensor</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">output_tensor_shape</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">ttnn.Shape</span> <span class="pre">or</span> <span class="pre">List[int]</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">pad_value</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">float</span> <span class="pre">or</span> <span class="pre">int</span></span></em>, <em class="sig-param"><span class="o"><span class="pre">*</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">memory_config</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">ttnn.MemoryConfig</span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">dtype</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">ttnn.DataType</span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">use_multicore</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">bool</span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">True</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">sub_core_grids</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">ttnn.CoreRangeSet</span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">None</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">→</span> <span class="sig-return-typehint"><span class="pre">ttnn.Tensor</span></span></span><a class="headerlink" href="#ttnn.tilize_with_val_padding" title="Permalink to this definition"></a>
 </dt>
 <dd>
-<p>Changes data layout of input tensor to TILE. Pads to specified shape with a user-provided value.</p>
-<p>Input tensor must be on TT accelerator device, in ROW_MAJOR layout, and have BFLOAT16 data type.</p>
-<p>Output tensor will be on TT accelerator device, in TILE layout, and have BFLOAT16 data type.</p>
+<p>Changes the layout of the input tensor from ROW_MAJOR to TILE, padding it to <cite>output_tensor_shape</cite> with
+<cite>pad_value</cite>.</p>
 <dl class="field-list simple">
 <dt class="field-odd">Parameters<span class="colon">:</span>
 </dt>
 <dd class="field-odd">
 <ul class="simple">
-<li><p><span class="tt-api-param-name"><strong>input_tensor</strong> (<em>ttnn.Tensor</em>)</span><span class="tt-api-param-desc">the input tensor.</span></p></li>
-<li><p><span class="tt-api-param-name"><strong>output_tensor_shape</strong> (<em>shape</em>)</span><span class="tt-api-param-desc">Shape of the output tensor.</span></p></li>
-<li><p><span class="tt-api-param-name"><strong>pad_value</strong> (<em>number</em>)</span><span class="tt-api-param-desc">Value to pad the output tensor.</span></p></li>
+<li><p><span class="tt-api-param-name"><strong>input_tensor</strong> (<em>ttnn.Tensor</em>)</span><span class="tt-api-param-desc">the input tensor, on device, in ROW_MAJOR layout.</span></p></li>
+<li><p><span class="tt-api-param-name"><strong>output_tensor_shape</strong> (<a class="reference internal" href="../tensor.html#ttnn.Shape" title="ttnn.Shape"><em>ttnn.Shape</em></a><em> or </em><em>List</em><em>[</em><em>int</em><em>]</em>)</span><span class="tt-api-param-desc">the padded shape of the output. Its last two dimensions are multiples of 32. For an input of rank 2 or more, it has the input’s rank, its dimensions before the last two equal the input’s, and its last two are at least the input’s. For an input of rank 0 or 1, it has two dimensions, and its last is at least the input’s size. For an input of rank 5 or more, the last two dimensions must be the input’s rounded up to multiples of 32. When the last dimension is more than 1024, the second-to-last must be the input’s rounded up to a multiple of 32.</span></p></li>
+<li><p><span class="tt-api-param-name"><strong>pad_value</strong> (<em>float</em><em> or </em><em>int</em>)</span><span class="tt-api-param-desc">value of the padding. For <code class="docutils literal notranslate"><span class="pre">FLOAT32</span></code> tensors it must be a float, such as <code class="docutils literal notranslate"><span class="pre">1.0</span></code> rather than <code class="docutils literal notranslate"><span class="pre">1</span></code>. <code class="docutils literal notranslate"><span class="pre">BFLOAT16</span></code> rounds it to the nearest <code class="docutils literal notranslate"><span class="pre">BFLOAT16</span></code> value. For <code class="docutils literal notranslate"><span class="pre">INT32</span></code>, <code class="docutils literal notranslate"><span class="pre">UINT32</span></code> and <code class="docutils literal notranslate"><span class="pre">UINT16</span></code> tensors it must be an int that the dtype can hold, and a negative <code class="docutils literal notranslate"><span class="pre">INT32</span></code> value must be at least <code class="docutils literal notranslate"><span class="pre">-2**24</span></code>.</span></p></li>
 </ul>
 </dd>
 <dt class="field-even">Keyword Arguments<span class="colon">:</span>
 </dt>
 <dd class="field-even">
 <ul class="simple">
-<li><p><span class="tt-api-param-name"><strong>memory_config</strong> (<em>ttnn.MemoryConfig</em><em>, </em><em>optional</em>)</span><span class="tt-api-param-desc">Memory configuration for the operation. Defaults to <cite>None</cite>.</span></p></li>
-<li><p><span class="tt-api-param-name"><strong>dtype</strong> (<em>data type</em><em>, </em><em>optional</em>)</span><span class="tt-api-param-desc">Data type of the output tensor. Defaults to <cite>None</cite>.</span></p></li>
+<li><p><span class="tt-api-param-name"><strong>memory_config</strong> (<em>ttnn.MemoryConfig</em><em>, </em><em>optional</em>)</span><span class="tt-api-param-desc">Memory configuration of the output. Defaults to <cite>None</cite>, which uses the input tensor’s memory configuration. A sharded output, including the default one for a sharded input, needs a shard shape that is a multiple of 32x32. When the input and the output are WIDTH_SHARDED in L1, only the second-to-last dimension is padded and <code class="docutils literal notranslate"><span class="pre">sub_core_grids</span></code> is <cite>None</cite>, the output keeps the input’s core grid.</span></p></li>
+<li><p><span class="tt-api-param-name"><strong>dtype</strong> (<em>ttnn.DataType</em><em>, </em><em>optional</em>)</span><span class="tt-api-param-desc">Data type of the output. Defaults to <cite>None</cite>, which keeps the input dtype, or gives <code class="docutils literal notranslate"><span class="pre">FLOAT32</span></code> for a <code class="docutils literal notranslate"><span class="pre">FP8_E4M3</span></code> input. A <code class="docutils literal notranslate"><span class="pre">BFLOAT16</span></code> or <code class="docutils literal notranslate"><span class="pre">FLOAT32</span></code> input can give a <code class="docutils literal notranslate"><span class="pre">BFLOAT16</span></code>, <code class="docutils literal notranslate"><span class="pre">FLOAT32</span></code>, <code class="docutils literal notranslate"><span class="pre">BFLOAT8_B</span></code> or <code class="docutils literal notranslate"><span class="pre">BFLOAT4_B</span></code> output. For an integer input it must be <cite>None</cite> or the input’s dtype.</span></p></li>
 <li><p><span class="tt-api-param-name"><strong>use_multicore</strong> (<em>bool</em><em>, </em><em>optional</em>)</span><span class="tt-api-param-desc">Whether to use multicore. Defaults to <cite>True</cite>.</span></p></li>
+<li><p><span class="tt-api-param-name"><strong>sub_core_grids</strong> (<em>ttnn.CoreRangeSet</em><em>, </em><em>optional</em>)</span><span class="tt-api-param-desc">Cores to run the operation on. Defaults to <cite>None</cite>, which lets the operation choose its cores.</span></p></li>
 </ul>
 </dd>
 <dt class="field-odd">Returns<span class="colon">:</span>
 </dt>
 <dd class="field-odd">
-<p><span class="tt-api-param-name"><em>ttnn.Tensor</em></span><span class="tt-api-param-desc">the output tensor.</span></p>
+<p><span class="tt-api-param-name"><em>ttnn.Tensor</em></span><span class="tt-api-param-desc">the output tensor, in TILE layout with 32x32 tiles. Its shape is the input’s, and its padded shape is <cite>output_tensor_shape</cite>. For an input with no elements, <cite>output_tensor_shape</cite> must have no elements either, and it is the output’s shape.</span></p>
+</dd>
+</dl>
+<div class="admonition note">
+<p class="admonition-title">Note</p>
+<p>Supported dtypes and layouts:</p>
+<table class="docutils align-default">
+<thead>
+<tr class="row-odd">
+<th class="head"><p>Dtypes</p></th>
+<th class="head"><p>Layouts</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even">
+<td><p>BFLOAT16, FLOAT32, INT32, UINT32, UINT16</p></td>
+<td><p>ROW_MAJOR</p></td>
+</tr>
+</tbody>
+</table>
+<p><code class="docutils literal notranslate"><span class="pre">BFLOAT16</span></code> input values must not be NaN.</p>
+<p>On Blackhole, a <code class="docutils literal notranslate"><span class="pre">FP8_E4M3</span></code> ROW_MAJOR input is also supported. Its output defaults to <code class="docutils literal notranslate"><span class="pre">FLOAT32</span></code>, and a
+<code class="docutils literal notranslate"><span class="pre">dtype</span></code> must be a floating-point type other than <code class="docutils literal notranslate"><span class="pre">FP8_E4M3</span></code>. The last dimension of <cite>output_tensor_shape</cite>
+must be more than 32, and <cite>pad_value</cite> must be a float, which is first converted to <code class="docutils literal notranslate"><span class="pre">FP8_E4M3</span></code>.</p>
+</div>
+<dl class="simple">
+<dt>Memory Support:</dt>
+<dd>
+<ul class="simple">
+<li><p>Interleaved: DRAM and L1</p></li>
+<li><p>Sharded input: HEIGHT_SHARDED, WIDTH_SHARDED and BLOCK_SHARDED in L1; HEIGHT_SHARDED and WIDTH_SHARDED in DRAM</p></li>
+<li><p>Sharded output: HEIGHT_SHARDED, WIDTH_SHARDED and BLOCK_SHARDED in L1; HEIGHT_SHARDED and WIDTH_SHARDED in DRAM</p></li>
+<li><p>A WIDTH_SHARDED or BLOCK_SHARDED input needs a shard width, in bytes, that is a multiple of the buffer’s alignment</p></li>
+<li><p>ND sharded: L1 input and output</p></li>
+</ul>
 </dd>
 </dl>
 <div class="admonition-example admonition">
@@ -412,9 +446,10 @@
 <div class="highlight"><pre><span></span><span class="c1"># Create a tensor to tilize with value padding</span>
 <span class="n">input_tensor</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">rand</span><span class="p">((</span><span class="mi">1</span><span class="p">,</span> <span class="mi">1</span><span class="p">,</span> <span class="mi">64</span><span class="p">,</span> <span class="mi">32</span><span class="p">),</span> <span class="n">dtype</span><span class="o">=</span><span class="n">ttnn</span><span class="o">.</span><span class="n">bfloat16</span><span class="p">,</span> <span class="n">layout</span><span class="o">=</span><span class="n">ttnn</span><span class="o">.</span><span class="n">ROW_MAJOR_LAYOUT</span><span class="p">,</span> <span class="n">device</span><span class="o">=</span><span class="n">device</span><span class="p">)</span>
 
-<span class="c1"># Tilize the tensor with value padding</span>
+<span class="c1"># Tilize the tensor, padding its last dimension to 64 with zeros</span>
 <span class="n">tilized_tensor</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">tilize_with_val_padding</span><span class="p">(</span><span class="n">input_tensor</span><span class="p">,</span> <span class="n">output_tensor_shape</span><span class="o">=</span><span class="p">[</span><span class="mi">1</span><span class="p">,</span> <span class="mi">1</span><span class="p">,</span> <span class="mi">64</span><span class="p">,</span> <span class="mi">64</span><span class="p">],</span> <span class="n">pad_value</span><span class="o">=</span><span class="mf">0.0</span><span class="p">)</span>
-<span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">"Tilized Tensor with Value Padding Shape:"</span><span class="p">,</span> <span class="n">tilized_tensor</span><span class="o">.</span><span class="n">shape</span><span class="p">)</span>
+<span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="sa">f</span><span class="s2">"Tilized Tensor Shape: </span><span class="si">{</span><span class="n">tilized_tensor</span><span class="o">.</span><span class="n">shape</span><span class="si">}</span><span class="s2">"</span><span class="p">)</span>  <span class="c1"># Shape([1, 1, 64, 32])</span>
+<span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="sa">f</span><span class="s2">"Tilized Tensor Padded Shape: </span><span class="si">{</span><span class="n">tilized_tensor</span><span class="o">.</span><span class="n">padded_shape</span><span class="si">}</span><span class="s2">"</span><span class="p">)</span>  <span class="c1"># Shape([1, 1, 64, 64])</span>
 </pre></div>
 </div>
 </div>

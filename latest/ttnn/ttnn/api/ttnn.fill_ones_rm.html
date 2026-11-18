@@ -375,96 +375,61 @@
 </h1>
 <span class="target" id="id1"></span><dl class="py function">
 <dt class="sig sig-object py" id="ttnn.fill_ones_rm">
-<span class="sig-prename descclassname"><span class="pre">ttnn.</span></span><span class="sig-name descname"><span class="pre">fill_ones_rm</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">N</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">number</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">C</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">number</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">H</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">number</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">W</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">number</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">hOnes</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">number</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">wOnes</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">number</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">any</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">ttnn.tensor</span></span></em>, <em class="sig-param"><span class="o"><span class="pre">*</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">memory_config</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">ttnn.MemoryConfig</span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">None</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">→</span> <span class="sig-return-typehint"><span class="pre">ttnn.Tensor</span></span></span><a class="headerlink" href="#ttnn.fill_ones_rm" title="Permalink to this definition"></a>
+<span class="sig-prename descclassname"><span class="pre">ttnn.</span></span><span class="sig-name descname"><span class="pre">fill_ones_rm</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">N</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">int</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">C</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">int</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">H</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">int</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">W</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">int</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">hOnes</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">int</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">wOnes</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">int</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">any</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">ttnn.Tensor</span></span></em>, <em class="sig-param"><span class="o"><span class="pre">*</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">memory_config</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">ttnn.MemoryConfig</span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">None</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">→</span> <span class="sig-return-typehint"><span class="pre">ttnn.Tensor</span></span></span><a class="headerlink" href="#ttnn.fill_ones_rm" title="Permalink to this definition"></a>
 </dt>
 <dd>
-<p>Same as <code class="docutils literal notranslate"><span class="pre">fill_rm</span></code>, but <code class="docutils literal notranslate"><span class="pre">val_hi</span></code> is set to <code class="docutils literal notranslate"><span class="pre">1</span></code> and <code class="docutils literal notranslate"><span class="pre">val_lo</span></code> is
-<code class="docutils literal notranslate"><span class="pre">0</span></code>.</p>
-<table class="docutils align-default">
-<thead>
-<tr class="row-odd">
-<th class="head"><p>Argument</p></th>
-<th class="head"><p>Description</p></th>
-<th class="head"><p>Data type</p></th>
-<th class="head"><p>Valid range</p></th>
-<th class="head"><p>Required</p></th>
-</tr>
-</thead>
-<tbody>
-<tr class="row-even">
-<td><p>N</p></td>
-<td><p>Batch count of output tensor</p></td>
-<td><p>int</p></td>
-<td><p>N &gt; 0</p></td>
-<td><p>Yes</p></td>
-</tr>
-<tr class="row-odd">
-<td><p>C</p></td>
-<td><p>Channel count of output tensor</p></td>
-<td><p>int</p></td>
-<td><p>C &gt; 0</p></td>
-<td><p>Yes</p></td>
-</tr>
-<tr class="row-even">
-<td><p>H</p></td>
-<td><p>Height count of output tensor</p></td>
-<td><p>int</p></td>
-<td><p>H &gt; 0</p></td>
-<td><p>Yes</p></td>
-</tr>
-<tr class="row-odd">
-<td><p>W</p></td>
-<td><p>Width count of output tensor</p></td>
-<td><p>int</p></td>
-<td><p>W &gt; 0</p></td>
-<td><p>Yes</p></td>
-</tr>
-<tr class="row-even">
-<td><p>hOnes</p></td>
-<td><p>Height of high values region</p></td>
-<td><p>int</p></td>
-<td><p>hOnes &lt;= H</p></td>
-<td><p>Yes</p></td>
-</tr>
-<tr class="row-odd">
-<td><p>wOnes</p></td>
-<td><p>Width of high values region</p></td>
-<td><p>int</p></td>
-<td><p>wOnes &lt;= W</p></td>
-<td><p>Yes</p></td>
-</tr>
-<tr class="row-even">
-<td><p>any</p></td>
-<td><p>Any input tensor with desired device and data types for output tensor</p></td>
-<td><p>tt_lib.tensor.Tensor</p></td>
-<td></td>
-<td><p>Yes</p></td>
-</tr>
-</tbody>
-</table>
+<p>Same as <code class="docutils literal notranslate"><span class="pre">ttnn.fill_rm</span></code> with <cite>val_hi</cite> 1 and <cite>val_lo</cite> 0: creates an <code class="docutils literal notranslate"><span class="pre">[N,</span> <span class="pre">C,</span> <span class="pre">H,</span> <span class="pre">W]</span></code> BFLOAT16 tensor on the
+device of <cite>any</cite> whose top-left <code class="docutils literal notranslate"><span class="pre">hOnes</span> <span class="pre">x</span> <span class="pre">wOnes</span></code> block in each <code class="docutils literal notranslate"><span class="pre">H</span> <span class="pre">x</span> <span class="pre">W</span></code> plane is 1, and every other element 0.</p>
 <dl class="field-list simple">
 <dt class="field-odd">Parameters<span class="colon">:</span>
 </dt>
 <dd class="field-odd">
 <ul class="simple">
-<li><p><span class="tt-api-param-name"><strong>N</strong> (<em>number</em>)</span><span class="tt-api-param-desc">Batch count of output tensor.</span></p></li>
-<li><p><span class="tt-api-param-name"><strong>C</strong> (<em>number</em>)</span><span class="tt-api-param-desc">Channel count of output tensor.</span></p></li>
-<li><p><span class="tt-api-param-name"><strong>H</strong> (<em>number</em>)</span><span class="tt-api-param-desc">Height count of output tensor.</span></p></li>
-<li><p><span class="tt-api-param-name"><strong>W</strong> (<em>number</em>)</span><span class="tt-api-param-desc">Width count of output tensor.</span></p></li>
-<li><p><span class="tt-api-param-name"><strong>hOnes</strong> (<em>number</em>)</span><span class="tt-api-param-desc">Height of high values region.</span></p></li>
-<li><p><span class="tt-api-param-name"><strong>wOnes</strong> (<em>number</em>)</span><span class="tt-api-param-desc">Width of high values region.</span></p></li>
-<li><p><span class="tt-api-param-name"><strong>any</strong> (<em>ttnn.tensor</em>)</span><span class="tt-api-param-desc">Any input tensor with desired device and data types for output tensor. value greater than 0</span></p></li>
+<li><p><span class="tt-api-param-name"><strong>N</strong> (<em>int</em>)</span><span class="tt-api-param-desc">batch size of the output. Must be greater than 0.</span></p></li>
+<li><p><span class="tt-api-param-name"><strong>C</strong> (<em>int</em>)</span><span class="tt-api-param-desc">number of channels of the output. Must be greater than 0.</span></p></li>
+<li><p><span class="tt-api-param-name"><strong>H</strong> (<em>int</em>)</span><span class="tt-api-param-desc">height of the output. Must be greater than 0.</span></p></li>
+<li><p><span class="tt-api-param-name"><strong>W</strong> (<em>int</em>)</span><span class="tt-api-param-desc">width of the output. Must be greater than 0 and less than 16384.</span></p></li>
+<li><p><span class="tt-api-param-name"><strong>hOnes</strong> (<em>int</em>)</span><span class="tt-api-param-desc">number of rows, from the top of each <code class="docutils literal notranslate"><span class="pre">H</span> <span class="pre">x</span> <span class="pre">W</span></code> plane, in the top-left block. At most <cite>H</cite>.</span></p></li>
+<li><p><span class="tt-api-param-name"><strong>wOnes</strong> (<em>int</em>)</span><span class="tt-api-param-desc">number of columns, from the left of each <code class="docutils literal notranslate"><span class="pre">H</span> <span class="pre">x</span> <span class="pre">W</span></code> plane, in the top-left block. At most <cite>W</cite>.</span></p></li>
+<li><p><span class="tt-api-param-name"><strong>any</strong> (<em>ttnn.Tensor</em>)</span><span class="tt-api-param-desc">a tensor on the device to create the output on. Only its device and memory configuration are used.</span></p></li>
 </ul>
 </dd>
 <dt class="field-even">Keyword Arguments<span class="colon">:</span>
 </dt>
 <dd class="field-even">
-<p><span class="tt-api-param-name"><strong>memory_config</strong> (<em>ttnn.MemoryConfig</em><em>, </em><em>optional</em>)</span><span class="tt-api-param-desc">Memory configuration for the operation. Defaults to <cite>None</cite>.</span></p>
+<p><span class="tt-api-param-name"><strong>memory_config</strong> (<em>ttnn.MemoryConfig</em><em>, </em><em>optional</em>)</span><span class="tt-api-param-desc">Memory configuration of the output. It must be interleaved. Defaults to <cite>None</cite>, which uses the memory configuration of <cite>any</cite>.</span></p>
 </dd>
 <dt class="field-odd">Returns<span class="colon">:</span>
 </dt>
 <dd class="field-odd">
-<p><span class="tt-api-param-name"><em>ttnn.Tensor</em></span><span class="tt-api-param-desc">the output tensor.</span></p>
+<p><span class="tt-api-param-name"><em>ttnn.Tensor</em></span><span class="tt-api-param-desc">the output tensor, of shape <code class="docutils literal notranslate"><span class="pre">[N,</span> <span class="pre">C,</span> <span class="pre">H,</span> <span class="pre">W]</span></code>, in ROW_MAJOR layout with BFLOAT16 dtype.</span></p>
+</dd>
+</dl>
+<div class="admonition note">
+<p class="admonition-title">Note</p>
+<p>Supported dtypes and layouts for <cite>any</cite>:</p>
+<table class="docutils align-default">
+<thead>
+<tr class="row-odd">
+<th class="head"><p>Dtypes</p></th>
+<th class="head"><p>Layouts</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even">
+<td><p>BFLOAT16</p></td>
+<td><p>TILE, ROW_MAJOR</p></td>
+</tr>
+</tbody>
+</table>
+</div>
+<dl class="simple">
+<dt>Memory Support:</dt>
+<dd>
+<ul class="simple">
+<li><p>Input (<cite>any</cite>): interleaved DRAM and L1</p></li>
+<li><p>Output: interleaved DRAM and L1</p></li>
+</ul>
 </dd>
 </dl>
 <div class="admonition-example admonition">
@@ -486,7 +451,7 @@
 
 <span class="c1"># Fill the tensor</span>
 <span class="n">output</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">fill_ones_rm</span><span class="p">(</span><span class="n">N</span><span class="p">,</span> <span class="n">C</span><span class="p">,</span> <span class="n">H</span><span class="p">,</span> <span class="n">W</span><span class="p">,</span> <span class="n">hOnes</span><span class="p">,</span> <span class="n">wOnes</span><span class="p">,</span> <span class="n">xt</span><span class="p">)</span>
-<span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">"Filled Ones Tensor Shape:"</span><span class="p">,</span> <span class="n">output</span><span class="o">.</span><span class="n">shape</span><span class="p">)</span>
+<span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="sa">f</span><span class="s2">"Filled Ones Tensor Shape: </span><span class="si">{</span><span class="n">output</span><span class="o">.</span><span class="n">shape</span><span class="si">}</span><span class="s2">"</span><span class="p">)</span>  <span class="c1"># Shape([2, 3, 64, 96])</span>
 </pre></div>
 </div>
 </div>
