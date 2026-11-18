@@ -270,10 +270,6 @@ std::optional<Link> parse_link(const YAML::Node& node, const std::string& where,
     return Link{.a = *a, .b = *b, .backend = *backend};
 }
 
-void add(Findings& findings, ManifestCheck check, std::string detail) {
-    findings.push_back(ManifestFinding{check, std::move(detail)});
-}
-
 std::string cce_label(uint32_t tile, uint32_t cce) { return fmt::format("(tile {}, cce {})", tile, cce); }
 
 std::string slot_label(const Device& device, std::size_t index) {
@@ -326,42 +322,41 @@ void check_reserved_values(const Manifest& manifest, const PackageFacts& facts, 
         for (std::size_t i = 0; i < device.slots.size(); i++) {
             const Slot& slot = device.slots[i];
             if (slot.cce == kReservedCce) {
-                add(findings,
-                    ManifestCheck::ReservedValue,
-                    fmt::format("{}: cce {} is reserved for Phase 3", slot_label(device, i), slot.cce));
+                findings.push_back(
+                    {ManifestCheck::ReservedValue,
+                     fmt::format("{}: cce {} is reserved for Phase 3", slot_label(device, i), slot.cce)});
             }
             if (slot.role == SlotRole::Router && slot.hart != kRouterHart) {
-                add(findings,
-                    ManifestCheck::ReservedValue,
-                    fmt::format(
-                        "{}: a router on a hart other than {} is reserved for Phase 3",
-                        slot_label(device, i),
-                        kRouterHart));
+                findings.push_back(
+                    {ManifestCheck::ReservedValue,
+                     fmt::format(
+                         "{}: a router on a hart other than {} is reserved for Phase 3",
+                         slot_label(device, i),
+                         kRouterHart)});
             }
         }
         for (std::size_t i = 0; i < device.regions.size(); i++) {
             const Region& region = device.regions[i];
             if (region.cce == kReservedCce) {
-                add(findings,
-                    ManifestCheck::ReservedValue,
-                    fmt::format("{}: cce {} is reserved for Phase 3", region_label(device, i), region.cce));
+                findings.push_back(
+                    {ManifestCheck::ReservedValue,
+                     fmt::format("{}: cce {} is reserved for Phase 3", region_label(device, i), region.cce)});
             }
             const bool whole = region.base == 0 && region.size == facts.sram_bytes_per_cce;
             if (!whole && !beyond_sram(region, facts.sram_bytes_per_cce)) {
-                add(findings,
-                    ManifestCheck::ReservedValue,
-                    fmt::format(
-                        "{}: a part of a CCE (the whole is base 0, size {:#x}) is reserved for Phase 3",
-                        region_label(device, i),
-                        facts.sram_bytes_per_cce));
+                findings.push_back(
+                    {ManifestCheck::ReservedValue,
+                     fmt::format(
+                         "{}: a part of a CCE (the whole is base 0, size {:#x}) is reserved for Phase 3",
+                         region_label(device, i),
+                         facts.sram_bytes_per_cce)});
             }
         }
     }
     for (std::size_t i = 0; i < manifest.links.size(); i++) {
         if (manifest.links[i].backend == LinkBackend::Local) {
-            add(findings,
-                ManifestCheck::ReservedValue,
-                fmt::format("links[{}]: backend local is reserved for Phase 3", i));
+            findings.push_back(
+                {ManifestCheck::ReservedValue, fmt::format("links[{}]: backend local is reserved for Phase 3", i)});
         }
     }
 }
@@ -373,23 +368,23 @@ void check_cces_in_package(const Manifest& manifest, const PackageFacts& facts, 
         for (std::size_t i = 0; i < device.slots.size(); i++) {
             const Slot& slot = device.slots[i];
             if (!cores.contains(CceId{slot.tile, slot.cce})) {
-                add(findings,
-                    ManifestCheck::CceNotInPackage,
-                    fmt::format(
-                        "{}: {} is not a Keraunos core of the package",
-                        slot_label(device, i),
-                        cce_label(slot.tile, slot.cce)));
+                findings.push_back(
+                    {ManifestCheck::CceNotInPackage,
+                     fmt::format(
+                         "{}: {} is not a Keraunos core of the package",
+                         slot_label(device, i),
+                         cce_label(slot.tile, slot.cce))});
             }
         }
         for (std::size_t i = 0; i < device.regions.size(); i++) {
             const Region& region = device.regions[i];
             if (!cores.contains(CceId{region.tile, region.cce})) {
-                add(findings,
-                    ManifestCheck::CceNotInPackage,
-                    fmt::format(
-                        "{}: {} is not a Keraunos core of the package",
-                        region_label(device, i),
-                        cce_label(region.tile, region.cce)));
+                findings.push_back(
+                    {ManifestCheck::CceNotInPackage,
+                     fmt::format(
+                         "{}: {} is not a Keraunos core of the package",
+                         region_label(device, i),
+                         cce_label(region.tile, region.cce))});
             }
         }
     }
@@ -397,23 +392,23 @@ void check_cces_in_package(const Manifest& manifest, const PackageFacts& facts, 
 
 // Row 12.
 void check_duplicates(const Manifest& manifest, Findings& findings) {
-    std::map<std::string, std::size_t> names;
-    std::map<uint32_t, std::size_t> chips;
+    std::set<std::string> names;
+    std::set<uint32_t> chips;
     for (const Device& device : manifest.devices) {
-        if (names[device.name]++ > 0) {
-            add(findings, ManifestCheck::Duplicate, fmt::format("device name {} is used more than once", device.name));
+        if (!names.insert(device.name).second) {
+            findings.push_back(
+                {ManifestCheck::Duplicate, fmt::format("device name {} is used more than once", device.name)});
         }
-        if (chips[device.fabric_chip]++ > 0) {
-            add(findings,
-                ManifestCheck::Duplicate,
-                fmt::format("fabric_chip {} is used more than once", device.fabric_chip));
+        if (!chips.insert(device.fabric_chip).second) {
+            findings.push_back(
+                {ManifestCheck::Duplicate, fmt::format("fabric_chip {} is used more than once", device.fabric_chip)});
         }
-        std::map<uint32_t, std::size_t> ports;
+        std::set<uint32_t> ports;
         for (const Slot& slot : device.slots) {
-            if (slot.role == SlotRole::Router && slot.port && ports[*slot.port]++ > 0) {
-                add(findings,
-                    ManifestCheck::Duplicate,
-                    fmt::format("device {}: two routers on port {}", device.name, *slot.port));
+            if (slot.role == SlotRole::Router && slot.port && !ports.insert(*slot.port).second) {
+                findings.push_back(
+                    {ManifestCheck::Duplicate,
+                     fmt::format("device {}: two routers on port {}", device.name, *slot.port)});
             }
         }
     }
@@ -421,23 +416,22 @@ void check_duplicates(const Manifest& manifest, Findings& findings) {
 
 // Row 3.
 void check_slots(const Manifest& manifest, const PackageFacts& facts, Findings& findings) {
-    std::map<std::tuple<uint32_t, uint32_t, uint32_t>, std::size_t> harts;
+    std::set<std::tuple<uint32_t, uint32_t, uint32_t>> harts;
     for (const Device& device : manifest.devices) {
         for (std::size_t i = 0; i < device.slots.size(); i++) {
             const Slot& slot = device.slots[i];
-            if (harts[{slot.tile, slot.cce, slot.hart}]++ > 0) {
-                add(findings,
-                    ManifestCheck::Slot,
-                    fmt::format("{}: another slot is on this hart", slot_label(device, i)));
+            if (!harts.insert({slot.tile, slot.cce, slot.hart}).second) {
+                findings.push_back(
+                    {ManifestCheck::Slot, fmt::format("{}: another slot is on this hart", slot_label(device, i))});
             }
             if (slot.hart >= facts.harts_per_cce) {
-                add(findings,
-                    ManifestCheck::Slot,
-                    fmt::format(
-                        "{}: hart {} is not below the CCE's {} harts",
-                        slot_label(device, i),
-                        slot.hart,
-                        facts.harts_per_cce));
+                findings.push_back(
+                    {ManifestCheck::Slot,
+                     fmt::format(
+                         "{}: hart {} is not below the CCE's {} harts",
+                         slot_label(device, i),
+                         slot.hart,
+                         facts.harts_per_cce)});
             }
         }
     }
@@ -454,12 +448,12 @@ void check_regions(const Manifest& manifest, const PackageFacts& facts, Findings
         for (std::size_t i = 0; i < device.regions.size(); i++) {
             const Region& region = device.regions[i];
             if (beyond_sram(region, facts.sram_bytes_per_cce)) {
-                add(findings,
-                    ManifestCheck::Region,
-                    fmt::format(
-                        "{}: ends beyond the CCE's {:#x} bytes of SRAM",
-                        region_label(device, i),
-                        facts.sram_bytes_per_cce));
+                findings.push_back(
+                    {ManifestCheck::Region,
+                     fmt::format(
+                         "{}: ends beyond the CCE's {:#x} bytes of SRAM",
+                         region_label(device, i),
+                         facts.sram_bytes_per_cce)});
             }
             by_cce[CceId{region.tile, region.cce}].push_back(Placed{&device, i});
         }
@@ -473,12 +467,12 @@ void check_regions(const Manifest& manifest, const PackageFacts& facts, Findings
                 const bool overlap = x.size != 0 && y.size != 0 &&
                                      (x.base < y.base ? y.base - x.base < x.size : x.base - y.base < y.size);
                 if (overlap) {
-                    add(findings,
-                        ManifestCheck::Region,
-                        fmt::format(
-                            "{} overlaps {}",
-                            region_label(*placed[i].device, placed[i].index),
-                            region_label(*placed[j].device, placed[j].index)));
+                    findings.push_back(
+                        {ManifestCheck::Region,
+                         fmt::format(
+                             "{} overlaps {}",
+                             region_label(*placed[i].device, placed[i].index),
+                             region_label(*placed[j].device, placed[j].index))});
                 }
             }
         }
@@ -495,13 +489,13 @@ void check_slots_have_regions(const Manifest& manifest, Findings& findings) {
         for (std::size_t i = 0; i < device.slots.size(); i++) {
             const Slot& slot = device.slots[i];
             if (!owned.contains(CceId{slot.tile, slot.cce})) {
-                add(findings,
-                    ManifestCheck::SlotWithoutRegion,
-                    fmt::format(
-                        "{}: device {} owns no region of {}",
-                        slot_label(device, i),
-                        device.name,
-                        cce_label(slot.tile, slot.cce)));
+                findings.push_back(
+                    {ManifestCheck::SlotWithoutRegion,
+                     fmt::format(
+                         "{}: device {} owns no region of {}",
+                         slot_label(device, i),
+                         device.name,
+                         cce_label(slot.tile, slot.cce))});
             }
         }
     }
@@ -518,9 +512,9 @@ void check_worker_placement(const Manifest& manifest, Findings& findings) {
         for (std::size_t i = 0; i < device.slots.size(); i++) {
             const Slot& slot = device.slots[i];
             if (slot.role == SlotRole::Worker && slot.hart == kRouterHart) {
-                add(findings,
-                    ManifestCheck::WorkerPlacement,
-                    fmt::format("{}: a worker is on hart {}", slot_label(device, i), kRouterHart));
+                findings.push_back(
+                    {ManifestCheck::WorkerPlacement,
+                     fmt::format("{}: a worker is on hart {}", slot_label(device, i), kRouterHart)});
             }
             Roles& roles = by_cce[CceId{slot.tile, slot.cce}];
             roles.worker |= slot.role == SlotRole::Worker;
@@ -529,47 +523,48 @@ void check_worker_placement(const Manifest& manifest, Findings& findings) {
     }
     for (const auto& [cce, roles] : by_cce) {
         if (roles.worker && !roles.router_on_hart0) {
-            add(findings,
-                ManifestCheck::WorkerPlacement,
-                fmt::format("{} has a worker and no router on hart {}", cce_label(cce.tile, cce.cce), kRouterHart));
+            findings.push_back(
+                {ManifestCheck::WorkerPlacement,
+                 fmt::format("{} has a worker and no router on hart {}", cce_label(cce.tile, cce.cce), kRouterHart)});
         }
     }
 }
 
 // Row 7.
 void check_links(const Manifest& manifest, Findings& findings) {
-    std::map<std::pair<std::string, uint32_t>, std::size_t> uses;
+    std::set<std::pair<std::string, uint32_t>> uses;
     for (std::size_t i = 0; i < manifest.links.size(); i++) {
         const Link& link = manifest.links[i];
         const auto check_end = [&](char side, const LinkEnd& end) {
             if (find_device(manifest, end.device) == nullptr) {
-                add(findings, ManifestCheck::Link, fmt::format("{}: no such device", end_label(i, side, end)));
+                findings.push_back({ManifestCheck::Link, fmt::format("{}: no such device", end_label(i, side, end))});
                 return;
             }
             if (find_router(manifest, end) == nullptr) {
-                add(findings,
-                    ManifestCheck::Link,
-                    fmt::format("{}: the device has no router on that port", end_label(i, side, end)));
+                findings.push_back(
+                    {ManifestCheck::Link,
+                     fmt::format("{}: the device has no router on that port", end_label(i, side, end))});
             }
-            if (uses[{end.device, end.port}]++ > 0) {
-                add(findings,
-                    ManifestCheck::Link,
-                    fmt::format("{}: the port is in another link end too", end_label(i, side, end)));
+            if (!uses.insert({end.device, end.port}).second) {
+                findings.push_back(
+                    {ManifestCheck::Link,
+                     fmt::format("{}: the port is in another link end too", end_label(i, side, end))});
             }
         };
         check_end('a', link.a);
         check_end('b', link.b);
         if (link.a.device == link.b.device) {
-            add(findings, ManifestCheck::Link, fmt::format("links[{}]: device {} is at both ends", i, link.a.device));
+            findings.push_back(
+                {ManifestCheck::Link, fmt::format("links[{}]: device {} is at both ends", i, link.a.device)});
         }
     }
     for (const Device& device : manifest.devices) {
         for (std::size_t i = 0; i < device.slots.size(); i++) {
             const Slot& slot = device.slots[i];
             if (slot.role == SlotRole::Router && slot.port && !uses.contains({device.name, *slot.port})) {
-                add(findings,
-                    ManifestCheck::Link,
-                    fmt::format("{}: router port {} is in no link", slot_label(device, i), *slot.port));
+                findings.push_back(
+                    {ManifestCheck::Link,
+                     fmt::format("{}: router port {} is in no link", slot_label(device, i), *slot.port)});
             }
         }
     }
@@ -593,10 +588,10 @@ void check_ethernet_pairs(const Manifest& manifest, const PackageFacts& facts, F
                        (pair.first == b->tile && pair.second == a->tile);
             });
         if (!wired) {
-            add(findings,
-                ManifestCheck::EthernetTilesNotWired,
-                fmt::format(
-                    "links[{}]: tiles {} and {} are not an Ethernet pair the bring-up wired", i, a->tile, b->tile));
+            findings.push_back(
+                {ManifestCheck::EthernetTilesNotWired,
+                 fmt::format(
+                     "links[{}]: tiles {} and {} are not an Ethernet pair the bring-up wired", i, a->tile, b->tile)});
         }
     }
 }
@@ -606,7 +601,8 @@ void check_devices_have_router(const Manifest& manifest, Findings& findings) {
     for (const Device& device : manifest.devices) {
         if (std::none_of(
                 device.slots.begin(), device.slots.end(), [](const Slot& s) { return s.role == SlotRole::Router; })) {
-            add(findings, ManifestCheck::DeviceWithoutRouter, fmt::format("device {} has no router slot", device.name));
+            findings.push_back(
+                {ManifestCheck::DeviceWithoutRouter, fmt::format("device {} has no router slot", device.name)});
         }
     }
 }
