@@ -96,8 +96,11 @@ void AllReduceAsyncDeviceOperation::validate_on_program_cache_miss(
             input_tensor.padded_shape());
         TT_FATAL(
             input_tensor.layout() == Layout::TILE &&
-                input_tensor.tensor_spec().tile().get_height() == tt::constants::TILE_HEIGHT,
-            "all_reduce_async one_shot needs a TILE input with 32x32 tiles");
+                input_tensor.tensor_spec().tile().get_height() == tt::constants::TILE_HEIGHT &&
+                input_tensor.tensor_spec().tile().get_width() == tt::constants::TILE_WIDTH,
+            "all_reduce_async one_shot needs a TILE input with 32x32 tiles, got {}x{}",
+            input_tensor.tensor_spec().tile().get_height(),
+            input_tensor.tensor_spec().tile().get_width());
         const uint32_t num_out_cores = out_spec->grid.num_cores();
         TT_FATAL(
             num_out_cores % args.ring_size == 0,
@@ -116,7 +119,17 @@ void AllReduceAsyncDeviceOperation::validate_on_program_cache_miss(
         const auto& residual = tensor_args.residual_tensor.value();
         TT_FATAL(residual.storage_type() == StorageType::DEVICE, "Fused residual of all_reduce needs to be on device!");
         TT_FATAL(residual.buffer() != nullptr, "Fused residual of all_reduce needs to be allocated on device!");
+        TT_FATAL(
+            residual.device() == input_tensor.device(),
+            "Fused residual of all_reduce must be on the input tensor's mesh device");
         TT_FATAL(residual.layout() == Layout::TILE, "Fused residual of all_reduce must be in TILE layout");
+        TT_FATAL(
+            residual.tensor_spec().tile() == input_tensor.tensor_spec().tile(),
+            "Fused residual tile {}x{} must match the input tile {}x{} (its CB pages are counted in input tiles)",
+            residual.tensor_spec().tile().get_height(),
+            residual.tensor_spec().tile().get_width(),
+            input_tensor.tensor_spec().tile().get_height(),
+            input_tensor.tensor_spec().tile().get_width());
         TT_FATAL(
             residual.dtype() == input_tensor.dtype(),
             "Fused residual dtype {} must match the input dtype {} (it is unpacked with the reduction CB format)",
