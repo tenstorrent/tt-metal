@@ -52,6 +52,9 @@ inline void _llk_pack_configure_addrmod_()
 
         // Increment faces by 2 (jump 2 dest address 32)
         addr_mod_pack_t {.y_src = {.incr = 0, .clr = 1}, .z_src = {.incr = 1}}.set(ADDR_MOD_2);
+
+        // The tile's last PACR: the per-tile byte-wise pack leaves Z to it.
+        addr_mod_pack_t {.y_src = {.incr = 0, .clr = 1}, .z_src = {.incr = 0, .clr = 1}}.set(ADDR_MOD_3);
     }
     else
     {
@@ -172,12 +175,12 @@ inline void _llk_pack_mop_config_(
             ckernel::ckernel_template tmp(
                 MOP_OUTER_LOOP,
                 MOP_INNER_LOOP,
-                // Interfaces 0 and 1 read DEST rows 0 and 1 (face 0 and face 1); ADDR_MOD_2, close the tile.
+                // Interfaces 0 and 1 read DEST rows 0 and 1 (face 0 and face 1); ADDR_MOD_3, close the tile.
                 TT_OP_PACR(
                     p_pacr::CFG_CTXT_0,
                     p_pacr::NO_ROW_PAD_ZERO,
                     p_pacr::DST_ACCESS_NORMAL_MODE,
-                    ADDR_MOD_2,
+                    ADDR_MOD_3,
                     p_pacr::ADDR_CNT_CTXT_0,
                     ZERO_OUTPUT_FLAG,
                     p_pacr::TWO_INTFS_ACTIVE,
@@ -284,7 +287,7 @@ inline void _llk_pack_mop_config_(
             p_pacr::CFG_CTXT_0,
             p_pacr::NO_ROW_PAD_ZERO,
             p_pacr::DST_ACCESS_NORMAL_MODE,
-            ADDR_MOD_2,
+            ADDR_MOD_3,
             p_pacr::ADDR_CNT_CTXT_0,
             ZERO_OUTPUT_FLAG,
             PACK_INTF_SEL_1,
@@ -692,7 +695,7 @@ inline void _llk_pack_(const std::uint32_t tile_index, const std::uint32_t addre
 
     ckernel::ckernel_template::run();
 
-    // Every pack program leaves Z at 0 (the default MOP's last PACR, ADDR_MOD_1, clears it; the others reset it) and the
+    // Every pack program leaves Z at 0 (the last PACR of the default and tilize MOPs clears it; the others reset it) and the
     // pack dest init resets it at kernel start, so the byte-wise form leaves the reset out.
     if constexpr (!(rmw_dest && pack_mode == PackMode::Default))
     {
