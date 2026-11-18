@@ -917,3 +917,38 @@ def test_sdpa_block_map_rejects_windowed_and_sliding(device, mode, expect_error)
         ttnn.transformer.scaled_dot_product_attention(
             q, k, v, is_causal=False, program_config=program_config, attn_mask_block_map=block_map, **kwargs
         )
+
+
+@pytest.mark.parametrize("q_chunk_size, k_chunk_size", [(256, 512), (192, 192)], ids=["q256_k512", "q192_k192"])
+def test_sdpa_min_blocked_pack_tiles(device, q_chunk_size, k_chunk_size):
+    """Every min_blocked_pack_tiles setting packs the same values, and each one is its own cached program."""
+    torch.manual_seed(0)
+    q, k, v = (torch.randn(1, 8, 1536, 128) for _ in range(3))
+    tt_q, tt_k, tt_v = (
+        ttnn.from_torch(t, device=device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16) for t in (q, k, v)
+    )
+    compute_kernel_config = ttnn.init_device_compute_kernel_config(
+        device.arch(), math_fidelity=ttnn.MathFidelity.HiFi2, math_approx_mode=False, fp32_dest_acc_en=False
+    )
+    outputs = []
+    for min_blocked_pack_tiles in (None, 2, 8):
+        program_config = ttnn.SDPAProgramConfig(
+            compute_with_storage_grid_size=device.compute_with_storage_grid_size(),
+            q_chunk_size=q_chunk_size,
+            k_chunk_size=k_chunk_size,
+            min_blocked_pack_tiles=min_blocked_pack_tiles,
+        )
+        out = ttnn.transformer.scaled_dot_product_attention(
+            tt_q,
+            tt_k,
+            tt_v,
+            is_causal=False,
+            program_config=program_config,
+            compute_kernel_config=compute_kernel_config,
+        )
+        outputs.append(ttnn.to_torch(out))
+    passing, pcc = comp_pcc(torch.nn.functional.scaled_dot_product_attention(q, k, v), outputs[0], 0.999)
+    assert passing, pcc
+    for out in outputs[1:]:
+        assert torch.equal(out, outputs[0])
+    assert device.num_program_cache_entries() == 3

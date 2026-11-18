@@ -269,9 +269,14 @@ struct RingStreamingMaskCtx : LocalNPaddedTilesField<DynamicLocalN, LocalNPadded
 
 // Sentinel for "no CB" — beyond the valid 0-31 range.
 constexpr uint32_t INVALID_CB = 32;
-// Blocked pack from 2 tiles wide on both architectures. On Wormhole, 2 and 4 measure the same, and the 4-wide
-// subblocks of a q256 / k512 ring SDPA are faster blocked than tile by tile.
+// SDPA_MIN_BLOCKED_PACK_TILES comes from SDPAProgramConfig::min_blocked_pack_tiles.
+#if defined(SDPA_MIN_BLOCKED_PACK_TILES)
+constexpr uint32_t MIN_BLOCKED_PACK_TILES = SDPA_MIN_BLOCKED_PACK_TILES;
+#elif defined(ARCH_BLACKHOLE)
 constexpr uint32_t MIN_BLOCKED_PACK_TILES = 2;
+#else
+constexpr uint32_t MIN_BLOCKED_PACK_TILES = 8;
+#endif
 ALWI bool should_use_blocked_pack_width(uint32_t pack_width) { return pack_width >= MIN_BLOCKED_PACK_TILES; }
 
 template <uint32_t old_cb, uint32_t new_cb>
