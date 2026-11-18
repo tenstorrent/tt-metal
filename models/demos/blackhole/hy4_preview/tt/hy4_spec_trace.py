@@ -58,6 +58,12 @@ class SpecDerive:
             1, S, 64
         )  # persistent outputs: the layer's rope tables (cos, sin) and the 128-wide indexer tables
         self.c128, self.s128 = z(1, S, 128), z(1, S, 128)
+        from models.demos.blackhole.hy4_preview.tt import hy4_derive_fused as _b40
+
+        self._b40 = _b40 if _b40.enabled() else None
+        if self._b40 is not None:  # B40: persistent rope hi / lo index rows (uint32 [1, S] per mesh row)
+            zi = lambda: upload(md, torch.zeros(R, S, dtype=torch.int32), ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT, row_dim=0)
+            self.ih_b40, self.il_b40 = zi(), zi()
 
     def tabs(self):
         return (self.cos, self.sin, self.cos, self.sin, self.c128, self.s128)
@@ -69,13 +75,19 @@ class SpecDerive:
     def derive(self, p):
         """p fp32 [1,1,1,1] (position of row 0 of the S verify rows) -> overwrite the ctx tensors + rope tabs (all in place, traceable)."""
         ctx, S, cp = self.ctx, self.S, ttnn.copy
-        pv = ttnn.add(p, self.ar16)  # [1,1,1,16]: position of row j in element j
+        pv = None if self._b40 is not None else ttnn.add(p, self.ar16)  # [1,1,1,16]: position of row j in element j
         # --- rope (two-level tables)
-        pr = ttnn.slice(pv, [0, 0, 0, 0], [1, 1, 1, S])
-        hi = ttnn.floor(ttnn.multiply(pr, 1.0 / B2))
-        lo = ttnn.subtract(pr, ttnn.multiply(hi, float(B2)))
-        ih = ttnn.reshape(self._i(hi, ttnn.uint32), [1, S])
-        il = ttnn.reshape(self._i(lo, ttnn.uint32), [1, S])
+        if self._b40 is not None:
+            self._b40.derive_geom(
+                p, self.own_col, ctx.wr, ctx.kvcnt, ctx.colinfo, self.ih_b40, self.il_b40, ctx.upd_rows, S, CH, SL, B2
+            )
+            ih, il = self.ih_b40, self.il_b40
+        else:
+            pr = ttnn.slice(pv, [0, 0, 0, 0], [1, 1, 1, S])
+            hi = ttnn.floor(ttnn.multiply(pr, 1.0 / B2))
+            lo = ttnn.subtract(pr, ttnn.multiply(hi, float(B2)))
+            ih = ttnn.reshape(self._i(hi, ttnn.uint32), [1, S])
+            il = ttnn.reshape(self._i(lo, ttnn.uint32), [1, S])
         D = self.D
 
         def g(tbl, idx):
@@ -94,33 +106,38 @@ class SpecDerive:
             ttnn.concat([cosb, self.ones] if self.first else [self.ones, cosb], dim=3), self.c128
         )  # product9 fix: order as hy4_indexer (was flipped)
         cp(ttnn.concat([sinb, self.zeros] if self.first else [self.zeros, sinb], dim=3), self.s128)
-        # --- KV geometry of the S appended tokens (vector over j)
-        h5 = ttnn.floor(ttnn.multiply(pv, 1.0 / CH))
-        l5 = ttnn.subtract(pv, ttnn.multiply(h5, float(CH)))
-        col = ttnn.floor(ttnn.multiply(l5, 1.0 / SL))
-        loc = ttnn.add(ttnn.multiply(h5, float(SL)), ttnn.subtract(l5, ttnn.multiply(col, float(SL))))
-        mine = ttnn.eq(col, self.own_col)
-        e = ttnn.subtract(ttnn.multiply(mine, ttnn.add(loc, 1.0)), 1.0)  # local row on the owner column, -1 elsewhere
-        wr = ttnn.subtract(ttnn.multiply(ttnn.add(e, 1.0), self.maskS), 1.0)  # -1 for j >= S
-        cp(self._i(wr, ttnn.int32), ctx.wr)
-        for j in range(S):
-            cp(
-                ttnn.reshape(self._i(ttnn.slice(e, [0, 0, 0, j], [1, 1, 1, j + 1]), ttnn.int32), [1, 1]),
-                ctx.upd_rows[j],
+        if self._b40 is None:
+            # --- KV geometry of the S appended tokens (vector over j)
+            h5 = ttnn.floor(ttnn.multiply(pv, 1.0 / CH))
+            l5 = ttnn.subtract(pv, ttnn.multiply(h5, float(CH)))
+            col = ttnn.floor(ttnn.multiply(l5, 1.0 / SL))
+            loc = ttnn.add(ttnn.multiply(h5, float(SL)), ttnn.subtract(l5, ttnn.multiply(col, float(SL))))
+            mine = ttnn.eq(col, self.own_col)
+            e = ttnn.subtract(
+                ttnn.multiply(mine, ttnn.add(loc, 1.0)), 1.0
+            )  # local row on the owner column, -1 elsewhere
+            wr = ttnn.subtract(ttnn.multiply(ttnn.add(e, 1.0), self.maskS), 1.0)  # -1 for j >= S
+            cp(self._i(wr, ttnn.int32), ctx.wr)
+            for j in range(S):
+                cp(
+                    ttnn.reshape(self._i(ttnn.slice(e, [0, 0, 0, j], [1, 1, 1, j + 1]), ttnn.int32), [1, 1]),
+                    ctx.upd_rows[j],
+                )
+            n = ttnn.add(pv, 1.0)
+            fu = ttnn.floor(ttnn.multiply(n, 1.0 / CH))
+            rem = ttnn.subtract(n, ttnn.multiply(fu, float(CH)))
+            kv = ttnn.add(
+                ttnn.multiply(fu, float(SL)),
+                ttnn.minimum(ttnn.maximum(ttnn.subtract(rem, ttnn.multiply(self.own_col, float(SL))), 0.0), float(SL)),
             )
-        n = ttnn.add(pv, 1.0)
-        fu = ttnn.floor(ttnn.multiply(n, 1.0 / CH))
-        rem = ttnn.subtract(n, ttnn.multiply(fu, float(CH)))
-        kv = ttnn.add(
-            ttnn.multiply(fu, float(SL)),
-            ttnn.minimum(ttnn.maximum(ttnn.subtract(rem, ttnn.multiply(self.own_col, float(SL))), 0.0), float(SL)),
-        )
-        cp(self._i(ttnn.multiply(kv, self.maskS), ttnn.uint32), ctx.kvcnt)
-        n0 = ttnn.add(p, 1.0)
-        ci = ttnn.add(ttnn.multiply(self.own_col, self.oh0), ttnn.multiply(n0, self.oh1))
-        ci = ttnn.add(ci, ttnn.add(ttnn.multiply(n0, self.maskC), self.offC))
-        cp(self._i(ci, ttnn.uint32), ctx.colinfo)
+            cp(self._i(ttnn.multiply(kv, self.maskS), ttnn.uint32), ctx.kvcnt)
+            n0 = ttnn.add(p, 1.0)
+            ci = ttnn.add(ttnn.multiply(self.own_col, self.oh0), ttnn.multiply(n0, self.oh1))
+            ci = ttnn.add(ci, ttnn.add(ttnn.multiply(n0, self.maskC), self.offC))
+            cp(self._i(ci, ttnn.uint32), ctx.colinfo)
         # --- dense ids [S,1,1,K]: row j sees tokens 0..p+j
+        if self._b40 is not None and ctx.mode != "dense":
+            return  # B40: the dense ids are only read in mode "dense"
         pj = ttnn.add(p, self.arS)  # [S,1,1,1]
         valid = ttnn.le(self.arK, pj)
         ids = ttnn.subtract(ttnn.multiply(valid, ttnn.add(self.arK, 1.0)), 1.0)
@@ -193,6 +210,12 @@ class MTPRoundTail:
         self.m_out = rows(torch.zeros(R, 1, 1, 1))
         self.a_out = rows(torch.zeros(R, 1, 1, W16))  # emitted tokens a_0..a_k of the round (host reads a_out + m_out)
         self.zeros_pad = rep(torch.zeros(1, 1, 1, W16 - S))
+        from models.demos.blackhole.hy4_preview.tt import hy4_derive_fused as _b40
+
+        self._b40 = _b40 if _b40.tail_enabled() else None
+        if self._b40 is not None:  # B40: persistent outputs of the one-core accept program (per mesh row)
+            self.p_new_t, self.nxt_t = rows(torch.zeros(R, 1, 1, 1)), rows(torch.zeros(R, 1, 1, 1))
+            self.oh_col_t = rows(torch.zeros(R, 1, S, 1), ttnn.bfloat16)
         self.neg_pad = rep(torch.full((1, 1, 1, W16 - k), -1.0))
 
     def _u32_row(self, f):
@@ -208,19 +231,36 @@ class MTPRoundTail:
     def run(self, a_tok, h_rows, derived=False):
         """a_tok: uint32 [S, 1] verify output tokens (device greedy / sampler), h_rows bf16 [1,1,S,D] verify hidden rows (post model.norm). Updates self.pos / d_row / tok / a_out / m_out in place."""
         S, k, mtp, ch = self.S, self.k, self.mtp, self.ch
-        a_f = ttnn.typecast(ttnn.to_layout(ttnn.reshape(a_tok, [1, 1, 1, S]), ttnn.TILE_LAYOUT), ttnn.float32)
-        a_row = ttnn.concat([a_f, self.zeros_pad], dim=3) if W16 > S else a_f
-        m, onehot, nxt = accept(a_row, self.d_row, self.cap, k, self.ar16, None, None)
-        ttnn.copy(a_row, self.a_out)
-        ttnn.copy(m, self.m_out)
+        if self._b40 is not None:
+            self._b40.spec_accept(
+                a_tok,
+                self.d_row,
+                self.cap,
+                self.pos,
+                self.a_out,
+                self.m_out,
+                self.oh_col_t,
+                self.p_new_t,
+                self.nxt_t,
+                S,
+                k,
+            )
+        else:
+            a_f = ttnn.typecast(ttnn.to_layout(ttnn.reshape(a_tok, [1, 1, 1, S]), ttnn.TILE_LAYOUT), ttnn.float32)
+            a_row = ttnn.concat([a_f, self.zeros_pad], dim=3) if W16 > S else a_f
+            m, onehot, nxt = accept(a_row, self.d_row, self.cap, k, self.ar16, None, None)
+            ttnn.copy(a_row, self.a_out)
+            ttnn.copy(m, self.m_out)
         # MTP step 0 on all S rows: pair (h_j, a_j) at position P + j  (no dependence on the accept result)
         if not derived:  # the verify of the same trace already derived the position-P inputs
             self.sd.derive(self.pos)
         out0 = self._step(ttnn.reshape(a_tok, [1, S]), h_rows, self._dense8())
-        oh_col = ttnn.typecast(ttnn.eq(self.arS_col, m), ttnn.bfloat16)  # [1,1,S,1]
+        oh_col = (
+            self.oh_col_t if self._b40 is not None else ttnn.typecast(ttnn.eq(self.arS_col, m), ttnn.bfloat16)
+        )  # [1,1,S,1]
         hm = ttnn.sum(ttnn.multiply(out0, oh_col), dim=2, keepdim=True)  # [1,1,1,D] the MTP hidden of row m
         ttnn.deallocate(out0)
-        p_new = ttnn.add(ttnn.add(self.pos, m), 1.0)  # L' = P + m + 1
+        p_new = self.p_new_t if self._b40 is not None else ttnn.add(ttnn.add(self.pos, m), 1.0)  # L' = P + m + 1
         drafts = []
         h_cur = hm
         for i in range(k):
@@ -249,6 +289,11 @@ class MTPRoundTail:
             ttnn.deallocate(o)
         if self.sampling is not None:
             self.sampling.finish()
+        if self._b40 is not None:
+            self._b40.spec_state(
+                drafts, self.nxt_t, p_new, self.park, self.parkvec, self.d_row, self.tok, self.pos, S, k
+            )
+            return
         # next-round state (a parked row keeps (PAD, 0, no drafts): the same values ``load`` uploads for an idle row)
         keep = ttnn.subtract(ttnn.multiply(self.park, -1.0), -1.0)  # 1 - park
         dcat = ttnn.concat(drafts, dim=3)  # [1,1,1,k]
