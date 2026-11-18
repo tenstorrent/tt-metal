@@ -15,25 +15,32 @@ namespace ttml::ops::distributed {
 // Vocab-parallel cross-entropy loss.
 //
 // Avoids the full-vocabulary gather by keeping logits sharded along the vocab
-// dimension across TP devices and communicating only small [B,1,S,1] correction
-// tensors (local max, local exp-sum, local target-logit).
+// dimension across TP devices and communicating only one small FP32 record
+// per row and shard.
 //
-// Forward (all float32 for numerical stability):
-//   1. Local max per device  [B,1,S,1]  → all-gather → global max
-//   2. Shifted exp + local sum           → all-reduce  → global sum
-//   3. log_normalizer = global_max + log(global_sum)
-//   4. On-device one-hot via arange + eq → target logit → all-reduce
-//   5. per-position loss = log_normalizer − target_logit  [B,1,S,1]
-//   6. ReduceType::MEAN: collapse to scalar via mean over B*S.
+// Collapse-resistant (arXiv:2610.31642, Section 2), like the fused single-device
+// cross-entropy: the loss of a confidently predicted token is log1p(tail) and its
+// gradient -s * tail / (1 + tail), never rounded to zero while tail is representable.
+//
+// Forward:
+//   1. Per shard and row (fused kernel): local maximum, global column of its
+//      first occurrence, tail sum_{j != k} exp(x_j - m) without it, and the
+//      target logit if this shard owns the target, all FP32.
+//   2. All-gather the records across TP (exact; no reduction in the CCL).
+//   3. Every device combines them identically: global maximum M, one global first
+//      maximum K (lowest shard on ties), T = tail without exactly x_K,
+//      l = log1p(T) in FP32, per-position loss = -((x_t - M) - l).
+//   4. ReduceType::MEAN: collapse to scalar via mean over B*S.
 //      ReduceType::NONE: return the per-position [B,1,S,1] tensor as-is, so
 //      callers can apply per-token weighting (e.g. SFT loss masks) before
 //      taking their own reduction.
 //
-// Backward: purely local, no inter-device communication.
-//   dL/dx_k = (softmax_k − onehot_k) * scale * grad_output
-//   scale = 1/N for MEAN, 1.0 for NONE.  The trailing multiply broadcasts
-//   the upstream gradient: scalar [1,1,1,1] for MEAN, per-position
-//   [B,1,S,1] for NONE — both expand against scaled_softmax [B,1,S,V/tp].
+// Backward: purely local, no inter-device communication, from the row state (M, l).
+//   dL/dx_j = s * exp(x_j - M - l), and on the target's shard
+//   dL/dx_t = s * expm1((x_t - M) - l) = s * (softmax_t - 1).
+//   s = scale * grad_output: scale = 1/N for MEAN, 1.0 for NONE; the upstream
+//   gradient (scalar [1,1,1,1] for MEAN, per-position [B,1,S,1] for NONE) is
+//   folded into the kernel's per-row scale.
 //
 // logits  : [B, 1, S, local_V] bfloat16, sharded along vocab (last) dim across TP.
 // targets : [B, 1, S, 1] or [B, S] uint32, integer target indices in [0, full_V),

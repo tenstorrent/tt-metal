@@ -3,8 +3,9 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // The fused cross-entropy backward: per row, the gradient s * softmax(x) with the target's entry
-// s * expm1((x_t - M) - l), s times the row's upstream gradient with UPSTREAM_GRAD (see row_softmax_program.hpp).
-// The row statistics and the conventions of the steps are in row_softmax_compute.hpp.
+// s * expm1((x_t - M) - l), s times the row's upstream gradient with UPSTREAM_GRAD; with the vocabulary sharded across
+// devices (VP_BACKWARD), from the combined row state. See row_softmax_program.hpp. The row statistics and the
+// conventions of the steps are in row_softmax_compute.hpp.
 #include "tt-train/sources/ttml/metal/ops/log_softmax/device/kernels/compute/row_softmax_compute.hpp"
 
 #ifdef TRISC_MATH
@@ -140,7 +141,7 @@ inline void cross_entropy_grad_tiles(uint32_t begin, uint32_t end) {
 }
 
 // One row of the cross-entropy gradient: dx = s * softmax(x), with the writer substituting the target's dx_t.
-// Consumes the row statistics cmax, cpivot, cnorm.
+// Consumes the row statistics cmax, cnorm (and cpivot, which the vocabulary-parallel backward does not have).
 inline void cross_entropy_grad_row(uint32_t begin, uint32_t end) {
     cross_entropy_scale_tile();                // cd = q
     broadcast_column_tile<Cb::cd, Cb::cs>(0);  // cs = q in every column
@@ -148,7 +149,9 @@ inline void cross_entropy_grad_row(uint32_t begin, uint32_t end) {
     target_gradient_tile();                      // cpivotgrad = dx_t
     broadcast_column_tile<Cb::cmax, Cb::cm>(0);  // cm = M in every column
     cb_pop_front(Cb::cmax, 1);
+#ifndef VP_BACKWARD
     cb_pop_front(Cb::cpivot, 1);
+#endif
     cb_pop_front(Cb::cnorm, 1);
     cross_entropy_grad_tiles(begin, end);  // cout = dx
     cb_pop_front(Cb::cm, 1);
@@ -161,7 +164,10 @@ void kernel_main() {
     reconfig_data_format_srca(Cb::cx, Cb::cfp32);  // Steps start with source A set for the FP32 statistics.
     cb_wait_front(Cb::ccols, 1);
     for (uint32_t row = 0; row < count; ++row) {
+        // VP_BACKWARD has no statistics pass: the reader hands over the combined row state (M, l) in cmax and cnorm.
+#ifndef VP_BACKWARD
         row_statistics<Cb, chunks>(begin, end);  // cmax, cpivot, cnorm = M, K, l
+#endif
         cross_entropy_grad_row(begin, end);
     }
     cb_pop_front(Cb::ccols, 1);
