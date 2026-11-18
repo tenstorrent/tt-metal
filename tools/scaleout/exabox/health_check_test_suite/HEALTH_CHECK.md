@@ -3,14 +3,19 @@
 Pre-cluster hardware sanity check for Blackhole Galaxy 6U systems. Captures a
 `tt-smi` snapshot, decodes per-chip telemetry, runs a reset stability loop,
 invokes the `unit_tests_deployment` gtest binary, and on the longer tiers folds
-in the first-step triage tools, the QSFP tests and the sys-triage bundle. Emits
-a single JSON report with per-check PASS/WARN/FAIL/SKIP status grouped by IP.
+in the first-step triage tools, the QSFP tests and the sys-triage bundle. The
+`flash` tier reads every on-host ETH link twice with tt-triage instead, with no
+resets and no tests. Emits a single JSON report with per-check
+PASS/WARN/FAIL/SKIP status grouped by IP.
 
 ## Quick start
 
 ```bash
 export TT_METAL_HOME=/path/to/tt-metal
 cd $TT_METAL_HOME
+
+# Quick ETH link health, the unit read as found (snapshot + two triage reads 30 s apart)
+./tools/scaleout/exabox/health_check_test_suite/run_diag.sh flash
 
 # Full light tier (snapshot + tt-smi -r + eth_link_up gtest, ~75s)
 ./tools/scaleout/exabox/health_check_test_suite/run_diag.sh light
@@ -35,6 +40,9 @@ the per-step logs and the console transcript on the host:
 # Medium tier into ./test_output_<date>-<time>/
 ./tools/scaleout/exabox/health_check_test_suite/run_diag_docker.sh
 
+# Quick ETH link health
+./tools/scaleout/exabox/health_check_test_suite/run_diag_docker.sh flash
+
 # Deploy tier with the QSFP phase, results in a named directory
 ./tools/scaleout/exabox/health_check_test_suite/run_diag_docker.sh deploy \
     --output-dir /data/hc-run-1 --gh-token "$GH_TOKEN"
@@ -46,10 +54,15 @@ BMC_IP=... BMC_USER=... BMC_PASSWORD=... \
 
 - The tier defaults to `medium`; `--image` defaults to `exabox-tools:latest`,
   which is re-pulled on every run.
+- The container runs the suite baked into the image, not the host checkout's, so
+  a tier exists in docker only once the image is built from a commit that has
+  it. `flash` also needs the image's venv to carry `tools/triage/requirements.txt`,
+  which `dockerfile/exabox_tools/Dockerfile` installs and smoke-tests.
 - `--gh-token` (default `$GH_TOKEN`) installs `tt-syseng-diag` from its private
   release (`tenstorrent/tt-syseng-diag-packages`, `--diag-pkg-version`, default
   `0.0.4`). Without it the QSFP and sys-triage phases report SKIP; every other
-  check still runs.
+  check still runs. `flash` and `light` run neither phase, so it is never
+  installed for them.
 - `--bmc-ip` / `--bmc-user` / `--bmc-password` (default `$BMC_*`) feed the
   sys-triage phase, `pre_reboot` only.
 - `--bmc-api-url` / `--bmc-api-token` (default `$TT_BMC_API_URL` /
@@ -62,31 +75,50 @@ BMC_IP=... BMC_USER=... BMC_PASSWORD=... \
   `--tt-metal-path` after a `--` separator, using an in-container repo path.
   Host paths (`--input-snapshot`, `--qsfp-descriptor`, `--triage-dir`) supplied
   before the separator are mounted read-only for you.
-- The exit code is the suite's own: `1` on FAIL, `0` on PASS/WARN.
+- One run per output directory. When a run ends, everything it wrote is handed
+  back to the user who launched the wrapper, so the container user cannot
+  overwrite it. A directory that already holds a run (a `diag_report.json` or
+  `console.log`) is refused before anything starts, rather than failing on the
+  run's first write and leaving the earlier report in place.
+- The exit code is the suite's own: `1` on FAIL, `0` on PASS/WARN. A report that
+  could not be written is `1` too, whatever the phases found.
 
 ## Tiers
 
-| Tier | Resets | Tests | Triage | QSFP tests | sys-triage | Duration | Use when |
-|---|---|---|---|---|---|---|---|
-| `light`  | `tt-smi -r` × 1                            | eth_link_up                                                                | — | — | — | ~75 s   | Smoke check on every new unit |
-| `medium` | `tt-smi -r`, `tt-smi -glx_reset`, then `-glx_reset` after the tests | eth_link_up + eth_bandwidth + gddr_fast (DRAM_TEST_FAST=1)                | host_side + device_side | yes, if installed | — | ~5 min + triage + ~7 min | Pre-deployment validation |
-| `deploy` | `tt-smi -r`, `tt-smi -glx_reset` × 2, then `-glx_reset` after the tests | eth_link_up + eth_bandwidth + full gddr matrix (3 DramDeployment tests) + didt_matmul_galaxy (pytest, ~9 min) | host_side + device_side | yes, if installed | — | ~18 min + triage + ~7 min | Final deploy gate |
-| `pre_reboot` | none | — | host_side + device_side | yes, if installed | yes, if installed and BMC credentials set | snapshot + triage + ~7 min + sys-triage | Collect data before a BMC reboot |
+| Tier | Resets | Tests | Triage | ETH status | QSFP tests | sys-triage | Duration | Use when |
+|---|---|---|---|---|---|---|---|---|
+| `flash`  | none | — | — | 2 reads, 30 s apart | — | — | snapshot + 2 triage reads + 30 s | Quick ETH link health, the unit read as found |
+| `light`  | `tt-smi -r` × 1                            | eth_link_up                                                                | — | — | — | — | ~75 s   | Smoke check on every new unit |
+| `medium` | `tt-smi -r`, `tt-smi -glx_reset`, then `-glx_reset` after the tests | eth_link_up + eth_bandwidth + gddr_fast (DRAM_TEST_FAST=1)                | host_side + device_side | — | yes, if installed | — | ~5 min + triage + ~7 min | Pre-deployment validation |
+| `deploy` | `tt-smi -r`, `tt-smi -glx_reset` × 2, then `-glx_reset` after the tests | eth_link_up + eth_bandwidth + full gddr matrix (3 DramDeployment tests) + didt_matmul_galaxy (pytest, ~9 min) | host_side + device_side | — | yes, if installed | — | ~18 min + triage + ~7 min | Final deploy gate |
+| `pre_reboot` | none | — | host_side + device_side | — | yes, if installed | yes, if installed and BMC credentials set | snapshot + triage + ~7 min + sys-triage | Collect data before a BMC reboot |
 
 The [sys-triage phase](#sys-triage-phase) runs last on `pre_reboot` only; it
 collects a bundle for the ticket and never gates the run.
 
+`flash` is the quick look at the ETH links. It runs the snapshot and the
+[ETH status phase](#eth-status-phase) and nothing else: no reset, so a fault is
+still there for whoever picks the ticket up, and no tests, so nothing has
+retrained or reset a link before it is read. The other phases are recorded as
+SKIP with the reason. Unlike the triage and QSFP phases, the ETH status phase
+gates the run, since it is the whole of what `flash` checks. Under the fleet
+harness (`test_infrastructure/run_health_check.py`) a clean `flash` run never
+closes the node's open ticket: it runs no device tests, so passing it does not
+show the node recovered from whatever the ticket is about.
+
 What each tier runs is defined in one place, `TIERS` in
 [`tiers.py`](tiers.py): per tier, the pre-test resets, the tests, the post-test
-reset, the triage tools, and whether the QSFP tests and sys-triage run. To add a
+reset, the triage tools, and whether the ETH status read, the QSFP tests and
+sys-triage run. To add a
 step to a tier, or drop one, edit its entry there. The steps it can name are
 defined beside the phase that runs them: gtests in `TESTS` and pytests in
 `PYTESTS` (`diag/device_tests.py`), triage tools in `TRIAGE_TOOLS`
 (`diag/triage.py`). An unknown name fails at import. The phase order is fixed in
 `diag_runner.run_diag()` and is not a per-tier choice. A new tier also has to be
-added to the tier lists in `run_diag.sh` and `run_diag_docker.sh`, and to the
-table above; `tools/scaleout/exabox/tests/test_diag_tiers.py` fails until the
-scripts agree with `TIERS`.
+added to the tier lists in `run_diag.sh`, `run_diag_docker.sh` and
+`test_infrastructure/run_health_check.py`, and to the table above;
+`tools/scaleout/exabox/tests/test_diag_tiers.py` fails until the scripts agree
+with `TIERS`.
 
 `pre_reboot` collects data; it does not check the unit. It runs on a unit that is
 about to be power cycled through the BMC, so it records the state first and runs
@@ -230,6 +262,113 @@ for want of a capability rather than a mount:
 
 Also note `/proc/driver/tenstorrent/<N>/pids` lists *host* PIDs, which don't resolve
 in the container's PID namespace — the holder count is right, the names are not.
+
+## ETH status phase
+
+`flash` reads every on-host ETH link twice with tt-triage's `check_eth_status`,
+30 s apart, and judges the two reads against the BH Galaxy UBB port map. It is
+`diag/eth_status.py`; whether a tier runs it is `eth_status` in `tiers.py`.
+
+### What it runs
+
+```bash
+<python> tools/triage/triage.py --run=device_info --run=check_eth_status --dev=all --llm-output \
+    --inspector-log-path=<output_dir>/logs/eth_status_no_inspector
+sleep 30
+<python> tools/triage/triage.py --run=check_eth_status --dev=all --llm-output \
+    --inspector-log-path=<output_dir>/logs/eth_status_no_inspector
+```
+
+Triage runs from the tt-metal tree the suite runs from, the host checkout
+(`run_diag.sh`) or the image's (`run_diag_docker.sh`); nothing is started in a
+container of its own. `<python>` is `python_env/bin/python` where it exists
+(`create_venv.sh` installs `tools/triage/requirements.txt` there), else the
+python running the suite, which in the `exabox-tools` image is its venv. Before
+the first read the phase checks that this python can import triage's
+requirements, and WARNs naming the missing module if it cannot.
+
+- **`--inspector-log-path` points at a path that does not exist**, which keeps
+  Inspector out. By default triage loads `/tmp/tt-metal/inspector`, where the
+  last metal run on the host left the eth cores *it* found trained, and would
+  check those instead of the links as they are now.
+- **`TT_METAL_VISIBLE_DEVICES` is dropped** from triage's environment, so every
+  chip is read whatever the caller left visible to metal.
+- **`device_info`** on the first read gives each triage chip id its PCI address,
+  and from the bus byte its UBB and ASIC slot. If its table is missing or does
+  not cover every chip, the phase falls back to `/dev/tenstorrent` order, which
+  is how UMD numbers the chips; `eth_status_read` says which it used.
+
+### PCIe first
+
+Before any chip is opened, the phase reads each Tenstorrent PCI function's
+config space from sysfs. A chip whose vendor ID reads `0xFFFF`, or whose
+Command register has memory decoding off, has dropped off PCIe:
+`eth_status_pcie_gate` FAILs naming it, and the links are **not read**. Opening
+that chip could hang the read, and a reset to recover it wipes the evidence, so
+the unit is left as it was found. A chip that is simply missing is
+`pcie_enum_count`'s finding; here it only means which links are there cannot be
+judged, since the links to it cannot come up.
+
+### What is judged and what is described
+
+The link checks read `Port Status`, the live `Link` state and `Heartbeat` of
+every eth core triage lists. The counter checks compare the two reads: the FEC,
+CRC and retrain counters only go up until the chips are reset, so what they did
+in 30 s is the reading, not their totals. A counter that went down means that
+chip was reset between the reads, and its link is not rated.
+
+The topology checks use `UBB_ETH_PORTS` in `diag/galaxy.py`, the UBB_BLACKHOLE
+port map from tt-metal's `tools/scaleout/board/board.cpp`. Its **built-in**
+links (20 board traces and 6 linking-board ports per UBB, 208 eth cores on a
+Galaxy) exist whatever the cabling, so one that is not linked is a FAIL. A QSFP
+port carries one cable, so a port with only one of its two lanes linked is a
+FAIL too.
+
+**The cabling itself is described, never judged.** It differs from host to host
+and over time, and a QSFP port linked on no UBB has no cable, a cable to another
+host or dead cables, which this phase cannot tell apart. `eth_status_cabling`
+names what it finds where it has a name for it (tt-metal's mesh, Y, X and XY
+torus, XY torus plus the Z ports, a Galaxy inside a sub-torus cluster) and
+always PASSes. The one cabling finding is `eth_status_cable_trays_alike`: a port
+linked on some UBBs and not on the others is a WARN, since UBBs are normally
+cabled alike.
+
+### Statuses
+
+- **SKIP** — no reading: no chip is on PCIe, or one dropped off it.
+- **WARN on `eth_status_read`** — triage is not in the tree or its
+  requirements do not import; or triage ran but listed no eth core (its last
+  output lines are in `details`; a chip that stopped answering shows up as a
+  register timeout there), or only the first read did, and the counters were
+  judged on one read. Lost coverage, not a statement about the links. Not a
+  SKIP, because the PCIe gate has already PASSed by then, and a SKIP beside it
+  would roll the phase, and a flash run, up to PASS with no link read.
+- Every other check is a finding about the links, at the thresholds below
+  (module constants in `diag/eth_status.py`):
+
+| Reading | WARN | FAIL |
+|---|---|---|
+| Uncorrected FEC codewords, per link | ≥ 10/s | ≥ 100/s: the link corrupts data |
+| Same, when only one read came back | ≥ 1,000,000 since the last reset | — |
+| CRC errors (bad frames), per link | ≥ 1/s | — |
+| Retrains | ≥ 3 since the last reset | any during the check: the link is flapping |
+| ERR_STAT | any latched bit | — |
+
+### Not checked here
+
+- Whether the cabling is the one the host is meant to have; only the people who
+  cabled it know.
+- Links to other hosts: `check_eth_status` lists on-host links only.
+- Where each cable goes: the far end of a link is not read, so cables in the
+  wrong ports can look healthy. The [QSFP tests](#qsfp-tests-phase) compare
+  partners.
+- Traffic: a fabric router can wedge on a link that still reads healthy. The
+  `eth_link_up` and `eth_bandwidth` gtests push traffic.
+
+The raw reads land in `<output_dir>/logs/eth_status_read_{1,2}.csv` (triage's
+own CSV tables) beside `eth_status_read_{1,2}.log` (command, exit code and
+stderr), so `collect_run_artifacts()` attaches them to the JIRA ticket with no
+extra wiring.
 
 ## QSFP tests phase
 
@@ -440,13 +579,14 @@ whose baked-in suite predates the phase has the `--skip-sys-triage` and
 
 | Flag | Default | Purpose |
 |---|---|---|
-| `--tier {light,medium,deploy,pre_reboot}` | required | Selects reset cadence + gtest matrix |
+| `--tier {flash,light,medium,deploy,pre_reboot}` | required | Selects reset cadence + gtest matrix |
 | `--dry-run` | off | Print intended subprocess calls; skip destructive steps |
 | `--skip-reset` | off | Skip the reset loop phase entirely |
 | `--skip-tests` | off | Skip the gtest phase entirely |
 | `--skip-triage` | off | Skip the post-test reset and the triage phase entirely. `--skip-reset` also suppresses the post-test reset. |
 | `--triage-dir PATH` | `$HC_TRIAGE_DIR`, else `<repo>/tools/scaleout/kmd_triage` | Directory holding the triage scripts. Override only to run a working copy against a deployed checkout. |
 | `--triage-gating` | off | Let triage FAILs gate the run. Off holds them at WARN (noted in `details`); findings are recorded either way. |
+| `--skip-eth-status` | off | Skip the ETH status read entirely |
 | `--skip-qsfp-tests` | off | Skip the QSFP tests entirely. Named for the phase, not the collector's own `--skip-qsfp`, which drops the cage sweep but still collects ETH. |
 | `--qsfp-tool-path PATH` | `tt-bh-glx-cluster-debug` on PATH | Override the collector binary. A path that doesn't resolve is reported as its own SKIP rather than silently ignored. |
 | `--qsfp-descriptor PATH` | — | `factory_system_descriptor.textproto`, which gives the cage-attached links an expected partner. Without it only the soldered internal links are compared against a topology. |
@@ -460,7 +600,7 @@ whose baked-in suite predates the phase has the `--skip-sys-triage` and
 | `--tt-smi-path PATH` | `/opt/tt_metal_infra/.../tt-smi` else `tt-smi` on PATH | Override tt-smi binary or repo path |
 | `--tt-metal-path PATH` | `$TT_METAL_HOME` | tt-metal repo root. The deployment-test binary is looked up under `build_Release/`, `build/`, `build_Debug/` and `build_RelWithDebInfo/`, in that order (`DEPLOYMENT_BIN_CANDIDATES`). |
 | `--output PATH` | `./diag_report.json` | Where to write the JSON report. Gtest logs go to `<output_dir>/logs/`. |
-| `--snapshot-out PATH` | `/tmp/diag_snapshot.json` | Where `tt-smi -f` writes the raw snapshot |
+| `--snapshot-out PATH` | `diag_snapshot.json` beside `--output` | Where `tt-smi -f` writes the raw snapshot |
 
 ## Checks (grouped by IP)
 
@@ -528,6 +668,29 @@ while `eth_links_up` reads the `ETH_LIVE_STATUS` telemetry from the snapshot.
 
 ### Thermal (JSON-only)
 `asic_thermal_precheck` records the hottest chip / temp vs `thm_limit` for forensics.
+
+### ETH status (flash)
+
+From the two `check_eth_status` reads; see [the phase section](#eth-status-phase)
+for how they are taken and the thresholds. Links are named
+`UBB<tray>/U<asic> ch<channel> (<port>, dev <triage chip id>)`, e.g.
+`UBB2/U6 ch4 (TRACE P9, dev 13)`.
+
+| Check | Rule | On fail |
+|---|---|---|
+| `eth_status_pcie_gate` | Every Tenstorrent PCI function answers in config space with memory decoding on. Read from sysfs before any chip is opened. | **FAIL**, naming the chips, and the links are not read. **SKIP** with no chip on PCIe. |
+| `eth_status_read` | Both triage reads listed eth cores | **WARN** when triage is absent or its requirements are missing, when it listed no eth core (with its last output lines), or when only the first read did. **SKIP** when the PCIe gate stopped it. |
+| `eth_status_links_down` | Every listed link not on an unused port is up and readable, and none went away between the reads | **FAIL**, naming the links |
+| `eth_status_heartbeat` | No eth core's heartbeat stood still between triage's two samples (a core released to metal is fine) | **FAIL** — the core has stopped |
+| `eth_status_port_state` | No port reports `Unknown`, `Invalid` or `Unsupported FW` | **WARN** |
+| `eth_status_fec_uncorrected` | Uncorrected FEC codewords per link between the reads | **FAIL** ≥ 100/s, **WARN** ≥ 10/s; on one read, **WARN** ≥ 1,000,000 since the last reset |
+| `eth_status_crc_errors` | CRC errors per link between the reads | **WARN** ≥ 1/s. **SKIP** on one read. |
+| `eth_status_retrains` | No link retrained during the check | **FAIL** when one did; **WARN** at ≥ 3 since the last reset |
+| `eth_status_err_stat` | No latched ETH_CTRL error | **WARN** |
+| `eth_status_builtin_links` | All 208 built-in eth cores (board traces, linking boards) linked | **FAIL**, naming port and lane, and whether it is a trace or a linking board |
+| `eth_status_cable_lanes` | No QSFP port with only part of its lanes linked | **FAIL** — the cable is there and part of it is dead |
+| `eth_status_cable_trays_alike` | No QSFP port linked on some UBBs and not on the others | **WARN** |
+| `eth_status_cabling` | Describes the QSFP ports linked on all 4 UBBs and the link counts | never alerts. The four topology checks **SKIP** when a chip is missing or the chips cannot be placed on 4 UBBs × 8 ASICs. |
 
 ### QSFP tests (medium / deploy / pre_reboot, when the package is installed)
 
@@ -646,6 +809,22 @@ not in `build_metal.sh`'s default target list. Build with either:
 ninja -C build_Release unit_tests_deployment
 ```
 
+The `flash` tier needs no build, only triage's Python requirements, which
+`./create_venv.sh` installs into `python_env/` (or, into another environment,
+`uv pip install -r tools/triage/requirements.txt`).
+
+A sparse checkout runs `flash` on the host too, given triage and the file its
+`inspector.capnp` symlink points at, and a `python_env/` that carries triage's
+requirements:
+
+```bash
+git clone --depth 1 --filter=blob:none --sparse -b <branch> https://github.com/tenstorrent/tt-metal.git tt-metal
+cd tt-metal
+git sparse-checkout set tools/scaleout/exabox tools/triage tt_metal/impl/debug/inspector
+python3 -m venv python_env && python_env/bin/pip install -r tools/triage/requirements.txt
+./tools/scaleout/exabox/health_check_test_suite/run_diag.sh flash --output /path/to/run/diag_report.json
+```
+
 ## Repo layout
 
 ```
@@ -654,21 +833,23 @@ tools/scaleout/exabox/health_check_test_suite/
 ├── run_diag_docker.sh  # runs run_diag.sh inside the exabox-tools image; results land on the host
 ├── diag_runner.py      # CLI and the phase order. Also exposes run_diag() as a
 │                       #   programmatic entry point returning (exit_code, report_dict).
-├── tiers.py            # what each tier runs: resets, tests, triage, QSFP, sys-triage
+├── tiers.py            # what each tier runs: resets, tests, triage, ETH status, QSFP, sys-triage
 ├── diag/               # the phases and what they share
 │   ├── model.py            # Check / Phase result model
 │   ├── common.py           # subprocess, console and path helpers
-│   ├── galaxy.py           # BH Galaxy topology: BDF <-> UBB/ASIC, ETH wiring, board revs
+│   ├── galaxy.py           # BH Galaxy topology: BDF <-> UBB/ASIC, ETH wiring and UBB port map, board revs
 │   ├── snapshot.py         # phase 1: tt-smi snapshot capture, BMC FRU inventory
 │   ├── snapshot_checks.py  # phase 1: the checks over a snapshot
 │   ├── resets.py           # phase 2: pre-test reset loop; phase 4: post-test reset
 │   ├── device_tests.py     # phase 3: deployment gtests (TESTS) and pytests (PYTESTS)
 │   ├── external.py         # ingesting checks written by external tools
 │   ├── triage.py           # phase 5: kmd_triage tools (TRIAGE_TOOLS)
-│   ├── qsfp.py             # phase 6: QSFP tests, collection
-│   ├── qsfp_ingest.py      # phase 6: cluster-debug JSONL dump -> checks. No hardware in it: a stored
+│   ├── eth_status.py       # phase 6: ETH status read: PCIe gate, two tt-triage reads, and the
+│   │                       #   judgement of them (pure functions, tested at a desk)
+│   ├── qsfp.py             # phase 7: QSFP tests, collection
+│   ├── qsfp_ingest.py      # phase 7: cluster-debug JSONL dump -> checks. No hardware in it: a stored
 │   │                       #   dump is all it needs, so it is tested at a desk. Runnable standalone.
-│   └── sys_triage.py       # phase 7: sys-triage bundle
+│   └── sys_triage.py       # phase 8: sys-triage bundle
 ├── HEALTH_CHECK.md     # this file
 └── test_infrastructure/  # scheduled/CI harness around the diag suite
     ├── run_health_check.py              # entrypoint: run diag as a subprocess, then JIRA + CSV + SFTP
@@ -688,7 +869,8 @@ tools/scaleout/exabox/health_check_test_suite/
 ```
 
 The unit tests for the parsers and the harness live outside this directory, in
-`tools/scaleout/exabox/tests/` (e.g. `test_diag_runner_parsers.py`, `test_diag_tiers.py`).
+`tools/scaleout/exabox/tests/` (e.g. `test_diag_runner_parsers.py`, `test_diag_tiers.py`,
+`test_diag_eth_status.py`).
 
 The `test_infrastructure/` harness previously lived in the `exabox-infra` repo and
 spun up a nested Docker container to run the diag suite. Now that the harness ships

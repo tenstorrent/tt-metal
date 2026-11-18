@@ -9,6 +9,8 @@
 #
 # Tiers (what each one runs is defined in tiers.py; keep the case below and the
 # --help text in step with it):
+#   flash           quick ETH link health, the unit read as found: snapshot validate
+#                   + two tt-triage check_eth_status reads 30 s apart. No resets, no tests
 #   light   ~5 min  snapshot validate + 1 PCI reset + GDDR train/BIST + eth link_up
 #   medium          light + eth bandwidth + GDDR fast-pattern stress
 #                   + post-test -glx_reset + triage (host_side + device_side)
@@ -24,7 +26,7 @@
 #
 # Designed to match tt-metal's run_upstream_tests_vanilla.sh shape.
 # Can be used as the ENTRYPOINT of a docker image
-# (TEST_COMMAND=tools/scaleout/exabox/health_check_test_suite/run_diag.sh, CMD=light|medium|deploy|pre_reboot).
+# (TEST_COMMAND=tools/scaleout/exabox/health_check_test_suite/run_diag.sh, CMD=flash|light|medium|deploy|pre_reboot).
 
 set -euo pipefail
 
@@ -32,9 +34,11 @@ SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
 
 show_help() {
     cat <<EOF
-Usage: $0 {light|medium|deploy|pre_reboot} [diag_runner.py options]
+Usage: $0 {flash|light|medium|deploy|pre_reboot} [diag_runner.py options]
 
 Tiers:
+  flash       Quick ETH link health, the unit read as found: snapshot validate + two
+              tt-triage check_eth_status reads 30 s apart. No resets, no tests.
   light       Smoke check: snapshot validate + 1 PCI reset + GDDR train/BIST + eth link_up
   medium      light + eth bandwidth + GDDR fast-pattern stress + post-test reset + triage
               + QSFP tests
@@ -42,6 +46,12 @@ Tiers:
               + post-test reset + triage + QSFP tests
   pre_reboot  Data collection before a BMC reboot: snapshot + triage + QSFP tests
               + sys-triage. No resets, no tests.
+
+The ETH status read (flash) runs tools/triage/triage.py from this checkout under
+python_env/bin/python (create_venv.sh installs the triage requirements there), else
+the python running this script. A sparse checkout needs tools/triage and
+tt_metal/impl/debug/inspector for it. It checks PCIe in sysfs first and does not open
+the chips if one has dropped off; the raw reads land in <output dir>/logs/eth_status_read_*.
 
 The QSFP tests check ETH link training, cabling and module state across all 448
 ports. They run on medium, deploy and pre_reboot when \`tt-bh-glx-cluster-debug\` is on PATH
@@ -62,6 +72,7 @@ Forwarded options (see diag_runner.py --help for details):
   --triage-dir PATH      Triage scripts dir (default: \$HC_TRIAGE_DIR, else tools/scaleout/kmd_triage)
   --skip-triage          Skip the post-test reset and the triage phase
   --triage-gating        Let triage FAILs gate the run (default: held at WARN)
+  --skip-eth-status      Skip the ETH status read
   --skip-qsfp-tests      Skip the QSFP tests. Named for the phase, not the collector's own
                          --skip-qsfp, which drops the cage sweep but still collects ETH
   --qsfp-tool-path PATH  Override the tt-bh-glx-cluster-debug binary
@@ -84,13 +95,13 @@ EOF
 
 TIER="${1:-}"
 case "$TIER" in
-    light|medium|deploy|pre_reboot) ;;
+    flash|light|medium|deploy|pre_reboot) ;;
     -h|--help|"")
         show_help
         exit 0
         ;;
     *)
-        echo "Error: unknown tier '$TIER'. Expected: light, medium, deploy, pre_reboot" >&2
+        echo "Error: unknown tier '$TIER'. Expected: flash, light, medium, deploy, pre_reboot" >&2
         show_help
         exit 1
         ;;

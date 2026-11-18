@@ -8,8 +8,8 @@
 
 Orchestrates: tt-smi snapshot validation, direct FW-telemetry-table reads,
 reset stability loop, tt-metal deployment-test gtest invocation, the kmd_triage
-first-step tools, and — where the host has the package — the QSFP tests and
-the sys-triage bundle.
+first-step tools, the tt-triage ETH status read, and — where the host has the
+package — the QSFP tests and the sys-triage bundle.
  Emits a single JSON pass/fail report.
 
 This file holds the CLI and the order the phases run in. What each tier runs is
@@ -38,6 +38,7 @@ if _SUITE_DIR not in sys.path:
 
 from diag.common import default_tt_metal_path, log, print_phase_line, print_phase_summary  # noqa: E402
 from diag.device_tests import run_tests  # noqa: E402
+from diag.eth_status import run_eth_status  # noqa: E402
 from diag.model import FAIL, PASS, SKIP, WARN, Check, Phase  # noqa: E402
 from diag.qsfp import QSFP_TOOL_BIN, run_qsfp_tests  # noqa: E402
 from diag.resets import fold_post_reset_snapshots, reset_loop, run_post_test_reset  # noqa: E402
@@ -80,6 +81,11 @@ def build_diag_arg_parser() -> argparse.ArgumentParser:
             "Let triage FAILs gate the run. Off by default: triage FAILs are held at WARN so a "
             "tool still bedding in cannot ticket the fleet. Findings are recorded either way."
         ),
+    )
+    ap.add_argument(
+        "--skip-eth-status",
+        action="store_true",
+        help="Skip the ETH status read (two tt-triage check_eth_status reads) entirely.",
     )
     ap.add_argument(
         "--skip-qsfp-tests",
@@ -142,7 +148,11 @@ def build_diag_arg_parser() -> argparse.ArgumentParser:
         help="tt-metal repo root (contains build/test/tt_metal/unit_tests_deployment).",
     )
     ap.add_argument("--output", type=Path, default=Path("diag_report.json"))
-    ap.add_argument("--snapshot-out", type=Path, default=Path("/tmp/diag_snapshot.json"))
+    ap.add_argument(
+        "--snapshot-out",
+        type=Path,
+        help="Where tt-smi writes the raw snapshot. Default: diag_snapshot.json beside the --output report.",
+    )
     return ap
 
 
@@ -161,17 +171,17 @@ def _guarded(phase: Phase, error_check: str, error_status: str, body: Callable[[
         phase.add(Check(name=error_check, status=error_status, details=repr(e), ip="other"))
 
 
-def _finish(report: dict, phase: Phase, t0: float, *, summary: bool, all_skip_stays_skip: bool = False) -> None:
+def _finish(report: dict, phase: Phase, t0: float, *, summary: bool) -> None:
     """Time, roll up, record and print a phase.
 
     ``summary`` prints the grouped per-check summary; without it the phase gets
     one rollup line, for phases that print their own per-step lines as they run.
-    ``all_skip_stays_skip`` keeps a phase that only skipped at SKIP rather than
-    rolling it up to PASS, for the optional-tool phases where no reading at all
-    must not read as a clean one.
+    A phase whose checks all skipped stays SKIP rather than rolling up to PASS:
+    a phase the tier or a --skip-* flag left empty ran nothing, and must not
+    read as a clean run of it.
     """
     phase.duration_s = time.time() - t0
-    if not all_skip_stays_skip or any(c.status != SKIP for c in phase.checks):
+    if any(c.status != SKIP for c in phase.checks):
         phase.rollup()
     report["phases"][phase.name] = asdict(phase)
     if summary:
@@ -217,6 +227,7 @@ def run_diag(
     skip_reset: bool = False,
     skip_tests: bool = False,
     skip_triage: bool = False,
+    skip_eth_status: bool = False,
     skip_qsfp_tests: bool = False,
     input_snapshot: Path | None = None,
     tt_smi_path: str | None = None,
@@ -232,9 +243,9 @@ def run_diag(
     bmc_user: str | None = None,
     bmc_password: str | None = None,
     output: Path = Path("diag_report.json"),
-    snapshot_out: Path = Path("/tmp/diag_snapshot.json"),
+    snapshot_out: Path | None = None,
 ) -> tuple[int, dict]:
-    """Run the full pipeline (snapshot → resets → gtests → triage → QSFP tests → sys-triage).
+    """Run the full pipeline (snapshot → resets → gtests → triage → ETH status → QSFP tests → sys-triage).
 
     Programmatic entry point equivalent to the CLI: writes the JSON report to
     *output* (gtest logs to ``<output_dir>/logs/``) and returns
@@ -246,6 +257,10 @@ def run_diag(
     plan = TIERS[tier]
     if tt_metal_path is None:
         tt_metal_path = default_tt_metal_path()
+    if snapshot_out is None:
+        # Not a fixed path under /tmp: on a shared node a copy another user left
+        # there cannot be overwritten, and tt-smi -f then fails the snapshot.
+        snapshot_out = output.parent / "diag_snapshot.json"
 
     started = datetime.now(timezone.utc)
     report = {
@@ -258,6 +273,18 @@ def run_diag(
         "detected_board_rev": None,
         "phases": {},
     }
+
+    # A report left by an earlier run would read as this run's if this one
+    # never wrote its own. One that cannot be removed cannot be replaced at the
+    # end either, so stop before any phase touches the unit.
+    try:
+        output.parent.mkdir(parents=True, exist_ok=True)
+        output.unlink(missing_ok=True)
+    except OSError as e:
+        report["overall_status"] = FAIL
+        report["error"] = f"cannot replace {output}: {e!r}"
+        log(f"ERROR: {report['error']}")
+        return 1, report
 
     # Phase 1: snapshot
     snap_phase = Phase(name="snapshot")
@@ -358,7 +385,30 @@ def run_diag(
         )
     _finish(report, triage_phase, t0, summary=True)
 
-    # Phase 6: the QSFP tests, when the host has the package. Last,
+    # Phase 6: the ETH status read. After the post-test reset and the triage
+    # tools for the reason they sit there: it opens every chip, so it must not
+    # overlap the tests. It reads the links as found and never resets, so on a
+    # tier with no resets the state it reads is the one the unit was left in.
+    # Unlike the triage and QSFP phases it gates: it is the flash tier's verdict.
+    eth_phase = Phase(name="eth_status")
+    t0 = time.time()
+    if skip_eth_status:
+        eth_phase.add(Check(name="eth_status_read", status=SKIP, details="--skip-eth-status", ip="other"))
+    elif not plan.eth_status:
+        eth_phase.add(
+            Check(name="eth_status_read", status=SKIP, details=f"no ETH status read for tier '{tier}'", ip="other")
+        )
+    else:
+        # A crash here is lost coverage, not a hardware finding.
+        _guarded(
+            eth_phase,
+            "eth_status_read",
+            WARN,
+            lambda: run_eth_status(tt_metal_path, eth_phase, dry_run, logs_dir),
+        )
+    _finish(report, eth_phase, t0, summary=True)
+
+    # Phase 7: the QSFP tests, when the host has the package. Last,
     # and after the post-test reset for the same two reasons the triage phase
     # sits there: it opens every chip, so it must not overlap the tests, and the
     # tool has no SIGBUS handler, so a concurrent reset would kill it outright
@@ -391,9 +441,9 @@ def run_diag(
                 detected_rev=report.get("detected_board_rev"),
             ),
         )
-    _finish(report, qsfp_phase, t0, summary=True, all_skip_stays_skip=True)
+    _finish(report, qsfp_phase, t0, summary=True)
 
-    # Phase 7: the sys-triage bundle, when the host has the package. After the
+    # Phase 8: the sys-triage bundle, when the host has the package. After the
     # QSFP tests for the same reason they follow triage: it opens every chip
     # (tt-smi -s, tt-fw-terminal, the reset-unit scratch reads), so nothing may
     # run beside it. Forensics for a person rather than findings, so it never
@@ -421,7 +471,7 @@ def run_diag(
                 bmc_password=bmc_password,
             ),
         )
-    _finish(report, sys_triage_phase, t0, summary=True, all_skip_stays_skip=True)
+    _finish(report, sys_triage_phase, t0, summary=True)
 
     ended = datetime.now(timezone.utc)
     report["ended_utc"] = ended.isoformat()
@@ -440,8 +490,15 @@ def run_diag(
 
     # Only the phases that write logs create this directory, and any of them can
     # be skipped — don't lose a completed run's report to a missing parent dir.
-    output.parent.mkdir(parents=True, exist_ok=True)
-    output.write_text(json.dumps(report, indent=2))
+    # A report that cannot be written leaves the caller no verdict to read, so
+    # that is a failed run whatever its phases found.
+    try:
+        output.parent.mkdir(parents=True, exist_ok=True)
+        output.write_text(json.dumps(report, indent=2))
+    except OSError as e:
+        log(f"ERROR: could not write report {output}: {e!r}")
+        _print_overall(report)
+        return 1, report
     log(f"wrote report: {output} (overall={report['overall_status']})")
 
     _print_overall(report)
@@ -456,6 +513,7 @@ def main() -> int:
         skip_reset=args.skip_reset,
         skip_tests=args.skip_tests,
         skip_triage=args.skip_triage,
+        skip_eth_status=args.skip_eth_status,
         skip_qsfp_tests=args.skip_qsfp_tests,
         input_snapshot=args.input_snapshot,
         tt_smi_path=args.tt_smi_path,

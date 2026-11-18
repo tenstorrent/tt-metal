@@ -75,6 +75,11 @@ log = logging.getLogger(__name__)
 # key is loaded — dispatch on this. Default preserves the Slurm behavior.
 LAUNCH_MODES = ("slurm", "orchestration")
 
+# Tiers whose clean run never closes the node's open ticket, because passing one
+# does not show the node recovered: flash reads only the ETH links, and a ticket
+# can be for anything its device tests would have caught.
+NON_RESOLVING_TIERS = frozenset({"flash"})
+
 
 # ---------------------------------------------------------------------------
 # Argument parsing
@@ -99,7 +104,7 @@ def parse_args() -> argparse.Namespace:
     p.add_argument(
         "--tier",
         default="light",
-        choices=["light", "medium", "deploy", "pre_reboot"],
+        choices=["flash", "light", "medium", "deploy", "pre_reboot"],
         help="Diagnostic tier passed to the diag suite",
     )
     p.add_argument(
@@ -616,6 +621,12 @@ def main() -> int:
                         jira_base_url=args.jira_base_url,
                         jira_bearer_token=jira_bearer_token,
                     )
+    elif args.tier in NON_RESOLVING_TIERS:
+        log.info(
+            "Tier %s passed, but it cannot show node %s recovered; leaving any open ticket open",
+            args.tier,
+            node,
+        )
     else:
         # Clean run: if this node has an open failure ticket, it just recovered
         # — close it so machines that are fine don't accumulate stale tickets.
