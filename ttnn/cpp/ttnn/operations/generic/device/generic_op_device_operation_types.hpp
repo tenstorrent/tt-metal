@@ -9,9 +9,9 @@
 #include <variant>
 
 #include <tt-metalium/experimental/mesh_program_descriptor.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
-#include <tt-metalium/experimental/metal2_host_api/utility/table.hpp>
+#include <tt-metalium/workload/run_args/program_run_args.hpp>
+#include <tt-metalium/workload/specification/program_spec.hpp>
+#include <tt-metalium/workload/utils/table.hpp>
 
 #include "ttnn/tensor/tensor.hpp"
 
@@ -22,9 +22,9 @@ namespace ttnn::operations::generic {
 // by pointer identity, a MeshTensor reachable from the op's tensor_args, so it cannot be handed
 // in from Python.
 struct SpecProgram {
-    tt::tt_metal::experimental::ProgramSpec spec;
-    tt::tt_metal::experimental::ProgramRunArgs run_args;
-    tt::tt_metal::experimental::Table<tt::tt_metal::experimental::TensorParamName, uint32_t> tensor_arg_indices;
+    tt::tt_metal::ProgramSpec spec;
+    tt::tt_metal::ProgramRunArgs run_args;
+    tt::tt_metal::Table<tt::tt_metal::TensorParamName, uint32_t> tensor_arg_indices;
 };
 
 // A generic_op call carries either a descriptor program or a spec program; the alternative

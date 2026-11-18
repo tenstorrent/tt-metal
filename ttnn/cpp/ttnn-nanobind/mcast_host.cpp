@@ -28,7 +28,7 @@
 namespace ttnn::mcast_host {
 
 namespace kh = ttnn::kernel_lib::host;
-namespace m2 = tt::tt_metal::experimental;
+namespace m2 = tt::tt_metal;
 using tt::tt_metal::CoreCoord;
 using tt::tt_metal::CoreRangeSet;
 using tt::tt_metal::NOC;

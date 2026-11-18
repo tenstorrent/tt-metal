@@ -175,7 +175,7 @@ ttsl::hash::hash_t compute_io_tensors_hash(const std::vector<Tensor>& io_tensors
 
 namespace {
 
-namespace m2 = tt::tt_metal::experimental;
+namespace m2 = tt::tt_metal;
 
 // Every field below is structural: it changes the compiled program or its resource layout.
 // Anything that varies per dispatch (runtime arg VALUES, tensor addresses) must stay out.

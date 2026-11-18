@@ -21,8 +21,8 @@
 #include "ttnn-nanobind/export_enum.hpp"
 #include "ttnn-nanobind/metal2_casters.hpp"
 
-#include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
+#include <tt-metalium/workload/specification/program_spec.hpp>
+#include <tt-metalium/workload/run_args/program_run_args.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 
 #include "ttnn/types.hpp"
@@ -30,7 +30,7 @@
 
 namespace ttnn::program_specs {
 
-namespace m2 = tt::tt_metal::experimental;
+namespace m2 = tt::tt_metal;
 
 void py_module_types(nb::module_& mod) {
     export_enum<tt::tt_metal::UnpackMode>(mod, "UnpackMode");
@@ -71,19 +71,19 @@ void py_module_types(nb::module_& mod) {
 
     // ---------------------------------------------------------------- dataflow buffers
 
-    nb::class_<m2::DFBAdvancedOptions>(mod, "DFBAdvancedOptions")
+    nb::class_<m2::experimental::DFBAdvancedOptions>(mod, "DFBAdvancedOptions")
         .def(
             "__init__",
-            [](m2::DFBAdvancedOptions* self,
+            [](m2::experimental::DFBAdvancedOptions* self,
                std::vector<m2::DFBSpecName> alias_with,
                bool allow_instance_multi_binding) {
-                new (self) m2::DFBAdvancedOptions{
+                new (self) m2::experimental::DFBAdvancedOptions{
                     .alias_with = std::move(alias_with), .allow_instance_multi_binding = allow_instance_multi_binding};
             },
             nb::arg("alias_with") = std::vector<m2::DFBSpecName>{},
             nb::arg("allow_instance_multi_binding") = false)
-        .def_rw("alias_with", &m2::DFBAdvancedOptions::alias_with)
-        .def_rw("allow_instance_multi_binding", &m2::DFBAdvancedOptions::allow_instance_multi_binding);
+        .def_rw("alias_with", &m2::experimental::DFBAdvancedOptions::alias_with)
+        .def_rw("allow_instance_multi_binding", &m2::experimental::DFBAdvancedOptions::allow_instance_multi_binding);
 
     nb::class_<m2::DataflowBufferSpec>(mod, "DataflowBufferSpec")
         .def(
@@ -96,7 +96,7 @@ void py_module_types(nb::module_& mod) {
                std::optional<ttnn::DataType> data_format,
                std::optional<tt::tt_metal::Tile> tile_format,
                std::optional<m2::TensorParamName> borrowed_from,
-               m2::DFBAdvancedOptions advanced_options) {
+               m2::experimental::DFBAdvancedOptions advanced_options) {
                 std::optional<tt::DataFormat> df;
                 if (data_format.has_value()) {
                     df = tt::tt_metal::datatype_to_dataformat_converter(*data_format);
@@ -116,7 +116,7 @@ void py_module_types(nb::module_& mod) {
             nb::arg("data_format") = nb::none(),
             nb::arg("tile_format") = nb::none(),
             nb::arg("borrowed_from") = nb::none(),
-            nb::arg("advanced_options") = m2::DFBAdvancedOptions{})
+            nb::arg("advanced_options") = m2::experimental::DFBAdvancedOptions{})
         .def_rw("unique_id", &m2::DataflowBufferSpec::unique_id)
         .def_rw("entry_size", &m2::DataflowBufferSpec::entry_size)
         .def_rw("num_entries", &m2::DataflowBufferSpec::num_entries)
@@ -144,7 +144,7 @@ void py_module_types(nb::module_& mod) {
         nb::arg("borrowed_from") = nb::none(),
         nb::arg("page_as_tile") = false,
         nb::arg("tile_format") = nb::none(),
-        nb::arg("advanced_options") = m2::DFBAdvancedOptions{},
+        nb::arg("advanced_options") = m2::experimental::DFBAdvancedOptions{},
         R"pbdoc(
             Create a DataflowBufferSpec from a sharded tensor.
 
@@ -427,18 +427,18 @@ void py_module_types(nb::module_& mod) {
         .def_rw("runtime_arg_names", &m2::KernelSpec::RuntimeArgSchema::runtime_arg_names)
         .def_rw("common_runtime_arg_names", &m2::KernelSpec::RuntimeArgSchema::common_runtime_arg_names);
 
-    nb::class_<m2::KernelAdvancedOptions>(mod, "KernelAdvancedOptions")
+    nb::class_<m2::experimental::KernelAdvancedOptions>(mod, "KernelAdvancedOptions")
         .def(
             "__init__",
-            [](m2::KernelAdvancedOptions* self, uint32_t num_runtime_varargs, uint32_t num_common_runtime_varargs) {
-                new (self) m2::KernelAdvancedOptions{};
+            [](m2::experimental::KernelAdvancedOptions* self, uint32_t num_runtime_varargs, uint32_t num_common_runtime_varargs) {
+                new (self) m2::experimental::KernelAdvancedOptions{};
                 self->num_runtime_varargs = num_runtime_varargs;
                 self->num_common_runtime_varargs = num_common_runtime_varargs;
             },
             nb::arg("num_runtime_varargs") = 0,
             nb::arg("num_common_runtime_varargs") = 0)
-        .def_rw("num_runtime_varargs", &m2::KernelAdvancedOptions::num_runtime_varargs)
-        .def_rw("num_common_runtime_varargs", &m2::KernelAdvancedOptions::num_common_runtime_varargs);
+        .def_rw("num_runtime_varargs", &m2::experimental::KernelAdvancedOptions::num_runtime_varargs)
+        .def_rw("num_common_runtime_varargs", &m2::experimental::KernelAdvancedOptions::num_common_runtime_varargs);
 
     nb::class_<m2::KernelSpec>(mod, "KernelSpec")
         .def(
@@ -455,7 +455,7 @@ void py_module_types(nb::module_& mod) {
                std::vector<m2::TensorBinding> tensor_bindings,
                m2::KernelSpec::CompileTimeArgs compile_time_args,
                m2::KernelSpec::RuntimeArgSchema runtime_arg_schema,
-               m2::KernelAdvancedOptions advanced_options) {
+               m2::experimental::KernelAdvancedOptions advanced_options) {
                 new (self) m2::KernelSpec{
                     .unique_id = std::move(unique_id),
                     .source = std::move(source),
@@ -481,7 +481,7 @@ void py_module_types(nb::module_& mod) {
             nb::arg("tensor_bindings") = std::vector<m2::TensorBinding>{},
             nb::arg("compile_time_args") = m2::KernelSpec::CompileTimeArgs{},
             nb::arg("runtime_arg_schema") = m2::KernelSpec::RuntimeArgSchema{},
-            nb::arg("advanced_options") = m2::KernelAdvancedOptions{})
+            nb::arg("advanced_options") = m2::experimental::KernelAdvancedOptions{})
         .def_rw("unique_id", &m2::KernelSpec::unique_id)
         .def_rw("source", &m2::KernelSpec::source)
         .def_rw("num_threads", &m2::KernelSpec::num_threads)
@@ -551,20 +551,20 @@ void py_module_types(nb::module_& mod) {
 
     // ---------------------------------------------------------------- run args
 
-    nb::class_<m2::AdvancedKernelRunArgs>(mod, "AdvancedKernelRunArgs")
+    nb::class_<m2::experimental::AdvancedKernelRunArgs>(mod, "AdvancedKernelRunArgs")
         .def(
             "__init__",
-            [](m2::AdvancedKernelRunArgs* self,
-               m2::Table<m2::NodeCoord, m2::AdvancedKernelRunArgs::Varargs> runtime_varargs,
-               m2::AdvancedKernelRunArgs::Varargs common_runtime_varargs) {
-                new (self) m2::AdvancedKernelRunArgs{
+            [](m2::experimental::AdvancedKernelRunArgs* self,
+               m2::Table<m2::NodeCoord, m2::experimental::AdvancedKernelRunArgs::Varargs> runtime_varargs,
+               m2::experimental::AdvancedKernelRunArgs::Varargs common_runtime_varargs) {
+                new (self) m2::experimental::AdvancedKernelRunArgs{
                     .runtime_varargs = std::move(runtime_varargs),
                     .common_runtime_varargs = std::move(common_runtime_varargs)};
             },
-            nb::arg("runtime_varargs") = m2::Table<m2::NodeCoord, m2::AdvancedKernelRunArgs::Varargs>{},
-            nb::arg("common_runtime_varargs") = m2::AdvancedKernelRunArgs::Varargs{})
-        .def_rw("runtime_varargs", &m2::AdvancedKernelRunArgs::runtime_varargs)
-        .def_rw("common_runtime_varargs", &m2::AdvancedKernelRunArgs::common_runtime_varargs);
+            nb::arg("runtime_varargs") = m2::Table<m2::NodeCoord, m2::experimental::AdvancedKernelRunArgs::Varargs>{},
+            nb::arg("common_runtime_varargs") = m2::experimental::AdvancedKernelRunArgs::Varargs{})
+        .def_rw("runtime_varargs", &m2::experimental::AdvancedKernelRunArgs::runtime_varargs)
+        .def_rw("common_runtime_varargs", &m2::experimental::AdvancedKernelRunArgs::common_runtime_varargs);
 
     nb::class_<m2::KernelRunArgs>(mod, "KernelRunArgs")
         .def(
@@ -573,7 +573,7 @@ void py_module_types(nb::module_& mod) {
                m2::KernelSpecName kernel,
                m2::KernelRunArgs::RuntimeArgValues runtime_arg_values,
                m2::KernelRunArgs::CommonRuntimeArgValues common_runtime_arg_values,
-               m2::AdvancedKernelRunArgs advanced_options) {
+               m2::experimental::AdvancedKernelRunArgs advanced_options) {
                 new (self) m2::KernelRunArgs{
                     .kernel = std::move(kernel),
                     .runtime_arg_values = std::move(runtime_arg_values),
@@ -583,7 +583,7 @@ void py_module_types(nb::module_& mod) {
             nb::arg("kernel"),
             nb::arg("runtime_arg_values") = m2::KernelRunArgs::RuntimeArgValues{},
             nb::arg("common_runtime_arg_values") = m2::KernelRunArgs::CommonRuntimeArgValues{},
-            nb::arg("advanced_options") = m2::AdvancedKernelRunArgs{})
+            nb::arg("advanced_options") = m2::experimental::AdvancedKernelRunArgs{})
         .def_rw("kernel", &m2::KernelRunArgs::kernel)
         .def_rw("runtime_arg_values", &m2::KernelRunArgs::runtime_arg_values)
         .def_rw("common_runtime_arg_values", &m2::KernelRunArgs::common_runtime_arg_values)
