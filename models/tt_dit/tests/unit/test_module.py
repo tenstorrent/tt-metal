@@ -131,6 +131,8 @@ def test_shard_and_gather(mesh_device: ttnn.MeshDevice, expect_error) -> None:  
     assert_layout_matches_data()
     with expect_error(RuntimeError, "gather it first"):
         params["replicated"].data  # noqa: B018
+    with expect_error(RuntimeError, "ShardableModule has weights with a transient split"):
+        model()
 
     # Axis 0 is in `tensor_parallel`'s durable layout, axis 1 already transient: both refuse, and change nothing.
     with expect_error(ValueError, "durable layout"):
@@ -141,6 +143,7 @@ def test_shard_and_gather(mesh_device: ttnn.MeshDevice, expect_error) -> None:  
 
     model.gather(ccl_manager)
     assert model.is_loaded() and not model.is_sharded()
+    model()
     for name, p in params.items():
         assert p.mesh_axes == p.durable_mesh_axes, name
     for name in ("replicated", "small"):
@@ -161,3 +164,17 @@ def test_shard_and_gather(mesh_device: ttnn.MeshDevice, expect_error) -> None:  
     replicated.shard(1)
     replicated.deallocate()
     assert replicated.mesh_axes == (None, None) and not replicated.is_sharded()
+
+
+class FreesExtraState(ShardableModule):
+    def deallocate_weights(self) -> None:
+        super().deallocate_weights()
+
+
+@pytest.mark.parametrize("mesh_device", [(1, 1)], indirect=True)
+def test_shard_refuses_a_deallocate_weights_override(
+    mesh_device: ttnn.MeshDevice, expect_error
+) -> None:  # noqa: ANN001
+    model = FreesExtraState(device=mesh_device)
+    with expect_error(TypeError, "FreesExtraState overrides deallocate_weights"):
+        model.shard(1)
