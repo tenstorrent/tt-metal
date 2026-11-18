@@ -204,48 +204,65 @@ FORCE_INLINE bool txq_busy(uint32_t q_num) {
     return idma_free_space_cmdbuf<kCmdBuf>(txq_req_vc(q_num)) == 0;
 }
 
-// Programs the command buffer for a send on TX queue @p q_num to the flat address @p dest on the link peer, by the
-// link's kind (link()). Halts with BadTxq.
-FORCE_INLINE void setup_send(uint32_t q_num, uint32_t dest) {
-    check_txq(q_num);
-    const LinkCopy& copy = link();
-    const uint32_t peer_tile = copy.peer_tile;
-    const bool noc = copy.kind == ETH_LINK_KIND_NOC;
-    if (!noc) {
-        reset_cmdbuf<kCmdBuf>();
-    }
+// Programs the command buffer for a send on TX queue @p q_num to the flat address @p dest on the Ethernet link peer,
+// whose SRAM is at @p dest_base.
+FORCE_INLINE void setup_send(uint32_t q_num, uint32_t dest, uint64_t dest_base) {
+    const uint32_t vc = txq_req_vc(q_num);
+    reset_cmdbuf<kCmdBuf>();
     idma_setup_as_copy_cmdbuf<kCmdBuf>();
     setup_ongoing_cmdbuf<kCmdBuf>(AutoIncConfig{});
-    if (noc) {
-        const uint32_t vc = noc_req_vc(q_num);
-        setup_wrapping_vcs_cmdbuf<kCmdBuf>(
-            VcRange{.start = vc, .end = vc}, VcRange{.start = kNocRespVc, .end = kNocRespVc});
-        setup_trids_cmdbuf<kCmdBuf>(noc_trid(q_num));
-        set_dest_cmdbuf<kCmdBuf>(sram_system_addr(peer_tile, dest), 0, 0, 0);
-    } else {
-        const uint32_t vc = txq_req_vc(q_num);
-        setup_wrapping_vcs_cmdbuf<kCmdBuf>(VcRange{.start = vc, .end = vc});
-        setup_trids_cmdbuf<kCmdBuf>(kTrid);
-        set_dest_cmdbuf<kCmdBuf>(sram_local_addr(peer_tile, dest));
-    }
+    setup_wrapping_vcs_cmdbuf<kCmdBuf>(VcRange{.start = vc, .end = vc});
+    setup_trids_cmdbuf<kCmdBuf>(kTrid);
+    set_dest_cmdbuf<kCmdBuf>(dest_base + sram_offset(dest));
+}
+
+// send_bytes() on the latched NOC link, after its fence: a coupled copy on TX queue @p q_num, which must be in
+// range. The command buffer is not reset: the latch reset it once (latch_link()). Out of line, as is
+// noc_send_dword(), so that a send site pays a compare and a call for the NOC path, not its whole sequence.
+[[gnu::noinline]] inline void noc_send_bytes(uint32_t q_num, uint32_t src, uint32_t dest, uint32_t num_bytes) {
+    const uint32_t vc = noc_req_vc(q_num);
+    idma_setup_as_copy_cmdbuf<kCmdBuf>();
+    setup_ongoing_cmdbuf<kCmdBuf>(AutoIncConfig{});
+    setup_wrapping_vcs_cmdbuf<kCmdBuf>(
+        VcRange{.start = vc, .end = vc}, VcRange{.start = kNocRespVc, .end = kNocRespVc});
+    setup_trids_cmdbuf<kCmdBuf>(noc_trid(q_num));
+    set_dest_cmdbuf<kCmdBuf>(link_copy.dest_base + sram_offset(dest), 0, 0, 0);
+    set_src_cmdbuf<kCmdBuf>(link_copy.src_base + sram_offset(src), 0, 0, 0);
+    set_len_cmdbuf<kCmdBuf>(num_bytes);
+    setup_max_bytes_in_packet_cmdbuf<kCmdBuf>(kMaxBytesInPacket);
+    setup_packet_tags_cmdbuf<kCmdBuf>(PacketTags{});
+    issue_cmdbuf<kCmdBuf>();
 }
 
 // Copy @p num_bytes from @p src to @p dest on the link peer on TX queue @p q_num; returns once issued. With @p snoop
 // the peer's NIU snoops its cache for the write on an Ethernet link; a NOC link sets no snoop tag. Assumes
-// !txq_busy(q_num).
+// !txq_busy(q_num). Halts with BadTxq.
 FORCE_INLINE void send_bytes(uint32_t q_num, uint32_t src, uint32_t dest, uint32_t num_bytes, bool snoop = false) {
     // A core store to the source must reach SRAM before the copy reads it.
     asm volatile("fence" ::: "memory");
-    setup_send(q_num, dest);
-    if (link_copy.kind == ETH_LINK_KIND_NOC) {
-        set_src_cmdbuf<kCmdBuf>(sram_local_addr(hsio_tile(), src), 0, 0, 0);
-    } else {
-        set_src_cmdbuf<kCmdBuf>(sram_local_addr(hsio_tile(), src));
+    check_txq(q_num);
+    const LinkCopy& copy = link();
+    if (copy.kind == ETH_LINK_KIND_NOC) {
+        noc_send_bytes(q_num, src, dest, num_bytes);
+        return;
     }
+    setup_send(q_num, dest, copy.dest_base);
+    set_src_cmdbuf<kCmdBuf>(copy.src_base + sram_offset(src));
     set_len_cmdbuf<kCmdBuf>(num_bytes);
     setup_max_bytes_in_packet_cmdbuf<kCmdBuf>(kMaxBytesInPacket);
-    setup_packet_tags_cmdbuf<kCmdBuf>(link_copy.kind == ETH_LINK_KIND_NOC ? PacketTags{} : PacketTags{.snoop = snoop});
+    setup_packet_tags_cmdbuf<kCmdBuf>(PacketTags{.snoop = snoop});
     issue_cmdbuf<kCmdBuf>();
+}
+
+// send_dword() on the latched NOC link, after its checks: stages @p val in TX queue @p q_num's word at
+// MEM_IERISC_FABRIC_NOC_DWORD_STAGE_BASE, through the uncached alias, and sends those 8 bytes. @p q_num must be in
+// range. No inline write on an iDMA back-end: it leaves the AW coupler count of GREN-2020.
+[[gnu::noinline]] inline void noc_send_dword(uint32_t q_num, uint32_t dest, uint64_t val) {
+    const uint32_t stage = MEM_IERISC_FABRIC_NOC_DWORD_STAGE_BASE + q_num * sizeof(val);
+    *reinterpret_cast<volatile uint64_t*>(static_cast<uintptr_t>(MEM_IERISC_UNCACHED_BASE + stage)) = val;
+    // A core store to the source must reach SRAM before the copy reads it.
+    asm volatile("fence" ::: "memory");
+    noc_send_bytes(q_num, stage, dest, sizeof(val));
 }
 
 // Write @p val to the 8-byte-aligned @p dest on the link peer on TX queue @p q_num: on an Ethernet link as an inline
@@ -260,15 +277,13 @@ FORCE_INLINE void send_dword(uint32_t q_num, uint32_t dest, uint64_t val, bool s
     if ((val >> kInlineValueBits) != 0) {
         halt(HaltCode::RemoteRegValueTooWide, static_cast<uint32_t>(val >> 32));
     }
-    if (link().kind == ETH_LINK_KIND_NOC) {
-        // No inline write on an iDMA back-end: it leaves the AW coupler count of GREN-2020.
-        check_txq(q_num);
-        const uint32_t stage = MEM_IERISC_FABRIC_NOC_DWORD_STAGE_BASE + q_num * sizeof(val);
-        *reinterpret_cast<volatile uint64_t*>(static_cast<uintptr_t>(MEM_IERISC_UNCACHED_BASE + stage)) = val;
-        send_bytes(q_num, stage, dest, sizeof(val));
+    check_txq(q_num);
+    const LinkCopy& copy = link();
+    if (copy.kind == ETH_LINK_KIND_NOC) {
+        noc_send_dword(q_num, dest, val);
         return;
     }
-    setup_send(q_num, dest);
+    setup_send(q_num, dest, copy.dest_base);
     set_src_cmdbuf<kCmdBuf>(val);
     set_len_cmdbuf<kCmdBuf>(sizeof(val));
     TT_ROCC_CMD_BUF_AXI_OPT_1_reg_u axi_opt_1;
