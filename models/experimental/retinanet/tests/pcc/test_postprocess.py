@@ -2,7 +2,6 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-import pytest
 import torch
 import ttnn
 from loguru import logger
@@ -18,12 +17,15 @@ from models.experimental.retinanet.tt.tt_postprocess import (
     select_detections,
 )
 
-TOPK_CANDIDATES = 1000
 # Every level gets more distinct high logits than the top-k keeps, so the selected set and its
 # order are unique; every other logit is far below them.
 NUM_HIGH_LOGITS = 1200
 LOW_LOGIT = -8.0
+# The device decodes in float32 like torchvision; what is left is its exp() and the order of
+# the float32 operations, a small fraction of a pixel.
 BOX_ATOL = 0.05
+# Scores are the sigmoid of the same bfloat16 logits, computed in float32 on both sides.
+SCORE_ATOL = 1e-2
 
 
 def synthetic_head_outputs(anchors_per_level, seed=0):
@@ -42,7 +44,7 @@ def synthetic_head_outputs(anchors_per_level, seed=0):
     return torch.cat(logits, dim=1), deltas
 
 
-def reference_candidates(logits, deltas, anchors):
+def reference_candidates(logits, deltas, anchors, topk_candidates):
     """torchvision's per-level selection and decoding, without the score threshold."""
     box_coder = det_utils.BoxCoder(weights=(1.0, 1.0, 1.0, 1.0))
     boxes, scores, labels = [], [], []
@@ -50,7 +52,7 @@ def reference_candidates(logits, deltas, anchors):
     for level_anchors in anchors:
         end = start + len(level_anchors)
         level_logits = logits[0, start:end].flatten()
-        values, indices = level_logits.topk(min(TOPK_CANDIDATES, len(level_logits)))
+        values, indices = level_logits.topk(min(topk_candidates, len(level_logits)))
         anchor_index = torch.div(indices, NUM_CLASSES, rounding_mode="floor")
         level_boxes = box_coder.decode_single(deltas[0, start:end][anchor_index], level_anchors[anchor_index])
         boxes.append(box_ops.clip_boxes_to_image(level_boxes, (IMAGE_SIZE, IMAGE_SIZE)))
@@ -60,19 +62,22 @@ def reference_candidates(logits, deltas, anchors):
     return boxes, scores, labels
 
 
-@pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
-def test_detection_decoder(device, reset_seeds):
+def test_detection_decoder(device):
     image_size = (IMAGE_SIZE, IMAGE_SIZE)
     anchors = retinanet_anchors(image_size)
     logits, deltas = synthetic_head_outputs([len(level) for level in anchors])
+    # The postprocessing settings are torchvision's, read from its model.
+    retinanet = retinanet_resnet50_fpn_v2(weights=None, weights_backbone=None).eval()
 
-    decoder = TTDetectionDecoder(device, image_size, topk_candidates=TOPK_CANDIDATES)
-    to_device = lambda tensor: ttnn.from_torch(
-        tensor, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG
-    )
+    def to_device(tensor):
+        return ttnn.from_torch(
+            tensor, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG
+        )
+
+    decoder = TTDetectionDecoder(device, image_size, topk_candidates=retinanet.topk_candidates)
     tt_boxes, tt_scores, tt_labels = decoder(to_device(logits), to_device(deltas))
 
-    ref_boxes, ref_scores, ref_labels = reference_candidates(logits, deltas, anchors)
+    ref_boxes, ref_scores, ref_labels = reference_candidates(logits, deltas, anchors, retinanet.topk_candidates)
     for level in range(len(anchors)):
         boxes = ttnn.to_torch(tt_boxes[level]).reshape(4, -1).T.float()
         scores = ttnn.to_torch(tt_scores[level]).reshape(-1).float()
@@ -81,19 +86,26 @@ def test_detection_decoder(device, reset_seeds):
         score_error = (scores - ref_scores[level]).abs().max().item()
         logger.info(f"Level {level}: max box error {box_error:.4f} px, max score error {score_error:.2e}")
         assert torch.equal(labels, ref_labels[level]), f"Level {level}: labels differ"
-        assert score_error < 1e-2, f"Level {level}: max score error {score_error}"
+        assert score_error < SCORE_ATOL, f"Level {level}: max score error {score_error}"
         assert box_error < BOX_ATOL, f"Level {level}: max box error {box_error} px"
 
     # The host's threshold and NMS on the device candidates against torchvision's postprocessing.
-    detections = select_detections(tt_boxes, tt_scores, tt_labels)
+    detections = select_detections(
+        tt_boxes,
+        tt_scores,
+        tt_labels,
+        score_thresh=retinanet.score_thresh,
+        nms_thresh=retinanet.nms_thresh,
+        detections_per_img=retinanet.detections_per_img,
+    )
     counts = [len(level) for level in anchors]
     head_outputs = {
         "cls_logits": list(logits.split(counts, dim=1)),
         "bbox_regression": list(deltas.split(counts, dim=1)),
     }
-    retinanet = retinanet_resnet50_fpn_v2(weights=None, weights_backbone=None).eval()
     expected = retinanet.postprocess_detections(head_outputs, [anchors], [image_size])[0]
     logger.info(f"Detections: {len(detections['boxes'])} on device and host, {len(expected['boxes'])} in torchvision")
+    assert len(expected["boxes"]) > 0, "No candidate is above the score threshold; the check is empty"
     assert torch.equal(detections["labels"], expected["labels"])
     assert torch.allclose(detections["boxes"], expected["boxes"], atol=BOX_ATOL)
-    assert torch.allclose(detections["scores"], expected["scores"], atol=1e-2)
+    assert torch.allclose(detections["scores"], expected["scores"], atol=SCORE_ATOL)
