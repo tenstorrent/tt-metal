@@ -223,6 +223,16 @@ PERF FOCUS 3 (32 × 512×128 @ 128×1024 bf8b, B in L1): split 32×1×3 → **32
 
 PERF FOCUS 4 (256×6144 @ 6144×18432 bf16, swiglu; 96 cores, block 8×6): DRAM = A 3.1 MB + B 226 MB + out 4.7 MB ≈ 234 MB (the roofline's traffic), NoC = 3.1 MB A multicast to 95 cores. Before (R1a 8×9, 72 cores): the same DRAM bytes, but B streamed by only the 9 column injectors (25 MB each), 1125 µs; now 633–646 µs, B-stream-bound (B alone 550 µs ≈ 411 GB/s for interleaved 2 KB tile reads; with the A lockstep 578 µs). The single injector caps R1b at ~23 GB/s of A, so the split ranking counts R1b at `max(A + B, ACT_STREAM_INJECTOR_COST · A)` (= 18): text-encoder down 512×16384×5120 (A = 19% of B) keeps R1a.
 
+**R1b bank-local split as built (Refinement 15)** (`grid.placement == "bank"`, `operand_mode() == 2`). The CB inventory and sizes are R1b's; no new CB. The core's region is `core_m × core_n`, where `core_n` = the longest unit run × unit columns, and its columns sit 8 apart in B. Idle cores (w = 0) keep the nominal CBs and walk; they read and write nothing. The rotating injectors reserve through their next turn in the existing `cb_act_tiles` ring: no extra L1, `injectors < depth_act` (the ring holds the next turn while compute holds the current one).
+
+| Tensor | DRAM crossings | Why that many | Cross-core traffic added |
+|--------|----------------|---------------|--------------------------|
+| A | 1 | 3 rotating injectors each read every third A K-block once | multicast of every A K-block to the whole grid rectangle, once (the flat split sent each byte twice over its two rectangles) |
+| B | exactly 1 | each core streams its own bank run per K row, from the bank of its home row | none |
+| output, bias / gate, residual | as R1 | per-core, columns 8 apart (per-tile writes / reads) | none |
+
+Qwen3.8 M = 128 down (4352×5120 bfp4, A in L1): DRAM = B 12.5 MB + out 1.3 MB; NoC = 1.1 MB of A multicast once to 109 cores. 41.5 µs: the A stream (~36 µs) binds, and B alone is 34 µs.
+
 ## Refinement 13 — split output (`chunks`)
 - **No CB change.** `cb_output_tiles` keeps its size and its single producer (compute) / single consumer (writer). The reader still writes its tail share straight out of that CB's L1 under the existing post / done handshake, without popping it.
 - **Data-movement budget unchanged.** The output is written once, tile by tile, as before; only the destination tensor of each tile column changes (`kernels/out_chunks.hpp`). There is no full-width intermediate and no extra op. The `chunks` tensors are DRAM (or L1) interleaved like the unsplit output: `l1_cb_budget` counts all of them when they live in L1.

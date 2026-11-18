@@ -40,6 +40,8 @@ R15_CASES = [
     ("f1_lin1", 1, 256, 6144, "float32", "bfloat16", "float32", "HiFi2", "none", False, 7700),
     ("x_embedder", 2048, 128, 3072, "bfloat16", "bfloat16", "bfloat16", "HiFi2", "none", False, 30200),
     ("proj_out", 2048, 3072, 128, "bfloat16", "bfloat16", "bfloat16", "HiFi2", "none", False, 30200),
+    # Guard: a mid-M shape the bank split competes for (test_genify_matmul_mcast's text-encoder qkv in bf16).
+    ("te_qkv_bf16_hifi4", 512, 5120, 3072, "bfloat16", "bfloat16", "bfloat16", "HiFi4", "none", False, 0),
 ]
 
 

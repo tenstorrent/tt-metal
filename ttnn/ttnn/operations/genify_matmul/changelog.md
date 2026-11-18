@@ -1026,3 +1026,46 @@ Artifacts: `perf_experiments/<slug>/` and `tests/.../genify_matmul/perf_experime
 - Perf (device ns, one profile run each, vs the same shape's single-tensor LOOSE call): single out M = 2304, [3072 | 9216] x 6144: 1425.9 vs 1426.4 us; final block M = 2048: 1202.3 vs 1201.7 us. Both within 0.05%: the concat is free. Perf guard: `perf/test_genify_matmul_perf_flux.py::test_perf_flux_segments` (segmented + single twin).
 - Issues encountered: None.
 - Tests added: `tests/ttnn/unit_tests/operations/genify_matmul/test_genify_matmul_segments.py` (19 cases): every epilogue; one-tile edge segments, one segment per K tile (8), a one-element list; M = 1; folded leading dims; batched weight (R1d); a large multi-block walk; R1a (asserted) and R1b (asserted, none + swiglu); fp32 A; L1 A + output; segments with chunks; the `ValueError` contract.
+
+## Refinement 15 — Small-M weight streaming at the DRAM roofline (Qwen3.8 M = 128, FLUX.2 prompt stream, M = 1)
+- Date: 2026-11-18
+- What was done:
+  - **Breakdown first** (`/perf-measure`, new `ABLATE_DEFINES` host knob: SKIP_COMPUTE / GM_ABLATE_A / GM_ABLATE_A_SEND / GM_ABLATE_B payload stubs).
+    - Qwen M = 128 gate_up, 109 µs: no-A 107, no-B 69, B alone 93, A alone 59, sync floor 10. The B stream binds: 25 MB of 576 B bfp4 tile reads at ~300 GB/s.
+    - Per-core B finish times spread 3–4× by grid row, whichever bank the core read. Coalesced reads alone gave 78 µs; NoC1 reads 174 µs.
+    - The flat 68-core split is two multicast rectangles, so the injector sent A twice (multicast 41 µs, reads 23 µs).
+  - **R1b bank-local split** (`ACT_STREAM_BANK_LOCAL`, the `bank` split candidate).
+    - Interleaved DRAM page p is in bank p % 8, so B columns n, n+8, ... of a K row are consecutive pages of one bank. Each core owns a run of such units (B columns; swiglu (gate, up) pairs), read as one bank run per K row (`GM_BANK_STRIDE` / `GM_BANK_RUNS`).
+    - The output (and the bias / gate / residual reads) follow the same stride (`GM_OUT_STRIDE`, `out_chunks::write_row(stride)`).
+    - Placement `BANK_LOCAL_PLACEMENT = "row"`: a bank's units go to the cores of its NoC0 home row (the optimal reader's row), so responses never turn into a column. Down's B stream: 34 µs (~430 GB/s) vs ~95 µs with "near" / "spread" placements.
+    - `BANK_LOCAL_ROW_FILL`: the spare rows join the most loaded class. Banks 0 / 4 share a home row; time_mod 2037 → 1363 µs with fill.
+    - The split is the whole grid, one rectangle, so A is multicast once.
+    - Priced in `choose_split` by its own DRAM rate, injector cost, the busiest core's B stream and a per-round A floor (`BANK_LOCAL_*`).
+    - swiglu stays on the flat split (`BANK_LOCAL_SWIGLU = False`): a pair spans two banks with different home rows.
+  - **Rotating A injectors** (`ACT_STREAM_INJECTORS = 3`, `GM_ACT_INJECTORS`, bank split only): `McastRotatingSenderConfig`, K-block r from injector r % 3.
+    - An injector issues its next turn's read before sending r when the slots are free, else after. Issuing it after the send held its ack of r + 1: 13.6 µs rounds. Issuing it before with a blocking reserve stalled sends on compute: FLUX attn 107 → 135.
+    - Down 46 → 41 µs, attn 113 → 107, ctx 260 → 251.
+  - **Reused / Added.**
+    - Reused: the R1b reader / writer / `act` channel / CBs / compute, `out_chunks::write_row`, the split cost model, the R4 optimal-reader map.
+    - Added: the column-stride defines, `bank_layout` / `bank_candidates` / `bank_core_columns`, the rotating-injector branch of the writer's A stream, the `wr_a_barrier` / `wr_a_send` / `wr_a_issue` / `wr_a_rotate` zones.
+    - No new CB, kernel file or descriptor branch.
+- Accuracy achieved: PCC 0.99998–1.000000, relative RMS 0.0044–0.0083 on every R15 shape (GENIFY_MATMUL_CHECK) [128×{5120×8704 swiglu, 5120×4160, 4352×5120, 1536×5120, 5120×3584} bfp4 LoFi; 256×{6144×9216, 6144×3072 addcmul, 6144×18432 swiglu, 9216×6144, 15360×3072} HiFi2; 1×6144×6144 bf16 / fp32 A; 1×6144×52224 bias; 1×256×6144; 2048×128×3072; 2048×3072×128].
+- Golden test progress:
+  - Interleaved cartesian slice: 375 passed, 75 xfailed.
+  - R15 loose slice (M = 128 / 256 / 1, te_gate, x_embedder, proj_out): 19/19.
+  - Feature (chunks / segments): 10/10.
+- Perf, device µs before → after (roofline):
+  - Qwen M = 128: gate_up 109.1 → 106.8 (56.8), in_proj 63.6 → 48.2 (28.3), down 55.9 → 41.5 (30.0), out_proj 22.9 → 22.8 (12.4), qkvg 81.0 → 49.8 (27.2).
+  - FLUX.2 M = 256: QKV 331 → 283 (263), attn + addcmul 148 → 107 (96), FF1 631 → 614 (509), FF2 332 → 278 (263), ctx 352 → 251 (225).
+  - FLUX.2 M = 1: linear_2 fp32 / bf16 205 / 209 → 168 / 173 (167 / 166), time_mod 1600 → 1352 (1409), linear_1 10.5 → 10.5 (7.7).
+  - x_embedder 47.7 → 47.5 (30.2), proj_out 58.3 → 58.1 (30.2).
+  - Also: text-encoder gate 504 → 479.
+  - Guard: perf_guard / R1b guard / R11 cells show no regression beyond ±3%. 64×16384×256 (16-bit DEST) needed the round floor in the cost model and the bank-only rotation: it was 134, then 92, now back to 84.
+- Issues encountered:
+  - The helper's rotating senders need a rectangular receiver group (flat splits keep the fixed injector).
+  - The remote JIT farm's SFPI mismatched (`__xtt_vector8`), so all runs compiled locally.
+  - The NoC0 per-row B-rate effect is a measured property; its root cause (arbitration vs. response routing) was not established.
+- Tests added:
+  - `tests/ttnn/unit_tests/operations/genify_matmul/test_genify_matmul_bank_local.py` (14 cases): selection + correctness on bfp4 / bf16, 130 columns (not a bank multiple), ragged M / N, every row-epilogue, fp32 A, L1 A, the "near" / "spread" placements, injectors 1 / 2, fill off, swiglu under its knob.
+  - `perf/test_genify_matmul_perf_r15.py`: the 16 R15 cases at their golden configs, the perf-guard extension for the new path.
+  - `test_r1b_act_resident` now pins the flat split, since the bank split takes that shape.

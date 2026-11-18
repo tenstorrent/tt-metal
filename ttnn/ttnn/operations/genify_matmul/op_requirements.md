@@ -475,7 +475,7 @@ Golden: the three `test_op_feature[..._concatK...]` cases.
 
 **Outcome**: the reader's `read_act` (R1 / R1a, every residency / head-ramp variant) and R1b's A-streaming writer map global K tile kt to its segment and local tile through a segment table in their RT args (`kernels/a_segments.hpp`); the split, blocking, CBs and compute kernel are those of the single-tensor call (the host plans on the logical concat shape). All three golden `concatK` cases pass. Device ns, segments vs the single-tensor LOOSE call: single out M = 2304 1425.9 vs 1426.4 us; final block M = 2048 1202.3 vs 1201.7 us (both within 0.05%). The concat is free. The bottleneck is the matmul itself; nothing left to do for the segmented A.
 
-### [ ] Refinement 15 — Small-M weight streaming at the DRAM roofline (Qwen3.8 M = 128, FLUX.2 prompt stream, M = 1)
+### [x] Refinement 15 — Small-M weight streaming at the DRAM roofline (Qwen3.8 M = 128, FLUX.2 prompt stream, M = 1)
 
 **Type**: perf
 
@@ -514,6 +514,28 @@ At these M the whole job is streaming B from the 8 DRAM banks once, at full band
 - Each listed case is within 1.15× of its `roofline_ns`, or its remaining gap is explained by a measured floor.
 - Golden is green.
 - No other model case in LOOSE_CASES or FEATURE_CASES is slower beyond ±3%.
+
+**Outcome**: device µs before → after (roofline), one fresh run each (`perf/test_genify_matmul_perf_r15.py`).
+- **Within 1.15× (FLUX.2 non-swiglu):** QKV 331 → 283 (263), attn-out + addcmul 148 → 107 (96), FF2 332 → 278 (263), context_embedder 352 → 251 (225), linear_2 fp32 / bf16 205 / 209 → 168 / 173 (167 / 166), time_mod 1600 → 1352 (1409).
+- **Faster, still off roofline (Qwen3.8 M = 128):** in_proj 63.6 → 48.2 (28.3), down 55.9 → 41.5 (30.0), qkvg 81.0 → 49.8 (27.2; stock 52.9, now faster), out_proj 22.9 → 22.8 (12.4).
+- **Unchanged:** gate_up + SwiGLU 109 → 107 (56.8), FF1 + SwiGLU 631 → 614 (509, noise), linear_1 10.5 (7.7), x_embedder 47.7 (30.2), proj_out 58.3 (30.2).
+- **What was built: the R1b bank-local split.**
+  - Each core owns units 8 B columns apart, so each K row is one contiguous bank read.
+  - Each bank's units go to the cores of the grid row of its NoC0 home (its optimal reader); spare cores fill the most loaded classes.
+  - The output follows the same stride. The split is one full-grid rectangle, so A is multicast once.
+- **Also built: rotating A injectors** (3 on the bank split, K-block r from injector r % 3). Each issues its next turn's read before sending when the slots are free.
+- **Measured findings.**
+  - The first ablation of the M = 128 gate_up showed B, not A, binding. B alone was 93 µs: 576 B tile reads, and a core's NoC0 B rate fell 3–4× with the grid rows its responses crossed.
+  - Coalescing alone gave 78 µs. Bank-local home-row placement gave down's B stream 34 µs (~430 GB/s). NoC1 reads were 1.8× slower.
+- **Bottleneck now.**
+  - Qwen M = 128: the 1.3 MB A multicast (~40 µs at 5 rounds, ~5 µs per 256 KB round plus the turn hand-over), then a ~5 µs compute / write tail.
+  - swiglu: its (gate, up) pair spans banks 2s and 2s + 1, whose home rows differ. Under the bank split half its bytes cross rows (gate_up 101–111 vs 107 µs flat, FF1 667 vs 631), so swiglu keeps the flat split (`BANK_LOCAL_SWIGLU = False`, a live knob).
+  - x_embedder / proj_out are R1a shapes this lever does not touch.
+- **Next, not done (each is its own structural change).**
+  - A multicast on both NoCs, or receivers acking a round ahead (needs a counter-signal handshake in the helper), for the Qwen A floor.
+  - Paired gate / up cores exchanging Y_up for swiglu.
+  - Split-K for proj_out.
+- **Guards.** Golden interleaved cartesian 375 passed / 75 xfailed, R15 loose slice 19/19, feature 10/10. Perf guard, R1b guard and R11 sets: no cell slower beyond ±3% (swiglu ff1 / gate_up re-measured 3×: medians 637 / 632 and 107.0 / 107.9); text-encoder gate 504 → 479.
 
 ### [ ] Refinement 16 — Mid-M compute efficiency (text encoder at 512 tokens, Qwen3.8 prefill M = 512 / 1024)
 

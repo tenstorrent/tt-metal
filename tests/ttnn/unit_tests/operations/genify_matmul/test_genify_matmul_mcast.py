@@ -123,8 +123,11 @@ def test_r1a_min_k_blocks(device):
         ((1, 512, 5120), (5120, 3072), None),  # text-encoder qkv: was R1b (one A injector for 96 cores)
     ],
 )
-def test_split_cost_model_r1a(a_shape, b_shape, grid_n, device):
-    """Refinement 11: the cost model trades per-core work for traffic / injector load and picks R1a."""
+def test_split_cost_model_r1a(a_shape, b_shape, grid_n, device, monkeypatch):
+    """Refinement 11: the cost model trades per-core work for traffic / injector load and picks R1a. Against the flat
+    R1b split: Refinement 15's bank-local split ties R1a on the bf16 text-encoder qkv (181.1 vs 179.9 us) and may
+    take it, so it is off here."""
+    monkeypatch.setattr(pd, "ACT_STREAM_BANK_LOCAL", False)
     geom, grid, blk = _plan(device, a_shape, b_shape)
     assert pd.uses_operand_mcast(geom, grid, blk), f"{grid} {blk}"
     if grid_n is not None:
