@@ -29,8 +29,8 @@ class Pipeline:
     sizes eagerly (MiniMax-H3 ``dynamic_length``) keeps its weights resident and does not set it.
 
     A subclass calls ``Pipeline.__init__`` before it builds modules or runs a warm-up, registers
-    every eviction through ``register_coresident_exclusions`` or ``register_evictable``, and
-    implements ``_run``. It does not define ``__call__``: that would skip the rule.
+    every eviction through ``register_coresident_exclusions``, and implements ``_run``. It does
+    not define ``__call__``: that would skip the rule.
 
     Tracing is decided at construction. A call that still passes the former per-call ``traced``
     argument runs as the pipeline was constructed, whatever the value, and logs a warning.
@@ -67,22 +67,16 @@ class Pipeline:
         self._offload_weights_requested = bool(value)
 
     def register_coresident_exclusions(self, module: Module, *others: Module | None) -> None:
-        """Make loading ``module`` evict ``others``, which thereby become evictable."""
+        """Make loading ``module`` evict ``others``, which thereby become evictable. ``None`` entries are skipped."""
         present = [m for m in others if m is not None]
         # Checked first: a refused exclusion must not stay live on the module.
         if present and getattr(self, "trace", False):
             raise self._trace_rule_error()
         module._register_coresident_exclusions(*present)  # noqa: SLF001
-        self.register_evictable(*present)
-
-    def register_evictable(self, *modules: Module | None) -> None:
-        """Declare modules whose weights the pipeline deallocates itself. ``None`` entries are skipped."""
+        # hasattr: the rule must also hold on an instance built without __init__.
         if not hasattr(self, "_evictable"):
             self._evictable = weakref.WeakSet()
-        for module in modules:
-            if module is not None:
-                self._evictable.add(module)
-        self._check_trace_rule()
+        self._evictable.update(present)
 
     @staticmethod
     def _trace_rule_error() -> ValueError:

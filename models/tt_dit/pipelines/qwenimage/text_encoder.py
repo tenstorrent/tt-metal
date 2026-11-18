@@ -99,9 +99,10 @@ class TextEncoder:
     ) -> None:
         """Build the encoder, and the vision tower if ``prompt_format`` takes images.
 
-        With ``offload``, the device weights are loaded for each ``encode_cfg`` and freed after it,
-        which leaves their memory to the transformer. Encoding then cannot be traced. With
-        ``offload_vision``, only the vision tower's weights are, and only around encoding the images.
+        With ``offload``, the device weights are loaded for each ``encode_cfg``. The pipeline frees
+        them when it next loads its transformers, which leaves their memory to the transformer.
+        Encoding then cannot be traced. With ``offload_vision``, only the vision tower's weights are
+        loaded, and freed, around encoding the images.
         Both need ``TT_DIT_CACHE_DIR``, which the reloads read from.
 
         The vision tower pads its patches to one length per image count up to ``max_images``: that
@@ -219,8 +220,6 @@ class TextEncoder:
                 outputs.append(embeds.repeat_interleave(num_images_per_prompt, dim=0))
             if image_inputs is not None and image_inputs.embeds is not None:
                 ttnn.deallocate(image_inputs.embeds)
-            if self._offload:
-                self._deallocate_weights()
         on_event(SectionEnd("qwen_encoding"))
 
         return outputs
@@ -235,7 +234,10 @@ class TextEncoder:
 
     @property
     def offloaded_modules(self) -> tuple[Qwen25VlEncoder | Qwen25VlVisionModel | None, ...]:
-        """The modules whose device weights this encoder frees and reloads itself."""
+        """The modules whose device weights this encoder reloads itself.
+
+        The pipeline evicts them through the coresident exclusions of its transformers.
+        """
         if self._offload:
             return (self._encoder, self._vision)
         if self._offload_vision:

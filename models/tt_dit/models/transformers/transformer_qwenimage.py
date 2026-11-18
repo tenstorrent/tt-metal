@@ -492,6 +492,19 @@ class QwenImageCheckpoint:
             padding_config=padding_config,
             is_fsdp=is_fsdp,
         )
+        self.load_weights(model, ccl_manager=ccl_manager, parallel_config=parallel_config, is_fsdp=is_fsdp)
+        return model
+
+    def load_weights(
+        self,
+        model: QwenImageTransformer,
+        *,
+        ccl_manager: CCLManager,
+        parallel_config: DiTParallelConfig,
+        is_fsdp: bool,
+    ) -> None:
+        """Load the weights of a model built by ``build``. A loaded model only evicts its coresident exclusions."""
+        device = ccl_manager.mesh_device
         cache.load_model(
             tt_model=model,
             get_torch_state_dict=self._load_state_dict,
@@ -502,7 +515,6 @@ class QwenImageCheckpoint:
             mesh_device=device,
             is_fsdp=is_fsdp,
         )
-        return model
 
     def _load_state_dict(self) -> dict[str, torch.Tensor]:
         torch_transformer = diffusers.QwenImageTransformer2DModel.from_pretrained(

@@ -491,14 +491,13 @@ class QwenImagePipeline(Pipeline):
             vision_image_sizes=[self._vision_size(s.width / s.height, s) for s in self._image_sizes.values()],
             max_images=self._max_images,
         )
-        # What the text encoder really evicts decides, whatever the config predicted.
-        self.register_evictable(*self._text_encoder.offloaded_modules)
 
         logger.info("creating transformers...")
         self._transformers = [
             self._checkpoint.build(ccl_manager=m, parallel_config=config.dit_parallel_config, is_fsdp=False)
             for m in self._ccl_managers
         ]
+        self._register_text_encoder_exclusions()
         self._dbcache = (
             DBCache(
                 [_BatchedCFG(t) if self._cfg_enabled and not self._cfg_parallel else t for t in self._transformers],
@@ -578,6 +577,25 @@ class QwenImagePipeline(Pipeline):
         if self.trace:
             logger.info("pipeline capture run...")
             self._warm_up(traced=True)
+
+    def _register_text_encoder_exclusions(self) -> None:
+        """Make loading a transformer evict what the text encoder offloads.
+
+        What the text encoder really offloads decides, whatever the config predicted. The encoder
+        reloads those modules itself, so it excludes nothing in return.
+        """
+        offloaded = self._text_encoder.offloaded_modules
+        if not offloaded:
+            return
+        for transformer in self._transformers:
+            self.register_coresident_exclusions(transformer, *offloaded)
+
+    def _ensure_transformers_loaded(self) -> None:
+        """Evict what the text encoder offloads. The transformers stay resident and are not loaded again."""
+        for transformer, ccl_manager in zip(self._transformers, self._ccl_managers):
+            self._checkpoint.load_weights(
+                transformer, ccl_manager=ccl_manager, parallel_config=self._parallel_config, is_fsdp=False
+            )
 
     def _warm_up(self, *, traced: bool) -> None:
         """Runs every prompt bucket with every spatial bucket, and the VAE at every resolution."""
@@ -800,6 +818,7 @@ class QwenImagePipeline(Pipeline):
             images=self._vision_images(images, conditions) if edit else (),
         )
         on_event(SectionEnd("encoder"))
+        self._ensure_transformers_loaded()
         prompt_sequence_lengths = [c.shape[1] for c in torch_contexts]
 
         logger.info("preparing timesteps...")

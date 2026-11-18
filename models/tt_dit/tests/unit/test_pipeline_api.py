@@ -77,7 +77,7 @@ def test_registering_exclusions_makes_the_pipeline_offload() -> None:
 def test_registering_on_a_traced_pipeline_raises(expect_error: Callable) -> None:
     pipeline = _FakePipeline(offload_weights=False, trace=True)
     with expect_error(ValueError, _RULE):
-        pipeline.register_evictable(_FakeModule())
+        pipeline.register_coresident_exclusions(_FakeModule(), _FakeModule())
 
 
 def test_refused_exclusion_is_not_registered_on_the_module(expect_error: Callable) -> None:
@@ -92,14 +92,13 @@ def test_refused_exclusion_is_not_registered_on_the_module(expect_error: Callabl
 def test_offload_stays_set_while_a_module_is_registered() -> None:
     pipeline = _FakePipeline(offload_weights=True, trace=False)
     module = _FakeModule()
-    pipeline.register_evictable(module)
+    pipeline.register_coresident_exclusions(_FakeModule(), module)
     pipeline.offload_weights = False
     assert pipeline.offload_weights is True
 
 
 def test_registering_nothing_keeps_the_pipeline_resident() -> None:
     pipeline = _FakePipeline(offload_weights=False, trace=True)
-    pipeline.register_evictable(None)
     pipeline.register_coresident_exclusions(_FakeModule(), None)
     assert pipeline.offload_weights is False
     assert pipeline(prompts=["a"]) == "output"
@@ -107,9 +106,11 @@ def test_registering_nothing_keeps_the_pipeline_resident() -> None:
 
 def test_evictable_modules_are_held_weakly() -> None:
     pipeline = _FakePipeline(offload_weights=False, trace=False)
-    module = _FakeModule()
-    pipeline.register_evictable(module)
-    del module
+    loaded, module = _FakeModule(), _FakeModule()
+    pipeline.register_coresident_exclusions(loaded, module)
+    assert pipeline.offload_weights is True
+    # The stand-in holds its exclusions strongly, so it goes too.
+    del loaded, module
     gc.collect()
     assert pipeline.offload_weights is False
 
@@ -170,7 +171,7 @@ def test_a_per_call_traced_is_reported_once_per_kind() -> None:
 def test_offloading_in_the_warning_follows_registration() -> None:
     pipeline = _FakePipeline(offload_weights=False, trace=False)
     module = _FakeModule()
-    pipeline.register_evictable(module)
+    pipeline.register_coresident_exclusions(_FakeModule(), module)
     (message,) = _warnings_of(lambda: pipeline(prompts=["a"], traced=True))
     assert "because it offloads weights (TDM-130)" in message
 
