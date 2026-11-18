@@ -319,9 +319,7 @@ def _scan_local_grouped_chunks(
         actual_end=actual_end,
         sequence_parallel_axis=sequence_parallel_axis,
     )
-    output = ttnn.reshape(
-        scan.output, (geometry.batch_heads, geometry.num_chunks, geometry.chunk_size, geometry.value_dim)
-    )
+    output = ttnn.reshape(scan.output, (geometry.batch_heads, geometry.local_rows, geometry.value_dim))
     return RecurrenceResult(output, _last_group_state(scan.final_state, geometry, groups))
 
 
@@ -600,13 +598,12 @@ class KDARecurrence:
 
     @staticmethod
     def _finish(scan: RecurrenceResult, geometry: _RecurrenceGeometry, slab: bool) -> RecurrenceResult:
-        output = ttnn.reshape(scan.output, (geometry.batch_heads, geometry.local_rows, geometry.value_dim))
         if slab:
-            return RecurrenceResult(output, scan.final_state)
+            return scan
         final_state = ttnn.reshape(
             scan.final_state, (geometry.batch, geometry.heads, geometry.key_dim, geometry.value_dim)
         )
-        return RecurrenceResult(output, final_state)
+        return RecurrenceResult(scan.output, final_state)
 
     def __call__(
         self,

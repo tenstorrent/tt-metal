@@ -148,7 +148,7 @@ def test_entry_correction_matches_reference(mesh_device, interval):
             expected[:, reset:] = from_tail[:, reset:]
         seed = tail if reset else entry
         expected_final = seed + (final_e @ seed + final_b)
-        got = ttnn.to_torch(local_output).float()
+        got = ttnn.to_torch(local_output).float().reshape(expected.shape)
         assert_accurate(
             expected[:, :valid], got[:, :valid], name=f"output rank={rank}", pcc_threshold=0.9999, nrmse_threshold=0.01
         )
