@@ -92,23 +92,44 @@ def _read_into(
     return total
 
 
+def _pread_into(fd: int, buffer: memoryview, offset: int) -> None:
+    """Fill ``buffer`` from ``fd`` at ``offset`` (``os.preadv`` may return short reads on some filesystems)."""
+    done = 0
+    while done < len(buffer):
+        n = os.preadv(fd, [buffer[done:]], offset + done)
+        if not n:
+            raise EOFError(f"safetensors: read past the end of the file at offset {offset + done}")
+        done += n
+
+
+def _check_crc(plan: KeyPlan, chunk_index: int, crc: int, path: str) -> None:
+    record = plan.entry.chunks[chunk_index]
+    if crc != record.crc32:
+        raise CheckpointError(
+            f"{plan.key}: chunk {chunk_index} ({record.box}) in {path} fails its CRC32 check (recorded "
+            f"{record.crc32:08x}, read {crc:08x}); the checkpoint is corrupt"
+        )
+
+
 def _read_chunk(
     fd: int, data_start: int, plan: KeyPlan, items: list[ReadItem], itemsize: int, carrier, arrays: dict, path: str
 ) -> int:
     """The reads of one chunk: one ``pread`` of the whole chunk, sliced in memory, when the items need at least half
-    of it (on a single host the destination shards together cover every chunk), else one read per contiguous run.
-    A whole chunk is checked against the CRC32 that save recorded for it; a partial read cannot be, since the checksum
-    covers the whole chunk. Returns bytes read."""
+    of it (on a single host the destination shards together cover every chunk), else one read per contiguous run. A
+    chunk that is its one destination shard, as in a same-world load, is read into the shard's array itself. A whole
+    chunk is checked against the CRC32 that save recorded for it; a partial read cannot be, since the checksum covers
+    the whole chunk. Returns bytes read."""
     record = plan.entry.chunks[items[0].chunk]
+    sizes = tuple(record.box.sizes)
+    dest = arrays[items[0].group]
+    if len(items) == 1 and tuple(items[0].src.sizes) == sizes and dest.shape == sizes and dest.flags.c_contiguous:
+        _pread_into(fd, memoryview(dest).cast("B"), data_start + record.data_offset)
+        _check_crc(plan, items[0].chunk, zlib.crc32(dest), path)
+        return record.nbytes
     needed = sum(it.src.volume for it in items) * itemsize
     if 2 * needed >= record.nbytes:
         raw = pread_all(fd, record.nbytes, data_start + record.data_offset)
-        crc = zlib.crc32(raw)
-        if crc != record.crc32:
-            raise CheckpointError(
-                f"{plan.key}: chunk {items[0].chunk} ({record.box}) in {path} fails its CRC32 check (recorded "
-                f"{record.crc32:08x}, read {crc:08x}); the checkpoint is corrupt"
-            )
+        _check_crc(plan, items[0].chunk, zlib.crc32(raw), path)
         chunk = np.frombuffer(raw, dtype=carrier).reshape(record.box.sizes)
         for it in items:
             arrays[it.group][it.dst.slices()] = chunk[it.src.slices()]

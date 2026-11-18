@@ -159,6 +159,37 @@ def test_a_block_from_the_middle_of_a_chunk_reads_its_own_rows(tmp_path, monkeyp
             os.close(fd)
 
 
+def test_a_same_layout_chunk_is_read_into_its_destination(tmp_path, monkeypatch, expect_error):
+    """A chunk that is its one destination shard, as in a same-world load, is read into the shard's array itself, with
+    no intermediate bytes, and still checked against its CRC32."""
+    kplan, fds, src = _plan_and_files(tmp_path, saved=TP2_COLS, loaded=TP2_COLS)
+
+    def no_intermediate_copy(fd, nbytes, offset):
+        raise AssertionError("a same-layout chunk was read into intermediate bytes")
+
+    monkeypatch.setattr(_load, "pread_all", no_intermediate_copy)
+    try:
+        arrays = {group: np.zeros(box.sizes, np.float32) for group, box in kplan.boxes.items()}
+        chunks = _by_chunk(kplan)
+        for items in chunks.values():
+            assert len(items) == 1, "precondition: each chunk is one destination shard"
+            n = _read_chunk(fds[items[0].file], 0, kplan, items, ITEMSIZE["F32"], np.float32, arrays, "file")
+            assert n == src.nbytes // 2
+        assert_shards_equal(arrays, expected_shards(src, TP2_COLS))
+
+        items = chunks[max(chunks)]
+        with open(tmp_path / f"file{items[0].file}", "r+b") as f:  # one flipped bit; the descriptor sees it
+            f.seek(5)
+            byte = f.read(1)[0]
+            f.seek(5)
+            f.write(bytes([byte ^ 0x40]))
+        with expect_error(CheckpointError, r"w: chunk 1 \(.*\) in file fails its CRC32 check"):
+            _read_chunk(fds[items[0].file], 0, kplan, items, ITEMSIZE["F32"], np.float32, arrays, "file")
+    finally:
+        for fd in fds.values():
+            os.close(fd)
+
+
 def test_a_whole_chunk_read_checks_the_chunk_crc(tmp_path, expect_error):
     ckpt = FakeCheckpoint()
     src = arange(SHAPE)
