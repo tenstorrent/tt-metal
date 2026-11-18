@@ -110,7 +110,9 @@ class FilePlan:
 class SavePlan:
     infos: dict[str, TensorInfo]
     files: list[FilePlan]
-    items: dict[str, list[WriteItem]]  # per key, one item per unique box, in distribution order of the owner
+    # Per key, one item per unique box this process writes, in distribution order: every box on one process; on a
+    # rank of a multi-rank save, the boxes elected to it, and none for a key other ranks write in full.
+    items: dict[str, list[WriteItem]]
 
     @property
     def bytes_written(self) -> int:
