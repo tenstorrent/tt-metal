@@ -613,6 +613,14 @@ TEST(BufferDistributionSpecContiguousPages, CPU_NumContiguousPages) {
     EXPECT_EQ(single_page_shard.contiguous_page_stride(), 1u);
 }
 
+// A buffer with pages must not have a page size of 0.
+TEST_F(BufferDistributionSpecFixture, ZeroPageSizeIsRejected) {
+    EXPECT_ANY_THROW(distributed::MeshBuffer::create(
+        distributed::ReplicatedBufferConfig{.size = 1024},
+        distributed::DeviceLocalBufferConfig{.page_size = 0, .buffer_type = BufferType::DRAM},
+        mesh_device_.get()));
+}
+
 // CONTIGUOUS_1D needs a whole number of shards per node; creating a buffer with an uneven count must fatal, before
 // kernels or host transfers use it.
 TEST_F(BufferDistributionSpecFixture, ContiguousBufferRequiresUniformShardsPerNode) {

@@ -290,6 +290,7 @@ void validate_buffer_parameters(
         return;
     }
 
+    TT_FATAL(page_size != 0, "Page size must not be 0 for a buffer of size {}", size);
     TT_FATAL(
         size % page_size == 0,
         "For valid non-interleaved buffers page size {} must equal buffer size {}. For interleaved-buffers, "
