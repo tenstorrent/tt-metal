@@ -121,7 +121,7 @@ PASS — test_eltwise_binary_quasar.py (arch=quasar, command=run)
 ```
 PASS — perf_pack_l1_acc.py (arch=wormhole, command=run, perf, speed-of-light)
 - 20 variants collected, 20 passed
-- Report: <tt-llk>/perf_data/runs/pack-dest-bank-sol
+- Report: <tt-llk>/perf_data/runs/pack-l1-acc-sol
 ```
 
 ```

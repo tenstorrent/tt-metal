@@ -85,7 +85,7 @@ work unless the measured operation itself requires it.
   both, a two-face pack issues one tile per call, as `pack_l1_acc_test.cpp`
   does.
 
-## Measured relations (pack dest bank, Wormhole)
+## Measured relations (pack L1 accumulate, Wormhole)
 
 These are examples of healthy numbers, not limits:
 

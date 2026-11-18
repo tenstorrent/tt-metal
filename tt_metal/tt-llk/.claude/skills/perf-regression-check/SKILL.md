@@ -72,23 +72,20 @@ Show the verdict, the top regressions, and the improvements if any. Point at
 - Comparison is **per (marker, sweep-config)** on `mean(<run_type>)` cycles, median across
   iterations. A point exists on both sides or it is a "new point" (no baseline).
 - Treat match coverage as part of the verdict. A changed schema or
-  configuration column changes the point key. `perf/regression_compare.py`
-  reads `tests/python_tests/helpers/perf/test_schemas.py` and maps old test
-  names (`test_name_aliases`) and old column names (`aliases`) to the current
-  ones on both sides before keying points, so a rename recorded there still
-  matches an older baseline. An unrecorded rename does not. When no point matches, the
-  compare exits with "No points compared" before writing a report: that is a
-  key mismatch, not a crash. When only a few points match, a clean verdict
-  covers just those points. In the multi-module CI gate, one module can lose
-  every match while others still compare, so the gate passes without
-  measuring it. Check the matched-point count of every module: zero for one
-  module is inconclusive even when the gate is green. The rename tests in
-  `tests/hardware_free/perf/test_perf_regression_compare.py` (old header
-  against new header) show how to pin this for a renamed module or column.
-  Either outcome is inconclusive, not a pass. Preserve the old
-  key long enough to compare, run an explicit like-for-like baseline, or
-  state that the validated current report must become the new pinned
-  baseline.
+  configuration column changes the point key. A rename recorded in
+  `tests/python_tests/helpers/perf/test_schemas.py` (`test_name_aliases`,
+  `aliases`) is mapped to the current name on both sides first and still
+  matches; an unrecorded one does not. When no point matches, the compare exits
+  with "No points compared" before writing a report: that is a key mismatch,
+  not a crash. When only a few points match, a clean verdict covers just those
+  points. In the multi-module CI gate, one module can lose every match while
+  others still compare, so the gate passes without measuring it; check the
+  matched-point count of every module. Either outcome is inconclusive, not a
+  pass. Preserve the old key long enough to compare, run an explicit
+  like-for-like baseline, or state that the validated current report must
+  become the new pinned baseline.
+  `tests/hardware_free/perf/test_perf_regression_compare.py` (old header against
+  new header) shows how to pin a rename.
 - Cleanest when only **kernel/LLK code** differs between the commits. If the test's sweep
   changed, expect "new points" — those are reported, never counted as regressions.
 - **Noise:** 3 iterations + median reduces run-to-run noise, but deltas near the threshold

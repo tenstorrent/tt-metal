@@ -48,8 +48,7 @@ fixed inside a `PerfConfig` call: read the code for those (`perf-test`,
 - `CROSS_ARCH_FUNCTION_EXCEPTIONS` pairs a function that lives in a different
   module on the other side. Use it only for that. Two modules of one op whose
   stems differ (`pack_dest_bank` against `pack_l1_acc`) are a naming bug: rename
-  the module, with its kernel source, `perf_split_costs*.json` entries and a
-  `test_name_aliases` entry in `test_schemas.py`.
+  the module (`perf-test`, "Renames").
 
 **Axes**
 
@@ -60,9 +59,8 @@ fixed inside a `PerfConfig` call: read the code for those (`perf-test`,
   `formats_dest_acc.formats.input` and never meet. Tuples flatten to type
   names (`str`, `MathOperation`), which collide across ops. Unbundle the test
   axes; do not special-case a dataclass in the comparer.
-- The comparer joins axes by exact name; `AXIS_ALIASES` is empty. A mismatch
-  such as `math_op` against `mathop` is a naming bug: rename it in the test,
-  never alias it in the comparer. It splits a tuple axis whose name is exactly
+- The comparer joins axes by exact name; `AXIS_ALIASES` is empty (a spelling
+  mismatch is fixed in the test, see the table below). It splits a tuple axis whose name is exactly
   the other side's axes (`dest_sync_dest_acc`) when each slot has the same
   type. It does not read schema `aliases`; those serve the perf gate
   (`perf-regression-check`).

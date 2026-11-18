@@ -320,7 +320,7 @@ still compile. Every name it uses must exist in every build.
 ## 5. No dead paths
 
 A kernel branch that no sweep value reaches is untested, and untested code
-hides bugs. In the pack dest-bank test, tilize was never swept, and its read
+hides bugs. In the pack L1-accumulate test, tilize was never swept, and its read
 offset stepped by `BLOCK_RT_DIM` instead of `BLOCK_CT_DIM`. Either sweep the
 option in functional (and so in perf), with the matching golden
 (`TilizeGolden`), or delete the branch.
@@ -347,6 +347,13 @@ parameter: `write_runtimes_to_L1` serializes every runtime field, so the
 kernel's struct layout changes. A column takes its name from the dataclass
 field, so name the field after the quantity it holds.
 
+Column names are unique across all parameter classes;
+`schema.assert_unique_columns` and the header gate fail on a duplicate. Before
+adding a template class, check whether an existing one already has the field
+and extend that one. `MATH_OP` carries `mathop`, `unary_extra` and `pool_type`,
+and emits `POOL_TYPE` and the ternary operation constant, so reductions and
+ternary tests use it instead of their own class.
+
 After a rebase, check `wide_schema.py` and `wide_schema_quasar.py` for a
 column added twice, once by each side.
 
@@ -364,14 +371,9 @@ schema for the target architecture:
 ### Renames
 
 - Record a renamed column in the entry's `aliases` (old -> new) and a renamed
-  module in `test_name_aliases` (old -> current), and bump `version` once per
-  PR. The perf gate reads both from this catalog to match older baselines.
-- Column names (dataclass field names) are unique across all parameter classes;
-  `schema.assert_unique_columns` and the header gate fail on a duplicate.
-  Before adding a template class, check whether an existing one already has the
-  field and extend that one. `MATH_OP` carries `mathop`, `unary_extra` and
-  `pool_type`, and emits `POOL_TYPE` and the ternary operation constant, so
-  reductions and ternary tests use it instead of their own class.
+  module in `test_name_aliases` (old -> current). A column rename changes the
+  column set, so bump `version` as above. The perf gate matches older baselines
+  through these maps (`perf-regression-check`, "Interpreting results").
 - Check each place that names the old spelling: `tests/perf_split_costs.json`
   and `tests/perf_split_costs_sol.json`, the ids hard-coded in
   `hardware_free/kernels/test_gathering_config.py`, `test_schemas.py`,
@@ -392,13 +394,14 @@ these names, so a second spelling shows up as two one-sided axes.
 | Dest sync mode | `dest_sync` | not `dest_sync_mode` |
 | Math operation | `mathop` | not `math_op`, `ternary_mathop`; `op` only for kernel-variant strings that are not a `MathOperation` |
 | Pool or reduce kind | `pool_type` | not `reduce_pool`, `reduce_pool_type` |
-| Tile count | `tile_cnt` | check the module's meaning first |
+| Tile count | `tile_cnt` | check the module's meaning first ([perf-facts](references/perf-facts.md), "Accounting and comparability") |
 | Dest accumulation | `dest_acc` | |
 | Data formats | `formats` | |
 
 Reuse the name the other architecture already uses; never rename one side
-only. A module pairs across architectures by equal stem, so the Wormhole/
-Blackhole and Quasar modules of one op share it (`perf_pack_l1_acc`).
+only. Give the Wormhole/Blackhole and Quasar modules of one op the same stem
+(`perf_pack_l1_acc` and `perf_pack_l1_acc_quasar`); pairing is in
+`perf-coverage`, "How the comparer works".
 
 ## 7. Repair a run type
 
@@ -464,6 +467,7 @@ Derive the description from the final diff, not the issue title. State:
 - the isolate model (the table above, as implemented);
 - any intentionally unmatched functional tests;
 - the schema version change;
+- after an axis or module rename, the dashboard aliases that can go (`axis_maps.json`, `report_data.py` in the dashboard repository, not held here);
 - split-cost changes and why their build-count estimate changed;
 - when rows no longer match the old catalog, that the baseline needs a re-pin;
 - the validation actually run, per architecture, and what was not measured
