@@ -38,23 +38,32 @@ namespace {
 // TT_METAL_SLOW_DISPATCH_MODE).
 class OptimalDramWorkers : public ::testing::TestWithParam<DispatchCoreAxis> {};
 
+// Supported axes follow the per-arch core descriptor YAMLs (tt_metal/core_descriptors/):
+// Blackhole defines only a col axis (without fabric tensix) and Quasar only a row axis.
+bool is_axis_supported(tt::ARCH arch, DispatchCoreAxis axis) {
+    switch (arch) {
+        case tt::ARCH::BLACKHOLE: return axis == DispatchCoreAxis::COL;
+        case tt::ARCH::QUASAR: return axis == DispatchCoreAxis::ROW;
+        default: return true;
+    }
+}
+
 // Resolved at static-init from the ARCH_NAME env var (set by build/test scripts), so
 // gtest enumeration only lists axes that the platform actually supports — no runtime
 // skips appear in the test output. When ARCH_NAME is unset or wrong (e.g. the Quasar
 // emulator runner), the test body skips unsupported axes at run time instead.
-//
-// Blackhole rejects ROW dispatch (the Device guard emits
-// "ROW dispatch core axis is not supported for blackhole arch"), so we omit ROW on BH.
-// Quasar core descriptors only define a row axis.
 std::vector<DispatchCoreAxis> supported_dispatch_axes() {
     const char* arch_env = std::getenv("ARCH_NAME");
-    const std::string arch = arch_env == nullptr ? "" : arch_env;
-    if (arch == "quasar") {
-        return {DispatchCoreAxis::ROW};
-    }
-    std::vector<DispatchCoreAxis> axes = {DispatchCoreAxis::COL};
-    if (arch != "blackhole") {
-        axes.push_back(DispatchCoreAxis::ROW);
+    const std::string arch_name = arch_env == nullptr ? "" : arch_env;
+    // Not tt::get_arch_from_string: it throws on an unset or unknown name.
+    const tt::ARCH arch = arch_name == "blackhole" ? tt::ARCH::BLACKHOLE
+                          : arch_name == "quasar"  ? tt::ARCH::QUASAR
+                                                   : tt::ARCH::Invalid;
+    std::vector<DispatchCoreAxis> axes;
+    for (DispatchCoreAxis axis : {DispatchCoreAxis::COL, DispatchCoreAxis::ROW}) {
+        if (is_axis_supported(arch, axis)) {
+            axes.push_back(axis);
+        }
     }
     return axes;
 }
@@ -70,25 +79,21 @@ TEST_P(OptimalDramWorkers, ReturnsOneValidWorkerPerDramBank) {
 
     // Run-time guard for when ARCH_NAME is unset or wrong at registration time (see supported_dispatch_axes()).
     const tt::ARCH arch = MetalContext::instance().get_cluster().arch();
-    if (arch == tt::ARCH::QUASAR && axis == DispatchCoreAxis::COL) {
-        GTEST_SKIP() << "COL dispatch core axis is not supported on " << tt::arch_to_str(arch);
-    }
-    if (arch == tt::ARCH::BLACKHOLE && axis == DispatchCoreAxis::ROW &&
-        MetalContext::instance().get_fabric_tensix_config() == tt::tt_fabric::FabricTensixConfig::DISABLED) {
-        GTEST_SKIP() << "ROW dispatch core axis is not supported on " << tt::arch_to_str(arch)
-                     << " unless fabric tensix is enabled";
+    if (!is_axis_supported(arch, axis)) {
+        GTEST_SKIP() << (axis == DispatchCoreAxis::ROW ? "ROW" : "COL") << " dispatch core axis is not supported on "
+                     << tt::arch_to_str(arch);
     }
     std::vector<int> ids(ids_set.begin(), ids_set.end());
 
     auto devs = distributed::MeshDevice::create_unit_meshes(
         ids, DEFAULT_L1_SMALL_SIZE, DEFAULT_TRACE_REGION_SIZE, /*num_command_queues=*/1, cfg);
 
+    const uint32_t num_nocs = MetalContext::instance().hal().get_num_nocs();
     for (auto& [chip_id, dev] : devs) {
         const CoreCoord grid = dev->compute_with_storage_grid_size();
         const CoreCoord dram_grid = dev->dram_grid_size();
         const size_t expected_banks = static_cast<size_t>(dram_grid.x) * dram_grid.y;
 
-        const uint32_t num_nocs = MetalContext::instance().hal().get_num_nocs();
         for (uint32_t noc_idx = 0; noc_idx < num_nocs; ++noc_idx) {
             const NOC noc = static_cast<NOC>(noc_idx);
             const auto bank_to_core = dev->get_optimal_dram_bank_to_logical_worker_assignment(
