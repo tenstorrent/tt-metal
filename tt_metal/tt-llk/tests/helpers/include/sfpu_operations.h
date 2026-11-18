@@ -96,6 +96,9 @@
 #include "llk_sfpu/ckernel_sfpu_signbit.h"
 #include "llk_sfpu/ckernel_sfpu_silu.h"
 #include "llk_sfpu/ckernel_sfpu_snake_beta.h"
+#ifdef ARCH_BLACKHOLE
+#include "llk_sfpu/ckernel_sfpu_softcap.h"
+#endif
 #include "llk_sfpu/ckernel_sfpu_softplus.h"
 #ifndef SOFTPLUS_TEST_BETA
 #define SOFTPLUS_TEST_BETA       0x3f800000u /* beta = 1.0f */
@@ -1635,6 +1638,14 @@ void call_unary_sfpu_operation(std::uint32_t dst_index, std::uint32_t math_forma
         SFPU_UNARY_CALL(
             DST_SYNC_MODE, DST_ACCUM_MODE, calculate_hardshrink, (APPROX_MODE, ITERATIONS), dst_index, vector_mode, 0x3f000000u /* lambda = 0.5f */);
     }
+#ifdef ARCH_BLACKHOLE
+    else if constexpr (OPERATION == SfpuType::softcap)
+    {
+        // softcap at beta = 5.0 (SOFTCAP_BETA).
+        SFPU_UNARY_CALL(
+            DST_SYNC_MODE, DST_ACCUM_MODE, calculate_softcap, (APPROX_MODE, is_fp32_dest_acc_en, ITERATIONS), dst_index, vector_mode, 0x40a00000u, 0x3e4ccccdu);
+    }
+#endif
     else if constexpr (OPERATION == SfpuType::softplus)
     {
         SFPU_UNARY_CALL(

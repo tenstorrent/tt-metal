@@ -8,7 +8,7 @@ from itertools import product
 
 import pytest
 import torch
-from conftest import wormhole_only
+from conftest import skip_for_quasar, skip_for_wormhole, wormhole_only
 from helpers.chip_architecture import ChipArchitecture
 from helpers.constraints import distinct_dest_accumulation_modes
 from helpers.data_format_inference import (
@@ -1157,6 +1157,32 @@ _SOFTPLUS_PARAMS = [
     pytest.param(-1.0, 20.0, id="beta_neg"),
     pytest.param(1.0, 5.0, id="threshold5"),
 ]
+
+
+SOFTCAP_SWEEP = dict(
+    formats=input_output_formats([DataFormat.Float16_b]),
+    mathop=[MathOperation.Softcap],
+    dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
+)
+
+
+@skip_for_quasar
+@skip_for_wormhole
+@parametrize(**SOFTCAP_SWEEP)
+def test_eltwise_unary_sfpu_softcap(formats, dest_acc, mathop):
+    # at beta = 5.0 (SOFTCAP_BETA), both signs past the hold.
+    eltwise_unary_sfpu(
+        "sources/eltwise_unary_sfpu_test.cpp",
+        formats,
+        dest_acc,
+        ApproximationMode.No,
+        mathop,
+        FastMode.No,
+        [64, 64],
+        spec_A=StimuliSpec(
+            distribution=DistributionKind.UNIFORM, low=-48.75, high=48.75
+        ),
+    )
 
 
 @pytest.mark.parametrize("softplus_beta,softplus_threshold", _SOFTPLUS_PARAMS)
