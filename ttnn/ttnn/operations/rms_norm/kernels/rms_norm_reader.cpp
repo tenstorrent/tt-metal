@@ -138,10 +138,6 @@ void kernel_main() {
     }
 
     // Sharded TILE + non-aligned W: the 0/1 mask for the partial-W tile (once; compute never pops it until the end).
-    if constexpr (collapse_reduce_tile) {
-        // ones scaler of the ReduceTile collapse (SUM, row reduce); resident for the whole kernel.
-        calculate_and_prepare_reduce_scaler<cb_reduce_scaler, PoolType::SUM, ReduceDim::REDUCE_ROW>();
-    }
     if constexpr (mask_partial) {
         if (owns_partial_last) {
             prepare_reduce_mask<cb_wmask, ReduceDim::REDUCE_ROW>(w_valid_last);
@@ -275,21 +271,32 @@ void kernel_main() {
     Semaphore<> sem_partials(sem_partials_id);
     Semaphore<> sem_rinv_local(sem_rinv_local_id);
 
+    // Constant tiles compute first reads after block 0's sumsq: built once block 0's x is on its way (they would
+    // otherwise sit in front of it): the ReduceTile collapse's ones scaler, the dense selectors.
+    auto gen_constants = [&]() {
+        if constexpr (collapse_reduce_tile) {
+            calculate_and_prepare_reduce_scaler<cb_reduce_scaler, PoolType::SUM, ReduceDim::REDUCE_ROW>();
+        }
+        if constexpr (dense) {
+            gen_jsel();
+        }
+    };
+
     for (uint32_t b = 0; b < lookahead && b < num_blocks; ++b) {
         load_x_block(b);
     }
-    if constexpr (dense && lookahead > 0) {
+    if constexpr (lookahead > 0) {
         if (num_blocks > 0) {
-            gen_jsel();  // block 0 already published
+            gen_constants();  // block 0 already published
         }
     }
     for (uint32_t b = 0; b < num_blocks; ++b) {
         if (b + lookahead < num_blocks) {
             load_x_block(b + lookahead);
         }
-        if constexpr (dense && lookahead == 0) {
+        if constexpr (lookahead == 0) {
             if (b == 0) {
-                gen_jsel();  // right after block 0's x
+                gen_constants();  // right after block 0's x
             }
         }
         if constexpr (is_wsplit) {
