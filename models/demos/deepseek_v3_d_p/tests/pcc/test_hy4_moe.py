@@ -3,9 +3,11 @@
 
 """Hy4-preview FFN modules on the Galaxy vs the HF ``hy_v4`` reference, on real weights (#65890, #65923).
 
-Layout: the SC1 placement (TP32 / DP1) on the PHYSICAL 8x4 mesh: SP 4 on mesh axis 1, TP 8 on mesh axis 0, the same
-split as the logical 4x8 view of ``tt/hy4/layout.py``'s tp32 (a logical 4x8 view over the 8x4 torus descriptor hung
-in an all-to-all on another branch; see the TP32 blockers). The dev layout (SP 8 on axis 0, TP 4) runs too.
+Layout: the SC1 placement (TP32 / DP1, ``tt/hy4/layout.py``'s tp32) on the PHYSICAL 8x4 mesh: SP 8 on mesh axis 0,
+TP 4 on mesh axis 1, i.e. the hidden over the 4-chip axis and the intermediate / tokens over the 8-chip axis, the
+residual ``[S / 8, 6144 / 4]`` (#65884: hidden over its 4 rows). It is the dev layout's mesh too; only the shared
+expert / dense FFN placement differs (2D here). ``HY4_MOE_SP_AXES=0,1`` adds the SP-on-axis-1 mesh (H on the 8-chip
+axis), which the module also supports.
 
   * ``test_hy4_dense_ffn``: layer 0's dense FFN (intermediate 18432, unclamped) as ``TtMlp2D``: hidden over TP,
     intermediate over SP, no replication. Prefill form (tokens over SP, the block's layout) and decode form (tokens
@@ -73,11 +75,11 @@ def _galaxy(sp_axis):
         torus_xy_device_params(fabric_payload_size=moe_fabric_payload(CFG)),
         sp_axis,
         marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
-        id="sc1-8x4-sp1" if sp_axis == 1 else "dev-8x4-sp0",
+        id="sc1-8x4-sp0" if sp_axis == 0 else "alt-8x4-sp1",
     )
 
 
-MESHES = [_galaxy(1), _galaxy(0)]
+MESHES = [_galaxy(int(a)) for a in os.environ.get("HY4_MOE_SP_AXES", "0").split(",")]
 
 
 def _need(path: Path, what: str) -> Path:

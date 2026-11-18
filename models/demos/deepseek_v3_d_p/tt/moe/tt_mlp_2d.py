@@ -4,7 +4,7 @@
 """2D tensor-parallel SwiGLU MLP: the shared expert and the dense FFN with every weight sharded once over the mesh.
 
 ``TtSharedExpert`` / ``TtFfn`` shard the intermediate dim over ONE mesh axis (TP) and replicate the weights over the
-other (SP), which on the 4x8 Galaxy stores each shared expert / dense FFN 4x (8x on the dev 8x4 SP layout). The SC1
+other (SP), which on the 8x4 Galaxy (SP 8 x TP 4) stores each shared expert / dense FFN 8x. The SC1
 placement of #65884 (Hy4-preview, #65890) shards every weight once over all 32 chips. This module does that:
 
   mesh axis ``hidden_axis`` (size nh) splits the model hidden dim H     (the axis the block's residual shards H over)
@@ -33,16 +33,24 @@ are the only collectives.
 
 Which mesh axis gets H is the RESIDUAL's choice, not this module's: H goes wherever the block keeps the hidden
 shards, so the input needs no redistribution. In the prefill block the residual is ``[S / sp, H / tp]``, so
-``hidden_axis = tp_axis`` and ``inter_axis = sp_axis``; on the SC1 4x8 layout (SP 4, TP 8) that is H over the 8-axis
-and I over the 4-axis. If the residual moves H onto the 4-axis (as #65884's attention table suggests), pass that
-axis; nothing else changes.
+``hidden_axis = tp_axis`` and ``inter_axis = sp_axis``. On SC1 (#65884: hidden over its 4 rows, the other dimension
+over its 8 columns) that is the physical 8x4 mesh with TP 4 on axis 1 and SP 8 on axis 0: H over the 4-chip axis 1
+(1536 per chip) and I over the 8-chip axis 0 (shared expert 2048 / 8 = 256, dense layer 0 18432 / 8 = 2304 per chip),
+residual ``[S / 8, 6144 / 4]``, the same as 2D-TP attention (#65885) and iHC (#65891).
 
-Cache files: ``{prefix}.gate_up_proj_tp2d`` and ``{prefix}.down_proj_tp2d``, distinct from the 1D modules' so a
-1D cache never loads as a 2D one (or back).
+Cache files: ``{prefix}.gate_up_proj_{layout}`` and ``{prefix}.down_proj_{layout}`` with the layout derived from the
+mesh (``Mlp2DLayout.tag``, ``utils/sharded_cache.layout_tag``: mesh shape, and the size and mesh axis of H and of I;
+``gate_up_proj_8x4_h4ax1_i8ax0`` on SC1), distinct from the 1D modules' names and from any other 2D split's. Next to
+them ``{prefix}.mlp2d_{layout}.layout.stamp`` holds the layout descriptor (module, ``CACHE_FORMAT``, mesh, axes,
+weights dtype); shards without it, or with a stamp that disagrees, refuse to load. The first SC1 split (H on the
+8-chip axis 0) cached as ``gate_up_proj_tp2d`` / ``down_proj_tp2d`` and never loads. Model configs name the layout
+their caches use (``FFN_2D_MESH`` / ``FFN_2D_HIDDEN_AXIS``, ``ffn_2d_layout``) so the cache checks look for the right
+files.
 """
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional, Sequence, Union
 
@@ -51,16 +59,67 @@ from loguru import logger
 
 import ttnn
 from models.common.lightweightmodule import LightweightModule
+from models.demos.deepseek_v3_d_p.utils.sharded_cache import LayoutCacheGuard, layout_descriptor, layout_tag
 from models.demos.deepseek_v3_d_p.utils.weight_cache_dump import weight_cache_dump_mode
 
 ACTIVATION_SILU = "silu"
 ACTIVATION_CLAMPED_SILU_GLU = "clamped_silu_glu"
 SUPPORTED_ACTIVATIONS = (ACTIVATION_SILU, ACTIVATION_CLAMPED_SILU_GLU)
 
-GATE_UP_CACHE_NAME = "gate_up_proj_tp2d"
-DOWN_CACHE_NAME = "down_proj_tp2d"
+GATE_UP_CACHE_NAME = "gate_up_proj"
+DOWN_CACHE_NAME = "down_proj"
+CACHE_FORMAT = 1  # bump when the shards change without an axis moving
 
-# fp32 dest accumulation: the dense layer-0 down projection is K = 18432 / ni deep (4608 on SC1) and #65923 asks
+
+@dataclass(frozen=True)
+class Mlp2DLayout:
+    """Where ``TtMlp2D``'s dims go: H over mesh axis ``hidden_axis``, I over the other, on a ``mesh_shape`` mesh."""
+
+    mesh_shape: tuple
+    hidden_axis: int
+
+    def __post_init__(self):
+        if self.hidden_axis not in (0, 1):
+            raise ValueError(f"hidden_axis must be 0 or 1, got {self.hidden_axis}")
+        object.__setattr__(self, "mesh_shape", tuple(int(n) for n in self.mesh_shape))
+
+    @classmethod
+    def of(cls, mesh_device, hidden_axis: int) -> "Mlp2DLayout":
+        return cls(tuple(mesh_device.shape), hidden_axis)
+
+    @property
+    def axes(self) -> dict:
+        return {"h": self.hidden_axis, "i": 1 - self.hidden_axis}
+
+    @property
+    def tag(self) -> str:
+        """``{rows}x{cols}_h{n}ax{a}_i{n}ax{a}``, e.g. ``8x4_h4ax1_i8ax0`` on SC1."""
+        return layout_tag(self.mesh_shape, self.axes)
+
+
+def cache_names(layout: Mlp2DLayout) -> tuple[str, str]:
+    """(gate_up, down) cache basenames for this layout."""
+    return f"{GATE_UP_CACHE_NAME}_{layout.tag}", f"{DOWN_CACHE_NAME}_{layout.tag}"
+
+
+def cache_guard(cache_path, cache_name_prefix: str, layout: Mlp2DLayout, weights_dtype=ttnn.bfloat8_b):
+    """The layout stamp of one TtMlp2D's cache files (``utils/sharded_cache.py``)."""
+    descriptor = layout_descriptor(
+        "TtMlp2D",
+        CACHE_FORMAT,
+        layout.mesh_shape,
+        layout.axes,
+        {"gate_up_proj": weights_dtype, "down_proj": weights_dtype},
+    )
+    return LayoutCacheGuard(
+        cache_path,
+        f"{cache_name_prefix}.mlp2d_{layout.tag}",
+        f"{cache_name_prefix}.*_proj_{layout.tag}*.tensorbin",
+        descriptor,
+    )
+
+
+# fp32 dest accumulation: the dense layer-0 down projection is K = 18432 / ni deep (2304 on SC1) and #65923 asks
 # PCC >= 0.99 of it; bf16 accumulation over that depth costs more than the fp32 dest does.
 COMPUTE_KERNEL_CONFIG = ttnn.WormholeComputeKernelConfig(
     math_fidelity=ttnn.MathFidelity.HiFi2,
@@ -75,6 +134,14 @@ PerAxis = Union[ttnn.Topology, Sequence[ttnn.Topology]]
 def ffn_2d_tp(model_cfg) -> bool:
     """Whether a model config runs its shared expert and dense FFN as ``TtMlp2D`` (``FFN_2D_TP``; default off)."""
     return bool(getattr(model_cfg, "FFN_2D_TP", False))
+
+
+def ffn_2d_layout(model_cfg) -> Mlp2DLayout:
+    """The mesh and H axis a ``FFN_2D_TP`` model runs TtMlp2D on (``FFN_2D_MESH``, ``FFN_2D_HIDDEN_AXIS``: its prefill
+    mesh and TP axis), which its cache names carry."""
+    if not ffn_2d_tp(model_cfg):
+        raise ValueError(f"{getattr(model_cfg, '__name__', model_cfg)} does not set FFN_2D_TP")
+    return Mlp2DLayout(tuple(model_cfg.FFN_2D_MESH), int(model_cfg.FFN_2D_HIDDEN_AXIS))
 
 
 def fuse_gate_up(gate_proj: torch.Tensor, up_proj: torch.Tensor, n_inter: int) -> torch.Tensor:
@@ -113,14 +180,18 @@ class TtMlp2D(LightweightModule):
     """SwiGLU MLP with gate / up / down sharded over both mesh axes (module docstring)."""
 
     @staticmethod
-    def check_cache_complete(cache_path: Path, cache_name_prefix: str) -> bool:
+    def check_cache_complete(
+        cache_path: Path, cache_name_prefix: str, layout: Mlp2DLayout, weights_dtype=ttnn.bfloat8_b
+    ) -> bool:
+        """Complete only for ``layout``'s files with a matching layout stamp: a cache cut for another split, or
+        unstamped, does not count."""
         from models.demos.deepseek_v3_d_p.utils.fast_cache_checker import pattern_exists
 
-        for name in (GATE_UP_CACHE_NAME, DOWN_CACHE_NAME):
+        for name in cache_names(layout):
             if not pattern_exists(f"{cache_name_prefix}.{name}*.tensorbin", "Mlp2D"):
                 logger.debug(f"TTNN cache missing: {cache_name_prefix}.{name}")
                 return False
-        return True
+        return cache_guard(cache_path, cache_name_prefix, layout, weights_dtype).stamped()
 
     @staticmethod
     def _convert(
@@ -149,6 +220,11 @@ class TtMlp2D(LightweightModule):
             gate_up = torch.empty(emb_dim, 2 * hidden_dim)
             down = torch.empty(hidden_dim, emb_dim)
 
+        layout = Mlp2DLayout.of(mesh_device, hidden_axis)
+        cached = cache_path is not None and cache_name_prefix is not None
+        guard = cache_guard(cache_path if cached else None, cache_name_prefix or "", layout, weights_dtype)
+        guard.check()  # shards from another layout (or unstamped) refuse to load
+
         def _to_ttnn(t, rows_over, name):
             cache = (
                 None
@@ -168,8 +244,10 @@ class TtMlp2D(LightweightModule):
                 cache_dump_mode=weight_cache_dump_mode(),
             )
 
-        gate_up_tt = _to_ttnn(gate_up, "hidden", GATE_UP_CACHE_NAME)
-        down_tt = _to_ttnn(down, "inter", DOWN_CACHE_NAME)
+        gate_up_name, down_name = cache_names(layout)
+        gate_up_tt = _to_ttnn(gate_up, "hidden", gate_up_name)
+        down_tt = _to_ttnn(down, "inter", down_name)
+        guard.write()
         if device is None:
             return None
         return gate_up_tt, down_tt

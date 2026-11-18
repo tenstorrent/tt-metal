@@ -9,7 +9,8 @@
 * The torch reference (``reference/hy4_moe.py``): router picks and weights, the clamp on routed experts only.
 * The clamp the routed-expert kernel bakes in (``ClampedSiluGluConfigDsV4``) is Hy4's ``swiglu_limit``.
 * Config / layout wiring: tp32 runs ``Hy4TP32Config`` (FFN_2D_TP), the dev layout keeps the 1D modules.
-* 2D-TP cache files are distinct from the 1D modules' (neither loads as the other).
+* 2D-TP cache files are distinct from the 1D modules' (neither loads as the other) and name the hidden's mesh axis
+  (a cache from the old split, H on axis 0, never loads for SC1's H on axis 1).
 * DRAM per chip of the FFN / MoE weights on SC1 against #65884's table.
 """
 
@@ -25,7 +26,15 @@ import torch
 from models.demos.deepseek_v3_d_p.reference import hy4_moe as ref
 from models.demos.deepseek_v3_d_p.reference.hy4_config import Hy4Config, Hy4TP32Config
 from models.demos.deepseek_v3_d_p.tt.hy4 import layout as hy4_layout
-from models.demos.deepseek_v3_d_p.tt.moe.tt_mlp_2d import ffn_2d_tp, fuse_gate_up, shard_dims
+from models.demos.deepseek_v3_d_p.tt.moe.tt_mlp_2d import (
+    Mlp2DLayout,
+    cache_guard,
+    cache_names,
+    ffn_2d_layout,
+    ffn_2d_tp,
+    fuse_gate_up,
+    shard_dims,
+)
 
 REPO = Path(__file__).resolve().parents[4]
 
@@ -122,7 +131,7 @@ def test_mlp_2d_plan_clamped():
     g, u = x @ w["gate_proj"].T, x @ w["up_proj"].T
     assert (g > lim).any() and (u.abs() > lim).any(), "test input does not reach the clamp"
     expected = ref.clamped_swiglu(g, u, lim) @ w["down_proj"].T
-    got = _emulate_mlp_2d(x, w, (8, 4), 0, True, limit=lim)
+    got = _emulate_mlp_2d(x, w, (8, 4), Hy4TP32Config.FFN_2D_HIDDEN_AXIS, True, limit=lim)
     torch.testing.assert_close(got, expected, rtol=1e-10, atol=1e-10)
 
 
@@ -246,13 +255,19 @@ def test_routed_kernel_clamp_is_hy4_swiglu_limit():
     assert "gate = sfpi::min(gate, limit);" in text and "up = sfpi::clamp(up, -limit, limit);" in text
 
 
-def test_ffn_2d_tp_wiring():
+def test_ffn_2d_tp_wiring(expect_error):
     assert not ffn_2d_tp(Hy4Config) and ffn_2d_tp(Hy4TP32Config)
     assert issubclass(Hy4TP32Config, Hy4Config)
     tp32 = hy4_layout.HY4_PREFILL_LAYOUTS[hy4_layout.TP32_LAYOUT]
     dev = hy4_layout.HY4_PREFILL_LAYOUTS[hy4_layout.DEV_LAYOUT]
     assert tp32.ffn_2d_tp and not dev.ffn_2d_tp
     assert "#65890" not in {issue for _, issue in tp32.blockers}
+    # SC1: H over the 4-chip mesh axis 1 (the TP axis of PREFILL_SP=8 PREFILL_TP=4 PREFILL_SP_AXIS=0).
+    lay = ffn_2d_layout(Hy4TP32Config)
+    assert lay == Mlp2DLayout((8, 4), 1) and lay.hidden_axis == tp32.hidden_axis
+    assert lay.mesh_shape[tp32.sp_axis] == tp32.sp == 8 and lay.mesh_shape[tp32.hidden_axis] == tp32.tp == 4
+    with expect_error(ValueError, "does not set FFN_2D_TP"):
+        ffn_2d_layout(Hy4Config)
 
 
 def test_adapter_picks_model_config_by_layout(monkeypatch):
@@ -261,63 +276,96 @@ def test_adapter_picks_model_config_by_layout(monkeypatch):
     from models.demos.deepseek_v3_d_p.tt.runners.adapters.hy4_preview import Hy4Adapter
 
     adapter = Hy4Adapter()
+    mesh = SimpleNamespace(sp_factor=8, tp_factor=4, sp_axis=0)  # both layouts' mesh; the layout env picks
     monkeypatch.setenv(hy4_layout.LAYOUT_ENV, hy4_layout.DEV_LAYOUT)
-    assert adapter.model_config_for(SimpleNamespace(sp_factor=8, tp_factor=4, sp_axis=0)) is Hy4Config
+    assert adapter.model_config_for(mesh) is Hy4Config
     monkeypatch.delenv(hy4_layout.LAYOUT_ENV)
     assert adapter.model_config_for(SimpleNamespace(sp_factor=2, tp_factor=4, sp_axis=0)) is Hy4Config  # test mesh
     # tp32 is still blocked by #65885 / #65887 / #65892; with those cleared it runs the 2D-TP config.
     tp32 = hy4_layout.HY4_PREFILL_LAYOUTS[hy4_layout.TP32_LAYOUT]
     monkeypatch.setitem(hy4_layout.HY4_PREFILL_LAYOUTS, hy4_layout.TP32_LAYOUT, dataclasses.replace(tp32, blockers=()))
-    assert adapter.model_config_for(SimpleNamespace(sp_factor=4, tp_factor=8, sp_axis=0)) is Hy4TP32Config
+    assert adapter.model_config_for(mesh) is Hy4TP32Config
+    monkeypatch.setenv(hy4_layout.LAYOUT_ENV, hy4_layout.TP32_LAYOUT)
+    assert adapter.model_config_for(mesh) is Hy4TP32Config
 
 
-def test_2d_cache_names_are_distinct(tmp_path):
+def test_2d_cache_names_come_from_the_layout():
+    sc1 = Mlp2DLayout((8, 4), 1)
+    assert cache_names(sc1) == ("gate_up_proj_8x4_h4ax1_i8ax0", "down_proj_8x4_h4ax1_i8ax0")
+    # The first SC1 split (H on the 8-chip axis 0) and every other mesh / axis assignment get other names.
+    layouts = [Mlp2DLayout(m, a) for m in ((8, 4), (4, 8), (4, 4), (2, 4)) for a in (0, 1)]
+    assert len({cache_names(x) for x in layouts}) == len(layouts)
+    assert cache_names(Mlp2DLayout((8, 4), 0))[0] == "gate_up_proj_8x4_h8ax0_i4ax1"
+
+
+def test_2d_cache_files_and_stamp(tmp_path, expect_error):
     from models.demos.deepseek_v3_d_p.tt.moe.tt_mlp_2d import TtMlp2D
     from models.demos.deepseek_v3_d_p.tt.moe.tt_shared_expert import TtSharedExpert
     from models.demos.deepseek_v3_d_p.utils.fast_cache_checker import init_checker
 
-    def touch(*names):
-        for n in names:
-            (tmp_path / f"layer_1.shared_expert.{n}_dtype_BFLOAT8_B_layout_TILE.tensorbin").touch()
+    prefix = "layer_1.shared_expert"
+    sc1 = Mlp2DLayout((8, 4), 1)
 
-    touch("gate_up_proj_tp2d", "down_proj_tp2d")
-    init_checker(tmp_path)
-    assert TtMlp2D.check_cache_complete(tmp_path, "layer_1.shared_expert")
-    assert not TtSharedExpert.check_cache_complete(tmp_path, "layer_1.shared_expert")
-    for f in tmp_path.iterdir():
-        f.unlink()
-    touch("gate_proj", "up_proj", "down_proj")
-    init_checker(tmp_path)
-    assert TtSharedExpert.check_cache_complete(tmp_path, "layer_1.shared_expert")
-    assert not TtMlp2D.check_cache_complete(tmp_path, "layer_1.shared_expert")
+    def reset(*names):
+        for f in tmp_path.iterdir():
+            f.unlink()
+        for n in names:
+            (tmp_path / f"{prefix}.{n}_dtype_BFLOAT8_B_layout_TILE.tensorbin").touch()
+        init_checker(tmp_path)
+
+    reset(*cache_names(sc1))
+    guard = cache_guard(tmp_path, prefix, sc1)
+    # Shards without a stamp: not complete, and loading them refuses.
+    assert not TtMlp2D.check_cache_complete(tmp_path, prefix, sc1)
+    with expect_error(RuntimeError, "no layout stamp"):
+        guard.check()
+    guard.write()
+    assert TtMlp2D.check_cache_complete(tmp_path, prefix, sc1)
+    assert not TtMlp2D.check_cache_complete(tmp_path, prefix, Mlp2DLayout((8, 4), 0))
+    assert not TtSharedExpert.check_cache_complete(tmp_path, prefix)
+    # A stamp written for other content (here another dtype) under the same name refuses.
+    import ttnn
+
+    other = cache_guard(tmp_path, prefix, sc1, ttnn.bfloat4_b)
+    assert other.name == guard.name and not TtMlp2D.check_cache_complete(tmp_path, prefix, sc1, ttnn.bfloat4_b)
+    with expect_error(RuntimeError, "records layout"):
+        other.check()
+    # The first SC1 split's files (gate_up_proj_tp2d / down_proj_tp2d): never complete for SC1 now.
+    reset("gate_up_proj_tp2d", "down_proj_tp2d")
+    assert not TtMlp2D.check_cache_complete(tmp_path, prefix, sc1)
+    # The 1D files: complete for TtSharedExpert only.
+    reset("gate_proj", "up_proj", "down_proj")
+    assert TtSharedExpert.check_cache_complete(tmp_path, prefix)
+    assert not TtMlp2D.check_cache_complete(tmp_path, prefix, sc1)
 
 
 # ---------------------------------------------------------------------------------------------- DRAM per chip
 BYTES_PER_ELEMENT = {"bf16": 2.0, "bfp8": 1088 / 1024, "bfp4": 576 / 1024}  # BFP: 16-value blocks, 1 shared exp
 
 
-def ffn_dram_per_chip(cfg=Hy4Config, chips=32, experts="bfp8", dense="bfp8", ffn_replication=1) -> dict:
-    """Bytes per chip of the FFN / MoE weights on SC1. ``ffn_replication``: how many chips hold each shared-expert /
-    dense-FFN shard (1 = 2D TP; 4 = TP 8 replicated over the 4 SP rows, the 1D modules on 4x8)."""
+def ffn_dram_per_chip(cfg=Hy4Config, chips=32, experts="bfp8", dense="bfp8", ffn_replication=1, tp=4) -> dict:
+    """Bytes per chip of the FFN / MoE weights on SC1 (SP 8 x TP 4 on the 8x4 mesh). ``ffn_replication``: how many
+    chips hold each shared-expert / dense-FFN shard (1 = 2D TP; 8 = TP 4 replicated over the 8 SP rows, the 1D
+    modules)."""
     H, I_moe, I_dense = cfg.EMB_SIZE, cfg.MOE_INTERMEDIATE_SIZE, cfg.INTERMEDIATE_SIZE
     moe_layers = cfg.NUM_LAYERS - cfg.NUM_DENSE_LAYERS
     routed = moe_layers * cfg.NUM_ROUTED_EXPERTS * 3 * H * I_moe / chips * BYTES_PER_ELEMENT[experts]
     shared = moe_layers * cfg.NUM_SHARED_EXPERTS * 3 * H * I_moe * ffn_replication / chips * BYTES_PER_ELEMENT[dense]
     dense_ffn = cfg.NUM_DENSE_LAYERS * 3 * H * I_dense * ffn_replication / chips * BYTES_PER_ELEMENT[dense]
-    # Router: bf16 [E, H], hidden over the 8-chip TP axis, replicated over the 4 SP rows (TtMoEGatePrefill).
-    router = moe_layers * cfg.NUM_ROUTED_EXPERTS * H * 2.0 / 8
+    # Router: bf16 [E, H], hidden over the 4-chip TP axis, replicated over the 8 SP rows (TtMoEGatePrefill).
+    router = moe_layers * cfg.NUM_ROUTED_EXPERTS * H * 2.0 / tp
     return {"routed": routed, "shared": shared, "dense": dense_ffn, "router": router}
 
 
 def test_ffn_dram_per_chip_sc1():
     """#65884 budgets 25.9 GB per chip for all weights with BFP8 experts (14.1 GB with BFP4). The routed experts are
-    almost all of it; 2D TP cuts the shared expert + dense FFN 4x against the TP-only modules."""
+    almost all of it; 2D TP cuts the shared expert + dense FFN 8x against the TP-only modules."""
     gb = 1e9
     bfp8 = ffn_dram_per_chip(experts="bfp8")
     bfp4 = ffn_dram_per_chip(experts="bfp4")
-    one_d = ffn_dram_per_chip(experts="bfp8", ffn_replication=4)
+    one_d = ffn_dram_per_chip(experts="bfp8", ffn_replication=8)
     assert abs(bfp8["routed"] / gb - 24.71) < 0.01  # 77 x 256 x 3 x 6144 x 2048 / 32 at 1.0625 B
     assert abs(bfp4["routed"] / gb - 13.08) < 0.01
     assert abs((bfp8["shared"] + bfp8["dense"]) / gb - 0.108) < 0.001
-    assert abs((one_d["shared"] + one_d["dense"]) / gb - 0.431) < 0.001
+    assert abs((one_d["shared"] + one_d["dense"]) / gb - 0.862) < 0.001
     assert sum(bfp8.values()) / gb < 25.9 and sum(bfp4.values()) / gb < 14.1

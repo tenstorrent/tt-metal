@@ -88,11 +88,13 @@ class TtMoe(LightweightModule):
         routed_expert_weights_dtype: ttnn.DataType = DEFAULT_ROUTED_EXPERT_WEIGHTS_DTYPE,
         gate_bias_centered: bool = False,
         shared_expert_2d_tp: bool = False,
+        shared_expert_2d_layout=None,
     ) -> bool:
         """Check if MoE cache is complete (gate + routed experts + shared expert [+ latent proj]).
 
         ``shared_expert_2d_tp`` must match the model's (``tt_mlp_2d.ffn_2d_tp``): the 2D-TP shared expert caches
-        under other file names (``TtMlp2D``).
+        under other file names (``TtMlp2D``), which name the mesh layout (``shared_expert_2d_layout``, the model's
+        ``tt_mlp_2d.ffn_2d_layout``; required with ``shared_expert_2d_tp``).
 
         ``gate_bias_centered`` (MOE_GATE_BIAS_CENTERED) must match the model's, or a cache missing the
         centred gate bias reports complete.
@@ -112,8 +114,13 @@ class TtMoe(LightweightModule):
             cache_path, f"{prefix}.routed_expert", experts_per_chip, routed_expert_weights_dtype
         ):
             return False
-        shared_check = TtMlp2D.check_cache_complete if shared_expert_2d_tp else TtSharedExpert.check_cache_complete
-        if not shared_check(cache_path, f"{prefix}.shared_expert"):
+        if shared_expert_2d_tp:
+            if shared_expert_2d_layout is None:
+                raise ValueError("shared_expert_2d_tp needs shared_expert_2d_layout: it names the cache files")
+            shared_ok = TtMlp2D.check_cache_complete(cache_path, f"{prefix}.shared_expert", shared_expert_2d_layout)
+        else:
+            shared_ok = TtSharedExpert.check_cache_complete(cache_path, f"{prefix}.shared_expert")
+        if not shared_ok:
             return False
         if use_latent_moe and not TtLatentMoeProjections.check_cache_complete(
             cache_path, f"{prefix}.latent_proj", use_norm=latent_use_norm

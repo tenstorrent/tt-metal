@@ -127,6 +127,10 @@ class Hy4TP32Config(Hy4Config):
     (``TtMlp2D``; every weight sharded once over the 32 chips), not TP-only and replicated over the SP rows."""
 
     FFN_2D_TP = True
+    # The 8x4 Galaxy mesh with the hidden over mesh axis 1 (TP 4) and the intermediate over axis 0 (SP 8). The 2D
+    # cache names carry it (tt_mlp_2d.cache_names: *_8x4_h4ax1_i8ax0), so caches from another split never load.
+    FFN_2D_MESH = (8, 4)
+    FFN_2D_HIDDEN_AXIS = 1
 
 
 # ---------------------------------------------------------------------------------------------------

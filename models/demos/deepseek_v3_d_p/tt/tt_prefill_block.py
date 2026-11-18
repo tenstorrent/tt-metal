@@ -21,7 +21,7 @@ from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import (
     moe_transport_arg,
     routed_expert_combine_overlap_arg,
 )
-from models.demos.deepseek_v3_d_p.tt.moe.tt_mlp_2d import TtMlp2D, ffn_2d_tp
+from models.demos.deepseek_v3_d_p.tt.moe.tt_mlp_2d import Mlp2DLayout, TtMlp2D, ffn_2d_layout, ffn_2d_tp
 from models.demos.deepseek_v3_d_p.tt.moe.tt_moe import TtMoe
 from models.demos.deepseek_v3_d_p.tt.moe.tt_moe_gate_prefill import GateComputeMode, gate_bias_centered
 from models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert import (
@@ -57,6 +57,19 @@ def get_block_timings() -> dict[int, dict[str, list[float]]]:
 # FABRIC_2D_TORUS_Y, where only the SP axis is wrapped into a ring.
 PerAxisTopology = Tuple[ttnn.Topology, ttnn.Topology]
 TopologyArg = Union[ttnn.Topology, PerAxisTopology]
+
+
+def _check_ffn_2d_axis(model_cfg, mesh_device, tp_axis: int) -> None:
+    """A FFN_2D_TP model's 2D caches are named for its FFN_2D_MESH / FFN_2D_HIDDEN_AXIS; the block puts H on its TP
+    axis of this mesh."""
+    if not ffn_2d_tp(model_cfg):
+        return
+    want, have = ffn_2d_layout(model_cfg), Mlp2DLayout.of(mesh_device, tp_axis)
+    if want != have:
+        raise ValueError(
+            f"{model_cfg.__name__} runs its 2D FFN as {want.tag} (FFN_2D_MESH / FFN_2D_HIDDEN_AXIS), but this block "
+            f"is {have.tag} (TP axis {tp_axis})"
+        )
 
 
 class TtPrefillBlock(LightweightModule):
@@ -128,8 +141,11 @@ class TtPrefillBlock(LightweightModule):
 
         if is_dense:
             # FFN_2D_TP (Hy4 SC1, #65890): the dense FFN caches as TtMlp2D, under its own file names.
-            ffn_check = TtMlp2D.check_cache_complete if ffn_2d_tp(model_cfg) else TtFfn.check_cache_complete
-            if not ffn_check(cache_path, f"{prefix}.ffn"):
+            if ffn_2d_tp(model_cfg):
+                ffn_ok = TtMlp2D.check_cache_complete(cache_path, f"{prefix}.ffn", ffn_2d_layout(model_cfg))
+            else:
+                ffn_ok = TtFfn.check_cache_complete(cache_path, f"{prefix}.ffn")
+            if not ffn_ok:
                 return False
         else:
             if not TtMoe.check_cache_complete(
@@ -142,6 +158,7 @@ class TtPrefillBlock(LightweightModule):
                 routed_expert_weights_dtype=routed_expert_weights_dtype,
                 gate_bias_centered=gate_bias_centered(model_cfg),
                 shared_expert_2d_tp=ffn_2d_tp(model_cfg),
+                shared_expert_2d_layout=ffn_2d_layout(model_cfg) if ffn_2d_tp(model_cfg) else None,
             ):
                 return False
 
@@ -244,6 +261,7 @@ class TtPrefillBlock(LightweightModule):
         )
 
         # Build FFN or MoE cache
+        _check_ffn_2d_axis(model_cfg, mesh_device, tp_axis)
         if is_moe:
             # Use static method (no device copy!)
             mesh_config = extract_mesh_config(mesh_device, sp_axis)
@@ -363,6 +381,7 @@ class TtPrefillBlock(LightweightModule):
         tp_topology = topology[tp_axis] if isinstance(topology, tuple) else topology
         self.topology = tp_topology  # forward()'s dense-FFN all-gather is on the TP axis
         self.tp_axis = tp_axis
+        _check_ffn_2d_axis(model_cfg, mesh_device, tp_axis)
         self.kv_only = kv_only
         self.is_moe = layer_idx >= model_cfg.NUM_DENSE_LAYERS
 
