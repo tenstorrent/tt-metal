@@ -1,0 +1,2 @@
+{"event":"test_run","result":"pass","detail":"acceptance 110/110 dev+prod; golden interleaved supported 630 pass; loose+regression+translated pass; refused cells xfail","ts":"2026-11-18T00:47:34+00:00"}
+{"event":"fix_applied","detail":"Mcast adapter requires attached kernels on sender cores to be on the channel NoC; split line-root readers into their own KernelDescriptor with an absent channel; root rinv delivery via SEM_RINV_LOCAL","ts":"2026-11-18T00:47:34+00:00"}
