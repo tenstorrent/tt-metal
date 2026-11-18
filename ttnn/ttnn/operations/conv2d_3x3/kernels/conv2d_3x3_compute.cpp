@@ -446,12 +446,15 @@ void kernel_main() {
     const auto pre_k_block = make_pre_k_block();
     using PreKBlockFn = std::decay_t<decltype(pre_k_block)>;
 
-    if constexpr (has_bias) {
-        bias.wait_front(out_n_tiles);
-    }
-
+    // The bias is waited for at its first use, not at kernel start: every core reads the same few bias pages from DRAM
+    // at kernel start (3-4 us), and an early wait would hold the unpacker, so the first untilize and the fill behind
+    // its 2-batch input CB, for that long. It stays fronted until the kernel end, so every later wait returns at once.
     // finalize_block over `shape`'s rows of the matmul partials: + bias, ReLU on this pack only.
     auto add_bias = [&](const ckl::BiasAddShape& shape) {
+        {
+            MaybeDeviceZoneScope("compute_bias_wait");
+            bias.wait_front(out_n_tiles);
+        }
         MaybeDeviceZoneScope("compute_bias_add");
         // matmul_block leaves packer L1 accumulation on after its last K-block.
         pack_reconfig_l1_acc(0);
@@ -494,6 +497,11 @@ void kernel_main() {
             has_bias ? combined_dfb : output_tiles_dfb,
             ckl::ReduceInputBlockShape::of(k_cols, slot_tiles));
         if constexpr (has_bias) {
+            {
+                // First use of the bias on this path (see add_bias).
+                MaybeDeviceZoneScope("compute_combine_bias_wait");
+                bias.wait_front(out_n_tiles);
+            }
             if constexpr (apply_relu) {
                 pack_relu_config(ReluConfig::zero());
             }
@@ -647,6 +655,11 @@ void kernel_main() {
                         pack_relu_config(ReluConfig::zero());
                     }
                     if constexpr (has_bias) {
+                        {
+                            // First use of the bias on this path (see add_bias).
+                            MaybeDeviceZoneScope("compute_combine_bias_wait");
+                            bias.wait_front(out_n_tiles);
+                        }
                         ckl::add_bias_bcast_rows<ckl::BiasBroadcast::RowBroadcast, ckl::OutputCBLayout::TileRowMajor>(
                             slots, bias, output_tiles, combine_bias_shape);
                     } else {
@@ -795,6 +808,8 @@ void kernel_main() {
     }
 
     if constexpr (has_bias) {
+        // A core that owns no output columns never waited for it.
+        bias.wait_front(out_n_tiles);
         bias.pop_front(out_n_tiles);
     }
 }
