@@ -208,7 +208,7 @@ def test_entry_correction_determinism(mesh_device):
         for rank, (chunks, _) in _rank_chunks(sp_size, start, end).items():
             valid[rank * tp_size * _HEADS : (rank + 1) * tp_size * _HEADS, :chunks] = 1
         valid = ttnn.from_torch(
-            valid,
+            valid.flatten(1, 2),
             dtype=ttnn.bfloat16,
             layout=ttnn.TILE_LAYOUT,
             device=mesh_device,
