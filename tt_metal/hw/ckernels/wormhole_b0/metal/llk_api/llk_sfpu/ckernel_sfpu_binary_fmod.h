@@ -65,14 +65,11 @@ sfpi_inline sfpi::vFloat _sfpu_binary_fmod_(sfpi::vFloat a, sfpi::vFloat b) {
     v_if(result < sfpi::vFloat(0.0f)) { result = result + b_abs; }
     v_endif;
 
-    // Handle special cases using conditional assignment (NOT early return!)
-    // When a == b, fmod(a, b) = 0
-    v_if(a == b) { result = sfpi::vFloat(0.0f); }
-    v_endif;
+    // No a == b override: for finite a == b the chain above already yields 0 (trunc of
+    // |a| * recip(|b|) is 0 or 1, and the corrections bring the result into [0, |b|)).
 
     // fmod takes the sign of a, on a zero result too (fmod(-4, 2) = -0, as in IEEE and
-    // torch). Placed after the a == b override so that a dies here and the sign copy
-    // needs no register move.
+    // torch). a dies here, so the sign copy needs no register move.
     result = sfpi::copysgn(result, a);
 
     // Handle division by zero - return NaN
