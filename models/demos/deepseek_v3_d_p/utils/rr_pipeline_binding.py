@@ -311,8 +311,16 @@ def cmd_predict(args):
             raise SystemExit(f"hosts {missing} are not in {args.mapping} (has {sorted(by_name)})")
         galaxies = [by_name[h] for h in args.host]
     num_stages = args.stages or 2 * len(galaxies)
+    if args.print_order:
+        counts = link_counts(galaxies)
+        print(f"RR_CROSS_LINKS {sum(n for pair, n in counts.items() if len({host for host, _ in pair}) > 1)}")
     if args.auto_order:
         orders = ring_orders(galaxies, num_stages)
+        if args.print_order and not orders:
+            print("RR_ORDER none")
+            return 3
+        if args.print_order:
+            print(f"RR_ORDER {' '.join(g.name for g in orders[0][1])} MIN_LINKS {orders[0][0]}")
         print("host orders with a torus on every stage (min edge links, order):")
         for links, order in orders:
             print(f"  {links}  {', '.join(g.name for g in order)}")
@@ -365,6 +373,7 @@ def main(argv=None):
     p.add_argument("--mapping", default=str(SC4_MAPPING), help="mock mapping yaml listing one descriptor per host")
     p.add_argument("--host", action="append", help="host to use, repeated in cabling ring order (default: the mapping's)")
     p.add_argument("--auto-order", action="store_true", help="search the host orders for the ring order")
+    p.add_argument("--print-order", action="store_true", help="print RR_CROSS_LINKS and RR_ORDER lines for scripts; exit 3 if no order")
     p.add_argument("--mock-mapping-out", help="also write a per-rank mock cluster mapping here")
     for s in (g, p):
         s.add_argument("--stages", type=int, default=None, help="pipeline stages (default 2 per host)")
