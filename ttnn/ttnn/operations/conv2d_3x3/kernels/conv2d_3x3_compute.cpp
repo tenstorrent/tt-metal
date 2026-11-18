@@ -51,6 +51,7 @@
 #include "conv2d_3x3_nslice_order.hpp"
 #include "conv2d_3x3_narrow_untilize.hpp"
 #include "conv2d_3x3_wide_untilize.hpp"
+#include "conv2d_3x3_lean_tilize.hpp"
 
 namespace ckl = compute_kernel_lib;
 
@@ -62,8 +63,9 @@ namespace {
 // an init at 2 * c_in_tiles and chunks covering 3 * c_in_tiles read row i's 3 pixels at a 2-pixel stride: the same
 // tiles, in the same order, as tilizing the [32, 3 * c_in_tiles] row-layout block (bit-identical).
 // The unit's last 16 B hold the L1 address to tilize from (the unit itself, or a slab run on the N-slice-outer walk).
-// Raw LLK, UNPACK only (capability): ckl::tilize ties the row stride to the block width and reads at the CB read
-// pointer; the loop is fast_tilize_block's, with the unpacker's base taken from that address.
+// Raw LLK (capability): ckl::tilize ties the row stride to the block width and reads at the CB read pointer; the loop
+// is fast_tilize_block's, with the unpacker's base taken from that address, and the lean pack stream of
+// conv2d_3x3_lean_tilize.hpp.
 #ifdef TRISC_UNPACK
 template <uint32_t cb_in, uint32_t block_tiles>
 inline uint32_t window_unit_source() {
@@ -88,33 +90,32 @@ ALWI void window_tilize(DataflowBuffer& in, DataflowBuffer& out, uint32_t units)
     reconfig_data_format_srca(cb_in);
     pack_reconfig_data_format(cb_out);
     fast_tilize_init(cb_in, row_tiles, cb_out);
-    // Every unit has the same chunk sequence: reprogram the unpack width / pack MOP only when the chunk changes.
+    // The lean pack stream (conv2d_3x3_lean_tilize.hpp): one 1-tile MOP for every chunk width.
+    PACK((conv2d_3x3::lean_tilize::pack_init()));
+    // Every unit has the same chunk sequence: reprogram the unpack width only when the chunk changes.
     uint32_t prev_chunk = 0;
     for (uint32_t u = 0; u < units; ++u) {
         in.wait_front(block_tiles);
         out.reserve_back(block_tiles);
         [[maybe_unused]] uint32_t src = 0;
         UNPACK(src = window_unit_source<cb_in, block_tiles>());
-        PACK((llk_pack_fast_tilize_row_begin(cb_out, 0)));
+        PACK((conv2d_3x3::lean_tilize::pack_row_begin(cb_out, 0)));
         for (uint32_t tiles_done = 0; tiles_done < block_tiles;) {
             // BH fast-tilize chunks are 2..4 tiles (fast_tilize_block's split: 5 -> 2 + 3).
-            const uint32_t remaining = block_tiles - tiles_done;
-            const uint32_t chunk = (remaining > 5) ? 4 : (remaining == 5) ? 2 : remaining;
+            const uint32_t chunk = conv2d_3x3::lean_tilize::chunk_of(block_tiles - tiles_done);
             MATH((llk_math_wait_for_dest_available()));
             PACK((llk_packer_wait_for_math_done()));
             if (chunk != prev_chunk) {
                 UNPACK((llk_unpack_fast_tilize_reinit_xdim(chunk)));
-                PACK((llk_pack_fast_tilize_reinit_unit_dim(cb_out, chunk)));
                 prev_chunk = chunk;
             }
             UNPACK((window_unpack_chunk<cb_in>(src, chunk, tiles_done)));
             MATH((llk_math_fast_tilize_block_<DST_ACCUM_MODE>(0, cb_in, 4)));
-            PACK((llk_pack_fast_tilize_row_chunk(0, cb_out, chunk)));
+            PACK((conv2d_3x3::lean_tilize::pack_row_chunk(chunk)));
             MATH((llk_math_dest_section_done<DST_ACCUM_MODE>()));
             PACK((llk_pack_dest_section_done<DST_ACCUM_MODE>()));
             tiles_done += chunk;
         }
-        PACK((llk_pack_fast_tilize_row_end()));
         out.push_back(block_tiles);
         in.pop_front(block_tiles);
     }
@@ -125,9 +126,10 @@ ALWI void window_tilize(DataflowBuffer& in, DataflowBuffer& out, uint32_t units)
 // tiles, a [32, c_in_p] row-major block) of a unit is tilized from the L1 address the reader published in its slot's
 // entry of cb_src_table: a slab run, the zero block, or the block the reader gathered into the slot. Same tiles, same
 // order as ckl::tilize over the slot (bit-identical).
-// Raw LLK, UNPACK only (capability): ckl::tilize / fast_tilize_block always read at the CB read pointer; the loop is
-// fast_tilize_block's (as window_tilize), with the unpacker's base taken from the published address. It removes the
-// reader's copy of most tap blocks, which paced the prelude: aspp.convs.1 @ LoFi 76.7 -> 74.7 us.
+// Raw LLK (capability): ckl::tilize / fast_tilize_block always read at the CB read pointer; the loop is
+// fast_tilize_block's (as window_tilize), with the unpacker's base taken from the published address, and the lean pack
+// stream of conv2d_3x3_lean_tilize.hpp. It removes the reader's copy of most tap blocks, which paced the prelude:
+// aspp.convs.1 @ LoFi 76.7 -> 74.7 us.
 #ifdef TRISC_UNPACK
 template <uint32_t cb_table, uint32_t taps>
 inline void direct_unit_sources(uint32_t slot, uint32_t (&src)[taps]) {
@@ -161,6 +163,10 @@ ALWI void direct_tilize(DataflowBuffer& in, DataflowBuffer& out, uint32_t units,
     reconfig_data_format_srca(cb_in);
     pack_reconfig_data_format(cb_out);
     fast_tilize_init(cb_in, tw, cb_out);
+    if constexpr (tw > 1) {
+        // The lean pack stream (conv2d_3x3_lean_tilize.hpp): one 1-tile MOP for every chunk width.
+        PACK((conv2d_3x3::lean_tilize::pack_init()));
+    }
     [[maybe_unused]] uint32_t prev_chunk = 0;
     for (uint32_t u = 0; u < units; ++u, ++seq) {
         in.wait_front(tw * taps);
@@ -183,26 +189,23 @@ ALWI void direct_tilize(DataflowBuffer& in, DataflowBuffer& out, uint32_t units,
                 out.push_back(1);
             } else {
                 out.reserve_back(tw);
-                PACK((llk_pack_fast_tilize_row_begin(cb_out, 0)));
+                PACK((conv2d_3x3::lean_tilize::pack_row_begin(cb_out, 0)));
                 for (uint32_t tiles_done = 0; tiles_done < tw;) {
                     // BH fast-tilize chunks are 2..4 tiles (fast_tilize_block's split: 5 -> 2 + 3).
-                    const uint32_t remaining = tw - tiles_done;
-                    const uint32_t chunk = (remaining > 5) ? 4 : (remaining == 5) ? 2 : remaining;
+                    const uint32_t chunk = conv2d_3x3::lean_tilize::chunk_of(tw - tiles_done);
                     MATH((llk_math_wait_for_dest_available()));
                     PACK((llk_packer_wait_for_math_done()));
                     if (chunk != prev_chunk) {
                         UNPACK((llk_unpack_fast_tilize_reinit_xdim(chunk)));
-                        PACK((llk_pack_fast_tilize_reinit_unit_dim(cb_out, chunk)));
                         prev_chunk = chunk;
                     }
                     UNPACK((window_unpack_chunk<cb_in>(src[t], chunk, tiles_done)));
                     MATH((llk_math_fast_tilize_block_<DST_ACCUM_MODE>(0, cb_in, 4)));
-                    PACK((llk_pack_fast_tilize_row_chunk(0, cb_out, chunk)));
+                    PACK((conv2d_3x3::lean_tilize::pack_row_chunk(chunk)));
                     MATH((llk_math_dest_section_done<DST_ACCUM_MODE>()));
                     PACK((llk_pack_dest_section_done<DST_ACCUM_MODE>()));
                     tiles_done += chunk;
                 }
-                PACK((llk_pack_fast_tilize_row_end()));
                 out.push_back(tw);
             }
         }
@@ -221,27 +224,27 @@ constexpr uint32_t CENTER_SLOTS = 2;
 template <uint32_t tw, uint32_t cb_rm, uint32_t cb_tiles>
 ALWI void tilize_rows_skip_center(DataflowBuffer& rm, DataflowBuffer& tiles, uint32_t num_rows) {
     namespace tc = ckl::tilize_config;
-    constexpr auto NoRc = tc::ReconfigureRegisterDatatypeMode::NoReconfigure;
+    namespace lt = conv2d_3x3::lean_tilize;
     for (uint32_t r = 0; r < num_rows; ++r) {
         if (r == 0) {
-            ckl::tilize<tw, cb_rm, cb_tiles, tc::InitUninitMode::InitOnly>(rm, tiles, 1);
+            lt::tilize<tw, cb_rm, cb_tiles, tc::InitUninitMode::InitOnly>(rm, tiles, 1);
         } else {
-            ckl::tilize<tw, cb_rm, cb_tiles, tc::InitUninitMode::Neither, tc::WaitMode::WaitBlock, NoRc>(rm, tiles, 1);
+            lt::tilize<tw, cb_rm, cb_tiles, tc::InitUninitMode::Neither, false>(rm, tiles, 1);
         }
         tiles.reserve_back(tw);
         tiles.push_back(tw);
         rm.wait_front(tw);
         rm.pop_front(tw);
         if (r + 1 == num_rows) {
-            ckl::tilize<tw, cb_rm, cb_tiles, tc::InitUninitMode::UninitOnly, tc::WaitMode::WaitBlock, NoRc>(
-                rm, tiles, 1);
+            lt::tilize<tw, cb_rm, cb_tiles, tc::InitUninitMode::UninitOnly, false>(rm, tiles, 1);
         } else {
-            ckl::tilize<tw, cb_rm, cb_tiles, tc::InitUninitMode::Neither, tc::WaitMode::WaitBlock, NoRc>(rm, tiles, 1);
+            lt::tilize<tw, cb_rm, cb_tiles, tc::InitUninitMode::Neither, false>(rm, tiles, 1);
         }
     }
 }
 
-// Tilizes one K-block (block_m_tiles tile-rows x block_k_tiles) of gathered im2col rows. The matmul
+// Tilizes one K-block (block_m_tiles tile-rows x block_k_tiles) of gathered im2col rows (lean BH fast tilize:
+// conv2d_3x3_lean_tilize.hpp). The matmul
 // restores its own state afterwards (InitMode::ShortAfterPreKBlock).
 // The reader lays a tile-row out either as one [32, block_k_tiles * 32] row block or tap-major, as
 // block_k_tiles / tilize_width_tiles blocks of [32, tilize_width_tiles * 32]; tilizing those blocks in order
@@ -286,7 +289,7 @@ struct TilizeIm2colKBlock {
                 static_assert(block_k_tiles == 3 * c_in_tiles, "a window unit is one kernel row");
                 window_tilize<c_in_tiles, cb_im2col_rm, cb_im2col_tiles>(*rm, *tiles, block_m_tiles);
             } else {
-                ckl::tilize<tilize_width_tiles, cb_im2col_rm, cb_im2col_tiles>(
+                conv2d_3x3::lean_tilize::tilize<tilize_width_tiles, cb_im2col_rm, cb_im2col_tiles>(
                     *rm, *tiles, block_m_tiles * (block_k_tiles / tilize_width_tiles));
             }
         }
@@ -592,7 +595,7 @@ void kernel_main() {
                         cb_im2col_tiles,
                         cb_src_table>(im2col_rm_dfb, im2col_tiles_dfb, block_m_tiles * num_k_blocks, direct_seq);
                 } else {
-                    ckl::tilize<im2col_tilize_width_tiles, cb_im2col_rm, cb_im2col_tiles>(
+                    conv2d_3x3::lean_tilize::tilize<im2col_tilize_width_tiles, cb_im2col_rm, cb_im2col_tiles>(
                         im2col_rm_dfb, im2col_tiles_dfb, block_m_tiles * (k_tiles / im2col_tilize_width_tiles));
                 }
             }
