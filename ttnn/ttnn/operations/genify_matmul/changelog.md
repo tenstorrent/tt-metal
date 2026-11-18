@@ -1069,3 +1069,77 @@ Artifacts: `perf_experiments/<slug>/` and `tests/.../genify_matmul/perf_experime
   - `tests/ttnn/unit_tests/operations/genify_matmul/test_genify_matmul_bank_local.py` (14 cases): selection + correctness on bfp4 / bf16, 130 columns (not a bank multiple), ragged M / N, every row-epilogue, fp32 A, L1 A, the "near" / "spread" placements, injectors 1 / 2, fill off, swiglu under its knob.
   - `perf/test_genify_matmul_perf_r15.py`: the 16 R15 cases at their golden configs, the perf-guard extension for the new path.
   - `test_r1b_act_resident` now pins the flat split, since the bank split takes that shape.
+
+## Refinement 16 — Mid-M compute efficiency (text encoder at 512 tokens, Qwen3.8 prefill M = 512 / 1024)
+- Date: 2026-11-18
+- What was done:
+  - **Breakdown first** (`/perf-measure`; bench `tests/.../perf/test_genify_matmul_perf_r16.py`, the 15 listed cases at their golden configs; new `GM_ABLATE_DM` stub = reads + line deliveries replaced by reserve / push, beside `SKIP_COMPUTE`). Before (full / data-movement-only / compute-only): q512 in_proj 101.6 / 97.3 / 60.5 µs, te o_proj 86.6 / 82.0 / 61.5, te down 525.5 / 510.3 / 405.2, q1024 down 134.4 / 129.1 / 110.7: the R1a operand lines bound the mid-M walks. Zones: a B-line injector spent 50 µs of the 97 issuing its line's 1920 bfp4 tile reads (~35 RISC cycles each), and every core's reader received A(kb) before it could ack B(kb).
+  - **R1a split lines** (`R1A_SPLIT_LINES`, `kernels/line_stream.hpp`). The A row lines move to the writer RISC (BRISC / NoC1, `cb_act_tiles`' producer, writer `act_mode = 3`); the B column lines stay on the reader. Both use rotating injectors (`McastRotatingSenderConfig` over the line: round r from line core r % length). An injector reads its turn into a one-K-block staging CB (6 / 7) in K-row chunks over the `R1A_LINE_WINDOW = 2` rounds before it, with round 0 read alone at round 0 (`R1A_LINE_STARTUP_SHARE = 1`), then multicasts staging → the ring slot (loopback into its own slot).
+    - Measured on the way (q512_in): reading turns into the depth-2 ring slot 84 µs (the slot frees too late); all turns at once 107 (round 0 landed at ~40 µs behind the whole prefetch); whole turn 2 rounds ahead 89 (it delays the ack); chunks over every round between turns 86; window 2 + round 0 alone 78.5; + startup share 75.6.
+  - **Head ramp on the split walks** (`R1A_SPLIT_RAMP`): the Perf 2 schedule on the helper walk too (the writer's A line follows it; compact A on the raw walk). q1024 down 132 → 126, q512 gate_up 167 → 161, flat elsewhere.
+  - **Gates** (`_r1a_split_shape`): `0.7 ≤ busiest-core read / K-walk < 2.0`, A line ≤ B line, staging fits without shrinking the output block.
+    - out_proj M ≥ 1024 (0.52–0.55) measured flat to +3 %; Qwen qkvg M = 4096 (0.65) +6 %.
+    - FLUX proj_out at HiFi4 (1.95, A line 6× B) 69 → 84 µs.
+    - The staged solve shrank out_proj M = 4096's block (226 → 268 µs) until the same-block rule.
+  - **R1b ring fallback** (`ACT_STREAM_MIN_DEPTH = 3`): text-encoder gate (PERF FOCUS 1, bank split) solved two 8-row M-blocks at ring depth 4, streaming its 89 MB of bfp8 B twice. Depth 3 keeps one 16-row block: 477 → 404 µs, the roofline.
+  - **Operand-aware subblocks** (`SUBBLOCK_UNPACK_AWARE`): cost per tile-K = max(FPU, unpack(A)/sb_w, unpack(B)/sb_h), unpack(t) = bytes/100 + 3 cycles, in the R1 subblock choice and the split ranking. Calibrated on compute-only runs (bf16 A, LoFi): 2×1 subblocks ~24 cycles per tile-K, 3×1 23.6, against 17.5 for 1×4. q512 qkvg 77 → 73 µs (8×10 split, 1×4), q2048 out_proj 136 → 129 µs (1×3 instead of 4×1).
+  - **Reused / Added.**
+    - Reused: the R1a descriptor / walk / CBs / compute; R1b's writer-produces-`cb_act_tiles` structure; the Mcast helper's rotating senders; the kschedule head ramp; `_choose_blocking` / `split_cost_terms`.
+    - Added: `line_stream.hpp`, two staging CBs, the writer's `act_mode = 3` branch, the reader's B-line branch, knobs `R1A_SPLIT_LINES` / `R1A_SPLIT_MIN_RATIO` / `R1A_SPLIT_RAMP` / `R1A_LINE_WINDOW` / `R1A_LINE_STARTUP_SHARE` / `ACT_STREAM_MIN_DEPTH` / `SUBBLOCK_UNPACK_AWARE`, and `GM_ABLATE_DM`.
+    - No new kernel file beside the header, no new descriptor branch.
+- Device µs, before → after (roofline; ×roofline after):
+
+  | Group | Case | Before | After | Roofline | × roofline |
+  |---|---|---|---|---|---|
+  | Text encoder | gate | 478.6 | 403.1 | 403.5 | 1.00 |
+  | Text encoder | down | 525.5 | 430.1 | 403.5 | 1.07 |
+  | Text encoder | qkv | 113.3 | 93.7 | 75.7 | 1.24 |
+  | Text encoder | o_proj | 86.6 | 68.9 | 50.4 | 1.37 |
+  | Qwen3.8 M = 512 | in_proj | 101.6 | 75.1 | 51.2 | 1.47 |
+  | Qwen3.8 M = 512 | gate_up + SwiGLU | 195.7 | 161.0 | 107.2 | 1.50 |
+  | Qwen3.8 M = 512 | down | 102.6 | 81.8 | 53.6 | 1.53 |
+  | Qwen3.8 M = 512 | qkvg | 96.3 | 72.9 | 44.1 | 1.65 |
+  | Qwen3.8 M = 512 | out_proj | 53.0 | 45.0 | 24.4 | 1.84 |
+  | Qwen3.8 M = 1024 | out_proj | 76.2 | 75.7 | 39.2 | 1.93 |
+  | Qwen3.8 M = 1024 | qkvg | 120.9 | 107.2 | 88.3 | 1.21 |
+  | Qwen3.8 M = 1024 | in_proj | 139.6 | 125.0 | 102.4 | 1.22 |
+  | Qwen3.8 M = 1024 | down | 134.4 | 125.2 | 107.2 | 1.17 |
+  | out_proj | M = 2048 | 136.4 | 129.0 | 75.7 | 1.70 |
+  | out_proj | M = 4096 | 226.4 | 226.2 | 151.3 | 1.50 |
+- Measured floors after (compute-only = `GM_ABLATE_DM` / data-movement-only = `SKIP_COMPUTE`, µs):
+
+  | Case | Compute-only | Data-movement-only |
+  |---|---|---|
+  | te down | 413 | 291 |
+  | te qkv | 82 | 64 |
+  | te o_proj | 63 | 49 |
+  | q512 in | 62 | 64 |
+  | q512 gate_up | 139 | 118 |
+  | q512 down | 68 | 69 |
+  | q512 qkvg | 61 | 59 |
+  | q512 out | 38 | 39 |
+  | q1024 out | 69 | 71 |
+  | q1024 qkvg | 94 | 85 |
+  | q1024 in | 114 | 87 |
+  | q1024 down | 114 | 96 |
+  | q2048 out | 121 | 102 |
+  | q4096 out | 213 | 183 |
+
+  - Every case runs within 1.05–1.2× of its larger floor.
+  - What keeps the floors above the roofline:
+    - M = 512 (16 tile rows) caps the 2-D split at 80–88 cores; the roofline assumes 110. On 88 cores the K-walk alone is ~1.25× the roofline.
+    - out_proj (K = 48 tiles, output 2–3× the operands) writes its whole output after the last K-block. Splitting the region into M-blocks to overlap the writes measured worse (q1024 out 2×16 blocks 90.5, 1×16 152 vs 75.9 µs): the B re-reads cost more than the overlap.
+  - Both are findings for the perf rounds, not open work: a non-rectangular split filling 110 cores at M = 16 tiles; an out_proj walk with B resident across M-blocks, delivered in K-blocks during the first.
+- Guard (knobs off = before; `agent_logs/r16_guard.sh`): perf_guard 62 ops, perf_r11 15, perf_r15 17, perf_flux 20, perf_sharded 46, perf_focus 1. No op slower beyond ±3 % on re-run (single-run flags on 5–12 µs cells and two R1b shapes whose plans did not change came back within noise). 10 R11 / FLUX cells −15 … −26 %, 384×1536×1024 −14 … −35 %, PERF FOCUS 1 (Qwen gate_up 2048) unchanged.
+- Accuracy achieved: PCC ≥ 0.99988, relative RMS ≤ 0.0086 on all 15 R16 shapes (`GENIFY_MATMUL_CHECK`). The split lines with the ramp off are bit-identical to the fixed-injector walk; the pacing knobs are bit-identical to each other.
+- Golden test progress:
+  - interleaved loose + feature (`test_op_loose and interleaved or test_op_feature`): 65/65 passed.
+  - Interleaved cartesian slice: 375 passed, 75 xfailed (unchanged).
+  - Unit (every file but the 540-cell precision matrix): 242/242.
+- Issues encountered:
+  - A profiler zone-hash collision (16-bit hash of file:line:name) after kernel line numbers shifted made `--profile` runs throw at teardown (`profiler.cpp:321`). `agent_logs/r16_zone_hash_check.py` checks the op's zones against every known location.
+  - The writer's K schedule must be the identity for writers whose K args are placeholders (R4 / absent A role).
+- Tests added:
+  - `test_genify_matmul_split_lines.py` (14 cases): the split plan asserted + helpers.TOLERANCES on every epilogue, ragged M / K, folded lead dims, bfp4 LoFi and bfp8 HiFi2; bit-identity vs the fixed injectors; pacing-knob invariance; segments + chunks.
+  - `perf/test_genify_matmul_perf_r16.py`: the 15 cases.
+  - `perf/test_genify_matmul_perf_r11.py`: `GENIFY_MATMUL_BLOCK` (force an output blocking).

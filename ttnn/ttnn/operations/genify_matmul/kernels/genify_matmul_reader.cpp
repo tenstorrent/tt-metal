@@ -37,6 +37,8 @@
 // and the multicast lands at the sender's own slot address. Per K-block every core delivers A, then
 // B: no core can block in B(kb) before every core has passed A(kb), so the two channels cannot
 // deadlock. The bias / gate row and the residual stay per-core reads (they are tiny or unshared).
+// R1a split lines (Refinement 16, GM_R1A_SPLIT, line_stream.hpp): the A row line runs on the writer instead and this
+// reader runs only the B column line, with rotating injectors staging their turns ahead.
 //
 // Regime R1b `interleaved_stream_mcast_a` (Refinement 9, `operand_mode` = 2): a 1-D N split (every core
 // owns all rows), so A is reuse-shared by every core. The writer RISC produces cb_act_tiles (one injector

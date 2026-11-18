@@ -240,3 +240,25 @@ Qwen3.8 M = 128 down (4352×5120 bfp4, A in L1): DRAM = B 12.5 MB + out 1.3 MB; 
 ## Refinement 14 — A as K segments (list `input_tensor`)
 - **No CB change.** `cb_act_tiles` keeps its size, its producer (the reader; R1b: the writer) and its consumer (compute). Only the source address of each A tile changes (`kernels/a_segments.hpp`).
 - **Data-movement budget unchanged.** A is read exactly as often as the single-tensor call reads the concatenation (same split, blocking and A residency); there is no concat intermediate and no extra op. When the segments live in L1, `l1_cb_budget` counts every one of them.
+
+## Refinement 16 — R1a split lines, R1b ring fallback, operand-aware subblocks
+
+| CB | Capacity (pages) | Live set | Axis accounting | Page format | Producer | Consumer | Lifetime | Shares with / why not |
+|----|------------------|----------|-----------------|-------------|----------|----------|----------|-----------------------|
+| `cb_act_stage` (index 6; R1a split lines only) | `block_m_tiles · block_k_tiles` (one A K-block) | this core's next A-line turn, from its first chunk read until its send | `{b: streams, m: spans → block_m_tiles, n: streams, k: spans → block_k_tiles}` | A dtype | writer (raw scratch: the A-line injector reads its turn here) | writer (multicast source, its own slot included by loopback) | whole kernel | **None.** It cannot be a `cb_act_tiles` ring slot: a ring slot frees only when compute pops the round `depth_act` rounds earlier, so reading the next turn into it left the read on the critical path every round (measured: round issue blocking the line, Qwen3.8 M = 512 q512_in 84 µs vs 75 µs with staging + paced issue). Not shared with `cb_weight_stage`: different RISCs, concurrent, different formats. |
+| `cb_weight_stage` (index 7; R1a split lines only) | `block_k_tiles · block_n_tiles` (one B K-block) | this core's next B-line turn | `{b: streams, m: streams, n: spans → block_n_tiles, k: spans → block_k_tiles}` | B dtype | reader (raw scratch) | reader (multicast source) | whole kernel | **None.** Same reason, the B line's twin. |
+
+- **`cb_act_tiles` producer under the split lines = the writer** (BRISC runs the A row line, as R1b's A stream): single producer (the reader no longer touches it), single consumer (compute). Capacity unchanged (`depth_act = 2`).
+- **Solve**: a split-lines walk is solved with `depth + 1` K-blocks of each operand (the staging buffers; `_choose_blocking(..., (da + 1, dw + 1))`), and kept only if the output block is unchanged and the footprint `F + staging_bytes` fits (`staging_bytes = block_k · (block_m · a_tile + block_n · b_tile)`); the write-batch grant counts the staging too. Text encoder down 512×16384×5120: `block_k` 31 → 20 (26 K-blocks), output block 2×15 unchanged.
+- **R1b ring fallback** (`ACT_STREAM_MIN_DEPTH = 3`): when the depth-4 rings would split the core's rows into M-blocks (B streamed once per M-block), the solve takes the deepest ring ≥ 3 that keeps all rows in one block. Text encoder gate 512×5120×16384: block 8×5 (2 M-blocks, `depth 4`) → 16×5 (`depth 3`, `block_k` 9).
+- **Subblock choice** (R1 family, `SUBBLOCK_UNPACK_AWARE`): the cheapest `max(FPU, unpack(A) / sb_w, unpack(B) / sb_h)` first, then the larger area; no capacity changes except `cb_output_tiles` (`depth_out · sb_h · out_block_n`, now from the chosen `sb_h`; `_footprint` prices the taller of the operand-aware and the area-first `sb_h`, since it is shared with R2 / R3 / R4).
+
+**Data-movement budget, R1a split lines** (`r1a_split()`):
+
+| Tensor | DRAM crossings | Why that many | Cross-core traffic added |
+|--------|----------------|---------------|--------------------------|
+| A | `nb_n` (as R1a) | each A K-block is read once per row line, by the line core whose turn it is (round r from core r % grid_n', on the writer RISC / NoC1) | multicast of every A K-block to the `grid_n' − 1` other cores of the line (NoC1) |
+| B | `nb_m` (as R1a) | each B K-block is read once per column line, by its turn's core (r % grid_m', reader / NoC0) | multicast of every B K-block to the `grid_m' − 1` other cores (NoC0) |
+| output, bias / gate, residual | as R1 | unchanged | none |
+
+DRAM bytes are R1a's; what changes is who issues them: a line's reads are spread over its cores (Qwen3.8 M = 512 in_proj: a column line's 1920 bfp4 tile reads, ~50 µs on one core's RISC, now ~1/8 per core) and over the rounds (chunks over the `R1A_LINE_WINDOW = 2` rounds before each turn).

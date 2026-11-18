@@ -537,7 +537,7 @@ At these M the whole job is streaming B from the 8 DRAM banks once, at full band
   - Split-K for proj_out.
 - **Guards.** Golden interleaved cartesian 375 passed / 75 xfailed, R15 loose slice 19/19, feature 10/10. Perf guard, R1b guard and R11 sets: no cell slower beyond ±3% (swiglu ff1 / gate_up re-measured 3×: medians 637 / 632 and 107.0 / 107.9); text-encoder gate 504 → 479.
 
-### [ ] Refinement 16 — Mid-M compute efficiency (text encoder at 512 tokens, Qwen3.8 prefill M = 512 / 1024)
+### [x] Refinement 16 — Mid-M compute efficiency (text encoder at 512 tokens, Qwen3.8 prefill M = 512 / 1024)
 
 **Type**: perf
 
@@ -574,6 +574,19 @@ Refinement 11's outcome measured the text-encoder o_proj and down as bound by th
 - Each listed case is within 1.15× of its `roofline_ns`, or its remaining gap is explained by a measured floor.
 - Golden is green.
 - No other model case is slower beyond ±3%.
+
+**Outcome**: Three levers landed. (1) R1a split lines: the A row lines on the writer RISC, rotating line injectors with staged, paced reads, and the head ramp. (2) The R1b ring fallback (depth 3 when depth 4 would split M). (3) Operand-aware subblocks.
+Device µs, before → after (roofline):
+- Text encoder: gate 478.6 → 403.1 (403.5, PERF FOCUS 1 at the roofline), down 525.5 → 430.1 (1.07×), qkv 113.3 → 93.7, o_proj 86.6 → 68.9.
+- Qwen3.8 M = 512: in 101.6 → 75.1, gate_up 195.7 → 161.0, down 102.6 → 81.8, qkvg 96.3 → 72.9, out 53.0 → 45.0.
+- Qwen3.8 M = 1024: in 139.6 → 125.0 (1.22×), qkvg 120.9 → 107.2 (1.21×), down 134.4 → 125.2 (1.17×), out 76.2 → 75.7.
+- out_proj M = 2048 / 4096: 136.4 / 226.4 → 129.0 / 226.2.
+
+Every case is now within 1.05–1.2× of its larger measured floor (compute-only = DM stubbed; DM-only = compute stubbed; table in the changelog). What keeps those floors above the roofline:
+- M = 512 is 16 tile rows, which caps the 2-D split at 80–88 cores (the roofline assumes 110); the K-walk alone is ~1.25× the roofline there.
+- out_proj (K = 48) writes its whole output after the last K-block. M-blocking the region to overlap the writes measured worse (B re-reads).
+
+Next I would try a non-rectangular split that fills 110 cores at M = 16 tiles, and an out_proj walk that keeps B resident across M-blocks, delivered in K-blocks during the first one. I did not build them because both are new topologies, beyond the levers named here. Golden interleaved slices are green and the perf guards are within noise.
 
 ### [ ] Refinement 17 — Decode weight streaming (dram_sharded) at the DRAM roofline
 
