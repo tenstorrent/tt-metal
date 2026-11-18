@@ -1,0 +1,8 @@
+TT_PROBE: Saved → tests/ttnn/unit_tests/operations/all_gather_rms_norm_kimi/probes/probe_040.py
+TT_PROBE: [dev] asserts=ebreak llk_asserts=ON watcher=polling triage=ON timeout=5s
+TT_PROBE: Waiting for device lock...
+TT_PROBE: Device lock acquired
+TT_PROBE: python3 tests/ttnn/unit_tests/operations/all_gather_rms_norm_kimi/probes/probe_040.py
+TT_PROBE: Resetting device...
+TT_PROBE: Device reset complete
+TT_PROBE_RESULT: FAIL (python exit code: 1; wrapper exit: 1, probe: tests/ttnn/unit_tests/operations/all_gather_rms_norm_kimi/probes/probe_040.py)

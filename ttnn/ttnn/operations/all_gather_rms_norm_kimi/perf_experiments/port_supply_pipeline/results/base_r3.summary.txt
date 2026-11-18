@@ -1,0 +1,22 @@
+TT_PROBE: Saved → tests/ttnn/unit_tests/operations/all_gather_rms_norm_kimi/probes/probe_070.py
+TT_PROBE: Waiting for device lock...
+TT_PROBE: Device lock acquired
+TT_PROBE: python3 tests/ttnn/unit_tests/operations/all_gather_rms_norm_kimi/probes/probe_070.py
+FFS golden check passed
+FFS bit-identical over 5 calls
+CCL_PERF experiment 1/5
+CCL_PERF experiment 2/5
+CCL_PERF experiment 3/5
+CCL_PERF experiment 4/5
+CCL_PERF experiment 5/5
+CCL_PERF base_r3: 5 experiments, 2500 calls
+  fastest chip  18.709 us (stdev 0.007, +-0.003)   <- optimization target
+  slowest chip  19.800 us (stdev 0.028, +-0.012)
+  chip average  19.314 us (stdev 0.014, +-0.006)
+  spread        1.090 us (stdev 0.034, +-0.015)   (slowest - fastest per call)
+  per chip      dev3 19.316  dev2 19.283  dev1 19.340  dev0 19.316   slowest share dev3 23% dev2 29% dev1 18% dev0 31%
+  dispatch      not dispatch-bound: back to back, max gap 0.58 us, max period 19.92 us per call
+FFS HARNESS DONE
+TT_PROBE: Resetting device...
+TT_PROBE: Device reset complete
+TT_PROBE_RESULT: PASS

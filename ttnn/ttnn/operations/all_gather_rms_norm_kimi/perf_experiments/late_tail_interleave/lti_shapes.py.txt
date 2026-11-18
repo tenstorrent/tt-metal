@@ -1,0 +1,72 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent Inc.
+# SPDX-License-Identifier: Apache-2.0
+"""late_tail_interleave domain check: the acceptance-test shapes through the op COPY (current env knobs) and the
+unmodified op (op_orig). Each shape: golden check of the copy, bit-identity across repeated calls and across chips,
+and bit-exact equality with the unmodified op (same per-tile arithmetic, only the schedule changed).
+
+    [LTI_SHAPES_IMPL=op_grad] LTI_INTERLEAVE=8 LTI_ROUND_INC=1 LTI_LATE_BLOCK=0 scripts/tt-probe.sh all_gather_rms_norm_kimi <<< \\
+      "from ttnn.operations.all_gather_rms_norm_kimi.perf_experiments.late_tail_interleave import lti_shapes as s; s.run()"
+"""
+
+from __future__ import annotations
+
+import torch
+import ttnn
+
+from eval.golden_tests.all_gather_rms_norm_kimi.conftest import _FabricMeshCache
+from eval.golden_tests.all_gather_rms_norm_kimi.topology import focus_mesh_shape
+from eval.golden_tests.all_gather_rms_norm_kimi.helpers import (
+    check_output,
+    create_ttnn_gamma,
+    create_ttnn_input_tensor,
+    gathered_shape,
+    pytorch_all_gather_rms_norm_kimi,
+)
+import importlib  # noqa: E402
+import os  # noqa: E402
+
+from ttnn.operations.all_gather_rms_norm_kimi.perf_experiments.late_tail_interleave import op_orig
+
+_PKG = "ttnn.operations.all_gather_rms_norm_kimi.perf_experiments.late_tail_interleave." + os.environ.get(
+    "LTI_SHAPES_IMPL", "op_copy"
+)
+op_copy = importlib.import_module(_PKG)
+pd = importlib.import_module(_PKG + ".all_gather_rms_norm_kimi_program_descriptor")
+
+SHAPES = [(1, 1, 32, 32), (1, 1, 64, 128), (1, 1, 128, 256), (1, 1, 640, 384), (1, 1, 2048, 384)]
+
+
+def run():
+    print(f"LTI impl {_PKG}: INTERLEAVE={pd.TAIL_INTERLEAVE_CHUNKS}")
+    cache = _FabricMeshCache()
+    mesh = cache.get(focus_mesh_shape()[0])
+    rows, cols = tuple(mesh.shape)
+    comp = ttnn.ConcatMeshToTensor(mesh, dim=0)
+    for shape in SHAPES:
+        torch.manual_seed(42)
+        x = torch.randn((rows, cols, *shape)).to(torch.bfloat16)
+        g = torch.randn((cols * shape[-1],)).to(torch.bfloat16)
+        tx = create_ttnn_input_tensor(x, mesh, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
+        tg = create_ttnn_gamma(g, mesh, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT)
+        kw = dict(gamma=tg, cluster_axis=1, epsilon=1e-6, topology=ttnn.Topology.Ring, num_links=2)
+        out = op_copy.all_gather_rms_norm_kimi(tx, **kw)
+        expected = pytorch_all_gather_rms_norm_kimi(x, g, 1, 1e-6)
+        check_output(
+            out,
+            expected,
+            shape=gathered_shape(shape, cols),
+            dtype=ttnn.bfloat16,
+            fp32_dest_acc_en=True,
+            expected_layout=ttnn.TILE_LAYOUT,
+            group=cols,
+        )
+        ref = ttnn.to_torch(out, mesh_composer=comp)
+        for _ in range(3):
+            assert torch.equal(ref, ttnn.to_torch(op_copy.all_gather_rms_norm_kimi(tx, **kw), mesh_composer=comp))
+        for c in range(1, ref.shape[0]):
+            assert torch.equal(ref[0], ref[c]), f"{shape}: chip {c} differs from chip 0"
+        orig = ttnn.to_torch(op_orig.all_gather_rms_norm_kimi(tx, **kw), mesh_composer=comp)
+        assert torch.equal(ref, orig), f"{shape}: differs from the unmodified op"
+        print(f"LTI shape {shape}: golden ok, bit-identical x4 calls, {ref.shape[0]} chips equal, == unmodified op")
+    cache.close()
+    print("LTI SHAPES DONE")

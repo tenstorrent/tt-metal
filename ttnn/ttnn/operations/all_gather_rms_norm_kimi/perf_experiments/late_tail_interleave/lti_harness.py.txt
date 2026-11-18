@@ -1,0 +1,113 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent Inc.
+# SPDX-License-Identifier: Apache-2.0
+"""late_tail_interleave: eval's ccl_perf harness against the op COPY in op_copy/ (round-1 ffs_harness pattern).
+
+    LTI_TAIL_INC=<n> LTI_INTERLEAVE=<n> LTI_LATE_BLOCK=<0|1> LTI_OUT=<dir> LTI_LABEL=<label> [LTI_SHAPE=tall] \\
+      scripts/tt-probe.sh all_gather_rms_norm_kimi <<< \\
+      "from ttnn.operations.all_gather_rms_norm_kimi.perf_experiments.late_tail_interleave import lti_harness as h; h.run()"
+
+Focus: the perf LOOSE_CASE, golden-checked, then bit-identity across repeated calls and across the chips (every chip
+holds the same full output), then CCL_PERF_EXPERIMENTS (5) ccl_perf experiments. Tall: (1,1,2048,384) like
+perf/perf_tall.py.txt (bit identity + replication only). LTI_ZONES=1: no harness; 6 spin+call iterations with the
+profiler on and AGRN_PERF_ZONES=1 for the tail analyzer (perf/p1_tail_analyze.py.txt).
+"""
+
+from __future__ import annotations
+
+import os
+from pathlib import Path
+
+from eval import ccl_perf
+
+ZONES = os.environ.get("LTI_ZONES", "0") == "1"
+if ZONES:
+    os.environ["AGRN_PERF_ZONES"] = "1"
+else:
+    for _k, _v in ccl_perf.PROFILER_ENV.items():  # before the mesh opens
+        os.environ.setdefault(_k, _v)
+
+import torch  # noqa: E402
+import ttnn  # noqa: E402
+
+from eval.golden_tests.all_gather_rms_norm_kimi.conftest import _FabricMeshCache  # noqa: E402
+from eval.golden_tests.all_gather_rms_norm_kimi.topology import focus_mesh_shape  # noqa: E402
+from eval.golden_tests.all_gather_rms_norm_kimi.helpers import (  # noqa: E402
+    create_ttnn_gamma,
+    create_ttnn_input_tensor,
+    prepare_all_gather_rms_norm_kimi,
+)
+from eval.golden_tests.all_gather_rms_norm_kimi.test_golden import _loose_cases  # noqa: E402
+import importlib  # noqa: E402
+
+# LTI_IMPL=orig: an unmodified copy of the real op (op_orig/); grad: the graduation candidate (op_grad/ = op_orig +
+# graduate/ files, no env knobs); default: op_copy/ (env-driven experiment knobs)
+_pkg = "ttnn.operations.all_gather_rms_norm_kimi.perf_experiments.late_tail_interleave."
+_pkg += {"orig": "op_orig", "grad": "op_grad"}.get(os.environ.get("LTI_IMPL", "copy"), "op_copy")
+all_gather_rms_norm_kimi = importlib.import_module(_pkg).all_gather_rms_norm_kimi
+pd = importlib.import_module(_pkg + ".all_gather_rms_norm_kimi_program_descriptor")
+
+
+def _bit_identity(mesh, call, n=4):
+    comp = ttnn.ConcatMeshToTensor(mesh, dim=0)
+    ref = ttnn.to_torch(call(), mesh_composer=comp)
+    for _ in range(n):
+        got = ttnn.to_torch(call(), mesh_composer=comp)
+        assert torch.equal(ref, got), "output differs across repeated calls"
+    chips = ref.shape[0]
+    for c in range(1, chips):
+        assert torch.equal(ref[0], ref[c]), f"chip {c} output differs from chip 0 (replication)"
+    print(f"LTI bit-identical over {n + 1} calls and across {chips} chips")
+
+
+def run():
+    if hasattr(pd, "TAIL_ROUND_INC") and hasattr(pd, "LATE_BLOCK"):
+        print(
+            f"LTI knobs: ROUND_INC={pd.TAIL_ROUND_INC} INTERLEAVE={pd.TAIL_INTERLEAVE_CHUNKS} LATE_BLOCK={pd.LATE_BLOCK}"
+        )
+    else:
+        print(
+            f"LTI knobs: {_pkg.rsplit('.', 1)[1]}, TAIL_INTERLEAVE_CHUNKS={getattr(pd, 'TAIL_INTERLEAVE_CHUNKS', None)}"
+        )
+    out = Path(os.environ.get("LTI_OUT", ".eval/ccl_perf"))
+    label = os.environ.get("LTI_LABEL", "variant")
+    exps = int(os.environ.get("CCL_PERF_EXPERIMENTS", "5"))
+    cache = _FabricMeshCache()
+    kw = {} if ZONES else dict(trace_region_size=ccl_perf.TRACE_REGION_SIZE)
+    mesh = cache.get(focus_mesh_shape()[0], **kw)
+    if os.environ.get("LTI_SHAPE", "focus") == "tall" or ZONES:
+        M = 2048 if os.environ.get("LTI_SHAPE", "focus") == "tall" else 640
+        shape = (1, 1, M, 384)
+        rows, cols = tuple(mesh.shape)
+        torch.manual_seed(0)
+        x = torch.randn((rows, cols, *shape)).to(torch.bfloat16)
+        g = torch.randn((cols * shape[-1],)).to(torch.bfloat16)
+        tx = create_ttnn_input_tensor(x, mesh, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
+        tg = create_ttnn_gamma(g, mesh, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT)
+        call = lambda: all_gather_rms_norm_kimi(
+            tx, gamma=tg, cluster_axis=1, epsilon=1e-6, topology=ttnn.Topology.Ring, num_links=2
+        )
+        if ZONES:
+            spin = ccl_perf.spin_op(mesh, cycles=40_000_000)
+            call()
+            ttnn.synchronize_device(mesh)
+            for _ in range(6):
+                spin()
+                call()
+            ttnn.synchronize_device(mesh)
+            ttnn.ReadDeviceProfiler(mesh)
+            cache.close()
+            print("LTI ZONES DONE")
+            return
+        _bit_identity(mesh, call)
+    else:
+        (p,) = _loose_cases()
+        inputs, axes, extras = p.values
+        call, check = prepare_all_gather_rms_norm_kimi(
+            inputs, mesh_device=mesh, extras=extras, op=all_gather_rms_norm_kimi, **axes
+        )
+        check(call())
+        print("LTI golden check passed")
+        _bit_identity(mesh, call)
+    ccl_perf.run(mesh, call, experiments=exps, out_path=out / f"{label}.json", label=label)
+    cache.close()
+    print("LTI HARNESS DONE")

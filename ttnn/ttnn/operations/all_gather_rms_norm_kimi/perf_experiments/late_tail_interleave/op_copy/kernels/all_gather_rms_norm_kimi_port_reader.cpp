@@ -1,0 +1,126 @@
+// SPDX-FileCopyrightText: © 2026 Tenstorrent Inc.
+// SPDX-License-Identifier: Apache-2.0
+
+// Port reader (RISCV_1, NoC0), one per (link, direction). Adapted from examples/fabric_all_gather's port reader: the
+// chunk walk is over compute-core `landing` blocks (L1), not DRAM pages. Its stream: entry 0 = the own slice's row
+// blocks of this link (read once every own core of the link has loaded: own_loaded, a fan-in counter waited for its
+// total), then the relay entries (each block read once the receiver says it landed: relay_ready, one ordered sender).
+// Chunks go into cb_port_chunks in batches of `batch` (2 batches in the CB); a batch ends at a multiple of `batch`
+// in the CB (a reservation never wraps), at the stream end, and before any relay wait that would block (an
+// unpushed batch would otherwise sit behind data that has not landed yet).
+
+#include <cstdint>
+
+#include "api/dataflow/dataflow_api.h"
+#include "all_gather_rms_norm_kimi_perf.hpp"
+
+constexpr uint32_t cb = get_compile_time_arg_val(0);
+constexpr uint32_t chunk_tiles = get_compile_time_arg_val(1);
+constexpr uint32_t tile_bytes = get_compile_time_arg_val(2);
+constexpr uint32_t batch = get_compile_time_arg_val(3);
+constexpr uint32_t sem_own_loaded = get_compile_time_arg_val(5);
+constexpr uint32_t sem_relay_ready = get_compile_time_arg_val(6);
+constexpr uint32_t sem_landed = get_compile_time_arg_val(11);
+// own-store gate: 0 off, 1 release each own block once its reads are issued, 2 release every own block of the
+// link once the whole own entry's reads are issued
+constexpr uint32_t own_store_gate = get_compile_time_arg_val(12);
+constexpr uint32_t chunk_bytes = chunk_tiles * tile_bytes;
+
+void kernel_main() {
+    size_t a = 0;
+    const uint32_t landing_addr = get_arg_val<uint32_t>(a++);
+    const uint32_t own_total = get_arg_val<uint32_t>(a++);  // own cores of my link (each increments me once)
+    uint32_t chunks_left = get_arg_val<uint32_t>(a++);
+    const uint32_t n_blocks = get_arg_val<uint32_t>(a++);
+    const uint32_t n_tail = get_arg_val<uint32_t>(a++);  // trailing blocks read chunk-major (the sender's order)
+    const uint32_t blocks_idx = a;                       // then per block: core xy, n_chunks | relay << 16
+
+    volatile tt_l1_ptr uint32_t* own_loaded =
+        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(sem_own_loaded));
+    volatile tt_l1_ptr uint32_t* relay_ready =
+        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(sem_relay_ready));
+
+    uint32_t nbat = 0, need = 0, pos = 0, wptr = 0, relays = 0;
+    bool own_waited = false;
+    auto push_batch = [&]() {
+        if (nbat > 0) {
+            noc_async_read_barrier();
+            cb_push_back(cb, chunk_tiles * nbat);
+            pos += nbat;
+            nbat = 0;
+        }
+    };
+    // a block's first visit: wait until it is readable (own: every own core of the link loaded; relay: landed)
+    auto open_block = [&](uint32_t info) __attribute__((always_inline)) {
+        if ((info >> 16) & 1) {
+            ++relays;
+            if (*relay_ready < relays) {
+                push_batch();
+                noc_semaphore_wait_min(relay_ready, relays);
+            }
+        } else if (!own_waited) {
+            MaybeDeviceZoneScope("preader_own_wait");
+            noc_semaphore_wait_min(own_loaded, own_total);
+            own_waited = true;
+        }
+    };
+    auto read_chunk = [&](uint32_t xy, uint32_t k) __attribute__((always_inline)) {
+        if (nbat == 0) {
+            need = batch - pos % batch;
+            cb_reserve_back(cb, chunk_tiles * need);
+            wptr = get_write_ptr(cb);
+        }
+        noc_async_read(
+            get_noc_addr(xy >> 8, xy & 0xFF, landing_addr) + k * chunk_bytes, wptr + nbat * chunk_bytes, chunk_bytes);
+        --chunks_left;
+        if (++nbat == need || chunks_left == 0) {
+            push_batch();
+        }
+    };
+    // the own core may start its DRAM store once this port has issued the reads of its block (gate 1) or of the
+    // whole own entry (gate 2). No data hazard (the store reads cb_out); the gate only keeps the store burst off the
+    // bulk. A tail block's reads are complete only after the last round.
+    auto own_done = [&](uint32_t i, bool own_end) __attribute__((always_inline)) {
+        const uint32_t xy = get_arg_val<uint32_t>(blocks_idx + 2 * i);
+        const bool relay = (get_arg_val<uint32_t>(blocks_idx + 2 * i + 1) >> 16) & 1;
+        if constexpr (own_store_gate == 1) {
+            if (!relay) {
+                noc_semaphore_inc(get_noc_addr(xy >> 8, xy & 0xFF, get_semaphore(sem_landed)), 1);
+            }
+        } else if constexpr (own_store_gate == 2) {
+            if (!relay && own_end) {
+                for (uint32_t j = 0; j <= i; ++j) {
+                    const uint32_t oxy = get_arg_val<uint32_t>(blocks_idx + 2 * j);
+                    noc_semaphore_inc(get_noc_addr(oxy >> 8, oxy & 0xFF, get_semaphore(sem_landed)), 1);
+                }
+            }
+        }
+    };
+    const uint32_t n_head = n_blocks - n_tail;
+    for (uint32_t i = 0; i < n_head; ++i) {
+        const uint32_t xy = get_arg_val<uint32_t>(blocks_idx + 2 * i);
+        const uint32_t info = get_arg_val<uint32_t>(blocks_idx + 2 * i + 1);
+        open_block(info);
+        for (uint32_t k = 0; k < (info & 0xFFFF); ++k) {
+            read_chunk(xy, k);
+        }
+        own_done(i, i + 1 == n_blocks || ((get_arg_val<uint32_t>(blocks_idx + 2 * i + 3) >> 16) & 1));
+    }
+    for (uint32_t c = 0; chunks_left > 0; ++c) {
+        for (uint32_t i = n_head; i < n_blocks; ++i) {
+            const uint32_t xy = get_arg_val<uint32_t>(blocks_idx + 2 * i);
+            const uint32_t info = get_arg_val<uint32_t>(blocks_idx + 2 * i + 1);
+            if (c == 0) {
+                open_block(info);
+            }
+            if ((info & 0xFFFF) > c) {
+                read_chunk(xy, c);
+            }
+        }
+    }
+    for (uint32_t i = n_head; i < n_blocks; ++i) {
+        own_done(i, i + 1 == n_blocks);
+    }
+    push_batch();
+    noc_async_atomic_barrier();
+}

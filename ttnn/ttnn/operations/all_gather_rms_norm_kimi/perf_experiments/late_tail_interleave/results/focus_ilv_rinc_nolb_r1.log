@@ -1,0 +1,639 @@
+TT_PROBE: Saved → tests/ttnn/unit_tests/operations/all_gather_rms_norm_kimi/probes/probe_041.py
+TT_PROBE: Waiting for device lock...
+TT_PROBE: Device lock acquired
+TT_PROBE: python3 tests/ttnn/unit_tests/operations/all_gather_rms_norm_kimi/probes/probe_041.py
+========================================
+2026-11-18 00:57:45.203 | DEBUG    | ttnn:<module>:45 - Initial ttnn.CONFIG:
+Config{cache_path=/home/malimpic/.cache/ttnn,model_cache_path=/home/malimpic/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,validate_program_args=false,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_graph_python_stack_traces=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,std::nullopt}
+LTI knobs: ROUND_INC=True TAIL_INC=0 INTERLEAVE=8 LATE_BLOCK=False
+2026-11-18 00:57:47.386 | info     |          Device | Opening user mode device driver (tt_cluster.cpp:223)
+2026-11-18 00:57:47.387 | info     |             UMD | Cluster constructor started. (cluster.cpp:405)
+2026-11-18 00:57:47.387 | info     |             UMD | Creating TopologyDiscovery for architecture: blackhole (topology_discovery.cpp:131)
+2026-11-18 00:57:47.387 | info     |             UMD | Starting topology discovery. (topology_discovery.cpp:150)
+2026-11-18 00:57:47.397 | info     |             UMD | Established firmware bundle version: 19.9.0 (topology_discovery.cpp:654)
+2026-11-18 00:57:47.398 | info     |             UMD | Completed topology discovery. (topology_discovery.cpp:154)
+2026-11-18 00:57:47.678 | warning  |             UMD | Sysmem (0x40000000 bytes) using regular pages; pre-allocate hugepages for better DMA performance (e.g. 1 × 1GB or 512 × 2MB; on AArch64 also 2 × 512MB). (silicon_sysmem_manager.cpp:105)
+2026-11-18 00:57:47.906 | warning  |             UMD | Sysmem (0x40000000 bytes) using regular pages; pre-allocate hugepages for better DMA performance (e.g. 1 × 1GB or 512 × 2MB; on AArch64 also 2 × 512MB). (silicon_sysmem_manager.cpp:105)
+2026-11-18 00:57:48.147 | warning  |             UMD | Sysmem (0x40000000 bytes) using regular pages; pre-allocate hugepages for better DMA performance (e.g. 1 × 1GB or 512 × 2MB; on AArch64 also 2 × 512MB). (silicon_sysmem_manager.cpp:105)
+2026-11-18 00:57:48.469 | warning  |             UMD | Sysmem (0x40000000 bytes) using regular pages; pre-allocate hugepages for better DMA performance (e.g. 1 × 1GB or 512 × 2MB; on AArch64 also 2 × 512MB). (silicon_sysmem_manager.cpp:105)
+2026-11-18 00:57:48.470 | info     |             UMD | Opening local chip ids/PCIe ids: {0, 1, 2, 3}/[0, 1, 2, 3] and remote chip ids {} (cluster.cpp:172)
+2026-11-18 00:57:48.470 | info     |             UMD | IOMMU: enabled (cluster.cpp:146)
+2026-11-18 00:57:48.470 | info     |             UMD | KMD version: 2.10.0 (cluster.cpp:149)
+2026-11-18 00:57:48.470 | info     |             UMD | Cluster constructor completed. (cluster.cpp:719)
+2026-11-18 00:57:48.473 | info     |             UMD | Starting devices in cluster (cluster.cpp:1305)
+2026-11-18 00:57:48.866 | info     |             UMD | Starting devices in cluster completed. (cluster.cpp:1314)
+2026-11-18 00:57:48.995 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:435)
+2026-11-18 00:57:48.995 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:497)
+2026-11-18 00:57:48.995 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=0 (bus_id=0x1) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:119)
+2026-11-18 00:57:48.995 | info     |          Fabric | Loaded physical groupings from: /home/malimpic/localdev/2026_11_17/1458_malimpic_distributed_rms_norm_all_gather_gen/clones/all_gather_rms_norm_kimi_run1/tt-metal/tests/tt_metal/tt_fabric/physical_groupings/default_physical_grouping_descriptor.textproto (physical_grouping_descriptor_core.cpp:813)
+2026-11-18 00:57:48.997 | info     |          Fabric | No specific Physical Grouping Descriptor found; using default. (physical_grouping_descriptor_core.cpp:897)
+2026-11-18 00:57:48.997 | info     |          Fabric | Matching MESH mgd groupings to MESH groupings (physical_grouping_descriptor_matching.cpp:1428)
+2026-11-18 00:57:48.997 | info     |          Fabric | Grouping valid candidates by node difference (physical_grouping_descriptor_matching.cpp:1522)
+2026-11-18 00:57:48.997 | info     |          Fabric | Physical groupings: Mesh graph descriptor 'M0': 1 topology match(es), committed: 2x2_Mesh_flat (MESH) (physical_grouping_descriptor_matching.cpp:1731)
+2026-11-18 00:57:48.999 | info     |          Fabric | Physical groupings: Mesh graph descriptor 'M0': MGD placement fallback M0 (MESH) embeds on PSD (physical_grouping_descriptor_matching.cpp:1848)
+2026-11-18 00:57:49.004 | info     |           Metal | Fabric config changed from FabricConfig::DISABLED to FabricConfig::FABRIC_2D_TORUS_XY, reinitializing control plane (metal_env.cpp:331)
+2026-11-18 00:57:49.004 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:435)
+2026-11-18 00:57:49.004 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:497)
+2026-11-18 00:57:49.005 | warning  |          Fabric | TopologyMapper auto-discovery: requested fabric type TORUS_XY could not be realized on the discovered physical topology; using MESH which maps all 4 physical chips. This is expected on galaxies that do not have wrap-around (torus) cabling on every axis. (topology_mapper.cpp:1737)
+2026-11-18 00:57:49.005 | info     |          Fabric | Loaded physical groupings from: /home/malimpic/localdev/2026_11_17/1458_malimpic_distributed_rms_norm_all_gather_gen/clones/all_gather_rms_norm_kimi_run1/tt-metal/tests/tt_metal/tt_fabric/physical_groupings/default_physical_grouping_descriptor.textproto (physical_grouping_descriptor_core.cpp:813)
+2026-11-18 00:57:49.005 | info     |          Fabric | No specific Physical Grouping Descriptor found; using default. (physical_grouping_descriptor_core.cpp:897)
+2026-11-18 00:57:49.006 | info     |          Fabric | Matching MESH mgd groupings to MESH groupings (physical_grouping_descriptor_matching.cpp:1428)
+2026-11-18 00:57:49.006 | info     |          Fabric | Grouping valid candidates by node difference (physical_grouping_descriptor_matching.cpp:1522)
+2026-11-18 00:57:49.006 | info     |          Fabric | Physical groupings: Mesh graph descriptor 'M0': 1 topology match(es), committed: 2x2_Mesh_flat (MESH) (physical_grouping_descriptor_matching.cpp:1731)
+2026-11-18 00:57:49.007 | info     |          Fabric | Physical groupings: Mesh graph descriptor 'M0': MGD placement fallback M0 (MESH) embeds on PSD (physical_grouping_descriptor_matching.cpp:1848)
+2026-11-18 00:57:49.244 | info     |           Metal | Profiler started on device 0 (profiler_initializer.cpp:49)
+2026-11-18 00:57:49.259 | info     |           Metal | Profiler started on device 1 (profiler_initializer.cpp:49)
+2026-11-18 00:57:49.277 | info     |           Metal | Profiler started on device 2 (profiler_initializer.cpp:49)
+2026-11-18 00:57:49.287 | info     |           Metal | Profiler started on device 3 (profiler_initializer.cpp:49)
+2026-11-18 00:57:49.287 | info     |           Metal | Initializing Fabric (fabric_firmware_initializer.cpp:319)
+2026-11-18 00:57:49.530 | info     |           Metal | Fabric initialized on 4 devices (fabric_firmware_initializer.cpp:466)
+2026-11-18 00:57:49.530 | info     |           Metal | Fabric Initialized with config FabricConfig::FABRIC_2D_TORUS_XY (fabric_firmware_initializer.cpp:336)
+Building trisc0, compile step:
+In file included from /home/malimpic/localdev/2026_11_17/1458_malimpic_distributed_rms_norm_all_gather_gen/clones/all_gather_rms_norm_kimi_run1/tt-metal/tt_metal/hw/ckernels/blackhole/metal/llk_io/llk_io_unpack.h:13,
+                 from /home/malimpic/localdev/2026_11_17/1458_malimpic_distributed_rms_norm_all_gather_gen/clones/all_gather_rms_norm_kimi_run1/tt-metal/tt_metal/hw/inc/api/compute/cb_api.h:15,
+                 from /home/malimpic/localdev/2026_11_17/1458_malimpic_distributed_rms_norm_all_gather_gen/clones/all_gather_rms_norm_kimi_run1/tt-metal/tt_metal/hw/inc/api/compute/common.h:11,
+                 from /home/malimpic/localdev/2026_11_17/1458_malimpic_distributed_rms_norm_all_gather_gen/clones/all_gather_rms_norm_kimi_run1/tt-metal/ttnn/ttnn/operations/all_gather_rms_norm_kimi/perf_experiments/late_tail_interleave/op_copy/kernels/all_gather_rms_norm_kimi_compute.cpp:26,
+                 from ../chlkc_unpack.cpp:4,
+                 from /home/malimpic/localdev/2026_11_17/1458_malimpic_distributed_rms_norm_all_gather_gen/clones/all_gather_rms_norm_kimi_run1/tt-metal/tt_metal/hw/ckernels/blackhole/metal/common/chlkc_list.h:26,
+                 from /home/malimpic/localdev/2026_11_17/1458_malimpic_distributed_rms_norm_all_gather_gen/clones/all_gather_rms_norm_kimi_run1/tt-metal/tt_metal/hw/firmware/src/tt-1xx/trisck.cc:14:
+/home/malimpic/localdev/2026_11_17/1458_malimpic_distributed_rms_norm_all_gather_gen/clones/all_gather_rms_norm_kimi_run1/tt-metal/tt_metal/hw/ckernels/blackhole/metal/llk_io/llk_io_unpack.h: In function 'void llk_wait_tiles(int, int32_t)':
+/home/malimpic/localdev/2026_11_17/1458_malimpic_distributed_rms_norm_all_gather_gen/clones/all_gather_rms_norm_kimi_run1/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:32:22: note: '#pragma message: CB-COMPUTE-WAIT-FRONT,/home/malimpic/localdev/2026_11_17/1458_malimpic_distributed_rms_norm_all_gather_gen/clones/all_gather_rms_norm_kimi_run1/tt-metal/tt_metal/hw/ckernels/blackhole/metal/llk_io/llk_io_unpack.h,19,KERNEL_PROFILER'
+   32 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/home/malimpic/localdev/2026_11_17/1458_malimpic_distributed_rms_norm_all_gather_gen/clones/all_gather_rms_norm_kimi_run1/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:1052:5: note: in expansion of macro 'DO_PRAGMA'
+ 1052 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/home/malimpic/localdev/2026_11_17/1458_malimpic_distributed_rms_norm_all_gather_gen/clones/all_gather_rms_norm_kimi_run1/tt-metal/tt_metal/hw/ckernels/blackhole/metal/llk_io/llk_io_unpack.h:19:5: note: in expansion of macro 'DeviceZoneScopedSumN1'
+   19 |     DeviceZoneScopedSumN1("CB-COMPUTE-WAIT-FRONT");
+      |     ^~~~~~~~~~~~~~~~~~~~~
+In file included from /home/malimpic/localdev/2026_11_17/1458_malimpic_distributed_rms_norm_all_gather_gen/clones/all_gather_rms_norm_kimi_run1/tt-metal/ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.hpp:695,
+                 from /home/malimpic/localdev/2026_11_17/1458_malimpic_distributed_rms_norm_all_gather_gen/clones/all_gather_rms_norm_kimi_run1/tt-metal/ttnn/ttnn/operations/all_gather_rms_norm_kimi/perf_experiments/late_tail_interleave/op_copy/kernels/all_gather_rms_norm_kimi_compute.cpp:33:
+/home/malimpic/localdev/2026_11_17/1458_malimpic_distributed_rms_norm_all_gather_gen/clones/all_gather_rms_norm_kimi_run1/tt-metal/ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.inl: In function 'void compute_kernel_lib::detail::reduce_accumulate_via_add(compute_kernel_lib::ReduceInputBlockShape, compute_kernel_lib::ReduceInputMemoryLayout, compute_kernel_lib::ReducePartialScaler, AccumulateT, PostReduceOp)':
+/home/malimpic/localdev/2026_11_17/1458_malimpic_distributed_rms_norm_all_gather_gen/clones/all_gather_rms_norm_kimi_run1/tt-metal/ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.inl:372:31: warning: 'void ckernel::copy_tile_init(uint32_t, uint32_t) [with bool is_fp32_dest_acc_en = true; uint32_t = long unsigned int]' is deprecated: Renamed to copy_init(). This will be removed after 20-09-2026. [-Wdeprecated-declarations]
+  372 |                 copy_tile_init(input_dfb_id);
+      |                 ~~~~~~~~~~~~~~^~~~~~~~~~~~~~
+In file included from /home/malimpic/localdev/2026_11_17/1458_malimpic_distributed_rms_norm_all_gather_gen/clones/all_gather_rms_norm_kimi_run1/tt-metal/ttnn/cpp/ttnn/kernel_lib/eltwise/core/chain.inl:25,
+                 from /home/malimpic/localdev/2026_11_17/1458_malimpic_distributed_rms_norm_all_gather_gen/clones/all_gather_rms_norm_kimi_run1/tt-metal/ttnn/cpp/ttnn/kernel_lib/eltwise/api/chain.hpp:538,
+                 from /home/malimpic/localdev/2026_11_17/1458_malimpic_distributed_rms_norm_all_gather_gen/clones/all_gather_rms_norm_kimi_run1/tt-metal/ttnn/ttnn/operations/all_gather_rms_norm_kimi/perf_experiments/late_tail_interleave/op_copy/kernels/all_gather_rms_norm_kimi_compute.cpp:27:
+/home/malimpic/localdev/2026_11_17/1458_malimpic_distributed_rms_norm_all_gather_gen/clones/all_gather_rms_norm_kimi_run1/tt-metal/tt_metal/hw/inc/api/compute/tile_move_copy.h:200:92: note: declared here
+  200 | [[deprecated("Renamed to copy_init(). This will be removed after 20-09-2026.")]] ALWI void copy_tile_init(
+      |                                                                                            ^~~~~~~~~~~~~~
+/home/malimpic/localdev/2026_11_17/1458_malimpic_distributed_rms_norm_all_gather_gen/clones/all_gather_rms_norm_kimi_run1/tt-metal/ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.inl:377:27: warning: 'void ckernel::add_tiles_init(uint32_t, uint32_t, bool, uint32_t)' is deprecated: Renamed to add_init(). This will be removed after September 15th, 2026. [-Wdeprecated-declarations]
+  377 |             add_tiles_init(input_dfb_id, input_dfb_id, true);
+      |             ~~~~~~~~~~~~~~^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+In file included from /home/malimpic/localdev/2026_11_17/1458_malimpic_distributed_rms_norm_all_gather_gen/clones/all_gather_rms_norm_kimi_run1/tt-metal/ttnn/cpp/ttnn/kernel_lib/eltwise/core/chain.inl:21:
+/home/malimpic/localdev/2026_11_17/1458_malimpic_distributed_rms_norm_all_gather_gen/clones/all_gather_rms_norm_kimi_run1/tt-metal/tt_metal/hw/inc/api/compute/eltwise_binary.h:562:101: note: declared here
+  562 | [[deprecated("Renamed to add_init(). This will be removed after September 15th, 2026.")]] ALWI void add_tiles_init(
+      |                                                                                                     ^~~~~~~~~~~~~~
+/home/malimpic/localdev/2026_11_17/1458_malimpic_distributed_rms_norm_all_gather_gen/clones/all_gather_rms_norm_kimi_run1/tt-metal/ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.inl:407:39: warning: 'void ckernel::copy_tile_init(uint32_t, uint32_t) [with bool is_fp32_dest_acc_en = true; uint32_t = long unsigned int]' is deprecated: Renamed to copy_init(). This will be removed after 20-09-2026. [-Wdeprecated-declarations]
+  407 |                         copy_tile_init(input_dfb_id);
+      |                         ~~~~~~~~~~~~~~^~~~~~~~~~~~~~
+/home/malimpic/localdev/2026_11_17/1458_malimpic_distributed_rms_norm_all_gather_gen/clones/all_gather_rms_norm_kimi_run1/tt-metal/tt_metal/hw/inc/api/compute/tile_move_copy.h:200:92: note: declared here
+  200 | [[deprecated("Renamed to copy_init(). This will be removed after 20-09-2026.")]] ALWI void copy_tile_init(
+      |                                                                                            ^~~~~~~~~~~~~~
+/home/malimpic/localdev/2026_11_17/1458_malimpic_distributed_rms_norm_all_gather_gen/clones/all_gather_rms_norm_kimi_run1/tt-metal/ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.inl:411:35: warning: 'void ckernel::add_tiles_init(uint32_t, uint32_t, bool, uint32_t)' is deprecated: Renamed to add_init(). This will be removed after September 15th, 2026. [-Wdeprecated-declarations]
+  411 |                     add_tiles_init(input_dfb_id, input_dfb_id, true);
+      |                     ~~~~~~~~~~~~~~^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+/home/malimpic/localdev/2026_11_17/1458_malimpic_distributed_rms_norm_all_gather_gen/clones/all_gather_rms_norm_kimi_run1/tt-metal/tt_metal/hw/inc/api/compute/eltwise_binary.h:562:101: note: declared here
+  562 | [[deprecated("Renamed to add_init(). This will be removed after September 15th, 2026.")]] ALWI void add_tiles_init(
+      |                                                                                                     ^~~~~~~~~~~~~~
+/home/malimpic/localdev/2026_11_17/1458_malimpic_distributed_rms_norm_all_gather_gen/clones/all_gather_rms_norm_kimi_run1/tt-metal/ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.inl:433:47: warning: 'void ckernel::add_tiles_init(uint32_t, uint32_t, bool, uint32_t)' is deprecated: Renamed to add_init(). This will be removed after September 15th, 2026. [-Wdeprecated-declarations]
+  433 |                                 add_tiles_init(input_dfb_id, acc_cb, true);  // fresh DST reads 0 -> new[0] + acc
+      |                                 ~~~~~~~~~~~~~~^~~~~~~~~~~~~~~~~~~~~~~~~~~~
+/home/malimpic/localdev/2026_11_17/1458_malimpic_distributed_rms_norm_all_gather_gen/clones/all_gather_rms_norm_kimi_run1/tt-metal/tt_metal/hw/inc/api/compute/eltwise_binary.h:562:101: note: declared here
+  562 | [[deprecated("Renamed to add_init(). This will be removed after September 15th, 2026.")]] ALWI void add_tiles_init(
+      |                                                                                                     ^~~~~~~~~~~~~~
+/home/malimpic/localdev/2026_11_17/1458_malimpic_distributed_rms_norm_all_gather_gen/clones/all_gather_rms_norm_kimi_run1/tt-metal/ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.inl:437:47: warning: 'void ckernel::add_tiles_init(uint32_t, uint32_t, bool, uint32_t)' is deprecated: Renamed to add_init(). This will be removed after September 15th, 2026. [-Wdeprecated-declarations]
+  437 |                                 add_tiles_init(input_dfb_id, input_dfb_id, true);                 // fresh DST reads 0
+      |                                 ~~~~~~~~~~~~~~^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+/home/malimpic/localdev/2026_11_17/1458_malimpic_distributed_rms_norm_all_gather_gen/clones/all_gather_rms_norm_kimi_run1/tt-metal/tt_metal/hw/inc/api/compute/eltwise_binary.h:562:101: note: declared here
+  562 | [[deprecated("Renamed to add_init(). This will be removed after September 15th, 2026.")]] ALWI void add_tiles_init(
+      |                                                                                                     ^~~~~~~~~~~~~~
+/home/malimpic/localdev/2026_11_17/1458_malimpic_distributed_rms_norm_all_gather_gen/clones/all_gather_rms_norm_kimi_run1/tt-metal/ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.inl:439:47: warning: 'void ckernel::add_tiles_init(uint32_t, uint32_t, bool, uint32_t)' is deprecated: Renamed to add_init(). This will be removed after September 15th, 2026. [-Wdeprecated-declarations]
+  439 |                                 add_tiles_init(input_dfb_id, input_dfb_id, true);
+      |                                 ~~~~~~~~~~~~~~^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+/home/malimpic/localdev/2026_11_17/1458_malimpic_distributed_rms_norm_all_gather_gen/clones/all_gather_rms_norm_kimi_run1/tt-metal/tt_metal/hw/inc/api/compute/eltwise_binary.h:562:101: note: declared here
+  562 | [[deprecated("Renamed to add_init(). This will be removed after September 15th, 2026.")]] ALWI void add_tiles_init(
+      |                                                                                                     ^~~~~~~~~~~~~~
+/home/malimpic/localdev/2026_11_17/1458_malimpic_distributed_rms_norm_all_gather_gen/clones/all_gather_rms_norm_kimi_run1/tt-metal/ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.inl:445:47: warning: 'void ckernel::add_tiles_init(uint32_t, uint32_t, bool, uint32_t)' is deprecated: Renamed to add_init(). This will be removed after September 15th, 2026. [-Wdeprecated-declarations]
+  445 |                                 add_tiles_init(input_dfb_id, acc_cb, true);  // last new tile + accumulator
+      |                                 ~~~~~~~~~~~~~~^~~~~~~~~~~~~~~~~~~~~~~~~~~~
+/home/malimpic/localdev/2026_11_17/1458_malimpic_distributed_rms_norm_all_gather_gen/clones/all_gather_rms_norm_kimi_run1/tt-metal/tt_metal/hw/inc/api/compute/eltwise_binary.h:562:101: note: declared here
+  562 | [[deprecated("Renamed to add_init(). This will be removed after September 15th, 2026.")]] ALWI void add_tiles_init(
+      |                                                                                                     ^~~~~~~~~~~~~~
+/home/malimpic/localdev/2026_11_17/1458_malimpic_distributed_rms_norm_all_gather_gen/clones/all_gather_rms_norm_kimi_run1/tt-metal/ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.inl:451:43: warning: 'void ckernel::copy_tile_init(uint32_t, uint32_t) [with bool is_fp32_dest_acc_en = true; uint32_t = long unsigned int]' is deprecated: Renamed to copy_init(). This will be removed after 20-09-2026. [-Wdeprecated-declarations]
+  451 |                             copy_tile_init(acc_cb);
+      |                             ~~~~~~~~~~~~~~^~~~~~~~
+/home/malimpic/localdev/2026_11_17/1458_malimpic_distributed_rms_norm_all_gather_gen/clones/all_gather_rms_norm_kimi_run1/tt-metal/tt_metal/hw/inc/api/compute/tile_move_copy.h:200:92: note: declared here
+  200 | [[deprecated("Renamed to copy_init(). This will be removed after 20-09-2026.")]] ALWI void copy_tile_init(
+      |                                                                                            ^~~~~~~~~~~~~~
+/home/malimpic/localdev/2026_11_17/1458_malimpic_distributed_rms_norm_all_gather_gen/clones/all_gather_rms_norm_kimi_run1/tt-metal/ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.inl:454:43: warning: 'void ckernel::add_tiles_init(uint32_t, uint32_t, bool, uint32_t)' is deprecated: Renamed to add_init(). This will be removed after September 15th, 2026. [-Wdeprecated-declarations]
+  454 |                             add_tiles_init(input_dfb_id, input_dfb_id, true);
+      |                             ~~~~~~~~~~~~~~^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+/home/malimpic/localdev/2026_11_17/1458_malimpic_distributed_rms_norm_all_gather_gen/clones/all_gather_rms_norm_kimi_run1/tt-metal/tt_metal/hw/inc/api/compute/eltwise_binary.h:562:101: note: declared here
+  562 | [[deprecated("Renamed to add_init(). This will be removed after September 15th, 2026.")]] ALWI void add_tiles_init(
+      |                                                                                                     ^~~~~~~~~~~~~~
+/home/malimpic/localdev/2026_11_17/1458_malimpic_distributed_rms_norm_all_gather_gen/clones/all_gather_rms_norm_kimi_run1/tt-metal/ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.inl:468:47: warning: 'void ckernel::copy_tile_init(uint32_t, uint32_t) [with bool is_fp32_dest_acc_en = true; uint32_t = long unsigned int]' is deprecated: Renamed to copy_init(). This will be removed after 20-09-2026. [-Wdeprecated-declarations]
+  468 |                                 copy_tile_init(input_dfb_id);
+      |                                 ~~~~~~~~~~~~~~^~~~~~~~~~~~~~
+/home/malimpic/localdev/2026_11_17/1458_malimpic_distributed_rms_norm_all_gather_gen/clones/all_gather_rms_norm_kimi_run1/tt-metal/tt_metal/hw/inc/api/compute/tile_move_copy.h:200:92: note: declared here
+  200 | [[deprecated("Renamed to copy_init(). This will be removed after 20-09-2026.")]] ALWI void copy_tile_init(
+      |                                                                                            ^~~~~~~~~~~~~~
+/home/malimpic/localdev/2026_11_17/1458_malimpic_distributed_rms_norm_all_gather_gen/clones/all_gather_rms_norm_kimi_run1/tt-metal/ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.inl:472:43: warning: 'void ckernel::add_tiles_init(uint32_t, uint32_t, bool, uint32_t)' is deprecated: Renamed to add_init(). This will be removed after September 15th, 2026. [-Wdeprecated-declarations]
+  472 |                             add_tiles_init(input_dfb_id, input_dfb_id, true);
+      |                             ~~~~~~~~~~~~~~^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+/home/malimpic/localdev/2026_11_17/1458_malimpic_distributed_rms_norm_all_gather_gen/clones/all_gather_rms_norm_kimi_run1/tt-metal/tt_metal/hw/inc/api/compute/eltwise_binary.h:562:101: note: declared here
+  562 | [[deprecated("Renamed to add_init(). This will be removed after September 15th, 2026.")]] ALWI void add_tiles_init(
+      |                                                                                                     ^~~~~~~~~~~~~~
+/home/malimpic/localdev/2026_11_17/1458_malimpic_distributed_rms_norm_all_gather_gen/clones/all_gather_rms_norm_kimi_run1/tt-metal/ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.inl:478:39: warning: 'void ckernel::copy_tile_init(uint32_t, uint32_t) [with bool is_fp32_dest_acc_en = true; uint32_t = long unsigned int]' is deprecated: Renamed to copy_init(). This will be removed after 20-09-2026. [-Wdeprecated-declarations]
+  478 |                         copy_tile_init(acc_cb);
+      |                         ~~~~~~~~~~~~~~^~~~~~~~
+/home/malimpic/localdev/2026_11_17/1458_malimpic_distributed_rms_norm_all_gather_gen/clones/all_gather_rms_norm_kimi_run1/tt-metal/tt_metal/hw/inc/api/compute/tile_move_copy.h:200:92: note: declared here
+  200 | [[deprecated("Renamed to copy_init(). This will be removed after 20-09-2026.")]] ALWI void copy_tile_init(
+      |                                                                                            ^~~~~~~~~~~~~~
+/home/malimpic/localdev/2026_11_17/1458_malimpic_distributed_rms_norm_all_gather_gen/clones/all_gather_rms_norm_kimi_run1/tt-metal/ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.inl:496:39: warning: 'void ckernel::copy_tile_init(uint32_t, uint32_t) [with bool is_fp32_dest_acc_en = true; uint32_t = long unsigned int]' is deprecated: Renamed to copy_init(). This will be removed after 20-09-2026. [-Wdeprecated-declarations]
+  496 |                         copy_tile_init(acc_cb);
+      |                         ~~~~~~~~~~~~~~^~~~~~~~
+/home/malimpic/localdev/2026_11_17/1458_malimpic_distributed_rms_norm_all_gather_gen/clones/all_gather_rms_norm_kimi_run1/tt-metal/tt_metal/hw/inc/api/compute/tile_move_copy.h:200:92: note: declared here
+  200 | [[deprecated("Renamed to copy_init(). This will be removed after 20-09-2026.")]] ALWI void copy_tile_init(
+      |                                                                                            ^~~~~~~~~~~~~~
+/home/malimpic/localdev/2026_11_17/1458_malimpic_distributed_rms_norm_all_gather_gen/clones/all_gather_rms_norm_kimi_run1/tt-metal/ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.inl:504:83: warning: 'void ckernel::binary_dest_reuse_tiles_init(uint32_t, uint32_t) [with EltwiseBinaryType eltwise_binary_type = ckernel::EltwiseBinaryType::ELWADD; EltwiseBinaryReuseDestType binary_reuse_dest = ckernel::EltwiseBinaryReuseDestType::DEST_TO_SRCB; uint32_t = long unsigned int]' is deprecated: Renamed to add_reuse_dest_init / sub_reuse_dest_init / mul_reuse_dest_init<reuse_dest>, e.g. add_reuse_dest_init<EltwiseBinaryReuseDestType::DEST_TO_SRCA>(in_cb). This will be removed after September 15th, 2026. [-Wdeprecated-declarations]
+  502 |                             binary_dest_reuse_tiles_init<
+      |                             ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+  503 |                                 ckernel::EltwiseBinaryType::ELWADD,
+      |                                 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+  504 |                                 ckernel::EltwiseBinaryReuseDestType::DEST_TO_SRCB>(input_dfb_id);
+      |                                 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^~~~~~~~~~~~~~
+/home/malimpic/localdev/2026_11_17/1458_malimpic_distributed_rms_norm_all_gather_gen/clones/all_gather_rms_norm_kimi_run1/tt-metal/tt_metal/hw/inc/api/compute/eltwise_binary.h:599:1: note: declared here
+  599 | binary_dest_reuse_tiles_init(uint32_t icb0, uint32_t call_line = __builtin_LINE()) {
+      | ^~~~~~~~~~~~~~~~~~~~~~~~~~~~
+/home/malimpic/localdev/2026_11_17/1458_malimpic_distributed_rms_norm_all_gather_gen/clones/all_gather_rms_norm_kimi_run1/tt-metal/ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.inl:508:87: warning: 'void ckernel::binary_dest_reuse_tiles(uint32_t, uint32_t, uint32_t) [with EltwiseBinaryType eltwise_binary_type = ckernel::EltwiseBinaryType::ELWADD; EltwiseBinaryReuseDestType binary_reuse_dest = ckernel::EltwiseBinaryReuseDestType::DEST_TO_SRCB; bool is_fp32_dest_acc_en = true; uint32_t = long unsigned int]' is deprecated: Renamed to add_reuse_dest_tiles / sub_reuse_dest_tiles / mul_reuse_dest_tiles<reuse_dest>, e.g. add_reuse_dest_tiles<EltwiseBinaryReuseDestType::DEST_TO_SRCA>(in_cb, it, idst). This will be removed after September 15th, 2026. [-Wdeprecated-declarations]
+  506 |                                 binary_dest_reuse_tiles<
+      |                                 ~~~~~~~~~~~~~~~~~~~~~~~~
+  507 |                                     ckernel::EltwiseBinaryType::ELWADD,
+      |                                     ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+  508 |                                     ckernel::EltwiseBinaryReuseDestType::DEST_TO_SRCB>(
+      |                                     ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^
+  509 |                                     input_dfb_id, start + k * stride, 0);
+      |                                     ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+/home/malimpic/localdev/2026_11_17/1458_malimpic_distributed_rms_norm_all_gather_gen/clones/all_gather_rms_norm_kimi_run1/tt-metal/tt_metal/hw/inc/api/compute/eltwise_binary.h:624:1: note: declared here
+  624 | binary_dest_reuse_tiles(uint32_t in_cb_id, uint32_t in_tile_index, uint32_t dst_tile_index) {
+      | ^~~~~~~~~~~~~~~~~~~~~~~
+/home/malimpic/localdev/2026_11_17/1458_malimpic_distributed_rms_norm_all_gather_gen/clones/all_gather_rms_norm_kimi_run1/tt-metal/ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.inl:517:47: warning: 'void ckernel::add_tiles_init(uint32_t, uint32_t, bool, uint32_t)' is deprecated: Renamed to add_init(). This will be removed after September 15th, 2026. [-Wdeprecated-declarations]
+  517 |                                 add_tiles_init(input_dfb_id, scaler_dfb_id, true);
+      |                                 ~~~~~~~~~~~~~~^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+/home/malimpic/localdev/2026_11_17/1458_malimpic_distributed_rms_norm_all_gather_gen/clones/all_gather_rms_norm_kimi_run1/tt-metal/tt_metal/hw/inc/api/compute/eltwise_binary.h:562:101: note: declared here
+  562 | [[deprecated("Renamed to add_init(). This will be removed after September 15th, 2026.")]] ALWI void add_tiles_init(
+      |                                                                                                     ^~~~~~~~~~~~~~
+/home/malimpic/localdev/2026_11_17/1458_malimpic_distributed_rms_norm_all_gather_gen/clones/all_gather_rms_norm_kimi_run1/tt-metal/ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.inl:521:43: warning: 'void ckernel::add_tiles_init(uint32_t, uint32_t, bool, uint32_t)' is deprecated: Renamed to add_init(). This will be removed after September 15th, 2026. [-Wdeprecated-declarations]
+  521 |                             add_tiles_init(input_dfb_id, input_dfb_id, true);
+      |                             ~~~~~~~~~~~~~~^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+/home/malimpic/localdev/2026_11_17/1458_malimpic_distributed_rms_norm_all_gather_gen/clones/all_gather_rms_norm_kimi_run1/tt-metal/tt_metal/hw/inc/api/compute/eltwise_binary.h:562:101: note: declared here
+  562 | [[deprecated("Renamed to add_init(). This will be removed after September 15th, 2026.")]] ALWI void add_tiles_init(
+      |                                                                                                     ^~~~~~~~~~~~~~
+/home/malimpic/localdev/2026_11_17/1458_malimpic_distributed_rms_norm_all_gather_gen/clones/all_gather_rms_norm_kimi_run1/tt-metal/ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.inl:532:87: warning: 'void ckernel::binary_dest_reuse_tiles_init(uint32_t, uint32_t) [with EltwiseBinaryType eltwise_binary_type = ckernel::EltwiseBinaryType::ELWADD; EltwiseBinaryReuseDestType binary_reuse_dest = ckernel::EltwiseBinaryReuseDestType::DEST_TO_SRCB; uint32_t = long unsigned int]' is deprecated: Renamed to add_reuse_dest_init / sub_reuse_dest_init / mul_reuse_dest_init<reuse_dest>, e.g. add_reuse_dest_init<EltwiseBinaryReuseDestType::DEST_TO_SRCA>(in_cb). This will be removed after September 15th, 2026. [-Wdeprecated-declarations]
+  530 |                                 binary_dest_reuse_tiles_init<
+      |                                 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+  531 |                                     ckernel::EltwiseBinaryType::ELWADD,
+      |                                     ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+  532 |                                     ckernel::EltwiseBinaryReuseDestType::DEST_TO_SRCB>(input_dfb_id);
+      |                                     ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^~~~~~~~~~~~~~
+/home/malimpic/localdev/2026_11_17/1458_malimpic_distributed_rms_norm_all_gather_gen/clones/all_gather_rms_norm_kimi_run1/tt-metal/tt_metal/hw/inc/api/compute/eltwise_binary.h:599:1: note: declared here
+  599 | binary_dest_reuse_tiles_init(uint32_t icb0, uint32_t call_line = __builtin_LINE()) {
+      | ^~~~~~~~~~~~~~~~~~~~~~~~~~~~
+/home/malimpic/localdev/2026_11_17/1458_malimpic_distributed_rms_norm_all_gather_gen/clones/all_gather_rms_norm_kimi_run1/tt-metal/ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.inl:535:87: warning: 'void ckernel::binary_dest_reuse_tiles(uint32_t, uint32_t, uint32_t) [with EltwiseBinaryType eltwise_binary_type = ckernel::EltwiseBinaryType::ELWADD; EltwiseBinaryReuseDestType binary_reuse_dest = ckernel::EltwiseBinaryReuseDestType::DEST_TO_SRCB; bool is_fp32_dest_acc_en = true; uint32_t = long unsigned int]' is deprecated: Renamed to add_reuse_dest_tiles / sub_reuse_dest_tiles / mul_reuse_dest_tiles<reuse_dest>, e.g. add_reuse_dest_tiles<EltwiseBinaryReuseDestType::DEST_TO_SRCA>(in_cb, it, idst). This will be removed after September 15th, 2026. [-Wdeprecated-declarations]
+  533 |                                 binary_dest_reuse_tiles<
+      |                                 ~~~~~~~~~~~~~~~~~~~~~~~~
+  534 |                                     ckernel::EltwiseBinaryType::ELWADD,
+      |                                     ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+  535 |                                     ckernel::EltwiseBinaryReuseDestType::DEST_TO_SRCB>(input_dfb_id, start, 0);
+      |                                     ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^~~~~~~~~~~~~~~~~~~~~~~~
+/home/malimpic/localdev/2026_11_17/1458_malimpic_distributed_rms_norm_all_gather_gen/clones/all_gather_rms_norm_kimi_run1/tt-metal/tt_metal/hw/inc/api/compute/eltwise_binary.h:624:1: note: declared here
+  624 | binary_dest_reuse_tiles(uint32_t in_cb_id, uint32_t in_tile_index, uint32_t dst_tile_index) {
+      | ^~~~~~~~~~~~~~~~~~~~~~~
+/home/malimpic/localdev/2026_11_17/1458_malimpic_distributed_rms_norm_all_gather_gen/clones/all_gather_rms_norm_kimi_run1/tt-metal/ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.inl:538:43: warning: 'void ckernel::add_tiles_init(uint32_t, uint32_t, bool, uint32_t)' is deprecated: Renamed to add_init(). This will be removed after September 15th, 2026. [-Wdeprecated-declarations]
+  538 |                             add_tiles_init(input_dfb_id, input_dfb_id, true);
+      |                             ~~~~~~~~~~~~~~^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+/home/malimpic/localdev/2026_11_17/1458_malimpic_distributed_rms_norm_all_gather_gen/clones/all_gather_rms_norm_kimi_run1/tt-metal/tt_metal/hw/inc/api/compute/eltwise_binary.h:562:101: note: declared here
+  562 | [[deprecated("Renamed to add_init(). This will be removed after September 15th, 2026.")]] ALWI void add_tiles_init(
+      |                                                                                                     ^~~~~~~~~~~~~~
+/home/malimpic/localdev/2026_11_17/1458_malimpic_distributed_rms_norm_all_gather_gen/clones/all_gather_rms_norm_kimi_run1/tt-metal/ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.inl:554:35: warning: 'void ckernel::copy_tile_init(uint32_t, uint32_t) [with bool is_fp32_dest_acc_en = true; uint32_t = long unsigned int]' is deprecated: Renamed to copy_init(). This will be removed after 20-09-2026. [-Wdeprecated-declarations]
+  554 |                     copy_tile_init(input_dfb_id);
+      |                     ~~~~~~~~~~~~~~^~~~~~~~~~~~~~
+/home/malimpic/localdev/2026_11_17/1458_malimpic_distributed_rms_norm_all_gather_gen/clones/all_gather_rms_norm_kimi_run1/tt-metal/tt_metal/hw/inc/api/compute/tile_move_copy.h:200:92: note: declared here
+  200 | [[deprecated("Renamed to copy_init(). This will be removed after 20-09-2026.")]] ALWI void copy_tile_init(
+      |                                                                                            ^~~~~~~~~~~~~~
+/home/malimpic/localdev/2026_11_17/1458_malimpic_distributed_rms_norm_all_gather_gen/clones/all_gather_rms_norm_kimi_run1/tt-metal/ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.inl:558:31: warning: 'void ckernel::add_tiles_init(uint32_t, uint32_t, bool, uint32_t)' is deprecated: Renamed to add_init(). This will be removed after September 15th, 2026. [-Wdeprecated-declarations]
+  558 |                 add_tiles_init(input_dfb_id, input_dfb_id, true);
+      |                 ~~~~~~~~~~~~~~^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+/home/malimpic/localdev/2026_11_17/1458_malimpic_distributed_rms_norm_all_gather_gen/clones/all_gather_rms_norm_kimi_run1/tt-metal/tt_metal/hw/inc/api/compute/eltwise_binary.h:562:101: note: declared here
+  562 | [[deprecated("Renamed to add_init(). This will be removed after September 15th, 2026.")]] ALWI void add_tiles_init(
+      |                                                                                                     ^~~~~~~~~~~~~~
+/home/malimpic/localdev/2026_11_17/1458_malimpic_distributed_rms_norm_all_gather_gen/clones/all_gather_rms_norm_kimi_run1/tt-metal/tt_metal/hw/firmware/src/tt-1xx/trisck.cc: In function 'uint32_t _start()':
+/home/malimpic/localdev/2026_11_17/1458_malimpic_distributed_rms_norm_all_gather_gen/clones/all_gather_rms_norm_kimi_run1/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:32:22: note: '#pragma message: TRISC-KERNEL,/home/malimpic/localdev/2026_11_17/1458_malimpic_distributed_rms_norm_all_gather_gen/clones/all_gather_rms_norm_kimi_run1/tt-metal/tt_metal/hw/firmware/src/tt-1xx/trisck.cc,89,KERNEL_PROFILER'
+   32 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/home/malimpic/localdev/2026_11_17/1458_malimpic_distributed_rms_norm_all_gather_gen/clones/all_gather_rms_norm_kimi_run1/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:1047:5: note: in expansion of macro 'DO_PRAGMA'
+ 1047 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/home/malimpic/localdev/2026_11_17/1458_malimpic_distributed_rms_norm_all_gather_gen/clones/all_gather_rms_norm_kimi_run1/tt-metal/tt_metal/hw/firmware/src/tt-1xx/trisck.cc:89:5: note: in expansion of macro 'DeviceZoneScopedMainChildN'
+   89 |     DeviceZoneScopedMainChildN("TRISC-KERNEL");
+      |     ^~~~~~~~~~~~~~~~~~~~~~~~~~
+Building trisc2, compile step:
+In file included from /home/malimpic/localdev/2026_11_17/1458_malimpic_distributed_rms_norm_all_gather_gen/clones/all_gather_rms_norm_kimi_run1/tt-metal/tt_metal/hw/ckernels/blackhole/metal/llk_io/llk_io_pack.h:14,
+                 from /home/malimpic/localdev/2026_11_17/1458_malimpic_distributed_rms_norm_all_gather_gen/clones/all_gather_rms_norm_kimi_run1/tt-metal/tt_metal/hw/inc/api/compute/cb_api.h:12,
+                 from /home/malimpic/localdev/2026_11_17/1458_malimpic_distributed_rms_norm_all_gather_gen/clones/all_gather_rms_norm_kimi_run1/tt-metal/tt_metal/hw/inc/api/compute/common.h:11,
+                 from /home/malimpic/localdev/2026_11_17/1458_malimpic_distributed_rms_norm_all_gather_gen/clones/all_gather_rms_norm_kimi_run1/tt-metal/ttnn/ttnn/operations/all_gather_rms_norm_kimi/perf_experiments/late_tail_interleave/op_copy/kernels/all_gather_rms_norm_kimi_compute.cpp:26,
+                 from ../chlkc_pack.cpp:4,
+                 from /home/malimpic/localdev/2026_11_17/1458_malimpic_distributed_rms_norm_all_gather_gen/clones/all_gather_rms_norm_kimi_run1/tt-metal/tt_metal/hw/ckernels/blackhole/metal/common/chlkc_list.h:21,
+                 from /home/malimpic/localdev/2026_11_17/1458_malimpic_distributed_rms_norm_all_gather_gen/clones/all_gather_rms_norm_kimi_run1/tt-metal/tt_metal/hw/firmware/src/tt-1xx/trisck.cc:14:
+/home/malimpic/localdev/2026_11_17/1458_malimpic_distributed_rms_norm_all_gather_gen/clones/all_gather_rms_norm_kimi_run1/tt-metal/tt_metal/hw/ckernels/blackhole/metal/llk_io/llk_io_pack.h: In function 'void llk_wait_for_free_tiles(int32_t, int32_t)':
+/home/malimpic/localdev/2026_11_17/1458_malimpic_distributed_rms_norm_all_gather_gen/clones/all_gather_rms_norm_kimi_run1/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:32:22: note: '#pragma message: CB-COMPUTE-RESERVE-BACK,/home/malimpic/localdev/2026_11_17/1458_malimpic_distributed_rms_norm_all_gather_gen/clones/all_gather_rms_norm_kimi_run1/tt-metal/tt_metal/hw/ckernels/blackhole/metal/llk_io/llk_io_pack.h,21,KERNEL_PROFILER'
+   32 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/home/malimpic/localdev/2026_11_17/1458_malimpic_distributed_rms_norm_all_gather_gen/clones/all_gather_rms_norm_kimi_run1/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:1057:5: note: in expansion of macro 'DO_PRAGMA'
+ 1057 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/home/malimpic/localdev/2026_11_17/1458_malimpic_distributed_rms_norm_all_gather_gen/clones/all_gather_rms_norm_kimi_run1/tt-metal/tt_metal/hw/ckernels/blackhole/metal/llk_io/llk_io_pack.h:21:5: note: in expansion of macro 'DeviceZoneScopedSumN2'
+   21 |     DeviceZoneScopedSumN2("CB-COMPUTE-RESERVE-BACK");
+      |     ^~~~~~~~~~~~~~~~~~~~~
+In file included from /home/malimpic/localdev/2026_11_17/1458_malimpic_distributed_rms_norm_all_gather_gen/clones/all_gather_rms_norm_kimi_run1/tt-metal/ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.hpp:695,
+                 from /home/malimpic/localdev/2026_11_17/1458_malimpic_distributed_rms_norm_all_gather_gen/clones/all_gather_rms_norm_kimi_run1/tt-metal/ttnn/ttnn/operations/all_gather_rms_norm_kimi/perf_experiments/late_tail_interleave/op_copy/kernels/all_gather_rms_norm_kimi_compute.cpp:33:
+/home/malimpic/localdev/2026_11_17/1458_malimpic_distributed_rms_norm_all_gather_gen/clones/all_gather_rms_norm_kimi_run1/tt-metal/ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.inl: In function 'void compute_kernel_lib::detail::reduce_accumulate_via_add(compute_kernel_lib::ReduceInputBlockShape, compute_kernel_lib::ReduceInputMemoryLayout, compute_kernel_lib::ReducePartialScaler, AccumulateT, PostReduceOp)':
+/home/malimpic/localdev/2026_11_17/1458_malimpic_distributed_rms_norm_all_gather_gen/clones/all_gather_rms_norm_kimi_run1/tt-metal/ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.inl:372:31: warning: 'void ckernel::copy_tile_init(uint32_t, uint32_t) [with bool is_fp32_dest_acc_en = true; uint32_t = long unsigned int]' is deprecated: Renamed to copy_init(). This will be removed after 20-09-2026. [-Wdeprecated-declarations]
+  372 |                 copy_tile_init(input_dfb_id);
+      |                 ~~~~~~~~~~~~~~^~~~~~~~~~~~~~
+In file included from /home/malimpic/localdev/2026_11_17/1458_malimpic_distributed_rms_norm_all_gather_gen/clones/all_gather_rms_norm_kimi_run1/tt-metal/ttnn/cpp/ttnn/kernel_lib/eltwise/core/chain.inl:25,
+                 from /home/malimpic/localdev/2026_11_17/1458_malimpic_distributed_rms_norm_all_gather_gen/clones/all_gather_rms_norm_kimi_run1/tt-metal/ttnn/cpp/ttnn/kernel_lib/eltwise/api/chain.hpp:538,
+                 from /home/malimpic/localdev/2026_11_17/1458_malimpic_distributed_rms_norm_all_gather_gen/clones/all_gather_rms_norm_kimi_run1/tt-metal/ttnn/ttnn/operations/all_gather_rms_norm_kimi/perf_experiments/late_tail_interleave/op_copy/kernels/all_gather_rms_norm_kimi_compute.cpp:27:
+/home/malimpic/localdev/2026_11_17/1458_malimpic_distributed_rms_norm_all_gather_gen/clones/all_gather_rms_norm_kimi_run1/tt-metal/tt_metal/hw/inc/api/compute/tile_move_copy.h:200:92: note: declared here
+  200 | [[deprecated("Renamed to copy_init(). This will be removed after 20-09-2026.")]] ALWI void copy_tile_init(
+      |                                                                                            ^~~~~~~~~~~~~~
+/home/malimpic/localdev/2026_11_17/1458_malimpic_distributed_rms_norm_all_gather_gen/clones/all_gather_rms_norm_kimi_run1/tt-metal/ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.inl:377:27: warning: 'void ckernel::add_tiles_init(uint32_t, uint32_t, bool, uint32_t)' is deprecated: Renamed to add_init(). This will be removed after September 15th, 2026. [-Wdeprecated-declarations]
+  377 |             add_tiles_init(input_dfb_id, input_dfb_id, true);
+      |             ~~~~~~~~~~~~~~^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+In file included from /home/malimpic/localdev/2026_11_17/1458_malimpic_distributed_rms_norm_all_gather_gen/clones/all_gather_rms_norm_kimi_run1/tt-metal/ttnn/cpp/ttnn/kernel_lib/eltwise/core/chain.inl:21:
+/home/malimpic/localdev/2026_11_17/1458_malimpic_distributed_rms_norm_all_gather_gen/clones/all_gather_rms_norm_kimi_run1/tt-metal/tt_metal/hw/inc/api/compute/eltwise_binary.h:562:101: note: declared here
+  562 | [[deprecated("Renamed to add_init(). This will be removed after September 15th, 2026.")]] ALWI void add_tiles_init(
+      |                                                                                                     ^~~~~~~~~~~~~~
+/home/malimpic/localdev/2026_11_17/1458_malimpic_distributed_rms_norm_all_gather_gen/clones/all_gather_rms_norm_kimi_run1/tt-metal/ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.inl:407:39: warning: 'void ckernel::copy_tile_init(uint32_t, uint32_t) [with bool is_fp32_dest_acc_en = true; uint32_t = long unsigned int]' is deprecated: Renamed to copy_init(). This will be removed after 20-09-2026. [-Wdeprecated-declarations]
+  407 |                         copy_tile_init(input_dfb_id);
+      |                         ~~~~~~~~~~~~~~^~~~~~~~~~~~~~
+/home/malimpic/localdev/2026_11_17/1458_malimpic_distributed_rms_norm_all_gather_gen/clones/all_gather_rms_norm_kimi_run1/tt-metal/tt_metal/hw/inc/api/compute/tile_move_copy.h:200:92: note: declared here
+  200 | [[deprecated("Renamed to copy_init(). This will be removed after 20-09-2026.")]] ALWI void copy_tile_init(
+      |                                                                                            ^~~~~~~~~~~~~~
+/home/malimpic/localdev/2026_11_17/1458_malimpic_distributed_rms_norm_all_gather_gen/clones/all_gather_rms_norm_kimi_run1/tt-metal/ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.inl:411:35: warning: 'void ckernel::add_tiles_init(uint32_t, uint32_t, bool, uint32_t)' is deprecated: Renamed to add_init(). This will be removed after September 15th, 2026. [-Wdeprecated-declarations]
+  411 |                     add_tiles_init(input_dfb_id, input_dfb_id, true);
+      |                     ~~~~~~~~~~~~~~^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+/home/malimpic/localdev/2026_11_17/1458_malimpic_distributed_rms_norm_all_gather_gen/clones/all_gather_rms_norm_kimi_run1/tt-metal/tt_metal/hw/inc/api/compute/eltwise_binary.h:562:101: note: declared here
+  562 | [[deprecated("Renamed to add_init(). This will be removed after September 15th, 2026.")]] ALWI void add_tiles_init(
+      |                                                                                                     ^~~~~~~~~~~~~~
+/home/malimpic/localdev/2026_11_17/1458_malimpic_distributed_rms_norm_all_gather_gen/clones/all_gather_rms_norm_kimi_run1/tt-metal/ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.inl:433:47: warning: 'void ckernel::add_tiles_init(uint32_t, uint32_t, bool, uint32_t)' is deprecated: Renamed to add_init(). This will be removed after September 15th, 2026. [-Wdeprecated-declarations]
+  433 |                                 add_tiles_init(input_dfb_id, acc_cb, true);  // fresh DST reads 0 -> new[0] + acc
+      |                                 ~~~~~~~~~~~~~~^~~~~~~~~~~~~~~~~~~~~~~~~~~~
+/home/malimpic/localdev/2026_11_17/1458_malimpic_distributed_rms_norm_all_gather_gen/clones/all_gather_rms_norm_kimi_run1/tt-metal/tt_metal/hw/inc/api/compute/eltwise_binary.h:562:101: note: declared here
+  562 | [[deprecated("Renamed to add_init(). This will be removed after September 15th, 2026.")]] ALWI void add_tiles_init(
+      |                                                                                                     ^~~~~~~~~~~~~~
+/home/malimpic/localdev/2026_11_17/1458_malimpic_distributed_rms_norm_all_gather_gen/clones/all_gather_rms_norm_kimi_run1/tt-metal/ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.inl:437:47: warning: 'void ckernel::add_tiles_init(uint32_t, uint32_t, bool, uint32_t)' is deprecated: Renamed to add_init(). This will be removed after September 15th, 2026. [-Wdeprecated-declarations]
+  437 |                                 add_tiles_init(input_dfb_id, input_dfb_id, true);                 // fresh DST reads 0
+      |                                 ~~~~~~~~~~~~~~^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+/home/malimpic/localdev/2026_11_17/1458_malimpic_distributed_rms_norm_all_gather_gen/clones/all_gather_rms_norm_kimi_run1/tt-metal/tt_metal/hw/inc/api/compute/eltwise_binary.h:562:101: note: declared here
+  562 | [[deprecated("Renamed to add_init(). This will be removed after September 15th, 2026.")]] ALWI void add_tiles_init(
+      |                                                                                                     ^~~~~~~~~~~~~~
+/home/malimpic/localdev/2026_11_17/1458_malimpic_distributed_rms_norm_all_gather_gen/clones/all_gather_rms_norm_kimi_run1/tt-metal/ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.inl:439:47: warning: 'void ckernel::add_tiles_init(uint32_t, uint32_t, bool, uint32_t)' is deprecated: Renamed to add_init(). This will be removed after September 15th, 2026. [-Wdeprecated-declarations]
+  439 |                                 add_tiles_init(input_dfb_id, input_dfb_id, true);
+      |                                 ~~~~~~~~~~~~~~^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+/home/malimpic/localdev/2026_11_17/1458_malimpic_distributed_rms_norm_all_gather_gen/clones/all_gather_rms_norm_kimi_run1/tt-metal/tt_metal/hw/inc/api/compute/eltwise_binary.h:562:101: note: declared here
+  562 | [[deprecated("Renamed to add_init(). This will be removed after September 15th, 2026.")]] ALWI void add_tiles_init(
+      |                                                                                                     ^~~~~~~~~~~~~~
+/home/malimpic/localdev/2026_11_17/1458_malimpic_distributed_rms_norm_all_gather_gen/clones/all_gather_rms_norm_kimi_run1/tt-metal/ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.inl:445:47: warning: 'void ckernel::add_tiles_init(uint32_t, uint32_t, bool, uint32_t)' is deprecated: Renamed to add_init(). This will be removed after September 15th, 2026. [-Wdeprecated-declarations]
+  445 |                                 add_tiles_init(input_dfb_id, acc_cb, true);  // last new tile + accumulator
+      |                                 ~~~~~~~~~~~~~~^~~~~~~~~~~~~~~~~~~~~~~~~~~~
+/home/malimpic/localdev/2026_11_17/1458_malimpic_distributed_rms_norm_all_gather_gen/clones/all_gather_rms_norm_kimi_run1/tt-metal/tt_metal/hw/inc/api/compute/eltwise_binary.h:562:101: note: declared here
+  562 | [[deprecated("Renamed to add_init(). This will be removed after September 15th, 2026.")]] ALWI void add_tiles_init(
+      |                                                                                                     ^~~~~~~~~~~~~~
+/home/malimpic/localdev/2026_11_17/1458_malimpic_distributed_rms_norm_all_gather_gen/clones/all_gather_rms_norm_kimi_run1/tt-metal/ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.inl:451:43: warning: 'void ckernel::copy_tile_init(uint32_t, uint32_t) [with bool is_fp32_dest_acc_en = true; uint32_t = long unsigned int]' is deprecated: Renamed to copy_init(). This will be removed after 20-09-2026. [-Wdeprecated-declarations]
+  451 |                             copy_tile_init(acc_cb);
+      |                             ~~~~~~~~~~~~~~^~~~~~~~
+/home/malimpic/localdev/2026_11_17/1458_malimpic_distributed_rms_norm_all_gather_gen/clones/all_gather_rms_norm_kimi_run1/tt-metal/tt_metal/hw/inc/api/compute/tile_move_copy.h:200:92: note: declared here
+  200 | [[deprecated("Renamed to copy_init(). This will be removed after 20-09-2026.")]] ALWI void copy_tile_init(
+      |                                                                                            ^~~~~~~~~~~~~~
+/home/malimpic/localdev/2026_11_17/1458_malimpic_distributed_rms_norm_all_gather_gen/clones/all_gather_rms_norm_kimi_run1/tt-metal/ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.inl:454:43: warning: 'void ckernel::add_tiles_init(uint32_t, uint32_t, bool, uint32_t)' is deprecated: Renamed to add_init(). This will be removed after September 15th, 2026. [-Wdeprecated-declarations]
+  454 |                             add_tiles_init(input_dfb_id, input_dfb_id, true);
+      |                             ~~~~~~~~~~~~~~^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+/home/malimpic/localdev/2026_11_17/1458_malimpic_distributed_rms_norm_all_gather_gen/clones/all_gather_rms_norm_kimi_run1/tt-metal/tt_metal/hw/inc/api/compute/eltwise_binary.h:562:101: note: declared here
+  562 | [[deprecated("Renamed to add_init(). This will be removed after September 15th, 2026.")]] ALWI void add_tiles_init(
+      |                                                                                                     ^~~~~~~~~~~~~~
+/home/malimpic/localdev/2026_11_17/1458_malimpic_distributed_rms_norm_all_gather_gen/clones/all_gather_rms_norm_kimi_run1/tt-metal/ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.inl:468:47: warning: 'void ckernel::copy_tile_init(uint32_t, uint32_t) [with bool is_fp32_dest_acc_en = true; uint32_t = long unsigned int]' is deprecated: Renamed to copy_init(). This will be removed after 20-09-2026. [-Wdeprecated-declarations]
+  468 |                                 copy_tile_init(input_dfb_id);
+      |                                 ~~~~~~~~~~~~~~^~~~~~~~~~~~~~
+/home/malimpic/localdev/2026_11_17/1458_malimpic_distributed_rms_norm_all_gather_gen/clones/all_gather_rms_norm_kimi_run1/tt-metal/tt_metal/hw/inc/api/compute/tile_move_copy.h:200:92: note: declared here
+  200 | [[deprecated("Renamed to copy_init(). This will be removed after 20-09-2026.")]] ALWI void copy_tile_init(
+      |                                                                                            ^~~~~~~~~~~~~~
+/home/malimpic/localdev/2026_11_17/1458_malimpic_distributed_rms_norm_all_gather_gen/clones/all_gather_rms_norm_kimi_run1/tt-metal/ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.inl:472:43: warning: 'void ckernel::add_tiles_init(uint32_t, uint32_t, bool, uint32_t)' is deprecated: Renamed to add_init(). This will be removed after September 15th, 2026. [-Wdeprecated-declarations]
+  472 |                             add_tiles_init(input_dfb_id, input_dfb_id, true);
+      |                             ~~~~~~~~~~~~~~^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+/home/malimpic/localdev/2026_11_17/1458_malimpic_distributed_rms_norm_all_gather_gen/clones/all_gather_rms_norm_kimi_run1/tt-metal/tt_metal/hw/inc/api/compute/eltwise_binary.h:562:101: note: declared here
+  562 | [[deprecated("Renamed to add_init(). This will be removed after September 15th, 2026.")]] ALWI void add_tiles_init(
+      |                                                                                                     ^~~~~~~~~~~~~~
+/home/malimpic/localdev/2026_11_17/1458_malimpic_distributed_rms_norm_all_gather_gen/clones/all_gather_rms_norm_kimi_run1/tt-metal/ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.inl:478:39: warning: 'void ckernel::copy_tile_init(uint32_t, uint32_t) [with bool is_fp32_dest_acc_en = true; uint32_t = long unsigned int]' is deprecated: Renamed to copy_init(). This will be removed after 20-09-2026. [-Wdeprecated-declarations]
+  478 |                         copy_tile_init(acc_cb);
+      |                         ~~~~~~~~~~~~~~^~~~~~~~
+/home/malimpic/localdev/2026_11_17/1458_malimpic_distributed_rms_norm_all_gather_gen/clones/all_gather_rms_norm_kimi_run1/tt-metal/tt_metal/hw/inc/api/compute/tile_move_copy.h:200:92: note: declared here
+  200 | [[deprecated("Renamed to copy_init(). This will be removed after 20-09-2026.")]] ALWI void copy_tile_init(
+      |                                                                                            ^~~~~~~~~~~~~~
+/home/malimpic/localdev/2026_11_17/1458_malimpic_distributed_rms_norm_all_gather_gen/clones/all_gather_rms_norm_kimi_run1/tt-metal/ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.inl:496:39: warning: 'void ckernel::copy_tile_init(uint32_t, uint32_t) [with bool is_fp32_dest_acc_en = true; uint32_t = long unsigned int]' is deprecated: Renamed to copy_init(). This will be removed after 20-09-2026. [-Wdeprecated-declarations]
+  496 |                         copy_tile_init(acc_cb);
+      |                         ~~~~~~~~~~~~~~^~~~~~~~
+/home/malimpic/localdev/2026_11_17/1458_malimpic_distributed_rms_norm_all_gather_gen/clones/all_gather_rms_norm_kimi_run1/tt-metal/tt_metal/hw/inc/api/compute/tile_move_copy.h:200:92: note: declared here
+  200 | [[deprecated("Renamed to copy_init(). This will be removed after 20-09-2026.")]] ALWI void copy_tile_init(
+      |                                                                                            ^~~~~~~~~~~~~~
+/home/malimpic/localdev/2026_11_17/1458_malimpic_distributed_rms_norm_all_gather_gen/clones/all_gather_rms_norm_kimi_run1/tt-metal/ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.inl:504:83: warning: 'void ckernel::binary_dest_reuse_tiles_init(uint32_t, uint32_t) [with EltwiseBinaryType eltwise_binary_type = ckernel::EltwiseBinaryType::ELWADD; EltwiseBinaryReuseDestType binary_reuse_dest = ckernel::EltwiseBinaryReuseDestType::DEST_TO_SRCB; uint32_t = long unsigned int]' is deprecated: Renamed to add_reuse_dest_init / sub_reuse_dest_init / mul_reuse_dest_init<reuse_dest>, e.g. add_reuse_dest_init<EltwiseBinaryReuseDestType::DEST_TO_SRCA>(in_cb). This will be removed after September 15th, 2026. [-Wdeprecated-declarations]
+  502 |                             binary_dest_reuse_tiles_init<
+      |                             ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+  503 |                                 ckernel::EltwiseBinaryType::ELWADD,
+      |                                 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+  504 |                                 ckernel::EltwiseBinaryReuseDestType::DEST_TO_SRCB>(input_dfb_id);
+      |                                 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^~~~~~~~~~~~~~
+/home/malimpic/localdev/2026_11_17/1458_malimpic_distributed_rms_norm_all_gather_gen/clones/all_gather_rms_norm_kimi_run1/tt-metal/tt_metal/hw/inc/api/compute/eltwise_binary.h:599:1: note: declared here
+  599 | binary_dest_reuse_tiles_init(uint32_t icb0, uint32_t call_line = __builtin_LINE()) {
+      | ^~~~~~~~~~~~~~~~~~~~~~~~~~~~
+/home/malimpic/localdev/2026_11_17/1458_malimpic_distributed_rms_norm_all_gather_gen/clones/all_gather_rms_norm_kimi_run1/tt-metal/ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.inl:508:87: warning: 'void ckernel::binary_dest_reuse_tiles(uint32_t, uint32_t, uint32_t) [with EltwiseBinaryType eltwise_binary_type = ckernel::EltwiseBinaryType::ELWADD; EltwiseBinaryReuseDestType binary_reuse_dest = ckernel::EltwiseBinaryReuseDestType::DEST_TO_SRCB; bool is_fp32_dest_acc_en = true; uint32_t = long unsigned int]' is deprecated: Renamed to add_reuse_dest_tiles / sub_reuse_dest_tiles / mul_reuse_dest_tiles<reuse_dest>, e.g. add_reuse_dest_tiles<EltwiseBinaryReuseDestType::DEST_TO_SRCA>(in_cb, it, idst). This will be removed after September 15th, 2026. [-Wdeprecated-declarations]
+  506 |                                 binary_dest_reuse_tiles<
+      |                                 ~~~~~~~~~~~~~~~~~~~~~~~~
+  507 |                                     ckernel::EltwiseBinaryType::ELWADD,
+      |                                     ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+  508 |                                     ckernel::EltwiseBinaryReuseDestType::DEST_TO_SRCB>(
+      |                                     ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^
+  509 |                                     input_dfb_id, start + k * stride, 0);
+      |                                     ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+/home/malimpic/localdev/2026_11_17/1458_malimpic_distributed_rms_norm_all_gather_gen/clones/all_gather_rms_norm_kimi_run1/tt-metal/tt_metal/hw/inc/api/compute/eltwise_binary.h:624:1: note: declared here
+  624 | binary_dest_reuse_tiles(uint32_t in_cb_id, uint32_t in_tile_index, uint32_t dst_tile_index) {
+      | ^~~~~~~~~~~~~~~~~~~~~~~
+/home/malimpic/localdev/2026_11_17/1458_malimpic_distributed_rms_norm_all_gather_gen/clones/all_gather_rms_norm_kimi_run1/tt-metal/ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.inl:517:47: warning: 'void ckernel::add_tiles_init(uint32_t, uint32_t, bool, uint32_t)' is deprecated: Renamed to add_init(). This will be removed after September 15th, 2026. [-Wdeprecated-declarations]
+  517 |                                 add_tiles_init(input_dfb_id, scaler_dfb_id, true);
+      |                                 ~~~~~~~~~~~~~~^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+/home/malimpic/localdev/2026_11_17/1458_malimpic_distributed_rms_norm_all_gather_gen/clones/all_gather_rms_norm_kimi_run1/tt-metal/tt_metal/hw/inc/api/compute/eltwise_binary.h:562:101: note: declared here
+  562 | [[deprecated("Renamed to add_init(). This will be removed after September 15th, 2026.")]] ALWI void add_tiles_init(
+      |                                                                                                     ^~~~~~~~~~~~~~
+/home/malimpic/localdev/2026_11_17/1458_malimpic_distributed_rms_norm_all_gather_gen/clones/all_gather_rms_norm_kimi_run1/tt-metal/ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.inl:521:43: warning: 'void ckernel::add_tiles_init(uint32_t, uint32_t, bool, uint32_t)' is deprecated: Renamed to add_init(). This will be removed after September 15th, 2026. [-Wdeprecated-declarations]
+  521 |                             add_tiles_init(input_dfb_id, input_dfb_id, true);
+      |                             ~~~~~~~~~~~~~~^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+/home/malimpic/localdev/2026_11_17/1458_malimpic_distributed_rms_norm_all_gather_gen/clones/all_gather_rms_norm_kimi_run1/tt-metal/tt_metal/hw/inc/api/compute/eltwise_binary.h:562:101: note: declared here
+  562 | [[deprecated("Renamed to add_init(). This will be removed after September 15th, 2026.")]] ALWI void add_tiles_init(
+      |                                                                                                     ^~~~~~~~~~~~~~
+/home/malimpic/localdev/2026_11_17/1458_malimpic_distributed_rms_norm_all_gather_gen/clones/all_gather_rms_norm_kimi_run1/tt-metal/ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.inl:532:87: warning: 'void ckernel::binary_dest_reuse_tiles_init(uint32_t, uint32_t) [with EltwiseBinaryType eltwise_binary_type = ckernel::EltwiseBinaryType::ELWADD; EltwiseBinaryReuseDestType binary_reuse_dest = ckernel::EltwiseBinaryReuseDestType::DEST_TO_SRCB; uint32_t = long unsigned int]' is deprecated: Renamed to add_reuse_dest_init / sub_reuse_dest_init / mul_reuse_dest_init<reuse_dest>, e.g. add_reuse_dest_init<EltwiseBinaryReuseDestType::DEST_TO_SRCA>(in_cb). This will be removed after September 15th, 2026. [-Wdeprecated-declarations]
+  530 |                                 binary_dest_reuse_tiles_init<
+      |                                 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+  531 |                                     ckernel::EltwiseBinaryType::ELWADD,
+      |                                     ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+  532 |                                     ckernel::EltwiseBinaryReuseDestType::DEST_TO_SRCB>(input_dfb_id);
+      |                                     ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^~~~~~~~~~~~~~
+/home/malimpic/localdev/2026_11_17/1458_malimpic_distributed_rms_norm_all_gather_gen/clones/all_gather_rms_norm_kimi_run1/tt-metal/tt_metal/hw/inc/api/compute/eltwise_binary.h:599:1: note: declared here
+  599 | binary_dest_reuse_tiles_init(uint32_t icb0, uint32_t call_line = __builtin_LINE()) {
+      | ^~~~~~~~~~~~~~~~~~~~~~~~~~~~
+/home/malimpic/localdev/2026_11_17/1458_malimpic_distributed_rms_norm_all_gather_gen/clones/all_gather_rms_norm_kimi_run1/tt-metal/ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.inl:535:87: warning: 'void ckernel::binary_dest_reuse_tiles(uint32_t, uint32_t, uint32_t) [with EltwiseBinaryType eltwise_binary_type = ckernel::EltwiseBinaryType::ELWADD; EltwiseBinaryReuseDestType binary_reuse_dest = ckernel::EltwiseBinaryReuseDestType::DEST_TO_SRCB; bool is_fp32_dest_acc_en = true; uint32_t = long unsigned int]' is deprecated: Renamed to add_reuse_dest_tiles / sub_reuse_dest_tiles / mul_reuse_dest_tiles<reuse_dest>, e.g. add_reuse_dest_tiles<EltwiseBinaryReuseDestType::DEST_TO_SRCA>(in_cb, it, idst). This will be removed after September 15th, 2026. [-Wdeprecated-declarations]
+  533 |                                 binary_dest_reuse_tiles<
+      |                                 ~~~~~~~~~~~~~~~~~~~~~~~~
+  534 |                                     ckernel::EltwiseBinaryType::ELWADD,
+      |                                     ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+  535 |                                     ckernel::EltwiseBinaryReuseDestType::DEST_TO_SRCB>(input_dfb_id, start, 0);
+      |                                     ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^~~~~~~~~~~~~~~~~~~~~~~~
+/home/malimpic/localdev/2026_11_17/1458_malimpic_distributed_rms_norm_all_gather_gen/clones/all_gather_rms_norm_kimi_run1/tt-metal/tt_metal/hw/inc/api/compute/eltwise_binary.h:624:1: note: declared here
+  624 | binary_dest_reuse_tiles(uint32_t in_cb_id, uint32_t in_tile_index, uint32_t dst_tile_index) {
+      | ^~~~~~~~~~~~~~~~~~~~~~~
+/home/malimpic/localdev/2026_11_17/1458_malimpic_distributed_rms_norm_all_gather_gen/clones/all_gather_rms_norm_kimi_run1/tt-metal/ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.inl:538:43: warning: 'void ckernel::add_tiles_init(uint32_t, uint32_t, bool, uint32_t)' is deprecated: Renamed to add_init(). This will be removed after September 15th, 2026. [-Wdeprecated-declarations]
+  538 |                             add_tiles_init(input_dfb_id, input_dfb_id, true);
+      |                             ~~~~~~~~~~~~~~^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+/home/malimpic/localdev/2026_11_17/1458_malimpic_distributed_rms_norm_all_gather_gen/clones/all_gather_rms_norm_kimi_run1/tt-metal/tt_metal/hw/inc/api/compute/eltwise_binary.h:562:101: note: declared here
+  562 | [[deprecated("Renamed to add_init(). This will be removed after September 15th, 2026.")]] ALWI void add_tiles_init(
+      |                                                                                                     ^~~~~~~~~~~~~~
+/home/malimpic/localdev/2026_11_17/1458_malimpic_distributed_rms_norm_all_gather_gen/clones/all_gather_rms_norm_kimi_run1/tt-metal/ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.inl:554:35: warning: 'void ckernel::copy_tile_init(uint32_t, uint32_t) [with bool is_fp32_dest_acc_en = true; uint32_t = long unsigned int]' is deprecated: Renamed to copy_init(). This will be removed after 20-09-2026. [-Wdeprecated-declarations]
+  554 |                     copy_tile_init(input_dfb_id);
+      |                     ~~~~~~~~~~~~~~^~~~~~~~~~~~~~
+/home/malimpic/localdev/2026_11_17/1458_malimpic_distributed_rms_norm_all_gather_gen/clones/all_gather_rms_norm_kimi_run1/tt-metal/tt_metal/hw/inc/api/compute/tile_move_copy.h:200:92: note: declared here
+  200 | [[deprecated("Renamed to copy_init(). This will be removed after 20-09-2026.")]] ALWI void copy_tile_init(
+      |                                                                                            ^~~~~~~~~~~~~~
+/home/malimpic/localdev/2026_11_17/1458_malimpic_distributed_rms_norm_all_gather_gen/clones/all_gather_rms_norm_kimi_run1/tt-metal/ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.inl:558:31: warning: 'void ckernel::add_tiles_init(uint32_t, uint32_t, bool, uint32_t)' is deprecated: Renamed to add_init(). This will be removed after September 15th, 2026. [-Wdeprecated-declarations]
+  558 |                 add_tiles_init(input_dfb_id, input_dfb_id, true);
+      |                 ~~~~~~~~~~~~~~^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+/home/malimpic/localdev/2026_11_17/1458_malimpic_distributed_rms_norm_all_gather_gen/clones/all_gather_rms_norm_kimi_run1/tt-metal/tt_metal/hw/inc/api/compute/eltwise_binary.h:562:101: note: declared here
+  562 | [[deprecated("Renamed to add_init(). This will be removed after September 15th, 2026.")]] ALWI void add_tiles_init(
+      |                                                                                                     ^~~~~~~~~~~~~~
+/home/malimpic/localdev/2026_11_17/1458_malimpic_distributed_rms_norm_all_gather_gen/clones/all_gather_rms_norm_kimi_run1/tt-metal/tt_metal/hw/firmware/src/tt-1xx/trisck.cc: In function 'uint32_t _start()':
+/home/malimpic/localdev/2026_11_17/1458_malimpic_distributed_rms_norm_all_gather_gen/clones/all_gather_rms_norm_kimi_run1/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:32:22: note: '#pragma message: TRISC-KERNEL,/home/malimpic/localdev/2026_11_17/1458_malimpic_distributed_rms_norm_all_gather_gen/clones/all_gather_rms_norm_kimi_run1/tt-metal/tt_metal/hw/firmware/src/tt-1xx/trisck.cc,89,KERNEL_PROFILER'
+   32 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/home/malimpic/localdev/2026_11_17/1458_malimpic_distributed_rms_norm_all_gather_gen/clones/all_gather_rms_norm_kimi_run1/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:1047:5: note: in expansion of macro 'DO_PRAGMA'
+ 1047 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/home/malimpic/localdev/2026_11_17/1458_malimpic_distributed_rms_norm_all_gather_gen/clones/all_gather_rms_norm_kimi_run1/tt-metal/tt_metal/hw/firmware/src/tt-1xx/trisck.cc:89:5: note: in expansion of macro 'DeviceZoneScopedMainChildN'
+   89 |     DeviceZoneScopedMainChildN("TRISC-KERNEL");
+      |     ^~~~~~~~~~~~~~~~~~~~~~~~~~
+Building trisc1, compile step:
+In file included from /home/malimpic/localdev/2026_11_17/1458_malimpic_distributed_rms_norm_all_gather_gen/clones/all_gather_rms_norm_kimi_run1/tt-metal/ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.hpp:695,
+                 from /home/malimpic/localdev/2026_11_17/1458_malimpic_distributed_rms_norm_all_gather_gen/clones/all_gather_rms_norm_kimi_run1/tt-metal/ttnn/ttnn/operations/all_gather_rms_norm_kimi/perf_experiments/late_tail_interleave/op_copy/kernels/all_gather_rms_norm_kimi_compute.cpp:33,
+                 from ../chlkc_math.cpp:4,
+                 from /home/malimpic/localdev/2026_11_17/1458_malimpic_distributed_rms_norm_all_gather_gen/clones/all_gather_rms_norm_kimi_run1/tt-metal/tt_metal/hw/ckernels/blackhole/metal/common/chlkc_list.h:16,
+                 from /home/malimpic/localdev/2026_11_17/1458_malimpic_distributed_rms_norm_all_gather_gen/clones/all_gather_rms_norm_kimi_run1/tt-metal/tt_metal/hw/firmware/src/tt-1xx/trisck.cc:14:
+/home/malimpic/localdev/2026_11_17/1458_malimpic_distributed_rms_norm_all_gather_gen/clones/all_gather_rms_norm_kimi_run1/tt-metal/ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.inl: In function 'void compute_kernel_lib::detail::reduce_accumulate_via_add(compute_kernel_lib::ReduceInputBlockShape, compute_kernel_lib::ReduceInputMemoryLayout, compute_kernel_lib::ReducePartialScaler, AccumulateT, PostReduceOp)':
+/home/malimpic/localdev/2026_11_17/1458_malimpic_distributed_rms_norm_all_gather_gen/clones/all_gather_rms_norm_kimi_run1/tt-metal/ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.inl:372:31: warning: 'void ckernel::copy_tile_init(uint32_t, uint32_t) [with bool is_fp32_dest_acc_en = true; uint32_t = long unsigned int]' is deprecated: Renamed to copy_init(). This will be removed after 20-09-2026. [-Wdeprecated-declarations]
+  372 |                 copy_tile_init(input_dfb_id);
+      |                 ~~~~~~~~~~~~~~^~~~~~~~~~~~~~
+In file included from /home/malimpic/localdev/2026_11_17/1458_malimpic_distributed_rms_norm_all_gather_gen/clones/all_gather_rms_norm_kimi_run1/tt-metal/ttnn/cpp/ttnn/kernel_lib/eltwise/core/chain.inl:25,
+                 from /home/malimpic/localdev/2026_11_17/1458_malimpic_distributed_rms_norm_all_gather_gen/clones/all_gather_rms_norm_kimi_run1/tt-metal/ttnn/cpp/ttnn/kernel_lib/eltwise/api/chain.hpp:538,
+                 from /home/malimpic/localdev/2026_11_17/1458_malimpic_distributed_rms_norm_all_gather_gen/clones/all_gather_rms_norm_kimi_run1/tt-metal/ttnn/ttnn/operations/all_gather_rms_norm_kimi/perf_experiments/late_tail_interleave/op_copy/kernels/all_gather_rms_norm_kimi_compute.cpp:27:
+/home/malimpic/localdev/2026_11_17/1458_malimpic_distributed_rms_norm_all_gather_gen/clones/all_gather_rms_norm_kimi_run1/tt-metal/tt_metal/hw/inc/api/compute/tile_move_copy.h:200:92: note: declared here
+  200 | [[deprecated("Renamed to copy_init(). This will be removed after 20-09-2026.")]] ALWI void copy_tile_init(
+      |                                                                                            ^~~~~~~~~~~~~~
+/home/malimpic/localdev/2026_11_17/1458_malimpic_distributed_rms_norm_all_gather_gen/clones/all_gather_rms_norm_kimi_run1/tt-metal/ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.inl:377:27: warning: 'void ckernel::add_tiles_init(uint32_t, uint32_t, bool, uint32_t)' is deprecated: Renamed to add_init(). This will be removed after September 15th, 2026. [-Wdeprecated-declarations]
+  377 |             add_tiles_init(input_dfb_id, input_dfb_id, true);
+      |             ~~~~~~~~~~~~~~^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+In file included from /home/malimpic/localdev/2026_11_17/1458_malimpic_distributed_rms_norm_all_gather_gen/clones/all_gather_rms_norm_kimi_run1/tt-metal/ttnn/cpp/ttnn/kernel_lib/eltwise/core/chain.inl:21:
+/home/malimpic/localdev/2026_11_17/1458_malimpic_distributed_rms_norm_all_gather_gen/clones/all_gather_rms_norm_kimi_run1/tt-metal/tt_metal/hw/inc/api/compute/eltwise_binary.h:562:101: note: declared here
+  562 | [[deprecated("Renamed to add_init(). This will be removed after September 15th, 2026.")]] ALWI void add_tiles_init(
+      |                                                                                                     ^~~~~~~~~~~~~~
+/home/malimpic/localdev/2026_11_17/1458_malimpic_distributed_rms_norm_all_gather_gen/clones/all_gather_rms_norm_kimi_run1/tt-metal/ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.inl:407:39: warning: 'void ckernel::copy_tile_init(uint32_t, uint32_t) [with bool is_fp32_dest_acc_en = true; uint32_t = long unsigned int]' is deprecated: Renamed to copy_init(). This will be removed after 20-09-2026. [-Wdeprecated-declarations]
+  407 |                         copy_tile_init(input_dfb_id);
+      |                         ~~~~~~~~~~~~~~^~~~~~~~~~~~~~
+/home/malimpic/localdev/2026_11_17/1458_malimpic_distributed_rms_norm_all_gather_gen/clones/all_gather_rms_norm_kimi_run1/tt-metal/tt_metal/hw/inc/api/compute/tile_move_copy.h:200:92: note: declared here
+  200 | [[deprecated("Renamed to copy_init(). This will be removed after 20-09-2026.")]] ALWI void copy_tile_init(
+      |                                                                                            ^~~~~~~~~~~~~~
+/home/malimpic/localdev/2026_11_17/1458_malimpic_distributed_rms_norm_all_gather_gen/clones/all_gather_rms_norm_kimi_run1/tt-metal/ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.inl:411:35: warning: 'void ckernel::add_tiles_init(uint32_t, uint32_t, bool, uint32_t)' is deprecated: Renamed to add_init(). This will be removed after September 15th, 2026. [-Wdeprecated-declarations]
+  411 |                     add_tiles_init(input_dfb_id, input_dfb_id, true);
+      |                     ~~~~~~~~~~~~~~^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+/home/malimpic/localdev/2026_11_17/1458_malimpic_distributed_rms_norm_all_gather_gen/clones/all_gather_rms_norm_kimi_run1/tt-metal/tt_metal/hw/inc/api/compute/eltwise_binary.h:562:101: note: declared here
+  562 | [[deprecated("Renamed to add_init(). This will be removed after September 15th, 2026.")]] ALWI void add_tiles_init(
+      |                                                                                                     ^~~~~~~~~~~~~~
+/home/malimpic/localdev/2026_11_17/1458_malimpic_distributed_rms_norm_all_gather_gen/clones/all_gather_rms_norm_kimi_run1/tt-metal/ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.inl:433:47: warning: 'void ckernel::add_tiles_init(uint32_t, uint32_t, bool, uint32_t)' is deprecated: Renamed to add_init(). This will be removed after September 15th, 2026. [-Wdeprecated-declarations]
+  433 |                                 add_tiles_init(input_dfb_id, acc_cb, true);  // fresh DST reads 0 -> new[0] + acc
+      |                                 ~~~~~~~~~~~~~~^~~~~~~~~~~~~~~~~~~~~~~~~~~~
+/home/malimpic/localdev/2026_11_17/1458_malimpic_distributed_rms_norm_all_gather_gen/clones/all_gather_rms_norm_kimi_run1/tt-metal/tt_metal/hw/inc/api/compute/eltwise_binary.h:562:101: note: declared here
+  562 | [[deprecated("Renamed to add_init(). This will be removed after September 15th, 2026.")]] ALWI void add_tiles_init(
+      |                                                                                                     ^~~~~~~~~~~~~~
+/home/malimpic/localdev/2026_11_17/1458_malimpic_distributed_rms_norm_all_gather_gen/clones/all_gather_rms_norm_kimi_run1/tt-metal/ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.inl:437:47: warning: 'void ckernel::add_tiles_init(uint32_t, uint32_t, bool, uint32_t)' is deprecated: Renamed to add_init(). This will be removed after September 15th, 2026. [-Wdeprecated-declarations]
+  437 |                                 add_tiles_init(input_dfb_id, input_dfb_id, true);                 // fresh DST reads 0
+      |                                 ~~~~~~~~~~~~~~^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+/home/malimpic/localdev/2026_11_17/1458_malimpic_distributed_rms_norm_all_gather_gen/clones/all_gather_rms_norm_kimi_run1/tt-metal/tt_metal/hw/inc/api/compute/eltwise_binary.h:562:101: note: declared here
+  562 | [[deprecated("Renamed to add_init(). This will be removed after September 15th, 2026.")]] ALWI void add_tiles_init(
+      |                                                                                                     ^~~~~~~~~~~~~~
+/home/malimpic/localdev/2026_11_17/1458_malimpic_distributed_rms_norm_all_gather_gen/clones/all_gather_rms_norm_kimi_run1/tt-metal/ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.inl:439:47: warning: 'void ckernel::add_tiles_init(uint32_t, uint32_t, bool, uint32_t)' is deprecated: Renamed to add_init(). This will be removed after September 15th, 2026. [-Wdeprecated-declarations]
+  439 |                                 add_tiles_init(input_dfb_id, input_dfb_id, true);
+      |                                 ~~~~~~~~~~~~~~^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+/home/malimpic/localdev/2026_11_17/1458_malimpic_distributed_rms_norm_all_gather_gen/clones/all_gather_rms_norm_kimi_run1/tt-metal/tt_metal/hw/inc/api/compute/eltwise_binary.h:562:101: note: declared here
+  562 | [[deprecated("Renamed to add_init(). This will be removed after September 15th, 2026.")]] ALWI void add_tiles_init(
+      |                                                                                                     ^~~~~~~~~~~~~~
+/home/malimpic/localdev/2026_11_17/1458_malimpic_distributed_rms_norm_all_gather_gen/clones/all_gather_rms_norm_kimi_run1/tt-metal/ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.inl:445:47: warning: 'void ckernel::add_tiles_init(uint32_t, uint32_t, bool, uint32_t)' is deprecated: Renamed to add_init(). This will be removed after September 15th, 2026. [-Wdeprecated-declarations]
+  445 |                                 add_tiles_init(input_dfb_id, acc_cb, true);  // last new tile + accumulator
+      |                                 ~~~~~~~~~~~~~~^~~~~~~~~~~~~~~~~~~~~~~~~~~~
+/home/malimpic/localdev/2026_11_17/1458_malimpic_distributed_rms_norm_all_gather_gen/clones/all_gather_rms_norm_kimi_run1/tt-metal/tt_metal/hw/inc/api/compute/eltwise_binary.h:562:101: note: declared here
+  562 | [[deprecated("Renamed to add_init(). This will be removed after September 15th, 2026.")]] ALWI void add_tiles_init(
+      |                                                                                                     ^~~~~~~~~~~~~~
+/home/malimpic/localdev/2026_11_17/1458_malimpic_distributed_rms_norm_all_gather_gen/clones/all_gather_rms_norm_kimi_run1/tt-metal/ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.inl:451:43: warning: 'void ckernel::copy_tile_init(uint32_t, uint32_t) [with bool is_fp32_dest_acc_en = true; uint32_t = long unsigned int]' is deprecated: Renamed to copy_init(). This will be removed after 20-09-2026. [-Wdeprecated-declarations]
+  451 |                             copy_tile_init(acc_cb);
+      |                             ~~~~~~~~~~~~~~^~~~~~~~
+/home/malimpic/localdev/2026_11_17/1458_malimpic_distributed_rms_norm_all_gather_gen/clones/all_gather_rms_norm_kimi_run1/tt-metal/tt_metal/hw/inc/api/compute/tile_move_copy.h:200:92: note: declared here
+  200 | [[deprecated("Renamed to copy_init(). This will be removed after 20-09-2026.")]] ALWI void copy_tile_init(
+      |                                                                                            ^~~~~~~~~~~~~~
+/home/malimpic/localdev/2026_11_17/1458_malimpic_distributed_rms_norm_all_gather_gen/clones/all_gather_rms_norm_kimi_run1/tt-metal/ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.inl:454:43: warning: 'void ckernel::add_tiles_init(uint32_t, uint32_t, bool, uint32_t)' is deprecated: Renamed to add_init(). This will be removed after September 15th, 2026. [-Wdeprecated-declarations]
+  454 |                             add_tiles_init(input_dfb_id, input_dfb_id, true);
+      |                             ~~~~~~~~~~~~~~^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+/home/malimpic/localdev/2026_11_17/1458_malimpic_distributed_rms_norm_all_gather_gen/clones/all_gather_rms_norm_kimi_run1/tt-metal/tt_metal/hw/inc/api/compute/eltwise_binary.h:562:101: note: declared here
+  562 | [[deprecated("Renamed to add_init(). This will be removed after September 15th, 2026.")]] ALWI void add_tiles_init(
+      |                                                                                                     ^~~~~~~~~~~~~~
+/home/malimpic/localdev/2026_11_17/1458_malimpic_distributed_rms_norm_all_gather_gen/clones/all_gather_rms_norm_kimi_run1/tt-metal/ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.inl:468:47: warning: 'void ckernel::copy_tile_init(uint32_t, uint32_t) [with bool is_fp32_dest_acc_en = true; uint32_t = long unsigned int]' is deprecated: Renamed to copy_init(). This will be removed after 20-09-2026. [-Wdeprecated-declarations]
+  468 |                                 copy_tile_init(input_dfb_id);
+      |                                 ~~~~~~~~~~~~~~^~~~~~~~~~~~~~
+/home/malimpic/localdev/2026_11_17/1458_malimpic_distributed_rms_norm_all_gather_gen/clones/all_gather_rms_norm_kimi_run1/tt-metal/tt_metal/hw/inc/api/compute/tile_move_copy.h:200:92: note: declared here
+  200 | [[deprecated("Renamed to copy_init(). This will be removed after 20-09-2026.")]] ALWI void copy_tile_init(
+      |                                                                                            ^~~~~~~~~~~~~~
+/home/malimpic/localdev/2026_11_17/1458_malimpic_distributed_rms_norm_all_gather_gen/clones/all_gather_rms_norm_kimi_run1/tt-metal/ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.inl:472:43: warning: 'void ckernel::add_tiles_init(uint32_t, uint32_t, bool, uint32_t)' is deprecated: Renamed to add_init(). This will be removed after September 15th, 2026. [-Wdeprecated-declarations]
+  472 |                             add_tiles_init(input_dfb_id, input_dfb_id, true);
+      |                             ~~~~~~~~~~~~~~^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+/home/malimpic/localdev/2026_11_17/1458_malimpic_distributed_rms_norm_all_gather_gen/clones/all_gather_rms_norm_kimi_run1/tt-metal/tt_metal/hw/inc/api/compute/eltwise_binary.h:562:101: note: declared here
+  562 | [[deprecated("Renamed to add_init(). This will be removed after September 15th, 2026.")]] ALWI void add_tiles_init(
+      |                                                                                                     ^~~~~~~~~~~~~~
+/home/malimpic/localdev/2026_11_17/1458_malimpic_distributed_rms_norm_all_gather_gen/clones/all_gather_rms_norm_kimi_run1/tt-metal/ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.inl:478:39: warning: 'void ckernel::copy_tile_init(uint32_t, uint32_t) [with bool is_fp32_dest_acc_en = true; uint32_t = long unsigned int]' is deprecated: Renamed to copy_init(). This will be removed after 20-09-2026. [-Wdeprecated-declarations]
+  478 |                         copy_tile_init(acc_cb);
+      |                         ~~~~~~~~~~~~~~^~~~~~~~
+/home/malimpic/localdev/2026_11_17/1458_malimpic_distributed_rms_norm_all_gather_gen/clones/all_gather_rms_norm_kimi_run1/tt-metal/tt_metal/hw/inc/api/compute/tile_move_copy.h:200:92: note: declared here
+  200 | [[deprecated("Renamed to copy_init(). This will be removed after 20-09-2026.")]] ALWI void copy_tile_init(
+      |                                                                                            ^~~~~~~~~~~~~~
+/home/malimpic/localdev/2026_11_17/1458_malimpic_distributed_rms_norm_all_gather_gen/clones/all_gather_rms_norm_kimi_run1/tt-metal/ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.inl:496:39: warning: 'void ckernel::copy_tile_init(uint32_t, uint32_t) [with bool is_fp32_dest_acc_en = true; uint32_t = long unsigned int]' is deprecated: Renamed to copy_init(). This will be removed after 20-09-2026. [-Wdeprecated-declarations]
+  496 |                         copy_tile_init(acc_cb);
+      |                         ~~~~~~~~~~~~~~^~~~~~~~
+/home/malimpic/localdev/2026_11_17/1458_malimpic_distributed_rms_norm_all_gather_gen/clones/all_gather_rms_norm_kimi_run1/tt-metal/tt_metal/hw/inc/api/compute/tile_move_copy.h:200:92: note: declared here
+  200 | [[deprecated("Renamed to copy_init(). This will be removed after 20-09-2026.")]] ALWI void copy_tile_init(
+      |                                                                                            ^~~~~~~~~~~~~~
+/home/malimpic/localdev/2026_11_17/1458_malimpic_distributed_rms_norm_all_gather_gen/clones/all_gather_rms_norm_kimi_run1/tt-metal/ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.inl:504:83: warning: 'void ckernel::binary_dest_reuse_tiles_init(uint32_t, uint32_t) [with EltwiseBinaryType eltwise_binary_type = ckernel::EltwiseBinaryType::ELWADD; EltwiseBinaryReuseDestType binary_reuse_dest = ckernel::EltwiseBinaryReuseDestType::DEST_TO_SRCB; uint32_t = long unsigned int]' is deprecated: Renamed to add_reuse_dest_init / sub_reuse_dest_init / mul_reuse_dest_init<reuse_dest>, e.g. add_reuse_dest_init<EltwiseBinaryReuseDestType::DEST_TO_SRCA>(in_cb). This will be removed after September 15th, 2026. [-Wdeprecated-declarations]
+  502 |                             binary_dest_reuse_tiles_init<
+      |                             ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+  503 |                                 ckernel::EltwiseBinaryType::ELWADD,
+      |                                 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+  504 |                                 ckernel::EltwiseBinaryReuseDestType::DEST_TO_SRCB>(input_dfb_id);
+      |                                 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^~~~~~~~~~~~~~
+/home/malimpic/localdev/2026_11_17/1458_malimpic_distributed_rms_norm_all_gather_gen/clones/all_gather_rms_norm_kimi_run1/tt-metal/tt_metal/hw/inc/api/compute/eltwise_binary.h:599:1: note: declared here
+  599 | binary_dest_reuse_tiles_init(uint32_t icb0, uint32_t call_line = __builtin_LINE()) {
+      | ^~~~~~~~~~~~~~~~~~~~~~~~~~~~
+/home/malimpic/localdev/2026_11_17/1458_malimpic_distributed_rms_norm_all_gather_gen/clones/all_gather_rms_norm_kimi_run1/tt-metal/ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.inl:508:87: warning: 'void ckernel::binary_dest_reuse_tiles(uint32_t, uint32_t, uint32_t) [with EltwiseBinaryType eltwise_binary_type = ckernel::EltwiseBinaryType::ELWADD; EltwiseBinaryReuseDestType binary_reuse_dest = ckernel::EltwiseBinaryReuseDestType::DEST_TO_SRCB; bool is_fp32_dest_acc_en = true; uint32_t = long unsigned int]' is deprecated: Renamed to add_reuse_dest_tiles / sub_reuse_dest_tiles / mul_reuse_dest_tiles<reuse_dest>, e.g. add_reuse_dest_tiles<EltwiseBinaryReuseDestType::DEST_TO_SRCA>(in_cb, it, idst). This will be removed after September 15th, 2026. [-Wdeprecated-declarations]
+  506 |                                 binary_dest_reuse_tiles<
+      |                                 ~~~~~~~~~~~~~~~~~~~~~~~~
+  507 |                                     ckernel::EltwiseBinaryType::ELWADD,
+      |                                     ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+  508 |                                     ckernel::EltwiseBinaryReuseDestType::DEST_TO_SRCB>(
+      |                                     ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^
+  509 |                                     input_dfb_id, start + k * stride, 0);
+      |                                     ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+/home/malimpic/localdev/2026_11_17/1458_malimpic_distributed_rms_norm_all_gather_gen/clones/all_gather_rms_norm_kimi_run1/tt-metal/tt_metal/hw/inc/api/compute/eltwise_binary.h:624:1: note: declared here
+  624 | binary_dest_reuse_tiles(uint32_t in_cb_id, uint32_t in_tile_index, uint32_t dst_tile_index) {
+      | ^~~~~~~~~~~~~~~~~~~~~~~
+/home/malimpic/localdev/2026_11_17/1458_malimpic_distributed_rms_norm_all_gather_gen/clones/all_gather_rms_norm_kimi_run1/tt-metal/ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.inl:517:47: warning: 'void ckernel::add_tiles_init(uint32_t, uint32_t, bool, uint32_t)' is deprecated: Renamed to add_init(). This will be removed after September 15th, 2026. [-Wdeprecated-declarations]
+  517 |                                 add_tiles_init(input_dfb_id, scaler_dfb_id, true);
+      |                                 ~~~~~~~~~~~~~~^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+/home/malimpic/localdev/2026_11_17/1458_malimpic_distributed_rms_norm_all_gather_gen/clones/all_gather_rms_norm_kimi_run1/tt-metal/tt_metal/hw/inc/api/compute/eltwise_binary.h:562:101: note: declared here
+  562 | [[deprecated("Renamed to add_init(). This will be removed after September 15th, 2026.")]] ALWI void add_tiles_init(
+      |                                                                                                     ^~~~~~~~~~~~~~
+/home/malimpic/localdev/2026_11_17/1458_malimpic_distributed_rms_norm_all_gather_gen/clones/all_gather_rms_norm_kimi_run1/tt-metal/ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.inl:521:43: warning: 'void ckernel::add_tiles_init(uint32_t, uint32_t, bool, uint32_t)' is deprecated: Renamed to add_init(). This will be removed after September 15th, 2026. [-Wdeprecated-declarations]
+  521 |                             add_tiles_init(input_dfb_id, input_dfb_id, true);
+      |                             ~~~~~~~~~~~~~~^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+/home/malimpic/localdev/2026_11_17/1458_malimpic_distributed_rms_norm_all_gather_gen/clones/all_gather_rms_norm_kimi_run1/tt-metal/tt_metal/hw/inc/api/compute/eltwise_binary.h:562:101: note: declared here
+  562 | [[deprecated("Renamed to add_init(). This will be removed after September 15th, 2026.")]] ALWI void add_tiles_init(
+      |                                                                                                     ^~~~~~~~~~~~~~
+/home/malimpic/localdev/2026_11_17/1458_malimpic_distributed_rms_norm_all_gather_gen/clones/all_gather_rms_norm_kimi_run1/tt-metal/ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.inl:532:87: warning: 'void ckernel::binary_dest_reuse_tiles_init(uint32_t, uint32_t) [with EltwiseBinaryType eltwise_binary_type = ckernel::EltwiseBinaryType::ELWADD; EltwiseBinaryReuseDestType binary_reuse_dest = ckernel::EltwiseBinaryReuseDestType::DEST_TO_SRCB; uint32_t = long unsigned int]' is deprecated: Renamed to add_reuse_dest_init / sub_reuse_dest_init / mul_reuse_dest_init<reuse_dest>, e.g. add_reuse_dest_init<EltwiseBinaryReuseDestType::DEST_TO_SRCA>(in_cb). This will be removed after September 15th, 2026. [-Wdeprecated-declarations]
+  530 |                                 binary_dest_reuse_tiles_init<
+      |                                 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+  531 |                                     ckernel::EltwiseBinaryType::ELWADD,
+      |                                     ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+  532 |                                     ckernel::EltwiseBinaryReuseDestType::DEST_TO_SRCB>(input_dfb_id);
+      |                                     ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^~~~~~~~~~~~~~
+/home/malimpic/localdev/2026_11_17/1458_malimpic_distributed_rms_norm_all_gather_gen/clones/all_gather_rms_norm_kimi_run1/tt-metal/tt_metal/hw/inc/api/compute/eltwise_binary.h:599:1: note: declared here
+  599 | binary_dest_reuse_tiles_init(uint32_t icb0, uint32_t call_line = __builtin_LINE()) {
+      | ^~~~~~~~~~~~~~~~~~~~~~~~~~~~
+/home/malimpic/localdev/2026_11_17/1458_malimpic_distributed_rms_norm_all_gather_gen/clones/all_gather_rms_norm_kimi_run1/tt-metal/ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.inl:535:87: warning: 'void ckernel::binary_dest_reuse_tiles(uint32_t, uint32_t, uint32_t) [with EltwiseBinaryType eltwise_binary_type = ckernel::EltwiseBinaryType::ELWADD; EltwiseBinaryReuseDestType binary_reuse_dest = ckernel::EltwiseBinaryReuseDestType::DEST_TO_SRCB; bool is_fp32_dest_acc_en = true; uint32_t = long unsigned int]' is deprecated: Renamed to add_reuse_dest_tiles / sub_reuse_dest_tiles / mul_reuse_dest_tiles<reuse_dest>, e.g. add_reuse_dest_tiles<EltwiseBinaryReuseDestType::DEST_TO_SRCA>(in_cb, it, idst). This will be removed after September 15th, 2026. [-Wdeprecated-declarations]
+  533 |                                 binary_dest_reuse_tiles<
+      |                                 ~~~~~~~~~~~~~~~~~~~~~~~~
+  534 |                                     ckernel::EltwiseBinaryType::ELWADD,
+      |                                     ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+  535 |                                     ckernel::EltwiseBinaryReuseDestType::DEST_TO_SRCB>(input_dfb_id, start, 0);
+      |                                     ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^~~~~~~~~~~~~~~~~~~~~~~~
+/home/malimpic/localdev/2026_11_17/1458_malimpic_distributed_rms_norm_all_gather_gen/clones/all_gather_rms_norm_kimi_run1/tt-metal/tt_metal/hw/inc/api/compute/eltwise_binary.h:624:1: note: declared here
+  624 | binary_dest_reuse_tiles(uint32_t in_cb_id, uint32_t in_tile_index, uint32_t dst_tile_index) {
+      | ^~~~~~~~~~~~~~~~~~~~~~~
+/home/malimpic/localdev/2026_11_17/1458_malimpic_distributed_rms_norm_all_gather_gen/clones/all_gather_rms_norm_kimi_run1/tt-metal/ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.inl:538:43: warning: 'void ckernel::add_tiles_init(uint32_t, uint32_t, bool, uint32_t)' is deprecated: Renamed to add_init(). This will be removed after September 15th, 2026. [-Wdeprecated-declarations]
+  538 |                             add_tiles_init(input_dfb_id, input_dfb_id, true);
+      |                             ~~~~~~~~~~~~~~^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+/home/malimpic/localdev/2026_11_17/1458_malimpic_distributed_rms_norm_all_gather_gen/clones/all_gather_rms_norm_kimi_run1/tt-metal/tt_metal/hw/inc/api/compute/eltwise_binary.h:562:101: note: declared here
+  562 | [[deprecated("Renamed to add_init(). This will be removed after September 15th, 2026.")]] ALWI void add_tiles_init(
+      |                                                                                                     ^~~~~~~~~~~~~~
+/home/malimpic/localdev/2026_11_17/1458_malimpic_distributed_rms_norm_all_gather_gen/clones/all_gather_rms_norm_kimi_run1/tt-metal/ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.inl:554:35: warning: 'void ckernel::copy_tile_init(uint32_t, uint32_t) [with bool is_fp32_dest_acc_en = true; uint32_t = long unsigned int]' is deprecated: Renamed to copy_init(). This will be removed after 20-09-2026. [-Wdeprecated-declarations]
+  554 |                     copy_tile_init(input_dfb_id);
+      |                     ~~~~~~~~~~~~~~^~~~~~~~~~~~~~
+/home/malimpic/localdev/2026_11_17/1458_malimpic_distributed_rms_norm_all_gather_gen/clones/all_gather_rms_norm_kimi_run1/tt-metal/tt_metal/hw/inc/api/compute/tile_move_copy.h:200:92: note: declared here
+  200 | [[deprecated("Renamed to copy_init(). This will be removed after 20-09-2026.")]] ALWI void copy_tile_init(
+      |                                                                                            ^~~~~~~~~~~~~~
+/home/malimpic/localdev/2026_11_17/1458_malimpic_distributed_rms_norm_all_gather_gen/clones/all_gather_rms_norm_kimi_run1/tt-metal/ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.inl:558:31: warning: 'void ckernel::add_tiles_init(uint32_t, uint32_t, bool, uint32_t)' is deprecated: Renamed to add_init(). This will be removed after September 15th, 2026. [-Wdeprecated-declarations]
+  558 |                 add_tiles_init(input_dfb_id, input_dfb_id, true);
+      |                 ~~~~~~~~~~~~~~^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+/home/malimpic/localdev/2026_11_17/1458_malimpic_distributed_rms_norm_all_gather_gen/clones/all_gather_rms_norm_kimi_run1/tt-metal/tt_metal/hw/inc/api/compute/eltwise_binary.h:562:101: note: declared here
+  562 | [[deprecated("Renamed to add_init(). This will be removed after September 15th, 2026.")]] ALWI void add_tiles_init(
+      |                                                                                                     ^~~~~~~~~~~~~~
+In file included from /home/malimpic/localdev/2026_11_17/1458_malimpic_distributed_rms_norm_all_gather_gen/clones/all_gather_rms_norm_kimi_run1/tt-metal/ttnn/ttnn/operations/all_gather_rms_norm_kimi/perf_experiments/late_tail_interleave/op_copy/kernels/all_gather_rms_norm_kimi_perf.hpp:16,
+                 from /home/malimpic/localdev/2026_11_17/1458_malimpic_distributed_rms_norm_all_gather_gen/clones/all_gather_rms_norm_kimi_run1/tt-metal/ttnn/ttnn/operations/all_gather_rms_norm_kimi/perf_experiments/late_tail_interleave/op_copy/kernels/all_gather_rms_norm_kimi_compute.cpp:36:
+/home/malimpic/localdev/2026_11_17/1458_malimpic_distributed_rms_norm_all_gather_gen/clones/all_gather_rms_norm_kimi_run1/tt-metal/tt_metal/hw/firmware/src/tt-1xx/trisck.cc: In function 'uint32_t _start()':
+/home/malimpic/localdev/2026_11_17/1458_malimpic_distributed_rms_norm_all_gather_gen/clones/all_gather_rms_norm_kimi_run1/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:32:22: note: '#pragma message: TRISC-KERNEL,/home/malimpic/localdev/2026_11_17/1458_malimpic_distributed_rms_norm_all_gather_gen/clones/all_gather_rms_norm_kimi_run1/tt-metal/tt_metal/hw/firmware/src/tt-1xx/trisck.cc,89,KERNEL_PROFILER'
+   32 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/home/malimpic/localdev/2026_11_17/1458_malimpic_distributed_rms_norm_all_gather_gen/clones/all_gather_rms_norm_kimi_run1/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:1047:5: note: in expansion of macro 'DO_PRAGMA'
+ 1047 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/home/malimpic/localdev/2026_11_17/1458_malimpic_distributed_rms_norm_all_gather_gen/clones/all_gather_rms_norm_kimi_run1/tt-metal/tt_metal/hw/firmware/src/tt-1xx/trisck.cc:89:5: note: in expansion of macro 'DeviceZoneScopedMainChildN'
+   89 |     DeviceZoneScopedMainChildN("TRISC-KERNEL");
+      |     ^~~~~~~~~~~~~~~~~~~~~~~~~~
+LTI golden check passed
+LTI bit-identical over 5 calls and across 4 chips
+CCL_PERF experiment 1/5
+CCL_PERF experiment 2/5
+CCL_PERF experiment 3/5
+CCL_PERF experiment 4/5
+CCL_PERF experiment 5/5
+CCL_PERF focus_ilv_rinc_nolb_r1: 5 experiments, 2500 calls
+  fastest chip  18.452 us (stdev 0.007, +-0.003)   <- optimization target
+  slowest chip  19.393 us (stdev 0.014, +-0.006)
+  chip average  18.960 us (stdev 0.009, +-0.004)
+  spread        0.941 us (stdev 0.011, +-0.005)   (slowest - fastest per call)
+  per chip      dev3 18.958  dev2 18.939  dev1 18.973  dev0 18.972   slowest share dev3 27% dev2 24% dev1 18% dev0 32%
+  dispatch      not dispatch-bound: back to back, max gap 0.57 us, max period 19.48 us per call
+LTI HARNESS DONE
+2026-11-18 00:58:28.148 | info     |    BuildKernels | JIT cache stats: 62/65 hits (95.4%) [62 cached, 45 build-once dedup, 0 merged artifacts, 0 merged genfiles] (build_cache_telemetry.cpp:268)
+2026-11-18 00:58:28.148 | info     |    BuildKernels | JIT telemetry: 32 registered TelemetryTokens (build_cache_telemetry.cpp:325)
+2026-11-18 00:58:28.184 | info     |          Device | Closing user mode device drivers (tt_cluster.cpp:519)
+2026-11-18 00:58:28.184 | info     |             UMD | Closing devices in cluster (cluster.cpp:1319)
+2026-11-18 00:58:28.816 | info     |             UMD | Closing devices in cluster completed. (cluster.cpp:1329)
+2026-11-18 00:58:28.816 | info     |             UMD | Cluster destructor started. (cluster.cpp:1050)
+2026-11-18 00:58:28.816 | info     |             UMD | Cluster destructor completed. (cluster.cpp:1063)
+========================================
+TT_PROBE: Resetting device...
+Resetting all PCI devices: [0, 1, 2, 3]
+[95m Re-initializing boards after reset.... [0m
+TT_PROBE: Device reset complete
+TT_PROBE_RESULT: PASS

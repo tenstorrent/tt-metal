@@ -12,9 +12,9 @@
 //                       remote chunks the host look-ahead table expects landed by then (the stall shadow)
 //   expand_rstd_block   unary_bcast<Col> -> cb_rstd_full (one tile per block row)
 //   normalize_block     per chunk: out = xg * rstd_full -> cb_out; a chunk not done ahead runs x * gamma * rstd_full
-//                       as one chain (DEST reused as srcA, FUSE_LATE_CHUNKS); a block with no chunk ahead runs one
-//                       gamma pass + one normalize pass over the whole block (LATE_BLOCK). NORMALIZE_MODE "scale"
-//                       instead computes S = rstd_full * gamma after the combine and out = x * S per landed chunk
+//                       as one chain (DEST reused as srcA, FUSE_LATE_CHUNKS). The late blocks' chunks arrive
+//                       chunk-major (host TAIL_INTERLEAVE_CHUNKS), so each late chunk runs as it lands. NORMALIZE_MODE
+//                       "scale" instead computes S = rstd_full * gamma after the combine and out = x * S per chunk
 // After the stats only the combine and one multiply per tile stand between the landed chunks and their DRAM store,
 // so the stores (DRAM-bound, ~4 us for the whole output) start right after the combine instead of after a whole-
 // block scale. Each chunk is one (rows x cols) window of the block: a run inside one block row, or whole rows.
@@ -62,9 +62,6 @@ constexpr bool combine_col0 = get_compile_time_arg_val(C + 13) != 0;  // combine
 // normalize mode: false = xg (x * gamma ahead of the stats, out = xg * rstd per chunk); true = scale (S = rstd * gamma
 // right after the combine, out = x * S per chunk: ONE pass per landed chunk)
 constexpr bool scale_mode = get_compile_time_arg_val(C + 14) != 0;
-// xg mode, a block with no chunk ahead (all of it lands late): one gamma pass + one normalize pass over the whole
-// block (cumulative waits, pushed per chunk) instead of a gamma + normalize pass per chunk
-constexpr bool late_block = get_compile_time_arg_val(C + 15) != 0;
 
 static_assert(block_w % chunk_tiles == 0 || chunk_tiles % block_w == 0, "a chunk is a run in one row or whole rows");
 
@@ -317,16 +314,7 @@ void kernel_main() {
     // ---- normalize_block: per chunk, out = xg * rstd (x * gamma * rstd for the chunks not done ahead) ----
     MaybeDeviceZoneScope("compute_normalize");  // includes the per-chunk landing waits
     cb_wait_front(cb_rstd_full, h);             // held for every chunk (Col-mapped, offset per chunk)
-    if (late_block && !fuse_late && ahead == 0) {
-        const IterationShape block = IterationShape::grid(h, block_w).block_size(chunk_tiles);
-        mul<input(cb_x_block, WaitPolicy::Cumulative, PopPolicy::None, InputTileMapping::Block),
-            input(cb_gamma, BroadcastDim::Row, WaitPolicy::None, PopPolicy::None, InputTileMapping::Row),
-            output(cb_xg, ReservePolicy::PerBlockSize, PushPolicy::PerBlockSize)>(block);
-        mul<input(cb_xg, WaitPolicy::Cumulative, PopPolicy::AtEnd, InputTileMapping::Block),
-            input(cb_rstd_full, WaitPolicy::None, PopPolicy::None, InputTileMapping::Col),
-            output(cb_out, ReservePolicy::PerBlockSize, PushPolicy::PerBlockSize)>(block);
-    }
-    for (uint32_t k = (late_block && !fuse_late && ahead == 0) ? n_chunks : 0; k < n_chunks; ++k) {
+    for (uint32_t k = 0; k < n_chunks; ++k) {
         if (k < ahead) {
             normalize_chunk(k);
         } else if constexpr (fuse_late) {

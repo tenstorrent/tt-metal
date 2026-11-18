@@ -25,7 +25,7 @@ Knobs (single source of truth; every CB size / loop count / RT arg derives from 
   BLOCK_W (None = the whole slice width), block_h (derived from the grid left after the ports), chunk_tiles (derived
   from the router payload), PORT_PLACEMENT, PORT_BATCH_CHUNKS, INC_EVERY, OUT_DEPTH_CHUNKS, num_links; the OVERLAP
   knobs of Refinement 2: GAMMA_HUB_MCAST, XG_LATE_STREAM_CHUNKS, FUSE_LATE_CHUNKS, STATS_BULK_WINDOW; Refinement 3:
-  COMBINE_COL0, COMPUTE_STORE_NOC, OWN_STORE_GATE.
+  COMBINE_COL0, COMPUTE_STORE_NOC, OWN_STORE_GATE; Perf 2: TAIL_INTERLEAVE_CHUNKS.
 """
 
 from __future__ import annotations
@@ -52,6 +52,9 @@ BLOCK_W = None  # tile columns of a slice per block; None = the whole slice (Wl_
 PORT_PLACEMENT = "eth_nearest"  # "eth_nearest" (each port next to its link's Ethernet core) | "centred"  [TRANSPORT]
 PORT_BATCH_CHUNKS = 2  # chunks per port batch (cb_port_chunks holds 2 batches); R1: 2 best of 1-4  [TRANSPORT]
 PORT_BATCH_CHUNKS_MAX = 8  # packet-header pool cap
+# Port reader supply: chunk reads in flight, each with its own NoC transaction id, each chunk pushed to the sender as
+# soon as its own read completes (Perf 2: 4 = the whole 2-batch CB; a deeper cb_port_chunks measured slower).
+PORT_READS_IN_FLIGHT = 4  # [TRANSPORT]
 # While a port still owes stats slots, it keeps at most this many bulk packets queued in its router channel, so a
 # stats packet (the relay hop of the stats round) waits behind that many, not a full channel. 0 = off.  [OVERLAP]
 STATS_BULK_WINDOW = 2
@@ -75,9 +78,12 @@ COMBINE_COL0 = True
 # after the combine: two passes for a chunk that lands after the combine. "scale": S = rstd * gamma (one block pass
 # right after the combine), out = x * S: one pass per landed chunk, so the landing tail is one multiply.  [R3]
 NORMALIZE_MODE = "xg"
-# xg mode: a block with no chunk ahead runs one gamma + one normalize pass over the whole block (pushed per chunk)
-# instead of two passes per chunk: half the per-pass init / format reconfig on the landing tail.  [R3]
-LATE_BLOCK = True
+# The trailing blocks of a stream's last entry that hold any of its last TAIL_INTERLEAVE_CHUNKS chunks (the late
+# blocks of the look-ahead) are sent chunk-major (A0 B0 C0 D0 A1 B1 ...), and each chunk-major round ends with a fused
+# arrival increment: the first chunks of every late block land and are notified well before the stream's last chunk,
+# so after the last landing only one chunk's gamma + normalize + store is left per core (block order left a whole
+# late block, and INC_EVERY notified the last 3 blocks of each stream at once at the stream end). 0 = off.  [Perf 2]
+TAIL_INTERLEAVE_CHUNKS = 8
 # NoC of the compute cores' writer (the DRAM output store + the partial export); the compute reader takes the other
 # one. The port senders and receivers write on NoC1, the port readers pull the landed chunks on NoC0.  [R3]
 COMPUTE_STORE_NOC = 1
@@ -431,32 +437,73 @@ def own_block_reads(geo, p):
     return counts[0]
 
 
+def tail_blocks(geo, entries):
+    """How many trailing blocks of the stream are sent chunk-major: those of the last entry that hold any of the
+    stream's last TAIL_INTERLEAVE_CHUNKS chunks."""
+    if TAIL_INTERLEAVE_CHUNKS <= 0 or not entries:
+        return 0
+    total = sum(geo.nchunks(m) for _, ms in entries for m in ms)
+    n, t = 0, total
+    for m in reversed(entries[-1][1]):
+        if t <= total - TAIL_INTERLEAVE_CHUNKS:
+            break
+        n += 1
+        t -= geo.nchunks(m)
+    return n
+
+
+@dataclass
+class StreamChunk:
+    q: int
+    m: int
+    c: int  # chunk index within the block
+    entry: int
+    inc: bool = False  # carries a fused arrival increment
+    last_of_block: bool = False  # last chunk of its block in send order
+
+
+def stream_chunks(geo, entries):
+    """Every chunk of a port stream in send order, with its increment flag: the host mirror of the port sender's walk
+    (blocks in order, each block's chunks in order; the tail_blocks() trailing blocks chunk-major). The sender
+    increments on every INC_EVERY-th chunk, on each entry's last chunk, and on the last chunk of each chunk-major
+    round of the tail."""
+    blocks = [(k, q, m) for k, (q, ms) in enumerate(entries) for m in ms]
+    n_tail = tail_blocks(geo, entries)
+    head, tail = blocks[: len(blocks) - n_tail], blocks[len(blocks) - n_tail :]
+    out = []
+    for k, q, m in head:
+        n = geo.nchunks(m)
+        out += [StreamChunk(q, m, c, k, last_of_block=c == n - 1) for c in range(n)]
+        out[-1].inc = m == entries[k][1][-1]  # entry end
+    for c in range(max((geo.nchunks(m) for _, _, m in tail), default=0)):
+        out += [
+            StreamChunk(q, m, c, k, last_of_block=c == geo.nchunks(m) - 1) for k, q, m in tail if c < geo.nchunks(m)
+        ]
+        out[-1].inc = True  # round end (the last round ends the last entry)
+    for i, ch in enumerate(out):
+        ch.inc = ch.inc or (i + 1) % INC_EVERY == 0
+    return out
+
+
 def stream_incs(geo, entries):
-    """Per chunk of the stream (in order): the arrival-counter value that covers it; and the total increments.
-    The sender increments on every INC_EVERY-th chunk and on each entry's last chunk."""
+    """Per chunk of the stream (in send order): the arrival-counter value that covers it; and the total increments."""
     thresholds = []
-    sent = incs = 0
-    pending = 0
-    for _, ms in entries:
-        n_entry = sum(geo.nchunks(m) for m in ms)
-        k = 0
-        for m in ms:
-            for _ in range(geo.nchunks(m)):
-                sent += 1
-                k += 1
-                pending += 1
-                if sent % INC_EVERY == 0 or k == n_entry:
-                    incs += 1
-                    thresholds += [incs] * pending
-                    pending = 0
+    incs = pending = 0
+    for ch in stream_chunks(geo, entries):
+        pending += 1
+        if ch.inc:
+            incs += 1
+            thresholds += [incs] * pending
+            pending = 0
     assert pending == 0
     return thresholds, incs
 
 
 def xg_ahead_table(geo, p):
     """Per compute core (index q * nb + m) of chip p: chunks of its block that compute xg before the stats combine,
-    packed 4 per word (8 bits each). Own blocks: all. Remote blocks: the chunks before the last XG_LATE_STREAM_CHUNKS
-    of their upstream port's stream (each remote block arrives in exactly one upstream stream)."""
+    packed 4 per word (8 bits each). Own blocks: all. Remote blocks: their chunks sent before the last
+    XG_LATE_STREAM_CHUNKS of their upstream port's stream (each remote block arrives in exactly one upstream stream,
+    its chunks in order, so this is a prefix of the block)."""
     G = geo.G
     ahead = [0] * (G * geo.nb)
     for m in range(geo.nb):
@@ -464,15 +511,10 @@ def xg_ahead_table(geo, p):
     for l in range(geo.L):
         for d in (FWD, BWD):
             up_p = (p - 1) % G if d == FWD else (p + 1) % G
-            entries = port_stream(geo, up_p, l, d)
-            total = sum(geo.nchunks(m) for _, ms in entries for m in ms)
-            thr = 0 if XG_LATE_STREAM_CHUNKS is None else total - XG_LATE_STREAM_CHUNKS
-            t = 0
-            for q, ms in entries:
-                for m in ms:
-                    n = geo.nchunks(m)
-                    ahead[q * geo.nb + m] = min(n, max(0, thr - t))
-                    t += n
+            chunks = stream_chunks(geo, port_stream(geo, up_p, l, d))
+            thr = 0 if XG_LATE_STREAM_CHUNKS is None else len(chunks) - XG_LATE_STREAM_CHUNKS
+            for ch in chunks[: max(0, thr)]:
+                ahead[ch.q * geo.nb + ch.m] += 1
     assert max(ahead) < 256
     words = [0] * (-(-len(ahead) // 4))
     for i, a in enumerate(ahead):
@@ -582,6 +624,7 @@ def create_mesh_program_descriptor(geo, res, input_tensor, gamma, output, epsilo
                 BLOCK_W,
                 sorted((k, (c.x, c.y)) for k, c in pl.ports.items()),
                 PORT_BATCH_CHUNKS,
+                PORT_READS_IN_FLIGHT,
                 INC_EVERY,
                 STATS_BULK_WINDOW,
                 OUT_DEPTH_CHUNKS,
@@ -590,7 +633,7 @@ def create_mesh_program_descriptor(geo, res, input_tensor, gamma, output, epsilo
                 FUSE_LATE_CHUNKS,
                 COMBINE_COL0,
                 NORMALIZE_MODE,
-                LATE_BLOCK,
+                TAIL_INTERLEAVE_CHUNKS,
                 COMPUTE_STORE_NOC,
                 OWN_STORE_GATE,
                 gamma_page,
@@ -654,7 +697,7 @@ def create_mesh_program_descriptor(geo, res, input_tensor, gamma, output, epsilo
             compute_ct = geo_ct + [_f32_bits(1.0 / W), _f32_bits(epsilon)]
             compute_ct += [CB_X_BLOCK, CB_GAMMA, CB_OUT, CB_PARTIALS, CB_XSQ_SUM, CB_RSTD, CB_PARTIAL, CB_XG]
             compute_ct += [CB_SCALER, CB_RSTD_FULL, int(FUSE_LATE_CHUNKS), int(COMBINE_COL0)]
-            compute_ct += [int(NORMALIZE_MODE == "scale"), int(LATE_BLOCK)]
+            compute_ct += [int(NORMALIZE_MODE == "scale")]
 
             ccfg = ttnn.ComputeConfigDescriptor()
             ccfg.math_fidelity = cfg.math_fidelity
@@ -708,12 +751,13 @@ def create_mesh_program_descriptor(geo, res, input_tensor, gamma, output, epsilo
                     slots = stats_slots(geo, p, d) if l == 0 else []
                     active = n_chunks > 0 or len(slots) > 0
                     # reader
-                    rargs = [landing_addr, len(geo.link_rows(l)), n_chunks, len(blocks)]
+                    n_tail = tail_blocks(geo, entries)
+                    rargs = [landing_addr, len(geo.link_rows(l)), n_chunks, len(blocks), n_tail]
                     for q, m, relay, end in blocks:
                         rargs += [_xy(virt(geo.core(q, m))), geo.nchunks(m) | (int(relay) << 16) | (int(end) << 17)]
                     preader_rt[core.x][core.y] = rargs
                     # sender
-                    sargs = [landing_addr, stats_addr, int(active), n_chunks, len(blocks), len(slots)]
+                    sargs = [landing_addr, stats_addr, int(active), n_chunks, len(blocks), n_tail, len(slots)]
                     sargs += [ready_addr, _xy(port_vs[peer][(l, _OPP[d])]), arrival_addr, _xy(recv_vs[peer][(l, d)])]
                     sargs += [sfwd_addr if d == FWD else sbwd_addr, _xy(hub_vs[peer])]
                     pn = node(peer)
@@ -739,6 +783,8 @@ def create_mesh_program_descriptor(geo, res, input_tensor, gamma, output, epsilo
                 STATS_BULK_WINDOW,
                 SEM_LANDED,
                 OWN_STORE_GATE,
+                2 * batch,  # cb_port_chunks capacity in chunks
+                max(1, min(PORT_READS_IN_FLIGHT, 2 * batch, 15)),  # port reader: chunk reads in flight
             ]
             kernels += [
                 ttnn.KernelDescriptor(
@@ -771,20 +817,14 @@ def create_mesh_program_descriptor(geo, res, input_tensor, gamma, output, epsilo
                     local_entries = port_stream(geo, p, l, d)
                     thresholds, incs = stream_incs(geo, up_entries)
                     events = []
-                    t = 0
-                    for k, (q, ms) in enumerate(up_entries):
-                        relayed = set()
-                        if k + 1 < len(local_entries):
-                            rq, rms = local_entries[k + 1]
-                            assert rq == q
-                            relayed = set(rms)
-                        for m in ms:
-                            n = geo.nchunks(m)
-                            xy = _xy(virt(geo.core(q, m)))
-                            for c in range(n):
-                                flag = 1 if (c == n - 1 and m in relayed) else 0
-                                events += [thresholds[t], xy | (flag << 16)]
-                                t += 1
+                    for t, ch in enumerate(stream_chunks(geo, up_entries)):
+                        relayed = False
+                        if ch.entry + 1 < len(local_entries):
+                            rq, rms = local_entries[ch.entry + 1]
+                            assert rq == ch.q
+                            relayed = ch.m in rms
+                        flag = 1 if (ch.last_of_block and relayed) else 0
+                        events += [thresholds[t], _xy(virt(geo.core(ch.q, ch.m))) | (flag << 16)]
                     recv_rt[core.x][core.y] = [arrival_addr, incs, _xy(port_v[(l, d)]), len(events) // 2] + events
             kernels.append(
                 ttnn.KernelDescriptor(

@@ -1,0 +1,100 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent Inc.
+# SPDX-License-Identifier: Apache-2.0
+"""port_supply_pipeline: stall split of the op COPY's port senders / readers during the bulk.
+
+    AGRN_PERF_ZONES=1 PSP_DIAG=1 TT_METAL_DEVICE_PROFILER=1 [PSP_SENDER=.. PSP_READER=.. PSP_BATCH=.. PSP_CB_BATCHES=..] \\
+        scripts/tt-probe.sh all_gather_rms_norm_kimi <<< "from ttnn.operations.all_gather_rms_norm_kimi.perf_experiments.port_supply_pipeline import psp_zones; psp_zones.run()"
+Per chip: medians over calls and the chip's 4 ports of each psp_* counter (cycles -> us), plus the sender_bulk zone
+span and end (us from the chip's first kernel start). Checks bit-identity across calls.
+"""
+
+from __future__ import annotations
+
+import collections
+import csv
+import os
+import statistics as st
+from pathlib import Path
+
+import torch
+import ttnn
+
+from eval import ccl_perf
+from eval.golden_tests.all_gather_rms_norm_kimi.conftest import _FabricMeshCache
+from eval.golden_tests.all_gather_rms_norm_kimi.topology import focus_mesh_shape
+from eval.golden_tests.all_gather_rms_norm_kimi.helpers import create_ttnn_input_tensor, create_ttnn_gamma
+from ttnn.operations.all_gather_rms_norm_kimi.perf_experiments.port_supply_pipeline.op_copy import (
+    all_gather_rms_norm_kimi,
+)
+
+F = 1350.0
+CALLS = int(os.environ.get("FFS_CALLS", "6"))
+COUNTS = ("psp_s_ncbwait", "psp_s_nslotwait", "psp_r_nrelaywait")
+
+
+def analyze(path):
+    prog = collections.defaultdict(list)
+    with open(path) as f:
+        next(f)
+        r = csv.reader(f)
+        next(r)
+        for x in r:
+            prog[(x[0], x[7])].append(
+                (int(x[1]), int(x[2]), x[3].strip(), int(x[5]), int(x[6] or 0), x[10].strip(), x[11].strip())
+            )
+    vals = collections.defaultdict(lambda: collections.defaultdict(list))
+    for (chip, run), ev in prog.items():
+        names = {e[5] for e in ev}
+        if "sender_bulk" not in names:
+            continue
+        t0 = min(e[3] for e in ev if e[5].endswith("-KERNEL") and e[6] == "ZONE_START")
+        bulk = {}
+        for cx, cy, risc, t, data, name, typ in ev:
+            if name.startswith("psp_"):
+                vals[chip][name].append(data if name in COUNTS else data / F)
+            elif name == "sender_bulk":
+                bulk.setdefault((cx, cy), {})[typ] = (t - t0) / F
+            elif name == "preader_own_wait" and typ == "ZONE_END":
+                vals[chip]["own_wait_end"].append((t - t0) / F)
+        for b in bulk.values():
+            if "ZONE_START" in b and "ZONE_END" in b:
+                vals[chip]["bulk_start"].append(b["ZONE_START"])
+                vals[chip]["bulk_end"].append(b["ZONE_END"])
+                vals[chip]["bulk_dur"].append(b["ZONE_END"] - b["ZONE_START"])
+        vals[chip]["span"].append(
+            (max(e[3] for e in ev if e[5].endswith("-KERNEL") and e[6] == "ZONE_END") - t0) / F
+        )
+    for chip in sorted(vals):
+        v = vals[chip]
+        print(
+            f"PSP chip {chip}: "
+            + " ".join(f"{k}={st.median(v[k]):.2f}" for k in sorted(v) if v[k])
+            + f" | n={len(v['span'])}"
+        )
+
+
+def run():
+    cache = _FabricMeshCache()
+    mesh = cache.get(focus_mesh_shape()[0])
+    rows, cols = tuple(mesh.shape)
+    shape = (1, 1, int(os.environ.get("AGRN_M", "640")), 384)
+    torch.manual_seed(0)
+    x = torch.randn((rows, cols, *shape)).to(torch.bfloat16)
+    g = torch.randn((cols * 384,)).to(torch.bfloat16)
+    tx = create_ttnn_input_tensor(x, mesh, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
+    tg = create_ttnn_gamma(g, mesh, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT)
+    spin = ccl_perf.spin_op(mesh, cycles=40_000_000)
+    call = lambda: all_gather_rms_norm_kimi(tx, gamma=tg, cluster_axis=1, num_links=2)
+    ref = ttnn.to_torch(call(), mesh_composer=ttnn.ConcatMeshToTensor(mesh, dim=0))
+    ttnn.synchronize_device(mesh)
+    for _ in range(CALLS):
+        spin()
+        out = call()
+    ttnn.synchronize_device(mesh)
+    got = ttnn.to_torch(out, mesh_composer=ttnn.ConcatMeshToTensor(mesh, dim=0))
+    assert torch.equal(ref, got), "output not bit-identical across calls"
+    ttnn.ReadDeviceProfiler(mesh)
+    cache.close()
+    d = os.environ.get("TT_METAL_PROFILER_DIR", "generated/profiler")
+    analyze(Path(d) / ".logs" / "profile_log_device.csv")
+    print("PSP ZONES DONE")

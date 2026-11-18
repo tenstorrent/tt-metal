@@ -1,0 +1,69 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent Inc.
+# SPDX-License-Identifier: Apache-2.0
+"""port_supply_pipeline: eval/golden_tests/all_gather_rms_norm_kimi/perf_measure.py, pointed at the op COPY in op_copy/.
+
+pytest cannot collect a test file under ttnn/ttnn (ttnn gets imported twice), so this runs through tt-probe:
+
+    PSP_SENDER=<stem> PSP_READER=<stem> [PSP_BATCH= PSP_CB_BATCHES=] FFS_OUT=<dir> FFS_LABEL=<label> [FFS_SHAPE=tall] \\
+      scripts/tt-probe.sh all_gather_rms_norm_kimi <<< \\
+      "from ttnn.operations.all_gather_rms_norm_kimi.perf_experiments.port_supply_pipeline import psp_harness as h; h.run()"
+
+Focus case: the perf LOOSE_CASE, checked against the golden reference before it is timed, then 5 ccl_perf
+experiments. Tall: (1,1,2048,384), like perf/perf_tall.py.txt; both golden-checked and bit-identity-checked across calls.
+"""
+
+from __future__ import annotations
+
+import os
+from pathlib import Path
+
+from eval import ccl_perf
+
+for _k, _v in ccl_perf.PROFILER_ENV.items():  # before the mesh opens
+    os.environ.setdefault(_k, _v)
+
+import torch  # noqa: E402
+import ttnn  # noqa: E402
+
+from eval.golden_tests.all_gather_rms_norm_kimi.conftest import _FabricMeshCache  # noqa: E402
+from eval.golden_tests.all_gather_rms_norm_kimi.topology import focus_mesh_shape  # noqa: E402
+from eval.golden_tests.all_gather_rms_norm_kimi.helpers import (  # noqa: E402
+    create_ttnn_gamma,
+    create_ttnn_input_tensor,
+    prepare_all_gather_rms_norm_kimi,
+)
+from eval.golden_tests.all_gather_rms_norm_kimi.test_golden import _loose_cases  # noqa: E402
+from ttnn.operations.all_gather_rms_norm_kimi.perf_experiments.port_supply_pipeline.op_copy import (  # noqa: E402
+    all_gather_rms_norm_kimi,
+)
+
+
+def _bit_identity(mesh, call, n=4):
+    comp = ttnn.ConcatMeshToTensor(mesh, dim=0)
+    ref = ttnn.to_torch(call(), mesh_composer=comp)
+    for _ in range(n):
+        got = ttnn.to_torch(call(), mesh_composer=comp)
+        assert torch.equal(ref, got), "output differs across repeated calls"
+    print(f"FFS bit-identical over {n + 1} calls")
+
+
+def run():
+    out = Path(os.environ.get("FFS_OUT", ".eval/ccl_perf"))
+    label = os.environ.get("FFS_LABEL", os.environ.get("FFS_SENDER", "baseline"))
+    exps = int(os.environ.get("CCL_PERF_EXPERIMENTS", "5"))
+    cache = _FabricMeshCache()
+    mesh = cache.get(focus_mesh_shape()[0], trace_region_size=ccl_perf.TRACE_REGION_SIZE)
+    (p,) = _loose_cases()
+    inputs, axes, extras = p.values
+    if os.environ.get("FFS_SHAPE", "focus") == "tall":
+        # the tall regression shape of perf/perf_tall.py.txt, golden-checked like the focus case
+        inputs = [(1, 1, 2048, 384)] + list(inputs[1:])
+    call, check = prepare_all_gather_rms_norm_kimi(
+        inputs, mesh_device=mesh, extras=extras, op=all_gather_rms_norm_kimi, **axes
+    )
+    check(call())
+    print("FFS golden check passed")
+    _bit_identity(mesh, call)
+    ccl_perf.run(mesh, call, experiments=exps, out_path=out / f"{label}.json", label=label)
+    cache.close()
+    print("FFS HARNESS DONE")

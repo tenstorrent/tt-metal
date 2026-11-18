@@ -263,3 +263,108 @@ Nothing graduated, so the op gained no raw-LLK path.
   - full-payload packets if the sender is link-bound;
   - port-reader supply (batch depth, relay readiness) if it is data-starved.
 - `ff2` costs nothing and should be re-measured together with any bulk-rate win.
+
+## Perf 2 — tournament round 2 (2-experiment cap)
+- Date: 2026-11-18
+- Focus: the suite's one perf case (per-chip `(1,1,640,384)` bf16 TILE interleaved, γ bf16 ROW_MAJOR, `fp32_dest_acc_en=True`, HiFi4, G = 4 ring, 2 links). Every axis it declares is in `SUPPORTED`. Roofline 7.6 µs (links), target 10.1 µs.
+- Start (harness, 5 experiments): fastest chip **18.716 µs**, slowest 19.788 µs, not dispatch-bound (`perf/p2_baseline.json`).
+
+### Measured breakdown
+- Round 1 graduated nothing, so the cumulative ablation of `perf/p1_abl_*.json` still describes this op: full 18.72, transport only 15.86, local only 15.74, skeleton 6.92 µs. Overlap loss = 18.72 − 15.86 = 2.86 µs.
+- Fresh zone timeline, `p1_zone_driver` + `p1_tail_analyze`. Medians, µs from the chip's first kernel start:
+
+  | chip | fence end | bulk end | last landing | last normalize | last store |
+  |---|---|---|---|---|---|
+  | 0 | 2.36 | 14.64 | 17.27 | 19.01 | 19.65 |
+  | 1 | 3.44 | 15.91 | 17.31 | 19.05 | 19.69 |
+  | 2 | 3.43 | 15.43 | 17.30 | 18.96 | 19.60 |
+  | 3 | 2.91 | 15.93 | 16.84 | 18.62 | 19.30 |
+
+- Per part against its SOL:
+
+  | Part | Measured | Part SOL | Gap |
+  |---|---|---|---|
+  | TRANSPORT bulk per port (360 KiB, 30 × 12,288 B packets) | 12.1 µs ≈ 30 GB/s, 62% of the link | 7.6 µs at 48.5 GB/s; the example reaches ~75% in steady state | 2 µs vs the example, 4.5 vs SOL |
+  | OVERLAP post-exchange chain (last landing → last store) | 2.4 µs | ~0.9 µs (one 6-tile pass + one 6-tile store) | 1.5 µs |
+
+- Ranked: (1) the bulk rate, (2) the post-landing chain.
+- Isolated TRANSPORT check, not spawned: the 7-tile full-payload packet idea. The `fabric_all_gather` example on this exact slice (1x4 ring, 2 links, balanced) measured 14,336 B vs 12,288 B router payload: 18.0 vs 16.4 µs (1D), 17.1 vs 16.5 (1D_RING), 18.7 vs 17.6 (2D). Larger packets do not help at this size. The op's transport-only time (15.86) is already below the example's.
+
+### Portfolio and verdicts (cap: 2)
+
+**Results**
+
+| Idea | Kind | Verdict alone | Focus, fastest / slowest µs (base → candidate) | Domain |
+|---|---|---|---|---|
+| `port_supply_pipeline` (`perf_experiments/port_supply_pipeline/`) | TRANSPORT, bulk rate | WIN, but below the 2–3% noise rule alone (−0.9%) | 18.717 / 19.79 → 18.563 / 19.696 (3 runs, `compare` win each time) | Everywhere; the tall shape is better on the fastest chip (−0.7) and flat on the slowest |
+| `late_tail_interleave` (`perf_experiments/late_tail_interleave/`) | OVERLAP, post-exchange chain | WIN, but below the noise rule alone (−1.5% / −1.9%) | 18.717 / 19.789 → 18.443 / 19.423 | Everywhere; all 5 acceptance shapes are bit-exact against the old op; tall 50.91 / 53.78 → 50.67 / 53.07 |
+
+**`port_supply_pipeline`**
+- **Sender stall split (12.3–12.7 µs bulk):**
+  - waiting for CB data 1.5–1.9 µs;
+  - waiting for a router slot 1.3–1.7;
+  - `send_current_slot` issue 2.5–2.8;
+  - `noc_async_writes_flushed` 1.6–1.8.
+- **Port reader:** its whole-batch read barrier took 7.6–8.2 µs.
+- **What wins:** each chunk read gets its own trid (up to 4 in flight) and is pushed to the sender as soon as it lands. The reader's barrier time drops to ~4.2 µs, and the bulk then sits at the router channel's ~400 ns per 12 KiB packet.
+- **Nulls / regressions in the menu:**
+  - a deeper port CB (8 chunks, pop every 2 or every 4): 18.89–19.21;
+  - pop every 4 with a 4-chunk CB: 19.68 (sender starved);
+  - the stateful fabric send API: null on the profiler run.
+
+**`late_tail_interleave`**
+- **Root cause:** INC_EVERY = 8 plus an increment at each entry end places the arrival increments at stream positions 8, 16, 20, 24 and 30. Only the final increment released the last 3 late blocks, so each ran a whole-block LATE_BLOCK gamma + normalize after the last landing.
+- **Fix:**
+  - send the tail blocks chunk-major (A0 B0 C0 D0 A1 B1 …), `TAIL_INTERLEAVE_CHUNKS = 8`, with one increment at the end of each round;
+  - process late blocks per chunk.
+- **Menu, fastest / slowest µs:**
+  - LATE_BLOCK kept on: 18.760 / 19.753;
+  - interleave without the extra increment: 19.014 / 20.070;
+  - per-chunk processing without reordering: 19.109 / 20.126;
+  - an increment on each of the last 8 chunks: 20.332 / 21.295.
+- Back-to-back fused increments cost ~0.25 µs each at the stream tail.
+- A non-inlined sender lambda cost +0.40 µs; `always_inline` restores it.
+
+### Graduated: both, as one change (they are compatible and super-additive)
+- **What changed:**
+  - **Port reader:** the head / chunk-major-tail walk of `late_tail_interleave`, with every chunk read through the rolling trid pipeline of `port_supply_pipeline`. A blocking relay wait drains first. New zone `preader_tail_drain`.
+  - **Port sender:** inlined `send_chunk`, then the chunk-major tail with one increment per round.
+  - **Host side:**
+    - `stream_chunks()` is now the single host model of the send order and increment flags. `stream_incs`, the look-ahead table and the receiver's events derive from it.
+    - New knobs `TAIL_INTERLEAVE_CHUNKS = 8` and `PORT_READS_IN_FLIGHT = 4` (both in the program hash).
+    - Port compile-time args 13 / 14: CB capacity in chunks / reads in flight.
+    - Runtime args: + `n_tail` per port kernel.
+- **Domain:** the op's one kernel path, everywhere, unqualified. No predicate and no carve-out: no shape measured a regression.
+- **Deleted:** `LATE_BLOCK` (knob, hash entry, compute compile-time arg, the whole-block branch in the compute kernel) and the port reader's batch / barrier supply loop.
+- **Whole op (harness, 5 experiments):**
+
+  | Case | Fastest chip µs | Slowest chip µs | `compare` |
+  |---|---|---|---|
+  | Focus, base | 18.716 | 19.788 | — |
+  | Focus, candidate run 1 | 18.097 (−0.618, −3.3%) | 19.215 (−0.573, −2.9%) | win, noise 0.050 / 0.060 |
+  | Focus, candidate run 2 | 18.102 | 19.219 | — |
+  | Tall (1,1,2048,384), R3 final → now | 51.000 → 50.054 (−0.946) | 53.652 → 52.912 (−0.740) | win |
+
+  Files: `perf/p2_final.json`, `perf/p2_final_r2.json`, `perf/p2_tall_final.json`.
+- **Tail after the change** (chips 0–3, µs):
+  - last landing 17.03 / 17.03 / 17.25 / 16.87;
+  - last normalize 18.25 / 18.26 / 18.39 / 18.02 (landing → normalize **+1.2**, was +1.7);
+  - last store 18.85 / 18.86 / 18.94 / 18.62;
+  - zones-on span 18.6–19.2 (was 19.1–19.7);
+  - `sender_bulk` 11.2–12.1 µs (was 11.7–12.3).
+- **Accuracy (unchanged):** PCC 0.999998, relative RMS ≤ 0.002406, max ULP 1.09 over (1,1,32,32), (1,1,128,256), (1,1,640,384), (1,1,2048,384).
+- **Guard set:** the op has one kernel path × layout × placement.
+  - golden suite 7 / 7;
+  - acceptance 8 / 8 (tall shape, bit-identical repeat and replication);
+  - precision baseline 4 / 4.
+
+### Helper bypasses — none
+- The compute change is a deletion: the remaining per-chunk path still uses the eltwise helpers.
+- The port reader uses the dataflow API's transaction-id calls (`noc_async_read_set_trid`, `noc_async_read_barrier_with_trid`, `ncrisc_noc_read_with_transaction_id_flushed`, `noc_cmd_buf_ready`). No kernel_lib helper covers this; it is the base dataflow layer, not a bypass.
+- Feedback for a future dataflow helper: a "rolling read ring" (per-entry completion pushed in order into a CB, with a cap on reads in flight) would cover this pattern. Pitfalls such a helper would have to own:
+  - the deadlock against a batch-popping consumer;
+  - the poll of a trid before the NIU has counted the read.
+
+### Next round
+- The bulk now sits at the router channel's ~400 ns per 12 KiB packet: the sender's issue + flush (~4.3 µs of the 12) is the remaining sender-side cost.
+- After the last landing, what remains is one 6-tile gamma pass + one 6-tile normalize pass (~1.2 µs) + the store (~0.6 µs).

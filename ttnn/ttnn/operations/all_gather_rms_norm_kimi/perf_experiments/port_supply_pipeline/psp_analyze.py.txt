@@ -1,0 +1,51 @@
+# port_supply_pipeline: offline stall-split analyzer (no device). python3 psp_analyze.py <profile_log_device.csv>
+import collections, csv, os, statistics as st, sys
+F = 1350.0
+CALLS = int(os.environ.get("FFS_CALLS", "6"))
+COUNTS = ("psp_s_ncbwait", "psp_s_nslotwait", "psp_r_nrelaywait")
+
+
+def analyze(path):
+    prog = collections.defaultdict(list)
+    with open(path) as f:
+        next(f)
+        r = csv.reader(f)
+        next(r)
+        for x in r:
+            prog[(x[0], x[7])].append(
+                (int(x[1]), int(x[2]), x[3].strip(), int(x[5]), int(x[6] or 0), x[10].strip(), x[11].strip())
+            )
+    vals = collections.defaultdict(lambda: collections.defaultdict(list))
+    for (chip, run), ev in prog.items():
+        names = {e[5] for e in ev}
+        if "sender_bulk" not in names:
+            continue
+        t0 = min(e[3] for e in ev if e[5].endswith("-KERNEL") and e[6] == "ZONE_START")
+        bulk = {}
+        for cx, cy, risc, t, data, name, typ in ev:
+            if name.startswith("psp_"):
+                vals[chip][name].append(data if name in COUNTS else data / F)
+            elif name == "sender_bulk":
+                bulk.setdefault((cx, cy), {})[typ] = (t - t0) / F
+            elif name == "preader_own_wait" and typ == "ZONE_END":
+                vals[chip]["own_wait_end"].append((t - t0) / F)
+        for b in bulk.values():
+            if "ZONE_START" in b and "ZONE_END" in b:
+                vals[chip]["bulk_start"].append(b["ZONE_START"])
+                vals[chip]["bulk_end"].append(b["ZONE_END"])
+                vals[chip]["bulk_dur"].append(b["ZONE_END"] - b["ZONE_START"])
+        vals[chip]["span"].append(
+            (max(e[3] for e in ev if e[5].endswith("-KERNEL") and e[6] == "ZONE_END") - t0) / F
+        )
+    for chip in sorted(vals):
+        v = vals[chip]
+        print(
+            f"PSP chip {chip}: "
+            + " ".join(f"{k}={st.median(v[k]):.2f}" for k in sorted(v) if v[k])
+            + f" | n={len(v['span'])}"
+        )
+
+
+
+if __name__ == "__main__":
+    analyze(sys.argv[1])

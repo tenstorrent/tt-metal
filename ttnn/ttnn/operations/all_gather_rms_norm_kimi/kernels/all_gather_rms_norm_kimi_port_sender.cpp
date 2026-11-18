@@ -53,6 +53,7 @@ void kernel_main() {
     const uint32_t active = get_arg_val<uint32_t>(a++);
     uint32_t chunks_left = get_arg_val<uint32_t>(a++);
     const uint32_t n_blocks = get_arg_val<uint32_t>(a++);
+    const uint32_t n_tail = get_arg_val<uint32_t>(a++);  // trailing blocks sent chunk-major (host tail_blocks)
     const uint32_t n_stats = get_arg_val<uint32_t>(a++);
     const uint32_t ready_addr = get_arg_val<uint32_t>(a++);
     const uint32_t ready_xy = get_arg_val<uint32_t>(a++);  // the peer's port that writes into this chip
@@ -125,46 +126,70 @@ void kernel_main() {
 
     // ---- bulk ----
     const uint64_t arrival_noc = get_noc_addr(recv_xy >> 8, recv_xy & 0xFF, arrival_addr);
+    const uint32_t n_chunks = chunks_left;
     uint32_t h = 0, unflushed = 0, sent = 0;
+    // one bulk chunk: chunk k of the block on core xy, with a fused arrival increment if `inc`
+    auto send_chunk = [&](uint32_t xy, uint32_t k, bool inc) __attribute__((always_inline)) {
+        while (!cb_pages_available_at_front(cb, chunk_tiles * (unflushed + 1))) {
+            try_stats();
+        }
+        if constexpr (stats_window > 0) {
+            // a stats slot still owed (the relay) would queue behind every bulk packet in the channel: keep at
+            // most stats_window of them queued until it has gone out
+            while (stats_sent < n_stats &&
+                   conn.num_buffers_per_channel - conn.get_num_free_write_slots() >= stats_window) {
+                try_stats();
+            }
+        }
+        const uint32_t src = get_read_ptr(cb) + unflushed * chunk_bytes;
+        const uint64_t dst = get_noc_addr(xy >> 8, xy & 0xFF, landing_addr + k * chunk_bytes);
+        volatile tt_l1_ptr PACKET_HEADER_TYPE* hdr = hdrs[h];
+        h = (h + 1 == batch) ? 0 : h + 1;
+        if (inc) {
+            hdr->to_noc_fused_unicast_write_atomic_inc(
+                NocUnicastAtomicIncFusedCommandHeader{dst, arrival_noc, 1, true}, chunk_bytes);
+        } else {
+            hdr->to_noc_unicast_write(NocUnicastCommandHeader{dst}, chunk_bytes);
+        }
+        conn.wait_for_empty_write_slot();
+        conn.send_current_slot_non_blocking(src, chunk_bytes, reinterpret_cast<uint32_t>(hdr));
+        --chunks_left;
+        if (++unflushed == batch || chunks_left == 0) {
+            noc_async_writes_flushed();  // sources + headers of the in-flight chunks have left L1
+            cb_pop_front(cb, chunk_tiles * unflushed);
+            unflushed = 0;
+            try_stats();
+        }
+    };
     {
         MaybeDeviceZoneScope("sender_bulk");
-        for (uint32_t i = 0; i < n_blocks; ++i) {
+        const uint32_t n_head = n_blocks - n_tail;
+        for (uint32_t i = 0; i < n_head; ++i) {
             const uint32_t xy = get_arg_val<uint32_t>(blocks_idx + 2 * i);
             const uint32_t info = get_arg_val<uint32_t>(blocks_idx + 2 * i + 1);
             const uint32_t n = info & 0xFFFF;
             const bool entry_end = (info >> 17) & 1;
             for (uint32_t k = 0; k < n; ++k) {
-                while (!cb_pages_available_at_front(cb, chunk_tiles * (unflushed + 1))) {
-                    try_stats();
-                }
-                if constexpr (stats_window > 0) {
-                    // a stats slot still owed (the relay) would queue behind every bulk packet in the channel: keep at
-                    // most stats_window of them queued until it has gone out
-                    while (stats_sent < n_stats &&
-                           conn.num_buffers_per_channel - conn.get_num_free_write_slots() >= stats_window) {
-                        try_stats();
-                    }
-                }
-                const uint32_t src = get_read_ptr(cb) + unflushed * chunk_bytes;
-                const uint64_t dst = get_noc_addr(xy >> 8, xy & 0xFF, landing_addr + k * chunk_bytes);
-                volatile tt_l1_ptr PACKET_HEADER_TYPE* hdr = hdrs[h];
-                h = (h + 1 == batch) ? 0 : h + 1;
                 ++sent;
-                if ((sent % inc_every) == 0 || (entry_end && k + 1 == n)) {
-                    hdr->to_noc_fused_unicast_write_atomic_inc(
-                        NocUnicastAtomicIncFusedCommandHeader{dst, arrival_noc, 1, true}, chunk_bytes);
-                } else {
-                    hdr->to_noc_unicast_write(NocUnicastCommandHeader{dst}, chunk_bytes);
+                send_chunk(xy, k, (sent % inc_every) == 0 || (entry_end && k + 1 == n));
+            }
+        }
+        // the tail (the end of the last entry), chunk-major: round c sends chunk c of every tail block that has it;
+        // each round ends with an increment (one notification releases those chunks of every tail block)
+        for (uint32_t c = 0; sent < n_chunks; ++c) {
+            uint32_t last = n_head;  // the last tail block with a chunk c (the round's end)
+            for (uint32_t i = n_head; i < n_blocks; ++i) {
+                if ((get_arg_val<uint32_t>(blocks_idx + 2 * i + 1) & 0xFFFF) > c) {
+                    last = i;
                 }
-                conn.wait_for_empty_write_slot();
-                conn.send_current_slot_non_blocking(src, chunk_bytes, reinterpret_cast<uint32_t>(hdr));
-                --chunks_left;
-                if (++unflushed == batch || chunks_left == 0) {
-                    noc_async_writes_flushed();  // sources + headers of the in-flight chunks have left L1
-                    cb_pop_front(cb, chunk_tiles * unflushed);
-                    unflushed = 0;
-                    try_stats();
+            }
+            for (uint32_t i = n_head; i <= last; ++i) {
+                const uint32_t xy = get_arg_val<uint32_t>(blocks_idx + 2 * i);
+                if ((get_arg_val<uint32_t>(blocks_idx + 2 * i + 1) & 0xFFFF) <= c) {
+                    continue;
                 }
+                ++sent;
+                send_chunk(xy, c, (sent % inc_every) == 0 || i == last);
             }
         }
     }  // sender_bulk

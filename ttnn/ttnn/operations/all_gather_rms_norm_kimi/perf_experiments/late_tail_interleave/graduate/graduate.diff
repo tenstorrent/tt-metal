@@ -1,0 +1,469 @@
+--- a/ttnn/ttnn/operations/all_gather_rms_norm_kimi/all_gather_rms_norm_kimi_program_descriptor.py
++++ b/ttnn/ttnn/operations/all_gather_rms_norm_kimi/all_gather_rms_norm_kimi_program_descriptor.py
+@@ -25,7 +25,7 @@
+   BLOCK_W (None = the whole slice width), block_h (derived from the grid left after the ports), chunk_tiles (derived
+   from the router payload), PORT_PLACEMENT, PORT_BATCH_CHUNKS, INC_EVERY, OUT_DEPTH_CHUNKS, num_links; the OVERLAP
+   knobs of Refinement 2: GAMMA_HUB_MCAST, XG_LATE_STREAM_CHUNKS, FUSE_LATE_CHUNKS, STATS_BULK_WINDOW; Refinement 3:
+-  COMBINE_COL0, COMPUTE_STORE_NOC, OWN_STORE_GATE.
++  COMBINE_COL0, COMPUTE_STORE_NOC, OWN_STORE_GATE; Perf 2: TAIL_INTERLEAVE_CHUNKS.
+ """
+
+ from __future__ import annotations
+@@ -75,9 +75,12 @@
+ # after the combine: two passes for a chunk that lands after the combine. "scale": S = rstd * gamma (one block pass
+ # right after the combine), out = x * S: one pass per landed chunk, so the landing tail is one multiply.  [R3]
+ NORMALIZE_MODE = "xg"
+-# xg mode: a block with no chunk ahead runs one gamma + one normalize pass over the whole block (pushed per chunk)
+-# instead of two passes per chunk: half the per-pass init / format reconfig on the landing tail.  [R3]
+-LATE_BLOCK = True
++# The trailing blocks of a stream's last entry that hold any of its last TAIL_INTERLEAVE_CHUNKS chunks (the late
++# blocks of the look-ahead) are sent chunk-major (A0 B0 C0 D0 A1 B1 ...), and each chunk-major round ends with a fused
++# arrival increment: the first chunks of every late block land and are notified well before the stream's last chunk,
++# so after the last landing only one chunk's gamma + normalize + store is left per core (block order left a whole
++# late block, and INC_EVERY notified the last 3 blocks of each stream at once at the stream end). 0 = off.  [Perf 2]
++TAIL_INTERLEAVE_CHUNKS = 8
+ # NoC of the compute cores' writer (the DRAM output store + the partial export); the compute reader takes the other
+ # one. The port senders and receivers write on NoC1, the port readers pull the landed chunks on NoC0.  [R3]
+ COMPUTE_STORE_NOC = 1
+@@ -431,32 +434,75 @@
+     return counts[0]
+
+
++def tail_blocks(geo, entries):
++    """How many trailing blocks of the stream are sent chunk-major: those of the last entry that hold any of the
++    stream's last TAIL_INTERLEAVE_CHUNKS chunks."""
++    if TAIL_INTERLEAVE_CHUNKS <= 0 or not entries:
++        return 0
++    total = sum(geo.nchunks(m) for _, ms in entries for m in ms)
++    n, t = 0, total
++    for m in reversed(entries[-1][1]):
++        if t <= total - TAIL_INTERLEAVE_CHUNKS:
++            break
++        n += 1
++        t -= geo.nchunks(m)
++    return n
++
++
++@dataclass
++class StreamChunk:
++    q: int
++    m: int
++    c: int  # chunk index within the block
++    entry: int
++    inc: bool = False  # carries a fused arrival increment
++    last_of_block: bool = False  # last chunk of its block in send order
++
++
++def stream_chunks(geo, entries):
++    """Every chunk of a port stream in send order, with its increment flag: the host mirror of the port sender's walk
++    (blocks in order, each block's chunks in order; the tail_blocks() trailing blocks chunk-major). The sender
++    increments on every INC_EVERY-th chunk, on each entry's last chunk, and on the last chunk of each chunk-major
++    round of the tail."""
++    blocks = [(k, q, m) for k, (q, ms) in enumerate(entries) for m in ms]
++    n_tail = tail_blocks(geo, entries)
++    head, tail = blocks[: len(blocks) - n_tail], blocks[len(blocks) - n_tail :]
++    out = []
++    for k, q, m in head:
++        n = geo.nchunks(m)
++        out += [StreamChunk(q, m, c, k, last_of_block=c == n - 1) for c in range(n)]
++        out[-1].inc = m == entries[k][1][-1]  # entry end
++    for c in range(max((geo.nchunks(m) for _, _, m in tail), default=0)):
++        out += [
++            StreamChunk(q, m, c, k, last_of_block=c == geo.nchunks(m) - 1)
++            for k, q, m in tail
++            if c < geo.nchunks(m)
++        ]
++        out[-1].inc = True  # round end (the last round ends the last entry)
++    for i, ch in enumerate(out):
++        ch.inc = ch.inc or (i + 1) % INC_EVERY == 0
++    return out
++
++
+ def stream_incs(geo, entries):
+-    """Per chunk of the stream (in order): the arrival-counter value that covers it; and the total increments.
+-    The sender increments on every INC_EVERY-th chunk and on each entry's last chunk."""
++    """Per chunk of the stream (in send order): the arrival-counter value that covers it; and the total increments."""
+     thresholds = []
+-    sent = incs = 0
+-    pending = 0
+-    for _, ms in entries:
+-        n_entry = sum(geo.nchunks(m) for m in ms)
+-        k = 0
+-        for m in ms:
+-            for _ in range(geo.nchunks(m)):
+-                sent += 1
+-                k += 1
+-                pending += 1
+-                if sent % INC_EVERY == 0 or k == n_entry:
+-                    incs += 1
+-                    thresholds += [incs] * pending
+-                    pending = 0
++    incs = pending = 0
++    for ch in stream_chunks(geo, entries):
++        pending += 1
++        if ch.inc:
++            incs += 1
++            thresholds += [incs] * pending
++            pending = 0
+     assert pending == 0
+     return thresholds, incs
+
+
+ def xg_ahead_table(geo, p):
+     """Per compute core (index q * nb + m) of chip p: chunks of its block that compute xg before the stats combine,
+-    packed 4 per word (8 bits each). Own blocks: all. Remote blocks: the chunks before the last XG_LATE_STREAM_CHUNKS
+-    of their upstream port's stream (each remote block arrives in exactly one upstream stream)."""
++    packed 4 per word (8 bits each). Own blocks: all. Remote blocks: their chunks sent before the last
++    XG_LATE_STREAM_CHUNKS of their upstream port's stream (each remote block arrives in exactly one upstream stream,
++    its chunks in order, so this is a prefix of the block)."""
+     G = geo.G
+     ahead = [0] * (G * geo.nb)
+     for m in range(geo.nb):
+@@ -464,15 +510,10 @@
+     for l in range(geo.L):
+         for d in (FWD, BWD):
+             up_p = (p - 1) % G if d == FWD else (p + 1) % G
+-            entries = port_stream(geo, up_p, l, d)
+-            total = sum(geo.nchunks(m) for _, ms in entries for m in ms)
+-            thr = 0 if XG_LATE_STREAM_CHUNKS is None else total - XG_LATE_STREAM_CHUNKS
+-            t = 0
+-            for q, ms in entries:
+-                for m in ms:
+-                    n = geo.nchunks(m)
+-                    ahead[q * geo.nb + m] = min(n, max(0, thr - t))
+-                    t += n
++            chunks = stream_chunks(geo, port_stream(geo, up_p, l, d))
++            thr = 0 if XG_LATE_STREAM_CHUNKS is None else len(chunks) - XG_LATE_STREAM_CHUNKS
++            for ch in chunks[: max(0, thr)]:
++                ahead[ch.q * geo.nb + ch.m] += 1
+     assert max(ahead) < 256
+     words = [0] * (-(-len(ahead) // 4))
+     for i, a in enumerate(ahead):
+@@ -590,7 +631,7 @@
+                 FUSE_LATE_CHUNKS,
+                 COMBINE_COL0,
+                 NORMALIZE_MODE,
+-                LATE_BLOCK,
++                TAIL_INTERLEAVE_CHUNKS,
+                 COMPUTE_STORE_NOC,
+                 OWN_STORE_GATE,
+                 gamma_page,
+@@ -654,7 +695,7 @@
+             compute_ct = geo_ct + [_f32_bits(1.0 / W), _f32_bits(epsilon)]
+             compute_ct += [CB_X_BLOCK, CB_GAMMA, CB_OUT, CB_PARTIALS, CB_XSQ_SUM, CB_RSTD, CB_PARTIAL, CB_XG]
+             compute_ct += [CB_SCALER, CB_RSTD_FULL, int(FUSE_LATE_CHUNKS), int(COMBINE_COL0)]
+-            compute_ct += [int(NORMALIZE_MODE == "scale"), int(LATE_BLOCK)]
++            compute_ct += [int(NORMALIZE_MODE == "scale")]
+
+             ccfg = ttnn.ComputeConfigDescriptor()
+             ccfg.math_fidelity = cfg.math_fidelity
+@@ -708,12 +749,13 @@
+                     slots = stats_slots(geo, p, d) if l == 0 else []
+                     active = n_chunks > 0 or len(slots) > 0
+                     # reader
+-                    rargs = [landing_addr, len(geo.link_rows(l)), n_chunks, len(blocks)]
++                    n_tail = tail_blocks(geo, entries)
++                    rargs = [landing_addr, len(geo.link_rows(l)), n_chunks, len(blocks), n_tail]
+                     for q, m, relay, end in blocks:
+                         rargs += [_xy(virt(geo.core(q, m))), geo.nchunks(m) | (int(relay) << 16) | (int(end) << 17)]
+                     preader_rt[core.x][core.y] = rargs
+                     # sender
+-                    sargs = [landing_addr, stats_addr, int(active), n_chunks, len(blocks), len(slots)]
++                    sargs = [landing_addr, stats_addr, int(active), n_chunks, len(blocks), n_tail, len(slots)]
+                     sargs += [ready_addr, _xy(port_vs[peer][(l, _OPP[d])]), arrival_addr, _xy(recv_vs[peer][(l, d)])]
+                     sargs += [sfwd_addr if d == FWD else sbwd_addr, _xy(hub_vs[peer])]
+                     pn = node(peer)
+@@ -771,20 +813,14 @@
+                     local_entries = port_stream(geo, p, l, d)
+                     thresholds, incs = stream_incs(geo, up_entries)
+                     events = []
+-                    t = 0
+-                    for k, (q, ms) in enumerate(up_entries):
+-                        relayed = set()
+-                        if k + 1 < len(local_entries):
+-                            rq, rms = local_entries[k + 1]
+-                            assert rq == q
+-                            relayed = set(rms)
+-                        for m in ms:
+-                            n = geo.nchunks(m)
+-                            xy = _xy(virt(geo.core(q, m)))
+-                            for c in range(n):
+-                                flag = 1 if (c == n - 1 and m in relayed) else 0
+-                                events += [thresholds[t], xy | (flag << 16)]
+-                                t += 1
++                    for t, ch in enumerate(stream_chunks(geo, up_entries)):
++                        relayed = False
++                        if ch.entry + 1 < len(local_entries):
++                            rq, rms = local_entries[ch.entry + 1]
++                            assert rq == ch.q
++                            relayed = ch.m in rms
++                        flag = 1 if (ch.last_of_block and relayed) else 0
++                        events += [thresholds[t], _xy(virt(geo.core(ch.q, ch.m))) | (flag << 16)]
+                     recv_rt[core.x][core.y] = [arrival_addr, incs, _xy(port_v[(l, d)]), len(events) // 2] + events
+             kernels.append(
+                 ttnn.KernelDescriptor(
+--- a/ttnn/ttnn/operations/all_gather_rms_norm_kimi/kernels/all_gather_rms_norm_kimi_port_sender.cpp
++++ b/ttnn/ttnn/operations/all_gather_rms_norm_kimi/kernels/all_gather_rms_norm_kimi_port_sender.cpp
+@@ -53,6 +53,7 @@
+     const uint32_t active = get_arg_val<uint32_t>(a++);
+     uint32_t chunks_left = get_arg_val<uint32_t>(a++);
+     const uint32_t n_blocks = get_arg_val<uint32_t>(a++);
++    const uint32_t n_tail = get_arg_val<uint32_t>(a++);  // trailing blocks sent chunk-major (host tail_blocks)
+     const uint32_t n_stats = get_arg_val<uint32_t>(a++);
+     const uint32_t ready_addr = get_arg_val<uint32_t>(a++);
+     const uint32_t ready_xy = get_arg_val<uint32_t>(a++);  // the peer's port that writes into this chip
+@@ -125,46 +126,70 @@
+
+     // ---- bulk ----
+     const uint64_t arrival_noc = get_noc_addr(recv_xy >> 8, recv_xy & 0xFF, arrival_addr);
++    const uint32_t n_chunks = chunks_left;
+     uint32_t h = 0, unflushed = 0, sent = 0;
++    // one bulk chunk: chunk k of the block on core xy, with a fused arrival increment if `inc`
++    auto send_chunk = [&](uint32_t xy, uint32_t k, bool inc) __attribute__((always_inline)) {
++        while (!cb_pages_available_at_front(cb, chunk_tiles * (unflushed + 1))) {
++            try_stats();
++        }
++        if constexpr (stats_window > 0) {
++            // a stats slot still owed (the relay) would queue behind every bulk packet in the channel: keep at
++            // most stats_window of them queued until it has gone out
++            while (stats_sent < n_stats &&
++                   conn.num_buffers_per_channel - conn.get_num_free_write_slots() >= stats_window) {
++                try_stats();
++            }
++        }
++        const uint32_t src = get_read_ptr(cb) + unflushed * chunk_bytes;
++        const uint64_t dst = get_noc_addr(xy >> 8, xy & 0xFF, landing_addr + k * chunk_bytes);
++        volatile tt_l1_ptr PACKET_HEADER_TYPE* hdr = hdrs[h];
++        h = (h + 1 == batch) ? 0 : h + 1;
++        if (inc) {
++            hdr->to_noc_fused_unicast_write_atomic_inc(
++                NocUnicastAtomicIncFusedCommandHeader{dst, arrival_noc, 1, true}, chunk_bytes);
++        } else {
++            hdr->to_noc_unicast_write(NocUnicastCommandHeader{dst}, chunk_bytes);
++        }
++        conn.wait_for_empty_write_slot();
++        conn.send_current_slot_non_blocking(src, chunk_bytes, reinterpret_cast<uint32_t>(hdr));
++        --chunks_left;
++        if (++unflushed == batch || chunks_left == 0) {
++            noc_async_writes_flushed();  // sources + headers of the in-flight chunks have left L1
++            cb_pop_front(cb, chunk_tiles * unflushed);
++            unflushed = 0;
++            try_stats();
++        }
++    };
+     {
+         MaybeDeviceZoneScope("sender_bulk");
+-        for (uint32_t i = 0; i < n_blocks; ++i) {
++        const uint32_t n_head = n_blocks - n_tail;
++        for (uint32_t i = 0; i < n_head; ++i) {
+             const uint32_t xy = get_arg_val<uint32_t>(blocks_idx + 2 * i);
+             const uint32_t info = get_arg_val<uint32_t>(blocks_idx + 2 * i + 1);
+             const uint32_t n = info & 0xFFFF;
+             const bool entry_end = (info >> 17) & 1;
+             for (uint32_t k = 0; k < n; ++k) {
+-                while (!cb_pages_available_at_front(cb, chunk_tiles * (unflushed + 1))) {
+-                    try_stats();
+-                }
+-                if constexpr (stats_window > 0) {
+-                    // a stats slot still owed (the relay) would queue behind every bulk packet in the channel: keep at
+-                    // most stats_window of them queued until it has gone out
+-                    while (stats_sent < n_stats &&
+-                           conn.num_buffers_per_channel - conn.get_num_free_write_slots() >= stats_window) {
+-                        try_stats();
+-                    }
+-                }
+-                const uint32_t src = get_read_ptr(cb) + unflushed * chunk_bytes;
+-                const uint64_t dst = get_noc_addr(xy >> 8, xy & 0xFF, landing_addr + k * chunk_bytes);
+-                volatile tt_l1_ptr PACKET_HEADER_TYPE* hdr = hdrs[h];
+-                h = (h + 1 == batch) ? 0 : h + 1;
+                 ++sent;
+-                if ((sent % inc_every) == 0 || (entry_end && k + 1 == n)) {
+-                    hdr->to_noc_fused_unicast_write_atomic_inc(
+-                        NocUnicastAtomicIncFusedCommandHeader{dst, arrival_noc, 1, true}, chunk_bytes);
+-                } else {
+-                    hdr->to_noc_unicast_write(NocUnicastCommandHeader{dst}, chunk_bytes);
++                send_chunk(xy, k, (sent % inc_every) == 0 || (entry_end && k + 1 == n));
++            }
++        }
++        // the tail (the end of the last entry), chunk-major: round c sends chunk c of every tail block that has it;
++        // each round ends with an increment (one notification releases those chunks of every tail block)
++        for (uint32_t c = 0; sent < n_chunks; ++c) {
++            uint32_t last = n_head;  // the last tail block with a chunk c (the round's end)
++            for (uint32_t i = n_head; i < n_blocks; ++i) {
++                if ((get_arg_val<uint32_t>(blocks_idx + 2 * i + 1) & 0xFFFF) > c) {
++                    last = i;
+                 }
+-                conn.wait_for_empty_write_slot();
+-                conn.send_current_slot_non_blocking(src, chunk_bytes, reinterpret_cast<uint32_t>(hdr));
+-                --chunks_left;
+-                if (++unflushed == batch || chunks_left == 0) {
+-                    noc_async_writes_flushed();  // sources + headers of the in-flight chunks have left L1
+-                    cb_pop_front(cb, chunk_tiles * unflushed);
+-                    unflushed = 0;
+-                    try_stats();
++            }
++            for (uint32_t i = n_head; i <= last; ++i) {
++                const uint32_t xy = get_arg_val<uint32_t>(blocks_idx + 2 * i);
++                if ((get_arg_val<uint32_t>(blocks_idx + 2 * i + 1) & 0xFFFF) <= c) {
++                    continue;
+                 }
++                ++sent;
++                send_chunk(xy, c, (sent % inc_every) == 0 || i == last);
+             }
+         }
+     }  // sender_bulk
+--- a/ttnn/ttnn/operations/all_gather_rms_norm_kimi/kernels/all_gather_rms_norm_kimi_port_reader.cpp
++++ b/ttnn/ttnn/operations/all_gather_rms_norm_kimi/kernels/all_gather_rms_norm_kimi_port_reader.cpp
+@@ -31,7 +31,9 @@
+     const uint32_t landing_addr = get_arg_val<uint32_t>(a++);
+     const uint32_t own_total = get_arg_val<uint32_t>(a++);  // own cores of my link (each increments me once)
+     uint32_t chunks_left = get_arg_val<uint32_t>(a++);
+-    const uint32_t n_blocks = get_arg_val<uint32_t>(a++);  // then per block: core xy, n_chunks | relay << 16
++    const uint32_t n_blocks = get_arg_val<uint32_t>(a++);
++    const uint32_t n_tail = get_arg_val<uint32_t>(a++);  // trailing blocks read chunk-major (the sender's order)
++    const uint32_t blocks_idx = a;                        // then per block: core xy, n_chunks | relay << 16
+
+     volatile tt_l1_ptr uint32_t* own_loaded =
+         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(sem_own_loaded));
+@@ -48,12 +50,9 @@
+             nbat = 0;
+         }
+     };
+-    for (uint32_t i = 0; i < n_blocks; ++i) {
+-        const uint32_t xy = get_arg_val<uint32_t>(a++);
+-        const uint32_t info = get_arg_val<uint32_t>(a++);
+-        const uint32_t n = info & 0xFFFF;
+-        const bool relay = (info >> 16) & 1;
+-        if (relay) {
++    // a block's first visit: wait until it is readable (own: every own core of the link loaded; relay: landed)
++    auto open_block = [&](uint32_t info) __attribute__((always_inline)) {
++        if ((info >> 16) & 1) {
+             ++relays;
+             if (*relay_ready < relays) {
+                 push_batch();
+@@ -64,35 +63,63 @@
+             noc_semaphore_wait_min(own_loaded, own_total);
+             own_waited = true;
+         }
+-        const uint64_t src_base = get_noc_addr(xy >> 8, xy & 0xFF, landing_addr);
+-        for (uint32_t k = 0; k < n; ++k) {
+-            if (nbat == 0) {
+-                need = batch - pos % batch;
+-                cb_reserve_back(cb, chunk_tiles * need);
+-                wptr = get_write_ptr(cb);
+-            }
+-            noc_async_read(src_base + k * chunk_bytes, wptr + nbat * chunk_bytes, chunk_bytes);
+-            --chunks_left;
+-            if (++nbat == need || chunks_left == 0) {
+-                push_batch();
+-            }
++    };
++    auto read_chunk = [&](uint32_t xy, uint32_t k) __attribute__((always_inline)) {
++        if (nbat == 0) {
++            need = batch - pos % batch;
++            cb_reserve_back(cb, chunk_tiles * need);
++            wptr = get_write_ptr(cb);
+         }
+-        // the own core may start its DRAM store once this port has issued the reads of its block (gate 1) or of the
+-        // whole own entry (gate 2). No data hazard (the store reads cb_out); the gate only keeps the store burst
+-        // off the bulk.
++        noc_async_read(
++            get_noc_addr(xy >> 8, xy & 0xFF, landing_addr) + k * chunk_bytes, wptr + nbat * chunk_bytes, chunk_bytes);
++        --chunks_left;
++        if (++nbat == need || chunks_left == 0) {
++            push_batch();
++        }
++    };
++    // the own core may start its DRAM store once this port has issued the reads of its block (gate 1) or of the
++    // whole own entry (gate 2). No data hazard (the store reads cb_out); the gate only keeps the store burst off the
++    // bulk. A tail block's reads are complete only after the last round.
++    auto own_done = [&](uint32_t i, bool own_end) __attribute__((always_inline)) {
++        const uint32_t xy = get_arg_val<uint32_t>(blocks_idx + 2 * i);
++        const bool relay = (get_arg_val<uint32_t>(blocks_idx + 2 * i + 1) >> 16) & 1;
+         if constexpr (own_store_gate == 1) {
+             if (!relay) {
+                 noc_semaphore_inc(get_noc_addr(xy >> 8, xy & 0xFF, get_semaphore(sem_landed)), 1);
+             }
+         } else if constexpr (own_store_gate == 2) {
+-            const bool own_end = !relay && (i + 1 == n_blocks || ((get_arg_val<uint32_t>(a + 1) >> 16) & 1));
+-            if (own_end) {
+-                for (uint32_t j = 0, aa = 4; j <= i; ++j, aa += 2) {
+-                    const uint32_t oxy = get_arg_val<uint32_t>(aa);
++            if (!relay && own_end) {
++                for (uint32_t j = 0; j <= i; ++j) {
++                    const uint32_t oxy = get_arg_val<uint32_t>(blocks_idx + 2 * j);
+                     noc_semaphore_inc(get_noc_addr(oxy >> 8, oxy & 0xFF, get_semaphore(sem_landed)), 1);
+                 }
+             }
+         }
++    };
++    const uint32_t n_head = n_blocks - n_tail;
++    for (uint32_t i = 0; i < n_head; ++i) {
++        const uint32_t xy = get_arg_val<uint32_t>(blocks_idx + 2 * i);
++        const uint32_t info = get_arg_val<uint32_t>(blocks_idx + 2 * i + 1);
++        open_block(info);
++        for (uint32_t k = 0; k < (info & 0xFFFF); ++k) {
++            read_chunk(xy, k);
++        }
++        own_done(i, i + 1 == n_blocks || ((get_arg_val<uint32_t>(blocks_idx + 2 * i + 3) >> 16) & 1));
++    }
++    for (uint32_t c = 0; chunks_left > 0; ++c) {
++        for (uint32_t i = n_head; i < n_blocks; ++i) {
++            const uint32_t xy = get_arg_val<uint32_t>(blocks_idx + 2 * i);
++            const uint32_t info = get_arg_val<uint32_t>(blocks_idx + 2 * i + 1);
++            if (c == 0) {
++                open_block(info);
++            }
++            if ((info & 0xFFFF) > c) {
++                read_chunk(xy, c);
++            }
++        }
++    }
++    for (uint32_t i = n_head; i < n_blocks; ++i) {
++        own_done(i, i + 1 == n_blocks);
+     }
+     push_batch();
+     noc_async_atomic_barrier();
+--- a/ttnn/ttnn/operations/all_gather_rms_norm_kimi/kernels/all_gather_rms_norm_kimi_compute.cpp
++++ b/ttnn/ttnn/operations/all_gather_rms_norm_kimi/kernels/all_gather_rms_norm_kimi_compute.cpp
+@@ -12,9 +12,9 @@
+ //                       remote chunks the host look-ahead table expects landed by then (the stall shadow)
+ //   expand_rstd_block   unary_bcast<Col> -> cb_rstd_full (one tile per block row)
+ //   normalize_block     per chunk: out = xg * rstd_full -> cb_out; a chunk not done ahead runs x * gamma * rstd_full
+-//                       as one chain (DEST reused as srcA, FUSE_LATE_CHUNKS); a block with no chunk ahead runs one
+-//                       gamma pass + one normalize pass over the whole block (LATE_BLOCK). NORMALIZE_MODE "scale"
+-//                       instead computes S = rstd_full * gamma after the combine and out = x * S per landed chunk
++//                       as one chain (DEST reused as srcA, FUSE_LATE_CHUNKS). The late blocks' chunks arrive
++//                       chunk-major (host TAIL_INTERLEAVE_CHUNKS), so each late chunk runs as it lands. NORMALIZE_MODE
++//                       "scale" instead computes S = rstd_full * gamma after the combine and out = x * S per chunk
+ // After the stats only the combine and one multiply per tile stand between the landed chunks and their DRAM store,
+ // so the stores (DRAM-bound, ~4 us for the whole output) start right after the combine instead of after a whole-
+ // block scale. Each chunk is one (rows x cols) window of the block: a run inside one block row, or whole rows.
+@@ -62,9 +62,6 @@
+ // normalize mode: false = xg (x * gamma ahead of the stats, out = xg * rstd per chunk); true = scale (S = rstd * gamma
+ // right after the combine, out = x * S per chunk: ONE pass per landed chunk)
+ constexpr bool scale_mode = get_compile_time_arg_val(C + 14) != 0;
+-// xg mode, a block with no chunk ahead (all of it lands late): one gamma pass + one normalize pass over the whole
+-// block (cumulative waits, pushed per chunk) instead of a gamma + normalize pass per chunk
+-constexpr bool late_block = get_compile_time_arg_val(C + 15) != 0;
+
+ static_assert(block_w % chunk_tiles == 0 || chunk_tiles % block_w == 0, "a chunk is a run in one row or whole rows");
+
+@@ -317,16 +314,7 @@
+     // ---- normalize_block: per chunk, out = xg * rstd (x * gamma * rstd for the chunks not done ahead) ----
+     MaybeDeviceZoneScope("compute_normalize");  // includes the per-chunk landing waits
+     cb_wait_front(cb_rstd_full, h);             // held for every chunk (Col-mapped, offset per chunk)
+-    if (late_block && !fuse_late && ahead == 0) {
+-        const IterationShape block = IterationShape::grid(h, block_w).block_size(chunk_tiles);
+-        mul<input(cb_x_block, WaitPolicy::Cumulative, PopPolicy::None, InputTileMapping::Block),
+-            input(cb_gamma, BroadcastDim::Row, WaitPolicy::None, PopPolicy::None, InputTileMapping::Row),
+-            output(cb_xg, ReservePolicy::PerBlockSize, PushPolicy::PerBlockSize)>(block);
+-        mul<input(cb_xg, WaitPolicy::Cumulative, PopPolicy::AtEnd, InputTileMapping::Block),
+-            input(cb_rstd_full, WaitPolicy::None, PopPolicy::None, InputTileMapping::Col),
+-            output(cb_out, ReservePolicy::PerBlockSize, PushPolicy::PerBlockSize)>(block);
+-    }
+-    for (uint32_t k = (late_block && !fuse_late && ahead == 0) ? n_chunks : 0; k < n_chunks; ++k) {
++    for (uint32_t k = 0; k < n_chunks; ++k) {
+         if (k < ahead) {
+             normalize_chunk(k);
+         } else if constexpr (fuse_late) {

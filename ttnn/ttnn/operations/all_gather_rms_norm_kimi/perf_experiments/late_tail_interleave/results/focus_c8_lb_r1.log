@@ -1,0 +1,78 @@
+TT_PROBE: Saved → tests/ttnn/unit_tests/operations/all_gather_rms_norm_kimi/probes/probe_039.py
+TT_PROBE: Waiting for device lock...
+TT_PROBE: Device lock acquired
+TT_PROBE: python3 tests/ttnn/unit_tests/operations/all_gather_rms_norm_kimi/probes/probe_039.py
+========================================
+2026-11-18 00:53:14.493 | DEBUG    | ttnn:<module>:45 - Initial ttnn.CONFIG:
+Config{cache_path=/home/malimpic/.cache/ttnn,model_cache_path=/home/malimpic/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,validate_program_args=false,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_graph_python_stack_traces=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,std::nullopt}
+LTI knobs: TAIL_INC=8 INTERLEAVE=0 LATE_BLOCK=True
+2026-11-18 00:53:16.128 | info     |          Device | Opening user mode device driver (tt_cluster.cpp:223)
+2026-11-18 00:53:16.128 | info     |             UMD | Cluster constructor started. (cluster.cpp:405)
+2026-11-18 00:53:16.128 | info     |             UMD | Creating TopologyDiscovery for architecture: blackhole (topology_discovery.cpp:131)
+2026-11-18 00:53:16.128 | info     |             UMD | Starting topology discovery. (topology_discovery.cpp:150)
+2026-11-18 00:53:16.138 | info     |             UMD | Established firmware bundle version: 19.9.0 (topology_discovery.cpp:654)
+2026-11-18 00:53:16.138 | info     |             UMD | Completed topology discovery. (topology_discovery.cpp:154)
+2026-11-18 00:53:16.368 | warning  |             UMD | Sysmem (0x40000000 bytes) using regular pages; pre-allocate hugepages for better DMA performance (e.g. 1 × 1GB or 512 × 2MB; on AArch64 also 2 × 512MB). (silicon_sysmem_manager.cpp:105)
+2026-11-18 00:53:16.604 | warning  |             UMD | Sysmem (0x40000000 bytes) using regular pages; pre-allocate hugepages for better DMA performance (e.g. 1 × 1GB or 512 × 2MB; on AArch64 also 2 × 512MB). (silicon_sysmem_manager.cpp:105)
+2026-11-18 00:53:16.800 | warning  |             UMD | Sysmem (0x40000000 bytes) using regular pages; pre-allocate hugepages for better DMA performance (e.g. 1 × 1GB or 512 × 2MB; on AArch64 also 2 × 512MB). (silicon_sysmem_manager.cpp:105)
+2026-11-18 00:53:17.070 | warning  |             UMD | Sysmem (0x40000000 bytes) using regular pages; pre-allocate hugepages for better DMA performance (e.g. 1 × 1GB or 512 × 2MB; on AArch64 also 2 × 512MB). (silicon_sysmem_manager.cpp:105)
+2026-11-18 00:53:17.071 | info     |             UMD | Opening local chip ids/PCIe ids: {0, 1, 2, 3}/[0, 1, 2, 3] and remote chip ids {} (cluster.cpp:172)
+2026-11-18 00:53:17.071 | info     |             UMD | IOMMU: enabled (cluster.cpp:146)
+2026-11-18 00:53:17.071 | info     |             UMD | KMD version: 2.10.0 (cluster.cpp:149)
+2026-11-18 00:53:17.071 | info     |             UMD | Cluster constructor completed. (cluster.cpp:719)
+2026-11-18 00:53:17.074 | info     |             UMD | Starting devices in cluster (cluster.cpp:1305)
+2026-11-18 00:53:17.444 | info     |             UMD | Starting devices in cluster completed. (cluster.cpp:1314)
+2026-11-18 00:53:17.545 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:435)
+2026-11-18 00:53:17.545 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:497)
+2026-11-18 00:53:17.545 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=0 (bus_id=0x1) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:119)
+2026-11-18 00:53:17.546 | info     |          Fabric | Loaded physical groupings from: /home/malimpic/localdev/2026_11_17/1458_malimpic_distributed_rms_norm_all_gather_gen/clones/all_gather_rms_norm_kimi_run1/tt-metal/tests/tt_metal/tt_fabric/physical_groupings/default_physical_grouping_descriptor.textproto (physical_grouping_descriptor_core.cpp:813)
+2026-11-18 00:53:17.547 | info     |          Fabric | No specific Physical Grouping Descriptor found; using default. (physical_grouping_descriptor_core.cpp:897)
+2026-11-18 00:53:17.549 | info     |          Fabric | Matching MESH mgd groupings to MESH groupings (physical_grouping_descriptor_matching.cpp:1428)
+2026-11-18 00:53:17.549 | info     |          Fabric | Grouping valid candidates by node difference (physical_grouping_descriptor_matching.cpp:1522)
+2026-11-18 00:53:17.549 | info     |          Fabric | Physical groupings: Mesh graph descriptor 'M0': 1 topology match(es), committed: 2x2_Mesh_flat (MESH) (physical_grouping_descriptor_matching.cpp:1731)
+2026-11-18 00:53:17.549 | info     |          Fabric | Physical groupings: Mesh graph descriptor 'M0': MGD placement fallback M0 (MESH) embeds on PSD (physical_grouping_descriptor_matching.cpp:1848)
+2026-11-18 00:53:17.554 | info     |           Metal | Fabric config changed from FabricConfig::DISABLED to FabricConfig::FABRIC_2D_TORUS_XY, reinitializing control plane (metal_env.cpp:331)
+2026-11-18 00:53:17.555 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:435)
+2026-11-18 00:53:17.555 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:497)
+2026-11-18 00:53:17.556 | warning  |          Fabric | TopologyMapper auto-discovery: requested fabric type TORUS_XY could not be realized on the discovered physical topology; using MESH which maps all 4 physical chips. This is expected on galaxies that do not have wrap-around (torus) cabling on every axis. (topology_mapper.cpp:1737)
+2026-11-18 00:53:17.556 | info     |          Fabric | Loaded physical groupings from: /home/malimpic/localdev/2026_11_17/1458_malimpic_distributed_rms_norm_all_gather_gen/clones/all_gather_rms_norm_kimi_run1/tt-metal/tests/tt_metal/tt_fabric/physical_groupings/default_physical_grouping_descriptor.textproto (physical_grouping_descriptor_core.cpp:813)
+2026-11-18 00:53:17.556 | info     |          Fabric | No specific Physical Grouping Descriptor found; using default. (physical_grouping_descriptor_core.cpp:897)
+2026-11-18 00:53:17.557 | info     |          Fabric | Matching MESH mgd groupings to MESH groupings (physical_grouping_descriptor_matching.cpp:1428)
+2026-11-18 00:53:17.558 | info     |          Fabric | Grouping valid candidates by node difference (physical_grouping_descriptor_matching.cpp:1522)
+2026-11-18 00:53:17.558 | info     |          Fabric | Physical groupings: Mesh graph descriptor 'M0': 1 topology match(es), committed: 2x2_Mesh_flat (MESH) (physical_grouping_descriptor_matching.cpp:1731)
+2026-11-18 00:53:17.558 | info     |          Fabric | Physical groupings: Mesh graph descriptor 'M0': MGD placement fallback M0 (MESH) embeds on PSD (physical_grouping_descriptor_matching.cpp:1848)
+2026-11-18 00:53:17.781 | info     |           Metal | Profiler started on device 0 (profiler_initializer.cpp:49)
+2026-11-18 00:53:17.797 | info     |           Metal | Profiler started on device 1 (profiler_initializer.cpp:49)
+2026-11-18 00:53:17.805 | info     |           Metal | Profiler started on device 2 (profiler_initializer.cpp:49)
+2026-11-18 00:53:17.814 | info     |           Metal | Profiler started on device 3 (profiler_initializer.cpp:49)
+2026-11-18 00:53:17.814 | info     |           Metal | Initializing Fabric (fabric_firmware_initializer.cpp:319)
+2026-11-18 00:53:18.032 | info     |           Metal | Fabric initialized on 4 devices (fabric_firmware_initializer.cpp:466)
+2026-11-18 00:53:18.032 | info     |           Metal | Fabric Initialized with config FabricConfig::FABRIC_2D_TORUS_XY (fabric_firmware_initializer.cpp:336)
+LTI golden check passed
+LTI bit-identical over 5 calls and across 4 chips
+CCL_PERF experiment 1/5
+CCL_PERF experiment 2/5
+CCL_PERF experiment 3/5
+CCL_PERF experiment 4/5
+CCL_PERF experiment 5/5
+CCL_PERF focus_c8_lb_r1: 5 experiments, 2500 calls
+  fastest chip  20.332 us (stdev 0.007, +-0.003)   <- optimization target
+  slowest chip  21.295 us (stdev 0.024, +-0.011)
+  chip average  20.864 us (stdev 0.013, +-0.006)
+  spread        0.963 us (stdev 0.030, +-0.014)   (slowest - fastest per call)
+  per chip      dev3 20.895  dev2 20.805  dev1 20.874  dev0 20.881   slowest share dev3 23% dev2 29% dev1 23% dev0 26%
+  dispatch      not dispatch-bound: back to back, max gap 0.58 us, max period 21.36 us per call
+LTI HARNESS DONE
+2026-11-18 00:54:31.997 | info     |    BuildKernels | JIT cache stats: 65/65 hits (100.0%) [65 cached, 45 build-once dedup, 0 merged artifacts, 0 merged genfiles] (build_cache_telemetry.cpp:268)
+2026-11-18 00:54:31.998 | info     |    BuildKernels | JIT telemetry: 26 registered TelemetryTokens (build_cache_telemetry.cpp:325)
+2026-11-18 00:54:32.122 | info     |          Device | Closing user mode device drivers (tt_cluster.cpp:519)
+2026-11-18 00:54:32.122 | info     |             UMD | Closing devices in cluster (cluster.cpp:1319)
+2026-11-18 00:54:33.085 | info     |             UMD | Closing devices in cluster completed. (cluster.cpp:1329)
+2026-11-18 00:54:33.085 | info     |             UMD | Cluster destructor started. (cluster.cpp:1050)
+2026-11-18 00:54:33.085 | info     |             UMD | Cluster destructor completed. (cluster.cpp:1063)
+========================================
+TT_PROBE: Resetting device...
+Resetting all PCI devices: [0, 1, 2, 3]
+[95m Re-initializing boards after reset.... [0m
+TT_PROBE: Device reset complete
+TT_PROBE_RESULT: PASS
