@@ -28,7 +28,7 @@ on:
       vllm-tt-plugin-ref:
         description: "tenstorrent/vllm-tt-plugin branch or sha (vllm-source=plugin only)"
         required: false
-        default: main
+        default: 0e96e9eec1387bbc8e9a75457f2a31d67acdcf0a
         type: string
       model:
         description: "Model to test (or 'all' for all models)"
