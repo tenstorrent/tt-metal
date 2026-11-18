@@ -158,8 +158,11 @@ void UnaryDeviceOperation::validate_on_program_cache_miss(
     TT_FATAL(
         input_tensor.is_allocated(), "Unary: Operands need to be allocated in buffers on the device. Buffer is null.");
 
-    auto validate_tile_shape = [](const Tensor& tensor, const char* name) {
-        if (tensor.layout() != Layout::TILE) {
+    // A constant fill writes the same value to every element, so it is independent of the tile shape.
+    // zeros_like/full_like rely on this to clear tiny-tile outputs (e.g. sparse_matmul with 16x32 tiles).
+    const bool is_fill_only = args.op_chain.size() == 1 && args.op_chain[0].type() == UnaryOpType::FILL;
+    auto validate_tile_shape = [is_fill_only](const Tensor& tensor, const char* name) {
+        if (is_fill_only || tensor.layout() != Layout::TILE) {
             return;
         }
         const auto tile_shape = tensor.tensor_spec().tile().get_tile_shape();
