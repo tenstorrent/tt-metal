@@ -602,10 +602,9 @@ targets:
               decode_t/s: 45.6307
               prefill_t/s: 969.3269
               prefill_time_to_token: 0.0898
-              # 27.23 s (run 40213776008) -> 15.29 s (run 40227270371) after the FusedNormDecode runtime-arg
-              # change (the per-layer scalar no longer forks a JIT build per layer: 620 -> 542 builds).
-              compile_decode: 15.2906
-              compile_prefill: 21.9563
+              # No compile_decode / compile_prefill target on QB2: cold-JIT compile time follows the runner's kernel
+              # cache, not the code. One commit measured compile_decode 8.60-15.29 s, compile_prefill 12.46-21.96 s across All Model Tests runs 43957134464,
+              # 44122157854, 44188503323 and 44244547108 (2026-11-16..18). The validator still prints the measured values.
             accuracy: {}
             owner_id: U08TJ70UFRT # Harry Andrews
             team: models
@@ -653,13 +652,9 @@ targets:
               decode_t_s_tolerance: 0.2
               prefill_t/s: 936.1785
               prefill_time_to_token: 0.0929
-              # Compile (cold JIT) time swings with the runner's kernel cache: 7.67 / 7.43 s on main (All Model Tests
-              # 43957134464, 2026-11-16: failed as "much better than expected"), 12.11 / 12.45 s the next day (run
-              # 44122157854). Centred between them, +/-30% (the cache-sensitive compile precedent above).
-              compile_decode: 9.8925
-              compile_decode_tolerance: 0.30
-              compile_prefill: 9.94
-              compile_prefill_tolerance: 0.30
+              # No compile_decode / compile_prefill target on QB2: cold-JIT compile time follows the runner's kernel
+              # cache, not the code. One commit measured compile_decode 2.92-12.30 s, compile_prefill 3.02-12.45 s across All Model Tests runs 43957134464,
+              # 44122157854, 44188503323 and 44244547108 (2026-11-16..18). The validator still prints the measured values.
             accuracy: {}
   gemma-4-e2b:
     aliases: ["gemma-4-e2b", "google/gemma-4-E2B-it", "gemma-4-e2b-it"]
@@ -2592,14 +2587,9 @@ targets:
               # 128-token prefill on qb2-120-p05t08: 59.5 ms (run 40213776008), 61.6 ms (run 40227270371); the
               # 52 ms entry predates this branch. Re-centred on the latest measurement.
               prefill_time_to_token: 0.0616
-              # Compile (cold JIT) time swings with the runner's kernel cache: 14.43 / 14.16 s when the targets were
-              # set, 8.56 / 8.75 s on main (All Model Tests 43957134464, 2026-11-16), which failed as "much better
-              # than expected". Centred between the two and widened to +/-30% (the cache-sensitive compile precedent
-              # of the 26B / 31B wh_llmbox_perf entries).
-              compile_decode: 11.4961
-              compile_decode_tolerance: 0.30
-              compile_prefill: 11.4569
-              compile_prefill_tolerance: 0.30
+              # No compile_decode / compile_prefill target on QB2: cold-JIT compile time follows the runner's kernel
+              # cache, not the code. One commit measured compile_decode 8.56-14.60 s, compile_prefill 8.75-14.16 s across All Model Tests runs 43957134464,
+              # 44122157854, 44188503323 and 44244547108 (2026-11-16..18). The validator still prints the measured values.
             accuracy: {}
             owner_id: U088413NP0Q # Ashai Reddy
             team: models
