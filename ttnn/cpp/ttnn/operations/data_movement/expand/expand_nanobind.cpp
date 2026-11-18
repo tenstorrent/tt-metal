@@ -30,20 +30,36 @@ ttnn::Tensor expand_wrapper(
 void bind_expand(nb::module_& mod) {
     const auto* doc =
         R"doc(
-        Returns a new tensor where singleton dimensions are expanded to a larger side.
-        Unlike :func:`torch.expand`, this function is not zero-cost and perform a memory copy to create the expanded tensor. This is due to `ttnn.Tensor`'s lack of strided tensor support.
+        Returns a tensor whose dimensions of size 1 in `input_tensor` are expanded to the sizes in `output_shape`.
 
         Args:
-            * :attr:`input_tensor`: The tensor to be expanded.
-            * :attr:`output_shape`: The desired output shape.
-            * :attr:`memory_config`: The memory configuration for the expanded tensor.
+            input_tensor (ttnn.Tensor): the input tensor.
+            output_shape (List[int]): the shape of the output, with at least as many dimensions as `input_tensor`. Its last dimensions pair with the dimensions of `input_tensor`: a dimension of size 1 can take any size of 0 or more, and every other dimension must keep its size; -1 keeps the size of a dimension. Leading dimensions that `input_tensor` does not have are added with the given sizes, which must be 0 or more. A size of 0 returns an empty tensor.
 
-        Requirements:
-            like torch.expand:
-                only size 1 dimensions can be expanded in the output shape
-                -1 or the original shape size can be used to indicate that dimension should not have an expansion
-                The output shape must have the same or higher dimensions than the input shape
+        Keyword Args:
+            memory_config (ttnn.MemoryConfig, optional): Memory configuration of the output. Defaults to `None`: an interleaved input keeps its memory configuration. A sharded input keeps its memory layout and buffer type, with a shard spec derived for the output shape, when such a spec can be derived; otherwise, and for an empty output, the output is interleaved in the input's buffer type.
 
+        Returns:
+            ttnn.Tensor: the output tensor, with the same dtype and layout as the input.
+
+        Note:
+            Supported dtypes and layouts:
+
+            .. list-table::
+               :header-rows: 1
+
+               * - Dtypes
+                 - Layouts
+               * - BFLOAT16, FLOAT32, INT32, UINT32, UINT16
+                 - TILE, ROW_MAJOR
+               * - BFLOAT8_B
+                 - TILE
+
+            For a ``BFLOAT16`` TILE input whose last two dims are not both multiples of 32, input values must not be NaN.
+
+        Memory Support:
+            - Interleaved: DRAM and L1
+            - Sharded: HEIGHT_SHARDED, WIDTH_SHARDED and BLOCK_SHARDED input and output in L1; DRAM-sharded input is also accepted with an interleaved ``memory_config``
         )doc";
 
     ttnn::bind_function<"expand">(
