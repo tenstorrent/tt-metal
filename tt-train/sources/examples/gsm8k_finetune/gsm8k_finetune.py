@@ -49,6 +49,7 @@ def gsm8k_collate_fn(
 ) -> Batch:
     """Collate (question_tokens, answer_tokens) pairs into a :class:`Batch`.
 
+    ``eos_token_id`` is appended to each answer, so the last trained target is EOS.
     Loss is computed only on answer (completion) tokens; question (prompt) tokens
     and padding are masked out via ``Batch.loss_mask``. ``labels`` are the
     inputs shifted left by one and ``loss_mask`` is aligned with ``labels``.
@@ -61,6 +62,8 @@ def gsm8k_collate_fn(
     seq_lens = []
 
     for i, (x_tokens, y_tokens) in enumerate(zip(X, Y)):
+        # The answer ends with EOS so the model learns to stop after it.
+        y_tokens = list(y_tokens) + [eos_token_id]
         x_len = len(x_tokens)
         y_len = len(y_tokens)
         total_len = x_len + y_len
@@ -96,8 +99,8 @@ def gsm8k_collate_fn(
     # loss_mask lives in label space: position t scores labels[t] = input[t + 1].
     # Train the positions whose label is an answer token, i.e. t in
     # [prompt_len - 1, seq_len - 2]. Position prompt_len - 1 predicts the first
-    # answer token; prompt, padding and the final real position (whose label is
-    # filler) get zero weight.
+    # answer token and position seq_len - 2 predicts the appended EOS; prompt,
+    # padding and the final real position (whose label is filler) get zero weight.
     loss_mask_np = np.zeros((batch_size, 1, max_sequence_length, 1), dtype=np.float32)
     for i, (prompt_len, seq_len) in enumerate(zip(prompt_lens, seq_lens)):
         loss_mask_np[i, :, max(prompt_len - 1, 0) : max(seq_len - 1, 0), :] = 1.0

@@ -66,26 +66,13 @@ QUESTION = [10, 11, 12]
 ANSWER = [20, 21, 22, 23]
 
 
-# 4 and 3 are shorter than the answer, so the question is dropped and the answer itself is truncated.
+# The collate appends EOS, so the answer is 5 tokens. At 5 the whole answer fits and only the question is dropped;
+# at 4 and 3 the answer itself is truncated.
 @pytest.mark.parametrize("max_len", [10, 8, 7, 6, 5, 4, 3])
 def test_trained_pairs_match_hf_convention(max_len):
     collate = _load_collate()
     batch = collate([(QUESTION, ANSWER)], EOS, max_len)
-    assert _trained_pairs(batch, 0) == _hf_pairs(QUESTION, ANSWER, max_len)
-
-
-def test_first_answer_token_is_trained():
-    collate = _load_collate()
-    batch = collate([(QUESTION, ANSWER)], EOS, 10)
-    assert (len(QUESTION) - 1, ANSWER[0]) in _trained_pairs(batch, 0)
-
-
-def test_exactly_full_length_has_no_filler_label():
-    collate = _load_collate()
-    batch = collate([(QUESTION, ANSWER)], EOS, len(QUESTION) + len(ANSWER))
-    mask = batch.loss_mask.to_numpy()[0, 0, :, 0]
-    assert mask[-1] == 0
-    assert [p for p in _trained_pairs(batch, 0)] == [(2, 20), (3, 21), (4, 22), (5, 23)]
+    assert _trained_pairs(batch, 0) == _hf_pairs(QUESTION, ANSWER + [EOS], max_len)
 
 
 def test_mask_is_normalised_over_the_batch():
@@ -93,4 +80,4 @@ def test_mask_is_normalised_over_the_batch():
     batch = collate([(QUESTION, ANSWER), (QUESTION[:2], ANSWER[:2])], EOS, 10)
     mask = batch.loss_mask.to_numpy()
     assert mask.sum() == pytest.approx(2 * 10)
-    assert _trained_pairs(batch, 1) == [(1, 20), (2, 21)]
+    assert _trained_pairs(batch, 1) == [(1, 20), (2, 21), (3, EOS)]
