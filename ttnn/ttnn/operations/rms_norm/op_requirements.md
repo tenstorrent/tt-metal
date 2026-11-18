@@ -80,6 +80,28 @@ The input shard is the per-core block: `cb_x` (TILE) is backed on it zero-copy v
 
 **Done when**: every HEIGHT/WIDTH/BLOCK_SHARDED cell outside INVALID and EXCLUSIONS is `supported_pass` or infeasible-skipped by the harness (never op-failed); that includes the sharded `_perf_case`, resilience and pad-poison loose cases; a grep of the kernels shows no accessor read of the core's own shard; interleaved cells and acceptance tests show no regression; verifier loud categories are 0.
 
+
+
+### [x] Refinement 2b — Sharded placements: HEIGHT / WIDTH / BLOCK_SHARDED, consumed in place (debug: fix gate violations)
+
+**Goal**: fix the hard violation from Refinement 2 so the completion gate's three bullets hold.
+
+**Verifier notes** (mechanical, from the harness completion gate):
+
+```
+Bullet 3 FAIL: REGRESSION — prior-passing golden cells no longer pass (responsible cells 4491/4904). A prior-passing cell that failed, hung, or never ran (suite hung before reaching it) is a regression.
+```
+
+**Done when**: the gate passes — zero hangs in SUPPORTED, acceptance + refinement tests pass, golden majority with no regression.
+
+**Outcome**: diagnosed as a harness-side timeout, not an op failure. Every one of the 3000 cells the gate charged (`error/infra`, "not reported by its device job") sat in one of four golden chunks (002 / 004 / 006 / 012) that the broker killed for producing no output for 300 s.
+- Why the chunks went silent: the eval runner prints nothing while pytest runs. Its precompile warm pass fails (`ImportError: bench_devfilter`, infra), so every distinct program was JIT-compiled inline and serially. At about 1.2 s per test, a cold chunk of ~250–500 real tests runs past 300 s.
+- The op had no hang: the triage `TT_THROW: ... build failed` lines are the compiler being interrupted by the kill.
+- Re-run of the FULL golden suite on the R2 kernels, unchanged, through the same chunked runner: 4993 passed, 0 hangs, 0 errors.
+  - The only 2 failures are the two INVALID `test_translated` bf8b × w_non_aligned cells. They hit the documented host `ValueError`; before R2 they also failed, as xfail.
+  - Verifier: supported_pass 4980, supported_fail 0, xfail_wrong_mode 0. Every R1-passing cell passes (0 regressions).
+  - Slowest chunk: 254 s.
+- No code changed. The JIT cache under `built/` now holds every golden program.
 ### [ ] Refinement 3 — Speed up the width-sharded decode profile (cross-core combine latency)
 
 **Type**: perf

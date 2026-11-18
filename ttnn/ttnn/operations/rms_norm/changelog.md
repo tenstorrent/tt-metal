@@ -90,3 +90,25 @@
   - A `static_assert` in a discarded `if constexpr` branch of a non-template kernel still fires (bf8b γ). Moved it to a gated top-level assert.
   - The test-only shard config "6 shards on 5 cores" was rejected by TTNN itself (not the op).
 - Tests added: `tests/ttnn/unit_tests/operations/rms_norm/test_rms_norm_sharded.py` (51 cases: HEIGHT/WIDTH/BLOCK × TILE/RM, ragged grids, multi-row WIDTH grids, poisoned padding × acc on/off, RM γ misaligned slices, COL_MAJOR BLOCK, perf-profile config, wide HEIGHT rows via the W-chunk knob, input-shard immutability, default output inherits the shard spec); probe `probes/perf_sharded_probe.py`.
+
+## Refinement 2b — Sharded placements (debug: gate violation "REGRESSION 4491/4904")
+- Date: 2026-11-18
+- What was done: diagnosis plus a full golden re-run. The kernels and host code are unchanged.
+  - The harness's R2 golden run (`io/logs/refinements/golden_refinement_2`) has 3000 `error/infra` cells, all "not reported by its device job". 119 of them were R1-passing interleaved cells, which is what the gate flagged as regressions.
+  - All 3000 came from four chunks (002, 004, 006, 012) that the broker reaped as `hung` for "no output for 300s":
+    - The eval runner writes pytest output to a file and prints nothing in the meantime.
+    - Its precompile warm pass fails in this environment (`ImportError: Error importing plugin "bench_devfilter"`), so each test JIT-compiled its programs inline and serially, about 1.2 s per test cold.
+    - A 4000-item chunk holding 250–500 non-skipped sharded/interleaved tests therefore ran past 300 s.
+  - The `TT_THROW: trisc* build failed` lines at the end of those chunks are the compiler being killed, not a kernel error. No device hang was involved.
+- Accuracy achieved: unchanged from Refinement 2. Every supported golden cell passes its harness tolerance.
+- Golden test progress: a FULL suite run through `eval/eval_test_runner.sh` (same chunked broker path as the harness, 40142 items, 11 chunks, 27–254 s each):
+  - PASSED=4993, FAILED=2, ERRORS=0, HANGS=0.
+  - `verify_supported`: supported_pass 4980, supported_fail 0, xfail_expected 1229, xfail_wrong_mode 0, xpass_drift 0, infeasible_skipped 18, invalid_unexpected 2.
+  - The 2 failures are the INVALID-per-feature_spec `test_translated::test_rms_norm_sharded_uneven_multicore_logical_width[w72|w200 … bfloat8_b]` cells (bf8b × non-aligned W). They hit the documented host `ValueError`; before R2 they were xfail.
+  - 0 regressions against the R1 harness results (all 1471 R1 passes still pass).
+- Issues encountered / findings:
+  - Cold-compile cost is the op's exposure to this broker limit: each test is a distinct program (shape-specific CT args `block_rows`, `core_w_tiles`, `Wt`, `w_valid_last`, page sizes and the sharded TensorAccessor args, times the data formats).
+  - The JIT cache (`built/`) now holds every golden program, so a re-run is warm. The slowest chunk took 254 s, and the harness's own run excludes test_translated from the cartesian chunks.
+  - A structural fix would make the TILE kernels' shape extents runtime args, so binaries are shared across shapes. That rewrites all three kernels and was not done here, because any kernel edit invalidates the warm cache.
+  - The bf8b non-aligned resident-shard case needs only the reader's block-float `static_assert` relaxed for `x_resident`. It was deferred for the same reason: the cells are INVALID, and the edit would invalidate the cache.
+- Tests added: none.
