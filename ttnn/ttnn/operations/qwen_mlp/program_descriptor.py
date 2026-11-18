@@ -252,15 +252,14 @@ def create_program_descriptor(h, w_norm, w_gate_up, w_down, n, a, y):
         "tile_bytes_bf16": BF16_TILE_BYTES,
         "tile_bytes_bfp4": BFP4_TILE_BYTES,
         "barrier_group_size": GRID_Y,
-        "defer_k_block": min(1, gate_up.K_blocks - 1),
     }
     named.update({f"sem_{name}": i for i, name in enumerate(SEMAPHORES)})
     named.update({f"ta_{name}": offset for name, offset in tensor_accessor_offsets.items()})
     for phase in phases:
         named.update({f"{phase.name}_{key}": value for key, value in phase.named_args(M_tiles).items()})
 
-    in0_chain = _chain(GRID_Y, increasing=False)
-    in1_chain = _chain(GRID_X, increasing=True)
+    in0_chain = _chain(GRID_Y, increasing=True)
+    in1_chain = _chain(GRID_X, increasing=False)
 
     def physical(x, y):
         core = device.worker_core_from_logical_core(ttnn.CoreCoord(x, y))
@@ -284,6 +283,7 @@ def create_program_descriptor(h, w_norm, w_gate_up, w_down, n, a, y):
                 "y_addr": y.buffer_address(),
                 "norm_first_row": norm_first_row,
                 "norm_rows": norm_rows,
+                "defer_k_block": 1 + (x * GRID_Y + row) % (min(phase.K_blocks for phase in phases) - 1),
             }
             for name, chain, core_at in [
                 ("in0", in0_chain[row], lambda position: (x, FIRST_Y + position)),
@@ -318,13 +318,13 @@ def create_program_descriptor(h, w_norm, w_gate_up, w_down, n, a, y):
             kernel(
                 "dm_in0.cpp",
                 ttnn.DataMovementConfigDescriptor(
-                    processor=ttnn.DataMovementProcessor.RISCV_1, noc=ttnn.NOC.RISCV_1_default
+                    processor=ttnn.DataMovementProcessor.RISCV_0, noc=ttnn.NOC.RISCV_0_default
                 ),
             ),
             kernel(
                 "dm_in1.cpp",
                 ttnn.DataMovementConfigDescriptor(
-                    processor=ttnn.DataMovementProcessor.RISCV_0, noc=ttnn.NOC.RISCV_0_default
+                    processor=ttnn.DataMovementProcessor.RISCV_1, noc=ttnn.NOC.RISCV_1_default
                 ),
             ),
             kernel(

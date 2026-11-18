@@ -6,11 +6,9 @@
 #include "api/dataflow/noc_semaphore.h"
 #include "named_args.hpp"
 
-// Every member of the group calls this once its DRAM writes are issued. Only the injector waits for the whole group.
-inline void group_barrier(const Noc& noc, Semaphore<>& sem, bool is_injector) {
+inline void signal_group_written(const Noc& noc, Semaphore<>& sem) {
     noc.async_write_barrier();
     sem.up(noc, RT_ARG("barrier_x"), RT_ARG("barrier_y"), 1);
-    if (is_injector) {
-        sem.wait_min(CT_ARG("barrier_group_size"));
-    }
 }
+
+inline void wait_group_written(Semaphore<>& sem) { sem.wait_min(CT_ARG("barrier_group_size")); }
