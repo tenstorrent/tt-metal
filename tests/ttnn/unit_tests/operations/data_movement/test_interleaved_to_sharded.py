@@ -47,9 +47,9 @@ def _docstring_sharded_output_params(op):
             layout_names, buffer_name = match.groups()
             buffer_type = getattr(ttnn.BufferType, buffer_name, None)
             assert isinstance(buffer_type, ttnn.BufferType), f"not a ttnn.BufferType: {buffer_name}"
-            for name in re.findall(r"[^\s,]+", layout_names):
-                if name == "and":
-                    continue
+            names = [name for name in re.findall(r"[^\s,]+", layout_names) if name != "and"]
+            assert names, f"no shard layouts in {clause!r}"
+            for name in names:
                 memory_layout = getattr(ttnn.TensorMemoryLayout, name, None)
                 assert isinstance(memory_layout, ttnn.TensorMemoryLayout), f"not a ttnn.TensorMemoryLayout: {name}"
                 params.append(pytest.param(memory_layout, buffer_type, id=f"{name}-{buffer_name}"))
@@ -61,11 +61,15 @@ def _docstring_sharded_output_params(op):
 
 def _docstring_output_dtype_pairs(op):
     """One ``pytest.param(input_dtype, output_dtype)`` per ordered pair of the dtypes that the op's ``output_dtype``
-    line names after "Defaults to": the dtypes it says an input converts between."""
+    line lists in "input of <dtypes> can be converted": the dtypes it says an input converts between. Each name must be
+    a ``ttnn.DataType``."""
     try:
         line = next(line for line in op.__doc__.splitlines() if line.strip().startswith("output_dtype ("))
-        words = re.findall(r"\b[A-Z][A-Z0-9_]*\b", line.split("Defaults to", 1)[1])
-        names = [word for word in words if isinstance(getattr(ttnn.DataType, word, None), ttnn.DataType)]
+        match = re.search(r"input of (.+?) can be converted", line)
+        assert match, f"no 'input of <dtypes> can be converted' on: {line.strip()!r}"
+        names = re.split(r",\s*|\s+or\s+", match.group(1))
+        unknown = [name for name in names if not isinstance(getattr(ttnn.DataType, name, None), ttnn.DataType)]
+        assert not unknown, f"not a ttnn.DataType: {unknown} on: {line.strip()!r}"
         assert len(names) > 1, f"fewer than two dtypes on: {line.strip()!r}"
         return [
             pytest.param(getattr(ttnn.DataType, a), getattr(ttnn.DataType, b), id=f"{a}-to-{b}")
