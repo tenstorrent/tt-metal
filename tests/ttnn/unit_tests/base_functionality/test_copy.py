@@ -2643,22 +2643,18 @@ def test_assign_docstring_supported_inputs(dtype, layout, input_buffer_type, out
     assert output.memory_config() == memory_config
     assert_exact(expected, ttnn.to_torch(output))
 
-    def destination(seed):
-        # Values other than the input's, so the test sees them overwritten.
-        return ttnn.from_torch(
-            full_range_input(shape, dtype, seed=seed),
-            dtype=dtype,
-            layout=layout,
-            device=device,
-            memory_config=memory_config,
-        )
+    # Every value differs from the input's, so the test sees each one overwritten.
+    other_values = torch.where(expected == 1, 2, 1).to(expected.dtype)
 
-    output_tensor = destination(seed=1)
+    def destination():
+        return ttnn.from_torch(other_values, dtype=dtype, layout=layout, device=device, memory_config=memory_config)
+
+    output_tensor = destination()
     output = ttnn.assign(input_tensor, memory_config=memory_config, output_tensor=output_tensor)
     assert output.buffer_address() == output_tensor.buffer_address()
     assert_exact(expected, ttnn.to_torch(output_tensor))
 
-    input_b = destination(seed=2)
+    input_b = destination()
     output = ttnn.assign(input_tensor, input_b)
     assert output.buffer_address() == input_b.buffer_address()
     assert_exact(expected, ttnn.to_torch(input_b))
