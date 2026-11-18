@@ -1554,7 +1554,7 @@ public:
             const operation_attributes_t& attrs,
             const tensor_args_t& tensor_args,
             tensor_return_value_t& tensor_return_value) {
-            auto* mesh_device = SpecBindingSupport::source_mesh_device(tensor_args, tensor_return_value);
+            auto* mesh_device = SpecBindingSupport::source_mesh_device(attrs, tensor_args, tensor_return_value);
             for (const auto& [coordinate_range, sv] : cached_workload.shared_variables) {
                 check_merged_entry_usable(*sv.per_device, *mesh_device);
             }
@@ -1572,7 +1572,7 @@ public:
             namespace pd = per_device_run_args;
             auto& workload = cached_workload.workload;
             auto& programs = workload.get_programs();
-            auto* mesh_device = SpecBindingSupport::source_mesh_device(tensor_args, tensor_return_value);
+            auto* mesh_device = SpecBindingSupport::source_mesh_device(attrs, tensor_args, tensor_return_value);
             struct Pending {
                 pd::RangeState* state;
                 RangeRunArgs run_args;
