@@ -518,7 +518,6 @@ def lcfg_from_env(**kw):
         flags = ("out_all", "mcast_linked", "arr_write", "mc_noc1", "bcast", "own_read", "gather", "mux_noc1")
         flags += ("noc_split", "nofab", "ucast", "xchain", "hchain", "xhop", "jump", "fprio", "fnb", "harrw", "fasync")
         flags += ("ks", "ks_pall", "wtwice", "arr_nf", "ks_ff", "ks_fz", "ybarrier", "y_rm", "y_nowrite", "y_posted")
-        flags += ("links_rev",)
         kw[k] = bool(int(v)) if k in flags else (v if k == "slots" else int(v))
     return LCfg(**kw)
 

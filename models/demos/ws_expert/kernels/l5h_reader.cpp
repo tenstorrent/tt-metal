@@ -102,9 +102,11 @@ void kernel_main() {
     volatile tt_l1_ptr uint32_t* st = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_arg_val<uint32_t>(3));
     const uint32_t DS = get_arg_val<uint32_t>(5);
     const uint16_t my_mesh = get_arg_val<uint32_t>(6);
+    // (RT 7 / 8: the direction-d neighbour's chip id | (this lane's core j there: x | y << 8) << 8 - a chip may hold
+    // a lane on another rectangle than its neighbours, L5Cfg.place)
     const uint8_t nchip[2] = {(uint8_t)get_arg_val<uint32_t>(7), (uint8_t)get_arg_val<uint32_t>(8)};
-    const uint32_t myxy = get_arg_val<uint32_t>(9);
-    const uint32_t mex = myxy & 0xFF, mey = myxy >> 8;
+    const uint32_t nbx[2] = {(get_arg_val<uint32_t>(7) >> 8) & 0xFF, (get_arg_val<uint32_t>(8) >> 8) & 0xFF};
+    const uint32_t nby[2] = {get_arg_val<uint32_t>(7) >> 16, get_arg_val<uint32_t>(8) >> 16};
     uint32_t cx[NCOL], ry[NR];
     for (uint32_t i = 0; i < NCOL; ++i) {
         cx[i] = get_arg_val<uint32_t>(10 + i);
@@ -301,7 +303,10 @@ void kernel_main() {
                 slot_addr(s, u),
                 CHT * wtile,
                 tt::tt_fabric::NocUnicastAtomicIncFusedCommandHeader{
-                    get_noc_addr(mex, mey, slot_addr(s2, u)), get_noc_addr(mex, mey, warr_addr + s2 * 16), 1, false});
+                    get_noc_addr(nbx[d], nby[d], slot_addr(s2, u)),
+                    get_noc_addr(nbx[d], nby[d], warr_addr + s2 * 16),
+                    1,
+                    false});
             ++sent[s][d];
             ++n_fwd;
             rr = rr + t + 1;
@@ -334,7 +339,7 @@ void kernel_main() {
                     nchip[1 - d],
                     my_mesh,
                     tt::tt_fabric::NocUnicastInlineWriteCommandHeader{
-                        get_noc_addr(mex, mey, cred_addr + (d * K + s) * 16), next});
+                        get_noc_addr(nbx[1 - d], nby[1 - d], cred_addr + (d * K + s) * 16), next});
                 ++n_credit;
             }
             occ[s] = next;

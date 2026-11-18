@@ -1668,3 +1668,27 @@ speed-of-light ep4_targets.py.
   (muxes at x 1 serve the east link over the short wrap, muxes at x 7 the west link directly) the model gives 2 for
   all of them - the link-0-only case above, which ran at 29.4 GB/s, above the Galaxy's 25 GB/s links. Galaxy EP-4
   lanes: LCfg.links_rev.
+- Correction: links_rev (e4a4ed363b3) leaned on blackhole_galaxy.yaml, a generic descriptor, not a real Galaxy's
+  wiring; removed. Instead L5Cfg.place (default 1, hmc builds): every chip reads the ethernet cores its lanes send on
+  (the fabric's channel for (neighbour, link), BH channel -> NoC x) and assigns lanes to its group rectangles with the
+  fewest mux flows on the busiest westward ethernet-row link (then fewest link crossings, then identity). A lane's core
+  j writes its packets / credits to the same lane's core j on the neighbour, wherever that chip placed it (l5h_reader
+  RT 7 / 8: chip id | (x | y << 8) << 8). Physical columns checked (ttexalens): bh-lb-19 has NoC column 10 harvested,
+  translated 10-15 = physical 11-16; the mux columns (x 1 / 7) are unaffected.
+- One-way G 4 on two 4-chip rings (test_ws_lane5_tray_oneway_rings: (0,0) (0,1) (1,1) (1,0) and (0,2) (0,3) (1,3)
+  (1,2); 40 experts a lane, 124 MB a link direction), M 0:
+| placement | ring 0-1-5-4 lanes end | ring 2-3-7-6 lanes end |
+|---|---|---|
+| fixed (lane g on rectangle g) | 6.7-6.9 ms (18 GB/s) | 6.7-6.9 ms (18 GB/s) |
+| placed | 6.8 ms (chip 4: all four ethernet cores at x 11-14, every mux ~4.8 ms on mux space) | 4.7-5.1 ms (~25 GB/s, +37%) |
+  M 586 placed: PCC 0.99988 every expert (10.39 ms; fixed 10.34 - compute-bound there). Snake one-way M 0 placed:
+  8.37 ms (chips 3 / 4 bind, as before). EP-4 experts (2-chip columns, G 2) with placement: weights 31.6 GB/s, phase
+  11.05 ms, PCC 0.99988 - unchanged.
+- Limit that placement cannot lift: a chip whose four ethernet cores lie on one side of both mux columns (LoudBox
+  chips 3 and 4 on the tray's cycles) sends every flow through one westward ethernet-row link on NOC1, ~70 GB/s
+  for its four lanes. Going below it needs either mux cores east of / between those ethernet cores (inside the group
+  columns) or the mux writes on NOC0, which would enter the rectangles on their multicast NoC (the rule from the
+  multicast wedge repro). Whether a Galaxy has such chips depends on its real wiring: read it with eth_x on the
+  machine.
+- Open: at M 586 the rectangles at x 11-15 (groups 2 / 3) finish later than x 1-7 (snake 11.4 vs 7.9 ms, rings
+  10.3 vs 7.5 fixed) - not the weights; not looked at yet.

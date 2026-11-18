@@ -146,11 +146,6 @@ class LCfg:
     # all the way round its lane's direction; a lane's credits go back on the other direction's connection, which is its
     # partner lane's (g ^ 1): header-only channels on the partner's mux (ws_lane5)
     oneway: bool = False
-    # the lanes take the links in reverse order (lane pair 0 on link NL - 1): a group's mux kernel writes to its router
-    # on NOC1 (north, then west), so a mux west on the chip should serve the link whose ethernet core is east of it
-    # (reached over the row's wrap in a few hops) and a mux mid-chip the west one, instead of every mux's path crossing
-    # the wrap and sharing the ethernet row's links (a Galaxy pair of links: link 0 west, link 1 east)
-    links_rev: bool = False
 
 
 # G <= 2 (the tray): columns (4, 5) and (9, 10), muxes in 3 and 8. Measured on the tray (K split, M 586): 62.5% against
@@ -183,7 +178,7 @@ def lanes(shape, lc: LCfg):
     R, Cn = shape
     every = sorted((r, c) for r in range(R) for c in range(Cn))
     rev = lambda c: [c[0]] + c[1:][::-1]  # (the same cycle the other way round)
-    links = list(range(lc.NL))[::-1] if lc.links_rev else list(range(lc.NL))
+    links = list(range(lc.NL))
     if lc.subcycles:
         subs = [list(c) for c in lc.cycles]
         assert sorted(x for c in subs for x in c) == every, "the sub-cycles cover every chip once"
