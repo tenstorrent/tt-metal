@@ -101,7 +101,7 @@ def main():
         ttnn.synchronize_device(md)
         res(event="first_call_s", s=round(time.time() - t0, 1))
         if os.environ.get("DBG") == "1":
-            P = snap(pf.sh["part"]).reshape(N // 32, 6, 2, 32, 32)  # [r, ch, {M,Q}, tok, col]
+            P = snap(pf.sh["part"]).reshape(N // 32, pf.NCH, 2, 32, 32)  # [r, ch, {M,Q}, tok, col]
             m_dev = P[:, :, 0].sum(1)[:, :, :8].reshape(N, 8)  # [t, j]
             q_dev = P[:, :, 1].sum(1).sum(-1).reshape(N)
             m_ref = torch.einsum("std,jsd->tj", xh[0].double(), fn8.reshape(8, 4, D).double())
@@ -110,6 +110,18 @@ def main():
                 ttnn.sum(ttnn.matmul(x, ihc.w, compute_kernel_config=ihc.ckc, dtype=ttnn.float32), dim=1, keepdim=True)
             ).reshape(N, 8)
             q_st = snap(ttnn.sum(ttnn.sum(ttnn.multiply(x, x), dim=3, keepdim=True), dim=1, keepdim=True)).reshape(N)
+            CTc = 192 // pf.NCH
+            per, perq = [], []
+            for ch_ in range(pf.NCH):
+                sl = slice(ch_ * CTc * 32, (ch_ + 1) * CTc * 32)
+                mref = sum(
+                    torch.einsum("td,jd->tj", xh[0][s_][:, sl].double(), fn8.reshape(8, 4, D)[:, s_, sl].double())
+                    for s_ in range(4)
+                )
+                per.append(float((P[:, ch_, 0][:, :, :8].reshape(N, 8) - mref).abs().max() / mref.abs().max()))
+                qref = sum((xh[0][s_][:, sl].double() ** 2).sum(-1) for s_ in range(4))
+                perq.append(float(((P[:, ch_, 1].sum(-1).reshape(N) - qref).abs() / qref).max()))
+            res(event="dbg_per_chunk", m_relerr=per, q_relerr=perq)
             res(
                 event="dbg_stock_stats",
                 m_relerr=float((m_st - m_ref).abs().max() / m_ref.abs().max()),

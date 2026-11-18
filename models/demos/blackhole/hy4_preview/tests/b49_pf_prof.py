@@ -25,20 +25,34 @@ def res(**kw):
 
 
 def main():
-    full, md = open_row()
+    mesh4 = os.environ.get("MESH4") == "1"  # whole 4x8 mesh (4 users, TP32 MoE prefill on the real weights)
+    if mesh4:
+        from models.demos.blackhole.hy4_preview.tests.dev_common import close_mesh, open_mesh
+        from models.demos.gpt_oss.config import mesh_4x8
+
+        full, md = None, open_mesh(trace=500_000_000)
+    else:
+        full, md = open_row()
     try:
-        mc, ccl = mesh_1x8(), CCLManager(md, num_links=2, topology=ttnn.Topology.Ring)
+        mc, ccl = (mesh_4x8() if mesh4 else mesh_1x8()), CCLManager(md, num_links=2, topology=ttnn.Topology.Ring)
         ch = HC.Hy4Chain(md, mc, ccl, ckpt=CKPT, kv_fmt=os.environ.get("HY4_KV_FMT", "bf16"))
         t0 = time.time()
         ch.add_layers(0, NL, log=lambda s: print(s, flush=True))
         res(event="built", sec=round(time.time() - t0, 1))
         rnd = torch.Generator().manual_seed(3)
         ids = [torch.randint(0, 100000, (1, HC.CHUNK), generator=rnd) for _ in range(K)]
-        emb = ch.rd.get(
-            "model.embed_tokens.weight"
-        )  # [V, D]: realistic stream inputs (the embedding rows, 4 identical streams like Hy4Chain.embed_ids)
-        xs = [emb[ids[c][0]].float().reshape(1, 1, HC.CHUNK, 6144).repeat(1, 4, 1, 1) for c in range(K)]
-        del emb
+        if mesh4:
+            ch.build_head()
+            ids4 = [torch.randint(1000, 100000, (4, HC.CHUNK), generator=rnd) for _ in range(K)]
+            xs_dev = [ch.embed_ids(ids4[c]) for c in range(K)]
+            xs = None
+        else:
+            emb = ch.rd.get(
+                "model.embed_tokens.weight"
+            )  # [V, D]: realistic stream inputs (the embedding rows, 4 identical streams like Hy4Chain.embed_ids)
+            xs = [emb[ids[c][0]].float().reshape(1, 1, HC.CHUNK, 6144).repeat(1, 4, 1, 1) for c in range(K)]
+            del emb
+        mk_x = (lambda c: ttnn.clone(xs_dev[c])) if mesh4 else (lambda c: upload(md, xs[c], ttnn.float32))
         sync = lambda: ttnn.synchronize_device(md)
 
         # prefill K-1 chunks to build context (also warms the program cache), then time the last one K times (re-running the same start: append=True grows, so use fresh ch.reset each rep)
@@ -52,7 +66,7 @@ def main():
                 if last and timed_last:
                     sync()
                     tl = time.perf_counter()
-                x4 = upload(md, xs[c], ttnn.float32)
+                x4 = mk_x(c)
                 for ly in ch.layers:
                     x4 = ly.prefill_chunk(x4, c * HC.CHUNK, ibl)
                 if last and timed_last:
@@ -81,7 +95,7 @@ def main():
                         ly.ihcpf_a = ly.ihcpf_m = None
                 ibl = {}
                 for c in range(K):
-                    x4 = upload(md, xs[c], ttnn.float32)
+                    x4 = mk_x(c)
                     for ly in ch.layers:
                         x4 = ly.prefill_chunk(x4, c * HC.CHUNK, ibl)
                         if c == 0 and os.environ.get("DBGNAN") == "1":
@@ -125,9 +139,45 @@ def main():
                     stock_repeat_equal=bool(torch.equal(o_s[c], o_s2[c])),
                     fused_repeat_equal=bool(torch.equal(o_f[c], o_f2[c])),
                 )
+        if (
+            os.environ.get("AB") == "1"
+        ):  # eager chunk wall: stock iHC / collapse-only variant / fused iHC, same layers (HY4_B49_IHC=fused at build)
+            saved = [(ly.ihcpf_a, ly.ihcpf_m) for ly in ch.layers]
+            for name, pf_on, coll in (("stock", False, "0"), ("collapse", False, "1"), ("fused", True, "1")):
+                os.environ["HY4_B49_COLLAPSE"] = coll
+                for ly, (a_, m_) in zip(ch.layers, saved):
+                    ly.ihcpf_a, ly.ihcpf_m = (a_, m_) if pf_on else (None, None)
+                run_chunks(K)
+                for r in range(REPS):
+                    d, w = run_chunks(K, True)
+                    res(
+                        event="ab_chunk",
+                        variant=name,
+                        rep=r,
+                        ctx=K * HC.CHUNK,
+                        layers=NL,
+                        host_dispatch_ms=round(d * 1e3, 1),
+                        wall_ms=round(w * 1e3, 1),
+                        per_layer_ms=round(w * 1e3 / NL, 2),
+                    )
+            for ly, (a_, m_) in zip(ch.layers, saved):
+                ly.ihcpf_a, ly.ihcpf_m = a_, m_
+            os.environ["HY4_B49_COLLAPSE"] = "1"
         run_chunks(K)  # warm
+        from models.demos.blackhole.hy4_preview.tt import hy4_ihc_pf as _pfm
+
+        _pfm.HOST_T.clear()
         for r in range(REPS):
             d, w = run_chunks(K, True)
+            res(
+                event="ihcpf_host_ms_per_call",
+                t={
+                    k: [round(v[1] / max(v[0], 1) * 1e3, 3), round(v[2] / max(v[0], 1) * 1e3, 3)]
+                    for k, v in _pfm.HOST_T.items()
+                },
+                calls={k: v[0] for k, v in _pfm.HOST_T.items()},
+            )
+            _pfm.HOST_T.clear()
             res(
                 event="chunk_eager",
                 rep=r,
@@ -154,6 +204,21 @@ def main():
 
         def timed_prefill_chunk(self, x4, start, ids_by_layer, taps=None):
             tag = f"L{self.L}"
+            if self.ihcpf_a is not None:  # fused iHC variant (same flow as _prefill_chunk_pf)
+                bf = lambda t: t if t.dtype == ttnn.bfloat16 else ttnn.typecast(t, ttnn.bfloat16)
+                h, st = T(tag + ".ihcpf_a.pre", lambda: self.ihcpf_a.pre(x4))
+                src = self.spec.indexer_source
+                ids_in = None if self.spec.indexer == HC.FULL else ids_by_layer[src]
+                a, ids = T(tag + ".attn", lambda: self.attn.prefill_chunk(h, start, ids_in=ids_in))
+                if self.spec.indexer == HC.FULL:
+                    ids_by_layer[self.L] = ids
+                ab = T(tag + ".bf16_a", lambda: bf(a))
+                x4a = T(tag + ".ihcpf_a.expand", lambda: self.ihcpf_a.expand(x4, ab, st))
+                h, st = T(tag + ".ihcpf_m.pre", lambda: self.ihcpf_m.pre(x4a))
+                y = T(tag + ".mlp", lambda: self._mlp_prefill(h))
+                yb = T(tag + ".bf16_y", lambda: bf(y))
+                return T(tag + ".ihcpf_m.expand", lambda: self.ihcpf_m.expand(x4a, yb, st))
+            tag = f"L{self.L}"
             pre, post = T(tag + ".ihc_a.pre_post", lambda: self.ihc_a.pre_post(x4))
             raw = T(tag + ".ihc_a.collapse", lambda: self.ihc_a.collapse(x4, pre))
             h = T(tag + ".norm_a", lambda: self._norm(raw, self.w_in))
@@ -171,6 +236,24 @@ def main():
             return x4
 
         L.prefill_chunk = timed_prefill_chunk
+        if mesh4:  # MoE block sub-stages
+            from models.demos.blackhole.hy4_preview.tt import hy4_tp32_prefill as TP
+
+            for cls, nm in ((TP.Tp32PlanBuilder, "plan_build"), (TP.Tp32PrefillExperts, "experts")):
+                f0 = cls.__call__
+                cls.__call__ = (lambda f0, nm: (lambda self, *x, **k: T(f"moe.{nm}", lambda: f0(self, *x, **k))))(
+                    f0, nm
+                )
+            for ly in ch.layers:
+                b_ = getattr(ly, "blk_pf", None)
+                if b_ is not None:
+                    for mname in ("route", "_pack_route", "_ag_rows", "_rs"):
+                        f0 = getattr(b_, mname)
+                        setattr(
+                            b_, mname, (lambda f0, nm: (lambda *x, **k: T(f"moe.{nm}", lambda: f0(*x, **k))))(f0, mname)
+                        )
+                    f0 = ly.shared.forward
+                    ly.shared.forward = (lambda f0: (lambda *x, **k: T("moe.shared_fwd", lambda: f0(*x, **k))))(f0)
         # attention sub-stages (device-synced): wrap the methods of every layer's attention
         for ly in ch.layers:
             a_ = ly.attn
@@ -203,7 +286,10 @@ def main():
             per_layer_total_ms={k: round(v, 2) for k, v in tot.items()},
         )
     finally:
-        close_row(full, md)
+        if mesh4:
+            close_mesh(md)
+        else:
+            close_row(full, md)
 
 
 if __name__ == "__main__":
