@@ -31,14 +31,14 @@ CoreCoord get_compute_grid_size(MetalContext& metal_ctx) {
     // Handle the mock device case (for cheap unit testing)
     const bool is_mock = metal_ctx.get_cluster().get_target_device_type() == tt::TargetDevice::Mock;
 
-    // A default DispatchCoreConfig and 1 CQ is sufficient to look up the compute grid size
-    // from the YAML descriptor, and both are available in mock mode.
-    DispatchCoreConfig dispatch_core_config{};
+    // On a mock device, the dispatch config the context was initialized with (the default, Tensix dispatch, before
+    // any device was opened). It has to be the device's own: the compute grid depends on it, e.g. 8x8 on an N300 with
+    // ethernet dispatch, its default, but 8x7 with Tensix dispatch. 1 CQ is enough, the grid doesn't depend on it.
+    DispatchCoreConfig dispatch_core_config = metal_ctx.get_dispatch_core_config();
     uint8_t num_hw_cqs = 1;
     constexpr ChipId chip_id = 0;
 
-    // But, best get the real dispatch_core_config and num_hw_cqs
-    // (Makes no difference now, but hardbaking that assumption could be brittle)
+    // On real devices, the config and CQ count of the live dispatch managers.
     if (!is_mock) {
         auto& dispatch_mgr = metal_ctx.get_dispatch_core_manager();
         dispatch_core_config = dispatch_mgr.get_dispatch_core_config();
