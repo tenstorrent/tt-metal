@@ -303,7 +303,7 @@ static void RunTest(
             // Neo level, so the same code on every TRISC.
             case 9:
                 hw_assert_cause = (static_cast<uint32_t>(TriscErrors::NEO_SEMAPHORES) << 8) |
-                                  static_cast<uint32_t>(SemaphoreErrors::GET_ON_UNINITIALIZED);
+                                  static_cast<uint32_t>(SemaphoreErrors::GET_UNDERFLOW);
                 break;
             default: hw_assert_cause = 0; break;
         }
