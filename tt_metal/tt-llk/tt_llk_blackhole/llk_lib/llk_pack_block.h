@@ -699,6 +699,12 @@ constexpr char llk_pack_block_form_of(
             out = 'B';
         }
     }
+    // Half sync, 16-bit DEST, no 32-bit CB, LoFi, Float16_b, four tiles or more: the table's block forms. A per-tile pack pays main's
+    // destination word write per tile; on three tiles the block form moved the pack's issue into the math's slots (VCS) for no gain.
+    if (llk_pack_src32_mask(0) == 0 && llk_pack_src32_mask(32) == 0 && column == 0 && MATH_FIDELITY == MathFidelity::LoFi && row == 10 && count >= 3)
+    {
+        return form;
+    }
     constexpr std::uint32_t fam_bit = family == 0 ? 1 : (llk_pack_unpack_to_dest ? 4 : 2);
     constexpr std::uint32_t fid_bit =
         MATH_FIDELITY == MathFidelity::LoFi ? 1 : (MATH_FIDELITY == MathFidelity::HiFi2 ? 2 : (MATH_FIDELITY == MathFidelity::HiFi3 ? 4 : 8));
