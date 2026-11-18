@@ -41,9 +41,10 @@ class LayerCompletionSink(ABC):
 
     @abstractmethod
     def chunk_failed(self, slot_id: int, pos_start: int, pos_end: int) -> None:
-        """Fail the request whose chunk this is; its layers are still reported. Only stage 0 (the master rank by
-        default) calls it, before the forward's first layer, so it reaches the consumer before the chunk's last layer
-        completion."""
+        """Fail the request whose chunk this is; its layers are still reported. The consumer needs this no later than
+        the chunk's last layer completion. Records from one rank stay in order and the master rank forwards its own
+        ring first, so only the master rank (stage 0 by default) can guarantee that: call it from stage 0, before the
+        forward's first layer."""
 
 
 class LayerCompletionRingWriter(LayerCompletionSink):

@@ -49,10 +49,8 @@ static_assert(offsetof(LayerCompletionMessage, host_timestamp_ns) == 24);
 
 inline constexpr uint32_t kLayerCompletionSentinel = 0xFFFFFFFFu;
 
-// The request whose chunk [pos_start, pos_end) of slot_id this is failed (e.g. its media embeddings were missing or
-// the wrong size); the layer range is ignored. The runner still reports every layer of the chunk. The consumer needs
-// it no later than the chunk's last layer completion, which only the master rank, or the rank that runs the chunk's
-// last layer, can guarantee: stage 0 (the master by default) reports it before the forward's first layer.
+// The request whose chunk [pos_start, pos_end) of slot_id this is failed; the layer range is ignored and the chunk's
+// layers are still reported. The consumer needs it no later than the chunk's last layer completion.
 inline constexpr uint32_t kLayerCompletionChunkFailed = 1u;
 
 inline uint64_t layer_completion_host_timestamp_ns() noexcept {

@@ -57,6 +57,9 @@ void bind_layer_completion_api(nb::module_& mod) {
                uint32_t layer_start,
                uint32_t layer_end,
                uint32_t flags) {
+                if (flags != 0u && flags != tt::tt_metal::internal::kLayerCompletionChunkFailed) {
+                    throw std::invalid_argument("flags must be 0 or CHUNK_FAILED, got " + std::to_string(flags));
+                }
                 return self.try_push(LayerCompletionMessage{
                     slot_id,
                     pos_start,
@@ -88,6 +91,18 @@ void bind_layer_completion_api(nb::module_& mod) {
             "Consumer pop. Returns (slot_id, pos_start, pos_end, layer_start, layer_end, host_timestamp_ns) or None "
             "when "
             "empty.")
+        .def(
+            "try_pop_with_flags",
+            [](LayerCompletionQueue& self)
+                -> std::optional<std::tuple<uint32_t, uint32_t, uint32_t, uint32_t, uint32_t, uint64_t, uint32_t>> {
+                LayerCompletionMessage m{};
+                if (!self.try_pop(m)) {
+                    return std::nullopt;
+                }
+                return std::make_tuple(
+                    m.slot_id, m.pos_start, m.pos_end, m.layer_start, m.layer_end, m.host_timestamp_ns, m.flags);
+            },
+            "try_pop with the record's flags appended (0 or CHUNK_FAILED).")
         .def("shutdown", &LayerCompletionQueue::shutdown, "Idempotent teardown. Owner unlinks; connector unmaps.")
         .def_prop_ro("shm_name", &LayerCompletionQueue::shm_name)
         .def_prop_ro("completions_per_chunk", &LayerCompletionQueue::completions_per_chunk);

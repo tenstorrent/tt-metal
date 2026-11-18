@@ -15,6 +15,7 @@ from collections import deque
 import pytest
 
 from models.demos.common.prefill.runners.layer_completion_ring_reader import (
+    CHUNK_FAILED,
     Completion,
     LayerCompletionDrain,
     LayerCompletionRingReader,
@@ -30,13 +31,13 @@ class FakeRing:
     def __init__(self, messages=()):
         self._q = deque(messages)
 
-    def try_pop(self):
+    def try_pop_with_flags(self):
         return self._q.popleft() if self._q else None
 
 
-def msg(layer_start, layer_end, *, slot_id=0, pos_start=0, pos_end=128, host_timestamp_ns=0):
-    """A wire-order tuple, as LayerCompletionQueue.try_pop() returns."""
-    return (slot_id, pos_start, pos_end, layer_start, layer_end, host_timestamp_ns)
+def msg(layer_start, layer_end, *, slot_id=0, pos_start=0, pos_end=128, host_timestamp_ns=0, flags=0):
+    """A wire-order tuple, as LayerCompletionQueue.try_pop_with_flags() returns."""
+    return (slot_id, pos_start, pos_end, layer_start, layer_end, host_timestamp_ns, flags)
 
 
 def per_layer(layers=range(NUM_LAYERS), **kw):
@@ -197,7 +198,7 @@ class BoundedRing:
                 raise TimeoutError("ring stayed full: nothing drained it")
             time.sleep(0.001)
 
-    def try_pop(self):
+    def try_pop_with_flags(self):
         with self._lock:
             return self._q.popleft() if self._q else None
 
@@ -230,3 +231,13 @@ def test_no_channel_means_no_drain():
 def test_scheduler_segment_name():
     """Frozen: tt-d-gen's ack_shm_name configs attach to this name."""
     assert scheduler_shm_name("svc") == "/tt_prefill_layer_completions_svc"
+
+
+def test_a_failed_chunk_is_recorded_and_its_layers_still_complete_it():
+    completed = []
+    ring = FakeRing([msg(0, 0, flags=CHUNK_FAILED)] + per_layer())
+    d = LayerCompletionRingReader(ring, num_layers=NUM_LAYERS, on_chunk_complete=lambda key, cov: completed.append(key))
+    while d.step():
+        pass
+    assert d.failed_chunks == {(0, 0, 128)}
+    assert completed == [(0, 0, 128)] and d.total_layers == NUM_LAYERS

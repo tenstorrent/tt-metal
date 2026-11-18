@@ -18,7 +18,8 @@ The rings are bounded, so a caller submitting input must drain concurrently: Lay
 on a thread, which progresses while the caller blocks in an H2D call (those release the GIL).
 
 ttnn is imported lazily inside the connect helper, so the reader is unit-testable without the device stack. The
-ring is any object with `try_pop() -> tuple | None` in the wire order of LayerCompletionQueue.try_pop().
+ring is any object with `try_pop_with_flags() -> tuple | None` in the wire order of
+LayerCompletionQueue.try_pop_with_flags().
 """
 
 import os
@@ -28,8 +29,9 @@ from collections import deque, namedtuple
 
 from loguru import logger
 
-# Wire order of LayerCompletionQueue.try_pop().
+# Wire order of LayerCompletionQueue.try_pop(); try_pop_with_flags() appends the record's flags.
 Completion = namedtuple("Completion", "slot_id pos_start pos_end layer_start layer_end host_timestamp_ns")
+CHUNK_FAILED = 1  # ttnn._experimental.layer_completion.CHUNK_FAILED, kept here so this module stays ttnn-free
 
 
 def chunk_key(c: Completion) -> tuple:
@@ -72,7 +74,7 @@ class LayerCompletionRingReader:
     """Work-conserving reader of the scheduler-facing completion ring.
 
     Args:
-        ring: anything with try_pop() -> tuple | None in the wire order.
+        ring: anything with try_pop_with_flags() -> tuple | None in the wire order.
         num_layers: global ack-layer axis: the model's layers plus the MTP / DFlash rows acked
             past them. Every span must lie in [0, num_layers).
         chunk_layers: layers one chunk covers when complete (the ring header's
@@ -111,6 +113,7 @@ class LayerCompletionRingReader:
         self.processed = 0
         self.side_queued = 0
         self.completed_chunks = 0
+        self.failed_chunks = set()  # chunk_key of every chunk a CHUNK_FAILED record named
 
     @property
     def chunks(self):
@@ -150,10 +153,16 @@ class LayerCompletionRingReader:
 
     def step(self) -> bool:
         """One work-conserving iteration. True if anything moved; False means idle."""
-        msg = self._ring.try_pop()
+        msg = self._ring.try_pop_with_flags()
         if msg is None:
             return self._retry_side_queues()
-        c = Completion._make(msg)
+        *fields, flags = msg
+        c = Completion(*fields)
+        if flags == CHUNK_FAILED:
+            # The request failed; its layers still arrive as usual and complete the chunk.
+            logger.warning(f"[ring-reader] chunk {chunk_key(c)} failed")
+            self.failed_chunks.add(chunk_key(c))
+            return True
         if self._can_process(c):
             self._process(c)
             self._retry_side_queues()  # processing may have unblocked side-queued messages
