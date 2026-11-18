@@ -8,6 +8,7 @@ import torch
 
 import ttnn
 from models.common.utility_functions import run_for_blackhole
+from models.demos.deepseek_v3_d_p.tests.kda.kda_test_utils import make_actual_start
 from models.demos.deepseek_v3_d_p.tests.kda.utils import (
     DeviceMismatch,
     assert_device_time,
@@ -17,8 +18,7 @@ from models.demos.deepseek_v3_d_p.tests.kda.utils import (
     median_device_us,
 )
 from models.demos.deepseek_v3_d_p.tt.kda.recurrence import _RelayFinalCarry, _sp_links
-from tests.ttnn.profiling.realtime_profiler_utils import require_realtime_profiler
-from tests.ttnn.unit_tests.operations.experimental.kda.kda_test_utils import make_actual_start
+from tt_py_test_utils_common.realtime_profiler_utils import require_realtime_profiler
 
 pytestmark = run_for_blackhole()
 
@@ -324,8 +324,8 @@ _PERF_START = _ROWS + 320
         pytest.param(*case.values, reference_us, margin, marks=case.marks, id=case.id)
         for case, reference_us, margin in (
             # Device-time references in us, with K3's payload: Galaxy on TorusXY, LoudBox and QuietBox on TorusY.
-            # Galaxy's 32 chips start a call further apart, so its medians spread wider (194-209 us over repeated runs).
-            (kda_mesh_param((8, 4), "mesh-8x4", "SP8xTP4"), 203.0, 0.08),
+            # Galaxy runs one program for all 32 chips, so they start a call together (130-132 us over repeated runs).
+            (kda_mesh_param((8, 4), "mesh-8x4", "SP8xTP4"), 131.0, 0.08),
             (kda_mesh_param((8, 1), "ring", "loudbox-SP8xTP1"), 276.0, 0.05),
             (kda_mesh_param((4, 1), "ring", "quietbox-SP4xTP1"), 123.3, 0.05),
         )

@@ -13,8 +13,8 @@
 #include <tt-metalium/experimental/prefetcher_pipe.hpp>
 #include <tt-metalium/experimental/sram_arena/sram_arena.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
+#include <tt-metalium/workload/run_args/program_run_args.hpp>
+#include <tt-metalium/workload/specification/program_spec.hpp>
 
 #include "impl/sram_arena/sram_arena_impl.hpp"
 #include "impl/kernels/kernel.hpp"
@@ -393,7 +393,7 @@ TEST_F(ProgramRunArgsTestGen1, CPU_SRAMArenaScratchpadLeavesNodesOpenForPersiste
     distributed::MeshDevice& fixture_device = *mesh_device_;
     Program program = MakeProgramFromSpec(fixture_device, BorrowedScratchpadSpec());
     const PrefetcherPipeSpaceConfig space_config = MakePrefetcherPipeSpaceConfigOnFirstScratchpadNodeForTest();
-    EXPECT_NO_THROW({ PrefetcherPipeSpace space = CreatePrefetcherPipeSpace(fixture_device, space_config); });
+    EXPECT_NO_THROW({ PrefetcherPipeSpace space = CreatePrefetcherPipeSpace(fixture_device.mesh_command_queue(0), space_config); });
 }
 
 TEST_F(ProgramRunArgsTestGen1, CPU_SRAMArenaSharedScratchpadLeavesNodesOpenForPersistentL1) {
@@ -401,7 +401,7 @@ TEST_F(ProgramRunArgsTestGen1, CPU_SRAMArenaSharedScratchpadLeavesNodesOpenForPe
     distributed::MeshDevice& fixture_device = *mesh_device_;
     Program program = MakeProgramFromSpec(fixture_device, BorrowedScratchpadSpec(/*shared=*/true));
     const PrefetcherPipeSpaceConfig space_config = MakePrefetcherPipeSpaceConfigOnFirstScratchpadNodeForTest();
-    EXPECT_NO_THROW({ PrefetcherPipeSpace space = CreatePrefetcherPipeSpace(fixture_device, space_config); });
+    EXPECT_NO_THROW({ PrefetcherPipeSpace space = CreatePrefetcherPipeSpace(fixture_device.mesh_command_queue(0), space_config); });
 }
 
 TEST_F(ProgramRunArgsTestGen1, CPU_SRAMArenaScratchpadRangeArenaForLockstepDeclaration) {
