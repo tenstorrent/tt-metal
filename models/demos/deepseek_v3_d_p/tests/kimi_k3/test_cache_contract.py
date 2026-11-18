@@ -271,3 +271,16 @@ def test_preflight_matches_per_file_globs_with_each_file_removed(tmp_path, model
                 marked and not _glob_reference(tmp_path, [idx], model_cfg)
             )
         (tmp_path / name).touch()
+
+
+@pytest.mark.parametrize("missing", [None, *_INDEXER_NAMES], ids=lambda m: f"missing_{m or 'none'}")
+def test_indexer_check_matches_per_file_globs(tmp_path, missing):
+    """`TtIndexer.check_cache_complete` (also DeepSeek-V3.2 / GLM's sparse-layer check) answers from one listing."""
+    _write_indexer_cache(tmp_path, _MLA_LAYER, names=[n for n in _INDEXER_NAMES if n != missing])
+    # decoys at a dtype no indexer weight uses
+    _write_indexer_cache(tmp_path, _MLA_LAYER, dtypes=dict.fromkeys(_INDEXER_NAMES, ttnn.float32))
+    prefix = f"layer_{_MLA_LAYER}.mla"
+    expected = all(any(tmp_path.glob(pattern)) for pattern in TtIndexer.cache_globs(prefix))
+    assert expected is (missing is None)
+    assert TtIndexer.check_cache_complete(tmp_path, prefix) is expected
+    assert not TtIndexer.check_cache_complete(tmp_path / "absent", prefix)
