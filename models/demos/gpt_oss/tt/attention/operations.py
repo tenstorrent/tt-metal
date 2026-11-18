@@ -9,7 +9,7 @@ from ..batched_prefill import batched_reduce_links, per_user_reduce, ring_reduce
 from .weights import AttentionWeights
 
 
-def apply_qkv_projection(hidden_states, weights: AttentionWeights, program_config=None):
+def apply_qkv_projection(hidden_states, weights: AttentionWeights, program_config=None, compute_kernel_config=None):
     """
     Apply QKV projection and add bias.
 
@@ -17,12 +17,18 @@ def apply_qkv_projection(hidden_states, weights: AttentionWeights, program_confi
         hidden_states: Input tensor [batch, seq_len, hidden_size]
         weights: Attention weights container
         program_config: matmul program config (None: ttnn default)
+        compute_kernel_config: matmul compute config (None: ttnn default)
 
     Returns:
         Fused QKV tensor [batch, seq_len, total_qkv_dim]
     """
     xqkv_fused = ttnn.linear(
-        hidden_states, weights.wqkv, bias=weights.wqkv_bias, dtype=ttnn.bfloat16, program_config=program_config
+        hidden_states,
+        weights.wqkv,
+        bias=weights.wqkv_bias,
+        dtype=ttnn.bfloat16,
+        program_config=program_config,
+        compute_kernel_config=compute_kernel_config,
     )
     return xqkv_fused
 

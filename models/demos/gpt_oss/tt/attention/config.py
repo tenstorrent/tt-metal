@@ -36,6 +36,11 @@ PREFILL_PROJ_2D = {
     "o": (9, 10, 8),  # [S, 1024] x [1024, 2880]: N = 90 tiles over 9 columns, K = 32 tiles
 }
 PREFILL_PROJ_L1_BYTES = 1_100_000
+# ttnn.matmul runs a bf16 x bf8 matmul at HiFi2 only without a program config (LoFi with one, as for bf8 x bf8). A bf16
+# in0 that gets the 2D config above passes this instead: the default's numerics, with the 2D config's fixed K blocking.
+PREFILL_PROJ_BF16_COMPUTE = ttnn.WormholeComputeKernelConfig(
+    math_fidelity=ttnn.MathFidelity.HiFi2, math_approx_mode=False, fp32_dest_acc_en=False, packer_l1_acc=True
+)
 PREFILL_PROJ_L1_MARGIN = 32 * 1024
 # Tensor parallelism the geometries above were measured at (1x4); any other TP keeps the ttnn default.
 PREFILL_PROJ_TP = 4

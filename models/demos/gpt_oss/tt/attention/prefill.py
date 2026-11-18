@@ -6,7 +6,7 @@ from loguru import logger
 import ttnn
 
 from ..batched_prefill import fill_batch_idx
-from .config import AttentionConfig, ProgramConfig
+from .config import PREFILL_PROJ_BF16_COMPUTE, AttentionConfig, ProgramConfig
 from .operations import (
     apply_allgather_and_slice,
     apply_allreduce,
@@ -100,10 +100,15 @@ def prefill_forward(
         raise ValueError(f"Prefill mode requires seq_len>1, got {seq_len}. Use decode mode for single tokens.")
 
     # QKV projection
+    qkv_program_config = program_config.get_prefill_proj_config(
+        mesh_device, "qkv", hidden_states, weights.wqkv, mesh_config.tp
+    )
     xqkv_fused = apply_qkv_projection(
         hidden_states,
         weights,
-        program_config.get_prefill_proj_config(mesh_device, "qkv", hidden_states, weights.wqkv, mesh_config.tp),
+        qkv_program_config,
+        # a bf16 input keeps ttnn's no-config fidelity (HiFi2) under the 2D config (PREFILL_PROJ_BF16_COMPUTE)
+        PREFILL_PROJ_BF16_COMPUTE if qkv_program_config is not None and hidden_states.dtype == ttnn.bfloat16 else None,
     )
     hidden_states.deallocate(True)  # Free input activations after projection
 
