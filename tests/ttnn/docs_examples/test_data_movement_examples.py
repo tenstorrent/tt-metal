@@ -238,6 +238,20 @@ def test_gather(device):
     logger.info(f"Gathered Tensor Shape: {gathered_tensor.shape}")  # Shape([4, 2])
 
 
+def test_split(device):
+    # Create a tensor to split
+    input_tensor = ttnn.rand((1, 1, 64, 96), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+
+    # Split the last dimension into chunks of 32; the output is a list of tensors
+    chunks = ttnn.split(input_tensor, 32, dim=-1)
+    logger.debug(f"Number of chunks: {len(chunks)}")  # 3
+
+    # Split the last dimension into chunks of 64 and 32
+    chunks = ttnn.split(input_tensor, [64, 32], dim=-1)
+    logger.debug(f"First Chunk Shape: {chunks[0].shape}")  # Shape([1, 1, 64, 64])
+    logger.debug(f"Second Chunk Shape: {chunks[1].shape}")  # Shape([1, 1, 64, 32])
+
+
 def test_sort(device):
     # Create a tensor
     input_tensor = torch.Tensor([[3, 1, 2], [3, 1, 2]])
