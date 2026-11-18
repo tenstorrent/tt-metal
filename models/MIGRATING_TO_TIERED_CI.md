@@ -458,7 +458,7 @@ SKU not already in the dropdown of that workflow, also add it to:
 ## Time budgets
 
 `.github/time_budget.yaml` declares the **maximum allowed total
-runtime** per pipeline + SKU. Per-job timeouts in the registry must
+runtime** per pipeline + SKU. Per-test timeouts in the registry must
 sum to within that budget, otherwise the pipeline cannot fit on the
 allocated hardware in a single nightly slot.
 
@@ -471,7 +471,7 @@ If your new entries push a SKU over budget, either:
 - Negotiate a larger budget with the CI owners (and document why in
   the PR description).
 
-A common pitfall: choosing a 30-minute timeout for a 5-minute job
+A common pitfall: choosing a 30-minute timeout for a 5-minute test
 because "it's safer". Don't — it counts against the shared budget.
 
 ---
