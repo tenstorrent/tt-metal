@@ -20,10 +20,10 @@ namespace scatter_ns = ttnn::operations::data_movement::scatter;
 
 // ROW_MAJOR dispatches on layout+reduction_mode alone (both already part of the default hash), so
 // no live L1 read is needed to pick between the two RM factories. TILE prefers the row-buffered
-// interleaved plan whenever its footprint fits the live L1 frontier, UNLESS the tile-row count
-// underfills the grid while more than one output column exists -- there, splitting by output COLUMN
-// (streaming) reaches every core instead of leaving most of them idle even though the interleaved
-// plan would also fit.
+// interleaved plan whenever its footprint fits the live L1 frontier, UNLESS splitting by output
+// COLUMN (streaming) leaves the busiest core less work: a few tile rows underfill the grid, but a
+// column-split core re-reads and rescans every index/src tile per output tile, which on wide rows
+// with a wide index costs far more than the idle cores would save.
 ScatterCodegenDeviceOperation::program_factory_t ScatterCodegenDeviceOperation::select_program_factory(
     const operation_attributes_t& attributes, const tensor_args_t& tensor_args) {
     const auto& input_tensor = tensor_args.input_tensor;
@@ -54,8 +54,8 @@ ScatterCodegenDeviceOperation::program_factory_t ScatterCodegenDeviceOperation::
     const uint32_t candidate_cores = attributes.sub_core_grids.has_value()
                                          ? static_cast<uint32_t>(attributes.sub_core_grids->num_cores())
                                          : device_cores;
-    const uint32_t column_cores = std::min(attributes.Wt_output, candidate_cores);
-    const bool use_column_parallel = attributes.Ht < column_cores && attributes.Wt_output > 1;
+    const bool use_column_parallel =
+        scatter_prefers_column_split(attributes.Ht, attributes.Wt_output, attributes.Wt_index, candidate_cores);
 
     if (interleaved_fits && !use_column_parallel) {
         return ScatterCodegenProgramFactoryInterleaved{};
@@ -292,6 +292,14 @@ ScatterCodegenParams build_scatter_codegen_params(
             output_mem_config,
             sub_core_grids};
     }
+    // The stick geometry reads the last dim before validate's rank checks run (see the TILE branch).
+    TT_FATAL(
+        input_tensor.logical_shape().rank() >= 1 && index_tensor.logical_shape().rank() >= 1 &&
+            src_tensor.logical_shape().rank() >= 1,
+        "scatter_codegen: ROW_MAJOR operands must have rank >= 1; got input {}, index {}, src {}.",
+        input_tensor.logical_shape(),
+        index_tensor.logical_shape(),
+        src_tensor.logical_shape());
     const auto geometry = compute_scatter_rm_geometry(input_tensor, index_tensor);
     return ScatterCodegenParams{
         /*Ht=*/0,

@@ -309,6 +309,22 @@ uint64_t scatter_tile_streaming_bytes(
            kStreamingIndexPages * index_page_bytes + kStreamingSrcPages * src_page_bytes;
 }
 
+bool scatter_prefers_column_split(uint32_t Ht, uint32_t Wt_output, uint32_t Wt_index, uint32_t cores) {
+    if (Ht == 0 || Wt_output <= 1 || cores == 0) {
+        return false;
+    }
+    // One index/src pair costs two tile reads and one element-by-element scan of the index tile; the
+    // scan dominates (tens of microseconds against about one per tile read on Blackhole), so it is
+    // weighted rather than counted as one more tile operation.
+    constexpr uint64_t kScanWeight = 16;
+    const uint64_t pair_cost = (2ull + kScanWeight) * Wt_index;
+    const uint64_t rows_per_core = tt::div_up(Ht, std::min(Ht, cores));
+    const uint64_t row_split = rows_per_core * (2ull * Wt_output + pair_cost);
+    const uint64_t columns_per_core = tt::div_up(Wt_output, std::min(Wt_output, cores));
+    const uint64_t column_split = columns_per_core * Ht * (2ull + pair_cost);
+    return column_split < row_split;
+}
+
 uint64_t scatter_rm_fixed_bytes(
     uint64_t input_page_bytes, uint64_t output_page_bytes, bool bf16_reduce, uint32_t cb_align) {
     return tt::align(input_page_bytes, cb_align) + tt::align(output_page_bytes, cb_align) +

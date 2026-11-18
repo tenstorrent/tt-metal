@@ -113,6 +113,14 @@ bool scatter_interleaved_fits_l1(
 uint64_t scatter_tile_streaming_bytes(
     uint64_t output_page_bytes, uint64_t input_page_bytes, uint64_t index_page_bytes, uint64_t src_page_bytes);
 
+// Whether the column-split (streaming) plan leaves its busiest core less work than the row-split
+// (interleaved) plan on `cores`, counted in tile operations with the index scans weighted. A
+// row-split core copies and writes back the Wt_output tiles of each of its rows and reads and scans
+// that row's Wt_index index/src pairs once; a column-split core does the same for one tile and
+// repeats the Wt_index reads and scans for EVERY output tile it owns, so the column split only pays
+// when the rows are too few to fill the grid and the rescans stay cheap.
+bool scatter_prefers_column_split(uint32_t Ht, uint32_t Wt_output, uint32_t Wt_index, uint32_t cores);
+
 // RM: the bytes a ROW_MAJOR factory keeps resident per core whatever the chunking -- the input and
 // output sticks, plus a same-sized FP32 accumulator (2x a BF16 page) for the bf16-reduce factory,
 // each CB rounded up to `cb_align` (scatter_cb_alignment()). The one formula the routing gate, the

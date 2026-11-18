@@ -20,6 +20,14 @@ _force_native = ttnn._ttnn.operations.data_movement.scatter_force_native
 _force_codegen = ttnn._ttnn.operations.data_movement.scatter_force_codegen
 
 
+@pytest.fixture(autouse=True)
+def _require_codegen_arch(device):
+    # Codegen serves calls only on these architectures; elsewhere every call is native and the
+    # codegen legs have nothing to exercise.
+    if not (ttnn.device.is_wormhole_b0(device) or ttnn.device.is_blackhole(device)):
+        pytest.skip("scatter codegen runs only on Wormhole and Blackhole")
+
+
 def _make_input(shape, dtype):
     if dtype in (ttnn.int32, ttnn.uint32):
         return torch.randint(0, 100, shape, dtype=torch.int32)
