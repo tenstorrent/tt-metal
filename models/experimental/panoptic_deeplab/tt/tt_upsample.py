@@ -197,12 +197,7 @@ class BilinearUpsampleMatmulTTNN(LightweightModule):
             img_ttnn.dtype == self.output_dtype
         ), f"Input dtype {img_ttnn.dtype} does not match expected output dtype {self.output_dtype}"
 
-        if genify.enabled() and img_ttnn.dtype != ttnn.bfloat8_b:
-            # genify_matmul hangs on the bf16 H pass (batched B, fp32_dest_acc_en=False; repro in
-            # models/experimental/op_genify/integration/pdl_test_upsample_hang.py). The model runs bfp8, which
-            # genify handles; other dtypes (only the module's unit tests) keep the stock matmuls.
-            logger.warning(f"genify upsample: {img_ttnn.dtype} stays on ttnn.matmul (genify bf16 H-pass hang)")
-        elif genify.enabled():
+        if genify.enabled():
             # TT_GENIFY_MATMUL=1: both passes on genify_matmul, same operands, placements, dtype and
             # compute config (the stock program configs have no counterpart: genify picks its own split).
             # W pass: A interleaved, Mw [1, 1, W, W_out] is one shared B.

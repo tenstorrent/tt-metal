@@ -41,6 +41,7 @@ Phase 0 (regime R1, epilogue none) allocates the first four rows. The later rows
 
 **Refinement 6 (R4 `cores_per_bank` split, writer-side A rounds, trid B ring) as built.**
 - **Workers = C per bank** (`DS_CORES_PER_BANK`, auto: the largest C dividing the bank width `sw` into slices of ≥ `DS_CORE_N_TILES_MIN = 4` columns (whole swiglu pairs) with `C · banks ≤ grid`): bank w's optimal worker plus its C − 1 nearest free cores. Every per-worker CB above is the same with `block_n_tiles = sw / C` (PERF FOCUS 2: 20 → 4 columns, 40 workers), so `cb_weight_tiles` / `cb_partials` / epilogue rows shrink C×.
+- **Refinement 17:** `block_n_tiles = cw = ceil(sw / C)` (a bank's last slice may be narrower; its reads fetch only the valid columns, the CB slot keeps the `cw` row stride). C comes from the compute-hiding rule (`DS_COMPUTE_SHARE`), not a divisor of `sw`; no CB added, removed or resized beyond the `cw` term (qkvg 14 → 4 columns, 32 workers; LM head 64 → 22).
 - **C > 1: `cb_output_tiles` (index 16, `depth_out · sb_h · out_block_n`) replaces `cb_output_shard`** on every worker: a slice is not the whole output shard, so it cannot be packed in place. The writer lands it in the bank's output shard (on the bank's primary worker) through the output's sharded accessor. C = 1 keeps `cb_output_shard` (0 bytes). Shares with / why not: the output shard itself only exists on the primary worker and holds all C slices' columns interleaved per row, so a slice core has no in-place target.
 - **`cb_weight_tiles` depth** = `DS_DEPTH_WEIGHT` (default 2 = `DEPTH_WEIGHT`) when it fits (`ds_weight_depth`), else `DEPTH_WEIGHT`; the B ring keeps `min(DS_B_AHEAD, depth)` K-blocks in flight on transaction ids (default 1: depth 3–4 measured no gain once 5 slice readers share each bank — the bank is already saturated — so the knob is parked at its trivial value and costs no L1).
 - **`cb_act_tiles`** unchanged in size; under `DS_ACT_ON_WRITER` (default) its producer on the workers is the **writer** (BRISC runs the A rounds), not the reader — still a single producer (the reader no longer touches it) and a single consumer (compute). The non-worker cores of the broadcast run only the writer kernel (sender-only / landing zone).
@@ -222,3 +223,64 @@ PERF FOCUS 3 (32 × 512×128 @ 128×1024 bf8b, B in L1): split 32×1×3 → **32
 | output, bias / gate, residual | as R1 | unchanged (per-core) | none |
 
 PERF FOCUS 4 (256×6144 @ 6144×18432 bf16, swiglu; 96 cores, block 8×6): DRAM = A 3.1 MB + B 226 MB + out 4.7 MB ≈ 234 MB (the roofline's traffic), NoC = 3.1 MB A multicast to 95 cores. Before (R1a 8×9, 72 cores): the same DRAM bytes, but B streamed by only the 9 column injectors (25 MB each), 1125 µs; now 633–646 µs, B-stream-bound (B alone 550 µs ≈ 411 GB/s for interleaved 2 KB tile reads; with the A lockstep 578 µs). The single injector caps R1b at ~23 GB/s of A, so the split ranking counts R1b at `max(A + B, ACT_STREAM_INJECTOR_COST · A)` (= 18): text-encoder down 512×16384×5120 (A = 19% of B) keeps R1a.
+
+**R1b bank-local split as built (Refinement 15)** (`grid.placement == "bank"`, `operand_mode() == 2`). The CB inventory and sizes are R1b's; no new CB. The core's region is `core_m × core_n`, where `core_n` = the longest unit run × unit columns, and its columns sit 8 apart in B. Idle cores (w = 0) keep the nominal CBs and walk; they read and write nothing. The rotating injectors reserve through their next turn in the existing `cb_act_tiles` ring: no extra L1, `injectors < depth_act` (the ring holds the next turn while compute holds the current one).
+
+| Tensor | DRAM crossings | Why that many | Cross-core traffic added |
+|--------|----------------|---------------|--------------------------|
+| A | 1 | 3 rotating injectors each read every third A K-block once | multicast of every A K-block to the whole grid rectangle, once (the flat split sent each byte twice over its two rectangles) |
+| B | exactly 1 | each core streams its own bank run per K row, from the bank of its home row | none |
+| output, bias / gate, residual | as R1 | per-core, columns 8 apart (per-tile writes / reads) | none |
+
+Qwen3.8 M = 128 down (4352×5120 bfp4, A in L1): DRAM = B 12.5 MB + out 1.3 MB; NoC = 1.1 MB of A multicast once to 109 cores. 41.5 µs: the A stream (~36 µs) binds, and B alone is 34 µs.
+
+## Refinement 13 — split output (`chunks`)
+- **No CB change.** `cb_output_tiles` keeps its size and its single producer (compute) / single consumer (writer). The reader still writes its tail share straight out of that CB's L1 under the existing post / done handshake, without popping it.
+- **Data-movement budget unchanged.** The output is written once, tile by tile, as before; only the destination tensor of each tile column changes (`kernels/out_chunks.hpp`). There is no full-width intermediate and no extra op. The `chunks` tensors are DRAM (or L1) interleaved like the unsplit output: `l1_cb_budget` counts all of them when they live in L1.
+
+## Refinement 14 — A as K segments (list `input_tensor`)
+- **No CB change.** `cb_act_tiles` keeps its size, its producer (the reader; R1b: the writer) and its consumer (compute). Only the source address of each A tile changes (`kernels/a_segments.hpp`).
+- **Data-movement budget unchanged.** A is read exactly as often as the single-tensor call reads the concatenation (same split, blocking and A residency); there is no concat intermediate and no extra op. When the segments live in L1, `l1_cb_budget` counts every one of them.
+
+## Refinement 16 — R1a split lines, R1b ring fallback, operand-aware subblocks
+
+| CB | Capacity (pages) | Live set | Axis accounting | Page format | Producer | Consumer | Lifetime | Shares with / why not |
+|----|------------------|----------|-----------------|-------------|----------|----------|----------|-----------------------|
+| `cb_act_stage` (index 6; R1a split lines only) | `block_m_tiles · block_k_tiles` (one A K-block) | this core's next A-line turn, from its first chunk read until its send | `{b: streams, m: spans → block_m_tiles, n: streams, k: spans → block_k_tiles}` | A dtype | writer (raw scratch: the A-line injector reads its turn here) | writer (multicast source, its own slot included by loopback) | whole kernel | **None.** It cannot be a `cb_act_tiles` ring slot: a ring slot frees only when compute pops the round `depth_act` rounds earlier, so reading the next turn into it left the read on the critical path every round (measured: round issue blocking the line, Qwen3.8 M = 512 q512_in 84 µs vs 75 µs with staging + paced issue). Not shared with `cb_weight_stage`: different RISCs, concurrent, different formats. |
+| `cb_weight_stage` (index 7; R1a split lines only) | `block_k_tiles · block_n_tiles` (one B K-block) | this core's next B-line turn | `{b: streams, m: streams, n: spans → block_n_tiles, k: spans → block_k_tiles}` | B dtype | reader (raw scratch) | reader (multicast source) | whole kernel | **None.** Same reason, the B line's twin. |
+
+- **`cb_act_tiles` producer under the split lines = the writer** (BRISC runs the A row line, as R1b's A stream): single producer (the reader no longer touches it), single consumer (compute). Capacity unchanged (`depth_act = 2`).
+- **Solve**: a split-lines walk is solved with `depth + 1` K-blocks of each operand (the staging buffers; `_choose_blocking(..., (da + 1, dw + 1))`), and kept only if the output block is unchanged and the footprint `F + staging_bytes` fits (`staging_bytes = block_k · (block_m · a_tile + block_n · b_tile)`); the write-batch grant counts the staging too. Text encoder down 512×16384×5120: `block_k` 31 → 20 (26 K-blocks), output block 2×15 unchanged.
+- **R1b ring fallback** (`ACT_STREAM_MIN_DEPTH = 3`): when the depth-4 rings would split the core's rows into M-blocks (B streamed once per M-block), the solve takes the deepest ring ≥ 3 that keeps all rows in one block. Text encoder gate 512×5120×16384: block 8×5 (2 M-blocks, `depth 4`) → 16×5 (`depth 3`, `block_k` 9).
+- **Subblock choice** (R1 family, `SUBBLOCK_UNPACK_AWARE`): the cheapest `max(FPU, unpack(A) / sb_w, unpack(B) / sb_h)` first, then the larger area; no capacity changes except `cb_output_tiles` (`depth_out · sb_h · out_block_n`, now from the chosen `sb_h`; `_footprint` prices the taller of the operand-aware and the area-first `sb_h`, since it is shared with R2 / R3 / R4).
+
+**Data-movement budget, R1a split lines** (`r1a_split()`):
+
+| Tensor | DRAM crossings | Why that many | Cross-core traffic added |
+|--------|----------------|---------------|--------------------------|
+| A | `nb_n` (as R1a) | each A K-block is read once per row line, by the line core whose turn it is (round r from core r % grid_n', on the writer RISC / NoC1) | multicast of every A K-block to the `grid_n' − 1` other cores of the line (NoC1) |
+| B | `nb_m` (as R1a) | each B K-block is read once per column line, by its turn's core (r % grid_m', reader / NoC0) | multicast of every B K-block to the `grid_m' − 1` other cores (NoC0) |
+| output, bias / gate, residual | as R1 | unchanged | none |
+
+DRAM bytes are R1a's; what changes is who issues them: a line's reads are spread over its cores (Qwen3.8 M = 512 in_proj: a column line's 1920 bfp4 tile reads, ~50 µs on one core's RISC, now ~1/8 per core) and over the rounds (chunks over the `R1A_LINE_WINDOW = 2` rounds before each turn).
+
+## Refinement 18 — PDL sharded 1×1 convs: one-shot B channel, B groups, split roles
+
+| CB | Capacity (pages) | Live set | Axis accounting | Page format | Producer | Consumer | Lifetime | Shares with / why not |
+|----|------------------|----------|-----------------|-------------|----------|----------|----------|-----------------------|
+| `cb_weight_tiles` (R2 / R3, one-shot walks with a row epilogue) | `depth_weight · block_k_tiles · block_n_tiles` **+ `row_tail` pages** (`row_tail = ceil(block_n · row_tile_bytes / b_tile_bytes)`, `sharded_b_one_shot`) | the walk's only B round, plus the first bias / gate row in the tail past it (until every core copied it into `cb_row`) | `{b: streams, m: streams, n: spans → block_n_tiles, k: spans → K}` (one round = the whole walk); the tail holds one N-block row | B dtype (the tail is raw bytes of the row's dtype; it is never pushed) | reader (the group's injector reads B + the row into it; the multicast lands both on every core) | compute (the round); the reader itself (the tail, L1 → L1 into `cb_row`) | kernel | **Shares the allocation with the row's landing zone.** One delivery per walk is what makes the channel handshake-free and race-free (one flag set, one clear), so the row must ride in B's delivery; a separate `cb_row` landing would need a second flag delivery. Priced in `sharded_b_one_shot` (falls back to the handshaked rounds when the tail does not fit). |
+| `cb_act_tiles` (R3a, parked `BS_A_ONE_SHOT`) | `num_k_blocks · block_m_tiles · block_k_tiles` when on (default `DEPTH_ACT = 2`) | every peer shard of the walk's only block | `{k: spans → K}` | A dtype | reader | compute | kernel | **None** (in0 of the matmul). Parked off: measured slower (concurrent row multicasts serialize). |
+
+- **Producers under the R3 split roles** (`BS_B_ON_WRITER`, in-place R3 walks): `cb_weight_tiles` and `cb_row` are produced by the reader-kernel instance on BRISC (`GM_BS_ROLE 2`); `cb_act_tiles` / `cb_act_shard` and `cb_residual_tiles` by the NCRISC instance (`GM_BS_ROLE 1`). Each CB keeps exactly one producer and one consumer (compute). The output CB is the output's own shard (packed in place, sized to the whole shard), so it has no consumer kernel: the writer kernel is not placed (compute never waits on its space).
+- **R2a B-read helper** (`SHARDED_B_READ_HELPER`): on each multicasting group's injector, a reader instance on BRISC (`GM_BS_ROLE 3`) issues the last `floor(K / 2)` K rows of the walk's only B round into the same `cb_weight_tiles` slot. It never reserves or pushes; the NCRISC reader stays the CB's only producer and pushes after the helper's post. One extra L1 semaphore per core (`GM_BS_B_HELPER_SEM`, the post word). The writer kernel is not placed (in-place output).
+- **Semaphores**: R2 now attaches one `weight` channel per B group (disjoint core sets, each at its own ids). The one-shot channel is handshake-free (1 flag semaphore instead of 2).
+- **No other CB change.** `BS_SPLIT_B_DEPTH` (split, per-core B, parked at 2 = `DEPTH_WEIGHT`) and `BS_SPLIT_B_LOOKAHEAD` (parked at 0) are live knobs that deepen `cb_weight_tiles` to the whole walk; measured flat.
+
+**Data-movement budget, Refinement 18:**
+
+| Tensor | DRAM crossings | Why that many | Cross-core traffic added |
+|--------|----------------|---------------|--------------------------|
+| B (R2) | **one per B group** (= rectangle of the HS core set: 2 on PDL's 86 / 103 / 64-core sets) | each group's injector reads B once (`SHARDED_B_RECT_GROUPS`); before, one injector sent B to the rectangles one after another | multicast of B to each group (the groups multicast concurrently) |
+| bias / gate (R2 one-shot) | 1 per group | read by the injector into `cb_weight_tiles`' tail, delivered with B | rides B's multicast (+`block_n` tiles per delivery) |
+| B (R3 split) | 1 per grid column (now also below the old 3 MiB traffic gate: `BS_SPLIT_B_MCAST_MIN_SAVED_BYTES = 0`) | the column injector's BRISC reads each K-block once, one K-block per round (`BS_SPLIT_B_ROUND_BYTES`) | multicast down the column on NoC1, concurrent with the A row exchange on NoC0 |
+| A, output, residual | unchanged | | |

@@ -996,3 +996,458 @@ Artifacts: `perf_experiments/<slug>/` and `tests/.../genify_matmul/perf_experime
 - Golden test progress: interleaved slice (`test_golden.py -k interleaved`) 429 passed / 75 xfailed / 0 failed; `test_translated.py` + `test_regression.py` 212 passed, 20 skipped, 80 xfailed, 14 failed (the pre-existing `test_matmul_1d_multiple_output_blocks_per_core` program-cache-count asserts, unchanged since Perf 1). Unit: interleaved 650/650, sharded 52/52.
 - Issues encountered: the first cost model under-priced few-core R1 splits (per-core read rate) and the 32-core PERF FOCUS 3 split (per-core write rate) — both added as terms; `MIN_K_BLOCKS` initially pushed R1b K-blocks under the R1b gate (restricted to R1a). Plan-pinning unit tests (R1a orientation / padded tail, single-walk split, PERF FOCUS 3 split) now pin those plans under the legacy ranking, which still builds them.
 - Tests added: `perf/test_genify_matmul_perf_r11.py` (15 model cases; `GENIFY_MATMUL_FORCE` / `_PLAN` / `_CHECK`), `perf/conftest.py` (`GENIFY_MATMUL_KNOBS` / `GENIFY_MATMUL_TRACE` for the whole perf dir); `test_genify_matmul_mcast.py`: `test_r1a_min_k_blocks`, `test_split_cost_model_r1a` (proj_out, te qkv), `test_none_raw_walk` (both walks).
+
+## Refinement 12 — Hang: bf16 batched-weight matmul (PDL upsample H pass in bf16)
+- Date: 2026-11-17
+- What was done: root-caused and fixed the dispatch-timeout hang of `genify_matmul(A (1,32,512,128) bf16, B (1,32,128,1024) bf16 batched)`. Triage: every writer in `tail_split::wait_at_least`, every reader in `cb_reserve_back`. The Perf 2 tail write split held the core's whole LAST block's output batches until the reader served its NoC0 share, but the reader serves only after its K-walk. In bf16 the split chooser plans R1a with `block_batches = 32` (one 32-batch block per core), so the writer held batch 0 while the reader still had batches 1..31 to read: the output CB (DEPTH_OUT row groups) filled, compute stalled, the input CBs never drained, deadlock. bfp8 plans `block_batches = 1` (the tail starts after the walk) and so ran. The hang is a property of `block_batches > 1` with any CB depth / K-blocking / dtype, not of this shape. Fix (writer + reader, no host change): the split now covers only the tail block's LAST batch, whose output is produced only after the reader's final K-block push, so the reader can always serve it. Earlier batches of a multi-batch tail are written by the writer alone. The residual-loop mid-walk serve is unchanged (it now only serves batches of that last block-batch).
+  Reused: the tail-split handshake, its semaphores and the `serve_one` / `serve_before` walk. Added: the `bi + 1 == block_batches` scope (writer) and the `t_bi` constant (reader).
+- Accuracy achieved: helpers.TOLERANCES pass (run_genify_matmul) on the H pass bf16 / bfp8 × B DRAM / L1, the R1a multi-K multi-batch (1,8,512,512)² and the plain-R1 multi-batch (1,128,64,128)@(1,128,128,64) shapes under none / bias / addcmul.
+- Golden test progress: the two target cases (`test_op_loose[...dtype=BFLOAT16...]`, `test_op_feature[..._weight_l1...]`) pass, plain and `--dev`. Golden slice `-k "batched and interleaved"`: 78 passed, 15 xfailed, 0 failed. Unit regression (test_genify_matmul / residency / mcast / stream_mcast / epilogue / extended): 105/105.
+- Perf: bfp8 H pass (`test_op_loose` bfp8), A/B on one box, 4 fresh runs each: base 66.8 / 65.7 / 67.0 / 66.3, fix 67.9 / 67.2 / 67.2 / 68.2 us (medians 66.6 -> 67.6, +1.5%: inside the noise band; same handshake at block_batches = 1). bf16 H pass: hang -> 136.0 us. That is about 2x bfp8; its R1a 32-batch plan has not been profiled (left for perf rounds).
+- Issues encountered: none beyond the root cause. For multi-batch tails the NoC0 share now covers 1/block_batches of the last block, which matters only for the tail of multi-batch blocks.
+- Tests added: `tests/ttnn/unit_tests/operations/genify_matmul/test_genify_matmul_tail_split.py`: the H pass (bf16 / bfp8 × B DRAM / L1; asserts the bf16 plan is multi-batch), and multi-batch tails on R1a (2 K-blocks) and plain R1 × none / bias / addcmul (asserting block_batches > 1 and the walk mode). 10 cases.
+
+## Refinement 13 — Split output: `chunks` (FLUX.2 QKV ×3, time_mod ×17)
+- Date: 2026-11-18
+- What was done: `genify_matmul(..., chunks=c)` returns a list of `c` tensors, chunk i = columns [i·w, (i+1)·w) of epilogue(A @ B), w = N_out / c, each with `memory_config` and `dtype`. The same single program writes every chunk directly: no full-width intermediate, no extra op. Host: the entry point checks the contract (`chunks` an int ≥ 1, N_out % c == 0, w % 32 == 0, else `ValueError`), raises `UnsupportedAxisValue` for `chunks > 1` on a sharded placement, allocates the c tensors and passes them all last to `generic_op`. The R1 descriptor plans on the logical output (`_geometry` sums the chunk widths; `l1_cb_budget` counts every chunk). Chunk 0 stands in for the per-tensor properties (dtype, page size, accessor args). Every chunk's address goes to the writer and to the reader (tail share) RT args, and `GM_OUT_CHUNKS` is defined on both. Kernels: the new `kernels/out_chunks.hpp` (`Table`, `locate`, `write_row`) maps output tile column gc to chunk gc / w, local column gc % w. It locates the chunk once per block and writes a straddling block row as one run per chunk, through one `TensorAccessor` per run. The writer's store loop and the reader's tail-share loop both call `write_row`. The split choice, blocking, CBs and compute kernel are unchanged. R3 / R4 writers compile `GM_OUT_CHUNKS = 1`, which is the old page arithmetic.
+  Reused: the R1 / R1a / R1b / R1d descriptor and both dataflow kernels' store paths, the tail-split handshake, the output accessor args. Added: `out_chunks.hpp`, the chunk address table (RT), `_out_list` / `_check_chunks`, and the `GM_OUT_CHUNKS` define. No new CB, kernel or descriptor branch.
+- Accuracy achieved: per chunk, double QKV img / txt and single QKV PCC 0.999994, relative RMS 0.0044–0.0046; time_mod ×17 PCC ≥ 0.999991, RMS ≤ 0.0062; 384×1536×3072 ×3 / bias ×2 PCC 0.999999, RMS 0.0017.
+- Golden test progress: the six `test_op_feature[..._chunksN-...]` cases pass (6/6). Unit regression (every file except the 540-cell precision matrix and the new one): 172/172.
+- Perf (device ns, the same call without `chunks` = its LOOSE_CASES entry, one profile run each): double QKV img 963.9 → 962.8 us; single QKV 1122.1 → 1121.1 us; time_mod 1602.7 → 1605.5 us (+0.2%). Double QKV txt varied by run: unsplit 319.8 / 325.4 / 328.4 us, `chunks` 335.5 / 321.4 / 328.8 us. Medians 325.4 vs 328.8 us (+1.0%) sit in the same 320–336 us noise band. Every FLUX.2 `chunks` case is within 2% of its unsplit call: the split is free.
+- Issues encountered: `run_safe_pytest.sh --profile` cannot take a multi-word `-k` (Tracy's shell splits it). Pass explicit node ids instead.
+- Tests added: `tests/ttnn/unit_tests/operations/genify_matmul/test_genify_matmul_chunks.py` (23 cases): every epilogue × chunks {2, 3, 16}; chunk width 1 tile (every block row straddles chunks); M = 1; folded leading dims; batched weight (R1d); a large multi-block walk; time_mod's fp32-A / bf16-bias / bf16-out mix ×17; L1 A + output; the `ValueError` contract and the chunks = 1 / > 1 return types.
+
+## Refinement 14 — A as a list of K segments (FLUX.2 single-block out = [attention | MLP])
+- Date: 2026-11-18
+- What was done: `genify_matmul([A_0, .., A_{s-1}], B, ...)` computes epilogue(concat(A_i, dim=-1) @ B) in the same single program, without building the concatenation. Host: `_check_segments` enforces the contract (same leading dims / M, dtype, layout and memory config; K_i % 32 == 0; Σ K_i == B[-2]; else `ValueError`); a one-element list is the single-tensor call; a sharded segment list raises `UnsupportedAxisValue`. `validate()` / `_check_contract` see the logical concat shape (`_logical_a_shape`), segment 0 stands in for the per-tensor axes. The R1 descriptor plans on the logical A (`_a_list`: `_geometry` sums the segment widths, `l1_cb_budget` counts every segment), appends the segment table `[kt_0 .. kt_{s-1}, addr_1 .. addr_{s-1}]` to the reader RT args (after `own_kb`) and to the R1b writer's A-stream args, and defines `GM_A_SEGMENTS` on both. Kernels: the new `kernels/a_segments.hpp` (`Table`, `locate`, `read_row`) maps K tile kt to its segment and local tile; `read_act` (R1 / R1a / R1d, residency and head-ramp walks) and the R1b injector's A read locate the segment once per K-block and read a straddling row as one run per segment. Without the define both keep their old loops verbatim. Split, blocking, CBs, compute unchanged.
+  Reused: the R1 / R1a / R1b / R1d descriptor, `read_act`, the R1b injector read, A's accessor args (segment 0's). Added: `a_segments.hpp`, the segment table (RT), `GM_A_SEGMENTS`, `_a_list` / `_a_segment_table` / `_check_segments` / `_logical_a_shape`. No new CB, kernel or descriptor branch.
+- Accuracy achieved: all three golden `concatK` cases within helpers.TOLERANCES (bf16, HiFi2 / HiFi4, fp32 DEST); unit cases on every epilogue, R1 / R1a / R1b / R1d, fp32 A, L1 A, with chunks.
+- Golden test progress: the three `test_op_feature[..._concatK...]` cases pass (3/3). Unit regression (test_genify_matmul, chunks, stream_mcast, mcast, epilogue, height_sharded, tail_split): 132/132.
+- Perf (device ns, one profile run each, vs the same shape's single-tensor LOOSE call): single out M = 2304, [3072 | 9216] x 6144: 1425.9 vs 1426.4 us; final block M = 2048: 1202.3 vs 1201.7 us. Both within 0.05%: the concat is free. Perf guard: `perf/test_genify_matmul_perf_flux.py::test_perf_flux_segments` (segmented + single twin).
+- Issues encountered: None.
+- Tests added: `tests/ttnn/unit_tests/operations/genify_matmul/test_genify_matmul_segments.py` (19 cases): every epilogue; one-tile edge segments, one segment per K tile (8), a one-element list; M = 1; folded leading dims; batched weight (R1d); a large multi-block walk; R1a (asserted) and R1b (asserted, none + swiglu); fp32 A; L1 A + output; segments with chunks; the `ValueError` contract.
+
+## Refinement 15 — Small-M weight streaming at the DRAM roofline (Qwen3.8 M = 128, FLUX.2 prompt stream, M = 1)
+- Date: 2026-11-18
+- What was done:
+  - **Breakdown first** (`/perf-measure`, new `ABLATE_DEFINES` host knob: SKIP_COMPUTE / GM_ABLATE_A / GM_ABLATE_A_SEND / GM_ABLATE_B payload stubs).
+    - Qwen M = 128 gate_up, 109 µs: no-A 107, no-B 69, B alone 93, A alone 59, sync floor 10. The B stream binds: 25 MB of 576 B bfp4 tile reads at ~300 GB/s.
+    - Per-core B finish times spread 3–4× by grid row, whichever bank the core read. Coalesced reads alone gave 78 µs; NoC1 reads 174 µs.
+    - The flat 68-core split is two multicast rectangles, so the injector sent A twice (multicast 41 µs, reads 23 µs).
+  - **R1b bank-local split** (`ACT_STREAM_BANK_LOCAL`, the `bank` split candidate).
+    - Interleaved DRAM page p is in bank p % 8, so B columns n, n+8, ... of a K row are consecutive pages of one bank. Each core owns a run of such units (B columns; swiglu (gate, up) pairs), read as one bank run per K row (`GM_BANK_STRIDE` / `GM_BANK_RUNS`).
+    - The output (and the bias / gate / residual reads) follow the same stride (`GM_OUT_STRIDE`, `out_chunks::write_row(stride)`).
+    - Placement `BANK_LOCAL_PLACEMENT = "row"`: a bank's units go to the cores of its NoC0 home row (the optimal reader's row), so responses never turn into a column. Down's B stream: 34 µs (~430 GB/s) vs ~95 µs with "near" / "spread" placements.
+    - `BANK_LOCAL_ROW_FILL`: the spare rows join the most loaded class. Banks 0 / 4 share a home row; time_mod 2037 → 1363 µs with fill.
+    - The split is the whole grid, one rectangle, so A is multicast once.
+    - Priced in `choose_split` by its own DRAM rate, injector cost, the busiest core's B stream and a per-round A floor (`BANK_LOCAL_*`).
+    - swiglu stays on the flat split (`BANK_LOCAL_SWIGLU = False`): a pair spans two banks with different home rows.
+  - **Rotating A injectors** (`ACT_STREAM_INJECTORS = 3`, `GM_ACT_INJECTORS`, bank split only): `McastRotatingSenderConfig`, K-block r from injector r % 3.
+    - An injector issues its next turn's read before sending r when the slots are free, else after. Issuing it after the send held its ack of r + 1: 13.6 µs rounds. Issuing it before with a blocking reserve stalled sends on compute: FLUX attn 107 → 135.
+    - Down 46 → 41 µs, attn 113 → 107, ctx 260 → 251.
+  - **Reused / Added.**
+    - Reused: the R1b reader / writer / `act` channel / CBs / compute, `out_chunks::write_row`, the split cost model, the R4 optimal-reader map.
+    - Added: the column-stride defines, `bank_layout` / `bank_candidates` / `bank_core_columns`, the rotating-injector branch of the writer's A stream, the `wr_a_barrier` / `wr_a_send` / `wr_a_issue` / `wr_a_rotate` zones.
+    - No new CB, kernel file or descriptor branch.
+- Accuracy achieved: PCC 0.99998–1.000000, relative RMS 0.0044–0.0083 on every R15 shape (GENIFY_MATMUL_CHECK) [128×{5120×8704 swiglu, 5120×4160, 4352×5120, 1536×5120, 5120×3584} bfp4 LoFi; 256×{6144×9216, 6144×3072 addcmul, 6144×18432 swiglu, 9216×6144, 15360×3072} HiFi2; 1×6144×6144 bf16 / fp32 A; 1×6144×52224 bias; 1×256×6144; 2048×128×3072; 2048×3072×128].
+- Golden test progress:
+  - Interleaved cartesian slice: 375 passed, 75 xfailed.
+  - R15 loose slice (M = 128 / 256 / 1, te_gate, x_embedder, proj_out): 19/19.
+  - Feature (chunks / segments): 10/10.
+- Perf, device µs before → after (roofline):
+  - Qwen M = 128: gate_up 109.1 → 106.8 (56.8), in_proj 63.6 → 48.2 (28.3), down 55.9 → 41.5 (30.0), out_proj 22.9 → 22.8 (12.4), qkvg 81.0 → 49.8 (27.2).
+  - FLUX.2 M = 256: QKV 331 → 283 (263), attn + addcmul 148 → 107 (96), FF1 631 → 614 (509), FF2 332 → 278 (263), ctx 352 → 251 (225).
+  - FLUX.2 M = 1: linear_2 fp32 / bf16 205 / 209 → 168 / 173 (167 / 166), time_mod 1600 → 1352 (1409), linear_1 10.5 → 10.5 (7.7).
+  - x_embedder 47.7 → 47.5 (30.2), proj_out 58.3 → 58.1 (30.2).
+  - Also: text-encoder gate 504 → 479.
+  - Guard: perf_guard / R1b guard / R11 cells show no regression beyond ±3%. 64×16384×256 (16-bit DEST) needed the round floor in the cost model and the bank-only rotation: it was 134, then 92, now back to 84.
+- Issues encountered:
+  - The helper's rotating senders need a rectangular receiver group (flat splits keep the fixed injector).
+  - The remote JIT farm's SFPI mismatched (`__xtt_vector8`), so all runs compiled locally.
+  - The NoC0 per-row B-rate effect is a measured property; its root cause (arbitration vs. response routing) was not established.
+- Tests added:
+  - `tests/ttnn/unit_tests/operations/genify_matmul/test_genify_matmul_bank_local.py` (14 cases): selection + correctness on bfp4 / bf16, 130 columns (not a bank multiple), ragged M / N, every row-epilogue, fp32 A, L1 A, the "near" / "spread" placements, injectors 1 / 2, fill off, swiglu under its knob.
+  - `perf/test_genify_matmul_perf_r15.py`: the 16 R15 cases at their golden configs, the perf-guard extension for the new path.
+  - `test_r1b_act_resident` now pins the flat split, since the bank split takes that shape.
+
+## Refinement 16 — Mid-M compute efficiency (text encoder at 512 tokens, Qwen3.8 prefill M = 512 / 1024)
+- Date: 2026-11-18
+- What was done:
+  - **Breakdown first** (`/perf-measure`; bench `tests/.../perf/test_genify_matmul_perf_r16.py`, the 15 listed cases at their golden configs; new `GM_ABLATE_DM` stub = reads + line deliveries replaced by reserve / push, beside `SKIP_COMPUTE`). Before (full / data-movement-only / compute-only): q512 in_proj 101.6 / 97.3 / 60.5 µs, te o_proj 86.6 / 82.0 / 61.5, te down 525.5 / 510.3 / 405.2, q1024 down 134.4 / 129.1 / 110.7: the R1a operand lines bound the mid-M walks. Zones: a B-line injector spent 50 µs of the 97 issuing its line's 1920 bfp4 tile reads (~35 RISC cycles each), and every core's reader received A(kb) before it could ack B(kb).
+  - **R1a split lines** (`R1A_SPLIT_LINES`, `kernels/line_stream.hpp`). The A row lines move to the writer RISC (BRISC / NoC1, `cb_act_tiles`' producer, writer `act_mode = 3`); the B column lines stay on the reader. Both use rotating injectors (`McastRotatingSenderConfig` over the line: round r from line core r % length). An injector reads its turn into a one-K-block staging CB (6 / 7) in K-row chunks over the `R1A_LINE_WINDOW = 2` rounds before it, with round 0 read alone at round 0 (`R1A_LINE_STARTUP_SHARE = 1`), then multicasts staging → the ring slot (loopback into its own slot).
+    - Measured on the way (q512_in): reading turns into the depth-2 ring slot 84 µs (the slot frees too late); all turns at once 107 (round 0 landed at ~40 µs behind the whole prefetch); whole turn 2 rounds ahead 89 (it delays the ack); chunks over every round between turns 86; window 2 + round 0 alone 78.5; + startup share 75.6.
+  - **Head ramp on the split walks** (`R1A_SPLIT_RAMP`): the Perf 2 schedule on the helper walk too (the writer's A line follows it; compact A on the raw walk). q1024 down 132 → 126, q512 gate_up 167 → 161, flat elsewhere.
+  - **Gates** (`_r1a_split_shape`): `0.7 ≤ busiest-core read / K-walk < 2.0`, A line ≤ B line, staging fits without shrinking the output block.
+    - out_proj M ≥ 1024 (0.52–0.55) measured flat to +3 %; Qwen qkvg M = 4096 (0.65) +6 %.
+    - FLUX proj_out at HiFi4 (1.95, A line 6× B) 69 → 84 µs.
+    - The staged solve shrank out_proj M = 4096's block (226 → 268 µs) until the same-block rule.
+  - **R1b ring fallback** (`ACT_STREAM_MIN_DEPTH = 3`): text-encoder gate (PERF FOCUS 1, bank split) solved two 8-row M-blocks at ring depth 4, streaming its 89 MB of bfp8 B twice. Depth 3 keeps one 16-row block: 477 → 404 µs, the roofline.
+  - **Operand-aware subblocks** (`SUBBLOCK_UNPACK_AWARE`): cost per tile-K = max(FPU, unpack(A)/sb_w, unpack(B)/sb_h), unpack(t) = bytes/100 + 3 cycles, in the R1 subblock choice and the split ranking. Calibrated on compute-only runs (bf16 A, LoFi): 2×1 subblocks ~24 cycles per tile-K, 3×1 23.6, against 17.5 for 1×4. q512 qkvg 77 → 73 µs (8×10 split, 1×4), q2048 out_proj 136 → 129 µs (1×3 instead of 4×1).
+  - **Reused / Added.**
+    - Reused: the R1a descriptor / walk / CBs / compute; R1b's writer-produces-`cb_act_tiles` structure; the Mcast helper's rotating senders; the kschedule head ramp; `_choose_blocking` / `split_cost_terms`.
+    - Added: `line_stream.hpp`, two staging CBs, the writer's `act_mode = 3` branch, the reader's B-line branch, knobs `R1A_SPLIT_LINES` / `R1A_SPLIT_MIN_RATIO` / `R1A_SPLIT_RAMP` / `R1A_LINE_WINDOW` / `R1A_LINE_STARTUP_SHARE` / `ACT_STREAM_MIN_DEPTH` / `SUBBLOCK_UNPACK_AWARE`, and `GM_ABLATE_DM`.
+    - No new kernel file beside the header, no new descriptor branch.
+- Device µs, before → after (roofline; ×roofline after):
+
+  | Group | Case | Before | After | Roofline | × roofline |
+  |---|---|---|---|---|---|
+  | Text encoder | gate | 478.6 | 403.1 | 403.5 | 1.00 |
+  | Text encoder | down | 525.5 | 430.1 | 403.5 | 1.07 |
+  | Text encoder | qkv | 113.3 | 93.7 | 75.7 | 1.24 |
+  | Text encoder | o_proj | 86.6 | 68.9 | 50.4 | 1.37 |
+  | Qwen3.8 M = 512 | in_proj | 101.6 | 75.1 | 51.2 | 1.47 |
+  | Qwen3.8 M = 512 | gate_up + SwiGLU | 195.7 | 161.0 | 107.2 | 1.50 |
+  | Qwen3.8 M = 512 | down | 102.6 | 81.8 | 53.6 | 1.53 |
+  | Qwen3.8 M = 512 | qkvg | 96.3 | 72.9 | 44.1 | 1.65 |
+  | Qwen3.8 M = 512 | out_proj | 53.0 | 45.0 | 24.4 | 1.84 |
+  | Qwen3.8 M = 1024 | out_proj | 76.2 | 75.7 | 39.2 | 1.93 |
+  | Qwen3.8 M = 1024 | qkvg | 120.9 | 107.2 | 88.3 | 1.21 |
+  | Qwen3.8 M = 1024 | in_proj | 139.6 | 125.0 | 102.4 | 1.22 |
+  | Qwen3.8 M = 1024 | down | 134.4 | 125.2 | 107.2 | 1.17 |
+  | out_proj | M = 2048 | 136.4 | 129.0 | 75.7 | 1.70 |
+  | out_proj | M = 4096 | 226.4 | 226.2 | 151.3 | 1.50 |
+- Measured floors after (compute-only = `GM_ABLATE_DM` / data-movement-only = `SKIP_COMPUTE`, µs):
+
+  | Case | Compute-only | Data-movement-only |
+  |---|---|---|
+  | te down | 413 | 291 |
+  | te qkv | 82 | 64 |
+  | te o_proj | 63 | 49 |
+  | q512 in | 62 | 64 |
+  | q512 gate_up | 139 | 118 |
+  | q512 down | 68 | 69 |
+  | q512 qkvg | 61 | 59 |
+  | q512 out | 38 | 39 |
+  | q1024 out | 69 | 71 |
+  | q1024 qkvg | 94 | 85 |
+  | q1024 in | 114 | 87 |
+  | q1024 down | 114 | 96 |
+  | q2048 out | 121 | 102 |
+  | q4096 out | 213 | 183 |
+
+  - Every case runs within 1.05–1.2× of its larger floor.
+  - What keeps the floors above the roofline:
+    - M = 512 (16 tile rows) caps the 2-D split at 80–88 cores; the roofline assumes 110. On 88 cores the K-walk alone is ~1.25× the roofline.
+    - out_proj (K = 48 tiles, output 2–3× the operands) writes its whole output after the last K-block. Splitting the region into M-blocks to overlap the writes measured worse (q1024 out 2×16 blocks 90.5, 1×16 152 vs 75.9 µs): the B re-reads cost more than the overlap.
+  - Both are findings for the perf rounds, not open work: a non-rectangular split filling 110 cores at M = 16 tiles; an out_proj walk with B resident across M-blocks, delivered in K-blocks during the first.
+- Guard (knobs off = before; `agent_logs/r16_guard.sh`): perf_guard 62 ops, perf_r11 15, perf_r15 17, perf_flux 20, perf_sharded 46, perf_focus 1. No op slower beyond ±3 % on re-run (single-run flags on 5–12 µs cells and two R1b shapes whose plans did not change came back within noise). 10 R11 / FLUX cells −15 … −26 %, 384×1536×1024 −14 … −35 %, PERF FOCUS 1 (Qwen gate_up 2048) unchanged.
+- Accuracy achieved: PCC ≥ 0.99988, relative RMS ≤ 0.0086 on all 15 R16 shapes (`GENIFY_MATMUL_CHECK`). The split lines with the ramp off are bit-identical to the fixed-injector walk; the pacing knobs are bit-identical to each other.
+- Golden test progress:
+  - interleaved loose + feature (`test_op_loose and interleaved or test_op_feature`): 65/65 passed.
+  - Interleaved cartesian slice: 375 passed, 75 xfailed (unchanged).
+  - Unit (every file but the 540-cell precision matrix): 242/242.
+- Issues encountered:
+  - A profiler zone-hash collision (16-bit hash of file:line:name) after kernel line numbers shifted made `--profile` runs throw at teardown (`profiler.cpp:321`). `agent_logs/r16_zone_hash_check.py` checks the op's zones against every known location.
+  - The writer's K schedule must be the identity for writers whose K args are placeholders (R4 / absent A role).
+- Tests added:
+  - `test_genify_matmul_split_lines.py` (14 cases): the split plan asserted + helpers.TOLERANCES on every epilogue, ragged M / K, folded lead dims, bfp4 LoFi and bfp8 HiFi2; bit-identity vs the fixed injectors; pacing-knob invariance; segments + chunks.
+  - `perf/test_genify_matmul_perf_r16.py`: the 15 cases.
+  - `perf/test_genify_matmul_perf_r11.py`: `GENIFY_MATMUL_BLOCK` (force an output blocking).
+
+## Refinement 17 — Decode weight streaming (dram_sharded) at the DRAM roofline
+- Date: 2026-11-18
+- What was done:
+  - **Breakdown first** (`/perf-measure`; bench `tests/.../perf/test_genify_matmul_perf_r17.py`: the 10 Qwen3.8 decode cases at their golden config, `GENIFY_MATMUL_CSWEEP` forces cores_per_bank per run; `agent_logs/r17_sweep.sh`, `r17_core_ends.py` per-core reader end times on the grid). The `ABLATE_DEFINES` stubs now reach R4 too (`GM_ABLATE_B` in the B ring, `GM_ABLATE_A_SEND` 32-byte rounds, new `GM_ABLATE_A_ROUND` = no round at all).
+    - qkvg (PERF FOCUS 3) at the Refinement 6 split (C = 2, 7-column slices, 16 workers): compute stubbed 23.9 µs, B + A payload stubbed (compute only) 30.4 µs — compute-bound (1120 tile products per core with 1×1 subblocks).
+    - A cores_per_bank sweep (C = 2 … 13) showed the B stream alone varies ±8 % with C, and fewer slice readers per bank stream fastest (LM head compute-stubbed: C = 3 98 µs, C = 4 106).
+    - The C = 3 cliff (lm_last 101 µs, lm_head 119) was placement: logical row 9 holds banks 0 (col 0) and 4 (col 6); the old "nearest" placement put bank 4's third slice reader at col 5, whose NoC0 responses wrap the row through bank 0's links; row 9's cores ended 86–98 µs vs ~78 elsewhere.
+  - **Ragged bank slices**: `cw = ceil(sw / C)`, C any value whose slices are all non-empty (was: C divides `sw`). The reader fetches only a slice's valid columns per K row (`cols_valid`, also for the last bank's padding); the CB slot keeps the `cw` stride, the stale tail columns are never written out. `worker_cols` clips to the bank boundary.
+  - **Home-row segment placement** (`DS_PLACEMENT = "segment"`, `"near"` = Refinement 6): a bank's slice readers fill its home row from the primary in NoC0's +x direction up to the row's next bank primary; beyond it, the nearest free cores.
+  - **Compute-hiding cores_per_bank rule** (`DS_COMPUTE_SHARE = 0.65`, `DS_COMPUTE_FIXED_CYCLES`, `DS_BANK_BYTES_PER_CYCLE`): the smallest C whose per-core compute (K · M · cw at `tile_k_cycles` for the plan's fidelity and subblock) + fixed cost is ≤ 0.65 × the busiest bank's stream, within the segment cap (5 on this board) when one qualifies; else the cheapest. `plan_dram_sharded` takes `math_fidelity` (the descriptor passes the compute config's; HiFi4 when absent). `DS_COMPUTE_SHARE = None` restores the narrowest-slice rule.
+  - **Reused / Added.** Reused: the R4 descriptor, reader B ring, writer A rounds, compute, CBs, `tile_k_cycles` / `choose_subblock`. Added: topology field `core_n_tiles`, `_ds_segment_cap`, the cost rule in `ds_cores_per_bank`, knobs `DS_PLACEMENT` / `DS_COMPUTE_SHARE` / `DS_COMPUTE_FIXED_CYCLES` / `DS_BANK_BYTES_PER_CYCLE`, R4 ablation defines. No new CB, kernel file or descriptor branch.
+- Device µs, before → after (roofline; × roofline after):
+
+  | Case | Before | After | Roofline | × | C, slice |
+  |---|---|---|---|---|---|
+  | qkvg 1×5120×3584 (PERF FOCUS 3) | 31.9 | 24.2 | 22.4 | 1.08 | 4, 4 |
+  | LM head last chunk 1×5120×12928 | 100.9 | 83.9 | 80.8 | 1.04 | 3, 17 |
+  | GDN in_proj 1×5120×4608 | 33.1 | 30.3 | 28.8 | 1.05 | 3, 6 |
+  | out_proj 1×1536×5120 | 11.3 | 11.6 | 9.6 | 1.21 | 5, 4 |
+  | MLP down 1×4352×5120 | 29.5 | 29.3 | 27.2 | 1.08 | 4, 5 |
+  | gate_up + SwiGLU 1×5120×9216 | 62.4 | 60.1 | 57.6 | 1.04 | 3, 12 |
+  | LM head 1×5120×16384 | 104.1 | 100.7 | 102.4 | 0.98 | 3, 22 |
+  | gate_up batch 32 | 62.0 | 60.3 | 57.6 | 1.05 | 3, 12 |
+  | down batch 32 | 30.1 | 29.6 | 27.2 | 1.09 | 4, 5 |
+  | out_proj batch 16 | 11.3 | 11.2 | 9.6 | 1.17 | 5, 4 |
+
+  - out_proj's floor (measured): compute + A payload stubbed 10.8 µs, B stubbed 10.9, every payload stubbed 9.3 (the 8 handshaked A rounds + launch), 3.5 with no rounds. The B stream, the rounds and compute each take ~10–11 µs alone; the 11.2–11.6 µs run is within ~5 % of the B-stream floor.
+  - `DS_B_AHEAD = 2` (two K-blocks in flight) on the new splits: qkvg 23.6, in_proj 29.9, lm_last 89.3 (+6 %), lm_head 103.8 (+3 %): parked at 1.
+  - Guard (`test_perf_dram_sharded`, before → after): PERF FOCUS 2 29.0 → 29.1, LM head 104.4 → 100.6, gate_up batch 32 62.3 → 61.2, cartesian 384×1536×1024 bf16 HiFi4 137.2 → 63.6 (C = 4 one-column slices; was one core per bank). No other regime touched.
+- Accuracy achieved: PCC 0.999989–0.999996, relative RMS 0.0046–0.0088 on all 10 decode cases (`GENIFY_MATMUL_CHECK`).
+- Golden test progress: `test_golden.py -k dram_sharded`: 310 passed, 150 xfailed (the permanent EXCLUSIONs); `test_op_loose and dram_sharded` 10/10; `test_translated.py` DRAM-sharded 57/57.
+- Issues encountered: the per-bank stream rate depends on where its slice readers sit and how many there are (±8 % compute-stubbed); the rule takes the smallest hiding split rather than modeling it. The root cause of the remaining spread (e.g. bank 4's primary in row 9 finishing last even with "segment") was not established.
+- Tests added:
+  - `test_genify_matmul_dram_sharded.py`: `test_cores_per_bank_split` gains a ragged split (C = 2 over 3-column banks); `test_plan_blocking` pins PERF FOCUS 2 at LoFi (C = 4, 5-column slices, every slice reader in its bank's row) and qkvg (14 columns → 4, 4, 4, 2).
+  - `perf/test_genify_matmul_perf_r17.py`: the 10 decode cases.
+
+## Refinement 18 — PDL: sharded 1×1 convs and the bilinear upsample
+- Date: 2026-11-18
+- What was done:
+  - **Fixed cost first** (`/perf-measure`, per-core zone timelines; scripts in this phase's commits). PDL heads (32768×32×32, 103 cores, 1-tile B): the B round ended at +1.9 µs, the bias-row round at +3.4 µs, the epilogue at +4.0 µs. Both rounds were handshake + multicast. Dropping only the handshake (counter signal) left the receivers' arrival times unchanged: the cost was the injector's serial sends (two rectangles one after another, then a second delivery for the row), not the 102 acks.
+  - **R2 one-shot weight channel** (`SHARDED_B_ONE_SHOT`, reader `GM_BS_ROW_TAIL`). A walk of exactly one B round in one chunk (every PDL HS conv) lands in slots no core has used, so the channel runs handshake-free with one linked-flag delivery per walk. The first bias / gate row rides in that delivery from `cb_weight_tiles`' tail (`row_tail` extra pages), and every core copies it L1 → L1 into `cb_row`. A counter signal (two deliveries) needs a write barrier per rectangle: measured 0.9–4.7 µs slower.
+  - **Injector early push**: the injector hands its landed K-block to compute before multicasting it (the send only reads the slot). The injector had been the op's last core.
+  - **R2 B groups** (`SHARDED_B_RECT_GROUPS`, `sharded_b_groups`): each rectangle of the HS core set is its own B group with its own `ttnn.Mcast`, injector and reader `KernelDescriptor`, all multicasting concurrently. Before, one injector sent B to the rectangles in turn: res3's 9-core partial row got B 1.35 µs after the 77-core block. `SHARDED_B_GROUP_ROWS` (bands of 1 / 2 / 4 rows) measured worse (more injectors contend for DRAM), so it is parked at `None`.
+  - **R2a B-read helper** (`SHARDED_B_READ_HELPER`, reader `GM_BS_ROLE 3` + `GM_BS_B_HELPER_SEM`). The injector's B read issue is RISC-serial (~27 ns a tile: 2.2 µs for res3 expand's 80 tiles before the first byte goes out). A reader instance on the injector's BRISC, which has no writer work since the output is in place, issues the last floor(K / 2) K rows into the same slot and posts a local semaphore.
+  - **R3 split roles** (`BS_B_ON_WRITER`, reader `GM_BS_ROLE 1 / 2`). This is the R10-recorded next lever. On in-place R3 walks a second reader instance on BRISC / NoC1 runs the B half (B rounds or reads, the bias / gate row), and NCRISC keeps the A row exchange and the residual. The writer is not placed. Under the split:
+    - one K-block per B round (`BS_SPLIT_B_ROUND_BYTES = 1`; 32 KB / 64 KB / all-K measured worse);
+    - R10's 3 MiB traffic gate lifted (`BS_SPLIT_B_MCAST_MIN_SAVED_BYTES = 0`; res4 reduce 1024 → 256: 12.2 → 9.7 µs);
+    - without a channel, the split only for heavy A rounds or a single grid row (`BS_SPLIT_MIN_A_ROUND_BYTES = 64 KB`, `BS_SPLIT_SINGLE_ROW`; res4 expand / res4 reduce5 per-core on NoC1 were +6 / +4 %);
+    - the per-core B half issues the block's row with its first K-block.
+  - **Measured and parked (correct, live knobs, unit-tested):**
+    - `BS_A_ONE_SHOT`: the whole R3a A exchange at once on a counter. ASPP pool 9.3 → 15.9 µs; eight concurrent multicasts over one 1×8 row serialize on its links, and the matmul loses its overlap.
+    - `BS_SPLIT_B_DEPTH` / `BS_SPLIT_B_LOOKAHEAD`: per-core B read-ahead on the split, flat on ASPP pool.
+  - **Reused / Added.**
+    - Reused: the R2 / R3 walk, CBs, compute kernel, `ttnn.Mcast` channels, `tail_split`'s local-word helpers, the reader kernel itself (its other instances run the B half / the helper).
+    - Added: reader defines `GM_BS_ROW_TAIL`, `GM_BS_ROLE`, `GM_BS_A_ONE_SHOT`, `GM_BS_B_HELPER_SEM`, `GM_BS_B_AHEAD`; host `sharded_b_one_shot`, `sharded_b_groups`, and the knobs above; zones `rd_b_helper`, `rd_b_ahead`, `rd_a_exchange`.
+    - No new kernel file, no new CB index.
+- Device µs (one fresh run each; before = this phase's start; stock `achievable_ns`):
+
+  | Case | Before | After | Stock |
+  |---|---|---|---|
+  | HS res2 shortcut | 10.7 | 10.0 | 9.8 |
+  | HS res2 reduce 128→64 | 4.9 | 3.8 | 4.0 |
+  | HS res2 expand | 8.9 | 8.2 | 8.7 |
+  | HS res2 reduce 256→64 | 6.1 | 5.1 | 5.0 |
+  | HS res3 reduce 32768×256×128 | 10.3 | 9.3 | 9.4 |
+  | HS res3 expand | 9.9 | 8.3 | 8.2 |
+  | HS res3 reduce | 8.4 | 6.6 | 6.9 |
+  | HS decoder skip 8192×512×64 | 6.0 | 4.7 | 4.65 |
+  | HS decoder skip 32768×256×32 | 4.4 | 3.4 | 3.6 |
+  | HS semantic logits | 4.4 | 3.4 | 3.6 |
+  | HS heads | 4.4 | 2.8 | 3.5 |
+  | HS res3 shortcut (bf16 A) | 15.7 | 12.6 | 13.05 |
+  | BS res4 reduce 512→256 | 18.9 | 18.4 | 16.6 |
+  | BS res4 expand | 13.1 | 12.9 | 13.6 |
+  | BS res4 reduce 1024→256 | 12.1 | 9.7–10.0 | 9.4 |
+  | BS res5 shortcut | 30.3 | 28.7 | 72.4 |
+  | BS res5 reduce 1024→512 | 14.9 | 11.6 | 10.6 |
+  | BS res5 expand | 24.0 | 22.8 | 24.2 |
+  | BS res5 reduce 2048→512 | 23.0 | 16.6 | 16.1 |
+  | BS ASPP 1×1 | 18.4 | 13.9–14.1 | 13.8 |
+  | BS ASPP pool | 9.3 | 8.8–9.4 | 6.9 |
+  | BS ASPP projection | 18.6 | 16.7 | 16.8 |
+  | BS res4 shortcut (bf16 A) | 17.2 | 14.2 | 16.2 |
+  | upsample H pass (×3) | 66.6 | 66.8 | 123.0 (roofline 43.5) |
+  | upsample W pass (×3) | 12.4 | 12.7 | 15.4 |
+
+- **Measured floors for what is still above stock / roofline:**
+  - **H pass.** Write-only (reads + compute stubbed, all sync kept) is 62.6 µs vs 67 µs full: 17.8 MB of 1088 B tile writes at ~285 GB/s. The 1.2× roofline target (52 µs) is below that floor. Every write lever measured flat or worse:
+    - writing all output over both NoCs (single block + tail split at 25 / 36 / 50 %): 65–82 µs;
+    - more cores, NoC0, bank stagger, batching: Refinement 8.
+  - **R3 (ablation: compute stubbed / B stubbed / both, handshakes kept).**
+    - res4 reduce 512→256: 18.5 / 18.5 / 15.9. The handshaked A row exchange alone is 15.9 (stock 16.6), and it overlaps imperfectly with the 32×16-tile-K matmul.
+    - res5 reduce: 11.7 / 10.1 / 9.0.
+    - res5 reduce 2: 16.7 / 14.9 / 12.3.
+    - res4 reduce 1024→256 (before the gate lift): 12.1 / 9.9 / 9.9.
+    - ASPP pool: 9.2 / 6.7 / 6.5. Its A rounds alone run 6.5 µs (stock 6.9); with B traffic in flight they stretch from ~0.6 to ~1.0 µs each (contention, not B latency: read-ahead measured flat).
+  - **HS.** Within 1–3 % of stock on res2 shortcut / reduce 256→64, res3 expand and decoder skip 8192: injector read issue (now split over two RISCs) + multicast + an FPU-bound LoFi matmul + the bias epilogue pass.
+- Guard (base = this phase's start commit's descriptor + reader, same session; `/tmp` harness swapping the two files):
+  - perf_guard 62 ops: worst +4.0 % on 2048×256×512 HiFi2, which re-ran 3× at −2.2..+2.0 % (noise); PDL sharded rows −6..−25 %.
+  - r17 (R4) worst +0.9 %, r15 (R1b) +1.8 %, r16 (R1a split lines) +2.0 %, r11 +1.4 %, PERF FOCUS 1 0.0 %.
+  - ASPP pool's single-reader path measured +4 % from reader codegen alone (host descriptor byte-identical); the single-row split restored it.
+- Accuracy achieved: every multicast, split-role, one-shot and helper path is bit-identical to the per-core-read single-reader walk (`torch.equal`, `test_genify_matmul_sharded_b_mcast.py`). Golden PDL loose cases pass at their helpers.TOLERANCES gates (bf8b LoFi).
+- Golden test progress: `test_golden.py -k "(test_op_loose and (height_sharded or block_sharded)) or (test_op and not loose and (height_sharded or block_sharded) and (bias_relu or addcmul or bias)) or (batched and interleaved)"`: 551 passed, 105 xfailed (the permanent EXCLUSIONs), 0 failed. Unit: every file but the precision matrix, 252/252.
+- Issues encountered:
+  - `static_assert` inside `if constexpr` in `kernel_main` (non-template) is still evaluated; hoisted as a conditional assert.
+  - The test spy recorded only the last `_sharded_b_channel` call. R2 now builds one channel per group, so the spy records "any group multicasts" plus a channel count.
+  - The B-read helper first assumed a core list on R3 single-K-shard grids (ZeroDivisionError). It is R2-only.
+- Tests added (`test_genify_matmul_sharded_b_mcast.py`):
+  - `test_hs_one_shot_rect_groups` (heads, res3 expand, addcmul, swiglu: channel count per rectangle, one-shot + row tail);
+  - `test_bs_split_roles` (res5 reduce, ASPP pool, addcmul × lookahead 0 / 2: both halves present, bit-identical);
+  - `test_bs_a_one_shot_parked` (ASPP pool, res5 reduce);
+  - `test_bs_traffic_gate` now pins the gate on one reader and the multicast under the split.
+
+## Perf 1 (tournament 2) — PERF FOCUS: text-encoder MLP gate, 512 tokens
+- Date: 2026-11-18. This is round 1 of the second perf tournament. The earlier `## Perf 1` / `## Perf 2` entries belong to the first tournament.
+- **Focus** (`LOOSE_CASES` attention #1, exact config): A (1, 512, 5120) bf16 @ B (5120, 16384) bfloat8_b, epilogue none, HiFi2, fp32 DEST, every tensor DRAM interleaved, bf16 out. Roofline 403.5 µs; stock 501 µs.
+- **Plan:** R1b bank-local 1×110. Every core computes 16×5 output tiles as one block: block_k 9, 18 K-blocks, 4×1 subblock on the helper `matmul_block<Out>`.
+- **Bench:** `agent_logs/r16_run.sh te_gate "<knobs>"`.
+- **Analysis tools:** `agent_logs/t2p1_zone_summary.py` (per-zone first / last / total across cores), `agent_logs/t2p1_guard.sh` (whole perf file, base vs new), `agent_logs/t2p1_ab.sh` (alternating base / new reps of single ids).
+
+### Measured breakdown (before: 404.1 / 404.4 / 405.8 µs, one fresh run each)
+- Ablation, cumulative (µs):
+  - full: 405
+  - compute stubbed (`SKIP_COMPUTE`, data movement only): 262.5
+  - compute-only (A reads, A multicast payload and B reads stubbed): 391.9
+  - B stubbed: 403.5
+  - A stubbed: 397.7
+  - compute + B stubbed: 229.6
+  - compute + A stubbed: 245.0
+  - everything stubbed: 124.4
+- Compute-bound. Data movement is hidden except at the head and the tail.
+- Zones:
+  - The A ring finishes on every core at 312–314 µs.
+  - `wr_write` starts at ~338 µs on every core and ends at 351–404 µs. The end time rises smoothly with physical x and y; the far corner (x 14, y 9 / 10) is last.
+  - The same gradient appears in `cmp_matmul`'s end (the pack thread waits on `cb_output_tiles`). It persists with `SKIP_COMPUTE`, so it is **the end-of-walk output write stream, not compute speed**: 16.8 MB at ~260 GB/s, serialized after the K-walk.
+  - The flat 1×103 split (`FORCE="1,103"`) measured 392.7 / 393.9 µs with a 48 µs write tail, against the bank split's 66 µs.
+- K-block count is not a lever. Compute-only, 18 / 20 / 40 K-blocks measured 374.2 / 381.9 / 389.4 µs (flat split): ~0.4 µs per K-block.
+- **Ranked:**
+  1. The output write tail: 48–66 µs, write-bound.
+  2. The K-walk: ~37–41 cycles per tile-K against 35 modeled. It runs on the helper because sb_h > 1 is a carve-out of the raw walk.
+  3. N quantization to 5 columns: 80 output tiles per core against an average of 74.5 (at most 7%; not floated).
+
+### Portfolio (4 experiments, one perf-part-optimizer each) and verdicts
+| idea | stage | verdict | focus µs (base → candidate) | domain / notes |
+|---|---|---|---|---|
+| `t2_progressive_nsplit`: the core's N range as ≥ 2 N-blocks, A re-broadcast per N-block, so block i's writes overlap block i+1 | tail | **REGRESSION** | 405.1 → 433.2 (best: 3+2 with a ragged last block, 1×3) | Each extra N-block is a full A broadcast pass (~165 µs at ~32 GB/s). The tail fell 67 → 27 µs, but the K-walk's end moved 338 → 406 µs. R1b M ≥ 128: +9..+81 %; M = 1 flat. Not graduated. |
+| `t2_msplit_b_resident`: M-blocks (8-4-4) with B L1-resident (delivered during M-block 0) and B reads paced behind the A rounds | tail | WIN alone, **not graduated** | 404.3 → 382.7 (bit-identical variant at block_k 9: 396.9) | Measured regression on DRAM / A-stream-bound R1b (f256 qkv / ff2 / ctx +12 / +26 / +36 %), so it needs a compute-bound gate. R1a is inexpressible. Its compute rides matmul_block's hook points, which conflicts with the raw h×w walk below on the same walk. Its pacing reads another RISC's CB counter. Its tail gain overlaps the tail policy's. The two graduated ideas together beat it (360 vs 383). Recorded as a round-2 candidate on top of them. |
+| `t2_tail_write_stream`: de-hotspot the tail writes | tail rate | **WIN** | 404.0 → 380.4 (hop policy, default endpoints) / 376.4 (+ writer addressing the NoC0 endpoint) / 389.6 (NoC0 share 80 %) | The gradient: on the bank-local split each core writes ONE bank, and that bank's NoC1 endpoint sits in another grid row than its cores. The writer's NoC1 share (64 %) climbed 2–11 rows and merged with other rows' streams on the endpoint rows. Coalescing same-bank pages: flat (407.1). Bit-exact output. |
+| `t2_raw_kwalk_hxw`: the raw K-walk (`kw::matmul_accumulate_interm`) for sb_h × sb_w subblocks, plus the epilogue-none identity copy streamed per row group during the last K-block | K-walk | **WIN** | 404.1 → 379.1 (isolated: 35.63 → 33.06 cycles per tile-K) | Isolated −4.9 … −9.3 % on every subblock shape tried (3×1, 2×2, 2×4, 8×1, HiFi4, LoFi bfp4). Whole op: q512 gate_up (swiglu 2×2) −2.6 %, BS bias_relu 4×1 −11 %, FLUX addcmul −5 %, compute-bound epilogue-none sb_h = 1 walks −1..−4 % (streamed copy). Exception: sb_h > sb_w > 1 (16-bit DEST only) measured incorrect, so it keeps the helper. |
+
+Precision: no option traded precision.
+- The raw walk is bit-identical to the existing raw walk + identity copy class. Against the helper's `Out` reload it differs by ≤ 1 bf16 ulp, with slightly lower error. Focus PCC 0.999883 → 0.999886, rel-RMS 0.00489 → 0.00468.
+- The tail policy is bit-exact.
+- msplit's 1-ulp variant was not graduated.
+
+### Graduated (aggregate: the two composable WINs; msplit dropped as conflicting / superseded)
+1. **Raw h×w K-walk** (`kernels/genify_matmul_kwalk.hpp`, `kernels/genify_matmul_compute.cpp`).
+   - `kwalk_expressible` is now `(sb_w >= sb_h || sb_w == 1)`. The `sb_h == 1` carve-out is deleted, and every epilogue walk and gate-open epilogue-none walk with sb_h > 1 takes the raw walk.
+   - The epilogue-none raw walk streams its identity copy inside the walk (`stream_out`), replacing the separate after-walk `eltwise_chain` copy. That code is deleted.
+   - Remaining helper cases, unchanged from before except the first:
+     - a multi-column column walk: `sb_h > sb_w > 1`, 16-bit DEST only; measured incorrect, guarded by a `static_assert`;
+     - operand residency;
+     - epilogue-none walks the host's `NONE_RAW_WALK_MIN_RATIO` gate leaves on `LastBlockTarget::Out`.
+   - That gate was kept as it is. The subagent measured opening it: wins on data-movement-bound cells (te_down −6.5 %, te_qkv −4.4 %), but q128 2×2 epilogue-none cells +3..+7 %. Re-gating is left as a round-2 lever.
+   - Instrumentation: `cmp_matmul` now includes the streamed copy, and a new PERMANENT zone `cmp_out_tail` (inside the walk, once per block, the budget of the old per-block `cmp_epilogue`) times the serialized last row group's copy. Zone-hash check: no collisions.
+2. **Tail write policy** (`TAIL_POLICY`, host `bank_tail_policy`, reader / writer / `tail_split.hpp` `GM_TAIL_POLICY`).
+   - On the bank-local split with a DRAM interleaved output, the host prices each core's NoC0 path (reader → the bank's NoC0 endpoint) and NoC1 path (writer → its NoC1 endpoint) in torus hops. The whole tail goes on the shorter one; ties keep `TAIL_NC_PCT`.
+   - Each RISC addresses the bank through its own NoC's endpoint.
+   - **Deliberately NOT graduated:** the subagent's best variant had the writer address the bank's NoC0 endpoint from NoC1 (376.4 µs, bit-exact on this board). That is cross-NoC endpoint use. Its mirror (NoC0 into the NoC1 endpoints) corrupted 1,760 output tiles, and the NoC0 endpoint is CMFW's DRAM-telemetry port (`blackhole_140_arch.yaml`, SYS-1419). The ~4 µs it would add is not worth a firmware-dependent correctness risk.
+   - Where it applies: the bank split exists only on R1b. The guard is not an allow-list. The policy has no meaning elsewhere: there, a core does not write one bank, and the policy needs the NoC torus size (Blackhole only).
+   - Elsewhere `TAIL_NC_PCT` is unchanged.
+- **Whole op, focus:** 404.1 / 404.4 / 405.8 → **360.1 / 360.5 / 359.8 / 360.0 / 360.3 µs (−11 %)**. That is 0.89× the 403.5 µs roofline and 0.72× stock.
+  - Raw walk alone (`TAIL_POLICY=False`): 379.1.
+  - After: `wr_write` ends at 327–360 µs (was 351–404), and the write tail is 10–42 µs.
+  - What is left: the write gradient (some cores' `cmp_out_tail` waits up to 26 µs on `cb_output_tiles`) and the K-walk at ~33 cycles per tile-K. These are the round-2 targets, together with msplit on top of the new base.
+
+### Guard (no regression)
+- Method: base = HEAD's descriptor + kernels (git stash), same session, one fresh run per cell. Files: perf_r16 (15), r11 (15), r15 (17), r17 (10), flux (20), focus (1, Qwen gate_up 2048 R1a), guard (62), sharded (46). This covers one or more cells per kernel path × layout × placement.
+- Faster beyond 3 %:
+  - te_gate −10.9 % (r16 and r11)
+  - q512 gate_up −3.1 %
+  - q128_out −10.6 %, q128_qkvg −4.9 %
+  - f256_attn addcmul −3.1 %, te_qkv_bf16_hifi4 −3.2 %
+  - guard: 9472×5120×3456 −4.1 %, 9472×3456×5120 HiFi2 −4.1 %, 4096³ −3.3 %, 2048×5120×8704 −4.4 %, formats 2048×5120×4160 −5.3 %, 2048×6144×3072 addcmul fused / none −4.4 / −4.0 %
+  - BS 8192×512×256 bias_relu −11.6 % / −12.2 %, bs_aspp_1x1 −3.9 %
+  - FLUX 256×6144×3072 addcmul −3.1 %
+  - Every other cell within ±3 %.
+- Flagged slower and re-run (alternating base / new, 3 reps each): every one is noise or within the band.
+  - flux 1×256×6144 fp32: 10.0 / 10.6 / 10.8 base vs 10.0 / 10.3 / 10.4 new.
+  - guard 256×6144×9216: 287.6 / 291.0 / 291.6 vs 288.1 / 288.4 / 291.8.
+  - bs_aspp_pool: 9.0 / 9.4 / 9.6 vs 8.9 / 9.0 / 9.2.
+  - f1_lin2_fp32 (1×6144×6144, bank R1b, 1×2 subblock): 168.0 / 169.0 / 169.8 vs 169.5 / 173.1 / 174.5, a median of +2.4 %. With `TAIL_POLICY` off / on: 170.1 / 170.6 vs 173.2 / 171.5. That is within the 2–3 % noise band, not a material regression, so no carve-out.
+- Correctness:
+  - `test_golden.py`: 1523 passed, 375 xfailed (the permanent EXCLUSIONs), 0 failed.
+  - `test_regression.py`: 10/10.
+  - `test_translated.py`: 69 failed / 202 passed. These are the identical failing set on the base: host-side n-non-aligned `ValueError`s and program-cache count asserts, all pre-existing.
+  - Unit (tail split, bank-local, stream mcast, split lines, epilogue, segments, chunks, main, extended, mcast, residency, block / height / dram sharded, sharded B mcast, precision baseline): 255 passed, re-run after the zone change: 61 passed.
+  - After the zone change, `test_op_loose or test_op_feature`: 98 passed.
+- Artifacts: the experiment dirs `perf_experiments/t2_*` (raw profiler dumps dropped). The shims at `tests/.../perf_experiments/t2_{raw_kwalk_hxw,msplit_b_resident}/` exist because the benches cannot be collected from inside the ttnn package.
+
+### Helper bypasses
+| helper | kind | what was missing / hard | helper ns | raw ns | site |
+|---|---|---|---|---|---|
+| `compute_kernel_lib::matmul_block` (LLK `_llk_math_matmul_` under every flavour) | capability | (1) No multi-tile MVMUL sequence that advances DEST by address modifier instead of writing the DEST offset (SETC16) before every output tile, for any rt_dim × ct_dim: ~2.5 cycles per HiFi2 tile-K on a 4×1 subblock. (2) No "accumulate in an L1 partials block, emit to the output row group by row group during the last K-block" target. `LastBlockTarget::Out` reloads the partials into DEST per subblock, with a data-format reconfig + `copy_init` + `matmul_block_init` per subblock (20× per block on the focus). `Interm` leaves the whole block for an after-walk copy. | 404100 (whole op); 337900 (isolated K-walk, 35.63 cyc/tile-K) | 379100; 313400 (33.06 cyc/tile-K) | `kernels/genify_matmul_compute.cpp:320`, `:367` → `kernels/genify_matmul_kwalk.hpp:189` |
+
+## Perf 2 (tournament 2) — PERF FOCUS: Qwen3.8 prefill MLP gate_up + SwiGLU, 128 tokens, A in L1
+- Date: 2026-11-18. Round 2 of the second perf tournament. The earlier `## Perf 2` entry belongs to the first tournament.
+- **Focus** (`LOOSE_CASES` attention #1, exact config):
+  - A (1, 128, 5120) bf16, L1 interleaved; B (5120, 8704) bfloat4_b, DRAM interleaved; bf16 output in DRAM.
+  - swiglu, LoFi, fp32 DEST, math_approx off.
+  - Roofline 56.8 µs; stock 105.4 µs.
+  - Every knob is in `SUPPORTED`.
+- **Before:** 106.4 / 106.6 µs on the flat R1b split. 1×68 cores, each owning 4 B columns (2 (gate, up) pairs); sb 1×4; 5 K-blocks of 32; one fixed A injector. The 68 cores form two multicast rectangles, so A goes out twice.
+- **Bench:**
+  - `agent_logs/t2p2_run.sh <id> "<knobs>"` runs one case.
+  - `agent_logs/t2p2_coremap.py <csv> <zone>` prints a per-core zone-end map.
+  - `agent_logs/t2p2_guard.sh` runs the base-vs-new guard.
+
+### Measured breakdown (cumulative ablation, µs)
+- full 106.5
+- compute stubbed: 93.0
+- B stubbed: 69.5
+- A stubbed: 108.5
+- **B stream alone** (compute and A stubbed): **94.3**
+- A stream alone (compute and B stubbed): 60.8
+- compute alone (A and B stubbed): 38.8
+- everything stubbed: 10.5
+
+What the per-core zones show:
+- **B stream:** the end of `rd_issue` follows the NoC0 row. Logical rows 0–1 finish at ~88 µs, row 4 at ~55, rows 5–6 at ~27. This is the Refinement-15 effect: responses that cross grid rows are slow.
+- **A stream on the flat split:** `wr_a_inject` takes 58.8 µs: ~20 µs of A reads serialized with 39 µs of sends (two rectangles).
+- **Existing knob `BANK_LOCAL_SWIGLU=True`** (pair units):
+  - With row fill: 113.6 µs.
+  - Home rows only: 98.8 µs. Here B alone is 75.7 and A alone 47.5. Compute alone is 62.1, because cores get 6 columns.
+  - Pair units span banks 2s / 2s+1. On this board their NoC0 home rows are (9, 0), (7, 3), (9, 1), (6, 4).
+
+Ceilings (the analytic Step-4b numbers; the `noc_estimate` CLI is not built on this checkout):
+- B: 25.07 MB at 460.8 GB/s → 54.4 µs.
+- A ingress: 1.31 MB at 64 B/cycle × 1.35 GHz → 15.2 µs.
+- Compute: ~33 µs.
+
+**Ranked:**
+1. B stream: 94 µs against a 54 µs floor.
+2. A multicast: 61 µs flat, 47.5 µs bank split, against a 15 µs floor.
+3. Tail (epilogue + write after the last MAC): ~5–8 µs.
+4. Compute: near its roofline; not floated.
+
+### Portfolio (4 experiments, one perf-part-optimizer each) and verdicts
+| idea | stage | verdict | focus µs (base → candidate) | domain / notes |
+|---|---|---|---|---|
+| `t2p2_swiglu_bank_exchange`: bank-local split on ONE-column units (every core streams one bank on its home row); gate and up columns on different cores, exchanged after the K-walk | B stream | **WIN** | 107.6 → 69.5 (split exchange); 73.9 one-sided | Bit-identical on the focus. B alone 92.8 → 59.4 µs (~420 GB/s). Domain: every swiglu cell whose split is R1b. f256_ff1 −17 %, Qwen M=256 −26 %, M=32 −22 %. Measured regression on R1a cells when forced (q512 gate_up 156.2 → 206.1: every core streams all 16 A rows) → carve-out. Inexpressible (falls back to flat R1b): no interleaved-DRAM bank-run B, N not a multiple of the banks, chunked output, a core's columns over more than one N-block. |
+| `t2p2_swiglu_pair_placement`: keep pair units; place them to avoid the NoC0 +y torus seam and cap 2 pairs per core; add a seam term to the split cost | B stream | WIN, **superseded** | 107.5 → 77.6 | Bit-identical. Mutually exclusive with the exchange (both are the swiglu bank split); the exchange is 8 µs faster. Its finding (NoC0 responses that wrap the +y seam deliver ~26 B/cycle; the x wrap is cheap) is the round-3 lever for the exchange's fill-row cores, below. Not graduated. |
+| `t2p2_act_stream_rounds`: R1b rotating injectors: split the pipe's receive into ack / wait so an injector acks round r+1 right after its send and issues its next turn's reads one tile per poll | A stream | **WIN** (isolated, composes) | Whole op flat on the old base (B-bound); A alone 47.4 → 41.6 | Bit-identical. f256_ctx 248.4 → 230.7. Domain: every rotating-injector (bank split) cell, no exceptions; the flat split's fixed injector is untouched. Not graduated: "ack one round ahead" (38.7 µs A alone), which is safe only by a timing margin (a violation would hang). |
+| `t2p2_swiglu_stream_epilogue`: stream silu(gate)·up per row group inside the last K-block | tail | **NULL** | 108.0 → 107.8 | Bit-identical. The SFPU passes run on TRISC1, the same thread as the FPU walk, which is saturated on LoFi bfp4 (17.7 cycles/tile-K), so the work is only reordered. r11 s_ff1 −2.8 % is inside the 2–3 % noise band, so it is not a win. Not graduated: no raw-LLK bypass for a noise-level gain. |
+
+Precision: no option traded precision. Every candidate was bit-identical to HEAD on the focus. The exchange's f256_ff1 had 59 of 2.36 M elements off by 1 bf16 ulp, from a different K-blocking (8×24 vs 10×20 block_k × K-blocks); PCC and rel-RMS match to 6 digits.
+
+### Graduated (aggregate: exchange + A-stream rounds; placement superseded, epilogue streaming null)
+1. **Swiglu partner exchange.**
+   - Changes: `genify_matmul_program_descriptor.py` (`BANK_LOCAL_SWIGLU_XCHG`, `xchg_plan`, `xchg_partners`, `_attach_xchg`, `CB_XCHG = 25`, two semaphores) and the reader / writer / compute kernels under `GM_SWX`.
+   - Split: under swiglu the bank split uses one-column units, 8 classes, "row" placement plus row fill. Each up core's writer sends the gate partner its K-accumulated up block straight from `cb_partials` (partials format, fp32 under fp32 DEST) over NoC1 into `CB_XCHG`, with a READY / DATA semaphore handshake.
+   - Shared rows (`BANK_LOCAL_SWIGLU_XCHG_SPLIT`, even block_m): the gate core keeps rows [0, M/2) and sends its other gate rows to the up core, which keeps [M/2, M). Both cores run the existing SwiGluMul `eltwise_chain` epilogue on half the rows.
+   - Where it applies: every swiglu cell whose own split choice is R1b. That flat 1-D N split is the code it replaces; it remains only as the fallback for the inexpressible cases above.
+   - **Carve-out** (`BANK_LOCAL_SWIGLU_XCHG_SCOPE = "r1b"`): cells whose split is R1a keep R1a. Earned by a measured regression: q512 gate_up 156.2 → 206.1 µs when forced, and the cost model mis-ranks it (115.9 vs 118.3 estimated).
+   - Instrumentation (PERMANENT): `wr_swx_ready`, `wr_swx_wait_partials`, `wr_swx_wait_ready`, `wr_swx_send`, `wr_swx_wait_data`. The zone-hash check finds no collisions, and on the focus the zones cover the whole kernel span.
+   - The old pair-unit bank swiglu (`BANK_LOCAL_SWIGLU`, default False, never production) is still an off knob.
+2. **A-stream rounds** (`kernels/genify_matmul_rx_split.hpp`, writer's rotating-injector branch).
+   - It is the only rotating-injector path, with no guard and no dual path; the old "issue before send when slots are free" ordering is deleted.
+   - New PERMANENT zone `wr_a_wait`.
+- **Whole op, focus:** 106.4 / 106.6 → **68.8 / 70.3 / 68.8 µs (−35 %)**, then 70.2 in the guard run. That is 1.21× the 56.8 µs roofline and 0.66× stock. PCC 0.999991, rel-RMS 0.00831, unchanged.
+  - Exchange alone: 69.5. Adding the A rounds moves the A stream's end from 49.7 to 43.8 µs and the median core's K-walk end from 54.3 to 48.5 µs. It does not move the wall yet.
+  - **What binds now:** the fill-row cores (logical rows 2 / 5 / 8, home to no bank) stream banks homed on other rows. Their K-walk ends at 58–64 µs against 48.5 for the median core. Home rows only (`BANK_LOCAL_ROW_FILL=False`) measured 95.2 µs, so fill stays.
+  - Round-3 lever: seam-aware fill-row assignment / weighting on the one-column layout, from the placement experiment's finding.
+
+### Guard (no regression)
+- **Method:** base = HEAD's descriptor and kernels (checked out), new = graduation, same session, one fresh run per cell. Files: r15 (17), r16 (15), r17 (10), r11 (15), flux (20), focus (1), sharded (46), guard (62).
+- **Faster beyond 3 %:**
+  - q128 gate_up: r15 107.4 → 70.2, flux L1-out 107.2 → 69.2, guard 108.5 → 70.6.
+  - f256_ff1: 629.7 → 518.1 (r15) and 627.7 → 521.6 (flux).
+  - f256_ctx: 248.6 → 228.2 / 248.4 → 229.7.
+  - te_qkv_bf16_hifi4: 175.3 → 150.1.
+  - f256_attn: 103.8 → 98.3 / 104.2 → 98.9 / 95.9 → 92.0.
+  - guard 256×9216×6144: −6.9 %; 256×15360×3072: HiFi4 −4.1 %, HiFi2 −8.6 %.
+  - hs_res2_expand: −3.8 %.
+  - Every other cell within ±3 %.
+- **Flagged slower and re-run** (alternating base / new, 3 reps each; every cell is over 32 tiles). All are noise, so no carve-out:
+
+| cell | new µs | base µs | read |
+|---|---|---|---|
+| hs_res2_reduce | 6.2 / 6.2 / 6.4 | 6.2 / 6.2 / 6.2 | equal |
+| bs_res5_reduce2 | 40.5 / 39.8 / 39.0 | 40.5 / 38.7 / 40.2 | equal |
+| bs_aspp_pool | 8.8 / 9.2 / 9.6 | 9.3 / 8.8 / 8.7 | ranges overlap; neither patch changes this path's behaviour |
+| guard 32×1024×2048 | 11.8 / 12.0 / 12.1 | 12.0 / 12.2 / 11.8 | equal |
+| q128_in | 49.3 / 50.2 / 50.5 | 50.5 / 50.6 / 51.4 | new faster |
+
+- **Correctness:**
+  - Golden `test_golden.py`: 1425 passed + 375 xfailed (the permanent EXCLUSIONs) for the cartesian, run per epilogue (swiglu, addcmul, bias + bias_relu, none). Loose + feature: 98 passed.
+  - `test_regression.py`: 10/10.
+  - Unit (bank_local, stream_mcast, sharded_b_mcast, epilogue, mcast, tail_split, segments, chunks, main, extended, residency, block / height / dram sharded, split_lines, precision_baseline): 255 passed.
+- **Artifacts:** `perf_experiments/t2p2_{swiglu_bank_exchange,swiglu_pair_placement,act_stream_rounds,swiglu_stream_epilogue}/`, each with its graduation patch, plus the shim tests under `tests/.../genify_matmul/perf_experiments/t2p2_*`.
+
+### Helper bypasses
+| helper | kind | what was missing / hard | helper ns | raw ns | site |
+|---|---|---|---|---|---|
+| `dataflow_kernel_lib::ReceiverPipe::receive(round)` (mcast pipe, `mcast_pipe.inl`) | capability | `receive()` fuses "ack round r's sender" (consumer_ready.up) with "wait for / clear round r's data-ready flag" in one call. A rotating injector therefore cannot ack round r+1 and THEN spend its idle time issuing its next turn's reads: the work sits either before its own send or before its ack (which gates the next sender). Needed: `receive_ack(round)` / `ready(round)` (non-blocking poll) / `receive_wait(round)` as separate calls. Also: a data-ready flag carrying the round number, so acking one round ahead would be safe by construction (it is not today, so that faster option was left out). | 47400 (A stream alone, focus, bank split); 248400 (f256_ctx whole op) | 41600; 230700 | `kernels/genify_matmul_writer.cpp:300` → `kernels/genify_matmul_rx_split.hpp` |
+
+The exchange itself uses no raw LLK: standard dataflow API (`noc_async_write`, semaphores) and the existing `eltwise_chain` SwiGluMul epilogue.

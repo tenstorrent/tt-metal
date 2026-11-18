@@ -53,9 +53,14 @@ CB_BIAS_ROW = 2  # bias N-block row (bias / bias_relu), reader -> compute, one p
 CB_GATE_ROW = 3  # gate N-block row (addcmul), reader -> compute, one per block
 CB_RESIDUAL_TILES = 4  # residual row groups (addcmul), reader -> compute
 CB_ACT_SHARD = 5  # R3: A's own L1 shard (zero-copy), reader (push only) -> compute (own K-block)
+# R1a split lines (Refinement 16): one K-block staging buffer per line stream, raw scratch of ONE RISC (no CB protocol):
+# the injector reads its next turn there, then multicasts it into the line's ring slot.
+CB_ACT_STAGE = 6  # A row line, writer
+CB_WEIGHT_STAGE = 7  # B column line, reader
 CB_OUTPUT_TILES = 16  # output row groups, compute -> writer
 CB_OUTPUT_SHARD = 17  # R4: the output's own L1 shard (zero-copy), compute -> writer (wait/pop only)
 CB_PARTIALS = 24  # K-accumulator (packer L1 acc), compute -> compute; num_k_blocks > 1 or epilogue != none
+CB_XCHG = 25  # swiglu partner exchange: the up partner's accumulated up block (partials format), NoC -> compute
 
 # ---- Epilogue kinds (compile-time arg shared by reader and compute) ----
 EPILOGUES = {"none": 0, "bias": 1, "bias_relu": 2, "swiglu": 3, "addcmul": 4}
@@ -106,6 +111,29 @@ MIN_K_BLOCKS = 8
 R1A_INJECTOR_AHEAD = 2
 R1A_PREFETCH_DEPTH = 3
 R1A_PREFETCH_MIN_RATIO = 2.0
+# R1a split lines (Refinement 16, kernels/line_stream.hpp). The R1a reader ran both lines: per K-block it received
+# (or read + multicast) A, then B, so a core acked B(kb) only after A(kb) landed, and ONE fixed core per line issued
+# every tile read of its line (text encoder / Qwen3.8 M = 512: a B line is 1920 bfp4 tile reads at ~35 RISC cycles
+# each -- 50 us of a 97 us data-movement-only walk, with the whole line waiting on it). True: the A row lines move to
+# the writer RISC (BRISC / NoC1, which then produces cb_act_tiles, as R1b's A stream), the B column lines stay on the
+# reader, and both rotate their injectors over the line (round r from line core r % line length), each injector
+# issuing its next turn's reads as soon as that turn's ring slot is free. Plain R1a helper walks without the head
+# ramp, operand residency, the injector prefetch or batches. False: the fixed-injector R1a reader.
+R1A_SPLIT_LINES = True
+# ... on walks whose busiest line injector (split_cost's busiest-core read term, the fixed-injector R1a price) is at
+# least this fraction of the K-walk: data-movement-heavy walks. Measured (device us, fixed -> split): ratio ~1.0-1.1
+# (text encoder qkv / o_proj, Qwen3.8 M = 512 rows) -15..-26 %; 0.73 (Qwen3.8 M = 1024 qkvg / in_proj / down) -2..-10 %;
+# 0.65 (Qwen3.8 qkvg M = 4096) +6 %; 0.52-0.55 (out_proj M = 1024 / 2048 / 4096, compute- and output-bound) flat to
+# +3 %. Above R1A_PREFETCH_MIN_RATIO the fixed injectors' prefetch keeps the walk (see _r1a_split_shape).
+R1A_SPLIT_MIN_RATIO = 0.7
+R1A_SPLIT_ACT_NOC = ttnn.NOC.NOC_1  # the writer RISC's NoC (BRISC, WriterConfigDescriptor)
+# The Perf 2 K head ramp (kernels/genify_matmul_kschedule.hpp) on every split-lines walk, the helper walk included:
+# the first rounds are a third .. five sixths of a K-block, so round 0's read and multicast land early.
+R1A_SPLIT_RAMP = True
+# Rounds ahead over which a split-lines injector spreads its turn's reads (kernels/line_stream.hpp, issue pacing).
+R1A_LINE_WINDOW = 2
+# ... and at round 0 a later turn spreads its share over this many extra rounds (round 0's own read stays ahead).
+R1A_LINE_STARTUP_SHARE = 1
 # Epilogue-none K-walk (Refinement 11): True runs an R1 / R1a / R1b epilogue-none multi-K-block walk with 1 x sb_w
 # subblocks on the raw K-walk (kw::matmul_accumulate_interm, Perf 1: no per-tile DEST-offset write) into
 # cb_partials, then an identity copy to the output, instead of matmul_block<Out>'s last-K-block partials reload.
@@ -138,6 +166,19 @@ OUT_WRITE_BATCH_ROW_GROUPS = 1
 # (PERF FOCUS 1, epilogue stubbed: write tail 60 -> 43 us, ~414 GB/s; 25 / 30 / 43 / 50 % all worse).
 # It is the R1 descriptor's only write path (R1 / R1a / R1b; R4 in-place output has nothing to write).
 TAIL_NC_PCT = 36
+# Tail write policy knob (Perf 1 of tournament 2, t2_tail_write_stream; R1b bank-local split, DRAM output, Blackhole).
+# Every core of the bank split writes ONE bank. Under the TAIL_NC_PCT split ~2/3 of a core's tail went out on NoC1 to
+# the bank's NoC1 endpoint, which sits in another grid row than the bank's NoC0 endpoint (the cores' home row): those
+# writes climbed 2-11 rows (NoC1 runs north, then west) and merged with other rows' streams on the endpoint rows --
+# te_gate 512x5120x16384: write tail 338 -> 404 us at ~260 GB/s, a smooth x / y end-time gradient. True: per core,
+# the host prices the NoC0 path (reader, NoC0 endpoint) and the NoC1 path (writer, NoC1 endpoint) in hops on the NoC
+# torus (bank_tail_policy) and puts the whole tail on the shorter one (ties: TAIL_NC_PCT); each RISC keeps its own
+# NoC's endpoints. Measured te_gate 404 -> 380 us (subagent, alone). Not graduated: the writer addressing the bank's
+# NoC0 endpoint from NoC1 (375 us) -- cross-NoC endpoint use, and the mirror case (NoC0 into the NoC1 endpoints)
+# corrupted DRAM; the NoC0 endpoint is CMFW's telemetry port (SYS-1419). False: TAIL_NC_PCT on every core.
+TAIL_POLICY = True
+# NoC torus (columns, rows) per arch, for bank_tail_policy's hop counts (Blackhole only: measured there).
+TAIL_POLICY_TORUS = {"BLACKHOLE": (17, 12)}
 # Subblock tie-break knob (same DEST area): True prefers the square-most subblock (fewest operand
 # unpacks per K step). Measured on PERF FOCUS 1 (LoFi, block 6x28): 2x2 477.8 us vs 1x4 463.7 us, so
 # the wide subblock stays the default.
@@ -161,6 +202,16 @@ GRID_W_SLACK = 0.25
 SPLIT_COST_MODEL = True
 FPU_CYCLES_PER_TILE_K = 17.5  # per fidelity phase (LoFi 1, HiFi2 2, HiFi3 3, HiFi4 4); measured 16.6-18.0 LoFi
 UNPACK_CYCLES_PER_TILE = 12  # one operand tile unpack per K step: a 1 x w subblock costs (1 + w) / w of it
+# Operand-aware unpack cost (Refinement 16, SUBBLOCK_UNPACK_AWARE). Per K step an sb_h x sb_w subblock unpacks sb_h A
+# tiles (SrcB, each reused across the sb_w columns) and sb_w B tiles (SrcA, reused across the sb_h rows) on the two
+# unpackers, so an output tile costs max(FPU, unpack(A) / sb_w, unpack(B) / sb_h), unpack(t) = bytes /
+# UNPACK_BYTES_PER_CYCLE + UNPACK_TILE_CYCLES. Calibrated on Qwen3.8 prefill (bf16 A, bfp4 B, LoFi), compute alone:
+# 2 x 1 subblocks (q512 qkvg) 24 cycles per tile-K, 3 x 1 (q1024 in_proj) 23.6, against 17.5 for 1 x 4 -- a bf16 A
+# tile under a one-column subblock outruns the LoFi FPU. True: the R1 family's subblock choice and the split ranking
+# use it; False: the symmetric UNPACK_CYCLES_PER_TILE model and the area-first subblock choice.
+SUBBLOCK_UNPACK_AWARE = True
+UNPACK_BYTES_PER_CYCLE = 100
+UNPACK_TILE_CYCLES = 3
 DRAM_BYTES_PER_CYCLE = 296  # ~400 GB/s interleaved tile reads / writes at 1.35 GHz
 # One core's operand stream: an R1 core reading its own A + B (proj_out 13x1: 1.77 MB per core in 78 us,
 # ~23 GB/s), an R1a line injector reading its line's K-block then multicasting it (serial; proj_out 11x4:
@@ -205,6 +256,9 @@ ACT_STREAM_MIN_KBLOCK_BYTES = 32 * 1024
 # B read of a K-block gates the next broadcast; deeper rings give that coupling slack and let the B stream
 # run ahead of compute. PERF FOCUS 4: depth 2 / 3 / 4 = 683 / 666 / 633 us (B-stream floor 578 us).
 ACT_STREAM_DEPTH = 4
+# ... the shallowest ring choose_blocking falls back to so the K-walk keeps the core's rows in one M-block (B streamed
+# once); >= the rotating injectors + 1 (an injector reserves through its next turn).
+ACT_STREAM_MIN_DEPTH = 3
 # R1b injector stall-shadow: A K-blocks the injector keeps in flight (read trids), so the DRAM read of
 # K-block kb+1 overlaps the multicast of kb (clamped to the act ring depth). 1 = read, barrier, send.
 ACT_STREAM_AHEAD = 2
@@ -216,8 +270,66 @@ ACT_STREAM_AHEAD = 2
 ACT_STREAM_INJECTOR_COST = 18
 # R1b injector: index of the broadcasting core in the split's row-wise core order.
 ACT_STREAM_INJECTOR = 0
+# R1b rotating injectors (Refinement 15): A K-block round r is read and multicast by injector r % n, each injector
+# reading its next turn while the others multicast (one injector reads + multicasts serially: Qwen3.8 M = 128 down
+# streamed its 1.1 MB A in 38 us). n cores evenly spaced in the split's row-wise order; clamped below the act ring
+# depth (an injector reserves through its next turn); the bank-local split only (one rectangle, as the helper's
+# rotating senders need; a small flat split of thin rounds measured slower). Measured 1 / 2 / 3 on the R15 set:
+# M = 128 down 46.1 / 41.7 / 41.3 us, FLUX attn-out 113 / 109 / 107, context_embedder 260 / 253 / 251, the rest flat.
+# 1 = the single fixed injector (ACT_STREAM_INJECTOR).
+ACT_STREAM_INJECTORS = 3
 # R1b NoC: the writer RISC's (BRISC, WriterConfigDescriptor).
 ACT_STREAM_NOC = ttnn.NOC.NOC_1
+# R1b bank-local B stream (Refinement 15). An interleaved DRAM page p lives in bank p % banks at bank offset
+# (p // banks) * page, so the B columns n, n + banks, n + 2 * banks, ... of one K row are consecutive pages of ONE
+# bank. Small-M weight streaming was bound by the B stream's per-tile reads (Qwen3.8 M = 128 gate_up: 576 B bfp4
+# pages, 25 MB at ~300 GB/s, the slowest cores 3x behind the fastest), and its flat 1-D split is two rectangles,
+# so the A broadcast went out twice. True: the split candidate `bank` -- the whole compute grid (one multicast
+# rectangle), each core owning a run of bank-strided units (B columns; swiglu: (gate, up) pairs) of one bank
+# class, read as ONE contiguous bank run per K row (two under swiglu) and placed by BANK_LOCAL_PLACEMENT; the
+# output columns follow the same stride. The split cost model ranks it beside the flat R1b split. False: off.
+ACT_STREAM_BANK_LOCAL = True
+# Core -> bank-class assignment of the `bank` split (bank_layout). "row" (measured best): a bank's units go to the
+# cores of its home row -- the row of its optimal NoC0 reader (get_optimal_dram_bank_to_logical_worker_assignment,
+# R4's workers) -- so its read responses travel one grid row and never turn into a column (Qwen3.8 M = 128 down,
+# B alone: 34 us vs ~95 us when a bank's cores spread over rows: on NoC0 a core's B rate fell 3-4x with the rows
+# its responses crossed). "near": each class takes, in turn, its nearest free core (Manhattan); "spread": row-major
+# cores dealt round-robin over the classes.
+BANK_LOCAL_PLACEMENT = "row"
+# Grid rows of the bank-local split (its rectangle is the first rows): None = the whole grid (with "row" placement
+# every row either homes a bank or fills in for the most loaded one); an int pins a band of the first rows.
+BANK_LOCAL_ROWS = None
+# swiglu under the bank-local split with (gate, up) PAIR units (BANK_LOCAL_SWIGLU_XCHG off). A (gate, up) pair's two
+# tiles live in banks 2s and 2s + 1, whose home rows differ, so half of every core's bytes cross grid rows: Qwen3.8 M = 128 gate_up B alone 76 us (home rows only) /
+# 100 us (filled) vs 93 us flat, the whole op 101 / 111 vs 109 us; FLUX FF1 667 vs 631 us. False: swiglu keeps the
+# flat R1b split.
+BANK_LOCAL_SWIGLU = False
+# "row" placement: True = every core of no home row joins the most loaded class (by units per core), nearest its
+# homes; False = home rows only (the other cores idle).
+BANK_LOCAL_ROW_FILL = True
+# swiglu under the bank-local split with a gate / up PARTNER EXCHANGE (tournament 2, t2p2_swiglu_bank_exchange): the
+# split's unit is one B column (8 classes, every core streams ONE bank on its home row, as the non-swiglu split), so a
+# core owns gate columns (even banks) or up columns (odd banks). After the K-walk an up core ships its accumulated up
+# block (cb_partials: the K-accumulated value in the partials format, fp32 under fp32_dest_acc_en) to the gate
+# core(s) owning the matching gate columns (writer RISC, NoC writes into their CB_XCHG + a semaphore handshake); the
+# gate core runs the swiglu epilogue on (its partials, CB_XCHG) and writes the output. True: every swiglu cell the
+# bank split can express takes it; False: BANK_LOCAL_SWIGLU decides (pair units).
+BANK_LOCAL_SWIGLU_XCHG = True
+# The exchange's output rows: True = shared (an even block_m: the gate core keeps rows [0, block_m / 2) and sends the
+# rest of its gate tiles to the up core, which keeps rows [block_m / 2, block_m): both halves of the epilogue and of
+# the exchange run in parallel); False = one-sided (the up core ships its whole block, the gate core runs every row).
+BANK_LOCAL_SWIGLU_XCHG_SPLIT = True
+# The swiglu cells that take the exchange split. "r1b" (measured): the cells whose own choice is an R1b walk -- the flat
+# 1-D N split it replaces (Qwen3.8 M = 128 gate_up 108.8 -> 69.1 us, M = 256 138.7 -> 102.2, M = 32 96.5 -> 75.2, FLUX
+# FF1 623.7 -> 524.0). "all": also the R1a cells -- the split cost model ranks the bank split ahead there but it loses
+# (Qwen3.8 M = 512 gate_up R1a 156.2 us -> 206.1 us: every core streams all 16 A rows).
+BANK_LOCAL_SWIGLU_XCHG_SCOPE = "r1b"
+# Split-ranking prices of the bank-local split: its B stream's DRAM rate (bank runs: ~460 GB/s at 1.35 GHz) and
+# its A injector (one rectangle: each A byte is multicast once) in streamed-byte equivalents (cf. ACT_STREAM_*).
+BANK_LOCAL_DRAM_BYTES_PER_CYCLE = 330
+BANK_LOCAL_INJECTOR_COST = 9
+# ... and the A stream's per-round floor (handshake + multicast latency of one K-block round, ~2 us measured).
+BANK_LOCAL_ROUND_CYCLES = 2700
 # N quantum on a 1-D N split (Refinement 9). Q_N_MAX makes a 4-wide subblock exist when a core owns one
 # tile row; when it owns all rows (grid_m == 1) a subblock of height h (the largest power of two <= 4
 # dividing core_m) needs only q_n = Q_N_MAX / h columns. FLUX FF1 256x6144x18432 swiglu: core_n 8 -> 6
@@ -237,6 +349,19 @@ DS_READ_NOC = ttnn.NOC.NOC_0
 # whole swiglu pairs); 1 = one core per bank, the Refinement 4 topology (output packed in place).
 DS_CORE_N_TILES_MIN = 4
 DS_CORES_PER_BANK = None
+# Refinement 17: the auto C is the SMALLEST split whose per-core compute hides under the bank's stream --
+# fewer slice readers per bank stream faster (decode LM head, compute stubbed: C = 3 98 us, C = 4 106 us,
+# C = 5 103 us), while too few leave the walk compute-bound (qkvg C = 2: 31.9 us vs 23.8 at C = 4).
+# Hidden = (K * M * cw tile products at tile_k_cycles + DS_COMPUTE_FIXED_CYCLES) <= DS_COMPUTE_SHARE * the
+# busiest bank's stream (K * bank width tiles at DS_BANK_BYTES_PER_CYCLE). None of the C <= cap qualify:
+# the cheapest one. The cap: every bank's home-row segment (`_ds_bank_cores`) when that leaves a hiding C,
+# else the grid. DS_COMPUTE_SHARE = None restores Refinement 6's narrowest-slice rule (DS_CORE_N_TILES_MIN).
+DS_COMPUTE_SHARE = 0.65
+DS_COMPUTE_FIXED_CYCLES = 4000  # the walk's fill / drain around the hidden part (first K-block, output)
+DS_BANK_BYTES_PER_CYCLE = 42.7  # 460.8 GB/s over 8 banks at 1.35 GHz
+# Where a bank's C - 1 extra slice readers sit (`_ds_bank_cores`): "segment" (Refinement 17) = the bank's
+# home-row segment in the NoC0 travel direction first; "near" (Refinement 6) = the nearest free cores.
+DS_PLACEMENT = "segment"
 # R4 B stream depth (Refinement 6, `trid_double_issue`). DS_B_AHEAD: B K-blocks kept in flight, each
 # retired by its own transaction-id barrier so the bank pipe does not drain once per K-block (1 = the
 # Refinement 4 shape: one K-block in flight, issued before its A round). DS_DEPTH_WEIGHT: cb_weight_tiles
@@ -278,8 +403,75 @@ SHARDED_B_ROUND_BYTES = 32 * 1024
 # multicast vs per-core reads): 0.97-2.1 MB saved runs 0-9% slower (res4 reduce / expand, ASPP projection),
 # 3.9 MB and up 3-61% faster (res4 shortcut, ASPP 1x1, res5). R2 has no A exchange: always on.
 BS_B_MCAST_MIN_SAVED_BYTES = 3 * 1024 * 1024
+# Refinement 18: a walk of exactly ONE B round in ONE chunk (every PDL R2 1x1 conv: one K-block, one block)
+# lands its B in slots no core has used yet, so the receivers' ready acks guard nothing. True: that channel
+# runs handshake-free (McastConfig(handshake=False), linked flag) and carries ONE delivery per walk -- with a
+# bias / gate row, [B round | row] from cb_weight_tiles' tail (GM_BS_ROW_TAIL), each core copying the row into
+# cb_row -- so there is one flag set and one clear (two flag deliveries without acks could race a clear; a
+# counter signal instead needs a write barrier per rectangle: measured slower). PDL heads (32768x32x32, 103
+# cores): the B round and the row round were ~1.3 / ~1.4 us each. False: the Refinement 10 handshaked rounds.
+SHARDED_B_ONE_SHOT = True
+# Refinement 18, R2 only: B groups. One injector multicasting B to an HS core set of several rectangles sends
+# the rectangles one after another (PDL res3: the 9-core partial row got B ~1.35 us after the 77-core block).
+# True: every rectangle of the core list (maximal runs of whole grid rows with the same column span) is its
+# own B group with its own injector reading B from DRAM, all multicasting at once (B crosses DRAM once per
+# group). SHARDED_B_GROUP_ROWS caps a group's grid rows (None: whole rectangles). False: one group (Refinement 10).
+SHARDED_B_RECT_GROUPS = True
+SHARDED_B_GROUP_ROWS = None
+# Refinement 18, R3 with the output packed in place (no writer work): the walk's B half (B rounds / per-core B
+# reads, the bias / gate row) runs on BRISC / NoC1 -- a second instance of the reader kernel (GM_BS_ROLE 2) in
+# the writer's slot -- and the A half (the row exchange, residual) stays on NCRISC (GM_BS_ROLE 1), so a column's
+# B rounds overlap its row's A rounds instead of queueing behind them on one RISC. False: one reader (R10).
+BS_B_ON_WRITER = True
+# ... and on that split's per-core B path (no weight channel), cb_weight_tiles holds up to this many K-blocks
+# (clamped to the walk and to the L1 budget) so the B RISC reads ahead of compute instead of one K-block at a time;
+# a ring holding a whole single-block walk of <= 14 K-blocks issues every K-block's reads up front under its own
+# transaction id (GM_BS_B_AHEAD). 2 = DEPTH_WEIGHT (the Refinement 10 ring).
+# Parked at 2 / 0 (byte-identical): on ASPP pool (the one PDL walk on this path) depth 8 / 16 with lookahead 1 / 2 /
+# 3 measured 8.8-9.3 us vs 9.0-9.2 -- noise. Its B half is not the binder: with B stubbed the A rounds alone run
+# 6.5 us, with B traffic in flight they stretch from ~0.6 to ~1.0 us each (contention, not B latency).
+BS_SPLIT_B_DEPTH = 2
+BS_SPLIT_B_LOOKAHEAD = 0  # K-blocks kept in flight on that path (GM_BS_B_AHEAD); 0 = read, barrier, push
+# ... and its B rounds carry this many bytes (SHARDED_B_ROUND_BYTES' role, for the split): with B off the A chain a
+# round per K-block feeds compute earliest. Measured (device us, 1 B / 32 KB / 64 KB / all K): ASPP 1x1 13.9 / 15.1 /
+# 17.3 / 17.2, res4 shortcut 14.1 / 15.1 / 17.0 / 17.0, res5 expand 22.7 / 23.6 / 25.2 / 28.7, res5 reduce 11.7 /
+# 11.9 / 13.9 / 13.8, res5 reduce 2 and res5 shortcut flat.
+BS_SPLIT_B_ROUND_BYTES = 1
+# ... and the R3 traffic gate (BS_B_MCAST_MIN_SAVED_BYTES' role) under the split: with B off the A chain the B
+# multicast no longer competes with the A rounds. Measured gate 3 MiB vs 0 (device us): res4 reduce 1024 -> 256
+# 12.2 vs 9.7, res4 reduce 18.4 / 18.4, res4 expand 13.1 / 13.0, ASPP projection 16.8 / 16.9.
+BS_SPLIT_B_MCAST_MIN_SAVED_BYTES = 0
+# ... and without a weight channel (per-core B reads on NoC1) the split pays only when the A rounds are heavy
+# enough to hide the B half's read latency: A round bytes (block_m x block_k tiles) >= this. Measured (device us,
+# split vs one reader): aspp_proj 87 KB 16.8 vs 18.6, res4_reduce 70 KB 18.4 vs 18.8, res4_reduce5 35 KB 12.7 vs
+# 12.2, res4_expand 8.7 KB 13.9 vs 13.1. 0 = split every in-place R3 walk.
+BS_SPLIT_MIN_A_ROUND_BYTES = 64 * 1024
+# ... or the grid is a single row (no B group to share: every core's B reads are the minimum traffic, and the
+# latency-bound walk is the A rounds + per-K-block B read latency in series on one RISC). ASPP pool (8 x 1 grid,
+# M = 1): 9.3 -> 8.8 us with the split and BS_SPLIT_B_DEPTH 8. False: the A-round-bytes gate alone.
+BS_SPLIT_SINGLE_ROW = True
+# Refinement 18, R3a: a single-block walk whose cb_act_tiles can hold all num_k_blocks K-blocks (L1 budget) runs
+# its row's A exchange in one shot -- every core multicasts its shard into its own slot on every row peer at
+# once (handshake-free, counter signal; GM_BS_A_ONE_SHOT) -- instead of num_k_blocks handshaked rounds in turn.
+# The matmul then starts only after the whole exchange, so it pays when the walk's K-loop (its tile-K
+# products at tile_k_cycles) is at most BS_A_ONE_SHOT_MAX_KWALK_CYCLES. False: the rounds (Refinement 5).
+# Parked False: measured slower on every PDL R3 case, worst on the one it targets -- ASPP pool (8 cores x 16 KB
+# shards) 9.3 -> 15.9 us, the concurrent exchange alone 9.4 us: eight multicasts over the same 1 x 8 row serialize
+# on its links (no faster than the rounds) and the matmul / B reads lose their overlap with them.
+BS_A_ONE_SHOT = False
+BS_A_ONE_SHOT_MAX_KWALK_CYCLES = 1 << 30
+# Refinement 18, R2a: on a one-shot walk (output in place, so BRISC has no writer work) the injector's B round
+# read issue -- RISC-serial, ~27 ns a tile, 2.2 us for res3 expand's 80 tiles before the first byte can be
+# multicast -- is split across both RISCs: a reader instance on the injector's BRISC (GM_BS_ROLE 3) reads the
+# last floor(K / 2) K rows and posts a local semaphore. Needs K >= 2 tiles. False: the reader issues it all.
+SHARDED_B_READ_HELPER = True
 # own_kb sentinel for every regime without a resident own K-slice (R1 / R1a / R4).
 NO_OWN_KB = 0xFFFFFFFF
+# Perf tooling (Refinement 15, /perf-measure ablations): defines appended to every R1-family kernel. Payload stubs
+# that keep every handshake, barrier and trip count: SKIP_COMPUTE + CKL_ELTWISE_CHAIN_SKIP_COMPUTE (the math),
+# GM_ABLATE_A (the R1b injector's A reads), GM_ABLATE_A_SEND (the R1b multicast payload, 32 B per round),
+# GM_ABLATE_B (the reader's B reads), '+'-separated (a GENIFY_MATMUL_KNOBS value). Empty = production.
+ABLATE_DEFINES = ""
 
 
 def _cdiv(a, b):
@@ -322,6 +514,13 @@ class Geometry:
     a_in_l1: bool = False  # operand A / B is an L1 tensor (split ranking: L1_READ_COST)
     b_in_l1: bool = False
     fidelity_phases: int = 4  # math fidelity passes per tile-K (split_cost); LoFi 1 .. HiFi4 4
+    # Refinement 15: DRAM banks of an interleaved DRAM B whose aligned page is exactly its tile (consecutive pages
+    # of a bank are contiguous: the bank-local stream can read bank runs), else 0; output tensors (chunks).
+    b_banks: int = 0
+    out_chunks: int = 1
+    bank_home: tuple = ()  # per DRAM bank: its optimal NoC0 reader (x, y) (bank-local placement)
+    # BANK_LOCAL_SWIGLU_XCHG: swiglu on one-column bank units (gate and up columns on different cores, exchanged)
+    xchg: bool = False
 
     @property
     def swiglu(self):
@@ -330,10 +529,11 @@ class Geometry:
     @property
     def q_n_min(self):
         # swiglu: whole (gate, up) tile pairs per core and per block (N % 64 == 0 makes Nt even).
-        return 2 if self.swiglu else 1
+        return 2 if self.swiglu and not self.xchg else 1
 
     def out_block_n(self, block_n_tiles):
-        return block_n_tiles // 2 if self.swiglu else block_n_tiles
+        # xchg: a gate core's block is all gate columns, one output column each
+        return block_n_tiles // 2 if self.swiglu and not self.xchg else block_n_tiles
 
 
 @dataclass(frozen=True)
@@ -345,7 +545,7 @@ class GridChoice:
     core_m_tiles: int
     core_n_tiles: int
     q_n: int
-    placement: str  # "rect" (x=n, y=m), "rect_t" (x=m, y=n) or "flat" (row-wise list)
+    placement: str  # "rect" (x=n, y=m), "rect_t" (x=m, y=n), "flat" (row-wise list) or "bank" (Refinement 15)
 
 
 @dataclass(frozen=True)
@@ -371,6 +571,9 @@ class Blocking:
     # ACT_STREAM_DEPTH on an R1b K-walk. The L1 solve and the CB sizes both read them here.
     depth_act: int = DEPTH_ACT
     depth_weight: int = DEPTH_WEIGHT
+    # R1a split lines (Refinement 16): one K-block staging buffer per operand line stream (CB_ACT_STAGE /
+    # CB_WEIGHT_STAGE), priced by the L1 solve. Only a walk solved with it runs the split lines.
+    line_staging: bool = False
 
     @property
     def use_partials(self):
@@ -392,14 +595,39 @@ _FIDELITY_PHASES = {
 }
 
 
+def _out_list(out):
+    """The output tensor(s): one tensor, or the `chunks` equal-width column chunks of a split output
+    (Refinement 13; interleaved placement only). The geometry is the LOGICAL output, the chunks side by side."""
+    return list(out) if isinstance(out, (list, tuple)) else [out]
+
+
+def _a_list(a):
+    """The A operand(s): one tensor, or the K segments [A_0, A_1, ...] of A = concat(A_i, dim=-1) (Refinement 14;
+    interleaved placement only). The segments share leading dims, M, dtype and memory config, so segment 0 stands
+    in for every per-tensor property; the geometry is the LOGICAL A, the segments side by side along K."""
+    return list(a) if isinstance(a, (list, tuple)) else [a]
+
+
+def _a_segment_table(a_segs):
+    """The reader / R1b-writer RT segment table (kernels/a_segments.hpp): [kt_0, .., kt_{s-1}, addr_1, ..,
+    addr_{s-1}] for s > 1 segments, empty for one tensor (segment 0's address is the existing A-address arg)."""
+    if len(a_segs) == 1:
+        return []
+    return [_cdiv(list(t.shape)[-1], TILE) for t in a_segs] + [t.buffer_address() for t in a_segs[1:]]
+
+
 def _geometry(a, b, out, fp32_dest_acc_en, epilogue="none", row=None, residual=None, math_fidelity=None):
-    a_shape = list(a.shape)
+    outs = _out_list(out)
+    out = outs[0]
+    a_segs = _a_list(a)
+    a = a_segs[0]
+    a_shape = list(a.shape)[:-1] + [sum(list(t.shape)[-1] for t in a_segs)]
     b_shape = list(b.shape)
     lead = a_shape[:-2]
     img_m_tiles = _cdiv(a_shape[-2], TILE)
     tensor_k_tiles = _cdiv(a_shape[-1], TILE)
     tensor_n_tiles = _cdiv(b_shape[-1], TILE)
-    out_n_tiles = _cdiv(list(out.shape)[-1], TILE)
+    out_n_tiles = sum(_cdiv(list(o.shape)[-1], TILE) for o in outs)
     lead_prod = 1
     for d in lead:
         lead_prod *= d
@@ -434,7 +662,28 @@ def _geometry(a, b, out, fp32_dest_acc_en, epilogue="none", row=None, residual=N
         a_in_l1=a.memory_config().buffer_type == ttnn.BufferType.L1,
         b_in_l1=b.memory_config().buffer_type == ttnn.BufferType.L1,
         fidelity_phases=_FIDELITY_PHASES.get(math_fidelity, 4),
+        b_banks=_bank_run_banks(b),
+        out_chunks=len(outs),
+        bank_home=_bank_homes(b),
     )
+
+
+def _bank_homes(t):
+    """Per DRAM bank, its optimal NoC0 reader's logical (x, y) (bank-local placement), when B streams bank runs."""
+    if not _bank_run_banks(t):
+        return ()
+    opt = ttnn.get_optimal_dram_bank_to_logical_worker_assignment(t.device(), ttnn.NOC.NOC_0)
+    return tuple((c.x, c.y) for c in opt)
+
+
+def _bank_run_banks(t):
+    """Banks of an interleaved DRAM tensor whose aligned page equals its tile (bank runs are contiguous), else 0."""
+    mc = t.memory_config()
+    if mc.buffer_type != ttnn.BufferType.DRAM or mc.memory_layout != ttnn.TensorMemoryLayout.INTERLEAVED:
+        return 0
+    if t.layout != ttnn.TILE_LAYOUT or t.buffer_aligned_page_size() != ttnn.tile_size(t.dtype):
+        return 0
+    return ttnn.get_memory_view(t.device(), ttnn.BufferType.DRAM).num_banks
 
 
 # ---------------------------------------------------------------------------
@@ -486,7 +735,125 @@ def grid_candidates(geom: Geometry, gx: int, gy: int):
                         continue
                     grid = GridChoice(ub, um, un, core_b, core_m, core_n, q, placement)
                     seen.setdefault((ub, um, un, core_b, core_m, core_n, q), grid)
-    return list(seen.values())
+    return list(seen.values()) + bank_candidates(geom, gx, gy)
+
+
+def bank_eligible(geom: Geometry):
+    """ACT_STREAM_BANK_LOCAL: single B and one output tensor, B interleaved in DRAM with contiguous bank runs;
+    swiglu only under BANK_LOCAL_SWIGLU."""
+    return (
+        ACT_STREAM_BANK_LOCAL
+        and (BANK_LOCAL_SWIGLU or not geom.swiglu or geom.xchg)
+        and geom.b_banks > 0
+        and geom.out_chunks == 1
+        and geom.tensor_batches == 1
+        and geom.weight_batch_stride == 0
+    )
+
+
+def bank_classes(geom: Geometry):
+    """(unit, U, sizes): the bank-local stream's units (one B column, or a swiglu (gate, up) pair of 2) fall in U
+    = banks / unit classes -- unit i is in class i % U, so class u's units are U apart and, for unit = 1, all in
+    bank u (unit = 2: gates in bank 2u, ups in 2u + 1) whenever the row length is a multiple of the banks."""
+    unit = 2 if geom.swiglu and not geom.xchg else 1
+    U = geom.b_banks // unit
+    n_units = geom.tensor_n_tiles // unit
+    return unit, U, [len(range(u, n_units, U)) for u in range(U)]
+
+
+def _even_runs(n, cores):
+    """n units cut into `cores` contiguous runs, as even as possible (the longer runs first): [(t0, w)]."""
+    out, t = [], 0
+    for i in range(cores):
+        w = n // cores + (1 if i < n % cores else 0)
+        out.append((t, w))
+        t += w
+    return out
+
+
+def bank_layout(geom: Geometry, gx: int, rows: int, placement=None):
+    """The bank-local split of the first `rows` grid rows: {(x, y): (class u, first class unit t0, units w)} for
+    every core of the rectangle (w = 0: an idle core), by BANK_LOCAL_PLACEMENT; None when infeasible.
+      "row"    each class owns the cores of its banks' home rows (the row of the bank's optimal NoC0 reader, so
+               the bank's responses never turn into a grid column); a row homing two classes is split by x.
+               Cores outside every home row idle. A class's units go to its cores in even runs, nearest first.
+      "near"   each class takes, in turn, its nearest free core (Manhattan to its homes),
+               quotas tracking the class sizes.
+      "spread" row-major cores dealt round-robin over the classes. Both work min(cores, units) cores."""
+    placement = placement or BANK_LOCAL_PLACEMENT
+    unit, U, sizes = bank_classes(geom)
+    cores = [(x, y) for y in range(rows) for x in range(gx)]
+    homes = [[geom.bank_home[unit * u + i] for i in range(unit)] for u in range(U)]
+    local = geom.tensor_n_tiles % geom.b_banks == 0  # a class's units stay in its banks on every K row
+    if placement == "row" and local:
+        members = {u: [] for u in range(U)}
+        for x, y in cores:
+            cands = [(abs(x - hx), u) for u in range(U) for hx, hy in homes[u] if hy == y]
+            if cands:
+                members[min(cands)[1]].append((x, y))
+        if any(not members[u] for u in range(U) if sizes[u]):
+            return None
+        # BANK_LOCAL_ROW_FILL: the cores of no home row join, one at a time, the class whose cores carry the most
+        # units (banks sharing a home row would otherwise stream on half the cores), nearest to its homes first.
+        spare = [xy for xy in cores if all(xy not in m for m in members.values())] if BANK_LOCAL_ROW_FILL else []
+        for _ in range(len(spare)):
+            u = max(range(U), key=lambda u: (sizes[u] / len(members[u]) if members[u] else 0, -u))
+            xy = min(spare, key=lambda c: (min(abs(c[0] - hx) + abs(c[1] - hy) for hx, hy in homes[u]), c[1], c[0]))
+            spare.remove(xy)
+            members[u].append(xy)
+        out = {xy: (0, 0, 0) for xy in cores}
+        for u in range(U):
+            near = sorted(members[u], key=lambda c: (min(abs(c[0] - hx) + abs(c[1] - hy) for hx, hy in homes[u]), c))
+            for xy, (t0, w) in zip(near, _even_runs(sizes[u], len(near))):
+                out[xy] = (u, t0, w)
+        return out
+    working = min(len(cores), sum(sizes))  # more cores than units: the rest idle
+    quota = [0] * U  # each core goes to the class whose busiest core is busiest
+    for _ in range(working):
+        u = max(
+            (u for u in range(U) if quota[u] < sizes[u]),
+            key=lambda u: (_cdiv(sizes[u], quota[u]) if quota[u] else 1 << 30, -u),
+        )
+        quota[u] += 1
+    runs = {u: [(u, t0, w) for t0, w in _even_runs(sizes[u], quota[u])] for u in range(U)}
+    out = {}
+    if placement == "near" and local:
+        free = list(cores)
+        while any(runs.values()):
+            for u in range(U):
+                if runs[u]:
+                    xy = min(
+                        free, key=lambda c: (min(abs(c[0] - hx) + abs(c[1] - hy) for hx, hy in homes[u]), c[1], c[0])
+                    )
+                    free.remove(xy)
+                    out[xy] = runs[u].pop(0)
+    else:
+        order = [runs[u][i] for i in range(max(quota)) for u in range(U) if i < quota[u]]
+        out = dict(zip(cores, order))
+    return {xy: out.get(xy, (0, 0, 0)) for xy in cores}
+
+
+def bank_candidates(geom: Geometry, gx: int, gy: int):
+    """R1b bank-local splits: the first `rows` grid rows (one multicast rectangle), every working core one bank-class
+    run (bank_layout); the nominal per-core width is the longest run."""
+    if not bank_eligible(geom):
+        return []
+    unit, _, _ = bank_classes(geom)
+    out = []
+    for rows in [gy if BANK_LOCAL_ROWS is None else BANK_LOCAL_ROWS]:
+        layout = bank_layout(geom, gx, rows)
+        if layout is None or gx * rows < 2:
+            continue
+        core_n = unit * max(w for _, _, w in layout.values())
+        out.append(GridChoice(1, 1, gx * rows, 1, geom.tensor_m_tiles, core_n, unit, "bank"))
+    return out
+
+
+def bank_core_columns(geom: Geometry, grid: GridChoice, gx: int):
+    """{(x, y): (col0, cols_valid)} in B columns for a `bank` split (bank_layout): units U * unit columns apart."""
+    unit, U, _ = bank_classes(geom)
+    layout = bank_layout(geom, gx, grid.grid_n // gx)
+    return {xy: (unit * (u + U * t0), unit * w) for xy, (u, t0, w) in layout.items()}
 
 
 def uses_operand_mcast(geom: Geometry, grid: GridChoice, blk: "Blocking"):
@@ -524,7 +891,7 @@ def uses_act_stream(geom: Geometry, grid: GridChoice, blk: "Blocking"):
     )
 
 
-def k_head_ramp(blk: "Blocking", mode: int, epilogue: str):
+def k_head_ramp(blk: "Blocking", mode: int, epilogue: str, split: bool = False):
     """Perf 2 head ramp (kernels/genify_matmul_kschedule.hpp) -> (ramp, compact_a) for an R1-descriptor walk.
 
     The ramp is the K-walk's delivery schedule wherever it can be expressed. Carve-outs (inexpressible, not
@@ -534,23 +901,25 @@ def k_head_ramp(blk: "Blocking", mode: int, epilogue: str):
         packer L1 accumulation where K accumulates wholly in DEST -- a precision change, not a speedup);
       - R1a on the matmul_block helper walk (epilogue none, sb_h > 1): the helper strides A rows by block_k, so A
         cannot be compacted and a short head delivery still multicasts a full A slot (the ramp's mechanism is
-        gone: measured flat to +2.3%).
+        gone: measured flat to +2.3%). Not under the split lines (`split`, Refinement 16): there the A slot goes out on
+        its own RISC and the ramp's short head is what lets the first round land early (R1A_SPLIT_RAMP).
     compact_a: A laid out with the delivery's row stride -- the raw K-walk only (epilogue, 1 x sb_w subblocks).
     """
     raw_walk = epilogue != "none" and blk.sb_h == 1 and not (blk.weight_resident or blk.act_resident)
     if mode == 2 or blk.weight_resident or blk.act_resident or blk.num_k_blocks <= 1:
         return False, False
-    if mode == 1 and not raw_walk:
+    if mode == 1 and not raw_walk and not (split and R1A_SPLIT_RAMP):
         return False, False
     return True, raw_walk
 
 
-def _attach_k_head_ramp(readers, compute, blk, mode, epilogue):
-    ramp, compact_a = k_head_ramp(blk, mode, epilogue)
+def _attach_k_head_ramp(readers, compute, blk, mode, epilogue, writer=None):
+    """`writer`: the split lines' A-line writer (it walks the same deliveries), else None."""
+    ramp, compact_a = k_head_ramp(blk, mode, epilogue, split=writer is not None)
     if not ramp:
         return
     defs = [("GM_K_RAMP", "1"), ("GM_COMPACT_A", "1" if compact_a else "0")]
-    for k in [*readers, compute]:
+    for k in [*readers, compute] + ([writer] if writer is not None else []):
         k.defines = list(k.defines) + defs
 
 
@@ -566,6 +935,38 @@ def r1a_prefetch(geom: Geometry, grid: GridChoice, blk: "Blocking"):
         and not k_head_ramp(blk, mode, geom.epilogue)[0]
         and blk.depth_act == blk.depth_weight >= R1A_PREFETCH_DEPTH  # one ring depth addresses both
     )
+
+
+def staging_bytes(geom: Geometry, blk: "Blocking"):
+    """The split lines' staging buffers: one K-block of each operand."""
+    return blk.block_k_tiles * (blk.block_m_tiles * geom.a_tile_bytes + blk.block_n_tiles * geom.b_tile_bytes)
+
+
+def _r1a_split_shape(geom: Geometry, grid: GridChoice, blk: "Blocking"):
+    """An R1a walk the split line streams can express (one batch per block, no residency, not the injector
+    prefetch) and pay for (R1A_SPLIT_MIN_RATIO), whether or not it was solved with staging."""
+    mode = operand_mode(geom, grid, blk)
+    if not (
+        R1A_SPLIT_LINES
+        and mode == 1
+        and blk.block_batches == 1
+        and geom.tensor_batches == 1
+        and not (blk.weight_resident or blk.act_resident)
+        and not r1a_prefetch(geom, grid, blk)
+    ):
+        return False
+    walk, _, core_read, _ = split_cost_terms(geom, grid, blk)
+    # The A line moves to the writer RISC (NoC1), so it must be the lighter line: FLUX proj_out 2048x3072x128 (A line
+    # 1.18 MB per line vs 196 KB of B; A injectors ~2x the K-walk at HiFi4, ~4x at HiFi2) measured 69 -> 84 us at
+    # HiFi4 on the split lines (at HiFi2 the fixed injectors' prefetch keeps it: >= R1A_PREFETCH_MIN_RATIO).
+    a_line = grid.core_m_tiles * geom.tensor_k_tiles * geom.a_tile_bytes
+    b_line = grid.core_n_tiles * geom.tensor_k_tiles * geom.b_tile_bytes
+    return a_line <= b_line and R1A_SPLIT_MIN_RATIO * walk <= core_read < R1A_PREFETCH_MIN_RATIO * walk
+
+
+def r1a_split(geom: Geometry, grid: GridChoice, blk: "Blocking"):
+    """R1A_SPLIT_LINES: the walk runs the split line streams (solved with their staging buffers)."""
+    return blk.line_staging and _r1a_split_shape(geom, grid, blk)
 
 
 def operand_mode(geom: Geometry, grid: GridChoice, blk: "Blocking"):
@@ -615,16 +1016,27 @@ def read_traffic(geom: Geometry, grid: GridChoice, blk: "Blocking"):
     if mode == 1:
         # R1a: one A read per grid row-line, one B read per column-line.
         return a_per_core * grid.grid_m + b_per_core * grid.grid_n
+    if mode == 2 and grid.placement == "bank":
+        # R1b bank-local: B exactly once (no nominal padding), A through the one-rectangle injector.
+        b_total = geom.tensor_k_tiles * geom.tensor_n_tiles * geom.b_tile_bytes
+        return max(a_per_core + b_total, a_per_core * BANK_LOCAL_INJECTOR_COST)
     if mode == 2:
         # R1b: A read once (by the injector), B per core; the single injector's throughput caps it.
         return max(a_per_core + b_per_core * grid.grid_n, a_per_core * ACT_STREAM_INJECTOR_COST)
     return (a_per_core + b_per_core) * grid.grid_b * grid.grid_m * grid.grid_n
 
 
+def _unpack_cycles(tile_bytes):
+    return tile_bytes / UNPACK_BYTES_PER_CYCLE + UNPACK_TILE_CYCLES
+
+
 def tile_k_cycles(geom: Geometry, sb_h: int, sb_w: int):
     """Cycles per output tile per K tile: the FPU's fidelity passes, or the subblock's operand unpacks
     (sb_h + sb_w tiles per sb_h * sb_w products) when they bind."""
-    return max(FPU_CYCLES_PER_TILE_K * geom.fidelity_phases, UNPACK_CYCLES_PER_TILE * (sb_h + sb_w) / (sb_h * sb_w))
+    fpu = FPU_CYCLES_PER_TILE_K * geom.fidelity_phases
+    if SUBBLOCK_UNPACK_AWARE:
+        return max(fpu, _unpack_cycles(geom.a_tile_bytes) / sb_w, _unpack_cycles(geom.b_tile_bytes) / sb_h)
+    return max(fpu, UNPACK_CYCLES_PER_TILE * (sb_h + sb_w) / (sb_h * sb_w))
 
 
 def padded_work(grid: GridChoice, blk: "Blocking"):
@@ -644,7 +1056,8 @@ def split_cost_terms(geom: Geometry, grid: GridChoice, blk: "Blocking"):
     """(K-walk, DRAM stream, busiest core's reads, busiest core's writes) in cycles."""
     walk = padded_work(grid, blk) * geom.tensor_k_tiles * tile_k_cycles(geom, blk.sb_h, blk.sb_w)
     out_bytes = geom.tensor_batches * geom.tensor_m_tiles * geom.out_n_tiles * geom.o_tile_bytes
-    dram = (read_traffic(geom, grid, blk) + out_bytes) / DRAM_BYTES_PER_CYCLE
+    rate = BANK_LOCAL_DRAM_BYTES_PER_CYCLE if grid.placement == "bank" else DRAM_BYTES_PER_CYCLE
+    dram = (read_traffic(geom, grid, blk) + out_bytes) / rate
     # The busiest reading core: R1 reads its own A (once per N-block) and B (once per M-block); an R1a line
     # injector reads + multicasts one of them for its line; R1b's injector is priced inside read_traffic.
     nb_m = 1 if blk.weight_resident else _cdiv(grid.core_m_tiles, blk.block_m_tiles)
@@ -653,8 +1066,15 @@ def split_cost_terms(geom: Geometry, grid: GridChoice, blk: "Blocking"):
     b_core = grid.core_batches * grid.core_n_tiles * geom.tensor_k_tiles * geom.b_tile_bytes * nb_m
     mode = operand_mode(geom, grid, blk)
     core_bytes = max(a_core, b_core) if mode == 1 else (0 if mode == 2 else a_core + b_core)
+    core_cycles = core_bytes / CORE_READ_BYTES_PER_CYCLE
+    if grid.placement == "bank":
+        # The bank-local split: its busiest core streams its own B run, and its A stream pays a handshake round per
+        # K-block of every block (64x16384x256, 16-bit DEST: 64 rounds of 32 KB on 8 working cores, 134 us vs 84 us
+        # on its R1 split).
+        rounds = _cdiv(grid.core_m_tiles, blk.block_m_tiles) * _cdiv(grid.core_n_tiles, blk.block_n_tiles)
+        core_cycles = max(b_core / CORE_READ_BYTES_PER_CYCLE, rounds * blk.num_k_blocks * BANK_LOCAL_ROUND_CYCLES)
     core_out = grid.core_batches * grid.core_m_tiles * geom.out_block_n(grid.core_n_tiles) * geom.o_tile_bytes
-    return walk, dram, core_bytes / CORE_READ_BYTES_PER_CYCLE, core_out / CORE_WRITE_BYTES_PER_CYCLE
+    return walk, dram, core_cycles, core_out / CORE_WRITE_BYTES_PER_CYCLE
 
 
 def choose_split(geom: Geometry, gx: int, gy: int, budget: int):
@@ -674,6 +1094,8 @@ def choose_split(geom: Geometry, gx: int, gy: int, budget: int):
                 blk = choose_blocking(geom, grid, budget)
             except RuntimeError:
                 continue
+            if grid.placement == "bank" and operand_mode(geom, grid, blk) != 2:
+                continue  # the bank-local column map exists only on the R1b reader / writer
             key = (
                 split_cost(geom, grid, blk),
                 read_traffic(geom, grid, blk),
@@ -694,6 +1116,8 @@ def choose_split(geom: Geometry, gx: int, gy: int, budget: int):
             blk = choose_blocking(geom, grid, budget)
         except RuntimeError:
             continue
+        if grid.placement == "bank" and operand_mode(geom, grid, blk) != 2:
+            continue
         key = (read_traffic(geom, grid, blk), grid_work(grid), grid.grid_b * grid.grid_m * grid.grid_n)
         if best_key is None or key < best_key:
             best_key, best = key, (grid, blk)
@@ -710,6 +1134,8 @@ def _logical_cores(grid: GridChoice, gx: int):
             for j in range(grid.grid_n):
                 if grid.placement == "rect":
                     x, y = j, i
+                elif grid.placement == "bank":
+                    x, y = j % gx, j // gx
                 elif grid.placement == "rect_t":
                     x, y = i, j
                 else:
@@ -718,6 +1144,8 @@ def _logical_cores(grid: GridChoice, gx: int):
                 out.append((b, i, j, ttnn.CoreCoord(x, y)))
     if grid.placement == "rect":
         ranges = [ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid.grid_n - 1, grid.grid_m - 1))]
+    elif grid.placement == "bank":
+        ranges = [ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(gx - 1, grid.grid_n // gx - 1))]
     elif grid.placement == "rect_t":
         ranges = [ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid.grid_m - 1, grid.grid_n - 1))]
     else:
@@ -736,12 +1164,15 @@ def _logical_cores(grid: GridChoice, gx: int):
 # ---------------------------------------------------------------------------
 
 
-def choose_subblock(block_m, block_n, dest_limit):
+def choose_subblock(block_m, block_n, dest_limit, geom=None):
     """Largest sb_h*sb_w <= dest_limit with sb_h | block_m, sb_w | block_n. Ties: SUBBLOCK_MIN_UNPACK
     prefers the smallest operand-unpack count per subblock (sb_h + sb_w per K step), then larger sb_w;
-    otherwise larger sb_w."""
+    otherwise larger sb_w. `geom` (the R1 family, SUBBLOCK_UNPACK_AWARE): the cheapest tile_k_cycles first, then
+    the larger area, then the larger sb_w -- so an 8 x 15 block takes 1 x 3 over 4 x 1 at LoFi."""
 
     def key(h, w):
+        if geom is not None and SUBBLOCK_UNPACK_AWARE:
+            return (-tile_k_cycles(geom, h, w), h * w, w)
         return (h * w, -(h + w) if SUBBLOCK_MIN_UNPACK else 0, w)
 
     best = (1, 1)
@@ -759,7 +1190,9 @@ def _footprint(geom, bm, bn, bk, partials, out_in_place=False, depth_weight=None
     A is consumed straight from its resident shard (R2 / single-K-shard R3), no cb_act_tiles."""
     depth_act = DEPTH_ACT if depth_act is None else depth_act
     depth_weight = DEPTH_WEIGHT if depth_weight is None else depth_weight
-    sb_h, _ = choose_subblock(bm, bn, geom.dest_limit)
+    # The output row group's height: the R1 family's operand-aware subblock or the sharded regimes' area-first one,
+    # whichever is taller (the footprint is shared, so it must not under-price either).
+    sb_h = max(choose_subblock(bm, bn, geom.dest_limit, geom)[0], choose_subblock(bm, bn, geom.dest_limit)[0])
     partials = partials or geom.epilogue != "none"
     return (
         (depth_act * bm * bk * geom.a_tile_bytes if act_cb else 0)
@@ -768,6 +1201,7 @@ def _footprint(geom, bm, bn, bk, partials, out_in_place=False, depth_weight=None
         + (0 if out_in_place else DEPTH_OUT * sb_h * geom.out_block_n(bn) * geom.o_tile_bytes)
         + bn * geom.row_tile_bytes  # cb_bias_row / cb_gate_row: one N-block row
         + DEPTH_RESIDUAL * sb_h * bn * geom.r_tile_bytes  # cb_residual_tiles
+        + (bm * bn * geom.p_tile_bytes if geom.xchg else 0)  # CB_XCHG: the up partner's block
     )
 
 
@@ -794,7 +1228,7 @@ def _k_split(tk, bk_max):
 
 def _make_blocking(geom, block_b, bm, bn, bk_max, depths=None):
     block_k, nkb, last = _k_split(geom.tensor_k_tiles, min(bk_max, geom.block_k_cap))
-    sb_h, sb_w = choose_subblock(bm, bn, geom.dest_limit)
+    sb_h, sb_w = choose_subblock(bm, bn, geom.dest_limit, geom)
     da, dw = depths or (DEPTH_ACT, DEPTH_WEIGHT)
     return Blocking(block_b, bm, bn, block_k, nkb, last, sb_h, sb_w, geom.epilogue, depth_act=da, depth_weight=dw)
 
@@ -812,7 +1246,7 @@ def _resident_split(geom: Geometry, grid: GridChoice):
         if bn < cn:
             return replace(_make_blocking(geom, 1, cm, bn, tk), act_resident=True)
     else:
-        sb_h, _ = choose_subblock(cm, cn, geom.dest_limit)
+        sb_h, _ = choose_subblock(cm, cn, geom.dest_limit, geom)
         bm = min(cm, _round_up(_cdiv(cm, RESIDENT_SPLIT_BLOCKS), sb_h))
         if bm < cm:
             return replace(_make_blocking(geom, 1, bm, cn, tk), weight_resident=True)
@@ -832,6 +1266,39 @@ def choose_blocking(geom: Geometry, grid: GridChoice, budget: int) -> Blocking:
     blk = _choose_blocking(geom, grid, budget, depths)
     if depths is not None and operand_mode(geom, grid, blk) != 2:
         blk = _choose_blocking(geom, grid, budget)  # the solved K-block missed the R1b gate: plain depths
+    elif depths is not None and blk.block_m_tiles < grid.core_m_tiles:
+        # ACT_STREAM_MIN_DEPTH (Refinement 16): the deep rings made the solve split the core's rows into M-blocks,
+        # so every core streams its B columns once per M-block -- the R1b walk's dominant traffic. A shallower ring
+        # (down to ACT_STREAM_MIN_DEPTH) that keeps all rows in one block streams B once: text-encoder gate
+        # 512x5120x16384 (bfp8, 89 MB of B) two 8-row M-blocks at depth 4 477 us -> one 16-row block at depth 3 405 us.
+        for d in range(depths[0] - 1, ACT_STREAM_MIN_DEPTH - 1, -1):
+            shallow = _choose_blocking(geom, grid, budget, (d, d))
+            if operand_mode(geom, grid, shallow) == 2 and shallow.block_m_tiles == grid.core_m_tiles:
+                blk = shallow
+                break
+    # R1A_SPLIT_LINES: re-solve with one more K-block of each operand (the line streams' staging buffers; the rings
+    # keep their depth); kept only while the walk stays a split-lines R1a walk, the staging fits, and it costs only
+    # K-block width: a staged solve that shrinks the output block re-reads operands per block (Qwen3.8 out_proj
+    # 4096x1536x5120: 13x15 -> two 7x16 M-blocks, 226 -> 268 us).
+    if _r1a_split_shape(geom, grid, blk):
+        staged = _choose_blocking(geom, grid, budget, (blk.depth_act + 1, blk.depth_weight + 1))
+        staged = replace(staged, depth_act=blk.depth_act, depth_weight=blk.depth_weight, line_staging=True)
+        fits = (
+            _footprint(
+                geom,
+                staged.block_m_tiles,
+                staged.block_n_tiles,
+                staged.block_k_tiles,
+                staged.use_partials,
+                depth_weight=staged.depth_weight,
+                depth_act=staged.depth_act,
+            )
+            + staging_bytes(geom, staged)
+            <= budget
+        )
+        same_block = (staged.block_m_tiles, staged.block_n_tiles) == (blk.block_m_tiles, blk.block_n_tiles)
+        if fits and same_block and _r1a_split_shape(geom, grid, staged):
+            blk = staged
     # MIN_K_BLOCKS: an R1a walk without the head ramp (the ramp already shortens the fill on the raw walk:
     # 384x1536x1024 bias +5% re-split under it).
     mode = operand_mode(geom, grid, blk)
@@ -845,7 +1312,12 @@ def choose_blocking(geom: Geometry, grid: GridChoice, budget: int) -> Blocking:
     d = R1A_PREFETCH_DEPTH
     deeper = replace(blk, depth_act=max(d, blk.depth_act), depth_weight=max(d, blk.depth_weight))
     walk, _, core_read, _ = split_cost_terms(geom, grid, blk)
-    if R1A_INJECTOR_AHEAD > 1 and core_read >= R1A_PREFETCH_MIN_RATIO * walk and r1a_prefetch(geom, grid, deeper):
+    if (
+        R1A_INJECTOR_AHEAD > 1
+        and not blk.line_staging
+        and core_read >= R1A_PREFETCH_MIN_RATIO * walk
+        and r1a_prefetch(geom, grid, deeper)
+    ):
         bm, bn = blk.block_m_tiles, blk.block_n_tiles
         depths = (deeper.depth_act, deeper.depth_weight)
         bk_max = min(blk.block_k_tiles, _block_k_max(geom, bm, bn, budget, depths))
@@ -865,7 +1337,7 @@ def choose_blocking(geom: Geometry, grid: GridChoice, budget: int) -> Blocking:
         blk.use_partials,
         depth_weight=blk.depth_weight,
         depth_act=blk.depth_act,
-    )
+    ) + (staging_bytes(geom, blk) if blk.line_staging else 0)
     for batch in sorted((d for d in _divisors(groups) if d <= OUT_WRITE_BATCH_ROW_GROUPS), reverse=True):
         if base + DEPTH_OUT * (batch - 1) * row_group_bytes <= budget:
             return replace(blk, write_batch=batch)
@@ -892,7 +1364,7 @@ def _choose_blocking(geom: Geometry, grid: GridChoice, budget: int, depths=None)
             if _footprint(geom, cm, cn, bk, partials=True) <= budget:
                 return _make_blocking(geom, block_b, cm, cn, bk)
         whole = _make_blocking(geom, block_b, cm, cn, tk)
-        resident = _resident_split(geom, grid)
+        resident = None if grid.placement == "bank" else _resident_split(geom, grid)
         # The split must not cost the R1a / R1b operand multicast: a smaller K-block can drop under
         # MCAST_MIN_KBLOCK_BYTES (2048x256x512 bf8b, 16-bit DEST: 52 -> 26 KB A rounds, +11% as plain R1).
         if resident is not None and operand_mode(geom, grid, resident) == operand_mode(geom, grid, whole):
@@ -985,9 +1457,58 @@ def plan(a, b, out, fp32_dest_acc_en, device, epilogue="none", row=None, residua
     geom = _geometry(a, b, out, fp32_dest_acc_en, epilogue, row, residual, math_fidelity)
     grid_size = device.compute_with_storage_grid_size()
     gx, gy = grid_size.x, grid_size.y
-    budget = l1_cb_budget(device, [t for t in (a, b, out, row, residual) if t is not None])
+    budget = l1_cb_budget(device, [t for t in (*_a_list(a), b, *_out_list(out), row, residual) if t is not None])
     grid, blocking = choose_split(geom, gx, gy, budget)
+    if BANK_LOCAL_SWIGLU_XCHG and geom.swiglu and xchg_applies(geom, grid, blocking):
+        xchg = xchg_plan(replace(geom, xchg=True), gx, gy, budget)
+        if xchg is not None:
+            return (*xchg, (gx, gy))
     return geom, grid, blocking, (gx, gy)
+
+
+def xchg_applies(geom: Geometry, grid: GridChoice, blk: Blocking):
+    """BANK_LOCAL_SWIGLU_XCHG_SCOPE: "r1b" = the cells whose chosen split is an R1b walk (the flat 1-D N split the
+    exchange replaces); "all" = every cell the bank split can express."""
+    return BANK_LOCAL_SWIGLU_XCHG_SCOPE == "all" or operand_mode(geom, grid, blk) == 2
+
+
+def xchg_plan(geom: Geometry, gx: int, gy: int, budget: int):
+    """BANK_LOCAL_SWIGLU_XCHG: (geom, grid, blocking) of the one-column bank split of a swiglu cell, or None when it
+    cannot be expressed: no bank candidate (bank_eligible: interleaved DRAM B of bank runs, one output; every class
+    local: N % banks == 0), the walk misses R1b, or a core's columns span more than one N-block (the exchange
+    pairs whole blocks)."""
+    if not bank_eligible(geom) or geom.b_banks % 2 or geom.tensor_n_tiles % geom.b_banks:
+        return None
+    for grid in bank_candidates(geom, gx, gy):
+        try:
+            blk = choose_blocking(geom, grid, budget)
+        except RuntimeError:
+            continue
+        if operand_mode(geom, grid, blk) == 2 and blk.block_n_tiles == grid.core_n_tiles:
+            return geom, grid, blk
+    return None
+
+
+def xchg_partners(geom: Geometry, grid: GridChoice, gx: int):
+    """{(x, y): (role, parts)} of the exchange: role 0 = gate core, 1 = up core; parts = (x, y, my_c0, peer_c0, cols):
+    the partner core whose block columns [peer_c0, peer_c0 + cols) hold the same class units as this core's
+    [my_c0, my_c0 + cols). Gate class 2s and up class 2s + 1 hold the same class units t (output column s + (U / 2) t),
+    each cut into its own runs; idle cores (no columns) are role 2: no parts, no epilogue, no output."""
+    layout = bank_layout(geom, gx, grid.grid_n // gx)
+    gates = {}
+    for xy, (u, t0, w) in layout.items():
+        if w and u % 2 == 0:
+            gates.setdefault(u, []).append((xy, t0, w))
+    out = {xy: ((u % 2) if w else 2, []) for xy, (u, t0, w) in layout.items()}
+    for xy, (u, t0, w) in layout.items():
+        if not w or u % 2 == 0:
+            continue
+        for gxy, g0, gw in gates.get(u - 1, []):
+            lo, hi = max(t0, g0), min(t0 + w, g0 + gw)
+            if lo < hi:
+                out[xy][1].append((gxy[0], gxy[1], lo - t0, lo - g0, hi - lo))
+                out[gxy][1].append((xy[0], xy[1], lo - g0, lo - t0, hi - lo))
+    return out
 
 
 # ---------------------------------------------------------------------------
@@ -1051,13 +1572,21 @@ def _reader_accessor_ct(a, b, row_t, res_t):
 
 
 def _writer_ct(
-    cb_out, blk, out_block_n_tiles, geom, out, out_in_place, ds_act_role=_DS_WRITER_ACT_ABSENT, act_stream_a=None
+    cb_out,
+    blk,
+    out_block_n_tiles,
+    geom,
+    out,
+    out_in_place,
+    ds_act_role=_DS_WRITER_ACT_ABSENT,
+    act_stream_a=None,
+    act_mode=2,
 ):
     """`ds_act_role`: the R4 A-round role (CT [8, 16)). `act_stream_a`: A, when this writer runs R1b's A
-    stream (CT 8 = 2 overrides the absent R4 role; A's accessor follows the output's)."""
+    stream (CT 8 = `act_mode` 2) or R1a's A row line (3, split lines); A's accessor follows the output's."""
     role = list(ds_act_role)
     if act_stream_a is not None:
-        role = [2, 1, CB_ACT_TILES, blk.block_k_tiles, blk.num_k_blocks, 1, geom.a_tile_bytes, blk.depth_act]
+        role = [act_mode, 1, CB_ACT_TILES, blk.block_k_tiles, blk.num_k_blocks, 1, geom.a_tile_bytes, blk.depth_act]
     a_t = act_stream_a if act_stream_a is not None else out  # stand-in accessor (never dereferenced)
     return [
         cb_out,
@@ -1073,7 +1602,7 @@ def _writer_ct(
         blk.last_block_k_tiles,
         a_t.buffer_aligned_page_size(),
         int(blk.act_resident),
-        max(1, min(ACT_STREAM_AHEAD, blk.depth_act)) if act_stream_a is not None else 1,  # R1b act_ahead
+        max(1, min(ACT_STREAM_AHEAD, blk.depth_act)) if act_stream_a is not None and act_mode == 2 else 1,  # R1b
         *ttnn.TensorAccessorArgs(out).get_compile_time_args(),
         *ttnn.TensorAccessorArgs(a_t).get_compile_time_args(),
     ]
@@ -1124,7 +1653,8 @@ def create_program_descriptor(
         return create_block_sharded_program_descriptor(
             a, b, out, compute_config, epilogue=epilogue, row=row, residual=residual, placement=placement
         )
-    device = a.device()
+    a_segs = _a_list(a)  # Refinement 14: A as K segments (R1 family only)
+    device = a_segs[0].device()
     geom, grid, blk, (gx, gy) = plan(
         a,
         b,
@@ -1137,6 +1667,17 @@ def create_program_descriptor(
         math_fidelity=compute_config.math_fidelity,
     )
     cores, core_ranges = _logical_cores(grid, gx)
+    # Split output (Refinement 13): the chunks share one memory config / dtype / shape, so chunk 0 stands in
+    # for every per-tensor property; the writer (and the reader's tail share) route each output tile column
+    # to its chunk through the address table appended to their runtime args (kernels/out_chunks.hpp).
+    outs = _out_list(out)
+    out = outs[0]
+    out_row_tiles = geom.out_n_tiles // len(outs)  # tiles per tile row of ONE output tensor
+    chunk_addrs = [o.buffer_address() for o in outs[1:]]
+    # A as K segments (Refinement 14): segment 0 stands in for A's per-tensor properties; the reader (and R1b's
+    # A-streaming writer) map each K tile to its segment through the table in their RT args (a_segments.hpp).
+    a = a_segs[0]
+    a_seg_table = _a_segment_table(a_segs)
 
     out_block_n_tiles = geom.out_block_n(blk.block_n_tiles)  # swiglu halves the output width
     cb_row = CB_GATE_ROW if epilogue == "addcmul" else CB_BIAS_ROW
@@ -1180,21 +1721,38 @@ def create_program_descriptor(
             )
         )
 
+    if geom.xchg:
+        # The up partner's accumulated block (exactly one block, written over the NoC, partials format).
+        cbs.append(_cb(CB_XCHG, geom.p_dtype, geom.p_tile_bytes, blk.block_m_tiles * blk.block_n_tiles, core_ranges))
+
     # Absent epilogue tensors: B stands in for the accessor CT args (never dereferenced).
     row_t = row if row is not None else b
     res_t = residual if residual is not None else b
 
     # ---- Kernels ----
-    reader_ct = _reader_ct(geom, blk, a, b, epilogue, cb_row, row_t, res_t)
+    # xchg: the reader streams one-column bank units (no gate / up permutation): its walk is the epilogue-none one.
+    reader_ct = _reader_ct(geom, blk, a, b, "none" if geom.xchg else epilogue, cb_row, row_t, res_t)
     # [operand_mcast, a_sends, b_sends] + the R4 role args go between reader_ct and the accessors,
     # set per kernel group below.
     reader_accessor_ct = _reader_accessor_ct(a, b, row_t, res_t)
     mode = operand_mode(geom, grid, blk)
     operand_mcast = mode == 1  # R1a
     act_stream = mode == 2  # R1b
+    split = r1a_split(geom, grid, blk)  # R1a split lines: A row lines on the writer, both lines rotating
+    if split:
+        # The line streams' staging buffers (one K-block each; raw scratch of the writer / the reader).
+        cbs.append(_cb(CB_ACT_STAGE, a.dtype, geom.a_tile_bytes, blk.block_m_tiles * blk.block_k_tiles, core_ranges))
+        cbs.append(_cb(CB_WEIGHT_STAGE, b.dtype, geom.b_tile_bytes, blk.block_k_tiles * blk.block_n_tiles, core_ranges))
     act_offset, weight_offset = injector_offsets(grid)
     writer_ct = _writer_ct(
-        CB_OUTPUT_TILES, blk, out_block_n_tiles, geom, out, out_in_place=False, act_stream_a=a if act_stream else None
+        CB_OUTPUT_TILES,
+        blk,
+        out_block_n_tiles,
+        geom,
+        out,
+        out_in_place=False,
+        act_stream_a=a if (act_stream or split) else None,
+        act_mode=3 if split else 2,
     )
     compute_ct = _compute_ct(CB_OUTPUT_TILES, blk, epilogue, cb_row, out, swiglu_natural_pairs=False)
 
@@ -1204,15 +1762,22 @@ def create_program_descriptor(
     row_addr = row.buffer_address() if row is not None else 0
     res_addr = residual.buffer_address() if residual is not None else 0
     out_div = 2 if geom.swiglu else 1  # B columns per output column
+    xchg = xchg_partners(geom, grid, gx) if geom.xchg else None
+    virt = lambda x, y: (lambda v: (v.x, v.y))(device.worker_core_from_logical_core(ttnn.CoreCoord(x, y)))
     reader_roles = {}  # core -> (a_sends, b_sends)
     reader_args = {}  # core -> reader runtime args (placed per role group below)
+    bank_cols = bank_core_columns(geom, grid, gx) if grid.placement == "bank" else None
+    tail_pol = bank_tail_policy(geom, grid, bank_cols, out)  # TAIL_POLICY: per-core tail reader share
     for bi, i, j, core in cores:
         b0 = bi * grid.core_batches
         batches_valid = min(grid.core_batches, geom.tensor_batches - b0)
         row0 = i * grid.core_m_tiles
         rows_valid = min(grid.core_m_tiles, geom.tensor_m_tiles - row0)
-        col0 = j * grid.core_n_tiles
-        cols_valid = min(grid.core_n_tiles, geom.tensor_n_tiles - col0)
+        if bank_cols is not None:
+            col0, cols_valid = bank_cols[(core.x, core.y)]  # bank-local: units S columns apart from col0
+        else:
+            col0 = j * grid.core_n_tiles
+            cols_valid = min(grid.core_n_tiles, geom.tensor_n_tiles - col0)
         nb_b = _cdiv(batches_valid, blk.block_batches)
         if operand_mcast or act_stream:
             # Every core of a line (R1b: of the split) walks the same nominal block sequence (CB pointers in lockstep, one
@@ -1221,7 +1786,7 @@ def create_program_descriptor(
             nb_n = _cdiv(grid.core_n_tiles, blk.block_n_tiles)
             reader_roles[(core.x, core.y)] = (
                 (int(j == (act_offset + i) % grid.grid_n), int(i == (weight_offset + j) % grid.grid_m))
-                if operand_mcast
+                if operand_mcast and not split
                 else (0, 0)
             )
         else:
@@ -1240,15 +1805,33 @@ def create_program_descriptor(
             row_addr,
             res_addr,
             NO_OWN_KB,
+            *a_seg_table,
         ]
         # The writer walks output columns: swiglu halves col0 / cols_valid (both even, q_n >= 2).
         out_region = [b0, batches_valid, row0, rows_valid, col0 // out_div, cols_valid // out_div, nb_b, nb_m, nb_n]
-        a_stream_rt = [a_addr, geom.tensor_k_tiles] if act_stream else []  # R1b: the writer reads A
-        wrt = [out_addr, *out_region, geom.tensor_m_tiles, geom.out_n_tiles, *a_stream_rt]
+        xchg_rt = []
+        if xchg is not None:
+            # A gate core writes its gate columns' outputs (gate column 2s + 2Ut <-> output s + Ut); an up core none.
+            role, parts = xchg[(core.x, core.y)]
+            keep = (xchg_rows(blk), blk.block_m_tiles - xchg_rows(blk), 0)[role]  # output rows of each block
+            out_region[5] = cols_valid if keep else 0
+            expect = keep * cols_valid  # partner tiles per block (the kept rows of this core's columns)
+            xchg_rt = [role, expect, len(parts)]
+            for px, py, s0, d0, n in parts:
+                xchg_rt += [*virt(px, py), s0, d0, n]
+        # R1b / R1a split lines: the writer reads A.
+        a_stream_rt = [a_addr, geom.tensor_k_tiles, *a_seg_table] if (act_stream or split) else []
+        wrt = [out_addr, *out_region, geom.tensor_m_tiles, out_row_tiles, *a_stream_rt, *chunk_addrs]
         # Tail write split (Perf 2): the reader serves part of the last block's writes on NoC0.
-        reader_args[(core.x, core.y)] += [out_addr, *out_region, geom.tensor_m_tiles, geom.out_n_tiles]
+        reader_args[(core.x, core.y)] += [out_addr, *out_region, geom.tensor_m_tiles, out_row_tiles, *chunk_addrs]
+        if tail_pol is not None:  # GM_TAIL_POLICY: right after the chunk table on both RISCs
+            wrt += list(tail_pol[(core.x, core.y)])
+            reader_args[(core.x, core.y)] += list(tail_pol[(core.x, core.y)])
+        if xchg is not None:
+            wrt += xchg_rt
+            reader_args[(core.x, core.y)] += xchg_rt[:1]
         writer_rt[core.x][core.y] = wrt
-        compute_rt[core.x][core.y] = [nb_b * nb_m * nb_n, NO_OWN_KB, nb_n]
+        compute_rt[core.x][core.y] = [nb_b * nb_m * nb_n, NO_OWN_KB, nb_n] + xchg_rt[:1]
 
     # One reader kernel per (a_sends, b_sends) role group: under R1a the line injectors are CT-
     # specialized, so every core hosts exactly one reader. Plain R1 is a single group (0, 0).
@@ -1294,13 +1877,58 @@ def create_program_descriptor(
         config=compute_config,
     )
     descriptor = ttnn.ProgramDescriptor(kernels=[], semaphores=[], cbs=cbs)
-    _attach_operand_channels(descriptor, readers, grid, core_ranges, device, operand_mcast, act_offset, weight_offset)
-    if act_stream:
-        _attach_act_stream(descriptor, writer, core_ranges, device)
+    if split:
+        _attach_split_lines(descriptor, readers, writer, grid, core_ranges, device)
+        for k in readers:
+            k.defines = list(k.defines) + [
+                ("GM_R1A_SPLIT", "1"),
+                ("GM_R1A_DEPTH", str(blk.depth_weight)),
+                ("GM_LINE_STAGE_CB", str(CB_WEIGHT_STAGE)),
+                ("GM_LINE_WINDOW", str(R1A_LINE_WINDOW)),
+                ("GM_LINE_STARTUP", str(R1A_LINE_STARTUP_SHARE)),
+            ]
+        writer.defines = list(writer.defines) + [
+            ("GM_LINE_STAGE_CB", str(CB_ACT_STAGE)),
+            ("GM_LINE_WINDOW", str(R1A_LINE_WINDOW)),
+            ("GM_LINE_STARTUP", str(R1A_LINE_STARTUP_SHARE)),
+        ]
     else:
+        _attach_operand_channels(
+            descriptor, readers, grid, core_ranges, device, operand_mcast, act_offset, weight_offset
+        )
+    if act_stream:
+        rounds = _cdiv(grid.core_m_tiles, blk.block_m_tiles) * _cdiv(grid.core_n_tiles, blk.block_n_tiles)
+        # Rotating injectors on the bank-local split only (one rectangle, as the helper's rotating senders need):
+        # on a small flat split of thin K-blocks the turn hand-over costs more than the parallel reads save
+        # (64x16384x256, 16-bit DEST, 8 cores x 64 rounds of 32 KB: 84 -> 92 us with 3).
+        bank = grid.placement == "bank"
+        injectors = act_stream_injectors(blk, rounds * blk.num_k_blocks) if bank else 1
+        _attach_act_stream(descriptor, writer, core_ranges, device, injectors)
+    elif not split:  # (split: the writer's `act` channel is the A row line, attached above)
         ttnn.attach_absent_mcast(writer, "act")  # the writer's A role (R4 rounds / R1b stream) is absent
     _attach_tail_split(descriptor, readers, writer, core_ranges, blk, out_block_n_tiles, geom, out)
-    _attach_k_head_ramp(readers, compute, blk, mode, epilogue)
+    if tail_pol is not None:
+        for k in (*readers, writer):
+            k.defines = list(k.defines) + [("GM_TAIL_POLICY", "1")]
+    if len(outs) > 1:
+        for k in (*readers, writer):
+            k.defines = list(k.defines) + [("GM_OUT_CHUNKS", str(len(outs)))]
+    if len(a_segs) > 1:
+        for k in (*readers, writer):
+            k.defines = list(k.defines) + [("GM_A_SEGMENTS", str(len(a_segs)))]
+    if grid.placement == "bank":
+        unit, U, _ = bank_classes(geom)
+        out_stride = U // 2 if geom.xchg else U  # xchg: output columns of a gate class are U / 2 apart
+        for k in readers:
+            k.defines = list(k.defines) + [
+                ("GM_BANK_STRIDE", str(unit * U)),
+                ("GM_BANK_RUNS", "1"),
+                ("GM_OUT_STRIDE", str(out_stride)),
+            ]
+        writer.defines = list(writer.defines) + [("GM_OUT_STRIDE", str(out_stride))]
+    if geom.xchg:
+        _attach_xchg(descriptor, readers, writer, compute, core_ranges, blk, geom)
+    _attach_k_head_ramp(readers, compute, blk, mode, epilogue, writer if split else None)
     walk, *streams = split_cost_terms(geom, grid, blk)
     if NONE_RAW_WALK and epilogue == "none" and walk >= NONE_RAW_WALK_MIN_RATIO * max(streams):
         compute.defines = list(compute.defines) + [("GM_NONE_RAW_WALK", "1")]
@@ -1308,8 +1936,84 @@ def create_program_descriptor(
         defs = [("GM_R1A_AHEAD", str(R1A_INJECTOR_AHEAD)), ("GM_R1A_DEPTH", str(min(blk.depth_act, blk.depth_weight)))]
         for k in readers:
             k.defines = list(k.defines) + defs
+    for k in (*readers, writer, compute):
+        k.defines = list(k.defines) + [(d, "1") for d in ABLATE_DEFINES.split("+") if d]
     descriptor.kernels = [*readers, writer, compute]
     return descriptor
+
+
+def xchg_rows(blk: Blocking):
+    """The gate core's output rows of each block (GM_SWX_ROWS): half under BANK_LOCAL_SWIGLU_XCHG_SPLIT (even
+    block_m), else all."""
+    m = blk.block_m_tiles
+    return m // 2 if BANK_LOCAL_SWIGLU_XCHG_SPLIT and m % 2 == 0 else m
+
+
+def _attach_xchg(descriptor, readers, writer, compute, core_ranges, blk, geom):
+    """BANK_LOCAL_SWIGLU_XCHG: two semaphores (READY on an up core: its gate partners' CB_XCHG is free; DATA on a gate
+    core: up tiles landed) and the GM_SWX defines (role = the last RT arg of the reader / compute, the writer's xchg
+    table after its tail policy)."""
+    sems = list(descriptor.semaphores)
+    base = max([sm.id for sm in sems], default=-1) + 1
+    for i in range(2):
+        sems.append(ttnn.SemaphoreDescriptor(id=base + i, core_ranges=core_ranges, initial_value=0))
+    descriptor.semaphores = sems
+    defs = [
+        ("GM_SWX", "1"),
+        ("GM_SWX_CB", str(CB_XCHG)),
+        ("GM_SWX_PARTIALS_CB", str(CB_PARTIALS)),
+        ("GM_SWX_TILE_BYTES", str(geom.p_tile_bytes)),
+        ("GM_SWX_SEM_READY", str(base)),
+        ("GM_SWX_SEM_DATA", str(base + 1)),
+        ("GM_SWX_ROWS", str(xchg_rows(blk))),
+    ]
+    for k in (*readers, writer, compute):
+        k.defines = list(k.defines) + defs
+
+
+def bank_tail_policy(geom: Geometry, grid: GridChoice, bank_cols, out):
+    """TAIL_POLICY: {(x, y): (reader tiles of every tail row,)} for a bank-local split whose cores each write ONE DRAM
+    bank (no swiglu, output rows a whole number of bank rounds, DRAM interleaved output), on an arch with a known NoC
+    torus; None otherwise (TAIL_NC_PCT everywhere).
+
+    Hops in virtual NoC coordinates: a bank's NoC0 / NoC1 endpoint is the DRAM column just west of its optimal NoC0 /
+    NoC1 worker, in that worker's row. NoC0 (the reader) runs east then south to the NoC0 endpoint, NoC1 (the writer)
+    north then west to the NoC1 endpoint. All the core's tail tiles go on the NoC with fewer hops; ties keep the
+    TAIL_NC_PCT split."""
+    if not TAIL_POLICY or grid.placement != "bank" or geom.swiglu or bank_cols is None:
+        return None
+    mc = out.memory_config()
+    if mc.buffer_type != ttnn.BufferType.DRAM or mc.memory_layout != ttnn.TensorMemoryLayout.INTERLEAVED:
+        return None
+    banks = geom.b_banks
+    if not banks or geom.out_n_tiles % banks:
+        return None
+    dev = out.device()
+    torus = TAIL_POLICY_TORUS.get(str(dev.arch()).split(".")[-1])
+    if torus is None:
+        return None
+    nx, ny = torus
+    virt = lambda c: (lambda v: (v.x, v.y))(dev.worker_core_from_logical_core(c))
+    w0 = [virt(c) for c in ttnn.get_optimal_dram_bank_to_logical_worker_assignment(dev, ttnn.NOC.NOC_0)]
+    w1 = [virt(c) for c in ttnn.get_optimal_dram_bank_to_logical_worker_assignment(dev, ttnn.NOC.NOC_1)]
+    if len(w0) != banks or len(w1) != banks:
+        return None
+
+    def hops1(c, wk):  # NoC1: -y, then -x to the DRAM column west of the worker
+        return (c[1] - wk[1]) % ny + (c[0] - wk[0]) % nx + 0.5
+
+    def hops0(c, wk):  # NoC0: +x to the DRAM column west of the worker, then +y
+        return ((wk[0] - c[0]) % nx - 0.5) % nx + (wk[1] - c[1]) % ny
+
+    pol = {}
+    for (x, y), (col0, w) in bank_cols.items():
+        if not w:
+            pol[(x, y)] = (0,)
+            continue
+        c, u = virt(ttnn.CoreCoord(x, y)), col0 % banks
+        h1, h0 = hops1(c, w1[u]), hops0(c, w0[u])
+        pol[(x, y)] = (w if h0 < h1 else 0 if h1 < h0 else (w * TAIL_NC_PCT) // 100,)
+    return pol
 
 
 def _attach_tail_split(descriptor, readers, writer, core_ranges, blk, out_block_n_tiles, geom, out):
@@ -1339,15 +2043,57 @@ def _attach_tail_split(descriptor, readers, writer, core_ranges, blk, out_block_
     writer.defines = list(writer.defines) + common
 
 
-def _attach_act_stream(descriptor, writer, core_ranges, device):
-    """R1b: one channel over the whole split (one group: every core needs every A K-block), a fixed
-    in-group injector (ACT_STREAM_INJECTOR in row-wise order) on the writer RISC's NoC. A flat split's
-    core set (full rows + a partial row) is an irregular receiver set: one hardware multicast per
-    rectangle."""
+def act_stream_injectors(blk: "Blocking", rounds: int):
+    """R1b injector count: ACT_STREAM_INJECTORS, below the act ring depth and at most the A rounds."""
+    return max(1, min(ACT_STREAM_INJECTORS, blk.depth_act - 1, rounds))
+
+
+def _attach_act_stream(descriptor, writer, core_ranges, device, injectors=1):
+    """R1b: one channel over the whole split (one group: every core needs every A K-block) on the writer RISC's
+    NoC: a fixed in-group injector (ACT_STREAM_INJECTOR in row-wise order), or `injectors` rotating senders evenly
+    spaced in row-wise order. A flat split's core set (full rows + a partial row) is an irregular receiver set:
+    one hardware multicast per rectangle."""
     config = ttnn.McastConfig(noc=ACT_STREAM_NOC, handshake=True)
-    sender = ttnn.McastFixedSenderConfig(sender_index=ACT_STREAM_INJECTOR)
+    if injectors > 1:
+        cores = ttnn.corerange_to_cores(core_ranges, None, True)
+        picks = [cores[i * len(cores) // injectors] for i in range(injectors)]
+        sender = ttnn.McastRotatingSenderConfig(
+            sender_cores=ttnn.CoreRangeSet([ttnn.CoreRange(c, c) for c in picks]),
+            sender_order=ttnn.McastCoreOrder.RowMajor,
+        )
+        writer.defines = list(writer.defines) + [("GM_ACT_INJECTORS", str(injectors))]
+    else:
+        sender = ttnn.McastFixedSenderConfig(sender_index=ACT_STREAM_INJECTOR)
     mc = ttnn.Mcast(device, config, core_ranges, core_ranges.num_cores(), sender, ttnn.McastCoreOrder.RowMajor)
     mc.attach(descriptor, "act", [writer], 0)  # the only channel of an R1b program (R1a's are absent)
+
+
+def _attach_split_lines(descriptor, readers, writer, grid, core_ranges, device):
+    """R1a split lines: `act` (A row lines: the cores sharing a row region) on the writer RISC's NoC, `weight` (B
+    column lines) on the readers', both with rotating senders over the whole line (round r from its core r % length,
+    in line order). The readers carry no `act` channel."""
+    row_major, col_major = ttnn.McastCoreOrder.RowMajor, ttnn.McastCoreOrder.ColumnMajor
+    act_order, weight_order = (row_major, col_major) if grid.placement == "rect" else (col_major, row_major)
+    mc_act = ttnn.Mcast(
+        device,
+        ttnn.McastConfig(noc=R1A_SPLIT_ACT_NOC, handshake=True),
+        core_ranges,
+        grid.grid_n,
+        ttnn.McastRotatingSenderConfig(),
+        act_order,
+    )
+    mc_weight = ttnn.Mcast(
+        device,
+        ttnn.McastConfig(handshake=True),
+        core_ranges,
+        grid.grid_m,
+        ttnn.McastRotatingSenderConfig(),
+        weight_order,
+    )
+    mc_act.attach(descriptor, "act", [writer], 0)
+    for reader in readers:
+        ttnn.attach_absent_mcast(reader, "act")
+    mc_weight.attach(descriptor, "weight", readers, mc_act.next_semaphore_id())
 
 
 def _attach_operand_channels(
@@ -1395,17 +2141,14 @@ class DramShardedTopology:
     bank_n_tiles: int  # sw: B columns (tiles) per bank shard
     primaries: tuple  # bank w's optimal worker (logical CoreCoord), w in bank-shard order: output shard w
     cores_per_bank: int  # C: compute cores sharing each bank's columns (the cores_per_bank split)
+    core_n_tiles: int  # cw: the per-worker column slice = block_n (slice j = columns [j*cw, (j+1)*cw) of the
+    #                    bank; the last slice of a bank may be narrower when C does not divide the bank width)
     workers: tuple  # every compute core, bank-major: workers[w * C + j] owns bank w's column slice j
     rect: object  # CoreRange: the workers' bounding rectangle = the A broadcast's receiver group
 
     @property
     def num_shards(self):
         return len(self.a_cores)
-
-    @property
-    def core_n_tiles(self):
-        # The per-worker block width: one C-th of the bank's columns.
-        return self.bank_n_tiles // self.cores_per_bank
 
     @property
     def out_in_place(self):
@@ -1426,8 +2169,10 @@ def _core_key(c, row_major):
     return (c.y, c.x) if row_major else (c.x, c.y)
 
 
-def dram_sharded_topology(a, b, swiglu=False) -> DramShardedTopology:
-    """Validate the R4 operand layout and derive its topology (pure host, cheap)."""
+def dram_sharded_topology(a, b, swiglu=False, geom=None) -> DramShardedTopology:
+    """Validate the R4 operand layout and derive its topology (pure host, cheap). `geom` (the plan) feeds the
+    cores_per_bank cost rule; without it (layout checks, the output placement) C is the slice-width rule --
+    neither caller reads it (the output shards sit on the primaries)."""
     a_mc, b_mc = a.memory_config(), b.memory_config()
     if a_mc.buffer_type != ttnn.BufferType.L1 or a_mc.memory_layout != ttnn.TensorMemoryLayout.WIDTH_SHARDED:
         raise DramShardedLayoutError("dram_sharded needs A L1 WIDTH_SHARDED (read A where it lives)")
@@ -1470,43 +2215,107 @@ def dram_sharded_topology(a, b, swiglu=False) -> DramShardedTopology:
         raise DramShardedLayoutError("dram_sharded needs one B column shard per DRAM bank")
     primaries = [optimal[c.x] for c in bank_cores[:used_banks]]
     grid = a.device().compute_with_storage_grid_size()
-    cores_per_bank = ds_cores_per_bank(sw, used_banks, grid.x * grid.y, swiglu)
+    cores_per_bank, core_n_tiles = ds_cores_per_bank(
+        sw,
+        used_banks,
+        grid.x * grid.y,
+        swiglu,
+        cost=(geom, kt) if geom is not None else None,
+        seg_cap=_ds_segment_cap(primaries, grid) if DS_PLACEMENT == "segment" else None,
+    )
     workers = _ds_bank_cores(primaries, cores_per_bank, grid)
     xs, ys = [c.x for c in workers], [c.y for c in workers]
     rect = ttnn.CoreRange(ttnn.CoreCoord(min(xs), min(ys)), ttnn.CoreCoord(max(xs), max(ys)))
     return DramShardedTopology(
-        tuple(a_cores), a_row_major, kw, sw, tuple(primaries), cores_per_bank, tuple(workers), rect
+        tuple(a_cores), a_row_major, kw, sw, tuple(primaries), cores_per_bank, core_n_tiles, tuple(workers), rect
     )
 
 
-def ds_cores_per_bank(bank_n_tiles, used_banks, grid_cores, swiglu=False):
-    """The cores_per_bank split C: C divides the bank width (each core a whole, equal column slice; whole
-    (gate, up) pairs under swiglu) and C * banks fits the grid. Auto: the smallest slice >= DS_CORE_N_TILES_MIN."""
+def ds_cores_per_bank(bank_n_tiles, used_banks, grid_cores, swiglu=False, cost=None, seg_cap=None):
+    """The cores_per_bank split: (C, cw). Bank slice j = columns [j*cw, (j+1)*cw) of the bank shard, the last
+    one possibly narrower (Refinement 17: C need not divide the bank width), every slice non-empty, whole
+    (gate, up) pairs under swiglu, and C * banks fits the grid. DS_CORES_PER_BANK forces C.
+    Auto with `cost` (geom, tensor_k_tiles; Refinement 17): the smallest C whose compute hides under the bank
+    stream (DS_COMPUTE_SHARE), within `seg_cap` (the home-row segments) when one there does. Without it
+    (or DS_COMPUTE_SHARE None): the narrowest slice >= DS_CORE_N_TILES_MIN (one fp32-DEST subblock wide)."""
     granule = 2 if swiglu else 1
     c_max = max(1, grid_cores // used_banks)
-    ok = [c for c in _divisors(bank_n_tiles) if c <= c_max and (bank_n_tiles // c) % granule == 0]
+
+    def slices(c):
+        cw = _round_up(_cdiv(bank_n_tiles, c), granule)
+        return _cdiv(bank_n_tiles, cw), cw
+
     if DS_CORES_PER_BANK is not None:
-        if DS_CORES_PER_BANK not in ok:
+        c, cw = slices(DS_CORES_PER_BANK)
+        if c != DS_CORES_PER_BANK or c > c_max:
             raise ValueError(f"DS_CORES_PER_BANK={DS_CORES_PER_BANK} does not split {bank_n_tiles} bank columns")
-        return DS_CORES_PER_BANK
-    wide = [c for c in ok if bank_n_tiles // c >= min(DS_CORE_N_TILES_MIN, bank_n_tiles)]
-    return max(wide) if wide else 1
+        return c, cw
+    if cost is None or DS_COMPUTE_SHARE is None:
+        cw_min = _round_up(min(DS_CORE_N_TILES_MIN, bank_n_tiles), granule)
+        return slices(min(c_max, _cdiv(bank_n_tiles, cw_min)))
+    geom, kt = cost
+    stream = kt * bank_n_tiles * geom.b_tile_bytes / DS_BANK_BYTES_PER_CYCLE
+    splits = sorted({slices(c) for c in range(1, c_max + 1)})
+
+    def compute(split):
+        cw = split[1]
+        sb_h, sb_w = choose_subblock(geom.tensor_m_tiles, cw, geom.dest_limit)
+        return kt * geom.tensor_m_tiles * cw * tile_k_cycles(geom, sb_h, sb_w) + DS_COMPUTE_FIXED_CYCLES
+
+    for cap in ([seg_cap] if seg_cap else []) + [c_max]:
+        ok = [sp for sp in splits if sp[0] <= cap and compute(sp) <= DS_COMPUTE_SHARE * stream]
+        if ok:
+            return ok[0]
+    return min((sp for sp in splits if sp[0] <= (seg_cap or c_max)), key=compute)
+
+
+def _ds_segment_cap(primaries, grid):
+    """The fewest cores any bank's home-row segment holds (its primary up to the row's next primary, +x)."""
+    xs = {}
+    for c in primaries:
+        xs.setdefault(c.y, []).append(c.x)
+    cap = grid.x
+    for row in xs.values():
+        row = sorted(row)
+        for i, x in enumerate(row):
+            nxt = row[(i + 1) % len(row)]
+            cap = min(cap, (nxt - x) % grid.x or grid.x)
+    return cap
 
 
 def _ds_bank_cores(primaries, cores_per_bank, grid):
-    """workers[w * C + j]: bank w's optimal worker (j = 0), then its C - 1 nearest unclaimed cores -- the
-    same row first (right before left), then the nearest rows -- so the slice readers sit by their bank."""
+    """workers[w * C + j]: bank w's optimal worker (j = 0), then C - 1 more unclaimed cores.
+
+    DS_PLACEMENT "segment" (Refinement 17): bank w first takes its home-row segment -- the cores from its
+    primary in the NoC0 travel direction (+x, wrapping) up to the next bank primary of the row -- so no
+    bank's read responses cross another bank's row links (logical row 9 holds two banks: with "near" the
+    col-6 bank's left-hand slice reader wrapped through bank 0's links, and both banks' streams slowed
+    ~20 %). Cores beyond the segment are the nearest unclaimed ones (rows first). "near" (Refinement 6):
+    the nearest unclaimed cores, the same row first (right before left), then the nearest rows."""
     taken = {(c.x, c.y) for c in primaries}
+    prim_x = {}
+    for c in primaries:
+        prim_x.setdefault(c.y, set()).add(c.x)
     workers = []
     for p in primaries:
         workers.append(p)
+        picked = []
+        if DS_PLACEMENT == "segment":
+            for d in range(1, grid.x):
+                x = (p.x + d) % grid.x
+                if x in prim_x[p.y] or len(picked) == cores_per_bank - 1:
+                    break
+                if (x, p.y) not in taken:
+                    picked.append((x, p.y))
+                    taken.add((x, p.y))
         cands = sorted(
             ((x, y) for x in range(grid.x) for y in range(grid.y) if (x, y) not in taken),
             key=lambda xy: (abs(xy[1] - p.y), abs(xy[0] - p.x), xy[0] < p.x, xy[1] < p.y),
         )
-        for x, y in cands[: cores_per_bank - 1]:
-            taken.add((x, y))
-            workers.append(ttnn.CoreCoord(x, y))
+        for xy in cands[: cores_per_bank - 1 - len(picked)]:
+            taken.add(xy)
+            picked.append(xy)
+        workers.extend(ttnn.CoreCoord(x, y) for x, y in picked)
     return workers
 
 
@@ -1567,10 +2376,13 @@ def ds_weight_depth(geom: Geometry, topo: DramShardedTopology, blk: Blocking, bu
     return DEPTH_WEIGHT
 
 
-def plan_dram_sharded(a, b, out, fp32_dest_acc_en, epilogue="none", row=None, residual=None):
-    """R4 blocking decision (geometry, topology, blocking). Exposed for tests / perf tooling."""
-    geom = _geometry(a, b, out, fp32_dest_acc_en, epilogue, row, residual)
-    topo = dram_sharded_topology(a, b, geom.swiglu)
+def plan_dram_sharded(
+    a, b, out, fp32_dest_acc_en, epilogue="none", row=None, residual=None, math_fidelity=ttnn.MathFidelity.HiFi4
+):
+    """R4 blocking decision (geometry, topology, blocking). Exposed for tests / perf tooling. `math_fidelity`
+    feeds the cores_per_bank cost rule (HiFi4, the op's default, when the caller has no compute config)."""
+    geom = _geometry(a, b, out, fp32_dest_acc_en, epilogue, row, residual, math_fidelity)
+    topo = dram_sharded_topology(a, b, geom.swiglu, geom)
     budget = l1_cb_budget(a.device(), [t for t in (a, b, out, row, residual) if t is not None])
     return geom, topo, choose_dram_sharded_blocking(geom, topo, budget)
 
@@ -1582,7 +2394,14 @@ def create_dram_sharded_program_descriptor(a, b, out, compute_config, epilogue="
     receiver rectangle only lands the multicast and exits). Compute and writer run on the workers."""
     device = a.device()
     geom, topo, blk = plan_dram_sharded(
-        a, b, out, bool(compute_config.fp32_dest_acc_en), epilogue=epilogue, row=row, residual=residual
+        a,
+        b,
+        out,
+        bool(compute_config.fp32_dest_acc_en),
+        epilogue=epilogue,
+        row=row,
+        residual=residual,
+        math_fidelity=compute_config.math_fidelity,
     )
     budget = l1_cb_budget(device, [t for t in (a, b, out, row, residual) if t is not None])
     depth_weight = ds_weight_depth(geom, topo, blk, budget)
@@ -1678,10 +2497,11 @@ def create_dram_sharded_program_descriptor(a, b, out, compute_config, epilogue="
     sw, cw, cpb = topo.bank_n_tiles, topo.core_n_tiles, topo.cores_per_bank
 
     def worker_cols(i):
-        # Worker i = bank i // C, slice i % C: its first B column and valid column count (0 when the
-        # slice lies wholly in the last bank's padding).
+        # Worker i = bank i // C, slice i % C: its first B column and valid column count (narrower for a
+        # bank's last slice when C does not divide the bank width; 0 when the slice lies wholly in the
+        # last bank's padding).
         col0 = (i // cpb) * sw + (i % cpb) * cw
-        return col0, max(0, min(cw, geom.tensor_n_tiles - col0))
+        return col0, max(0, min(cw, sw - (i % cpb) * cw, geom.tensor_n_tiles - col0))
 
     def reader_args(w):
         # w = None: a non-worker core of the broadcast (no B columns; it reads only nb_m and a_addr).
@@ -1774,6 +2594,8 @@ def create_dram_sharded_program_descriptor(a, b, out, compute_config, epilogue="
             ttnn.attach_absent_mcast(wr, "act")
     for r in readers:
         ttnn.attach_absent_mcast(r, "weight")
+    for k in (*readers, *writers, compute):
+        k.defines = list(k.defines) + [(d, "1") for d in ABLATE_DEFINES.split("+") if d]
     descriptor.kernels = [*readers, *writers, compute]
     return descriptor
 
@@ -2033,12 +2855,14 @@ def _sharded_b_depth(round_kblocks, walk_k_blocks):
     return round_kblocks if walk_k_blocks <= round_kblocks else DEPTH_WEIGHT * round_kblocks
 
 
-def sharded_b_round(geom: Geometry, blk: Blocking, walk_k_blocks, budget, in_place, act_cb):
+def sharded_b_round(geom: Geometry, blk: Blocking, walk_k_blocks, budget, in_place, act_cb, round_bytes=None):
     """R2a / R3a: K-blocks per B round -- the smallest divisor g of num_k_blocks whose round carries
-    SHARDED_B_ROUND_BYTES (else all of them), shrunk while its 2g-deep weight CB does not fit the budget."""
+    `round_bytes` (default SHARDED_B_ROUND_BYTES; else all of them), shrunk while its 2g-deep weight CB does not
+    fit the budget."""
+    round_bytes = SHARDED_B_ROUND_BYTES if round_bytes is None else round_bytes
     kblock_bytes = blk.block_k_tiles * blk.block_n_tiles * geom.b_tile_bytes
     divs = sorted(_divisors(blk.num_k_blocks))
-    g = next((d for d in divs if d * kblock_bytes >= SHARDED_B_ROUND_BYTES), divs[-1])
+    g = next((d for d in divs if d * kblock_bytes >= round_bytes), divs[-1])
     for d in reversed([d for d in divs if d <= g]):
         f = _footprint(
             geom,
@@ -2055,25 +2879,85 @@ def sharded_b_round(geom: Geometry, blk: Blocking, walk_k_blocks, budget, in_pla
     return 1
 
 
-def _sharded_b_channel(device, geom: Geometry, topo: BlockShardedTopology):
+def sharded_b_groups(topo: BlockShardedTopology):
+    """The B groups' core lists: R2 under SHARDED_B_RECT_GROUPS, the shard cores split into rectangles (runs
+    of grid rows with the same contiguous column span, at most SHARDED_B_GROUP_ROWS rows each); else [None]
+    (one channel over the whole core set: R3's grid columns, R2's single group)."""
+    if not topo.core_list or not SHARDED_B_RECT_GROUPS:
+        return [None]
+    by_row = {}
+    for c in topo.core_list:
+        by_row.setdefault(c.y, []).append(c.x)
+    spans = []  # (y, x0, x1) contiguous column runs per grid row
+    for y in sorted(by_row):
+        xs = sorted(by_row[y])
+        x0 = xs[0]
+        for i in range(1, len(xs) + 1):
+            if i == len(xs) or xs[i] != xs[i - 1] + 1:
+                spans.append((y, x0, xs[i - 1]))
+                if i < len(xs):
+                    x0 = xs[i]
+    groups = []  # [y0, y1, x0, x1]
+    cap = SHARDED_B_GROUP_ROWS or len(by_row)
+    for y, x0, x1 in spans:
+        g = next((g for g in groups if g[1] == y - 1 and g[2] == x0 and g[3] == x1 and g[1] - g[0] + 1 < cap), None)
+        if g is None:
+            groups.append([y, y, x0, x1])
+        else:
+            g[1] = y
+    return [[ttnn.CoreCoord(x, y) for y in range(y0, y1 + 1) for x in range(x0, x1 + 1)] for y0, y1, x0, x1 in groups]
+
+
+def _sharded_b_channel(
+    device, geom: Geometry, topo: BlockShardedTopology, one_shot=False, cores=None, noc=ttnn.NOC.NOC_0, min_saved=None
+):
     """R2a / R3a: the weight channel (an unattached ttnn.Mcast), or None where the per-core reads stay: the
     knob is off, B is batched (it varies along the rows), a group is a single core, R3 saves less than
     BS_B_MCAST_MIN_SAVED_BYTES of B re-reads, or the receiver set is not multicastable (an R2 core list of
-    more than three rectangles)."""
-    if not SHARDED_B_MCAST or geom.tensor_batches != 1 or topo.rows < 2:
+    more than three rectangles). `one_shot` selects the handshake-free single-delivery channel
+    (SHARDED_B_ONE_SHOT); `cores` (an R2 B group, sharded_b_groups) restricts the channel to that group."""
+    if not SHARDED_B_MCAST or geom.tensor_batches != 1 or topo.rows < 2 or (cores is not None and len(cores) < 2):
         return None
     saved = (topo.rows - 1) * geom.tensor_k_tiles * geom.tensor_n_tiles * geom.b_tile_bytes
-    if topo.cols > 1 and saved < BS_B_MCAST_MIN_SAVED_BYTES:
+    if topo.cols > 1 and saved < (BS_B_MCAST_MIN_SAVED_BYTES if min_saved is None else min_saved):
         return None
     staggered = ttnn.McastFixedSenderConfig(
         sender_index=SHARDED_B_INJECTOR, placement=ttnn.McastSenderPlacement.Staggered
     )
     # Groups = grid columns (R3; R2 is a single column of `rows` shard cores).
     order = ttnn.McastCoreOrder.ColumnMajor if topo.core_list == () else ttnn.McastCoreOrder.RowMajor
+    receivers, size = topo.core_set, topo.rows
+    if cores is not None:
+        receivers, size = ttnn.CoreRangeSet([ttnn.CoreRange(c, c) for c in cores]), len(cores)
     try:
-        return ttnn.Mcast(device, ttnn.McastConfig(handshake=True), topo.core_set, topo.rows, staggered, order)
+        return ttnn.Mcast(device, ttnn.McastConfig(noc=noc, handshake=not one_shot), receivers, size, staggered, order)
     except RuntimeError:
         return None
+
+
+def sharded_b_one_shot(geom: Geometry, blk: Blocking, walk_k_blocks, b_round, b_chunks, budget, in_place, act_cb):
+    """Refinement 18: (one_shot, row_tail_pages). The R2a / R3a weight channel runs handshake-free with one
+    delivery per walk when the walk is a single B round sent as one chunk; a bias / gate row then rides in
+    `row_tail_pages` extra cb_weight_tiles pages past the round (0 without a row). Off (False, 0) when the knob
+    is off or the tail does not fit the L1 budget (a second, row delivery would need the handshake)."""
+    if not (SHARDED_B_ONE_SHOT and walk_k_blocks == b_round and b_chunks == 1):
+        return False, 0
+    if geom.epilogue not in ("bias", "bias_relu", "addcmul"):
+        return True, 0
+    tail = _cdiv(blk.block_n_tiles * geom.row_tile_bytes, geom.b_tile_bytes)
+    f = _footprint(
+        geom,
+        blk.block_m_tiles,
+        blk.block_n_tiles,
+        blk.block_k_tiles,
+        partials=blk.use_partials,
+        out_in_place=in_place,
+        depth_weight=_sharded_b_depth(b_round, walk_k_blocks),
+        act_cb=act_cb,
+    )
+    if f + tail * geom.b_tile_bytes > budget:
+        return False, 0
+    return True, tail
 
 
 def _weight_depth(walk_k_blocks):
@@ -2118,7 +3002,6 @@ def create_block_sharded_program_descriptor(
     cb_row = CB_GATE_ROW if epilogue == "addcmul" else CB_BIAS_ROW
     cb_out = CB_OUTPUT_SHARD if in_place else CB_OUTPUT_TILES
     row_mcast = BS_ROW_MCAST and topo.cols > 1
-    mc_weight = _sharded_b_channel(device, geom, topo)
     out_div = 2 if geom.swiglu else 1
     bn_full = topo.out_w_tiles * out_div  # B columns per grid column
     # Every core of a row walks the same nominal block sequence (lockstep CB pointers for the multicast).
@@ -2127,12 +3010,71 @@ def create_block_sharded_program_descriptor(
     # A single K shard (R2): compute consumes the resident shard directly; no cb_act_tiles exists.
     cb_act_compute = CB_ACT_SHARD if topo.act_resident else CB_ACT_TILES
     walk_k_blocks = nb_m * nb_n * blk.num_k_blocks * blk.block_batches
-    b_round, b_chunks, b_chunk_k = 1, 1, 1
-    if mc_weight is not None:
-        budget = l1_cb_budget(device, [t for t in (a, b, out, row, residual) if t is not None])
-        b_round = sharded_b_round(geom, blk, walk_k_blocks, budget, in_place, act_cb=not topo.act_resident)
-        b_chunks, b_chunk_k = sharded_b_chunks(geom, blk, b_round)
+    # The B round as the channel would carry it (one round in one chunk selects the one-shot channel).
+    budget = l1_cb_budget(device, [t for t in (a, b, out, row, residual) if t is not None])
+    act_cb = not topo.act_resident
+    # R3 split roles (BS_B_ON_WRITER): the B half on BRISC / NoC1 when the output needs no writer.
+    split_roles = BS_B_ON_WRITER and topo.cols > 1 and in_place
+    b_round = sharded_b_round(
+        geom,
+        blk,
+        walk_k_blocks,
+        budget,
+        in_place,
+        act_cb=act_cb,
+        round_bytes=BS_SPLIT_B_ROUND_BYTES if split_roles else None,
+    )
+    b_chunks, b_chunk_k = sharded_b_chunks(geom, blk, b_round)
+    one_shot, row_tail = sharded_b_one_shot(geom, blk, walk_k_blocks, b_round, b_chunks, budget, in_place, act_cb)
+    b_noc = ttnn.NOC.NOC_1 if split_roles else ttnn.NOC.NOC_0
+    # One weight channel per B group (R3 / single-group R2: one channel over the whole core set).
+    b_groups = sharded_b_groups(topo)
+    gate = BS_SPLIT_B_MCAST_MIN_SAVED_BYTES if split_roles else None
+    b_channels = [
+        _sharded_b_channel(device, geom, topo, one_shot=one_shot, cores=g, noc=b_noc, min_saved=gate) for g in b_groups
+    ]
+    mc_weight = next((ch for ch in b_channels if ch is not None), None)
+    a_round_bytes = blk.block_m_tiles * blk.block_k_tiles * geom.a_tile_bytes
+    single_row = BS_SPLIT_SINGLE_ROW and topo.rows == 1
+    if split_roles and mc_weight is None and a_round_bytes < BS_SPLIT_MIN_A_ROUND_BYTES and not single_row:
+        split_roles = False  # (no channel was built, so nothing is bound to NoC1)
+    if mc_weight is None:
+        b_round, b_chunks, b_chunk_k, row_tail = 1, 1, 1, 0
     depth_weight = _sharded_b_depth(b_round, walk_k_blocks)
+    if split_roles and mc_weight is None and walk_k_blocks > depth_weight:
+        # The split's per-core B path: read ahead (BS_SPLIT_B_DEPTH K-blocks) while L1 allows.
+        for d in range(min(BS_SPLIT_B_DEPTH, walk_k_blocks), depth_weight, -1):
+            f = _footprint(
+                geom,
+                blk.block_m_tiles,
+                blk.block_n_tiles,
+                blk.block_k_tiles,
+                partials=blk.use_partials,
+                out_in_place=in_place,
+                depth_weight=d,
+                act_cb=act_cb,
+            )
+            if f <= budget:
+                depth_weight = d
+                break
+
+    # R3a one-shot A exchange: the walk's only block, every K-block slot resident at once (BS_A_ONE_SHOT).
+    a_one_shot = False
+    if BS_A_ONE_SHOT and row_mcast and walk_k_blocks == blk.num_k_blocks:
+        kwalk = blk.block_m_tiles * blk.block_n_tiles * geom.tensor_k_tiles * tile_k_cycles(geom, blk.sb_h, blk.sb_w)
+        f = _footprint(
+            geom,
+            blk.block_m_tiles,
+            blk.block_n_tiles,
+            blk.block_k_tiles,
+            partials=blk.use_partials,
+            out_in_place=in_place,
+            depth_weight=depth_weight,
+            act_cb=True,
+            depth_act=blk.num_k_blocks,
+        )
+        a_one_shot = kwalk <= BS_A_ONE_SHOT_MAX_KWALK_CYCLES and f + row_tail * geom.b_tile_bytes <= budget
+    depth_act = blk.num_k_blocks if a_one_shot else DEPTH_ACT
 
     # ---- CBs ----
     # The own K-slice: backed on A's resident shard (zero-copy).
@@ -2140,11 +3082,18 @@ def create_block_sharded_program_descriptor(
     act_shard_cb.core_ranges = grid
     cbs = [
         act_shard_cb,
-        _cb(CB_WEIGHT_TILES, b.dtype, geom.b_tile_bytes, depth_weight * blk.block_k_tiles * blk.block_n_tiles, grid),
+        # (+ the one-shot channel's row tail: the walk's first bias / gate row rides in B's delivery)
+        _cb(
+            CB_WEIGHT_TILES,
+            b.dtype,
+            geom.b_tile_bytes,
+            depth_weight * blk.block_k_tiles * blk.block_n_tiles + row_tail,
+            grid,
+        ),
     ]
     if not topo.act_resident:
         cbs.append(
-            _cb(CB_ACT_TILES, a.dtype, geom.a_tile_bytes, DEPTH_ACT * blk.block_m_tiles * blk.block_k_tiles, grid)
+            _cb(CB_ACT_TILES, a.dtype, geom.a_tile_bytes, depth_act * blk.block_m_tiles * blk.block_k_tiles, grid)
         )
     if in_place:
         # Output packed in place into the core's own L1 shard (block_n == the shard's B columns).
@@ -2170,21 +3119,26 @@ def create_block_sharded_program_descriptor(
 
     row_t = row if row is not None else b
     res_t = residual if residual is not None else b
-    reader_ct = [
-        *_reader_ct(geom, blk, a, b, epilogue, cb_row, row_t, res_t),
-        0,  # operand_mcast
-        0,  # a_sends
-        0,  # b_sends
-        *_DS_ROLE_ABSENT,
-        1,  # block_sharded (R3 / R2 walk)
-        int(row_mcast),
-        CB_ACT_SHARD,
-        int(mc_weight is not None),
-        b_chunks,
-        b_chunk_k,
-        b_round,
-        *_reader_accessor_ct(a, b, row_t, res_t),
-    ]
+
+    def reader_ct(mc, act=True):
+        # A group without a channel (a single-core R2 group) reads its own B: one K-block per round. `act` False:
+        # the B-half kernel of the split roles (no A exchange there).
+        return [
+            *_reader_ct(geom, blk, a, b, epilogue, cb_row, row_t, res_t),
+            0,  # operand_mcast
+            0,  # a_sends
+            0,  # b_sends
+            *_DS_ROLE_ABSENT,
+            1,  # block_sharded (R3 / R2 walk)
+            int(row_mcast and act),
+            CB_ACT_SHARD,
+            int(mc is not None),
+            b_chunks if mc is not None else 1,
+            b_chunk_k if mc is not None else 1,
+            b_round if mc is not None else 1,
+            *_reader_accessor_ct(a, b, row_t, res_t),
+        ]
+
     writer_ct = _writer_ct(cb_out, blk, out_block_n_tiles, geom, out, out_in_place=in_place)
     compute_ct = _compute_ct(cb_out, blk, epilogue, cb_row, out, swiglu_natural_pairs=False, own_round_slot=row_mcast)
     compute_ct[0] = cb_act_compute
@@ -2192,7 +3146,7 @@ def create_block_sharded_program_descriptor(
     a_addr, b_addr, out_addr = a.buffer_address(), b.buffer_address(), out.buffer_address()
     row_addr = row.buffer_address() if row is not None else 0
     res_addr = residual.buffer_address() if residual is not None else 0
-    reader_rt, writer_rt, compute_rt = ttnn.RuntimeArgs(), ttnn.RuntimeArgs(), ttnn.RuntimeArgs()
+    reader_args, writer_rt, compute_rt = {}, ttnn.RuntimeArgs(), ttnn.RuntimeArgs()
     for r in range(topo.rows):
         b0, batches_valid, row0, rows_valid = rows.region(geom, r, topo.shard_m_tiles)
         for c in range(topo.cols):
@@ -2200,7 +3154,7 @@ def create_block_sharded_program_descriptor(
             col0 = c * bn_full
             cols_valid = max(0, min(bn_full, geom.tensor_n_tiles - col0))
             region = [b0, batches_valid, row0, rows_valid, col0, cols_valid, 1, nb_m, nb_n]
-            reader_rt[core.x][core.y] = [
+            reader_args[(core.x, core.y)] = [
                 a_addr,
                 b_addr,
                 *region,
@@ -2216,13 +3170,58 @@ def create_block_sharded_program_descriptor(
             writer_rt[core.x][core.y] = [out_addr, *out_region, geom.tensor_m_tiles, geom.out_n_tiles]
             compute_rt[core.x][core.y] = [nb_m * nb_n, c]
 
-    reader = ttnn.KernelDescriptor(
-        kernel_source=str(KERNEL_DIR / "genify_matmul_reader.cpp"),
-        core_ranges=grid,
-        compile_time_args=reader_ct,
-        runtime_args=reader_rt,
-        config=ttnn.ReaderConfigDescriptor(),  # NCRISC / NOC_0
-    )
+    def reader(cores, mc, role=0):
+        rt = ttnn.RuntimeArgs()
+        for x, y in cores:
+            rt[x][y] = reader_args[(x, y)]
+        whole = len(b_groups) == 1 and role != 3
+        k = ttnn.KernelDescriptor(
+            kernel_source=str(KERNEL_DIR / "genify_matmul_reader.cpp"),
+            core_ranges=grid if whole else ttnn.CoreRangeSet([ttnn.CoreRange(c, c) for c in cores]),
+            compile_time_args=reader_ct(mc if role not in (1, 3) else None, act=role not in (2, 3)),
+            runtime_args=rt,
+            # NCRISC / NOC_0; the split roles' B half and the B-read helper: BRISC / NOC_1 (the writer's slot)
+            config=ttnn.WriterConfigDescriptor() if role in (2, 3) else ttnn.ReaderConfigDescriptor(),
+        )
+        if row_tail and mc is not None and role != 1:
+            k.defines = list(k.defines) + [("GM_BS_ROW_TAIL", "1")]
+        if role:
+            k.defines = list(k.defines) + [("GM_BS_ROLE", str(role))]
+        if a_one_shot and role != 2:
+            k.defines = list(k.defines) + [("GM_BS_A_ONE_SHOT", "1")]
+        if (
+            role == 2
+            and mc is None
+            and BS_SPLIT_B_LOOKAHEAD
+            and depth_weight >= walk_k_blocks == blk.num_k_blocks <= 14
+        ):
+            # (b_round is 1 without a channel)
+            k.defines = list(k.defines) + [("GM_BS_B_AHEAD", str(BS_SPLIT_B_LOOKAHEAD))]
+        return k
+
+    if split_roles:
+        # readers[0]: the A half (NCRISC, act channel); b_readers: the B half (BRISC, weight channel); no writer.
+        readers = [reader(list(reader_args), None, role=1)]
+        b_readers = [reader(list(reader_args), b_channels[0], role=2)]
+        helpers = []
+    else:
+        readers = [
+            reader(list(reader_args) if g is None else [(c.x, c.y) for c in g], mc)
+            for g, mc in zip(b_groups, b_channels)
+        ]
+        b_readers = readers
+        # R2a B-read helper: BRISC of each multicasting group's injector (its fixed sender: the group's
+        # SHARDED_B_INJECTOR-th core in row-major order; each R2 group is its own Mcast, group index 0).
+        helpers = []
+        # (R2 only -- topo.core_list: its groups' fixed senders are known here; R3's single-K-shard grid is not)
+        if SHARDED_B_READ_HELPER and topo.core_list and in_place and one_shot and blk.block_k_tiles >= 2:
+            injectors = []
+            for g, mc in zip(b_groups, b_channels):
+                if mc is not None:
+                    members = sorted(((c.x, c.y) for c in (g or topo.core_list)), key=lambda c: (c[1], c[0]))
+                    injectors.append(members[SHARDED_B_INJECTOR % len(members)])
+            if injectors:
+                helpers = [reader(injectors, None, role=3)]
     writer = ttnn.KernelDescriptor(
         kernel_source=str(KERNEL_DIR / "genify_matmul_writer.cpp"),
         core_ranges=grid,
@@ -2237,28 +3236,59 @@ def create_block_sharded_program_descriptor(
         runtime_args=compute_rt,
         config=compute_config,
     )
+    for k in {id(k): k for k in (*readers, *b_readers, writer, compute)}.values():
+        k.defines = list(k.defines) + [(d, "1") for d in ABLATE_DEFINES.split("+") if d]
     descriptor = ttnn.ProgramDescriptor(kernels=[], semaphores=[], cbs=cbs)
     if row_mcast:
         # One channel group per grid row (RowMajor groups of `cols` cores); the senders rotate through
         # the row in column (= K shard) order, so round kb's sender is the core owning K shard kb.
+        # (One-shot exchange: handshake-free on a counter, every core sending once, all at once.)
         mc = ttnn.Mcast(
             device,
-            ttnn.McastConfig(handshake=True),
+            (
+                ttnn.McastConfig(handshake=False, data_ready=ttnn.McastDataReady.Counter)
+                if a_one_shot
+                else ttnn.McastConfig(handshake=True)
+            ),
             grid,
             topo.cols,
             ttnn.McastRotatingSenderConfig(),
             ttnn.McastCoreOrder.RowMajor,
         )
-        mc.attach(descriptor, "act", [reader], 0)
+        mc.attach(descriptor, "act", readers, 0)  # (R3: a single A reader)
         next_sem = mc.next_semaphore_id()
     else:
-        ttnn.attach_absent_mcast(reader, "act")
+        for k in readers:
+            ttnn.attach_absent_mcast(k, "act")
         next_sem = 0
-    if mc_weight is not None:
-        # R2a / R3a: B down each grid column (R2: to every shard core) from the group's fixed injector.
-        mc_weight.attach(descriptor, "weight", [reader], next_sem)
-    else:
-        ttnn.attach_absent_mcast(reader, "weight")
+    for k, mc in zip(b_readers, b_channels):
+        if mc is not None:
+            # R2a / R3a: B down each grid column (R2: to every core of the B group) from its fixed injector.
+            # R2's groups are disjoint core sets: each attaches its own semaphores.
+            mc.attach(descriptor, "weight", [k], next_sem)
+            next_sem = mc.next_semaphore_id()
+        else:
+            ttnn.attach_absent_mcast(k, "weight")
+    if split_roles:
+        ttnn.attach_absent_mcast(readers[0], "weight")
+        ttnn.attach_absent_mcast(b_readers[0], "act")
+        descriptor.kernels = [*readers, *b_readers, compute]
+        return descriptor
+    if helpers:
+        # One local post word per core (written by the helper, read by the injector's reader); no writer (in place).
+        sem = max([sm.id for sm in descriptor.semaphores], default=-1) + 1
+        descriptor.semaphores = list(descriptor.semaphores) + [
+            ttnn.SemaphoreDescriptor(id=sem, core_ranges=grid, initial_value=0)
+        ]
+        for k in readers:
+            if b_channels[readers.index(k)] is not None:
+                k.defines = list(k.defines) + [("GM_BS_B_HELPER_SEM", str(sem))]
+        for k in helpers:
+            k.defines = list(k.defines) + [("GM_BS_B_HELPER_SEM", str(sem))]
+            ttnn.attach_absent_mcast(k, "act")
+            ttnn.attach_absent_mcast(k, "weight")
+        descriptor.kernels = [*readers, *helpers, compute]
+        return descriptor
     ttnn.attach_absent_mcast(writer, "act")  # the writer's R4 A-round role is absent
-    descriptor.kernels = [reader, writer, compute]
+    descriptor.kernels = [*readers, writer, compute]
     return descriptor

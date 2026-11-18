@@ -68,8 +68,10 @@ def _run_both(
     real_channel, real_plan = pd._sharded_b_channel, pd.plan_block_sharded
 
     def spy_channel(*args, **kw):
+        # Refinement 18: R2 builds one channel per B group (rectangle); "mcast" = some group multicasts.
         channel = real_channel(*args, **kw)
-        seen["mcast"] = channel is not None
+        seen["mcast"] = seen.get("mcast", False) or channel is not None
+        seen["channels"] = seen.get("channels", 0) + int(channel is not None)
         return channel
 
     def spy_plan(*args, **kw):
@@ -85,6 +87,7 @@ def _run_both(
         outs.append(ttnn.to_torch(genify_matmul(ta, tb, **kwargs)))
     assert list(outs[1].shape)[-1] == n_out
     assert torch.equal(outs[0], outs[1]), f"max diff {(outs[0].float() - outs[1].float()).abs().max()}"
+    seen["out"] = outs[1]
     return seen
 
 
@@ -110,9 +113,16 @@ def test_bs_multi_kblock_rounds(device, monkeypatch):
 
 
 def test_bs_traffic_gate(device, monkeypatch):
-    """R3 keeps the per-core B reads when the multicast would save less than BS_B_MCAST_MIN_SAVED_BYTES (PDL
-    res4 reduce: 0.97 MB, measured slower with the multicast) and multicasts above it (res5 reduce, 5 MB)."""
+    """R3 on one reader keeps the per-core B reads when the multicast would save less than
+    BS_B_MCAST_MIN_SAVED_BYTES (PDL res4 reduce: 0.97 MB, measured slower with the multicast) and multicasts above
+    it (res5 reduce, 5 MB). Under the Refinement 18 split roles (B on its own RISC) the gate is
+    BS_SPLIT_B_MCAST_MIN_SAVED_BYTES (0: res4 reduce multicasts too)."""
+    monkeypatch.setattr(pd, "BS_B_ON_WRITER", False)
     assert not _run_both(device, monkeypatch, 8192, 512, 256, _rect(8, 8), [1024, 64], _BS, "bias_relu", r3_gate=True)[
+        "mcast"
+    ]
+    monkeypatch.setattr(pd, "BS_B_ON_WRITER", True)
+    assert _run_both(device, monkeypatch, 8192, 512, 256, _rect(8, 8), [1024, 64], _BS, "bias_relu", r3_gate=True)[
         "mcast"
     ]
     assert _run_both(device, monkeypatch, 2048, 1024, 512, _rect(8, 10), [224, 128], _BS, "bias_relu", r3_gate=True)[
@@ -174,3 +184,91 @@ def test_hs_scattered_cores_fall_back(device, monkeypatch):
     cores = [ttnn.CoreCoord(x, 0) for x in (0, 2, 4, 6)]
     grid = ttnn.CoreRangeSet([ttnn.CoreRange(c, c) for c in cores])
     assert not _run_both(device, monkeypatch, 4 * 64, 128, 128, grid, [64, 128], _HS, "bias", dtype=_BF16)["mcast"]
+
+
+@pytest.mark.parametrize(
+    "case",
+    [
+        # (cores, m, k, n, epilogue): PDL heads (1-tile B, 103 cores = 9 x 11 + 4), res3 expand (86 = 7 x 11 + 9,
+        # bias row tail of 16 tiles), addcmul (gate row tail + per-core residual), swiglu (no row: no tail).
+        (103, 103 * 64, 32, 32, "bias"),
+        (86, 86 * 96, 128, 512, "bias_relu"),
+        (24, 24 * 64, 256, 256, "addcmul"),
+        (24, 24 * 64, 256, 256, "swiglu"),
+    ],
+    ids=["heads", "res3_expand", "addcmul", "swiglu"],
+)
+def test_hs_one_shot_rect_groups(device, monkeypatch, case):
+    """Refinement 18: a single-round R2 walk runs one B group per rectangle of the core set (own injector each)
+    on the handshake-free one-shot channel, the first row riding in cb_weight_tiles' tail. Bit-identical to the
+    per-core reads; the plan is asserted through spies."""
+    cores, m, k, n, epilogue = case
+    grid = ttnn.num_cores_to_corerangeset(cores, device.compute_with_storage_grid_size(), True)
+    width = device.compute_with_storage_grid_size().x
+    rects = (1 if cores >= width else 0) + int(cores % width != 0)
+    real_one_shot = pd.sharded_b_one_shot
+    shots = []
+    monkeypatch.setattr(pd, "sharded_b_one_shot", lambda *a: shots.append(real_one_shot(*a)) or shots[-1])
+    seen = _run_both(device, monkeypatch, m, k, n, grid, [m // cores, k], _HS, epilogue, dtype=_BF16)
+    assert seen["channels"] == rects
+    one_shot, tail = shots[-1]
+    assert one_shot and (tail > 0) == (epilogue != "swiglu")
+
+
+@pytest.mark.parametrize(
+    "case",
+    [
+        # (m, k, n, grid x, grid y, shard, epilogue, channel): PDL res5 reduce (multicast B, one K-block per round),
+        # ASPP pool's one grid row (no B group: per-core B on BRISC), addcmul on the res5 grid (per-core residual
+        # on NCRISC).
+        (2048, 1024, 512, 8, 10, [224, 128], "bias_relu", True),
+        (32, 2048, 256, 8, 1, [32, 256], "bias_relu", False),
+        (2048, 1024, 512, 8, 10, [224, 128], "addcmul", True),
+    ],
+    ids=["res5_reduce", "aspp_pool", "addcmul"],
+)
+@pytest.mark.parametrize("lookahead", [0, 2], ids=["ahead0", "ahead2"])
+def test_bs_split_roles(device, monkeypatch, case, lookahead):
+    """Refinement 18 (BS_B_ON_WRITER): an in-place R3 walk runs its B half (B rounds / reads, the bias / gate row)
+    on BRISC as a second reader instance (GM_BS_ROLE 2) and its A half on NCRISC (GM_BS_ROLE 1), with no writer.
+    Bit-identical to the single-reader walk."""
+    m, k, n, gx, gy, shard, epilogue, channel = case
+    # (the parked per-core B lookahead, BS_SPLIT_B_LOOKAHEAD / BS_SPLIT_B_DEPTH: the ASPP pool case runs it at 2)
+    monkeypatch.setattr(pd, "BS_SPLIT_B_LOOKAHEAD", lookahead)
+    monkeypatch.setattr(pd, "BS_SPLIT_B_DEPTH", 16 if lookahead else 2)
+    real = pd.create_block_sharded_program_descriptor
+    roles = []
+
+    def spy(*a, **kw):
+        d = real(*a, **kw)
+        roles.append({v for kern in d.kernels for name, v in kern.defines if name == "GM_BS_ROLE"})
+        return d
+
+    monkeypatch.setattr(pd, "create_block_sharded_program_descriptor", spy)
+    outs = []
+    for split in (False, True):
+        monkeypatch.setattr(pd, "BS_B_ON_WRITER", split)
+        seen = _run_both(device, monkeypatch, m, k, n, _rect(gx, gy), shard, _BS, epilogue, r3_gate=True)
+        assert seen["mcast"] == channel
+        outs.append(seen["out"])
+    assert {"1", "2"} in roles  # the split descriptor carries both halves
+    assert torch.equal(outs[0], outs[1]), f"max diff {(outs[0].float() - outs[1].float()).abs().max()}"
+
+
+@pytest.mark.parametrize(
+    "case",
+    [
+        (32, 2048, 256, 8, 1, [32, 256], "bias_relu", _BF16),  # PDL ASPP pool (one grid row, M = 1)
+        (2048, 1024, 512, 8, 10, [224, 128], "bias_relu", _BFP8),  # PDL res5 reduce (B multicast + split roles)
+    ],
+    ids=["aspp_pool", "res5_reduce"],
+)
+def test_bs_a_one_shot_parked(device, monkeypatch, case):
+    """Refinement 18: the parked one-shot A exchange (BS_A_ONE_SHOT, measured slower) stays a correct live knob:
+    bit-identical to the handshaked rounds."""
+    m, k, n, gx, gy, shard, epilogue, dtype = case
+    outs = []
+    for on in (False, True):
+        monkeypatch.setattr(pd, "BS_A_ONE_SHOT", on)
+        outs.append(_run_both(device, monkeypatch, m, k, n, _rect(gx, gy), shard, _BS, epilogue, dtype=dtype)["out"])
+    assert torch.equal(outs[0], outs[1]), f"max diff {(outs[0].float() - outs[1].float()).abs().max()}"

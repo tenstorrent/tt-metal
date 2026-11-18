@@ -170,7 +170,13 @@ def validate(
     compute_kernel_config=None,
     memory_config=None,
 ):
-    """Runtime support gate: SUPPORTED per axis, then EXCLUSIONS (both NotImplementedError)."""
+    """Runtime support gate: SUPPORTED per axis, then EXCLUSIONS (both NotImplementedError).
+
+    `input_tensor` may be a list of K segments (Refinement 14): segment 0 stands in for the per-tensor axes
+    (the segments share dtype / layout / memory config) and the taggers see the logical concat shape."""
+    a_shape = _logical_a_shape(input_tensor)
+    if isinstance(input_tensor, (list, tuple)):
+        input_tensor = input_tensor[0]
     cfg = _resolve_compute_config(compute_kernel_config)
     axes = {
         "dtype": input_tensor.dtype,
@@ -180,7 +186,7 @@ def validate(
         "placement": _classify_placement(input_tensor, weight),
         "epilogue": _classify_epilogue(bias, activation, residual, gate),
     }
-    inputs = (list(input_tensor.shape), list(weight.shape))
+    inputs = (a_shape, list(weight.shape))
     for axis_name, tagger in INPUT_TAGGERS.items():
         axes[axis_name] = tagger(inputs, axes)
 
@@ -299,12 +305,47 @@ def _check_shard_batches(input_tensor, weight, shard_m_tiles):
 # ---------------------------------------------------------------------------
 
 
+def _logical_a_shape(input_tensor):
+    """A's shape: one tensor's, or concat(A_i, dim=-1)'s for a list of K segments."""
+    if isinstance(input_tensor, (list, tuple)):
+        a_shape = list(input_tensor[0].shape)
+        return a_shape[:-1] + [sum(list(t.shape)[-1] for t in input_tensor)]
+    return list(input_tensor.shape)
+
+
+def _check_segments(segments, weight):
+    """A as K segments (Refinement 14): every A_i is (..., M, K_i) with the same leading dims, dtype, layout and
+    memory config, K_i % 32 == 0 and sum(K_i) == B[-2]; otherwise ValueError."""
+    if len(segments) == 0:
+        raise ValueError("genify_matmul: A as a list of K segments needs at least one segment")
+    if not all(isinstance(t, ttnn.Tensor) for t in segments):
+        raise ValueError("genify_matmul: every K segment of A must be a ttnn.Tensor")
+    a0 = segments[0]
+    s0 = list(a0.shape)
+    if len(s0) < 2:
+        raise ValueError(f"genify_matmul: A segments must have rank >= 2, got shape {s0}")
+    for i, t in enumerate(segments):
+        si = list(t.shape)
+        if len(si) != len(s0) or si[:-1] != s0[:-1]:
+            raise ValueError(f"genify_matmul: K segment {i} shape {si} must match segment 0's leading dims / M {s0}")
+        if si[-1] % TILE:
+            raise ValueError(f"genify_matmul: K segment {i} width K_i={si[-1]} must be a multiple of {TILE}")
+        if t.dtype != a0.dtype or t.layout != a0.layout:
+            raise ValueError(f"genify_matmul: K segment {i} must share segment 0's dtype and layout")
+        mc, mc0 = t.memory_config(), a0.memory_config()
+        if mc.memory_layout != mc0.memory_layout or mc.buffer_type != mc0.buffer_type:
+            raise ValueError(f"genify_matmul: K segment {i} must share segment 0's placement (memory config)")
+    k = sum(list(t.shape)[-1] for t in segments)
+    if k != weight.shape[-2]:
+        raise ValueError(f"genify_matmul: the K segments sum to K={k}, but B[-2]={weight.shape[-2]}")
+
+
 def _is_row_vector(shape, n):
     return len(shape) >= 2 and shape[-1] == n and all(d == 1 for d in shape[:-1])
 
 
 def _check_contract(input_tensor, weight, bias, activation, residual, gate):
-    a_shape = list(input_tensor.shape)
+    a_shape = _logical_a_shape(input_tensor)
     b_shape = list(weight.shape)
     if len(a_shape) < 2:
         raise ValueError(f"genify_matmul: A must have rank >= 2, got shape {a_shape}")
@@ -341,13 +382,27 @@ def _check_contract(input_tensor, weight, bias, activation, residual, gate):
         )
 
 
+def _check_chunks(weight, activation, chunks):
+    """Split output contract: N_out % chunks == 0 and every chunk a whole number of tiles wide."""
+    if isinstance(chunks, bool) or not isinstance(chunks, int) or chunks < 1:
+        raise ValueError(f"genify_matmul: chunks must be an int >= 1, got {chunks!r}")
+    if chunks == 1:
+        # No split: a non-tile-aligned N is validate()'s call (alignment axis -> NotImplementedError).
+        return
+    n_out = weight.shape[-1] // 2 if activation == "swiglu" else weight.shape[-1]
+    if n_out % chunks or (n_out // chunks) % TILE:
+        raise ValueError(
+            f"genify_matmul: chunks={chunks} must split N_out={n_out} into equal widths that are multiples of {TILE}"
+        )
+
+
 # ---------------------------------------------------------------------------
 # Public entry point
 # ---------------------------------------------------------------------------
 
 
 def genify_matmul(
-    input_tensor: ttnn.Tensor,
+    input_tensor,
     weight: ttnn.Tensor,
     *,
     bias: ttnn.Tensor = None,
@@ -357,9 +412,26 @@ def genify_matmul(
     dtype: ttnn.DataType = None,
     memory_config: ttnn.MemoryConfig = None,
     compute_kernel_config: ttnn.ComputeConfigDescriptor = None,
-) -> ttnn.Tensor:
-    """out = epilogue(A @ B) in one device program. See op_design.md."""
+    chunks: int = 1,
+):
+    """out = epilogue(A @ B) in one device program. See op_design.md.
+
+    input_tensor: one tensor A (..., M, K), or a list [A_0, A_1, ...] of K segments read as
+    concat(A_i, dim=-1) without materializing the concatenation (K = the segments' K summed).
+    chunks: > 1 returns the output split along its last dim into `chunks` equal tensors, as a list
+    (Refinement 13): chunk i is columns [i*w, (i+1)*w) of the output, w = N_out / chunks, each written
+    directly by the same program (no full-width intermediate). Interleaved placement only.
+    A list input (Refinement 14): the reader maps each K tile to its segment and local tile, so the
+    concatenation is never built. Interleaved A (DRAM or L1) only.
+    """
+    segments = list(input_tensor) if isinstance(input_tensor, (list, tuple)) else None
+    if segments is not None:
+        _check_segments(segments, weight)
+        if len(segments) == 1:
+            input_tensor = segments[0]  # one segment is the single-tensor call
+            segments = None
     _check_contract(input_tensor, weight, bias, activation, residual, gate)
+    _check_chunks(weight, activation, chunks)
     axes = validate(
         input_tensor,
         weight,
@@ -371,6 +443,18 @@ def genify_matmul(
         memory_config=memory_config,
     )
 
+    if chunks != 1 and axes["placement"] != "interleaved":
+        raise UnsupportedAxisValue(
+            f"genify_matmul: chunks > 1 (split output) is implemented for the interleaved placement only; "
+            f"got {axes['placement']}"
+        )
+    if segments is not None and axes["placement"] != "interleaved":
+        raise UnsupportedAxisValue(
+            f"genify_matmul: A as K segments is implemented for the interleaved placement only; got {axes['placement']}"
+        )
+
+    a_op = segments if segments is not None else input_tensor  # what the program descriptor reads as A
+    input_tensor = segments[0] if segments is not None else input_tensor  # per-tensor properties
     cfg = _resolve_compute_config(compute_kernel_config)
     device = input_tensor.device()
     out_dtype = dtype if dtype is not None else input_tensor.dtype
@@ -386,18 +470,24 @@ def genify_matmul(
     else:
         out_mc = memory_config if memory_config is not None else ttnn.DRAM_MEMORY_CONFIG
 
-    a_shape = list(input_tensor.shape)
+    a_shape = _logical_a_shape(a_op)
     n_out = weight.shape[-1] // 2 if activation == "swiglu" else weight.shape[-1]
-    out_shape = a_shape[:-1] + [n_out]
+    # Split output: `chunks` equal-width tensors, each with memory_config and dtype (chunks == 1: one tensor).
+    out_shape = a_shape[:-1] + [n_out // chunks]
 
     # allocate_tensor_on_device takes positional args only.
-    output_tensor = ttnn.allocate_tensor_on_device(ttnn.Shape(out_shape), out_dtype, ttnn.TILE_LAYOUT, device, out_mc)
+    outputs = [
+        ttnn.allocate_tensor_on_device(ttnn.Shape(out_shape), out_dtype, ttnn.TILE_LAYOUT, device, out_mc)
+        for _ in range(chunks)
+    ]
+    output_tensor = outputs if chunks != 1 else outputs[0]
 
     epilogue = _classify_epilogue(bias, activation, residual, gate)
     row = bias if bias is not None else gate  # the (1, N) row the epilogue broadcasts
     program_descriptor = create_program_descriptor(
-        input_tensor, weight, output_tensor, cfg, epilogue=epilogue, row=row, residual=residual, placement=placement
+        a_op, weight, output_tensor, cfg, epilogue=epilogue, row=row, residual=residual, placement=placement
     )
-    # Exactly one dispatch; the output tensor is last.
-    io_tensors = [t for t in (input_tensor, weight, row, residual) if t is not None]
-    return ttnn.generic_op(io_tensors + [output_tensor], program_descriptor)
+    # Exactly one dispatch; the output tensor(s) last.
+    io_tensors = [t for t in (*(segments or [input_tensor]), weight, row, residual) if t is not None]
+    result = ttnn.generic_op(io_tensors + outputs, program_descriptor)
+    return outputs if chunks != 1 else result

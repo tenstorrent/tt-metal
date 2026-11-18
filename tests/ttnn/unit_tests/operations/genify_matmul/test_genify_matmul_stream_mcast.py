@@ -92,8 +92,10 @@ def test_r1b_multi_block_walk(epilogue, device, monkeypatch):
     _run((a_shape, b_shape), epilogue, device, extras=HIFI2)
 
 
-def test_r1b_act_resident(device):
-    # A one-K-block walk split into N-blocks with A held fronted (Refinement 8) under the A stream.
+def test_r1b_act_resident(device, monkeypatch):
+    # A one-K-block walk split into N-blocks with A held fronted (Refinement 8) under the A stream. The flat split
+    # pinned: the bank-local split (Refinement 15) takes this shape by default and never holds A resident.
+    monkeypatch.setattr(pd, "ACT_STREAM_BANK_LOCAL", False)
     a_shape, b_shape = (1, 128, 384), (384, 16384)
     geom, grid, blk = _plan(device, a_shape, b_shape)
     assert pd.operand_mode(geom, grid, blk) == 2

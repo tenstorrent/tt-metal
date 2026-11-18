@@ -63,6 +63,20 @@ def _apply_knobs(monkeypatch, request):
             raise RuntimeError(f"no candidate {force}")
 
         monkeypatch.setattr(pd, "choose_split", _forced)
+    block = os.environ.get("GENIFY_MATMUL_BLOCK")  # "block_m,block_n[,min_k_blocks]": measure one output blocking
+    if block:
+        bm, bn, *mk = (int(v) for v in block.split(","))
+        orig_blocking = pd.choose_blocking
+
+        def _forced_blocking(geom, grid, budget):
+            blk = orig_blocking(geom, grid, budget)
+            depths = (blk.depth_act, blk.depth_weight)
+            bk_max = pd._block_k_max(geom, bm, bn, budget, depths)
+            if mk:
+                bk_max = min(bk_max, max(pd.BLOCK_K_FLOOR, -(-geom.tensor_k_tiles // mk[0])))
+            return pd._make_blocking(geom, blk.block_batches, bm, bn, bk_max, depths)
+
+        monkeypatch.setattr(pd, "choose_blocking", _forced_blocking)
     if os.environ.get("GENIFY_MATMUL_PLAN") == "1":
         orig = pd.choose_split
 

@@ -529,7 +529,7 @@ class ColParallelLinear(Module):
 
             if self.chunks is not None:
                 if genify.enabled():
-                    # genify over the full N, then the same uniform chunks (one slice each).
+                    # genify writes the same uniform chunks directly (chunks=).
                     outputs = _genify_matmul_split(
                         "ColParallelLinear split",
                         x,
@@ -716,7 +716,7 @@ class RowParallelLinear(Module):
 
             output = None
             if genify.enabled():
-                # genify takes one A: concatenate over K first (a separate op), then one matmul.
+                # genify reads [prefix, suffix] in place as one A concatenated over K.
                 output = _genify_matmul_concat_k(
                     "RowParallelLinear concat-K",
                     list(x),
@@ -978,15 +978,18 @@ def _genify_matmul(
     dtype: ttnn.DataType | None = None,
     memory_config: ttnn.MemoryConfig | None = None,
     compute_kernel_config=None,
-) -> ttnn.Tensor | None:
+    chunks: int = 1,
+) -> ttnn.Tensor | list[ttnn.Tensor] | None:
     """The stock call's result computed by genify_matmul, or None if genify cannot express the call.
 
     Mirrors the stock epilogues: bias; fuse_swiglu (the same (gate, up) tile-pair weight layout,
     output N / 2) -> activation="swiglu"; residual + scalar * (x @ W) * gate -> addcmul (scalar 1,
-    no bias). Returns None (after logging once) for what genify has no epilogue for: a fused GELU,
+    no bias). x may be a list of K segments; chunks > 1 returns the output split into a list.
+    Returns None (after logging once) for what genify has no epilogue for: a fused GELU,
     SwiGLU with bias, addcmul with bias or scalar != 1, sharded or row-major operands, and anything
     genify's own support gate rejects (NotImplementedError).
     """
+    xs = list(x) if isinstance(x, (list, tuple)) else [x]
     if fused_activation is not None:
         return _genify_fallback(site, f"fused activation {fused_activation}")
     if fuse_swiglu and bias is not None:
@@ -995,7 +998,8 @@ def _genify_matmul(
         return _genify_fallback(site, "addcmul with bias")
     if residual is not None and scalar != 1.0:
         return _genify_fallback(site, f"addcmul scalar {scalar}")
-    issue = _genify_operand_issue(input=x, weight=weight, bias=bias, residual=residual, gate=gate)
+    inputs = {f"input[{i}]": t for i, t in enumerate(xs)} if len(xs) > 1 else {"input": xs[0]}
+    issue = _genify_operand_issue(**inputs, weight=weight, bias=bias, residual=residual, gate=gate)
     if issue is not None:
         return _genify_fallback(site, issue)
 
@@ -1003,7 +1007,7 @@ def _genify_matmul(
     if fuse_swiglu and n % 64:
         return _genify_fallback(site, f"SwiGLU needs N % 64 == 0, N = {n}")
     if residual is not None:
-        out_shape = list(x.shape)[:-1] + [n]
+        out_shape = list(xs[0].shape)[:-1] + [n]
         if list(residual.shape) != out_shape:
             # A rank difference in the leading dims is a view; anything else is not this epilogue.
             if list(residual.shape)[-2:] != out_shape[-2:] or math.prod(residual.shape) != math.prod(out_shape):
@@ -1023,6 +1027,7 @@ def _genify_matmul(
             dtype=dtype,
             memory_config=memory_config,
             compute_kernel_config=compute_kernel_config,
+            chunks=chunks,
         )
     except NotImplementedError as e:  # genify's support gate: UnsupportedAxisValue / ExcludedCell
         return _genify_fallback(site, str(e))
@@ -1040,7 +1045,7 @@ def _genify_matmul_split(
     dtype: ttnn.DataType | None,
     compute_kernel_config,
 ) -> list[ttnn.Tensor] | None:
-    """minimal_matmul_split(chunks, dim=-1) as one genify_matmul over the full N plus one slice per chunk."""
+    """minimal_matmul_split(chunks, dim=-1) as one genify_matmul that writes each chunk directly."""
     n_out = weight.shape[-1] // 2 if fuse_swiglu else weight.shape[-1]
     if n_out % (chunks * 32):
         return _genify_fallback(site, f"output width {n_out} does not split into {chunks} tile-aligned chunks")
@@ -1054,12 +1059,11 @@ def _genify_matmul_split(
         dtype=dtype,
         memory_config=x.memory_config(),  # minimal_matmul_split's default
         compute_kernel_config=compute_kernel_config,
+        chunks=chunks,
     )
     if output is None:
         return None
-    if chunks == 1:
-        return [output]
-    return ttnn.chunk(output, chunks, -1)
+    return list(output) if chunks > 1 else [output]
 
 
 def _genify_matmul_concat_k(
@@ -1071,27 +1075,21 @@ def _genify_matmul_concat_k(
     dtype: ttnn.DataType | None,
     compute_kernel_config,
 ) -> ttnn.Tensor | None:
-    """minimal_matmul([x0, x1]) (A concatenated over K) as ttnn.concat + one genify_matmul."""
-    issue = _genify_operand_issue(**{f"input[{i}]": t for i, t in enumerate(xs)})
-    if issue is not None:
-        return _genify_fallback(site, issue)
+    """minimal_matmul([x0, x1]) (A concatenated over K) as one genify_matmul reading both segments in place."""
     widths = [t.shape[-1] for t in xs]
-    # The weight is tile-padded per segment (prepare_weight_for_concatenated_input), so a plain
-    # concat lines up with its rows only when every segment but the last is tile-aligned.
-    if any(w % 32 for w in widths[:-1]) or sum(widths) != weight.shape[-2]:
+    # The weight is tile-padded per segment (prepare_weight_for_concatenated_input); genify's
+    # segments must each be tile-aligned, and then the weight's rows line up with them.
+    if any(w % 32 for w in widths) or sum(widths) != weight.shape[-2]:
         return _genify_fallback(site, f"segment widths {widths} vs weight K {weight.shape[-2]}")
-    x = ttnn.concat(xs, dim=-1, memory_config=xs[0].memory_config())
-    output = _genify_matmul(
+    return _genify_matmul(
         site,
-        x,
+        list(xs),
         weight,
         bias=bias,
         dtype=dtype,
         memory_config=xs[0].memory_config(),  # minimal_matmul's default
         compute_kernel_config=compute_kernel_config,
     )
-    ttnn.deallocate(x)
-    return output
 
 
 def _apply_activation_fn(t: ttnn.Tensor, activation_fn: str | None) -> ttnn.Tensor:

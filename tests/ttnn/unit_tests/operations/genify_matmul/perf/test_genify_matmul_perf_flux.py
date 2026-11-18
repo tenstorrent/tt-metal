@@ -116,3 +116,30 @@ def test_perf_r1b_guard(case, device, monkeypatch, request):
     )
     out = genify_matmul(ta, tb, dtype=o_dtype, compute_kernel_config=cfg, memory_config=mc, **kwargs)
     ttnn.synchronize_device(device)
+
+
+# Refinement 14: A as K segments (FLUX.2 single-block out = [attn | MLP] along K). Each case runs the segmented
+# call and its single-tensor twin, so a profile shows the segment table's cost directly.
+SEGMENT_CASES = [
+    (2304, 6144, [3072, 9216]),  # single out, 47
+    (2048, 6144, [3072, 9216]),  # single out, final block
+]
+
+
+@pytest.mark.parametrize("segmented", [True, False], ids=["segments", "single"])
+@pytest.mark.parametrize("case", SEGMENT_CASES, ids=[f"{m}-{'+'.join(map(str, s))}-{n}" for m, n, s in SEGMENT_CASES])
+def test_perf_flux_segments(case, segmented, device, monkeypatch, request):
+    _apply_knobs(monkeypatch, request)
+    m, n, split = case
+    k = sum(split)
+    torch.manual_seed(0)
+    A = torch.randn(1, m, k)
+    B = torch.randn(k, n) / math.sqrt(k)
+    parts = torch.split(A, split, dim=-1) if segmented else (A,)
+    ta = [create_ttnn_input_tensor(p.contiguous(), device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT) for p in parts]
+    tb = create_ttnn_input_tensor(B, device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
+    cfg = ttnn.ComputeConfigDescriptor(
+        math_fidelity=ttnn.MathFidelity.HiFi2, fp32_dest_acc_en=True, math_approx_mode=False
+    )
+    genify_matmul(ta if segmented else ta[0], tb, compute_kernel_config=cfg)
+    ttnn.synchronize_device(device)

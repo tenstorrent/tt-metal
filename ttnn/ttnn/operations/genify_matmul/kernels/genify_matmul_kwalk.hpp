@@ -2,43 +2,70 @@
 // SPDX-License-Identifier: Apache-2.0
 #pragma once
 
-// Perf 1 graduation from perf_experiments/matmul_kwalk_efficiency (focus whole op 466.3 -> 441.5 us, bit-identical).
+// Perf 1 graduation from perf_experiments/matmul_kwalk_efficiency (focus whole op 466.3 -> 441.5 us, bit-identical);
+// tournament 2 extension from perf_experiments/t2_raw_kwalk_hxw (sb_h x sb_w subblocks + streamed epilogue-none copy).
 // kw::matmul_accumulate_interm -- the K-walk of genify_matmul's matmul_accumulate_block for the
-// (TileRowMajor, packer_l1_acc, LastBlockTarget::Interm, 1 x sb_w subblock) configuration, i.e. what
+// (TileRowMajor, packer_l1_acc, LastBlockTarget::Interm) configuration, i.e. what
 // compute_kernel_lib::matmul_block<false, true, Interm, TileRowMajor, Short, WaitAndPop, WaitAndPop, ...,
-// caller_owns_pack_target> computes, with two mechanism changes. Bit-identical result.
+// caller_owns_pack_target> computes, with two mechanism changes. Bit-identical result (every subblock shape).
 //
 // RAW-LLK justification (bypasses compute_kernel_lib::matmul_block; capability, not ergonomics):
 //  1. DEST advance by address modifier. The stock math call (_llk_math_matmul_, used by every
 //     matmul_block flavour incl. matmul_block_no_mop) writes the DEST offset register (TT_SETC16 via
 //     math::set_dst_write_addr) before EVERY output tile's MVMUL sequence; each such write costs ~1 FPU
 //     cycle on Blackhole (measured: 16 + ~1.3 cyc per LoFi tile-K). Here the offset is written once per
-//     subblock pass; the 16th MVMUL of each tile carries an address modifier that moves the DEST
-//     counter's carry register to the next tile (cr += 64 rows) -- the last tile of the subblock clears
-//     it. The first 15 MVMULs are the stock replay buffer written by llk_math_matmul_init. No helper or
-//     LLK API exposes a multi-tile matmul without the per-tile SETC16.
+//     subblock pass; the last MVMUL of each tile carries an address modifier that moves the DEST counter's
+//     carry register to the next tile (cr += 64 rows) -- the last tile of the subblock clears it. The first 15
+//     MVMULs of each fidelity phase are the stock replay buffer written by llk_math_matmul_init. The stock tile
+//     order is kept: sb_w >= sb_h walks rows (SrcB = A row tile reused across the row, SrcA cleared per tile,
+//     SrcB at each row end), sb_w == 1 walks the one column (SrcA = B tile reused down it, SrcB cleared per
+//     tile). No helper or LLK API exposes a multi-tile matmul without the per-tile SETC16.
+//     Measured (t2_raw_kwalk_hxw, isolated K-walk, 110 cores, no NoC): 16x5 block, 4 x 1, HiFi2, bf16 x bfp8,
+//     fp32 DEST 35.63 -> 33.06 cycles per tile-K (-7.2%); 3 x 1 HiFi2 bf16 -8.5%; 2 x 2 LoFi bfp4 -7.7%;
+//     2 x 4 / 8 x 1 16-bit DEST -9.3% / -8.4%; HiFi4 4 x 1 bf16 -4.9%; 1 x 4 LoFi bfp4 (Perf 1) unchanged.
 //  2. One reserve / one push of the partials block (the helper's caller_owns_pack_target protocol):
 //     no per-row-group reserve/push and no per-K-block drain wait/pop on the UNPACK thread (which made
 //     the unpacker wait for the packer to finish each K-block before unpacking the next).
 //  The packer data format / L1-acc state is also set once (K-block 0 / 1) instead of per subblock.
+//  3. stream_out (epilogue none): the last K-block pushes the partials row group by row group and the identity
+//     copy (copy_tile -> pack_tile, the same numerics as the CopyTile -> PackTile chain) moves each fronted row
+//     group to the output CB one row group behind the walk, so the output leaves during the last K-block instead
+//     of after the walk. The helper has no "accumulate in an L1 partials block, emit per row group on the last
+//     K-block" mode (its Out target re-loads the partials into DEST per subblock, with a reconfig + copy init +
+//     matmul re-init per subblock). Bit-identical to the walk + the whole-block identity copy.
+//     Measured whole op (text-encoder MLP gate 512x5120x16384, bf16 x bfp8, HiFi2): 404.1 -> 379.3 us.
 //
 // Dynamic throttle: the firmware flag is read once per subblock pass (stock reads it per call); a
 // throttled pass runs the stock throttled call and the custom state is re-armed on the way back.
 // Address modifiers used: ADDR_MOD_3, ADDR_MOD_6, ADDR_MOD_7 (math thread), re-armed by the init.
-// Contract: full 32x32 tiles, no transpose, sb_h == 1 (reuse-A path), 1 <= sb_w <= DEST half.
+// Contract: full 32x32 tiles, no transpose, 1 <= sb_h * sb_w <= DEST half, sb_w >= sb_h or sb_w == 1 (a
+// multi-column column walk, sb_h > sb_w > 1 -- 16-bit DEST only -- is not expressed: the caller keeps the helper).
 
 #include <cstdint>
 #include "api/compute/matmul.h"
 #include "api/compute/pack.h"
+#include "api/compute/tile_move_copy.h"
 #include "api/compute/reconfig_data_format.h"
+#include "ttnn/cpp/ttnn/kernel_lib/perf_instrumentation.hpp"
 #include "ttnn/ttnn/operations/genify_matmul/kernels/genify_matmul_kschedule.hpp"
 
 namespace kw {
 
+template <uint32_t rt, uint32_t ct>
+struct Walk {
+    static constexpr bool reuse_a = ct >= rt;
+    static constexpr uint32_t t_dim = reuse_a ? rt : ct;
+    static constexpr uint32_t rut_dim = reuse_a ? ct : rt;
+    // DEST tile index r * ct + c: consecutive in MVMUL order for a row walk and a one-column walk. A multi-column
+    // column walk (sb_h > sb_w > 1, 16-bit DEST only) is not expressed (t2_raw_kwalk_hxw: a DEST-stride-sb_w
+    // walk with a re-base per column measured incorrect), so kwalk_expressible keeps the helper there.
+    static constexpr bool contiguous = reuse_a || ct == 1;
+};
+
 #ifdef TRISC_MATH
 constexpr uint32_t mm_phases = to_underlying(MATH_FIDELITY) == 0 ? 1 : to_underlying(MATH_FIDELITY);
-constexpr uint8_t AM_ADVANCE = ADDR_MOD_3;  // tile t < ct-1 last MVMUL: dest cr += 64, dest = cr
-constexpr uint8_t AM_RESET = ADDR_MOD_6;    // tile ct-1 last MVMUL: every counter cleared
+constexpr uint8_t AM_ADVANCE = ADDR_MOD_3;  // next tile: dest cr += 64, dest = cr
+constexpr uint8_t AM_RESET = ADDR_MOD_6;    // last tile of the pass (or of a column): every counter cleared
 constexpr uint8_t AM_PHASE = ADDR_MOD_7;    // HiFi phase end: back to the tile base, next phase
 
 ALWI void set_addrmods() {
@@ -67,10 +94,11 @@ ALWI void set_addrmods() {
 
 static bool pass_throttled = false;
 
-ALWI void pass_begin(uint32_t in0_cb, uint32_t in1_cb, uint32_t ct) {
+template <uint32_t rt, uint32_t ct>
+ALWI void pass_begin(uint32_t in0_cb, uint32_t in1_cb) {
     const bool thr = (*throttle_ptr % 2) != 0;
     if (!thr && throttled_mop_status != 0) {  // back from a throttled pass: stock MOP/replay + ours
-        llk_math_matmul_init<MATH_FIDELITY, MM_THROTTLE>(in0_cb, in1_cb, 0, ct, 1);
+        llk_math_matmul_init<MATH_FIDELITY, MM_THROTTLE>(in0_cb, in1_cb, 0, ct, rt);
         throttled_mop_status = 0;
         set_addrmods();
     }
@@ -80,26 +108,37 @@ ALWI void pass_begin(uint32_t in0_cb, uint32_t in1_cb, uint32_t ct) {
     }
 }
 
-template <uint32_t ct>
+template <uint32_t rt, uint32_t ct>
 ALWI void math_call(uint32_t in0_cb, uint32_t in1_cb) {
+    using W = Walk<rt, ct>;
     if (pass_throttled) {
-        matmul_block_math_dynamic_throttle(in0_cb, in1_cb, 0, 0, ct, 1);
+        matmul_block_math_dynamic_throttle(in0_cb, in1_cb, 0, 0, ct, rt);
         return;
     }
+    constexpr uint32_t clr_tile = W::reuse_a ? p_setrwc::CLR_A : p_setrwc::CLR_B;  // streamed operand
+    constexpr uint32_t clr_row = W::reuse_a ? p_setrwc::CLR_B : p_setrwc::CLR_A;   // reused operand
 #pragma GCC unroll 8
-    for (uint32_t t = 0; t < ct; ++t) {
-        for (uint32_t p = 0; p + 1 < mm_phases; ++p) {
+    for (uint32_t t = 0; t < W::t_dim; ++t) {
+#pragma GCC unroll 8
+        for (uint32_t u = 0; u < W::rut_dim; ++u) {
+            for (uint32_t p = 0; p + 1 < mm_phases; ++p) {
+                lltt::replay(ckernel::math::replay_buf_offset, 15);
+                TTI_MVMUL(p_setrwc::CLR_NONE, 0, AM_PHASE, 0);
+            }
             lltt::replay(ckernel::math::replay_buf_offset, 15);
-            TTI_MVMUL(p_setrwc::CLR_NONE, 0, AM_PHASE, 0);
+            if (u + 1 == W::rut_dim && t + 1 == W::t_dim) {
+                TTI_MVMUL(clr_tile, 0, AM_RESET, 0);
+            } else {
+                TTI_MVMUL(clr_tile, 0, AM_ADVANCE, 0);
+            }
         }
-        lltt::replay(ckernel::math::replay_buf_offset, 15);
-        if (t + 1 < ct) {
-            TTI_MVMUL(p_setrwc::CLR_A, 0, AM_ADVANCE, 0);
+        if (t + 1 == W::t_dim) {
+            TTI_SETRWC(clr_row, 0, 0, 0, 0, p_setrwc::SET_ABD_F);
         } else {
-            TTI_MVMUL(p_setrwc::CLR_A, 0, AM_RESET, 0);
+            // end of a reuse row: release the reused operand, keep the DEST counter (= the next tile base)
+            TTI_SETRWC(clr_row, 0, 0, 0, 0, 0);
         }
     }
-    TTI_SETRWC(p_setrwc::CLR_B, 0, 0, 0, 0, p_setrwc::SET_ABD_F);
 }
 #endif
 
@@ -110,37 +149,62 @@ struct NoPostKBlock {
     ALWI void operator()(uint32_t, uint32_t, bool) const {}
 };
 
-// Accumulate one (in0_num_subblocks x 1) x (in1_num_subblocks x sb_w) block over the K deliveries of the
-// gm_ks schedule (Perf 2 head ramp: per-delivery width kv, A row stride kv under GM_COMPACT_A; without the
-// ramp, num_k_blocks K-blocks with the ragged last_block_k last)
-// into partials_cb (fp32, packer L1 acc), tile row-major, row stride block_n. Waits / pops in0 and in1
-// per K-block; reserves the whole block in partials_cb before and pushes it after (it ends fronted
-// there for the epilogue). Leaves packer L1 accumulation enabled (caller disables it, as with the helper).
-// The boot hw_configure (compute_kernel_hw_startup<SrcOrder::Reverse>) is the caller's.
+// Identity copy of `ntiles` fronted partials tiles (from the read pointer + src0) into out_cb (reserved by the
+// caller, at offsets dst0..), DEST-half-sized batches. Leaves unpack / math in copy mode and the packer on
+// out_cb's format with L1 accumulation off.
+template <uint32_t batch>
+ALWI void copy_tiles(uint32_t partials_cb, uint32_t out_cb, uint32_t src0, uint32_t dst0, uint32_t ntiles) {
+    for (uint32_t t = 0; t < ntiles; t += batch) {
+        const uint32_t n = ntiles - t < batch ? ntiles - t : batch;
+        tile_regs_acquire();
+        for (uint32_t i = 0; i < n; ++i) {
+            copy_tile(partials_cb, src0 + t + i, i);
+        }
+        tile_regs_commit();
+        tile_regs_wait();
+        for (uint32_t i = 0; i < n; ++i) {
+            pack_tile<true>(i, out_cb, dst0 + t + i);
+        }
+        tile_regs_release();
+    }
+}
+
+// Accumulate one (in0_num_subblocks x sb_h) x (in1_num_subblocks x sb_w) block over the gm_ks K deliveries into
+// partials_cb (fp32, packer L1 acc), tile row-major, row stride block_n. Waits / pops in0 and in1 per K-block;
+// reserves the whole block in partials_cb before. stream_out == false: pushes it after (it ends fronted there
+// for the epilogue). stream_out == true (epilogue none): see the head comment (3.); out_cb receives the
+// block row group by row group (reserve / push per row group) and partials_cb ends empty.
+// Leaves packer L1 accumulation enabled (caller disables it, as with the helper).
 template <
+    uint32_t sb_h,
     uint32_t sb_w,
     uint32_t in0_num_subblocks,
     uint32_t in1_num_subblocks,
     uint32_t block_k,
     uint32_t num_k_blocks,
     uint32_t last_block_k,
+    bool stream_out = false,
     typename In0SourceFn = DefaultIn0,
     typename PostKBlockFn = NoPostKBlock>
 ALWI void matmul_accumulate_interm(
     uint32_t in0_cb,
     uint32_t in1_cb,
     uint32_t partials_cb,
+    uint32_t out_cb = 0,
     In0SourceFn in0_source = {},
     PostKBlockFn post_k_block = {}) {
-    constexpr uint32_t block_m = in0_num_subblocks;
+    constexpr uint32_t block_m = in0_num_subblocks * sb_h;
     constexpr uint32_t block_n = in1_num_subblocks * sb_w;
     constexpr uint32_t block_tiles = block_m * block_n;
+    constexpr uint32_t rg_tiles = sb_h * block_n;  // one row group
     constexpr uint32_t in0_block_tiles = block_m * block_k;
     constexpr uint32_t in1_block_tiles = block_k * block_n;
+    constexpr uint32_t copy_batch = sb_h * sb_w;  // the walk's own DEST-half budget
+    static_assert(Walk<sb_h, sb_w>::contiguous, "multi-column column walk (sb_h > sb_w > 1): use the helper");
 
     reconfig_data_format(in1_cb, in0_cb);  // SrcA = in1, SrcB = in0
     PACK((pack_reconfig_data_format(partials_cb)));
-    matmul_block_init(in0_cb, in1_cb, /*transpose=*/0, sb_w, 1, block_k);
+    matmul_block_init(in0_cb, in1_cb, /*transpose=*/0, sb_w, sb_h, block_k);
     MATH((set_addrmods()));
     PACK((llk_pack_reconfig_l1_acc(0)));
     cb_reserve_back(partials_cb, block_tiles);
@@ -150,39 +214,82 @@ ALWI void matmul_accumulate_interm(
         const uint32_t inner = KS::kv(kb);
         const uint32_t a_stride = gm_ks::compact_a ? inner : block_k;  // A slot row stride (tiles)
         const uint32_t a_cb = in0_source(kb, in0_cb);
+        const bool last_kb = kb == KS::n - 1;
         cb_wait_front(a_cb, in0_block_tiles);
         cb_wait_front(in1_cb, in1_block_tiles);
         if (kb == 1) {
             PACK((llk_pack_reconfig_l1_acc(1)));
         }
-        for (uint32_t m = 0; m < block_m; ++m) {
+        for (uint32_t m = 0; m < in0_num_subblocks; ++m) {
             for (uint32_t n = 0; n < in1_num_subblocks; ++n) {
                 tile_regs_acquire();
-                MATH((pass_begin(in0_cb, in1_cb, sb_w)));
-                uint32_t in0_index = m * a_stride;
+                MATH((pass_begin<sb_h, sb_w>(in0_cb, in1_cb)));
+                uint32_t in0_index = m * sb_h * a_stride;
                 uint32_t in1_index = n * sb_w;
                 for (uint32_t k = 0; k < inner; ++k) {
 #ifndef SKIP_COMPUTE
-                    UNPACK((llk_unpack_AB_matmul(a_cb, in1_cb, in0_index, in1_index, sb_w, 1, block_k)));
-                    MATH((math_call<sb_w>(in0_cb, in1_cb)));
+                    UNPACK((llk_unpack_AB_matmul(a_cb, in1_cb, in0_index, in1_index, sb_w, sb_h, block_k)));
+                    MATH((math_call<sb_h, sb_w>(in0_cb, in1_cb)));
 #endif
                     in0_index++;
                     in1_index += block_n;
                 }
                 tile_regs_commit();
                 tile_regs_wait();
-                const uint32_t col_base = m * block_n + n * sb_w;
-                for (uint32_t c = 0; c < sb_w; ++c) {
-                    pack_tile<true>(c, partials_cb, col_base + c);
+                // stream_out pushes row groups on the last K-block: offsets are relative to the moving write ptr
+                const uint32_t pushed = (stream_out && last_kb) ? m * rg_tiles : 0;
+                const uint32_t col_base = m * rg_tiles + n * sb_w - pushed;
+                for (uint32_t r = 0; r < sb_h; ++r) {
+                    for (uint32_t c = 0; c < sb_w; ++c) {
+                        pack_tile<true>(r * sb_w + c, partials_cb, col_base + r * block_n + c);
+                    }
                 }
                 tile_regs_release();
+            }
+            if constexpr (stream_out) {
+                if (last_kb) {
+                    cb_push_back(partials_cb, rg_tiles);
+                    if (m > 0) {  // copy the previous row group, one behind the walk
+                        cb_wait_front(partials_cb, rg_tiles);
+                        reconfig_data_format_srca(in1_cb, partials_cb);
+                        copy_init(partials_cb);
+                        PACK((pack_reconfig_data_format(out_cb)));
+                        PACK((llk_pack_reconfig_l1_acc(0)));
+                        cb_reserve_back(out_cb, rg_tiles);
+                        copy_tiles<copy_batch>(partials_cb, out_cb, 0, 0, rg_tiles);
+                        cb_push_back(out_cb, rg_tiles);
+                        cb_pop_front(partials_cb, rg_tiles);
+                        // back to the walk
+                        reconfig_data_format_srca(partials_cb, in1_cb);
+                        PACK((pack_reconfig_data_format(partials_cb)));
+                        PACK((llk_pack_reconfig_l1_acc(1)));
+                        matmul_block_init(in0_cb, in1_cb, /*transpose=*/0, sb_w, sb_h, block_k);
+                        MATH((set_addrmods()));
+                    }
+                }
             }
         }
         cb_pop_front(a_cb, in0_block_tiles);
         cb_pop_front(in1_cb, in1_block_tiles);
-        post_k_block(kb, KS::n, kb == KS::n - 1);
+        post_k_block(kb, KS::n, last_kb);
     }
-    cb_push_back(partials_cb, block_tiles);
+    if constexpr (stream_out) {
+        // the last row group: the only serialized part of the streamed copy (the others ride the last K-block).
+        // PERMANENT zone (free with the profiler off); one execution per block, as the old per-block cmp_epilogue.
+        // OCCUPANCY: includes the wait on the packer's last row group and the reserve on out_cb (writer drain).
+        MaybeDeviceZoneScope("cmp_out_tail");
+        cb_wait_front(partials_cb, rg_tiles);
+        reconfig_data_format_srca(in1_cb, partials_cb);
+        copy_init(partials_cb);
+        PACK((pack_reconfig_data_format(out_cb)));
+        PACK((llk_pack_reconfig_l1_acc(0)));
+        cb_reserve_back(out_cb, rg_tiles);
+        copy_tiles<copy_batch>(partials_cb, out_cb, 0, 0, rg_tiles);
+        cb_push_back(out_cb, rg_tiles);
+        cb_pop_front(partials_cb, rg_tiles);
+    } else {
+        cb_push_back(partials_cb, block_tiles);
+    }
 }
 
 }  // namespace kw

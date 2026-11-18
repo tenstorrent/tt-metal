@@ -37,8 +37,15 @@ template <typename Blocks, typename Mc, typename Sender, typename Receiver>
 FORCE_INLINE void worker_round(
     const Blocks& blocks, const Mc& mc, Sender& sender, Receiver& receiver, uint32_t mb, uint32_t kb, uint32_t dst) {
     const uint32_t round = Blocks::round(kb);
+#ifdef GM_ABLATE_A_ROUND
+    return;  // perf tooling: no round at all (no handshake, no payload)
+#endif
     if (mc.should_send(round)) {
+#ifdef GM_ABLATE_A_SEND
+        sender->send(blocks.src(mb, kb), dst, 32);  // perf tooling: the round's handshake, no payload
+#else
         sender->send(blocks.src(mb, kb), dst, Blocks::bytes);
+#endif
     } else {
         receiver->receive(round);
     }
@@ -56,6 +63,9 @@ FORCE_INLINE void send_only(
     uint32_t act_cb_blocks,
     uint32_t nb_m,
     uint32_t num_k_blocks) {
+#ifdef GM_ABLATE_A_ROUND
+    return;
+#endif
     if (!sender) {
         return;
     }
@@ -63,7 +73,11 @@ FORCE_INLINE void send_only(
     for (uint32_t mb = 0; mb < nb_m; ++mb) {
         for (uint32_t kb = 0; kb < num_k_blocks; ++kb) {
             if (mc.should_send(Blocks::round(kb))) {
+#ifdef GM_ABLATE_A_SEND
+                sender->send(blocks.src(mb, kb), act_base + slot * Blocks::bytes, 32);
+#else
                 sender->send(blocks.src(mb, kb), act_base + slot * Blocks::bytes, Blocks::bytes);
+#endif
             }
             slot = (slot + 1 == act_cb_blocks) ? 0 : slot + 1;
         }
