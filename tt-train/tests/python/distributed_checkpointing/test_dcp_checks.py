@@ -24,7 +24,7 @@ from ttml.distributed_checkpointing._state_dict import (
     _python_parameters,
     check_param_groups,
     check_undeclared_fusion,
-    fsdp_gate,
+    reshard_fsdp_modules,
 )
 from ttml.distributed_checkpointing._topology import Label, Placement, dist_coords, tp_split
 from ttml.modules.parameter import Parameter
@@ -151,7 +151,7 @@ def test_cpp_bound_parameters_are_named():
     params = {"llama/llama_block_0/attention/kv_linear/weight": 0, "llama/fc/weight": 1}
     assert _cpp_bound_params(_CppModel(), params) == list(params), "a C++-bound model: every parameter"
     assert _python_parameters(_CppModel(), params) == ({}, {})
-    assert fsdp_gate(_CppModel(), True) == []
+    assert reshard_fsdp_modules(_CppModel()) == []
     mixed = {"Root/cpp_child/gamma": 0, "Root/cpp_childish/w": 1, "Root/w": 2}
     assert _cpp_bound_params(_Model(), mixed) == ["Root/cpp_child/gamma"], "only the C++-bound child's parameters"
 

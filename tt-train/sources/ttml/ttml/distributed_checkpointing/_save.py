@@ -43,10 +43,10 @@ from ._safetensors import create_file, pwrite_all
 from ._state_dict import (
     NATIVE,
     LiveTensor,
-    collect_model,
     check_threads,
+    collect_model,
     collect_optimizer,
-    fsdp_gate,
+    reshard_fsdp_modules,
     world_record,
 )
 from ._topology import Chunk, owner
@@ -220,15 +220,13 @@ def save(
     threads: int | None = None,
     max_inflight_bytes: int = 4 << 30,
     overwrite: bool = False,
-    reshard_fsdp: bool = True,
 ) -> SaveResult:
     """Write ``model`` and ``optimizer`` to the directory ``ckpt_dir``.
 
     ``header`` is any JSON-encodable dict (the step, dataloader state, ...), returned by ``load``. ``threads`` caps
     the writer threads (default: one per device data file); ``max_inflight_bytes`` bounds the host buffers waiting
-    to be written. An existing
-    ``ckpt_dir`` is refused unless ``overwrite=True``. FSDP modules must be in their sharded state; with
-    ``reshard_fsdp`` (default) they are resharded first.
+    to be written. An existing ``ckpt_dir`` is refused unless ``overwrite=True``. FSDP modules are resharded first
+    (nothing to do for one already sharded).
 
     A replicated shard is written once, from one device of its replica group. Save does not check that the replicas
     hold the same values, as ``ttml.checkpointing.save_checkpoint`` does by default (``verify_replicas=True``):
@@ -247,7 +245,7 @@ def save(
     header = check_json("header", header or {})  # before any device read or file write
     t0 = time.perf_counter()
     stats: dict[str, float] = {}
-    fsdp_gate(model, reshard_fsdp)
+    reshard_fsdp_modules(model)
     live: list[LiveTensor] = collect_model(model)
     scalars: dict = {}
     if optimizer is not None:

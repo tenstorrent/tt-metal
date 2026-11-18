@@ -39,8 +39,8 @@ from ._state_dict import (
     check_undeclared_fusion,
     collect_model,
     collect_optimizer,
-    fsdp_gate,
     mesh_device,
+    reshard_fsdp_modules,
     restore_scalars,
 )
 from ._topology import chunk_boxes
@@ -272,7 +272,6 @@ def load(
     optimizer=None,
     strict: bool = True,
     threads: int | None = None,
-    reshard_fsdp: bool = True,
 ) -> LoadResult:
     """Restore ``model`` and ``optimizer`` in place from the checkpoint directory ``ckpt_dir``.
 
@@ -280,7 +279,8 @@ def load(
     ``strict`` (default), a live tensor without an entry, or an entry of a requested role (model, and optimizer state
     when ``optimizer`` is passed) without a live tensor, is an error; otherwise they are listed in the result.
     Optimizer scalars (steps, learning rates) are restored through ``set_state_dict``. ``threads`` caps the reader
-    threads (default 32; a read is one contiguous byte range of one file). Returns the header passed to ``save``.
+    threads (default 32; a read is one contiguous byte range of one file). FSDP modules are resharded first.
+    Returns the header passed to ``save``.
 
     Everything that can be checked without reading tensor data is checked before the first tensor is placed: keys,
     shapes, dtypes, layouts, param groups and the sizes of the data files. A failure after that (a read error, the
@@ -301,7 +301,7 @@ def load(
     index: Index = read_index(ckpt_dir)
     header = read_checked_header(ckpt_dir)
 
-    fsdp_states = fsdp_gate(model, reshard_fsdp)
+    fsdp_states = reshard_fsdp_modules(model)
     # A sharded FSDP module's cached shards are its current values: drop them now, so every value the load replaces is
     # freed as it is replaced instead of at the end (the next forward rebuilds the cache).
     for state in fsdp_states:

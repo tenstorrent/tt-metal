@@ -29,7 +29,7 @@ import ttnn
 import ttml
 from ttml.modules.parameter import Parameter
 
-from ._errors import CheckpointError, FSDPStateError, LayoutError, LazyParameterError, MissingKeyError, TopologyError
+from ._errors import CheckpointError, LayoutError, LazyParameterError, MissingKeyError, TopologyError
 from ._index import Entry
 from ._layouts import DECLARATIONS, Identity, Segments, Transform, declared_transform
 from ._planner import TensorInfo
@@ -443,22 +443,18 @@ def restore_scalars(optimizer, scalars: dict[str, Any]) -> list[str]:
     return applied
 
 
-def fsdp_gate(model, reshard: bool) -> list[Any]:
-    """Every FSDP state on ``model`` must be sharded: a module left gathered by a forward with
+def reshard_fsdp_modules(model) -> list[Any]:
+    """Reshard every FSDP module of ``model`` and return their states. A module left gathered by a forward with
     ``reshard_after_forward=False`` holds the full weight while its moments are shards, and its cached shard would
-    overwrite whatever is loaded into it at the next backward. Reshards when allowed, raises otherwise."""
-    from ttml.fsdp import _ShardedState
-
+    overwrite whatever is loaded into it at the next backward. Resharding is always safe: ``reshard()`` does nothing to
+    a sharded module, and the next forward or backward gathers it again as it does under
+    ``reshard_after_forward=True``."""
     states = []
-    for path, module in _named_modules(model):
+    for _, module in _named_modules(model):
         state = getattr(module, "_fsdp_state", None)
         if state is None:
             continue
         states.append(state)
-        if state.sharded_state == _ShardedState.SHARDED:
-            continue
-        if not reshard:
-            raise FSDPStateError(f"FSDP module {path or '<root>'} is not in its sharded state; pass reshard_fsdp=True")
         module.reshard()  # installed by fully_shard
     return states
 

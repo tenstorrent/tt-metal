@@ -5,7 +5,7 @@
 """Same-world round trips of ``ttml.distributed_checkpointing`` on the shared ``[1, 2]`` TP and FSDP fixtures.
 
 Every parameter and optimizer moment must come back device for device, bit for bit, into a fresh model and
-optimizer; the header and the optimizer scalars must come back; the FSDP gate must refuse a gathered module; a
+optimizer; the header and the optimizer scalars must come back; a gathered FSDP module is resharded first; a
 strict load must name what is missing. Cross-world loads live in ``test_dcp_cross_world.py``, which needs no open
 device of its own.
 
@@ -487,7 +487,7 @@ def test_undeclared_fused_weight_needs_same_row_order(tp_mesh, tmp_path, expect_
     _assert_same_shards(_model_shards(declared.parameters()), before)
 
 
-def test_fsdp_round_trip_and_the_sharded_state_gate(fsdp_mesh, tmp_path, expect_error):
+def test_fsdp_round_trip_and_a_gathered_module_resharded(fsdp_mesh, tmp_path):
     model = _Stack(DIM)
     ttml.fsdp.fully_shard(model)
     params = model.parameters()
@@ -518,7 +518,7 @@ def test_fsdp_round_trip_and_the_sharded_state_gate(fsdp_mesh, tmp_path, expect_
     _assert_same_shards(_state(opt2)[0], _state(opt)[0])
     assert _state(opt2)[1] == _state(opt)[1]
 
-    # A module left gathered by a forward with reshard_after_forward=False is refused unless resharded first.
+    # A module left gathered by a forward with reshard_after_forward=False is resharded first.
     model3 = _Stack(DIM)
     ttml.fsdp.fully_shard(model3, reshard_after_forward=False)
     params3 = model3.parameters()
@@ -529,15 +529,13 @@ def test_fsdp_round_trip_and_the_sharded_state_gate(fsdp_mesh, tmp_path, expect_
     )
     model3(x)  # leaves the module UNSHARDED
     assert model3._fsdp_state.sharded_state == _ShardedState.UNSHARDED, "precondition"
-    with expect_error(dcp.FSDPStateError, "is not in its sharded state; pass reshard_fsdp=True"):
-        dcp.save(str(tmp_path / "gathered"), model=model3, optimizer=opt3, reshard_fsdp=False)
     dcp.save(str(tmp_path / "resharded"), model=model3, optimizer=opt3)
     assert model3._fsdp_state.sharded_state == _ShardedState.SHARDED
     ttml.autograd.AutoContext.get_instance().reset_graph()
 
 
-def test_fsdp_load_refuses_gathered_or_early_optimizer(fsdp_mesh, tmp_path, expect_error):
-    """An FSDP load refuses a gathered module, and an optimizer built before sharding."""
+def test_fsdp_load_reshards_gathered_and_refuses_early_optimizer(fsdp_mesh, tmp_path, expect_error):
+    """An FSDP load reshards a gathered module first, and refuses an optimizer built before sharding."""
     model = _Stack(DIM)
     ttml.fsdp.fully_shard(model)
     opt = make_adamw(model.parameters())
@@ -545,7 +543,7 @@ def test_fsdp_load_refuses_gathered_or_early_optimizer(fsdp_mesh, tmp_path, expe
     path = str(tmp_path / "step_0000001")
     dcp.save(path, model=model, optimizer=opt)
 
-    # Loading into a module left gathered: refused with reshard_fsdp=False, resharded first by default.
+    # Loading into a module left gathered: resharded first.
     gathered = _Stack(DIM)
     ttml.fsdp.fully_shard(gathered, reshard_after_forward=False)
     gathered_opt = make_adamw(gathered.parameters())
@@ -556,8 +554,6 @@ def test_fsdp_load_refuses_gathered_or_early_optimizer(fsdp_mesh, tmp_path, expe
     gathered(x)
     ttml.autograd.AutoContext.get_instance().reset_graph()
     assert gathered._fsdp_state.sharded_state == _ShardedState.UNSHARDED, "precondition"
-    with expect_error(dcp.FSDPStateError, "is not in its sharded state; pass reshard_fsdp=True"):
-        dcp.load(path, model=gathered, optimizer=gathered_opt, reshard_fsdp=False)
     dcp.load(path, model=gathered, optimizer=gathered_opt)
     assert gathered._fsdp_state.sharded_state == _ShardedState.SHARDED
     _assert_same_shards(_model_shards(gathered.parameters()), _model_shards(model.parameters()))
