@@ -83,6 +83,188 @@ struct TaggedReads {
     FORCE_INLINE void wait(uint32_t which) { dataflow_kernel_lib::async_read_barrier_with_trid(noc, which); }
 };
 
+// One im2col tile-row: output pixels [o, min(o + 32, o_end)) x the K-block's columns [col_lo, col_lo + block_k_cols)
+// of kernel row kh, into rows_l1. Rows past o_end are not written: every phase downstream is row-independent and the
+// writer never stores them. The row gather is a real call (inlined into kernel_main, its per-pixel loop measured
+// slower: register pressure on the data-movement RISC); the tap-major body, a handful of runs, measured faster inlined.
+
+// Row gather: one im2col row per output pixel ([32, block_k_cols]). A d = 1 in-image row with no padded lanes is one
+// combined read of its taps; otherwise one read per in-image tap plus zero-fills for out-of-image taps, padded lanes
+// (unless zeroed once) and kernel-row K padding.
+template <
+    uint32_t output_width,
+    int32_t input_height,
+    int32_t input_width,
+    int32_t stride,
+    int32_t padding,
+    int32_t dilation,
+    uint32_t c_in,
+    uint32_t c_in_p,
+    uint32_t block_k_tiles,
+    bool zero_im2col_once>
+struct RowGather {
+    static constexpr uint32_t TILE_DIM = 32;
+    static constexpr uint32_t ELEM_BYTES = 2;
+    static constexpr uint32_t block_k_cols = block_k_tiles * TILE_DIM;
+    static constexpr uint32_t im2col_row_bytes = block_k_cols * ELEM_BYTES;
+    static constexpr uint32_t tap_cols = 3 * c_in_p;
+    static constexpr uint32_t pixel_bytes = c_in_p * ELEM_BYTES;
+    static constexpr bool lanes_padded = c_in < c_in_p;
+
+    template <typename Reads>
+    __attribute__((noinline)) static void tile_row(
+        Reads& reads,
+        uint64_t slab_noc,
+        uint32_t rows_l1,
+        uint32_t o,
+        uint32_t o_end,
+        int32_t kh,
+        uint32_t col_lo,
+        int32_t slab_x_base_kh) {
+        const uint32_t col_hi = col_lo + block_k_cols;
+        const uint32_t data_hi = col_hi < tap_cols ? col_hi : tap_cols;
+        const int32_t kw_first = col_lo < tap_cols ? col_lo / c_in_p : 3;
+        const int32_t kw_last = data_hi > col_lo ? (data_hi - 1) / c_in_p : -1;
+        int32_t ho = o / output_width;
+        int32_t wo = o % output_width;
+        for (uint32_t r = 0; r < TILE_DIM && o < o_end; ++r, ++o) {
+            const uint32_t row_l1 = rows_l1 + r * im2col_row_bytes;
+            const int32_t h_in = ho * stride + kh * dilation - padding;
+            const int32_t w_in0 = wo * stride - padding;
+            const bool row_in_image = h_in >= 0 && h_in < input_height;
+            const int32_t slab_x0 = slab_x_base_kh + h_in * input_width + w_in0;
+
+            const bool combined = !lanes_padded && dilation == 1 && row_in_image && w_in0 + kw_first >= 0 &&
+                                  w_in0 + kw_last < input_width && kw_first <= kw_last;
+            if (combined) {
+                // d = 1, no lanes: the touched taps are consecutive slab pixels, so one read covers them.
+                reads.read(
+                    slab_noc + slab_x0 * pixel_bytes + col_lo * ELEM_BYTES, row_l1, (data_hi - col_lo) * ELEM_BYTES);
+            } else {
+                for (int32_t kw = kw_first; kw <= kw_last; ++kw) {
+                    const uint32_t tap_lo = kw * c_in_p;
+                    const uint32_t seg_lo = col_lo > tap_lo ? col_lo : tap_lo;
+                    const uint32_t seg_hi = data_hi < tap_lo + c_in_p ? data_hi : tap_lo + c_in_p;
+                    const uint32_t real_hi = seg_hi < tap_lo + c_in ? seg_hi : tap_lo + c_in;
+                    const uint32_t dst = row_l1 + (seg_lo - col_lo) * ELEM_BYTES;
+                    const int32_t w_in = w_in0 + kw * dilation;
+                    if (row_in_image && w_in >= 0 && w_in < input_width) {
+                        const int32_t slab_x = slab_x0 + kw * dilation;
+                        if (real_hi > seg_lo) {
+                            reads.read(
+                                slab_noc + slab_x * pixel_bytes + (seg_lo - tap_lo) * ELEM_BYTES,
+                                dst,
+                                (real_hi - seg_lo) * ELEM_BYTES);
+                        }
+                        if constexpr (lanes_padded && !zero_im2col_once) {
+                            const uint32_t lane_lo = real_hi > seg_lo ? real_hi : seg_lo;
+                            if (seg_hi > lane_lo) {
+                                reads.zero_fill(
+                                    row_l1 + (lane_lo - col_lo) * ELEM_BYTES, (seg_hi - lane_lo) * ELEM_BYTES);
+                            }
+                        }
+                    } else {
+                        reads.zero_fill(dst, (seg_hi - seg_lo) * ELEM_BYTES);
+                    }
+                }
+            }
+            if constexpr (!zero_im2col_once) {
+                if (col_hi > tap_cols) {
+                    const uint32_t pad_lo = col_lo > tap_cols ? col_lo : tap_cols;
+                    reads.zero_fill(row_l1 + (pad_lo - col_lo) * ELEM_BYTES, (col_hi - pad_lo) * ELEM_BYTES);
+                }
+            }
+
+            if (++wo == static_cast<int32_t>(output_width)) {
+                wo = 0;
+                ++ho;
+            }
+        }
+    }
+};
+
+// The core's im2col units (one tile-row of one K-block) in cb_im2col_rm push order. Unit s of M-block m is
+// s - m * units_per_block into the block: K-block outer (the K-blocked walk) or tile-row outer (N-slice-outer).
+template <bool tile_row_outer, uint32_t block_m_tiles, uint32_t num_k_blocks>
+struct GatherUnits {
+    static constexpr uint32_t per_block = block_m_tiles * num_k_blocks;
+    static FORCE_INLINE uint32_t k_block(uint32_t s) {
+        const uint32_t u = s % per_block;
+        return tile_row_outer ? u % num_k_blocks : u / block_m_tiles;
+    }
+    static FORCE_INLINE uint32_t tile_row(uint32_t s) {
+        const uint32_t u = s % per_block;
+        return tile_row_outer ? u / num_k_blocks : u % block_m_tiles;
+    }
+};
+
+// Tap-major (stride 1, whole unpadded or zero-lane taps): tap kw of the tile-row is a [32 pixels, c_in_p] block. The
+// pixels of one output image row read consecutive slab pixels, so each in-image run is one read; out-of-image pixels
+// read a 32-pixel zero block at zero_src_noc, one read per run.
+template <
+    uint32_t output_width,
+    int32_t input_height,
+    int32_t input_width,
+    int32_t padding,
+    int32_t dilation,
+    uint32_t c_in_p,
+    uint32_t block_k_tiles>
+struct TapMajorGather {
+    static constexpr uint32_t TILE_DIM = 32;
+    static constexpr uint32_t pixel_bytes = c_in_p * 2;
+    static constexpr uint32_t tap_cols = 3 * c_in_p;
+
+    template <typename Reads>
+    FORCE_INLINE static void tile_row(
+        Reads& reads,
+        uint64_t slab_noc,
+        uint64_t zero_src_noc,
+        uint32_t rows_l1,
+        uint32_t o,
+        uint32_t o_end,
+        int32_t kh,
+        uint32_t col_lo,
+        int32_t slab_x_base_kh) {
+        const uint32_t col_hi = col_lo + block_k_tiles * TILE_DIM;
+        const uint32_t data_hi = col_hi < tap_cols ? col_hi : tap_cols;
+        const int32_t kw_first = col_lo < tap_cols ? col_lo / c_in_p : 3;
+        const int32_t kw_last = data_hi > col_lo ? (data_hi - 1) / c_in_p : -1;
+        const uint32_t row_end = o + TILE_DIM < o_end ? o + TILE_DIM : o_end;
+        for (int32_t kw = kw_first; kw <= kw_last; ++kw) {
+            uint32_t dst = rows_l1 + (kw - kw_first) * TILE_DIM * pixel_bytes;
+            int32_t ho = o / output_width;
+            int32_t wo = o % output_width;
+            for (uint32_t p = o; p < row_end;) {
+                const int32_t run = row_end - p < output_width - wo ? row_end - p : output_width - wo;
+                const int32_t h_in = ho + kh * dilation - padding;
+                const int32_t w_lo = wo - padding + kw * dilation;
+                // Pixels [in_lo, in_hi) of the run are inside the image row; the rest are padding.
+                int32_t in_lo = w_lo < 0 ? (-w_lo < run ? -w_lo : run) : 0;
+                int32_t in_hi = input_width - w_lo < run ? input_width - w_lo : run;
+                if (h_in < 0 || h_in >= input_height || in_hi < in_lo) {
+                    in_lo = in_hi = run;
+                }
+                if (in_lo > 0) {
+                    reads.read(zero_src_noc, dst, in_lo * pixel_bytes);
+                }
+                if (in_hi > in_lo) {
+                    reads.read(
+                        slab_noc + (slab_x_base_kh + h_in * input_width + w_lo + in_lo) * pixel_bytes,
+                        dst + in_lo * pixel_bytes,
+                        (in_hi - in_lo) * pixel_bytes);
+                }
+                if (run > in_hi) {
+                    reads.read(zero_src_noc, dst + in_hi * pixel_bytes, (run - in_hi) * pixel_bytes);
+                }
+                dst += run * pixel_bytes;
+                p += run;
+                wo = 0;
+                ++ho;
+            }
+        }
+    }
+};
+
 template <
     uint32_t output_width,
     int32_t input_height,

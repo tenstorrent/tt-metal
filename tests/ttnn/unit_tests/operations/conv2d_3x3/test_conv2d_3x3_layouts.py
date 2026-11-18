@@ -223,7 +223,6 @@ def test_conv2d_3x3_multi_m_block_relu(dtype, layout, with_bias, device, monkeyp
         block_m_tiles=1,
         block_k_tiles=geometry.tensor_kkh_tiles,
         block_n_tiles=geometry.tensor_n_tiles,
-        im2col_rm_depth_rows=_pd.IM2COL_RM_DEPTH_ROWS,
         out_depth_row_groups=_pd.OUT_DEPTH_ROW_GROUPS,
         **fit,
     )

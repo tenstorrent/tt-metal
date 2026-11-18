@@ -25,6 +25,9 @@
 // With combine_split_nocs the reader also sends the higher grid columns' N-slices of each M-block's
 // partials on NoC0 (see the writer's file comment): it waits for the writer's send_go, writes, fences and
 // raises send_done. It never waits on or pops the partials CB; the writer owns that CB's lifecycle.
+// N-slice-outer K split (see the writer's file comment): the reader gathers tile-row outer, K-block inner, so compute
+// tilizes in0 row-major over all of K, and it sends the +d owner slices on NoC0 from cb_slice_r, which it alone
+// consumes.
 //
 // im2col layout: by default one row per output pixel ([32, block_k_cols] per tile-row), costing one read
 // (or one per tap) per pixel per K-block. Tap-major (stride 1, whole unpadded taps): each tap of a tile-row
@@ -42,6 +45,14 @@
 // as it lands. With a split gather it raises gather_go once the block is reserved and the slab complete; the writer
 // then gathers every odd row group and counts them in gather_done, while the reader gathers the even ones. Only the
 // reader touches the CB's pointers; the writer writes into the reserved block, which starts at the CB base.
+//
+// Split row gather (the per-pixel row gather, more than one tile-row per K-block): the writer gathers some units
+// (one tile-row of one K-block) on NoC1 while the reader gathers the rest. At each unit it takes, the reader hands the
+// writer the following units while the writer has fewer than row_queue outstanding and has published (row_limit)
+// that it serves them; a hand-out is a mailbox word (the unit index) plus row_go, and row_assigned tells the writer
+// how far the assignment got. So a writer busy with a weight round gets no units, and an idle one about every other.
+// The CB API cannot reserve on behalf of another RISC, hence the index-addressed slots. Hand-outs stay inside the
+// reader's current K-block, whose band it has waited for; under the N-slice-outer order every band is waited first.
 //
 // Short last channel slice (K split, C_in not a multiple of the slice width): tap-major copies whole slab pixels, so
 // the slice's padded lanes must read as zero. They are zeroed once at kernel start and never read into: on TILE the
@@ -64,6 +75,7 @@
 #include "conv2d_3x3_combine_dataflow.hpp"
 #include "conv2d_3x3_slab_dataflow.hpp"
 #include "conv2d_3x3_gather_dataflow.hpp"
+#include "conv2d_3x3_nslice_order.hpp"
 
 namespace {
 
@@ -122,7 +134,20 @@ void kernel_main() {
     constexpr uint32_t gather_done_sem_id = get_compile_time_arg_val(44);
     constexpr uint32_t lane_zero_rows = get_compile_time_arg_val(45);
     constexpr uint32_t cb_zero_src = get_compile_time_arg_val(46);
-    constexpr auto input_args = TensorAccessorArgs<47>();
+    // N-slice-outer K split (see conv2d_3x3_nslice_order.hpp): the reader sends the +d owner slices on NoC0.
+    constexpr bool nslice_outer = get_compile_time_arg_val(47) != 0;
+    constexpr uint32_t cb_slice_r = get_compile_time_arg_val(48);
+    constexpr uint32_t combine_credit_sem_id = get_compile_time_arg_val(49);
+    constexpr uint32_t combine_arrival_sem_id = get_compile_time_arg_val(50);
+    // Split row gather (see the file comment).
+    constexpr bool row_split = get_compile_time_arg_val(51) != 0;
+    constexpr uint32_t row_queue = get_compile_time_arg_val(52);
+    constexpr uint32_t row_go_sem_id = get_compile_time_arg_val(53);
+    constexpr uint32_t row_done_sem_id = get_compile_time_arg_val(54);
+    constexpr uint32_t row_limit_sem_id = get_compile_time_arg_val(55);
+    constexpr uint32_t row_assigned_sem_id = get_compile_time_arg_val(56);
+    constexpr uint32_t row_mailbox_sem_id = get_compile_time_arg_val(57);  // row_queue consecutive ids
+    constexpr auto input_args = TensorAccessorArgs<58>();
 
     const uint32_t input_addr = get_arg_val<uint32_t>(0);
     const uint32_t m_tile_start = get_arg_val<uint32_t>(1);
@@ -137,7 +162,6 @@ void kernel_main() {
     constexpr uint32_t pixel_bytes = c_in_p * ELEM_BYTES;
     constexpr int32_t num_in_px = input_height * input_width;
     constexpr uint32_t block_k_cols = block_k_tiles * TILE_DIM;
-    constexpr uint32_t im2col_row_bytes = block_k_cols * ELEM_BYTES;
     constexpr uint32_t tap_cols = 3 * c_in_p;
     constexpr bool lanes_padded = c_in < c_in_p;
     constexpr bool k_padded = tensor_kkh_tiles * TILE_DIM > tap_cols;
@@ -177,6 +201,33 @@ void kernel_main() {
         tensor_kkh_tiles,
         block_k_tiles,
         band_last_tap>;
+    using RowGatherT = conv2d_3x3::RowGather<
+        output_width,
+        input_height,
+        input_width,
+        stride,
+        padding,
+        dilation,
+        c_in,
+        c_in_p,
+        block_k_tiles,
+        zero_im2col_once>;
+    using TapMajorT =
+        conv2d_3x3::TapMajorGather<output_width, input_height, input_width, padding, dilation, c_in_p, block_k_tiles>;
+    static_assert(!nslice_outer || channel_slice, "the N-slice-outer walk is the K split's");
+    // Face-direct under a K split is one whole-K K-block, which already lands in0 as [bm, K].
+    constexpr bool tile_row_outer = nslice_outer && !face_direct;
+    static_assert(!row_split || (!face_direct && !tap_major && row_queue > 0), "the split gather is the row gather");
+    using Units = conv2d_3x3::GatherUnits<tile_row_outer, block_m_tiles, num_k_blocks>;
+    // Split row gather: unit s of the push sequence lives in cb_im2col_rm slot s % im2col_rm_depth_rows (every push is
+    // one unit and the CB holds exactly that many), so a unit is placed by index, not by the write pointer.
+    [[maybe_unused]] const uint32_t im2col_rm_base = row_split ? get_write_ptr(cb_im2col_rm) : 0;
+    [[maybe_unused]] const uint32_t im2col_rm_slot_bytes = row_split ? block_k_tiles * get_tile_size(cb_im2col_rm) : 0;
+    [[maybe_unused]] uint32_t rows_pushed = 0;      // units pushed to cb_im2col_rm
+    [[maybe_unused]] uint32_t assign_cursor = 0;    // next unit nobody gathers yet
+    [[maybe_unused]] uint32_t writer_assigned = 0;  // units handed to the writer
+    // Per slot: the writer grant (count) of the unit in it, 0 for a reader unit.
+    [[maybe_unused]] uint32_t slot_grant[row_split ? im2col_rm_depth_rows : 1];
     constexpr uint32_t FACE_DIM = FaceGather::FACE_DIM;
     constexpr uint32_t in0_tile_bytes = FaceGather::tile_bytes;
     constexpr int32_t face_taps = face_direct ? FaceGather::face_taps : 1;
@@ -226,16 +277,6 @@ void kernel_main() {
         reads.noc.write_zeros_l1_barrier();
     }
 
-    const uint64_t zeros_noc = get_noc_addr(MEM_ZEROS_BASE);
-    auto zero_fill = [&](uint32_t dst_l1, uint32_t bytes) {
-        while (bytes > 0) {
-            const uint32_t chunk = bytes < MEM_ZEROS_SIZE ? bytes : MEM_ZEROS_SIZE;
-            reads.read(zeros_noc, dst_l1, chunk);
-            dst_l1 += chunk;
-            bytes -= chunk;
-        }
-    };
-
     // Tap-major zero-fills read a 32-pixel zero block, so an out-of-image run is one read.
     [[maybe_unused]] uint64_t zero_src_noc = 0;
     if constexpr (tap_major) {
@@ -243,15 +284,6 @@ void kernel_main() {
         reads.noc.write_zeros_l1_barrier();
         zero_src_noc = get_noc_addr(get_write_ptr(cb_zero_src));
     }
-    [[maybe_unused]] auto zero_fill_px = [&](uint32_t dst_l1, uint32_t bytes) {
-        constexpr uint32_t zero_src_bytes = TILE_DIM * pixel_bytes;
-        while (bytes > 0) {
-            const uint32_t chunk = bytes < zero_src_bytes ? bytes : zero_src_bytes;
-            reads.read(zero_src_noc, dst_l1, chunk);
-            dst_l1 += chunk;
-            bytes -= chunk;
-        }
-    };
 
     // Input pages [page, end_page) into consecutive L1 page slots from l1. With the split fill, runs of higher
     // shards are the writer's.
@@ -312,47 +344,19 @@ void kernel_main() {
         const conv2d_3x3::SlabFootprint footprint =
             conv2d_3x3::block_footprint<output_width, input_width, stride, padding, dilation, band_last_tap>(
                 o_first, o_end);
-        const int32_t f = footprint.f;
-        const int32_t band_len = footprint.band_len;
-
         int32_t slab_x_base[3];
         [[maybe_unused]] uint32_t slab_ready_pages[3];  // TILE: slab pages that hold band kh once compute pushed them
 
         if constexpr (tile_input) {
             // ---- fill_halo_slab (TILE): plan the slab rows, then stream input tile-rows in slab order.
             MaybeDeviceZoneScope("reader_fill");
-            uint32_t seg_first[3];
-            uint32_t seg_count[3];
-            uint32_t num_segs = 0;
-            int32_t next_free = 0;
-            bool have_prev = false;
-            int32_t prev_t_lo = 0, prev_t_hi = 0, prev_row = 0;
+            conv2d_3x3::TileSlabPlan plan;
+            conv2d_3x3::tile_slab_plan<input_width, num_in_px, dilation, c_in_tiles>(footprint, slab_x_base, plan);
+            const uint32_t num_segs = plan.num_segs;
+            const uint32_t(&seg_first)[3] = plan.seg_first;
+            const uint32_t(&seg_count)[3] = plan.seg_count;
             for (int32_t kh = 0; kh < 3; ++kh) {
-                const int32_t v_lo = f + kh * dilation * input_width;
-                const int32_t lo = v_lo > 0 ? v_lo : 0;
-                const int32_t hi = v_lo + band_len < num_in_px ? v_lo + band_len : num_in_px;
-                if (lo >= hi) {
-                    slab_x_base[kh] = 0;
-                    slab_ready_pages[kh] = next_free * c_in_tiles;
-                    continue;
-                }
-                const int32_t t_lo = lo / static_cast<int32_t>(TILE_DIM);
-                const int32_t t_hi = (hi + static_cast<int32_t>(TILE_DIM) - 1) / static_cast<int32_t>(TILE_DIM);
-                const bool shares = have_prev && t_lo < prev_t_hi;
-                const int32_t row = shares ? prev_row + (t_lo - prev_t_lo) : next_free;
-                const int32_t first_new = shares ? prev_t_hi : t_lo;
-                if (t_hi > first_new) {
-                    seg_first[num_segs] = first_new;
-                    seg_count[num_segs] = t_hi - first_new;
-                    ++num_segs;
-                }
-                slab_x_base[kh] = static_cast<int32_t>(TILE_DIM) * (row - t_lo);
-                next_free = row + (t_hi - t_lo);
-                slab_ready_pages[kh] = next_free * c_in_tiles;
-                have_prev = true;
-                prev_t_lo = t_lo;
-                prev_t_hi = t_hi;
-                prev_row = row;
+                slab_ready_pages[kh] = plan.ready_pages[kh];
             }
 
             // Slab rows past the plan's last row are pushed unread: compute untilizes a fixed count.
@@ -412,11 +416,105 @@ void kernel_main() {
         }
 
         // ---- gather_im2col_blocks: one K-block = block_m_tiles tile-rows x block_k_cols of kernel row kh.
-        for (uint32_t k_block_idx = 0; k_block_idx < num_k_blocks; ++k_block_idx) {
+        // Tile-row tile_row of K-block k_block_idx into rows_l1.
+        [[maybe_unused]] auto gather_into = [&](uint32_t k_block_idx, uint32_t tile_row, uint32_t rows_l1) {
             const uint32_t k_tile0 = k_block_idx * block_k_tiles;
             const int32_t kh = k_tile0 / tensor_kkh_tiles;
             const uint32_t col_lo = (k_tile0 - kh * tensor_kkh_tiles) * TILE_DIM;
-            const uint32_t col_hi = col_lo + block_k_cols;
+            const uint32_t o = o_first + tile_row * TILE_DIM;
+            reads.begin(TRID_GATHER);
+            if constexpr (tap_major) {
+                TapMajorT::tile_row(reads, slab_noc, zero_src_noc, rows_l1, o, o_end, kh, col_lo, slab_x_base[kh]);
+            } else {
+                RowGatherT::tile_row(reads, slab_noc, rows_l1, o, o_end, kh, col_lo, slab_x_base[kh]);
+            }
+            reads.wait(TRID_GATHER);
+        };
+        [[maybe_unused]] auto gather_unit = [&](uint32_t k_block_idx, uint32_t tile_row) {
+            cb_reserve_back(cb_im2col_rm, block_k_tiles);
+            gather_into(k_block_idx, tile_row, get_write_ptr(cb_im2col_rm));
+            cb_push_back(cb_im2col_rm, block_k_tiles);
+        };
+
+        // ---- Split row gather. The reader alone moves cb_im2col_rm's pointers and pushes units in sequence order,
+        // a writer unit once row_done counted it.
+        const uint32_t m_seq_end = (m_block_idx + 1) * Units::per_block;
+        [[maybe_unused]] auto push_one = [&]() {
+            const uint32_t grant = slot_grant[rows_pushed % im2col_rm_depth_rows];
+            if (grant > 0) {
+                Semaphore<>(row_done_sem_id).wait_min(grant);
+            }
+            cb_push_back(cb_im2col_rm, block_k_tiles);
+            ++rows_pushed;
+        };
+        // Hand the writer the next units below `limit` while it has fewer than row_queue outstanding, has published
+        // (row_limit) that it serves them, and they fit the CB.
+        [[maybe_unused]] auto top_up_writer = [&](uint32_t limit) {
+            while (assign_cursor < limit && assign_cursor + 1 - rows_pushed <= im2col_rm_depth_rows &&
+                   writer_assigned - Semaphore<>(row_done_sem_id).value() < row_queue &&
+                   assign_cursor < Semaphore<>(row_limit_sem_id).value()) {
+                const uint32_t r = assign_cursor;
+                cb_reserve_back(cb_im2col_rm, (r + 1 - rows_pushed) * block_k_tiles);
+                slot_grant[r % im2col_rm_depth_rows] = ++writer_assigned;
+                Semaphore<>(row_mailbox_sem_id + (writer_assigned - 1) % row_queue).set(r);
+                Semaphore<>(row_go_sem_id).up(1);
+                ++assign_cursor;
+            }
+        };
+        // The reader takes the next unassigned unit, first handing the writer the following ones below `limit`, then
+        // gathers it and pushes every unit up to it.
+        [[maybe_unused]] auto take_unit = [&](uint32_t limit) {
+            const uint32_t s = assign_cursor;
+            while (s + 1 - rows_pushed > im2col_rm_depth_rows) {
+                push_one();
+            }
+            cb_reserve_back(cb_im2col_rm, (s + 1 - rows_pushed) * block_k_tiles);
+            slot_grant[s % im2col_rm_depth_rows] = 0;
+            ++assign_cursor;
+            top_up_writer(limit);
+            // The writer's serve loop ends once every unit of its K-block (or M-block) is assigned.
+            Semaphore<>(row_assigned_sem_id).set(assign_cursor);
+            gather_into(
+                Units::k_block(s),
+                Units::tile_row(s),
+                im2col_rm_base + (s % im2col_rm_depth_rows) * im2col_rm_slot_bytes);
+            while (rows_pushed <= s) {
+                push_one();
+            }
+        };
+        if constexpr (tile_row_outer) {
+            // N-slice-outer K split: tile-row outer, K-block inner, so compute's tilize lays in0 out row-major over
+            // all of K ([bm, K], the one-K-block layout of the slice matmuls).
+            {
+                MaybeDeviceZoneScope("reader_band_wait");
+                for (int32_t band = 0; band < 3; ++band) {
+                    if constexpr (tile_input) {
+                        if (slab_ready_pages[band] > 0) {
+                            cb_wait_front(cb_halo_slab, slab_ready_pages[band]);
+                        }
+                    } else {
+                        reads.wait(band + 1);
+                    }
+                }
+            }
+            MaybeDeviceZoneScope("reader_gather");
+            if constexpr (row_split) {
+                // Every band is in: the writer may take any unit of the M-block.
+                while (assign_cursor < m_seq_end) {
+                    take_unit(m_seq_end);
+                }
+            } else {
+                for (uint32_t tile_row = 0; tile_row < block_m_tiles; ++tile_row) {
+                    for (uint32_t k_block_idx = 0; k_block_idx < num_k_blocks; ++k_block_idx) {
+                        gather_unit(k_block_idx, tile_row);
+                    }
+                }
+            }
+        }
+        for (uint32_t k_block_idx = 0; k_block_idx < (tile_row_outer ? 0 : num_k_blocks); ++k_block_idx) {
+            const uint32_t k_tile0 = k_block_idx * block_k_tiles;
+            const int32_t kh = k_tile0 / tensor_kkh_tiles;
+            const uint32_t col_lo = (k_tile0 - kh * tensor_kkh_tiles) * TILE_DIM;
             if (col_lo == 0) {
                 // The band's slab rows: compute's untilize (TILE) or this core's own band reads (ROW_MAJOR).
                 MaybeDeviceZoneScope("reader_band_wait");
@@ -472,118 +570,22 @@ void kernel_main() {
                 push_through(in0_groups);
                 continue;
             }
-            const uint32_t data_hi = col_hi < tap_cols ? col_hi : tap_cols;
-            const int32_t kw_first = col_lo < tap_cols ? col_lo / c_in_p : 3;
-            const int32_t kw_last = data_hi > col_lo ? (data_hi - 1) / c_in_p : -1;
-            const int32_t slab_x_base_kh = slab_x_base[kh];
-
-            uint32_t o = o_first;
-            for (uint32_t tile_row = 0; tile_row < block_m_tiles; ++tile_row) {
-                cb_reserve_back(cb_im2col_rm, block_k_tiles);
-                const uint32_t rows_l1 = get_write_ptr(cb_im2col_rm);
-                reads.begin(TRID_GATHER);
-
-                if constexpr (tap_major) {
-                    // Tap kw of this tile-row is a [32 pixels, c_in_p] block. At stride 1 the pixels of one
-                    // output image row read consecutive slab pixels, so each such run is one read.
-                    const uint32_t row_end = o + TILE_DIM < o_end ? o + TILE_DIM : o_end;
-                    for (int32_t kw = kw_first; kw <= kw_last; ++kw) {
-                        uint32_t dst = rows_l1 + (kw - kw_first) * TILE_DIM * pixel_bytes;
-                        int32_t ho = o / output_width;
-                        int32_t wo = o % output_width;
-                        for (uint32_t p = o; p < row_end;) {
-                            const int32_t run = row_end - p < output_width - wo ? row_end - p : output_width - wo;
-                            const int32_t h_in = ho + kh * dilation - padding;
-                            const int32_t w_lo = wo - padding + kw * dilation;
-                            // Pixels [in_lo, in_hi) of the run are inside the image row; the rest are padding.
-                            int32_t in_lo = w_lo < 0 ? (-w_lo < run ? -w_lo : run) : 0;
-                            int32_t in_hi = input_width - w_lo < run ? input_width - w_lo : run;
-                            if (h_in < 0 || h_in >= input_height || in_hi < in_lo) {
-                                in_lo = in_hi = run;
-                            }
-                            if (in_lo > 0) {
-                                zero_fill_px(dst, in_lo * pixel_bytes);
-                            }
-                            if (in_hi > in_lo) {
-                                reads.read(
-                                    slab_noc + (slab_x_base_kh + h_in * input_width + w_lo + in_lo) * pixel_bytes,
-                                    dst + in_lo * pixel_bytes,
-                                    (in_hi - in_lo) * pixel_bytes);
-                            }
-                            if (run > in_hi) {
-                                zero_fill_px(dst + in_hi * pixel_bytes, (run - in_hi) * pixel_bytes);
-                            }
-                            dst += run * pixel_bytes;
-                            p += run;
-                            wo = 0;
-                            ++ho;
-                        }
-                    }
-                    o = row_end;
-                } else {
-                    int32_t ho = o / output_width;
-                    int32_t wo = o % output_width;
-                    for (uint32_t r = 0; r < TILE_DIM && o < o_end; ++r, ++o) {
-                        const uint32_t row_l1 = rows_l1 + r * im2col_row_bytes;
-                        const int32_t h_in = ho * stride + kh * dilation - padding;
-                        const int32_t w_in0 = wo * stride - padding;
-                        const bool row_in_image = h_in >= 0 && h_in < input_height;
-                        const int32_t slab_x0 = slab_x_base_kh + h_in * input_width + w_in0;
-
-                        const bool combined = !lanes_padded && dilation == 1 && row_in_image && w_in0 + kw_first >= 0 &&
-                                              w_in0 + kw_last < input_width && kw_first <= kw_last;
-                        if (combined) {
-                            // d = 1, no lanes: the touched taps are consecutive slab pixels, so one read covers them.
-                            reads.read(
-                                slab_noc + slab_x0 * pixel_bytes + col_lo * ELEM_BYTES,
-                                row_l1,
-                                (data_hi - col_lo) * ELEM_BYTES);
-                        } else {
-                            for (int32_t kw = kw_first; kw <= kw_last; ++kw) {
-                                const uint32_t tap_lo = kw * c_in_p;
-                                const uint32_t seg_lo = col_lo > tap_lo ? col_lo : tap_lo;
-                                const uint32_t seg_hi = data_hi < tap_lo + c_in_p ? data_hi : tap_lo + c_in_p;
-                                const uint32_t real_hi = seg_hi < tap_lo + c_in ? seg_hi : tap_lo + c_in;
-                                const uint32_t dst = row_l1 + (seg_lo - col_lo) * ELEM_BYTES;
-                                const int32_t w_in = w_in0 + kw * dilation;
-                                if (row_in_image && w_in >= 0 && w_in < input_width) {
-                                    const int32_t slab_x = slab_x0 + kw * dilation;
-                                    if (real_hi > seg_lo) {
-                                        reads.read(
-                                            slab_noc + slab_x * pixel_bytes + (seg_lo - tap_lo) * ELEM_BYTES,
-                                            dst,
-                                            (real_hi - seg_lo) * ELEM_BYTES);
-                                    }
-                                    if constexpr (lanes_padded && !zero_im2col_once) {
-                                        const uint32_t lane_lo = real_hi > seg_lo ? real_hi : seg_lo;
-                                        if (seg_hi > lane_lo) {
-                                            zero_fill(
-                                                row_l1 + (lane_lo - col_lo) * ELEM_BYTES,
-                                                (seg_hi - lane_lo) * ELEM_BYTES);
-                                        }
-                                    }
-                                } else {
-                                    zero_fill(dst, (seg_hi - seg_lo) * ELEM_BYTES);
-                                }
-                            }
-                        }
-                        if constexpr (!zero_im2col_once) {
-                            if (col_hi > tap_cols) {
-                                const uint32_t pad_lo = col_lo > tap_cols ? col_lo : tap_cols;
-                                zero_fill(row_l1 + (pad_lo - col_lo) * ELEM_BYTES, (col_hi - pad_lo) * ELEM_BYTES);
-                            }
-                        }
-
-                        if (++wo == static_cast<int32_t>(output_width)) {
-                            wo = 0;
-                            ++ho;
-                        }
-                    }
+            if constexpr (row_split) {
+                // Only this K-block's band is known to be in: hand-outs stay inside it.
+                const uint32_t kb_end = (m_block_idx * num_k_blocks + k_block_idx + 1) * block_m_tiles;
+                while (assign_cursor < kb_end) {
+                    take_unit(kb_end);
                 }
-                // Rows past the block's last valid pixel keep stale bytes: every phase downstream is
-                // row-independent and the writer never stores them.
-                reads.wait(TRID_GATHER);
-                cb_push_back(cb_im2col_rm, block_k_tiles);
+            } else {
+                for (uint32_t tile_row = 0; tile_row < block_m_tiles; ++tile_row) {
+                    gather_unit(k_block_idx, tile_row);
+                }
+            }
+        }
+        if constexpr (row_split) {
+            // The writer's trailing units: compute needs them, and the slab must not be refilled under them.
+            while (rows_pushed < m_seq_end) {
+                push_one();
             }
         }
 
@@ -593,7 +595,43 @@ void kernel_main() {
             cb_pop_front(cb_halo_slab, slab_pages);
         }
 
-        if constexpr (combine_send) {
+        if constexpr (nslice_outer) {
+            // NoC0 half of the slice sends: the +d owner slices, from cb_slice_r, in the shared order.
+            constexpr uint32_t num_owning_cols = (tensor_n_tiles + out_n_tiles - 1) / out_n_tiles;
+            constexpr uint32_t slice_tiles = block_m_tiles * out_n_tiles;
+            Semaphore<> credit(combine_credit_sem_id);
+            Semaphore<> arrival(combine_arrival_sem_id);
+            Noc noc;
+            const uint32_t tile_bytes = get_tile_size(cb_slice_r);
+            const uint32_t combine_base = get_write_ptr(cb_combine_slots);
+            bool credited = false;
+            for (uint32_t j = 0; j < k_cols; ++j) {
+                const uint32_t y = conv2d_3x3::nslice_owner<k_cols>(my_col, j);
+                if (y >= num_owning_cols || !conv2d_3x3::nslice_reader_sends<k_cols>(j)) {
+                    continue;
+                }
+                {
+                    MaybeDeviceZoneScope("reader_combine_wait_go");
+                    cb_wait_front(cb_slice_r, slice_tiles);
+                    if (!credited) {
+                        credit.wait_min((m_block_idx + 1) * num_owning_cols);
+                        credited = true;
+                    }
+                }
+                {
+                    MaybeDeviceZoneScope("reader_combine_send");
+                    conv2d_3x3::send_slice<block_m_tiles, out_n_tiles, tensor_n_tiles>(
+                        get_read_ptr(cb_slice_r), combine_base, tile_bytes, my_col, y, row_peer_coords_arg);
+                    noc_async_write_barrier();
+                }
+                arrival.up(
+                    noc,
+                    get_arg_val<uint32_t>(row_peer_coords_arg + 2 * y),
+                    get_arg_val<uint32_t>(row_peer_coords_arg + 2 * y + 1),
+                    1);
+                cb_pop_front(cb_slice_r, slice_tiles);
+            }
+        } else if constexpr (combine_send) {
             constexpr uint32_t num_owning_cols = (tensor_n_tiles + out_n_tiles - 1) / out_n_tiles;
             static_assert(num_owning_cols <= k_cols);
             Semaphore<> send_go(combine_send_go_sem_id);
@@ -616,4 +654,7 @@ void kernel_main() {
         }
     }
     dataflow_kernel_lib::set_read_trid(reads.noc, 0);
+    if constexpr (nslice_outer) {
+        noc_async_atomic_barrier();
+    }
 }

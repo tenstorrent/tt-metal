@@ -54,4 +54,50 @@ FORCE_INLINE void slab_bands(const SlabFootprint& fp, int32_t (&slab_x_base)[3],
     }
 }
 
+// TILE slab plan of one M-block, shared by the reader (which streams it) and the writer's split row gather (which
+// needs slab_x_base). Band kh is its in-image pixels rounded out to whole 32-pixel input tile-rows; a band that starts
+// inside the previous band's tile-rows shares them, otherwise it is placed after them.
+struct TileSlabPlan {
+    uint32_t seg_first[3];
+    uint32_t seg_count[3];
+    uint32_t num_segs;
+    uint32_t ready_pages[3];  // slab pages that hold band kh once compute pushed them
+};
+
+template <int32_t input_width, int32_t num_in_px, int32_t dilation, uint32_t c_in_tiles>
+FORCE_INLINE void tile_slab_plan(const SlabFootprint& fp, int32_t (&slab_x_base)[3], TileSlabPlan& plan) {
+    constexpr int32_t TILE_DIM = 32;
+    plan.num_segs = 0;
+    int32_t next_free = 0;
+    bool have_prev = false;
+    int32_t prev_t_lo = 0, prev_t_hi = 0, prev_row = 0;
+    for (int32_t kh = 0; kh < 3; ++kh) {
+        const int32_t v_lo = fp.f + kh * dilation * input_width;
+        const int32_t lo = v_lo > 0 ? v_lo : 0;
+        const int32_t hi = v_lo + fp.band_len < num_in_px ? v_lo + fp.band_len : num_in_px;
+        if (lo >= hi) {
+            slab_x_base[kh] = 0;
+            plan.ready_pages[kh] = next_free * c_in_tiles;
+            continue;
+        }
+        const int32_t t_lo = lo / TILE_DIM;
+        const int32_t t_hi = (hi + TILE_DIM - 1) / TILE_DIM;
+        const bool shares = have_prev && t_lo < prev_t_hi;
+        const int32_t row = shares ? prev_row + (t_lo - prev_t_lo) : next_free;
+        const int32_t first_new = shares ? prev_t_hi : t_lo;
+        if (t_hi > first_new) {
+            plan.seg_first[plan.num_segs] = first_new;
+            plan.seg_count[plan.num_segs] = t_hi - first_new;
+            ++plan.num_segs;
+        }
+        slab_x_base[kh] = TILE_DIM * (row - t_lo);
+        next_free = row + (t_hi - t_lo);
+        plan.ready_pages[kh] = next_free * c_in_tiles;
+        have_prev = true;
+        prev_t_lo = t_lo;
+        prev_t_hi = t_hi;
+        prev_row = row;
+    }
+}
+
 }  // namespace conv2d_3x3

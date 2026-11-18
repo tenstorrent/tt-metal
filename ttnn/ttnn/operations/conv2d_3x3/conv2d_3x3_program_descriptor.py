@@ -60,6 +60,8 @@ CB_INPUT_TILES = 7
 # R4 only: every row peer's fp32 N-slice for this core's output columns, and their sum before the bias.
 CB_COMBINE_SLOTS = 8
 CB_COMBINED = 9
+# N-slice-outer K split: the fp32 owner slices the reader sends on NoC0 (the writer's are in CB_MATMUL_PARTIALS).
+CB_SLICE_R = 10
 # Tap-major only: 32 zero pixels, so an out-of-image tap run is one read instead of one per 512 B MEM_ZEROS chunk.
 CB_ZERO_SRC = 11
 
@@ -106,6 +108,19 @@ BIAS_STREAM_GROUPS = 5
 # while the reader gathers the rest, since the gather is bound by read issue. Applies with the split slab fill (the
 # writer then holds the slab plan) and in0 streaming. False keeps the whole gather on the reader.
 GATHER_SPLIT_RISCS = True
+
+# N-slice-outer K split (R4, the default when its resident in0 fits L1): the core tilizes its whole K of in0 once,
+# then multiplies one owner N-slice at a time over the whole K (one DEST accumulation, one fp32 pack, no L1-acc
+# passes) and sends slice y while slice y + 1 multiplies. Weight CB depth in slices (two rounds ahead of the slice
+# being sent, plus the sender's prefetch) and slice CB depth in slices, per sending RISC.
+NSLICE_WEIGHT_DEPTH = 4
+NSLICE_SLICE_DEPTH = 2
+
+# Split row gather (the per-pixel row gather with more than one tile-row per K-block): the writer gathers the units the
+# reader hands it (at most ROW_QUEUE outstanding) on NoC1, so two RISCs issue the reads. cb_im2col_rm then holds up to
+# ROW_SPLIT_DEPTH_ROWS units, so both RISCs and the next K-block's units stay in flight during a matmul.
+ROW_QUEUE = 2
+ROW_SPLIT_DEPTH_ROWS = 8
 
 # Buffer-depth knobs (Blocking Model depth table).
 IM2COL_RM_DEPTH_ROWS = 2
@@ -248,6 +263,8 @@ class Conv3x3Blocking:
     weight_depth: int
     out_depth_row_groups: int
     footprint_bytes: int
+    # The K split runs N-slice-outer (see NSLICE_WEIGHT_DEPTH).
+    nslice: bool = False
 
     @property
     def slab_px(self):
@@ -377,10 +394,23 @@ def _tap_major(g: Conv3x3Geometry, bk):
     return tap_major_capable(g) and bk % g.c_in_tiles == 0
 
 
-def _footprint(g: Conv3x3Geometry, core_m_tiles, bm, bk, bn, ub_cap=None):
+def _row_split(g: Conv3x3Geometry, bm, bk):
+    """The split row gather: the per-pixel row gather (neither face-direct nor tap-major) with more than one tile-row
+    per K-block; with one there is nothing to hand over (the reader takes each K-block's first unit)."""
+    return bm > 1 and not face_direct_im2col(g, bk) and not _tap_major(g, bk)
+
+
+def _footprint(g: Conv3x3Geometry, core_m_tiles, bm, bk, bn, ub_cap=None, nslice=False):
     num_k_blocks = g.tensor_k_tiles // bk
+    im2col_rm_depth_rows = (
+        max(IM2COL_RM_DEPTH_ROWS, min(ROW_SPLIT_DEPTH_ROWS, bm * num_k_blocks))
+        if _row_split(g, bm, bk)
+        else IM2COL_RM_DEPTH_ROWS
+    )
     max_m_blocks = _div_up(core_m_tiles, bm)
-    weight_depth = 1 if num_k_blocks * max_m_blocks == 1 else WEIGHT_DEPTH
+    num_slices = _div_up(g.tensor_n_tiles, g.out_n_tiles)
+    weight_rounds = (num_slices if nslice else num_k_blocks) * max_m_blocks
+    weight_depth = 1 if weight_rounds == 1 else (NSLICE_WEIGHT_DEPTH if nslice else WEIGHT_DEPTH)
     band_len, raw_slab_rows = _block_extents(g, core_m_tiles, bm)
     band_stride = min(g.dilation * g.input_width, band_len)
     sb_h, sb_w = _out_subblock(bm, bn)
@@ -403,12 +433,12 @@ def _footprint(g: Conv3x3Geometry, core_m_tiles, bm, bk, bn, ub_cap=None):
     total = (
         slab_bytes
         + input_tile_bytes
-        + (0 if face_direct_im2col(g, bk) else IM2COL_RM_DEPTH_ROWS * bk * TILE_BYTES_BF16)
+        + (0 if face_direct_im2col(g, bk) else im2col_rm_depth_rows * bk * TILE_BYTES_BF16)
         + (TILE * g.c_in_p * BF16_BYTES if _tap_major(g, bk) else 0)
-        + bm * bk * g.in0_tile_bytes
-        + weight_depth * bk * bn * g.weight_tile_bytes
+        + bm * (g.tensor_k_tiles if nslice else bk) * g.in0_tile_bytes
+        + weight_depth * (g.tensor_k_tiles * ns if nslice else bk * bn) * g.weight_tile_bytes
         + (ns * g.weight_tile_bytes if g.has_bias else 0)
-        + bm * bn * TILE_BYTES_FP32
+        + (2 * NSLICE_SLICE_DEPTH * bm * ns if nslice else bm * bn) * TILE_BYTES_FP32
         + combine_bytes
         + (0 if g.sharded_output else OUT_DEPTH_ROW_GROUPS * sb_h * bn * g.out_tile_bytes)
     )
@@ -426,6 +456,8 @@ def _footprint(g: Conv3x3Geometry, core_m_tiles, bm, bk, bn, ub_cap=None):
         combine_subblock_w=combine_sb_w,
         in0_stream_rows=_in0_stream_rows(g, bm, bk, sb_h),
         footprint_bytes=total,
+        nslice=nslice,
+        im2col_rm_depth_rows=im2col_rm_depth_rows,
     )
 
 
@@ -463,29 +495,35 @@ def select_blocking(g: Conv3x3Geometry, grid, l1_budget) -> Conv3x3Blocking:
     search = [(bm, bk) for bm in bm_candidates for bk in bk_above_floor]
     search += [(bm_candidates[-1], bk) for bk in bk_below_floor]
 
-    for bm, bk in search:
-        # The untilize batch shrinks first: a smaller batch costs one more read fence per tile-row,
-        # a smaller bk costs a whole K-block (tilize, matmul init, L1-acc pass).
-        band_len, raw_slab_rows = _block_extents(g, core_m_tiles, bm)
-        ub_default = _default_untilize_batch_rows(g, band_len, raw_slab_rows)
-        fit = None
-        for ub_cap in range(ub_default, 0, -1):
-            candidate = _footprint(g, core_m_tiles, bm, bk, bn, ub_cap)
-            if candidate["footprint_bytes"] <= l1_budget:
-                fit = candidate
-                break
-        if fit is not None:
-            return Conv3x3Blocking(
-                grid_x=grid_x,
-                core_m_tiles=core_m_tiles,
-                num_m_groups=num_m_groups,
-                block_m_tiles=bm,
-                block_k_tiles=bk,
-                block_n_tiles=bn,
-                im2col_rm_depth_rows=IM2COL_RM_DEPTH_ROWS,
-                out_depth_row_groups=OUT_DEPTH_ROW_GROUPS,
-                **fit,
-            )
+    def solve(candidates, nslice):
+        for bm, bk in candidates:
+            # The untilize batch shrinks first: a smaller batch costs one more read fence per tile-row,
+            # a smaller bk costs a whole K-block (tilize, matmul init, L1-acc pass).
+            band_len, raw_slab_rows = _block_extents(g, core_m_tiles, bm)
+            ub_default = _default_untilize_batch_rows(g, band_len, raw_slab_rows)
+            for ub_cap in range(ub_default, 0, -1):
+                fit = _footprint(g, core_m_tiles, bm, bk, bn, ub_cap, nslice)
+                if fit["footprint_bytes"] <= l1_budget:
+                    return Conv3x3Blocking(
+                        grid_x=grid_x,
+                        core_m_tiles=core_m_tiles,
+                        num_m_groups=num_m_groups,
+                        block_m_tiles=bm,
+                        block_k_tiles=bk,
+                        block_n_tiles=bn,
+                        out_depth_row_groups=OUT_DEPTH_ROW_GROUPS,
+                        **fit,
+                    )
+        return None
+
+    blocking = solve(search, nslice=False)
+    if blocking is not None and g.k_split:
+        # N-slice-outer at the K-blocked solve's bm, unless its resident [bm, K] in0 does not fit. There bk only sets
+        # the gather / tilize granularity and costs almost no L1, so the coarsest that fits wins.
+        nslice = solve([(blocking.block_m_tiles, bk) for bk in bk_above_floor + bk_below_floor], nslice=True)
+        blocking = nslice or blocking
+    if blocking is not None:
+        return blocking
     raise ValueError(
         f"conv2d_3x3: no blocking of {g.input_height}x{g.input_width}x{g.c_in_p}->{g.c_out} "
         f"fits the {l1_budget} B L1 CB budget"
@@ -643,9 +681,21 @@ def create_program_descriptor(
         cbs.append(_cb(CB_IM2COL_RM, ttnn.bfloat16, TILE_BYTES_BF16, b.im2col_rm_depth_rows * bk, cores))
     cbs += [
         # Face-direct: the reader writes these tiles; it relies on every K-block starting at the CB base.
-        _cb(CB_IM2COL_TILES, input_tensor.dtype, g.in0_tile_bytes, bm * bk, cores),
-        _cb(CB_WEIGHTS, weight_tensor.dtype, g.weight_tile_bytes, b.weight_depth * bk * bn, cores),
-        _cb(CB_MATMUL_PARTIALS, ttnn.float32, TILE_BYTES_FP32, bm * bn, cores),
+        _cb(CB_IM2COL_TILES, input_tensor.dtype, g.in0_tile_bytes, bm * (g.tensor_k_tiles if b.nslice else bk), cores),
+        _cb(
+            CB_WEIGHTS,
+            weight_tensor.dtype,
+            g.weight_tile_bytes,
+            b.weight_depth * (g.tensor_k_tiles * ns if b.nslice else bk * bn),
+            cores,
+        ),
+        _cb(
+            CB_MATMUL_PARTIALS,
+            ttnn.float32,
+            TILE_BYTES_FP32,
+            NSLICE_SLICE_DEPTH * bm * ns if b.nslice else bm * bn,
+            cores,
+        ),
     ]
     if g.sharded_output:
         # Packs land in the output shard; its capacity is the core's whole M range, and the M-blocks
@@ -672,6 +722,8 @@ def create_program_descriptor(
     if g.tile_input:
         input_tile_pages = INPUT_TILE_DEPTH_BATCHES * b.untilize_batch_rows * g.c_in_tiles
         cbs.append(_cb(CB_INPUT_TILES, input_tensor.dtype, g.in0_tile_bytes, input_tile_pages, cores))
+    if b.nslice:
+        cbs.append(_cb(CB_SLICE_R, ttnn.float32, TILE_BYTES_FP32, NSLICE_SLICE_DEPTH * bm * ns, cores))
     if tap_major_im2col(g, b):
         cbs.append(_cb(CB_ZERO_SRC, ttnn.bfloat16, pixel_bytes, TILE, cores))
     if g.k_split:
@@ -706,6 +758,15 @@ def create_program_descriptor(
     sem_ids += slab_sem_ids if slab_split else ()
     gather_sem_ids = (len(sem_ids), len(sem_ids) + 1) if gather_split else (0, 0)
     sem_ids += gather_sem_ids if gather_split else ()
+    # Split row gather: row_go, row_done, row_limit, row_assigned, then ROW_QUEUE mailbox words.
+    row_split = _row_split(g, bm, bk)
+    row_sem_ids = tuple(range(len(sem_ids), len(sem_ids) + 5)) if row_split else (0, 0, 0, 0, 0)
+    sem_ids += tuple(range(len(sem_ids), len(sem_ids) + 4 + ROW_QUEUE)) if row_split else ()
+    k_padded = g.tensor_kkh_tiles * TILE > 3 * g.c_in_p
+
+    def zero_im2col_once(slice_channels):
+        """The reader zeroes cb_im2col_rm once (mirror of its zero_im2col_once)."""
+        return not face_direct and bk == g.tensor_kkh_tiles and (slice_channels < g.c_in_p or k_padded)
 
     def reader_ct_args(slice_channels):
         args = [
@@ -755,6 +816,13 @@ def create_program_descriptor(
             # Short-slice lane zeroing: cb_input_tiles tile-row slots (TILE) / slab pixels (ROW_MAJOR).
             INPUT_TILE_DEPTH_BATCHES * b.untilize_batch_rows if g.tile_input else b.slab_px,
             CB_ZERO_SRC,
+            int(b.nslice),
+            CB_SLICE_R,
+            SEM_COMBINE_CREDIT,
+            SEM_COMBINE_ARRIVAL,
+            int(row_split),
+            ROW_QUEUE,
+            *row_sem_ids,
         ]
         args.extend(ttnn.TensorAccessorArgs(input_tensor).get_compile_time_args())
         return args
@@ -790,6 +858,9 @@ def create_program_descriptor(
         int(face_direct),
         b.in0_stream_rows,
         max(1, min(BIAS_STREAM_GROUPS, _div_up(bm, b.in0_stream_rows))),
+        int(b.nslice),
+        CB_SLICE_R,
+        *_out_subblock(bm, ns),
     ]
 
     writer_ct_args = [
@@ -834,7 +905,25 @@ def create_program_descriptor(
         CB_IM2COL_TILES,
         g.c_in_p,
         g.tensor_kkh_tiles,
+        int(b.nslice),
+        b.weight_depth,
+        int(row_split),
+        ROW_QUEUE,
+        *row_sem_ids,
+        CB_IM2COL_RM,
+        b.im2col_rm_depth_rows,
+        g.c_in_p,  # this core's slice channels, set per writer kernel
+        int(g.tile_input),
+        0,  # zero_im2col_once, set per writer kernel
     ]
+    writer_slice_arg = len(writer_ct_args) - 3
+
+    def writer_ct_args_for(slice_channels):
+        args = list(writer_ct_args)
+        args[writer_slice_arg] = slice_channels
+        args[writer_slice_arg + 2] = int(zero_im2col_once(slice_channels))
+        return args
+
     writer_ct_args.extend(ttnn.TensorAccessorArgs(weight_tensor).get_compile_time_args())
     writer_ct_args.extend(
         ttnn.TensorAccessorArgs(bias_tensor).get_compile_time_args()
@@ -854,7 +943,7 @@ def create_program_descriptor(
 
     # One reader kernel per distinct slice width: the gather's lane handling is compile-time.
     reader_groups = {}  # slice channels -> (cores, RuntimeArgs)
-    writer_rt = ttnn.RuntimeArgs()
+    writer_groups = {}  # slice channels -> (cores, RuntimeArgs): the split row gather's lane handling is compile-time
     compute_rt = ttnn.RuntimeArgs()
     input_addr = input_tensor.buffer_address()
     weight_addr = weight_tensor.buffer_address()
@@ -887,7 +976,9 @@ def create_program_descriptor(
             col,
             m_index,
         ] + row_peer_coords.get(m_index, [])
-        compute_rt[core.x][core.y] = [num_m_blocks_this_core, int(out_valid_tiles > 0)]
+        compute_rt[core.x][core.y] = [num_m_blocks_this_core, int(out_valid_tiles > 0), col]
+        writer_cores, writer_rt = writer_groups.setdefault(_slice_channels(g, col), ([], ttnn.RuntimeArgs()))
+        writer_cores.append(core)
         writer_rt[core.x][core.y] = [
             weight_addr,
             bias_addr,
@@ -914,13 +1005,16 @@ def create_program_descriptor(
         )
         for slice_channels, (reader_cores, reader_rt) in reader_groups.items()
     ]
-    writer = ttnn.KernelDescriptor(
-        kernel_source=str(KERNEL_DIR / "conv2d_3x3_writer.cpp"),
-        core_ranges=cores,
-        compile_time_args=writer_ct_args,
-        runtime_args=writer_rt,
-        config=ttnn.WriterConfigDescriptor(),
-    )
+    writers = [
+        ttnn.KernelDescriptor(
+            kernel_source=str(KERNEL_DIR / "conv2d_3x3_writer.cpp"),
+            core_ranges=_core_range_set(writer_cores),
+            compile_time_args=writer_ct_args_for(slice_channels),
+            runtime_args=writer_rt,
+            config=ttnn.WriterConfigDescriptor(),
+        )
+        for slice_channels, (writer_cores, writer_rt) in writer_groups.items()
+    ]
     compute = ttnn.KernelDescriptor(
         kernel_source=str(KERNEL_DIR / "conv2d_3x3_compute.cpp"),
         core_ranges=cores,
@@ -956,8 +1050,9 @@ def create_program_descriptor(
                 ttnn.McastExplicitFixedSenderConfig([core_list[0]]),
             )
     if weight_mcast is None:
-        ttnn.attach_absent_mcast(writer, WEIGHT_MCAST_PREFIX)
+        for writer in writers:
+            ttnn.attach_absent_mcast(writer, WEIGHT_MCAST_PREFIX)
     else:
-        weight_mcast.attach(descriptor, WEIGHT_MCAST_PREFIX, [writer], len(semaphores))
-    descriptor.kernels = readers + [writer, compute]
+        weight_mcast.attach(descriptor, WEIGHT_MCAST_PREFIX, writers, len(semaphores))
+    descriptor.kernels = readers + writers + [compute]
     return descriptor

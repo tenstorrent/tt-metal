@@ -39,6 +39,15 @@
 // in0 block is reserved and the slab complete), then writes every odd row group (in0_stream_rows tile-rows) on
 // NoC1, raising gather_done after each; the reader pushes the groups in order.
 //
+// N-slice-outer K split (the default under a K split when the resident in0 fits L1): compute multiplies one owner
+// N-slice at a time over the whole K, in the order of conv2d_3x3_nslice_order.hpp, so the partials of slice y are
+// final while slice y + 1 multiplies. The writer streams each slice's weights (K x out_n tiles, one multicast round
+// per slice down the column) two rounds ahead of the slice it sends next; the column's weight-reading core issues
+// round r + 1's DRAM reads (own transaction id) before it multicasts round r. Each slice is sent by one RISC: the
+// -d slices and the own slice by the writer on NoC1 from cb_matmul_partials, the +d slices by the reader on NoC0
+// from cb_slice_r. Both RISCs wait on the owners' credits and bump an owner's arrival count after their write to it
+// is acked; the owner pushes its slots after k_cols arrivals, as in the K-blocked round.
+//
 // Every push of cb_combine_slots is its whole capacity, so its write pointer never leaves the CB base and
 // the same base address is right on every core. The counters only grow, so round j waits for
 // (j + 1) x the per-round count.
@@ -53,6 +62,7 @@
 #include "conv2d_3x3_combine_dataflow.hpp"
 #include "conv2d_3x3_slab_dataflow.hpp"
 #include "conv2d_3x3_gather_dataflow.hpp"
+#include "conv2d_3x3_nslice_order.hpp"
 
 void kernel_main() {
     constexpr uint32_t cb_weights = get_compile_time_arg_val(0);
@@ -98,7 +108,22 @@ void kernel_main() {
     constexpr uint32_t cb_im2col_tiles = get_compile_time_arg_val(40);
     constexpr uint32_t c_in_p = get_compile_time_arg_val(41);
     constexpr uint32_t tensor_kkh_tiles = get_compile_time_arg_val(42);
-    constexpr auto weight_args = TensorAccessorArgs<43>();
+    constexpr bool nslice_outer = get_compile_time_arg_val(43) != 0;
+    constexpr uint32_t nslice_weight_depth = get_compile_time_arg_val(44);
+    // Split row gather (see the reader's file comment).
+    constexpr bool row_split = get_compile_time_arg_val(45) != 0;
+    constexpr uint32_t row_queue = get_compile_time_arg_val(46);
+    constexpr uint32_t row_go_sem_id = get_compile_time_arg_val(47);
+    constexpr uint32_t row_done_sem_id = get_compile_time_arg_val(48);
+    constexpr uint32_t row_limit_sem_id = get_compile_time_arg_val(49);
+    constexpr uint32_t row_assigned_sem_id = get_compile_time_arg_val(50);
+    constexpr uint32_t row_mailbox_sem_id = get_compile_time_arg_val(51);
+    constexpr uint32_t cb_im2col_rm = get_compile_time_arg_val(52);
+    constexpr uint32_t im2col_rm_depth_rows = get_compile_time_arg_val(53);
+    constexpr uint32_t c_in = get_compile_time_arg_val(54);  // this core's channel slice
+    constexpr bool tile_input = get_compile_time_arg_val(55) != 0;
+    constexpr bool zero_im2col_once = get_compile_time_arg_val(56) != 0;
+    constexpr auto weight_args = TensorAccessorArgs<57>();
     [[maybe_unused]] constexpr auto bias_args = TensorAccessorArgs<weight_args.next_compile_time_args_offset()>();
     [[maybe_unused]] constexpr auto output_args = TensorAccessorArgs<bias_args.next_compile_time_args_offset()>();
     [[maybe_unused]] constexpr auto input_args = TensorAccessorArgs<output_args.next_compile_time_args_offset()>();
@@ -250,6 +275,123 @@ void kernel_main() {
         }
     };
 
+    // ---- N-slice-outer K split (see the file comment).
+    static_assert(!nslice_outer || (k_split && output_sharded));
+    constexpr uint32_t nslice_k_tiles = block_k_tiles * num_k_blocks;
+    constexpr uint32_t slice_weight_tiles = nslice_k_tiles * out_n_tiles;
+    constexpr uint32_t slice_tiles = block_m_tiles * out_n_tiles;
+    // Rounds issued ahead of the slice the writer sends next.
+    constexpr uint32_t nslice_weight_lookahead = 2;
+    static_assert(!nslice_outer || nslice_weight_depth == 1 || nslice_weight_depth >= nslice_weight_lookahead + 2);
+    // Every participant pushes one slice per round from the CB base, so slot round % depth is the same L1 address on
+    // every core of the column.
+    const uint32_t weights_base = get_write_ptr(cb_weights);
+    conv2d_3x3::TaggedReads<false> weight_reads;
+    constexpr uint32_t TRID_WEIGHTS = 2;  // 2 and 3 alternate; the face gather uses 1
+    uint32_t prefetched_round = 0xFFFFFFFF;
+    [[maybe_unused]] auto start_weight_reads = [&](uint32_t round, uint32_t y) {
+        weight_reads.begin(TRID_WEIGHTS + (round & 1));
+        uint32_t l1 = weights_base + (round % nslice_weight_depth) * slice_weight_tiles * weight_tile_bytes;
+        const uint32_t n0 = y * out_n_tiles;
+        const uint32_t valid = tensor_n_tiles - n0 < out_n_tiles ? tensor_n_tiles - n0 : out_n_tiles;
+        for (uint32_t k = 0; k < nslice_k_tiles; ++k) {
+            const uint32_t row_page = (weight_k_tile_start + k) * tensor_n_tiles + n0;
+            for (uint32_t n = 0; n < valid; ++n) {
+                weight_reads.read(weights.get_noc_addr(row_page + n), l1 + n * weight_tile_bytes, weight_tile_bytes);
+            }
+            l1 += out_n_tiles * weight_tile_bytes;
+        }
+        dataflow_kernel_lib::set_read_trid(weight_reads.noc, 0);
+    };
+    // Weights of slice y; next_y is the M-block's next slice, or k_cols after the last.
+    [[maybe_unused]] auto issue_weight_slice = [&](uint32_t y, uint32_t next_y) {
+        const uint32_t round = k_blocks_issued;
+        MaybeDeviceZoneScope("writer_weight_fetch");
+        if (!weight_receiver || (weight_sender && weight_mcast.should_send(round))) {
+            if (prefetched_round != round) {
+                cb_reserve_back(cb_weights, slice_weight_tiles);
+                start_weight_reads(round, y);
+            }
+            if (nslice_weight_depth > 1 && next_y < k_cols) {
+                cb_reserve_back(cb_weights, 2 * slice_weight_tiles);
+                start_weight_reads(round + 1, next_y);
+                prefetched_round = round + 1;
+            }
+            weight_reads.wait(TRID_WEIGHTS + (round & 1));
+            if (weight_sender && weight_mcast.should_send(round)) {
+                const uint32_t l1 =
+                    weights_base + (round % nslice_weight_depth) * slice_weight_tiles * weight_tile_bytes;
+                weight_sender->send(l1, l1, slice_weight_tiles * weight_tile_bytes);
+            }
+        } else {
+            cb_reserve_back(cb_weights, slice_weight_tiles);
+            weight_receiver->receive(round);
+        }
+        cb_push_back(cb_weights, slice_weight_tiles);
+        ++k_blocks_issued;
+    };
+    // before_sends runs once the first weight rounds are out, before the first slice send (the split row gather).
+    [[maybe_unused]] auto nslice_round = [&](uint32_t m_block_idx, auto&& before_sends) {
+        if (out_valid_tiles > 0) {
+            cb_reserve_back(cb_combine_slots, k_cols * slot_tiles);
+            for (uint32_t col = 0; col < k_cols; ++col) {
+                combine_credit.up(noc, peer_x(col), peer_y(col), 1);
+            }
+        }
+        uint32_t order[k_cols];
+        uint32_t step[k_cols];
+        uint32_t num_slices = 0;
+        for (uint32_t j = 0; j < k_cols; ++j) {
+            const uint32_t y = conv2d_3x3::nslice_owner<k_cols>(my_col, j);
+            if (y < num_owning_cols) {
+                step[num_slices] = j;
+                order[num_slices++] = y;
+            }
+        }
+        const uint32_t tile_bytes = get_tile_size(cb_partials);
+        bool credited = false;
+        uint32_t weights_issued = 0;
+        auto issue_weights_through = [&](uint32_t end) {
+            for (; weights_issued < end && weights_issued < num_slices; ++weights_issued) {
+                issue_weight_slice(
+                    order[weights_issued], weights_issued + 1 < num_slices ? order[weights_issued + 1] : k_cols);
+            }
+        };
+        issue_weights_through(1 + nslice_weight_lookahead);
+        before_sends();
+        for (uint32_t j = 0; j < num_slices; ++j) {
+            issue_weights_through(j + 1 + nslice_weight_lookahead);
+            const uint32_t y = order[j];
+            if (conv2d_3x3::nslice_reader_sends<k_cols>(step[j])) {
+                continue;
+            }
+            {
+                MaybeDeviceZoneScope("writer_combine_wait_partials");
+                cb_wait_front(cb_partials, slice_tiles);
+            }
+            if (!credited) {
+                MaybeDeviceZoneScope("writer_combine_wait_credit");
+                combine_credit.wait_min((m_block_idx + 1) * num_owning_cols);
+                credited = true;
+            }
+            {
+                MaybeDeviceZoneScope("writer_combine_send");
+                conv2d_3x3::send_slice<block_m_tiles, out_n_tiles, tensor_n_tiles>(
+                    get_read_ptr(cb_partials), combine_base, tile_bytes, my_col, y, row_peer_coords_arg);
+                noc_async_write_barrier();
+            }
+            combine_arrival.up(noc, peer_x(y), peer_y(y), 1);
+            cb_pop_front(cb_partials, slice_tiles);
+        }
+        if (out_valid_tiles > 0) {
+            {
+                MaybeDeviceZoneScope("writer_combine_wait_arrivals");
+                combine_arrival.wait_min((m_block_idx + 1) * k_cols);
+            }
+            cb_push_back(cb_combine_slots, k_cols * slot_tiles);
+        }
+    };
+
     // ---- fill_halo_slab, higher-shard half, and the trailing tile-rows of the face-direct gather (see the file
     // comment).
     const uint32_t slab_l1 = get_write_ptr(cb_halo_slab);
@@ -334,6 +476,79 @@ void kernel_main() {
         dataflow_kernel_lib::set_read_trid(gather_reads.noc, 0);
     };
 
+    // ---- Split row gather, writer half: the units the reader hands over, into the cb_im2col_rm slots it reserved
+    // for them, on NoC1.
+    using RowGatherT = conv2d_3x3::RowGather<
+        output_width,
+        input_height,
+        input_width,
+        stride,
+        padding,
+        dilation,
+        c_in,
+        c_in_p,
+        block_k_tiles,
+        zero_im2col_once>;
+    using Units = conv2d_3x3::GatherUnits<nslice_outer, block_m_tiles, num_k_blocks>;  // row_split excludes face-direct
+    conv2d_3x3::TaggedReads<false> row_reads;
+    [[maybe_unused]] const uint64_t row_slab_noc = row_split ? get_noc_addr(slab_l1, row_reads.noc.get_noc_id()) : 0;
+    [[maybe_unused]] const uint32_t im2col_rm_base = row_split ? get_write_ptr(cb_im2col_rm) : 0;
+    [[maybe_unused]] const uint32_t im2col_rm_slot_bytes = row_split ? block_k_tiles * get_tile_size(cb_im2col_rm) : 0;
+    [[maybe_unused]] uint32_t grants_served = 0;
+    // The M-block's output pixels and slab bands, placed exactly as the reader places them.
+    [[maybe_unused]] auto plan_row_block = [&](uint32_t m_block_idx) {
+        const uint32_t block_tiles_done = m_block_idx * block_m_tiles;
+        const uint32_t block_valid_tiles =
+            actual_m_tiles - block_tiles_done < block_m_tiles ? actual_m_tiles - block_tiles_done : block_m_tiles;
+        o_first = (m_tile_start + block_tiles_done) * 32;
+        const uint32_t o_end_tiles = o_first + block_valid_tiles * 32;
+        o_end = o_end_tiles < num_out_px ? o_end_tiles : num_out_px;
+        const auto footprint =
+            conv2d_3x3::block_footprint<output_width, input_width, stride, padding, dilation, band_last_tap>(
+                o_first, o_end);
+        if constexpr (tile_input) {
+            conv2d_3x3::TileSlabPlan plan;
+            conv2d_3x3::tile_slab_plan<input_width, input_height * input_width, dilation, c_in_p / 32>(
+                footprint, slab_x_base, plan);
+        } else {
+            conv2d_3x3::slab_bands<input_width, input_height * input_width, dilation, band_stride_px>(
+                footprint, slab_x_base, [](int32_t, int32_t, int32_t, int32_t) {});
+        }
+    };
+    // Serve hand-outs until every unit below end_unit is assigned. The reader posts a grant before it advances
+    // row_assigned past it, so one more look at row_go after seeing row_assigned catches the last one.
+    [[maybe_unused]] auto serve_until = [&](uint32_t end_unit) {
+        MaybeDeviceZoneScope("writer_row_serve");
+        while (true) {
+            if (Semaphore<>(row_go_sem_id).value() > grants_served) {
+                const uint32_t s = Semaphore<>(row_mailbox_sem_id + grants_served % row_queue).value();
+                const uint32_t k_tile0 = Units::k_block(s) * block_k_tiles;
+                const int32_t kh = k_tile0 / tensor_kkh_tiles;
+                row_reads.begin(1);
+                RowGatherT::tile_row(
+                    row_reads,
+                    row_slab_noc,
+                    im2col_rm_base + (s % im2col_rm_depth_rows) * im2col_rm_slot_bytes,
+                    o_first + Units::tile_row(s) * 32,
+                    o_end,
+                    kh,
+                    (k_tile0 - kh * tensor_kkh_tiles) * 32,
+                    slab_x_base[kh]);
+                row_reads.wait(1);
+                Semaphore<>(row_done_sem_id).up(1);
+                ++grants_served;
+                continue;
+            }
+            if (Semaphore<>(row_assigned_sem_id).value() >= end_unit) {
+                if (Semaphore<>(row_go_sem_id).value() > grants_served) {
+                    continue;
+                }
+                break;
+            }
+        }
+        dataflow_kernel_lib::set_read_trid(row_reads.noc, 0);
+    };
+
     for (uint32_t m_block_idx = 0; m_block_idx < num_m_blocks_this_core; ++m_block_idx) {
         if constexpr (slab_split) {
             fill_forward_slab(m_block_idx);
@@ -341,14 +556,42 @@ void kernel_main() {
                 prefetch_bias();
             }
         }
-        while (k_blocks_issued < (m_block_idx + 1) * num_k_blocks) {
-            issue_weight_k_block();
-            if constexpr (gather_split) {
-                gather_odd_groups(k_blocks_issued - 1);
+        const uint32_t m_seq_end = (m_block_idx + 1) * Units::per_block;
+        if constexpr (nslice_outer) {
+            nslice_round(m_block_idx, [&]() {
+                if constexpr (row_split) {
+                    // The reader waits every band before its first hand-out: serve the whole M-block.
+                    plan_row_block(m_block_idx);
+                    Semaphore<>(row_limit_sem_id).set(m_seq_end);
+                    serve_until(m_seq_end);
+                }
+            });
+        } else if constexpr (row_split) {
+            // Per K-block: its weights, then the units of it the reader hands over (row_limit: units whose weights
+            // are out), so the weight round of K-block k + 1 lands while compute multiplies K-block k.
+            plan_row_block(m_block_idx);
+            for (uint32_t k_block_idx = 0; k_block_idx < num_k_blocks; ++k_block_idx) {
+                const uint32_t k_block_seq = m_block_idx * num_k_blocks + k_block_idx;
+                while (k_blocks_issued <= k_block_seq) {
+                    issue_weight_k_block();
+                }
+                const uint32_t ready = k_blocks_issued * block_m_tiles;
+                Semaphore<>(row_limit_sem_id).set(ready < m_seq_end ? ready : m_seq_end);
+                serve_until((k_block_seq + 1) * block_m_tiles);
             }
-        }
-        if constexpr (k_split) {
-            combine_round(m_block_idx);
+            if constexpr (k_split) {
+                combine_round(m_block_idx);
+            }
+        } else {
+            while (k_blocks_issued < (m_block_idx + 1) * num_k_blocks) {
+                issue_weight_k_block();
+                if constexpr (gather_split) {
+                    gather_odd_groups(k_blocks_issued - 1);
+                }
+            }
+            if constexpr (k_split) {
+                combine_round(m_block_idx);
+            }
         }
         if constexpr (!output_sharded) {
             // ---- store_block: valid output tile-rows only; the ragged tail keeps nominal CB counts.

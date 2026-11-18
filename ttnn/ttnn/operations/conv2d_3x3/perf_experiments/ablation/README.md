@@ -1,6 +1,6 @@
 # conv2d_3x3 ablation hooks (Perf 1)
 
-`ablation_hooks.patch` adds payload stubs gated by kernel defines, driven by an env var read in the program
+`ablation_hooks.patch` (against commit `acc3d2e23e2`; later rounds restructured the gather, so re-derive it before reuse) adds payload stubs gated by kernel defines, driven by an env var read in the program
 descriptor. Apply it to a scratch tree only; it is not part of the op.
 
 ```bash

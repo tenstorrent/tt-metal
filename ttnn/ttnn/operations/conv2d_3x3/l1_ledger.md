@@ -139,3 +139,21 @@ Totals, INPUTS `32x64x128 -> 128, p1` (64 cores): input 1.6 MB (tensor 512 KB), 
 R1 adds no CB and changes no capacity: the multicast lands in `cb_weights` (quantum `bk*bn`, depth `weight_depth`) at the same address on every participant because every CB has the same core range and every participant pushes the same quanta in the same order. Its only L1 cost is the channel's two semaphores per participating core.
 
 > Cheapest-traffic split considered: **M split + weight broadcast (R1)** — weights `num_m_groups` -> 1 DRAM crossing (32x64x128: 18.4 MB -> 288 KB DRAM; adds 18.1 MB of multicast payload on the NoC, one sender-serialized transfer per K-block); input and output unchanged. Implemented: **M split with per-core weight stream (R0)**. Deferred because the Phase 0 weight path is prompt-directed (each core reads its own kh blocks; multicast is a later perf refinement) and R0's `cb_weights` receive side — K-block quantum `bk*bn`, depth 2 — is exactly the multicast receiver, so R1 layers onto R0 without changing any CB, block extent or compute phase.
+
+## Perf 1 additions
+
+| CB | Index | Size | When |
+|----|-------|------|------|
+| `cb_slice_r` | 10 | `NSLICE_SLICE_DEPTH * bm * out_n` fp32 tiles | R4 N-slice-outer (reader's slice sends) |
+| `cb_zero_src` | 11 | `32 * C_in_p * 2` B | tap-major gather |
+| `cb_im2col_tiles` | 2 | `bm * K` (was `bm * bk`) | R4 N-slice-outer (resident in0) |
+| `cb_weights` | 3 | `NSLICE_WEIGHT_DEPTH * K * out_n` (was `weight_depth * bk * bn`) | R4 N-slice-outer |
+| `cb_matmul_partials` | 5 | `NSLICE_SLICE_DEPTH * bm * out_n` (was `bm * bn`) | R4 N-slice-outer (writer's slice sends) |
+| `cb_im2col_rm` | 1 | depth `min(8, bm * num_k_blocks)` units (was 2) | split row gather |
+
+`_footprint` counts all of them. Measured footprints, in bytes:
+- res5.1: 1,266,368 (K-blocked, bk 3) -> 1,219,840 (N-slice-outer, bk 6);
+- res4.0: 836,928 -> 781,888;
+- aspp.convs.1/2: unchanged at 1,257,792 (the N-slice-outer in0 does not fit).
+
+The split row gather adds 6 core-local semaphores (`row_go`, `row_done`, `row_limit`, `row_assigned`, 2 mailbox words).

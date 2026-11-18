@@ -239,7 +239,7 @@ def test_conv2d_3x3_block_sharded_multi_m_block(dtype, layout, with_bias, device
     def one_tile_row_blocks(g, grid, l1_budget):
         b = real_select(g, grid, l1_budget)
         assert g.k_split and b.core_m_tiles == 4, "the test expects a K split and a 4-tile-row output shard"
-        fit = _pd._footprint(g, b.core_m_tiles, 1, b.block_k_tiles, b.block_n_tiles)
+        fit = _pd._footprint(g, b.core_m_tiles, 1, b.block_k_tiles, b.block_n_tiles, nslice=b.nslice)
         return _pd.Conv3x3Blocking(
             grid_x=b.grid_x,
             core_m_tiles=b.core_m_tiles,
@@ -247,7 +247,6 @@ def test_conv2d_3x3_block_sharded_multi_m_block(dtype, layout, with_bias, device
             block_m_tiles=1,
             block_k_tiles=b.block_k_tiles,
             block_n_tiles=b.block_n_tiles,
-            im2col_rm_depth_rows=b.im2col_rm_depth_rows,
             out_depth_row_groups=b.out_depth_row_groups,
             **fit,
         )
@@ -272,7 +271,7 @@ def test_conv2d_3x3_block_sharded_column_weight_mcast_ragged_row(dtype, layout, 
     def one_tile_row_blocks(g, grid, l1_budget):
         b = real_select(g, grid, l1_budget)
         assert g.k_split and b.core_m_tiles == 7 and b.num_m_groups == 3
-        fit = _pd._footprint(g, b.core_m_tiles, 1, b.block_k_tiles, b.block_n_tiles)
+        fit = _pd._footprint(g, b.core_m_tiles, 1, b.block_k_tiles, b.block_n_tiles, nslice=b.nslice)
         return _pd.Conv3x3Blocking(
             grid_x=b.grid_x,
             core_m_tiles=b.core_m_tiles,
@@ -280,7 +279,6 @@ def test_conv2d_3x3_block_sharded_column_weight_mcast_ragged_row(dtype, layout, 
             block_m_tiles=1,
             block_k_tiles=b.block_k_tiles,
             block_n_tiles=b.block_n_tiles,
-            im2col_rm_depth_rows=b.im2col_rm_depth_rows,
             out_depth_row_groups=b.out_depth_row_groups,
             **fit,
         )

@@ -389,3 +389,129 @@ Lamps measured (kept at design defaults):
   - `test_conv2d_3x3_height_sharded.py::test_conv2d_3x3_height_sharded_face_direct` (9 cases): C_in 8 s2 and C_in 16 s1 (K-padding-only faces), with an odd row-group count and a shorter last group, bias+ReLU / ReLU / bias. Each case asserts the face-direct, whole-K, streamed blocking.
   - `::test_conv2d_3x3_height_sharded_face_direct_multi_m_block`: two M-blocks per shard, exercising the slab handshake across blocks.
   - Disabling the writer's higher-shard reads fails these tests.
+
+## Perf 1
+- Date: 2026-11-18
+- Scope: perf tournament round 1 on the six `[perf]` LOOSE cases (`feature_spec.py`): Panoptic config at LoFi, fp32 DEST, bf8_b activation and weights, bias + ReLU, pinned shard grids. No SUPPORTED change. Board: Blackhole p150b, AICLK 1350 MHz. All numbers are DEVICE KERNEL DURATION from one fresh-cache run per variant, unless marked as a median.
+- Instrumentation (permanent): `MaybeDeviceZoneScope` zones in all three kernels. Waits are split from work where a wait can be hoisted (`*_reserve`, `*_wait_*`, `compute_combine_wait`). Tools:
+  - focus harness: `test_conv2d_3x3_perf.py::test_conv2d_3x3_perf_focus`;
+  - zone report: `perf_experiments/zone_report.py`;
+  - ablation hooks: `perf_experiments/ablation/` (a patch against `acc3d2e23e2`).
+  - Under the profiler, the reader zones cost ~5% on the old per-pixel row gather (res5.1 211 vs 222 us); the compute zones are free. The before/after table below is unzoned (zones stripped for the run).
+
+### Measured breakdown (before)
+- All six cases ran the per-pixel row gather. Tap-major was gated off in each:
+  - res5.x: bk 3 split a 2-tile tap;
+  - aspp: the short last channel slice;
+  - sem res2.fuse_conv.1: bk 12 split an 8-tile tap;
+  - res4.0: stride 2.
+- Zones (p50 core, zoned):
+  - res5.1: `reader_gather` 188 of 222 us; compute's tilize waited on it.
+  - aspp1: gather 198 us p50, 276 us on the short-slice column, which the whole row's combine waited on (`compute_combine_wait` 76 us).
+  - sem_res2: gather 143 us and weight-multicast wait 149 us overlap.
+  - res4.0: gather 38 us, combine ~14 us, untilize 9 us.
+- Cumulative ablation peel (zoned us; full > gather > matmul > weights > scatter > fill):
+
+  | case | full | −gather | −matmul | −weights | −scatter | −fill |
+  |---|---|---|---|---|---|---|
+  | res5.1 | 221.9 | 69.1 | 67.0 | 66.7 | 46.3 | 46.1 |
+  | aspp1 | 297.7 | 96.6 | 83.3 | 82.3 | 62.1 | 58.5 |
+  | sem_res2 | 191.4 | 125.0 | 92.3 | 77.7 | 77.0 | 69.2 |
+  | res4.0 | 63.4 | 39.0 | 38.9 | 38.8 | 27.1 | 26.8 |
+
+  - Weights were hidden once the gather was gone (`gather,weights` equals `gather` on all six), so no weight idea was floated.
+  - With the gather stubbed, `SKIP_COMPUTE` moved res5.1 by only 2 us: the K-blocked walk there was bound by the fp32 packer-L1-accumulation passes (6 x 112 tiles), not by math.
+  - The R4 scatter was a serial tail: 20 us on res5.x and aspp, 12 us on res4.0.
+- Ranked: (1) row gather, 66-201 us exposed; (2) R4 combine tail, 12-20 us; (3) K-blocked L1-acc pack passes; (4) the stride-2 gather (res4.0).
+
+### Portfolio and verdicts
+Each idea was built and measured in isolation by its own optimizer (`perf_experiments/<slug>/`). Precision was identical in every option: the outputs are bit-identical to the old path unless noted.
+
+| idea | verdict | focus result (us, isolated) | domain |
+|---|---|---|---|
+| `tap_aligned_blocking`: L1 solve keeps only tap-aligned bk when tap-major is otherwise eligible | WIN | res5.1 211.3 -> 89.2, res5.2 210.2 -> 89.7, sem_res2 189.5 -> 136.9 | everywhere tap-major can run; 8x16x512 interleaved flat; bm re-sweep and single-buffered weights measured slower except res5 (option B, not taken) |
+| `short_slice_tap_major`: zero a short channel slice's padded lanes once, never read them | WIN | aspp1 293.9 -> 109.6 (A) / 101.6 (C: + 32-pixel zero block for out-of-image runs), aspp2 291.5 -> 109.4 / 101.0 | every BLOCK short slice, TILE and RM. Exception (inexpressible): TILE short slice whose real channels are not whole tiles |
+| `split_row_gather`: the writer gathers the units the reader hands it (dynamic queue 2, ring depth 8, `noinline` row gather) | WIN | res4.0 63.3 -> 47.4 (median of 3) | every row gather with > 1 tile-row per K-block: res3.0 -4.7%, interleaved C_in 48 -14.6%, HEIGHT TILE C_in 48 -36%; flat elsewhere |
+| `nslice_outer_ksplit`: K split walks owner N-slices outermost (whole-K DEST accumulation, slice y's send overlaps slice y+1's matmul) | WIN with exceptions | res5.1 222.0 -> 47.6 (it also frees the L1 that lets bk 6 run tap-major), res4.0 63.4 -> 56.0, res4.x LoFi 35.9 -> 25.5 | every K split whose resident `[bm, K]` in0 fits. Exceptions: aspp1/2 (inexpressible: in0 1.57 MB > budget), aspp.convs.3 HiFi4 +6% (measured regression while its gather was the slow row gather) |
+| `l1acc_pack_hoist`: issue the pack format / L1-acc reconfig once per K-block in `matmul_block` | WIN in isolation, not graduated | res5 walk bench 135.2 -> 118.8 us (1.14x); sem_res2 walk flat (FPU-bound) | the res5 walk it speeds up no longer exists after `nslice_outer_ksplit`; on every remaining focus walk (bk >= 4) it is flat; it is a `matmul_block_helpers.inl` edit, outside this op |
+
+Not taken: `split_row_gather`'s static ownership modes, cross-K-block hand-outs (+1-5%) and weights-up-front variants; `short_slice_tap_major` option A, which C supersedes; `nslice_outer_ksplit`'s unpinned bm.
+
+### Graduated (one path each, old code deleted unless noted)
+1. **Tap-aligned bk** (`select_blocking`): when `tap_major_capable(g)`, `bk_above_floor` keeps only multiples of the tap width. No carve-out.
+2. **Short-slice tap-major** with the zero block (option C).
+   - `tap_major_capable` admits a short slice whose lanes the reader keeps at zero: TILE by zeroing the padding tile-column slots of the `cb_input_tiles` ring once, RM by zeroing the slab once and filling real channels only.
+   - Every tap-major out-of-image run reads `CB_ZERO_SRC` (32 zero pixels, one read). This replaces the 512 B `MEM_ZEROS` chunk loop on the tap-major path.
+   - Carve-out (inexpressible): a TILE short slice whose real channels are not whole tiles keeps the row gather.
+3. **N-slice-outer K split** (R4).
+   - Under a K split, `select_blocking` solves the K-blocked walk as before, then takes N-slice-outer at that bm with the coarsest bk that fits.
+   - Changes:
+     - in0 is resident as `[bm, K]`;
+     - the reader gathers tile-row outer, K-block inner;
+     - one `matmul_block` per owner slice, Out target, no L1 acc, alternate order +1, -1, +2, -2, ..., own slice last;
+     - the reader sends the +d slices on NoC0 from `CB_SLICE_R`, the writer the -d slices and its own slice on NoC1;
+     - weights stream one slice per multicast round, two rounds ahead, depth 4, with the sender prefetching round r+1 under its own trid;
+     - `combine_credit` / `combine_arrival` keep their meaning, and `send_go` / `send_done` are unused on this path.
+   - Carve-out, written as `nslice = solve(...) or legacy`: the K-blocked walk and its post-walk scatter stay for K splits whose resident in0 does not fit L1 (aspp1/2 at bm 8).
+   - The aspp.convs.3 HiFi4 regression measured in isolation does not survive the short-slice graduation: aspp.convs.3 HiFi4 goes 192.1 -> 106.9 us whole-op (guard set below).
+4. **Split row gather**.
+   - In both gather orders: per K-block hand-outs in K-block-outer order (only that band is known to be in), M-block-wide hand-outs in the N-slice-outer order (all bands waited first).
+   - The writer plans the block's slab bands itself (shared `tile_slab_plan` / `slab_bands`) and serves hand-outs.
+   - It runs one kernel per channel-slice width, because lane handling is compile-time.
+   - Adds 6 semaphores; `cb_im2col_rm` holds `min(8, bm * num_k_blocks)` units on this path, counted in the L1 solve.
+   - Carve-out (nothing to split): with one tile-row per K-block the plain path runs.
+- Refactor that rides along: both per-tile-row gather bodies moved into `conv2d_3x3_gather_dataflow.hpp`.
+  - `RowGather::tile_row` is `noinline`: inlined, its per-pixel loop measured slower.
+  - `TapMajorGather::tile_row` is inline: measured 1-2 us faster than `noinline` on res5 / aspp / sem_res2.
+  - The TILE slab plan is shared reader/writer (`TileSlabPlan`).
+
+### Whole-op result (unzoned, us; ttnn.conv2d target from feature_spec)
+
+| case | before | after | speedup | ttnn target |
+|---|---|---|---|---|
+| res5.1.conv2 @ LoFi | 211.1 | 45.9 | 4.60x | 75.5 |
+| res5.2.conv2 @ LoFi | 210.3 | 46.1 | 4.56x | 79.8 |
+| aspp.convs.1 @ LoFi | 294.0 | 103.2 | 2.85x | 159.3 |
+| aspp.convs.2 @ LoFi | 291.3 | 102.5 | 2.84x | 220.5 |
+| semantic res2.fuse_conv.1 @ LoFi | 189.9 | 135.2 | 1.40x | 145.6 |
+| res4.0.conv2 @ LoFi | 62.5 | 44.2 | 1.41x | 39.8 |
+
+Five of six now beat ttnn.conv2d on the same input; res4.0 is 11% behind.
+
+### Guard set (whole perf harness, 47 shapes, zoned on both sides, same session; baseline = `acc3d2e23e2`)
+- BLOCK:
+  - res4.0 HiFi4 81.9 -> 63.2, res4.x HiFi4 54.8 -> 43.1, res4.x LoFi 35.9 -> 25.2;
+  - res5.0 / 5.1 / 5.2 HiFi4 142.2 / 274.7 / 273.5 -> 115.5 / 116.5 / 117.2;
+  - aspp.convs.1 / 2 / 3 HiFi4 411.4 / 405.9 / 192.1 -> 228.7 / 228.7 / 106.9.
+- HEIGHT:
+  - sem res2.fuse_conv.1 HiFi4 398.0 -> 345.1;
+  - the other 13 layers move -3.8% to +0.2% (stem.conv1 25.7 -> 25.1, stem.conv3 202.3 -> 199.5, sem res2.fuse_conv.0 391.6 -> 392.5).
+- Interleaved: the 18 shapes move -3.2% to +3.9%. The largest, H16_W16_Ci64 RM bf16 (10.2 -> 10.6), re-measured 3x on each side: median 10.2 vs 10.5 us, with a 0.5 us swing between baseline runs. That is inside the noise band, so not a material regression and no carve-out.
+- Golden: `eval/golden_tests/conv2d_3x3/` all green — `test_op` 1584 passed (INVALID skipped), `test_op_loose` + `test_regression` 62 passed. Unit dir 198 / 198. The BLOCK unit file plus the six focus cases are clean under `--dev`: 51 / 51.
+
+### Bottleneck now (zoned, p50 core)
+- **res5.x (43 us):** compute.
+  - The slice walk is 28.5 us against a ~23 us LoFi matmul floor (2016 tile-MACs).
+  - Plus untilize 4, tilize 7 and combine 3.6 us.
+- **aspp1/2 (101 us):** the K-blocked walk (nslice does not fit).
+  - Walk 69 us, tilize 20 us of it.
+  - Combine 23 us: arrivals wait 13 us on the slowest column, and the writer's send is 21 us at max.
+  - Lever: make N-slice-outer fit aspp, e.g. stream in0 per K chunk with the slice loop inside.
+- **sem_res2 (131 us):** compute.
+  - Walk 110 us over 2 M-blocks: matmul roofline ~66 us, plus tilize 26 and the L1-acc packs.
+  - Untilize 17 us.
+- **res4.0 (43.5 us):**
+  - untilize 9.4 us;
+  - split gather ~20 us, which compute's tilize waits on;
+  - slice walk 15 us: eight 72-tile-MAC matmuls paced by the weight multicast rounds; its 72-tile weight slice would fit fully resident;
+  - combine 3 us.
+
+### Helper bypasses
+No kernel_lib compute helper was bypassed: the graduated compute paths use `tilize`, `matmul_block`, `reduce` and `add_bias_bcast_rows`. Two new dataflow constructs are raw NoC / CB / semaphore code because no dataflow helper covers them:
+
+| helper | kind | what was missing / hard | helper ns | raw ns | site |
+|---|---|---|---|---|---|
+| no helper covers this (CB / dataflow_buffer family) | capability | A producer RISC cannot reserve CB slots on behalf of another RISC. The split row gather needs the writer to fill slots the reader reserved and pushes in order, so the slots are index-addressed (`base + (s % depth) * slot`) with a mailbox / `row_go` / `row_done` handshake. A "shared-producer reserve with per-slot completion" primitive would replace it. | n/a (no helper) | res4.0 47.4 us vs 63.3 us single-producer | conv2d_3x3_reader.cpp:452 (`top_up_writer`), conv2d_3x3_writer.cpp:519 (`serve_until`) |
+| no helper covers this (cross-core partial combine family) | capability | There is no helper for a point-to-point fp32 block send with a remote arrival count (write a slice into slot `my_col` of an owner, fence, bump the owner's semaphore). It is the per-slice form of R4's scatter, which was already raw. | n/a (no helper) | res5.1 45.9 us (scatter hidden behind the slice matmuls) | conv2d_3x3_combine_dataflow.hpp:50 (`send_slice`) |
+
+Helper-library feedback that was measured but not taken (not a bypass): `matmul_block` re-issues `pack_reconfig_data_format` and `llk_pack_reconfig_l1_acc` before every output subblock although both are constant within a K-block. Hoisting them to once per K-block measured 1.14x on a pack-bound K-blocked fp32 L1-acc walk (bk <= 3, 1x4 subblocks), bit-identical, flat when FPU-bound (`perf_experiments/l1acc_pack_hoist/`).

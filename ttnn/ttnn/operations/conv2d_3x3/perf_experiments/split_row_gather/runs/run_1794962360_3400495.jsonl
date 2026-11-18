@@ -1,0 +1,12 @@
+{"case": "res4_0_conv2", "variant": "committed", "pcc": 0.999999, "rel_rms": NaN, "equal_committed": null}
+{"case": "res4_0_conv2", "variant": "dyn_q2_d2", "pcc": 0.999999, "rel_rms": NaN, "equal_committed": true}
+{"case": "res4_0_conv2", "variant": "dyn_q2_d4", "pcc": 0.999999, "rel_rms": NaN, "equal_committed": true}
+{"case": "res4_0_conv2", "variant": "dyn_q2_d6", "pcc": 0.999999, "rel_rms": NaN, "equal_committed": true}
+{"case": "res4_0_conv2", "variant": "dyn_q2_d8", "pcc": 0.999999, "rel_rms": NaN, "equal_committed": true}
+{"case": "res4_0_conv2", "variant": "dyn_q3_d8", "pcc": 0.999999, "rel_rms": NaN, "equal_committed": true}
+{"case": "res4_0_conv2", "variant": "committed", "pcc": 0.9997633951755206, "rel_rms": 0.020070798695087433, "equal_committed": null}
+{"case": "res4_0_conv2", "variant": "dyn_q2_d2", "pcc": 0.9997633951755206, "rel_rms": 0.020070798695087433, "equal_committed": true}
+{"case": "res4_0_conv2", "variant": "dyn_q2_d4", "pcc": 0.9997633951755206, "rel_rms": 0.020070798695087433, "equal_committed": true}
+{"case": "res4_0_conv2", "variant": "dyn_q2_d6", "pcc": 0.9997633951755206, "rel_rms": 0.020070798695087433, "equal_committed": true}
+{"case": "res4_0_conv2", "variant": "dyn_q2_d8", "pcc": 0.9997633951755206, "rel_rms": 0.020070798695087433, "equal_committed": true}
+{"case": "res4_0_conv2", "variant": "dyn_q3_d8", "pcc": 0.9997633951755206, "rel_rms": 0.020070798695087433, "equal_committed": true}

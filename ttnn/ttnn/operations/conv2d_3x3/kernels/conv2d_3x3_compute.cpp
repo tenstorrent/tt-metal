@@ -15,6 +15,9 @@
 // matmul_block leaves packer L1 accumulation on and (OutWithRelu) PACK_RELU on; every later pack
 // (untilize, tilize, combine, bias add) first restores the state it needs.
 //
+// N-slice-outer K split (the default under a K split, when the resident in0 fits L1): see the branch below and
+// conv2d_3x3_nslice_order.hpp. The K-blocked walk below remains for K splits whose [bm, K] in0 does not fit.
+//
 // K split (BLOCK_SHARDED, k_cols > 1): the matmul accumulates this core's channel slice into fp32
 // partials [bm, all C_out] that the WRITER consumes (it scatters N-slice y to grid column y of the row),
 // so compute owns that CB's reserve/push once per M-block instead of letting the helper drain it per
@@ -37,6 +40,7 @@
 #include "ttnn/cpp/ttnn/kernel_lib/bias_add_helpers.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/perf_instrumentation.hpp"
+#include "conv2d_3x3_nslice_order.hpp"
 
 namespace ckl = compute_kernel_lib;
 
@@ -113,9 +117,14 @@ void kernel_main() {
     constexpr bool face_direct = get_compile_time_arg_val(27) != 0;
     constexpr uint32_t in0_stream_rows = get_compile_time_arg_val(28);
     constexpr uint32_t bias_stream_groups = get_compile_time_arg_val(29);
+    constexpr bool nslice_outer = get_compile_time_arg_val(30) != 0;
+    constexpr uint32_t cb_slice_r = get_compile_time_arg_val(31);
+    constexpr uint32_t slice_sb_h = get_compile_time_arg_val(32);
+    constexpr uint32_t slice_sb_w = get_compile_time_arg_val(33);
 
     const uint32_t num_m_blocks_this_core = get_arg_val<uint32_t>(0);
     [[maybe_unused]] const bool owns_output_columns = get_arg_val<uint32_t>(1) != 0;
+    [[maybe_unused]] const uint32_t my_col = get_arg_val<uint32_t>(2);
 
     constexpr uint32_t in0_num_subblocks = block_m_tiles / out_subblock_h;
     constexpr uint32_t in1_num_subblocks = block_n_tiles / out_subblock_w;
@@ -171,6 +180,7 @@ void kernel_main() {
     CircularBuffer output_tiles(cb_output_tiles);
     CircularBuffer bias(cb_bias);
     CircularBuffer combined(cb_combined);
+    [[maybe_unused]] CircularBuffer slice_r(nslice_outer ? cb_slice_r : cb_matmul_partials);
     DataflowBuffer combine_slots_dfb(cb_combine_slots);
     DataflowBuffer combined_dfb(cb_combined);
     DataflowBuffer output_tiles_dfb(cb_output_tiles);
@@ -257,7 +267,55 @@ void kernel_main() {
                 input_tiles_dfb, halo_slab_dfb, slab_tile_rows);
         }
 
-        if constexpr (k_split) {
+        if constexpr (k_split && nslice_outer) {
+            // N-slice-outer K split: the whole K of in0 is tilized once into a resident [bm, K] block (the reader
+            // gathers tile-row outer, K-block inner). Then per owner N-slice, in the order of
+            // conv2d_3x3_nslice_order.hpp, one matmul call runs the whole K as one K-block: DEST accumulates over K,
+            // the fp32 [bm, out_n] slice is packed once, with no L1-accumulation pass, and pushed to the CB of the
+            // RISC that sends it (reader: cb_slice_r; writer: cb_matmul_partials) while the next slice multiplies.
+            constexpr uint32_t k_tiles = block_k_tiles * num_k_blocks;
+            constexpr uint32_t num_owning_cols = (block_n_tiles + out_n_tiles - 1) / out_n_tiles;
+            static_assert(block_m_tiles % slice_sb_h == 0 && out_n_tiles % slice_sb_w == 0);
+            // The tilize packs must overwrite (the previous M-block's combine may have left L1 accumulation on).
+            pack_reconfig_l1_acc(0);
+            if constexpr (!face_direct) {
+                MaybeDeviceZoneScope("compute_tilize");
+                ckl::tilize<im2col_tilize_width_tiles, cb_im2col_rm, cb_im2col_tiles>(
+                    im2col_rm_dfb, im2col_tiles_dfb, block_m_tiles * (k_tiles / im2col_tilize_width_tiles));
+            }
+            {
+                MaybeDeviceZoneScope("compute_matmul_walk");
+                for (uint32_t j = 0; j < k_cols; ++j) {
+                    const uint32_t y = conv2d_3x3::nslice_owner<k_cols>(my_col, j);
+                    if (y >= num_owning_cols) {
+                        continue;
+                    }
+                    CircularBuffer& slice_cb = conv2d_3x3::nslice_reader_sends<k_cols>(j) ? slice_r : partials;
+                    ckl::matmul_block<
+                        /*transpose=*/false,
+                        /*packer_l1_acc=*/false,
+                        ckl::LastBlockTarget::Out,
+                        ckl::OutputCBLayout::TileRowMajor,
+                        ckl::matmul_config::InitMode::Short,
+                        ckl::InputPolicy::WaitAndRetainOnLastBlock,
+                        ckl::InputPolicy::WaitAndPopPerKBlock>(
+                        im2col_tiles,
+                        weights,
+                        slice_cb,
+                        slice_cb,
+                        ckl::MatmulBlockShape::of(
+                            block_m_tiles / slice_sb_h, out_n_tiles / slice_sb_w, slice_sb_h, slice_sb_w, k_tiles, 1),
+                        {},
+                        {},
+                        /*in1_per_core_w=*/out_n_tiles,
+                        /*out_row_width=*/out_n_tiles);
+                }
+                im2col_tiles.pop_front(block_m_tiles * k_tiles);
+            }
+            if (owns_output_columns) {
+                combine_block();
+            }
+        } else if constexpr (k_split) {
             {
                 // The whole K walk, tilize hooks included (compute_tilize is the tilize share).
                 MaybeDeviceZoneScope("compute_matmul_walk");

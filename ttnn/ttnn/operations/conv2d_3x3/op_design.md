@@ -323,3 +323,14 @@ Helpers considered and rejected:
 | Program cache | The second dispatch (fresh buffers, same shapes) must add no cache entry and be correct. | Addresses only in RT args (per-core vectors); CB sizes and CT args depend on shapes only; sharded CB backing hashes presence only. |
 | Ragged last core | Fewer valid tiles than nominal. | Nominal push/pop/wait counts and matmul shape; reader skips invalid rows; writer writes valid tiles only (mechanism cap 9). |
 | Deadlock: writer weight prefetch vs output drain (> 1 M-block per core) | Writer blocked on `cb_weights` reserve for block j while compute is blocked in finalize(j-1) on `cb_output_tiles`. | Writer order per M-block: weights of j, then drain output j; prefetch of j+1 weights only between drained row groups (their reserves cannot block — see stall-shadow table). |
+
+## Perf 1 amendments to the Blocking Model
+
+Measured reasons and numbers: `changelog.md` "Perf 1".
+
+| Change | Where | Rule |
+|--------|-------|------|
+| Tap-aligned bk | `select_blocking` | When `tap_major_capable(g)`, `bk_above_floor` keeps only multiples of `c_in_tiles`. Above the tap floor, the only tap-splitting divisor of a kernel row is 1.5 taps, and taking it would fall back to the per-pixel row gather. |
+| Short-slice tap-major | `tap_major_capable`, reader | A K split whose last channel slice is short stays tap-major: the reader zeroes that slice's padded lanes once and never reads into them (TILE: the padding tile-column slots of the `cb_input_tiles` ring; RM: the slab, then real-channel pixel reads). TILE needs the slice's real channels to be whole tiles. Tap-major out-of-image runs read `cb_zero_src` (CB 11, 32 zero pixels). |
+| R4 N-slice-outer | `select_blocking`, all kernels | Under a K split, the K-blocked solve fixes bm. At that bm the coarsest bk whose N-slice-outer footprint fits wins: resident in0 `[bm, K]`, weights `NSLICE_WEIGHT_DEPTH x K x out_n`, two `NSLICE_SLICE_DEPTH x [bm, out_n]` fp32 slice CBs (`cb_matmul_partials` for the writer, `cb_slice_r` CB 10 for the reader). Per owner slice, in the order of `conv2d_3x3_nslice_order.hpp`, one whole-K matmul packs the fp32 slice once, and its send overlaps the next slice's matmul. When it does not fit, the K-blocked walk with the post-walk scatter runs (aspp.convs.1/2). |
+| Split row gather | `_row_split`, reader, writer | On the per-pixel row gather with `bm > 1`, the writer gathers the units (one tile-row of one K-block) the reader hands it, at most `ROW_QUEUE` outstanding. `cb_im2col_rm` holds `min(ROW_SPLIT_DEPTH_ROWS, bm * num_k_blocks)` units, index-addressed. There is one writer kernel per channel-slice width. |

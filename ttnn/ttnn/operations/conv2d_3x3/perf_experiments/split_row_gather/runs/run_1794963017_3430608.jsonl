@@ -1,0 +1,12 @@
+{"case": "height_rm_s2", "variant": "committed", "pcc": 0.999999, "rel_rms": NaN, "equal_committed": null, "blocking": {"bm": 1, "bk": 3, "nk": 3, "mblocks": 1, "depth": 2}}
+{"case": "height_rm_s2", "variant": "dyn_q2_d8", "pcc": 0.999999, "rel_rms": NaN, "equal_committed": true, "blocking": {"bm": 1, "bk": 3, "nk": 3, "mblocks": 1, "depth": 2}}
+{"case": "height_rm_s2", "variant": "dyn_q2_d8", "pcc": 0.999999, "rel_rms": NaN, "equal_committed": null, "blocking": {"bm": 1, "bk": 3, "nk": 3, "mblocks": 1, "depth": 2}}
+{"case": "height_rm_s2", "variant": "committed", "pcc": 0.999999, "rel_rms": NaN, "equal_committed": null, "blocking": {"bm": 1, "bk": 3, "nk": 3, "mblocks": 1, "depth": 2}}
+{"case": "height_rm_s2", "variant": "committed", "pcc": 0.999999, "rel_rms": NaN, "equal_committed": null, "blocking": {"bm": 1, "bk": 3, "nk": 3, "mblocks": 1, "depth": 2}}
+{"case": "height_rm_s2", "variant": "dyn_q2_d8", "pcc": 0.999999, "rel_rms": NaN, "equal_committed": true, "blocking": {"bm": 1, "bk": 3, "nk": 3, "mblocks": 1, "depth": 2}}
+{"case": "height_rm_s2", "variant": "committed", "pcc": 0.9999552549931149, "rel_rms": 0.007801934145390987, "equal_committed": null, "blocking": {"bm": 1, "bk": 3, "nk": 3, "mblocks": 1, "depth": 2}}
+{"case": "height_rm_s2", "variant": "dyn_q2_d8", "pcc": 0.9999552549931149, "rel_rms": 0.007801934145390987, "equal_committed": true, "blocking": {"bm": 1, "bk": 3, "nk": 3, "mblocks": 1, "depth": 2}}
+{"case": "height_rm_s2", "variant": "dyn_q2_d8", "pcc": 0.9999552549931149, "rel_rms": 0.007801934145390987, "equal_committed": null, "blocking": {"bm": 1, "bk": 3, "nk": 3, "mblocks": 1, "depth": 2}}
+{"case": "height_rm_s2", "variant": "committed", "pcc": 0.9999552549931149, "rel_rms": 0.007801934145390987, "equal_committed": null, "blocking": {"bm": 1, "bk": 3, "nk": 3, "mblocks": 1, "depth": 2}}
+{"case": "height_rm_s2", "variant": "committed", "pcc": 0.9999552549931149, "rel_rms": 0.007801934145390987, "equal_committed": null, "blocking": {"bm": 1, "bk": 3, "nk": 3, "mblocks": 1, "depth": 2}}
+{"case": "height_rm_s2", "variant": "dyn_q2_d8", "pcc": 0.9999552549931149, "rel_rms": 0.007801934145390987, "equal_committed": true, "blocking": {"bm": 1, "bk": 3, "nk": 3, "mblocks": 1, "depth": 2}}
