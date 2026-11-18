@@ -492,9 +492,11 @@ def dist_batch_worker(
             "src_core_uid": d1["src_core_uid"],
             "dst_core_uid": d2["src_core_uid"],
             "proc": d1["proc"],
-            "bw": bw1 if bw1["bw"] > bw2["bw"] else bw2,
+            "bw": {},
             "errors": d1["errors"] + d2["errors"],
         }
+        if bw1 and bw2:  # TODO handle better
+            d["bw"] = bw1 if bw1["bw"] > bw2["bw"] else bw2
 
         if d["src_core_uid"] != l[0]:
             d["src_core_uid"], d["dst_core_uid"] = d["dst_core_uid"], d["src_core_uid"]
