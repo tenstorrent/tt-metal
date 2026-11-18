@@ -21,11 +21,11 @@ from tests.ttnn.utils_for_testing import (
 I0_MAX_INPUT = 91.90076446533203
 I0_MAX_INPUT_BF16 = 91.5
 
-# Worst-case ULP error measured on Blackhole p150a over the kernel's full input
-# domain: 6.0 ULP for float32 (a 2,000,001-point sweep of [-88.5, 88.5], worst at
-# x = -5.9458, just inside the |x| <= 6 polynomial region) and 0.64 ULP for bfloat16
-# (every bfloat16 input against the float32 golden, worst at x = 85.5). Budgets
-# below carry 2x and 3x headroom over those measurements.
+# Worst-case ULP error measured on Blackhole p150a and Wormhole n300 (identical
+# outputs) against I0 in float64: 4 ULP for float32 (a 2,000,001-point sweep of
+# [-91.9008, 91.9008], worst at x = -18.958; every float32 with 88.5 <= |x| <=
+# 91.9008 stays within 3) and 0.64 ULP for bfloat16 (every bfloat16 input, worst at
+# x = 85.5). Budgets below carry 3x headroom over those measurements.
 #
 # Units are the true spacing of the output dtype (what comp_ulp/assert_with_ulp use),
 # not a relative-mantissa proxy -- the two differ by up to 2x within a binade and
