@@ -62,7 +62,7 @@ def _big_mesh_parts():
     ]
 
 
-def test_local_coords_keeps_only_this_hosts_devices_when_they_do_not_form_a_box(monkeypatch):
+def test_local_coords_of_an_l_shaped_host(monkeypatch):
     """get_local_mesh_coord_range is the bounding box of this host's devices. An L-shaped set of them spans another
     host's device too, which a save would otherwise be elected to write and a load would hand to
     from_local_host_shards."""
@@ -125,7 +125,8 @@ def test_each_rank_plans_only_its_owned_chunks_and_files():
     assert "model/b" not in entries(plans[other]) and "model/b" in entries(plans[bias_writer])
 
 
-def test_the_ranks_must_cover_the_label_and_agree_on_its_description(expect_error):
+def test_ranks_must_cover_and_agree_on_the_label(expect_error):
+    """The ranks must hold every coordinate of a label between them, and describe it the same way."""
     infos = [_info("model/w", [R, S(3)], (1, 4), (1, 1, 32, 16))]
     with expect_error(CheckpointError, "no rank holds"):
         merge_plan_parts([PlanPart(_record(0, [(0, 0), (0, 1)]), infos), PlanPart(_record(1, [(0, 2)]), infos)])
@@ -136,7 +137,7 @@ def test_the_ranks_must_cover_the_label_and_agree_on_its_description(expect_erro
         )
 
 
-def test_the_tp_split_travels_with_a_plan_part_and_the_ranks_must_agree_on_it(expect_error):
+def test_tp_split_travels_with_the_plan_part(expect_error):
     """Each rank's plan part carries its tensors' TP split, which the index records and load compares; ranks that
     report different splits for one key (one of them FSDP-sharding it) describe it differently."""
     split = dataclasses.replace(_info("model/qkv_linear/w", [R, S(2)], (1, 4), (1, 1, 32, 64)), tp_split=(1, 1, 4, 1))
@@ -162,7 +163,7 @@ def test_multi_mesh_ranks_with_their_own_keys_and_one_shared_key():
     assert len(election.owners["model/norm"]) == 1, "one box, held by four (rank, coordinate) pairs"
 
 
-def test_every_ranks_names_of_a_key_reach_the_index_even_from_a_rank_that_writes_none_of_it(expect_error):
+def test_every_ranks_live_names_reach_the_index(expect_error):
     """A layer both ranks hold, tied to another name on one rank only: the index maps that name too, though the other
     rank writes the layer, so the rank holding it under the extra name loads it through that name."""
     stage0 = _info("model/stage0/w", [R, S(3)], (1, 2), (1, 1, 32, 32))
@@ -265,7 +266,8 @@ def _big_mesh_save():
     return election, r0, r1
 
 
-def test_merge_results_builds_one_index_with_remapped_files_and_every_ranks_generators(expect_error):
+def test_merge_results_builds_one_index(expect_error):
+    """merge_results builds one index, with each rank's file indexes shifted, and keeps every rank's generators."""
     election, r0, r1 = _big_mesh_save()
     index, header = merge_results([r1, r0], election, "step_0000003")
     assert [f.path for f in index.files] == [
@@ -425,7 +427,7 @@ def test_a_failing_point_to_point_transfer_is_fatal_on_both_ends():
         assert all("point-to-point transfer failed" in str(e) for e in errors.values()), (body.__name__, errors)
 
 
-def test_after_a_fatal_failure_no_later_save_or_load_in_the_process_exchanges_anything(expect_error):
+def test_no_exchange_after_a_fatal_failure(expect_error):
     """A retry must not reach the other ranks: MPI pairs collectives by order, so an exchange on a communicator that
     failed could hang, or be paired with an unrelated one on a rank that moved on. The transport outlives the group
     of one save or load and records the failure, so a group built later on it raises before exchanging anything."""
@@ -456,7 +458,7 @@ def test_the_mpi_transport_is_one_per_process(monkeypatch):
     assert _coordinator.current_transport().broken == "rank 1: collective failed"
 
 
-def test_scalar_restore_keeps_each_optimizers_own_param_group_members():
+def test_scalar_restore_keeps_own_group_members():
     """On a multi-mesh world the index carries rank 0's optimizer scalars; another rank's optimizer holds other
     parameters, and the membership list must stay its own while steps and learning rates are restored."""
 
@@ -517,7 +519,9 @@ def test_every_rank_raises_the_class_the_failing_rank_raised():
     assert all("rank 1: IncompleteCheckpointError: no index.json" in str(e) for e in errors.values())
 
 
-def test_an_interrupt_on_one_rank_is_exchanged_before_it_propagates():
+def test_interrupt_is_exchanged_before_it_propagates():
+    """An interrupt on one rank is exchanged with the others before it propagates."""
+
     def body(group, fake):
         def work():
             if group.rank == 1:
@@ -551,7 +555,8 @@ def test_an_oversized_payload_fails_every_rank_inside_its_phase(monkeypatch):
     assert all("more than a transfer can carry" in str(e) for e in errors.values()), "every rank names the cause"
 
 
-def test_ranks_with_different_scheduler_or_dataloader_state_are_refused(expect_error):
+def test_ranks_must_agree_on_scheduler_and_loader(expect_error):
+    """Ranks with different scheduler or dataloader state are refused."""
     parts = _big_mesh_parts()
     parts[0].train_state_hash, parts[1].train_state_hash = 11, 12
     with expect_error(CheckpointError, r"rank\(s\) \[1\] differs from rank 0"):
@@ -561,7 +566,9 @@ def test_ranks_with_different_scheduler_or_dataloader_state_are_refused(expect_e
     assert PlanPart.from_bytes(parts[1].to_bytes()).train_state_hash == 11
 
 
-def test_param_group_members_are_merged_across_ranks_and_checked_as_a_subset(expect_error):
+def test_param_group_members_merge_across_ranks(expect_error):
+    """Param group members are merged across the ranks, and a rank's optimizer is checked to hold a subset of the
+    union."""
     # Each rank's optimizer holds the shared layer and its own stage; the index records the union of the lists.
     election, r0, r1 = _big_mesh_save()
     r0.scalars = {"optimizer/num_param_groups": 1, "optimizer/param_groups.0.params": "shared/w\nstage0/w"}
@@ -581,7 +588,7 @@ def test_param_group_members_are_merged_across_ranks_and_checked_as_a_subset(exp
         check_param_groups(_Opt(["shared/w", "stage2/w"]), index.scalars, strict=True)
 
 
-def test_a_one_rank_sub_context_is_the_group_of_one_under_its_world_rank(monkeypatch):
+def test_one_rank_sub_context_keeps_its_world_rank(monkeypatch):
     """A split launch can leave a process alone in its sub context: still the group of one, but under its MPI world
     rank, as capture_rng and restore_rng key its generators."""
     for name, value in (
@@ -598,7 +605,8 @@ def test_a_one_rank_sub_context_is_the_group_of_one_under_its_world_rank(monkeyp
     assert _coordinator.current_group().world_rank == 0 == this_world_rank()
 
 
-def test_the_group_of_one_runs_phases_directly_and_keeps_error_types(expect_error):
+def test_group_of_one_runs_phases_directly(expect_error):
+    """The group of one runs its phases directly and keeps their error types."""
     group = Group(LoopbackTransport())
     assert group.phase("x", lambda: 5) == 5 and group.gather(b"p") == [b"p"] and group.broadcast(b"q") == b"q"
     assert group.agree("x", 3) == [3] and group.allgather(4) == [4] and group.is_coordinator

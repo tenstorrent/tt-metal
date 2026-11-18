@@ -56,7 +56,8 @@ def _ranks_in_step(request, two_ranks):
     ranks_in_step(request.node.nodeid)
 
 
-def test_each_rank_writes_its_coordinates_and_rank_zero_merges_the_index(two_ranks):
+def test_ranks_write_their_coordinates(two_ranks):
+    """Each rank writes the files of its coordinates, and rank 0 merges the index."""
     rank, local, root = two_ranks
     ctx = ttml.autograd.AutoContext.get_instance()
     ttml.init.manual_seed(0)  # the ranks build the same replicated weights, which then train alike
@@ -127,7 +128,8 @@ def test_each_rank_writes_its_coordinates_and_rank_zero_merges_the_index(two_ran
     ttnn.distributed_context_barrier()
 
 
-def test_a_rank_failing_mid_save_stops_every_rank_and_leaves_no_checkpoint(two_ranks, expect_error):
+def test_rank_failing_mid_save_stops_every_rank(two_ranks, expect_error):
+    """A rank failing mid-save stops every rank and leaves no checkpoint."""
     rank, local, root = two_ranks
     model, params, opt = fresh_tp(DIM)
     path = os.path.join(root, "refused")
@@ -177,7 +179,7 @@ def test_ranks_whose_optimizers_differ_are_refused(two_ranks, expect_error):
     ttnn.distributed_context_barrier()
 
 
-def test_a_truncated_file_on_one_rank_stops_every_rank_before_anything_is_placed(two_ranks, expect_error):
+def test_truncated_file_on_one_rank_stops_all(two_ranks, expect_error):
     """Every rank opens and checks its data files while the load is planned, so a truncated file of rank 1's stops
     every rank before any rank places anything. Rank 0 may read the file too (the election spreads replicated boxes
     over both ranks' files) or not; either way it used to restore its tensors first."""

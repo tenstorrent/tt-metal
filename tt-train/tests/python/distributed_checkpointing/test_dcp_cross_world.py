@@ -213,9 +213,7 @@ def test_a_scrambled_fused_weight_fails_the_logits_check(tmp_path, release_metal
 DUAL_RANK_MGD = "tests/ttnn/distributed/config/bh_1x4_dual_rank_mesh_graph_descriptor.textproto"
 
 
-def test_a_checkpoint_two_ranks_wrote_on_one_mesh_loads_on_one_process(
-    tmp_path, release_metal_env, skip_if_host_too_small
-):
+def test_two_ranks_on_one_mesh_load_on_one_process(tmp_path, release_metal_env, skip_if_host_too_small):
     """Two ranks co-owning one [1, 4] mesh split most keys' chunks between their files (the other two-rank cases
     give each rank a whole mesh, so each key is written by one rank). The test_dcp_multirank module's source test
     saves such a checkpoint under tt-run; one process with one device loads it, and every parameter must equal the
