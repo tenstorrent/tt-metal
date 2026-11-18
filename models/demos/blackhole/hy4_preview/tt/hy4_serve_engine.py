@@ -16,6 +16,7 @@ import hashlib
 import os
 import time
 
+import numpy as np
 import torch
 from loguru import logger
 
@@ -81,6 +82,12 @@ class Hy4Engine:
         ] * ROWS  # per mesh row: np.int32 tokens whose pool pages (positions 0..len-1) are valid, len % 512 == 0; None = nothing retained
         self.ret_t = [0.0] * ROWS
         self.pfx_stats = dict(calls=0, hit_calls=0, hit_tokens=0, prompt_tokens=0, computed_tokens=0)
+        # HY4_PFX_LOSS_LOG=1 (default 0): one ``pfx_loss`` line per prefilled request with the cause of the tokens that were NOT served from the cache + running totals in pfx_stats (loss_<cause>)
+        self.loss_log = os.environ.get("HY4_PFX_LOSS_LOG", "0") == "1"
+        self.hist = (
+            []
+        )  # recent prompts (np.int32, floored to the page) with the row they were prefilled on and the time: the 'was it ever here' memory of the loss classifier
+        self.hist_max = int(os.environ.get("HY4_PFX_LOSS_HIST", "24"))
         ckpt = os.environ.get("HY4_CKPT", "/ckpt")
         nl = int(os.environ.get("HY4_SERVE_LAYERS", "78"))
         t0 = time.time()
@@ -234,6 +241,58 @@ class Hy4Engine:
             taken.add(r)
         return out
 
+    def classify_loss(self, prompts_by_row, hits, start, live_before, rids=None):
+        """cause of the tokens a request did not get from the cache, per mesh row of the call: -> {row: dict(rid, prompt, hit, potential, cause, home)}.
+        potential = the aligned hit the longest earlier prompt of the history would have given (never more than the prompt - 1). Causes: hit (nothing lost beyond alignment), first_seen (no earlier prompt shares a
+        token), policy_off (HY4_PFX_FILE switch 0), busy_home (the prefix is still resident on a row that was live, so the request went elsewhere), lockstep (resident on the row it got but the call starts at the common
+        minimum of its rows), evicted (a row overwrote it), partial (resident but the call recomputed it for another reason).
+        """
+        A, out = self.pf_rows, {}
+        on = self._pfx_on()
+        for r, p in prompts_by_row.items():
+            toks = torch.as_tensor(p, dtype=torch.int32).numpy()
+            n = len(toks)
+            used = min(hits.get(r, 0), start) if (hits.get(r, 0) > 0) else 0
+            pot, row0 = 0, None
+            for chain, r0, _t in self.hist:
+                m = (
+                    min(
+                        int(np.argmax(np.append(chain[: min(len(chain), n)] != toks[: min(len(chain), n)], True))),
+                        n - 1,
+                    )
+                    // A
+                ) * A
+                if m > pot:
+                    pot, row0 = m, r0
+            if not on and self.pfx:
+                cause = "policy_off" if pot > 0 else "first_seen"
+            elif pot == 0:
+                cause = "first_seen"
+            elif used >= pot:
+                cause = "hit"
+            else:
+                resident = [q for q in range(ROWS) if (min(self.match_len(q, toks), n - 1) // A) * A >= pot]
+                if r in resident:
+                    cause = "lockstep" if hits.get(r, 0) > used else "partial"
+                elif any(live_before[q] for q in resident):
+                    cause = "busy_home"
+                elif resident:
+                    cause = "partial"
+                else:
+                    cause = "evicted"
+            lost = max(pot - used, 0)
+            self.pfx_stats["loss_" + cause] = self.pfx_stats.get("loss_" + cause, 0) + (lost if cause != "hit" else 0)
+            out[r] = dict(rid=(rids or {}).get(r), prompt=n, hit=used, potential=pot, cause=cause, home=row0)
+        return out
+
+    def remember_prompts(self, prompts_by_row, rows):
+        now = time.time()
+        for r in rows:
+            n = (len(prompts_by_row[r]) // PAGE) * PAGE
+            if n:
+                self.hist.append((torch.as_tensor(prompts_by_row[r][:n], dtype=torch.int32).numpy().copy(), r, now))
+        del self.hist[: max(0, len(self.hist) - self.hist_max)]
+
     def drain(self):
         """wait for an in-flight speculative round and drop it (state on device advanced past the mirror: reload before the next round). Called before anything else touches the device (prefill, seed)."""
         if self.inflight is not None:
@@ -245,7 +304,7 @@ class Hy4Engine:
             self.pipe_discards += 1
 
     # ------------------------------------------------------------------------------------------------ prefill
-    def prefill(self, prompts_by_row, sampling=None):
+    def prefill(self, prompts_by_row, sampling=None, rids=None):
         """prompts_by_row {mesh row: list[int]} -> {row: first token}. ``sampling`` {row: (temperature, top_k, top_p, seed)}. Direct-to-pool chunked prefill (+ MTP prompt KV + seed round in spec mode).
         The other mesh rows keep their pool pages (masked writes) and their decode state."""
         t0 = time.perf_counter()
@@ -270,6 +329,14 @@ class Hy4Engine:
                 hits[r] = self.hit_len(r, torch.as_tensor(prompts_by_row[r], dtype=torch.int32).numpy())
             st = [(h - A if (self.pfx_redo and h > 0) else h) for h in hits.values()]
             start = max(0, min(st)) if st else 0
+            if self.loss_log:
+                live_before = list(self.live)
+                loss = self.classify_loss(prompts_by_row, hits, start, live_before, rids)
+                for r in rows:
+                    d = loss[r]
+                    logger.info(
+                        f"pfx_loss rid={d['rid']} row={r} prompt={d['prompt']} hit={d['hit']} potential={d['potential']} cause={d['cause']} home={d['home']} live={live_before}"
+                    )
             for r in rows:
                 self.ret[r] = None  # the pages of this row change from position ``start`` on
             self.pfx_stats["calls"] += 1
@@ -289,6 +356,8 @@ class Hy4Engine:
             start=start,
         )
         if self.pfx:
+            if self.loss_log:
+                self.remember_prompts(prompts_by_row, rows)
             now = time.time()
             for r in rows:
                 n = (len(prompts_by_row[r]) // PAGE) * PAGE

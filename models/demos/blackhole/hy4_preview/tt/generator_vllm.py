@@ -184,6 +184,19 @@ class HYV4ForCausalLM:
         self.vocab = self.eng.vocab
         self.pages = self.eng.pages
         self.slots = _Slots(max_num_seqs)
+        self.apc_hook = None
+        if self.eng.pfx and os.environ.get("HY4_APC_HOOK", "0") == "1":
+            # home-row hold / row-match admission of the plugin scheduler read the row-local chains through this hook (default off)
+            try:
+                from vllm_tt_plugin.prefix_hooks import set_prefix_hook
+
+                from models.demos.blackhole.hy4_preview.tt.hy4_apc_hook import Hy4ApcHook
+
+                self.apc_hook = Hy4ApcHook(self.eng, ROWS)
+                set_prefix_hook(self.apc_hook)
+                logger.info("Hy4 APC hook registered (peek_home over the row-local chains)")
+            except Exception as e:  # noqa: BLE001
+                logger.warning(f"Hy4 APC hook not registered: {e!r}")
         self.steps = 0
         self._active = [0] * ROWS
         self._variant, self._seeds, self._samp_set = "G", [0] * ROWS, False
@@ -255,6 +268,8 @@ class HYV4ForCausalLM:
                     s2 = self.slots.phys.index(q)
                     self.slots.phys[s], self.slots.phys[s2] = self.slots.phys[s2], self.slots.phys[s]
             phys = [self.slots.phys[s] for s in slots]
+        if self.apc_hook is not None and kwargs.get("request_ids"):
+            self.apc_hook.note_prefill(kwargs["request_ids"], phys)
         prompts = {p: [int(x) for x in tokens[i, : lens[i]].tolist()] for i, p in enumerate(phys)}
         sampling = {}
         if sampling_params is not None:
@@ -275,7 +290,8 @@ class HYV4ForCausalLM:
             raise TTRequestError(
                 "Hy4 product server: host sampling is not available (the plugin must sample on device)"
             )
-        first = self.eng.prefill(prompts, sampling)
+        rids = {p: str(r) for p, r in zip(phys, kwargs["request_ids"])} if kwargs.get("request_ids") else None
+        first = self.eng.prefill(prompts, sampling, rids=rids)
         for p in phys:
             self._seeds[p] = sampling[p][3]
         self._samp_set = False  # plain mode: the decode reload contract re-uploads tokens / positions / sampling state after a prefill
