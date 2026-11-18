@@ -15,6 +15,7 @@ from models.demos.common.prefill.prefill_chunk import (
     sentinel_words,
 )
 from models.demos.common.prefill.runners import prefill_runner as runner
+from models.demos.common.prefill.runners.stage_layout import StageLayout
 
 C, SP, F = 1024, 8, 4
 
@@ -151,7 +152,7 @@ def test_indexer_top_k_rides_the_activation_service_with_the_d2d_metadata(monkey
     monkeypatch.setattr(runner, "activation_global_spec", lambda *a: None)
     monkeypatch.setattr(runner, "D2D_METADATA_SIZE_BYTES", 16)
     tail = (("idx", runner.INDEX_MAPPER_CONFIG),)
-    runner.build_d2d_pipeline_endpoints(None, 1, 3, 32, 64, extra_specs=("ids",), inbound_tail=tail, outbound_tail=())
+    runner.build_d2d_pipeline_endpoints(None, StageLayout.single_host(3), 1, 32, 64, extra_specs=("ids",), inbound_tail=tail, outbound_tail=())
     assert made == [(16, ["ids", "idx"]), (16, ["ids"])]
 
 
@@ -167,7 +168,7 @@ def test_receivers_reserve_links_only_when_a_sender_follows(monkeypatch, rank, r
     monkeypatch.setattr(runner.ttnn, "create_mesh_mapper", lambda *a: None)
     monkeypatch.setattr(runner, "d2d_worker_cores", lambda *a: None)
     monkeypatch.setattr(runner, "activation_global_spec", lambda *a: None)
-    runner.build_d2d_pipeline_endpoints(None, rank, 3, 32, 64)
+    runner.build_d2d_pipeline_endpoints(None, StageLayout.single_host(3), rank, 32, 64)
     assert reserved == [reserve]
 
 
