@@ -108,6 +108,27 @@ auto create_mesh_buffer(
     return distributed::MeshBuffer::create(buffer_config, local_config, &mesh_device);
 }
 
+// The buffer must match the spec's memory type and hold its pages, not only be large enough.
+TEST_F(MeshTensorDeviceTest, ConstructionRejectsMismatchedBuffer) {
+    auto memory_config = MemoryConfig{TensorMemoryLayout::INTERLEAVED, BufferType::DRAM};
+    auto row_major_spec =
+        TensorSpec(Shape{32, 32}, TensorLayout(DataType::BFLOAT16, PageConfig(Layout::ROW_MAJOR), memory_config));
+
+    // A DRAM buffer for an L1 tensor.
+    auto l1_spec = TensorSpec(
+        Shape{32, 32},
+        TensorLayout(
+            DataType::BFLOAT16,
+            PageConfig(Layout::ROW_MAJOR),
+            MemoryConfig{TensorMemoryLayout::INTERLEAVED, BufferType::L1}));
+    EXPECT_ANY_THROW(MeshTensor::from_buffer(std::move(*create_mesh_buffer(*mesh_device_, row_major_spec)), l1_spec));
+
+    // A buffer of 64-byte rows for a tensor of 2048-byte tiles, though both hold 2048 bytes.
+    auto tile_spec =
+        TensorSpec(Shape{32, 32}, TensorLayout(DataType::BFLOAT16, PageConfig(Layout::TILE), memory_config));
+    EXPECT_ANY_THROW(MeshTensor::from_buffer(std::move(*create_mesh_buffer(*mesh_device_, row_major_spec)), tile_spec));
+}
+
 TEST_F(MeshTensorDeviceTest, ConstructionWithMeshBuffer) {
     auto page_config = PageConfig(Layout::ROW_MAJOR);
     auto memory_config = MemoryConfig{TensorMemoryLayout::INTERLEAVED, BufferType::DRAM};
