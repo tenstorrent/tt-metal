@@ -1221,6 +1221,41 @@ class TtLlamaAttention(LightweightModule):
         st = self._cpf_ring_state(keys_BKSD)
         block_size = int(keys_BKSD.shape[2])
         head_dim = int(keys_BKSD.shape[3])
+        # K and V share one all-reduce of [1, 1, 2P, head_dim] when 2P has ATTN_REPLICATE buffers
+        # (LLAMA_GALAXY_PREFILL_CPF_RING_KVMERGE=0 keeps one all-reduce per tensor at length P).
+        merge = os.environ.get("LLAMA_GALAXY_PREFILL_CPF_RING_KVMERGE", "1") == "1" and 2 * P in getattr(
+            self.tt_ccl, "support_seqlens", ()
+        )
+        # LLAMA_GALAXY_PREFILL_CPF_REPLICA=1 (opt-in, read at call time): a persistent per-layer replica of the last
+        # broadcast prefix K|V ([1, 1, 2P, head_dim] on every device). The generator sets tt_ccl._cpf_rep_mode per
+        # call: "write" = the usual gather + broadcast, then copy the result into the replica; "read" = the
+        # generator saw the same prefix tokens as the last "write" call, so the prefix K|V comes from the replica
+        # (no gather, mask or all-reduce). None = no replica.
+        rep_mode = None
+        if merge and os.environ.get("LLAMA_GALAXY_PREFILL_CPF_REPLICA", "0") == "1":
+            rep_mode = getattr(self.tt_ccl, "_cpf_rep_mode", None)
+        rep = None
+        if rep_mode in ("read", "write"):
+            reps = st.setdefault("rep", {})
+            if (self.layer_num, P) not in reps:
+                reps[(self.layer_num, P)] = ttnn.from_torch(
+                    torch.zeros(1, 1, 2 * P, head_dim),
+                    device=self.mesh_device,
+                    layout=ttnn.TILE_LAYOUT,
+                    dtype=ttnn.bfloat8_b,
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                    mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+                )
+            rep = reps[(self.layer_num, P)]
+        if rep_mode == "read":
+            fulls = []
+            for lo, new in ((0, k_new), (P, v_new)):
+                prefix = ttnn.slice(rep, [0, 0, lo, 0], [1, 1, lo + P, head_dim])
+                fulls.append(ttnn.concat([prefix, new], dim=2, memory_config=ttnn.DRAM_MEMORY_CONFIG))
+                ttnn.deallocate(prefix)
+            out = [ttnn.reshape(f, [int(f.shape[2]) // block_size, 1, block_size, head_dim]) for f in fulls]
+            out.append(st["ident_pt"])
+            return out
         # grouped (default): the gather runs as P / G independent batch rows of G = 8 blocks each (page table
         # [P / G, 8], the smallest 32-byte page-table row), so each query row scores G keys instead of up to P.
         # full: one causal pass over all P rows (LLAMA_GALAXY_PREFILL_CPF_RING_GATHER=full).
@@ -1300,17 +1335,14 @@ class TtLlamaAttention(LightweightModule):
             ttnn.deallocate(masked)
             return reduced
 
-        # K and V share one all-reduce of [1, 1, 2P, head_dim] when 2P has ATTN_REPLICATE buffers
-        # (LLAMA_GALAXY_PREFILL_CPF_RING_KVMERGE=0 keeps one all-reduce per tensor at length P).
-        merge = os.environ.get("LLAMA_GALAXY_PREFILL_CPF_RING_KVMERGE", "1") == "1" and 2 * P in getattr(
-            self.tt_ccl, "support_seqlens", ()
-        )
         fulls = []
         if merge:
             kv = ttnn.concat(gathered, dim=2, memory_config=ttnn.DRAM_MEMORY_CONFIG)
             for g in gathered:
                 ttnn.deallocate(g)
             reduced = broadcast(kv)
+            if rep_mode == "write":
+                ttnn.copy(reduced, rep)
             for lo, new in ((0, k_new), (P, v_new)):
                 prefix = ttnn.slice(reduced, [0, 0, lo, 0], [1, 1, lo + P, head_dim])
                 fulls.append(ttnn.concat([prefix, new], dim=2, memory_config=ttnn.DRAM_MEMORY_CONFIG))

@@ -2,6 +2,7 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+import hashlib
 import os
 from collections import defaultdict
 from dataclasses import fields, replace
@@ -111,6 +112,12 @@ def get_padded_prefill_len(seq_len: int) -> int:
     LLAMA_GALAXY_PREFILL_PAD length when that is smaller.
     """
     return padded_prefill_len(seq_len, PREFILL_EXTRA_SEQLENS)
+
+
+def _cpf_rep_on() -> bool:
+    """LLAMA_GALAXY_PREFILL_CPF_REPLICA=1 (read at call time): reuse the last broadcast prefix K|V of the CPF ring
+    path when the next ring request has the same prefix tokens (llama_attention._cpf_ring_kv, mode "read")."""
+    return os.environ.get("LLAMA_GALAXY_PREFILL_CPF_REPLICA", "0") == "1" and _cpf_ring_on()
 
 
 def _cpf_ring_on() -> bool:
@@ -262,6 +269,13 @@ class Generator(WarmupForwardMixin):
         # no output-processing allocation happens while a trace is live. See prefill_warmup.
         self._defer_trace_recording = False
         self._pending_prefill_traces: dict = {}
+        # CPF replica (LLAMA_GALAXY_PREFILL_CPF_REPLICA): (P, sha1 of the prefix tokens) whose K|V the device replica
+        # holds (set after a "write" call is dispatched; None = nothing valid), this call's (P, digest), the forced
+        # mode during warmup, and the mode the last ring call ran with.
+        self._cpf_rep_valid = None
+        self._cpf_rep_cur = None
+        self._cpf_rep_force = None
+        self._cpf_rep_last_mode = None
         # None means programs are warm, but L1 inputs must be recreated after prefill.
         self._prepared_decode_traces: dict = {}
 
@@ -305,6 +319,17 @@ class Generator(WarmupForwardMixin):
         for ccl_obj in ccl_refs:
             ccl_obj._prefill_column_mask = tt_column_mask
 
+    def _set_cpf_rep_mode(self, mode):
+        """tt_ccl._cpf_rep_mode on every TT_CCL instance attention may use (same walk as the column mask)."""
+        seen_ids = set()
+        refs = [getattr(self.model, n, None) for n in ("tt_ccl", "tt_ccl_prefill", "tt_ccl_decode")]
+        refs += [getattr(layer.attention, "tt_ccl", None) for layer in self.model.layers]
+        for ccl_obj in refs:
+            if ccl_obj is not None and id(ccl_obj) not in seen_ids:
+                seen_ids.add(id(ccl_obj))
+                ccl_obj._cpf_rep_mode = mode
+        self._cpf_rep_last_mode = mode
+
     def prefill_warmup(
         self,
         tokens: torch.Tensor,
@@ -343,6 +368,9 @@ class Generator(WarmupForwardMixin):
             self._defer_trace_recording = False
             self._pending_prefill_traces.clear()
             self.warming_up_prefill = False
+            # warmup wrote dummy prefixes into the CPF replica
+            self._cpf_rep_valid = None
+            self._cpf_rep_force = None
         logger.info("Prefill warmup completed")
 
     def _prefill_warmup_sweep(
@@ -496,17 +524,21 @@ class Generator(WarmupForwardMixin):
                         f"Running warmup prefill for CPF ring: prefill_seq_len={supported_length}, "
                         f"num_cached={prefix_len}, total_seq_len={total_seq_len}"
                     )
-                    self.prefill_forward_text(
-                        torch.zeros(1, total_seq_len, dtype=torch.long),
-                        torch.zeros(1, num_blocks_in_seq(total_seq_len, block_size), dtype=torch.int32),
-                        kv_cache,
-                        torch.tensor([total_seq_len], dtype=torch.long),
-                        enable_trace,
-                        sampling_params,
-                        [0],
-                        tt_out_logits_all_users,
-                        start_pos=[prefix_len],
-                    )
+                    rep_max = int(os.environ.get("LLAMA_GALAXY_PREFILL_CPF_REPLICA_MAX", "8192"))
+                    for force in ("write", "read") if _cpf_rep_on() and supported_length <= rep_max else (None,):
+                        self._cpf_rep_force = force
+                        self.prefill_forward_text(
+                            torch.zeros(1, total_seq_len, dtype=torch.long),
+                            torch.zeros(1, num_blocks_in_seq(total_seq_len, block_size), dtype=torch.int32),
+                            kv_cache,
+                            torch.tensor([total_seq_len], dtype=torch.long),
+                            enable_trace,
+                            sampling_params,
+                            [0],
+                            tt_out_logits_all_users,
+                            start_pos=[prefix_len],
+                        )
+                    self._cpf_rep_force = None
 
     def prefill_forward_text(
         self,
@@ -780,6 +812,27 @@ class Generator(WarmupForwardMixin):
                     dim=-1,
                 )
 
+            # CPF replica: identity of this call's prefix; "read" when the device replica holds this prefix (the
+            # traced path then uses the _rep trace variant), else "write" (refresh it).
+            self._cpf_rep_cur = None
+            rep_mode = None
+            if (
+                _cpf_rep_on()
+                and not work_use_batched_prefill
+                and num_cached_tokens > 0
+                and prefill_seq_len <= int(os.environ.get("LLAMA_GALAXY_PREFILL_CPF_REPLICA_MAX", "8192"))
+                and self._cpf_ring_request(prefill_seq_len, num_cached_tokens, get_block_size(kv_cache))
+            ):
+                pre = tokens[request_idx, :num_cached_tokens].to(torch.int64).contiguous().numpy().tobytes()
+                self._cpf_rep_cur = (int(num_cached_tokens), hashlib.sha1(pre).hexdigest())
+                # LLAMA_GALAXY_PREFILL_CPF_REPLICA_FORCE=read: test-only planted bug (read whatever the replica holds)
+                force = self._cpf_rep_force or os.environ.get("LLAMA_GALAXY_PREFILL_CPF_REPLICA_FORCE") or None
+                if force is not None:
+                    rep_mode = force
+                else:
+                    rep_mode = "read" if self._cpf_rep_cur == self._cpf_rep_valid else "write"
+            self._set_cpf_rep_mode(rep_mode)
+
             if page_table is not None:
                 # For prefix caching, page_table includes both cached and new blocks
                 page_table_user = self._get_prefill_user_page_table(
@@ -824,6 +877,11 @@ class Generator(WarmupForwardMixin):
                 tt_tok = self._easy_trace_prefill(**prefill_kwargs, prefill_seq_len=prefill_seq_len)
             else:
                 tt_tok = self.prefill_forward_single_user_text(**prefill_kwargs)
+            if _cpf_rep_on() and self._cpf_rep_last_mode == "write":
+                # the replica now holds this call's prefix (device work is ordered on the one command queue);
+                # a deferred warmup compile wrote nothing valid (the warmup end resets this anyway)
+                self._cpf_rep_valid = self._cpf_rep_cur
+            self._set_cpf_rep_mode(None)
 
             if not do_device_sampling:
                 tt_tok = self.model.process_output_prefill(
@@ -1233,6 +1291,9 @@ class Generator(WarmupForwardMixin):
             and self._cpf_ring_request(prefill_seq_len, chunk_start_idx, block_size)
         ):
             trace_key += f"_cs{chunk_start_idx}"
+            # CPF replica: the mode prefill_forward_text chose for this call selects the trace variant
+            if _cpf_rep_on() and self._cpf_rep_last_mode == "read":
+                trace_key += "_rep"
 
         # For prefix caching, the model output has only prefill_seq_len positions (the chunk).
         # Relative index within the chunk (0..prefill_seq_len-1) for get_last_token and output processing.
@@ -1260,6 +1321,8 @@ class Generator(WarmupForwardMixin):
                         batch_size=batch_size,
                         start_pos=chunk_start_idx,
                     )
+                    # CPF replica: record this variant later with the mode it was compiled with
+                    self._pending_prefill_traces[trace_key]["cpf_rep_mode"] = self._cpf_rep_last_mode
                 # Hand back the compile run's own output so the caller's output processing still
                 # runs (and compiles) exactly as it would have. There is no trace to replay yet.
                 return self._pending_prefill_traces[trace_key]["compile_out"]
@@ -1304,6 +1367,7 @@ class Generator(WarmupForwardMixin):
 
         logger.info(f"Recording {len(self._pending_prefill_traces)} deferred prefill trace(s)")
         for trace_key, prepared in self._pending_prefill_traces.items():
+            self._set_cpf_rep_mode(prepared.get("cpf_rep_mode"))
             trace_id, tt_out_trace = self._record_trace_prefill(prepared)
             self.trace_id_prefill[trace_key] = trace_id
             self.trace_inputs_prefill[trace_key] = prepared["device_inputs"]
