@@ -569,11 +569,15 @@ class StackBackend(ModelBackend):
         self._wc = wc  # the narrow widths' layer objects reuse these weights (allocate_kv_cache)
         build = EPX.build_moe_ep if self.ep_weights else TPSP.build_moe
         # the layers whose weights are not resident yet: their files prefetched by a thread pool AHEAD of the
-        # constructor (tt/load_prefetch.py: parallel NFS reads + the expert permutations; GLM53_LOAD_PREFETCH=0: off)
+        # constructor (tt/load_prefetch.py: parallel NFS reads + the expert permutations; GLM53_LOAD_PREFETCH=0: off).
+        # Not while the tile cache is being BUILT (no COMPLETE marker): every prefetch task of a missing entry builds it
+        # from the HF source, whose layer loads are ~14 GB each -- 32 threads two layers ahead held several layers at
+        # once and the host ran out of memory (a cold Models CI runner, 2026-11-18); the constructor builds them in order
         cached = lambda L: any((k, L) in wc for k in ("dense", "sparse", "dsa"))  # noqa: E731
         todo = [L for L in ids if not cached(L)]
         pf = None
-        if todo and os.environ.get("GLM53_LOAD_PREFETCH", "1") == "1" and hasattr(source, "tensors"):
+        prefetch = os.environ.get("GLM53_LOAD_PREFETCH", "1") == "1" and hasattr(source, "tensors")
+        if todo and prefetch and getattr(source, "ready", True):
             from models.autoports.zai_org_glm_5_3_flash.tt.load_prefetch import LayerPrefetcher
 
             pf = LayerPrefetcher(source, todo, num_experts=self.cfg.n_routed_experts,

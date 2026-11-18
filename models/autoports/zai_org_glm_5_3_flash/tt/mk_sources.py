@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import json
 import os
+import threading
 import time
 
 import torch
@@ -49,6 +50,8 @@ class HFSource(WeightSource):
     def __init__(self, snapshot, cfg):
         self.snapshot, self.cfg = snapshot, cfg
         self.headers = shard_headers(snapshot)
+        # one caller at a time: _raw keeps ONE layer resident, which concurrent callers on different layers would break
+        self._lock = threading.RLock()
         self.raw: dict[int, dict] = {}
         self.cache: dict[tuple[int, str], torch.Tensor] = {}
         V, H = int(cfg.vocab_size), int(cfg.hidden_size)
@@ -80,6 +83,10 @@ class HFSource(WeightSource):
         return self.raw[layer_idx]
 
     def host(self, layer_idx: int, name: str) -> torch.Tensor:
+        with self._lock:
+            return self._host(layer_idx, name)
+
+    def _host(self, layer_idx: int, name: str) -> torch.Tensor:
         key = (layer_idx, name)
         if key in self.cache:
             return self.cache[key]
