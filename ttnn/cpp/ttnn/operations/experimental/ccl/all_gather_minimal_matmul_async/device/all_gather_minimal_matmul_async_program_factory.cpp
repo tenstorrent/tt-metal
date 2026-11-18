@@ -307,7 +307,8 @@ tt::tt_metal::ProgramDescriptor all_gather_minimal_matmul_async_factory_helper(
     const std::vector<ttnn::GlobalSemaphore>& fsdp_semaphore,
     ttnn::ccl::Topology fsdp_topology,
     bool fuse_swiglu = false,
-    const std::optional<ttnn::MeshCoordinate>& linear_far_end_coord = std::nullopt) {
+    const std::optional<ttnn::MeshCoordinate>& linear_far_end_coord = std::nullopt,
+    bool swiglu_last_chunk = false) {
     tt::tt_metal::ProgramDescriptor desc;
     auto* device = input_tensor.device();
 
@@ -467,6 +468,42 @@ tt::tt_metal::ProgramDescriptor all_gather_minimal_matmul_async_factory_helper(
             N_block_tiles);
     }
 
+    // Grouped N split: group A = the chunks before the last, group B = the SwiGLU (last) chunk. Each of the
+    // in1_parallel_axis_cores N cores gets A_pc tiles of A and B_pc of B, laid out per core as a virtual range
+    // [A part | B part] (N_tiles_per_core = A_pc + B_pc); the kernels map virtual -> physical columns (grp_phys_n).
+    const bool grouped_n = swiglu_last_chunk;
+    uint32_t grp_a_tiles = 0, grp_a_pc = 0, grp_b_pc = 0;
+    if (grouped_n) {
+        TT_FATAL(transpose_core_grid, "swiglu_last_chunk needs the transposed core grid (M > N or force_transpose)");
+        for (uint32_t c = 0; c + 1 < N_chunks; c++) {
+            grp_a_tiles += chunk_sizes[c] / tt::constants::TILE_WIDTH;
+        }
+        const uint32_t grp_b_tiles = chunk_sizes.back() / tt::constants::TILE_WIDTH;
+        TT_FATAL(
+            padded_N_tiles == N_tiles && grp_a_tiles % in1_parallel_axis_cores == 0 &&
+                grp_b_tiles % in1_parallel_axis_cores == 0,
+            "swiglu_last_chunk: group widths A {} / B {} tiles must split evenly over the {} N cores",
+            grp_a_tiles,
+            grp_b_tiles,
+            in1_parallel_axis_cores);
+        grp_a_pc = grp_a_tiles / in1_parallel_axis_cores;
+        grp_b_pc = grp_b_tiles / in1_parallel_axis_cores;
+        TT_FATAL(
+            N_block_tiles % 2 == 0 && grp_a_pc % N_block_tiles == 0 && grp_b_pc % N_block_tiles == 0 &&
+                N_tiles_per_core == grp_a_pc + grp_b_pc,
+            "swiglu_last_chunk: N_block {} must be even and divide both per-core group widths A {} / B {}",
+            N_block_tiles,
+            grp_a_pc,
+            grp_b_pc);
+        for (uint32_t c = 0; c + 1 < N_chunks; c++) {
+            TT_FATAL(
+                (chunk_sizes[c] / tt::constants::TILE_WIDTH) % N_block_tiles == 0,
+                "swiglu_last_chunk: chunk {} width must be a multiple of N_block {}",
+                c,
+                N_block_tiles);
+        }
+    }
+
     log_debug(tt::LogOp, "N_tiles_per_core: {}", N_tiles_per_core);
     log_debug(tt::LogOp, "N_blocks_per_core: {}", N_blocks_per_core);
 
@@ -495,6 +532,7 @@ tt::tt_metal::ProgramDescriptor all_gather_minimal_matmul_async_factory_helper(
     // Fabric2D / TorusXY: the kernels route by fabric node (chip, mesh) with HybridMeshPacketHeader instead of
     // by hop count. get_forward_backward_line_unicast_configuration already returns (mesh, chip) on 2D.
     const bool fabric_2d = tt::tt_fabric::is_2d_fabric_config(tt::tt_fabric::GetFabricConfig());
+    TT_FATAL(!(grouped_n && fabric_2d), "swiglu_last_chunk is proven on 1D fabric only");
     // Fabric2D Linear: the 1D path's one-way ring (each rank sends to rank - 1, rank 0 to the last rank), routed by
     // fabric node. The two ends of the line reach each other through it (linear_far_end_coord).
     const bool linear_2d = fabric_2d && topology == ttnn::ccl::Topology::Linear;
@@ -882,6 +920,30 @@ tt::tt_metal::ProgramDescriptor all_gather_minimal_matmul_async_factory_helper(
         {"in1_chunk_w", in1_chunk_w},
         {"out_piece_w", direct_out ? subblock_w : N_block_tiles},
         {"in0_cb_blocks", double_buffer_factor}};
+    if (grouped_n) {
+        defines["GROUPED_N"] = "1";
+        defines["GRP_A_TILES"] = std::to_string(grp_a_tiles);
+        defines["GRP_A_PER_CORE"] = std::to_string(grp_a_pc);
+        defines["GRP_B_PER_CORE"] = std::to_string(grp_b_pc);
+        // Every (M, N) block accumulates K in the forward order, as the separate QKV and MLP-in ops do (each has one
+        // N block per core, so it never reaches the ring's per-N-block K reversal), at the cost of the in0 reuse
+        // between N blocks.
+        defines["K_FORWARD_ONLY"] = "1";
+        // Output-space chunk table for the writers: the SwiGLU chunk is half as wide as its weight columns.
+        std::string w_out, o_out = "0";
+        uint32_t run = 0;
+        for (uint32_t c = 0; c < N_chunks; c++) {
+            uint32_t w = chunk_sizes[c] / tt::constants::TILE_WIDTH;
+            if (c + 1 == N_chunks) {
+                w /= 2;
+            }
+            w_out += (c == 0 ? "" : ",") + std::to_string(w);
+            run += w;
+            o_out += "," + std::to_string(run);
+        }
+        defines["CHUNK_TILE_WIDTHS_OUT"] = w_out;
+        defines["CHUNK_TILE_OFFSETS_OUT"] = o_out;
+    }
 
     in0_defines = defines;
     in0_defines["READ_FROM_LOCAL_INPUT"] = "1";
@@ -1969,7 +2031,8 @@ tt::tt_metal::ProgramDescriptor all_gather_minimal_matmul_async_factory(
     const std::vector<ttnn::GlobalSemaphore>& fsdp_semaphore,
     ttnn::ccl::Topology fsdp_topology,
     bool fuse_swiglu,
-    const std::optional<MeshCoordinate>& linear_far_end_coord) {
+    const std::optional<MeshCoordinate>& linear_far_end_coord,
+    bool swiglu_last_chunk) {
     return ::detail::all_gather_minimal_matmul_async_factory_helper(
         input_tensor,
         weight_tensor,
@@ -2005,7 +2068,8 @@ tt::tt_metal::ProgramDescriptor all_gather_minimal_matmul_async_factory(
         fsdp_semaphore,
         fsdp_topology,
         fuse_swiglu,
-        linear_far_end_coord);
+        linear_far_end_coord,
+        swiglu_last_chunk);
 }
 
 tt::tt_metal::ProgramDescriptor build_program_descriptor_at(
@@ -2099,7 +2163,8 @@ tt::tt_metal::ProgramDescriptor build_program_descriptor_at(
         attributes.fsdp_semaphore,
         attributes.fsdp_topology,
         attributes.fuse_swiglu,
-        linear_far_end_coord);
+        linear_far_end_coord,
+        attributes.swiglu_last_chunk);
 }
 
 AllGatherMinimalMatmulAsyncProgramFactory::cached_mesh_workload_t

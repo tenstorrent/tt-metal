@@ -266,6 +266,19 @@ void AllGatherMinimalMatmulAsyncOp::validate_on_program_cache_miss(
             2 * tt::constants::TILE_WIDTH);
     }
 
+    if (attributes.swiglu_last_chunk) {
+        TT_FATAL(attributes.chunks >= 2, "swiglu_last_chunk needs at least 2 chunks, got {}", attributes.chunks);
+        TT_FATAL(
+            !attributes.fuse_swiglu && !attributes.fused_activation.has_value() &&
+                !attributes.fused_ternary_scalar.has_value() && !tensor_args.bias_tensor.has_value() &&
+                !attributes.fsdp_cluster_axis.has_value(),
+            "swiglu_last_chunk does not combine with fuse_swiglu / fused_activation / addcmul / bias / FSDP");
+        TT_FATAL(
+            attributes.chunk_sizes.size() == static_cast<size_t>(attributes.chunks) &&
+                attributes.chunk_sizes.back() % (2 * tt::constants::TILE_WIDTH) == 0,
+            "swiglu_last_chunk needs explicit chunk_sizes with an even tile count for the SwiGLU chunk");
+    }
+
     // FSDP fusion validation
     if (attributes.fsdp_cluster_axis.has_value()) {
         TT_FATAL(
@@ -525,7 +538,9 @@ AllGatherMinimalMatmulAsyncOp::spec_return_value_t AllGatherMinimalMatmulAsyncOp
 
     // Per-chunk widths: explicit when given, else the uniform N/chunks split.
     const auto chunk_sizes = resolve_chunk_sizes(attributes, N);
-    for (const uint32_t chunk_width : chunk_sizes) {
+    for (uint32_t c = 0; c < chunk_sizes.size(); ++c) {
+        const bool swiglu = attributes.swiglu_last_chunk && c + 1 == chunk_sizes.size();
+        const uint32_t chunk_width = swiglu ? chunk_sizes[c] / 2 : chunk_sizes[c];
         ttnn::Shape output_shape(in0_input_tensor_shape);
         output_shape[-1] = chunk_width;
         output_specs.push_back(
@@ -650,7 +665,8 @@ std::vector<ttnn::Tensor> all_gather_minimal_matmul_async(
     std::optional<ttnn::ccl::Topology> fsdp_topology,
     bool fuse_swiglu,
     const std::vector<uint32_t>& chunk_sizes,
-    std::optional<bool> transpose_core_grid) {
+    std::optional<bool> transpose_core_grid,
+    bool swiglu_last_chunk) {
     using OperationType = ttnn::experimental::prim::AllGatherMinimalMatmulAsyncOp;
 
     auto kernel_config_val = init_device_compute_kernel_config(
@@ -699,7 +715,8 @@ std::vector<ttnn::Tensor> all_gather_minimal_matmul_async(
         fsdp_topology_,
         fuse_swiglu,
         chunk_sizes,
-        transpose_core_grid};
+        transpose_core_grid,
+        swiglu_last_chunk};
     auto tensor_args = OperationType::tensor_args_t{
         input_tensor,
         weight_tensor,

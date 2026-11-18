@@ -38,6 +38,10 @@ void kernel_main() {
     constexpr uint32_t out_tile_size = get_compile_time_arg_val(9);
     constexpr uint32_t in2_tile_size = get_compile_time_arg_val(10);
     constexpr uint32_t is_output_writer = get_compile_time_arg_val(11);
+#ifdef GROUPED_N
+    // Grouped N runs on the transposed grid, where in0 writes the output; this kernel's writes are not grouped.
+    static_assert(!is_output_writer);
+#endif
     constexpr uint32_t is_injector_core = get_compile_time_arg_val(12);
     constexpr uint32_t num_devices = get_compile_time_arg_val(13);
     constexpr uint32_t my_rank = get_compile_time_arg_val(14);
@@ -333,6 +337,10 @@ void kernel_main() {
         for (uint32_t n_block_iter = 0; n_block_iter < N_blocks_per_core; n_block_iter++) {
             uint32_t n_tile = N_start_tile + n_block_iter * N_block_tiles;
             uint32_t n_tile_end = std::min(n_tile + N_block_tiles, N_end_tile);
+#ifdef GROUPED_N
+            n_tile_end = grp_phys_n(n_tile) + (n_tile_end - n_tile);
+            n_tile = grp_phys_n(n_tile);
+#endif
             uint32_t current_N_block_tiles = n_tile_end - n_tile;
             uint32_t current_N_tiles_bytes = current_N_block_tiles * in1_tile_size;
             // Relay must NOT forward padding N-tiles (n >= N_tiles): the relay dst_tile is
@@ -752,9 +760,11 @@ void kernel_main() {
             }
 #endif  // FUSE_TERNARY
 
+#ifndef K_FORWARD_ONLY
             if constexpr (!is_linear) {
                 k_forward = !k_forward;
             }
+#endif
             // We have an output block to write out
 
             defer_write_m_tile = m_tile;
