@@ -569,7 +569,7 @@ def main(argv=None):
             f"{len(result['records'])} of "
             f"{len(result['records']) + len(result['new_points'])} generated point(s) compared."
         )
-        raise SystemExit(1)
+        raise SystemExit(2)
     # exit non-zero if regressions, so the skill/CI can gate on it
     raise SystemExit(1 if result["regressions"] else 0)
 

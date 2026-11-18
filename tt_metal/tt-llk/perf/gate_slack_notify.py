@@ -156,6 +156,8 @@ def verdict(
         return "skipped", (
             "The comparison started but did not finish, so its " "verdict is unknown."
         )
+    if exit_code == 2:
+        return "skipped", "The gate did not compare every point."
     return ("regressed", "") if exit_code != 0 else ("clean", "")
 
 

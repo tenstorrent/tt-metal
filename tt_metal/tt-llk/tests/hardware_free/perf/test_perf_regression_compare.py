@@ -27,6 +27,7 @@ from regression_compare import (  # noqa: E402
     DEFAULT_THRESHOLD,
     _medians,
     compare_runs,
+    main,
     render_report,
 )
 from test_name_aliases import TEST_NAME_ALIASES  # noqa: E402
@@ -225,6 +226,30 @@ def test_full_coverage_leaves_missing_points_empty(tmp_path):
     assert not result["missing_points"]
     assert not result["new_points"]
     assert len(result["records"]) == 2
+
+
+def test_require_full_coverage_exits_two_on_a_short_run(tmp_path):
+    _csv(tmp_path, "b.csv", _INIT, _TILE_LOOP, tile_cnt=4)
+    _csv(tmp_path, "b.csv", _INIT, _TILE_LOOP, tile_cnt=8, module="perf_y")
+    _csv(tmp_path, "c.csv", _INIT, _TILE_LOOP, tile_cnt=4)
+
+    argv = [
+        "--current",
+        str(tmp_path / "c" / "*.csv"),
+        "--baseline",
+        str(tmp_path / "b" / "*.csv"),
+        "--report",
+        str(tmp_path / "report.md"),
+        "--require-full-coverage",
+    ]
+
+    with pytest.raises(SystemExit) as exc:
+        main(argv)
+    assert exc.value.code == 2
+
+    with pytest.raises(SystemExit) as exc:
+        main(argv[:-1])
+    assert exc.value.code == 0
 
 
 def test_run_type_filter_keeps_only_what_was_asked_for(tmp_path):

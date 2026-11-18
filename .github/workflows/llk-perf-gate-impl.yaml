@@ -753,6 +753,13 @@ jobs:
             exit 1
           fi
 
+          if [ "$EXIT_CODE" = "2" ]; then
+            KIND=incomplete
+            echo "::error::The gate did not compare every point, so its verdict covers only part of the run."
+            cat perf_gate_report.md
+            exit 1
+          fi
+
           if [ "$EXIT_CODE" != "0" ]; then
             KIND=regression
             echo "❌ Performance regressions detected"
