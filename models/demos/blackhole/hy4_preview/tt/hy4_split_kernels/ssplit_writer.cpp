@@ -487,7 +487,16 @@ void kernel_main() {
             DeviceZoneScopedN("W_OUTWR");
             noc.async_write_barrier();
         }
-        if (xflag != 0) {  // fused exchange: the runs are in the comm cores' staging / the own landing slot; signal them
+        if (xflag == 3) {
+            // B47a XPUSH (compact owner layout): this token's bands are in the DRAM output; tell the comm cores of
+            // owner j = tok / owner_s (rt 5 = n comm cores, 6 = global semaphore address of owner j, 7.. = (x, y))
+            for (uint32_t g = 0; g < xtpc; ++g) {
+                noc_semaphore_inc(
+                    get_noc_addr(get_arg_val<uint32_t>(7 + 2 * g), get_arg_val<uint32_t>(8 + 2 * g), xn), 1);
+            }
+            noc_async_atomic_barrier();
+        } else if (xflag != 0) {  // fused exchange: the runs are in the comm cores' staging / the own landing slot;
+                                  // signal them
             for (uint32_t g = 0; g < xn; ++g) {
                 const uint32_t ex = get_arg_val<uint32_t>(10 + 3 * g), ey = get_arg_val<uint32_t>(11 + 3 * g);
                 noc_semaphore_inc(get_noc_addr(ex, ey, xflag == 1 ? get_semaphore(xsem) : xgsem), 1);

@@ -170,9 +170,9 @@ def sparse_sdpa_split(
     emit_stats = int(emit_stats)
     assert owner_s == 0 or (cols and S % owner_s == 0), "owner layout: emit_stats=2/3 and S = NC*owner_s query rows"
     assert not tile_out or owner_s > 0
-    assert not compact or (
-        tile_out and xchg is None
-    ), "compact: owner-layout tile output (emit_stats=3), no fused exchange"
+    assert (
+        not compact or (tile_out and xchg is None) or (xchg is not None and getattr(xchg, "xpush", False))
+    ), "compact: owner-layout tile output (emit_stats=3), no fused exchange (B47a xpush hooks excepted)"
     use_sink = 0 if emit_stats else 1
     stats = (
         ttnn.allocate_tensor_on_device(
