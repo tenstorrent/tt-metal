@@ -70,10 +70,10 @@ sfpi_inline sfpi::vFloat _sfpu_binary_fmod_(sfpi::vFloat a, sfpi::vFloat b) {
     v_if(a == b) { result = sfpi::vFloat(0.0f); }
     v_endif;
 
-    // fmod takes the sign of a. SFPMUL rather than copysgn: a zero result stays +0, as
-    // the signed MAD chain produced it, since SFPMAD flushes -0 to +0. Placed after the
-    // a == b override so that a dies here and the sign copy needs no register move.
-    result = result * sfpi::copysgn(sfpi::vFloat(1.0f), a);
+    // fmod takes the sign of a, on a zero result too (fmod(-4, 2) = -0, as in IEEE and
+    // torch). Placed after the a == b override so that a dies here and the sign copy
+    // needs no register move.
+    result = sfpi::copysgn(result, a);
 
     // Handle division by zero - return NaN
     v_if(b == sfpi::vFloat(0.0f)) { result = sfpi::vFloat(std::numeric_limits<float>::quiet_NaN()); }
