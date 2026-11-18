@@ -15,6 +15,9 @@
 
 #include <tt-metalium/bfloat16.hpp>
 #include <tt-metalium/experimental/distributed_tensor/distributed_tensor_apis.hpp>
+// Redeclares the HostTensor overloads defined below as deprecated. The attribute must come before
+// their definitions, or a later file of the same unity batch that includes it fails to compile.
+#include <tt-metalium/tensor/tensor_apis.hpp>
 #include <tt-metalium/experimental/pinned_memory.hpp>
 #include <tt-metalium/tensor/tensor_types.hpp>
 #include <tt-metalium/host_buffer.hpp>

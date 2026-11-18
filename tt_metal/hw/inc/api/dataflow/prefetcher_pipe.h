@@ -433,6 +433,23 @@ public:
         WAYPOINT("GSRD");
     }
 
+    // Whether a SINGLE receiver (receiver_idx) has space for num_entries entries right now: what
+    // reserve_back_for_receiver waits for, without waiting. Lets one sender serving several receivers
+    // move on to another receiver instead of stalling behind a slow one. Single credit lane only.
+    // Multi-DM: this hart must own receiver_idx. The writes and credits that would follow are no-ops
+    // for a receiver it does not own, so a true answer there would count a block that was never sent.
+    FORCE_INLINE bool receiver_has_space(uint32_t receiver_idx, uint32_t num_entries) {
+        ASSERT(num_credit_lanes() == 1);
+        ASSERT(owns_receiver(receiver_idx));
+        CrossNodeSenderDFBInterface& iface = interface_.sender;
+        const uint32_t wr_offset = sender_wr_offset(iface, receiver_idx);
+        assert_contiguous_write(iface, wr_offset, num_entries);
+        const uint32_t num_units = fifo_size() / L1_ALIGNMENT;
+        const uint32_t used_units =
+            *local_sent_ptr(iface, receiver_idx) - load_remote_l1_credit(local_acked_ptr(iface, receiver_idx));
+        return num_units - used_units >= units_for_write(iface, wr_offset, num_entries);
+    }
+
 #if !defined(COMPILE_FOR_TRISC)
 
     // ------------------------------------------------------------------
@@ -667,6 +684,20 @@ public:
         }
         free_units_floor_ = fifo_size() / L1_ALIGNMENT;  // every owned ring is empty
         WAYPOINT("CNBD");
+    }
+
+    // Whether receiver_idx has acked every entry sent to it on every lane: barrier()'s condition for one
+    // receiver, without waiting. Lets a sender that must also watch for something else (a termination
+    // request) wait for a drain in its own loop.
+    FORCE_INLINE bool receiver_drained(uint32_t receiver_idx) {
+        CrossNodeSenderDFBInterface& iface = interface_.sender;
+        for (uint32_t lane = 0; lane < num_credit_lanes(); ++lane) {
+            if (load_remote_l1_credit(local_acked_ptr(iface, receiver_idx, lane)) !=
+                *local_sent_ptr(iface, receiver_idx, lane)) {
+                return false;
+            }
+        }
+        return true;
     }
 
     // -----------------------------------------------------------------------

@@ -259,7 +259,8 @@ std::unique_ptr<ComputeMeshRouterBuilder> ComputeMeshRouterBuilder::build(
     FabricNodeId local_node,
     const RouterLocation& location,
     const ChipRoutingFacts& chip_facts,
-    std::shared_ptr<ConnectionRegistry> connection_registry) {
+    std::shared_ptr<ConnectionRegistry> connection_registry,
+    std::optional<RouterArchetype> archetype_override) {
     // Get fabric config
     const auto& builder_context = fabric_context.get_builder_context();
     const auto topology = fabric_context.get_fabric_topology();
@@ -336,8 +337,15 @@ std::unique_ptr<ComputeMeshRouterBuilder> ComputeMeshRouterBuilder::build(
     // chip whose only Z edge crosses a mesh boundary, an express-style Z target would resolve to
     // the intermesh Z router and leak same-mesh traffic onto the boundary link.
     const auto& intermesh_config = fabric_context.get_builder_context().get_intermesh_vc_config();
-    auto archetype = router_archetype(
-        topology, location.direction, chip_facts.per_direction_capabilities, express_axis, &intermesh_config);
+    // A plugin builder (e.g. one lowered from a fabric graph) can supply the shape and turns itself.
+    auto archetype =
+        archetype_override
+            ? std::move(*archetype_override)
+            : router_archetype(
+                  topology, location.direction, chip_facts.per_direction_capabilities, express_axis, &intermesh_config);
+    if (archetype_override) {
+        check_vc_shape(archetype.shape);
+    }
     const auto& vc_shape = archetype.shape;
 
     // Compute injection channel flags at router level BEFORE creating builders
@@ -703,10 +711,22 @@ void ComputeMeshRouterBuilder::connect_to_local_tensix_builder(FabricTensixDatam
     auto* adapter_ptr = erisc_builder_->receiver_channel_to_downstream_adapter.get();
     const auto tensix_noc_x = tensix_builder.get_noc_x();
     const auto tensix_noc_y = tensix_builder.get_noc_y();
-    adapter_ptr->add_local_tensix_connection(adapter_spec, local_tensix_dir, tt::tt_metal::CoreCoord(tensix_noc_x, tensix_noc_y));
+    adapter_ptr->add_local_tensix_connection(
+        adapter_spec, local_tensix_dir, tt::tt_metal::CoreCoord(tensix_noc_x, tensix_noc_y));
 
     // Provide router NOC coordinates to relay kernel for sending packets back to router
     tensix_builder.append_relay_router_noc_xy(erisc_builder_->get_noc_x(), erisc_builder_->get_noc_y());
+}
+
+void ComputeMeshRouterBuilder::connect_to_downstream_channel(
+    ComputeMeshRouterBuilder& downstream, uint32_t vc, uint32_t channel) {
+    // absolute id is flat across VCs; the VC-relative one is what the allocator uses
+    erisc_builder_->setup_downstream_vc_connection(
+        downstream.get_builder_for_vc_channel(vc, channel),
+        vc,
+        vc,
+        downstream.vc_shape_.flat_sender_id(vc, channel),
+        channel);
 }
 
 void ComputeMeshRouterBuilder::establish_connections_to_router(ComputeMeshRouterBuilder& downstream_router) {
@@ -782,19 +802,10 @@ void ComputeMeshRouterBuilder::establish_connections_to_router(ComputeMeshRouter
                     vc);
             }
 
-            // Get downstream builder and the flat channel ID
+            connect_to_downstream_channel(downstream_router, vc, downstream_sender_channel);
             auto* downstream_builder = downstream_router.get_builder_for_vc_channel(vc, downstream_sender_channel);
-
-            // Get both absolute and VC-relative channel IDs
-            // - absolute_channel_id: flattened across all VCs (used for flat arrays)
-            // - vc_relative_channel_id: 0-based within the VC (used for allocator calls)
             uint32_t absolute_channel_id = downstream_router.vc_shape_.flat_sender_id(vc, downstream_sender_channel);
-            uint32_t vc_relative_channel_id = downstream_sender_channel;  // This is already VC-relative
-
-            // Setup producer → consumer connection
-            // Pass both indices - build_connection_to_fabric_channel needs both
-            erisc_builder_->setup_downstream_vc_connection(
-                downstream_builder, vc, vc, absolute_channel_id, vc_relative_channel_id);
+            uint32_t vc_relative_channel_id = downstream_sender_channel;
             // Record connection in registry if present
             if (connection_registry_) {
                 RouterConnectionRecord record{
