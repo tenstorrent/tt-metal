@@ -32,7 +32,7 @@ device = ttnn.open_device(device_id=0, l1_small_size=24576)
 
 
 class Demo:
-    """Panoptic-DeepLab demo supporting both PyTorch and TTNN pipelines."""
+    """RetinaNet detection on one image: the TTNN model on device, its detections drawn on the image."""
 
     def __init__(self) -> None:
         self.torch_model: Optional[Any] = None
@@ -91,7 +91,8 @@ class Demo:
         return output
 
     def run_ttnn_inference(self, input_tensor, model_config, device):
-        """Run TTNN inference."""
+        """Run the TTNN model on ``input_tensor`` (NHWC) and return the device candidates of every
+        pyramid level: per-level lists of boxes, scores and labels for select_detections."""
         self.ttnn_model = TTBackbone(parameters=self.backbone_parameters, model_config=model_config)
 
         backbone_output = self.ttnn_model(input_tensor, device)
@@ -131,9 +132,11 @@ class Demo:
 
         return self.decoder(classification_output, regression_output)
 
-    def preprocess_image(self, image_path: str, device, target_size=(800, 800)):
-        """PREPROCESS IMAGE"""
+    def preprocess_image(self, image_path: str, output_dir: str, target_size=(800, 800)):
+        """The image resized to ``target_size`` and normalized, as (1, 3, H, W), and its original
+        (H, W). Saves the resized image, denormalized, as restored.jpg in ``output_dir``."""
         image = Image.open(image_path).convert("RGB")
+        # PIL sizes are (W, H); resize_boxes takes (H, W).
         og_size = [tuple(reversed(image.size))]
 
         # Resize image to the target size
@@ -159,9 +162,9 @@ class Demo:
 
         to_pil = transforms.ToPILImage()
         restored_image = to_pil(img)
-        restored_image.save("models/experimental/retinanet/resources/outputs/restored.jpg")
-        output_path = "models/experimental/retinanet/resources/outputs/restored.jpg"
-        logger.info(f"Saved restored image to the default output directory: {output_path}")
+        output_path = os.path.join(output_dir, "restored.jpg")
+        restored_image.save(output_path)
+        logger.info(f"Saved restored image to {output_path}")
 
         return image_tensor, og_size
 
@@ -202,9 +205,7 @@ class Demo:
         logger.info("Starting demo for image: {}", image_path)
 
         # Preprocess image
-        self.torch_input, original_image_sizes = self.preprocess_image(
-            image_path, self.ttnn_device, target_size=(512, 512)
-        )
+        self.torch_input, original_image_sizes = self.preprocess_image(image_path, output_dir, target_size=(512, 512))
 
         self.ttnn_input = ttnn.from_torch(self.torch_input.permute(0, 2, 3, 1), dtype=ttnn.bfloat16)
         self.ttnn_input = ttnn.to_device(self.ttnn_input, device)
