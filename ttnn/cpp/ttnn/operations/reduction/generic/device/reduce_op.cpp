@@ -305,7 +305,9 @@ Tensor reduce(
         const auto out_final_dtype = output_dtype.value_or(input_tensor.dtype());
         const bool keep_w_fp32 =
             (reduce_math == tt::tt_metal::ReduceOpMath::SUM || reduce_math == tt::tt_metal::ReduceOpMath::AVG) &&
-            ((output_dtype.has_value() && out_final_dtype == tt::tt_metal::DataType::BFLOAT16 &&
+            ((output_dtype.has_value() &&
+              (out_final_dtype == tt::tt_metal::DataType::BFLOAT16 ||
+               out_final_dtype == tt::tt_metal::DataType::BFLOAT8_B) &&
               prepared_input.dtype() == tt::tt_metal::DataType::FLOAT32) ||
              (prepared_input.dtype() == tt::tt_metal::DataType::BFLOAT16 && config.fp32_dest_acc_en));
         const auto out_w_dtype = keep_w_fp32 ? tt::tt_metal::DataType::FLOAT32 : out_final_dtype;
