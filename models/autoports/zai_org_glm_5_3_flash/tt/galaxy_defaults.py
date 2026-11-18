@@ -122,7 +122,12 @@ SPARSE_T = {
     65536: "16384,32768,49152,65536",
     262144: "32768,65536,98304,131072,163840,262144",  # through the cache length: a prompt past 163840 rows needs it
     524288: "131072,262144,393216,524288",
-    1048576: "262144,524288,786432,1048576",
+    # 1 M (2026-11-18): the first rungs at 32 K / 64 K / 128 K -- the DSA prefill's pool gather, score, top-k and latent
+    # gather are sized by the captured window, so a warm chunk at 33-260 K no longer runs on the 262,144 window: warm
+    # 2 K chunk at 32 K 490 -> 400 ms (DSA x11 268 -> 175), served AgentX c8 decode 40.5 -> 42.2 tok/s/u, prefill share
+    # 33.6 -> 29.9 %, TTFT p90 14.4 -> 9.4 s; not bitwise (top-k ties over a different plane width; the 1 M text stays
+    # coherent, errors [] at 1 / 2 / 4 / 8 users); 26 prefill trace keys instead of 17 (+~130 s of capture at boot)
+    1048576: "32768,65536,131072,262144,524288,786432,1048576",
 }
 
 
