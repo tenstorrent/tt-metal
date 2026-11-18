@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <gtest/gtest.h>
+#include <sched.h>
 
 #include <algorithm>
 #include <array>
@@ -132,6 +133,27 @@ TEST(ThreadPoolTest, ParallelForUsesWorkers) {
     });
     auto on_caller = std::count(ran_on.begin(), ran_on.end(), std::this_thread::get_id());
     EXPECT_LT(on_caller, static_cast<int64_t>(ran_on.size()));
+}
+
+// Each pool's workers get CPUs of their own while the process may run on enough CPUs, also when pools are recreated.
+// Binding the process to fewer CPUs than the host has (taskset -c 0-2) makes the node lists overlap.
+TEST(ThreadPoolTest, RecreatedPoolWorkersOnDistinctCpus) {
+    const uint32_t num_devices = MetalContext::instance(DEFAULT_CONTEXT_ID).get_cluster().number_of_user_devices();
+    cpu_set_t allowed;
+    ASSERT_EQ(sched_getaffinity(0, sizeof(allowed), &allowed), 0);
+    if (num_devices < 2 || static_cast<uint32_t>(CPU_COUNT(&allowed)) < num_devices) {
+        GTEST_SKIP() << "Needs 2 devices and a CPU per device";
+    }
+    for (int pool = 0; pool < 6; pool++) {
+        auto thread_pool = create_pool_per_device();
+        std::vector<int> cpus(num_devices);
+        for (uint32_t device = 0; device < num_devices; device++) {
+            thread_pool->enqueue([&cpus, device] { cpus[device] = sched_getcpu(); }, device);
+        }
+        thread_pool->wait();
+        std::sort(cpus.begin(), cpus.end());
+        EXPECT_EQ(std::unique(cpus.begin(), cpus.end()), cpus.end()) << "pool " << pool;
+    }
 }
 
 TEST(ThreadPoolTest, ParallelForOneWorkerRunsOnCaller) {
