@@ -378,6 +378,7 @@ FUNCTION_TO_EXAMPLES_MAPPING_DICT = {
     "ttnn.moe": reduction.test_moe,
     "ttnn.manual_seed": reduction.test_manual_seed,
     # Data movement
+    "ttnn.unsqueeze_to_4D": data_movement.test_unsqueeze_to_4D,
     "ttnn.concat": data_movement.test_concat,
     "ttnn.nonzero": data_movement.test_nonzero,
     "ttnn.pad": data_movement.test_pad,

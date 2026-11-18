@@ -131,7 +131,38 @@ void py_module(nb::module_& mod) {
         nb::arg("dst_full_sync_en") = false,
         nb::arg("throttle_level") = nb::cast(ttnn::operations::compute_throttle_utils::ThrottleLevel::NO_THROTTLE));
 
-    mod.def("unsqueeze_to_4D", &ttnn::unsqueeze_to_4D, nb::arg("tensor"));
+    mod.def(
+        "unsqueeze_to_4D",
+        &ttnn::unsqueeze_to_4D,
+        nb::arg("tensor"),
+        R"doc(
+            Returns `tensor` as a rank-4 tensor, with dimensions of size 1 added in front: a tensor of shape ``[H, W]`` gives ``[1, 1, H, W]``. A rank-4 tensor is returned unchanged.
+
+            The output is a view of `tensor`: it shares the input's buffer and no data moves.
+
+            Args:
+                tensor (ttnn.Tensor): the input tensor, of rank 4 or less.
+
+            Returns:
+                ttnn.Tensor: the rank-4 output tensor, with the input's dtype, layout and memory configuration.
+
+            Note:
+                Supported dtypes and layouts:
+
+                .. list-table::
+                   :header-rows: 1
+
+                   * - Dtypes
+                     - Layouts
+                   * - BFLOAT16, FLOAT32, INT32, UINT32, UINT16, UINT8
+                     - TILE, ROW_MAJOR
+                   * - BFLOAT8_B, BFLOAT4_B
+                     - TILE
+
+            Memory Support:
+                - Interleaved: DRAM and L1
+                - Sharded: HEIGHT_SHARDED, WIDTH_SHARDED and BLOCK_SHARDED in L1
+        )doc");
 
     mod.def(
         "to_device",
