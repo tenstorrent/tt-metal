@@ -4,7 +4,7 @@
 
 import ttnn
 from dataclasses import dataclass
-from models.experimental.retinanet.tt.utils import TTConv2D
+from models.experimental.retinanet.tt.utils import TTConv2D, reduced_grid
 
 
 @dataclass
@@ -51,6 +51,16 @@ class resnet50Stem:
         # conv1 is stride 2 conv 3x3
         out, shape = self.conv1(device, x, x.shape)
 
+        # On a reduced grid the pool slices its DRAM input by height (max_pool2d chooses how many).
+        pool_kwargs = (
+            dict(
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                dram_slice_config=ttnn.Op2DSliceConfig(slice_type=ttnn.Op2DDRAMSliceHeight, num_slices=0),
+                config_tensor_in_dram=True,
+            )
+            if reduced_grid(device)
+            else dict(applied_shard_scheme=ttnn.TensorMemoryLayout.HEIGHT_SHARDED)
+        )
         out = ttnn.max_pool2d(
             input_tensor=out,
             batch_size=shape[-4],
@@ -62,8 +72,8 @@ class resnet50Stem:
             padding=[1, 1],
             dilation=[1, 1],
             reallocate_halo_output=True,
-            applied_shard_scheme=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
             ceil_mode=False,
+            **pool_kwargs,
         )
         out = ttnn.reshape(out, (shape[-4], shape[-3] // 2, shape[-2] // 2, shape[-1]))
 

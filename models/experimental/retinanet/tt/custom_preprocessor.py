@@ -5,7 +5,11 @@ import torch
 import ttnn
 from ttnn.model_preprocessing import fold_batch_norm2d_into_conv2d
 
-from models.experimental.retinanet.tt.utils import BBOX_REG_SLICE_CONFIG, group_norm_channel_chunks
+from models.experimental.retinanet.tt.utils import (
+    bbox_reg_slice_config,
+    cls_logits_slice_config,
+    group_norm_channel_chunks,
+)
 
 
 def conv_bn_to_params(conv, bn, mesh_mapper):
@@ -173,7 +177,7 @@ def preprocess_regression_head_parameters(torch_head, device, mesh_mapper, model
         input_dtype=ttnn.bfloat16,
         output_dtype=model_config["WEIGHTS_DTYPE"],
         conv_config=ttnn.Conv2dConfig(weights_dtype=model_config["WEIGHTS_DTYPE"]),
-        slice_config=BBOX_REG_SLICE_CONFIG,
+        slice_config=bbox_reg_slice_config(device),
         compute_config=None,
     )
     prepared_bbox_bias = ttnn.prepare_conv_bias(
@@ -193,7 +197,7 @@ def preprocess_regression_head_parameters(torch_head, device, mesh_mapper, model
         device=device,
         input_dtype=ttnn.bfloat16,
         conv_config=ttnn.Conv2dConfig(weights_dtype=model_config["WEIGHTS_DTYPE"]),
-        slice_config=BBOX_REG_SLICE_CONFIG,
+        slice_config=bbox_reg_slice_config(device),
     )
     parameters["bbox_reg"] = {
         "weight": prepared_bbox_weight,
@@ -309,6 +313,7 @@ def preprocess_classification_head_parameters(torch_head, device, mesh_mapper, m
         groups=1,
         device=device,
         input_dtype=ttnn.bfloat16,
+        slice_config=cls_logits_slice_config(device),
         conv_config=ttnn.Conv2dConfig(weights_dtype=model_config["WEIGHTS_DTYPE"]),
     )
 
@@ -330,6 +335,7 @@ def preprocess_classification_head_parameters(torch_head, device, mesh_mapper, m
         groups=1,
         device=device,
         input_dtype=ttnn.bfloat16,
+        slice_config=cls_logits_slice_config(device),
         conv_config=ttnn.Conv2dConfig(weights_dtype=model_config["WEIGHTS_DTYPE"]),
     )
 

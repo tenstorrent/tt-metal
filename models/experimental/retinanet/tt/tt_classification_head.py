@@ -3,7 +3,13 @@
 
 import ttnn
 from typing import List
-from models.experimental.retinanet.tt.utils import Conv2dNormActivation, group_norm_grid
+from models.experimental.retinanet.tt.utils import (
+    Conv2dNormActivation,
+    activation_memory_config,
+    cls_logits_slice_config,
+    group_norm_grid,
+    head_conv_config,
+)
 from dataclasses import dataclass
 
 
@@ -137,8 +143,8 @@ def ttnn_retinanet_classification_head(
         fpn_conv_config_dict = getattr(opt_config, f"fpn{fpn_idx}_conv_blocks")
         fpn_final_config_dict = getattr(opt_config, f"fpn{fpn_idx}_final_conv")
 
-        fpn_conv_config = ttnn.Conv2dConfig(**fpn_conv_config_dict) if fpn_conv_config_dict else None
-        fpn_final_config = ttnn.Conv2dConfig(**fpn_final_config_dict) if fpn_final_config_dict else None
+        fpn_conv_config = head_conv_config(device, fpn_conv_config_dict)
+        fpn_final_config = head_conv_config(device, fpn_final_config_dict)
 
         x = feature_map
         for conv_idx in range(4):
@@ -174,8 +180,9 @@ def ttnn_retinanet_classification_head(
             input_width=W,
             compute_config=compute_config,
             conv_config=fpn_final_config,
-            memory_config=ttnn.L1_MEMORY_CONFIG,
-            slice_config=ttnn.Conv2dL1FullSliceConfig,
+            memory_config=activation_memory_config(device),
+            # Prepared for this same slicing (custom_preprocessor).
+            slice_config=cls_logits_slice_config(device) or ttnn.Conv2dL1FullSliceConfig,
         )
 
         N, H_out, W_out, _ = cls_logits.shape

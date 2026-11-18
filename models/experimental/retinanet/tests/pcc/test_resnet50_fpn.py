@@ -11,6 +11,7 @@ from torchvision import transforms
 from ttnn.model_preprocessing import preprocess_model_parameters
 from tt_py_test_utils_common.utils_for_testing import check_with_pcc
 from models.experimental.retinanet.tt.tt_fpn import resnet50Fpn, fpn_optimisations
+from models.experimental.retinanet.tt.utils import activation_memory_config
 from ttnn.model_preprocessing import fold_batch_norm2d_into_conv2d
 
 
@@ -144,7 +145,9 @@ class Resnet50FpnTestInfra:
                 dtype=ttnn.bfloat16,
                 mesh_mapper=self.inputs_mesh_mapper,
             )
-            self.input_tensor[key] = ttnn.to_device(tt_host_tensor[key], device, memory_config=ttnn.L1_MEMORY_CONFIG)
+            self.input_tensor[key] = ttnn.to_device(
+                tt_host_tensor[key], device, memory_config=activation_memory_config(device)
+            )
 
         # Build TTNN model
         self.ttnn_model = resnet50Fpn(
