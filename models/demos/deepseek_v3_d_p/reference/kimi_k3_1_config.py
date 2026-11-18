@@ -10,6 +10,8 @@ without its q/k Hadamard rotation.
 No ``indexer_types``: every DSA layer owns its index slot, in the same 24-slot space as the KVPE cache.
 """
 
+import os
+
 from models.demos.deepseek_v3_d_p.reference.kimi_k3_config import KimiK3Config, kimi_k3_hf_config
 
 
@@ -55,5 +57,8 @@ def kimi_k3_1_hf_config(max_seq: int = 8192):
     # Indexer score matmul at HiFi2, not the op's LoFi default for bf8 x bf8: LoFi was the
     # largest device score error at DSA layers 3/7. Top-k recall vs the trace L3/L7 +0.015/+0.016 at 10K,
     # +0.033/+0.038 at 128K, for +0.2% / +0.9% scenario TTFT (stage 2, indicative 75 W).
-    cfg.index_score_math_fidelity = "HiFi2"
+    # Probe only: PROBE_K31_INDEX_SCORE_FIDELITY=default leaves the attribute unset (the op's own fidelity).
+    fidelity = os.environ.get("PROBE_K31_INDEX_SCORE_FIDELITY", "HiFi2")
+    if fidelity != "default":
+        cfg.index_score_math_fidelity = fidelity
     return cfg
