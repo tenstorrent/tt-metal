@@ -419,6 +419,19 @@ namespace ckernel {
 #endif
 
 #ifdef TRISC_MATH
+// The M block a kernel names as a compile-time arg (minimal_matmul: M_block_tiles), else 0. HiFi2 row forms need M
+// block 4: on M block 2 the faster math lands the compute's L1 bursts under the reader's NoC writes.
+constexpr std::uint32_t matmul_fe_named_m_block() {
+#ifdef KERNEL_COMPILE_TIME_ARG_MAP
+    for (const auto& [arg_name, arg_value] : named_args_map) {
+        if (arg_name == std::string_view("M_block_tiles")) {
+            return arg_value;
+        }
+    }
+#endif
+    return 0;
+}
+
 // llk_math_matmul_tile_mop, and the row form at HiFi2 half sync with a 32-bit DEST in a kernel with a constant block
 // (matmul_hifi2_half_wide); the matmul_fe_hifi3_wide class keeps the row form (minimal_matmul 424/444/888 bf16 HiFi3
 // -2.5 to -3.2 %)
@@ -440,6 +453,10 @@ constexpr bool matmul_fe_tile_mop() {
         // tell a run-time-block kernel); a kernel pairing a 32-bit operand with a fast one keeps the tile MOP (the row form hangs
         // the 2D-mcast bmm of Float32 x Float16_b blocks of two or more rows)
         return false;
+    } else if constexpr (
+        !row_mop_on && kt_key == 0 && MATH_FIDELITY == MathFidelity::HiFi2 && matmul_fe_named_m_block() != 0 &&
+        matmul_fe_named_m_block() < 4) {
+        return true;
     } else {
         return llk_math_matmul_tile_mop<row_mop_on, kt_key, form_out>();
     }
@@ -464,21 +481,7 @@ constexpr bool matmul_fe_main_math() {
 // The smallest kt_dim from which a plain call that runs main's math because the front end sees no constant block takes
 // the row form (0: never), outside size mode: LoFi half sync from kt 3 (census 65c1c: 40 of 76 keys faster, 0 slower;
 // kt <= 2 loses to the row path's per-call cost), HiFi2 half sync with a 32-bit DEST from kt 2 in kernels that name an
-// M block of 4 or more (a kt-1 block loses: ccl F32 4x1x1 +1.05). The init and the calls receive the same kt_dim. The
-// kernel's M block in tiles where it names it as a compile-time argument (minimal_matmul: M_block_tiles), else 0. HiFi2
-// takes the row form from M block 4: on M block 2 its faster math moves the compute's L1 bursts under the reader's
-// incoming NoC writes (224 2x1 bf16 +0.3 %).
-constexpr std::uint32_t matmul_fe_named_m_block() {
-#ifdef KERNEL_COMPILE_TIME_ARG_MAP
-    for (const auto& [arg_name, arg_value] : named_args_map) {
-        if (arg_name == std::string_view("M_block_tiles")) {
-            return arg_value;
-        }
-    }
-#endif
-    return 0;
-}
-
+// M block of 4 or more (a kt-1 block loses: ccl F32 4x1x1 +1.05). The init and the calls receive the same kt_dim.
 template <std::uint32_t llk_dir, bool row_mop_on, std::uint32_t kt_key>
 constexpr std::uint32_t matmul_fe_rowform_min_kt() {
     if constexpr (
