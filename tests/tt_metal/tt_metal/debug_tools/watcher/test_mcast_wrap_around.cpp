@@ -31,7 +31,7 @@ namespace {
 
 // Helper to perform host noc_multicast_write with given coordinates.
 // Uses valid L1 address and small payload to only exercise the sanitize check.
-// A mesh NoC (Quasar) cannot wrap, so there a wrapping multicast must be rejected.
+// On a mesh NoC (Quasar, Trinity) a wrapping multicast must be rejected.
 void DoHostMcastWrite(ChipId chip_id, CoreCoord core_start, CoreCoord core_end) {
     const auto& hal = MetalContext::instance().hal();
     const uint64_t l1_addr = hal.get_dev_addr(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::BASE);
