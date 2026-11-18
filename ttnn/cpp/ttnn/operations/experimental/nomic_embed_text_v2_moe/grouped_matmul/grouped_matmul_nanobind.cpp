@@ -53,7 +53,7 @@ void bind_grouped_matmul(nb::module_& mod) {
             memory_config (ttnn.MemoryConfig, optional): interleaved DRAM or L1. Defaults to the
                 input's.
             compute_kernel_config (ttnn.DeviceComputeKernelConfig, optional): defaults to HiFi4
-                (HiFi3 on Wormhole) with fp32 accumulation.
+                with fp32 accumulation.
             per_expert_lanes (bool): give each expert a core row of its own; num_experts must be
                 at most the grid's rows. The output is the same bit for bit. Defaults to False.
 

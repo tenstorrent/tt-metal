@@ -17,16 +17,10 @@ Tensor routed_combine(
     const std::optional<tt::tt_metal::MemoryConfig>& memory_config,
     const std::optional<DeviceComputeKernelConfig>& compute_kernel_config) {
     // Without a config: HiFi4, so the weights' products are exact in the fp32 DST.
-    // Due to hardware bug (#38306), HiFi4 + fp32_dest_acc_en can sometime produce incorrect results on Wormhole,
-    // so Wormhole uses HiFi3 instead (products are then exact only for weights with short mantissas, e.g. 0 or 1).
-    const auto arch = expert_rows.device()->arch();
-    const auto math_fidelity =
-        arch == tt::ARCH::WORMHOLE_B0 ? tt::tt_metal::MathFidelity::HiFi3 : tt::tt_metal::MathFidelity::HiFi4;
-    ttnn::verify_numerical_configuration(arch, compute_kernel_config);
     const auto kernel_config = init_device_compute_kernel_config(
-        arch,
+        expert_rows.device()->arch(),
         compute_kernel_config,
-        math_fidelity,
+        tt::tt_metal::MathFidelity::HiFi4,
         /*default_approx_mode=*/false,
         /*default_fp32_acc=*/true);
     return ttnn::prim::routed_combine(

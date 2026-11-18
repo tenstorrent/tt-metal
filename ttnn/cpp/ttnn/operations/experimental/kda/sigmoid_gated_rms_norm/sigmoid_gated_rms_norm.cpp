@@ -21,16 +21,10 @@ ttnn::Tensor sigmoid_gated_rms_norm(
         input.storage_type() == StorageType::DEVICE && input.is_allocated(),
         "sigmoid_gated_rms_norm: input must be an allocated device tensor");
     const auto output_memory_config = memory_config.value_or(ttnn::DRAM_MEMORY_CONFIG);
-    const auto arch = input.device()->arch();
-    // Due to hardware bug (#38306), HiFi4 + fp32_dest_acc_en can sometime produce incorrect results on Wormhole.
-    // Use HiFi3 when fp32_dest_acc_en is True on Wormhole (less likely to give bad results).
-    const auto math_fidelity =
-        arch == tt::ARCH::WORMHOLE_B0 ? tt::tt_metal::MathFidelity::HiFi3 : tt::tt_metal::MathFidelity::HiFi4;
-    ttnn::verify_numerical_configuration(arch, compute_kernel_config);
     const auto kernel_config = init_device_compute_kernel_config(
-        arch,
+        input.device()->arch(),
         compute_kernel_config,
-        math_fidelity,
+        tt::tt_metal::MathFidelity::HiFi4,
         /*default_approx_mode=*/true,
         /*default_fp32_acc=*/true,
         /*default_l1_acc=*/false,

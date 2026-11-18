@@ -20,16 +20,10 @@ Tensor grouped_matmul(
     const std::optional<DeviceComputeKernelConfig>& compute_kernel_config,
     bool per_expert_lanes) {
     // Without a config: HiFi4 and fp32 accumulation, the most precise setting.
-    // Due to hardware bug (#38306), HiFi4 + fp32_dest_acc_en can sometime produce incorrect results on Wormhole,
-    // so Wormhole uses HiFi3 instead.
-    const auto arch = input_tensor.device()->arch();
-    const auto math_fidelity =
-        arch == tt::ARCH::WORMHOLE_B0 ? tt::tt_metal::MathFidelity::HiFi3 : tt::tt_metal::MathFidelity::HiFi4;
-    ttnn::verify_numerical_configuration(arch, compute_kernel_config);
     const auto kernel_config = init_device_compute_kernel_config(
-        arch,
+        input_tensor.device()->arch(),
         compute_kernel_config,
-        math_fidelity,
+        tt::tt_metal::MathFidelity::HiFi4,
         /*default_approx_mode=*/false,
         /*default_fp32_acc=*/true);
     return ttnn::prim::grouped_matmul(

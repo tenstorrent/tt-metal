@@ -41,16 +41,10 @@ std::pair<ttnn::MemoryConfig, ttnn::DeviceComputeKernelConfig> resolve_configs(
     const std::optional<ttnn::MemoryConfig>& memory_config,
     const std::optional<ttnn::DeviceComputeKernelConfig>& compute_kernel_config) {
     const auto output_memory_config = memory_config.value_or(ttnn::DRAM_MEMORY_CONFIG);
-    const auto arch = anchor.device()->arch();
-    // Due to hardware bug (#38306), HiFi4 + fp32_dest_acc_en can sometime produce incorrect results on Wormhole.
-    // Use HiFi3 when fp32_dest_acc_en is True on Wormhole (less likely to give bad results).
-    const auto math_fidelity =
-        arch == tt::ARCH::WORMHOLE_B0 ? tt::tt_metal::MathFidelity::HiFi3 : tt::tt_metal::MathFidelity::HiFi4;
-    ttnn::verify_numerical_configuration(arch, compute_kernel_config);
     auto kernel_config = init_device_compute_kernel_config(
-        arch,
+        anchor.device()->arch(),
         compute_kernel_config,
-        math_fidelity,
+        tt::tt_metal::MathFidelity::HiFi4,
         /*default_approx_mode=*/false,
         /*default_fp32_acc=*/true,
         /*default_l1_acc=*/false);

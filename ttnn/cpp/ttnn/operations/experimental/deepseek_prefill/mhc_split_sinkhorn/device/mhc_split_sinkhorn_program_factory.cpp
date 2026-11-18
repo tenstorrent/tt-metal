@@ -59,10 +59,6 @@ ProgramDescriptor MhcSplitSinkhornProgramFactory::create_descriptor(
 
     const tt::DataFormat df = datatype_to_dataformat_converter(tt::tt_metal::DataType::FLOAT32);
     const uint32_t tile_size = tt::tile_size(df);
-    // Due to hardware bug (#38306), HiFi4 + fp32_dest_acc_en can sometime produce incorrect results on Wormhole.
-    // Use HiFi3 with fp32_dest_acc_en on Wormhole (less likely to give bad results).
-    const auto math_fidelity =
-        tensor_args.mixes.device()->arch() == tt::ARCH::WORMHOLE_B0 ? MathFidelity::HiFi3 : MathFidelity::HiFi4;
 
     auto* mixes_buffer = tensor_args.mixes.buffer();
     auto* consts_buffer = tensor_args.consts.buffer();
@@ -116,7 +112,7 @@ ProgramDescriptor MhcSplitSinkhornProgramFactory::create_descriptor(
         compute.source_type = KernelDescriptor::SourceType::FILE_PATH;
         compute.core_ranges = cores;
         compute.compile_time_args = std::move(compute_ct);
-        compute.config = ComputeConfigDescriptor{.math_fidelity = math_fidelity, .fp32_dest_acc_en = true};
+        compute.config = ComputeConfigDescriptor{.math_fidelity = MathFidelity::HiFi4, .fp32_dest_acc_en = true};
 
         for (const CoreCoord& core : corerange_to_cores(cores)) {
             KernelDescriptor::RTArgList rr;
@@ -193,7 +189,7 @@ ProgramDescriptor MhcSplitSinkhornProgramFactory::create_descriptor(
     compute.core_ranges = all_cores;
     compute.compile_time_args = std::move(compute_ct);
     compute.config = ComputeConfigDescriptor{
-        .math_fidelity = math_fidelity,
+        .math_fidelity = MathFidelity::HiFi4,
         .fp32_dest_acc_en = true,
     };
 

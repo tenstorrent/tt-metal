@@ -40,7 +40,7 @@ void bind_routed_combine(nb::module_& mod) {
             memory_config (ttnn.MemoryConfig, optional): interleaved DRAM or L1. Defaults to
                 expert_rows'.
             compute_kernel_config (ttnn.DeviceComputeKernelConfig, optional): fp32_dest_acc_en
-                must be on. Defaults to HiFi4 (HiFi3 on Wormhole) with fp32 accumulation.
+                must be on. Defaults to HiFi4 with fp32 accumulation.
 
         Returns:
             ttnn.Tensor: (1, 1, num_tokens, hidden) BFLOAT16, TILE, its tile padding the bias.
