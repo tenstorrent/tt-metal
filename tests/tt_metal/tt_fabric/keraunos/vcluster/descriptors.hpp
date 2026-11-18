@@ -64,9 +64,11 @@ struct GeneratedDescriptors {
 //
 // Runs check_manifest(`manifest`, package_facts(`package_soc_desc`)) and the G1 to G6 refusals, and throws
 // DescriptorGenerationError, before creating or writing anything, when any row or refusal holds; it reports every
-// one. Throws std::runtime_error (TT_FATAL) when `package_soc_desc` cannot be read or lacks a key the generator reads
-// (dram_views, eth, keraunos.cores, eth_l1_size), when `manifest` has no devices, or when a file cannot be written; a
-// write failure can leave earlier files of this call in `out_dir`.
+// one. Throws std::runtime_error (TT_FATAL) when `package_soc_desc` cannot be read, lacks a key the generator reads
+// (dram_views, eth, keraunos.cores, eth_l1_size) or holds a value of the wrong type (naming the file), when
+// `manifest` has no devices or a router slot without a port, when the absolute `out_dir` contains a comma or a
+// newline, or when a file cannot be written. Before writing, it removes `out_dir`'s env.emu and env.mock, and it
+// writes them last: a write failure leaves no env file, and can leave other files of this call in `out_dir`.
 GeneratedDescriptors generate_descriptors(
     const Manifest& manifest, const std::filesystem::path& package_soc_desc, const std::filesystem::path& out_dir);
 
@@ -78,8 +80,8 @@ std::vector<std::pair<uint32_t, uint32_t>> noc_links(const Manifest& manifest);
 // The package facts check_manifest() takes, from the package SoC descriptor at `package_soc_desc`: its
 // keraunos.cores as (hsio, cce), MEM_IERISC_LOCAL_HARTS harts a CCE, eth_l1_size bytes of SRAM a CCE, and the
 // Ethernet tile pairs (0, 1) and (2, 3) the mmk 26ww45.eth-pcs-output-inter bring-up wires (chippy bringup_mmk.py
-// KER_ETH_LINKS). Throws std::runtime_error (TT_FATAL) when the file cannot be read or lacks keraunos.cores or
-// eth_l1_size.
+// KER_ETH_LINKS). Throws std::runtime_error (TT_FATAL) when the file cannot be read, lacks keraunos.cores or
+// eth_l1_size, or holds a value of the wrong type there (naming the file).
 PackageFacts package_facts(const std::filesystem::path& package_soc_desc);
 
 }  // namespace tt::tt_fabric::vcluster
