@@ -1,6 +1,8 @@
 # SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
+import os
+
 import ttnn
 
 
@@ -28,6 +30,11 @@ class CCLManager:
 
     def _init_subdevice(self):
         compute_grid_size = ttnn.CoreCoord(8, 8)
+        if os.environ.get("HY4_B51_CCL_FULL_GRID", "0") == "1":
+            # B51 / NAN49 fix: the global semaphores (ping-pong RS / AG / barrier) were reserved on an 8x8 core range only, but the RS / AG / a2a worker cores of a
+            # ring op with num_links=2 can lie outside it; on those cores the semaphore L1 address is NOT reserved and collides with CBs / L1 buffers -> silently wrong
+            # all-reduce on some ping-pong parities (size / address dependent). Reserve the address on the whole compute grid.
+            compute_grid_size = self.mesh_device.compute_with_storage_grid_size()
         self.ccl_cores = ttnn.CoreRangeSet(
             {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(compute_grid_size.x - 1, compute_grid_size.y - 1))}
         )

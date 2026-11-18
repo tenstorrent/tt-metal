@@ -20,6 +20,7 @@ import torch
 import ttnn
 
 log = logging.getLogger("hy4_ccl_safe")
+A2A_LINKS = 2  # B51: num_links of the all_to_all_async_generic calls (prefill a2a2, pool decode); the serve engine lowers it to 1 when the pf-size a2a selftest case fails
 
 
 @dataclass
@@ -36,7 +37,17 @@ class Hy4Links:
     ) -> (
         int
     ):  # for CCLManager / lean calls (all-reduce + TILE gather share it): min over the classes that go through the manager
-        return min(self.per_op.get(k, 2) for k in ("ag_tile_dim3", "allreduce_rs_ag"))
+        return min(
+            self.per_op.get(k, 2) for k in ("ag_tile_dim3", "allreduce_rs_ag", "ag_tile_dim3_pf", "allreduce_rs_ag_pf")
+        )
+
+    @property
+    def a2a(
+        self,
+    ) -> (
+        int
+    ):  # B51: all_to_all_async_generic links (prefill heads<->sequence a2a2, pool decode a2a), 2 unless the pf-size a2a case failed
+        return self.per_op.get("a2a_pf", 2)
 
     @property
     def pool_ag(self) -> int:  # the pool path's all_gather_async calls (q gather dim=2 row-major, key gather)
@@ -73,6 +84,9 @@ def _check(mesh, op, nl, n_calls, topology):
     R, C = _cluster_shape(mesh)
     ccl = CCLManager(mesh, num_links=nl, topology=topology)
     ri = lambda *s: torch.randint(-8, 8, s).bfloat16()
+    pf = op.endswith("_pf")  # B51: prefill-size case (HY4_B51_PF_ROWS rows, default 512) instead of 32 rows
+    op = op[:-3] if pf else op
+    NR = int(os.environ.get("HY4_B51_PF_ROWS", "512")) if pf else 32
 
     def ag(t, dim):
         return ttnn.experimental.all_gather_async(
@@ -90,22 +104,39 @@ def _check(mesh, op, nl, n_calls, topology):
     ok = True
     for _ in range(n_calls):  # consecutive calls: odd and even parity both
         if op == "ag_tile_dim3":
-            x = ri(R, 1, 32, C * 256)
+            x = ri(R, 1, NR, C * 256)
             o = ag(_put(mesh, x, R, C, 3, ttnn.TILE_LAYOUT), 3)
+        elif op == "a2a":  # heads<->sequence round trip (prefill a2a2 / pool decode), exact
+            x = ri(R * C, 8, NR, 576)
+            t = ttnn.from_torch(
+                x,
+                device=mesh,
+                layout=ttnn.TILE_LAYOUT,
+                dtype=ttnn.bfloat16,
+                mesh_mapper=ttnn.ShardTensorToMesh(mesh, dim=0),
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+            kw = dict(num_links=nl, memory_config=ttnn.DRAM_MEMORY_CONFIG, cluster_axis=1)
+            q = ttnn.experimental.all_to_all_async_generic(t, in_dim=1, out_dim=2, **kw)
+            o = ttnn.experimental.all_to_all_async_generic(q, in_dim=2, out_dim=1, **kw)
+            ttnn.synchronize_device(mesh)
+            for i, y in enumerate(ttnn.get_device_tensors(o)):
+                ok &= torch.equal(ttnn.to_torch(y).reshape(8, NR, 576), x[i])
+            continue
         elif op == "ag_rm_dim2":
             x = ri(R, 8, C * 4, 576)
             o = ag(_put(mesh, x, R, C, 2, ttnn.ROW_MAJOR_LAYOUT), 2)
         else:  # allreduce_rs_ag: lean all-reduce form (reduce_scatter_minimal + TILE all_gather)
-            xs = [ri(R, 1, 32, 6144) for _ in range(C)]
+            xs = [ri(R, 1, NR, 6144) for _ in range(C)]
             if R == 1:
-                t = _put(mesh, torch.cat(xs, 0).reshape(C, 1, 32, 6144), 1, C, 0, ttnn.TILE_LAYOUT)
+                t = _put(mesh, torch.cat(xs, 0).reshape(C, 1, NR, 6144), 1, C, 0, ttnn.TILE_LAYOUT)
                 ref = sum(xs).float()
             else:  # per-row independent partials: device (r,c) holds xs[c][r]
                 full = torch.stack(
                     [torch.stack([xs[c][r] for c in range(C)], 0) for r in range(R)], 0
                 )  # [R,C,1,32,6144]
                 t = ttnn.from_torch(
-                    full.reshape(R * C, 1, 32, 6144),
+                    full.reshape(R * C, 1, NR, 6144),
                     device=mesh,
                     layout=ttnn.TILE_LAYOUT,
                     dtype=ttnn.bfloat16,
@@ -136,11 +167,13 @@ def _check(mesh, op, nl, n_calls, topology):
     return ok
 
 
-def hy4_fabric_selftest(
-    mesh, n_calls=4, topology=None, ops=("ag_tile_dim3", "ag_rm_dim2", "allreduce_rs_ag")
-) -> Hy4Links:
+def hy4_fabric_selftest(mesh, n_calls=4, topology=None, ops=None) -> Hy4Links:
     """Run the exact-integer odd/even all_gather_async test per op class. Safe links per class: 2 if num_links=2 is exact for n_calls consecutive calls, else 1 if num_links=1 is
     exact, else RuntimeError (slot unusable). Mesh must be open with the fabric the model uses. Typically 2-4 s warm."""
+    if ops is None:  # B51 (HY4_B51_SELFTEST_PF=1, default off): also the prefill-size cases (512 rows) and the a2a
+        ops = ("ag_tile_dim3", "ag_rm_dim2", "allreduce_rs_ag")
+        if os.environ.get("HY4_B51_SELFTEST_PF", "0") == "1":
+            ops += ("ag_tile_dim3_pf", "allreduce_rs_ag_pf", "a2a_pf")
     forced = os.environ.get("HY4_CCL_LINKS_FORCE")
     if forced:
         res = Hy4Links({k: int(forced) for k in ops}, 0.0, True)

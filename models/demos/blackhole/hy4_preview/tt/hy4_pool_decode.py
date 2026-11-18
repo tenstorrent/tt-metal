@@ -18,6 +18,7 @@ import os
 import torch
 
 import ttnn
+from models.demos.blackhole.hy4_preview.tt import hy4_ccl_safe as _ccl_safe
 from models.demos.blackhole.hy4_preview.tt import hy4_pool as HP
 from models.demos.blackhole.hy4_preview.tt.hy4_attn_opt import Hy4AttentionOpt
 from models.demos.blackhole.hy4_preview.tt.hy4_common import upload
@@ -320,7 +321,7 @@ class PoolCtx:
 
             TR = self.TR
             x = ttnn.experimental.all_to_all_async_generic(
-                out, in_dim=1, out_dim=0, num_links=2, topology=ttnn.Topology.Ring, cluster_axis=1
+                out, in_dim=1, out_dim=0, num_links=_ccl_safe.A2A_LINKS, topology=ttnn.Topology.Ring, cluster_axis=1
             )
             if self.hm_compact:
                 return hy4_merge.merge_fused(
@@ -342,12 +343,12 @@ class PoolCtx:
             from models.demos.blackhole.hy4_preview.tt import hy4_merge
 
             x = ttnn.experimental.all_to_all_async_generic(
-                out, in_dim=1, out_dim=0, num_links=2, topology=ttnn.Topology.Ring, cluster_axis=1
+                out, in_dim=1, out_dim=0, num_links=_ccl_safe.A2A_LINKS, topology=ttnn.Topology.Ring, cluster_axis=1
             )
             res = hy4_merge.merge_fused(x, sink, S)
         else:
             x = ttnn.experimental.all_to_all_async_generic(
-                out, in_dim=1, out_dim=0, num_links=2, topology=ttnn.Topology.Ring, cluster_axis=1
+                out, in_dim=1, out_dim=0, num_links=_ccl_safe.A2A_LINKS, topology=ttnn.Topology.Ring, cluster_axis=1
             )
             res = merge3(x, sink, S)
         # res [1,S,32,512] TILE: rows 0..7 = the 8 real heads of user s -> [1,8,S,512]
