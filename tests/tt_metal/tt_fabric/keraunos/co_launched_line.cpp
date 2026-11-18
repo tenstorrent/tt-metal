@@ -9,6 +9,7 @@
 #include <fmt/format.h>
 
 #include <algorithm>
+#include <array>
 #include <chrono>
 #include <cstdint>
 #include <random>
@@ -22,6 +23,7 @@
 
 #include "fabric_fixture.hpp"
 #include "hostdev/eth_link.h"
+#include "internal/tt-2xx/quasar/dev_mem_map.h"
 #include "impl/context/metal_context.hpp"
 #include "impl/context/metal_env_accessor.hpp"
 #include "impl/context/metal_env_impl.hpp"
@@ -97,7 +99,6 @@ LinePrograms create_line_programs(const Line& line, const WorkerMemMap& map, uin
     return programs;
 }
 
-// A router whose link record the extension set to the NOC kind, and the record as the extension found it.
 // A fabric router as the extension prepared it: its record as found, whether its link is on the NOC, and whether it
 // sends the line's traffic on that link, toward the line's last chip.
 struct PreparedRouter {
@@ -287,6 +288,15 @@ void KeraunosCoLaunchedWorkers::run_line_unicast(const NocLinks& noc_links) {
             << "chip " << router.chip << " router " << router.logical.str() << " reads TERMINATED as fabric comes up";
     }
 
+    // Fabric is up, so this run launched every router, and none has been told to terminate. A router's status word
+    // survives from the case before on the same server, so TERMINATED here is that case's, and without this check the
+    // TERMINATED after close below could be too.
+    const auto routers = all_routers();
+    for (const auto& router : routers) {
+        EXPECT_NE(read_edm_status(router), static_cast<uint32_t>(tt::tt_fabric::EDMStatus::TERMINATED))
+            << "chip " << router.chip << " router " << router.logical.str() << " reads TERMINATED as fabric comes up";
+    }
+
     // Each record the extension set was valid when it found it, so device init had written it, and still holds the NOC
     // kind after launch. Every other record holds the Ethernet kind device init writes. One router per end of
     // each chosen link: the mesh descriptors have one channel between neighbours.
@@ -323,6 +333,19 @@ void KeraunosCoLaunchedWorkers::run_line_unicast(const NocLinks& noc_links) {
         const auto results = read_results(worker, map);
         EXPECT_EQ(results[TT_FABRIC_STATUS_INDEX], TT_FABRIC_STATUS_PASS) << role;
         EXPECT_EQ(bytes_of(results), expected_bytes) << role;
+    }
+
+    // The path each link took: a router stages a word only in send_dword on a NOC link,
+    // for the packets-sent credit on its sender TX queue (word 0); the receiver returns credits by send_bytes, which
+    // stages nothing. That holds for traffic one way along the line, as here: only the sender of a NOC link stages.
+    for (const auto& router : routers) {
+        const PreparedRouter& prep = prepared_router(router);
+        const NocStage stage = read_noc_stage(router.chip, router.virtual_core);
+        const std::string where = fmt::format("chip {} router {}", router.chip, router.logical.str());
+        log_info(tt::LogTest, "{} NOC staging words {:#x}", where, fmt::join(stage, " "));
+        const NocStage expected = prep.noc && prep.downstream ? NocStage{kNumPackets, 0, 0, 0} : NocStage{};
+        EXPECT_EQ(stage, expected) << where << (prep.noc ? " (NOC link" : " (Ethernet link")
+                                   << (prep.downstream ? ", sends the line's packets)" : ", does not send them)");
     }
 
     DoTearDownTestSuite();

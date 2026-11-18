@@ -47,8 +47,8 @@ class KeraunosCoLaunchedWorkers : public BaseFabricFixture {
 protected:
     // Opens the devices with 1D fabric, sends kNumPackets from the line's first chip to its last with the links in
     // `noc_links` on the NOC and the rest on Ethernet, then checks the link records, both workers' results and that
-    // every router terminates. Skips off Quasar, when a link in `noc_links` is not on the open line, and on Mock after
-    // compiling the workers' kernels.
+    // every router terminates, and the path each link took from the routers' NOC staging words. Skips off Quasar,
+    // when a link in `noc_links` is not on the open line, and on Mock after compiling the workers' kernels.
     void run_line_unicast(const NocLinks& noc_links);
 
     static void SetUpTestSuite() {}
