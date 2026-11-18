@@ -86,3 +86,15 @@ Totals per tier:
 | core-local L1 | x read twice by compute (sumsq, normalize) from `cb_x` | same |
 
 > Cheapest-traffic split considered: R × W split with γ multicast (W_SPLIT + GAMMA_MCAST) — saves `(G−1)·W·es_γ` DRAM bytes (≤ 1/16 of `S_x`, ≤ 1/32 when γ dtype = x dtype) and adds one γ rendezvous per core. Implemented: LOCAL / W_SPLIT, both at the x/y minimum (1 crossing each). GAMMA_MCAST is deferred because γ's row-0-only reads already bound its extra DRAM traffic to ≤ 1/16 of x's, and the structure keeps it reachable: `cb_gamma` is filled once in the writer prologue, which a multicast receive can replace without touching any per-block operation. The rejected STREAM_TWO_PASS split would add `S_x` DRAM bytes (x read twice).
+
+## Implementation notes (ttnn-implementer, Phase 0)
+
+The implemented CB set, page counts and formats match the table above row for row (`rms_norm_program_descriptor.py`
+computes every page count from `select_blocking()`'s `block_rows` / `core_w_tiles` / `w_split` and the depth
+constants). Non-CB L1 added: semaphore `SEM_RINV_LOCAL` (W_SPLIT only, one word) — the line root's writer bumps it
+after its barriered loopback multicast so the root's reader can push its own `cb_rinv` (the Mcast sender has no
+receiver role). The data-movement budget is unchanged: x and y cross DRAM once; γ is read once per core (row-0 lanes).
+
+Measured (BH p150b, bf16, RM γ, DEVICE KERNEL DURATION): (1,1,32,4096) TILE 7.8 µs / 16 cores; (1,1,32,16384)
+15.3 µs / 64 cores; (1,1,128,8192) 17.0 µs / 104 cores; (1024,1024) 15.8 µs / 96 cores; (4,1,512,512) 16.2 µs /
+64 cores. RM is 15–30 % slower than TILE at the same shape.
