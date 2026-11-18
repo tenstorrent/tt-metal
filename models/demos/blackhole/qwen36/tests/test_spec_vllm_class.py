@@ -591,6 +591,7 @@ def test_capabilities():
     assert caps["supports_async_decode"] is True and caps["supports_async_spec_decode"] is True
     assert caps["supports_chained_spec_verify"] is True
     assert caps["supports_prefill_over_pending_spec"] is True
+    assert caps["supports_prefill_resume_inside_kv_block"] is False
     assert caps["output_tokens_per_step"] == 1
     assert caps["supports_prefix_caching"] is True and caps["supports_chunked_prefill"] is True
     assert issubclass(CLS, Qwen36ForCausalLM)
