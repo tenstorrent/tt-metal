@@ -226,6 +226,18 @@ constexpr bool llk_matmul_kernel_mixes_32bit() {
 #endif
 }
 
+// True when a CB of the kernel unpacks from a block-float format
+constexpr bool llk_matmul_kernel_has_bfp_cb() {
+#if defined(UCK_CHLKC_MATH) || defined(UCK_CHLKC_UNPACK)
+    for (std::uint32_t cb = 0; cb < sizeof(unpack_src_format); cb++) {
+        if (unpack_src_format[cb] != static_cast<std::uint8_t>(DataFormat::Invalid) && IS_BFP_FORMAT(unpack_src_format[cb])) {
+            return true;
+        }
+    }
+#endif
+    return false;
+}
+
 // True when every CB of the kernel with a format holds whole 32x32 tiles of four faces (the two-row schemes need them)
 constexpr bool llk_matmul_kernel_full_tiles() {
 #if defined(UCK_CHLKC_MATH) || defined(UCK_CHLKC_UNPACK)
@@ -417,6 +429,20 @@ namespace ckernel {
 #include "llk_math_matmul_main.h"
 namespace ckernel {
 #endif
+
+// The output subblock width a kernel names as a compile-time arg (minimal_matmul: subblock_w), else 0. A one-tile-wide
+// subblock of 16-bit operands keeps the per-row unpack offsets: hoisting them measured slower there (minimal 224 2x1 bf16
+// LoFi +0.1 %, bfp8 -0.35 %).
+constexpr std::uint32_t matmul_fe_named_subblock_w() {
+#ifdef KERNEL_COMPILE_TIME_ARG_MAP
+    for (const auto& [arg_name, arg_value] : named_args_map) {
+        if (arg_name == std::string_view("subblock_w")) {
+            return arg_value;
+        }
+    }
+#endif
+    return 0;
+}
 
 #ifdef TRISC_MATH
 // The M block a kernel names as a compile-time arg (minimal_matmul: M_block_tiles), else 0. HiFi2 row forms need M
@@ -628,7 +654,7 @@ ALWI void matmul_block_llk(
     const std::uint32_t rt_dim,
     const std::uint32_t kt_dim,
     const std::uint32_t held_a = matmul_held_a_init) {
-    UNPACK((llk_unpack_AB_matmul<unpack_ttsync, kt_key, form_out, llk_dir, stream_z>(
+    UNPACK((llk_unpack_AB_matmul<unpack_ttsync, kt_key, form_out, llk_dir, stream_z, matmul_fe_named_subblock_w() != 1 || llk_matmul_kernel_has_bfp_cb()>(
         in0_cb_id, in1_cb_id, in0_tile_index, in1_tile_index, ct_dim, rt_dim, kt_dim, held_a)));
 #ifdef TRISC_MATH
     if constexpr (matmul_fe_main_math<llk_dir, row_mop_on, kt_key, form_out, in1_order, row_end_fold, in0_format, in1_format, out_format, block_rt, block_ct>()) {
