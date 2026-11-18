@@ -36,6 +36,7 @@ class _DeepSeekV4Adapter(MLAPrefillAdapter):
     ttnn_cache_default = ""
     config_builder_overrides_checkpoint = True
     prefill_trace_layout = "chunked_group_a_v1"
+    builds_missing_weight_cache = False  # TtV4Transformer reads its own checkpoint layout; no TTNN trunk cache
 
     @property
     def config_builder(self) -> Callable:

@@ -157,14 +157,11 @@ def chunk_boxes(label: Label, local_shape_: Sequence[int]) -> list[Chunk]:
 
 
 def replica_groups(chunks: Sequence[Chunk]) -> dict[tuple[int, ...], list[Chunk]]:
-    """Chunks that hold the same box, keyed by their shard coordinates, in first-seen order."""
+    """Chunks that hold the same box, keyed by their shard coordinates, in first-seen order. The key fixes the box,
+    since ``chunk_boxes`` derives a chunk's offsets from the same coordinates."""
     groups: dict[tuple[int, ...], list[Chunk]] = {}
     for chunk in chunks:
         groups.setdefault(chunk.group, []).append(chunk)
-    for group in groups.values():
-        box = group[0].box
-        if any(c.box != box for c in group):
-            raise TopologyError(f"replicas of group {group[0].group} hold different boxes")
     return groups
 
 

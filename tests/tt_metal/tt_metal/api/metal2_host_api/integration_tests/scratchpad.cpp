@@ -23,6 +23,8 @@
 #include "metal2_host_api/test_helpers/test_helpers.hpp"
 #include "metal2_host_api/test_helpers/program_spec_hw_fixture.hpp"
 
+#include "metal2_host_api/test_helpers/scratchpad_override.hpp"
+
 namespace tt::tt_metal::experimental {
 namespace {
 
@@ -30,6 +32,40 @@ using test_helpers::MakeMinimalDFB;
 using test_helpers::MakeMinimalGen1DMKernel;
 using test_helpers::MakeMinimalWorkUnit;
 using test_helpers::ProgramSpecHWTest;
+
+namespace sp_test = tt::tt_metal::test_helpers;
+using ScratchpadOverrideSlowTest = sp_test::ScratchpadPlacementFixture<ProgramSpecHWTest>;
+using tt::tt_metal::experimental::MakeMeshWorkloadFromSpec;
+using tt::tt_metal::experimental::SetProgramRunArgs;
+
+TEST_F(ScratchpadOverrideSlowTest, ScratchpadPlacementOverrideGuardedAccess) {
+    // Kernels write only on selected nodes and leave memory on the excluded node untouched.
+    distributed::MeshDevice& fixture_device = this->fixture_device();
+    auto spec = sp_test::MakeGuardedScratchpadSpecForTest();
+    auto workload = MakeMeshWorkloadFromSpec(fixture_device, spec);
+    Program& program = workload.get_programs().begin()->second;
+    sp_test::InitializeScratchpadReportsForTest(fixture_device, program);
+    SetProgramRunArgs(program, sp_test::MakeGuardedScratchpadArgsForTest(0xC0DE0000u));
+    sp_test::EnqueueScratchpadOverrideForTest(fixture_device, workload, false);
+    EXPECT_EQ(
+        sp_test::ReadScratchpadResultsForTest(fixture_device, program),
+        sp_test::ExpectedScratchpadResultsForTest(sp_test::ScratchpadAddressForTest(program), 0xC0DE0000u));
+}
+
+TEST_F(ScratchpadOverrideSlowTest, ScratchpadPlacementOverrideRepeatedEnqueue) {
+    // Repeated enqueue supplies each new pattern to both scratchpad bindings.
+    distributed::MeshDevice& fixture_device = this->fixture_device();
+    auto workload = MakeMeshWorkloadFromSpec(fixture_device, sp_test::MakeGuardedScratchpadSpecForTest());
+    Program& program = workload.get_programs().begin()->second;
+    sp_test::InitializeScratchpadReportsForTest(fixture_device, program);
+    SetProgramRunArgs(program, sp_test::MakeGuardedScratchpadArgsForTest(0x100u));
+    sp_test::EnqueueScratchpadOverrideForTest(fixture_device, workload, false);
+    SetProgramRunArgs(program, sp_test::MakeGuardedScratchpadArgsForTest(0x200u));
+    sp_test::EnqueueScratchpadOverrideForTest(fixture_device, workload, false);
+    EXPECT_EQ(
+        sp_test::ReadScratchpadResultsForTest(fixture_device, program),
+        sp_test::ExpectedScratchpadResultsForTest(sp_test::ScratchpadAddressForTest(program), 0x200u));
+}
 
 // ============================================================================
 // Kernel Scratchpad: write / readback under slow dispatch
@@ -46,6 +82,7 @@ using test_helpers::ProgramSpecHWTest;
 // base address and get_dataformat() to a host-known L1 address. The host reads the
 // reported values, then reads the scratchpad L1 and confirms the pattern landed — closing the loop on
 // the scratchpad being real, writable, node-local L1 and the framework delivering its metadata.
+
 TEST_F(ProgramSpecHWTest, ScratchpadWriteReadback) {
     auto mesh_device = devices_.at(0);
 

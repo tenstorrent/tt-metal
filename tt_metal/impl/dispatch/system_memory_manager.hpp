@@ -5,6 +5,7 @@
 #pragma once
 
 // needed for private members
+#include "aux_region_allocator.hpp"
 #include "system_memory_cq_interface.hpp"
 #include <tt-umd/io_window/io_window.hpp>  // for tt::umd::IoWindow
 #include <tt-umd/types/xy_pair.hpp>        // for tt_cxy_pair
@@ -23,9 +24,6 @@ class Buffer;
 class MetalContext;
 class MetalEnvImpl;
 
-// True when the host can't pin D2H memory (no 64-bit PCIe addressing and no IOMMU).
-bool d2h_uses_hugepage_fallback(const MetalContext& ctx);
-
 class SystemMemoryManager {
 public:
     // Create a SystemMemoryManager for accessing system memory accessible by the given device
@@ -36,10 +34,6 @@ public:
 
     uint32_t get_last_event(uint8_t cq_id);
 
-    void reset_event_id(uint8_t cq_id);
-
-    void increment_event_id(uint8_t cq_id, uint32_t val);
-
     void set_last_completed_event(uint8_t cq_id, uint32_t event_id);
 
     uint32_t get_last_completed_event(uint8_t cq_id);
@@ -47,8 +41,6 @@ public:
     uint32_t get_current_event(uint8_t cq_id);
 
     void reset(uint8_t cq_id);
-
-    void set_issue_queue_size(uint8_t cq_id, uint32_t issue_queue_size);
 
     void set_bypass_mode(bool enable, bool clear);
 
@@ -89,13 +81,9 @@ public:
 
     uint32_t completion_queue_wait_front(uint8_t cq_id, std::atomic<bool>& exit_condition) const;
 
-    void send_completion_queue_read_ptr(uint8_t cq_id) const;
-
     void* get_completion_queue_ptr(uint8_t cq_id) const;
 
     void wrap_issue_queue_wr_ptr(uint8_t cq_id);
-
-    void wrap_completion_queue_rd_ptr(uint8_t cq_id);
 
     void completion_queue_pop_front(uint32_t num_pages_read, uint8_t cq_id);
 
@@ -107,23 +95,26 @@ public:
     void set_current_and_last_completed_event(
         uint8_t cq_id, uint32_t current_event_id, uint32_t last_completed_event_id);
 
-    bool is_dram_backed() const;
+    bool is_dram_backed() const { return is_dram_backed_; }
 
     uint32_t get_dram_region_base_addr() const;
 
     uint32_t get_dram_region_bank_id() const;
 
-    std::pair<void*, uint32_t> allocate_region(uint32_t size);
-
-    uint32_t get_channel_offset() const { return channel_offset; }
+    AuxRegionAllocator& aux_region_allocator() { return aux_region_allocator_; }
 
 private:
-    bool is_mock_device() const;
+    bool is_mock_device() const { return is_mock_device_; }
 
     void init_dispatch_core_interfaces(uint8_t num_hw_cqs, uint16_t channel);
 
+    void send_completion_queue_read_ptr(uint8_t cq_id) const;
+
     MetalEnvImpl& env_;
     MetalContext& ctx_;
+    const bool is_mock_device_;
+    const bool is_dram_backed_;
+    const uint32_t cq_alignment_;  // DRAM alignment if DRAM-backed, host alignment otherwise
     ChipId device_id = 0;
     std::vector<uint32_t> completion_byte_addrs;
     char* cq_sysmem_start = nullptr;
@@ -147,12 +138,8 @@ private:
 
     std::unique_ptr<char[]> dram_region_staging_buffer;
 
-    // Bump-allocated tail of CQ sysmem (after all per-CQ issue/completion buffers). Device and host
-    // addresses are returned together by allocate_region() for PCIe/D2H consumers.
-    uint32_t free_region_start_ = 0;
-    uint32_t free_region_size_ = 0;
-    uint32_t free_region_bump_ = 0;
-    char* free_region_host_ptr_ = nullptr;
+    // Empty on mock devices.
+    AuxRegionAllocator aux_region_allocator_;
 };
 
 }  // namespace tt::tt_metal

@@ -9,8 +9,8 @@ an 8-byte little-endian header length, a JSON header mapping tensor names to ``d
 ``data_offsets`` (relative to the data section), and the data section. The header is padded with spaces so the
 data section starts on a 4 KiB boundary, which the spec allows. Tensors are laid out back to back in the order given.
 
-The ``safetensors`` package itself is not used: its numpy backend has no bfloat16 entry, and the writer here needs to
-know every offset before a byte moves so that per-device threads can write at fixed offsets.
+The ``safetensors`` package itself is not used: the writer here needs to know every offset before a byte moves, so
+that per-device threads can write their chunks at fixed offsets.
 """
 
 from __future__ import annotations
@@ -25,18 +25,21 @@ ITEMSIZE = {"BF16": 2, "F32": 4, "U32": 4, "I32": 4, "U16": 2, "U8": 1, "I8": 1}
 
 
 def build_header(
-    tensors: Sequence[tuple[str, str, Sequence[int], int]], metadata: dict | None = None
+    tensors: Sequence[tuple[str, str, Sequence[int], int]], metadata: dict[str, str] | None = None
 ) -> tuple[bytes, dict[str, tuple[int, int]], int]:
     """The file header for ``tensors`` given as ``(name, dtype, shape, nbytes)`` in file order.
 
     Returns the header bytes including the length prefix, each tensor's ``(begin, end)`` within the data section,
-    and the total size of the data section. ``metadata`` values are strings, stored as they are so any safetensors
-    reader shows them, or dicts and lists, stored as JSON; see ``encode_metadata``.
+    and the total size of the data section. ``metadata`` becomes the file's ``__metadata__``, whose values safetensors
+    requires to be strings.
     """
     offsets: dict[str, tuple[int, int]] = {}
     entries: dict = {}
     if metadata is not None:
-        entries["__metadata__"] = encode_metadata(metadata)
+        for key, value in metadata.items():
+            if not isinstance(value, str):
+                raise ValueError(f"safetensors: metadata {key!r} must be a string, not {type(value).__name__}")
+        entries["__metadata__"] = dict(metadata)
     cursor = 0
     for name, dtype, shape, nbytes in tensors:
         if name in entries:
@@ -86,30 +89,6 @@ def read_file_header(path: str) -> tuple[dict, int]:
     if len(body) != length:
         raise ValueError(f"safetensors: {path} is truncated inside its header")
     return json.loads(body), 8 + length
-
-
-def encode_metadata(metadata: dict) -> dict[str, str]:
-    """``__metadata__`` values, which safetensors requires to be strings: a string is stored as it is and a dict or
-    list as JSON, which always starts with ``{`` or ``[``, so a reader that decodes exactly those values gets
-    ``metadata`` back. Anything else (a number, a bool, None) or a string that itself starts with ``{`` or ``[`` would
-    not read back as the same value, so it is refused."""
-    encoded = {}
-    for key, value in metadata.items():
-        if isinstance(value, str):
-            if value[:1] in ("{", "["):
-                raise ValueError(
-                    f"safetensors: metadata {key!r} is a string starting with {value[:1]!r}, which reads back as JSON; "
-                    f"pass the dict or list itself"
-                )
-            encoded[key] = value
-        elif isinstance(value, (dict, list)):
-            encoded[key] = json.dumps(value, separators=(",", ":"))
-        else:
-            raise ValueError(
-                f"safetensors: metadata {key!r} must be a str, dict or list, not {type(value).__name__} (it would not "
-                f"read back as the same type)"
-            )
-    return encoded
 
 
 def pread_all(fd: int, nbytes: int, offset: int) -> bytes:

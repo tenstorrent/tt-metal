@@ -3,6 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import pytest
+import re
 import torch
 import math
 
@@ -12,7 +13,14 @@ from tt_py_test_utils_common.perf.benchmarking_utils import BenchmarkProfiler
 from tracy import signpost
 
 from tests.ttnn.utils_for_testing import assert_equal, assert_allclose, assert_with_pcc, assert_with_ulp
-from tt_py_test_utils_common.utility_functions import skip_for_slow_dispatch, run_for_blackhole
+from tests.ttnn.unit_tests.operations.data_movement.docstring_support import (
+    check_readable,
+    docstring_dtype_layout_params,
+    docstring_interleaved_buffer_type_params,
+    interleaved_memory_config,
+)
+from tests.ttnn.unit_tests.operations.data_movement.data_movement_test_utils import assert_exact, full_range_input
+from tt_py_test_utils_common.utility_functions import skip_for_slow_dispatch, run_for_blackhole, is_blackhole, is_quasar
 
 shapes = [[[1, 1, 32, 32]], [[3, 1, 320, 384]], [[1, 1, 128, 7328]]]
 
@@ -1282,3 +1290,67 @@ def test_tilize_uint8_tall_narrow_program_cache_addr_change(device, shape):
 
     assert entries == 1, "tilize should build exactly one program for a fixed config"
     device.disable_and_clear_program_cache()
+
+
+_ARCH_RULE = re.compile(
+    r"On (Blackhole|Quasar), an? ``(\w+)`` input (must be in DRAM and )?needs a tile height of (\d+)( or more)?\."
+)
+
+
+def _docstring_arch_rule(dtype):
+    """The ttnn.tilize docstring's rule for ``dtype`` on this architecture, as (DRAM only, allowed tile height check).
+
+    The rules are sentences such as "On Blackhole, a ``UINT8`` input must be in DRAM and needs a tile height of 2 or
+    more." A dtype without a rule for this architecture gets (False, any height). A sentence for an architecture that
+    mentions tiles but doesn't match this form fails the test, so a reworded rule is caught here and not on the device.
+    """
+    doc = " ".join(ttnn.tilize.__doc__.split())
+    sentences = re.findall(r"On (?:Blackhole|Quasar), [^.]*\btile[^.]*\.", doc)
+    unreadable = [sentence for sentence in sentences if not _ARCH_RULE.fullmatch(sentence)]
+    assert not unreadable, f"the test can't read these architecture rules in the ttnn.tilize docstring: {unreadable}"
+    arch = "Blackhole" if is_blackhole() else "Quasar" if is_quasar() else None
+    for rule_arch, name, dram, height, or_more in _ARCH_RULE.findall(doc):
+        if rule_arch == arch and getattr(ttnn.DataType, name) == dtype:
+            height = int(height)
+            return bool(dram), (lambda h: h >= height) if or_more else (lambda h: h == height)
+    return False, lambda h: True
+
+
+def _docstring_tile_heights():
+    """The tile heights the ``tile`` line of the ttnn.tilize docstring lists."""
+    line = next(line for line in ttnn.tilize.__doc__.splitlines() if line.strip().startswith("tile ("))
+    return [int(height) for height in re.findall(r"\d+", line.split("height of", 1)[1].split(".", 1)[0])]
+
+
+@pytest.mark.parametrize("buffer_type", docstring_interleaved_buffer_type_params(ttnn.tilize))
+@pytest.mark.parametrize("dtype, layout", docstring_dtype_layout_params(ttnn.tilize))
+@pytest.mark.parametrize("shape", [(2, 3, 64, 96), (1, 1, 64, 2048)], ids=["default", "wide"])
+def test_tilize_docstring_supported_inputs(shape, dtype, layout, buffer_type, device):
+    """Runs every dtype, layout and interleaved buffer type the ttnn.tilize docstring lists, with each tile height its
+    ``tile`` line lists.
+
+    BFLOAT16 inputs leave out NaN, as the docstring requires, and compare zeros by value. A dtype with an architecture
+    rule in the docstring (e.g. UINT8 on Blackhole) runs only where and with the tile heights that rule allows.
+    """
+    check_readable(dtype, layout, buffer_type)
+    dram_only, tile_height_allowed = _docstring_arch_rule(dtype)
+    if dram_only and buffer_type != ttnn.BufferType.DRAM:
+        pytest.skip(f"the docstring asks for {dtype} inputs in DRAM on this architecture")
+    memory_config = interleaved_memory_config(buffer_type)
+    input_tensor = ttnn.from_torch(
+        full_range_input(shape, dtype, nan=dtype != ttnn.bfloat16),
+        dtype=dtype,
+        layout=layout,
+        device=device,
+        memory_config=memory_config,
+    )
+    tile_heights = [height for height in _docstring_tile_heights() if tile_height_allowed(height)]
+    assert 32 in tile_heights
+    for tile_height in tile_heights:
+        output = ttnn.tilize(input_tensor, tile=ttnn.Tile((tile_height, 32)))
+
+        assert output.layout == ttnn.TILE_LAYOUT
+        assert output.dtype == dtype
+        assert list(output.tile.tile_shape) == [tile_height, 32]
+        assert output.memory_config() == memory_config
+        assert_exact(ttnn.to_torch(input_tensor), ttnn.to_torch(output), signed_zeros=dtype != ttnn.bfloat16)

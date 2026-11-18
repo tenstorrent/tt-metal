@@ -134,6 +134,21 @@ Set only what is specific to the deployment:
   adapter defaults. For an MTP variant, also `TT_GLM53_MTP_TTNN_CACHE`; the
   manifest pins the MTP cache to the weka path.
 
+### Missing weight-cache pieces
+
+The runner checks the TTNN cache at start-up, per rank and per weight category of that rank's layers, and converts
+whatever is missing from the checkpoint (`PREFILL_HF_MODEL`) while the model builds. Nothing needs to be selected,
+and a site that lacks a piece does not need to rsync the whole cache. A complete cache loads from disk unchanged.
+This is the default for the MLA-family adapters (`builds_missing_weight_cache`); an adapter whose checkpoint layout
+the reader does not handle sets it to `False`, and so does any model outside that family. Without a readable
+checkpoint (`PREFILL_HF_MODEL` unset or config-only), an incomplete cache is an error. Converting expert weights
+dequantises every expert of a layer inside the serving process (minutes, ~20 GB of host RAM per layer), so populate
+large pieces before going live where possible. The rebuild is logged at warning level, per layer, with a completion
+line.
+
+Chunk size: `PREFILL_CHUNK_SIZE` (default in `deepseek_v3_d_p/utils/chunk_config.py`) must be identical for the runner
+and the producer, and a multiple of `SP * TP * 32` (1024 on 8x4).
+
 ### Launching through `ttrun`
 
 Copy `glm53_4rank.yaml` and add the variables to its `global_env`:

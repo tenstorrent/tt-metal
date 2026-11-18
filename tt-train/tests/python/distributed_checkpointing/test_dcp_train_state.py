@@ -86,7 +86,8 @@ def test_every_generator_comes_back_exactly():
     ) == expected
 
 
-def test_a_generator_without_stored_state_keeps_its_state_with_a_warning(monkeypatch):
+def test_generator_without_stored_state_warns(monkeypatch):
+    """A generator the checkpoint holds no state for keeps its state, with a warning."""
     block = capture_rng(world_rank=0)
     without_numpy = json.loads(json.dumps(block))
     del without_numpy["ranks"]["0"]["numpy"]  # saved while numpy's global generator was not MT19937
@@ -202,7 +203,8 @@ def _cosine_state() -> dict:
     return json.loads(json.dumps(sched.get_state_dict()))
 
 
-def test_a_refused_state_stops_the_restore_before_anything_else_moves(expect_error):
+def test_refused_state_stops_the_restore_first(expect_error):
+    """A refused state stops the restore before anything else moves."""
     # A StepScheduler given a cosine scheduler's state: the run was configured differently.
     loader = Loader()
     stepper = StepScheduler(_adamw([1e-3]), step_size=2)
@@ -214,7 +216,8 @@ def test_a_refused_state_stops_the_restore_before_anything_else_moves(expect_err
     assert loader.position == 0, "the scheduler is restored first, so the loader has not moved"
 
 
-def test_a_component_that_cannot_take_a_state_is_refused_before_anything_is_placed(expect_error):
+def test_component_without_state_setter_is_refused(expect_error):
+    """A component that cannot take a state is refused before anything is placed."""
     stored = {"scheduler": {"m_last_step": 3}, "dataloader": {"position": 5}}
     with expect_error(TypeError, r"the dataloader passed \(list_iterator\) has no set_state_dict"):
         check_train_state(stored, dataloader=iter([]))
@@ -299,7 +302,8 @@ MISREAD = [
 
 
 @pytest.mark.parametrize("damage", MISREAD)
-def test_rng_state_a_setter_would_misread_is_refused_and_changes_no_generator(damage, expect_error):
+def test_misreadable_rng_state_is_refused(damage, expect_error):
+    """RNG state a setter would misread is refused, and no generator changes."""
     ctx = ttml.autograd.AutoContext.get_instance()
     block = capture_rng(world_rank=0)
     broken = json.loads(json.dumps(block))

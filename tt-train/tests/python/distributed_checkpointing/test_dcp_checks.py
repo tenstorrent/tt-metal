@@ -68,7 +68,8 @@ def test_param_groups_are_checked_before_anything_is_placed(expect_error):
         check_param_groups(_StubOptimizer([["a", "b", "c"]]), saved, strict=True)
 
 
-def test_a_strict_load_with_an_optimizer_needs_optimizer_state_in_the_checkpoint(expect_error):
+def test_strict_load_needs_optimizer_state(expect_error):
+    """A strict load with an optimizer needs optimizer state in the checkpoint."""
     # A model-only checkpoint: an optimizer whose state is scalars only would restore nothing, so strict refuses.
     with expect_error(MissingKeyError, "the checkpoint holds no optimizer state"):
         check_param_groups(_StubOptimizer([["a"]]), {}, strict=True)
@@ -148,7 +149,8 @@ class _CppModel:
     __slots__ = ()
 
 
-def test_parameters_of_cpp_bound_modules_are_named_and_the_walks_pass_over_them():
+def test_cpp_bound_parameters_are_named():
+    """Parameters of C++-bound modules are named, and the module walks pass over them."""
     params = {"llama/llama_block_0/attention/kv_linear/weight": 0, "llama/fc/weight": 1}
     assert _cpp_bound_params(_CppModel(), params) == list(params), "a C++-bound model: every parameter"
     assert _python_parameters(_CppModel(), params) == ({}, {})
@@ -164,7 +166,7 @@ def _entry(key, label, transform, split):
     )
 
 
-def test_a_fused_looking_weight_loads_only_with_the_same_undescribed_tp_split(expect_error):
+def test_fused_looking_weight_needs_same_undescribed_split(expect_error):
     """Segments scramble when the per-shard row order one side leaves undeclared differs from the other's: compared
     through the TP split each side leaves undescribed, FSDP's split left out."""
     key = "model/Root/blocks/0/attention/qkv_linear/weight"
@@ -233,7 +235,8 @@ def test_an_unknown_layout_declaration_is_refused(expect_error):
         _python_parameters(_Declaring({"fused_segments": (2, (64, 32, 32))}), {"Root/w": 0})
 
 
-def test_argument_errors_are_type_and_value_errors_raised_before_anything_is_touched(tmp_path, expect_error):
+def test_argument_errors_come_first(tmp_path, expect_error):
+    """Argument errors are TypeErrors and ValueErrors, raised before anything is touched."""
     path = str(tmp_path / "step_0000001")
     with expect_error(TypeError, "save needs a model and/or an optimizer"):
         dcp.save(path)
