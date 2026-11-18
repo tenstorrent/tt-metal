@@ -1273,6 +1273,7 @@ class GRPOTrainer:
         from .remote_rollout.rollout_queue import RolloutQueue
         from .remote_rollout.threaded_weight_bridge import ThreadedWeightBridge
         from .remote_rollout.weight_bridge import TTML_RANK, HostWeightBridge
+        from .rollout_batch_source import InProcessRolloutBatchSource
 
         cfg = self.config
         match cfg.rollout_backend:
@@ -1282,23 +1283,27 @@ class GRPOTrainer:
                 )
                 return MPIRolloutServer(peer_rank=TTML_RANK, bridge=bridge, sampler=self.rollout_sampler)
             case "ttt_remote_async":
+                dataset = dataset_func()
+                if len(dataset) == 0:
+                    raise ValueError(f"GRPOTrainer: rollout_backend={cfg.rollout_backend!r} needs a non-empty dataset.")
                 ttml.autograd.AutoContext.get_instance().initialize_distributed_context(*sys.argv)
                 self.tokenizer = AutoTokenizer.from_pretrained(self.model_source, trust_remote_code=True)
-                prompts, extra_columns, batch_prompts = self._prompt_batches(
-                    dataset_func(), self.tokenizer, num_devices=1
-                )
+                prompts, extra_columns, batch_prompts = self._prompt_batches(dataset, self.tokenizer, num_devices=1)
                 return AsyncRolloutServer(
                     bridge=ThreadedWeightBridge.receiver(peer_rank=TTML_RANK, submeshes=self.rollout_sampler.submeshes),
                     queue=RolloutQueue.producer(
                         peer_rank=TTML_RANK, capacity=cfg.remote_rollout.rollout_queue_capacity
                     ),
-                    sampler=self.rollout_sampler,
-                    prompts=prompts,
-                    extra_columns=extra_columns,
-                    batch_prompts=batch_prompts,
-                    tokenizer=self.tokenizer,
-                    reward_funcs=self.reward_funcs,
-                    num_generations=cfg.num_generations,
+                    rollout_batch_source=InProcessRolloutBatchSource(
+                        sampler=self.rollout_sampler,
+                        prompts=prompts,
+                        extra_columns=extra_columns,
+                        batch_prompts=batch_prompts,
+                        tokenizer=self.tokenizer,
+                        reward_funcs=self.reward_funcs,
+                        num_generations=cfg.num_generations,
+                        max_completion_length=cfg.max_completion_length,
+                    ),
                 )
         raise ValueError(f"unsupported rollout_backend {cfg.rollout_backend!r}")
 
