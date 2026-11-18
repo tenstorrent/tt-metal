@@ -14,9 +14,27 @@
 // to this client via TT_METAL_COMPILE_STRESS_SEED), letting the multi-client
 // harness dial in workload overlap between clients.
 //
-// Mock-mode only: the fixture calls experimental::configure_mock_mode and the
+// Mock mode (default): the fixture calls experimental::configure_mock_mode and the
 // test asserts the cluster target is Mock, so multiple clients can run on one
-// host without contending on UMD driver locks.
+// host without contending on UMD driver locks. TT_METAL_COMPILE_STRESS_MOCK=0
+// compiles against the attached device instead.
+//
+// Wormhole/Blackhole build each program with the legacy host API (CreateKernel
+// of eltwise_copy_3m.cpp, {id, seed} as positional compile args, CBs c_0/c_16).
+// That path feeds the compile_stress_ci.py per-arch timing goldens; keep it as is.
+//
+// Quasar rejects the legacy kernel API, so it builds each program from a Metal 2.0
+// ProgramSpec instead: one compute KernelSpec (eltwise_copy_2_0.cpp) per core,
+// with {id, seed} as compile-time varargs, fed and drained through DFBs by one
+// shared reader/writer KernelSpec pair. Programs are built with
+// BuildProgramFromSpec (no eager compile) so the timed section still compiles
+// them in parallel. The reader/writer add two data-movement builds that WH/BH
+// lack; the warmup program uses the same helper, so they are expected to be
+// cached before the timed section.
+//
+// Mock Quasar is rejected up front: JIT compile is a no-op on a mock Quasar
+// device (Program::compile returns early), so the timing would be meaningless.
+// Run Quasar with TT_METAL_COMPILE_STRESS_MOCK=0 on a simulator or device.
 //
 // Configuration (env vars):
 //   TT_METAL_COMPILE_STRESS_NUM_KERNELS     total kernels                 (default 1000)
@@ -63,7 +81,10 @@
 #include <tt-metalium/circular_buffer_config.hpp>
 #include <tt-metalium/experimental/mock_device/mock_device.hpp>
 #include <tt-metalium/host_api.hpp>
+#include <tt-metalium/tt_backend_api_types.hpp>
 #include <tt-metalium/tt_metal.hpp>
+#include <tt-metalium/workload/specification/program_spec.hpp>
+#include "impl/metal2_host_api/program_spec/program_spec_internal.hpp"
 #include "impl/program/program_impl.hpp"
 #include "common/env_lib.hpp"
 #include "common/tt_backend_api_types.hpp"
@@ -99,6 +120,15 @@ bool use_mock_mode() {
     // queried from SetUp/TearDown/the test body.
     static const bool mock = tt::parse_env<std::uint32_t>("TT_METAL_COMPILE_STRESS_MOCK", 1) != 0;
     return mock;
+}
+
+// Mock Quasar would time nothing: Program::compile returns early on a mock Quasar device.
+// Reads only env vars, so it can run before any device work.
+void reject_compile_stress_mock_quasar() {
+    TT_FATAL(
+        !(use_mock_mode() && get_mock_arch_from_env() == tt::ARCH::QUASAR),
+        "mock Quasar JIT compile is a no-op (Program::compile returns early); set TT_METAL_COMPILE_STRESS_MOCK=0 "
+        "and run on a Quasar simulator or device");
 }
 
 constexpr std::string_view target_device_type_to_string(tt::TargetDevice t) noexcept {
@@ -161,6 +191,82 @@ Program create_compute_program(
     return program;
 }
 
+// Quasar (Metal 2.0) counterpart of create_compute_program. Each core gets its own
+// compute KernelSpec, with {id, seed} as compile-time varargs so every kernel hashes
+// uniquely. Gen2 DFBs need one producer and one consumer per node, so a shared
+// reader/writer pair feeds and drains the DFBs (layout from llk/single_node_dfb_program.hpp).
+// Built without compiling; the caller compiles.
+Program create_quasar_compile_stress_program(
+    distributed::MeshDevice& mesh_device,
+    const std::string& program_name,
+    uint32_t grid_x,
+    uint32_t grid_y,
+    ttsl::Span<const std::array<uint32_t, 2>> compile_args_slice) {
+    const DFBSpecName in_dfb{"stress_in_dfb"};
+    const DFBSpecName out_dfb{"stress_out_dfb"};
+    const KernelSpecName reader{"stress_reader"};
+    const KernelSpecName writer{"stress_writer"};
+    const std::string dm_kernel_dir = "tests/tt_metal/tt_metal/test_kernels/dataflow/unit_tests/dram/";
+    constexpr tt::DataFormat data_format = tt::DataFormat::Float16_b;
+    const uint32_t entry_size = tt::tile_size(data_format);
+
+    ProgramSpec spec{.name = program_name};
+    spec.dataflow_buffers.push_back({
+        .unique_id = in_dfb,
+        .entry_size = entry_size,
+        .num_entries = 2,
+        .data_format_metadata = data_format,
+    });
+    spec.dataflow_buffers.push_back({
+        .unique_id = out_dfb,
+        .entry_size = entry_size,
+        .num_entries = 2,
+        .data_format_metadata = data_format,
+    });
+    spec.kernels.push_back({
+        .unique_id = reader,
+        .source = dm_kernel_dir + "direct_reader_unary_2_0.cpp",
+        .num_threads = 1,
+        .dfb_bindings = {ProducerOf(in_dfb, "out")},
+        .runtime_arg_schema = {.runtime_arg_names = {"src_addr", "src_bank_id", "num_tiles", "dram_page_stride"}},
+        .hw_config = DataMovementHardwareConfig{},
+    });
+    spec.kernels.push_back({
+        .unique_id = writer,
+        .source = dm_kernel_dir + "direct_writer_unary_2_0.cpp",
+        .num_threads = 1,
+        .dfb_bindings = {ConsumerOf(out_dfb, "in")},
+        .runtime_arg_schema = {.runtime_arg_names = {"dst_addr", "dst_bank_id", "num_tiles", "dram_page_stride"}},
+        .hw_config = DataMovementHardwareConfig{},
+    });
+
+    size_t k = 0;
+    for (uint32_t y = 0; y < grid_y && k < compile_args_slice.size(); y++) {
+        for (uint32_t x = 0; x < grid_x && k < compile_args_slice.size(); x++) {
+            const auto& args = compile_args_slice[k];
+            const KernelSpecName compute{fmt::format("stress_compute_{}", k)};
+            KernelSpec compute_spec{
+                .unique_id = compute,
+                .source = std::string("tests/tt_metal/tt_metal/test_kernels/compute/eltwise_copy_2_0.cpp"),
+                .num_threads = 1,
+                .dfb_bindings = {ConsumerOf(in_dfb, "in"), ProducerOf(out_dfb, "out")},
+                .compile_time_args = {{"per_core_tile_cnt", 1u}},
+                .hw_config = ComputeHardwareConfig{},
+            };
+            compute_spec.advanced_options.compile_time_varargs = {args[0], args[1]};
+            spec.kernels.push_back(std::move(compute_spec));
+            spec.work_units.push_back({
+                .name = fmt::format("stress_wu_{}", k),
+                .kernels = {reader, writer, compute},
+                .target_nodes = NodeCoord(x, y),
+            });
+            k++;
+        }
+    }
+
+    return BuildProgramFromSpec(mesh_device, spec);
+}
+
 struct StressResult {
     uint32_t client_id;
     uint32_t private_seed;
@@ -203,7 +309,16 @@ void write_result_json(const std::string& path, const StressResult& r) {
 
 class CompileStressFixture : public MeshDispatchFixture {
 protected:
+    // Hides MeshDispatchFixture::SetUpTestSuite so the mock-Quasar check runs before
+    // the shared devices are created.
+    static void SetUpTestSuite() {
+        reject_compile_stress_mock_quasar();
+        MeshDispatchFixture::SetUpTestSuite();
+    }
+
     void SetUp() override {
+        // Repeated in case this gtest still runs the test after a SetUpTestSuite failure.
+        reject_compile_stress_mock_quasar();
         if (use_mock_mode()) {
             experimental::configure_mock_mode(
                 get_mock_arch_from_env(), tt::parse_env<std::uint32_t>("TT_METAL_COMPILE_STRESS_NUM_CHIPS", 1));
@@ -239,6 +354,11 @@ TEST_F(CompileStressFixture, DISABLED_TensixCompileStress) {
             "CompileStressFixture requested arch '{}' but the attached device is '{}'.",
             tt::get_string_lowercase(expected_arch),
             tt::get_string_lowercase(actual_arch));
+        // Program::compile also returns early on an emulated Quasar, so the run would time nothing.
+        TT_FATAL(
+            !(actual_arch == tt::ARCH::QUASAR && target == tt::TargetDevice::Emule),
+            "emulated Quasar JIT compile is a no-op (Program::compile returns early); run on a Quasar simulator or "
+            "device");
     }
 
     const uint32_t target_num_kernels = tt::parse_env<std::uint32_t>("TT_METAL_COMPILE_STRESS_NUM_KERNELS", 1000);
@@ -295,9 +415,18 @@ TEST_F(CompileStressFixture, DISABLED_TensixCompileStress) {
     const std::string kernel_path = "tests/tt_metal/tt_metal/test_kernels/compute/eltwise_copy_3m.cpp";
     CoreRange all_cores(CoreCoord(0, 0), CoreCoord(grid_x - 1, grid_y - 1));
 
+    // Quasar rejects the legacy kernel API; build its programs from a Metal 2.0 ProgramSpec.
+    const bool is_quasar = device->arch() == tt::ARCH::QUASAR;
+
     // Warmup initialises JIT infrastructure and the remote-server connection.
     // UINT32_MAX as the id keeps this kernel's hash out of the production set.
-    {
+    if (is_quasar) {
+        // Same helper as the timed programs, so the shared reader/writer builds should be cached here.
+        const std::array<uint32_t, 2> warmup_args{UINT32_MAX, private_seed};
+        Program warmup = create_quasar_compile_stress_program(
+            *device, "compile_stress_warmup", 1, 1, ttsl::Span<const std::array<uint32_t, 2>>(&warmup_args, 1));
+        warmup.impl().compile(device);
+    } else {
         Program warmup = CreateProgram(*device);
         CircularBufferConfig cb0 =
             CircularBufferConfig(8 * single_tile_size, {{tt::CBIndex::c_0, tt::DataFormat::Float16_b}})
@@ -319,8 +448,13 @@ TEST_F(CompileStressFixture, DISABLED_TensixCompileStress) {
         uint32_t id_end = std::min(id_begin + cores_per_program, target_num_kernels);
         auto slice =
             ttsl::Span<const std::array<uint32_t, 2>>(compile_args_per_kernel.data() + id_begin, id_end - id_begin);
-        programs.push_back(
-            create_compute_program(*device, all_cores, single_tile_size, kernel_path, grid_x, grid_y, slice));
+        if (is_quasar) {
+            programs.push_back(create_quasar_compile_stress_program(
+                *device, fmt::format("compile_stress_{}", p), grid_x, grid_y, slice));
+        } else {
+            programs.push_back(
+                create_compute_program(*device, all_cores, single_tile_size, kernel_path, grid_x, grid_y, slice));
+        }
     }
 
     // T_ZERO rendezvous: harness sets a wall-clock target so all clients enter
