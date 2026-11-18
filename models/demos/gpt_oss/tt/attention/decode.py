@@ -86,6 +86,14 @@ def decode_forward(
     num_local_kv_heads = mesh_config.shard_size(config.num_kv_heads)
     head_dim = config.head_dim
     k_cache, v_cache = kv_cache
+    # The decode K / V cache writes address whole 32-row cache tiles (block_size / 32 tiles per page): pages of 16
+    # tokens (vLLM's default block_size) make every decode write land in the wrong place while prefill still fills the
+    # cache correctly, so the first token is right and the rest degenerates.
+    if page_table is not None and k_cache.shape[2] % ttnn.TILE_SIZE:
+        raise ValueError(
+            f"gpt-oss decode needs KV cache pages of a multiple of {ttnn.TILE_SIZE} tokens, got {k_cache.shape[2]} "
+            "(vLLM: serve with --block_size 64)"
+        )
 
     if fused:
         # rope_mats / transformation_mat are laid out for rotary_embedding_llama_fused_qk: cos/sin rows for the Q
