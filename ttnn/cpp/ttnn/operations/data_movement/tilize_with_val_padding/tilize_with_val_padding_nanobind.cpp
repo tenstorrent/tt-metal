@@ -89,19 +89,40 @@ void bind_tilize_with_val_padding(nb::module_& mod) {
 void bind_tilize_with_zero_padding(nb::module_& mod) {
     const auto* doc =
         R"doc(
-            Changes data layout of input tensor to TILE. Pads to the nearest multiple of TILE width/height with zero value.
-
-            Input tensor must be on TT accelerator device, in ROW_MAJOR layout, and have BFLOAT16 or UINT32 data type.
-
-            Output tensor will be on TT accelerator device, in TILE layout, and have BFLOAT16 or UINT32 data type.
+            Changes the layout of the input tensor from ROW_MAJOR to TILE, padding its last two dimensions with zeros up
+            to multiples of 32.
 
             Args:
-                * :attr:`input_tensor`: Input Tensor.
+                input_tensor (ttnn.Tensor): the input tensor, on device, in ROW_MAJOR layout.
 
             Keyword Args:
-                * :attr:`memory_config`: Memory Config of the output tensor.
-                * :attr:`dtype`: Data type of the output tensor.
-                * :attr:`use_multicore`: Whether to use multicore.
+                memory_config (ttnn.MemoryConfig, optional): Memory configuration of the output. Defaults to `None`, which uses the input tensor's memory configuration. A sharded output, including the default one for a sharded input, needs a shard shape that is a multiple of 32x32. When the input and the output are WIDTH_SHARDED in L1, the input's last dimension is a multiple of 32 and ``sub_core_grids`` is `None`, the output keeps the input's core grid.
+                output_dtype (ttnn.DataType, optional): Data type of the output. Defaults to `None`, which keeps the input dtype. A ``BFLOAT16`` or ``FLOAT32`` input can give a ``BFLOAT16``, ``FLOAT32``, ``BFLOAT8_B`` or ``BFLOAT4_B`` output. For an integer input it must be `None` or the input's dtype.
+                use_multicore (bool, optional): Whether to use multicore. Defaults to `True`.
+                sub_core_grids (ttnn.CoreRangeSet, optional): Cores to run the operation on. Defaults to `None`, which lets the operation choose its cores.
+
+            Returns:
+                ttnn.Tensor: the output tensor, in TILE layout with 32x32 tiles. For an input of rank 2 or more, its padded shape is the input's shape with the last two dimensions rounded up to multiples of 32, and the padding holds zeros. Its shape is the input's, or that padded shape for an input with no elements.
+
+            Note:
+                Supported dtypes and layouts:
+
+                .. list-table::
+                   :header-rows: 1
+
+                   * - Dtypes
+                     - Layouts
+                   * - BFLOAT16, FLOAT32, INT32, UINT32, UINT16
+                     - ROW_MAJOR
+
+                ``BFLOAT16`` input values must not be NaN.
+
+            Memory Support:
+                - Interleaved: DRAM and L1
+                - Sharded input: HEIGHT_SHARDED, WIDTH_SHARDED and BLOCK_SHARDED in L1; HEIGHT_SHARDED and WIDTH_SHARDED in DRAM
+                - Sharded output: HEIGHT_SHARDED, WIDTH_SHARDED and BLOCK_SHARDED in L1; HEIGHT_SHARDED and WIDTH_SHARDED in DRAM
+                - A WIDTH_SHARDED or BLOCK_SHARDED input needs a shard width, in bytes, that is a multiple of the buffer's alignment
+                - ND sharded: L1 and DRAM input and output
         )doc";
 
     ttnn::bind_function<"tilize_with_zero_padding">(
