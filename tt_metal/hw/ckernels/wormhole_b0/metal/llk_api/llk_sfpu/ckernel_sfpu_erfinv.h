@@ -52,6 +52,9 @@ sfpi_inline sfpi::vFloat calculate_erfinv_body(sfpi::vFloat x) {
     p = p * u + -0x1.db1b3ap-3f;
     p = p * u + 0x1.c5c02p-1f;
 
+    // Computed ahead of the tail polynomial so the SFPSETCC below doesn't wait on this SFPMAD.
+    sfpi::vFloat u_plus_7 = u + 7.0f;
+
     // Tail polynomial, u in [-16, -7], degree 4.
     sfpi::vFloat t = -0x1.aep-18f;
     t = t * u + -0x1.c24p-12f;
@@ -59,7 +62,7 @@ sfpi_inline sfpi::vFloat calculate_erfinv_body(sfpi::vFloat x) {
     t = t * u + -0x1.405c58p-2f;
     t = t * u + 0x1.93939cp-1f;
 
-    v_if(u < -7.0f) { p = t; }
+    v_if(u_plus_7 < 0.0f) { p = t; }
     v_endif;
 
     return p;
