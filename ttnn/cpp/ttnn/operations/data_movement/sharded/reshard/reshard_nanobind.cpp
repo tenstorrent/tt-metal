@@ -14,30 +14,38 @@
 #include "ttnn/types.hpp"
 namespace ttnn::operations::data_movement {
 
-// TODO: Add more descriptions to the arguments
 void bind_reshard(nb::module_& mod) {
     const auto* doc =
         R"doc(
-        Converts a tensor from one sharded layout to another sharded layout
+        Copies the sharded tensor `input_tensor` into the sharded memory configuration `output_memory_config`, which
+        can change the shard shape, the core grid, the memory layout and the buffer type. The output has the input's
+        shape, dtype, layout and values.
 
         Args:
-            * :attr:`input_tensor` (ttnn.Tensor): input tensor
-            * :attr:`output_memory_config` (MemoryConfig): Memory config with shard spec of output tensor
+            input_tensor (ttnn.Tensor): the sharded input tensor, on device, see Memory Support. A TILE input must have 32x32 tiles.
+            output_memory_config (ttnn.MemoryConfig): sharded memory configuration of the output, see Memory Support. Its shards must cover the input's shape: HEIGHT_SHARDED shards span the full width, WIDTH_SHARDED shards span the full height, and the grid has a core for each shard (for BLOCK_SHARDED with ROW_MAJOR orientation, one rectangle of cores with a row for each row of shards and a column for each column of shards). For a TILE tensor, the shard height and width must be multiples of 32. For a ROW_MAJOR WIDTH_SHARDED or BLOCK_SHARDED tensor, the input and output shard widths in bytes must be multiples of 16.
+            output_tensor (ttnn.Tensor, optional): Tensor to write the output into, on the input's device. It must have the input's shape, dtype and layout and `output_memory_config` as its memory configuration. Defaults to `None`.
 
-        Example:
-            >>> sharded_memory_config_dict = dict(
-                core_grid=ttnn.CoreRangeSet(
-                    {
-                        ttnn.CoreRange(
-                            ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 1)
-                        ),
-                    }
-                ),
-                strategy=ttnn.ShardStrategy.BLOCK,
-            ),
-            >>> shard_memory_config = ttnn.create_sharded_memory_config(input_shape, **input_sharded_memory_config_args)
-            >>> sharded_tensor = ttnn.reshard(tensor, shard_memory_config)
+        Returns:
+            ttnn.Tensor: the resharded tensor, with the memory configuration `output_memory_config`.
 
+        Note:
+            Supported dtypes and layouts:
+
+            .. list-table::
+               :header-rows: 1
+
+               * - Dtypes
+                 - Layouts
+               * - BFLOAT16, FLOAT32, INT32, UINT32, UINT16, UINT8
+                 - TILE, ROW_MAJOR
+               * - BFLOAT8_B, BFLOAT4_B
+                 - TILE
+
+        Memory Support:
+            - Input: HEIGHT_SHARDED, WIDTH_SHARDED and BLOCK_SHARDED in L1; HEIGHT_SHARDED and WIDTH_SHARDED in DRAM
+            - Output: HEIGHT_SHARDED, WIDTH_SHARDED and BLOCK_SHARDED in L1; HEIGHT_SHARDED and WIDTH_SHARDED in DRAM
+            - ROW_MAJOR: the input and output must have the same memory layout, and both be HEIGHT_SHARDED when either is in DRAM
         )doc";
 
     ttnn::bind_function<"reshard">(
