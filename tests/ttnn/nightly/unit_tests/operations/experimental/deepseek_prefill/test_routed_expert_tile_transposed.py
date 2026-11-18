@@ -24,8 +24,16 @@ from loguru import logger
 import ttnn
 from tt_py_test_utils_common.utility_functions import is_blackhole
 from models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert import TtRoutedExpert
-from models.demos.gpt_oss.tt.experts.prefill_routed import tile_transpose
 from tests.ttnn.utils_for_testing import comp_pcc
+
+
+def tile_transpose(w):
+    """w [R, C] (R, C multiples of 32) with every 32x32 tile transposed in place (the layout the op reads with
+    weights_tile_transposed; the same helper as gpt-oss's experts/prefill_routed.py)."""
+    R, C = w.shape[-2], w.shape[-1]
+    assert R % 32 == 0 and C % 32 == 0, f"tile_transpose needs tile-aligned dims, got {tuple(w.shape)}"
+    return w.reshape(R // 32, 32, C // 32, 32).transpose(1, 3).reshape(R, C).contiguous()
+
 
 # gpt-oss-20b: hidden_size = intermediate_size = 2880
 EMB_DIM = 2880
