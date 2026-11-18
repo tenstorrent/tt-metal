@@ -1393,10 +1393,23 @@ class TestJobOwnership:
 
         from ttnn.distributed.ttrun import run_launcher
 
-        # like PRRTE's ranks: a child that stays in the launcher's session (only the process group differs)
+        # like PRRTE's ranks: a child that stays in the launcher's session (only the process group differs) and
+        # OUTLASTS the settle window -> a genuine leak -> ended and the job failed.
         t0 = time.time()
         rc = run_launcher(["bash", "-c", "sleep 30 & disown; sleep 0.2; exit 0"], cwd=Path.cwd())
         assert rc != 0
+        assert time.time() - t0 < 10
+
+    def test_run_launcher_does_not_fail_when_a_rank_exits_just_after_the_launcher(self):
+        import time
+
+        from ttnn.distributed.ttrun import run_launcher
+
+        # The SC4 case: a child still in the launcher's session but already on its way out when the launcher
+        # returns is a graceful finish, not a leak. tt-run's settle lets it leave, and the clean code is forwarded.
+        t0 = time.time()
+        rc = run_launcher(["bash", "-c", "sleep 1 & disown; exit 0"], cwd=Path.cwd())
+        assert rc == 0
         assert time.time() - t0 < 10
 
     @staticmethod

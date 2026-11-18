@@ -61,6 +61,12 @@ _MPI_ABORT_BANNER = "MPI_ABORT was invoked"
 # the next launch's pre-launch sweep.
 SHM_MIN_STALE_AGE_S = 30.0
 
+# How long a process still in the launcher's session, when the launcher has just exited, is given to leave on its
+# own before tt-run treats it as a leak. A rank (or a UMD helper child the rank spawned) can still be in its exit
+# path for a fraction of a second after the launcher returns — a graceful finish, not a leftover. Only a process
+# that OUTLASTS this is a genuine leak worth ending and failing on.
+SURVIVOR_SETTLE_S = 3.0
+
 
 def remove_stale_launcher_leftovers() -> int:
     """Remove this user's leftovers from a killed job that no live owner claims (teardown plan P11, P25). The
@@ -289,15 +295,29 @@ class LaunchedJob:
                 continue
         return out
 
-    def _end_survivors(self, grace_s: float = 2.0) -> None:
-        """Teardown step: end any rank the launcher left alive on this host (SIGTERM, then SIGKILL what remains).
-        Records what it had to end on ``self.ended`` so the caller can classify the exit code."""
+    def _end_survivors(self, grace_s: float = 2.0, settle_s: float = SURVIVOR_SETTLE_S) -> None:
+        """Teardown step: the launcher has exited; anything still in its session on this host is either a rank
+        finishing a hair late or a genuine leak. Give survivors a bounded settle to leave on their own — a
+        graceful exit is the norm and is NOT a leak — and act only on what OUTLASTS it: forward the stop
+        (SIGTERM) to each one first, then SIGKILL only what refuses. tt-run never kills a rank it has not first
+        asked to stop. A real leak is recorded on ``self.ended`` (so the caller fails the job) and logged
+        critically with per-process detail (state / wchan / cmdline) so it can be chased down.
+
+        TODO(#66310): this sees only the launch host's /proc; once the launcher is gone, ranks on other hosts
+        are reached only by their own prted's disconnect teardown (best effort). Tier A (an ssh reaper keyed on
+        TT_RUN_JOB_ID) would extend this guarantee across hosts.
+        """
         survivors = self._survivors()
+        deadline = time.time() + settle_s
+        while survivors and time.time() < deadline:  # let a rank still in its exit path leave on its own
+            time.sleep(0.1)
+            survivors = self._survivors()
         if not survivors:
             return
-        logger.error(
-            f"{TT_RUN_PREFIX} the launcher left {len(survivors)} process(es) of its job alive on this host: "
-            f"{survivors}; ending them (last resort; the launcher should have torn the job down itself)"
+        logger.critical(
+            f"{TT_RUN_PREFIX} the launcher exited while {len(survivors)} process(es) of its job were still alive "
+            f"on {socket.gethostname()} after {settle_s:.0f}s — a leak (the launcher should have torn the job "
+            f"down itself). Ending them:\n" + "\n".join(self._describe(pid) for pid in survivors)
         )
         self.ended = list(survivors)
         for sig in (signal.SIGTERM, signal.SIGKILL):
@@ -312,6 +332,25 @@ class LaunchedJob:
             survivors = [pid for pid in survivors if os.path.exists(f"/proc/{pid}")]
             if not survivors:
                 return
+
+    @staticmethod
+    def _describe(pid: int) -> str:
+        """One diagnostic line for a leaked pid — what it is and where it is stuck — best effort over racy /proc."""
+
+        def read(path: str) -> str:
+            try:
+                with open(path) as fh:
+                    return fh.read()
+            except OSError:
+                return "?"
+
+        cmd = read(f"/proc/{pid}/cmdline").replace("\0", " ").strip() or "?"
+        wchan = read(f"/proc/{pid}/wchan").strip()  # the kernel function it is blocked in ("0" if runnable)
+        try:
+            state = read(f"/proc/{pid}/stat").rsplit(")", 1)[1].split()[0]  # R/S/D/Z, after the comm field
+        except (IndexError, ValueError):
+            state = "?"
+        return f"  pid {pid} state={state} wchan={wchan} cmd={cmd}"
 
 
 def run_launcher(cmd: List[str], cwd: Path) -> int:
