@@ -4,9 +4,6 @@
 
 #pragma once
 
-#include <cstddef>
-#include <vector>
-
 #include <tt-metalium/tensor/host_tensor.hpp>
 #include <tt-metalium/tile.hpp>
 

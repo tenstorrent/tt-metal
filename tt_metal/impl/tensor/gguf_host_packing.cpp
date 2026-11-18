@@ -21,6 +21,8 @@
 
 #include <tt_stl/assert.hpp>
 #include <tt-metalium/experimental/gguf.hpp>
+#include <tt-metalium/host_buffer.hpp>
+#include <tt-metalium/tensor/tensor_apis.hpp>
 
 #include "tt_metal/hw/inc/experimental/gguf_page.h"
 
@@ -1070,7 +1072,7 @@ HostTensor from_gguf(ttsl::Span<const std::byte> blocks, const TensorSpec& spec)
 
 std::vector<std::byte> to_gguf(const HostTensor& tensor) {
     const auto [K, N] = gguf_shape(tensor.tensor_spec());
-    const HostBuffer buffer = host_buffer::get_host_buffer(tensor);
+    const HostBuffer buffer = tt::tt_metal::host_buffer::get_host_buffer(tensor);
     const auto pages = buffer.view_bytes();
     TT_FATAL(
         pages.size() == tensor.tensor_spec().compute_packed_buffer_size_bytes(), "GGUF tensor buffer size mismatch");
