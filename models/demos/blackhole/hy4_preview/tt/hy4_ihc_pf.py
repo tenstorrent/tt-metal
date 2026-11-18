@@ -112,17 +112,21 @@ class Hy4IHCPF:
         c[4, :, :4] = hc_eps
         self.cst = upload(md, c.reshape(1, 1, 5 * 32, 32), f32)
         self.wn = upload(md, norm_w.float().reshape(1, 1, 1, dim).repeat(1, 1, 32, 1), bf16)
-        key = (id(md), n, dim)
-        sh = _CACHE.get(key)
-        if sh is None:
-            mk = lambda shape, dt: ttnn.allocate_tensor_on_device(
-                ttnn.Shape(shape), dt, ttnn.TILE_LAYOUT, md, ttnn.DRAM_MEMORY_CONFIG
-            )
-            sh = _CACHE[key] = dict(
-                part=mk([1, 1, self.NC * 2 * 32, 32], f32),
-                accp=mk([1, 1, self.NC * 32, 32], f32),
-                hbuf=mk([1, 1, n, dim], f32),
-            )
+        sh = None
+        if (
+            not MERGE
+        ):  # the 4-program variant needs shared scratch (partials, h row); the merged program keeps everything in L1
+            key = (id(md), n, dim)
+            sh = _CACHE.get(key)
+            if sh is None:
+                mk = lambda shape, dt: ttnn.allocate_tensor_on_device(
+                    ttnn.Shape(shape), dt, ttnn.TILE_LAYOUT, md, ttnn.DRAM_MEMORY_CONFIG
+                )
+                sh = _CACHE[key] = dict(
+                    part=mk([1, 1, self.NC * 2 * 32, 32], f32),
+                    accp=mk([1, 1, self.NC * 32, 32], f32),
+                    hbuf=mk([1, 1, n, dim], f32),
+                )
         self.sh = sh
 
     # ------------------------------------------------------------------ programs
