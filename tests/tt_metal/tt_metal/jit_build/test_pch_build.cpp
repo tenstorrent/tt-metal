@@ -5,6 +5,7 @@
 #include <gtest/gtest.h>
 
 #include <algorithm>
+#include <chrono>
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
@@ -12,10 +13,12 @@
 #include <stdexcept>
 #include <string>
 #include <unistd.h>
+#include <vector>
 
 #include "jit_build/build.hpp"
 #include "jit_build/jit_device_config.hpp"
 #include "jit_build/jit_build_utils.hpp"
+#include "jit_build/pch.hpp"
 #include "llrt/hal.hpp"
 #include "llrt/rtoptions.hpp"
 
@@ -84,6 +87,45 @@ public:
     }
 };
 
+// Probe whether the sfpi g++ can build what the Quasar test needs: the PCH umbrella's standard-library headers,
+// compiled for the Quasar TENSIX DM -mcpu. A preprocess-only check would pass on toolchains that lack the rv64
+// libstdc++ and then fail the test (rather than skip it) on every runner. Uses a local RunTimeOptions (not
+// MetalContext) and the shell-free exec_command launcher.
+bool sfpi_supports_quasar_dm_mcpu() {
+    const std::string root = llrt::RunTimeOptions().get_root_dir();
+    std::string gxx;
+    for (const std::string& sfpi_root : {root + "runtime/sfpi", std::string("/opt/tenstorrent/sfpi")}) {
+        const auto candidate = sfpi_root + "/compiler/bin/riscv-tt-elf-g++";
+        if (std::filesystem::exists(candidate)) {
+            gxx = candidate;
+            break;
+        }
+    }
+    if (gxx.empty()) {
+        return false;
+    }
+    const auto scratch =
+        std::filesystem::temp_directory_path() /
+        ("tt_metal_qsr_mcpu_probe_" + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
+    std::filesystem::create_directories(scratch);
+    const std::vector<std::string> args = {
+        gxx,
+        "-mcpu=tt-qsr64-rocc",
+        "-std=c++17",
+        "-c",
+        "-x",
+        "c++",
+        "-include",
+        root + std::string(tt::jit_build::PCH_UMBRELLA),
+        "/dev/null",
+        "-o",
+        (scratch / "probe.o").string()};
+    const bool ok = jit_build::utils::exec_command(args, scratch.string(), (scratch / "probe.log").string());
+    std::error_code ec;
+    std::filesystem::remove_all(scratch, ec);
+    return ok;
+}
+
 TEST(PchBuildDeathTest, SharesWithinArchitectureAndSeparatesHalTargetFlags) {
     namespace fs = std::filesystem;
     auto pattern = (fs::temp_directory_path() / "pch_build_XXXXXX").string();
@@ -136,6 +178,60 @@ TEST(PchBuildDeathTest, SharesWithinArchitectureAndSeparatesHalTargetFlags) {
     EXPECT_EQ(artifacts, 2u);
     EXPECT_TRUE(fs::exists(root / "first/probe.tmp.o"));
     EXPECT_TRUE(fs::exists(root / "second/probe.tmp.o"));
+    EXPECT_TRUE(fs::exists(root / "blackhole/probe.tmp.o"));
+    fs::remove_all(root);
+}
+
+TEST(PchBuildDeathTest, QuasarPchSeparatesFromOtherArchs) {
+    namespace fs = std::filesystem;
+    if (llrt::RunTimeOptions().get_streaming_profiler_enabled()) {
+        GTEST_SKIP() << "TT_METAL_STREAMING_PROFILER is not supported on Quasar (JitBuildEnv::init fatals)";
+    }
+    if (!sfpi_supports_quasar_dm_mcpu()) {
+        GTEST_SKIP() << "sfpi g++ not found or cannot compile the PCH umbrella for -mcpu=tt-qsr64-rocc";
+    }
+    auto pattern = (fs::temp_directory_path() / "pch_build_qsr_XXXXXX").string();
+    const auto* directory = mkdtemp(pattern.data());
+    ASSERT_NE(directory, nullptr);
+    const fs::path root = directory;
+    // Environment changes and JIT memoization are confined to the child.
+    const auto compile_profiles = [&] {
+        setenv("TT_METAL_CACHE", (root.string() + "/").c_str(), 1);
+        llrt::RunTimeOptions options;
+        const Hal qsr_hal(tt::ARCH::QUASAR, false, false, 0, false);
+        const Hal bh_hal(tt::ARCH::BLACKHOLE, false, false, 0, false);
+        const JitDeviceConfig qsr_config{
+            .hal = &qsr_hal,
+            .arch = tt::ARCH::QUASAR,
+            .max_dfbs = qsr_hal.get_num_dataflow_buffers()};
+        const JitDeviceConfig bh_config{.hal = &bh_hal, .arch = tt::ARCH::BLACKHOLE, .max_dfbs = 32};
+        JitBuildEnv quasar;
+        JitBuildEnv blackhole;
+        quasar.init(1, qsr_config, options, {});
+        blackhole.init(2, bh_config, options, {});
+        ASSERT_NE(quasar.get_build_key(), blackhole.get_build_key());
+
+        const auto source = root / "probe.cpp";
+        std::ofstream(source) << "int probe() { return 42; }\n";
+        const PchCompileProbe qsr(quasar, qsr_hal, source.string());
+        const PchCompileProbe bh(blackhole, bh_hal, source.string());
+        const auto qsr_flags = jit_build::utils::tokenize_flags(qsr.export_target_recipe(nullptr).cflags);
+        ASSERT_NE(std::find(qsr_flags.begin(), qsr_flags.end(), "-mcpu=tt-qsr64-rocc"), qsr_flags.end());
+
+        ASSERT_NE(qsr.run(root / "quasar"), bh.run(root / "blackhole"));
+        std::_Exit(0);
+    };
+    EXPECT_EXIT(compile_profiles(), ::testing::ExitedWithCode(0), "");
+    std::size_t artifacts = 0;
+    for (const auto& entry : fs::recursive_directory_iterator(root)) {
+        if (entry.path().extension() == ".gch") {
+            ++artifacts;
+            EXPECT_EQ(entry.path().parent_path().parent_path(), root / "tt-metal-cache" / "pch");
+            EXPECT_GT(entry.file_size(), 0u);
+        }
+    }
+    EXPECT_EQ(artifacts, 2u);
+    EXPECT_TRUE(fs::exists(root / "quasar/probe.tmp.o"));
     EXPECT_TRUE(fs::exists(root / "blackhole/probe.tmp.o"));
     fs::remove_all(root);
 }
