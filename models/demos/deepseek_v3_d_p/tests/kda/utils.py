@@ -83,6 +83,12 @@ def kda_mesh_param(shape: tuple[int, int], topology: str, case_id: str, device_p
     )
 
 
+def gated_rms_norm_reference(x: torch.Tensor, gate: torch.Tensor, weight: torch.Tensor, epsilon: float) -> torch.Tensor:
+    """The KDA output's gated RMSNorm over its last dimension: x / sqrt(mean(x^2) + epsilon) * weight * sigmoid(gate)."""
+    x = x.double()
+    return x * torch.rsqrt(x.pow(2).mean(-1, keepdim=True) + epsilon) * weight.double() * torch.sigmoid(gate.double())
+
+
 def closed_form_tensor(*shape: int, offset: float = 0.0, scale: float = 1e-3) -> torch.Tensor:
     """Cheap finite values with no generator, for determinism checks (accuracy is checked elsewhere)."""
     count = 1

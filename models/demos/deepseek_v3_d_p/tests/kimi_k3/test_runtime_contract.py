@@ -291,6 +291,7 @@ def _mocked_layer(monkeypatch, tensor_parallel_size: int):
     layer._compute_decay = calls.compute_decay
     layer.recurrence = calls.recurrence
     calls.recurrence.return_value = SimpleNamespace(output=object(), final_state="final_recurrent")
+    calls.recurrence.applies_output_norm = False
     layer._kda_rms_norm = calls.norm
     layer._project_output = calls.project_output
     calls.project_output.return_value = "output"
@@ -309,6 +310,20 @@ def test_kda_layer_functional_path_skips_the_gather_on_a_full_width_input(monkey
     calls.all_gather.assert_not_called()
     calls.project_inputs.assert_called_once_with(full)
     assert output == "output" and (state.recurrent, state.convolution) == ("final_recurrent", "new_convolution")
+
+
+def test_kda_layer_with_sequence_parallelism_leaves_the_norm_to_the_relay(monkeypatch):
+    layer, calls = _mocked_layer(monkeypatch, tensor_parallel_size=4)
+    calls.recurrence.applies_output_norm = True
+    layer.weights.norm = object()
+    layer.config.num_heads, layer.config.norm_eps = 2, 1e-6
+    layer.gated_rms_output_dtype = layer.norm_output_memory_config = None
+    output, _ = layer.forward(SimpleNamespace(shape=(1, 64, 256)), Mock(), object())
+    calls.norm.assert_not_called()
+    output_norm = calls.recurrence.call_args.kwargs["output_norm"]
+    assert output_norm.gate is calls.project_inputs.return_value.projected and output_norm.num_heads == 2
+    calls.project_output.assert_called_once_with(calls.recurrence.return_value.output)
+    assert output == "output"
 
 
 def test_kda_attention_rejects_a_layer_without_the_contract_convolution_pages(expect_error):

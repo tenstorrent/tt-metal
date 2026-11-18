@@ -7,7 +7,7 @@
 
 constexpr uint32_t cb_eout = get_compile_time_arg_val(0);
 constexpr uint32_t cb_chron = get_compile_time_arg_val(1);
-constexpr uint32_t cb_out = get_compile_time_arg_val(2);
+constexpr uint32_t cb_norm = get_compile_time_arg_val(2);
 constexpr uint32_t kt = get_compile_time_arg_val(3);
 constexpr uint32_t num_chunks = get_compile_time_arg_val(4);
 constexpr uint32_t ack_semaphore_id = get_compile_time_arg_val(5);
@@ -18,7 +18,9 @@ constexpr uint32_t grid_x = get_compile_time_arg_val(7);
 constexpr uint32_t core_chunks = get_compile_time_arg_val(8);
 constexpr uint32_t num_links = get_compile_time_arg_val(9);
 constexpr uint32_t first_core = get_compile_time_arg_val(10);
-constexpr bool streamed = get_compile_time_arg_val(11);
+// The normalized outputs are token-major [B, T, H*V]: head h's tiles of chunk c at tile row (h / heads) * num_chunks +
+// c, from tile column (h % heads) * kt.
+constexpr uint32_t heads = get_compile_time_arg_val(11);
 constexpr auto output_args = TensorAccessorArgs<12>();
 constexpr auto carry_args = TensorAccessorArgs<output_args.next_compile_time_args_offset()>();
 // Slab (slab_kernel_args): the carry output is the slab, written at entry `index * slab_scale + slab_offset`; nothing
@@ -82,18 +84,16 @@ void kernel_main() {
     }
 
     const auto output = TensorAccessor(output_args, get_common_arg_val<uint32_t>(0));
-    const uint32_t out_tile = get_tile_size(cb_out);
-    // Compute packs a block of chunk rows at a time: all of a seed's chunks in place, one chunk streamed.
+    const uint32_t out_tile = get_tile_size(cb_norm);
     const auto write_outputs = [&](uint32_t begin, uint32_t end) {
-        const uint32_t block = streamed ? 1 : end - begin;
-        for (uint32_t first = begin; first < end; first += block) {
-            cb_wait_front(cb_out, block * kt);
-            const uint32_t page = (head * num_chunks + first_chunk + first) * kt;
-            for (uint32_t t = 0; t < block * kt; ++t) {
-                noc_async_write_page(page + t, output, get_read_ptr(cb_out) + t * out_tile);
+        for (uint32_t c = begin; c < end; ++c) {
+            cb_wait_front(cb_norm, kt);
+            const uint32_t page = (((head / heads) * num_chunks + first_chunk + c) * heads + head % heads) * kt;
+            for (uint32_t j = 0; j < kt; ++j) {
+                noc_async_write_page(page + j, output, get_read_ptr(cb_norm) + j * out_tile);
             }
             noc_async_writes_flushed();
-            cb_pop_front(cb_out, block * kt);
+            cb_pop_front(cb_norm, kt);
         }
     };
     write_outputs(0, group_chunks);

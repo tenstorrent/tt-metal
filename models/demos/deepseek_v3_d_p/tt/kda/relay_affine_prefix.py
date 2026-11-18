@@ -27,6 +27,7 @@ first rank sends after the lap, separates consecutive calls.
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
 
 import ttnn
@@ -45,6 +46,21 @@ class SlabEntry:
 
     def op_kwargs(self) -> dict:
         return {"slab_index": self.index, "slab_index_scale": self.scale, "slab_index_offset": self.offset}
+
+
+@dataclass(frozen=True)
+class OutputNorm:
+    """The gated RMSNorm the relay applies to each output row x: x / sqrt(mean(x^2) + norm_epsilon) * weight *
+    sigmoid(gate), with the BF16 gate in ``gate``'s ``num_heads * V`` columns from ``gate_column_offset``. The output is
+    token-major [B, T, num_heads * V] in ``output_dtype`` and ``memory_config``."""
+
+    gate: ttnn.Tensor
+    weight: ttnn.Tensor
+    num_heads: int
+    gate_column_offset: int
+    norm_epsilon: float
+    output_dtype: ttnn.DataType
+    memory_config: ttnn.MemoryConfig
 
 
 # A sender core's count semaphores, one per head it serves (relay_affine_prefix_max_heads_per_link).
@@ -110,7 +126,7 @@ class RelayAffinePrefix:
         num_links,
         local_rows,
         max_cores,
-        math_fidelity=ttnn.MathFidelity.HiFi2,
+        math_fidelity=ttnn.MathFidelity.HiFi3,
     ):
         if key_dim != value_dim:
             raise ValueError("relay prefix requires K == V")
@@ -143,7 +159,12 @@ class RelayAffinePrefix:
         self.cores_per_head = cores_per_head = max(
             d for d in range(1, min(num_chunks, budget // batch_heads) + 1) if num_chunks % d == 0
         )
-        correction = cores[senders : senders + batch_heads * cores_per_head]
+        # The heads' cores start on the first grid row after the senders' when they fit there: whole rows are one
+        # core range, which the dispatch writes the program to in one multicast.
+        first = math.ceil(senders / grid.x) * grid.x
+        if first + batch_heads * cores_per_head > len(cores):
+            first = senders
+        correction = cores[first : first + batch_heads * cores_per_head]
         self.cores = correction + cores[:senders]
 
         def core_set(selected):
@@ -185,7 +206,6 @@ class RelayAffinePrefix:
                 ttnn.ShardSpec(core_set(correction), (2 * core_rows, key_dim), ttnn.ShardOrientation.ROW_MAJOR),
             )
         )
-        self.output_memory_config = ttnn.DRAM_MEMORY_CONFIG if streamed else ttnn.L1_MEMORY_CONFIG
 
     def reserve(self):
         """Allocate the landing buffer for the next call, before any program of its layer (a no-op while reserved)."""
@@ -195,9 +215,17 @@ class RelayAffinePrefix:
             )
 
     def __call__(
-        self, packed, terms, initial_state: ttnn.Tensor | SlabEntry, final_e, final_b, actual_start, actual_end=None
+        self,
+        packed,
+        terms,
+        initial_state: ttnn.Tensor | SlabEntry,
+        final_e,
+        final_b,
+        output_norm: OutputNorm,
+        actual_start,
+        actual_end=None,
     ):
-        """Return the chunk outputs [BH, NC, 32, V] BF16 and the chunk's final carry [BH, K, K] FP32 on every rank.
+        """Return the gated-norm outputs (see OutputNorm) and the chunk's final carry [BH, K, K] FP32 on every rank.
         Frees the landing buffer once the relay has run. A slab entry ``initial_state`` is read in place (zeros at a
         request's head) and the final carry is written back into it: the carry returned is then the slab."""
         # Reserving here suffices only when no program of this rank runs between its predecessor's relay and its own.
@@ -212,6 +240,8 @@ class RelayAffinePrefix:
             initial_state,
             final_e,
             final_b,
+            output_norm.gate,
+            output_norm.weight,
             actual_start,
             self._landing,
             self.semaphores,
@@ -220,8 +250,12 @@ class RelayAffinePrefix:
             cores=self.cores,
             actual_end=actual_end,
             sequence_parallel_axis=self.axis,
-            memory_config=self.output_memory_config,
             compute_kernel_config=self.compute_config,
+            num_heads=output_norm.num_heads,
+            gate_column_offset=output_norm.gate_column_offset,
+            norm_epsilon=output_norm.norm_epsilon,
+            output_dtype=output_norm.output_dtype,
+            memory_config=output_norm.memory_config,
             **slab_kwargs,
         )
         # Every write into it is consumed within the call: the predecessor's entry columns by this rank's heads, and

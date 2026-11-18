@@ -23,12 +23,13 @@ void bind_relay_affine_prefix(nb::module_& mod) {
         sends the final state ``P`` on to the first. ``S_p`` and ``B_p`` are added exactly in FP32 DST (``B_p`` as
         ``I B_p`` in the matmul); only ``E_p S_p`` passes through the matmul's source registers at its fidelity.
 
-        Every core of a head then forms its chunks' outputs ``F0 + (FI - F0) @ seed`` from the summary's
-        ``terms`` (the entry correction), the seed being ``S_p``, or ``P`` for the chunks of a separated tail.
-        The first rank then forms the final carry as ``P`` lands: ``P + (E P + B)`` with its final transition
-        ``final_e`` / ``final_b`` when the interval ends in a separated tail, else ``P``. It multicasts it from
-        L1 along the SP axis into every rank's carry output, and every other rank waits for its arrival, which
-        separates consecutive calls across the SP line.
+        Every core of a head then forms its chunks' outputs ``x = F0 + (FI - F0) @ seed`` from the summary's
+        ``terms`` (the entry correction), the seed being ``S_p``, or ``P`` for the chunks of a separated tail,
+        and writes each row's gated RMSNorm ``x / sqrt(mean(x^2) + norm_epsilon) * norm_weight *
+        sigmoid(gate)``, token-major. The first rank forms the final carry as ``P`` lands: ``P + (E P + B)``
+        with its final transition ``final_e`` / ``final_b`` when the interval ends in a separated tail, else
+        ``P``. It multicasts it from L1 along the SP axis into every rank's carry output, and every other rank
+        waits for its arrival, which separates consecutive calls across the SP line.
 
         ``cores`` lists the same number of cores per head, head by head (the first of each also runs the relay's
         hop), then two sender cores per link. The ``landing`` buffer and the global ``semaphores`` outlive the call:
@@ -46,6 +47,9 @@ void bind_relay_affine_prefix(nb::module_& mod) {
             final_e (ttnn.Tensor): FLOAT32 TILE-layout interleaved ``[B*H, K, K]`` E of this rank's final
                 transition.
             final_b (ttnn.Tensor): FLOAT32 TILE-layout interleaved ``[B*H, K, K]`` B of the same transition.
+            output_gate (ttnn.Tensor): TILE-layout interleaved ``[B, local_rows, W]`` holding each token's output gate
+                logits for heads ``0..H-1`` in ``H*K`` columns from ``gate_column_offset``.
+            norm_weight (ttnn.Tensor): TILE-layout interleaved ``[K]`` RMSNorm weight.
             actual_start (ttnn.Tensor): Replicated UINT32 row-major scalar with the absolute position of the
                 chunk's first token. Keep its address stable and update its contents before replay of a
                 captured trace.
@@ -60,13 +64,17 @@ void bind_relay_affine_prefix(nb::module_& mod) {
             num_links (int): Fabric links to the successor, two sender cores each.
             cores (list[ttnn.CoreCoord]): The heads' cores, head by head (as many per head, dividing its chunks),
                 then two senders per link, all distinct.
+            num_heads (int): Heads per batch ``H``; ``B*H`` heads are ``B`` batches.
             actual_end (ttnn.Tensor, optional): Replicated UINT32 exclusive valid end, which decides whether the
                 interval ends in a separated tail. Omitted, the chunk runs to its full capacity.
             sequence_parallel_axis (int, optional): Mesh axis partitioning the sequence, of at least two ranks
                 (the last rank's hand-off to the first crosses the axis when it does not wrap).
-            memory_config (ttnn.MemoryConfig, optional): Interleaved memory of the chunk outputs. Defaults to DRAM.
+            gate_column_offset (int, optional): Tile-aligned first gate column in ``output_gate``. Defaults to 0.
+            norm_epsilon (float, optional): Added to the mean square. Defaults to 1e-6.
+            output_dtype (ttnn.DataType, optional): FLOAT32 or BFLOAT16 output. Defaults to BFLOAT16.
+            memory_config (ttnn.MemoryConfig, optional): Interleaved memory of the output. Defaults to DRAM.
             compute_kernel_config (ttnn.DeviceComputeKernelConfig, optional): The matmuls' fidelity; their
-                products accumulate in DST. Requires ``fp32_dest_acc_en`` and HiFi2 or above. Defaults to HiFi2
+                products accumulate in DST. Requires ``fp32_dest_acc_en`` and HiFi3 or above. Defaults to HiFi3
                 with FP32 destination accumulation.
             slab_index (ttnn.Tensor, optional): Replicated UINT32 scalar, read on device: the first rank enters at
                 slab entry ``slab_index * slab_index_scale + slab_index_offset``, or zeros when ``actual_start`` is 0,
@@ -75,7 +83,7 @@ void bind_relay_affine_prefix(nb::module_& mod) {
             slab_index_offset (int, optional): Defaults to 0.
 
         Returns:
-            tuple[ttnn.Tensor, ttnn.Tensor]: BFLOAT16 TILE-layout ``[B*H, local_rows / 32, 32, K]`` chunk outputs,
+            tuple[ttnn.Tensor, ttnn.Tensor]: TILE-layout ``[B, local_rows, H*K]`` gated-norm outputs, token-major,
                 and the FLOAT32 ``[B*H, K, K]`` final carry in DRAM on every rank (with ``slab_index``, the slab
                 itself).
 
@@ -89,6 +97,8 @@ void bind_relay_affine_prefix(nb::module_& mod) {
         nb::arg("initial_state").noconvert(),
         nb::arg("final_e").noconvert(),
         nb::arg("final_b").noconvert(),
+        nb::arg("output_gate").noconvert(),
+        nb::arg("norm_weight").noconvert(),
         nb::arg("actual_start").noconvert(),
         nb::arg("landing").noconvert(),
         nb::arg("semaphores"),
@@ -96,8 +106,12 @@ void bind_relay_affine_prefix(nb::module_& mod) {
         nb::arg("local_rows"),
         nb::arg("num_links"),
         nb::arg("cores"),
+        nb::arg("num_heads"),
         nb::arg("actual_end") = nb::none(),
         nb::arg("sequence_parallel_axis") = 0,
+        nb::arg("gate_column_offset") = 0,
+        nb::arg("norm_epsilon") = 1e-6f,
+        nb::arg("output_dtype") = tt::tt_metal::DataType::BFLOAT16,
         nb::arg("memory_config") = nb::none(),
         nb::arg("compute_kernel_config") = nb::none(),
         nb::arg("slab_index") = nb::none(),

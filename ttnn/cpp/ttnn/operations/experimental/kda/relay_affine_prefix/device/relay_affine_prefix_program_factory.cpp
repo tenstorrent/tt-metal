@@ -5,6 +5,7 @@
 
 #include <algorithm>
 #include <array>
+#include <bit>
 #include <optional>
 #include <string>
 #include <vector>
@@ -46,6 +47,16 @@ constexpr uint32_t cb_tail = 14;
 constexpr uint32_t cb_terms = 15;
 constexpr uint32_t cb_diff = 16;
 constexpr uint32_t cb_out = 17;
+// The gated output norm, on every core of a head: the squares of a chunk row, the mean's scaler, 1 / rms, the gate
+// rows, the weight and its rows broadcast down a tile, and the normalized rows the writer writes.
+constexpr uint32_t cb_square = 18;
+constexpr uint32_t cb_scaler = 19;
+constexpr uint32_t cb_inv_rms = 20;
+constexpr uint32_t cb_gate = 21;
+constexpr uint32_t cb_weight = 22;
+constexpr uint32_t cb_weight_rows = 23;
+constexpr uint32_t cb_norm = 24;
+constexpr uint32_t cb_gate_factor = 25;
 // On the head cores: the sender releases a head once it has read the head's last column.
 constexpr uint32_t ack_semaphore_id = 0;
 // On every core of a head: the seeds the head's first core has written there.
@@ -212,7 +223,10 @@ tt::tt_metal::ProgramDescriptor build_program(
     if (!streamed) {
         terms_cb.buffer = in.terms.buffer();
     }
-    const uint32_t output_tile = tt::constants::TILE_HW * sizeof(uint16_t);
+    const auto tile_cb = [&](uint32_t index, uint32_t tiles, tt::tt_metal::DataType dtype) {
+        const auto format = tt::tt_metal::datatype_to_dataformat_converter(dtype);
+        return kda_factory_detail::cb_descriptor(index, tiles, tt::tile_size(format), format, correction_set);
+    };
     desc.cbs = {
         // The seeds first: every core of a head takes them at the address its head's first core writes them to.
         kda_factory_detail::cb_descriptor(cb_seed, state_tiles, state_tile, tt::DataFormat::Float32, correction_set),
@@ -220,9 +234,19 @@ tt::tt_metal::ProgramDescriptor build_program(
         std::move(terms_cb),
         kda_factory_detail::cb_descriptor(
             cb_diff, (streamed ? 2 : core_chunks) * kt, state_tile, tt::DataFormat::Float32, correction_set),
-        // A block of chunk rows: all of a seed's chunks in place, two chunks streamed.
-        kda_factory_detail::cb_descriptor(
-            cb_out, (streamed ? 2 : core_chunks) * kt, output_tile, tt::DataFormat::Float16_b, correction_set),
+        // One FP32 chunk row, which compute normalizes itself.
+        kda_factory_detail::cb_descriptor(cb_out, kt, state_tile, tt::DataFormat::Float32, correction_set),
+        // The squares feed only the row means: in the output's precision.
+        tile_cb(cb_square, kt, attrs.output_dtype),
+        kda_factory_detail::cb_descriptor(cb_scaler, 1, summary_tile, tt::DataFormat::Float16_b, correction_set),
+        kda_factory_detail::cb_descriptor(cb_inv_rms, 1, state_tile, tt::DataFormat::Float32, correction_set),
+        tile_cb(cb_gate, 2 * kt, in.output_gate.dtype()),
+        // Each chunk's sigmoid(gate) * weight: in place all of the core's, formed before the seeds land; streamed, one.
+        tile_cb(cb_gate_factor, (streamed ? 1 : core_chunks) * kt, attrs.output_dtype),
+        tile_cb(cb_weight, kt, in.norm_weight.dtype()),
+        tile_cb(cb_weight_rows, kt, in.norm_weight.dtype()),
+        // One normalized row, single-buffered: L1 beside the in-place terms has no room for two.
+        tile_cb(cb_norm, kt, attrs.output_dtype),
         // Two DRAM-aligned slots: actual_start (then the writer's chronology words), then the slab index.
         kda_factory_detail::cb_descriptor(cb_chron, 1, 2 * chron_slot_bytes, tt::DataFormat::UInt32, correction_set),
         kda_factory_detail::cb_descriptor(cb_ctl, 1, 64, tt::DataFormat::UInt32, correction_set),
@@ -288,10 +312,20 @@ tt::tt_metal::ProgramDescriptor build_program(
          grid_x,
          first_core});
     tt::tt_metal::TensorAccessorArgs(in.terms.buffer()).append_to(reader_ct);
+    reader_ct.insert(
+        reader_ct.end(),
+        {cb_scaler,
+         cb_gate,
+         cb_weight,
+         attrs.num_heads,
+         static_cast<uint32_t>(in.output_gate.padded_shape()[-1] / tt::constants::TILE_WIDTH),
+         attrs.gate_column_offset / tt::constants::TILE_WIDTH});
+    tt::tt_metal::TensorAccessorArgs(in.output_gate.buffer()).append_to(reader_ct);
+    tt::tt_metal::TensorAccessorArgs(in.norm_weight.buffer()).append_to(reader_ct);
     std::vector<uint32_t> writer_ct = {
         cb_eout,
         cb_chron,
-        cb_out,
+        cb_norm,
         kt,
         num_chunks,
         ack_semaphore_id,
@@ -300,7 +334,7 @@ tt::tt_metal::ProgramDescriptor build_program(
         core_chunks,
         attrs.num_links,
         first_core,
-        uint32_t(streamed)};
+        attrs.num_heads};
     tt::tt_metal::TensorAccessorArgs(output.buffer()).append_to(writer_ct);
     tt::tt_metal::TensorAccessorArgs(carry.buffer()).append_to(writer_ct);
     writer_ct.insert(writer_ct.end(), slab_ct.begin(), slab_ct.end());
@@ -331,6 +365,10 @@ tt::tt_metal::ProgramDescriptor build_program(
     for (const uint32_t exact : {cb_ein_exact, cb_p_exact, cb_fb}) {
         compute_config.unpack_to_dest_mode[exact] = tt::tt_metal::UnpackToDestMode::UnpackToDestFp32;
     }
+    // An FP32 output's g reaches DST exactly.
+    if (attrs.output_dtype == tt::tt_metal::DataType::FLOAT32) {
+        compute_config.unpack_to_dest_mode[cb_gate_factor] = tt::tt_metal::UnpackToDestMode::UnpackToDestFp32;
+    }
     tt::tt_metal::KernelDescriptor compute{
         .kernel_source = std::string(kernel_dir) + "compute/relay_affine_prefix.cpp",
         .core_ranges = correction_set,
@@ -356,7 +394,17 @@ tt::tt_metal::ProgramDescriptor build_program(
              uint32_t(streamed),
              cores_per_head,
              grid_x,
-             first_core},
+             first_core,
+             cb_square,
+             cb_scaler,
+             cb_inv_rms,
+             cb_gate,
+             cb_weight,
+             cb_weight_rows,
+             cb_norm,
+             cb_gate_factor,
+             std::bit_cast<uint32_t>(attrs.norm_epsilon),
+             uint32_t(attrs.output_dtype == tt::tt_metal::DataType::FLOAT32)},
         .config = std::move(compute_config),
     };
     tt::tt_metal::KernelDescriptor sender{
@@ -383,7 +431,9 @@ tt::tt_metal::ProgramDescriptor build_program(
           actual_end.buffer(),
           in.terms.buffer(),
           slab_index.buffer(),
-          in.landing.buffer()}) {
+          in.landing.buffer(),
+          in.output_gate.buffer(),
+          in.norm_weight.buffer()}) {
         reader_args.push_back(buffer);
     }
     reader_args.push_back(arrival_address);

@@ -43,8 +43,8 @@ _TIMING_SAMPLES = 5
 # Host-time targets (ms) per (layout, mode), as tests/measure measures them: untraced fastest of 10 after 10 warm-up,
 # traced one replay, both with the CPU clock held.
 _TARGETS_MS = {
-    ("SP8xTP4", "untraced"): 1.37,
-    ("SP8xTP4", "traced"): 1.168,
+    ("SP8xTP4", "untraced"): 1.34,
+    ("SP8xTP4", "traced"): 1.137,
     ("SP8xTP1", "untraced"): 1.20,
     ("SP8xTP1", "traced"): 1.142,
     ("SP4xTP1", "untraced"): 1.216,

@@ -22,12 +22,14 @@ from models.demos.deepseek_v3_d_p.tests.kda.utils import (
     collect_mesh_accuracy_and_determinism_results,
     compare_cpu_device,
     distributed_prefix,
+    gated_rms_norm_reference,
     kda_device_params,
     pack_complement,
     reconstruct_state_at_sp_rank,
 )
 from models.demos.deepseek_v3_d_p.tt.kda import recurrence
 from models.demos.deepseek_v3_d_p.tt.kda.config import KDARecurrenceProgramConfig
+from models.demos.deepseek_v3_d_p.tt.kda.relay_affine_prefix import OutputNorm
 
 pytestmark = run_for_blackhole()
 
@@ -262,23 +264,56 @@ def _to_mesh(
 
 
 def _reconstruct_recurrence_output(
-    tensor: ttnn.Tensor,
-    mesh_device: ttnn.MeshDevice,
-    sp_axis: int,
-    tp_axis: int,
+    tensor: ttnn.Tensor, mesh_device: ttnn.MeshDevice, activation_dims: tuple, heads: int
 ) -> torch.Tensor:
-    shards = [ttnn.to_torch(shard) for shard in ttnn.get_device_tensors(tensor)]
-    rows, columns = tuple(mesh_device.shape)
-    sp_size = (rows, columns)[sp_axis]
-    tp_size = (rows, columns)[tp_axis]
-    sequence_partitions = []
-    for sp_rank in range(sp_size):
-        head_partitions = []
-        for tp_rank in range(tp_size):
-            row, column = (sp_rank, tp_rank) if sp_axis == 0 else (tp_rank, sp_rank)
-            head_partitions.append(shards[row * columns + column])
-        sequence_partitions.append(torch.cat(head_partitions, dim=0).transpose(0, 1))
-    return torch.cat(sequence_partitions, dim=0).unsqueeze(0)
+    """The SP recurrence's token-major [1, T, H*V] output, sharded like its inputs, as [1, T, H, V]."""
+    output = ttnn.to_torch(
+        tensor, mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, tuple(mesh_device.shape), dims=activation_dims)
+    )
+    return output.reshape(*output.shape[:2], heads, -1)
+
+
+def _activation_dims(sp_axis: int, tp_axis: int) -> tuple:
+    """Token-major activations: the sequence over the SP axis, the heads' columns over the TP axis."""
+    dims = [None, None]
+    dims[sp_axis], dims[tp_axis] = 1, 2
+    return tuple(dims)
+
+
+_NORM_EPSILON = 1e-6
+
+
+def _output_norm(
+    mesh_device: ttnn.MeshDevice,
+    sequence: int,
+    heads: int,
+    local_heads: int,
+    dim: int,
+    activation_dims: tuple,
+    generator: torch.Generator,
+) -> tuple[OutputNorm, torch.Tensor, torch.Tensor]:
+    """The SP recurrence's gated output norm, with a random BF16 gate laid out like q and weight, and both on host."""
+    gate = torch.randn(1, sequence, heads * dim, generator=generator).bfloat16().float()
+    weight = (1 + 0.1 * torch.randn(dim, generator=generator)).bfloat16().float()
+    norm = OutputNorm(
+        gate=_to_mesh(gate, mesh_device, activation_dims, ttnn.bfloat16),
+        weight=ttnn.from_torch(
+            weight,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=mesh_device,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+        ),
+        num_heads=local_heads,
+        gate_column_offset=0,
+        norm_epsilon=_NORM_EPSILON,
+        output_dtype=ttnn.bfloat16,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    return norm, gate.reshape(1, sequence, heads, dim), weight
+
+
+_DISTRIBUTED_HEADS = 8
 
 
 def _distributed_recurrence_case(
@@ -286,14 +321,14 @@ def _distributed_recurrence_case(
     tensor_parallel_axis: int,
 ) -> tuple[
     recurrence.KDARecurrence,
-    tuple[ttnn.Tensor, ttnn.Tensor, ttnn.Tensor, ttnn.Tensor, ttnn.Tensor, ttnn.Tensor],
+    tuple[ttnn.Tensor, ttnn.Tensor, ttnn.Tensor, ttnn.Tensor, ttnn.Tensor, ttnn.Tensor, OutputNorm],
     torch.Tensor,
     torch.Tensor,
     int,
     ttnn.Tensor,
 ]:
     sp_axis = 1 - tensor_parallel_axis
-    sequence, heads, dim = 128, 8, 32
+    sequence, heads, dim = 128, _DISTRIBUTED_HEADS, 32
     generator = torch.Generator().manual_seed(1621 + tensor_parallel_axis)
     shape = (1, sequence, heads)
     q = torch.randn(*shape, dim, generator=generator)
@@ -305,9 +340,7 @@ def _distributed_recurrence_case(
     initial_state = 0.02 * torch.randn(1, heads, dim, dim, generator=generator)
     expected_output, expected_state = kda_recurrent_reference(q, k, v, gate, beta, initial_state)
 
-    activation_dims = [None, None]
-    activation_dims[sp_axis] = 1
-    activation_dims[tensor_parallel_axis] = 2
+    activation_dims = _activation_dims(sp_axis, tensor_parallel_axis)
     state_dims = [None, None]
     state_dims[tensor_parallel_axis] = 1
     inputs = (
@@ -318,12 +351,18 @@ def _distributed_recurrence_case(
         _to_mesh(beta_logits, mesh_device, tuple(activation_dims), ttnn.bfloat16),
         _to_mesh(initial_state, mesh_device, tuple(state_dims), ttnn.float32),
     )
+    local_heads = heads // tuple(mesh_device.shape)[tensor_parallel_axis]
+    norm, norm_gate, norm_weight = _output_norm(
+        mesh_device, sequence, heads, local_heads, dim, tuple(activation_dims), generator
+    )
+    inputs = (*inputs, norm)
+    expected_output = gated_rms_norm_reference(expected_output, norm_gate, norm_weight, _NORM_EPSILON).float()
     executor = recurrence.KDARecurrence(
         mesh_device,
         KDARecurrenceProgramConfig(summary_group_chunks=sequence // tuple(mesh_device.shape)[sp_axis] // 32),
         sequence_parallel_axis=sp_axis,
         local_rows=sequence // tuple(mesh_device.shape)[sp_axis],
-        heads=heads // tuple(mesh_device.shape)[tensor_parallel_axis],
+        heads=local_heads,
         key_dim=dim,
         value_dim=dim,
     )
@@ -333,10 +372,10 @@ def _distributed_recurrence_case(
 
 def _run_distributed_recurrence(
     executor: recurrence.KDARecurrence,
-    inputs: tuple[ttnn.Tensor, ttnn.Tensor, ttnn.Tensor, ttnn.Tensor, ttnn.Tensor, ttnn.Tensor],
+    inputs: tuple[ttnn.Tensor, ttnn.Tensor, ttnn.Tensor, ttnn.Tensor, ttnn.Tensor, ttnn.Tensor, OutputNorm],
     actual_start: ttnn.Tensor,
 ) -> tuple[ttnn.Tensor, ttnn.Tensor]:
-    q, k, v, gate, beta, initial_state = inputs
+    q, k, v, gate, beta, initial_state, output_norm = inputs
     with ttnn.manage_config("throw_exception_on_fallback", True):
         result = executor(
             q=q,
@@ -347,6 +386,7 @@ def _run_distributed_recurrence(
             beta_logits_column_offset=0,
             initial_state=initial_state,
             actual_start=actual_start,
+            output_norm=output_norm,
         )
     return result.output, result.final_state
 
@@ -374,7 +414,8 @@ def test_distributed_recurrence_matches_serial_and_is_deterministic(
     assert state_tt.dtype == ttnn.float32
     assert all(marker.item() == 0 for marker in mismatch_markers), "distributed recurrence is not bit-identical"
 
-    actual_output = _reconstruct_recurrence_output(output_tt, mesh_device, sp_axis, tensor_parallel_axis)
+    dims = _activation_dims(sp_axis, tensor_parallel_axis)
+    actual_output = _reconstruct_recurrence_output(output_tt, mesh_device, dims, _DISTRIBUTED_HEADS)
     actual_state = reconstruct_state_at_sp_rank(state_tt, mesh_device, sp_axis, tensor_parallel_axis, sp_rank=0)
     label = f"tp_axis={tensor_parallel_axis}"
     assert_accurate(expected_output, actual_output, name=f"{label} output", nrmse_threshold=0.02)
@@ -396,8 +437,9 @@ def test_distributed_recurrence_trace_replay_matches_eager(
         ttnn.execute_trace(mesh_device, trace_id, cq_id=0, blocking=False)
     ttnn.synchronize_device(mesh_device)
 
-    eager_output = _reconstruct_recurrence_output(eager_output_tt, mesh_device, sp_axis, tensor_parallel_axis)
-    traced_output = _reconstruct_recurrence_output(traced_output_tt, mesh_device, sp_axis, tensor_parallel_axis)
+    dims = _activation_dims(sp_axis, tensor_parallel_axis)
+    eager_output = _reconstruct_recurrence_output(eager_output_tt, mesh_device, dims, _DISTRIBUTED_HEADS)
+    traced_output = _reconstruct_recurrence_output(traced_output_tt, mesh_device, dims, _DISTRIBUTED_HEADS)
     eager_state = reconstruct_state_at_sp_rank(eager_state_tt, mesh_device, sp_axis, tensor_parallel_axis, sp_rank=0)
     traced_state = reconstruct_state_at_sp_rank(traced_state_tt, mesh_device, sp_axis, tensor_parallel_axis, sp_rank=0)
     ttnn.release_trace(mesh_device, trace_id)
@@ -466,8 +508,7 @@ def test_distributed_recurrence_split_interval_matches_reference(
         *(t[:, order] for t in (q, k, v, gate, torch.sigmoid(beta_logits.float()))), initial_state
     )
 
-    activation_dims = [None, None]
-    activation_dims[sp_axis], activation_dims[tp_axis] = 1, 2
+    activation_dims = _activation_dims(sp_axis, tp_axis)
     state_dims = [None, None]
     state_dims[tp_axis] = 1
     q_tt, k_tt, v_tt, gate_tt = (
@@ -476,12 +517,17 @@ def test_distributed_recurrence_split_interval_matches_reference(
     )
     beta_tt = _to_mesh(beta_logits, mesh_device, tuple(activation_dims), ttnn.bfloat16)
     state_tt = _to_mesh(initial_state, mesh_device, tuple(state_dims), ttnn.float32)
+    local_heads = heads // tuple(mesh_device.shape)[tp_axis]
+    norm, norm_gate, norm_weight = _output_norm(
+        mesh_device, sequence, heads, local_heads, dim, tuple(activation_dims), generator
+    )
+    expected_output = gated_rms_norm_reference(expected_output, norm_gate[:, order], norm_weight, _NORM_EPSILON).float()
     executor = recurrence.KDARecurrence(
         mesh_device,
         KDARecurrenceProgramConfig(summary_group_chunks=_STRADDLE_LOCAL_ROWS // 32 // groups),
         sequence_parallel_axis=sp_axis,
         local_rows=_STRADDLE_LOCAL_ROWS,
-        heads=heads // tuple(mesh_device.shape)[tp_axis],
+        heads=local_heads,
         key_dim=dim,
         value_dim=dim,
     )
@@ -498,10 +544,11 @@ def test_distributed_recurrence_split_interval_matches_reference(
             initial_state=state_tt,
             actual_start=actual_start,
             actual_end=actual_end,
+            output_norm=norm,
         )
     ttnn.synchronize_device(mesh_device)
 
-    output = _reconstruct_recurrence_output(result.output, mesh_device, sp_axis, tp_axis)[:, order].float()
+    output = _reconstruct_recurrence_output(result.output, mesh_device, tuple(activation_dims), heads)[:, order].float()
     label = f"G={groups} start={start} length={length}"
     assert_accurate(expected_output, output, name=f"{label} output", nrmse_threshold=0.02)
     # A fault confined to one rank's head or tail must not average away: gate every chronological segment.

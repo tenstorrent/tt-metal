@@ -19,19 +19,26 @@ from models.demos.deepseek_v3_d_p.tests.kda.utils import (
     assert_device_time,
     closed_form_tensor,
     distributed_prefix,
+    gated_rms_norm_reference,
     kda_mesh_param,
     median_device_us,
     pack_complement,
 )
 from models.demos.deepseek_v3_d_p.tt.kda.config import kimi_k3_program_config
 from models.demos.deepseek_v3_d_p.tt.kda.recurrence import _sp_links
-from models.demos.deepseek_v3_d_p.tt.kda.relay_affine_prefix import RelayAffinePrefix, reset_persistent_semaphores
+from models.demos.deepseek_v3_d_p.tt.kda.relay_affine_prefix import (
+    OutputNorm,
+    RelayAffinePrefix,
+    reset_persistent_semaphores,
+)
 from tt_py_test_utils_common.realtime_profiler_utils import require_realtime_profiler
 
 pytestmark = run_for_blackhole()
 
 _ROWS, _HEADS, _KEY = 640, 24, 128
 _CHUNKS = _ROWS // 32
+# The gated output norm: its gate starts a tile column into a [1, T, K + H*V] gate tensor.
+_GATE_OFFSET, _NORM_EPSILON = _KEY, 1e-6
 # The model's relay runs at the affine prefix's fidelity, on the model's cores.
 _PROGRAM_CONFIG = kimi_k3_program_config(active_seq_len_local=_ROWS, tp_ccl_topology=ttnn.Topology.Linear).recurrence
 _MATH_FIDELITY = _PROGRAM_CONFIG.affine_prefix_math_fidelity
@@ -95,12 +102,14 @@ def _rank_chunks(sp_size: int, start: int, end: int | None) -> dict[int, tuple[i
 
 
 class _Transforms:
-    """One transform per rank, its packed complement form [E | B] (E = A - I) on device, the chunk terms and the final
-    transition, and the FP64 reference of the relay around the ring."""
+    """One transform per rank, its packed complement form [E | B] (E = A - I) on device, the chunk terms, the final
+    transition and the output norm, and the FP64 reference of the relay around the ring."""
 
-    def __init__(self, mesh_device, relay, seed: int | None):
-        """Random transforms from ``seed``, or closed-form ones (for the determinism check) without one."""
+    def __init__(self, mesh_device, relay, seed: int | None, batch: int = 1, output_dtype=ttnn.bfloat16):
+        """Random transforms from ``seed``, or closed-form ones (for the determinism check) without one; the heads are
+        ``batch`` batches in the norm's gate and output."""
         self.sp_size, self.tp_size = tuple(mesh_device.shape)
+        self.batch, gate_width = batch, _GATE_OFFSET + _HEADS // batch * _KEY
         if seed is None:
             shape = (self.sp_size, _HEADS, _KEY, _KEY)
             a, b = closed_form_tensor(*shape, offset=-0.125), closed_form_tensor(*shape, offset=0.0625)
@@ -109,6 +118,8 @@ class _Transforms:
             self.identity = self.zero.flip(-1)
             self.final_e = closed_form_tensor(_HEADS, _KEY, _KEY, offset=-0.1)
             self.final_b = closed_form_tensor(_HEADS, _KEY, _KEY, offset=0.05)
+            self.gate = closed_form_tensor(batch, _ROWS, gate_width, offset=0.2)
+            self.weight = closed_form_tensor(_KEY, offset=1.0)
         else:
             generator = torch.Generator().manual_seed(seed)
             a = 0.1 * torch.randn(self.sp_size, _HEADS, _KEY, _KEY, generator=generator)
@@ -118,15 +129,41 @@ class _Transforms:
             self.identity = 0.1 * torch.randn(_HEADS, _CHUNKS, 32, _KEY, generator=generator)
             self.final_e = 0.1 * torch.randn(_HEADS, _KEY, _KEY, generator=generator)
             self.final_b = 0.1 * torch.randn(_HEADS, _KEY, _KEY, generator=generator)
+            self.gate = torch.randn(batch, _ROWS, gate_width, generator=generator)
+            self.weight = 1 + 0.1 * torch.randn(_KEY, generator=generator)
+        self.gate, self.weight = self.gate.bfloat16().float(), self.weight.bfloat16().float()
         # A BF16-representable E and B make the BF16 transport exact for both paths; A = E + I exactly.
         e, self.b = (a - torch.eye(_KEY)).bfloat16().float(), b.bfloat16().float()
         self.a = e + torch.eye(_KEY)
         self.packed = _pack(mesh_device, self.a, self.b)
         self.initial_tt = _replicated(mesh_device, self.initial)
         self.inputs = _inputs(mesh_device, relay, self.zero, self.identity, self.final_e, self.final_b)
+        self.norm = OutputNorm(
+            gate=_replicated(mesh_device, self.gate, dtype=ttnn.bfloat16),
+            weight=_replicated(mesh_device, self.weight, dtype=ttnn.bfloat16),
+            num_heads=_HEADS // batch,
+            gate_column_offset=_GATE_OFFSET,
+            norm_epsilon=_NORM_EPSILON,
+            output_dtype=output_dtype,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
         self.compute_config = ttnn.init_device_compute_kernel_config(
             mesh_device.arch(), math_fidelity=_MATH_FIDELITY, fp32_dest_acc_en=True, packer_l1_acc=False
         )
+
+    def head_major(self, tokens: torch.Tensor) -> torch.Tensor:
+        """Token-major [B, T, H*V] as [B*H, chunks, 32, V]."""
+        heads = _HEADS // self.batch
+        return (
+            tokens.reshape(self.batch, _CHUNKS, 32, heads, _KEY)
+            .permute(0, 3, 1, 2, 4)
+            .reshape(_HEADS, _CHUNKS, 32, _KEY)
+        )
+
+    def normalize(self, x: torch.Tensor) -> torch.Tensor:
+        """The gated output norm of [B*H, chunks, 32, V] chunk outputs."""
+        gate = self.head_major(self.gate[:, :, _GATE_OFFSET:])
+        return gated_rms_norm_reference(x, gate, self.weight, _NORM_EPSILON)
 
     def reference(self, start: int):
         """Each rank's entry state and the relayed final state P."""
@@ -168,7 +205,8 @@ class _Transforms:
             expected = zero + (identity - zero) @ entries[rank].unsqueeze(1)
             if reset:
                 expected[:, reset:] = (zero + (identity - zero) @ final.unsqueeze(1))[:, reset:]
-            got = ttnn.to_torch(local_output).double()
+            expected = self.normalize(expected)
+            got = self.head_major(ttnn.to_torch(local_output).double())
             assert_accurate(
                 expected[:, :valid].float(),
                 got[:, :valid].float(),
@@ -184,10 +222,12 @@ class _Transforms:
                 assert relay_error <= 1.01 * chain_error, f"carry {name}: relay {relay_error} > chain {chain_error}"
 
 
-def _replicated(mesh_device, host: torch.Tensor, memory_config=ttnn.DRAM_MEMORY_CONFIG) -> ttnn.Tensor:
+def _replicated(
+    mesh_device, host: torch.Tensor, memory_config=ttnn.DRAM_MEMORY_CONFIG, dtype=ttnn.float32
+) -> ttnn.Tensor:
     return ttnn.from_torch(
         host,
-        dtype=ttnn.float32,
+        dtype=dtype,
         layout=ttnn.TILE_LAYOUT,
         device=mesh_device,
         memory_config=memory_config,
@@ -233,7 +273,9 @@ def _relay(
 
 def _run(relay: RelayAffinePrefix, transforms: _Transforms, actual_start, actual_end=None):
     terms, final_e, final_b = transforms.inputs
-    return relay(transforms.packed, terms, transforms.initial_tt, final_e, final_b, actual_start, actual_end)
+    return relay(
+        transforms.packed, terms, transforms.initial_tt, final_e, final_b, transforms.norm, actual_start, actual_end
+    )
 
 
 # Only the rank holding the first token orders the relay; "split" checks that an offset within that rank is ignored by
@@ -289,19 +331,28 @@ def test_relay_affine_prefix_core_layouts(mesh_device, layout):
     transforms.assert_matches_reference(output, carry, actual_start, start, end)
 
 
-def _scaled_identity_rows() -> torch.Tensor:
-    """F(I) rows that read the seed's tile rows back, chunk c its rows 32 (c % 4) on; F(0) is zero."""
-    rows = torch.eye(_KEY).reshape(_KEY // 32, 32, _KEY)
-    return rows.repeat(_CHUNKS // rows.shape[0], 1, 1).expand(_HEADS, _CHUNKS, 32, _KEY).contiguous()
+# The norm's output in FP32, and the heads as two batches (each with its own gate rows and output rows).
+_NORM_CASES = {"float32-output": (1, ttnn.float32), "two-batches": (2, ttnn.bfloat16)}
+
+
+@_MESH
+@pytest.mark.parametrize("case", list(_NORM_CASES))
+def test_relay_affine_prefix_output_norm(mesh_device, case):
+    batch, output_dtype = _NORM_CASES[case]
+    start, end, actual_start, actual_end = _bounds(mesh_device, "split-bounded")
+    relay = _relay(mesh_device)
+    transforms = _Transforms(mesh_device, relay, seed=start + end, batch=batch, output_dtype=output_dtype)
+    output, carry = _run(relay, transforms, actual_start, actual_end)
+    assert output.dtype == output_dtype
+    transforms.assert_matches_reference(output, carry, actual_start, start, end)
 
 
 @_MESH
 def test_relay_affine_prefix_applies_the_complement_form(mesh_device):
     """Hand-checkable relay of the complement form: rank r carries A = I / 2 (E = -I / 2) and B = (r + 1) I, except
     rank 3, which carries the identity map, (0, 0) as an empty rank's summary publishes it. From S = 10 I every entry
-    state is a small dyadic multiple of I, exact in FP32, in the matmuls' source registers and in the BF16 outputs, so
-    each rank's outputs (its entry state's rows) and the carry must match the hand values bit for bit. A relay that read
-    E as A would send -4 I from rank 0, and 0 from rank 3."""
+    state is a small dyadic multiple of I, exact in FP32 and in the matmuls' source registers, so every rank's carry must
+    match the hand value bit for bit. A relay that read E as A would send -4 I from rank 0, and 0 from rank 3."""
     sp_size, tp_size = tuple(mesh_device.shape)
     eye = torch.eye(_KEY)
     scales = [(0.0, 0.0) if rank == 3 else (-0.5, rank + 1.0) for rank in range(sp_size)]
@@ -311,9 +362,8 @@ def test_relay_affine_prefix_applies_the_complement_form(mesh_device):
     b = torch.stack([torch.stack([b_scale * eye] * _HEADS) for _, b_scale in scales])
     transforms.packed = _pack(mesh_device, e + eye, b)
     transforms.initial_tt = _replicated(mesh_device, 10 * eye.expand(_HEADS, _KEY, _KEY).contiguous())
-    rows = _scaled_identity_rows()
     zero = torch.zeros(_HEADS, _KEY, _KEY)
-    transforms.inputs = _inputs(mesh_device, relay, torch.zeros_like(rows), rows, zero, zero)
+    transforms.inputs = _inputs(mesh_device, relay, transforms.zero, transforms.identity, zero, zero)
     # From rank 0: 10, 6, 5, 5.5, 5.5 (identity), 7.75, 9.875, 11.9375 for 8 ranks; the hand recurrence below.
     entries, carry = [], 10.0
     for e_scale, b_scale in scales:
@@ -321,14 +371,9 @@ def test_relay_affine_prefix_applies_the_complement_form(mesh_device):
         carry = carry + e_scale * carry + b_scale
     if sp_size == 8:
         assert entries == [10.0, 6.0, 5.0, 5.5, 5.5, 7.75, 9.875, 11.9375] and carry == 13.96875
-    output, final = _run(relay, transforms, make_actual_start(mesh_device, 0))
-    for index, (local_output, local_final) in enumerate(
-        zip(ttnn.get_device_tensors(output), ttnn.get_device_tensors(final), strict=True)
-    ):
+    _, final = _run(relay, transforms, make_actual_start(mesh_device, 0))
+    for index, local_final in enumerate(ttnn.get_device_tensors(final)):
         rank = index // tp_size
-        torch.testing.assert_close(
-            ttnn.to_torch(local_output).float(), entries[rank] * rows, rtol=0, atol=0, msg=f"output rank={rank}"
-        )
         torch.testing.assert_close(
             ttnn.to_torch(local_final),
             carry * eye.expand(_HEADS, _KEY, _KEY),
@@ -378,7 +423,14 @@ def test_relay_affine_prefix_applies_the_final_transition_of_a_separated_tail(me
     actual_end = None if end is None else make_actual_start(mesh_device, end)
     terms, _, _ = transforms.inputs
     output, carry = relay(
-        transforms.packed, terms, transforms.initial_tt, final_e_tt, final_b_tt, actual_start, actual_end
+        transforms.packed,
+        terms,
+        transforms.initial_tt,
+        final_e_tt,
+        final_b_tt,
+        transforms.norm,
+        actual_start,
+        actual_end,
     )
 
     _, prefix = transforms.reference(start)
@@ -420,11 +472,11 @@ def test_relay_affine_prefix_adds_the_entry_state_and_b_in_fp32(mesh_device):
 
 
 @_MESH
-def test_relay_affine_prefix_rejects_lofi(mesh_device, expect_error):
-    """B enters the hop as I @ B, exact only from HiFi2 on: LoFi is refused."""
-    relay = _relay(mesh_device, math_fidelity=ttnn.MathFidelity.LoFi)
+def test_relay_affine_prefix_rejects_low_fidelity(mesh_device, expect_error):
+    """Below HiFi3 the norm's FPU products truncate 1 / rms and the squares: HiFi2 is refused."""
+    relay = _relay(mesh_device, math_fidelity=ttnn.MathFidelity.HiFi2)
     transforms = _Transforms(mesh_device, relay, seed=0)
-    with expect_error(RuntimeError, "LoFi is unsupported"):
+    with expect_error(RuntimeError, "needs HiFi3 or above"):
         _run(relay, transforms, make_actual_start(mesh_device, 0))
 
 
@@ -505,7 +557,7 @@ def _perf_case(shape: tuple[int, int], topology: str, case_id: str, reference_us
 
 # Device-time references in us, with K3's payload: Galaxy on TorusXY, LoudBox and QuietBox on TorusY.
 _PERF_CASES = [
-    _perf_case((8, 4), "mesh-8x4", "SP8xTP4", 141.0, 0.10),
+    _perf_case((8, 4), "mesh-8x4", "SP8xTP4", 174.0, 0.10),
     _perf_case((8, 1), "ring", "loudbox-SP8xTP1-ring", 388.0, 0.12),
     _perf_case((4, 1), "ring", "quietbox-SP4xTP1-ring", 75.5, 0.05),
 ]

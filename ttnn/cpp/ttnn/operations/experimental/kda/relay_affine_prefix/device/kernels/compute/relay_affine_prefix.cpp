@@ -3,12 +3,17 @@
 
 #include <cstdint>
 
+#include "api/compute/bcast.h"
 #include "api/compute/cb_api.h"
+#include "api/compute/compute_kernel_api.h"
 #include "api/compute/compute_kernel_hw_startup.h"
 #include "api/compute/eltwise_binary.h"
 #include "api/compute/eltwise_binary_sfpu.h"
+#include "api/compute/eltwise_unary/binop_with_scalar.h"
+#include "api/compute/eltwise_unary/rsqrt.h"
 #include "api/compute/matmul.h"
 #include "api/compute/reconfig_data_format.h"
+#include "api/compute/reduce.h"
 #include "api/compute/tile_move_copy.h"
 #include "ttnn/cpp/ttnn/operations/experimental/kda/device/kernels/compute/matmul_subblock.hpp"
 
@@ -29,7 +34,7 @@ constexpr uint32_t cb_p = get_compile_time_arg_val(9);
 constexpr uint32_t cb_p_exact = get_compile_time_arg_val(10);
 // The reader's {holder, split, chunks, group chunks}.
 constexpr uint32_t cb_ctl = get_compile_time_arg_val(11);
-// The entry correction: the seeds, the chunk terms, their differences and the chunk outputs.
+// The entry correction: the seeds, the chunk terms, their differences and the chunk outputs (FP32).
 constexpr uint32_t cb_seed = get_compile_time_arg_val(12);
 constexpr uint32_t cb_tail = get_compile_time_arg_val(13);
 constexpr uint32_t cb_terms = get_compile_time_arg_val(14);
@@ -42,13 +47,27 @@ constexpr bool streamed = get_compile_time_arg_val(18);
 constexpr uint32_t cores_per_head = get_compile_time_arg_val(19);
 constexpr uint32_t grid_x = get_compile_time_arg_val(20);
 constexpr uint32_t first_core = get_compile_time_arg_val(21);
+// The gated output norm of each chunk row x: x / sqrt(mean(x^2) + epsilon) * g with g = sigmoid(gate) * weight. The
+// squares, the mean's scaler, 1 / rms, the gate rows, the weight (row 0 of its tiles) and broadcast down every row,
+// each chunk's g (formed while the seeds are on their way: all in place, one streamed), and the result.
+constexpr uint32_t cb_square = get_compile_time_arg_val(22);
+constexpr uint32_t cb_scaler = get_compile_time_arg_val(23);
+constexpr uint32_t cb_inv_rms = get_compile_time_arg_val(24);
+constexpr uint32_t cb_gate = get_compile_time_arg_val(25);
+constexpr uint32_t cb_weight = get_compile_time_arg_val(26);
+constexpr uint32_t cb_weight_rows = get_compile_time_arg_val(27);
+constexpr uint32_t cb_norm = get_compile_time_arg_val(28);
+constexpr uint32_t cb_gate_factor = get_compile_time_arg_val(29);
+constexpr uint32_t epsilon_bits = get_compile_time_arg_val(30);
+// An FP32 output takes the FP32-accurate sigmoid; a BF16 one needs only the BF16-accurate exp and one reciprocal step.
+constexpr bool fp32_output = get_compile_time_arg_val(31);
 constexpr uint32_t state_tiles = kt * kt;
 constexpr uint32_t dst_tiles =
     ckernel::get_dest_max_tiles<DST_SYNC_MODE, DST_ACCUM_MODE, ckernel::DstTileShape::Tile32x32>();
 // A tile column of the next state is formed in one DST pass (the op checks K against the DST).
 static_assert(kt <= dst_tiles);
-// The carry pass forms `carry_rows` tiles of a column per DST pass, with P's tiles beside them.
-constexpr uint32_t carry_rows = kda::largest_divisor_at_most(kt, dst_tiles / 2);
+// A DST pass of the carry or the norm takes `half_dst` tiles, with as many operand tiles beside them.
+constexpr uint32_t half_dst = kda::largest_divisor_at_most(kt, dst_tiles / 2);
 // The terms buffer holds a chunk row of F(0) at tile row, and of F(I) at fi_offset further: in place, the core's whole
 // shard (core_chunks rows of F(0), then of F(I)); streamed, one chunk at a time.
 constexpr uint32_t fi_offset = (streamed ? 1 : core_chunks) * kt;
@@ -112,38 +131,38 @@ void carry_pass(bool split) {
         cb_reserve_back(cb_eout, kt);
         cb_wait_front(cb_p, (j + 1) * kt);
         cb_wait_front(cb_p_exact, (j + 1) * kt);
-        for (uint32_t r0 = 0; r0 < kt; r0 += carry_rows) {
+        for (uint32_t r0 = 0; r0 < kt; r0 += half_dst) {
             tile_regs_acquire();
             if (split) {
                 reconfig_data_format_srca(cb_fb);
                 copy_init(cb_fb);
-                for (uint32_t i = 0; i < carry_rows; ++i) {
+                for (uint32_t i = 0; i < half_dst; ++i) {
                     copy_tile(cb_fb, (r0 + i) * kt + j, i);
                 }
                 reconfig_data_format_srca(cb_p_exact);
                 copy_init(cb_p_exact);
-                for (uint32_t i = 0; i < carry_rows; ++i) {
-                    copy_tile(cb_p_exact, j * kt + r0 + i, carry_rows + i);
+                for (uint32_t i = 0; i < half_dst; ++i) {
+                    copy_tile(cb_p_exact, j * kt + r0 + i, half_dst + i);
                 }
                 add_binary_tile_init();
-                for (uint32_t i = 0; i < carry_rows; ++i) {
-                    add_binary_tile(i, carry_rows + i, i);
+                for (uint32_t i = 0; i < half_dst; ++i) {
+                    add_binary_tile(i, half_dst + i, i);
                 }
                 reconfig_data_format<SrcOrder::Reverse>(cb_fe, cb_p);
-                matmul_block_init(cb_fe, cb_p, false, 1, carry_rows, kt);
+                matmul_block_init(cb_fe, cb_p, false, 1, half_dst, kt);
                 for (uint32_t k = 0; k < kt; ++k) {
-                    matmul_block(cb_fe, cb_p, r0 * kt + k, j * kt + k, 0, false, 1, carry_rows, kt);
+                    matmul_block(cb_fe, cb_p, r0 * kt + k, j * kt + k, 0, false, 1, half_dst, kt);
                 }
             } else {
                 reconfig_data_format_srca(cb_p_exact);
                 copy_init(cb_p_exact);
-                for (uint32_t i = 0; i < carry_rows; ++i) {
+                for (uint32_t i = 0; i < half_dst; ++i) {
                     copy_tile(cb_p_exact, j * kt + r0 + i, i);
                 }
             }
             tile_regs_commit();
             tile_regs_wait();
-            for (uint32_t i = 0; i < carry_rows; ++i) {
+            for (uint32_t i = 0; i < half_dst; ++i) {
                 pack_tile(i, cb_eout);
             }
             tile_regs_release();
@@ -177,47 +196,172 @@ void subtract(uint32_t first, uint32_t tiles) {
     }
 }
 
-// Chunk outputs F0_c + (FI_c - F0_c) @ seed for this core's chunks [begin, end), accumulated in the FP32 DST on top of
-// the copied F0. The seed is column-major by tile and lands a tile column at a time: output column j needs only seed
-// column j, so the columns are formed as they land, up to dst_tiles chunks per pass, and packed into their rows. In
-// place the differences are already formed; streamed, each chunk's is formed just before its products.
+// The norm weight's row 0 broadcast down every row, for the elementwise product with each output row.
+void broadcast_weight() {
+    cb_wait_front(cb_weight, kt);
+    cb_reserve_back(cb_weight_rows, kt);
+    pack_reconfig_data_format(cb_weight_rows);
+    reconfig_data_format(cb_weight, cb_weight);
+    unary_bcast_init<BroadcastType::ROW>(cb_weight);
+    for (uint32_t j = 0; j < kt; ++j) {
+        tile_regs_acquire();
+        unary_bcast<BroadcastType::ROW>(cb_weight, j, 0);
+        tile_regs_commit();
+        tile_regs_wait();
+        pack_tile(0, cb_weight_rows);
+        tile_regs_release();
+    }
+    cb_push_back(cb_weight_rows, kt);
+    cb_pop_front(cb_weight, kt);
+    cb_wait_front(cb_weight_rows, kt);
+}
+
+// Each of the next `chunks` gate rows into its chunk's g = sigmoid(gate) * weight.
+void gate_factors(uint32_t chunks) {
+    pack_reconfig_data_format(cb_gate_factor);
+    for (uint32_t c = 0; c < chunks; ++c) {
+        cb_wait_front(cb_gate, kt);
+        cb_reserve_back(cb_gate_factor, kt);
+        tile_regs_acquire();
+        reconfig_data_format_srca(cb_gate);
+        copy_init(cb_gate);
+        for (uint32_t j = 0; j < kt; ++j) {
+            copy_tile(cb_gate, j, j);
+        }
+        sigmoid_tile_init();
+        for (uint32_t j = 0; j < kt; ++j) {
+            sigmoid_tile<VectorMode::RC, false, fp32_output>(j);
+        }
+        reconfig_data_format(cb_weight_rows, cb_weight_rows);
+        mul_reuse_dest_init<EltwiseBinaryReuseDestType::DEST_TO_SRCA>(cb_weight_rows);
+        for (uint32_t j = 0; j < kt; ++j) {
+            mul_reuse_dest_tiles<EltwiseBinaryReuseDestType::DEST_TO_SRCA>(cb_weight_rows, j, j);
+        }
+        tile_regs_commit();
+        tile_regs_wait();
+        for (uint32_t j = 0; j < kt; ++j) {
+            pack_tile(j, cb_gate_factor);
+        }
+        tile_regs_release();
+        cb_push_back(cb_gate_factor, kt);
+        cb_pop_front(cb_gate, kt);
+    }
+}
+
+// The gated norm of the chunk row in cb_out, with the front g of cb_gate_factor, into cb_norm.
+void normalize() {
+    cb_reserve_back(cb_square, kt);
+    pack_reconfig_data_format(cb_square);
+    reconfig_data_format(cb_out, cb_out);
+    mul_init(cb_out, cb_out);
+    tile_regs_acquire();
+    for (uint32_t j = 0; j < kt; ++j) {
+        mul_tiles(cb_out, cb_out, j, j, j);
+    }
+    tile_regs_commit();
+    tile_regs_wait();
+    for (uint32_t j = 0; j < kt; ++j) {
+        pack_tile(j, cb_square);
+    }
+    tile_regs_release();
+    cb_push_back(cb_square, kt);
+    // The row means land in column 0, all the column broadcast reads: epsilon and rsqrt on that column only.
+    cb_wait_front(cb_square, kt);
+    cb_reserve_back(cb_inv_rms, 1);
+    pack_reconfig_data_format(cb_inv_rms);
+    reconfig_data_format(cb_scaler, cb_square);
+    reduce_init<PoolType::AVG, ReduceDim::REDUCE_ROW>(cb_square, cb_scaler, cb_inv_rms);
+    tile_regs_acquire();
+    for (uint32_t j = 0; j < kt; ++j) {
+        reduce_tile<PoolType::AVG, ReduceDim::REDUCE_ROW>(cb_square, cb_scaler, j, 0, 0);
+    }
+    reduce_uninit();
+    binop_with_scalar_tile_init();
+    add_unary_tile(0, epsilon_bits, VectorMode::C);
+    rsqrt_tile_init();
+    rsqrt_tile(0, VectorMode::C);
+    tile_regs_commit();
+    tile_regs_wait();
+    pack_tile(0, cb_inv_rms);
+    tile_regs_release();
+    cb_push_back(cb_inv_rms, 1);
+    cb_pop_front(cb_square, kt);
+    // Per pass: x / rms on the FPU, then times g beside it on the SFPU, in FP32.
+    cb_wait_front(cb_inv_rms, 1);
+    cb_wait_front(cb_gate_factor, kt);
+    cb_reserve_back(cb_norm, kt);
+    pack_reconfig_data_format(cb_norm);
+    for (uint32_t first = 0; first < kt; first += half_dst) {
+        tile_regs_acquire();
+        reconfig_data_format(cb_out, cb_inv_rms);
+        mul_bcast_cols_init(cb_out, cb_inv_rms);
+        for (uint32_t j = 0; j < half_dst; ++j) {
+            mul_tiles_bcast_cols(cb_out, cb_inv_rms, first + j, 0, j);
+        }
+        reconfig_data_format_srca(cb_gate_factor);
+        copy_init(cb_gate_factor);
+        for (uint32_t j = 0; j < half_dst; ++j) {
+            copy_tile(cb_gate_factor, first + j, half_dst + j);
+        }
+        mul_binary_tile_init();
+        for (uint32_t j = 0; j < half_dst; ++j) {
+            mul_binary_tile(j, half_dst + j, j);
+        }
+        tile_regs_commit();
+        tile_regs_wait();
+        for (uint32_t j = 0; j < half_dst; ++j) {
+            pack_tile(j, cb_norm);
+        }
+        tile_regs_release();
+    }
+    cb_push_back(cb_norm, kt);
+    cb_pop_front(cb_inv_rms, 1);
+    cb_pop_front(cb_gate_factor, kt);
+}
+
+// Chunk outputs x = F0_c + (FI_c - F0_c) @ seed for this core's chunks [begin, end), a row at a time once the whole
+// seed has landed: F0's row is copied into the FP32 DST and the K-sum of each column accumulates on top of it, then the
+// row is normalized. In place the differences are already formed; streamed, each chunk's is formed just before its
+// products, and its g with it.
 void correct(uint32_t begin, uint32_t end, uint32_t seed) {
-    const uint32_t block = streamed ? 1 : end - begin;
-    for (uint32_t first = begin; first < end; first += block) {
+    if (begin != end) {
+        cb_wait_front(seed, state_tiles);
+    }
+    for (uint32_t c = begin; c < end; ++c) {
         if constexpr (streamed) {
             cb_wait_front(cb_terms, terms_tiles);
             cb_reserve_back(cb_diff, kt);
             subtract(0, kt);
             cb_push_back(cb_diff, kt);
             cb_wait_front(cb_diff, kt);
+            gate_factors(1);
         }
+        const uint32_t row = streamed ? 0 : c * kt;
+        cb_reserve_back(cb_out, kt);
         pack_reconfig_data_format(cb_out);
-        cb_reserve_back(cb_out, block * kt);
+        tile_regs_acquire();
+        reconfig_data_format_srca(cb_terms);
+        copy_init(cb_terms);
         for (uint32_t j = 0; j < kt; ++j) {
-            cb_wait_front(seed, (j + 1) * kt);
-            for (uint32_t c = 0; c < block; c += dst_tiles) {
-                const uint32_t rows = block - c < dst_tiles ? block - c : dst_tiles;
-                const uint32_t row = streamed ? 0 : (first + c) * kt;
-                tile_regs_acquire();
-                reconfig_data_format_srca(cb_terms);
-                copy_init(cb_terms);
-                for (uint32_t i = 0; i < rows; ++i) {
-                    copy_tile(cb_terms, row + i * kt + j, i);
-                }
-                reconfig_data_format<SrcOrder::Reverse>(cb_diff, seed);
-                matmul_block_init(cb_diff, seed, false, 1, rows, kt);
-                for (uint32_t k = 0; k < kt; ++k) {
-                    matmul_block(cb_diff, seed, row + k, j * kt + k, 0, false, 1, rows, kt);
-                }
-                tile_regs_commit();
-                tile_regs_wait();
-                for (uint32_t i = 0; i < rows; ++i) {
-                    pack_tile<true>(i, cb_out, (c + i) * kt + j);
-                }
-                tile_regs_release();
+            copy_tile(cb_terms, row + j, j);
+        }
+        reconfig_data_format<SrcOrder::Reverse>(cb_diff, seed);
+        matmul_block_init(cb_diff, seed, false, 1, 1, kt);
+        for (uint32_t j = 0; j < kt; ++j) {
+            for (uint32_t k = 0; k < kt; ++k) {
+                matmul_block(cb_diff, seed, row + k, j * kt + k, j, false, 1, 1, kt);
             }
         }
-        cb_push_back(cb_out, block * kt);
+        tile_regs_commit();
+        tile_regs_wait();
+        for (uint32_t j = 0; j < kt; ++j) {
+            pack_tile(j, cb_out);
+        }
+        tile_regs_release();
+        cb_push_back(cb_out, kt);
+        cb_wait_front(cb_out, kt);
+        normalize();
+        cb_pop_front(cb_out, kt);
         if constexpr (streamed) {
             cb_pop_front(cb_terms, terms_tiles);
             cb_pop_front(cb_diff, kt);
@@ -239,16 +383,35 @@ void kernel_main() {
     const uint32_t group_chunks = read_tile_value(cb_ctl, 0, 3);
     cb_pop_front(cb_ctl, 1);
 
+    // The norm's weight rows and, in place, every chunk's g while the seeds are on their way; on a head core after
+    // the hop on the first rank, before it elsewhere (the entry state arrives after a share of the lap).
+    const auto prepare_norm = [&]() {
+        if (chunks != 0) {
+            cb_wait_front(cb_scaler, 1);
+            broadcast_weight();
+        }
+        if constexpr (!streamed) {
+            gate_factors(chunks);
+        }
+    };
+    if (relay_head && !holder) {
+        prepare_norm();
+    }
     if (relay_head) {
         relay_hop();
     }
-    // In place, the differences for all of this core's chunks first: they need no seed.
-    if (!streamed && chunks != 0) {
-        cb_wait_front(cb_terms, terms_tiles);
-        cb_reserve_back(cb_diff, chunks * kt);
-        subtract(0, chunks * kt);
-        cb_push_back(cb_diff, chunks * kt);
-        cb_wait_front(cb_diff, chunks * kt);
+    if (!relay_head || holder) {
+        prepare_norm();
+    }
+    // In place, every chunk's difference while the seeds are on their way.
+    if constexpr (!streamed) {
+        if (chunks != 0) {
+            cb_wait_front(cb_terms, terms_tiles);
+            cb_reserve_back(cb_diff, chunks * kt);
+            subtract(0, chunks * kt);
+            cb_push_back(cb_diff, chunks * kt);
+            cb_wait_front(cb_diff, chunks * kt);
+        }
     }
     correct(0, group_chunks, cb_seed);
     if (relay_head && holder) {
@@ -264,5 +427,9 @@ void kernel_main() {
     if (!streamed && chunks != 0) {
         cb_pop_front(cb_terms, terms_tiles);
         cb_pop_front(cb_diff, chunks * kt);
+    }
+    if (chunks != 0) {
+        cb_pop_front(cb_weight_rows, kt);
+        cb_pop_front(cb_scaler, 1);
     }
 }

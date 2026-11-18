@@ -5,6 +5,7 @@
 
 #include <algorithm>
 #include <array>
+#include <cmath>
 #include <set>
 #include <span>
 
@@ -33,6 +34,8 @@ void RelayAffinePrefixOperation::validate_on_program_cache_hit(const operation_a
         {&in.landing, "landing"},
         {&in.final_e, "final_e"},
         {&in.final_b, "final_b"},
+        {&in.output_gate, "output_gate"},
+        {&in.norm_weight, "norm_weight"},
         {in.slab_index ? &*in.slab_index : nullptr, "slab_index"}};
     kda_factory_detail::check_allocated_on_device(in.packed, tensors, operation_name);
     kda_factory_detail::check_distinct_buffers(tensors, operation_name);
@@ -181,6 +184,8 @@ void RelayAffinePrefixOperation::validate_on_program_cache_miss(
          {&in.initial_state, "initial_state"},
          {&in.actual_start, "actual_start"},
          {&in.landing, "landing"},
+         {&in.output_gate, "output_gate"},
+         {&in.norm_weight, "norm_weight"},
          {in.slab_index ? &*in.slab_index : nullptr, "slab_index"}},
         operation_name);
     for (const auto& [tensor, name] : {std::pair{&in.final_e, "final_e"}, std::pair{&in.final_b, "final_b"}}) {
@@ -236,13 +241,58 @@ void RelayAffinePrefixOperation::validate_on_program_cache_miss(
             operation_name,
             chunks * tt::constants::TILE_HEIGHT);
     }
+    // The gated output norm.
+    for (const auto& [tensor, name] :
+         {std::pair{&in.output_gate, "output_gate"}, std::pair{&in.norm_weight, "norm_weight"}}) {
+        kda_factory_detail::check_allocated_device_tensor(*tensor, operation_name, name);
+        kda_factory_detail::check_layout(*tensor, tt::tt_metal::Layout::TILE, operation_name, name);
+        kda_factory_detail::check_dtype(*tensor, tt::tt_metal::DataType::BFLOAT16, operation_name, name);
+        kda_factory_detail::check_interleaved(*tensor, operation_name, name);
+        kda_factory_detail::check_same_device(in.packed, *tensor, operation_name, name);
+    }
+    TT_FATAL(
+        attrs.num_heads > 0 && heads % attrs.num_heads == 0,
+        "{}: {} heads are not a whole number of batches of {}",
+        operation_name,
+        heads,
+        attrs.num_heads);
+    const auto& gate_shape = in.output_gate.logical_shape();
+    TT_FATAL(
+        attrs.gate_column_offset % tt::constants::TILE_WIDTH == 0,
+        "{}: gate_column_offset {} must be tile aligned",
+        operation_name,
+        attrs.gate_column_offset);
+    TT_FATAL(
+        gate_shape.rank() == 3 && gate_shape[0] == heads / attrs.num_heads && gate_shape[1] == attrs.local_rows &&
+            gate_shape[2] >= attrs.gate_column_offset + attrs.num_heads * key_dim,
+        "{}: output_gate {} must be [{}, {}, W] with H*K = {} columns from gate_column_offset {}",
+        operation_name,
+        gate_shape,
+        heads / attrs.num_heads,
+        attrs.local_rows,
+        attrs.num_heads * key_dim,
+        attrs.gate_column_offset);
+    TT_FATAL(
+        in.norm_weight.logical_shape().rank() == 1 && in.norm_weight.logical_shape()[0] == key_dim,
+        "{}: norm_weight must be [K] with K = {}",
+        operation_name,
+        key_dim);
+    TT_FATAL(
+        std::isfinite(attrs.norm_epsilon) && attrs.norm_epsilon > 0.0f,
+        "{}: norm_epsilon must be finite and positive",
+        operation_name);
+    TT_FATAL(
+        attrs.output_dtype == tt::tt_metal::DataType::FLOAT32 || attrs.output_dtype == tt::tt_metal::DataType::BFLOAT16,
+        "{}: output_dtype must be FLOAT32 or BFLOAT16",
+        operation_name);
     kda_factory_detail::check_output_interleaved(attrs.output_mem_config, operation_name);
     kda_factory_detail::check_compute_config(attrs.compute_kernel_config, operation_name);
     kda_factory_detail::check_fp32_dest_acc(
         attrs.compute_kernel_config, operation_name, "the hop adds the FP32 entry state and B exactly in DST");
     TT_FATAL(
-        attrs.compute_kernel_config.math_fidelity != tt::tt_metal::MathFidelity::LoFi,
-        "{}: LoFi is unsupported because B enters the hop as I @ B, exact only from HiFi2 on",
+        attrs.compute_kernel_config.math_fidelity == tt::tt_metal::MathFidelity::HiFi3 ||
+            attrs.compute_kernel_config.math_fidelity == tt::tt_metal::MathFidelity::HiFi4,
+        "{}: needs HiFi3 or above: below it the norm's FPU products truncate 1 / rms and the squares",
         operation_name);
     // Compute forms a K-tile column of the next state in one DST pass.
     const uint32_t dst_tiles = ttnn::get_dest_reg_count(attrs.compute_kernel_config);
@@ -261,15 +311,13 @@ RelayAffinePrefixOperation::spec_return_value_t RelayAffinePrefixOperation::comp
             return tt::tt_metal::TensorSpec(
                 shape, tt::tt_metal::TensorLayout(dtype, tt::tt_metal::PageConfig(tt::tt_metal::Layout::TILE), memory));
         };
-    // The chunk outputs [B*H, chunks, 32, V], and the final carry: with a slab, written into the slab's entry, in
-    // place.
+    // The normalized outputs [B, T, H*V], and the final carry: with a slab, written into the slab's entry, in place.
     const auto [heads, key_dim] = relay_state_geometry(in);
     const uint32_t value_dim = in.initial_state.logical_shape()[-1];
-    const uint32_t chunks = attrs.local_rows / tt::constants::TILE_HEIGHT;
     return {
         spec(
-            Shape({heads, chunks, tt::constants::TILE_HEIGHT, value_dim}),
-            tt::tt_metal::DataType::BFLOAT16,
+            Shape({heads / attrs.num_heads, attrs.local_rows, attrs.num_heads * value_dim}),
+            attrs.output_dtype,
             attrs.output_mem_config),
         in.slab_index
             ? in.initial_state.tensor_spec()
@@ -309,9 +357,15 @@ std::tuple<Tensor, Tensor> relay_affine_prefix(
     const Tensor& initial_state,
     const Tensor& final_e,
     const Tensor& final_b,
+    const Tensor& output_gate,
+    const Tensor& norm_weight,
     const Tensor& actual_start,
     const std::optional<Tensor>& actual_end,
     const Tensor& landing,
+    uint32_t num_heads,
+    uint32_t gate_column_offset,
+    float norm_epsilon,
+    tt::tt_metal::DataType output_dtype,
     const tt::tt_metal::MemoryConfig& memory_config,
     const DeviceComputeKernelConfig& compute_kernel_config,
     const std::array<uint32_t, 3>& semaphore_addresses,
@@ -328,6 +382,10 @@ std::tuple<Tensor, Tensor> relay_affine_prefix(
             .local_rows = local_rows,
             .num_links = num_links,
             .cores = cores,
+            .num_heads = num_heads,
+            .gate_column_offset = gate_column_offset,
+            .norm_epsilon = norm_epsilon,
+            .output_dtype = output_dtype,
             .output_mem_config = memory_config,
             .compute_kernel_config = compute_kernel_config,
             .semaphore_addresses = semaphore_addresses,
@@ -342,6 +400,8 @@ std::tuple<Tensor, Tensor> relay_affine_prefix(
             .final_e = final_e,
             .final_b = final_b,
             .actual_end = actual_end,
+            .output_gate = output_gate,
+            .norm_weight = norm_weight,
             .slab_index = slab_index});
     return {outputs[0], outputs[1]};
 }
