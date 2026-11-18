@@ -264,6 +264,12 @@ class Flux2VaeEncoder(Module):
         self._ctx = ctx
 
         configure_conv2d(self, config_tensors_in_dram=True)
+        # A fixed shard scheme, so each conv prepares its weights once instead of per image size. On a
+        # T3K (2x4) for reference sizes from 256x256 to 1024x1024, square and not, these convs are
+        # block-sharded by conv2d on its own. conv_in is left to conv2d: its 3 input channels are not
+        # a whole tile, so it prepares its weights per size anyway.
+        for module in (self.down_blocks, self.mid_block, self.conv_out):
+            configure_conv2d(module, shard_layout=ttnn.TensorMemoryLayout.BLOCK_SHARDED)
 
     def _prepare_torch_state(self, state: dict[str, torch.Tensor]) -> None:
         pop_substate(state, "decoder")
