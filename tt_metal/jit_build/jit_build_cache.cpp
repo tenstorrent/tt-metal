@@ -25,33 +25,40 @@ bool JitBuildCache::build_once(size_t hash, const std::function<void()>& build_f
 }
 
 JitBuildCache::BuildOnceStatus JitBuildCache::build_once_no_wait(size_t hash, const std::function<void()>& build_fn) {
-    std::unique_lock<std::mutex> lock(mutex_);
-
-    auto it = entries_.find(hash);
-    if (it != entries_.end()) {
-        return it->second == State::Built ? BuildOnceStatus::AlreadyBuilt : BuildOnceStatus::InProgress;
+    const BuildOnceStatus status = claim(hash);
+    if (status != BuildOnceStatus::BuiltByCaller) {
+        return status;
     }
-
-    // Hash not present -- we are the builder.
-    entries_.emplace(hash, State::Building);
-    lock.unlock();
-
     try {
         build_fn();
     } catch (...) {
         // Build failed -- remove the entry so subsequent callers can retry.
-        std::lock_guard<std::mutex> guard(mutex_);
-        entries_.erase(hash);
-        cv_.notify_all();
+        release(hash, false);
         throw;
     }
+    release(hash, true);
+    return BuildOnceStatus::BuiltByCaller;
+}
 
+JitBuildCache::BuildOnceStatus JitBuildCache::claim(size_t hash) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    auto [it, inserted] = entries_.try_emplace(hash, State::Building);
+    if (!inserted) {
+        return it->second == State::Built ? BuildOnceStatus::AlreadyBuilt : BuildOnceStatus::InProgress;
+    }
+    return BuildOnceStatus::BuiltByCaller;
+}
+
+void JitBuildCache::release(size_t hash, bool built) {
     {
         std::lock_guard<std::mutex> guard(mutex_);
-        entries_[hash] = State::Built;
+        if (built) {
+            entries_[hash] = State::Built;
+        } else {
+            entries_.erase(hash);
+        }
     }
     cv_.notify_all();
-    return BuildOnceStatus::BuiltByCaller;
 }
 
 void JitBuildCache::clear() {

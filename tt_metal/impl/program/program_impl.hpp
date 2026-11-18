@@ -22,12 +22,12 @@
 #include "impl/buffers/semaphore.hpp"
 #include "impl/metal2_host_api/sram_arena_support.hpp"
 #include "tt-metalium/sub_device_types.hpp"
-#include "tt-metalium/tensor/spec/tensor_spec.hpp"                               // Metal 2.0 TensorParameter registry
+#include "tt-metalium/tensor/spec/tensor_spec.hpp"                         // Metal 2.0 TensorParameter registry
 #include "tt-metalium/workload/specification/tensor_spec_relaxations.hpp"  // Metal 2.0 TensorParameter relaxations
 #include "tt-metalium/experimental/sram_arena/sram_arena_properties.hpp"
 #include "tt-metalium/experimental/metal2_host_api/sram_arena_parameter.hpp"
 #include "tt-metalium/workload/specification/tensor_parameter.hpp"
-#include "tt-metalium/experimental/prefetcher_pipe.hpp"                          // PrefetcherPipeIdentity
+#include "tt-metalium/experimental/prefetcher_pipe.hpp"  // PrefetcherPipeIdentity
 #include "tt_metal/impl/dataflow_buffer/dataflow_buffer_impl.hpp"
 #include <impl/context/context_types.hpp>
 
@@ -225,8 +225,6 @@ struct BoundTensorFootprint {
 
 BoundTensorFootprint make_bound_tensor_footprint(const MeshTensor& tensor);
 
-struct KernelBuildJob;
-
 // The internal implementation of the Program class. Program is a view of this class that's usable by API clients.
 class ProgramImpl : public std::enable_shared_from_this<ProgramImpl> {
 public:
@@ -285,12 +283,6 @@ public:
     /// objects on disk are reused unless the content hash of a source or header dependency changed (or
     /// TT_METAL_FORCE_JIT_COMPILE is set). A program is compiled once per build key; later calls return early.
     void compile(IDevice* device, bool force_slow_dispatch = false);
-    // Resolves the build inputs of every kernel as compile() would, without building anything, so that an
-    // experimental::CompileSession can build them later without the device. Returns nothing for a program
-    // already compiled for this device's build key, or one compile() would not build (mock Quasar, Emule). The
-    // caller marks the program compiled: preparing changes its kernels (build options, full name) the way
-    // compile() would, and the session reads them from another thread.
-    std::vector<KernelBuildJob> prepare_kernel_builds(IDevice* device);
     void compile_and_allocate(IDevice* device, bool force_slow_dispatch);
     void invalidate_circular_buffer_allocation();
     void invalidate_dataflow_buffer_allocation();
@@ -870,7 +862,7 @@ private:
     ContextId context_id_{DEFAULT_CONTEXT_ID};
     uint32_t programmable_core_count_;
     uint32_t max_dfbs_;  // Architecture-specific max DFBs
-    uint64_t id;        // Need to make non-const due to move constructor
+    uint64_t id;         // Need to make non-const due to move constructor
     uint64_t runtime_id{0};
     static std::atomic<uint64_t> program_counter;
     // Programmable core type index -> KernelHandle -> Kernel
@@ -995,8 +987,7 @@ private:
 
     void set_remote_circular_buffer_init(const std::shared_ptr<Kernel>& kernel) const;
 
-    // Build options and compile hash of one kernel; sets the kernel's full name. Shared by compile() and
-    // prepare_kernel_builds().
+    // Build options and compile hash of one kernel; sets the kernel's full name.
     std::pair<JitBuildOptions, std::size_t> prep_kernel_build(
         const std::shared_ptr<Kernel>& kernel, const DeviceBuildEnv& build_env);
 

@@ -87,7 +87,7 @@
 #include "tt_metal/jit_build/genfiles.hpp"
 #include "tt_metal/jit_build/jit_build_utils.hpp"
 #include "impl/jit_server/remote_compile_coordinator.hpp"
-#include "impl/program/kernel_build_job.hpp"
+#include "impl/program/kernel_build.hpp"
 #include "jit_build/jit_build_cache.hpp"
 #include "kernel_compile_utils.hpp"
 #include <tt-umd/types/core_coordinates.hpp>
@@ -416,47 +416,37 @@ KernelCompileDescriptor build_kernel_descriptor(
     return desc;
 }
 
-// With no_wait, returns nullopt instead of waiting while another thread builds kernel_hash.
-std::optional<std::string> ensure_kernel_binaries(
-    const std::shared_ptr<Kernel>& kernel,
-    IDevice* device,
-    JitBuildOptions& build_options,
-    const DeviceBuildEnv& build_env,
-    size_t kernel_hash,
-    bool no_wait = false) {
-    if (const auto& precompiled_config = kernel->precompiled_config(); precompiled_config.has_value()) {
-        if (kernel->binaries_exist_on_disk(device, precompiled_config->precompiled_dir)) {
-            log_debug(
-                tt::LogBuildKernels,
-                "Using precompiled kernel binaries. kernel_name={}, compile_hash={}, precompiled_dir={}",
-                kernel->name(),
-                kernel_hash,
-                precompiled_config->precompiled_dir);
-            return precompiled_config->precompiled_dir;
-        }
-
-        if (precompiled_config->fallback_policy == experimental::PrecompiledKernelConfig::FallbackPolicy::Error) {
-            throw experimental::PrecompiledKernelNotFoundError(
-                kernel->name(), kernel_hash, precompiled_config->precompiled_dir, precompiled_config->fallback_policy);
-        }
+// Builds one kernel into its build env's kernel cache, on the calling thread.
+void build_kernel_locally(detail::KernelBuild& build) {
+    try {
+        jit_build_genfiles_descriptors(build.build_env->build_env, build.build_options);
+        build.kernel->generate_binaries(*build.build_env_manager, *build.build_env);
+    } catch (std::runtime_error& ex) {
+        TT_THROW("Failed to generate binaries for {} {}", build.kernel->name(), ex.what());
     }
+}
 
-    auto build = [&] {
-        try {
-            jit_build_genfiles_descriptors(build_env.build_env, build_options);
-            kernel->generate_binaries(device, build_options);
-        } catch (std::runtime_error& ex) {
-            TT_THROW("Failed to generate binaries for {} {}", kernel->name(), ex.what());
-        }
-    };
-    if (no_wait) {
-        if (!jit_build_once_no_wait(kernel_hash, build)) {
-            return std::nullopt;
-        }
-    } else {
-        jit_build_once(kernel_hash, build);
+// Where a kernel with a precompiled config finds its binaries; nullopt when it is built like any other.
+std::optional<std::string> precompiled_binary_root(
+    const std::shared_ptr<Kernel>& kernel, IDevice* device, size_t kernel_hash) {
+    const auto& precompiled_config = kernel->precompiled_config();
+    if (!precompiled_config.has_value()) {
+        return std::nullopt;
     }
-    return build_env.build_env.get_out_kernel_root_path();
+    if (kernel->binaries_exist_on_disk(device, precompiled_config->precompiled_dir)) {
+        log_debug(
+            tt::LogBuildKernels,
+            "Using precompiled kernel binaries. kernel_name={}, compile_hash={}, precompiled_dir={}",
+            kernel->name(),
+            kernel_hash,
+            precompiled_config->precompiled_dir);
+        return precompiled_config->precompiled_dir;
+    }
+    if (precompiled_config->fallback_policy == experimental::PrecompiledKernelConfig::FallbackPolicy::Error) {
+        throw experimental::PrecompiledKernelNotFoundError(
+            kernel->name(), kernel_hash, precompiled_config->precompiled_dir, precompiled_config->fallback_policy);
+    }
+    return std::nullopt;
 }
 }  // namespace
 
@@ -3389,7 +3379,8 @@ void detail::ProgramImpl::compile(IDevice* device, bool force_slow_dispatch) {
     auto& device_context = MetalContext::instance(device_context_id);
     const auto& cluster = device_context.get_cluster();
 
-    const auto& build_env = device_context.build_env_manager().get_device_build_env(device->build_id());
+    const auto build_env_ptr = device_context.build_env_manager().get_device_build_env_ptr(device->build_id());
+    const DeviceBuildEnv& build_env = *build_env_ptr;
 
     if (compiled_.contains(build_env.build_key())) {
         Inspector::program_compile_already_exists(this, device, build_env.build_key());
@@ -3420,25 +3411,11 @@ void detail::ProgramImpl::compile(IDevice* device, bool force_slow_dispatch) {
         return;
     }
 
-    // A mock device never loads binaries: with a build sink on, the kernels go to its workers and the program is
-    // compiled as far as the run can tell.
-    if (cluster.get_target_device_type() == tt::TargetDevice::Mock &&
-        experimental::CompileSession::sink_kernel_builds(*this, device)) {
-        compiled_.insert(build_env.build_key());
-        Inspector::program_compile_finished(this, device, build_env.build_key());
-        return;
-    }
-
     TT_FATAL(
         device->is_initialized(),
         "Device needs to be initialized before program {} compilation! Generating headers for banking information is "
         "dependent on information that is set during device initialization.",
         this->get_id());
-
-    bool remote_enabled = jit_server::JitCompileRpcClient::enabled();
-    std::vector<std::shared_future<void>> events;
-
-    auto prep_kernel = [&](const std::shared_ptr<Kernel>& kernel) { return prep_kernel_build(kernel, build_env); };
 
     auto load_kernel_binaries = [&](const std::shared_ptr<Kernel>& kernel,
                                     const JitBuildOptions& build_options,
@@ -3456,92 +3433,62 @@ void detail::ProgramImpl::compile(IDevice* device, bool force_slow_dispatch) {
         }
     }
 
-    if (remote_enabled) {
-        // Remote path: prep and submit are sequential.  Parallelism is on compilation which happens on the remote
-        // server.
-        // TODO: precompiled kernel is not supported in remote mode
-        auto endpoints = jit_server::JitCompileRpcClient::endpoints_from_env();
+    std::vector<KernelBuild> builds;
+    std::vector<std::tuple<std::shared_ptr<Kernel>, JitBuildOptions, std::string>> precompiled;
+    for (const auto& kernels : kernels_) {
+        for (const auto& [id, kernel] : kernels) {
+            auto [build_options, kernel_hash] = prep_kernel_build(kernel, build_env);
+            if (auto binary_root = precompiled_binary_root(kernel, device, kernel_hash)) {
+                precompiled.emplace_back(kernel, std::move(build_options), std::move(*binary_root));
+                continue;
+            }
+            builds.push_back(KernelBuild{
+                .kernel = kernel,
+                .build_env = build_env_ptr,
+                .build_env_manager = &device_context.build_env_manager(),
+                .build_options = std::move(build_options),
+                .kernel_hash = kernel_hash,
+                .context_id = device_context_id,
+                .build_id = device->build_id()});
+        }
+    }
+
+    // A mock device never loads binaries: with a build sink on, the kernels go to its session and the program is
+    // compiled as far as the run can tell.
+    if (cluster.get_target_device_type() == tt::TargetDevice::Mock &&
+        experimental::CompileSession::takes_kernel_builds()) {
+        experimental::CompileSession::add_kernel_builds(std::move(builds));
+        compiled_.insert(build_env.build_key());
+        Inspector::program_compile_finished(this, device, build_env.build_key());
+        return;
+    }
+
+    std::vector<std::string> remote_endpoints;
+    if (jit_server::JitCompileRpcClient::enabled()) {
+        remote_endpoints = jit_server::JitCompileRpcClient::endpoints_from_env();
         TT_FATAL(
-            !endpoints.empty(),
+            !remote_endpoints.empty(),
             "TT_METAL_JIT_SERVER_ENABLE is set but no compile-server endpoints are configured. "
             "Set TT_METAL_JIT_SERVER_ENDPOINTS or TT_METAL_JIT_SERVER_ENDPOINT.");
-        RemoteCompileCoordinator coordinator(
-            std::move(endpoints), extract_context_id(device), device->build_id(), build_env.build_key());
-
-        static const bool preprocess_and_ship = std::getenv("TT_METAL_JIT_PREPROCESS") != nullptr;
-        std::vector<std::pair<std::shared_ptr<Kernel>, JitBuildOptions>> submitted_kernels;
-        // Kernels preprocess-and-shipped this run, whose reuse cache is written once the compile
-        // succeeds (from the .d files left by the -E step).
-        std::vector<std::shared_ptr<Kernel>> preprocessed_kernels;
-
-        size_t total_kernels = 0;
-        for (const auto& kernels : kernels_) {
-            total_kernels += kernels.size();
+    }
+    const std::string binary_root = build_env.build_env.get_out_kernel_root_path();
+    const auto statuses = build_kernels(builds, remote_endpoints, [&](KernelBuild& build) {
+        load_kernel_binaries(build.kernel, build.build_options, binary_root);
+    });
+    for (const auto& status : statuses) {
+        if (status.error) {
+            std::rethrow_exception(status.error);
         }
-        submitted_kernels.reserve(total_kernels);
-        preprocessed_kernels.reserve(total_kernels);
-
-        for (auto& kernels : kernels_) {
-            for (auto& [id, kernel] : kernels) {
-                auto [build_options, kernel_hash] = prep_kernel(kernel);
-                // Skip the remote round-trip when the ELF is already validly cached locally.
-                if (!remote_kernel_cached(device_context.build_env_manager(), build_env, kernel)) {
-                    coordinator.submit(kernel_hash, [&]() {
-                        generate_kernel_source_files(build_env, build_options, kernel);
-                        return build_kernel_descriptor(
-                            device_context.build_env_manager(), build_env, kernel, build_options, kernel_hash);
-                    });
-                    if (preprocess_and_ship) {
-                        preprocessed_kernels.push_back(kernel);
-                    }
-                }
-                // Always recorded: cached kernels still need read_binaries() to load the on-disk ELF.
-                submitted_kernels.emplace_back(kernel, std::move(build_options));
-            }
+    }
+    // Join in-progress builds only now, once this Program's tasks have released their compile workers.
+    for (std::size_t i = 0; i < builds.size(); ++i) {
+        if (statuses[i].result == KernelBuildResult::BuildingElsewhere) {
+            join_kernel_build(builds[i]);
+            load_kernel_binaries(builds[i].kernel, builds[i].build_options, binary_root);
         }
-
-        // Throws on any compile failure; only past this point are all ELFs guaranteed on disk.
-        coordinator.finish();
-
-        // Now that the compile succeeded, write the reuse cache. A failure above would have thrown,
-        // so no sidecar is ever written for a missing or stale ELF.
-        for (const auto& kernel : preprocessed_kernels) {
-            finalize_preprocess_reuse_cache(device_context.build_env_manager(), build_env, kernel);
-        }
-
-        const std::string binary_root = build_env.build_env.get_out_kernel_root_path();
-        for (const auto& [kernel, build_options] : submitted_kernels) {
-            load_kernel_binaries(kernel, build_options, binary_root);
-        }
-    } else {
-        // Local path: parallel build via thread pool.
-        std::mutex deferred_mutex;
-        std::vector<std::tuple<std::shared_ptr<Kernel>, JitBuildOptions, size_t>> deferred;
-        for (auto& kernels : kernels_) {
-            for (auto& [id, kernel] : kernels) {
-                launch_build_step(
-                    [&, kernel] {
-                        auto [build_options, kernel_hash] = prep_kernel(kernel);
-                        // A duplicate that waited here would hold a compile worker, so it joins the
-                        // build after the sync below.
-                        const auto binary_root = ensure_kernel_binaries(
-                            kernel, device, build_options, build_env, kernel_hash, /*no_wait=*/true);
-                        if (!binary_root) {
-                            std::lock_guard<std::mutex> lock(deferred_mutex);
-                            deferred.emplace_back(kernel, std::move(build_options), kernel_hash);
-                            return;
-                        }
-                        load_kernel_binaries(kernel, build_options, *binary_root);
-                    },
-                    events);
-            }
-        }
-        sync_build_steps(events);
-        // Join in-progress builds only now, once this Program's tasks have released their compile workers.
-        for (auto& [kernel, build_options, kernel_hash] : deferred) {
-            load_kernel_binaries(
-                kernel, build_options, *ensure_kernel_binaries(kernel, device, build_options, build_env, kernel_hash));
-        }
+    }
+    for (const auto& [kernel, build_options, precompiled_root] : precompiled) {
+        load_kernel_binaries(kernel, build_options, precompiled_root);
     }
     if (detail::MemoryReporter::enabled()) {
         detail::MemoryReporter::inst().flush_program_memory_usage(get_id(), device);
@@ -3552,97 +3499,133 @@ void detail::ProgramImpl::compile(IDevice* device, bool force_slow_dispatch) {
     Inspector::program_compile_finished(this, device, build_env.build_key());
 }
 
-std::vector<detail::KernelBuildJob> detail::ProgramImpl::prepare_kernel_builds(IDevice* device) {
-    const ContextId device_context_id = extract_context_id(device);
-    TT_FATAL(
-        context_id_ == DEFAULT_CONTEXT_ID || context_id_ == device_context_id,
-        "Program {} was created for context_id {} but its kernels are being prepared on a device from context_id {}.",
-        this->id,
-        context_id_.get(),
-        device_context_id.get());
-    auto& device_context = MetalContext::instance(device_context_id);
-    const auto& cluster = device_context.get_cluster();
-    BuildEnvManager& build_env_manager = device_context.build_env_manager();
-    auto build_env = build_env_manager.get_device_build_env_ptr(device->build_id());
+std::vector<detail::KernelBuildStatus> detail::build_kernels(
+    ttsl::Span<KernelBuild> builds,
+    const std::vector<std::string>& remote_endpoints,
+    const std::function<void(KernelBuild&)>& on_built) {
+    std::vector<KernelBuildStatus> statuses(builds.size());
+    if (builds.empty()) {
+        return statuses;
+    }
+    BuildEnvManager& build_env_manager = *builds.front().build_env_manager;
+    const DeviceBuildEnv& build_env = *builds.front().build_env;
+    const bool remote =
+        !remote_endpoints.empty() &&
+        build_env_manager.get_device_build_env(builds.front().build_id).build_key() == build_env.build_key();
 
-    std::vector<KernelBuildJob> jobs;
-    if (compiled_.contains(build_env->build_key()) || cluster.get_target_device_type() == tt::TargetDevice::Emule ||
-        (cluster.get_target_device_type() == tt::TargetDevice::Mock && device->arch() == tt::ARCH::QUASAR)) {
-        return jobs;
-    }
-    TT_FATAL(device->is_initialized(), "Device needs to be initialized before preparing program {}.", this->get_id());
-    for (const auto& kernels : kernels_) {
-        for (const auto& [id, kernel] : kernels) {
-            validate_kernel_placement(false, kernel, device->build_id());
+    if (!remote) {
+        // Local path: parallel build via thread pool.
+        std::vector<std::shared_future<void>> events;
+        events.reserve(builds.size());
+        try {
+            for (std::size_t i = 0; i < builds.size(); ++i) {
+                launch_build_step(
+                    [&, i] {
+                        KernelBuild& build = builds[i];
+                        KernelBuildStatus& status = statuses[i];
+                        try {
+                            // A duplicate that waited here would hold a compile worker, so it is left to the caller.
+                            switch (JitBuildCache::inst().build_once_no_wait(
+                                build.kernel_hash, [&] { build_kernel_locally(build); })) {
+                                case JitBuildCache::BuildOnceStatus::BuiltByCaller:
+                                    status.result = KernelBuildResult::Built;
+                                    break;
+                                case JitBuildCache::BuildOnceStatus::AlreadyBuilt:
+                                    BuildCacheTelemetry::inst().record_jit_once_dedup();
+                                    status.result = KernelBuildResult::AlreadyBuilt;
+                                    break;
+                                case JitBuildCache::BuildOnceStatus::InProgress:
+                                    status.result = KernelBuildResult::BuildingElsewhere;
+                                    return;
+                            }
+                            if (on_built) {
+                                on_built(build);
+                            }
+                        } catch (...) {
+                            status = {KernelBuildResult::Failed, std::current_exception()};
+                        }
+                    },
+                    events);
+            }
+        } catch (...) {
+            sync_build_steps(events);
+            throw;
         }
+        sync_build_steps(events);
+        return statuses;
     }
-    for (const auto& kernels : kernels_) {
-        for (const auto& [id, kernel] : kernels) {
-            // Precompiled kernels and kernel types that need a device to build stay with compile().
-            if (kernel->precompiled_config().has_value() || !kernel->supports_detached_build()) {
+
+    // Remote path: prep and submit are sequential.  Parallelism is on compilation which happens on the remote server.
+    static const bool preprocess_and_ship = std::getenv("TT_METAL_JIT_PREPROCESS") != nullptr;
+    const KernelBuild& first = builds.front();
+    RemoteCompileCoordinator coordinator(remote_endpoints, first.context_id, first.build_id, build_env.build_key());
+    std::vector<std::size_t> claimed;    // claimed in the build-once table; released once the batch is done
+    std::vector<std::size_t> submitted;  // of those, sent to the server
+    std::exception_ptr batch_error;
+    try {
+        for (std::size_t i = 0; i < builds.size(); ++i) {
+            KernelBuild& build = builds[i];
+            switch (JitBuildCache::inst().claim(build.kernel_hash)) {
+                case JitBuildCache::BuildOnceStatus::AlreadyBuilt:
+                    BuildCacheTelemetry::inst().record_jit_once_dedup();
+                    statuses[i].result = KernelBuildResult::AlreadyBuilt;
+                    continue;
+                case JitBuildCache::BuildOnceStatus::InProgress:
+                    statuses[i].result = KernelBuildResult::BuildingElsewhere;
+                    continue;
+                case JitBuildCache::BuildOnceStatus::BuiltByCaller: claimed.push_back(i); break;
+            }
+            // Skip the remote round-trip when the ELF is already validly cached locally.
+            if (remote_kernel_cached(build_env_manager, build_env, build.kernel)) {
+                statuses[i].result = KernelBuildResult::Built;
                 continue;
             }
-            auto [build_options, kernel_hash] = prep_kernel_build(kernel, *build_env);
-            jobs.push_back(KernelBuildJob{
-                .kernel = kernel,
-                .build_env = build_env,
-                .build_env_manager = &build_env_manager,
-                .build_options = std::move(build_options),
-                .kernel_hash = kernel_hash,
-                .context_id = device_context_id,
-                .build_id = device->build_id()});
+            coordinator.submit(build.kernel_hash, [&]() {
+                generate_kernel_source_files(build_env, build.build_options, build.kernel);
+                return build_kernel_descriptor(
+                    build_env_manager, build_env, build.kernel, build.build_options, build.kernel_hash);
+            });
+            submitted.push_back(i);
+        }
+        // Throws on any compile failure; only past this point are all ELFs guaranteed on disk.
+        coordinator.finish();
+        // Now that the compile succeeded, write the reuse cache. A failure above would have thrown,
+        // so no sidecar is ever written for a missing or stale ELF.
+        for (const std::size_t i : submitted) {
+            if (preprocess_and_ship) {
+                finalize_preprocess_reuse_cache(build_env_manager, build_env, builds[i].kernel);
+            }
+            statuses[i].result = KernelBuildResult::BuiltRemotely;
+        }
+    } catch (...) {
+        batch_error = std::current_exception();
+    }
+    for (const std::size_t i : claimed) {
+        const bool built =
+            statuses[i].result == KernelBuildResult::Built || statuses[i].result == KernelBuildResult::BuiltRemotely;
+        if (!built) {
+            statuses[i] = {KernelBuildResult::Failed, batch_error};
+        }
+        JitBuildCache::inst().release(builds[i].kernel_hash, built);
+    }
+    if (on_built) {
+        for (std::size_t i = 0; i < builds.size(); ++i) {
+            const KernelBuildResult result = statuses[i].result;
+            if (result == KernelBuildResult::Built || result == KernelBuildResult::BuiltRemotely ||
+                result == KernelBuildResult::AlreadyBuilt) {
+                try {
+                    on_built(builds[i]);
+                } catch (...) {
+                    statuses[i] = {KernelBuildResult::Failed, std::current_exception()};
+                }
+            }
         }
     }
-    return jobs;
+    return statuses;
 }
 
-detail::KernelBuildResult detail::run_kernel_build_job(
-    KernelBuildJob& job, const std::vector<std::string>& remote_endpoints) {
-    BuildEnvManager& build_env_manager = *job.build_env_manager;
-    const DeviceBuildEnv& build_env = *job.build_env;
-    const auto& kernel = job.kernel;
-    // The compile server is handed the firmware of the device's current build env, so a job prepared before the
-    // device was reopened with a different configuration builds locally, against the env it was prepared for.
-    const bool remote = !remote_endpoints.empty() &&
-                        build_env_manager.get_device_build_env(job.build_id).build_key() == build_env.build_key();
-    bool built_remotely = false;
-    std::function<void()> build;
-    if (!remote) {
-        build = [&] {
-            try {
-                jit_build_genfiles_descriptors(build_env.build_env, job.build_options);
-                kernel->generate_binaries_detached(build_env_manager, build_env);
-            } catch (std::runtime_error& ex) {
-                TT_THROW("Failed to generate binaries for {} {}", kernel->name(), ex.what());
-            }
-        };
-    } else {
-        build = [&] {
-            if (remote_kernel_cached(build_env_manager, build_env, kernel)) {
-                return;
-            }
-            RemoteCompileCoordinator coordinator(remote_endpoints, job.context_id, job.build_id, build_env.build_key());
-            coordinator.submit(job.kernel_hash, [&]() {
-                generate_kernel_source_files(build_env, job.build_options, kernel);
-                return build_kernel_descriptor(
-                    build_env_manager, build_env, kernel, job.build_options, job.kernel_hash);
-            });
-            coordinator.finish();
-            built_remotely = true;
-            static const bool preprocess_and_ship = std::getenv("TT_METAL_JIT_PREPROCESS") != nullptr;
-            if (preprocess_and_ship) {
-                finalize_preprocess_reuse_cache(build_env_manager, build_env, kernel);
-            }
-        };
-    }
-    // Never waits: a kernel another thread is building is left to that thread.
-    switch (JitBuildCache::inst().build_once_no_wait(job.kernel_hash, build)) {
-        case JitBuildCache::BuildOnceStatus::BuiltByCaller:
-            return built_remotely ? KernelBuildResult::BuiltRemotely : KernelBuildResult::Built;
-        case JitBuildCache::BuildOnceStatus::AlreadyBuilt: return KernelBuildResult::AlreadyBuilt;
-        case JitBuildCache::BuildOnceStatus::InProgress: return KernelBuildResult::BuildingElsewhere;
-    }
-    TT_THROW("Unexpected build-once status for kernel {}", job.kernel_hash);
+void detail::join_kernel_build(KernelBuild& build) {
+    jit_build_once(build.kernel_hash, [&] { build_kernel_locally(build); });
 }
 
 void detail::ProgramImpl::compile_and_allocate(IDevice* device, bool force_slow_dispatch) {

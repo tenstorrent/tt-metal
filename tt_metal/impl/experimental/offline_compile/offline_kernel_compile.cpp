@@ -94,40 +94,6 @@ void apply_cb_compile_configs(JitBuildOptions& build_options, const std::vector<
     }
 }
 
-// Generate sources and invoke the JIT build for one (kernel, build_env) pair against a *local*
-// BuildEnvManager, mirroring the runtime bodies of DataMovementKernel::generate_binaries and
-// ComputeKernel::generate_binaries (which are unusable here because they look up the device's
-// MetalContext and its BuildEnvManager).
-//
-// TODO: the kernel-type if/else below does not extend to other Kernel subclasses
-// (Ethernet, DRAM, Quasar variants); this dispatch should live on Kernel itself.
-void generate_kernel_binaries_offline(
-    const std::shared_ptr<Kernel>& kernel,
-    BuildEnvManager& build_env_manager,
-    const DeviceBuildEnv& device_build_env,
-    JitBuildOptions& build_options,
-    const Hal& hal) {
-    const uint32_t programmable_core_type_idx =
-        hal.get_programmable_core_type_index(kernel->get_kernel_programmable_core_type());
-    const uint32_t processor_class_idx =
-        static_cast<std::underlying_type_t<HalProcessorClassType>>(kernel->get_kernel_processor_class());
-
-    jit_build_genfiles_descriptors(device_build_env.build_env, build_options);
-
-    if (kernel->get_kernel_processor_class() == HalProcessorClassType::COMPUTE) {
-        jit_build_genfiles_triscs_src(device_build_env.build_env, *kernel, kernel->kernel_source());
-        const auto build_states =
-            build_env_manager.get_kernel_build_states(0, programmable_core_type_idx, processor_class_idx);
-        jit_build_subset(build_states, kernel.get());
-    } else {
-        jit_build_genfiles_kernel_include(device_build_env.build_env, *kernel, kernel->kernel_source());
-        const uint32_t riscv_id = kernel->get_kernel_processor_type(0);
-        const auto& build_state =
-            build_env_manager.get_kernel_build_state(0, programmable_core_type_idx, processor_class_idx, riscv_id);
-        jit_build(build_state, kernel.get());
-    }
-}
-
 // Copy each generated ELF for `kernel` from the local build env's kernel root into
 // <output_dir>/<kernel_name>/<compile_hash>/<target_full_path>. Both source and destination
 // paths are computed by BuildEnvManager::get_kernel_binary_path so the layout matches what
@@ -238,8 +204,9 @@ void CompileKernelOffline(
                 kernel->set_full_name(kernel_path_suffix);
                 build_options.set_name(kernel_path_suffix);
 
-                generate_kernel_binaries_offline(
-                    kernel, build_env_manager, device_build_env, build_options, *jit_device_config.hal);
+                // The runtime's build of this kernel type, against the local BuildEnvManager.
+                jit_build_genfiles_descriptors(device_build_env.build_env, build_options);
+                kernel->generate_binaries(build_env_manager, device_build_env);
 
                 copy_generated_elfs_to_output_dir(
                     kernel, build_env_manager, device_build_env, *jit_device_config.hal, params.output_dir);

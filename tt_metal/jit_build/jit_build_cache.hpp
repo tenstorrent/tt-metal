@@ -38,6 +38,12 @@ public:
     // Like build_once(), but returns InProgress instead of waiting while another thread builds hash.
     BuildOnceStatus build_once_no_wait(size_t hash, const std::function<void()>& build_fn);
 
+    // The two halves of build_once_no_wait(), for a caller that builds several hashes together (one compile-server
+    // batch). claim() returns BuiltByCaller when the caller now builds hash; it must then call release() once, with
+    // built = false if the build failed, so later callers retry.
+    BuildOnceStatus claim(size_t hash);
+    void release(size_t hash, bool built);
+
     // Clear completed entries. After clear(), the next build_once() for any hash
     // will re-execute the build function.
     void clear();

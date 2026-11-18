@@ -6,6 +6,7 @@
 
 #include <filesystem>
 #include <fstream>
+#include <stdexcept>
 #include <utility>
 
 #include <tt_stl/assert.hpp>
@@ -37,7 +38,21 @@ RemoteCompileCoordinator::RemoteCompileCoordinator(
     TT_FATAL(!endpoints_.empty(), "RemoteCompileCoordinator requires at least one endpoint");
 }
 
-RemoteCompileCoordinator::~RemoteCompileCoordinator() = default;
+RemoteCompileCoordinator::~RemoteCompileCoordinator() {
+    // Kernels submitted but never collected (a later submit or finish() threw): drop their dedup entries, so a later
+    // submit of the same kernel sends it again instead of waiting on this abandoned batch.
+    std::lock_guard lock(s_dedup_mutex_);
+    for (auto& pending : pending_by_endpoint_) {
+        for (auto& pend : pending) {
+            if (pend.dedup_promise) {
+                s_dedup_cache_.erase(pend.descriptor.kernel_hash);
+                pend.dedup_promise->set_exception(std::make_exception_ptr(std::runtime_error(
+                    "remote compile of kernel " + pend.descriptor.request.kernel_name +
+                    " was abandoned before its reply was collected")));
+            }
+        }
+    }
+}
 
 void RemoteCompileCoordinator::submit(
     std::size_t kernel_hash, const std::function<KernelCompileDescriptor()>& make_descriptor) {
@@ -134,6 +149,7 @@ void RemoteCompileCoordinator::finish() {
                 if (pend.dedup_promise) {
                     s_dedup_cache_.erase(pend.descriptor.kernel_hash);
                     pend.dedup_promise->set_exception(ex);
+                    pend.dedup_promise.reset();
                 }
             }
             throw;

@@ -16,8 +16,7 @@
 #include <tt-logger/tt-logger.hpp>
 
 #include "impl/jit_server/jit_compile_rpc_client.hpp"
-#include "impl/program/kernel_build_job.hpp"
-#include "impl/program/program_impl.hpp"
+#include "impl/program/kernel_build.hpp"
 
 namespace tt::tt_metal {
 
@@ -35,28 +34,39 @@ bool detail::BuildSinkScope::active() { return t_build_sink_scope; }
 namespace experimental {
 
 struct CompileSession::Impl {
-    // Queues the jobs whose kernels were not queued before.
-    void enqueue(std::vector<detail::KernelBuildJob> jobs) {
-        bool queued_any = false;
+    // One queue entry: a single kernel, or the not yet queued kernels of one program (see CompileSessionHandoff).
+    using Unit = std::vector<detail::KernelBuild>;
+
+    // Queues the builds whose kernels were not queued before.
+    void enqueue(std::vector<detail::KernelBuild> builds) {
+        std::size_t queued = 0;
         {
             std::lock_guard lock(mutex);
             if (closing) {
                 return;
             }
-            if (!jobs.empty()) {
-                ++stats.programs_added;
-            }
-            for (auto& job : jobs) {
-                if (!queued_kernels.insert(job.kernel_hash).second) {
+            Unit program_unit;
+            for (auto& build : builds) {
+                if (!queued_kernels.insert(build.kernel_hash).second) {
                     continue;
                 }
-                queue.push_back(std::make_unique<detail::KernelBuildJob>(std::move(job)));
-                ++stats.kernels_queued;
-                ++stats.kernels_pending;
-                queued_any = true;
+                ++queued;
+                if (options.handoff == CompileSessionHandoff::Kernel) {
+                    queue.emplace_back().push_back(std::move(build));
+                } else {
+                    program_unit.push_back(std::move(build));
+                }
             }
+            if (!program_unit.empty()) {
+                queue.push_back(std::move(program_unit));
+            }
+            if (!builds.empty()) {
+                ++stats.programs_added;
+            }
+            stats.kernels_queued += queued;
+            stats.kernels_pending += queued;
         }
-        if (queued_any) {
+        if (queued != 0) {
             work_cv.notify_all();
         }
     }
@@ -66,7 +76,7 @@ struct CompileSession::Impl {
     mutable std::mutex mutex;
     std::condition_variable work_cv;  // workers wait for work or shutdown
     std::condition_variable idle_cv;  // wait() waits for an empty queue and idle workers
-    std::deque<std::unique_ptr<detail::KernelBuildJob>> queue;
+    std::deque<Unit> queue;
     std::unordered_set<std::size_t> queued_kernels;
     bool closing = false;
     // Set when the compile server could not be reached or stopped replying; the session's remaining kernels
@@ -86,9 +96,93 @@ struct CompileSession::Impl {
 
     bool idle() const { return stats.kernels_running == 0 && (closing || queue.empty()); }
 
+    // Builds unit through the compile server, then locally whatever that did not build. Never throws.
+    std::vector<detail::KernelBuildStatus> build(Unit& unit, bool remote, std::size_t& remote_fallbacks) {
+        std::vector<detail::KernelBuildStatus> statuses;
+        try {
+            if (remote) {
+                statuses = detail::build_kernels(unit, options.remote_endpoints);
+                std::exception_ptr remote_error;
+                for (const auto& status : statuses) {
+                    if (status.result == detail::KernelBuildResult::Failed) {
+                        remote_error = status.error;
+                        ++remote_fallbacks;
+                    }
+                }
+                if (remote_error) {
+                    note_remote_failure(remote_error, unit);
+                }
+            }
+            if (statuses.empty() || remote_fallbacks != 0) {
+                // Local build of the kernels the server did not build (all of them without a server).
+                Unit rest;
+                std::vector<std::size_t> rest_index;
+                for (std::size_t i = 0; i < unit.size(); ++i) {
+                    if (statuses.empty() || statuses[i].result == detail::KernelBuildResult::Failed) {
+                        rest.push_back(unit[i]);
+                        rest_index.push_back(i);
+                    }
+                }
+                auto local = detail::build_kernels(rest, {});
+                statuses.resize(unit.size());
+                for (std::size_t j = 0; j < rest.size(); ++j) {
+                    statuses[rest_index[j]] = std::move(local[j]);
+                }
+            }
+        } catch (const std::exception& e) {
+            log_warning(
+                tt::LogBuildKernels,
+                "CompileSession: build of {} kernel(s) failed; they compile inline when needed: {}",
+                unit.size(),
+                e.what());
+            statuses.assign(unit.size(), {});
+        }
+        for (std::size_t i = 0; i < statuses.size(); ++i) {
+            if (statuses[i].result == detail::KernelBuildResult::Failed && statuses[i].error) {
+                try {
+                    std::rethrow_exception(statuses[i].error);
+                } catch (const std::exception& e) {
+                    log_warning(
+                        tt::LogBuildKernels,
+                        "CompileSession: build of kernel {} failed; it compiles inline when needed: {}",
+                        unit[i].kernel_hash,
+                        e.what());
+                } catch (...) {
+                    log_warning(
+                        tt::LogBuildKernels,
+                        "CompileSession: build of kernel {} failed; it compiles inline when needed",
+                        unit[i].kernel_hash);
+                }
+            }
+        }
+        return statuses;
+    }
+
+    void note_remote_failure(const std::exception_ptr& error, const Unit& unit) {
+        try {
+            std::rethrow_exception(error);
+        } catch (const jit_server::RemoteCompileTransportError& e) {
+            std::lock_guard lock(mutex);
+            if (!remote_down) {
+                remote_down = true;
+                log_warning(
+                    tt::LogBuildKernels,
+                    "CompileSession: {}; this session builds its remaining kernels locally",
+                    e.what());
+            }
+        } catch (const std::exception& e) {
+            log_warning(
+                tt::LogBuildKernels,
+                "CompileSession: remote build of {} kernel(s) failed, building them locally: {}",
+                unit.size(),
+                e.what());
+        } catch (...) {
+        }
+    }
+
     void worker_loop() {
         while (true) {
-            std::unique_ptr<detail::KernelBuildJob> job;
+            Unit unit;
             bool remote = false;
             {
                 std::unique_lock lock(mutex);
@@ -96,65 +190,27 @@ struct CompileSession::Impl {
                 if (queue.empty()) {
                     return;  // closing
                 }
-                job = std::move(queue.front());
+                unit = std::move(queue.front());
                 queue.pop_front();
-                --stats.kernels_pending;
-                ++stats.kernels_running;
+                stats.kernels_pending -= unit.size();
+                stats.kernels_running += unit.size();
                 remote = !options.remote_endpoints.empty() && !remote_down &&
                          stats.kernels_queued >= options.remote_min_kernels;
             }
             const auto start = std::chrono::steady_clock::now();
-            std::optional<detail::KernelBuildResult> result;
-            bool remote_failed = false;
-            try {
-                if (remote) {
-                    try {
-                        result = detail::run_kernel_build_job(*job, options.remote_endpoints);
-                    } catch (const jit_server::RemoteCompileTransportError& e) {
-                        remote_failed = true;
-                        std::lock_guard lock(mutex);
-                        if (!remote_down) {
-                            remote_down = true;
-                            log_warning(
-                                tt::LogBuildKernels,
-                                "CompileSession: {}; this session builds its remaining kernels locally",
-                                e.what());
-                        }
-                    } catch (const std::exception& e) {
-                        remote_failed = true;
-                        log_warning(
-                            tt::LogBuildKernels,
-                            "CompileSession: remote build of kernel {} failed, building it locally: {}",
-                            job->kernel_hash,
-                            e.what());
-                    }
-                }
-                if (!result) {
-                    result = detail::run_kernel_build_job(*job, {});
-                }
-            } catch (const std::exception& e) {
-                log_warning(
-                    tt::LogBuildKernels,
-                    "CompileSession: build of kernel {} failed; it compiles inline when needed: {}",
-                    job->kernel_hash,
-                    e.what());
-            } catch (...) {
-                log_warning(
-                    tt::LogBuildKernels,
-                    "CompileSession: build of kernel {} failed; it compiles inline when needed",
-                    job->kernel_hash);
-            }
+            std::size_t remote_fallbacks = 0;
+            const auto statuses = build(unit, remote, remote_fallbacks);
             const double seconds = std::chrono::duration<double>(std::chrono::steady_clock::now() - start).count();
-            job.reset();  // release the kernel and its build env outside the lock
+            const std::size_t size = unit.size();
+            unit.clear();  // release the kernels and their build env outside the lock
             {
                 std::lock_guard lock(mutex);
-                --stats.kernels_running;
+                stats.kernels_running -= size;
                 stats.busy_seconds += seconds;
-                if (!result) {
-                    ++stats.kernels_failed;
-                } else {
-                    stats.kernels_remote_fallback += remote_failed ? 1 : 0;
-                    switch (*result) {
+                ++stats.units_built;
+                stats.kernels_remote_fallback += remote_fallbacks;
+                for (const auto& status : statuses) {
+                    switch (status.result) {
                         case detail::KernelBuildResult::Built: ++stats.kernels_built; break;
                         case detail::KernelBuildResult::BuiltRemotely:
                             ++stats.kernels_built;
@@ -162,6 +218,7 @@ struct CompileSession::Impl {
                             break;
                         case detail::KernelBuildResult::AlreadyBuilt:
                         case detail::KernelBuildResult::BuildingElsewhere: ++stats.kernels_preempted; break;
+                        case detail::KernelBuildResult::Failed: ++stats.kernels_failed; break;
                     }
                 }
                 if (idle()) {
@@ -177,7 +234,7 @@ struct CompileSession::Impl {
             std::lock_guard lock(mutex);
             if (!closing) {
                 closing = true;
-                stats.kernels_dropped += queue.size();
+                stats.kernels_dropped += stats.kernels_pending;
                 stats.kernels_pending = 0;
                 queue.clear();
             }
@@ -221,13 +278,10 @@ void CompileSession::set_build_sink(bool on) {
 
 CompileSession* CompileSession::build_sink() { return t_build_sink; }
 
-bool CompileSession::sink_kernel_builds(detail::ProgramImpl& program, IDevice* device) {
-    if (t_build_sink == nullptr || !detail::BuildSinkScope::active()) {
-        return false;
-    }
-    // Resolves build inputs for every kernel; needs the device, so it runs on the caller's thread.
-    t_build_sink->impl_->enqueue(program.prepare_kernel_builds(device));
-    return true;
+bool CompileSession::takes_kernel_builds() { return t_build_sink != nullptr && detail::BuildSinkScope::active(); }
+
+void CompileSession::add_kernel_builds(std::vector<detail::KernelBuild> builds) {
+    t_build_sink->impl_->enqueue(std::move(builds));
 }
 
 }  // namespace experimental

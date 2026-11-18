@@ -25,7 +25,7 @@
 
 namespace tt::tt_metal {
 
-BuildEnvManager::BuildEnvManager(const Hal& hal) {
+BuildEnvManager::BuildEnvManager(const Hal& hal) : hal_(hal) {
     uint32_t kernel_index = 0;
     uint32_t firmware_index = 0;
     uint32_t programmable_core_type_count = hal.get_programmable_core_type_count();

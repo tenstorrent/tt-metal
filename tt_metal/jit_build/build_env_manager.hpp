@@ -94,7 +94,12 @@ public:
     // Method to get the build environment info for all devices
     std::vector<BuildEnvInfo> get_all_build_envs_info();
 
+    // The HAL of the architecture these build envs target; kernels building into them read it from here, which
+    // also works without a MetalContext (offline compile).
+    const Hal& hal() const { return hal_; }
+
 private:
+    const Hal& hal_;
     std::unordered_map<ChipId, std::shared_ptr<DeviceBuildEnv>> device_id_to_build_env_;
 
     // A device-agnostic mapping from programmable_core_type and processor_class to unique index + processor_type_count.

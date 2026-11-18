@@ -21,7 +21,7 @@
 #include "impl/context/metal_context.hpp"
 #include "impl/dispatch/dispatch_core_manager.hpp"
 #include "llrt.hpp"
-#include "program/kernel_build_job.hpp"
+#include "program/kernel_build.hpp"
 #include "program/program_impl.hpp"
 #include "program/slow_dispatch.hpp"
 #include "tt_metal/fabric/fabric_init.hpp"
