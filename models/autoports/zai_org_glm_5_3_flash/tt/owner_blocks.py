@@ -31,7 +31,7 @@ blocks beyond that are evicted per chip, least recently released first.
 from __future__ import annotations
 
 from collections import OrderedDict
-from typing import Dict, List, Optional, Sequence
+from typing import AbstractSet, Dict, List, Optional, Sequence
 
 
 class OwnerBlockMap:
@@ -85,10 +85,11 @@ class OwnerBlockMap:
         else:
             self.phys[b] = g
 
-    def _take(self, r: int, avoid: set) -> int:
-        """a free physical block of chip r, evicting the least recently released cached block if the chip is dry"""
+    def _take(self, r: int, avoid: set, pinned: AbstractSet[int] = frozenset()) -> int:
+        """a free physical block of chip r, evicting the least recently released cached block if the chip is dry (never
+        one in `avoid` or `pinned`)"""
         if not self.free[r]:
-            victim = next((b for b in self.idle[r] if b not in avoid), None)
+            victim = next((b for b in self.idle[r] if b not in avoid and b not in pinned), None)
             if victim is None:
                 raise RuntimeError(f"owner chip {r} has no free physical block (nb_local {self.nb_local}, all live)")
             self._idle_drop(victim)
@@ -158,22 +159,25 @@ class OwnerBlockMap:
                 self.evictions -= 1
 
     # ---- the row API
-    def set_row(self, slot: int, row: Sequence[int], covered: int, keep: int = 0) -> List[int]:
+    def set_row(
+        self, slot: int, row: Sequence[int], covered: int, keep: int = 0, pinned: AbstractSet[int] = frozenset()
+    ) -> List[int]:
         """the slot's logical row (columns < covered are live; -1 = no block) -> its physical row (same length).
         keep: columns < keep hold content the request already computed (their blocks must be mapped on the column's
-        owner). Releases the blocks the slot's previous row listed that this row no longer lists (they stay mapped,
-        evictable). Atomic: raises with the map unchanged."""
+        owner). pinned: cached blocks this row's fresh columns may not evict besides its own (the computed columns of
+        the other rows of one page-table write, mapped after it). Releases the blocks the slot's previous row listed
+        that this row no longer lists (they stay mapped, evictable). Atomic: raises with the map unchanged."""
         assert self._undo is None, "set_row is not reentrant"
         self._undo, self._snapped = [], set()
         try:
-            return self._set_row(slot, row, covered, keep)
+            return self._set_row(slot, row, covered, keep, pinned)
         except (RuntimeError, ValueError):
             self._rollback(self._undo)
             raise
         finally:
             self._undo, self._snapped = None, set()
 
-    def _set_row(self, slot: int, row: Sequence[int], covered: int, keep: int) -> List[int]:
+    def _set_row(self, slot: int, row: Sequence[int], covered: int, keep: int, pinned: AbstractSet[int]) -> List[int]:
         old = self.rows.get(slot, [])
         mine: Dict[int, int] = {}
         for b in old:
@@ -186,7 +190,7 @@ class OwnerBlockMap:
             # the row EXTENDS the slot's live row (a growing prompt / decode: the same blocks at the same columns):
             # those columns keep their physical blocks (a live block is never moved, evicted or re-owned while this
             # row lists it) and their references (+1 -1), so only the new columns are walked
-            return self._extend_row(slot, row, head, old, keep)
+            return self._extend_row(slot, row, head, old, keep, pinned)
         listed = {b for b in head if b >= 0}
         new: List[int] = []
         out: List[int] = []
@@ -215,7 +219,7 @@ class OwnerBlockMap:
                 self._release_phys(b)  # new content for b: moves to owner r
                 g = None
             if g is None:
-                g = self._take(r, listed)
+                g = self._take(r, listed, pinned)
                 self._set_phys(b, g)
             new.append(b)
             out.append(g)
@@ -229,7 +233,9 @@ class OwnerBlockMap:
         self.rows[slot] = new
         return out
 
-    def _extend_row(self, slot: int, row: Sequence[int], head: List[int], old: List[int], keep: int) -> List[int]:
+    def _extend_row(
+        self, slot: int, row: Sequence[int], head: List[int], old: List[int], keep: int, pinned: AbstractSet[int]
+    ) -> List[int]:
         """_set_row for a head whose first len(old) columns are exactly the slot's live row: the same result, map and
         undo-safe mutations as the full walk, with only the columns past the old row walked"""
         n_old = len(old)
@@ -262,7 +268,7 @@ class OwnerBlockMap:
                 self._release_phys(b)  # new content for b: moves to owner r
                 g = None
             if g is None:
-                g = self._take(r, listed)
+                g = self._take(r, listed, pinned)
                 self._set_phys(b, g)
             new.append(b)
             out.append(g)

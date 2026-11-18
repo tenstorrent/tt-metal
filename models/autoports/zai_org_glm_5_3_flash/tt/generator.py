@@ -1656,6 +1656,14 @@ class Glm53Generator(_ReadinessGenerator):
             # three rows) mapped a new request first, which evicted a block of the next row's confirmed hit: "logical
             # block 897 at computed column 896 of slot 4 has no device content", and the engine stopped.
             slots.sort(key=lambda s: 0 if keep.get(s, 0) > 0 else 1)
+        # ... and every row's computed columns are pinned for the whole call: the rows that map first are themselves
+        # keep > 0 rows, whose NEW columns could otherwise reclaim a cached block of a later keep > 0 row of the call (a
+        # prefill passes keep = start for every row)
+        pinned = (
+            {int(v) for s in slots for v in table[s, : min(int(keep.get(s, 0)), int(cov[s]))].tolist() if int(v) >= 0}
+            if keep and len(slots) > 1
+            else frozenset()
+        )
         # rows only IDLE slots hold (an owned cache's identity rows, a finished request's) are reclaimable: a row being
         # written that lists one of their blocks releases them (the idle slot loses its coverage; a later admission
         # writes its rows again)
@@ -1673,7 +1681,8 @@ class Glm53Generator(_ReadinessGenerator):
                     k = (keep or {}).get(s, 0)
                     # the covered head only: past the coverage set_row returns the column owners' null blocks, which is
                     # b.null_row (cf3h-d lever A: no 16,392-column list round trip per changed row)
-                    phys[s, :c] = torch.tensor(b.obm.set_row(s, table[s, :c].tolist(), c, keep=k), dtype=torch.int64)
+                    row = b.obm.set_row(s, table[s, :c].tolist(), c, keep=k, pinned=pinned)
+                    phys[s, :c] = torch.tensor(row, dtype=torch.int64)
                     phys[s, c:] = b.null_row[c:]
                 else:
                     b.obm.release_slot(s)

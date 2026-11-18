@@ -1203,6 +1203,34 @@ def test_prefix_cache_pins_lru_and_eviction_fallbacks(monkeypatch):
     assert err is None and done == [3, 1]
     assert o2.physical(10) is not None and o2.physical(11) is not None and o2.physical(12) is None
 
+    # ---- two keep > 0 rows (a prefill passes keep = start for every row): the first row's NEW column on a full owner
+    #      chip must not reclaim a cached block of the later row's computed columns -- every row's computed columns are
+    #      pinned for the whole call, so the fresh column reclaims another cached block (in the call's order slot 1's
+    #      column 2 evicted 10 and slot 3 raised "no device content")
+    def two_hits(nb_local: int, spare: bool):
+        o = OwnerBlockMap(2, nb_local, 1)
+        o.set_row(0, [10, 11], 2)
+        o.release_slot(0)  # 10 (chip 0) and 11 (chip 1) cached: 10 is chip 0's least recently released
+        if spare:
+            o.set_row(2, [12], 1)
+            o.release_slot(2)  # a cached block of no row of the call (chip 0)
+        o.set_row(1, [13], 1)  # chip 0 full: 10, (12,) 13
+        bd = SimpleNamespace(obm=o, max_batch=4, null_row=null4, phys=null4.expand(4, 4).clone(),
+                             slots=[SimpleNamespace(active=False) for _ in range(4)])  # fmt: skip
+        tb = torch.full((4, 4), -1, dtype=torch.int64)
+        tb[1, :3] = torch.tensor([13, 21, 22])  # slot 1: its live request (1 computed column) + 2 new columns
+        tb[3, :2] = torch.tensor([10, 11])  # slot 3: a hit on slot 0's cached blocks (2 computed columns)
+        cv = torch.tensor([0, 3, 0, 2])
+        return o, Glm53Generator._physical_rows(bd, tb, cv, [1, 3], keep={1: 1, 3: 2})
+
+    o, (ph, done, err) = two_hits(4, spare=True)  # 3 blocks per chip: chip 0 holds 13, 22 and the hit's 10
+    assert err is None and done == [1, 3], err
+    assert o.physical(12) is None and o.evictions == 1, "the fresh column reclaims the unrelated cached block"
+    assert ph[3, :2].tolist() == [o.physical(10), o.physical(11)] and o.rows[3] == [10, 11]
+    o, (ph, done, err) = two_hits(3, spare=False)  # 2 blocks per chip: no room for 22 -- slot 1 is refused, the hit's
+    assert isinstance(err, RuntimeError) and "no free physical block" in str(err) and done == []  # blocks stay cached
+    assert o.physical(10) is not None and o.physical(11) is not None and o.evictions == 0 and o.rows[1] == [13]
+
 
 class _MockHostTierBackend(_MockPrefixBackend):
     """+ the host tier's device side: export_snapshot / import_snapshot of a pool entry (virtual slot max_batch + k) as
