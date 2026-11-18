@@ -71,6 +71,10 @@ void kernel_main() {
     constexpr uint32_t sem_partials_id = get_compile_time_arg_val(13);
     constexpr uint32_t sem_rinv_local_id = get_compile_time_arg_val(14);
     constexpr auto x_args = TensorAccessorArgs<15>();
+    // Block-float input (bf8b: tile_bytes != 32*32*es) has no per-element addressing: the RM stick path and the
+    // pad-lane zeroing must never be reached for it (host guard in create_program_descriptor).
+    constexpr bool is_block_float = tile_bytes != TILE_DIM * TILE_DIM * es;
+    static_assert(!is_block_float || (!is_rm && w_valid_last == TILE_DIM), "block-float input: TILE + aligned W only");
     constexpr auto mcast = McastArgs<
         get_named_compile_time_arg_val("rinv_mcast_ct_offset"),
         get_named_compile_time_arg_val("rinv_mcast_rt_offset")>();

@@ -8,14 +8,16 @@
 computed over the last dimension of `x`. Design: op_design.md (LOCAL and W_SPLIT regimes, both built).
 
 Inputs
-    input_tensor  rank >= 2; float32 / bfloat16; TILE or ROW_MAJOR; any H and W (tile-aligned or not);
-                  interleaved (Phase 0).
-    gamma         optional; shape [1, 1, 1, W]; float32 / bfloat16 (may differ from x); ROW_MAJOR or TILE.
+    input_tensor  rank >= 2; float32 / bfloat16 / bfloat8_b; TILE or ROW_MAJOR; any H and W (tile-aligned or not);
+                  bfloat8_b is TILE + tile-aligned only (block-float); interleaved.
+    gamma         optional; shape [1, 1, 1, W]; float32 / bfloat16 / bfloat8_b (may differ from x); ROW_MAJOR or
+                  TILE (bfloat8_b: TILE only).
     epsilon       added to the mean of squares before the reciprocal square root.
     compute_kernel_config
                   a ttnn.ComputeConfigDescriptor; None means default_compute_kernel_config() (the Phase 0 corner:
                   HiFi4, fp32 DEST accumulation on, approx off). math_fidelity / math_approx_mode are honoured as
-                  given; fp32_dest_acc_en=False is a refinement candidate (refused for now).
+                  given; fp32_dest_acc_en=False switches every intermediate CB to Float16_b (refused for float32
+                  input — EXCLUSIONS).
     memory_config the output's placement; None means DRAM interleaved. Phase 0: interleaved only.
 
 Output
@@ -103,13 +105,13 @@ def tag_gamma_layout(gamma):
 # ---------------------------------------------------------------------------
 
 SUPPORTED = {
-    "dtype": [ttnn.float32, ttnn.bfloat16],
-    "fp32_dest_acc_en": [True],
+    "dtype": [ttnn.float32, ttnn.bfloat16, ttnn.bfloat8_b],
+    "fp32_dest_acc_en": [True, False],
     "layout": [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT],
     "alignment": ["tile_aligned", "w_non_aligned", "h_non_aligned"],
     "rank": [2, 3, 4],
     "gamma_mode": ["gamma", "no_gamma"],
-    "gamma_dtype": [ttnn.float32, ttnn.bfloat16, "none"],
+    "gamma_dtype": [ttnn.float32, ttnn.bfloat16, ttnn.bfloat8_b, "none"],
     "gamma_layout": [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT, "none"],
     "memory_layout": [ttnn.TensorMemoryLayout.INTERLEAVED],
 }

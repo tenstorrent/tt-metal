@@ -1,2 +1,5 @@
 {"event":"test_run","result":"pass","detail":"acceptance 110/110 dev+prod; golden interleaved supported 630 pass; loose+regression+translated pass; refused cells xfail","ts":"2026-11-18T00:47:34+00:00"}
 {"event":"fix_applied","detail":"Mcast adapter requires attached kernels on sender cores to be on the channel NoC; split line-root readers into their own KernelDescriptor with an absent channel; root rinv delivery via SEM_RINV_LOCAL","ts":"2026-11-18T00:47:34+00:00"}
+{"event":"tool_use","tool":"Skill","skill":"numeric-formats-metal","args":"","ts":"2026-11-18T01:34:05+00:00"}
+{"event":"test_run","status":"pass","tests":"test_rms_norm_numeric.py (74p/6s), test_rms_norm.py + precision_baseline (126p)","ts":"2026-11-18T01:40:50+00:00"}
+{"event":"test_run","status":"pass","tests":"golden slices: loose INTERLEAVED acc-off 100/100; cartesian bf8b/acc-off 129 pass 66 xfail(EXCLUSION) 0 fail","ts":"2026-11-18T01:50:16+00:00"}

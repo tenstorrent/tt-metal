@@ -61,6 +61,13 @@ def _div_up(a, b):
     return (a + b - 1) // b
 
 
+def _element_bytes(t) -> int:
+    """Element bytes for addressing. Block-float (bfloat8_b) has no per-element byte size (Tensor.element_size()
+    raises); report its 1-byte mantissa — every element-addressed path (RM sticks, pad-lane zeroing, face-row γ
+    reads) is host-guarded off for block-float, and the kernels static_assert it."""
+    return 1 if t.dtype == ttnn.bfloat8_b else t.element_size()
+
+
 def _f32_bits(x: float) -> int:
     return struct.unpack("<I", struct.pack("<f", x))[0]
 
@@ -73,7 +80,7 @@ class OpGeometry:
     t_in: int  # input (= output) tile bytes
     t_g: int  # gamma tile bytes
     es_g: int  # gamma element bytes
-    t_f: int  # Float32 tile bytes
+    t_int: int  # intermediate-CB tile bytes (Float32 when fp32 DEST is on, Float16_b when off)
 
 
 @dataclass(frozen=True)
@@ -89,9 +96,9 @@ def _per_row_bytes(g: OpGeometry, cw: int, k: int) -> int:
     ws = k > 1
     b = 0
     b += (X_BLOCK_DEPTH * cw * g.t_in) if g.is_tile else (cw * g.t_in)  # cb_x
-    b += 3 * g.t_f  # cb_sumsq_raw, cb_rinv_col, cb_rinv
+    b += 3 * g.t_int  # cb_sumsq_raw, cb_rinv_col, cb_rinv
     if ws:
-        b += (2 + k) * g.t_f  # cb_partial, cb_rinv_bcast, cb_gathered
+        b += (2 + k) * g.t_int  # cb_partial, cb_rinv_bcast, cb_gathered
     return b
 
 
@@ -170,10 +177,17 @@ def create_program_descriptor(input_tensor, gamma, output_tensor, epsilon, compu
         lead *= d
     is_tile = input_tensor.layout == ttnn.TILE_LAYOUT
     dtype = input_tensor.dtype
-    es = input_tensor.element_size()
+    es = _element_bytes(input_tensor)
     has_gamma = gamma is not None
     gamma_is_rm = has_gamma and gamma.layout == ttnn.ROW_MAJOR_LAYOUT
     g_dtype = gamma.dtype if has_gamma else dtype
+    gamma_is_block_float = has_gamma and g_dtype == ttnn.bfloat8_b
+
+    # The ONE intermediate-format decision (numeric-formats §4): every intermediate CB (Σx² raw / partial / gathered,
+    # rinv col / bcast / tile) follows the DEST width. Feeds the CB descriptors, the L1 budget (_per_row_bytes) and
+    # the writer's gather / multicast byte counts.
+    int_fmt = ttnn.float32 if compute_config.fp32_dest_acc_en else ttnn.bfloat16
+    t_int = ttnn.tile_size(int_fmt)
 
     geo = OpGeometry(
         is_tile=is_tile,
@@ -181,13 +195,17 @@ def create_program_descriptor(input_tensor, gamma, output_tensor, epsilon, compu
         gamma_is_rm=gamma_is_rm,
         t_in=ttnn.tile_size(dtype),
         t_g=ttnn.tile_size(g_dtype),
-        es_g=gamma.element_size() if has_gamma else es,
-        t_f=ttnn.tile_size(ttnn.float32),
+        es_g=_element_bytes(gamma) if has_gamma else es,
+        t_int=t_int,
     )
 
     # ---- shape-derived extents (alignment-aware) ----
     Wt = _div_up(W, TILE)
     w_valid_last = W - TILE * (Wt - 1)
+    if dtype == ttnn.bfloat8_b and (not is_tile or w_valid_last != TILE):
+        # Block-float input: the reader's per-lane pad zeroing / RM stick paths address elements, which a bf8b tile
+        # (shared-exponent section + mantissa section) does not have. feature_spec INVALID removes these cells.
+        raise ValueError("rms_norm: bfloat8_b input requires TILE layout and a tile-aligned W")
     num_sticks = lead * H  # RM: total sticks (rows)
     R = lead * _div_up(H, TILE) if is_tile else _div_up(num_sticks, TILE)
 
@@ -203,7 +221,7 @@ def create_program_descriptor(input_tensor, gamma, output_tensor, epsilon, compu
     crs = _core_range_set(cores)
 
     # ---- CBs (identical descriptors on every participating core: uniform addresses) ----
-    t_in, t_f = geo.t_in, geo.t_f
+    t_in = geo.t_in
     cbs = []
     if not is_tile:
         cbs.append(_cb(CB_X_RM, X_RM_DEPTH * cw, t_in, dtype, crs))
@@ -212,13 +230,13 @@ def create_program_descriptor(input_tensor, gamma, output_tensor, epsilon, compu
         if gamma_is_rm:
             cbs.append(_cb(CB_GAMMA_RM, 1, cw * TILE * geo.es_g, g_dtype, crs))
         cbs.append(_cb(CB_GAMMA, cw, geo.t_g, g_dtype, crs))
-    cbs.append(_cb(CB_SUMSQ_RAW, br, t_f, ttnn.float32, crs))
+    cbs.append(_cb(CB_SUMSQ_RAW, br, t_int, int_fmt, crs))
     if is_ws:
-        cbs.append(_cb(CB_PARTIAL, br, t_f, ttnn.float32, crs))
-        cbs.append(_cb(CB_GATHERED, k * br, t_f, ttnn.float32, crs))
-        cbs.append(_cb(CB_RINV_BCAST, br, t_f, ttnn.float32, crs))
-    cbs.append(_cb(CB_RINV_COL, br, t_f, ttnn.float32, crs))
-    cbs.append(_cb(CB_RINV, br, t_f, ttnn.float32, crs))
+        cbs.append(_cb(CB_PARTIAL, br, t_int, int_fmt, crs))
+        cbs.append(_cb(CB_GATHERED, k * br, t_int, int_fmt, crs))
+        cbs.append(_cb(CB_RINV_BCAST, br, t_int, int_fmt, crs))
+    cbs.append(_cb(CB_RINV_COL, br, t_int, int_fmt, crs))
+    cbs.append(_cb(CB_RINV, br, t_int, int_fmt, crs))
     if is_tile:
         cbs.append(_cb(CB_Y, Y_DEPTH * Y_CHUNK_TILES, t_in, dtype, crs))
     else:
@@ -343,7 +361,8 @@ def create_program_descriptor(input_tensor, gamma, output_tensor, epsilon, compu
         k,  # 15 w_split
         SEM_PARTIALS,  # 16
         SEM_RINV_LOCAL,  # 17
-        t_f,  # 18
+        t_int,  # 18 intermediate tile bytes (gather / multicast)
+        int(gamma_is_block_float),  # 19 TILE γ is block-float -> read whole tiles
     ]
     writer_ct.extend(ttnn.TensorAccessorArgs(output_tensor).get_compile_time_args())
     writer_ct.extend(

@@ -56,8 +56,10 @@ void kernel_main() {
     constexpr uint32_t w_split = get_compile_time_arg_val(15);
     constexpr uint32_t sem_partials_id = get_compile_time_arg_val(16);
     constexpr uint32_t sem_rinv_local_id = get_compile_time_arg_val(17);
-    constexpr uint32_t f32_tile_bytes = get_compile_time_arg_val(18);
-    constexpr auto y_args = TensorAccessorArgs<19>();
+    constexpr uint32_t int_tile_bytes = get_compile_time_arg_val(18);  // intermediate-CB tile (DEST-width format)
+    constexpr bool gamma_is_block_float = get_compile_time_arg_val(19) != 0;
+    static_assert(!(gamma_is_block_float && gamma_is_rm), "block-float γ has no ROW_MAJOR form");
+    constexpr auto y_args = TensorAccessorArgs<20>();
     constexpr auto g_args = TensorAccessorArgs<y_args.next_compile_time_args_offset()>();
     constexpr auto mcast = McastArgs<
         get_named_compile_time_arg_val("rinv_mcast_ct_offset"),
@@ -93,6 +95,23 @@ void kernel_main() {
                 g_acc.get_noc_addr(0, w_start * TILE_DIM * es_g), get_write_ptr(cb_gamma_rm), w_valid_elems * es_g);
             noc_async_read_barrier();
             cb_push_back(cb_gamma_rm, 1);
+        } else if constexpr (gamma_is_block_float) {
+            // TILE block-float γ (bf8b): a tile is a shared-exponent section + a mantissa section, so face-row
+            // addressing is meaningless -> read the valid tiles whole (contiguous pages, one barrier). The nominal
+            // tail tiles [w_valid, core_w_tiles) are zeroed (all-zero bf8b bytes decode to 0).
+            CircularBuffer g_buf(cb_gamma);
+            cb_reserve_back(cb_gamma, core_w_tiles);
+            const uint32_t l1 = get_write_ptr(cb_gamma);
+            if (w_valid < core_w_tiles) {
+                noc.async_write_zeros(
+                    g_buf, (core_w_tiles - w_valid) * g_tile_bytes, {.offset_bytes = w_valid * g_tile_bytes});
+                noc.write_zeros_l1_barrier();
+            }
+            for (uint32_t c = 0; c < w_valid; ++c) {
+                noc_async_read(g_acc.get_noc_addr(w_start + c), l1 + c * g_tile_bytes, g_tile_bytes);
+            }
+            noc_async_read_barrier();
+            cb_push_back(cb_gamma, core_w_tiles);
         } else {
             // TILE γ: only row 0 matters (row broadcast) -> read face0-row0 and face1-row0 of each valid tile.
             CircularBuffer g_buf(cb_gamma);
@@ -139,9 +158,9 @@ void kernel_main() {
             const uint32_t src = get_read_ptr(cb_partial);
             for (uint32_t r = 0; r < rows; ++r) {
                 noc_async_write(
-                    src + r * f32_tile_bytes,
-                    get_noc_addr(root_x, root_y, gathered_base + (r * w_split + line_pos) * f32_tile_bytes),
-                    f32_tile_bytes);
+                    src + r * int_tile_bytes,
+                    get_noc_addr(root_x, root_y, gathered_base + (r * w_split + line_pos) * int_tile_bytes),
+                    int_tile_bytes);
             }
             noc_async_write_barrier();
             sem_partials.up(noc, root_x, root_y, 1);
@@ -153,7 +172,7 @@ void kernel_main() {
                 auto sender = mcast.optional_sender(noc);
                 ASSERT(sender.has_value());
                 if (sender) {
-                    sender->send(get_read_ptr(cb_rinv_bcast), rinv_base, rows * f32_tile_bytes);
+                    sender->send(get_read_ptr(cb_rinv_bcast), rinv_base, rows * int_tile_bytes);
                 }
                 cb_pop_front(cb_rinv_bcast, rows);
                 sem_rinv_local.set(b + 1);  // send() barriered the loopback copy: own cb_rinv holds rinv(b)

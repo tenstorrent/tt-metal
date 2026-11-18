@@ -43,7 +43,7 @@
 - **Compute config**: caller's `ComputeConfigDescriptor` passed as-is (fidelity / approx honoured; `math_approx_mode` → `Rsqrt<Approx>`); default = HiFi4 + fp32_dest_acc_en=True
 - **Golden baseline**: 659 supported_pass / 5566 xfail_expected / 33900 invalid_skipped; supported_fail = xpass_drift = xfail_wrong_mode = 0 (per `verifier_report.json`)
 
-### [ ] Refinement 1 — Numerical configurability: fp32_dest_acc_en=False + bfloat8_b (input and γ)
+### [x] Refinement 1 — Numerical configurability: fp32_dest_acc_en=False + bfloat8_b (input and γ)
 
 **Goal**: add `False` to `SUPPORTED["fp32_dest_acc_en"]` (bfloat16 input; `{float32, False}` stays in EXCLUSIONS), add `ttnn.bfloat8_b` to `SUPPORTED["dtype"]` and to `SUPPORTED["gamma_dtype"]`, and derive every intermediate-CB page format from the resolved `fp32_dest_acc_en` (Float32 when on, Float16_b when off). Native, in-kernel: no host-side typecasts. Cells that fail out of the box go to `EXCLUSIONS`, not to a separate refinement. Moves the 1221 interleaved `xfail_expected` cells (`fp32_dest_acc_en=False` ×753, `gamma_dtype=bfloat8_b` ×259, `dtype=bfloat8_b` ×209) to `supported_pass`, including all 12 interleaved `_perf_case` loose cases (bf16 / HiFi2 / fp32_dest_acc_en=False / TILE bf16 γ).
 
