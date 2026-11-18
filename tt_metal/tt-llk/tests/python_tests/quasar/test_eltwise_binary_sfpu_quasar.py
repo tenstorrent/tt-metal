@@ -1160,8 +1160,8 @@ def test_eltwise_binary_sfpu_max_min_int32_quasar(
 # Family 4 — quant / requant / dequant. Mixed int/float operands with a runtime
 # fp32 zero-point. Ported from Blackhole ckernel_sfpu_quant.h.
 #
-#   quant:   out_int32 = clamp(round(A_fp32 * scale_fp32 + zp), -127, 127)
-#   requant: out_int32 = clamp(round(int32_to_fp32(A) * scale_fp32 + zp), -127, 127)
+#   quant:   out_int32 = clamp(round(A_fp32 * scale_fp32) + zp, -128, 127)
+#   requant: out_int32 = clamp(round(int32_to_fp32(A) * scale_fp32 + zp), -128, 127)
 #   dequant: out_fp32  = (int32_to_fp32(A) - zp) * scale_fp32
 #
 # Operand A and the fp32 scale B are both staged into buffer_A as raw 32-bit words
@@ -1175,9 +1175,8 @@ def test_eltwise_binary_sfpu_max_min_int32_quasar(
 # call runs ITERATIONS=8 unrolled rows, covering the whole 1024-element dst tile.
 _PROCESSED_ELEMS = MAX_TILE_ELEMENTS
 
-# SMAG8 saturation: the STOCH_RND fp32->sint8 path clamps magnitude to 127, so the
-# representable output range is [-127, +127] (-128 is NOT representable).
-_QUANT_INT8_MIN = -127
+# Magic-constant round plus an SFPSWAP clamp. The full int8 range is representable.
+_QUANT_INT8_MIN = -128
 _QUANT_INT8_MAX = 127
 
 
@@ -1240,21 +1239,19 @@ def _run_quant(
         golden_active = golden_active.to(torch.float32)
         out_dtype = torch.float32
     else:
-        prod = a_float * scale + zero_point
-        rounded = torch.round(prod)  # round-half-to-even matches SFP STOCH_RND NearEven
-        clamped = torch.clamp(rounded, _QUANT_INT8_MIN, _QUANT_INT8_MAX).to(torch.int32)
-        # STOCH_RND emits a sign-magnitude int8 result. A negative value whose
-        # magnitude rounds to 0 becomes sign-magnitude negative-zero (0x80000000).
-        neg_zero = (clamped == 0) & (prod < 0)
-        if sign_magnitude:
-            # SM path stores the STOCH_RND SMAG32 result as-is (no SM32_TO_2SC cast):
-            # negatives keep bit31|magnitude and negative-zero stays 0x80000000.
-            golden_active = int32_to_smag32(clamped)
-            golden_active[neg_zero] = torch.tensor(-(2**31), dtype=torch.int32)
+        # Matching Blackhole: quant rounds the bare product and adds the zero point afterwards,
+        # requant rounds the product plus the zero point. The two differ at exact halves.
+        exact = a_float.double() * scale.double()
+        if binary_op == "QUANT":
+            rounded = torch.round(exact) + zero_point
         else:
-            # 2's-comp path: SM32_TO_2SC maps STOCH_RND negative-zero to -1 (not +0).
+            rounded = torch.round((exact + zero_point).float().double())
+        clamped = torch.clamp(rounded, _QUANT_INT8_MIN, _QUANT_INT8_MAX).to(torch.int32)
+        if sign_magnitude:
+            # The kernel rounds in two's complement, then casts back to sign-magnitude.
+            golden_active = int32_to_smag32(clamped)
+        else:
             golden_active = clamped
-            golden_active[neg_zero] = -1
         out_dtype = torch.int32
 
     golden_tensor = torch.zeros(MAX_TILE_ELEMENTS, dtype=out_dtype)
