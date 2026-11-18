@@ -14,7 +14,7 @@ from typing import Sequence
 
 from .common import emit_result, emit_running, log, print_phase_summary, run, write_command_log
 from .galaxy import EXPECTED_CHIP_COUNT
-from .model import FAIL, PASS, WARN, Check, Phase
+from .model import FAIL, PASS, SKIP, WARN, Check, Phase
 from .snapshot import resolve_tt_smi, take_snapshot
 from .snapshot_checks import validate_snapshot
 
@@ -204,10 +204,14 @@ def fold_post_reset_snapshots(report: dict, post_reset_phases: list[tuple[str, P
     final_name, final_phase = post_reset_phases[-1]
     if final_name not in report["phases"]:
         report["phases"][final_name] = asdict(final_phase)
-    summary_status = PASS if not differed else WARN
-    summary_details = f"{len(matched)}/{len(post_reset_phases)} post-reset snapshots matched initial" + (
-        f"; {len(differed)} differed (see {', '.join(n for n,_ in differed)})" if differed else ""
-    )
+    if not differed and ("snapshot_capture", FAIL) in initial_sig:
+        summary_status = SKIP
+        summary_details = "no snapshot was captured, so there is nothing to compare"
+    else:
+        summary_status = PASS if not differed else WARN
+        summary_details = f"{len(matched)}/{len(post_reset_phases)} post-reset snapshots matched initial" + (
+            f"; {len(differed)} differed (see {', '.join(n for n,_ in differed)})" if differed else ""
+        )
     report["phases"]["snapshot"]["checks"].append(
         asdict(
             Check(
