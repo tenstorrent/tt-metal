@@ -238,61 +238,29 @@ std::vector<MeshCoordinate> extract_tensor_coordinates_impl(
 
 std::vector<std::uint32_t> compute_tensor_alias_signature(
     const std::vector<std::reference_wrapper<const ttnn::Tensor>>& tensors) {
-    // Avoid allocation/sorting for the common use case, most operations
-    // pass a fixed number of tensors as parameters, so everything can be
-    // kept on stack in SmallVector.
-    constexpr std::size_t kPairwiseScanLimit = 16;
-
     // Tensors without an allocated MeshTensor never alias: no binding can reference them.
-    ttsl::SmallVector<const tt::tt_metal::MeshTensor*, kPairwiseScanLimit> identities;
-    identities.reserve(tensors.size());
-    for (const auto& tensor_ref : tensors) {
-        const ttnn::Tensor& tensor = tensor_ref.get();
-        const bool has_mesh_tensor = tensor.storage_type() == StorageType::DEVICE && tensor.is_allocated();
-        identities.push_back(has_mesh_tensor ? &tensor.mesh_tensor() : nullptr);
+    ttsl::SmallVector<std::pair<const tt::tt_metal::MeshTensor*, std::uint32_t>, 16> identities;
+    for (std::uint32_t i = 0; i < tensors.size(); ++i) {
+        const ttnn::Tensor& tensor = tensors[i].get();
+        if (tensor.storage_type() == StorageType::DEVICE && tensor.is_allocated()) {
+            identities.emplace_back(&tensor.mesh_tensor(), i);
+        }
     }
+    // Sorting by (MeshTensor, position) puts each MeshTensor's first position at the head of its run.
+    std::sort(identities.begin(), identities.end());
 
     std::vector<std::uint32_t> signature;
-    const auto record_alias = [&](std::size_t position, std::size_t first_position) {
+    for (std::size_t run_start = 0, i = 1; i < identities.size(); ++i) {
+        if (identities[i].first != identities[run_start].first) {
+            run_start = i;
+            continue;
+        }
         if (signature.empty()) {
-            signature.resize(identities.size());
+            signature.resize(tensors.size());
             std::iota(signature.begin(), signature.end(), 0u);
         }
-        signature[position] = static_cast<std::uint32_t>(first_position);
-    };
-
-    if (identities.size() <= kPairwiseScanLimit) {
-        for (std::size_t i = 1; i < identities.size(); ++i) {
-            if (identities[i] == nullptr) {
-                continue;
-            }
-            for (std::size_t j = 0; j < i; ++j) {
-                if (identities[j] == identities[i]) {
-                    record_alias(i, j);
-                    break;
-                }
-            }
-        }
-
-    } else {
-        // Sorting by (identity, position) puts each MeshTensor's first position at the head of its run.
-        std::vector<std::pair<const tt::tt_metal::MeshTensor*, std::size_t>> sorted;
-        sorted.reserve(identities.size());
-        for (std::size_t i = 0; i < identities.size(); ++i) {
-            if (identities[i] != nullptr) {
-                sorted.emplace_back(identities[i], i);
-            }
-        }
-        std::sort(sorted.begin(), sorted.end());
-        for (std::size_t run_start = 0, i = 1; i < sorted.size(); ++i) {
-            if (sorted[i].first == sorted[run_start].first) {
-                record_alias(sorted[i].second, sorted[run_start].second);
-            } else {
-                run_start = i;
-            }
-        }
+        signature[identities[i].second] = identities[run_start].second;
     }
-
     return signature;
 }
 

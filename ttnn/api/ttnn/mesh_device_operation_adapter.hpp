@@ -1131,8 +1131,8 @@ public:
         //
         // When several slots hold the same MeshTensor, pointer identity cannot tell which of them a
         // TensorArgument came from (ProgramRunArgs::tensor_args is a Table with no promised order).
-        // Any of them is correct: compute_mesh_workload_hash keys spec ops by which io slots alias
-        // (compute_tensor_alias_signature), so every hit of this entry repeats the miss's aliasing.
+        // Any of them is correct: compute_mesh_workload_hash keys spec ops by which tensor_args slots
+        // alias (compute_tensor_alias_signature), so every hit of this entry repeats the miss's aliasing.
         //
         // NOTE on host perf: the index-based binding scheme is what makes a fast cache-hit path
         // possible, but the current straightforward implementation isn't there yet -- the

@@ -703,7 +703,6 @@ TEST_F(LaunchOperation2x4Test, TensorAliasSignature) {
     ASSERT_NE(a_rewrapped.tensor_attributes, a.tensor_attributes);
     EXPECT_THAT(compute_tensor_alias_signature(TensorRefs{b, a, a_copy, a_rewrapped}), ElementsAre(0u, 1u, 1u, 1u));
 
-    // Past the pairwise-scan limit the sort-based path must give the same answers.
     std::vector<Tensor> distinct_tensors;
     distinct_tensors.reserve(20);
     for (int i = 0; i < 20; ++i) {
