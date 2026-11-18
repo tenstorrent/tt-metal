@@ -236,6 +236,17 @@ ParallelismContext::ParallelismContext(
             m_num_tp_devices = mesh_shape[m_tp_axis.value()];
         }
     }
+
+    // ring_shift pairs even and odd devices, so CP needs an even ring of at least 2. Check it at setup rather than
+    // at the first ring step.
+    if (m_cp_axis.has_value()) {
+        TT_FATAL(
+            m_num_cp_devices >= 2U && m_num_cp_devices % 2U == 0U,
+            "Context parallelism needs an even CP axis of at least 2 devices (mesh shape {}, CP axis {} has {})",
+            mesh_shape,
+            m_cp_axis.value(),
+            m_num_cp_devices);
+    }
 }
 
 [[nodiscard]] const ParallelismContext& AutoContext::get_parallelism_context() const {
