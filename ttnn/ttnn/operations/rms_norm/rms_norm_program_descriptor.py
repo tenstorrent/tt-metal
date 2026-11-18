@@ -52,6 +52,16 @@ RINV_MCAST_HANDSHAKE = False
 # x·γ prescale into cb_xg before the rinv wait (W_SPLIT TILE γ; per-shape gate in _xg_prescale). False: the fused
 # normalize (x·γ)·rinv after the rendezvous (pre-Refinement-3 schedule).
 XG_PRESCALE = True
+# Per-core compute-throughput knobs (Refinement 4; catalog `compute_block_size`):
+# DEST tiles per eltwise_chain window for the normalize / x·γ prescale passes (block lifecycle on the output CB:
+# one acquire / commit / pack / release per NORM_DEST_BLOCK tiles instead of per tile; the chain clamps it to
+# DEST_AUTO_LIMIT). 1 = the per-tile schedule. Applied only where the output CB's ring can never be straddled by
+# a window (_norm_block).
+NORM_DEST_BLOCK = 8
+# Collapse Σx² tiles to the per-row column on the ReduceTile datapath (FPU reduce against a ones scaler in
+# CB_REDUCE_SCALER) instead of AccumulateViaAdd's SFPU lane reduce (~6x fewer cycles per tile). The masked
+# partial-W collapse (resident non-aligned W) keeps AccumulateViaAdd (its 0/1 lane mask is that datapath's).
+COLLAPSE_REDUCE_TILE = True
 
 # ---- CB indices (semantic names) ----
 CB_X_RM = 0
@@ -69,6 +79,7 @@ CB_OUT_RM = 11
 CB_WMASK = 12  # sharded TILE + non-aligned W: 0/1 lane mask for the partial-W tile (collapse reduce scaler slot)
 CB_GAMMA_STAGE = 13  # RM γ whose slice offset is not DRAM-aligned (RM shards): aligned DRAM window staging
 CB_XG = 14  # W_SPLIT TILE γ: x·γ of the block, computed while waiting for rinv (Blocking.xg_prescale)
+CB_REDUCE_SCALER = 15  # ones scaler of the ReduceTile collapse (COLLAPSE_REDUCE_TILE)
 
 # ---- semaphore ids ----
 SEM_PARTIALS = 0  # root: count of partials landed in cb_gathered (cumulative)
@@ -142,6 +153,23 @@ class ShardPlacement:
     col_major: bool  # COL_MAJOR orientation (lines are shard-grid columns)
 
 
+def _collapse_reduce_tile(g: OpGeometry) -> bool:
+    return COLLAPSE_REDUCE_TILE and g.sumsq_parts == 1
+
+
+def _norm_block(is_tile: bool, y_resident: bool, br: int, cw: int) -> int:
+    """DEST window of the normalize / prescale chains. A window reserves its tiles contiguously, so it must never
+    straddle the end of the output CB ring: the resident output shard and cb_xg are consumed whole per block; the
+    interleaved cb_y ring is safe when both the ring and the block are window multiples. RM normalizes in place
+    with per-tile credit (window 1)."""
+    if not is_tile or NORM_DEST_BLOCK <= 1:
+        return 1
+    if y_resident:
+        return NORM_DEST_BLOCK
+    ring = Y_DEPTH * Y_CHUNK_TILES
+    return NORM_DEST_BLOCK if (ring % NORM_DEST_BLOCK == 0 and (br * cw) % NORM_DEST_BLOCK == 0) else 1
+
+
 def _per_row_bytes(g: OpGeometry, cw: int, k: int) -> int:
     ws = k > 1
     b = 0
@@ -176,6 +204,8 @@ def _fixed_bytes(g: OpGeometry, cw: int, wc: int = None) -> int:
         b += X_RM_DEPTH * wc * g.t_in + OUT_RM_DEPTH * wc * g.t_in  # cb_x_rm, cb_out_rm
     if g.sumsq_parts > 1:
         b += g.t_int  # cb_wmask
+    if _collapse_reduce_tile(g):
+        b += ttnn.tile_size(ttnn.bfloat16)  # cb_reduce_scaler
     b += _gamma_stage_bytes(g, wc)  # cb_gamma_stage
     return b
 
@@ -510,6 +540,10 @@ def create_program_descriptor(input_tensor, gamma, output_tensor, epsilon, compu
     cbs.append(_cb(CB_SUMSQ_RAW, geo.sumsq_parts * br, t_int, int_fmt, crs))
     if mask_partial:
         cbs.append(_cb(CB_WMASK, 1, t_int, int_fmt, crs))
+    collapse_rt = _collapse_reduce_tile(geo)
+    if collapse_rt:
+        cbs.append(_cb(CB_REDUCE_SCALER, 1, ttnn.tile_size(ttnn.bfloat16), ttnn.bfloat16, crs))
+    norm_block = _norm_block(is_tile, y_resident, br, cw)
     if is_ws:
         cbs.append(_cb(CB_PARTIAL, br, t_int, int_fmt, crs))
         cbs.append(_cb(CB_GATHERED, k * br, t_int, int_fmt, crs))
@@ -611,6 +645,7 @@ def create_program_descriptor(input_tensor, gamma, output_tensor, epsilon, compu
         int(x_sharded),  # 15 input is an L1 shard (TILE: resident cb_x; RM: core-local re-stride)
         int(mask_partial),  # 16 owner of the partial-W tile fills cb_wmask
         wc,  # 17 w_chunk_tiles (RM staging chunk)
+        int(collapse_rt),  # 18 fill the ReduceTile collapse's ones scaler (cb_reduce_scaler)
     ]
     reader_ct.extend(ttnn.TensorAccessorArgs(input_tensor).get_compile_time_args())
 
@@ -690,6 +725,8 @@ def create_program_descriptor(input_tensor, gamma, output_tensor, epsilon, compu
         wc,  # 10 w_chunk_tiles (RM tilize / untilize chunk, γ chunk)
         int(gamma_streams),  # 11 γ streamed per block in w_chunk_tiles chunks
         int(blk.xg_prescale),  # 12 x·γ into cb_xg before the rinv wait
+        norm_block,  # 13 DEST window of the normalize / prescale chains (NORM_DEST_BLOCK, ring-safe)
+        int(collapse_rt),  # 14 collapse on the ReduceTile datapath (COLLAPSE_REDUCE_TILE)
     ]
     compute = ttnn.KernelDescriptor(
         kernel_source=str(KERNEL_DIR / "rms_norm_compute.cpp"),

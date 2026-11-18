@@ -39,6 +39,7 @@ constexpr uint32_t cb_x = 1;
 constexpr uint32_t cb_gathered = 6;
 constexpr uint32_t cb_rinv = 9;
 constexpr uint32_t cb_wmask = 12;
+constexpr uint32_t cb_reduce_scaler = 15;
 
 constexpr uint32_t TILE_DIM = 32;
 constexpr uint32_t FACE_DIM = 16;
@@ -83,7 +84,8 @@ void kernel_main() {
     constexpr uint32_t w_chunk_tiles = get_compile_time_arg_val(17);  // RM staging chunk (== core_w_tiles: none)
     constexpr uint32_t num_w_chunks = core_w_tiles / w_chunk_tiles;
     static_assert(!is_rm || num_w_chunks * w_chunk_tiles == core_w_tiles, "RM pitch is a chunk multiple");
-    constexpr auto x_args = TensorAccessorArgs<18>();
+    constexpr bool collapse_reduce_tile = get_compile_time_arg_val(18) != 0;
+    constexpr auto x_args = TensorAccessorArgs<19>();
     // Block-float input (bf8b: tile_bytes != 32*32*es) has no per-element addressing: the RM stick path and the
     // pad-lane zeroing must never be reached for it (host guard in create_program_descriptor).
     constexpr bool is_block_float = tile_bytes != TILE_DIM * TILE_DIM * es;
@@ -129,6 +131,10 @@ void kernel_main() {
     }
 
     // Sharded TILE + non-aligned W: the 0/1 mask for the partial-W tile (once; compute never pops it until the end).
+    if constexpr (collapse_reduce_tile) {
+        // ones scaler of the ReduceTile collapse (SUM, row reduce); resident for the whole kernel.
+        calculate_and_prepare_reduce_scaler<cb_reduce_scaler, PoolType::SUM, ReduceDim::REDUCE_ROW>();
+    }
     if constexpr (mask_partial) {
         if (owns_partial_last) {
             prepare_reduce_mask<cb_wmask, ReduceDim::REDUCE_ROW>(w_valid_last);

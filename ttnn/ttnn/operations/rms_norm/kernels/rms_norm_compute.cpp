@@ -12,8 +12,9 @@
 //                                          shard's tail tiles are never read); the partial-W tile (pad lanes hold the
 //                                          caller's padding, possibly poison) is squared into a SECOND per-row tile.
 //   collapse_block                         reduce SUM ROW  cb_sumsq_raw -> cb_rinv_col (LOCAL) | cb_partial (W_SPLIT)
-//                                          (AccumulateViaAdd + within-tile Collapse; the second per-row tile, when
-//                                          present, is folded through the 0/1 lane mask cb_wmask: only_partial())
+//                                          (ReduceTile against the ones scaler cb_reduce_scaler; masked resident
+//                                          partial-W: AccumulateViaAdd + within-tile Collapse, the second per-row
+//                                          tile folded through the 0/1 lane mask cb_wmask: only_partial())
 //   combine_block        (W_SPLIT root)    reduce SUM ROW  cb_gathered -> cb_rinv_col (AccumulateViaAdd, Skip)
 //   finalize_rinv_block  (LOCAL / root)    eltwise_chain x2 (1) cb_rinv_col -> rsqrt(Σ*(1/W)+eps) on the column-0
 //                                                          vectors only (RinvColumn, fused SFPU) -> cb_rinv_col in place
@@ -62,6 +63,7 @@ constexpr uint32_t cb_y = 10;
 constexpr uint32_t cb_out_rm = 11;
 constexpr uint32_t cb_wmask = 12;
 constexpr uint32_t cb_xg = 14;
+constexpr uint32_t cb_reduce_scaler = 15;
 
 using namespace compute_kernel_lib;
 
@@ -86,6 +88,15 @@ constexpr uint32_t num_g_chunks = (core_w_tiles + w_chunk_tiles - 1) / w_chunk_t
 // x·γ computed into cb_xg while the core waits for rinv (W_SPLIT, TILE, resident γ; select_blocking().xg_prescale).
 constexpr bool xg_prescale = get_compile_time_arg_val(12) != 0;
 static_assert(!xg_prescale || (is_wsplit && has_gamma && !is_rm && !gamma_streams), "xg_prescale: W_SPLIT TILE γ");
+// DEST window (tiles per acquire/commit/pack/release) of the normalize / prescale chains (host _norm_block: ring-safe
+// or 1). Inputs and outputs then synchronize per window (PerBlockSize) instead of per tile.
+constexpr uint32_t norm_block = get_compile_time_arg_val(13);
+// Collapse on the ReduceTile datapath (FPU reduce against the ones scaler in cb_reduce_scaler) instead of
+// AccumulateViaAdd's within-tile SFPU lane reduce. Never with mask_partial (the 0/1 lane mask is AccumulateViaAdd's).
+constexpr bool collapse_reduce_tile = get_compile_time_arg_val(14) != 0;
+static_assert(!(collapse_reduce_tile && mask_partial), "the masked partial-W collapse stays on AccumulateViaAdd");
+constexpr ReservePolicy norm_reserve = norm_block > 1 ? ReservePolicy::PerBlockSize : ReservePolicy::PerTile;
+constexpr PushPolicy norm_push = norm_block > 1 ? PushPolicy::PerBlockSize : PushPolicy::PerTile;
 
 // Normalize output: TILE -> separate cb_y window; RM -> in place into cb_x (compute is its only producer/consumer).
 constexpr uint32_t cb_norm_out = is_rm ? cb_x : cb_y;
@@ -94,6 +105,19 @@ constexpr uint32_t cb_norm_out = is_rm ? cb_x : cb_y;
 // masked: the last per-row tile is the partial-W tile's squares -> folded through cb_wmask (pad lanes -> 0).
 template <uint32_t out_cb>
 ALWI void collapse_block(uint32_t rows, uint32_t parts, bool masked) {
+    if constexpr (collapse_reduce_tile) {
+        reduce<
+            PoolType::SUM,
+            ReduceDim::REDUCE_ROW,
+            cb_sumsq_raw,
+            cb_reduce_scaler,
+            out_cb,
+            ReduceInputPolicy::BulkWaitBulkPop,
+            ReduceDataFormatReconfigMode::INPUT_AND_OUTPUT,
+            ReduceFp32Mode::Fast,
+            ReduceAlgorithm::ReduceTile>(ReduceInputBlockShape::of(rows, parts));
+        return;
+    }
     reduce<
         PoolType::SUM,
         ReduceDim::REDUCE_ROW,
@@ -238,27 +262,29 @@ constexpr InputSpec x_in = is_rm ? input(cb_x, WaitPolicy::PerTile, PopPolicy::P
 // xg = x * γ[row bcast] -> cb_xg (pops the x block). Nothing here depends on rinv.
 ALWI void prescale_block(uint32_t rows) {
     eltwise_chain(
-        IterationShape::grid(rows, core_w_tiles),
+        IterationShape::grid(rows, core_w_tiles).block_size(norm_block),
         BinaryFpu<
             BinaryFpuOp::Mul,
             x_in,
             input(cb_gamma, BroadcastDim::Row, WaitPolicy::None, PopPolicy::None, InputTileMapping::Row)>{},
-        PackTile<output(cb_xg)>{});
+        PackTile<output(cb_xg, norm_reserve, norm_push)>{});
 }
 
 ALWI void normalize_block(uint32_t rows) {
     if constexpr (xg_prescale) {
         // y = xg * rinv: the only work left after the rendezvous.
+        constexpr WaitPolicy xg_wait = norm_block > 1 ? WaitPolicy::PerBlockSize : WaitPolicy::PerTile;
+        constexpr PopPolicy xg_pop = norm_block > 1 ? PopPolicy::PerBlockSize : PopPolicy::PerTile;
         eltwise_chain(
-            IterationShape::grid(rows, core_w_tiles),
+            IterationShape::grid(rows, core_w_tiles).block_size(norm_block),
             BinaryFpu<
                 BinaryFpuOp::Mul,
-                input(cb_xg),
+                input(cb_xg, xg_wait, xg_pop, norm_block > 1 ? InputTileMapping::Block : InputTileMapping::Scalar),
                 input(cb_rinv, BroadcastDim::None, WaitPolicy::Upfront, PopPolicy::AtEnd, InputTileMapping::Col)>{},
-            PackTile<output(cb_y)>{});
+            PackTile<output(cb_y, norm_reserve, norm_push)>{});
     } else if constexpr (has_gamma) {
         eltwise_chain(
-            IterationShape::grid(rows, core_w_tiles),
+            IterationShape::grid(rows, core_w_tiles).block_size(norm_block),
             BinaryFpu<
                 BinaryFpuOp::Mul,
                 x_in,
@@ -267,15 +293,15 @@ ALWI void normalize_block(uint32_t rows) {
                 BinaryFpuOp::Mul,
                 input(cb_rinv, WaitPolicy::Upfront, PopPolicy::AtEnd, InputTileMapping::Col),
                 DestReuseType::DEST_TO_SRCA>{},
-            PackTile<output(cb_norm_out)>{});
+            PackTile<output(cb_norm_out, norm_reserve, norm_push)>{});
     } else {
         eltwise_chain(
-            IterationShape::grid(rows, core_w_tiles),
+            IterationShape::grid(rows, core_w_tiles).block_size(norm_block),
             BinaryFpu<
                 BinaryFpuOp::Mul,
                 x_in,
                 input(cb_rinv, BroadcastDim::None, WaitPolicy::Upfront, PopPolicy::AtEnd, InputTileMapping::Col)>{},
-            PackTile<output(cb_norm_out)>{});
+            PackTile<output(cb_norm_out, norm_reserve, norm_push)>{});
     }
 }
 
