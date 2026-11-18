@@ -25,7 +25,7 @@ moe_block_utils = ttnn._ttnn.operations.experimental.moe_block
 
 BLOCK = "block"
 TTMOE = "ttmoe"
-_BLOCK_DEFAULT = ("GLM53Config", "KimiK3Config")  # model config classes whose MoE is the block by default
+_BLOCK_DEFAULT = ("GLM53Config", "KimiK3Config", "KimiK31Config")  # model config classes whose MoE is the block by default
 
 # The model's own L1_SMALL use a bank next to the block (its other ops' semaphores and words, allocated before the
 # block's slab), where the model's l1_small_size is not that figure:
