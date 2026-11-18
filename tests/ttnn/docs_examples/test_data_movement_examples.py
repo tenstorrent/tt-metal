@@ -260,6 +260,40 @@ def test_sort(device):
     logger.info(f"Sorted Tensor along dim 1: {sorted_tensor_dim}, Indices: {indices_dim}")
 
 
+def test_reshard(device):
+    # Create a tensor height-sharded in L1 over 4 cores, 32 rows per core
+    height_sharded = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+        ttnn.BufferType.L1,
+        ttnn.ShardSpec(
+            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(3, 0))}),
+            [32, 64],
+            ttnn.ShardOrientation.ROW_MAJOR,
+        ),
+    )
+    input_tensor = ttnn.from_torch(
+        torch.rand((1, 1, 128, 64)),
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=height_sharded,
+    )
+
+    # Reshard it into 64x32 blocks on a 2x2 core grid
+    block_sharded = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+        ttnn.BufferType.L1,
+        ttnn.ShardSpec(
+            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 1))}),
+            [64, 32],
+            ttnn.ShardOrientation.ROW_MAJOR,
+        ),
+    )
+    output_tensor = ttnn.reshard(input_tensor, block_sharded)
+    logger.debug(f"Shard Shape: {output_tensor.memory_config().shard_spec.shape}")  # [64, 32]
+    logger.debug(f"Resharded Tensor Shape: {output_tensor.shape}")  # Shape([1, 1, 128, 64])
+
+
 def test_narrow(device):
     input_tensor = ttnn.rand((32, 16, 16, 4), dtype=ttnn.bfloat16, device=device)
     narrowed_tensor = ttnn.narrow(input_tensor, 0, 0, 12)
