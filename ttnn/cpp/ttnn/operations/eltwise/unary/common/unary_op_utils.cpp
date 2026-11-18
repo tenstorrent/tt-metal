@@ -968,6 +968,10 @@ std::pair<std::string, std::string> get_op_init_and_func_default(
             if (input_dtype == DataType::INT32) {
                 return {"ltz_tile_init();", fmt::format("ltz_tile_int32({});", idst)};
             }
+            if (input_dtype == DataType::UINT32) {
+                // No unsigned value is below zero, so the result is always 0.
+                return {"fill_tile_init();", fmt::format("fill_tile_int<DataFormat::UInt32>({}, 0u);", idst)};
+            }
             return {"ltz_tile_init();", fmt::format("        ltz_tile({});", idst)};
 
         case UnaryOpType::GTZ:
@@ -975,6 +979,10 @@ std::pair<std::string, std::string> get_op_init_and_func_default(
                 input_dtype.has_value(), "Missing input dtype: Expected a valid input dtype, but none was provided.");
             if (input_dtype == DataType::INT32) {
                 return {"gtz_tile_init();", fmt::format("gtz_tile_int32({});", idst)};
+            }
+            if (input_dtype == DataType::UINT32) {
+                // For unsigned x, x > 0 is x != 0.
+                return {"nez_tile_init();", fmt::format("nez_tile_uint32({});", idst)};
             }
             return {"gtz_tile_init();", fmt::format("        gtz_tile({});", idst)};
 
@@ -984,6 +992,10 @@ std::pair<std::string, std::string> get_op_init_and_func_default(
             if (input_dtype == DataType::INT32) {
                 return {"gez_tile_init();", fmt::format("gez_tile_int32({});", idst)};
             }
+            if (input_dtype == DataType::UINT32) {
+                // Every unsigned value is at least zero, so the result is always 1.
+                return {"fill_tile_init();", fmt::format("fill_tile_int<DataFormat::UInt32>({}, 1u);", idst)};
+            }
             return {"gez_tile_init();", fmt::format("        gez_tile({});", idst)};
 
         case UnaryOpType::LEZ:
@@ -991,6 +1003,10 @@ std::pair<std::string, std::string> get_op_init_and_func_default(
                 input_dtype.has_value(), "Missing input dtype: Expected a valid input dtype, but none was provided.");
             if (input_dtype == DataType::INT32) {
                 return {"lez_tile_init();", fmt::format("lez_tile_int32({});", idst)};
+            }
+            if (input_dtype == DataType::UINT32) {
+                // For unsigned x, x <= 0 is x == 0.
+                return {"eqz_tile_init();", fmt::format("eqz_tile_uint32({});", idst)};
             }
             return {"lez_tile_init();", fmt::format("        lez_tile({});", idst)};
 
@@ -1294,6 +1310,10 @@ std::map<std::string, std::string> get_block_defines(
 // update split eltwise ops include macros
 void update_macro_defines(UnaryOpType op_type, std::map<std::string, std::string>& defines) {
     defines[get_macro_definition(op_type)] = "1";
+    // UInt32 GEZ / LTZ are emitted as fill_tile_int; the include does not depend on the dtype, so add it always.
+    if (op_type == UnaryOpType::GEZ || op_type == UnaryOpType::LTZ) {
+        defines["SFPU_OP_FILL_INCLUDE"] = "1";
+    }
 }
 
 void add_input_dtype_defines(DataType dtype, std::map<std::string, std::string>& defines) {
