@@ -387,6 +387,20 @@ SHARDED_B_ONE_SHOT = True
 # group). SHARDED_B_GROUP_ROWS caps a group's grid rows (None: whole rectangles). False: one group (Refinement 10).
 SHARDED_B_RECT_GROUPS = True
 SHARDED_B_GROUP_ROWS = None
+# Refinement 18, R3 with the output packed in place (no writer work): the walk's B half (B rounds / per-core B
+# reads, the bias / gate row) runs on BRISC / NoC1 -- a second instance of the reader kernel (GM_BS_ROLE 2) in
+# the writer's slot -- and the A half (the row exchange, residual) stays on NCRISC (GM_BS_ROLE 1), so a column's
+# B rounds overlap its row's A rounds instead of queueing behind them on one RISC. False: one reader (R10).
+BS_B_ON_WRITER = True
+# ... and on that split's per-core B path (no weight channel), cb_weight_tiles holds up to this many K-blocks
+# (clamped to the walk and to the L1 budget) so the B RISC reads ahead of compute instead of one K-block at a time.
+# 2 = DEPTH_WEIGHT (the Refinement 10 ring).
+BS_SPLIT_B_DEPTH = 2
+# ... and without a weight channel (per-core B reads on NoC1) the split pays only when the A rounds are heavy
+# enough to hide the B half's read latency: A round bytes (block_m x block_k tiles) >= this. Measured (device us,
+# split vs one reader): aspp_proj 87 KB 16.8 vs 18.6, res4_reduce 70 KB 18.4 vs 18.8, res4_reduce5 35 KB 12.7 vs
+# 12.2, res4_expand 8.7 KB 13.9 vs 13.1. 0 = split every in-place R3 walk.
+BS_SPLIT_MIN_A_ROUND_BYTES = 64 * 1024
 # own_kb sentinel for every regime without a resident own K-slice (R1 / R1a / R4).
 NO_OWN_KB = 0xFFFFFFFF
 # Perf tooling (Refinement 15, /perf-measure ablations): defines appended to every R1-family kernel. Payload stubs
@@ -2671,7 +2685,9 @@ def sharded_b_groups(topo: BlockShardedTopology):
     return [[ttnn.CoreCoord(x, y) for y in range(y0, y1 + 1) for x in range(x0, x1 + 1)] for y0, y1, x0, x1 in groups]
 
 
-def _sharded_b_channel(device, geom: Geometry, topo: BlockShardedTopology, one_shot=False, cores=None):
+def _sharded_b_channel(
+    device, geom: Geometry, topo: BlockShardedTopology, one_shot=False, cores=None, noc=ttnn.NOC.NOC_0
+):
     """R2a / R3a: the weight channel (an unattached ttnn.Mcast), or None where the per-core reads stay: the
     knob is off, B is batched (it varies along the rows), a group is a single core, R3 saves less than
     BS_B_MCAST_MIN_SAVED_BYTES of B re-reads, or the receiver set is not multicastable (an R2 core list of
@@ -2691,7 +2707,7 @@ def _sharded_b_channel(device, geom: Geometry, topo: BlockShardedTopology, one_s
     if cores is not None:
         receivers, size = ttnn.CoreRangeSet([ttnn.CoreRange(c, c) for c in cores]), len(cores)
     try:
-        return ttnn.Mcast(device, ttnn.McastConfig(handshake=not one_shot), receivers, size, staggered, order)
+        return ttnn.Mcast(device, ttnn.McastConfig(noc=noc, handshake=not one_shot), receivers, size, staggered, order)
     except RuntimeError:
         return None
 
@@ -2777,13 +2793,35 @@ def create_block_sharded_program_descriptor(
     b_round = sharded_b_round(geom, blk, walk_k_blocks, budget, in_place, act_cb=act_cb)
     b_chunks, b_chunk_k = sharded_b_chunks(geom, blk, b_round)
     one_shot, row_tail = sharded_b_one_shot(geom, blk, walk_k_blocks, b_round, b_chunks, budget, in_place, act_cb)
+    # R3 split roles (BS_B_ON_WRITER): the B half on BRISC / NoC1 when the output needs no writer.
+    split_roles = BS_B_ON_WRITER and topo.cols > 1 and in_place
+    b_noc = ttnn.NOC.NOC_1 if split_roles else ttnn.NOC.NOC_0
     # One weight channel per B group (R3 / single-group R2: one channel over the whole core set).
     b_groups = sharded_b_groups(topo)
-    b_channels = [_sharded_b_channel(device, geom, topo, one_shot=one_shot, cores=g) for g in b_groups]
+    b_channels = [_sharded_b_channel(device, geom, topo, one_shot=one_shot, cores=g, noc=b_noc) for g in b_groups]
     mc_weight = next((ch for ch in b_channels if ch is not None), None)
+    a_round_bytes = blk.block_m_tiles * blk.block_k_tiles * geom.a_tile_bytes
+    if split_roles and mc_weight is None and a_round_bytes < BS_SPLIT_MIN_A_ROUND_BYTES:
+        split_roles = False  # (no channel was built, so nothing is bound to NoC1)
     if mc_weight is None:
         b_round, b_chunks, b_chunk_k, row_tail = 1, 1, 1, 0
     depth_weight = _sharded_b_depth(b_round, walk_k_blocks)
+    if split_roles and mc_weight is None and walk_k_blocks > depth_weight:
+        # The split's per-core B path: read ahead (BS_SPLIT_B_DEPTH K-blocks) while L1 allows.
+        for d in range(min(BS_SPLIT_B_DEPTH, walk_k_blocks), depth_weight, -1):
+            f = _footprint(
+                geom,
+                blk.block_m_tiles,
+                blk.block_n_tiles,
+                blk.block_k_tiles,
+                partials=blk.use_partials,
+                out_in_place=in_place,
+                depth_weight=d,
+                act_cb=act_cb,
+            )
+            if f <= budget:
+                depth_weight = d
+                break
 
     # ---- CBs ----
     # The own K-slice: backed on A's resident shard (zero-copy).
@@ -2829,8 +2867,9 @@ def create_block_sharded_program_descriptor(
     row_t = row if row is not None else b
     res_t = residual if residual is not None else b
 
-    def reader_ct(mc):
-        # A group without a channel (a single-core R2 group) reads its own B: one K-block per round.
+    def reader_ct(mc, act=True):
+        # A group without a channel (a single-core R2 group) reads its own B: one K-block per round. `act` False:
+        # the B-half kernel of the split roles (no A exchange there).
         return [
             *_reader_ct(geom, blk, a, b, epilogue, cb_row, row_t, res_t),
             0,  # operand_mcast
@@ -2838,7 +2877,7 @@ def create_block_sharded_program_descriptor(
             0,  # b_sends
             *_DS_ROLE_ABSENT,
             1,  # block_sharded (R3 / R2 walk)
-            int(row_mcast),
+            int(row_mcast and act),
             CB_ACT_SHARD,
             int(mc is not None),
             b_chunks if mc is not None else 1,
@@ -2878,24 +2917,34 @@ def create_block_sharded_program_descriptor(
             writer_rt[core.x][core.y] = [out_addr, *out_region, geom.tensor_m_tiles, geom.out_n_tiles]
             compute_rt[core.x][core.y] = [nb_m * nb_n, c]
 
-    def reader(cores, mc):
+    def reader(cores, mc, role=0):
         rt = ttnn.RuntimeArgs()
         for x, y in cores:
             rt[x][y] = reader_args[(x, y)]
         k = ttnn.KernelDescriptor(
             kernel_source=str(KERNEL_DIR / "genify_matmul_reader.cpp"),
             core_ranges=grid if len(b_groups) == 1 else ttnn.CoreRangeSet([ttnn.CoreRange(c, c) for c in cores]),
-            compile_time_args=reader_ct(mc),
+            compile_time_args=reader_ct(mc if role != 1 else None, act=role != 2),
             runtime_args=rt,
-            config=ttnn.ReaderConfigDescriptor(),  # NCRISC / NOC_0
+            # NCRISC / NOC_0; the split roles' B half: BRISC / NOC_1 (the writer's slot)
+            config=ttnn.WriterConfigDescriptor() if role == 2 else ttnn.ReaderConfigDescriptor(),
         )
-        if row_tail and mc is not None:
+        if row_tail and mc is not None and role != 1:
             k.defines = list(k.defines) + [("GM_BS_ROW_TAIL", "1")]
+        if role:
+            k.defines = list(k.defines) + [("GM_BS_ROLE", str(role))]
         return k
 
-    readers = [
-        reader(list(reader_args) if g is None else [(c.x, c.y) for c in g], mc) for g, mc in zip(b_groups, b_channels)
-    ]
+    if split_roles:
+        # readers[0]: the A half (NCRISC, act channel); b_readers: the B half (BRISC, weight channel); no writer.
+        readers = [reader(list(reader_args), None, role=1)]
+        b_readers = [reader(list(reader_args), b_channels[0], role=2)]
+    else:
+        readers = [
+            reader(list(reader_args) if g is None else [(c.x, c.y) for c in g], mc)
+            for g, mc in zip(b_groups, b_channels)
+        ]
+        b_readers = readers
     writer = ttnn.KernelDescriptor(
         kernel_source=str(KERNEL_DIR / "genify_matmul_writer.cpp"),
         core_ranges=grid,
@@ -2910,7 +2959,7 @@ def create_block_sharded_program_descriptor(
         runtime_args=compute_rt,
         config=compute_config,
     )
-    for k in (*readers, writer, compute):
+    for k in {id(k): k for k in (*readers, *b_readers, writer, compute)}.values():
         k.defines = list(k.defines) + [(d, "1") for d in ABLATE_DEFINES.split("+") if d]
     descriptor = ttnn.ProgramDescriptor(kernels=[], semaphores=[], cbs=cbs)
     if row_mcast:
@@ -2924,13 +2973,13 @@ def create_block_sharded_program_descriptor(
             ttnn.McastRotatingSenderConfig(),
             ttnn.McastCoreOrder.RowMajor,
         )
-        mc.attach(descriptor, "act", readers, 0)  # (R3: a single reader)
+        mc.attach(descriptor, "act", readers, 0)  # (R3: a single A reader)
         next_sem = mc.next_semaphore_id()
     else:
         for k in readers:
             ttnn.attach_absent_mcast(k, "act")
         next_sem = 0
-    for k, mc in zip(readers, b_channels):
+    for k, mc in zip(b_readers, b_channels):
         if mc is not None:
             # R2a / R3a: B down each grid column (R2: to every core of the B group) from its fixed injector.
             # R2's groups are disjoint core sets: each attaches its own semaphores.
@@ -2938,6 +2987,11 @@ def create_block_sharded_program_descriptor(
             next_sem = mc.next_semaphore_id()
         else:
             ttnn.attach_absent_mcast(k, "weight")
+    if split_roles:
+        ttnn.attach_absent_mcast(readers[0], "weight")
+        ttnn.attach_absent_mcast(b_readers[0], "act")
+        descriptor.kernels = [*readers, *b_readers, compute]
+        return descriptor
     ttnn.attach_absent_mcast(writer, "act")  # the writer's R4 A-round role is absent
     descriptor.kernels = [*readers, writer, compute]
     return descriptor

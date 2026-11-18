@@ -87,6 +87,7 @@ def _run_both(
         outs.append(ttnn.to_torch(genify_matmul(ta, tb, **kwargs)))
     assert list(outs[1].shape)[-1] == n_out
     assert torch.equal(outs[0], outs[1]), f"max diff {(outs[0].float() - outs[1].float()).abs().max()}"
+    seen["out"] = outs[1]
     return seen
 
 
@@ -205,3 +206,38 @@ def test_hs_one_shot_rect_groups(device, monkeypatch, case):
     assert seen["channels"] == rects
     one_shot, tail = shots[-1]
     assert one_shot and (tail > 0) == (epilogue != "swiglu")
+
+
+@pytest.mark.parametrize(
+    "case",
+    [
+        # (m, k, n, grid x, grid y, shard, epilogue, channel): PDL res5 reduce (multicast B, rounds of 2 K-blocks),
+        # ASPP projection (per-core B, 87 KB A rounds), addcmul on the res5 grid (per-core residual on NCRISC).
+        (2048, 1024, 512, 8, 10, [224, 128], "bias_relu", True),
+        (2048, 1280, 256, 8, 4, [512, 160], "bias_relu", False),
+        (2048, 1024, 512, 8, 10, [224, 128], "addcmul", True),
+    ],
+    ids=["res5_reduce", "aspp_proj", "addcmul"],
+)
+def test_bs_split_roles(device, monkeypatch, case):
+    """Refinement 18 (BS_B_ON_WRITER): an in-place R3 walk runs its B half (B rounds / reads, the bias / gate row)
+    on BRISC as a second reader instance (GM_BS_ROLE 2) and its A half on NCRISC (GM_BS_ROLE 1), with no writer.
+    Bit-identical to the single-reader walk."""
+    m, k, n, gx, gy, shard, epilogue, channel = case
+    real = pd.create_block_sharded_program_descriptor
+    roles = []
+
+    def spy(*a, **kw):
+        d = real(*a, **kw)
+        roles.append({v for kern in d.kernels for name, v in kern.defines if name == "GM_BS_ROLE"})
+        return d
+
+    monkeypatch.setattr(pd, "create_block_sharded_program_descriptor", spy)
+    outs = []
+    for split in (False, True):
+        monkeypatch.setattr(pd, "BS_B_ON_WRITER", split)
+        seen = _run_both(device, monkeypatch, m, k, n, _rect(gx, gy), shard, _BS, epilogue, r3_gate=True)
+        assert seen["mcast"] == channel
+        outs.append(seen["out"])
+    assert {"1", "2"} in roles  # the split descriptor carries both halves
+    assert torch.equal(outs[0], outs[1]), f"max diff {(outs[0].float() - outs[1].float()).abs().max()}"

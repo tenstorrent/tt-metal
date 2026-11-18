@@ -171,6 +171,12 @@
 #ifndef GM_BS_ROW_TAIL
 #define GM_BS_ROW_TAIL 0
 #endif
+// R3 split roles (Refinement 18, host BS_B_ON_WRITER): this kernel runs the R3 walk's A half only (1, NCRISC) or its
+// B half only (2, BRISC / NoC1), so the column's B rounds overlap the row's A rounds instead of queueing behind them on
+// one RISC. 0 = both halves here.
+#ifndef GM_BS_ROLE
+#define GM_BS_ROLE 0
+#endif
 
 namespace {
 
@@ -479,6 +485,15 @@ void kernel_main() {
     [[maybe_unused]] auto b_sender = make_bs_face<bs_b_mcast, true>(mc_weight, noc);
     [[maybe_unused]] auto b_receiver = make_bs_face<bs_b_mcast, false>(mc_weight, noc);
     [[maybe_unused]] const bool b_injector = bs_has_face<bs_b_mcast>(b_sender);
+    // Refinement 18 R3 split roles (GM_BS_ROLE): 0 = this kernel runs the whole R2 / R3 walk; 1 = only its A half
+    // (A rounds, residual: NCRISC); 2 = only its B half (B rounds, the bias / gate row: BRISC / NoC1, the in-place
+    // output needing no writer).
+    constexpr uint32_t bs_role = GM_BS_ROLE;
+    constexpr bool bs_does_a = bs_role != 2;
+    constexpr bool bs_does_b = bs_role != 1;
+    static_assert(bs_role <= 2 && (bs_role == 0 || block_sharded));
+    static_assert(bs_does_b || !bs_b_mcast);
+    static_assert(bs_does_a || !bs_mcast);
     constexpr bool row_tail = GM_BS_ROW_TAIL != 0;
     static_assert(!row_tail || (bs_b_mcast && has_row && b_chunks == 1));
     [[maybe_unused]] constexpr uint32_t row_bytes = block_n_tiles * row_tile_bytes;
@@ -660,6 +675,9 @@ void kernel_main() {
                     // one row round right after the first B round, while compute runs the matmul. It is pushed
                     // after the walk as usual. Later blocks (cb_row holds one row) keep the per-core read.
                     const bool row_mcast = bs_b_mcast && has_row && bb == 0 && mb == 0 && nbk == 0 && bi == 0;
+                    // Refinement 18: the split roles' B half reading its own B also issues the block's row with
+                    // its first K-block (it is off the A chain, so the row no longer trails the walk).
+                    const bool row_early = bs_role == 2 && !bs_b_mcast && has_row;
                     constexpr uint32_t row_trid = 15;
                     static_assert(!bs_b_mcast || b_chunks < row_trid);
                     auto read_row = [&](uint32_t l1) {
@@ -710,7 +728,9 @@ void kernel_main() {
                             // A B round starts here (always without the multicast: one K-block per round). Its
                             // b_round_kblocks K-block slots are reserved together; they are contiguous K rows
                             // (the CB holds a whole number of rounds and rounds start on a multiple of it).
-                            const bool b_round = (kb % b_round_kblocks) == 0;
+                            // Refinement 18 (GM_BS_ROLE): the B half (cb_weight_tiles, cb_row) and the A half
+                            // (cb_act_shard / cb_act_tiles, cb_residual_tiles) may run on two RISCs.
+                            const bool b_round = bs_does_b && (kb % b_round_kblocks) == 0;
                             if (b_round) {
                                 cb_reserve_back(cb_weight_tiles, b_round_kblocks * weight_block_tiles);
                             }
@@ -750,10 +770,13 @@ void kernel_main() {
                                     }
                                     dataflow_kernel_lib::set_read_trid(noc, 0);  // the A round's reads stay untagged
                                 }
-                            } else if (batch_valid) {  // a shard's padded batch slots (batched B) read no weight
+                            } else if (bs_does_b && batch_valid) {  // padded batch slots (batched B) read no weight
                                 read_weight(weight_l1, b_base, k0, k_valid, blk_cols);
+                                if (row_early && kb == 0 && bi == 0) {
+                                    issue_row();  // retired by this K-block's barrier, pushed after the walk
+                                }
                             }
-                            const bool own = kb == own_kb;
+                            const bool own = bs_does_a && kb == own_kb;
                             if (own) {
                                 // The block rows of this core's own shard are resident: hand them over.
                                 cb_reserve_back(cb_act_shard, act_block_tiles);
@@ -767,28 +790,24 @@ void kernel_main() {
                                 } else {
                                     a_receiver->receive(kb);
                                 }
-                            } else {
-                                if (!own) {
-                                    cb_reserve_back(cb_act_tiles, act_block_tiles);
-                                    read_act(
-                                        get_write_ptr(cb_act_tiles), a_row_base, k0, blk_rows, k_valid, block_k_tiles);
-                                }
+                            } else if (bs_does_a && !own) {
+                                cb_reserve_back(cb_act_tiles, act_block_tiles);
+                                read_act(get_write_ptr(cb_act_tiles), a_row_base, k0, blk_rows, k_valid, block_k_tiles);
                             }
-                            auto push_kblock = [&]() {
+                            const bool a_pending = bs_does_a && !bs_mcast && !own;  // unicast A reads in flight
+                            auto push_act = [&]() {
                                 if (own) {
                                     cb_push_back(cb_act_shard, act_block_tiles);
                                 }
-                                if (bs_mcast || !own) {
+                                if (bs_mcast || (bs_does_a && !own)) {
                                     cb_push_back(cb_act_tiles, act_block_tiles);
                                 }
-                                cb_push_back(cb_weight_tiles, weight_block_tiles);
                             };
                             // Refinement 18: the injector hands its K-block to compute as soon as it has landed
-                            // (one-chunk round; its A is resident or already exchanged) and multicasts after --
-                            // the send only reads the slot, so its own matmul overlaps the group's delivery
-                            // instead of trailing it (the injector was the op's last core).
-                            const bool early_push =
-                                bs_b_mcast && b_injector && b_round && b_chunks == 1 && (bs_mcast || own);
+                            // (one-chunk round; its A is resident, already exchanged, or another RISC's) and
+                            // multicasts after -- the send only reads the slot, so its own matmul overlaps the
+                            // group's delivery instead of trailing it (the injector was the op's last core).
+                            const bool early_push = bs_b_mcast && b_injector && b_round && b_chunks == 1 && !a_pending;
                             if (bs_b_mcast && b_round) {
                                 MaybeDeviceZoneScope("rd_b_round");
                                 // B round after the A round on every core (fixed order: no channel deadlock).
@@ -799,7 +818,8 @@ void kernel_main() {
                                         dataflow_kernel_lib::async_read_barrier_with_trid(noc, c + 1);
                                     }
                                     if (early_push) {
-                                        push_kblock();
+                                        push_act();
+                                        cb_push_back(cb_weight_tiles, weight_block_tiles);
                                     }
                                     bs_b_deliver<bs_b_mcast>(
                                         b_injector,
@@ -811,11 +831,14 @@ void kernel_main() {
                             }
                             // One barrier per K-block, both operands. Under the B multicast B's reads are retired
                             // by their transaction ids, so only the unicast A stepping stone still needs it.
-                            if (!bs_b_mcast || (!bs_mcast && !own)) {
+                            if ((bs_does_b && !bs_b_mcast) || a_pending) {
                                 noc_async_read_barrier();
                             }
                             if (!early_push) {
-                                push_kblock();
+                                push_act();
+                                if constexpr (bs_does_b) {
+                                    cb_push_back(cb_weight_tiles, weight_block_tiles);
+                                }
                             }
                             if (!row_tail && row_mcast && kb == 0) {
                                 // Row round (same channel, same order on every core): lands at the injector's
@@ -957,11 +980,13 @@ void kernel_main() {
                         }
                     }
 
-                    if constexpr (has_row) {
+                    if constexpr (has_row && bs_does_b) {
                         // bias / gate row of this N-block: once per block, after the first K-walk.
                         if (bi == 0) {
                             MaybeDeviceZoneScope("rd_row");
-                            if (!row_mcast) {  // (the multicast row already landed in the row round)
+                            if (row_early) {
+                                // (issued with the walk's first K-block)
+                            } else if (!row_mcast) {  // (the multicast row already landed in the row round)
                                 issue_row();
                                 noc_async_read_barrier();
                             } else if constexpr (row_tail) {
@@ -976,7 +1001,7 @@ void kernel_main() {
                             cb_push_back(cb_row, block_n_tiles);
                         }
                     }
-                    if constexpr (has_residual) {
+                    if constexpr (has_residual && bs_does_a) {
                         // residual rows of this batch, in row groups of sb_h (epilogue order).
                         for (uint32_t g = 0; g < num_row_groups; ++g) {
                             MaybeDeviceZoneScope("rd_residual");
