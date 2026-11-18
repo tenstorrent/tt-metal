@@ -846,6 +846,48 @@ def test_sdpa_output_concat_heads(device, b, nh, s, d, pad_rows):
     assert torch.equal(out_torch[:, :valid], ref_torch[:, :valid]), f"{n_diff} of the valid elements differ"
 
 
+def _run_sdpa_with_sink_fp32_dest_acc(device, sink_dtype):
+    b, nh, nkv, s, d = 1, 8, 1, 256, 64
+    program_config = ttnn.SDPAProgramConfig(
+        compute_with_storage_grid_size=device.compute_with_storage_grid_size(),
+        q_chunk_size=64,
+        k_chunk_size=128,
+        exp_approx_mode=False,
+    )
+    compute_kernel_config = ttnn.WormholeComputeKernelConfig(
+        math_fidelity=ttnn.MathFidelity.HiFi4,
+        math_approx_mode=False,
+        fp32_dest_acc_en=True,
+        packer_l1_acc=False,
+    )
+    Q, K, V = fa_rand(b, nh, s, d), fa_rand(b, nkv, s, d), fa_rand(b, nkv, s, d)
+    S = (torch.rand(1, nh) * 4.0).reshape(1, nh, 1, 1)
+    to_dev = lambda t, dt: ttnn.from_torch(t, dtype=dt, layout=ttnn.TILE_LAYOUT, device=device, pad_value=0.0)
+    tt_out = ttnn.transformer.scaled_dot_product_attention(
+        to_dev(Q, ttnn.bfloat16),
+        to_dev(K, ttnn.bfloat16),
+        to_dev(V, ttnn.bfloat16),
+        is_causal=True,
+        program_config=program_config,
+        compute_kernel_config=compute_kernel_config,
+        attention_sink=to_dev(S, sink_dtype),
+    )
+    gt = reference_sdpa_with_attention_sinks(Q, K.repeat(1, nh, 1, 1), V.repeat(1, nh, 1, 1), S, is_causal=True)
+    return ttnn.to_torch(tt_out)[:, :, :s, :], gt
+
+
+def test_sdpa_attention_sink_bf16_with_fp32_dest_acc(device, reset_seeds):
+    tt_out, gt = _run_sdpa_with_sink_fp32_dest_acc(device, ttnn.bfloat16)
+    passing, pcc = comp_pcc(gt, tt_out, 0.994)
+    assert passing, pcc
+
+
+@pytest.mark.parametrize("sink_dtype", [ttnn.bfloat8_b, ttnn.bfloat4_b], ids=["bfp8", "bfp4"])
+def test_sdpa_attention_sink_rejects_block_float_with_fp32_dest_acc(device, sink_dtype, expect_error):
+    with expect_error(RuntimeError, "Attention sink must be BF16 when fp32_dest_acc_en=true"):
+        _run_sdpa_with_sink_fp32_dest_acc(device, sink_dtype)
+
+
 # The nightly prefill file sweeps the masked fraction and chunk sizes at S 2048 and 4096.
 @pytest.mark.parametrize(
     "s, nkv, bcast_heads, q_chunk_size, k_chunk_size, p_masked",
@@ -999,3 +1041,38 @@ def test_sdpa_fp32_dest_wide_score_rows(
     assert not zero_rows, f"rows {zero_rows} are all zero"
     relative_rms = ((actual - expected).square().sum() / expected.square().sum()).sqrt().item()
     assert relative_rms < 0.02, f"relative RMS error {relative_rms:.4f} against a float64 reference"
+
+
+@pytest.mark.parametrize("q_chunk_size, k_chunk_size", [(0, 128), (128, 0)])
+def test_sdpa_block_map_rejects_zero_chunk_size(device, expect_error, q_chunk_size, k_chunk_size):
+    # The block-map shape check divides the sequence lengths by the chunk sizes.
+    s, d = 256, 64
+    program_config = ttnn.SDPAProgramConfig(
+        compute_with_storage_grid_size=device.compute_with_storage_grid_size(),
+        q_chunk_size=q_chunk_size,
+        k_chunk_size=k_chunk_size,
+    )
+    q, k, v = (
+        ttnn.from_torch(fa_rand(1, 1, s, d), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+        for _ in range(3)
+    )
+    mask = ttnn.from_torch(torch.zeros(1, 1, s, s), dtype=ttnn.bfloat4_b, layout=ttnn.TILE_LAYOUT, device=device)
+    block_map = ttnn.from_torch(torch.ones(1, 1, 2, 2, dtype=torch.int32), layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+    with expect_error(RuntimeError, "q_chunk_size .* and k_chunk_size .* must be greater than 0"):
+        ttnn.transformer.scaled_dot_product_attention(
+            q, k, v, is_causal=False, attn_mask=mask, program_config=program_config, attn_mask_block_map=block_map
+        )
+
+
+@pytest.mark.parametrize("v_heads", [0, 4])
+def test_flash_mla_prefill_rejects_bad_v_heads(device, expect_error, v_heads):
+    # The K/V chain grouping divides Q heads by V heads.
+    s = 128
+    program_config = ttnn.SDPAProgramConfig(
+        compute_with_storage_grid_size=device.compute_with_storage_grid_size(), q_chunk_size=32, k_chunk_size=32
+    )
+    q = ttnn.from_torch(fa_rand(1, 2, s, 96), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    k = ttnn.from_torch(fa_rand(1, 1, s, 96), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    v = ttnn.from_torch(fa_rand(1, v_heads, s, 64), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    with expect_error(RuntimeError, "Q num_heads must be >= V num_heads"):
+        ttnn.transformer.flash_mla_prefill(q, k, v, is_causal=False, program_config=program_config)

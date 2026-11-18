@@ -21,6 +21,7 @@ set(UNIT_TESTS_TTNN_BASIC_SOURCES
     test_broadcast_to.cpp
     test_command_list.cpp
     test_command_list_tensor_prefetcher.cpp
+    test_tensor_prefetcher_dispatch_engine.cpp
     test_convert_to_hwc_gather.cpp
     test_eltwise.cpp
     test_gelu_bw_ulp.cpp
@@ -44,6 +45,7 @@ set(UNIT_TESTS_TTNN_BASIC_SOURCES
     test_matmul_dram_sharded_placement.cpp
     test_sparse_matmul_fp32.cpp
     test_normalization.cpp
+    test_op_performance_model.cpp
     test_program_cache_l1.cpp
     test_reduction.cpp
     test_relational_int.cpp

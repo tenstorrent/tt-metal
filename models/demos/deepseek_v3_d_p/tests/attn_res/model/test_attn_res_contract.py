@@ -33,11 +33,6 @@ from loguru import logger
 import ttnn
 from models.demos.deepseek_v3_d_p.reference.kimi_k3.attn_res.attn_res import EPS
 from models.demos.deepseek_v3_d_p.tests.attn_res.assertions import assert_bit_identical
-from models.demos.deepseek_v3_d_p.tests.attn_res.device_determinism import (
-    device_mismatch_marker_is_set,
-    fold_mismatches,
-    mismatch_report,
-)
 from models.demos.deepseek_v3_d_p.tests.attn_res.model.harness import (
     FABRIC,
     HIDDEN_SIZE,
@@ -57,6 +52,12 @@ from models.demos.deepseek_v3_d_p.tests.fabric_profiles import (
     torus_x_device_params,
     torus_xy_device_params,
 )
+from models.demos.deepseek_v3_d_p.tests.measure.determinism import (
+    device_mismatch_marker_is_set,
+    fold_mismatches,
+    mismatch_report,
+)
+from models.demos.deepseek_v3_d_p.tests.measure.trace import TracedStep
 from models.demos.deepseek_v3_d_p.tt.attn_res.attn_res import TtAttnRes
 
 # `attn_res_block_stats` counts its peers' arrivals on a semaphore of the op's own: it is
@@ -144,7 +145,7 @@ def test_read_repeats_exactly_without_disturbing_its_inputs(mesh_device, device_
     peer writing a buffer this chip is still reading, or a freed memo entry all show up as
     a run that disagrees with the first. The first run's reads stay on device as the
     reference and each later run's mismatch folds into one device marker, read back once at
-    the end, so the chips are free to drift apart (`device_determinism.py`).
+    the end, so the chips are free to drift apart (`tests/measure/determinism.py`).
 
     Inputs are borrowed by both `inter_block` and `merge`, so they are also compared, on
     device, against copies made up front. The op reaches its operands through slices that
@@ -226,19 +227,17 @@ def test_trace_replay_matches_eager(mesh_device, device_params, sp_axis):
     want = compose(op, eager)
     ttnn.deallocate(eager)
 
-    trace_id = ttnn.begin_trace_capture(mesh_device, cq_id=0)
-    traced = op.merge(partials, shifts, masses, tt_prefix, tt_queries[0], 0)
-    ttnn.end_trace_capture(mesh_device, trace_id, cq_id=0)
-
-    for _ in range(2):
-        ttnn.execute_trace(mesh_device, trace_id, cq_id=0, blocking=False)
-    ttnn.synchronize_device(mesh_device)
-
-    assert_bit_identical(want, compose(op, traced), name="trace replay")
+    # The eager call above compiled; the trace frees its captured output on exit.
+    with TracedStep(
+        mesh_device, lambda: op.merge(partials, shifts, masses, tt_prefix, tt_queries[0], 0), compile_runs=0
+    ) as traced:
+        traced.capture()
+        for _ in range(2):
+            traced.replay(sync=False)
+        ttnn.synchronize_device(mesh_device)
+        assert_bit_identical(want, compose(op, traced.output), name="trace replay")
     logger.info(f"trace replay bit-identical to eager at T={num_tokens} ({PER_CHIP_TOKENS}/chip)")
 
-    ttnn.release_trace(mesh_device, trace_id)
-    ttnn.deallocate(traced)
     for tensor in (partials, shifts, masses, tt_prefix, tt_block, *tt_queries):
         ttnn.deallocate(tensor)
 

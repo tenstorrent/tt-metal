@@ -634,8 +634,8 @@ jobs:
       - name: Configure AWS Credentials
         uses: aws-actions/configure-aws-credentials@v4
         with:
-          role-to-assume: ${{ secrets.PYPI_ROLE }}
-          aws-region: ${{ secrets.PYPI_REGION }}
+          role-to-assume: ${{ vars.PYPI_ROLE }}
+          aws-region: ${{ vars.PYPI_REGION }}
 
       - name: Install s3pypi
         run: |
@@ -653,5 +653,5 @@ jobs:
           found_wheel_files=$(find ./wheels -type f -name "*.whl" -exec realpath {} \;)
           for wheel in $found_wheel_files; do
             echo "Publishing wheel: $wheel"
-            s3pypi upload "$wheel" --put-root-index --bucket ${{ secrets.PYPI_BUCKET }}
+            s3pypi upload "$wheel" --put-root-index --bucket ${{ vars.PYPI_BUCKET }}
           done

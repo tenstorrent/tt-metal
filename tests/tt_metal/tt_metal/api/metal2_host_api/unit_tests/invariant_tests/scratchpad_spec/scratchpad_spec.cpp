@@ -447,5 +447,34 @@ TEST_F(ProgramSpecTestGen1, CPU_SharedScratchpadUsesEntireBinderNodeUnion) {
     }
 }
 
+TEST_F(ProgramSpecTestQuasar, CPU_ScratchpadOverrideEmptyFails) {
+    // An explicit scratchpad placement must contain at least one node.
+    distributed::MeshDevice& fixture_device = *mesh_device_;
+    auto spec = MakeMinimalValidProgramSpec();
+    spec.scratchpads = {ScratchpadSpec{
+        .unique_id = ScratchpadSpecName{"pad"},
+        .size_per_node = 64,
+        .advanced_options = {.override_placement = CoreRangeSet{}}}};
+    spec.kernels[0].scratchpad_bindings = {{ScratchpadSpecName{"pad"}, "pad"}};
+    EXPECT_THAT(
+        [&] { MakeProgramFromSpec(fixture_device, spec); },
+        ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("override_placement must be non-empty")));
+}
+
+TEST_F(ProgramSpecTestQuasar, CPU_ScratchpadOverrideOutOfBoundsFails) {
+    // Scratchpad placement must stay within the logical worker grid.
+    distributed::MeshDevice& fixture_device = *mesh_device_;
+    auto spec = MakeMinimalValidProgramSpec();
+    const auto grid = mesh_device_->compute_with_storage_grid_size();
+    spec.scratchpads = {ScratchpadSpec{
+        .unique_id = ScratchpadSpecName{"pad"},
+        .size_per_node = 64,
+        .advanced_options = {.override_placement = CoreRangeSet(CoreRange(grid))}}};
+    spec.kernels[0].scratchpad_bindings = {{ScratchpadSpecName{"pad"}, "pad"}};
+    EXPECT_THAT(
+        [&] { MakeProgramFromSpec(fixture_device, spec); },
+        ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("out of bounds")));
+}
+
 }  // namespace
 }  // namespace tt::tt_metal::experimental
