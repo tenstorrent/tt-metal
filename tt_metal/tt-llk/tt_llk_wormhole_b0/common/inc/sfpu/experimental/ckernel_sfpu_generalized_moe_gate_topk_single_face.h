@@ -45,18 +45,18 @@ constexpr std::uint32_t gmg_recip_seed_prgm2_bits = __builtin_bit_cast(std::uint
 
 // Normalization-tail prologue shared by top8 and finalize_ungrouped: clear LaneConfig, sum the top-8 scores
 // (scores+0/+4, column 0) and leave the sum in LREG0 after a bf16-truncating round trip through interm, and re-set
-// LREG14 to gmg_recip_seed_prgm2. The sum is reduced in LREG4-7 so LREG0 (SFPCONFIG's source) is free to carry the
-// seed in the ADD latency slots; LaneConfig must be cleared first, ENABLE_DEST_INDEX forbids SFPADD writes to LREG4-7.
+// LREG14 to gmg_recip_seed_prgm2. After the transpose the sum is reduced into LREG4/6 so LREG0 (SFPCONFIG's source)
+// is free to carry the seed in the ADD latency slots. ENABLE_DEST_INDEX forbids SFPADD writes to LREG4-7, so
+// LaneConfig is cleared in the slot ahead of the transpose (SFPCONFIG to LaneConfig takes <= 2 cycles).
 inline void _gmg_tail_sum_to_lreg0_reseed_prgm2()
 {
+    TTI_SFPLOAD(p_sfpu::LREG0, 0, ADDR_MOD_3, scores_offset + 0);
+    TTI_SFPLOAD(p_sfpu::LREG1, 0, ADDR_MOD_3, scores_offset + 4);
+    TTI_SFPADD(p_sfpu::LREG0, p_sfpu::LCONST_1, p_sfpu::LREG1, p_sfpu::LREG0, 0);
     _init_sfpu_config_reg();
-    TTI_SFPLOAD(p_sfpu::LREG4, 0, ADDR_MOD_3, scores_offset + 0);
-    TTI_SFPLOAD(p_sfpu::LREG5, 0, ADDR_MOD_3, scores_offset + 4);
-    TTI_SFPADD(p_sfpu::LREG4, p_sfpu::LCONST_1, p_sfpu::LREG5, p_sfpu::LREG4, 0);
-    TTI_SFPNOP;
     TTI_SFPTRANSP(0, 0, 0, 0);
-    TTI_SFPADD(p_sfpu::LREG4, p_sfpu::LCONST_1, p_sfpu::LREG5, p_sfpu::LREG4, 0);
-    TTI_SFPADD(p_sfpu::LREG6, p_sfpu::LCONST_1, p_sfpu::LREG7, p_sfpu::LREG6, 0);
+    TTI_SFPADD(p_sfpu::LREG0, p_sfpu::LCONST_1, p_sfpu::LREG1, p_sfpu::LREG4, 0);
+    TTI_SFPADD(p_sfpu::LREG2, p_sfpu::LCONST_1, p_sfpu::LREG3, p_sfpu::LREG6, 0);
     TTI_SFPLOADI(p_sfpu::LREG0, sfpi::SFPLOADI_MOD0_LOWER, gmg_recip_seed_prgm2_bits & 0xFFFF);
     TTI_SFPADD(p_sfpu::LREG4, p_sfpu::LCONST_1, p_sfpu::LREG6, p_sfpu::LREG4, 0);
     TTI_SFPLOADI(p_sfpu::LREG0, sfpi::SFPLOADI_MOD0_UPPER, gmg_recip_seed_prgm2_bits >> 16);
