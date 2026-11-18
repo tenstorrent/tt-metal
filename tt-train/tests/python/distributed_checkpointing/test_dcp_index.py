@@ -7,6 +7,7 @@
 import gc
 import json
 import os
+import re
 import shutil
 import warnings
 
@@ -259,7 +260,7 @@ def test_naming(expect_error):
         step_dir_name(-1)  # "step_-000001" would never parse back, so find_latest would not find it
 
 
-@pytest.mark.filterwarnings("ignore:.*left by saves that did not finish")
+@pytest.mark.filterwarnings("ignore:.*left by saves that did not finish", "ignore:.*is the only copy of")
 def test_find_latest_orders_by_parsed_step_and_skips_partials(tmp_path):
     for name in [
         "step_0000005",
@@ -289,14 +290,22 @@ def test_find_latest_orders_by_parsed_step_and_skips_partials(tmp_path):
 
 def test_find_latest_warns_about_leftovers(tmp_path):
     """find_latest warns about the .partial- and .replaced- directories of its prefix, naming each, and removes
-    none of them."""
+    none of them. A .replaced- directory whose step has no final directory is that step's only copy: the warning
+    says to rename it back, not to remove it."""
     names = ["step_0000005", "step_0000010.partial-7", "step_0000005.replaced-3", "other_step_0000020.partial-1"]
+    names.append("step_0000008.replaced-4")  # an overwrite of step 8 killed between its two renames
     for name in names:
         (tmp_path / name).mkdir()
-    (tmp_path / "step_0000005" / "index.json").write_text("{}")
+    for name in ("step_0000005", "step_0000008.replaced-4"):
+        (tmp_path / name / "index.json").write_text("{}")
     leftovers = r"2 directories left by saves that did not finish: step_0000005\.replaced-3, step_0000010\.partial-7\. "
-    with pytest.warns(UserWarning, match=leftovers):
-        assert find_latest(str(tmp_path)) == str(tmp_path / "step_0000005")
+    only_copy = r"step_0000008\.replaced-4 is the only copy of step_0000008: .* Rename it back to step_0000008 rather"
+    # Each call warns twice: once about the leftovers to remove, once about the only copy to rename back.
+    for include_replaced, latest in ((False, "step_0000005"), (True, "step_0000008.replaced-4")):
+        with pytest.warns(UserWarning) as record:
+            assert find_latest(str(tmp_path), include_replaced=include_replaced) == str(tmp_path / latest)
+        messages = [str(w.message) for w in record]
+        assert len(messages) == 2 and re.search(leftovers, messages[0]) and re.search(only_copy, messages[1])
     with pytest.warns(
         UserWarning, match=r"1 directory left by saves that did not finish: other_step_0000020\.partial-1"
     ):

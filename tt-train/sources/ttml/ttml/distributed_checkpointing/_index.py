@@ -371,9 +371,12 @@ def find_latest(root: str, prefix: str = "", include_replaced: bool = False) -> 
 
     Directories left by saves that did not finish, ``.partial-`` ones of saves that died and ``.replaced-`` ones of
     interrupted overwrites, can each hold a whole checkpoint. Nothing removes them, since a ``.partial-`` directory may
-    belong to a save still running in another job; this warns about those of ``prefix``, naming each."""
+    belong to a save still running in another job; this warns about those of ``prefix``, naming each. A
+    ``.replaced-`` directory whose step has no complete final directory is that step's only copy, so for it the
+    warning says to rename it back instead."""
     best: tuple[int, int, str, str] | None = None
     leftovers: list[str] = []
+    only_copies: list[tuple[str, str]] = []  # (.replaced- name, the final name it must be renamed back to)
     try:
         names = os.listdir(root)
     except FileNotFoundError:
@@ -385,7 +388,10 @@ def find_latest(root: str, prefix: str = "", include_replaced: bool = False) -> 
             candidate = name.split(mark, 1)[0]
             stem = parse_dir_name(candidate)
             if stem is not None and stem[0] == prefix:
-                leftovers.append(name)
+                if mark == REPLACED_MARK and not is_complete(os.path.join(root, candidate)):
+                    only_copies.append((name, candidate))
+                else:
+                    leftovers.append(name)
             if mark == PARTIAL_MARK or not include_replaced:
                 continue
         parsed = parse_dir_name(candidate)
@@ -404,6 +410,12 @@ def find_latest(root: str, prefix: str = "", include_replaced: bool = False) -> 
             f"directory is the staging directory of a save that died, or of one still running; a .replaced- one is a "
             f"previous checkpoint that an interrupted overwrite moved aside. Remove them once no save into {root} is "
             f"running.",
+            stacklevel=2,
+        )
+    for name, final in sorted(only_copies):
+        warnings.warn(
+            f"{os.path.join(root, name)} is the only copy of {final}: an overwrite was interrupted after moving it "
+            f"aside and before moving the new checkpoint in. Rename it back to {final} rather than removing it.",
             stacklevel=2,
         )
     return best[3] if best else None
