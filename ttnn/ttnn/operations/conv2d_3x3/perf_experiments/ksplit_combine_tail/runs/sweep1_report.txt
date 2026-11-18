@@ -1,0 +1,135 @@
+res5_1_conv2             base         45192 ns  pcc 0.999764  hash 53c156997d26
+      compute_combine@TRISC_0                      max     2.53  p50     2.51
+      compute_combine_wait@TRISC_0                 max     2.25  p50     1.12
+res5_1_conv2             own_x        46295 ns  pcc 0.999764  hash 53c156997d26
+      compute_combine@TRISC_0                      max     2.65  p50     2.62
+      compute_combine_wait@TRISC_0                 max     2.44  p50     0.10
+res5_1_conv2             fused_x      46107 ns  pcc 0.999764  hash 53c156997d26
+      compute_combine@TRISC_0                      max     2.38  p50     2.29
+      compute_combine_wait@TRISC_0                 max     2.18  p50     1.11
+res5_2_conv2             base         45960 ns  pcc 0.999764  hash 3be9a82af0e3
+      compute_combine@TRISC_0                      max     2.53  p50     2.51
+      compute_combine_wait@TRISC_0                 max     2.50  p50     1.12
+res5_2_conv2             own_x        46591 ns  pcc 0.999764  hash 3be9a82af0e3
+      compute_combine@TRISC_0                      max     2.65  p50     2.62
+      compute_combine_wait@TRISC_0                 max     2.48  p50     0.10
+res5_2_conv2             fused_x      46405 ns  pcc 0.999764  hash 3be9a82af0e3
+      compute_combine@TRISC_0                      max     2.33  p50     2.29
+      compute_combine_wait@TRISC_0                 max     2.68  p50     1.11
+aspp_convs_1             base         77706 ns  pcc 0.999765  hash 17bf5d213d6a
+      compute_combine@TRISC_0                      max     1.94  p50     1.94
+      compute_combine_wait@TRISC_0                 max     4.53  p50     0.92
+aspp_convs_1             own_x        76423 ns  pcc 0.999765  hash 17bf5d213d6a
+      compute_combine@TRISC_0                      max     2.07  p50     2.04
+      compute_combine_wait@TRISC_0                 max     4.39  p50     0.26
+aspp_convs_1             fused_x      76514 ns  pcc 0.999765  hash 17bf5d213d6a
+      compute_combine@TRISC_0                      max     1.78  p50     1.76
+      compute_combine_wait@TRISC_0                 max     4.29  p50     0.92
+aspp_convs_2             base         76594 ns  pcc 0.999764  hash 20e9bc2c38ac
+      compute_combine@TRISC_0                      max     1.94  p50     1.94
+      compute_combine_wait@TRISC_0                 max     4.42  p50     0.92
+aspp_convs_2             own_x        76670 ns  pcc 0.999764  hash 20e9bc2c38ac
+      compute_combine@TRISC_0                      max     2.07  p50     2.04
+      compute_combine_wait@TRISC_0                 max     4.68  p50     0.26
+aspp_convs_2             fused_x      76507 ns  pcc 0.999764  hash 20e9bc2c38ac
+      compute_combine@TRISC_0                      max     1.79  p50     1.76
+      compute_combine_wait@TRISC_0                 max     4.29  p50     0.92
+res4_0_conv2             base         21088 ns  pcc 0.999763  hash 695e12ff2953
+      compute_combine@TRISC_0                      max     1.53  p50     1.48
+      compute_combine_wait@TRISC_0                 max     2.96  p50     1.55
+res4_0_conv2             own_x        21166 ns  pcc 0.999763  hash 695e12ff2953
+      compute_combine@TRISC_0                      max     1.61  p50     1.58
+      compute_combine_wait@TRISC_0                 max     2.36  p50     1.67
+res4_0_conv2             fused_x      21580 ns  pcc 0.999763  hash 695e12ff2953
+      compute_combine@TRISC_0                      max     1.43  p50     1.30
+      compute_combine_wait@TRISC_0                 max     2.71  p50     1.90
+block:res4_0_conv2       base         39333 ns  pcc 0.999882  hash fb122394162e
+      compute_combine@TRISC_0                      max     1.48  p50     1.48
+      compute_combine_wait@TRISC_0                 max     1.55  p50     1.55
+block:res4_0_conv2       own_x        38880 ns  pcc 0.999882  hash fb122394162e
+      compute_combine@TRISC_0                      max     1.60  p50     1.58
+      compute_combine_wait@TRISC_0                 max     0.90  p50     0.89
+block:res4_0_conv2       fused_x      39333 ns  pcc 0.999882  hash fb122394162e
+      compute_combine@TRISC_0                      max     1.30  p50     1.30
+      compute_combine_wait@TRISC_0                 max     1.56  p50     1.55
+block:res4_conv2         base         41373 ns  pcc 0.999882  hash 5abe34e9f480
+      compute_combine@TRISC_0                      max     1.48  p50     1.48
+      compute_combine_wait@TRISC_0                 max     1.55  p50     1.55
+block:res4_conv2         own_x        41010 ns  pcc 0.999882  hash 5abe34e9f480
+      compute_combine@TRISC_0                      max     1.60  p50     1.58
+      compute_combine_wait@TRISC_0                 max     0.89  p50     0.89
+block:res4_conv2         fused_x      41371 ns  pcc 0.999882  hash 5abe34e9f480
+      compute_combine@TRISC_0                      max     1.31  p50     1.30
+      compute_combine_wait@TRISC_0                 max     1.55  p50     1.54
+block:res4_conv2_lofi    base         23701 ns  pcc 0.999765  hash e05f5c9d8dde
+      compute_combine@TRISC_0                      max     1.52  p50     1.48
+      compute_combine_wait@TRISC_0                 max     2.49  p50     1.91
+block:res4_conv2_lofi    own_x        23539 ns  pcc 0.999765  hash e05f5c9d8dde
+      compute_combine@TRISC_0                      max     1.60  p50     1.58
+      compute_combine_wait@TRISC_0                 max     2.48  p50     1.82
+block:res4_conv2_lofi    fused_x      23587 ns  pcc 0.999765  hash e05f5c9d8dde
+      compute_combine@TRISC_0                      max     1.37  p50     1.30
+      compute_combine_wait@TRISC_0                 max     2.93  p50     2.09
+block:res5_0_conv2       base        115366 ns  pcc 0.999881  hash e64476f84bb8
+      compute_combine@TRISC_0                      max     2.53  p50     2.52
+      compute_combine_wait@TRISC_0                 max     1.65  p50     1.64
+block:res5_0_conv2       own_x       114540 ns  pcc 0.999881  hash e64476f84bb8
+      compute_combine@TRISC_0                      max     2.64  p50     2.61
+      compute_combine_wait@TRISC_0                 max     0.64  p50     0.64
+block:res5_0_conv2       fused_x     115331 ns  pcc 0.999881  hash e64476f84bb8
+      compute_combine@TRISC_0                      max     2.32  p50     2.32
+      compute_combine_wait@TRISC_0                 max     1.64  p50     1.64
+block:res5_1_conv2       base        116326 ns  pcc 0.999881  hash 17cdaf6e754d
+      compute_combine@TRISC_0                      max     2.52  p50     2.51
+      compute_combine_wait@TRISC_0                 max     1.65  p50     1.65
+block:res5_1_conv2       own_x       115493 ns  pcc 0.999881  hash 17cdaf6e754d
+      compute_combine@TRISC_0                      max     2.64  p50     2.61
+      compute_combine_wait@TRISC_0                 max     0.64  p50     0.63
+block:res5_1_conv2       fused_x     116266 ns  pcc 0.999881  hash 17cdaf6e754d
+      compute_combine@TRISC_0                      max     2.32  p50     2.29
+      compute_combine_wait@TRISC_0                 max     1.64  p50     1.64
+block:res5_2_conv2       base        116987 ns  pcc 0.999882  hash 5b3a7dd3084e
+      compute_combine@TRISC_0                      max     2.52  p50     2.51
+      compute_combine_wait@TRISC_0                 max     1.65  p50     1.65
+block:res5_2_conv2       own_x       116379 ns  pcc 0.999882  hash 5b3a7dd3084e
+      compute_combine@TRISC_0                      max     2.64  p50     2.61
+      compute_combine_wait@TRISC_0                 max     0.64  p50     0.63
+block:res5_2_conv2       fused_x     116846 ns  pcc 0.999882  hash 5b3a7dd3084e
+      compute_combine@TRISC_0                      max     2.32  p50     2.29
+      compute_combine_wait@TRISC_0                 max     1.64  p50     1.64
+block:aspp_convs1        base        201953 ns  pcc 0.999882  hash 46793ead630c
+      compute_combine@TRISC_0                      max     1.94  p50     1.93
+      compute_combine_wait@TRISC_0                 max     4.72  p50     1.54
+block:aspp_convs1        own_x       202248 ns  pcc 0.999882  hash 46793ead630c
+      compute_combine@TRISC_0                      max     2.06  p50     2.04
+      compute_combine_wait@TRISC_0                 max     4.88  p50     0.88
+block:aspp_convs1        fused_x     201818 ns  pcc 0.999882  hash 46793ead630c
+      compute_combine@TRISC_0                      max     1.78  p50     1.75
+      compute_combine_wait@TRISC_0                 max     4.64  p50     1.54
+block:aspp_convs2        base        201913 ns  pcc 0.999882  hash aadf12596fd4
+      compute_combine@TRISC_0                      max     1.94  p50     1.93
+      compute_combine_wait@TRISC_0                 max     5.04  p50     1.54
+block:aspp_convs2        own_x       201787 ns  pcc 0.999882  hash aadf12596fd4
+      compute_combine@TRISC_0                      max     2.06  p50     2.04
+      compute_combine_wait@TRISC_0                 max     5.05  p50     0.88
+block:aspp_convs2        fused_x     201629 ns  pcc 0.999882  hash aadf12596fd4
+      compute_combine@TRISC_0                      max     1.78  p50     1.75
+      compute_combine_wait@TRISC_0                 max     5.20  p50     1.54
+block:aspp_convs3        base        106702 ns  pcc 0.999912  hash a70e714fcf35
+      compute_combine@TRISC_0                      max     1.54  p50     1.54
+      compute_combine_wait@TRISC_0                 max     5.78  p50     1.53
+block:aspp_convs3        own_x       107033 ns  pcc 0.999912  hash a70e714fcf35
+      compute_combine@TRISC_0                      max     1.80  p50     1.78
+      compute_combine_wait@TRISC_0                 max     5.70  p50     0.89
+block:aspp_convs3        fused_x     106762 ns  pcc 0.999912  hash a70e714fcf35
+      compute_combine@TRISC_0                      max     1.42  p50     1.42
+      compute_combine_wait@TRISC_0                 max     5.93  p50     1.54
+block:res4_s1_lofi       base         79023 ns  pcc 0.999764  hash d77903151e69
+      compute_combine@TRISC_0                      max     5.68  p50     5.51
+      compute_combine_wait@TRISC_0                 max     8.39  p50     7.11
+block:res4_s1_lofi       own_x        79749 ns  pcc 0.999764  hash d77903151e69
+      compute_combine@TRISC_0                      max     5.86  p50     5.73
+      compute_combine_wait@TRISC_0                 max     9.54  p50     6.39
+block:res4_s1_lofi       fused_x      78804 ns  pcc 0.999764  hash d77903151e69
+      compute_combine@TRISC_0                      max     5.35  p50     5.05
+      compute_combine_wait@TRISC_0                 max     8.85  p50     6.66

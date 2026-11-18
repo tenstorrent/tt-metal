@@ -1,0 +1,2 @@
+{"kind": "perf", "case": "res5_1_conv2", "variant": "rfar_own_x", "pcc": 0.9997638283511298, "hash": "53c156997d26", "k_cols": 8, "k_split": true, "ns": 2, "bm": 7, "nkb": 3, "nslice": true, "shared": true, "shared_zero": true, "mblocks": 1, "foot": 990464, "csb": [1, 2]}
+{"kind": "perf", "case": "res5_1_conv2", "variant": "base", "pcc": 0.9997638283511298, "hash": "53c156997d26", "k_cols": 8, "k_split": true, "ns": 2, "bm": 7, "nkb": 3, "nslice": true, "shared": true, "shared_zero": true, "mblocks": 1, "foot": 990464, "csb": [1, 2]}

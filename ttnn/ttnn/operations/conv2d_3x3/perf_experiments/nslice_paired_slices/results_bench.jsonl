@@ -1,0 +1,17 @@
+{"tag": "r1", "walk": "res5_1", "variant": "base", "ns": 28437.0, "cyc_per_mac": 19.042633928571426, "pcc": 0.9998897784241375, "exact": "ref", "box": "bh-lb-11-special-pmilojevic-for-reservation-295838"}
+{"tag": "r1", "walk": "res5_1", "variant": "pair_il", "ns": 27248.0, "cyc_per_mac": 18.246428571428574, "pcc": 0.9998897784241375, "exact": "bit-exact", "box": "bh-lb-11-special-pmilojevic-for-reservation-295838"}
+{"tag": "r1", "walk": "res5_1", "variant": "pair_2call", "ns": 27644.0, "cyc_per_mac": 18.511607142857144, "pcc": 0.9998897784241375, "exact": "bit-exact", "box": "bh-lb-11-special-pmilojevic-for-reservation-295838"}
+{"tag": "r1", "walk": "res5_1", "variant": "pair_1cb", "ns": 27247.0, "cyc_per_mac": 18.245758928571426, "pcc": 0.9998897784241375, "exact": "bit-exact", "box": "bh-lb-11-special-pmilojevic-for-reservation-295838"}
+{"tag": "r1", "walk": "res5_1", "variant": "base_raw", "ns": 28293.0, "cyc_per_mac": 18.94620535714286, "pcc": 0.9998897784241375, "exact": "bit-exact", "box": "bh-lb-11-special-pmilojevic-for-reservation-295838"}
+{"tag": "r2", "walk": "res5_0", "variant": "base", "ns": 9775.0, "cyc_per_mac": 22.91015625, "pcc": 0.999889906481039, "exact": "ref", "box": "bh-lb-11-special-pmilojevic-for-reservation-295838"}
+{"tag": "r2", "walk": "res5_0", "variant": "pair_il", "ns": 8629.0, "cyc_per_mac": 20.22421875, "pcc": 0.999889906481039, "exact": "bit-exact", "box": "bh-lb-11-special-pmilojevic-for-reservation-295838"}
+{"tag": "r2", "walk": "res5_0", "variant": "pair_1cb", "ns": 8656.0, "cyc_per_mac": 20.2875, "pcc": 0.999889906481039, "exact": "bit-exact", "box": "bh-lb-11-special-pmilojevic-for-reservation-295838"}
+{"tag": "r2", "walk": "res5_0", "variant": "base_raw", "ns": 9679.0, "cyc_per_mac": 22.68515625, "pcc": 0.999889906481039, "exact": "bit-exact", "box": "bh-lb-11-special-pmilojevic-for-reservation-295838"}
+{"tag": "r2", "walk": "res4", "variant": "base", "ns": 9692.0, "cyc_per_mac": 22.715625000000003, "pcc": 0.9998895863098557, "exact": "ref", "box": "bh-lb-11-special-pmilojevic-for-reservation-295838"}
+{"tag": "r2", "walk": "res4", "variant": "pair_il", "ns": 8863.0, "cyc_per_mac": 20.772656249999997, "pcc": 0.9998895863098557, "exact": "bit-exact", "box": "bh-lb-11-special-pmilojevic-for-reservation-295838"}
+{"tag": "r2", "walk": "res4", "variant": "pair_1cb", "ns": 8939.0, "cyc_per_mac": 20.95078125, "pcc": 0.9998895863098557, "exact": "bit-exact", "box": "bh-lb-11-special-pmilojevic-for-reservation-295838"}
+{"tag": "r2", "walk": "res4", "variant": "base_raw", "ns": 9613.0, "cyc_per_mac": 22.530468749999997, "pcc": 0.9998895863098557, "exact": "bit-exact", "box": "bh-lb-11-special-pmilojevic-for-reservation-295838"}
+{"tag": "r2", "walk": "aspp", "variant": "base", "ns": 46496.0, "cyc_per_mac": 18.162499999999998, "pcc": 0.9998906268107086, "exact": "ref", "box": "bh-lb-11-special-pmilojevic-for-reservation-295838"}
+{"tag": "r2", "walk": "aspp", "variant": "pair_il", "ns": 46250.0, "cyc_per_mac": 18.06640625, "pcc": 0.9998906268107086, "exact": "bit-exact", "box": "bh-lb-11-special-pmilojevic-for-reservation-295838"}
+{"tag": "r2", "walk": "aspp", "variant": "pair_1cb", "ns": 47862.0, "cyc_per_mac": 18.69609375, "pcc": 0.9998906268107086, "exact": "bit-exact", "box": "bh-lb-11-special-pmilojevic-for-reservation-295838"}
+{"tag": "r2", "walk": "aspp", "variant": "base_raw", "ns": 46479.0, "cyc_per_mac": 18.155859375000002, "pcc": 0.9998906268107086, "exact": "bit-exact", "box": "bh-lb-11-special-pmilojevic-for-reservation-295838"}

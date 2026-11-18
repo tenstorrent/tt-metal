@@ -1,0 +1,403 @@
+diff -ru --label head/kernels --label op_copy/kernels head/kernels op_copy/kernels
+--- head/kernels
++++ op_copy/kernels
+@@ -72,4 +72,35 @@
+     }
+ }
+
++// ksplit_combine_tail experiment (COMBINE_TAIL bit 256): tile-rows [r0, r1) of owner slice `col` into slot `my_col` of
++// grid column `col` (send_slice for a row range). The caller fences with noc_async_write_barrier().
++template <uint32_t block_m_tiles, uint32_t out_n_tiles, uint32_t tensor_n_tiles>
++inline void send_slice_rows(
++    uint32_t slice_l1,
++    uint32_t combine_base_l1,
++    uint32_t tile_bytes,
++    uint32_t my_col,
++    uint32_t col,
++    uint32_t row_peer_coords_arg,
++    uint32_t r0,
++    uint32_t r1) {
++    constexpr uint32_t slot_tiles = block_m_tiles * out_n_tiles;
++    const uint32_t my_slot_l1 = combine_base_l1 + my_col * slot_tiles * tile_bytes;
++    const uint32_t n0 = col * out_n_tiles;
++    const uint32_t cols_valid = tensor_n_tiles - n0 < out_n_tiles ? tensor_n_tiles - n0 : out_n_tiles;
++    const uint32_t x = get_arg_val<uint32_t>(row_peer_coords_arg + 2 * col);
++    const uint32_t y = get_arg_val<uint32_t>(row_peer_coords_arg + 2 * col + 1);
++    if (cols_valid == out_n_tiles) {
++        const uint32_t off = r0 * out_n_tiles * tile_bytes;
++        noc_async_write(slice_l1 + off, get_noc_addr(x, y, my_slot_l1 + off), (r1 - r0) * out_n_tiles * tile_bytes);
++    } else {
++        for (uint32_t t = r0; t < r1; ++t) {
++            noc_async_write(
++                slice_l1 + t * out_n_tiles * tile_bytes,
++                get_noc_addr(x, y, my_slot_l1 + t * out_n_tiles * tile_bytes),
++                cols_valid * tile_bytes);
++        }
++    }
++}
++
+ }  // namespace conv2d_3x3
+Only in perf_experiments/ksplit_combine_tail/op_copy/kernels: conv2d_3x3_combine_tail.hpp
+diff -ru --label head/kernels --label op_copy/kernels head/kernels op_copy/kernels
+--- head/kernels
++++ op_copy/kernels
+@@ -48,6 +48,7 @@
+ #include "ttnn/cpp/ttnn/kernel_lib/perf_instrumentation.hpp"
+ #include "conv2d_3x3_nslice_order.hpp"
+ #include "conv2d_3x3_narrow_untilize.hpp"
++#include "conv2d_3x3_combine_tail.hpp"
+
+ namespace ckl = compute_kernel_lib;
+
+@@ -362,7 +363,45 @@
+
+     // Sum the row's k_cols contributions per output tile and pack them; with a bias the fp32 sum goes
+     // through cb_combined into the bias add, otherwise straight to the output shard.
++    // ksplit_combine_tail: the own slice stays in this core's L1 (cb_combined) under CT_OWN_LOCAL.
++    constexpr bool ct_own_local =
++        (COMBINE_TAIL & conv2d_3x3::combine_tail::CT_OWN_LOCAL) != 0 && k_split && nslice_outer;
+     auto combine_block = [&]() {
++        if constexpr (conv2d_3x3::combine_tail::fused) {
++            {
++                MaybeDeviceZoneScope("compute_combine_wait");
++                combine_slots_dfb.wait_front(k_cols * slot_tiles);
++                if constexpr (ct_own_local) {
++                    combined_dfb.wait_front(slot_tiles);
++                }
++                if constexpr ((COMBINE_TAIL & 64) != 0) {
++                    // Diagnostic only: hold the combine ~1.1 us (as long as the committed own-slice NoC1 copy).
++                    UNPACK((ckernel::wait(1500)));
++                }
++            }
++            MaybeDeviceZoneScope("compute_combine");
++            pack_reconfig_l1_acc(0);
++            if constexpr (apply_relu) {
++                pack_relu_config(ReluConfig::zero());
++            }
++            output_tiles_dfb.reserve_back(slot_tiles);
++            conv2d_3x3::combine_tail::fused_combine<
++                ct_own_local,
++                has_bias,
++                k_cols,
++                slot_tiles,
++                out_n_tiles,
++                cb_combine_slots,
++                cb_combined,
++                cb_bias,
++                cb_output_tiles>(my_col);
++            output_tiles_dfb.push_back(slot_tiles);
++            combine_slots_dfb.pop_front(k_cols * slot_tiles);
++            if constexpr (ct_own_local) {
++                combined_dfb.pop_front(slot_tiles);
++            }
++            return;
++        }
+         {
+             // The row's slices arrive over the NoC; waiting here keeps that wait out of the sum's zone.
+             MaybeDeviceZoneScope("compute_combine_wait");
+@@ -444,7 +483,9 @@
+                     if (y >= num_owning_cols) {
+                         continue;
+                     }
+-                    CircularBuffer& slice_cb = conv2d_3x3::nslice_reader_sends<k_cols>(j) ? slice_r : partials;
++                    CircularBuffer& slice_cb = (ct_own_local && j == k_cols - 1)
++                                                   ? combined
++                                                   : (conv2d_3x3::nslice_reader_sends<k_cols>(j) ? slice_r : partials);
+                     ckl::matmul_block<
+                         /*transpose=*/false,
+                         /*packer_l1_acc=*/false,
+diff -ru --label head/kernels --label op_copy/kernels head/kernels op_copy/kernels
+--- head/kernels
++++ op_copy/kernels
+@@ -13,20 +13,63 @@
+
+ #include <cstdint>
+
++// ksplit_combine_tail experiment: COMBINE_TAIL bit 8 (far first) walks the remote owners farthest first (the reverse
++// of the order above), so the expensive long-haul slice sends overlap the rest of the walk and the slices sent last
++// are the one-hop ones; each slice keeps its RISC / NoC (+d on the reader's NoC0, -d on the writer's NoC1).
++#ifndef COMBINE_TAIL
++#define COMBINE_TAIL 0
++#endif
++
+ namespace conv2d_3x3 {
+
++constexpr bool nslice_far_first = (COMBINE_TAIL & 8) != 0;
++// COMBINE_TAIL bit 16 (near last): the +-1 pair moves to the end of the remote walk (just before the own slice), the
++// rest keep their ascending order: +2, -2, ..., then +1 / -1 (whichever keeps the RISCs alternating). A send's time
++// grows with d (every core of the row sends at once, so each link carries d flows), and the last remote sends are the
++// ones the owners wait for.
++constexpr bool nslice_near_last = (COMBINE_TAIL & 16) != 0;
++// COMBINE_TAIL bit 32 (reader far first): only the reader's +d sends run farthest first (+k/2 ... +1); the writer keeps
++// -1, -2, ... and the own slice last, so its blocking sends stay short while it still streams weights. The reader has
++// two slice periods per send, and its last send (+1) is one hop.
++constexpr bool nslice_reader_far_first = (COMBINE_TAIL & 32) != 0;
++// COMBINE_TAIL bit 128 (reader far middle): the reader sends +1 first (short, while the row's credits settle), then the
++// rest farthest first: +1, +k/2, ..., +2. The writer keeps its order.
++constexpr bool nslice_reader_far_mid = (COMBINE_TAIL & 128) != 0;
++
++// Walk step j (< k_cols - 1) -> step of the base order (+1, -1, +2, -2, ...).
++template <uint32_t k_cols>
++inline uint32_t nslice_base_step(uint32_t j) {
++    if constexpr (nslice_far_first) {
++        return k_cols - 2 - j;
++    } else if constexpr (nslice_near_last && k_cols >= 4) {
++        return j + 2 <= k_cols - 2 ? j + 2 : j % 2;
++    } else if constexpr (nslice_reader_far_mid) {
++        constexpr uint32_t reader_steps = k_cols / 2;
++        return (j % 2 == 0 && j > 0) ? 2 * reader_steps - j : j;
++    } else if constexpr (nslice_reader_far_first) {
++        constexpr uint32_t reader_steps = k_cols / 2;  // +1 .. +(k_cols / 2), the last one only for even k_cols
++        return j % 2 == 0 ? 2 * reader_steps - 2 - j : j;
++    } else {
++        return j;
++    }
++}
++
+ template <uint32_t k_cols>
+ inline uint32_t nslice_owner(uint32_t my_col, uint32_t j) {
+     if (j == k_cols - 1) {
+         return my_col;
+     }
++    j = nslice_base_step<k_cols>(j);
+     const uint32_t d = j / 2 + 1;
+     return (j % 2 == 0) ? (my_col + d) % k_cols : (my_col + k_cols - d) % k_cols;
+ }
+
+ template <uint32_t k_cols>
+ inline bool nslice_reader_sends(uint32_t j) {
+-    return j != k_cols - 1 && j % 2 == 0;
++    if (j == k_cols - 1) {
++        return false;
++    }
++    return nslice_base_step<k_cols>(j) % 2 == 0;
+ }
+
+ }  // namespace conv2d_3x3
+diff -ru --label head/kernels --label op_copy/kernels head/kernels op_copy/kernels
+--- head/kernels
++++ op_copy/kernels
+@@ -100,6 +100,10 @@
+ #include "conv2d_3x3_gather_dataflow.hpp"
+ #include "conv2d_3x3_nslice_order.hpp"
+
++#ifndef CT_HALF_GO_SEM
++#define CT_HALF_GO_SEM 0
++#endif
++
+ namespace {
+
+ constexpr uint32_t TILE_DIM = 32;
+@@ -822,11 +826,15 @@
+             const uint32_t tile_bytes = get_tile_size(cb_slice_r);
+             const uint32_t combine_base = get_write_ptr(cb_combine_slots);
+             bool credited = false;
++            // ksplit_combine_tail (COMBINE_TAIL bit 256, even k_cols, shared-L1 walk): the d = k_cols / 2 slice (the last
++            // remote one, base order step k_cols - 2) goes half on this NoC0 and half on the writer's NoC1.
++            constexpr bool ct_split_last = (COMBINE_TAIL & 256) != 0 && alias_slab_combine && k_cols % 2 == 0;
+             for (uint32_t j = 0; j < k_cols; ++j) {
+                 const uint32_t y = conv2d_3x3::nslice_owner<k_cols>(my_col, j);
+                 if (y >= num_owning_cols || !conv2d_3x3::nslice_reader_sends<k_cols>(j)) {
+                     continue;
+                 }
++                const bool split = ct_split_last && j == k_cols - 2;
+                 {
+                     MaybeDeviceZoneScope("reader_combine_wait_go");
+                     cb_wait_front(cb_slice_r, slice_tiles);
+@@ -835,10 +843,26 @@
+                         credited = true;
+                     }
+                 }
++                if (split) {
++                    // Hand the writer the second half (its NoC1 send reads this CB's L1 in place).
++                    Semaphore<>(CT_HALF_GO_SEM).up(1);
++                }
+                 {
+                     MaybeDeviceZoneScope("reader_combine_send");
+-                    conv2d_3x3::send_slice<block_m_tiles, out_n_tiles, tensor_n_tiles>(
+-                        get_read_ptr(cb_slice_r), combine_base, tile_bytes, my_col, y, row_peer_coords_arg);
++                    if (split) {
++                        conv2d_3x3::send_slice_rows<block_m_tiles, out_n_tiles, tensor_n_tiles>(
++                            get_read_ptr(cb_slice_r),
++                            combine_base,
++                            tile_bytes,
++                            my_col,
++                            y,
++                            row_peer_coords_arg,
++                            0,
++                            (block_m_tiles + 1) / 2);
++                    } else {
++                        conv2d_3x3::send_slice<block_m_tiles, out_n_tiles, tensor_n_tiles>(
++                            get_read_ptr(cb_slice_r), combine_base, tile_bytes, my_col, y, row_peer_coords_arg);
++                    }
+                     noc_async_write_barrier();
+                 }
+                 arrival.up(
+diff -ru --label head/kernels --label op_copy/kernels head/kernels op_copy/kernels
+--- head/kernels
++++ op_copy/kernels
+@@ -75,6 +75,18 @@
+ #include "conv2d_3x3_gather_dataflow.hpp"
+ #include "conv2d_3x3_nslice_order.hpp"
+
++// ksplit_combine_tail experiment (see conv2d_3x3_combine_tail.hpp): CT_OWN_LOCAL keeps the own slice in compute's
++// cb_combined, so the writer never sends it and the owner waits for k_cols - 1 arrivals.
++#ifndef COMBINE_TAIL
++#define COMBINE_TAIL 0
++#endif
++#ifndef CT_HALF_GO_SEM
++#define CT_HALF_GO_SEM 0
++#endif
++#ifndef CT_SLICE_R_CB
++#define CT_SLICE_R_CB 0
++#endif
++
+ void kernel_main() {
+     constexpr uint32_t cb_weights = get_compile_time_arg_val(0);
+     constexpr uint32_t cb_bias = get_compile_time_arg_val(1);
+@@ -514,6 +526,10 @@
+         ++k_blocks_issued;
+     };
+     // before_sends runs once the first weight rounds are out, before the first slice send (the split row gather).
++    constexpr bool ct_own_local = (COMBINE_TAIL & 1) != 0 && nslice_outer;
++    // COMBINE_TAIL bit 256: the reader's d = k_cols / 2 slice goes half on each NoC (two arrivals for it).
++    constexpr bool ct_split_last = (COMBINE_TAIL & 256) != 0 && nslice_outer && alias_slab_combine && k_cols % 2 == 0;
++    constexpr uint32_t nslice_arrivals = (ct_own_local ? k_cols - 1 : k_cols) + (ct_split_last ? 1 : 0);
+     [[maybe_unused]] auto nslice_round = [&](uint32_t m_block_idx, auto&& before_sends) {
+         auto give_credits = [&]() {
+             if (out_valid_tiles > 0) {
+@@ -559,8 +575,40 @@
+             issue_weights_through(j + 1 + nslice_weight_lookahead);
+             const uint32_t y = order[j];
+             if (conv2d_3x3::nslice_reader_sends<k_cols>(step[j])) {
++                if constexpr (ct_split_last) {
++                    if (step[j] == k_cols - 2) {
++                        if (!credited) {
++                            MaybeDeviceZoneScope("writer_combine_wait_credit");
++                            combine_credit.wait_min((m_block_idx + 1) * num_owning_cols);
++                            credited = true;
++                        }
++                        {
++                            MaybeDeviceZoneScope("writer_combine_wait_partials");
++                            Semaphore<>(CT_HALF_GO_SEM).wait_min(m_block_idx + 1);
++                        }
++                        {
++                            MaybeDeviceZoneScope("writer_combine_send");
++                            conv2d_3x3::send_slice_rows<block_m_tiles, out_n_tiles, tensor_n_tiles>(
++                                get_read_ptr(CT_SLICE_R_CB),
++                                combine_base,
++                                tile_bytes,
++                                my_col,
++                                y,
++                                row_peer_coords_arg,
++                                (block_m_tiles + 1) / 2,
++                                block_m_tiles);
++                            noc_async_write_barrier();
++                        }
++                        combine_arrival.up(noc, peer_x(y), peer_y(y), 1);
++                    }
++                }
+                 continue;
+             }
++            if constexpr (ct_own_local) {
++                if (y == my_col) {
++                    continue;  // compute packed it into its own cb_combined
++                }
++            }
+             {
+                 MaybeDeviceZoneScope("writer_combine_wait_partials");
+                 cb_wait_front(cb_partials, slice_tiles);
+@@ -582,7 +630,7 @@
+         if (out_valid_tiles > 0) {
+             {
+                 MaybeDeviceZoneScope("writer_combine_wait_arrivals");
+-                combine_arrival.wait_min((m_block_idx + 1) * k_cols);
++                combine_arrival.wait_min((m_block_idx + 1) * nslice_arrivals);
+             }
+             cb_push_back(cb_combine_slots, k_cols * slot_tiles);
+         }
+--- head/conv2d_3x3_program_descriptor.py
++++ op_copy/conv2d_3x3_program_descriptor.py
+@@ -149,6 +149,30 @@
+ # cb_combined cb_zero_src's), both dead once the core's gather landed; the owner's credits follow its gather. The slice
+ # CBs are single-buffered there: the two sending RISCs alternate slices, so compute still runs a slice ahead.
+ NSLICE_SHARED_SLICE_DEPTH = 1
++# ksplit_combine_tail experiment: the combine tail's COMBINE_TAIL bit set (kernels/conv2d_3x3_combine_tail.hpp).
++# 0 = the committed path; 1 = own slice local (needs 2); 2 = fused sum + bias in one DEST pass; 4 = exact rounding;
++# 8 = N-slice walk farthest owner first; 16 = the +-1 owners last; 32 = the reader's +d owners farthest first;
++# 128 = the reader's +1 first, then farthest first (kernels/conv2d_3x3_nslice_order.hpp); 64 = diagnostic hold;
++# 256 = the last remote (d = k/2) slice sent half on each NoC (even k_cols, shared-L1 walk).
++COMBINE_TAIL = 0
++
++
++def _ct_own_local(g, nslice):
++    return bool(COMBINE_TAIL & 1) and g.k_split and nslice
++
++
++def _ct_defines(g, b):
++    return [
++        ("COMBINE_TAIL", str(_ct_mode(g, b.nslice))),
++        ("CT_HALF_GO_SEM", str(SEM_COMBINE_SEND_DONE)),
++        ("CT_SLICE_R_CB", str(CB_SLICE_R)),
++    ]
++
++
++def _ct_mode(g, nslice):
++    if not g.k_split:
++        return 0
++    return COMBINE_TAIL if nslice else (COMBINE_TAIL & ~(1 | 8 | 16 | 32 | 128 | 256))
+
+ # Split row gather (the per-pixel row gather with more than one tile-row per K-block): the writer gathers the units the
+ # reader hands it (at most ROW_QUEUE outstanding) on NoC1, so two RISCs issue the reads. cb_im2col_rm then holds up to
+@@ -536,7 +560,8 @@
+     ns = g.out_n_tiles
+     combine_sb_h, combine_sb_w = _out_subblock(bm, ns)
+     # R4: every row peer's slice of this core's output columns, plus their sum before the bias add.
+-    combine_bytes = (g.k_cols * bm * ns + (bm * ns if g.has_bias else 0)) * TILE_BYTES_FP32 if g.k_split else 0
++    need_combined = g.has_bias or _ct_own_local(g, nslice)
++    combine_bytes = (g.k_cols * bm * ns + (bm * ns if need_combined else 0)) * TILE_BYTES_FP32 if g.k_split else 0
+     if g.tile_input:
+         ub = _default_untilize_batch_rows(g, band_len, raw_slab_rows)
+         if ub_cap is not None:
+@@ -557,7 +582,7 @@
+         shared_slab_bytes = _shared_region_bytes(slab_bytes, slab_page, slots_bytes, TILE_BYTES_FP32)
+         combine_bytes -= slots_bytes
+         slab_bytes = shared_slab_bytes
+-        if g.has_bias and zero_src_bytes:
++        if need_combined and zero_src_bytes:
+             combined_bytes = bm * ns * TILE_BYTES_FP32
+             shared_zero_bytes = _shared_region_bytes(
+                 zero_src_bytes, g.c_in_p * BF16_BYTES, combined_bytes, TILE_BYTES_FP32
+@@ -928,7 +953,7 @@
+     if g.k_split:
+         if not b.shared_slab_bytes:
+             cbs.append(_cb(CB_COMBINE_SLOTS, ttnn.float32, TILE_BYTES_FP32, g.k_cols * bm * ns, cores))
+-        if has_bias and not b.shared_zero_bytes:
++        if (has_bias or _ct_own_local(g, b.nslice)) and not b.shared_zero_bytes:
+             cbs.append(_cb(CB_COMBINED, ttnn.float32, TILE_BYTES_FP32, bm * ns, cores))
+
+     # Channel-slice reads (R4): the core's slice of input row v is page v * row_page_stride + col offset,
+@@ -1246,6 +1271,7 @@
+             kernel_source=str(KERNEL_DIR / "conv2d_3x3_reader.cpp"),
+             core_ranges=_core_range_set(reader_cores),
+             compile_time_args=reader_ct_args(*slice_channels),
++            defines=_ct_defines(g, b),
+             runtime_args=reader_rt,
+             config=ttnn.ReaderConfigDescriptor(),
+         )
+@@ -1256,6 +1282,7 @@
+             kernel_source=str(KERNEL_DIR / "conv2d_3x3_writer.cpp"),
+             core_ranges=_core_range_set(writer_cores),
+             compile_time_args=writer_ct_args_for(*slice_channels),
++            defines=_ct_defines(g, b),
+             runtime_args=writer_rt,
+             config=ttnn.WriterConfigDescriptor(),
+         )
+@@ -1265,6 +1292,7 @@
+         kernel_source=str(KERNEL_DIR / "conv2d_3x3_compute.cpp"),
+         core_ranges=cores,
+         compile_time_args=compute_ct_args,
++        defines=_ct_defines(g, b),
+         runtime_args=compute_rt,
+         config=ttnn.ComputeConfigDescriptor(
+             math_fidelity=compute_kernel_config.math_fidelity,

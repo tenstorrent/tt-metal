@@ -1,0 +1,997 @@
+diff --git a/ttnn/ttnn/operations/conv2d_3x3/conv2d_3x3_program_descriptor.py b/ttnn/ttnn/operations/conv2d_3x3/perf_experiments/nslice_prelude_pacing/op_copy/conv2d_3x3_program_descriptor.py
+index 58f3edbbec5..d91196de071 100644
+--- a/ttnn/ttnn/operations/conv2d_3x3/conv2d_3x3_program_descriptor.py
++++ b/ttnn/ttnn/operations/conv2d_3x3/perf_experiments/nslice_prelude_pacing/op_copy/conv2d_3x3_program_descriptor.py
+@@ -160,6 +160,34 @@ ROW_SPLIT_DEPTH_ROWS = 8
+ # grows past IM2COL_RM_DEPTH_ROWS toward one K-block of tile-rows, as far as the L1 left at the solved blocking allows
+ # (_im2col_ring_target).
+ IM2COL_RM_DEPTH_ROWS = 2
++# nslice_prelude_pacing experiment knobs (op copy only): extra kernel defines for all three kernels.
++NPP_DEFINES = ()
++# Tap-direct tilize on the N-slice-outer prelude (tap-major, tilize width >= 2): compute tilizes in-image tap blocks
++# from the slab and out-of-image ones from the zero block; the reader gathers only the edge blocks.
++NPP_TAP_DIRECT = False
++# N-slice cb_im2col_rm ring target in units (None: IM2COL_RM_DEPTH_ROWS); only L1 left after the solve.
++NPP_RING_TARGET = None
++# Narrowest tap block (tiles) tap-direct takes: 2 = BH fast tilize only; 1 adds the per-tile unpack tilize path.
++NPP_TD_MIN_TW = 2
++# Windowed N-slice gather: units in flight before the reader fences / pushes (0: one at a time); capped at ring - 1.
++NPP_WIN = 0
++CB_SRC_TABLE = 13
++
++
++def _tap_direct(g, bm, bk, nslice):
++    return (
++        NPP_TAP_DIRECT
++        and nslice
++        and _tap_major(g, bk)
++        and g.c_in_tiles >= NPP_TD_MIN_TW
++        and not face_direct_im2col(g, bk)
++        and not _row_split(g, bm, bk)
++        and not _strided_window(g, bk)
++    )
++
++
++def _src_table_bytes(ring):
++    return _div_up(ring * 16, 64) * 64
+ WEIGHT_DEPTH = 2
+ OUT_DEPTH_ROW_GROUPS = 2
+ # cb_input_tiles depth in untilize batches: the reader reads batch b+1 while compute untilizes b.
+@@ -501,6 +529,8 @@ def _im2col_ring_target(g: Conv3x3Geometry, bm, bk, nslice):
+     gathers K-block k+1 while compute multiplies K-block k and the tilize never waits on a reserve-blocked gather. The
+     split row gather has its own ring, face-direct has no cb_im2col_rm, and the N-slice-outer walk tilizes all of K
+     before its first matmul, so there is nothing for the gather to run under."""
++    if nslice and NPP_RING_TARGET:
++        return NPP_RING_TARGET
+     if nslice or face_direct_im2col(g, bk) or _row_split(g, bm, bk):
+         return IM2COL_RM_DEPTH_ROWS
+     return max(IM2COL_RM_DEPTH_ROWS, bm)
+@@ -575,6 +605,7 @@ def _footprint(
+         + (2 * slice_depth * bm * ns if nslice else bm * bn) * TILE_BYTES_FP32
+         + combine_bytes
+         + (0 if g.sharded_output else OUT_DEPTH_ROW_GROUPS * sb_h * bn * g.out_tile_bytes)
++        + (_src_table_bytes(im2col_rm_depth_rows) if _tap_direct(g, bm, bk, nslice) else 0)
+     )
+     return dict(
+         num_k_blocks=num_k_blocks,
+@@ -922,6 +953,9 @@ def create_program_descriptor(
+         )
+     elif tap_major_im2col(g, b):
+         cbs.append(_cb(CB_ZERO_SRC, ttnn.bfloat16, pixel_bytes, TILE, cores))
++    tap_direct = _tap_direct(g, bm, bk, b.nslice)
++    if tap_direct:
++        cbs.append(_cb(CB_SRC_TABLE, ttnn.bfloat16, 64, _src_table_bytes(b.im2col_rm_depth_rows) // 64, cores))
+     center_mode = b.center_mode
+     if center_mode == CENTER_K_BLOCK:
+         cbs.append(_cb(CB_CENTER_TILES, input_tensor.dtype, g.in0_tile_bytes, bm * bk, cores))
+@@ -1241,12 +1275,28 @@ def create_program_descriptor(
+             m_index,
+         ] + row_peer_coords.get(m_index, [])
+
++    import os as _os
++
++    _abl = [t for t in _os.environ.get("CONV2D_3X3_ABLATE", "").split(",") if t]
++    _abl_defines = [(f"CONV2D_3X3_ABLATE_{t.upper()}", "1") for t in _abl] + [tuple(d.split("=", 1)) if "=" in d else (d, "1") for d in NPP_DEFINES]
++    if NPP_WIN and b.nslice and not face_direct and not row_split and not strided_window:
++        _win = min(NPP_WIN, b.im2col_rm_depth_rows - 1)
++        if _win > 0:
++            _abl_defines += [("NPP_WIN", str(_win))]
++    if tap_direct:
++        _abl_defines += [
++            ("NPP_TAP_DIRECT", "1"),
++            ("NPP_CB_SRC_TABLE", str(CB_SRC_TABLE)),
++            ("NPP_RING", str(b.im2col_rm_depth_rows)),
++        ]
++    _compute_defines = _abl_defines + ([("SKIP_COMPUTE", "1")] if "matmul" in _abl else [])
+     readers = [
+         ttnn.KernelDescriptor(
+             kernel_source=str(KERNEL_DIR / "conv2d_3x3_reader.cpp"),
+             core_ranges=_core_range_set(reader_cores),
+             compile_time_args=reader_ct_args(*slice_channels),
+             runtime_args=reader_rt,
++            defines=_abl_defines,
+             config=ttnn.ReaderConfigDescriptor(),
+         )
+         for slice_channels, (reader_cores, reader_rt) in reader_groups.items()
+@@ -1257,6 +1307,7 @@ def create_program_descriptor(
+             core_ranges=_core_range_set(writer_cores),
+             compile_time_args=writer_ct_args_for(*slice_channels),
+             runtime_args=writer_rt,
++            defines=_abl_defines,
+             config=ttnn.WriterConfigDescriptor(),
+         )
+         for slice_channels, (writer_cores, writer_rt) in writer_groups.items()
+@@ -1266,6 +1317,7 @@ def create_program_descriptor(
+         core_ranges=cores,
+         compile_time_args=compute_ct_args,
+         runtime_args=compute_rt,
++        defines=_compute_defines,
+         config=ttnn.ComputeConfigDescriptor(
+             math_fidelity=compute_kernel_config.math_fidelity,
+             math_approx_mode=compute_kernel_config.math_approx_mode,
+diff --git a/ttnn/ttnn/operations/conv2d_3x3/kernels/conv2d_3x3_combine_dataflow.hpp b/ttnn/ttnn/operations/conv2d_3x3/perf_experiments/nslice_prelude_pacing/op_copy/kernels/conv2d_3x3_combine_dataflow.hpp
+index be219b5d150..9a358df1c5e 100644
+--- a/ttnn/ttnn/operations/conv2d_3x3/kernels/conv2d_3x3_combine_dataflow.hpp
++++ b/ttnn/ttnn/operations/conv2d_3x3/perf_experiments/nslice_prelude_pacing/op_copy/kernels/conv2d_3x3_combine_dataflow.hpp
+@@ -27,6 +27,9 @@ inline void scatter_partial_slices(
+     uint32_t col_begin,
+     uint32_t col_end,
+     uint32_t row_peer_coords_arg) {
++#ifdef CONV2D_3X3_ABLATE_SCATTER
++    return;
++#endif
+     constexpr uint32_t slot_tiles = block_m_tiles * out_n_tiles;
+     const uint32_t my_slot_l1 = combine_base_l1 + my_col * slot_tiles * tile_bytes;
+     for (uint32_t col = col_begin; col < col_end; ++col) {
+@@ -54,6 +57,9 @@ inline void send_slice(
+     uint32_t my_col,
+     uint32_t col,
+     uint32_t row_peer_coords_arg) {
++#ifdef CONV2D_3X3_ABLATE_SCATTER
++    return;
++#endif
+     constexpr uint32_t slot_tiles = block_m_tiles * out_n_tiles;
+     const uint32_t my_slot_l1 = combine_base_l1 + my_col * slot_tiles * tile_bytes;
+     const uint32_t n0 = col * out_n_tiles;
+diff --git a/ttnn/ttnn/operations/conv2d_3x3/kernels/conv2d_3x3_compute.cpp b/ttnn/ttnn/operations/conv2d_3x3/perf_experiments/nslice_prelude_pacing/op_copy/kernels/conv2d_3x3_compute.cpp
+index b7def1fac8f..c552d538451 100644
+--- a/ttnn/ttnn/operations/conv2d_3x3/kernels/conv2d_3x3_compute.cpp
++++ b/ttnn/ttnn/operations/conv2d_3x3/perf_experiments/nslice_prelude_pacing/op_copy/kernels/conv2d_3x3_compute.cpp
+@@ -82,6 +82,15 @@ template <uint32_t c_in_tiles, uint32_t cb_in, uint32_t cb_out>
+ ALWI void window_tilize(DataflowBuffer& in, DataflowBuffer& out, uint32_t units) {
+     constexpr uint32_t row_tiles = 2 * c_in_tiles;
+     constexpr uint32_t block_tiles = 3 * c_in_tiles;
++#ifdef CONV2D_3X3_ABLATE_TILIZE
++    for (uint32_t u = 0; u < units; ++u) {
++        in.wait_front(block_tiles);
++        out.reserve_back(block_tiles);
++        out.push_back(block_tiles);
++        in.pop_front(block_tiles);
++    }
++    return;
++#endif
+     reconfig_data_format_srca(cb_in);
+     pack_reconfig_data_format(cb_out);
+     fast_tilize_init(cb_in, row_tiles, cb_out);
+@@ -118,6 +127,128 @@ ALWI void window_tilize(DataflowBuffer& in, DataflowBuffer& out, uint32_t units)
+     fast_tilize_uninit(cb_in, cb_out, row_tiles);
+ }
+
++// Tap-direct tilize (N-slice-outer prelude, nslice_prelude_pacing experiment; see the reader's TapDirect): every tap
++// block (tw tiles, a [32, c_in_p] row-major block) of a unit is tilized from the L1 address the reader published in its
++// slot's entry of cb_src_table: a slab run, the zero block, or the block the reader gathered into the slot. Same tiles,
++// same order as ckl::tilize over the slot (bit-identical).
++// Raw LLK, UNPACK only (capability): ckl::tilize / fast_tilize_block always read at the CB read pointer; the loop is
++// fast_tilize_block's (as window_tilize), with the unpacker's base taken from the published address.
++#ifdef NPP_TAP_DIRECT
++#ifdef TRISC_UNPACK
++template <uint32_t cb_table, uint32_t taps>
++inline void direct_unit_sources(uint32_t slot, uint32_t (&src)[taps]) {
++    invalidate_l1_cache();
++    const uint32_t table = get_local_cb_interface(get_operand_id(cb_table)).fifo_rd_ptr << 4;
++    volatile uint32_t* entry = reinterpret_cast<volatile uint32_t*>(table + slot * 16);
++    for (uint32_t t = 0; t < taps; ++t) {
++        src[t] = entry[t];
++    }
++}
++#endif
++
++#ifdef TRISC_UNPACK
++// One-tile-wide tap block (tw == 1): BH tilizes it with the per-tile unpack tilize (fast_tilize_block's block == 1
++// path); the base is the published address instead of the CB read pointer.
++template <uint32_t cb_in>
++inline void direct_unpack_tilize(uint32_t src) {
++    const uint32_t id = get_operand_id(cb_in);
++    llk_unpack_tilize_impl(
++        (src >> 4) - 1,
++        0,
++        unpack_src_format[id],
++        unpack_dst_format[id],
++        get_operand_face_r_dim(id),
++        get_operand_num_faces(id),
++        get_operand_narrow_tile(id));
++}
++#endif
++
++template <uint32_t taps, uint32_t ring, uint32_t cb_in, uint32_t cb_out, uint32_t cb_table>
++ALWI void direct_tilize_1wide(DataflowBuffer& in, DataflowBuffer& out, uint32_t units, uint32_t& seq) {
++    reconfig_data_format_srca(cb_in);
++    pack_reconfig_data_format(cb_out);
++    fast_tilize_init(cb_in, 1, cb_out);
++    for (uint32_t u = 0; u < units; ++u, ++seq) {
++#ifdef NPP_FINE_ZONES
++        {
++            DeviceZoneScopedN("ct_wait");
++            in.wait_front(taps);
++        }
++        DeviceZoneScopedN("ct_unit");
++#else
++        in.wait_front(taps);
++#endif
++        [[maybe_unused]] uint32_t src[taps];
++        UNPACK((direct_unit_sources<cb_table, taps>(seq % ring, src)));
++        for (uint32_t t = 0; t < taps; ++t) {
++            out.reserve_back(1);
++            UNPACK((direct_unpack_tilize<cb_in>(src[t])));
++            MATH((llk_math_wait_for_dest_available()));
++            PACK((llk_packer_wait_for_math_done()));
++            MATH((llk_math_eltwise_unary_datacopy<DataCopyType::A2D, DST_ACCUM_MODE, BroadcastType::NONE, UnpackToDestEn>(
++                0, cb_in)));
++            PACK((llk_pack<DST_ACCUM_MODE, true, PackMode::Default>(0, cb_out, 0)));
++            MATH((llk_math_dest_section_done<DST_ACCUM_MODE>()));
++            PACK((llk_pack_dest_section_done<DST_ACCUM_MODE>()));
++            out.push_back(1);
++        }
++        in.pop_front(taps);
++    }
++    fast_tilize_uninit(cb_in, cb_out, 1);
++}
++
++template <uint32_t tw, uint32_t taps, uint32_t ring, uint32_t cb_in, uint32_t cb_out, uint32_t cb_table>
++ALWI void direct_tilize(DataflowBuffer& in, DataflowBuffer& out, uint32_t units, uint32_t& seq) {
++    if constexpr (tw == 1) {
++        direct_tilize_1wide<taps, ring, cb_in, cb_out, cb_table>(in, out, units, seq);
++        return;
++    }
++    static_assert(tw != 0, "tap width");
++    reconfig_data_format_srca(cb_in);
++    pack_reconfig_data_format(cb_out);
++    fast_tilize_init(cb_in, tw, cb_out);
++    uint32_t prev_chunk = 0;
++    for (uint32_t u = 0; u < units; ++u, ++seq) {
++#ifdef NPP_FINE_ZONES
++        {
++            DeviceZoneScopedN("ct_wait");
++            in.wait_front(tw * taps);
++        }
++        DeviceZoneScopedN("ct_unit");
++#else
++        in.wait_front(tw * taps);
++#endif
++        [[maybe_unused]] uint32_t src[taps];
++        UNPACK((direct_unit_sources<cb_table, taps>(seq % ring, src)));
++        for (uint32_t t = 0; t < taps; ++t) {
++            out.reserve_back(tw);
++            PACK((llk_pack_fast_tilize_row_begin(cb_out, 0)));
++            for (uint32_t tiles_done = 0; tiles_done < tw;) {
++                const uint32_t remaining = tw - tiles_done;
++                const uint32_t chunk = (remaining > 5) ? 4 : (remaining == 5) ? 2 : remaining;
++                MATH((llk_math_wait_for_dest_available()));
++                PACK((llk_packer_wait_for_math_done()));
++                if (chunk != prev_chunk) {
++                    UNPACK((llk_unpack_fast_tilize_reinit_xdim(chunk)));
++                    PACK((llk_pack_fast_tilize_reinit_unit_dim(cb_out, chunk)));
++                    prev_chunk = chunk;
++                }
++                UNPACK((window_unpack_chunk<cb_in>(src[t], chunk, tiles_done)));
++                MATH((llk_math_fast_tilize_block_<DST_ACCUM_MODE>(0, cb_in, 4)));
++                PACK((llk_pack_fast_tilize_row_chunk(0, cb_out, chunk)));
++                MATH((llk_math_dest_section_done<DST_ACCUM_MODE>()));
++                PACK((llk_pack_dest_section_done<DST_ACCUM_MODE>()));
++                tiles_done += chunk;
++            }
++            PACK((llk_pack_fast_tilize_row_end()));
++            out.push_back(tw);
++        }
++        in.pop_front(tw * taps);
++    }
++    fast_tilize_uninit(cb_in, cb_out, tw);
++}
++#endif
++
+ // Center-tap direct modes (the descriptor's center_tap_mode).
+ constexpr uint32_t CENTER_K_BLOCK = 1;
+ constexpr uint32_t CENTER_SLOTS = 2;
+@@ -129,6 +260,15 @@ template <uint32_t tw, uint32_t cb_rm, uint32_t cb_tiles>
+ ALWI void tilize_rows_skip_center(DataflowBuffer& rm, DataflowBuffer& tiles, uint32_t num_rows) {
+     namespace tc = ckl::tilize_config;
+     constexpr auto NoRc = tc::ReconfigureRegisterDatatypeMode::NoReconfigure;
++#ifdef CONV2D_3X3_ABLATE_TILIZE
++    for (uint32_t r = 0; r < 3 * num_rows; ++r) {
++        rm.wait_front(tw);
++        tiles.reserve_back(tw);
++        tiles.push_back(tw);
++        rm.pop_front(tw);
++    }
++    return;
++#endif
+     for (uint32_t r = 0; r < num_rows; ++r) {
+         if (r == 0) {
+             ckl::tilize<tw, cb_rm, cb_tiles, tc::InitUninitMode::InitOnly>(rm, tiles, 1);
+@@ -193,8 +333,17 @@ struct TilizeIm2colKBlock {
+                 static_assert(block_k_tiles == 3 * c_in_tiles, "a window unit is one kernel row");
+                 window_tilize<c_in_tiles, cb_im2col_rm, cb_im2col_tiles>(*rm, *tiles, block_m_tiles);
+             } else {
++#ifdef CONV2D_3X3_ABLATE_TILIZE
++                for (uint32_t r = 0; r < block_m_tiles * (block_k_tiles / tilize_width_tiles); ++r) {
++                    rm->wait_front(tilize_width_tiles);
++                    tiles->reserve_back(tilize_width_tiles);
++                    tiles->push_back(tilize_width_tiles);
++                    rm->pop_front(tilize_width_tiles);
++                }
++#else
+                 ckl::tilize<tilize_width_tiles, cb_im2col_rm, cb_im2col_tiles>(
+                     *rm, *tiles, block_m_tiles * (block_k_tiles / tilize_width_tiles));
++#endif
+             }
+         }
+         if constexpr (relu_on_last_matmul_pack) {
+@@ -400,11 +549,22 @@ void kernel_main() {
+         }
+     };
+
++#ifdef NPP_TAP_DIRECT
++    uint32_t direct_seq = 0;
++#endif
+     for (uint32_t m_block_idx = 0; m_block_idx < num_m_blocks_this_core; ++m_block_idx) {
+         if constexpr (tile_input) {
+             // untilize_footprint: the reader streams slab_tile_rows input tile-rows in slab order.
+             MaybeDeviceZoneScope("compute_untilize");
+             pack_reconfig_l1_acc(0);
++#ifdef CONV2D_3X3_ABLATE_UNTILIZE
++            for (uint32_t r = 0; r < slab_tile_rows; ++r) {
++                input_tiles_dfb.wait_front(untilize_width_tiles);
++                halo_slab_dfb.reserve_back(untilize_width_tiles);
++                halo_slab_dfb.push_back(untilize_width_tiles);
++                input_tiles_dfb.pop_front(untilize_width_tiles);
++            }
++#else
+             if constexpr (untilize_width_tiles == 1) {
+                 // Raw LLK on a measured win (see conv2d_3x3_narrow_untilize.hpp): the helper's 1-wide path is
+                 // packer-bound at one DEST section and one CB sync per tile-row.
+@@ -414,6 +574,7 @@ void kernel_main() {
+                 ckl::untilize<untilize_width_tiles, cb_input_tiles, cb_halo_slab>(
+                     input_tiles_dfb, halo_slab_dfb, slab_tile_rows);
+             }
++#endif
+         }
+
+         if constexpr (k_split && nslice_outer) {
+@@ -433,8 +594,68 @@ void kernel_main() {
+                     window_tilize<c_in_tiles, cb_im2col_rm, cb_im2col_tiles>(
+                         im2col_rm_dfb, im2col_tiles_dfb, block_m_tiles * num_k_blocks);
+                 } else {
++#ifdef NPP_TAP_DIRECT
++                    direct_tilize<
++                        im2col_tilize_width_tiles,
++                        block_k_tiles / im2col_tilize_width_tiles,
++                        NPP_RING,
++                        cb_im2col_rm,
++                        cb_im2col_tiles,
++                        NPP_CB_SRC_TABLE>(im2col_rm_dfb, im2col_tiles_dfb, block_m_tiles * num_k_blocks, direct_seq);
++#elif defined(CONV2D_3X3_ABLATE_TILIZE)
++#ifdef NPP_FINE_ZONES
++                    for (uint32_t u = 0; u < block_m_tiles * num_k_blocks; ++u) {
++                        {
++                            DeviceZoneScopedN("ct_wait");
++                            im2col_rm_dfb.wait_front(block_k_tiles);
++                        }
++                        DeviceZoneScopedN("ct_unit");
++                        for (uint32_t r = 0; r < block_k_tiles / im2col_tilize_width_tiles; ++r) {
++                            im2col_rm_dfb.wait_front(im2col_tilize_width_tiles);
++                            im2col_tiles_dfb.reserve_back(im2col_tilize_width_tiles);
++                            im2col_tiles_dfb.push_back(im2col_tilize_width_tiles);
++                            im2col_rm_dfb.pop_front(im2col_tilize_width_tiles);
++                        }
++                    }
++#else
++                    for (uint32_t r = 0; r < block_m_tiles * (k_tiles / im2col_tilize_width_tiles); ++r) {
++                        im2col_rm_dfb.wait_front(im2col_tilize_width_tiles);
++                        im2col_tiles_dfb.reserve_back(im2col_tilize_width_tiles);
++                        im2col_tiles_dfb.push_back(im2col_tilize_width_tiles);
++                        im2col_rm_dfb.pop_front(im2col_tilize_width_tiles);
++                    }
++#endif
++#else
++#ifdef NPP_FINE_ZONES
++                    {
++                        namespace tc = ckl::tilize_config;
++                        constexpr auto NoRc = tc::ReconfigureRegisterDatatypeMode::NoReconfigure;
++                        constexpr uint32_t units = block_m_tiles * num_k_blocks;
++                        constexpr uint32_t bpu = block_k_tiles / im2col_tilize_width_tiles;
++                        static_assert(units >= 2);
++                        for (uint32_t u = 0; u < units; ++u) {
++                            {
++                                DeviceZoneScopedN("ct_wait");
++                                im2col_rm_dfb.wait_front(block_k_tiles);
++                            }
++                            DeviceZoneScopedN("ct_unit");
++                            if (u == 0) {
++                                ckl::tilize<im2col_tilize_width_tiles, cb_im2col_rm, cb_im2col_tiles, tc::InitUninitMode::InitOnly>(
++                                    im2col_rm_dfb, im2col_tiles_dfb, bpu);
++                            } else if (u + 1 == units) {
++                                ckl::tilize<im2col_tilize_width_tiles, cb_im2col_rm, cb_im2col_tiles, tc::InitUninitMode::UninitOnly, tc::WaitMode::WaitBlock, NoRc>(
++                                    im2col_rm_dfb, im2col_tiles_dfb, bpu);
++                            } else {
++                                ckl::tilize<im2col_tilize_width_tiles, cb_im2col_rm, cb_im2col_tiles, tc::InitUninitMode::Neither, tc::WaitMode::WaitBlock, NoRc>(
++                                    im2col_rm_dfb, im2col_tiles_dfb, bpu);
++                            }
++                        }
++                    }
++#else
+                     ckl::tilize<im2col_tilize_width_tiles, cb_im2col_rm, cb_im2col_tiles>(
+                         im2col_rm_dfb, im2col_tiles_dfb, block_m_tiles * (k_tiles / im2col_tilize_width_tiles));
++#endif
++#endif
+                 }
+             }
+             {
+diff --git a/ttnn/ttnn/operations/conv2d_3x3/kernels/conv2d_3x3_gather_dataflow.hpp b/ttnn/ttnn/operations/conv2d_3x3/perf_experiments/nslice_prelude_pacing/op_copy/kernels/conv2d_3x3_gather_dataflow.hpp
+index 3b76080cb45..3857836aa3a 100644
+--- a/ttnn/ttnn/operations/conv2d_3x3/kernels/conv2d_3x3_gather_dataflow.hpp
++++ b/ttnn/ttnn/operations/conv2d_3x3/perf_experiments/nslice_prelude_pacing/op_copy/kernels/conv2d_3x3_gather_dataflow.hpp
+@@ -374,6 +374,129 @@ struct TapMajorGather {
+     }
+ };
+
++// Tap-direct (N-slice-outer prelude, nslice_prelude_pacing experiment): compute tilizes each tap block of a unit from
++// an L1 address the reader publishes per (unit slot, tap). A tap block [32 pixels, c_in_p] is already a contiguous run of
++// slab pixels when the tile-row's valid pixels are one output-row run whose tap lies inside the image row: its address
++// is the slab run itself (no copy). A tap whose kernel row lies outside the image, or a tile-row wholly past o_end, is
++// the 32-pixel zero block. Only the other taps (a run touching the left / right padding, or a tile-row straddling two
++// output rows) are gathered into the unit's own slot, as TapMajorGather does. Rows past o_end read whatever follows the
++// run: every phase downstream is row-independent and the writer never stores them.
++template <
++    uint32_t output_width,
++    int32_t input_height,
++    int32_t input_width,
++    int32_t padding,
++    int32_t dilation,
++    uint32_t c_in_p,
++    uint32_t block_k_tiles>
++struct TapDirect {
++    static constexpr uint32_t TILE_DIM = 32;
++    static constexpr uint32_t pixel_bytes = c_in_p * 2;
++    static constexpr uint32_t tap_cols = 3 * c_in_p;
++
++    // Returns the number of taps gathered (reads issued) into the slot.
++    template <typename Reads>
++    FORCE_INLINE static uint32_t tile_row(
++        Reads& reads,
++        uint32_t slab_l1,
++        uint64_t slab_noc,
++        uint32_t zero_l1,
++        uint64_t zero_src_noc,
++        uint32_t rows_l1,
++        uint32_t o,
++        uint32_t o_end,
++        int32_t kh,
++        uint32_t col_lo,
++        int32_t slab_x_base_kh,
++        volatile tt_l1_ptr uint32_t* srcs) {
++        const uint32_t col_hi = col_lo + block_k_tiles * TILE_DIM;
++        const uint32_t data_hi = col_hi < tap_cols ? col_hi : tap_cols;
++        const int32_t kw_first = col_lo / c_in_p;
++        const int32_t kw_last = (data_hi - 1) / c_in_p;
++        const uint32_t row_end = o + TILE_DIM < o_end ? o + TILE_DIM : o_end;
++        uint32_t gathered = 0;
++        const int32_t ho0 = o / output_width;
++        const int32_t wo0 = o % output_width;
++        const int32_t n = static_cast<int32_t>(row_end) - static_cast<int32_t>(o);
++        const bool one_run = n > 0 && wo0 + n <= static_cast<int32_t>(output_width);
++        const int32_t h_in0 = ho0 + kh * dilation - padding;
++        const bool row_out = h_in0 < 0 || h_in0 >= input_height;
++        for (int32_t kw = kw_first; kw <= kw_last; ++kw) {
++            const uint32_t dst = rows_l1 + (kw - kw_first) * TILE_DIM * pixel_bytes;
++            const int32_t w_lo0 = wo0 - padding + kw * dilation;
++            uint32_t src = dst;
++#if defined(NPP_TD_FORCE_GATHER)
++            // diagnosis: every tap gathered into the slot (the baseline's data movement, tilized via the table)
++            if (n <= 0) {
++                srcs[kw - kw_first] = src;
++                continue;
++            }
++#elif defined(NPP_TD_ALLDIRECT)
++            // diagnosis only (WRONG at the image edges): every in-image-row tap tilized from the slab, nothing gathered
++            if (n <= 0 || row_out) {
++                src = zero_l1;
++            } else {
++                src = slab_l1 + static_cast<uint32_t>(slab_x_base_kh + h_in0 * input_width + w_lo0) * pixel_bytes;
++            }
++#ifdef NPP_TD_ALIGN
++            if (src != zero_l1) {
++                src &= ~static_cast<uint32_t>(NPP_TD_ALIGN - 1);
++            }
++#endif
++#ifdef NPP_TD_SLOTSRC
++            src = dst;
++            srcs[kw - kw_first] = src;
++            continue;
++#endif
++#ifdef NPP_TD_ZEROSRC
++            src = zero_l1;
++#endif
++#else
++            if (n <= 0 || (one_run && row_out)) {
++                src = zero_l1;
++            } else if (one_run && w_lo0 >= 0 && w_lo0 + n <= input_width) {
++                src = slab_l1 + static_cast<uint32_t>(slab_x_base_kh + h_in0 * input_width + w_lo0) * pixel_bytes;
++            }
++#endif
++            srcs[kw - kw_first] = src;
++            if (src != dst) {
++                continue;
++            }
++            ++gathered;
++            uint32_t d = dst;
++            int32_t ho = ho0;
++            int32_t wo = wo0;
++            for (uint32_t p = o; p < row_end;) {
++                const int32_t run = row_end - p < output_width - wo ? row_end - p : output_width - wo;
++                const int32_t h_in = ho + kh * dilation - padding;
++                const int32_t w_lo = wo - padding + kw * dilation;
++                int32_t in_lo = w_lo < 0 ? (-w_lo < run ? -w_lo : run) : 0;
++                int32_t in_hi = input_width - w_lo < run ? input_width - w_lo : run;
++                if (h_in < 0 || h_in >= input_height || in_hi < in_lo) {
++                    in_lo = in_hi = run;
++                }
++                if (in_lo > 0) {
++                    reads.read(zero_src_noc, d, in_lo * pixel_bytes);
++                }
++                if (in_hi > in_lo) {
++                    reads.read(
++                        slab_noc + (slab_x_base_kh + h_in * input_width + w_lo + in_lo) * pixel_bytes,
++                        d + in_lo * pixel_bytes,
++                        (in_hi - in_lo) * pixel_bytes);
++                }
++                if (run > in_hi) {
++                    reads.read(zero_src_noc, d + in_hi * pixel_bytes, (run - in_hi) * pixel_bytes);
++                }
++                d += run * pixel_bytes;
++                p += run;
++                wo = 0;
++                ++ho;
++            }
++        }
++        return gathered;
++    }
++};
++
+ // Strided window (stride 2, d 1, C_in_p whole tiles, one K-block per kernel row): im2col row i of a tile-row is the 3
+ // consecutive input pixels from 2 * wo_i - padding, and inside one output-row run row i + 1 starts two pixels after row
+ // i. So the run's rows are overlapping windows of one input run: pixel slot j of the unit holds input pixel
+diff --git a/ttnn/ttnn/operations/conv2d_3x3/kernels/conv2d_3x3_reader.cpp b/ttnn/ttnn/operations/conv2d_3x3/perf_experiments/nslice_prelude_pacing/op_copy/kernels/conv2d_3x3_reader.cpp
+index 7d9a89346d3..0ff2bb02420 100644
+--- a/ttnn/ttnn/operations/conv2d_3x3/kernels/conv2d_3x3_reader.cpp
++++ b/ttnn/ttnn/operations/conv2d_3x3/perf_experiments/nslice_prelude_pacing/op_copy/kernels/conv2d_3x3_reader.cpp
+@@ -89,6 +89,12 @@
+ // zero-fills.
+
+ #include <cstdint>
++#ifdef CONV2D_3X3_ABLATE_GATHER
++#define CENTER_READ(...) ((void)0)
++#else
++#define CENTER_READ(...) reads.read(__VA_ARGS__)
++#endif
++#pragma GCC diagnostic ignored "-Wunused-local-typedefs"
+
+ #include "api/dataflow/dataflow_api.h"
+ #include "api/dataflow/circular_buffer.h"
+@@ -107,6 +113,22 @@ constexpr uint32_t ELEM_BYTES = 2;        // bf16 slab and im2col rows
+ constexpr uint32_t TRID_GATHER = 4;       // ROW_MAJOR bands use trids 1..3
+ constexpr uint32_t TRID_INPUT_TILES = 5;  // TILE footprint batches
+ constexpr uint32_t TRID_CENTER = 6;       // center-tap slots
++constexpr uint32_t TRID_GATHER_ALT = 7;   // tap-direct pipelined gather: odd units
++#ifndef NPP_WIN
++#define NPP_WIN 0
++#endif
++#ifdef NPP_TD_PIPE
++#define NPP_TD_PIPE_ON true
++#else
++#define NPP_TD_PIPE_ON false
++#endif
++#ifdef NPP_TAP_DIRECT
++constexpr bool tap_direct = true;
++constexpr uint32_t cb_src_table = NPP_CB_SRC_TABLE;
++#else
++constexpr bool tap_direct = false;
++constexpr uint32_t cb_src_table = 0;
++#endif
+
+ }  // namespace
+
+@@ -271,6 +293,8 @@ void kernel_main() {
+         block_k_tiles,
+         center_mode == 2 ? 1 : -1>;
+     using WindowT = conv2d_3x3::WindowGather<output_width, input_height, input_width, padding, c_in_p>;
++    using TapDirectT =
++        conv2d_3x3::TapDirect<output_width, input_height, input_width, padding, dilation, c_in_p, block_k_tiles>;
+     // The unit address word compute tilizes from: the last 16 B of the unit's cb_im2col_rm pages.
+     constexpr uint32_t window_header_offset = block_k_tiles * TILE_DIM * TILE_DIM * ELEM_BYTES - 16;
+     static_assert(
+@@ -317,6 +341,10 @@ void kernel_main() {
+     // so the slab always starts at the CB base.
+     const uint32_t slab_l1 = tile_input ? get_read_ptr(cb_halo_slab) : get_write_ptr(cb_halo_slab);
+     const uint64_t slab_noc = get_noc_addr(slab_l1);
++    // Tap-direct: per cb_im2col_rm slot, one 16 B entry of tap source addresses (see TapDirect).
++    [[maybe_unused]] const uint32_t src_table_l1 = tap_direct ? get_write_ptr(cb_src_table) : 0;
++    [[maybe_unused]] uint32_t direct_seq = 0;
++    [[maybe_unused]] const uint32_t im2col_rm_base0 = tap_direct ? get_write_ptr(cb_im2col_rm) : 0;
+     conv2d_3x3::TaggedReads<face_direct> reads;
+
+     if constexpr (zero_im2col_once) {
+@@ -351,6 +379,7 @@ void kernel_main() {
+         reads.noc.write_zeros_l1_barrier();
+         zero_src_noc = get_noc_addr(get_write_ptr(cb_zero_src));
+     }
++    [[maybe_unused]] const uint32_t zero_src_l1 = tap_major ? get_write_ptr(cb_zero_src) : 0;
+
+     // Input pages [page, end_page) into consecutive L1 page slots from l1. With the split fill, runs of higher
+     // shards are the writer's.
+@@ -455,7 +484,9 @@ void kernel_main() {
+                     const uint32_t seg_left = seg_count[seg] - seg_row;
+                     const uint32_t rows = untilize_batch_rows - r < seg_left ? untilize_batch_rows - r : seg_left;
+                     const uint32_t row0 = seg_first[seg] + seg_row;
++#ifndef CONV2D_3X3_ABLATE_FILL
+                     read_rows(row0, row0 + rows, l1);
++#endif
+                     l1 += rows * row_bytes;
+                     r += rows;
+                     seg_row += rows;
+@@ -502,13 +533,22 @@ void kernel_main() {
+
+         // ---- gather_im2col_blocks: one K-block = block_m_tiles tile-rows x block_k_cols of kernel row kh.
+         // Tile-row tile_row of K-block k_block_idx into rows_l1.
+-        [[maybe_unused]] auto gather_into = [&](uint32_t k_block_idx, uint32_t tile_row, uint32_t rows_l1) {
++        [[maybe_unused]] auto gather_issue = [&](uint32_t k_block_idx, uint32_t tile_row, uint32_t rows_l1, uint32_t trid) {
+             const uint32_t k_tile0 = k_block_idx * block_k_tiles;
+             const int32_t kh = k_tile0 / tensor_kkh_tiles;
+             const uint32_t col_lo = (k_tile0 - kh * tensor_kkh_tiles) * TILE_DIM;
+             const uint32_t o = o_first + tile_row * TILE_DIM;
+-            reads.begin(TRID_GATHER);
+-            if constexpr (tap_major) {
++            reads.begin(trid);
++#ifdef CONV2D_3X3_ABLATE_GATHER
++            if constexpr (strided_window) {
++                *reinterpret_cast<volatile uint32_t*>(rows_l1 + window_header_offset) = rows_l1;
++            }
++            // nslice_prelude_pacing: the ablation_r4 hook had `false` here too, so `gather` never stubbed gather_into.
++            if constexpr (true) {
++#else
++            if constexpr (false) {
++#endif
++            } else if constexpr (tap_major) {
+                 TapMajorT::tile_row(reads, slab_noc, zero_src_noc, rows_l1, o, o_end, kh, col_lo, slab_x_base[kh]);
+             } else if constexpr (strided_window) {
+                 uint32_t src = 0;
+@@ -523,10 +563,21 @@ void kernel_main() {
+             } else {
+                 RowGatherT::tile_row(reads, slab_noc, rows_l1, o, o_end, kh, col_lo, slab_x_base[kh]);
+             }
++        };
++        [[maybe_unused]] auto gather_into = [&](uint32_t k_block_idx, uint32_t tile_row, uint32_t rows_l1) {
++            gather_issue(k_block_idx, tile_row, rows_l1, TRID_GATHER);
+             reads.wait(TRID_GATHER);
+         };
+         [[maybe_unused]] auto gather_unit = [&](uint32_t k_block_idx, uint32_t tile_row) {
++#ifdef NPP_FINE_ZONES
++            {
++                DeviceZoneScopedN("rg_reserve");
++                cb_reserve_back(cb_im2col_rm, block_k_tiles);
++            }
++            DeviceZoneScopedN("rg_work");
++#else
+             cb_reserve_back(cb_im2col_rm, block_k_tiles);
++#endif
+             gather_into(k_block_idx, tile_row, get_write_ptr(cb_im2col_rm));
+             cb_push_back(cb_im2col_rm, block_k_tiles);
+         };
+@@ -547,7 +598,7 @@ void kernel_main() {
+                 const uint32_t t = t_first + r;
+                 const int32_t h_in = static_cast<int32_t>(t / tile_rows_per_image_row) + kh * dilation - padding;
+                 if (r >= block_valid_tiles || h_in < 0 || h_in >= input_height) {
+-                    reads.read(zero_src_noc, l1, row_tile_bytes);
++                    CENTER_READ(zero_src_noc, l1, row_tile_bytes);
+                     l1 += l1_row_stride;
+                     ++r;
+                     continue;
+@@ -564,7 +615,7 @@ void kernel_main() {
+                 if (contig_rows == 0) {
+                     // A row split across pages that are not contiguous: one read per page.
+                     for (uint32_t c = 0; c < c_in_tiles; ++c) {
+-                        reads.read(input.get_noc_addr(page + c), l1 + c * input_page_bytes, input_page_bytes);
++                        CENTER_READ(input.get_noc_addr(page + c), l1 + c * input_page_bytes, input_page_bytes);
+                     }
+                     l1 += l1_row_stride;
+                     ++r;
+@@ -572,7 +623,7 @@ void kernel_main() {
+                 }
+                 uint64_t src = input.get_noc_addr(page);
+                 for (uint32_t i = 0; i < contig_rows; ++i) {
+-                    reads.read(src, l1, row_tile_bytes);
++                    CENTER_READ(src, l1, row_tile_bytes);
+                     src += row_tile_bytes;
+                     l1 += l1_row_stride;
+                 }
+@@ -646,6 +697,169 @@ void kernel_main() {
+                 while (assign_cursor < m_seq_end) {
+                     take_unit(m_seq_end);
+                 }
++            } else if constexpr (NPP_WIN > 0) {
++                // Windowed gather: up to NPP_WIN units gathered but not yet fenced / pushed, each under its own trid,
++                // so the read latency of one unit hides under the next ones' issue. The ring holds NPP_WIN + 1 units
++                // at least (the descriptor's ring target).
++                constexpr uint32_t W = NPP_WIN;
++                static_assert(W + 1 <= 6, "trids 8..13");
++                const uint32_t unit_bytes = block_k_tiles * get_tile_size(cb_im2col_rm);
++                const uint32_t ring_bytes = im2col_rm_depth_rows * unit_bytes;
++                const uint32_t rm_base = get_local_cb_interface(cb_im2col_rm).fifo_limit - get_local_cb_interface(cb_im2col_rm).fifo_size;
++                uint32_t pend = 0;
++                uint32_t seq = 0;
++                for (uint32_t tile_row = 0; tile_row < block_m_tiles; ++tile_row) {
++                    for (uint32_t k_block_idx = 0; k_block_idx < num_k_blocks; ++k_block_idx) {
++#ifdef NPP_FINE_ZONES
++                        {
++                            DeviceZoneScopedN("rg_reserve");
++                            cb_reserve_back(cb_im2col_rm, (pend + 1) * block_k_tiles);
++                        }
++                        DeviceZoneScopedN("rg_work");
++#else
++                        cb_reserve_back(cb_im2col_rm, (pend + 1) * block_k_tiles);
++#endif
++                        uint32_t slot_l1 = get_write_ptr(cb_im2col_rm) + pend * unit_bytes;
++                        if (slot_l1 >= rm_base + ring_bytes) {
++                            slot_l1 -= ring_bytes;
++                        }
++                        const uint32_t trid = 8 + seq % (W + 1);
++                        if constexpr (tap_direct) {
++                            const uint32_t k_tile0 = k_block_idx * block_k_tiles;
++                            const int32_t kh = k_tile0 / tensor_kkh_tiles;
++                            const uint32_t col_lo = (k_tile0 - kh * tensor_kkh_tiles) * TILE_DIM;
++                            volatile tt_l1_ptr uint32_t* srcs = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(
++                                src_table_l1 + (direct_seq % im2col_rm_depth_rows) * 16);
++                            reads.begin(trid);
++                            TapDirectT::tile_row(
++                                reads,
++                                slab_l1,
++                                slab_noc,
++                                zero_src_l1,
++                                zero_src_noc,
++                                slot_l1,
++                                o_first + tile_row * TILE_DIM,
++                                o_end,
++                                kh,
++                                col_lo,
++                                slab_x_base[kh],
++                                srcs);
++                            ++direct_seq;
++                        } else {
++                            gather_issue(k_block_idx, tile_row, slot_l1, trid);
++                        }
++                        ++pend;
++                        ++seq;
++                        if (pend > W) {
++                            reads.wait(8 + (seq - pend) % (W + 1));
++                            cb_push_back(cb_im2col_rm, block_k_tiles);
++                            --pend;
++                        }
++                    }
++                }
++                while (pend > 0) {
++                    reads.wait(8 + (seq - pend) % (W + 1));
++                    cb_push_back(cb_im2col_rm, block_k_tiles);
++                    --pend;
++                }
++            } else if constexpr (tap_direct && NPP_TD_PIPE_ON) {
++                // Pipelined: unit s's gather reads are issued before unit s - 1 is fenced and pushed, so the read
++                // latency of one unit hides under the next one's issue (and, with a ring of 3+, under the tilize).
++                const uint32_t unit_bytes = block_k_tiles * get_tile_size(cb_im2col_rm);
++                const uint32_t ring_bytes = im2col_rm_depth_rows * unit_bytes;
++                uint32_t pend = 0;
++                uint32_t pend_trid = TRID_GATHER;
++                bool pend_reads = false;
++                for (uint32_t tile_row = 0; tile_row < block_m_tiles; ++tile_row) {
++                    for (uint32_t k_block_idx = 0; k_block_idx < num_k_blocks; ++k_block_idx) {
++#ifdef NPP_FINE_ZONES
++                        {
++                            DeviceZoneScopedN("rg_reserve");
++                            cb_reserve_back(cb_im2col_rm, (pend + 1) * block_k_tiles);
++                        }
++                        DeviceZoneScopedN("rg_work");
++#else
++                        cb_reserve_back(cb_im2col_rm, (pend + 1) * block_k_tiles);
++#endif
++                        uint32_t slot_l1 = get_write_ptr(cb_im2col_rm) + pend * unit_bytes;
++                        if (slot_l1 >= im2col_rm_base0 + ring_bytes) {
++                            slot_l1 -= ring_bytes;
++                        }
++                        const uint32_t k_tile0 = k_block_idx * block_k_tiles;
++                        const int32_t kh = k_tile0 / tensor_kkh_tiles;
++                        const uint32_t col_lo = (k_tile0 - kh * tensor_kkh_tiles) * TILE_DIM;
++                        volatile tt_l1_ptr uint32_t* srcs = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(
++                            src_table_l1 + (direct_seq % im2col_rm_depth_rows) * 16);
++                        const uint32_t trid = (direct_seq & 1) ? TRID_GATHER_ALT : TRID_GATHER;
++                        reads.begin(trid);
++                        const uint32_t gathered = TapDirectT::tile_row(
++                            reads,
++                            slab_l1,
++                            slab_noc,
++                            zero_src_l1,
++                            zero_src_noc,
++                            slot_l1,
++                            o_first + tile_row * TILE_DIM,
++                            o_end,
++                            kh,
++                            col_lo,
++                            slab_x_base[kh],
++                            srcs);
++                        if (pend) {
++                            if (pend_reads) {
++                                reads.wait(pend_trid);
++                            }
++                            cb_push_back(cb_im2col_rm, block_k_tiles);
++                        }
++                        pend = 1;
++                        pend_trid = trid;
++                        pend_reads = gathered > 0;
++                        ++direct_seq;
++                    }
++                }
++                if (pend_reads) {
++                    reads.wait(pend_trid);
++                }
++                cb_push_back(cb_im2col_rm, block_k_tiles);
++            } else if constexpr (tap_direct) {
++                static_assert(!tap_direct || (tap_major && !center_direct), "tap-direct: the tap-major N-slice gather");
++                for (uint32_t tile_row = 0; tile_row < block_m_tiles; ++tile_row) {
++                    for (uint32_t k_block_idx = 0; k_block_idx < num_k_blocks; ++k_block_idx) {
++#ifdef NPP_FINE_ZONES
++                        {
++                            DeviceZoneScopedN("rg_reserve");
++                            cb_reserve_back(cb_im2col_rm, block_k_tiles);
++                        }
++                        DeviceZoneScopedN("rg_work");
++#else
++                        cb_reserve_back(cb_im2col_rm, block_k_tiles);
++#endif
++                        const uint32_t k_tile0 = k_block_idx * block_k_tiles;
++                        const int32_t kh = k_tile0 / tensor_kkh_tiles;
++                        const uint32_t col_lo = (k_tile0 - kh * tensor_kkh_tiles) * TILE_DIM;
++                        volatile tt_l1_ptr uint32_t* srcs = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(
++                            src_table_l1 + (direct_seq % im2col_rm_depth_rows) * 16);
++                        reads.begin(TRID_GATHER);
++                        const uint32_t gathered = TapDirectT::tile_row(
++                            reads,
++                            slab_l1,
++                            slab_noc,
++                            zero_src_l1,
++                            zero_src_noc,
++                            get_write_ptr(cb_im2col_rm),
++                            o_first + tile_row * TILE_DIM,
++                            o_end,
++                            kh,
++                            col_lo,
++                            slab_x_base[kh],
++                            srcs);
++                        if (gathered > 0) {
++                            reads.wait(TRID_GATHER);
++                        }
++                        cb_push_back(cb_im2col_rm, block_k_tiles);
++                        ++direct_seq;
++                    }
++                }
+             } else {
+                 for (uint32_t tile_row = 0; tile_row < block_m_tiles; ++tile_row) {
+                     for (uint32_t k_block_idx = 0; k_block_idx < num_k_blocks; ++k_block_idx) {
+@@ -677,7 +891,7 @@ void kernel_main() {
+                         const int32_t h_in =
+                             static_cast<int32_t>(t / tile_rows_per_image_row) + kh * dilation - padding;
+                         if (r >= block_valid_tiles || h_in < 0 || h_in >= input_height) {
+-                            reads.read(zero_src_noc, l1, row_tile_bytes);
++                            CENTER_READ(zero_src_noc, l1, row_tile_bytes);
+                             l1 += row_tile_bytes;
+                             ++r;
+                             continue;
+@@ -693,7 +907,7 @@ void kernel_main() {
+                         while (page < end_page) {
+                             const uint32_t n =
+                                 input.contiguous_page_stride() == 1 ? input.num_contiguous_pages(page, end_page) : 1;
+-                            reads.read(input.get_noc_addr(page), l1, n * input_page_bytes);
++                            CENTER_READ(input.get_noc_addr(page), l1, n * input_page_bytes);
+                             page += n;
+                             l1 += n * input_page_bytes;
+                         }
+@@ -797,7 +1011,7 @@ void kernel_main() {
+             }
+         }
+
+-        if constexpr (window_direct) {
++        if constexpr (window_direct || tap_direct) {
+             // Compute tilizes slab runs in place: the slab is dead only once compute popped every unit.
+             cb_reserve_back(cb_im2col_rm, im2col_rm_depth_rows * block_k_tiles);
+         }
+diff --git a/ttnn/ttnn/operations/conv2d_3x3/kernels/conv2d_3x3_writer.cpp b/ttnn/ttnn/operations/conv2d_3x3/perf_experiments/nslice_prelude_pacing/op_copy/kernels/conv2d_3x3_writer.cpp
+index c2b9153eb78..aebf461eea6 100644
+--- a/ttnn/ttnn/operations/conv2d_3x3/kernels/conv2d_3x3_writer.cpp
++++ b/ttnn/ttnn/operations/conv2d_3x3/perf_experiments/nslice_prelude_pacing/op_copy/kernels/conv2d_3x3_writer.cpp
+@@ -64,6 +64,7 @@
+ // (j + 1) x the per-round count.
+
+ #include <cstdint>
++#pragma GCC diagnostic ignored "-Wunused-local-typedefs"
+
+ #include "api/dataflow/dataflow_api.h"
+ #include "api/dataflow/noc.h"
+@@ -256,7 +257,9 @@ void kernel_main() {
+                 for (uint32_t page = lo * fill_c_in_tiles, end_page = (row0 + rows) * fill_c_in_tiles;
+                      page < end_page;) {
+                     const uint32_t run = input.num_contiguous_pages(page, end_page);
++#ifndef CONV2D_3X3_ABLATE_FILL
+                     fill_reads.read(input.get_noc_addr(page), l1, run * input_page_bytes);
++#endif
+                     page += run;
+                     l1 += run * input_page_bytes;
+                 }
+@@ -378,17 +381,25 @@ void kernel_main() {
+         const uint32_t l1 = get_write_ptr(cb_weights);
+         // DRAM read (+ multicast) on a sender or own-stream core; the multicast wait on a receiver.
+         MaybeDeviceZoneScope("writer_weight_fetch");
++#ifdef CONV2D_3X3_ABLATE_WEIGHTS
++        if (false) {
++#else
+         if (weight_sender && weight_mcast.should_send(k_blocks_issued)) {
++#endif
+             read_weight_k_block(l1);
+             weight_sender->send(l1, l1, weight_k_block_tiles * weight_tile_bytes);
+         } else if (weight_receiver) {
++#ifndef CONV2D_3X3_ABLATE_WEIGHTS
+             if constexpr (tile_fill_split) {
+                 receive_serving(weight_mcast, k_blocks_issued);
+             } else {
+                 weight_receiver->receive(k_blocks_issued);
+             }
++#endif
+         } else {
++#ifndef CONV2D_3X3_ABLATE_WEIGHTS
+             read_weight_k_block(l1);
++#endif
+         }
+         cb_push_back(cb_weights, weight_k_block_tiles);
+         ++k_blocks_issued;
+@@ -480,6 +491,9 @@ void kernel_main() {
+         for (uint32_t k = 0; k < nslice_k_tiles; ++k) {
+             const uint32_t row_page = (weight_k_tile_start + k) * tensor_n_tiles + n0;
+             for (uint32_t n = 0; n < valid; ++n) {
++#ifdef CONV2D_3X3_ABLATE_WEIGHTS
++                continue;
++#endif
+                 weight_reads.read(weights.get_noc_addr(row_page + n), l1 + n * weight_tile_bytes, weight_tile_bytes);
+             }
+             l1 += out_n_tiles * weight_tile_bytes;
+@@ -501,14 +515,20 @@ void kernel_main() {
+                 prefetched_round = round + 1;
+             }
+             weight_reads.wait(TRID_WEIGHTS + (round & 1));
++#ifdef CONV2D_3X3_ABLATE_WEIGHTS
++            if (false) {
++#else
+             if (weight_sender && weight_mcast.should_send(round)) {
++#endif
+                 const uint32_t l1 =
+                     weights_base + (round % nslice_weight_depth) * slice_weight_tiles * weight_tile_bytes;
+                 weight_sender->send(l1, l1, slice_weight_tiles * weight_tile_bytes);
+             }
+         } else {
+             cb_reserve_back(cb_weights, slice_weight_tiles);
++#ifndef CONV2D_3X3_ABLATE_WEIGHTS
+             weight_receiver->receive(round);
++#endif
+         }
+         cb_push_back(cb_weights, slice_weight_tiles);
+         ++k_blocks_issued;
+@@ -721,6 +741,7 @@ void kernel_main() {
+                 const uint32_t k_tile0 = Units::k_block(s) * block_k_tiles;
+                 const int32_t kh = k_tile0 / tensor_kkh_tiles;
+                 row_reads.begin(1);
++#ifndef CONV2D_3X3_ABLATE_GATHER
+                 RowGatherT::tile_row(
+                     row_reads,
+                     row_slab_noc,
+@@ -730,6 +751,7 @@ void kernel_main() {
+                     kh,
+                     (k_tile0 - kh * tensor_kkh_tiles) * 32,
+                     slab_x_base[kh]);
++#endif
+                 row_reads.wait(1);
+                 Semaphore<>(row_done_sem_id).up(1);
+                 ++grants_served;

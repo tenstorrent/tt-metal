@@ -769,3 +769,102 @@ Helper feedback measured but not taken (not a bypass):
   - One `MatmulBlockShape` per call, so no mixed subblock heights inside a K-block.
   - No in0 base offset. That blocked streaming slice-0 without a raw path (`perf_experiments/nslice_stream_first_slice/`).
 - **`dataflow_kernel_lib` multicast (`McastFixedSenderConfig`):** the default sender placement puts every per-column sender on one grid row. Their DRAM responses share one NoC row, and `McastSenderPlacement.Staggered` halves aspp's weight chain (`perf_experiments/weight_bank_spread/`). Not taken this round: the weights are hidden.
+
+## Perf 4
+- Date: 2026-11-18
+- Scope: perf tournament round 4 on the six `[perf]` LOOSE cases (LoFi, fp32 DEST, bf8_b activation and weights, pinned shard grids; bias + ReLU). No SUPPORTED change. Base `20cb18c0947` (end of Perf 3). Board: Blackhole p150b, AICLK 1350 MHz. DEVICE KERNEL DURATION from one fresh-cache run per variant, unless marked as a median.
+- Instrumentation: the Perf 1-3 zones are kept. Every new path runs inside an existing zone: the ring fill in `reader_fill` / `reader_fill_reserve` / `reader_fill_fwd_wait` / `writer_fill`, the wide untilize in `compute_untilize`, the tap-direct gather in `reader_gather`, `direct_tilize` in `compute_tilize`.
+- Ablation hooks for this tree: `perf_experiments/ablation_r4/ablation_hooks.patch` (against `20cb18c0947`). Same tokens as round 3; `gather` also stubs the strided-window gather and the center-tap copies, `tilize` also stubs `window_tilize` and the center-slot tilize.
+- **Correction to my first breakdown.** The first version of the r4 patch emitted `if constexpr (false)` in both arms of the `gather` hook, so the tap-major / row / window gathers still ran under that token. On it I read the N-slice prelude as "paced by something other than payload" (gather loop 7.1 / 14.7 us with the gather "stubbed") and briefed `nslice_prelude_pacing` on that premise. Two optimizers found the bug independently; the patch is fixed and every gather-bearing column below was re-run with the fix. The prelude is the reader's own tap-block copy.
+
+### Measured breakdown (before, zoned, us)
+DM first: full > gather > fill > weights > scatter > untilize > tilize > matmul (last column: everything stubbed).
+
+| case | full | −gather | −fill | −weights | −scatter | −untilize | −tilize | −matmul |
+|---|---|---|---|---|---|---|---|---|
+| res5.1 | 45.5 | 44.3 | 45.1 | 42.5 | 40.5 | 39.5 | 36.7 | 15.8 |
+| aspp1 | 76.8 | 73.2 | 72.2 | 71.1 | 70.5 | 64.9 | 55.3 | 14.0 |
+| sem_res2 | 115.6 | 115.4 | 115.6 | 115.3 | 115.2 | 105.3 | 93.9 | 50.2 |
+| res4.0 | 22.1 | 19.6 | 19.5 | 20.2 | 16.3 | 14.6 | 14.0 | 9.4 |
+
+Compute first: full > matmul > tilize > untilize > gather > fill > scatter (the last value is the weights-only chain).
+- res5.1: 45.5, 42.4, 42.4, 43.2, 42.5, 42.9, **34.4**
+- aspp1: 76.8, 65.9, 65.4, 64.8, 64.5, 65.7, **58.3**
+- sem_res2: 115.6, 98.4, 97.9, 95.7, 94.4, 94.1, **94.2**
+- res4.0: 22.1, 20.5, 20.3, 19.3, 17.4, 17.7, **12.8**
+
+Blocking on the focus cases: res5 bm 7, bk 6, 3 K-blocks, N-slice, ~348 KB L1 free; aspp bm 8, bk 18, N-slice, ~1 KB free; sem_res2 bm 5, bk 8, 9 K-blocks, 2 M-blocks per core, center mode 1, ~88 KB free; res4.0 bm 8, bk 3, strided window.
+
+Ranked, with the ceiling gate (LoFi 16 cycles per tile-MAC):
+1. **N-slice prelude (res5, aspp):** untilize then gather/tilize, serial before the walk: 10.5 / 25.6 us zoned. The reader's tap-block copy paces the tilize (aspp gather solo −3.6 us). The walk itself is at 92% (aspp) and 82% (res5) of the floor.
+2. **sem_res2 compute chain:** untilize 10.3 us for 2 x 21 slab rows of which 16 are shared between the two M-blocks; walk 97 us including tilize 11.6; bias 3.1. All DM stubbed = full, so DM is hidden.
+3. **Weights co-bound:** weights-only chain res5 34.4, aspp 58.3, sem_res2 94.2 us.
+4. **res5 walk:** 29 us vs a 23.9 us floor at 1x2 slice subblocks (out_n 2, bm 7).
+5. **K-split combine tail:** res5 4.7, aspp 3.7, res4.0 5.0 us.
+
+### Portfolio and verdicts
+Each idea was built and measured in isolation by its own optimizer (`perf_experiments/<slug>/`). Every option listed meets the precision contract and, unless noted, is bit-identical to the baseline output.
+
+| idea | verdict | focus result (us, isolated) | domain / notes |
+|---|---|---|---|
+| `nslice_prelude_pacing`: the reader publishes each tap block's L1 source (slab run, zero block, or the slot it gathered for edge taps) in a 16 B-per-slot table; compute tilizes from it ("tap-direct") | WIN | aspp1 76.7 -> 74.7, res5.1 46.0 -> 45.0 (medians of 3); aspp2 −4.1%, res5.2 −0.6% | every tap-major N-slice prelude, tap width 1 and up. BLOCK HiFi4: aspp_convs3 −3.6%, res5_0 −1.1%, res4 LoFi −3.5%, res4 HiFi4 −2.8%. Inexpressible: row / split row gather, face-direct, strided window. Ring depth alone −2% on res5, impossible on aspp; windowed multi-trid gather: no change |
+| `nslice_prelude_overlap`: gather/tilize band by band into [bm, K] slots, untilize of band kh+1 hidden under band kh | NULL | best aspp1 77.9 -> 78.0, res5.1 46.6 -> 46.5 (medians of 3); per-unit interleave +9 to +12% | the reader (fill, then gather) is the bottleneck in both phases; a 2-unit ring and 2-batch input CB cannot decouple them, and each untilize/tilize switch costs ~0.75 us |
+| `wide_untilize`: half-row (5-8 tiles) and multi-row (2-4) DEST sections, each one contiguous pack stream; input synced per batch | WIN | per-core untilize (ct 8) 12.2 -> 8.7; sem_res2 115.6 -> 113.8 | every fast-untilize-capable width >= 2. Isolated ns/tile: ct 2 75.6 -> 44.9, ct 6 43.7 -> 28.6, ct 8 36.2 -> 25.9, ct 16 39.9 -> 33.2. Op: stem_conv3 −3.7%, inst_res2_fuse_conv0 −2.6%; aspp flat (fill-paced); res5 −1.1 / −1.7% slower (medians of 3, inside noise) |
+| `nslice_paired_slices`: two owner slices per whole-K matmul (1x4 subblocks on res5) | NULL | res5.1 45.8 -> 45.8, res5.2 46.6 -> 45.9 (best form, medians of 3); naive pairing +6 to +16% | walk −2.2 us, but res5 is gated by the weight stream. res4 LoFi +2.6% (measured regression); aspp inexpressible (L1). Pairing + staggered senders untested |
+| `ring_slab_reuse`: `cb_halo_slab` as a ring across M-blocks; each block fills and untilizes only its new rows | WIN | sem_res2 115.5 -> 112.0 (median of 3, non-overlapping) | TILE, tap-major, no K split, `c_in_tiles > 1`, where the ring fits the L1 left after the solve (sem_res2 +32 KB: the ring holds M-block 0's whole span, gaps included). stem_conv3 −2.5%, DRAM H256 W512 Ci128 bf16 −9.0% / bf8_b −5.0%; one-M-block shapes flat. Counting the ring inside the solve: +34% on a DRAM C_in 512 shape (rejected) |
+| `ksplit_combine_tail`: one-pass sum + bias, own slice kept local, send-order and NoC-split variants | NULL | res5.1 45.9 (11-run median) -> 45.8 / 46.1 (`fused_x`); aspp1 −1.65% (median, in noise) | the sum runs ~47 cycles per add and is already minimal; the op end is set by the slowest core: a late walk or the remote slice from k/2 columns away (~5 us send). Send-order changes +6 to +11%; a folded-bias variant is not bit-exact (≤ 1 bf8_b step on ~0.35% of elements) |
+
+Carried-over enabler (not a new experiment): `McastSenderPlacement.Staggered` for the per-column weight senders, round 3's `weight_bank_spread` option A (weights-only aspp chain 65.5 -> 38.3 us; whole op flat in round 3 while compute hid it). Re-measured on the round-4 tree once the prelude got shorter.
+
+### Graduated (one path each)
+1. **Ring halo slab** (`8137eab85db`).
+   - `ring_capable` + `ring_plan` decide it per shape; no menu knob survives (`RING_SLAB`, `RING_SLAB_SINGLE`, `RING_IN_SOLVE`, `TEST_BM_CAP` deleted). It also runs where every core has one M-block (flat there; it drops the slab's batch rounding).
+   - Carve-outs (inexpressible): K split, ROW_MAJOR, row gather, strided window, `c_in_tiles == 1` (the narrow untilize's sections would cross the ring end), and a ring that does not fit the L1 left at the solved blocking (sem_res2_fuse_conv0, DRAM C_in 512). Those keep the compacted per-M-block slab.
+2. **Wide slab untilize** (`6b2a90b0515`).
+   - Raw LLK in `kernels/conv2d_3x3_wide_untilize.hpp`; the experiment's diagnostic stages, the four other CB-sync modes and the folded unpack were dropped.
+   - Merge fix: on the ring slab, a ct = 2 section group (2 tile-rows, one stream) could cross the ring end, so groups are capped there (`ring_rows` / `ring_pos`).
+   - `compute_kernel_lib::untilize` remains only where `fast_untilize` cannot run (format / tile shape), which is the helper's own fallback, not a second path of this pattern.
+3. **Tap-direct N-slice prelude** (`6f3b47c3cd3`).
+   - CT args instead of the experiment's defines; the windowed / pipelined gathers and the diagnostic sources were dropped. CB 13 `cb_src_table` (64 B).
+   - Not implemented on the K-blocked walk: there the gather runs under the previous K-block's matmul (sem_res2: all DM stubbed = full), so it has nothing to win.
+4. **Staggered weight senders** (`3e291fb76ba`). A/B on the final tree, 3 alternating pairs, medians: aspp1 72.1 -> 71.0, aspp2 74.4 -> 69.8 (non-overlapping); res5.x, sem_res2 and the HiFi4 BLOCK shapes flat; res4.0 focus 21.3 -> 21.7 and res4 LoFi 22.1 -> 22.7 with overlapping ranges, inside the noise band, so no carve-out.
+
+Per-graduation focus deltas (unzoned, sequential single runs): ring sem_res2 114.7 -> 111.1; wide untilize sem_res2 111.1 -> 109.9; tap-direct aspp1 75.8 -> 71.9, aspp2 75.6 -> 74.4, res5.1 46.1 -> 45.1, res5.2 47.0 -> 45.1.
+
+### Whole-op result (unzoned, us; same session; ttnn.conv2d target from feature_spec)
+
+| case | before (`20cb18c0947`) | after (`3e291fb76ba`) | speedup | ttnn target |
+|---|---|---|---|---|
+| res5.1.conv2 @ LoFi | 45.8 | 44.8 | 1.02x | 75.5 |
+| res5.2.conv2 @ LoFi | 46.5 | 45.6 | 1.02x | 79.8 |
+| aspp.convs.1 @ LoFi | 76.9 | 71.0 | 1.08x | 159.3 |
+| aspp.convs.2 @ LoFi | 76.2 | 69.7 | 1.09x | 220.5 |
+| semantic res2.fuse_conv.1 @ LoFi | 114.6 | 110.1 | 1.04x | 145.6 |
+| res4.0.conv2 @ LoFi | 20.9 | 21.4 | flat (noise; only the stagger reaches it) | 39.8 |
+
+### Guard set (whole perf harness, 47 shapes, unzoned, same session, base `20cb18c0947` vs final)
+- **BLOCK:** aspp.convs.1 / 2 / 3 HiFi4 201.8 / 201.7 / 106.2 -> 196.5 / 195.6 / 102.6; res5.0 / 5.1 / 5.2 HiFi4 −1.4 / −1.4 / −2.4%; res4.x HiFi4 −2.1%, res4.x LoFi −2.7%; res4.0 HiFi4 flat.
+- **HEIGHT:** stem_conv3 194.9 -> 186.7 (−4.2%); stem_conv2 122.1 -> 118.3; res2_conv2 32.4 -> 31.3; inst_res2_fuse_conv0 117.5 -> 113.7; sem_res2_fuse_conv1 (HiFi4) 323.8 -> 318.7; the other 9 within −1.0% to +0.1%.
+- **Interleaved:** 18 shapes within −2.2% to +1.2% (largest: H128 W256 C_in 64 tile_bf16 63.0 -> 61.6; RM bf16 184.9 -> 187.2, a shape whose program did not change).
+- **Bit-exact:** all 47 harness outputs are identical to the base commit's (`torch.equal`).
+- **Golden:** `eval/golden_tests/conv2d_3x3/` 1502 passed, 480 skipped (INVALID), 0 failed, after each graduation. Unit dir 245 / 245.
+- **`--dev`:** the HEIGHT and BLOCK unit files plus the six focus cases are clean (92 / 92).
+
+### Bottleneck now (zoned, p50 core)
+- **res5.x (45 us):** untilize 2.3, tilize 6.1 (paced by the 5.8 us edge-tap gather), walk 30.2 (floor 23.9), combine 1.1 + 2.5. Next: pairing slices now that the weights are staggered (walk −2.2 us measured, untested in combination).
+- **aspp (70-71 us):** untilize 8-9 (paced by the 7.5-8.8 us fill), tilize 12.0 (now tilize-bound, ~465 ns per 18-tile unit), walk 44.8 (92% of floor), combine ~3.
+- **sem_res2 (110 us):** walk 97.3 including tilize 11.5; untilize 5.3 (was 10.3); bias 3.1. The matmul at ~20 cycles per tile-MAC is now the bulk.
+- **res4.0 (21 us):** walk 9.1, tilize 4.2, gather 4.8, untilize 2.6, combine 1.5 + wait 2.3.
+
+### Helper bypasses
+
+| helper | kind | what was missing / hard | helper ns | raw ns | site |
+|---|---|---|---|---|---|
+| `compute_kernel_lib::untilize<ct>` (BH `fast_untilize` path, ct >= 2) | capability | Its unit of work is one tile-row, and a DEST section holds at most 4 whole tiles of it. For ct > 4 every slab row of a chunk is its own L1 stream closed by a Last PACR (64 packer drains per 8-wide tile-row), and CB sync is per tile-row. There is no half-tile-row section (faces 0-1, then 2-3, of up to 8 tiles), no multi-row section for ct <= 4, no batch-level sync, and no way to keep a section group from crossing the end of a ring-addressed output CB. | 12156 (per-core untilize, ct 8; 36.2 ns/tile) | 8689 (25.9 ns/tile); op sem_res2 111.1 -> 109.9 us | conv2d_3x3_compute.cpp:509 (`untilize_wide_rows`), conv2d_3x3_wide_untilize.hpp:362 (`untilize_wide`) |
+| `compute_kernel_lib::tilize` / `fast_tilize_block` (compute API) | capability | The unpacker base is always the CB read pointer. Tap-direct tilizes each tap block from a per-unit published L1 address (slab run, zero block, or the unit's slot), so the reader does not copy it. Same gap as Perf 3's `window_tilize`; a source-address hook on the tilize helper would cover both. | 76672 (aspp1, median of 3) | 74731 (median of 3); final tree 75.8 -> 71.9 us | conv2d_3x3_compute.cpp:157 (`direct_tilize`), conv2d_3x3_reader.cpp:747 (tap-direct loop) |
+| `tilize_block` (compute API, one-tile-wide block) | capability | Same gap for tw = 1: `llk_unpack_tilize_impl` with the published address as base, then the usual datacopy and pack. | res4 LoFi 23287 (median of 3) | 22477 | conv2d_3x3_compute.cpp:143 (`direct_unpack_tilize`) |
+
+The ring slab and the staggered senders use no raw LLK: the ring is op dataflow code (no helper covers a ring-addressed staging slab), and the stagger is the multicast helper's own `McastSenderPlacement.Staggered`.
+
+Helper feedback measured but not taken (not a bypass):
+- **`dataflow_kernel_lib` multicast:** with the round-4 compute cuts, `Staggered` placement is now a measured whole-op win (aspp.convs.2 −6.2%). The default per-column placement (all senders on one row) is the wrong default for any column-per-group weight stream.
