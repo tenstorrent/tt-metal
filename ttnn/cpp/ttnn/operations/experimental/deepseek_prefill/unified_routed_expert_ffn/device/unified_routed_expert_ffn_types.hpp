@@ -32,7 +32,7 @@ inline constexpr uint32_t kCoreGridY = 8;
 // request as an upper bound: it snaps it down to a divisor of K_gate_tiles and narrows it further if
 // the CBs do not fit in L1. 16 divides every 512-multiple emb. The best width is shape- and
 // activation-dependent (more K-blocks pipeline DRAM reads better but each pays a fixed mcast barrier),
-// so models request their measured one through the op arg (GLM-5.3: 8 of 192, gpt-oss: 18 of 90).
+// so models request their measured one through the op arg (GLM-5.3: 8 of 192, gpt-oss: 9 of 90).
 inline constexpr uint32_t kDefaultIn0BlockWGu = 16;
 
 // Maximum number of global experts the op supports.

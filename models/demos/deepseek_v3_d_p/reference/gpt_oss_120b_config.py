@@ -37,9 +37,10 @@ class GptOss120BConfig:
     ROUTED_EXPERT_HYBRID_TOKEN_THRESHOLD_MEASURED = 384
     # Requested gate/up K-block width (tiles) for unified_routed_expert_moe. emb 2880 => K_gate_tiles 90,
     # so the op's default 16 snaps down to 15. Swept over the divisors of 90 on the 2880x2880 bf4 SwiGLU-OAI
-    # expert with biases, x_rm, ND-sharded, BH p100a (#56654): 18 is ~6% faster than 15 over 128-5120
-    # active tokens and the best at <= 512; 15 was the slowest of {6, 9, 10, 15, 18}.
-    ROUTED_EXPERT_IN0_BLOCK_W_GU = 18
+    # expert with biases, x_rm, ND-sharded, BH p100a (#56654), 128-5120 active tokens: 9 has the lowest
+    # total time, -3.8% vs 15 (-3..-6% from 2048 up, +1..+5% at <= 512). The L1 fitter runs it as w=6
+    # with per_core_M doubled to 8, halving the weight re-reads. 6 is -2.8%, 10 -2.0%; 18/30/45 tie 15.
+    ROUTED_EXPERT_IN0_BLOCK_W_GU = 9
     INTERMEDIATE_SIZE = 2880  # Dense FFN hidden dimension (same as MoE)
     HEAD_DIM = 64
 

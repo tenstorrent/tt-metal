@@ -277,7 +277,7 @@ tt::tt_metal::ProgramDescriptor UnifiedRoutedExpertFfnProgramFactory::create_des
     // A request that does not divide K_gate_tiles (e.g. the default 16 on GPT-OSS
     // 120B: emb 2880 => K_gate_tiles 90) is snapped down to the largest divisor of
     // K_gate_tiles that does not exceed it. Callers pick a request that already
-    // divides (gpt-oss asks for 18 of 90, GLM-5.3 for 8 of 192), making this a no-op; the L1
+    // divides (gpt-oss asks for 9 of 90, GLM-5.3 for 8 of 192), making this a no-op; the L1
     // guard below may narrow it further. Previously divisor-snapping only ran as
     // a side effect of the L1-overflow guard, so non-512 emb slipped through on
     // the TILE x layout — whose smaller footprint fits at 16 and skips the guard.

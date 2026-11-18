@@ -78,7 +78,7 @@ void bind_unified_routed_expert_ffn(nb::module_& mod) {
             in0_block_w_gu (int, optional): requested gate/up K-block width in tiles (default 16). An
                 upper bound: the op snaps it down to a divisor of emb/32 and narrows it further if the
                 circular buffers do not fit in L1. Wider blocks mean fewer K-blocks, each of which pays
-                a fixed mcast barrier; set it per model (e.g. 8 for GLM-5.3, 18 for gpt-oss).
+                a fixed mcast barrier; set it per model (e.g. 8 for GLM-5.3, 9 for gpt-oss).
 
         Each per-expert FFN picks its chunk_M_tiles / per_core_M / num_chunks at
         RUNTIME from the device-resident token count, so there is no expected-token

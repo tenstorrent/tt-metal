@@ -245,7 +245,7 @@ def test_hybrid_routed_expert_model_block_width(
     in0_block_w_gu: int,
     x_row_major: bool,
 ):
-    """The unified half at the model-dependent gate/up K-block width (GLM-5.3: 8, gpt-oss: 18)."""
+    """The unified half at the model-dependent gate/up K-block width (GLM-5.3: 8, gpt-oss: 9)."""
     run_hybrid_routed_expert(
         device,
         allocated_tokens,

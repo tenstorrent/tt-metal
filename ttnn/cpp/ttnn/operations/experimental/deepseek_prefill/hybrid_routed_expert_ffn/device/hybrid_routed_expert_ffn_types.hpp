@@ -325,7 +325,7 @@ struct HybridRoutedExpertFfnParams {
     uint32_t hybrid_token_threshold = 0;
 
     // The unified half's requested gate/up K-block width in tiles (see unified::kDefaultIn0BlockWGu).
-    // Model-dependent: GLM-5.3 asks for 8, gpt-oss for 18. The fused half does not read it.
+    // Model-dependent: GLM-5.3 asks for 8, gpt-oss for 9. The fused half does not read it.
     uint32_t in0_block_w_gu = unified::kDefaultIn0BlockWGu;
 
     // Overlapped with combine in the same program: combine runs on rows 0-1 and takes each expert as soon

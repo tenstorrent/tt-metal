@@ -53,7 +53,7 @@ void bind_hybrid_routed_expert_ffn(nb::module_& mod) {
 
         in0_block_w_gu is the unified half's requested gate/up K-block width in tiles (default 16):
         an upper bound the op snaps to a divisor of emb/32 and narrows to fit L1. Set it per model
-        (8 for GLM-5.3, 18 for gpt-oss); the fused half does not read it.
+        (8 for GLM-5.3, 9 for gpt-oss); the fused half does not read it.
         )doc",
         &hybrid_routed_expert_moe,
         nb::arg("dispatched_buffer").noconvert(),
