@@ -422,7 +422,8 @@ void bfp_codes(DataType type, const GgufTraits& f, uint8_t* blocks, size_t bytes
     std::array<uint8_t, 16> to_page{};
     for (int q = 0; q < 16; ++q) {
         if (type == GGUF_IQ4_NL || type == GGUF_IQ4_XS) {
-            to_page[q] = uint8_t(q <= 7 ? 7 - q : q <= 14 ? q + 1 : 8);
+            constexpr uint8_t iq4[16] = {7, 6, 5, 4, 3, 2, 1, 0, 9, 10, 11, 12, 13, 14, 15, 8};
+            to_page[q] = iq4[q];
         } else {
             constexpr uint8_t magnitude[8] = {0, 1, 4, 5, 6, 7, 2, 3};
             to_page[q] = uint8_t((q & 8) | magnitude[q & 7]);
@@ -452,7 +453,10 @@ void nvfp4_scales(uint8_t* blocks, size_t bytes, int64_t row_blocks, bool to_dev
     std::array<uint8_t, 128> to_page{};
     std::array<uint8_t, 256> to_gguf{};
     for (int u = 0; u < 128; ++u) {
-        to_page[u] = u == 0x7F ? 1 : u < 8 ? subnormal[u] : uint8_t(u + 56);  // (e + 7) << 3 | m
+        to_page[u] = u < 8 ? subnormal[u] : uint8_t(u + 56);  // (e + 7) << 3 | m
+        if (u == 0x7F) {
+            to_page[u] = 1;
+        }
         to_gguf[to_page[u]] = uint8_t(u);
     }
     for (size_t block = 0; block < bytes; block += 36) {

@@ -115,8 +115,10 @@ std::optional<PrefillPlan> prefill_plan(
     const uint32_t base_l1 = prefill_fixed_l1(f);
     PrefillPlan best;
     auto core_cycles = [](uint32_t nc, uint32_t kt, uint32_t mb, uint32_t mc, uint32_t kb) {
-        return double(nc) * kt * (mb / mc) * kPrefillDecodeCycles + double(nc) * mb * kt * 32.0 +
-               double(mb / mc) * (kt / kb) * 2000.0;
+        const uint32_t m_blocks = mb / mc;
+        const uint32_t k_blocks = kt / kb;
+        return double(nc) * kt * m_blocks * kPrefillDecodeCycles + double(nc) * mb * kt * 32.0 +
+               double(m_blocks) * k_blocks * 2000.0;
     };
     auto consider = [&](PrefillPlan plan, double core) {
         // Input bytes per cycle per band stream: ~30 for one band, ~40 for two or five, ~70 for ten.
@@ -189,9 +191,10 @@ std::optional<PrefillPlan> prefill_plan(
                 const uint32_t ur = mc % 4 == 0 ? 4 : mc % 2 == 0 ? 2 : 1;
                 for (uint32_t kb = gt; mb % mc == 0 && kb <= k_tiles && kb <= 16; kb += gt) {
                     if (k_tiles % kb == 0 && fits(mc, ur, kb, np, false)) {
+                        const uint32_t blocks = (mb / mc) * (k_tiles / kb);
                         consider(
                             {mg, 1, 0, 0, mc, kb, ur, {nc, nc}, np},
-                            core_cycles(nc, k_tiles, mb, mc, kb) + (passes - 1) * (mb / mc) * (k_tiles / kb) * 2000.0);
+                            core_cycles(nc, k_tiles, mb, mc, kb) + (passes - 1) * blocks * 2000.0);
                     }
                 }
             }

@@ -257,6 +257,7 @@ GgufMatmulProgramFactory::cached_program_t GgufMatmulProgramFactory::create(
     for (uint32_t b = 0; b < bands.size(); b++) {
         const KBand& band = bands[b];
         std::vector<CoreCoord> all;
+        all.reserve(grid_x * band.rows);
         for (uint32_t i = 0; i < grid_x * band.rows; i++) {
             all.emplace_back(i % grid_x, band.row0 + i / grid_x);
         }
@@ -289,6 +290,7 @@ GgufMatmulProgramFactory::cached_program_t GgufMatmulProgramFactory::create(
         }
     }
     std::vector<CoreCoord> virt;
+    virt.reserve(cores.size());
     for (const CoreCoord& c : cores) {
         virt.push_back(device->worker_core_from_logical_core(c));
     }

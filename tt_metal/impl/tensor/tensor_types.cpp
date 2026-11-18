@@ -195,7 +195,10 @@ uint32_t gguf_records_per_page(DataType dtype, uint64_t k) {
         return 1;
     }
     const uint64_t groups = k / gguf_traits(dtype).page_height();
-    return groups % 4 == 0 ? 4 : groups % 2 == 0 ? 2 : 1;
+    if (groups % 4 == 0) {
+        return 4;
+    }
+    return groups % 2 == 0 ? 2 : 1;
 }
 
 uint32_t GgufTraits::l1_page_bytes() const {

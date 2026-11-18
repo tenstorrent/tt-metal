@@ -516,7 +516,8 @@ void pytensor_module(nb::module_& mod) {
         "storage.");
     mod.def(
         "from_gguf",
-        [](nb::ndarray<const uint8_t, nb::ndim<1>, nb::c_contig, nb::device::cpu> blocks, const TensorSpec& spec) {
+        [](const nb::ndarray<const uint8_t, nb::ndim<1>, nb::c_contig, nb::device::cpu>& blocks,
+           const TensorSpec& spec) {
             return Tensor(tt::tt_metal::from_gguf(
                 ttsl::Span<const std::byte>(reinterpret_cast<const std::byte*>(blocks.data()), blocks.size()), spec));
         },
