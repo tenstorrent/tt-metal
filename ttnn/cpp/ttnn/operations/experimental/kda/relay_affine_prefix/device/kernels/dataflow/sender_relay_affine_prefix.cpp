@@ -38,7 +38,8 @@ constexpr uint32_t entry_tiles = get_compile_time_arg_val(slab_ct + 4);
 constexpr uint32_t slab_index_word = get_compile_time_arg_val(slab_ct + 5);
 constexpr auto slab_index_args = TensorAccessorArgs<slab_ct + 6>();
 // On a 2D fabric whose SP axis turns, a multicast cannot follow the axis: the carry goes to each rank this sender
-// serves as a 2D unicast (chip and mesh per rank after the connection args), carry_range ranks in all.
+// serves as a 2D unicast (per rank after the connection args: the connection its route leaves on, its chip and mesh),
+// carry_range ranks in all.
 constexpr bool unicast_peers = get_compile_time_arg_val(slab_index_args.next_compile_time_args_offset());
 // One packet header per packet of each slot, out of this RISC's share of the pool.
 static_assert(
@@ -220,12 +221,15 @@ void kernel_main() {
 #if defined(FABRIC_2D)
             fabric_set_unicast_route(
                 hdr,
-                static_cast<uint16_t>(get_arg_val<uint32_t>(peer_args + 2 * peer)),
-                static_cast<uint16_t>(get_arg_val<uint32_t>(peer_args + 2 * peer + 1)));
+                static_cast<uint16_t>(get_arg_val<uint32_t>(peer_args + 3 * peer + 1)),
+                static_cast<uint16_t>(get_arg_val<uint32_t>(peer_args + 3 * peer + 2)));
 #endif
             return hdr;
         };
         auto* sender = &fabric.get(0).sender;
+        const auto peer_sender = [&](uint32_t peer) {
+            return &fabric.get(get_arg_val<uint32_t>(peer_args + 3 * peer)).sender;
+        };
         const auto carry = TensorAccessor(carry_args, get_common_arg_val<uint32_t>(2));
         // The head's writer counts compute's carry columns, on the relay's sender after the relay's kt; a ready
         // column is read into stage slot u % 2 while the previous one is on the fabric.
@@ -268,7 +272,7 @@ void kernel_main() {
                     }
                     for (uint32_t r = 0; r < kt; ++r) {
                         fabric_unicast_noc_unicast_write(
-                            sender,
+                            peer_sender(peer),
                             peer_header(peer, r),
                             buffer + r * tile_bytes,
                             tile_bytes,
@@ -296,7 +300,7 @@ void kernel_main() {
                     noc_async_writes_flushed();
                 }
                 fabric_unicast_noc_unicast_atomic_inc(
-                    sender, peer_header(peer, 0), NocUnicastAtomicIncCommandHeader{arrival, 1, true}, 1);
+                    peer_sender(peer), peer_header(peer, 0), NocUnicastAtomicIncCommandHeader{arrival, 1, true}, 1);
             }
         } else {
             fabric_multicast_noc_unicast_atomic_inc_with_state<UnicastAtomicIncUpdateMask::DstAddr>(
