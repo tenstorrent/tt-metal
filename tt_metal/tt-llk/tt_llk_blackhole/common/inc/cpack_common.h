@@ -567,9 +567,9 @@ inline constexpr PackMode llk_pack_default_mode = PackMode::Default;
 // reconfigured: the reconfigure's state, stored by the caller of the noinline reconfigure (store_state false there),
 // so that call writes no memory and the caller keeps its registers across it. zero_ch1: hw_configure and the fast
 // untilize close; elsewhere a channel-1 stride left by the strided fast untilize (Y) or the W forms (W) is idle, as
-// they reset their channel-1 counter at the end of every block and no other pack program moves it. ch1_u2d: the fp32 DEST
-// reconfigure, which keeps them with an unpack to DEST.
-template <PackMode pack_mode = PackMode::Default, bool reconfigured = false, bool store_state = true, bool zero_ch1 = false, bool ch1_u2d = false>
+// they reset their channel-1 counter at the end of every block and no other pack program moves it. ch1_u2d: with an unpack
+// to DEST the inits keep them, and the reconfigures only with fp32 DEST.
+template <PackMode pack_mode = PackMode::Default, bool reconfigured = false, bool store_state = true, bool zero_ch1 = false, bool ch1_u2d = true>
 inline void set_packer_strides(const std::uint32_t pack_src_format, const std::uint32_t tile_c_dim)
 {
     llk_pack_live_forget();
@@ -594,7 +594,7 @@ inline void set_packer_strides(const std::uint32_t pack_src_format, const std::u
     TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::THCON);
     TTI_WRCFG(p_gpr_pack::TMP0, p_cfg::WRCFG_32b, PCK0_ADDR_CTRL_XY_REG_0_Xstride_ADDR32);
     TTI_WRCFG(p_gpr_pack::TMP1, p_cfg::WRCFG_32b, PCK0_ADDR_CTRL_ZW_REG_0_Zstride_ADDR32);
-    // Like the NOPs, they delay the pack start, which an fp32 reconfigure with an unpack to DEST needs.
+    // Like the NOPs, they delay the pack start, which a u2d loop's init and an fp32 reconfigure need.
     if constexpr (zero_ch1 || (ch1_u2d && pack_strides_u2d<pack_mode>))
     {
         TTI_WRCFG(p_gpr::ZERO, p_cfg::WRCFG_32b, PCK0_ADDR_CTRL_XY_REG_1_Xstride_ADDR32);
