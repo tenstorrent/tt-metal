@@ -3,7 +3,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <gtest/gtest.h>
-#include <sched.h>
 
 #include <algorithm>
 #include <array>
@@ -15,6 +14,7 @@
 #include <stdexcept>
 #include <thread>
 #include <type_traits>
+#include <unordered_map>
 #include <vector>
 
 #include <tt-metalium/mesh_device.hpp>
@@ -135,35 +135,61 @@ TEST(ThreadPoolTest, ParallelForUsesWorkers) {
     EXPECT_LT(on_caller, static_cast<int64_t>(ran_on.size()));
 }
 
-// Number of distinct CPUs the pool's workers run on.
-size_t distinct_worker_cpus(ThreadPool& thread_pool, uint32_t num_devices) {
-    std::vector<int> cpus(num_devices);
-    for (uint32_t device = 0; device < num_devices; device++) {
-        thread_pool.enqueue([&cpus, device] { cpus[device] = sched_getcpu(); }, device);
+// Worker placement over explicit per-node CPU lists, as thread_binding::pick_cpu sees them.
+struct CpuPlacement {
+    std::vector<std::vector<uint32_t>> node_cpus;
+    std::unordered_map<uint32_t, uint32_t> workers_per_cpu;
+    std::vector<size_t> next = std::vector<size_t>(node_cpus.size());
+
+    // CPUs of a pool with one worker per entry of worker_nodes.
+    std::vector<uint32_t> place(const std::vector<int>& worker_nodes) {
+        std::vector<uint32_t> pool;
+        for (const int node : worker_nodes) {
+            pool.push_back(thread_binding::pick_cpu(node_cpus[node], pool, workers_per_cpu, next[node]));
+        }
+        return pool;
     }
-    thread_pool.wait();
+    void release(const std::vector<uint32_t>& pool) {
+        for (const uint32_t cpu : pool) {
+            workers_per_cpu[cpu]--;
+        }
+    }
+};
+
+size_t distinct(std::vector<uint32_t> cpus) {
     std::sort(cpus.begin(), cpus.end());
     return std::unique(cpus.begin(), cpus.end()) - cpus.begin();
 }
 
-// Every pool spreads its workers over as many CPUs as the first, also after others are destroyed and next to live
-// pools. Binding the process to fewer CPUs (taskset -c 0-2) makes the node lists overlap.
-TEST(ThreadPoolTest, PoolsKeepDistinctWorkerCpus) {
-    const uint32_t num_devices = MetalContext::instance(DEFAULT_CONTEXT_ID).get_cluster().number_of_user_devices();
-    if (num_devices < 2) {
-        GTEST_SKIP() << "Needs 2 devices";
-    }
-    const size_t expected = distinct_worker_cpus(*create_pool_per_device(), num_devices);
+// A node with no allowed CPU gets the allowed list, which the other node holds too: workers of both still spread.
+TEST(ThreadPoolTest, PickCpuNodesSharingCpus) {
+    const std::vector<uint32_t> allowed = {0, 1, 2, 3, 4, 5, 6, 7};
+    CpuPlacement placement{.node_cpus = {allowed, allowed}};
+    EXPECT_EQ(distinct(placement.place({0, 0, 0, 0, 1, 1, 1, 1})), 8);
+}
+
+// A pool created after others are destroyed gets distinct CPUs again.
+TEST(ThreadPoolTest, PickCpuRecreatedPool) {
+    const std::vector<uint32_t> allowed = {0, 1, 2};
+    CpuPlacement placement{.node_cpus = {allowed, allowed}};
     for (int pool = 0; pool < 6; pool++) {
-        EXPECT_EQ(distinct_worker_cpus(*create_pool_per_device(), num_devices), expected) << "pool " << pool;
+        const auto cpus = placement.place({0, 1});
+        EXPECT_EQ(distinct(cpus), 2) << "pool " << pool;
+        placement.release(cpus);
     }
-    std::array<std::shared_ptr<ThreadPool>, 3> live_pools;
-    for (auto& pool : live_pools) {
-        pool = create_pool_per_device();
-        EXPECT_EQ(distinct_worker_cpus(*pool, num_devices), expected);
-    }
-    live_pools[1].reset();
-    EXPECT_EQ(distinct_worker_cpus(*create_pool_per_device(), num_devices), expected) << "after a live pool";
+}
+
+// Live pools spread over the least-used CPUs, and a pool created next to them keeps its own workers apart.
+TEST(ThreadPoolTest, PickCpuNextToLivePools) {
+    CpuPlacement placement{.node_cpus = {{0, 1, 2, 3}}};
+    const auto first = placement.place({0, 0});
+    const auto second = placement.place({0, 0});
+    EXPECT_EQ(distinct(first), 2);
+    EXPECT_EQ(distinct(second), 2);
+    EXPECT_EQ(distinct({first[0], first[1], second[0], second[1]}), 4);
+    placement.place({0, 0});
+    placement.release(second);
+    EXPECT_EQ(distinct(placement.place({0, 0, 0, 0})), 4);
 }
 
 TEST(ThreadPoolTest, ParallelForOneWorkerRunsOnCaller) {

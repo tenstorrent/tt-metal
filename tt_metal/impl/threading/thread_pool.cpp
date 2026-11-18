@@ -125,6 +125,30 @@ CpuPlacement& cpu_placement() {
     return placement.get();
 }
 
+uint32_t pick_cpu(
+    const std::vector<uint32_t>& node_cpus,
+    const std::vector<uint32_t>& pool_cpus,
+    std::unordered_map<uint32_t, uint32_t>& workers_per_cpu,
+    size_t& next) {
+    // CPUs outside the pool first, so its workers keep their spin window; then the least-used.
+    const auto rank = [&](uint32_t cpu) {
+        return std::pair{std::find(pool_cpus.begin(), pool_cpus.end(), cpu) != pool_cpus.end(), workers_per_cpu[cpu]};
+    };
+    auto best = rank(node_cpus.front());
+    for (const uint32_t cpu : node_cpus) {
+        best = std::min(best, rank(cpu));
+    }
+    for (size_t i = 0;; i++) {
+        const size_t index = (next + i) % node_cpus.size();
+        const uint32_t cpu = node_cpus[index];
+        if (rank(cpu) == best) {
+            next = index + 1;
+            workers_per_cpu[cpu]++;
+            return cpu;
+        }
+    }
+}
+
 // pool_cpus: the CPUs already picked for the caller's pool, which the pick avoids first.
 uint32_t get_cpu_core_for_physical_device(
     ContextId context_id, uint32_t physical_device_id, const std::vector<uint32_t>& pool_cpus) {
@@ -169,27 +193,11 @@ uint32_t get_cpu_core_for_physical_device(
                         : physical_device_id % 2;
     }
     if (cpu_cores_per_numa_node.contains(numa_node)) {
-        const auto& cpu_cores_on_node = cpu_cores_per_numa_node[numa_node];
-        // CPUs outside the pool first, so its workers keep their spin window; then the least-used.
-        const auto rank = [&](uint32_t cpu) {
-            return std::pair{
-                std::find(pool_cpus.begin(), pool_cpus.end(), cpu) != pool_cpus.end(), workers_per_cpu[cpu]};
-        };
-        auto best = rank(cpu_cores_on_node.front());
-        for (const uint32_t cpu : cpu_cores_on_node) {
-            best = std::min(best, rank(cpu));
-        }
-        // Round robin among the best-ranked CPUs.
-        size_t& next = placement.next_cpu_per_numa_node[numa_node];
-        for (size_t i = 0;; i++) {
-            const size_t index = (next + i) % cpu_cores_on_node.size();
-            const uint32_t cpu = cpu_cores_on_node[index];
-            if (rank(cpu) == best) {
-                next = index + 1;
-                workers_per_cpu[cpu]++;
-                return cpu;
-            }
-        }
+        return pick_cpu(
+            cpu_cores_per_numa_node[numa_node],
+            pool_cpus,
+            workers_per_cpu,
+            placement.next_cpu_per_numa_node[numa_node]);
     }
     uint32_t cpu = 0;
     if (!allowed_cpus.empty()) {
@@ -203,12 +211,23 @@ uint32_t get_cpu_core_for_physical_device(
     return cpu;
 }
 
-// Releases a CPU returned by get_cpu_core_for_physical_device once its worker exits.
-void release_cpu_core(uint32_t cpu_core) {
-    auto& placement = cpu_placement();
-    const std::lock_guard<std::mutex> lock(placement.mutex);
-    placement.workers_per_cpu[cpu_core]--;
-}
+// CPUs returned by get_cpu_core_for_physical_device for one pool, released on destruction.
+struct CpuReservation {
+    std::vector<uint32_t> cpus;
+
+    CpuReservation() = default;
+    CpuReservation(const CpuReservation&) = delete;
+    CpuReservation& operator=(const CpuReservation&) = delete;
+    CpuReservation(CpuReservation&&) = delete;
+    CpuReservation& operator=(CpuReservation&&) = delete;
+    ~CpuReservation() {
+        auto& placement = cpu_placement();
+        const std::lock_guard<std::mutex> lock(placement.mutex);
+        for (const uint32_t cpu : cpus) {
+            placement.workers_per_cpu[cpu]--;
+        }
+    }
+};
 
 void bind_memory_to_numa_node(void* base, size_t bytes, int numa_node) {
     if (base == nullptr || bytes == 0 || numa_node < 0 || numa_available() == -1) {
@@ -794,16 +813,16 @@ public:
         std::chrono::nanoseconds spin_window = std::chrono::nanoseconds(0)) :
         num_workers_(physical_devices.size()) {
         allocate_jobs();
-        cpu_cores_.reserve(num_workers_);
+        cpu_cores_.cpus.reserve(num_workers_);
         for (uint32_t i = 0; i < num_workers_; i++) {
-            cpu_cores_.push_back(
-                thread_binding::get_cpu_core_for_physical_device(context_id, physical_devices[i]->id(), cpu_cores_));
+            cpu_cores_.cpus.push_back(thread_binding::get_cpu_core_for_physical_device(
+                context_id, physical_devices[i]->id(), cpu_cores_.cpus));
         }
-        spin_window = spin_window_for(cpu_cores_, spin_window);
+        spin_window = spin_window_for(cpu_cores_.cpus, spin_window);
         workers_.reserve(num_workers_);
         for (uint32_t i = 0; i < num_workers_; i++) {
             workers_.emplace_back(std::make_unique<NumaAwareExecutor>(
-                cpu_cores_[i], completion_, i, published_, spin_window_closed_at_, jobs_.data(), spin_window));
+                cpu_cores_.cpus[i], completion_, i, published_, spin_window_closed_at_, jobs_.data(), spin_window));
             phys_device_to_thread_id_[physical_devices[i]->id()] = i;
             map_worker_to_device(i, physical_devices[i]->id());
         }
@@ -812,12 +831,13 @@ public:
     // core but they are not guaranteed to be "close" to any physical device.
     DeviceBoundThreadPool(ContextId context_id, uint32_t thread_count) : num_workers_(thread_count) {
         allocate_jobs();
+        cpu_cores_.cpus.reserve(thread_count);
         workers_.reserve(thread_count);
 
         for (uint32_t i = 0; i < thread_count; i++) {
-            cpu_cores_.push_back(thread_binding::get_cpu_core_for_physical_device(context_id, i, cpu_cores_));
+            cpu_cores_.cpus.push_back(thread_binding::get_cpu_core_for_physical_device(context_id, i, cpu_cores_.cpus));
             workers_.emplace_back(std::make_unique<NumaAwareExecutor>(
-                cpu_cores_.back(),
+                cpu_cores_.cpus.back(),
                 completion_,
                 i,
                 published_,
@@ -839,9 +859,6 @@ public:
         // Stop every executor before destroying any: a parallel_for job on one worker can wake the others.
         for (auto& worker : workers_) {
             worker->stop();
-        }
-        for (const uint32_t cpu : cpu_cores_) {
-            thread_binding::release_cpu_core(cpu);
         }
     }
 
@@ -988,9 +1005,10 @@ private:
     // Worker by physical device id; NO_WORKER for a device without one.
     static constexpr uint32_t NO_WORKER = UINT32_MAX;
     std::vector<uint32_t> worker_of_device_;
-    // Executors backing this pool, and the CPU each is pinned to.
+    // The CPU each executor is pinned to; declared before the executors, so released after they stop.
+    thread_binding::CpuReservation cpu_cores_;
+    // Executors backing this pool.
     std::vector<std::unique_ptr<NumaAwareExecutor>> workers_;
-    std::vector<uint32_t> cpu_cores_;
     // Used to pick threads when device_idx is not specified in the enqueue API
     std::atomic<uint32_t> thread_idx_ = 0;
     std::mutex exception_mutex_;
