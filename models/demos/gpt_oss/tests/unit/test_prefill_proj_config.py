@@ -15,8 +15,13 @@ from unittest.mock import MagicMock
 import pytest
 
 import ttnn
-from models.demos.gpt_oss.tt.attention.config import PREFILL_PROJ_L1_BYTES, PREFILL_PROJ_TP, prefill_proj_program_config
-from models.demos.gpt_oss.tt.attention_configs import GPTOSSAttentionProgramConfig
+from models.demos.gpt_oss.tt.attention.config import (
+    PREFILL_PROJ_L1_BYTES,
+    PREFILL_PROJ_TP,
+    ProgramConfig,
+    prefill_proj_program_config,
+)
+from models.demos.gpt_oss.tt.attention_configs import GPTOSSAttentionProgramConfig, gpt_oss_attention_program_config
 
 # Per-device (K tiles, N tiles) of gpt-oss-20b at TP = 4: QKV [S, 2880] x [2880, 1280], o_proj [S, 1024] x [1024, 2880].
 ROLE_KN = {"qkv": (90, 40), "o": (32, 90)}
@@ -120,3 +125,22 @@ def test_get_prefill_proj_config_gate(monkeypatch, blackhole, tp):
     assert pc.get_prefill_proj_config(mesh_device, "o", x_o, w_o, tp) is None
     # Batched [B, 1, S, K] inputs keep the default.
     assert pc.get_prefill_proj_config(mesh_device, "qkv", _fake((2, 1, m, 2880), ttnn.bfloat8_b), w_qkv, tp) is None
+
+
+@pytest.mark.parametrize("num_experts, tuned", [(32, True), (128, False)], ids=["gpt-oss-20b", "gpt-oss-120b"])
+def test_attention_program_config_per_model(num_experts, tuned):
+    """gpt-oss-20b gets the tuned Blackhole prefill attention; gpt-oss-120b keeps the base class's settings."""
+    pc = gpt_oss_attention_program_config(MagicMock(num_local_experts=num_experts))
+    base = ProgramConfig()
+    fields = (
+        "prefill_chunk_regimes",
+        "prefill_sliding_chunk_regimes",
+        "prefill_sdpa_math_fidelity",
+        "prefill_proj_2d",
+        "prefill_unpadded_o_proj",
+    )
+    if tuned:
+        assert pc == GPTOSSAttentionProgramConfig()
+        assert all(getattr(pc, f) != getattr(base, f) for f in fields)
+    else:
+        assert all(getattr(pc, f) == getattr(base, f) for f in fields)
