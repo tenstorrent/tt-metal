@@ -55,19 +55,25 @@ The hardware description is in tt-llk (`tools/include/perf_counters/`, namespace
 |---|---|
 | `noc_counters_types.h` | `NocCounter` (names, append only), `NocGroup`, the group masks, `Entry` = `{counter, status register index, group}` |
 | `noc_counters_blackhole.h`, `noc_counters_wormhole.h`, `noc_counters_quasar.h` | `noc_counters` table in capture order, `NIU_STATUS_BASE`, `NIU_NOC_STRIDE`, `NIU_NOCS`, `NIU_DATA_WORD_BYTES` |
-| `noc_counters_inventory.h` | Picks the arch header from `ARCH_*`; `selected_regs<GroupMask>()` is the compile-time list of registers of the selected groups |
-| `noc_counters_hw.h` | `read(noc, reg)` |
+| `noc_counters_inventory.h` | Picks the arch header from `ARCH_*`; `selected_regs<GroupMask>()` is the compile-time list of registers of the selected groups and `selected_offsets<GroupMask>()` the word offsets of those registers on every NoC |
+| `noc_counters_hw.h` | `read(noc, reg)`, and the capture step both consumers use: `capture<GroupMask>(values, delta)` reads the selected registers of every NoC into `values` in capture order, or with `delta` set replaces each stored start reading by the difference (modulo 2^32) to the current one; `value_count<GroupMask>()` is how many values that is |
 
-The metal consumer is `tt_metal/hw/inc/internal/profiler/noc_counters.hpp`: marker ids, payload layout and emission.
+There are two consumers. The metal consumer is `tt_metal/hw/inc/internal/profiler/noc_counters.hpp`: marker ids, payload layout and emission.
 The hooks are in the BRISC kernel entry `tt_metal/hw/firmware/src/tt-1xx/brisck.cc` and the Quasar DM0 firmware `tt-2xx/dm.cc`; the option is parsed in
 `tt_metal/llrt/rtoptions.cpp` and becomes `-DPROFILE_NOC_COUNTERS=<mask>` in `tt_metal/jit_build/build.cpp`. The host
 side is `tools/python/tt_llk_perf/`: `headers.py` parses the tables, `noc_counters.py` decodes the markers and
 `noc_metrics.py` derives byte and request totals; `tools/tracy/perf_counter_analysis.py` has
 `decode_noc_counter_markers`.
 
+The second consumer is the LLK perf harness, described in [The LLK perf harness](#the-llk-perf-harness) below.
+
 Adding a counter: append the enumerator to `NocCounter`, add one `{NocCounter::NAME, index, NocGroup::GROUP}` entry to
 each arch table and bump the array size. Keep the counters of every group an even number per NoC (they are emitted in
 pairs). The host parsers read the headers, so nothing else changes.
+
+### The LLK perf harness
+
+`--perf-noc-counters=GROUPS` makes the LLK perf harness capture the same counters (Wormhole and Blackhole; refused on Quasar, where the harness has no BRISC and no TRISC is known to read the tile's NoC registers). The harness reads them once per launch from BRISC with `capture<GroupMask>`: the start readings go into the launch block in L1 before BRISC releases the TRISCs, and after the TRISCs are done the second call turns them into deltas, so the window is the whole launch and not one zone. The host decodes the block with `tt_llk_perf.noc_counters`, checks the echoed group mask against the requested one, and writes one row per counter and NoC, plus the byte totals of `noc_metrics`, under the marker `LAUNCH_<zone>` of the zone the launch counted. The perf tests move data between L1 buffers of the tile only, so the counts are near zero; the capture is there for tests that use the NoC. Details: [performance_counters.md](performance_counters.md#other-counter-families).
 
 ## 4. Using it in tt-metal
 
