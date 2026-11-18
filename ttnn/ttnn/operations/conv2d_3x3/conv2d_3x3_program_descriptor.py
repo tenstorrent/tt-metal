@@ -97,13 +97,12 @@ STRIDED_WINDOW_IM2COL = True
 # (same format as cb_im2col_tiles) or zero tile-rows above / below the image. The reader copies them from the own or a
 # neighbour shard and compute skips their untilize -> gather -> tilize round trip (3 of the 9 taps):
 #   one tap per K-block: the kw = 1 K-blocks come from cb_center_tiles (matmul_block's In0SourceFn);
-#   one kernel row per K-block (CENTER_TAP_SLOTS): the reader writes each tile-row's kw = 1 tiles straight into their
-#     cb_im2col_tiles slots, and compute's tilize reserves and pushes those slots unpacked. K-blocked walk (bm >= 2):
-#     cb_im2col_tiles holds two K-blocks, so the reader writes K-block k's center tiles while compute still multiplies
-#     K-block k - 1 (reserving K-block k's first im2col row already implies the matmul of K-block k - 2 is done).
-#     N-slice-outer K split: the resident [bm, K] in0 holds the slots, no extra L1.
-# On the K-blocked walks both take bm * bk more in0 tiles, and only from the L1 left at the solved blocking, so they never
-# change bm, bk, the untilize batch or the im2col ring. False keeps the tilize for every K-block.
+#   one kernel row per K-block (CENTER_TAP_SLOTS, bm >= 2): the reader writes each tile-row's kw = 1 tiles straight into
+#     their cb_im2col_tiles slots, and compute's tilize reserves and pushes those slots unpacked. cb_im2col_tiles holds
+#     two K-blocks, so the reader writes K-block k's center tiles while compute still multiplies K-block k - 1
+#     (reserving K-block k's first im2col row already implies the matmul of K-block k - 2 is done).
+# Both take bm * bk more in0 tiles, and only from the L1 left at the solved blocking, so they never change bm, bk, the
+# untilize batch or the im2col ring. False keeps the tilize for every K-block.
 CENTER_TAP_DIRECT = True
 CENTER_TAP_SLOTS = True
 
@@ -461,15 +460,16 @@ def _strided_window(g: Conv3x3Geometry, bk):
 CENTER_NONE, CENTER_K_BLOCK, CENTER_SLOTS = 0, 1, 2
 
 
-def center_tap_mode(g: Conv3x3Geometry, bm, bk, nslice=False):
+def center_tap_mode(g: Conv3x3Geometry, bm, bk):
     """How the kw = 1 taps skip the tilize (see CENTER_TAP_DIRECT): they are whole input tile-rows (a vertical-only
-    shift by whole tile-rows). Not on the K split's K-blocked walk, whose L1-accumulating packs are ordered only by the
-    tilize between K-blocks.
+    shift by whole tile-rows).
       CENTER_K_BLOCK  one tap per K-block: K-block k with k % 3 == 1 comes from cb_center_tiles.
-      CENTER_SLOTS    one kernel row per K-block: the reader writes each tile-row's center tiles into their in0 slots
-                      (K-blocked walk, bm >= 2: a second in0 K-block; N-slice-outer: the resident [bm, K] in0), and they
-                      land before the reader pushes the K-block's (M-block's) last im2col row."""
-    if g.k_split and not nslice:
+      CENTER_SLOTS    one kernel row per K-block (bm >= 2): the reader writes each tile-row's center tiles into their
+                      slots of a second in0 K-block, and they land before the reader pushes the K-block's last im2col row.
+    Not under a K split. Its K-blocked walk's L1-accumulating packs are ordered only by the tilize between K-blocks. On
+    the N-slice-outer walk the tilize is paced by the gather, so the copy saves nothing: measured LoFi median of 3,
+    res5.1 +1.5% and aspp.convs.1 +2.3% with non-overlapping ranges, the other N-slice layers flat."""
+    if g.k_split:
         return CENTER_NONE
     # Sharded input only: the center tiles are then L1 copies from the own or a neighbour shard. On an interleaved input
     # they are a second DRAM read of tile-rows the fill already streams (measured 7-16% slower).
@@ -483,8 +483,6 @@ def center_tap_mode(g: Conv3x3Geometry, bm, bk, nslice=False):
         and _tap_major(g, bk)
     ):
         return CENTER_NONE
-    if nslice:
-        return CENTER_SLOTS if CENTER_TAP_SLOTS and bk == 3 * g.c_in_tiles else CENTER_NONE
     if bk == g.c_in_tiles:
         return CENTER_K_BLOCK
     if CENTER_TAP_SLOTS and bk == 3 * g.c_in_tiles and bm >= 2:
@@ -652,12 +650,9 @@ def select_blocking(g: Conv3x3Geometry, grid, l1_budget) -> Conv3x3Blocking:
                             fit = deep
                             break
                     # Center-tap direct: bm * bk more in0 tiles, from the L1 left after everything else.
-                    mode = center_tap_mode(g, bm, bk, nslice)
+                    mode = center_tap_mode(g, bm, bk)
                     extra = bm * bk * g.in0_tile_bytes
-                    if nslice:
-                        # The resident [bm, K] in0 holds the slots already: no extra L1.
-                        fit = dict(fit, center_mode=mode)
-                    elif mode != CENTER_NONE and fit["footprint_bytes"] + extra <= l1_budget:
+                    if mode != CENTER_NONE and fit["footprint_bytes"] + extra <= l1_budget:
                         fit = dict(
                             fit,
                             center_mode=mode,
@@ -1044,7 +1039,6 @@ def create_program_descriptor(
             int(window_direct),
             center_mode,
             CB_CENTER_TILES,
-            b.center_slot_blocks,
         ]
         args.extend(ttnn.TensorAccessorArgs(input_tensor).get_compile_time_args())
         return args

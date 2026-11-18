@@ -259,9 +259,7 @@ void kernel_main() {
     constexpr bool strided_window = get_compile_time_arg_val(35) != 0;
     constexpr uint32_t center_mode = get_compile_time_arg_val(36);
     constexpr uint32_t cb_center_tiles = get_compile_time_arg_val(37);
-    static_assert(
-        center_mode == 0 ||
-        (tile_input && !face_direct && (!k_split || (nslice_outer && center_mode == CENTER_SLOTS))));
+    static_assert(center_mode == 0 || (tile_input && !face_direct && !k_split));
 
     const uint32_t num_m_blocks_this_core = get_arg_val<uint32_t>(0);
     [[maybe_unused]] const bool owns_output_columns = get_arg_val<uint32_t>(1) != 0;
@@ -429,14 +427,7 @@ void kernel_main() {
             static_assert(block_m_tiles % slice_sb_h == 0 && out_n_tiles % slice_sb_w == 0);
             // The tilize packs must overwrite (the previous M-block's combine may have left L1 accumulation on).
             pack_reconfig_l1_acc(0);
-            if constexpr (center_mode == CENTER_SLOTS) {
-                // One im2col row per (tile-row, kernel row): three taps, tap 1 the reader's. (kernel_main is not a
-                // template: this branch is compiled on every path.)
-                static_assert(center_mode != CENTER_SLOTS || block_k_tiles == 3 * im2col_tilize_width_tiles);
-                MaybeDeviceZoneScope("compute_tilize");
-                tilize_rows_skip_center<im2col_tilize_width_tiles, cb_im2col_rm, cb_im2col_tiles>(
-                    im2col_rm_dfb, im2col_tiles_dfb, block_m_tiles * num_k_blocks);
-            } else if constexpr (!face_direct) {
+            if constexpr (!face_direct) {
                 MaybeDeviceZoneScope("compute_tilize");
                 if constexpr (strided_window) {
                     window_tilize<c_in_tiles, cb_im2col_rm, cb_im2col_tiles>(

@@ -78,10 +78,9 @@
 //   center_mode 1 (one tap per K-block): K-blocks k % 3 == 1 go whole into cb_center_tiles (compute's In0SourceFn).
 //   center_mode 2 (one kernel row per K-block): each tile-row's kw = 1 tiles go straight into their cb_im2col_tiles
 //     slots; the tap-major gather leaves that tap's block of the im2col row empty, and compute's tilize reserves and
-//     pushes the slots unpacked. The copy (own transaction id) lands before the K-block's (N-slice-outer: M-block's)
-//     last im2col row is pushed, and starts only once the matmul that last read the slots is done: with a
-//     double-buffered in0 that is implied by reserving the K-block's first im2col row, otherwise the reader waits
-//     for compute to pop a page of it.
+//     pushes the slots unpacked. The copy (own transaction id) lands before the K-block's last im2col row is pushed.
+//     cb_im2col_tiles holds two K-blocks, so K-block k's slots (k % 2) are free once the reader can reserve K-block k's
+//     first im2col row: compute then began K-block k - 1, so the matmul of K-block k - 2 is done.
 //
 // Lanes C_in..C_in_p of a slab pixel are not data (DRAM page padding or tile padding) and may hold
 // NaN. The gather copies only the C_in real channels of each tap; the lanes of an im2col row are
@@ -187,9 +186,7 @@ void kernel_main() {
     constexpr uint32_t center_mode = get_compile_time_arg_val(63);
     constexpr uint32_t cb_center_tiles = get_compile_time_arg_val(64);
     constexpr bool center_direct = center_mode != 0;
-    // Center slots: K-blocks cb_im2col_tiles holds (2: K-block k sits at slot k % 2).
-    constexpr uint32_t center_slot_blocks = get_compile_time_arg_val(65);
-    constexpr auto input_args = TensorAccessorArgs<66>();
+    constexpr auto input_args = TensorAccessorArgs<65>();
     static_assert(!alias_slab_combine || nslice_outer, "only the N-slice-outer walk aliases the slab");
 
     const uint32_t input_addr = get_arg_val<uint32_t>(0);
@@ -235,19 +232,12 @@ void kernel_main() {
     static_assert(
         !tap_major || (stride == 1 && !k_padded && block_k_cols % c_in_p == 0),
         "tap-major rows are whole taps read in unit-stride pixel runs");
-    constexpr bool tile_row_outer_ct = nslice_outer && !face_direct;
     static_assert(
-        !center_direct ||
-            (tile_input && tap_major && !face_direct && !row_split && (!channel_slice || tile_row_outer_ct) &&
-             block_k_tiles == (center_mode == 1 ? 1 : 3) * (c_in_p / TILE_DIM) && padding == dilation &&
-             input_width % TILE_DIM == 0 && output_width == input_width &&
-             (center_mode == 1 || tile_row_outer_ct || block_m_tiles >= 2) && (center_mode == 2 || !tile_row_outer_ct)),
-        "center-tap direct: one tap per K-block, and the kw = 1 tap is a whole-tile-row vertical shift");
-    static_assert(
-        center_slot_blocks == 1 ||
-            (center_mode == 2 && center_slot_blocks == 2 && im2col_rm_depth_rows <= block_m_tiles),
-        "double-buffered center slots: reserving a K-block's first im2col row must imply compute began the previous "
-        "one");
+        !center_direct || (tile_input && tap_major && !face_direct && !row_split && !channel_slice &&
+                           block_k_tiles == (center_mode == 1 ? 1 : 3) * (c_in_p / TILE_DIM) && padding == dilation &&
+                           input_width % TILE_DIM == 0 && output_width == input_width &&
+                           (center_mode == 1 || (block_m_tiles >= 2 && im2col_rm_depth_rows <= block_m_tiles))),
+        "center-tap direct: K-blocked walk, whole taps, and the kw = 1 tap is a whole-tile-row vertical shift");
 
     using FaceGather = conv2d_3x3::FaceGather<
         output_width,
@@ -323,8 +313,6 @@ void kernel_main() {
     const auto input = TensorAccessor(input_args, input_addr, input_page_bytes);
     // Center-tap slots: cb_im2col_tiles' base (compute produces it; every K-block starts there).
     [[maybe_unused]] const uint32_t im2col_tiles_base = center_mode == 2 ? get_write_ptr(cb_im2col_tiles) : 0;
-    static_assert(
-        center_mode != 2 || !nslice_outer || center_slot_blocks == 1, "the resident [bm, K] in0 is one block");
     // TILE: compute pushes exactly slab_tile_rows tile-rows per M-block and the reader pops them all,
     // so the slab always starts at the CB base.
     const uint32_t slab_l1 = tile_input ? get_read_ptr(cb_halo_slab) : get_write_ptr(cb_halo_slab);
@@ -415,7 +403,6 @@ void kernel_main() {
     };
 
     [[maybe_unused]] uint32_t fill_batches_handed = 0;  // split TILE fill: batches handed to the writer
-    [[maybe_unused]] uint32_t rm_units_pushed = 0;      // center slots: im2col rows pushed so far
     for (uint32_t m_block_idx = 0; m_block_idx < num_m_blocks_this_core; ++m_block_idx) {
         const uint32_t block_tiles_done = m_block_idx * block_m_tiles;
         const uint32_t block_valid_tiles =
@@ -545,13 +532,11 @@ void kernel_main() {
         };
         // Center-tap slots (center_mode 2): the kw = 1 tiles of kernel row kh of every tile-row of the M-block,
         // straight into their cb_im2col_tiles slots: tile-row r's at l1_first + r * l1_row_stride. Issued under
-        // TRID_CENTER and waited only before the K-block's (N-slice-outer: the M-block's) last im2col row is pushed,
-        // which compute tilizes before its matmul reads the slots. A row's source is c_in_tiles consecutive L1 pages of
-        // one owner shard (HEIGHT: pages t * c_in_tiles...; channel slice: this column's slice of input row t), so one
-        // accessor lookup per in-shard run. A short channel slice copies its real tiles and zeroes the padded ones.
+        // TRID_CENTER and waited only before the K-block's last im2col row is pushed, which compute tilizes before its
+        // matmul reads the slots. A row's source is c_in_tiles consecutive L1 pages of one owner shard, so one accessor
+        // lookup per in-shard run.
         [[maybe_unused]] auto issue_center_rows = [&](int32_t kh, uint32_t l1_first, uint32_t l1_row_stride) {
             constexpr uint32_t row_tile_bytes = c_in_tiles * input_page_bytes;
-            constexpr uint32_t real_tile_bytes = (c_in / TILE_DIM) * input_page_bytes;
             // Compiled on every path; it only runs with input_width % 32 == 0 (center_direct's static_assert).
             constexpr int32_t tile_rows_per_image_row = input_width >= TILE_DIM ? input_width / TILE_DIM : 1;
             const int32_t shift_rows = (kh * dilation - padding) * tile_rows_per_image_row;
@@ -572,60 +557,28 @@ void kernel_main() {
                     static_cast<uint32_t>(input_height - h_in) * tile_rows_per_image_row - t % tile_rows_per_image_row;
                 uint32_t run = block_valid_tiles - r;
                 run = run < rows_left_in_image ? run : rows_left_in_image;
-                const uint32_t src_row = t + shift_rows;
-                uint32_t contig_rows;
-                uint64_t src;
-                if constexpr (channel_slice) {
-                    const uint32_t shard_end = (src_row / input_shard_rows + 1) * input_shard_rows;
-                    contig_rows = src_row + run < shard_end ? run : shard_end - src_row;
-                    src = input.get_noc_addr(src_row * row_page_stride + slice_page_offset);
-                } else {
-                    const uint32_t page = src_row * c_in_tiles;
-                    const uint32_t contig_pages = input.contiguous_page_stride() == 1
-                                                      ? input.num_contiguous_pages(page, page + run * c_in_tiles)
-                                                      : 1;
-                    contig_rows = contig_pages / (c_in_tiles > 0 ? c_in_tiles : 1);
-                    if (contig_rows == 0) {
-                        // Interleaved pages: one read per page of this row.
-                        for (uint32_t c = 0; c < c_in_tiles; ++c) {
-                            reads.read(input.get_noc_addr(page + c), l1 + c * input_page_bytes, input_page_bytes);
-                        }
-                        l1 += l1_row_stride;
-                        ++r;
-                        continue;
+                const uint32_t page = (t + shift_rows) * c_in_tiles;
+                const uint32_t contig_pages =
+                    input.contiguous_page_stride() == 1 ? input.num_contiguous_pages(page, page + run * c_in_tiles) : 1;
+                const uint32_t contig_rows = contig_pages / (c_in_tiles > 0 ? c_in_tiles : 1);
+                if (contig_rows == 0) {
+                    // A row split across pages that are not contiguous: one read per page.
+                    for (uint32_t c = 0; c < c_in_tiles; ++c) {
+                        reads.read(input.get_noc_addr(page + c), l1 + c * input_page_bytes, input_page_bytes);
                     }
-                    src = input.get_noc_addr(page);
+                    l1 += l1_row_stride;
+                    ++r;
+                    continue;
                 }
+                uint64_t src = input.get_noc_addr(page);
                 for (uint32_t i = 0; i < contig_rows; ++i) {
-                    if constexpr (real_tile_bytes < row_tile_bytes) {
-                        reads.read(src, l1, real_tile_bytes);
-                        reads.read(zero_src_noc, l1 + real_tile_bytes, row_tile_bytes - real_tile_bytes);
-                    } else {
-                        reads.read(src, l1, row_tile_bytes);
-                    }
+                    reads.read(src, l1, row_tile_bytes);
                     src += row_tile_bytes;
                     l1 += l1_row_stride;
                 }
                 r += contig_rows;
             }
         };
-        // Center slots: the in0 slots are free once the matmul that last read them is done, which a compute that popped
-        // a page of im2col row first_unit has (it tilizes only after that matmul). True when, with rows_in_flight of
-        // this K-block (or M-block) pushed, that page is popped; blocking waits for it.
-        [[maybe_unused]] auto center_slots_free = [&](uint32_t rows_in_flight, bool blocking) -> bool {
-            constexpr int32_t ring_pages = im2col_rm_depth_rows * block_k_tiles;
-            const int32_t n = ring_pages - static_cast<int32_t>(rows_in_flight * block_k_tiles - 1);
-            if (n <= 0) {
-                return true;
-            }
-            if (blocking) {
-                MaybeDeviceZoneScope("reader_center_wait");
-                cb_reserve_back(cb_im2col_rm, n);
-                return true;
-            }
-            return rows_in_flight > 0 && cb_pages_reservable_at_back(cb_im2col_rm, n);
-        };
-
         // ---- Split row gather. The reader alone moves cb_im2col_rm's pointers and pushes units in sequence order,
         // a writer unit once row_done counted it.
         const uint32_t m_seq_end = (m_block_idx + 1) * Units::per_block;
@@ -692,36 +645,6 @@ void kernel_main() {
                 // Every band is in: the writer may take any unit of the M-block.
                 while (assign_cursor < m_seq_end) {
                     take_unit(m_seq_end);
-                }
-            } else if constexpr (center_mode == 2) {
-                // The resident [bm, K] in0 starts at the CB base every M-block; its slots are free from the start on
-                // the first M-block, and once compute began tilizing this M-block on a later one (see
-                // center_slots_free).
-                constexpr uint32_t k_tiles = num_k_blocks * block_k_tiles;
-                const uint32_t first_unit = rm_units_pushed;
-                bool issued = false;
-                for (uint32_t tile_row = 0; tile_row < block_m_tiles; ++tile_row) {
-                    for (uint32_t k_block_idx = 0; k_block_idx < num_k_blocks; ++k_block_idx) {
-                        const bool last = tile_row + 1 == block_m_tiles && k_block_idx + 1 == num_k_blocks;
-                        cb_reserve_back(cb_im2col_rm, block_k_tiles);
-                        if (!issued) {
-                            issued = m_block_idx == 0 || center_slots_free(rm_units_pushed - first_unit, last);
-                            if (issued) {
-                                for (int32_t band = 0; band < 3; ++band) {
-                                    issue_center_rows(
-                                        band,
-                                        im2col_tiles_base + (band * block_k_tiles + c_in_tiles) * input_page_bytes,
-                                        k_tiles * input_page_bytes);
-                                }
-                            }
-                        }
-                        gather_into(k_block_idx, tile_row, get_write_ptr(cb_im2col_rm));
-                        if (last) {
-                            reads.wait(TRID_CENTER);
-                        }
-                        cb_push_back(cb_im2col_rm, block_k_tiles);
-                        ++rm_units_pushed;
-                    }
                 }
             } else {
                 for (uint32_t tile_row = 0; tile_row < block_m_tiles; ++tile_row) {
@@ -843,32 +766,23 @@ void kernel_main() {
                     take_unit(kb_end);
                 }
             } else if constexpr (center_mode == 2) {
-                // Double-buffered in0: reserving this K-block's first im2col row already implies compute began the
-                // previous K-block (the ring is at most bm rows), so the matmul of K-block k - 2 (slot k % 2) is done.
-                // Single-buffered: wait for compute's tilize of this K-block to begin (see center_slots_free).
+                // Reserving this K-block's first im2col row implies compute began the previous K-block (the ring is at
+                // most bm rows), so the matmul of K-block k - 2, the last reader of slot k % 2, is done.
                 const uint32_t k_block_seq = m_block_idx * num_k_blocks + k_block_idx;
-                const uint32_t first_unit = rm_units_pushed;
-                bool issued = false;
                 for (uint32_t tile_row = 0; tile_row < block_m_tiles; ++tile_row) {
                     cb_reserve_back(cb_im2col_rm, block_k_tiles);
-                    if (!issued) {
-                        issued = center_slot_blocks == 2 ||
-                                 center_slots_free(rm_units_pushed - first_unit, tile_row + 1 == block_m_tiles);
-                        if (issued) {
-                            issue_center_rows(
-                                kh,
-                                im2col_tiles_base +
-                                    ((k_block_seq % center_slot_blocks) * block_m_tiles * block_k_tiles + c_in_tiles) *
-                                        input_page_bytes,
-                                block_k_tiles * input_page_bytes);
-                        }
+                    if (tile_row == 0) {
+                        issue_center_rows(
+                            kh,
+                            im2col_tiles_base +
+                                ((k_block_seq % 2) * block_m_tiles * block_k_tiles + c_in_tiles) * input_page_bytes,
+                            block_k_tiles * input_page_bytes);
                     }
                     gather_into(k_block_idx, tile_row, get_write_ptr(cb_im2col_rm));
                     if (tile_row + 1 == block_m_tiles) {
                         reads.wait(TRID_CENTER);
                     }
                     cb_push_back(cb_im2col_rm, block_k_tiles);
-                    ++rm_units_pushed;
                 }
             } else {
                 for (uint32_t tile_row = 0; tile_row < block_m_tiles; ++tile_row) {
