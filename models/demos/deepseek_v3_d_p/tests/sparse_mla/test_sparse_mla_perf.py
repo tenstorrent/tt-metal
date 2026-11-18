@@ -57,14 +57,15 @@ from tt_py_test_utils_common.perf.cpu_clock import hold_full_cpu_clock
 MODES = ("untraced", "traced")
 # Host time of one chunk forward through device synchronization, in ms, per case: (warm untraced, warm traced, long
 # untraced, long traced), run as the CI jobs run them (LOGURU_LEVEL=ERROR, TT_METAL_SHM_TRACKING_DISABLED=1, one pytest
-# process per model). LoudBox: CI hosts. Galaxy: the mean of 3 runs on one Galaxy, after #65125, unscaled. Galaxy 4x4
-# (2 runs): one local Galaxy, unscaled, as its CI leg has no recent run; recheck once it runs. Galaxy 4x4 subtorus has
-# no CI leg: measured on a subtorus-cabled Galaxy (3 runs), unscaled.
+# process per model). LoudBox: CI hosts. Galaxy: the mean of 3 runs on one Galaxy, after #65125, unscaled; GLM-5.3
+# rows re-centred on the CI nightly after #66140 (run 44241638855, one run). Galaxy 4x4 (2 runs): one local Galaxy,
+# unscaled, as its CI leg has no recent run; recheck once it runs. Galaxy 4x4 subtorus has no CI leg: measured on a
+# subtorus-cabled Galaxy (3 runs), unscaled.
 _TARGETS_MS = {
     "Galaxy": {
         "kimi_k3_1": (3.53, 3.18, 7.64, 7.28),
-        "glm_5_3": (3.28, 2.82, 7.20, 6.79),
-        "glm_5_3-no_indexer": (2.54, 2.22, 2.59, 2.28),
+        "glm_5_3": (3.11, 2.65, 6.65, 6.29),
+        "glm_5_3-no_indexer": (2.46, 2.16, 2.53, 2.21),
     },
     "Galaxy 4x4": {
         "kimi_k3_1": (3.87, 3.56, 7.98, 7.58),
