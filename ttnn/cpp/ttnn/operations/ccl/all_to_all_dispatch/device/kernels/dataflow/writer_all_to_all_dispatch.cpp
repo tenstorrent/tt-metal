@@ -4,14 +4,16 @@
 
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
-#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
 #include "api/dataflow/noc.h"
 #include "api/core_local_mem.h"
 #include "api/tensor/noc_traits.h"
+#include "api/dataflow/global_semaphore.h"
+#include "experimental/kernel_args.h"
 #include "tt_metal/fabric/hw/inc/tt_fabric_api.h"
 #include "ttnn/operations/ccl/common/kernels/moe_utils.hpp"
 #include "ttnn/operations/data_movement/common/kernels/common.hpp"
-#include "tt_metal/fabric/hw/inc/edm_fabric/fabric_connection_manager.hpp"
+#include "tt_metal/fabric/hw/inc/edm_fabric/edm_fabric_worker_adapters.hpp"
 
 namespace detail {
 
@@ -51,10 +53,9 @@ inline void dispatch_metadata_local_device(
     }
 }
 
-void zero_buffer_async(uint32_t cb_id, uint32_t bytes) {
+void zero_buffer_async(const DataflowBuffer& dfb, uint32_t bytes) {
     Noc noc;
-    CircularBuffer cb(cb_id);
-    noc.async_write_zeros(cb, bytes);
+    noc.async_write_zeros(dfb, bytes);
 }
 
 void zero_buffer_barrier() {
@@ -96,86 +97,77 @@ inline void send_ring_completion_credit(
 }
 
 void kernel_main() {
-    constexpr uint32_t input_tensor_cb_id = get_compile_time_arg_val(0);
-    constexpr uint32_t indices_tensor_cb_id = get_compile_time_arg_val(1);
-    constexpr uint32_t mapping_tensor_cb_id = get_compile_time_arg_val(2);
-    constexpr uint32_t packet_header_cb_id = get_compile_time_arg_val(3);
-    constexpr uint32_t send_preparation_buffer_cb_id = get_compile_time_arg_val(4);
+    constexpr uint32_t input_pages = get_arg(args::input_pages);
+    constexpr uint32_t indices_pages = get_arg(args::indices_pages);
+    constexpr uint32_t mapping_pages = get_arg(args::mapping_pages);
+    constexpr uint32_t output_pages = get_arg(args::output_pages);
+    constexpr uint32_t metadata_pages = get_arg(args::metadata_pages);
 
-    constexpr uint32_t input_pages = get_compile_time_arg_val(5);
-    constexpr uint32_t indices_pages = get_compile_time_arg_val(6);
-    constexpr uint32_t mapping_pages = get_compile_time_arg_val(7);
-    constexpr uint32_t output_pages = get_compile_time_arg_val(8);
-    constexpr uint32_t metadata_pages = get_compile_time_arg_val(9);
+    constexpr uint32_t input_page_size = get_arg(args::input_page_size);
+    constexpr uint32_t indices_page_size = get_arg(args::indices_page_size);
+    constexpr uint32_t mapping_page_size = get_arg(args::mapping_page_size);
+    constexpr uint32_t output_page_size = get_arg(args::output_page_size);
+    constexpr uint32_t metadata_page_size = get_arg(args::metadata_page_size);
 
-    constexpr uint32_t input_page_size = get_compile_time_arg_val(10);
-    constexpr uint32_t indices_page_size = get_compile_time_arg_val(11);
-    constexpr uint32_t mapping_page_size = get_compile_time_arg_val(12);
-    constexpr uint32_t output_page_size = get_compile_time_arg_val(13);
-    constexpr uint32_t metadata_page_size = get_compile_time_arg_val(14);
+    constexpr uint32_t num_devices = get_arg(args::num_devices);
+    constexpr uint32_t hidden_size = get_arg(args::hidden_size);
+    constexpr uint32_t batch_size = get_arg(args::batch_size);
+    constexpr uint32_t selected_experts_k = get_arg(args::selected_experts_k);
+    constexpr uint32_t experts = get_arg(args::experts);
+    constexpr uint32_t tokens_per_device = get_arg(args::tokens_per_device);
 
-    constexpr uint32_t num_devices = get_compile_time_arg_val(15);
-    constexpr uint32_t hidden_size = get_compile_time_arg_val(16);
-    constexpr uint32_t batch_size = get_compile_time_arg_val(17);
-    constexpr uint32_t selected_experts_k = get_compile_time_arg_val(18);
-    constexpr uint32_t experts = get_compile_time_arg_val(19);
-    constexpr uint32_t tokens_per_device = get_compile_time_arg_val(20);
+    constexpr uint32_t num_links = get_arg(args::num_links);
+    constexpr tt::tt_fabric::Topology topology = (tt::tt_fabric::Topology)get_arg(args::topology);
 
-    constexpr uint32_t num_links = get_compile_time_arg_val(21);
-    constexpr tt::tt_fabric::Topology topology = (tt::tt_fabric::Topology)get_compile_time_arg_val(22);
+    constexpr uint32_t src_mesh_id = get_arg(args::src_mesh_id);
+    constexpr uint32_t src_chip_id = get_arg(args::src_chip_id);
+    constexpr uint32_t mesh_rows = get_arg(args::mesh_rows);
+    constexpr uint32_t mesh_cols = get_arg(args::mesh_cols);  // ew_dim
+    constexpr uint32_t aligned_input_page_size = get_arg(args::aligned_input_page_size);
+    constexpr uint32_t aligned_indices_page_size = get_arg(args::aligned_indices_page_size);
+    constexpr uint32_t aligned_mapping_page_size = get_arg(args::aligned_mapping_page_size);
+    constexpr uint32_t aligned_output_page_size = get_arg(args::aligned_output_page_size);
+    constexpr uint32_t aligned_metadata_page_size = get_arg(args::aligned_metadata_page_size);
 
-    constexpr uint32_t src_mesh_id = get_compile_time_arg_val(23);
-    constexpr uint32_t src_chip_id = get_compile_time_arg_val(24);
-    constexpr uint32_t mesh_rows = get_compile_time_arg_val(25);
-    constexpr uint32_t mesh_cols = get_compile_time_arg_val(26);  // ew_dim
-    constexpr uint32_t aligned_input_page_size = get_compile_time_arg_val(27);
-    constexpr uint32_t aligned_indices_page_size = get_compile_time_arg_val(28);
-    constexpr uint32_t aligned_mapping_page_size = get_compile_time_arg_val(29);
-    constexpr uint32_t aligned_output_page_size = get_compile_time_arg_val(30);
-    constexpr uint32_t aligned_metadata_page_size = get_compile_time_arg_val(31);
+    constexpr uint32_t fabric_max_packet_size = get_arg(args::fabric_max_packet_size);
+    constexpr uint32_t alignment = get_arg(args::alignment);
+    constexpr uint32_t linearized_mesh_coord = get_arg(args::linearized_mesh_coord);
 
-    constexpr uint32_t fabric_max_packet_size = get_compile_time_arg_val(32);
-    constexpr uint32_t alignment = get_compile_time_arg_val(33);
-    constexpr uint32_t metadata_buffer_id = get_compile_time_arg_val(34);
-    constexpr uint32_t write_page_by_page = get_compile_time_arg_val(35);
-    constexpr uint32_t linearized_mesh_coord = get_compile_time_arg_val(36);
-
-    constexpr auto input_args = TensorAccessorArgs<37>();
-    constexpr auto indices_args = TensorAccessorArgs<input_args.next_compile_time_args_offset()>();
-    constexpr auto mapping_args = TensorAccessorArgs<indices_args.next_compile_time_args_offset()>();
-    constexpr auto output_args = TensorAccessorArgs<mapping_args.next_compile_time_args_offset()>();
-    constexpr auto metadata_args = TensorAccessorArgs<output_args.next_compile_time_args_offset()>();
-
-    size_t rt_args_idx = 0;
-    uint32_t input_tensor_address = get_arg_val<uint32_t>(rt_args_idx++);
-    uint32_t indices_tensor_address = get_arg_val<uint32_t>(rt_args_idx++);
-    uint32_t mapping_tensor_address = get_arg_val<uint32_t>(rt_args_idx++);
-    uint32_t output_tensor_address = get_arg_val<uint32_t>(rt_args_idx++);
-    uint32_t metadata_tensor_address = get_arg_val<uint32_t>(rt_args_idx++);
-    uint32_t global_semaphore_address = get_arg_val<uint32_t>(rt_args_idx++);
-    uint32_t init_semaphore_address = get_arg_val<uint32_t>(rt_args_idx++);
-    uint32_t token_start_idx = get_arg_val<uint32_t>(rt_args_idx++);
-    uint32_t token_end_idx = get_arg_val<uint32_t>(rt_args_idx++);
+    experimental::GlobalSemaphore global_semaphore(global_sem::global_semaphore);
+    experimental::GlobalSemaphore init_semaphore(global_sem::init_semaphore);
+    uint32_t token_start_idx = get_arg(args::token_start_idx);
+    uint32_t token_end_idx = get_arg(args::token_end_idx);
 
     constexpr uint8_t dest_chip_ids[num_devices] = DEST_CHIP_ID;
     constexpr uint8_t dest_mesh_ids[num_devices] = DEST_MESH_ID;
 
     constexpr uint32_t num_directions = 4;
-    constexpr std::array<bool, num_directions> directions = DIRECTIONS;
+    // Fabric connections in {East, West, North, South} order; a direction without a neighbor has no connection.
+    const std::array<FabricConnectionBindingToken, num_directions> fabric_bindings = {
+        fabric::east, fabric::west, fabric::north, fabric::south};
+    std::array<bool, num_directions> directions;
+    for (uint32_t i = 0; i < num_directions; i++) {
+        directions[i] = tt::tt_fabric::has_fabric_connection(fabric_bindings[i]);
+    }
 
     std::array<tt::tt_fabric::WorkerToFabricEdmSender, num_directions> fabric_connections;
-    open_direction_connections_async(directions, fabric_connections, rt_args_idx);
+    for (uint32_t i = 0; i < num_directions; i++) {
+        if (directions[i]) {
+            fabric_connections[i] = tt::tt_fabric::WorkerToFabricEdmSender::build_from_binding(fabric_bindings[i]);
+            fabric_connections[i].open_start();
+        }
+    }
 
     Noc noc;
-    CircularBuffer input_cb(input_tensor_cb_id);
-    CircularBuffer indices_cb(indices_tensor_cb_id);
-    CircularBuffer mapping_cb(mapping_tensor_cb_id);
-    CircularBuffer packet_header_cb(packet_header_cb_id);
-    CircularBuffer send_preparation_buffer_cb(send_preparation_buffer_cb_id);
+    DataflowBuffer dfb_input(dfb::input);
+    DataflowBuffer dfb_indices(dfb::indices);
+    DataflowBuffer dfb_mapping(dfb::mapping);
+    DataflowBuffer dfb_packet_header(dfb::packet_header);
+    DataflowBuffer dfb_send_preparation_buffer(dfb::send_preparation_buffer);
 
-    uint32_t send_preparation_buffer_address = send_preparation_buffer_cb.get_write_ptr();
+    uint32_t send_preparation_buffer_address = dfb_send_preparation_buffer.get_write_ptr();
     detail::zero_buffer_async(
-        send_preparation_buffer_cb_id, (token_end_idx - token_start_idx) * num_devices * sizeof(uint8_t));
+        dfb_send_preparation_buffer, (token_end_idx - token_start_idx) * num_devices * sizeof(uint8_t));
 
 #ifdef AXIS
     constexpr ReplicateGroup axis = ReplicateGroup(AXIS);
@@ -204,23 +196,23 @@ void kernel_main() {
     constexpr uint32_t device_stride = 1;
 #endif
 
-    const auto output_addr_gen = TensorAccessor(output_args, output_tensor_address);
-    const auto metadata_addr_gen = TensorAccessor(metadata_args, metadata_tensor_address);
+    const auto output_addr_gen = TensorAccessor(tensor::output);
+    const auto metadata_addr_gen = TensorAccessor(tensor::metadata);
 
-    uint32_t packet_header_buffer_address = packet_header_cb.get_read_ptr();
+    uint32_t packet_header_buffer_address = dfb_packet_header.get_read_ptr();
     auto* unicast_packet_header = reinterpret_cast<volatile PACKET_HEADER_TYPE*>(packet_header_buffer_address);
     auto* metadata_packet_header =
         reinterpret_cast<volatile PACKET_HEADER_TYPE*>(packet_header_buffer_address + sizeof(PACKET_HEADER_TYPE));
     auto* completion_neg_packet_header =
         reinterpret_cast<volatile PACKET_HEADER_TYPE*>(packet_header_buffer_address + 2 * sizeof(PACKET_HEADER_TYPE));
 
-    uint32_t base_indices_addr = indices_cb.get_read_ptr();
+    uint32_t base_indices_addr = dfb_indices.get_read_ptr();
 
     detail::zero_buffer_barrier();
     open_direction_connections_barrier(directions, fabric_connections);
 
     // Send initialization semaphore to configured targets for synchronization
-    const uint64_t init_noc_semaphore_addr = get_noc_addr(init_semaphore_address);
+    const uint64_t init_noc_semaphore_addr = get_noc_addr(init_semaphore.address());
     send_init_semaphore_to_configured_targets<
         linearized_mesh_coord,
         topology,
@@ -232,27 +224,27 @@ void kernel_main() {
 
     // Wait for all devices to complete initialization synchronization
     bool needs_barrier = false;
-    noc_semaphore_wait((uint32_t*)init_semaphore_address, dispatch_devices - 1);
-    noc_semaphore_set((uint32_t*)init_semaphore_address, 0);
+    init_semaphore.wait(dispatch_devices - 1);
+    init_semaphore.set(0);
 
     // Based on the selected experts, we dispatch the input tokens to the corresponding devices
-    mapping_cb.wait_front(mapping_pages);
+    dfb_mapping.wait_front(mapping_pages);
     uint8_t* send_preparation_buffer = (uint8_t*)send_preparation_buffer_address;
     for (uint32_t local_token = token_start_idx; local_token < token_end_idx; local_token++) {
         // global_token is the global token index for the current token
         // we need the global token index to write to the output buffer – each global token that could potentially be
         // sent has a unique output buffer address to ensure that it is not overwritten by another token
         uint32_t global_token = (local_token + (tokens_per_device * dispatch_index));
-        indices_cb.wait_front(1);
-        input_cb.wait_front(1);
-        uint32_t input_token_read_addr = input_cb.get_read_ptr();
-        uint16_t* token_indices = (uint16_t*)(indices_cb.get_read_ptr());
+        dfb_indices.wait_front(1);
+        dfb_input.wait_front(1);
+        uint32_t input_token_read_addr = dfb_input.get_read_ptr();
+        uint16_t* token_indices = (uint16_t*)(dfb_indices.get_read_ptr());
 
         for (uint32_t k = 0; k < selected_experts_k; k++) {
             // get the expert that is chosen for the current token
             uint16_t expert_chosen = token_indices[k];
             uint32_t expert_offset = expert_chosen * aligned_mapping_page_size;
-            uint16_t* devices_for_expert = (uint16_t*)(mapping_cb.get_read_ptr() + expert_offset);
+            uint16_t* devices_for_expert = (uint16_t*)(dfb_mapping.get_read_ptr() + expert_offset);
 
             // find the devices that the expert lives on and dispatch the input tokens to them
             // if there is no tensor parallelism, then the token will only be sent to one device
@@ -264,7 +256,7 @@ void kernel_main() {
                         // if the expert lives on the current device, we dispatch the input token to it
                         detail::dispatch_input_local_device_flushed(
                             noc,
-                            input_cb,
+                            dfb_input,
                             output_addr_gen,
                             output_page_size,
                             {.offset_bytes = 0},
@@ -309,15 +301,15 @@ void kernel_main() {
                 }
             }
         }
-        indices_cb.pop_front(1);
-        input_cb.pop_front(1);
+        dfb_indices.pop_front(1);
+        dfb_input.pop_front(1);
     }
     if (needs_barrier) {
         noc.async_write_barrier();
     }
     // Send our selected experts tensor to all other devices and signal that we are done dispatching the input tokens
     // with a semaphore
-    uint64_t global_noc_semaphore_address = get_noc_addr(global_semaphore_address);
+    uint64_t global_noc_semaphore_address = get_noc_addr(global_semaphore.address());
 
     // Ring: payloads to the antipode alternate arcs (routing tie), so a credit on the metadata packet could
     // overtake a payload on the other arc. There metadata carries no credit; a completion credit is sent on
@@ -328,7 +320,8 @@ void kernel_main() {
 
     // two modes: send pages directly to the output buffer or send pages to the intermediate buffer and then write to
     // the output buffer latter is slower but is less L1 intensive
-    if constexpr (write_page_by_page) {
+#ifndef FULL_PACKET
+    {
         for (uint32_t local_token = token_start_idx; local_token < token_end_idx; local_token++) {
             uint32_t global_token = (local_token + (tokens_per_device * dispatch_index));
             uint32_t token_indices_address =
@@ -395,14 +388,16 @@ void kernel_main() {
             noc_semaphore_inc(global_noc_semaphore_address, 1);
             noc.async_atomic_barrier();
         }
-    } else {
+    }
+#else
+    {
         uint32_t indices_size = aligned_indices_page_size * tokens_per_device;
         uint32_t indices_size_per_core = aligned_indices_page_size * (token_end_idx - token_start_idx);
 
-        CircularBuffer metadata_buffer_cb(metadata_buffer_id);
+        DataflowBuffer dfb_metadata_buffer(dfb::metadata_buffer);
         const uint32_t core_offset_md_write_offset =
             (dispatch_index * indices_size) + (token_start_idx * aligned_indices_page_size);
-        uint64_t intermediate_metadata_write_addr = get_noc_addr(metadata_buffer_cb.get_read_ptr());
+        uint64_t intermediate_metadata_write_addr = get_noc_addr(dfb_metadata_buffer.get_read_ptr());
         uint64_t noc_core_offset_md_write_addr = intermediate_metadata_write_addr + core_offset_md_write_offset;
 
         for (uint32_t d = device_begin_idx; d < device_end_idx; d += device_stride) {
@@ -411,7 +406,7 @@ void kernel_main() {
                 detail::dispatch_input_local_device_flushed(
                     noc,
                     CoreLocalMem<uint32_t>(base_indices_addr),
-                    CoreLocalMem<uint32_t>(metadata_buffer_cb.get_read_ptr()),
+                    CoreLocalMem<uint32_t>(dfb_metadata_buffer.get_read_ptr()),
                     indices_size_per_core,
                     {},
                     {.offset_bytes = core_offset_md_write_offset});
@@ -458,11 +453,12 @@ void kernel_main() {
         noc_semaphore_inc(global_noc_semaphore_address, 1);
         noc.async_atomic_barrier();
     }
+#endif
 
     send_ring_completion_credit<ring_completion, linearized_mesh_coord, topology, mesh_rows, mesh_cols, axis>(
         noc, fabric_connections, metadata_packet_header, completion_neg_packet_header, global_noc_semaphore_address);
 
-    mapping_cb.pop_front(mapping_pages);
+    dfb_mapping.pop_front(mapping_pages);
 
     close_direction_connections(directions, fabric_connections);
 }
