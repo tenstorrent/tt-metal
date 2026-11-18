@@ -13,6 +13,7 @@
 
 #include <cstdint>
 #include <filesystem>
+#include <fstream>
 #include <initializer_list>
 #include <set>
 #include <stdexcept>
@@ -83,21 +84,25 @@ std::string edit(std::initializer_list<std::pair<std::string_view, std::string_v
     return text;
 }
 
-// SPEC-0011 § Checks: "The loader fails and reports no row."
-// shortcut: the interface at b1f3296e581 reports a load error as a row-1 finding of parse_manifest() or as a throw;
-// match this to the loader's documented failure once its header follows SPEC-0011 83ace99.
+// SPEC-0011 § Checks: "The loader fails and reports no row." The loader's contract: it throws ManifestLoadError,
+// listing every load error. Any other exception is not a load error and fails the test.
 bool load_fails(std::string_view yaml) {
     try {
-        return !parse_manifest(yaml).findings.empty();
-    } catch (const std::runtime_error&) {
+        parse_manifest(yaml);
+    } catch (const ManifestLoadError& error) {
+        EXPECT_FALSE(error.errors().empty());
         return true;
     }
+    return false;
 }
 
 Manifest load(std::string_view yaml) {
-    ManifestParse parse = parse_manifest(yaml);
-    EXPECT_TRUE(parse.findings.empty()) << "load failed: " << parse.findings.front().detail;
-    return std::move(parse.manifest);
+    try {
+        return parse_manifest(yaml);
+    } catch (const ManifestLoadError& error) {
+        ADD_FAILURE() << "load failed: " << error.what();
+        throw;
+    }
 }
 
 // The rows check_manifest() reports for `yaml`, which must load.
@@ -117,7 +122,7 @@ using Rows = std::set<uint32_t>;
 TEST(VclusterManifest, LineLoadsAsWritten) {
     const Manifest m = load(kLine);
     EXPECT_EQ(m.version, 1u);
-    EXPECT_TRUE(m.capture.empty());
+    EXPECT_FALSE(m.capture.has_value());
     ASSERT_EQ(m.devices.size(), 3u);
     EXPECT_EQ(m.devices[0].name, "A");
     EXPECT_EQ(m.devices[1].name, "M");
@@ -146,7 +151,19 @@ TEST(VclusterManifest, LinePasses) { EXPECT_EQ(rows(kLine), Rows{}); }
 // § Checks: "`capture` is optional." Named, it loads; rows 9 to 11 are not judged here.
 TEST(VclusterManifest, CaptureNamedLoads) {
     const Manifest m = load(edit({{"version: 1\n", "version: 1\ncapture: line3.capture\n"}}));
-    EXPECT_EQ(m.capture, "line3.capture");
+    EXPECT_EQ(m.capture, std::filesystem::path("line3.capture"));
+}
+
+// The loader's contract: load_manifest() reads the file and resolves a relative `capture` against its directory.
+TEST(VclusterManifest, LoadManifestFromFile) {
+    const auto dir = std::filesystem::path(::testing::TempDir()) / "vcluster_manifest_test";
+    std::filesystem::create_directories(dir);
+    const auto path = dir / "line3.yaml";
+    std::ofstream(path) << edit({{"version: 1\n", "version: 1\ncapture: line3.capture\n"}});
+    const Manifest m = load_manifest(path);
+    EXPECT_EQ(m.capture, dir / "line3.capture");
+    EXPECT_EQ(m.devices.size(), 3u);
+    std::filesystem::remove_all(dir);
 }
 
 // Row 8 judges only ethernet links: both links on the NOC pass, and so does a NOC link between unwired tiles.
@@ -430,7 +447,7 @@ TEST(VclusterManifest, StageBEndsBeforeStageC) {
 // --- Load errors: the loader fails and reports no row ------------------------------------------------------------
 
 TEST(VclusterManifest, LoadErrorUnreadableFile) {
-    EXPECT_THROW(load_manifest(std::filesystem::path("/nonexistent/vcluster/line3.yaml")), std::runtime_error);
+    EXPECT_THROW(load_manifest(std::filesystem::path("/nonexistent/vcluster/line3.yaml")), ManifestLoadError);
 }
 
 TEST(VclusterManifest, LoadErrorNotYaml) { EXPECT_TRUE(load_fails("version: 1\ndevices: [\n")); }
