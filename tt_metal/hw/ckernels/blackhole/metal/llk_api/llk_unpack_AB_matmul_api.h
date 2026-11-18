@@ -7,6 +7,7 @@
 #include "llk_unpack_AB_matmul.h"
 #include "llk_unpack_common_api.h"
 #include "llk_size_mode.h"
+#include "api/compute/matmul_named_args.h"
 #include "sanitizer/api.h"
 
 /*************************************************************************
@@ -91,13 +92,15 @@ inline void llk_unpack_AB_matmul_impl(
         // unpack thread; not in a kernel bound by the kernel config buffer, where the hoisted body costs program size,
         // nor above LoFi with a 32-bit DEST, where it measured slower (minimal_matmul 888 2x2 bf16 HiFi2 +0.37 %, 444
         // 1x2 bfp8 HiFi2 +0.15 %)
-        (unkeyed_hoist && kt_per_section == 0 && !LLK_SIZE_MODE && (MATH_FIDELITY == MathFidelity::LoFi || !DST_ACCUM_MODE)) ||
+        (unkeyed_hoist && kt_per_section == 0 && !LLK_SIZE_MODE &&
+         (MATH_FIDELITY == MathFidelity::LoFi || !DST_ACCUM_MODE)) ||
             unpack_AB_matmul_hoist_rows<MATH_FIDELITY, DST_SYNC_MODE, DST_ACCUM_MODE, kt_per_section, out_format>(),
         // an unkeyed caller (kt_per_section 0) masks the low byte of the context 1 zmask as main does; the keyed forms
         // keep the full mask for rows of 9 to 16 tiles
         kt_per_section == 0 ? 8u : get_dest_max_tiles<DST_SYNC_MODE, DST_ACCUM_MODE, DstTileShape::Tile32x32>(),
         stream_z,
-        reuse_dir>(
+        reuse_dir,
+        llk_unpack_AB_matmul_named_1x1()>(
         base_address_a,
         base_address_b,
         tile_index_a,

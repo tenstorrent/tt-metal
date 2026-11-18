@@ -14,6 +14,7 @@
 #endif
 #include "llk_assert.h"
 #include "sanitizer/api.h"
+#include "api/compute/matmul_named_args.h"
 #ifdef TRISC_MATH
 #include "llk_math_matmul_api.h"
 #endif

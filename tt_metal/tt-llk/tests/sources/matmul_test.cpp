@@ -291,7 +291,14 @@ void run_kernel(RUNTIME_PARAMETERS params)
     constexpr std::uint32_t stream_z = 0;
 #endif
 #define MATMUL_UNPACK_INIT_TEMPLATE_ARGS 0, 0, unpack_auto_ttsync, stream_narrow, stream_z, matmul_reuse_dir_k
-#define MATMUL_UNPACK_TEMPLATE_ARGS      0, 0, unpack_auto_ttsync, MAX_TILES_DEST, matmul_hoist_rows, matmul_max_row_tiles, stream_z, matmul_reuse_dir_k
+#if defined(MATMUL_PRODUCTION) && defined(MATMUL_PACK_TILES)
+    // minimal_matmul names its subblock: a 1x1 key's calls are one tile each (llk_unpack_AB_matmul_named_1x1)
+    constexpr bool matmul_one_tile_calls = MATMUL_PK_RT == 1 && MATMUL_PK_CT == 1;
+#else
+    constexpr bool matmul_one_tile_calls = false;
+#endif
+#define MATMUL_UNPACK_TEMPLATE_ARGS \
+    0, 0, unpack_auto_ttsync, MAX_TILES_DEST, matmul_hoist_rows, matmul_max_row_tiles, stream_z, matmul_reuse_dir_k, matmul_one_tile_calls
 #else
 #define MATMUL_UNPACK_INIT_TEMPLATE_ARGS
 #define MATMUL_UNPACK_TEMPLATE_ARGS
