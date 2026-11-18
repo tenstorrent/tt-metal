@@ -1,0 +1,91 @@
+{
+ "summary": {
+  "total": 40142,
+  "supported_pass": 659,
+  "supported_fail": 0,
+  "supported_marked_xfail": 0,
+  "supported_skipped": 0,
+  "supported_other": 0,
+  "xfail_expected": 5566,
+  "xpass_drift": 0,
+  "xfail_wrong_mode": 0,
+  "xfail_other": 0,
+  "invalid_skipped": 33900,
+  "invalid_unexpected": 2,
+  "infeasible_skipped": 2,
+  "no_axes_found": 13
+ },
+ "results_dir": "/tmp/rms_golden_r2 (full report: 25 MB, not committed)",
+ "by_category": {
+  "xfail_expected": 5566,
+  "invalid_skipped": 33900,
+  "supported_pass": 659,
+  "infeasible_skipped": [
+   {
+    "nodeid": "eval/golden_tests/rms_norm/test_golden.py::test_op_loose[99991x64-alignment=h_non_aligned-dtype=BFLOAT16-fp32_dest_acc_en=False-gamma_dtype=BFLOAT16-gamma_layout=TILE-gamma_mode=gamma-layout=TILE-memory_layout=WIDTH_SHARDED-rank=2]",
+    "axes": {
+     "dtype": "BFLOAT16",
+     "fp32_dest_acc_en": false,
+     "gamma_mode": "gamma",
+     "gamma_dtype": "BFLOAT16",
+     "layout": "TILE",
+     "gamma_layout": "TILE",
+     "memory_layout": "WIDTH_SHARDED",
+     "alignment": "h_non_aligned",
+     "rank": 2
+    },
+    "status": "skipped",
+    "failure_category": "infeasible"
+   },
+   {
+    "nodeid": "eval/golden_tests/rms_norm/test_golden.py::test_op_loose[99991x64-alignment=h_non_aligned-dtype=BFLOAT16-fp32_dest_acc_en=False-gamma_dtype=BFLOAT16-gamma_layout=ROW_MAJOR-gamma_mode=gamma-layout=ROW_MAJOR-memory_layout=WIDTH_SHARDED-rank=2]",
+    "axes": {
+     "dtype": "BFLOAT16",
+     "fp32_dest_acc_en": false,
+     "gamma_mode": "gamma",
+     "gamma_dtype": "BFLOAT16",
+     "layout": "ROW_MAJOR",
+     "gamma_layout": "ROW_MAJOR",
+     "memory_layout": "WIDTH_SHARDED",
+     "alignment": "h_non_aligned",
+     "rank": 2
+    },
+    "status": "skipped",
+    "failure_category": "infeasible"
+   }
+  ],
+  "no_axes_found": 13,
+  "invalid_unexpected": [
+   {
+    "nodeid": "eval/golden_tests/rms_norm/test_translated.py::test_rms_norm_sharded_uneven_multicore_logical_width[w72_c2_nonaligned-bfloat8_b]",
+    "axes": {
+     "dtype": "BFLOAT8_B",
+     "layout": "TILE",
+     "fp32_dest_acc_en": true,
+     "gamma_mode": "gamma",
+     "gamma_dtype": "BFLOAT16",
+     "gamma_layout": "TILE",
+     "memory_layout": "WIDTH_SHARDED",
+     "alignment": "w_non_aligned",
+     "rank": 4
+    },
+    "status": "xfail"
+   },
+   {
+    "nodeid": "eval/golden_tests/rms_norm/test_translated.py::test_rms_norm_sharded_uneven_multicore_logical_width[w200_c3_nonaligned-bfloat8_b]",
+    "axes": {
+     "dtype": "BFLOAT8_B",
+     "layout": "TILE",
+     "fp32_dest_acc_en": true,
+     "gamma_mode": "gamma",
+     "gamma_dtype": "BFLOAT16",
+     "gamma_layout": "TILE",
+     "memory_layout": "WIDTH_SHARDED",
+     "alignment": "w_non_aligned",
+     "rank": 4
+    },
+    "status": "xfail"
+   }
+  ]
+ }
+}

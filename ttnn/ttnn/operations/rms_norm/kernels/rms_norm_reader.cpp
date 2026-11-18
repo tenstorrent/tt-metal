@@ -70,8 +70,7 @@ void kernel_main() {
     constexpr uint32_t w_split = get_compile_time_arg_val(12);
     constexpr uint32_t sem_partials_id = get_compile_time_arg_val(13);
     constexpr uint32_t sem_rinv_local_id = get_compile_time_arg_val(14);
-    constexpr uint32_t f32_tile_bytes = get_compile_time_arg_val(15);
-    constexpr auto x_args = TensorAccessorArgs<16>();
+    constexpr auto x_args = TensorAccessorArgs<15>();
     constexpr auto mcast = McastArgs<
         get_named_compile_time_arg_val("rinv_mcast_ct_offset"),
         get_named_compile_time_arg_val("rinv_mcast_rt_offset")>();
@@ -199,5 +198,4 @@ void kernel_main() {
             }
         }
     }
-    (void)f32_tile_bytes;
 }

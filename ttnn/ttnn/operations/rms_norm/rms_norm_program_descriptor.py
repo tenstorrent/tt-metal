@@ -301,7 +301,6 @@ def create_program_descriptor(input_tensor, gamma, output_tensor, epsilon, compu
         k,  # 12 w_split
         SEM_PARTIALS,  # 13
         SEM_RINV_LOCAL,  # 14
-        t_f,  # 15
     ]
     reader_ct.extend(ttnn.TensorAccessorArgs(input_tensor).get_compile_time_args())
 
@@ -334,18 +333,17 @@ def create_program_descriptor(input_tensor, gamma, output_tensor, epsilon, compu
         cw,  # 5 core_w_tiles
         Y_CHUNK_TILES,  # 6
         Y_DEPTH,  # 7
-        OUT_RM_DEPTH,  # 8
-        t_in,  # 9 output tile bytes
-        es,  # 10 output element bytes
-        y_page,  # 11 output accessor page size
-        g_page,  # 12 gamma accessor page size
-        geo.es_g,  # 13 gamma element bytes
-        geo.t_g,  # 14 gamma tile bytes
-        Wt,  # 15
-        k,  # 16 w_split
-        SEM_PARTIALS,  # 17
-        SEM_RINV_LOCAL,  # 18
-        t_f,  # 19
+        t_in,  # 8 output tile bytes
+        es,  # 9 output element bytes
+        y_page,  # 10 output accessor page size
+        g_page,  # 11 gamma accessor page size
+        geo.es_g,  # 12 gamma element bytes
+        geo.t_g,  # 13 gamma tile bytes
+        Wt,  # 14
+        k,  # 15 w_split
+        SEM_PARTIALS,  # 16
+        SEM_RINV_LOCAL,  # 17
+        t_f,  # 18
     ]
     writer_ct.extend(ttnn.TensorAccessorArgs(output_tensor).get_compile_time_args())
     writer_ct.extend(

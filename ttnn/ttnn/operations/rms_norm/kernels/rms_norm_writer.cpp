@@ -46,24 +46,22 @@ void kernel_main() {
     constexpr uint32_t core_w_tiles = get_compile_time_arg_val(5);
     constexpr uint32_t y_chunk_tiles = get_compile_time_arg_val(6);
     constexpr uint32_t y_depth = get_compile_time_arg_val(7);
-    constexpr uint32_t out_rm_depth = get_compile_time_arg_val(8);
-    constexpr uint32_t tile_bytes = get_compile_time_arg_val(9);
-    constexpr uint32_t es = get_compile_time_arg_val(10);
-    constexpr uint32_t y_page_bytes = get_compile_time_arg_val(11);
-    constexpr uint32_t g_page_bytes = get_compile_time_arg_val(12);
-    constexpr uint32_t es_g = get_compile_time_arg_val(13);
-    constexpr uint32_t g_tile_bytes = get_compile_time_arg_val(14);
-    constexpr uint32_t Wt = get_compile_time_arg_val(15);
-    constexpr uint32_t w_split = get_compile_time_arg_val(16);
-    constexpr uint32_t sem_partials_id = get_compile_time_arg_val(17);
-    constexpr uint32_t sem_rinv_local_id = get_compile_time_arg_val(18);
-    constexpr uint32_t f32_tile_bytes = get_compile_time_arg_val(19);
-    constexpr auto y_args = TensorAccessorArgs<20>();
+    constexpr uint32_t tile_bytes = get_compile_time_arg_val(8);
+    constexpr uint32_t es = get_compile_time_arg_val(9);
+    constexpr uint32_t y_page_bytes = get_compile_time_arg_val(10);
+    constexpr uint32_t g_page_bytes = get_compile_time_arg_val(11);
+    constexpr uint32_t es_g = get_compile_time_arg_val(12);
+    constexpr uint32_t g_tile_bytes = get_compile_time_arg_val(13);
+    constexpr uint32_t Wt = get_compile_time_arg_val(14);
+    constexpr uint32_t w_split = get_compile_time_arg_val(15);
+    constexpr uint32_t sem_partials_id = get_compile_time_arg_val(16);
+    constexpr uint32_t sem_rinv_local_id = get_compile_time_arg_val(17);
+    constexpr uint32_t f32_tile_bytes = get_compile_time_arg_val(18);
+    constexpr auto y_args = TensorAccessorArgs<19>();
     constexpr auto g_args = TensorAccessorArgs<y_args.next_compile_time_args_offset()>();
     constexpr auto mcast = McastArgs<
         get_named_compile_time_arg_val("rinv_mcast_ct_offset"),
         get_named_compile_time_arg_val("rinv_mcast_rt_offset")>();
-    (void)out_rm_depth;
 
     const uint32_t y_addr = get_arg_val<uint32_t>(0);
     const uint32_t g_addr = get_arg_val<uint32_t>(1);
