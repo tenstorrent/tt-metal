@@ -187,13 +187,25 @@ def test_a_malformed_tp_split_is_refused(expect_error):
         ("sizes", [[1, 1, 96, "16"]], r"malformed chunk sizes \[1, 1, 96, '16'\]"),
         ("global_shape", [1, 1, 192, -16], r"malformed global_shape \[1, 1, 192, -16\]"),
         ("canonical_shape", [1, 130, 16], r"malformed canonical_shape \[1, 130, 16\]"),
+        # A chunk's file indexes the file table: -1 would quietly read the last file, 99 none.
+        ("file", [0, -1], r"malformed file column \[0, -1\]"),
+        ("file", [0, 99], "chunk file 99 is not one of the index's 4 files"),
+        # A transform's dim must be one of the tensor's, and the transform must give the recorded canonical shape.
+        (
+            "transform",
+            {"kind": "pad", "dim": 7, "logical": 130, "padded": 192},
+            r"transform .* names dim 7 of a rank-4",
+        ),
+        ("transform", {"kind": "pad", "dim": -2, "logical": 130, "padded": 192}, r"transform .* names dim -2 of a"),
+        ("transform", {"kind": "pad", "dim": 3, "logical": 8, "padded": 192}, "pad: global extent 16 on dim 3 is not"),
+        ("transform", {"kind": "identity"}, r"its transform gives canonical shape \[1, 1, 192, 16\], not the recorded"),
     ],
 )
 def test_malformed_shapes_and_chunk_boxes_are_refused(field, value, message, expect_error):
     # Boxes are built unchecked, so decoding the index is where a bad shape or box must be caught.
     encoded = json.loads(json.dumps(_index().to_json()))
     entry = encoded["state"]["model/Llama/fc/weight"]
-    (entry["chunks"] if field in ("offsets", "sizes") else entry)[field] = value
+    (entry["chunks"] if field in ("offsets", "sizes", "file") else entry)[field] = value
     with expect_error(CheckpointError, "index entry 'model/Llama/fc/weight': " + message):
         Index.from_json(encoded)
 

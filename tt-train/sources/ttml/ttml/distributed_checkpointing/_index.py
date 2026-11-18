@@ -36,7 +36,7 @@ from dataclasses import dataclass, field
 from typing import Any, Iterator, Sequence
 
 from ._boxes import Box
-from ._errors import CheckpointError, IncompleteCheckpointError, VersionError
+from ._errors import CheckpointError, IncompleteCheckpointError, LayoutError, VersionError
 from ._layouts import Transform, transform_from_json
 from ._topology import Label
 
@@ -154,6 +154,12 @@ class Index:
         ]
         labels = [Label.from_json(label) for label in value["labels"]]
         entries = {key: _entry_from_json(key, e, labels) for key, e in value["state"].items()}
+        for key, entry in entries.items():
+            for chunk in entry.chunks:
+                if chunk.file >= len(files):
+                    raise CheckpointError(
+                        f"index entry {key!r}: chunk file {chunk.file} is not one of the index's {len(files)} files"
+                    )
         scalars = {key: _scalar_from_json(v) for key, v in value["scalars"].items()}
         return Index(
             checkpoint_id=str(value["checkpoint_id"]),
@@ -222,6 +228,28 @@ def _shape(key: str, what: str, value: Any, ndim: int | None = None) -> tuple[in
     return tuple(value)
 
 
+def _transform(key: str, value: Any, global_shape: tuple[int, ...], canonical_shape: tuple[int, ...]) -> Transform:
+    """An entry's transform, checked against its shapes: the dim it names within the tensor's rank (a negative or
+    too large dim would index the wrong dim or none), and the canonical shape it gives from the global shape the one
+    recorded."""
+    transform = transform_from_json(value)
+    dim = getattr(transform, "dim", None)
+    if dim is not None and not 0 <= dim < len(global_shape):
+        raise CheckpointError(
+            f"index entry {key!r}: transform {transform.to_json()} names dim {dim} of a rank-{len(global_shape)} tensor"
+        )
+    try:
+        canonical = transform.canonical_shape(global_shape)
+    except LayoutError as err:
+        raise LayoutError(f"index entry {key!r}: {err}") from None
+    if tuple(canonical) != tuple(canonical_shape):
+        raise CheckpointError(
+            f"index entry {key!r}: its transform gives canonical shape {list(canonical)}, not the recorded "
+            f"{list(canonical_shape)}"
+        )
+    return transform
+
+
 def _entry_from_json(key: str, value: dict, labels: Sequence[Label]) -> Entry:
     # Boxes are built unchecked (``Box``), so every shape and box an index holds is checked here.
     global_shape = _shape(key, "global_shape", value["global_shape"])
@@ -231,7 +259,7 @@ def _entry_from_json(key: str, value: dict, labels: Sequence[Label]) -> Entry:
     offsets = table["offsets"]
     # A broadcast sizes column holds one row: checked once, then repeated.
     sizes = _expand([_shape(key, "chunk sizes", s, ndim) for s in table["sizes"]], n)
-    files = table["file"]
+    files = _shape(key, "file column", table["file"])  # in range of the index's files: checked by Index.from_json
     data_offsets = table["data_offset"]
     nbytes = _expand(table["nbytes"], n)
     crcs = table["crc32"]
@@ -244,7 +272,7 @@ def _entry_from_json(key: str, value: dict, labels: Sequence[Label]) -> Entry:
     chunks = [
         ChunkRecord(
             box=Box(_shape(key, "chunk offsets", offsets[i], ndim), sizes[i]),
-            file=int(files[i]),
+            file=files[i],
             data_offset=int(data_offsets[i]),
             nbytes=int(nbytes[i]),
             crc32=crc_values[i],
@@ -263,14 +291,16 @@ def _entry_from_json(key: str, value: dict, labels: Sequence[Label]) -> Entry:
         raise CheckpointError(
             f"index entry {key!r}: label {label_id!r} is not a position in the index's table of {len(labels)} labels"
         )
+    canonical_shape = _shape(key, "canonical_shape", value["canonical_shape"], ndim)
+    transform = _transform(key, value["transform"], global_shape, canonical_shape)
     return Entry(
         key=key,
         role=str(value["role"]),
         dtype=str(value["dtype"]),
         layout=str(value["layout"]),
         global_shape=global_shape,
-        canonical_shape=_shape(key, "canonical_shape", value["canonical_shape"], ndim),
-        transform=transform_from_json(value["transform"]),
+        canonical_shape=canonical_shape,
+        transform=transform,
         label=labels[label_id],
         live_keys=tuple(value["live_keys"]),
         chunks=chunks,
