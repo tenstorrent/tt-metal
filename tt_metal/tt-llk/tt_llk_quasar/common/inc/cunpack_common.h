@@ -147,7 +147,7 @@ __attribute__((noinline, optimize("no-jump-tables"))) bool is_quasar_unpack_reco
                 case DataFormat::Int8:
                     return true;
                 case DataFormat::Int8_2x:
-                    return HAS_INT8_2X_SRC_FORMAT && !unpack_to_dest;
+                    return trisc::HAS_INT8_2X_SRC_FORMAT && !unpack_to_dest;
                 default:
                     return false;
             }
