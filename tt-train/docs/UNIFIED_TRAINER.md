@@ -69,7 +69,8 @@ scaling other than `llama3` or the default. Other models plug in as model provid
 [Adding a model](#adding-a-model)).
 
 **LoRA or every weight.** With `model.lora`, a run trains those adapters and nothing else. Without it, every weight
-is trained. `target_modules` uses HF projection
+is trained. The recipes without `model.lora` are `llama_3_2_1b_instruct_sst2.yaml`,
+`llama_3_1_8b_instruct_alpaca.yaml`, and `llama_3_1_8b_instruct_custom.yaml`. `target_modules` uses HF projection
 names, and takes any of them. ttml's Llama fuses some projections into one layer:
 
 | HF projections | ttml Llama layer |
