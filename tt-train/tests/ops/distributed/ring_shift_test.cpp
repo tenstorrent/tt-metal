@@ -86,7 +86,6 @@ static void TestRingShift(
     const auto mapper = ttnn::distributed::shard_tensor_to_mesh_mapper(*device, shard_dim, cluster_axis);
     const auto tt_tensor =
         core::from_xtensor<float, ttnn::DataType::BFLOAT16>(xtensor, device, ttnn::Layout::TILE, mapper.get());
-    // Inputs do not require grad by default; without this ring_shift records no backward node.
     auto tensor = autograd::create_tensor(tt_tensor, /*requires_grad=*/test_backward_grad);
 
     // Get original sharded tensors for comparison

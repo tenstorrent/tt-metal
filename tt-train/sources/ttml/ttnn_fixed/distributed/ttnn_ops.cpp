@@ -213,6 +213,11 @@ ttnn::Tensor ring_shift(
     const uint32_t cluster_axis_value = cluster_axis.has_value() ? cluster_axis.value() : 0;
     const uint32_t ring_size = mesh_shape[cluster_axis_value];
     TT_FATAL(ring_size % 2 == 0, "ring_shift requires an even number of devices in the ring, got {}", ring_size);
+    // ring_shift requires tensors of the same page size (see #64664).
+    TT_FATAL(
+        tensor.layout() == ttnn::Layout::TILE &&
+            (tensor.dtype() == ttnn::DataType::BFLOAT16 || tensor.dtype() == ttnn::DataType::FLOAT32),
+        "ring_shift requires TILE bf16/fp32 tensors");
 
     if (ring_size <= 1U) {
         return tensor;
@@ -258,13 +263,8 @@ ttnn::Tensor ring_shift(
     const core::distributed::InterHostParameters inter_host_params{distributed_ctx, distributed_ctx->rank()};
     using core::distributed::IntraMeshTransport;
 
-    // Direct sockets: a send writes straight into its peer's output tensor. It completes once that peer's recv has
-    // answered its handshake, and the recv completes on the send's final token.
-    // No host synchronization: the ops wait only on each other, through the socket's state on device. This is
-    // deadlock-free because a phase issues a send and its recv back to back, on disjoint sets of devices, and the
-    // host enqueues without waiting for them. So the k-th socket op on a device is always the peer of the k-th on
-    // one of its ring neighbours, and both ends of every pair are reached. Re-check this if the sends and recvs
-    // below are reordered, or if a phase stops covering every device.
+    // Direct sockets: a send writes straight into its peer's output tensor.
+    // No host sync needed: the two-phase exchange below is deadlock-free.
     // Phase 1: Even positions send, odd positions receive
     const core::distributed::IntraMeshParameters even_to_odd_params{
         even_to_odd_connections, IntraMeshTransport::Direct};
