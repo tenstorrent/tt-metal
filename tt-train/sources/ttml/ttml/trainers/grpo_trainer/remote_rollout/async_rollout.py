@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import atexit
 import itertools
+import logging
 import os
 from typing import Optional
 
@@ -15,6 +16,8 @@ from ..rollout_batch_source import InProcessRolloutBatchSource, ScoredRolloutBat
 from .rollout_queue import RolloutQueue
 from .threaded_weight_bridge import ThreadedWeightBridge
 from .weight_bridge import TTML_RANK, TTT_RANK, _require_distributed_context
+
+_PUSH_TIMEOUT_S = 0.5
 
 
 class AsyncRolloutClient:
@@ -50,8 +53,8 @@ class AsyncRolloutServer:
 
     Unlike MPIRolloutServer, which generates only the prompts the trainer sends and installs weights only when
     asked, this server cycles ``rollout_batch_source`` itself, wrapping around at the end. It pushes each
-    ScoredRolloutBatch to the RolloutQueue; a full queue blocks the push. Weights arrive in the background on the
-    ThreadedWeightBridge while a batch generates. The newest received weights are installed into
+    ScoredRolloutBatch to the RolloutQueue; it drops a batch that waits 0.5 s on a full queue. Weights arrive in the
+    background on the ThreadedWeightBridge while a batch generates. The newest received weights are installed into
     ``rollout_batch_source.sampler`` before each batch, so every batch is generated with one weight version, which
     it carries. The server waits only for the first weights, and stops once the trainer closes the bridge. The
     caller owns ``rollout_batch_source.sampler`` and closes it.
@@ -68,6 +71,7 @@ class AsyncRolloutServer:
         self._rollout_batch_source = rollout_batch_source
         self._bridge.connect()
         self._queue.connect()
+        self._warned_full_queue = False
         # The peer waits on this rank until serve_forever returns; a normal exit before that hangs both ranks.
         atexit.register(os._exit, 1)
 
@@ -76,7 +80,14 @@ class AsyncRolloutServer:
         try:
             with exit_on_error():
                 while self._install_newest_weights():
-                    self._queue.push(next(scored_batches))
+                    pushed = self._queue.push(next(scored_batches), timeout=_PUSH_TIMEOUT_S)
+                    if not pushed and not self._warned_full_queue:
+                        self._warned_full_queue = True
+                        logging.warning(
+                            "AsyncRolloutServer: the rollout queue was full for %.1f s. The server drops the batch, "
+                            "installs the newest weights and generates a new batch. This warning shows one time.",
+                            _PUSH_TIMEOUT_S,
+                        )
         finally:
             atexit.unregister(os._exit)
             self._queue.close()
