@@ -23,10 +23,10 @@
 #include "impl/metal2_host_api/sram_arena_support.hpp"
 #include "tt-metalium/sub_device_types.hpp"
 #include "tt-metalium/tensor/spec/tensor_spec.hpp"                               // Metal 2.0 TensorParameter registry
-#include "tt-metalium/experimental/metal2_host_api/tensor_spec_relaxations.hpp"  // Metal 2.0 TensorParameter relaxations
+#include "tt-metalium/workload/specification/tensor_spec_relaxations.hpp"  // Metal 2.0 TensorParameter relaxations
 #include "tt-metalium/experimental/sram_arena/sram_arena_properties.hpp"
 #include "tt-metalium/experimental/metal2_host_api/sram_arena_parameter.hpp"
-#include "tt-metalium/experimental/metal2_host_api/tensor_parameter.hpp"
+#include "tt-metalium/workload/specification/tensor_parameter.hpp"
 #include "tt-metalium/experimental/prefetcher_pipe.hpp"                          // PrefetcherPipeIdentity
 #include "tt_metal/impl/dataflow_buffer/dataflow_buffer_impl.hpp"
 #include <impl/context/context_types.hpp>
@@ -671,7 +671,7 @@ public:
     void register_dfb_spec_name(const std::string& name, uint32_t dfb_id);
     void register_semaphore_spec_name(const std::string& name, uint32_t sem_id);
     void register_tensor_parameter(
-        const std::string& name, const TensorSpec& spec, const experimental::TensorSpecRelaxations& relaxations);
+        const std::string& name, const TensorSpec& spec, const TensorSpecRelaxations& relaxations);
 
     // Describes the required properties and device of an SRAMArena argument.
     struct RegisteredSRAMArenaParameter {
@@ -699,7 +699,7 @@ public:
     const TensorSpec* get_tensor_parameter_layout(const std::string& name) const;
     // Returns the relaxations the parameter was registered with (default-constructed / strict if the
     // name is unknown; the caller validates known-ness separately).
-    experimental::TensorSpecRelaxations get_tensor_parameter_relaxations(const std::string& name) const;
+    TensorSpecRelaxations get_tensor_parameter_relaxations(const std::string& name) const;
     std::vector<std::string> get_registered_tensor_parameter_names() const;
     // Footprint of the tensor most recently bound to a registered parameter. The setter ignores unregistered names;
     // the getter returns nullptr if no tensor has been bound.
@@ -709,7 +709,7 @@ public:
     // Identifies the tensor storage or SRAM arena allocation used by a DFB.
     struct DFBStorageBinding {
         uint32_t dfb_id;
-        std::variant<experimental::TensorParamName, SRAMArenaSource> source;
+        std::variant<TensorParamName, SRAMArenaSource> source;
     };
 
     // Register the tensor storage or SRAM arena allocation used by a DFB.
@@ -847,7 +847,7 @@ private:
         // the per-parameter lookup for completeness checks.
         struct RegisteredTensorParameter {
             TensorSpec spec;
-            experimental::TensorSpecRelaxations relaxations;
+            TensorSpecRelaxations relaxations;
             std::optional<BoundTensorFootprint> bound;
         };
         std::unordered_map<std::string, RegisteredTensorParameter> tensor_parameter_layouts;

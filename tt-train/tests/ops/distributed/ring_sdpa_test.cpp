@@ -57,6 +57,29 @@ public:
     }
 };
 
+// CP2 ring attention on a 1x2 mesh, wherever one fits. In CI that is the tt-train distributed unit-test leg
+// (bh_quietbox_2 with the 1x2 mesh graph descriptor), the only CI coverage of the real ring loop: the Galaxy suite
+// above needs 32 chips.
+class Mesh1x2RingSDPATest : public ttml::test_utils::Mesh1x2SuiteFixture {
+protected:
+    static void SetUpTestSuite() {
+        Mesh1x2SuiteFixture::SetUpTestSuite();
+        if (ttml::test_utils::system_supports_mesh(mesh_shape())) {
+            // Another suite in this process may have created the distributed context already.
+            try {
+                (void)ttml::autograd::ctx().get_distributed_context();
+            } catch (const std::runtime_error&) {
+                ttml::autograd::ctx().initialize_distributed_context(0, nullptr);
+            }
+            ttml::autograd::ctx().set_seed(42);
+            ttml::autograd::ctx().initialize_socket_manager(ttnn::distributed::SocketType::FABRIC);
+            // A 1x2 mesh is a line, so CP takes its only non-trivial axis: cp_axis = 1, ring size 2.
+            ttml::autograd::ctx().initialize_parallelism_context(
+                {.enable_ddp = false, .enable_tp = false, .enable_cp = true});
+        }
+    }
+};
+
 // Reference SDPA forward and backward implementation in xtensor for comparison
 struct SDPARefResult {
     xt::xarray<float> output;
@@ -528,4 +551,34 @@ TEST_F(GalaxyRingSDPATest, ReuseMatchesReshiftBitExact) {
     EXPECT_TRUE(reused[0] == reshifted[0]) << "dQ differs";
     EXPECT_TRUE(reused[1] == reshifted[1]) << "dK differs";
     EXPECT_TRUE(reused[2] == reshifted[2]) << "dV differs";
+}
+
+// CP2: step 0 is the diagonal block on both devices; at step 1 device 0 skips (its K/V come from later in the
+// sequence) while device 1 attends to device 0's chunk without a mask.
+TEST_F(Mesh1x2RingSDPATest, WithCausalMask) {
+    TestRingAttention(
+        /*batch=*/1,
+        /*num_heads=*/4,
+        /*seq_len=*/128,
+        /*head_dim=*/64,
+        /*test_backward=*/false);
+}
+
+TEST_F(Mesh1x2RingSDPATest, WithCausalMaskBackward) {
+    TestRingAttention(
+        /*batch=*/1,
+        /*num_heads=*/4,
+        /*seq_len=*/128,
+        /*head_dim=*/64,
+        /*test_backward=*/true);
+}
+
+// 256 rows per device, so each step's SDPA spans several tile rows, heads and batch entries.
+TEST_F(Mesh1x2RingSDPATest, LargerBatchSequenceBackward) {
+    TestRingAttention(
+        /*batch=*/2,
+        /*num_heads=*/8,
+        /*seq_len=*/512,
+        /*head_dim=*/64,
+        /*test_backward=*/true);
 }

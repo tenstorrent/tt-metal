@@ -55,9 +55,11 @@ class TtLMHead(LightweightModule):
     """
 
     @staticmethod
-    def _weight_shard_dims(is_column_parallel: bool) -> tuple:
-        # column: shard vocab (last dim) across TP; row: shard emb (second-to-last) across TP.
-        return (None, -1) if is_column_parallel else (None, -2)
+    def _weight_shard_dims(is_column_parallel: bool, tp_axis: int = 1) -> tuple:
+        # column: shard vocab (last dim) across TP; row: shard emb (second-to-last) across TP. Replicated
+        # on the other mesh axis (SP), whichever one TP is.
+        dim = -1 if is_column_parallel else -2
+        return (None, dim) if tp_axis == 1 else (dim, None)
 
     @staticmethod
     def check_cache_complete(cache_path: Path) -> bool:
@@ -82,6 +84,7 @@ class TtLMHead(LightweightModule):
         cache_path: Path | None,
         device: ttnn.MeshDevice | None = None,
         is_column_parallel: bool = False,
+        tp_axis: int = 1,
     ) -> ttnn.Tensor | None:
         """
         Shared logic for converting LM head weight to ttnn with caching.
@@ -96,6 +99,7 @@ class TtLMHead(LightweightModule):
             cache_path: Cache directory path
             device: None for cache-only, mesh_device for cache+load
             is_column_parallel: True - column-parallel sharding (vocab dim), False - row-parallel (emb dim).
+            tp_axis: Mesh axis the weight is TP-sharded on.
 
         Returns:
             ttnn.Tensor if device is not None, else None
@@ -114,7 +118,7 @@ class TtLMHead(LightweightModule):
         mesh_mapper = ttnn.ShardTensor2dMesh(
             mesh_device,
             mesh_shape=mesh_device.shape,
-            dims=TtLMHead._weight_shard_dims(is_column_parallel),
+            dims=TtLMHead._weight_shard_dims(is_column_parallel, tp_axis),
         )
 
         cache_file_name = str(cache_path / "lm_head_weight") if cache_path else None
@@ -147,6 +151,7 @@ class TtLMHead(LightweightModule):
         cache_path: Path,
         dtype: ttnn.DataType = ttnn.bfloat16,
         is_column_parallel: bool = False,
+        tp_axis: int = 1,
     ):
         """Build TTNN cache for LM head weight without device copy."""
         TtLMHead._convert_and_cache_weight(
@@ -158,6 +163,7 @@ class TtLMHead(LightweightModule):
             cache_path,
             device=None,
             is_column_parallel=is_column_parallel,
+            tp_axis=tp_axis,
         )
 
     def __init__(
@@ -235,12 +241,13 @@ class TtLMHead(LightweightModule):
                 self.weight_cache_path,
                 device=self.mesh_device,
                 is_column_parallel=self.is_column_parallel,
+                tp_axis=self.tp_axis,
             )
         else:
             logger.debug("Creating random sharded weight")
             self.weight = self._create_random_sharded_weight(
                 shape=(emb_dim, vocab_size),
-                dims=self._weight_shard_dims(self.is_column_parallel),
+                dims=self._weight_shard_dims(self.is_column_parallel, self.tp_axis),
                 name="lm_head_weight",
                 dtype=self.weights_dtype,
             )
@@ -319,6 +326,7 @@ class TtLMHead(LightweightModule):
             self.weight_cache_path,
             device=self.mesh_device,
             is_column_parallel=self.is_column_parallel,
+            tp_axis=self.tp_axis,
         )
         logger.debug(f"Created sharded LM head weight: {tt_weight.shape}")
         return tt_weight
@@ -429,16 +437,19 @@ class TtLMHead(LightweightModule):
         """
         ttnn.synchronize_device(self.mesh_device)
         shards = ttnn.get_device_tensors(tt_logit)
-        # Mesh row-major flat index: sp_i * tp + tp_j
-        base_idx = device_id * self.tp_factor
+        # Mesh row-major flat index of SP rank device_id, TP rank tp_j.
+        cols = self.mesh_device.shape[1]
+
+        def flat(tp_j: int) -> int:
+            return device_id * cols + tp_j if self.tp_axis == 1 else tp_j * cols + device_id
 
         if not self.is_column_parallel:
             # Row-parallel: all TP slices on this SP row are identical (TP-replicated by all-reduce).
             # Take from the first device in the row.
-            return ttnn.to_torch(shards[base_idx + 0]).to(torch.bfloat16)
+            return ttnn.to_torch(shards[flat(0)]).to(torch.bfloat16)
 
         # column: 4 TP slices, each holds vocab/tp; concat on vocab dim to assemble the full vocab on host.
-        host_pieces = [ttnn.to_torch(shards[base_idx + j]).to(torch.bfloat16) for j in range(self.tp_factor)]
+        host_pieces = [ttnn.to_torch(shards[flat(j)]).to(torch.bfloat16) for j in range(self.tp_factor)]
         return torch.cat(host_pieces, dim=-1)
 
     def select_first_token(self, logit_host: torch.Tensor, token_offset: int) -> torch.Tensor:

@@ -12,6 +12,7 @@ import torch
 import ttnn
 from models.common.utility_functions import run_for_blackhole
 from models.demos.deepseek_v3_d_p.reference.kda import KDAConfig, KDAReferenceState, kda_forward_reference
+from models.demos.deepseek_v3_d_p.tests.kda.kda_test_utils import assert_bit_identical, make_actual_start
 from models.demos.deepseek_v3_d_p.tests.kda.utils import (
     LayerNrmseThresholds,
     assert_matches_reference,
@@ -35,17 +36,25 @@ from models.demos.deepseek_v3_d_p.tt.kda.state_adapter import (
 )
 from models.demos.deepseek_v3_d_p.tt.kda.state_contract import KDA_CONVOLUTION_PAGE_CHANNELS
 from models.demos.deepseek_v3_d_p.tt.kimi_k3.attention import TtK3KdaAttention
-from tests.ttnn.unit_tests.operations.experimental.kda.kda_test_utils import assert_bit_identical, make_actual_start
 
 pytestmark = run_for_blackhole()
 
 
 @pytest.mark.parametrize(
-    "mesh_device,sp_axis,tp_axis,device_params",
+    "mesh_device,device_params,sp_axis,tp_axis",
     [
-        ((1, 8), 0, 1, kda_device_params((1, 8))),
-        ((2, 4), 0, 1, kda_device_params((2, 4))),
-        ((2, 4), 1, 0, kda_device_params((2, 4))),
+        pytest.param((1, 8), kda_device_params((1, 8)), 0, 1, id="1x8-sp0"),
+        pytest.param((2, 4), kda_device_params((2, 4)), 0, 1, id="2x4-sp0"),
+        pytest.param((2, 4), kda_device_params((2, 4)), 1, 0, id="2x4-sp1"),
+        # One 4x4 prefill stage (a Galaxy tray half): SP=4 on the axis-1 ring, TP=4 on the axis-0 line.
+        pytest.param(
+            (4, 4),
+            kda_device_params((4, 4)),
+            1,
+            0,
+            marks=pytest.mark.requires_mesh_topology(mesh_shape=(4, 4), topology="mesh-4x4"),
+            id="4x4-sp1",
+        ),
     ],
     indirect=["mesh_device", "device_params"],
 )

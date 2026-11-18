@@ -47,6 +47,14 @@ enum class PerfRunType
     SFPU_ISOLATE
 };
 
+// The PACK_ISOLATE and L1_CONGESTION pack loops release every dest section as tile_regs_release does in production
+// (Wormhole only for now: without the drain its four packers can lock into their slow pattern for the whole loop)
+#if defined(ARCH_WORMHOLE)
+constexpr bool PERF_PACK_SECTION_RELEASE = true;
+#else
+constexpr bool PERF_PACK_SECTION_RELEASE = false;
+#endif
+
 // The run types whose source mock goes through the MOP expander: on Wormhole, MATH_ISOLATE's unpack mock and
 // UNPACK_ISOLATE's math mock. Every other caller (other run types, Blackhole, Quasar) keeps the RISC-V loop mocks below.
 template <PerfRunType RUN_TYPE>
