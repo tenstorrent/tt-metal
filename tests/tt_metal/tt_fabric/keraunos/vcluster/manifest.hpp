@@ -121,10 +121,10 @@ struct PackageFacts {
 
 // Reads a manifest from YAML text. Throws ManifestLoadError, listing every load error, when the text does not parse
 // as YAML, `version` is missing or not 1, a required key is missing, a key is unknown (`port` on a worker
-// included), a value has the wrong type or is negative, a `role` or `backend` is not a known name, a router has no
-// `port`, or `devices` is empty. Required keys: version, devices, links; a device's name, fabric_chip, slots,
-// regions; every field of a slot (port for a router only), a region, a link and a link end. `links`, `slots` and
-// `regions` may be empty sequences.
+// included), a value has the wrong type or is negative, an integer is not decimal without a leading 0 (other than "0")
+// or hexadecimal after "0x", a `role` or `backend` is not a known name, a router has no `port`, or `devices` is empty.
+// Required keys: version, devices, links; a device's name, fabric_chip, slots, regions; every field of a slot (port for
+// a router only), a region, a link and a link end. `links`, `slots` and `regions` may be empty sequences.
 Manifest parse_manifest(std::string_view yaml_text);
 
 // parse_manifest() on the file at `path`, then a relative `capture` resolved against the file's directory. Throws
