@@ -188,6 +188,16 @@ GRID_W_SLACK = 0.25
 SPLIT_COST_MODEL = True
 FPU_CYCLES_PER_TILE_K = 17.5  # per fidelity phase (LoFi 1, HiFi2 2, HiFi3 3, HiFi4 4); measured 16.6-18.0 LoFi
 UNPACK_CYCLES_PER_TILE = 12  # one operand tile unpack per K step: a 1 x w subblock costs (1 + w) / w of it
+# Operand-aware unpack cost (Refinement 16, SUBBLOCK_UNPACK_AWARE). Per K step an sb_h x sb_w subblock unpacks sb_h A
+# tiles (SrcB, each reused across the sb_w columns) and sb_w B tiles (SrcA, reused across the sb_h rows) on the two
+# unpackers, so an output tile costs max(FPU, unpack(A) / sb_w, unpack(B) / sb_h), unpack(t) = bytes /
+# UNPACK_BYTES_PER_CYCLE + UNPACK_TILE_CYCLES. Calibrated on Qwen3.8 prefill (bf16 A, bfp4 B, LoFi), compute alone:
+# 2 x 1 subblocks (q512 qkvg) 24 cycles per tile-K, 3 x 1 (q1024 in_proj) 23.6, against 17.5 for 1 x 4 -- a bf16 A
+# tile under a one-column subblock outruns the LoFi FPU. True: the R1 family's subblock choice and the split ranking
+# use it; False: the symmetric UNPACK_CYCLES_PER_TILE model and the area-first subblock choice.
+SUBBLOCK_UNPACK_AWARE = True
+UNPACK_BYTES_PER_CYCLE = 100
+UNPACK_TILE_CYCLES = 3
 DRAM_BYTES_PER_CYCLE = 296  # ~400 GB/s interleaved tile reads / writes at 1.35 GHz
 # One core's operand stream: an R1 core reading its own A + B (proj_out 13x1: 1.77 MB per core in 78 us,
 # ~23 GB/s), an R1a line injector reading its line's K-block then multicasting it (serial; proj_out 11x4:
@@ -907,10 +917,17 @@ def read_traffic(geom: Geometry, grid: GridChoice, blk: "Blocking"):
     return (a_per_core + b_per_core) * grid.grid_b * grid.grid_m * grid.grid_n
 
 
+def _unpack_cycles(tile_bytes):
+    return tile_bytes / UNPACK_BYTES_PER_CYCLE + UNPACK_TILE_CYCLES
+
+
 def tile_k_cycles(geom: Geometry, sb_h: int, sb_w: int):
     """Cycles per output tile per K tile: the FPU's fidelity passes, or the subblock's operand unpacks
     (sb_h + sb_w tiles per sb_h * sb_w products) when they bind."""
-    return max(FPU_CYCLES_PER_TILE_K * geom.fidelity_phases, UNPACK_CYCLES_PER_TILE * (sb_h + sb_w) / (sb_h * sb_w))
+    fpu = FPU_CYCLES_PER_TILE_K * geom.fidelity_phases
+    if SUBBLOCK_UNPACK_AWARE:
+        return max(fpu, _unpack_cycles(geom.a_tile_bytes) / sb_w, _unpack_cycles(geom.b_tile_bytes) / sb_h)
+    return max(fpu, UNPACK_CYCLES_PER_TILE * (sb_h + sb_w) / (sb_h * sb_w))
 
 
 def padded_work(grid: GridChoice, blk: "Blocking"):
@@ -1038,12 +1055,15 @@ def _logical_cores(grid: GridChoice, gx: int):
 # ---------------------------------------------------------------------------
 
 
-def choose_subblock(block_m, block_n, dest_limit):
+def choose_subblock(block_m, block_n, dest_limit, geom=None):
     """Largest sb_h*sb_w <= dest_limit with sb_h | block_m, sb_w | block_n. Ties: SUBBLOCK_MIN_UNPACK
     prefers the smallest operand-unpack count per subblock (sb_h + sb_w per K step), then larger sb_w;
-    otherwise larger sb_w."""
+    otherwise larger sb_w. `geom` (the R1 family, SUBBLOCK_UNPACK_AWARE): the cheapest tile_k_cycles first, then
+    the larger area, then the larger sb_w -- so an 8 x 15 block takes 1 x 3 over 4 x 1 at LoFi."""
 
     def key(h, w):
+        if geom is not None and SUBBLOCK_UNPACK_AWARE:
+            return (-tile_k_cycles(geom, h, w), h * w, w)
         return (h * w, -(h + w) if SUBBLOCK_MIN_UNPACK else 0, w)
 
     best = (1, 1)
@@ -1061,7 +1081,9 @@ def _footprint(geom, bm, bn, bk, partials, out_in_place=False, depth_weight=None
     A is consumed straight from its resident shard (R2 / single-K-shard R3), no cb_act_tiles."""
     depth_act = DEPTH_ACT if depth_act is None else depth_act
     depth_weight = DEPTH_WEIGHT if depth_weight is None else depth_weight
-    sb_h, _ = choose_subblock(bm, bn, geom.dest_limit)
+    # The output row group's height: the R1 family's operand-aware subblock or the sharded regimes' area-first one,
+    # whichever is taller (the footprint is shared, so it must not under-price either).
+    sb_h = max(choose_subblock(bm, bn, geom.dest_limit, geom)[0], choose_subblock(bm, bn, geom.dest_limit)[0])
     partials = partials or geom.epilogue != "none"
     return (
         (depth_act * bm * bk * geom.a_tile_bytes if act_cb else 0)
@@ -1096,7 +1118,7 @@ def _k_split(tk, bk_max):
 
 def _make_blocking(geom, block_b, bm, bn, bk_max, depths=None):
     block_k, nkb, last = _k_split(geom.tensor_k_tiles, min(bk_max, geom.block_k_cap))
-    sb_h, sb_w = choose_subblock(bm, bn, geom.dest_limit)
+    sb_h, sb_w = choose_subblock(bm, bn, geom.dest_limit, geom)
     da, dw = depths or (DEPTH_ACT, DEPTH_WEIGHT)
     return Blocking(block_b, bm, bn, block_k, nkb, last, sb_h, sb_w, geom.epilogue, depth_act=da, depth_weight=dw)
 
@@ -1114,7 +1136,7 @@ def _resident_split(geom: Geometry, grid: GridChoice):
         if bn < cn:
             return replace(_make_blocking(geom, 1, cm, bn, tk), act_resident=True)
     else:
-        sb_h, _ = choose_subblock(cm, cn, geom.dest_limit)
+        sb_h, _ = choose_subblock(cm, cn, geom.dest_limit, geom)
         bm = min(cm, _round_up(_cdiv(cm, RESIDENT_SPLIT_BLOCKS), sb_h))
         if bm < cm:
             return replace(_make_blocking(geom, 1, bm, cn, tk), weight_resident=True)
