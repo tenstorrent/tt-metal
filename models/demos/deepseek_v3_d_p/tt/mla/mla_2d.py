@@ -67,8 +67,11 @@ LSE) is NOT used here; if it lands (#65886 / #65887) the sink must move to the m
 Not here: the DSA indexer on this layout (#65887; TtIndexer tiles at TP 4 but shards over TP only, replicated over
 SP); this module takes the top-k as ``indexer_indices``.
 
-Cache files: ``layer_{i}.mla2d_v2.*``. ``v2`` is this split; the first one (hidden over the 8-chip axis, q_b's K over
-SP and its heads over TP in ``core_head_order``) cached as ``mla2d`` and never loads as this one.
+Cache files: ``layer_{i}.mla2d_{layout}.*`` with the layout in the name (``cache_name``: mesh, SP / TP sizes and axes,
+e.g. ``mla2d_8x4_sp8ax0_tp4ax1`` on SC1) and a stamp ``layer_{i}.mla2d_{layout}.layout.stamp`` next to them holding the
+layout descriptor (``utils/sharded_cache.py``: module, ``CACHE_FORMAT``, mesh, axes, dtypes). Shards without a stamp,
+or with a stamp for another layout / format, refuse to load. ``CACHE_FORMAT`` is bumped whenever the shards change
+without an axis moving (format 2: q_b's K over TP; the first split cached as ``mla2d`` / ``mla2d_v2`` and never loads).
 """
 
 from __future__ import annotations
@@ -82,6 +85,7 @@ from loguru import logger
 import ttnn
 from models.demos.deepseek_v3_d_p.tt.mla.mla import ttMLA
 from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import MlaKvCache
+from models.demos.deepseek_v3_d_p.utils.sharded_cache import LayoutCacheGuard, layout_descriptor, layout_tag
 from models.demos.deepseek_v3_d_p.utils.weight_cache_dump import weight_cache_dump_mode
 
 # The config switch: models that set it (Hy4-preview on the tp32 layout) build ttMLA2DTP; GLM-5.x, DeepSeek and
@@ -99,7 +103,8 @@ def mla_class(config):
 
 
 class ttMLA2DTP(ttMLA):
-    CACHE_PREFIX = "mla2d_v2"  # never ttMLA's TP-only shards, nor the first 2D split's ("mla2d"; module docstring)
+    CACHE_PREFIX = "mla2d"  # + the layout tag (cache_name); never ttMLA's TP-only shards
+    CACHE_FORMAT = 2  # bump when the shards change without an axis moving (module docstring)
 
     # ------------------------------------------------------------------------------------------- host math
     @staticmethod
@@ -199,6 +204,25 @@ class ttMLA2DTP(ttMLA):
         return t
 
     # ------------------------------------------------------------------------------------------- caches
+    VECTOR_WEIGHTS = ("q_a_layernorm", "kv_a_layernorm", "attn_sink")
+
+    @staticmethod
+    def cache_name(mesh_shape, sp_axis: int, tp_axis: int) -> str:
+        """``mla2d_{rows}x{cols}_sp{n}ax{a}_tp{n}ax{a}``: the shards' file prefix after ``layer_{i}.``."""
+        return f"{ttMLA2DTP.CACHE_PREFIX}_{layout_tag(mesh_shape, {'sp': sp_axis, 'tp': tp_axis})}"
+
+    @staticmethod
+    def cache_guard(cache_path: Path | None, layer_idx: int, mesh_shape, sp_axis: int, tp_axis: int):
+        """The layout stamp of layer ``layer_idx``'s 2D shards (``utils/sharded_cache.py``)."""
+        name = f"layer_{layer_idx}.{ttMLA2DTP.cache_name(mesh_shape, sp_axis, tp_axis)}"
+        dtypes = {
+            w: "BFLOAT16" if w in ttMLA2DTP.VECTOR_WEIGHTS else "BFLOAT8_B" for w in ttMLA.weight_names(True, True)
+        }
+        descriptor = layout_descriptor(
+            "ttMLA2DTP", ttMLA2DTP.CACHE_FORMAT, mesh_shape, {"sp": sp_axis, "tp": tp_axis}, dtypes
+        )
+        return LayoutCacheGuard(cache_path, name, f"{name}.*.tensorbin", descriptor)
+
     @staticmethod
     def check_cache_complete(
         cache_path: Path,
@@ -206,16 +230,31 @@ class ttMLA2DTP(ttMLA):
         has_indexer: bool = False,
         has_output_gate: bool = False,
         has_sink: bool = False,
+        *,
+        mesh_shape=None,
+        sp_axis: int | None = None,
+        tp_axis: int | None = None,
     ) -> bool:
-        """``cache_name_prefix`` is ttMLA's ``.../layer_{i}.mla``; the 2D shards live under ``layer_{i}.mla2d``."""
+        """``cache_name_prefix`` is ttMLA's ``.../layer_{i}.mla``; the 2D shards live under
+        ``layer_{i}.{cache_name(...)}``, so the mesh layout is required. Complete means every shard plus a matching
+        layout stamp."""
         from models.demos.deepseek_v3_d_p.tt.mla.indexer import TtIndexer
         from models.demos.deepseek_v3_d_p.utils.fast_cache_checker import pattern_exists
 
+        if mesh_shape is None or sp_axis is None or tp_axis is None:
+            raise ValueError(
+                "ttMLA2DTP.check_cache_complete needs mesh_shape, sp_axis and tp_axis: they name the shards"
+            )
         prefix = str(cache_name_prefix)
-        prefix_2d = prefix[: -len(".mla")] + "." + ttMLA2DTP.CACHE_PREFIX if prefix.endswith(".mla") else prefix
+        if not prefix.endswith(".mla"):
+            raise ValueError(f"expected ttMLA's '.../layer_{{i}}.mla' prefix, got {prefix!r}")
+        layer_idx = int(Path(prefix).name[len("layer_") : -len(".mla")])
+        prefix_2d = prefix[: -len(".mla")] + "." + ttMLA2DTP.cache_name(mesh_shape, sp_axis, tp_axis)
         for name in ttMLA.weight_names(has_output_gate, has_sink):
             if not pattern_exists(f"{prefix_2d}.{name}*.tensorbin", "MLA"):
                 return False
+        if not ttMLA2DTP.cache_guard(cache_path, layer_idx, mesh_shape, sp_axis, tp_axis).stamped():
+            return False
         return not has_indexer or TtIndexer.check_cache_complete(cache_path, cache_name_prefix)
 
     @staticmethod
@@ -238,6 +277,10 @@ class ttMLA2DTP(ttMLA):
         host = ttMLA2DTP.host_weights_2d(state_dict, config, sp, tp)
         mem = ttnn.DRAM_MEMORY_CONFIG if device else None
         kv_names = ("kv_a_proj_with_mqa", "kv_a_layernorm")
+        mesh_shape = tuple(mesh_device.shape)
+        guard = ttMLA2DTP.cache_guard(cache_path, layer_idx, mesh_shape, sp_axis, tp_axis)
+        guard.check()  # shards from another layout (or unstamped) refuse to load
+        prefix = f"layer_{layer_idx}.{ttMLA2DTP.cache_name(mesh_shape, sp_axis, tp_axis)}"
         result = {}
         for name, (t, sp_dim, tp_dim) in host.items():
             if kv_only and name not in kv_names:
@@ -248,7 +291,7 @@ class ttMLA2DTP(ttMLA):
                 dims = [None, None]
                 dims[sp_axis], dims[tp_axis] = sp_dim, tp_dim
                 mapper = ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=tuple(mesh_device.shape), dims=dims)
-            vector = name in ("q_a_layernorm", "kv_a_layernorm", "attn_sink")
+            vector = name in ttMLA2DTP.VECTOR_WEIGHTS
             result[name] = ttnn.as_tensor(
                 t,
                 device=device,
@@ -256,11 +299,10 @@ class ttMLA2DTP(ttMLA):
                 layout=ttnn.ROW_MAJOR_LAYOUT if vector else ttnn.TILE_LAYOUT,
                 memory_config=mem,
                 mesh_mapper=mapper,
-                cache_file_name=(
-                    str(cache_path / f"layer_{layer_idx}.{ttMLA2DTP.CACHE_PREFIX}.{name}") if cache_path else None
-                ),
+                cache_file_name=str(cache_path / f"{prefix}.{name}") if cache_path else None,
                 cache_dump_mode=weight_cache_dump_mode(),
             )
+        guard.write()
         if device is None:
             return None
         return result

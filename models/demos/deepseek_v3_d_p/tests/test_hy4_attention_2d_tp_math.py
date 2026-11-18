@@ -275,3 +275,39 @@ def test_config_switch_keeps_ttmla_unless_opted_in():
 def test_dims_that_do_not_tile_are_refused(expect_error):
     with expect_error(ValueError, "does not tile"):
         ttMLA2DTP.check_dims(_config(HY4, HY4_HIDDEN), 3, 8)  # 64 heads do not split over 24 chips
+
+
+def test_cache_names_come_from_the_layout():
+    """SC1 now (SP 8 on axis 0, TP 4 on axis 1) and the first split (SP 4 on axis 1, TP 8 on axis 0) never share a
+    cache name, nor with any other mesh / axis assignment."""
+    sc1 = ttMLA2DTP.cache_name((8, 4), 0, 1)
+    assert sc1 == "mla2d_8x4_sp8ax0_tp4ax1"
+    assert ttMLA2DTP.cache_name((8, 4), 1, 0) == "mla2d_8x4_sp4ax1_tp8ax0"
+    names = {ttMLA2DTP.cache_name(m, a, 1 - a) for m in ((8, 4), (4, 8), (4, 4), (2, 4)) for a in (0, 1)}
+    assert len(names) == 8
+
+
+def test_cache_stamp_guards_the_shards(tmp_path, monkeypatch, expect_error):
+    from models.demos.deepseek_v3_d_p.utils.fast_cache_checker import init_checker
+
+    mesh, sp_axis, tp_axis, layer = (8, 4), 0, 1, 3
+    prefix = f"layer_{layer}.{ttMLA2DTP.cache_name(mesh, sp_axis, tp_axis)}"
+    for name in ttMLA.weight_names(True, True):
+        (tmp_path / f"{prefix}.{name}_dtype_BFLOAT8_B_layout_TILE.tensorbin").touch()
+    layout = dict(mesh_shape=mesh, sp_axis=sp_axis, tp_axis=tp_axis)
+    guard = ttMLA2DTP.cache_guard(tmp_path, layer, mesh, sp_axis, tp_axis)
+    init_checker(tmp_path)
+    # Shards but no stamp: incomplete for the cache check, and a load refuses them.
+    assert not ttMLA2DTP.check_cache_complete(tmp_path, f"layer_{layer}.mla", False, True, True, **layout)
+    with expect_error(RuntimeError, "no layout stamp"):
+        guard.check()
+    guard.write()
+    init_checker(tmp_path)
+    assert ttMLA2DTP.check_cache_complete(tmp_path, f"layer_{layer}.mla", False, True, True, **layout)
+    # Same name, shards cut by another format of this module: refused.
+    monkeypatch.setattr(ttMLA2DTP, "CACHE_FORMAT", ttMLA2DTP.CACHE_FORMAT + 1)
+    assert not ttMLA2DTP.check_cache_complete(tmp_path, f"layer_{layer}.mla", False, True, True, **layout)
+    with expect_error(RuntimeError, "records layout"):
+        ttMLA2DTP.cache_guard(tmp_path, layer, mesh, sp_axis, tp_axis).check()
+    with expect_error(ValueError, "needs mesh_shape"):
+        ttMLA2DTP.check_cache_complete(tmp_path, f"layer_{layer}.mla")
