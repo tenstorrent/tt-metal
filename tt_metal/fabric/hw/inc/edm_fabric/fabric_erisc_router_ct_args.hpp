@@ -385,6 +385,22 @@ constexpr std::array<bool, MAX_NUM_SENDER_CHANNELS> is_sender_channel_worker = {
     static_cast<bool>(NAMED_CT_ARG("SENDER_CH_8_IS_WORKER_CHANNEL")),
     static_cast<bool>(NAMED_CT_ARG("SENDER_CH_9_IS_WORKER_CHANNEL")),
 };
+// Whether a sender channel position is the host_rdma channel, which the host writes packets into directly and credits
+// itself from what the router writes back to host memory (SENDER_CH_<i>_IS_HOST_RDMA_CHANNEL;
+// erisc_datamover_builder.cpp). At most one, VC0's last sender channel, where the fabric builds it
+// (TT_METAL_ENABLE_FABRIC_HOST_RDMA).
+constexpr std::array<bool, MAX_NUM_SENDER_CHANNELS> is_sender_channel_host_rdma = {
+    static_cast<bool>(NAMED_CT_ARG("SENDER_CH_0_IS_HOST_RDMA_CHANNEL")),
+    static_cast<bool>(NAMED_CT_ARG("SENDER_CH_1_IS_HOST_RDMA_CHANNEL")),
+    static_cast<bool>(NAMED_CT_ARG("SENDER_CH_2_IS_HOST_RDMA_CHANNEL")),
+    static_cast<bool>(NAMED_CT_ARG("SENDER_CH_3_IS_HOST_RDMA_CHANNEL")),
+    static_cast<bool>(NAMED_CT_ARG("SENDER_CH_4_IS_HOST_RDMA_CHANNEL")),
+    static_cast<bool>(NAMED_CT_ARG("SENDER_CH_5_IS_HOST_RDMA_CHANNEL")),
+    static_cast<bool>(NAMED_CT_ARG("SENDER_CH_6_IS_HOST_RDMA_CHANNEL")),
+    static_cast<bool>(NAMED_CT_ARG("SENDER_CH_7_IS_HOST_RDMA_CHANNEL")),
+    static_cast<bool>(NAMED_CT_ARG("SENDER_CH_8_IS_HOST_RDMA_CHANNEL")),
+    static_cast<bool>(NAMED_CT_ARG("SENDER_CH_9_IS_HOST_RDMA_CHANNEL")),
+};
 constexpr std::array<bool, MAX_NUM_SENDER_CHANNELS> is_sender_channel_serviced = {
     static_cast<bool>(NAMED_CT_ARG("IS_SENDER_CHANNEL_0_SERVICED")),
     static_cast<bool>(NAMED_CT_ARG("IS_SENDER_CHANNEL_1_SERVICED")),

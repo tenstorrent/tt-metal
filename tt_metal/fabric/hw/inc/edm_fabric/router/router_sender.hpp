@@ -18,14 +18,15 @@
 // can keep that state in memory), so helpers recurse over channel masks.
 //
 // Each sender channel (SenderChannel<CH>) belongs to one VC (SenderVc<VC>); a VC has at most one worker channel
-// (WorkerChannel<CH>), and its others are forwarding channels (ForwardingChannel<CH>). Where state lives:
-// SenderChannelStates.
+// (WorkerChannel<CH>), VC0 at most one host_rdma channel (HostRdmaChannel<CH>, which the host writes packets into
+// directly), and its others are forwarding channels (ForwardingChannel<CH>). Where state lives: SenderChannelStates.
 
 #include <algorithm>
 
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_connection_interface.hpp"
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_erisc_datamover_channels.hpp"
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_router_flow_control.hpp"
+#include "tt_metal/fabric/hw/inc/edm_fabric/host_rdma_writer.hpp"
 #include "tt_metal/fabric/hw/inc/edm_fabric/router_data_cache.hpp"
 #include "tt_metal/fabric/hw/inc/tt_fabric_utils.h"
 
@@ -46,6 +47,9 @@ struct SenderChannel {
     // A worker channel takes a worker on this chip (the host's role, SENDER_CH_<i>_IS_WORKER_CHANNEL); the others are
     // forwarding channels, which the routers on this chip facing other directions write into.
     static constexpr bool worker = is_sender_channel_worker[CH];
+    // The host_rdma channel: the host writes packets into it and is credited in host memory (HostRdmaChannel<CH>).
+    static constexpr bool host_rdma = is_sender_channel_host_rdma[CH];
+    static_assert(!(worker && host_rdma), "a channel is a worker channel or the host_rdma channel, not both");
     static constexpr uint32_t num_slots = SENDER_NUM_BUFFERS_ARRAY[CH];
     static constexpr uint32_t first_slot_addr = channel_allocs::Entry<SENDER_TO_ENTRY_IDX[CH]>::base_address;
     static constexpr uint32_t last_slot_addr = first_slot_addr + (num_slots - 1) * channel_buffer_size;
@@ -93,6 +97,15 @@ private:
         return mask;
     }();
     static_assert(popcount(worker_positions) <= 1, "a VC takes at most one worker");
+    // The host's host_rdma position among VC's channels, serviced or not (VC0's last channel, where built).
+    static constexpr uint32_t host_rdma_positions = [] {
+        uint32_t mask = 0;
+        for (size_t ch = 0; ch < NUM_SENDER_CHANNELS; ch++) {
+            mask |= (vc_of_sender_channel(ch) == VC && is_sender_channel_host_rdma[ch]) ? 1u << ch : 0u;
+        }
+        return mask;
+    }();
+    static_assert(popcount(host_rdma_positions) <= (VC == 0 ? 1 : 0), "only VC0 takes the host_rdma channel, once");
 
 public:
     // VC's serviced sender channels, one bit each: its worker channel (where serviced) and its forwarding channels.
@@ -104,7 +117,8 @@ public:
         return mask;
     }();
     static constexpr uint32_t worker_channels = sender_channels & worker_positions;
-    static constexpr uint32_t forwarding_channels = sender_channels & ~worker_channels;
+    static constexpr uint32_t host_rdma_channels = sender_channels & host_rdma_positions;
+    static constexpr uint32_t forwarding_channels = sender_channels & ~worker_channels & ~host_rdma_channels;
     // VC's worker channel, where this router serves one (named only under has_worker_channel).
     static constexpr bool has_worker_channel = worker_channels != 0;
     static constexpr size_t worker_channel = has_worker_channel ? lowest_bit(worker_channels) : 0;
@@ -121,7 +135,8 @@ struct SenderChannels {
         SenderVc<0>::sender_channels | SenderVc<1>::sender_channels | SenderVc<2>::sender_channels;
     static constexpr uint32_t worker_channels =
         SenderVc<0>::worker_channels | SenderVc<1>::worker_channels | SenderVc<2>::worker_channels;
-    static constexpr uint32_t forwarding_channels = serviced & ~worker_channels;
+    static constexpr uint32_t host_rdma_channels = SenderVc<0>::host_rdma_channels;
+    static constexpr uint32_t forwarding_channels = serviced & ~worker_channels & ~host_rdma_channels;
     static constexpr uint32_t read_at_pass_start =
         (SenderVc<0>::reads_free_slots_at_pass_start ? SenderVc<0>::sender_channels : 0u) |
         (SenderVc<1>::reads_free_slots_at_pass_start ? SenderVc<1>::sender_channels : 0u) |
@@ -133,6 +148,7 @@ struct SenderChannels {
     // In Tensix mux mode the mux is the only producer: no router forwards into this one. (Channel trimming may leave
     // the mux's worker channel unserviced too.)
     static_assert(!tensix_mux_mode || forwarding_channels == 0);
+    static_assert(!tensix_mux_mode || host_rdma_channels == 0, "the host_rdma channel is not built with the mux");
     // A channel the host has wait for a static connection from an upstream router
     // (SENDER_CH_<i>_WAIT_STATIC_CONNECTION) is a forwarding channel.
     static_assert(
@@ -282,6 +298,7 @@ struct SenderChannelInterfaces {
         for_each_index<NUM_SENDER_CHANNELS>([&](auto i) {
             constexpr size_t CH = decltype(i)::value;
             constexpr bool worker = is_sender_channel_worker[CH];  // the host's role, serviced or not
+            constexpr bool host_rdma = is_sender_channel_host_rdma[CH];
             auto* info = reinterpret_cast<volatile tt::tt_fabric::EDMChannelWorkerLocationInfo*>(
                 sender_connection_info_addrs[CH]);
             info->edm_read_counter = 0;
@@ -294,8 +311,11 @@ struct SenderChannelInterfaces {
                 /*remote_producer_write_counter (unused)=*/0,
                 reinterpret_cast<volatile tt_l1_ptr uint32_t* const>(connection_semaphores[CH]),
                 CommandBuffers::worker_credits[CH],
-                worker ? 0 : SENDER_NUM_BUFFERS_ARRAY[CH],
+                (worker || host_rdma) ? 0 : SENDER_NUM_BUFFERS_ARRAY[CH],
                 worker ? read_counter_addr(CH) : notify_worker_of_read_counter_update_src_address);
+            if constexpr (host_rdma) {
+                tt::tt_fabric::host_rdma::clear_host_write_target(sender_connection_info_addrs[CH]);
+            }
         });
     }
 
@@ -470,6 +490,32 @@ struct ForwardingChannel {
     }
 };
 
+// The host_rdma channel: the host writes packets into its slots (and takes a slot on its free-slots register per
+// packet) without a connection. It is credited with the absolute count of slots freed so far, kept in the channel's
+// read counter (HostRdmaChannelInfo::edm_read_counter) and, once the host has published a target in the channel's
+// connection info, written from there to the host by HostWriter. Visited like a forwarding channel: only when it holds
+// a packet or has packets in flight. The credit is out of line: it goes once per completion group.
+template <size_t CH>
+struct HostRdmaChannel {
+    static_assert(SenderChannel<CH>::host_rdma);
+    static_assert(SenderChannel<CH>::vc == 0, "the host_rdma channel is on VC0");
+
+    static constexpr uint32_t connection_info_addr = sender_connection_info_addrs[CH];
+    static constexpr uint32_t read_counter_addr = SenderChannelInterfaces::read_counter_addr(CH);
+
+    // `returned` slots in all: into the read counter, then to the host's target (where it published one) on the
+    // atomics command buffer, which keeps no preset.
+    __attribute__((noinline)) static void credit(uint32_t returned) {
+        *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(read_counter_addr) = returned;
+        const auto target =
+            tt::tt_fabric::host_rdma::read_host_write_target<ENABLE_RISC_CPU_DATA_CACHE>(connection_info_addr);
+        if (target.enabled) {
+            tt::tt_fabric::host_rdma::HostWriter::write_word<noc_mode, CommandBuffers::atomics>(
+                SenderChannel<CH>::producer_noc, read_counter_addr, target);
+        }
+    }
+};
+
 // ---------------------------------------------------------------------------------------------------------------------
 // Free-slots registers
 // ---------------------------------------------------------------------------------------------------------------------
@@ -607,6 +653,8 @@ template <size_t CH>
 FORCE_INLINE void credit_slots(const SenderChannelState<CH>& state, uint32_t n, uint32_t returned) {
     if constexpr (SenderChannel<CH>::worker) {
         WorkerChannel<CH>::credit(returned, WorkerChannel<CH>::connected(state));
+    } else if constexpr (SenderChannel<CH>::host_rdma) {
+        HostRdmaChannel<CH>::credit(returned);
     } else {
         ForwardingChannel<CH>::credit(state.upstream_free_slots_addr, n);
     }
@@ -735,6 +783,7 @@ FORCE_INLINE void visit_channel_with_work(
 struct SenderChannelStates {
     Each<SenderChannels::serviced_vcs, SenderVcState> vcs;
     Each<SenderChannels::forwarding_channels, SenderChannelState> forwarding;
+    Each<SenderChannels::host_rdma_channels, SenderChannelState> host_rdma;
 
     // The VC whose send state run() carries as a loop local: the lowest VC this router sends on (channel trimming can
     // leave a router sending on VC2 and not VC0). 0 where it sends on none: then nothing is visited.
@@ -795,6 +844,21 @@ FORCE_INLINE void visit_forwarding_channels(
     }
 }
 
+// The host_rdma channels in MASK (VC0's one, where built) that have a packet or packets in flight.
+template <uint32_t MASK, typename Remote>
+FORCE_INLINE void visit_host_rdma_channels(
+    SenderChannelStates& states, uint32_t holding, uint32_t& channels_in_flight, Remote& remote, bool& send_yielded) {
+    if constexpr (MASK != 0) {
+        constexpr size_t CH = lowest_bit(MASK);
+        const bool has_packet = ((holding >> CH) & 1u) != 0;
+        if (has_packet || ((channels_in_flight >> CH) & 1u) != 0) {
+            visit_channel_with_work<CH>(
+                states.host_rdma.template get<CH>(), channels_in_flight, has_packet, remote, send_yielded);
+        }
+        visit_host_rdma_channels<without_lowest_bit(MASK)>(states, holding, channels_in_flight, remote, send_yielded);
+    }
+}
+
 // VC's channels against its remote receiver progress (`remote`): its worker channel (visited every pass where VC is the
 // loop-local VC, otherwise when it holds a packet or has packets in flight), then its forwarding channels, skipped with
 // one test when none holds a packet or has packets in flight.
@@ -820,6 +884,10 @@ FORCE_INLINE void visit_channels(
             visit_forwarding_channels<SenderVc<VC>::forwarding_channels>(
                 states, holding, channels_in_flight, remote, send_yielded);
         }
+    }
+    if constexpr (SenderVc<VC>::host_rdma_channels != 0) {
+        visit_host_rdma_channels<SenderVc<VC>::host_rdma_channels>(
+            states, holding, channels_in_flight, remote, send_yielded);
     }
 }
 
@@ -864,6 +932,17 @@ FORCE_INLINE uint32_t forwarded(SenderChannelStates& states) {
     }
 }
 
+// Packets sent so far on the host_rdma channels in MASK.
+template <uint32_t MASK>
+FORCE_INLINE uint32_t sent_by_host(SenderChannelStates& states) {
+    if constexpr (MASK != 0) {
+        return states.host_rdma.template get<lowest_bit(MASK)>().progress.sent +
+               sent_by_host<without_lowest_bit(MASK)>(states);
+    } else {
+        return 0;
+    }
+}
+
 // Packets sent so far on VC's worker channel (0 where it has none).
 template <size_t VC, typename LoopCopy>
 FORCE_INLINE uint32_t sent_by_worker(LoopCopy& loop_copy, SenderChannelStates& states) {
@@ -878,7 +957,8 @@ FORCE_INLINE uint32_t sent_by_worker(LoopCopy& loop_copy, SenderChannelStates& s
 // context switch only).
 template <typename LoopCopy>
 FORCE_INLINE uint32_t total_sent(LoopCopy& loop_copy, SenderChannelStates& states) {
-    return forwarded<SenderChannels::forwarding_channels>(states) + sent_by_worker<0>(loop_copy, states) +
+    return forwarded<SenderChannels::forwarding_channels>(states) +
+           sent_by_host<SenderChannels::host_rdma_channels>(states) + sent_by_worker<0>(loop_copy, states) +
            sent_by_worker<1>(loop_copy, states) + sent_by_worker<2>(loop_copy, states);
 }
 
