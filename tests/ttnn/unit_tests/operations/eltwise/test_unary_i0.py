@@ -16,68 +16,32 @@ from tests.ttnn.utils_for_testing import (
     generate_all_bfloat16_bitpatterns,
 )
 
-# Largest float32 |x| whose I0 is finite in float32 (3.402823e38); beyond it, i0
-# returns +inf. The largest such bfloat16 value is 91.5.
+# Largest float32 |x| whose I0 is finite; beyond it, i0 returns +inf. The largest such bfloat16 value is 91.5.
 I0_MAX_INPUT = 91.90076446533203
 I0_MAX_INPUT_BF16 = 91.5
 
-# Worst-case ULP error measured on Blackhole p150a and Wormhole n300 (identical
-# outputs) against I0 in float64: 4 ULP for float32 (a 2,000,001-point sweep of
-# [-91.9008, 91.9008], worst at x = -18.958; every float32 with 88.5 <= |x| <=
-# 91.9008 stays within 3) and 0.64 ULP for bfloat16 (every bfloat16 input, worst at
-# x = 85.5). Budgets below carry 3x headroom over those measurements.
-#
-# Units are the true spacing of the output dtype (what comp_ulp/assert_with_ulp use),
-# not a relative-mantissa proxy -- the two differ by up to 2x within a binade and
-# diverge at power-of-2 boundaries, so a budget calibrated against one is not valid
-# for the other.
+# Worst case measured on Blackhole p150a and Wormhole n300 against I0 in float64: 4 ULP for float32 over
+# [-91.9008, 91.9008], 0.64 ULP for bfloat16 over every bfloat16 input. Budgets carry 3x headroom.
 _MAX_ULP = {
     ttnn.float32: 12,
     ttnn.bfloat16: 2,
 }
 
-# test_unary_category1_bfloat16.py::test_bessel_ops checks ttnn.i0 separately, at
-# assert_with_ulp(..., ulp_threshold=1) over an exhaustive bfloat16 sweep of
-# [-10, 10]. It measures 1.0 and passes.
-#
-# That 1.0 and the 0.64 above are not the same measurement, and comparing them
-# directly is a mistake. comp_ulp only resolves below 1 ULP when the golden is
-# higher precision than the output: test_bessel_ops compares a bfloat16 golden
-# against a bfloat16 output, and two bfloat16 values are always a whole number of
-# bfloat16 ULPs apart. So on that ruler 1.0 means "never more than one bfloat16
-# step off" -- the tightest it can express short of bit-exactness, not a marginal
-# pass. The 0.64 is the distance from the float32 reference, on a ruler fine enough
-# to see fractions. The device output is the same in both cases.
-#
-# Measured together on one build, bfloat16 output throughout:
-#   bfloat16 golden, [-10, 10]    1.00  (worst at x = 0.48046875)
-#   bfloat16 golden, all bfloat16 1.00  (same worst point)
-#   float32  golden, all bfloat16 0.64  (worst at x = 85.5)
-#   float32  golden, [-10, 10]    0.61  (worst at x = 7.71875)
-# At x = 0.48046875, I0 = 1.0585506 lies 0.006 of a bfloat16 step below the
-# midpoint between 1.0546875 and 1.0625: the golden rounds down, and the kernel's
-# value, 4.6e-5 above I0, rounds up. A one-step difference of that kind is what
-# 1.00 on this ruler records; only a correctly rounded kernel avoids it everywhere.
+# test_unary_category1_bfloat16.py::test_bessel_ops reads 1.0 ULP on the same output because its golden is
+# bfloat16, so any difference there is a whole bfloat16 step.
 
 
 def _quantise(x, dtype):
-    """Round a float32 reference input to the dtype the device will see.
+    """Round a float32 input to the dtype the device sees, so the golden is not charged for input rounding.
 
-    Without this the golden is charged for input-quantisation error rather than
-    kernel error. It matters unusually much for i0: dI0/dx = I1(x) ~ I0(x), so a
-    relative input error eps becomes roughly |x| * eps relative output error -- at
-    x = 88.5, one bfloat16 ULP of input (0.4%) is ~35% of output on its own.
+    dI0/dx ~ I0, so at x = 88.5 one bfloat16 ULP of input moves the output by ~35%.
     """
     torch_dtype = torch.bfloat16 if dtype == ttnn.bfloat16 else torch.float32
     return x.to(torch_dtype).to(torch.float32)
 
 
 def _golden(x):
-    """I0 in float64, rounded to float32.
-
-    torch.special.i0 on a float32 tensor overflows where exp() does, at 88.7228;
-    I0 itself stays finite in float32 up to I0_MAX_INPUT.
-    """
+    """I0 in float64, rounded to float32: torch's float32 i0 overflows at 88.72, before I0 does."""
     return torch.special.i0(x.to(torch.float64)).to(torch.float32)
 
 
@@ -109,9 +73,7 @@ def test_i0_range(device, shapes, layout):
 
     output_tensor = _run_i0(device, torch_input_tensor_a, ttnn.float32, layout=layout)
 
-    # I0 spans 1 -> 2815 over this range. PCC is unusable here: it is invariant to
-    # scale and offset (PCC(y, a*y + b) = 1), and its sum is dominated by the largest
-    # values, so an error near x = 0 would be invisible next to i0(10) ~ 2.8e3.
+    # Not PCC: it ignores scale and offset, and i0(10) ~ 2.8e3 would hide an error near x = 0.
     assert_allclose(torch_output_tensor, output_tensor, rtol=1e-5, atol=1e-6)
     assert_with_ulp(
         expected_result=torch_output_tensor, actual_result=output_tensor, ulp_threshold=_MAX_ULP[ttnn.float32]
@@ -121,14 +83,8 @@ def test_i0_range(device, shapes, layout):
 @pytest.mark.parametrize("shapes", [[1, 1, 32, 32], [4, 7, 21, 133]])
 @pytest.mark.parametrize("dtype", [ttnn.float32, ttnn.bfloat16])
 def test_i0_zero(device, shapes, dtype):
-    # I0(0) = 1 exactly and is representable in every dtype. (Unlike i1, i0 has no
-    # zeros: I0(x) >= 1 everywhere.)
-    #
-    # This cannot be an equality check against the torch golden: torch.special.i0
-    # evaluates in float32 and returns 0x3f7fffff at x = 0, exactly 1 ULP below 1.0
-    # (its float64 path returns exactly 1.0). The device returns exactly 1.0, so the
-    # kernel is the more accurate of the two here. Assert both bounds -- within 1 ULP
-    # of the golden, and exact against the mathematical value.
+    # I0(0) = 1 exactly. torch's float32 i0 returns 1 ULP below 1.0, so check within 1 ULP of torch and
+    # equal to 1.
     torch_input_tensor_a = torch.zeros(shapes, dtype=torch.float32)
     torch_output_tensor = torch.special.i0(torch_input_tensor_a)
 
@@ -140,13 +96,7 @@ def test_i0_zero(device, shapes, dtype):
     assert_equal(torch.ones(shapes, dtype=output_tensor.dtype), output_tensor)
 
 
-# Covers |x| beyond the Maclaurin series' useful range, where the old single-polynomial
-# implementation degraded badly (21% rel err at x = 20, 89% at x = 30). Range [-50, 50]
-# keeps the reference within FP32 (i0(50) ~ 2.93e20).
-#
-# float32 only. Every bfloat16 value this could draw is already in the exhaustive sweep
-# below, so a random bfloat16 draw here would add nothing; float32 has 2^32 values and
-# cannot be enumerated, so sampling still earns its place.
+# Random float32 draws reaching well into the asymptotic region. bfloat16 is covered exhaustively below.
 @pytest.mark.parametrize("shapes", [[1, 1, 32, 32], [4, 7, 21, 133]])
 def test_i0_ood(device, shapes):
     torch.manual_seed(0)
@@ -165,29 +115,19 @@ def test_i0_ood(device, shapes):
 
 @pytest.mark.parametrize("dtype", [ttnn.float32, ttnn.bfloat16])
 def test_i0_all_bfloat16_bitpatterns(device, dtype):
-    """Exhaustive sweep over all 65,536 bfloat16 values.
-
-    A random draw cannot substitute for this: floats are distributed logarithmically
-    but torch.rand is uniform in linear space, so a draw over [-50, 50] lands almost
-    nothing in |x| < 1 even though half of all bfloat16 values live there.
-    """
+    """Every one of the 65,536 bfloat16 values."""
     all_bf16_values = generate_all_bfloat16_bitpatterns(torch.float32)
 
-    # Hardware flushes subnormal inputs to zero; do the same to the golden's input so
-    # the two agree on what was actually evaluated.
+    # The hardware flushes subnormal inputs to zero; so does the golden.
     x_torch = flush_subnormal_values_to_zero(all_bf16_values)
 
-    # Non-finite *inputs* are excluded and covered by test_i0_overflow instead: torch
-    # returns NaN for i0(+/-inf) (its exp(inf)/sqrt(inf) goes to inf/inf), whereas the
-    # kernel returns +inf, which is the mathematically correct value. Comparing against
-    # the golden out there would encode a torch artifact as the expected result.
+    # Non-finite inputs are tested in test_i0_overflow: torch returns NaN for i0(+/-inf), not +inf.
     finite_in = torch.isfinite(x_torch)
     x_torch = torch.where(finite_in, x_torch, torch.zeros_like(x_torch))
 
     output_tensor = _run_i0(device, x_torch, dtype)
 
-    # Both overflow where I0 exceeds float32, from |x| = 92.0 on; allow_nonfinite
-    # still requires the resulting infinities to match position and sign.
+    # Both overflow from |x| = 92.0 on; allow_nonfinite still requires the infinities to match.
     torch_output_tensor = flush_subnormal_values_to_zero(_golden(x_torch))
 
     assert_with_ulp(
@@ -198,8 +138,7 @@ def test_i0_all_bfloat16_bitpatterns(device, dtype):
     )
 
 
-# i0 is even: i0(-x) == i0(x). Verifies symmetry is preserved across the kernel's
-# domain split, so a one-sided threshold bug cannot go unnoticed.
+# i0 is even: i0(-x) == i0(x) on both sides of the domain split.
 @pytest.mark.parametrize("dtype", [ttnn.float32, ttnn.bfloat16])
 def test_i0_even_symmetry(device, dtype):
     mags = torch.tensor([0.5, 3.0, 7.0, 10.0, 13.0, 20.0, 30.0, 50.0], dtype=torch.float32)
@@ -217,20 +156,13 @@ def test_i0_even_symmetry(device, dtype):
 
 @pytest.mark.parametrize("dtype", [ttnn.float32, ttnn.bfloat16])
 def test_i0_overflow(device, dtype):
-    """|x| past the representable range returns +inf, not a clamped finite value,
-    and |x| up to that range stays finite.
-
-    I0 grows without bound, so there is no correct finite answer out here; a clamped
-    input would return a finite, plausible-looking value orders of magnitude off.
-    """
+    """|x| <= I0_MAX_INPUT stays finite; beyond it i0 returns +inf, not a clamped finite value."""
     # 89.0 to 91.9 are past float32 exp()'s overflow but not I0's.
     finite = [0.0, 1.0, 6.0, 60.0, 88.5, 89.0, I0_MAX_INPUT_BF16]
     if dtype == ttnn.float32:
         finite.append(I0_MAX_INPUT)
-    # torch.special.i0 returns NaN for +/-inf rather than +inf, because its
-    # exp(inf)/sqrt(inf) evaluates to inf/inf. The kernel returns +inf, which is the
-    # mathematically correct limit, so +/-inf is asserted directly rather than against
-    # the golden. 91.90077209472656 is the next float32 above I0_MAX_INPUT.
+    # Asserted directly, not against torch, which returns NaN for i0(+/-inf).
+    # 91.90077209472656 is the next float32 above I0_MAX_INPUT.
     overflow = [91.90077209472656, 92.0, 100.0, 1.0e4, float("inf")]
     # i0 is even, so both signs must behave identically.
     values = finite + [-v for v in finite] + overflow + [-v for v in overflow]
@@ -238,8 +170,7 @@ def test_i0_overflow(device, dtype):
     padded = torch.zeros((1, 1, 32, 32), dtype=torch.float32)
     padded[0, 0, 0, : len(values)] = torch.tensor(values, dtype=torch.float32)
 
-    # Keep the device dtype: converting to float32 first would make assert_with_ulp
-    # measure a bfloat16 result against float32 spacing, inflating the error by ~2^16.
+    # Keep the device dtype, so assert_with_ulp measures bfloat16 results in bfloat16 ULPs.
     output_tensor = _run_i0(device, padded, dtype)[0, 0, 0, : len(values)]
 
     n_finite = 2 * len(finite)
@@ -257,12 +188,7 @@ def test_i0_overflow(device, dtype):
 
 
 def test_i0_nan(device):
-    """Test ensures i0 on NaN inputs (including -NaN) gives NaN outputs.
-
-    float32 only: on the bfloat16 path, NaN becomes +inf before the kernel ever
-    sees it (lost unpacking bfloat16 into DST) -- a separate, pre-existing gap
-    this test does not cover.
-    """
+    """i0(NaN) and i0(-NaN) are NaN. float32 only: a bfloat16 NaN becomes +inf when unpacked, before the kernel."""
     padded = torch.zeros((1, 1, 32, 32), dtype=torch.float32)
     padded[0, 0, 0, :2] = torch.tensor([float("nan"), -float("nan")], dtype=torch.float32)
 
@@ -273,16 +199,9 @@ def test_i0_nan(device):
 
 
 def test_i0_mixed_dtype_output(device):
-    """A bfloat16 input with a preallocated float32 output_tensor keeps float32 precision.
+    """A bfloat16 input with a float32 output_tensor runs a 32-bit DEST and keeps float32 precision.
 
-    ttnn.i0(bf16_tensor, output_tensor=<float32 tensor>) is a supported mixed-dtype
-    call (unary.cpp's is_supported_mixed_float_dtype). It runs DEST in 32-bit mode
-    because the *output* is float32, independent of the bfloat16 input -- so the
-    kernel must compute and store at float32 precision here: the asymptotic
-    branch's exp variant and Q degree, and the final store, all follow the DEST
-    width rather than the input dtype. The draw spans every bfloat16 input with a
-    finite I0, [-91.5, 91.5], so the asymptotic branch -- the only one with a
-    dtype-dependent variant -- is exercised out to the end of its range.
+    The draw spans every bfloat16 input with a finite I0, [-91.5, 91.5].
     """
     torch.manual_seed(0)
     shape = [1, 1, 32, 32]
