@@ -107,13 +107,13 @@ class KDARecurrenceProgramConfig:
     # Exact number of chunks per group. Construction validates divisibility and
     # worker capacity; execution never silently changes an explicit configuration.
     summary_group_chunks: int = 20
-    affine_prefix_math_fidelity: ttnn.MathFidelity = ttnn.MathFidelity.HiFi2
+    affine_prefix_math_fidelity: ttnn.MathFidelity = ttnn.MathFidelity.HiFi3
     scan_math_fidelity: ttnn.MathFidelity = ttnn.MathFidelity.HiFi2
-    # With sequence parallelism and one group per head, the SP prefix is a relay along the SP axis (RelayAffinePrefix):
+    # With sequence parallelism and one group per head, the SP prefix is a relay along the SP axis (RelayChunkScan):
     # each rank applies its own summary to the entry state it receives and forwards the result. The summary also emits
-    # each chunk's output terms, and an EntryCorrection program forms the chunk outputs and the final state from the
-    # entry states, all chunks in parallel. Cores the entry correction may use: its products count toward the Blackhole
-    # di/dt bound.
+    # each chunk's output terms, from which the relay's program forms the chunk outputs once the entry state lands, all
+    # chunks in parallel (the entry correction). Cores the entry correction may use: its products count toward the
+    # Blackhole di/dt bound.
     entry_correction_max_cores: int = 110
 
     def __post_init__(self) -> None:
@@ -243,8 +243,7 @@ def kimi_k3_program_config(*, active_seq_len_local: int, tp_ccl_topology: ttnn.T
             local_scan_strategy="grouped",
             summary_group_chunks=group_chunks[active_seq_len_local],
             # HiFi3, not HiFi2: HiFi2 keeps only SrcB's 6 explicit mantissa bits, which biases the FP32 state products
-            # low over long sequences. With SP these are the relay's hop (affine prefix) and the entry correction
-            # (scan).
+            # low over long sequences. With SP these are the relay's hop and entry correction (affine prefix).
             scan_math_fidelity=ttnn.MathFidelity.HiFi3,
             affine_prefix_math_fidelity=ttnn.MathFidelity.HiFi3,
         ),
