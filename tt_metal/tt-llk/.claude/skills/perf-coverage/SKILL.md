@@ -110,6 +110,15 @@ assertion. Pin a perf axis that the kernel ignores (for example
 `approx_mode=No` for kernels that never read it) instead of multiplying
 builds by it.
 
+### Unbundling an existing generator
+
+A generator that returns a list of tuples becomes flat axes with
+`helpers.param_config.flat_axes(names, combinations)`:
+`@parametrize(**flat_axes(NAMES, COMBOS))`. The cross product equals the
+original list as a set of cases; the order can differ, because cases are grouped
+by first-seen value. Columns wrapped in `runtime()` stay runtime-only. Prefer a
+callable axis (`dest_acc=lambda formats: ...`) when the dependency is simple.
+
 ## Commands
 
 ```bash

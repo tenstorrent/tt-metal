@@ -501,7 +501,7 @@ def test_where_without_sfploadmacro_replay_record_is_gathering_bracketed():
         "sources/sfpu_ternary_gathering_nomacro_test.cpp",
         formats,
         templates=[
-            MATH_OP(mathop=MathOperation.SfpuWhere),
+            MATH_OP(mathop=MathOperation.TTNNWhere),
             SFPU_TERNARY_SCALAR(0x40000000),
             APPROX_MODE(ApproximationMode.No),
             ITERATIONS(8),
