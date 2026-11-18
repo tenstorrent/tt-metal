@@ -27,10 +27,10 @@ using tt::tt_metal::MeshTensor;
 using tt::tt_metal::NOC;
 using tt::tt_metal::Tile;
 using tt::tt_metal::TileDescriptor;
-using tt::tt_metal::experimental::DataflowBufferSpec;
+using tt::tt_metal::DataflowBufferSpec;
 using tt::tt_metal::experimental::DFBAdvancedOptions;
-using tt::tt_metal::experimental::DFBSpecName;
-using tt::tt_metal::experimental::TensorParamName;
+using tt::tt_metal::DFBSpecName;
+using tt::tt_metal::TensorParamName;
 
 bool is_cpu_tensor(const Tensor& tensor) { return tensor.storage_type() == StorageType::HOST; }
 

@@ -43,7 +43,7 @@ struct GenericOpDeviceOperation {
 
 // Structural hash of a ProgramSpec: the program cache key the spec path uses. Excludes runtime
 // argument values and tensor addresses, which are re-applied on every dispatch.
-ttsl::hash::hash_t compute_program_spec_hash(const tt::tt_metal::experimental::ProgramSpec& spec);
+ttsl::hash::hash_t compute_program_spec_hash(const tt::tt_metal::ProgramSpec& spec);
 
 }  // namespace ttnn::operations::generic
 

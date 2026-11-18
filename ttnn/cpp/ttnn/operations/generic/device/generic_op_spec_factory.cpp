@@ -10,7 +10,7 @@ namespace ttnn::operations::generic::program {
 
 namespace {
 
-namespace m2 = tt::tt_metal::experimental;
+namespace m2 = tt::tt_metal;
 
 m2::ProgramRunArgs build_run_args(const operation_attributes_t& attrs, const tensor_args_t& tensor_args) {
     const auto& spec_program = attrs.spec_program();

@@ -71,9 +71,9 @@ void bind_generic_operation(nb::module_& mod) {
     auto spec_overload = ttnn::overload_t(
         static_cast<Tensor (*)(
             const std::vector<Tensor>&,
-            const tt::tt_metal::experimental::ProgramSpec&,
-            const tt::tt_metal::experimental::ProgramRunArgs&,
-            const tt::tt_metal::experimental::Table<tt::tt_metal::experimental::TensorParamName, uint32_t>&)>(
+            const tt::tt_metal::ProgramSpec&,
+            const tt::tt_metal::ProgramRunArgs&,
+            const tt::tt_metal::Table<tt::tt_metal::TensorParamName, uint32_t>&)>(
             &ttnn::generic_op),
         nb::arg("io_tensors"),
         nb::arg("spec"),

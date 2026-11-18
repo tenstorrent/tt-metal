@@ -18,8 +18,8 @@
 #include <tt-metalium/device.hpp>
 #include <tt-metalium/kernel_types.hpp>
 #include <tt-metalium/mesh_device.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
+#include <tt-metalium/workload/run_args/program_run_args.hpp>
+#include <tt-metalium/workload/specification/program_spec.hpp>
 
 #include "ttnn-nanobind/metal2_casters.hpp"
 
@@ -28,7 +28,7 @@
 namespace ttnn::mcast_host {
 
 namespace kh = ttnn::kernel_lib::host;
-namespace m2 = tt::tt_metal::experimental;
+namespace m2 = tt::tt_metal;
 using tt::tt_metal::CoreCoord;
 using tt::tt_metal::CoreRangeSet;
 using tt::tt_metal::NOC;
