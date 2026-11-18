@@ -99,7 +99,7 @@ def test_hardmish_bf16_nonfinite_inputs(device):
 
 
 def test_hardmish_bf16_exhaustive_inputs(device):
-    """All 65,536 BF16 inputs: torch's result as stored, within STEPS BF16 steps, or STOCK's word per board.
+    """All 65,536 BF16 inputs: torch's result as stored, within STEPS BF16 steps, or STOCK's word.
 
     SKIP lists inputs the LLK sweep judges instead.
     """

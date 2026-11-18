@@ -47,7 +47,7 @@ ALWI void hardmish_tile(std::uint32_t idst) {
             DST_SYNC_MODE,
             DST_ACCUM_MODE,
             hardmish,
-            (APPROX, DST_ACCUM_MODE, DEST_16BIT_FORMAT, 32),
+            (APPROX, DST_ACCUM_MODE, DEST_16BIT_FORMAT, 32 /*ITERATIONS*/),
             idst,
             VectorMode::None);
         return;

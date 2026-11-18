@@ -10,7 +10,7 @@ from helpers.llk_params import ApproximationMode, MathOperation
 
 # (operation, approximation mode of the replaced instance, max ULP); max ULP 0 is an exact fit.
 _BF16_EXHAUSTIVE_OPS = [
-    (MathOperation.Hardmish, ApproximationMode.No, 1),
+    (MathOperation.Hardmish, ApproximationMode.No, 0),
 ]
 # Boards where the op keeps its stock kernel, which this sweep does not test.
 _BF16_STOCK_BOARDS = {
