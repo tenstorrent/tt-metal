@@ -35,17 +35,13 @@ REDUCED_GRID_SLICE_CONFIG = ttnn.Conv2dSliceConfig(slice_type=ttnn.Conv2dDRAMSli
 
 
 def bbox_reg_slice_config(device):
-    """The bbox_reg conv's slicing on ``device``. Its weights and bias are prepared for this same
-    slicing (custom_preprocessor): weights prepared for another slicing are laid out for another
-    program."""
+    """The bbox_reg conv's slicing on ``device``."""
     return REDUCED_GRID_SLICE_CONFIG if reduced_grid(device) else BBOX_REG_SLICE_CONFIG
 
 
 def cls_logits_slice_config(device):
-    """The cls_logits conv's slicing on ``device``, which its weights and bias are prepared for:
-    conv2d's own height slices on a reduced grid; unsliced in L1 on the full grid. Preparation
-    takes its input from DRAM, where no slice config would mean DRAM slicing, so the full grid's
-    is explicit."""
+    """The cls_logits conv's slicing on ``device``: conv2d's own height slices on a reduced grid;
+    unsliced in L1 on the full grid."""
     return REDUCED_GRID_SLICE_CONFIG if reduced_grid(device) else ttnn.Conv2dL1FullSliceConfig
 
 
@@ -63,6 +59,25 @@ def group_norm_grid(device):
     level's tile rows (Conv2dNormActivation)."""
     grid = device.compute_with_storage_grid_size()
     return ttnn.CoreGrid(y=grid.y, x=grid.x)
+
+
+def conv2d_with_level_weights(parameters, level, **conv2d_args):
+    """ttnn.conv2d of a head conv on pyramid level ``level``, with the conv's weights prepared for
+    that level; returns the output and its height and width. A head runs the same weights on every
+    level, but conv2d lays prepared weights out for one program, and the program depends on the
+    level's size. So ``parameters`` keeps the host weights and, under "prepared", the copy conv2d
+    prepared on each level's first run."""
+    prepared = parameters.setdefault("prepared", {})
+    weight, bias = prepared.get(level, (parameters["weight"], parameters["bias"]))
+    output, [height, width], [weight, bias] = ttnn.conv2d(
+        weight_tensor=weight,
+        bias_tensor=bias,
+        return_output_dim=True,
+        return_weights_and_bias=True,
+        **conv2d_args,
+    )
+    prepared[level] = (weight, bias)
+    return output, height, width
 
 
 def group_norm_channel_chunks(device, num_channels, num_groups):
@@ -421,8 +436,8 @@ class Conv2dNormActivation:
     ):
         """
         Args:
-            parameters: Dict with the prepared conv 'weight' and 'bias', and the GroupNorm
-                'norm_weight' and 'norm_bias' (create_group_norm_weight_bias_rm)
+            parameters: Dict with the conv's host 'weight' and 'bias' (conv2d_with_level_weights),
+                and the GroupNorm 'norm_weight' and 'norm_bias' (create_group_norm_weight_bias_rm)
             device: TTNN device
             in_channels: Number of input channels
             out_channels: Number of output channels
@@ -444,8 +459,7 @@ class Conv2dNormActivation:
         self.num_groups = num_groups
         self.compute_config = compute_config
         self.conv_config = conv_config
-        self.conv_weight = parameters["weight"]
-        self.conv_bias = parameters["bias"]
+        self.parameters = parameters
         self.norm_weight = parameters["norm_weight"]
         self.norm_bias = parameters["norm_bias"]
         self.grid_size = grid_size if grid_size is not None else group_norm_grid(device)
@@ -462,6 +476,7 @@ class Conv2dNormActivation:
         batch_size: int,
         input_height: int,
         input_width: int,
+        level: int,
     ) -> ttnn.Tensor:
         """
         Forward pass: Conv2d -> GroupNorm -> ReLU
@@ -471,18 +486,19 @@ class Conv2dNormActivation:
             batch_size: Batch size
             input_height: Input height
             input_width: Input width
+            level: Pyramid level of ``x``, whose prepared conv weights to use
 
         Returns:
             Output tensor after Conv2d + GroupNorm + ReLU
         """
 
-        x, [H_out, W_out], [prepared_weight, prepared_bias] = ttnn.conv2d(
+        x, H_out, W_out = conv2d_with_level_weights(
+            self.parameters,
+            level,
             input_tensor=x,
-            weight_tensor=self.conv_weight,
             in_channels=self.in_channels,
             out_channels=self.out_channels,
             device=self.device,
-            bias_tensor=self.conv_bias,
             kernel_size=list(self.kernel_size),
             stride=list(self.stride),
             padding=list(self.padding),
@@ -492,8 +508,6 @@ class Conv2dNormActivation:
             slice_config=self.slice_config,
             compute_config=self.compute_config,
             conv_config=self.conv_config,
-            return_output_dim=True,
-            return_weights_and_bias=True,
         )
 
         N, H_out, W_out, C = x.shape
