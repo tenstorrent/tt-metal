@@ -446,16 +446,19 @@ constexpr std::uint32_t matmul_fe_named_subblock_w() {
 
 #ifdef TRISC_MATH
 // A compile-time arg the kernel names (minimal_matmul: M_block_tiles, M_blocks_per_core), else 0
-constexpr std::uint32_t matmul_fe_named_arg(const std::string_view name) {
 #ifdef KERNEL_COMPILE_TIME_ARG_MAP
+constexpr std::uint32_t matmul_fe_named_arg(const std::string_view name) {
     for (const auto& [arg_name, arg_value] : named_args_map) {
         if (arg_name == name) {
             return arg_value;
         }
     }
-#endif
     return 0;
 }
+#else
+// A kernel without named compile-time args names none
+constexpr std::uint32_t matmul_fe_named_arg(const char*) { return 0; }
+#endif
 
 // HiFi2 row forms need M block 4 (M block 2 lands the compute's L1 bursts under the reader's NoC writes) and no fused
 // addcmul or swiglu epilogue on the math thread (minimal_matmul +0.8 to +1.2 %)
