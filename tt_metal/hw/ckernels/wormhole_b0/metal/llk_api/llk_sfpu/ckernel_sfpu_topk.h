@@ -1007,7 +1007,7 @@ constexpr int topk_ls_ph3_replay_start = 25;
 // (comparator-stable mode measured up to +8% over the per-phase passes that way). Not inlined:
 // unswitched into the caller, each range would carry its own unrolled copy of the group loop.
 template <bool STABLE_SORT, bool FUSED, TopkTieOrder TIE_ORDER, int PH_LO, int PH_HI>
-[[gnu::noinline]] void bitonic_topk_ph0_to_3_group(bool dir) {
+inline void bitonic_topk_ph0_to_3_group_body(bool dir) {
     static_assert(0 <= PH_LO && PH_LO <= PH_HI && PH_HI <= 3, "group pass covers phases 0..3");
     if constexpr (PH_LO == 0) {
         bitonic_topk_ph0_st1_to_1<STABLE_SORT, TIE_ORDER, (PH_HI == 0) /* TRAIL_TRANSP */>();
@@ -1026,6 +1026,22 @@ template <bool STABLE_SORT, bool FUSED, TopkTieOrder TIE_ORDER, int PH_LO, int P
     if constexpr (PH_HI == 3) {
         bool recorded = false;  // the ph3 window is recorded per call by the local sort
         bitonic_topk_ph3_st4_to_1<STABLE_SORT, FUSED, TIE_ORDER>(dir, recorded, topk_ls_ph3_replay_start);
+    }
+}
+
+// The 4 groups of one column (load16 / phases / store16 each): one indirect call per column.
+template <bool STABLE_SORT, bool FUSED, TopkTieOrder TIE_ORDER, int PH_LO, int PH_HI>
+[[gnu::noinline]] void bitonic_topk_ph0_to_3_group(bool dir) {
+    constexpr int ldst_count = FUSED ? 4 : 8;
+#pragma GCC unroll 0
+    for (int d = 0; d < 4; d++) {
+        // Groups of 16 datums being sorted at the same time
+        lltt::replay(0, ldst_count);
+        bitonic_topk_ph0_to_3_group_body<STABLE_SORT, FUSED, TIE_ORDER, PH_LO, PH_HI>(dir);
+        if constexpr (PH_HI == 3) {
+            dir = !dir;
+        }
+        lltt::replay(8, ldst_count);
     }
 }
 
@@ -1166,15 +1182,7 @@ inline void _bitonic_topk_phases_steps(
                 const int ph_hi = (i_end_phase < 3) ? i_end_phase : 3;
                 const topk_group_fn group = bitonic_topk_pick_ph0_to_3_group<STABLE_SORT, FUSED, TIE_ORDER>(ph, ph_hi);
                 TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
-                for (int d = 0; d < 4; d++) {
-                    // Groups of 16 datums being sorted at the same time
-                    lltt::replay(0, ldst_count);
-                    group(dir);
-                    if (ph_hi == 3) {
-                        dir = !dir;
-                    }
-                    lltt::replay(8, ldst_count);
-                }
+                group(dir);
                 ph = 4;
             }
             for (; ph <= i_end_phase; ph++) {
