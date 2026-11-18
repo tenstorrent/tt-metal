@@ -66,6 +66,7 @@ if(TT_UMD_BUILD_GRENDEL_JTAG)
         keraunos/vcluster/descriptors.cpp
         keraunos/vcluster/test_vcluster_manifest.cpp
         keraunos/vcluster/test_vcluster_descriptors.cpp
+        keraunos/vcluster/test_vcluster_metal_desc.cpp
     )
 endif()
 
