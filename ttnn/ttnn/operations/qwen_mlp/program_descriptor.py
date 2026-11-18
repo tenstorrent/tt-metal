@@ -42,7 +42,7 @@ class BlockConfig:
 
 BLOCK_CONFIGS = {
     4096: BlockConfig(MatmulBlocks(4, 8, 16, 2, 2), MatmulBlocks(4, 8, 9, 4, 1)),
-    2048: BlockConfig(MatmulBlocks(2, 8, 16, 2, 2), MatmulBlocks(2, 8, 9, 2, 1)),
+    2048: BlockConfig(MatmulBlocks(6, 8, 8, 1, 4), MatmulBlocks(6, 8, 9, 3, 1)),
     1024: BlockConfig(MatmulBlocks(3, 8, 16, 1, 4), MatmulBlocks(3, 8, 9, 1, 3)),
 }
 
@@ -210,11 +210,13 @@ def create_program_descriptor(h, w_norm, w_gate_up, w_down, n, a, y):
         [ttnn.CoreRange(ttnn.CoreCoord(0, FIRST_Y), ttnn.CoreCoord(GRID_X - 1, FIRST_Y + GRID_Y - 1))]
     )
     bf16, bfp4, fp32 = ttnn.bfloat16, ttnn.bfloat4_b, ttnn.float32
-    in0_block_tiles = [phase.in0_block_tiles for phase in phases]
-    norm_in_tiles = H_tiles
-    in0_shares_norm_in = all(norm_in_tiles % tiles == 0 for tiles in in0_block_tiles)
-    assert max(in0_block_tiles) % min(in0_block_tiles) == 0
-    in0_ring_tiles = norm_in_tiles if in0_shares_norm_in else RING_BLOCKS * max(in0_block_tiles)
+    in0_block_tiles = gate_up.in0_block_tiles
+    assert in0_block_tiles % down.in0_block_tiles == 0
+    rows_per_core = ceil(M_core / GRID_Y)
+    in0_shares_norm_in = H_tiles % in0_block_tiles == 0 or rows_per_core == 1
+    in0_ring_tiles = (
+        ceil(H_tiles / in0_block_tiles) * in0_block_tiles if in0_shares_norm_in else RING_BLOCKS * in0_block_tiles
+    )
     in0_formats = [ttnn.CBFormatDescriptor(buffer_index=CB_IN0, data_format=bf16, page_size=BF16_TILE_BYTES)]
     norm_in_format = ttnn.CBFormatDescriptor(buffer_index=CB_NORM_IN, data_format=bf16, page_size=BF16_TILE_BYTES)
     cbs = [
@@ -239,7 +241,7 @@ def create_program_descriptor(h, w_norm, w_gate_up, w_down, n, a, y):
         _cb(CB_NORM_OUT, bf16, BF16_TILE_BYTES, 2 * NORM_GROUP, cores),
     ]
     if not in0_shares_norm_in:
-        cbs.append(_cb(CB_NORM_IN, bf16, BF16_TILE_BYTES, norm_in_tiles, cores))
+        cbs.append(_cb(CB_NORM_IN, bf16, BF16_TILE_BYTES, H_tiles, cores))
     semaphores = [ttnn.SemaphoreDescriptor(id=i, core_ranges=cores, initial_value=0) for i in range(len(SEMAPHORES))]
 
     tensors = dict(zip(TENSORS, [h, w_norm, w_gate_up, w_down, n, a, y]))
