@@ -412,8 +412,6 @@ ProgramDescriptor build_program_descriptor_at(
     CoreRangeSet w_fabric_core_range;
     bool is_first_w_device = true;
     bool is_last_w_device = true;
-    uint32_t w_forward_device_offset = 0;
-    uint32_t w_backward_device_offset = 0;
     std::optional<MeshCoordinate> w_forward_coord;
     std::optional<MeshCoordinate> w_backward_coord;
     uint32_t w_rows_per_link = 0;
@@ -437,25 +435,12 @@ ProgramDescriptor build_program_descriptor_at(
 
         is_first_w_device = !w_backward_coord.has_value();
         is_last_w_device = !w_forward_coord.has_value();
-        // W neighbors are physically adjacent (same row, adjacent columns) = 1 physical hop.
-        // The fabric chain chip_id difference can be much larger (e.g., 4 on a 4x8 mesh),
-        // but the EDM routing uses physical hops along the selected direction, NOT chain hops.
-        // Using the chain distance would cause packets to overshoot the target.
-        if (w_forward_coord.has_value()) {
-            w_forward_device_offset = 1;
-        }
-        if (w_backward_coord.has_value()) {
-            w_backward_device_offset = 1;
-        }
 
         log_trace(
             tt::LogOp,
-            "NeighborPad W-fabric: mesh_coord=({},{}), "
-            "w_fwd_offset={}, w_bwd_offset={}, is_first_w={}, is_last_w={}",
+            "NeighborPad W-fabric: mesh_coord=({},{}), is_first_w={}, is_last_w={}",
             mesh_coordinate[0],
             mesh_coordinate[1],
-            w_forward_device_offset,
-            w_backward_device_offset,
             is_first_w_device,
             is_last_w_device);
 
@@ -824,6 +809,9 @@ ProgramDescriptor build_program_descriptor_at(
             w_num_targets_forward,
             w_num_targets_backward,
             mesh_device);
+        auto [w_unicast_forward_args, w_unicast_backward_args] =
+            ::ttnn::ccl::get_forward_backward_line_unicast_configuration(
+                mesh_coordinate, w_forward_coord, w_backward_coord, mesh_device);
 
         // Create consolidated W fabric reader kernel (uniform compile args across all W cores)
         std::vector<uint32_t> w_reader_compile_args = {
@@ -952,10 +940,9 @@ ProgramDescriptor build_program_descriptor_at(
                 w_writer_rt_args.push_back(w_direction ? is_last_w_device : is_first_w_device);  // is_first_chip
                 w_writer_rt_args.push_back(w_direction ? is_first_w_device : is_last_w_device);  // is_last_chip
                 w_writer_rt_args.push_back(w_direction);                                         // direction
-                // W fabric unicast route args: manually constructed with actual hop distances
-                uint32_t w_device_offset = w_direction ? w_backward_device_offset : w_forward_device_offset;
-                w_writer_rt_args.push_back(0);                // dst_mesh_id (unused for 1D)
-                w_writer_rt_args.push_back(w_device_offset);  // distance_in_hops
+                // W unicast route args: 1 hop to the W neighbour on 1D, its fabric node on 2D
+                const auto& w_unicast_args = w_direction ? w_unicast_backward_args : w_unicast_forward_args;
+                w_writer_rt_args.insert(w_writer_rt_args.end(), w_unicast_args.begin(), w_unicast_args.end());
                 // W barrier multicast route info (6 args)
                 const auto& w_mcast_args = w_direction ? w_mcast_backward_args : w_mcast_forward_args;
                 w_writer_rt_args.insert(w_writer_rt_args.end(), w_mcast_args.begin(), w_mcast_args.end());

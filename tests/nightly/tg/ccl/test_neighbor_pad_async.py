@@ -223,6 +223,41 @@ def test_neighbor_pad_async_2d(
     )
 
 
+@pytest.mark.timeout(120)
+@pytest.mark.parametrize(
+    "mesh_device, device_params",
+    [
+        ((8, 4), {"fabric_config": ttnn.FabricConfig.FABRIC_2D}),
+        ((8, 4), {"fabric_config": ttnn.FabricConfig.FABRIC_1D_RING}),
+    ],
+    ids=["fabric_2d", "fabric_1d_ring"],
+    indirect=True,
+)
+@pytest.mark.parametrize(
+    "input_shape, pH, pW",
+    [([1, 3, 12, 16, 32], 1, 1), ([1, 3, 92, 160, 32], 1, 1), ([1, 2, 8, 16, 32], 2, 2)],
+    ids=["medium_5d", "vae_conv0", "pad2"],
+)
+def test_neighbor_pad_async_2d_on_a_4x2_submesh(mesh_device, input_shape, pH, pW):
+    """H and W padding on a (4, 2) submesh, as a DP4 group's VAE conv pads: the W leg routes to its neighbour on 2D
+    fabric too (FABRIC_1D_RING is the control)."""
+    run_neighbor_pad_2d_impl(
+        mesh_device.create_submesh(ttnn.MeshShape(4, 2)),
+        input_shape=list(input_shape),
+        h_dim=2,
+        w_dim=3,
+        h_axis=0,
+        w_axis=1,
+        pH=pH,
+        pW=pW,
+        padding_mode="zeros",
+        num_links=2,
+        input_dtype=ttnn.bfloat16,
+        topology=ttnn.Topology.Linear,
+        use_persistent_output_buffer=False,
+    )
+
+
 # ---------------------------------------------------------------------------
 # Shared sub-device setup helper
 # ---------------------------------------------------------------------------
