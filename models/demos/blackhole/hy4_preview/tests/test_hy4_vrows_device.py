@@ -260,6 +260,43 @@ def run_xplat(md):
         c.free()
 
 
+def run_xpbit(md):
+    """B47a: bit-for-bit XPush vs all_to_all + A1 merge (cmp_run) on every case/S, then a SOAK of ITER consecutive XPush calls (each with its own q all-gather, as in the model) that must equal the first call bit for bit"""
+    sel = os.environ.get("CASES")
+    iters = int(os.environ.get("ITER", "200"))
+    for tag in CASES:
+        if sel and tag not in sel.split(","):
+            continue
+        kind, ctx, skew = parse(tag)
+        for S in [int(x) for x in os.environ.get("SS", "2,3,4").split(",")]:
+            try:
+                c = DM.Case(md, kind, ctx, S, "scaled", seed=3, skew=skew)
+                blk = DM.mk_block(md, S, fuse=True, xchg=False)
+                ref = cmp_run(md, blk, c, S)
+                got = xpp_run(md, blk, c, S)
+                eq = bool(torch.equal(ref, got))
+                res = {
+                    "test": "xp_bit",
+                    "case": f"{tag}_S{S}",
+                    "bit_equal": eq,
+                    "maxdiff": float((ref - got).abs().max()),
+                }
+                if os.environ.get("SOAK", "0") == "1":
+                    bad = 0
+                    for i in range(iters):
+                        g = xpp_run(md, blk, c, S)
+                        if not torch.equal(g, got):
+                            bad += 1
+                    res.update({"soak_iters": iters, "soak_mismatch": bad})
+                emit(res)
+                c.free()
+            except Exception as e:
+                import traceback
+
+                traceback.print_exc()
+                emit({"test": "xp_bit", "case": f"{tag}_S{S}", "error": str(e).strip().splitlines()[0][:300]})
+
+
 _XMC = {}
 
 
@@ -492,6 +529,7 @@ if __name__ == "__main__":
             ("xmclat", run_xmclat),
             ("qplat", run_qplat),
             ("xplat", run_xplat),
+            ("xpbit", run_xpbit),
         ]:
             if os.environ.get("TEST", "pcc") in (name, "all"):
                 fn(md)
