@@ -166,14 +166,33 @@ def _get_logits_processor(
     return processors
 
 
-def get_logits_processor(input_ids, config):
-    generation_config = GenerationConfig.from_model_config(config)
+def get_logits_processor(input_ids, config, encoder_input_ids=None):
+    """Build the logits processors for a generation loop.
+
+    ``input_ids`` are the ids the processors are applied to at every step. For encoder-decoder models that is
+    the decoder prefix (the tokens generated so far, starting from the decoder start token), matching what
+    HF `generate` feeds to `_get_logits_processor`. ``encoder_input_ids`` are the encoder ids and are only used
+    by the encoder-side processors (`EncoderRepetitionPenaltyLogitsProcessor`,
+    `EncoderNoRepeatNGramLogitsProcessor`); for decoder-only models they default to ``input_ids`` because the
+    prompt and the decoder prefix are the same tensor.
+
+    ``config`` may be a `GenerationConfig` (typically `model.generation_config`, which carries values that only
+    exist in generation_config.json) or a model config, which is converted the way HF does it.
+    """
+    if isinstance(config, GenerationConfig):
+        generation_config = config
+    else:
+        generation_config = GenerationConfig.from_model_config(config)
+
+    if encoder_input_ids is None:
+        encoder_input_ids = input_ids
+
     input_ids_seq_length = input_ids.shape[-1]
 
     logits_processor = _get_logits_processor(
         generation_config=generation_config,
         input_ids_seq_length=input_ids_seq_length,
-        encoder_input_ids=input_ids,
+        encoder_input_ids=encoder_input_ids,
         prefix_allowed_tokens_fn=None,
         logits_processor=LogitsProcessorList(),
     )
@@ -216,13 +235,22 @@ def run_generate(
         logger.debug(f"input_ids {input_ids.shape} {input_ids}")
         logger.debug(f"attention_mask {attention_mask.shape} {attention_mask}")
 
-    logits_processor = get_logits_processor(input_ids, hf_reference_model.config)
-
     decoder_start_values = hf_reference_model.generation_config.pad_token_id * torch.ones(1, 32).to(torch.long)
     decoder_input_ids = hf_reference_model.generation_config.pad_token_id * torch.ones(1, 64).to(torch.long)
 
     if log:
         logger.debug(f"decoder_input_ids {decoder_input_ids}")
+
+    # The logits processors see the decoder prefix (the tokens generated so far, starting from the decoder start
+    # token), the same tensor HF `generate` feeds them. The padded encoder ids are passed separately and only
+    # reach the encoder-side processors. They are built from `generation_config` rather than `config` because
+    # values such as `begin_suppress_tokens` usually live only in generation_config.json.
+    generation_config = getattr(hf_reference_model, "generation_config", None)
+    if generation_config is None:
+        generation_config = hf_reference_model.config
+    logits_processor = get_logits_processor(
+        decoder_input_ids[:, :1], generation_config, encoder_input_ids=input_ids
+    )
 
     encoder_outputs = None
     use_cache = False
@@ -255,8 +283,11 @@ def run_generate(
         else:
             next_token_logits = pt_out.logits
 
-        # pre-process distribution
-        next_tokens_scores = logits_processor(input_ids, next_token_logits)
+        # pre-process distribution. The processors act on the logits of the current step (a (batch, vocab) row, as
+        # in HF `generate`) and on the decoder prefix generated so far (the tokens from the decoder start token up
+        # to this step), not on the padded encoder ids and not on the whole fixed decoder window.
+        step_logits = next_token_logits[:, i, :]
+        next_tokens_scores = logits_processor(decoder_input_ids[:, : i + 1], step_logits)
 
         # argmax
         next_tokens = torch.argmax(next_tokens_scores, dim=-1)
@@ -264,14 +295,14 @@ def run_generate(
         if log:
             logger.debug(f"next_tokens {next_tokens}")
 
-        if next_tokens[0][i] == hf_reference_model.generation_config.eos_token_id:
+        if next_tokens[0] == hf_reference_model.generation_config.eos_token_id:
             break
 
         # We need to expand decoder_input_ids
         if (i + 1) % 32 == 0:
             decoder_input_ids = torch.cat([decoder_input_ids, decoder_start_values], dim=1)
 
-        decoder_input_ids[0][i + 1] = next_tokens[0][i]
+        decoder_input_ids[0][i + 1] = next_tokens[0]
 
         if log:
             logger.debug(f"decoder_input_ids {decoder_input_ids[0]}")
