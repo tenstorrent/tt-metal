@@ -66,10 +66,10 @@ ttnn::device_operation::MeshWorkloadArtifacts::PerCoordProgram build_combine_pro
     const KernelSpecName reader_kernel{"reader"};
     const KernelSpecName writer_kernel{"writer"};
     const DFBSpecName data_dfb{"data"};
-    const DFBSpecName mapping_dfb{"mapping"};
     const DFBSpecName local_experts_dfb{"local_experts"};
     const DFBSpecName metadata_dfb{"metadata"};
-    const DFBSpecName packet_header_dfb{"packet_header"};
+    const ScratchpadSpecName mapping_scratchpad{"mapping"};
+    const ScratchpadSpecName packet_header_scratchpad{"packet_header"};
     const TensorParamName input_param{"input"};
     const TensorParamName mapping_param{"mapping"};
     const TensorParamName metadata_param{"metadata"};
@@ -124,7 +124,6 @@ ttnn::device_operation::MeshWorkloadArtifacts::PerCoordProgram build_combine_pro
     const auto aligned_metadata_page_size_bytes = tt::align(metadata_page_size_bytes, l1_alignment);
 
     const auto input_data_format = datatype_to_dataformat_converter(input_tensor.dtype());
-    const auto mapping_data_format = datatype_to_dataformat_converter(mapping_tensor.dtype());
     const auto metadata_data_format = datatype_to_dataformat_converter(metadata_tensor.dtype());
 
     // Anything less will lead to deadlocks. It's clear why, TODO fix it.
@@ -164,13 +163,6 @@ ttnn::device_operation::MeshWorkloadArtifacts::PerCoordProgram build_combine_pro
             .num_entries = buffering_factor,
             .data_format_metadata = input_data_format,
         },
-        // full mapping buffer
-        DataflowBufferSpec{
-            .unique_id = mapping_dfb,
-            .entry_size = aligned_mapping_page_size_bytes,
-            .num_entries = 1,
-            .data_format_metadata = mapping_data_format,
-        },
         DataflowBufferSpec{
             .unique_id = local_experts_dfb,
             .entry_size = aligned_local_expert_page_size_bytes,
@@ -184,11 +176,17 @@ ttnn::device_operation::MeshWorkloadArtifacts::PerCoordProgram build_combine_pro
             .num_entries = 1,
             .data_format_metadata = metadata_data_format,
         },
-        DataflowBufferSpec{
-            .unique_id = packet_header_dfb,
-            .entry_size = CLIENT_INTERFACE_SIZE,
-            .num_entries = num_headers,
-            .data_format_metadata = tt::DataFormat::UInt32,
+    };
+
+    Group<ScratchpadSpec> scratchpads = {
+        // full mapping buffer
+        ScratchpadSpec{
+            .unique_id = mapping_scratchpad,
+            .size_per_node = aligned_mapping_page_size_bytes * 1,
+        },
+        ScratchpadSpec{
+            .unique_id = packet_header_scratchpad,
+            .size_per_node = CLIENT_INTERFACE_SIZE * num_headers,
         },
     };
 
@@ -227,17 +225,6 @@ ttnn::device_operation::MeshWorkloadArtifacts::PerCoordProgram build_combine_pro
                                         "reader_all_to_all_combine_metal2.cpp"),
         .dfb_bindings =
             {
-                // temp buffer just used by the reader
-                DFBBinding{
-                    .dfb_spec_name = mapping_dfb,
-                    .accessor_name = "mapping",
-                    .endpoint_type = DFBEndpointType::PRODUCER,
-                },
-                DFBBinding{
-                    .dfb_spec_name = mapping_dfb,
-                    .accessor_name = "mapping",
-                    .endpoint_type = DFBEndpointType::CONSUMER,
-                },
                 DFBBinding{
                     .dfb_spec_name = local_experts_dfb,
                     .accessor_name = "local_experts",
@@ -252,6 +239,14 @@ ttnn::device_operation::MeshWorkloadArtifacts::PerCoordProgram build_combine_pro
                     .dfb_spec_name = data_dfb,
                     .accessor_name = "data",
                     .endpoint_type = DFBEndpointType::PRODUCER,
+                },
+            },
+        .scratchpad_bindings =
+            {
+                // temp buffer just used by the reader
+                ScratchpadBinding{
+                    .scratchpad_spec_name = mapping_scratchpad,
+                    .accessor_name = "mapping",
                 },
             },
         .tensor_bindings =
@@ -311,21 +306,18 @@ ttnn::device_operation::MeshWorkloadArtifacts::PerCoordProgram build_combine_pro
                     .accessor_name = "local_experts",
                     .endpoint_type = DFBEndpointType::CONSUMER,
                 },
-                // packet headers, reserved once and never popped by the writer
-                DFBBinding{
-                    .dfb_spec_name = packet_header_dfb,
-                    .accessor_name = "packet_header",
-                    .endpoint_type = DFBEndpointType::PRODUCER,
-                },
-                DFBBinding{
-                    .dfb_spec_name = packet_header_dfb,
-                    .accessor_name = "packet_header",
-                    .endpoint_type = DFBEndpointType::CONSUMER,
-                },
                 DFBBinding{
                     .dfb_spec_name = data_dfb,
                     .accessor_name = "data",
                     .endpoint_type = DFBEndpointType::CONSUMER,
+                },
+            },
+        .scratchpad_bindings =
+            {
+                // packet headers
+                ScratchpadBinding{
+                    .scratchpad_spec_name = packet_header_scratchpad,
+                    .accessor_name = "packet_header",
                 },
             },
         .tensor_bindings =
@@ -440,6 +432,7 @@ ttnn::device_operation::MeshWorkloadArtifacts::PerCoordProgram build_combine_pro
         .name = "all_to_all_combine",
         .kernels = {std::move(reader_kernel_spec), std::move(writer_kernel_spec)},
         .dataflow_buffers = std::move(dataflow_buffers),
+        .scratchpads = std::move(scratchpads),
         .tensor_parameters =
             {
                 TensorParameter{.unique_id = input_param, .spec = input_tensor.tensor_spec()},

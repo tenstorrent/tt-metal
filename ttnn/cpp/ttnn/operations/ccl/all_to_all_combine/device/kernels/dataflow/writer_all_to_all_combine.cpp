@@ -4,6 +4,7 @@
 
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/dataflow_buffer.h"
+#include "api/scratchpad.h"
 #include "api/dataflow/noc.h"
 #include "api/dataflow/global_semaphore.h"
 #include "experimental/kernel_args.h"
@@ -176,20 +177,18 @@ void kernel_main() {
     Noc noc;
     DataflowBuffer dfb_metadata(dfb::metadata);
     DataflowBuffer dfb_local_experts(dfb::local_experts);
-    DataflowBuffer dfb_packet_header(dfb::packet_header);
+    Scratchpad<uint8_t> packet_header(scratch::packet_header);
     DataflowBuffer dfb_data(dfb::data);
 
     // 3 distinct header buffers: the bidirectional completion send fills packet_headers[1] and [2]
-    // back-to-back with non-draining fabric sends, so they must not alias. get_read_ptr stays pinned
-    // (nothing pops this scratch DFB), so take the base once and offset each by sizeof(PACKET_HEADER_TYPE).
+    // back-to-back with non-draining fabric sends, so they must not alias. Take the scratchpad base once
+    // and offset each by sizeof(PACKET_HEADER_TYPE).
     volatile PACKET_HEADER_TYPE* packet_headers[3];
-    dfb_packet_header.reserve_back(3);
-    const uint32_t packet_header_base = dfb_packet_header.get_read_ptr();
+    const uint32_t packet_header_base = reinterpret_cast<uint32_t>(&packet_header[0]);
     for (uint8_t i = 0; i < 3; ++i) {
         packet_headers[i] =
             reinterpret_cast<volatile PACKET_HEADER_TYPE*>(packet_header_base + i * sizeof(PACKET_HEADER_TYPE));
     }
-    dfb_packet_header.push_back(3);
     const uint64_t init_noc_semaphore_addr = get_noc_addr(init_semaphore.address());
 
     for (uint32_t i = 0; i < Num_Directions; i++) {

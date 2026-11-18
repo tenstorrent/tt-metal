@@ -6,6 +6,7 @@
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
 #include "api/dataflow/dataflow_buffer.h"
+#include "api/scratchpad.h"
 #include "api/core_local_mem.h"
 #include "api/tensor/noc_traits.h"
 #include "experimental/kernel_args.h"
@@ -74,7 +75,7 @@ void kernel_main() {
     const auto data_addrgen = TensorAccessor(tensor::data);
 
     Noc noc;
-    DataflowBuffer dfb_mapping(dfb::mapping);
+    Scratchpad<uint8_t> mapping(scratch::mapping);
     DataflowBuffer dfb_local_experts(dfb::local_experts);
     DataflowBuffer dfb_metadata(dfb::metadata);
     DataflowBuffer dfb_data(dfb::data);
@@ -84,9 +85,7 @@ void kernel_main() {
     auto local_experts_ptr = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(dfb_local_experts.get_write_ptr());
 
     // temp buffer just used here
-    dfb_mapping.reserve_back(1);
-    uint32_t mapping_buffer_addr = dfb_mapping.get_write_ptr();
-    dfb_mapping.push_back(1);
+    uint32_t mapping_buffer_addr = reinterpret_cast<uint32_t>(&mapping[0]);
 
     detail::get_device_expert_indices<linearized_mesh_coord, num_mapping_pages, mapping_page_size_bytes>(
         noc, mapping_addrgen, mapping_buffer_addr, mapping_page_size_bytes, local_experts_ptr);
