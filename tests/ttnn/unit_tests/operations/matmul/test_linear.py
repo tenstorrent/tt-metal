@@ -1792,3 +1792,60 @@ def test_linear_rejects_output_aliasing_bias(device, expect_error):
     product = (torch_a.float() @ torch_b.float()).flatten()
     coeff = torch.dot(product, (result - torch_bias.float()).flatten()) / torch.dot(product, product)
     assert abs(coeff.item() - 1.0) < 0.02, coeff.item()
+
+
+@pytest.mark.parametrize(
+    "shape_a, shape_b, transpose_a, transpose_b",
+    [
+        ((96, 95), (511, 95), False, True),
+        ((128, 64), (128, 96), True, False),
+    ],
+)
+@pytest.mark.parametrize("use_bias", [True, False])
+@pytest.mark.parametrize("preallocated_output", [True, False])
+def test_linear_l1_host_transpose(device, shape_a, shape_b, transpose_a, transpose_b, use_bias, preallocated_output):
+    """
+    On L1 these shapes select a config that transposes on the host.
+    The output shape must still follow the requested transpose, or the bias add or the preallocated output check fails.
+    """
+    torch.manual_seed(0)
+    torch_a = torch.randn(shape_a, dtype=torch.bfloat16)
+    torch_b = torch.randn(shape_b, dtype=torch.bfloat16)
+    torch_output = (torch_a.T if transpose_a else torch_a) @ (torch_b.T if transpose_b else torch_b)
+    torch_bias = torch.randn((1, torch_output.shape[-1]), dtype=torch.bfloat16)
+    if use_bias:
+        torch_output = torch_output + torch_bias
+
+    input_tensor_a = ttnn.from_torch(
+        torch_a, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.L1_MEMORY_CONFIG
+    )
+    input_tensor_b = ttnn.from_torch(
+        torch_b, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.L1_MEMORY_CONFIG
+    )
+    bias = ttnn.from_torch(
+        torch_bias, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.L1_MEMORY_CONFIG
+    )
+
+    output = ttnn.from_torch(
+        torch.zeros(torch_output.shape, dtype=torch.bfloat16),
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=ttnn.L1_MEMORY_CONFIG,
+    )
+
+    output_tensor = ttnn.linear(
+        input_tensor_a,
+        input_tensor_b,
+        bias=bias if use_bias else None,
+        transpose_a=transpose_a,
+        transpose_b=transpose_b,
+        memory_config=ttnn.L1_MEMORY_CONFIG,
+        optional_output_tensor=output if preallocated_output else None,
+    )
+    output_tensor = ttnn.to_torch(output_tensor)
+
+    assert output_tensor.shape == torch_output.shape
+    assert_numeric_metrics(
+        torch_output, output_tensor, pcc_threshold=0.999, check_ulp=False, check_frobenius=False, check_allclose=False
+    )

@@ -7,7 +7,7 @@ import pytest
 
 import ttnn
 
-from tests.ttnn.utils_for_testing import assert_with_pcc
+from tt_py_test_utils_common.utils_for_testing import assert_with_pcc
 
 from models.experimental.vovnet.tt.osa_stage import TtOsaStage
 from models.experimental.vovnet.tt.model_preprocessing import custom_preprocessor

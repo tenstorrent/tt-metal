@@ -6,8 +6,8 @@
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/work_split.hpp>
 #include <tt-metalium/hal.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
+#include <tt-metalium/workload/specification/program_spec.hpp>
+#include <tt-metalium/workload/run_args/program_run_args.hpp>
 #include <tt-metalium/math.hpp>
 #include "ttnn/operations/core/data_movement_kernel/datamovement_kernel_config.hpp"
 #include "ttnn/operations/data_movement/common/common.hpp"
@@ -46,7 +46,6 @@ ttnn::device_operation::ProgramArtifacts PermuteDeviceOperation::MultiCoreRowInv
     tensor_return_value_t& tensor_return_value) {
     using namespace tt;
     using namespace tt::tt_metal;
-    using namespace tt::tt_metal::experimental;
 
     const auto& input_tensor = tensor_args.input_tensor;
     auto& output_tensor = tensor_return_value;
@@ -169,7 +168,6 @@ ttnn::device_operation::ProgramArtifacts PermuteDeviceOperation::MultiCoreBlocke
     tensor_return_value_t& tensor_return_value) {
     using namespace tt;
     using namespace tt::tt_metal;
-    using namespace tt::tt_metal::experimental;
 
     const auto& input_tensor = tensor_args.input_tensor;
     auto& output_tensor = tensor_return_value;
@@ -185,6 +183,10 @@ ttnn::device_operation::ProgramArtifacts PermuteDeviceOperation::MultiCoreBlocke
     uint32_t output_cb_page_size = x_block_size * input_tensor.element_size();
 
     uint32_t num_input_pages_to_read = 2;
+    const uint32_t fast_path = input_tensor.device()->arch() == tt::ARCH::WORMHOLE_B0 && !input_tensor.is_sharded() &&
+                                       !output_tensor.is_sharded()
+                                   ? 1u
+                                   : 0u;
 
     // we are focused on reading one row at a time, in a pattern that allows us to write an entire output row at a time
     // if W is being swapped with another dim X (e.g. H), then we need to read X rows at a time (X is the new row
@@ -267,7 +269,8 @@ ttnn::device_operation::ProgramArtifacts PermuteDeviceOperation::MultiCoreBlocke
              {"w_blocks", w_blocks},
              {"x_block_size", x_block_size},
              {"w_block_size", w_block_size},
-             {"element_size", input_tensor.element_size()}},
+             {"element_size", input_tensor.element_size()},
+             {"fast_path", fast_path}},
         .runtime_arg_schema = {.runtime_arg_names = {"start_block", "end_block"}},
         .hw_config = ttnn::create_reader_datamovement_config(),
         .advanced_options = {.num_runtime_varargs = 2 * N},
@@ -296,7 +299,8 @@ ttnn::device_operation::ProgramArtifacts PermuteDeviceOperation::MultiCoreBlocke
              {"w_blocks", w_blocks},
              {"x_block_size", x_block_size},
              {"w_block_size", w_block_size},
-             {"W", W}},
+             {"W", W},
+             {"fast_path", fast_path}},
         .runtime_arg_schema = {.runtime_arg_names = {"start_block", "end_block"}},
         .hw_config = ttnn::create_writer_datamovement_config(),
         .advanced_options = {.num_runtime_varargs = 3 * N},

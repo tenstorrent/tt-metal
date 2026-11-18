@@ -7,7 +7,7 @@
 #include <cstdint>
 #include <string>
 
-#include <tt-metalium/experimental/metal2_host_api/node_coord.hpp>
+#include <tt-metalium/vocabulary/node_coord.hpp>
 #include <tt_stl/strong_type.hpp>
 
 namespace tt::tt_metal::experimental {

@@ -109,7 +109,7 @@ distributed::MeshWorkload initialize_program_data_movement_rta(
     // so defining it unconditionally is harmless on gen1.
     uint32_t max_dms = MetalContext::instance().hal().get_processor_types_count(
         HalProgrammableCoreType::TENSIX, ttsl::as_underlying_type(HalProcessorClassType::DM));
-    experimental::KernelSpec::CompilerOptions::Defines dm_defines = {
+    KernelSpec::CompilerOptions::Defines dm_defines = {
         {"DATA_MOVEMENT", "1"},
         {"NUM_RUNTIME_ARGS", std::to_string(num_unique_rt_args)},
         {"RESULTS_ADDR", std::to_string(rta_base_dm)},
@@ -118,17 +118,17 @@ distributed::MeshWorkload initialize_program_data_movement_rta(
         dm_defines.emplace("COMMON_RUNTIME_ARGS", "1");
     }
 
-    const experimental::KernelSpecName KERNEL{"dm_runtime_args"};
+    const KernelSpecName KERNEL{"dm_runtime_args"};
 
     // DM config is chosen per arch; WH/BH pins processor/NOC via config_1xx. On Quasar all 6
     // user DMs (DM2..DM7) run the kernel; on WH/BH the legacy DM was a single RISCV_0 thread.
-    experimental::DataMovementHardwareConfig dm_cfg;
+    DataMovementHardwareConfig dm_cfg;
     if (mesh_device->arch() == tt::ARCH::QUASAR) {
-        dm_cfg = experimental::DataMovementHardwareConfig{};
+        dm_cfg = DataMovementHardwareConfig{};
     } else {
-        dm_cfg = experimental::DataMovementHardwareConfig{
+        dm_cfg = DataMovementHardwareConfig{
             .config_1xx =
-                experimental::DataMovementHardwareConfig::DataMovement1XXConfig{
+                DataMovementHardwareConfig::DataMovement1XXConfig{
                     .processor = tt_metal::DataMovementProcessor::RISCV_0,
                     .noc = tt_metal::NOC::RISCV_0_default,
                 },
@@ -137,7 +137,7 @@ distributed::MeshWorkload initialize_program_data_movement_rta(
     const bool is_quasar = MetalContext::instance().hal().get_arch() == tt::ARCH::QUASAR;
     const uint32_t num_threads = is_quasar ? kQuasarNumUserDms : 1u;
 
-    experimental::KernelSpec kernel_spec{
+    KernelSpec kernel_spec{
         .unique_id = KERNEL,
         .source =
 
@@ -146,38 +146,38 @@ distributed::MeshWorkload initialize_program_data_movement_rta(
         .compiler_options = {.defines = dm_defines},
         .hw_config = dm_cfg,
         .advanced_options =
-            experimental::KernelAdvancedOptions{
+            tt_metal::experimental::KernelAdvancedOptions{
                 .num_runtime_varargs = common_rtas ? 0u : num_unique_rt_args,
                 .num_common_runtime_varargs = common_rtas ? num_unique_rt_args : 0u,
             },
     };
 
-    experimental::WorkUnitSpec wu{
+    WorkUnitSpec wu{
         .name = "main",
         .kernels = {KERNEL},
         .target_nodes = core_range_set,
     };
-    experimental::ProgramSpec spec{
+    ProgramSpec spec{
         .name = "dm_runtime_args",
         .kernels = {kernel_spec},
         .work_units = {wu},
     };
-    Program program = experimental::MakeProgramFromSpec(*mesh_device, spec);
+    Program program = tt_metal::experimental::MakeProgramFromSpec(*mesh_device, spec);
 
     workload.add_program(device_range, std::move(program));
     return workload;
 }
 
-experimental::ProgramRunArgs make_data_movement_program_run_args(
+ProgramRunArgs make_data_movement_program_run_args(
     const std::map<CoreCoord, std::vector<uint32_t>>& core_to_rt_args,
     const std::vector<uint32_t>& common_runtime_args = {}) {
-    experimental::ProgramRunArgs::KernelRunArgs kernel_args{.kernel = experimental::KernelSpecName{"dm_runtime_args"}};
+    ProgramRunArgs::KernelRunArgs kernel_args{.kernel = KernelSpecName{"dm_runtime_args"}};
     for (const auto& [core, runtime_args] : core_to_rt_args) {
         kernel_args.advanced_options.runtime_varargs[core] = runtime_args;
     }
     kernel_args.advanced_options.common_runtime_varargs = common_runtime_args;
 
-    experimental::ProgramRunArgs params;
+    ProgramRunArgs params;
     params.kernel_run_args.push_back(std::move(kernel_args));
     return params;
 }
@@ -212,7 +212,7 @@ std::pair<distributed::MeshWorkload, std::vector<std::string>> initialize_progra
 
     uint32_t max_dms = MetalContext::instance().hal().get_processor_types_count(
         HalProgrammableCoreType::TENSIX, ttsl::as_underlying_type(HalProcessorClassType::DM));
-    experimental::KernelSpec::CompilerOptions::Defines defines_vec = {
+    KernelSpec::CompilerOptions::Defines defines_vec = {
         {"DATA_MOVEMENT", "1"},
         {"NUM_RUNTIME_ARGS", std::to_string(num_runtime_args)},
         {"RESULTS_ADDR", std::to_string(rta_base)},
@@ -222,42 +222,42 @@ std::pair<distributed::MeshWorkload, std::vector<std::string>> initialize_progra
     }
 
     std::vector<std::string> kernel_names(num_kernels);
-    std::vector<experimental::KernelSpec> kernel_specs;
-    std::vector<experimental::KernelSpecName> wu_kernel_names;
+    std::vector<KernelSpec> kernel_specs;
+    std::vector<KernelSpecName> wu_kernel_names;
     kernel_specs.reserve(num_kernels);
     wu_kernel_names.reserve(num_kernels);
 
     for (uint32_t k = 0; k < num_kernels; k++) {
         kernel_names[k] = "dm_kernel_" + std::to_string(k);
-        kernel_specs.push_back(experimental::KernelSpec{
-            .unique_id = experimental::KernelSpecName{kernel_names[k]},
+        kernel_specs.push_back(KernelSpec{
+            .unique_id = KernelSpecName{kernel_names[k]},
             .source =
 
                 "tests/tt_metal/tt_metal/test_kernels/misc/runtime_args_kernel_2_0.cpp",
             .num_threads = dm_processors_per_kernel,
             .compiler_options = {.defines = defines_vec},
-            .hw_config = experimental::DataMovementHardwareConfig{},
+            .hw_config = DataMovementHardwareConfig{},
             .advanced_options =
-                experimental::KernelAdvancedOptions{
+                tt_metal::experimental::KernelAdvancedOptions{
                     .num_runtime_varargs = num_runtime_args,
                     .num_common_runtime_varargs = common_rtas ? static_cast<size_t>(num_runtime_args) : size_t{0},
                 },
         });
-        wu_kernel_names.push_back(experimental::KernelSpecName{kernel_names[k]});
+        wu_kernel_names.push_back(KernelSpecName{kernel_names[k]});
     }
 
-    experimental::WorkUnitSpec main_wu{
+    WorkUnitSpec main_wu{
         .name = "main",
         .kernels = wu_kernel_names,
         .target_nodes = core_range_set,
     };
 
-    experimental::ProgramSpec spec{
+    ProgramSpec spec{
         .name = "quasar_crta_test",
         .kernels = kernel_specs,
         .work_units = {main_wu},
     };
-    Program program = experimental::MakeProgramFromSpec(*mesh_device, spec);
+    Program program = tt_metal::experimental::MakeProgramFromSpec(*mesh_device, spec);
 
     workload.add_program(device_range, std::move(program));
     return {std::move(workload), kernel_names};
@@ -1054,9 +1054,9 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarCRTASharedL1Address) {
         unit_tests::runtime_args::kQuasarNumUserDms);
     auto& program = workload.get_programs().at(device_range);
 
-    experimental::ProgramRunArgs params;
-    params.kernel_run_args = {experimental::ProgramRunArgs::KernelRunArgs{
-        .kernel = experimental::KernelSpecName{kernel_names[0]},
+    ProgramRunArgs params;
+    params.kernel_run_args = {ProgramRunArgs::KernelRunArgs{
+        .kernel = KernelSpecName{kernel_names[0]},
         .advanced_options =
             experimental::AdvancedKernelRunArgs{
                 .runtime_varargs = {{core, std::vector<uint32_t>(common_rtas.size(), 0)}},
@@ -1092,13 +1092,13 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarCRTAUniqueL1Addresses) {
         mesh_device, core_range_set, base_crtas.size(), true, num_kernels, /*dm_processors_per_kernel*/ 1);
     auto& program = workload.get_programs().at(device_range);
 
-    experimental::ProgramRunArgs params;
+    ProgramRunArgs params;
     std::vector<std::vector<uint32_t>> all_crtas(num_kernels);
     for (uint32_t i = 0; i < num_kernels; i++) {
         std::vector<uint32_t> kernel_crtas = {base_crtas[0] + i, base_crtas[1] + i, base_crtas[2] + i};
         all_crtas[i] = kernel_crtas;
-        params.kernel_run_args.push_back(experimental::ProgramRunArgs::KernelRunArgs{
-            .kernel = experimental::KernelSpecName{kernel_names[i]},
+        params.kernel_run_args.push_back(ProgramRunArgs::KernelRunArgs{
+            .kernel = KernelSpecName{kernel_names[i]},
             .advanced_options =
                 experimental::AdvancedKernelRunArgs{
                     .runtime_varargs = {{core, std::vector<uint32_t>(base_crtas.size(), 0)}},
@@ -1114,7 +1114,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarCRTAUniqueL1Addresses) {
 }
 
 TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarMergeProgramRunArgs) {
-    const experimental::NodeCoord node{0, 0};
+    const NodeCoord node{0, 0};
     CoreRange core_range(CoreCoord{0, 0});
     CoreRangeSet core_range_set(std::vector{core_range});
 
@@ -1129,38 +1129,37 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarMergeProgramRunArgs) {
     slow_dispatch::WriteToL1(this->device(), node, address_1, zeros);
 
     // Two kernels, each using one DM thread, writing to distinct L1 addresses.
-    const experimental::KernelSpecName K1{"k1"}, K2{"k2"};
-    auto make_dm_spec = [&](const experimental::KernelSpecName& id) {
-        return experimental::KernelSpec{
+    const KernelSpecName K1{"k1"}, K2{"k2"};
+    auto make_dm_spec = [&](const KernelSpecName& id) {
+        return KernelSpec{
             .unique_id = id,
             .source = "tests/tt_metal/tt_metal/test_kernels/dataflow/simple_l1_write.cpp",
             .num_threads = 1,
             .runtime_arg_schema = {.runtime_arg_names = {"address"}, .common_runtime_arg_names = {"value"}},
-            .hw_config = experimental::DataMovementHardwareConfig{},
+            .hw_config = DataMovementHardwareConfig{},
         };
     };
-    experimental::WorkUnitSpec main_wu{.name = "main", .kernels = {K1, K2}, .target_nodes = core_range_set};
-    experimental::ProgramSpec spec{
-        .name = "merge_test", .kernels = {make_dm_spec(K1), make_dm_spec(K2)}, .work_units = {main_wu}};
+    WorkUnitSpec main_wu{.name = "main", .kernels = {K1, K2}, .target_nodes = core_range_set};
+    ProgramSpec spec{.name = "merge_test", .kernels = {make_dm_spec(K1), make_dm_spec(K2)}, .work_units = {main_wu}};
     Program program = experimental::MakeProgramFromSpec(this->device(), spec);
 
     // Build two partial ProgramRunArgs, one per kernel.
-    experimental::ProgramRunArgs part1;
-    part1.kernel_run_args = {experimental::ProgramRunArgs::KernelRunArgs{
+    ProgramRunArgs part1;
+    part1.kernel_run_args = {ProgramRunArgs::KernelRunArgs{
         .kernel = K1,
-        .runtime_arg_values = experimental::MakeRuntimeArgsForSingleNode(node, {{"address", address_1}}),
+        .runtime_arg_values = MakeRuntimeArgsForSingleNode(node, {{"address", address_1}}),
         .common_runtime_arg_values = {{"value", value_1}},
     }};
-    experimental::ProgramRunArgs part2;
-    part2.kernel_run_args = {experimental::ProgramRunArgs::KernelRunArgs{
+    ProgramRunArgs part2;
+    part2.kernel_run_args = {ProgramRunArgs::KernelRunArgs{
         .kernel = K2,
-        .runtime_arg_values = experimental::MakeRuntimeArgsForSingleNode(node, {{"address", address_2}}),
+        .runtime_arg_values = MakeRuntimeArgsForSingleNode(node, {{"address", address_2}}),
         .common_runtime_arg_values = {{"value", value_2}},
     }};
 
     // Merge and set.
-    std::vector<experimental::ProgramRunArgs> rest = {part2};
-    experimental::ProgramRunArgs merged = experimental::MergeProgramRunArgs(std::move(part1), rest);
+    std::vector<ProgramRunArgs> rest = {part2};
+    ProgramRunArgs merged = MergeProgramRunArgs(std::move(part1), rest);
     experimental::SetProgramRunArgs(program, merged);
 
     LaunchProgram(this->device(), std::move(program));
@@ -1171,7 +1170,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarMergeProgramRunArgs) {
 }
 
 TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarUpdateProgramRunArgs) {
-    const experimental::NodeCoord node{0, 0};
+    const NodeCoord node{0, 0};
     CoreRange core_range(CoreCoord{0, 0});
     CoreRangeSet core_range_set(std::vector{core_range});
 
@@ -1185,17 +1184,16 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarUpdateProgramRunArgs) {
     const uint32_t value_1 = 0x11223344;
     const uint32_t value_2 = 0x99aabbcc;
 
-    const experimental::KernelSpecName DM_KERNEL{"dm_kernel"};
-    experimental::KernelSpec dm_kernel_spec{
+    const KernelSpecName DM_KERNEL{"dm_kernel"};
+    KernelSpec dm_kernel_spec{
         .unique_id = DM_KERNEL,
         .source = "tests/tt_metal/tt_metal/test_kernels/dataflow/simple_l1_write.cpp",
         .num_threads = unit_tests::runtime_args::kQuasarNumUserDms,
         .runtime_arg_schema = {.runtime_arg_names = {"address"}, .common_runtime_arg_names = {"value"}},
-        .hw_config = experimental::DataMovementHardwareConfig{},
+        .hw_config = DataMovementHardwareConfig{},
     };
-    experimental::WorkUnitSpec main_wu{.name = "main", .kernels = {DM_KERNEL}, .target_nodes = core_range_set};
-    experimental::ProgramSpec spec{
-        .name = "update_run_args_test", .kernels = {dm_kernel_spec}, .work_units = {main_wu}};
+    WorkUnitSpec main_wu{.name = "main", .kernels = {DM_KERNEL}, .target_nodes = core_range_set};
+    ProgramSpec spec{.name = "update_run_args_test", .kernels = {dm_kernel_spec}, .work_units = {main_wu}};
 
     distributed::MeshWorkload workload;
     workload.add_program(device_range, experimental::MakeProgramFromSpec(this->device(), spec));
@@ -1205,20 +1203,20 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarUpdateProgramRunArgs) {
     slow_dispatch::WriteToL1(this->device(), node, address_1, zeros);
 
     // First enqueue: write value_1 to address_1.
-    experimental::ProgramRunArgs params1;
-    params1.kernel_run_args = {experimental::ProgramRunArgs::KernelRunArgs{
+    ProgramRunArgs params1;
+    params1.kernel_run_args = {ProgramRunArgs::KernelRunArgs{
         .kernel = DM_KERNEL,
-        .runtime_arg_values = experimental::MakeRuntimeArgsForSingleNode(node, {{"address", address_1}}),
+        .runtime_arg_values = MakeRuntimeArgsForSingleNode(node, {{"address", address_1}}),
         .common_runtime_arg_values = {{"value", value_1}},
     }};
     experimental::SetProgramRunArgs(prog, params1);
     distributed::EnqueueMeshWorkload(cq, workload, true);
 
     // Second enqueue: update to value_2 and re-dispatch to address_2.
-    experimental::ProgramRunArgs params2;
-    params2.kernel_run_args = {experimental::ProgramRunArgs::KernelRunArgs{
+    ProgramRunArgs params2;
+    params2.kernel_run_args = {ProgramRunArgs::KernelRunArgs{
         .kernel = DM_KERNEL,
-        .runtime_arg_values = experimental::MakeRuntimeArgsForSingleNode(node, {{"address", address_2}}),
+        .runtime_arg_values = MakeRuntimeArgsForSingleNode(node, {{"address", address_2}}),
         .common_runtime_arg_values = {{"value", value_2}},
     }};
     experimental::UpdateProgramRunArgs(prog, params2);
