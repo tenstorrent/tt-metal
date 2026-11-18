@@ -22,7 +22,8 @@ from safetensors import safe_open
 from transformers import AutoTokenizer
 
 import ttnn
-from models.tt_transformers.tt.model_config import ModelArgs, ModelOptimizations, parse_decoder_json
+from models.demos.audio.qwen3_asr.tt.model_args import Qwen3ASRModelArgs
+from models.tt_transformers.tt.model_config import ModelOptimizations, parse_decoder_json
 
 ROOT = os.path.join(os.path.dirname(__file__), "..")
 sys.path.insert(0, os.path.join(ROOT, "reference"))
@@ -85,7 +86,7 @@ def main():
         enc_params = tt_enc.preprocess_weights(w, dev)
         decoder_cfg = os.environ.get("QWEN3ASR_DECODER_CONFIG")
         opt = parse_decoder_json(decoder_cfg, default_optimization=ModelOptimizations.accuracy) if decoder_cfg else None
-        args = ModelArgs(dev, max_batch_size=1, max_seq_len=2048, optimizations=opt)
+        args = Qwen3ASRModelArgs(dev, max_batch_size=1, max_seq_len=2048, optimizations=opt)
         sd = args.load_state_dict()
         model = Qwen3ASRDecoder(
             args, ttnn.bfloat16, dev, sd, args.weight_cache_path(ttnn.bfloat16), use_paged_kv_cache=False

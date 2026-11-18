@@ -31,8 +31,8 @@ import torch
 import ttnn
 from models.demos.audio.qwen3_asr.reference import audio_encoder_ref as ref
 from models.demos.audio.qwen3_asr.tt import audio_encoder as tt_enc
+from models.demos.audio.qwen3_asr.tt.model_args import Qwen3ASRModelArgs
 from models.demos.audio.qwen3_asr.tt.qwen3_asr_decoder import Qwen3ASRDecoder
-from models.tt_transformers.tt.model_config import ModelArgs
 
 AUDIO_TOKEN_ID = 151676
 SR = 16000
@@ -93,7 +93,7 @@ def test_e2e_wav_transcription(device, snap_dir, text_decoder_ckpt):
     # --- build the real TT encoder + decoder ---
     w = ref.load_audio_tower_weights(snap_dir=snap_dir, dtype=torch.float32)
     enc_params = tt_enc.preprocess_weights(w, device)
-    args = ModelArgs(device, max_batch_size=1, max_seq_len=2048)
+    args = Qwen3ASRModelArgs(device, max_batch_size=1, max_seq_len=2048)
     model = Qwen3ASRDecoder(
         args,
         ttnn.bfloat16,
