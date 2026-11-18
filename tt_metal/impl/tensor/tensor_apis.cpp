@@ -44,6 +44,21 @@ bool should_use_pinned_write_path(distributed::MeshDevice& mesh_device, size_t s
     return params.max_pins > 0 && params.can_map_to_noc;
 }
 
+// Re-encodes `tensor` with `spec`, which has the same logical shape but other padding.
+HostTensor to_padding_of(const HostTensor& tensor, const TensorSpec& spec) {
+    return tensor_impl::dispatch(tensor.dtype(), [&]<typename T>() {
+        if constexpr (std::is_same_v<T, tensor_impl::bfloat8_b> || std::is_same_v<T, tensor_impl::bfloat4_b>) {
+            // Block-float data is re-encoded through float, which to_tensor_spec requires.
+            return to_tensor_spec<float>(tensor, spec);
+        } else if constexpr (std::is_same_v<T, float8_e4m3> || std::is_same_v<T, tensor_impl::mx_tiles>) {
+            TT_THROW("Re-padding a {} host tensor is not supported", tensor.dtype());
+            return tensor;
+        } else {
+            return to_tensor_spec<T>(tensor, spec);
+        }
+    });
+}
+
 }  // namespace CMAKE_UNIQUE_NAMESPACE
 
 }  // namespace
@@ -102,7 +117,12 @@ MeshTensor distributed::MeshCommandQueue::enqueue_write_tensor(
             old_spec.tensor_layout().get_alignment()));
     auto result =
         allocate_mesh_tensor_on_device_with_topology(mesh_device, tensor_spec, get_tensor_topology(host_tensor));
-    enqueue_write_tensor(host_tensor, result);
+    // The memory config can add padding, such as a ROW_MAJOR shard width beyond the tensor width.
+    if (host_tensor.padded_shape() != tensor_spec.padded_shape()) {
+        enqueue_write_tensor(CMAKE_UNIQUE_NAMESPACE::to_padding_of(host_tensor, tensor_spec), result);
+    } else {
+        enqueue_write_tensor(host_tensor, result);
+    }
     return result;
 }
 

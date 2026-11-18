@@ -40,6 +40,7 @@
 #include <tt-metalium/buffer.hpp>
 #include <tt-metalium/buffer_types.hpp>
 #include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/vocabulary/node_coord.hpp>
 #include <tt-metalium/host_buffer.hpp>
 #include <tt-metalium/memory_pin.hpp>
 #include <tt-metalium/distributed_host_buffer.hpp>
@@ -127,6 +128,25 @@ TEST_F(MeshTensorDeviceTest, ConstructionRejectsMismatchedBuffer) {
     auto tile_spec =
         TensorSpec(Shape{32, 32}, TensorLayout(DataType::BFLOAT16, PageConfig(Layout::TILE), memory_config));
     EXPECT_ANY_THROW(MeshTensor::from_buffer(std::move(*create_mesh_buffer(*mesh_device_, row_major_spec)), tile_spec));
+}
+
+// A ROW_MAJOR shard wider than the tensor pads the device tensor; the write pads the host data to match.
+TEST_F(MeshTensorDeviceTest, WriteTensorPadsToMemoryConfig) {
+    const Shape shape{64, 10};
+    std::vector<uint32_t> data(shape.volume());
+    std::iota(data.begin(), data.end(), 1);
+    auto host_tensor = HostTensor::from_vector(
+        data, TensorSpec(shape, TensorLayout(DataType::UINT32, Layout::ROW_MAJOR, MemoryConfig{})));
+
+    const MemoryConfig memory_config{
+        TensorMemoryLayout::HEIGHT_SHARDED,
+        BufferType::L1,
+        ShardSpec{NodeRangeSet(NodeRange{NodeCoord{0, 0}, NodeCoord{1, 0}}), {32, 16}, ShardOrientation::ROW_MAJOR}};
+    auto& cq = mesh_device_->mesh_command_queue();
+    MeshTensor device_tensor = cq.enqueue_write_tensor(host_tensor, memory_config);
+    ASSERT_EQ(device_tensor.padded_shape(), Shape({64, 16}));
+
+    EXPECT_EQ(cq.enqueue_read_tensor(device_tensor).to_vector<uint32_t>(), data);
 }
 
 TEST_F(MeshTensorDeviceTest, ConstructionWithMeshBuffer) {
