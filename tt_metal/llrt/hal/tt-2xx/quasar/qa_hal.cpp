@@ -366,6 +366,13 @@ public:
     std::vector<std::string> defines(const Params& params) const override {
         auto defines = HalJitBuildQueryBase::defines(params);
         defines.push_back("ARCH_QUASAR");
+        // Emit a per-variant define so kernel headers can gate on the specific Quasar IP.
+        // The variant is set by Cluster::get_quasar_ip_variant(), which reads ip_variant
+        // from the SoC descriptor (shipped beside the simulator binary).
+        // Add a new branch for each new IP variant.
+        if (hal_.quasar_arch_variant_ == IpVariant::HORIZON) {
+            defines.push_back("IP_VARIANT_HORIZON");
+        }
         // ttsim does not model the tensix global semaphore registers. UMD picks ttsim over RTL
         // emulation by the same .so test.
         if (params.rtoptions.get_simulator_path().extension() == ".so") {

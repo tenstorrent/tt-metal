@@ -281,8 +281,9 @@ struct DFBAdvancedOptions {
     // Rules for aliased DFBs:
     //   - Every DFB in the alias group must list every other member as an alias
     //   - Aliased DFBs must have the same total size (num_entries * entry_size).
-    //   - All members must target the same node set
-    //     (derived from their bound kernels' WorkUnitSpecs).
+    //   - All members must allocate backing memory on the same node set.
+    //     Each member can derive its placement from its bound kernels or specify
+    //     override_placement.
     //   - If any member overrides allocation, all members must use the same arena parameter and byte offset.
     Group<DFBSpecName> alias_with;
 
@@ -369,6 +370,31 @@ struct DFBAdvancedOptions {
     // CAUTION: The relay's storage is the pipe's ring, owned outside the Program. The DFB cannot
     //          be resized by DFBRunOverrides, and its address is only known once the pipe is bound.
     Group<PrefetcherPipeParamName> prefetcher_pipe_relays;
+
+    ////////////////////////////////////////////////////////////////////////////////
+    // Placement override
+    ////////////////////////////////////////////////////////////////////////////////
+
+    // Restrict the nodes on which DFB instances (and their backing memory) exist.
+    // By default, a DFB has an instance on every node where its bound kernels run.
+    // With an override, it has instances only on the override's nodes.
+    //
+    // CAUTION: With an override, kernel instances on the excluded nodes hold a "dangling binding":
+    // a DFB binding with no DFB instance behind it. The kernel author must handle this explicitly;
+    // the runtime provides no device-side checks. It is undefined behavior for a kernel instance
+    // to access the binding of an absent DFB instance.
+    //
+    // Invariants:
+    //  - The override is a non-empty subset of the bound kernels' nodes (equality is allowed).
+    //  - Every overridden node has at least one producer and one consumer bound to this DFB.
+    //  - Cannot be combined with borrowed_from or prefetcher_pipe_relays.
+    //
+    // Notes:
+    //  - The per-instance endpoint rules (see dataflow_buffer_spec.hpp) and
+    //    allow_instance_multi_binding apply on the nodes that have a DFB instance.
+    //  - Placement is fixed for the Program lifetime. DFBRunOverrides can still change
+    //    entry_size and num_entries.
+    std::optional<NodeRangeSet> override_placement = std::nullopt;
 };
 
 struct ScratchpadAdvancedOptions {
@@ -393,6 +419,24 @@ struct ScratchpadAdvancedOptions {
     // DM cores and Compute cores have cache coherency misalignment that currently
     // lacks ways to synchronize. See: #62551
     bool allow_instance_multi_binding = false;
+
+    ////////////////////////////////////////////////////////////////////////////////
+    // Placement override
+    ////////////////////////////////////////////////////////////////////////////////
+
+    // Restrict the nodes on which scratchpad instances (and their backing memory) exist.
+    // By default, a scratchpad has an instance on every node where its bound kernels run.
+    // With an override, it has instances only on the override's nodes, all at the same
+    // local L1 address.
+    //
+    // CAUTION: With an override, kernel instances on the excluded nodes hold a "dangling binding":
+    // a scratchpad binding with no scratchpad instance behind it. The kernel author must handle
+    // this explicitly; the runtime provides no device-side checks. It is undefined behavior for a
+    // kernel instance to access the binding of an absent scratchpad instance.
+    //
+    // Invariants:
+    //  - The override is a non-empty subset of the bound kernels' nodes (equality is allowed).
+    std::optional<NodeRangeSet> override_placement = std::nullopt;
 
     ////////////////////////////////////////////////////////////////////////////////
     // Allocation override (experimental)

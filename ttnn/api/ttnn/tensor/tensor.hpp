@@ -159,6 +159,12 @@ public:
 
     [[nodiscard]] Tensor cpu(bool blocking = true, std::optional<QueueId> cq_id = std::nullopt) const;
 
+    // See ttnn::cpu_shards.
+    [[nodiscard]] std::vector<Tensor> cpu_shards(
+        const std::vector<tt::tt_metal::distributed::MeshCoordinate>& coords,
+        bool blocking = true,
+        std::optional<QueueId> cq_id = std::nullopt) const;
+
     [[nodiscard]] Tensor unpad(
         const tt::tt_metal::Shape& output_tensor_start, const tt::tt_metal::Shape& output_tensor_end) const;
 

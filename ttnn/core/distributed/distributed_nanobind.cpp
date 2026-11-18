@@ -47,6 +47,7 @@
 #include "distribution_mode.hpp"
 
 #include "ttnn/tensor/types.hpp"
+#include "ttnn/tensor/tensor_ops.hpp"
 #include "ttnn-nanobind/pipeline_module_nanobind.hpp"
 
 namespace {
@@ -932,6 +933,31 @@ void py_module(nb::module_& mod) {
            List[Tensor]: The shards of the tensor corresponding to the devices.
            )doc");
     mod.def(
+        "cpu_shards",
+        &ttnn::cpu_shards,
+        nb::arg("tensor"),
+        nb::arg("coords"),
+        nb::arg("blocking") = true,
+        nb::arg("cq_id") = nb::none(),
+        nb::call_guard<nb::gil_scoped_release>(),
+        R"doc(
+       Read the shards of a device tensor at the given mesh coordinates to the host, in one command-queue batch.
+
+       The function form of ``Tensor.cpu_shards``. Returns one single-device host tensor per coordinate, in the order
+       given, as ``get_device_tensors`` returns a host tensor's shards. Every coordinate must be one the tensor holds a
+       shard at (``tensor.device_coords()``), and none may repeat. The device tensor and its topology label are
+       untouched.
+
+       Args:
+           tensor (Tensor): The device tensor to read.
+           coords (List[MeshCoordinate]): The coordinates to read, in the order the results are returned.
+           blocking (bool): Wait for the read to finish. Defaults to True.
+           cq_id (int, optional): The command queue to read on. Defaults to None, the current command queue.
+
+       Returns:
+           List[Tensor]: One single-device host tensor per coordinate.
+           )doc");
+    mod.def(
         "replicate_tensor_to_mesh_mapper",
         [](MeshDevice& mesh_device) -> nbh::unique_ptr<TensorToMesh> {
             return nbh::steal_rewrap_unique<TensorToMesh>(replicate_tensor_to_mesh_mapper(mesh_device));
@@ -1092,6 +1118,30 @@ void py_module(nb::module_& mod) {
             Args:
                 tensors (List[Tensor]): The tensor shards to aggregate.
                 mesh_shape (MeshShape): The shape of the mesh to aggregate the shards over.
+
+            Returns:
+                Tensor: The multi-device host tensor.
+            )doc");
+    mod.def(
+        "from_local_host_shards",
+        &from_local_host_shards,
+        nb::arg("shards"),
+        nb::arg("mesh_device"),
+        nb::arg("topology"),
+        R"doc(
+            Creates a multi-device host tensor from the shards this host holds, labelled exactly as given.
+
+            Unlike ``from_host_shards``, which needs one shard per coordinate of the whole mesh and spells a 1-D
+            label of its own, this takes the ``TensorTopology`` the tensor should carry and one host shard per
+            coordinate it lists on this host (on a single-host mesh, every coordinate it lists). Coordinates that
+            belong to other hosts of a multi-host mesh, or that the label does not list (a tensor can live on part
+            of the mesh), stay unpopulated, so the result can be moved to the device with ``to``.
+
+            Args:
+                shards (Dict[MeshCoordinate, Tensor]): One host shard per local coordinate the topology lists; all
+                    with the same spec.
+                mesh_device (MeshDevice): The mesh the tensor is destined for; decides which coordinates are local.
+                topology (TensorTopology): The label the tensor carries, as the live tensor it will be placed into has it.
 
             Returns:
                 Tensor: The multi-device host tensor.
