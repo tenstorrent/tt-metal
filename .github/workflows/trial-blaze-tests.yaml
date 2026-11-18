@@ -57,9 +57,10 @@ jobs:
     if: ${{ !cancelled() && needs.build-artifact-profiler.result == 'success' }}
     permissions:
       contents: read
-    # TT_BLAZE_PAT -- the default GITHUB_TOKEN cannot dispatch another repo.
-    secrets:
-      TT_BLAZE_PAT: ${{ secrets.TT_BLAZE_PAT }}
+      # The gate signs in to the OSPO Vault for short-lived tt-blaze tokens
+      # (the default GITHUB_TOKEN cannot dispatch another repo). They are given
+      # only to runs on main; a manual run from another branch stops in the gate.
+      id-token: write
     uses: ./.github/workflows/blaze-merge-gate.yaml
     with:
       # Artifacts belong to the TOP-LEVEL run, which is this workflow.

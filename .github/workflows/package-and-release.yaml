@@ -211,9 +211,10 @@ jobs:
     if: ${{ !cancelled() && github.ref != 'refs/heads/stable' && needs.build-artifact-profiler.result == 'success' }}
     permissions:
       contents: read
-    # TT_BLAZE_PAT -- the default GITHUB_TOKEN cannot dispatch another repo.
-    secrets:
-      TT_BLAZE_PAT: ${{ secrets.TT_BLAZE_PAT }}
+      # The gate signs in to the OSPO Vault for short-lived tt-blaze tokens
+      # (the default GITHUB_TOKEN cannot dispatch another repo). They are given
+      # only to runs on main; on any other ref except stable the gate stops.
+      id-token: write
     uses: ./.github/workflows/blaze-merge-gate.yaml
     with:
       # Artifacts belong to the TOP-LEVEL run, which is this workflow.
@@ -238,12 +239,53 @@ jobs:
           && github.event_name == 'schedule'
           && github.ref == 'refs/heads/main' }}
     runs-on: ubuntu-latest
-    permissions: {}
+    # The tt-blaze write token can only be fetched by a job on main in
+    # environment `tt-blaze-dispatch` (the `if` above already needs main).
+    environment: tt-blaze-dispatch
+    permissions:
+      id-token: write # OSPO Vault sign-in for the tt-blaze write token
+    env:
+      VAULT_URL: https://vault-ospo.eng-svc.aws.tenstorrent.com
     steps:
+      - name: Join tailnet (OSPO Vault)
+        id: tailnet
+        timeout-minutes: 3
+        uses: tailscale/github-action@064b10558093f38325e838ddea35486bdc6b1d5c # v4.4.0
+        with:
+          oauth-client-id: ${{ vars.TS_VAULT_OSPO_CLIENT_ID }}
+          audience: ${{ vars.TS_VAULT_OSPO_AUDIENCE }}
+          tags: tag:tt-gha-vault-ospo
+
+      - name: Wait for Vault
+        timeout-minutes: 2
+        shell: bash
+        run: |
+          for _ in 1 2 3 4 5 6; do
+            curl -fsS --max-time 5 "${VAULT_URL}/v1/sys/health?standbyok=true&uninitcode=204&sealedcode=204" >/dev/null && exit 0
+            sleep 2
+          done
+          echo "Vault ${VAULT_URL} did not become reachable over Tailscale" >&2
+          exit 1
+
+      - name: Get a tt-blaze write token from Vault
+        id: vault
+        timeout-minutes: 2
+        uses: hashicorp/vault-action@892a26828f195e65540a40b4768ae4571f51ebfc # v4.0.0
+        with:
+          url: ${{ env.VAULT_URL }}
+          method: jwt
+          path: jwt-github
+          role: tenstorrent--tt-metal--blaze-dispatch
+          jwtGithubAudience: ${{ env.VAULT_URL }}
+          exportEnv: false
+          secrets: |
+            github/token/tenstorrent--tt-metal--blaze-actions-write token | BLAZE_WRITE_TOKEN
+
       - name: Launch tt-blaze's nightly tt-metal uplift
         env:
-          # The default GITHUB_TOKEN cannot dispatch another repo.
-          GH_TOKEN: ${{ secrets.TT_BLAZE_PAT }}
+          # The default GITHUB_TOKEN cannot dispatch another repo: a short-lived
+          # token from the OSPO Vault, revoked in the next step.
+          GH_TOKEN: ${{ steps.vault.outputs.BLAZE_WRITE_TOKEN }}
           METAL_SHA: ${{ github.sha }}
         shell: bash
         run: |
@@ -253,6 +295,27 @@ jobs:
           gh workflow run nightly-metal-uplift.yaml --repo tenstorrent/tt-blaze --ref main \
             -f metal-ref=main -f metal-sha="$METAL_SHA" -f validate=true
           echo "Launched tt-blaze nightly-metal-uplift.yaml for tt-metal ${METAL_SHA}" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Revoke the tt-blaze write token
+        if: ${{ always() }}
+        env:
+          BLAZE_WRITE_TOKEN: ${{ steps.vault.outputs.BLAZE_WRITE_TOKEN }}
+        shell: bash
+        run: |
+          # Token from env, not the command line.
+          if [ -n "${BLAZE_WRITE_TOKEN:-}" ]; then
+            printf 'header = "Authorization: Bearer %s"\nheader = "Accept: application/vnd.github+json"\n' "$BLAZE_WRITE_TOKEN" \
+              | curl -sS --max-time 10 -o /dev/null -w 'revoke write token: HTTP %{http_code}\n' -K - -X DELETE \
+                  https://api.github.com/installation/token || true
+          else
+            echo "no token to revoke"
+          fi
+
+      # Leaving the tailnet cuts this job off from Vault.
+      - name: Leave tailnet
+        if: ${{ always() && (steps.tailnet.outcome == 'success' || steps.tailnet.outcome == 'failure') }}
+        shell: bash
+        run: sudo tailscale logout || { echo "::warning::tailscale logout failed; taking the interface down"; sudo tailscale down || true; }
 
   publish-to-pypi:
     needs: [build-test-publish, create-tag, blaze-merge-gate]

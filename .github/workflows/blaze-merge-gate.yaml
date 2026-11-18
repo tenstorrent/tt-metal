@@ -22,10 +22,18 @@ name: Blaze Merge Gate
 # or wheel), so the gate must run in this commit's image, not vars.DEV_IMAGE.
 #
 #
-# Auth: dispatching and polling a workflow in another repo needs a PAT with
+# Auth: dispatching and polling a workflow in another repo needs a token with
 # `actions: write` (dispatch, cancel) and `actions: read` (poll) on
-# tenstorrent/tt-blaze, stored in THIS repo as the `TT_BLAZE_PAT` secret. The
-# default GITHUB_TOKEN is scoped to tt-metal and cannot dispatch tt-blaze.
+# tenstorrent/tt-blaze. The default GITHUB_TOKEN is scoped to tt-metal and
+# cannot dispatch tt-blaze. No token is stored in this repo: the job gets
+# short-lived tokens from the OSPO Vault at run time (OIDC sign-in, role
+# tenstorrent--tt-metal--blaze-dispatch). The role answers only a job that runs
+# on `main` (schedule or manual dispatch) AND names the environment
+# `tt-blaze-dispatch`; on any other ref this job stops at once. The write token
+# is used for the dispatch and revoked right after it; the cancel step gets its
+# own. The poll holds only a read token, renewed every 45 minutes (a token lasts
+# 1 hour, a Vault sign-in 15 minutes). The caller job must grant
+# `id-token: write`. To change the access, open an OSPO ticket.
 #
 # `gh workflow run` returns no run id, so the run is correlated by echoing a
 # unique `dispatch-id` into tt-blaze's `run-name` and matching it back. That token
@@ -81,10 +89,6 @@ on:
       blaze-run-url:
         description: "URL of the tt-blaze run this gate waited on (empty if none was ever found)."
         value: ${{ jobs.blaze-ci.outputs.blaze-run-url }}
-    secrets:
-      TT_BLAZE_PAT:
-        description: "PAT with actions:read+write on tenstorrent/tt-blaze."
-        required: true
 
 permissions:
   contents: read
@@ -97,16 +101,72 @@ jobs:
     # so it can report WHY it gave up. If the runner killed it first, the failure
     # would read as an infra timeout instead of "no Loudbox came free".
     timeout-minutes: 195
+    # The tt-blaze tokens can only be fetched by a job on main in environment
+    # `tt-blaze-dispatch`. Same form as the `release` binding in
+    # release-verify-or-create-tag.yaml.
+    environment: ${{ github.ref == 'refs/heads/main' && 'tt-blaze-dispatch' || '' }}
+    permissions:
+      contents: read
+      id-token: write # OSPO Vault sign-in for the tt-blaze tokens
     outputs:
       blaze-run-url: ${{ steps.dispatch.outputs.blaze-run-url }}
     env:
       BLAZE_REPO: tenstorrent/tt-blaze
       BLAZE_WORKFLOW: ${{ inputs.selected-buckets == '' && 'ci.yaml' || 'bh-loudbox-intermittent.yaml' }}
+      VAULT_URL: https://vault-ospo.eng-svc.aws.tenstorrent.com
     steps:
+      # The OSPO Vault gives the tt-blaze tokens only to runs on main. Stop here,
+      # with one clear message, instead of failing later at the Vault sign-in.
+      - name: Check that this run is on main
+        if: ${{ github.ref != 'refs/heads/main' }}
+        shell: bash
+        run: |
+          echo "::error::tt-blaze token is available only for runs on main; ask OSPO by ticket for other needs"
+          exit 1
+
+      - name: Join tailnet (OSPO Vault)
+        id: tailnet
+        timeout-minutes: 3
+        uses: tailscale/github-action@064b10558093f38325e838ddea35486bdc6b1d5c # v4.4.0
+        with:
+          oauth-client-id: ${{ vars.TS_VAULT_OSPO_CLIENT_ID }}
+          audience: ${{ vars.TS_VAULT_OSPO_AUDIENCE }}
+          tags: tag:tt-gha-vault-ospo
+
+      - name: Wait for Vault
+        timeout-minutes: 2
+        shell: bash
+        run: |
+          for _ in 1 2 3 4 5 6; do
+            curl -fsS --max-time 5 "${VAULT_URL}/v1/sys/health?standbyok=true&uninitcode=204&sealedcode=204" >/dev/null && exit 0
+            sleep 2
+          done
+          echo "Vault ${VAULT_URL} did not become reachable over Tailscale" >&2
+          exit 1
+
+      # Write token for the dispatch only. The step below revokes it right after
+      # the dispatch; the poll uses read tokens.
+      - name: Get a tt-blaze write token from Vault (dispatch)
+        id: vault-write
+        timeout-minutes: 2
+        uses: hashicorp/vault-action@892a26828f195e65540a40b4768ae4571f51ebfc # v4.0.0
+        with:
+          url: ${{ env.VAULT_URL }}
+          method: jwt
+          path: jwt-github
+          role: tenstorrent--tt-metal--blaze-dispatch
+          jwtGithubAudience: ${{ env.VAULT_URL }}
+          exportEnv: false
+          secrets: |
+            github/token/tenstorrent--tt-metal--blaze-actions-write token | BLAZE_WRITE_TOKEN
+
       - name: Dispatch tt-blaze ${{ env.BLAZE_WORKFLOW }} and wait for it
         id: dispatch
         env:
-          GH_TOKEN: ${{ secrets.TT_BLAZE_PAT }}
+          # Do not add `set -x` to this step: it would print the tokens.
+          BLAZE_WRITE_TOKEN: ${{ steps.vault-write.outputs.BLAZE_WRITE_TOKEN }}
+          BLAZE_VAULT_ROLE: tenstorrent--tt-metal--blaze-dispatch
+          BLAZE_READ_PATH: github/token/tenstorrent--tt-metal--blaze-actions-read
           METAL_RUN_ID: ${{ inputs.metal-run-id }}
           METAL_REF: ${{ inputs.metal-ref }}
           BLAZE_REF: ${{ inputs.blaze-ref }}
@@ -116,6 +176,108 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+
+          # >>> tt-blaze read token (OSPO-1330; tested as a unit, keep these marker lines)
+          # Short-lived read tokens for the poll, from the OSPO Vault. Rules:
+          # never print a token, never pass one on a command line (printf is a
+          # shell builtin; curl reads headers and body from stdin), mask each
+          # value before any other use. Messages and masks go to fd 3 (the step
+          # log) or stderr, never to stdout, so `$(...)` and `> file` around a
+          # call can never capture a token or a mask line.
+          exec 3>&1
+          BLAZE_READ_TOKEN=""
+          blaze_read_minted_at=0
+          BLAZE_READ_MAX_AGE=2700  # 45 minutes: renew from here on
+          BLAZE_READ_HARD_AGE=3480 # 58 minutes: a token lasts 1 hour, never use it past this
+          revoke_github_token() { # $1 = NAME of the variable that holds the token, $2 = label
+            local tok="${!1:-}" code
+            [ -n "$tok" ] || return 0
+            code=$(printf 'header = "Authorization: Bearer %s"\nheader = "Accept: application/vnd.github+json"\n' "$tok" \
+              | curl -sS --max-time 10 -o /dev/null -w '%{http_code}' -K - -X DELETE \
+                  https://api.github.com/installation/token 2>/dev/null) || code=000
+            echo "revoke $2 token: HTTP ${code}" >&3
+            [ "$code" = 204 ]
+          }
+          mint_blaze_read_token() {
+            local jwt="" vault_token="" token="" audience
+            audience=$(jq -rn --arg v "$VAULT_URL" '$v | @uri')
+            # 1. A new GitHub OIDC token for the Vault audience (needs id-token: write).
+            jwt=$(printf 'header = "Authorization: Bearer %s"\nurl = "%s&audience=%s"\n' \
+                    "${ACTIONS_ID_TOKEN_REQUEST_TOKEN:-}" "${ACTIONS_ID_TOKEN_REQUEST_URL:-}" "$audience" \
+                  | curl -fsS --max-time 20 -K - | jq -r '.value // empty') || jwt=""
+            if [ -z "$jwt" ]; then
+              echo "::warning::tt-blaze read token: GitHub gave no OIDC token (does the caller job grant id-token: write?)" >&3
+              return 1
+            fi
+            echo "::add-mask::${jwt}" >&3
+            # 2. Vault sign-in with that OIDC token.
+            vault_token=$(printf '{"role":"%s","jwt":"%s"}' "$BLAZE_VAULT_ROLE" "$jwt" \
+                  | curl -fsS --max-time 20 -X POST --data-binary @- "${VAULT_URL}/v1/auth/jwt-github/login" \
+                  | jq -r '.auth.client_token // empty') || vault_token=""
+            jwt=""
+            if [ -z "$vault_token" ]; then
+              echo "::warning::tt-blaze read token: Vault refused the sign-in (role ${BLAZE_VAULT_ROLE} answers only runs on main in environment tt-blaze-dispatch)" >&3
+              return 1
+            fi
+            echo "::add-mask::${vault_token}" >&3
+            # 3. Mint the read token.
+            token=$(printf 'header = "X-Vault-Token: %s"\n' "$vault_token" \
+                  | curl -fsS --max-time 20 -K - "${VAULT_URL}/v1/${BLAZE_READ_PATH}" \
+                  | jq -r '.data.token // empty') || token=""
+            vault_token=""
+            if [ -z "$token" ]; then
+              echo "::warning::tt-blaze read token: Vault gave no token for ${BLAZE_READ_PATH}" >&3
+              return 1
+            fi
+            echo "::add-mask::${token}" >&3
+            revoke_github_token BLAZE_READ_TOKEN "previous read" || true
+            BLAZE_READ_TOKEN="$token"
+            token=""
+            blaze_read_minted_at=$SECONDS
+            echo "tt-blaze read token ready (renewed after 45 minutes or on a 401)" >&3
+          }
+          ensure_blaze_read_token() {
+            if [ -n "$BLAZE_READ_TOKEN" ] && [ $(( SECONDS - blaze_read_minted_at )) -lt "$BLAZE_READ_MAX_AGE" ]; then
+              return 0
+            fi
+            [ -z "$BLAZE_READ_TOKEN" ] || echo "tt-blaze read token is 45 minutes old: getting a new one" >&3
+            mint_blaze_read_token && return 0
+            # Renewal failed (for example Vault is briefly down). Keep the old
+            # token while it is still valid; the next call tries the mint again.
+            if [ -n "$BLAZE_READ_TOKEN" ] && [ $(( SECONDS - blaze_read_minted_at )) -lt "$BLAZE_READ_HARD_AGE" ]; then
+              echo "::warning::tt-blaze read token renewal failed; using the current token for now" >&3
+              return 0
+            fi
+            return 1
+          }
+          # `gh` with the read token. Run it in this shell (redirect its output
+          # to a file, not `$(...)`), so a new token stays for the next call.
+          # On a 401 it gets a new token once and tries the same call again.
+          blaze_gh() {
+            local err rc=0
+            ensure_blaze_read_token || return 1
+            err=$(mktemp)
+            GH_TOKEN="$BLAZE_READ_TOKEN" gh "$@" 2>"$err" || rc=$?
+            if [ "$rc" -ne 0 ] && grep -q 'HTTP 401' "$err"; then
+              echo "tt-blaze read token refused (401): getting a new one" >&3
+              if mint_blaze_read_token; then
+                rc=0
+                GH_TOKEN="$BLAZE_READ_TOKEN" gh "$@" 2>"$err" || rc=$?
+              else
+                # Rejected and not renewed: drop it, so the poll stops (see the loop).
+                BLAZE_READ_TOKEN=""
+              fi
+            fi
+            cat "$err" >&2
+            rm -f "$err"
+            return "$rc"
+          }
+          # Set before anything can exit, so every exit revokes what is left.
+          # On cancel the runner sends a signal: exit, so the EXIT trap runs.
+          trap 'revoke_github_token BLAZE_READ_TOKEN read; revoke_github_token BLAZE_WRITE_TOKEN write' EXIT
+          trap 'exit 143' TERM INT
+          # <<< tt-blaze read token
+          BLAZE_OUT=$(mktemp)
 
           POLL_SECONDS=60
           # A dispatched run is not immediately visible to `gh run list`. Until this
@@ -155,47 +317,57 @@ jobs:
             SCOPE_ARGS=(-f bh-loudbox-run-all=false -f bh-loudbox-selected-buckets="$SELECTED_BUCKETS")
             SCOPE="selected buckets: ${SELECTED_BUCKETS}"
           fi
+
+          # Get the read token first: it proves the Vault path before anything
+          # is started in tt-blaze.
+          if ! mint_blaze_read_token; then
+            echo "::error::Could not get a tt-blaze read token from the OSPO Vault (see the warning above). Nothing was dispatched. Ask OSPO by ticket."
+            echo "- ❌ tt-blaze — no tt-blaze token from the OSPO Vault" >> "$GITHUB_STEP_SUMMARY"
+            exit 1
+          fi
+          if [ -z "${BLAZE_WRITE_TOKEN:-}" ]; then
+            echo "::error::The Vault step gave no tt-blaze write token. Nothing was dispatched. Ask OSPO by ticket."
+            echo "- ❌ tt-blaze — no tt-blaze write token" >> "$GITHUB_STEP_SUMMARY"
+            exit 1
+          fi
+
           # Preflight the token before dispatching. tt-blaze is PRIVATE, and
           # GitHub answers 404 (never 403) for anything a token cannot see there,
           # so `gh workflow run` reports a missing workflow when the real fault is
-          # a PAT that cannot read the repo. These two probes separate the cases so
-          # the log names the actual problem.
-          # Probe 1: is the credential live at all? Separated from the repo probe
-          # because "expired/revoked token" and "valid token that cannot see
-          # tt-blaze" have completely different fixes but look identical once the
-          # repo lookup 404s.
-          if ! PAT_LOGIN=$(gh api user --jq .login 2>/dev/null) || [ -z "$PAT_LOGIN" ]; then
-            echo "::error::TT_BLAZE_PAT is not a usable credential -- GitHub rejected it outright (401 Bad credentials), so this is not about repo access. It is expired, revoked, or was stored with stray whitespace/quotes when the secret was set. Reissue it and update the secret in ${GITHUB_REPOSITORY}."
-            echo "- ❌ tt-blaze — TT_BLAZE_PAT rejected (bad credentials)" >> "$GITHUB_STEP_SUMMARY"
+          # a token that cannot read the repo. These two probes separate the cases
+          # so the log names the actual problem. (The PAT-era probe `gh api user`
+          # is gone: a short-lived App token has no user.)
+          if ! blaze_gh api "repos/${BLAZE_REPO}" --jq .full_name >/dev/null 2>&1; then
+            echo "::error::The tt-blaze read token cannot see ${BLAZE_REPO}. ${BLAZE_REPO} is private, so GitHub answers 404 rather than 403 for anything this token is not entitled to. The token comes from the OSPO Vault (role ${BLAZE_VAULT_ROLE}): ask OSPO by ticket."
+            echo "- ❌ tt-blaze — the tt-blaze token cannot see ${BLAZE_REPO}" >> "$GITHUB_STEP_SUMMARY"
             exit 1
           fi
-          # Not a secret; naming it turns "wrong account / stale bot" into a
-          # one-line diagnosis instead of a hunt.
-          echo "TT_BLAZE_PAT authenticates as: ${PAT_LOGIN}"
-
-          if ! gh api "repos/${BLAZE_REPO}" --jq .full_name >/dev/null 2>&1; then
-            echo "::error::TT_BLAZE_PAT is valid (authenticates as '${PAT_LOGIN}') but cannot see ${BLAZE_REPO}. ${BLAZE_REPO} is private, so GitHub answers 404 rather than 403 for anything this token is not entitled to. Either '${PAT_LOGIN}' has no access to ${BLAZE_REPO}, or the token is scoped away from it: a fine-grained PAT must list ${BLAZE_REPO} in its selected repositories AND be approved by the tenstorrent org (pending approval also reads as 404); a classic PAT needs the 'repo' scope to see private repos at all."
-            echo "- ❌ tt-blaze — TT_BLAZE_PAT ('${PAT_LOGIN}') cannot see ${BLAZE_REPO}" >> "$GITHUB_STEP_SUMMARY"
-            exit 1
-          fi
-          if ! gh api "repos/${BLAZE_REPO}/actions/workflows/${BLAZE_WORKFLOW}" --jq .id >/dev/null 2>&1; then
-            echo "::error::TT_BLAZE_PAT can read ${BLAZE_REPO} but not ${BLAZE_WORKFLOW}. That is an Actions-permission gap, not a missing file: a fine-grained PAT needs Actions: Read and write (plus Metadata: Read); a classic PAT needs the 'repo' scope for a private repository."
-            echo "- ❌ tt-blaze — TT_BLAZE_PAT lacks Actions access on ${BLAZE_REPO}" >> "$GITHUB_STEP_SUMMARY"
+          if ! blaze_gh api "repos/${BLAZE_REPO}/actions/workflows/${BLAZE_WORKFLOW}" --jq .id >/dev/null 2>&1; then
+            echo "::error::The tt-blaze read token can read ${BLAZE_REPO} but not ${BLAZE_WORKFLOW}: either the file does not exist on the default branch of ${BLAZE_REPO}, or the token lacks Actions read. Ask OSPO by ticket if the file exists."
+            echo "- ❌ tt-blaze — cannot read ${BLAZE_WORKFLOW} on ${BLAZE_REPO}" >> "$GITHUB_STEP_SUMMARY"
             exit 1
           fi
 
           # Dispatching needs actions:WRITE, which neither probe above proves --
           # both are reads. A 403 here (rather than 404) means the token can see
           # Actions but not trigger them.
-          if ! gh workflow run "$BLAZE_WORKFLOW" \
+          dispatch_rc=0
+          GH_TOKEN="$BLAZE_WRITE_TOKEN" gh workflow run "$BLAZE_WORKFLOW" \
             --repo "$BLAZE_REPO" \
             --ref "$BLAZE_REF" \
             -f metal-run-id="$METAL_RUN_ID" \
             -f metal-ref="$METAL_REF" \
             -f dispatch-id="$DISPATCH_ID" \
             -f dev-image="$DEV_IMAGE" \
-            "${SCOPE_ARGS[@]}"; then
-            echo "::error::Dispatch of ${BLAZE_WORKFLOW} on ${BLAZE_REPO}@${BLAZE_REF} failed. The token can read the workflow (checked above), so the usual causes are: no actions:write on ${BLAZE_REPO}; ${BLAZE_REF} does not carry every input passed here (an input this workflow sends but ${BLAZE_REF}'s ${BLAZE_WORKFLOW} does not declare is rejected outright -- the tt-blaze side must land FIRST); or ${BLAZE_REF} does not exist."
+            "${SCOPE_ARGS[@]}" || dispatch_rc=$?
+          # The write token is not needed again in this step: revoke it now.
+          if revoke_github_token BLAZE_WRITE_TOKEN write; then
+            # The always() revoke step below then has nothing to do.
+            echo "BLAZE_WRITE_REVOKED=1" >> "$GITHUB_ENV"
+          fi
+          BLAZE_WRITE_TOKEN=""
+          if [ "$dispatch_rc" -ne 0 ]; then
+            echo "::error::Dispatch of ${BLAZE_WORKFLOW} on ${BLAZE_REPO}@${BLAZE_REF} failed. The read token can see the workflow (checked above), so the usual causes are: the write token lacks actions:write on ${BLAZE_REPO}; ${BLAZE_REF} does not carry every input passed here (an input this workflow sends but ${BLAZE_REF}'s ${BLAZE_WORKFLOW} does not declare is rejected outright -- the tt-blaze side must land FIRST); or ${BLAZE_REF} does not exist."
             echo "- ❌ tt-blaze — dispatch rejected" >> "$GITHUB_STEP_SUMMARY"
             exit 1
           fi
@@ -212,6 +384,16 @@ jobs:
           while :; do
             elapsed=$(( $(date +%s) - started ))
 
+            # Never poll without a valid read token. ensure_blaze_read_token
+            # fails only when renewal failed and the token is rejected or 58
+            # minutes old. Stop now (not at the deadline); the cancel steps
+            # below then try a fresh write token.
+            if ! ensure_blaze_read_token; then
+              echo "::error::could not renew the tt-blaze read token; the tt-blaze run ${run_id:-(dispatched, id not found yet)} may still be running"
+              echo "- ❌ tt-blaze — could not renew the tt-blaze read token" >> "$GITHUB_STEP_SUMMARY"
+              exit 1
+            fi
+
             if [ -z "$run_id" ]; then
               # Correlate on the token echoed into tt-blaze's run-name. Matching on
               # "newest dispatch" instead would be wrong: the release pipeline is
@@ -221,11 +403,15 @@ jobs:
               # `displayTitle` is where a computed `run-name` lands; `name` is the
               # workflow's own name. Both are searched so this keeps working if gh
               # ever changes which one carries it.
-              run_id=$(gh run list --repo "$BLAZE_REPO" --workflow "$BLAZE_WORKFLOW" \
+              # blaze_gh runs in this shell with its output in a file (see above).
+              run_id=""
+              if blaze_gh run list --repo "$BLAZE_REPO" --workflow "$BLAZE_WORKFLOW" \
                          --event workflow_dispatch --limit 100 \
                          --json databaseId,displayTitle,name \
                          --jq "[.[] | select(((.displayTitle // \"\") + \" \" + (.name // \"\")) | contains(\"${DISPATCH_ID}\"))] | .[0].databaseId // empty" \
-                       2>/dev/null || echo "")
+                       >"$BLAZE_OUT" 2>/dev/null; then
+                run_id=$(cat "$BLAZE_OUT")
+              fi
 
               if [ -z "$run_id" ]; then
                 if [ "$elapsed" -gt "$GRACE_SECONDS" ]; then
@@ -234,7 +420,7 @@ jobs:
                   exit 1
                 fi
                 echo "waiting for the dispatched run to be indexed (${elapsed}s)"
-                sleep "$POLL_SECONDS"
+                sleep "$POLL_SECONDS" & wait $!
                 continue
               fi
 
@@ -247,11 +433,16 @@ jobs:
               echo "- ⏳ tt-blaze — [run ${run_id}](${run_url})" >> "$GITHUB_STEP_SUMMARY"
             fi
 
-            read -r status conclusion <<< "$(gh run view "$run_id" --repo "$BLAZE_REPO" \
-                                               --json status,conclusion \
-                                               --jq '"\(.status) \(.conclusion // "-")"')"
+            status=""
+            conclusion=""
+            blaze_gh run view "$run_id" --repo "$BLAZE_REPO" \
+                     --json status,conclusion \
+                     --jq '"\(.status) \(.conclusion // "-")"' >"$BLAZE_OUT" || true
+            read -r status conclusion <"$BLAZE_OUT" || true
 
             if [ "$status" = "completed" ]; then
+              # Nothing left to cancel: the cancel steps below skip a finished run.
+              echo "BLAZE_RUN_DONE=1" >> "$GITHUB_ENV"
               case "$conclusion" in
                 success)
                   echo "✅ tt-blaze CI passed: ${run_url}"
@@ -278,8 +469,32 @@ jobs:
             fi
 
             echo "tt-blaze run ${run_id}: ${status} (${elapsed}s elapsed)"
-            sleep "$POLL_SECONDS"
+            # Background sleep + wait, so a cancel signal is handled at once.
+            sleep "$POLL_SECONDS" & wait $!
           done
+
+      # Revokes the dispatch write token at a step boundary when the dispatch
+      # step did not (for example a cancel before or during it). Quiet when
+      # there is nothing to do.
+      - name: Revoke the tt-blaze write token (dispatch)
+        if: ${{ always() && steps.vault-write.outcome == 'success' && env.BLAZE_WRITE_REVOKED != '1' }}
+        env:
+          BLAZE_WRITE_TOKEN: ${{ steps.vault-write.outputs.BLAZE_WRITE_TOKEN }}
+        shell: bash
+        run: |
+          # Token from env, not the command line. Always exits 0.
+          if [ -z "${BLAZE_WRITE_TOKEN:-}" ]; then
+            echo "no write token to revoke"
+            exit 0
+          fi
+          code=$(printf 'header = "Authorization: Bearer %s"\nheader = "Accept: application/vnd.github+json"\n' "$BLAZE_WRITE_TOKEN" \
+            | curl -sS --max-time 10 -o /dev/null -w '%{http_code}' -K - -X DELETE \
+                https://api.github.com/installation/token 2>/dev/null) || code=000
+          case "$code" in
+            204) echo "write token revoked" ;;
+            401) echo "write token was already invalid; nothing to revoke" ;;
+            *)   echo "write token revoke not confirmed (HTTP ${code}); it expires within 1 hour" ;;
+          esac
 
       # Cancelling this run (or the release pipeline around it) stops this job but
       # not the run it started, which would otherwise keep occupying constrained
@@ -288,11 +503,41 @@ jobs:
       # failure() is here for the TIMEOUT path specifically: giving up on the wait
       # exits 1, which is not cancelled(), so without this a timed-out gate leaves
       # the blaze run holding those runners with nobody watching it anymore.
+      #
+      # The write token of the dispatch is revoked already, so this path gets a
+      # fresh one. The tailnet stays up until the last step.
+      - name: Get a tt-blaze write token from Vault (cancel)
+        id: vault-cancel
+        if: (cancelled() || failure()) && env.BLAZE_RUN_ID != '' && env.BLAZE_RUN_DONE != '1'
+        timeout-minutes: 2
+        uses: hashicorp/vault-action@892a26828f195e65540a40b4768ae4571f51ebfc # v4.0.0
+        with:
+          url: ${{ env.VAULT_URL }}
+          method: jwt
+          path: jwt-github
+          role: tenstorrent--tt-metal--blaze-dispatch
+          jwtGithubAudience: ${{ env.VAULT_URL }}
+          exportEnv: false
+          secrets: |
+            github/token/tenstorrent--tt-metal--blaze-actions-write token | BLAZE_WRITE_TOKEN
+
       - name: Cancel the tt-blaze run if this job was cancelled or timed out
-        if: (cancelled() || failure()) && env.BLAZE_RUN_ID != ''
+        if: (cancelled() || failure()) && env.BLAZE_RUN_ID != '' && env.BLAZE_RUN_DONE != '1'
         env:
-          GH_TOKEN: ${{ secrets.TT_BLAZE_PAT }}
+          GH_TOKEN: ${{ steps.vault-cancel.outputs.BLAZE_WRITE_TOKEN }}
         shell: bash
         run: |
           echo "Cancelling tt-blaze run ${BLAZE_RUN_ID}"
           gh run cancel "$BLAZE_RUN_ID" --repo "$BLAZE_REPO" || true
+          # Revoke the write token right away (token from env, not the command line).
+          if [ -n "${GH_TOKEN:-}" ]; then
+            printf 'header = "Authorization: Bearer %s"\nheader = "Accept: application/vnd.github+json"\n' "$GH_TOKEN" \
+              | curl -sS --max-time 10 -o /dev/null -w 'revoke write token: HTTP %{http_code}\n' -K - -X DELETE \
+                  https://api.github.com/installation/token || true
+          fi
+
+      # Leaving the tailnet cuts this job off from Vault.
+      - name: Leave tailnet
+        if: ${{ always() && (steps.tailnet.outcome == 'success' || steps.tailnet.outcome == 'failure') }}
+        shell: bash
+        run: sudo tailscale logout || { echo "::warning::tailscale logout failed; taking the interface down"; sudo tailscale down || true; }
