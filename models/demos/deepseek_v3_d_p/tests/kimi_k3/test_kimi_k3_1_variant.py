@@ -26,6 +26,7 @@ from models.demos.deepseek_v3_d_p.tests.kimi_k3.k31_stage import (
     NUM_STAGES_4X4,
     PP4_MAX_USERS,
     SP_AXIS_4X4,
+    STAGE0_4X4_MAX_USERS,
 )
 from models.demos.deepseek_v3_d_p.tt.kimi_k3.transformer import TtKimiK3Transformer
 from models.demos.deepseek_v3_d_p.tt.mla.indexer import resolve_has_indexer
@@ -132,6 +133,5 @@ def test_kimi_k3_1_manifest_deploys_k31_as_k3_is_deployed(monkeypatch):
 
     # The context must be whole 2560-token chunks.
     assert int(k31["PREFILL_MAX_SEQ_LEN"]) == MAX_SEQ_LEN and MAX_SEQ_LEN % CHUNK_4X4 == 0
-    # PROVISIONAL: the 8x4 PP4 capacity (measured, see k31_stage.PP4_MAX_USERS), held until the 4x4 count is
-    # measured at this context on 2x[4,4] and replaces it here and in the manifest.
-    assert int(k31["PREFILL_NUM_USERS"]) == PP4_MAX_USERS
+    # The slots allocated are the measured maximum, as for the 8x4 stage (PP4_MAX_USERS, which the *_8x4 configs keep).
+    assert int(k31["PREFILL_NUM_USERS"]) == STAGE0_4X4_MAX_USERS > PP4_MAX_USERS
