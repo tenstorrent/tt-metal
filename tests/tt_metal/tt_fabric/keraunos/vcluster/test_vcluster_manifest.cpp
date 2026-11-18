@@ -520,6 +520,13 @@ TEST(VclusterManifest, LoadErrorVersion) {
     expect_load_error(edit({{"version: 1\n", ""}}), "version");
 }
 
+// § Checks: "An unknown or missing `version` is reported alone and ends the load": an unknown key beside it is not
+// reported.
+TEST(VclusterManifest, LoadErrorVersionAlone) {
+    expect_load_error(edit({{"version: 1\n", "version: 2\ntopology: line\n"}}), "version");
+    expect_load_error(edit({{"version: 1\n", "topology: line\n"}}), "version");
+}
+
 TEST(VclusterManifest, LoadErrorMissingKey) {
     for (const auto& [from, to, needle] :
          std::initializer_list<std::tuple<std::string_view, std::string_view, std::string_view>>{
@@ -530,7 +537,7 @@ TEST(VclusterManifest, LoadErrorMissingKey) {
              {"{tile: 3, cce: 0, hart: 1, role: worker}", "{tile: 3, cce: 0, hart: 1}", "role"},
              {"{tile: 0, cce: 0, base: 0x0, size: 0x400000}", "{tile: 0, cce: 0, base: 0x0}", "size"},
              {"b: {device: B, port: 0}, backend: ethernet", "b: {device: B, port: 0}", "backend"},
-             {"b: {device: B, port: 0}, backend: ethernet", "backend: ethernet", "b"},
+             {"b: {device: B, port: 0}, backend: ethernet", "backend: ethernet", "links[1].b"},
              {"b: {device: B, port: 0}", "b: {device: B}", "port"},
          }) {
         SCOPED_TRACE(to);
@@ -669,7 +676,7 @@ TEST(VclusterManifest, LoadErrorWrongType) {
               "role: worker}\n",
               "    slots: 3\n",
               "slots"},
-             {"b: {device: B, port: 0}", "b: B", "b"},
+             {"b: {device: B, port: 0}", "b: B", "links[1].b"},
          }) {
         SCOPED_TRACE(to);
         expect_load_error(edit({{from, to}}), needle);
@@ -700,8 +707,8 @@ TEST(VclusterManifest, LoadErrorEmptyCapture) {
     expect_load_error(edit({{"version: 1\n", "version: 1\ncapture: \"\"\n"}}), "capture");
 }
 
-// A key repeated in one map, a file of more than one YAML document, and a tagged scalar where a number is expected
-// are load errors.
+// § Checks: a key repeated in any map, a file of more than one YAML document, and a number with an explicit tag are
+// load errors.
 TEST(VclusterManifest, LoadErrorRepeatedKey) {
     expect_load_error(
         edit({{"{tile: 3, cce: 0, hart: 1, role: worker}", "{tile: 3, tile: 3, cce: 0, hart: 1, role: worker}"}}),
@@ -730,6 +737,23 @@ TEST(VclusterManifest, LoadErrorListsEvery) {
     };
     EXPECT_EQ(names("color"), 1) << joined(errors);
     EXPECT_EQ(names("master"), 1) << joined(errors);
+}
+
+// § Checks: "The checker asserts that its package facts are usable: a hart count and an SRAM size above 0, and at
+// least one core. Unusable facts are a caller's bug, not a row." The spec names no exception type.
+TEST(VclusterManifest, UnusableFactsThrow) {
+    const Manifest m = load(kLine);
+    EXPECT_ANY_THROW(check_manifest(m, PackageFacts{}));
+    PackageFacts no_harts = mmk();
+    no_harts.harts_per_cce = 0;
+    EXPECT_ANY_THROW(check_manifest(m, no_harts));
+    PackageFacts no_sram = mmk();
+    no_sram.sram_bytes_per_cce = 0;
+    EXPECT_ANY_THROW(check_manifest(m, no_sram));
+    PackageFacts no_cores = mmk();
+    no_cores.cores.clear();
+    EXPECT_ANY_THROW(check_manifest(m, no_cores));
+    EXPECT_NO_THROW(check_manifest(m, mmk()));
 }
 
 }  // namespace
