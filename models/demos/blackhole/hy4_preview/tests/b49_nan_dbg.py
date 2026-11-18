@@ -7,15 +7,15 @@ import torch
 import ttnn
 from models.demos.blackhole.hy4_preview.tests.dm_block import close_row, open_row
 from models.demos.blackhole.hy4_preview.tt import hy4_chain as HC
+from models.demos.blackhole.hy4_preview.tt.hy4_ccl_safe import make_safe_ccl
 from models.demos.blackhole.hy4_preview.tt.hy4_common import upload
 from models.demos.gpt_oss.config import mesh_1x8
-from models.demos.gpt_oss.tt.ccl import CCLManager
 
 
 def main():
     full, md = open_row()
     try:
-        mc, ccl = mesh_1x8(), CCLManager(md, num_links=2, topology=ttnn.Topology.Ring)
+        mc, ccl = mesh_1x8(), make_safe_ccl(md)
         ch = HC.Hy4Chain(md, mc, ccl, ckpt="/ckpt", kv_fmt=os.environ.get("HY4_KV_FMT", "bf16"))
         ch.add_layers(0, 1, log=lambda s: None)
         emb = ch.rd.get("model.embed_tokens.weight")
