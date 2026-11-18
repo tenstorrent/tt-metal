@@ -761,11 +761,7 @@ inline void _llk_unpack_AB_matmul_(
             }
         }
 
-        if constexpr (hoisted)
-        {
-            TT_INSN(unp_cfg_context == 0 ? mop_0 : mop_1);
-        }
-        else if (one_tile_calls && ct_dim == 1 && rt_dim == 1 && !(reuse_a ? unpA_partial_face : unpB_partial_face))
+        if (one_tile_calls && ct_dim == 1 && rt_dim == 1 && !(reuse_a ? unpA_partial_face : unpB_partial_face))
         {
             // a one-tile row: the MOP's base-address advance after its UNPACR is dead, the next call writes a fresh base
             if (reuse_a)
@@ -776,6 +772,10 @@ inline void _llk_unpack_AB_matmul_(
             {
                 TTI_UNPACR(SrcB, 0, 0, 0, 0, 1 /*Set OvrdThreadId*/, 1 /*Set Dvalid*/, p_unpacr::RAREFYB_DISABLE, 0, 0 /* Set ContextIdInc */, 0, 0, 1);
             }
+        }
+        else if constexpr (hoisted)
+        {
+            TT_INSN(unp_cfg_context == 0 ? mop_0 : mop_1);
         }
         else
         {

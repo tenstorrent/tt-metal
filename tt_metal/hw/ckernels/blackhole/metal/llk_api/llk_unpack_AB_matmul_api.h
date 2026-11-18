@@ -65,7 +65,8 @@ template <
     DataFormat out_format = DataFormat::Invalid,
     std::uint32_t reuse_dir = 0,
     std::uint32_t stream_z = 0,
-    bool unkeyed_hoist = true>
+    bool unkeyed_hoist = true,
+    bool one_tile_key = false>
 inline void llk_unpack_AB_matmul_impl(
     const std::uint32_t base_address_a,
     const std::uint32_t base_address_b,
@@ -100,7 +101,7 @@ inline void llk_unpack_AB_matmul_impl(
         kt_per_section == 0 ? 8u : get_dest_max_tiles<DST_SYNC_MODE, DST_ACCUM_MODE, DstTileShape::Tile32x32>(),
         stream_z,
         reuse_dir,
-        llk_unpack_AB_matmul_named_1x1()>(
+        one_tile_key || llk_unpack_AB_matmul_named_1x1()>(
         base_address_a,
         base_address_b,
         tile_index_a,
@@ -230,7 +231,8 @@ template <
     DataFormat out_format = DataFormat::Invalid,
     std::uint32_t reuse_dir = 0,
     std::uint32_t stream_z = 0,
-    bool unkeyed_hoist = true>
+    bool unkeyed_hoist = true,
+    bool one_tile_key = false>
 inline void llk_unpack_AB_matmul(
     const std::uint32_t operandA,
     const std::uint32_t operandB,
@@ -283,7 +285,14 @@ inline void llk_unpack_AB_matmul(
         StateDiscard<std::uint32_t>(tile_index_a),
         StateDiscard<std::uint32_t>(tile_index_b)));
 
-    llk_unpack_AB_matmul_impl<auto_ttsync, kt_per_section, out_format, reuse_dir, stream_z, unkeyed_hoist>(
+    llk_unpack_AB_matmul_impl<
+        auto_ttsync,
+        kt_per_section,
+        out_format,
+        reuse_dir,
+        stream_z,
+        unkeyed_hoist,
+        one_tile_key>(
         base_address_a,
         base_address_b,
         tile_index_a,
