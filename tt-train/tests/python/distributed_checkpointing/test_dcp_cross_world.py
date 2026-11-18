@@ -149,9 +149,7 @@ def test_same_world_through_the_driver_matches_exactly(tmp_path, release_metal_e
     assert "RESULT: OK" in out
 
 
-def test_a_tp2_checkpoint_with_its_fused_declarations_stripped_is_refused_on_one_device(
-    tmp_path, release_metal_env, skip_if_host_too_small, mgd_path
-):
+def test_stripped_fused_declarations_are_refused(tmp_path, release_metal_env, skip_if_host_too_small, mgd_path):
     """Without its fused_segments declarations a TP2 checkpoint holds its fused rows in TP2's per-shard order and its
     index says nothing about it; loaded onto one device it would scramble Q, K and V, so the load refuses it."""
     skip_if_host_too_small((2,), "the stripped-declarations case")
