@@ -4,7 +4,7 @@
 
 """Fabric init and a ring all-gather on both axes of every [RING,RING] 4x4 prefill mesh.
 
-Each rank opens the 4x4 mesh it belongs to with FABRIC_2D_TORUS_XY: an in-Galaxy torus is owned by one
+Run on its own (one rank, one in-Galaxy torus) it checks a single mesh. Each rank opens the 4x4 mesh it belongs to with FABRIC_2D_TORUS_XY: an in-Galaxy torus is owned by one
 rank, a seam torus by two ranks on two hosts. Chip (r, c) of a mesh holds a block filled with r * 4 + c + 1;
 a ring all-gather along each axis must return the blocks of the whole row or column in mesh order, on
 every chip the rank owns.
@@ -26,17 +26,24 @@ SIDE = 4
 BLOCK = 32
 
 
+def rank_of_process():
+    return int(ttnn.distributed_context_get_rank()) if ttnn.using_distributed_env() else 0
+
+
+def barrier():
+    if ttnn.using_distributed_env():
+        barrier()
+
+
 @pytest.fixture(scope="module")
 def rr_mesh():
-    if not ttnn.using_distributed_env():
-        pytest.skip("Requires the rank binding of an rr prefill pipeline; launch with tt-run")
     ttnn.set_fabric_config(ttnn.FabricConfig.FABRIC_2D_TORUS_XY)
     try:
         mesh_device = ttnn.open_mesh_device(mesh_shape=ttnn.MeshShape(SIDE, SIDE))
         try:
             yield mesh_device
         finally:
-            ttnn.distributed_context_barrier()
+            barrier()
             ttnn.close_mesh_device(mesh_device)
     finally:
         ttnn.set_fabric_config(ttnn.FabricConfig.DISABLED)
@@ -60,7 +67,7 @@ def expected_gather(axis, r, c):
 def test_ring_all_gather_on_every_chip(rr_mesh, axis, num_links):
     mesh_device = rr_mesh
     view = mesh_device.get_view()
-    rank = int(ttnn.distributed_context_get_rank())
+    rank = rank_of_process()
 
     full = torch.cat(
         [
@@ -100,4 +107,4 @@ def test_ring_all_gather_on_every_chip(rr_mesh, axis, num_links):
         checked += 1
     assert checked > 0, "no local chip was checked"
     logger.info(f"RR_CHECK OK rank {rank} axis {axis} links {num_links}: {checked} local chips")
-    ttnn.distributed_context_barrier()
+    barrier()
