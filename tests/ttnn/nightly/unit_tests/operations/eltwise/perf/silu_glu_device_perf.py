@@ -93,8 +93,7 @@ def test_silu_glu_profiled_calls(device):
             if path != "composite":
                 ttnn.deallocate(result)
             assert (OP_TYPE in arguments) == (path == "fused"), f"the {path} call ran the other path"
-            if True:
-                assert len(operations) == 1, f"the {path} call launched {operations}"
+            assert len(operations) == 1, f"the {path} call launched {operations}"
             for repeat in range(REPEATS):
                 signpost(f"{path}-{height}x{width}-{repeat}-start")
                 result = call()

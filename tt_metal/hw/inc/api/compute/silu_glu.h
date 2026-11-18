@@ -26,7 +26,7 @@ namespace ckernel {
  *
  * BF16 inputs, Blackhole only: within 0.523 ULP of the exact value, in either DEST mode, on the inputs its test scores.
  *
- * The DST register buffer must be in acquired state via *acquire_dst* call. This call is blocking and is only
+ * The DST register buffer must be in acquired state via *tile_regs_acquire* call. This call is blocking and is only
  * available on the compute engine.
  *
  * Return value: None
