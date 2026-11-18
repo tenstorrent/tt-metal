@@ -9,7 +9,7 @@
 #include "api/compute/pack.h"
 #include "api/dataflow/circular_buffer.h"
 #include "named_args.hpp"
-#include "ttnn/operations/experimental/minimal_matmul/device/kernels/swiglu_sfpu.hpp"
+#include "swiglu_sfpu.hpp"
 
 ALWI void matmul_subblock(const MatmulShape& s, uint32_t in0_offset, uint32_t in1_offset) {
     uint32_t in0_index = in0_offset;
@@ -72,7 +72,7 @@ ALWI void matmul_block_to_out(const MatmulShape& s, bool add_partials) {
                 for (uint32_t h = 0; h < s.sub_h; h++) {
                     for (uint32_t w = 0; w < s.sub_w; w += 2) {
                         const uint32_t gate = h * s.sub_w + w;
-                        PACK((minimal_matmul_swiglu_tile<false>(gate, gate + 1, gate)));
+                        PACK((swiglu_tile(gate, gate + 1, gate)));
                     }
                 }
                 PACK(TTI_STALLWAIT(p_stall::STALL_PACK, p_stall::WAIT_SFPU));
@@ -106,7 +106,7 @@ ALWI void matmul_phase(const MatmulShape& s) {
     const uint32_t out_tiles = s.swiglu ? partial_tiles / 2 : partial_tiles;
 
     if (s.swiglu) {
-        PACK((minimal_matmul_swiglu_tile_init()));
+        PACK((swiglu_tile_init()));
     }
     matmul_init(s.cb_in0, s.cb_in1);
 
