@@ -28,6 +28,7 @@ from helpers.llk_params import (
 )
 from helpers.param_config import (
     QuasarSfpuVariant,
+    flat_axes,
     generate_dest_depth_input_dimensions,
     generate_quasar_sfpu_format_variants,
     input_output_formats,
@@ -1747,15 +1748,17 @@ def _cumsum_detector_stimulus() -> torch.Tensor:
     return (1 + (cols % 2) + 3 * (rows % 2)).to(torch.float32)
 
 
+CUMSUM_FLAT_NAMES = ("formats", "dest_acc")
+CUMSUM_COMBINATIONS = [
+    (fmt, dest_acc)
+    for fmt in CUMSUM_DETECTOR_FORMATS
+    for dest_acc in (DestAccumulation.No, DestAccumulation.Yes)
+]
+
+
 @pytest.mark.quasar
-@parametrize(
-    cumsum_formats_dest_acc=[
-        (fmt, dest_acc)
-        for fmt in CUMSUM_DETECTOR_FORMATS
-        for dest_acc in (DestAccumulation.No, DestAccumulation.Yes)
-    ],
-)
-def test_cumsum_tilized_dest_quasar(cumsum_formats_dest_acc):
+@parametrize(**flat_axes(CUMSUM_FLAT_NAMES, CUMSUM_COMBINATIONS))
+def test_cumsum_tilized_dest_quasar(formats, dest_acc):
     """
     Deterministic proof that Quasar cumsum walks the tilized Dest layout and carries its
     running total across the face-pair boundary.
@@ -1766,8 +1769,6 @@ def test_cumsum_tilized_dest_quasar(cumsum_formats_dest_acc):
     so both the input and the output permutation are load-bearing: an untilized row-major
     reading of Dest cannot satisfy this oracle.
     """
-    formats, dest_acc = cumsum_formats_dest_acc[0]
-
     input_dimensions = [DEFAULT_TILE_R_DIM, DEFAULT_TILE_C_DIM]
     src_A = _cumsum_detector_stimulus().to(format_dict[formats.input_format])
     # src_B is unused by a unary op, but StimuliConfig requires an operand-B buffer.
