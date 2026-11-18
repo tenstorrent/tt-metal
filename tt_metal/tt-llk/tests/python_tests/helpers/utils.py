@@ -273,6 +273,15 @@ def format_kernel_list(kernels, as_hex=False):
     return ",".join(formatter(i) for i in kernels)
 
 
+def _is_constant(x):
+    """True when every element of *x* has the same value (zero standard deviation).
+
+    An empty tensor counts as constant rather than raising. A NaN anywhere makes the
+    max/min comparison false, so a tensor holding one is not constant.
+    """
+    return x.numel() == 0 or bool(torch.max(x) == torch.min(x))
+
+
 def calculate_pcc(golden, input):
     """Calculate Pearson Correlation Coefficient between two tensors.
 
@@ -329,11 +338,8 @@ def calculate_pcc(golden, input):
     # one side is constant it cannot follow the other side's variation at all, so
     # there is no correlation. When both are constant there is no variation to
     # disagree about; how far apart the two values are is the tolerance check's job.
-    def is_constant(x):
-        return x.numel() == 0 or bool(torch.max(x) == torch.min(x))
-
-    golden_constant = is_constant(golden)
-    input_constant = is_constant(input)
+    golden_constant = _is_constant(golden)
+    input_constant = _is_constant(input)
     if golden_constant != input_constant:
         return 0.0
     if golden_constant:
@@ -1145,7 +1151,7 @@ def passed_test(
     # A constant golden has no variation for PCC to measure: calculate_pcc calls it
     # uncorrelated with any result that varies, even within tolerance. As with the
     # floor above, the per-element tolerance check is the verdict.
-    if bool(golden_tensor.max() == golden_tensor.min()):
+    if _is_constant(golden_tensor):
         return bool(is_within_tolerance)
 
     pcc = calculate_pcc(res_tensor, golden_tensor)
