@@ -1,31 +1,20 @@
 # SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
-from itertools import chain, product
 
 import pytest
 from helpers.format_config import DataFormat, is_dest_acc_needed
-from helpers.golden_generators import TILE_DIM
 from helpers.llk_params import (
-    ALL_MATH_FIDELITIES,
-    DEST_ACC_MODES,
     DestAccumulation,
     DestSync,
     StochasticRounding,
 )
 from helpers.matmul_sweep import (
-    DEST_RT_CT_BLOCKS,
     MatmulConfig,
-    generate_face_layout_config_sweep,
-    generate_tile_dims,
-    matmul_pack_form,
-    mid_fill_rt_ct_pairs,
-    skip_matmul_combination,
-    sweep_tiny_tiles_matmul,
 )
 from helpers.pack_sweep import SHIM_CONFIG
-from helpers.param_config import input_output_formats, max_dest_tiles
-from helpers.perf.core import ALL_PERF_RUN_TYPES, PerfConfig
+from helpers.param_config import input_output_formats
+from helpers.perf.core import PerfConfig
 from helpers.stimuli_config import StimuliConfig
 from helpers.test_variant_parameters import (
     CRK_TILE_DIMM,
@@ -34,7 +23,6 @@ from helpers.test_variant_parameters import (
     IN_TILE_DIMS,
     LOOP_FACTOR,
     MATH_FIDELITY,
-    MATMUL_PACK_BLOCK,
     NUM_BLOCKS,
     NUM_FACES,
     NUM_TILES_IN_BLOCK,
@@ -61,6 +49,7 @@ STOCHASTIC_ROUNDING_MODES = [StochasticRounding.No]
 PERF_KT_DIMS = (1, 4)
 
 from dataclasses import dataclass
+
 from conftest import skip_for_wormhole
 from helpers.format_config import InputOutputFormat
 from helpers.llk_params import (
@@ -71,14 +60,13 @@ from helpers.llk_params import (
     StochasticRounding,
     Transpose,
 )
+from helpers.matmul_sweep import (
+    FaceLayoutConfig,
+    MatmulConfig,
+)
+from helpers.matmul_sweep import generate_tile_dims as _gtd
 from helpers.param_config import parametrize
 from helpers.test_variant_parameters import TemplateParameter
-from helpers.matmul_sweep import (
-    MatmulConfig,
-    FaceLayoutConfig,
-    calculate_matmul_output_faces,
-    generate_tile_dims as _gtd,
-)
 
 
 @dataclass
