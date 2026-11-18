@@ -98,7 +98,8 @@ void kernel_main() {
     const uint32_t index_faces = CircularBuffer(get_named_compile_time_arg_val("index_faces_cb")).get_write_ptr();
     const uint32_t gather_scratch = CircularBuffer(get_named_compile_time_arg_val("gather_cb")).get_write_ptr();
     const uint32_t combine_scratch = CircularBuffer(get_named_compile_time_arg_val("combine_cb")).get_write_ptr();
-    const uint32_t table_scratch = CircularBuffer(get_named_compile_time_arg_val("table_cb")).get_write_ptr();
+    const CircularBuffer table_cb(get_named_compile_time_arg_val("table_cb"));
+    const uint32_t table_scratch = table_cb.get_write_ptr();
     Semaphore<> counts_ready(get_named_compile_time_arg_val("counts_ready_semaphore"));
     Semaphore<> starts_ready(get_named_compile_time_arg_val("starts_ready_semaphore"));
     Semaphore<> rows_ready(get_named_compile_time_arg_val("rows_ready_semaphore"));
@@ -165,15 +166,14 @@ void kernel_main() {
             // Linked, so the semaphore write reaches each core only after the table.
             noc.async_write_multicast(
                 CoreLocalMem<uint32_t>(table_scratch),
-                MulticastEndpoint{},
+                table_cb,
                 num_cores * table_row_words * kWordBytes,
                 num_cores - 1,
                 {},
                 {.noc_x_start = first_core_x,
                  .noc_y_start = first_core_y,
                  .noc_x_end = last_core_x,
-                 .noc_y_end = last_core_y,
-                 .addr = table_scratch},
+                 .noc_y_end = last_core_y},
                 true);
             starts_ready.set_multicast(noc, first_core_x, first_core_y, last_core_x, last_core_y, num_cores - 1);
         }

@@ -26,8 +26,9 @@ from models.experimental.bevformer.model_config import (
     BOX_SIZE,
     BOX_VELOCITY,
     BOX_YAW,
-    CAMERA_ORDER,
+    CAMERA_GROUPS,
     CAMERA_IMAGE_SIZE,
+    CAMERA_ORDER,
     CAN_BUS_DIMS,
     CENTERS_FIRST,
     CODE_CENTERS,
@@ -85,6 +86,7 @@ from models.experimental.bevformer.tests.fixtures.camera_rigs import (
     build_lidar2img,
     ring_camera_rig,
 )
+from models.experimental.bevformer.tt.tt_resnet import TTResLayer, TTResNet
 from models.experimental.bevformer.tt.tt_head import box_preds_to_torch
 
 # The variant is fixed when model_config is first imported; the log says which one a run tests.
@@ -133,6 +135,44 @@ def img_metas_for_dataset(dataset_config, batch_size: int, dtype: torch.dtype = 
         }
         for _ in range(batch_size)
     ]
+
+
+def turn_rig(lidar2img, degrees: float) -> torch.Tensor:
+    """``lidar2img`` ``[..., 4, 4]`` of the rig turned by ``degrees`` about the vertical axis."""
+    yaw = math.radians(degrees)
+    turn = torch.eye(4)
+    turn[:2, :2] = torch.tensor([[math.cos(yaw), -math.sin(yaw)], [math.sin(yaw), math.cos(yaw)]])
+    return torch.as_tensor(lidar2img, dtype=torch.float32) @ turn
+
+
+def zoom_cameras(lidar2img, scale: float, image_size) -> torch.Tensor:
+    """``lidar2img`` ``[..., 4, 4]`` of cameras whose ``(width, height)`` images are scaled by ``scale``
+    about their centre, as a resize and centre crop would: above 1 narrows every field of view,
+    below 1 widens it."""
+    width, height = image_size
+    zoom = torch.tensor(
+        [
+            [scale, 0.0, (1.0 - scale) * width / 2, 0.0],
+            [0.0, scale, (1.0 - scale) * height / 2, 0.0],
+            [0.0, 0.0, 1.0, 0.0],
+            [0.0, 0.0, 0.0, 1.0],
+        ]
+    )
+    return zoom @ torch.as_tensor(lidar2img, dtype=torch.float32)
+
+
+def rig_sequence_metas(dataset_config, steps, batch_size: int = 1) -> List[List[dict]]:
+    """One frame's ``img_metas`` per ``(yaw_deg, zoom)`` step: the dataset's rig turned and zoomed
+    (:func:`turn_rig`, :func:`zoom_cameras`). Each camera's visible BEV cells change from frame to
+    frame while every projection stays a valid camera's."""
+    frames = []
+    for yaw_deg, zoom in steps:
+        metas = img_metas_for_dataset(dataset_config, batch_size)
+        for meta in metas:
+            lidar2img = zoom_cameras(turn_rig(meta["lidar2img"], yaw_deg), zoom, dataset_config.input_size)
+            meta["lidar2img"] = lidar2img.tolist()
+        frames.append(metas)
+    return frames
 
 
 # --- Dataset presets --------------------------------------------------------------------------
@@ -320,6 +360,11 @@ BACKBONE_FPN_PCC = 0.985 if VARIANT == "small" else 0.99
 
 # Dtypes TTResNet emits for its outputs: C3-C5 for base, C5 for small and tiny.
 BACKBONE_OUTPUT_DTYPES = [ttnn.bfloat16] * len(RESNET_KWARGS["out_indices"])
+# Layouts TTResNet emits its outputs in, which follow its layers' camera groups.
+BACKBONE_OUTPUT_LAYOUTS = [
+    TTResLayer.group_output_layout(CAMERA_GROUPS.get(layer), h, w)
+    for layer, (h, w) in zip(RESNET_KWARGS["out_indices"], SPATIAL_SHAPES)
+]
 
 # Random structure at these cell sizes and amplitudes, in pixel units, plus per-pixel noise.
 IMAGE_NOISE_SCALES = ((8, 80.0), (32, 40.0), (128, 20.0))
@@ -343,10 +388,35 @@ def build_reference_fpn(seed=0):
 
 
 def to_conv_layout(nchw, device, dtype, layout=ttnn.TILE_LAYOUT):
-    """NCHW torch tensor -> (1, 1, N*H*W, C) device tensor, the layout conv2d reads and writes."""
+    """NCHW torch tensor -> (1, 1, N*H*W, C) ttnn tensor, the layout conv2d reads and writes
+    (``device`` None keeps it on the host)."""
+    if dtype == ttnn.bfloat16:
+        # torch rounds float32 to bfloat16 bit for bit as from_torch does, several times faster, and
+        # the permute then moves half the bytes.
+        nchw = nchw.to(torch.bfloat16)
     n, c, h, w = nchw.shape
     nhwc = nchw.permute(0, 2, 3, 1).reshape(1, 1, n * h * w, c)
     return ttnn.from_torch(nhwc, device=device, dtype=dtype, layout=layout)
+
+
+def to_image_layout(nchw, device, upload=True):
+    """NCHW images -> the per-camera tensors TTResNet reads, each ``(1, 1, 3, H * W)`` bfloat16
+    ROW_MAJOR and sharded over ``device``'s DRAM (TTResNet.camera_memory_config); without
+    ``upload`` they stay on the host in that layout. torch rounds float32 to bfloat16 bit for bit as
+    from_torch does, several times faster."""
+    n, c, h, w = nchw.shape
+    memory_config = TTResNet.camera_memory_config(device, c, h, w)
+    cameras = nchw.to(torch.bfloat16).reshape(n, 1, 1, c, h * w)
+    return [
+        ttnn.from_torch(
+            camera,
+            device=device if upload else None,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            memory_config=memory_config,
+        )
+        for camera in cameras
+    ]
 
 
 def from_conv_layout(tt_tensor, nchw_shape):
@@ -494,10 +564,7 @@ def camera_img_metas(batch_size, preset="nuscenes_variant", yaw_step_deg=0.0):
     the samples' cameras see different BEV cells."""
     metas = img_metas_for_dataset(PRESETS[preset], batch_size)
     for b, meta in enumerate(metas):
-        yaw = math.radians(b * yaw_step_deg)
-        turn = torch.eye(4)
-        turn[:2, :2] = torch.tensor([[math.cos(yaw), -math.sin(yaw)], [math.sin(yaw), math.cos(yaw)]])
-        meta["lidar2img"] = (torch.tensor(meta["lidar2img"]) @ turn).tolist()
+        meta["lidar2img"] = turn_rig(meta["lidar2img"], b * yaw_step_deg).tolist()
     return metas
 
 

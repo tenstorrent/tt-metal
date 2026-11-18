@@ -24,9 +24,6 @@
 struct McastRect {
     uint32_t noc_x_start, noc_y_start, noc_x_end, noc_y_end;
 };
-#ifndef COMPILE_FOR_TRISC
-using McastDst = noc_traits_t<MulticastEndpoint>::dst_args_mcast_type;
-#endif
 
 // Only a part of the total channel depth (width) is used in one block.
 template <int window_height, int window_width>
@@ -116,14 +113,6 @@ void kernel_main() {
     volatile tt_l1_ptr uint32_t* packed_reader_indices_ptr =
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(reader_indices_cb.get_write_ptr());
 
-    MulticastEndpoint mcast_ep;
-    McastDst mcast_dst = {
-        .noc_x_start = mcast_rect.noc_x_start,
-        .noc_y_start = mcast_rect.noc_y_start,
-        .noc_x_end = mcast_rect.noc_x_end,
-        .noc_y_end = mcast_rect.noc_y_end,
-        .addr = 0};
-
     act_mcast_receiver_sem.set(VALID);
 
     constexpr uint32_t conv_act_c_bytes = conv_act_c_read_bytes * act_num_blocks_w;
@@ -204,14 +193,16 @@ void kernel_main() {
 
                     auto tilized_src = CoreLocalMem<uint32_t>(tilized_in0_cb.get_read_ptr());
 
-                    mcast_dst.addr = act_cb.get_write_ptr();
                     noc.async_write_multicast<NocOptions::MCAST_INCL_SRC>(
                         tilized_src,
-                        mcast_ep,
+                        act_cb,
                         act_mcast_sender_size_bytes,
                         num_reader_cores,
                         {.offset_bytes = 0},
-                        mcast_dst,
+                        {.noc_x_start = mcast_rect.noc_x_start,
+                         .noc_y_start = mcast_rect.noc_y_start,
+                         .noc_x_end = mcast_rect.noc_x_end,
+                         .noc_y_end = mcast_rect.noc_y_end},
                         true);
 
                     act_mcast_receiver_sem.set(VALID);

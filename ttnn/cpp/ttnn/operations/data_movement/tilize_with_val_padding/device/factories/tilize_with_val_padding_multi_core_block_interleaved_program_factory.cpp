@@ -18,7 +18,6 @@
 
 using namespace tt::constants;
 using namespace tt::tt_metal;
-using namespace tt::tt_metal::experimental;
 
 namespace ttnn::prim {
 
@@ -184,10 +183,6 @@ ttnn::device_operation::ProgramArtifacts TilizeWithValPaddingMultiCoreBlockInter
     uint32_t tile_height = output.tensor_spec().tile().get_height();
 
     uint32_t total_num_rows = a.logical_shape()[-2];
-
-    if (output.padded_shape()[-2] > tt::round_up(total_num_rows, tile_height)) {
-        total_num_rows = output.padded_shape()[-2];
-    }
 
     // One reader and one writer per buffer set, each over that set's cores and bound to that set's
     // buffers. A set's cores are exactly the cores whose block width its buffers are sized for, so

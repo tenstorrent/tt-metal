@@ -14,28 +14,30 @@ def test_concat(device):
 
     # Concatenate along dimension 3
     concatenated_tensor = ttnn.concat([tensor1, tensor2], dim=3)
-    logger.info(
-        "Concatenated Tensor Shape:", concatenated_tensor.shape
-    )  # Concatenated Tensor Shape: Shape([1, 1, 64, 64])
+    logger.info(f"Concatenated Tensor Shape: {concatenated_tensor.shape}")  # Shape([1, 1, 64, 64])
 
 
 def test_nonzero(device):
-    # Create a tensor with some zero and non-zero elements
+    # Create a rank-4 tensor with three non-zero elements
     input_tensor = torch.zeros((1, 1, 1, 32), dtype=torch.bfloat16)
+    input_tensor[0, 0, 0, [3, 10, 20]] = 1
     input_tensor_ttnn = ttnn.from_torch(input_tensor, device=device)
 
-    # Find indices of non-zero elements
-    nonzero_indices = ttnn.nonzero(input_tensor_ttnn)
-    logger.info("Non-zero Indices:", nonzero_indices)
+    # Find the non-zero elements: the first output holds the count, the second the (n, c, h, w) indices
+    count_tensor, indices_tensor = ttnn.nonzero(input_tensor_ttnn)
+    count = int(ttnn.to_torch(count_tensor)[0, 0, 0, 0])
+    indices = ttnn.to_torch(indices_tensor)[0, 0, 0, : 4 * count].reshape(count, 4)
+    logger.info(f"Non-zero count: {count}")  # 3
+    logger.info(f"Non-zero indices: {indices.tolist()}")  # [[0, 0, 0, 3], [0, 0, 0, 10], [0, 0, 0, 20]]
 
 
 def test_pad(device):
     # Create a tensor to pad
     input_tensor = ttnn.rand((1, 1, 4, 4), dtype=ttnn.bfloat16, device=device)
 
-    # Pad the tensor with 1 zero on all sides
+    # Pad the last two dimensions with 12 zeros at the end
     padded_tensor = ttnn.pad(input_tensor, [(0, 0), (0, 0), (0, 12), (0, 12)], 0)
-    logger.info("Padded Tensor Shape:", padded_tensor.shape)  # Padded Tensor Shape: Shape([1, 1, 16, 16])
+    logger.info(f"Padded Tensor Shape: {padded_tensor.shape}")  # Shape([1, 1, 16, 16])
 
 
 def test_permute(device):
@@ -44,7 +46,7 @@ def test_permute(device):
 
     # Permute the tensor dimensions
     permuted_tensor = ttnn.permute(input_tensor, (0, 1, 3, 2))
-    logger.info("Permuted Tensor Shape:", permuted_tensor.shape)  # Permuted Tensor Shape: Shape([1, 1, 32, 64])
+    logger.info(f"Permuted Tensor Shape: {permuted_tensor.shape}")  # Shape([1, 1, 32, 64])
 
 
 def test_reshape(device):
@@ -54,7 +56,7 @@ def test_reshape(device):
 
     # Reshape the tensor
     reshaped_tensor = ttnn.reshape(input_tensor_tt, (1, 1, 2, 2))
-    logger.info("Reshaped Tensor Shape:", reshaped_tensor.shape)  # Reshaped Tensor Shape: Shape([1, 1, 2, 2])
+    logger.info(f"Reshaped Tensor Shape: {reshaped_tensor.shape}")  # Shape([1, 1, 2, 2])
 
 
 def test_scatter(device):
@@ -96,7 +98,7 @@ def test_repeat(device):
 
     # Repeat the tensor along specified dimensions
     repeated_tensor = ttnn.repeat(input_tensor_tt, (1, 2))
-    logger.info("Repeated Tensor Shape:", repeated_tensor.shape)  # Repeated Tensor Shape: Shape([2, 4])
+    logger.info(f"Repeated Tensor Shape: {repeated_tensor.shape}")  # Shape([2, 4])
 
 
 def test_repeat_interleave(device):
@@ -105,9 +107,7 @@ def test_repeat_interleave(device):
 
     # Repeat interleave the tensor
     repeated_tensor = ttnn.repeat_interleave(input_tensor, repeats=2, dim=0)
-    logger.info(
-        "Repeat Interleave Tensor Shape:", repeated_tensor.shape
-    )  # Repeat Interleave Tensor Shape: Shape([20, 10])
+    logger.info(f"Repeat Interleave Tensor Shape: {repeated_tensor.shape}")  # Shape([20, 10])
 
 
 def test_slice(device):
@@ -116,12 +116,12 @@ def test_slice(device):
 
     # Slice the tensor
     sliced_tensor = ttnn.slice(input_tensor, [0, 0, 0, 0], [1, 1, 64, 16], [1, 1, 2, 1])
-    logger.info("Sliced Tensor Shape:", sliced_tensor.shape)  # Sliced Tensor Shape: Shape([1, 1, 32, 16])
+    logger.info(f"Sliced Tensor Shape: {sliced_tensor.shape}")  # Shape([1, 1, 32, 16])
 
     # Create a tensor to slice without step
     input_tensor = ttnn.rand((1, 1, 64, 32), dtype=ttnn.bfloat16, layout=ttnn.Layout.TILE, device=device)
     output = ttnn.slice(input_tensor, [0, 0, 0, 0], [1, 1, 32, 32])
-    logger.info("Sliced Tensor Shape:", output.shape)  # Sliced Tensor Shape: Shape([1, 1, 32, 32])
+    logger.info(f"Sliced Tensor Shape: {output.shape}")  # Shape([1, 1, 32, 32])
 
 
 def test_tilize(device):
@@ -130,16 +130,17 @@ def test_tilize(device):
 
     # Tilize the tensor
     tilized_tensor = ttnn.tilize(input_tensor)
-    logger.info("Tilized Tensor Shape:", tilized_tensor.shape)
+    logger.info(f"Tilized Tensor Layout: {tilized_tensor.layout}")  # Layout.TILE
 
 
 def test_tilize_with_val_padding(device):
     # Create a tensor to tilize with value padding
     input_tensor = ttnn.rand((1, 1, 64, 32), dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
 
-    # Tilize the tensor with value padding
+    # Tilize the tensor, padding its last dimension to 64 with zeros
     tilized_tensor = ttnn.tilize_with_val_padding(input_tensor, output_tensor_shape=[1, 1, 64, 64], pad_value=0.0)
-    logger.info("Tilized Tensor with Value Padding Shape:", tilized_tensor.shape)
+    logger.info(f"Tilized Tensor Shape: {tilized_tensor.shape}")  # Shape([1, 1, 64, 32])
+    logger.info(f"Tilized Tensor Padded Shape: {tilized_tensor.padded_shape}")  # Shape([1, 1, 64, 64])
 
 
 def test_fill_rm(device):
@@ -159,16 +160,11 @@ def test_fill_rm(device):
 
     # Create input tensor
     input = torch.zeros((N, C, H, W))
-    xt = ttnn.Tensor(
-        input.reshape(-1).tolist(),
-        input.shape,
-        ttnn.bfloat16,
-        ttnn.TILE_LAYOUT,
-    ).to(device)
+    xt = ttnn.from_torch(input, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT).to(device)
 
     # Fill the tensor
     output = ttnn.fill_rm(N, C, H, W, hOnes, wOnes, xt, val_hi, val_lo)
-    logger.info("Filled Tensor Shape:", output.shape)
+    logger.info(f"Filled Tensor Shape: {output.shape}")  # Shape([2, 3, 64, 96])
 
 
 def test_fill_ones_rm(device):
@@ -184,16 +180,11 @@ def test_fill_ones_rm(device):
 
     # Create input tensor
     input = torch.zeros((N, C, H, W))
-    xt = ttnn.Tensor(
-        input.reshape(-1).tolist(),
-        input.shape,
-        ttnn.bfloat16,
-        ttnn.TILE_LAYOUT,
-    ).to(device)
+    xt = ttnn.from_torch(input, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT).to(device)
 
     # Fill the tensor
     output = ttnn.fill_ones_rm(N, C, H, W, hOnes, wOnes, xt)
-    logger.info("Filled Ones Tensor Shape:", output.shape)
+    logger.info(f"Filled Ones Tensor Shape: {output.shape}")  # Shape([2, 3, 64, 96])
 
 
 def test_untilize(device):
@@ -202,16 +193,16 @@ def test_untilize(device):
 
     # Untilize the tensor
     untilized_tensor = ttnn.untilize(tilized_tensor)
-    logger.info("Untilized Tensor Shape:", untilized_tensor.shape)
+    logger.info(f"Untilized Tensor Layout: {untilized_tensor.layout}")  # Layout.ROW_MAJOR
 
 
 def test_untilize_with_unpadding(device):
     # Create a tilized tensor with padding
     tilized_tensor = ttnn.rand((1, 1, 64, 64), dtype=ttnn.bfloat16, layout=ttnn.Layout.TILE, device=device)
 
-    # Untilize the tensor with unpadding
-    untilized_tensor = ttnn.untilize_with_unpadding(tilized_tensor, output_tensor_end=(1, 1, 64, 32))
-    logger.info("Untilized Tensor with Unpadding Shape:", untilized_tensor.shape)
+    # Untilize the tensor and keep its first 32 columns; output_tensor_end holds inclusive end indices
+    untilized_tensor = ttnn.untilize_with_unpadding(tilized_tensor, output_tensor_end=(0, 0, 63, 31))
+    logger.info(f"Untilized Tensor with Unpadding Shape: {untilized_tensor.shape}")  # Shape([1, 1, 64, 32])
 
 
 def test_indexed_fill(device):
@@ -243,7 +234,8 @@ def test_gather(device):
     )
 
     # Gather elements along dimension 1 using the index tensor
-    ttnn.gather(ttnn_input, 1, index=ttnn_index)
+    gathered_tensor = ttnn.gather(ttnn_input, 1, index=ttnn_index)
+    logger.info(f"Gathered Tensor Shape: {gathered_tensor.shape}")  # Shape([4, 2])
 
 
 def test_sort(device):

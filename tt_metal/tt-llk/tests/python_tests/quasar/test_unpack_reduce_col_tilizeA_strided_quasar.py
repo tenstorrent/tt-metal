@@ -51,21 +51,11 @@ from helpers.test_variant_parameters import (
     TILE_COUNT,
     generate_input_dim,
 )
-from helpers.tile_constants import is_mx_unsupported_tile_dims
+from helpers.tile_constants import SUPPORTED_TILE_SIZES, is_mx_unsupported_tile_dims
 from helpers.tile_shape import TileShape, construct_tile_shape
 from helpers.utils import passed_test, result_tensor
 
-# 32x32 uses the four face MOP; the Nx32 tiles (N <= 8) use the tiny tile MOP in
-# llk_unpack_reduce_col_tilizeA_strided.h, where one strided unpack covers a whole face.
-# Tile shapes with a full 16 row face and fewer than four faces (16x16, 16x32, 32x16) have
-# no MOP on this path yet.
-UNPACK_REDUCE_COL_TILIZEA_STRIDED_TILE_SIZES = [
-    (32, 32),
-    (1, 32),
-    (2, 32),
-    (4, 32),
-    (8, 32),
-]
+UNPACK_REDUCE_COL_TILIZEA_STRIDED_TILE_SIZES = SUPPORTED_TILE_SIZES
 
 
 def generate_corner_case_input_dimensions(

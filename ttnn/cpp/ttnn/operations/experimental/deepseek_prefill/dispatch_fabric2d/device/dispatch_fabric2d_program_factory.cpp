@@ -53,7 +53,7 @@ uint32_t ring_extent_of(const DispatchFabric2dParams& args) {
 // Bytes of one token wherever the op moves it. Taken from the output payload, whose page is one token in
 // both input layouts; a TILE input is paged by tile.
 uint32_t token_size_bytes(const ttnn::Tensor& out_payload) {
-    return static_cast<uint32_t>(out_payload.buffer()->aligned_page_size());
+    return static_cast<uint32_t>(out_payload.mesh_buffer().aligned_page_size());
 }
 
 bool input_is_tiled(const DispatchFabric2dInputs& t) { return t.input_tensor.layout() == tt::tt_metal::Layout::TILE; }
@@ -85,7 +85,11 @@ dspf2d::ScratchGeometry scratch_geometry(const DispatchFabric2dParams& args, uin
 }
 
 L1Layout compute_l1_layout(
-    ttnn::MeshDevice* mesh, uint32_t token_bytes, const dspf2d::ScratchGeometry& g, uint32_t sem_floor) {
+    ttnn::MeshDevice* mesh,
+    uint32_t token_bytes,
+    uint32_t packets_per_token,
+    const dspf2d::ScratchGeometry& g,
+    uint32_t sem_floor) {
     const uint32_t scratch_bytes = dspf2d::scratch_bytes(g);
     const uint32_t base =
         static_cast<uint32_t>(mesh->allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1));
@@ -100,8 +104,8 @@ L1Layout compute_l1_layout(
         PKT_HDR_SIGNAL_OFF + hdr_bytes <= PKT_HDR_CREDIT_OFF && PKT_HDR_CREDIT_OFF + hdr_bytes <= DRAIN_SINK_OFF,
         "dispatch_fabric2d: a {} B fabric packet header does not fit between the signal, credit and drain slots",
         hdr_bytes);
-    // One header per entry, the same stride the sender indexes the pool with.
-    const uint32_t hdr_queue_bytes = dspf2d::QUEUE_DEPTH * hdr_bytes;
+    // One header per packet of each entry, the same stride the sender indexes the pool with.
+    const uint32_t hdr_queue_bytes = dspf2d::QUEUE_DEPTH * packets_per_token * hdr_bytes;
     // 64-byte aligned: a DRAM read needs a 64-byte-aligned L1 destination on Blackhole, and DRAM reads
     // land directly in the scratch.
     l.scratch = (l.pkt_hdr_queue + hdr_queue_bytes + 63u) & ~63u;
@@ -279,29 +283,33 @@ tt::tt_metal::WorkloadDescriptor DispatchFabric2dProgramFactory::create_workload
     auto* mesh = args.device;
     const uint32_t extent = ring_extent_of(args);
     const uint32_t token_bytes = token_size_bytes(tensor_return_value[0]);
-    const uint32_t meta_bytes = static_cast<uint32_t>(tensor_return_value[1].buffer()->aligned_page_size());
+    const uint32_t meta_bytes = static_cast<uint32_t>(tensor_return_value[1].mesh_buffer().aligned_page_size());
     TT_FATAL(
         meta_bytes >= dspf2d::METADATA_WIRE_BYTES,
         "dispatch_fabric2d: metadata page is {} B but the last hop writes {} B into it",
         meta_bytes,
         dspf2d::METADATA_WIRE_BYTES);
-    // A forwarded packet (token plus fwd_meta) is the largest packet the op sends. The fabric does
-    // not reject a larger payload: the bytes past its max overwrite the next channel slot.
+    // A token that does not fit one packet with its fwd_meta goes as two. A forward's last packet is the
+    // largest the op sends. The fabric does not reject a larger payload: the bytes past its max overwrite the
+    // next channel slot.
+    const auto max_payload = static_cast<uint32_t>(tt::tt_fabric::get_tt_fabric_max_payload_size_bytes());
+    const uint32_t first_packet = dspf2d::first_packet_bytes(token_bytes, max_payload);
+    const uint32_t packets_per_token = first_packet == token_bytes ? 1u : 2u;
     TT_FATAL(
-        token_bytes + dspf2d::FWD_EXTRA_BYTES <= tt::tt_fabric::get_tt_fabric_max_payload_size_bytes(),
-        "dispatch_fabric2d: token page {} B + {} B forwarding metadata exceeds the fabric max payload {}. Increase "
-        "max_packet_payload_size_bytes in FabricRouterConfig.",
+        dspf2d::largest_packet_bytes(token_bytes, first_packet) <= max_payload,
+        "dispatch_fabric2d: token page {} B + {} B forwarding metadata does not fit the fabric max payload {} even "
+        "split in two. Increase max_packet_payload_size_bytes in FabricRouterConfig.",
         token_bytes,
         dspf2d::FWD_EXTRA_BYTES,
-        tt::tt_fabric::get_tt_fabric_max_payload_size_bytes());
+        max_payload);
     const bool tiled = input_is_tiled(tensor_args);
     if (!tiled) {
         // The row-major path reads tokens straight out of the input, so the two pages have to be the
         // same size; they are both one row of the same emb_dim in the same dtype.
         TT_FATAL(
-            tensor_args.input_tensor.buffer()->aligned_page_size() == token_bytes,
+            tensor_args.input_tensor.mesh_buffer().aligned_page_size() == token_bytes,
             "dispatch_fabric2d: a ROW_MAJOR input pages a token at {} B but the output pages it at {} B",
-            tensor_args.input_tensor.buffer()->aligned_page_size(),
+            tensor_args.input_tensor.mesh_buffer().aligned_page_size(),
             token_bytes);
     }
 
@@ -335,7 +343,8 @@ tt::tt_metal::WorkloadDescriptor DispatchFabric2dProgramFactory::create_workload
         token_bytes,
         static_cast<uint32_t>(sems.untilized.address()),
         staging.buffer);
-    const L1Layout l1 = compute_l1_layout(mesh, token_bytes, scratch_geometry(args, extent), sems.lowest_address());
+    const L1Layout l1 =
+        compute_l1_layout(mesh, token_bytes, packets_per_token, scratch_geometry(args, extent), sems.lowest_address());
 
     tt::tt_metal::Buffer* dram[dspf2d::ReaderRtArg::kCount] = {};
     // For a TILE input the stream cores read tokens from staging. The accessor arguments are built from
@@ -439,8 +448,9 @@ tt::tt_metal::WorkloadDescriptor DispatchFabric2dProgramFactory::create_workload
                 "sender_dispatch_fabric2d.cpp";
             snd.source_type = tt::tt_metal::KernelDescriptor::SourceType::FILE_PATH;
             snd.core_ranges = CoreRangeSet(CoreRange(self.worker_logical));
-            snd.compile_time_args = dspf2d::SenderCtArgs(token_bytes, self, downstream, returning, l1, plan)
-                                        .to_ct_word_arr(plan.vc_arrived_addr, plan.vc_freed_addr, plan.vc_outbox_addr);
+            snd.compile_time_args =
+                dspf2d::SenderCtArgs(token_bytes, first_packet, self, downstream, returning, l1, plan)
+                    .to_ct_word_arr(plan.vc_arrived_addr, plan.vc_freed_addr, plan.vc_outbox_addr);
             snd.config = tt::tt_metal::DataMovementConfigDescriptor{
                 .processor = tt::tt_metal::DataMovementProcessor::RISCV_0,
                 // NOC_1 routes -Y first, so a worker one core row from its eth core reaches it in a single hop.
@@ -559,6 +569,7 @@ tt::tt_metal::WorkloadDescriptor DispatchFabric2dProgramFactory::create_workload
 
             std::vector<uint32_t> snd_rt{1u};  // num_connections
             tt::tt_fabric::append_routing_plane_connection_manager_rt_args(
+                *mesh,
                 mesh->get_fabric_node_id(coord),
                 std::vector<tt::tt_fabric::FabricNodeId>{self.downstream_node},
                 std::vector<uint32_t>{self.link_idx},

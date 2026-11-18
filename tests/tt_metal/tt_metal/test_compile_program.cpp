@@ -23,6 +23,7 @@
 #include "impl/program/program_impl.hpp"
 #include "impl/kernels/kernel.hpp"
 #include "distributed/mesh_device_impl.hpp"
+#include "impl/context/metal_context.hpp"
 
 using std::vector;
 using namespace tt;
@@ -38,6 +39,14 @@ struct KernelCacheStatus {
 void ClearKernelCache(const std::string& kernel_root_path) {
     std::filesystem::remove_all(kernel_root_path);
     jit_build_cache_clear();
+}
+
+std::string get_kernel_root_path(distributed::MeshDevice& device) {
+    return device.impl()
+        .metal_context()
+        .build_env_manager()
+        .get_device_build_env(device.build_id())
+        .build_env.get_out_kernel_root_path();
 }
 
 // This assumes binaries are written to specific location: kernel_compile_outpath / kernel_name / hash
@@ -68,19 +77,13 @@ std::unordered_map<std::string, std::string> get_last_program_binary_path(
 
 KernelCacheStatus CompileProgramTestWrapper(
     distributed::MeshDevice& device, Program& program, bool /*profile_kernel*/ = false) {
-    std::unordered_map<std::string, std::string> pre_compile_kernel_to_hash_str = get_last_program_binary_path(
-        program,
-        BuildEnvManager::get_instance(device.impl().get_context_id())
-            .get_device_build_env(device.build_id())
-            .build_env.get_out_kernel_root_path());
+    std::unordered_map<std::string, std::string> pre_compile_kernel_to_hash_str =
+        get_last_program_binary_path(program, get_kernel_root_path(device));
 
     program.impl().compile(&device);
 
-    std::unordered_map<std::string, std::string> post_compile_kernel_to_hash_str = get_last_program_binary_path(
-        program,
-        BuildEnvManager::get_instance(device.impl().get_context_id())
-            .get_device_build_env(device.build_id())
-            .build_env.get_out_kernel_root_path());
+    std::unordered_map<std::string, std::string> post_compile_kernel_to_hash_str =
+        get_last_program_binary_path(program, get_kernel_root_path(device));
 
     KernelCacheStatus kernel_cache_status;
     for (const auto& [kernel_name, hash_str] : post_compile_kernel_to_hash_str) {
@@ -234,12 +237,7 @@ std::unordered_map<std::string, std::string> compile_program_with_modified_kerne
     const std::unordered_map<HalProcessorClassType, bool>& kernel_type_to_cache_hit_status) {
     auto program = create_program(device, attributes);
     auto kernel_cache_status = CompileProgramTestWrapper(device, program);
-    assert_kernel_binary_path_exists(
-        program,
-        BuildEnvManager::get_instance(device.impl().get_context_id())
-            .get_device_build_env(device.build_id())
-            .build_env.get_out_kernel_root_path(),
-        kernel_cache_status);
+    assert_kernel_binary_path_exists(program, get_kernel_root_path(device), kernel_cache_status);
     assert_cache_hit_status_for_kernel_type(program, kernel_type_to_cache_hit_status, kernel_cache_status);
     assert_hash_comparison_for_kernel_type(
         program, prev_kernel_name_to_hash, kernel_type_to_cache_hit_status, kernel_cache_status);
@@ -250,9 +248,7 @@ std::unordered_map<std::string, std::string> compile_program_with_modified_kerne
 }  // namespace
 
 TEST_F(UnitMeshAnyDispatchFixture, CompileProgramInLoop) {
-    ClearKernelCache(BuildEnvManager::get_instance(this->device().impl().get_context_id())
-                         .get_device_build_env(this->device().build_id())
-                         .build_env.get_out_kernel_root_path());
+    ClearKernelCache(get_kernel_root_path(this->device()));
     ProgramAttributes default_attributes;
     auto program = create_program(this->device(), default_attributes);
 
@@ -261,12 +257,7 @@ TEST_F(UnitMeshAnyDispatchFixture, CompileProgramInLoop) {
     for (int compile_idx = 0; compile_idx < num_compiles; compile_idx++) {
         auto kernel_cache_status = CompileProgramTestWrapper(this->device(), program);
         if (compile_idx == 0) {
-            assert_kernel_binary_path_exists(
-                program,
-                BuildEnvManager::get_instance(this->device().impl().get_context_id())
-                    .get_device_build_env(this->device().build_id())
-                    .build_env.get_out_kernel_root_path(),
-                kernel_cache_status);
+            assert_kernel_binary_path_exists(program, get_kernel_root_path(this->device()), kernel_cache_status);
             assert_program_cache_hit_status(program, /*hit_expected=*/false, kernel_cache_status);
             kernel_name_to_hash = kernel_cache_status.kernel_name_to_hash_str;
         } else {
@@ -277,27 +268,18 @@ TEST_F(UnitMeshAnyDispatchFixture, CompileProgramInLoop) {
 }
 
 TEST_F(UnitMeshAnyDispatchFixture, CompileProgramAfterCleanKernelBinaryDirectory) {
-    ClearKernelCache(BuildEnvManager::get_instance(this->device().impl().get_context_id())
-                         .get_device_build_env(this->device().build_id())
-                         .build_env.get_out_kernel_root_path());
+    ClearKernelCache(get_kernel_root_path(this->device()));
 
     ProgramAttributes default_attributes;
     auto program = create_program(this->device(), default_attributes);
 
     auto kernel_cache_status = CompileProgramTestWrapper(this->device(), program);
 
-    assert_kernel_binary_path_exists(
-        program,
-        BuildEnvManager::get_instance(this->device().impl().get_context_id())
-            .get_device_build_env(this->device().build_id())
-            .build_env.get_out_kernel_root_path(),
-        kernel_cache_status);
+    assert_kernel_binary_path_exists(program, get_kernel_root_path(this->device()), kernel_cache_status);
     assert_program_cache_hit_status(program, /*hit_expected=*/false, kernel_cache_status);
     std::unordered_map<std::string, std::string> kernel_name_to_hash = kernel_cache_status.kernel_name_to_hash_str;
 
-    ClearKernelCache(BuildEnvManager::get_instance(this->device().impl().get_context_id())
-                         .get_device_build_env(this->device().build_id())
-                         .build_env.get_out_kernel_root_path());
+    ClearKernelCache(get_kernel_root_path(this->device()));
     auto second_program = create_program(this->device(), default_attributes);
     auto second_kernel_cache_status = CompileProgramTestWrapper(this->device(), second_program);
     assert_program_cache_hit_status(second_program, /*hit_expected=*/false, second_kernel_cache_status);
@@ -317,19 +299,12 @@ TEST_F(UnitMeshAnyDispatchFixture, CompileProgramWithModifiedProgram) {
     const static std::unordered_map<HalProcessorClassType, bool> compute_miss_data_movement_miss = {
         {HalProcessorClassType::COMPUTE, false}, {HalProcessorClassType::DM, false}};
 
-    ClearKernelCache(BuildEnvManager::get_instance(this->device().impl().get_context_id())
-                         .get_device_build_env(this->device().build_id())
-                         .build_env.get_out_kernel_root_path());
+    ClearKernelCache(get_kernel_root_path(this->device()));
 
     ProgramAttributes attributes;
     auto program = create_program(this->device(), attributes);
     auto kernel_cache_status = CompileProgramTestWrapper(this->device(), program);
-    assert_kernel_binary_path_exists(
-        program,
-        BuildEnvManager::get_instance(this->device().impl().get_context_id())
-            .get_device_build_env(this->device().build_id())
-            .build_env.get_out_kernel_root_path(),
-        kernel_cache_status);
+    assert_kernel_binary_path_exists(program, get_kernel_root_path(this->device()), kernel_cache_status);
     assert_program_cache_hit_status(program, /*hit_expected=*/false, kernel_cache_status);
     std::unordered_map<std::string, std::string> kernel_name_to_hash = kernel_cache_status.kernel_name_to_hash_str;
 

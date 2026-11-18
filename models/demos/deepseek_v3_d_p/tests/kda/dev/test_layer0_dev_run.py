@@ -23,7 +23,7 @@ Environment:
     KDA_TRACE_DIR            the vLLM trace whose token ids the golden used
     KDA_DEV_TOKENS           tokens to run (default: the whole golden; a multiple of 5,120)
     KDA_DEV_PROGRAM_CONFIG   JSON overrides of the program config, e.g.
-                             {"recurrence.scan_math_fidelity": "HiFi3", "input_projection_math_fidelity": "HiFi4"}
+                             {"recurrence.scan_math_fidelity": "HiFi2", "input_projection_math_fidelity": "HiFi4"}
 """
 
 from __future__ import annotations
@@ -59,6 +59,7 @@ from models.demos.deepseek_v3_d_p.tests.kda.dev.layer0_run_analysis import (
     tiers,
 )
 from models.demos.deepseek_v3_d_p.tests.kda.first_layer_input import FIRST_LAYER_INPUT, FirstLayerInput
+from models.demos.deepseek_v3_d_p.tests.kda.kda_test_utils import make_actual_start
 from models.demos.deepseek_v3_d_p.tests.kda.long_context_golden import (
     MANIFEST,
     load_window,
@@ -78,7 +79,6 @@ from models.demos.deepseek_v3_d_p.tt.kda.config import kimi_k3_program_config
 from models.demos.deepseek_v3_d_p.tt.tt_ccl import per_axis_topology
 from models.demos.deepseek_v3_d_p.utils.chunk_config import PREFILL_CHUNK_TOKENS
 from models.demos.deepseek_v3_d_p.utils.smbus_telemetry import get_tdp_limit_max, is_high_power
-from tests.ttnn.unit_tests.operations.experimental.kda.kda_test_utils import make_actual_start
 
 pytestmark = [run_for_blackhole(), pytest.mark.timeout(3600)]
 
@@ -197,7 +197,7 @@ def test_kimi_k3_layer0_dev_run(mesh_device: ttnn.MeshDevice, tensor_parallel_ax
     (run_dir / "run.json").write_text(json.dumps(meta, indent=1))
 
     # Perf first, on a fresh layer: median traced-replay wall of one 5,120-token call at start 0.
-    samples_ms, _ = _trace_wall_samples_ms(
+    samples_ms = _trace_wall_samples_ms(
         mesh_device, layer, first_hidden_tt, _PERF_REPETITIONS, actual_start=0, actual_end=_CALL
     )
     median_ms = statistics.median(samples_ms)

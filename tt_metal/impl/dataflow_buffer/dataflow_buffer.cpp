@@ -15,16 +15,31 @@
 #include <string>
 #include <type_traits>
 
+#include <tt-metalium/allocator.hpp>
 #include "impl/context/metal_context.hpp"
 #include "jit_build/jit_build_options.hpp"
 #include "llrt/tt_cluster.hpp"
-#include "tt_metal/impl/allocator/allocator.hpp"
+#include <tt-metalium/math.hpp>
 #include "tt_metal/impl/dataflow_buffer/dataflow_buffer_impl.hpp"
 #include "tt_metal/impl/program/program_impl.hpp"
 #include "tt_metal/impl/kernels/kernel.hpp"
 #include "tt_metal/tools/profiler/tracy_debug_zones.hpp"
 
 namespace tt::tt_metal::experimental::dfb::detail {
+
+static bool dfb_is_blocked_strided(const DataflowBufferConfig& config) {
+    return (config.pap == ::dfb::AccessPattern::BLOCKED && config.cap == ::dfb::AccessPattern::STRIDED) ||
+           (config.pap == ::dfb::AccessPattern::STRIDED && config.cap == ::dfb::AccessPattern::BLOCKED);
+}
+
+// Split credits: one whole-block op is shared by all of this hart's counters (the BLOCKED side
+// of a BLOCKED<->STRIDED ring with more than one peer).
+static bool dfb_dm_side_credits_split(const DataflowBufferImpl& dfb, bool is_producer) {
+    const DataflowBufferConfig& config = dfb.config;
+    const bool side_blocked = (is_producer ? config.pap : config.cap) == ::dfb::AccessPattern::BLOCKED;
+    const uint32_t other_side_count = is_producer ? config.num_consumers : config.num_producers;
+    return dfb_is_blocked_strided(config) && side_blocked && other_side_count > 1;
+}
 
 namespace {
 
@@ -74,7 +89,10 @@ uint32_t align_dfb_config_transfer_size(const Hal& hal, uint32_t payload_bytes) 
 }
 
 dfb_dm0_txn_descriptor_image_t build_dm0_txn_descriptor_image(
-    uint8_t num_tcs, const std::vector<::dfb::PackedTileCounter>& tcs, uint8_t tiles_to_post_or_ack) {
+    uint8_t num_tcs,
+    const std::vector<::dfb::PackedTileCounter>& tcs,
+    uint8_t tiles_to_post_or_ack,
+    const dfb_dm0_finish_info_t& finish) {
     TT_FATAL(
         num_tcs <= ::dfb::MAX_TCS_PER_TXN,
         "Implicit-sync DFB txn descriptor lists {} tile counters, but the ISR image holds at most {}; "
@@ -87,6 +105,7 @@ dfb_dm0_txn_descriptor_image_t build_dm0_txn_descriptor_image(
         img.tile_counters[j] = tcs[j];
     }
     img.tiles_to_post_or_ack = tiles_to_post_or_ack;
+    img.finish = finish;
     return img;
 }
 
@@ -155,8 +174,12 @@ std::vector<uint8_t> serialize_dm0_isr_txn_desc_pool_for_core(
         // sync), so its tile counters are neither listed nor held to the ISR image limit.
         const bool producer_live = dfb->producer_txn_descriptor.num_txn_ids > 0;
         const bool consumer_live = dfb->consumer_txn_descriptor.num_txn_ids > 0;
+        // Counters are listed per issuing hart in ascending hart order, num_tcs_to_rr each. DM0's
+        // kernel-exit flush relies on that order to find each issuer's counters (dfb_dm0_flush_side).
         std::vector<::dfb::PackedTileCounter> blob_producer_tcs;
         std::vector<::dfb::PackedTileCounter> blob_consumer_tcs;
+        dfb_dm0_finish_info_t prod_finish = {};
+        dfb_dm0_finish_info_t cons_finish = {};
         for (int bit = 0; bit < 16; bit++) {
             if (!(dfb->risc_mask & (1 << bit))) {
                 continue;
@@ -180,20 +203,32 @@ std::vector<uint8_t> serialize_dm0_isr_txn_desc_pool_for_core(
                     blob_consumer_tcs.push_back(rc->config.packed_tile_counter[j]);
                 }
             }
+            // Only DMs issue implicit-sync transactions; risc ids below TENSIX_RISC_OFFSET are DM hart ids.
+            if (bit < ::dfb::TENSIX_RISC_OFFSET) {
+                dfb_dm0_finish_info_t& finish = rc->is_producer ? prod_finish : cons_finish;
+                finish.issuer_hart_mask |= static_cast<uint8_t>(1u << bit);
+                finish.flags = static_cast<uint8_t>(
+                    (dfb_dm_side_credits_split(*dfb, rc->is_producer) ? DFB_DM0_FINISH_FLAG_SPLIT : 0u) |
+                    (rc->config.broadcast_tc ? DFB_DM0_FINISH_FLAG_BROADCAST : 0u));
+            }
         }
 
+        prod_finish.num_txn_ids = dfb->producer_txn_descriptor.num_txn_ids;
+        cons_finish.num_txn_ids = dfb->consumer_txn_descriptor.num_txn_ids;
         const uint8_t num_prod_tcs = static_cast<uint8_t>(blob_producer_tcs.size());
         const uint8_t num_cons_tcs = static_cast<uint8_t>(blob_consumer_tcs.size());
-        const auto prod_desc =
-            producer_live
-                ? build_dm0_txn_descriptor_image(
-                      num_prod_tcs, blob_producer_tcs, dfb->producer_txn_descriptor.num_entries_per_txn_id_per_tc)
-                : dfb_dm0_txn_descriptor_image_t{};
-        const auto cons_desc =
-            consumer_live
-                ? build_dm0_txn_descriptor_image(
-                      num_cons_tcs, blob_consumer_tcs, dfb->consumer_txn_descriptor.num_entries_per_txn_id_per_tc)
-                : dfb_dm0_txn_descriptor_image_t{};
+        const auto prod_desc = producer_live ? build_dm0_txn_descriptor_image(
+                                                   num_prod_tcs,
+                                                   blob_producer_tcs,
+                                                   dfb->producer_txn_descriptor.num_entries_per_txn_id_per_tc,
+                                                   prod_finish)
+                                             : dfb_dm0_txn_descriptor_image_t{};
+        const auto cons_desc = consumer_live ? build_dm0_txn_descriptor_image(
+                                                   num_cons_tcs,
+                                                   blob_consumer_tcs,
+                                                   dfb->consumer_txn_descriptor.num_entries_per_txn_id_per_tc,
+                                                   cons_finish)
+                                             : dfb_dm0_txn_descriptor_image_t{};
 
         for (uint8_t i = 0; i < dfb->producer_txn_descriptor.num_txn_ids; i++) {
             const uint8_t txn_id = dfb->producer_txn_descriptor.txn_ids[i];
@@ -503,20 +538,6 @@ static uint32_t dfb_effective_block_entries(const DataflowBufferImpl& dfb, bool 
 }
 
 // BLOCKED <-> STRIDED rings: every (producer, consumer) pair shares one tile counter.
-static bool dfb_is_blocked_strided(const DataflowBufferConfig& config) {
-    return (config.pap == ::dfb::AccessPattern::BLOCKED && config.cap == ::dfb::AccessPattern::STRIDED) ||
-           (config.pap == ::dfb::AccessPattern::STRIDED && config.cap == ::dfb::AccessPattern::BLOCKED);
-}
-
-// Split credits: one whole-block op is shared by all of this hart's counters (the BLOCKED side
-// of a BLOCKED<->STRIDED ring with more than one peer).
-static bool dfb_dm_side_credits_split(const DataflowBufferImpl& dfb, bool is_producer) {
-    const DataflowBufferConfig& config = dfb.config;
-    const bool side_blocked = (is_producer ? config.pap : config.cap) == ::dfb::AccessPattern::BLOCKED;
-    const uint32_t other_side_count = is_producer ? config.num_consumers : config.num_producers;
-    return dfb_is_blocked_strided(config) && side_blocked && other_side_count > 1;
-}
-
 // Transactions a DM hart does on one counter before moving to the next (0 = split: every
 // transaction touches all counters).
 static uint32_t dfb_dm_side_counter_share(const DataflowBufferImpl& dfb, bool is_producer) {
@@ -1256,7 +1277,8 @@ std::vector<uint8_t> TxnIdAllocator::allocate(uint8_t count) {
         DFB_TXN_ID_BASE,
         HW_TXN_ID_MAX,
         USER_TXN_ID_MAX);
-    // Hand out a contiguous ascending block from the top of the remaining pool.
+    // Hand out a contiguous ascending block from the top of the remaining pool. Quasar firmware relies on
+    // the ascending order: txn_ids[0] is a side's lowest id, which keys its kernel-exit record.
     const uint8_t first = static_cast<uint8_t>(next_id_ - count + 1);
     std::vector<uint8_t> ids;
     ids.reserve(count);
@@ -1802,6 +1824,21 @@ uint32_t DataflowBufferImpl::serialized_size() const {
     return sz;
 }
 
+void DataflowBufferImpl::set_configured_address(uint32_t alloc_addr) {
+    // Fill alloc_addr per core in each group. All configured cores get the same address,
+    // including cores on which the DFB does not reserve backing memory.
+    if (core_lookup_.empty() || uniform_alloc_addr() != alloc_addr) {
+        ++config_generation_;
+    }
+    core_lookup_.clear();
+    for (size_t gi = 0; gi < groups.size(); gi++) {
+        for (auto& [core, addr] : groups[gi].l1_by_core) {
+            addr = alloc_addr;
+            core_lookup_.emplace(core, std::make_pair(gi, alloc_addr));
+        }
+    }
+}
+
 void DataflowBufferImpl::update_size(std::optional<uint32_t> new_entry_size, std::optional<uint32_t> new_num_entries) {
     if (!new_entry_size.has_value() && !new_num_entries.has_value()) {
         return;
@@ -2195,7 +2232,10 @@ uint32_t ProgramImpl::assign_dfb_device_slot(const DataflowBufferImpl& dfb) cons
     return slot;
 }
 
-uint32_t ProgramImpl::add_dataflow_buffer(const CoreRangeSet& core_range_set, const DataflowBufferConfig& config) {
+uint32_t ProgramImpl::add_dataflow_buffer(
+    const CoreRangeSet& core_range_set,
+    const DataflowBufferConfig& config,
+    ttsl::optional_reference<const CoreRangeSet> allocation_core_range_set) {
     TT_FATAL(this->compiled_.empty(), "Cannot add dataflow buffer to an already compiled program {}", this->id);
 
     TT_FATAL(this->circular_buffers_.empty(), "Cannot add dataflow buffer to a program with circular buffers");
@@ -2238,6 +2278,9 @@ uint32_t ProgramImpl::add_dataflow_buffer(const CoreRangeSet& core_range_set, co
     dfb->context_id_ = this->context_id_;
 
     dfb->core_ranges = core_range_set.merge_ranges();
+    if (allocation_core_range_set.has_value()) {
+        dfb->allocation_placement = allocation_core_range_set->merge_ranges();
+    }
     dfb->config = config;
 
     dfb->device_slot = this->assign_dfb_device_slot(*dfb);
@@ -2280,7 +2323,7 @@ uint32_t ProgramImpl::add_dataflow_buffer(const CoreRangeSet& core_range_set, co
         }
     }
     if (!dfb->borrows_memory()) {  // borrowed dfb does not need to allocate
-        register_ephemeral_allocation(this->dfb_allocation_metadata_, dfb->core_ranges);
+        register_ephemeral_allocation(this->dfb_allocation_metadata_, dfb->allocation_core_ranges());
     }
 
     this->local_dataflow_buffer_allocation_needed_ = true;
@@ -3000,38 +3043,17 @@ void ProgramImpl::allocate_dataflow_buffers(const IDevice* device) {
         } else {
             const uint64_t computed_addr = allocate_dfb(
                 this->dfb_allocation_metadata_,
-                dfb->core_ranges,
+                dfb->allocation_core_ranges(),
                 dfb->total_size(),
                 device->allocator()->get_alignment(BufferType::DRAM));
             alloc_addr = static_cast<uint32_t>(computed_addr);
         }
-        // Fill alloc_addr per core in each group.  All cores of a DFB get the same alloc_addr so the L1 buffer is at a
-        // uniform absolute address on every physical core.
-        if (dfb->core_lookup_.empty() || dfb->uniform_alloc_addr() != alloc_addr) {
-            ++dfb->config_generation_;
-        }
-        dfb->core_lookup_.clear();
-        for (size_t gi = 0; gi < dfb->groups.size(); gi++) {
-            for (auto& [core, addr] : dfb->groups[gi].l1_by_core) {
-                addr = alloc_addr;
-                dfb->core_lookup_.emplace(core, std::make_pair(gi, alloc_addr));
-            }
-        }
+        dfb->set_configured_address(alloc_addr);
 
         // Propagate this primary's address to all alias secondaries immediately,
         // so they share the same L1 region without an additional allocator call.
         for (uint32_t sec_id : dfb->alias_secondary_ids) {
-            auto& sec = this->dataflow_buffers_[sec_id];
-            if (sec->core_lookup_.empty() || sec->uniform_alloc_addr() != alloc_addr) {
-                ++sec->config_generation_;
-            }
-            sec->core_lookup_.clear();
-            for (size_t gi = 0; gi < sec->groups.size(); gi++) {
-                for (auto& [core, addr] : sec->groups[gi].l1_by_core) {
-                    addr = alloc_addr;
-                    sec->core_lookup_.emplace(core, std::make_pair(gi, alloc_addr));
-                }
-            }
+            this->dataflow_buffers_[sec_id]->set_configured_address(alloc_addr);
         }
     }
     this->local_dataflow_buffer_allocation_needed_ = false;

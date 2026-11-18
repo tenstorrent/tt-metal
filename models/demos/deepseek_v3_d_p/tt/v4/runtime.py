@@ -6,8 +6,8 @@
 
 ``TtPrefillRuntime`` driving ``TtV4Transformer``, with what V4's attention state imposes:
 
-* the state lives in the model, not in an engine-owned KV cache, and is one user's, so the runtime
-  runs one slot and resets the state at the head of every request;
+* the state lives in the model, not in an engine-owned KV cache, one per user slot, so the runtime
+  resets a slot's state at the head of each request in that slot and leaves the other slots alone;
 * the state advances on host counters, which a trace replay would not update, so the runtime is
   eager-only;
 * a non-first rank receives the packed fp32 residual streams, not a bf16 hidden state.
@@ -35,8 +35,6 @@ class TtV4Runtime(TtPrefillRuntime):
             raise ValueError(f"DeepSeek-V4 prefill has no MTP predictor; got mtp_levels={self.config.mtp_levels}")
         if self.config.use_trace:
             raise ValueError("DeepSeek-V4 prefill is eager-only: its attention state advances on host counters")
-        if self.config.num_users != 1:
-            raise ValueError(f"DeepSeek-V4 attention state is single-user; got num_users={self.config.num_users}")
         if self.config.dflash_enabled:
             raise ValueError("DeepSeek-V4 prefill has no DFlash drafter")
         # The runner's D2D boundary is bf16 at hidden width; V4 hands over fp32 hc_mult * hidden streams.
@@ -47,10 +45,13 @@ class TtV4Runtime(TtPrefillRuntime):
         super()._build_model(state_dict)
 
     def prefill_chunk(self, *args, **kwargs):
-        """Reset the attention state at the head of a request, then defer to the shared runtime."""
+        """Reset the slot's attention state at the head of a request, then defer to the shared runtime."""
         bound = inspect.signature(TtPrefillRuntime.prefill_chunk).bind_partial(self, *args, **kwargs)
         if bound.arguments.get("actual_start") == 0:
-            self.model.reset_streams()
+            # None is the traced path's "the slot is on device", which an eager-only runtime never sees;
+            # forward reads it as slot 0, so the reset does too.
+            slot_id = bound.arguments.get("slot_id")
+            self.model.reset_streams(0 if slot_id is None else slot_id)
         return super().prefill_chunk(*args, **kwargs)
 
     def make_placeholder_activation(self, dflash_packed: bool = True) -> ttnn.Tensor:
