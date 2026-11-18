@@ -324,10 +324,11 @@ class Module(ABC):
         parameters = list(self._all_parameters())
         for parameter in parameters:
             parameter.check_shard_axis(mesh_axis)
-        retired: list[ttnn.Tensor] = []
+        # Free the full weights only once every slice is cut (the fragmentation note above).
+        defer_free: list[ttnn.Tensor] = []
         for parameter in parameters:
-            parameter.shard(mesh_axis, retired=retired)
-        for t in retired:
+            parameter.shard(mesh_axis, defer_free=defer_free)
+        for t in defer_free:
             ttnn.deallocate(t)
         for module in modules:
             module._has_transient_split = True  # noqa: SLF001
@@ -335,10 +336,10 @@ class Module(ABC):
 
     def gather(self, ccl_manager: Any) -> None:  # noqa: ANN401
         """Undo `shard`: all-gather every sliced parameter; the module is loaded again."""
-        retired: list[ttnn.Tensor] = []
+        defer_free: list[ttnn.Tensor] = []
         for parameter in self._all_parameters():
-            parameter.gather(ccl_manager, retired=retired)
-        for t in retired:
+            parameter.gather(ccl_manager, defer_free=defer_free)
+        for t in defer_free:
             ttnn.deallocate(t)
         self._mark_loaded()
 
@@ -628,13 +629,14 @@ class Parameter:
             msg = f"parameter already has a transient split over mesh axis {mesh_axis}"
             raise ValueError(msg)
 
-    def shard(self, mesh_axis: int, /, *, retired: list[ttnn.Tensor] | None = None) -> None:
+    def shard(self, mesh_axis: int, /, *, defer_free: list[ttnn.Tensor] | None = None) -> None:
         """Keep only this device's slice of one dim not yet split over the mesh: a transient split over `mesh_axis`,
         recorded in `mesh_axes`. Raises as `check_shard_axis` does. Does nothing without device data, if
         `mesh_axis` has one device, or if no dim divides evenly (whole tiles, for the last two dims of a tiled
         tensor).
 
-        The full tensor is deallocated, or appended to `retired` for the caller to free.
+        The full tensor it replaces is deallocated at once, or, given `defer_free`, appended to it instead, so a
+        caller sharding many parameters can free them all after every slice is cut (see `Module.shard`).
         """
         self.check_shard_axis(mesh_axis)
         if self._data is None or self.on_host:
@@ -653,12 +655,12 @@ class Parameter:
         )
         self._set_mesh_axis(dim, mesh_axis)
         self.data = ttnn.reshape(piece, self.local_shape)
-        self._retire(full, retired)
+        self._free(full, defer_free)
 
-    def gather(self, ccl_manager: Any, /, *, retired: list[ttnn.Tensor] | None = None) -> None:  # noqa: ANN401
+    def gather(self, ccl_manager: Any, /, *, defer_free: list[ttnn.Tensor] | None = None) -> None:  # noqa: ANN401
         """Undo `shard`: all-gather every transiently split dim, back to the durable layout.
 
-        The slice is deallocated, or appended to `retired` for the caller to free.
+        The slice it replaces is deallocated at once, or, given `defer_free`, appended to it instead.
         """
         dims = self.transient_dims()
         if not dims or self._data is None:
@@ -679,7 +681,7 @@ class Parameter:
         if current.memory_config() != self.memory_config:
             current = ttnn.to_memory_config(current, self.memory_config)
         self.data = current
-        self._retire(piece, retired)
+        self._free(piece, defer_free)
 
     def _shard_dim(self, n: int) -> int | None:
         """The first unsplit dim that splits n ways: whole tiles for the last two dims of a tiled tensor, never the
@@ -699,11 +701,11 @@ class Parameter:
         self.mesh_axes = tuple(axes)
 
     @staticmethod
-    def _retire(t: ttnn.Tensor, retired: list[ttnn.Tensor] | None) -> None:
-        if retired is None:
+    def _free(t: ttnn.Tensor, defer_free: list[ttnn.Tensor] | None) -> None:
+        if defer_free is None:
             ttnn.deallocate(t)
         else:
-            retired.append(t)
+            defer_free.append(t)
 
     def _check_data(self, value: ttnn.Tensor) -> None:
         if self.on_host:
