@@ -251,29 +251,39 @@ std::string line_with(std::initializer_list<std::pair<std::string_view, std::str
     return text;
 }
 
-std::set<uint32_t> refusal_numbers(const DescriptorGenerationError& error) {
-    std::set<uint32_t> numbers;
-    for (const auto& finding : error.findings()) {
-        numbers.insert(static_cast<uint32_t>(finding.refusal));
-    }
-    return numbers;
-}
+using Refusals = std::set<uint32_t>;
 
-// The refusals generate_descriptors() reports for `manifest`, and that it wrote nothing to its output directory.
-std::set<uint32_t> refusals(const Manifest& manifest, const fs::path& package = package_soc_desc()) {
+// What generate_descriptors() refused `manifest` with: the check_manifest() rows and the G refusals.
+struct Refused {
+    Refusals rows;
+    Refusals g;
+};
+
+// The refusal of `manifest`, and that nothing was written to the output directory.
+Refused refused(const Manifest& manifest, const fs::path& package = package_soc_desc()) {
     const TempDir out("refusal");
-    std::set<uint32_t> found;
+    Refused found;
     try {
         generate_descriptors(manifest, package, out.path());
         ADD_FAILURE() << "generated, expected a refusal";
     } catch (const DescriptorGenerationError& error) {
-        found = refusal_numbers(error);
+        for (const auto& row : error.rows()) {
+            found.rows.insert(static_cast<uint32_t>(row.check));
+        }
+        for (const auto& finding : error.findings()) {
+            found.g.insert(static_cast<uint32_t>(finding.refusal));
+        }
     }
     EXPECT_TRUE(fs::is_empty(out.path())) << "a refusal wrote a file";
     return found;
 }
 
-using Refusals = std::set<uint32_t>;
+// The G refusals of a manifest that passes the checks, so no row is reported with them.
+Refusals refusals(const Manifest& manifest, const fs::path& package = package_soc_desc()) {
+    const Refused found = refused(manifest, package);
+    EXPECT_EQ(found.rows, Refusals{}) << "rows reported for a manifest the checks accept";
+    return found.g;
+}
 
 // Every refusal test's manifest is one the checks accept, so the refusal is the generator's alone.
 Manifest checked(std::string_view yaml, const fs::path& package = package_soc_desc()) {
@@ -393,46 +403,54 @@ TEST(VclusterDescriptors, BackendInNoFile) {
     }
 }
 
-// § Descriptors, `env`: three lines NAME=value with absolute paths, the SoC descriptors comma-separated in chip order.
-TEST(VclusterDescriptors, EnvFile) {
-    const TempDir out("env");
-    const GeneratedDescriptors g =
-        generate_descriptors(manifest_file("line3_noc.yaml"), package_soc_desc(), out.path());
-    EXPECT_EQ(g.env, out.path() / "env");
+// The NAME=value lines of an env file.
+std::map<std::string, std::string> env_vars(const fs::path& path) {
     std::map<std::string, std::string> vars;
-    std::istringstream lines(read_text(g.env));
-    size_t count = 0;
+    std::istringstream lines(read_text(path));
     for (std::string line; std::getline(lines, line);) {
         if (line.empty()) {
             continue;
         }
-        ++count;
         const size_t eq = line.find('=');
-        ASSERT_NE(eq, std::string::npos) << line;
+        EXPECT_NE(eq, std::string::npos) << line;
+        EXPECT_FALSE(vars.contains(line.substr(0, eq))) << "repeated " << line;
         vars[line.substr(0, eq)] = line.substr(eq + 1);
     }
-    EXPECT_EQ(count, 3u);
-    EXPECT_EQ(vars["TT_METAL_EMU_CLUSTER_DESC"], fs::absolute(g.cluster_desc).string());
-    EXPECT_EQ(vars["TT_MESH_GRAPH_DESC_PATH"], fs::absolute(g.mesh_graph_desc).string());
+    return vars;
+}
+
+// § Descriptors, `env.emu` and `env.mock`: three lines NAME=value with absolute paths, the SoC descriptors
+// comma-separated in chip order; env.mock names the cluster descriptor TT_METAL_MOCK_CLUSTER_DESC_PATH where env.emu
+// names it TT_METAL_EMU_CLUSTER_DESC.
+TEST(VclusterDescriptors, EnvFiles) {
+    const TempDir out("env");
+    const GeneratedDescriptors g =
+        generate_descriptors(manifest_file("line3_noc.yaml"), package_soc_desc(), out.path());
+    EXPECT_EQ(g.env_emu, out.path() / "env.emu");
+    EXPECT_EQ(g.env_mock, out.path() / "env.mock");
     std::string socs;
     for (const auto& soc : g.soc_descs) {
         socs += (socs.empty() ? "" : ",") + fs::absolute(soc).string();
     }
-    EXPECT_EQ(vars["TT_METAL_EMU_SOC_DESC"], socs);
-    for (const auto& [name, value] : vars) {
-        EXPECT_TRUE(fs::path(value.substr(0, value.find(','))).is_absolute()) << name;
-    }
+    const std::map<std::string, std::string> shared = {
+        {"TT_METAL_EMU_SOC_DESC", socs}, {"TT_MESH_GRAPH_DESC_PATH", fs::absolute(g.mesh_graph_desc).string()}};
+    auto emu = shared;
+    emu["TT_METAL_EMU_CLUSTER_DESC"] = fs::absolute(g.cluster_desc).string();
+    auto mock = shared;
+    mock["TT_METAL_MOCK_CLUSTER_DESC_PATH"] = fs::absolute(g.cluster_desc).string();
+    EXPECT_EQ(env_vars(g.env_emu), emu);
+    EXPECT_EQ(env_vars(g.env_mock), mock);
 }
 
 // § Descriptors: files are replaced if present.
 TEST(VclusterDescriptors, ReplacesExistingFiles) {
     const TempDir out("replace");
     write_text(out.path() / "cluster_desc.yaml", "stale: true\n");
-    write_text(out.path() / "env", "STALE=1\n");
+    write_text(out.path() / "env.emu", "STALE=1\n");
     const GeneratedDescriptors g =
         generate_descriptors(manifest_file("line3_noc.yaml"), package_soc_desc(), out.path());
     EXPECT_EQ(yaml_file_difference(g.cluster_desc, kKeraunosDir / "keraunos_3chip_cluster_desc.yaml"), "");
-    EXPECT_EQ(read_text(g.env).find("STALE"), std::string::npos);
+    EXPECT_EQ(read_text(g.env_emu).find("STALE"), std::string::npos);
 }
 
 // § Verification 1: a two-device manifest generates a [ 1, 2 ] mesh and two SoC descriptors whose DRAM views are
@@ -566,6 +584,39 @@ TEST(VclusterDescriptors, G5Capture) {
     EXPECT_EQ(refusals(checked(line_with({{"version: 1\n", "version: 1\ncapture: line3.capture\n"}}))), Refusals{5});
 }
 
+// § Descriptors: the generator runs check_manifest() itself and refuses on any row, reporting the rows. A worker on
+// hart 8 of an 8-hart CCE is row 3 and touches no G refusal.
+TEST(VclusterDescriptors, RefusesOnARow) {
+    const Manifest m = parse_manifest(
+        line_with({{"{tile: 3, cce: 0, hart: 1, role: worker}", "{tile: 3, cce: 0, hart: 8, role: worker}"}}));
+    const Refused found = refused(m);
+    EXPECT_EQ(found.rows, Refusals{3});
+    EXPECT_EQ(found.g, Refusals{});
+}
+
+// The rows are check_manifest()'s, staged: a reserved value (row 1) reports row 1 alone.
+TEST(VclusterDescriptors, RefusesOnRowOneAlone) {
+    const Manifest m = parse_manifest(line_with(
+        {{"{tile: 3, cce: 0, hart: 1, role: worker}", "{tile: 3, cce: 0, hart: 8, role: worker}"},
+         {"b: {device: B, port: 0}, backend: noc", "b: {device: B, port: 0}, backend: local"}}));
+    const Refused found = refused(m);
+    EXPECT_EQ(found.rows, Refusals{1});
+    EXPECT_EQ(found.g, Refusals{});
+}
+
+// § Descriptors, cluster_desc.yaml: each ethernet_connections entry puts the end with the lower chip first, whatever
+// the manifest's order of the two ends.
+TEST(VclusterDescriptors, ConnectionLowerChipFirst) {
+    const Manifest m = checked(line_with(
+        {{"{a: {device: A, port: 0}, b: {device: M, port: 0}, backend: noc}",
+          "{a: {device: M, port: 0}, b: {device: A, port: 0}, backend: noc}"},
+         {"{a: {device: M, port: 1}, b: {device: B, port: 0}, backend: noc}",
+          "{a: {device: B, port: 0}, b: {device: M, port: 1}, backend: noc}"}}));
+    const TempDir out("lower_first");
+    const GeneratedDescriptors g = generate_descriptors(m, package_soc_desc(), out.path());
+    EXPECT_EQ(yaml_file_difference(g.cluster_desc, kKeraunosDir / "keraunos_3chip_cluster_desc.yaml"), "");
+}
+
 // The generator lists every refusal that holds: G2 and G5 together.
 TEST(VclusterDescriptors, EveryRefusalListed) {
     EXPECT_EQ(
@@ -597,7 +648,8 @@ TEST(VclusterGenerate, FromEnvironment) {
     ASSERT_TRUE(findings.empty());
     fs::create_directories(out);
     const GeneratedDescriptors g = generate_descriptors(manifest, package, out);
-    std::cout << "export the variables of " << fs::absolute(g.env).string() << std::endl;
+    std::cout << "export the variables of " << g.env_emu.string() << " (emulator) or " << g.env_mock.string()
+              << " (Mock)" << std::endl;
 }
 
 }  // namespace
