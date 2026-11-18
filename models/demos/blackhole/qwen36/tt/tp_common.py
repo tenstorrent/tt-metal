@@ -51,12 +51,12 @@ def prefill_options(args):
     return opts
 
 
-def norm_compute_cfg(args=None, default=None):
-    """RMSNorm compute config: HiFi4 + fp32 accumulation when args.prefill_options.exact_norms, else `default`.
+def norm_compute_cfg(args):
+    """RMSNorm compute config: HiFi4 + fp32 accumulation when args.prefill_options.exact_norms, else None (the op's).
     HiFi2 truncates x*x and biases sum(x^2): 0.88% relative error vs fp32 on Qwen3.5-9B layer inputs (mean x^2 ~ 1e-4),
     HiFi4 + fp32 0.29% (= the bf16 output rounding)."""
     if not prefill_options(args).exact_norms:
-        return default
+        return None
     return ttnn.WormholeComputeKernelConfig(
         math_fidelity=ttnn.MathFidelity.HiFi4, math_approx_mode=False, fp32_dest_acc_en=True, packer_l1_acc=False
     )
