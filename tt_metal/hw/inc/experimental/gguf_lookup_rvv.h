@@ -110,4 +110,20 @@ inline __attribute__((always_inline)) void lookup_grid_rvv(
 
 }  // namespace experimental::gguf
 
+#else  // no vector unit (e.g. Wormhole's RV32IM TRISCs): the scalar lookup
+
+namespace experimental::gguf {
+
+template <Format FMT, typename Out>
+inline __attribute__((always_inline)) void lookup_grid_rvv(
+    const std::uint32_t* indices,
+    const std::uint16_t* table,
+    Out* levels,
+    const std::uint32_t part = 0,
+    const std::uint32_t parts = 1) {
+    lookup_grid<FMT>(indices, table, levels, part, parts);
+}
+
+}  // namespace experimental::gguf
+
 #endif  // __riscv_vector
