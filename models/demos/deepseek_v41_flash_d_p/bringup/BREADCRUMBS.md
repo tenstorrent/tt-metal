@@ -2606,3 +2606,30 @@ Measured (8x4, `gate FIX.31 --check`, after the last edit)
   the layer-time decode of the chunk's W blocks is within noise. Wall 105.2 / 108.9 / 122.4 ms (109.3 / 108.7 /
   123.4; spread ~10 ms): no change visible. DRAM state 16.09 / 17.08 / 20.74 GiB (same: one user, the shared buffer
   replaces k8 at the same size; saving = k8 x (users - 1)).
+
+## FIX.39 (overseer, owner review 2026-11-18): outside-written history, prefetch marker cleared at chunk start
+
+- (A) tt/history_gather.new_chunk(): every history buffer's ``pre`` (P.75's prefetch marker) set to None; called from
+  TtDS41Model.begin_chunk next to index_keys.new_chunk(). Why: gather() reused a prefetched history when (cache id,
+  start) matched and ``version`` moved by <= 1, but ``version`` counts this process's writes only: a write from outside
+  (the KV Manager after a store load / d2p pull) never bumps it, so a stage that starts mid-model (no prefetch before
+  its sources) could reuse rows gathered before that write. The prefetch runs after begin_chunk (first engram wait),
+  so the normal path is unchanged (host only; the gate's X.4 units rerun it).
+- (B) nothing (FIX.38's units ran on the new default in its own --check).
+- (C) tests/test_outside_history.py (one load, DECODER_SKIP=decode via use_decoder_skip): slot states A and B (own
+  slabs, the same CacheSlab code as the engine's slots). A runs [0, C); every served cache of A (48 tensors: window
+  snapshots, compressed KV, 192-byte index rows) copied into B as a raw DRAM image (ttnn.from_device ->
+  ttnn.copy_host_to_device_tensor; no model write path, B's counters stay 0; checked B == A after the copy); then the
+  replay chunk [C - 128, 2C - 128) with global_write_start C in A, then in B; every encoder layer output (0-19) and
+  every served image compared. Replay: every window truncated at C - 128 in both (item 2, the window ring, not read);
+  B told the prefix ids with note_tokens (host only; item 1, the engram tail). Also asserted: no prefetch marker left
+  right after any begin_chunk (A).
+- Measured (8x4, chunk 5120, novel prompt): shipped outside_history_max_abs_diff 0.0 (no layer, no cache differs; 28
+  caches rewritten by chunk k + 1). Documented (recorded, not gated): STATIC_TABLES=on max 242, layers 2-19 differ
+  (layer 2 by 1.34; its replicated AttnTable never sees the outside write: item 3); INDEX_K_SOURCE=private max 245,
+  layers 2-19 (layer 2 by 0.57; the k8 copy: item 4); B without the prefix ids max 220, layers 1-19 (layer 1 by
+  0.46: the engram tail, item 1); [C, 2C) without replay max 229, layers 0-19 (layer 0 by 0.80: B's ring holds no
+  carry, item 2). DS41-294.
+- STATIC_TABLES / INDEX_K_SOURCE switched for one variant's states on the same load: env + settings.refresh() at state
+  build, plus each TtSparseAttention.static and model._hide (host flags), put back after.
+- Re-run: `scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/test_outside_history.py`

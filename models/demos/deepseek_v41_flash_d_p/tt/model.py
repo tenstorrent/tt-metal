@@ -1409,6 +1409,7 @@ class TtDS41Model:
             st.memo.clear()
         # HISTORY_GATHER_HIDE=on (P.75): the sources' history gathers wait for the first engram layer's host rows
         self._pf_start = int(start) if self._hide else None
+        history_gather.new_chunk()  # FIX.39: no prefetch marker of an earlier chunk survives (outside writes)
         # INDEX_K_SOURCE=served (P.76): nothing decoded before this chunk is trusted; the index sources' served history
         # is decoded at the first engram wait (prefetch_index_keys)
         index_keys.new_chunk()

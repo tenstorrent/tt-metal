@@ -1660,6 +1660,57 @@ tasks:
       decoder skip, contract, adapter acks, positions) runs on the new default.'
     gate_tasks:
     - X.4
+- id: FIX.39
+  title: 'Outside-written history: clear the prefetch marker at chunk start, and a test that proves the served-state path'
+  step: overseer_fix
+  role: overseer
+  precheck: false
+  deps:
+  - X.4
+  gate:
+    cmd: BRINGUP_TASK=X.4 BRINGUP_RUNG=last scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_ladder.py
+      && BRINGUP_TASK=X.4 scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_determinism.py
+      && BRINGUP_TASK=X.4 scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/test_determinism.py
+      && BRINGUP_TASK=X.4 scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/test_decoder_skip_decode.py
+      && BRINGUP_TASK=X.4 scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_contract.py
+      && BRINGUP_TASK=X.4 scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/bringup/contract/test_adapter_acks.py
+      && BRINGUP_TASK=X.4 DS41_DECODER_SKIP=decode scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/test_skip_positions.py
+    metrics:
+      err_layer_L*: <= limit
+      err_state_*_L*: <= limit
+      err_final_hidden: <= limit
+      top5_overlap: '>= limit'
+      determinism_max_abs_diff: == 0
+      determinism_max_abs_diff_decoder_skip: == 0
+      contract_checks_failed: == 0
+      acks_early: == 0
+      contract_checks_failed_decoder_skip: == 0
+      unwritten_records_changed_decoder_skip: == 0
+      steady_wall_ms_p51200: '> 0'
+      steady_wall_ms_p1024000: '> 0'
+  device: true
+  paths:
+  - models/demos/deepseek_v41_flash_d_p/tt
+  - models/demos/deepseek_v41_flash_d_p/tests
+  brief:
+    details: 'Review feedback (owner 2026-11-18). (A) Latent bug: tt/history_gather.py gather() (:170-177) reuses a prefetched
+      history (buf.pre) when (cache id, start) match and ckv_cache.version moved by <= 1; version is a host counter that writes
+      from OUTSIDE the process (the KV Manager filling the served cache after a store load / d2p pull) never bump. The full
+      model is safe (layer 1''s engram wait re-prefetches every chunk), but a pipeline stage that starts mid-model (no prefetch
+      before its sources) could reuse rows gathered before an outside write. Fix: clear every history buffer''s pre at chunk
+      start (begin_chunk), one line; bit-identical on the normal path. (B) nothing to do (FIX.38''s units did run on the new
+      default in its gate --check at 17:37-17:53, FIX.38.check.log; the final gate line ''reused'' refers to those runs).
+      (C) Add the missing test: tests/test_outside_history.py: run a request''s chunks k and k+1 in slot A (self-written);
+      in slot B write the served caches of chunk k from OUTSIDE the model (copy slot A''s served records into slot B with
+      a raw DRAM copy, as the KV Manager would; nothing through the model''s write path, no load_host), then run chunk k+1
+      in slot B with the same ids, and compare every layer''s output and every served record written by chunk k+1 between
+      A and B. Expected: bit-identical with STATIC_TABLES=off (today''s default); record what differs with STATIC_TABLES=on
+      (the replicated table) and with INDEX_K_SOURCE=private (k8) to document items 3 and 4; the engram tail (item 1) and
+      window ring (item 2) need the replay / host ids, so run the comparison from a chunk start where the window carry and
+      the engram tail are the same for both (or replay 128 rows with global_write_start) and say how. Metrics: outside_history_max_abs_diff
+      (== 0 for the shipped defaults). DECODER_SKIP=decode. One model load.'
+    gate_tasks:
+    - X.4
 - id: FIX.13
   title: 'DS41-141: is P.9''s window-KV rise rounding or a bug (device allowed)'
   step: overseer_fix
@@ -1677,6 +1728,7 @@ tasks:
   - FIX.33
   - FIX.36
   - FIX.38
+  - FIX.39
   gate:
     cmd: BRINGUP_TASK=K.1 scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_contract.py
       && BRINGUP_TASK=K.1 scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/bringup/contract/test_kv_layout.py
@@ -4951,8 +5003,8 @@ tasks:
       steady_wall_ms_p51200: '> 0'
       steady_wall_ms_p1024000: '> 0'
 - id: P.76
-  title: 'OWNER 2026-11-18: item 3 of the slot-state page: the indexer scores the SERVED fp8 index rows, no private
-    k8 copy (correct whatever wrote the slot''s history)'
+  title: 'OWNER 2026-11-18: item 3 of the slot-state page: the indexer scores the SERVED fp8 index rows, no private k8 copy
+    (correct whatever wrote the slot''s history)'
   step: perf
   role: perf
   device: true
@@ -4965,30 +5017,29 @@ tasks:
   - models/demos/deepseek_v41_flash_d_p/bringup/known_issues.md
   - ttnn/ttnn/bringup
   brief:
-    details: 'OWNER 2026-11-18. Item 3 of the slot-state page (https://claude.ai/artifact/ARpCTqB11QGLrwjGxR6Adz): the
-      prefill indexer scores a PRIVATE bfloat8_b copy of the index keys (k8, INDEX_K_COPY=bfp8; tt/compressor.py
-      TtServedRows / TtCompressCaches ~:430-530 _put8; tt/indexer.py _keys :251), correct only if this process wrote every
-      earlier chunk of the slot: after a store load / d2p pull / a reused slot it holds zeros or another user''s keys
-      (silently wrong top-k). The served index keys are Blaze decode''s fp8 192-byte rows (INDEX_K_SERVED=fp8_row192:
-      bytes 0-127 e4m3, 128-131 the fp32 scale, 132-191 zero; written per chunk by fp8_rows_tile = per_token_cast_to_fp8 +
-      ttnn.bringup.pack_fp8_rows; TP-replicated, SP-sharded, so each chip already holds its SP row''s served rows: no mesh
-      traffic needed beyond the ring score''s own ring over SP). Goal: the indexer reads ONLY served state: every chunk the
-      served rows [0, start) (and the chunk''s own) are decoded to the scoring format (bfloat8_b tiles of 128 dims, as the
-      ring score reads today) into a persistent per-size buffer (no per-user copy; like P.74''s gather buffer), then the
-      existing ring score (ttnn.bringup.ring_indexer_score_dsa) runs unchanged. Decoder: no device reader of the 192-byte
-      rows exists today; the stock ttnn.experimental.deepseek_prefill.per_token_cast_back (decode x scale -> bf16, needs
-      FP8_E4M3 row-major input; its token_count_aware mode reads a scale packed in the row tail) plus an unpack/bitcast,
-      or a small bring-up fork (ttnn/ttnn/bringup, e.g. an unpack_fp8_rows next to pack_fp8_rows) that writes bfp8 tiles
-      directly: pick the fastest deterministic one; read /data/dnijemcevic/bringup/handoff_20261118/step1_report.md §3.
-      Hide the decode like P.75 hid the gather if it costs (the served rows [0, start) are complete before the chunk:
-      the engram wait, tt/model.TtDS41Model.prefetch_history). Precision: the scored keys become bfp8(fp8(key)) instead
-      of bfp8(key): NOT bit-identical to today by construction (fp8 is lossy), but prefill then scores what decode scores;
-      the gate''s accuracy limits judge it (do not loosen any). Determinism must stay exact. Put it behind a switch
-      (e.g. INDEX_K_SOURCE=private|served), keep the private path working. No weight-layout change (no weight rebuild),
-      matmuls within 110 cores, every Python-built op through ttnn.bringup.prepare_program / run_prepared, no fork
-      regression suites (only tests you add for a new fork, CPU / one device). Check it runs (test_decoder_skip_decode,
-      determinism), then stop: the orchestrator measures both sides. Report short: per-chunk cost of the decode at 51k /
-      256k / 1M, hidden or not, and the accuracy change.'
+    details: "OWNER 2026-11-18. Item 3 of the slot-state page (https://claude.ai/artifact/ARpCTqB11QGLrwjGxR6Adz): the prefill\
+      \ indexer scores a PRIVATE bfloat8_b copy of the index keys (k8, INDEX_K_COPY=bfp8; tt/compressor.py TtServedRows /\
+      \ TtCompressCaches ~:430-530 _put8; tt/indexer.py _keys :251), correct only if this process wrote every earlier chunk\
+      \ of the slot: after a store load / d2p pull / a reused slot it holds zeros or another user's keys (silently wrong top-k).\
+      \ The served index keys are Blaze decode's fp8 192-byte rows (INDEX_K_SERVED=fp8_row192: bytes 0-127 e4m3, 128-131 the\
+      \ fp32 scale, 132-191 zero; written per chunk by fp8_rows_tile = per_token_cast_to_fp8 + ttnn.bringup.pack_fp8_rows;\
+      \ TP-replicated, SP-sharded, so each chip already holds its SP row's served rows: no mesh traffic needed beyond the\
+      \ ring score's own ring over SP). Goal: the indexer reads ONLY served state: every chunk the served rows [0, start)\
+      \ (and the chunk's own) are decoded to the scoring format (bfloat8_b tiles of 128 dims, as the ring score reads today)\
+      \ into a persistent per-size buffer (no per-user copy; like P.74's gather buffer), then the existing ring score (ttnn.bringup.ring_indexer_score_dsa)\
+      \ runs unchanged. Decoder: no device reader of the 192-byte rows exists today; the stock ttnn.experimental.deepseek_prefill.per_token_cast_back\
+      \ (decode x scale -> bf16, needs FP8_E4M3 row-major input; its token_count_aware mode reads a scale packed in the row\
+      \ tail) plus an unpack/bitcast, or a small bring-up fork (ttnn/ttnn/bringup, e.g. an unpack_fp8_rows next to pack_fp8_rows)\
+      \ that writes bfp8 tiles directly: pick the fastest deterministic one; read /data/dnijemcevic/bringup/handoff_20261118/step1_report.md\
+      \ \xA73. Hide the decode like P.75 hid the gather if it costs (the served rows [0, start) are complete before the chunk:\
+      \ the engram wait, tt/model.TtDS41Model.prefetch_history). Precision: the scored keys become bfp8(fp8(key)) instead\
+      \ of bfp8(key): NOT bit-identical to today by construction (fp8 is lossy), but prefill then scores what decode scores;\
+      \ the gate's accuracy limits judge it (do not loosen any). Determinism must stay exact. Put it behind a switch (e.g.\
+      \ INDEX_K_SOURCE=private|served), keep the private path working. No weight-layout change (no weight rebuild), matmuls\
+      \ within 110 cores, every Python-built op through ttnn.bringup.prepare_program / run_prepared, no fork regression suites\
+      \ (only tests you add for a new fork, CPU / one device). Check it runs (test_decoder_skip_decode, determinism), then\
+      \ stop: the orchestrator measures both sides. Report short: per-chunk cost of the decode at 51k / 256k / 1M, hidden\
+      \ or not, and the accuracy change."
   ab:
     keep_default: true
     env:
@@ -5000,10 +5051,10 @@ tasks:
   - last
   gate:
     cmd: BRINGUP_RUNG=last scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_ladder.py
-      && scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_determinism.py
-      && scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/test_decoder_skip_decode.py
-      && scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_contract.py
-      && DS41_DECODER_SKIP=decode scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/test_skip_positions.py
+      && scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_determinism.py && scripts/run_safe_pytest.sh
+      --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/test_decoder_skip_decode.py && scripts/run_safe_pytest.sh
+      --run-all --no-precompile models/demos/common/bringup/tests/test_contract.py && DS41_DECODER_SKIP=decode scripts/run_safe_pytest.sh
+      --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/test_skip_positions.py
     metrics:
       err_layer_L*: <= limit
       err_state_*_L*: <= limit

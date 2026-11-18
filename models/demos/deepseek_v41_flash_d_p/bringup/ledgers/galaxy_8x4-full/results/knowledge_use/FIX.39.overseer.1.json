@@ -1,0 +1,53 @@
+{
+ "used": [],
+ "contradicted": [],
+ "missing": [
+  "How to write a served cache from outside the model in a test (no UMD write binding exists, only read_dram_umd): ttnn.from_device + copy_host_to_device_tensor of the whole ND-sharded slab image works (now DS41-294 / repo_map row)",
+  "Which per-slot device state a served-history write does not reach (AttnTable, k8, engram tail, window ring): now DS41-294"
+ ],
+ "overseer": [
+  {
+   "id": "FIX.39",
+   "answer": "done",
+   "evidence": "(A) tt/history_gather.new_chunk() called in TtDS41Model.begin_chunk; test asserts no marker after begin_chunk (outside_history_markers_left 0). (C) tests/test_outside_history.py on 8x4: shipped outside_history_max_abs_diff 0.0; static_on 242, index_private 245, no_prefix_ids 220, window_carry 229 (documented). (B) nothing to do."
+  },
+  {
+   "id": "OV-3",
+   "answer": "n/a",
+   "evidence": "no padding or inflated work: a host-only marker reset and a test"
+  },
+  {
+   "id": "OV-23",
+   "answer": "n/a",
+   "evidence": "no Python-built op added or touched; the test's copy is a stock host->device write"
+  },
+  {
+   "id": "OV-25",
+   "answer": "done",
+   "evidence": "no fork suite run; only the new test and the gate's model-level units"
+  }
+ ],
+ "cited_only": [
+  "DS41-294"
+ ],
+ "meta": {
+  "model": "deepseek_v41_flash_d_p",
+  "run": "run1",
+  "task": "FIX.39",
+  "role": "overseer",
+  "attempt": 1,
+  "agent": "bringup-engineer",
+  "t": "2026-11-18T20:56:30",
+  "head": "56bbcbbf17f",
+  "touched": [
+   "models/demos/deepseek_v41_flash_d_p/bringup/BREADCRUMBS.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/known_issues.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/FIX.39.json",
+   "models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/knowledge_use/FIX.39.overseer.1.json",
+   "models/demos/deepseek_v41_flash_d_p/bringup/repo_map.md",
+   "models/demos/deepseek_v41_flash_d_p/tests/test_outside_history.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/history_gather.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/model.py"
+  ]
+ }
+}

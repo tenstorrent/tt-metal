@@ -41,7 +41,8 @@ At the source's layer ``gather`` then moves only the chunk's own periods [c hs, 
 from the slab, gathered into a small persistent buffer [owners m, 512] (key ("tail", owners m)) and slice_written
 (viewed [1, owners, m, 512] -> [1, owners, R, 512]) into rows [q R + c hs, q R + nb hs): the same bytes at the same
 rows as one gather of [0, nb hs) (a data move), so the table, the index and sparse_sdpa are bit-identical. A chunk
-whose prefetch did not run (no engram layer loaded, a re-run, a cache written since) gathers everything as before.
+whose prefetch did not run (no engram layer loaded, a re-run, a cache written since) gathers everything as before;
+every chunk start clears the markers (``new_chunk``, FIX.39: an outside write never bumps ``version``).
 """
 
 from __future__ import annotations
@@ -216,6 +217,17 @@ def _tail(ckv_cache, buf: HistoryBuffer, h: int, local_rows: int, owners: int, a
     ttnn.bringup.slice_write(
         small.view, buf.view, [0, 0, h, 0], [1, owners, local_rows, WIDTH], [1, 1, 1, 1], max_grid=max_grid()
     )
+
+
+def new_chunk() -> None:
+    """FIX.39 (owner review 2026-11-18): at every chunk start (TtDS41Model.begin_chunk) no buffer holds a prefetched
+    history: ``gather`` reuses one only when this chunk's ``prefetch`` made it. ``version`` counts this process's
+    writes only; a write from outside (the KV Manager filling a served cache after a store load / d2p pull) never bumps
+    it, so a marker left from an earlier chunk (a pipeline stage that starts mid-model: no prefetch before its sources)
+    could pass the (cache, start, version) check over rows gathered before that write. Host only."""
+    for _, bufs in _BUF.values():
+        for b in bufs.values():
+            b.pre = None
 
 
 def prefetch(ckv_cache, start: int, chunk: int) -> bool:
