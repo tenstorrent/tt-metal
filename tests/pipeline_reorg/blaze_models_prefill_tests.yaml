@@ -796,10 +796,18 @@
       # ttnn.experimental.sparse_push_plan + sparse_kv_push on the 8x4 TorusXY mesh: op checks against a host
       # reference and determinism (repeated runs, bit-exact, compared on device), then the real GLM-5.3 1M top-k push
       # (L14/L62) against the dense gather, with attention beside the prefix push on a sub-device.
-      timeout -k 2m 20m mpirun --bind-to none --pernode --tag-output bash -lc '
+      timeout -k 2m 30m mpirun --bind-to none --pernode --tag-output bash -lc '
         export OMP_NUM_THREADS=$(nproc)
         python3 -m pytest models/demos/deepseek_v3_d_p/tests/op_unit_tests/test_sparse_push_plan.py -vvv --tb=short &&
         python3 -m pytest tests/ttnn/unit_tests/operations/experimental/test_sparse_kv_push.py -vvv --tb=short &&
+        # The xy4 rows (the unnarrowed run above skips them) on a [RING, RING] 4x4 sub-torus of this Galaxy: the
+        # carve is the AttnRes harness SUBTORUS_4X4_ENV. All 10 must run, so the summary has to say 10 passed.
+        (
+          set -o pipefail
+          eval "$(python3 -c "from models.demos.deepseek_v3_d_p.tests.attn_res.model.harness import SUBTORUS_4X4_ENV as E; print(*(f\"export {k}={v}\" for k, v in E.items()), sep=chr(10))")" || exit 1
+          timeout -k 1m 10m python3 -m pytest tests/ttnn/unit_tests/operations/experimental/test_sparse_kv_push.py -k xy4 -vvv --tb=short --timeout=480 -rs 2>&1 | tee /tmp/sparse_kv_push_xy4.log || exit 1
+          grep -qE "(^|[ =])10 passed" /tmp/sparse_kv_push_xy4.log && ! grep -qE "[0-9]+ (skipped|failed|error)" /tmp/sparse_kv_push_xy4.log
+        ) &&
         python3 -m pytest tests/nightly/blackhole/sdpa/test_sparse_sdpa_kv_push.py::test_sparse_kv_push_real_topk_matches_gather -vvv --tb=short
       '
     )

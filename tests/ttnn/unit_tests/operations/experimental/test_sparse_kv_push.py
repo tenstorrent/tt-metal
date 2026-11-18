@@ -378,7 +378,11 @@ def test_sparse_kv_push_configs(mesh_device, page_bytes, sc, links, slot_tensor)
     _run_parts(mesh_device, push, slot=3, chunk_start=start, tag=f"{page_bytes}B sc{sc} {links}L", **slot_args)
 
 
-@pytest.mark.parametrize("device_params", [_device_params()], indirect=True)
+# The 4x4 mesh runs only on a Galaxy carved to 16 chips (`SUBTORUS_4X4_ENV` in the AttnRes model harness); on the
+# unnarrowed 8x4 box the exact-box requirement skips it before the mesh opens.
+@pytest.mark.parametrize(
+    "device_params", [{**_device_params(), "require_exact_physical_num_devices": True}], indirect=True
+)
 @pytest.mark.parametrize("mesh_device", [(4, 4)], ids=["xy4"], indirect=True)
 @pytest.mark.parametrize("sp_axis", [0, 1], ids=["sp0", "sp1"])
 @pytest.mark.parametrize("pattern", ["random", "one_owner", "local_only", "run_lengths", "edges"])
