@@ -134,7 +134,7 @@ class VisionNumerics:
 
     An fp32 ``ttnn.all_reduce`` (reduce-scatter + all-gather) on the 1x8 row was seen handing its output to the next
     op before every chip's share had landed ([1, 1, 1024, 1280] and [1, 1, 1280, 1280]: random results run to run,
-    exact with a device sync after it; tests/perf/allreduce_fp32_race.py checks it standalone), so fp32 reduces are
+    exact with a device sync after it), so fp32 reduces are
     followed by ``ttnn.synchronize_device``. bf16 reduces showed no such race (every row bucket is checked bit for
     bit run to run in tests/test_vision_tp8.py)."""
 

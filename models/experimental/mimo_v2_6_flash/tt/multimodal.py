@@ -3,7 +3,7 @@
 
 """Multimodal input (image, video, audio) for the MiMo-V2.6-Flash prefill: host-side bookkeeping.
 
-The LLM is unchanged: an item's embeddings replace the embeddings of its placeholder tokens (doc/multimodal_plan.md).
+The LLM is unchanged: an item's embeddings replace the embeddings of its placeholder tokens.
 This module turns a prefill row's items into the host rows of one chunk (``chunk_embeds``), which
 TtMiMoModel.prefill_enqueue(embeds=, embed_rows=) merges into the chunk on device:
 

@@ -341,7 +341,7 @@ def _cache_dir(model_path):
 
 
 # A verify's global SDPA runs one launch per group (attention.verify_variants' sequential variants) when the longest
-# context is at least this long and twice the others' mean: tests/perf/sdpa_balance_bench.py.
+# context is at least this long and twice the others' mean (measurements: attention.py).
 SEQUENTIAL_MIN_CONTEXT = int(os.environ.get("MIMO_VERIFY_SEQUENTIAL_MIN", "131072"))
 
 
@@ -2694,7 +2694,7 @@ class MiMoV2ForCausalLM:
 
 
 # ---------------------------------------------------------------------------------------------------------------------
-# Multimodal input (doc/multimodal_plan.md)
+# Multimodal input
 # ---------------------------------------------------------------------------------------------------------------------
 
 # Modalities MiMoV2OmniForCausalLM serves (model_capabilities["mm_modalities"]); MIMO_MM_MODALITIES narrows them.

@@ -18,13 +18,13 @@ MiMo-V2.6-Flash-MOPD served by vLLM on one Blackhole Galaxy with every request a
   - `MIMO_EXPERT_QUANT=gptq`.
 - Server start takes 8 minutes. That includes the prefill warmup and a first-start kernel compile after a fresh
   build.
-- Client: `tests/perf/vllm_long_prompts.py`.
+- Client: a script that sends the prompts to the completions endpoint.
   - Each prompt is exactly 1,048,000 random token ids, sent as a token list, so the server counts 1,048,000 prompt
     tokens. Every prompt is distinct, so there are no prefix-cache hits.
   - Each request generates 128 greedy tokens with `ignore_eos` and streams them back.
 - Two runs on the same server:
-  - one prompt alone (`--n 1 --concurrency 1`);
-  - then 16 at once (`--n 16 --concurrency 16`).
+  - one prompt alone;
+  - then 16 at once.
 
 ## Results
 
@@ -53,7 +53,7 @@ One 1M prompt alone (the other three lanes idle) has a TTFT of 355.5 s.
 |---|---|---|
 | One prompt, one lane busy (vLLM) | 356 s | 2.95K tok/s |
 | 16 prompts, all 4 lanes busy (vLLM) | 855 s | 1.22K tok/s per lane, 4.9K tok/s for the Galaxy |
-| Standalone model, one row, last 4K chunk at 1M (`long_1m.py --kv-pair-split`) | 1.57 s per 4K chunk | 2.6K tok/s at the 1M end |
+| Standalone model, one row, last 4K chunk at 1M (KV pair split) | 1.57 s per 4K chunk | 2.6K tok/s at the 1M end |
 
 **Decode.**
 - One request alone at 1M decodes at 12.3 ms per token (81 tok/s). That is the short-context c=1 TPOT (9.3 ms) plus
@@ -67,8 +67,7 @@ One 1M prompt alone (the other three lanes idle) has a TTFT of 355.5 s.
 
 ## Standalone comparison
 
-Results from `tests/perf/long_1m.py --mode capacity --users 4` (one row runs; all 4 rows are built), from
-`doc/tp8_dp4_plan.md`, "1M prefill on all 4 rows". The DRAM column is for 4 users x 1M per row; the last chunk is the
+Results of the standalone model at 1M with 4 users per row (one row runs; all 4 rows are built). The DRAM column is for 4 users x 1M per row; the last chunk is the
 4K chunk ending at 1M.
 
 | Global KV layout | DRAM per chip (34.18 GB) | Last 4K chunk at 1M |
@@ -89,7 +88,7 @@ chip runs all 16 heads over its half of the keys (G 2 / S 15 from 64K) and the p
   - Per prompt, each lane takes 2.4x longer than alone. The device work per chunk does not change with the number of
     busy lanes, so the time goes to host dispatch.
   - The standalone model shows the same effect with one host thread for 4 rows: 476 s per prompt against 277 s for one
-    row alone (tp8_dp4_plan.md, the head split).
+    row alone.
 - **vLLM's 2048-token prefill chunks.**
   - They double the number of chunks per prompt against the standalone model's 4096, and with it the per-chunk host
     overhead.

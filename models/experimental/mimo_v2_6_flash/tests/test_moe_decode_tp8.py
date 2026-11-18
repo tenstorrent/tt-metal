@@ -38,7 +38,6 @@ from models.experimental.mimo_v2_6_flash.tests.common import (
     load_config_and_ckpt,
     pcc,
 )
-from models.experimental.mimo_v2_6_flash.tests.perf.moe_decode_common import golden_moe_inputs
 from models.experimental.mimo_v2_6_flash.tt.common import TILE, MeshPlan
 from models.experimental.mimo_v2_6_flash.tt.moe import TtMiMoMoE
 from models.experimental.mimo_v2_6_flash.tt.moe_stream import zero_output
@@ -46,6 +45,23 @@ from models.experimental.mimo_v2_6_flash.tt.moe_stream import zero_output
 LAYER = 1
 STEPS = 4
 RESIDUAL_STD = 0.5
+
+
+def golden_moe_inputs(cfg, ckpt):
+    """Real post-attention-norm activations of the golden prompts at LAYER (fp32 rows, bf16-exact)."""
+    golden = torch.load(golden_path())
+    w = dict(ckpt.norms(LAYER))
+    w["attn"] = ckpt.attention(LAYER)
+    dims = cfg.attention_dims(LAYER)
+    rows = []
+    with torch.no_grad():
+        for hidden in golden["hidden"]:
+            x = hidden[LAYER]
+            pos = torch.arange(x.shape[0])
+            h = ref.rms_norm(x, w["input_layernorm"], cfg.layernorm_epsilon)
+            x = x + ref.attention(h, w["attn"], dims, cfg.attention_value_scale, pos)
+            rows.append(ref.rms_norm(x, w["post_attention_layernorm"], cfg.layernorm_epsilon))
+    return torch.cat(rows).bfloat16().float()
 
 
 def to_device(plan, t):

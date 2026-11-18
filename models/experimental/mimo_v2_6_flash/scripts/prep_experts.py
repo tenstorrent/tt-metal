@@ -7,7 +7,7 @@ Converting the weight cache dequantizes 256 MXFP4 experts per layer and prepares
 ~80 s per layer at 32 threads). This writes each layer's (w_gate_up, w_down) in device layout to
 <out>/layer<i>.pt so the cache conversion (MIMO_EXPERT_PREP_DIR=<out>) only encodes them.
 
-    python models/experimental/mimo_v2_6_flash/tests/perf/prep_experts.py --out DIR [--layers 1-47] [--threads 32]
+    python models/experimental/mimo_v2_6_flash/scripts/prep_experts.py --out DIR [--layers 1-47] [--threads 32]
 """
 
 import argparse

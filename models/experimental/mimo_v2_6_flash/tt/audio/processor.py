@@ -11,14 +11,14 @@ MIMO_AUDIO_TOKENIZER=frontend by its RVQ codes (25 Hz) computed here in fp32 as 
 bf16 before it leaves the processor, which changed 8 of the 126 code frames of a 5 s clip; ``fp32_mels``), or with
 MIMO_AUDIO_PATCH=frontend by the LLM embeddings the patch encoder makes from them (below). The host tokenizer encoder
 (1.6 s for 30 s of audio at 8 threads) runs here, never in the engine process, where it held up every other request
-of the engine. Only a bit-identical fp32 computation keeps every code (its RVQ decisions sit at fp32 rounding level,
-tests/perf/audio_codes_margin.py); the device encoder's few percent of changed frames cost no accuracy (below).
+of the engine. Only a bit-identical fp32 computation keeps every code (its RVQ decisions sit at fp32 rounding
+level); the device encoder's few percent of changed frames cost no accuracy (below).
 
 Where it runs: vLLM 0.31.0's renderer calls ``_process_multimodal`` (and so this processor) through
 ``make_async(..., executor=self._mm_executor)``, a single-worker ThreadPoolExecutor of the API server process, not on
 its asyncio event loop. Torch kernels release the GIL, so the loop keeps streaming other requests' tokens: while a
 120 s clip took 10.4 s there, a 10 ms text stream's largest gap was 20 ms (12 ms before; 10.9 s with the same work
-on the loop), on bhg4 at load average ~37 (tests/perf/audio_frontend_stall.py). Multimodal items of one API server
+on the loop), on bhg4 at load average ~37. Multimodal items of one API server
 queue behind each other on the one worker: a 5 s clip sent with that 120 s one finished after 10.7 s (9.7 s with the
 aligned windowed attention, load average ~20). vLLM 0.31 offers no setting for more workers: ``BaseRenderer``
 creates ``ThreadPoolExecutor(max_workers=1)`` and requires it ("must stay single-worker per #38418": the sender-side

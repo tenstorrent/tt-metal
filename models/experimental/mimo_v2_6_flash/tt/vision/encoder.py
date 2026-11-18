@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-"""Vision half of the encoder backend (doc/multimodal_plan.md, ``EncoderBackend``): the ViT on one 1x8 row.
+"""Vision half of the encoder backend (``EncoderBackend`` in tt/multimodal.py): the ViT on one 1x8 row.
 
     encoder = MiMoVisionEncoder(row_mesh, model_path)            # row_mesh: a (1, 8) MeshDevice / submesh
     encoder.warm()                                               # every bucket's programs, before trace capture

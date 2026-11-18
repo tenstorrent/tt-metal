@@ -2,8 +2,7 @@
 
 TTNN implementation of [XiaomiMiMo/MiMo-V2.6-Flash-MOPD](https://huggingface.co/XiaomiMiMo/MiMo-V2.6-Flash-MOPD)
 (text only) for a 32-chip Blackhole Galaxy run as four independent TP=8 replicas, one per row of
-the 4x8 mesh. Tracking issue: tenstorrent/tt-metal#60807. The parallel plan and memory budget are
-in [doc/tp8_dp4_plan.md](doc/tp8_dp4_plan.md).
+the 4x8 mesh. Tracking issue: tenstorrent/tt-metal#60807.
 
 ## Layout
 
@@ -32,10 +31,11 @@ in [doc/tp8_dp4_plan.md](doc/tp8_dp4_plan.md).
 | `tt/spec_inputs.py`, `tt/spec_chain.py`, `reference/spec_inputs.py`, `reference/spec_chain.py` | A verify's and a draft's packed inputs, derived on device; the MTP or DFlash draft chained behind the verify and its acceptance (`kernels/spec_chain.cpp`), with one result page per pass; their torch / integer mirrors |
 | `tt/generator_vllm.py` | `MiMoV2ForCausalLM`, the vllm-tt-plugin model class: DP=4 as in-process lanes, vLLM-owned hybrid KV (1 global + 5 SWA KV cache groups). Launch and results in [doc/vllm_integration/README.md](doc/vllm_integration/README.md) |
 | `reference/vision.py`, `reference/vision_inputs.py` | fp32 MiMo ViT (`visual.*`), bit-identical to HF's `MiMoVisionTransformer` except the merger norm (RMSNorm as vLLM, not HF's LayerNorm); vLLM's `MiMoV2OmniMultiModalProcessor` on the host for inputs as served |
-| `tt/vision/` | The ViT on one 1x8 row, TP=8 with a sequence-parallel residual stream (`vit.py`), and `MiMoVisionEncoder` (`encoder.py`: `embed_image` / `embed_video` -> host bf16 [n, 4096]; `warm()` compiles the fixed program set: every pass is padded to one of 21 row buckets; passes up to 4096 rows replay traces, `capture_traces()`); `tests/perf/vision_latency.py` times it, `tests/perf/allreduce_fp32_race.py` checks the fp32 all-reduce race standalone |
+| `tt/vision/` | The ViT on one 1x8 row, TP=8 with a sequence-parallel residual stream (`vit.py`), and `MiMoVisionEncoder` (`encoder.py`: `embed_image` / `embed_video` -> host bf16 [n, 4096]; `warm()` compiles the fixed program set: every pass is padded to one of 21 row buckets; passes up to 4096 rows replay traces, `capture_traces()`) |
 | `reference/audio.py`, `tt/audio/host_backend.py` | Audio input: fp32 torch reference of mel -> audio tokenizer encoder -> 20 RVQ codes -> patch encoder -> [n, 4096] (bit-identical to HF), and `HostAudioBackend.embed_audio` on the host CPU; test clips from `reference/make_audio_clips.py` |
-| `tt/multimodal.py`, `reference/make_golden_mm.py` | Multimodal input (doc/multimodal_plan.md): the plugin's items, the encoder backend interface (device ViT `tt/vision/`, host audio `tt/audio/`), the item embedding cache and the scatter into a prefill chunk's rows, which `TtMiMoModel.prefill_enqueue(embeds=)` merges on device; `MiMoV2OmniForCausalLM` in `tt/generator_vllm.py` serves it (`TT_MODEL_CLASS_OVERRIDES=TTMiMoV2OmniForCausalLM=models.experimental.mimo_v2_6_flash.tt.generator_vllm:MiMoV2OmniForCausalLM`); the multimodal golden |
-| `tests/` | TP=8 x DP=4 tests on the 4x8 mesh; `tests/perf/` perf scripts and tt-kernel-agent check / bench commands. Results in [doc/tp8_dp4_plan.md](doc/tp8_dp4_plan.md) |
+| `tt/multimodal.py`, `reference/make_golden_mm.py` | Multimodal input: the plugin's items, the encoder backend interface (device ViT `tt/vision/`, host audio `tt/audio/`), the item embedding cache and the scatter into a prefill chunk's rows, which `TtMiMoModel.prefill_enqueue(embeds=)` merges on device; `MiMoV2OmniForCausalLM` in `tt/generator_vllm.py` serves it (`TT_MODEL_CLASS_OVERRIDES=TTMiMoV2OmniForCausalLM=models.experimental.mimo_v2_6_flash.tt.generator_vllm:MiMoV2OmniForCausalLM`); the multimodal golden |
+| `tests/` | TP=8 x DP=4 tests on the 4x8 mesh |
+| `scripts/` | Host tools that precompute the bfloat4_b expert weights for the cache conversion (`prep_experts.py`: MSE-prepared; `gptq_experts.py`: GPTQ, for `MIMO_EXPERT_QUANT=gptq`) |
 
 ## Running
 
@@ -61,8 +61,6 @@ pytest models/experimental/mimo_v2_6_flash/tests/test_multimodal_host.py        
 pytest models/experimental/mimo_v2_6_flash/tests/test_prefill_embeds_tp8.py       # prefill from embeddings == from tokens
 python -m models.experimental.mimo_v2_6_flash.reference.make_golden_mm --audio clip.wav --out golden_mm_48l.pt
 MIMO_MM_GOLDEN=golden_mm_48l.pt pytest models/experimental/mimo_v2_6_flash/tests/test_model_mm_tp8.py  # image / audio
-python models/experimental/mimo_v2_6_flash/tests/perf/decode_bandwidth.py --steps 32 --repeats 5
-python models/experimental/mimo_v2_6_flash/tests/perf/prefill_time.py             # 4K prompt, 32K in 4K chunks, one row
 ```
 
 The device tests can outlast pytest's default 300 s timeout on a cold weight cache; pass `--timeout 3000`.

@@ -932,7 +932,7 @@ class TtMiMoModel:
         returns the last one's output [1, 1, padded, hidden] and appends (copy, real rows) of every layer's output to
         ``hidden`` when given. With the DFlash drafter the chunk's last rows also go into draft group ``draft_group``'s
         context ring (TtDFlash.prefill_context; a warm-up through a subset of the layers runs the same programs).
-        ``after_layer(i)`` runs after layer ``i`` is enqueued (profiling: tests/perf/profile_prefill.py reads the
+        ``after_layer(i)`` runs after layer ``i`` is enqueued (profiling: a caller reads the
         device profiler there). ``embeds`` / ``embed_rows``: host rows replacing the chunk's token embeddings
         (``_embed``; multimodal items)."""
         n = tokens.numel()

@@ -5,7 +5,7 @@
 
 A zone is two signposts, ``MIMO_ZONE_START <name>`` and ``MIMO_ZONE_END <name>``. They land in the tracy ops CSV
 in host-enqueue order between the op rows, so the ops between a zone's two signposts are the ops it enqueued
-(tests/perf/parse_prefill_zones.py sums their device time). Signposts are host messages: no device op, no sync.
+(summing their device time gives the zone's). Signposts are host messages: no device op, no sync.
 Same scheme as models/demos/minimax_m3/utils/profiler_utils.py, whose parser this reuses.
 
     with zone("attn"):

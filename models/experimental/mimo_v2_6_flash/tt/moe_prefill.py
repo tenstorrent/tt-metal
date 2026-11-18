@@ -376,7 +376,7 @@ class DevicePlan:
 
 
 # DevicePlanSplit from this many tokens: 0.60 vs 1.55 ms at 4096, 0.34 vs 0.55 at 1056, 0.18 vs 0.14 at 32
-# (tests/perf/moe_plan_bench.py, device time on one row); the two cross near 210 tokens.
+# (device time on one row); the two cross near 210 tokens.
 SPLIT_PLAN_MIN_TOKENS = 256
 
 

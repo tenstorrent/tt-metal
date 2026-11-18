@@ -1,6 +1,6 @@
 # MiMo-V2.6-Flash multimodal evals: OpenRouter conformance, benchmark suite, tt-inference-server plan
 
-Evals workstream of [multimodal_plan.md](multimodal_plan.md). Goal: show that the TT endpoint passes an
+Evals workstream of the multimodal input work. Goal: show that the TT endpoint passes an
 OpenRouter-style evaluation, i.e. it accepts every request form OpenRouter sends without server errors, and it scores
 within noise of a reference deployment on the benchmarks OpenRouter routes by plus a per-modality suite.
 
@@ -83,7 +83,7 @@ pass, the miss being the fake ignoring `reasoning.enabled` exactly as vLLM does.
 | 6 | media URL fetch failure answers 422 | 422 is in neither OpenRouter list | map to 400 | same shim (or a vLLM front-end patch in the plugin) |
 | 7 | pipe-encoded FLAC rejected with a nonsense duration | 400 for a valid file (not uptime) | decode with a length-agnostic reader, or accept | low priority; vLLM upstream |
 | 8 | the prefix router hashes base64 media as text (`lb.py` / `engine_proxy.py` `prefix_text`) | a 20 MB video is ~80K chunk hashes per request, evicting a third of the 262,144-entry index | hash each media part by digest | `serving/lb.py`, TTI `engine_proxy.py` |
-| 9 | the capability gate (multimodal_plan.md, plugin contract) | a modality the model has not enabled must be a 400, never an engine exception | as planned | plugin workstream |
+| 9 | the capability gate (plugin contract) | a modality the model has not enabled must be a 400, never an engine exception | as planned | plugin workstream |
 
 ## Benchmark harness
 

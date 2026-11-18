@@ -44,8 +44,7 @@ SWA_RING = 64  # SWA blocks per request (a window and a chunk fit many times)
 
 
 def vllm_kv_layout(cfg):
-    """vLLM's KV cache groups of MiMo (tests/perf/vllm_adapter_prefill.vllm_kv_layout, which is not imported: it turns
-    prefill batches off): (each layer's group, each layer's buffer within its group)."""
+    """vLLM's KV cache groups of MiMo: (each layer's group, each layer's buffer within its group)."""
     kinds = {}
     for i in range(cfg.num_hidden_layers):
         kinds.setdefault(cfg.is_swa(i), []).append(i)

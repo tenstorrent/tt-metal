@@ -39,7 +39,7 @@ measured before the merges, at that commit with plugin 47cc860.
 
 32K server, after a 16-prompt warmup run. At ee6895badd4 the 1M server's TPOT was 23.3 ms at concurrency 1 and
 49.4 ms at 16 (wider page tables, below). The traced device step is 13.5 ms (1 row) / 15.1 ms (4 rows) with the
-on-device greedy loop (`tests/perf/decode_bandwidth.py`); serving adds host sampling (logit rows read back every
+on-device greedy loop; serving adds host sampling (logit rows read back every
 step), per-step input copies and page-table bookkeeping. The expert-major MoE prefill halves TTFT at concurrency 1;
 the p99 drop is the recapture that the first request used to pay. At concurrency 16, TTFT is still about 13x the
 single-request value (not investigated).
@@ -110,8 +110,8 @@ vllm serve /path/to/MiMo-V2.6-Flash-MOPD --served-model-name XiaomiMiMo/MiMo-V2.
 ```
 
 - `MIMO_EXPERT_QUANT=gptq` serves the GPTQ-prepared bfloat4_b experts (same speed, KL about half the stock
-  packer's; see doc/tp8_dp4_plan.md "Accuracy"). Building their cache the first time needs
-  `MIMO_EXPERT_PREP_DIR` with `tests/perf/gptq_experts.py` output. The default is the MSE-prepared experts.
+  packer's). Building their cache the first time needs
+  `MIMO_EXPERT_PREP_DIR` with `scripts/gptq_experts.py` output. The default is the MSE-prepared experts.
 - `trace_region_size` 1 GB holds the decode trace, the 28 prefill-batch traces and the traced later prefill chunks per
   replica (150 MB is enough with `MIMO_PREFILL_TRACE=0` and `MIMO_PREFILL_CHUNK_TRACE=0`). `sample_on_device_mode` and the prefill gather need plugin `mimo-v2.6-flash/c16-throughput`.
 
@@ -379,7 +379,7 @@ coherent; for scale, each mode agrees with itself on 6 of 16 between two c=16 ru
 c=16, so these prompts flip on rounding near-ties, and the split changes the attention's rounding in every global
 layer.
 
-16 users x 1M, every request a full 1M-token prompt (`long_context_16x1m.md`; client `tests/perf/vllm_long_prompts.py`):
+16 users x 1M, every request a full 1M-token prompt (`long_context_16x1m.md`):
 - At the default 6.7 GB pool all 16 complete in 57 minutes.
 - Each lane prefills its four requests one after another, ~855 s each, so the TTFTs are 14, 29, 43 and 57 minutes.
 - One 1M prompt alone takes 356 s (2.95K tok/s). Four lanes prefilling together reach only 1.7x that throughput:

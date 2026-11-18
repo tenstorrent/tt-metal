@@ -117,7 +117,7 @@ class HostAudioBackend:
     Host memory: ~1.7 GB of weights (308M tokenizer-encoder parameters in fp32, 236M patch-encoder parameters in
     bf16). Construction took 0.1 s on bhg4 with the safetensors files in the page cache.
 
-    Latency of ``embed_audio`` on bhg4 (EPYC 9354P, shared host; tests/perf/audio_host_latency.py), 8 threads:
+    Latency of ``embed_audio`` on bhg4 (EPYC 9354P, shared host), 8 threads:
     5 s 0.35 s, 30 s 1.74 s, 120 s 8.9 s, 300 s 28.4 s, 600 s 62 s; the tokenizer encoder is 90-98 % of it. Its
     fp32 matmuls run at ~100 GFLOP/s per core (MKL sgemm at the AVX-512 peak: 790 GFLOP/s at 8 threads), 70 % of
     its time; attention ~20 %. By thread count on bhg2 (same CPU, lightly shared), key-block-aligned windowed layers

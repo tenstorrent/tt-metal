@@ -65,7 +65,7 @@ PREFILL_MAX_TOKENS = 4096
 
 
 def expert_quant(expert_dtype):
-    """How bfloat4_b experts are prepared: "mse" (default, bfp_mse_prepare), "gptq" (tests/perf/gptq_experts.py,
+    """How bfloat4_b experts are prepared: "mse" (default, bfp_mse_prepare), "gptq" (scripts/gptq_experts.py,
     read from MIMO_EXPERT_PREP_DIR) or "" (the stock packer). MIMO_EXPERT_QUANT picks it; MIMO_EXPERT_MSE=0 is
     "" (older switch). Other dtypes always use the stock packer."""
     if expert_dtype != ttnn.bfloat4_b or os.environ.get("MIMO_EXPERT_MSE", "1") == "0":
@@ -80,13 +80,13 @@ def expert_weights_host(experts, tp, inter_local, expert_dtype, layer_idx=None, 
 
     gate/up [E, I, H] -> one tensor whose chip-c slice holds [gate_c | up_c], so one matmul makes both; down
     [E, H, I] -> [1, E, I, H] with I sharded over TP. bfloat4_b weights are MSE-prepared (bfp_mse_prepare); a
-    precomputed copy is taken from MIMO_EXPERT_PREP_DIR/layer<i>.pt when present (tests/perf/prep_experts.py).
+    precomputed copy is taken from MIMO_EXPERT_PREP_DIR/layer<i>.pt when present (scripts/prep_experts.py).
     """
     prep_dir = os.environ.get("MIMO_EXPERT_PREP_DIR")
     path = os.path.join(prep_dir, f"layer{layer_idx}.pt") if prep_dir and layer_idx is not None else None
     mse = mse and expert_dtype == ttnn.bfloat4_b
     if quant == "gptq":
-        assert path and os.path.exists(path), f"gptq experts need tests/perf/gptq_experts.py output at {path}"
+        assert path and os.path.exists(path), f"gptq experts need scripts/gptq_experts.py output at {path}"
     if (mse or quant == "gptq") and path and os.path.exists(path):
         saved = torch.load(path)
         return saved["w_gate_up"], saved["w_down"]

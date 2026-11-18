@@ -94,7 +94,7 @@ PAIR_SPLIT_OPS = all(
 # A speculative verify's global attention under the KV pair split (_verify_grouped): one KV scan per request for all
 # its candidates (paged MLA decode's spec_multi_pos_tiles) instead of one per candidate slot. Each candidate's 16 heads
 # fill half a 32-row Q tile, so one tile per candidate is compute-bound; spec_multi_pos_packed (GROUPED_PACKED_OPS)
-# computes two candidates per tile. One chip, ms per global layer (tests/perf/verify_sdpa_bench.py; per slot /
+# computes two candidates per tile. One chip, ms per global layer (per slot /
 # grouped one tile per candidate / packed / a plain decode step of the requests):
 # - 4 requests of 2 candidates (MIMO_SPEC_GROUPS=4, c=16): 1M 4.33 / 3.04 / 2.19 / 2.19, 256K 1.10 / 0.82 / 0.58 /
 #   0.58, 32K 0.17 / 0.16 / 0.12 / 0.11, 4K 0.086 / 0.083 / 0.090 / 0.041;
@@ -127,7 +127,7 @@ VERIFY_VARIANTS = os.environ.get("MIMO_VERIFY_VARIANTS", "1") == "1"
 # The cores still split evenly over the attended groups, so the longest context sets the time when the requests'
 # contexts differ (AgentX: tens of K beside hundreds of K). A sequential variant runs one SDPA per group, each on the
 # whole grid, back to back: the time is then the sum of the contexts' scans plus a launch per group. One chip, local
-# keys (tests/perf/sdpa_balance_bench.py, ms per global layer): 400K + 3 x 25K grouped 1.29, sequential 0.80; 4 x 100K
+# keys, ms per global layer: 400K + 3 x 25K grouped 1.29, sequential 0.80; 4 x 100K
 # grouped 0.46, sequential 0.62. The adapter picks it per step (verify_variant ``sequential``) when one request's
 # context dwarfs the others'. MIMO_VERIFY_SEQUENTIAL: 0 never, 1 always (with two or more groups), auto (default).
 VERIFY_SEQUENTIAL = os.environ.get("MIMO_VERIFY_SEQUENTIAL", "auto")
@@ -715,7 +715,7 @@ class TtMiMoAttention:
         # Off by default: its larger circular buffers clash with decode's persistent L1 buffers once the vLLM adapter
         # warms the 2048-token prefill chunks. Decode SDPA stays in bf16 dest (fp32 dest gave non-finite values).
         # Prefill SDPA at HiFi2 (MIMO_PREFILL_SDPA_FIDELITY overrides): a global layer's chunk at 128K is compute bound,
-        # 78.3 -> 46.7 ms; top-1, the chunked-prefill PCCs and the 32K pass keys are unchanged (tp8_dp4_plan.md).
+        # 78.3 -> 46.7 ms; top-1, the chunked-prefill PCCs and the 32K pass keys are unchanged.
         self.sdpa_config = compute_config(
             getattr(ttnn.MathFidelity, os.environ.get("MIMO_PREFILL_SDPA_FIDELITY", "HiFi2")),
             fp32_acc=os.environ.get("MIMO_SDPA_FP32_ACC", "0") == "1",

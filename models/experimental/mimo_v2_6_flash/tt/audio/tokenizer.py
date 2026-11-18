@@ -13,7 +13,7 @@ segments, one padded batch). Each segment runs as its own pass: conv1 (k 3) + GE
 avg-pool conv (k 2, stride 2) + GELU + LayerNorm. The pass returns the hidden states to the host, which runs the
 20-stage RVQ in fp32 (the reference's ``quantize``).
 
-Numerics (measured on Blackhole; tests/perf/audio_device_matmul_codes.py): fp32 elementwise ops (add, sub, mul, exp,
+Numerics (measured on Blackhole): fp32 elementwise ops (add, sub, mul, exp,
 rsqrt, division, GELU, ``ttnn.sum``, ``ttnn.max``, typecast with round-to-nearest-even) are fp32-exact to ~1e-7; a
 matmul is not: products of bf16 operands are exact and the accumulation across K tiles in the fp32 dest is exact, but
 each 32-term tile dot product keeps only 11 bits below its largest product (~3e-4 relative; no math fidelity or packer

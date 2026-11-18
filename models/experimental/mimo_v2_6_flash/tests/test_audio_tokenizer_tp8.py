@@ -4,7 +4,7 @@
 """The TTNN audio tokenizer encoder (tt/audio/tokenizer.py) on one 1x8 row vs the fp32 reference, real weights.
 
 On speech clips of 5 s to 300 s (one to five 6000-frame segments): the 25 Hz hidden states' error, the code frames
-that differ from the fp32 reference (with their RVQ decision margins, tests/perf/audio_codes_margin.py), and the LLM
+that differ from the fp32 reference (with their RVQ decision margins), and the LLM
 embeddings of the device codes through the device patch encoder against the fp32 reference path (codes and patch
 encoder in fp32) and the served host path. Checks: the outputs are the same bit for bit run to run; ``warm()``
 compiles every program a call runs and a call leaves no DRAM allocated; embeddings PCC >= 0.998 and at most 8 % of the
@@ -23,12 +23,12 @@ import time
 
 import pytest
 import torch
+import torch.nn.functional as F
 from loguru import logger
 
 import ttnn
 from models.experimental.mimo_v2_6_flash.reference import audio as ref
 from models.experimental.mimo_v2_6_flash.tests.common import GALAXY_DEVICE_PARAMS, pcc
-from models.experimental.mimo_v2_6_flash.tests.perf.audio_codes_margin import margins
 from models.experimental.mimo_v2_6_flash.tests.test_audio_reference_host import (
     audio_model_path,
     load_wav_24k,
@@ -52,6 +52,20 @@ EDGE_CLIPS = {
     "edge_odd_last_segment": ("speech_65s", 0, 6000 + 37),
 }
 HIDDEN_PCC = 0.99
+
+
+def margins(enc, h):
+    """Per frame: min over the RVQ stages of (second-best - best distance) / best distance (fp64)."""
+    residual = h.double()
+    out = None
+    for embed in enc.codebooks:
+        e = embed.double().t()
+        dist = residual.pow(2).sum(1, keepdim=True) - 2 * residual @ e + e.pow(2).sum(0, keepdim=True)
+        top = dist.topk(2, dim=-1, largest=False).values
+        m = (top[:, 1] - top[:, 0]) / top[:, 0].abs().clamp_min(1e-30)
+        out = m if out is None else torch.minimum(out, m)
+        residual = residual - F.embedding(dist.argmin(-1), embed.double())
+    return out
 
 
 def edge_mels(mels):

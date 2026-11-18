@@ -11,11 +11,11 @@ blocks along N), row by row along K, with the bfloat4_b projector of tt.common.b
 the exponents {e, e + 1} (tt-quant's ``gptq-noclip``) and the inverse-Hessian error feedback. All 256 experts of
 a layer run as one batch. Experts with fewer than ``--min-tokens`` routed tokens are MSE-prepared instead.
 
-The output is the same as tests/perf/prep_experts.py's (<out>/layer<i>.pt with w_gate_up / w_down in device
+The output is the same as scripts/prep_experts.py's (<out>/layer<i>.pt with w_gate_up / w_down in device
 layout, every value on the bfloat4_b grid), for the cache conversion with MIMO_EXPERT_QUANT=gptq and
 MIMO_EXPERT_PREP_DIR=<out>.
 
-    python models/experimental/mimo_v2_6_flash/tests/perf/gptq_experts.py --out DIR --calib c4-train.00000-of-01024.json.gz
+    python models/experimental/mimo_v2_6_flash/scripts/gptq_experts.py --out DIR --calib c4-train.00000-of-01024.json.gz
 """
 
 import argparse
