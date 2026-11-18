@@ -37,7 +37,7 @@ def create_classification_head_parameters(torch_head, device, model_config):
         prepared_weight = ttnn.prepare_conv_weights(
             weight_tensor=ttnn.from_torch(conv_weight, dtype=ttnn.bfloat16),
             input_memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            input_layout=ttnn.ROW_MAJOR_LAYOUT,
+            input_layout=ttnn.TILE_LAYOUT,
             weights_format="OIHW",
             in_channels=conv_weight.shape[1],
             out_channels=conv_weight.shape[0],
@@ -57,7 +57,7 @@ def create_classification_head_parameters(torch_head, device, model_config):
         prepared_bias = ttnn.prepare_conv_bias(
             bias_tensor=ttnn.from_torch(bias.reshape(1, 1, 1, -1), dtype=ttnn.bfloat16),
             input_memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            input_layout=ttnn.ROW_MAJOR_LAYOUT,
+            input_layout=ttnn.TILE_LAYOUT,
             in_channels=conv_weight.shape[1],
             out_channels=conv_weight.shape[0],
             batch_size=1,
@@ -100,7 +100,7 @@ def create_classification_head_parameters(torch_head, device, model_config):
     prepared_cls_logits_weight = ttnn.prepare_conv_weights(
         weight_tensor=cls_logits_weight_ttnn,
         input_memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        input_layout=ttnn.ROW_MAJOR_LAYOUT,
+        input_layout=ttnn.TILE_LAYOUT,
         weights_format="OIHW",
         in_channels=cls_logits_weight.shape[1],
         out_channels=cls_logits_weight.shape[0],
@@ -123,7 +123,7 @@ def create_classification_head_parameters(torch_head, device, model_config):
     prepared_cls_logits_bias = ttnn.prepare_conv_bias(
         bias_tensor=cls_logits_bias_ttnn,
         input_memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        input_layout=ttnn.ROW_MAJOR_LAYOUT,
+        input_layout=ttnn.TILE_LAYOUT,
         in_channels=cls_logits_weight.shape[1],
         out_channels=cls_logits_weight.shape[0],
         batch_size=1,
@@ -193,7 +193,7 @@ def test_classification_head_full(device, pcc, reset_seeds):
         ttnn.from_torch(
             feature.permute(0, 2, 3, 1),
             dtype=ttnn.bfloat16,
-            layout=ttnn.ROW_MAJOR_LAYOUT,
+            layout=ttnn.TILE_LAYOUT,
             device=device,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )

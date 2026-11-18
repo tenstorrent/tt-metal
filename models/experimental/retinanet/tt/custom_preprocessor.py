@@ -5,6 +5,8 @@ import torch
 import ttnn
 from ttnn.model_preprocessing import fold_batch_norm2d_into_conv2d
 
+from models.experimental.retinanet.tt.tt_regression_head import BBOX_REG_SLICE_CONFIG
+
 
 def conv_bn_to_params(conv, bn, mesh_mapper):
     if bn is None:
@@ -89,7 +91,7 @@ def preprocess_regression_head_parameters(torch_head, device, mesh_mapper, model
         prepared_weight = ttnn.prepare_conv_weights(
             weight_tensor=ttnn.from_torch(conv_weight, dtype=ttnn.bfloat16),
             input_memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            input_layout=ttnn.ROW_MAJOR_LAYOUT,
+            input_layout=ttnn.TILE_LAYOUT,
             weights_format="OIHW",
             in_channels=conv_weight.shape[1],
             out_channels=conv_weight.shape[0],
@@ -109,7 +111,7 @@ def preprocess_regression_head_parameters(torch_head, device, mesh_mapper, model
         prepared_bias = ttnn.prepare_conv_bias(
             bias_tensor=ttnn.from_torch(bias.reshape(1, 1, 1, -1), dtype=ttnn.bfloat16),
             input_memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            input_layout=ttnn.ROW_MAJOR_LAYOUT,
+            input_layout=ttnn.TILE_LAYOUT,
             in_channels=conv_weight.shape[1],
             out_channels=conv_weight.shape[0],
             batch_size=1,
@@ -154,7 +156,7 @@ def preprocess_regression_head_parameters(torch_head, device, mesh_mapper, model
     prepared_bbox_weight = ttnn.prepare_conv_weights(
         weight_tensor=bbox_weight_ttnn,
         input_memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        input_layout=ttnn.ROW_MAJOR_LAYOUT,
+        input_layout=ttnn.TILE_LAYOUT,
         weights_format="OIHW",
         in_channels=256,
         out_channels=bbox_weight.shape[0],
@@ -171,12 +173,13 @@ def preprocess_regression_head_parameters(torch_head, device, mesh_mapper, model
         input_dtype=ttnn.bfloat16,
         output_dtype=model_config["WEIGHTS_DTYPE"],
         conv_config=ttnn.Conv2dConfig(weights_dtype=model_config["WEIGHTS_DTYPE"]),
+        slice_config=BBOX_REG_SLICE_CONFIG,
         compute_config=None,
     )
     prepared_bbox_bias = ttnn.prepare_conv_bias(
         bias_tensor=bbox_bias_ttnn,
         input_memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        input_layout=ttnn.ROW_MAJOR_LAYOUT,
+        input_layout=ttnn.TILE_LAYOUT,
         in_channels=256,
         out_channels=bbox_weight.shape[0],
         batch_size=1,
@@ -190,6 +193,7 @@ def preprocess_regression_head_parameters(torch_head, device, mesh_mapper, model
         device=device,
         input_dtype=ttnn.bfloat16,
         conv_config=ttnn.Conv2dConfig(weights_dtype=model_config["WEIGHTS_DTYPE"]),
+        slice_config=BBOX_REG_SLICE_CONFIG,
     )
     parameters["bbox_reg"] = {
         "weight": prepared_bbox_weight,
@@ -225,7 +229,7 @@ def preprocess_classification_head_parameters(torch_head, device, mesh_mapper, m
         prepared_weight = ttnn.prepare_conv_weights(
             weight_tensor=ttnn.from_torch(conv_weight, dtype=ttnn.bfloat16),
             input_memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            input_layout=ttnn.ROW_MAJOR_LAYOUT,
+            input_layout=ttnn.TILE_LAYOUT,
             weights_format="OIHW",
             in_channels=conv_weight.shape[1],
             out_channels=conv_weight.shape[0],
@@ -245,7 +249,7 @@ def preprocess_classification_head_parameters(torch_head, device, mesh_mapper, m
         prepared_bias = ttnn.prepare_conv_bias(
             bias_tensor=ttnn.from_torch(bias.reshape(1, 1, 1, -1), dtype=ttnn.bfloat16),
             input_memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            input_layout=ttnn.ROW_MAJOR_LAYOUT,
+            input_layout=ttnn.TILE_LAYOUT,
             in_channels=conv_weight.shape[1],
             out_channels=conv_weight.shape[0],
             batch_size=1,
@@ -290,7 +294,7 @@ def preprocess_classification_head_parameters(torch_head, device, mesh_mapper, m
     prepared_cls_logits_weight = ttnn.prepare_conv_weights(
         weight_tensor=cls_logits_weight_ttnn,
         input_memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        input_layout=ttnn.ROW_MAJOR_LAYOUT,
+        input_layout=ttnn.TILE_LAYOUT,
         weights_format="OIHW",
         in_channels=cls_logits_weight.shape[1],
         out_channels=cls_logits_weight.shape[0],
@@ -313,7 +317,7 @@ def preprocess_classification_head_parameters(torch_head, device, mesh_mapper, m
     prepared_cls_logits_bias = ttnn.prepare_conv_bias(
         bias_tensor=cls_logits_bias_ttnn,
         input_memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        input_layout=ttnn.ROW_MAJOR_LAYOUT,
+        input_layout=ttnn.TILE_LAYOUT,
         in_channels=cls_logits_weight.shape[1],
         out_channels=cls_logits_weight.shape[0],
         batch_size=1,

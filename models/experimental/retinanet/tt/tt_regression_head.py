@@ -8,6 +8,10 @@ from loguru import logger
 import tt_lib.fallback_ops as fallback_ops
 import os
 
+# The bbox_reg conv's DRAM slicing. Its weights and bias are prepared for this same slicing
+# (custom_preprocessor): weights prepared for another slicing are laid out for another program.
+BBOX_REG_SLICE_CONFIG = ttnn.Conv2dSliceConfig(slice_type=ttnn.Conv2dDRAMSliceHeight, num_slices=4)
+
 
 @dataclass
 class RetinaNetHeadOptimizer:
@@ -347,7 +351,6 @@ def ttnn_retinanet_regression_head(
             )
 
         # Final bbox_reg conv layer with config
-        bbox_reg_slice_config = ttnn.Conv2dSliceConfig(slice_type=ttnn.Conv2dDRAMSliceHeight, num_slices=4)
         if final_conv_config is not None:
             bbox_reg_config = ttnn.Conv2dConfig(**final_conv_config)
         else:
@@ -366,7 +369,7 @@ def ttnn_retinanet_regression_head(
             batch_size=batch_size,
             input_height=H,
             input_width=W,
-            slice_config=bbox_reg_slice_config,
+            slice_config=BBOX_REG_SLICE_CONFIG,
             compute_config=compute_config,
             conv_config=bbox_reg_config,
         )
