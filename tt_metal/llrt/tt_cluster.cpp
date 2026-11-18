@@ -729,15 +729,16 @@ void Cluster::get_metal_desc_from_tt_desc() {
         const tt::umd::SocDescriptor& driver_soc = this->driver_->get_soc_descriptor(id);
         // chip_info as UMD fills it when it opens the chip.
         tt::umd::SocDescriptor umd_soc =
-            !chip_soc_desc_paths.empty() ? tt::umd::SocDescriptor(
-                                               std::make_shared<tt::umd::SocArchDescriptor>(chip_soc_desc_paths.at(id)),
-                                               tt::umd::ChipInfo{
-                                                   .noc_translation_enabled = driver_soc.noc_translation_enabled,
-                                                   .harvesting_masks = driver_soc.harvesting_masks,
-                                                   .board_type = this->get_cluster_desc()->get_board_type(id),
-                                                   .asic_location = this->get_cluster_desc()->get_asic_location(id),
-                                               })
-                                         : driver_soc;
+            !chip_soc_desc_paths_.empty()
+                ? tt::umd::SocDescriptor(
+                      std::make_shared<tt::umd::SocArchDescriptor>(chip_soc_desc_paths_.at(id)),
+                      tt::ChipInfo{
+                          .noc_translation_enabled = driver_soc.noc_translation_enabled,
+                          .harvesting_masks = driver_soc.harvesting_masks,
+                          .board_type = this->get_cluster_desc()->get_board_type(id),
+                          .asic_location = this->get_cluster_desc()->get_asic_location(id),
+                      })
+                : driver_soc;
         if (this->target_type_ == TargetDevice::Silicon) {
             umd_soc.device_descriptor_file_path = silicon_dram_metadata_yaml;
         }
