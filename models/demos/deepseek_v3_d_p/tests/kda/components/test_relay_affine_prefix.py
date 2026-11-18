@@ -261,6 +261,66 @@ def test_relay_affine_prefix_applies_the_complement_form(mesh_device):
             )
 
 
+# (start, end) as functions of the SP span: the interval's tail separates from its head on the first rank only when
+# the start is not rank-aligned and the interval reaches past the start of that tail (span - 32 rows after a 32-row
+# offset into the first rank).
+_TAIL_BOUNDS = {
+    "aligned": lambda span: (_ROWS, None),
+    "split": lambda span: (_ROWS + 32, None),
+    "end-past-tail": lambda span: (_ROWS + 32, _ROWS + 32 + span),
+    "end-at-tail": lambda span: (32, span),
+    "end-before-tail": lambda span: (32, span - 32),
+}
+
+
+@_MESH
+@pytest.mark.parametrize("bounds", list(_TAIL_BOUNDS.values()), ids=list(_TAIL_BOUNDS))
+def test_relay_affine_prefix_applies_the_final_transition_of_a_separated_tail(mesh_device, bounds):
+    """The carry is the relayed final state P, or P + E P + B with the first rank's final transition (E, B) when the
+    interval ends in a separated tail. Every rank holds a distinct, non-zero final transition, so a carry formed
+    from the wrong rank's transition, or one applied (or skipped) on the wrong side of the tail's start, cannot
+    match."""
+    sp_size, tp_size = tuple(mesh_device.shape)
+    start, end = bounds(sp_size * _ROWS)
+    transforms = _Transforms(mesh_device, seed=start)
+    generator = torch.Generator().manual_seed(start + 1)
+    final_e = 0.1 * torch.randn(sp_size, _HEADS, _KEY, _KEY, generator=generator)
+    final_b = 0.1 * torch.randn(sp_size, _HEADS, _KEY, _KEY, generator=generator)
+    final_e_tt, final_b_tt = (
+        ttnn.from_torch(
+            t.reshape(sp_size * _HEADS, _KEY, _KEY),
+            dtype=ttnn.float32,
+            layout=ttnn.TILE_LAYOUT,
+            device=mesh_device,
+            mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=(0, None), mesh_shape=(sp_size, tp_size)),
+        )
+        for t in (final_e, final_b)
+    )
+    actual_start = make_actual_start(mesh_device, start)
+    actual_end = None if end is None else make_actual_start(mesh_device, end)
+    entry, final, carry = _relay(mesh_device)(
+        transforms.packed, transforms.initial_tt, final_e_tt, final_b_tt, actual_start, actual_end
+    )
+
+    _, prefix, _ = transforms.reference(start)
+    offset, first_rank = start % _ROWS, (start // _ROWS) % sp_size
+    separated = offset != 0 and (end is None or end - start > (_ROWS - offset) + (sp_size - 1) * _ROWS)
+    expected = prefix.double()
+    if separated:
+        expected = expected + final_e[first_rank].double() @ expected + final_b[first_rank].double()
+    for index, local_carry in enumerate(ttnn.get_device_tensors(carry)):
+        rank, tp = divmod(index, tp_size)
+        assert_accurate(
+            expected.float(),
+            ttnn.to_torch(local_carry),
+            name=f"carry start={start} end={end} rank={rank} tp={tp}",
+            nrmse_threshold=0.03,
+        )
+    for tensor in (entry, final, carry, final_e_tt, final_b_tt, actual_start, actual_end):
+        if tensor is not None:
+            ttnn.deallocate(tensor)
+
+
 @_MESH
 def test_relay_affine_prefix_adds_the_entry_state_and_b_in_fp32(mesh_device):
     """With E = 0 each hop is S + B: random FP32 entry states and BF16 B with full mantissas must come out as their
@@ -388,9 +448,7 @@ def _perf_case(shape: tuple[int, int], topology: str, case_id: str, reference_us
     return pytest.param(*case.values, reference_us, margin, marks=case.marks, id=case_id)
 
 
-# Device-time references in us, with K3's payload: Galaxy on TorusXY, LoudBox and QuietBox on TorusY, each including
-# the final carry. Galaxy runs one program for all 32 chips, so they start a call together (129.8 and 130.6 us with the
-# carry; 119-124 us before it); LoudBox's span 108-129 us before the carry.
+# Device-time references in us, with K3's payload: Galaxy on TorusXY, LoudBox and QuietBox on TorusY.
 _PERF_CASES = [
     _perf_case((8, 4), "mesh-8x4", "SP8xTP4", 130.0, 0.10),
     _perf_case((8, 1), "ring", "loudbox-SP8xTP1-ring", 118.0, 0.12),
