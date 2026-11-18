@@ -187,6 +187,19 @@ def test_fill_ones_rm(device):
     logger.info(f"Filled Ones Tensor Shape: {output.shape}")  # Shape([2, 3, 64, 96])
 
 
+def test_transpose(device):
+    # Create a tensor to transpose
+    input_tensor = ttnn.rand((1, 2, 64, 32), dtype=ttnn.bfloat16, layout=ttnn.Layout.TILE, device=device)
+
+    # Swap the last two dimensions
+    transposed_tensor = ttnn.transpose(input_tensor, -2, -1)
+    logger.debug(f"Transposed Tensor Shape: {transposed_tensor.shape}")  # Shape([1, 2, 32, 64])
+
+    # Swap dimensions 1 and 2
+    transposed_tensor = ttnn.transpose(input_tensor, 1, 2)
+    logger.debug(f"Transposed Tensor Shape: {transposed_tensor.shape}")  # Shape([1, 64, 2, 32])
+
+
 def test_untilize(device):
     # Create a tilized tensor
     tilized_tensor = ttnn.rand((1, 1, 64, 32), dtype=ttnn.bfloat16, layout=ttnn.Layout.TILE, device=device)

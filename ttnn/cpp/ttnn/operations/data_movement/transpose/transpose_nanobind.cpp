@@ -19,22 +19,42 @@ namespace ttnn::operations::data_movement::detail {
 void bind_transpose(nb::module_& mod) {
     const auto* doc =
         R"doc(
-            Returns a tensor that is transposed along dims dim1 and dim2
-
-            Equivalent pytorch code:
-
-            .. code-block:: python
-
-                output_tensor = torch.transpose(input_tensor, 0, 1)
+            Returns a tensor with dimensions ``dim1`` and ``dim2`` of the input tensor swapped.
 
             Args:
-                * :attr:`input_tensor`: Input Tensor.
-                * :attr:`dim1`: First dim of transpose.
-                * :attr:`dim2`: Second dim of transpose.
-                * :attr:`pad_value` (float, optional): padding value for when tiles are broken in a transpose. Defaults to `0.0`.
+                input_tensor (ttnn.Tensor): the input tensor.
+                dim1 (int): the first dimension to swap. Negative values count from the last dimension.
+                dim2 (int): the second dimension to swap. Negative values count from the last dimension.
 
             Keyword Args:
-                * :attr:`memory_config`: Memory Config of the output tensor
+                memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`: an interleaved input keeps its memory configuration, and an L1 sharded input gives an L1 output, sharded or interleaved depending on the input's shard spec and on the dimensions swapped. A given ``memory_config`` sets the output's memory configuration.
+                pad_value (float, optional): value that fills the tile padding that the transpose exposes on a ``BFLOAT16``, ``FLOAT32`` or ``UINT32`` TILE output when exactly one of ``dim1`` and ``dim2`` is among the last two dimensions. Must be `0.0` when ``dim1`` and ``dim2`` are both among the last two dimensions or both outside them. Defaults to `0.0`.
+
+            Returns:
+                ttnn.Tensor: the output tensor, with the same dtype and layout as the input.
+
+            Note:
+                Supported dtypes and layouts:
+
+                .. list-table::
+                   :header-rows: 1
+
+                   * - Dtypes
+                     - Layouts
+                   * - BFLOAT16, FLOAT32, INT32, UINT32
+                     - TILE, ROW_MAJOR
+                   * - UINT8
+                     - ROW_MAJOR
+                   * - BFLOAT8_B
+                     - TILE
+
+                ``BFLOAT8_B`` is supported for interleaved tensors of rank 4 or less.
+
+                ``BFLOAT16`` input values must not be NaN when ``dim1`` or ``dim2`` is the last dimension.
+
+            Memory Support:
+                - Interleaved: DRAM and L1
+                - Sharded: HEIGHT_SHARDED, WIDTH_SHARDED and BLOCK_SHARDED input and output in L1, for ``BFLOAT16`` and ``FLOAT32`` tensors
         )doc";
 
     ttnn::bind_function<"transpose">(
