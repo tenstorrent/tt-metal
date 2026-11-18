@@ -10,14 +10,14 @@ from loguru import logger
 from torchvision.models.detection import retinanet_resnet50_fpn_v2, RetinaNet_ResNet50_FPN_V2_Weights
 from tt_py_test_utils_common.utils_for_testing import assert_with_pcc
 from models.experimental.retinanet.tt.tt_regression_head import ttnn_retinanet_regression_head
-from models.experimental.retinanet.tt.utils import BBOX_REG_SLICE_CONFIG
+from models.experimental.retinanet.tt.utils import BBOX_REG_SLICE_CONFIG, group_norm_channel_chunks
 
 
 def create_regression_head_parameters(torch_head, device, model_config):
     """Convert PyTorch regression head weights to TTNN format."""
     parameters = {}
 
-    grid_size = ttnn.CoreGrid(y=8, x=8)
+    channel_chunks = group_norm_channel_chunks(device, num_channels=256, num_groups=32)
     layout = (
         ttnn.TILE_LAYOUT if model_config["WEIGHTS_DTYPE"] in [ttnn.bfloat8_b, ttnn.bfloat4_b] else ttnn.ROW_MAJOR_LAYOUT
     )
@@ -30,10 +30,10 @@ def create_regression_head_parameters(torch_head, device, model_config):
         norm_bias = torch_head.conv[i][1].bias.detach()
 
         formatted_norm_weight = ttnn.create_group_norm_weight_bias_rm(
-            norm_weight, num_channels=256, num_cores_x=grid_size.y
+            norm_weight, num_channels=256, num_cores_x=channel_chunks
         )
         formatted_norm_bias = ttnn.create_group_norm_weight_bias_rm(
-            norm_bias, num_channels=256, num_cores_x=grid_size.y
+            norm_bias, num_channels=256, num_cores_x=channel_chunks
         )
         prepared_weight = ttnn.prepare_conv_weights(
             weight_tensor=ttnn.from_torch(conv_weight, dtype=ttnn.bfloat16),

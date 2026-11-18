@@ -3,7 +3,7 @@
 
 import ttnn
 from typing import List
-from models.experimental.retinanet.tt.utils import Conv2dNormActivation
+from models.experimental.retinanet.tt.utils import Conv2dNormActivation, group_norm_grid
 from dataclasses import dataclass
 
 
@@ -121,7 +121,7 @@ def ttnn_retinanet_classification_head(
 
     opt_config = retinanet_classification_head_optimizations[optimization_profile]
 
-    grid_size = ttnn.CoreGrid(y=8, x=8)
+    grid_size = group_norm_grid(device)
 
     compute_config = ttnn.init_device_compute_kernel_config(
         device.arch(),
