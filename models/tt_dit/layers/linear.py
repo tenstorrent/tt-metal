@@ -334,7 +334,7 @@ class ColParallelLinear(Module):
             strided_all_gather_core_grid_offset=fabric_cfg.ag_core_grid_offset,
             num_links=self.ccl_manager.num_links,
             memory_config_ag=dram,
-            topology=self.ccl_manager.topology,
+            topology=self.ccl_manager.axis_topology(mesh_axis),
             cluster_axis=mesh_axis,
             bias=self.bias.data if self.bias is not None else None,
             fused_activation=self.fused_activation_fn,
@@ -490,7 +490,7 @@ class ColParallelLinear(Module):
                 persistent_output_buffer=ag_persistent_buffer,
                 multi_device_global_semaphore=ag_global_semaphores,
                 num_links=self.ccl_manager.num_links,
-                topology=self.ccl_manager.topology,
+                topology=self.ccl_manager.axis_topology(parallel_config.tensor_parallel.mesh_axis),
                 cluster_axis=parallel_config.tensor_parallel.mesh_axis,
                 barrier_semaphore=(
                     None if use_persistent_buffer else self.ccl_manager.get_barrier_semaphore(tp_mesh_axis)
@@ -759,6 +759,12 @@ class RowParallelLinear(Module):
         a caller serving varying lengths passes ``use_persistent_buffer=False`` (the op then allocates its exact
         output and uses the barrier semaphore) rather than pinning a pair per length.
         """
+        if self.ccl_manager.axis_topology(self.mesh_axis) != ttnn.Topology.Ring:
+            # the fused op is Ring only: on a line axis (e.g. a 2-chip one) matmul + reduce-scatter, then the addcmul
+            output = self.forward(
+                x, compute_kernel_config=compute_kernel_config, use_persistent_buffer=use_persistent_buffer, dtype=dtype
+            )
+            return ttnn.addcmul(addcmul_a, output, addcmul_b, value=scalar)
         if self.fsdp_mesh_axis is not None and self.mesh_device.shape[self.fsdp_mesh_axis] > 1:
             unsqueezed_weight = ttnn.unsqueeze_to_4D(self.weight.data)
             weight = self.ccl_manager.all_gather_persistent_buffer(
@@ -814,7 +820,7 @@ class RowParallelLinear(Module):
             else self.mm_memory_config,
             rs_intermediate_mem_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM),
             rs_output_mem_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM),
-            topology=self.ccl_manager.topology,
+            topology=self.ccl_manager.axis_topology(self.mesh_axis),
             cluster_axis=self.mesh_axis,
             compute_kernel_config=compute_kernel_config or self.compute_config,
             barrier_semaphore=None if use_persistent_buffer else self.ccl_manager.get_barrier_semaphore(self.mesh_axis),

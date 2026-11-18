@@ -182,7 +182,7 @@ class CCLManager:
             # an intermediate that is neither the tiled spec nor the contiguous staging buffer.
             # TODO: Switch over to using reduce_scatter_minimal_async_create_intermediate_buffer.
             intermediate_buffer_shape = list(shape)
-            if self.reduce_scatter_topology == ttnn.Topology.Linear:
+            if self.axis_topology(mesh_axis, self.reduce_scatter_topology) == ttnn.Topology.Linear:
                 intermediate_buffer_shape[0] *= 2
             for _ in range(2):
                 # Device-native, uninitialized allocation: these scratch ping-pong
@@ -890,6 +890,14 @@ class CCLManager:
             use_persistent_buffer=True,
         )
 
+    def axis_topology(self, mesh_axis: int | None, topology: ttnn.Topology | None = None):
+        """The topology of a CCL along `mesh_axis` (`topology`, default the manager's): a 2-chip axis has no wrap-around
+        link, so it is a line even on a Ring mesh. Only 2-chip axes: a longer slice of a Ring axis still gets Ring."""
+        topology = topology or self.topology
+        if topology == ttnn.Topology.Ring and mesh_axis is not None and self.mesh_device.shape[mesh_axis] == 2:
+            return ttnn.Topology.Linear
+        return topology
+
     def all_gather(
         self,
         tensor: ttnn.Tensor,
@@ -933,7 +941,7 @@ class CCLManager:
             dim=dim,
             multi_device_global_semaphore=self.get_ag_ping_pong_semaphore(mesh_axis),
             num_links=self.num_links,
-            topology=self.topology,
+            topology=self.axis_topology(mesh_axis),
             cluster_axis=mesh_axis,
             **params,
         )
@@ -980,7 +988,7 @@ class CCLManager:
             multi_device_global_semaphore=self.get_rs_ping_pong_semaphore(mesh_axis),
             num_links=self.num_links,
             memory_config=ttnn.MemoryConfig(buffer_type=ttnn.BufferType.DRAM),
-            topology=self.reduce_scatter_topology,
+            topology=self.axis_topology(mesh_axis, self.reduce_scatter_topology),
             cluster_axis=mesh_axis,
             **self.get_rs_hyperparams(tensor.shape),
         )
