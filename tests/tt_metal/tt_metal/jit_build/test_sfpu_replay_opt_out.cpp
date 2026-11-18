@@ -11,11 +11,9 @@
 //    changes, and the kernel's JIT cache key changes. The kernel still compiles.
 //  - ProgramDescriptor: the define in KernelDescriptor::defines reaches the kernel.
 //
-// The fixture follows the runner's architecture (jit_build_device_fixture.hpp): a mock Blackhole on
-// Wormhole, Blackhole and CPU-only hosts, so compilation is pure host-side JIT with no silicon; the
-// real device on a Quasar runner (simulator or silicon). Kernels are compiled, never dispatched.
-// On Quasar only the define-absent case runs, built through Metal 2.0: the opt-out is not implemented
-// there, and Quasar rejects the legacy and ProgramDescriptor kernel APIs.
+// Compile-only; see jit_build_device_fixture.hpp for which device each runner uses. On Quasar only the
+// define-absent case runs, built through Metal 2.0: the opt-out is not implemented there, and Quasar
+// rejects the legacy and ProgramDescriptor kernel APIs.
 
 #include <gtest/gtest.h>
 
@@ -24,7 +22,6 @@
 #include <map>
 #include <memory>
 #include <string>
-#include <vector>
 
 #include <tt-metalium/host_api.hpp>
 #include <internal/kernel_build_options.hpp>
@@ -86,31 +83,11 @@ protected:
 
     // Quasar: the blank compute kernel, without the define, built through Metal 2.0 and compiled.
     std::shared_ptr<Kernel> compile_blank_metal2() {
-        const KernelSpecName kernel_name{"blank"};
-        ProgramSpec spec{
-            .name = "sfpu_replay_opt_out_blank",
-            .kernels = {KernelSpec{
-                .unique_id = kernel_name,
-                .source = std::filesystem::path(kBlankComputeKernel),
-                .hw_config = ComputeHardwareConfig{},
-            }},
-            .work_units = {WorkUnitSpec{
-                .name = "main",
-                .kernels = {kernel_name},
-                .target_nodes = CoreCoord{0, 0},
-            }},
-        };
-        Program program = build_program_from_spec(spec);
-        // Plain compile is the first step of the compile_and_allocate that MakeProgramFromSpec runs;
-        // allocation is not needed to read the recipes.
-        program.impl().compile(devices_.at(0).get());
-        return program.impl().get_kernel(0);  // The spec's only kernel.
-    }
-
-    // The kernel's exported compile recipe cflags for one compute processor (a binary_processor_types()
-    // value; on Blackhole 0=unpack, 1=math, 2=pack).
-    std::string recipe_cflags(const std::shared_ptr<Kernel>& kernel, uint32_t processor_id) {
-        return kernel_build_state(*kernel, processor_id).export_target_recipe(kernel.get()).cflags;
+        return compile_single_kernel_spec(KernelSpec{
+            .unique_id = KernelSpecName{"blank"},
+            .source = std::filesystem::path(kBlankComputeKernel),
+            .hw_config = ComputeHardwareConfig{},
+        });
     }
 };
 
@@ -152,8 +129,7 @@ TEST_F(SfpuReplayOptOutFixture, ProgramDescriptorCarriesTheDefine) {
     Program program(*devices_.at(0), descriptor);
     program.impl().compile(devices_.at(0).get());
     auto kernel = program.impl().get_kernel(0);
-    const uint32_t math_processor = binary_processor_types(*kernel).at(1);
-    EXPECT_NE(recipe_cflags(kernel, math_processor).find(kNoReplayFlag), std::string::npos);
+    EXPECT_NE(recipe_cflags(kernel, /*math*/ 1).find(kNoReplayFlag), std::string::npos);
 }
 
 }  // namespace tt::tt_metal

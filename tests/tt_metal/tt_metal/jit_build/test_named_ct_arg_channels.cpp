@@ -86,12 +86,22 @@ protected:
         };
     }
 
+    // A second logical worker core besides {0, 0}, from the queried compute grid; nullopt on a 1-core grid.
+    std::optional<CoreCoord> second_worker_core() const {
+        const CoreCoord grid = devices_.at(0)->compute_with_storage_grid_size();
+        if (grid.x > 1) {
+            return CoreCoord{1, 0};
+        }
+        if (grid.y > 1) {
+            return CoreCoord{0, 1};
+        }
+        return std::nullopt;
+    }
+
     // Quasar stand-in for a ProgramDescriptor holding one data-movement kernel duplicated on {0, 0} and
     // second_core: two Metal 2.0 KernelSpecs with the same inline source and named CT args, one work unit each.
-    // They still share one build: the required distinct unique_ids feed neither the build hash
-    // (Kernel::compute_hash, kernel.cpp:701; KernelCompileHash) nor the generated headers, the kernel name
-    // comes from the source (kernel_source.hpp:31), and the DM solver gives each single-threaded kernel alone
-    // on its node the same first free DM processor (processor_assignment.cpp:28), so config_hash matches.
+    // They still share one build: unique_ids feed neither Kernel::compute_hash nor the generated headers, and
+    // the DM processor solver gives each lone single-threaded kernel the same processor.
     static ProgramSpec duplicate_dm_kernels_spec(
         const std::string& source, const KernelSpec::CompileTimeArgs& compile_time_args, const CoreCoord& second_core) {
         ProgramSpec spec{.name = "named_ct_arg_channels_duplicates"};
@@ -112,17 +122,12 @@ protected:
 
 namespace {
 
-// The legacy named-CT map and Blaze tests build through ProgramDescriptor, which lowers to the legacy
-// CreateKernel (program.cpp:611-613); Quasar rejects legacy kernels (kernel.hpp:607, :814), and Metal 2.0
-// has no Blaze channel.
 constexpr const char* kLegacyDescriptorSkip =
-    "legacy named-CT map / Blaze ProgramDescriptor path: legacy kernels are rejected on Quasar "
-    "(kernel.hpp:607, :814) and Metal 2.0 has no Blaze channel";
-// The expect-throw tests would also pass for the wrong reason on Quasar: the legacy-kernel fatal throws the
-// expected std::runtime_error before the duplicate-name check runs.
+    "legacy named-CT map / Blaze ProgramDescriptor path: ProgramDescriptor lowers to legacy kernels, which "
+    "Quasar rejects, and Metal 2.0 has no Blaze channel";
 constexpr const char* kLegacyThrowSkip =
-    "legacy/Blaze ProgramDescriptor path is rejected on Quasar (kernel.hpp:607), so the expected throw would "
-    "come from the legacy-kernel fatal, not the named-arg check";
+    "ProgramDescriptor lowers to legacy kernels, which Quasar rejects, so the expected throw would come from "
+    "the legacy-kernel fatal, not the named-arg check";
 
 }  // namespace
 
@@ -228,8 +233,7 @@ TEST_F(NamedCtArgChannelsFixture, LegacyBlazeKernelsCompile) {
 
 // No API includes: the kernel wrapper must supply the accessors to all three TRISCs.
 TEST_F(NamedCtArgChannelsFixture, LegacyComputeArgsWithoutApiIncludes) {
-    JIT_BUILD_SKIP_ON_QUASAR(
-        "legacy CreateKernelFromString/ComputeConfig: ComputeKernel is rejected on Quasar (kernel.hpp:814)");
+    JIT_BUILD_SKIP_ON_QUASAR("legacy CreateKernelFromString/ComputeConfig: legacy kernels are rejected on Quasar");
     Program program = CreateProgram(*devices_.at(0));
     CreateKernelFromString(
         program,
@@ -252,25 +256,16 @@ static_assert(get_named_compile_time_arg_val("value") == 42);
 void kernel_main() {}
 )";
     if (is_quasar()) {
-        // ProgramDescriptor lowers to the legacy ComputeKernel, which Quasar rejects, so build the same
-        // kernel from a ProgramSpec. The legacy accessors still resolve: compile_time_varargs become the
-        // positional CT args (kernel_lowering.cpp:396), and compile_time_args land in the same named CT map
-        // (to_named_compile_args_map, kernel_lowering.cpp:59) that tt-2xx/trisck.cc reads through
-        // api/compile_time_args.h.
-        const KernelSpecName name{"compute"};
+        // ProgramDescriptor lowers to a legacy kernel, which Quasar rejects, so build the same kernel from a
+        // ProgramSpec: compile_time_varargs become the positional CT args and compile_time_args the named ones.
         KernelSpec kernel{
-            .unique_id = name,
+            .unique_id = KernelSpecName{"compute"},
             .source = KernelSpec::SourceCode{source},
             .compile_time_args = {{"value", 42u}},
             .hw_config = ComputeHardwareConfig{},
         };
         kernel.advanced_options.compile_time_varargs = {17, 23};
-        Program program = build_program_from_spec(ProgramSpec{
-            .name = "metal2_compute_args_without_api_includes",
-            .kernels = {kernel},
-            .work_units = {WorkUnitSpec{.name = "main", .kernels = {name}, .target_nodes = CoreCoord{0, 0}}},
-        });
-        program.impl().compile(devices_.at(0).get());
+        compile_single_kernel_spec(std::move(kernel));
         return;
     }
     KernelDescriptor kernel = {
@@ -444,11 +439,10 @@ TEST_F(NamedCtArgChannelsFixture, SameProgramDuplicateDoesNotRetryFailedBuild) {
 
 TEST_F(NamedCtArgChannelsFixture, PlacementFailureDoesNotStartBuilds) {
     // Ahead of the dispatch check: Tensix-dispatch Quasar has WORKER dispatch cores, so that check alone would
-    // let the test reach the legacy-kernel fatal. A Metal 2.0 port would fail at spec validation rather than
-    // compile, which is not what this test checks.
+    // let the test reach the legacy-kernel fatal.
     JIT_BUILD_SKIP_ON_QUASAR(
-        "builds through ProgramDescriptor, whose legacy kernels Quasar rejects (kernel.hpp:607); a Metal 2.0 "
-        "port would fail at spec validation, not compile");
+        "builds through ProgramDescriptor, whose legacy kernels Quasar rejects; a Metal 2.0 port would fail at "
+        "spec validation, not compile");
     auto* device = devices_.at(0).get();
     auto& env = device->impl().metal_env();
     auto& context = device->impl().metal_context();
@@ -459,14 +453,7 @@ TEST_F(NamedCtArgChannelsFixture, PlacementFailureDoesNotStartBuilds) {
     const auto& dispatch_cores = context.get_dispatch_query_manager().get_logical_dispatch_cores_on_user_chips();
     ASSERT_FALSE(dispatch_cores.empty());
     const auto invalid_core = dispatch_cores.front();
-    CoreCoord valid_core{0, 0};
-    if (invalid_core == valid_core) {
-        const std::optional<CoreCoord> second_core = second_worker_core();
-        if (!second_core) {
-            GTEST_SKIP() << "needs two worker cores";
-        }
-        valid_core = *second_core;
-    }
+    const CoreCoord valid_core = invalid_core == CoreCoord{0, 0} ? CoreCoord{1, 0} : CoreCoord{0, 0};
     for (const bool invalid_first : {false, true}) {
         KernelDescriptor kernel{
             .kernel_source = "void kernel_main() {}",
