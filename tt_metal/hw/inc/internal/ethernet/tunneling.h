@@ -88,7 +88,7 @@ namespace internal_ {
 
 #if defined(ARCH_QUASAR)
 // A Keraunos CCE sends on its command buffer (eth_cce_send.h). There is no base firmware to switch to, so ctx_switch
-// has no effect, and no base-firmware link status for the watcher to check. A remote register write is an inline write
+// has no effect, and no base-firmware link status for the watcher to check. A remote register write is an 8-byte write
 // to the same flat address in the peer's CCE SRAM (cce_eth::send_dword).
 FORCE_INLINE bool eth_txq_is_busy(uint32_t q_num) { return cce_eth::txq_busy(q_num); }
 
