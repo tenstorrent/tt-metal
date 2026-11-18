@@ -37,6 +37,7 @@ import json
 import os
 import queue
 import threading
+import time
 from types import SimpleNamespace
 
 import numpy as np
@@ -1703,8 +1704,9 @@ class _RecordingQueue:
     def connect(self):
         self.connected = True
 
-    def push(self, scored):
+    def push(self, scored, timeout=None):
         self.pushed.append(scored)
+        return True
 
     def close(self):
         self.closed = True
@@ -1802,6 +1804,203 @@ def test_async_rollout_client_shuts_down_at_exit(monkeypatch):
     assert registered == [client.shutdown]
     registered[0]()
     assert bridge.closed and queue_.closed
+
+
+class _RendezvousContext(_LoopbackContext):
+    """A _LoopbackContext whose send returns only once the peer has received the message, as MPI_Send may."""
+
+    def send(self, data, dest, tag):
+        super().send(data, dest, tag)
+        self._queues[(dest, tag)].join()
+
+    def recv(self, nbytes, source, tag):
+        data = super().recv(nbytes, source, tag)
+        self._queues[(1 - source, tag)].task_done()
+        return data
+
+
+class _HostPad:
+    """A ttnn.Tensor of the ThreadedWeightBridge, kept in host memory."""
+
+    dtype, layout = ttnn.bfloat16, ttnn.TILE_LAYOUT
+
+    def __init__(self, shape):
+        self.shape = [int(d) for d in shape]
+        self.value = torch.zeros(self.shape)
+
+    def memory_config(self):
+        return ttnn.DRAM_MEMORY_CONFIG
+
+
+class _CountingSampler(_EchoSampler):
+    def __init__(self):
+        super().__init__()
+        self.installed = []
+
+    def update_weights(self, weights, version):
+        super().update_weights(weights, version)
+        self.installed.append(version)
+
+
+def _finishes(fn, timeout_s=10.0):
+    """Runs ``fn`` in a thread; returns False if it does not return in ``timeout_s``, raises what ``fn`` raised."""
+    errors = []
+
+    def run():
+        try:
+            fn()
+        except BaseException as e:
+            errors.append(e)
+
+    thread = threading.Thread(target=run, daemon=True)
+    thread.start()
+    thread.join(timeout_s)
+    if errors:
+        raise errors[0]
+    return not thread.is_alive()
+
+
+@pytest.fixture(params=[1, 3], ids=["capacity1", "capacity3"])
+def async_rollout_over_rendezvous(request, monkeypatch):
+    """The real AsyncRolloutClient and AsyncRolloutServer over rendezvous sends; the server serves in a thread.
+
+    Returns (client, sampler, server thread) once both local rollout queues are full of version-0 batches.
+    """
+    monkeypatch.setattr(ttnn, "begin_trace_capture", threaded_weight_bridge._begin_trace_capture)
+    monkeypatch.setattr(ttnn, "end_trace_capture", threaded_weight_bridge._end_trace_capture)
+    monkeypatch.setattr(ttnn, "allocate_tensor_on_device", lambda shape, *a, **k: _HostPad(shape))
+    monkeypatch.setattr(ttnn, "copy", lambda src, dst: setattr(dst, "value", src.value.clone()))
+    monkeypatch.setattr(ttnn, "record_event", lambda mesh, cq_id: None)
+    monkeypatch.setattr(ttnn, "wait_for_event", lambda cq_id, event: None)
+    monkeypatch.setattr(ttnn, "to_torch", lambda pad, cq_id: pad.value.clone())
+    monkeypatch.setattr(ttnn, "from_torch", lambda tensor, **k: tensor)
+    monkeypatch.setattr(ttnn, "copy_host_to_device_tensor", lambda host, pad, cq_id: setattr(pad, "value", host))
+    monkeypatch.setattr(threaded_weight_bridge, "_validate_source_tensor", lambda key, tensor: None)
+    thread_errors = []
+
+    @contextlib.contextmanager
+    def record_errors():
+        try:
+            yield
+        except BaseException as e:
+            thread_errors.append(e)
+
+    for module in (async_rollout, rollout_queue, threaded_weight_bridge):
+        monkeypatch.setattr(module, "exit_on_error", record_errors)
+    bridge_queues, rollout_queues = collections.defaultdict(queue.Queue), collections.defaultdict(queue.Queue)
+    monkeypatch.setattr(
+        threaded_weight_bridge, "duplicate_distributed_context", lambda: _RendezvousContext(bridge_queues)
+    )
+    monkeypatch.setattr(rollout_queue, "duplicate_distributed_context", lambda: _RendezvousContext(rollout_queues))
+    monkeypatch.setattr(
+        async_rollout,
+        "_require_distributed_context",
+        lambda owner: TTML_RANK if owner == "AsyncRolloutClient" else TTT_RANK,
+    )
+    monkeypatch.setattr(async_rollout.atexit, "register", lambda fn, *args: None)
+    monkeypatch.setattr(async_rollout.atexit, "unregister", lambda fn: None)
+
+    sampler = _CountingSampler()
+    producer = RolloutQueue.producer(peer_rank=TTML_RANK, capacity=request.param)
+    consumer = RolloutQueue.consumer(peer_rank=TTT_RANK, capacity=request.param)
+    server = _async_rollout_server(
+        threaded_weight_bridge.ThreadedWeightBridge.receiver(peer_rank=TTML_RANK, submeshes=["submesh"]),
+        producer,
+        sampler,
+        [_zero_reward],
+    )
+    client = async_rollout.AsyncRolloutClient(
+        bridge=threaded_weight_bridge.ThreadedWeightBridge.sender(peer_rank=TTT_RANK, mesh_device="mesh"),
+        queue=consumer,
+    )
+    server_thread = threading.Thread(target=server.serve_forever, daemon=True)
+    server_thread.start()
+    try:
+        client.send_weights({"w": _HostPad([1])}, version=0)
+        deadline = time.monotonic() + 30
+        while not (producer._local.full() and consumer._local.full()):
+            assert not thread_errors, f"a transport thread raised: {thread_errors!r}"
+            assert time.monotonic() < deadline, "the rollout queues did not fill in 30 s"
+            time.sleep(0.01)
+        yield client, sampler, server_thread
+    finally:
+        _finishes(client.shutdown)
+        server_thread.join(10)
+        assert not server_thread.is_alive(), "AsyncRolloutServer did not stop"
+        assert not thread_errors, f"a transport thread raised: {thread_errors!r}"
+
+
+def _queue_full_warnings(caplog):
+    return [
+        r for when in ("setup", "call") for r in caplog.get_records(when) if "rollout queue was full" in r.getMessage()
+    ]
+
+
+def test_async_rollout_weight_pushes_continue_while_the_rollout_queue_is_full(async_rollout_over_rendezvous, caplog):
+    client, sampler, server_thread = async_rollout_over_rendezvous
+
+    def push_versions_1_to_3():
+        for version in (1, 2, 3):
+            client.send_weights({"w": _HostPad([1])}, version=version)
+
+    def pop_until_version_3():
+        while client.pop().rollout.weight_version != 3:
+            pass
+
+    assert _finishes(push_versions_1_to_3)
+    assert _finishes(pop_until_version_3)
+    assert _finishes(client.shutdown)
+    server_thread.join(10)
+    assert not server_thread.is_alive()
+    assert sampler.installed == [0, 1, 2, 3]
+    assert len(_queue_full_warnings(caplog)) == 1
+
+
+def test_async_rollout_shuts_down_with_a_weight_push_in_flight_and_a_full_rollout_queue(
+    async_rollout_over_rendezvous,
+):
+    client, sampler, server_thread = async_rollout_over_rendezvous
+    client.send_weights({"w": _HostPad([1])}, version=1)
+    client.send_weights({"w": _HostPad([1])}, version=2)
+    assert _finishes(client.shutdown)
+    server_thread.join(10)
+    assert not server_thread.is_alive()
+    assert sampler.installed == [0, 1, 2]
+
+
+@pytest.mark.parametrize("weight_sync_every, num_iterations, max_staleness", [(1, 1, 2), (2, 2, 4)])
+def test_async_remote_source_trains_every_batch_over_a_full_rollout_queue(
+    monkeypatch, async_rollout_over_rendezvous, weight_sync_every, num_iterations, max_staleness
+):
+    client, sampler, _ = async_rollout_over_rendezvous
+
+    def slow_copy(host, pad, cq_id):
+        time.sleep(0.3)
+        pad.value = host
+
+    monkeypatch.setattr(ttnn, "copy_host_to_device_tensor", slow_copy)
+    monkeypatch.setattr(grpo_ttml_model, "weights_ref_hf_dict", lambda model: {"w": _HostPad([1])})
+    num_batches = 6
+    source = AsyncRemoteRolloutBatchSource(
+        client=client,
+        num_batches=num_batches,
+        num_generations=1,
+        max_completion_length=4,
+        weight_sync_every=weight_sync_every,
+        max_staleness=max_staleness,
+    )
+    trained = []
+
+    def train():
+        # Version 0 is already pushed; push at the batch boundaries as GRPOTrainer._train_policy does.
+        for batch_index, scored in enumerate(source, start=1):
+            trained.append(scored.rollout.weight_version)
+            if batch_index < num_batches:
+                source.update_weights(None, batch_index * num_iterations)
+
+    assert _finishes(train, timeout_s=30)
+    assert len(trained) == num_batches
+    assert trained == sorted(trained) and trained[-1] > 0
 
 
 class _FakeAsyncClient:

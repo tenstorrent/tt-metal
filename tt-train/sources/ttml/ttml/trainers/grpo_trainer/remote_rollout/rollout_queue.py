@@ -55,8 +55,13 @@ class RolloutQueue:
         self._thread = threading.Thread(target=loop, daemon=True)
         self._thread.start()
 
-    def push(self, scored: ScoredRolloutBatch) -> None:
-        self._local.put(scored)
+    def push(self, scored: ScoredRolloutBatch, timeout: Optional[float] = None) -> bool:
+        """Returns False if the queue stays full for ``timeout`` seconds."""
+        try:
+            self._local.put(scored, timeout=timeout)
+        except queue.Full:
+            return False
+        return True
 
     def pop(self) -> Optional[ScoredRolloutBatch]:
         """Returns None once the producer has closed."""
