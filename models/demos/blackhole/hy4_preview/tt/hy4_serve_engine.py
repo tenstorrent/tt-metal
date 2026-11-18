@@ -141,13 +141,16 @@ class Hy4Engine:
             )
         if self.blocks_on:
             page_b = 475_978  # B/bank per pool page incl. pool-attached tensors (RESULT_B43 calibration)
-            want = int(os.environ.get("HY4_BLOCKS_PAGES", "256"))
-            room = (
-                dv["free_per_bank"] - pool_bytes - (int(os.environ.get("HY4_BLOCKS_GUARD_MB", "400")) << 20)
-            ) // page_b
+            want = int(os.environ.get("HY4_BLOCKS_PAGES", "64"))
+            # The shadow pages are part of the pool tensors, allocated HERE (eagerly), before warm-up / eager bodies / captures / ropetab / xrow stage (mega0: -344 MB/bank after the pool). Headroom kept for everything
+            # that comes later: HY4_BLOCKS_RESERVE_MB (default 350) + the steady free floor HY4_BLOCKS_FLOOR_MB (default 250) that must remain after warm-up.
+            reserve = (
+                int(os.environ.get("HY4_BLOCKS_RESERVE_MB", "350")) + int(os.environ.get("HY4_BLOCKS_FLOOR_MB", "250"))
+            ) << 20
+            room = (dv["free_per_bank"] - pool_bytes - reserve) // page_b
             self.blocks_pages = max(0, min(want, int(room)))
             logger.info(
-                f"HY4 blocks: shadow pages/row {self.blocks_pages} (asked {want}, room {room}); free {dv['free_per_bank'] >> 20} MiB/bank before the pool"
+                f"HY4 blocks: shadow pages/row {self.blocks_pages} = {self.blocks_pages * page_b / 1e6:.0f} MB/bank (asked {want}, room {room} pages after reserve {reserve >> 20} MB); free {dv['free_per_bank'] / 1e6:.0f} MB/bank before the pool, pool {pool_bytes / 1e6:.0f} MB/bank"
             )
             if self.blocks_pages < 8:
                 self.blocks_on, self.blocks_pages = False, 0
@@ -398,6 +401,7 @@ class Hy4Engine:
             depth_weight=float(os.environ.get("HY4_BLOCKS_DEPTH_W", "0")),
         )
         self._dram("after blocks build")
+        self.blocks_floor_mb = int(os.environ.get("HY4_BLOCKS_FLOOR_MB", "250"))
         logger.info(
             f"HY4 blocks: store built, {self.blocks_pages} shadow pages/row ({self.blocks_pages * PAGE} tokens), {len(self.bcopy.tensors)} pool tensors"
         )
@@ -962,6 +966,17 @@ class Hy4Engine:
                 self.runner.capture("S")
                 self._dram("after S capture")
             self._capturing = False
+            if self.blocks_on:
+                from models.demos.blackhole.hy4_preview.tt.hy4_chain import dram_view
+
+                fr = dram_view(self.md)["free_per_bank"] / 1e6
+                logger.info(
+                    f"HY4 blocks: FINAL shadow {self.blocks_pages} pages/row = {self.blocks_pages * 475_978 / 1e6:.0f} MB/bank; steady free after warm-up {fr:.0f} MB/bank (floor {self.blocks_floor_mb})"
+                )
+                if fr < self.blocks_floor_mb:
+                    logger.warning(
+                        f"HY4 blocks: steady free {fr:.0f} MB/bank is below the floor {self.blocks_floor_mb}: lower HY4_BLOCKS_PAGES or raise HY4_BLOCKS_RESERVE_MB"
+                    )
             self._l1_probe("after captures (guard held)")
             self._l1_guard_release()
             self._l1_report()
