@@ -7,12 +7,22 @@
 #include <cstdint>
 
 #include "experimental/llk_unpack_dest_srca_mm.h"
+#include "llk_unpack_A_api.h"
 #include "llk_unpack_common_api.h"
 
 // Unpack side of DEST_SRCA_MM (experimental/llk_unpack_dest_srca_mm.h): SrcA handed to the math thread, in0 to SrcB.
 
 inline void llk_unpack_dest_srca_mm_init(const std::uint32_t in0_operand) {
     _llk_unpack_dest_srca_mm_init_(get_operand_num_faces(get_operand_id(in0_operand)));
+}
+
+// A 32-bit tile of page_operand copied into DEST unchanged (unpack to DEST).
+inline void llk_unpack_dest_srca_mm_page_init(const std::uint32_t page_operand) {
+    llk_unpack_A_init<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, true>(false, false, page_operand);
+}
+
+inline void llk_unpack_dest_srca_mm_page(const std::uint32_t page_operand, const std::uint32_t tile_index) {
+    llk_unpack_A<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, true>(page_operand, tile_index);
 }
 
 inline void llk_unpack_dest_srca_mm(const std::uint32_t in0_operand, const std::uint32_t in0_tile_index) {

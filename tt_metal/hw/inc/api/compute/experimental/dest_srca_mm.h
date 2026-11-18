@@ -7,18 +7,15 @@
 #include <cstdint>
 
 #include "api/compute/common.h"
-// Blackhole-only: the dest_srca_mm LLKs live only in the Blackhole llk_api / llk_lib trees.
-#if defined(TRISC_MATH) && defined(ARCH_BLACKHOLE)
+// Blackhole-only: other archs' llk_api entry points reject these calls (LLK_ASSERT).
+#ifdef TRISC_MATH
 #include "experimental/llk_math_dest_srca_mm_api.h"
 #endif
-#if defined(TRISC_UNPACK) && defined(ARCH_BLACKHOLE)
-#include "llk_unpack_A_api.h"
+#ifdef TRISC_UNPACK
 #include "experimental/llk_unpack_dest_srca_mm_api.h"
 #endif
 
 namespace ckernel {
-
-#if defined(ARCH_BLACKHOLE)
 
 // clang-format off
 /**
@@ -46,8 +43,7 @@ namespace ckernel {
 template <std::uint32_t in0_rows = 32>
 ALWI void dest_srca_mm_init(const std::uint32_t in0_cb, const std::uint32_t page_cb) {
     static_assert(DST_ACCUM_MODE, "dest_srca_mm needs fp32_dest_acc_en");
-    UNPACK(
-        (llk_unpack_A_init<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, true>(false, false, page_cb)));
+    UNPACK((llk_unpack_dest_srca_mm_page_init(page_cb)));
     UNPACK((llk_unpack_dest_srca_mm_init(in0_cb)));
     MATH((llk_math_dest_srca_mm_init<in0_rows>()));
 }
@@ -60,7 +56,7 @@ ALWI void dest_srca_mm_page_post(const std::uint32_t idst) { MATH((llk_math_dest
 
 // UNPACK: tile tile_index of page_cb into the DEST tile posted by dest_srca_mm_page_post.
 ALWI void dest_srca_mm_page_unpack(const std::uint32_t page_cb, const std::uint32_t tile_index) {
-    UNPACK((llk_unpack_A<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, true>(page_cb, tile_index)));
+    UNPACK((llk_unpack_dest_srca_mm_page(page_cb, tile_index)));
 }
 
 // MATH: waits for the copy into DEST tile idst.
@@ -152,7 +148,5 @@ ALWI void dest_srca_mm(
     dest_srca_mm_unpack(in0_cb, in0_tile_index);
     dest_srca_mm_math<in0_rows>(src_idst, dst_idst, src_rows);
 }
-
-#endif  // ARCH_BLACKHOLE
 
 }  // namespace ckernel
