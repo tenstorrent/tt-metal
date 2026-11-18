@@ -17,6 +17,14 @@
 // A core outside the channel (one with fewer M-blocks, or an absent channel) reads its own weights.
 // Under a K split the channel has one group per grid column, whose sender reads that column's K-slice.
 //
+// Weight servers (HEIGHT-sharded K-blocked walk, when the device has a spare core per channel rectangle): the rounds
+// come from a server core outside the work grid instead (conv2d_3x3_weight_server_{reader,writer}.cpp: DRAM reads on
+// NoC0, multicast on NoC1, one server per rectangle), and every participant is a pure receiver. A participant acks its
+// server once at kernel start (it runs and its semaphores are initialized) and then once per round that reuses a
+// cb_weights slot (round >= weight depth: compute freed the slot); the server sets one flag per slot after the round's
+// data, and the receiver clears it. The bias reads are issued at kernel start and completed after the first round:
+// compute needs the bias only after its walk, and every core reading the same bias pages at once took ~3 us.
+//
 // K split (BLOCK_SHARDED, k_cols > 1; regime R4): every core of a grid row computes fp32 partials
 // [bm, all C_out] over its own channel slice, and grid column y owns output N-slice y. Per M-block the
 // writer runs one row-local reduce-scatter round:
@@ -158,7 +166,11 @@ void kernel_main() {
     constexpr uint32_t fill_writer_window = get_compile_time_arg_val(69);
     static_assert(fill_writer_window >= 1 && fill_writer_window <= 8, "writer fill transaction ids 8..15");
     static_assert(fill_writer_window == 1 || !ring_slab, "the ring slab's writer fill is one batch at a time");
-    constexpr auto weight_args = TensorAccessorArgs<70>();
+    // Weight servers (see the file comment): on, the server's ack semaphore, the first of weight_depth flag semaphores.
+    constexpr bool weight_servers = get_compile_time_arg_val(70) != 0;
+    constexpr uint32_t server_ack_sem_id = get_compile_time_arg_val(71);
+    constexpr uint32_t server_flag_sem_id = get_compile_time_arg_val(72);
+    constexpr auto weight_args = TensorAccessorArgs<73>();
     [[maybe_unused]] constexpr auto bias_args = TensorAccessorArgs<weight_args.next_compile_time_args_offset()>();
     [[maybe_unused]] constexpr auto output_args = TensorAccessorArgs<bias_args.next_compile_time_args_offset()>();
     [[maybe_unused]] constexpr auto input_args = TensorAccessorArgs<output_args.next_compile_time_args_offset()>();
@@ -183,6 +195,9 @@ void kernel_main() {
     // Split TILE fill on this core (runtime: the kernel is shared with the cores that keep the reader-only fill).
     constexpr uint32_t split_flag_arg = row_peer_coords_arg + (k_split ? 2 * k_cols : 0);
     [[maybe_unused]] const bool split_here = tile_fill_split && get_arg_val<uint32_t>(split_flag_arg) != 0;
+    // Weight servers: 1 on a receiver, then its server's (x, y).
+    constexpr uint32_t server_arg = split_flag_arg + 1;
+    [[maybe_unused]] const bool server_receiver = weight_servers && get_arg_val<uint32_t>(server_arg) != 0;
 
     constexpr uint32_t weight_k_block_tiles = block_k_tiles * block_n_tiles;
     constexpr uint32_t row_group_tiles = out_subblock_h * block_n_tiles;
@@ -208,7 +223,7 @@ void kernel_main() {
         }
     };
     // With the polling split TILE fill the bias reads are issued later, serving the first block's hand-overs.
-    if constexpr (!slab_split && !tile_fill_split) {
+    if constexpr (!slab_split && !tile_fill_split && !weight_servers) {
         prefetch_bias();
     }
 
@@ -541,8 +556,43 @@ void kernel_main() {
             cb_push_back(cb_bias, out_n_tiles);
         }
     };
-    if constexpr (!slab_split && tile_fill_split) {
+    if constexpr (!slab_split && tile_fill_split && !weight_servers) {
         prefetch_bias_serving();
+    }
+    // Weight servers: the bias reads go out now and complete after the first weight round (see the file comment).
+    constexpr uint32_t TRID_BIAS_LATE = 7;
+    conv2d_3x3::TaggedReads<false> late_bias_reads;
+    [[maybe_unused]] bool late_bias_pending = false;
+    if constexpr (weight_servers && has_bias && !slab_split) {
+        const uint32_t bias_tile_bytes = get_tile_size(cb_bias);
+        const auto bias = TensorAccessor(bias_args, bias_addr, bias_tile_bytes);
+        cb_reserve_back(cb_bias, out_n_tiles);
+        uint32_t l1 = get_write_ptr(cb_bias);
+        late_bias_reads.begin(TRID_BIAS_LATE);
+        for (uint32_t n = 0; n < out_valid_tiles; ++n, l1 += bias_tile_bytes) {
+            late_bias_reads.read(bias.get_noc_addr(out_n_tile_start + n), l1, bias_tile_bytes);
+        }
+        dataflow_kernel_lib::set_read_trid(late_bias_reads.noc, 0);
+        late_bias_pending = true;
+    }
+    [[maybe_unused]] auto finish_late_bias = [&]() {
+        if (late_bias_pending) {
+            MaybeDeviceZoneScope("writer_bias");
+            while (!ncrisc_noc_read_with_transaction_id_flushed(late_bias_reads.noc.get_noc_id(), TRID_BIAS_LATE)) {
+                serve_fill();
+            }
+            late_bias_reads.wait(TRID_BIAS_LATE);
+            cb_push_back(cb_bias, out_n_tiles);
+            late_bias_pending = false;
+        }
+    };
+    // Weight servers: the receiver's ack to its server (one per round that reuses a slot, plus one at kernel start).
+    [[maybe_unused]] uint64_t server_ack_noc = 0;
+    if (server_receiver) {
+        const uint32_t server_x = get_arg_val<uint32_t>(server_arg + 1);
+        const uint32_t server_y = get_arg_val<uint32_t>(server_arg + 2);
+        server_ack_noc = get_noc_addr(server_x, server_y, get_semaphore(server_ack_sem_id));
+        noc_semaphore_inc(server_ack_noc, 1);
     }
     auto issue_weight_k_block = [&]() {
         {
@@ -559,7 +609,22 @@ void kernel_main() {
         const uint32_t l1 = get_write_ptr(cb_weights);
         // DRAM read (+ multicast) on a sender or own-stream core; the multicast wait on a receiver.
         MaybeDeviceZoneScope("writer_weight_fetch");
-        if (weight_sender && weight_mcast.should_send(k_blocks_issued)) {
+        if (server_receiver) {
+            // Weight server round (see the file comment); serves the fill hand-overs while it waits.
+            if (k_blocks_issued >= nslice_weight_depth) {
+                noc_semaphore_inc(server_ack_noc, 1);
+            }
+            volatile tt_l1_ptr uint32_t* flag = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(
+                get_semaphore(server_flag_sem_id + k_blocks_issued % nslice_weight_depth));
+            while (true) {
+                invalidate_l1_cache();
+                if (*flag == VALID) {
+                    break;
+                }
+                serve_fill();
+            }
+            *flag = INVALID;
+        } else if (weight_sender && weight_mcast.should_send(k_blocks_issued)) {
             read_weight_k_block(l1);
             weight_sender->send(l1, l1, weight_k_block_tiles * weight_tile_bytes);
         } else if (weight_receiver) {
@@ -573,6 +638,9 @@ void kernel_main() {
         }
         cb_push_back(cb_weights, weight_k_block_tiles);
         ++k_blocks_issued;
+        if constexpr (weight_servers) {
+            finish_late_bias();
+        }
     };
 
     // ---- R4 row reduce-scatter (see the file comment).
@@ -981,7 +1049,7 @@ void kernel_main() {
     if constexpr (!output_sharded) {
         noc_async_write_barrier();
     }
-    if constexpr (k_split) {
+    if constexpr (k_split || weight_servers) {
         noc_async_atomic_barrier();
     }
 }

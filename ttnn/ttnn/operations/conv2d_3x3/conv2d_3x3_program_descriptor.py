@@ -196,6 +196,15 @@ SLAB_READ_STAGGER_PX_PER_CORE = 0
 # A large value disables it (every core streams its own weights, regime R0).
 WEIGHT_MCAST_MIN_CORES = 2
 WEIGHT_MCAST_PREFIX = "weight_mcast"
+# Weight servers (HEIGHT-sharded K-blocked walk): when the device has a spare core per rectangle of the weight channel,
+# each rectangle's rounds come from one spare core outside the work grid (its reader reads DRAM on NoC0, its writer
+# multicasts on NoC1) instead of from work core 0, which read on NoC1 (the unfavourable read NoC, ~23 GB/s) and then
+# multicast every round to each rectangle in turn. Each round is read and multicast in up to WEIGHT_SERVER_CHUNKS
+# chunks. Measured (LoFi, bf8_b): res3.x 18.2 -> 15.7 us, sem dec res3 fc0 59.9 -> 45.9, fc1 49.5 -> 36.3, inst dec
+# res3 fc0 35.3 -> 29.0, at the weights-stubbed bound. Not on interleaved input: the server's NoC0 DRAM reads meet
+# every core's NoC0 DRAM fill there (32x64x128 ROW_MAJOR +4.9%, 64x128x128 +1.5% / +2.3%).
+WEIGHT_SERVERS = True
+WEIGHT_SERVER_CHUNKS = 6
 # Hardware multicast rectangles one channel may carry (dataflow_kernel_lib::MAX_MCAST_RECTANGLES).
 MAX_MCAST_RECTANGLES = 3
 
@@ -937,6 +946,27 @@ def _weight_mcast_cores(core_list, m_blocks_per_core):
     return receivers
 
 
+def _weight_servers(input_tensor, core_list, receivers):
+    """One spare core per rectangle of the weight channel (closest to the rectangle's NoC1 multicast start, its high
+    corner), as [(rectangle, server core)], or None when the device grid has too few spare cores. A spare core holds
+    neither work nor an input shard: the fill reads every input shard, and a server's traffic on a shard's core slowed
+    those reads (stem.conv1, input on 110 cores and work on 108: 22.7 -> 24.1 us with servers on the two shard cores).
+    """
+    grid = input_tensor.device().compute_with_storage_grid_size()
+    used = {(c.x, c.y) for c in core_list} | {(c.x, c.y) for c in shard_cores(input_tensor)}
+    spare = [(x, y) for y in range(grid.y) for x in range(grid.x) if (x, y) not in used]
+    rects = list(receivers.ranges())
+    if len(spare) < len(rects):
+        return None
+    out = []
+    for rect in rects:
+        hx, hy = rect.end.x, rect.end.y
+        best = min(spare, key=lambda c: (abs(c[0] - hx) + abs(c[1] - hy), c[1], c[0]))
+        spare.remove(best)
+        out.append((rect, ttnn.CoreCoord(*best)))
+    return out
+
+
 def _column_weight_mcast(input_tensor, work, m_blocks_per_index):
     """K split: one weight stream per channel slice, shared by that slice's grid column. Participants are
     the grid rows that run the most M-blocks (same rounds, as in _weight_mcast_cores); each column is one
@@ -1142,9 +1172,14 @@ def create_program_descriptor(
     # The weight multicast's cores (the channel below is built from the same set). The split TILE fill runs on its pure
     # receivers: not the sender (work core 0), nor the own-stream cores outside the channel.
     mcast_receivers = None if g.k_split else _weight_mcast_cores(core_list, [m_blocks_per_index[i] for _, i, _ in work])
+    weight_servers = None
+    if WEIGHT_SERVERS and g.sharded_output and not g.k_split and mcast_receivers is not None:
+        weight_servers = _weight_servers(input_tensor, core_list, mcast_receivers)
     split_cores = set()
     if tile_fill_split and mcast_receivers is not None:
-        split_cores = {(c.x, c.y) for c in core_list[1:] if mcast_receivers.contains(c)}
+        # With weight servers every participant is a pure receiver.
+        first = 0 if weight_servers is not None else 1
+        split_cores = {(c.x, c.y) for c in core_list[first:] if mcast_receivers.contains(c)}
     # K split: each column multiplies against its own weight K-slice, one stream per column (built once: the split
     # fill picks its receivers from it).
     column_channel = _column_weight_mcast(input_tensor, work, m_blocks_per_index) if g.k_split else None
@@ -1186,6 +1221,9 @@ def create_program_descriptor(
     window_direct = strided_window and b.nslice
     row_sem_ids = tuple(range(len(sem_ids), len(sem_ids) + 5)) if row_split else (0, 0, 0, 0, 0)
     sem_ids += tuple(range(len(sem_ids), len(sem_ids) + 4 + ROW_QUEUE)) if row_split else ()
+    # Weight servers: the server's ack counter, then one data-ready flag per cb_weights slot.
+    server_sem_ids = (len(sem_ids), len(sem_ids) + 1) if weight_servers is not None else (0, 0)
+    sem_ids += tuple(range(len(sem_ids), len(sem_ids) + 1 + b.weight_depth)) if weight_servers is not None else ()
     k_padded = g.tensor_kkh_tiles * TILE > 3 * g.c_in_p
 
     def zero_im2col_once(slice_channels):
@@ -1397,8 +1435,10 @@ def create_program_descriptor(
         0,  # fill_zero_lanes, set per writer kernel
         CB_ZERO_SRC,
         FILL_WRITER_WINDOW_BATCHES if not b.ring else 1,
+        int(weight_servers is not None),
+        *server_sem_ids,
     ]
-    writer_zero_lanes_arg = len(writer_ct_args) - 3
+    writer_zero_lanes_arg = len(writer_ct_args) - 6
 
     def writer_ct_args_for(slice_channels, split_core=None):
         args = list(writer_ct_args)
@@ -1443,6 +1483,14 @@ def create_program_descriptor(
 
     def split_of(core):
         return (core.x, core.y) in split_cores
+
+    def server_rt_args(core):
+        """Weight servers: [1, server x, server y] on a receiver, else zeros."""
+        for rect, server in weight_servers or []:
+            if rect.contains(core):
+                virtual = device.worker_core_from_logical_core(server)
+                return [1, virtual.x, virtual.y]
+        return [0, 0, 0]
 
     for core, m_index, col in work:
         m_tile_start, actual_m_tiles = core_m_ranges[m_index]
@@ -1500,6 +1548,7 @@ def create_program_descriptor(
             ]
             + row_peer_coords.get(m_index, [])
             + [int(split_of(core))]
+            + server_rt_args(core)
         )
 
     readers = [
@@ -1533,7 +1582,53 @@ def create_program_descriptor(
             fp32_dest_acc_en=True,
         ),
     )
-    semaphores = [ttnn.SemaphoreDescriptor(id=sem_id, core_ranges=cores, initial_value=0) for sem_id in sem_ids]
+    server_kernels = []
+    sem_cores = cores
+    if weight_servers is not None:
+        # The servers hold cb_weights (same index and size, so the same L1 address as the receivers' slots) and the
+        # program's semaphores; their kernels stream every participant's rounds.
+        servers = [server for _, server in weight_servers]
+        sem_cores = _core_range_set(core_list + servers)
+        for i, cb in enumerate(cbs):
+            if cb.format_descriptors[0].buffer_index == CB_WEIGHTS:
+                pages = cb.total_size // g.weight_tile_bytes
+                cbs[i] = _cb(CB_WEIGHTS, weight_tensor.dtype, g.weight_tile_bytes, pages, sem_cores)
+        num_rounds = max(m_blocks_per_index[i] for _, i, _ in work) * b.num_k_blocks
+        num_chunks = max(d for d in range(1, WEIGHT_SERVER_CHUNKS + 1) if (bk * bn) % d == 0)
+        server_reader_rt = ttnn.RuntimeArgs()
+        server_writer_rt = ttnn.RuntimeArgs()
+        for rect, server in weight_servers:
+            lo = device.worker_core_from_logical_core(rect.start)
+            hi = device.worker_core_from_logical_core(rect.end)
+            server_reader_rt[server.x][server.y] = [weight_addr, num_rounds]
+            # NoC1 multicast: from the rectangle's high corner to its low corner.
+            server_writer_rt[server.x][server.y] = [
+                num_rounds,
+                rect.grid_size().x * rect.grid_size().y,
+                hi.x,
+                hi.y,
+                lo.x,
+                lo.y,
+            ]
+        server_cores = _core_range_set(servers)
+        server_kernels = [
+            ttnn.KernelDescriptor(
+                kernel_source=str(KERNEL_DIR / "conv2d_3x3_weight_server_reader.cpp"),
+                core_ranges=server_cores,
+                compile_time_args=[CB_WEIGHTS, bk, bn, b.num_k_blocks, num_chunks]
+                + list(ttnn.TensorAccessorArgs(weight_tensor).get_compile_time_args()),
+                runtime_args=server_reader_rt,
+                config=ttnn.ReaderConfigDescriptor(),
+            ),
+            ttnn.KernelDescriptor(
+                kernel_source=str(KERNEL_DIR / "conv2d_3x3_weight_server_writer.cpp"),
+                core_ranges=server_cores,
+                compile_time_args=[CB_WEIGHTS, bk * bn, *server_sem_ids, b.weight_depth, num_chunks],
+                runtime_args=server_writer_rt,
+                config=ttnn.WriterConfigDescriptor(),
+            ),
+        ]
+    semaphores = [ttnn.SemaphoreDescriptor(id=sem_id, core_ranges=sem_cores, initial_value=0) for sem_id in sem_ids]
     descriptor = ttnn.ProgramDescriptor(kernels=[], semaphores=semaphores, cbs=cbs)
     # The writer's NoC (WriterConfigDescriptor).
     weight_mcast_config = ttnn.McastConfig(noc=ttnn.NOC.NOC_1)
@@ -1548,7 +1643,7 @@ def create_program_descriptor(
             sender_config = ttnn.McastFixedSenderConfig(sender_index=0, placement=ttnn.McastSenderPlacement.Staggered)
             weight_mcast = ttnn.Mcast(device, weight_mcast_config, receivers, group_size, sender_config, order)
     else:
-        if mcast_receivers is not None:
+        if mcast_receivers is not None and weight_servers is None:
             weight_mcast = ttnn.Mcast(
                 device,
                 weight_mcast_config,
@@ -1561,5 +1656,5 @@ def create_program_descriptor(
             ttnn.attach_absent_mcast(writer, WEIGHT_MCAST_PREFIX)
     else:
         weight_mcast.attach(descriptor, WEIGHT_MCAST_PREFIX, writers, len(semaphores))
-    descriptor.kernels = readers + writers + [compute]
+    descriptor.kernels = readers + writers + [compute] + server_kernels
     return descriptor

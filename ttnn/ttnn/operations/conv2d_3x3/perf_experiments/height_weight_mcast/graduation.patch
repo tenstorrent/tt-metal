@@ -1,0 +1,448 @@
+diff -ruN -x __pycache__ a/ttnn/ttnn/operations/conv2d_3x3/conv2d_3x3_program_descriptor.py b/ttnn/ttnn/operations/conv2d_3x3/conv2d_3x3_program_descriptor.py
+--- a/ttnn/ttnn/operations/conv2d_3x3/conv2d_3x3_program_descriptor.py	2026-11-18 15:42:46.196371292 +0000
++++ b/ttnn/ttnn/operations/conv2d_3x3/conv2d_3x3_program_descriptor.py	2026-11-18 15:48:03.223851421 +0000
+@@ -193,6 +193,15 @@
+ # A large value disables it (every core streams its own weights, regime R0).
+ WEIGHT_MCAST_MIN_CORES = 2
+ WEIGHT_MCAST_PREFIX = "weight_mcast"
++# Weight servers (HEIGHT-sharded K-blocked walk): when the device has a spare core per rectangle of the weight channel,
++# each rectangle's rounds come from one spare core outside the work grid (its reader reads DRAM on NoC0, its writer
++# multicasts on NoC1) instead of from work core 0, which read on NoC1 (the unfavourable read NoC, ~23 GB/s) and then
++# multicast every round to each rectangle in turn. Each round is read and multicast in up to WEIGHT_SERVER_CHUNKS
++# chunks. Measured (LoFi, bf8_b): res3.x 18.2 -> 15.7 us, sem dec res3 fc0 59.9 -> 45.9, fc1 49.5 -> 36.3, inst dec
++# res3 fc0 35.3 -> 29.0, at the weights-stubbed bound. Not on interleaved input: the server's NoC0 DRAM reads meet
++# every core's NoC0 DRAM fill there (32x64x128 ROW_MAJOR +4.9%, 64x128x128 +1.5% / +2.3%).
++WEIGHT_SERVERS = True
++WEIGHT_SERVER_CHUNKS = 6
+ # Hardware multicast rectangles one channel may carry (dataflow_kernel_lib::MAX_MCAST_RECTANGLES).
+ MAX_MCAST_RECTANGLES = 3
+ 
+@@ -913,6 +922,24 @@
+     return receivers
+ 
+ 
++def _weight_servers(device, core_list, receivers):
++    """One spare core per rectangle of the weight channel (closest to the rectangle's NoC1 multicast start, its high
++    corner), as [(rectangle, server core)], or None when the device grid has too few cores outside the work grid."""
++    grid = device.compute_with_storage_grid_size()
++    used = {(c.x, c.y) for c in core_list}
++    spare = [(x, y) for y in range(grid.y) for x in range(grid.x) if (x, y) not in used]
++    rects = list(receivers.ranges())
++    if len(spare) < len(rects):
++        return None
++    out = []
++    for rect in rects:
++        hx, hy = rect.end.x, rect.end.y
++        best = min(spare, key=lambda c: (abs(c[0] - hx) + abs(c[1] - hy), c[1], c[0]))
++        spare.remove(best)
++        out.append((rect, ttnn.CoreCoord(*best)))
++    return out
++
++
+ def _column_weight_mcast(input_tensor, work, m_blocks_per_index):
+     """K split: one weight stream per channel slice, shared by that slice's grid column. Participants are
+     the grid rows that run the most M-blocks (same rounds, as in _weight_mcast_cores); each column is one
+@@ -1114,9 +1141,14 @@
+     # The weight multicast's cores (the channel below is built from the same set). The split TILE fill runs on its pure
+     # receivers: not the sender (work core 0), nor the own-stream cores outside the channel.
+     mcast_receivers = None if g.k_split else _weight_mcast_cores(core_list, [m_blocks_per_index[i] for _, i, _ in work])
++    weight_servers = None
++    if WEIGHT_SERVERS and g.sharded_output and not g.k_split and mcast_receivers is not None:
++        weight_servers = _weight_servers(input_tensor.device(), core_list, mcast_receivers)
+     split_cores = set()
+     if tile_fill_split and mcast_receivers is not None:
+-        split_cores = {(c.x, c.y) for c in core_list[1:] if mcast_receivers.contains(c)}
++        # With weight servers every participant is a pure receiver.
++        first = 0 if weight_servers is not None else 1
++        split_cores = {(c.x, c.y) for c in core_list[first:] if mcast_receivers.contains(c)}
+     # K split: each column multiplies against its own weight K-slice, one stream per column (built once: the split
+     # fill picks its receivers from it).
+     column_channel = _column_weight_mcast(input_tensor, work, m_blocks_per_index) if g.k_split else None
+@@ -1158,6 +1190,9 @@
+     window_direct = strided_window and b.nslice
+     row_sem_ids = tuple(range(len(sem_ids), len(sem_ids) + 5)) if row_split else (0, 0, 0, 0, 0)
+     sem_ids += tuple(range(len(sem_ids), len(sem_ids) + 4 + ROW_QUEUE)) if row_split else ()
++    # Weight servers: the server's ack counter, then one data-ready flag per cb_weights slot.
++    server_sem_ids = (len(sem_ids), len(sem_ids) + 1) if weight_servers is not None else (0, 0)
++    sem_ids += tuple(range(len(sem_ids), len(sem_ids) + 1 + b.weight_depth)) if weight_servers is not None else ()
+     k_padded = g.tensor_kkh_tiles * TILE > 3 * g.c_in_p
+ 
+     def zero_im2col_once(slice_channels):
+@@ -1358,8 +1393,10 @@
+         0,  # fill_zero_lanes, set per writer kernel
+         CB_ZERO_SRC,
+         FILL_WRITER_WINDOW_BATCHES if not b.ring else 1,
++        int(weight_servers is not None),
++        *server_sem_ids,
+     ]
+-    writer_zero_lanes_arg = len(writer_ct_args) - 3
++    writer_zero_lanes_arg = len(writer_ct_args) - 6
+ 
+     def writer_ct_args_for(slice_channels, split_core=None):
+         args = list(writer_ct_args)
+@@ -1405,6 +1442,14 @@
+     def split_of(core):
+         return (core.x, core.y) in split_cores
+ 
++    def server_rt_args(core):
++        """Weight servers: [1, server x, server y] on a receiver, else zeros."""
++        for rect, server in weight_servers or []:
++            if rect.contains(core):
++                virtual = device.worker_core_from_logical_core(server)
++                return [1, virtual.x, virtual.y]
++        return [0, 0, 0]
++
+     for core, m_index, col in work:
+         m_tile_start, actual_m_tiles = core_m_ranges[m_index]
+         num_m_blocks_this_core = m_blocks_per_index[m_index]
+@@ -1461,6 +1506,7 @@
+             ]
+             + row_peer_coords.get(m_index, [])
+             + [int(split_of(core))]
++            + server_rt_args(core)
+         )
+ 
+     readers = [
+@@ -1494,7 +1540,53 @@
+             fp32_dest_acc_en=True,
+         ),
+     )
+-    semaphores = [ttnn.SemaphoreDescriptor(id=sem_id, core_ranges=cores, initial_value=0) for sem_id in sem_ids]
++    server_kernels = []
++    sem_cores = cores
++    if weight_servers is not None:
++        # The servers hold cb_weights (same index and size, so the same L1 address as the receivers' slots) and the
++        # program's semaphores; their kernels stream every participant's rounds.
++        servers = [server for _, server in weight_servers]
++        sem_cores = _core_range_set(core_list + servers)
++        for i, cb in enumerate(cbs):
++            if cb.format_descriptors[0].buffer_index == CB_WEIGHTS:
++                pages = cb.total_size // g.weight_tile_bytes
++                cbs[i] = _cb(CB_WEIGHTS, weight_tensor.dtype, g.weight_tile_bytes, pages, sem_cores)
++        num_rounds = max(m_blocks_per_index[i] for _, i, _ in work) * b.num_k_blocks
++        num_chunks = max(d for d in range(1, WEIGHT_SERVER_CHUNKS + 1) if (bk * bn) % d == 0)
++        server_reader_rt = ttnn.RuntimeArgs()
++        server_writer_rt = ttnn.RuntimeArgs()
++        for rect, server in weight_servers:
++            lo = device.worker_core_from_logical_core(rect.start)
++            hi = device.worker_core_from_logical_core(rect.end)
++            server_reader_rt[server.x][server.y] = [weight_addr, num_rounds]
++            # NoC1 multicast: from the rectangle's high corner to its low corner.
++            server_writer_rt[server.x][server.y] = [
++                num_rounds,
++                rect.grid_size().x * rect.grid_size().y,
++                hi.x,
++                hi.y,
++                lo.x,
++                lo.y,
++            ]
++        server_cores = _core_range_set(servers)
++        server_kernels = [
++            ttnn.KernelDescriptor(
++                kernel_source=str(KERNEL_DIR / "conv2d_3x3_weight_server_reader.cpp"),
++                core_ranges=server_cores,
++                compile_time_args=[CB_WEIGHTS, bk, bn, b.num_k_blocks, num_chunks]
++                + list(ttnn.TensorAccessorArgs(weight_tensor).get_compile_time_args()),
++                runtime_args=server_reader_rt,
++                config=ttnn.ReaderConfigDescriptor(),
++            ),
++            ttnn.KernelDescriptor(
++                kernel_source=str(KERNEL_DIR / "conv2d_3x3_weight_server_writer.cpp"),
++                core_ranges=server_cores,
++                compile_time_args=[CB_WEIGHTS, bk * bn, *server_sem_ids, b.weight_depth, num_chunks],
++                runtime_args=server_writer_rt,
++                config=ttnn.WriterConfigDescriptor(),
++            ),
++        ]
++    semaphores = [ttnn.SemaphoreDescriptor(id=sem_id, core_ranges=sem_cores, initial_value=0) for sem_id in sem_ids]
+     descriptor = ttnn.ProgramDescriptor(kernels=[], semaphores=semaphores, cbs=cbs)
+     # The writer's NoC (WriterConfigDescriptor).
+     weight_mcast_config = ttnn.McastConfig(noc=ttnn.NOC.NOC_1)
+@@ -1509,7 +1601,7 @@
+             sender_config = ttnn.McastFixedSenderConfig(sender_index=0, placement=ttnn.McastSenderPlacement.Staggered)
+             weight_mcast = ttnn.Mcast(device, weight_mcast_config, receivers, group_size, sender_config, order)
+     else:
+-        if mcast_receivers is not None:
++        if mcast_receivers is not None and weight_servers is None:
+             weight_mcast = ttnn.Mcast(
+                 device,
+                 weight_mcast_config,
+@@ -1522,5 +1614,5 @@
+             ttnn.attach_absent_mcast(writer, WEIGHT_MCAST_PREFIX)
+     else:
+         weight_mcast.attach(descriptor, WEIGHT_MCAST_PREFIX, writers, len(semaphores))
+-    descriptor.kernels = readers + writers + [compute]
++    descriptor.kernels = readers + writers + [compute] + server_kernels
+     return descriptor
+diff -ruN -x __pycache__ a/ttnn/ttnn/operations/conv2d_3x3/kernels/conv2d_3x3_weight_server_reader.cpp b/ttnn/ttnn/operations/conv2d_3x3/kernels/conv2d_3x3_weight_server_reader.cpp
+--- a/ttnn/ttnn/operations/conv2d_3x3/kernels/conv2d_3x3_weight_server_reader.cpp	1970-01-01 00:00:00.000000000 +0000
++++ b/ttnn/ttnn/operations/conv2d_3x3/kernels/conv2d_3x3_weight_server_reader.cpp	2026-11-18 15:43:40.352128774 +0000
+@@ -0,0 +1,57 @@
++// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
++// SPDX-License-Identifier: Apache-2.0
++
++// conv2d_3x3 weight server, reader half (NCRISC / NoC0). A spare core outside the work grid streams the weight rounds
++// of one channel rectangle (one K-block of bk x bn tiles per round, all the participants' rounds in order) from DRAM
++// into cb_weights, whose slots sit at the same L1 address as the receivers'. Reads go out on NoC0, the read-preferred
++// NoC, while the server writer multicasts on NoC1 from another RISC, so the reads of round r + 1 run under the
++// multicast of round r. Each round is read in num_chunks chunks, each under its own transaction id and pushed as soon
++// as it landed while the next chunk's reads are in flight, so the multicast of a round starts before its last read.
++// One reader issuing one-tile reads is bound by the NIU's outstanding reads (~34 GB/s at 1088 B tiles), not by
++// the issue loop.
++
++#include <cstdint>
++
++#include "api/dataflow/dataflow_api.h"
++#include "ttnn/cpp/ttnn/kernel_lib/perf_instrumentation.hpp"
++#include "conv2d_3x3_gather_dataflow.hpp"
++
++void kernel_main() {
++    constexpr uint32_t cb_weights = get_compile_time_arg_val(0);
++    constexpr uint32_t block_k_tiles = get_compile_time_arg_val(1);
++    constexpr uint32_t block_n_tiles = get_compile_time_arg_val(2);
++    constexpr uint32_t num_k_blocks = get_compile_time_arg_val(3);
++    constexpr uint32_t num_chunks = get_compile_time_arg_val(4);
++    constexpr auto weight_args = TensorAccessorArgs<5>();
++    constexpr uint32_t round_tiles = block_k_tiles * block_n_tiles;
++    static_assert(num_chunks >= 1 && num_chunks <= 8 && round_tiles % num_chunks == 0);
++    constexpr uint32_t chunk_tiles = round_tiles / num_chunks;
++
++    const uint32_t weight_addr = get_arg_val<uint32_t>(0);
++    const uint32_t num_rounds = get_arg_val<uint32_t>(1);
++    const uint32_t tile_bytes = get_tile_size(cb_weights);
++    const auto weights = TensorAccessor(weight_args, weight_addr, tile_bytes);
++    conv2d_3x3::TaggedReads<false> reads;
++
++    for (uint32_t r = 0; r < num_rounds; ++r) {
++        cb_reserve_back(cb_weights, round_tiles);
++        const uint32_t l1 = get_write_ptr(cb_weights);
++        MaybeDeviceZoneScope("server_read");
++        // The K-block's tiles are consecutive pages (bn is the whole C_out on this path).
++        const uint32_t page0 = (r % num_k_blocks) * round_tiles;
++        // Issue chunk c, then hand over chunk c - 1.
++        for (uint32_t c = 0; c <= num_chunks; ++c) {
++            if (c < num_chunks) {
++                reads.begin(1 + c);
++                for (uint32_t t = c * chunk_tiles; t < (c + 1) * chunk_tiles; ++t) {
++                    reads.read(weights.get_noc_addr(page0 + t), l1 + t * tile_bytes, tile_bytes);
++                }
++                dataflow_kernel_lib::set_read_trid(reads.noc, 0);
++            }
++            if (c > 0) {
++                reads.wait(c);
++                cb_push_back(cb_weights, chunk_tiles);
++            }
++        }
++    }
++}
+diff -ruN -x __pycache__ a/ttnn/ttnn/operations/conv2d_3x3/kernels/conv2d_3x3_weight_server_writer.cpp b/ttnn/ttnn/operations/conv2d_3x3/kernels/conv2d_3x3_weight_server_writer.cpp
+--- a/ttnn/ttnn/operations/conv2d_3x3/kernels/conv2d_3x3_weight_server_writer.cpp	1970-01-01 00:00:00.000000000 +0000
++++ b/ttnn/ttnn/operations/conv2d_3x3/kernels/conv2d_3x3_weight_server_writer.cpp	2026-11-18 15:43:40.354128802 +0000
+@@ -0,0 +1,68 @@
++// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
++// SPDX-License-Identifier: Apache-2.0
++
++// conv2d_3x3 weight server, writer half (BRISC / NoC1). Per round: wait until every receiver of the rectangle can take
++// it (a monotonic ack counter: one ack per receiver at its kernel start, then one per round that reuses a cb_weights
++// slot), then multicast each chunk the server reader hands over into the same slot of every receiver, and free the
++// slot once the multicast has read it. Each chunk's linked multicast is closed by a 4 B write of zero to the receivers'
++// flag of this slot (INVALID there until this round's end: the receiver cleared it before its ack let this round
++// start); the last chunk's closing write sets the flag. One multicast into the rectangle at a time: concurrent
++// multicasts from several senders into one rectangle measured 1.6x to 3.7x slower.
++
++#include <cstdint>
++
++#include "api/dataflow/dataflow_api.h"
++#include "ttnn/cpp/ttnn/kernel_lib/perf_instrumentation.hpp"
++
++void kernel_main() {
++    constexpr uint32_t cb_weights = get_compile_time_arg_val(0);
++    constexpr uint32_t round_tiles = get_compile_time_arg_val(1);
++    constexpr uint32_t ack_sem_id = get_compile_time_arg_val(2);
++    constexpr uint32_t flag_sem_id = get_compile_time_arg_val(3);  // one per weight slot
++    constexpr uint32_t weight_depth = get_compile_time_arg_val(4);
++    constexpr uint32_t num_chunks = get_compile_time_arg_val(5);
++    constexpr uint32_t chunk_tiles = round_tiles / num_chunks;
++
++    const uint32_t num_rounds = get_arg_val<uint32_t>(0);
++    const uint32_t num_receivers = get_arg_val<uint32_t>(1);
++    // The rectangle in NoC1 multicast order: start (high corner) x, y, end (low corner) x, y.
++    const uint32_t sx = get_arg_val<uint32_t>(2);
++    const uint32_t sy = get_arg_val<uint32_t>(3);
++    const uint32_t ex = get_arg_val<uint32_t>(4);
++    const uint32_t ey = get_arg_val<uint32_t>(5);
++    const uint32_t tile_bytes = get_tile_size(cb_weights);
++    volatile tt_l1_ptr uint32_t* ack = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(ack_sem_id));
++    // The multicast source of every slot's flag.
++    for (uint32_t slot = 0; slot < weight_depth; ++slot) {
++        *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(flag_sem_id + slot)) = VALID;
++    }
++
++    for (uint32_t r = 0; r < num_rounds; ++r) {
++        {
++            MaybeDeviceZoneScope("server_wait_ack");
++            const uint32_t acks = 1 + (r + 1 > weight_depth ? r + 1 - weight_depth : 0);
++            noc_semaphore_wait_min(ack, acks * num_receivers);
++        }
++        const uint32_t flag = get_semaphore(flag_sem_id + r % weight_depth);
++        const uint64_t flag_mcast = get_noc_multicast_addr(sx, sy, ex, ey, flag);
++        const uint32_t base = get_read_ptr(cb_weights);
++        for (uint32_t c = 0; c < num_chunks; ++c) {
++            {
++                MaybeDeviceZoneScope("server_wait_read");
++                cb_wait_front(cb_weights, (c + 1) * chunk_tiles);
++            }
++            MaybeDeviceZoneScope("server_send");
++            const uint32_t src = base + c * chunk_tiles * tile_bytes;
++            noc_async_write_multicast(
++                src, get_noc_multicast_addr(sx, sy, ex, ey, src), chunk_tiles * tile_bytes, num_receivers, true);
++            noc_semaphore_set_multicast(c + 1 == num_chunks ? flag : MEM_ZEROS_BASE, flag_mcast, num_receivers, false);
++        }
++        {
++            // The reader refills this slot weight_depth rounds on: the multicast must have read it.
++            MaybeDeviceZoneScope("server_flush");
++            noc_async_writes_flushed();
++        }
++        cb_pop_front(cb_weights, round_tiles);
++    }
++    noc_async_write_barrier();
++}
+diff -ruN -x __pycache__ a/ttnn/ttnn/operations/conv2d_3x3/kernels/conv2d_3x3_writer.cpp b/ttnn/ttnn/operations/conv2d_3x3/kernels/conv2d_3x3_writer.cpp
+--- a/ttnn/ttnn/operations/conv2d_3x3/kernels/conv2d_3x3_writer.cpp	2026-11-18 15:42:46.271372341 +0000
++++ b/ttnn/ttnn/operations/conv2d_3x3/kernels/conv2d_3x3_writer.cpp	2026-11-18 15:48:18.680070647 +0000
+@@ -17,6 +17,14 @@
+ // A core outside the channel (one with fewer M-blocks, or an absent channel) reads its own weights.
+ // Under a K split the channel has one group per grid column, whose sender reads that column's K-slice.
+ //
++// Weight servers (HEIGHT-sharded K-blocked walk, when the device has a spare core per channel rectangle): the rounds
++// come from a server core outside the work grid instead (conv2d_3x3_weight_server_{reader,writer}.cpp: DRAM reads on
++// NoC0, multicast on NoC1, one server per rectangle), and every participant is a pure receiver. A participant acks its
++// server once at kernel start (it runs and its semaphores are initialized) and then once per round that reuses a
++// cb_weights slot (round >= weight depth: compute freed the slot); the server sets one flag per slot after the round's
++// data, and the receiver clears it. The bias reads are issued at kernel start and completed after the first round:
++// compute needs the bias only after its walk, and every core reading the same bias pages at once took ~3 us.
++//
+ // K split (BLOCK_SHARDED, k_cols > 1; regime R4): every core of a grid row computes fp32 partials
+ // [bm, all C_out] over its own channel slice, and grid column y owns output N-slice y. Per M-block the
+ // writer runs one row-local reduce-scatter round:
+@@ -158,7 +166,11 @@
+     constexpr uint32_t fill_writer_window = get_compile_time_arg_val(69);
+     static_assert(fill_writer_window >= 1 && fill_writer_window <= 8, "writer fill transaction ids 8..15");
+     static_assert(fill_writer_window == 1 || !ring_slab, "the ring slab's writer fill is one batch at a time");
+-    constexpr auto weight_args = TensorAccessorArgs<70>();
++    // Weight servers (see the file comment): on, the server's ack semaphore, the first of weight_depth flag semaphores.
++    constexpr bool weight_servers = get_compile_time_arg_val(70) != 0;
++    constexpr uint32_t server_ack_sem_id = get_compile_time_arg_val(71);
++    constexpr uint32_t server_flag_sem_id = get_compile_time_arg_val(72);
++    constexpr auto weight_args = TensorAccessorArgs<73>();
+     [[maybe_unused]] constexpr auto bias_args = TensorAccessorArgs<weight_args.next_compile_time_args_offset()>();
+     [[maybe_unused]] constexpr auto output_args = TensorAccessorArgs<bias_args.next_compile_time_args_offset()>();
+     [[maybe_unused]] constexpr auto input_args = TensorAccessorArgs<output_args.next_compile_time_args_offset()>();
+@@ -183,6 +195,9 @@
+     // Split TILE fill on this core (runtime: the kernel is shared with the cores that keep the reader-only fill).
+     constexpr uint32_t split_flag_arg = row_peer_coords_arg + (k_split ? 2 * k_cols : 0);
+     [[maybe_unused]] const bool split_here = tile_fill_split && get_arg_val<uint32_t>(split_flag_arg) != 0;
++    // Weight servers: 1 on a receiver, then its server's (x, y).
++    constexpr uint32_t server_arg = split_flag_arg + 1;
++    [[maybe_unused]] const bool server_receiver = weight_servers && get_arg_val<uint32_t>(server_arg) != 0;
+ 
+     constexpr uint32_t weight_k_block_tiles = block_k_tiles * block_n_tiles;
+     constexpr uint32_t row_group_tiles = out_subblock_h * block_n_tiles;
+@@ -208,7 +223,7 @@
+         }
+     };
+     // With the polling split TILE fill the bias reads are issued later, serving the first block's hand-overs.
+-    if constexpr (!slab_split && !tile_fill_split) {
++    if constexpr (!slab_split && !tile_fill_split && !weight_servers) {
+         prefetch_bias();
+     }
+ 
+@@ -541,9 +556,44 @@
+             cb_push_back(cb_bias, out_n_tiles);
+         }
+     };
+-    if constexpr (!slab_split && tile_fill_split) {
++    if constexpr (!slab_split && tile_fill_split && !weight_servers) {
+         prefetch_bias_serving();
+     }
++    // Weight servers: the bias reads go out now and complete after the first weight round (see the file comment).
++    constexpr uint32_t TRID_BIAS_LATE = 7;
++    conv2d_3x3::TaggedReads<false> late_bias_reads;
++    [[maybe_unused]] bool late_bias_pending = false;
++    if constexpr (weight_servers && has_bias && !slab_split) {
++        const uint32_t bias_tile_bytes = get_tile_size(cb_bias);
++        const auto bias = TensorAccessor(bias_args, bias_addr, bias_tile_bytes);
++        cb_reserve_back(cb_bias, out_n_tiles);
++        uint32_t l1 = get_write_ptr(cb_bias);
++        late_bias_reads.begin(TRID_BIAS_LATE);
++        for (uint32_t n = 0; n < out_valid_tiles; ++n, l1 += bias_tile_bytes) {
++            late_bias_reads.read(bias.get_noc_addr(out_n_tile_start + n), l1, bias_tile_bytes);
++        }
++        dataflow_kernel_lib::set_read_trid(late_bias_reads.noc, 0);
++        late_bias_pending = true;
++    }
++    [[maybe_unused]] auto finish_late_bias = [&]() {
++        if (late_bias_pending) {
++            MaybeDeviceZoneScope("writer_bias");
++            while (!ncrisc_noc_read_with_transaction_id_flushed(late_bias_reads.noc.get_noc_id(), TRID_BIAS_LATE)) {
++                serve_fill();
++            }
++            late_bias_reads.wait(TRID_BIAS_LATE);
++            cb_push_back(cb_bias, out_n_tiles);
++            late_bias_pending = false;
++        }
++    };
++    // Weight servers: the receiver's ack to its server (one per round that reuses a slot, plus one at kernel start).
++    [[maybe_unused]] uint64_t server_ack_noc = 0;
++    if (server_receiver) {
++        const uint32_t server_x = get_arg_val<uint32_t>(server_arg + 1);
++        const uint32_t server_y = get_arg_val<uint32_t>(server_arg + 2);
++        server_ack_noc = get_noc_addr(server_x, server_y, get_semaphore(server_ack_sem_id));
++        noc_semaphore_inc(server_ack_noc, 1);
++    }
+     auto issue_weight_k_block = [&]() {
+         {
+             // Back-pressure from compute's matmul.
+@@ -559,7 +609,22 @@
+         const uint32_t l1 = get_write_ptr(cb_weights);
+         // DRAM read (+ multicast) on a sender or own-stream core; the multicast wait on a receiver.
+         MaybeDeviceZoneScope("writer_weight_fetch");
+-        if (weight_sender && weight_mcast.should_send(k_blocks_issued)) {
++        if (server_receiver) {
++            // Weight server round (see the file comment); serves the fill hand-overs while it waits.
++            if (k_blocks_issued >= nslice_weight_depth) {
++                noc_semaphore_inc(server_ack_noc, 1);
++            }
++            volatile tt_l1_ptr uint32_t* flag = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(
++                get_semaphore(server_flag_sem_id + k_blocks_issued % nslice_weight_depth));
++            while (true) {
++                invalidate_l1_cache();
++                if (*flag == VALID) {
++                    break;
++                }
++                serve_fill();
++            }
++            *flag = INVALID;
++        } else if (weight_sender && weight_mcast.should_send(k_blocks_issued)) {
+             read_weight_k_block(l1);
+             weight_sender->send(l1, l1, weight_k_block_tiles * weight_tile_bytes);
+         } else if (weight_receiver) {
+@@ -573,6 +638,9 @@
+         }
+         cb_push_back(cb_weights, weight_k_block_tiles);
+         ++k_blocks_issued;
++        if constexpr (weight_servers) {
++            finish_late_bias();
++        }
+     };
+ 
+     // ---- R4 row reduce-scatter (see the file comment).
+@@ -981,7 +1049,7 @@
+     if constexpr (!output_sharded) {
+         noc_async_write_barrier();
+     }
+-    if constexpr (k_split) {
++    if constexpr (k_split || weight_servers) {
+         noc_async_atomic_barrier();
+     }
+ }
