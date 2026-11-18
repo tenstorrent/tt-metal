@@ -327,6 +327,7 @@ class DS41DeviceState:
         self.tail_state = None
         self.cut = None  # (P.31: the start every layer's window is truncated at, TtWindowCache.truncate)
         model.state = self  # begin_chunk reads (and advances) the active slot's engram tail
+        model.hold_history(self)  # P.74: the gather buffers of the sources whose attention runs in this mode
 
     # ------------------------------------------------------------------ per chunk (device)
     def put(self, store: dict, layer: int, start: int, t: ttnn.Tensor) -> None:
@@ -1535,6 +1536,26 @@ class TtDS41Model:
         assert all(j < cfg.cand_source or j in self.kv_only for i in enc for j in cfg.sources(i)), enc
         self._decoder_set = frozenset(self.decoder)
 
+    def history_sources(self) -> set:
+        """P.74 (STATIC_TABLES=off): the KV sources whose compressed history some attention gathers in this
+        DECODER_SKIP mode: every loaded compressed layer's source, but under decode none whose readers are all
+        decoder layers (their attention never runs: only the KV source's kv_only head; layer 20)."""
+        cfg = self.cfg
+        skipped = self._decoder_set if self.skip_mode == "decode" else frozenset()
+        return {cfg.kv_source_of(i) for i in self.layers if cfg.ratio(i) and i not in skipped}
+
+    def hold_history(self, state=None) -> None:
+        """P.74: the state's (default the active one's) compressed caches hold the shared history-gather buffer
+        exactly when their source is gathered in this mode (tt/history_gather.py; load / state build / mode switch,
+        never per chunk). Shared caches (the decoder tail's) belong to the state that made them."""
+        state = self.state if state is None else state
+        if state is None or self.tail_of is not None:
+            return
+        need = self.history_sources()
+        for i, c in state.compress.items():
+            if i not in state.shared_compress:
+                c.ckv.hold_history(i in need)
+
     def use_decoder_skip(self, mode: str) -> None:
         """Tests only (tests/bringup/test_window_ring.py, P.32; tests/test_decoder_skip_decode.py, P.51; FIX.28: the
         gate tests test_determinism, test_contract, test_adapter_acks): run a model loaded with a DECODER_SKIP other
@@ -1551,6 +1572,7 @@ class TtDS41Model:
             if mode == "off":  # (exactly as loaded: __init__'s values with DECODER_SKIP=off)
                 self.decoder, self.kv_only, self._decoder_set = [], frozenset(), frozenset()
                 self.skip_mode, self.replay, self.replay_rows, self.last_rows = "off", False, 0, 0
+                self.hold_history()  # (P.74: the active state's gather buffers for this mode)
                 return
             if not self.decoder:
                 self._build_decoder()
@@ -1560,6 +1582,7 @@ class TtDS41Model:
         w = self.cfg.window
         self.replay_rows = w if self.replay else 0
         self.last_rows = 0 if self.replay else -(-(len(self.decoder) * (w - 1) + w) // 32) * 32
+        self.hold_history()  # (P.74: the active state's gather buffers for this mode)
 
     def _begin_engram_async(self, tokens: torch.Tensor, start: int) -> None:
         """ENGRAM_ASYNC=on: on this thread only the new tails (3 ids a layer) and the device rows' allocation (the

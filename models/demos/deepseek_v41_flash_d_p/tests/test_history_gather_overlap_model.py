@@ -1,9 +1,9 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 #
 # SPDX-License-Identifier: Apache-2.0
-"""P.73 (HISTORY_GATHER_OVERLAP): the whole model with STATIC_TABLES=off, the KV sources' history gathered as rows (on)
+"""P.73 (HISTORY_GATHER, was HISTORY_GATHER_OVERLAP): the whole model with STATIC_TABLES=off, the KV sources' history gathered as rows (on)
 vs tiled + untilized (off), in one process on one load (device; run with DS41_STATIC_TABLES=off
-DS41_HISTORY_GATHER_OVERLAP=on; the off side flips the sparse attentions' ``gather_rows`` back, host only).
+DS41_HISTORY_GATHER=rows; the off side flips the sparse attentions' ``gather_rows`` back, host only).
 
 Under DECODER_SKIP=decode (as test_skip_positions), at each point p (P73_POS, default 51200 and 1024000; the position
 tables sized for the longest, as test_skip_positions, DS41-279): a fresh state, the real previous chunk at p - chunk,
@@ -40,8 +40,8 @@ def _points() -> list[int]:
 def test_history_gather_overlap_model(mesh_device, monkeypatch):
     if mesh_device is None:
         pytest.skip("device test")
-    if settings.get("STATIC_TABLES") != "off" or settings.get("HISTORY_GATHER_OVERLAP") != "on":
-        pytest.skip("run with DS41_STATIC_TABLES=off DS41_HISTORY_GATHER_OVERLAP=on (load-time choices)")
+    if settings.get("STATIC_TABLES") != "off" or settings.get("HISTORY_GATHER") == "tiles":
+        pytest.skip("run with DS41_STATIC_TABLES=off DS41_HISTORY_GATHER=rows or rows_axes (load-time choices)")
     if os.environ.get(settings.env_name("ENGRAM_TABLE")) is None:  # (as test_skip_positions: the shipped default)
         monkeypatch.setenv(settings.env_name("ENGRAM_TABLE"), str(settings.table["ENGRAM_TABLE"].default))
     chunk = int(S.get("target.chunk"))
@@ -52,7 +52,7 @@ def test_history_gather_overlap_model(mesh_device, monkeypatch):
     monkeypatch.setitem(S.data["target"], "seq", want)
     model = batch.device_model(S, mesh_device, layers, lm_head=False)
     blocks = [b.attention for b in model.blocks.values() if getattr(b.attention, "gather_rows", False)]
-    assert blocks, "HISTORY_GATHER_OVERLAP=on: no sparse attention gathers rows"
+    assert blocks, "HISTORY_GATHER=tiles: no sparse attention gathers rows"
     loaded = model.skip_mode
     if loaded != "decode":
         model.use_decoder_skip("decode")
@@ -103,7 +103,7 @@ def test_history_gather_overlap_model(mesh_device, monkeypatch):
                 f"[P.73] p{p}: layer {LAST_ENC} output on vs off bit-identical {same} (max abs diff {diff}); chunk wall on {walls['on'][0]:.1f} ms "
                 f"{walls['on'][1]}, off {walls['off'][0]:.1f} ms {walls['off'][1]}"
             )
-            assert same, f"p{p}: HISTORY_GATHER_OVERLAP on != off (max abs diff {diff})"
+            assert same, f"p{p}: HISTORY_GATHER rows != tiles (max abs diff {diff})"
     finally:
         for b in blocks:
             b.gather_rows = True

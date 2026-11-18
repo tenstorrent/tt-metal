@@ -228,17 +228,20 @@ TABLE = {
         "moves only (the same bf16 rows and the same keys per query): not a precision switch. Memory: a replicated "
         "copy of each source's compressed KV per slot (2x2 at 57,344: r2 28 MiB, r1 56 MiB a chip)",
     ),
-    "HISTORY_GATHER_OVERLAP": Setting(
-        "off",
-        ("off", "on"),
-        "P.73 (owner 2026-11-18; only with STATIC_TABLES=off): the cost of the KV source layer's per-chunk history "
-        "gather (tt/sparse_attention._compressed). off = the P.19 / P.72 path: the slab's rows tiled, all_gather TP then "
-        "SP, untilized (at an odd chunk count nb x 80 rows is not tile-aligned: the TP gather takes the composite "
-        "all_gather). on = the rows gathered as stored (ROW_MAJOR, high_bw_all_gather on both axes at any row count), "
-        "no tilize / untilize: the same rows in the same order (bit-identical). 8x4, a source at 1M: 10.04 -> 5.93 ms "
-        "(tests/test_history_gather_overlap.py::test_history_gather_rows). The name is the task's: P.73's first "
-        "build, a sub-device overlap (tt/history_overlap.py, not wired), was stopped by the overseer (116 cores busy at "
-        "once, over the 110 cap)",
+    "HISTORY_GATHER": Setting(
+        "rows",
+        ("rows", "rows_axes", "tiles"),
+        "P.74 (owner 2026-11-18; only with STATIC_TABLES=off; P.73's HISTORY_GATHER_OVERLAP renamed to what it is): "
+        "how a KV source's compressed history is gathered over the mesh each chunk (tt/sparse_attention._compressed). "
+        "rows = ONE stock high_bw_all_gather straight from the served cache's slab (input_batch_index) into a "
+        "persistent buffer allocated with the compressed caches and shared by every chunk, user and source of its "
+        "size (tt/history_gather.py): only each chip's first nb chunk periods move (gathered_dim_size), every owner "
+        "at a fixed slot of the slab's rows, over the whole mesh (cluster_axis=None) for the TP-dedup cache; no slice "
+        "copy, no TP / SP intermediate, no allocation per chunk. rows_axes = P.73's row gather (the slab's rows "
+        "sliced, high_bw_all_gather over TP then SP as ROW_MAJOR rows, each output allocated per chunk; 8x4, a "
+        "source at 1M: 10.04 -> 5.93 ms vs tiles). tiles = the P.19 / P.72 path (the rows tiled, all_gather TP then "
+        "SP, untilized; at an odd chunk count the TP gather takes the composite all_gather). All three put the same "
+        "bf16 rows under the same keys (the table rows differ only in where an owner's rows sit): bit-identical",
     ),
     "BF16_ACTIVATIONS": Setting(
         "on",

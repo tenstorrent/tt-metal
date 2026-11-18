@@ -4849,3 +4849,65 @@ tasks:
       unwritten_records_changed_decoder_skip: == 0
       steady_wall_ms_p51200: '> 0'
       steady_wall_ms_p1024000: '> 0'
+- id: P.75
+  title: 'OWNER 2026-11-18: hide the history all-gather of STATIC_TABLES=off (engram wait, token-id readback, or
+    injected into an existing kernel)'
+  step: perf
+  role: perf
+  device: true
+  deps:
+  - P.74
+  paths:
+  - models/demos/deepseek_v41_flash_d_p/tt
+  - models/demos/deepseek_v41_flash_d_p/tests/
+  - models/demos/deepseek_v41_flash_d_p/bringup/BREADCRUMBS.md
+  - models/demos/deepseek_v41_flash_d_p/bringup/known_issues.md
+  - ttnn/ttnn/bringup
+  brief:
+    details: 'OWNER 2026-11-18. After P.74 (STATIC_TABLES=off on the new tree: row gather, one persistent gather
+      buffer per source size, A/B vs the table), hide the per-chunk history all-gather (sources 2, 8, 14 under
+      DECODER_SKIP=decode) so the served-state-only path costs close to the table. The history [0, start) is complete
+      before the chunk starts; only the chunk''s own rows are new at layer s. Options the owner accepts, in this order
+      of preference by measurement: (a) run the gather while the device waits for the engram host rows before layer 1
+      (P.73 measured that idle gap: 66.6 ms under the profiler, the host''s share of a clean 1M chunk ~25-33 ms; the
+      engram op of layer 14 too), filling the persistent buffer''s history part early and appending the chunk''s rows
+      at layer s; (b) behind the token-id readback at the next chunk''s start (adapter._host_ids); (c) injected into an
+      existing kernel that runs before sparse attention (first candidate: the indexer''s ring score
+      ttnn.bringup.ring_indexer_score_dsa, which already rings the index keys over SP into a persistent buffer: the
+      compressed-KV rows could ride the same ring), or a sub-device split (the owner''s rule is only that MATMULS stay
+      within 110 cores; a gather on its own cores is allowed). Read first: /scratch/dnijemcevic/phase_1117/step1_report.md,
+      /data/dnijemcevic/bringup/handoff_20261118/ring_indexer_write_pattern.md, P.73''s BREADCRUMBS entries (the engram
+      window analysis, the fixed-stride table constraint: sparse attention reads history + chunk as one table). Measure
+      first what each option can hide (rt-profiler timeline at 256k and 1M), build the best, behind a switch
+      (e.g. HISTORY_GATHER_HIDE off|engram|readback|ring). Bit-identical to the plain off path, determinism exact, no
+      weight rebuild (no MoE / layout change), every Python-built op through ttnn.bringup.prepare_program / run_prepared,
+      no fork regression suites. Stop after your checks; the orchestrator measures. Report short: hidden ms per source
+      and per chunk at 51k / 256k / 1M, vs off and vs on.'
+  ab:
+    keep_default: true
+    env:
+      STATIC_TABLES: 'off'
+      HISTORY_GATHER_HIDE: 'off'
+    change:
+      STATIC_TABLES: 'off'
+      HISTORY_GATHER_HIDE: 'on'
+  ab_mode: full
+  ab_rungs:
+  - last
+  gate:
+    cmd: BRINGUP_RUNG=last scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_ladder.py
+      && scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_determinism.py
+      && scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/test_decoder_skip_decode.py
+      && scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_contract.py
+      && DS41_DECODER_SKIP=decode scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/test_skip_positions.py
+    metrics:
+      err_layer_L*: <= limit
+      err_state_*_L*: <= limit
+      err_final_hidden: <= limit
+      top5_overlap: '>= limit'
+      determinism_max_abs_diff: == 0
+      contract_checks_failed: == 0
+      contract_checks_failed_decoder_skip: == 0
+      unwritten_records_changed_decoder_skip: == 0
+      steady_wall_ms_p51200: '> 0'
+      steady_wall_ms_p1024000: '> 0'

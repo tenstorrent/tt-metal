@@ -65,7 +65,7 @@ import torch
 
 import ttnn
 
-from . import ccl, cores, host_alloc
+from . import ccl, cores, history_gather, host_alloc
 from . import mm_configs as mm
 from .ccl import dealloc
 from .common import DRAM, SP_AXIS, TP_AXIS, attn_compute_config, bf16_activations, cast, tp_sum
@@ -495,12 +495,30 @@ class TtServedRows:
         # STATIC_TABLES=on (P.21): a KV source's compressed KV keeps the sparse-attention table of its readers in step
         self.table = AttnTable(mesh, tables, self.max_seq // ratio, width) if attn_table and static_tables() else None
         assert not (attn_table and ckv_bfp4() and self.table is None), "CKV_FORMAT=bfp4_rows needs STATIC_TABLES=on"
+        # STATIC_TABLES=off, HISTORY_GATHER=rows (P.74): the persistent gather buffer of this cache's size, shared by
+        # every source / slot / chunk of that size (tt/history_gather.py), held while an attention that reads this
+        # source runs in the model's mode (``hold_history``: the state's build and use_decoder_skip; never per chunk)
+        self.history_rows = None
+        self.history_gathered = attn_table and not static_tables() and settings.get("HISTORY_GATHER") == "rows"
+        self.history_gathered = self.history_gathered and g.n > 1
         if ratio > 1:  # metadata-path values (load time): starts / valid ends in compressed rows, slot ids
             self._pos = tables.scalars(32 // ratio, max_seq // 32 + 1)
             slots = max(
                 s.slots for s in ([slab] if slab is not None else []) + ([self.served] if fp8 else []) + self.mirrors
             )
             self._slot = tables.scalars(1, slots)
+
+    def hold_history(self, on: bool) -> None:
+        """P.74 (STATIC_TABLES=off, HISTORY_GATHER=rows): hold (or let go of) the shared gather buffer of this
+        cache's size (owners x slab rows; tt/history_gather.py). A no-op for a cache whose history is not gathered."""
+        if not self.history_gathered:
+            return
+        if on and self.history_rows is None:
+            self.history_rows = self.owners * self.slab.rows
+            history_gather.acquire(self.mesh, self.history_rows)
+        elif not on and self.history_rows is not None:
+            history_gather.release(self.mesh, self.history_rows)
+            self.history_rows = None
 
     def _own_fp8(self, dedup: bool) -> CacheSlab:
         """An own served tensor of 192-byte rows (the ladder: no engine cache)."""
@@ -718,6 +736,7 @@ class TtServedRows:
         if self.table is not None:
             self.table.free()
             self.table = None
+        self.hold_history(False)  # (P.74: the shared gather buffer goes with its last cache)
         if self.slab is not None:
             self.slab.free()
         if self.k8 is not None and self.k8.is_allocated():

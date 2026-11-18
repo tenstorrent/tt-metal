@@ -2442,3 +2442,49 @@ Measured (8x4, `gate FIX.31 --check`, after the last edit)
 - Re-run: `DS41_STATIC_TABLES=off DS41_HISTORY_GATHER_OVERLAP=on DS41_DECODER_SKIP=decode HANGLOOP_GATHER_ROWS=alt
   HANGLOOP_ROUNDS=44 HANGLOOP_MINUTES=50 HANGLOOP_STOP_OVER=1 scripts/run_safe_pytest.sh --run-all --no-precompile
   models/demos/deepseek_v41_flash_d_p/tests/test_skip_hang_loop.py -s` (under devjob).
+
+## P.74 perf (attempt 1): STATIC_TABLES=off on the new tree: one whole-mesh row gather into a persistent buffer
+
+- Owner 2026-11-18: what the served-state-only path (STATIC_TABLES=off) costs vs the per-user replicated table (on).
+  The switch is STATIC_TABLES (change on = off; old = on). HISTORY_GATHER_OVERLAP (P.73) renamed HISTORY_GATHER =
+  rows | rows_axes | tiles, default rows (rows_axes = P.73's row gather, tiles = the P.19 / P.72 path).
+- Expected saving (written before measuring; per KV source a chunk, off side only): HISTORY_GATHER=rows vs P.73's
+  rows_axes: no slab slice copy (L rows read + written: ~32 MB a chip at 1M), no TP intermediate, one whole-mesh
+  gather on the torus (two Hamiltonian cycles, all four links a chip) instead of a TP then an SP line gather: device
+  ~5.9 -> ~3.5 ms a source at 1M (~-7 ms a chunk over the encoder's 3 sources), ~-0.2 ms a source at 51k; host
+  -2 ops and -3 allocations a source (~-0.3 ms a source). Against STATIC_TABLES=on the off side still pays the gather
+  (~3-4 ms a source at 1M, ~0.3 at 51k) plus the index remap, and saves the table's slice_writes and 2.5 GiB a user a
+  chip at 1M (it holds the shared buffers instead: ~1 + 0.5 GiB a chip at 1M, for all users).
+- Design (tt/history_gather.py): ttnn.experimental.high_bw_all_gather straight from the served slab
+  (input_batch_index = the slab's (slot, layer) row; the ND-sharded engine cache is the op's own input form, as
+  deepseek_v3_d_p's MLA), gathered_dim_size = owners x L (only the first nb chunk periods move), cluster_axis=None
+  for the TP-dedup cache (row-major rank r TP + c = the caches' chip-linear owner order), output = the persistent
+  buffer: owner q at the FIXED row q R (R = the slab's rows), rows past L never indexed. _topk_rows takes the owner
+  stride (R; nb hs on the other two paths). A third semaphore pair (axis None, DS41-216) made with the buffer.
+- Departure from the brief's "ONE buffer": ONE per distinct table size (owners x slab rows). The stock op requires
+  its output at exactly the worst-case shape of its input, and ttnn has no Python view of a buffer prefix of another
+  volume (ttnn.view and ttnn.experimental.view both check the volume; tt_metal::view's MeshBuffer view is C++ only,
+  ttnn/cpp is outside this step's paths). Ratio-1 and ratio-2 sources have R and R / 2 rows, so a model with both
+  holds two buffers (1.5x the largest source's table), each shared by every chunk, user and source of its size.
+- Lifetime (overseer, P.74: only the sizes gathered in the running mode): a KV source's compressed cache
+  (TtServedRows.hold_history) holds the buffer of its size only while some attention reading that source runs in the
+  model's DECODER_SKIP mode (TtDS41Model.history_sources: under decode not layer 20's ratio-1 source, whose readers
+  are all decoder layers: no 1 GiB-at-1M ratio-1 buffer then; under off / exact / replay128 both sizes). Set at state
+  build (DS41DeviceState.__init__ -> model.hold_history) and re-synced by use_decoder_skip; released in free(), the
+  last holder frees it. Never per chunk (a gather on a cache without one acquires it and notes history_gather.LATE).
+  So test_skip_positions' dram_state_gib_p<p> (after new_state) and dram_after include exactly the decode-mode
+  buffer (ratio 2, ~0.5 GiB a chip at 1M), sized for that point's state (p + chunk), as the on side's tables are.
+- One buffer serves every source of a size because a source's readers are the layers up to the next source
+  (Config.kv_source_of) and the layers run in order; the memo entry is checked against the buffer's owner
+  (history_gather.holds) before reuse and re-gathers instead of reading another source's rows.
+- Cores: the gather is a CCL (link workers + local copy cores, a few a chip); no matmul touched.
+- Checks run (device, STATIC_TABLES=off): tests/test_history_gather_overlap_model.py (HISTORY_GATHER=rows vs tiles,
+  one load, DECODER_SKIP=decode, before the overseer's lifetime change): layer 19 bit-identical at p51200 and
+  p1024000 (max abs diff 0.0); indicative chunk wall (one process, no profiler) rows vs tiles: p51200 103.2 vs
+  105.3 ms, p1024000 129.9 vs 154.2 ms. test_decoder_skip_decode and determinism (final code, measure --part, change-on env): both rc 0;
+  determinism_max_abs_diff 0.0 (state 0.0).
+- Re-run: `DS41_STATIC_TABLES=off DS41_HISTORY_GATHER=rows P73_POS=51200,1024000 scripts/run_safe_pytest.sh
+  --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/test_history_gather_overlap_model.py -s`;
+  `python -m models.demos.common.bringup.orchestrator measure --task P.74 --part test_decoder_skip_decode` and
+  `--part determinism` (the run names: determinism, test_decoder_skip_decode, test_contract, test_skip_positions,
+  last).

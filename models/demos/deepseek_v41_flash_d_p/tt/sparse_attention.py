@@ -55,7 +55,7 @@ import torch
 
 import ttnn
 
-from . import ccl
+from . import ccl, history_gather
 from .attention import WINDOW, TtWindowAttention, TtWindowCache, WindowTables, _upload, attention_weights
 from .ccl import dealloc
 from .common import DRAM, SP_AXIS, TP_AXIS
@@ -143,10 +143,10 @@ class TtSparseAttention(TtWindowAttention):
         super().__init__(mesh, cfg, w, rope, tables)
         self.sparse = sparse
         self.static = static_tables()  # STATIC_TABLES=on (P.21): the KV source's persistent table (``_static``)
-        # HISTORY_GATHER_OVERLAP=on (P.73, STATIC_TABLES=off): ``_compressed`` gathers the history as ROW_MAJOR rows (no
-        # tilize / untilize; tt/ccl.all_gather takes high_bw_all_gather at any row count, where a TILE gather of an
-        # odd nb x 80 rows fell back to the composite all_gather): the same rows in the same order
-        self.gather_rows = settings.get("HISTORY_GATHER_OVERLAP") == "on"
+        # HISTORY_GATHER (STATIC_TABLES=off): how ``_compressed`` gathers the history. rows (P.74): one whole-mesh
+        # high_bw_all_gather from the served slab into the persistent buffer (tt/history_gather.py); rows_axes (P.73):
+        # the sliced rows gathered as ROW_MAJOR rows over TP then SP (no tilize / untilize); tiles: P.19 / P.72
+        self.gather = settings.get("HISTORY_GATHER")
 
     # ------------------------------------------------------------------ parts
     def _gather_mesh(self, t: ttnn.Tensor, dedup: bool) -> ttnn.Tensor:
@@ -163,21 +163,41 @@ class TtSparseAttention(TtWindowAttention):
             out = nxt
         return out
 
-    def _compressed(self, ckv_cache, start: int) -> tuple[ttnn.Tensor, int]:
-        """The KV source's compressed rows of the first nb chunk periods in the gather's mesh order:
-        [1, 1, owners nb hs, 512] bf16 ROW_MAJOR, replicated; returns (rows, nb)."""
+    @property
+    def gather_rows(self) -> bool:
+        """(P.73 tests: True = a row gather, False = tiles)"""
+        return self.gather != "tiles"
+
+    @gather_rows.setter
+    def gather_rows(self, on: bool) -> None:
+        loaded = settings.get("HISTORY_GATHER")  # (rows needs the buffer its caches acquired at build: else rows_axes)
+        self.gather = "tiles" if not on else (loaded if loaded != "tiles" else "rows_axes")
+
+    def _compressed(self, ckv_cache, start: int) -> tuple:
+        """The KV source's compressed rows of the first nb chunk periods: [1, 1, owners x stride, 512] bf16
+        ROW_MAJOR, replicated, owner q's rows at q x stride (the gather's mesh order); returns (rows, nb, stride).
+        HISTORY_GATHER=rows: rows is a history_gather.Held (the persistent buffer, never freed by the caller) and
+        stride the slab's rows; else a tensor of the chunk's own (stride nb hs, the rows exactly)."""
         g = self.geo
         r, stripe = ckv_cache.ratio, ckv_cache.stripe
         assert ckv_cache.width == self.d and ckv_cache.tok_width * r == self.d, (ckv_cache.width, self.d)
         nb = -(-(start + g.chunk) // g.chunk)
         loc = nb * stripe
         assert loc <= ckv_cache.rows, f"chunk [{start}, {start + g.chunk}) past the compressed cache ({ckv_cache.rows})"
+        if self.gather == "rows":  # P.74: from the served slab into the persistent buffer, owner q at q R
+            if ckv_cache.history_rows is None:  # (never expected: the state holds it for every source gathered in
+                # its mode, TtDS41Model.hold_history; e.g. a state not the active one at a mode switch)
+                history_gather.LATE.append((id(ckv_cache), start))
+                ckv_cache.hold_history(True)
+            buf, stride = history_gather.gather(ckv_cache, loc // r, start)
+            return history_gather.Held(buf), nb, stride
+        hs = stripe // r
         sl = ckv_cache.slab.slice_rows(0, loc // r)  # [1, 1, loc / r, 512] compressed rows
-        if self.gather_rows:  # HISTORY_GATHER_OVERLAP=on (P.73): the rows gathered as stored, the table as it lands
+        if self.gather == "rows_axes":  # P.73: the rows gathered as stored, the table as it lands
             gat = self._gather_mesh(sl, ckv_cache.tp_axis is not None)
             if gat is not sl:
                 dealloc(sl)
-            return gat, nb
+            return gat, nb, nb * hs
         tl = to_tile(sl, memory_config=DRAM)  # (P.73: capped also where nb x 80 rows pad, DS41-289)
         dealloc(sl)
         gat = self._gather_mesh(tl, ckv_cache.tp_axis is not None)
@@ -185,14 +205,15 @@ class TtSparseAttention(TtWindowAttention):
             dealloc(tl)
         rm = to_rm(gat, memory_config=DRAM)
         dealloc(gat)
-        return rm, nb
+        return rm, nb, nb * hs
 
-    def _topk_rows(self, topk: ttnn.Tensor, ckv_cache, nb: int, offset: int) -> ttnn.Tensor:
+    def _topk_rows(self, topk: ttnn.Tensor, ckv_cache, stride: int, offset: int) -> ttnn.Tensor:
         """The chip's queries' top-k group ids [1, 1, q_rows, K] uint32 ROW_MAJOR -> table rows (same shape and
-        dtype; 0xFFFFFFFF kept): offset + q (nb hs) + b hs + j mod hs, s = j div hs, q = s mod N, b = s div N."""
+        dtype; 0xFFFFFFFF kept): offset + q stride + b hs + j mod hs, s = j div hs, q = s mod N, b = s div N
+        (stride: an owner's rows in the table, nb hs for a gather of exactly nb chunk periods)."""
         hs = ckv_cache.stripe // ckv_cache.ratio  # compressed rows per owner stripe
         n_own = ckv_cache.owners
-        assert offset + n_own * nb * hs < TOPK_LIMIT
+        assert offset + n_own * stride < TOPK_LIMIT
 
         f32 = dict(dtype=ttnn.float32, memory_config=DRAM)
 
@@ -228,7 +249,7 @@ class TtSparseAttention(TtWindowAttention):
         b = floor_div(s, n_own)
         q = op(ttnn.subtract, s, op(ttnn.multiply, ttnn.clone(b, memory_config=DRAM), float(n_own)))  # s mod N
         row = op(ttnn.add, op(ttnn.add, u, float(offset)), op(ttnn.multiply, b, float(hs)))
-        row = op(ttnn.add, row, op(ttnn.multiply, q, float(nb * hs)))
+        row = op(ttnn.add, row, op(ttnn.multiply, q, float(stride)))
         valid = ttnn.ge(x, 0.0, dtype=ttnn.float32, sub_core_grids=sub_cores(x))
         out = ttnn.where(valid, row, -1.0, sub_core_grids=sub_cores(valid))
         for t in (x, row, valid):
@@ -255,13 +276,13 @@ class TtSparseAttention(TtWindowAttention):
         assert rows == g.w, (rows, g.w, g.q_rows)
         return ttnn.mesh_partition(topk, dim=2, cluster_axis=TP_AXIS, memory_config=DRAM)
 
-    def _index(self, topk: ttnn.Tensor, ckv_cache, nb: int, start: int, cls: int | None = None) -> ttnn.Tensor:
+    def _index(self, topk: ttnn.Tensor, ckv_cache, stride: int, start: int, cls: int | None = None) -> ttnn.Tensor:
         """The chip's index list [1, 1, q_rows, 128 + K] uint32 ROW_MAJOR: [window | top-k rows], sentinels last.
         ``cls``: the window's start class (default the start's; DECODER_SKIP=exact, P.30: the cache's carry_class)."""
         g = self.geo
         assert topk.shape[-1] == self.sparse.topk, (topk.shape, self.sparse.topk)
         mine = self._mine(topk)
-        rows = self._topk_rows(mine, ckv_cache, nb, WINDOW + g.chunk)
+        rows = self._topk_rows(mine, ckv_cache, stride, WINDOW + g.chunk)
         if mine is not topk:
             dealloc(mine)
         cls = g.start_class(start) if cls is None else cls
@@ -273,13 +294,13 @@ class TtSparseAttention(TtWindowAttention):
         dealloc(src)
         return out
 
-    def _index_region(self, topk: ttnn.Tensor, ckv_cache, nb: int, cls: int) -> ttnn.Tensor:
+    def _index_region(self, topk: ttnn.Tensor, ckv_cache, stride: int, cls: int) -> ttnn.Tensor:
         """STATIC_TABLES=off with the per-chip bf16 window region (WINDOW_KV_FORMAT=bf16_tiles, P.72): the chip's
         index list [1, 1, q_rows, 128 + K] uint32 ROW_MAJOR = [region window ids | top-k rows of the gathered history
         (offset 0)], not compacted (the fork's BF16 kv_window takes the two sentinel tails apart)."""
         assert topk.shape[-1] == self.sparse.topk, (topk.shape, self.sparse.topk)
         mine = self._mine(topk)
-        rows = self._topk_rows(mine, ckv_cache, nb, 0)
+        rows = self._topk_rows(mine, ckv_cache, stride, 0)
         if mine is not topk:
             dealloc(mine)
         out = ttnn.concat([self.tables.region_index[cls], rows], dim=-1, memory_config=DRAM, sub_core_grids=sub_cores())
@@ -400,31 +421,40 @@ class TtSparseAttention(TtWindowAttention):
         shared = memo is not None and sources is not None
         ckey = (start, id(ckv_cache), ckv_cache.version)
         hit = memo.get(("comp", sources[0]), ckey) if shared else None
+        if hit is not None and isinstance(hit[0], history_gather.Held) and not history_gather.holds(ckv_cache, start):
+            hit = None  # (HISTORY_GATHER=rows: another source of this size gathered into the buffer since; never
+            # expected, the readers of a source run before the next source: tt/history_gather.py)
         if hit is None:
-            comp, nb = self._compressed(ckv_cache, start)
+            comp, nb, stride = self._compressed(ckv_cache, start)
             if shared:
-                memo.put(("comp", sources[0]), ckey, (comp, nb))
+                memo.put(("comp", sources[0]), ckey, (comp, nb, stride))
         else:
-            comp, nb = hit
+            comp, nb, stride = hit
+        held = isinstance(comp, history_gather.Held)  # (the persistent buffer: never freed here)
+        comp_t = comp.tensor if held else comp
         if region:
-            table = comp
+            table = comp_t
         else:
-            table = ttnn.concat([window, comp], dim=2, memory_config=DRAM, sub_core_grids=sub_cores())
+            table = ttnn.concat([window, comp_t], dim=2, memory_config=DRAM, sub_core_grids=sub_cores())
             dealloc(window)
-            if not shared:
-                dealloc(comp)
+            if not shared and not held:
+                dealloc(comp_t)
+            if held:  # the [window | history] concat: the history's rows move by the window's 128 + S
+                held = False
         cls = cache.carry_class(start)  # (DECODER_SKIP=exact, P.30)
         index = memo.get(("index", sources[1]), ckey + (cls, region)) if shared else None
         if index is None:
             index = (
-                self._index_region(topk, ckv_cache, nb, cls) if region else self._index(topk, ckv_cache, nb, start, cls)
+                self._index_region(topk, ckv_cache, stride, cls)
+                if region
+                else self._index(topk, ckv_cache, stride, start, cls)
             )
             if shared:
                 memo.put(("index", sources[1]), ckey + (cls, region), index)
         q_rm = self._q(q_resid, cos, sin)
         o = self._sdpa(q_rm, table, index, window=window if region else None)
         dealloc(q_rm)
-        if not (region and shared):
+        if not (region and shared) and not held:
             dealloc(table)
         if not shared:
             dealloc(index)

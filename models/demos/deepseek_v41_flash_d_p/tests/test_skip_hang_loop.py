@@ -22,7 +22,7 @@ steady chunk at the first point (the last full layer, model.decoder[0] - 1) is r
                        (a hang) it prints those per chip before the teardown: the program after them is the one in
                        flight (FIX.36)
     HANGLOOP_GATHER_ROWS  P.73: "alt" alternates the STATIC_TABLES=off history gather per round (even rounds as
-                       loaded, odd rounds the sparse attentions' ``gather_rows`` flipped: HISTORY_GATHER_OVERLAP on /
+                       loaded, odd rounds the sparse attentions' ``gather_rows`` flipped: HISTORY_GATHER rows /
                        off in one load); each side keeps its own determinism reference, and the other side's output
                        is compared with it too (on vs off bit-identity, recorded, asserted)
     HANGLOOP_STOP_OVER  1: stop after the first round that ran a program over the core cap (an audit run)
