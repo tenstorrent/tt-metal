@@ -211,6 +211,9 @@ namespace {
 #define GM_A_INFLIGHT 0
 #endif
 #define GM_A_TRID0 13
+#ifndef GM_A_STAGGER
+#define GM_A_STAGGER 0
+#endif
 // R1 B multicast (Refinement 19, host R1_B_MCAST): on a plain R1 walk whose B is resident (read once, on the first
 // M-block), one injector per B group (a rectangle of the split's cores) reads B -- and the walk's bias / gate row
 // into cb_weight_tiles' tail, past B -- from DRAM once and multicasts both in ONE handshake-free delivery (the
@@ -289,6 +292,64 @@ FORCE_INLINE void bs_b_deliver(bool injector, Sender& sender, Receiver& receiver
         } else {
             receiver->receive();
         }
+    }
+}
+
+// R1 B multicast, distributed (Refinement 19, GM_R1_B_MCAST == 2; parked): up to GM_R1_B_SLICES cores of the B group
+// are rotating senders of a handshake-free Counter channel. Sender s reads B's K rows [s * per, (s + 1) * per) (per =
+// ceil(K / slices); the last slice also carries the bias / gate row tail, contiguous past B) and multicasts them at
+// the same offset into every group core's slot, in slice order (slice s waits for the counter to reach s: concurrent
+// multicasts into one rectangle serialize badly -- every core of a 64-core group sending at once took res4.0 conv1
+// from 20.6 to 57 us), while the slices' DRAM reads overlap. Returns the number of slices (= the deliveries every core
+// counts).
+#ifndef GM_R1_B_SLICES
+#define GM_R1_B_SLICES 4
+#endif
+template <bool ON, typename Channel, typename Sender, typename Receiver, typename ReadRows>
+FORCE_INLINE uint32_t r1_b_slice_send(
+    const Channel& mc,
+    Sender& sender,
+    Receiver& receiver,
+    const Noc& noc,
+    uint32_t l1,
+    uint32_t k_rows,
+    uint32_t b_row_bytes,
+    uint32_t tail_bytes,
+    ReadRows read_rows) {
+    if constexpr (ON) {
+        constexpr uint32_t g = Channel::num_senders < GM_R1_B_SLICES ? Channel::num_senders : GM_R1_B_SLICES;
+        const uint32_t per = (k_rows + g - 1) / g;
+        const uint32_t slices = (k_rows + per - 1) / per;
+        uint32_t me = Channel::num_senders;
+        for (uint32_t s = 0; s < Channel::num_senders; ++s) {
+            if (mc.should_send(s)) {
+                me = s;
+                break;
+            }
+        }
+        if (me < slices) {
+            const uint32_t r0 = me * per;
+            const uint32_t nr = (k_rows - r0) < per ? (k_rows - r0) : per;
+            const bool last = me + 1 == slices;
+            dataflow_kernel_lib::set_read_trid(noc, 1);
+            read_rows(r0, nr, last);
+            dataflow_kernel_lib::set_read_trid(noc, 0);
+            dataflow_kernel_lib::async_read_barrier_with_trid(noc, 1);
+            if (me > 0) {
+                receiver->receive(me - 1);  // in slice order: slice me - 1 has landed (count >= me)
+            }
+            sender->send(l1 + r0 * b_row_bytes, l1 + r0 * b_row_bytes, nr * b_row_bytes + (last ? tail_bytes : 0));
+        }
+        return slices;
+    } else {
+        return 0;
+    }
+}
+
+template <bool ON, typename Receiver>
+FORCE_INLINE void r1_b_slices_wait(Receiver& receiver, uint32_t slices) {
+    if constexpr (ON) {
+        receiver->receive(slices - 1);  // count >= slices: every slice (this core's own included) landed
     }
 }
 
@@ -391,6 +452,8 @@ void kernel_main() {
         get_named_compile_time_arg_val("weight_ct_offset"),
         get_named_compile_time_arg_val("weight_rt_offset")>();
     constexpr bool r1_b_mcast = GM_R1_B_MCAST != 0;
+    constexpr bool r1_b_distributed = GM_R1_B_MCAST == 2;  // the group's B in K-row slices from several senders
+    [[maybe_unused]] uint32_t r1_b_slices = 0;
     static_assert(!r1_b_mcast || (operand_mode == 0 && weight_resident && !dram_sharded && !block_sharded));
     static_assert(
         mc_act.active == ((operand_mcast && !r1a_split) || (dram_sharded && ds_reader_act) || bs_mcast) &&
@@ -591,10 +654,14 @@ void kernel_main() {
                 for (uint32_t r = 0; r < blk_rows; ++r) {
                     uint32_t page = (a_row_base + r) * tensor_k_tiles + k0;
                     uint32_t l1 = act_l1 + r * a_stride * a_tile_bytes;
-                    for (uint32_t k = 0; k < k_valid; ++k) {
+                    // GM_A_STAGGER: row r's K tiles go out starting at k = (row) % k_valid (wrapping), so rows -- and
+                    // the cores of an M split -- start on different DRAM banks instead of all on the bank of K tile 0.
+                    const uint32_t k_rot = GM_A_STAGGER ? (a_row_base + r) % k_valid : 0;
+                    for (uint32_t kk = 0; kk < k_valid; ++kk) {
+                        const uint32_t k = (kk + k_rot) < k_valid ? kk + k_rot : kk + k_rot - k_valid;
                         if constexpr (GM_A_INFLIGHT != 0) {
                             // The in-flight cap: chunk boundaries retire the chunk two back (same trid).
-                            const uint32_t t = r * k_valid + k;
+                            const uint32_t t = r * k_valid + kk;
                             if (t % GM_A_INFLIGHT == 0) {
                                 const uint32_t c = t / GM_A_INFLIGHT;
                                 if (c >= 2) {
@@ -604,11 +671,11 @@ void kernel_main() {
                             }
                         }
 #if defined(GM_EXP_A_LOCAL)
-                        noc_async_read(get_noc_addr(l1), l1, a_tile_bytes);  // EXPERIMENT: zero-distance floor
+                        // EXPERIMENT (perf tooling): the same reads from this core's own L1 -- the zero-distance floor
+                        noc_async_read(get_noc_addr(l1 + k * a_tile_bytes), l1 + k * a_tile_bytes, a_tile_bytes);
 #else
-                        noc_async_read(a_acc.get_noc_addr(page + k), l1, a_tile_bytes);
+                        noc_async_read(a_acc.get_noc_addr(page + k), l1 + k * a_tile_bytes, a_tile_bytes);
 #endif
-                        l1 += a_tile_bytes;
                     }
                 }
                 if constexpr (GM_A_INFLIGHT != 0) {
@@ -1072,7 +1139,34 @@ void kernel_main() {
                             }
 #ifndef GM_ABLATE_DM
                             else if constexpr (reads_act || reads_weight) {
-                                if constexpr (r1_b_mcast) {
+                                if constexpr (r1_b_distributed) {
+                                    // A slice sender: its K-row slice of B (+ the row tail on the last slice), read
+                                    // and multicast before its own A.
+                                    if (load_weight) {
+                                        MaybeDeviceZoneScope("rd_b_issue");
+                                        r1_b_slices = r1_b_slice_send<r1_b_distributed>(
+                                            mc_weight,
+                                            b_sender,
+                                            b_receiver,
+                                            noc,
+                                            weight_l1,
+                                            k_valid,
+                                            block_n_tiles * b_tile_bytes,
+                                            has_row ? row_bytes : 0,
+                                            [&](uint32_t r0, uint32_t nr, bool last) {
+                                                read_weight(
+                                                    weight_l1 + r0 * block_n_tiles * b_tile_bytes,
+                                                    b_base,
+                                                    k0 + r0,
+                                                    nr,
+                                                    blk_cols);
+                                                if (has_row && last) {
+                                                    read_row(weight_l1 + weight_block_bytes);
+                                                }
+                                            });
+                                        row_tail_l1 = weight_l1 + weight_block_bytes;
+                                    }
+                                } else if constexpr (r1_b_mcast) {
                                     // The group's injector: B (+ the walk's row in the tail) first, under its own
                                     // trid, then the one-shot delivery -- before its own A, so the group's
                                     // compute waits on one B read, not on the injector's A block too.
@@ -1117,7 +1211,12 @@ void kernel_main() {
                                     MaybeDeviceZoneScope("rd_barrier");
                                     noc_async_read_barrier();  // one barrier per K-block, both operands
                                 }
-                                if constexpr (r1_b_mcast) {
+                                if constexpr (r1_b_distributed) {
+                                    if (load_weight) {
+                                        MaybeDeviceZoneScope("rd_b_round");
+                                        r1_b_slices_wait<r1_b_distributed>(b_receiver, r1_b_slices);
+                                    }
+                                } else if constexpr (r1_b_mcast) {
                                     if (load_weight && !b_injector) {
                                         MaybeDeviceZoneScope("rd_b_round");
                                         // the group's B (+ row) landed in the slot

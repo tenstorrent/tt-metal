@@ -158,8 +158,14 @@ RESIDENT_SPLIT_BLOCKS = 4
 # A reads every this many tiles (a two-chunk transaction-id ring, so 1-2x of it are in flight) instead of issuing
 # the whole K-block and one barrier. When every core of a large split bursts its K-block at once, the NoC collapses
 # (all-to-all L1-interleaved reads, every core's barrier ending at the same instant): decoder res2 32768x256x32 on
-# 103 cores 25.9 -> 16.1 us at 8 (4: 16.8, 16: 21.4). 0 = off (one barrier per K-block).
-R1_A_INFLIGHT_TILES = 2
+# 103 cores 25.9 -> 16.1 us with drain barriers every 8 tiles (4: 16.8, 16: 21.4). With the two-chunk ring and the
+# B multicast, 4 measured best (dec res2 / res3.0 conv1 / dec res3: 2 -> 13.8 / 28.0 / 10.9, 4 -> 12.1 / 27.5 / 9.9,
+# 8 -> 12.3 / 29.6 / 15.1, off -> 21.7 / 30.0 / 20.3 us). 0 = off (one barrier per K-block).
+R1_A_INFLIGHT_TILES = 4
+# ... and its rows' K tiles go out from a per-row rotated start (bank stagger), so the split's cores do not all walk
+# the DRAM banks in the same order (with K a multiple of the 8 banks every row starts on bank 0): res4.0 conv1
+# 21.6 -> 20.6 us, the rest flat.
+R1_A_STAGGER = True
 # ... only on splits of at least this many cores: on a smaller split each core's own read rate binds and the cap costs
 # it (dec res3 8192x512x64 on 37 cores 12.4 -> 16.8 us at 2; res3.0 conv1 on 27 cores 41.2 -> 44.4).
 R1_A_INFLIGHT_MIN_CORES = 64
@@ -169,6 +175,12 @@ R1_A_INFLIGHT_MIN_CORES = 64
 # DRAM hot spot on a split over the whole grid (res3.0 conv1 32768x256x128 on 103 cores: ~17 us).
 R1_B_MCAST = True
 R1_B_INJECTOR = 0  # the group core (row-major) that reads and multicasts
+# ... distributed (parked): up to GM_R1_B_SLICES (kernel default 4) group cores each read a K-row slice of B and
+# multicast it in slice order (rotating senders, Counter signal), so the slices' DRAM reads overlap. Correct, but every
+# measured setting loses to the one injector: res4.0 conv1 20.6 us -> 57 with every core sending at once (concurrent
+# multicasts into one rectangle serialize), 23.9 / 25.0 with 2 / 4 ordered slices (res3 shortcut 16.8 -> 19.5 / 21.8).
+# False: one fixed injector per group.
+R1_B_DISTRIBUTED = False
 R1_B_MCAST_GROUPS = 2  # split cost: B reads of a multicast split (its rectangles; a flat split's full rows + the rest)
 # Output write batching knob (Refinement 8, R1): row groups the writer drains per wait / flush / pop
 # (the largest divisor of the block's row groups <= this; cb_output_tiles holds DEPTH_OUT batches).
@@ -958,11 +970,14 @@ def r1_b_mcast(geom: Geometry, grid: GridChoice, blk: "Blocking"):
 
 
 def r1_a_inflight(geom: Geometry, grid: GridChoice, blk: "Blocking"):
-    """R1_A_INFLIGHT_TILES on a plain R1 walk over at least R1_A_INFLIGHT_MIN_CORES cores, else 0 (off)."""
+    """R1_A_INFLIGHT_TILES on a plain R1 M-only split (grid_b == grid_n == 1: every core streams its own rows of A)
+    over at least R1_A_INFLIGHT_MIN_CORES cores, else 0 (off). Elsewhere the cap only serializes a core's read
+    latency: the batched guard (32 x 512x128x1024, 32x2x1 cores, A resident) 67 -> 71 us under it."""
     cores = grid.grid_b * grid.grid_m * grid.grid_n
-    if not R1_A_INFLIGHT_TILES or cores < R1_A_INFLIGHT_MIN_CORES or operand_mode(geom, grid, blk) != 0:
+    m_only = grid.grid_b == 1 and grid.grid_n == 1
+    if not R1_A_INFLIGHT_TILES or not m_only or cores < R1_A_INFLIGHT_MIN_CORES:
         return 0
-    return R1_A_INFLIGHT_TILES
+    return R1_A_INFLIGHT_TILES if operand_mode(geom, grid, blk) == 0 else 0
 
 
 def r1a_prefetch(geom: Geometry, grid: GridChoice, blk: "Blocking"):
@@ -1967,6 +1982,8 @@ def create_program_descriptor(
     if r1_a_inflight(geom, grid, blk):
         for k in readers:
             k.defines = list(k.defines) + [("GM_A_INFLIGHT", str(r1_a_inflight(geom, grid, blk)))]
+            if R1_A_STAGGER:
+                k.defines = list(k.defines) + [("GM_A_STAGGER", "1")]
     if act_stream:
         rounds = _cdiv(grid.core_m_tiles, blk.block_m_tiles) * _cdiv(grid.core_n_tiles, blk.block_n_tiles)
         # Rotating injectors on the bank-local split only (one rectangle, as the helper's rotating senders need):
@@ -2173,8 +2190,13 @@ def _attach_r1_b_mcast(descriptor, readers, device):
     """R1_B_MCAST: one handshake-free weight channel per B group (its reader kernel's cores, a rectangle) from its
     R1_B_INJECTOR-th core; a single-core group reads its own B (channel absent). The act channel is absent."""
     sem = max([sm.id for sm in descriptor.semaphores], default=-1) + 1
-    sender = ttnn.McastFixedSenderConfig(sender_index=R1_B_INJECTOR, placement=ttnn.McastSenderPlacement.Staggered)
-    config = ttnn.McastConfig(noc=ttnn.NOC.NOC_0, handshake=False)
+    if R1_B_DISTRIBUTED:
+        # K-row slices from several senders; a Counter data-ready signal counts the slices (handshake-free).
+        sender = ttnn.McastRotatingSenderConfig()
+        config = ttnn.McastConfig(noc=ttnn.NOC.NOC_0, handshake=False, data_ready=ttnn.McastDataReady.Counter)
+    else:
+        sender = ttnn.McastFixedSenderConfig(sender_index=R1_B_INJECTOR, placement=ttnn.McastSenderPlacement.Staggered)
+        config = ttnn.McastConfig(noc=ttnn.NOC.NOC_0, handshake=False)
     for k in readers:
         ttnn.attach_absent_mcast(k, "act")
         size = k.core_ranges.num_cores()
@@ -2184,7 +2206,7 @@ def _attach_r1_b_mcast(descriptor, readers, device):
         mc = ttnn.Mcast(device, config, k.core_ranges, size, sender, ttnn.McastCoreOrder.RowMajor)
         mc.attach(descriptor, "weight", [k], sem)
         sem = mc.next_semaphore_id()
-        k.defines = list(k.defines) + [("GM_R1_B_MCAST", "1")]
+        k.defines = list(k.defines) + [("GM_R1_B_MCAST", "2" if R1_B_DISTRIBUTED else "1")]
 
 
 def _attach_operand_channels(
