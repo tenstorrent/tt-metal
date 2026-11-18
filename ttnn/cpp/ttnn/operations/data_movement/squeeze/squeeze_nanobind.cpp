@@ -34,20 +34,45 @@ void bind_squeeze(nb::module_& mod) {
     ttnn::bind_function<"squeeze">(
         mod,
         R"doc(
-        Returns a tensor with the specified dimensions squeezed. If `dim` is not provided, all dimensions of size 1 will be squeezed. If `dim` is an integer, only the specified dimension will be squeezed. If `dim` is a list of integers, all specified dimensions will be squeezed.
+        Returns `input_tensor` with dimensions of size 1 removed, like ``torch.squeeze``: every dimension of size 1 when `dim` is `None`, or only the dimensions of size 1 that `dim` lists.
 
-        If a specified dimension in `dim` does not have size 1, it will be ignored.
-
-        Equivalent pytorch code:
-
-        .. code-block:: python
-
-            input_tensor = torch.rand((1,1,1,256), dtype=torch.bfloat16)
-            output_tensor = torch.squeeze(input_tensor, 2) # tensor of shape (1,1,256), where at dimension 2 we removed it
+        When every removed dimension comes before the last two, the output is a view of `input_tensor`: it shares the input's buffer and no data moves.
 
         Args:
-            * :attr:`input_tensor`: Input Tensor.
-            * :attr:`dim`: Dim where we want to squeeze
+            input_tensor (ttnn.Tensor): the input tensor.
+            dim (int or List[int], optional): the dimension or dimensions to remove, each in ``[-rank, rank - 1]`` and listed once, where ``rank`` is the rank of `input_tensor`. Negative values count from the last dimension. A listed dimension whose size is not 1 is kept. Defaults to `None`, which removes every dimension of size 1.
+
+        Returns:
+            ttnn.Tensor: the output tensor, with the input's dtype, layout and memory configuration.
+
+        Note:
+            Supported dtypes and layouts:
+
+            .. list-table::
+               :header-rows: 1
+
+               * - Dtypes
+                 - Layouts
+               * - BFLOAT16, FLOAT32, INT32, UINT32
+                 - TILE, ROW_MAJOR
+               * - BFLOAT8_B, BFLOAT4_B
+                 - TILE
+
+            Also supported when every removed dimension comes before the last two:
+
+            .. list-table::
+               :header-rows: 1
+
+               * - Dtypes
+                 - Layouts
+               * - UINT16, UINT8
+                 - TILE, ROW_MAJOR
+
+            Removing the last dimension of a ``BFLOAT8_B`` or ``BFLOAT4_B`` tensor regroups its values into new blocks of 16 that share one exponent.
+
+        Memory Support:
+            - Interleaved: DRAM and L1
+            - Sharded: HEIGHT_SHARDED, WIDTH_SHARDED and BLOCK_SHARDED in L1, when every removed dimension comes before the last two
         )doc",
         &squeeze_wrapper,
         nb::arg("input_tensor"),
