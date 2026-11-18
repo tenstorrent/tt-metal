@@ -368,7 +368,7 @@ PERF_TEST_SCHEMAS = {
         "test_name_aliases": {"perf_eltwise_binary_sfpu": "perf_eltwise_binary_sfpu"},
     },
     "perf_eltwise_unary_datacopy": {
-        "version": 2,
+        "version": 3,
         "columns": [
             "block_ct_dim",
             "block_rt_dim",
@@ -396,6 +396,7 @@ PERF_TEST_SCHEMAS = {
             "output_num_tiles_in_block",
             "tile_cnt",
             "tilize",
+            "unpack_block",
             "unpack_to_dest",
         ],
         "aliases": {"formats.sfpu_math": "formats.sfpu_src"},

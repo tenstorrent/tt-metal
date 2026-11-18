@@ -10,6 +10,9 @@
 #include "api/compute/sentinel/compute_kernel_sentinel.h"
 #include "sanitizer/api.h"
 #include "llk_assert.h"
+#ifdef ARCH_BLACKHOLE
+#include "llk_size_mode.h"
+#endif
 
 #ifdef TRISC_MATH
 #include "llk_math_unary_datacopy_api.h"
@@ -128,8 +131,15 @@ ALWI void copy_tile(std::uint32_t in_cb_id, std::uint32_t in_tile_index, std::ui
 #ifndef ARCH_QUASAR
     LLK_SAN_FUNCTION();
 #endif
+#if defined(ARCH_BLACKHOLE)
+    // The context semaphore is read before the address writes, so the per-tile chain overlaps its latency; a size-mode
+    // kernel keeps main's smaller call
+    UNPACK((llk_unpack_A<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, UnpackToDestEn, !LLK_SIZE_MODE>(
+        in_cb_id, in_tile_index, dst_tile_index)));
+#else
     UNPACK((llk_unpack_A<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, UnpackToDestEn>(
         in_cb_id, in_tile_index, dst_tile_index)));
+#endif
     MATH((llk_math_eltwise_unary_datacopy<DataCopyType::A2D, is_fp32_dest_acc_en, BroadcastType::NONE, UnpackToDestEn>(
         dst_tile_index, in_cb_id)));
 }
@@ -139,7 +149,7 @@ ALWI void copy_tile(std::uint32_t in_cb_id, std::uint32_t in_tile_index, std::ui
  * Copies a block of `ntiles` consecutive tiles from the specified input CB into consecutive DST
  * register slots. This is the uniform block entry point for the copy/datacopy op group. It uses the
  * block unpack/datacopy llk paths and requires the same initialization as `copy_tile`
- * (`copy_init`). The DST register buffer must be in acquired
+ * (`copy_init`, without transpose). The DST register buffer must be in acquired
  * state via *acquire_dst* call, and `cb_wait_front(n)` must have made at least
  * `start_in_tile_index + ntiles` tiles available in the input CB. This call is blocking and is only
  * available on the compute engine.

@@ -50,7 +50,7 @@ inline void _llk_math_topk_xl_copy_(const std::uint32_t dst_index, const std::ui
 {
     if (elements_this_tile != 0 && is_32bit_input(dst_format, dst_format))
     {
-        math_unpack_to_dest_math_ready();
+        math_unpack_to_dest_math_ready_risc_ack();
         // clear to -inf first for padding
         if (elements_this_tile < 1024)
         {
