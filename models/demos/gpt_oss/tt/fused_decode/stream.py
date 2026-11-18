@@ -287,12 +287,8 @@ _BANK_WORKERS = {}
 
 def robust_readers(mesh_device):
     """Harvest-robust reader placement (bank_workers and _BankStreamOp's growth): on for Blackhole 1x4, the mesh the
-    fused decode runs on. GPT_OSS_DECODE_ROBUST_READERS=0 keeps the previous placement (the furthest-east chip's
-    workers, readers growing east and west); =1 forces it on."""
-    knob = os.environ.get("GPT_OSS_DECODE_ROBUST_READERS")
-    if knob is not None:
-        assert knob in ("0", "1"), f"GPT_OSS_DECODE_ROBUST_READERS={knob!r}: 0 or 1"
-        return knob == "1"
+    fused decode runs on. Elsewhere the previous placement (the furthest-east chip's workers, readers growing east and
+    west)."""
     return ttnn.device.is_blackhole(mesh_device) and tuple(mesh_device.shape) == (1, 4)
 
 

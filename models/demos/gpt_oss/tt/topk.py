@@ -192,7 +192,7 @@ class TopKRouter:
         step, all K tiles accumulated in the dest register, then the bias): a 1D in1-multicast program with
         in0_block_w = all of K (one K block, so the same in-dest sum) and the batch-1 call's kernel config (HiFi2,
         bf16 dest; ttnn's default for a user-given program differs). Measured on BH 1x4, 32 users x 128 tokens
-        (l20/mb_router2.py): 0.200 -> 0.118 ms per linear, 0 / 131072 logits differ; the DRAM output also keeps the
+        0.200 -> 0.118 ms per linear, 0 / 131072 logits differ; the DRAM output also keeps the
         top-k's pad multi-core (from L1 it runs on one core, 80 us). Users of a partial tile of rows, or more rows per
         core than _BATCHED_ROUTER_MAX_PER_CORE_M (L1 of the full-K blocks), keep the [B, 1, S, H] linear with the L1
         output (ttnn picks the batch-1 call's program), copied to DRAM."""

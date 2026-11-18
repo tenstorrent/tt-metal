@@ -47,3 +47,24 @@ class GPTOSSAttentionProgramConfig(ProgramConfig):
     prefill_out_cores: tuple[int, int] | None = None
     # Prefill QKV / o_proj 2D multicast configs on Blackhole (attention/config.py prefill_proj_program_config).
     prefill_proj_2d: bool = True
+    # Unpadded o_proj with a bf8 all-reduce in prefill on Blackhole (attention/weights.py, attention/prefill.py).
+    prefill_unpadded_o_proj: bool = True
+
+
+# The prefill settings above were measured and accuracy-checked on gpt-oss-20b (32 experts) only. gpt-oss-120b keeps
+# the ones it had before them: the base class's SDPA chunks, HiFi4 prefill SDPA, ttnn's default projection configs and
+# the padded o_proj (so no sequence-parallel prefill).
+GPT_OSS_20B_NUM_EXPERTS = 32
+
+
+def gpt_oss_attention_program_config(hf_config) -> GPTOSSAttentionProgramConfig:
+    """The attention program config of the GPT-OSS model of hf_config."""
+    if hf_config.num_local_experts == GPT_OSS_20B_NUM_EXPERTS:
+        return GPTOSSAttentionProgramConfig()
+    return GPTOSSAttentionProgramConfig(
+        prefill_chunk_regimes=None,
+        prefill_sliding_chunk_regimes=None,
+        prefill_sdpa_math_fidelity=None,
+        prefill_proj_2d=False,
+        prefill_unpadded_o_proj=False,
+    )

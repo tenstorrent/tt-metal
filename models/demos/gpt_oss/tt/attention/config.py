@@ -30,7 +30,7 @@ class AttentionConfig:
 # Prefill QKV / o_proj 2D multicast matmul geometry per role: (grid columns, N tiles per core, in0_block_w). The ttnn
 # default for these shapes picks in0_block_w=1 (one K tile per multicast step); in0_block_w 8-9 and an out_block_h of at
 # most 32 tiles measured QKV 0.35 -> 0.24 ms at S = 8192 and 1.54 -> 1.01 ms at 32768, o_proj 0.31 -> 0.24 and
-# 1.44 -> 1.00 ms (BH, per-device 1x4 shapes, l11/probe_mm.py). Keyed by the per-device (K, N) of each projection.
+# 1.44 -> 1.00 ms (BH, per-device 1x4 shapes, standalone). Keyed by the per-device (K, N) of each projection.
 PREFILL_PROJ_2D = {
     "qkv": (10, 4, 9),  # [S, 2880] x [2880, 1280]: N = 40 tiles over 10 columns, K = 90 tiles
     "o": (9, 10, 8),  # [S, 1024] x [1024, 2880]: N = 90 tiles over 9 columns, K = 32 tiles
@@ -154,6 +154,9 @@ class ProgramConfig:
     # L1 address the prefill projections' circular buffers must end below (0: the whole L1); set by
     # Model.set_prefill_l1_end when buffers stay resident in L1 (DFlash).
     prefill_l1_end: int = 0
+    # Blackhole TP > 1: the prefill o_proj runs on the unpadded weight and ends in a bf8 all-reduce, which also allows
+    # the sequence-parallel prefill (attention/prefill.py). False keeps the padded o_proj + reduce-scatter path.
+    prefill_unpadded_o_proj: bool = False
 
     def __post_init__(self):
         """Validate configuration on creation"""

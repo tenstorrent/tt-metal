@@ -81,6 +81,7 @@ class Attention:
             weight_dtype=weight_dtype,
             tensor_cache_path=tensor_cache_path,
             fused_decode=fused_decode,
+            unpadded_o_proj_prefill=program_config.prefill_unpadded_o_proj,
         )
 
         # Initialize KV cache

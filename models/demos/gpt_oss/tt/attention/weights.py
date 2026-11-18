@@ -47,6 +47,7 @@ def load_attention_weights(
     bias_dtype=ttnn.bfloat16,
     tensor_cache_path=None,
     fused_decode=False,
+    unpadded_o_proj_prefill=False,
 ) -> AttentionWeights:
     """
     Load and shard attention weights.
@@ -60,6 +61,7 @@ def load_attention_weights(
         bias_dtype: Data type for biases (default: bfloat16)
         tensor_cache_path: Optional path for weight caching
         fused_decode: Also load the streamed QKV / o_proj copies used by the fused decode path
+        unpadded_o_proj_prefill: Also make the unpadded prefill o_proj (Blackhole, TP > 1)
 
     Returns:
         AttentionWeights container with all loaded weights
@@ -277,7 +279,7 @@ def load_attention_weights(
     )
 
     o_proj_prefill_tt = o_proj_bias_prefill_tt = None
-    if o_proj_pad_size > 0 and mesh_config.tp > 1 and ttnn.device.is_blackhole(mesh_device):
+    if unpadded_o_proj_prefill and o_proj_pad_size > 0 and mesh_config.tp > 1 and ttnn.device.is_blackhole(mesh_device):
         # Blackhole only (measured there; other architectures keep the padded RS + AG path).
         # The padding columns sit after column hidden_size of every device's [K_local, padded_hidden] shard.
         w_shape = list(o_proj_tt.shape)

@@ -7,7 +7,7 @@ from models.demos.gpt_oss.utils.substate import substate
 
 from .attention import Attention, AttentionConfig
 from .attention.prefill import prefill_sequence_parallel_supported
-from .attention_configs import GPTOSSAttentionProgramConfig
+from .attention_configs import gpt_oss_attention_program_config
 from .batched_prefill import gather_users
 from .fused_decode.boundary import PendingBoundary
 from .fused_decode.config import DECODE_BOUNDARY_FUSE_CONSUMER
@@ -77,7 +77,7 @@ class DecoderLayer:
         )
 
         # Create attention program config
-        attention_program_config = GPTOSSAttentionProgramConfig()
+        attention_program_config = gpt_oss_attention_program_config(hf_config)
 
         self.self_attn = Attention(
             mesh_device=mesh_device,

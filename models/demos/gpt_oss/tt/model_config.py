@@ -118,18 +118,16 @@ class ModelArgs:
             self.processor = None  # GPT-OSS doesn't use vision processor
 
         # Batched prefill (several users flattened into one [1, 1, B*S, H] forward, attention per user) is validated
-        # on the Blackhole 1x4 mesh only (the routed-MoE prefill placement, experts/prefill_routed_placement.py, and
-        # the per-user exact reductions of batched_prefill.py); other meshes keep the sequential per-user prefill.
+        # for gpt-oss-20b on the Blackhole 1x4 mesh only (the routed-MoE prefill placement,
+        # experts/prefill_routed_placement.py, and the per-user exact reductions of batched_prefill.py); other models
+        # and meshes keep the sequential per-user prefill.
         mesh_shape = tuple(mesh_device.shape) if mesh_device is not None else ()
-        self.disable_batched_prefill = not (mesh_shape == (1, 4) and is_blackhole())
+        self.disable_batched_prefill = not (
+            self.model_name == "gpt-oss-20b" and mesh_shape == (1, 4) and is_blackhole()
+        )
         # Padded length -> users per batched forward where all users do not fit the generator's token budget
-        # (batched_prefill_group_size). GPT_OSS_PREFILL_GROUPS="4096:16,8192:8" overrides it (tuning).
+        # (batched_prefill_group_size).
         self.batched_prefill_groups = dict(BATCHED_PREFILL_GROUPS)
-        groups_env = os.getenv("GPT_OSS_PREFILL_GROUPS")
-        if groups_env is not None:
-            self.batched_prefill_groups = {
-                int(k): int(v) for k, v in (item.split(":") for item in groups_env.split(",") if item.strip())
-            }
         self.capped_warmup_seq_len = 2048
         self.trace_prefill_supported_seq_lens = self.get_trace_prefill_supported_seq_lens()
 

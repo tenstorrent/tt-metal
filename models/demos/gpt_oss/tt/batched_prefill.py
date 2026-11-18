@@ -39,8 +39,7 @@ BATCHED_REDUCE_LINKS = 2
 _TILE_BYTES = {ttnn.bfloat8_b: 1088, ttnn.bfloat16: 2048, ttnn.float32: 4096}
 
 # chunks_per_sync of the prefill ring reduce-scatters (ring_reduce_scatter). The ring result does not depend on it
-# (bit-identical to the default in every case measured). Measured on BH 1x4, bf8, 2 links, ms per call, default -> 128
-# (l14/mb_ccl14.py, l14/logs/mb_ccl14.log):
+# (bit-identical to the default in every case measured). Measured on BH 1x4, bf8, 2 links, ms per call, default -> 128:
 #   [32, 1, 2048, 2880] 2.816 -> 2.503; [16, 1, 4096, 2880] 2.807 -> 2.491; [8, 1, 8192, 2880] 2.773 -> 2.456;
 #   [32, 1, 512, 2880] 0.703 -> 0.647; [1, 1, 16384, 2880] 0.711 -> 0.647; [1, 1, 4096, 2880] 0.182 -> 0.184.
 # 64 / 256 are within 0.5% of 128; num_workers_per_link 6 and num_buffers_per_channel 8 on top: within 1-4%, mixed.
@@ -137,7 +136,7 @@ def per_user_reduce(x, batch_size, cluster_axis, num_links, scatter=False):
         return _flat_view(out)
     # ttnn.all_reduce of a [B, 1, S, H] whose S tiles divide by the mesh axis (H = 2880 is 90 tiles, which do not) is
     # this ring ttnn.reduce_scatter over dim 2 plus ttnn.all_gather; run them here to set chunks_per_sync on the ring.
-    # Bit-identical, measured on BH 1x4, bf8, 2 links, ms per call (l14/logs/mb_ccl14.log): [32, 1, 512, 2880]
+    # Bit-identical, measured on BH 1x4, bf8, 2 links, ms per call: [32, 1, 512, 2880]
     # all_reduce 1.301 -> 1.244, [32, 1, 256, 2880] 0.658 -> 0.638 (all_gather_async in place of all_gather: slower).
     if direct:
         rs = ttnn.experimental.reduce_scatter_minimal_direct(
