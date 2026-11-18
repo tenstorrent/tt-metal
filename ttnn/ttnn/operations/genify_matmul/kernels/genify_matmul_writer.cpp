@@ -52,9 +52,12 @@
 #define GM_OUT_STRIDE 1
 #endif
 // R1b rotating injectors (Refinement 15, host ACT_STREAM_INJECTORS): the `act` channel's senders take turns, A
-// K-block round r is read and multicast by injector r % GM_ACT_INJECTORS. An injector issues the read of its NEXT
-// turn (round r + injectors) right after sending round r, so the injectors' A reads overlap each other's multicasts
-// and the stream runs at the multicast rate instead of the read + multicast rate of one core. 1 = one fixed injector.
+// K-block round r is read and multicast by injector r % GM_ACT_INJECTORS, each injector reading its NEXT turn (round
+// r + injectors, the other of two transaction ids) while the others multicast, so the stream runs near the multicast
+// rate instead of one core's read + multicast rate. When the next turn's slots are already free the read is issued
+// BEFORE sending r (hidden under the wait for r's acks; issued after the send it holds this core's ack of round r + 1
+// for the whole issue: 13.6 us rounds instead of ~5 on Qwen M = 128); otherwise after the send, never blocking the
+// send on compute (blocking cost FLUX attn-out 107 -> 135 us). 1 = one fixed injector.
 #ifndef GM_ACT_INJECTORS
 #define GM_ACT_INJECTORS 1
 #endif
@@ -191,12 +194,14 @@ void kernel_main() {
         blk_r0 = ((r / num_k_blocks) / nb_n % nb_m) * block_m_tiles;
         blk_rows = block_extent(rows_valid, blk_r0, block_m_tiles);
     };
-    // Issue this core's read for its turn `r` (r >= act_seq): reserve through r's slot, read under trid 1.
+    // Issue this core's read for its turn `r` (r >= act_seq): reserve through r's slot, read under the turn's trid
+    // (alternating, so retiring turn r never waits on the already-issued turn r + injectors).
+    [[maybe_unused]] auto turn_trid = [&](uint32_t r) { return (r / act_injectors) % 2 + 1; };
     [[maybe_unused]] auto issue_turn = [&](uint32_t r) {
         cb_reserve_back(cb_act_tiles, (r - act_seq + 1) * act_block_tiles);
         uint32_t blk_r0, blk_rows;
         round_rows(r, blk_r0, blk_rows);
-        dataflow_kernel_lib::set_read_trid(noc, 1);
+        dataflow_kernel_lib::set_read_trid(noc, turn_trid(r));
         read_act_kblock(act_ring_base + (r % act_cb_blocks) * act_block_bytes, blk_r0, blk_rows, r % num_k_blocks);
         dataflow_kernel_lib::set_read_trid(noc, 0);
     };
@@ -254,8 +259,20 @@ void kernel_main() {
                         for (uint32_t kb = 0; kb < num_k_blocks; ++kb) {
                             const uint32_t r = act_seq;
                             if (a_sender && mc_act.should_send(r)) {
-                                dataflow_kernel_lib::async_read_barrier_with_trid(noc, 1);  // issued last turn
+                                const uint32_t next = r + act_injectors;
+                                bool next_issued = next >= act_rounds;
+                                if (!next_issued &&
+                                    cb_pages_reservable_at_back(cb_act_tiles, (next - act_seq + 1) * act_block_tiles)) {
+                                    MaybeDeviceZoneScope("wr_a_issue");
+                                    issue_turn(next);  // slots free: the next turn's read hides under r's acks
+                                    next_issued = true;
+                                }
+                                {
+                                    MaybeDeviceZoneScope("wr_a_barrier");
+                                    dataflow_kernel_lib::async_read_barrier_with_trid(noc, turn_trid(r));
+                                }
                                 const uint32_t slot = act_ring_base + (r % act_cb_blocks) * act_block_bytes;
+                                MaybeDeviceZoneScope("wr_a_send");
 #ifdef GM_ABLATE_A_SEND
                                 a_sender->send(slot, slot, 32);
 #else
@@ -263,10 +280,11 @@ void kernel_main() {
 #endif
                                 cb_push_back(cb_act_tiles, act_block_tiles);
                                 ++act_seq;
-                                if (r + act_injectors < act_rounds) {
-                                    issue_turn(r + act_injectors);  // the next turn's read overlaps others' sends
+                                if (!next_issued) {
+                                    issue_turn(next);  // after the send: compute frees the slots meanwhile
                                 }
                             } else {
+                                MaybeDeviceZoneScope("wr_a_recv1");
                                 cb_reserve_back(cb_act_tiles, act_block_tiles);
                                 a_receiver->receive(r);
                                 cb_push_back(cb_act_tiles, act_block_tiles);
