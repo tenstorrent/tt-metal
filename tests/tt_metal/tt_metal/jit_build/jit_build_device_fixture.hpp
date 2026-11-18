@@ -5,7 +5,7 @@
 #pragma once
 
 #include <cstdint>
-#include <exception>
+#include <filesystem>
 #include <memory>
 #include <string>
 #include <utility>
@@ -13,6 +13,7 @@
 
 #include <enchantum/enchantum.hpp>
 #include <tt-metalium/experimental/mock_device/mock_device.hpp>
+#include <tt_stl/assert.hpp>
 #include <tt-metalium/workload/specification/program_spec.hpp>
 
 #include "common/mesh_dispatch_fixture.hpp"
@@ -125,23 +126,29 @@ private:
     // True when the runner is a Quasar simulator, device, or mock/emulated Quasar (which the caller skips).
     //  - Simulator: decided from the soc_descriptor.yaml a Quasar simulator must ship, never by loading
     //    the simulator image (get_simulator_architecture would load libttsim for a WH/BH .so).
-    //  - Any probe failure (bad simulator path, unreadable mock descriptor, mixed-arch PCI cards)
-    //    falls back to the mock Blackhole.
+    //  - A probe failure (unreadable simulator or mock descriptor, mixed-arch PCI cards) propagates and
+    //    fails the suite. Falling back to the mock Blackhole would let a broken Quasar runner pass with
+    //    no sign that Quasar went untested. Hosts with no device do not throw here.
     static bool runner_is_quasar(const llrt::RunTimeOptions& rtoptions) {
-        try {
-            switch (rtoptions.get_target_device()) {
-                case tt::TargetDevice::Simulator: {
-                    const std::string soc_desc = find_simulator_soc_descriptor_path(rtoptions.get_simulator_path());
-                    return !soc_desc.empty() &&
-                           umd::SocDescriptor::get_arch_from_soc_descriptor_path(soc_desc) == tt::ARCH::QUASAR;
+        switch (rtoptions.get_target_device()) {
+            case tt::TargetDevice::Simulator: {
+                const std::filesystem::path sim_path = rtoptions.get_simulator_path();
+                const std::string soc_desc = find_simulator_soc_descriptor_path(sim_path);
+                if (soc_desc.empty()) {
+                    // A ttsim .so may omit it (WH/BH declare their arch through the image); an RTL
+                    // simulator must ship one, so its absence means a broken simulator.
+                    TT_FATAL(
+                        sim_path.extension() == ".so",
+                        "JitBuildDeviceFixture: simulator {} has no soc_descriptor.yaml.",
+                        sim_path.string());
+                    return false;
                 }
-                case tt::TargetDevice::Mock:
-                case tt::TargetDevice::Emule:
-                case tt::TargetDevice::Silicon: return get_platform_architecture(rtoptions) == tt::ARCH::QUASAR;
-                default: return false;
+                return umd::SocDescriptor::get_arch_from_soc_descriptor_path(soc_desc) == tt::ARCH::QUASAR;
             }
-        } catch (const std::exception&) {
-            return false;
+            case tt::TargetDevice::Mock:
+            case tt::TargetDevice::Emule:
+            case tt::TargetDevice::Silicon: return get_platform_architecture(rtoptions) == tt::ARCH::QUASAR;
+            default: return false;
         }
     }
 
