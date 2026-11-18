@@ -19,6 +19,7 @@ from ttnn.experimental.moe_compute_utils import auto_output_width_shard_dim
 from tests.nightly.tg.ccl.moe.test_moe_compute_6U import _run_moe_compute_impl
 
 GUARD = int(os.environ.get("TT_MOE_MUX_L1_FIT_Q", "0"))
+CHECK = int(os.environ.get("TT_MOE_MUX_L1_CHECK", "0"))
 GROW_KB = int(os.environ.get("B46_GROW_KB", "160"))
 COLS = int(os.environ.get("B46_COLS", "8"))
 DEVICE_PARAMS = {
@@ -58,8 +59,10 @@ def _call(mesh_device, mesh_shape, iters=1):
 @pytest.mark.parametrize("mesh_shape, mesh_device", [((1, COLS), (1, COLS))], indirect=["mesh_device"])
 @pytest.mark.parametrize("case", ["plain", "grow"])
 def test_mux_l1_guard(mesh_device, mesh_shape, case):
-    if case == "grow" and not GUARD:
-        pytest.skip("grow without TT_MOE_MUX_L1_FIT_Q is the B39 hang; not run")
+    if case == "grow" and not GUARD and CHECK < 2:
+        pytest.skip(
+            "grow without TT_MOE_MUX_L1_FIT_Q is the B39 hang; only run with TT_MOE_MUX_L1_CHECK=2 (raises instead of hanging)"
+        )
     _call(mesh_device, mesh_shape, iters=2)
     n1 = mesh_device.num_program_cache_entries()
     keep = None
@@ -72,6 +75,19 @@ def test_mux_l1_guard(mesh_device, mesh_shape, case):
             mesh_device,
             ttnn.L1_MEMORY_CONFIG,
         )
+    if case == "grow" and not GUARD:
+        # stock behaviour: the program is reused with the mux map overlapping live L1. The debug check turns the B39 hang
+        # into a deterministic error on the program-cache hit (before anything is enqueued).
+        try:
+            _call(mesh_device, mesh_shape, iters=2)
+        except RuntimeError as e:
+            assert "overlaps live L1" in str(e), str(e)[:500]
+            logger.info(
+                "B46 case=grow guard_q=0: stock reuse detected the mux-map overlap (would hang): " + str(e)[:300]
+            )
+            ttnn.deallocate(keep)
+            return
+        raise AssertionError("stock program reuse after L1 growth did not trip the mux-map overlap check")
     _call(mesh_device, mesh_shape, iters=2)
     n2 = mesh_device.num_program_cache_entries()
     logger.info(f"B46 case={case} guard_q={GUARD} cache entries {n1} -> {n2}")

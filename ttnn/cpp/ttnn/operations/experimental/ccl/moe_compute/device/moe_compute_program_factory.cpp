@@ -4,6 +4,7 @@
 
 #include "moe_compute_program_factory.hpp"
 #include "moe_compute_device_operation_types.hpp"
+#include "ttnn/operations/experimental/ccl/moe/selective_reduce_combine/device/selective_reduce_combine_device_operation_types.hpp"
 
 #include "ttnn/global_semaphore.hpp"
 
@@ -1789,8 +1790,30 @@ void MoEComputeMeshWorkloadFactory::override_runtime_arguments(
     tt::tt_metal::Program& program,
     const MoEComputeParams& args,
     const MoEComputeInputs& /*tensor_args*/,
-    std::vector<ttnn::Tensor>& /*tensor_return_value*/,
+    std::vector<ttnn::Tensor>& tensor_return_value,
     const std::optional<ttnn::MeshCoordinate>& /*coord*/) {
+    if (const uint32_t mode = moe_mux_l1_check_mode(); mode != 0 && args.path == MoEComputePath::FullCcl &&
+                                                       !tensor_return_value.empty() &&
+                                                       tensor_return_value.front().device() != nullptr) {
+        const auto lowest = tensor_return_value.front().device()->lowest_occupied_compute_l1_address();
+        const size_t map_end = moe_mux_last_map_end().load();
+        if (lowest.has_value() && map_end != 0 && *lowest < map_end) {
+            if (mode >= 2) {
+                TT_FATAL(
+                    false,
+                    "moe_compute combine fabric-mux L1 map [.., {}) overlaps live L1 (lowest occupied {}): persistent "
+                    "L1 "
+                    "grew after the program build (RESULT_B39 hazard); set TT_MOE_MUX_L1_FIT_Q to rebuild on growth",
+                    map_end,
+                    *lowest);
+            }
+            log_error(
+                tt::LogOp,
+                "moe_compute combine fabric-mux L1 map end {} > lowest occupied L1 {}: mux map overrun hazard",
+                map_end,
+                *lowest);
+        }
+    }
     // Buffer addresses are bindings. Only the caller-owned cross-device semaphore address can move.
     if (args.path != MoEComputePath::FullCcl || !args.combine_params.has_value() ||
         !args.combine_params->optional_cross_device_semaphore.has_value()) {

@@ -3,6 +3,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
+#include <atomic>
+#include <cstddef>
 #include <cstdlib>
 #include <cstdint>
 #include <tt_stl/reflection.hpp>
@@ -26,6 +28,21 @@ inline uint32_t moe_mux_l1_fit_quantum() {
         return v ? static_cast<uint32_t>(std::strtoul(v, nullptr, 10)) : 0u;
     }();
     return q;
+}
+
+// Debug aid (env TT_MOE_MUX_L1_CHECK: 0 off, 1 log an error, 2 TT_FATAL). The fabric-mux map end of the most recent
+// combine program build; moe_compute compares the live lowest occupied L1 address against it on every program-cache hit
+// (the hazard of RESULT_B39: persistent L1 grew after the build, outputs now overlap the raw-L1 mux map).
+inline uint32_t moe_mux_l1_check_mode() {
+    static const uint32_t m = [] {
+        const char* v = std::getenv("TT_MOE_MUX_L1_CHECK");
+        return v ? static_cast<uint32_t>(std::strtoul(v, nullptr, 10)) : 0u;
+    }();
+    return m;
+}
+inline std::atomic<size_t>& moe_mux_last_map_end() {
+    static std::atomic<size_t> v{0};
+    return v;
 }
 
 struct SelectiveReduceCombineParams {

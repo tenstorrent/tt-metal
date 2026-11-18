@@ -269,6 +269,7 @@ auto plan_mux_workers(
         channel_buffer_size_bytes,
         l1_unreserved_base_address,
         usable_l1_end_address);
+    ttnn::experimental::prim::moe_mux_last_map_end().store(mux_config.get_memory_map_end_address());
     log_debug(
         tt::LogOp,
         "selective_reduce_combine fabric mux v2: {} channels x {} buffers x {} B, memory map [{}, {}) under {}, {} "
