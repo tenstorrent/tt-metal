@@ -170,3 +170,14 @@ def test_random_ops_invariants_and_more_than_4_conversations(seed):
     # 8 conversations of <= 14+ blocks (+shared 6) do not all fit in 120 pages, but several survive
     held = sum(1 for c in convs if len(st.shadow_chain(0, BS.digests_of(c))) > 6)
     assert held >= 1
+
+
+def test_b8_user_slot_bases():
+    """HY4_B8_ON32: 2 users per row, user slot u owns pages [u*ppu,(u+1)*ppu), shadow after both: page ids are absolute"""
+    ppu = 1000
+    st = BS.ShadowStore(rows=1, shadow_pages=8, shadow_base=2 * ppu)
+    a = toks(1, 3 * C)
+    out = st.plan_out(0, a, active_base=ppu)  # user slot 1
+    assert [o[0] for o in out] == [ppu, ppu + 1, ppu + 2] and all(2 * ppu <= o[1] < 2 * ppu + 8 for o in out)
+    p = st.plan_hit(0, np.concatenate([a, toks(2, 5)]), None, active_base=0)  # served into user slot 0
+    assert [d for _, d in p.copy_in] == [0, 1, 2] and all(s >= 2 * ppu for s, _ in p.copy_in)

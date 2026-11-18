@@ -55,7 +55,11 @@ class HitPlan:
 
 
 class ShadowStore:
-    def __init__(self, rows=4, shadow_pages=0, chunk=CHUNK, tip_sessions=1, depth_weight=0.0, margin_tokens=1):
+    def __init__(
+        self, rows=4, shadow_pages=0, chunk=CHUNK, tip_sessions=1, depth_weight=0.0, margin_tokens=1, shadow_base=0
+    ):
+        # shadow_base: first pool page of the shadow region (= users_per_row * pages_per_user: HY4_B8_ON32 puts user slot u at pages [u*ppu,(u+1)*ppu), the shadow after both)
+        self.shadow_base = int(shadow_base)
         self.rows, self.shadow_pages, self.chunk = rows, int(shadow_pages), chunk
         self.tip_sessions, self.depth_weight, self.margin = tip_sessions, float(depth_weight), margin_tokens
         self._blk = [dict() for _ in range(rows)]  # per row: digest -> _Blk
@@ -89,7 +93,7 @@ class ShadowStore:
         """deepest boundary s <= n - margin on the chunk grid (never a hit at s == 0 is enforced by the caller: 0 blocks)"""
         return max(0, (int(n_tokens) - self.margin) // self.chunk)
 
-    def plan_hit(self, row, tokens, resident=None, salt=b"", max_hit_blocks=None):
+    def plan_hit(self, row, tokens, resident=None, salt=b"", max_hit_blocks=None, active_base=0):
         """reusable prefix of ``tokens`` on ``row``. ``resident``: token array whose pool pages 0..len-1 are valid in the ACTIVE region of the row (the retained chain), or None.
         Active blocks are free (already in place); deeper shadow blocks are copied in. The hit is the deeper of the two (never both mixed except the active prefix + the shadow continuation).
         """
@@ -109,7 +113,7 @@ class ShadowStore:
         pins = []
         if m > a:
             for i in range(a, m):  # blocks a..m-1 come from the shadow
-                copy.append((chain[i].page, i))
+                copy.append((self.shadow_base + chain[i].page, active_base + i))
                 chain[i].pins += 1
                 pins.append(chain[i])
             self.stats["hit_blocks_shadow"] += m - a
@@ -171,7 +175,7 @@ class ShadowStore:
         while len(t) > self.tip_sessions:
             t.pop(next(iter(t)))
 
-    def plan_out(self, row, resident, salt=b"", session=None, keep_from=0):
+    def plan_out(self, row, resident, salt=b"", session=None, keep_from=0, active_base=0):
         """publish the blocks of the ACTIVE chain ``resident`` (about to be overwritten) that the shadow does not hold: [(active_page, shadow_page)] parent first. Stops at the first block that cannot get a page
         (blocks beyond it would have no parent). ``keep_from``: blocks below this index are not published (the new prompt keeps them in place, no overwrite). Run the copies BEFORE the overwrite.
         """
@@ -201,7 +205,7 @@ class ShadowStore:
             self._blk[row][d] = nb
             prot.add(d)
             parent = nb
-            plan.append((i, pg))
+            plan.append((active_base + i, self.shadow_base + pg))
             self.stats["published"] += 1
         if session is not None:
             self.set_tip(row, session, resident, salt)
