@@ -880,13 +880,12 @@ TT_ALWAYS_INLINE void topk_fused_ph0_to_2_pair() {
     TTI_SFPSWAP(0, p_sfpu::LREG6, p_sfpu::LREG7, p_sfpswap::ROWS_02_MAX);
     TTI_SFPTRANSP(0, 0, 0, 0);
 
-    // Phase 2, step 3.
+    // Phase 2, step 3. The stock SWAP(L2,L3,MAX) + SWAP(L2,L3,UNCONDITIONALLY) pair is one SWAP
+    // with the operands reversed (bit-identical: the compare is a total order on bit patterns).
     TTI_SFPSWAP(0, p_sfpu::LREG0, p_sfpu::LREG1, p_sfpswap::ALL_ROWS_MAX);
-    TTI_SFPSWAP(0, p_sfpu::LREG2, p_sfpu::LREG3, p_sfpswap::ALL_ROWS_MAX);
-    TTI_SFPSWAP(0, p_sfpu::LREG2, p_sfpu::LREG3, p_sfpswap::UNCONDITIONALLY);
+    TTI_SFPSWAP(0, p_sfpu::LREG3, p_sfpu::LREG2, p_sfpswap::ALL_ROWS_MAX);
     TTI_SFPSWAP(0, p_sfpu::LREG4, p_sfpu::LREG5, p_sfpswap::ALL_ROWS_MAX);
-    TTI_SFPSWAP(0, p_sfpu::LREG6, p_sfpu::LREG7, p_sfpswap::ALL_ROWS_MAX);
-    TTI_SFPSWAP(0, p_sfpu::LREG6, p_sfpu::LREG7, p_sfpswap::UNCONDITIONALLY);
+    TTI_SFPSWAP(0, p_sfpu::LREG7, p_sfpu::LREG6, p_sfpswap::ALL_ROWS_MAX);
     TTI_SFPTRANSP(0, 0, 0, 0);
 
     // Phase 2, steps 2 and 1.
