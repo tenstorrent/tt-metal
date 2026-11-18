@@ -226,3 +226,7 @@ PERF FOCUS 4 (256×6144 @ 6144×18432 bf16, swiglu; 96 cores, block 8×6): DRAM 
 ## Refinement 13 — split output (`chunks`)
 - **No CB change.** `cb_output_tiles` keeps its size and its single producer (compute) / single consumer (writer). The reader still writes its tail share straight out of that CB's L1 under the existing post / done handshake, without popping it.
 - **Data-movement budget unchanged.** The output is written once, tile by tile, as before; only the destination tensor of each tile column changes (`kernels/out_chunks.hpp`). There is no full-width intermediate and no extra op. The `chunks` tensors are DRAM (or L1) interleaved like the unsplit output: `l1_cb_budget` counts all of them when they live in L1.
+
+## Refinement 14 — A as K segments (list `input_tensor`)
+- **No CB change.** `cb_act_tiles` keeps its size, its producer (the reader; R1b: the writer) and its consumer (compute). Only the source address of each A tile changes (`kernels/a_segments.hpp`).
+- **Data-movement budget unchanged.** A is read exactly as often as the single-tensor call reads the concatenation (same split, blocking and A residency); there is no concat intermediate and no extra op. When the segments live in L1, `l1_cb_budget` counts every one of them.

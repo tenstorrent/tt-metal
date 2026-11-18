@@ -29,7 +29,7 @@
 
 | Name | Type | Required | Valid Range | Default | CT/RT |
 |------|------|----------|-------------|---------|-------|
-| `input_tensor` (A) | ttnn.Tensor | yes | rank 2–4, TILE, (..., M, K) | — | addresses RT |
+| `input_tensor` (A) | ttnn.Tensor, or a list of K segments | yes | rank 2–4, TILE, (..., M, K); a list: every A_i (..., M, K_i) with the same leading dims / dtype / layout / memory config, K_i % 32 == 0, Σ K_i == B[-2] (else `ValueError`), interleaved only (else `UnsupportedAxisValue`) | — | addresses RT; > 1 segment: `GM_A_SEGMENTS` define (reader + writer), segment table RT |
 | `weight` (B) | ttnn.Tensor | yes | (K, N), or (..., K, N) with leading dims == A's | — | address RT |
 | `bias` | ttnn.Tensor | no | (1, N) (padded to one tile row) | None | address RT; presence CT |
 | `activation` | str | no | None, "relu" (needs bias), "swiglu" (no bias/residual) | None | epilogue CT |
@@ -92,6 +92,8 @@ The contract checks run **before** the support gate. A call such as `activation=
 | Memory | `memory_config` (default DRAM interleaved). height/block_sharded: exactly the requested shard spec. dram_sharded (`L1_WIDTH_SHARDED_MEMORY_CONFIG` with no spec): the op builds `MemoryConfig(WIDTH_SHARDED, L1, ShardSpec(worker_cores, [M_pad_total, out_shard_w_tiles·32], ROW_MAJOR))` |
 
 Allocation: `ttnn.allocate_tensor_on_device(ttnn.Shape(out_shape), out_dtype, TILE_LAYOUT, device, out_mc)` (positional args). Dispatch: `ttnn.generic_op([A, B, <bias/gate/residual present>, out], program_descriptor)`, with the output last. This is exactly one dispatch.
+
+**A as K segments (a list `input_tensor`, Refinement 14).** A = concat(A_0, .., A_{s-1}, dim=-1) is never built. The host plans on the logical A (segment 0's shape with K = Σ K_i; segment 0 stands in for every per-tensor property: dtype, page size, accessor args, L1 residency) and passes every segment to `generic_op`. The reader's `read_act` (R1, R1a injectors, every residency / head-ramp walk) and R1b's A-streaming writer map global K tile kt to segment s and local tile kt − cum_s through `kernels/a_segments.hpp`: segment 0's address is the existing A-address arg, `[kt_0 .. kt_{s-1}, addr_1 .. addr_{s-1}]` follows in the RT args (the reader: right after `own_kb`; the R1b writer: after its A address / K). The segment is located once per K-block and a K-block row that straddles a boundary is read as one run per segment. One segment is the single-tensor call; without `GM_A_SEGMENTS` the page arithmetic is the old one.
 
 **Split output (`chunks` > 1, Refinement 13).** The op allocates `chunks` tensors of shape A[:-1] + [N_out / chunks] (each with `memory_config` and `dtype`) and returns them as a list; `generic_op` gets all of them last. The program is the unsplit one: same split, blocking, compute. Only the store address changes. The host geometry is the logical output (the chunks side by side). The writer and the reader's tail-write share map output tile column gc to chunk gc / w, local column gc % w (w = chunk width in tiles), through `kernels/out_chunks.hpp`. Chunk 0's address is the existing output-address RT arg; chunks 1.. are appended to the RT args. The chunks share one memory config, so one `TensorAccessorArgs` serves all of them. A block row that straddles a chunk boundary is written as one run per chunk; the chunk is located once per block.
 

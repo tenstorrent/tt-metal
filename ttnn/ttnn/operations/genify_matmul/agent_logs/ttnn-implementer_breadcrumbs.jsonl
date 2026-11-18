@@ -38,3 +38,4 @@
 {"event":"fix_applied","detail":"tail split scoped to the last block-batch of the last block (writer bi+1==block_batches; reader t_bi)","ts":"2026-11-17T23:32:38+00:00"}
 {"event":"test_run","result":"pass","detail":"tail_split 10/10, golden targets plain+dev 3/3, golden batched interleaved 78p/15xf, unit 105/105; bfp8 H pass 66.6->67.6us median (noise)","ts":"2026-11-17T23:32:38+00:00"}
 {"event":"test_run","refinement":13,"result":"pass","golden_chunks":"6/6","unit_regression":"172/172","unit_chunks":"23/23","perf":"QKV img 963.9->962.8, single QKV 1122.1->1121.1, time_mod 1602.7->1605.5, QKV txt median 325.4 vs 328.8 (noise)","ts":"2026-11-18T00:07:55+00:00"}
+{"event":"test_run","refinement":14,"result":"pass","golden_concatK":"3/3","unit_new":"19/19","unit_regression":"132/132","perf_us":{"single_out_2304":[1425.9,1426.4],"final_2048":[1202.3,1201.7]},"ts":"2026-11-18T00:32:45+00:00"}

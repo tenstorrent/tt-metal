@@ -115,6 +115,7 @@
 #include "ttnn/cpp/ttnn/kernel_lib/perf_instrumentation.hpp"
 #include "ttnn/ttnn/operations/genify_matmul/kernels/tail_split.hpp"
 #include "ttnn/ttnn/operations/genify_matmul/kernels/out_chunks.hpp"
+#include "ttnn/ttnn/operations/genify_matmul/kernels/a_segments.hpp"
 #include "ttnn/ttnn/operations/genify_matmul/kernels/genify_matmul_kschedule.hpp"
 
 // R1a injector stall-shadow (Refinement 11, host R1A_INJECTOR_AHEAD): a line injector issues K-block kb+1's
@@ -321,6 +322,9 @@ void kernel_main() {
     [[maybe_unused]] const uint32_t row_addr = get_arg_val<uint32_t>(arg++);
     [[maybe_unused]] const uint32_t res_addr = get_arg_val<uint32_t>(arg++);
     [[maybe_unused]] const uint32_t own_kb = get_arg_val<uint32_t>(arg++);  // R3: this core's K shard (grid column)
+    // Refinement 14: A as K segments (interleaved R1 / R1a only; a_segments.hpp). Segment 0 is a_addr; with
+    // GM_A_SEGMENTS > 1 the segment widths / addresses follow here.
+    const a_segments::Table a_tab = a_segments::read_table(a_addr, tensor_k_tiles, arg);
 #if TAIL_SPLIT_MODE != 0
     // tail_writes_both_nocs: the writer's output region (same RT layout as the writer's first 12 args).
     constexpr auto out_args = TensorAccessorArgs<res_args.next_compile_time_args_offset()>();
@@ -433,12 +437,28 @@ void kernel_main() {
     // `a_stride`: the slot's A row stride in tiles (block_k; the delivery's K width under GM_COMPACT_A).
     auto read_act =
         [&](uint32_t act_l1, uint32_t a_row_base, uint32_t k0, uint32_t blk_rows, uint32_t k_valid, uint32_t a_stride) {
-            for (uint32_t r = 0; r < blk_rows; ++r) {
-                uint32_t page = (a_row_base + r) * tensor_k_tiles + k0;
-                uint32_t l1 = act_l1 + r * a_stride * a_tile_bytes;
-                for (uint32_t k = 0; k < k_valid; ++k) {
-                    noc_async_read(a_acc.get_noc_addr(page + k), l1, a_tile_bytes);
-                    l1 += a_tile_bytes;
+            if constexpr (a_segments::num > 1) {
+                // Refinement 14: the K-block's rows of concat(A_i) -- one run per segment it touches.
+                const a_segments::Pos at = a_segments::locate(a_tab, k0);
+                for (uint32_t r = 0; r < blk_rows; ++r) {
+                    a_segments::read_row(
+                        a_args,
+                        a_tab,
+                        a_page_bytes,
+                        a_tile_bytes,
+                        act_l1 + r * a_stride * a_tile_bytes,
+                        a_row_base + r,
+                        at,
+                        k_valid);
+                }
+            } else {
+                for (uint32_t r = 0; r < blk_rows; ++r) {
+                    uint32_t page = (a_row_base + r) * tensor_k_tiles + k0;
+                    uint32_t l1 = act_l1 + r * a_stride * a_tile_bytes;
+                    for (uint32_t k = 0; k < k_valid; ++k) {
+                        noc_async_read(a_acc.get_noc_addr(page + k), l1, a_tile_bytes);
+                        l1 += a_tile_bytes;
+                    }
                 }
             }
         };

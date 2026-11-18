@@ -453,7 +453,7 @@ Golden: the six `test_op_feature[..._chunksN-...]` cases:
 
 **Outcome**: the writer (and the reader's tail-write share) route each output tile column to its chunk through an address table in the runtime args (`kernels/out_chunks.hpp`); split, blocking and compute unchanged. All six golden cases pass (PCC >= 0.99999 per chunk). Device ns, `chunks` vs the same LOOSE call: double QKV img 962.8 vs 963.9 us; single QKV 1121.1 vs 1122.1 us; time_mod 1605.5 vs 1602.7 us (+0.2%); double QKV txt, 3 runs each, median 328.8 vs 325.4 us (+1.0%, both spread 320-336 us: noise). The split is free. The bottleneck is the matmul itself; nothing left to do for chunks.
 
-### [ ] Refinement 14 — A as a list of K segments (FLUX.2 single-block out = [attention | MLP])
+### [x] Refinement 14 — A as a list of K segments (FLUX.2 single-block out = [attention | MLP])
 
 *Filed by the run operator for the #65150 follow-up.*
 
@@ -472,6 +472,8 @@ Golden: the three `test_op_feature[..._concatK...]` cases.
 - The three cases pass.
 - Both FLUX.2 cases run within 2% of the single-tensor call of the same shape; LOOSE_CASES has the single out.
 - Golden is green, and nothing else is slower.
+
+**Outcome**: the reader's `read_act` (R1 / R1a, every residency / head-ramp variant) and R1b's A-streaming writer map global K tile kt to its segment and local tile through a segment table in their RT args (`kernels/a_segments.hpp`); the split, blocking, CBs and compute kernel are those of the single-tensor call (the host plans on the logical concat shape). All three golden `concatK` cases pass. Device ns, segments vs the single-tensor LOOSE call: single out M = 2304 1425.9 vs 1426.4 us; final block M = 2048 1202.3 vs 1201.7 us (both within 0.05%). The concat is free. The bottleneck is the matmul itself; nothing left to do for the segmented A.
 
 ### [ ] Refinement 15 — Small-M weight streaming at the DRAM roofline (Qwen3.8 M = 128, FLUX.2 prompt stream, M = 1)
 

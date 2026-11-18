@@ -398,10 +398,27 @@ def _out_list(out):
     return list(out) if isinstance(out, (list, tuple)) else [out]
 
 
+def _a_list(a):
+    """The A operand(s): one tensor, or the K segments [A_0, A_1, ...] of A = concat(A_i, dim=-1) (Refinement 14;
+    interleaved placement only). The segments share leading dims, M, dtype and memory config, so segment 0 stands
+    in for every per-tensor property; the geometry is the LOGICAL A, the segments side by side along K."""
+    return list(a) if isinstance(a, (list, tuple)) else [a]
+
+
+def _a_segment_table(a_segs):
+    """The reader / R1b-writer RT segment table (kernels/a_segments.hpp): [kt_0, .., kt_{s-1}, addr_1, ..,
+    addr_{s-1}] for s > 1 segments, empty for one tensor (segment 0's address is the existing A-address arg)."""
+    if len(a_segs) == 1:
+        return []
+    return [_cdiv(list(t.shape)[-1], TILE) for t in a_segs] + [t.buffer_address() for t in a_segs[1:]]
+
+
 def _geometry(a, b, out, fp32_dest_acc_en, epilogue="none", row=None, residual=None, math_fidelity=None):
     outs = _out_list(out)
     out = outs[0]
-    a_shape = list(a.shape)
+    a_segs = _a_list(a)
+    a = a_segs[0]
+    a_shape = list(a.shape)[:-1] + [sum(list(t.shape)[-1] for t in a_segs)]
     b_shape = list(b.shape)
     lead = a_shape[:-2]
     img_m_tiles = _cdiv(a_shape[-2], TILE)
@@ -993,7 +1010,7 @@ def plan(a, b, out, fp32_dest_acc_en, device, epilogue="none", row=None, residua
     geom = _geometry(a, b, out, fp32_dest_acc_en, epilogue, row, residual, math_fidelity)
     grid_size = device.compute_with_storage_grid_size()
     gx, gy = grid_size.x, grid_size.y
-    budget = l1_cb_budget(device, [t for t in (a, b, *_out_list(out), row, residual) if t is not None])
+    budget = l1_cb_budget(device, [t for t in (*_a_list(a), b, *_out_list(out), row, residual) if t is not None])
     grid, blocking = choose_split(geom, gx, gy, budget)
     return geom, grid, blocking, (gx, gy)
 
@@ -1132,7 +1149,8 @@ def create_program_descriptor(
         return create_block_sharded_program_descriptor(
             a, b, out, compute_config, epilogue=epilogue, row=row, residual=residual, placement=placement
         )
-    device = a.device()
+    a_segs = _a_list(a)  # Refinement 14: A as K segments (R1 family only)
+    device = a_segs[0].device()
     geom, grid, blk, (gx, gy) = plan(
         a,
         b,
@@ -1152,6 +1170,10 @@ def create_program_descriptor(
     out = outs[0]
     out_row_tiles = geom.out_n_tiles // len(outs)  # tiles per tile row of ONE output tensor
     chunk_addrs = [o.buffer_address() for o in outs[1:]]
+    # A as K segments (Refinement 14): segment 0 stands in for A's per-tensor properties; the reader (and R1b's
+    # A-streaming writer) map each K tile to its segment through the table in their RT args (a_segments.hpp).
+    a = a_segs[0]
+    a_seg_table = _a_segment_table(a_segs)
 
     out_block_n_tiles = geom.out_block_n(blk.block_n_tiles)  # swiglu halves the output width
     cb_row = CB_GATE_ROW if epilogue == "addcmul" else CB_BIAS_ROW
@@ -1255,10 +1277,11 @@ def create_program_descriptor(
             row_addr,
             res_addr,
             NO_OWN_KB,
+            *a_seg_table,
         ]
         # The writer walks output columns: swiglu halves col0 / cols_valid (both even, q_n >= 2).
         out_region = [b0, batches_valid, row0, rows_valid, col0 // out_div, cols_valid // out_div, nb_b, nb_m, nb_n]
-        a_stream_rt = [a_addr, geom.tensor_k_tiles] if act_stream else []  # R1b: the writer reads A
+        a_stream_rt = [a_addr, geom.tensor_k_tiles, *a_seg_table] if act_stream else []  # R1b: the writer reads A
         wrt = [out_addr, *out_region, geom.tensor_m_tiles, out_row_tiles, *a_stream_rt, *chunk_addrs]
         # Tail write split (Perf 2): the reader serves part of the last block's writes on NoC0.
         reader_args[(core.x, core.y)] += [out_addr, *out_region, geom.tensor_m_tiles, out_row_tiles, *chunk_addrs]
@@ -1318,6 +1341,9 @@ def create_program_descriptor(
     if len(outs) > 1:
         for k in (*readers, writer):
             k.defines = list(k.defines) + [("GM_OUT_CHUNKS", str(len(outs)))]
+    if len(a_segs) > 1:
+        for k in (*readers, writer):
+            k.defines = list(k.defines) + [("GM_A_SEGMENTS", str(len(a_segs)))]
     _attach_k_head_ramp(readers, compute, blk, mode, epilogue)
     walk, *streams = split_cost_terms(geom, grid, blk)
     if NONE_RAW_WALK and epilogue == "none" and walk >= NONE_RAW_WALK_MIN_RATIO * max(streams):

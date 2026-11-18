@@ -42,6 +42,7 @@
 #include "ttnn/cpp/ttnn/kernel_lib/perf_instrumentation.hpp"
 #include "ttnn/ttnn/operations/genify_matmul/kernels/tail_split.hpp"
 #include "ttnn/ttnn/operations/genify_matmul/kernels/out_chunks.hpp"
+#include "ttnn/ttnn/operations/genify_matmul/kernels/a_segments.hpp"
 
 namespace {
 // Valid extent of a block starting at `start` inside a region of `valid` tiles (0 when the block lies
@@ -111,6 +112,11 @@ void kernel_main() {
     // R4 A rounds: the A shard's L1 address. R1b: A's buffer address.
     [[maybe_unused]] const uint32_t a_addr = act_mode != 0 ? get_arg_val<uint32_t>(arg++) : 0;
     [[maybe_unused]] const uint32_t tensor_k_tiles = act_stream ? get_arg_val<uint32_t>(arg++) : 0;  // R1b
+    // Refinement 14: R1b's A as K segments (a_segments.hpp): the segment table follows (GM_A_SEGMENTS > 1).
+    [[maybe_unused]] a_segments::Table a_tab{};
+    if constexpr (act_stream) {
+        a_tab = a_segments::read_table(a_addr, tensor_k_tiles, arg);
+    }
     // Refinement 13 split output: chunk 0 is out_addr, chunks 1.. follow (out_chunks.hpp).
     const out_chunks::Table out_tab = out_chunks::read_table(out_addr, out_n_tiles, arg);
 
@@ -183,12 +189,27 @@ void kernel_main() {
                                     ring_base + ((act_seq + j - issued_from) % act_cb_blocks) * act_block_bytes;
                                 const uint32_t k_valid = (j == num_k_blocks - 1) ? last_block_k_tiles : block_k_tiles;
                                 dataflow_kernel_lib::set_read_trid(noc, j % act_ahead + 1);
-                                for (uint32_t r = 0; r < blk_rows; ++r) {
-                                    const uint32_t page = (row0 + blk_r0 + r) * tensor_k_tiles + j * block_k_tiles;
-                                    uint32_t l1 = l1_slot + r * block_k_tiles * a_tile_bytes;
-                                    for (uint32_t k = 0; k < k_valid; ++k) {
-                                        noc_async_read(a_acc.get_noc_addr(page + k), l1, a_tile_bytes);
-                                        l1 += a_tile_bytes;
+                                if constexpr (a_segments::num > 1) {
+                                    const a_segments::Pos at = a_segments::locate(a_tab, j * block_k_tiles);
+                                    for (uint32_t r = 0; r < blk_rows; ++r) {
+                                        a_segments::read_row(
+                                            a_args,
+                                            a_tab,
+                                            a_page_bytes,
+                                            a_tile_bytes,
+                                            l1_slot + r * block_k_tiles * a_tile_bytes,
+                                            row0 + blk_r0 + r,
+                                            at,
+                                            k_valid);
+                                    }
+                                } else {
+                                    for (uint32_t r = 0; r < blk_rows; ++r) {
+                                        const uint32_t page = (row0 + blk_r0 + r) * tensor_k_tiles + j * block_k_tiles;
+                                        uint32_t l1 = l1_slot + r * block_k_tiles * a_tile_bytes;
+                                        for (uint32_t k = 0; k < k_valid; ++k) {
+                                            noc_async_read(a_acc.get_noc_addr(page + k), l1, a_tile_bytes);
+                                            l1 += a_tile_bytes;
+                                        }
                                     }
                                 }
                             };
