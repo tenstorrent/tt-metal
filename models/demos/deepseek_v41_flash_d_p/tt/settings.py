@@ -213,8 +213,13 @@ TABLE = {
         "to the reference's fp32 mixes); the rest are data moves",
     ),
     "STATIC_TABLES": Setting(
-        "on",
+        "off",
         ("on", "off"),
+        "OWNER DECISION 2026-11-18 (FIX.38): default off, P.74's A/B: off at 1M +11.8 ms wall / +10 %, accuracy and "
+        "determinism identical; the per-user replicated table removed (2.5 GiB a user a chip at 1M; off holds shared "
+        "gather buffers instead, one per gathered source with HISTORY_GATHER_HIDE=on); item 4 of the slot-state page "
+        "solved. off runs with HISTORY_GATHER=rows and the persistent buffers (P.74) and HISTORY_GATHER_HIDE=on (P.75). "
+        "on stays the alternative. "
         "P.21 (owner comparison 2026-10-22, fusion report item 3): the sparse-attention table of the compressed layers. "
         "on = ONE persistent table per KV source and slot (tt/compressor.AttnTable, allocated with the source's served "
         "compressed cache): [compressed history in natural order (group j at row j), max_seq / r rows | window region "
@@ -223,8 +228,8 @@ TABLE = {
         "layer slice_writes its [carry | chunk] window rows into the region (the layers of one source run in order "
         "and reuse it), and the index list is [load-time window ids + the region's base | the top-k ids as they are]: "
         "mesh_partition + concat (+ the compaction gather for starts < 128). No per-chunk gather / concat of the "
-        "history, no top-k -> table-row remap; the table's shape is the same in every chunk. off = the P.19 path "
-        "(the history gathered over the mesh per chunk, [window | history] concat, the fp32 integer remap). Data "
+        "history, no top-k -> table-row remap; the table's shape is the same in every chunk. off (the default) = no "
+        "table: the history gathered over the mesh per chunk (HISTORY_GATHER; P.19, P.74), [window | history], the remap. Data "
         "moves only (the same bf16 rows and the same keys per query): not a precision switch. Memory: a replicated "
         "copy of each source's compressed KV per slot (2x2 at 57,344: r2 28 MiB, r1 56 MiB a chip)",
     ),

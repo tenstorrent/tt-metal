@@ -157,8 +157,9 @@ until the owner decides from the A/B).**
   - p < g (encoder replay): layers 0-19 run; every encoder window is truncated at the chunk's start (begin_chunk's
     replay: carry masked, start class 0); the compressed KV and index keys (and layer 20's) are read as cached and no
     row of a position < g is written: the served row write starts at g (the chunk's rows shifted by (g - start) / r and
-    written as a chunk at g), the private attention table's rows below g are put back as they were, and a KV source
-    whose chunk lies wholly below g skips its compressor. Layer 20's KV / index head (kv_only) does not run on a chunk
+    written as a chunk at g); under STATIC_TABLES=on (not the default since FIX.38) the private attention table's
+    rows below g are put back as they were (off, the default, has no private table: it gathers the served rows); a KV
+    source whose chunk lies wholly below g skips its compressor. Layer 20's KV / index head (kv_only) does not run on a chunk
     wholly below g.
   - p >= g: layers 0-19 plus layer 20's KV / index head (attn_hc, attn_collapse, attn_norm, compressor), writes as
     before.

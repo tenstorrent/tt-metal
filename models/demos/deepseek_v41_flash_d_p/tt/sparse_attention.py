@@ -38,7 +38,7 @@ TtWindowAttention's load-time list; the top-k's sentinels are already a tail (in
 
 No host work per chunk: the per-chunk inputs are integers (start, end) picking load-time tables and scalars.
 
-STATIC_TABLES=on (P.21, the default): the table above is not rebuilt per chunk. Each KV source keeps ONE persistent
+STATIC_TABLES=on (P.21; the alternative since FIX.38, default off): the table above is not rebuilt per chunk. Each KV source keeps ONE persistent
 table per slot (tt/compressor.AttnTable, made with its served compressed cache): [the history in natural order, group
 j at row j, max_seq / r rows | window region 128 + S at base = max_seq / r]. The compressor appends the chunk's
 groups with one slice_write (the replicated natural-order rows it writes into the served cache), a host load of the

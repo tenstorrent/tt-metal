@@ -2543,3 +2543,19 @@ Measured (8x4, `gate FIX.31 --check`, after the last edit)
 - Not built: (b) the token-id readback window (the same idle span one step earlier; (a) already fills most of it at
   1M: host gap 17.9 ms left) and (c) riding the indexer's ring (shares its SP routers, P.73). No Python-built op added
   (OV-23); no fork touched or regression-run (OV-25).
+
+## FIX.38 overseer fix (attempt 1): STATIC_TABLES=off the shipped default (owner 2026-11-18)
+
+- Change: tt/settings.py STATIC_TABLES default "on" -> "off", reason text = owner decision 2026-11-18, P.74's A/B (off at
+  1M +11.8 ms wall / +10 %, accuracy and determinism identical; the per-user replicated table, 2.5 GiB a user a chip at
+  1M, removed; item 4 of the slot-state page solved). HISTORY_GATHER stays "rows" (P.74, persistent buffers) and
+  HISTORY_GATHER_HIDE stays "on" (P.75 passed its gate, no A/B pending: accepted). STATIC_TABLES=on is untouched and
+  still selectable (DS41_STATIC_TABLES=on). Defaults checked compatible with off: CKV_FORMAT=bf16 (bfp4_rows still
+  asserts STATIC_TABLES=on, compressor.py:497), WINDOW_KV_FORMAT=bf16_tiles (off path since P.72, DS41-282).
+- Docs: sparse_attention.py docstring (on = the alternative), serving_contract.md (the private table's put-back under
+  encoder replay is on-only), known_issues DS41-101 (the table is the on path; its stale "default bfp4_rows" dropped).
+- Gate check on the new default (X.4's units, one process + skip_positions): PASS. err_final_hidden 0.127 (limit
+  0.242), top5_overlap 1.0, determinism 0.0 / 0.0 (decoder skip), contract_checks_failed 0 / 0, acks_early 0,
+  unwritten_records_changed 0, steady wall p51200 105.7 ms, p1024000 120.7 ms (P.75's on side: 118.3-125.4 ms at 1M).
+- Re-run: `PYTHONPATH=$PWD python -m models.demos.common.bringup gate FIX.38 --spec
+  models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/spec.yaml --check`.

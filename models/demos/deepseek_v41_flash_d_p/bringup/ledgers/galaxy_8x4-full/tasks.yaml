@@ -1619,6 +1619,47 @@ tasks:
       ~5-10 min (cluster health handling); stop device work at the first hang, report, and let the overseer handle the box.'
     gate_tasks:
     - FIX.34
+- id: FIX.38
+  title: 'STATIC_TABLES=off by default (owner 2026-11-18): no per-user, per-chip KV history'
+  step: overseer_fix
+  role: overseer
+  precheck: false
+  deps:
+  - X.4
+  gate:
+    cmd: BRINGUP_TASK=X.4 BRINGUP_RUNG=last scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_ladder.py
+      && BRINGUP_TASK=X.4 scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_determinism.py
+      && BRINGUP_TASK=X.4 scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/test_determinism.py
+      && BRINGUP_TASK=X.4 scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/test_decoder_skip_decode.py
+      && BRINGUP_TASK=X.4 scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_contract.py
+      && BRINGUP_TASK=X.4 scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/bringup/contract/test_adapter_acks.py
+      && BRINGUP_TASK=X.4 DS41_DECODER_SKIP=decode scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/test_skip_positions.py
+    metrics:
+      err_layer_L*: <= limit
+      err_state_*_L*: <= limit
+      err_final_hidden: <= limit
+      top5_overlap: '>= limit'
+      determinism_max_abs_diff: == 0
+      determinism_max_abs_diff_decoder_skip: == 0
+      contract_checks_failed: == 0
+      acks_early: == 0
+      contract_checks_failed_decoder_skip: == 0
+      unwritten_records_changed_decoder_skip: == 0
+      steady_wall_ms_p51200: '> 0'
+      steady_wall_ms_p1024000: '> 0'
+  device: true
+  paths:
+  - models/demos/deepseek_v41_flash_d_p/tt
+  - models/demos/deepseek_v41_flash_d_p/bringup
+  brief:
+    details: 'OWNER 2026-11-18: make STATIC_TABLES=off the shipped default in tt/settings.py (the reason text: owner decision
+      2026-11-18, P.74''s A/B: off at 1M +11.8 ms wall / +10 %, accuracy and determinism identical; the per-user replicated
+      table removed; item 4 of the slot-state page solved), with HISTORY_GATHER=rows and the persistent buffers (P.74); HISTORY_GATHER_HIDE''s
+      default as P.75 was decided (on if accepted). Keep STATIC_TABLES=on working as the alternative. No other change. Update
+      serving_contract.md / known_issues where they say the table is the default. The gate (X.4''s: ladder last, both determinism,
+      decoder skip, contract, adapter acks, positions) runs on the new default.'
+    gate_tasks:
+    - X.4
 - id: FIX.13
   title: 'DS41-141: is P.9''s window-KV rise rounding or a bug (device allowed)'
   step: overseer_fix
@@ -1635,6 +1676,7 @@ tasks:
   - FIX.32
   - FIX.33
   - FIX.36
+  - FIX.38
   gate:
     cmd: BRINGUP_TASK=K.1 scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_contract.py
       && BRINGUP_TASK=K.1 scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/bringup/contract/test_kv_layout.py
@@ -4674,8 +4716,8 @@ tasks:
       resumed_wall_ms_p1024000: '> 0'
       e2e_wall_s_p1024000: '> 0'
 - id: P.73
-  title: 'OWNER 2026-11-18: hide the history all-gather of STATIC_TABLES=off behind compute (sub-device overlap), so the
-    served-state-only path costs close to the persistent table'
+  title: 'OWNER 2026-11-18: hide the history all-gather of STATIC_TABLES=off behind compute (sub-device overlap), so the served-state-only
+    path costs close to the persistent table'
   step: perf
   role: perf
   device: true
@@ -4688,32 +4730,33 @@ tasks:
   - models/demos/deepseek_v41_flash_d_p/bringup/known_issues.md
   - ttnn/ttnn/bringup
   brief:
-    details: 'OWNER 2026-11-18 (per-slot private state phase, step 4). Goal: STATIC_TABLES=off (the path that reads only
-      the served compressed cache, correct when a slot''s history was written by someone else) at close to STATIC_TABLES=on
-      speed, by running its per-chunk history all-gather concurrently with compute. Today (P.72, 8x4, DECODER_SKIP=decode,
-      steady chunk) off costs vs on: wall +4.6 ms at 51k, +10 at 256k, +25 at 768k, +33 at 1M; device +2.5 .. +30 ms. The
-      gather (sparse_attention.py _compressed / _gather_mesh, high_bw_all_gather TP then SP) runs once per KV source per
-      chunk at the first layer reading it (layers 2, 8, 14 under decode), after the compressor and indexer, before sparse
-      attention, serialized with everything on the one CQ. Read first: /scratch/dnijemcevic/phase_1117/step1_report.md
-      (code reading, file:line): ops on one CQ serialize per sub-device (go signal waits for the whole sub-device), so
-      overlap needs a sub-device split; deepseek_v3_d_p already does exactly this on one CQ (V3 tt_ccl.py:46-60, 336-355;
-      mla/mla.py:2009-2049, 2468-2475: load_sub_device_manager, top-k on rows 1-9 and high_bw_all_gather on row 0 next to
-      the Ethernet row with subdevice_id + sub_core_grids + its own semaphores, clear_loaded_sub_device_manager as the
-      join). Costs to check: load/clear drains the CQ on the device (once per region, not a host sync); sub-device-local L1
-      allocations block a load (ffn_feed''s persistent L1); inside the region every op must fit its sub-device grid (today
-      11x10 at (0,0); a row-0 gather leaves 12x9 from (0,1)). The history rows [0, start) are complete before the chunk
-      starts, so the gather of a source needs nothing of the chunk: options, in this order: (a) start the gather of source
-      s at the beginning of layer s''s attention block and overlap it with that layer''s compressor + indexer (the
-      indexer needs only k8 and the queries); (b) start it earlier (behind layers 0-1 for source 2; behind the previous
-      source''s layers for 8 and 14), holding the gathered buffer until layer s, if (a) does not hide enough. Measure
-      what you hide, per source and position. Put it behind a new switch in tt/settings.py (e.g. HISTORY_GATHER_OVERLAP
-      off|on, default off; only meaningful with STATIC_TABLES=off). Hard requirements: bit-identical outputs with the
-      switch on vs off (the same gathered rows, the same keys) and determinism unchanged (the gate checks both); no new
-      hang: at the first device hang stop device work and report (each hang so far took the node down). Every Python-built
-      op through ttnn.bringup.prepare_program / run_prepared. No fork regression or unit suites on the 8x4; only the tests
-      you add and the model-level checks. If the split cannot work (L1, grids, a CCL that cannot take a sub-device), stop
-      with the evidence and the next option, do not force it. Report short: what is hidden at each position, device and
-      wall, vs off and vs on (P.72''s table). ATTEMPT 2 (overseer 2026-11-18): first fix the hang your A/B hit at 07:06 (STATIC_TABLES=off + this switch on, test_skip_positions; see the open notes): loop, cap, prove >= 20 clean rounds per switch value, then stop; the orchestrator measures.'
+    details: 'OWNER 2026-11-18 (per-slot private state phase, step 4). Goal: STATIC_TABLES=off (the path that reads only the
+      served compressed cache, correct when a slot''s history was written by someone else) at close to STATIC_TABLES=on speed,
+      by running its per-chunk history all-gather concurrently with compute. Today (P.72, 8x4, DECODER_SKIP=decode, steady
+      chunk) off costs vs on: wall +4.6 ms at 51k, +10 at 256k, +25 at 768k, +33 at 1M; device +2.5 .. +30 ms. The gather
+      (sparse_attention.py _compressed / _gather_mesh, high_bw_all_gather TP then SP) runs once per KV source per chunk at
+      the first layer reading it (layers 2, 8, 14 under decode), after the compressor and indexer, before sparse attention,
+      serialized with everything on the one CQ. Read first: /scratch/dnijemcevic/phase_1117/step1_report.md (code reading,
+      file:line): ops on one CQ serialize per sub-device (go signal waits for the whole sub-device), so overlap needs a sub-device
+      split; deepseek_v3_d_p already does exactly this on one CQ (V3 tt_ccl.py:46-60, 336-355; mla/mla.py:2009-2049, 2468-2475:
+      load_sub_device_manager, top-k on rows 1-9 and high_bw_all_gather on row 0 next to the Ethernet row with subdevice_id
+      + sub_core_grids + its own semaphores, clear_loaded_sub_device_manager as the join). Costs to check: load/clear drains
+      the CQ on the device (once per region, not a host sync); sub-device-local L1 allocations block a load (ffn_feed''s persistent
+      L1); inside the region every op must fit its sub-device grid (today 11x10 at (0,0); a row-0 gather leaves 12x9 from
+      (0,1)). The history rows [0, start) are complete before the chunk starts, so the gather of a source needs nothing of
+      the chunk: options, in this order: (a) start the gather of source s at the beginning of layer s''s attention block and
+      overlap it with that layer''s compressor + indexer (the indexer needs only k8 and the queries); (b) start it earlier
+      (behind layers 0-1 for source 2; behind the previous source''s layers for 8 and 14), holding the gathered buffer until
+      layer s, if (a) does not hide enough. Measure what you hide, per source and position. Put it behind a new switch in
+      tt/settings.py (e.g. HISTORY_GATHER_OVERLAP off|on, default off; only meaningful with STATIC_TABLES=off). Hard requirements:
+      bit-identical outputs with the switch on vs off (the same gathered rows, the same keys) and determinism unchanged (the
+      gate checks both); no new hang: at the first device hang stop device work and report (each hang so far took the node
+      down). Every Python-built op through ttnn.bringup.prepare_program / run_prepared. No fork regression or unit suites
+      on the 8x4; only the tests you add and the model-level checks. If the split cannot work (L1, grids, a CCL that cannot
+      take a sub-device), stop with the evidence and the next option, do not force it. Report short: what is hidden at each
+      position, device and wall, vs off and vs on (P.72''s table). ATTEMPT 2 (overseer 2026-11-18): first fix the hang your
+      A/B hit at 07:06 (STATIC_TABLES=off + this switch on, test_skip_positions; see the open notes): loop, cap, prove >=
+      20 clean rounds per switch value, then stop; the orchestrator measures.'
   ab:
     keep_default: true
     env:
@@ -4727,10 +4770,10 @@ tasks:
   - last
   gate:
     cmd: BRINGUP_RUNG=last scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_ladder.py
-      && scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_determinism.py
-      && scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/test_determinism.py
-      && scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/test_decoder_skip_decode.py
-      && DS41_DECODER_SKIP=decode scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/test_skip_positions.py
+      && scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_determinism.py && scripts/run_safe_pytest.sh
+      --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/test_determinism.py && scripts/run_safe_pytest.sh
+      --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/test_decoder_skip_decode.py && DS41_DECODER_SKIP=decode
+      scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/test_skip_positions.py
     metrics:
       err_layer_L*: <= limit
       err_state_*_L*: <= limit
@@ -4744,37 +4787,35 @@ tasks:
       steady_wall_ms_p1024000: '> 0'
       resumed_wall_ms_p1024000: '> 0'
 - id: X.4
-  title: 'Milestone (owner 2026-11-18): rebase onto main 8a317f39a8d, Marko''s MoE block with split rows (6208 B fabric
-    payload: the intermittent 8x4 hang fix), non-matmul stock ops on the full 120-core grid; recorded and verified'
+  title: 'Milestone (owner 2026-11-18): rebase onto main 8a317f39a8d, Marko''s MoE block with split rows (6208 B fabric payload:
+    the intermittent 8x4 hang fix), non-matmul stock ops on the full 120-core grid; recorded and verified'
   step: perf
   deps:
   - FIX.36
   brief:
-    details: 'Records work done outside the ledger on 2026-11-18 (overseer agents, owner in a hurry), verified here on
-      the final tree. (1) Rebase of the whole branch (llk_helper_library''s commits + ours) onto main 8a317f39a8d (the
-      main of origin/mstaletovic/moe-block-65124-split-rows): 2,800 commits + build fixes c0964d90f18 / 840413e7fd2;
-      report /data/dnijemcevic/bringup/handoff_20261118/rebase_report.md; ladder last, determinism passed then.
-      (2) MoE port: Marko''s 11 commits + int32 snap cherry-picked; fork ttnn.bringup.moe_block (5963cd7fdb3) with
-      weights_nk, set_max_grid (110), x pieces; model 60add9f88f6: MOE_BLOCK_SRC=block (default), MOE_BLOCK_SPLIT_ROWS=on,
-      fabric payload 6208 B (was 10880); old block kept as MOE_BLOCK_SRC=main; report moe_port_report.md: ladder last
-      err_final_hidden 0.1268 (was 0.1325), determinism 0, positions 51k..1M device 78.9..95.4 ms (was 80.7..98.4).
-      (3) Hang: with the 6208 B payload test_skip_hang_loop ran 64 rounds = 11,776 chunks at p256000 / p1024000 with no
-      hang and determinism 0 every round (old payload: a hang every ~1,300-3,000 chunks; cause per
-      hang_origin_report.md and ring_indexer_write_pattern.md: a chip''s NOC1 wedged by the fabric router''s large
-      non-posted DRAM writes during the indexer ring score); soak log /scratch/dnijemcevic/phase_1117/soak/soak.log.
-      (4) ec4f1453425: NONMM_MAX_CORES (default 0 = full grid) for stock non-matmul ops; matmuls and the bring-up forks
-      stay at MAX_WORKER_CORES 110 (owner rule: only matmuls are capped); ladder metrics bit-identical, determinism 0,
-      positions within noise (uncap_report.md). This gate: the accuracy rung, both determinism checks, the decode-skip
-      and serving contract tests (not run since the rebase: models/demos/common/prefill took main''s side), and the
-      realistic positions under DECODER_SKIP=decode.'
+    details: 'Records work done outside the ledger on 2026-11-18 (overseer agents, owner in a hurry), verified here on the
+      final tree. (1) Rebase of the whole branch (llk_helper_library''s commits + ours) onto main 8a317f39a8d (the main of
+      origin/mstaletovic/moe-block-65124-split-rows): 2,800 commits + build fixes c0964d90f18 / 840413e7fd2; report /data/dnijemcevic/bringup/handoff_20261118/rebase_report.md;
+      ladder last, determinism passed then. (2) MoE port: Marko''s 11 commits + int32 snap cherry-picked; fork ttnn.bringup.moe_block
+      (5963cd7fdb3) with weights_nk, set_max_grid (110), x pieces; model 60add9f88f6: MOE_BLOCK_SRC=block (default), MOE_BLOCK_SPLIT_ROWS=on,
+      fabric payload 6208 B (was 10880); old block kept as MOE_BLOCK_SRC=main; report moe_port_report.md: ladder last err_final_hidden
+      0.1268 (was 0.1325), determinism 0, positions 51k..1M device 78.9..95.4 ms (was 80.7..98.4). (3) Hang: with the 6208
+      B payload test_skip_hang_loop ran 64 rounds = 11,776 chunks at p256000 / p1024000 with no hang and determinism 0 every
+      round (old payload: a hang every ~1,300-3,000 chunks; cause per hang_origin_report.md and ring_indexer_write_pattern.md:
+      a chip''s NOC1 wedged by the fabric router''s large non-posted DRAM writes during the indexer ring score); soak log
+      /scratch/dnijemcevic/phase_1117/soak/soak.log. (4) ec4f1453425: NONMM_MAX_CORES (default 0 = full grid) for stock non-matmul
+      ops; matmuls and the bring-up forks stay at MAX_WORKER_CORES 110 (owner rule: only matmuls are capped); ladder metrics
+      bit-identical, determinism 0, positions within noise (uncap_report.md). This gate: the accuracy rung, both determinism
+      checks, the decode-skip and serving contract tests (not run since the rebase: models/demos/common/prefill took main''s
+      side), and the realistic positions under DECODER_SKIP=decode.'
   gate:
     cmd: BRINGUP_RUNG=last scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_ladder.py
-      && scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_determinism.py
-      && scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/test_determinism.py
-      && scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/test_decoder_skip_decode.py
-      && scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_contract.py
-      && scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/bringup/contract/test_adapter_acks.py
-      && DS41_DECODER_SKIP=decode scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/test_skip_positions.py
+      && scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_determinism.py && scripts/run_safe_pytest.sh
+      --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/test_determinism.py && scripts/run_safe_pytest.sh
+      --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/test_decoder_skip_decode.py && scripts/run_safe_pytest.sh
+      --run-all --no-precompile models/demos/common/bringup/tests/test_contract.py && scripts/run_safe_pytest.sh --run-all
+      --no-precompile models/demos/deepseek_v41_flash_d_p/tests/bringup/contract/test_adapter_acks.py && DS41_DECODER_SKIP=decode
+      scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/test_skip_positions.py
     metrics:
       err_layer_L*: <= limit
       err_state_*_L*: <= limit
@@ -4790,8 +4831,8 @@ tasks:
       steady_wall_ms_p1024000: '> 0'
   device: true
 - id: P.74
-  title: 'OWNER 2026-11-18: STATIC_TABLES=off (no per-user, per-chip KV history) on the new tree: row gather + one
-    persistent shared gather buffer; A/B against today''s table, speed and DRAM per chip at 51k..1M'
+  title: 'OWNER 2026-11-18: STATIC_TABLES=off (no per-user, per-chip KV history) on the new tree: row gather + one persistent
+    shared gather buffer; A/B against today''s table, speed and DRAM per chip at 51k..1M'
   step: perf
   role: perf
   device: true
@@ -4803,26 +4844,25 @@ tasks:
   - models/demos/deepseek_v41_flash_d_p/bringup/BREADCRUMBS.md
   - models/demos/deepseek_v41_flash_d_p/bringup/known_issues.md
   brief:
-    details: 'OWNER 2026-11-18. The owner considers the per-user, per-chip replicated KV history (STATIC_TABLES=on:
-      every user keeps each KV source''s whole compressed history on every chip, 2.5 GiB a user a chip at 1M; correct
-      only when this process wrote every earlier chunk of the slot) forbidden in the long run, and wants to see what
-      the served-state-only path (STATIC_TABLES=off: each source''s history all-gathered over the mesh every chunk) costs
-      on today''s tree (Marko''s MoE block with split rows and a 6208 B fabric payload, the hang fixed; non-matmul ops
-      on 120 cores). Build on what is already in the tree: (1) the row gather (setting HISTORY_GATHER_OVERLAP=on: the
-      history gathered as ROW_MAJOR rows, no tilize / untilize, high_bw_all_gather on both axes; standalone 10.0 -> 5.9 ms
-      a source at 1M; P.73 WIP, never accepted): RENAME it to what it is (HISTORY_GATHER=rows | tiles, default rows),
-      keep the old path behind the setting. (2) ONE persistent gather buffer per chip, allocated once at load and sized
-      for the maximum context, reused by every chunk / user / source (today the off path allocates and frees it every
-      chunk): the gather writes into it (high_bw_all_gather''s persistent / preallocated output, or a slice of it).
-      Values must be bit-identical to the plain off path and to STATIC_TABLES=on (data moves only); determinism exact.
-      Matmuls stay within 110 cores (tt/cores.py worker_grid / max_grid); non-matmul stock ops may use the full grid
-      (NONMM_MAX_CORES). Do not change the MoE block or any weight layout (no weight-cache rebuild: a run must load from
-      the existing cache in a few minutes). Check that off with your changes RUNS: one run of
-      DS41_STATIC_TABLES=off DS41_DECODER_SKIP=decode test_decoder_skip_decode.py and one test_determinism.py
-      (models/demos/common/bringup/tests). Then stop: the orchestrator measures both sides (do not run the A/B or the
-      position tests yourself). Also make test_skip_positions record the allocator''s DRAM per chip after each point
-      (it already records dram_state / dram_after: check they include the gather buffer). No fork regression suites;
-      every Python-built op through ttnn.bringup.prepare_program / run_prepared. Report short.'
+    details: 'OWNER 2026-11-18. The owner considers the per-user, per-chip replicated KV history (STATIC_TABLES=on: every
+      user keeps each KV source''s whole compressed history on every chip, 2.5 GiB a user a chip at 1M; correct only when
+      this process wrote every earlier chunk of the slot) forbidden in the long run, and wants to see what the served-state-only
+      path (STATIC_TABLES=off: each source''s history all-gathered over the mesh every chunk) costs on today''s tree (Marko''s
+      MoE block with split rows and a 6208 B fabric payload, the hang fixed; non-matmul ops on 120 cores). Build on what is
+      already in the tree: (1) the row gather (setting HISTORY_GATHER_OVERLAP=on: the history gathered as ROW_MAJOR rows,
+      no tilize / untilize, high_bw_all_gather on both axes; standalone 10.0 -> 5.9 ms a source at 1M; P.73 WIP, never accepted):
+      RENAME it to what it is (HISTORY_GATHER=rows | tiles, default rows), keep the old path behind the setting. (2) ONE persistent
+      gather buffer per chip, allocated once at load and sized for the maximum context, reused by every chunk / user / source
+      (today the off path allocates and frees it every chunk): the gather writes into it (high_bw_all_gather''s persistent
+      / preallocated output, or a slice of it). Values must be bit-identical to the plain off path and to STATIC_TABLES=on
+      (data moves only); determinism exact. Matmuls stay within 110 cores (tt/cores.py worker_grid / max_grid); non-matmul
+      stock ops may use the full grid (NONMM_MAX_CORES). Do not change the MoE block or any weight layout (no weight-cache
+      rebuild: a run must load from the existing cache in a few minutes). Check that off with your changes RUNS: one run of
+      DS41_STATIC_TABLES=off DS41_DECODER_SKIP=decode test_decoder_skip_decode.py and one test_determinism.py (models/demos/common/bringup/tests).
+      Then stop: the orchestrator measures both sides (do not run the A/B or the position tests yourself). Also make test_skip_positions
+      record the allocator''s DRAM per chip after each point (it already records dram_state / dram_after: check they include
+      the gather buffer). No fork regression suites; every Python-built op through ttnn.bringup.prepare_program / run_prepared.
+      Report short.'
   ab:
     keep_default: true
     env:
@@ -4834,10 +4874,10 @@ tasks:
   - last
   gate:
     cmd: BRINGUP_RUNG=last scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_ladder.py
-      && scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_determinism.py
-      && scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/test_decoder_skip_decode.py
-      && scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_contract.py
-      && DS41_DECODER_SKIP=decode scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/test_skip_positions.py
+      && scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_determinism.py && scripts/run_safe_pytest.sh
+      --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/test_decoder_skip_decode.py && scripts/run_safe_pytest.sh
+      --run-all --no-precompile models/demos/common/bringup/tests/test_contract.py && DS41_DECODER_SKIP=decode scripts/run_safe_pytest.sh
+      --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/test_skip_positions.py
     metrics:
       err_layer_L*: <= limit
       err_state_*_L*: <= limit
@@ -4850,8 +4890,8 @@ tasks:
       steady_wall_ms_p51200: '> 0'
       steady_wall_ms_p1024000: '> 0'
 - id: P.75
-  title: 'OWNER 2026-11-18: hide the history all-gather of STATIC_TABLES=off (engram wait, token-id readback, or
-    injected into an existing kernel)'
+  title: 'OWNER 2026-11-18: hide the history all-gather of STATIC_TABLES=off (engram wait, token-id readback, or injected
+    into an existing kernel)'
   step: perf
   role: perf
   device: true
@@ -4864,25 +4904,24 @@ tasks:
   - models/demos/deepseek_v41_flash_d_p/bringup/known_issues.md
   - ttnn/ttnn/bringup
   brief:
-    details: 'OWNER 2026-11-18. After P.74 (STATIC_TABLES=off on the new tree: row gather, one persistent gather
-      buffer per source size, A/B vs the table), hide the per-chunk history all-gather (sources 2, 8, 14 under
-      DECODER_SKIP=decode) so the served-state-only path costs close to the table. The history [0, start) is complete
-      before the chunk starts; only the chunk''s own rows are new at layer s. Options the owner accepts, in this order
-      of preference by measurement: (a) run the gather while the device waits for the engram host rows before layer 1
-      (P.73 measured that idle gap: 66.6 ms under the profiler, the host''s share of a clean 1M chunk ~25-33 ms; the
-      engram op of layer 14 too), filling the persistent buffer''s history part early and appending the chunk''s rows
-      at layer s; (b) behind the token-id readback at the next chunk''s start (adapter._host_ids); (c) injected into an
-      existing kernel that runs before sparse attention (first candidate: the indexer''s ring score
-      ttnn.bringup.ring_indexer_score_dsa, which already rings the index keys over SP into a persistent buffer: the
-      compressed-KV rows could ride the same ring), or a sub-device split (the owner''s rule is only that MATMULS stay
-      within 110 cores; a gather on its own cores is allowed). Read first: /scratch/dnijemcevic/phase_1117/step1_report.md,
-      /data/dnijemcevic/bringup/handoff_20261118/ring_indexer_write_pattern.md, P.73''s BREADCRUMBS entries (the engram
-      window analysis, the fixed-stride table constraint: sparse attention reads history + chunk as one table). Measure
-      first what each option can hide (rt-profiler timeline at 256k and 1M), build the best, behind a switch
-      (e.g. HISTORY_GATHER_HIDE off|engram|readback|ring). Bit-identical to the plain off path, determinism exact, no
-      weight rebuild (no MoE / layout change), every Python-built op through ttnn.bringup.prepare_program / run_prepared,
-      no fork regression suites. Stop after your checks; the orchestrator measures. Report short: hidden ms per source
-      and per chunk at 51k / 256k / 1M, vs off and vs on.'
+    details: 'OWNER 2026-11-18. After P.74 (STATIC_TABLES=off on the new tree: row gather, one persistent gather buffer per
+      source size, A/B vs the table), hide the per-chunk history all-gather (sources 2, 8, 14 under DECODER_SKIP=decode) so
+      the served-state-only path costs close to the table. The history [0, start) is complete before the chunk starts; only
+      the chunk''s own rows are new at layer s. Options the owner accepts, in this order of preference by measurement: (a)
+      run the gather while the device waits for the engram host rows before layer 1 (P.73 measured that idle gap: 66.6 ms
+      under the profiler, the host''s share of a clean 1M chunk ~25-33 ms; the engram op of layer 14 too), filling the persistent
+      buffer''s history part early and appending the chunk''s rows at layer s; (b) behind the token-id readback at the next
+      chunk''s start (adapter._host_ids); (c) injected into an existing kernel that runs before sparse attention (first candidate:
+      the indexer''s ring score ttnn.bringup.ring_indexer_score_dsa, which already rings the index keys over SP into a persistent
+      buffer: the compressed-KV rows could ride the same ring), or a sub-device split (the owner''s rule is only that MATMULS
+      stay within 110 cores; a gather on its own cores is allowed). Read first: /scratch/dnijemcevic/phase_1117/step1_report.md,
+      /data/dnijemcevic/bringup/handoff_20261118/ring_indexer_write_pattern.md, P.73''s BREADCRUMBS entries (the engram window
+      analysis, the fixed-stride table constraint: sparse attention reads history + chunk as one table). Measure first what
+      each option can hide (rt-profiler timeline at 256k and 1M), build the best, behind a switch (e.g. HISTORY_GATHER_HIDE
+      off|engram|readback|ring). Bit-identical to the plain off path, determinism exact, no weight rebuild (no MoE / layout
+      change), every Python-built op through ttnn.bringup.prepare_program / run_prepared, no fork regression suites. Stop
+      after your checks; the orchestrator measures. Report short: hidden ms per source and per chunk at 51k / 256k / 1M, vs
+      off and vs on.'
   ab:
     keep_default: true
     env:
@@ -4896,10 +4935,10 @@ tasks:
   - last
   gate:
     cmd: BRINGUP_RUNG=last scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_ladder.py
-      && scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_determinism.py
-      && scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/test_decoder_skip_decode.py
-      && scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_contract.py
-      && DS41_DECODER_SKIP=decode scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/test_skip_positions.py
+      && scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_determinism.py && scripts/run_safe_pytest.sh
+      --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/test_decoder_skip_decode.py && scripts/run_safe_pytest.sh
+      --run-all --no-precompile models/demos/common/bringup/tests/test_contract.py && DS41_DECODER_SKIP=decode scripts/run_safe_pytest.sh
+      --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/test_skip_positions.py
     metrics:
       err_layer_L*: <= limit
       err_state_*_L*: <= limit

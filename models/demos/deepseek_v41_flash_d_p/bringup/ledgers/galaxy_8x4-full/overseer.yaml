@@ -1207,6 +1207,38 @@ fixes:
   - ttnn/ttnn/bringup
   released: '2026-11-18T04:07:08'
   placed: '2026-11-18T04:08:51'
+- id: FIX.37
+  title: Two test files import the tests package (pre-commit hook blocks gate commits)
+  gate:
+  - X.4
+  status: held
+  t: '2026-11-18T16:42:44'
+  text: 'Fix the imports that the pre-commit hook check-models-do-not-import-tests rejects: models/demos/deepseek_v41_flash_d_p/tests/test_expert_x_pieces.py:66
+    (from tests.ttnn.profiling.realtime_profiler_utils) and models/demos/moe_block_main/tests/test_moe_block_models.py:43
+    (from tests.ttnn.utils_for_testing): move or copy the helpers they need into models (or a models-side util), no behaviour
+    change. CPU only; no device runs (the gate reuses X.4''s passed units).'
+  hold: after P.75
+  paths:
+  - models/demos/deepseek_v41_flash_d_p/tests
+  - models/demos/moe_block_main/tests
+- id: FIX.38
+  title: 'STATIC_TABLES=off by default (owner 2026-11-18): no per-user, per-chip KV history'
+  gate:
+  - X.4
+  status: placed
+  t: '2026-11-18T17:23:32'
+  text: 'OWNER 2026-11-18: make STATIC_TABLES=off the shipped default in tt/settings.py (the reason text: owner decision
+    2026-11-18, P.74''s A/B: off at 1M +11.8 ms wall / +10 %, accuracy and determinism identical; the per-user replicated
+    table removed; item 4 of the slot-state page solved), with HISTORY_GATHER=rows and the persistent buffers (P.74); HISTORY_GATHER_HIDE''s
+    default as P.75 was decided (on if accepted). Keep STATIC_TABLES=on working as the alternative. No other change. Update
+    serving_contract.md / known_issues where they say the table is the default. The gate (X.4''s: ladder last, both determinism,
+    decoder skip, contract, adapter acks, positions) runs on the new default.'
+  hold: after P.75's decision (HISTORY_GATHER_HIDE default follows it)
+  paths:
+  - models/demos/deepseek_v41_flash_d_p/tt
+  - models/demos/deepseek_v41_flash_d_p/bringup
+  released: '2026-11-18T17:33:12'
+  placed: '2026-11-18T17:34:33'
 classified:
   L.smoke:
     kind: framework
