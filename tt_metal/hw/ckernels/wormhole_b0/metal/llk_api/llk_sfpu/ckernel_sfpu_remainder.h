@@ -87,11 +87,12 @@ __attribute__((noinline)) void calculate_remainder_uint32_scalar_big_b(uint scal
     for (int d = 0; d < ITERATIONS; d++) {
         sfpi::vInt a = sfpi::dst_reg[0].mode<sfpi::DataLayout::I32>();
 
-        sfpi::vInt r = a;
-        v_if(a < 0 && sfpi::vUInt(a) >= sfpi::vUInt(b)) { r = a - b; }
+        // With both a and b in [2^31, 2^32), a - b doesn't overflow, so a >=u b is t >= 0.
+        sfpi::vInt t = a - b;
+        v_if(a < 0 && t >= 0) { a = t; }
         v_endif;
 
-        sfpi::dst_reg[0].mode<sfpi::DataLayout::I32>() = r;
+        sfpi::dst_reg[0].mode<sfpi::DataLayout::I32>() = a;
         sfpi::dst_reg++;
     }
 }
