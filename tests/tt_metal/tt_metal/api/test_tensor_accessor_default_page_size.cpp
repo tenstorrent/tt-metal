@@ -8,9 +8,11 @@
 // to a DRAM output buffer. The host compares this with buffer->aligned_page_size().
 
 #include <gtest/gtest.h>
+#include <gmock/gmock.h>
 
 #include <cstdint>
 #include <set>
+#include <stdexcept>
 #include <utility>
 #include <vector>
 
@@ -331,6 +333,24 @@ TEST_F(MeshDispatchFixture, TensixTensorAccessorDefaultPageSizeLegacyShardedL1Ti
 }
 
 // --- ND Sharded ---
+
+// A sharded accessor reads its page size at compile time; the host rejects RuntimePageSize for it.
+TEST_F(MeshDispatchFixture, TensixTensorAccessorRuntimePageSizeRejectedForShardedBuffer) {
+    for (auto& mesh_device : devices_) {
+        auto buffer = create_nd_sharded_buffer(
+            *mesh_device,
+            RM_PAGE_SIZE,
+            RM_TOTAL_SIZE,
+            BufferType::DRAM,
+            Shape({RM_NUM_ROWS, RM_NUM_COLS}),
+            Shape({RM_NUM_ROWS, RM_NUM_COLS}),
+            Shape2D(1, RM_NUM_COLS));
+        EXPECT_THAT(
+            [&]() { TensorAccessorArgs(*buffer, tensor_accessor::ArgConfig::RuntimePageSize); },
+            ::testing::ThrowsMessage<std::runtime_error>(
+                ::testing::HasSubstr("RuntimePageSize is not supported for a sharded buffer")));
+    }
+}
 
 TEST_F(MeshDispatchFixture, TensixTensorAccessorDefaultPageSizeNdShardedDramRowMajor) {
     for (auto& mesh_device : devices_) {
