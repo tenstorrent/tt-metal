@@ -68,12 +68,23 @@ def _mla_cache_complete(cache_path: Path, prefix: str, layer_idx: int, model_cfg
     """
     from models.demos.deepseek_v3_d_p.tt.mla import ttMLA
     from models.demos.deepseek_v3_d_p.tt.mla.indexer import TtIndexer, indexer_layer_is_reused, resolve_has_indexer
-    from models.demos.deepseek_v3_d_p.utils.fast_cache_checker import pattern_exists
 
     # Sparse (DSA) attention is a property of the model; a `shared` layer is still sparse (it replicates wkv_b1) but
     # owns no indexer weights, so only the indexer files depend on the layer's own type.
+    from models.demos.deepseek_v3_d_p.tt.mla.mla_2d import ttMLA2DTP, uses_2d_tp
+    from models.demos.deepseek_v3_d_p.utils.fast_cache_checker import pattern_exists
+
     sparse = hf_config is not None and resolve_has_indexer(hf_config)
     owns_indexer = sparse and not indexer_layer_is_reused(hf_config, layer_idx)
+    if hf_config is not None and uses_2d_tp(hf_config):
+        # 2D TP attention (Hy4 tp32, #65885) caches under layer_{i}.mla2d.*, which the block builds via mla_class.
+        return ttMLA2DTP.check_cache_complete(
+            cache_path,
+            f"{prefix}.mla",
+            has_indexer=owns_indexer,
+            has_output_gate=bool(getattr(model_cfg, "USE_OUTPUT_GATE", False)),
+            has_sink=bool(getattr(model_cfg, "USE_LEARNABLE_SINK", False)),
+        )
     replicated = sparse and ttMLA.replicates_wkv_b1(hf_config, tp_factor, sparse)
     names = ttMLA.weight_names(
         bool(getattr(model_cfg, "USE_OUTPUT_GATE", False)), bool(getattr(model_cfg, "USE_LEARNABLE_SINK", False))

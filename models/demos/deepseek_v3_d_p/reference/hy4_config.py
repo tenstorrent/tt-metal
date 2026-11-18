@@ -104,7 +104,7 @@ class Hy4Config(GLM53Config):
     # 1e-6 applies, not rms_norm_eps (1e-5, which the decoder norms use). GLM-5.3 keeps rms_norm_eps.
     LOW_RANK_NORM_EPS = 1e-6
 
-    # --- iHC hyper-connections (not implemented in the prefill stack yet; #65891) --------------
+    # --- iHC hyper-connections (#65891; tt/hy4/ihc.py, gated by ENABLE_IHC in the prefill block) ----
     ENABLE_IHC = True
     HC_MULT = 4
     HC_EPS = 1e-6

@@ -21,8 +21,9 @@ blocking issues until the shared stack supports it; the GLM-5.3 dev / numerics l
 
 Hooks for the sibling issues:
 
-* iHC (#65891) changes the residual stream between blocks, so it lands as a Hy4 transformer here via
-  the ``MODEL_CLS`` seam, the way Kimi-K3 swaps in ``TtKimiK3Transformer``.
+* iHC (#65891) is in the shared ``TtPrefillTransformer`` / ``TtPrefillBlock``, switched on by
+  ``Hy4Config.ENABLE_IHC`` (tt/hy4/ihc.py): the residual between blocks is 4 fp32 streams, and the iHC parameters are
+  the ``ihc`` weight category, read by ``hy4_checkpoint``.
 * The KV hooks (``build_kv_chunk_table``, ``kv_migration_stages``, ``set_layer_completion_sink``) are
   inherited. They already follow ``indexer_types``, so the index-key table has Hy4's 21 full layers and
   completions carry global layer indices.
@@ -38,7 +39,7 @@ from models.demos.deepseek_v3_d_p.tt.tt_prefill_runtime import TtPrefillRuntime
 
 
 class TtHy4Runtime(TtPrefillRuntime):
-    # MODEL_CLS stays TtPrefillTransformer until the iHC residual (#65891) needs its own transformer.
+    # MODEL_CLS stays TtPrefillTransformer: iHC (#65891) is gated inside it by ENABLE_IHC.
 
     _load_trunk_state_dict = staticmethod(load_hy4_trunk_state_dict)
 

@@ -209,10 +209,12 @@ def test_kv_only_last_layer_needs_its_indexer_cache_when_full(tmp_path):
 
 
 def _kv_only_cache(root, layer, with_indexer):
-    """The files a runner writes for a kv-only last layer: attn_norm, the KV projections (+ the indexer)."""
+    """The files a runner writes for a kv-only last layer: attn_norm, the KV projections (+ the indexer), and the
+    layer's iHC parameters (its KV is computed from the collapsed iHC streams)."""
     from models.demos.deepseek_v3_d_p.tt.mla.indexer import TtIndexer
 
     names = [
+        f"layer_{layer}.ihc.pt",
         f"layer_{layer}.attn_norm_weight_dtype_BFLOAT16_layout_ROW_MAJOR.tensorbin",
         f"layer_{layer}.mla.kv_a_layernorm_dtype_BFLOAT16_layout_ROW_MAJOR.tensorbin",
         f"layer_{layer}.mla.kv_a_proj_with_mqa_dtype_BFLOAT8_B_layout_TILE.tensorbin",
@@ -247,6 +249,8 @@ def test_transformer_cache_check_is_kv_only_aware_on_the_last_layer(tmp_path, wi
     assert check(kv_only_last_layer=True, hf_config=glm_5_3_hf_config())  # shared layer: no indexer needed
     assert not check(hf_config=hy4_hf_config())  # full-layer check (FFN/MoE, Q, ...) as before
     assert not check(kv_only_last_layer=True, is_last_rank=False, hf_config=hy4_hf_config())
+    (tmp_path / "layer_77.ihc.pt").unlink()  # Hy4 (ENABLE_IHC) also needs the layer's iHC parameters
+    assert not check(kv_only_last_layer=True, hf_config=hy4_hf_config())
 
 
 # ---------------------------------------------------------------------------------------------------------------
@@ -480,16 +484,17 @@ def test_pending_deltas_guard(adapter, monkeypatch, expect_error):
     from models.demos.deepseek_v3_d_p.tt.runners.adapters import hy4_preview
 
     cfg = hy4_hf_config()
-    pending = hy4_preview.pending_deltas(cfg)
-    assert not any("#65921" in p for p in pending)  # sink + gate are implemented in ttMLA
-    assert any("#65891" in p for p in pending)
+    # Sink + gate (#65921) are implemented in ttMLA and iHC (#65891) in the block: nothing is pending.
+    assert cfg.enable_ihc is True
+    assert hy4_preview.pending_deltas(cfg) == []
     monkeypatch.delenv(hy4_preview.ALLOW_PENDING_DELTAS_ENV, raising=False)
+    adapter._check_pending_deltas(cfg)  # no override needed
+    # The guard itself still works for a delta that is pending.
+    monkeypatch.setitem(hy4_preview.PENDING_DELTAS, "enable_ihc", ("iHC", "#65891"))
     with expect_error(NotImplementedError, "#65891"):
         adapter._check_pending_deltas(cfg)
     monkeypatch.setenv(hy4_preview.ALLOW_PENDING_DELTAS_ENV, "1")
     adapter._check_pending_deltas(cfg)  # bring-up override: warns, does not raise
-    cfg.enable_ihc = False
-    assert hy4_preview.pending_deltas(cfg) == []
 
 
 def test_adapter_builds_the_hy4_runtime_class(adapter):

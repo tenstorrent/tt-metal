@@ -48,9 +48,8 @@ ALLOW_PENDING_DELTAS_ENV = "PREFILL_HY4_ALLOW_PENDING_DELTAS"
 
 # Hy4 deltas the prefill stack does not implement yet: config attribute -> (what, owning issue). An issue
 # that implements one deletes its entry here.
-PENDING_DELTAS = {
-    "enable_ihc": ("iHC hyper-connection residual (hc_mult=4, fp32 streams)", "#65891"),
-}
+# (iHC, #65891, is implemented: tt/hy4/ihc.py, TtPrefillBlock / TtPrefillTransformer with ENABLE_IHC.)
+PENDING_DELTAS: dict = {}
 
 
 def pending_deltas(hf_config) -> list[str]:

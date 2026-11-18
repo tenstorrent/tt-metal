@@ -13,8 +13,10 @@ from transformers.configuration_utils import PretrainedConfig
 import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.common.utility_functions import is_blackhole
+from models.demos.deepseek_v3_d_p.tt.hy4 import ihc as hy4_ihc
 from models.demos.deepseek_v3_d_p.tt.kv_ack import zero_pad_and_ack
 from models.demos.deepseek_v3_d_p.tt.mla import ttMLA
+from models.demos.deepseek_v3_d_p.tt.mla.mla_2d import mla_class
 from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import (
     compute_constants,
     extract_mesh_config,
@@ -32,6 +34,7 @@ from models.demos.deepseek_v3_d_p.tt.moe.tt_shared_expert import ACTIVATION_SILU
 from models.demos.deepseek_v3_d_p.tt.tt_distributed_rms_norm import TtDistributedRmsNorm
 from models.demos.deepseek_v3_d_p.tt.tt_ffn import TtFfn
 from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import MlaKvCache, MlaKvCacheFormat
+from models.experimental.hy4_preview.tt.ihc import TtIHCWrap
 
 # Optional per-layer MLA-vs-FFN host timing (rough ratio only). Gated by TT_PREFILL_BLOCK_TIMING=1.
 # Host wall-clock with a device sync bracketing each region, so the syncs serialize the pipeline and
@@ -77,6 +80,12 @@ class TtPrefillBlock(LightweightModule):
     Single transformer block for DeepSeek V3 prefill.
 
     Constructs and composes: attn_norm → MLA → residual → ffn_norm → FFN/MoE → residual
+
+    With iHC (``model_cfg.ENABLE_IHC``, Hy4-preview, #65891) the residual is n packed fp32 streams
+    ``[1, 1, seq_len_local, n * emb_dim_per_tp]`` and each "→ residual" is an iHC site (tt/hy4/ihc.py):
+    hc_pre collapses the streams to the sublayer's BF16 input, hc_post writes post_j * F(y) back into stream j.
+    The attention site and the FFN site each have their own fn / base / scale (state dict ``ihc_weights``
+    ``{"attn": {...}, "ffn": {...}}``, cached as ``layer_{i}.ihc.pt``).
 
     Canonical tensor format: [1, 1, seq_len_local, emb_dim_per_tp], TILE_LAYOUT, TP-sharded on last dim.
 
@@ -125,9 +134,11 @@ class TtPrefillBlock(LightweightModule):
 
         if not TtDistributedRmsNorm.check_cache_complete(cache_path, f"{prefix}.attn_norm"):
             return False
+        if hy4_ihc.ihc_enabled(model_cfg) and not hy4_ihc.layer_cache_complete(cache_path, layer_idx):
+            return False
         if kv_only:
             return TtPrefillBlock._kv_only_mla_cache_complete(cache_path, prefix, layer_idx, hf_config)
-        if not ttMLA.check_cache_complete(
+        if not (mla_class(hf_config) if hf_config is not None else ttMLA).check_cache_complete(
             cache_path,
             f"{prefix}.mla",
             # #54836: a cache missing the MLA output gate reported complete, and `ttnn.as_tensor` then
@@ -235,7 +246,11 @@ class TtPrefillBlock(LightweightModule):
         # Build MLA cache
         if use_fused_rmsnorm is None:
             use_fused_rmsnorm = getattr(model_cfg, "USE_FUSED_PREFILL_RMSNORM", False) and is_blackhole()
-        ttMLA.build_ttnn_cache(
+        if hy4_ihc.ihc_enabled(model_cfg):
+            hy4_ihc.resolve_weights(
+                state_dict.get("ihc_weights"), hy4_ihc.layer_cache_file(cache_path, layer_idx), f"layer {layer_idx} iHC"
+            )
+        mla_class(config).build_ttnn_cache(
             state_dict=state_dict.get("mla_weights", {}),
             cache_path=cache_path,
             mesh_device=mesh_device,
@@ -433,11 +448,30 @@ class TtPrefillBlock(LightweightModule):
             post_use_2d_core_grid=use_mistral4_2d_post_norm,
         )
 
+        # --- iHC (Hy4-preview, #65891) ---
+        # One TtIHCWrap per sublayer site, hidden split over the TP axis (where the residual keeps it). A kv-only
+        # layer still needs the attention site's hc_pre: its KV is computed from the collapsed streams.
+        self.ihc = hy4_ihc.ihc_enabled(model_cfg)
+        if self.ihc:
+            ihc_cfg = hy4_ihc.ihc_config(config, model_cfg)
+            self.ihc_n = ihc_cfg.n
+            ihc_weights = hy4_ihc.resolve_weights(
+                state_dict.get("ihc_weights"),
+                hy4_ihc.layer_cache_file(weight_cache_path, layer_idx) if weight_cache_path else None,
+                f"layer {layer_idx} iHC",
+            )
+            plan = hy4_ihc.ihc_plan(mesh_device, tp_axis, num_links=num_links, topology=tp_topology)
+            self.ihc_attn = TtIHCWrap(plan, ihc_cfg, **ihc_weights["attn"], dtype=hy4_ihc.STREAM_DTYPE)
+            self.ihc_ffn = (
+                None if kv_only else TtIHCWrap(plan, ihc_cfg, **ihc_weights["ffn"], dtype=hy4_ihc.STREAM_DTYPE)
+            )
+
         # --- MLA ---
         # In chunked prefill the MLA's seq_len sizes the gathered-KV ring buffer (= full per-user
         # cache length), while the block's seq_len is the per-chunk size used by the MoE/FFN dispatch
         # buffers. They are equal in the single-shot path (max_seq_len is None).
-        self.mla = ttMLA(
+        # mla_class: ttMLA2DTP when the config opts in to 2D TP attention (Hy4 tp32, #65885), else ttMLA.
+        self.mla = mla_class(config)(
             config,
             state_dict.get("mla_weights", {}),  # Empty dict if cache exists
             mesh_device,
@@ -770,7 +804,14 @@ class TtPrefillBlock(LightweightModule):
             _t_start = time.perf_counter()
 
         # --- Attention ---
-        attn_norm_out = self.attn_norm(x)
+        # iHC: x is the packed fp32 streams; the attention sublayer sees their pre-weighted sum, in BF16.
+        if self.ihc:
+            attn_in, ihc_post = self._ihc_pre(self.ihc_attn, x)
+        else:
+            attn_in = x
+        attn_norm_out = self.attn_norm(attn_in)
+        if attn_in is not x:
+            ttnn.deallocate(attn_in)
         seq_len_local = attn_norm_out.shape[2]
         mla_out = self.mla.forward(
             attn_norm_out,
@@ -825,6 +866,8 @@ class TtPrefillBlock(LightweightModule):
         )
 
         if kv_only:
+            if self.ihc:
+                ttnn.deallocate(ihc_post)  # no hc_post: a kv-only layer writes no streams
             kv_cache = (
                 ttMLA.kv_cache_to_host(kvpe_cache, self.mesh_device, sp_axis=self.mla.sp_axis)
                 if return_kv_cache
@@ -834,7 +877,10 @@ class TtPrefillBlock(LightweightModule):
                 return None, kv_cache, None
             return None, kv_cache
 
-        x = ttnn.add(x, mla_out, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        if self.ihc:
+            x = self._ihc_post(self.ihc_attn, mla_out, x, ihc_post, free_streams=False)  # the caller owns x
+        else:
+            x = ttnn.add(x, mla_out, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         ttnn.deallocate(mla_out)
         if _timing:
             ttnn.synchronize_device(self.mesh_device)
@@ -844,12 +890,19 @@ class TtPrefillBlock(LightweightModule):
             kv_intermediates["post_mla_residual"] = ttnn.clone(x)
 
         # --- FFN ---
-        ffn_norm_out = self.ffn_norm(x)
+        if self.ihc:
+            ffn_in, ihc_post = self._ihc_pre(self.ihc_ffn, x)
+        else:
+            ffn_in = x
+        ffn_norm_out = self.ffn_norm(ffn_in)
+        if ffn_in is not x:
+            ttnn.deallocate(ffn_in)
         if return_kv_intermediates:
             # post_attention_layernorm output (the FFN norm), TP-sharded on hidden.
             kv_intermediates["post_attn_norm"] = ttnn.clone(ffn_norm_out)
 
-        fold_residual = self.is_moe and not return_intermediates
+        # The MoE folds a plain residual add into its combine; an iHC site writes post_j * F(y) per stream instead.
+        fold_residual = self.is_moe and not return_intermediates and not self.ihc
         if self.is_moe:
             ffn_out = self._moe_path(
                 ffn_norm_out,
@@ -868,6 +921,9 @@ class TtPrefillBlock(LightweightModule):
         if fold_residual:
             ttnn.deallocate(x)
             x = ffn_out
+        elif self.ihc:
+            x = self._ihc_post(self.ihc_ffn, ffn_out, x, ihc_post, free_streams=True)
+            ttnn.deallocate(ffn_out)
         else:
             x = ttnn.add(x, ffn_out)
             ttnn.deallocate(ffn_out)
@@ -895,6 +951,28 @@ class TtPrefillBlock(LightweightModule):
         if return_indexer_indices:
             return x, kv_cache, mla_indices
         return x, kv_cache
+
+    @staticmethod
+    def _ihc_pre(wrap: TtIHCWrap, streams: ttnn.Tensor):
+        """iHC hc_pre: packed fp32 streams -> (the sublayer's BF16 input [1, 1, S/sp, H/tp], post [1, 1, S/sp, n])."""
+        y, post = wrap.hc_pre(streams)
+        y_bf = ttnn.typecast(y, hy4_ihc.SUBLAYER_DTYPE)
+        ttnn.deallocate(y)
+        return y_bf, post
+
+    @staticmethod
+    def _ihc_post(
+        wrap: TtIHCWrap, sublayer_out: ttnn.Tensor, streams: ttnn.Tensor, post: ttnn.Tensor, free_streams: bool
+    ) -> ttnn.Tensor:
+        """iHC hc_post: stream j += post_j * F(y), in fp32. Frees post (and the input streams when free_streams);
+        not sublayer_out."""
+        out_f = ttnn.typecast(sublayer_out, streams.dtype)
+        new = wrap.hc_post(out_f, streams, post)
+        ttnn.deallocate(out_f)
+        ttnn.deallocate(post)
+        if free_streams:
+            ttnn.deallocate(streams)
+        return new
 
     def _moe_path(
         self,
