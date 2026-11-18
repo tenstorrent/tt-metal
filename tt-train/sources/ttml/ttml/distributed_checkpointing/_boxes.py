@@ -87,13 +87,6 @@ class Box:
     def slices(self) -> tuple[slice, ...]:
         return tuple(slice(o, o + s) for o, s in zip(self.offsets, self.sizes))
 
-    def to_json(self) -> dict:
-        return {"offsets": list(self.offsets), "sizes": list(self.sizes)}
-
-    @staticmethod
-    def from_json(value: dict) -> "Box":
-        return Box(tuple(value["offsets"]), tuple(value["sizes"]))
-
 
 def grid_cell_size(boxes: Sequence[Box], origin: Sequence[int]) -> tuple[int, ...] | None:
     """The common size of ``boxes`` when every one is a cell of one regular grid anchored at ``origin`` (same sizes,
