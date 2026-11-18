@@ -78,6 +78,8 @@ int main()
     {
         (void)ckernel::load_blocking(pc_buf);
     }
+    // Counters on only (empty otherwise, counters.h): the tile counters' end readings, before the host sees the launch done.
+    llk_perf::finish_from_brisc();
     for (std::uint32_t i = 0; i < GPR_DUMP_WORDS; i++)
     {
         ckernel::store_blocking(gpr_dump + i, ckernel::regfile[i]);

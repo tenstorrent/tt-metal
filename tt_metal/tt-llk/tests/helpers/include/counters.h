@@ -19,6 +19,35 @@
 #include "perf_counters/inventory.h"
 #include "perf_counters/registers.h"
 
+// Optional families next to PERF_COUNTERS_COMPILED: LLK_PERF_RISCV_PMC (per zone, each TRISC), LLK_PERF_NOC_GROUPS and
+// LLK_PERF_ROUTER_OPTION (per launch, BRISC); the arch checks below follow what each arch has.
+#if defined(LLK_PERF_RISCV_PMC)
+#if defined(ARCH_WORMHOLE)
+#error "LLK_PERF_RISCV_PMC: Wormhole RISC-V cores have no performance counter CSRs"
+#endif
+#ifndef LLK_PERF_RISCV_EV3
+#define LLK_PERF_RISCV_EV3 0
+#endif
+#ifndef LLK_PERF_RISCV_EV4
+#define LLK_PERF_RISCV_EV4 0
+#endif
+#include "perf_counters/riscv_pmc_hw.h"
+#endif
+#if defined(LLK_PERF_NOC_GROUPS) || defined(LLK_PERF_ROUTER_OPTION)
+#if defined(ARCH_QUASAR)
+#error "LLK_PERF_NOC_GROUPS and LLK_PERF_ROUTER_OPTION: the Quasar harness has no BRISC and no TRISC is known to read the tile's NoC registers"
+#endif
+#endif
+#if defined(LLK_PERF_NOC_GROUPS)
+#include "perf_counters/noc_counters_hw.h"
+#endif
+#if defined(LLK_PERF_ROUTER_OPTION)
+#if defined(ARCH_WORMHOLE)
+#error "LLK_PERF_ROUTER_OPTION: Wormhole has no router counters"
+#endif
+#include "perf_counters/router_counters_hw.h"
+#endif
+
 namespace llk_perf
 {
 
@@ -41,8 +70,20 @@ using llk::perf::PerfCounterType;
 constexpr std::uint32_t PERF_COUNTERS_MAX_ZONES = 8;
 constexpr std::uint32_t SYNC_ZONE_COMPLETE      = 0xFFu; // written after readout; host polls for it
 
-constexpr std::uint32_t PERF_COUNTERS_ZONE_DATA_BYTES = (PERF_COUNTERS_BANK_CYCLES_WORDS + PERF_COUNTERS_DATA_WORDS) * 4;
-constexpr std::uint32_t PERF_COUNTERS_ZONE_SIZE       = PERF_COUNTERS_ZONE_DATA_BYTES + 40;
+// A zone block: the Tensix bank cycles and counts, 40 bytes of sync, then one RISC-V monitor block per thread.
+constexpr std::uint32_t PERF_COUNTERS_ZONE_DATA_BYTES   = (PERF_COUNTERS_BANK_CYCLES_WORDS + PERF_COUNTERS_DATA_WORDS) * 4;
+constexpr std::uint32_t PERF_COUNTERS_RISCV_BYTES       = PERF_COUNTERS_RISCV_THREADS * PERF_COUNTERS_RISCV_THREAD_WORDS * 4;
+constexpr std::uint32_t PERF_COUNTERS_ZONE_SIZE         = PERF_COUNTERS_ZONE_DATA_BYTES + 40 + PERF_COUNTERS_RISCV_BYTES;
+constexpr std::uint32_t PERF_COUNTERS_RISCV_ZONE_OFFSET = PERF_COUNTERS_ZONE_DATA_BYTES + 40;
+
+// A thread's RISC-V monitor block in words; cycles and instret hold the window start until it ends, then the deltas.
+constexpr std::uint32_t RISCV_WORD_FLAG    = 0;
+constexpr std::uint32_t RISCV_WORD_EVENT3  = 1;
+constexpr std::uint32_t RISCV_WORD_EVENT4  = 2;
+constexpr std::uint32_t RISCV_WORD_CYCLES  = 3;
+constexpr std::uint32_t RISCV_WORD_INSTRET = 4;
+constexpr std::uint32_t RISCV_WORD_PMC3    = 5;
+constexpr std::uint32_t RISCV_WORD_PMC4    = 6;
 
 constexpr std::uint32_t PERF_COUNTERS_SHARED_CONFIG_ADDR = PERF_COUNTERS_BASE_ADDR;
 constexpr std::uint32_t PERF_COUNTERS_ZONES_BASE         = PERF_COUNTERS_BASE_ADDR + PERF_COUNTERS_CONFIG_WORDS * 4;
@@ -50,6 +91,11 @@ constexpr std::uint32_t PERF_COUNTERS_ZONES_BASE         = PERF_COUNTERS_BASE_AD
 constexpr std::uint32_t perf_counters_zone_data_addr(std::uint32_t zone)
 {
     return PERF_COUNTERS_ZONES_BASE + zone * PERF_COUNTERS_ZONE_SIZE;
+}
+
+constexpr std::uint32_t perf_counters_riscv_slot_addr(std::uint32_t zone, std::uint32_t thread)
+{
+    return perf_counters_zone_data_addr(zone) + PERF_COUNTERS_RISCV_ZONE_OFFSET + thread * PERF_COUNTERS_RISCV_THREAD_WORDS * 4;
 }
 
 // +0 holds the SYNC_ZONE_COMPLETE flag the host polls.
@@ -63,7 +109,17 @@ constexpr std::uint32_t PERF_COUNTERS_PENDING_ZONE_ADDR = perf_counters_sync_ctr
 
 // Quasar's launch word (it has no stream registers): the word after the zone blocks.
 constexpr std::uint32_t PERF_COUNTERS_LAUNCH_WORD_ADDR = PERF_COUNTERS_ZONES_BASE + PERF_COUNTERS_MAX_ZONES * PERF_COUNTERS_ZONE_SIZE;
-constexpr std::uint32_t PERF_COUNTERS_LAYOUT_END       = PERF_COUNTERS_LAUNCH_WORD_ADDR + 4;
+
+// The launch block after the launch word: NoC flag and group mask, router flag and option, then the NoC and router values.
+constexpr std::uint32_t PERF_COUNTERS_LAUNCH_BLOCK_ADDR = PERF_COUNTERS_LAUNCH_WORD_ADDR + 4;
+constexpr std::uint32_t TILE_WORD_NOC_FLAG              = 0;
+constexpr std::uint32_t TILE_WORD_NOC_SELECT            = 1;
+constexpr std::uint32_t TILE_WORD_ROUTER_FLAG           = 2;
+constexpr std::uint32_t TILE_WORD_ROUTER_SELECT         = 3;
+constexpr std::uint32_t TILE_WORD_NOC_VALUES            = 4;
+constexpr std::uint32_t TILE_WORD_ROUTER_VALUES         = TILE_WORD_NOC_VALUES + PERF_COUNTERS_TILE_VALUE_WORDS;
+constexpr std::uint32_t PERF_COUNTERS_LAYOUT_END        = PERF_COUNTERS_LAUNCH_BLOCK_ADDR + PERF_COUNTERS_LAUNCH_BLOCK_WORDS * 4;
+static_assert(TILE_WORD_ROUTER_VALUES + PERF_COUNTERS_TILE_VALUE_WORDS == PERF_COUNTERS_LAUNCH_BLOCK_WORDS, "launch block layout");
 
 // A literal because BRISC has no llk_profiler namespace; the LLK_PROFILER section asserts it symbolically.
 static_assert(PERF_COUNTERS_LAYOUT_END <= 0x16AFF0u, "Perf counter L1 layout overflows into the profiler region");
@@ -278,6 +334,50 @@ inline void configure_hardware()
     llk::perf::configure(llk::perf::bank_regs(Bank::L1));
 }
 
+#if defined(LLK_PERF_NOC_GROUPS)
+constexpr std::uint32_t NOC_VALUE_COUNT = llk::perf::noc::NIU_NOCS * llk::perf::noc::selected_regs<LLK_PERF_NOC_GROUPS>().size();
+static_assert(NOC_VALUE_COUNT != 0, "LLK_PERF_NOC_GROUPS selects no NoC counter");
+static_assert(NOC_VALUE_COUNT <= PERF_COUNTERS_TILE_VALUE_WORDS, "LLK_PERF_NOC_GROUPS selects more NoC counters than the launch block holds");
+#endif
+#if defined(LLK_PERF_ROUTER_OPTION)
+constexpr std::uint32_t ROUTER_VALUE_COUNT = llk::perf::router::value_count(LLK_PERF_ROUTER_OPTION);
+static_assert((LLK_PERF_ROUTER_OPTION & ~llk::perf::router::OPTION_VALID) == 0, "LLK_PERF_ROUTER_OPTION has bits outside the router option mask");
+static_assert(ROUTER_VALUE_COUNT != 0, "LLK_PERF_ROUTER_OPTION selects no router bank or virtual channel this architecture has");
+static_assert(ROUTER_VALUE_COUNT <= PERF_COUNTERS_TILE_VALUE_WORDS, "LLK_PERF_ROUTER_OPTION selects more router values than the launch block holds");
+#endif
+
+#if defined(LLK_PERF_NOC_GROUPS) || defined(LLK_PERF_ROUTER_OPTION)
+inline volatile std::uint32_t* tile_block()
+{
+    return reinterpret_cast<volatile std::uint32_t*>(PERF_COUNTERS_LAUNCH_BLOCK_ADDR);
+}
+#endif
+
+// The tile counters have no zone: BRISC reads them around the launch, the start readings waiting in the block as values.
+inline void tile_counters_begin()
+{
+#if defined(LLK_PERF_NOC_GROUPS)
+    llk::perf::noc::capture<LLK_PERF_NOC_GROUPS>(tile_block() + TILE_WORD_NOC_VALUES, false);
+#endif
+#if defined(LLK_PERF_ROUTER_OPTION)
+    llk::perf::router::capture<LLK_PERF_ROUTER_OPTION>(tile_block() + TILE_WORD_ROUTER_VALUES, false);
+#endif
+}
+
+inline void tile_counters_end()
+{
+#if defined(LLK_PERF_NOC_GROUPS)
+    llk::perf::noc::capture<LLK_PERF_NOC_GROUPS>(tile_block() + TILE_WORD_NOC_VALUES, true);
+    tile_block()[TILE_WORD_NOC_SELECT] = LLK_PERF_NOC_GROUPS;
+    tile_block()[TILE_WORD_NOC_FLAG]   = SYNC_ZONE_COMPLETE | (launch_word() & ~LAUNCH_ZONES_MASK);
+#endif
+#if defined(LLK_PERF_ROUTER_OPTION)
+    llk::perf::router::capture<LLK_PERF_ROUTER_OPTION>(tile_block() + TILE_WORD_ROUTER_VALUES, true);
+    tile_block()[TILE_WORD_ROUTER_SELECT] = LLK_PERF_ROUTER_OPTION;
+    tile_block()[TILE_WORD_ROUTER_FLAG]   = SYNC_ZONE_COMPLETE | (launch_word() & ~LAUNCH_ZONES_MASK);
+#endif
+}
+
 // Runs on BRISC before it releases the TRISCs. The zone arms start the counters and the readouts write the results and
 // the config they used.
 inline void configure_from_brisc()
@@ -285,6 +385,16 @@ inline void configure_from_brisc()
     if (counted_zones() != 0)
     {
         configure_hardware();
+        tile_counters_begin();
+    }
+}
+
+// Runs on BRISC once every TRISC is done, before the host is told.
+inline void finish_from_brisc()
+{
+    if (counted_zones() != 0)
+    {
+        tile_counters_end();
     }
 }
 #endif
@@ -292,6 +402,10 @@ inline void configure_from_brisc()
 #else
 // Counters off: the launch hooks brisc.cpp and trisc.cpp call compile to nothing.
 __attribute__((always_inline)) inline void configure_from_brisc()
+{
+}
+
+__attribute__((always_inline)) inline void finish_from_brisc()
 {
 }
 
@@ -476,6 +590,38 @@ inline __attribute__((always_inline)) void read_all_counters([[maybe_unused]] st
     ckernel::fence_compiler();
 }
 
+#if defined(LLK_PERF_RISCV_PMC)
+// Each thread's own window of a zone, counted or not so that every launch runs the same code.
+inline __attribute__((always_inline)) volatile std::uint32_t* riscv_slot(std::uint32_t zone_id)
+{
+    return reinterpret_cast<volatile std::uint32_t*>(perf_counters_riscv_slot_addr(zone_id, llk_barrier::THREAD_ID));
+}
+
+inline __attribute__((always_inline)) void riscv_window_begin(std::uint32_t zone_id)
+{
+    llk::perf::riscv::arm(LLK_PERF_RISCV_EV3, LLK_PERF_RISCV_EV4);
+    const llk::perf::riscv::Reference start = llk::perf::riscv::reference();
+    volatile std::uint32_t* slot            = riscv_slot(zone_id);
+    slot[RISCV_WORD_CYCLES]                 = start.cycles;
+    slot[RISCV_WORD_INSTRET]                = start.instret;
+}
+
+inline __attribute__((always_inline)) void riscv_window_end(std::uint32_t zone_id)
+{
+    volatile std::uint32_t* slot            = riscv_slot(zone_id);
+    const llk::perf::riscv::Reference start = {slot[RISCV_WORD_CYCLES], slot[RISCV_WORD_INSTRET]};
+    std::uint32_t pmc3, pmc4, cycles, instret;
+    llk::perf::riscv::sample(start, pmc3, pmc4, cycles, instret);
+    slot[RISCV_WORD_CYCLES]  = cycles;
+    slot[RISCV_WORD_INSTRET] = instret;
+    slot[RISCV_WORD_PMC3]    = pmc3;
+    slot[RISCV_WORD_PMC4]    = pmc4;
+    slot[RISCV_WORD_EVENT3]  = LLK_PERF_RISCV_EV3;
+    slot[RISCV_WORD_EVENT4]  = LLK_PERF_RISCV_EV4;
+    slot[RISCV_WORD_FLAG]    = SYNC_ZONE_COMPLETE | (detail::token << LAUNCH_TOKEN_SHIFT);
+}
+#endif // LLK_PERF_RISCV_PMC
+
 inline __attribute__((always_inline)) void freeze_zone(std::uint32_t zone_id)
 {
     freeze_all_counters();
@@ -586,6 +732,9 @@ struct perf_counter_scoped
                 arm_all_counters(zid); // START, or 0 (no command) when the zone is not counted
 #endif
             });
+#if defined(PERF_COUNTERS_COMPILED) && defined(LLK_PERF_RISCV_PMC)
+        riscv_window_begin(zid);
+#endif
         ckernel::fence_compiler();
     }
 
@@ -593,6 +742,9 @@ struct perf_counter_scoped
     {
         ckernel::fence_compiler();
         [[maybe_unused]] const std::uint32_t zid = zone_id;
+#if defined(PERF_COUNTERS_COMPILED) && defined(LLK_PERF_RISCV_PMC)
+        riscv_window_end(zid);
+#endif
         static_assert(
             exit_barrier_for(RUN_TYPE) || is_single_thread_runtype(RUN_TYPE),
             "a run type that skips the exit barrier needs a measured thread in is_measured_thread() to freeze the counters");
