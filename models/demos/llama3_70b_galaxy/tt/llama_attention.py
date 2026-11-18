@@ -21,6 +21,36 @@ PREFILL_SDPA_HIFI2 = os.environ.get("LLAMA_GALAXY_PREFILL_SDPA_HIFI2", "0") == "
 CPF_RING_GATHER_Q_CHUNK = 32
 CPF_RING_GATHER_K_CHUNK = 256
 CPF_RING_GATHER_SCALE = 16.0
+# The generator rounds a cached prefix down to a multiple of this; ring traces are keyed by prefix length.
+CPF_RING_ALIGN = 1024
+
+
+def cpf_ring_warm_prefixes():
+    """LLAMA_GALAXY_PREFILL_CPF_RING_WARM (read at call time, default 2048): the prefix lengths whose ring traces the
+    generator warms up. Only these take the ring path, so no ring trace is ever captured at serving time."""
+    return [int(p) for p in os.environ.get("LLAMA_GALAXY_PREFILL_CPF_RING_WARM", "2048").split(",") if p.strip()]
+
+
+def cpf_ring_eligible(seq_len, prefix_len, block_size, support_seqlens):
+    """The one CPF ring rule for a batch-1 prefill of seq_len new rows over prefix_len cached rows, shared by
+    TtLlamaAttention._cpf_ring_enabled (which path runs) and the generator (trace key, skip rule, rounding, warmup),
+    so a trace keyed for the ring path always holds it and no other trace does. block_size is the paged KV cache's
+    (kv tensor dim 2: vLLM passes no paged_attention_config); support_seqlens the prefill TT_CCL's."""
+    if os.environ.get("LLAMA_GALAXY_PREFILL_CPF_RING", "0") != "1":
+        return False
+    P = int(prefix_len)
+    if P <= 0 or seq_len < int(os.environ.get("LLAMA_GALAXY_PREFILL_CPF_RING_MIN", "2048")):
+        return False
+    return (
+        P in cpf_ring_warm_prefixes()
+        and P in support_seqlens  # the K/V broadcast uses its ATTN_REPLICATE buffers
+        and P % CPF_RING_ALIGN == 0
+        and P % CPF_RING_GATHER_K_CHUNK == 0
+        and P % block_size == 0
+        and P % ring_sdpa_q_chunk_size(seq_len) == 0
+        and (P + seq_len) % 512 == 0  # SDPA_PROGCFG k_chunk_size for seq_len >= 2048
+        and seq_len % block_size == 0
+    )
 
 
 class TtLlamaAttention(LightweightModule):
@@ -1108,28 +1138,14 @@ class TtLlamaAttention(LightweightModule):
             compute_with_storage_grid_size=ttnn.CoreCoord(gx, gy),
         )
 
-    def _cpf_ring_enabled(self, seq_len, batch_size, chunk_start_idx, page_table):
+    def _cpf_ring_enabled(self, seq_len, batch_size, chunk_start_idx, page_table, block_size):
         """LLAMA_GALAXY_PREFILL_CPF_RING=1 (opt-in, read at call time): run prefill over a cached prefix
         (chunk_start_idx = P > 0) as ring SDPA on all 4 mesh columns instead of chunked SDPA on the owning column.
-        Needs: new rows N >= LLAMA_GALAXY_PREFILL_CPF_RING_MIN (default 2048), P a TT_CCL prefill length (the K/V
-        broadcast uses its ATTN_REPLICATE buffers), and the ring op's chunk constraints."""
-        if os.environ.get("LLAMA_GALAXY_PREFILL_CPF_RING", "0") != "1":
+        Rule: cpf_ring_eligible (new rows N >= LLAMA_GALAXY_PREFILL_CPF_RING_MIN, P a warmed prefix length with CCL
+        buffers, the ring op's chunk constraints)."""
+        if batch_size != 1 or page_table is None or self.is_blackhole:
             return False
-        if batch_size != 1 or page_table is None or self.paged_attention_config is None or self.is_blackhole:
-            return False
-        P = int(chunk_start_idx)
-        block_size = self.paged_attention_config.block_size
-        q_chunk = ring_sdpa_q_chunk_size(seq_len)
-        return (
-            seq_len >= int(os.environ.get("LLAMA_GALAXY_PREFILL_CPF_RING_MIN", "2048"))
-            and P in getattr(self.tt_ccl, "support_seqlens", ())
-            and P % 1024 == 0  # generator.CPF_RING_ALIGN: the generator's ring trace keys cover every ring call
-            and P % CPF_RING_GATHER_K_CHUNK == 0
-            and P % block_size == 0
-            and P % q_chunk == 0
-            and (P + seq_len) % 512 == 0  # SDPA_PROGCFG k_chunk_size for seq_len >= 2048
-            and seq_len % block_size == 0
-        )
+        return cpf_ring_eligible(seq_len, chunk_start_idx, block_size, getattr(self.tt_ccl, "support_seqlens", ()))
 
     def _cpf_ring_state(self, keys_BKSD):
         """Per-model persistent tensors for the CPF ring path, shared by all layers (kept on tt_ccl):
@@ -1561,7 +1577,9 @@ class TtLlamaAttention(LightweightModule):
 
         # LLAMA_GALAXY_PREFILL_CPF_RING=1: cached-prefix prefill as ring SDPA on all 4 mesh columns.
         cpf_ring_kv = None
-        if use_chunked_sdpa and self._cpf_ring_enabled(seq_len, batch_size, chunk_start_idx, page_table):
+        if use_chunked_sdpa and self._cpf_ring_enabled(
+            seq_len, batch_size, chunk_start_idx, page_table, int(keys_BKSD.shape[2])
+        ):
             cpf_ring_kv = self._cpf_ring_kv(
                 keys_BKSD, values_BKSD, k_fill, v_fill, page_table, int(chunk_start_idx), prefill_num_links
             )

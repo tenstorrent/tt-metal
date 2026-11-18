@@ -23,6 +23,7 @@ from models.common.sampling import (
     format_sampling_params,
 )
 from models.common.warmup import WarmupForwardMixin
+from models.demos.llama3_70b_galaxy.tt.llama_attention import CPF_RING_ALIGN, cpf_ring_eligible, cpf_ring_warm_prefixes
 from models.demos.llama3_70b_galaxy.tt.model_config import SDPA_CHUNK_ALIGN
 from models.demos.llama3_70b_galaxy.tt.prefill_padding import padded_prefill_len, prefill_extra_seqlens
 from models.tt_transformers.tt.common import (
@@ -45,13 +46,6 @@ CHUNKED_PREFILL = os.environ.get("LLAMA_GALAXY_CHUNKED_PREFILL", "0") == "1"
 # Non-power-of-two prefill lengths from LLAMA_GALAXY_PREFILL_PAD (empty when unset). TT_CCL reads the
 # same variable for its persistent buffers, so the padded lengths always have buffers and traces.
 PREFILL_EXTRA_SEQLENS = prefill_extra_seqlens()
-
-# LLAMA_GALAXY_PREFILL_CPF_RING: the cached prefix is rounded down to a multiple of this (the ring path's trace
-# key carries the prefix length, so this bounds the number of traces), and the prefix lengths warmed up.
-CPF_RING_ALIGN = 1024
-CPF_RING_WARM_PREFIXES = [
-    int(p) for p in os.environ.get("LLAMA_GALAXY_PREFILL_CPF_RING_WARM", "2048").split(",") if p.strip()
-]
 
 
 def _as_list(value):
@@ -121,31 +115,20 @@ def get_padded_prefill_len(seq_len: int) -> int:
 
 def _cpf_ring_on() -> bool:
     """LLAMA_GALAXY_PREFILL_CPF_RING=1 (read at call time): prefill over a cached prefix runs ring SDPA on all
-    4 mesh columns (llama_attention._cpf_ring_kv) when the request is eligible (_cpf_ring_request)."""
+    4 mesh columns (llama_attention._cpf_ring_kv) when the request is eligible (Generator._cpf_ring_request)."""
     return os.environ.get("LLAMA_GALAXY_PREFILL_CPF_RING", "0") == "1"
 
 
-def _cpf_ring_request(padded_new: int, num_cached: int) -> bool:
-    """Whether a cached-prefix request can take the CPF ring path. A superset of the attention-side check
-    (TtLlamaAttention._cpf_ring_enabled), so trace keys that carry the prefix length cover every ring trace."""
-    return (
-        _cpf_ring_on()
-        and num_cached > 0
-        and num_cached % CPF_RING_ALIGN == 0
-        and padded_new >= int(os.environ.get("LLAMA_GALAXY_PREFILL_CPF_RING_MIN", "2048"))
-    )
-
-
-def _should_skip_prefix_caching_env(seq_len: int, num_cached: int) -> bool:
+def _should_skip_prefix_caching_env(seq_len: int, num_cached: int, ring: bool) -> bool:
     """LLAMA_GALAXY_PREFIX_SKIP (read at call time) selects the skip rule:
     unset -> _should_skip_prefix_caching (default heuristic);
     "0"   -> never skip: every cache hit runs the cached path;
-    "ring"-> keep the cache when the request takes the CPF ring path (LLAMA_GALAXY_PREFILL_CPF_RING=1),
+    "ring"-> keep the cache when the request takes the CPF ring path (ring: Generator._cpf_ring_request),
              otherwise the default heuristic."""
     rule = os.environ.get("LLAMA_GALAXY_PREFIX_SKIP")
     if rule == "0":
         return False
-    if rule == "ring" and _cpf_ring_request(get_padded_prefill_len(seq_len - num_cached), num_cached):
+    if rule == "ring" and ring:
         return False
     return _should_skip_prefix_caching(seq_len, num_cached)
 
@@ -289,6 +272,17 @@ class Generator(WarmupForwardMixin):
             raise ValueError(f"Request slot {slot} is out of range")
         if self.model.sampling is not None:
             self.model.sampling.seed_manager.release_slot(slot)
+
+    def _cpf_ring_request(self, padded_new: int, num_cached: int, block_size: int) -> bool:
+        """Whether a batch-1 prefill of padded_new rows over num_cached cached rows takes the CPF ring path: the
+        attention-side rule (llama_attention.cpf_ring_eligible) with this model's prefill CCL lengths, so the
+        _cs<P> trace keys, the skip rule, the prefix rounding and the warmup all match what attention runs."""
+        if getattr(self.model.args, "is_blackhole", False):
+            return False
+        support_seqlens = getattr(self.model.tt_ccl, "support_seqlens", None)
+        if support_seqlens is None:
+            support_seqlens = getattr(self.model.tt_ccl_prefill, "support_seqlens", ())
+        return cpf_ring_eligible(padded_new, num_cached, block_size, support_seqlens)
 
     def _set_prefill_column_mask(self, tt_column_mask):
         # Keep mask available on whichever TT_CCL instance attention currently uses.
@@ -493,9 +487,9 @@ class Generator(WarmupForwardMixin):
 
         # Phase 3 (LLAMA_GALAXY_PREFILL_CPF_RING=1): the ring path's traces for the warmed prefix lengths.
         if _cpf_ring_on():
-            for prefix_len in CPF_RING_WARM_PREFIXES:
+            for prefix_len in cpf_ring_warm_prefixes():
                 for supported_length in warmup_sequence_lengths:
-                    if not _cpf_ring_request(supported_length, prefix_len):
+                    if not self._cpf_ring_request(supported_length, prefix_len, block_size):
                         continue
                     total_seq_len = prefix_len + supported_length
                     logger.info(
@@ -577,9 +571,13 @@ class Generator(WarmupForwardMixin):
                         f"-> {aligned} (aligned to {SDPA_CHUNK_ALIGN})"
                     )
                     num_cached_tokens_list[idx] = aligned
-                # CPF ring: round a prefix >= CPF_RING_ALIGN down to a multiple of it (recomputes the rest).
-                if _cpf_ring_on() and num_cached_tokens_list[idx] >= CPF_RING_ALIGN:
-                    num_cached_tokens_list[idx] = (num_cached_tokens_list[idx] // CPF_RING_ALIGN) * CPF_RING_ALIGN
+                # CPF ring: round a prefix >= CPF_RING_ALIGN down to a multiple of it (recomputes the rest) when the
+                # rounded request takes the ring path.
+                ring_cached = (num_cached_tokens_list[idx] // CPF_RING_ALIGN) * CPF_RING_ALIGN
+                if ring_cached != num_cached_tokens_list[idx] and self._cpf_ring_request(
+                    get_padded_prefill_len(int(prompt_lens[idx]) - ring_cached), ring_cached, get_block_size(kv_cache)
+                ):
+                    num_cached_tokens_list[idx] = ring_cached
 
         # Heuristic: revert to non-cached path when prefix-caching overhead
         # exceeds the compute savings (chunked-SDPA penalty, column masking,
@@ -590,7 +588,11 @@ class Generator(WarmupForwardMixin):
         # hit, and resetting a resume to 0 would recompute every earlier chunk.
         if not self.warming_up_prefill and not CHUNKED_PREFILL:
             for idx, seq_len in enumerate(prompt_lens):
-                if _should_skip_prefix_caching_env(int(seq_len), num_cached_tokens_list[idx]):
+                num_cached = num_cached_tokens_list[idx]
+                ring = self._cpf_ring_request(
+                    get_padded_prefill_len(int(seq_len) - num_cached), num_cached, get_block_size(kv_cache)
+                )
+                if _should_skip_prefix_caching_env(int(seq_len), num_cached, ring):
                     logger.info(
                         f"Prefix-caching heuristic: skipping cache for user {idx} "
                         f"(seq_len={int(seq_len)}, cached={num_cached_tokens_list[idx]})"
@@ -1225,7 +1227,11 @@ class Generator(WarmupForwardMixin):
         use_start_pos = "sp1" if (chunk_start_idx is not None and chunk_start_idx > 0) else "sp0"
         trace_key = f"{prefill_seq_len}_{batch_size}_{use_start_pos}"
         # The CPF ring path bakes the prefix length into its ops: one trace per (new length, prefix length).
-        if use_start_pos == "sp1" and batch_size == 1 and _cpf_ring_request(prefill_seq_len, chunk_start_idx):
+        if (
+            use_start_pos == "sp1"
+            and batch_size == 1
+            and self._cpf_ring_request(prefill_seq_len, chunk_start_idx, block_size)
+        ):
             trace_key += f"_cs{chunk_start_idx}"
 
         # For prefix caching, the model output has only prefill_seq_len positions (the chunk).
