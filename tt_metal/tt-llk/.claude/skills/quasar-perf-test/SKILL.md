@@ -20,6 +20,9 @@ skill. For Quasar work:
    masks, `set_up_dest_dvalid_per_thread`, and the known Quasar stand-in
    counts.
 
+Axis, argument and CSV column names follow `perf-test`, "Canonical axis names";
+a Quasar module reuses the Wormhole/Blackhole spelling.
+
 Related: `quasar-test-coverage` chooses the functional sweep that perf
 inherits; `perf-coverage` compares Quasar test versus perf, and Blackhole
 versus Quasar.

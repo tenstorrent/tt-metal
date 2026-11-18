@@ -133,7 +133,9 @@ Rules:
 - Sweep the tile shape the way the architecture's existing tests do, and
   derive faces and face rows from it rather than sweeping them separately.
   When an axis change renames pytest ids, find and update every place that
-  hard-codes those ids.
+  hard-codes those ids (checklist in "Renames" below).
+- Spell an axis the way the other architecture does; see "Canonical axis
+  names" below.
 - Build `templates` and `runtimes` in a form `perf/perf_schema_derive.py`
   can read statically: list literals, `+`, conditional expressions, and local
   helpers that return a list. It does not follow `.extend()` or `.append()`;
@@ -358,6 +360,45 @@ schema for the target architecture:
   the shared warehouse;
 - keep configuration, timing and provenance columns in their existing
   sections.
+
+### Renames
+
+- Record a renamed column in the entry's `aliases` (old -> new) and a renamed
+  module in `test_name_aliases` (old -> current), and bump `version` once per
+  PR. The perf gate reads both from this catalog to match older baselines.
+- Column names (dataclass field names) are unique across all parameter classes;
+  `schema.assert_unique_columns` and the header gate fail on a duplicate.
+  Before adding a template class, check whether an existing one already has the
+  field and extend that one. `MATH_OP` carries `mathop`, `unary_extra` and
+  `pool_type`, and emits `POOL_TYPE` and the ternary operation constant, so
+  reductions and ternary tests use it instead of their own class.
+- Check each place that names the old spelling: `tests/perf_split_costs.json`
+  and `tests/perf_split_costs_sol.json`, the ids hard-coded in
+  `hardware_free/kernels/test_gathering_config.py`, `test_schemas.py`,
+  `wide_schema.py` and `wide_schema_quasar.py`, the kernel source filename, and
+  the gate's sparse checkout in `.github/workflows/llk-perf-gate-impl.yaml`
+  when a new reader of the catalog is added.
+- Prove the rename changed nothing else: collected pytest ids per architecture
+  before and after are identical except for the renamed token.
+
+### Canonical axis names
+
+One spelling per quantity on every architecture, in the axis, the test
+function argument and the CSV column. The comparer and the dashboard join on
+these names, so a second spelling shows up as two one-sided axes.
+
+| Quantity | Name | Notes |
+|---|---|---|
+| Dest sync mode | `dest_sync` | not `dest_sync_mode` |
+| Math operation | `mathop` | not `math_op`, `ternary_mathop`; `op` only for kernel-variant strings that are not a `MathOperation` |
+| Pool or reduce kind | `pool_type` | not `reduce_pool`, `reduce_pool_type` |
+| Tile count | `tile_cnt` | check the module's meaning first |
+| Dest accumulation | `dest_acc` | |
+| Data formats | `formats` | |
+
+Reuse the name the other architecture already uses; never rename one side
+only. A module pairs across architectures by equal stem, so the Wormhole/
+Blackhole and Quasar modules of one op share it (`perf_pack_l1_acc`).
 
 ## 7. Repair a run type
 
