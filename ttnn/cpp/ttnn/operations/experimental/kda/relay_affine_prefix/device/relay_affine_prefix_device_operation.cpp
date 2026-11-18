@@ -12,7 +12,6 @@
 #include <tt-metalium/experimental/fabric/fabric.hpp>
 
 #include "ttnn/device_operation.hpp"
-#include "ttnn/operations/ccl/ccl_common.hpp"
 #include "ttnn/operations/experimental/kda/factory/kda_factory_utils.hpp"
 #include "ttnn/operations/experimental/kda/kda_performance_model.hpp"
 
@@ -159,13 +158,6 @@ void RelayAffinePrefixOperation::validate_on_program_cache_miss(
          {&in.actual_start, "actual_start"},
          {&in.landing, "landing"},
          {in.slab_index ? &*in.slab_index : nullptr, "slab_index"}},
-        operation_name);
-    // The final carry leaves each sender as a multicast along the SP axis, which a 2D fabric routes only along a
-    // straight axis.
-    TT_FATAL(
-        !tt::tt_fabric::is_2d_fabric_config(tt::tt_fabric::GetFabricConfig()) ||
-            ttnn::ccl::is_axis_straight(*mesh, attrs.sequence_parallel_axis),
-        "{}: the final carry multicasts along a straight SP axis",
         operation_name);
     for (const auto& [tensor, name] : {std::pair{&in.final_e, "final_e"}, std::pair{&in.final_b, "final_b"}}) {
         kda_factory_detail::check_allocated_device_tensor(*tensor, operation_name, name);

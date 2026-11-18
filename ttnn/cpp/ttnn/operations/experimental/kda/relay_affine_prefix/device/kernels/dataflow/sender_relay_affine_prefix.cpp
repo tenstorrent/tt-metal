@@ -37,6 +37,9 @@ constexpr uint32_t slab_offset = get_compile_time_arg_val(slab_ct + 3);
 constexpr uint32_t entry_tiles = get_compile_time_arg_val(slab_ct + 4);
 constexpr uint32_t slab_index_word = get_compile_time_arg_val(slab_ct + 5);
 constexpr auto slab_index_args = TensorAccessorArgs<slab_ct + 6>();
+// On a 2D fabric whose SP axis turns, a multicast cannot follow the axis: the carry goes to each rank this sender
+// serves as a 2D unicast (chip and mesh per rank after the connection args), carry_range ranks in all.
+constexpr bool unicast_peers = get_compile_time_arg_val(slab_index_args.next_compile_time_args_offset());
 // One packet header per packet of each slot, out of this RISC's share of the pool.
 static_assert(
     slots * chunks <= MEM_PACKET_HEADER_POOL_SIZE / MaxDMProcessorsPerCoreType / PACKET_HEADER_MAX_SIZE,
@@ -45,7 +48,8 @@ static_assert(
 // Sender core: the relay's sender of a link reads each finished tile column out of its head cores and forwards it into
 // the successor's landing buffer (the first rank's final-state landing, from the last rank) over the fabric. On the
 // chronologically first rank, every sender then multicasts the final carry its head cores form, carry_range ranks
-// along its one connection, into every rank's carry output; together a link's senders reach every other rank once.
+// along its one connection (or unicasts it to each of them), into every rank's carry output; together a link's
+// senders reach every other rank once.
 void kernel_main() {
     size_t arg = 0;
     const uint32_t start_address = get_common_arg_val<uint32_t>(0);
@@ -98,6 +102,7 @@ void kernel_main() {
 
     RoutingPlaneConnectionManager fabric;
     open_connections(fabric, connections, arg);
+    const size_t peer_args = arg;
     auto* to_successor = relay ? &fabric.get(0).sender : nullptr;
     // The relay's unit is one tile column of a head's state (column-major storage): the successor computes that
     // column of its state as soon as it lands. Units go through `slots` buffers: unit u + slots - 1 is read out of its
@@ -188,20 +193,38 @@ void kernel_main() {
         constexpr uint32_t tile_bytes = unit_bytes / kt;
         static_assert(slots * chunks >= kt + 1, "the carry reuses the relay's packet headers");
         static_assert(slots >= 2, "the carry reads the next column into a second stage slot");
-        uint8_t range[1] = {carry_range};
         volatile tt_l1_ptr PACKET_HEADER_TYPE* carry_hdrs[kt + 1];
         for (uint32_t i = 0; i <= kt; ++i) {
             carry_hdrs[i] = hdrs[i / chunks][i % chunks];
-            fabric_set_mcast_route(fabric, carry_hdrs[i], range, 0);
-            if (i < kt) {
-                fabric_multicast_noc_unicast_write_set_state<UnicastWriteUpdateMask::PayloadSize>(
-                    carry_hdrs[i], 1, range[0], nullptr, tile_bytes);
-            } else {
-                fabric_multicast_noc_unicast_atomic_inc_set_state<
-                    UnicastAtomicIncUpdateMask::Val | UnicastAtomicIncUpdateMask::Flush>(
-                    carry_hdrs[i], 1, range[0], NocUnicastAtomicIncCommandHeader{0, 1u});
+        }
+        if constexpr (!unicast_peers) {
+            uint8_t range[1] = {carry_range};
+            for (uint32_t i = 0; i <= kt; ++i) {
+                fabric_set_mcast_route(fabric, carry_hdrs[i], range, 0);
+                if (i < kt) {
+                    fabric_multicast_noc_unicast_write_set_state<UnicastWriteUpdateMask::PayloadSize>(
+                        carry_hdrs[i], 1, range[0], nullptr, tile_bytes);
+                } else {
+                    fabric_multicast_noc_unicast_atomic_inc_set_state<
+                        UnicastAtomicIncUpdateMask::Val | UnicastAtomicIncUpdateMask::Flush>(
+                        carry_hdrs[i], 1, range[0], NocUnicastAtomicIncCommandHeader{0, 1u});
+                }
             }
         }
+        // Unicast: the pool's headers in groups of kt, a group per rank whose packets are in flight; a group is
+        // rerouted to the next rank only after a flush.
+        constexpr uint32_t peer_groups = slots * chunks / kt;
+        const auto peer_header = [&](uint32_t peer, uint32_t i) {
+            const uint32_t h = (peer % peer_groups) * kt + i;
+            volatile tt_l1_ptr PACKET_HEADER_TYPE* hdr = hdrs[h / chunks][h % chunks];
+#if defined(FABRIC_2D)
+            fabric_set_unicast_route(
+                hdr,
+                static_cast<uint16_t>(get_arg_val<uint32_t>(peer_args + 2 * peer)),
+                static_cast<uint16_t>(get_arg_val<uint32_t>(peer_args + 2 * peer + 1)));
+#endif
+            return hdr;
+        };
         auto* sender = &fabric.get(0).sender;
         const auto carry = TensorAccessor(carry_args, get_common_arg_val<uint32_t>(2));
         // The head's writer counts compute's carry columns, on the relay's sender after the relay's kt; a ready
@@ -235,13 +258,29 @@ void kernel_main() {
             const uint32_t buffer = stage + (u % 2) * unit_bytes;
             // The column's tiles are rows 0..kt-1 of tile column `column` of the row-major carry; a slab index past
             // the slabs writes nothing, and only the arrival increment goes out.
-            for (uint32_t r = 0; r < (writes_carry ? kt : 0); ++r) {
-                fabric_multicast_noc_unicast_write_with_state<UnicastWriteUpdateMask::DstAddr>(
-                    sender,
-                    carry_hdrs[r],
-                    buffer + r * tile_bytes,
-                    NocUnicastCommandHeader{linear::addrgen_detail::get_noc_address(
-                        carry, carry_base + head * kt * kt + r * kt + column, 0)});
+            const auto tile_address = [&](uint32_t r) {
+                return linear::addrgen_detail::get_noc_address(carry, carry_base + head * kt * kt + r * kt + column, 0);
+            };
+            if constexpr (unicast_peers) {
+                for (uint32_t peer = 0; peer < (writes_carry ? carry_range : 0); ++peer) {
+                    if (peer != 0 && peer % peer_groups == 0) {
+                        noc_async_writes_flushed();
+                    }
+                    for (uint32_t r = 0; r < kt; ++r) {
+                        fabric_unicast_noc_unicast_write(
+                            sender,
+                            peer_header(peer, r),
+                            buffer + r * tile_bytes,
+                            tile_bytes,
+                            NocUnicastCommandHeader{tile_address(r)},
+                            1);
+                    }
+                }
+            } else {
+                for (uint32_t r = 0; r < (writes_carry ? kt : 0); ++r) {
+                    fabric_multicast_noc_unicast_write_with_state<UnicastWriteUpdateMask::DstAddr>(
+                        sender, carry_hdrs[r], buffer + r * tile_bytes, NocUnicastCommandHeader{tile_address(r)});
+                }
             }
             if (u + 1 < units) {
                 fetch_carry(u + 1);
@@ -250,10 +289,19 @@ void kernel_main() {
             noc_async_writes_flushed();
         }
         // Flushed after this sender's columns, the increment tells each rank it reaches that its share has landed.
-        fabric_multicast_noc_unicast_atomic_inc_with_state<UnicastAtomicIncUpdateMask::DstAddr>(
-            sender,
-            carry_hdrs[kt],
-            NocUnicastAtomicIncCommandHeader{safe_get_noc_addr(drain_x, drain_y, carry_semaphore, 0), 0});
+        const uint64_t arrival = safe_get_noc_addr(drain_x, drain_y, carry_semaphore, 0);
+        if constexpr (unicast_peers) {
+            for (uint32_t peer = 0; peer < carry_range; ++peer) {
+                if (peer != 0 && peer % peer_groups == 0) {
+                    noc_async_writes_flushed();
+                }
+                fabric_unicast_noc_unicast_atomic_inc(
+                    sender, peer_header(peer, 0), NocUnicastAtomicIncCommandHeader{arrival, 1, true}, 1);
+            }
+        } else {
+            fabric_multicast_noc_unicast_atomic_inc_with_state<UnicastAtomicIncUpdateMask::DstAddr>(
+                sender, carry_hdrs[kt], NocUnicastAtomicIncCommandHeader{arrival, 0});
+        }
         noc_async_writes_flushed();
     }
     close_connections(fabric);
