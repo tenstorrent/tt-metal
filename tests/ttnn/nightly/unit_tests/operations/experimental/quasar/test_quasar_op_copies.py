@@ -134,8 +134,9 @@ def test_quasar_upsample_nearest(device, layout, batch_size, channels, height, w
 # returns garbage for any window of more than 16 elements with stride > 1, because it sums device memory that was
 # never cleared (the original ttnn.avg_pool2d does not). On a freshly opened device that memory happens to be zero,
 # so the case passes; after earlier tests it fails. Not strict for that reason.
+# Tracked in https://github.com/tenstorrent/tt-metal/issues/66262 (remove this xfail once it is fixed).
 _LARGE_WINDOW_AVG_POOL_XFAIL = pytest.mark.xfail(
-    reason="Quasar avg_pool2d reads uncleared memory for >16-element windows with stride > 1", strict=False
+    reason="Quasar avg_pool2d reads uncleared memory for >16-element windows with stride > 1 (#66262)", strict=False
 )
 
 
