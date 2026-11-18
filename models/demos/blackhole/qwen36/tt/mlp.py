@@ -26,9 +26,9 @@ def _build_gate_up(gate_w, up_w, mesh, tp, cache_path, dtype=ttnn.bfloat4_b):
     """Packed [gate|up] weight for all_gather_swiglu_prefill: prepare_for_fused_swiglu tile-pair
     interleave, then column-parallel shard on the 2N dim so each device holds its interleaved slice."""
     import torch
-    from models.tt_dit.utils.tensor import prepare_for_fused_swiglu
 
     from models.demos.blackhole.qwen36.tt import tp_common as tpc
+    from models.tt_dit.utils.tensor import prepare_for_fused_swiglu
 
     def pack(gate):
         # Runs only on a tensor-cache miss (as_tensor preprocess), so a cached load never reads
@@ -322,9 +322,8 @@ class Qwen36MLP:
     def _forward_tp(self, x, decode_ar=None):
         """TP forward: replicated input; reduce-scatter output fractured on hidden dim
         (decode_ar: all-reduce -> replicated RES40 output instead)."""
-        from models.tt_transformers.tt.ccl import tt_all_reduce
-
         from models.demos.blackhole.qwen36.tt import tp_common as tpc
+        from models.tt_transformers.tt.ccl import tt_all_reduce
 
         w = self.weights
         args = self.args

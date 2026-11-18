@@ -350,9 +350,9 @@ def load_gdn_weights_tp(mesh, sd, args, cache_dir=None):
         conv1d_w = sd[P + "conv1d.weight"]
     else:  # bf16 remap: reassemble fused conv1d from q/k/v streams
         conv1d_w = torch.cat([sd[P + "q_conv.weight"], sd[P + "k_conv.weight"], sd[P + "v_conv.weight"]], dim=0)
+    qkv_re = tpc.prepare_gdn_qkv(qkv_w, key_dim, value_dim, nk, dk, nv, dv, tp)
     z_w = sd[P + "in_proj_z.weight"]
     a_w, b_w = sd[P + "in_proj_a.weight"], sd[P + "in_proj_b.weight"]
-    qkv_re = tpc.prepare_gdn_qkv(qkv_w, key_dim, value_dim, nk, dk, nv, dv, tp)
     tw = {}
     # Column-parallel qkvz (DRAM-sharded decode matmul when enabled); distinct .dramshard cache
     qkvz_sharded = getattr(args, "gdn_qkvz_weight_memcfg", None) is not None
