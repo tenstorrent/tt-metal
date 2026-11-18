@@ -313,7 +313,9 @@ class WindowTables:
         n = t.shape[-2]
         if valid >= n * self.geo.sp:
             return t
-        keep = ttnn.lt(self._sp_iota[n], float(valid), dtype=ttnn.bfloat16, memory_config=DRAM)
+        keep = ttnn.lt(
+            self._sp_iota[n], float(valid), dtype=ttnn.bfloat16, memory_config=DRAM, sub_core_grids=sub_cores(t)
+        )  # (FIX.36: capped, rule 18)
         out = ttnn.multiply(t, keep, dtype=ttnn.bfloat16, memory_config=DRAM, sub_core_grids=sub_cores(t))
         dealloc(keep)
         return out
@@ -400,7 +402,9 @@ class WindowTables:
         offset ``valid`` zeroed (exact). Returns ``t`` when every row is valid."""
         if valid >= self.geo.chunk:
             return t
-        keep = ttnn.lt(self._chip_iota, float(valid), dtype=ttnn.bfloat16, memory_config=DRAM)
+        keep = ttnn.lt(
+            self._chip_iota, float(valid), dtype=ttnn.bfloat16, memory_config=DRAM, sub_core_grids=sub_cores(t)
+        )  # (FIX.36: capped, rule 18)
         out = ttnn.multiply(t, keep, dtype=ttnn.bfloat16, memory_config=DRAM, sub_core_grids=sub_cores(t))
         dealloc(keep)
         return out
@@ -1541,7 +1545,13 @@ class TtWindowAttention:
         if self.fold and end - start == g.chunk:  # GLUE_FOLD=on (P.19): no pad rows, the mask would multiply by 1
             masked = full
         else:
-            keep = ttnn.lt(self.tables.iota, float(end - start), dtype=ttnn.bfloat16, memory_config=DRAM)
+            keep = ttnn.lt(  # (FIX.36: capped, rule 18)
+                self.tables.iota,
+                float(end - start),
+                dtype=ttnn.bfloat16,
+                memory_config=DRAM,
+                sub_core_grids=sub_cores(full),
+            )
             masked = ttnn.multiply(
                 full, keep, dtype=ttnn.bfloat16, memory_config=DRAM, sub_core_grids=sub_cores(full)
             )  # pad rows -> 0 (exact)
@@ -1712,7 +1722,9 @@ class TtWindowAttention:
                 if full is not kv:
                     dealloc(full)
                 full = nxt
-            keep = ttnn.lt(tables.iota, float(end - start), dtype=ttnn.bfloat16, memory_config=DRAM)
+            keep = ttnn.lt(  # (FIX.36: capped, rule 18)
+                tables.iota, float(end - start), dtype=ttnn.bfloat16, memory_config=DRAM, sub_core_grids=sub_cores(full)
+            )
             masked = ttnn.multiply(full, keep, dtype=ttnn.bfloat16, memory_config=DRAM, sub_core_grids=sub_cores(full))
             dealloc(keep)
             if full is not kv:

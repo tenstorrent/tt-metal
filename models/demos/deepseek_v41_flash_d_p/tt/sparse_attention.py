@@ -187,7 +187,7 @@ class TtSparseAttention(TtWindowAttention):
         f32 = dict(dtype=ttnn.float32, memory_config=DRAM)
 
         def op(fn, *args):  # fn(*args) fp32, consuming the tensor arguments made here
-            out = fn(*args, **f32)
+            out = fn(*args, **f32, sub_core_grids=sub_cores(x))  # (FIX.36: capped, rule 18)
             for t in args:
                 if isinstance(t, ttnn.Tensor) and t is not x:
                     dealloc(t)
@@ -195,7 +195,7 @@ class TtSparseAttention(TtWindowAttention):
 
         def floor_div(v, d):  # floor((v + 1/2) / d): exact for integers v >= 0 and any divisor d
             y = op(ttnn.multiply, ttnn.add(v, 0.5, **f32, sub_core_grids=sub_cores(v)), 1.0 / d)
-            out = ttnn.floor(y, memory_config=DRAM)
+            out = ttnn.floor(y, memory_config=DRAM, sub_core_grids=sub_cores(y))
             dealloc(y)
             return out
 
@@ -216,7 +216,7 @@ class TtSparseAttention(TtWindowAttention):
         q = op(ttnn.subtract, s, op(ttnn.multiply, ttnn.clone(b, memory_config=DRAM), float(n_own)))  # s mod N
         row = op(ttnn.add, op(ttnn.add, u, float(offset)), op(ttnn.multiply, b, float(hs)))
         row = op(ttnn.add, row, op(ttnn.multiply, q, float(nb * hs)))
-        valid = ttnn.ge(x, 0.0, dtype=ttnn.float32)
+        valid = ttnn.ge(x, 0.0, dtype=ttnn.float32, sub_core_grids=sub_cores(x))
         out = ttnn.where(valid, row, -1.0, sub_core_grids=sub_cores(valid))
         for t in (x, row, valid):
             dealloc(t)

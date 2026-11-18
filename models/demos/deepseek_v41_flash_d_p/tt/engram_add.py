@@ -46,7 +46,9 @@ import ttnn
 
 from .ccl import dealloc
 from .common import DRAM, TP_AXIS, compute_config, tp_sum
-from .cores import from_torch, max_grid, sub_cores, sub_cores_tiled
+from .cores import from_torch, max_grid
+from .cores import maximum as cores_maximum
+from .cores import sub_cores, sub_cores_tiled
 from .layout import HC, row_split_to_device, streams_cols_to_chip_major
 from .settings import settings
 
@@ -216,7 +218,7 @@ class TtEngramAdd:
         d = ttnn.multiply(d0, self.inv_sqrt_h, dtype=ttnn.float32, memory_config=DRAM, sub_core_grids=sub_cores(d0))
         dealloc(d0)
         a = ttnn.abs(d, memory_config=DRAM, sub_core_grids=sub_cores(d))
-        am = ttnn.maximum(a, GATE_FLOOR, memory_config=DRAM)
+        am = cores_maximum(a, GATE_FLOOR, memory_config=DRAM)  # (FIX.36: capped, rule 18)
         dealloc(a)
         s = ttnn.sqrt(am, memory_config=DRAM, sub_core_grids=sub_cores(am))
         dealloc(am)

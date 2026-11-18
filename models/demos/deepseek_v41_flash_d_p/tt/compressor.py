@@ -967,7 +967,9 @@ class TtCompressor:
                     sub_core_grids=sub_cores(self.tables.iota),
                 )
             )
-            keep = ttnn.lt(iota, float(valid), dtype=ttnn.bfloat16, memory_config=DRAM)
+            keep = ttnn.lt(  # (FIX.36: capped, rule 18)
+                iota, float(valid), dtype=ttnn.bfloat16, memory_config=DRAM, sub_core_grids=sub_cores(iota)
+            )
             if not full:
                 dealloc(iota)
             masked = ttnn.multiply(g, keep, dtype=ttnn.bfloat16, memory_config=DRAM, sub_core_grids=sub_cores(g))
@@ -1085,7 +1087,9 @@ class TtCompressor:
                 sub_core_grids=sub_cores(self.tables.iota),
             )
         )
-        keep = ttnn.lt(iota, float(valid), dtype=ttnn.bfloat16, memory_config=DRAM)
+        keep = ttnn.lt(  # (FIX.36: capped, rule 18)
+            iota, float(valid), dtype=ttnn.bfloat16, memory_config=DRAM, sub_core_grids=sub_cores(iota)
+        )
         if not full:
             dealloc(iota)
         out = ttnn.multiply(g, keep, dtype=ttnn.bfloat16, memory_config=DRAM, sub_core_grids=sub_cores(g))

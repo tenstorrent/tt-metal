@@ -54,7 +54,7 @@ import ttnn
 from . import ccl
 from .ccl import dealloc
 from .common import DRAM, TP_AXIS, cast
-from .cores import max_grid
+from .cores import max_grid, sub_cores
 from .settings import settings
 
 LINKS = 2  # links per direction
@@ -507,10 +507,10 @@ class TtMoEBlockMainLayer:
         # ffn_residual only, which the next layer's add is queued after; the block's free skips it)
         ob = _lean_out(self.mesh, yt, se)
         if ob is not None:
-            ttnn.add(yt, se, memory_config=DRAM, output_tensor=ob)
+            ttnn.add(yt, se, memory_config=DRAM, output_tensor=ob, sub_core_grids=sub_cores(yt))  # (FIX.36: rule 18)
             dealloc(yt)
             return ob  # (the object itself: the op hands back a new wrapper of its buffer, DS41-149)
-        out = ttnn.add(yt, se, memory_config=DRAM)
+        out = ttnn.add(yt, se, memory_config=DRAM, sub_core_grids=sub_cores(yt))
         dealloc(yt)
         return out
 

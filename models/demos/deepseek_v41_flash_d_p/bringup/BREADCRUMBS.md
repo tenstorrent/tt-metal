@@ -2282,3 +2282,60 @@ Measured (8x4, `gate FIX.31 --check`, after the last edit)
   cores 15-2/15-3), on the untouched on path: left to the orchestrator (OV-42). Attempt 2 ran nothing on the device.
 - Re-run: `DS41_STATIC_TABLES=off DS41_DECODER_SKIP=decode python -m models.demos.common.bringup.devjob start x --
   scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/test_decoder_skip_decode.py`
+
+## FIX.36 (overseer fix, attempt 1): the intermittent DECODER_SKIP=decode hang, and test_skip_positions misreporting it
+
+- (3) Test fixed (tests/test_skip_positions.py `_alloc_failure`, DS41-284): a point is 'does not fit' only when a line
+  of the error says "Out of Memory" / "Not enough space to allocate" / "allocation failed" / "cannot allocate"
+  (bank_manager.cpp's wording); a message with "timeout" / "potential hang" / "timed out", or any other error,
+  re-raises and fails the test. Cause of the misreport: FIX.34 checked the first line only for "memory" / "alloc",
+  and a hang's first line is "TT_THROW @ .../system_memory_manager.cpp:806: tt::exception".
+- (1) Reproduced on the device (devjob fix36_loop3, new tests/test_skip_hang_loop.py, one load): the test's per-point
+  work looped over p256000 / p1024000, 23 runs a kind, the last under the rt profiler. Rounds 0-12 clean: 2,392
+  chunks in ~7.5 min, layer 19's output of the p256000 steady chunk bit-identical every round (max_abs_diff 0.0).
+  Hung in round 13 at `p256000 resumed run0 prev`: the first chunk after the steady kind's profiled run (finish_rt:
+  sync, 1 s idle, unregister). The 23:18 P.72 hang was also ~3 s after a profiled run (p768000's, then p1024000's
+  new state and first warm-up runs).
+- What hangs: unknown. tt-triage could not attach (UMD discovery, eth-core read: "MMIO per-op timeout: 4B load took
+  55527 us"). Cores 15-2 / 15-3, waited on at teardown on every chip, are the prefetch / dispatch cores
+  (wait_for_dispatch_cores), not a model program. Chip 15 (phys 15 / M0D14, one of the 4 chips with "4 eth channels
+  but only 2 routing planes" at open) had a core whose MMIO died (RISC reset and L1 ECC skipped); tensix reads still
+  answered on every chip. A spinning kernel leaves MMIO readable; this did not.
+- Excluded by reading: equality semaphore waits in the model's fabric sends (all wait_min + atomic take-back);
+  ENGRAM_ASYNC's worker on CQ 0 (FDMeshCommandQueue locks every enqueue / write; pinned writes block); the rt
+  profiler as a new factor (its push kernel and receiver run from mesh open in every run).
+- (2) Not done: no fix, so no 20-run proof. Brief: stop device work at the first hang. The safe runner started
+  recover-hosts (sys-triage, glx reset) by itself at 04:34; nothing else ran after it. Leads in order (each may cost a
+  box reset): same chip again? (re-run the loop); idle-then-burst / rule 18 core audit of the skip-positions flow;
+  HANGLOOP_PROFILE=0; watcher. Detail: known_issues_detail.md "The intermittent DECODER_SKIP=decode hang ...".
+- Gate not run (device hung). Logs: /scratch/dnijemcevic/fix36/ (loop3.log, triage log, inspector_loop3/).
+- Re-run the reproduction: `DS41_DECODER_SKIP=decode HANGLOOP_MINUTES=20 python -m models.demos.common.bringup.devjob
+  start loop -- scripts/run_safe_pytest.sh --run-all --no-precompile
+  models/demos/deepseek_v41_flash_d_p/tests/test_skip_hang_loop.py -s`
+
+## FIX.36 (overseer fix, attempt 2): the hang's cause, rule 18 (120-core programs), capped
+
+- OV-43 lead 1, no profiler: `HANGLOOP_PROFILE=0` hung in round 7 (`p256000 resumed run5 cur`, mid-stream), chip 3's
+  MMIO / PCIe dead (PcieHangError). Not the profiler, not idle, and not always chip 15 (15, 3, then 7).
+- New `HANGLOOP_WATCH=1` (default) in tests/test_skip_hang_loop.py: one rt-profiler callback for the whole loop; per
+  kernel set the most cores (printed each round, OVER above tt/cores.max_worker_cores; the test asserts none), per chip
+  the last 6 programs done, printed on an error. Overhead: ~43 s a round vs ~32 s, 0 records dropped.
+- It found 2 kernel sets on 120 cores every chunk: eltwise_binary_no_bcast (20 a chunk a chip, the MoE output add,
+  moe_block_main_adapter.py, not capped since MOE_BLOCK_SRC=main) and eltwise_binary_sfpu_scalar (5 a chunk).
+- Unfixed watch run hung in round 16, chip 7 dead: chips 4-7 / 28-31 never finished rid 37292 (ring_attention
+  all_gather), the others ran on to 37294 / 37304: one chip lost, its CCL partners waiting (DS41-283, detail file).
+- Fix (DS41-285, rule 18): sub_core_grids=sub_cores(..) on every stock binary op left uncapped in tt/: moe add (x2),
+  attention mask lt (x4), compressor lt (x2), indexer eq + floor, engram maximum -> cores.maximum (where(ge) on the
+  capped grid, bit-identical), sparse_attention off-path remap (op helper, floor, ge). Elementwise: same values.
+- Proof: devjob fix36_fix1 (`HANGLOOP_PROFILE=0`, 30 min): 41 rounds = 7,544 chunks clean, 0 programs over 110,
+  determinism max_abs_diff 0.0 in all 40 round comparisons. Unfixed: hangs at rounds 13 / 7 / 16. I count "20 clean
+  runs" as 20 rounds of the loop (each = test_skip_positions' work for 2 points); 41 > 20.
+- (3) the test fix from attempt 1 (DS41-284) stands.
+- Re-run: `DS41_DECODER_SKIP=decode HANGLOOP_PROFILE=0 HANGLOOP_MINUTES=30 python -m models.demos.common.bringup.devjob
+  start loop -- scripts/run_safe_pytest.sh --run-all --no-precompile
+  models/demos/deepseek_v41_flash_d_p/tests/test_skip_hang_loop.py -s`
+- Gate `FIX.36 --check`: PASS (525 s): test_skip_positions all 6 points fit and ran (no hang), determinism 0.0.
+  Cost of the caps, device ms (slowest chip) vs FIX.34: p51200 steady 81.0 (81.6), p256000 84.5 (85.7), p1024000 97.3
+  (99.1); wall 107.2 (106.7) .. 123.2 (120.4): within run-to-run noise.
+- Box report for the owner: the four chips with "only 2 routing planes" (phys 7 / 15 / 31 / 23) are not singled out:
+  the dead chip was 15, 3, 7 in three hangs (two of them in that set, one not).

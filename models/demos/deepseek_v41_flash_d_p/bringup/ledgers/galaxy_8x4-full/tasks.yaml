@@ -1420,7 +1420,8 @@ tasks:
     gate_tasks:
     - P.67
 - id: FIX.33
-  title: 'OWNER 2026-11-15: model_bringup without expert replication: keep the orthogonal wins (P.59, P.63-P.66, FIX.32), remove every replica piece P.67 brought'
+  title: 'OWNER 2026-11-15: model_bringup without expert replication: keep the orthogonal wins (P.59, P.63-P.66, FIX.32),
+    remove every replica piece P.67 brought'
   step: overseer_fix
   role: overseer
   precheck: false
@@ -1476,7 +1477,25 @@ tasks:
   - ttnn/ttnn/bringup/moe_block_main_ttnn/routed_experts_combine
   - models/demos/deepseek_v41_flash_d_p/bringup/ledgers/tt
   brief:
-    details: 'OWNER 2026-11-15 (supersedes this task''s earlier text): P.67 merged the WHOLE moe_replication branch; the owner asked only for the wins orthogonal to expert replication. model_bringup must hold the latest and greatest WITHOUT expert replication; the replica branch will be rebuilt on top of it afterwards (not this task). KEEP (and keep on by default where they are now): P.59 expert x pieces (EXPERT_X_PIECES), P.63 cached argument slots, P.64 ATTN_FUSE, P.65 CHEAP_CCL with FIX.32''s geometry-keyed program cache, P.66 LEAN_PY, FIX.31/FIX.32 framework and test work, the race tests (test_snapshot_race_loop, test_snapshot_send_geometry). REMOVE everything that exists only for expert replication: MOE_REPLICAS and all its modes (off/runtime/exact/prev; the code behaves as off does today), MOE_PREV_HOST, MOE_PREV_HOST2, MOE_PLANNER, MOE_PREV_FIXED and every other replica setting, tt/expert_prev.py and the replica parts of the adapter / moe_trace (P.61 MoE-half trace is replica-branch work: remove it too), the replica tests (test_moe_prev_replicas, test_moe_prev_host_probe, test_prev_host_account and the replica parts of any other), and the replica options in the forks (ttnn/ttnn/bringup/moe_block_main_ttnn: prev_counts, the fused head''s planner tail / prev_planner.hpp, the replica fill ports, the expert schedule''s replica paths) with their CHANGELOG entry. Reference for what is replica vs not: git diff ce1b9047afd b57de503eed (P.67) and the replica branch''s commits P.45-P.62b vs P.59/P.63-P.66 (bringup/deepseek_v41_flash_d_p/moe_replication). FIRST, before editing: list each P.67 file/hunk as KEEP or REMOVE, and name every place an orthogonal win depends on replica code (if one does, keep the orthogonal behaviour with replicas off and say how). Rebuild (./build_metal.sh) after the fork change. PROOF: outputs bit-identical to today''s MOE_REPLICAS=off path (test_determinism, test_decoder_skip_decode, ladder rung last within limits); chunk_wall_ms of the gate''s profile vs P.67''s A/B (off, pre-P.67: 182.8 ms; on, with replicas: 157.9 ms; replicas-off share of it expected ~10 ms slower than on); host / device ms a chunk reported. No new switches; no dead modes; grep proves no MOE_REPLICAS / expert_prev / prev_ name is left on model_bringup. Report plainly, short.'
+    details: 'OWNER 2026-11-15 (supersedes this task''s earlier text): P.67 merged the WHOLE moe_replication branch; the owner
+      asked only for the wins orthogonal to expert replication. model_bringup must hold the latest and greatest WITHOUT expert
+      replication; the replica branch will be rebuilt on top of it afterwards (not this task). KEEP (and keep on by default
+      where they are now): P.59 expert x pieces (EXPERT_X_PIECES), P.63 cached argument slots, P.64 ATTN_FUSE, P.65 CHEAP_CCL
+      with FIX.32''s geometry-keyed program cache, P.66 LEAN_PY, FIX.31/FIX.32 framework and test work, the race tests (test_snapshot_race_loop,
+      test_snapshot_send_geometry). REMOVE everything that exists only for expert replication: MOE_REPLICAS and all its modes
+      (off/runtime/exact/prev; the code behaves as off does today), MOE_PREV_HOST, MOE_PREV_HOST2, MOE_PLANNER, MOE_PREV_FIXED
+      and every other replica setting, tt/expert_prev.py and the replica parts of the adapter / moe_trace (P.61 MoE-half trace
+      is replica-branch work: remove it too), the replica tests (test_moe_prev_replicas, test_moe_prev_host_probe, test_prev_host_account
+      and the replica parts of any other), and the replica options in the forks (ttnn/ttnn/bringup/moe_block_main_ttnn: prev_counts,
+      the fused head''s planner tail / prev_planner.hpp, the replica fill ports, the expert schedule''s replica paths) with
+      their CHANGELOG entry. Reference for what is replica vs not: git diff ce1b9047afd b57de503eed (P.67) and the replica
+      branch''s commits P.45-P.62b vs P.59/P.63-P.66 (bringup/deepseek_v41_flash_d_p/moe_replication). FIRST, before editing:
+      list each P.67 file/hunk as KEEP or REMOVE, and name every place an orthogonal win depends on replica code (if one does,
+      keep the orthogonal behaviour with replicas off and say how). Rebuild (./build_metal.sh) after the fork change. PROOF:
+      outputs bit-identical to today''s MOE_REPLICAS=off path (test_determinism, test_decoder_skip_decode, ladder rung last
+      within limits); chunk_wall_ms of the gate''s profile vs P.67''s A/B (off, pre-P.67: 182.8 ms; on, with replicas: 157.9
+      ms; replicas-off share of it expected ~10 ms slower than on); host / device ms a chunk reported. No new switches; no
+      dead modes; grep proves no MOE_REPLICAS / expert_prev / prev_ name is left on model_bringup. Report plainly, short.'
     gate_tasks:
     - P.67
 - id: FIX.34
@@ -1560,6 +1579,46 @@ tasks:
       on the replica branch. One process, load once. Report plainly, short.'
     gate_tasks:
     - FIX.34
+- id: FIX.36
+  title: Intermittent device hang of the shipped tree under DECODER_SKIP=decode (test_skip_positions), and the test misreporting
+    it
+  step: overseer_fix
+  role: overseer
+  precheck: false
+  deps:
+  - FIX.34
+  gate:
+    cmd: BRINGUP_TASK=FIX.34 DS41_DECODER_SKIP=decode scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/test_skip_positions.py
+    metrics:
+      steady_wall_ms_p51200: '> 0'
+      steady_device_ms_p51200: '> 0'
+      resumed_wall_ms_p51200: '> 0'
+      steady_tok_s_p51200: '> 0'
+      resumed_tok_s_p51200: '> 0'
+  device: true
+  paths:
+  - models/demos/deepseek_v41_flash_d_p/tests
+  - models/demos/deepseek_v41_flash_d_p/tests/
+  - models/demos/deepseek_v41_flash_d_p/bringup/BREADCRUMBS.md
+  - models/demos/deepseek_v41_flash_d_p/tt
+  - models/demos/deepseek_v41_flash_d_p/bringup/known_issues.md
+  - ttnn/ttnn/bringup
+  brief:
+    details: 'Shipped tree (STATIC_TABLES=on, DECODER_SKIP=decode) hung 2 of 4 runs of tests/test_skip_positions.py on the
+      8x4: 2026-11-17 14:26 at p256000 and 23:18 at p1024000 (TT_THROW ''TIMEOUT: device timeout, potential hang detected'',
+      system_memory_manager.cpp:806; teardown then times out on physical cores 15-2 and 15-3 of EVERY chip); FIX.34 (11-15)
+      and 00:48 (11-18) passed all 6 points on the same code. Logs: runs/galaxy_8x4-full/run1/ab/P.72/new/batch1.hang2.log
+      and the P.72 new/ dir of 14:26. Off side (STATIC_TABLES=off, 1 run) did not hang. (1) Find which program hangs: cores
+      15-2/15-3 (which op places work there: the window/snapshot/tail send programs, fabric, a CCL?), the op in flight at
+      the timeout (the dispatcher''s last program per chip), whether it is the steady or the resumed (replay) chunk, and what
+      differs between a hanging and a passing run (position, preceding point, memory). Use the cheapest reproduction that
+      hangs reliably (a loop of the point that hung), never single-card jobs. (2) Fix the cause; prove it with 20 consecutive
+      clean runs of the reproduction, bit-identical outputs (determinism) unchanged. (3) Fix the test: test_skip_positions
+      records a device hang as fits_p<p>=0 ''DOES NOT FIT'' and exits 0; a hang (TIMEOUT / dispatch timeout) must fail the
+      test, only an allocation failure is ''does not fit''. Note: each hang has been followed by the node going down within
+      ~5-10 min (cluster health handling); stop device work at the first hang, report, and let the overseer handle the box.'
+    gate_tasks:
+    - FIX.34
 - id: FIX.13
   title: 'DS41-141: is P.9''s window-KV rise rounding or a bug (device allowed)'
   step: overseer_fix
@@ -1575,6 +1634,7 @@ tasks:
   - FIX.31
   - FIX.32
   - FIX.33
+  - FIX.36
   gate:
     cmd: BRINGUP_TASK=K.1 scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_contract.py
       && BRINGUP_TASK=K.1 scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/bringup/contract/test_kv_layout.py
@@ -4559,8 +4619,8 @@ tasks:
   - ttnn/ttnn/bringup
   device: true
 - id: P.72
-  title: 'OWNER 2026-11-17: STATIC_TABLES on vs off at realistic positions (DECODER_SKIP=decode): what the persistent
-    attention table (P.21) buys on the 8x4; measured only, the default stays on'
+  title: 'OWNER 2026-11-17: STATIC_TABLES on vs off at realistic positions (DECODER_SKIP=decode): what the persistent attention
+    table (P.21) buys on the 8x4; measured only, the default stays on'
   step: perf
   role: perf
   device: true
@@ -4573,17 +4633,17 @@ tasks:
   brief:
     details: 'OWNER 2026-11-17 (per-slot private state phase, step 2): a switch-only A/B of STATIC_TABLES (tt/settings.py:215,
       P.21; off = the P.19 path that gathers each KV source''s compressed history from the SERVED cache over the mesh every
-      chunk). The only number we have is a 2x2 8-layer one (118.8 -> 103.5 ms); we need the 8x4 at realistic positions,
-      because off reads only served state and is the correct-by-construction fallback when a slot''s history was written by
-      someone else (store load, d2p, a reused slot). The orchestrator measures both sides itself (the gate''s tests: ladder
-      at last, both determinism checks, test_decoder_skip_decode, test_skip_positions and test_full_prefill under
-      DS41_DECODER_SKIP=decode). YOUR job is small: check that STATIC_TABLES=off still RUNS on today''s tree (it has been
-      off-default since 2026-10-22; P.38, P.51, P.64-P.67 came after): one run of DS41_STATIC_TABLES=off
-      DS41_DECODER_SKIP=decode test_decoder_skip_decode.py (covers the replay chunk) and one of DS41_STATIC_TABLES=off
-      test_determinism.py (models/demos/common/bringup/tests). If both pass, change NOTHING and stop. If off is broken,
-      fix it on the off path only (the on path must stay bit-identical), with the smallest honest change, and say what was
-      broken. Do not profile, do not run the A/B or the position tests yourself. No fork regression or unit suites (8x4).
-      Agent rules 18 / 19 (no single-card jobs); device jobs over a few minutes through devjob. Report short.'
+      chunk). The only number we have is a 2x2 8-layer one (118.8 -> 103.5 ms); we need the 8x4 at realistic positions, because
+      off reads only served state and is the correct-by-construction fallback when a slot''s history was written by someone
+      else (store load, d2p, a reused slot). The orchestrator measures both sides itself (the gate''s tests: ladder at last,
+      both determinism checks, test_decoder_skip_decode, test_skip_positions and test_full_prefill under DS41_DECODER_SKIP=decode).
+      YOUR job is small: check that STATIC_TABLES=off still RUNS on today''s tree (it has been off-default since 2026-10-22;
+      P.38, P.51, P.64-P.67 came after): one run of DS41_STATIC_TABLES=off DS41_DECODER_SKIP=decode test_decoder_skip_decode.py
+      (covers the replay chunk) and one of DS41_STATIC_TABLES=off test_determinism.py (models/demos/common/bringup/tests).
+      If both pass, change NOTHING and stop. If off is broken, fix it on the off path only (the on path must stay bit-identical),
+      with the smallest honest change, and say what was broken. Do not profile, do not run the A/B or the position tests yourself.
+      No fork regression or unit suites (8x4). Agent rules 18 / 19 (no single-card jobs); device jobs over a few minutes through
+      devjob. Report short.'
   ab:
     keep_default: true
     flip: true
@@ -4596,10 +4656,10 @@ tasks:
   - last
   gate:
     cmd: BRINGUP_RUNG=last scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_ladder.py
-      && scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_determinism.py
-      && scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/test_determinism.py
-      && scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/test_decoder_skip_decode.py
-      && DS41_DECODER_SKIP=decode scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/test_skip_positions.py
+      && scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_determinism.py && scripts/run_safe_pytest.sh
+      --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/test_determinism.py && scripts/run_safe_pytest.sh
+      --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/test_decoder_skip_decode.py && DS41_DECODER_SKIP=decode
+      scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/test_skip_positions.py
       && DS41_DECODER_SKIP=decode scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/test_full_prefill.py
     metrics:
       err_layer_L*: <= limit

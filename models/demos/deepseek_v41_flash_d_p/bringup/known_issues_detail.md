@@ -1468,3 +1468,74 @@ Candidates, in the order to check (on a 2x2 first, or in slow dispatch with the 
    at the same address on every core (MeshBuffer sharded over the unit cores);
 4. a wrongly applied delta on a fabric connection arg (eth channel, EDM addresses) - the host check covers values,
    not the device's decoding (desc bits: slot 14 | common 14 | type 15-16 | anchor 17-30).
+
+## The intermittent DECODER_SKIP=decode hang: one chip drops off PCIe (a different one each time), its CCL partners wait
+
+(DS41-283; FIX.36, 2026-11-18, bh-glx-110-c10u02, KMD 2.11.0, firmware 19.16.0, FABRIC_2D_TORUS_XY.)
+
+History on the shipped tree (STATIC_TABLES=on, DECODER_SKIP=decode): test_skip_positions hung 2 of 4 runs (11-17 14:26
+at p256000, 23:18 at p1024000 about 3 s into the steady warm-up after p768000's profiled run; 11-15 FIX.34 and 11-18
+00:48 passed all 6 points). Each hang was followed by the node going down within 5-10 min.
+
+Reproduction (one model load, 20 min budget): `DS41_DECODER_SKIP=decode HANGLOOP_MINUTES=20 scripts/run_safe_pytest.sh
+--run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/test_skip_hang_loop.py -s`: the test's per-point
+work (fresh state p + chunk; steady and resumed: the real previous chunk at p - chunk, then the chunk at p, 23 runs a
+kind, the last one under the rt profiler), points 256000 and 1024000 alternating, ~32 s a round (184 chunks).
+Run fix36_loop3: rounds 0-12 clean (2,392 chunks, layer 19 output of p256000 steady bit-identical every round), hung
+at round 13, p256000, `resumed run0 prev`: the first chunk after the steady kind's rt-profiled run (finish_rt: sync,
+1 s idle, unregister). Log kept: /scratch/dnijemcevic/fix36/loop3.log (+ inspector_loop3/, the triage log).
+
+What the hang looks like:
+- 04:31:22 "Timeout detected" (5 s dispatch timeout), then TT_THROW "TIMEOUT: device timeout, potential hang detected,
+  the device is unrecoverable" (system_memory_manager.cpp:806).
+- tt-triage did not run: UMD TopologyDiscovery -> wait_eth_core_training -> "MMIO per-op timeout: 4B load took 55527
+  us (budget=2 ms)". So the op in flight per chip is unknown (no inspector / dispatcher read possible).
+- Teardown: every chip (0-31) "Timeout waiting for physical cores to finish: 15-3, 15-2": these are the prefetch /
+  dispatch cores (DispatchKernelInitializer::wait_for_dispatch_cores), stuck because the work they dispatched never
+  completed; not a program of the model. Tensix reads still worked on every chip.
+- Chip 15 only: "Skipping RISC reset on device 15 during teardown: MMIO per-op timeout ... 55569 us" and "Skipping L1
+  ECC report on device 15": a core of chip 15 (the RISC reset path; eth cores are the candidates, as the triage's
+  first failure was an eth read) no longer answers MMIO. Chip 15 = phys 15 / M0D14, one of the 4 chips the control
+  plane warns about at every open ("in direction 2 has 4 eth channels, but only 2 routing planes are available":
+  phys 7 / 15 / 31 / 23). One sample: whether the same chip fails every time is not known (the 23:18 log was cut
+  at device 17 by the overseer's stop; 14:26 left no log).
+- The safe runner then started recover-hosts (sys-triage + tt-smi -glx_reset) by itself.
+
+What it is not (evidence):
+- Not a semaphore equality race in the model's fabric sends: window_send / snapshot_send / tail_send wait with
+  noc_semaphore_wait_min and take arrivals back with an atomic -1/-count.
+- Not ENGRAM_ASYNC's worker writing CQ 0 unlocked: FDMeshCommandQueue takes lock_api_function_() in
+  enqueue_mesh_workload and the write paths; pinned writes are blocking.
+- Not the rt profiler as such: the RealtimeProfilerManager runs its push kernel and host receiver from mesh open in
+  every run (eligibility: MMIO chip + IOMMU), registered callback or not; only the consumer thread is per callback.
+
+Open leads, cheapest first (each costs a box reset if it hangs; the owner decides):
+1. Same chip? Re-run the loop (it hangs in ~8 min) and read which chip fails MMIO at teardown. Always chip 15 points
+   at that chip / its links (a hardware or firmware question for the cluster admins), not at the model.
+2. Idle-then-burst: both located hangs came right after the device sat idle (1 s settle; a point change). Rule 18's
+   di/dt trip shows as dead MMIO too. tests/perf/test_core_audit.py (FIX.15) covers a ladder chunk only: audit the
+   skip-positions flow (DECODER_SKIP=decode, new_state at 1M, resumed write_start) for programs over 110 cores.
+3. Without the profiler: HANGLOOP_PROFILE=0 (and a sleep 1 s instead) separates the profiler's unregister from idle.
+4. With the watcher (`--dev`) if 1-3 give nothing: slower, but triage then has the last waypoints.
+
+### FIX.36 attempt 2 (2026-11-18): the hang is a chip dropping off PCIe; the 120-core programs capped
+
+- HANGLOOP_PROFILE=0 (no rt profiler, OV-43's first lead) hung too: round 7, `p256000 resumed run5 cur` (mid-stream,
+  no idle before it); chip 3's MMIO dead ("Setting power state failed on device 3: Input/output error",
+  PcieHangError). So the profiled run / its 1 s idle is not the trigger, and the dead chip is not always 15.
+- HANGLOOP_WATCH (an rt-profiler callback over the whole loop, per kernel set the most cores, per chip the last
+  programs done) found two kernel sets on 120 cores, every chunk, on every chip: eltwise_binary_no_bcast (binary_ng
+  FPU, 20 a chunk a chip: the MoE output add in moe_block_main_adapter.py, one a full layer under DECODER_SKIP=decode)
+  and eltwise_binary_sfpu_scalar (5 a chunk: one of the scalar masks lt / eq / ge / maximum; it went away with them).
+  Everything else is at or under 110. MOE_BLOCK_SRC=main (owner 2026-11-06) came after FIX.15's audit (2026-10-31).
+- The same loop (unfixed) hung in round 16, chip 7 MMIO dead. Last program per chip (watch): chips 4-7 and 28-31 at rid
+  37291 (rope_chain), i.e. never finished 37292 (ring_attention all_gather + index compute, 104 cores); chips 12-15 /
+  20-23 at 37294, the other 16 at 37304. Chip 7's group stopped, its partners waited in the CCL: a chip lost at the
+  device level, not a model program waiting on a semaphore.
+- Fix: every stock binary call left uncapped in tt/ gets sub_core_grids (sub_cores(x)) or cores.maximum (8 sites in
+  attention, compressor, indexer, engram_add, moe_block_main_adapter, sparse_attention's STATIC_TABLES=off remap).
+  The same ops on fewer cores: same values (elementwise).
+- After: fix36_fix1 (HANGLOOP_PROFILE=0, watch on, 30 min): 41 rounds, 7,544 chunks clean, no program over 110, the
+  p256000 steady layer-19 output bit-identical to round 0 in all 40 comparisons. Before: hangs at rounds 13, 7 and 16
+  (mean ~12): 41 clean rounds at that rate has a chance of about 3%. The causal link (120-core di/dt trip -> chip
+  drops) is the likely one (rule 18's own failure mode, a random chip each time), not proven by a single experiment.

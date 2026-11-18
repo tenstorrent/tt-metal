@@ -600,11 +600,15 @@ class TtCandidateIndexer(TtIndexer):
         # pin: block (start + row offset) // b of every query row
         pos = ttnn.add(self.row_pos, float(start), memory_config=DRAM, sub_core_grids=sub_cores(self.row_pos))
         pin = ttnn.floor(
-            ttnn.multiply(pos, 1.0 / b, memory_config=DRAM, sub_core_grids=sub_cores(pos)), memory_config=DRAM
+            ttnn.multiply(pos, 1.0 / b, memory_config=DRAM, sub_core_grids=sub_cores(pos)),
+            memory_config=DRAM,
+            sub_core_grids=sub_cores(pos),
         )  # b a power of two
         dealloc(pos)
         cols = ttnn.slice(self._cols[t], [0, 0, 0, 0], [1, 1, 1, nb], memory_config=DRAM, sub_core_grids=sub_cores())
-        hit = ttnn.eq(cols, pin, dtype=ttnn.float32, memory_config=DRAM)  # [1, 1, Sq, nb] 1 at the pinned block
+        hit = ttnn.eq(  # [1, 1, Sq, nb] 1 at the pinned block (FIX.36: capped, rule 18)
+            cols, pin, dtype=ttnn.float32, memory_config=DRAM, sub_core_grids=sub_cores(pin)
+        )
         dealloc(pin)
         if not _same(cols, self._cols[t]):  # K-1: never free the load-time iota
             dealloc(cols)

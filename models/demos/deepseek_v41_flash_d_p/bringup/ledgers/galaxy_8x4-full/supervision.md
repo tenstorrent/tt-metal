@@ -1802,3 +1802,22 @@ https://claude.ai/artifact/V6jTfy2imD5wQz6UQXPPbR.
   test_fix_default_paths.py (+ test_overseer.py: 23 passed). FIX.36's paths set to tt/, tests/, BREADCRUMBS, known_issues,
   ttnn/ttnn/bringup. P.72's attempt-1 work (DS41-282 off-path fix, its reports, the partial A/B records) committed as
   bookkeeping before FIX.36 so the fix agent starts on a clean tree; P.72 stays RUNNING and is re-measured after the hang fix.
+- 04:1x OWNER: after the hang fix, hide the all-gather. Queued as P.73 (patch /scratch/dnijemcevic/phase_1117/p73_task.yaml,
+  applied to tasks.yaml when FIX.36's run stops; deps FIX.36): sub-device overlap of STATIC_TABLES=off's history gather
+  (deepseek_v3_d_p pattern), new switch HISTORY_GATHER_OVERLAP, A/B off-vs-overlap under STATIC_TABLES=off, keep_default.
+  Gate without test_full_prefill until the F259 batch-reload OOM is fixed (framework, at the same pause).
+- 04:36 INFRA: node down for the 3rd time. FIX.36 attempt 1 reproduced the hang (test_skip_hang_loop, round 13 of p256000/
+  p1024000 loops, right after a profiled run; dispatch cores 15-2/15-3; chip 15 = M0D14 had a core whose MMIO died; tt-triage
+  could not attach); the safe runner then ran recover-hosts at 04:34, and the host died during its sys-triage. CAUSE OF THE
+  NODE LOSSES (2 of 3 proven): sys-triage's `tt-fw-terminal` step on a hung box: both triage files (14:29 and 04:34 runs)
+  end at the "======== tt-fw-terminal ========" header, and the boot ends seconds later (14:30:41 / 04:36:53). The 23:2x loss
+  had no recover of ours (unexplained). Mitigation: node_env.sh TTPOOL_RECOVER_CMD adds --skip-sys-triage (safe-runner
+  recovery). For the owner / cluster admins: tt-fw-terminal on a hung Blackhole Galaxy kills the host.
+  Up 04:38 (job 219312); box test PASS; unaccounted RAM 2.7 GiB. Test fix DS41-284 (a hang is no longer 'does not fit').
+  Note to FIX.36 attempt 2: HANGLOOP_PROFILE=0 first (profiled-run trigger), record the chip each time, <= 3 hangs.
+- 04:52 FIX.36 attempt 2, hang #2 of the hunt (devjob fix36_np1): HANGLOOP with the rt profiler OFF hung in round 7
+  (p256000 resumed) at 04:52:10, same dispatch cores 15-2/15-3: the profiled run is NOT the trigger. The safe runner's
+  recovery WITHOUT sys-triage reset the box at 04:57:15 ("reset complete") and the NODE STAYED UP: mitigation confirmed.
+  Unaccounted RAM 3.9 GiB after (2.7 at boot).
+- 05:17 FIX.36 attempt 2, hang #3 of the hunt (devjob fix36_w1, watcher run): round 15, p256000 resumed, after 1157 s; node stayed up (recovery without sys-triage). The agent is at its 3-hang limit and reports next.
+- 05:42 FIX.36 attempt 2 testing a fix (devjob fix36_fix1, since 05:18): every op of the skip flow capped to the model's core grid (sub_core_grids=sub_cores(..), agent rule 18: attention, compressor, engram_add, indexer, moe adapter, sparse_attention): ops on the full grid were the lead. Round 29 at 05:42, no hang (previous hangs at rounds 7, 13, 15). Unaccounted RAM 15.3 GiB (3.9 at 04:57: +11.4 over the watcher run, its hang and reset, and this run so far).

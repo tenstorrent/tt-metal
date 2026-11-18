@@ -32,7 +32,8 @@ Memory: the model is loaded with its position tables (RoPE, window / sparse tabl
 raised in memory, as test_profile does for BRINGUP_POS; never past the deployment's deploy.seq, 1,044,480 on
 galaxy_8x4). Before the points the test checks each point against the loaded max_seq and records the allocator's DRAM per chip after the load and after each point's
 state allocation and runs (dram_*_gib_p<p>; tests/bringup/test_dram.Dram). A point that does not fit (past max_seq, or
-an allocation failure) is recorded fits_p<p> = 0 with its reason and printed, never skipped silently.
+an allocation failure: "Out of Memory" / "Not enough space to allocate") is recorded fits_p<p> = 0 with its reason and
+printed, never skipped silently. Anything else, a device hang (dispatch TIMEOUT) above all, fails the test (FIX.36).
 
 Per point and kind (steady / resumed):
     <kind>_wall_ms_p<p>        warm clean wall: first host call (begin_chunk) to the sync after the last layer, the
@@ -84,6 +85,27 @@ GIB = float(1 << 30)
 def _points() -> list[int]:
     v = os.environ.get("SKIP_POS", "").strip()
     return [int(x) for x in v.split(",") if x.strip()] if v else list(POINTS)
+
+
+HANG_MARKS = ("timeout", "potential hang", "timed out")
+ALLOC_MARKS = ("out of memory", "not enough space to allocate", "allocation failed", "cannot allocate")
+
+
+def _alloc_failure(e: BaseException) -> str | None:
+    """FIX.36: the reason line when ``e`` is a device allocation failure ('does not fit'), else None (re-raise).
+
+    The whole message is read, never only its first line: a dispatch hang's first line is
+    "TT_THROW @ .../system_memory_manager.cpp:806: tt::exception" (the word "memory" is the file name) and its second
+    "TIMEOUT: device timeout, potential hang detected"; FIX.34's first-line "memory" / "alloc" test filed two hangs
+    (P.72, 2026-11-17) as fits_p<p> = 0 and exited 0. A message with a hang mark is never an allocation failure."""
+    text = str(e)
+    low = text.lower()
+    if any(m in low for m in HANG_MARKS):
+        return None
+    for line in text.splitlines():
+        if any(m in line.lower() for m in ALLOC_MARKS):
+            return line.strip()
+    return None
 
 
 def _dram(mesh):
@@ -178,9 +200,10 @@ def test_skip_positions(mesh_device, monkeypatch):
             try:
                 res = _point(model, mesh_device, layers, p, chunk, dram)
             except RuntimeError as e:  # (an allocation failure: reported with its reason, the next point still runs)
-                msg = str(e).splitlines()[0][:300]
-                if "memory" not in msg.lower() and "alloc" not in msg.lower():
+                why = _alloc_failure(e)
+                if why is None:  # FIX.36: a hang (dispatch TIMEOUT) or any other error fails the test
                     raise
+                msg = why[:300]
                 metrics.record(f"fits_p{p}", 0, reason=msg)
                 print(f"POINT p{p} DOES NOT FIT: {msg}")
                 rows.append((p, None, None, msg))
