@@ -41,8 +41,10 @@ from models.demos.deepseek_v3_d_p.tt.hy4.kv_cache import (
     KVPE_SCALED_FP8_DRAM_ROW_BYTES,
     KvBudget,
     KvStripe,
+    device_topk_merge,
     read_chip_slabs,
     read_slot,
+    stripe_key_axis,
 )
 from models.demos.deepseek_v3_d_p.tt.mla.indexer import normalized_hadamard_matrix
 from models.demos.deepseek_v3_d_p.tt.runners.hy4_checkpoint import half_split_to_interleaved_perm
@@ -279,6 +281,81 @@ def test_hy4_kv_stripe_golden_round_trip(mesh_device, device_params, stripe_id):
             assert r[key] >= PCC_FLOOR, f"{name} {key} PCC {r[key]:.6f} < {PCC_FLOOR}"
     for name in HISTORIES:
         assert torch.equal(raw[name], raw["one_shot"]), f"{name}: KVPE bytes differ from the one-shot prefill"
+
+
+# ----------------------------------------------------------------------------------------------------------------
+# Distributed top-k on golden scores
+# ----------------------------------------------------------------------------------------------------------------
+# Layer-0 indexer scores [S, S] (fp32, causal -inf) from the fp32 reference with the golden's index keys and the
+# reference's queries / head weights. Produced offline (the reference lives on the golden-refs branch, #65936).
+GOLDEN_SCORES = Path(
+    os.environ.get("HY4_LAYER0_INDEX_SCORES", "/mnt/tt-data/dwadhwani/hy4-test/kvcp/layer0_index_scores.pt")
+)
+
+
+@pytest.mark.skipif(not GOLDEN_SCORES.is_file(), reason=f"no layer-0 golden index scores at {GOLDEN_SCORES}")
+@pytest.mark.parametrize(
+    "mesh_device, device_params, stripe_id",
+    [pytest.param((8, 4), torus_xy_device_params(), sid, id=sid) for sid in STRIPES],
+    indirect=["mesh_device", "device_params"],
+)
+@pytest.mark.parametrize("k", [64, 2048])
+@pytest.mark.timeout(0)
+def test_hy4_local_topk_merge_on_golden_scores(mesh_device, device_params, stripe_id, k):
+    """Each chip scores only its own stripe of keys, keeps a local top-k, the 32 lists are gathered and merged: the
+    result must be the global top-k of the same (bf16) scores. k = 64 makes the local selection real (64 of each
+    chip's 128 keys at 4K); k = 2048 is Hy4's index_topk."""
+    stripe = STRIPES[stripe_id]
+    scores = torch.load(GOLDEN_SCORES, weights_only=True)[:S, :S].to(torch.bfloat16)
+    per_chip = stripe_key_axis(scores, stripe)  # [8, 4, Q, 128]
+    rows = per_chip.shape[-1]
+    labels = torch.stack([stripe.local_positions(c, rows) for c in range(stripe.num_chips)])  # [chips, rows]
+    lab = torch.empty(*stripe.mesh_shape, S, rows, dtype=torch.int32)
+    for chip in range(stripe.num_chips):
+        r, c = stripe.coord(chip)
+        lab[r, c] = labels[chip].to(torch.int32).expand(S, rows)
+    mapper = ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=tuple(mesh_device.shape), dims=(0, 1))
+    tt_scores = ttnn.from_torch(
+        per_chip, device=mesh_device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, mesh_mapper=mapper
+    )
+    tt_labels = ttnn.from_torch(lab, device=mesh_device, dtype=ttnn.uint32, layout=ttnn.TILE_LAYOUT, mesh_mapper=mapper)
+    k_local = min(k, rows)
+    mv, mp = device_topk_merge(tt_scores, tt_labels, k, k_local, stripe, topology=ttnn.Topology.Linear)
+    ttnn.synchronize_device(mesh_device)
+    # every chip holds the merged result; read two of them
+    dev_v = [ttnn.to_torch(t).float().reshape(S, k) for t in ttnn.get_device_tensors(mv)]
+    dev_p = [ttnn.to_torch(t).long().reshape(S, k) for t in ttnn.get_device_tensors(mp)]
+    assert all(torch.equal(dev_v[0], x) for x in dev_v[1:]) and all(torch.equal(dev_p[0], x) for x in dev_p[1:])
+    dv, dp = dev_v[0], dev_p[0]
+
+    gv, gp = scores.float().topk(k, dim=-1)
+    finite = ~torch.isneginf(gv)
+    # 1) the merged values are the global top-k values, row by row
+    assert torch.equal(dv[finite], gv[finite]), "merged values differ from the global top-k"
+    assert torch.all(torch.isneginf(dv[~finite]))
+    # 2) every merged position is a real key with that score
+    assert torch.equal(scores.float().gather(1, dp.clamp(0, S - 1))[finite], dv[finite])
+    # 3) the selected sets match wherever the k-th score is not tied with the next one (bf16 ties are common)
+    nxt = scores.float().topk(min(k + 1, S), dim=-1).values[:, -1]
+    untied = torch.isneginf(nxt) | (gv[:, -1] > nxt)
+    same = torch.tensor(
+        [set(dp[i][finite[i]].tolist()) == set(gp[i][finite[i]].tolist()) for i in range(S)], dtype=torch.bool
+    )
+    logger.info(
+        f"{stripe_id} k={k}: {int(untied.sum())} of {S} rows have no tie at the k-th score; "
+        f"sets equal on {int(same[untied].sum())} of them, on {int(same.sum())} rows overall"
+    )
+    assert torch.all(same[untied]), "merged set differs from the global top-k on a row without a k-th-place tie"
+    if os.environ.get("HY4_KV_REPORT"):
+        out = Path(os.environ["HY4_KV_REPORT"])
+        prior = json.loads(out.read_text()) if out.is_file() else {}
+        prior[f"topk_merge_{stripe_id}_k{k}"] = {
+            "rows": S,
+            "untied_rows": int(untied.sum()),
+            "sets_equal_untied": int(same[untied].sum()),
+            "sets_equal_all": int(same.sum()),
+        }
+        out.write_text(json.dumps(prior, indent=1))
 
 
 # ----------------------------------------------------------------------------------------------------------------

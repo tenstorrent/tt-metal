@@ -314,3 +314,58 @@ def read_slot(storage, mesh_device, stripe: KvStripe, slot: int, length: Optiona
     """One (user, layer) slot of a striped cache in token order: ``[length, row_width]`` physical rows."""
     slabs = read_chip_slabs(storage, mesh_device, stripe)[:, slot]
     return stripe.destripe(slabs, length)
+
+
+# --- distributed top-k over the stripe (the decode / prefill indexer's selection, #65887 / #65888) -------------
+def merge_local_topk(
+    local_values: torch.Tensor, local_rows: torch.Tensor, stripe: KvStripe, k: int
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """Host reference of the gather + merge: every chip's local top-k ``[chips, Q, k_local]`` (scores and chip-local
+    rows) -> the global top-k ``(values, positions)`` ``[Q, k]``. -inf entries (fewer than k valid keys) map to -1.
+
+    The global top-k is contained in the union of the local top-k whenever ``k_local >= min(k, rows held)``, since a
+    key ranked below k on its own chip has k better keys on that chip alone."""
+    chips, q, kl = local_values.shape
+    chip = torch.arange(chips).view(chips, 1, 1).expand(chips, q, kl)
+    pos = stripe.position(chip, local_rows.long())
+    values = local_values.permute(1, 0, 2).reshape(q, chips * kl)
+    pos = pos.permute(1, 0, 2).reshape(q, chips * kl)
+    v, j = values.topk(k, dim=-1)
+    p = pos.gather(1, j).masked_fill(torch.isneginf(v), -1)
+    return v, p
+
+
+def stripe_key_axis(t: torch.Tensor, stripe: KvStripe) -> torch.Tensor:
+    """``[Q, S]`` (a score matrix over S keys) -> ``[mesh rows, mesh cols, Q, S / 32]``: each chip's own key columns,
+    in its row order, at its mesh coordinate. ``ttnn.ShardTensor2dMesh(dims=(0, 1))`` places it."""
+    slabs = stripe.stripe(t.transpose(0, 1)).transpose(1, 2)  # [chips, Q, rows]
+    rows, cols = stripe.mesh_shape
+    out = slabs.new_empty((rows, cols, *slabs.shape[1:]))
+    for chip in range(stripe.num_chips):
+        r, c = stripe.coord(chip)
+        out[r, c] = slabs[chip]
+    return out
+
+
+def device_topk_merge(local_scores, local_positions, k: int, k_local: int, stripe: KvStripe, topology=None):
+    """Distributed top-k on device: each chip keeps a local top-``k_local`` of its own key rows, the 32 local lists
+    are all-gathered (TP axis, then SP axis) and one more top-k picks the global ``k``.
+
+    ``local_scores``: per chip ``[1, 1, Q, rows]`` (bf16 TILE, -inf where a key is invalid); ``local_positions``: the
+    global position of each of those keys, same shape, uint32 TILE (``stripe.local_positions``). Both top-ks carry the
+    positions as their labels (``indices_tensor``), so the result is positions directly and does not depend on the
+    gather order. Returns ``(values, positions)``, ``[1, 1, Q, k]`` on every chip. Needs a fabric for the gathers."""
+    import ttnn
+
+    topology = topology or ttnn.Topology.Linear
+    v, p = ttnn.topk(local_scores, k=k_local, dim=-1, largest=True, sorted=True, indices_tensor=local_positions)
+    for axis in (stripe.tp_axis, stripe.sp_axis):
+        gv = ttnn.all_gather(v, dim=3, cluster_axis=axis, topology=topology)
+        gp = ttnn.all_gather(p, dim=3, cluster_axis=axis, topology=topology)
+        ttnn.deallocate(v)
+        ttnn.deallocate(p)
+        v, p = gv, gp
+    mv, mp = ttnn.topk(v, k=k, dim=-1, largest=True, sorted=True, indices_tensor=p)
+    ttnn.deallocate(v)
+    ttnn.deallocate(p)
+    return mv, mp

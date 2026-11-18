@@ -35,6 +35,8 @@ from models.demos.deepseek_v3_d_p.tt.hy4.kv_cache import (
     full_indexer_layers,
     hy4_stripe,
     index_slot,
+    merge_local_topk,
+    stripe_key_axis,
 )
 
 DEV = KvStripe(sp=8, tp=4, sp_axis=0)  # glm_prefill_sp8_tp4 on the 8x4 mesh
@@ -360,3 +362,41 @@ def test_bytes_per_token():
     # per chip, every token costs 1/32 of that
     free = 17_600_000_000
     assert b.tokens(free) == (free // 57_768) * 32
+
+
+# ----------------------------------------------------------------------------------------------------------------
+# Distributed top-k: local top-k per chip + gather + merge == global top-k
+# ----------------------------------------------------------------------------------------------------------------
+@pytest.mark.parametrize("stripe", STRIPES)
+@pytest.mark.parametrize("k", [16, 128, 2048])
+def test_local_topk_merge_equals_global(stripe, k):
+    torch.manual_seed(k)
+    q, s_len = 48, 3 * stripe.period
+    scores = torch.randn(q, s_len)
+    # causal-style validity: query i sees keys [0, kv_len_i); some see fewer than k keys
+    kv_len = torch.linspace(100, s_len, q).long()
+    scores = scores.masked_fill(torch.arange(s_len).unsqueeze(0) >= kv_len.unsqueeze(1), float("-inf"))
+    per_chip = stripe_key_axis(scores, stripe)  # [mesh rows, mesh cols, Q, rows]
+    rows = per_chip.shape[-1]
+    k_local = min(k, rows)
+    lv, lr = [], []
+    for chip in range(32):
+        r, c = stripe.coord(chip)
+        v, i = per_chip[r, c].topk(k_local, dim=-1)
+        lv.append(v)
+        lr.append(i)
+    v, p = merge_local_topk(torch.stack(lv), torch.stack(lr), stripe, k)
+    gv, gi = scores.topk(k, dim=-1)
+    gi = gi.masked_fill(torch.isneginf(gv), -1)
+    assert torch.equal(v, gv)
+    # same selection; equal scores may come back in either order
+    assert torch.equal(p.sort(dim=-1).values, gi.sort(dim=-1).values)
+
+
+@pytest.mark.parametrize("stripe", STRIPES)
+def test_stripe_key_axis_places_each_chips_keys(stripe):
+    scores = torch.arange(2 * stripe.period, dtype=torch.float32).unsqueeze(0).repeat(3, 1)  # value = key position
+    per_chip = stripe_key_axis(scores, stripe)
+    for chip in (0, 9, 31):
+        r, c = stripe.coord(chip)
+        assert torch.equal(per_chip[r, c, 0].long(), stripe.local_positions(chip, per_chip.shape[-1]))
