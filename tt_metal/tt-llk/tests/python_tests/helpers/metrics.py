@@ -123,6 +123,8 @@ def export_metrics(
     if zone_names:
         for i, name in enumerate(zone_names):
             zone_to_marker[f"ZONE_{i}"] = name
+            # The tile counters of a launch are named after the zone that launch counted.
+            zone_to_marker[f"LAUNCH_ZONE_{i}"] = f"LAUNCH_{name}"
 
     zones = sorted(set(m["zone"] for m in computed))
     rows = []
@@ -189,6 +191,8 @@ def export_counters(
     if zone_names:
         for i, name in enumerate(zone_names):
             zone_to_marker[f"ZONE_{i}"] = name
+            # The tile counters of a launch are named after the zone that launch counted.
+            zone_to_marker[f"LAUNCH_ZONE_{i}"] = f"LAUNCH_{name}"
 
     zones = sorted(all_counters["zone"].unique())
     has_runs = "run_index" in all_counters.columns

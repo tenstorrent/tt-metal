@@ -16,7 +16,7 @@ import pandas as pd
 import pytest
 
 from ..chip_architecture import ChipArchitecture
-from ..counters import read_counters
+from ..counters import read_counters, read_family_counters
 from ..device import BootMode
 from ..format_config import FormatConfig
 from ..llk_params import DestAccumulation, L1Accumulation, PerfRunType
@@ -977,7 +977,9 @@ class PerfConfig(TestConfig):
                 f"zone handshakes."
             )
 
-    def _read_counters_of_launch(self, variant_counter_results, run_index):
+    def _read_counters_of_launch(
+        self, variant_counter_results, run_index, variant_family_results
+    ):
         # A counted zone without its readout raises (counters.py) and fails the test instead of leaving a blank window.
         if TestConfig.counted_zones_address() is None:
             return  # ttsim: no launch word, nothing counts
@@ -988,6 +990,15 @@ class PerfConfig(TestConfig):
         )
         counter_results["run_index"] = run_index
         variant_counter_results.append(counter_results)
+        # The RISC-V monitor and tile counters take no part in the Tensix metrics: they only reach the raw counters CSV.
+        family_results = read_family_counters(
+            location=TestConfig.TENSIX_LOCATION,
+            zones=self.counted_zones,
+            token=self.launch_token,
+        )
+        if not family_results.empty:
+            family_results["run_index"] = run_index
+            variant_family_results.append(family_results)
 
     def run(self, perf_report: PerfReport, run_count=1):
         if not self.run_configs:
@@ -1062,6 +1073,7 @@ class PerfConfig(TestConfig):
 
             variant_raw_data = []
             variant_counter_results = []
+            variant_family_results = []
             # The measured launches count TILE_LOOP only: INIT's readout would sit between INIT and TILE_LOOP.
             self.counted_zones = (
                 COUNT_TILE_LOOP if TestConfig.ENABLE_PERF_COUNTERS else 0
@@ -1077,7 +1089,9 @@ class PerfConfig(TestConfig):
                 assert_zones_dont_overlap(profiler_data)
 
                 if TestConfig.ENABLE_PERF_COUNTERS:
-                    self._read_counters_of_launch(variant_counter_results, run_index)
+                    self._read_counters_of_launch(
+                        variant_counter_results, run_index, variant_family_results
+                    )
 
                 # Tag profiler data with run index for proper L1-to-L1 pairing
                 profiler_data.df["run_index"] = run_index
@@ -1090,7 +1104,9 @@ class PerfConfig(TestConfig):
                     self.write_runtimes_to_L1()
                     self.run_elf_files()
                     self.wait_for_tensix_operations_finished()
-                    self._read_counters_of_launch(variant_counter_results, run_index)
+                    self._read_counters_of_launch(
+                        variant_counter_results, run_index, variant_family_results
+                    )
             self.counted_zones = 0
 
             get_stats = Profiler.STATS_FUNCTION[run_type]
@@ -1124,7 +1140,9 @@ class PerfConfig(TestConfig):
                     and PerfConfig.COUNTER_REPORT is not None
                 ):
                     counter_csv_df = export_counters(
-                        all_counters,
+                        pd.concat(
+                            [all_counters, *variant_family_results], ignore_index=True
+                        ),
                         run_type_name=run_type.name,
                         zone_names=zone_names,
                     )

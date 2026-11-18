@@ -78,6 +78,7 @@ _TT_LLK_TOOLS_PYTHON = str(
 if _TT_LLK_TOOLS_PYTHON not in sys.path:
     sys.path.insert(0, _TT_LLK_TOOLS_PYTHON)
 
+import helpers.counters as counters
 import helpers.order_processing as order_processing
 import helpers.utils as utils_module
 import pytest
@@ -390,6 +391,34 @@ def pytest_addoption(parser):
     )
 
     parser.addoption(
+        "--perf-riscv-pmc",
+        action="store",
+        default=None,
+        metavar="EV3[,EV4]",
+        help="Also capture the RISC-V performance monitor of every TRISC per zone (Blackhole, Quasar): mcycle, minstret and "
+        "the two programmable counters. Each event is a number or event names joined with '+' (see "
+        "tools/include/perf_counters/riscv_pmc_*.h). Implies --dump-perf-counters.",
+    )
+
+    parser.addoption(
+        "--perf-noc-counters",
+        action="store",
+        default=None,
+        metavar="GROUPS",
+        help="Also capture the NoC interface counters of the tile per launch (Wormhole, Blackhole): a group mask or "
+        "MASTER, SLAVE, ATOMIC, ALL joined with '+'. Implies --dump-perf-counters.",
+    )
+
+    parser.addoption(
+        "--perf-router-counters",
+        action="store",
+        default=None,
+        metavar="OPTION",
+        help="Also capture the NoC router counters of the tile per launch (Blackhole): an option mask (virtual channels "
+        "in bits 0-15, banks from bit 16, bit 24 keeps channels apart) or ALL[+PER_VC]. Implies --dump-perf-counters.",
+    )
+
+    parser.addoption(
         "--dump-perf-counters",
         action="store_true",
         default=False,
@@ -466,9 +495,33 @@ def pytest_configure(config):
         raise pytest.UsageError(f"--bit-exact-runs must be >= 1, got {bit_exact_runs}")
     TestConfig.BIT_EXACT_RUNS = bit_exact_runs
 
+    family_options = {
+        name: config.getoption(name, default=None)
+        for name in (
+            "--perf-riscv-pmc",
+            "--perf-noc-counters",
+            "--perf-router-counters",
+        )
+    }
+    try:
+        if family_options["--perf-riscv-pmc"] is not None:
+            TestConfig.PERF_RISCV_EVENTS = counters.parse_riscv_events(
+                family_options["--perf-riscv-pmc"]
+            )
+        if family_options["--perf-noc-counters"] is not None:
+            TestConfig.PERF_NOC_GROUPS = counters.parse_noc_groups(
+                family_options["--perf-noc-counters"]
+            )
+        if family_options["--perf-router-counters"] is not None:
+            TestConfig.PERF_ROUTER_OPTION = counters.parse_router_option(
+                family_options["--perf-router-counters"]
+            )
+    except ValueError as error:
+        raise pytest.UsageError(str(error)) from error
+    # The families ride on the counter machinery and report through the raw counters CSV.
     TestConfig.DUMP_PERF_COUNTERS = config.getoption(
         "--dump-perf-counters", default=False
-    )
+    ) or any(value is not None for value in family_options.values())
     # --dump-perf-counters implies --enable-perf-counters
     TestConfig.ENABLE_PERF_COUNTERS = (
         config.getoption("--enable-perf-counters", default=False)

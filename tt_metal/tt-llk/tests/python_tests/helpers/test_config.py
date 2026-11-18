@@ -242,6 +242,12 @@ class TestConfig:
         os.environ.get("LLK_PERF_L1_CLIENT_SEL", "-1")
     )
     DUMP_PERF_COUNTERS: ClassVar[bool] = False
+    # Optional counter families on top of the Tensix banks (None = not compiled in). The RISC-V monitor is the two
+    # mhpmevent selects every TRISC programs; the NoC interface and router captures are the group mask and option mask
+    # BRISC reads around a launch. Parsed and validated in counters.py.
+    PERF_RISCV_EVENTS: ClassVar[tuple[int, int] | None] = None
+    PERF_NOC_GROUPS: ClassVar[int | None] = None
+    PERF_ROUTER_OPTION: ClassVar[int | None] = None
 
     # === Addresses ===
     RUNTIME_ADDRESS_NON_COVERAGE: ClassVar[int] = 0x20000
@@ -257,14 +263,18 @@ class TestConfig:
     # Performance counter L1 memory addresses
     # NOTE: These addresses must match the values in tests/helpers/include/counters.h
     # Shared config + per-zone data layout (must match counters.h).
-    # Shared config (200 words = 800 B) at base; per-zone data (5 bank-cycle
-    # words + 200 counter-count words + sync = 860 B) follows.
-    # 8 zones × 860 + 800 = 7680 B, fits below profiler region at 0x16AFF0.
+    # Shared config (128 words = 512 B) at base; per-zone data (5 bank-cycle
+    # words + 128 counter-count words + sync + 4 RISC-V monitor blocks = 700 B) follows,
+    # then the launch word and the launch block of the tile counters.
+    # 512 + 8 zones × 700 + 4 + 272 = 6388 B, fits below profiler region at 0x16AFF0.
     PERF_COUNTERS_BASE_ADDR: ClassVar[int] = 0x169000
     PERF_COUNTERS_MAX_ZONES: ClassVar[int] = 8  # Max zones (must match counters.h)
-    _PERF_COUNTERS_CONFIG_WORDS: ClassVar[int] = 200
-    _PERF_COUNTERS_DATA_WORDS: ClassVar[int] = 200  # per-zone counter-count slots
+    _PERF_COUNTERS_CONFIG_WORDS: ClassVar[int] = 128
+    _PERF_COUNTERS_DATA_WORDS: ClassVar[int] = 128  # per-zone counter-count slots
     _PERF_COUNTERS_BANK_CYCLES_WORDS: ClassVar[int] = 5  # OUT_L per bank (5 banks)
+    _PERF_COUNTERS_RISCV_THREADS: ClassVar[int] = 4
+    _PERF_COUNTERS_RISCV_THREAD_WORDS: ClassVar[int] = 8
+    _PERF_COUNTERS_TILE_VALUE_WORDS: ClassVar[int] = 32
 
     # Shared config region
     PERF_COUNTERS_CONFIG_ADDR: ClassVar[int] = PERF_COUNTERS_BASE_ADDR
@@ -272,17 +282,29 @@ class TestConfig:
         PERF_COUNTERS_BASE_ADDR + _PERF_COUNTERS_CONFIG_WORDS * 4
     )
 
-    # Per-zone data layout: [bank_cycles (5)][counter_counts (DATA_WORDS)][sync (1) + pad]
+    # Per-zone data layout: [bank_cycles (5)][counter_counts (DATA_WORDS)][sync (1) + pad][RISC-V monitor blocks]
     _PERF_COUNTERS_ZONE_DATA_BYTES: ClassVar[int] = (
         _PERF_COUNTERS_BANK_CYCLES_WORDS + _PERF_COUNTERS_DATA_WORDS
-    ) * 4  # 820 B = 20 (cycles) + 800 (counts)
+    ) * 4  # 532 B = 20 (cycles) + 512 (counts)
+    _PERF_COUNTERS_RISCV_ZONE_OFFSET: ClassVar[int] = (
+        _PERF_COUNTERS_ZONE_DATA_BYTES + 40
+    )
+    _PERF_COUNTERS_RISCV_BYTES: ClassVar[int] = (
+        _PERF_COUNTERS_RISCV_THREADS * _PERF_COUNTERS_RISCV_THREAD_WORDS * 4
+    )
 
-    # Size of one full zone block (data + sync/pad)
-    PERF_COUNTERS_ZONE_SIZE: ClassVar[int] = _PERF_COUNTERS_ZONE_DATA_BYTES + 40
+    # Size of one full zone block (data + sync/pad + RISC-V monitor blocks)
+    PERF_COUNTERS_ZONE_SIZE: ClassVar[int] = (
+        _PERF_COUNTERS_RISCV_ZONE_OFFSET + _PERF_COUNTERS_RISCV_BYTES
+    )
 
     # counters.h PERF_COUNTERS_LAUNCH_WORD_ADDR, Quasar's launch word: the word after the zone blocks.
     _PERF_COUNTERS_QUASAR_COUNTED_ZONES: ClassVar[int] = (
         PERF_COUNTERS_ZONES_BASE + PERF_COUNTERS_MAX_ZONES * PERF_COUNTERS_ZONE_SIZE
+    )
+    # counters.h PERF_COUNTERS_LAUNCH_BLOCK_ADDR: the tile counters BRISC reads around a launch.
+    PERF_COUNTERS_LAUNCH_BLOCK_ADDR: ClassVar[int] = (
+        _PERF_COUNTERS_QUASAR_COUNTED_ZONES + 4
     )
     # counters.h LAUNCH_TOKEN_SHIFT: the launch word's token sits above the zone bits (the sync word's above its flag).
     _LAUNCH_TOKEN_SHIFT: ClassVar[int] = 8
@@ -406,7 +428,32 @@ class TestConfig:
         """Counters on compiles BRISC and the kernels differently (counters.h), so its artefacts never mix with counters off."""
         if not TestConfig.ENABLE_PERF_COUNTERS:
             return ""
-        return f"-counters-l1mux{TestConfig.PERF_L1_MUX_GROUP}-l1client{TestConfig.PERF_L1_CLIENT_SEL}"
+        suffix = f"-counters-l1mux{TestConfig.PERF_L1_MUX_GROUP}-l1client{TestConfig.PERF_L1_CLIENT_SEL}"
+        if TestConfig.PERF_RISCV_EVENTS is not None:
+            suffix += "-riscv{:x}-{:x}".format(*TestConfig.PERF_RISCV_EVENTS)
+        if TestConfig.PERF_NOC_GROUPS is not None:
+            suffix += f"-noc{TestConfig.PERF_NOC_GROUPS:x}"
+        if TestConfig.PERF_ROUTER_OPTION is not None:
+            suffix += f"-router{TestConfig.PERF_ROUTER_OPTION:x}"
+        return suffix
+
+    @staticmethod
+    def perf_riscv_flags() -> str:
+        """The TRISC defines of the RISC-V monitor family (counters.h), empty when it is off."""
+        if TestConfig.PERF_RISCV_EVENTS is None:
+            return ""
+        event3, event4 = TestConfig.PERF_RISCV_EVENTS
+        return f" -DLLK_PERF_RISCV_PMC -DLLK_PERF_RISCV_EV3={event3:#x} -DLLK_PERF_RISCV_EV4={event4:#x}"
+
+    @staticmethod
+    def perf_tile_counter_flags() -> str:
+        """The BRISC defines of the NoC interface and router captures (counters.h), empty when both are off."""
+        flags = ""
+        if TestConfig.PERF_NOC_GROUPS is not None:
+            flags += f"-DLLK_PERF_NOC_GROUPS={TestConfig.PERF_NOC_GROUPS:#x} "
+        if TestConfig.PERF_ROUTER_OPTION is not None:
+            flags += f"-DLLK_PERF_ROUTER_OPTION={TestConfig.PERF_ROUTER_OPTION:#x} "
+        return flags
 
     @staticmethod
     def runs_on_ttsim() -> bool:
@@ -1589,6 +1636,7 @@ class TestConfig:
                 perf_cnt_flag = ""
                 if TestConfig.ENABLE_PERF_COUNTERS:
                     perf_cnt_flag = f"-DPERF_COUNTERS_COMPILED -DLLK_PERF_L1_MUX_GROUP={TestConfig.PERF_L1_MUX_GROUP} "
+                    perf_cnt_flag += TestConfig.perf_tile_counter_flags()
                 compile_command = (  # brisc.elf : brisc.cpp
                     f"{TestConfig.GXX} {TestConfig.ARCH_NON_COMPUTE} {TestConfig.OPTIONS_ALL} {TestConfig.OPTIONS_LINK} {local_non_coverage} "
                     f'{"-DCOVERAGE " if TestConfig.WITH_COVERAGE else ""}'
@@ -1924,6 +1972,7 @@ class TestConfig:
                 # event on Quasar); counters off keeps each zone's rendezvous alone (counters.h).
                 if TestConfig.ENABLE_PERF_COUNTERS:
                     optional_kernel_flags += " -DPERF_COUNTERS_COMPILED"
+                    optional_kernel_flags += TestConfig.perf_riscv_flags()
                     if TestConfig.CHIP_ARCH == ChipArchitecture.QUASAR:
                         optional_kernel_flags += (
                             f" -DLLK_PERF_L1_CLIENT_SEL={TestConfig.PERF_L1_CLIENT_SEL}"

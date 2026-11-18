@@ -27,10 +27,16 @@ constexpr std::uint32_t PERF_OUTPUT     = PERF_INPUT_C + PERF_RING_TILES * 4096;
 
 // Perf-counter shared config + per-zone data. Must stay below the profiler boundary at
 // 0x16AFF0 (asserted in counters.h) and must not overlap the stimuli buffers above; both builds use it.
-#define PERF_COUNTERS_BASE_ADDR         0x169000
-#define PERF_COUNTERS_CONFIG_WORDS      200
-#define PERF_COUNTERS_DATA_WORDS        200
-#define PERF_COUNTERS_BANK_CYCLES_WORDS 5
+// The Tensix banks need at most 110 slots (Wormhole), so 128 leave room; the RISC-V monitor keeps one block per thread
+// in each zone and the tile counters one block per launch (counters.h lays them out).
+#define PERF_COUNTERS_BASE_ADDR          0x169000
+#define PERF_COUNTERS_CONFIG_WORDS       128
+#define PERF_COUNTERS_DATA_WORDS         128
+#define PERF_COUNTERS_BANK_CYCLES_WORDS  5
+#define PERF_COUNTERS_RISCV_THREADS      4
+#define PERF_COUNTERS_RISCV_THREAD_WORDS 8
+#define PERF_COUNTERS_TILE_VALUE_WORDS   32
+#define PERF_COUNTERS_LAUNCH_BLOCK_WORDS (4 + 2 * PERF_COUNTERS_TILE_VALUE_WORDS)
 
 constexpr std::uint32_t PERF_ADDRESS(std::uint32_t buffer, std::uint32_t tile)
 {

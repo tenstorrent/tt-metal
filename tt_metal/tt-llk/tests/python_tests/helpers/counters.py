@@ -7,6 +7,10 @@ from pathlib import Path
 
 import pandas as pd
 from loguru import logger
+from tt_llk_perf import headers as _llk_headers
+from tt_llk_perf import noc_counters as _noc_counters
+from tt_llk_perf import riscv_pmc as _riscv_pmc
+from tt_llk_perf import router_counters as _router_counters
 from tt_llk_perf.headers import bank_tables
 from tt_llk_perf.metrics import quasar_l1_client_label
 from ttexalens.tt_exalens_lib import read_words_from_device, write_words_to_device
@@ -310,3 +314,366 @@ def configure_quasar_counters(location: str) -> None:
             write_words_to_device(
                 location, _QUASAR_NEO0_WINDOW + offset, [value], safe_mode=False
             )
+
+
+# ---------------------------------------------------------------------------------------------------------------------
+# Optional families next to the Tensix banks: the RISC-V monitor of each TRISC (per zone) and the NoC interface and
+# router counters of the tile (per launch, read by BRISC). Selected with --perf-riscv-pmc, --perf-noc-counters and
+# --perf-router-counters; the device side is counters.h.
+# ---------------------------------------------------------------------------------------------------------------------
+
+# Thread order of the per-zone RISC-V blocks, as llk_barrier::THREAD_ID.
+RISCV_THREAD_NAMES = ("UNPACK", "MATH", "PACK", "SFPU")
+RISCV_BANK_PREFIX = "RISCV_"
+NOC_BANK_PREFIX = "NOC"
+ROUTER_BANK_PREFIX = "ROUTER"
+# A launch's tile counters span the whole launch, so they are reported under the zone that launch counted.
+LAUNCH_ZONE_PREFIX = "LAUNCH_"
+
+# counters.h RISCV_WORD_* and TILE_WORD_*
+_RISCV_WORD = {
+    name: index
+    for index, name in enumerate(
+        ("FLAG", "EVENT3", "EVENT4", "CYCLES", "INSTRET", "PMC3", "PMC4")
+    )
+}
+_TILE_WORD_NOC_FLAG, _TILE_WORD_NOC_SELECT = 0, 1
+_TILE_WORD_ROUTER_FLAG, _TILE_WORD_ROUTER_SELECT = 2, 3
+_TILE_WORD_NOC_VALUES = 4
+_TILE_WORD_ROUTER_VALUES = (
+    _TILE_WORD_NOC_VALUES + TestConfig._PERF_COUNTERS_TILE_VALUE_WORDS
+)
+
+
+def _arch_name(arch=None) -> str:
+    return _llk_headers.normalize_arch(
+        arch if arch is not None else get_chip_architecture()
+    )
+
+
+def riscv_core_kind(arch=None) -> str:
+    """Select encoding of a TRISC: 'baby' on Blackhole, 'trisc' on Quasar. Wormhole cores have no counters."""
+    name = _arch_name(arch)
+    if name.startswith("wormhole"):
+        raise ValueError(
+            "--perf-riscv-pmc: Wormhole RISC-V cores implement no performance counter CSRs, so there is nothing to capture"
+        )
+    return "trisc" if name == "quasar" else "baby"
+
+
+def _split_option(text: str) -> list[str]:
+    return [part.strip() for part in text.split(",") if part.strip()]
+
+
+def _riscv_or_select(arch: str, kind: str, names: list[str]) -> int:
+    """The select that arms all the named events at once. An mhpmevent has one 4-bit field per pipeline domain, so two
+    events of one domain cannot be armed together: ORing their selects would arm a third event.
+    """
+    by_name = dict(_llk_headers.riscv_event_tables(arch).get(kind, []))
+    domains = {}
+    for name in names:
+        if name not in by_name:
+            raise ValueError(f"{name} is not an event of {kind} cores on {arch}")
+        domain = (by_name[name].bit_length() - 1) // 4
+        if domain in domains:
+            raise ValueError(
+                f"--perf-riscv-pmc: {domains[domain]} and {name} are events of the same pipeline domain and cannot share "
+                "a counter"
+            )
+        domains[domain] = name
+    return _llk_headers.riscv_event_select(arch, kind, names)
+
+
+def parse_riscv_events(text: str, arch=None) -> tuple[int, int]:
+    """(mhpmevent3, mhpmevent4) of --perf-riscv-pmc=EV3[,EV4]. Each is a number (hex ok) or event names joined with '+'
+    (the counter counts their OR); an omitted EV4 is 0, which counts nothing."""
+    kind = riscv_core_kind(arch)
+    parts = _split_option(text)
+    if not 1 <= len(parts) <= 2:
+        raise ValueError(f"--perf-riscv-pmc takes one or two events, got {text!r}")
+    selects = []
+    for part in parts:
+        try:
+            selects.append(int(part, 0))
+            continue
+        except ValueError:
+            pass
+        names = [name.strip().upper() for name in part.split("+")]
+        selects.append(_riscv_or_select(_arch_name(arch), kind, names))
+    while len(selects) < 2:
+        selects.append(0)
+    if any(not 0 <= select <= 0xFFFFFFFF for select in selects):
+        raise ValueError(f"--perf-riscv-pmc selects must fit 32 bits, got {text!r}")
+    return selects[0], selects[1]
+
+
+def parse_noc_groups(text: str, arch=None) -> int:
+    """Group mask of --perf-noc-counters: a number or group names (MASTER, SLAVE, ATOMIC, ALL) joined with '+'."""
+    name = _arch_name(arch)
+    if name == "quasar":
+        raise ValueError(
+            "--perf-noc-counters: the Quasar harness has no BRISC and no TRISC is known to read the tile's NoC registers"
+        )
+    groups = _llk_headers.NOC_GROUPS
+    try:
+        mask = int(text, 0)
+    except ValueError:
+        mask = 0
+        for part in text.split("+"):
+            part = part.strip().upper()
+            if part == "ALL":
+                mask |= (1 << len(groups)) - 1
+            elif part in groups:
+                mask |= 1 << groups.index(part)
+            else:
+                raise ValueError(
+                    f"--perf-noc-counters: {part!r} is not one of {', '.join(groups)}, ALL or a mask"
+                )
+    if mask <= 0 or mask >> len(groups):
+        raise ValueError(
+            f"--perf-noc-counters: mask {mask:#x} selects none of the {len(groups)} groups or sets bits beyond them"
+        )
+    return mask
+
+
+def parse_router_option(text: str, arch=None) -> int:
+    """Option mask of --perf-router-counters: a number (virtual channel bits 0 to 15, bank bits from 16, bit 24 keeps the
+    channels apart) or ALL (every channel, every bank), optionally +PER_VC."""
+    name = _arch_name(arch)
+    if name == "quasar":
+        raise ValueError(
+            "--perf-router-counters: the Quasar harness has no BRISC and no TRISC is known to read the tile's NoC registers"
+        )
+    consts = _llk_headers.router_constants()
+    table = _llk_headers.router_counter_table(name)
+    if not table.banks:
+        raise ValueError(f"--perf-router-counters: {name} has no router counters")
+    option = 0
+    try:
+        option = int(text, 0)
+    except ValueError:
+        for part in text.split("+"):
+            part = part.strip().upper()
+            if part == "ALL":
+                option |= consts["VC_MASK_ALL"] | consts["BANKS_ALL"]
+            elif part == "PER_VC":
+                option |= consts["PER_VC"]
+            else:
+                raise ValueError(
+                    f"--perf-router-counters: {part!r} is not ALL, PER_VC or a mask"
+                )
+    valid = consts["VC_MASK_ALL"] | consts["BANKS_ALL"] | consts["PER_VC"]
+    if option & ~valid:
+        raise ValueError(
+            f"--perf-router-counters: option {option:#x} has bits outside the router option mask {valid:#x}"
+        )
+    selected = _llk_headers.router_option(name, option)
+    if not selected.banks or not selected.vcs:
+        raise ValueError(
+            f"--perf-router-counters: option {option:#x} selects no bank or no virtual channel on {name}"
+        )
+    values = (
+        table.num_nocs
+        * len(selected.banks)
+        * (len(selected.vcs) if selected.per_vc else 1)
+    )
+    if values > consts["MAX_VALUES"]:
+        raise ValueError(
+            f"--perf-router-counters: option {option:#x} captures {values} values, at most {consts['MAX_VALUES']}"
+        )
+    return option
+
+
+def family_row(zone, bank, name, select, cycles, count) -> dict:
+    """One row in the layout of read_counters: the family values travel through the same report frame."""
+    return {
+        "zone": zone,
+        "bank": bank,
+        "counter_name": name,
+        "counter_id": select,
+        "cycles": cycles,
+        "count": count,
+        "l1_mux": None,
+    }
+
+
+def _slot_complete(words, token, what) -> bool:
+    """True when a block's flag word carries this launch's token; raises when a counted launch left none."""
+    flag = words[0]
+    if (flag & 0xFF) == _SYNC_ZONE_COMPLETE and (
+        flag >> TestConfig._LAUNCH_TOKEN_SHIFT
+    ) == token:
+        return True
+    raise CounterReadoutMissing(
+        f"{what}: flag 0x{flag:08x} is not this launch's readout (token {token})"
+    )
+
+
+def decode_riscv_block(words, arch, thread: str, zone_name: str, token) -> list[dict]:
+    """Rows of one thread's RISC-V monitor block of one zone: cycles, instructions and the armed events."""
+    _slot_complete(words, token, f"Zone {zone_name} {thread}: RISC-V monitor block")
+    event3, event4 = words[_RISCV_WORD["EVENT3"]], words[_RISCV_WORD["EVENT4"]]
+    launch = _riscv_pmc.Launch(
+        words[_RISCV_WORD["PMC3"]],
+        words[_RISCV_WORD["PMC4"]],
+        words[_RISCV_WORD["CYCLES"]],
+        words[_RISCV_WORD["INSTRET"]],
+        event3,
+        event4,
+    )
+    named = _riscv_pmc.decode_launch(_arch_name(arch), riscv_core_kind(arch), launch)
+    bank = RISCV_BANK_PREFIX + thread
+    rows = [
+        family_row(zone_name, bank, "cycles", -1, launch.mcycle, launch.mcycle),
+        family_row(zone_name, bank, "instructions", -1, launch.mcycle, launch.minstret),
+    ]
+    for label, select, count in (
+        (named["event3"], event3, launch.pmc3),
+        (named["event4"], event4, launch.pmc4),
+    ):
+        if label != "DISABLED":
+            rows.append(
+                family_row(zone_name, bank, label, select, launch.mcycle, count)
+            )
+    return rows
+
+
+def read_riscv_counters(
+    location: str, zones: int, token: int, arch=None, threads: int | None = None
+) -> list[dict]:
+    """Rows of the RISC-V monitor of every counted zone, each TRISC of the arch. A counted zone whose thread left no
+    readout of this launch raises CounterReadoutMissing."""
+    arch = arch if arch is not None else get_chip_architecture()
+    threads = threads or (4 if _arch_name(arch) == "quasar" else 3)
+    rows = []
+    for zone in range(TestConfig.PERF_COUNTERS_MAX_ZONES):
+        if not zones >> zone & 1:
+            continue
+        zone_name = f"ZONE_{zone}"
+        for thread in range(threads):
+            addr = (
+                _zone_data_addr(zone)
+                + TestConfig._PERF_COUNTERS_RISCV_ZONE_OFFSET
+                + thread * TestConfig._PERF_COUNTERS_RISCV_THREAD_WORDS * 4
+            )
+            words = read_words_from_device(
+                location=location,
+                addr=addr,
+                word_count=TestConfig._PERF_COUNTERS_RISCV_THREAD_WORDS,
+            )
+            if len(words) < TestConfig._PERF_COUNTERS_RISCV_THREAD_WORDS:
+                raise CounterReadoutMissing(
+                    f"Zone {zone_name} {RISCV_THREAD_NAMES[thread]}: the RISC-V monitor read was short"
+                )
+            rows += decode_riscv_block(
+                words, arch, RISCV_THREAD_NAMES[thread], zone_name, token
+            )
+    return rows
+
+
+def decode_tile_block(
+    words, arch, zone_name: str, noc_groups, router_option, token
+) -> list[dict]:
+    """Rows of one launch's NoC interface and router captures from the launch block words, named by the counter tables.
+    The echoed masks must equal the requested ones: a stale BRISC would otherwise label another selection's values.
+    """
+    name = _arch_name(arch)
+    zone = LAUNCH_ZONE_PREFIX + zone_name
+    rows = []
+    if noc_groups is not None:
+        _slot_complete(words[_TILE_WORD_NOC_FLAG:], token, f"{zone}: NoC counter block")
+        echoed = words[_TILE_WORD_NOC_SELECT]
+        if echoed != noc_groups:
+            raise RuntimeError(
+                f"NoC counters were captured with group mask {echoed:#x}, but {noc_groups:#x} was requested. The BRISC ELF "
+                "predates the change; recompile the producer."
+            )
+        table = _llk_headers.noc_counter_table(name)
+        selected = _llk_headers.noc_selected_counters(name, noc_groups)
+        count = len(selected) * table.num_nocs
+        launch = _noc_counters.Launch(
+            noc_groups,
+            table.num_nocs,
+            list(words[_TILE_WORD_NOC_VALUES : _TILE_WORD_NOC_VALUES + count]),
+        )
+        decoded = _noc_counters.decode_noc_launch(name, launch)
+        for noc in range(table.num_nocs):
+            bank = f"{NOC_BANK_PREFIX}{noc}"
+            for counter, value in decoded["counts"][noc].items():
+                rows.append(family_row(zone, bank, counter, -1, float("nan"), value))
+            for metric, value in decoded["metrics"][noc].items():
+                if (
+                    value is not None
+                    and "bytes" in metric
+                    and not metric.endswith("_ratio")
+                ):
+                    rows.append(family_row(zone, bank, metric, -1, float("nan"), value))
+    if router_option is not None:
+        _slot_complete(
+            words[_TILE_WORD_ROUTER_FLAG:], token, f"{zone}: router counter block"
+        )
+        echoed = words[_TILE_WORD_ROUTER_SELECT]
+        if echoed != router_option:
+            raise RuntimeError(
+                f"Router counters were captured with option {echoed:#x}, but {router_option:#x} was requested. The BRISC ELF "
+                "predates the change; recompile the producer."
+            )
+        labels = _router_counters.value_labels(name, router_option)
+        table = _llk_headers.router_counter_table(name)
+        total = len(labels) * table.num_nocs
+        values = list(
+            words[_TILE_WORD_ROUTER_VALUES : _TILE_WORD_ROUTER_VALUES + total]
+        )
+        launch = _router_counters.Launch(
+            router_option, table.num_nocs, values + [0] * (total % 2)
+        )
+        decoded = _router_counters.decode_router_launch(name, launch)
+        for noc in range(table.num_nocs):
+            bank = f"{ROUTER_BANK_PREFIX}{noc}"
+            for label, value in decoded["counts"][noc].items():
+                rows.append(family_row(zone, bank, label, -1, float("nan"), value))
+    return rows
+
+
+def read_tile_counters(
+    location: str, zones: int, token: int, noc_groups, router_option, arch=None
+) -> list[dict]:
+    """Rows of the tile counters of one launch, reported under the one zone the launch counted."""
+    if noc_groups is None and router_option is None:
+        return []
+    arch = arch if arch is not None else get_chip_architecture()
+    counted = [
+        zone for zone in range(TestConfig.PERF_COUNTERS_MAX_ZONES) if zones >> zone & 1
+    ]
+    if not counted:
+        return []
+    words = read_words_from_device(
+        location=location,
+        addr=TestConfig.PERF_COUNTERS_LAUNCH_BLOCK_ADDR,
+        word_count=_TILE_WORD_ROUTER_VALUES
+        + TestConfig._PERF_COUNTERS_TILE_VALUE_WORDS,
+    )
+    rows = []
+    for zone in counted:
+        rows += decode_tile_block(
+            words, arch, f"ZONE_{zone}", noc_groups, router_option, token
+        )
+    return rows
+
+
+def read_family_counters(
+    location: str = "0,0", zones: int = 0, token: int | None = None
+) -> pd.DataFrame:
+    """Rows of the optional families the build compiled in (TestConfig.PERF_*), in the layout of read_counters. Empty
+    when none is on."""
+    rows = []
+    if TestConfig.PERF_RISCV_EVENTS is not None:
+        rows += read_riscv_counters(location, zones, token)
+    rows += read_tile_counters(
+        location,
+        zones,
+        token,
+        TestConfig.PERF_NOC_GROUPS,
+        TestConfig.PERF_ROUTER_OPTION,
+    )
+    return pd.DataFrame(rows)
