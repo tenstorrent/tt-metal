@@ -50,7 +50,6 @@ TILE_DIMENSIONS = [(32, 32), (16, 32), (8, 32), (4, 32)]
     block_ct_dim=runtime(BLOCK_CT_DIMS),
     tile_dimensions=runtime(TILE_DIMENSIONS),
     dest_sync=[DestSync.Half, DestSync.Full],
-    # The block max-row LLK static_asserts against a 32-bit Dest.
     dest_acc=[DestAccumulation.No],
 )
 def test_reduce_block_max_row_quasar(
