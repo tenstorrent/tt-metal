@@ -50,6 +50,10 @@ class CanvasLevelMask:
         x = ttnn.multiply(x, self.cols if fp32 else self.cols16)
         return ttnn.multiply(x, self.rows if fp32 else self.rows16, **({"dtype": dtype} if dtype is not None else {}))
 
+    def deallocate(self) -> None:
+        for t in (self.rows, self.cols, self.rows16, self.cols16, self.inv_n):
+            ttnn.deallocate(t)
+
 
 class CanvasMasks:
     """The masks of one canvas for an image of (width, height) pixels in its top-left corner: each level's row and
@@ -83,6 +87,11 @@ class CanvasMasks:
 
     def __call__(self, x: ttnn.Tensor) -> CanvasLevelMask:
         return self._levels[(int(x.shape[1]), int(x.shape[2]))]
+
+    def deallocate(self) -> None:
+        for mask in self._levels.values():
+            mask.deallocate()
+        ttnn.deallocate(self.key_bias)
 
 
 class MaskedGroupNorm(Module):
