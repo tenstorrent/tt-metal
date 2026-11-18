@@ -13,6 +13,12 @@ Local tweaks (keep this list current):
   (the 2026-10-29 ttnn override was retired 2026-11-02).
 - config.py KDA_PREPARATION_L1_BYTES_PER_CORE 320 -> 256 KiB: the 1024-1088-local-row sequence-parallel geometry kept
   its chunk terms in L1 and clashed with the exclusive scan's circular buffers (2026-10-29).
+- recurrence.py keeps the gathered SP prefix (all_gather + chain_affine_transforms) and the grouped SP scan; main's
+  copy moved to the SP relay with one group per head (relay_affine_prefix + entry_correction, #63310), which is not
+  ported. On main's op contracts (2026-11-18): the packed complement-form [S, N, K, K+V] summaries of [E | B]
+  (E = A - I, #62896, the chunk decay as expm1, #62895), the tail slot whenever the mesh's SP axis has more than one
+  device, select_final_carry's persistent fabric cores and semaphores, and reduce_affine_transforms (removed by
+  #63310) replaced by compose_group_transforms, a ttnn composition of each rank's head-slot group summaries.
 """
 """Public Kimi Delta Attention layer API."""
 
