@@ -544,9 +544,7 @@ def test_a_bad_module_threshold_is_refused():
         "perf_matmul": 0.25,
         "perf_math_matmul": 0.25,
     }
-    with pytest.raises(  # allow-pytest.raises: no expect_error fixture in LLK suite
-        SystemExit
-    ):  # allow-pytest.raises: no expect_error in LLK suite
+    with pytest.raises(SystemExit):  # allow-pytest.raises: no expect_error in LLK suite
         _module_thresholds("perf_matmul")
 
 
