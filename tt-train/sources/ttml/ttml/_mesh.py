@@ -2,7 +2,7 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-import functools, operator, os, re
+import functools, operator, os, re, warnings
 from typing import Iterable
 import ttnn
 import ttml
@@ -232,9 +232,16 @@ def mesh() -> Mesh:
     return _mesh
 
 
-def sync_gradients(parameters):
+def sync_gradients(parameters, axis_names: tuple[str, ...] | None = None):
     """Turn each device's local gradient into the global one; call once per step."""
-    average_gradients(parameters, axis_names=("dp", "fsdp"))
+    if axis_names is not None:
+        warnings.warn(
+            "sync_gradients(axis_names=...) is deprecated: sync_gradients(parameters) averages over 'dp' and 'fsdp'; "
+            "use average_gradients(parameters, axis_names) to choose the axes",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+    average_gradients(parameters, axis_names=("dp", "fsdp") if axis_names is None else axis_names)
     sum_partial_gradients(parameters)
 
 
