@@ -18,9 +18,9 @@ cache writers) is shared with GLM-5.3 unchanged:
   * attention: the output gate is ``self_attn.linear_gate`` (cached as ttMLA's ``g_proj``), and each
     layer's learnable per-head sink ``self_attn.learnable_sink_param`` ``[heads]`` is ttMLA's
     ``attn_sink.weight`` (#65921; passed to ``sparse_sdpa`` as ``attention_sink``).
-  * iHC: ``hc_attn_layer.hc_pre.*`` / ``hc_mlp_layer.hc_pre.*`` per layer plus ``model.hc_head.*``,
-    not consumed by the prefill stack yet (#65891). ``pending_layer_tensors`` returns them, so those
-    issues can add their cache category without re-deriving the key names.
+  * iHC (#65891): ``hc_attn_layer.hc_pre.*`` / ``hc_mlp_layer.hc_pre.*`` per layer plus ``model.hc_head.*``, read
+    fp32 for the ``ihc`` weight category (``ihc_weights`` per layer, ``ihc_head_weights`` for the head; tt/hy4/ihc.py
+    caches them as ``layer_{i}.ihc.pt`` / ``ihc_head.pt``).
   * RoPE frames: Hy4's HF attention ropes its raw projection columns HALF-SPLIT (pairs ``(i, i + d/2)``),
     with no DeepSeek-style interleave reshuffle of ``q_pe`` / ``k_pe``, and its indexer ropes the LAST 64
     of the 128 index-key dims. ttMLA ropes INTERLEAVED pairs ``(2i, 2i + 1)`` and TtIndexer ropes the FIRST
@@ -64,7 +64,7 @@ _GATE_KEYS = {"linear_gate.weight": "g_proj.weight"}
 _SINK_KEYS = {"learnable_sink_param": "attn_sink.weight"}
 SINK_KEY = "self_attn.learnable_sink_param"
 
-# Tensors in the checkpoint that no prefill module consumes yet, by owning issue.
+# iHC tensors (#65891), per layer and for the head.
 IHC_LAYER_KEYS = tuple(
     f"{sub}.hc_pre.{field}" for sub in ("hc_attn_layer", "hc_mlp_layer") for field in ("hc_base", "hc_fn", "hc_scale")
 )  # #65891
@@ -320,7 +320,7 @@ def hy4_layer_state_dict(ckpt: Hy4Checkpoint, config, model_cfg, layer_idx: int,
 
     prefix = f"model.layers.{layer_idx}"
     mla_requested = wc.MLA in categories
-    sd = wc._layer_state_dict(ckpt, config, model_cfg, layer_idx, categories - {wc.MLA, wc.ROUTED_EXPERTS})
+    sd = wc._layer_state_dict(ckpt, config, model_cfg, layer_idx, categories - {wc.MLA, wc.ROUTED_EXPERTS, wc.IHC})
     if mla_requested:
         sd["mla_weights"] = hy4_mla_weights(
             ckpt,
@@ -330,6 +330,10 @@ def hy4_layer_state_dict(ckpt: Hy4Checkpoint, config, model_cfg, layer_idx: int,
             config=config,
             sink=bool(getattr(config, "mla_learnable_sink", False)),
         )
+    if wc.IHC in categories:
+        from models.demos.deepseek_v3_d_p.tt.hy4.ihc import read_layer_ihc
+
+        sd["ihc_weights"] = read_layer_ihc(ckpt, layer_idx)
     if wc.ROUTED_EXPERTS in categories:
         intermediate = model_cfg.MOE_INTERMEDIATE_SIZE
         sd["routed_expert_weights"] = [
@@ -337,14 +341,6 @@ def hy4_layer_state_dict(ckpt: Hy4Checkpoint, config, model_cfg, layer_idx: int,
             for e in range(model_cfg.NUM_ROUTED_EXPERTS)
         ]
     return sd
-
-
-def pending_layer_tensors(ckpt: Hy4Checkpoint, layer_idx: int) -> dict:
-    """The per-layer tensors only Hy4 has and no prefill module consumes yet:
-    ``{"ihc": {"hc_attn_layer.hc_pre.hc_fn": ..., ...}}``, for #65891 (iHC) to build its cache category from.
-    (The learnable sink is consumed by ttMLA now: ``hy4_mla_weights(..., sink=True)``.)"""
-    prefix = f"model.layers.{layer_idx}."
-    return {"ihc": {k: ckpt.get(prefix + k).float() for k in IHC_LAYER_KEYS}}
 
 
 def load_hy4_trunk_state_dict(
@@ -356,14 +352,21 @@ def load_hy4_trunk_state_dict(
     first_layer_idx: int,
     num_layers: int,
 ) -> dict:
-    """``weight_categories.load_trunk_state_dict`` over a Hy4 checkpoint."""
-    return wc.load_trunk_state_dict(
+    """``weight_categories.load_trunk_state_dict`` over a Hy4 checkpoint, plus the iHC head when the ``ihc``
+    category lists it (``[-1]``)."""
+    ckpt = Hy4Checkpoint(checkpoint_path)
+    sd = wc.load_trunk_state_dict(
         checkpoint_path,
         config,
         model_cfg,
         missing=missing,
         first_layer_idx=first_layer_idx,
         num_layers=num_layers,
-        checkpoint=Hy4Checkpoint(checkpoint_path),
+        checkpoint=ckpt,
         layer_state_dict_fn=hy4_layer_state_dict,
     )
+    if -1 in missing.get(wc.IHC, ()):
+        from models.demos.deepseek_v3_d_p.tt.hy4.ihc import read_head_ihc
+
+        sd["ihc_head_weights"] = read_head_ihc(ckpt)
+    return sd

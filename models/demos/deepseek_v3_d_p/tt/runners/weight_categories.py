@@ -26,6 +26,8 @@ Categories (rank-local unless noted):
     routed_experts   routed experts of every MoE layer     (by far the largest: 256 fp8 experts per layer)
     lm_head          final norm + LM head                   (last rank running MTP)
     mtp              the MTP predictor tree (its own cache root; last rank running MTP)
+    ihc              iHC parameters of every layer (both sites) and the iHC head (last rank without a kv-only
+                     last layer); only models with ENABLE_IHC (Hy4-preview, #65891)
 """
 
 from __future__ import annotations
@@ -46,8 +48,9 @@ SHARED_EXPERTS = "shared_experts"
 ROUTED_EXPERTS = "routed_experts"
 LM_HEAD = "lm_head"
 MTP = "mtp"
+IHC = "ihc"
 
-CATEGORIES = (EMBEDDING, NORMS, MLA, DENSE_FFN, MOE_GATE, SHARED_EXPERTS, ROUTED_EXPERTS, LM_HEAD, MTP)
+CATEGORIES = (EMBEDDING, NORMS, MLA, DENSE_FFN, MOE_GATE, SHARED_EXPERTS, ROUTED_EXPERTS, LM_HEAD, MTP, IHC)
 _PROJ = ("gate_proj", "up_proj", "down_proj")
 
 
@@ -145,10 +148,18 @@ def missing_trunk_categories(
         if not (exists and TtParallelEmbedding.check_cache_complete(cache_path)):
             miss(EMBEDDING, -1)
 
+    from models.demos.deepseek_v3_d_p.tt.hy4 import ihc as hy4_ihc
+
+    ihc = hy4_ihc.ihc_enabled(model_cfg)
+    if ihc and is_last_rank and not kv_only_last_layer and not (exists and hy4_ihc.head_cache_complete(cache_path)):
+        miss(IHC, -1)
+
     first_k_dense = model_cfg.NUM_DENSE_LAYERS
     last_layer_idx = first_layer_idx + num_layers - 1
     for layer_idx in range(first_layer_idx, first_layer_idx + num_layers):
         prefix = f"layer_{layer_idx}"
+        if ihc and not (exists and hy4_ihc.layer_cache_complete(cache_path, layer_idx)):
+            miss(IHC, layer_idx)  # a kv-only last layer needs it too: its KV comes from the collapsed streams
         if kv_only_last_layer and is_last_rank and layer_idx == last_layer_idx:
             # Built kv-only: the model reads attn_norm, the KV projections and, on a `full` indexer layer, the indexer
             # (it writes the index keys) of this layer and nothing else (no Q/output projections, FFN or MoE).

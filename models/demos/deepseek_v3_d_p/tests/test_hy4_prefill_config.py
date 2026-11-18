@@ -677,9 +677,10 @@ def test_checkpoint_reads_fused_experts_and_remaps_attention(tmp_path, mxfp8):
     assert sink.dtype == torch.float32 and sink.shape == (HEADS,)
     assert torch.equal(sink, ref["model.layers.1.self_attn.learnable_sink_param"].float())
 
-    pending = hc.pending_layer_tensors(ckpt, 1)
-    assert set(pending) == {"ihc"}
-    assert set(pending["ihc"]) == set(hc.IHC_LAYER_KEYS)
+    ihc = hc.hy4_layer_state_dict(ckpt, Cfg, MCfg, 1, {wc.IHC})["ihc_weights"]
+    assert set(ihc) == {"attn", "ffn"} and all(set(site) == {"fn", "base", "scale"} for site in ihc.values())
+    assert torch.equal(ihc["ffn"]["fn"], ref["model.layers.1.hc_mlp_layer.hc_pre.hc_fn"].float())
+    assert ihc["attn"]["fn"].dtype == torch.float32
 
     # The shared lazy loader drives the Hy4 per-layer reader.
     trunk = hc.load_hy4_trunk_state_dict(
