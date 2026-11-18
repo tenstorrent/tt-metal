@@ -135,6 +135,7 @@ set(TT_METAL_PUBLIC_API
     api/tt-metalium/experimental/tensor_prefetcher.hpp
     api/tt-metalium/experimental/tensor_serialization_support.hpp
     api/tt-metalium/experimental/tensor_layout_apis_with_custom_alignment.hpp
+    api/tt-metalium/experimental/work_split.hpp
     api/tt-metalium/tensor/host_tensor.hpp
     api/tt-metalium/tensor/mesh_tensor.hpp
     api/tt-metalium/tensor/spec/layout/alignment.hpp
@@ -292,6 +293,11 @@ set(JITAPI_FILES
     impl/dispatch/kernels/cq_realtime_profiler_push.cpp
     impl/dispatch/kernels/device_print_dispatch.h
     impl/buffers/kernels/tensor_prefetcher.cpp
+    impl/buffers/kernels/tensor_prefetcher_fifo_device.h
+    impl/buffers/kernels/tensor_prefetcher_pusher.cpp
+    impl/buffers/kernels/tensor_prefetcher_reader.cpp
+    impl/buffers/kernels/tensor_prefetcher_reader.h
+    impl/buffers/tensor_prefetcher_fifo.hpp
     impl/buffers/tensor_prefetcher_request.hpp
     fabric/impl/kernels/edm_fabric/fabric_erisc_router.cpp
     fabric/impl/kernels/edm_fabric/fabric_router_mux_extension.cpp

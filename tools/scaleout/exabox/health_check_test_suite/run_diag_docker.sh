@@ -25,7 +25,7 @@ DEFAULT_DIAG_PKG_VERSION="0.0.4"
 IN_DIR="/tmp/hc-inputs"
 
 IMAGE="${DEFAULT_IMAGE}"
-TIER="medium"
+TIER="daily"
 OUTPUT_DIR=""
 DIAG_PKG_REPO="${DEFAULT_DIAG_PKG_REPO}"
 DIAG_PKG_VERSION="${DEFAULT_DIAG_PKG_VERSION}"
@@ -53,13 +53,15 @@ Usage: $(basename "$0") [options] [-- <extra run_diag.sh args>]
 Runs health_check_test_suite/run_diag.sh inside the tt-metal upstream image and
 keeps the JSON report, the per-step logs and the console transcript on the host.
 
-Every option has a default, so a bare \`$(basename "$0")\` runs the medium tier
+Every option has a default, so a bare \`$(basename "$0")\` runs the daily tier
 into ./test_output_<date>-<time>/.
 
 Wrapper options:
-  -t, --tier {light|medium|deploy|pre_reboot}
+  -t, --tier {daily|weekly|full|pre_bmc_reboot|post_bmc_reboot}
                          Tier to run (default: ${TIER}). Also accepted
-                         positionally, like run_diag.sh itself.
+                         positionally, like run_diag.sh itself. The old
+                         names light, medium, deploy and pre_reboot are
+                         still accepted and passed on as given.
   -o, --output-dir PATH  Host directory for the report, the per-step logs and
                          the console transcript. Created if absent and chmod
                          0777 so the image user can write to it.
@@ -87,10 +89,10 @@ sys-triage phases):
                          Release tag (default: ${DEFAULT_DIAG_PKG_VERSION});
                          empty string skips the install
 
-BMC credentials (needed by the sys-triage phase, which runs on pre_reboot only
-and reports SKIP without all three). Forwarded to the container as BMC_IP /
-BMC_USER / BMC_PASSWORD via the same 0600 --env-file as the token, never on a
-command line:
+BMC credentials (needed by the sys-triage phase, which runs on full,
+pre_bmc_reboot and post_bmc_reboot only and reports SKIP without all three).
+Forwarded to the container as BMC_IP / BMC_USER / BMC_PASSWORD via the same
+0600 --env-file as the token, never on a command line:
       --bmc-ip IP        BMC address (default: \$BMC_IP)
       --bmc-user USER    BMC user (default: \$BMC_USER)
       --bmc-password PASS
@@ -136,19 +138,20 @@ Forwarded to run_diag.sh (see its --help, and diag_runner.py --help, for detail)
 
 Host requirements checked before starting:
   /dev/tenstorrent (required), /dev/ipmi0, /dev/hugepages, /dev/hugepages-1G,
-  /etc/udev/rules.d, /lib/modules, /sys/kernel/debug, and on pre_reboot
-  /var/log/journal, /run/log/journal, /etc/machine-id. A missing optional path
-  is reported with what it costs rather than failing the container outright.
+  /etc/udev/rules.d, /lib/modules, /sys/kernel/debug, and on full, pre_bmc_reboot
+  and post_bmc_reboot /var/log/journal, /run/log/journal, /etc/machine-id. A
+  missing optional path is reported with what it costs rather than failing the
+  container outright.
 
 Examples:
-  # Medium tier into a timestamped directory
+  # Daily tier into a timestamped directory
   $(basename "$0")
 
-  # Deploy tier with the QSFP phase, results in a named directory
-  $(basename "$0") deploy --output-dir /data/hc-run-1 --gh-token "\$GH_TOKEN"
+  # Weekly tier with the QSFP phase, results in a named directory
+  $(basename "$0") weekly --output-dir /data/hc-run-1 --gh-token "\$GH_TOKEN"
 
-  # Snapshot-only smoke, no resets and no gtests
-  $(basename "$0") light --skip-reset --skip-tests
+  # Snapshot-only smoke: no resets, tests, triage or QSFP
+  $(basename "$0") daily --skip-reset --skip-tests --skip-triage --skip-qsfp-tests
 EOF
 }
 
@@ -171,12 +174,14 @@ while (( $# )); do
     case "$1" in
         -h|--help) show_help; exit 0 ;;
 
-        light|medium|deploy|pre_reboot) TIER="$1"; shift ;;
+        # Old names are passed on as given, not translated: this script is
+        # fetched on its own and may drive an image that predates the rename.
+        daily|weekly|full|pre_bmc_reboot|post_bmc_reboot|light|medium|deploy|pre_reboot) TIER="$1"; shift ;;
         -t|--tier)
             require_value "$1" "${2:-}"
             case "$2" in
-                light|medium|deploy|pre_reboot) ;;
-                *) die "unknown tier '$2'. Expected: light, medium, deploy, pre_reboot" ;;
+                daily|weekly|full|pre_bmc_reboot|post_bmc_reboot|light|medium|deploy|pre_reboot) ;;
+                *) die "unknown tier '$2'. Expected: daily, weekly, full, pre_bmc_reboot, post_bmc_reboot" ;;
             esac
             TIER="$2"; shift 2 ;;
 
@@ -228,10 +233,13 @@ while (( $# )); do
     esac
 done
 
-# The sys-triage phase runs on pre_reboot only. Every other tier gets exactly
-# the container it got before the phase existed: no extra mounts or packages.
+# The sys-triage phase runs on full, pre_bmc_reboot (old name pre_reboot) and
+# post_bmc_reboot only. Every other tier gets exactly the container it got
+# before the phase existed: no extra mounts or packages.
 WANT_SYS_TRIAGE=false
-[[ ${TIER} == pre_reboot ]] && ! ${SKIP_SYS_TRIAGE} && WANT_SYS_TRIAGE=true
+case "${TIER}" in
+    full|pre_bmc_reboot|pre_reboot|post_bmc_reboot) ${SKIP_SYS_TRIAGE} || WANT_SYS_TRIAGE=true ;;
+esac
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Output directory. Bind-mounted at the same path inside the container so the
@@ -458,9 +466,9 @@ if [ -n "${_need}" ]; then
     fi
 fi
 
-# What sys-triage shells out to beyond the above, on pre_reboot only. Each is
-# installed after the packages above and on its own, so that a failure here
-# costs one section of the bundle and nothing else:
+# What sys-triage shells out to beyond the above, on the tiers that run it
+# only. Each is installed after the packages above and on its own, so that a
+# failure here costs one section of the bundle and nothing else:
 #   kmod (modinfo, lsmod)  the driver row of its FW table, where a missing
 #                          binary costs the whole table rather than the row
 #   curl                   its Redfish version reads
@@ -620,7 +628,7 @@ if ${WANT_SYS_TRIAGE}; then
 fi
 if [[ -n ${BMC_API_URL_VALUE} && -n ${BMC_API_TOKEN_VALUE} ]]; then
     say "bmc api:    ${BMC_API_URL_VALUE} (token set)"
-elif ! ${SKIP_QSFP} && [[ ${TIER} != light ]]; then
+elif ! ${SKIP_QSFP}; then
     say "bmc api:    (incomplete — the QSFP collector will not read the cages; see --bmc-api-*)"
 fi
 say "forwarded:  ${FORWARD[*]:-(none)}"

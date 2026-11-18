@@ -10,6 +10,8 @@
 #include <string>
 #include <span>
 
+#include <tt-umd/types/arch.hpp>
+
 #include "unary_op_types.hpp"
 #include "ttnn/tensor/types.hpp"
 namespace ttnn::operations::unary::utils {
@@ -37,6 +39,15 @@ std::map<std::string, std::string> get_defines(
 
 // Target dtype (second parameter) of a TYPECAST/BITCAST op, whichever type backs its parameters.
 std::optional<tt::tt_metal::DataType> typecast_target_dtype(const EltwiseUnaryWithParam& op);
+
+// The SFPU chain defines of a lone op that a generated kernel computes in one pass over BF16
+// DEST, or none when the op runs its own kernel.
+std::optional<std::map<std::string, std::string>> get_bf16_kernel_defines(
+    const std::vector<EltwiseUnaryWithParam>& op_chain,
+    DataType input_dtype,
+    DataType output_dtype,
+    bool fp32_dest_acc_en,
+    tt::ARCH arch);
 
 std::map<std::string, std::string> get_block_defines(
     const std::vector<EltwiseUnaryWithParam>& op_chain,

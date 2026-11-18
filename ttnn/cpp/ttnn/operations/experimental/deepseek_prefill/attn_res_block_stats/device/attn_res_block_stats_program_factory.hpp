@@ -15,21 +15,17 @@ namespace ttnn::experimental::prim {
 
 struct AttnResBlockStatsProgramFactory {
     // One program per chip: where the op gathers across an axis, each chip's rank and fabric
-    // routes differ.
+    // routes differ. They differ only in runtime args, so a range runs them as one program with
+    // per-device runtime args.
+    static constexpr bool merge_per_device_programs = true;
+    // At the ends of a line a chip has fewer neighbors, so fewer routes: its gather args are
+    // shorter. The kernel reads only the routes it is given, so the zero padding is never read.
+    static constexpr bool pad_per_device_runtime_args = true;
     static tt::tt_metal::WorkloadDescriptor create_workload_descriptor(
         const AttnResBlockStatsParams& operation_attributes,
         const AttnResBlockStatsInputs& tensor_args,
         Tensor& tensor_return_value,
         const ttnn::MeshCoordinateRangeSet& tensor_coords);
-
-    // The arrival semaphore is the caller's and left out of the program hash: a cache hit
-    // writes its address into the gather kernel's common args.
-    static void override_runtime_arguments(
-        tt::tt_metal::Program& program,
-        const AttnResBlockStatsParams& operation_attributes,
-        const AttnResBlockStatsInputs& tensor_args,
-        Tensor& tensor_return_value,
-        const std::optional<ttnn::MeshCoordinate>& mesh_coordinate);
 };
 
 }  // namespace ttnn::experimental::prim
