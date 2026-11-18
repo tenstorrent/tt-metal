@@ -10,7 +10,7 @@ from loguru import logger
 from torchvision.models.detection import retinanet_resnet50_fpn_v2, RetinaNet_ResNet50_FPN_V2_Weights
 from tt_py_test_utils_common.utils_for_testing import assert_with_pcc
 from models.experimental.retinanet.tt.tt_regression_head import ttnn_retinanet_regression_head
-from models.experimental.retinanet.tt.utils import BBOX_REG_SLICE_CONFIG, group_norm_channel_chunks
+from models.experimental.retinanet.tt.utils import bbox_reg_slice_config, group_norm_channel_chunks
 
 
 def create_regression_head_parameters(torch_head, device, model_config):
@@ -124,7 +124,7 @@ def create_regression_head_parameters(torch_head, device, model_config):
             input_dtype=ttnn.bfloat16,
             output_dtype=model_config["WEIGHTS_DTYPE"],
             conv_config=ttnn.Conv2dConfig(weights_dtype=model_config["WEIGHTS_DTYPE"]),
-            slice_config=BBOX_REG_SLICE_CONFIG,
+            slice_config=bbox_reg_slice_config(device),
             compute_config=None,
         )
         # Prepare the bias using prepare_conv_bias
@@ -145,7 +145,7 @@ def create_regression_head_parameters(torch_head, device, model_config):
             device=device,
             input_dtype=ttnn.bfloat16,
             conv_config=ttnn.Conv2dConfig(weights_dtype=model_config["WEIGHTS_DTYPE"]),
-            slice_config=BBOX_REG_SLICE_CONFIG,
+            slice_config=bbox_reg_slice_config(device),
         )
         parameters["bbox_reg"] = {
             "weight": prepared_bbox_weight,

@@ -4,7 +4,7 @@
 import torch
 import pytest
 import ttnn
-from models.experimental.retinanet.tt.utils import group_norm_channel_chunks
+from models.experimental.retinanet.tt.utils import cls_logits_slice_config, group_norm_channel_chunks
 import pickle
 import os
 from torchvision.models.detection import retinanet_resnet50_fpn_v2, RetinaNet_ResNet50_FPN_V2_Weights
@@ -116,6 +116,7 @@ def create_classification_head_parameters(torch_head, device, model_config):
         groups=1,
         device=device,
         input_dtype=ttnn.bfloat16,
+        slice_config=cls_logits_slice_config(device),
         conv_config=ttnn.Conv2dConfig(weights_dtype=model_config["WEIGHTS_DTYPE"]),
     )
 
@@ -137,6 +138,7 @@ def create_classification_head_parameters(torch_head, device, model_config):
         groups=1,
         device=device,
         input_dtype=ttnn.bfloat16,
+        slice_config=cls_logits_slice_config(device),
         conv_config=ttnn.Conv2dConfig(weights_dtype=model_config["WEIGHTS_DTYPE"]),
     )
 

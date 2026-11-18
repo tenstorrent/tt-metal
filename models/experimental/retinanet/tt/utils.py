@@ -7,13 +7,54 @@ import ttnn
 from ttnn.operations.normalization import dram_group_norm_virtual_columns
 from tt_py_test_utils_common.ttnn_utility_functions import get_shard_grid_from_num_cores
 
+# The L1 plan (each layer's shard layout, L1 activations and unsliced convs) is sized for a full
+# Wormhole or Blackhole grid; a grid with fewer cores runs every conv and pool from DRAM instead.
+FULL_PLAN_MIN_CORES = 64
+
+
+def reduced_grid(device):
+    """Whether ``device``'s grid has fewer cores than the L1 plan is sized for. Its convs and pools
+    then also keep their config tensors in DRAM: on a few cores L1_SMALL holds only a few banks."""
+    grid = device.compute_with_storage_grid_size()
+    return grid.x * grid.y < FULL_PLAN_MIN_CORES
+
+
+def activation_memory_config(device):
+    """Where layer outputs live: L1 on the full grid, DRAM on a reduced one."""
+    return ttnn.DRAM_MEMORY_CONFIG if reduced_grid(device) else ttnn.L1_MEMORY_CONFIG
+
+
 # ---------------------------
 # Head conv and GroupNorm settings, shared by both heads and their weight preparation
 # ---------------------------
 
-# The bbox_reg conv's DRAM slicing. Its weights and bias are prepared for this same slicing
-# (custom_preprocessor): weights prepared for another slicing are laid out for another program.
+# The bbox_reg conv's DRAM slicing on the full grid.
 BBOX_REG_SLICE_CONFIG = ttnn.Conv2dSliceConfig(slice_type=ttnn.Conv2dDRAMSliceHeight, num_slices=4)
+# On a reduced grid the heads' final convs run in the height slices conv2d chooses.
+REDUCED_GRID_SLICE_CONFIG = ttnn.Conv2dSliceConfig(slice_type=ttnn.Conv2dDRAMSliceHeight, num_slices=0)
+
+
+def bbox_reg_slice_config(device):
+    """The bbox_reg conv's slicing on ``device``. Its weights and bias are prepared for this same
+    slicing (custom_preprocessor): weights prepared for another slicing are laid out for another
+    program."""
+    return REDUCED_GRID_SLICE_CONFIG if reduced_grid(device) else BBOX_REG_SLICE_CONFIG
+
+
+def cls_logits_slice_config(device):
+    """The cls_logits conv's slicing on ``device``, which its weights and bias are prepared for:
+    conv2d's own height slices on a reduced grid; None on the full grid, where it runs unsliced in
+    L1 (Conv2dL1FullSliceConfig)."""
+    return REDUCED_GRID_SLICE_CONFIG if reduced_grid(device) else None
+
+
+def head_conv_config(device, config_dict):
+    """A head conv's Conv2dConfig from its optimization ``config_dict``; on a reduced grid its config
+    tensors go to DRAM, as L1_SMALL holds only a few banks there."""
+    conv_config = ttnn.Conv2dConfig(**config_dict) if config_dict else ttnn.Conv2dConfig()
+    if reduced_grid(device):
+        conv_config.config_tensors_in_dram = True
+    return conv_config
 
 
 def group_norm_grid(device):
@@ -126,7 +167,76 @@ class TTConv2D:
         else:
             self.math_fidelity = self.kernel_fidelity["MATH_FIDELITY"]
 
+    # The share of a core's L1 a spatial conv's weight block may take on a reduced grid.
+    WEIGHT_L1_FRACTION = 4
+
+    def _weight_split(self, device):
+        """How many blocks a reduced grid splits the conv's input channels into so that a block
+        of its bfloat16 weights takes at most 1/WEIGHT_L1_FRACTION of a core's L1; 1 if whole.
+        Width sharding first splits the channels over the grid's cores, and each block must stay
+        whole tiles of a core's share; conv2d does not reject a split that breaks a tile."""
+        in_channels = self.weights.shape[1]
+        weight_bytes = in_channels * self.kernel_size[0] * self.kernel_size[1] * self.out_channels * 2
+        budget = ttnn.get_memory_view(device, ttnn.BufferType.L1).total_bytes_per_bank // self.WEIGHT_L1_FRACTION
+        grid = device.compute_with_storage_grid_size()
+        core_channels = in_channels // (grid.x * grid.y)
+        split = 1
+        while weight_bytes // split > budget and core_channels % (split * 2 * ttnn.TILE_SIZE) == 0:
+            split *= 2
+        return split
+
+    def _is_pointwise(self):
+        return (
+            self.kernel_size == (1, 1)
+            and all(p == 0 for p in self.padding)
+            and self.dilation == (1, 1)
+            and self.groups == 1
+        )
+
+    def _pointwise_in_dram(self, device, input_tensor, input_shape, compute_config):
+        """A 1x1 conv as a DRAM matmul: conv2d runs one as a matmul whose output is L1 sharded, or
+        with its whole weight in L1, neither of which a reduced grid holds. A strided one takes
+        every stride-th pixel first. Its weights stay the host OIHW tensors conv2d would prepare,
+        from which the matmul's are made once."""
+        if getattr(self, "linear_weight", None) is None:
+            weight = ttnn.to_torch(self.weights).reshape(self.out_channels, -1).transpose(0, 1).contiguous()
+            self.linear_weight = ttnn.from_torch(
+                weight, dtype=self.weights_dtype, layout=ttnn.TILE_LAYOUT, device=device
+            )
+            bias = ttnn.to_torch(self.bias).reshape(1, self.out_channels)
+            self.linear_bias = ttnn.from_torch(bias, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+        n, h, w = input_shape[-4], input_shape[-3], input_shape[-2]
+        channels = input_tensor.shape[-1]
+        if self.stride != (1, 1):
+            sh, sw = self.stride
+            pixels = ttnn.to_layout(
+                ttnn.reshape(input_tensor, (n, h, w, channels)),
+                ttnn.ROW_MAJOR_LAYOUT,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+            pixels = ttnn.slice(
+                pixels, [0, 0, 0, 0], [n, h, w, channels], [1, sh, sw, 1], memory_config=ttnn.DRAM_MEMORY_CONFIG
+            )
+            h, w = pixels.shape[1], pixels.shape[2]
+            input_tensor = ttnn.to_layout(pixels, ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        rows = ttnn.reshape(input_tensor, (1, 1, n * h * w, channels))
+        relu = self.activation is not None and self.activation.op_type == ttnn.UnaryOpType.RELU
+        assert self.activation is None or relu, f"a DRAM pointwise conv fuses only RELU, got {self.activation}"
+        output_tensor = ttnn.linear(
+            rows,
+            self.linear_weight,
+            bias=self.linear_bias,
+            activation="relu" if relu else None,
+            dtype=self.dtype,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            compute_kernel_config=compute_config,
+        )
+        if self.is_reshape:
+            output_tensor = ttnn.reshape(output_tensor, (n, h, w, self.out_channels))
+        return output_tensor, (n, h, w, self.out_channels)
+
     def __call__(self, device, input_tensor, input_shape):
+        reduced = reduced_grid(device)
         conv_config = ttnn.Conv2dConfig(
             weights_dtype=self.weights_dtype,
             activation=self.activation,
@@ -153,6 +263,26 @@ class TTConv2D:
             conv_config.act_block_h_override = self.act_block_h
         if self.act_block_w is not None:
             conv_config.act_block_w_div = self.act_block_w
+        memory_config, slice_config = self.memory_config, self.slice_config
+        if reduced:
+            # A reduced grid's L1 holds no whole activation: the conv reads and writes DRAM in the
+            # height slices conv2d chooses, with conv2d's own block sizes.
+            conv_config.config_tensors_in_dram = True
+            conv_config.act_block_h_override = 0
+            conv_config.act_block_w_div = 1
+            memory_config = ttnn.DRAM_MEMORY_CONFIG
+            slice_config = ttnn.Conv2dSliceConfig(slice_type=ttnn.Conv2dDRAMSliceHeight, num_slices=0)
+            weight_split = self._weight_split(device)
+            if weight_split > 1:
+                # Slices shrink the activation, not the weights; a conv whose weights outgrow a
+                # reduced grid's L1 runs width sharded, its input channels in weight_split blocks.
+                conv_config.shard_layout = ttnn.TensorMemoryLayout.WIDTH_SHARDED
+                conv_config.act_block_w_div = weight_split
+            if input_tensor.layout != ttnn.TILE_LAYOUT:
+                # conv2d tilizes a row-major input whole into L1, which a reduced grid cannot hold.
+                input_tensor = ttnn.to_layout(input_tensor, ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            if self._is_pointwise():
+                return self._pointwise_in_dram(device, input_tensor, input_shape, compute_config)
 
         [output_tensor, [_out_height, _out_width], [self.weights, self.bias]] = ttnn.conv2d(
             input_tensor=input_tensor,
@@ -170,16 +300,16 @@ class TTConv2D:
             input_width=input_shape[-2],
             conv_config=conv_config,
             compute_config=compute_config,
-            slice_config=self.slice_config,
+            slice_config=slice_config,
             groups=self.groups,
             return_weights_and_bias=True,
             return_output_dim=True,
             dtype=self.dtype,
-            memory_config=self.memory_config,
+            memory_config=memory_config,
         )
 
         if self.is_reshape:
-            output_tensor = ttnn.sharded_to_interleaved(output_tensor, ttnn.L1_MEMORY_CONFIG)
+            output_tensor = ttnn.to_memory_config(output_tensor, activation_memory_config(device))
             output_tensor = ttnn.to_layout(output_tensor, ttnn.TILE_LAYOUT)
             output_tensor = ttnn.reshape(
                 output_tensor, (input_tensor.shape[0], _out_height, _out_width, output_tensor.shape[-1])
@@ -217,8 +347,9 @@ class TTUpsample:
         sent_to_dram=False,
         dtype=ttnn.bfloat8_b,
     ):
-        if sent_to_dram:
-            input_tensor = ttnn.sharded_to_interleaved(input_tensor, ttnn.DRAM_MEMORY_CONFIG)
+        reduced = reduced_grid(device)
+        if sent_to_dram or reduced:
+            input_tensor = ttnn.to_memory_config(input_tensor, ttnn.DRAM_MEMORY_CONFIG)
         else:
             input_tensor = ttnn.sharded_to_interleaved(input_tensor, ttnn.L1_MEMORY_CONFIG)
 
@@ -233,9 +364,12 @@ class TTUpsample:
             input_tensor,
             scale_factor=self.scale_factor,
             mode=self.mode,
-            memory_config=self.memory_config,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG if reduced else self.memory_config,
             compute_kernel_config=self.compute_kernel_config,
         )
+        if reduced:
+            # The add that consumes it would tilize a row-major output whole into L1.
+            output_tensor = ttnn.to_layout(output_tensor, ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
 
         # Remove channel padding if added.
         if pad_ch_to_32:

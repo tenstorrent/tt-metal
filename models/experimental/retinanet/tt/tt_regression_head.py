@@ -2,7 +2,12 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import ttnn
-from models.experimental.retinanet.tt.utils import BBOX_REG_SLICE_CONFIG, Conv2dNormActivation, group_norm_grid
+from models.experimental.retinanet.tt.utils import (
+    Conv2dNormActivation,
+    bbox_reg_slice_config,
+    group_norm_grid,
+    head_conv_config,
+)
 from typing import List
 from dataclasses import dataclass
 
@@ -148,10 +153,7 @@ def ttnn_retinanet_regression_head(
         conv_blocks_config = fpn_conv_configs[fpn_idx]
         final_conv_config = fpn_final_configs[fpn_idx]
 
-        if conv_blocks_config is not None:
-            conv_config = ttnn.Conv2dConfig(**conv_blocks_config)
-        else:
-            conv_config = None
+        conv_config = head_conv_config(device, conv_blocks_config)
 
         conv_blocks = []
         for conv_idx in range(4):
@@ -178,10 +180,7 @@ def ttnn_retinanet_regression_head(
             x = conv_block(x, batch_size=batch_size, input_height=H, input_width=W)
 
         # Final bbox_reg conv layer with config
-        if final_conv_config is not None:
-            bbox_reg_config = ttnn.Conv2dConfig(**final_conv_config)
-        else:
-            bbox_reg_config = None
+        bbox_reg_config = head_conv_config(device, final_conv_config)
 
         bbox_regression = ttnn.conv2d(
             input_tensor=x,
@@ -196,7 +195,7 @@ def ttnn_retinanet_regression_head(
             batch_size=batch_size,
             input_height=H,
             input_width=W,
-            slice_config=BBOX_REG_SLICE_CONFIG,
+            slice_config=bbox_reg_slice_config(device),
             compute_config=compute_config,
             conv_config=bbox_reg_config,
         )
