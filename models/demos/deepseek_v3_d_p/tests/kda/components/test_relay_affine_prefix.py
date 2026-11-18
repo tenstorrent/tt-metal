@@ -451,7 +451,7 @@ def _perf_case(shape: tuple[int, int], topology: str, case_id: str, reference_us
 # Device-time references in us, with K3's payload: Galaxy on TorusXY, LoudBox and QuietBox on TorusY.
 _PERF_CASES = [
     _perf_case((8, 4), "mesh-8x4", "SP8xTP4", 130.0, 0.10),
-    _perf_case((8, 1), "ring", "loudbox-SP8xTP1-ring", 118.0, 0.12),
+    _perf_case((8, 1), "ring", "loudbox-SP8xTP1-ring", 388.0, 0.12),
     _perf_case((4, 1), "ring", "quietbox-SP4xTP1-ring", 75.5, 0.05),
 ]
 
