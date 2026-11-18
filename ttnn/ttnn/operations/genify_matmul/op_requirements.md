@@ -672,3 +672,42 @@ Measured floors for the rest (ablation, handshakes kept):
 - **res5 reduce / reduce 2:** A floors 9.0 / 12.3, with B and compute adding on top.
 
 Next lever, not done: an R3a A exchange without the per-round loopback write barrier (each sender's include-source multicast waits for all write acks before it can ack the next round). It needs a send-without-loopback mode in the shared Mcast helper, outside this op. The one-shot concurrent exchange was tried and measured worse (parked: `BS_A_ONE_SHOT`).
+
+### [ ] Refinement 19 — Interleaved tall, narrow matmuls on all cores (PDL 1×1 convs read in place)
+
+**Type**: perf
+
+*Filed by the run operator for the #65150 follow-up, after the model re-measurement on the ported op.*
+
+**Goal**: no SUPPORTED change. In the PDL model, `genify_conv.py` reads these convs' activations in place (interleaved in DRAM or L1) and writes an L1 interleaved output. Stock instead shards the activation first and runs a sharded conv. On these shapes the interleaved split leaves most cores idle: M = 2,048–32,768 rows, K = 256–2,048, N = 32–2,048, and B (at most 2 MB) is small next to A (up to 8.9 MB). Together they take 330 µs of PDL's 907 µs of matmul time per inference. They are the ten new LOOSE_CASES `placement=interleaved` PDL entries.
+
+In-model genify µs. In brackets: stock's sharded matmul (`achievable_ns`) + the sharding step stock runs before it; then `roofline_ns`.
+- A in DRAM:
+  - res3.0 conv1 32768×256×128: 41.3 (9.4 + 24.7; 19.4)
+  - res4.0 conv1 8192×512×256: 25.4 (16.6 + 11.9; 10.0)
+  - res5.0 conv1 2048×1024×512: 17.6 (10.6 + 7.4; 6.1)
+  - res5.0 shortcut 2048×1024×2048: 33.7 (72.3 + 7.2; 20.2)
+- A in L1:
+  - decoder res2 projection 32768×256×32, ×2: 21.6 (3.6 + 12.3; 1.3)
+  - decoder res3 projection 8192×512×64, ×2: 12.4 (4.6 + 6.8; 1.3)
+  - ASPP 1×1 2048×2048×256, ×2: 28.6 (13.8 + 6.6; 5.0)
+  - ASPP projection 2048×1280×256, ×2: 18.9 (16.8 + 6.5; 3.2)
+  - res3.0 shortcut after the stride-2 subsample 8192×256×512: 19.1 (13.1; 5.0)
+  - res4.0 shortcut after the stride-2 subsample 2048×512×1024: 17.2 (16.2; 5.0)
+
+The first integration logged 27–49 cores for the worst of these (`choose_split` appeared to over-weight B re-reads against each core's own A read).
+
+Start from a measured breakdown of decoder res2 (32768×256×32) and res3.0 conv1 (32768×256×128): cores used, bytes each core reads, stage times. Levers:
+- An M-split over all 110 cores when B is small: each core reads its own A rows and all of B (or B multicast once).
+- Enough A reads in flight per core to cover L1 / DRAM latency; the output written by the core that computed it.
+- The split cost model re-ranked for these shapes against measured times.
+
+**Implementation skill**: /perf-measure
+
+**Done when**:
+- Each listed case meets one of these:
+  - at or under its `achievable_ns` (stock's sharded matmul alone, without the sharding step);
+  - within 1.5× of its `roofline_ns`;
+  - its remaining gap is explained by a measured floor.
+- Golden is green.
+- No other model case is slower beyond ±3% (the Qwen3.8 PERF FOCUS cases and the sharded PDL cases are guards).
