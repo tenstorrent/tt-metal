@@ -17,6 +17,7 @@
 #include "fabric_builder_context.hpp"
 #include "fabric_context.hpp"
 #include "impl/context/metal_context.hpp"
+#include "distributed/mesh_device_impl.hpp"
 #include "llrt/tt_cluster.hpp"
 
 namespace tt::tt_fabric::experimental {
@@ -25,43 +26,47 @@ namespace {
 
 using Clock = std::chrono::steady_clock;
 
-const FabricContext& fabric_context() {
-    return tt::tt_metal::MetalContext::instance().get_control_plane().get_fabric_context();
+// the context that owns the port, not whichever one MetalContext::instance() picks
+tt::tt_metal::MetalContext& metal(const InterDomainPort& port) {
+    return tt::tt_metal::MetalContext::instance(tt::tt_metal::ContextId{port.context});
 }
 
-const FabricEriscDatamoverConfig& router_config() {
-    return fabric_context().get_builder_context().get_fabric_router_config();
+const FabricContext& fabric_context(const InterDomainPort& port) {
+    return metal(port).get_control_plane().get_fabric_context();
+}
+
+const FabricEriscDatamoverConfig& router_config(const InterDomainPort& port) {
+    return fabric_context(port).get_builder_context().get_fabric_router_config();
 }
 
 // the router's eth core, as the cluster addresses it
 tt_cxy_pair router_core(const InterDomainPort& port) {
-    const auto& control_plane = fabric_context().get_control_plane();
+    const auto& control_plane = fabric_context(port).get_control_plane();
     const ChipId chip = control_plane.get_physical_chip_id_from_fabric_node_id(port.node);
-    return tt_cxy_pair(chip, fabric_context().get_cluster().get_virtual_eth_core_from_channel(chip, port.eth_chan));
+    return tt_cxy_pair(chip, fabric_context(port).get_cluster().get_virtual_eth_core_from_channel(chip, port.eth_chan));
 }
 
-uint64_t ctrl_addr() {
-    const auto addr = router_config().inter_domain_ctrl_address;
+uint64_t ctrl_addr(const InterDomainPort& port) {
+    const auto addr = router_config(port).inter_domain_ctrl_address;
     TT_FATAL(addr != 0, "inter-domain fabric is off (TT_METAL_FABRIC_INTER_DOMAIN=1)");
     return addr;
 }
 
 InterDomainRouterControl read_control(const InterDomainPort& port) {
     InterDomainRouterControl c{};
-    fabric_context().get_cluster().read_core(&c, sizeof(c), router_core(port), ctrl_addr());
+    fabric_context(port).get_cluster().read_core(&c, sizeof(c), router_core(port), ctrl_addr(port));
     return c;
 }
 
 // writes, then reads back so the write has landed (a chip-wide barrier would poke routers mid-traffic)
-void write_and_flush(const void* data, uint32_t size, tt_cxy_pair core, uint64_t addr) {
-    const auto& cluster = fabric_context().get_cluster();
+void write_and_flush(const tt::Cluster& cluster, const void* data, uint32_t size, tt_cxy_pair core, uint64_t addr) {
     cluster.write_core(data, size, core, addr);
     uint32_t readback = 0;
     cluster.read_core(&readback, sizeof(readback), core, addr);
 }
 
 void write_word(const InterDomainPort& port, size_t offset, uint32_t value) {
-    write_and_flush(&value, sizeof(value), router_core(port), ctrl_addr() + offset);
+    write_and_flush(fabric_context(port).get_cluster(), &value, sizeof(value), router_core(port), ctrl_addr(port) + offset);
 }
 
 void send_command(const InterDomainPort& port, InterDomainCommand command) {
@@ -84,14 +89,14 @@ std::optional<InterDomainRouterControl> wait_for(const InterDomainPort& port, Cl
 }
 
 const RouterChannelLayout& layout_of(const InterDomainPort& port) {
-    const auto* layout = fabric_context().get_builder_context().find_router_channel_layout(port.node, port.eth_chan);
+    const auto* layout = fabric_context(port).get_builder_context().find_router_channel_layout(port.node, port.eth_chan);
     TT_FATAL(layout != nullptr, "inter-domain: no router on {} eth channel {}", port.node, port.eth_chan);
     return *layout;
 }
 
 // Connect and disconnect write the far router's L1 at this router's addresses (the handshake, the control block).
-uint32_t layout_fingerprint() {
-    const auto& config = router_config();
+uint32_t layout_fingerprint(const InterDomainPort& port) {
+    const auto& config = router_config(port);
     uint32_t h = 2166136261u;  // FNV-1a
     for (const size_t v :
          {config.handshake_addr,
@@ -106,12 +111,21 @@ uint32_t layout_fingerprint() {
 
 }  // namespace
 
-std::vector<InterDomainPort> get_inter_domain_ports() {
-    return fabric_context().get_builder_context().get_inter_domain_ports();
+std::vector<InterDomainPort> get_inter_domain_ports(const tt::tt_metal::distributed::MeshDevice& mesh_device) {
+    const auto context = mesh_device.impl().get_context_id();
+    auto ports = tt::tt_metal::MetalContext::instance(context)
+                     .get_control_plane()
+                     .get_fabric_context()
+                     .get_builder_context()
+                     .get_inter_domain_ports();
+    for (auto& port : ports) {
+        port.context = context.get();
+    }
+    return ports;
 }
 
 uint64_t get_inter_domain_port_asic(const InterDomainPort& port) {
-    return fabric_context().get_cluster().get_unique_chip_ids().at(router_core(port).chip);
+    return fabric_context(port).get_cluster().get_unique_chip_ids().at(router_core(port).chip);
 }
 
 InterDomainMetadata get_inter_domain_metadata(const InterDomainPort& port, uint32_t domain_id) {
@@ -120,8 +134,8 @@ InterDomainMetadata get_inter_domain_metadata(const InterDomainPort& port, uint3
         .domain_id = domain_id,
         .vc2_receiver_channel_addr = vc2_rx.base_address,
         .vc2_receiver_channel_slots = vc2_rx.num_slots,
-        .max_packet_size_bytes = static_cast<uint32_t>(router_config().channel_buffer_size_bytes),
-        .layout_fingerprint = layout_fingerprint()};
+        .max_packet_size_bytes = static_cast<uint32_t>(router_config(port).channel_buffer_size_bytes),
+        .layout_fingerprint = layout_fingerprint(port)};
 }
 
 InterDomainState get_inter_domain_state(const InterDomainPort& port) { return read_control(port).state; }
@@ -138,7 +152,7 @@ void connect_inter_domain(
         port.eth_chan,
         port.link_trained ? "Z isn't supported yet" : "the link never trained");
     TT_FATAL(
-        peer.layout_fingerprint == layout_fingerprint(),
+        peer.layout_fingerprint == layout_fingerprint(port),
         "inter-domain: {} eth channel {}: domain {}'s router L1 layout differs from this one's",
         port.node,
         port.eth_chan,
@@ -206,7 +220,7 @@ void append_inter_domain_connection_rt_args(
     const tt::tt_metal::CoreCoord& worker_core,
     std::vector<uint32_t>& rt_args) {
     // the router's worker channel (VC0's channel 0), listed in the worker's fabric connection table like any router's
-    const auto& config = router_config();
+    const auto& config = router_config(port);
     const auto& channel = layout_of(port).senders[0].at(0);
     const auto router = router_core(port);
     fabric_connection_info_t info{};
@@ -215,18 +229,19 @@ void append_inter_domain_connection_rt_args(
     info.edm_worker_location_info_addr = config.sender_channels_worker_conn_info_base_address[0];
     info.buffer_index_semaphore_id = config.sender_channels_buffer_index_semaphore_address[0];
     info.buffer_size_bytes = config.channel_buffer_size_bytes;
-    info.edm_direction = fabric_context().get_control_plane().routing_direction_to_eth_direction(port.direction);
+    info.edm_direction = fabric_context(port).get_control_plane().routing_direction_to_eth_direction(port.direction);
     info.edm_noc_x = router.x;
     info.edm_noc_y = router.y;
     info.num_buffers_per_channel = channel.num_slots;
     info.worker_free_slots_stream_id = connection_interface::sender_channel_0_free_slots_stream_id;
 
-    const auto& cluster = fabric_context().get_cluster();
+    const auto& cluster = fabric_context(port).get_cluster();
     const auto worker =
         cluster.get_virtual_coordinate_from_logical_coordinates(router.chip, worker_core, CoreType::WORKER);
-    const uint64_t table = tt::tt_metal::MetalContext::instance().hal().get_dev_addr(
+    const uint64_t table = metal(port).hal().get_dev_addr(
         tt::tt_metal::HalProgrammableCoreType::TENSIX, tt::tt_metal::HalL1MemAddrType::TENSIX_FABRIC_CONNECTIONS);
     write_and_flush(
+        cluster,
         &info,
         sizeof(info),
         tt_cxy_pair(router.chip, worker),
