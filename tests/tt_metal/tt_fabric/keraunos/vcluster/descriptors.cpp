@@ -1,0 +1,412 @@
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+//
+// SPDX-License-Identifier: Apache-2.0
+
+#include "descriptors.hpp"
+
+#include <algorithm>
+#include <fstream>
+#include <iterator>
+#include <map>
+#include <optional>
+#include <set>
+
+#include <fmt/format.h>
+#include <fmt/ranges.h>
+#include <tt_stl/assert.hpp>
+#include <yaml-cpp/yaml.h>
+
+#include "internal/tt-2xx/quasar/dev_mem_map.h"
+
+namespace tt::tt_fabric::vcluster {
+
+DescriptorGenerationError::DescriptorGenerationError(std::vector<GenerationFinding> findings) :
+    std::runtime_error(fmt::format(
+        "descriptor generation refused: {}",
+        fmt::join(
+            [&] {
+                std::vector<std::string> lines;
+                for (const auto& f : findings) {
+                    lines.push_back(fmt::format("G{}: {}", static_cast<uint32_t>(f.refusal), f.detail));
+                }
+                return lines;
+            }(),
+            "; "))),
+    findings_(std::move(findings)) {}
+
+namespace {
+
+// keraunos_3chip_cluster_desc.yaml: ids carry UMD's mock Quasar board UPI (0x50) in bits 36 and up.
+constexpr uint64_t kQuasarBoardUpi = 0x50;
+constexpr uint32_t kBoardUpiShift = 36;
+constexpr uint64_t kFirstChipUniqueId = kQuasarBoardUpi << kBoardUpiShift;
+constexpr const char* kQuasar = "quasar";
+
+// The HSIO tile pairs the mmk 26ww45.eth-pcs-output-inter bring-up wires with Ethernet (chippy bringup_mmk.py
+// KER_ETH_LINKS; SPEC-0011 row 8).
+const std::vector<std::pair<uint32_t, uint32_t>> kWiredEthernetTilePairs = {{0, 1}, {2, 3}};
+
+constexpr const char* kClusterDescFile = "cluster_desc.yaml";
+constexpr const char* kMeshGraphDescFile = "mesh_graph_descriptor.textproto";
+constexpr const char* kEnvFile = "env";
+
+YAML::Node load_package(const std::filesystem::path& path) {
+    try {
+        return YAML::LoadFile(path.string());
+    } catch (const YAML::Exception& e) {
+        TT_THROW("Cannot read the package SoC descriptor {}: {}", path.string(), e.what());
+    }
+}
+
+// The node at `key` of the package descriptor, which must be present.
+YAML::Node package_key(const YAML::Node& package, const char* key, const std::filesystem::path& path) {
+    const YAML::Node value = package[key];
+    TT_FATAL(value, "The package SoC descriptor {} has no '{}'", path.string(), key);
+    return value;
+}
+
+// The package descriptor's keraunos.cores entry of `cce`, or an undefined node.
+YAML::Node keraunos_core_entry(const YAML::Node& cores, CceId cce) {
+    for (const auto& entry : cores) {
+        if (entry["hsio"].as<uint32_t>() == cce.tile && entry["cce"].as<uint32_t>() == cce.cce) {
+            return entry;
+        }
+    }
+    return YAML::Node(YAML::NodeType::Undefined);
+}
+
+bool is_eth_core(const YAML::Node& eth, const std::string& core) {
+    return std::any_of(eth.begin(), eth.end(), [&](const YAML::Node& e) { return e.as<std::string>() == core; });
+}
+
+const Device* device_named(const Manifest& manifest, const std::string& name) {
+    const auto it =
+        std::find_if(manifest.devices.begin(), manifest.devices.end(), [&](const Device& d) { return d.name == name; });
+    return it == manifest.devices.end() ? nullptr : &*it;
+}
+
+// A device's router slots in port order.
+std::vector<Slot> routers_by_port(const Device& device) {
+    std::vector<Slot> routers;
+    std::copy_if(device.slots.begin(), device.slots.end(), std::back_inserter(routers), [](const Slot& s) {
+        return s.role == SlotRole::Router;
+    });
+    std::sort(routers.begin(), routers.end(), [](const Slot& x, const Slot& y) { return *x.port < *y.port; });
+    return routers;
+}
+
+std::vector<YAML::Node> programmable_views(const YAML::Node& dram_views) {
+    std::vector<YAML::Node> views;
+    for (const auto& view : dram_views) {
+        if (view["programmable"] && view["programmable"].as<bool>()) {
+            views.push_back(view);
+        }
+    }
+    return views;
+}
+
+// G1 to G5, every one that holds.
+std::vector<GenerationFinding> refusals(
+    const Manifest& manifest, const YAML::Node& eth, const YAML::Node& cores, std::size_t num_programmable_views) {
+    std::vector<GenerationFinding> findings;
+    const auto num_devices = static_cast<uint32_t>(manifest.devices.size());
+
+    std::set<uint32_t> chips;
+    for (const Device& device : manifest.devices) {
+        chips.insert(device.fabric_chip);
+    }
+    if (chips.size() != num_devices || *chips.rbegin() != num_devices - 1) {
+        findings.push_back(
+            {GenerationRefusal::NotALine,
+             fmt::format("fabric_chip values {} are not 0 to {}", fmt::join(chips, ", "), num_devices - 1)});
+    }
+    std::map<uint32_t, std::size_t> hops;  // lower chip of each link -> number of links
+    for (std::size_t i = 0; i < manifest.links.size(); i++) {
+        const Link& link = manifest.links[i];
+        const Device* a = device_named(manifest, link.a.device);
+        const Device* b = device_named(manifest, link.b.device);
+        if (a == nullptr || b == nullptr) {
+            findings.push_back(
+                {GenerationRefusal::NotALine, fmt::format("links[{}] names a device the manifest does not have", i)});
+            continue;
+        }
+        const uint32_t lower = std::min(a->fabric_chip, b->fabric_chip);
+        const uint32_t upper = std::max(a->fabric_chip, b->fabric_chip);
+        if (upper != lower + 1) {
+            findings.push_back(
+                {GenerationRefusal::NotALine,
+                 fmt::format("links[{}] joins chips {} and {}, which are not neighbours on a line", i, lower, upper)});
+            continue;
+        }
+        hops[lower]++;
+    }
+    for (uint32_t chip = 0; chip + 1 < num_devices; chip++) {
+        const std::size_t count = hops.contains(chip) ? hops.at(chip) : 0;
+        if (count != 1) {
+            findings.push_back(
+                {GenerationRefusal::NotALine,
+                 fmt::format("{} links between chips {} and {}, not 1", count, chip, chip + 1)});
+        }
+    }
+
+    for (const Device& device : manifest.devices) {
+        const std::vector<Slot> routers = routers_by_port(device);
+        for (std::size_t port = 0; port < routers.size(); port++) {
+            if (*routers[port].port != port) {
+                std::vector<uint32_t> ports;
+                for (const Slot& s : routers) {
+                    ports.push_back(*s.port);
+                }
+                findings.push_back(
+                    {GenerationRefusal::RouterPortsNotDense,
+                     fmt::format(
+                         "device {} router ports {} are not 0 to {}",
+                         device.name,
+                         fmt::join(ports, ", "),
+                         routers.size() - 1)});
+                break;
+            }
+        }
+    }
+
+    if (num_programmable_views < num_devices) {
+        findings.push_back(
+            {GenerationRefusal::TooFewDramViews,
+             fmt::format(
+                 "the package has {} programmable DRAM views for {} devices", num_programmable_views, num_devices)});
+    }
+
+    for (const Device& device : manifest.devices) {
+        for (const Slot& slot : routers_by_port(device)) {
+            const YAML::Node entry = keraunos_core_entry(cores, CceId{slot.tile, slot.cce});
+            if (!entry) {
+                findings.push_back(
+                    {GenerationRefusal::RouterNotAnEthCore,
+                     fmt::format(
+                         "device {} router on (tile {}, cce {}) has no keraunos.cores entry in the package",
+                         device.name,
+                         slot.tile,
+                         slot.cce)});
+            } else if (!is_eth_core(eth, entry["core"].as<std::string>())) {
+                findings.push_back(
+                    {GenerationRefusal::RouterNotAnEthCore,
+                     fmt::format(
+                         "device {} router core {} is not in the package's eth list",
+                         device.name,
+                         entry["core"].as<std::string>())});
+            }
+        }
+    }
+
+    if (manifest.capture) {
+        findings.push_back(
+            {GenerationRefusal::HasCapture,
+             fmt::format("the manifest names a capture ({})", manifest.capture->string())});
+    }
+    return findings;
+}
+
+void write_file(const std::filesystem::path& path, const std::string& text) {
+    std::ofstream file(path, std::ios::trunc);
+    TT_FATAL(file.good(), "Cannot open {} for writing", path.string());
+    file << text;
+    file.close();
+    TT_FATAL(!file.fail(), "Cannot write {}", path.string());
+}
+
+std::string emit(const YAML::Node& node) {
+    YAML::Emitter out;
+    out << node;
+    TT_FATAL(out.good(), "YAML emitter: {}", out.GetLastError());
+    return std::string(out.c_str()) + "\n";
+}
+
+// The package descriptor with eth, keraunos.cores and dram_views replaced for `device` (fabric chip k of N).
+std::string soc_desc(
+    const YAML::Node& package,
+    const YAML::Node& cores,
+    const std::vector<YAML::Node>& views,
+    const Device& device,
+    uint32_t num_devices) {
+    YAML::Node desc = YAML::Clone(package);
+    YAML::Node eth(YAML::NodeType::Sequence);
+    YAML::Node device_cores(YAML::NodeType::Sequence);
+    for (const Slot& slot : routers_by_port(device)) {
+        const YAML::Node entry = keraunos_core_entry(cores, CceId{slot.tile, slot.cce});
+        eth.push_back(entry["core"].as<std::string>());
+        device_cores.push_back(YAML::Clone(entry));
+    }
+    eth.SetStyle(YAML::EmitterStyle::Flow);
+    desc["eth"] = eth;
+    desc["keraunos"]["cores"] = device_cores;
+    // V programmable views, N devices: device 0 takes views 0 to V-N, device k >= 1 takes view V-N+k (SPEC-0011).
+    const std::size_t first_shared = views.size() - num_devices;
+    YAML::Node dram_views(YAML::NodeType::Sequence);
+    if (device.fabric_chip == 0) {
+        for (std::size_t i = 0; i <= first_shared; i++) {
+            dram_views.push_back(YAML::Clone(views[i]));
+        }
+    } else {
+        dram_views.push_back(YAML::Clone(views[first_shared + device.fabric_chip]));
+    }
+    desc["dram_views"] = dram_views;
+    return emit(desc);
+}
+
+// The keys and layout of keraunos_3chip_cluster_desc.yaml for N chips and the manifest's links.
+std::string cluster_desc(const Manifest& manifest) {
+    const auto num_chips = static_cast<uint32_t>(manifest.devices.size());
+    YAML::Emitter out;
+    out << YAML::BeginMap;
+    out << YAML::Key << "arch" << YAML::Value << YAML::BeginMap;
+    for (uint32_t chip = 0; chip < num_chips; chip++) {
+        out << YAML::Key << chip << YAML::Value << kQuasar;
+    }
+    out << YAML::EndMap;
+    out << YAML::Key << "chips" << YAML::Value << YAML::Flow << YAML::BeginMap << YAML::EndMap;
+    out << YAML::Key << "chip_unique_ids" << YAML::Value << YAML::BeginMap;
+    for (uint32_t chip = 0; chip < num_chips; chip++) {
+        out << YAML::Key << chip << YAML::Value << kFirstChipUniqueId + chip;
+    }
+    out << YAML::EndMap;
+    out << YAML::Key << "ethernet_connections" << YAML::Value << YAML::BeginSeq;
+    for (const Link& link : manifest.links) {
+        out << YAML::Flow << YAML::BeginSeq;
+        for (const LinkEnd* end : {&link.a, &link.b}) {
+            out << YAML::Flow << YAML::BeginMap << YAML::Key << "chip" << YAML::Value
+                << device_named(manifest, end->device)->fabric_chip << YAML::Key << "chan" << YAML::Value << end->port
+                << YAML::EndMap;
+        }
+        out << YAML::EndSeq;
+    }
+    out << YAML::EndSeq;
+    out << YAML::Key << "ethernet_connections_to_remote_devices" << YAML::Value << YAML::Flow << YAML::BeginSeq
+        << YAML::EndSeq;
+    out << YAML::Key << "chips_with_mmio" << YAML::Value << YAML::BeginSeq;
+    for (uint32_t chip = 0; chip < num_chips; chip++) {
+        out << YAML::BeginMap << YAML::Key << chip << YAML::Value << chip << YAML::EndMap;
+    }
+    out << YAML::EndSeq;
+    out << YAML::Key << "harvesting" << YAML::Value << YAML::BeginMap;
+    for (uint32_t chip = 0; chip < num_chips; chip++) {
+        out << YAML::Key << chip << YAML::Value << YAML::BeginMap << YAML::Key << "noc_translation" << YAML::Value
+            << false << YAML::Key << "harvest_mask" << YAML::Value << 0 << YAML::EndMap;
+    }
+    out << YAML::EndMap;
+    out << YAML::Key << "chip_to_boardtype" << YAML::Value << YAML::BeginMap;
+    for (uint32_t chip = 0; chip < num_chips; chip++) {
+        out << YAML::Key << chip << YAML::Value << kQuasar;
+    }
+    out << YAML::EndMap;
+    out << YAML::Key << "boards" << YAML::Value << YAML::BeginSeq;
+    for (uint32_t chip = 0; chip < num_chips; chip++) {
+        out << YAML::BeginSeq;
+        out << YAML::BeginMap << YAML::Key << "board_id" << YAML::Value << kFirstChipUniqueId + chip << YAML::EndMap;
+        out << YAML::BeginMap << YAML::Key << "board_type" << YAML::Value << kQuasar << YAML::EndMap;
+        out << YAML::BeginMap << YAML::Key << "chips" << YAML::Value << YAML::BeginSeq << chip << YAML::EndSeq
+            << YAML::EndMap;
+        out << YAML::EndSeq;
+    }
+    out << YAML::EndSeq;
+    out << YAML::Key << "asic_locations" << YAML::Value << YAML::BeginMap;
+    for (uint32_t chip = 0; chip < num_chips; chip++) {
+        out << YAML::Key << chip << YAML::Value << 0;
+    }
+    out << YAML::EndMap;
+    out << YAML::EndMap;
+    TT_FATAL(out.good(), "YAML emitter: {}", out.GetLastError());
+    return std::string(out.c_str()) + "\n";
+}
+
+// keraunos_1x3_mesh_graph_descriptor.textproto with N chips.
+std::string mesh_graph_desc(uint32_t num_chips) {
+    return fmt::format(
+        "mesh_descriptors {{\n"
+        "  name: \"M0\"\n"
+        "  arch: QUASAR\n"
+        "  device_topology {{ dims: [ 1, {} ] }}\n"
+        "  host_topology   {{ dims: [ 1, 1 ] }}\n"
+        "  channels {{ count: 1 policy: RELAXED }}\n"
+        "}}\n"
+        "\n"
+        "top_level_instance {{ mesh {{ mesh_descriptor: \"M0\" mesh_id: 0 }} }}\n",
+        num_chips);
+}
+
+}  // namespace
+
+GeneratedDescriptors generate_descriptors(
+    const Manifest& manifest, const std::filesystem::path& package_soc_desc, const std::filesystem::path& out_dir) {
+    TT_FATAL(!manifest.devices.empty(), "Manifest::devices is empty; parse_manifest() never returns one");
+    const YAML::Node package = load_package(package_soc_desc);
+    const YAML::Node eth = package_key(package, "eth", package_soc_desc);
+    const YAML::Node cores = package_key(package_key(package, "keraunos", package_soc_desc), "cores", package_soc_desc);
+    const std::vector<YAML::Node> views = programmable_views(package_key(package, "dram_views", package_soc_desc));
+
+    if (auto findings = refusals(manifest, eth, cores, views.size()); !findings.empty()) {
+        std::stable_sort(
+            findings.begin(), findings.end(), [](const auto& x, const auto& y) { return x.refusal < y.refusal; });
+        throw DescriptorGenerationError(std::move(findings));
+    }
+
+    std::filesystem::create_directories(out_dir);
+    const std::filesystem::path dir = std::filesystem::absolute(out_dir);
+    const auto num_devices = static_cast<uint32_t>(manifest.devices.size());
+    GeneratedDescriptors generated;
+    generated.soc_descs.resize(num_devices);
+    for (const Device& device : manifest.devices) {
+        const std::filesystem::path path = dir / fmt::format("chip_{}_soc_desc.yaml", device.fabric_chip);
+        write_file(path, soc_desc(package, cores, views, device, num_devices));
+        generated.soc_descs[device.fabric_chip] = path;
+    }
+    generated.cluster_desc = dir / kClusterDescFile;
+    write_file(generated.cluster_desc, cluster_desc(manifest));
+    generated.mesh_graph_desc = dir / kMeshGraphDescFile;
+    write_file(generated.mesh_graph_desc, mesh_graph_desc(num_devices));
+    std::vector<std::string> soc_paths;
+    for (const auto& path : generated.soc_descs) {
+        soc_paths.push_back(path.string());
+    }
+    generated.env = dir / kEnvFile;
+    write_file(
+        generated.env,
+        fmt::format(
+            "TT_METAL_EMU_CLUSTER_DESC={}\nTT_METAL_EMU_SOC_DESC={}\nTT_MESH_GRAPH_DESC_PATH={}\n",
+            generated.cluster_desc.string(),
+            fmt::join(soc_paths, ","),
+            generated.mesh_graph_desc.string()));
+    return generated;
+}
+
+std::vector<std::pair<uint32_t, uint32_t>> noc_links(const Manifest& manifest) {
+    std::vector<std::pair<uint32_t, uint32_t>> links;
+    for (const Link& link : manifest.links) {
+        if (link.backend != LinkBackend::Noc) {
+            continue;
+        }
+        const Device* a = device_named(manifest, link.a.device);
+        const Device* b = device_named(manifest, link.b.device);
+        TT_FATAL(
+            a != nullptr && b != nullptr,
+            "Link {}-{} names a device the manifest does not have; check_manifest() refuses it as row 7",
+            link.a.device,
+            link.b.device);
+        links.emplace_back(std::min(a->fabric_chip, b->fabric_chip), std::max(a->fabric_chip, b->fabric_chip));
+    }
+    return links;
+}
+
+PackageFacts package_facts(const std::filesystem::path& package_soc_desc) {
+    const YAML::Node package = load_package(package_soc_desc);
+    PackageFacts facts;
+    for (const auto& entry :
+         package_key(package_key(package, "keraunos", package_soc_desc), "cores", package_soc_desc)) {
+        facts.cores.push_back(CceId{entry["hsio"].as<uint32_t>(), entry["cce"].as<uint32_t>()});
+    }
+    facts.harts_per_cce = MEM_IERISC_LOCAL_HARTS;
+    facts.sram_bytes_per_cce = package_key(package, "eth_l1_size", package_soc_desc).as<uint64_t>();
+    facts.ethernet_tile_pairs = kWiredEthernetTilePairs;
+    return facts;
+}
+
+}  // namespace tt::tt_fabric::vcluster
