@@ -112,7 +112,16 @@ def test_k31_layer_profile(mesh_device, device_params, monkeypatch):
             gate_mode_name=ADAPTER.default_gate_mode,
             sparse_kv_cache_format=ADAPTER.default_sparse_kv_cache_format,
         )
-    logger.info(f"K31_PROF model={MODEL} cache={params.weight_cache_path} kv={params.sparse_kv_cache_format}")
+    # K31_PROF_CHUNK overrides the layout's chunk (experiment: 5120-token chunks on a 4x4 stage). The runner's
+    # chunk_config reads PREFILL_CHUNK_SIZE at import (the MoE gate keys its tuned config to it), so a run that
+    # mirrors the runner sets both to the same value.
+    chunk_override = int(os.environ.get("K31_PROF_CHUNK", "0"))
+    if chunk_override:
+        params = dataclasses.replace(params, chunk_size=chunk_override)
+    logger.info(
+        f"K31_PROF model={MODEL} cache={params.weight_cache_path} kv={params.sparse_kv_cache_format} "
+        f"chunk={params.chunk_size} PREFILL_CHUNK_SIZE={os.environ.get('PREFILL_CHUNK_SIZE')}"
+    )
     params = dataclasses.replace(params, use_trace=True)
     chunk = params.chunk_size
     num_chunks = REQUEST_LEN // chunk

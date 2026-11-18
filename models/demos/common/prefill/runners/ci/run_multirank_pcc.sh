@@ -50,7 +50,9 @@ manifest_env() {
 # The manifests describe a 4x4 stage: SP=4 on mesh axis 1 (the tray half's ring), 2560-token chunks
 # (640 tokens per chip), and the slots that layout fits. Runner and producer both read them.
 kimi_layout() {
-  CHUNK_SIZE=$(manifest_env PREFILL_CHUNK_SIZE)
+  # Experiment branch only: an exported PREFILL_CHUNK_SIZE overrides the manifest's 4x4 chunk (the runner's own
+  # manifest loading already lets the environment win).
+  CHUNK_SIZE=${PREFILL_CHUNK_SIZE:-$(manifest_env PREFILL_CHUNK_SIZE)}
   case "${CONFIG}" in
     sc4|sc1)
       # Two ranks per galaxy, one per tray half, bound by tt-run discovery against the 4x4
