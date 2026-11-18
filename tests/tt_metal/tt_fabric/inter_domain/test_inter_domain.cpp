@@ -11,6 +11,7 @@
 
 #include <gtest/gtest.h>
 
+#include <algorithm>
 #include <chrono>
 #include <climits>
 #include <cstdlib>
@@ -164,7 +165,7 @@ TEST(InterDomain, Sanity) {
     // publish ours: metadata per port, a receive buffer per chip
     Side me;
     std::vector<InterDomainPort> ports;
-    for (const auto& port : get_inter_domain_ports()) {
+    for (const auto& port : get_inter_domain_ports(*mesh)) {
         if (port.has_router) {
             ports.push_back(port);
         }
@@ -362,11 +363,10 @@ TEST(InterDomain, Sanity) {
         step("sent");
 
         // what the peer sent each of our chips with a cable: slot 0 from across it, slots 1 and 2 from the chip behind
-        // that
+        // that. The peer's "sent" only means its workers returned, so poll until it all lands.
+        const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(30);
         for (const auto& [chips, cable] : cables) {
             IDevice* dev = device_of.at(chips.first);
-            std::vector<uint32_t> got;
-            detail::ReadFromDeviceL1(dev, kCore, me.rx.at(chips.first).addr, kSlots * kBytes, got);
             std::vector<std::pair<uint32_t, uint64_t>> expected = {{0, chips.second}};
             for (const auto& [asic, rx] : peer.rx) {
                 if (asic != chips.second) {
@@ -374,15 +374,29 @@ TEST(InterDomain, Sanity) {
                     expected.push_back({2, asic});
                 }
             }
-            for (const auto& [slot, from] : expected) {
-                uint32_t bad = 0;
-                for (uint32_t i = 0; i < kBytes / 4; ++i) {
-                    bad += got[slot * kBytes / 4 + i] != pattern(*peer_domain, from, round, i);
+            std::map<uint32_t, uint32_t> bad;  // [slot] wrong words
+            while (true) {
+                std::vector<uint32_t> got;
+                detail::ReadFromDeviceL1(dev, kCore, me.rx.at(chips.first).addr, kSlots * kBytes, got);
+                bad.clear();
+                for (const auto& [slot, from] : expected) {
+                    for (uint32_t i = 0; i < kBytes / 4; ++i) {
+                        bad[slot] += got[slot * kBytes / 4 + i] != pattern(*peer_domain, from, round, i);
+                    }
                 }
-                EXPECT_EQ(bad, 0u) << "round " << round << " chip " << chips.first << " slot " << slot << ": " << bad
-                                   << " bad words from asic " << from;
+                if (std::all_of(bad.begin(), bad.end(), [](const auto& b) { return b.second == 0; }) ||
+                    std::chrono::steady_clock::now() > deadline) {
+                    break;
+                }
+                std::this_thread::sleep_for(std::chrono::milliseconds(1));
+            }
+            for (const auto& [slot, from] : expected) {
+                EXPECT_EQ(bad[slot], 0u) << "round " << round << " chip " << chips.first << " slot " << slot << ": "
+                                         << bad[slot] << " bad words from asic " << from;
             }
         }
+        // both sides have everything before either disconnects
+        step("received");
 
         for (const auto& [chips, cable] : cables) {
             disconnect_inter_domain(cable.port);
