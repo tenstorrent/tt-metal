@@ -626,9 +626,7 @@
       timeout: 14
       tier: 2
     bh_quietbox_2:
-      # 8 min cut the suite off in every scheduled run since 2026-11-04 (job 7.8-9.8 min, one pass at 7.9 min);
-      # the whole suite ran 17.5 min on a Galaxy-emulated QB2 block (slower links). 14 min: the suite plus margin.
-      timeout: 14
+      timeout: 8
       tier: 1
     # bh_galaxy: temporarily disabled — sliding-1x32 path hits an unrecoverable
     # ethernet / fabric hang on Blackhole Galaxy that surfaces during
@@ -666,9 +664,7 @@
       timeout: 20
       tier: 2
     bh_quietbox_2:
-      # The generic Gemma-4 host + device suite runs here; 12 min cut it off in most scheduled runs since
-      # 2026-11-04 (job 11.4-13.7 min) and on main 2026-11-16. 18 min: the suite plus margin.
-      timeout: 18
+      timeout: 12
       tier: 1
     # bh_galaxy: temporarily disabled — same Blackhole Galaxy ethernet / fabric
     # hang as Gemma-4-26B-A4B above (surfaces during sliding-1x32 attention
