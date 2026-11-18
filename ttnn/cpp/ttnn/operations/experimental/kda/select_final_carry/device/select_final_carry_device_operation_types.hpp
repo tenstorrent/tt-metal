@@ -24,6 +24,8 @@ struct SelectFinalCarryParams {
     std::vector<tt::tt_metal::CoreCoord> cores;
     // L1 addresses of the caller's barrier and arrival global semaphores.
     std::array<uint32_t, 2> semaphore_addresses{};
+    uint32_t slab_index_scale = 1;
+    uint32_t slab_index_offset = 0;
 };
 
 struct SelectFinalCarryInputs {
@@ -31,6 +33,9 @@ struct SelectFinalCarryInputs {
     Tensor prefix_final;
     Tensor actual_start;
     std::optional<Tensor> actual_end;
+    // A [entries, B*H, K, V] slab the final state is written into, in place. Pass both or neither.
+    std::optional<Tensor> slab;
+    std::optional<Tensor> slab_index;
 };
 
 }  // namespace ttnn::experimental::prim

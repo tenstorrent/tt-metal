@@ -29,7 +29,7 @@ from tests.ttnn.unit_tests.operations.fused.sharded_test_utils import (
     UNEVEN_MULTICORE_LOGICAL_WIDTH_IDS,
 )
 from tests.ttnn.unit_tests.operations.test_utils import TILE_WIDTH
-from tests.ttnn.utils_for_testing import assert_numeric_metrics
+from tests.ttnn.utils_for_testing import assert_numeric_metrics, merge_gate_subset
 
 
 @pytest.mark.parametrize("h, w, num_cores_h, num_cores_w, block_ht, block_wt, subblock_wt", single_stage_param_sets())
@@ -206,10 +206,30 @@ def test_layer_norm_sharded_tile_backend_does_not_require_reciprocal(device):
     )
 
 
-@pytest.mark.parametrize("use_welford", [True, False])
-@pytest.mark.parametrize("two_stage", [True, False])
-@pytest.mark.parametrize("tensor_type", ["ascending_values_repeated_rows", "random"])
-@pytest.mark.parametrize("dtype", [torch.bfloat16, torch.float32])
+# random input: every two_stage/use_welford pair in bf16.
+_LAYER_NORM_RESIDUAL_MERGE_GATE = {
+    (True, True, "random", torch.bfloat16),
+    (True, False, "random", torch.bfloat16),
+    (False, True, "random", torch.bfloat16),
+    (False, False, "random", torch.bfloat16),
+    # fp32 with both on trips the unp_A_dst_format LLK assert in layernorm_sharded_welford.cpp, which hangs the
+    # device under TT_METAL_LLK_ASSERTS=1. Re-gate (True, True, "random", torch.float32) once #60764 is fixed.
+}
+
+
+@pytest.mark.parametrize(
+    *merge_gate_subset(
+        {
+            "dtype": [torch.bfloat16, torch.float32],
+            "tensor_type": ["ascending_values_repeated_rows", "random"],
+            "two_stage": [True, False],
+            "use_welford": [True, False],
+        },
+        keep=lambda use_welford, two_stage, tensor_type, dtype: (
+            (use_welford, two_stage, tensor_type, dtype) in _LAYER_NORM_RESIDUAL_MERGE_GATE
+        ),
+    )
+)
 def test_layer_norm_sharded_with_weight_and_bias_and_residual(device, use_welford, two_stage, tensor_type, dtype):
     torch.manual_seed(0)
     h, w, num_cores_h, num_cores_w, block_ht, block_wt, subblock_wt = simple_size_params(two_stage)
@@ -587,13 +607,33 @@ def test_layer_norm_sharded_1d_mcast_line_grid(device, start, end, h, w, orienta
 
 # Geometry cases (see UNEVEN_MULTICORE_LOGICAL_WIDTH_CASES in sharded_test_utils.py for the covered
 # tile-aligned-uneven and non-tile-aligned widths). Covers both the legacy path and Welford.
-@pytest.mark.parametrize(
-    "dtype", [ttnn.bfloat16, ttnn.float32, ttnn.bfloat8_b], ids=["bfloat16", "float32", "bfloat8_b"]
-)
-@pytest.mark.parametrize("use_welford", [False, True], ids=["legacy", "welford"])
-@pytest.mark.parametrize(
-    ("w", "num_cores_w"), UNEVEN_MULTICORE_LOGICAL_WIDTH_CASES, ids=UNEVEN_MULTICORE_LOGICAL_WIDTH_IDS
-)
+_LAYER_NORM_UNEVEN_MERGE_GATE = {
+    (72, 2, False, ttnn.bfloat16),  # w72_c2_nonaligned legacy
+    (72, 2, True, ttnn.bfloat16),  # w72_c2_nonaligned welford
+    (200, 3, False, ttnn.bfloat16),  # w200_c3_nonaligned legacy
+    # w200_c3_nonaligned welford fp32 trips the unp_A_dst_format LLK assert in layernorm_sharded_welford.cpp,
+    # which hangs the device under TT_METAL_LLK_ASSERTS=1. Re-gate (200, 3, True, ttnn.float32) once #60764 is fixed.
+    (224, 3, True, ttnn.bfloat8_b),  # w224_c3 welford
+}
+
+
+# One parametrize with explicit ids, so the ids stay those of the stacked decorators (width-backend-dtype).
+_LAYER_NORM_UNEVEN_PARAMS = [
+    pytest.param(
+        w,
+        cores,
+        use_welford,
+        dtype,
+        id=f"{width_id}-{backend_id}-{dtype_id}",
+        marks=pytest.mark.merge_gate if (w, cores, use_welford, dtype) in _LAYER_NORM_UNEVEN_MERGE_GATE else (),
+    )
+    for (w, cores), width_id in zip(UNEVEN_MULTICORE_LOGICAL_WIDTH_CASES, UNEVEN_MULTICORE_LOGICAL_WIDTH_IDS)
+    for use_welford, backend_id in ((False, "legacy"), (True, "welford"))
+    for dtype, dtype_id in ((ttnn.bfloat16, "bfloat16"), (ttnn.float32, "float32"), (ttnn.bfloat8_b, "bfloat8_b"))
+]
+
+
+@pytest.mark.parametrize("w, num_cores_w, use_welford, dtype", _LAYER_NORM_UNEVEN_PARAMS)
 def test_layer_norm_sharded_uneven_multicore_logical_width(device, w, num_cores_w, use_welford, dtype):
     run_sharded_norm_logical_width_multicore(
         device, is_rmsnorm=False, w=w, num_cores_w=num_cores_w, dtype=dtype, use_welford=use_welford

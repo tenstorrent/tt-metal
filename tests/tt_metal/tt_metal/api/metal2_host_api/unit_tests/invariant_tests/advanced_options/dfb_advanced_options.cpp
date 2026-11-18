@@ -16,6 +16,8 @@
 #include "metal2_host_api/test_helpers/mock_device_fixtures.hpp"
 #include "metal2_host_api/test_helpers/prefetcher_pipe_test_helpers.hpp"
 
+#include "metal2_host_api/test_helpers/dfb_placement_test_helpers.hpp"
+
 namespace tt::tt_metal::experimental {
 namespace {
 
@@ -92,6 +94,61 @@ TEST_F(PrefetcherPipeSpecTestQuasar, CPU_RelayWithAllocationOverrideFails) {
     spec.dataflow_buffers[0].advanced_options.allocation_override =
         SRAMArenaAllocation{.arena = SRAMArenaParamName{"arena"}};
     EXPECT_SPEC_REJECTED(spec, "sets both prefetcher_pipe_relays and allocation_override");
+}
+
+TEST_F(ProgramSpecTestQuasar, CPU_DFBPlacementRejectsEmpty) {
+    // An empty placement override is rejected.
+    distributed::MeshDevice& fixture_device = *mesh_device_;
+    auto spec = test_helpers::MakeDFBPlacementSpec(tt::ARCH::QUASAR);
+    spec.dataflow_buffers[0].advanced_options.override_placement = CoreRangeSet{};
+    EXPECT_THAT(
+        [&] { MakeProgramFromSpec(fixture_device, spec); },
+        ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("override_placement")));
+}
+
+TEST_F(ProgramSpecTestQuasar, CPU_DFBPlacementRejectsOutOfBounds) {
+    // A placement override outside the worker grid is rejected.
+    distributed::MeshDevice& fixture_device = *mesh_device_;
+    auto spec = test_helpers::MakeDFBPlacementSpec(tt::ARCH::QUASAR);
+    const CoreCoord outside = fixture_device.compute_with_storage_grid_size();
+    spec.dataflow_buffers[0].advanced_options.override_placement = CoreRangeSet(CoreRange(outside));
+    EXPECT_THAT(
+        [&] { MakeProgramFromSpec(fixture_device, spec); },
+        ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("out of bounds")));
+}
+
+TEST_F(ProgramSpecTestQuasar, CPU_DFBPlacementRejectsPrefetcherRelay) {
+    // A placement override combined with a prefetcher relay is rejected.
+    distributed::MeshDevice& fixture_device = *mesh_device_;
+    auto spec = test_helpers::MakeFullPipeSpec();
+    spec.dataflow_buffers[0].advanced_options.override_placement = CoreRangeSet(test_helpers::pipe_receiver_nodes);
+    EXPECT_THAT(
+        [&] { MakeProgramFromSpec(fixture_device, spec); },
+        ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("override_placement")));
+}
+
+// Endpoint kernels run on (0,0)-(1,0); the DFB placement override keeps only (0,0).
+ProgramSpec MakeQuasarSubsetPlacementSpecForTest() {
+    auto spec = test_helpers::MakeDFBPlacementSpec(tt::ARCH::QUASAR);
+    spec.work_units[0].target_nodes = NodeRange({0, 0}, {1, 0});
+    spec.dataflow_buffers[0].advanced_options.override_placement = NodeRangeSet(NodeRange({0, 0}));
+    return spec;
+}
+
+TEST_F(ProgramSpecTestQuasar, CPU_DFBPlacementAcceptsSubsetOnGen2) {
+    // A placement override on a strict subset of the endpoint nodes is accepted on Gen2.
+    EXPECT_NO_THROW(MakeProgramFromSpec(*mesh_device_, MakeQuasarSubsetPlacementSpecForTest()));
+}
+
+TEST_F(ProgramSpecTestQuasar, CPU_DFBPlacementPreservesGen2MultiBindingRestriction) {
+    // Gen2 rejects allow_instance_multi_binding even with a valid placement override.
+    // The spec is otherwise valid (CPU_DFBPlacementAcceptsSubsetOnGen2), so the flag causes the rejection.
+    distributed::MeshDevice& fixture_device = *mesh_device_;
+    auto spec = MakeQuasarSubsetPlacementSpecForTest();
+    spec.dataflow_buffers[0].advanced_options.allow_instance_multi_binding = true;
+    EXPECT_THAT(
+        [&] { MakeProgramFromSpec(fixture_device, spec); },
+        ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("allow_instance_multi_binding")));
 }
 
 }  // namespace

@@ -1551,13 +1551,13 @@ void py_module(nb::module_& mod) {
         &ttnn::gez,
         R"doc(\mathrm{{output\_tensor}}_i = (\mathrm{{input\_tensor_i\ >= 0}}))doc",
         "",
-        R"doc(BFLOAT16, BFLOAT8_B, INT32)doc");
+        R"doc(BFLOAT16, BFLOAT8_B, FLOAT32, INT32, UINT32)doc");
     bind_unary_operation_subcoregrids<"gtz">(
         mod,
         &ttnn::gtz,
         R"doc(\mathrm{{output\_tensor}}_i= (\mathrm{{input\_tensor_i\ > 0}}))doc",
         "",
-        R"doc(BFLOAT16, BFLOAT8_B, INT32)doc");
+        R"doc(BFLOAT16, BFLOAT8_B, FLOAT32, INT32, UINT32)doc");
     bind_unary_operation_subcoregrids<"i0">(
         mod,
         &ttnn::i0,
@@ -1607,7 +1607,7 @@ void py_module(nb::module_& mod) {
         &ttnn::lez,
         R"doc(\mathrm{{output\_tensor}}_i = (\mathrm{{input\_tensor_i\ <= 0}}))doc",
         "",
-        R"doc(BFLOAT16, BFLOAT8_B, INT32)doc");
+        R"doc(BFLOAT16, BFLOAT8_B, FLOAT32, INT32, UINT32)doc");
     bind_unary_operation_subcoregrids<"logical_not">(
         mod,
         &ttnn::logical_not,
@@ -1619,7 +1619,7 @@ void py_module(nb::module_& mod) {
         &ttnn::ltz,
         R"doc(\mathrm{{output\_tensor}}_i = (\mathrm{{input\_tensor_i\ < 0}}))doc",
         "",
-        R"doc(BFLOAT16, BFLOAT8_B, INT32)doc");
+        R"doc(BFLOAT16, BFLOAT8_B, FLOAT32, INT32, UINT32)doc");
     bind_unary_operation_subcoregrids<"neg">(
         mod,
         &ttnn::neg,
