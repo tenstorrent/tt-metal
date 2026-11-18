@@ -499,21 +499,20 @@ void KeraunosCoLaunchedWorkers::run_line_unicast(const NocLinks& noc_links, cons
         EXPECT_EQ(bytes_of(results), expected_bytes) << role;
     }
 
-    // The path each link took (PLAN-0008 § What 1c showed). The extension zeroed every staging word before launch. A
-    // router on an Ethernet link never writes them. A router that sends the line's packets on a NOC link stages one
-    // word a packet, and one word then holds the packet count. Whether the router at the other end of a NOC link
-    // returns its credits through a staging word is not established, so its words are logged, not asserted.
+    // The path each link took (PLAN-0008 § What 1c showed; SPEC-0011 § The line test, 6). The extension zeroed every
+    // staging word before launch. A router stages a word only in send_dword on a NOC link, whose one router caller is
+    // the packets-sent credit on the sender TX queue (SENDER_TXQ_ID, 0 by default and on this line), so word 0; the
+    // receiving side returns its credits by send_bytes, which stages nothing. The line's traffic runs one way, so the
+    // router that sends its packets on a NOC link holds the packet count in word 0 and every other word of every router
+    // is 0.
     for (const auto& router : routers) {
         const PreparedRouter& prep = prepared_router(router);
         const NocStage stage = read_noc_stage(router.chip, router.virtual_core);
         const std::string where = fmt::format("chip {} router {}", router.chip, router.logical.str());
         log_info(tt::LogTest, "{} NOC staging words {:#x}", where, fmt::join(stage, " "));
-        if (!prep.noc) {
-            EXPECT_EQ(stage, NocStage{}) << where << ": Ethernet link, yet a staging word was written";
-        } else if (prep.downstream) {
-            EXPECT_EQ(*std::max_element(stage.begin(), stage.end()), uint64_t{kNumPackets})
-                << where << ": sends the line's " << kNumPackets << " packets on a NOC link";
-        }
+        const NocStage expected = prep.noc && prep.downstream ? NocStage{kNumPackets, 0, 0, 0} : NocStage{};
+        EXPECT_EQ(stage, expected) << where << (prep.noc ? " (NOC link" : " (Ethernet link")
+                                   << (prep.downstream ? ", sends the line's packets)" : ", does not send them)");
     }
 
     DoTearDownTestSuite();
