@@ -144,5 +144,8 @@ def assert_dispatched(out, xbuf_in, route, R, C, S, what="dispatch"):
 
 
 def fabric_payload(W):
-    """The MoE block's fabric payload for rows of W bf16 (closeout_models.fabric_payload)."""
-    return max(7232, (2 * W + 32 + 63) // 64 * 64)
+    """The MoE block's fabric payload for rows of W bf16 (closeout_models.fabric_payload); half a row's with
+    MOE_BLOCK_SPLIT_ROWS=1 (each row then goes as two packets)."""
+    from models.demos.deepseek_v3_d_p.tt.moe_impl import moe_block_fabric_payload, moe_block_split_rows
+
+    return moe_block_fabric_payload(W) if moe_block_split_rows() else max(7232, (2 * W + 32 + 63) // 64 * 64)

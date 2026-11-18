@@ -155,12 +155,12 @@ struct FlatRoutedExpertPlan {
 
 // Builds the plan for the mesh device's chips (all of them laid out as its first local chip, as the program is).
 FlatRoutedExpertPlan make_flat_routed_expert_plan(
-    tt::tt_metal::distributed::MeshDevice& mesh_device, const FlatRoutedExpertConfig& cfg);
+    tt::tt_metal::distributed::MeshDevice& mesh_device, const FlatRoutedExpertConfig& config);
 
 // The plan for a mesh device and config, cached for the process (keyed by the mesh device's id and shape and the
 // config fields the plan depends on): what the program factory, the weight layout and the done words use.
 std::shared_ptr<const FlatRoutedExpertPlan> flat_routed_expert_plan(
-    tt::tt_metal::distributed::MeshDevice& mesh_device, const FlatRoutedExpertConfig& cfg);
+    tt::tt_metal::distributed::MeshDevice& mesh_device, const FlatRoutedExpertConfig& config);
 
 // Greedy maximal rectangles over a core list (one range per core makes every dispatch write a unicast).
 tt::tt_metal::CoreRangeSet rect_ranges(const std::vector<tt::tt_metal::CoreCoord>& cores);

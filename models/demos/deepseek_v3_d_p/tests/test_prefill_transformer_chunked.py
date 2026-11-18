@@ -72,7 +72,7 @@ from models.demos.deepseek_v3_d_p.tt.moe_impl import (
     k3_moe_block_device_params,
     model_l1_small_with_block,
     moe_block_enabled,
-    moe_block_fabric_payload,
+    moe_block_mesh_params,
 )
 from models.demos.deepseek_v3_d_p.tt.tt_ccl import _SPARSE_MLA_OVERLAP_GATHER_ROWS, per_axis_topology
 from models.demos.deepseek_v3_d_p.tt.tt_prefill_block import get_block_timings, reset_block_timings
@@ -112,10 +112,9 @@ GLM_L1_SMALL_SIZE = model_l1_small_with_block(GLM53Config, 1536) if GLM_MOE_BLOC
 
 def _glm_payload():
     """GLM's TtMoe payload; with the MoE block at least its combine's (2 x 6144 + 32 B, 64-B aligned)."""
-    payload = moe_fabric_payload(GLM53Config)
     if GLM_MOE_BLOCK:
-        payload = max(payload, moe_block_fabric_payload(GLM53Config.EMB_SIZE))
-    return payload
+        return moe_block_mesh_params(GLM53Config, moe_fabric_payload(GLM53Config), 0)[0]
+    return moe_fabric_payload(GLM53Config)
 
 
 # K3's fabric: the XY torus when the MoE block is K3's MoE (the default; on the 2D mesh fabric the block's first call

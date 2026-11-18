@@ -63,9 +63,9 @@ void kernel_main() {
     constexpr uint32_t done_sem_id = flat_options::down_done_sem;
     constexpr uint32_t go_sem_id = flat_options::go_sem;
     constexpr uint32_t hbuf = flat_options::h_buffers;
-    constexpr uint32_t mt = flat_options::row_tiles_per_sub_block;
-    constexpr uint32_t pcd = flat_options::down_columns;
-    constexpr uint32_t ht = flat_options::hidden_tiles;
+    constexpr uint32_t row_tiles = flat_options::row_tiles_per_sub_block;
+    constexpr uint32_t down_columns = flat_options::down_columns;
+    constexpr uint32_t hidden_tiles = flat_options::hidden_tiles;
     static_assert(hbuf <= 4);
     const uint32_t gath_ids[4] = {
         flat_options::h_gather_sem_0, flat_options::h_gather_sem_1, flat_options::h_gather_sem_2, 0};
@@ -74,7 +74,8 @@ void kernel_main() {
     constexpr uint32_t link_depth = 3;
 
     const uint32_t h_all = moe_block_args::arg(0);
-    const uint32_t pxy = moe_block_args::arg(1), sxy = moe_block_args::arg(2), cxy = moe_block_args::arg(3);
+    const uint32_t pred_xy = moe_block_args::arg(1), succ_xy = moe_block_args::arg(2),
+                   coordinator_xy = moe_block_args::arg(3);
     const bool is_coord = moe_block_args::arg(4) != 0;
     const uint32_t n_gu = moe_block_args::arg(5);
     // y is the bfp8 tile buffer shaped like the dispatch buffer: sub-block s of an entry writes its row tiles
@@ -87,10 +88,10 @@ void kernel_main() {
     load_schedule<local_experts>(schedule, 10, schedule_scratch(ScratchOwner::Brisc));
     publish_schedule(schedule, tt::CBIndex::c_6);
     const uint32_t num_v = schedule.total_sub_blocks;
-    uint32_t y_a = 0, y_s = 0;  // (active expert, sub-block) of output out_done
-    const uint32_t sxy_e = sxy;
+    uint32_t y_entry = 0, y_sub_block = 0;  // (active expert, sub-block) of output out_done
+    const uint32_t sxy_e = succ_xy;
     constexpr uint32_t n_down_e = n_down;
-    const uint32_t col0 = moe_block_args::arg(7);
+    const uint32_t first_column = moe_block_args::arg(7);
     const uint32_t done_words = moe_block_args::arg(8);
     const uint32_t my_index = moe_block_args::arg(9);
     auto sem = [](uint32_t id) { return reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(id)); };
@@ -98,12 +99,12 @@ void kernel_main() {
     volatile tt_l1_ptr uint32_t* hsfree = sem(hsfree_sem_id);
     volatile tt_l1_ptr uint32_t* gath[4] = {sem(gath_ids[0]), sem(gath_ids[1]), sem(gath_ids[2]), sem(gath_ids[3])};
     volatile tt_l1_ptr uint32_t* done_sem = sem(done_sem_id);
-    const uint64_t pred_free = get_noc_addr(pxy >> 16, pxy & 0xFFFF, get_semaphore(hsfree_sem_id));
-    const uint64_t succ_harr = get_noc_addr(sxy >> 16, sxy & 0xFFFF, get_semaphore(harr_sem_id));
-    const uint64_t succ_hall = get_noc_addr(sxy >> 16, sxy & 0xFFFF, h_all);
-    const uint64_t done_noc = get_noc_addr(cxy >> 16, cxy & 0xFFFF, done_words + 4 * my_index);
-    volatile tt_l1_ptr uint32_t* dw = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(done_words);
-    const bool head = pxy == 0;
+    const uint64_t pred_free = get_noc_addr(pred_xy >> 16, pred_xy & 0xFFFF, get_semaphore(hsfree_sem_id));
+    const uint64_t succ_harr = get_noc_addr(succ_xy >> 16, succ_xy & 0xFFFF, get_semaphore(harr_sem_id));
+    const uint64_t succ_hall = get_noc_addr(succ_xy >> 16, succ_xy & 0xFFFF, h_all);
+    const uint64_t done_noc = get_noc_addr(coordinator_xy >> 16, coordinator_xy & 0xFFFF, done_words + 4 * my_index);
+    volatile tt_l1_ptr uint32_t* done_counts = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(done_words);
+    const bool head = pred_xy == 0;
     auto write_trid = [](uint32_t src, uint64_t dst, uint32_t bytes, uint32_t trid) {
         for (uint32_t o = 0; o < bytes; o += NOC_MAX_BURST_SIZE) {
             const uint32_t n = bytes - o < NOC_MAX_BURST_SIZE ? bytes - o : NOC_MAX_BURST_SIZE;
@@ -159,13 +160,14 @@ void kernel_main() {
             out_done = num_v;  // (the y writes are down_weight_reader.cpp's)
         } else if (!y_pending && out_done < num_v && cb_pages_available_at_front(out_cb, out_tiles)) {
             const uint32_t src = get_read_ptr(out_cb);
-            for (uint32_t r = 0; r < mt; ++r) {
-                if ((y_s * mt + r) * kTileRows >= schedule.tokens[y_a]) {
+            for (uint32_t r = 0; r < row_tiles; ++r) {
+                if ((y_sub_block * row_tiles + r) * kTileRows >= schedule.tokens[y_entry]) {
                     continue;
                 }
-                const uint32_t trow = schedule.first_row[y_a] / kTileRows + y_s * mt + r;
-                for (uint32_t c = 0; c < pcd; ++c) {
-                    noc_async_write_page(trow * ht + col0 + c, y, src + (r * pcd + c) * out_page);
+                const uint32_t trow = schedule.first_row[y_entry] / kTileRows + y_sub_block * row_tiles + r;
+                for (uint32_t c = 0; c < down_columns; ++c) {
+                    noc_async_write_page(
+                        trow * hidden_tiles + first_column + c, y, src + (r * down_columns + c) * out_page);
                 }
             }
             y_pending = true;
@@ -173,20 +175,20 @@ void kernel_main() {
         if (y_pending && ncrisc_noc_nonposted_writes_flushed(noc_index)) {
             cb_pop_front(out_cb, out_tiles);
             ++out_done;
-            if (++y_s == schedule.sub_blocks[y_a]) {
-                y_s = 0;
-                ++y_a;
+            if (++y_sub_block == schedule.sub_blocks[y_entry]) {
+                y_sub_block = 0;
+                ++y_entry;
             }
             y_pending = false;
         }
         bool all_done = is_coord && go_sent + 1 < num_v;
         for (uint32_t d = 0; all_done && d < n_down_e; ++d) {
-            all_done = dw[d] >= go_sent + 1;
+            all_done = done_counts[d] >= go_sent + 1;
         }
         if (all_done) {
             for (uint32_t p = 0; p < n_gu; ++p) {
-                const uint32_t xy = get_common_arg_val<uint32_t>(p);
-                noc_semaphore_inc(get_noc_addr(xy >> 16, xy & 0xFFFF, get_semaphore(go_sem_id)), 1);
+                const uint32_t gate_up_xy = get_common_arg_val<uint32_t>(p);
+                noc_semaphore_inc(get_noc_addr(gate_up_xy >> 16, gate_up_xy & 0xFFFF, get_semaphore(go_sem_id)), 1);
             }
             ++go_sent;
         }
@@ -195,13 +197,13 @@ void kernel_main() {
         for (uint32_t d = 0; d < n_down_e; ++d) {
             while (true) {
                 invalidate_l1_cache();
-                if (dw[d] >= num_v) {
+                if (done_counts[d] >= num_v) {
                     break;
                 }
             }
         }
         for (uint32_t d = 0; d < n_down_e; ++d) {
-            dw[d] = 0;
+            done_counts[d] = 0;
         }
     }
     noc_async_write_barrier();

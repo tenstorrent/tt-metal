@@ -31,9 +31,9 @@ CombineBuffers buffers_of(const RoutedExpertsCombineInputs& t, const ttnn::Tenso
     set(CombineBuf::Plan, t.plan.buffer());
     set(CombineBuf::Table, t.table.buffer());
     set(CombineBuf::Out, out.buffer());
-    set(CombineBuf::Bar, t.bar.buffer());
+    set(CombineBuf::Bar, t.barrier.buffer());
     set(CombineBuf::Hcache, t.hcache.buffer());
-    set(CombineBuf::Lut, t.lut ? t.lut->buffer() : nullptr);
+    set(CombineBuf::Lut, t.accumulator_lut ? t.accumulator_lut->buffer() : nullptr);
     return b;
 }
 
@@ -42,8 +42,8 @@ constexpr uint32_t kFlatSources = static_cast<uint32_t>(flat_routed_expert::Flat
 constexpr uint32_t kSources = kFlatSources + static_cast<uint32_t>(CombineBuf::Count);
 std::array<uint32_t, kSources> arg_sources(const RoutedExpertsCombineInputs& t, const CombineBuffers& b) {
     std::array<uint32_t, kSources> s{};
-    const auto fa = flat_routed_expert::flat_source_addresses(t.flat);
-    std::copy(fa.begin(), fa.end(), s.begin());
+    const auto flat_addresses = flat_routed_expert::flat_source_addresses(t.flat);
+    std::copy(flat_addresses.begin(), flat_addresses.end(), s.begin());
     for (size_t i = 0; i < static_cast<size_t>(CombineBuf::Count); ++i) {
         s[kFlatSources + i] = b.buf[i] != nullptr ? static_cast<uint32_t>(b.buf[i]->address()) : 0u;
     }
@@ -83,60 +83,64 @@ ArgsToDram args_to_dram(
     // so add the addresses now)
     for (size_t c = 0; c < N; ++c) {
         auto& kernels = chips.programs[c].descriptor.kernels;
-        for (const auto& pa : builds[c].flat.patches) {
+        for (const auto& patch : builds[c].flat.patches) {
             TT_FATAL(
-                pa.kernel < kernels.size(),
+                patch.kernel < kernels.size(),
                 "routed_experts_combine: patch for kernel {} of {}",
-                pa.kernel,
+                patch.kernel,
                 kernels.size());
-            for (auto& [core, a] : kernels[pa.kernel].runtime_args) {
-                if (core == pa.core) {
-                    a.at(pa.index) += sources[static_cast<size_t>(pa.src)];
+            for (auto& [core, a] : kernels[patch.kernel].runtime_args) {
+                if (core == patch.core) {
+                    a.at(patch.index) += sources[static_cast<size_t>(patch.src)];
                 }
             }
         }
     }
     ArgsToDram out;
-    auto& ak = out.kernels;
-    const auto& k0 = chips.programs.at(0).descriptor.kernels;
-    for (size_t i = 0; i < k0.size(); ++i) {
-        const auto* dmc = std::get_if<tt::tt_metal::DataMovementConfigDescriptor>(&k0[i].config);
-        if (dmc == nullptr) {
+    auto& args_table_kernels = out.kernels;
+    const auto& chip0_kernels = chips.programs.at(0).descriptor.kernels;
+    for (size_t i = 0; i < chip0_kernels.size(); ++i) {
+        const auto* data_movement_config =
+            std::get_if<tt::tt_metal::DataMovementConfigDescriptor>(&chip0_kernels[i].config);
+        if (data_movement_config == nullptr) {
             continue;  // (a compute kernel)
         }
-        ArgsTableKernel kk;
-        kk.kernel = i;
-        kk.l1_offset = dmc->processor == tt::tt_metal::DataMovementProcessor::RISCV_0 ? 0u : kArgsHalfBytes;
-        kk.bytes = kArgsHalfBytes;
-        kk.fixups.resize(N);
-        kk.kept.resize(N);
+        ArgsTableKernel table_kernel;
+        table_kernel.kernel = i;
+        table_kernel.l1_offset =
+            data_movement_config->processor == tt::tt_metal::DataMovementProcessor::RISCV_0 ? 0u : kArgsHalfBytes;
+        table_kernel.bytes = kArgsHalfBytes;
+        table_kernel.fixups.resize(N);
+        table_kernel.kept.resize(N);
         for (size_t c = 0; c < N; ++c) {
-            for (const auto& pa : builds[c].flat.patches) {
-                if (pa.kernel == i) {
-                    kk.fixups[c][{pa.core.x, pa.core.y}].push_back({pa.index, static_cast<uint32_t>(pa.src)});
+            for (const auto& patch : builds[c].flat.patches) {
+                if (patch.kernel == i) {
+                    table_kernel.fixups[c][{patch.core.x, patch.core.y}].push_back(
+                        {patch.index, static_cast<uint32_t>(patch.src)});
                 }
             }
-            for (const auto& pa : builds[c].combine.patches) {
-                if (pa.kernel == i) {
-                    kk.fixups[c][{pa.core.x, pa.core.y}].push_back(
-                        {pa.index, kFlatSources + static_cast<uint32_t>(pa.buf)});
+            for (const auto& patch : builds[c].combine.patches) {
+                if (patch.kernel == i) {
+                    table_kernel.fixups[c][{patch.core.x, patch.core.y}].push_back(
+                        {patch.index, kFlatSources + static_cast<uint32_t>(patch.buf)});
                 }
             }
             // the y writers' report blocks (per-core args - their destinations differ by chip): the counts address
             // and the L1 hand-off's buffer addresses (set_report wrote them whole)
-            const auto& fl = builds[c].flat;
-            for (const auto& [k, core] : fl.y_writers) {
+            const auto& flat_handles = builds[c].flat;
+            for (const auto& [k, core] : flat_handles.y_writers) {
                 if (k != i) {
                     continue;
                 }
-                auto& fixups = kk.fixups[c][{core.x, core.y}];
-                fixups.push_back({fl.y_report_arg + 2, kFlatSources + static_cast<uint32_t>(CombineBuf::Arena)});
-                const auto& la = builds[c].combine.l1_args;
-                for (size_t j = 0; j < la.size(); ++j) {
-                    if (la[j].buf) {
+                auto& fixups = table_kernel.fixups[c][{core.x, core.y}];
+                fixups.push_back(
+                    {flat_handles.y_report_arg + 2, kFlatSources + static_cast<uint32_t>(CombineBuf::Arena)});
+                const auto& l1_args = builds[c].combine.l1_args;
+                for (size_t j = 0; j < l1_args.size(); ++j) {
+                    if (l1_args[j].buf) {
                         fixups.push_back(
-                            {fl.y_report_arg + flat_routed_expert::kFlatReportArgs + static_cast<uint32_t>(j),
-                             kFlatSources + static_cast<uint32_t>(*la[j].buf)});
+                            {flat_handles.y_report_arg + flat_routed_expert::kFlatReportArgs + static_cast<uint32_t>(j),
+                             kFlatSources + static_cast<uint32_t>(*l1_args[j].buf)});
                     }
                 }
             }
@@ -144,29 +148,31 @@ ArgsToDram args_to_dram(
             // build_from_args; their eth channel differs by chip - a per-device runtime arg of the one program
             for (const auto& f : builds[c].combine.fabric_args) {
                 if (f.kernel == i) {
-                    kk.kept[c][{f.core.x, f.core.y}] = {f.first, f.count};
+                    table_kernel.kept[c][{f.core.x, f.core.y}] = {f.first, f.count};
                 }
             }
         }
-        ak.push_back(std::move(kk));
+        args_table_kernels.push_back(std::move(table_kernel));
     }
-    ChipPrograms cv;
-    for (auto& pr : chips.programs) {
-        cv.emplace_back(pr.range.start_coord(), std::move(pr.descriptor));
+    ChipPrograms chip_programs;
+    for (auto& chip_program : chips.programs) {
+        chip_programs.emplace_back(chip_program.range.start_coord(), std::move(chip_program.descriptor));
     }
     std::string why;
-    out.table = runtime_args_to_dram(mesh_device, cv, ak, sources, args_base(p, bufs), why);
+    out.table = runtime_args_to_dram(mesh_device, chip_programs, args_table_kernels, sources, args_base(p, bufs), why);
     for (size_t c = 0; c < N; ++c) {
-        chips.programs[c].descriptor = std::move(cv[c].second);
+        chips.programs[c].descriptor = std::move(chip_programs[c].second);
     }
     TT_FATAL(out.table.tables != nullptr, "routed_experts_combine: the kernels' args to DRAM: {}", why);
     // (the converted kernels' address args are now the sources in their common args: no per-core arg left)
     auto converted = [&](uint32_t k) {
-        return std::any_of(ak.begin(), ak.end(), [&](const ArgsTableKernel& x) { return x.kernel == k; });
+        return std::any_of(args_table_kernels.begin(), args_table_kernels.end(), [&](const ArgsTableKernel& x) {
+            return x.kernel == k;
+        });
     };
     for (auto& build : builds) {
-        std::erase_if(build.flat.patches, [&](const auto& pa) { return converted(pa.kernel); });
-        std::erase_if(build.combine.patches, [&](const auto& pa) { return converted(pa.kernel); });
+        std::erase_if(build.flat.patches, [&](const auto& patch) { return converted(patch.kernel); });
+        std::erase_if(build.combine.patches, [&](const auto& patch) { return converted(patch.kernel); });
     }
     return out;
 }
@@ -206,23 +212,23 @@ ProgramAddresses program_addresses(
             args_offset(p.plan->arena_bytes)),
         .args = {},
         .arena_cbs = arena_backed_cbs(desc, arena)};
-    for (const auto& pa : build.flat.patches) {
+    for (const auto& patch : build.flat.patches) {
         out.args.push_back(ProgramAddresses::AddressArg{
-            .kernel = pa.kernel,
+            .kernel = patch.kernel,
             .common = false,
-            .core = pa.core,
-            .index = pa.index,
-            .source = static_cast<uint32_t>(pa.src),
-            .offset = pa.offset});
+            .core = patch.core,
+            .index = patch.index,
+            .source = static_cast<uint32_t>(patch.src),
+            .offset = patch.offset});
     }
-    for (const auto& pa : build.combine.patches) {
+    for (const auto& patch : build.combine.patches) {
         out.args.push_back(ProgramAddresses::AddressArg{
-            .kernel = pa.kernel,
+            .kernel = patch.kernel,
             .common = false,
-            .core = pa.core,
-            .index = pa.index,
-            .source = kFlatSources + static_cast<uint32_t>(pa.buf),
-            .offset = pa.offset});
+            .core = patch.core,
+            .index = patch.index,
+            .source = kFlatSources + static_cast<uint32_t>(patch.buf),
+            .offset = patch.offset});
     }
     return out;
 }
@@ -299,7 +305,7 @@ RoutedExpertsCombineFactory::cached_mesh_workload_t RoutedExpertsCombineFactory:
     // merge pads it)
     auto differences = [&]() -> std::string {
         constexpr size_t kMaxDiffs = 20;
-        const auto& p0 = chips.programs.at(0).descriptor;
+        const auto& chip0_program = chips.programs.at(0).descriptor;
         std::vector<std::string> lines;
         size_t total = 0;
         auto note = [&](std::string line) {
@@ -311,14 +317,15 @@ RoutedExpertsCombineFactory::cached_mesh_workload_t RoutedExpertsCombineFactory:
         auto at = [](const std::vector<uint32_t>& v, size_t i) { return i < v.size() ? v[i] : 0u; };
         static const std::vector<uint32_t> none;
         for (size_t c = 1; c < chips.programs.size(); ++c) {
-            const auto& pc = chips.programs[c].descriptor;
-            if (pc.kernels.size() != p0.kernels.size()) {
-                note(fmt::format("chip {}: {} kernels, chip 0 {}", c, pc.kernels.size(), p0.kernels.size()));
+            const auto& chip_program = chips.programs[c].descriptor;
+            if (chip_program.kernels.size() != chip0_program.kernels.size()) {
+                note(fmt::format(
+                    "chip {}: {} kernels, chip 0 {}", c, chip_program.kernels.size(), chip0_program.kernels.size()));
                 continue;
             }
-            for (size_t k = 0; k < p0.kernels.size(); ++k) {
-                const auto& a = p0.kernels[k];
-                const auto& b = pc.kernels[k];
+            for (size_t k = 0; k < chip0_program.kernels.size(); ++k) {
+                const auto& a = chip0_program.kernels[k];
+                const auto& b = chip_program.kernels[k];
                 if (a.kernel_source != b.kernel_source || a.core_ranges != b.core_ranges ||
                     a.compile_time_args != b.compile_time_args ||
                     a.named_compile_time_args != b.named_compile_time_args || a.defines != b.defines) {
@@ -329,19 +336,19 @@ RoutedExpertsCombineFactory::cached_mesh_workload_t RoutedExpertsCombineFactory:
                         a.kernel_source,
                         c));
                 }
-                const auto &ca = a.common_runtime_args, &cb = b.common_runtime_args;
-                for (size_t i = 0; i < std::max(ca.size(), cb.size()); ++i) {
-                    if (at(ca, i) != at(cb, i)) {
+                const auto &chip0_common_args = a.common_runtime_args, &chip_common_args = b.common_runtime_args;
+                for (size_t i = 0; i < std::max(chip0_common_args.size(), chip_common_args.size()); ++i) {
+                    if (at(chip0_common_args, i) != at(chip_common_args, i)) {
                         note(fmt::format(
                             "kernel {} ({}) common arg {} (of {} / {}): chip 0 = {}, chip {} = {}",
                             k,
                             a.kernel_source,
                             i,
-                            ca.size(),
-                            cb.size(),
-                            at(ca, i),
+                            chip0_common_args.size(),
+                            chip_common_args.size(),
+                            at(chip0_common_args, i),
                             c,
-                            at(cb, i)));
+                            at(chip_common_args, i)));
                     }
                 }
                 // (per core: the union of both chips' cores with args)
@@ -353,11 +360,11 @@ RoutedExpertsCombineFactory::cached_mesh_workload_t RoutedExpertsCombineFactory:
                 for (const auto& [core, v] : b.runtime_args) {
                     by_core[{core.x, core.y}].second = &v;
                 }
-                for (const auto& [xy, ab] : by_core) {
-                    const auto& va = ab.first != nullptr ? *ab.first : none;
-                    const auto& vb = ab.second != nullptr ? *ab.second : none;
-                    for (size_t i = 0; i < std::max(va.size(), vb.size()); ++i) {
-                        if (at(va, i) != at(vb, i)) {
+                for (const auto& [xy, core_args] : by_core) {
+                    const auto& chip0_args = core_args.first != nullptr ? *core_args.first : none;
+                    const auto& chip_args = core_args.second != nullptr ? *core_args.second : none;
+                    for (size_t i = 0; i < std::max(chip0_args.size(), chip_args.size()); ++i) {
+                        if (at(chip0_args, i) != at(chip_args, i)) {
                             note(fmt::format(
                                 "kernel {} ({}) core ({}, {}) runtime arg {} (of {} / {}): chip 0 = {}, chip {} = {}",
                                 k,
@@ -365,11 +372,11 @@ RoutedExpertsCombineFactory::cached_mesh_workload_t RoutedExpertsCombineFactory:
                                 xy.first,
                                 xy.second,
                                 i,
-                                va.size(),
-                                vb.size(),
-                                at(va, i),
+                                chip0_args.size(),
+                                chip_args.size(),
+                                at(chip0_args, i),
                                 c,
-                                at(vb, i)));
+                                at(chip_args, i)));
                         }
                     }
                 }
@@ -413,10 +420,10 @@ RoutedExpertsCombineFactory::cached_mesh_workload_t RoutedExpertsCombineFactory:
     for (size_t i = 0; i < one.workload.programs.size(); ++i) {
         const auto& [r, desc] = one.workload.programs[i];
         // (the descriptor holds every address whole: the flat expert's were added before the args moved)
-        shared_variables_t sv{
+        shared_variables_t shared_variables{
             .addresses = program_addresses(converted, builds[i], i, p, desc, bufs[CombineBuf::Arena])};
         add_chip_program(workload, one, i, tt::tt_metal::Program(desc));
-        shared.emplace(r, std::move(sv));
+        shared.emplace(r, std::move(shared_variables));
     }
     return cached_mesh_workload_t{std::move(workload), std::move(shared)};
 }
@@ -430,10 +437,10 @@ void RoutedExpertsCombineFactory::override_runtime_arguments(
     using namespace routed_experts_combine_factory_detail;
     const auto bufs = buffers_of(t, output);
     const auto sources = arg_sources(t, bufs);
-    for (auto& [range, sv] : cached.shared_variables) {
+    for (auto& [range, shared_variables] : cached.shared_variables) {
         // (the report is per-core args in the DRAM tables, its addresses fixups: the sources cover it)
         write_program_addresses(
-            cached.workload.get_programs().at(range), sv.addresses, sources, bufs[CombineBuf::Arena]);
+            cached.workload.get_programs().at(range), shared_variables.addresses, sources, bufs[CombineBuf::Arena]);
     }
 }
 

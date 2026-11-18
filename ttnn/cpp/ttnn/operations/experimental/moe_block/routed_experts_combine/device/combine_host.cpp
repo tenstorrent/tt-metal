@@ -23,33 +23,35 @@ RowSlot row_slot(uint32_t W) {
 }
 
 StateLayout state_layout(uint32_t N, uint32_t A, uint32_t grants_per_source) {
-    const uint32_t AP = (A + 3) / 4 * 4;
-    const uint32_t rw = align64(4ull * N * AP);
+    const uint32_t accumulators_padded = (A + 3) / 4 * 4;
+    const uint32_t region_bytes = align64(4ull * N * accumulators_padded);
     StateLayout s;
     s.grants_per_source = grants_per_source;
     s.credits_received_offset = 0;
-    s.rows_sent_offset = rw;
-    s.credits_to_return_offset = 2 * rw;
-    s.ring_layouts_received_offset = 3 * rw;
-    s.ring_layouts_to_forward_offset = 4 * rw;
-    s.rows_sent_at_call_start_offset = 5 * rw;
-    s.counts_offset = 6 * rw;
+    s.rows_sent_offset = region_bytes;
+    s.credits_to_return_offset = 2 * region_bytes;
+    s.ring_layouts_received_offset = 3 * region_bytes;
+    s.ring_layouts_to_forward_offset = 4 * region_bytes;
+    s.rows_sent_at_call_start_offset = 5 * region_bytes;
+    s.counts_offset = 6 * region_bytes;
     if (grants_per_source) {  // (shared landing: the grant rings, before the counts)
         s.grant_ids_offset = s.counts_offset;
-        s.grant_snapshots_offset = align64(s.grant_ids_offset + 4ull * N * AP * grants_per_source);
-        s.counts_offset = align64(s.grant_snapshots_offset + 4ull * N * AP * (1 + grants_per_source));
+        s.grant_snapshots_offset = align64(s.grant_ids_offset + 4ull * N * accumulators_padded * grants_per_source);
+        s.counts_offset = align64(s.grant_snapshots_offset + 4ull * N * accumulators_padded * (1 + grants_per_source));
     }
     s.misc_words_offset = s.counts_offset + 512;
     s.row_headers_offset = s.misc_words_offset + kMiscBytes;
     s.rings_offset = align64(
-        s.row_headers_offset + N * kNumHeaders * kHeaderStride + kNumHeaders * 4 * AP * (1 + grants_per_source));
+        s.row_headers_offset + N * kNumHeaders * kHeaderStride +
+        kNumHeaders * 4 * accumulators_padded * (1 + grants_per_source));
     return s;
 }
 
-uint32_t acc_cb_bytes(uint32_t S, uint32_t A, uint32_t NT, uint32_t rows, uint32_t tab) {
+uint32_t acc_cb_bytes(uint32_t S, uint32_t A, uint32_t row_tiles, uint32_t rows, uint32_t tab_cb_bytes) {
     const uint32_t max_tokens_per_accumulator = (S + A - 1) / A;
-    return align64(tab) + align64(rows * NT * kTile) + align64(rows * 32) +
-           align64(max_tokens_per_accumulator * NT * 4096) + align64(2 * NT * kTile) + align64(rows * kTile);
+    return align64(tab_cb_bytes) + align64(rows * row_tiles * kTile) + align64(rows * 32) +
+           align64(max_tokens_per_accumulator * row_tiles * 4096) + align64(2 * row_tiles * kTile) +
+           align64(rows * kTile);
 }
 
 CombineLayout combine_l1_layout(
@@ -64,14 +66,14 @@ CombineLayout combine_l1_layout(
     uint32_t local_ring_slots_reserved,
     bool shared_landing,
     uint32_t pool_slots) {
-    const auto pc = row_slot(W);
-    const int64_t slot_bytes = pc.slot_bytes;
+    const auto slot_sizes = row_slot(W);
+    const int64_t slot_bytes = slot_sizes.slot_bytes;
     const int64_t state_bytes = state_layout(N, A, shared_landing ? kGrants : 0).rings_offset;
     const uint32_t max_tokens_per_accumulator = (S + A - 1) / A;
     CombineLayout out;
-    out.slot_bytes = pc.slot_bytes;
-    out.accumulator_fp32_bytes = max_tokens_per_accumulator * pc.row_tiles * 4096;
-    out.accumulator_cb_bytes = acc_cb_bytes(S, A, pc.row_tiles, pool_slots > 0 ? kPoolRows : 2);
+    out.slot_bytes = slot_sizes.slot_bytes;
+    out.accumulator_fp32_bytes = max_tokens_per_accumulator * slot_sizes.row_tiles * 4096;
+    out.accumulator_cb_bytes = acc_cb_bytes(S, A, slot_sizes.row_tiles, pool_slots > 0 ? kPoolRows : 2);
     out.state_bytes = static_cast<uint32_t>(state_bytes);
     const int64_t arena = arena_bytes;
     int64_t accumulator_cb_bytes = out.accumulator_cb_bytes;
@@ -98,7 +100,11 @@ CombineLayout combine_l1_layout(
         std::min<int64_t>({static_cast<int64_t>(depth) * (N - 1), fit, landing_slots_cap});
     if (shared_landing && landing_on_flat_expert_cores) {  // (CB_TAB holds the pool's owners / free list: sized by it)
         out.accumulator_cb_bytes = acc_cb_bytes(
-            S, A, pc.row_tiles, kPoolRows, acc_tab_bytes(true, static_cast<uint32_t>(landing_slots_per_accumulator)));
+            S,
+            A,
+            slot_sizes.row_tiles,
+            kPoolRows,
+            acc_tab_bytes(true, static_cast<uint32_t>(landing_slots_per_accumulator)));
         accumulator_cb_bytes = out.accumulator_cb_bytes;
     }
     out.landing_slots_per_accumulator = static_cast<int32_t>(landing_slots_per_accumulator);
@@ -165,7 +171,7 @@ CombineAuto combine_auto(
     if (!landing_on_flat(landing)) {
         pool_slots = 0;
     }
-    CombineAuto res;
+    CombineAuto result;
     std::vector<std::string> why;
     auto score = [](const CombineAutoChoice& c) {
         return std::make_tuple(
@@ -195,7 +201,7 @@ CombineAuto combine_auto(
         CombineLayout last;
         for (const uint32_t local_reserve : {8u, 2u}) {
             for (const uint32_t injection_slots : {64u, 32u, 16u, 8u}) {
-                auto lay = combine_l1_layout(
+                auto layout = combine_l1_layout(
                     N,
                     S,
                     W,
@@ -207,8 +213,8 @@ CombineAuto combine_auto(
                     local_reserve,
                     shared_landing,
                     pool_slots);
-                if (!lay.fits) {
-                    last = lay;
+                if (!layout.fits) {
+                    last = layout;
                     continue;
                 }
                 CombineAutoChoice cand{
@@ -218,7 +224,7 @@ CombineAuto combine_auto(
                     depth,
                     local_reserve,
                     shared_landing,
-                    lay};
+                    layout};
                 if (!mode_best || score(cand) > score(*mode_best)) {
                     mode_best = cand;
                 }
@@ -228,27 +234,28 @@ CombineAuto combine_auto(
             why.push_back(fmt::format("{} A {}: {} at the shallowest rings", name, A, last.why));
             continue;
         }
-        (accumulators_on_ports ? res.accumulators_on_ports : res.ports_apart) = mode_best;
+        (accumulators_on_ports ? result.accumulators_on_ports : result.ports_apart) = mode_best;
     }
-    for (const auto* m : {&res.ports_apart, &res.accumulators_on_ports}) {  // (the modes ranked as combine_choice_key)
+    for (const auto* m :
+         {&result.ports_apart, &result.accumulators_on_ports}) {  // (the modes ranked as combine_choice_key)
         if (!m->has_value()) {
             continue;
         }
         uint32_t a_ref = (*m)->accumulator_count;
-        for (const auto* o : {&res.ports_apart, &res.accumulators_on_ports}) {
+        for (const auto* o : {&result.ports_apart, &result.accumulators_on_ports}) {
             a_ref = o->has_value() ? std::max(a_ref, (*o)->accumulator_count) : a_ref;
         }
-        if (!res.best || combine_choice_key(**m, a_ref) > combine_choice_key(*res.best, a_ref)) {
-            res.best = *m;
+        if (!result.best || combine_choice_key(**m, a_ref) > combine_choice_key(*result.best, a_ref)) {
+            result.best = *m;
         }
     }
-    res.fits = res.best.has_value();
-    if (!res.fits) {
+    result.fits = result.best.has_value();
+    if (!result.fits) {
         for (size_t i = 0; i < why.size(); ++i) {
-            res.why += (i ? "; " : "") + why[i];
+            result.why += (i ? "; " : "") + why[i];
         }
     }
-    return res;
+    return result;
 }
 
 std::tuple<uint32_t, bool, uint32_t, uint32_t, uint32_t, uint32_t> combine_choice_key(

@@ -21,6 +21,7 @@ from loguru import logger
 
 import ttnn
 from models.common.utility_functions import comp_pcc
+from models.demos.deepseek_v3_d_p.tt.moe_impl import moe_block_fabric_payload
 
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
@@ -110,7 +111,7 @@ CASES = [Case("glm53", 640), Case("glm53", 384)]
 
 
 def _payload(model):
-    return (2 * model.routed_width + 32 + 63) // 64 * 64  # (moe_impl.moe_block_fabric_payload)
+    return moe_block_fabric_payload(model.routed_width)
 
 
 def _device_params(model):

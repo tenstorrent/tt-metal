@@ -68,6 +68,11 @@ inline constexpr uint32_t kManifestBatch = 16;
 inline uint32_t default_pack(uint32_t row_bytes, size_t max_payload_bytes) {
     return 2 * static_cast<size_t>(row_bytes) <= max_payload_bytes ? 2 : 1;
 }
+// Fabric packets a row: 1 when a row fits the payload, else the fewest equal pieces that do (a mesh opened with a payload
+// below a row, e.g. half a GLM-5.3 token: the routers' 12 KB NOC1 DRAM writes hang the DRAM endpoint, tt-metal#64573).
+inline uint32_t row_pieces(uint32_t row_bytes, size_t max_payload_bytes) {
+    return static_cast<uint32_t>((row_bytes + max_payload_bytes - 1) / max_payload_bytes);
+}
 
 // CB sizes in bytes on every port core.
 struct CbSizes {

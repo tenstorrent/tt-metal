@@ -68,7 +68,8 @@ RowSlot row_slot(uint32_t W);
 
 // The per-core state block of every combine core: byte offsets from the core's arena. Each per-(chip, accumulator)
 // table holds N x AP uint32 words (AP: the accumulator count rounded up to 4). The kernels get these offsets as
-// compile-time args (combine_port_writer.cpp names them CRED, USED, RET, MISC, HDRS, RINGS, LAYR, LAYO, U0).
+// compile-time args (combine_port_writer.cpp names them CRED, USED, credits_to_return_offset, MISC, HDRS, RINGS, LAYR,
+// LAYO, rows_sent_at_call_start_offset).
 //
 //   offset                          | at           | words
 //   --------------------------------+--------------+-----------------------------------------------------------------
@@ -107,11 +108,13 @@ struct StateLayout {
 StateLayout state_layout(uint32_t N, uint32_t A, uint32_t grants_per_source = 0);
 
 // _acc_cbs: an accumulator's CB bytes (CB_TAB, CB_ROW, CB_META, CB_ACC, CB_OUT, CB_W; each 64 B aligned).
-uint32_t acc_cb_bytes(uint32_t S, uint32_t A, uint32_t NT, uint32_t rows = 2, uint32_t tab = kTabCbBytes);
+uint32_t acc_cb_bytes(
+    uint32_t S, uint32_t A, uint32_t row_tiles, uint32_t rows = 2, uint32_t tab_cb_bytes = kTabCbBytes);
 // an accumulator's CB_TAB bytes: the shared landing's slot owners (1 B) and free list (2 B a slot) last
 // (accumulator_reader.cpp: plan words, grant queues, trailer probes, zeros, then them from 1600 B)
-inline uint32_t acc_tab_bytes(bool shared, uint32_t psl) {
-    return shared ? std::max<uint32_t>(kTabCbBytes, align64(1600 + 4 + 3 * psl + 64)) : kTabCbBytes;
+inline uint32_t acc_tab_bytes(bool shared, uint32_t landing_slots_per_accumulator) {
+    return shared ? std::max<uint32_t>(kTabCbBytes, align64(1600 + 4 + 3 * landing_slots_per_accumulator + 64))
+                  : kTabCbBytes;
 }
 // the accumulator's row CB depth (rows, its meta and weight CBs too) with the rings on the flat expert cores: its row
 // reads cross the NoC, kPoolRows of them in flight

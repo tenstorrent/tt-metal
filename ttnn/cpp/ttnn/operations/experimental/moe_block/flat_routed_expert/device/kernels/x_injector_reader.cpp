@@ -38,20 +38,25 @@ void kernel_main() {
     constexpr uint32_t rm_cb = get_named_compile_time_arg_val("x_row_major_cb");
     constexpr uint32_t row_bytes = get_named_compile_time_arg_val("x_page_bytes");
     constexpr uint32_t num_e = flat_options::local_experts;
-    constexpr uint32_t mt = flat_options::row_tiles_per_sub_block;
-    constexpr uint32_t nsb = flat_options::super_blocks_per_sub_block;
+    constexpr uint32_t row_tiles = flat_options::row_tiles_per_sub_block;
+    constexpr uint32_t super_blocks_per_sub_block = flat_options::super_blocks_per_sub_block;
     constexpr uint32_t batch = get_named_compile_time_arg_val("row_chunks_per_read_barrier");
-    constexpr uint32_t sbt = flat_options::super_block_tiles;
-    constexpr uint32_t seg = sbt * 64;  // one row of a super-block: sbt tiles x 32 bf16
+    constexpr uint32_t super_block_tiles = flat_options::super_block_tiles;
+    constexpr uint32_t segment_bytes =
+        super_block_tiles * 64;  // one row of a super-block: super_block_tiles tiles x 32 bf16
     // x page = row_bytes (x_page_bytes) / pages per row (x_pages_per_row): a token row is PPR consecutive pages (PPR 8
-    // at H 4096 spreads every row over the 8 DRAM banks); a segment is one read (page >= seg) or seg / page reads
-    constexpr uint32_t ppr = get_named_compile_time_arg_val("x_pages_per_row");
-    constexpr uint32_t pread = row_bytes < seg ? row_bytes : seg;
-    const auto xg = TensorAccessor(flat_acc::x, moe_block_args::arg(0), row_bytes);
+    // at H 4096 spreads every row over the 8 DRAM banks); a segment is one read (page >= segment_bytes) or
+    // segment_bytes / page reads
+    constexpr uint32_t pages_per_row = get_named_compile_time_arg_val("x_pages_per_row");
+    constexpr uint32_t pread = row_bytes < segment_bytes ? row_bytes : segment_bytes;
+    const auto x_accessor = TensorAccessor(flat_acc::x, moe_block_args::arg(0), row_bytes);
     auto read_seg = [&](uint32_t row, uint32_t j, uint32_t dst) {
-        const uint32_t b = j * seg;
-        for (uint32_t q = 0; q < seg; q += pread) {
-            noc_async_read(xg.get_noc_addr(row * ppr + (b + q) / row_bytes, (b + q) % row_bytes), dst + q, pread);
+        const uint32_t b = j * segment_bytes;
+        for (uint32_t q = 0; q < segment_bytes; q += pread) {
+            noc_async_read(
+                x_accessor.get_noc_addr(row * pages_per_row + (b + q) / row_bytes, (b + q) % row_bytes),
+                dst + q,
+                pread);
         }
     };
     // x_indexed: one page holds the whole [1, rows] index row: address it as bank 0's page 0 plus a byte offset
@@ -75,43 +80,49 @@ void kernel_main() {
     ExpertSchedule schedule;
     load_schedule<num_e>(schedule, 3, schedule_scratch(ScratchOwner::Brisc));
     {
-        const uint32_t tot = schedule.total_sub_blocks * nsb;
+        const uint32_t total_super_blocks = schedule.total_sub_blocks * super_blocks_per_sub_block;
         cb_reserve_back(tt::CBIndex::c_6, 1);
         *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_write_ptr(tt::CBIndex::c_6)) =
-            tot > soff ? (tot - soff + stride - 1) / stride : 0;
+            total_super_blocks > soff ? (total_super_blocks - soff + stride - 1) / stride : 0;
         cb_push_back(tt::CBIndex::c_6, 1);
     }
     for (uint32_t a = 0; a < schedule.entries; ++a) {
         const uint32_t off = schedule.first_row[a], count = schedule.tokens[a];
-        const uint32_t subs = (count + mt * 32 - 1) / (mt * 32);
+        const uint32_t subs = (count + row_tiles * 32 - 1) / (row_tiles * 32);
         for (uint32_t s = 0; s < subs; ++s) {
             volatile tt_l1_ptr uint32_t* idx = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(idx_l1);
             if constexpr (flat_options::x_indexed) {
                 bool mine = false;  // does this relay take any of the sub-block's super-blocks
-                for (uint32_t j = 0; j < nsb && !mine; ++j) {
+                for (uint32_t j = 0; j < super_blocks_per_sub_block && !mine; ++j) {
                     mine = (g + j) % stride == soff;
                 }
                 if (mine) {
-                    const uint32_t rows = count - s * mt * 32 < mt * 32 ? count - s * mt * 32 : mt * 32;
+                    const uint32_t rows =
+                        count - s * row_tiles * 32 < row_tiles * 32 ? count - s * row_tiles * 32 : row_tiles * 32;
                     // whole 32-row groups: the region is padded to 32 rows, so the read stays inside it
                     noc_async_read(
-                        idx_base + (off + s * mt * 32) * 4, reinterpret_cast<uint32_t>(idx), (rows + 31) / 32 * 128);
+                        idx_base + (off + s * row_tiles * 32) * 4,
+                        reinterpret_cast<uint32_t>(idx),
+                        (rows + 31) / 32 * 128);
                     noc_async_read_barrier();
                 }
             }
-            for (uint32_t j = 0; j < nsb; ++j, ++g) {
+            for (uint32_t j = 0; j < super_blocks_per_sub_block; ++j, ++g) {
                 if (g % stride != soff) {
                     continue;
                 }
-                for (uint32_t m = 0; m < mt; ++m) {
+                for (uint32_t m = 0; m < row_tiles; ++m) {
                     if (in_batch == 0) {
                         cb_reserve_back(rm_cb, 32 * batch);
                         l1 = get_write_ptr(rm_cb);
                     }
-                    const uint32_t dst = l1 + in_batch * 32 * seg;
-                    const uint32_t r0 = s * mt * 32 + m * 32;
-                    for (uint32_t r = 0; r < 32 && r0 + r < count; ++r) {
-                        read_seg(flat_options::x_indexed ? idx[m * 32 + r] : off + r0 + r, j, dst + r * seg);
+                    const uint32_t dst = l1 + in_batch * 32 * segment_bytes;
+                    const uint32_t first_row = s * row_tiles * 32 + m * 32;
+                    for (uint32_t r = 0; r < 32 && first_row + r < count; ++r) {
+                        read_seg(
+                            flat_options::x_indexed ? idx[m * 32 + r] : off + first_row + r,
+                            j,
+                            dst + r * segment_bytes);
                     }
                     if (++in_batch == batch) {
                         flush();

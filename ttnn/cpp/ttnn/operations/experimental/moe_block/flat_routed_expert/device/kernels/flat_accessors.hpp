@@ -16,7 +16,8 @@ constexpr auto x = TensorAccessorArgs<0>();                                     
 constexpr auto y = TensorAccessorArgs<x.next_compile_time_args_offset()>();       // the output
 constexpr auto counts = TensorAccessorArgs<y.next_compile_time_args_offset()>();  // tokens per global expert
 constexpr auto regions = TensorAccessorArgs<counts.next_compile_time_args_offset()>();
-constexpr auto ids = TensorAccessorArgs<regions.next_compile_time_args_offset()>();  // the local experts' global ids
-constexpr auto token_index = TensorAccessorArgs<ids.next_compile_time_args_offset()>();
+constexpr auto global_expert_ids =
+    TensorAccessorArgs<regions.next_compile_time_args_offset()>();  // the local experts' global ids
+constexpr auto token_index = TensorAccessorArgs<global_expert_ids.next_compile_time_args_offset()>();
 constexpr auto y_table = TensorAccessorArgs<token_index.next_compile_time_args_offset()>();  // the combine's row tables
 }  // namespace flat_acc

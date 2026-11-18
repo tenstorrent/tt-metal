@@ -225,7 +225,13 @@ Args ChipProgram::port_block(XDirection direction, uint32_t link) const {
         const auto router_virtual_core = model.virtual_core(model.router_cores[router_core]);
         out.push_back(noc_word(router_virtual_core));
     }
-    const uint32_t tiles_per_payload = std::max<uint32_t>(1, model.payload / kFp32TileBytes);
+    // (the router logits stream sends whole fp32 tiles: a payload below one would overrun the router's slot)
+    TT_FATAL(
+        model.payload >= kFp32TileBytes,
+        "moe_head: the fabric payload {} B < an fp32 tile ({} B)",
+        model.payload,
+        kFp32TileBytes);
+    const uint32_t tiles_per_payload = model.payload / kFp32TileBytes;
     TT_FATAL(
         destination_positions.size() * router_core_indices.size() <= model.port_words,
         "moe_head: the port's sub-block words: {} a port",

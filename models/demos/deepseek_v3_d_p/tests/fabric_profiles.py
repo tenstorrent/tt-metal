@@ -6,6 +6,7 @@
 Return a fresh dictionary for every ``pytest.param`` so cases cannot share mutable fixture state.
 """
 
+import os
 import re
 from pathlib import Path
 
@@ -32,6 +33,9 @@ MODEL_PAYLOAD_CONFIGS = {"kimi_k3_1": KimiK31Config, "glm_5_3": GLM53Config}
 def model_fabric_payload(variant_name):
     """The production fabric packet size for `variant_name`, or None (the arch maximum) for a variant without one."""
     config = MODEL_PAYLOAD_CONFIGS.get(variant_name)
+    override = os.environ.get("MODEL_FABRIC_PAYLOAD_OVERRIDE")  # experiment hook: open the mesh at this payload
+    if override:
+        return int(override)
     return moe_fabric_payload(config) if config else None
 
 

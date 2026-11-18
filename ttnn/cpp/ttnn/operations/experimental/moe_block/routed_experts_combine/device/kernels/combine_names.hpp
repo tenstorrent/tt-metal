@@ -80,6 +80,7 @@ inline constexpr const char* kChipCount = "chip_count";
 inline constexpr const char* kFabricLinks = "fabric_links";
 inline constexpr const char* kMaxTokensPerAccumulator = "max_tokens_per_accumulator";
 inline constexpr const char* kRowHeaderCount = "row_header_count";
+inline constexpr const char* kRowPieces = "row_pieces";
 inline constexpr const char* kRowHeaderStride = "row_header_stride";
 
 // ---- the state layout (combine_state_layout) and the credit policy ----
