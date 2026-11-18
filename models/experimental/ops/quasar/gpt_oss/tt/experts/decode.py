@@ -11,6 +11,25 @@ from .operations import apply_expert_parallel_allreduce, apply_swiglu, apply_ten
 from .weights import ExpertWeights
 
 
+def _down_output_memory_config(down_input, output_width, mesh_device):
+    """Memory config for `down`, the output of the down projection: SRAM, unless `down` and its input `down_input`
+    do not fit there together.
+
+    `down_input` and `down` are interleaved over every core's SRAM bank, and `down_input` stays allocated while
+    the op runs. On a small device (for example 2 cores), `down_input` and `down` together need more than a bank
+    holds, so `down` goes to DRAM. Half a bank is the limit, which leaves the other half for the op's circular
+    buffers and other live tensors.
+    """
+    grid = mesh_device.compute_with_storage_grid_size()
+    num_banks = grid.x * grid.y
+    input_bytes = down_input.volume() * down_input.element_size()
+    output_bytes = input_bytes // down_input.padded_shape[-1] * output_width
+    l1_bank_size = ttnn._ttnn.reports.get_device_info(mesh_device).l1_bank_size
+    if (input_bytes + output_bytes) / num_banks > l1_bank_size / 2:
+        return ttnn.DRAM_MEMORY_CONFIG
+    return ttnn.L1_MEMORY_CONFIG
+
+
 def decode_forward(
     hidden_states,
     routing_weights,
@@ -140,7 +159,7 @@ def decode_forward(
         # the receivers deadlock in noc_semaphore_wait. Inferring the count is robust.
         # See tenstorrent/tt-metal#45943 (op deadlock) / #45052 (gpt-oss hang).
         nnz=None,
-        memory_config=ttnn.L1_MEMORY_CONFIG,
+        memory_config=_down_output_memory_config(down_input, weights.down_proj.shape[-1], mesh_device),
         output_tile=output_tile,
         is_input_a_sparse=True,
         program_config=program_config.get_decode_down_config(
