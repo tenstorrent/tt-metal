@@ -6,7 +6,6 @@ Nothing here writes a device register.
 """
 
 import os
-import subprocess
 import sys
 from pathlib import Path
 
@@ -30,13 +29,31 @@ def niu_addr(tile, noc, offset, arch="blackhole"):
 
 def card_busy(device_path):
     """True when another process has the device node open."""
-    try:
-        out = subprocess.run(
-            ["fuser", device_path], capture_output=True, text=True, timeout=20
-        ).stdout
-    except (OSError, subprocess.SubprocessError):
-        return False
-    return any(ch.isdigit() for ch in out)
+    target = os.path.realpath(device_path)
+    me = str(os.getpid())
+    for pid in os.listdir("/proc"):
+        if not pid.isdigit() or pid == me:
+            continue
+        fd_dir = os.path.join("/proc", pid, "fd")
+        try:
+            fds = os.listdir(fd_dir)
+        except OSError:
+            continue
+        for fd in fds:
+            try:
+                if os.path.realpath(os.path.join(fd_dir, fd)) == target:
+                    return True
+            except OSError:
+                continue
+    return False
+
+
+def executable(path):
+    """Absolute path of an existing executable file, or exit."""
+    resolved = Path(path).resolve()
+    if not resolved.is_file() or not os.access(resolved, os.X_OK):
+        raise SystemExit(f"not an executable file: {path}")
+    return str(resolved)
 
 
 class Reader:
