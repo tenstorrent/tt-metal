@@ -58,8 +58,7 @@ constexpr uint32_t kCceUncachedAlias = 0x800000;
 constexpr auto kTimeout = std::chrono::minutes(20);
 
 // The link record internal_::cce_eth::EthLink (tt-2xx/quasar/eth_cce_send.h) as the test reads it: `valid` in word 1,
-// and per PLAN-0008 § Design `kind` in word 2, the first reserved word. These mirror EthLink and must be replaced by
-// the header's names once the link switch lands.
+// and per PLAN-0008 § Design `kind` in word 2, the first reserved word. These mirror EthLink.
 constexpr uint32_t kEthLinkValidWord = 1;
 constexpr uint32_t kEthLinkValid = 0x4B4E494C;  // MEM_IERISC_FABRIC_ETH_LINK_VALID
 constexpr uint32_t kEthLinkKindWord = 2;
@@ -230,14 +229,13 @@ EthLinkRecord read_eth_link(ChipId chip, const CoreCoord& virtual_core) {
     return {words[0], words[1], words[2], words[3]};
 }
 
-// Called from the extension, so after device init wrote the link records and before the routers launch. Sets the NOC
-// kind in the record of every fabric router of `device` whose link is in `noc_links`, and returns those routers. Writes
-// to the device, which the extension's contract (fabric_init.hpp) does not allow; PLAN-0008 decision -D3 puts the kind
-// write here.
-std::vector<NocRouter> set_noc_links(tt::tt_metal::IDevice* device, const NocLinks& noc_links) {
+// Sets the NOC kind in the record of every fabric router of `chip` whose link is in `noc_links`, and returns those
+// routers. Called from the extension under std::call_once, after device init wrote the records and before any device
+// is configured (PLAN-0008 § Where the Phase 1 test writes `kind`, hub 62db7e799795-D8).
+std::vector<NocRouter> set_noc_links(ChipId chip, const NocLinks& noc_links) {
     const auto& control_plane = MetalContext::instance().get_control_plane();
     const auto& cluster = MetalContext::instance().get_cluster();
-    const FabricNodeId node = control_plane.get_fabric_node_id_from_physical_chip_id(device->id());
+    const FabricNodeId node = control_plane.get_fabric_node_id_from_physical_chip_id(chip);
     std::vector<NocRouter> routers;
     for (const auto& [chan, direction] : control_plane.get_active_fabric_eth_channels(node)) {
         const FabricNodeId peer = control_plane.get_connected_mesh_chip_chan_ids(node, chan).first;
@@ -248,15 +246,14 @@ std::vector<NocRouter> set_noc_links(tt::tt_metal::IDevice* device, const NocLin
         if (!noc) {
             continue;
         }
-        const CoreCoord logical =
-            cluster.get_soc_desc(device->id()).get_eth_core_for_channel(chan, tt::CoordSystem::LOGICAL);
+        const CoreCoord logical = cluster.get_soc_desc(chip).get_eth_core_for_channel(chan, tt::CoordSystem::LOGICAL);
         const CoreCoord virtual_core =
-            cluster.get_virtual_coordinate_from_logical_coordinates(device->id(), logical, CoreType::ETH);
-        NocRouter router{device->id(), virtual_core, read_eth_link(device->id(), virtual_core)};
+            cluster.get_virtual_coordinate_from_logical_coordinates(chip, logical, CoreType::ETH);
+        NocRouter router{chip, virtual_core, read_eth_link(chip, virtual_core)};
         EthLinkRecord record = router.as_found;
         record[kEthLinkKindWord] = kEthLinkKindNoc;
         cluster.write_core_immediate(
-            record.data(), sizeof(record), tt_cxy_pair(device->id(), virtual_core), eth_link_address());
+            record.data(), sizeof(record), tt_cxy_pair(chip, virtual_core), eth_link_address());
         routers.push_back(router);
     }
     return routers;
@@ -411,15 +408,24 @@ void KeraunosCoLaunchedWorkers::run_line_unicast(const NocLinks& noc_links) {
     std::mutex programs_mutex;
     std::map<ChipId, tt::tt_metal::Program*> programs;
     std::vector<NocRouter> noc_routers;
+    std::once_flag noc_links_written;
     set_fabric_program_extension([&](tt::tt_metal::IDevice* device, tt::tt_metal::Program& program) {
         add_line_workers(device, program, nonce, seed);
-        std::vector<NocRouter> routers;
-        if (!is_mock() && !noc_links.empty()) {
-            routers = set_noc_links(device, noc_links);
-        }
+        // Every call waits here, so the records of every chip are written before the first device is configured.
+        std::call_once(noc_links_written, [&] {
+            if (is_mock()) {
+                return;
+            }
+            const auto& control_plane = MetalContext::instance().get_control_plane();
+            const MeshId mesh = control_plane.get_fabric_node_id_from_physical_chip_id(0).mesh_id;
+            for (uint32_t i = 0; i < num_chips; ++i) {
+                const auto routers = set_noc_links(
+                    control_plane.get_physical_chip_id_from_fabric_node_id(FabricNodeId(mesh, i)), noc_links);
+                noc_routers.insert(noc_routers.end(), routers.begin(), routers.end());
+            }
+        });
         const std::scoped_lock lock(programs_mutex);
         programs[device->id()] = &program;
-        noc_routers.insert(noc_routers.end(), routers.begin(), routers.end());
     });
     DoSetUpTestSuite(tt::tt_fabric::FabricConfig::FABRIC_1D);
     ASSERT_GE(devices_.size(), 2u);
