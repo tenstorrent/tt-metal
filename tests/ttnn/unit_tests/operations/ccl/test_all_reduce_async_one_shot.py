@@ -57,14 +57,9 @@ def _width_mem(shard_w, grid_xy=GRID):
     )
 
 
-def _setup(mesh_device, grid_xy=GRID):
-    tp = list(mesh_device.shape)[1]
+def _persistent_buffer(mesh_device, tp, grid_xy=GRID):
     ncores = grid_xy[0] * grid_xy[1]
-    mem = _width_mem(DIM // ncores, grid_xy)
-    grid = mesh_device.compute_with_storage_grid_size()
-    all_cores = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid.x - 1, grid.y - 1))})
-    sems = [ttnn.create_global_semaphore(mesh_device, all_cores, 0) for _ in range(2)]
-    buf = ttnn.from_torch(
+    return ttnn.from_torch(
         torch.zeros([1, 1, ttnn.TILE_SIZE, DIM * tp]),
         dtype=ttnn.bfloat16,
         layout=ttnn.TILE_LAYOUT,
@@ -72,7 +67,16 @@ def _setup(mesh_device, grid_xy=GRID):
         memory_config=_width_mem(DIM * tp // ncores, grid_xy),
         mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
     )
-    return tp, mem, sems, buf
+
+
+def _setup(mesh_device, grid_xy=GRID):
+    tp = list(mesh_device.shape)[1]
+    ncores = grid_xy[0] * grid_xy[1]
+    mem = _width_mem(DIM // ncores, grid_xy)
+    grid = mesh_device.compute_with_storage_grid_size()
+    all_cores = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid.x - 1, grid.y - 1))})
+    sems = [ttnn.create_global_semaphore(mesh_device, all_cores, 0) for _ in range(2)]
+    return tp, mem, sems, _persistent_buffer(mesh_device, tp, grid_xy)
 
 
 def _partials_host(mesh_device, full):
@@ -274,20 +278,29 @@ def test_all_reduce_async_one_shot_refuses_unsplittable_cores(mesh_device, expec
 @pytest.mark.parametrize("device_params", [_fabric_params(ttnn.FabricConfig.FABRIC_1D, 16 << 20)], indirect=True)
 @pytest.mark.parametrize("mesh_device", MESH_1X8, indirect=True)
 def test_all_reduce_async_one_shot_latency(mesh_device):
-    """Traced latency of 64 back-to-back fused all-reduces per replay, default vs one_shot (reported, not a gate)."""
+    """Traced latency of 64 back-to-back fused all-reduces per replay, default vs one_shot (reported, not a gate).
+
+    one_shot calls share one persistent buffer, as a decoder's do. A device can write default-mode call n + 1 into a
+    peer's slot before that peer reduced call n, so default-mode calls alternate between two buffers. Two are enough: a
+    device starts call n + 2 only after every peer sent it call n + 1, which a peer does only after it finished call n.
+    ITERS is even, so buffers and semaphores also alternate from one replay to the next."""
     ITERS, REPLAYS = 64, 20
     tp, mem, sems, buf = _setup(mesh_device)
+    default_bufs = [buf, _persistent_buffer(mesh_device, tp)]
     full, res = _random(tp, 32, seed=7)
     inp = _partials_host(mesh_device, full).to(mesh_device, mem)
     residual = _replicated_host(mesh_device, res).to(mesh_device, mem)
 
     def capture(one_shot):
-        warm = _ar(mesh_device, inp, buf, sems[0], mem, one_shot, residual)
+        bufs = [buf, buf] if one_shot else default_bufs
+        warm = _ar(mesh_device, inp, bufs[0], sems[0], mem, one_shot, residual)
+        # The first traced call uses the warm-up call's buffer and semaphore.
+        ttnn.synchronize_device(mesh_device)
         ttnn.deallocate(warm)
         tid = ttnn.begin_trace_capture(mesh_device, cq_id=0)
         prev = None
         for i in range(ITERS):
-            out = _ar(mesh_device, inp, buf, sems[i % 2], mem, one_shot, residual)
+            out = _ar(mesh_device, inp, bufs[i % 2], sems[i % 2], mem, one_shot, residual)
             if prev is not None:
                 ttnn.deallocate(prev)
             prev = out
