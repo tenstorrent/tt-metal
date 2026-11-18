@@ -6,21 +6,58 @@
 
 #include "cross_entropy_fw_program_factory.hpp"
 #include "metal/common/tensor_validation.hpp"
+#include "metal/ops/log_softmax/device/row_softmax_program.hpp"
 #include "ttnn/device_operation.hpp"
 
 namespace ttml::metal::ops::cross_entropy_fw::device {
+
+namespace {
+// The per-row loss in the input's dtype, tiles and memory configuration. The program writes its tiles in the input's
+// format, so a preallocated output must have exactly this spec.
+tt::tt_metal::TensorSpec output_spec(const ttnn::Tensor& input) {
+    auto shape = input.logical_shape();
+    shape[-1] = 1U;
+    return tt::tt_metal::TensorSpec(
+        shape,
+        tt::tt_metal::TensorLayout(
+            input.dtype(),
+            tt::tt_metal::PageConfig(tt::tt_metal::Layout::TILE, input.tensor_spec().tile()),
+            input.memory_config()));
+}
+}  // namespace
 
 void CrossEntropyForwardDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     const auto& input_tensor = tensor_args.input;
     const auto& target_tensor = tensor_args.target;
     const auto& preallocated_output_tensor = tensor_args.preallocated_output;
-    check_device_tensor(input_tensor, "CrossEntropyForward", "Input");
+    check_device_tensor(
+        input_tensor,
+        "CrossEntropyForward",
+        "Input",
+        {.dtypes = {tt::tt_metal::DataType::BFLOAT16, tt::tt_metal::DataType::FLOAT32},
+         .layout = tt::tt_metal::Layout::TILE,
+         .buffer_type = tt::tt_metal::BufferType::DRAM});
+    // The fused row-softmax program streams interleaved tiles and keeps column indices as exact FP32.
+    TT_FATAL(
+        input_tensor.logical_shape().rank() == 4 && input_tensor.memory_config() == ttnn::DRAM_MEMORY_CONFIG &&
+            row_softmax::supports_tile(input_tensor.tensor_spec().tile()),
+        "CrossEntropyForward: input must be a rank-4 interleaved DRAM tensor of supported tiles, got {} with tile {}",
+        input_tensor.logical_shape(),
+        input_tensor.tensor_spec().tile().get_tile_shape());
+    TT_FATAL(
+        input_tensor.logical_shape()[-1] > 0 && input_tensor.logical_shape()[-1] <= (1U << 24),
+        "CrossEntropyForward: vocabulary width must be in [1, 2^24], got {}",
+        input_tensor.logical_shape()[-1]);
+    // The kernels take tile counts from the padded shape and mask only the last tile's columns past the logical
+    // width; the output has one tile row per logical tile row.
+    check_tile_padding(input_tensor, "CrossEntropyForward", "Input");
     check_device_tensor(
         target_tensor,
         "CrossEntropyForward",
         "Target",
         {.dtypes = {tt::tt_metal::DataType::UINT32}, .layout = tt::tt_metal::Layout::ROW_MAJOR});
+    check_same_device(target_tensor, input_tensor, "CrossEntropyForward", "Target", "Input");
 
     // The reader walks one row-major target page per batch-channel slice of the input
     // (page = tile_row / Ht over NC * Ht rows) and sizes each page read from the target's
@@ -44,7 +81,23 @@ void CrossEntropyForwardDeviceOperation::validate_on_program_cache_miss(
         input_nc_pages);
 
     if (preallocated_output_tensor.has_value()) {
-        check_device_tensor(preallocated_output_tensor.value(), "CrossEntropyForward", "Preallocated Output");
+        const auto& output = preallocated_output_tensor.value();
+        check_device_tensor(
+            output,
+            "CrossEntropyForward",
+            "Preallocated Output",
+            {.dtypes = {tt::tt_metal::DataType::BFLOAT16, tt::tt_metal::DataType::FLOAT32},
+             .buffer_type = tt::tt_metal::BufferType::DRAM});
+        check_same_device(output, input_tensor, "CrossEntropyForward", "Preallocated Output", "Input");
+        // Another dtype or shape would be written past the end of the buffer or read back in the wrong format.
+        const auto expected = output_spec(input_tensor);
+        TT_FATAL(
+            output.tensor_spec() == expected,
+            "CrossEntropyForward: preallocated output must be {} {} in interleaved DRAM like the input, got {} {}",
+            expected.logical_shape(),
+            enchantum::to_string(expected.data_type()),
+            output.logical_shape(),
+            enchantum::to_string(output.dtype()));
     }
 }
 
@@ -53,12 +106,7 @@ CrossEntropyForwardDeviceOperation::spec_return_value_t CrossEntropyForwardDevic
     if (tensor_args.preallocated_output.has_value()) {
         return tensor_args.preallocated_output->tensor_spec();
     }
-    auto input_logical_shape = tensor_args.input.logical_shape();
-    input_logical_shape[-1] = 1U;
-    return tt::tt_metal::TensorSpec(
-        ttnn::Shape(input_logical_shape),
-        tt::tt_metal::TensorLayout(
-            tensor_args.input.dtype(), tt::tt_metal::Layout::TILE, tensor_args.input.memory_config()));
+    return output_spec(tensor_args.input);
 }
 
 CrossEntropyForwardDeviceOperation::tensor_return_value_t CrossEntropyForwardDeviceOperation::create_output_tensors(
