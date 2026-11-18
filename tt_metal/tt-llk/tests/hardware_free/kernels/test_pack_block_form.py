@@ -303,9 +303,7 @@ def test_mirror_cells():
     )
     assert pack_block_form(3, "Bfp8_b", "next", fp32_dest=True) == "block"
     assert pack_block_form(4, "Bfp8_b", "next", fp32_dest=True) == "per_tile"
-    assert (
-        pack_block_form(3, "Bfp8_b", "next", fp32_dest=True, src32=True) == "block"
-    )
+    assert pack_block_form(3, "Bfp8_b", "next", fp32_dest=True, src32=True) == "block"
     assert (
         pack_block_form(4, "Bfp8_b", "next", fp32_dest=True, src32=True) == "per_tile"
     )

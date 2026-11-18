@@ -10,11 +10,11 @@ from conftest import skip_for_wormhole
 from helpers.format_config import DataFormat, InputOutputFormat
 from helpers.golden_generators import FACES_PER_TILE
 from helpers.llk_params import DestAccumulation, DestSync
+from helpers.pack_sweep import SHIM_CONFIG, bind_pack_src_b, sweep_templates
 from helpers.param_config import parametrize
 from helpers.perf.core import ALL_PERF_RUN_TYPES, create_test_or_perf_config
 from helpers.stimuli_config import StimuliConfig
 from helpers.stimuli_generator import generate_stimuli
-from helpers.pack_sweep import SHIM_CONFIG, bind_pack_src_b, sweep_templates
 from helpers.test_variant_parameters import (
     DEST_INDEX,
     DEST_SYNC,

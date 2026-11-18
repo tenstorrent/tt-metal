@@ -1,5 +1,7 @@
 """HiFi crossover (ad hoc): the block-float pack forms of llk_pack_block behind matmul math at LoFi, HiFi2, HiFi3 and HiFi4 (matmul_pack_sweep_test.cpp)."""
 
+from dataclasses import dataclass
+
 import pytest
 from helpers.format_config import DataFormat, InputOutputFormat
 from helpers.golden_generators import TILE_DIM
@@ -13,9 +15,7 @@ from helpers.pack_sweep import SHIM_CONFIG
 from helpers.param_config import parametrize
 from helpers.perf.core import ALL_PERF_RUN_TYPES, PerfConfig
 from helpers.stimuli_config import StimuliConfig
-from dataclasses import dataclass
 from helpers.test_variant_parameters import (
-    TemplateParameter,
     CRK_TILE_DIMM,
     DEST_INDEX,
     DEST_SYNC,
@@ -27,6 +27,7 @@ from helpers.test_variant_parameters import (
     THROTTLE_LEVEL,
     TILE_COUNT,
     UNPACK_TRANS_FACES,
+    TemplateParameter,
 )
 
 F = DataFormat

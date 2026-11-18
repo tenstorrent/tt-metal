@@ -84,9 +84,7 @@ def test_pack_block_alt(
     fmt_a, fmt_b = pair
     wide = dest_acc == DestAccumulation.Yes
     if F32 in pair and not wide:
-        pytest.skip(
-            "the gathered kernels pack a Float32 output from a 32 bit DEST"
-        )
+        pytest.skip("the gathered kernels pack a Float32 output from a 32 bit DEST")
     if l1_acc and fmt_b == B8:
         pytest.skip("packer L1 accumulate on a block float output is not used")
     dest_sync = DestSync.Half if block_tiles <= (4 if wide else 8) else DestSync.Full
