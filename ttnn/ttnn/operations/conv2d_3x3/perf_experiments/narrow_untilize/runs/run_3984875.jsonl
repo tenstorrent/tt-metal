@@ -1,0 +1,8 @@
+{"case": "hs_c32_s1_bf16", "order": "ab", "variant": "base", "pcc": 0.9999524308731546, "equal_first": null, "first": "base"}
+{"case": "hs_c32_s1_bf16", "order": "ab", "variant": "nu", "pcc": 0.9999524308731546, "equal_first": true, "first": "base"}
+{"case": "hs_c32_s1_bf8b", "order": "ab", "variant": "base", "pcc": 0.9998776981331666, "equal_first": null, "first": "base"}
+{"case": "hs_c32_s1_bf8b", "order": "ab", "variant": "nu", "pcc": 0.9998776981331666, "equal_first": true, "first": "base"}
+{"case": "hs_c32_s2_bf16", "order": "ab", "variant": "base", "pcc": 0.9999524337894822, "equal_first": null, "first": "base"}
+{"case": "hs_c32_s2_bf16", "order": "ab", "variant": "nu", "pcc": 0.9999524337894822, "equal_first": true, "first": "base"}
+{"case": "hs_c32_s2_bf8b", "order": "ab", "variant": "base", "pcc": 0.9998775449191938, "equal_first": null, "first": "base"}
+{"case": "hs_c32_s2_bf8b", "order": "ab", "variant": "nu", "pcc": 0.9998775449191938, "equal_first": true, "first": "base"}

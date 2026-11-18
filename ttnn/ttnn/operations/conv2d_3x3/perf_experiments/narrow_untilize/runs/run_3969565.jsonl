@@ -1,0 +1,10 @@
+{"case": "res5_0_conv2", "order": "ab", "variant": "base", "pcc": 0.9998787158606912, "equal_first": null, "first": "base"}
+{"case": "res5_0_conv2", "order": "ab", "variant": "wide", "pcc": 0.9998787158606912, "equal_first": true, "first": "base"}
+{"case": "res5_1_conv2_perf", "order": "ab", "variant": "base", "pcc": 0.9997618602681135, "equal_first": null, "first": "base"}
+{"case": "res5_1_conv2_perf", "order": "ab", "variant": "wide", "pcc": 0.9997618602681135, "equal_first": true, "first": "base"}
+{"case": "aspp_convs_1_perf", "order": "ab", "variant": "base", "pcc": 0.9997626084991099, "equal_first": null, "first": "base"}
+{"case": "aspp_convs_1_perf", "order": "ab", "variant": "wide", "pcc": 0.9997626084991099, "equal_first": true, "first": "base"}
+{"case": "stem_conv2", "order": "ab", "variant": "base", "pcc": 0.9998807064435621, "equal_first": null, "first": "base"}
+{"case": "stem_conv2", "order": "ab", "variant": "wide", "pcc": 0.9998807064435621, "equal_first": true, "first": "base"}
+{"case": "res3_0_conv2", "order": "ab", "variant": "base", "pcc": 0.9998788759745397, "equal_first": null, "first": "base"}
+{"case": "res3_0_conv2", "order": "ab", "variant": "wide", "pcc": 0.9998788759745397, "equal_first": true, "first": "base"}

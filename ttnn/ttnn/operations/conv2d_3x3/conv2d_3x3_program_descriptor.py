@@ -879,6 +879,7 @@ def create_program_descriptor(
         int(b.nslice),
         CB_SLICE_R,
         *_out_subblock(bm, ns),
+        b.untilize_batch_rows,
     ]
 
     writer_ct_args = [

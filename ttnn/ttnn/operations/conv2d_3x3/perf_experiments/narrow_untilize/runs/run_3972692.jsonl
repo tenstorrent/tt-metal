@@ -1,0 +1,2 @@
+{"case": "res4_0_conv2_perf", "order": "ab", "variant": "base", "pcc": -0.0013114521456437836, "equal_first": null, "first": "base"}
+{"case": "res4_0_conv2_perf", "order": "ab", "variant": "nu", "pcc": -0.0013114521456437836, "equal_first": true, "first": "base"}

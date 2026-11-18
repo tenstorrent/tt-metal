@@ -41,6 +41,7 @@
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/perf_instrumentation.hpp"
 #include "conv2d_3x3_nslice_order.hpp"
+#include "conv2d_3x3_narrow_untilize.hpp"
 
 namespace ckl = compute_kernel_lib;
 
@@ -121,6 +122,7 @@ void kernel_main() {
     constexpr uint32_t cb_slice_r = get_compile_time_arg_val(31);
     constexpr uint32_t slice_sb_h = get_compile_time_arg_val(32);
     constexpr uint32_t slice_sb_w = get_compile_time_arg_val(33);
+    constexpr uint32_t untilize_batch_rows = get_compile_time_arg_val(34);
 
     const uint32_t num_m_blocks_this_core = get_arg_val<uint32_t>(0);
     [[maybe_unused]] const bool owns_output_columns = get_arg_val<uint32_t>(1) != 0;
@@ -263,8 +265,15 @@ void kernel_main() {
             // untilize_footprint: the reader streams slab_tile_rows input tile-rows in slab order.
             MaybeDeviceZoneScope("compute_untilize");
             pack_reconfig_l1_acc(0);
-            ckl::untilize<untilize_width_tiles, cb_input_tiles, cb_halo_slab>(
-                input_tiles_dfb, halo_slab_dfb, slab_tile_rows);
+            if constexpr (untilize_width_tiles == 1) {
+                // Raw LLK on a measured win (see conv2d_3x3_narrow_untilize.hpp): the helper's 1-wide path is
+                // packer-bound at one DEST section and one CB sync per tile-row.
+                conv2d_3x3::narrow_untilize::untilize_1wide<cb_input_tiles, cb_halo_slab>(
+                    input_tiles_dfb, halo_slab_dfb, slab_tile_rows, untilize_batch_rows);
+            } else {
+                ckl::untilize<untilize_width_tiles, cb_input_tiles, cb_halo_slab>(
+                    input_tiles_dfb, halo_slab_dfb, slab_tile_rows);
+            }
         }
 
         if constexpr (k_split && nslice_outer) {

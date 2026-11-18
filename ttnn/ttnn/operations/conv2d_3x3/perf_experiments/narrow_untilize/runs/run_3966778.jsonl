@@ -1,0 +1,3 @@
+{"case": "res4_0_conv2_perf", "order": "ba", "variant": "nu_rowmop", "pcc": 0.9997615360227726, "equal_first": null, "first": "nu_rowmop"}
+{"case": "res4_0_conv2_perf", "order": "ba", "variant": "nu", "pcc": 0.9997615360227726, "equal_first": true, "first": "nu_rowmop"}
+{"case": "res4_0_conv2_perf", "order": "ba", "variant": "base", "pcc": 0.9997615360227726, "equal_first": true, "first": "nu_rowmop"}

@@ -1,0 +1,8 @@
+{"case": "res4_0_conv2_perf", "order": "ab", "variant": "base", "pcc": 0.999999, "equal_first": null, "first": "base"}
+{"case": "res4_0_conv2_perf", "order": "ab", "variant": "nu", "pcc": 0.999999, "equal_first": true, "first": "base"}
+{"case": "res4_0_conv2_perf", "order": "ab", "variant": "nu_bsync", "pcc": 0.999999, "equal_first": true, "first": "base"}
+{"case": "res4_0_conv2_perf", "order": "ab", "variant": "nu_s2", "pcc": 0.999999, "equal_first": true, "first": "base"}
+{"case": "res4_0_conv2_perf", "order": "ab", "variant": "base", "pcc": 0.999999, "equal_first": null, "first": "base"}
+{"case": "res4_0_conv2_perf", "order": "ab", "variant": "nu", "pcc": 0.999999, "equal_first": true, "first": "base"}
+{"case": "res4_0_conv2_perf", "order": "ab", "variant": "nu_bsync", "pcc": 0.999999, "equal_first": true, "first": "base"}
+{"case": "res4_0_conv2_perf", "order": "ab", "variant": "nu_s2", "pcc": 0.999999, "equal_first": true, "first": "base"}
