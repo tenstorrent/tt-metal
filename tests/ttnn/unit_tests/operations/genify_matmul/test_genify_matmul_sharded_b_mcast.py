@@ -68,8 +68,10 @@ def _run_both(
     real_channel, real_plan = pd._sharded_b_channel, pd.plan_block_sharded
 
     def spy_channel(*args, **kw):
+        # Refinement 18: R2 builds one channel per B group (rectangle); "mcast" = some group multicasts.
         channel = real_channel(*args, **kw)
-        seen["mcast"] = channel is not None
+        seen["mcast"] = seen.get("mcast", False) or channel is not None
+        seen["channels"] = seen.get("channels", 0) + int(channel is not None)
         return channel
 
     def spy_plan(*args, **kw):
@@ -174,3 +176,32 @@ def test_hs_scattered_cores_fall_back(device, monkeypatch):
     cores = [ttnn.CoreCoord(x, 0) for x in (0, 2, 4, 6)]
     grid = ttnn.CoreRangeSet([ttnn.CoreRange(c, c) for c in cores])
     assert not _run_both(device, monkeypatch, 4 * 64, 128, 128, grid, [64, 128], _HS, "bias", dtype=_BF16)["mcast"]
+
+
+@pytest.mark.parametrize(
+    "case",
+    [
+        # (cores, m, k, n, epilogue): PDL heads (1-tile B, 103 cores = 9 x 11 + 4), res3 expand (86 = 7 x 11 + 9,
+        # bias row tail of 16 tiles), addcmul (gate row tail + per-core residual), swiglu (no row: no tail).
+        (103, 103 * 64, 32, 32, "bias"),
+        (86, 86 * 96, 128, 512, "bias_relu"),
+        (24, 24 * 64, 256, 256, "addcmul"),
+        (24, 24 * 64, 256, 256, "swiglu"),
+    ],
+    ids=["heads", "res3_expand", "addcmul", "swiglu"],
+)
+def test_hs_one_shot_rect_groups(device, monkeypatch, case):
+    """Refinement 18: a single-round R2 walk runs one B group per rectangle of the core set (own injector each)
+    on the handshake-free one-shot channel, the first row riding in cb_weight_tiles' tail. Bit-identical to the
+    per-core reads; the plan is asserted through spies."""
+    cores, m, k, n, epilogue = case
+    grid = ttnn.num_cores_to_corerangeset(cores, device.compute_with_storage_grid_size(), True)
+    width = device.compute_with_storage_grid_size().x
+    rects = (1 if cores >= width else 0) + int(cores % width != 0)
+    real_one_shot = pd.sharded_b_one_shot
+    shots = []
+    monkeypatch.setattr(pd, "sharded_b_one_shot", lambda *a: shots.append(real_one_shot(*a)) or shots[-1])
+    seen = _run_both(device, monkeypatch, m, k, n, grid, [m // cores, k], _HS, epilogue, dtype=_BF16)
+    assert seen["channels"] == rects
+    one_shot, tail = shots[-1]
+    assert one_shot and (tail > 0) == (epilogue != "swiglu")

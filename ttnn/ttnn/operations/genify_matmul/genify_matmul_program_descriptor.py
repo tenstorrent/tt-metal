@@ -372,6 +372,21 @@ SHARDED_B_ROUND_BYTES = 32 * 1024
 # multicast vs per-core reads): 0.97-2.1 MB saved runs 0-9% slower (res4 reduce / expand, ASPP projection),
 # 3.9 MB and up 3-61% faster (res4 shortcut, ASPP 1x1, res5). R2 has no A exchange: always on.
 BS_B_MCAST_MIN_SAVED_BYTES = 3 * 1024 * 1024
+# Refinement 18: a walk of exactly ONE B round in ONE chunk (every PDL R2 1x1 conv: one K-block, one block)
+# lands its B in slots no core has used yet, so the receivers' ready acks guard nothing. True: that channel
+# runs handshake-free (McastConfig(handshake=False), linked flag) and carries ONE delivery per walk -- with a
+# bias / gate row, [B round | row] from cb_weight_tiles' tail (GM_BS_ROW_TAIL), each core copying the row into
+# cb_row -- so there is one flag set and one clear (two flag deliveries without acks could race a clear; a
+# counter signal instead needs a write barrier per rectangle: measured slower). PDL heads (32768x32x32, 103
+# cores): the B round and the row round were ~1.3 / ~1.4 us each. False: the Refinement 10 handshaked rounds.
+SHARDED_B_ONE_SHOT = True
+# Refinement 18, R2 only: B groups. One injector multicasting B to an HS core set of several rectangles sends
+# the rectangles one after another (PDL res3: the 9-core partial row got B ~1.35 us after the 77-core block).
+# True: every rectangle of the core list (maximal runs of whole grid rows with the same column span) is its
+# own B group with its own injector reading B from DRAM, all multicasting at once (B crosses DRAM once per
+# group). SHARDED_B_GROUP_ROWS caps a group's grid rows (None: whole rectangles). False: one group (Refinement 10).
+SHARDED_B_RECT_GROUPS = True
+SHARDED_B_GROUP_ROWS = None
 # own_kb sentinel for every regime without a resident own K-slice (R1 / R1a / R4).
 NO_OWN_KB = 0xFFFFFFFF
 # Perf tooling (Refinement 15, /perf-measure ablations): defines appended to every R1-family kernel. Payload stubs
@@ -2627,12 +2642,42 @@ def sharded_b_round(geom: Geometry, blk: Blocking, walk_k_blocks, budget, in_pla
     return 1
 
 
-def _sharded_b_channel(device, geom: Geometry, topo: BlockShardedTopology):
+def sharded_b_groups(topo: BlockShardedTopology):
+    """The B groups' core lists: R2 under SHARDED_B_RECT_GROUPS, the shard cores split into rectangles (runs
+    of grid rows with the same contiguous column span, at most SHARDED_B_GROUP_ROWS rows each); else [None]
+    (one channel over the whole core set: R3's grid columns, R2's single group)."""
+    if not topo.core_list or not SHARDED_B_RECT_GROUPS:
+        return [None]
+    by_row = {}
+    for c in topo.core_list:
+        by_row.setdefault(c.y, []).append(c.x)
+    spans = []  # (y, x0, x1) contiguous column runs per grid row
+    for y in sorted(by_row):
+        xs = sorted(by_row[y])
+        x0 = xs[0]
+        for i in range(1, len(xs) + 1):
+            if i == len(xs) or xs[i] != xs[i - 1] + 1:
+                spans.append((y, x0, xs[i - 1]))
+                if i < len(xs):
+                    x0 = xs[i]
+    groups = []  # [y0, y1, x0, x1]
+    cap = SHARDED_B_GROUP_ROWS or len(by_row)
+    for y, x0, x1 in spans:
+        g = next((g for g in groups if g[1] == y - 1 and g[2] == x0 and g[3] == x1 and g[1] - g[0] + 1 < cap), None)
+        if g is None:
+            groups.append([y, y, x0, x1])
+        else:
+            g[1] = y
+    return [[ttnn.CoreCoord(x, y) for y in range(y0, y1 + 1) for x in range(x0, x1 + 1)] for y0, y1, x0, x1 in groups]
+
+
+def _sharded_b_channel(device, geom: Geometry, topo: BlockShardedTopology, one_shot=False, cores=None):
     """R2a / R3a: the weight channel (an unattached ttnn.Mcast), or None where the per-core reads stay: the
     knob is off, B is batched (it varies along the rows), a group is a single core, R3 saves less than
     BS_B_MCAST_MIN_SAVED_BYTES of B re-reads, or the receiver set is not multicastable (an R2 core list of
-    more than three rectangles)."""
-    if not SHARDED_B_MCAST or geom.tensor_batches != 1 or topo.rows < 2:
+    more than three rectangles). `one_shot` selects the handshake-free single-delivery channel
+    (SHARDED_B_ONE_SHOT); `cores` (an R2 B group, sharded_b_groups) restricts the channel to that group."""
+    if not SHARDED_B_MCAST or geom.tensor_batches != 1 or topo.rows < 2 or (cores is not None and len(cores) < 2):
         return None
     saved = (topo.rows - 1) * geom.tensor_k_tiles * geom.tensor_n_tiles * geom.b_tile_bytes
     if topo.cols > 1 and saved < BS_B_MCAST_MIN_SAVED_BYTES:
@@ -2642,10 +2687,38 @@ def _sharded_b_channel(device, geom: Geometry, topo: BlockShardedTopology):
     )
     # Groups = grid columns (R3; R2 is a single column of `rows` shard cores).
     order = ttnn.McastCoreOrder.ColumnMajor if topo.core_list == () else ttnn.McastCoreOrder.RowMajor
+    receivers, size = topo.core_set, topo.rows
+    if cores is not None:
+        receivers, size = ttnn.CoreRangeSet([ttnn.CoreRange(c, c) for c in cores]), len(cores)
     try:
-        return ttnn.Mcast(device, ttnn.McastConfig(handshake=True), topo.core_set, topo.rows, staggered, order)
+        return ttnn.Mcast(device, ttnn.McastConfig(handshake=not one_shot), receivers, size, staggered, order)
     except RuntimeError:
         return None
+
+
+def sharded_b_one_shot(geom: Geometry, blk: Blocking, walk_k_blocks, b_round, b_chunks, budget, in_place, act_cb):
+    """Refinement 18: (one_shot, row_tail_pages). The R2a / R3a weight channel runs handshake-free with one
+    delivery per walk when the walk is a single B round sent as one chunk; a bias / gate row then rides in
+    `row_tail_pages` extra cb_weight_tiles pages past the round (0 without a row). Off (False, 0) when the knob
+    is off or the tail does not fit the L1 budget (a second, row delivery would need the handshake)."""
+    if not (SHARDED_B_ONE_SHOT and walk_k_blocks == b_round and b_chunks == 1):
+        return False, 0
+    if geom.epilogue not in ("bias", "bias_relu", "addcmul"):
+        return True, 0
+    tail = _cdiv(blk.block_n_tiles * geom.row_tile_bytes, geom.b_tile_bytes)
+    f = _footprint(
+        geom,
+        blk.block_m_tiles,
+        blk.block_n_tiles,
+        blk.block_k_tiles,
+        partials=blk.use_partials,
+        out_in_place=in_place,
+        depth_weight=_sharded_b_depth(b_round, walk_k_blocks),
+        act_cb=act_cb,
+    )
+    if f + tail * geom.b_tile_bytes > budget:
+        return False, 0
+    return True, tail
 
 
 def _weight_depth(walk_k_blocks):
@@ -2690,7 +2763,6 @@ def create_block_sharded_program_descriptor(
     cb_row = CB_GATE_ROW if epilogue == "addcmul" else CB_BIAS_ROW
     cb_out = CB_OUTPUT_SHARD if in_place else CB_OUTPUT_TILES
     row_mcast = BS_ROW_MCAST and topo.cols > 1
-    mc_weight = _sharded_b_channel(device, geom, topo)
     out_div = 2 if geom.swiglu else 1
     bn_full = topo.out_w_tiles * out_div  # B columns per grid column
     # Every core of a row walks the same nominal block sequence (lockstep CB pointers for the multicast).
@@ -2699,11 +2771,18 @@ def create_block_sharded_program_descriptor(
     # A single K shard (R2): compute consumes the resident shard directly; no cb_act_tiles exists.
     cb_act_compute = CB_ACT_SHARD if topo.act_resident else CB_ACT_TILES
     walk_k_blocks = nb_m * nb_n * blk.num_k_blocks * blk.block_batches
-    b_round, b_chunks, b_chunk_k = 1, 1, 1
-    if mc_weight is not None:
-        budget = l1_cb_budget(device, [t for t in (a, b, out, row, residual) if t is not None])
-        b_round = sharded_b_round(geom, blk, walk_k_blocks, budget, in_place, act_cb=not topo.act_resident)
-        b_chunks, b_chunk_k = sharded_b_chunks(geom, blk, b_round)
+    # The B round as the channel would carry it (one round in one chunk selects the one-shot channel).
+    budget = l1_cb_budget(device, [t for t in (a, b, out, row, residual) if t is not None])
+    act_cb = not topo.act_resident
+    b_round = sharded_b_round(geom, blk, walk_k_blocks, budget, in_place, act_cb=act_cb)
+    b_chunks, b_chunk_k = sharded_b_chunks(geom, blk, b_round)
+    one_shot, row_tail = sharded_b_one_shot(geom, blk, walk_k_blocks, b_round, b_chunks, budget, in_place, act_cb)
+    # One weight channel per B group (R3 / single-group R2: one channel over the whole core set).
+    b_groups = sharded_b_groups(topo)
+    b_channels = [_sharded_b_channel(device, geom, topo, one_shot=one_shot, cores=g) for g in b_groups]
+    mc_weight = next((ch for ch in b_channels if ch is not None), None)
+    if mc_weight is None:
+        b_round, b_chunks, b_chunk_k, row_tail = 1, 1, 1, 0
     depth_weight = _sharded_b_depth(b_round, walk_k_blocks)
 
     # ---- CBs ----
@@ -2712,7 +2791,14 @@ def create_block_sharded_program_descriptor(
     act_shard_cb.core_ranges = grid
     cbs = [
         act_shard_cb,
-        _cb(CB_WEIGHT_TILES, b.dtype, geom.b_tile_bytes, depth_weight * blk.block_k_tiles * blk.block_n_tiles, grid),
+        # (+ the one-shot channel's row tail: the walk's first bias / gate row rides in B's delivery)
+        _cb(
+            CB_WEIGHT_TILES,
+            b.dtype,
+            geom.b_tile_bytes,
+            depth_weight * blk.block_k_tiles * blk.block_n_tiles + row_tail,
+            grid,
+        ),
     ]
     if not topo.act_resident:
         cbs.append(
@@ -2742,21 +2828,25 @@ def create_block_sharded_program_descriptor(
 
     row_t = row if row is not None else b
     res_t = residual if residual is not None else b
-    reader_ct = [
-        *_reader_ct(geom, blk, a, b, epilogue, cb_row, row_t, res_t),
-        0,  # operand_mcast
-        0,  # a_sends
-        0,  # b_sends
-        *_DS_ROLE_ABSENT,
-        1,  # block_sharded (R3 / R2 walk)
-        int(row_mcast),
-        CB_ACT_SHARD,
-        int(mc_weight is not None),
-        b_chunks,
-        b_chunk_k,
-        b_round,
-        *_reader_accessor_ct(a, b, row_t, res_t),
-    ]
+
+    def reader_ct(mc):
+        # A group without a channel (a single-core R2 group) reads its own B: one K-block per round.
+        return [
+            *_reader_ct(geom, blk, a, b, epilogue, cb_row, row_t, res_t),
+            0,  # operand_mcast
+            0,  # a_sends
+            0,  # b_sends
+            *_DS_ROLE_ABSENT,
+            1,  # block_sharded (R3 / R2 walk)
+            int(row_mcast),
+            CB_ACT_SHARD,
+            int(mc is not None),
+            b_chunks if mc is not None else 1,
+            b_chunk_k if mc is not None else 1,
+            b_round if mc is not None else 1,
+            *_reader_accessor_ct(a, b, row_t, res_t),
+        ]
+
     writer_ct = _writer_ct(cb_out, blk, out_block_n_tiles, geom, out, out_in_place=in_place)
     compute_ct = _compute_ct(cb_out, blk, epilogue, cb_row, out, swiglu_natural_pairs=False, own_round_slot=row_mcast)
     compute_ct[0] = cb_act_compute
@@ -2764,7 +2854,7 @@ def create_block_sharded_program_descriptor(
     a_addr, b_addr, out_addr = a.buffer_address(), b.buffer_address(), out.buffer_address()
     row_addr = row.buffer_address() if row is not None else 0
     res_addr = residual.buffer_address() if residual is not None else 0
-    reader_rt, writer_rt, compute_rt = ttnn.RuntimeArgs(), ttnn.RuntimeArgs(), ttnn.RuntimeArgs()
+    reader_args, writer_rt, compute_rt = {}, ttnn.RuntimeArgs(), ttnn.RuntimeArgs()
     for r in range(topo.rows):
         b0, batches_valid, row0, rows_valid = rows.region(geom, r, topo.shard_m_tiles)
         for c in range(topo.cols):
@@ -2772,7 +2862,7 @@ def create_block_sharded_program_descriptor(
             col0 = c * bn_full
             cols_valid = max(0, min(bn_full, geom.tensor_n_tiles - col0))
             region = [b0, batches_valid, row0, rows_valid, col0, cols_valid, 1, nb_m, nb_n]
-            reader_rt[core.x][core.y] = [
+            reader_args[(core.x, core.y)] = [
                 a_addr,
                 b_addr,
                 *region,
@@ -2788,13 +2878,24 @@ def create_block_sharded_program_descriptor(
             writer_rt[core.x][core.y] = [out_addr, *out_region, geom.tensor_m_tiles, geom.out_n_tiles]
             compute_rt[core.x][core.y] = [nb_m * nb_n, c]
 
-    reader = ttnn.KernelDescriptor(
-        kernel_source=str(KERNEL_DIR / "genify_matmul_reader.cpp"),
-        core_ranges=grid,
-        compile_time_args=reader_ct,
-        runtime_args=reader_rt,
-        config=ttnn.ReaderConfigDescriptor(),  # NCRISC / NOC_0
-    )
+    def reader(cores, mc):
+        rt = ttnn.RuntimeArgs()
+        for x, y in cores:
+            rt[x][y] = reader_args[(x, y)]
+        k = ttnn.KernelDescriptor(
+            kernel_source=str(KERNEL_DIR / "genify_matmul_reader.cpp"),
+            core_ranges=grid if len(b_groups) == 1 else ttnn.CoreRangeSet([ttnn.CoreRange(c, c) for c in cores]),
+            compile_time_args=reader_ct(mc),
+            runtime_args=rt,
+            config=ttnn.ReaderConfigDescriptor(),  # NCRISC / NOC_0
+        )
+        if row_tail and mc is not None:
+            k.defines = list(k.defines) + [("GM_BS_ROW_TAIL", "1")]
+        return k
+
+    readers = [
+        reader(list(reader_args) if g is None else [(c.x, c.y) for c in g], mc) for g, mc in zip(b_groups, b_channels)
+    ]
     writer = ttnn.KernelDescriptor(
         kernel_source=str(KERNEL_DIR / "genify_matmul_writer.cpp"),
         core_ranges=grid,
@@ -2809,6 +2910,8 @@ def create_block_sharded_program_descriptor(
         runtime_args=compute_rt,
         config=compute_config,
     )
+    for k in (*readers, writer, compute):
+        k.defines = list(k.defines) + [(d, "1") for d in ABLATE_DEFINES.split("+") if d]
     descriptor = ttnn.ProgramDescriptor(kernels=[], semaphores=[], cbs=cbs)
     if row_mcast:
         # One channel group per grid row (RowMajor groups of `cols` cores); the senders rotate through
@@ -2821,16 +2924,20 @@ def create_block_sharded_program_descriptor(
             ttnn.McastRotatingSenderConfig(),
             ttnn.McastCoreOrder.RowMajor,
         )
-        mc.attach(descriptor, "act", [reader], 0)
+        mc.attach(descriptor, "act", readers, 0)  # (R3: a single reader)
         next_sem = mc.next_semaphore_id()
     else:
-        ttnn.attach_absent_mcast(reader, "act")
+        for k in readers:
+            ttnn.attach_absent_mcast(k, "act")
         next_sem = 0
-    if mc_weight is not None:
-        # R2a / R3a: B down each grid column (R2: to every shard core) from the group's fixed injector.
-        mc_weight.attach(descriptor, "weight", [reader], next_sem)
-    else:
-        ttnn.attach_absent_mcast(reader, "weight")
+    for k, mc in zip(readers, b_channels):
+        if mc is not None:
+            # R2a / R3a: B down each grid column (R2: to every core of the B group) from its fixed injector.
+            # R2's groups are disjoint core sets: each attaches its own semaphores.
+            mc.attach(descriptor, "weight", [k], next_sem)
+            next_sem = mc.next_semaphore_id()
+        else:
+            ttnn.attach_absent_mcast(k, "weight")
     ttnn.attach_absent_mcast(writer, "act")  # the writer's R4 A-round role is absent
-    descriptor.kernels = [reader, writer, compute]
+    descriptor.kernels = [*readers, writer, compute]
     return descriptor
