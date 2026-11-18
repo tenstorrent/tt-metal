@@ -14,8 +14,8 @@
 
 #include "api/debug/assert.h"
 #include "dev_mem_map.h"
-#include "hostdev/eth_link.h"
 #include "hostdev/cce_spa_routes.h"
+#include "hostdev/eth_link.h"
 #include "internal/risc_attribs.h"
 #include "internal/tt-2xx/quasar/cce_noc.h"
 #include "internal/tt-2xx/quasar/overlay/cmdbuff_api.hpp"
@@ -36,6 +36,8 @@ constexpr uint32_t kFirstNocReqVc = 4;
 constexpr uint32_t kNocRespVc = CMDBUF_WR_RESP_VC;
 constexpr uint32_t kFirstNocTrid = CMDBUF_1_TRID_START;
 static_assert(kFirstNocTrid + kNumTxqs - 1 <= CMDBUF_1_TRID_END);
+static_assert(MEM_IERISC_FABRIC_NOC_DWORD_STAGE_SIZE == kNumTxqs * sizeof(uint64_t));
+static_assert(MEM_IERISC_FABRIC_NOC_DWORD_STAGE_BASE % sizeof(uint64_t) == 0);
 constexpr uint64_t kMaxBytesInPacket = 0x1000;
 // AXI_OPT_1.src_protocol of an inline write: the source register carries the data.
 constexpr uint8_t kInlineSrcProtocol = 4;
@@ -173,17 +175,10 @@ FORCE_INLINE void send_bytes(uint32_t q_num, uint32_t src, uint32_t dest, uint32
     issue_cmdbuf<kCmdBuf>();
 }
 
-// Staging words of send_dword on a NOC link, one per TX queue, written only through the uncached alias. The block owns
-// its 64-byte cache line, so no cached store to a neighbour writes a stale line back over a staged value.
-struct alignas(64) NocDwordStage {
-    uint64_t word[kNumTxqs];
-};
-inline NocDwordStage noc_dword_stage;
-
 // Write @p val to the 8-byte-aligned @p dest on the link peer on TX queue @p q_num: on an Ethernet link as an inline
-// write, on a NOC link as an 8-byte copy from the queue's staging word; returns once issued. With @p snoop the peer's
-// NIU snoops its cache for the write on an Ethernet link; a NOC link sets no snoop tag. Assumes !txq_busy(q_num).
-// Halts if @p dest is misaligned or @p val is not below 2^kInlineValueBits.
+// write, on a NOC link as an 8-byte copy from the queue's word at MEM_IERISC_FABRIC_NOC_DWORD_STAGE_BASE; returns once
+// issued. With @p snoop the peer's NIU snoops its cache for the write on an Ethernet link; a NOC link sets no snoop
+// tag. Assumes !txq_busy(q_num). Halts if @p dest is misaligned or @p val is not below 2^kInlineValueBits.
 FORCE_INLINE void send_dword(uint32_t q_num, uint32_t dest, uint64_t val, bool snoop = false) {
     if (dest % sizeof(val) != 0) {
         halt(HaltCode::RemoteRegMisaligned, dest);
@@ -194,9 +189,8 @@ FORCE_INLINE void send_dword(uint32_t q_num, uint32_t dest, uint64_t val, bool s
     if (eth_link().kind == ETH_LINK_KIND_NOC) {
         // No inline write on an iDMA back-end: it leaves the AW coupler count of GREN-2020.
         ASSERT(q_num < kNumTxqs);
-        const uint32_t stage = static_cast<uint32_t>(reinterpret_cast<uintptr_t>(&noc_dword_stage.word[q_num]));
-        *reinterpret_cast<volatile uint64_t*>(static_cast<uintptr_t>(MEM_IERISC_UNCACHED_BASE + sram_offset(stage))) =
-            val;
+        const uint32_t stage = MEM_IERISC_FABRIC_NOC_DWORD_STAGE_BASE + q_num * sizeof(val);
+        *reinterpret_cast<volatile uint64_t*>(static_cast<uintptr_t>(MEM_IERISC_UNCACHED_BASE + stage)) = val;
         send_bytes(q_num, stage, dest, sizeof(val));
         return;
     }
