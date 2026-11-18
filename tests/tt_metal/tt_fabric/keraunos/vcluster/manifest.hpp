@@ -119,12 +119,15 @@ struct PackageFacts {
     std::vector<std::pair<uint32_t, uint32_t>> ethernet_tile_pairs;
 };
 
-// Reads a manifest from YAML text. Throws ManifestLoadError, listing every load error, when the text does not parse
-// as YAML, `version` is missing or not 1, a required key is missing, a key is unknown (`port` on a worker
-// included), a value has the wrong type or is negative, an integer is not decimal without a leading 0 (other than "0")
-// or hexadecimal after "0x", a `role` or `backend` is not a known name, a router has no `port`, or `devices` is empty.
-// Required keys: version, devices, links; a device's name, fabric_chip, slots, regions; every field of a slot (port for
-// a router only), a region, a link and a link end. `links`, `slots` and `regions` may be empty sequences.
+// Reads a manifest from YAML text. Throws ManifestLoadError when the text does not parse as YAML, is not exactly one
+// YAML document, or its root is not a map, and when `version` is missing or not 1; each of these is reported alone,
+// since the rest of the text cannot be judged. Otherwise throws ManifestLoadError listing every load error found: a
+// required key missing; a key unknown (`port` on a worker included) or repeated in one map; a value of the wrong type
+// or negative; an integer that is not a plain untagged scalar in decimal without a leading 0 (other than "0") or in
+// hexadecimal after "0x"; a `role` or `backend` that is not a known name; a router with no `port`; an empty `capture`;
+// an empty `devices`. Required keys: version, devices, links; a device's name, fabric_chip, slots, regions; every
+// field of a slot (port for a router only), a region, a link and a link end. `links`, `slots` and `regions` may be
+// empty sequences.
 Manifest parse_manifest(std::string_view yaml_text);
 
 // parse_manifest() on the file at `path`, then a relative `capture` resolved against the file's directory. Throws
@@ -134,7 +137,8 @@ Manifest load_manifest(const std::filesystem::path& path);
 // Runs the check rows of SPEC-0011 in stages against `manifest` and `facts`: stage A (row 1); if it found nothing,
 // stage B (rows 2 and 12); if that found nothing, stage C (rows 3 to 8 and 13). Returns every failing instance of
 // every row the last stage run checked, in row order; empty means the manifest passes stages A to C. Stage D (rows
-// 9 to 11, against the capture) is not run. Never throws; reads no device.
+// 9 to 11, against the capture) is not run. Reads no device. Throws std::runtime_error (TT_FATAL) only on a caller
+// bug, not a manifest fault: `facts` with no cores, 0 harts or 0 SRAM bytes, or a manifest with no devices.
 std::vector<ManifestFinding> check_manifest(const Manifest& manifest, const PackageFacts& facts);
 
 }  // namespace tt::tt_fabric::vcluster
