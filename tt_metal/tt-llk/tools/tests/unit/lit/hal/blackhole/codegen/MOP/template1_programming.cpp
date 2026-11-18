@@ -191,6 +191,22 @@ extern "C" __attribute__((noinline, used)) void reference_program_empty_inner()
     mop_cfg[4] = TT_OP_NOP;
 }
 
+// A start op makes an empty inner loop without end ops supported; EndOp1 stays unwritten.
+extern "C" __attribute__((noinline, used)) void program_start_empty_inner()
+{
+    mop::program(mop::loop(3, OP_START, mop::loop(0, OP_BODY)));
+}
+
+extern "C" __attribute__((noinline, used)) void reference_program_start_empty_inner()
+{
+    volatile std::uint32_t *mop_cfg = reference_mop_cfg();
+    ckernel::mop_sync();
+    mop_cfg[0] = 3;
+    mop_cfg[1] = 0;
+    mop_cfg[2] = OP_START;
+    mop_cfg[3] = TT_OP_NOP;
+}
+
 // With EndOp1 set, the count anomaly needs an outer count of 1, so this
 // no-start, empty-inner configuration is accepted.
 extern "C" __attribute__((noinline, used)) void program_empty_inner_second_end()
