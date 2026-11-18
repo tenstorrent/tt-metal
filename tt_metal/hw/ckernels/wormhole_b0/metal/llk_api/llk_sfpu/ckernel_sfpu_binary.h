@@ -155,10 +155,10 @@ template <
     bool is_fp32_dest_acc_en,
     DstRoundingMode dst_rounding_mode = DstRoundingMode::Default,
     // Row-loop unroll factor. Unrolled, the loop rolls into the replay buffer instead of a RISC
-    // bnez loop. POW and NEXTAFTER stay rolled: their bodies are SFPU-bound already and unrolled
-    // they outgrow the instruction cache (POW measured +4% MATH_ISOLATE). A template parameter
-    // because `#pragma GCC unroll` only accepts a literal or a bare template parameter.
-    int UNROLL = (BINOP == BinaryOp::POW || BINOP == BinaryOp::NEXTAFTER || BINOP == BinaryOp::NEXTAFTER_BF16) ? 1 : 8>
+    // bnez loop. POW stays rolled: its body is SFPU-bound already, and unrolled it measured
+    // +2.6..+2.9% MATH_ISOLATE. A template parameter because
+    // `#pragma GCC unroll` only accepts a literal or a bare template parameter.
+    int UNROLL = (BINOP == BinaryOp::POW) ? 1 : 8>
 inline void calculate_sfpu_binary(
     const std::uint32_t dst_index_in0, const std::uint32_t dst_index_in1, const std::uint32_t dst_index_out) {
     static constexpr float nan = std::numeric_limits<float>::quiet_NaN();
