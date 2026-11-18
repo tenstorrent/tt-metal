@@ -378,10 +378,10 @@
 # resume, and the benchmark runs 8 greedy requests at once so verifies chain;
 # read the SpecDecoding lines of the server log for the acceptance length.
 # TT_CACHE_PATH names its own weight cache: other Qwen3.8 legs build model-owned
-# caches with other shapes under the default path. The leg reads the checkpoint
-# revision the parity runs used (--revision, and HF_MODEL as that snapshot for the
-# TT model). The first run on a runner pool without that snapshot or that cache
-# needs mlperf-read-only unchecked and HF_HUB_OFFLINE=0 in extra-env.
+# caches with other shapes under the default path. The first run on a runner pool
+# whose cache holds no Qwen3.8-27B checkpoint needs mlperf-read-only unchecked and
+# HF_HUB_OFFLINE=0 CI=false in extra-env (the qwen36 loader treats CI=true as
+# offline), so that the checkpoint and the weight cache are written once.
 - name: "Qwen3.8-27B MTP prefix caching tp=8"
   model: Qwen/Qwen3.8-27B
   coherence-test: true
@@ -394,10 +394,10 @@
   mesh-device: P150x8
   arch: arch-blackhole
   tt-config: '{"sample_on_device_mode": "decode_only", "fabric_config": "FABRIC_1D", "trace_region_size": 1073741824, "l1_small_size": 24576}'
-  additional-server-args: "--revision 8c0b3d30f3ae96f5c7f774de704bf0ada83e422a --max_model_len 262144 --max_num_seqs 8 --block_size 1024 --enable-prefix-caching --prefix-cache-retention-interval 0 --enable-chunked-prefill --max_num_batched_tokens 525312 --long_prefill_token_threshold 16384 --async-scheduling --limit-mm-per-prompt.image 1 --limit-mm-per-prompt.video 1 --mm-processor-cache-gb 0 --mm-processor-kwargs.max_pixels 1048576 --speculative-config.method custom_class --speculative-config.model vllm_tt_plugin.model_owned_drafter --speculative-config.num_speculative_tokens 3"
+  additional-server-args: "--max_model_len 262144 --max_num_seqs 8 --block_size 1024 --enable-prefix-caching --prefix-cache-retention-interval 0 --enable-chunked-prefill --max_num_batched_tokens 525312 --long_prefill_token_threshold 16384 --async-scheduling --limit-mm-per-prompt.image 1 --limit-mm-per-prompt.video 1 --mm-processor-cache-gb 0 --mm-processor-kwargs.max_pixels 1048576 --speculative-config.method custom_class --speculative-config.model vllm_tt_plugin.model_owned_drafter --speculative-config.num_speculative_tokens 3"
   additional-benchmark-args: "--max-concurrency 8 --num-prompts 16 --temperature 0"
   default-chat-template-kwargs: '{"enable_thinking": false}'
-  extra-env: "TT_QWEN35_TEXT_VER=qwen36_blackhole TT_MODEL_CLASS_OVERRIDES=TTQwen3_5ForConditionalGeneration=models.demos.blackhole.qwen36.tt.qwen36_vllm:Qwen36MTPContractForCausalLM QWEN36_SPEC_K=3 QWEN36_MAX_TOKENS_ALL_USERS=525312 QWEN_SDPA_BF8=1 TT_METAL_PINNED_MEMORY_CACHE_LIMIT_BYTES=0 OMP_NUM_THREADS=8 OMP_WAIT_POLICY=PASSIVE TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/Qwen--Qwen3.8-27B-mambaspec-tp8 HF_MODEL=/mnt/MLPerf/huggingface/hub/models--Qwen--Qwen3.8-27B/snapshots/8c0b3d30f3ae96f5c7f774de704bf0ada83e422a"
+  extra-env: "TT_QWEN35_TEXT_VER=qwen36_blackhole TT_MODEL_CLASS_OVERRIDES=TTQwen3_5ForConditionalGeneration=models.demos.blackhole.qwen36.tt.qwen36_vllm:Qwen36MTPContractForCausalLM QWEN36_SPEC_K=3 QWEN36_MAX_TOKENS_ALL_USERS=525312 QWEN_SDPA_BF8=1 TT_METAL_PINNED_MEMORY_CACHE_LIMIT_BYTES=0 OMP_NUM_THREADS=8 OMP_WAIT_POLICY=PASSIVE TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/Qwen--Qwen3.8-27B-mambaspec-tp8"
   skus:
     bh_loudbox:
       timeout: 100
