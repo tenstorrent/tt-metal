@@ -375,6 +375,11 @@ void init_unary_sfpu_operation_quasar()
     {
         sigmoid_appx_init();
     }
+    else if constexpr (OPERATION == SfpuType::tanh)
+    {
+        // calculate_tanh stores through the ADDR_MOD_6 tanh_init programs, as tanh_tile_init does.
+        tanh_init<APPROX, is_fp32_dest_acc_en>();
+    }
     else if constexpr (OPERATION == SfpuType::tanhshrink)
     {
         tanhshrink_init<APPROX, is_fp32_dest_acc_en>();
@@ -1667,7 +1672,12 @@ void init_binary_sfpu_operation_quasar([[maybe_unused]] std::uint32_t zero_point
         calculate_gcd_init();
     }
     // RSHFT / LSHFT / LOGICAL_RSHFT need no init beyond the shared SFPU one.
-    // ADD / SUB / GT / LT / LE / GE / COPY_DEST / LOGSIGMOID / RESHUFFLE_ROWS are stateless — no init.
+    else if constexpr (OP == BinaryOp::LOGSIGMOID)
+    {
+        // logsigmoid_tile_init: loads the polynomial tail d6..d8 into vConstFloatPrgm0..2.
+        logsigmoid_init<APPROXIMATION_MODE>();
+    }
+    // ADD / SUB / GT / LT / LE / GE / COPY_DEST / RESHUFFLE_ROWS are stateless — no init.
 }
 
 /**

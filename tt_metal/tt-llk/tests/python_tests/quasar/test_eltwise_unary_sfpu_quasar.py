@@ -451,8 +451,13 @@ def prepare_inputs_for_operation(
         max_val = 10.0
         src_A = min_val + src_A.to(torch.float32) * (max_val - min_val)
         src_A = src_A.to(torch_format)
-    elif mathop in (MathOperation.Softplus, MathOperation.I0):
-        # for_op spans softplus' t < -5 tail and linear threshold, and i0's |x| <= 3.75 fit.
+    elif mathop in (
+        MathOperation.Softplus,
+        MathOperation.Softsign,
+        MathOperation.I0,
+    ):
+        # for_op spans softplus' t < -5 tail and linear threshold, softsign's [-5, 5] and i0's
+        # |x| <= 3.75 fit.
         spec = for_op(mathop, input_format).spec_A
         min_val = spec.low
         max_val = spec.high
@@ -1011,6 +1016,7 @@ _APPROX_MATHOPS = (
     MathOperation.Gelu,
     MathOperation.Reciprocal,
     MathOperation.Rsqrt,
+    MathOperation.Softsign,
 )
 _QSR_EXTRA_MATHOPS = (
     MathOperation.Relu,
@@ -1074,6 +1080,7 @@ OP_CONFIGS = [
     # p = 0 only (golden x * 2.0); seeding is test_dropout_reseed_quasar, p = 1 the fuser YAMLs.
     OpConfig(MathOperation.Dropout, TENSOR_DIMS, DEST_SYNC_MODES, uniform_spec=True),
     OpConfig(MathOperation.Softplus, TENSOR_DIMS, DEST_SYNC_MODES, uniform_spec=True),
+    OpConfig(MathOperation.Softsign, TENSOR_DIMS, DEST_SYNC_MODES, uniform_spec=True),
     # Reaches calculate_i0 through SFPU_UNARY_INIT(i0), the Compute API's i0_tile_init.
     OpConfig(MathOperation.I0, TENSOR_DIMS, DEST_SYNC_MODES, uniform_spec=True),
     *[OpConfig(op, TENSOR_DIMS, DEST_SYNC_MODES) for op in UNARY_MAX_MIN_OPS],
