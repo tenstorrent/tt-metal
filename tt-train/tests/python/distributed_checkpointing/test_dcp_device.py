@@ -313,7 +313,7 @@ class _LoraHeads(AbstractModuleBase):
         self.head = LoraLinear(head, LoraConfig(rank=8))
 
 
-def test_lora_declares_the_rows_it_adds_to(tp_mesh, expect_error):
+def test_lora_declares_the_rows_it_adds_to(tp_mesh, tmp_path, expect_error):
     from ttml.distributed_checkpointing._layouts import Pad, fused_segments
     from ttml.modules import ColumnParallelLinear
 
@@ -326,11 +326,15 @@ def test_lora_declares_the_rows_it_adds_to(tp_mesh, expect_error):
     for head in ("tp_head", "head"):
         assert infos[f"{head}/weight"].transform == Pad(2, 100, 128)
         assert infos[f"{head}/lora_B"].transform == Pad(2, 100, 128), head
-    # A segment that does not split evenly over the TP shards is refused when the layer is built, not at the first save.
-    with expect_error(dcp.LayoutError, "segment size 63 is not divisible by the 2 shards"):
-        ColumnParallelLinear(DIM, 96, has_bias=False, fused_segments=(63, 33))
-    with expect_error(dcp.LayoutError, r"fused_segments \(32, 32\) sum to 64 but the fused dim has 96 rows"):
-        ColumnParallelLinear(DIM, 96, has_bias=False, fused_segments=(32, 32))
+    # The layer only records its declaration; a bad one is refused by the first save, before anything is written.
+    for segments, message in (
+        ((63, 33), "segment size 63 is not divisible by the 2 shards"),
+        ((32, 32), r"fused_segments \(32, 32\) sum to 64 but the fused dim has 96 rows"),
+    ):
+        layer = ColumnParallelLinear(DIM, 96, has_bias=False, fused_segments=segments)
+        with expect_error(dcp.LayoutError, message):
+            dcp.save(str(tmp_path / "bad"), model=layer)
+        assert not (tmp_path / "bad").exists()
 
 
 def test_save_refuses_bad_state_before_writing_and_leaks_nothing(tp_mesh, tmp_path, monkeypatch, expect_error):
