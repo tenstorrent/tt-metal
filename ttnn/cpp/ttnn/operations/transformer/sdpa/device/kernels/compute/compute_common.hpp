@@ -1991,15 +1991,15 @@ void sdpa_inner_loop(
              * reduce_tile + binary_max_tile. The overload with cols as a template arg
              * is bf16-only but cb_qk_im could be fp32.
              */
-            if constexpr (DST_ACCUM_MODE) {
-                // cb_qk_im is fp32 with fp32 dest accumulation.
-                reduce_max_row_fp32<cb_qk_im, Sq_chunk_t>(
-                    alias_cur_max, alias_prev_max, Sk_chunk_t, processed_k_chunks > 0);
-            } else {
-                reconfig_data_format(cb_qk_im, cb_identity_scale_in);
-                reduce_c<PoolType::MAX, ReduceDim::REDUCE_ROW, cb_qk_im, cb_identity_scale_in, Sq_chunk_t>(
-                    alias_cur_max, alias_prev_max, Sk_chunk_t, processed_k_chunks > 0);
-            }
+#ifdef SDPA_EXACT_FP32_ROW_MAX
+            // cb_qk_im and the max CBs are fp32 with fp32 dest accumulation.
+            reduce_max_row_fp32<cb_qk_im, Sq_chunk_t>(
+                alias_cur_max, alias_prev_max, Sk_chunk_t, processed_k_chunks > 0);
+#else
+            reconfig_data_format(cb_qk_im, cb_identity_scale_in);
+            reduce_c<PoolType::MAX, ReduceDim::REDUCE_ROW, cb_qk_im, cb_identity_scale_in, Sq_chunk_t>(
+                alias_cur_max, alias_prev_max, Sk_chunk_t, processed_k_chunks > 0);
+#endif
 
             /**
              * sub_exp fuses a few operations.

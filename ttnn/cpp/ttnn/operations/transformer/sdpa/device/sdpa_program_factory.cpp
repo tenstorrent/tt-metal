@@ -1726,6 +1726,11 @@ ProgramDescriptor SDPAOperation::SDPAProgramFactory::create_descriptor(
     defines_map["DHT_GRANULARITY"] = std::to_string(dht_granularity);
     defines_map["REDUCE_GRANULARITY"] = std::to_string(reduce_granularity);
     defines_map["EXP_APPROX_MODE"] = std::to_string(exp_approx_mode);
+    if (fp32_dest_acc_en) {
+        // Matches the fp32 max CBs allocated below. Other factories sharing compute_common.hpp keep
+        // bf16 max CBs, and ring-joint kernels have no kernel-config-buffer room for the SFPU row max.
+        defines_map["SDPA_EXACT_FP32_ROW_MAX"] = "1";
+    }
     log_debug(tt::LogOp, "use_zigzag_balancing: {}", use_zigzag_balancing);
 
     KernelDescriptor::Defines defines(defines_map.begin(), defines_map.end());
