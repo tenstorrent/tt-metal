@@ -226,27 +226,43 @@ autograd::TensorPtr grouped_dynamic_causal_conv(
         std::vector<ttnn::Tensor> grad_dynamic_kernel;
         std::vector<ttnn::Tensor> grad_base_kernel;
         ttnn::Tensor grad_input;
+        const bool want_input = input->get_requires_grad();
+        const bool want_dynamic = dynamic_kernel->get_requires_grad();
+        const bool want_base = base_kernel->get_requires_grad();
         for (uint32_t o = 0; o < g.kernel_size; ++o) {
-            // d out / d kernel_o = shifted input, so its products with grad_out give both kernels' gradients.
-            const auto product = ttnn::multiply(grad_out, from_blocks(shift_down(x_blocks, o, g), g));
-            grad_dynamic_kernel.push_back(
-                ttnn_fixed::matmul(product, expand, /*transpose_a=*/false, /*transpose_b=*/true));
-            // One-row results stack in ROW_MAJOR: TILE concat on dim 2 would need tile-aligned rows.
-            grad_base_kernel.push_back(
-                ttnn::to_layout(ttnn_fixed::sum_over_leading_dims(product), ttnn::Layout::ROW_MAJOR));
-
-            const auto kernel_times_grad =
-                ttnn::multiply(kernel_at(dynamic_kernel_flat, base_kernel->get_value(), expand, o, g), grad_out);
-            auto term = from_blocks(shift_up(to_blocks(kernel_times_grad, g), o, g), g);
-            grad_input = o == 0U ? term : ttnn::add(grad_input, term);
+            if (want_dynamic || want_base) {
+                // d out / d kernel_o = shifted input, so its products with grad_out give both kernels' gradients.
+                const auto product = ttnn::multiply(grad_out, from_blocks(shift_down(x_blocks, o, g), g));
+                if (want_dynamic) {
+                    grad_dynamic_kernel.push_back(
+                        ttnn_fixed::matmul(product, expand, /*transpose_a=*/false, /*transpose_b=*/true));
+                }
+                if (want_base) {
+                    // One-row results stack in ROW_MAJOR: TILE concat on dim 2 would need tile-aligned rows.
+                    grad_base_kernel.push_back(
+                        ttnn::to_layout(ttnn_fixed::sum_over_leading_dims(product), ttnn::Layout::ROW_MAJOR));
+                }
+            }
+            if (want_input) {
+                const auto kernel_times_grad =
+                    ttnn::multiply(kernel_at(dynamic_kernel_flat, base_kernel->get_value(), expand, o, g), grad_out);
+                auto term = from_blocks(shift_up(to_blocks(kernel_times_grad, g), o, g), g);
+                grad_input = o == 0U ? term : ttnn::add(grad_input, term);
+            }
         }
 
-        input->add_grad(unflat(grad_input, g));
-        dynamic_kernel->add_grad(unflat(
-            g.kernel_size == 1U ? grad_dynamic_kernel.front() : ttnn::concat(grad_dynamic_kernel, /*dim=*/3), g));
-        base_kernel->add_grad(ttnn::to_layout(
-            g.kernel_size == 1U ? grad_base_kernel.front() : ttnn::concat(grad_base_kernel, /*dim=*/2),
-            ttnn::Layout::TILE));
+        if (want_input) {
+            input->add_grad(unflat(grad_input, g));
+        }
+        if (want_dynamic) {
+            dynamic_kernel->add_grad(unflat(
+                g.kernel_size == 1U ? grad_dynamic_kernel.front() : ttnn::concat(grad_dynamic_kernel, /*dim=*/3), g));
+        }
+        if (want_base) {
+            base_kernel->add_grad(ttnn::to_layout(
+                g.kernel_size == 1U ? grad_base_kernel.front() : ttnn::concat(grad_base_kernel, /*dim=*/2),
+                ttnn::Layout::TILE));
+        }
     };
     result->set_node(autograd::add_backward_node(std::move(grad), result, input, dynamic_kernel, base_kernel));
     return result;

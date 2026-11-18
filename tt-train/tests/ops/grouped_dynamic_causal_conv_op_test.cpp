@@ -113,9 +113,9 @@ protected:
         auto* device = &ttml::autograd::ctx().get_device();
         const Problem p = random_problem(c, seed);
         const Reference ref = reference(c, p);
-        auto input = ttml::autograd::create_tensor(ttml::core::from_xtensor(p.x, device));
-        auto dynamic_kernel = ttml::autograd::create_tensor(ttml::core::from_xtensor(p.dynamic_kernel, device));
-        auto base_kernel = ttml::autograd::create_tensor(ttml::core::from_xtensor(p.base_kernel, device));
+        auto input = ttml::autograd::create_tensor(ttml::core::from_xtensor(p.x, device), true);
+        auto dynamic_kernel = ttml::autograd::create_tensor(ttml::core::from_xtensor(p.dynamic_kernel, device), true);
+        auto base_kernel = ttml::autograd::create_tensor(ttml::core::from_xtensor(p.base_kernel, device), true);
 
         auto out = ttml::ops::grouped_dynamic_causal_conv(input, dynamic_kernel, base_kernel, c.block, c.group);
         expect_close(ref.out, out->get_value(), "out", 2e-2);
