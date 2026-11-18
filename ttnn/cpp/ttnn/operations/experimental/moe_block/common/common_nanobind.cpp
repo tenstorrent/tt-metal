@@ -216,6 +216,23 @@ void bind_resources(nb::module_& mod) {
             "Port cores (place_ports, memoized per allowed cells): {(r, c, dir name, link index): (logical x, logical "
             "y, "
             "fabric link id)}; allowed: [(x, y)] logical cells to place them in (None: the whole grid)")
+        .def(
+            "first_hops",
+            [](const MoEBlockResources& r) {
+                const auto& t = r.topology();
+                const FirstHops& fh = r.first_hops();
+                nb::dict out;
+                for (const auto& [src, sp] : r.mesh_plan().chips) {
+                    for (const auto& [dst, dp] : r.mesh_plan().chips) {
+                        if (src == dst) {
+                            continue;
+                        }
+                        out[nb::make_tuple(src.r, src.c, dst.r, dst.c)] = std::string(dir_name(fh.at(src, dst, t)));
+                    }
+                }
+                return out;
+            },
+            "The fabric's first hop of a unicast between every pair of chips: {(src r, src c, dst r, dst c): dir name}")
         .def("release", &MoEBlockResources::release);
 }
 

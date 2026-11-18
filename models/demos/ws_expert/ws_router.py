@@ -72,6 +72,11 @@ def logits_debug_tensor(mesh, lc):
     )
 
 
+def ep4_rw(mesh):
+    """sparse_dispatch_2d's route words a token: 1 up to 16 chips, 2 beyond."""
+    return 1 if mesh.get_num_devices() <= 16 else 2
+
+
 def ep4_outputs(mesh, lc):
     """The head's outputs in EP-4 mode (build_router ep4): the topk rows [TX, 32] uint32 (words 0-15 the gate weights'
     fp32 bits, 16 + k the expert ids, 28 the route word) as [TX / 32, 1024] (4-KB pages of 32 tokens) and the dispatch
@@ -80,7 +85,7 @@ def ep4_outputs(mesh, lc):
     e = lambda shape: ttnn.empty(shape, dtype=ttnn.uint32, layout=rm, device=mesh, memory_config=dram)
     small = e([1, 32])
     return dict(
-        w=e([lc.TX // 32, 1024]), route=e([1, 1, 1, lc.TX]), idx_t=small, dest_t=small, counts_t=small, fence_t=small
+        w=e([lc.TX // 32, 1024]), route=e([1, 1, 1, lc.TX * ep4_rw(mesh)]), idx_t=small, dest_t=small, counts_t=small, fence_t=small
     )
 
 
@@ -113,7 +118,7 @@ def build_router(mesh, lc, x_rm, wrT, ids_t, outs, logd=None, side=0, ep4=0):
     gring = tl(NG * GS, ttnn.float32)  # gather ring (CB 5)
     idl1 = tl(EPC, ttnn.uint16)  # id tiles (CB 6)
     bufs = dict(
-        wst=w16(32 * 32 + 32 if ep4 else 32 * 16),
+        wst=w16(32 * 32 + 32 * ep4_rw(mesh) if ep4 else 32 * 16),
         rec=w16(rcsrc),
         srt=w16(rcsrc + 4 * NOWN),
         cnt_in=w16(NC),
@@ -172,7 +177,7 @@ def build_router(mesh, lc, x_rm, wrT, ids_t, outs, logd=None, side=0, ep4=0):
     ccfg.unpack_to_dest_mode = utd
     ta = lambda t: list(ttnn.TensorAccessorArgs(t).get_compile_time_args())
     defs = [("WSR_DEBUG_LOGITS", "1")] if debug else []
-    defs += [("WSR_EP4", str(ep4)), ("WSR_EP4_SP", str(outs["route_sp"]))] if ep4 else []
+    defs += [("WSR_EP4", str(ep4)), ("WSR_EP4_SP", str(outs["route_sp"])), ("WSR_EP4_RW", str(ep4_rw(mesh)))] if ep4 else []
     if side:
         banks = mesh.dram_grid_size().x
         assert banks % 2 == 0 and side % 2 == 0

@@ -115,11 +115,12 @@ class Chip:
     pair_row: torch.Tensor = None  # [C, n, K] O row of (home, t, k) on this chip, -1 if not local
 
 
-def route_words(geo: Geo, ids, link=0, row0=0):
+def route_words(geo: Geo, ids, link=0, row0=0, words=1):
     """[rows, C, n] route words of mesh rows row0.. (ids [rows, C, n, K]; sparse_dispatch_2d, up to 16 chips: mask |
-    order << 16 | link << 17; order 0 = X first). link: an int, or a function of the token index."""
+    order << 16 | link << 17; order 0 = X first). link: an int, or a function of the token index. words 2 (meshes
+    past 16 chips): ([rows, C, n] masks, [rows, C, n] flags order | link << 1)."""
     R, C = ids.shape[0], geo.C
-    assert R * C <= 16, "one route word only up to 16 chips"
+    assert words == 2 or (row0 + R) * C <= 16, "one route word only up to 16 chips"
     col = ids // geo.EPC  # [R, C, n, K]
     hit = torch.zeros(*ids.shape[:3], C, dtype=torch.bool)
     hit.scatter_(-1, col, True)
@@ -128,6 +129,8 @@ def route_words(geo: Geo, ids, link=0, row0=0):
     bit = 1 << ((row0 + torch.arange(R)).view(R, 1, 1, 1) * C + cc.view(1, 1, 1, C))
     mask = (hit.long() * bit).sum(-1)
     lk = link if not callable(link) else link(torch.arange(ids.shape[2]))
+    if words == 2:
+        return mask, (torch.as_tensor(lk) << 1).expand_as(mask)
     return mask | (torch.as_tensor(lk) << 17)
 
 

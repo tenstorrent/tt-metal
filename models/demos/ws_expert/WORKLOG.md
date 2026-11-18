@@ -1617,3 +1617,31 @@ speed-of-light ep4_targets.py.
   (15.9 GB/s a connection), router-space wait 3.2 ms of it; adders mostly wait for port credits (1 slot a port).
   Floor on this line: the end chips' connections carry 105 MB each, 4.2 ms at 25 GB/s (7.7 KB packets: ~18 GB/s by
   the bench_unicast fit) - the LoudBox X phases run at the per-connection rate, not 50 GB/s.
+
+### Stage 8: the Galaxy (8 x 4 FABRIC_2D_TORUS_XY, bh-glx-120-b08u02, 130 W, AICLK 1350; tree ws_ep4)
+- Changes for 32 chips:
+  - route words: two a token past 16 chips (sparse_dispatch_2d: mask, order | link << 1). ws_router WSR_EP4_RW (the
+    topk row's word 28 the mask, 29 the flags; route pieces [1, 1, 1, RW SP]); ep4_ref.route_words(words=2).
+  - combine ports: the port of (home, link) is the fabric's first hop toward home (MoEBlockResources.first_hops(), a
+    new binding of FirstHops), not the line's "home right of me: X+"; comb_ports' mesh plan takes the resources' wrap.
+  - xbuf built a dispatch piece at a time and joined on device; the dispatch check reads a chip at a time (all 32
+    chips' xbuf at once is 75 GB of host memory at 302K).
+  - tests: EP4_MESH=glx runs every test on (8, 4) with the torus fabric.
+  - The lane as on the LoudBox: G 2 on the Y columns (column_cycles, subcycles; 8-chip cycles, 2 muxes a group):
+    a bidirectional lane on each of the 2 links uses all 4 Y link-planes.
+- 302K (n 9449), uniform, every stage PASS (cmds/ep4_g1.sh; WS_WARM 3, WS_MEAS 5):
+  - head + exchange 1.10 ms traced; route words and grp bit-exact.
+  - dispatch 2.84 ms traced (8 pieces of 1184; 2.91 rows sent a token) against 2.13 ms speed of light on the X ring.
+  - lists 0.62 ms traced, bit-identical over two runs.
+  - experts (G 2) 11.6-12.3 ms per chip, O min PCC 0.99988 on all 32 chips; rows a chip / 12 n 0.993-1.009. Weights
+    only: 6.9 ms for 140 remote experts (84 GB/s into a chip, 21 GB/s a link direction): G 2 is compute bound, as on
+    the LoudBox.
+  - layer in sequence: y min PCC 0.99987-0.99988 on every chip, two layers bit-identical. Per phase (ms, max over
+    chips): head 0.92, exchange 0.12, dispatch 2.82, lists 0.52, experts 12.29, shared 1.61, combine 5.04, home 1.13;
+    sum 24.45 (WS on this Galaxy at 302K: 22.10; EP-4 speed of light in sequence 11.6).
+- Combine: the fabric sends every partial for the opposite chip of the ring one way (its tie), so one direction's
+  ports send twice the rows of the other (chip 0: 4582 / 4588 vs 9175 / 9161 a port) and wait on the router most
+  (router-space wait 1.5-2.4 ms vs 0.8-1.0); the heavy direction carries about 3 p n rows a link pair against 2 p n
+  balanced. Splitting the opposite chip's partials over both directions needs a route other than the table's tie.
+- Next on the critical path: G 4 (experts 12.3 -> about 6 ms; the Y lane's own experts forwarded without being
+  computed, or lanes split by direction), then the combine's direction balance (5.0 -> about 3.4 ms), then dispatch.

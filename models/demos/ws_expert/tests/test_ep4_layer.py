@@ -60,15 +60,18 @@ from models.demos.ws_expert.ep4_layer import (
     xrow,
 )
 from models.demos.ws_expert.ep4_ref import Geo, chip_layout, lane_orders, n_per_chip, route_words
-from models.demos.ws_expert.tests.test_ws_fab_bench import FAB
+from models.demos.ws_expert.tests.test_ws_fab_bench import FAB, TORUS
 from models.demos.ws_expert.ws_router import router_span_us
 
 LEN = os.environ.get("EP4_LEN", "302K")
+# EP4_MESH glx: the 8 x 4 Galaxy (FABRIC_2D_TORUS_XY: X a 4-ring, Y 8-chip rings) instead of the LoudBox 2 x 4
+GLX = os.environ.get("EP4_MESH", "lb") == "glx"
 WARM = int(os.environ.get("WS_WARM", "20"))
 MEAS = int(os.environ.get("WS_MEAS", "5"))
 TRACE_REGION = 64 << 20
 # (EP4_PAYLOAD: the fabric's max packet payload; the lane's 15232 by default, >= 15424 lets the dispatch pack 2 rows)
-FABT = dict(FAB, trace_region_size=TRACE_REGION)
+FABT = dict(TORUS if GLX else FAB, trace_region_size=TRACE_REGION)
+MESH = (8, 4) if GLX else (2, 4)
 if os.environ.get("EP4_PAYLOAD"):
     from models.demos.ws_expert.tests.test_ws_fab_bench import router_cfg
 
@@ -117,7 +120,7 @@ def rows32(x):
     return x.reshape(-1, 32)
 
 
-@pytest.mark.parametrize("mesh_device", [(2, 4)], indirect=True)
+@pytest.mark.parametrize("mesh_device", [MESH], indirect=True)
 @pytest.mark.parametrize("device_params", [FABT], indirect=True)
 @pytest.mark.parametrize("routing", ["uniform", "zipf"])
 def test_ep4_head(mesh_device, routing):
@@ -145,14 +148,22 @@ def test_ep4_head(mesh_device, routing):
             i, w, rw = unpack_topk(tk[r * C + c][:n], lc.K)
             ids[r, c] = i
     # route words: the reference from the device's own top-K, link = t & 1
-    ref_route = route_words(geo, ids, link=lambda t: t & 1)
+    RW = 1 if R * C <= 16 else 2
+    ref_route = route_words(geo, ids, link=lambda t: t & 1, words=RW)
     bad_route = 0
     for r in range(R):
         for c in range(C):
             ch = r * C + c
             dev_rw = rt[ch].reshape(-1).to(torch.int64) & 0xFFFFFFFF
-            bad_route += int((dev_rw[:n] != ref_route[r, c]).sum()) + int((dev_rw[n:] != 0).sum())
-            bad_route += int(((tk[ch][:n, 28].to(torch.int64) & 0xFFFFFFFF) != ref_route[r, c]).sum())
+            tkw = lambda j: tk[ch][:n, j].to(torch.int64) & 0xFFFFFFFF
+            if RW == 1:
+                bad_route += int((dev_rw[:n] != ref_route[r, c]).sum()) + int((dev_rw[n:] != 0).sum())
+                bad_route += int((tkw(28) != ref_route[r, c]).sum())
+            else:
+                dv = dev_rw.view(-1, 2)
+                for j, want in enumerate((ref_route[0][r, c], ref_route[1][r, c])):
+                    bad_route += int((dv[:n, j] != want).sum()) + int((tkw(28 + j) != want).sum())
+                bad_route += int((dv[n:] != 0).sum())
     # grp: chip (r, c) holds the topk rows of (r, 0..C-1), home-major
     bad_grp = 0
     for r in range(R):
@@ -208,7 +219,7 @@ def test_ep4_head(mesh_device, routing):
     )
 
 
-@pytest.mark.parametrize("mesh_device", [(2, 4)], indirect=True)
+@pytest.mark.parametrize("mesh_device", [MESH], indirect=True)
 @pytest.mark.parametrize("device_params", [FABT], indirect=True)
 @pytest.mark.parametrize("routing", ["uniform", "zipf"])
 def test_ep4_dispatch(mesh_device, routing):
@@ -231,17 +242,18 @@ def test_ep4_dispatch(mesh_device, routing):
         torch.cat([v.reshape(-1) for v in parts]).to(torch.int64) & 0xFFFFFFFF
         for parts in zip(*[per_chip(t) for t in outs["route_pieces"]])
     ]
-    got = per_chip(out)
+    masks = rt if N <= 16 else [v.view(-1, 2)[:, 0] for v in rt]  # (2 route words a token past 16 chips: mask, flags)
+    devs = ttnn.get_device_tensors(out)  # (read back a chip at a time: every chip's xbuf at once is N^2 KP SP rows)
     bad, routed, held = 0, 0, 0
     for ch in range(N):
         r, c = divmod(ch, C)
-        xb = got[ch].reshape(x_rows(lc, N), lc.H)
+        xb = ttnn.to_torch(devs[ch]).reshape(x_rows(lc, N), lc.H)
         for home in range(N):
             rows = xb[xrow(lc, N, home, torch.arange(TX))]
             if home == ch:
                 bad += int((rows != host["x"][ch]).any(-1).sum())
                 continue
-            to_me = ((rt[home][:TX] >> ch) & 1).bool()
+            to_me = ((masks[home][:TX] >> ch) & 1).bool()
             eq_home = (rows == host["x"][home]).all(-1)
             zero = (rows == 0).all(-1)
             if home // C != r:
@@ -265,7 +277,7 @@ def test_ep4_dispatch(mesh_device, routing):
                 )
             routed += int(to_me.sum())
             held += int((~to_me & eq_home & ~zero).sum())
-    del got
+        del xb
     logger.info(
         f"EP4 dispatch {routing} n {n}: rows routed {routed} ({routed / (N * n):.3f} a token), bad {bad}, pass-through "
         f"copies kept {held}"
@@ -292,7 +304,7 @@ def lane_pos(geo: Geo, G=2):
     return pos
 
 
-@pytest.mark.parametrize("mesh_device", [(2, 4)], indirect=True)
+@pytest.mark.parametrize("mesh_device", [MESH], indirect=True)
 @pytest.mark.parametrize("device_params", [FABT], indirect=True)
 @pytest.mark.parametrize("routing", ["uniform", "zipf"])
 def test_ep4_lists(mesh_device, routing):
@@ -432,7 +444,7 @@ def lane_times(cfg, T, counts, st, chips, clk):
     return out
 
 
-@pytest.mark.parametrize("mesh_device", [(2, 4)], indirect=True)
+@pytest.mark.parametrize("mesh_device", [MESH], indirect=True)
 @pytest.mark.parametrize("device_params", [FABT], indirect=True)
 @pytest.mark.parametrize("routing", ["uniform", "zipf"])
 def test_ep4_experts(mesh_device, routing):
@@ -567,7 +579,7 @@ def run_phase(mesh, fn, reps=1):
     return statistics.median(ws)
 
 
-@pytest.mark.parametrize("mesh_device", [(2, 4)], indirect=True)
+@pytest.mark.parametrize("mesh_device", [MESH], indirect=True)
 @pytest.mark.parametrize("device_params", [FABT], indirect=True)
 @pytest.mark.parametrize("routing", ["uniform", "zipf"])
 def test_ep4_layer(mesh_device, routing):

@@ -71,8 +71,10 @@ def head_outputs(mesh, lc: EP4Cfg):
     """ws_router.ep4_outputs with the route words in KP pieces, each [1, 1, 1, SP] zeroed (tokens >= TX stay 0: no
     route): the head writes them, the dispatch's calls read them (persistent, so a traced layer can replay)."""
     outs = ep4_outputs(mesh, lc)
+    from models.demos.ws_expert.ws_router import ep4_rw
+
     z = lambda: ttnn.zeros(
-        [1, 1, 1, lc.SP],
+        [1, 1, 1, lc.SP * ep4_rw(mesh)],
         dtype=ttnn.uint32,
         layout=ttnn.ROW_MAJOR_LAYOUT,
         device=mesh,
@@ -124,23 +126,33 @@ def dispatch_resources(mesh, lc: EP4Cfg):
 
 def xbuf_tensor(mesh, lc: EP4Cfg, x):
     """xbuf [1, 1, KP N SP, H] bf16 row-major: chip ch's own rows (x [N, TX, H], rows >= T zero) at xrow(ch, t), every
-    other row zero; the dispatch writes chip home's token t at xrow(home, t) on the chips its route word names."""
+    other row zero; the dispatch writes chip home's token t at xrow(home, t) on the chips its route word names. Built a
+    piece at a time (piece p: rows [p N SP, (p + 1) N SP), chip ch's own at ch SP) and joined on device, so the host
+    holds one piece of every chip at once."""
     N = mesh.get_num_devices()
-    XR = x_rows(lc, N)
-    buf = torch.zeros(N, XR, lc.H, dtype=torch.bfloat16)
-    t = torch.arange(lc.TX)
-    for ch in range(N):
-        buf[ch, xrow(lc, N, ch, t)] = x[ch]
-    out = ttnn.from_torch(
-        buf.reshape(N, 1, XR, lc.H),
-        dtype=ttnn.bfloat16,
-        layout=ttnn.ROW_MAJOR_LAYOUT,
-        device=mesh,
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        mesh_mapper=ttnn.ShardTensorToMesh(mesh, dim=0),
-    )
-    del buf
-    return ttnn.reshape(out, [1, 1, XR, lc.H])
+    SP = lc.SP
+    pieces = []
+    for p_ in range(lc.KP):
+        buf = torch.zeros(N, N * SP, lc.H, dtype=torch.bfloat16)
+        for ch in range(N):
+            seg = x[ch, p_ * SP : (p_ + 1) * SP]  # (the last piece may run past TX: those rows stay zero)
+            buf[ch, ch * SP : ch * SP + seg.shape[0]] = seg
+        pieces.append(
+            ttnn.from_torch(
+                buf.reshape(N, 1, N * SP, lc.H),
+                dtype=ttnn.bfloat16,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                device=mesh,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                mesh_mapper=ttnn.ShardTensorToMesh(mesh, dim=0),
+            )
+        )
+        del buf
+    out = pieces[0] if len(pieces) == 1 else ttnn.concat(pieces, dim=2, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    if len(pieces) > 1:
+        for t_ in pieces:
+            ttnn.deallocate(t_)
+    return ttnn.reshape(out, [1, 1, x_rows(lc, N), lc.H])
 
 
 def route_pieces(lc: EP4Cfg, outs):
@@ -416,7 +428,8 @@ def counters_tensor(mesh):
 def comb_ports(mesh, res):
     """{(r, c): [(dir, link index, (x, y), fabric link, peer)]} the X ports of every chip (resources.port_cores)."""
     R, Cn = tuple(mesh.shape)
-    plan = mb.mesh_plan_uniform(R, Cn, False, False, 2)
+    topo = res.topology
+    plan = mb.mesh_plan_uniform(R, Cn, topo["wrap_x"], topo["wrap_y"], 2)
     out = {}
     for (r, c, d, li), (x, y, link) in res.port_cores().items():
         if d not in ("X+", "X-"):
@@ -437,6 +450,7 @@ def build_combine(mesh, lc: EP4Cfg, res, louts, O, P, cnt_t, fence):
 
     R, Cn = tuple(mesh.shape)
     ports = comb_ports(mesh, res)
+    hops = res.first_hops()
     pcores = sorted({p[2] for v in ports.values() for p in v})
     acores = [c for c in end_cores(mesh) if c not in pcores]
     NA = len(acores)
@@ -469,11 +483,11 @@ def build_combine(mesh, lc: EP4Cfg, res, louts, O, P, cnt_t, fence):
         for c in range(Cn):
             pl = ports[(r, c)]
             NP = len(pl)
-            # port of (home, link): the direction toward home, link index link
+            # port of (home, link): the fabric's first hop toward home (on a ring it splits the tie itself), link li
             pidx = {}
             for pi, (d, li, _, _, _) in enumerate(pl):
                 for h in range(Cn):
-                    if (d == "X+" and h > c) or (d == "X-" and h < c):
+                    if h != c and hops[(r, c, r, h)] == d:
                         pidx[(h, li)] = pi
             wr_ct = [lc.TX, rb, tab.buffer_address(), tab_flag, NP, COMB_NSL, SLOTB, ring.buffer_address()]
             wr_ct += [pfl.buffer_address(), pend.buffer_address(), cred.buffer_address(), S5, scr.buffer_address()]
