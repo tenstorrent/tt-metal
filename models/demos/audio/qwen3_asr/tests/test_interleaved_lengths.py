@@ -26,7 +26,7 @@ import torch
 
 import ttnn
 from models.demos.audio.qwen3_asr.demo import transcribe as T
-from models.tt_transformers.tt.model_config import ModelArgs
+from models.demos.audio.qwen3_asr.tt.model_args import Qwen3ASRModelArgs
 
 DEVICE_PARAMS = {"l1_small_size": 32768, "trace_region_size": 200000000, "num_command_queues": 2}
 MAX_WER = float(os.environ.get("QWEN3ASR_INTERLEAVE_MAX_WER", "0.25"))
@@ -82,7 +82,7 @@ def test_interleaved_prefill_lengths(device):
     with safe_open(os.path.join(ckpt, "model.safetensors"), "pt") as h:
         embed = h.get_tensor("model.embed_tokens.weight").float()
     enc_params = T.tt_enc.preprocess_weights(T.ref.load_audio_tower_weights(snap_dir=snap, dtype=torch.float32), device)
-    args = ModelArgs(device, max_batch_size=1, max_seq_len=2048)
+    args = Qwen3ASRModelArgs(device, max_batch_size=1, max_seq_len=2048)
     model = T.Qwen3ASRDecoder(
         args,
         ttnn.bfloat16,

@@ -34,7 +34,7 @@ from safetensors import safe_open
 from transformers import AutoTokenizer
 
 import ttnn
-from models.tt_transformers.tt.model_config import ModelArgs
+from models.demos.audio.qwen3_asr.tt.model_args import Qwen3ASRModelArgs
 
 ROOT = os.path.join(os.path.dirname(__file__), "..")
 sys.path.insert(0, os.path.join(ROOT, "tt"))
@@ -73,7 +73,7 @@ def _load():
     dev = ttnn.open_device(device_id=0, trace_region_size=200000000, l1_small_size=65536, num_command_queues=2)
     w = ref.load_audio_tower_weights(snap_dir=snap, dtype=torch.float32)
     enc_params = tt_enc.preprocess_weights(w, dev)
-    args = ModelArgs(dev, max_batch_size=1, max_seq_len=2048)
+    args = Qwen3ASRModelArgs(dev, max_batch_size=1, max_seq_len=2048)
     sd = args.load_state_dict()
     model = Qwen3ASRDecoder(
         args, ttnn.bfloat16, dev, sd, args.weight_cache_path(ttnn.bfloat16), use_paged_kv_cache=False

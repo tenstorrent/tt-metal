@@ -697,6 +697,12 @@ class ModelArgs:
         if self.prefetcher is not None:
             self.use_qk_fused = False
 
+        # Model-specific overrides (see _apply_model_overrides). Defaults keep the shared paths.
+        self.lm_head_dtype = None
+        self.fuse_w13_decode = False
+        self.qkv_width_sharded_create_heads = False
+        self.sdpa_prefill_exp_approx = False
+
         if self.mesh_device is not None:  # Avoid issue with test_torch.py not having a device
             # ============================================================================
             # Parameter initialization
@@ -805,30 +811,7 @@ class ModelArgs:
                 else self.dram_shard_core_grid_for_k_and_n(self.hidden_dim // self.num_devices, self.dim)
             )
 
-            # n150 1.7B decode: 16-core MLP and attn L1 grids (RMSNorm + DRAM-sharded matmuls share them).
-            # Isolated RMSNorm 64c was 3.4x slower than 8c; fused FF 16c ranked faster than 64c.
-            # A/B 2026-08-20: MLP 57.8 -> 59.4 tok/s; attn 59.4 -> 59.9 tok/s. EN byte-id, JA Japanese+CJK.
-            if self.num_devices == 1 and not self.is_galaxy and self.dim == 2048 and self.hidden_dim == 6144:
-                self.attn_input_grid = self.core_grid_for_count(16)
-                self.mlp_core_grid = self.core_grid_for_count(16)
-                self.mlp2_core_grid = self.core_grid_for_count(16)
-                # 32-core lm_head: 8 splits vs 64-core 4. A/B 59.9 -> 60.8 tok/s.
-                self.lm_head_core_grid = self.core_grid_for_count(32)
-                self.max_columns_per_device_lm_head = self.get_lm_head_max_columns_per_device(
-                    self.lm_head_core_grid, self.prefetcher
-                )
-                # n150 1.7B decode precision stack (baked in; all byte-identical EN + real-clip
-                # JA, see models/demos/audio/qwen3_asr/N150_PERF_SHEET.md). FF2 LoFi 60.8->61.4;
-                # FF1+FF3 LoFi 61.4->61.9; SDPA HiFi2 62.1->62.2; BFP8 KV cache 62.2->65.0/67.0;
-                # BFP8 attention weights (WQKV+WO) 67.0->67.7. JA byte-identical on real clips
-                # (ja_clean j0-j3); the earlier JA rejection was the degenerate 9x-tiled clip only.
-                for conf in self.optimizations.decoder_optimizations.values():
-                    conf.op_fidelity_settings[OpGroup.LI_FF2] = MathFidelitySetting.LOFI
-                    conf.op_fidelity_settings[OpGroup.LI_FF1_FF3] = MathFidelitySetting.LOFI
-                    conf.op_fidelity_settings[OpGroup.SDPA_DECODE] = MathFidelitySetting.HIFI2
-                    conf.tensor_dtype_settings[TensorGroup.KV_CACHE] = PrecisionSetting.BFP8
-                    conf.tensor_dtype_settings[TensorGroup.WQKV] = PrecisionSetting.BFP8
-                    conf.tensor_dtype_settings[TensorGroup.WO] = PrecisionSetting.BFP8
+            self._apply_model_overrides()
 
             # ============================================================================
             # Compute kernels Configs
@@ -1635,11 +1618,9 @@ class ModelArgs:
                 k_chunk_size=k_chunk,
             )
         else:
-            # n150 1.7B decode: SDPA exp_approx. A/B 61.9 -> 62.1 tok/s, EN byte-id, JA Japanese+CJK.
-            n150_asr = self.num_devices == 1 and not self.is_galaxy and self.dim == 2048 and self.hidden_dim == 6144
             return ttnn.SDPAProgramConfig(
                 compute_with_storage_grid_size=(8, 8),
-                exp_approx_mode=n150_asr,
+                exp_approx_mode=self.sdpa_prefill_exp_approx,
                 q_chunk_size=q_chunk,
                 k_chunk_size=k_chunk,
             )
@@ -3328,6 +3309,10 @@ class ModelArgs:
     def dram_shard_core_grid_for_k(self, k: int) -> Tuple[int, int]:
         rows, cols = self.find_grid(k // ttnn.TILE_SIZE)
         return ttnn.CoreGrid(x=cols, y=rows)
+
+    def _apply_model_overrides(self):
+        """Hook for a model's ModelArgs subclass to change grids, precision and the flags set in
+        __init__, after the default grids and before the program configs built from them."""
 
     def core_grid_for_count(self, cores: int) -> ttnn.CoreGrid:
         """Place `cores` as a rectangle on the Wormhole compute grid (wide-short first)."""

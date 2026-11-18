@@ -101,10 +101,10 @@ class MLP(LightweightModule):
         self.w2 = as_sharded_tensor("w2_sharded", self.ff2_dtype, dims=w2_dims)
         self.w3 = as_sharded_tensor("w3_sharded", self.ff1_3_dtype, dims=w1_dims)
 
-        # Decode: one DRAM-sharded matmul for gate|up (Llama/GPT-OSS). Same math as
-        # silu(w1(x))*w3(x). Prefill keeps the two-matmul path. No TG / no prefetcher.
+        # Decode: one DRAM-sharded matmul for gate|up. Same math as silu(w1(x))*w3(x).
+        # Prefill keeps the two-matmul path. Costs a second copy of w1/w3 in DRAM.
         self.w13 = None
-        if not args.is_galaxy and prefetcher is None:
+        if args.fuse_w13_decode and not args.is_galaxy and prefetcher is None:
             n13 = 2 * (args.hidden_dim // args.num_devices)
             w13_mem = args.create_dram_sharded_mem_config(args.dim, n13)
             pad_n = w1_dims[0] if args.is_galaxy else w1_dims[-1]
