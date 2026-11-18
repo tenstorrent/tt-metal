@@ -90,6 +90,19 @@ private:
         bool stall_before_program,
         const PerDeviceRuntimeArgs& per_device_runtime_args,
         const std::vector<ResolvedPerDeviceRuntimeArgsField>& resolved);
+    // Counts program command bytes written to devices, when host transfer stats are on.
+    void add_program_config_bytes(uint64_t bytes);
+    // A workload's device writes, collected to fan out across dispatch_thread_pool_.
+    struct ProgramWrite {
+        Device* device = nullptr;
+        ProgramCommandSequence* program_cmd_seq = nullptr;
+        tt::tt_metal::detail::ProgramImpl* program = nullptr;  // set: the worker updates program_cmd_seq first
+        const vector_aligned<uint32_t>* packed = nullptr;  // nullptr: write the fragments
+        uint32_t packed_size = 0;
+    };
+    std::vector<ProgramWrite> program_writes_;
+    std::vector<uint32_t> program_write_device_ids_;
+    std::vector<vector_aligned<uint32_t>> packed_programs_;
     // For a given MeshWorkload, a subgrid is unused if no programs are run on it. Dispatch sequences
     // must be sent to this subgrid to ensure consistent global state across the Virtual Mesh.
     // This function generates and writes dispatch commands forwarding go signal sequences to
