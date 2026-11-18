@@ -591,35 +591,36 @@ inline __attribute__((always_inline)) void read_all_counters([[maybe_unused]] st
 }
 
 #if defined(LLK_PERF_RISCV_PMC)
-// Each thread's own window of a zone, counted or not so that every launch runs the same code.
-inline __attribute__((always_inline)) volatile std::uint32_t* riscv_slot(std::uint32_t zone_id)
+// One thread's window of a zone. The start and the sample stay in registers and the stack (local memory), and the block
+// is stored only after the zone's Tensix counters are frozen, so the window adds no L1 access to the Tensix L1 counters.
+struct riscv_window
 {
-    return reinterpret_cast<volatile std::uint32_t*>(perf_counters_riscv_slot_addr(zone_id, llk_barrier::THREAD_ID));
-}
-
-inline __attribute__((always_inline)) void riscv_window_begin(std::uint32_t zone_id)
-{
-    llk::perf::riscv::arm(LLK_PERF_RISCV_EV3, LLK_PERF_RISCV_EV4);
-    const llk::perf::riscv::Reference start = llk::perf::riscv::reference();
-    volatile std::uint32_t* slot            = riscv_slot(zone_id);
-    slot[RISCV_WORD_CYCLES]                 = start.cycles;
-    slot[RISCV_WORD_INSTRET]                = start.instret;
-}
-
-inline __attribute__((always_inline)) void riscv_window_end(std::uint32_t zone_id)
-{
-    volatile std::uint32_t* slot            = riscv_slot(zone_id);
-    const llk::perf::riscv::Reference start = {slot[RISCV_WORD_CYCLES], slot[RISCV_WORD_INSTRET]};
+    llk::perf::riscv::Reference start;
     std::uint32_t pmc3, pmc4, cycles, instret;
-    llk::perf::riscv::sample(start, pmc3, pmc4, cycles, instret);
-    slot[RISCV_WORD_CYCLES]  = cycles;
-    slot[RISCV_WORD_INSTRET] = instret;
-    slot[RISCV_WORD_PMC3]    = pmc3;
-    slot[RISCV_WORD_PMC4]    = pmc4;
-    slot[RISCV_WORD_EVENT3]  = LLK_PERF_RISCV_EV3;
-    slot[RISCV_WORD_EVENT4]  = LLK_PERF_RISCV_EV4;
-    slot[RISCV_WORD_FLAG]    = SYNC_ZONE_COMPLETE | (detail::token << LAUNCH_TOKEN_SHIFT);
-}
+
+    inline __attribute__((always_inline)) void begin()
+    {
+        llk::perf::riscv::arm(LLK_PERF_RISCV_EV3, LLK_PERF_RISCV_EV4);
+        start = llk::perf::riscv::reference();
+    }
+
+    inline __attribute__((always_inline)) void end()
+    {
+        llk::perf::riscv::sample(start, pmc3, pmc4, cycles, instret);
+    }
+
+    inline __attribute__((always_inline)) void store(std::uint32_t zone_id) const
+    {
+        volatile std::uint32_t* slot = reinterpret_cast<volatile std::uint32_t*>(perf_counters_riscv_slot_addr(zone_id, llk_barrier::THREAD_ID));
+        slot[RISCV_WORD_CYCLES]      = cycles;
+        slot[RISCV_WORD_INSTRET]     = instret;
+        slot[RISCV_WORD_PMC3]        = pmc3;
+        slot[RISCV_WORD_PMC4]        = pmc4;
+        slot[RISCV_WORD_EVENT3]      = LLK_PERF_RISCV_EV3;
+        slot[RISCV_WORD_EVENT4]      = LLK_PERF_RISCV_EV4;
+        slot[RISCV_WORD_FLAG]        = SYNC_ZONE_COMPLETE | (detail::token << LAUNCH_TOKEN_SHIFT);
+    }
+};
 #endif // LLK_PERF_RISCV_PMC
 
 inline __attribute__((always_inline)) void freeze_zone(std::uint32_t zone_id)
@@ -700,6 +701,12 @@ template <PerfRunType RUN_TYPE>
 struct perf_counter_scoped
 {
     std::uint32_t zone_id;
+#if defined(PERF_COUNTERS_COMPILED) && defined(LLK_PERF_RISCV_PMC)
+    // A single thread run type's other threads end their zones inside the measured window, where their stores would
+    // reach its L1 counters, so only the measured thread keeps a RISC-V window there.
+    static constexpr bool riscv_here = !is_single_thread_runtype(RUN_TYPE) || is_measured_thread(RUN_TYPE);
+    riscv_window riscv;
+#endif
 
     perf_counter_scoped(const perf_counter_scoped&)            = delete;
     perf_counter_scoped(perf_counter_scoped&&)                 = delete;
@@ -733,7 +740,10 @@ struct perf_counter_scoped
 #endif
             });
 #if defined(PERF_COUNTERS_COMPILED) && defined(LLK_PERF_RISCV_PMC)
-        riscv_window_begin(zid);
+        if constexpr (riscv_here)
+        {
+            riscv.begin();
+        }
 #endif
         ckernel::fence_compiler();
     }
@@ -743,7 +753,10 @@ struct perf_counter_scoped
         ckernel::fence_compiler();
         [[maybe_unused]] const std::uint32_t zid = zone_id;
 #if defined(PERF_COUNTERS_COMPILED) && defined(LLK_PERF_RISCV_PMC)
-        riscv_window_end(zid);
+        if constexpr (riscv_here)
+        {
+            riscv.end();
+        }
 #endif
         static_assert(
             exit_barrier_for(RUN_TYPE) || is_single_thread_runtype(RUN_TYPE),
@@ -773,6 +786,12 @@ struct perf_counter_scoped
 #endif
                 });
         }
+#if defined(PERF_COUNTERS_COMPILED) && defined(LLK_PERF_RISCV_PMC)
+        if constexpr (riscv_here)
+        {
+            riscv.store(zid); // the zone's Tensix counters are frozen by now
+        }
+#endif
         ckernel::fence_compiler();
     }
 };

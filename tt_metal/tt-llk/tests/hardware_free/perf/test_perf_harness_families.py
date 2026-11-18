@@ -21,6 +21,7 @@ from helpers.counters import (
     parse_router_option,
     read_family_counters,
 )
+from helpers.llk_params import PerfRunType
 from helpers.metrics import export_counters
 from helpers.test_config import TestConfig
 from tt_llk_perf import headers
@@ -389,6 +390,29 @@ def test_read_family_counters_reads_blocks_from_the_layout(families_off, monkeyp
     )
     assert (frame[frame["bank"] == "NOC0"]["count"] == 3).any()
     assert (frame["zone"].isin(["ZONE_1", "LAUNCH_ZONE_1"])).all()
+
+
+def test_an_isolate_run_type_reads_its_measured_thread_only(families_off, monkeypatch):
+    stall = headers.riscv_event_select("blackhole", "baby", ["BP_PC_STALL_ANY"])
+    TestConfig.PERF_RISCV_EVENTS = (stall, 0)
+    math = (
+        TestConfig.PERF_COUNTERS_ZONES_BASE
+        + 1 * TestConfig.PERF_COUNTERS_ZONE_SIZE
+        + TestConfig._PERF_COUNTERS_RISCV_ZONE_OFFSET
+        + 1 * TestConfig._PERF_COUNTERS_RISCV_THREAD_WORDS * 4
+    )
+    memory = {math: _riscv_words(stall, 0, 100, 50, 10, 0)}
+
+    def fake_read(location, addr, word_count):
+        return memory[addr][:word_count]  # any other thread's block is a KeyError
+
+    monkeypatch.setattr(counters, "read_words_from_device", fake_read)
+    monkeypatch.setattr(counters, "get_chip_architecture", lambda: "blackhole")
+    frame = read_family_counters("0,0", 0b10, TOKEN, PerfRunType.MATH_ISOLATE)
+    assert list(frame["bank"].unique()) == ["RISCV_MATH"]
+    assert counters.riscv_threads_of(PerfRunType.L1_TO_L1, "blackhole") == [0, 1, 2]
+    assert counters.riscv_threads_of(PerfRunType.L1_TO_L1, "quasar") == [0, 1, 2, 3]
+    assert counters.riscv_threads_of(PerfRunType.SFPU_ISOLATE, "quasar") == [3]
 
 
 # --- report ---------------------------------------------------------------------------------------------------------

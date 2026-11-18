@@ -995,6 +995,7 @@ class PerfConfig(TestConfig):
             location=TestConfig.TENSIX_LOCATION,
             zones=self.counted_zones,
             token=self.launch_token,
+            run_type=self.current_run_type,
         )
         if not family_results.empty:
             family_results["run_index"] = run_index
