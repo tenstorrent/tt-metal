@@ -4,13 +4,12 @@
 import ttnn
 import torch
 import pytest
-from PIL import Image
-from torchvision import transforms
 from loguru import logger
 from ttnn.model_preprocessing import preprocess_model_parameters
 from tt_py_test_utils_common.utils_for_testing import check_with_pcc
 
 from models.experimental.retinanet.tt.tt_bottleneck import TTBottleneck, get_bottleneck_optimisation
+from models.experimental.retinanet.tests.pcc.synthetic_input import synthetic_image
 from torchvision.models.detection import retinanet_resnet50_fpn_v2, RetinaNet_ResNet50_FPN_V2_Weights
 from ttnn.model_preprocessing import fold_batch_norm2d_into_conv2d
 
@@ -67,16 +66,7 @@ def load_input(name):
     layer = name[9:-2]
     bottleneck = int(name[-1])
 
-    preprocess = transforms.Compose(
-        [
-            transforms.CenterCrop((512, 512)),
-            transforms.ToTensor(),
-            transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
-        ]
-    )
-
-    img = Image.open("models/experimental/retinanet/resources/dog_800x800.jpg").convert("RGB")
-    x = preprocess(img).unsqueeze(0)
+    x = synthetic_image()
 
     for lname, module in torch_backbone.named_children():
         if lname == layer:
