@@ -1,0 +1,2 @@
+{"case": "aspp_convs_1", "variant": "baseline", "pcc": 0.9997645999190008, "pcc_threshold": 0.996, "out_sha": "0bbe6bf990b2928e", "blocking": {"k_cols": 11, "ns": 1, "bm": 8, "bk": 18, "nkb": 3, "nslice": true, "shared": true, "mblocks": 1, "slice_depth": 1, "foot": 1277056}}
+{"case": "aspp_convs_2", "variant": "baseline", "pcc": 0.9997641645208292, "pcc_threshold": 0.996, "out_sha": "e2ff894b302e5287", "blocking": {"k_cols": 11, "ns": 1, "bm": 8, "bk": 18, "nkb": 3, "nslice": true, "shared": true, "mblocks": 1, "slice_depth": 1, "foot": 1277056}}

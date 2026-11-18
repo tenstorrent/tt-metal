@@ -1,0 +1,167 @@
+diff --git a/ttnn/ttnn/operations/conv2d_3x3/kernels/conv2d_3x3_compute.cpp b/ttnn/ttnn/operations/conv2d_3x3/kernels/conv2d_3x3_compute.cpp
+--- a/ttnn/ttnn/operations/conv2d_3x3/kernels/conv2d_3x3_compute.cpp
++++ b/ttnn/ttnn/operations/conv2d_3x3/kernels/conv2d_3x3_compute.cpp
+@@ -22,7 +22,8 @@
+ // (untilize, tilize, combine, bias add) first restores the state it needs.
+ //
+ // N-slice-outer K split (the default under a K split, when the resident in0 fits L1): see the branch below and
+-// conv2d_3x3_nslice_order.hpp. The K-blocked walk below remains for K splits whose [bm, K] in0 does not fit.
++// conv2d_3x3_nslice_order.hpp. The K-blocked walk below remains for K splits whose [bm, K] in0 does not fit. Each owner
++// slice is multiplied by nslice_slice_walk (raw LLK, 4-tile-long subblocks with a ragged last group; see there).
+ //
+ // K split (BLOCK_SHARDED, k_cols > 1): the matmul accumulates this core's channel slice into fp32
+ // partials [bm, all C_out] that the WRITER consumes (it scatters N-slice y to grid column y of the row),
+@@ -309,6 +310,79 @@
+     }
+ };
+ 
++// N-slice-outer walk, raw LLK.
++//   HELPER BYPASS: compute_kernel_lib::matmul_block runs one subblock shape per call, and that shape must divide the
++// block (width first). An owner slice of bm 7 x out_n 2 (res5.x) therefore only gets 1 x 2 subblocks: the BH matmul
++// unpacker reads rt + rt * ct tiles per k-step when ct >= rt (ct + ct * rt otherwise), 1.5 tile unpacks per tile-MAC,
++// and the walk ran at 19.5 cycles per tile-MAC. 4-long subblocks with a shorter last group (4 + 3 rows) cost 1.25 /
++// 1.33: 17.5 cycles per tile-MAC. This is the helper's LLK sequence (matmul_block_init, per-k ckernel::matmul_block
++// over the same K order, pack_tile<true> to absolute offsets), so the output is bit-identical, with a re-init where the
++// subblock length changes. Measured (Blackhole p150b, LoFi, DEVICE KERNEL DURATION, medians): res5.1 45.4 -> 42.2 us,
++// res5.2 45.4 -> 42.0 us (walk 30.3 -> 26.9 us). Flat: res5 at HiFi4 (math-bound) and the out_n 1 shapes (already
++// 4 x 1).
++//
++// Rows [r0, r0 + rt) x columns [c0, c0 + ct) of the resident [bm, K] in0 times the slice's compact [K, out_n] weights
++// at the weights CB's read pointer, the whole K accumulated in DEST, packed to cb_out at the slice's tile-row-major
++// offsets. The caller inits for (ct, rt), reserves / pushes cb_out and waits / pops the weights.
++template <uint32_t K, uint32_t out_n>
++ALWI void nslice_subblock(
++    uint32_t cb_in0, uint32_t cb_w, uint32_t cb_out, uint32_t r0, uint32_t rt, uint32_t c0, uint32_t ct) {
++    tile_regs_acquire();
++    for (uint32_t k = 0; k < K; ++k) {
++        ckernel::matmul_block(cb_in0, cb_w, r0 * K + k, k * out_n + c0, 0, false, ct, rt, K);
++    }
++    tile_regs_commit();
++    tile_regs_wait();
++    for (uint32_t rr = 0; rr < rt; ++rr) {
++        for (uint32_t cc = 0; cc < ct; ++cc) {
++            pack_tile<true>(rr * ct + cc, cb_out, (r0 + rr) * out_n + c0 + cc);
++        }
++    }
++    tile_regs_release();
++}
++
++// One owner slice in subblocks 4 tiles long (or the whole side, if shorter) along the slice's longer side: rt 4 x ct 1
++// (the unpacker reuses each weight tile across 4 in0 rows) when bm allows at least as long a run as out_n, else 1 x 4.
++// The last group along that side may be shorter. Each slice first runs at the length the previous one ended on, so the
++// init changes at most once per slice. cur_len: the current init's length, 0 before the first.
++template <uint32_t bm, uint32_t K, uint32_t out_n>
++ALWI void nslice_slice_walk(uint32_t cb_in0, uint32_t cb_w, uint32_t cb_out, uint32_t& cur_len) {
++    constexpr uint32_t tall_len = bm < 4 ? bm : 4;
++    constexpr uint32_t wide_len = out_n < 4 ? out_n : 4;
++    constexpr bool tall = tall_len >= wide_len;
++    constexpr uint32_t len = tall ? tall_len : wide_len;
++    constexpr uint32_t extent = tall ? bm : out_n;
++    constexpr uint32_t other = tall ? out_n : bm;
++    constexpr uint32_t full_groups = extent / len;
++    constexpr uint32_t ragged = extent % len;
++    auto run_length = [&](uint32_t l) {
++        if (l != cur_len) {
++            ckernel::matmul_block_init(cb_in0, cb_w, false, tall ? 1 : l, tall ? l : 1, K);
++            cur_len = l;
++        }
++        const uint32_t g_begin = l == len ? 0 : full_groups;
++        const uint32_t g_end = l == len ? full_groups : full_groups + 1;
++        for (uint32_t o = 0; o < other; ++o) {
++            for (uint32_t g = g_begin; g < g_end; ++g) {
++                if constexpr (tall) {
++                    nslice_subblock<K, out_n>(cb_in0, cb_w, cb_out, g * len, l, o, 1);
++                } else {
++                    nslice_subblock<K, out_n>(cb_in0, cb_w, cb_out, o, 1, g * len, l);
++                }
++            }
++        }
++    };
++    if constexpr (ragged == 0) {
++        run_length(len);
++    } else if (cur_len == ragged) {
++        run_length(ragged);
++        run_length(len);
++    } else {
++        run_length(len);
++        run_length(ragged);
++    }
++}
++
+ }  // namespace
+ 
+ void kernel_main() {
+@@ -344,8 +418,9 @@
+     constexpr uint32_t bias_stream_groups = get_compile_time_arg_val(29);
+     constexpr bool nslice_outer = get_compile_time_arg_val(30) != 0;
+     constexpr uint32_t cb_slice_r = get_compile_time_arg_val(31);
+-    constexpr uint32_t slice_sb_h = get_compile_time_arg_val(32);
+-    constexpr uint32_t slice_sb_w = get_compile_time_arg_val(33);
++    // The helper walk's slice subblock; nslice_slice_walk picks its own.
++    [[maybe_unused]] constexpr uint32_t slice_sb_h = get_compile_time_arg_val(32);
++    [[maybe_unused]] constexpr uint32_t slice_sb_w = get_compile_time_arg_val(33);
+     constexpr uint32_t untilize_batch_rows = get_compile_time_arg_val(34);
+     constexpr bool strided_window = get_compile_time_arg_val(35) != 0;
+     constexpr uint32_t center_mode = get_compile_time_arg_val(36);
+@@ -545,12 +620,11 @@
+         if constexpr (k_split && nslice_outer) {
+             // N-slice-outer K split: the whole K of in0 is tilized once into a resident [bm, K] block (the reader
+             // gathers tile-row outer, K-block inner). Then per owner N-slice, in the order of
+-            // conv2d_3x3_nslice_order.hpp, one matmul call runs the whole K as one K-block: DEST accumulates over K,
+-            // the fp32 [bm, out_n] slice is packed once, with no L1-accumulation pass, and pushed to the CB of the
+-            // RISC that sends it (reader: cb_slice_r; writer: cb_matmul_partials) while the next slice multiplies.
++            // conv2d_3x3_nslice_order.hpp, nslice_slice_walk runs the whole K: DEST accumulates over K, the fp32
++            // [bm, out_n] slice is packed once, with no L1-accumulation pass, and pushed to the CB of the RISC that
++            // sends it (reader: cb_slice_r; writer: cb_matmul_partials) while the next slice multiplies.
+             constexpr uint32_t k_tiles = block_k_tiles * num_k_blocks;
+             constexpr uint32_t num_owning_cols = (block_n_tiles + out_n_tiles - 1) / out_n_tiles;
+-            static_assert(block_m_tiles % slice_sb_h == 0 && out_n_tiles % slice_sb_w == 0);
+             // The tilize packs must overwrite (the previous M-block's combine may have left L1 accumulation on).
+             pack_reconfig_l1_acc(0);
+             if constexpr (!face_direct) {
+@@ -573,30 +647,26 @@
+             }
+             {
+                 MaybeDeviceZoneScope("compute_matmul_walk");
++                constexpr uint32_t slice_tiles = block_m_tiles * out_n_tiles;
++                constexpr uint32_t slice_weight_tiles = k_tiles * out_n_tiles;
++                im2col_tiles.wait_front(block_m_tiles * k_tiles);
++                // Matmul convention: srca takes in1 (the weights), srcb in0. Both slice CBs are fp32.
++                reconfig_data_format(cb_weights, cb_im2col_tiles);
++                PACK((pack_reconfig_data_format(cb_matmul_partials)));
++                uint32_t walk_len = 0;
+                 for (uint32_t j = 0; j < k_cols; ++j) {
+                     const uint32_t y = conv2d_3x3::nslice_owner<k_cols>(my_col, j);
+                     if (y >= num_owning_cols) {
+                         continue;
+                     }
+-                    CircularBuffer& slice_cb = conv2d_3x3::nslice_reader_sends<k_cols>(j) ? slice_r : partials;
+-                    ckl::matmul_block<
+-                        /*transpose=*/false,
+-                        /*packer_l1_acc=*/false,
+-                        ckl::LastBlockTarget::Out,
+-                        ckl::OutputCBLayout::TileRowMajor,
+-                        ckl::matmul_config::InitMode::Short,
+-                        ckl::InputPolicy::WaitAndRetainOnLastBlock,
+-                        ckl::InputPolicy::WaitAndPopPerKBlock>(
+-                        im2col_tiles,
+-                        weights,
+-                        slice_cb,
+-                        slice_cb,
+-                        ckl::MatmulBlockShape::of(
+-                            block_m_tiles / slice_sb_h, out_n_tiles / slice_sb_w, slice_sb_h, slice_sb_w, k_tiles, 1),
+-                        {},
+-                        {},
+-                        /*in1_per_core_w=*/out_n_tiles,
+-                        /*out_row_width=*/out_n_tiles);
++                    const bool reader_sends = conv2d_3x3::nslice_reader_sends<k_cols>(j);
++                    CircularBuffer& slice_cb = reader_sends ? slice_r : partials;
++                    weights.wait_front(slice_weight_tiles);
++                    slice_cb.reserve_back(slice_tiles);
++                    nslice_slice_walk<block_m_tiles, k_tiles, out_n_tiles>(
++                        cb_im2col_tiles, cb_weights, reader_sends ? cb_slice_r : cb_matmul_partials, walk_len);
++                    slice_cb.push_back(slice_tiles);
++                    weights.pop_front(slice_weight_tiles);
+                 }
+                 im2col_tiles.pop_front(block_m_tiles * k_tiles);
+             }

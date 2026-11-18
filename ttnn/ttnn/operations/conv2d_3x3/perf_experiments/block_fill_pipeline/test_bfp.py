@@ -1,0 +1,506 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+# SPDX-License-Identifier: Apache-2.0
+
+"""Bake-off: keep the TILE halo-slab fill feeding the untilize (perf experiment block_fill_pipeline, round 5).
+
+Every variant runs on this dir's op copy (op_copy/: HEAD 2ac42333eb2 + this experiment's knobs), whose knobs default to
+the committed op's behaviour (variant `baseline`). Never profile it in one process with the real op (zone-name hash
+collisions).
+
+Variants (knobs in op_copy/conv2d_3x3_program_descriptor.py, BFP_*):
+  baseline   the op's fill: per cb_input_tiles batch (ub tile-rows), reserve -> reads -> wait -> push, ring of 2 batches;
+             on HEIGHT the existing split fill (writer reads higher shards' rows on NoC1) on the weight receivers.
+  bz         baseline + per-batch zones by owner direction (bfp_rd_lo / bfp_rd_own / bfp_rd_hi), diagnosis only.
+  split      BLOCK too: the writer reads the higher shards' tile-rows on NoC1 (pure column receivers), polling the
+             reader's hand-overs wherever it waits.
+  splitall   split, also on the column weight senders.
+  alias      cb_input_tiles lives in cb_im2col_tiles' L1 (one M-block per core), ring = the whole slab.
+  aliasw<W>  alias + W batches in flight (own transaction id each).
+  w<W>       W batches in flight on the 2-batch ring.
+  splitalias[w<W>] / splitallalias[w<W>]: the combinations.
+
+Env: BFP_CASES (focus ids, `block:<layer>`, `height:<layer>`, or `focus` / `block` / `height` / `all`), BFP_VARIANTS
+(comma list, run in that order per case), BFP_ORDER=alt (alternate the variant order per case), BFP_LOG. One dispatch
+per test, for `run_safe_pytest.sh --profile`; each dispatch appends a JSON record (blocking, PCC, output hash) to
+runs/<log>.jsonl, which report.py joins with the profiler CSV's GenericOp rows in call order. Precision contract fixed
+per case (its fidelity, fp32 DEST, its dtypes): no variant touches it. A pure data-movement change, so every variant
+must be bit-identical to `baseline` (report.py compares the output hash).
+"""
+
+import hashlib
+import importlib
+import json
+import os
+import time
+from pathlib import Path
+
+import pytest
+import ttnn
+
+from tests.ttnn.utils_for_testing import comp_pcc
+
+HERE = Path(__file__).parent
+# BFP_PKG=grad runs the graduation copy (grad/: the real op + graduation.patch) instead, with variant `grad` only.
+_COPY = os.environ.get("BFP_PKG", "op_copy")
+_PKG = "ttnn.operations.conv2d_3x3.perf_experiments.block_fill_pipeline." + _COPY
+op = importlib.import_module(_PKG + ".conv2d_3x3")
+pd = importlib.import_module(_PKG + ".conv2d_3x3_program_descriptor")
+assert Path(pd.KERNEL_DIR).parent == HERE / _COPY, pd.KERNEL_DIR
+
+KNOB_DEFAULTS = dict(
+    BFP_DEFINES=(),
+    BFP_SPLIT_BLOCK=False,
+    BFP_SPLIT_SENDERS=False,
+    BFP_ALIAS_RING=False,
+    BFP_WINDOW=1,
+    BFP_WRITER_WINDOW=1,
+    BFP_SPLIT_RT=False,
+    BFP_SPLIT_MIN_BYTES=0,
+    BFP_UB=None,
+)
+# Startup fixes on the short last channel slice: no im2col zeroing under tap-major (BFP_NOZERO), and the ring's padding
+# tiles read from the zero block per row instead of zeroed at kernel start (BFP_LANE_READS).
+NZL = ("BFP_NOZERO", "BFP_LANE_READS")
+VARIANTS = {
+    "baseline": {},
+    "bz": dict(BFP_DEFINES=("BFP_BATCH_ZONES",)),
+    "split": dict(BFP_SPLIT_BLOCK=True),
+    "splitbz": dict(BFP_SPLIT_BLOCK=True, BFP_DEFINES=("BFP_BATCH_ZONES",)),
+    "splitall": dict(BFP_SPLIT_BLOCK=True, BFP_SPLIT_SENDERS=True),
+    "alias": dict(BFP_ALIAS_RING=True),
+    **{f"w{w}": dict(BFP_WINDOW=w) for w in (2,)},
+    **{f"aliasw{w}": dict(BFP_ALIAS_RING=True, BFP_WINDOW=w) for w in (2, 3, 4, 6, 8)},
+    "splitalias": dict(BFP_SPLIT_BLOCK=True, BFP_ALIAS_RING=True),
+    "nozero": dict(BFP_DEFINES=("BFP_NOZERO",)),
+    "nzl": dict(BFP_DEFINES=NZL),
+    **{f"nzlaliasw{w}": dict(BFP_DEFINES=NZL, BFP_ALIAS_RING=True, BFP_WINDOW=w) for w in (1, 2, 3, 4, 6, 8)},
+    "nzlsplitall": dict(BFP_DEFINES=NZL, BFP_SPLIT_BLOCK=True, BFP_SPLIT_SENDERS=True),
+    # Recommended: startup fixes + whole-slab ring in in0 + reader window 4 + BLOCK receiver split (runtime flag) with a
+    # writer window of 4. rec_nosplit: the same without the BLOCK split; rec2: windows of 2.
+    "rec": dict(
+        BFP_DEFINES=NZL, BFP_SPLIT_BLOCK=True, BFP_SPLIT_RT=True, BFP_ALIAS_RING=True, BFP_WINDOW=4, BFP_WRITER_WINDOW=4
+    ),
+    "rec2": dict(
+        BFP_DEFINES=NZL, BFP_SPLIT_BLOCK=True, BFP_SPLIT_RT=True, BFP_ALIAS_RING=True, BFP_WINDOW=2, BFP_WRITER_WINDOW=2
+    ),
+    # rec with the BLOCK split only on cores reading >= 8 KB from higher shards (small hand-overs are pure latency).
+    "rec_thr": dict(
+        BFP_DEFINES=NZL,
+        BFP_SPLIT_BLOCK=True,
+        BFP_SPLIT_RT=True,
+        BFP_SPLIT_MIN_BYTES=8192,
+        BFP_ALIAS_RING=True,
+        BFP_WINDOW=4,
+        BFP_WRITER_WINDOW=4,
+    ),
+    **{
+        f"rec_thr_ub{ub}": dict(
+            BFP_DEFINES=NZL,
+            BFP_SPLIT_BLOCK=True,
+            BFP_SPLIT_RT=True,
+            BFP_SPLIT_MIN_BYTES=8192,
+            BFP_ALIAS_RING=True,
+            BFP_WINDOW=4,
+            BFP_WRITER_WINDOW=4,
+            BFP_UB=ub,
+        )
+        for ub in (3, 5, 6, 10, 15)
+    },
+    # rec_thr with the split on every receiver that reads anything from a higher shard (no byte threshold).
+    "rec_all": dict(
+        BFP_DEFINES=NZL,
+        BFP_SPLIT_BLOCK=True,
+        BFP_SPLIT_RT=True,
+        BFP_SPLIT_MIN_BYTES=0,
+        BFP_ALIAS_RING=True,
+        BFP_WINDOW=4,
+        BFP_WRITER_WINDOW=4,
+    ),
+    "rec_nosplit": dict(BFP_DEFINES=NZL, BFP_SPLIT_RT=True, BFP_ALIAS_RING=True, BFP_WINDOW=4, BFP_WRITER_WINDOW=4),
+    # The split on the column receivers only, as a runtime flag (one kernel per slice width).
+    "nzlsplitrt": dict(BFP_DEFINES=NZL, BFP_SPLIT_BLOCK=True, BFP_SPLIT_RT=True),
+    **{
+        f"nzlsplitrtaliasw{w}ww{ww}": dict(
+            BFP_DEFINES=NZL,
+            BFP_SPLIT_BLOCK=True,
+            BFP_SPLIT_RT=True,
+            BFP_ALIAS_RING=True,
+            BFP_WINDOW=w,
+            BFP_WRITER_WINDOW=ww,
+        )
+        for w in (1, 2, 4, 8)
+        for ww in (1, 2, 4, 8)
+    },
+    **{
+        f"nzlsplitallaliasw{w}ww{ww}": dict(
+            BFP_DEFINES=NZL,
+            BFP_SPLIT_BLOCK=True,
+            BFP_SPLIT_SENDERS=True,
+            BFP_ALIAS_RING=True,
+            BFP_WINDOW=w,
+            BFP_WRITER_WINDOW=ww,
+        )
+        for w in (1, 2, 4, 8)
+        for ww in (1, 2, 4, 8)
+    },
+    **{f"splitaliasw{w}": dict(BFP_SPLIT_BLOCK=True, BFP_ALIAS_RING=True, BFP_WINDOW=w) for w in (2, 3, 4, 6, 8)},
+    **{
+        f"splitallaliasw{w}": dict(BFP_SPLIT_BLOCK=True, BFP_SPLIT_SENDERS=True, BFP_ALIAS_RING=True, BFP_WINDOW=w)
+        for w in (2, 3, 4, 6, 8)
+    },
+}
+
+
+def apply_variant(variant, monkeypatch):
+    if _COPY == "grad":
+        assert variant == "grad", "the graduation copy has no knobs"
+    else:
+        for k, v in {**KNOB_DEFAULTS, **VARIANTS[variant]}.items():
+            monkeypatch.setattr(pd, k, v)
+    # select_blocking is lru_cached on the geometry only: a knob must not hit a cached solve.
+    pd.select_blocking.cache_clear()
+
+
+def _focus_cases():
+    from eval.golden_tests.conv2d_3x3.feature_spec import LOOSE_CASES
+
+    out = {}
+    for c in LOOSE_CASES:
+        if "[perf]" in c["extras"]["layer"]:
+            out[c["extras"]["layer"].split(" ")[0].replace(".", "_")] = c
+    return out
+
+
+FOCUS = _focus_cases()
+# The BLOCK guard set of tests/ttnn/unit_tests/operations/conv2d_3x3/test_conv2d_3x3_perf.py (copied, not imported).
+# (layer, ((H, W, C_in), C_out, padding, dilation), shard_shape, (grid_x, grid_y), bias + ReLU, fidelity, stride)
+BLOCK_SHAPES = {
+    "res4_0_conv2": (((64, 128, 256), 256, 1, 1), [1024, 32], (8, 8), True, "HiFi4", 2),
+    "res4_conv2": (((32, 64, 256), 256, 1, 1), [256, 32], (8, 8), True, "HiFi4", 1),
+    "res4_conv2_lofi": (((32, 64, 256), 256, 1, 1), [256, 32], (8, 8), True, "LoFi", 1),
+    "res5_0_conv2": (((32, 64, 512), 512, 2, 2), [224, 64], (8, 10), True, "HiFi4", 1),
+    "res5_1_conv2": (((32, 64, 512), 512, 4, 4), [224, 64], (8, 10), True, "HiFi4", 1),
+    "res5_2_conv2": (((32, 64, 512), 512, 8, 8), [224, 64], (8, 10), True, "HiFi4", 1),
+    "aspp_convs1": (((32, 64, 2048), 256, 6, 6), [256, 192], (11, 8), True, "HiFi4", 1),
+    "aspp_convs2": (((32, 64, 2048), 256, 12, 12), [256, 192], (11, 8), True, "HiFi4", 1),
+    "aspp_convs3": (((32, 64, 1024), 256, 18, 18), [256, 96], (11, 8), False, "HiFi4", 1),
+}
+# The HEIGHT perf harness's TILE layers: (layer, ((H, W, C_in), C_out, padding, stride), shard_shape, num_cores).
+HEIGHT_SHAPES = {
+    "stem_conv3": (((256, 512, 64), 128, 1, 1), [1216, 64], 110),
+    "res2_conv2": (((128, 256, 64), 64, 1, 1), [320, 64], 103),
+    "res3_0_conv2": (((128, 256, 128), 128, 1, 2), [384, 128], 86),
+    "res3_conv2": (((64, 128, 128), 128, 1, 1), [96, 128], 86),
+    "sem_res2_fuse_conv0": (((128, 256, 288), 256, 1, 1), [320, 288], 103),
+    "stem_conv2": (((256, 512, 64), 64, 1, 1), [1216, 64], 110),
+    "sem_res3_fuse_conv0": (((64, 128, 320), 256, 1, 1), [96, 320], 86),
+    "sem_res3_fuse_conv1": (((64, 128, 256), 256, 1, 1), [96, 256], 86),
+    "inst_res2_fuse_conv0": (((128, 256, 160), 128, 1, 1), [320, 160], 103),
+    "sem_res2_fuse_conv1": (((128, 256, 256), 256, 1, 1), [320, 256], 103),
+    "inst_res2_fuse_conv1": (((128, 256, 128), 128, 1, 1), [320, 128], 103),
+    "center_head1": (((128, 256, 128), 32, 1, 1), [320, 128], 103),
+}
+# DRAM-interleaved TILE inputs (the perf harness's PERF_SHAPES, regimes R0 / R3): ((H, W, C_in), C_out, padding), dtype.
+DRAM_SHAPES = {
+    f"H{h}_W{w}_Ci{ci}_Co{co}_{dt}": (((h, w, ci), co, p), dt)
+    for ((h, w, ci), co, p) in [
+        ((32, 64, 128), 128, 1),
+        ((16, 16, 64), 128, 1),
+        ((8, 16, 512), 256, 1),
+        ((8, 16, 2048), 256, 1),
+        ((64, 128, 128), 128, 1),
+        ((128, 256, 64), 64, 1),
+    ]
+    for dt in ("bf8b", "bf16")
+}
+FOCUS_DEFAULT = ["aspp_convs_1", "aspp_convs_2", "res5_1_conv2", "res5_2_conv2", "semantic", "res4_0_conv2"]
+
+
+def _sel_cases():
+    raw = [c for c in os.environ.get("BFP_CASES", "aspp_convs_1").split(",") if c]
+    out = []
+    for c in raw:
+        if c == "focus":
+            out += FOCUS_DEFAULT
+        elif c == "block":
+            out += [f"block:{k}" for k in BLOCK_SHAPES]
+        elif c == "height":
+            out += [f"height:{k}" for k in HEIGHT_SHAPES]
+        elif c == "dram":
+            out += [f"dram:{k}" for k in DRAM_SHAPES]
+        elif c == "all":
+            out += FOCUS_DEFAULT + [f"block:{k}" for k in BLOCK_SHAPES] + [f"height:{k}" for k in HEIGHT_SHAPES]
+        else:
+            out.append(c)
+    return out
+
+
+SEL_CASES = _sel_cases()
+SEL_VARIANTS = [v for v in os.environ.get("BFP_VARIANTS", "baseline").split(",") if v]
+PARAMS = []
+for i, c in enumerate(SEL_CASES):
+    vs = SEL_VARIANTS if (os.environ.get("BFP_ORDER") != "alt" or i % 2 == 0) else list(reversed(SEL_VARIANTS))
+    PARAMS += [(c, v) for v in vs]
+RUN_LOG = HERE / "runs" / os.environ.get("BFP_LOG", f"run_{time.strftime('%Y%m%d_%H%M%S')}.jsonl")
+
+
+def _run_focus(case, device):
+    import torch
+    from eval.golden_tests.conv2d_3x3 import helpers
+
+    torch.manual_seed(0)
+    (H, W, c_in), c_out, padding, stride, dilation = case["inputs"]
+    extras = case["extras"]
+    dtype, weight_dtype, layout = case["dtype"], case["weight_dtype"], case["layout"]
+    memory_config = helpers.build_input_memory_config(
+        (1, 1, H * W, c_in), case["memory_layout"], layout=layout, dtype=dtype, device=device, extras=extras
+    )
+    if memory_config.shard_spec is None or list(memory_config.shard_spec.shape) != list(extras["shard_shape"]):
+        pytest.skip(f"{extras['layer']}: pinned shard geometry does not fit this device's grid")
+    kwargs = dict(
+        stride=stride,
+        padding=padding,
+        dilation=dilation,
+        input_dtype=dtype,
+        input_layout=layout,
+        weight_dtype=weight_dtype,
+        input_memory_config=memory_config,
+        device=device,
+    )
+    torch_weight = helpers.make_weight(c_out, c_in, dtype=torch.bfloat16)
+    has_bias = case["bias_mode"] == "with_bias"
+    activation = None if case["activation"] == "none" else case["activation"]
+    torch_bias = helpers.make_bias(c_out, dtype=torch.bfloat16) if has_bias else None
+    tt_weight = op.prepare_conv2d_weights(torch_weight, **kwargs)
+    tt_bias = op.prepare_conv2d_bias(torch_bias, **kwargs) if has_bias else None
+    torch_input = helpers.make_activation(H, W, c_in, dtype=torch.bfloat16)
+    tt_input = ttnn.from_torch(torch_input, dtype=dtype, layout=layout, device=device, memory_config=memory_config)
+    tt_output = op.conv2d_3x3(
+        tt_input,
+        tt_weight,
+        input_height=H,
+        input_width=W,
+        bias=tt_bias,
+        padding=padding,
+        stride=stride,
+        dilation=dilation,
+        activation=activation,
+        compute_kernel_config=helpers.make_compute_kernel_config(
+            case["fp32_dest_acc_en"], extras.get("math_fidelity", ttnn.MathFidelity.HiFi4)
+        ),
+    )
+    ref = helpers.pytorch_conv2d_3x3(
+        torch_input,
+        torch_weight,
+        input_height=H,
+        input_width=W,
+        bias=torch_bias,
+        padding=padding,
+        stride=stride,
+        dilation=dilation,
+        activation=activation,
+    )
+    pcc = (extras.get("tolerance") or (0.99, None))[0]
+    return tt_output, ref, pcc
+
+
+def _run_block(layer, device):
+    import torch
+
+    torch.manual_seed(0)
+    ((H, W, c_in), c_out, padding, dilation), shard_shape, (gx, gy), bias_relu, fidelity, stride = BLOCK_SHAPES[layer]
+    grid = device.compute_with_storage_grid_size()
+    if gx > grid.x or gy > grid.y:
+        pytest.skip(f"{layer}: pinned {gx}x{gy} shard grid does not fit {grid.x}x{grid.y}")
+    memory_config = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+        ttnn.BufferType.L1,
+        ttnn.ShardSpec(
+            ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(gx - 1, gy - 1))]),
+            shard_shape,
+            ttnn.ShardOrientation.ROW_MAJOR,
+        ),
+    )
+    kwargs = dict(
+        stride=stride,
+        padding=padding,
+        dilation=dilation,
+        input_dtype=ttnn.bfloat8_b,
+        input_layout=ttnn.TILE_LAYOUT,
+        weight_dtype=ttnn.bfloat8_b,
+        input_memory_config=memory_config,
+        device=device,
+    )
+    torch_weight = torch.randn(c_out, c_in, 3, 3).to(torch.bfloat16)
+    torch_bias = torch.randn(c_out).to(torch.bfloat16) if bias_relu else None
+    tt_weight = op.prepare_conv2d_weights(torch_weight, **kwargs)
+    tt_bias = op.prepare_conv2d_bias(torch_bias, **kwargs) if bias_relu else None
+    torch_input = torch.randn(1, 1, H * W, c_in).to(torch.bfloat16)
+    tt_input = ttnn.from_torch(
+        torch_input, dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT, device=device, memory_config=memory_config
+    )
+    tt_output = op.conv2d_3x3(
+        tt_input,
+        tt_weight,
+        input_height=H,
+        input_width=W,
+        bias=tt_bias,
+        padding=padding,
+        stride=stride,
+        dilation=dilation,
+        activation="relu" if bias_relu else None,
+        compute_kernel_config=ttnn.ComputeConfigDescriptor(
+            math_fidelity=getattr(ttnn.MathFidelity, fidelity), fp32_dest_acc_en=True, math_approx_mode=False
+        ),
+    )
+    x = torch_input.float().reshape(1, H, W, c_in).permute(0, 3, 1, 2)
+    ref = torch.nn.functional.conv2d(
+        x,
+        torch_weight.float(),
+        None if torch_bias is None else torch_bias.float(),
+        stride=stride,
+        padding=padding,
+        dilation=dilation,
+    )
+    if bias_relu:
+        ref = torch.relu(ref)
+    ref = ref.permute(0, 2, 3, 1).reshape(1, 1, -1, c_out)
+    return tt_output, ref, 0.99
+
+
+def _run_height(layer, device):
+    import torch
+
+    torch.manual_seed(0)
+    ((H, W, c_in), c_out, padding, stride), shard_shape, num_cores = HEIGHT_SHAPES[layer]
+    grid = device.compute_with_storage_grid_size()
+    if num_cores > grid.x * grid.y or grid.x < 11:
+        pytest.skip(f"{layer}: pinned 11-wide {num_cores}-core shard grid does not fit {grid.x}x{grid.y}")
+    full_rows, rem = divmod(num_cores, 11)
+    ranges = []
+    if full_rows:
+        ranges.append(ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(10, full_rows - 1)))
+    if rem:
+        ranges.append(ttnn.CoreRange(ttnn.CoreCoord(0, full_rows), ttnn.CoreCoord(rem - 1, full_rows)))
+    memory_config = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+        ttnn.BufferType.L1,
+        ttnn.ShardSpec(ttnn.CoreRangeSet(ranges), shard_shape, ttnn.ShardOrientation.ROW_MAJOR),
+    )
+    kwargs = dict(
+        stride=stride,
+        padding=padding,
+        dilation=1,
+        input_dtype=ttnn.bfloat8_b,
+        input_layout=ttnn.TILE_LAYOUT,
+        weight_dtype=ttnn.bfloat8_b,
+        input_memory_config=memory_config,
+        device=device,
+    )
+    torch_weight = torch.randn(c_out, c_in, 3, 3).to(torch.bfloat16)
+    torch_bias = torch.randn(c_out).to(torch.bfloat16)
+    tt_weight = op.prepare_conv2d_weights(torch_weight, **kwargs)
+    tt_bias = op.prepare_conv2d_bias(torch_bias, **kwargs)
+    torch_input = torch.randn(1, 1, H * W, c_in).to(torch.bfloat16)
+    tt_input = ttnn.from_torch(
+        torch_input, dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT, device=device, memory_config=memory_config
+    )
+    tt_output = op.conv2d_3x3(
+        tt_input,
+        tt_weight,
+        input_height=H,
+        input_width=W,
+        bias=tt_bias,
+        padding=padding,
+        stride=stride,
+        activation="relu",
+    )
+    x = torch_input.float().reshape(1, H, W, c_in).permute(0, 3, 1, 2)
+    ref = torch.relu(
+        torch.nn.functional.conv2d(x, torch_weight.float(), torch_bias.float(), stride=stride, padding=padding)
+    )
+    ref = ref.permute(0, 2, 3, 1).reshape(1, 1, -1, c_out)
+    return tt_output, ref, 0.99
+
+
+def _run_dram(key, device):
+    import torch
+
+    torch.manual_seed(0)
+    ((H, W, c_in), c_out, padding), dt = DRAM_SHAPES[key]
+    dtype = ttnn.bfloat8_b if dt == "bf8b" else ttnn.bfloat16
+    kwargs = dict(
+        stride=1,
+        padding=padding,
+        dilation=1,
+        input_dtype=dtype,
+        input_layout=ttnn.TILE_LAYOUT,
+        weight_dtype=ttnn.bfloat16,
+        input_memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        device=device,
+    )
+    torch_weight = torch.randn(c_out, c_in, 3, 3).to(torch.bfloat16)
+    torch_bias = torch.randn(c_out).to(torch.bfloat16)
+    tt_weight = op.prepare_conv2d_weights(torch_weight, **kwargs)
+    tt_bias = op.prepare_conv2d_bias(torch_bias, **kwargs)
+    torch_input = torch.randn(1, 1, H * W, c_in).to(torch.bfloat16)
+    tt_input = ttnn.from_torch(
+        torch_input, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG
+    )
+    tt_output = op.conv2d_3x3(tt_input, tt_weight, input_height=H, input_width=W, bias=tt_bias, padding=padding)
+    x = torch_input.float().reshape(1, H, W, c_in).permute(0, 3, 1, 2)
+    ref = torch.nn.functional.conv2d(x, torch_weight.float(), torch_bias.float(), padding=padding)
+    ref = ref.permute(0, 2, 3, 1).reshape(1, 1, -1, c_out)
+    return tt_output, ref, 0.995 if dt == "bf16" else 0.99
+
+
+def _record_blocking(monkeypatch, info):
+    real = op.select_blocking
+
+    def recording(g, grid, l1_budget):
+        b = real(g, grid, l1_budget)
+        info["blocking"] = dict(
+            bm=b.block_m_tiles,
+            bk=b.block_k_tiles,
+            nkb=b.num_k_blocks,
+            nslice=bool(b.nslice),
+            ub=b.untilize_batch_rows,
+            slab=b.slab_tile_rows,
+            mblk=b.max_m_blocks_per_core,
+            ring=bool(b.ring),
+            center=b.center_mode,
+            footprint=b.footprint_bytes,
+            budget=l1_budget,
+        )
+        return b
+
+    monkeypatch.setattr(op, "select_blocking", recording)
+
+
+@pytest.mark.parametrize("case_id,variant", PARAMS, ids=[f"{c}-{v}" for c, v in PARAMS])
+def test_bfp(case_id, variant, device, monkeypatch):
+    import torch
+
+    apply_variant(variant, monkeypatch)
+    info = dict(case=case_id, variant=variant)
+    _record_blocking(monkeypatch, info)
+    if case_id.startswith("block:"):
+        tt_output, ref, pcc_threshold = _run_block(case_id.split(":", 1)[1], device)
+    elif case_id.startswith("height:"):
+        tt_output, ref, pcc_threshold = _run_height(case_id.split(":", 1)[1], device)
+    elif case_id.startswith("dram:"):
+        tt_output, ref, pcc_threshold = _run_dram(case_id.split(":", 1)[1], device)
+    else:
+        tt_output, ref, pcc_threshold = _run_focus(FOCUS[case_id], device)
+    out = ttnn.to_torch(tt_output).float().reshape(ref.shape)
+    passed, pcc = comp_pcc(ref.float(), out, pcc_threshold)
+    info.update(
+        pcc=float(pcc),
+        pcc_threshold=pcc_threshold,
+        finite=bool(torch.isfinite(out).all()),
+        out_sha=hashlib.sha256(out.numpy().tobytes()).hexdigest()[:16],
+    )
+    RUN_LOG.parent.mkdir(exist_ok=True)
+    with open(RUN_LOG, "a") as f:
+        f.write(json.dumps(info) + "\n")
+    assert info["finite"] and passed, info

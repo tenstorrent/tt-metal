@@ -1,0 +1,913 @@
+diff --git a/ttnn/ttnn/operations/conv2d_3x3/conv2d_3x3_program_descriptor.py b/ttnn/ttnn/operations/conv2d_3x3/conv2d_3x3_program_descriptor.py
+index aab04cdeb50..1866b73d593 100644
+--- a/ttnn/ttnn/operations/conv2d_3x3/conv2d_3x3_program_descriptor.py
++++ b/ttnn/ttnn/operations/conv2d_3x3/conv2d_3x3_program_descriptor.py
+@@ -164,9 +164,21 @@ ROW_SPLIT_DEPTH_ROWS = 8
+ IM2COL_RM_DEPTH_ROWS = 2
+ WEIGHT_DEPTH = 2
+ OUT_DEPTH_ROW_GROUPS = 2
+-# cb_input_tiles depth in untilize batches: the reader reads batch b+1 while compute untilizes b.
++# cb_input_tiles depth in untilize batches: the reader reads batch b+1 while compute untilizes b. Where every core runs
++# one M-block the ring instead holds the whole slab in cb_im2col_tiles' L1 (see create_program_descriptor).
+ INPUT_TILE_DEPTH_BATCHES = 2
+ 
++# Windowed TILE fill (compacted slab): cb_input_tiles batches the reader keeps in flight, each under its own
++# transaction id, and the split fill's writer likewise. One batch at a time was one read round trip per batch: on
++# aspp.convs.1 @ LoFi (2-tile-row batches) the fill ran at ~22 GB/s and the untilize waited on it.
++FILL_WINDOW_BATCHES = 4
++FILL_WRITER_WINDOW_BATCHES = 4
++# The split TILE fill under a K split runs on a column receiver only when one of its M-blocks reads at least this many
++# bytes from higher-index shards. The split pays by taking those reads off NoC0's wrap-around; a small hand-over is
++# pure latency (res4 layers, ~3 KB per core: +2.0% / +4.3% median of 3 with the split; res5.0, ~11 KB: flat;
++# res5.1 / res5.2, ~20 KB, and aspp, 36-72 KB: faster).
++SPLIT_FILL_MIN_BYTES = 8192
++
+ # Slab-fill start offset per core index (op_design lamp P9): consecutive pixels rotate over DRAM banks,
+ # so offsetting each core's first read spreads the cores over the banks. 0 disables the stagger.
+ SLAB_READ_STAGGER_PX_PER_CORE = 0
+@@ -361,6 +373,32 @@ def _block_first_tap(g: Conv3x3Geometry, o_first):
+     return (ho0 * g.stride - g.padding) * g.input_width + wo0 * g.stride - g.padding
+ 
+ 
++def _higher_shard_rows(g: Conv3x3Geometry, core_m_tiles, block_m_tiles, m_index, shard_rows):
++    """The most slab tile-rows one M-block of work index m_index reads from a higher-index input shard (the split
++    fill's writer share; mirror of the kernels' tile_slab_plan segments)."""
++    start, actual = _core_m_ranges(g.tensor_m_tiles, core_m_tiles)[m_index]
++    most = 0
++    for block_start in range(0, actual, block_m_tiles):
++        tiles = min(block_m_tiles, actual - block_start)
++        o_first = (start + block_start) * TILE
++        o_last = min((start + block_start + tiles) * TILE, g.num_out_px) - 1
++        band_len = _block_band_len(g, o_first, o_last)
++        f = _block_first_tap(g, o_first)
++        prev_hi = None
++        count = 0
++        for kh in range(3):
++            v_lo = f + kh * g.dilation * g.input_width
++            lo, hi = max(v_lo, 0), min(v_lo + band_len, g.num_in_px)
++            if lo >= hi:
++                continue
++            t_lo, t_hi = lo // TILE, _div_up(hi, TILE)
++            first_new = prev_hi if prev_hi is not None and t_lo < prev_hi else t_lo
++            count += sum(1 for r in range(first_new, t_hi) if r // shard_rows > m_index)
++            prev_hi = t_hi
++        most = max(most, count)
++    return most
++
++
+ def _tile_slab_rows(g: Conv3x3Geometry, f, band_len):
+     """Tile-rows the reader's TILE slab plan places for one M-block (mirror of the reader kernel).
+     Band kh is its in-image pixels rounded out to whole 32-pixel input tile-rows; a band that starts
+@@ -1005,8 +1043,34 @@ def create_program_descriptor(
+         )
+     if has_bias:
+         cbs.append(_cb(CB_BIAS, bias_tensor.dtype, g.weight_tile_bytes, ns, cores))
+-    if g.tile_input:
+-        input_tile_pages = INPUT_TILE_DEPTH_BATCHES * b.untilize_batch_rows * g.c_in_tiles
++    # Whole-slab input ring: where every core runs one M-block, cb_input_tiles shares cb_im2col_tiles' L1 (compute
++    # tilizes in0 only after its untilize consumed every input batch, and no reader write lands in in0 before then: no
++    # center-tap slots) and holds the whole slab, so the reader never waits on a reserve and the split fill hands the
++    # writer every batch up front. Costs no L1 (it frees the separate ring).
++    input_ring_batches = INPUT_TILE_DEPTH_BATCHES
++    alias_ring = False
++    if (
++        g.tile_input
++        and not b.ring
++        and b.max_m_blocks_per_core == 1
++        and b.center_mode == CENTER_NONE
++        and not face_direct
++    ):
++        in0_pages = bm * (g.tensor_k_tiles if b.nslice else bk * b.center_slot_blocks)
++        if b.slab_tile_rows * g.c_in_tiles <= in0_pages:
++            alias_ring = True
++            input_ring_batches = b.slab_tile_rows // b.untilize_batch_rows
++    if alias_ring:
++        for i, cb in enumerate(cbs):
++            if cb.format_descriptors[0].buffer_index == CB_IM2COL_TILES:
++                cbs[i] = _shared_cb(
++                    cb.total_size,
++                    (CB_IM2COL_TILES, input_tensor.dtype, g.in0_tile_bytes),
++                    (CB_INPUT_TILES, input_tensor.dtype, g.in0_tile_bytes),
++                    cores,
++                )
++    elif g.tile_input:
++        input_tile_pages = input_ring_batches * b.untilize_batch_rows * g.c_in_tiles
+         cbs.append(_cb(CB_INPUT_TILES, input_tensor.dtype, g.in0_tile_bytes, input_tile_pages, cores))
+     if b.nslice:
+         cbs.append(_cb(CB_SLICE_R, ttnn.float32, TILE_BYTES_FP32, b.slice_depth * bm * ns, cores))
+@@ -1037,7 +1101,10 @@ def create_program_descriptor(
+     # Channel-slice reads (R4): the core's slice of input row v is page v * row_page_stride + col offset,
+     # and one owner shard holds input_shard_rows consecutive rows of it contiguously.
+     slab_split = SLAB_SPLIT_NOCS and g.sharded_output and not g.tile_input and not g.k_split
+-    tile_fill_split = g.sharded_output and g.tile_input and not g.k_split
++    # Split TILE fill. Under a K split (N-slice-outer walk) only with the whole slab in the ring, where the reader hands
++    # the writer every batch up front; a per-batch hand-over on the 2-batch ring measured slower than no split there
++    # (aspp.convs.1 @ LoFi 75.8 vs 71.0 us).
++    tile_fill_split = g.sharded_output and g.tile_input and (not g.k_split or (b.nslice and alias_ring))
+     if g.k_split:
+         in_spec = input_tensor.memory_config().shard_spec
+         page_cols = TILE if g.tile_input else g.c_in_p
+@@ -1049,6 +1116,32 @@ def create_program_descriptor(
+         row_page_stride, input_shard_rows = 0, int(input_tensor.memory_config().shard_spec.shape[0]) // TILE
+     else:
+         row_page_stride, input_shard_rows = 0, 0
++    core_m_ranges = _core_m_ranges(g.tensor_m_tiles, b.core_m_tiles)
++    m_blocks_per_index = [_div_up(actual_m_tiles, bm) for _, actual_m_tiles in core_m_ranges]
++    # The weight multicast's cores (the channel below is built from the same set). The split TILE fill runs on its pure
++    # receivers: not the sender (work core 0), nor the own-stream cores outside the channel.
++    mcast_receivers = None if g.k_split else _weight_mcast_cores(core_list, [m_blocks_per_index[i] for _, i, _ in work])
++    split_cores = set()
++    if tile_fill_split and mcast_receivers is not None:
++        split_cores = {(c.x, c.y) for c in core_list[1:] if mcast_receivers.contains(c)}
++    # K split: each column multiplies against its own weight K-slice, one stream per column (built once: the split
++    # fill picks its receivers from it).
++    column_channel = _column_weight_mcast(input_tensor, work, m_blocks_per_index) if g.k_split else None
++    if tile_fill_split and g.k_split and column_channel is not None:
++        # The column channels' pure receivers (the staggered sender of column g is participant row g % rows: its writer
++        # blocks in DRAM reads and multicast sends: measured +9% with it split) that read enough from higher shards.
++        most = max(m_blocks_per_index[i] for _, i, _ in work)
++        part_rows = sorted({i for _, i, _ in work if m_blocks_per_index[i] == most})
++        hi_bytes = {
++            row: _higher_shard_rows(g, b.core_m_tiles, bm, row, input_shard_rows) * g.c_in_tiles * g.in0_tile_bytes
++            for row in part_rows
++        }
++        for core, row, col in work:
++            if row in part_rows and row != part_rows[col % len(part_rows)] and hi_bytes[row] >= SPLIT_FILL_MIN_BYTES:
++                split_cores.add((core.x, core.y))
++
++    # Under a K split, the split kernel only where some core splits (no idle semaphores or accessor args otherwise).
++    tile_fill_split = tile_fill_split and (not g.k_split or bool(split_cores))
+     pages_per_slice_row = g.c_in_tiles if g.tile_input else 1
+     combine_split_nocs = g.k_split and COMBINE_SPLIT_NOCS
+     tap_major = tap_major_im2col(g, b)
+@@ -1075,8 +1168,11 @@ def create_program_descriptor(
+     k_padded = g.tensor_kkh_tiles * TILE > 3 * g.c_in_p
+ 
+     def zero_im2col_once(slice_channels):
+-        """The reader zeroes cb_im2col_rm once (mirror of its zero_im2col_once)."""
+-        return not face_direct and bk == g.tensor_kkh_tiles and (slice_channels < g.c_in_p or k_padded)
++        """The reader zeroes cb_im2col_rm once (mirror of its zero_im2col_once; the tap-major gather copies whole slab
++        pixels, lanes included, so its im2col needs no zeroing)."""
++        return (
++            not face_direct and not tap_major and bk == g.tensor_kkh_tiles and (slice_channels < g.c_in_p or k_padded)
++        )
+ 
+     def reader_ct_args(slice_channels, split_core=None):
+         split_core = tile_fill_split if split_core is None else split_core
+@@ -1124,8 +1220,8 @@ def create_program_descriptor(
+             int(gather_split),
+             stream_rows,
+             *gather_sem_ids,
+-            # Short-slice lane zeroing: cb_input_tiles tile-row slots (TILE) / slab pixels (ROW_MAJOR).
+-            INPUT_TILE_DEPTH_BATCHES * b.untilize_batch_rows if g.tile_input else b.slab_px,
++            # Short-slice lane zeroing: slab pixels (ROW_MAJOR; TILE reads a row's padding tiles from the zero block).
++            0 if g.tile_input else b.slab_px,
+             CB_ZERO_SRC,
+             int(b.nslice),
+             CB_SLICE_R,
+@@ -1145,6 +1241,9 @@ def create_program_descriptor(
+             int(b.ring),
+             int(tap_direct),
+             CB_SRC_TABLE,
++            input_ring_batches,
++            # A window past the ring would reserve more than the CB holds.
++            min(FILL_WINDOW_BATCHES, input_ring_batches) if g.tile_input and not b.ring else 1,
+         ]
+         args.extend(ttnn.TensorAccessorArgs(input_tensor).get_compile_time_args())
+         return args
+@@ -1255,14 +1354,21 @@ def create_program_descriptor(
+         CB_INPUT_TILES,
+         b.slab_tile_rows,
+         b.untilize_batch_rows,
+-        INPUT_TILE_DEPTH_BATCHES,
++        input_ring_batches,
+         int(b.ring),
++        int(g.k_split),
++        row_page_stride,
++        0,  # fill_zero_lanes, set per writer kernel
++        CB_ZERO_SRC,
++        FILL_WRITER_WINDOW_BATCHES if not b.ring else 1,
+     ]
++    writer_zero_lanes_arg = len(writer_ct_args) - 3
+ 
+     def writer_ct_args_for(slice_channels, split_core=None):
+         args = list(writer_ct_args)
+         args[writer_slice_arg] = slice_channels
+         args[writer_slice_arg + 2] = int(zero_im2col_once(slice_channels))
++        args[writer_zero_lanes_arg] = int(tap_major and slice_channels < g.c_in_p)
+         if split_core is not None:
+             args[writer_split_arg] = int(split_core)
+         return args
+@@ -1293,19 +1399,11 @@ def create_program_descriptor(
+     bias_addr = bias_tensor.buffer_address() if has_bias else 0
+     output_addr = output_tensor.buffer_address()
+     device = input_tensor.device()
+-    core_m_ranges = _core_m_ranges(g.tensor_m_tiles, b.core_m_tiles)
+-    m_blocks_per_index = [_div_up(actual_m_tiles, bm) for _, actual_m_tiles in core_m_ranges]
+     row_peer_coords = {}
+     if g.k_split:
+         for core, row, _ in work:
+             virtual = device.worker_core_from_logical_core(core)
+             row_peer_coords.setdefault(row, []).extend([virtual.x, virtual.y])
+-    # The weight multicast's cores (the channel below is built from the same set). The split TILE fill runs on its pure
+-    # receivers: not the sender (work core 0), nor the own-stream cores outside the channel.
+-    mcast_receivers = None if g.k_split else _weight_mcast_cores(core_list, [m_blocks_per_index[i] for _, i, _ in work])
+-    split_cores = set()
+-    if tile_fill_split and mcast_receivers is not None:
+-        split_cores = {(c.x, c.y) for c in core_list[1:] if mcast_receivers.contains(c)}
+ 
+     def split_of(core):
+         return (core.x, core.y) in split_cores
+@@ -1317,20 +1415,26 @@ def create_program_descriptor(
+         # empty past the last C_out tile).
+         out_n_tile_start = col * ns
+         out_valid_tiles = max(0, min(ns, g.tensor_n_tiles - out_n_tile_start))
++        # The split is a runtime flag: a per-core kernel split fragments the core ranges (a staggered sender per
++        # column), and the launch of many-range kernels measured up to ~10 us of start skew.
+         reader_cores, reader_rt = reader_groups.setdefault(
+-            (_slice_channels(g, col), split_of(core)), ([], ttnn.RuntimeArgs())
++            (_slice_channels(g, col), bool(split_cores)), ([], ttnn.RuntimeArgs())
+         )
+         reader_cores.append(core)
+-        reader_rt[core.x][core.y] = [
+-            input_addr,
+-            m_tile_start,
+-            actual_m_tiles,
+-            num_m_blocks_this_core,
+-            m_index * SLAB_READ_STAGGER_PX_PER_CORE,
+-            col * pages_per_slice_row,
+-            col,
+-            m_index,
+-        ] + row_peer_coords.get(m_index, [])
++        reader_rt[core.x][core.y] = (
++            [
++                input_addr,
++                m_tile_start,
++                actual_m_tiles,
++                num_m_blocks_this_core,
++                m_index * SLAB_READ_STAGGER_PX_PER_CORE,
++                col * pages_per_slice_row,
++                col,
++                m_index,
++            ]
++            + row_peer_coords.get(m_index, [])
++            + [int(split_of(core))]
++        )
+         compute_args = [num_m_blocks_this_core, int(out_valid_tiles > 0), col]
+         if b.ring:
+             # Per M-block: tile-rows to untilize, and the unread tail rows of its last cb_input_tiles batch.
+@@ -1339,24 +1443,28 @@ def create_program_descriptor(
+                 compute_args += [new_rows, -new_rows % ub]
+         compute_rt[core.x][core.y] = compute_args
+         writer_cores, writer_rt = writer_groups.setdefault(
+-            (_slice_channels(g, col), split_of(core)), ([], ttnn.RuntimeArgs())
++            (_slice_channels(g, col), bool(split_cores)), ([], ttnn.RuntimeArgs())
+         )
+         writer_cores.append(core)
+-        writer_rt[core.x][core.y] = [
+-            weight_addr,
+-            bias_addr,
+-            output_addr,
+-            m_tile_start,
+-            actual_m_tiles,
+-            num_m_blocks_this_core,
+-            0,  # first N tile of the matmul block: the core multiplies against all of C_out
+-            col * g.tensor_k_tiles,  # the column's weight K-slice (rows ordered (col, kh, kw, c))
+-            out_n_tile_start,
+-            out_valid_tiles,
+-            col,
+-            input_addr,
+-            m_index,
+-        ] + row_peer_coords.get(m_index, [])
++        writer_rt[core.x][core.y] = (
++            [
++                weight_addr,
++                bias_addr,
++                output_addr,
++                m_tile_start,
++                actual_m_tiles,
++                num_m_blocks_this_core,
++                0,  # first N tile of the matmul block: the core multiplies against all of C_out
++                col * g.tensor_k_tiles,  # the column's weight K-slice (rows ordered (col, kh, kw, c))
++                out_n_tile_start,
++                out_valid_tiles,
++                col,
++                input_addr,
++                m_index,
++            ]
++            + row_peer_coords.get(m_index, [])
++            + [int(split_of(core))]
++        )
+ 
+     readers = [
+         ttnn.KernelDescriptor(
+@@ -1395,8 +1503,6 @@ def create_program_descriptor(
+     weight_mcast_config = ttnn.McastConfig(noc=ttnn.NOC.NOC_1)
+     weight_mcast = None
+     if g.k_split:
+-        # Each column multiplies against its own weight K-slice: one stream per column.
+-        column_channel = _column_weight_mcast(input_tensor, work, m_blocks_per_index)
+         if column_channel is not None:
+             receivers, group_size, order = column_channel
+             # Staggered senders: with every column's sender on one grid row, all the columns' DRAM read responses
+diff --git a/ttnn/ttnn/operations/conv2d_3x3/kernels/conv2d_3x3_reader.cpp b/ttnn/ttnn/operations/conv2d_3x3/kernels/conv2d_3x3_reader.cpp
+index 71f6485a34e..7e9be74b4c3 100644
+--- a/ttnn/ttnn/operations/conv2d_3x3/kernels/conv2d_3x3_reader.cpp
++++ b/ttnn/ttnn/operations/conv2d_3x3/kernels/conv2d_3x3_reader.cpp
+@@ -40,10 +40,18 @@
+ // same slab and raises slab_fwd_done per M-block. The reader raises slab_free once a block's gather has
+ // landed, so the writer never refills a slab still being read.
+ //
+-// Split TILE fill (HEIGHT-sharded TILE input, on the weight multicast's pure receivers): the same NoC split for the
+-// tile-row fill. The reader reads its own and lower shards' tile-rows into each cb_input_tiles batch it reserved; a
+-// batch that holds higher shards' tile-rows is handed to the writer first (fill_go) and pushed once the writer's rows
+-// landed (fill_done). Only the reader moves the CB's pointers.
++// Windowed TILE fill (compacted slab): the reader keeps up to fill_window cb_input_tiles batches in flight, each under
++// its own transaction id, and pushes them in order as they land, so the untilize is fed at the NoC's rate rather than
++// one read round trip per batch. Where the ring holds the whole slab (the descriptor puts cb_input_tiles in
++// cb_im2col_tiles' L1 when every core runs one M-block: in0 is written only after the untilize consumed every batch),
++// it reserves the whole slab once and never waits on compute.
++//
++// Split TILE fill (sharded TILE input, on the weight multicast's pure receivers; a per-core runtime flag): the same NoC
++// split for the tile-row fill. The reader reads its own and lower shards' tile-rows into each cb_input_tiles batch it
++// reserved; a batch that holds higher shards' tile-rows is handed to the writer (fill_go) and pushed once the writer's
++// rows landed (fill_done). With the whole slab reserved, every such batch is handed over up front, so the writer's
++// higher-shard reads run alongside the reader's. Only the reader moves the CB's pointers. Under a K split the core
++// reads its channel slice of each row; the BLOCK split runs only on cores reading enough from higher shards.
+ //
+ // Face-direct im2col (see conv2d_3x3_gather_dataflow.hpp): the reader reserves the K-block's in0 tiles and pushes
+ // them in row groups of in0_stream_rows tile-rows (the last may be shorter), in order, so compute multiplies each group
+@@ -67,9 +75,10 @@
+ // slab_dead).
+ //
+ // Short last channel slice (K split, C_in not a multiple of the slice width): tap-major copies whole slab pixels, so
+-// the slice's padded lanes must read as zero. They are zeroed once at kernel start and never read into: on TILE the
+-// cb_input_tiles slots of the padding tile columns (the ring is whole batches, so each slot keeps its L1 offset),
+-// on ROW_MAJOR the whole slab, after which every pixel fill reads only its real channels.
++// the slice's padded lanes must read as zero. On TILE each row's padding tile columns are read from the zero block
++// (cb_zero_src) with the row's real tiles; on ROW_MAJOR the whole slab is zeroed once at kernel start, after which
++// every pixel fill reads only its real channels. Zeroing the TILE ring's lanes at kernel start instead delayed the
++// short column's fill (the op's critical column) by the zero writes.
+ //
+ // Center-tap direct in0 (the descriptor's CENTER_TAP_DIRECT; sharded TILE input, stride 1, padding == dilation,
+ // W % 32 == 0): output tile-row t's kw = 1 tap of kernel row kh is input tile-row t + (kh*d - p) * W / 32, or a zero
+@@ -194,7 +203,11 @@ void kernel_main() {
+     // cb_im2col_rm slot, cb_src_table holds one 16 B entry of tap source addresses that compute tilizes from.
+     constexpr bool tap_direct = get_compile_time_arg_val(66) != 0;
+     constexpr uint32_t cb_src_table = get_compile_time_arg_val(67);
+-    constexpr auto input_args = TensorAccessorArgs<68>();
++    // Windowed TILE fill (see the file comment): cb_input_tiles holds input_ring_batches batches, and the reader keeps
++    // up to fill_window of them in flight, each under its own transaction id (TRID_FILL_BASE + batch % fill_window).
++    constexpr uint32_t input_ring_batches = get_compile_time_arg_val(68);
++    constexpr uint32_t fill_window = get_compile_time_arg_val(69);
++    constexpr auto input_args = TensorAccessorArgs<70>();
+     static_assert(!alias_slab_combine || nslice_outer, "only the N-slice-outer walk aliases the slab");
+ 
+     const uint32_t input_addr = get_arg_val<uint32_t>(0);
+@@ -206,6 +219,9 @@ void kernel_main() {
+     [[maybe_unused]] const uint32_t my_col = get_arg_val<uint32_t>(6);
+     [[maybe_unused]] const uint32_t my_shard = get_arg_val<uint32_t>(7);
+     constexpr uint32_t row_peer_coords_arg = 8;  // (x, y) of grid columns 0..k_cols-1 of this row
++    // Split TILE fill on this core (runtime: the kernel is shared with the cores that keep the reader-only fill).
++    constexpr uint32_t split_flag_arg = row_peer_coords_arg + (channel_slice ? 2 * k_cols : 0);
++    [[maybe_unused]] const bool split_here = tile_fill_split && get_arg_val<uint32_t>(split_flag_arg) != 0;
+ 
+     constexpr uint32_t pixel_bytes = c_in_p * ELEM_BYTES;
+     constexpr int32_t num_in_px = input_height * input_width;
+@@ -215,7 +231,8 @@ void kernel_main() {
+     constexpr bool k_padded = tensor_kkh_tiles * TILE_DIM > tap_cols;
+     // One K-block per kernel row: every K-block puts taps, lanes and K padding at the same row offsets.
+     constexpr bool one_k_block_per_kh = block_k_tiles == tensor_kkh_tiles;
+-    constexpr bool zero_im2col_once = !face_direct && one_k_block_per_kh && (lanes_padded || k_padded);
++    // The tap-major gather copies whole slab pixels (lanes included) or zero runs: nothing of its im2col needs zeroing.
++    constexpr bool zero_im2col_once = !face_direct && !tap_major && one_k_block_per_kh && (lanes_padded || k_padded);
+     constexpr uint32_t c_in_tiles = c_in_p / TILE_DIM;
+     static_assert(
+         (tensor_kkh_tiles % block_k_tiles) == 0 || (face_direct && block_k_tiles % tensor_kkh_tiles == 0),
+@@ -234,8 +251,11 @@ void kernel_main() {
+         !slab_split || (!tile_input && !channel_slice && input_shard_rows > 0),
+         "the slab fill is split by owner shard of ROW_MAJOR HEIGHT pages");
+     static_assert(
+-        !tile_fill_split || (tile_input && !slab_split && !channel_slice && input_shard_rows > 0),
+-        "the TILE fill is split by owner shard of HEIGHT tile-rows");
++        !tile_fill_split || (tile_input && !slab_split && input_shard_rows > 0),
++        "the TILE fill is split by owner shard of tile-rows");
++    static_assert(fill_window >= 1 && fill_window <= 8, "the windowed fill uses transaction ids 8..15");
++    static_assert(fill_window == 1 || (tile_input && !ring_slab), "the windowed fill is the compacted TILE slab's");
++    static_assert(!tile_input || fill_window <= input_ring_batches, "the window never reserves past the ring");
+     // Tap-major with padded lanes is the short channel slice, whose lanes the reader keeps at zero.
+     constexpr bool zero_slab_lanes = tap_major && lanes_padded;
+     static_assert(
+@@ -329,6 +349,8 @@ void kernel_main() {
+     constexpr uint32_t writer_groups_per_k_block = gather_split ? in0_groups / 2 : 0;
+ 
+     const auto input = TensorAccessor(input_args, input_addr, input_page_bytes);
++    // The cb_input_tiles ring's base (the windowed fill wraps its batch slots there).
++    [[maybe_unused]] const uint32_t input_ring_base = tile_input ? get_write_ptr(cb_input_tiles) : 0;
+     // Center-tap slots: cb_im2col_tiles' base (compute produces it; every K-block starts there).
+     [[maybe_unused]] const uint32_t im2col_tiles_base = center_mode == 2 ? get_write_ptr(cb_im2col_tiles) : 0;
+     // TILE: compute pushes exactly slab_tile_rows tile-rows per M-block and the reader pops them all,
+@@ -345,19 +367,8 @@ void kernel_main() {
+         reads.noc.async_write_zeros(CircularBuffer(cb_im2col_rm), im2col_rm_bytes);
+         reads.noc.write_zeros_l1_barrier();
+     }
+-    if constexpr (zero_slab_lanes) {
+-        if constexpr (tile_input) {
+-            constexpr uint32_t ring_row_bytes = c_in_tiles * input_page_bytes;
+-            constexpr uint32_t real_row_bytes = (c_in / TILE_DIM) * input_page_bytes;
+-            for (uint32_t r = 0; r < lane_zero_rows; ++r) {
+-                reads.noc.async_write_zeros(
+-                    CircularBuffer(cb_input_tiles),
+-                    ring_row_bytes - real_row_bytes,
+-                    {.offset_bytes = r * ring_row_bytes + real_row_bytes});
+-            }
+-        } else {
+-            reads.noc.async_write_zeros(CircularBuffer(cb_halo_slab), lane_zero_rows * pixel_bytes);
+-        }
++    if constexpr (zero_slab_lanes && !tile_input) {
++        reads.noc.async_write_zeros(CircularBuffer(cb_halo_slab), lane_zero_rows * pixel_bytes);
+         reads.noc.write_zeros_l1_barrier();
+     }
+     if constexpr (padding_only_faces) {
+@@ -379,7 +390,7 @@ void kernel_main() {
+     constexpr uint32_t pages_per_row = tile_input ? c_in_tiles : 1;
+     // One owner shard: input_shard_rows rows (pixels on ROW_MAJOR, tile-rows on TILE) of pages_per_row pages each.
+     constexpr uint32_t owner_shard_pages = input_shard_rows > 0 ? input_shard_rows * pages_per_row : 1;
+-    constexpr bool skip_higher_shards = slab_split || tile_fill_split;
++    const bool skip_higher_shards = slab_split || split_here;
+     auto read_pages = [&](uint32_t page, uint32_t end_page, uint32_t l1) {
+         while (page < end_page) {
+             // Interleaved runs step by the bank count, not by 1; only unit-stride runs are contiguous here.
+@@ -403,10 +414,16 @@ void kernel_main() {
+                 const uint32_t shard_end = (row / input_shard_rows + 1) * input_shard_rows;
+                 const uint32_t run_end = end_row < shard_end ? end_row : shard_end;
+                 const uint64_t src = input.get_noc_addr(row * row_page_stride + slice_page_offset);
+-                if constexpr (zero_slab_lanes) {
++                if (split_here && row / input_shard_rows > my_shard) {
++                    // Split fill: a higher shard's rows are the writer's (NoC1).
++                } else if constexpr (zero_slab_lanes) {
+                     // One owner shard stores the slice's rows back to back, row_bytes apart.
+                     for (uint32_t i = 0; i < run_end - row; ++i) {
+                         reads.read(src + i * row_bytes, l1 + i * row_bytes, real_row_bytes);
++                        if constexpr (tile_input) {
++                            // The row's padding tile columns, from the zero block (tap-major: zeroed at kernel start).
++                            reads.read(zero_src_noc, l1 + i * row_bytes + real_row_bytes, row_bytes - real_row_bytes);
++                        }
+                     }
+                 } else {
+                     reads.read(src, l1, (run_end - row) * row_bytes);
+@@ -490,7 +507,7 @@ void kernel_main() {
+                 }
+                 [[maybe_unused]] bool writer_rows = false;
+                 if constexpr (tile_fill_split) {
+-                    writer_rows = row0 + rows > (my_shard + 1) * input_shard_rows;
++                    writer_rows = split_here && row0 + rows > (my_shard + 1) * input_shard_rows;
+                     if (writer_rows) {
+                         Semaphore<>(slab_free_sem_id).up(1);
+                     }
+@@ -531,45 +548,90 @@ void kernel_main() {
+             constexpr uint32_t batch_pages = untilize_batch_rows * c_in_tiles;
+             uint32_t seg = 0;
+             uint32_t seg_row = 0;
+-            for (uint32_t batch = 0; batch < slab_tile_rows / untilize_batch_rows; ++batch) {
+-                {
+-                    // Back-pressure from compute's untilize.
+-                    MaybeDeviceZoneScope("reader_fill_reserve");
+-                    cb_reserve_back(cb_input_tiles, batch_pages);
+-                }
+-                // Split fill: hand the reserved batch to the writer first when it holds higher shards' tile-rows.
+-                [[maybe_unused]] bool writer_rows = false;
+-                if constexpr (tile_fill_split) {
+-                    writer_rows = conv2d_3x3::tile_batch_has_rows_from<untilize_batch_rows>(
+-                        plan, batch, (my_shard + 1) * input_shard_rows);
+-                    if (writer_rows) {
+-                        Semaphore<>(slab_free_sem_id).up(1);
++            {
++                // Windowed fill: batches [pushed, batch) are reserved and in flight, batch j at ring slot (write
++                // pointer + j - pushed) under transaction id TRID_FILL_BASE + j % fill_window; the oldest is pushed
++                // once its reads (and the writer's half) landed.
++                constexpr uint32_t num_batches = slab_tile_rows / untilize_batch_rows;
++                constexpr uint32_t batch_bytes = batch_pages * input_page_bytes;
++                constexpr uint32_t ring_bytes = input_ring_batches * batch_bytes;
++                constexpr uint32_t TRID_FILL_BASE = 8;
++                // The ring holds the whole slab: reserve it once and hand the writer all of its batches up front, so
++                // its higher-shard reads run alongside the reader's from the start.
++                constexpr bool whole_slab = input_ring_batches >= num_batches;
++                constexpr uint32_t wr_slots = whole_slab ? num_batches : fill_window;
++                [[maybe_unused]] bool writer_rows_of[wr_slots];
++                if constexpr (whole_slab) {
++                    {
++                        MaybeDeviceZoneScope("reader_fill_reserve");
++                        cb_reserve_back(cb_input_tiles, num_batches * batch_pages);
+                     }
+-                }
+-                uint32_t l1 = get_write_ptr(cb_input_tiles);
+-                reads.begin(TRID_INPUT_TILES);
+-                for (uint32_t r = 0; r < untilize_batch_rows && seg < num_segs;) {
+-                    // The batch's rows of one segment are consecutive input tile-rows: consecutive pages.
+-                    const uint32_t seg_left = seg_count[seg] - seg_row;
+-                    const uint32_t rows = untilize_batch_rows - r < seg_left ? untilize_batch_rows - r : seg_left;
+-                    const uint32_t row0 = seg_first[seg] + seg_row;
+-                    read_rows(row0, row0 + rows, l1);
+-                    l1 += rows * row_bytes;
+-                    r += rows;
+-                    seg_row += rows;
+-                    if (seg_row == seg_count[seg]) {
+-                        ++seg;
+-                        seg_row = 0;
++                    if constexpr (tile_fill_split) {
++                        uint32_t handed = 0;
++                        for (uint32_t b = 0; b < num_batches; ++b) {
++                            writer_rows_of[b] = split_here && conv2d_3x3::tile_batch_has_rows_from<untilize_batch_rows>(
++                                                                  plan, b, (my_shard + 1) * input_shard_rows);
++                            handed += writer_rows_of[b] ? 1 : 0;
++                        }
++                        if (handed > 0) {
++                            Semaphore<>(slab_free_sem_id).up(handed);
++                        }
+                     }
+                 }
+-                reads.wait(TRID_INPUT_TILES);
+-                if constexpr (tile_fill_split) {
+-                    if (writer_rows) {
+-                        MaybeDeviceZoneScope("reader_fill_fwd_wait");
+-                        Semaphore<>(slab_fwd_done_sem_id).wait_min(++fill_batches_handed);
++                uint32_t pushed = 0;
++                auto retire = [&]() {
++                    reads.wait(TRID_FILL_BASE + pushed % fill_window);
++                    if constexpr (tile_fill_split) {
++                        if (writer_rows_of[pushed % wr_slots]) {
++                            MaybeDeviceZoneScope("reader_fill_fwd_wait");
++                            Semaphore<>(slab_fwd_done_sem_id).wait_min(++fill_batches_handed);
++                        }
++                    }
++                    cb_push_back(cb_input_tiles, batch_pages);
++                    ++pushed;
++                };
++                for (uint32_t batch = 0; batch < num_batches; ++batch) {
++                    if (batch - pushed == fill_window) {
++                        retire();
++                    }
++                    if constexpr (!whole_slab) {
++                        {
++                            MaybeDeviceZoneScope("reader_fill_reserve");
++                            cb_reserve_back(cb_input_tiles, (batch - pushed + 1) * batch_pages);
++                        }
++                        if constexpr (tile_fill_split) {
++                            const bool writer_rows =
++                                split_here && conv2d_3x3::tile_batch_has_rows_from<untilize_batch_rows>(
++                                                  plan, batch, (my_shard + 1) * input_shard_rows);
++                            writer_rows_of[batch % fill_window] = writer_rows;
++                            if (writer_rows) {
++                                Semaphore<>(slab_free_sem_id).up(1);
++                            }
++                        }
++                    }
++                    uint32_t l1 = get_write_ptr(cb_input_tiles) + (batch - pushed) * batch_bytes;
++                    if (l1 >= input_ring_base + ring_bytes) {
++                        l1 -= ring_bytes;
++                    }
++                    reads.begin(TRID_FILL_BASE + batch % fill_window);
++                    for (uint32_t r = 0; r < untilize_batch_rows && seg < num_segs;) {
++                        // The batch's rows of one segment are consecutive input tile-rows: consecutive pages.
++                        const uint32_t seg_left = seg_count[seg] - seg_row;
++                        const uint32_t rows = untilize_batch_rows - r < seg_left ? untilize_batch_rows - r : seg_left;
++                        const uint32_t row0 = seg_first[seg] + seg_row;
++                        read_rows(row0, row0 + rows, l1);
++                        l1 += rows * row_bytes;
++                        r += rows;
++                        seg_row += rows;
++                        if (seg_row == seg_count[seg]) {
++                            ++seg;
++                            seg_row = 0;
++                        }
+                     }
+                 }
+-                cb_push_back(cb_input_tiles, batch_pages);
++                while (pushed < num_batches) {
++                    retire();
++                }
+             }
+         } else {
+             // ---- fill_halo_slab (ROW_MAJOR): band kh tagged trid kh + 1; overlapping bands read only their
+diff --git a/ttnn/ttnn/operations/conv2d_3x3/kernels/conv2d_3x3_writer.cpp b/ttnn/ttnn/operations/conv2d_3x3/kernels/conv2d_3x3_writer.cpp
+index e5d70b83140..8c2a4c5131f 100644
+--- a/ttnn/ttnn/operations/conv2d_3x3/kernels/conv2d_3x3_writer.cpp
++++ b/ttnn/ttnn/operations/conv2d_3x3/kernels/conv2d_3x3_writer.cpp
+@@ -35,11 +35,14 @@
+ // writer reads the slab runs owned by higher-index input shards on NoC1, whose responses take the short way back,
+ // and raises slab_fwd_done; from the second block on it first waits for the reader's slab_free.
+ //
+-// Split TILE fill (HEIGHT-sharded TILE input, pure weight-multicast receivers): the reader reserves each cb_input_tiles
+-// batch and, when it holds tile-rows of higher-index input shards, hands it over (fill_go); the writer reads those rows
+-// on NoC1 into the batch's ring slot and counts it (fill_done), and the reader pushes the batch after both halves. The
+-// writer serves hand-overs wherever it waits (weight reserve and receive, bias read, row-gather serving), because
+-// compute untilizes a block before it multiplies it.
++// Split TILE fill (sharded TILE input, pure weight-multicast receivers; a per-core runtime flag): the reader reserves
++// each cb_input_tiles batch and, when it holds tile-rows of higher-index input shards, hands it over (fill_go); the
++// writer reads those rows on NoC1 into the batch's ring slot and counts it (fill_done), and the reader pushes the batch
++// after both halves. On the compacted slab the writer keeps up to fill_writer_window handed-over batches in flight (own
++// transaction id each) and counts them in order as they land. The writer serves hand-overs wherever it waits (weight
++// reserve and receive, bias read, row-gather serving, and on the N-slice walk its weight-read, slab_dead, partials,
++// credit and arrival waits), because compute untilizes a block before it multiplies it. Under a K split the writer
++// reads the core's channel slice of each row, a short slice's padding tiles from the reader's zero block.
+ //
+ // Split face-direct gather: after issuing each K-block's weights the writer waits for the reader's gather_go (the
+ // in0 block is reserved and the slab complete), then writes every odd row group (in0_stream_rows tile-rows) on
+@@ -145,7 +148,19 @@ void kernel_main() {
+     constexpr uint32_t input_tile_depth_batches = get_compile_time_arg_val(63);
+     // Ring slab (see the reader): every M-block streams the input tile-rows [max(previous hi, lo), hi) of its window.
+     constexpr bool ring_slab = get_compile_time_arg_val(64) != 0;
+-    constexpr auto weight_args = TensorAccessorArgs<65>();
++    // Split TILE fill under a K split: the core's channel slice of input tile-row r is c_in_p / 32 pages from page
++    // r * fill_row_page_stride + my_col * c_in_p / 32; with fill_zero_lanes only the slice's real tiles are read and
++    // its padding tile columns are read from the reader's zero block.
++    constexpr bool fill_channel_slice = get_compile_time_arg_val(65) != 0;
++    constexpr uint32_t fill_row_page_stride = get_compile_time_arg_val(66);
++    constexpr bool fill_zero_lanes = get_compile_time_arg_val(67) != 0;
++    // The reader's zero block (tap-major, zeroed before the reader hands anything over): a short slice's padding tiles.
++    constexpr uint32_t cb_zero_src = get_compile_time_arg_val(68);
++    // Higher-shard batches the writer keeps in flight (own transaction id each).
++    constexpr uint32_t fill_writer_window = get_compile_time_arg_val(69);
++    static_assert(fill_writer_window >= 1 && fill_writer_window <= 8, "writer fill transaction ids 8..15");
++    static_assert(fill_writer_window == 1 || !ring_slab, "the ring slab's writer fill is one batch at a time");
++    constexpr auto weight_args = TensorAccessorArgs<70>();
+     [[maybe_unused]] constexpr auto bias_args = TensorAccessorArgs<weight_args.next_compile_time_args_offset()>();
+     [[maybe_unused]] constexpr auto output_args = TensorAccessorArgs<bias_args.next_compile_time_args_offset()>();
+     [[maybe_unused]] constexpr auto input_args = TensorAccessorArgs<output_args.next_compile_time_args_offset()>();
+@@ -167,6 +182,9 @@ void kernel_main() {
+     [[maybe_unused]] const uint32_t input_addr = get_arg_val<uint32_t>(11);
+     [[maybe_unused]] const uint32_t my_shard = get_arg_val<uint32_t>(12);
+     constexpr uint32_t row_peer_coords_arg = 13;  // (x, y) of grid columns 0..k_cols-1 of this row
++    // Split TILE fill on this core (runtime: the kernel is shared with the cores that keep the reader-only fill).
++    constexpr uint32_t split_flag_arg = row_peer_coords_arg + (k_split ? 2 * k_cols : 0);
++    [[maybe_unused]] const bool split_here = tile_fill_split && get_arg_val<uint32_t>(split_flag_arg) != 0;
+ 
+     constexpr uint32_t weight_k_block_tiles = block_k_tiles * block_n_tiles;
+     constexpr uint32_t row_group_tiles = out_subblock_h * block_n_tiles;
+@@ -221,6 +239,8 @@ void kernel_main() {
+     [[maybe_unused]] int32_t ring_prev_hi = -1;
+     conv2d_3x3::TaggedReads<false> fill_reads;
+     constexpr uint32_t TRID_FILL = 6;
++    [[maybe_unused]] const uint64_t fill_zero_noc =
++        fill_zero_lanes ? get_noc_addr(get_write_ptr(cb_zero_src), fill_reads.noc.get_noc_id()) : 0;
+     // Moves the cursor to the next batch holding higher shards' rows; false past the last block.
+     [[maybe_unused]] auto fill_next = [&]() -> bool {
+         if constexpr (ring_slab) {
+@@ -295,10 +315,64 @@ void kernel_main() {
+         }
+         return false;
+     };
+-    [[maybe_unused]] auto fill_one = [&]() {
++    // Compacted slab: the cursor batch's higher-shard rows, issued under trid; advances the cursor.
++    [[maybe_unused]] auto fill_issue = [&](uint32_t trid) {
+         MaybeDeviceZoneScope("writer_fill");
+         const auto input = TensorAccessor(input_args, input_addr, input_page_bytes);
++        const uint32_t slot =
++            fill_ring_base + ((fill_m * fill_batches_per_block + fill_b) % input_tile_depth_batches) * fill_batch_bytes;
++        fill_reads.begin(trid);
++        conv2d_3x3::tile_batch_rows<untilize_batch_rows>(
++            fill_plan, fill_b, [&](uint32_t row0, uint32_t rows, uint32_t batch_row) {
++                const uint32_t lo = row0 > fill_hi_row ? row0 : fill_hi_row;
++                if (lo >= row0 + rows) {
++                    return;
++                }
++                uint32_t l1 = slot + (batch_row + lo - row0) * fill_row_bytes;
++                if constexpr (fill_channel_slice) {
++                    // One owner shard stores the slice's rows back to back, fill_row_bytes apart.
++                    constexpr uint32_t shard_rows = input_shard_rows > 0 ? input_shard_rows : 1;
++                    constexpr uint32_t real_row_bytes = (c_in / 32) * input_page_bytes;
++                    const uint32_t slice_page_offset = my_col * fill_c_in_tiles;
++                    for (uint32_t row = lo, end_row = row0 + rows; row < end_row;) {
++                        const uint32_t shard_end = (row / shard_rows + 1) * shard_rows;
++                        const uint32_t run_end = end_row < shard_end ? end_row : shard_end;
++                        const uint64_t src = input.get_noc_addr(row * fill_row_page_stride + slice_page_offset);
++                        if constexpr (fill_zero_lanes) {
++                            for (uint32_t i = 0; i < run_end - row; ++i) {
++                                fill_reads.read(src + i * fill_row_bytes, l1 + i * fill_row_bytes, real_row_bytes);
++                                fill_reads.read(
++                                    fill_zero_noc,
++                                    l1 + i * fill_row_bytes + real_row_bytes,
++                                    fill_row_bytes - real_row_bytes);
++                            }
++                        } else {
++                            fill_reads.read(src, l1, (run_end - row) * fill_row_bytes);
++                        }
++                        l1 += (run_end - row) * fill_row_bytes;
++                        row = run_end;
++                    }
++                    return;
++                }
++                for (uint32_t page = lo * fill_c_in_tiles, end_page = (row0 + rows) * fill_c_in_tiles;
++                     page < end_page;) {
++                    const uint32_t run = input.num_contiguous_pages(page, end_page);
++                    fill_reads.read(input.get_noc_addr(page), l1, run * input_page_bytes);
++                    page += run;
++                    l1 += run * input_page_bytes;
++                }
++            });
++        dataflow_kernel_lib::set_read_trid(fill_reads.noc, 0);
++        if (++fill_b == fill_batches_per_block) {
++            fill_b = 0;
++            ++fill_m;
++        }
++    };
++    // Ring slab: one handed-over batch, read and counted.
++    [[maybe_unused]] auto fill_one = [&]() {
++        MaybeDeviceZoneScope("writer_fill");
+         if constexpr (ring_slab) {
++            const auto input = TensorAccessor(input_args, input_addr, input_page_bytes);
+             const uint32_t slot =
+                 fill_ring_base + ((ring_batch_base + fill_b) % input_tile_depth_batches) * fill_batch_bytes;
+             const uint32_t row0 = ring_push_lo + fill_b * untilize_batch_rows;
+@@ -321,50 +395,79 @@ void kernel_main() {
+                 fill_b = 0;
+                 ++fill_m;
+             }
+-            return;
+         }
+-        const uint32_t slot =
+-            fill_ring_base + ((fill_m * fill_batches_per_block + fill_b) % input_tile_depth_batches) * fill_batch_bytes;
+-        fill_reads.begin(TRID_FILL);
+-        conv2d_3x3::tile_batch_rows<untilize_batch_rows>(
+-            fill_plan, fill_b, [&](uint32_t row0, uint32_t rows, uint32_t batch_row) {
+-                const uint32_t lo = row0 > fill_hi_row ? row0 : fill_hi_row;
+-                if (lo >= row0 + rows) {
+-                    return;
++    };
++    // Windowed writer fill: batches [fill_served, fill_issued) are in flight, batch j under trid
++    // TRID_WFILL_BASE + j % fill_writer_window.
++    constexpr uint32_t TRID_WFILL_BASE = 8;
++    [[maybe_unused]] uint32_t fill_issued = 0;
++    // Every batch the reader has handed over so far (windowed: retire the landed ones, issue up to the window).
++    [[maybe_unused]] auto serve_fill = [&]() {
++        if constexpr (tile_fill_split) {
++            if constexpr (!ring_slab) {
++                while (fill_served < fill_issued &&
++                       ncrisc_noc_read_with_transaction_id_flushed(
++                           fill_reads.noc.get_noc_id(), TRID_WFILL_BASE + fill_served % fill_writer_window)) {
++                    Semaphore<>(slab_fwd_done_sem_id).up(1);
++                    ++fill_served;
+                 }
+-                uint32_t l1 = slot + (batch_row + lo - row0) * fill_row_bytes;
+-                for (uint32_t page = lo * fill_c_in_tiles, end_page = (row0 + rows) * fill_c_in_tiles;
+-                     page < end_page;) {
+-                    const uint32_t run = input.num_contiguous_pages(page, end_page);
+-                    fill_reads.read(input.get_noc_addr(page), l1, run * input_page_bytes);
+-                    page += run;
+-                    l1 += run * input_page_bytes;
++                while (fill_issued - fill_served < fill_writer_window &&
++                       Semaphore<>(slab_free_sem_id).value() > fill_issued) {
++                    fill_next();
++                    fill_issue(TRID_WFILL_BASE + fill_issued % fill_writer_window);
++                    ++fill_issued;
+                 }
+-            });
+-        fill_reads.wait(TRID_FILL);
+-        dataflow_kernel_lib::set_read_trid(fill_reads.noc, 0);
+-        Semaphore<>(slab_fwd_done_sem_id).up(1);
+-        ++fill_served;
+-        if (++fill_b == fill_batches_per_block) {
+-            fill_b = 0;
+-            ++fill_m;
++            } else {
++                while (Semaphore<>(slab_free_sem_id).value() > fill_served) {
++                    fill_next();
++                    fill_one();
++                }
++            }
+         }
+     };
+-    // Every batch the reader has handed over so far.
+-    [[maybe_unused]] auto serve_fill = [&]() {
++    // Blocking waits of the K-split walk, serving the reader's fill hand-overs while they wait (split TILE fill).
++    [[maybe_unused]] auto reserve_serving = [&](uint32_t cb, uint32_t pages) {
+         if constexpr (tile_fill_split) {
+-            while (Semaphore<>(slab_free_sem_id).value() > fill_served) {
+-                fill_next();
+-                fill_one();
++            while (!cb_pages_reservable_at_back(cb, pages)) {
++                serve_fill();
+             }
+         }
++        cb_reserve_back(cb, pages);
++    };
++    [[maybe_unused]] auto wait_front_serving = [&](uint32_t cb, uint32_t pages) {
++        if constexpr (tile_fill_split) {
++            while (!cb_pages_available_at_front(cb, pages)) {
++                serve_fill();
++            }
++        }
++        cb_wait_front(cb, pages);
++    };
++    [[maybe_unused]] auto sem_wait_serving = [&](uint32_t sem_id, uint32_t count) {
++        if constexpr (tile_fill_split) {
++            while (Semaphore<>(sem_id).value() < count) {
++                serve_fill();
++            }
++        }
++        Semaphore<>(sem_id).wait_min(count);
+     };
+     // The rest of the kernel's batches, waiting for each hand-over.
+     [[maybe_unused]] auto drain_fill = [&]() {
+         if constexpr (tile_fill_split) {
+-            while (fill_next()) {
+-                Semaphore<>(slab_free_sem_id).wait_min(fill_served + 1);
+-                fill_one();
++            if (!split_here) {
++                return;
++            }
++            if constexpr (!ring_slab) {
++                while (true) {
++                    serve_fill();
++                    if (fill_served == fill_issued && !fill_next()) {
++                        break;
++                    }
++                }
++            } else {
++                while (fill_next()) {
++                    Semaphore<>(slab_free_sem_id).wait_min(fill_served + 1);
++                    fill_one();
++                }
+             }
+         }
+     };
+@@ -572,14 +675,20 @@ void kernel_main() {
+         MaybeDeviceZoneScope("writer_weight_fetch");
+         if (!weight_receiver || (weight_sender && weight_mcast.should_send(round))) {
+             if (prefetched_round != round) {
+-                cb_reserve_back(cb_weights, slice_weight_tiles);
++                reserve_serving(cb_weights, slice_weight_tiles);
+                 start_weight_reads(round, y);
+             }
+             if (nslice_weight_depth > 1 && next_y < k_cols) {
+-                cb_reserve_back(cb_weights, 2 * slice_weight_tiles);
++                reserve_serving(cb_weights, 2 * slice_weight_tiles);
+                 start_weight_reads(round + 1, next_y);
+                 prefetched_round = round + 1;
+             }
++            if constexpr (tile_fill_split) {
++                while (!ncrisc_noc_read_with_transaction_id_flushed(
++                    weight_reads.noc.get_noc_id(), TRID_WEIGHTS + (round & 1))) {
++                    serve_fill();
++                }
++            }
+             weight_reads.wait(TRID_WEIGHTS + (round & 1));
+             if (weight_sender && weight_mcast.should_send(round)) {
+                 const uint32_t l1 =
+@@ -587,8 +696,12 @@ void kernel_main() {
+                 weight_sender->send(l1, l1, slice_weight_tiles * weight_tile_bytes);
+             }
+         } else {
+-            cb_reserve_back(cb_weights, slice_weight_tiles);
+-            weight_receiver->receive(round);
++            reserve_serving(cb_weights, slice_weight_tiles);
++            if constexpr (tile_fill_split) {
++                receive_serving(weight_mcast, round);
++            } else {
++                weight_receiver->receive(round);
++            }
+         }
+         cb_push_back(cb_weights, slice_weight_tiles);
+         ++k_blocks_issued;
+@@ -597,7 +710,7 @@ void kernel_main() {
+     [[maybe_unused]] auto nslice_round = [&](uint32_t m_block_idx, auto&& before_sends) {
+         auto give_credits = [&]() {
+             if (out_valid_tiles > 0) {
+-                cb_reserve_back(cb_combine_slots, k_cols * slot_tiles);
++                reserve_serving(cb_combine_slots, k_cols * slot_tiles);
+                 for (uint32_t col = 0; col < k_cols; ++col) {
+                     combine_credit.up(noc, peer_x(col), peer_y(col), 1);
+                 }
+@@ -631,7 +744,7 @@ void kernel_main() {
+             // The combine slots are the slab's L1: peers may write them only once this core's gather landed.
+             {
+                 MaybeDeviceZoneScope("writer_slab_dead_wait");
+-                Semaphore<>(slab_dead_sem_id).wait_min(m_block_idx + 1);
++                sem_wait_serving(slab_dead_sem_id, m_block_idx + 1);
+             }
+             give_credits();
+         }
+@@ -643,11 +756,11 @@ void kernel_main() {
+             }
+             {
+                 MaybeDeviceZoneScope("writer_combine_wait_partials");
+-                cb_wait_front(cb_partials, slice_tiles);
++                wait_front_serving(cb_partials, slice_tiles);
+             }
+             if (!credited) {
+                 MaybeDeviceZoneScope("writer_combine_wait_credit");
+-                combine_credit.wait_min((m_block_idx + 1) * num_owning_cols);
++                sem_wait_serving(combine_credit_sem_id, (m_block_idx + 1) * num_owning_cols);
+                 credited = true;
+             }
+             {
+@@ -662,7 +775,7 @@ void kernel_main() {
+         if (out_valid_tiles > 0) {
+             {
+                 MaybeDeviceZoneScope("writer_combine_wait_arrivals");
+-                combine_arrival.wait_min((m_block_idx + 1) * k_cols);
++                sem_wait_serving(combine_arrival_sem_id, (m_block_idx + 1) * k_cols);
+             }
+             cb_push_back(cb_combine_slots, k_cols * slot_tiles);
+         }

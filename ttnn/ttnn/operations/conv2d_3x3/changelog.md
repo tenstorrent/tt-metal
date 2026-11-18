@@ -868,3 +868,110 @@ The ring slab and the staggered senders use no raw LLK: the ring is op dataflow 
 
 Helper feedback measured but not taken (not a bypass):
 - **`dataflow_kernel_lib` multicast:** with the round-4 compute cuts, `Staggered` placement is now a measured whole-op win (aspp.convs.2 −6.2%). The default per-column placement (all senders on one row) is the wrong default for any column-per-group weight stream.
+
+## Perf 5
+- Date: 2026-11-18
+- Scope: perf tournament round 5 on the six `[perf]` LOOSE cases (LoFi, fp32 DEST, bf8_b activation and weights, pinned shard grids; bias + ReLU). No SUPPORTED change. Base `2ac42333eb2` (end of Perf 4). Board: Blackhole p150b, AICLK 1350 MHz. DEVICE KERNEL DURATION from one fresh-cache run per variant, unless marked as a mean or median.
+- Instrumentation: the Perf 1-4 zones are kept. New zones on new paths: `reader_ring_wait_step`, `reader_ring_send` (inside `reader_combine_send`, which now spans the ring forwarding), `writer_ring_credit`, `compute_bias_wait`, `compute_combine_bias_wait`. The windowed / split fill runs inside `reader_fill*` / `writer_fill`; the ring walk inside `compute_matmul_walk` / `compute_combine`; the planned tap-direct gather inside `reader_gather`.
+- Ablation hooks for this tree: `perf_experiments/ablation_r5/ablation_hooks.patch` (against `2ac42333eb2`), plus `zone_timeline.py` (one core's zone start/end times). Every token was checked solo against its own zone. My first `untilize` hook emitted `if constexpr (false) {} else` ahead of the real untilize, so the untilize ran after the stub and the program hung; fixed before any number below was taken.
+
+### Measured breakdown (before, zoned, us)
+DM first: full > gather > fill > weights > scatter > untilize > tilize > matmul (last column: everything stubbed).
+
+| case | full | −gather | −fill | −weights | −scatter | −untilize | −tilize | −matmul |
+|---|---|---|---|---|---|---|---|---|
+| res5.1 | 45.3 | 43.8 | 42.8 | 42.8 | 40.9 | 38.8 | 36.4 | 16.2 |
+| aspp1 | 71.1 | 71.3 | 68.0 | 67.4 | 66.8 | 63.9 | 54.0 | 13.0 |
+| sem_res2 | 111.1 | 110.3 | 110.3 | 109.8 | 110.0 | 105.3 | 93.6 | 50.3 |
+| res4.0 | 21.4 | 20.3 | 19.2 | 20.0 | 16.2 | 14.6 | 13.9 | 9.3 |
+
+Compute first: full > matmul > tilize > untilize > gather > fill > scatter (the last value is the weights-only chain).
+- res5.1: 45.3, 32.7, 33.4, 33.1, 32.1, 33.4, **24.9**
+- aspp1: 71.1, 46.4, 43.6, 43.7, 38.6, 38.9, **33.0**
+- sem_res2: 111.1, 97.2, 96.8, 95.8, 94.4, 94.1, **93.8**
+- res4.0: 21.4, 20.5, 19.7, 18.2, 16.1, 16.6, **12.0**
+
+Solo: fill aspp1 −3.1, res5.1 −1.4; gather res5.1 −1.5, res4.0 −1.1; scatter res4.0 −3.3, res5.1 −1.8; weights 0 everywhere. Tilize alone leaves res5 flat and aspp −2.7 because the walk then waits on weights (walk zone res5 30.3 -> 36.6).
+
+Ranked:
+1. **res4.0 / res5: the K-split slice sends.** Scatter solo −3.3 / −1.8 us. On res4.0 the depth-1 slice CBs back-pressure the walk (+1.35 us) and the last remote slices land inside the combine.
+2. **res5 walk:** 30.3 us at 20 cycles per tile-MAC (floor 23.9): bm 7 x out_n 2 slices only take 1 x 2 subblocks.
+3. **aspp prelude:** untilize 9.7 us zoned, 4.7 payload, paced by a fill of one 2-tile-row batch in flight (~22 GB/s); tilize 11.9 us, payload-bound.
+4. **sem_res2 compute chain:** 110 us (all DM stubbed). Matmul ~83 us at 19.4 cycles per tile-MAC, tilize 13.8, untilize ~6, bias 2.9. The walk starts at 9.1 us (fill-paced untilize; weight round 0 behind a 3.3 us bias read). Weight rounds (5.2 us) co-pace the K-blocks (5.45 us).
+5. **res5 prelude gather:** the tap-direct reader's per-unit work paces the tilize (−1.5 us solo).
+
+### Portfolio and verdicts
+Each idea was built and measured in isolation by its own optimizer (`perf_experiments/<slug>/`). Precision is bit-identical to the baseline unless noted.
+
+| idea | verdict | focus result (us, isolated) | domain / notes |
+|---|---|---|---|
+| `nslice_send_decouple`: deeper slice CBs, deferred fences, send order; became a ring reduce-scatter | WIN (ring) | res4.0 21.1 -> 16.8, res5.1 45.2 -> 41.2, res5.2 45.2 -> 41.5, aspp −1.8% | every N-slice-outer K split. Slice CB depth 2 / 4: −2.5%, inside noise; farthest-first order: regression. Not bit-identical (below) |
+| `nslice_paired_weight_lead`: pair owner slices into 1 x 4 and give the weights more lead | WIN (tall subblocks); pairing and lead NULL / REGRESSION | res5.1 45.4 -> 42.2, res5.2 45.4 -> 42.0 (medians) | per-slice zones showed the walk compute-bound (weight wait 0.03 us per slice). All 8 weight rounds resident: 47.1 (+3.9%); lead + pair 45.0. 4 x 1 subblocks with a 3-row last group: 1.25 / 1.33 unpacks per tile-MAC instead of 1.5. Every N-slice walk; flat at HiFi4 and out_n 1 |
+| `tap_direct_gather_hide`: hide the tap-direct edge gather | WIN | res5.1 45.6 -> 44.2, res5.2 45.3 -> 44.4 (medians) | the reader's per-unit work (0.26 us vs compute's 0.16) paced it, not read latency. Per-tile-row tap plan, zero-once edges with fixed-size stateful reads, groups of 3 units (ring 6 from leftover L1). res4 LoFi −5.6%, HiFi4 −3.1%, aspp3 −1.1%; aspp1/2 flat (no spare L1). No raw LLK |
+| `block_fill_pipeline`: make the BLOCK TILE fill keep the untilize fed | WIN | aspp1 71.4 -> 68.3, aspp2 −2.2%, res5 −1.6 / −2.6% | windowed fill (4 batches in flight), whole-slab input ring in `cb_im2col_tiles`' L1 where every core runs one M-block, BLOCK NoC split on column receivers, no startup lane zeroing. Measured carve-outs below. Per-core compile-time split: 76.9 (launch skew); per-batch hand-over on the 2-batch ring: 75.8 |
+| `fast_tilize_chunking`: uniform chunks / no per-chunk reinit for tw 6 | chunking NULL; lean pack WIN | isolated tw 6: 27.68 -> 27.62 ns/tile (3 + 3); lean pack 25.04 (bit-exact); op aspp1 71.5 -> 70.4 | the BH fast tilize is pack-bound (27.6 ns/tile pack alone, 18.6 unpack + math); the chunk reinit hides behind it. Lean pack: 1.06-1.13x per tile for tw 2..16, every BH fast tilize in the op |
+| `height_kblock_startup`: start sem_res2's walk earlier, keep weights ahead | WIN (lazy bias wait); the rest NULL / REGRESSION | semantic 111.0 -> 109.7 (median of 3) | a kernel-start bias wait held the unpacker (first untilize) behind every core's 3.6 us bias read. Weights first / column-wise stateful weight reads / sender pushes its own weights first: flat. Sender reading round r+1 under round r's multicast: +1.0 us (DRAM replies share the sender's NoC1 with the multicast). Two fill batches in flight on the ring slab: +1.8 us. HEIGHT 13 of 14 faster |
+
+Not floated (cap of 6):
+- **sem_res2 N-outer whole-K walk** (no L1-acc passes, no per-K-block re-init): in0 `[5 x 72]` is 392 KB against 55 KB of L1 left.
+- **bf16 K-split partials:** a precision change.
+- **sem_res2 subblock / K-block shape:** probed in rounds 1-3, and bk is L1-locked at 8.
+
+### Graduated (one path each, old code deleted)
+1. **Ring reduce-scatter** (`fcf905f031b`): replaces the N-slice walk's direct all-to-all and the combine's slot sum. `CB_SLICE_R` becomes the 16 B `cb_ring_token`; `cb_combined` is no longer allocated on this walk; `send_slice` and `nslice_reader_sends` are deleted. No carve-out: every N-slice-outer K split. The K-blocked fallback keeps its post-walk scatter (a different walk).
+2. **Lazy bias wait** (`717194a0d6d`), compute only. Merge fix: the ring's bias add calls `add_bias_bcast_rows` directly, so it got its own first-use wait, and the end-of-kernel pop now waits first (a core owning no output columns never used the bias).
+3. **Tall ring subblocks** (`04e4625494e`), merged into the ring walk by hand: ring row groups are the subblock height (4, last group shorter), and odd owners take the short group first so each step starts at the height the previous one ended on. Compute and reader derive the group order from the owner (`ring_group_row0`), since the two columns a partial moves between must agree. Bit-identical to the ring commit on 15 shapes.
+4. **Planned tap-direct gather** (`37cb9aabc18`). Reader CT arg 69 (`tap_direct_group`) after the ring's 68.
+5. **Windowed TILE fill + BLOCK split fill** (`7c04b278db9`), merged with the ring's writer by hand: the ring writer's credit poll and slab-dead wait now serve fill hand-overs. The fill's "no im2col zeroing on tap-major" supersedes tap-direct's narrower rule. Carve-outs, both measured:
+   - **Weight senders keep the reader-only fill:** +9-11% with the split (their writer blocks in DRAM reads and multicast sends).
+   - **Small hand-overs keep the reader-only fill** (`SPLIT_FILL_MIN_BYTES = 8192` from higher shards per M-block). Re-measured on the combined tree, threshold 0 vs 8 KB, 2 alternating runs each: res4 HiFi4 38.08 / 38.09 vs 36.81 / 36.86 (+3.5%), res4 LoFi 17.38 / 17.36 vs 16.57 / 16.49 (+5%); res5 / aspp flat.
+   - Inexpressible: the whole-slab ring needs one M-block per core, no center-tap slots, no face-direct, and a slab that fits `cb_im2col_tiles`; the windowed fill is not on the multi-block ring slab.
+6. **Lean fast-tilize pack** (`4d4369d8992`), raw LLK in `kernels/conv2d_3x3_lean_tilize.hpp`, every BH fast tilize in compute (`window_tilize`, `direct_tilize`, the center-slot and K-block tilizes); `ckl::tilize` stays where the fast tilize does not apply. On the combined tree, 2 runs: aspp1 68.13 -> 67.29, aspp2 68.72 -> 67.64, sem_res2 110.14 -> 109.20; bit-identical on 15 shapes.
+
+Per-graduation focus deltas (zoned, sequential): ring res5.1 45.3 -> 41.15, res4.0 21.4 -> 16.5; bias sem_res2 111.2 -> 110.0; tall res5.1 41.2 -> 38.1; tap plan res5.1 38.1 -> 37.1; fill aspp1 70.3 -> 68.1 (3 runs); lean aspp1 68.1 -> 67.3.
+
+### Precision
+Every graduation except the ring is bit-identical to its predecessor (15 focus + BLOCK harness shapes). The ring's running sum is an fp32 packer L1 accumulation; the old combine passed each fp32 partial through SrcA/SrcB (19 bits). Against base `2ac42333eb2`, 0.83-0.90% of the outputs differ (aspp.convs.3 1.46%), and against the fp32 torch reference:
+- LoFi (the focus config): mean abs error lower on all six focus cases and res4 LoFi (−0.5% to −0.7%; aspp1 0.973 -> 0.967), max error unchanged.
+- HiFi4 BLOCK harness: mean abs error +0.2% to +0.3% (aspp_convs1 0.6206 -> 0.6221), max error unchanged or within 0.5.
+The precision contract (fp32 DEST, fidelity, dtypes, fp32 partials) is unchanged; golden stays green.
+
+### Whole-op result (unzoned, us; two alternating base/final pairs, mean; ttnn.conv2d target from feature_spec)
+
+| case | before (`2ac42333eb2`) | after (`4d4369d8992`) | speedup | ttnn target |
+|---|---|---|---|---|
+| res5.1.conv2 @ LoFi | 44.74 | 36.10 | 1.24x | 75.5 |
+| res5.2.conv2 @ LoFi | 45.19 | 36.40 | 1.24x | 79.8 |
+| aspp.convs.1 @ LoFi | 70.86 | 67.05 | 1.06x | 159.3 |
+| aspp.convs.2 @ LoFi | 69.83 | 67.49 | 1.03x | 220.5 |
+| semantic res2.fuse_conv.1 @ LoFi | 110.17 | 107.78 | 1.02x | 145.6 |
+| res4.0.conv2 @ LoFi | 20.82 | 16.19 | 1.29x | 39.8 |
+
+### Guard set (whole perf harness, 47 shapes, unzoned, same session, two alternating pairs)
+- **BLOCK:** res4 LoFi 22.34 -> 15.90 (−28.8%); res4 HiFi4 40.33 -> 36.80; res4.0 HiFi4 39.01 -> 37.05; res5.0 / 5.1 / 5.2 HiFi4 −3.9 / −4.5 / −4.4%; aspp.convs.1 / 2 / 3 HiFi4 −1.9 / −1.4 / −2.8%.
+- **HEIGHT:** center_head1 34.64 -> 32.98 (−4.8%); res3_0_conv2 −3.4%; res2_conv2 −3.3%; res3_conv2 −2.2%; inst_res2_fuse_conv0 −2.0%; inst_res2_fuse_conv1 −1.8%; stem_conv3 186.6 -> 184.0; sem_res2_fuse_conv1 HiFi4 318.9 -> 316.2; the rest −1.2% to +0.2% (sem_res3_fuse_conv0 131.15 -> 131.45).
+- **Interleaved:** 18 shapes within −1.2% to +0.6%, except H16_W16_Ci64 tile_bf8b 9.92 -> 10.12 (+2.1%), the same ~10 us shape flagged in rounds 1-4. Re-measured 3 alternating pairs with both TILE dtypes: base 9.80-9.96, final 9.88-10.29, ranges overlapping with single-run spikes on the final side; medians +0.1 / +0.04 us. Noise: no carve-out.
+- **Golden:** `eval/golden_tests/conv2d_3x3/` 1502 passed, 480 skipped (INVALID), 0 failed, after every graduation. Unit dir 245 / 245 after every graduation.
+- **`--dev`:** the BLOCK unit file after the tall merge (45 / 45), BLOCK + HEIGHT after the fill merge (86 / 86), the whole unit dir on the final tree (245 / 245).
+
+### Bottleneck now (zoned, core (3,3))
+- **res5.x (36.4 us):** untilize 3.4, tilize 4.9, walk 26.6 (17.8 cycles per tile-MAC; floor 23.9), combine 0.7. The walk is 73% of the op, at the 4 x 1 subblock unpack rate.
+- **aspp (67 us):** untilize 7.3 (payload ~4.7; fill 3.6 p50), tilize 10.8 (lean pack, payload-bound), walk 44.6 (floor 41), combine 0.4.
+- **sem_res2 (108 us):** per M-block untilize 6.4 / 1.3, walk 48.7 / 47.7 (tilize 1.1 per tilized K-block, matmul ~4.6 per K-block at 19.4 cycles per tile-MAC), bias 1.45. Weights co-pace the K-blocks (`writer_weight_fetch` 90.8 us p50), and the multicast sender's NoC1 is the next lever: a read-ahead under the multicast measured +1.0 us.
+- **res4.0 (16.2 us):** untilize 3.1, tilize 4.1, walk 7.9, combine 0.4.
+
+### Helper bypasses
+
+| helper | kind | what was missing / hard | helper ns | raw ns | site |
+|---|---|---|---|---|---|
+| `compute_kernel_lib::matmul_block` | capability | It packs with L1 accumulation only on K-blocks after the first, so a whole-K call cannot accumulate its only K-block onto a partial another core forwarded into L1; and it has no hook to gate each subblock row's pack on a CB another RISC frees (the ring token). | 21116 (res4.0, all-to-all with the helper walk) | 16807 (ring, raw walk) | conv2d_3x3_compute.cpp:615 |
+| `compute_kernel_lib::matmul_block` | capability | One `MatmulBlockShape` per call, and its subblock must divide the block (width first). A bm 7 x out_n 2 slice therefore gets 1 x 2 subblocks (1.5 matmul unpacks per tile-MAC on BH). There is no "4-long subblocks with a shorter last group" mode, and a ragged group costs one re-init, which a caller can only amortize by ordering groups across calls. | 45370 (res5.1, median) | 42170 (median) | conv2d_3x3_compute.cpp:615 (ring walk, `ring_group_row0`) |
+| `compute_kernel_lib::tilize` -> `fast_tilize_block` -> `llk_pack_fast_tilize.h` | capability | The BH fast tilize is pack-bound, and its pack MOP's per-tile address update (`ADDDMAREG; STALLWAIT(CFG, THCON); WRCFG`) stalls on the ADDDMAREG issued just before it. No helper or API knob reaches the replay. The fix (update for the next tile after the WRCFG, no start_op, 1-tile MOP) belongs in `llk_pack_fast_tilize.h`, where every BH fast tilize would get it; the chunk reinit in `fast_tilize_block` is harmless. | 27.68 ns/tile (tw 6, isolated); aspp1 68.13 | 25.04 ns/tile; aspp1 67.29 | conv2d_3x3_lean_tilize.hpp:42, :97; conv2d_3x3_compute.cpp:94, :168, :230, :292, :598 |
+| no helper covers this (NoC write family) | capability | The dataflow API has only a blocking per-transaction-id write barrier. The ring's forwarding loop must poll its own in-flight writes, the incoming arrival count and the token CB together, so it uses `noc_async_write_one_packet_with_trid` and polls `ncrisc_noc_nonposted_write_with_transaction_id_flushed`. A non-blocking "write trid flushed" query would cover it. | n/a | ring forwarding (res4.0 tail 3.6 -> 0.95 us) | conv2d_3x3_reader.cpp:1100, :1160 |
+| no helper covers this (CB family) | capability | A RISC that is neither producer nor consumer of a CB cannot wait for the consumer to pop it. The writer credits column my_col - 1 only after compute popped the previous M-block's `cb_combine_slots`, so it reads the CB's acked count register directly (`get_cb_tiles_acked_ptr` + `reg_read`). | n/a | n/a | conv2d_3x3_writer.cpp:713 |
+
+The BLOCK split fill reuses two Perf 2 bypasses at new sites: the polled multicast receive (`receive_serving`) and the polled trid flush (`ncrisc_noc_read_with_transaction_id_flushed`, now also the windowed fill's retire, conv2d_3x3_writer.cpp:407). The planned tap-direct gather and the lazy bias wait use no raw LLK (`set_read_state` / `read_with_state` from the kernel library).
+
+Helper feedback measured but not taken (not a bypass):
+- **`fast_tilize_block` chunking:** 4 + 2 vs 3 + 3 vs one reinit per call, all within 0.3% at every tw: the pack hides the reinit.
+- **`dataflow_kernel_lib` multicast sender:** reading round r+1 from DRAM under round r's multicast measured +1.0 us on sem_res2, because the DRAM replies and the multicast share the sender's NoC1. A sender read-ahead option would need the reads on the other NoC.
