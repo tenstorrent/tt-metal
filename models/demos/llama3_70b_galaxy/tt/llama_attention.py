@@ -10,7 +10,7 @@ from models.common.lightweightmodule import LightweightModule
 from models.common.rmsnorm import RMSNorm
 from models.demos.llama3_70b_galaxy.tt.llama_ccl import WO_AG_MAX
 from models.demos.llama3_70b_galaxy.tt.model_config import ring_sdpa_q_chunk_size
-from models.demos.llama3_70b_galaxy.tt.prefill_padding import prefill_minmm
+from models.demos.llama3_70b_galaxy.tt.prefill_padding import prefill_minmm, prefill_slab_rows
 
 # Opt-in: prefill SDPA (ring, chunked/prefix-cached, regular) at HiFi2 instead of HiFi4.
 # Read once at import. Unset keeps the shared HiFi4 config object used before this change.
@@ -1472,7 +1472,7 @@ class TtLlamaAttention(LightweightModule):
         # reshaping long sequence to matmul fit on device
         # 3072/5120 (LLAMA_GALAXY_PREFILL_PAD) are not multiples of 2048, so they use 1024-row slabs.
         if seq_len > 2048 and not qkv_minmm:
-            qkv_slab = 2048 if seq_len % 2048 == 0 else 1024
+            qkv_slab = 2048 if seq_len % 2048 == 0 else prefill_slab_rows(seq_len)
             x_11SH = ttnn.reshape(x_11SH, [1, seq_len // qkv_slab, qkv_slab, -1])
 
         if qkv_minmm:
@@ -1799,7 +1799,8 @@ class TtLlamaAttention(LightweightModule):
 
         # reshaping long sequence to matmul fit on device
         if seq_len > 1024:
-            attn_output_11SH = ttnn.reshape(attn_output_11SH, [1, seq_len // 1024, 1024, -1])
+            wo_slab = prefill_slab_rows(seq_len)
+            attn_output_11SH = ttnn.reshape(attn_output_11SH, [1, seq_len // wo_slab, wo_slab, -1])
 
         ## For shorter sequence lengths use the original matmul since it performs better than the minimal matmul
         wo_minmm = seq_len == 2048 and batch_size == 1 and self.use_prefetcher and prefill_minmm("wo2048")

@@ -95,9 +95,43 @@ def prefill_sdpa_q64_2048_enabled():
 #   mlp2048 : FF1/FF3 (minimal) and FF2 (fused AG + minimal) at 2048
 #   wo2048  : WO at 2048
 #   mlp3072 : FF1/FF3 (minimal) and FF2 (fused AG + minimal) at 3072 (not part of "1")
+#   mlp512  : the same at the CPF_PAD512 lengths below 4096 (2560, 3584; not part of "1")
 PREFILL_MINMM_ENV = "LLAMA_GALAXY_PREFILL_MINMM"
-PREFILL_MINMM_PARTS = ("qkv", "mlp2048", "wo2048", "mlp3072")
+PREFILL_MINMM_PARTS = ("qkv", "mlp2048", "wo2048", "mlp3072", "mlp512")
 PREFILL_MINMM_ALL = ("qkv", "mlp2048", "wo2048")  # what "1" turns on
+
+
+# LLAMA_GALAXY_PREFILL_CPF_PAD512 (opt-in, read at TT_CCL construction and call time): a prefill over a cached
+# prefix that takes the CPF ring path pads its new tokens to the next multiple of 512 when that is one of the
+# enabled lengths (and shorter than the usual padding), instead of the next 1024. "1" enables CPF_PAD512_SEQLENS,
+# a comma list enables a subset (e.g. "2560"). These lengths get prefill CCL buffers and ring(+replica) traces only:
+# the cold path keeps its padding and warmup. Their matmuls run on 512-row slabs (prefill_slab_rows).
+CPF_PAD512_ENV = "LLAMA_GALAXY_PREFILL_CPF_PAD512"
+CPF_PAD512_SEQLENS = (2560, 3584, 4608)
+
+
+def cpf_pad512_seqlens():
+    """The ring-only lengths LLAMA_GALAXY_PREFILL_CPF_PAD512 enables (empty when unset or "0")."""
+    value = os.environ.get(CPF_PAD512_ENV, "").strip()
+    if value in ("", "0"):
+        return ()
+    if value == "1":
+        return CPF_PAD512_SEQLENS
+    lens = tuple(int(v) for v in value.replace("+", ",").split(",") if v.strip())
+    for s in lens:
+        if s not in CPF_PAD512_SEQLENS:
+            raise ValueError(f"{CPF_PAD512_ENV}={value!r}: {s} is not one of {CPF_PAD512_SEQLENS}")
+    return lens
+
+
+def cpf_pad512_on():
+    return bool(cpf_pad512_seqlens())
+
+
+def prefill_slab_rows(seq_len):
+    """Rows per slab of the slabbed 2D prefill matmuls: 1024, or 512 for the lengths that are not multiples of 1024
+    (CPF_PAD512_SEQLENS)."""
+    return 1024 if seq_len % 1024 == 0 else 512
 
 
 def prefill_minmm(part):

@@ -7,7 +7,7 @@ import torch
 import os
 from loguru import logger
 
-from models.demos.llama3_70b_galaxy.tt.prefill_padding import prefill_extra_seqlens
+from models.demos.llama3_70b_galaxy.tt.prefill_padding import cpf_pad512_seqlens, prefill_extra_seqlens
 
 # Only for prefill, check tt-metal/models/demos/llama3_70b_galaxy/README.md
 LINE_RS = os.environ.get("LINE_RS", "0") == "1"
@@ -240,6 +240,8 @@ class TT_CCL:
             # LLAMA_GALAXY_PREFILL_PAD lengths (3072/5120/6144) pad, trace and buffer like the ones above.
             max_seq_len = getattr(model_args, "max_seq_len", 0)
             extra_seqlens = [s for s in prefill_extra_seqlens() if s <= max_seq_len]
+            # LLAMA_GALAXY_PREFILL_CPF_PAD512: ring-only lengths (buffers here; traces only on the CPF ring path)
+            extra_seqlens += [s for s in cpf_pad512_seqlens() if s <= max_seq_len and s not in extra_seqlens]
             self.pad_extra_seqlens = set(extra_seqlens)
             if extra_seqlens:
                 self.support_seqlens = sorted(set(self.support_seqlens) | set(extra_seqlens), reverse=True)

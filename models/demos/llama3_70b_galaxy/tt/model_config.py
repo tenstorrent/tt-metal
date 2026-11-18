@@ -38,6 +38,7 @@ from models.demos.llama3_70b_galaxy.tt.prefill_padding import (
     prefill_sdpa_q64_2048_enabled,
     prefill_slab1024_q_chunk,
     ring_sdpa_q_chunk_override,
+    prefill_slab_rows,
 )
 
 # HuggingFace reference-model wrappers are shared with models/tt_transformers instead of being
@@ -63,7 +64,10 @@ def ring_sdpa_q_chunk_size(seqlen):
     seqlen/8 slices). The op places a slice at slice_index * (seqlen/8) // q_chunk_size, so q_chunk_size
     must divide seqlen/8: 256 for every power of two >= 2048, 128 for 3072 and 5120.
     LLAMA_GALAXY_PREFILL_SLAB1024 can lower it at 4096/6144/8192 (prefill_padding.py)."""
-    default = 256 if (seqlen // 8) % 256 == 0 else 128
+    default = 256 if (seqlen // 8) % 256 == 0 else 128 if (seqlen // 8) % 128 == 0 else 64  # 64: CPF_PAD512 lengths
+    if default == 64:
+        # LLAMA_GALAXY_PREFILL_CPF_PAD512_Q (read at call time): q_chunk for the CPF_PAD512 lengths (64 or 32)
+        default = int(os.environ.get("LLAMA_GALAXY_PREFILL_CPF_PAD512_Q", "64"))
     if seqlen == 2048 and prefill_sdpa_q64_2048_enabled():
         return 64
     return ring_sdpa_q_chunk_override(seqlen, default, PREFILL_SLAB1024_Q_CHUNK)
@@ -71,9 +75,15 @@ def ring_sdpa_q_chunk_size(seqlen):
 
 def is_1024_slab_prefill_len(seq_len):
     """True for padded prefill lengths above 2048 that are not multiples of 2048 (3072, 5120 from
-    LLAMA_GALAXY_PREFILL_PAD). Their 2D prefill matmuls run on 1024-row slabs, unfused, with
-    per_core_M=4 (32 tile rows over 8 grid rows)."""
+    LLAMA_GALAXY_PREFILL_PAD; 2560/3584/4608 from LLAMA_GALAXY_PREFILL_CPF_PAD512). Their 2D prefill matmuls run on
+    slabs of prefill_slab_rows rows (1024, or 512 when the length is not a multiple of 1024), unfused, with
+    per_core_M = slab_per_core_m(seq_len) (slab tile rows over 8 grid rows)."""
     return seq_len > 2048 and seq_len % 2048 != 0
+
+
+def slab_per_core_m(seq_len):
+    """per_core_M of the 7x10-grid 2D prefill matmuls on one slab: 4 for 1024-row slabs, 2 for 512-row slabs."""
+    return prefill_slab_rows(seq_len) // 32 // 8
 
 
 PREFETCHER_NOC1_GRID = [
@@ -993,7 +1003,7 @@ class TtModelArgs:
                         out_subblock_h=1,  # Must be divisible by per_core_M
                         out_subblock_w=4,  # Must be divisible by per_core_N, out_subblock_w * out_subblock_h <= 4
                         per_core_M=(
-                            4
+                            slab_per_core_m(seq_len)
                             if is_1024_slab_prefill_len(seq_len)
                             else max(1, 8 if seq_len >= 2048 else seq_len // self.tile_size // 8)  # 8 rows
                         ),  # M / TILE_HEIGHT / Grid_Size (dynamic based on seqlen)
@@ -1123,7 +1133,7 @@ class TtModelArgs:
                         out_subblock_h=1,  # Must be divisible by per_core_M
                         out_subblock_w=2,  # Must be divisible by per_core_N, out_subblock_w * out_subblock_h <= 4
                         per_core_M=(
-                            4
+                            slab_per_core_m(seq_len)
                             if is_1024_slab_prefill_len(seq_len)
                             else max(1, 8 if seq_len >= 2048 else seq_len // self.tile_size // 8)
                         ),  # 8~10 rows
@@ -1228,7 +1238,9 @@ class TtModelArgs:
                         in0_block_w=8,  # FIXME: optimize this config for prefill, careful use DI_DT_WORKAROUND if necessary
                         out_subblock_h=1,  # Must be divisible by per_core_M
                         out_subblock_w=2,  # Must be divisible by per_core_N, out_subblock_w * out_subblock_h <= 4
-                        per_core_M=max(1, 4 if seq_len >= 1024 else seq_len // self.tile_size // 8),  # 8~10 rows
+                        per_core_M=max(
+                            1, slab_per_core_m(seq_len) if seq_len >= 1024 else seq_len // self.tile_size // 8
+                        ),  # 8~10 rows
                         per_core_N=math.ceil(2048 / 32 / 7),  # N / TILE_WIDTH / grid width
                         transpose_mcast=False,
                         fused_activation=None,
@@ -1297,7 +1309,7 @@ class TtModelArgs:
                         out_subblock_h=1,  # Must be divisible by per_core_M
                         out_subblock_w=2,  # Must be divisible by per_core_N, out_subblock_w * out_subblock_h <= 4
                         per_core_M=(
-                            4
+                            slab_per_core_m(seq_len)
                             if is_1024_slab_prefill_len(seq_len)
                             else max(1, 8 if seq_len >= 2048 else seq_len // self.tile_size // 8)  # 8 rows
                         ),  # M / TILE_HEIGHT / Grid_Size (dynamic based on seqlen)

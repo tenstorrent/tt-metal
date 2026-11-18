@@ -26,7 +26,12 @@ from models.common.sampling import (
 from models.common.warmup import WarmupForwardMixin
 from models.demos.llama3_70b_galaxy.tt.llama_attention import CPF_RING_ALIGN, cpf_ring_eligible, cpf_ring_warm_prefixes
 from models.demos.llama3_70b_galaxy.tt.model_config import SDPA_CHUNK_ALIGN
-from models.demos.llama3_70b_galaxy.tt.prefill_padding import padded_prefill_len, prefill_extra_seqlens
+from models.demos.llama3_70b_galaxy.tt.prefill_padding import (
+    cpf_pad512_on,
+    cpf_pad512_seqlens,
+    padded_prefill_len,
+    prefill_extra_seqlens,
+)
 from models.tt_transformers.tt.common import (
     InterleavedTextMedia,
     copy_host_to_device,
@@ -304,6 +309,22 @@ class Generator(WarmupForwardMixin):
             support_seqlens = getattr(self.model.tt_ccl_prefill, "support_seqlens", ())
         return cpf_ring_eligible(padded_new, num_cached, block_size, support_seqlens)
 
+    def _padded_new_len(self, new_len: int, num_cached: int, block_size: int) -> int:
+        """Padded length of new_len new rows over num_cached cached rows. LLAMA_GALAXY_PREFILL_CPF_PAD512=1: the next
+        multiple of 512 when it is a CPF_PAD512 length with prefill CCL buffers, shorter than the usual padding, and
+        the request then takes the CPF ring path; otherwise get_padded_prefill_len."""
+        padded = get_padded_prefill_len(new_len)
+        if num_cached > 0 and cpf_pad512_on():
+            p512 = -(-int(new_len) // 512) * 512
+            if (
+                p512 < padded
+                and p512 in cpf_pad512_seqlens()
+                and p512 in getattr(self.model.tt_ccl, "support_seqlens", ())
+                and self._cpf_ring_request(p512, num_cached, block_size)
+            ):
+                return p512
+        return padded
+
     def _set_prefill_column_mask(self, tt_column_mask):
         # Keep mask available on whichever TT_CCL instance attention currently uses.
         # Model-level CCL references may differ from layer-level ones (e.g. after the
@@ -521,8 +542,13 @@ class Generator(WarmupForwardMixin):
 
         # Phase 3 (LLAMA_GALAXY_PREFILL_CPF_RING=1): the ring path's traces for the warmed prefix lengths.
         if _cpf_ring_on():
+            # LLAMA_GALAXY_PREFILL_CPF_PAD512: the ring-only lengths are warmed here and nowhere else
+            ring_lengths = sorted(
+                set(warmup_sequence_lengths)
+                | {s for s in cpf_pad512_seqlens() if s in getattr(self.model.tt_ccl, "support_seqlens", ())}
+            )
             for prefix_len in cpf_ring_warm_prefixes():
-                for supported_length in warmup_sequence_lengths:
+                for supported_length in ring_lengths:
                     if not self._cpf_ring_request(supported_length, prefix_len, block_size):
                         continue
                     total_seq_len = prefix_len + supported_length
@@ -613,7 +639,9 @@ class Generator(WarmupForwardMixin):
                 # rounded request takes the ring path.
                 ring_cached = (num_cached_tokens_list[idx] // CPF_RING_ALIGN) * CPF_RING_ALIGN
                 if ring_cached != num_cached_tokens_list[idx] and self._cpf_ring_request(
-                    get_padded_prefill_len(int(prompt_lens[idx]) - ring_cached), ring_cached, get_block_size(kv_cache)
+                    self._padded_new_len(int(prompt_lens[idx]) - ring_cached, ring_cached, get_block_size(kv_cache)),
+                    ring_cached,
+                    get_block_size(kv_cache),
                 ):
                     num_cached_tokens_list[idx] = ring_cached
 
@@ -628,7 +656,9 @@ class Generator(WarmupForwardMixin):
             for idx, seq_len in enumerate(prompt_lens):
                 num_cached = num_cached_tokens_list[idx]
                 ring = self._cpf_ring_request(
-                    get_padded_prefill_len(int(seq_len) - num_cached), num_cached, get_block_size(kv_cache)
+                    self._padded_new_len(int(seq_len) - num_cached, num_cached, get_block_size(kv_cache)),
+                    num_cached,
+                    get_block_size(kv_cache),
                 )
                 if _should_skip_prefix_caching_env(int(seq_len), num_cached, ring):
                     logger.info(
@@ -639,7 +669,14 @@ class Generator(WarmupForwardMixin):
 
         # Calculate and pad prefill_seq_lens excluding cached tokens
         prefill_seq_lens = [
-            get_padded_prefill_len(seq_len - num_cached_tokens_list[idx]) for idx, seq_len in enumerate(prompt_lens)
+            (
+                self._padded_new_len(
+                    int(seq_len) - num_cached_tokens_list[idx], num_cached_tokens_list[idx], get_block_size(kv_cache)
+                )
+                if num_cached_tokens_list[idx] > 0 and kv_cache is not None
+                else get_padded_prefill_len(seq_len - num_cached_tokens_list[idx])
+            )
+            for idx, seq_len in enumerate(prompt_lens)
         ]
         if page_table is not None:
             assert isinstance(

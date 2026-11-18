@@ -4,7 +4,7 @@
 
 import torch
 import ttnn
-from models.demos.llama3_70b_galaxy.tt.prefill_padding import prefill_minmm
+from models.demos.llama3_70b_galaxy.tt.prefill_padding import prefill_minmm, prefill_slab_rows
 from models.common.lightweightmodule import LightweightModule
 import torch.nn.functional as F
 
@@ -382,12 +382,17 @@ class TtLlamaMLP(LightweightModule):
         minimal_pc_2 = self.model_config["PREFILL_FF2_MINIMAL_MATMUL_CONFIG"](seq_len)
 
         if 1024 <= seq_len < 4096:
-            x = ttnn.reshape(x, (1, seq_len // 1024, 1024, -1))
+            slab = prefill_slab_rows(seq_len)
+            x = ttnn.reshape(x, (1, seq_len // slab, slab, -1))
 
         # LLAMA_GALAXY_PREFILL_MINMM=mlp2048 / mlp3072: minimal matmuls (FF2 fused with its all-gather) at 2048 /
         # 3072 too (the 1024-row slab input [1, S/1024, 1024, 2048] goes to minimal_matmul as is, as at 2048).
         mlp_minmm = (
-            ((seq_len == 2048 and prefill_minmm("mlp2048")) or (seq_len == 3072 and prefill_minmm("mlp3072")))
+            (
+                (seq_len == 2048 and prefill_minmm("mlp2048"))
+                or (seq_len == 3072 and prefill_minmm("mlp3072"))
+                or (seq_len in (2560, 3584) and prefill_minmm("mlp512"))
+            )
             and batch_size == 1
             and self.args.use_prefetcher
             and not self.args.is_blackhole
