@@ -63,11 +63,9 @@ from ttml.trainers.grpo_trainer import (
 )
 from ttml.trainers.grpo_trainer import grpo_trainer as grpo_trainer_module
 from ttml.trainers.grpo_trainer.remote_rollout import (
-    async_remote_rollout_batch_source,
     async_rollout,
     mpi_rollout,
     rollout_queue,
-    sync_remote_rollout_batch_source,
     threaded_weight_bridge,
 )
 from ttml.trainers.grpo_trainer.remote_rollout.async_remote_rollout_batch_source import AsyncRemoteRolloutBatchSource
@@ -1267,7 +1265,7 @@ def _trainer_with_remote_rollout(monkeypatch, client, reward_funcs, callbacks=()
     monkeypatch.setattr(grpo_trainer_module, "init_distributed_training", lambda config, device_config: None)
     monkeypatch.setattr(grpo_trainer_module, "is_rollout_rank", lambda config: False)
     monkeypatch.setattr(GRPOTrainer, "_build_policy", build_policy)
-    monkeypatch.setattr(sync_remote_rollout_batch_source, "weights_ref_hf_dict", lambda model: {})
+    monkeypatch.setattr(grpo_ttml_model, "weights_ref_hf_dict", lambda model: {})
     return GRPOTrainer(
         transformer_config=SimpleNamespace(model_type="llama"),
         device_config=SimpleNamespace(enable_fsdp=False),
@@ -1445,7 +1443,7 @@ class _FakeRolloutClient:
 
 
 def _sync_source(monkeypatch, client, weight_sync_every):
-    monkeypatch.setattr(sync_remote_rollout_batch_source, "weights_ref_hf_dict", lambda model: {})
+    monkeypatch.setattr(grpo_ttml_model, "weights_ref_hf_dict", lambda model: {})
     return SyncRemoteRolloutBatchSource(
         client=client,
         prompts=[[1], [2], [3], [4]],
@@ -1800,7 +1798,7 @@ class _FakeAsyncClient:
 
 
 def _async_source(monkeypatch, client, num_batches, max_staleness, weight_sync_every=1):
-    monkeypatch.setattr(async_remote_rollout_batch_source, "weights_ref_hf_dict", lambda model: {})
+    monkeypatch.setattr(grpo_ttml_model, "weights_ref_hf_dict", lambda model: {})
     return AsyncRemoteRolloutBatchSource(
         client=client,
         num_batches=num_batches,
@@ -1850,9 +1848,11 @@ def test_async_remote_source_update_weights_returns_zero_when_sync_not_due(monke
     assert client.pushed == [0]
 
 
-def test_async_remote_source_update_weights_returns_zero_when_no_batches_left(monkeypatch):
-    source = _async_source(monkeypatch, _FakeAsyncClient([]), num_batches=0, max_staleness=0)
-    assert source.update_weights(None, 0) == 0.0
+def test_async_remote_source_pushes_version_0_when_no_batches_left(monkeypatch):
+    client = _FakeAsyncClient([])
+    source = _async_source(monkeypatch, client, num_batches=0, max_staleness=0)
+    assert source.update_weights(None, 0) >= 0.0
+    assert client.pushed == [0]
 
 
 def test_async_remote_source_raises_when_the_queue_closes(monkeypatch, expect_error):
