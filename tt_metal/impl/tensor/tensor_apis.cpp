@@ -180,6 +180,13 @@ void distributed::MeshCommandQueue::enqueue_write_tensor(const HostTensor& host_
     TT_FATAL(
         host_tensor.tensor_spec().page_config() == device_tensor.tensor_spec().page_config(),
         "Host tensor has different page config");
+    // The device buffer is laid out for the device tensor's padding, so host data with other padding would land at the
+    // wrong offsets.
+    TT_FATAL(
+        host_tensor.padded_shape() == device_tensor.padded_shape(),
+        "Host tensor has padded shape {}, but the device tensor has {}",
+        host_tensor.padded_shape(),
+        device_tensor.padded_shape());
 
     auto mesh_buffer = device_tensor.impl().raw_mesh_buffer();
     const auto& distributed_host_buffer = host_tensor.buffer();
