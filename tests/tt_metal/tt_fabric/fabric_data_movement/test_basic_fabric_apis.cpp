@@ -28,6 +28,7 @@
 #include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/experimental/fabric/mesh_graph.hpp>
 #include <tt-metalium/program.hpp>
+#include <tt_stl/fmt.hpp>
 #include "impl/context/metal_context.hpp"
 #include "impl/dispatch/slow_dispatch.hpp"
 #include "impl/kernels/kernel.hpp"
