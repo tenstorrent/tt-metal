@@ -10,12 +10,12 @@
 
 #pragma once
 
-#include <cstddef>
 #include <cstdint>
 
 #include "api/debug/assert.h"
 #include "dev_mem_map.h"
 #include "hostdev/cce_spa_routes.h"
+#include "hostdev/eth_link.h"
 #include "internal/risc_attribs.h"
 #include "internal/tt-2xx/quasar/overlay/cmdbuff_api.hpp"
 
@@ -85,28 +85,19 @@ inline void check_on_cce0() {
     }
 }
 
-// The Ethernet-link slot at MEM_IERISC_FABRIC_ETH_LINK_BASE. The host (RiscFirmwareInitializer) writes it before
-// launch on every linked Quasar Ethernet core, from the cluster's link table; when that table has no peer for the
-// core, valid stays 0. This CCE's own tile comes from hsio_tile(), not from the slot.
-struct EthLink {
-    uint32_t peer_tile;  // HSIO tile of the link peer's CCE
-    uint32_t valid;      // kEthLinkValid once the host has written peer_tile
-    uint32_t kind;       // kEthLinkKindEthernet or kEthLinkKindNoc: how a send reaches the peer
-    uint32_t reserved;
-};
+// The Ethernet-link slot at MEM_IERISC_FABRIC_ETH_LINK_BASE, an EthLink (hostdev/eth_link.h). The host
+// (RiscFirmwareInitializer) writes it before launch on every linked Quasar Ethernet core, from the cluster's link
+// table; when that table has no peer for the core, valid stays 0. This CCE's own tile comes from KeraunosSpaRoutes, not
+// from the slot.
 static_assert(sizeof(EthLink) == MEM_IERISC_FABRIC_ETH_LINK_SIZE);
-static_assert(offsetof(EthLink, kind) == 8);
-constexpr uint32_t kEthLinkValid = MEM_IERISC_FABRIC_ETH_LINK_VALID;
-constexpr uint32_t kEthLinkKindEthernet = 0;
-constexpr uint32_t kEthLinkKindNoc = 1;
 
 // The slot, once the host has written it. Without the valid word the peer tile is stale and a send would land in
 // another tile's SRAM, so this trips a watcher assert, and without watcher spins until the host writes the slot.
 FORCE_INLINE const volatile EthLink& eth_link() {
     const volatile EthLink& link = *reinterpret_cast<const volatile EthLink*>(
         static_cast<uintptr_t>(MEM_IERISC_FABRIC_ETH_LINK_BASE + MEM_IERISC_UNCACHED_BASE));
-    ASSERT(link.valid == kEthLinkValid);
-    while (link.valid != kEthLinkValid) {
+    ASSERT(link.valid == ETH_LINK_VALID);
+    while (link.valid != ETH_LINK_VALID) {
     }
     return link;
 }
@@ -148,7 +139,7 @@ FORCE_INLINE uint64_t sram_system_addr(uint32_t tile, uint32_t flat) {
 // true while its iDMA request VC has no space or the queue's last send is not acked: one send in flight per queue.
 // Never blocks once the host has written the link slot. A kind other than the two halts at the next send.
 FORCE_INLINE bool txq_busy(uint32_t q_num) {
-    if (eth_link().kind == kEthLinkKindNoc) {
+    if (eth_link().kind == ETH_LINK_KIND_NOC) {
         return idma_free_space_cmdbuf<kCmdBuf>(noc_req_vc(q_num)) == 0 || !idma_acked_cmdbuf<kCmdBuf>(noc_trid(q_num));
     }
     return idma_free_space_cmdbuf<kCmdBuf>(txq_req_vc(q_num)) == 0;
@@ -161,8 +152,8 @@ FORCE_INLINE void setup_send(uint32_t q_num, uint32_t dest) {
     const volatile EthLink& link = eth_link();
     const uint32_t kind = link.kind;
     const uint32_t peer_tile = link.peer_tile;
-    const bool noc = kind == kEthLinkKindNoc;
-    if (!noc && kind != kEthLinkKindEthernet) {
+    const bool noc = kind == ETH_LINK_KIND_NOC;
+    if (!noc && kind != ETH_LINK_KIND_ETHERNET) {
         halt(HaltCode::BadLinkKind, kind);
     }
     if (noc && peer_tile == hsio_tile()) {
@@ -195,7 +186,7 @@ FORCE_INLINE void send_bytes(uint32_t q_num, uint32_t src, uint32_t dest, uint32
     set_src_cmdbuf<kCmdBuf>(sram_local_addr(hsio_tile(), src));
     set_len_cmdbuf<kCmdBuf>(num_bytes);
     setup_max_bytes_in_packet_cmdbuf<kCmdBuf>(kMaxBytesInPacket);
-    setup_packet_tags_cmdbuf<kCmdBuf>(eth_link().kind == kEthLinkKindNoc ? PacketTags{} : PacketTags{.snoop = snoop});
+    setup_packet_tags_cmdbuf<kCmdBuf>(eth_link().kind == ETH_LINK_KIND_NOC ? PacketTags{} : PacketTags{.snoop = snoop});
     issue_cmdbuf<kCmdBuf>();
 }
 
@@ -217,7 +208,7 @@ FORCE_INLINE void send_dword(uint32_t q_num, uint32_t dest, uint64_t val, bool s
     if ((val >> kInlineValueBits) != 0) {
         halt(HaltCode::RemoteRegValueTooWide, static_cast<uint32_t>(val >> 32));
     }
-    if (eth_link().kind == kEthLinkKindNoc) {
+    if (eth_link().kind == ETH_LINK_KIND_NOC) {
         // No inline write on an iDMA back-end: it leaves the AW coupler count of GREN-2020.
         ASSERT(q_num < kNumTxqs);
         const uint32_t stage = static_cast<uint32_t>(reinterpret_cast<uintptr_t>(&noc_dword_stage.word[q_num]));
