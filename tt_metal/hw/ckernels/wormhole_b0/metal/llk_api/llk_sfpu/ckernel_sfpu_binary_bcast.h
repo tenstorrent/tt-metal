@@ -405,14 +405,14 @@ sfpi_inline void _dual_broadcast_finish_() {
 // LREG_DUAL_B), then each band:
 //   1. Loads its 4 data slots (band-relative immediates).
 //   2. Issues the 4 binops back-to-back; each writes a distinct LREG and
-//      reads the band's broadcast, so they pipeline without NOPs. SUB
-//      negates the broadcast once in place first (it is dead afterwards).
+//      reads the band's broadcast, so they pipeline without NOPs (SUB is
+//      SFPMAD(bcast, -1, data)).
 //   3. Streams out 4 SFPSTOREs; out_rel is 0 for the in-place API, which
 //      folds the stores to immediates.
 // The 4 loads / binops / stores each read a value written 4 instructions
 // earlier, past the 2-cycle latency. Per pair: 2 + 1 + 16 + 5 + 2 x 12 SFPU
-// ops (+2 for SUB), against 2 x 30 (+2) for the serial broadcast with its
-// SFPNOP slots.
+// ops, against 2 x 30 (+2 for SUB) for the serial broadcast with its SFPNOP
+// slots.
 //
 // The dual broadcast block is recorded with Exec while the first pair runs,
 // so the recording costs no SFPU time and the op depends only on the
@@ -433,13 +433,11 @@ sfpi_inline void _col_bcast_binop_band_store_(std::uint32_t out_rel) {
         TTI_SFPADD(LREG_DATA2, p_sfpu::LCONST_1, BCAST_LREG, LREG_DATA2, 0);
         TTI_SFPADD(LREG_DATA3, p_sfpu::LCONST_1, BCAST_LREG, LREG_DATA3, 0);
     } else if constexpr (BINOP == BinaryOp::SUB) {
-        // data - bcast = data + (-bcast); same SFPMOV negate + SFPADD as the
-        // serial form, with the negated value kept in the broadcast LREG.
-        TTI_SFPMOV(0, BCAST_LREG, BCAST_LREG, 1 /* SFPMOV_MOD1_NEGATE */);
-        TTI_SFPADD(LREG_DATA0, p_sfpu::LCONST_1, BCAST_LREG, LREG_DATA0, 0);
-        TTI_SFPADD(LREG_DATA1, p_sfpu::LCONST_1, BCAST_LREG, LREG_DATA1, 0);
-        TTI_SFPADD(LREG_DATA2, p_sfpu::LCONST_1, BCAST_LREG, LREG_DATA2, 0);
-        TTI_SFPADD(LREG_DATA3, p_sfpu::LCONST_1, BCAST_LREG, LREG_DATA3, 0);
+        // data - bcast = bcast * -1 + data, as in the ROW and normalize paths.
+        TTI_SFPMAD(BCAST_LREG, p_sfpu::LCONST_neg1, LREG_DATA0, LREG_DATA0, 0);
+        TTI_SFPMAD(BCAST_LREG, p_sfpu::LCONST_neg1, LREG_DATA1, LREG_DATA1, 0);
+        TTI_SFPMAD(BCAST_LREG, p_sfpu::LCONST_neg1, LREG_DATA2, LREG_DATA2, 0);
+        TTI_SFPMAD(BCAST_LREG, p_sfpu::LCONST_neg1, LREG_DATA3, LREG_DATA3, 0);
     } else if constexpr (BINOP == BinaryOp::MUL) {
         TTI_SFPMUL(LREG_DATA0, BCAST_LREG, p_sfpu::LCONST_0, LREG_DATA0, 0);
         TTI_SFPMUL(LREG_DATA1, BCAST_LREG, p_sfpu::LCONST_0, LREG_DATA1, 0);
