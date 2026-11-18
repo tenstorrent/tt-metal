@@ -99,7 +99,7 @@ L1Layout compute_l1_layout(
     l.drain_sink = base + DRAIN_SINK_OFF;
     l.queue = base + QUEUE_OFF;
     l.pkt_hdr_queue = l.queue + dspf2d::QUEUE_DEPTH * (token_bytes + dspf2d::FORWARDING_METADATA_SIZE);
-    const uint32_t hdr_bytes = static_cast<uint32_t>(tt::tt_fabric::get_tt_fabric_packet_header_size_bytes());
+    const uint32_t hdr_bytes = static_cast<uint32_t>(tt::tt_fabric::get_tt_fabric_packet_header_size_bytes(*mesh));
     TT_FATAL(
         PKT_HDR_SIGNAL_OFF + hdr_bytes <= PKT_HDR_CREDIT_OFF && PKT_HDR_CREDIT_OFF + hdr_bytes <= DRAIN_SINK_OFF,
         "dispatch_fabric2d: a {} B fabric packet header does not fit between the signal, credit and drain slots",
@@ -292,7 +292,7 @@ tt::tt_metal::WorkloadDescriptor DispatchFabric2dProgramFactory::create_workload
     // A token that does not fit one packet with its fwd_meta goes as two. A forward's last packet is the
     // largest the op sends. The fabric does not reject a larger payload: the bytes past its max overwrite the
     // next channel slot.
-    const auto max_payload = static_cast<uint32_t>(tt::tt_fabric::get_tt_fabric_max_payload_size_bytes());
+    const auto max_payload = static_cast<uint32_t>(tt::tt_fabric::get_tt_fabric_max_payload_size_bytes(*mesh));
     const uint32_t first_packet = dspf2d::first_packet_bytes(token_bytes, max_payload);
     const uint32_t packets_per_token = first_packet == token_bytes ? 1u : 2u;
     TT_FATAL(

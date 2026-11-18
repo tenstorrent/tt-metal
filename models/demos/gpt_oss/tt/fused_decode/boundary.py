@@ -209,7 +209,7 @@ class DecodeBoundary:
                 for name in sites
             }
         self.payload = self.all * PAGE
-        max_payload = int(ttnn.get_tt_fabric_max_payload_size_bytes())
+        max_payload = int(ttnn.get_tt_fabric_max_payload_size_bytes(mesh_device))
         self.chunk = min(self.payload, max_payload // PAGE * PAGE)
         self.chunks = -(-self.payload // self.chunk)
         phys = mesh_device.worker_core_from_logical_core(self.core)

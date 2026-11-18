@@ -183,7 +183,7 @@ tt::tt_metal::ProgramDescriptor build_program_for_coord(
         topology,
         num_links);
 
-    auto fabric_max_packet_size = local_only ? 0 : tt::tt_fabric::get_tt_fabric_max_payload_size_bytes();
+    auto fabric_max_packet_size = local_only ? 0 : tt::tt_fabric::get_tt_fabric_max_payload_size_bytes(*mesh_device);
     auto l1_alignment = tt::tt_metal::hal::get_l1_alignment();
 
     const auto [neighbors, directions] =
@@ -516,7 +516,7 @@ tt::tt_metal::ProgramDescriptor build_program_for_coord(
     // c_5: packet header CB for fabric sends (writer-only)
     if (num_links > 0) {
         constexpr uint32_t num_packet_headers = 2;
-        auto packet_header_size_bytes = tt::tt_fabric::get_tt_fabric_packet_header_size_bytes();
+        auto packet_header_size_bytes = tt::tt_fabric::get_tt_fabric_packet_header_size_bytes(*mesh_device);
         uint32_t packet_header_cb_size = num_packet_headers * packet_header_size_bytes;
 
         desc.cbs.push_back(tt::tt_metal::CBDescriptor{

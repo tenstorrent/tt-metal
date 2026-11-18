@@ -75,7 +75,7 @@ tt::tt_metal::ProgramDescriptor build_program(
     // columns at its own cb_eout address.
     const auto eout_set = head_set.merge(sender_set);
 
-    const uint32_t sender_slots = relay_affine_prefix_sender_slots(kt, mesh->arch());
+    const uint32_t sender_slots = relay_affine_prefix_sender_slots(*mesh, kt);
     const uint32_t chron_slot_bytes =
         std::max(tt::tt_metal::hal::get_dram_alignment(), tt::tt_metal::hal::get_l1_alignment());
     // A K x K slot of the landing buffer on each head core, in place.
@@ -133,7 +133,8 @@ tt::tt_metal::ProgramDescriptor build_program(
     std::vector<uint32_t> sender_ct = {cb_stage, cb_eout};
     sender_ct.insert(sender_ct.end(), chronology.begin(), chronology.end());
     sender_ct.insert(
-        sender_ct.end(), {kt * state_tile, relay_affine_prefix_packet_bytes(), kt, sender_slots, ack_semaphore_id});
+        sender_ct.end(),
+        {kt * state_tile, relay_affine_prefix_packet_bytes(*mesh), kt, sender_slots, ack_semaphore_id});
     tt::tt_metal::TensorAccessorArgs(in.actual_start.buffer()).append_to(sender_ct);
 
     tt::tt_metal::KernelDescriptor reader{

@@ -164,12 +164,12 @@ def _build_exchange_program(
 
     packet_header_cb_desc = None
     if use_fabric_on_receiver or use_fabric_on_sender:
-        fabric_max_payload_size = ttnn.get_tt_fabric_max_payload_size_bytes()
+        fabric_max_payload_size = ttnn.get_tt_fabric_max_payload_size_bytes(my_mesh_device)
         page_size_per_link = page_size // num_fwd_links
         num_whole_fabric_packets_per_link = page_size_per_link // fabric_max_payload_size
         partial_packet_size_per_link = page_size_per_link % fabric_max_payload_size
         packet_header_cb_num_pages = num_fwd_links + num_bwd_links
-        packet_header_cb_page_size = ttnn.get_tt_fabric_packet_header_size_bytes()
+        packet_header_cb_page_size = ttnn.get_tt_fabric_packet_header_size_bytes(my_mesh_device)
 
         packet_header_cb_desc = ttnn.CBDescriptor(
             total_size=packet_header_cb_num_pages * packet_header_cb_page_size,
@@ -546,11 +546,11 @@ class SocketInterface:
 
         packet_header_cb_desc = None
         if use_fabric_on_receiver or use_fabric_on_sender:
-            fabric_max_payload_size = ttnn.get_tt_fabric_max_payload_size_bytes()
+            fabric_max_payload_size = ttnn.get_tt_fabric_max_payload_size_bytes(my_mesh_device)
             num_whole_fabric_packets_per_link = self.upstream_page_size // fabric_max_payload_size
             partial_packet_size = self.upstream_page_size % fabric_max_payload_size
             packet_header_cb_num_pages = num_fwd_headers + num_bwd_headers
-            packet_header_cb_page_size = ttnn.get_tt_fabric_packet_header_size_bytes()
+            packet_header_cb_page_size = ttnn.get_tt_fabric_packet_header_size_bytes(my_mesh_device)
 
             packet_header_cb_desc = ttnn.CBDescriptor(
                 total_size=packet_header_cb_num_pages * packet_header_cb_page_size,

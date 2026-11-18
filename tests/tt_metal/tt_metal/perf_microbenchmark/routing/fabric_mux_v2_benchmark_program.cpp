@@ -618,7 +618,7 @@ StandaloneMuxV2BenchmarkRunResult run_standalone_mux_v2_benchmark_once(
     TT_FATAL(device != nullptr, "Standalone mux-v2 benchmark requires an initialized device");
     TT_FATAL(mesh_device != nullptr, "Standalone mux-v2 benchmark requires an initialized mesh device");
 
-    const auto resolved_payload_size_bytes = resolve_packet_payload_size_bytes(benchmark_case);
+    const auto resolved_payload_size_bytes = resolve_packet_payload_size_bytes(*mesh_device, benchmark_case);
     const auto num_packets = benchmark_case.num_packets;
     const uint64_t expected_total_packets = static_cast<uint64_t>(benchmark_case.num_senders) * num_packets;
     const uint64_t expected_sender_bytes = static_cast<uint64_t>(resolved_payload_size_bytes) * num_packets;
@@ -627,7 +627,7 @@ StandaloneMuxV2BenchmarkRunResult run_standalone_mux_v2_benchmark_once(
     const auto l1_unreserved_base_address =
         static_cast<uint32_t>(device->allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1));
     const auto packet_header_size_bytes =
-        static_cast<uint32_t>(tt::tt_fabric::get_tt_fabric_packet_header_size_bytes());
+        static_cast<uint32_t>(tt::tt_fabric::get_tt_fabric_packet_header_size_bytes(*mesh_device));
     const auto channel_buffer_size_bytes = packet_header_size_bytes + resolved_payload_size_bytes;
 
     tt::tt_fabric::FabricMuxV2Config mux_config(

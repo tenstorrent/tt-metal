@@ -108,7 +108,8 @@ ProgramDescriptor SendDirectAsyncProgramFactory::create_descriptor(
     const bool is_interleaved = input_tensor.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED;
     uint32_t num_banks = input_buffer->allocator()->get_num_banks(input_buffer->buffer_type());
 
-    auto fabric_max_payload_size = tt::round_down(tt::tt_fabric::get_tt_fabric_max_payload_size_bytes(), max_alignment);
+    auto fabric_max_payload_size =
+        tt::round_down(tt::tt_fabric::get_tt_fabric_max_payload_size_bytes(*input_tensor.device()), max_alignment);
     auto num_pages_per_packet = fabric_max_payload_size / socket_aligned_page_size;
 
     // Bank-contiguous packing: in an interleaved tensor, pages whose indices differ by num_banks sit
@@ -158,7 +159,7 @@ ProgramDescriptor SendDirectAsyncProgramFactory::create_descriptor(
 
     constexpr uint8_t packet_header_cb_index = tt::CBIndex::c_1;
     uint32_t packet_header_cb_num_pages = 2;  // One for data, one for sync
-    uint32_t packet_header_cb_page_size = tt::tt_fabric::get_tt_fabric_packet_header_size_bytes();
+    uint32_t packet_header_cb_page_size = tt::tt_fabric::get_tt_fabric_packet_header_size_bytes(*input_tensor.device());
     desc.cbs.push_back(CBDescriptor{
         .total_size = packet_header_cb_num_pages * packet_header_cb_page_size,
         .core_ranges = sender_core_range_set,

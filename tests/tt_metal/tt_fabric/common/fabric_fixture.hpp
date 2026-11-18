@@ -174,7 +174,7 @@ public:
         uint32_t target_address = source_l1_buffer_address;
         uint32_t notification_mailbox_address = test_results_address + TEST_RESULTS_SIZE_BYTES;
 
-        uint32_t packet_payload_size_bytes = get_tt_fabric_max_payload_size_bytes();
+        uint32_t packet_payload_size_bytes = get_tt_fabric_max_payload_size_bytes(*device);
 
         return {
             source_l1_buffer_address,

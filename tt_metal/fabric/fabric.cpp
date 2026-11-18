@@ -57,12 +57,24 @@ size_t get_tt_fabric_channel_buffer_size_bytes(const tt::tt_metal::distributed::
     return control_plane.get_fabric_context().get_fabric_channel_buffer_size_bytes();
 }
 
+size_t get_tt_fabric_packet_header_size_bytes(const tt::tt_metal::distributed::MeshDevice& mesh_device) {
+    const auto& control_plane = mesh_device.impl().metal_env().get_control_plane();
+    return control_plane.get_fabric_context().get_fabric_packet_header_size_bytes();
+}
+
+size_t get_tt_fabric_max_payload_size_bytes(const tt::tt_metal::distributed::MeshDevice& mesh_device) {
+    const auto& control_plane = mesh_device.impl().metal_env().get_control_plane();
+    return control_plane.get_fabric_context().get_fabric_max_payload_size_bytes();
+}
+
 size_t get_tt_fabric_packet_header_size_bytes() {
+    // TODO(#52020): resolves the default context; deprecated in favour of the MeshDevice form.
     const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
     return control_plane.get_fabric_context().get_fabric_packet_header_size_bytes();
 }
 
 size_t get_tt_fabric_max_payload_size_bytes() {
+    // TODO(#52020): resolves the default context; deprecated in favour of the MeshDevice form.
     const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
     return control_plane.get_fabric_context().get_fabric_max_payload_size_bytes();
 }

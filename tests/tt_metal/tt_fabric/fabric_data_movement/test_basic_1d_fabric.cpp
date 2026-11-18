@@ -56,7 +56,7 @@ struct DualRiscMemMapHelper {
     uint32_t region_size;
     uint32_t num_packets;
 
-    DualRiscMemMapHelper(bool dual_risc, uint32_t num_pkts) :
+    DualRiscMemMapHelper(const tt_metal::distributed::MeshDevice& mesh_device, bool dual_risc, uint32_t num_pkts) :
         data_space_size(dual_risc ? data_space_reserved_bytes / 2 : data_space_reserved_bytes),
         region_size(data_space_size + test_results_size_bytes + notification_size_bytes),
         num_packets(num_pkts) {
@@ -68,7 +68,7 @@ struct DualRiscMemMapHelper {
 
         TT_FATAL(region_size % 16 == 0, "region_size must be 16-byte aligned");
         TT_FATAL(
-            data_space_size >= num_packets * get_tt_fabric_max_payload_size_bytes() * 2,
+            data_space_size >= num_packets * get_tt_fabric_max_payload_size_bytes(mesh_device) * 2,
             "data_space_size must be large enough for num_packets");
     }
 
@@ -79,7 +79,7 @@ struct DualRiscMemMapHelper {
         uint32_t source_l1_buffer_address = base_addr + packet_header_reserved_bytes + base_offset;
         return WorkerMemMap{
             source_l1_buffer_address,
-            get_tt_fabric_max_payload_size_bytes(),
+            get_tt_fabric_max_payload_size_bytes(*device),
             source_l1_buffer_address + data_space_size,
             source_l1_buffer_address,
             source_l1_buffer_address + data_space_size + test_results_size_bytes,
@@ -2367,7 +2367,7 @@ void UDMFabricUnicastCommon(
     tt_metal::Program sender_program = tt_metal::CreateProgram(*sender_device);
     tt_metal::Program receiver_program = tt_metal::CreateProgram(*receiver_device);
 
-    DualRiscMemMapHelper mem_helper(dual_risc, num_packets);
+    DualRiscMemMapHelper mem_helper(*sender_device, dual_risc, num_packets);
     auto worker_mem_map = mem_helper.gen_mem_map(sender_device, 0);
     auto worker_mem_map_risc1 = mem_helper.gen_mem_map(sender_device, mem_helper.region_size);
 
@@ -2703,7 +2703,7 @@ void UDMFabricUnicastAllToAllCommon(BaseFabricFixture* fixture, NocPacketType no
         num_other_devices,
         dual_risc);
 
-    DualRiscMemMapHelper mem_helper(dual_risc, num_packets);
+    DualRiscMemMapHelper mem_helper(*device_ptrs[0], dual_risc, num_packets);
     auto worker_mem_map = mem_helper.gen_mem_map(device_ptrs[0], 0);
     auto worker_mem_map_risc1 = mem_helper.gen_mem_map(device_ptrs[0], mem_helper.region_size);
 

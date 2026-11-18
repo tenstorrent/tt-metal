@@ -31,7 +31,7 @@ tt::tt_metal::ProgramDescriptor receive_program_factory(
     // figure out packets
     const auto [packet_size_bytes, num_pages_per_packet, num_page_segments, total_packets] =
         detail::compute_aligned_packet_dims(
-            output_tensor.dtype(), output_page_size_bytes, output_num_pages, l1_alignment);
+            *output_tensor.device(), output_tensor.dtype(), output_page_size_bytes, output_num_pages, l1_alignment);
     // distribute work
     const CoreCoord use_cores = {1, 1};
 
@@ -48,7 +48,7 @@ tt::tt_metal::ProgramDescriptor receive_program_factory(
     constexpr auto packet_header_cb_id = tt::CBIndex::c_0;
     constexpr auto buffering_factor = 2;  // this is in other fabric kernels
     constexpr auto num_packet_headers_storable = 2;
-    const auto packet_header_size_bytes = tt::tt_fabric::get_tt_fabric_packet_header_size_bytes();
+    const auto packet_header_size_bytes = tt::tt_fabric::get_tt_fabric_packet_header_size_bytes(*mesh_device);
     desc.cbs.push_back(tt::tt_metal::CBDescriptor{
         .total_size = num_packet_headers_storable * packet_header_size_bytes * buffering_factor,
         .core_ranges = all_cores,

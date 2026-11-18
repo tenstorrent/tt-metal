@@ -267,7 +267,7 @@ tt::tt_metal::ProgramDescriptor SparseKvPushProgramFactory::create_descriptor(
         {kTable, kTableCbBytes, 1, tt::DataFormat::RawUInt32},
         {kUserId, kUserIdCbBytes, 1, tt::DataFormat::RawUInt32},
         {kHeaders,
-         static_cast<uint32_t>(tt::tt_fabric::get_tt_fabric_packet_header_size_bytes()),
+         static_cast<uint32_t>(tt::tt_fabric::get_tt_fabric_packet_header_size_bytes(*mesh_device)),
          kHeaderSlots,
          tt::DataFormat::RawUInt32},
     };

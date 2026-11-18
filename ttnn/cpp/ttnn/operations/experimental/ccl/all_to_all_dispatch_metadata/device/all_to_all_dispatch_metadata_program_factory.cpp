@@ -148,7 +148,7 @@ std::pair<std::array<uint32_t, 7>, std::array<uint32_t, 7>> get_cb_sizes(
     constexpr uint32_t buffering_factor = 2;
     constexpr uint32_t num_packet_headers = 8;
 
-    auto packet_header_size_bytes = tt::tt_fabric::get_tt_fabric_packet_header_size_bytes();
+    auto packet_header_size_bytes = tt::tt_fabric::get_tt_fabric_packet_header_size_bytes(*input_tensor.device());
 
     std::array<uint32_t, 7> cb_sizes = {
         buffering_factor * aligned_input_page_size,
@@ -458,7 +458,7 @@ tt::tt_metal::ProgramDescriptor build_all_to_all_dispatch_metadata_program_descr
     log_debug(tt::LogOp, "dest_mesh_id: {}", ttnn::operations::ccl::common::stringify(dest_mesh_id));
     log_debug(tt::LogOp, "directions: {}", ttnn::operations::ccl::common::stringify(directions));
 
-    auto fabric_max_packet_size = tt::tt_fabric::get_tt_fabric_max_payload_size_bytes();
+    auto fabric_max_packet_size = tt::tt_fabric::get_tt_fabric_max_payload_size_bytes(*mesh_device);
     const auto l1_alignment = tt::tt_metal::hal::get_l1_alignment();
     const auto dram_alignment = tt::tt_metal::hal::get_dram_alignment();
     const uint32_t payload_alignment = std::max(l1_alignment, dram_alignment);

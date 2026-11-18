@@ -76,7 +76,7 @@ def run_combine(
     num_devices = mesh_device.get_num_devices()
 
     # Log fabric config
-    logger.debug(f"Fabric max payload size: {ttnn.get_tt_fabric_max_payload_size_bytes()}")
+    logger.debug(f"Fabric max payload size: {ttnn.get_tt_fabric_max_payload_size_bytes(mesh_device)}")
 
     mesh_config = extract_mesh_config(mesh_device, sp_axis)
     dispatch_group_size = mesh_config.dispatch_group_size

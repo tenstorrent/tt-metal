@@ -650,9 +650,9 @@ class AttentionBlock:
             tile_width=sdpa_tile_width,
             bytes_per_element=sdpa_element_size_bytes,
             num_links=sdpa_num_forwarders,
-            packet_header_size_bytes=ttnn.get_tt_fabric_packet_header_size_bytes(),
+            packet_header_size_bytes=ttnn.get_tt_fabric_packet_header_size_bytes(mesh_device),
             l1_alignment=sdpa_l1_alignment,
-            max_payload_size_bytes=ttnn.get_tt_fabric_max_payload_size_bytes(),
+            max_payload_size_bytes=ttnn.get_tt_fabric_max_payload_size_bytes(mesh_device),
         )
         sdpa_input_page_size_bytes = sdpa_config.input_page_size_bytes
         sdpa_out_tiles = sdpa_config.out_tiles
@@ -2724,6 +2724,7 @@ class AttentionBlock:
         sdpa_out_interm_running_offset_post_sdpa = 0
 
         sdpa_fwd_buffer_bytes = compute_forwarder_scratch_size(
+            mesh_device=mesh_device,
             batch_size=SDPA_L_HEIGHT,
             l_width=sdpa_l_per_worker,
             num_cores=NUM_SDPA_WORKERS,
