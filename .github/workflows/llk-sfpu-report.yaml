@@ -210,7 +210,6 @@ jobs:
         test-group: ${{ fromJSON(needs.load-test-matrix.outputs.matrix) }}
     name: ${{ matrix.test-group.name }}
     runs-on: ${{ matrix.test-group.runs_on }}
-    timeout-minutes: ${{ matrix.test-group.timeout }}
     # Read-only token, no secrets: this job compiles and runs a PR's device code.
     permissions:
       contents: read
@@ -224,6 +223,7 @@ jobs:
         with:
           persist-credentials: false
       - name: Measure
+        timeout-minutes: ${{ matrix.test-group.timeout }}
         shell: bash
         env:
           PR_NUMBER: ${{ inputs.pr_number }}
@@ -238,7 +238,7 @@ jobs:
         run: |
           git config --global --add safe.directory "$GITHUB_WORKSPACE"
           ${{ matrix.test-group.cmd }}
-      # ci_run.sh copies its log when it exits; a leg that hits the job timeout never does.
+      # ci_run.sh copies its log when it exits; a leg that hits its timeout never does.
       - name: Keep the log of an unfinished run
         if: always()
         shell: bash

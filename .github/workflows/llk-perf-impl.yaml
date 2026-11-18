@@ -216,7 +216,6 @@ jobs:
     # Must not match the gate's leg filter ("_<arch> group N/M").
     name: "Shadow compile, shard ${{ matrix.test-group.split_group }} on ${{ join(matrix.test-group.runs_on, ' ') }}"
     runs-on: ${{ inputs.shadow-compile-runner }}
-    timeout-minutes: ${{ matrix.test-group.timeout }}
     container:
       image: ${{ needs.build-images.outputs.llk-ci-tag }}
       options: "--rm"
@@ -262,6 +261,7 @@ jobs:
             echo "LLK_SPLIT_DURATIONS=$PWD/split-durations/$CHIP_ARCH.json" >> "$GITHUB_ENV"
           fi
       - name: Compile
+        timeout-minutes: ${{ matrix.test-group.timeout }}
         shell: bash
         working-directory: ${{ env.LLK_PATH }}
         env:
@@ -354,7 +354,6 @@ jobs:
         test-group: ${{ fromJSON(needs.load-test-matrix.outputs.matrix) }}
     name: ${{ matrix.test-group.name }}
     runs-on: ${{ matrix.test-group.runs_on }}
-    timeout-minutes: ${{ matrix.test-group.timeout }}
     container:
       image: ${{ needs.build-images.outputs.llk-ci-tag }}
       options: "--rm --device /dev/tenstorrent --ulimit nofile=4096:4096"
@@ -460,6 +459,7 @@ jobs:
           slack_channel_id: ${{ secrets.LLK_CI_STATUS_CHANNEL_ID }}
           status: failure
       - name: Run tests
+        timeout-minutes: ${{ matrix.test-group.timeout }}
         shell: bash
         working-directory: ${{ env.LLK_PATH }}
         env:

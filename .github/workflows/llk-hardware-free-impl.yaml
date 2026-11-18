@@ -74,7 +74,6 @@ jobs:
         test-group: ${{ fromJson(needs.load-test-matrix.outputs.matrix) }}
     name: ${{ matrix.test-group.name }}
     runs-on: ${{ matrix.test-group.runs_on }}
-    timeout-minutes: ${{ matrix.test-group.timeout }}
     container:
       image: ${{ inputs.docker-image }}
     steps:
@@ -88,6 +87,7 @@ jobs:
         working-directory: ${{ env.LLK_PATH }}/tests
         run: ./setup_testing_env.sh
       - name: Run tests
+        timeout-minutes: ${{ matrix.test-group.timeout }}
         shell: bash
         working-directory: ${{ env.LLK_PATH }}
         run: |

@@ -56,7 +56,6 @@ jobs:
       arch: ${{ steps.derive.outputs.arch }}
       platform: ${{ steps.derive.outputs.platform }}
       ci-version: ${{ steps.derive.outputs.ci_version }}
-      job-timeout: ${{ steps.derive.outputs.job_timeout }}
       matrix: ${{ steps.parse.outputs.matrix }}
       model-count: ${{ steps.parse.outputs.model_count }}
     steps:
@@ -169,7 +168,6 @@ jobs:
         id: derive
         env:
           RUNNER_LABEL: ${{ inputs.runner-label }}
-          TRACE_TIMEOUT: ${{ inputs.timeout-minutes }}
         run: |
           RUNNER="$RUNNER_LABEL"
           case "$RUNNER" in
@@ -194,7 +192,6 @@ jobs:
           echo "arch=$ARCH" >> $GITHUB_OUTPUT
           echo "platform=Ubuntu 22.04" >> $GITHUB_OUTPUT
           echo "ci_version=$CI_VERSION" >> $GITHUB_OUTPUT
-          echo "job_timeout=$(( TRACE_TIMEOUT + 30 ))" >> $GITHUB_OUTPUT
           echo "Derived arch=$ARCH ci_version=$CI_VERSION for runner=$RUNNER"
 
   check-harbor:
@@ -249,7 +246,6 @@ jobs:
       run:
         shell: bash
         working-directory: /work
-    timeout-minutes: ${{ fromJSON(needs.validate-inputs.outputs.job-timeout) }}
     runs-on: >-
       ${{
         (inputs.runner-label == 'topology-6u' || inputs.runner-label == 'BH-LoudBox') && fromJSON(format('["{0}", "in-service", "bare-metal"]', inputs.runner-label))

@@ -77,7 +77,6 @@ jobs:
         test-group: ${{ fromJSON(needs.load-test-matrix.outputs.matrix) }}
     name: ${{ matrix.test-group.name }}
     runs-on: ${{ matrix.test-group.runs_on }}
-    timeout-minutes: ${{ matrix.test-group.timeout }}
     container:
       image: ${{ needs.build-images.outputs.llk-ci-tag }}
       options: "--rm --device /dev/tenstorrent --ulimit nofile=4096:4096"
@@ -106,6 +105,7 @@ jobs:
             echo "CHIP_ARCH=unknown" >> "$GITHUB_ENV"
           fi
       - name: Run tests
+        timeout-minutes: ${{ matrix.test-group.timeout }}
         shell: bash
         working-directory: ${{ env.LLK_PATH }}
         env:
