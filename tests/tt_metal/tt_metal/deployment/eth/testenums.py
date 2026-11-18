@@ -13,6 +13,7 @@ class TestCase(str, Enum):
 
 class DistTestCase(str, Enum):
     LINK_UP = "LinkUpDist"
+    BANDWIDTH = "BandwidthDist"
     BANDWIDTH_BIDIR = "BandwidthBidirDist"
 
 
