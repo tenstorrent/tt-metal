@@ -4,6 +4,10 @@
 
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
+#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/noc.h"
+#include "api/core_local_mem.h"
+#include "api/tensor/noc_traits.h"
 #include "ttnn/operations/ccl/common/kernels/moe_utils.hpp"
 
 using namespace ttnn::operations::ccl::common;
@@ -69,31 +73,43 @@ void kernel_main() {
     const auto mapping_addr_gen = TensorAccessor(mapping_args, mapping_tensor_address);
     const auto metadata_addr_gen = TensorAccessor(metadata_args, metadata_tensor_address);
 
+    Noc noc;
+    CircularBuffer input_cb(input_tensor_cb_id);
+    CircularBuffer indices_cb(indices_tensor_cb_id);
+    CircularBuffer mapping_cb(mapping_tensor_cb_id);
+
     // read the expert mapping table
-    cb_reserve_back(mapping_tensor_cb_id, mapping_pages);
-    uint32_t base_indices_addr = get_write_ptr(mapping_tensor_cb_id);
+    mapping_cb.reserve_back(mapping_pages);
     for (uint32_t i = 0; i < mapping_pages; i++) {
-        uint32_t l1_write_addr = get_write_ptr(mapping_tensor_cb_id) + i * aligned_mapping_page_size;
-        noc_async_read_page(i, mapping_addr_gen, l1_write_addr);
+        noc.async_read(
+            mapping_addr_gen,
+            mapping_cb,
+            mapping_addr_gen.get_aligned_page_size(),
+            {.page_id = i},
+            {.offset_bytes = i * aligned_mapping_page_size});
     }
-    noc_async_read_barrier();
-    cb_push_back(mapping_tensor_cb_id, mapping_pages);
+    noc.async_read_barrier();
+    mapping_cb.push_back(mapping_pages);
 
     ASSERT(indices_pages == input_pages);
     // read the input tokens and the selected experts for each token
     for (uint32_t i = token_start_idx; i < token_end_idx; i++) {
-        cb_reserve_back(indices_tensor_cb_id, 1);
-        cb_reserve_back(input_tensor_cb_id, 1);
+        indices_cb.reserve_back(1);
+        input_cb.reserve_back(1);
 
-        uint32_t l1_write_addr = get_write_ptr(indices_tensor_cb_id);
-        noc_async_read_page(i, indices_addr_gen, l1_write_addr);
+        noc.async_read(
+            indices_addr_gen,
+            indices_cb,
+            indices_addr_gen.get_aligned_page_size(),
+            {.page_id = i},
+            {.offset_bytes = 0});
 
-        l1_write_addr = get_write_ptr(input_tensor_cb_id);
-        noc_async_read_page(i, input_addr_gen, l1_write_addr);
+        noc.async_read(
+            input_addr_gen, input_cb, input_addr_gen.get_aligned_page_size(), {.page_id = i}, {.offset_bytes = 0});
 
-        noc_async_read_barrier();
-        cb_push_back(indices_tensor_cb_id, 1);
-        cb_push_back(input_tensor_cb_id, 1);
+        noc.async_read_barrier();
+        indices_cb.push_back(1);
+        input_cb.push_back(1);
     }
 
     // wait for all other devices to finish dispatching their input tokens and metadata
@@ -115,14 +131,19 @@ void kernel_main() {
             (uint32_t*)global_semaphore_address, ring_completion ? dispatch_devices + 1 : dispatch_devices);
         noc_semaphore_set((uint32_t*)global_semaphore_address, 0);
 
+        CircularBuffer metadata_buffer_cb(metadata_buffer_id);
+        const CoreLocalMem<uint32_t> metadata_buffer(metadata_buffer_cb.get_write_ptr());
         for (uint32_t t = token_start_idx; t < token_end_idx; t++) {
             for (uint32_t d = 0; d < dispatch_devices; d++) {
                 uint32_t page = d * tokens_per_device + t;
-                uint32_t l1_write_addr = get_write_ptr(metadata_buffer_id) + page * aligned_indices_page_size;
-                uint64_t metadata_write_addr = metadata_addr_gen.get_noc_addr(page);
-                noc_async_write(l1_write_addr, metadata_write_addr, metadata_page_size);
+                noc.async_write(
+                    metadata_buffer,
+                    metadata_addr_gen,
+                    metadata_page_size,
+                    {.offset_bytes = page * aligned_indices_page_size},
+                    {.page_id = page});
             }
         }
-        noc_async_write_barrier();
+        noc.async_write_barrier();
     }
 }

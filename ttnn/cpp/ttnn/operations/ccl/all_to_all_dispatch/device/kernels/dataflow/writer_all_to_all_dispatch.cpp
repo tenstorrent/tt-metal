@@ -5,6 +5,9 @@
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/noc.h"
+#include "api/core_local_mem.h"
+#include "api/tensor/noc_traits.h"
 #include "tt_metal/fabric/hw/inc/tt_fabric_api.h"
 #include "ttnn/operations/ccl/common/kernels/moe_utils.hpp"
 #include "ttnn/operations/data_movement/common/kernels/common.hpp"
@@ -12,25 +15,39 @@
 
 namespace detail {
 
+template <typename Src, typename Dst>
 inline void dispatch_input_local_device_flushed(
-    uint32_t input_token_read_addr, uint64_t output_token_write_addr, uint32_t output_page_size) {
-    noc_async_write(input_token_read_addr, output_token_write_addr, output_page_size);
-    noc_async_writes_flushed();
+    const Noc& noc,
+    const Src& src,
+    const Dst& dst,
+    uint32_t size_bytes,
+    const typename noc_traits_t<Src>::src_args_type& src_args,
+    const typename noc_traits_t<Dst>::dst_args_type& dst_args) {
+    noc.async_write(src, dst, size_bytes, src_args, dst_args);
+    noc.async_writes_flushed();
 }
 
 // Insert helper that handles the local-device metadata path
+template <typename MetadataAddrGen>
 inline void dispatch_metadata_local_device(
+    const Noc& noc,
     uint32_t token_indices_address,
-    uint64_t metadata_write_addr,
+    const MetadataAddrGen& metadata_addr_gen,
+    uint32_t metadata_page_id,
     uint32_t metadata_page_size,
     uint64_t global_noc_semaphore_address,
     bool increment) {
     // send metadata to local device output buffer
-    noc_async_write(token_indices_address, metadata_write_addr, metadata_page_size);
-    noc_async_write_barrier();
+    noc.async_write(
+        CoreLocalMem<uint32_t>(token_indices_address),
+        metadata_addr_gen,
+        metadata_page_size,
+        {},
+        {.page_id = metadata_page_id});
+    noc.async_write_barrier();
     if (increment) {
         noc_semaphore_inc(global_noc_semaphore_address, 1);
-        noc_async_atomic_barrier();
+        noc.async_atomic_barrier();
     }
 }
 
@@ -60,6 +77,7 @@ template <
     uint32_t MeshCols,
     ReplicateGroup Axis>
 inline void send_ring_completion_credit(
+    const Noc& noc,
     std::array<tt::tt_fabric::WorkerToFabricEdmSender, 4>& fabric_connections,
     volatile PACKET_HEADER_TYPE* packet_header_pos,
     volatile PACKET_HEADER_TYPE* packet_header_neg,
@@ -73,7 +91,7 @@ inline void send_ring_completion_credit(
             Axis,
             /*DoubleAntipodalAtomicInc=*/true>(
             fabric_connections, packet_header_pos, packet_header_neg, global_noc_semaphore_address);
-        noc_async_atomic_barrier();
+        noc.async_atomic_barrier();
     }
 }
 
@@ -148,7 +166,14 @@ void kernel_main() {
     std::array<tt::tt_fabric::WorkerToFabricEdmSender, num_directions> fabric_connections;
     open_direction_connections_async(directions, fabric_connections, rt_args_idx);
 
-    uint32_t send_preparation_buffer_address = get_write_ptr(send_preparation_buffer_cb_id);
+    Noc noc;
+    CircularBuffer input_cb(input_tensor_cb_id);
+    CircularBuffer indices_cb(indices_tensor_cb_id);
+    CircularBuffer mapping_cb(mapping_tensor_cb_id);
+    CircularBuffer packet_header_cb(packet_header_cb_id);
+    CircularBuffer send_preparation_buffer_cb(send_preparation_buffer_cb_id);
+
+    uint32_t send_preparation_buffer_address = send_preparation_buffer_cb.get_write_ptr();
     detail::zero_buffer_async(
         send_preparation_buffer_cb_id, (token_end_idx - token_start_idx) * num_devices * sizeof(uint8_t));
 
@@ -182,14 +207,14 @@ void kernel_main() {
     const auto output_addr_gen = TensorAccessor(output_args, output_tensor_address);
     const auto metadata_addr_gen = TensorAccessor(metadata_args, metadata_tensor_address);
 
-    uint32_t packet_header_buffer_address = get_read_ptr(packet_header_cb_id);
+    uint32_t packet_header_buffer_address = packet_header_cb.get_read_ptr();
     auto* unicast_packet_header = reinterpret_cast<volatile PACKET_HEADER_TYPE*>(packet_header_buffer_address);
     auto* metadata_packet_header =
         reinterpret_cast<volatile PACKET_HEADER_TYPE*>(packet_header_buffer_address + sizeof(PACKET_HEADER_TYPE));
     auto* completion_neg_packet_header =
         reinterpret_cast<volatile PACKET_HEADER_TYPE*>(packet_header_buffer_address + 2 * sizeof(PACKET_HEADER_TYPE));
 
-    uint32_t base_indices_addr = get_read_ptr(indices_tensor_cb_id);
+    uint32_t base_indices_addr = indices_cb.get_read_ptr();
 
     detail::zero_buffer_barrier();
     open_direction_connections_barrier(directions, fabric_connections);
@@ -211,24 +236,23 @@ void kernel_main() {
     noc_semaphore_set((uint32_t*)init_semaphore_address, 0);
 
     // Based on the selected experts, we dispatch the input tokens to the corresponding devices
-    cb_wait_front(mapping_tensor_cb_id, mapping_pages);
+    mapping_cb.wait_front(mapping_pages);
     uint8_t* send_preparation_buffer = (uint8_t*)send_preparation_buffer_address;
     for (uint32_t local_token = token_start_idx; local_token < token_end_idx; local_token++) {
         // global_token is the global token index for the current token
         // we need the global token index to write to the output buffer – each global token that could potentially be
         // sent has a unique output buffer address to ensure that it is not overwritten by another token
         uint32_t global_token = (local_token + (tokens_per_device * dispatch_index));
-        uint64_t output_token_write_addr = output_addr_gen.get_noc_addr(global_token);
-        cb_wait_front(indices_tensor_cb_id, 1);
-        cb_wait_front(input_tensor_cb_id, 1);
-        uint32_t input_token_read_addr = get_read_ptr(input_tensor_cb_id);
-        uint16_t* token_indices = (uint16_t*)(get_read_ptr(indices_tensor_cb_id));
+        indices_cb.wait_front(1);
+        input_cb.wait_front(1);
+        uint32_t input_token_read_addr = input_cb.get_read_ptr();
+        uint16_t* token_indices = (uint16_t*)(indices_cb.get_read_ptr());
 
         for (uint32_t k = 0; k < selected_experts_k; k++) {
             // get the expert that is chosen for the current token
             uint16_t expert_chosen = token_indices[k];
             uint32_t expert_offset = expert_chosen * aligned_mapping_page_size;
-            uint16_t* devices_for_expert = (uint16_t*)(get_read_ptr(mapping_tensor_cb_id) + expert_offset);
+            uint16_t* devices_for_expert = (uint16_t*)(mapping_cb.get_read_ptr() + expert_offset);
 
             // find the devices that the expert lives on and dispatch the input tokens to them
             // if there is no tensor parallelism, then the token will only be sent to one device
@@ -239,7 +263,12 @@ void kernel_main() {
                     if (d == linearized_mesh_coord) {
                         // if the expert lives on the current device, we dispatch the input token to it
                         detail::dispatch_input_local_device_flushed(
-                            input_token_read_addr, output_token_write_addr, output_page_size);
+                            noc,
+                            input_cb,
+                            output_addr_gen,
+                            output_page_size,
+                            {.offset_bytes = 0},
+                            {.page_id = global_token, .offset_bytes = 0});
                         needs_barrier = true;
                     } else if (is_configured_target<linearized_mesh_coord, mesh_rows, mesh_cols, axis>(d)) {
                         // if the expert lives on a remote device, we dispatch the input token to it
@@ -280,11 +309,11 @@ void kernel_main() {
                 }
             }
         }
-        cb_pop_front(indices_tensor_cb_id, 1);
-        cb_pop_front(input_tensor_cb_id, 1);
+        indices_cb.pop_front(1);
+        input_cb.pop_front(1);
     }
     if (needs_barrier) {
-        noc_async_write_barrier();
+        noc.async_write_barrier();
     }
     // Send our selected experts tensor to all other devices and signal that we are done dispatching the input tokens
     // with a semaphore
@@ -302,7 +331,6 @@ void kernel_main() {
     if constexpr (write_page_by_page) {
         for (uint32_t local_token = token_start_idx; local_token < token_end_idx; local_token++) {
             uint32_t global_token = (local_token + (tokens_per_device * dispatch_index));
-            uint64_t metadata_write_addr = metadata_addr_gen.get_noc_addr(global_token);
             uint32_t token_indices_address =
                 base_indices_addr + ((local_token - token_start_idx) * aligned_indices_page_size);
 
@@ -311,8 +339,10 @@ void kernel_main() {
                 if (d == linearized_mesh_coord) {
                     // dispatch the metadata to the current device and increment the local copy of the semaphore
                     detail::dispatch_metadata_local_device(
+                        noc,
                         token_indices_address,
-                        metadata_write_addr,
+                        metadata_addr_gen,
+                        global_token,
                         metadata_page_size,
                         global_noc_semaphore_address,
                         !ring_completion);
@@ -361,23 +391,30 @@ void kernel_main() {
         }
         if constexpr (ring_completion) {
             // Local credit, once the local writes have landed.
-            noc_async_write_barrier();
+            noc.async_write_barrier();
             noc_semaphore_inc(global_noc_semaphore_address, 1);
-            noc_async_atomic_barrier();
+            noc.async_atomic_barrier();
         }
     } else {
         uint32_t indices_size = aligned_indices_page_size * tokens_per_device;
         uint32_t indices_size_per_core = aligned_indices_page_size * (token_end_idx - token_start_idx);
 
-        uint64_t intermediate_metadata_write_addr = get_noc_addr(get_read_ptr(metadata_buffer_id));
-        uint64_t noc_core_offset_md_write_addr = intermediate_metadata_write_addr + (dispatch_index * indices_size) +
-                                                 (token_start_idx * aligned_indices_page_size);
+        CircularBuffer metadata_buffer_cb(metadata_buffer_id);
+        const uint32_t core_offset_md_write_offset =
+            (dispatch_index * indices_size) + (token_start_idx * aligned_indices_page_size);
+        uint64_t intermediate_metadata_write_addr = get_noc_addr(metadata_buffer_cb.get_read_ptr());
+        uint64_t noc_core_offset_md_write_addr = intermediate_metadata_write_addr + core_offset_md_write_offset;
 
         for (uint32_t d = device_begin_idx; d < device_end_idx; d += device_stride) {
             if (d == linearized_mesh_coord) {
                 // dispatch the metadata to the local device
                 detail::dispatch_input_local_device_flushed(
-                    base_indices_addr, noc_core_offset_md_write_addr, indices_size_per_core);
+                    noc,
+                    CoreLocalMem<uint32_t>(base_indices_addr),
+                    CoreLocalMem<uint32_t>(metadata_buffer_cb.get_read_ptr()),
+                    indices_size_per_core,
+                    {},
+                    {.offset_bytes = core_offset_md_write_offset});
             } else if (is_configured_target<linearized_mesh_coord, mesh_rows, mesh_cols, axis>(d)) {
                 if constexpr (is_1d_topology<topology>()) {
                     l1_only_fabric_send_chip_unicast_noc_unicast_with_semaphore_1d<
@@ -417,15 +454,15 @@ void kernel_main() {
             }
         }
         // Need to wait for the local flushed metadata write.
-        noc_async_write_barrier();
+        noc.async_write_barrier();
         noc_semaphore_inc(global_noc_semaphore_address, 1);
-        noc_async_atomic_barrier();
+        noc.async_atomic_barrier();
     }
 
     send_ring_completion_credit<ring_completion, linearized_mesh_coord, topology, mesh_rows, mesh_cols, axis>(
-        fabric_connections, metadata_packet_header, completion_neg_packet_header, global_noc_semaphore_address);
+        noc, fabric_connections, metadata_packet_header, completion_neg_packet_header, global_noc_semaphore_address);
 
-    cb_pop_front(mapping_tensor_cb_id, mapping_pages);
+    mapping_cb.pop_front(mapping_pages);
 
     close_direction_connections(directions, fabric_connections);
 }
