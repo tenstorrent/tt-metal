@@ -1017,10 +1017,6 @@ std::vector<detail::KernelMeta> experimental::collect_kernel_meta(
     return program.impl().collect_kernel_meta(&mesh_device);
 }
 
-std::vector<detail::KernelMeta> detail::collect_kernel_meta(const Program& program, IDevice* device) {
-    return program.impl().collect_kernel_meta(device);
-}
-
 std::vector<detail::KernelMeta> ProgramImpl::collect_kernel_meta(IDevice* device) const {
     std::vector<detail::KernelMeta> result;
     result.reserve(this->num_kernels());

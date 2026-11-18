@@ -27,6 +27,7 @@
 #include <tt-metalium/hal_types.hpp>
 #include <tt-metalium/kernel_types.hpp>
 #include <tt-metalium/distributed_context.hpp>
+#include <tt-metalium/experimental/op_profiler_support.hpp>
 #include <tt-metalium/experimental/per_core_allocation/buffer.hpp>
 #include <tt-metalium/mesh_command_queue.hpp>
 #include <tt-metalium/mesh_device.hpp>
@@ -576,8 +577,8 @@ struct ProgramPlacement {
 // KernelMeta is the only public view of a program's core types, and it carries no core ranges, so
 // non-Tensix work can be detected but not intersected against a sub-device. Called only on the
 // failure path, where it turns "we found nothing" into a reason worth printing.
-bool has_non_tensix_kernels(const tt::tt_metal::Program& program) {
-    for (const auto& kernel : tt::tt_metal::detail::collect_kernel_meta(program, /*device=*/nullptr)) {
+bool has_non_tensix_kernels(const tt::tt_metal::Program& program, tt::tt_metal::distributed::MeshDevice& mesh_device) {
+    for (const auto& kernel : tt::tt_metal::experimental::collect_kernel_meta(program, mesh_device)) {
         if (kernel.programmable_core_type != tt::tt_metal::HalProgrammableCoreType::TENSIX) {
             return true;
         }
@@ -606,7 +607,9 @@ bool has_non_tensix_kernels(const tt::tt_metal::Program& program) {
 //
 // The caller records the execution either way; only the placement is dropped.
 ProgramPlacement resolve_program_placement(
-    const tt::tt_metal::Program& program, const std::vector<tt::tt_metal::CoreRangeSet>& tensix_cores_by_sub_device) {
+    const tt::tt_metal::Program& program,
+    const std::vector<tt::tt_metal::CoreRangeSet>& tensix_cores_by_sub_device,
+    tt::tt_metal::distributed::MeshDevice& mesh_device) {
     // circular_buffers() returns by value, so it is built once rather than per sub-device.
     const auto circular_buffers = program.circular_buffers();
     std::optional<tt::tt_metal::SubDeviceId> match;
@@ -628,8 +631,8 @@ ProgramPlacement resolve_program_placement(
     }
     return {
         std::nullopt,
-        has_non_tensix_kernels(program) ? "it runs only on non-Tensix cores"
-                                        : "it allocates no circular buffers to match against"};
+        has_non_tensix_kernels(program, mesh_device) ? "it runs only on non-Tensix cores"
+                                                     : "it allocates no circular buffers to match against"};
 }
 }  // namespace
 
@@ -696,8 +699,9 @@ void track_mesh_workload_execution(
         // program inspection at all. This is both the common case and the one ProgramImpl itself
         // short-circuits, which keeps the proxy in resolve_program_placement off the path that
         // almost every capture takes.
-        ProgramPlacement placement = default_manager ? ProgramPlacement{tt::tt_metal::SubDeviceId{0}, {}}
-                                                     : resolve_program_placement(program, tensix_cores_by_sub_device);
+        ProgramPlacement placement = default_manager
+                                         ? ProgramPlacement{tt::tt_metal::SubDeviceId{0}, {}}
+                                         : resolve_program_placement(program, tensix_cores_by_sub_device, *mesh_device);
 
         if (!placement.sub_device_id.has_value()) {
             // Once per capture: on a whole-model capture an unplaceable op recurs every iteration,
