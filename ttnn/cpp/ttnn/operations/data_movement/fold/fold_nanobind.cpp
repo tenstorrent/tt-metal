@@ -33,10 +33,10 @@ void bind_fold_operation(nb::module_& mod) {
             input (ttnn.Tensor): the input tensor, of shape ``[N, H, W, C]``.
             stride_h (int): the height of each block. Must be greater than 0 and divide ``Hp``.
             stride_w (int): the width of each block. Must be greater than 0 and divide ``Wp``.
-            use_transpose_as_fold (bool, optional): Must be `False`. Defaults to `False`.
-            output_shape (ttnn.Shape, optional): Must be `None`. Defaults to `None`.
+            use_transpose_as_fold (bool, optional): `True` selects a legacy implementation; this page documents `False`. Defaults to `False`.
+            output_shape (ttnn.Shape, optional): Must be `None` when `use_transpose_as_fold` is `False`. Defaults to `None`.
             padding (List[int], optional): Zero padding applied before the fold: ``[pad_h, pad_w]`` pads both sides of ``H`` by ``pad_h`` and both sides of ``W`` by ``pad_w``; ``[pad_top, pad_bottom, pad_left, pad_right]`` pads each side of ``H`` and ``W``; ``[pad_top, pad_bottom, pad_left, pad_right, pad_c_front, pad_c_back]`` also pads both ends of ``C``. For a TILE input every value must be 0. Defaults to `[0, 0]`.
-            grid_size (ttnn.CoreRangeSet, optional): Must be `None`. Defaults to `None`.
+            grid_size (ttnn.CoreRangeSet, optional): Must be `None` when `use_transpose_as_fold` is `False`. Defaults to `None`.
             override_memory_config (ttnn.MemoryConfig, optional): Memory configuration of the output: interleaved in DRAM or L1, or HEIGHT_SHARDED, WIDTH_SHARDED or BLOCK_SHARDED in L1. For a sharded configuration without a shard spec, the operation chooses one. Defaults to `None`, which keeps an interleaved input's memory configuration and gives a HEIGHT_SHARDED input a HEIGHT_SHARDED L1 output.
             collapse_output (bool, optional): Whether to merge the batch and spatial dimensions of the output, giving it shape ``[1, 1, N * (Hp / stride_h) * (Wp / stride_w), Cp * stride_h * stride_w]``. Defaults to `False`.
 
