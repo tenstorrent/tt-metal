@@ -49,6 +49,7 @@
   "perf_eltwise_unary_typecast": 3.0,
   "perf_fast_tilize": 0.0,
   "perf_fast_tilize_full": 6.1,
+  "perf_fast_tilize_metal_api": 7.6,
   "perf_fast_untilize": 413.2,
   "perf_fused": 0.0,
   "perf_hadamard": 26.7,
