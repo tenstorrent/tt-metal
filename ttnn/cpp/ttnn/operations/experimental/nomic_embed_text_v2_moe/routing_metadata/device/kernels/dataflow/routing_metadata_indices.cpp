@@ -78,9 +78,15 @@ void kernel_main() {
     constexpr uint32_t group_tokens = top_k <= 2 ? 4 : (top_k <= 4 ? 2 : 1);
     constexpr uint32_t group_slots = group_tokens * top_k;
     constexpr auto indices_args = TensorAccessorArgs<0>();
-    constexpr auto gather_index_args = TensorAccessorArgs<indices_args.next_compile_time_args_offset()>();
-    constexpr auto combine_index_args = TensorAccessorArgs<gather_index_args.next_compile_time_args_offset()>();
-    constexpr auto expert_counts_args = TensorAccessorArgs<combine_index_args.next_compile_time_args_offset()>();
+    // The three outputs take their page sizes as common runtime args. The input's args are all compile-time, so the
+    // outputs' common runtime args start at 0.
+    constexpr auto gather_index_args = TensorAccessorArgs<indices_args.next_compile_time_args_offset(), 0>();
+    constexpr auto combine_index_args = TensorAccessorArgs<
+        gather_index_args.next_compile_time_args_offset(),
+        gather_index_args.next_common_runtime_args_offset()>();
+    constexpr auto expert_counts_args = TensorAccessorArgs<
+        combine_index_args.next_compile_time_args_offset(),
+        combine_index_args.next_common_runtime_args_offset()>();
 
     const uint32_t indices_address = get_arg_val<uint32_t>(0);
     const uint32_t gather_index_address = get_arg_val<uint32_t>(1);
@@ -89,25 +95,22 @@ void kernel_main() {
     const uint32_t token_start = get_arg_val<uint32_t>(4);
     const uint32_t num_tokens = get_arg_val<uint32_t>(5);
     const uint32_t gathered_rows = get_arg_val<uint32_t>(6);
-    const uint32_t gather_index_page_bytes = get_arg_val<uint32_t>(7);
-    const uint32_t combine_index_page_bytes = get_arg_val<uint32_t>(8);
-    const uint32_t expert_counts_page_bytes = get_arg_val<uint32_t>(9);
-    const uint32_t core_index = get_arg_val<uint32_t>(10);
-    const uint32_t num_cores = get_arg_val<uint32_t>(11);
-    const uint32_t first_tile_row = get_arg_val<uint32_t>(12);
-    const uint32_t num_tile_rows = get_arg_val<uint32_t>(13);
-    const uint32_t combine_stride = get_arg_val<uint32_t>(14);
+    const uint32_t core_index = get_arg_val<uint32_t>(7);
+    const uint32_t num_cores = get_arg_val<uint32_t>(8);
+    const uint32_t first_tile_row = get_arg_val<uint32_t>(9);
+    const uint32_t num_tile_rows = get_arg_val<uint32_t>(10);
+    const uint32_t combine_stride = get_arg_val<uint32_t>(11);
     // NoC coordinates of the rectangle's first and last cores, which are contiguous, in NOC0's
     // multicast order. Cores are numbered row by row, so core c sits c places after core 0.
-    const uint32_t first_core_x = get_arg_val<uint32_t>(15);
-    const uint32_t first_core_y = get_arg_val<uint32_t>(16);
-    const uint32_t last_core_x = get_arg_val<uint32_t>(17);
-    const uint32_t last_core_y = get_arg_val<uint32_t>(18);
+    const uint32_t first_core_x = get_arg_val<uint32_t>(12);
+    const uint32_t first_core_y = get_arg_val<uint32_t>(13);
+    const uint32_t last_core_x = get_arg_val<uint32_t>(14);
+    const uint32_t last_core_y = get_arg_val<uint32_t>(15);
 
     const auto indices = TensorAccessor(indices_args, indices_address);
-    const auto gather_index = TensorAccessor(gather_index_args, gather_index_address, gather_index_page_bytes);
-    const auto combine_index = TensorAccessor(combine_index_args, combine_index_address, combine_index_page_bytes);
-    const auto expert_counts = TensorAccessor(expert_counts_args, expert_counts_address, expert_counts_page_bytes);
+    const auto gather_index = TensorAccessor(gather_index_args, gather_index_address);
+    const auto combine_index = TensorAccessor(combine_index_args, combine_index_address);
+    const auto expert_counts = TensorAccessor(expert_counts_args, expert_counts_address);
 
     Noc noc;
     const uint32_t index_faces = CircularBuffer(get_named_compile_time_arg_val("index_faces_cb")).get_write_ptr();

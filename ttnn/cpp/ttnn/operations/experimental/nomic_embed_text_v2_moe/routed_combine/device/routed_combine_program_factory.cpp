@@ -122,11 +122,9 @@ tt::tt_metal::ProgramDescriptor RoutedCombineDeviceOperation::create_descriptor(
     };
     TensorAccessorArgs(*tensor_args.expert_rows.buffer()).append_to(reader.compile_time_args);
     TensorAccessorArgs(*tensor_args.combine_index.buffer()).append_to(reader.compile_time_args);
-    // A gather reads neither; stand-ins keep the accessors' compile-time layout.
+    // A gather reads neither; stand-ins built from no buffer keep the accessors' compile-time layout.
     for (const std::optional<Tensor>* operand : {&tensor_args.combine_weights, &tensor_args.bias}) {
-        (operand->has_value() ? TensorAccessorArgs(*(*operand)->buffer())
-                              : TensorAccessorArgs::create_dram_interleaved())
-            .append_to(reader.compile_time_args);
+        TensorAccessorArgs(operand->has_value() ? (*operand)->buffer() : nullptr).append_to(reader.compile_time_args);
     }
     reader.config = DataMovementConfigDescriptor{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::NOC_0};
 

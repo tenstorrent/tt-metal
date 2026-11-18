@@ -174,8 +174,8 @@ private:
     void routing_args(KernelDescriptor& kernel_descriptor) const;
     // The routing kernels' DRAM tensors (routing_accessors.hpp): their accessor args after the kernel's own positional
     // compile-time args, from the named arg routing_accessors_compile_time_args_offset on - plan, counts, regions,
-    // token index, table, slots, forwarding slots, the padded chunk's start / end scalars (an interleaved DRAM
-    // placeholder for one this call has none of).
+    // token index, table, slots, forwarding slots, the padded chunk's start / end scalars (a placeholder,
+    // built from no buffer, for one this call has none of).
     void routing_accessors(KernelDescriptor& kernel_descriptor) const {
         named_arg(
             kernel_descriptor,
@@ -190,9 +190,7 @@ private:
               SOURCE_SLOTS,
               SOURCE_START,
               SOURCE_END}) {
-            (buffers[source] ? tt::tt_metal::TensorAccessorArgs(*buffers[source])
-                             : tt::tt_metal::TensorAccessorArgs::create_dram_interleaved())
-                .append_to(kernel_descriptor.compile_time_args);
+            tt::tt_metal::TensorAccessorArgs(buffers[source]).append_to(kernel_descriptor.compile_time_args);
         }
     }
     // The routing planner's parameters: the named args routing_planner_* (the planner's accessor args' offset included)

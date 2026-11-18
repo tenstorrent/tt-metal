@@ -156,7 +156,7 @@ tt::tt_metal::ProgramDescriptor RoutingMetadataDeviceOperation::create_descripto
 
     // RISCV_0 on NOC0: indices, or the scores' selected ids -> gather_index, combine_index,
     // expert_counts. The three outputs are row-major pages whose size grows with num_tokens. Their
-    // page size goes in as a runtime argument rather than through the buffer's accessor arguments,
+    // page size goes in as a common runtime argument (RuntimePageSize) rather than a compile-time one,
     // which would bake it into the kernel binary and force a new compile for every 32 tokens.
     KernelDescriptor indices_kernel;
     indices_kernel.kernel_source = kKernelDirectory + "routing_metadata_indices.cpp";
@@ -178,8 +178,9 @@ tt::tt_metal::ProgramDescriptor RoutingMetadataDeviceOperation::create_descripto
         {"totals_row_words", totals_row_words},
     };
     TensorAccessorArgs(*indices_buffer).append_to(indices_kernel.compile_time_args);
-    for (int output = 0; output < 3; ++output) {
-        TensorAccessorArgs::create_dram_interleaved().append_to(indices_kernel.compile_time_args);
+    for (const Tensor* output : {&gather_index, &combine_index, &expert_counts}) {
+        TensorAccessorArgs(*output->buffer(), tensor_accessor::ArgConfig::RuntimePageSize)
+            .append_to(indices_kernel.compile_time_args, indices_kernel.common_runtime_args);
     }
     indices_kernel.config = DataMovementConfigDescriptor{
         .processor = DataMovementProcessor::RISCV_0,
@@ -224,9 +225,6 @@ tt::tt_metal::ProgramDescriptor RoutingMetadataDeviceOperation::create_descripto
              attributes.token_start,
              attributes.num_tokens,
              layout.gathered_rows,
-             static_cast<uint32_t>(gather_index.buffer()->aligned_page_size()),
-             static_cast<uint32_t>(combine_index.buffer()->aligned_page_size()),
-             static_cast<uint32_t>(expert_counts.buffer()->aligned_page_size()),
              core_index,
              num_cores,
              first_tile_row,
