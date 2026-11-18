@@ -16,8 +16,9 @@
 
 namespace ttnn::experimental::kda {
 
-std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> relay_affine_prefix(
+std::tuple<ttnn::Tensor, ttnn::Tensor> relay_affine_prefix(
     const ttnn::Tensor& packed,
+    const ttnn::Tensor& terms,
     const ttnn::Tensor& initial_state,
     const ttnn::Tensor& final_e,
     const ttnn::Tensor& final_b,
@@ -29,7 +30,7 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> relay_affine_prefix(
     const std::vector<tt::tt_metal::CoreCoord>& cores,
     const std::optional<ttnn::Tensor>& actual_end = std::nullopt,
     uint32_t sequence_parallel_axis = 0,
-    const std::optional<ttnn::MemoryConfig>& entry_memory_config = std::nullopt,
+    const std::optional<ttnn::MemoryConfig>& memory_config = std::nullopt,
     const std::optional<ttnn::DeviceComputeKernelConfig>& compute_kernel_config = std::nullopt,
     const std::optional<ttnn::Tensor>& slab_index = std::nullopt,
     uint32_t slab_index_scale = 1,

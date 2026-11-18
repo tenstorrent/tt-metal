@@ -28,6 +28,7 @@ void RelayAffinePrefixOperation::validate_on_program_cache_hit(const operation_a
     constexpr std::string_view operation_name = "relay_affine_prefix";
     const std::initializer_list<std::pair<const Tensor*, std::string_view>> tensors = {
         {&in.packed, "packed"},
+        {&in.terms, "terms"},
         {&in.initial_state, "initial_state"},
         {&in.actual_start, "actual_start"},
         {&in.landing, "landing"},
@@ -87,12 +88,20 @@ void RelayAffinePrefixOperation::validate_on_program_cache_miss(
     const auto* mesh = in.packed.device();
     TT_FATAL(attrs.sequence_parallel_axis < mesh->shape().dims(), "{}: invalid sequence_parallel_axis", operation_name);
     TT_FATAL(mesh->shape()[attrs.sequence_parallel_axis] >= 2, "{}: needs at least two SP ranks", operation_name);
-    // The relay's sender per link, then the final carry's second.
+    // Each head's cores, then the relay's sender per link and the final carry's second.
     const uint32_t senders = 2 * attrs.num_links;
+    const uint32_t chunks = attrs.local_rows / tt::constants::TILE_HEIGHT;
     TT_FATAL(
-        attrs.num_links > 0 && attrs.cores.size() >= heads + senders,
-        "{}: needs a core per head, then two senders per link",
+        attrs.num_links > 0 && attrs.cores.size() > senders && (attrs.cores.size() - senders) % heads == 0,
+        "{}: needs the same number of cores per head, then two senders per link",
         operation_name);
+    const uint32_t cores_per_head = relay_affine_prefix_cores_per_head(attrs.cores.size(), heads, attrs.num_links);
+    TT_FATAL(
+        chunks % cores_per_head == 0,
+        "{}: a head's {} cores must split its {} chunks evenly",
+        operation_name,
+        cores_per_head,
+        chunks);
     TT_FATAL(
         (heads + attrs.num_links - 1) / attrs.num_links <= relay_affine_prefix_max_heads_per_link,
         "{}: {} heads over {} links put {} on a sender, which has semaphores for {}: use more links",
@@ -101,13 +110,21 @@ void RelayAffinePrefixOperation::validate_on_program_cache_miss(
         attrs.num_links,
         (heads + attrs.num_links - 1) / attrs.num_links,
         relay_affine_prefix_max_heads_per_link);
-    const std::span<const CoreCoord> used_cores(attrs.cores.data(), heads + senders);
     TT_FATAL(
-        std::set<CoreCoord>(used_cores.begin(), used_cores.end()).size() == used_cores.size(),
-        "{}: the head and sender cores must be distinct",
+        std::set<CoreCoord>(attrs.cores.begin(), attrs.cores.end()).size() == attrs.cores.size(),
+        "{}: the cores must be distinct",
         operation_name);
     const auto grid = mesh->compute_with_storage_grid_size();
-    for (const auto& core : used_cores) {
+    // Each correction kernel finds its head and share from its place in the grid.
+    const uint32_t first_core = attrs.cores[0].y * grid.x + attrs.cores[0].x;
+    for (uint32_t i = 0; i < heads * cores_per_head; ++i) {
+        const uint32_t index = first_core + i;
+        TT_FATAL(
+            attrs.cores[i] == CoreCoord(index % grid.x, index / grid.x),
+            "{}: the heads' cores must be consecutive cores of the compute grid in row-major order",
+            operation_name);
+    }
+    for (const auto& core : attrs.cores) {
         TT_FATAL(
             core.x < grid.x && core.y < grid.y,
             "{}: core {} is outside the {}x{} compute grid",
@@ -132,7 +149,10 @@ void RelayAffinePrefixOperation::validate_on_program_cache_miss(
         relay_affine_prefix_column_packets(key_tiles),
         fabric_packet_headers_per_risc(mesh->arch()));
 
-    const std::span<const CoreCoord> head_cores(attrs.cores.data(), heads);
+    std::vector<CoreCoord> head_cores;
+    for (uint32_t h = 0; h < heads; ++h) {
+        head_cores.push_back(attrs.cores[h * cores_per_head]);
+    }
     kda_factory_detail::check_allocated_device_tensor(in.landing, operation_name, "landing");
     kda_factory_detail::check_layout(in.landing, tt::tt_metal::Layout::TILE, operation_name, "landing");
     kda_factory_detail::check_dtype(in.landing, tt::tt_metal::DataType::FLOAT32, operation_name, "landing");
@@ -155,9 +175,12 @@ void RelayAffinePrefixOperation::validate_on_program_cache_miss(
         key_dim);
     kda_factory_detail::check_distinct_buffers(
         {{&in.packed, "packed"},
+         {&in.terms, "terms"},
          {&in.initial_state, "initial_state"},
          {&in.actual_start, "actual_start"},
          {&in.landing, "landing"},
+         {&in.final_e, "final_e"},
+         {&in.final_b, "final_b"},
          {in.slab_index ? &*in.slab_index : nullptr, "slab_index"}},
         operation_name);
     // The final carry leaves each sender as a multicast along the SP axis, which a 2D fabric routes only along a
@@ -190,7 +213,37 @@ void RelayAffinePrefixOperation::validate_on_program_cache_miss(
         "{}: the final carry needs {} packet headers and two stage slots per sender",
         operation_name,
         key_tiles + 1);
-    kda_factory_detail::check_output_interleaved(attrs.entry_mem_config, operation_name);
+    // The chunk terms: in place in each core's shard, or streamed from interleaved memory.
+    const std::span<const CoreCoord> correction_cores(attrs.cores.data(), heads * cores_per_head);
+    kda_factory_detail::check_allocated_device_tensor(in.terms, operation_name, "terms");
+    kda_factory_detail::check_layout(in.terms, tt::tt_metal::Layout::TILE, operation_name, "terms");
+    kda_factory_detail::check_dtype(in.terms, tt::tt_metal::DataType::FLOAT32, operation_name, "terms");
+    kda_factory_detail::check_same_device(in.packed, in.terms, operation_name, "terms");
+    const uint32_t core_rows = chunks / cores_per_head * tt::constants::TILE_HEIGHT;
+    const auto& terms_memory = in.terms.memory_config();
+    if (terms_memory.is_sharded()) {
+        TT_FATAL(
+            in.terms.logical_shape() == Shape({heads * cores_per_head, 2, core_rows, key_dim}) &&
+                terms_memory.buffer_type() == tt::tt_metal::BufferType::L1 &&
+                terms_memory.memory_layout() == tt::tt_metal::TensorMemoryLayout::HEIGHT_SHARDED &&
+                terms_memory.shard_spec()->shape[0] == 2 * core_rows && terms_memory.shard_spec()->shape[1] == key_dim,
+            "{}: sharded terms must be [B*H * {}, 2, {}, K], height-sharded in L1 one core's rows per shard",
+            operation_name,
+            cores_per_head,
+            core_rows);
+        // Core i reads shard i in place.
+        TT_FATAL(
+            std::ranges::equal(kda_factory_detail::shard_cores(in.terms), correction_cores),
+            "{}: terms must be sharded over the heads' cores in their order",
+            operation_name);
+    } else {
+        TT_FATAL(
+            in.terms.logical_shape() == Shape({heads, 2, chunks * tt::constants::TILE_HEIGHT, key_dim}),
+            "{}: interleaved terms must be [B*H, 2, {}, K]",
+            operation_name,
+            chunks * tt::constants::TILE_HEIGHT);
+    }
+    kda_factory_detail::check_output_interleaved(attrs.output_mem_config, operation_name);
     kda_factory_detail::check_compute_config(attrs.compute_kernel_config, operation_name);
     kda_factory_detail::check_fp32_dest_acc(
         attrs.compute_kernel_config, operation_name, "the hop adds the FP32 entry state and B exactly in DST");
@@ -210,28 +263,33 @@ void RelayAffinePrefixOperation::validate_on_program_cache_miss(
 
 RelayAffinePrefixOperation::spec_return_value_t RelayAffinePrefixOperation::compute_output_specs(
     const operation_attributes_t& attrs, const tensor_args_t& in) {
-    const auto spec = [&](const tt::tt_metal::MemoryConfig& memory) {
-        const auto [heads, key_dim] = relay_state_geometry(in);
-        return tt::tt_metal::TensorSpec(
-            tt::tt_metal::Shape({heads, key_dim, key_dim}),
-            tt::tt_metal::TensorLayout(
-                tt::tt_metal::DataType::FLOAT32, tt::tt_metal::PageConfig(tt::tt_metal::Layout::TILE), memory));
-    };
-    // With a slab, the final carry is written into the slab's entry, in place.
+    const auto spec =
+        [](const ttnn::Shape& shape, tt::tt_metal::DataType dtype, const tt::tt_metal::MemoryConfig& memory) {
+            return tt::tt_metal::TensorSpec(
+                shape, tt::tt_metal::TensorLayout(dtype, tt::tt_metal::PageConfig(tt::tt_metal::Layout::TILE), memory));
+        };
+    // The chunk outputs [B*H, chunks, 32, V], and the final carry: with a slab, written into the slab's entry, in
+    // place.
+    const auto [heads, key_dim] = relay_state_geometry(in);
+    const uint32_t value_dim = in.initial_state.logical_shape()[-1];
+    const uint32_t chunks = attrs.local_rows / tt::constants::TILE_HEIGHT;
     return {
-        spec(attrs.entry_mem_config),
-        spec(ttnn::DRAM_MEMORY_CONFIG),
-        in.slab_index ? in.initial_state.tensor_spec() : spec(ttnn::DRAM_MEMORY_CONFIG)};
+        spec(
+            Shape({heads, chunks, tt::constants::TILE_HEIGHT, value_dim}),
+            tt::tt_metal::DataType::BFLOAT16,
+            attrs.output_mem_config),
+        in.slab_index
+            ? in.initial_state.tensor_spec()
+            : spec(Shape({heads, key_dim, value_dim}), tt::tt_metal::DataType::FLOAT32, ttnn::DRAM_MEMORY_CONFIG)};
 }
 
 RelayAffinePrefixOperation::tensor_return_value_t RelayAffinePrefixOperation::create_output_tensors(
     const operation_attributes_t& attrs, const tensor_args_t& in) {
     const auto specs = compute_output_specs(attrs, in);
     tensor_return_value_t outputs;
-    for (uint32_t i = 0; i < 2; ++i) {
-        outputs.push_back(create_device_tensor(specs[i], in.packed.device()));
-    }
-    outputs.push_back(in.slab_index ? in.initial_state : create_device_tensor(specs[2], in.packed.device()));
+    outputs.push_back(create_device_tensor(specs[0], in.packed.device()));
+    // With a slab, the final carry is written into the slab's entry, in place.
+    outputs.push_back(in.slab_index ? in.initial_state : create_device_tensor(specs[1], in.packed.device()));
     return outputs;
 }
 
@@ -242,24 +300,26 @@ RelayAffinePrefixOperation::create_op_performance_model(
     const auto geometry = relay_state_geometry(in);
     const double heads = geometry.heads;
     const double key_dim = geometry.key_dim;
-    // One hop per rank: S_out = S_in + E S_in + B per head (E = A - I).
+    const double rows = attrs.local_rows;
+    // Per head: one hop S_out = S_in + E S_in + B (E = A - I), then each chunk row's F0 + (FI - F0) @ seed.
     const KdaFpuWork work{
-        .fpu_matrix_flops = heads * 2.0 * key_dim * key_dim * key_dim,
-        .fpu_add_ops = heads * key_dim * key_dim,
+        .fpu_matrix_flops = heads * 2.0 * (key_dim + rows) * key_dim * key_dim,
+        .fpu_add_ops = heads * (key_dim + rows) * key_dim,
     };
-    const std::array<const Tensor*, 2> inputs = {&in.packed, &in.initial_state};
+    const std::array<const Tensor*, 3> inputs = {&in.packed, &in.terms, &in.initial_state};
     return make_profiler_model(work, inputs, outputs, attrs.compute_kernel_config.math_fidelity);
 }
 
-std::tuple<Tensor, Tensor, Tensor> relay_affine_prefix(
+std::tuple<Tensor, Tensor> relay_affine_prefix(
     const Tensor& packed,
+    const Tensor& terms,
     const Tensor& initial_state,
     const Tensor& final_e,
     const Tensor& final_b,
     const Tensor& actual_start,
     const std::optional<Tensor>& actual_end,
     const Tensor& landing,
-    const tt::tt_metal::MemoryConfig& entry_memory_config,
+    const tt::tt_metal::MemoryConfig& memory_config,
     const DeviceComputeKernelConfig& compute_kernel_config,
     const std::array<uint32_t, 3>& semaphore_addresses,
     uint32_t sequence_parallel_axis,
@@ -275,13 +335,14 @@ std::tuple<Tensor, Tensor, Tensor> relay_affine_prefix(
             .local_rows = local_rows,
             .num_links = num_links,
             .cores = cores,
-            .entry_mem_config = entry_memory_config,
+            .output_mem_config = memory_config,
             .compute_kernel_config = compute_kernel_config,
             .semaphore_addresses = semaphore_addresses,
             .slab_index_scale = slab_index_scale,
             .slab_index_offset = slab_index_offset},
         RelayAffinePrefixInputs{
             .packed = packed,
+            .terms = terms,
             .initial_state = initial_state,
             .actual_start = actual_start,
             .landing = landing,
@@ -289,7 +350,7 @@ std::tuple<Tensor, Tensor, Tensor> relay_affine_prefix(
             .final_b = final_b,
             .actual_end = actual_end,
             .slab_index = slab_index});
-    return {outputs[0], outputs[1], outputs[2]};
+    return {outputs[0], outputs[1]};
 }
 
 }  // namespace ttnn::experimental::prim

@@ -111,9 +111,9 @@ class KDARecurrenceProgramConfig:
     scan_math_fidelity: ttnn.MathFidelity = ttnn.MathFidelity.HiFi2
     # With sequence parallelism and one group per head, the SP prefix is a relay along the SP axis (RelayAffinePrefix):
     # each rank applies its own summary to the entry state it receives and forwards the result. The summary also emits
-    # each chunk's output terms, and an EntryCorrection program forms the chunk outputs and the final state from the
-    # entry states, all chunks in parallel. Cores the entry correction may use: its products count toward the Blackhole
-    # di/dt bound.
+    # each chunk's output terms, from which the relay's program forms the chunk outputs once the entry state lands, all
+    # chunks in parallel (the entry correction). Cores the entry correction may use: its products count toward the
+    # Blackhole di/dt bound.
     entry_correction_max_cores: int = 110
 
     def __post_init__(self) -> None:
