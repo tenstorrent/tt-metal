@@ -263,9 +263,7 @@ class Qwen36DecoderLayer:
         # user-major in x [1,1,Bg*Tb,dim]: keys Bg, Tb, cos, sin, csi, full_pts / chunk_pts (per-user device page
         # tables), gdn_masks, gdn_scratch ({id(gdn layer): alloc_group_scratch(Bg)}). Full attention runs per user on
         # its row slice (own KV pages), GDN runs once for the whole group (forward_prefill_group). Optional keys (Bg = 1):
-        # gdn_init (per GDN layer {"rec", "hist"}: the row resumed from a prefix state), conv_sel_tail (the caller
-        # guarantees the row's valid length is >= Tb - conv_sel_tail + 3: the GDN conv-state select reads only those
-        # last rows).
+        # gdn_init (per GDN layer {"rec", "hist"}: the row resumed from a prefix state).
         # Validate up front: attention/norm treat non-"prefill" as decode while the MoE experts
         # treat non-"decode" as prefill, so an unsupported mode would split the two down opposite
         # paths. Fail fast instead.
@@ -405,7 +403,6 @@ class Qwen36DecoderLayer:
                         pg["gdn_scratch"][id(self.attention)],
                         chunk_size=chunk_size,
                         init=(pg.get("gdn_init") or {}).get(id(self.attention)),
-                        conv_sel_tail=pg.get("conv_sel_tail", 0),
                     )
                 elif mode == "prefill":
                     if gdn_recurrent and gdn_seed:

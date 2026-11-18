@@ -166,7 +166,7 @@ class ColumnPrefill:
         cfg.vmask = self._dev(torch.zeros(1, 1, Tb, 1), ttnn.bfloat16)
         self.cfgs[Tb] = cfg
 
-    def body(self, Tb, conv_sel_tail):
+    def body(self, Tb):
         m, cfg = self.model, self.cfgs[Tb]
         x = m.embd(cfg.tok)
         x = ttnn.to_memory_config(ttnn.reshape(x, (1, 1, Tb, x.shape[-1])), ttnn.DRAM_MEMORY_CONFIG)
@@ -184,7 +184,6 @@ class ColumnPrefill:
             gdn_masks=cfg.gdn_masks,
             gdn_scratch=m._batched_gdn_scratch[1],
             gdn_init=self.init,
-            conv_sel_tail=conv_sel_tail,
         )
         for layer in m.layers:
             xn = layer.forward(x, cos=cfg.cos, sin=cfg.sin, mode="prefill", prefill_group=pg)
@@ -267,14 +266,14 @@ class ColumnPrefill:
         ):
             ttnn.copy_host_to_device_tensor(ttnn.from_torch(t, dtype=dt, layout=lay, mesh_mapper=mapper), dst)
 
-    def warm(self, Tb, conv_sel_tail):
+    def warm(self, Tb):
         for _ in range(2):  # compile; every allocation of the body happens here, before any group trace exists
-            ttnn.deallocate(self.body(Tb, conv_sel_tail))
+            ttnn.deallocate(self.body(Tb))
         ttnn.synchronize_device(self.mesh)
 
-    def capture(self, Tb, conv_sel_tail):
+    def capture(self, Tb):
         tid = ttnn.begin_trace_capture(self.mesh, cq_id=0)
-        out = self.body(Tb, conv_sel_tail)
+        out = self.body(Tb)
         ttnn.end_trace_capture(self.mesh, tid, cq_id=0)
         self.traces[Tb] = (tid, out)
 
@@ -288,11 +287,6 @@ class ColumnPrefill:
 
 def _task(name):
     return "i2i" if REQUESTS[name][1] else "t2i"
-
-
-def _conv_sel_tail(n_tail, Tb):
-    """The smallest tile multiple W with n_tail - 3 >= Tb - W (the conv-state select reads only the last W rows)."""
-    return min(Tb, -(-(Tb - (n_tail - 3)) // 32) * 32)
 
 
 def _setup(mesh_device, names):
@@ -312,13 +306,13 @@ def _setup(mesh_device, names):
     for n in names:
         Tb = REQUESTS[n][3]
         cp.stage(Tb, _task(n), refs[n], P[n])
-        cp.warm(Tb, _conv_sel_tail(tail[n], Tb))
+        cp.warm(Tb)
     model.capture_prefill_traces_short(mesh_device, cp.warm_pt, buckets=(128, 256, 512, 1024))
     for n in names:
         cp.prefill_prefix(_task(n), refs[n]["enc"]["input_ids"], P[n])
     for n in names:
         Tb = REQUESTS[n][3]
-        cp.capture(Tb, _conv_sel_tail(tail[n], Tb))
+        cp.capture(Tb)
     return model, cp, refs, P, tail
 
 
@@ -406,9 +400,3 @@ def test_column_profile_agmm_table():
     assert f(1152, "gdn_out")["N_block"] == 16
     assert f(512, "gdn_out") is None  # qwen36 default
     assert f(2688, "gdn_in") is None  # measured below 2048 rows
-
-
-def test_conv_sel_tail():
-    assert _conv_sel_tail(1112, 1152) == 64
-    assert _conv_sel_tail(109, 128) == 32
-    assert _conv_sel_tail(3, 128) == 128

@@ -2321,7 +2321,7 @@ class TPGatedDeltaNet:
             ttnn.deallocate(qkv_d)
         return outs[0], outs[1], outs[2], new_state
 
-    def forward_prefill_group(self, x, Bg, Tb, masks, scratch, chunk_size=128, init=None, conv_sel_tail=0):
+    def forward_prefill_group(self, x, Bg, Tb, masks, scratch, chunk_size=128, init=None):
         """Prefill Bg users (each right-padded to the bucket Tb, from scratch) in ONE pass.
 
         x:       [1, 1, Bg*Tb, dim/tp] K-sharded like forward_prefill's (row u*Tb + t = user u, token t).
@@ -2331,7 +2331,6 @@ class TPGatedDeltaNet:
                  (conv[m][0,u] for m = 1..K-1) IN PLACE; self.rec_state / conv_states / B are never touched.
         init:    Bg = 1 only: the row resumed from a prefix state, {"rec": [1,Nv,Dk,Dv] fp32 initial state,
                  "hist": [1,K-1,C] ROW_MAJOR conv history (the prefix's last K-1 conv-input rows)}.
-        conv_sel_tail: see the conv-state select below (0 = whole bucket).
         Returns the gated, out-projected output [1, 1, Bg*Tb, dim(/tp)] (rows beyond a user's valid_len are
         padding garbage). Allocates nothing persistent and uploads nothing from the host: trace-safe given warm-up
         (agmm gather buffers) and persistent masks/scratch."""
@@ -2368,35 +2367,13 @@ class TPGatedDeltaNet:
                 chunk_cap=self.args.kda_conv_chunk_cap,
                 memory_config=self._conv_out_mc,
             )
-            # conv_sel_tail = W (rows, a tile multiple): the selected rows valid_len-3..valid_len-1 lie in the bucket's
-            # last W rows (the caller guarantees valid_len - 3 >= Tb - W): select from those rows only instead of a
-            # [3, Tb] x [Tb, C] one-hot matmul over the whole bucket (bit-identical; 48 us per layer at Tb = 2688).
-            _w = conv_sel_tail
-            if 0 < _w < Tb:
-                _q = ttnn.slice(qkv, (0, Tb - _w, 0), (1, Tb, qkv.shape[-1]), memory_config=ttnn.DRAM_MEMORY_CONFIG)
-                _s = ttnn.slice(
-                    masks["conv_sel"],
-                    (0, 0, Tb - _w),
-                    (1, masks["conv_sel"].shape[1], Tb),
-                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                )
-                conv_new_state = ttnn.matmul(
-                    _s,
-                    _q,
-                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                    compute_kernel_config=exact_select_cfg(),
-                    dtype=ttnn.bfloat16,
-                )
-                ttnn.deallocate(_q)
-                ttnn.deallocate(_s)
-            else:
-                conv_new_state = ttnn.matmul(
-                    masks["conv_sel"],
-                    qkv,
-                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                    compute_kernel_config=exact_select_cfg(),
-                    dtype=ttnn.bfloat16,
-                )
+            conv_new_state = ttnn.matmul(
+                masks["conv_sel"],
+                qkv,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                compute_kernel_config=exact_select_cfg(),
+                dtype=ttnn.bfloat16,
+            )
         else:
             q, k, v, conv_new_state = self._kda_conv_group(qkv, masks["conv_sel"], masks["zeros_pad"])
         ttnn.deallocate(qkv)
