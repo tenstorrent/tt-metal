@@ -120,7 +120,7 @@ __attribute__((noinline)) void calculate_remainder_uint32_scalar_small_b(uint sc
     sfpi::vMag MASK_11{0x7ff};
     sfpi::vFloat b0 = sfpi::convert<sfpi::vFloat>(b_mag & MASK_11, sfpi::RoundMode::Nearest);
 
-#pragma GCC unroll 8
+#pragma GCC unroll 2
     for (int d = 0; d < ITERATIONS; d++) {
         sfpi::vInt a = sfpi::dst_reg[0].mode<sfpi::DataLayout::I32>();
         sfpi::vInt t = sfpi::vInt(sfpi::vUInt(a) >> 1);
@@ -148,7 +148,7 @@ __attribute__((noinline)) void calculate_remainder_uint32_scalar_general(uint sc
     sfpi::vInt b = static_cast<int>(scalar);
     sfpi::vFloat inv_b_f = unsigned_remainder_recip(b);
 
-#pragma GCC unroll 8
+#pragma GCC unroll 0
     for (int d = 0; d < ITERATIONS; d++) {
         sfpi::vInt a = sfpi::dst_reg[0].mode<sfpi::DataLayout::I32>();
         sfpi::vInt t = sfpi::vInt(sfpi::vUInt(a) >> 1);
