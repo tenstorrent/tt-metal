@@ -67,6 +67,8 @@ public:
 
     void create_kernel(tt::tt_metal::Program& program, const KernelCreationContext& ctx) override;
 
+    std::optional<RouterChannelLayout> get_channel_layout() const override;
+
     // ============ Compute-Mesh Specific Methods ============
 
     /**

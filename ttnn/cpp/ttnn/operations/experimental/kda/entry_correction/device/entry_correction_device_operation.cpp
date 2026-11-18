@@ -171,14 +171,10 @@ EntryCorrectionOperation::spec_return_value_t EntryCorrectionOperation::compute_
             return tt::tt_metal::TensorSpec(
                 shape, tt::tt_metal::TensorLayout(dtype, tt::tt_metal::PageConfig(tt::tt_metal::Layout::TILE), memory));
         };
-    // The chunk outputs are [B*H, chunks, 32, K].
+    // The chunk outputs are [B*H, local_rows, K].
     const auto& state = in.final_b.logical_shape();
-    const uint32_t chunks = attrs.local_rows / tt::constants::TILE_HEIGHT;
     return {
-        spec(
-            Shape({state[0], chunks, tt::constants::TILE_HEIGHT, state[2]}),
-            tt::tt_metal::DataType::BFLOAT16,
-            attrs.output_mem_config),
+        spec(Shape({state[0], attrs.local_rows, state[2]}), tt::tt_metal::DataType::BFLOAT16, attrs.output_mem_config),
         spec(state, tt::tt_metal::DataType::FLOAT32, ttnn::DRAM_MEMORY_CONFIG)};
 }
 
