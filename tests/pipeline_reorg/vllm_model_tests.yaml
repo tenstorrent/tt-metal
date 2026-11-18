@@ -388,6 +388,12 @@
   prefix-caching-test: true
   multimodal: true
   sampling-tests: true
+  # test_mixed_params_batch expects a seeded request to reproduce in a shuffled
+  # batch with penalty companions. Qwen36 samples penalties on the host
+  # (supports_device_penalties False) and the plugin picks one sampler per step,
+  # so those companions move seeded steps between the host and device random
+  # streams (vllm-tt-plugin issue 153, accepted behaviour).
+  sampling-test-filter: "not test_mixed_params_batch"
   sampling-test-timeout: 20
   server-timeout: 60
   benchmark-timeout: 15
