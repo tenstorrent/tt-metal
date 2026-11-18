@@ -136,6 +136,9 @@ constexpr float GELU_CDF_CORE_C9 = 8.1812159812e-05f;
 constexpr float GELU_CDF_CORE_C11 = -3.8082057209e-06f;
 constexpr float GELU_CDF_CORE_C13 = 7.9821413868e-08f;
 
+// x <= GELU_BF16_SAT gives 0 (torch.gelu BF16 saturation).
+constexpr float GELU_BF16_SAT = -5.54259443f;
+
 // Degree-3 H-form correction polynomial for the exp-based region (-5.54259443, -3.125].
 // H(x) = ½·erfc(|x|/√2) ≈ exp(-x²/2) · corr_H(x), and GELU(x) = x · H(x).
 // Fitted (uniform relative error) so the deep-tail snap is exact and the smooth
@@ -151,7 +154,7 @@ sfpi_inline sfpi::vFloat calculate_gelu_piecewise(sfpi::vFloat x) {
     sfpi::vFloat result = 0.0f;  // Default: 0 for x <= -5.54259443 (torch saturation)
     sfpi::vFloat x2 = x * x;
 
-    v_if(x > -5.54259443f) {
+    v_if(x > sfpi::vConstFloatPrgm0) {  // GELU_BF16_SAT, loaded by gelu_init<false, false>
         // Shared smooth H ≈ ½·erfc(|x|/√2) via Moroz exp_21f · corr_H.
         constexpr float NEG_HALF_ONE_LN2 = -0.72134752044f;  // -0.5 / ln(2)
         sfpi::vFloat xlog2 = x2 * NEG_HALF_ONE_LN2 + 127.0f;
@@ -186,8 +189,8 @@ sfpi_inline sfpi::vFloat calculate_gelu_piecewise(sfpi::vFloat x) {
             GELU_CDF_CORE_C3,
             GELU_CDF_CORE_C5,
             GELU_CDF_CORE_C7,
-            sfpi::vConstFloatPrgm0,   // GELU_CDF_CORE_C9, loaded by gelu_init<false, false>
-            sfpi::vConstFloatPrgm1,   // GELU_CDF_CORE_C11
+            GELU_CDF_CORE_C9,
+            sfpi::vConstFloatPrgm1,   // GELU_CDF_CORE_C11, loaded by gelu_init<false, false>
             sfpi::vConstFloatPrgm2);  // GELU_CDF_CORE_C13
         sfpi::vFloat phi = GELU_CDF_CORE_C0 + x * odd_poly;
         result = x * phi;
@@ -221,9 +224,10 @@ void gelu_init() {
         sfpu_reciprocal_init<false>();
     } else {
         // BF16 accurate mode: no reciprocal, so the programmable constant registers are free.
-        // Hold the three CDF coefficients that calculate_gelu_piecewise would otherwise reload
-        // (two SFPLOADI each) on every row.
-        sfpi::vConstFloatPrgm0 = GELU_CDF_CORE_C9;
+        // Hold three fp32 constants that calculate_gelu_piecewise would otherwise reload (two
+        // SFPLOADI each) on every row. C9 stays inline: its SFPLOADIs fill the MAD latency slot
+        // between the C13 and C9 Horner steps.
+        sfpi::vConstFloatPrgm0 = GELU_BF16_SAT;
         sfpi::vConstFloatPrgm1 = GELU_CDF_CORE_C11;
         sfpi::vConstFloatPrgm2 = GELU_CDF_CORE_C13;
     }
