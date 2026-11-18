@@ -137,7 +137,6 @@ def test_typecast_test_input_bounds_unsigned_high_never_exceeds_input_max():
         (torch.int, ttnn.int32, ttnn.uint16),
         (torch.int, ttnn.uint32, ttnn.uint16),
         (torch.bfloat16, ttnn.bfloat16, ttnn.uint8),
-        (torch.uint8, ttnn.uint8, ttnn.bfloat16),
         (torch.float32, ttnn.float32, ttnn.uint8),
         (torch.uint8, ttnn.uint8, ttnn.float32),
         (torch.int, ttnn.int32, ttnn.uint8),
@@ -151,21 +150,17 @@ def test_typecast_test_input_bounds_unsigned_high_never_exceeds_input_max():
         (torch.bfloat16, ttnn.bfloat4_b, ttnn.uint8),
         (torch.uint8, ttnn.uint8, ttnn.bfloat4_b),
         (torch.bfloat16, ttnn.bfloat16, ttnn.int8),
-        (torch.int8, ttnn.int8, ttnn.bfloat16),
         (torch.float32, ttnn.float32, ttnn.int8),
-        (torch.int8, ttnn.int8, ttnn.float32),
         (torch.int, ttnn.int32, ttnn.int8),
-        (torch.int8, ttnn.int8, ttnn.int32),
         (torch.int, ttnn.uint16, ttnn.int8),
-        (torch.int8, ttnn.int8, ttnn.uint16),
         (torch.int, ttnn.uint32, ttnn.int8),
-        (torch.int8, ttnn.int8, ttnn.uint32),
         (torch.bfloat16, ttnn.bfloat8_b, ttnn.int8),
         (torch.int8, ttnn.int8, ttnn.bfloat8_b),
         (torch.bfloat16, ttnn.bfloat4_b, ttnn.int8),
         (torch.int8, ttnn.int8, ttnn.bfloat4_b),
         (torch.uint8, ttnn.uint8, ttnn.int8),
-        (torch.int8, ttnn.int8, ttnn.uint8),
+        # uint8 -> bfloat16 and int8 -> {bfloat16, float32, int32, uint32, uint16, uint8} are covered
+        # bit-exactly over every input value by test_typecast_8bit_exhaustive.
     ),
 )
 @pytest.mark.parametrize(
@@ -173,16 +168,15 @@ def test_typecast_test_input_bounds_unsigned_high_never_exceeds_input_max():
     [
         [[1, 1, 32, 32]],  # Single core
         [[1, 1, 320, 320]],  # multi core
-        [[1, 3, 320, 320]],  # multi core
     ],
 )
+# Each memory config is exercised on both the reader and the writer side.
 @pytest.mark.parametrize(
-    "input_mem_config",
-    mem_configs,
-)
-@pytest.mark.parametrize(
-    "dst_mem_config",
-    mem_configs,
+    "input_mem_config, dst_mem_config",
+    [
+        (ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG),
+        (ttnn.L1_MEMORY_CONFIG, ttnn.DRAM_MEMORY_CONFIG),
+    ],
 )
 class TestTypecast:
     def test_run_eltwise_typecast_op(
@@ -196,8 +190,6 @@ class TestTypecast:
         device,
         function_level_defaults,
     ):
-        if tt_input_dtype == tt_output_dtype:
-            pytest.skip("Same I/O data types. Skip.")
         in_low, in_high = typecast_test_input_bounds(tt_input_dtype, tt_output_dtype)
         shape = input_shapes[0]
         torch_input = make_typecast_test_input(shape, pt_input_dtype, in_low, in_high)

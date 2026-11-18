@@ -53,6 +53,7 @@ from models.demos.common.prefill.runners.runner_utils import (
     resolve_trace_dir,
 )
 from models.demos.deepseek_v3_d_p.tt.mla.utils import mtp_lookahead_positions
+from models.demos.deepseek_v3_d_p.utils.chunk_config import prefill_chunk_tokens
 
 
 def _apply_manifest_env(manifest_path: str) -> dict:
@@ -115,7 +116,7 @@ def _load_env_config(check_budget: bool = True) -> None:
     # The host payload is one row per SP chip, in SP order, whichever mesh axis SP runs on; the
     # runner's H2D mapper (PREFILL_SP_AXIS) places the rows, so the producer needs only the factor.
     SP_FACTOR = int(os.environ.get("PREFILL_SP", 8))
-    CHUNK_SIZE = int(os.environ.get("PREFILL_CHUNK_SIZE", 5 * 1024))
+    CHUNK_SIZE = prefill_chunk_tokens()
     # Tokens per forward, a multiple of the chunk size; must match the runner's.
     forward_tokens_budget = int(os.environ.get("PREFILL_FORWARD_TOKENS_BUDGET", CHUNK_SIZE))
     assert not check_budget or (
@@ -1284,7 +1285,7 @@ def _resolve_pcc_window(trace_dir, real_len: int, tokens_per_block: int) -> tupl
 
 
 def _read_slot_kv_and_check_pcc_mla(table, device_map: dict, slot_id: int, real_len: int, trace_dir):
-    from models.demos.deepseek_v3_d_p.tt.mla.indexer import normalized_hadamard_matrix
+    from models.demos.deepseek_v3_d_p.tt.mla.indexer import rotate_index_keys
     from models.demos.deepseek_v3_d_p.tt.runners.prefill_kv_validation import (
         _load_golden_index_k,
         _load_golden_kv_post,
@@ -1411,17 +1412,18 @@ def _read_slot_kv_and_check_pcc_mla(table, device_map: dict, slot_id: int, real_
         mins["mtp"] = mtp_min
     if _has_index_config(table):
         index_head_dim = ADAPTER.model_config.INDEX_HEAD_DIM
-        index_hadamard = normalized_hadamard_matrix(index_head_dim).float()
+        hf_config = ADAPTER.load_hf_config()
         n_index_layers = table.config(1).num_layers
         full_layers = _full_indexer_layer_indices(NUM_LAYERS)
         index_rows = []
         if index_golden_present(trace_dir):
-            index_rows = [
-                (layer, trace_dir) for layer in (range(n_index_layers) if full_layers is None else full_layers)
-            ]
-            assert full_layers is None or max(full_layers) < n_index_layers, (
+            # Without an `indexer_types` map every layer that owns a KV slab runs its own indexer: all of a
+            # dense DSA stack, only the DSA layers of a hybrid one (Kimi-K3.1's other rows hold KDA state).
+            index_layers = sorted(expected_slabs) if full_layers is None else full_layers
+            index_rows = [(layer, trace_dir) for layer in index_layers]
+            assert max(index_layers) < n_index_layers, (
                 f"config 1 has {n_index_layers} rows but layers [0,{NUM_LAYERS}) put a full indexer at layer "
-                f"{max(full_layers)}. On the layer axis the extent must cover the deepest full-indexer "
+                f"{max(index_layers)}. On the layer axis the extent must cover the deepest full-indexer "
                 f"layer; a compacted (rank-axis) table reaching here would read another layer's keys."
             )
         else:
@@ -1475,7 +1477,7 @@ def _read_slot_kv_and_check_pcc_mla(table, device_map: dict, slot_id: int, real_
                 rope_layout=mtp_index_layout if is_mtp_row else "interleaved",
                 position0=first_pos + skip_rows,
             )
-            dev_ik = (dev_ik.float() @ index_hadamard).to(torch.bfloat16)
+            dev_ik = rotate_index_keys(hf_config, dev_ik.float()).to(torch.bfloat16)  # the golden's natural basis
             _, pcc_index = comp_pcc(golden_ik, dev_ik)
             if is_mtp_row:
                 mtp_index_pcc = pcc_index
