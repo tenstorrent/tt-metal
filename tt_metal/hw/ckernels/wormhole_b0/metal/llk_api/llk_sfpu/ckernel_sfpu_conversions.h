@@ -24,10 +24,10 @@ sfpi_inline sfpi::vInt _float_to_int32_positive_(sfpi::vFloat in) {
         result = std::numeric_limits<std::int32_t>::max();
         v_if(exp < 31) {
             // extract mantissa
-            sfpi::vInt man = exman(in, sfpi::MantissaMode::ImplicitOne);
+            result = exman(in, sfpi::MantissaMode::ImplicitOne);
             // shift the mantissa by (23-exponent) to the right
             sfpi::vInt shift = exp - 23;  // 23 is number of mantissa bits in float32
-            result = sfpi::shft(man, shift, sfpi::ShiftMode::Logical);
+            result = sfpi::shft(result, shift, sfpi::ShiftMode::Logical);
         }
         v_endif;
     }
