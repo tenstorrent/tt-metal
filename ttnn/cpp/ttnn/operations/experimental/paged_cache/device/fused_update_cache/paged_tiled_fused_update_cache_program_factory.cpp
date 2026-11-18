@@ -34,6 +34,25 @@ bool enable_fp32_dest_acc(
     return fp32_dest_acc_en;
 }
 
+// Entry counts of the tile-sized dataflow buffers that the program allocates in L1. The program build
+// and the L1 check of program_l1_bytes_per_core both take them from here.
+struct TileCounts {
+    uint32_t cache;            // TF_CACHE_TILES, double buffered
+    uint32_t interm;           // TF_UNTILIZED_CACHE and its alias TF_UNTILIZED_CACHE2, double buffered
+    uint32_t untilized_input;  // TF_UNTILIZED_INPUT
+    uint32_t output;           // TF_OUT_TILES
+};
+
+TileCounts tile_counts(uint32_t Wt, uint32_t B, uint32_t rows_per_user) {
+    return {
+        .cache = 2 * Wt,
+        .interm = 2 * Wt,
+        // The multi-row writer holds every untilized input row until the last pass, so its buffer holds all T.
+        .untilized_input = rows_per_user > 1 ? rows_per_user * Wt : 2 * Wt,
+        .output = B * Wt,
+    };
+}
+
 // Spec names for the tiled fused program. The reader / writer / compute sources are each instantiated
 // twice, once per input shard grid, so their kernel names carry the input they serve.
 const KernelSpecName TF_READER1{"reader1"};
@@ -127,6 +146,38 @@ PagedTiledFusedUpdateCacheProgramFactory::compute_tiled_fused_offsets(
         offsets.push_back({cores1.at(i), cores2.at(i), cache_start_id, tile_update_offset_B});
     }
     return offsets;
+}
+
+uint64_t PagedTiledFusedUpdateCacheProgramFactory::program_l1_bytes_per_core(
+    const PagedFusedUpdateCacheParams& operation_attributes, const PagedFusedUpdateCacheInputs& tensor_args) {
+    using namespace CMAKE_UNIQUE_NAMESPACE_TILED;
+
+    const auto& cache_tensor1 = tensor_args.cache_tensor1;
+    const auto& input_tensor1 = tensor_args.input_tensor1;
+    const bool fp32_dest_acc_en =
+        enable_fp32_dest_acc(*input_tensor1.device(), operation_attributes.compute_kernel_config) ||
+        cache_tensor1.dtype() == DataType::FLOAT32;
+    const uint64_t cache_tile_size = tt::tile_size(tt_metal::datatype_to_dataformat_converter(cache_tensor1.dtype()));
+    const uint64_t interm_tile_size =
+        tt::tile_size(fp32_dest_acc_en ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b);
+    const TileCounts num_tiles = tile_counts(
+        cache_tensor1.padded_shape()[-1] / TILE_WIDTH,
+        input_tensor1.padded_shape()[1],
+        operation_attributes.rows_per_user);
+
+    // The input shards, and a sharded index or page table, back their buffers in place, so they take no
+    // program L1. TF_UNTILIZED_CACHE and TF_UNTILIZED_CACHE2 share one region.
+    uint64_t bytes = (cache_tile_size * (num_tiles.cache + num_tiles.output)) +
+                     (interm_tile_size * (num_tiles.interm + num_tiles.untilized_input));
+    const auto& index = tensor_args.update_idxs_tensor;
+    if (index.has_value() && !index->is_sharded()) {
+        bytes += index->buffer()->aligned_page_size();
+    }
+    const auto& page_table = tensor_args.page_table;
+    if (page_table.has_value() && !page_table->is_sharded()) {
+        bytes += page_table->buffer()->aligned_page_size();
+    }
+    return bytes;
 }
 
 ttnn::device_operation::ProgramArtifacts PagedTiledFusedUpdateCacheProgramFactory::create_program_artifacts(
@@ -232,11 +283,7 @@ ttnn::device_operation::ProgramArtifacts PagedTiledFusedUpdateCacheProgramFactor
     const bool multi_row = rows_per_user > 1;
     const uint32_t num_passes = rows_per_user;
 
-    uint32_t num_cache_tiles = 2 * Wt;   // double buffered
-    uint32_t num_interm_tiles = 2 * Wt;  // double buffered
-    uint32_t num_output_tiles = B * Wt;
-    // The writer holds every untilized input row until the last pass, so the multi-row buffer holds all T.
-    const uint32_t num_untilized_input_tiles = multi_row ? rows_per_user * Wt : num_interm_tiles;
+    const TileCounts num_tiles = tile_counts(Wt, B, rows_per_user);
 
     // ---------------- Dataflow buffers ----------------
 
@@ -248,7 +295,7 @@ ttnn::device_operation::ProgramArtifacts PagedTiledFusedUpdateCacheProgramFactor
         DataflowBufferSpec{
             .unique_id = TF_CACHE_TILES,
             .entry_size = cache_single_tile_size,
-            .num_entries = num_cache_tiles,
+            .num_entries = num_tiles.cache,
             .data_format_metadata = cache_dfb_data_format,
         },
         DataflowBufferSpec{
@@ -271,27 +318,27 @@ ttnn::device_operation::ProgramArtifacts PagedTiledFusedUpdateCacheProgramFactor
         DataflowBufferSpec{
             .unique_id = TF_UNTILIZED_CACHE,
             .entry_size = interm_single_tile_size,
-            .num_entries = num_interm_tiles,
+            .num_entries = num_tiles.interm,
             .data_format_metadata = interm_dfb_data_format,
             .advanced_options = {.alias_with = {TF_UNTILIZED_CACHE2}},
         },
         DataflowBufferSpec{
             .unique_id = TF_UNTILIZED_CACHE2,
             .entry_size = interm_single_tile_size,
-            .num_entries = num_interm_tiles,
+            .num_entries = num_tiles.interm,
             .data_format_metadata = interm_dfb_data_format,
             .advanced_options = {.alias_with = {TF_UNTILIZED_CACHE}},
         },
         DataflowBufferSpec{
             .unique_id = TF_UNTILIZED_INPUT,
             .entry_size = interm_single_tile_size,
-            .num_entries = num_untilized_input_tiles,
+            .num_entries = num_tiles.untilized_input,
             .data_format_metadata = interm_dfb_data_format,
         },
         DataflowBufferSpec{
             .unique_id = TF_OUT_TILES,
             .entry_size = cache_single_tile_size,
-            .num_entries = num_output_tiles,
+            .num_entries = num_tiles.output,
             .data_format_metadata = cache_dfb_data_format,
         },
     };
