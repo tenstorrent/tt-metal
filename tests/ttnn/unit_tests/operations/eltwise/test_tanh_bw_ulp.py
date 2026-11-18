@@ -381,7 +381,7 @@ def test_tanh_bw_cache_hit_same_padded_shape_different_logical_shape(device):
     """Same padded shape and layout, different logical shape, must share one cache entry and stay correct.
 
     logical 30x30 and 32x32 both pad to 32x32 under the default tile alignment. The key matches each tensor the way
-    Metal 2.0's match_padded_shape_only relaxation does (whole TensorLayout plus padded shape), so the logical shape
+    Metal 2.0's match_padded_shape_only relaxation does (padded shape plus TensorLayout), so the logical shape
     stays out and the second call reuses the first call's program (#59915).
     """
     device.enable_program_cache()
