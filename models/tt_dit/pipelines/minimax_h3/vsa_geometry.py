@@ -40,6 +40,7 @@ columns are zero, and pad-row outputs are dropped at unpacking.
 from __future__ import annotations
 
 import math
+import os
 from dataclasses import dataclass
 
 import torch
@@ -264,6 +265,25 @@ def build_vsa_geometry(
     video_slot = prefix_per_shard[video_shard] + torch.arange(n_video_tiles) - video_first[video_shard]
     shard = torch.cat([prefix_tile % sp_factor, video_shard])
     slot = torch.cat([prefix_tile // sp_factor, video_slot])
+    # EXPERIMENT (MINIMAX_H3_VSA_INTERLEAVE=G): spread each shard's prefix tiles over its slots in groups of G
+    # blocks (G = one K piece), so every core's contiguous run of Q blocks gets its share of the dense prefix rows.
+    group = int(os.environ.get("MINIMAX_H3_VSA_INTERLEAVE", "0"))
+    if group > 0:
+        n_groups = -(-blocks_per_shard // group)
+        prefix_slot = torch.empty(n_prefix_tiles, dtype=torch.long)
+        video_slot = torch.empty(n_video_tiles, dtype=torch.long)
+        for s in range(sp_factor):
+            p, v = int(prefix_per_shard[s]), int(video_per_shard[s])
+            pg = -(-p // group)
+            chosen = {(j * n_groups) // pg for j in range(pg)} if pg else set()
+            in_prefix = [g in chosen for g in range(n_groups)]
+            pre = [b for b in range(blocks_per_shard) if in_prefix[b // group]][:p]
+            pre_set = set(pre)
+            rest = [b for b in range(blocks_per_shard) if b not in pre_set][:v]
+            assert len(pre) == p and len(rest) == v, (s, p, v, blocks_per_shard)
+            prefix_slot[prefix_tile % sp_factor == s] = torch.tensor(pre, dtype=torch.long)
+            video_slot[video_shard == s] = torch.tensor(rest, dtype=torch.long)
+        slot = torch.cat([prefix_slot, video_slot])
     tile_block = shard * blocks_per_shard + slot
     tile_start = shard * rows_per_shard + slot * VSA_TILE_TOKENS
 
