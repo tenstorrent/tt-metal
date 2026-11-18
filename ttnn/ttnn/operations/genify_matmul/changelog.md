@@ -1143,3 +1143,39 @@ Artifacts: `perf_experiments/<slug>/` and `tests/.../genify_matmul/perf_experime
   - `test_genify_matmul_split_lines.py` (14 cases): the split plan asserted + helpers.TOLERANCES on every epilogue, ragged M / K, folded lead dims, bfp4 LoFi and bfp8 HiFi2; bit-identity vs the fixed injectors; pacing-knob invariance; segments + chunks.
   - `perf/test_genify_matmul_perf_r16.py`: the 15 cases.
   - `perf/test_genify_matmul_perf_r11.py`: `GENIFY_MATMUL_BLOCK` (force an output blocking).
+
+## Refinement 17 — Decode weight streaming (dram_sharded) at the DRAM roofline
+- Date: 2026-11-18
+- What was done:
+  - **Breakdown first** (`/perf-measure`; bench `tests/.../perf/test_genify_matmul_perf_r17.py`: the 10 Qwen3.8 decode cases at their golden config, `GENIFY_MATMUL_CSWEEP` forces cores_per_bank per run; `agent_logs/r17_sweep.sh`, `r17_core_ends.py` per-core reader end times on the grid). The `ABLATE_DEFINES` stubs now reach R4 too (`GM_ABLATE_B` in the B ring, `GM_ABLATE_A_SEND` 32-byte rounds, new `GM_ABLATE_A_ROUND` = no round at all).
+    - qkvg (PERF FOCUS 3) at the Refinement 6 split (C = 2, 7-column slices, 16 workers): compute stubbed 23.9 µs, B + A payload stubbed (compute only) 30.4 µs — compute-bound (1120 tile products per core with 1×1 subblocks).
+    - A cores_per_bank sweep (C = 2 … 13) showed the B stream alone varies ±8 % with C, and fewer slice readers per bank stream fastest (LM head compute-stubbed: C = 3 98 µs, C = 4 106).
+    - The C = 3 cliff (lm_last 101 µs, lm_head 119) was placement: logical row 9 holds banks 0 (col 0) and 4 (col 6); the old "nearest" placement put bank 4's third slice reader at col 5, whose NoC0 responses wrap the row through bank 0's links; row 9's cores ended 86–98 µs vs ~78 elsewhere.
+  - **Ragged bank slices**: `cw = ceil(sw / C)`, C any value whose slices are all non-empty (was: C divides `sw`). The reader fetches only a slice's valid columns per K row (`cols_valid`, also for the last bank's padding); the CB slot keeps the `cw` stride, the stale tail columns are never written out. `worker_cols` clips to the bank boundary.
+  - **Home-row segment placement** (`DS_PLACEMENT = "segment"`, `"near"` = Refinement 6): a bank's slice readers fill its home row from the primary in NoC0's +x direction up to the row's next bank primary; beyond it, the nearest free cores.
+  - **Compute-hiding cores_per_bank rule** (`DS_COMPUTE_SHARE = 0.65`, `DS_COMPUTE_FIXED_CYCLES`, `DS_BANK_BYTES_PER_CYCLE`): the smallest C whose per-core compute (K · M · cw at `tile_k_cycles` for the plan's fidelity and subblock) + fixed cost is ≤ 0.65 × the busiest bank's stream, within the segment cap (5 on this board) when one qualifies; else the cheapest. `plan_dram_sharded` takes `math_fidelity` (the descriptor passes the compute config's; HiFi4 when absent). `DS_COMPUTE_SHARE = None` restores the narrowest-slice rule.
+  - **Reused / Added.** Reused: the R4 descriptor, reader B ring, writer A rounds, compute, CBs, `tile_k_cycles` / `choose_subblock`. Added: topology field `core_n_tiles`, `_ds_segment_cap`, the cost rule in `ds_cores_per_bank`, knobs `DS_PLACEMENT` / `DS_COMPUTE_SHARE` / `DS_COMPUTE_FIXED_CYCLES` / `DS_BANK_BYTES_PER_CYCLE`, R4 ablation defines. No new CB, kernel file or descriptor branch.
+- Device µs, before → after (roofline; × roofline after):
+
+  | Case | Before | After | Roofline | × | C, slice |
+  |---|---|---|---|---|---|
+  | qkvg 1×5120×3584 (PERF FOCUS 3) | 31.9 | 24.2 | 22.4 | 1.08 | 4, 4 |
+  | LM head last chunk 1×5120×12928 | 100.9 | 83.9 | 80.8 | 1.04 | 3, 17 |
+  | GDN in_proj 1×5120×4608 | 33.1 | 30.3 | 28.8 | 1.05 | 3, 6 |
+  | out_proj 1×1536×5120 | 11.3 | 11.6 | 9.6 | 1.21 | 5, 4 |
+  | MLP down 1×4352×5120 | 29.5 | 29.3 | 27.2 | 1.08 | 4, 5 |
+  | gate_up + SwiGLU 1×5120×9216 | 62.4 | 60.1 | 57.6 | 1.04 | 3, 12 |
+  | LM head 1×5120×16384 | 104.1 | 100.7 | 102.4 | 0.98 | 3, 22 |
+  | gate_up batch 32 | 62.0 | 60.3 | 57.6 | 1.05 | 3, 12 |
+  | down batch 32 | 30.1 | 29.6 | 27.2 | 1.09 | 4, 5 |
+  | out_proj batch 16 | 11.3 | 11.2 | 9.6 | 1.17 | 5, 4 |
+
+  - out_proj's floor (measured): compute + A payload stubbed 10.8 µs, B stubbed 10.9, every payload stubbed 9.3 (the 8 handshaked A rounds + launch), 3.5 with no rounds. The B stream, the rounds and compute each take ~10–11 µs alone; the 11.2–11.6 µs run is within ~5 % of the B-stream floor.
+  - `DS_B_AHEAD = 2` (two K-blocks in flight) on the new splits: qkvg 23.6, in_proj 29.9, lm_last 89.3 (+6 %), lm_head 103.8 (+3 %): parked at 1.
+  - Guard (`test_perf_dram_sharded`, before → after): PERF FOCUS 2 29.0 → 29.1, LM head 104.4 → 100.6, gate_up batch 32 62.3 → 61.2, cartesian 384×1536×1024 bf16 HiFi4 137.2 → 63.6 (C = 4 one-column slices; was one core per bank). No other regime touched.
+- Accuracy achieved: PCC 0.999989–0.999996, relative RMS 0.0046–0.0088 on all 10 decode cases (`GENIFY_MATMUL_CHECK`).
+- Golden test progress: `test_golden.py -k dram_sharded`: 310 passed, 150 xfailed (the permanent EXCLUSIONs); `test_op_loose and dram_sharded` 10/10; `test_translated.py` DRAM-sharded 57/57.
+- Issues encountered: the per-bank stream rate depends on where its slice readers sit and how many there are (±8 % compute-stubbed); the rule takes the smallest hiding split rather than modeling it. The root cause of the remaining spread (e.g. bank 4's primary in row 9 finishing last even with "segment") was not established.
+- Tests added:
+  - `test_genify_matmul_dram_sharded.py`: `test_cores_per_bank_split` gains a ragged split (C = 2 over 3-column banks); `test_plan_blocking` pins PERF FOCUS 2 at LoFi (C = 4, 5-column slices, every slice reader in its bank's row) and qkvg (14 columns → 4, 4, 4, 2).
+  - `perf/test_genify_matmul_perf_r17.py`: the 10 decode cases.

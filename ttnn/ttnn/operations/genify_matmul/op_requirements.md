@@ -588,7 +588,7 @@ Every case is now within 1.05–1.2× of its larger measured floor (compute-only
 
 Next I would try a non-rectangular split that fills 110 cores at M = 16 tiles, and an out_proj walk that keeps B resident across M-blocks, delivered in K-blocks during the first one. I did not build them because both are new topologies, beyond the levers named here. Golden interleaved slices are green and the perf guards are within noise.
 
-### [ ] Refinement 17 — Decode weight streaming (dram_sharded) at the DRAM roofline
+### [x] Refinement 17 — Decode weight streaming (dram_sharded) at the DRAM roofline
 
 **Type**: perf
 
@@ -615,6 +615,8 @@ Start with qkvg: N = 3584 is 112 tiles, 14 per bank, so the banks are balanced, 
 - Every decode case is within 1.10× of its `roofline_ns`, or its remaining gap is explained by a measured floor.
 - Golden is green.
 - Nothing else is slower beyond ±3%.
+
+**Outcome**: device µs before → after (roofline): qkvg 31.9 → 24.2 (22.4, 1.08×; stock 29.2), LM head last chunk 100.9 → 83.9 (80.8, 1.04×), in_proj 33.1 → 30.3 (28.8, 1.05×), down 29.5 → 29.3 (27.2, 1.08×), gate_up + SwiGLU 62.4 → 60.1 (57.6, 1.04×), LM head 104.1 → 100.7 (102.4, 0.98×), batch 32 gate_up 62.0 → 60.3, batch 32 down 30.1 → 29.6 (1.09×); out_proj 11.3 → 11.6 / batch 16 11.3 → 11.2 (9.6, 1.17–1.21×) is at its measured floor (compute + A payload stubbed 10.8 µs; every payload stubbed 9.3 µs, 3.5 µs without the 8 A rounds). Levers: ragged bank slices + the smallest compute-hiding cores_per_bank (qkvg was compute-bound at C = 2: 1120 tile products per core), home-row segment placement (the shared row 9 slowed both of its banks ~20 % when a slice reader sat left of the col-6 bank), the LM head's ragged last bank now splits like the others (C = 3, 17-column slices). The B ring at 2 K-blocks in flight measured flat to +6 % (lm_last) and stays parked at 1. Bottleneck now: the bank stream itself (compute stubbed: qkvg 23.1, lm_head ~98). Next lever, not tried: fewer A rounds for short-K shapes (out_proj's 8 handshaked rounds cost ~6 µs alone, overlapped) — e.g. workers reading A's shards directly — because out_proj's B stream (10.8 µs stubbed-compute) would still bind.
 
 ### [ ] Refinement 18 — PDL: sharded 1×1 convs and the bilinear upsample
 
