@@ -198,7 +198,7 @@ class GRPOConfig:
     gradient_accumulation_steps: int
     # Metrics are accumulated every step and emitted every ``logging_steps``
     # steps as an interval-mean (except ``min_completion_len``,
-    # ``max_completion_len`` and ``logprob_mismatch_max``, ``lr`` where minimum,
+    # ``max_completion_len``, ``logprob_mismatch_max`` and ``rollout_staleness_max``, ``lr`` where minimum,
     # maximum, last value is emitted respectively).
     logging_steps: int
     output_dir: str
@@ -449,6 +449,9 @@ _CSV_BASE_COLUMNS = (
     "rollout_wait_s",
     "weight_sync_time_s",
     "rollout_weight_version",
+    "rollouts_dropped",
+    "rollout_staleness_mean",
+    "rollout_staleness_max",
     "logprob_mismatch_mean",
     "logprob_mismatch_max",
     "clip_frac",
@@ -490,6 +493,7 @@ _AGG_POLICY: dict[str, str] = {
     "max_completion_len": "max",
     "lr": "last",
     "logprob_mismatch_max": "max",
+    "rollout_staleness_max": "max",
 }
 
 
@@ -1767,8 +1771,11 @@ class GRPOTrainer:
                             "reward_time_s": 0.0,
                             "rollout_wait_s": 0.0,
                             "weight_sync_time_s": 0.0,
+                            "rollouts_dropped": 0,
                         }
                         self._step_start_time = time.perf_counter()
+                    staleness = self.global_step - scored.rollout.weight_version
+                    self.metrics["rollout_staleness_mean"] = self.metrics["rollout_staleness_max"] = staleness
                     self._optimize(scored.rollout, advantages_np)
                     self._apply_gradients()
                     self.global_step += 1

@@ -839,6 +839,7 @@ _GENERATE_TIME_S = 1.0
 _SAVE_CHECKPOINT_TIME_S = 4.0
 _ON_SAVE_TIME_S = 2.0
 _WEIGHT_SYNC_TIME_S = 8.0
+_ROLLOUTS_DROPPED = 3
 _REWARDS = [0.0, 1.0, 0.0, 1.0]
 _BEHAVIOR_LOGPROB = -0.5
 _BASE_LR = 1.0
@@ -868,7 +869,9 @@ def _run_train_loop_on_host(monkeypatch, num_batches=1):
             run.batches_drawn += 1
             for _ in range(num_batches):
                 run.clock += _GENERATE_TIME_S
-                yield ScoredRolloutBatch(rollout, np.array(_REWARDS, dtype=np.float32), {}, _GENERATE_TIME_S, 0.0)
+                yield ScoredRolloutBatch(
+                    rollout, np.array(_REWARDS, dtype=np.float32), {}, _GENERATE_TIME_S, 0.0, _ROLLOUTS_DROPPED
+                )
 
         def update_weights(self, model, step):
             run.update_weights_steps.append(step)
@@ -979,6 +982,19 @@ def test_train_loop_mini_epoch_metrics(monkeypatch):
     assert "step_1_only" in step_1 and "step_1_only" not in step_2
     assert step_1["logprob_mismatch_mean"] == step_1["logprob_mismatch_max"] == 0.5
     assert step_1["clip_frac"] == 0.5
+    assert (step_1["rollouts_dropped"], step_2["rollouts_dropped"]) == (_ROLLOUTS_DROPPED, 0)
+    assert step_1["rollout_staleness_mean"] == step_1["rollout_staleness_max"] == 0
+    assert step_2["rollout_staleness_mean"] == step_2["rollout_staleness_max"] == 1
+
+
+def test_monitor_emits_the_interval_max_of_rollout_staleness_max():
+    from ttml.trainers.grpo_trainer.grpo_trainer import _aggregate, _MetricStats
+
+    stats = _MetricStats()
+    for value in (0.0, 2.0, 1.0):
+        stats.push(value)
+    assert _aggregate("rollout_staleness_max", stats) == 2.0
+    assert _aggregate("rollout_staleness_mean", stats) == 1.0
 
 
 def test_clipping_stats_counts_tokens_whose_clipped_term_is_the_min():
