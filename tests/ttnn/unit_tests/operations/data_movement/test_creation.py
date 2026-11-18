@@ -612,6 +612,16 @@ def test_empty_like_host():
     assert output_tensor.dtype == ttnn.float32
 
 
+def test_empty_like_host_tensor():
+    input_tensor = ttnn.from_torch(torch.ones((1, 1, 32, 32), dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT)
+    output_tensor = ttnn.empty_like(input_tensor)
+
+    assert ttnn.is_tensor_storage_on_device(output_tensor) is False
+    assert list(output_tensor.shape) == list(input_tensor.shape)
+    assert output_tensor.dtype == input_tensor.dtype
+    assert output_tensor.layout == input_tensor.layout
+
+
 @pytest.mark.parametrize(
     "input_shapes",
     [

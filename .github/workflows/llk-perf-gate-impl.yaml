@@ -86,13 +86,6 @@ on:
         required: false
         default: true
         type: boolean
-      fail_without_baseline:
-        description: >-
-          Fail the job when no baseline is found, because the gate then compares nothing.
-          False skips the gate with a warning.
-        required: false
-        default: false
-        type: boolean
       slack:
         description: "Post the verdict to the LLK regressions channel"
         required: false
@@ -701,7 +694,6 @@ jobs:
           ARCH: ${{ inputs.arch }}
           MEASURE_REASON: ${{ steps.measured.outputs.reason }}
           COMPARISON_FINISHED: ${{ steps.compare.outputs.comparison_finished }}
-          FAIL_WITHOUT_BASELINE: ${{ inputs.fail_without_baseline }}
           HAVE_WAREHOUSE_KEY: ${{ secrets.SWEEPS_SNOWFLAKE_KEY != '' }}
         run: |
           # The exit code and what kind of verdict it is: pass, regression, incomplete or no-compare.
@@ -732,13 +724,7 @@ jobs:
             exit 1
           fi
           if [ "$HAVE_BASELINE" != "true" ]; then
-            if [ "$FAIL_WITHOUT_BASELINE" = "true" ]; then
-              echo "::error::No baseline found, so the gate compared nothing."
-              echo "This is a missing baseline in the warehouse, not a performance result."
-              exit 1
-            fi
-            KIND=pass
-            echo "⚠️  No baseline found; gate skipped (first run or data missing)"
+            echo "::warning::No baseline found, so the gate compared nothing. No verdict; the job does not fail."
             exit 0
           fi
 

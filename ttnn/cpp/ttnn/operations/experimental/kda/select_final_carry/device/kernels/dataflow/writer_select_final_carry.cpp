@@ -19,14 +19,10 @@ constexpr uint32_t mode_cb = get_compile_time_arg_val(1);
 constexpr uint32_t packet_pages = get_compile_time_arg_val(2);
 constexpr uint32_t page_size = get_compile_time_arg_val(3);
 constexpr uint32_t line_targets = get_compile_time_arg_val(4);
-constexpr uint32_t start_hops_forward = get_compile_time_arg_val(5);
-constexpr uint32_t range_hops_forward = get_compile_time_arg_val(6);
-constexpr uint32_t start_hops_backward = get_compile_time_arg_val(7);
-constexpr uint32_t range_hops_backward = get_compile_time_arg_val(8);
 // On a 2D fabric whose SP axis turns, a multicast cannot follow the axis: every send goes to each other rank as a
 // 2D unicast instead (the per-peer connection, chip and mesh follow the connection arguments).
-constexpr bool unicast_peers = get_compile_time_arg_val(9);
-constexpr auto output_args = TensorAccessorArgs<10>();
+constexpr bool unicast_peers = get_compile_time_arg_val(5);
+constexpr auto output_args = TensorAccessorArgs<6>();
 
 // Write the final carry: the rank holding it writes it locally and multicasts it along the sequence-parallel line,
 // and the other ranks wait for its arrival.
@@ -36,10 +32,18 @@ void kernel_main() {
     size_t arg = 0;
     const uint32_t send_begin = get_arg_val<uint32_t>(arg++);
     const uint32_t send_end = get_arg_val<uint32_t>(arg++);
+    // The multicast's first hop and hop count in each direction (zero range: no neighbor that way).
+    const uint32_t start_hops_forward = get_arg_val<uint32_t>(arg++);
+    const uint32_t range_hops_forward = get_arg_val<uint32_t>(arg++);
+    const uint32_t start_hops_backward = get_arg_val<uint32_t>(arg++);
+    const uint32_t range_hops_backward = get_arg_val<uint32_t>(arg++);
     const auto output = TensorAccessor(output_args, output_address);
 
     cb_wait_front(mode_cb, 1);
-    const Mode mode = static_cast<Mode>(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_read_ptr(mode_cb))[0]);
+    const auto* mode_words = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_read_ptr(mode_cb));
+    const Mode mode = static_cast<Mode>(mode_words[mode_word]);
+    const uint32_t base = mode_words[output_base_word];
+    const uint32_t send_stop = mode_words[write_word] ? send_end : send_begin;
     cb_pop_front(mode_cb, 1);
 
     const size_t arrival_semaphore = get_arg_val<uint32_t>(arg++);
@@ -140,15 +144,15 @@ void kernel_main() {
     kda_counter::wait_and_consume(barrier_semaphore, line_targets);
 
     if (mode == broadcast) {
-        for (uint32_t tile = send_begin; tile < send_end;) {
+        for (uint32_t tile = send_begin; tile < send_stop;) {
             cb_wait_front(tiles_cb, packet_pages);
             const uint32_t l1_address = get_read_ptr(tiles_cb);
-            const uint32_t packet_end = tile + packet_pages < send_end ? tile + packet_pages : send_end;
+            const uint32_t packet_end = tile + packet_pages < send_stop ? tile + packet_pages : send_stop;
             // A packet holds one or two pages; scatter writes carry two destination pages in one fabric packet.
             if constexpr (unicast_peers) {
                 for (uint32_t page = tile; page < packet_end; ++page) {
                     const uint32_t source = l1_address + (page - tile) * page_size;
-                    noc_async_write_page(page, output, source);
+                    noc_async_write_page(base + page, output, source);
                     for (uint32_t peer = 0; peer < line_targets; ++peer) {
                         fabric_unicast_noc_unicast_write(
                             &to_peer(peer),
@@ -156,28 +160,29 @@ void kernel_main() {
                             source,
                             page_size,
                             tt::tt_fabric::NocUnicastCommandHeader{
-                                linear::addrgen_detail::get_noc_address(output, page, 0)},
+                                linear::addrgen_detail::get_noc_address(output, base + page, 0)},
                             1);
                         after_send(peer);
                     }
                 }
             } else if (packet_end - tile == 1) {
-                noc_async_write_page(tile, output, l1_address);
+                noc_async_write_page(base + tile, output, l1_address);
                 fabric_multicast_noc_unicast_write_with_state<UnicastWriteUpdateMask::DstAddr>(
                     fabric,
                     write_route,
                     l1_address,
-                    tt::tt_fabric::NocUnicastCommandHeader{linear::addrgen_detail::get_noc_address(output, tile, 0)});
+                    tt::tt_fabric::NocUnicastCommandHeader{
+                        linear::addrgen_detail::get_noc_address(output, base + tile, 0)});
             } else if constexpr (packet_pages > 1) {
-                noc_async_write_page(tile, output, l1_address);
-                noc_async_write_page(tile + 1, output, l1_address + page_size);
+                noc_async_write_page(base + tile, output, l1_address);
+                noc_async_write_page(base + tile + 1, output, l1_address + page_size);
                 fabric_multicast_noc_scatter_write_with_state<UnicastScatterWriteUpdateMask::DstAddrs>(
                     fabric,
                     scatter_route,
                     l1_address,
                     tt::tt_fabric::NocUnicastScatterCommandHeader(
-                        {linear::addrgen_detail::get_noc_address(output, tile, 0),
-                         linear::addrgen_detail::get_noc_address(output, tile + 1, 0)}),
+                        {linear::addrgen_detail::get_noc_address(output, base + tile, 0),
+                         linear::addrgen_detail::get_noc_address(output, base + tile + 1, 0)}),
                     page_size * 2);
             }
             tile = packet_end;
