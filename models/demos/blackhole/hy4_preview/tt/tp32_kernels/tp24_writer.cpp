@@ -94,6 +94,24 @@ void kernel_main() {
         }
     }
 
+#ifdef XPUSH
+    {  // B47b: wait for the 4 group sources (see tp24_reader.cpp); RT 3..: flag core x y, 4 flag addrs, counter addr
+        DeviceZoneScopedN("XW_WAIT");
+        const uint32_t fx = get_arg_val<uint32_t>(3), fy = get_arg_val<uint32_t>(4);
+        volatile tt_l1_ptr uint32_t* cnt = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_arg_val<uint32_t>(9));
+        const uint32_t target = *cnt + XP_NPT;
+        *cnt = target;
+        const uint32_t scr = cbmeta.get_write_ptr();
+        volatile tt_l1_ptr uint32_t* sp = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(scr);
+        for (uint32_t i = 0; i < 4; ++i) {
+            const uint64_t fn = get_noc_addr(fx, fy, get_arg_val<uint32_t>(5 + i));
+            do {
+                noc_async_read(fn, scr, 4);
+                noc_async_read_barrier();
+            } while ((int32_t)(sp[0] - target) < 0);
+        }
+    }
+#endif
     // route, plan
     uint16_t active[128];
     const uint32_t rt_l1 =
@@ -141,22 +159,50 @@ void kernel_main() {
 
     // x slice
     cbx.reserve_back(KB * MT);
-    for (uint32_t m = 0; m < MT; ++m) {
-        for (uint32_t j = 0; j < KB; ++j) {
-            const uint32_t i = KB * me + j;
-            // rows 8m .. 8m + R - 1 of the std tile: face 0 at 32 B per row, face 1 (cols 16..31) at 512 + same
-            noc.async_read(
-                x_acc, cbx, FB, {.page_id = i, .offset_bytes = 32 * 8 * m}, {.offset_bytes = (m * KB + j) * TB});
-            noc.async_read(
-                x_acc,
-                cbx,
-                FB,
-                {.page_id = i, .offset_bytes = 512 + 32 * 8 * m},
-                {.offset_bytes = (m * KB + j) * TB + FB});
+#ifdef XPUSH
+    {  // B47b: x slice of bank me from the push landing: [src chip i][bank][j][f][row-in-src (XP_T) x 32 B], pages of
+       // 4096 B
+        constexpr uint32_t PB = 32 * XP_T;  // bytes of one piece (XP_T rows x 32 B)
+        constexpr uint32_t SRCB = 12288 * XP_T, BLKB = 1536 * XP_T;
+        const auto xl = TensorAccessor(x_args, x_addr, 4096);
+        for (uint32_t m = 0; m < MT; ++m) {
+            for (uint32_t i = (8 * m) / XP_T; i < (8 * m + R) / XP_T; ++i) {
+                for (uint32_t j = 0; j < KB; ++j) {
+                    for (uint32_t f = 0; f < 2; ++f) {
+                        const uint32_t off = i * SRCB + me * BLKB + (j * 2 + f) * PB;
+                        noc.async_read(
+                            xl,
+                            cbx,
+                            PB,
+                            {.page_id = off >> 12, .offset_bytes = off & 4095},
+                            {.offset_bytes = (m * KB + j) * TB + f * FB + (i * XP_T - 8 * m) * 32});
+                    }
+                }
+            }
         }
+        noc.async_read_barrier();
+        cbx.push_back(KB * MT);
     }
-    noc.async_read_barrier();
-    cbx.push_back(KB * MT);
+    if (false)
+#endif
+    {
+        for (uint32_t m = 0; m < MT; ++m) {
+            for (uint32_t j = 0; j < KB; ++j) {
+                const uint32_t i = KB * me + j;
+                // rows 8m .. 8m + R - 1 of the std tile: face 0 at 32 B per row, face 1 (cols 16..31) at 512 + same
+                noc.async_read(
+                    x_acc, cbx, FB, {.page_id = i, .offset_bytes = 32 * 8 * m}, {.offset_bytes = (m * KB + j) * TB});
+                noc.async_read(
+                    x_acc,
+                    cbx,
+                    FB,
+                    {.page_id = i, .offset_bytes = 512 + 32 * 8 * m},
+                    {.offset_bytes = (m * KB + j) * TB + FB});
+            }
+        }
+        noc.async_read_barrier();
+        cbx.push_back(KB * MT);
+    }
 
     // per group of 8 experts: partials -> reducers (one write barrier, then the semaphores); the core that reduces
     // expert j = g (a = me + 8 g) then waits for its 8 partials, hands them to compute (cb_pr, 32 tiles per expert,

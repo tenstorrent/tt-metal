@@ -35,5 +35,15 @@ void kernel_main() {
         }
     }
     noc_async_write_barrier();
+#ifdef QF_NC
+    // B47b (HY4_B47B_QFOLD): tell the QF_NC push comm cores (phys x,y at runtime args 3..) that this core's q rows are
+    // in DRAM
+    for (uint32_t i = 0; i < QF_NC; ++i) {
+        const uint64_t sem =
+            get_noc_addr(get_arg_val<uint32_t>(3 + 2 * i), get_arg_val<uint32_t>(4 + 2 * i), get_semaphore(0));
+        noc_semaphore_inc(sem, 1);
+    }
+    noc_async_atomic_barrier();
+#endif
     o.pop_front(2);
 }

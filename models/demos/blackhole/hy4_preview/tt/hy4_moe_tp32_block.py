@@ -21,6 +21,10 @@ RED_AG = os.environ.get("HY4_TP32_RED", "") == "ag"
 ROUTE_LOCAL = (
     os.environ.get("HY4_TP32_ROUTE", "") == "local"
 )  # router on the gathered x (every chip routes all Tt tokens, writes the route words itself): no pack, no route all-gather
+_XP = {}
+XPUSH = (
+    os.environ.get("HY4_B47B_XPUSH", "0") == "1"
+)  # B47b: x + route push instead of the row all-gathers (T in 2, 4, ROUTE_ROW path)
 ROUTE16 = (
     os.environ.get("HY4_B30_ROUTE16", "0") == "1"
 )  # B30: ROUTE_LOCAL at Tt <= 16 (T=16 skinny router: 16-row tiles, two tokens per merge core)
@@ -132,6 +136,7 @@ class Hy4MoeTp32Block:
         """router + gathers + TP32 kernel + shared-expert fold -> the un-reduced [1,1,4T,HID] bf16 TILE partial of this chip (rows = the Tt tokens of the 4 mesh rows in row order)."""
         T, Tt = self.T, self.Tt
         route_all = None
+        xp_used = None
         if (
             ROUTE_LOCAL
             and forced_routing is None
@@ -153,11 +158,29 @@ class Hy4MoeTp32Block:
                 w, idx = forced_routing if forced_routing is not None else self.gate.forward(tt_x_gate)
                 self.last_routing = (w, idx)
                 route = self._pack_route(w, idx)
-            route_all = self._ag_rows(route, 3)  # [1,1,1,16 Tt] int32 RM, rows in mesh-row order
-            ttnn.deallocate(route)
-            x_all = ttnn.to_layout(
-                ttnn.reshape(self._ag_rows(tt_x_tokens, 0), [1, 1, Tt, HID]), ttnn.TILE_LAYOUT
-            )  # tokens [T,1,1,HID] RM -> [Tt,1,1,HID] -> [1,1,Tt,HID]
+            if (
+                XPUSH
+                and route is not None
+                and self.shared_fuse is None
+                and tt_x_tokens is not None
+                and self.T in (2, 4)
+                and tuple(self.md.shape)[0] == 4
+            ):  # B47b: push the x rows + route words over the 4-row group, the tp24 kernels wait for the flags (no row all-gathers, no tilize)
+                key = (id(self.md), self.T)
+                if key not in _XP:
+                    from models.demos.blackhole.hy4_preview.tt import hy4_b47b_xpush
+
+                    _XP[key] = hy4_b47b_xpush.XPush(self.md, self.T)
+                xp = _XP[key]
+                xp(tt_x_tokens, route)
+                ttnn.deallocate(route)
+                xp_used = xp
+            else:
+                route_all = self._ag_rows(route, 3)  # [1,1,1,16 Tt] int32 RM, rows in mesh-row order
+                ttnn.deallocate(route)
+                x_all = ttnn.to_layout(
+                    ttnn.reshape(self._ag_rows(tt_x_tokens, 0), [1, 1, Tt, HID]), ttnn.TILE_LAYOUT
+                )  # tokens [T,1,1,HID] RM -> [Tt,1,1,HID] -> [1,1,Tt,HID]
         if self.shared_fuse is not None and fold is None:
             part = self.tpe(
                 x_all, route_all, Tt, shared=self.shared_fuse
@@ -165,9 +188,12 @@ class Hy4MoeTp32Block:
             ttnn.deallocate(x_all)
             ttnn.deallocate(route_all)
             return part
-        part = self.tpe(x_all, route_all, Tt)  # [1,1,Tt,HID] bf16 TILE partial
-        ttnn.deallocate(x_all)
-        ttnn.deallocate(route_all)
+        if xp_used is not None:
+            part = self.tpe(None, None, Tt, xp=xp_used)
+        else:
+            part = self.tpe(x_all, route_all, Tt)  # [1,1,Tt,HID] bf16 TILE partial
+            ttnn.deallocate(x_all)
+            ttnn.deallocate(route_all)
         if (
             fold is not None and not defer_fold
         ):  # defer_fold (HY4_BOUNDARY_FUSE=fold): the caller hands `fold` to the rows-reduce program

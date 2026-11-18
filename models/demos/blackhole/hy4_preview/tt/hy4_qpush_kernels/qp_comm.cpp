@@ -49,6 +49,15 @@ void kernel_main() {
     }
     const uint32_t pkt = get_write_ptr(CB_PKT);
     uint32_t k = 0;
+#ifdef QF_WAIT
+    {  // B47b (HY4_B47B_QFOLD): this program is a part of the fused q-prep program: wait until all QF_WAIT writer cores
+       // have finished their q rows in DRAM (each increments local semaphore 0 after its write barrier)
+        DeviceZoneScopedN("QF_WAIT");
+        volatile tt_l1_ptr uint32_t* ssem = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(0));
+        noc_semaphore_wait_min(ssem, QF_WAIT);
+        noc_semaphore_set(ssem, 0);
+    }
+#endif
     {
         DeviceZoneScopedN("QP_READ");
         for (uint32_t p = LANE; p < NP; p += LANES) {
@@ -63,6 +72,41 @@ void kernel_main() {
     uint32_t n = 0;
     {
         DeviceZoneScopedN("QP_SEND");
+#ifdef QP_MC
+        // B47b (HY4_B47B_PUSH_MC=1): ONE chip-multicast write packet per q packet (start distance 1, range ND) instead
+        // of ND unicast packets, then ONE multicast atomic increment (value = packets of this lane) of the per-source
+        // flag after the last write. The fabric receivers flush their pending writes before an atomic inc (the order
+        // write -> inc is the one the stock all_gather_async relies on).
+        k = 0;
+        for (uint32_t p = LANE; p < NP; p += LANES) {
+            const uint64_t dst = la.get_noc_addr(c * NP + p);
+            volatile PACKET_HEADER_TYPE* h = hdr[n % NH];
+            fabric_multicast_noc_unicast_write(
+                sender,
+                h,
+                pkt + k * PKT,
+                (RP * p + RP <= NR) ? PKT : (NR - RP * p) * ROWB,
+                tt::tt_fabric::NocUnicastCommandHeader{dst},
+                static_cast<uint8_t>(1),
+                static_cast<uint8_t>(ND));
+            ++n;
+            if ((n % NH) == 0) {
+                noc_async_writes_flushed();
+            }
+            ++k;
+        }
+        {
+            noc_async_writes_flushed();
+            volatile PACKET_HEADER_TYPE* h = hdr[n % NH];
+            fabric_multicast_noc_unicast_atomic_inc(
+                sender,
+                h,
+                tt::tt_fabric::NocUnicastAtomicIncCommandHeader{flag_noc, static_cast<uint16_t>(k), true},
+                static_cast<uint8_t>(1),
+                static_cast<uint8_t>(ND));
+            ++n;
+        }
+#else
         for (uint32_t di = 0; di < ND; ++di) {
             const uint32_t d = ND - di;  // farthest first
             k = 0;
@@ -83,6 +127,7 @@ void kernel_main() {
                 ++k;
             }
         }
+#endif
         noc_async_writes_flushed();
     }
     if constexpr (DIR == 0) {  // own slot: local copy + flag increments (the readers of this chip treat all 8 slots

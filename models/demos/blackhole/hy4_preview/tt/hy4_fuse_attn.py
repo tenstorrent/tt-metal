@@ -124,7 +124,7 @@ def fused_back(o_lat, w_uv_t, g, gfold, out=None):
     return out
 
 
-def fused_q(q, w_uk, cos, sin, tm, out=None, kv=None):
+def fused_q(q, w_uk, cos, sin, tm, out=None, kv=None, push=None):
     """q [1,1,1,H*256] TILE bf16 (q_b output, head h = cols 256h.. : 192 nope | 64 pe), w_uk [1,H,192,512] TILE bf16, cos/sin [1,1,1,64] TILE, tm [1,1,32,32] TILE rotary trans mat
     -> RM bf16 [1,H,1,576] = per head [q_nope @ w_uk | rope(q_pe)] (the layout the q all-gather / sparse split kernel read): replaces nlp_create_q_heads_split + matmul + rope + concat + to_layout.
     """
@@ -158,9 +158,10 @@ def fused_q(q, w_uk, cos, sin, tm, out=None, kv=None):
 
     cbs = [cb(CX, 6), cb(CW, 12), cb(CC, 2), cb(CS, 2), cb(CT, 1), cb(CO, 2), cb(CSC, 1)]
     rt = ttnn.RuntimeArgs()
+    comm_xy = [v for xy in push.comm_phys() for v in xy] if push is not None else []
     for i in range(n_cores):
         cx, cy = i % grid.x, i // grid.x
-        rt[cx][cy] = [0, i // 8, i % 8] if i < n_abs else [1, i - n_abs, 0]
+        rt[cx][cy] = ([0, i // 8, i % 8] if i < n_abs else [1, i - n_abs, 0]) + comm_xy
     rt_c = ttnn.RuntimeArgs()
     reader = ttnn.KernelDescriptor(
         kernel_source=f"{KDIR}/qp_reader.cpp",
@@ -180,6 +181,10 @@ def fused_q(q, w_uk, cos, sin, tm, out=None, kv=None):
         common_runtime_args=[out.buffer_address()],
         config=ttnn.WriterConfigDescriptor(),
     )
+    if (
+        push is not None
+    ):  # B47b (HY4_B47B_QFOLD): the writers signal the push comm cores (QF_NC of them) when their q rows are in DRAM
+        writer.defines = [("QF_NC", str(len(comm_xy) // 2))]
     cc = ttnn.ComputeConfigDescriptor(
         math_fidelity=ttnn.MathFidelity.HiFi4, math_approx_mode=False, fp32_dest_acc_en=True
     )
@@ -212,10 +217,14 @@ def fused_q(q, w_uk, cos, sin, tm, out=None, kv=None):
         cbs += kc
         extra_t = [lat, k_pe, ids, pool]
         kvh = tuple(tuple(_acc(t)) for t in extra_t)
+    tag = (H, S, kvh, tuple(tuple(_acc(t)) for t in (q, w_uk, cos, sin, tm, out)))
+    if push is not None:
+        push.fold_nsig = n_cores
+        mpd, tl = push.fold_mesh(kernels, [], cbs, out, [q, w_uk, cos, sin, tm, out] + extra_t, tag)
+        ttnn.generic_op(tl, mpd)
+        return out
     prog = ttnn.ProgramDescriptor(kernels=kernels, semaphores=[], cbs=cbs)
-    prog.custom_program_hash = (0x3B2 << 40) | (
-        hash((H, S, kvh, tuple(tuple(_acc(t)) for t in (q, w_uk, cos, sin, tm, out)))) & ((1 << 40) - 1)
-    )
+    prog.custom_program_hash = (0x3B2 << 40) | (hash(tag) & ((1 << 40) - 1))
     ttnn.generic_op([q, w_uk, cos, sin, tm, out] + extra_t, prog)
     return out
 

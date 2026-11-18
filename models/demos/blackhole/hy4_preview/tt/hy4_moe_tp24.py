@@ -93,7 +93,7 @@ class Tp24Experts(Tp32Experts):
             self._shc = out
         return self._shc
 
-    def __call__(self, h, route, T, out=None, shared=None):
+    def __call__(self, h, route, T, out=None, shared=None, xp=None):
         """shared: a hy4_skinny.SkinnyShared (weights with 1/4-scaled down projection) run by the SAME program on 8 other cores on h (all T tokens); its 24 output tiles per bank land in the bank leader's L1 and are summed into `out` with the routed partial (B19, HY4_MOE_FUSE=1)."""
         assert 1 <= T <= 16
         md = self.md
@@ -149,10 +149,13 @@ class Tp24Experts(Tp32Experts):
             ),
         ]
         rt_r, rt_w = ttnn.RuntimeArgs(), ttnn.RuntimeArgs()
+        if xp is not None:  # B47b XPUSH: h / route are the push landing tensors; the kernels wait for the flags
+            assert xp.Tt == T and shared is None
+            h, route = xp.xland, xp.rland
         for i, cc in enumerate(cores):
             b, g = divmod(i, 3)
-            rt_r[cc.x][cc.y] = [b, self.vcs[b], g]
-            rt_w[cc.x][cc.y] = [b, KB * b, g]
+            rt_r[cc.x][cc.y] = [b, self.vcs[b], g] + (xp.consumer_args(0) if xp is not None else [])
+            rt_w[cc.x][cc.y] = [b, KB * b, g] + (xp.consumer_args(1) if xp is not None else [])
         reader = ttnn.KernelDescriptor(
             kernel_source=f"{KDIR}/tp24_reader.cpp",
             source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
@@ -197,6 +200,9 @@ class Tp24Experts(Tp32Experts):
             common_runtime_args=common_w,
             config=ttnn.WriterConfigDescriptor(),
         )
+        if xp is not None:
+            reader.defines = xp.consumer_defines()
+            writer.defines = xp.consumer_defines()
         L = self.limit
 
         def compute(crs, leader):
@@ -251,7 +257,7 @@ class Tp24Experts(Tp32Experts):
             kernels, sems, cbs = kernels + k2, sems + s2, cbs + c2
         prog = ttnn.ProgramDescriptor(kernels=kernels, semaphores=sems, cbs=cbs)
         prog.custom_program_hash = _hash(
-            0x7C24,
+            0x7C24 + (0x100 if xp is not None else 0),
             shp,
             T,
             R,
