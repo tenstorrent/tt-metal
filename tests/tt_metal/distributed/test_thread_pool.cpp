@@ -145,6 +145,7 @@ struct CpuPlacement {
     // CPUs of a pool with one worker per entry of worker_nodes.
     std::vector<uint32_t> place(const std::vector<int>& worker_nodes) {
         std::vector<uint32_t> pool;
+        pool.reserve(worker_nodes.size());
         for (const int node : worker_nodes) {
             pool.push_back(thread_binding::pick_cpu(node_cpus[node], pool, workers_per_cpu, next[node]));
         }

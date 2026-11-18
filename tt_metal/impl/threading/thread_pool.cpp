@@ -212,7 +212,7 @@ uint32_t get_cpu_core_for_physical_device(
     return cpu;
 }
 
-// CPUs returned by get_cpu_core_for_physical_device for one pool, released on destruction.
+// RAII reservation of a pool's CPUs.
 struct CpuReservation {
     std::vector<uint32_t> cpus;
 
