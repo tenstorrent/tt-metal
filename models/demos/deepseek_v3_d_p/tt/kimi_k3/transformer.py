@@ -28,11 +28,9 @@ from models.common.lightweightmodule import LightweightModule
 from models.demos.deepseek_v3_d_p.tt.attn_res.attn_res import TtAttnRes
 from models.demos.deepseek_v3_d_p.tt.attn_res.attn_res_stream import BLOCK_SIZE, TtAttnResWalk
 from models.demos.deepseek_v3_d_p.tt.attn_res.weights import CHECKPOINT_PREFIX, load_attn_res_weights
-from models.demos.deepseek_v3_d_p.tt.kda.kda import KdaState
-from models.demos.deepseek_v3_d_p.tt.kda.state_adapter import KdaStates, allocate_native_state
+from models.demos.deepseek_v3_d_p.tt.kda.state_adapter import KdaStates
 from models.demos.deepseek_v3_d_p.tt.kimi_k3.attention import K3AttnContext, build_attention, build_kda_scalars
 from models.demos.deepseek_v3_d_p.tt.kimi_k3.block import TtKimiK3Block
-from models.demos.deepseek_v3_d_p.tt.kimi_k3.kda_geometry import kimi_k3_kda_geometry
 from models.demos.deepseek_v3_d_p.tt.kimi_k3.layer_schedule import KimiK3LayerSchedule
 from models.demos.deepseek_v3_d_p.tt.kimi_k3.residual import TtAttnResResidual
 from models.demos.deepseek_v3_d_p.tt.kimi_k3.weights import mark_layer_cached
@@ -239,14 +237,9 @@ class TtKimiK3Transformer(LightweightModule):
             )
 
         # The KDA carries live in the engine-owned `KdaStates` slabs (one per rank, every slot and
-        # layer), handed over by the runtime at `compile()`. The model owns only one scratch carry,
-        # the state every KDA layer runs on: allocated once so a capture can bake in its address,
-        # from the same geometry the slabs use, and before the layers so each gets it at construction.
+        # layer), handed over by the runtime at `compile()`; the KDA layers read and write them in place.
         self.kda_states: KdaStates | None = None
-        self.kda_scratch: KdaState | None = None
-        if self.schedule.rank_kda_layer_ids():
-            geometry = kimi_k3_kda_geometry(mesh_device.shape, sp_axis, tp_axis)
-            self.kda_scratch = allocate_native_state(mesh_device, geometry)
+        self.has_kda_layers = bool(self.schedule.rank_kda_layer_ids())
 
         self.layers = []
         for local_idx in range(num_layers):
@@ -261,7 +254,6 @@ class TtKimiK3Transformer(LightweightModule):
                 layer_idx=layer_idx,
                 schedule=self.schedule,
                 seq_len=seq_len,
-                kda_scratch=self.kda_scratch,
                 sp_axis=sp_axis,
                 tp_axis=tp_axis,
                 num_links=num_links,
@@ -516,7 +508,7 @@ class TtKimiK3Transformer(LightweightModule):
         # below. A rank without KDA layers builds nothing.
         kda_scalars, owned_scalars = (
             build_kda_scalars(self.mesh_device, metadata, cache_user_id, actual_start, actual_end)
-            if self.kda_scratch is not None
+            if self.has_kda_layers
             else (None, ())
         )
         try:
@@ -650,7 +642,7 @@ class TtKimiK3Transformer(LightweightModule):
                 start = None if traced else chunk.actual_start
                 end = None if traced else chunk.actual_end
                 kda_scalars = None
-                if self.kda_scratch is not None:
+                if self.has_kda_layers:
                     kda_scalars, owned_k = build_kda_scalars(
                         self.mesh_device, metadata[k] if traced else None, slot, start, end
                     )

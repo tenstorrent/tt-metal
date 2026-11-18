@@ -100,7 +100,7 @@ class TtKimiK3Runtime(TtPrefillRuntime):
         argument.
         """
         slabs = getattr(kv_caches, "kda_states", None)
-        has_kda_layers = self.model.kda_scratch is not None
+        has_kda_layers = self.model.has_kda_layers
         if (slabs is not None) != has_kda_layers:
             raise RuntimeError(
                 "Kimi-K3 KDA state is split: the engine allocated "

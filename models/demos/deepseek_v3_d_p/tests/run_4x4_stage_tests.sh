@@ -79,4 +79,6 @@ else
     -k "4x4${user_k:+ and ($user_k)}"
 fi
 
-exec python3 -m pytest "$@"  # -m puts the repo root (cwd) on sys.path, as CI sets no PYTHONPATH
+# python3 -m puts the cwd (TT_METAL_HOME) on sys.path; bare pytest under --import-mode=importlib does not, and the
+# root conftest.py imports from models.
+exec python3 -m pytest "$@"
