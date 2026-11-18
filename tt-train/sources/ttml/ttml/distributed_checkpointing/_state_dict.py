@@ -78,8 +78,8 @@ class LiveTensor:
 def label_of(value) -> Label:
     """The topology label of a ttnn tensor as a ``Label``, shard dims normalized against the tensor's rank."""
     topology = value.tensor_topology()
-    # TODO: #62347 - map a partial-sum placement to a "partial" Placement once tensor placements carry one; until then
-    # every placement that is not a shard is read as a replicate.
+    # TODO(awliu-TT): #62347 - map a partial-sum placement to a "partial" Placement once tensor placements carry one;
+    # until then every placement that is not a shard is read as a replicate.
     placements = [
         Placement.shard(p.dim) if isinstance(p, ttnn.PlacementShard) else Placement.replicate()
         for p in topology.placements()
@@ -353,7 +353,7 @@ def check_undeclared_fusion(live: LiveTensor, entry: Entry) -> None:
     (the same TP size, both undeclared), scrambled otherwise. So for a weight whose name suggests a fused projection,
     the TP split left undescribed must be the same at save (recorded in the index) and at load. A declared side and a
     TP split of one leave nothing undescribed; FSDP's split never counts, since it splits rows already in canonical
-    order. Python layers declare ``fused_segments``; C++-bound modules cannot yet (#65584)."""
+    order. Python layers declare ``fused_segments``; C++-bound modules cannot yet."""
     if not live.fused_name:
         return
     before = _undescribed_split(entry.transform, entry.tp_split)
