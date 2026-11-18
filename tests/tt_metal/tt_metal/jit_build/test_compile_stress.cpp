@@ -24,17 +24,9 @@
 // That path feeds the compile_stress_ci.py per-arch timing goldens; keep it as is.
 //
 // Quasar rejects the legacy kernel API, so it builds each program from a Metal 2.0
-// ProgramSpec instead: one compute KernelSpec (eltwise_copy_2_0.cpp) per core,
-// with {id, seed} as compile-time varargs, fed and drained through DFBs by one
-// shared reader/writer KernelSpec pair. Programs are built with
-// BuildProgramFromSpec (no eager compile) so the timed section still compiles
-// them in parallel. The reader/writer add two data-movement builds that WH/BH
-// lack; the warmup program uses the same helper, so they are expected to be
-// cached before the timed section.
-//
-// Mock Quasar is rejected up front: JIT compile is a no-op on a mock Quasar
-// device (Program::compile returns early), so the timing would be meaningless.
-// Run Quasar with TT_METAL_COMPILE_STRESS_MOCK=0 on a simulator or device.
+// ProgramSpec instead (see create_quasar_compile_stress_program). Mock and emulated
+// Quasar are rejected: JIT compile is a no-op there. Run Quasar with
+// TT_METAL_COMPILE_STRESS_MOCK=0 on a simulator or device.
 //
 // Configuration (env vars):
 //   TT_METAL_COMPILE_STRESS_NUM_KERNELS     total kernels                 (default 1000)
@@ -195,7 +187,9 @@ Program create_compute_program(
 // compute KernelSpec, with {id, seed} as compile-time varargs so every kernel hashes
 // uniquely. Gen2 DFBs need one producer and one consumer per node, so a shared
 // reader/writer pair feeds and drains the DFBs (layout from llk/single_node_dfb_program.hpp).
-// Built without compiling; the caller compiles.
+// The reader/writer add two data-movement builds that WH/BH lack; the warmup program uses
+// this helper too, so they should be cached before the timed section. Built with
+// BuildProgramFromSpec (no eager compile), so the timed section still compiles in parallel.
 Program create_quasar_compile_stress_program(
     distributed::MeshDevice& mesh_device,
     const std::string& program_name,
@@ -207,26 +201,22 @@ Program create_quasar_compile_stress_program(
     const KernelSpecName reader{"stress_reader"};
     const KernelSpecName writer{"stress_writer"};
     const std::string dm_kernel_dir = "tests/tt_metal/tt_metal/test_kernels/dataflow/unit_tests/dram/";
+    const std::string compute_kernel = "tests/tt_metal/tt_metal/test_kernels/compute/eltwise_copy_2_0.cpp";
     constexpr tt::DataFormat data_format = tt::DataFormat::Float16_b;
     const uint32_t entry_size = tt::tile_size(data_format);
 
     ProgramSpec spec{.name = program_name};
-    spec.dataflow_buffers.push_back({
-        .unique_id = in_dfb,
-        .entry_size = entry_size,
-        .num_entries = 2,
-        .data_format_metadata = data_format,
-    });
-    spec.dataflow_buffers.push_back({
-        .unique_id = out_dfb,
-        .entry_size = entry_size,
-        .num_entries = 2,
-        .data_format_metadata = data_format,
-    });
+    for (const DFBSpecName& dfb : {in_dfb, out_dfb}) {
+        spec.dataflow_buffers.push_back({
+            .unique_id = dfb,
+            .entry_size = entry_size,
+            .num_entries = 2,
+            .data_format_metadata = data_format,
+        });
+    }
     spec.kernels.push_back({
         .unique_id = reader,
         .source = dm_kernel_dir + "direct_reader_unary_2_0.cpp",
-        .num_threads = 1,
         .dfb_bindings = {ProducerOf(in_dfb, "out")},
         .runtime_arg_schema = {.runtime_arg_names = {"src_addr", "src_bank_id", "num_tiles", "dram_page_stride"}},
         .hw_config = DataMovementHardwareConfig{},
@@ -234,7 +224,6 @@ Program create_quasar_compile_stress_program(
     spec.kernels.push_back({
         .unique_id = writer,
         .source = dm_kernel_dir + "direct_writer_unary_2_0.cpp",
-        .num_threads = 1,
         .dfb_bindings = {ConsumerOf(out_dfb, "in")},
         .runtime_arg_schema = {.runtime_arg_names = {"dst_addr", "dst_bank_id", "num_tiles", "dram_page_stride"}},
         .hw_config = DataMovementHardwareConfig{},
@@ -247,8 +236,7 @@ Program create_quasar_compile_stress_program(
             const KernelSpecName compute{fmt::format("stress_compute_{}", k)};
             KernelSpec compute_spec{
                 .unique_id = compute,
-                .source = std::string("tests/tt_metal/tt_metal/test_kernels/compute/eltwise_copy_2_0.cpp"),
-                .num_threads = 1,
+                .source = compute_kernel,
                 .dfb_bindings = {ConsumerOf(in_dfb, "in"), ProducerOf(out_dfb, "out")},
                 .compile_time_args = {{"per_core_tile_cnt", 1u}},
                 .hw_config = ComputeHardwareConfig{},
