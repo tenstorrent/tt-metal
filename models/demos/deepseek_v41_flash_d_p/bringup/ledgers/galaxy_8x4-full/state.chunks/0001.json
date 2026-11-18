@@ -5479,7 +5479,7 @@
   },
   "attempt": 1,
   "attempts": 1,
-  "duration_s": 2.9,
+  "duration_s": 2.2,
   "full_pending": true,
   "history": [
    {
@@ -5510,9 +5510,23 @@
     "s": 2.9,
     "status": "PASS",
     "t": "2026-11-18T15:09:35"
+   },
+   {
+    "reused": [
+     "P.67#test_ladder",
+     "P.67#test_profile",
+     "P.67#test_decoder_skip_decode",
+     "P.67#test_determinism",
+     "P.67#test_contract",
+     "P.67#test_adapter_acks",
+     "P.67#test_determinism.7.0"
+    ],
+    "s": 2.2,
+    "status": "PASS",
+    "t": "2026-11-18T15:10:29"
    }
   ],
-  "last_run": "2026-11-18T15:09:33",
+  "last_run": "2026-11-18T15:10:27",
   "log": "/scratch/dnijemcevic/bringup/deepseek_v41_flash_d_p/runs/galaxy_8x4-full/run1/logs/P.67.log",
   "rc": 0,
   "reason": [],
@@ -5537,7 +5551,7 @@
     "P.67#test_profile": "2cf7059c9166729a"
    }
   },
-  "started": "2026-11-18T15:09:30",
+  "started": "2026-11-18T15:10:25",
   "status": "PASS",
   "units": {
    "P.67#test_adapter_acks": "PASS",
