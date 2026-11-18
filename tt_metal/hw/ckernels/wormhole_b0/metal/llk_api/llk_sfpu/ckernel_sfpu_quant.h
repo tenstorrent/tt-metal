@@ -378,18 +378,42 @@ inline void calculate_dequant_int32(const uint dst_index_in0, const uint dst_ind
     }
 }
 
-// SFPSWAP clamp + SFPIADD convert for both rows (see RNE_MAGIC_FP32); T_LREG holds -bits(t).
-// The hardware stalls one cycle after each SFPSWAP, so interleaving the rows saves nothing here
-// but keeps each SFPIADD two slots after the SFPSWAP that last wrote its row.
-template <std::uint32_t T_LREG>
+// SFPSWAP clamp + SFPIADD convert for both rows (see RNE_MAGIC_FP32); T_LREG holds -bits(t) (+128 for Int8 output).
+// The hardware stalls one cycle after each SFPSWAP, so interleaving the rows saves nothing on the SFPSWAPs.
+//
+// For the 8-bit outputs HI - LO = 255, so the upper clamp is done on the integer instead: after the
+// lower SFPSWAP, m >= t + LO > 0 and bits(m) grows with m, so n - LO = bits(m) - bits(t) - LO is a
+// non-negative integer below 2^31 (also for +inf / +NaN m), and SFP_STOCH_RND INT32_TO_UINT8 (shift 0,
+// exact) saturates it to 255 exactly where min(m, t + HI) would have. One 1-cycle round replaces a
+// 2-cycle SFPSWAP. The Int32 output needs n in [-128, 127] 2's complement, which this can't produce.
+template <DataFormat OUTPUT_FORMAT, std::uint32_t T_LREG>
 inline void _quant_clamp_convert_row_pair_() {
     TTI_SFPSWAP(0, p_sfpu::LREG12, QUANT_ROW0_A, sfpi::SFPSWAP_MOD1_VEC_MAX_MIN);  // m = max(m, t + LO)
     TTI_SFPSWAP(0, p_sfpu::LREG12, QUANT_ROW1_A, sfpi::SFPSWAP_MOD1_VEC_MAX_MIN);
-    TTI_SFPSWAP(0, p_sfpu::LREG13, QUANT_ROW0_A, sfpi::SFPSWAP_MOD1_VEC_MIN_MAX);  // m = min(m, t + HI)
-    TTI_SFPSWAP(0, p_sfpu::LREG13, QUANT_ROW1_A, sfpi::SFPSWAP_MOD1_VEC_MIN_MAX);
-    // n = clamp(RNE(v) + zp) (+128)
+    if constexpr (OUTPUT_FORMAT == DataFormat::Int32) {
+        TTI_SFPSWAP(0, p_sfpu::LREG13, QUANT_ROW0_A, sfpi::SFPSWAP_MOD1_VEC_MIN_MAX);  // m = min(m, t + HI)
+        TTI_SFPSWAP(0, p_sfpu::LREG13, QUANT_ROW1_A, sfpi::SFPSWAP_MOD1_VEC_MIN_MAX);
+    }
+    // n = clamp(RNE(v) + zp) (+128); unclamped above for the 8-bit outputs
     TTI_SFPIADD(0, T_LREG, QUANT_ROW0_A, sfpi::SFPIADD_MOD1_ARG_LREG_DST | sfpi::SFPIADD_MOD1_CC_NONE);
     TTI_SFPIADD(0, T_LREG, QUANT_ROW1_A, sfpi::SFPIADD_MOD1_ARG_LREG_DST | sfpi::SFPIADD_MOD1_CC_NONE);
+    if constexpr (OUTPUT_FORMAT != DataFormat::Int32) {
+        // n - LO = min(n - LO, 255)
+        TTI_SFP_STOCH_RND(
+            sfpi::SFPSTOCHRND_RND_NEAREST,
+            0 /*shift*/,
+            p_sfpu::LCONST_0,
+            QUANT_ROW0_A,
+            QUANT_ROW0_A,
+            sfpi::SFPSTOCHRND_MOD1_IMM8 | sfpi::SFPSTOCHRND_MOD1_INT32_TO_UINT8);
+        TTI_SFP_STOCH_RND(
+            sfpi::SFPSTOCHRND_RND_NEAREST,
+            0 /*shift*/,
+            p_sfpu::LCONST_0,
+            QUANT_ROW1_A,
+            QUANT_ROW1_A,
+            sfpi::SFPSTOCHRND_MOD1_IMM8 | sfpi::SFPSTOCHRND_MOD1_INT32_TO_UINT8);
+    }
 }
 
 // int32 sign-magnitude (loaded that way regardless of input bit
@@ -433,7 +457,7 @@ void quant_init(const uint zero_point) {
         // The row-1 MAD fills the row-0 MAD's 2-cycle write-latency slot (formerly an SFPNOP).
         TTI_SFPMAD(QUANT_ROW0_A, QUANT_ROW0_B, p_sfpu::LREG5, QUANT_ROW0_A, 0 /*mod1*/);
         TTI_SFPMAD(QUANT_ROW1_A, QUANT_ROW1_B, p_sfpu::LREG5, QUANT_ROW1_A, 0 /*mod1*/);
-        _quant_clamp_convert_row_pair_<p_sfpu::LREG2>();
+        _quant_clamp_convert_row_pair_<OUTPUT_FORMAT, p_sfpu::LREG2>();
         if constexpr (OUTPUT_FORMAT == DataFormat::Int8) {
             _int8_out_xor_row_pair_();
         }
@@ -471,7 +495,7 @@ void requant_init(const uint zero_point, const uint out_zero_point = 0) {
         // m = RNE(v + zp_hi) + RNE_MAGIC
         TTI_SFPADD(QUANT_ROW0_A, p_sfpu::LCONST_1, p_sfpu::LREG5, QUANT_ROW0_A, 0 /*mod1*/);
         TTI_SFPADD(QUANT_ROW1_A, p_sfpu::LCONST_1, p_sfpu::LREG5, QUANT_ROW1_A, 0 /*mod1*/);
-        _quant_clamp_convert_row_pair_<p_sfpu::LREG6>();  // n = clamp(RNE(v) + out_zp) (+128)
+        _quant_clamp_convert_row_pair_<OUTPUT_FORMAT, p_sfpu::LREG6>();  // n = clamp(RNE(v) + out_zp) (+128)
         if constexpr (OUTPUT_FORMAT == DataFormat::Int8) {
             _int8_out_xor_row_pair_();
         }
