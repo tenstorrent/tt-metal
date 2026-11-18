@@ -1,0 +1,23 @@
+# run.sh labels -> configuration (results.jsonl rows; runs/dev_<label>.csv.gz device profiles, zoned).
+# op_copy/ = bench copy with SSL_* switches (descriptor _ssl_env); grad_copy/ (SSL_COPY=grad) = graduation candidate;
+# SSL_REAL=1 = the real op at HEAD 3ca4eb28f46. Cases: res3_{1,2,3}_conv2, center_head_1, res2_{0,1,2}_conv2 unless noted.
+base_z1      op_copy, no switches (= HEAD)
+link_z1/z2   SSL_LINK=1 (linked chain of landed chunks)
+lea          SSL_LINK=1 SSL_EARLY_ACK=1 SSL_ACK_FIRST=1
+leab1/leab2  lea + SSL_BIAS_MCAST=1 (bias after round 0) / =2 (bias before round 0)
+leab2e       leab2 with cb_bias reserved at kernel start on receivers
+LEFC3        lea + SSL_CHUNKS=3 (no bias multicast)
+Bonly        SSL_BIAS_MCAST=2 only
+AC2/AC3/AC4  leab2e + SSL_CHUNKS=2/3/4 ;  AM8  leab2e + SSL_MIN_CHUNK_TILES=8
+all_z1       SSL_WINDOW=6 + link/early/first (old polling-free window: chunk 0 behind all 6 issues)
+w6_z1/w6f_z1 SSL_WINDOW=6 (+SSL_FAST_ADDR=1), res3 only, per-chunk issue zones
+dbg_skip     timing only: small-rect server reads nothing (CONV2D_3X3_PERF_ABLATION=1)
+dbg_big2/8   timing only: 2 / 8 tiles per DRAM read (wrong data)
+twonoc/2     SSL_TWO_NOCS=1: NCRISC reads odd tiles on NoC1 -> HANG (both runs)
+split3/3b    SSL_SPLIT=3: server BRISC reads 3 of 6 chunks itself (NoC1), own reads only while no chain is open
+split3c      split3b + own reads issued between linked writes of an open chain -> HANG
+Aw6/AW2/AI16 leab2e + windowed/polling readers (per-chunk zones); BW2f/BW2/BI16f same without per-chunk zones
+dom_base/dom_A        domain (domain_ids.txt): op_copy base vs leab2 (6 chunks)
+fb1-3 / fg1-3         focus res3.x: SSL_REAL=1 (HEAD) vs SSL_COPY=grad, alternating
+dom_base2/dom_grad    domain + stem_conv2, stem_conv3, res4_{1__5}_conv2: HEAD vs grad
+grad1/grad_final      grad_copy, 3 cases

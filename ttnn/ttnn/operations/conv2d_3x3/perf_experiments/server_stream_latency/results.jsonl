@@ -1,0 +1,40 @@
+{"label": "base_z1", "ids": ["res3_{1,2,3}_conv2", "center_head_1", "res2_{0,1,2}_conv2"], "us": [15.05, 12.13, 13.69]}
+{"label": "all_z1", "ids": ["res3_{1,2,3}_conv2", "center_head_1", "res2_{0,1,2}_conv2"], "us": [15.86, 11.36, 12.77]}
+{"label": "w6_z1", "ids": ["res3_{1,2,3}_conv2"], "us": [16.41]}
+{"label": "w6f_z1", "ids": ["res3_{1,2,3}_conv2"], "us": [16.51]}
+{"label": "dbg_skip", "ids": ["res3_{1,2,3}_conv2"], "us": [16.99]}
+{"label": "dbg_big2", "ids": ["res3_{1,2,3}_conv2"], "us": [15.43]}
+{"label": "dbg_big8", "ids": ["res3_{1,2,3}_conv2"], "us": [15.04]}
+{"label": "link_z1", "ids": ["res3_{1,2,3}_conv2", "center_head_1", "res2_{0,1,2}_conv2"], "us": [14.45, 10.94, 12.45]}
+{"label": "link_z2", "ids": ["res3_{1,2,3}_conv2"], "us": []}
+{"label": "link_z2", "ids": ["res3_{1,2,3}_conv2"], "us": [14.58]}
+{"label": "lea", "ids": ["res3_{1,2,3}_conv2", "center_head_1", "res2_{0,1,2}_conv2"], "us": [14.87, 10.75, 12.32]}
+{"label": "leab1", "ids": ["res3_{1,2,3}_conv2", "center_head_1", "res2_{0,1,2}_conv2"], "us": [12.81, 11.08, 12.46]}
+{"label": "leab2", "ids": ["res3_{1,2,3}_conv2", "center_head_1", "res2_{0,1,2}_conv2"], "us": [12.93, 10.78, 12.66]}
+{"label": "leab2e", "ids": ["res3_{1,2,3}_conv2", "center_head_1", "res2_{0,1,2}_conv2"], "us": [12.79, 10.82, 12.66]}
+{"label": "split3", "ids": ["res3_{1,2,3}_conv2", "center_head_1", "res2_{0,1,2}_conv2"], "us": [12.37, 10.87, 12.31]}
+{"label": "split3b", "ids": ["res3_{1,2,3}_conv2", "center_head_1", "res2_{0,1,2}_conv2"], "us": [12.79, 10.9, 12.31]}
+{"label": "dom_base", "ids": ["res2_{0,1,2}_conv2", "res3_0_conv2", "res3_{1,2,3}_conv2", "semantic0", "instance0", "semantic1", "semantic2", "instance1", "semantic3", "instance2", "center_head_1"], "us": [13.92, 17.77, 14.96, 44.75, 25.23, 35.96, 135.78, 32.28, 107.72, 27.31, 11.78]}
+{"label": "dom_A", "ids": ["res2_{0,1,2}_conv2", "res3_0_conv2", "res3_{1,2,3}_conv2", "semantic0", "instance0", "semantic1", "semantic2", "instance1", "semantic3", "instance2", "center_head_1"], "us": [12.79, 17.66, 12.6, 45.34, 25.27, 35.15, 136.01, 32.36, 107.6, 26.34, 11.12]}
+{"label": "Aw6", "ids": ["res3_{1,2,3}_conv2", "center_head_1", "res2_{0,1,2}_conv2"], "us": [15.18, 11.75, 13.13]}
+{"label": "AW2", "ids": ["res3_{1,2,3}_conv2", "center_head_1", "res2_{0,1,2}_conv2"], "us": [14.01, 11.52, 12.89]}
+{"label": "AI16", "ids": ["res3_{1,2,3}_conv2", "center_head_1", "res2_{0,1,2}_conv2"], "us": [13.91, 12.31, 13.61]}
+{"label": "BW2f", "ids": ["res3_{1,2,3}_conv2", "center_head_1", "res2_{0,1,2}_conv2"], "us": [12.88, 11.0, 12.35]}
+{"label": "BW2", "ids": ["res3_{1,2,3}_conv2", "center_head_1", "res2_{0,1,2}_conv2"], "us": [13.03, 11.56, 12.31]}
+{"label": "BI16f", "ids": ["res3_{1,2,3}_conv2", "center_head_1", "res2_{0,1,2}_conv2"], "us": [12.81, 11.44, 13.1]}
+{"label": "AC3", "ids": ["res3_{1,2,3}_conv2", "center_head_1", "res2_{0,1,2}_conv2"], "us": [12.14, 10.87, 12.32]}
+{"label": "AM8", "ids": ["res3_{1,2,3}_conv2", "center_head_1", "res2_{0,1,2}_conv2"], "us": [12.78, 11.01, 12.46]}
+{"label": "AC2", "ids": ["res3_{1,2,3}_conv2", "center_head_1", "res2_{0,1,2}_conv2"], "us": [12.25, 11.05, 12.31]}
+{"label": "AC4", "ids": ["res3_{1,2,3}_conv2", "center_head_1", "res2_{0,1,2}_conv2"], "us": [12.85, 10.89, 12.3]}
+{"label": "LEFC3", "ids": ["res3_{1,2,3}_conv2", "center_head_1", "res2_{0,1,2}_conv2"], "us": [14.12, 10.85, 12.34]}
+{"label": "Bonly", "ids": ["res3_{1,2,3}_conv2", "center_head_1", "res2_{0,1,2}_conv2"], "us": [14.93, 12.08, 13.56]}
+{"label": "grad1", "ids": ["res3_{1,2,3}_conv2", "center_head_1", "res2_{0,1,2}_conv2"], "us": [12.32, 10.87, 12.31]}
+{"label": "fb1", "ids": ["res3_{1,2,3}_conv2"], "us": [14.93]}
+{"label": "fg1", "ids": ["res3_{1,2,3}_conv2"], "us": [12.12]}
+{"label": "fg2", "ids": ["res3_{1,2,3}_conv2"], "us": [12.1]}
+{"label": "fb2", "ids": ["res3_{1,2,3}_conv2"], "us": [14.95]}
+{"label": "fb3", "ids": ["res3_{1,2,3}_conv2"], "us": [15.44]}
+{"label": "fg3", "ids": ["res3_{1,2,3}_conv2"], "us": [12.12]}
+{"label": "dom_base2", "ids": ["res2_{0,1,2}_conv2", "res3_0_conv2", "res3_{1,2,3}_conv2", "semantic0", "instance0", "semantic1", "semantic2", "instance1", "semantic3", "instance2", "center_head_1", "stem_conv2", "stem_conv3", "res4_{1__5}_conv2"], "us": [13.7, 17.74, 14.88, 44.65, 25.2, 35.87, 135.88, 32.34, 107.67, 27.35, 11.71, 34.22, 49.11, 16.2]}
+{"label": "dom_grad", "ids": ["res2_{0,1,2}_conv2", "res3_0_conv2", "res3_{1,2,3}_conv2", "semantic0", "instance0", "semantic1", "semantic2", "instance1", "semantic3", "instance2", "center_head_1", "stem_conv2", "stem_conv3", "res4_{1__5}_conv2"], "us": [12.22, 17.66, 12.12, 44.92, 25.01, 35.47, 135.95, 31.98, 107.88, 26.66, 10.95, 34.46, 49.12, 16.1]}
+{"label": "grad_final", "ids": ["res3_{1,2,3}_conv2", "center_head_1", "res2_{0,1,2}_conv2"], "us": [12.11, 10.9, 12.36]}

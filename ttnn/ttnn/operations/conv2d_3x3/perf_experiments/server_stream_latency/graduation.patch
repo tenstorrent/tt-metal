@@ -1,0 +1,350 @@
+diff --git a/ttnn/ttnn/operations/conv2d_3x3/conv2d_3x3_program_descriptor.py b/ttnn/ttnn/operations/conv2d_3x3/conv2d_3x3_program_descriptor.py
+index d7d0caf..8832a15 100644
+--- a/ttnn/ttnn/operations/conv2d_3x3/conv2d_3x3_program_descriptor.py
++++ b/ttnn/ttnn/operations/conv2d_3x3/conv2d_3x3_program_descriptor.py
+@@ -220,8 +220,13 @@ WEIGHT_MCAST_PREFIX = "weight_mcast"
+ # chunks. Measured (LoFi, bf8_b): res3.x 18.2 -> 15.7 us, sem dec res3 fc0 59.9 -> 45.9, fc1 49.5 -> 36.3, inst dec
+ # res3 fc0 35.3 -> 29.0, at the weights-stubbed bound. Not on interleaved input: the server's NoC0 DRAM reads meet
+ # every core's NoC0 DRAM fill there (32x64x128 ROW_MAJOR +4.9%, 64x128x128 +1.5% / +2.3%).
++# The server writer multicasts every landed chunk in one linked chain (one path set-up per chain, not per chunk), the
++# server multicasts the bias too (no receiver reads it from DRAM), and a receiver acks a slot's reuse as soon as compute
++# freed it. Measured together (LoFi, bf8_b, perf focus, bit-identical): res3.x 14.95 -> 12.12 (medians of 3), res2
++# 13.7 -> 12.2, center_head.1 11.7 -> 11.0, inst res2 fc1 -2.5%, the other server-fed layers flat. 3 chunks per round:
++# on res3.x 6 measured 12.6-12.9 (a chunk per path set-up where the reads pace the stream), 4 12.9, 2 12.3, 3 12.1.
+ WEIGHT_SERVERS = True
+-WEIGHT_SERVER_CHUNKS = 6
++WEIGHT_SERVER_CHUNKS = 3
+ # Hardware multicast rectangles one channel may carry (dataflow_kernel_lib::MAX_MCAST_RECTANGLES).
+ MAX_MCAST_RECTANGLES = 3
+ 
+@@ -1484,9 +1489,11 @@ def create_program_descriptor(
+     window_direct = strided_window and b.nslice
+     row_sem_ids = tuple(range(len(sem_ids), len(sem_ids) + 5)) if row_split else (0, 0, 0, 0, 0)
+     sem_ids += tuple(range(len(sem_ids), len(sem_ids) + 4 + ROW_QUEUE)) if row_split else ()
+-    # Weight servers: the server's ack counter, then one data-ready flag per cb_weights slot.
++    # Weight servers: the server's ack counter, one data-ready flag per cb_weights slot, then the bias flag (the server
++    # multicasts the bias wherever the receivers take it from cb_bias: not under the split slab fill).
+     server_sem_ids = (len(sem_ids), len(sem_ids) + 1) if weight_servers is not None else (0, 0)
+-    sem_ids += tuple(range(len(sem_ids), len(sem_ids) + 1 + b.weight_depth)) if weight_servers is not None else ()
++    server_bias = weight_servers is not None and has_bias and not slab_split
++    sem_ids += tuple(range(len(sem_ids), len(sem_ids) + 2 + b.weight_depth)) if weight_servers is not None else ()
+     k_padded = g.tensor_kkh_tiles * TILE > 3 * g.c_in_p
+ 
+     def zero_im2col_once(slice_channels):
+@@ -1895,6 +1902,10 @@ def create_program_descriptor(
+             if cb.format_descriptors[0].buffer_index == CB_WEIGHTS:
+                 pages = cb.total_size // g.weight_tile_bytes
+                 cbs[i] = _cb(CB_WEIGHTS, weight_tensor.dtype, g.weight_tile_bytes, pages, sem_cores)
++            elif server_bias and cb.format_descriptors[0].buffer_index == CB_BIAS:
++                # HEIGHT: every receiver's cb_bias holds all of C_out, and the server multicasts it there.
++                assert ns == g.tensor_n_tiles
++                cbs[i] = _cb(CB_BIAS, bias_tensor.dtype, g.weight_tile_bytes, ns, sem_cores)
+         # Whole-K kw-fold keeps its weights resident across M-blocks: one stream.
+         num_rounds = (
+             b.num_k_blocks
+@@ -1916,6 +1927,7 @@ def create_program_descriptor(
+                 hi.y,
+                 lo.x,
+                 lo.y,
++                bias_addr if server_bias else 0,
+             ]
+         server_cores = _core_range_set(servers)
+         server_kernels = [
+@@ -1930,7 +1942,21 @@ def create_program_descriptor(
+             ttnn.KernelDescriptor(
+                 kernel_source=str(KERNEL_DIR / "conv2d_3x3_weight_server_writer.cpp"),
+                 core_ranges=server_cores,
+-                compile_time_args=[CB_WEIGHTS, bk * bn, *server_sem_ids, b.weight_depth, num_chunks],
++                compile_time_args=[
++                    CB_WEIGHTS,
++                    bk * bn,
++                    *server_sem_ids,
++                    b.weight_depth,
++                    num_chunks,
++                    int(server_bias),
++                    CB_BIAS,
++                    g.tensor_n_tiles,
++                ]
++                + (
++                    ttnn.TensorAccessorArgs(bias_tensor).get_compile_time_args()
++                    if server_bias
++                    else ttnn.TensorAccessorArgs().get_compile_time_args()
++                ),
+                 runtime_args=server_writer_rt,
+                 config=ttnn.WriterConfigDescriptor(),
+             ),
+diff --git a/ttnn/ttnn/operations/conv2d_3x3/kernels/conv2d_3x3_weight_server_writer.cpp b/ttnn/ttnn/operations/conv2d_3x3/kernels/conv2d_3x3_weight_server_writer.cpp
+index 2e89ad4..993e228 100644
+--- a/ttnn/ttnn/operations/conv2d_3x3/kernels/conv2d_3x3_weight_server_writer.cpp
++++ b/ttnn/ttnn/operations/conv2d_3x3/kernels/conv2d_3x3_weight_server_writer.cpp
+@@ -3,11 +3,19 @@
+ 
+ // conv2d_3x3 weight server, writer half (BRISC / NoC1). Per round: wait until every receiver of the rectangle can take
+ // it (a monotonic ack counter: one ack per receiver at its kernel start, then one per round that reuses a cb_weights
+-// slot), then multicast each chunk the server reader hands over into the same slot of every receiver, and free the
+-// slot once the multicast has read it. Each chunk's linked multicast is closed by a 4 B write of zero to the receivers'
+-// flag of this slot (INVALID there until this round's end: the receiver cleared it before its ack let this round
+-// start); the last chunk's closing write sets the flag. One multicast into the rectangle at a time: concurrent
+-// multicasts from several senders into one rectangle measured 1.6x to 3.7x slower.
++// slot), then multicast the chunks the server reader hands over into the same slot of every receiver, and free the
++// slot once the multicast has read it. Every chunk that has landed goes out in one linked chain, one path set-up per
++// chain (NoC estimator, Blackhole: 16 linked 8 KB multicasts to 64 cores at 43 B/cycle, unlinked at 15; one chain per
++// chunk measured ~0.3 us per 8.7 KB chunk on res3.x). The chain is closed by a 4 B write to the receivers' flag of
++// this slot when the round is complete (the flag is set) or when the next chunk has not landed yet (a write of zero:
++// the flag stays INVALID until this round's end, the receiver cleared it before its ack let this round start), so no
++// path stays reserved across a wait. One multicast into the rectangle at a time: concurrent multicasts from several
++// senders into one rectangle measured 1.6x to 3.7x slower.
++//
++// With a bias the server also reads it once (NoC1, at kernel start) and multicasts it into every receiver's cb_bias
++// (same index and size, so the same L1 address) before round 0, then sets the receivers' bias flag (the semaphore
++// after the slot flags). HEIGHT: every receiver takes all of C_out. ~100 receivers reading the same bias pages from
++// DRAM themselves landed it at ~7 us, behind kw-fold's ~6 us bias decode in front of the final pass.
+ 
+ #include <cstdint>
+ 
+@@ -18,10 +26,15 @@ void kernel_main() {
+     constexpr uint32_t cb_weights = get_compile_time_arg_val(0);
+     constexpr uint32_t round_tiles = get_compile_time_arg_val(1);
+     constexpr uint32_t ack_sem_id = get_compile_time_arg_val(2);
+-    constexpr uint32_t flag_sem_id = get_compile_time_arg_val(3);  // one per weight slot
++    constexpr uint32_t flag_sem_id = get_compile_time_arg_val(3);  // one per weight slot, then the bias flag
+     constexpr uint32_t weight_depth = get_compile_time_arg_val(4);
+     constexpr uint32_t num_chunks = get_compile_time_arg_val(5);
++    constexpr bool has_bias = get_compile_time_arg_val(6) != 0;
++    constexpr uint32_t cb_bias = get_compile_time_arg_val(7);
++    constexpr uint32_t bias_tiles = get_compile_time_arg_val(8);
++    constexpr auto bias_args = TensorAccessorArgs<9>();
+     constexpr uint32_t chunk_tiles = round_tiles / num_chunks;
++    constexpr uint32_t bias_flag_sem_id = flag_sem_id + weight_depth;
+ 
+     const uint32_t num_rounds = get_arg_val<uint32_t>(0);
+     const uint32_t num_receivers = get_arg_val<uint32_t>(1);
+@@ -32,6 +45,17 @@ void kernel_main() {
+     const uint32_t ey = get_arg_val<uint32_t>(5);
+     const uint32_t tile_bytes = get_tile_size(cb_weights);
+     volatile tt_l1_ptr uint32_t* ack = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(ack_sem_id));
++
++    [[maybe_unused]] uint32_t bias_l1 = 0;
++    if constexpr (has_bias) {
++        const uint32_t bias_tile_bytes = get_tile_size(cb_bias);
++        const auto bias = TensorAccessor(bias_args, get_arg_val<uint32_t>(6), bias_tile_bytes);
++        bias_l1 = get_write_ptr(cb_bias);
++        for (uint32_t n = 0; n < bias_tiles; ++n) {
++            noc_async_read_page(n, bias, bias_l1 + n * bias_tile_bytes);
++        }
++        *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(bias_flag_sem_id)) = VALID;
++    }
+     // The multicast source of every slot's flag.
+     for (uint32_t slot = 0; slot < weight_depth; ++slot) {
+         *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(flag_sem_id + slot)) = VALID;
+@@ -43,19 +67,42 @@ void kernel_main() {
+             const uint32_t acks = 1 + (r + 1 > weight_depth ? r + 1 - weight_depth : 0);
+             noc_semaphore_wait_min(ack, acks * num_receivers);
+         }
++        if constexpr (has_bias) {
++            if (r == 0) {
++                MaybeDeviceZoneScope("server_send_bias");
++                noc_async_read_barrier();
++                const uint32_t bias_bytes = bias_tiles * get_tile_size(cb_bias);
++                noc_async_write_multicast(
++                    bias_l1, get_noc_multicast_addr(sx, sy, ex, ey, bias_l1), bias_bytes, num_receivers, true);
++                const uint32_t bias_flag = get_semaphore(bias_flag_sem_id);
++                noc_semaphore_set_multicast(
++                    bias_flag, get_noc_multicast_addr(sx, sy, ex, ey, bias_flag), num_receivers, false);
++            }
++        }
+         const uint32_t flag = get_semaphore(flag_sem_id + r % weight_depth);
+         const uint64_t flag_mcast = get_noc_multicast_addr(sx, sy, ex, ey, flag);
+         const uint32_t base = get_read_ptr(cb_weights);
+-        for (uint32_t c = 0; c < num_chunks; ++c) {
++        auto landed = [&](uint32_t c) -> bool {
++            return cb_pages_available_at_front(cb_weights, (c + 1) * chunk_tiles);
++        };
++        for (uint32_t c = 0; c < num_chunks;) {
+             {
+                 MaybeDeviceZoneScope("server_wait_read");
+                 cb_wait_front(cb_weights, (c + 1) * chunk_tiles);
+             }
+             MaybeDeviceZoneScope("server_send");
++            uint32_t n = 1;
++            while (c + n < num_chunks && landed(c + n)) {
++                ++n;
++            }
+             const uint32_t src = base + c * chunk_tiles * tile_bytes;
+             noc_async_write_multicast(
+-                src, get_noc_multicast_addr(sx, sy, ex, ey, src), chunk_tiles * tile_bytes, num_receivers, true);
+-            noc_semaphore_set_multicast(c + 1 == num_chunks ? flag : MEM_ZEROS_BASE, flag_mcast, num_receivers, false);
++                src, get_noc_multicast_addr(sx, sy, ex, ey, src), n * chunk_tiles * tile_bytes, num_receivers, true);
++            c += n;
++            // Keep the chain open only into a chunk that already landed.
++            if (c == num_chunks || !landed(c)) {
++                noc_semaphore_set_multicast(c == num_chunks ? flag : MEM_ZEROS_BASE, flag_mcast, num_receivers, false);
++            }
+         }
+         {
+             // The reader refills this slot weight_depth rounds on: the multicast must have read it.
+diff --git a/ttnn/ttnn/operations/conv2d_3x3/kernels/conv2d_3x3_writer.cpp b/ttnn/ttnn/operations/conv2d_3x3/kernels/conv2d_3x3_writer.cpp
+index 816da85..bff0e3d 100644
+--- a/ttnn/ttnn/operations/conv2d_3x3/kernels/conv2d_3x3_writer.cpp
++++ b/ttnn/ttnn/operations/conv2d_3x3/kernels/conv2d_3x3_writer.cpp
+@@ -23,10 +23,12 @@
+ // Weight servers (HEIGHT-sharded K-blocked walk, when the device has a spare core per channel rectangle): the rounds
+ // come from a server core outside the work grid instead (conv2d_3x3_weight_server_{reader,writer}.cpp: DRAM reads on
+ // NoC0, multicast on NoC1, one server per rectangle), and every participant is a pure receiver. A participant acks its
+-// server once at kernel start (it runs and its semaphores are initialized) and then once per round that reuses a
+-// cb_weights slot (round >= weight depth: compute freed the slot); the server sets one flag per slot after the round's
+-// data, and the receiver clears it. The bias reads are issued at kernel start and completed after the first round:
+-// compute needs the bias only after its walk, and every core reading the same bias pages at once took ~3 us.
++// server first thing at kernel start (it runs and its semaphores are initialized) and then once per round that reuses
++// a cb_weights slot; the server sets one flag per slot after the round's data, and the receiver clears it. The reuse
++// ack of round k + 1 goes out while round k is awaited, as soon as compute freed round k + 1's slot (acking only once
++// round k had landed held the server's round 2 behind every receiver's round 1). The server also multicasts the bias
++// into cb_bias and sets the bias flag (the semaphore after the slot flags): the receiver reserves cb_bias at kernel
++// start and pushes it once the flag is set, polled inside the round waits.
+ //
+ // K split (BLOCK_SHARDED, k_cols > 1; regime R4): every core of a grid row computes fp32 partials
+ // [bm, all C_out] over its own channel slice, and grid column y owns output N-slice y. Per M-block the
+@@ -204,6 +206,16 @@ void kernel_main() {
+     // Weight servers: 1 on a receiver, then its server's (x, y).
+     constexpr uint32_t server_arg = split_flag_arg + 1;
+     [[maybe_unused]] const bool server_receiver = weight_servers && get_arg_val<uint32_t>(server_arg) != 0;
++    // Weight servers: the kernel-start ack goes out first (see the file comment); the server's first multicast waits
++    // for every receiver's.
++    [[maybe_unused]] uint64_t server_ack_noc = 0;
++    if (server_receiver) {
++        server_ack_noc = get_noc_addr(
++            get_arg_val<uint32_t>(server_arg + 1),
++            get_arg_val<uint32_t>(server_arg + 2),
++            get_semaphore(server_ack_sem_id));
++        noc_semaphore_inc(server_ack_noc, 1);
++    }
+ 
+     constexpr uint32_t weight_k_block_tiles = block_k_tiles * block_n_tiles;
+     constexpr uint32_t row_group_tiles = out_subblock_h * block_n_tiles;
+@@ -605,15 +617,32 @@ void kernel_main() {
+         }
+     };
+ #endif
+-    // Weight servers: the bias reads go out now and complete after the first weight round (see the file comment).
+-    // kw-fold needs the bias only in its final pass, and its first matmul waits for round 0: its reads go out once
+-    // round 0 landed (~100 cores reading the same bias pages slowed round 0 by ~1 us when issued at kernel start) and
+-    // are pushed as soon as they land, polled inside the round waits; the first M-block's last round blocks on them.
++    // Weight servers: on a server receiver the server multicasts the bias (see the file comment); cb_bias is reserved
++    // at kernel start and pushed once the bias flag is set. A core outside the channel reads it: at kernel start, or
++    // under kw-fold once round 0 landed (~100 cores reading the same bias pages slowed round 0 by ~1 us when issued at
++    // kernel start). Either is pushed as soon as it landed, polled inside the round waits; the first M-block's last
++    // round blocks on it.
+     constexpr uint32_t TRID_BIAS_LATE = 7;
+     conv2d_3x3::TaggedReads<false> late_bias_reads;
+     [[maybe_unused]] bool late_bias_pending = false;
++    [[maybe_unused]] bool late_bias_issued = false;
++    [[maybe_unused]] volatile tt_l1_ptr uint32_t* server_bias_flag = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(
++        weight_servers ? get_semaphore(server_flag_sem_id + nslice_weight_depth) : 0);
++    [[maybe_unused]] auto late_bias_landed = [&]() -> bool {
++        if (server_receiver) {
++            invalidate_l1_cache();
++            return *server_bias_flag == VALID;
++        }
++        return ncrisc_noc_read_with_transaction_id_flushed(late_bias_reads.noc.get_noc_id(), TRID_BIAS_LATE);
++    };
+     [[maybe_unused]] auto issue_late_bias = [&]() {
+         if constexpr (weight_servers && has_bias && !slab_split) {
++            late_bias_issued = true;
++            if (server_receiver) {
++                cb_reserve_back(cb_bias, out_n_tiles);
++                late_bias_pending = true;
++                return;
++            }
+             const uint32_t bias_tile_bytes = get_tile_size(cb_bias);
+             const auto bias = TensorAccessor(bias_args, bias_addr, bias_tile_bytes);
+             cb_reserve_back(cb_bias, out_n_tiles);
+@@ -626,14 +655,13 @@ void kernel_main() {
+             late_bias_pending = true;
+         }
+     };
+-    if constexpr (!kw_fold) {
++    if (!kw_fold || server_receiver) {
+         issue_late_bias();
+     }
+     // kw-fold: push the late bias as soon as it landed, from inside the weight waits (the reader decodes it into the
+     // final pass's fp32 rows at ~1.3 us per tile, so it must not wait for the block's last round).
+     [[maybe_unused]] auto try_finish_late_bias = [&]() {
+-        if (late_bias_pending &&
+-            ncrisc_noc_read_with_transaction_id_flushed(late_bias_reads.noc.get_noc_id(), TRID_BIAS_LATE)) {
++        if (late_bias_pending && late_bias_landed()) {
+             late_bias_reads.wait(TRID_BIAS_LATE);
+             cb_push_back(cb_bias, out_n_tiles);
+             late_bias_pending = false;
+@@ -642,7 +670,7 @@ void kernel_main() {
+     [[maybe_unused]] auto finish_late_bias = [&]() {
+         if (late_bias_pending) {
+             MaybeDeviceZoneScope("writer_bias");
+-            while (!ncrisc_noc_read_with_transaction_id_flushed(late_bias_reads.noc.get_noc_id(), TRID_BIAS_LATE)) {
++            while (!late_bias_landed()) {
+                 serve_fill();
+             }
+             late_bias_reads.wait(TRID_BIAS_LATE);
+@@ -650,14 +678,14 @@ void kernel_main() {
+             late_bias_pending = false;
+         }
+     };
+-    // Weight servers: the receiver's ack to its server (one per round that reuses a slot, plus one at kernel start).
+-    [[maybe_unused]] uint64_t server_ack_noc = 0;
+-    if (server_receiver) {
+-        const uint32_t server_x = get_arg_val<uint32_t>(server_arg + 1);
+-        const uint32_t server_y = get_arg_val<uint32_t>(server_arg + 2);
+-        server_ack_noc = get_noc_addr(server_x, server_y, get_semaphore(server_ack_sem_id));
+-        noc_semaphore_inc(server_ack_noc, 1);
+-    }
++    // Weight servers: the slot-reuse acks sent so far (rounds nslice_weight_depth .. + server_reuse_acks - 1), and the
++    // rounds this receiver takes (kw-fold whole-K keeps its weights resident across M-blocks: one stream).
++    [[maybe_unused]] uint32_t server_reuse_acks = 0;
++#if defined(CONV2D_3X3_KW_FOLD) && !KWF_KBLOCKED
++    [[maybe_unused]] const uint32_t server_rounds = num_k_blocks;
++#else
++    [[maybe_unused]] const uint32_t server_rounds = total_k_blocks;
++#endif
+     auto issue_weight_k_block = [&]() {
+         {
+             // Back-pressure from compute's matmul.
+@@ -675,9 +703,15 @@ void kernel_main() {
+         MaybeDeviceZoneScope("writer_weight_fetch");
+         if (server_receiver) {
+             // Weight server round (see the file comment); serves the fill hand-overs while it waits.
+-            if (k_blocks_issued >= nslice_weight_depth) {
++            if (k_blocks_issued >= nslice_weight_depth &&
++                server_reuse_acks < k_blocks_issued + 1 - nslice_weight_depth) {
+                 noc_semaphore_inc(server_ack_noc, 1);
++                ++server_reuse_acks;
+             }
++            // Round k + 1's reuse ack, early: round k is reserved and not pushed, so two free rounds at the back mean
++            // compute freed round k + 1's slot.
++            const bool early_ack = nslice_weight_depth >= 2 && k_blocks_issued + 1 >= nslice_weight_depth &&
++                                   k_blocks_issued + 1 < server_rounds;
+             volatile tt_l1_ptr uint32_t* flag = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(
+                 get_semaphore(server_flag_sem_id + k_blocks_issued % nslice_weight_depth));
+             while (true) {
+@@ -685,6 +719,11 @@ void kernel_main() {
+                 if (*flag == VALID) {
+                     break;
+                 }
++                if (early_ack && server_reuse_acks < k_blocks_issued + 2 - nslice_weight_depth &&
++                    cb_pages_reservable_at_back(cb_weights, 2 * weight_k_block_tiles)) {
++                    noc_semaphore_inc(server_ack_noc, 1);
++                    ++server_reuse_acks;
++                }
+                 serve_fill();
+                 if constexpr (kw_fold) {
+                     try_finish_late_bias();
+@@ -708,7 +747,10 @@ void kernel_main() {
+         if constexpr (weight_servers) {
+             if constexpr (kw_fold) {
+                 if (k_blocks_issued == 1) {
+-                    issue_late_bias();
++                    if (!late_bias_issued) {
++                        issue_late_bias();
++                    }
++                    try_finish_late_bias();
+                 } else if (k_blocks_issued == num_k_blocks) {
+                     finish_late_bias();
+                 } else {

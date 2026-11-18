@@ -23,10 +23,12 @@
 // Weight servers (HEIGHT-sharded K-blocked walk, when the device has a spare core per channel rectangle): the rounds
 // come from a server core outside the work grid instead (conv2d_3x3_weight_server_{reader,writer}.cpp: DRAM reads on
 // NoC0, multicast on NoC1, one server per rectangle), and every participant is a pure receiver. A participant acks its
-// server once at kernel start (it runs and its semaphores are initialized) and then once per round that reuses a
-// cb_weights slot (round >= weight depth: compute freed the slot); the server sets one flag per slot after the round's
-// data, and the receiver clears it. The bias reads are issued at kernel start and completed after the first round:
-// compute needs the bias only after its walk, and every core reading the same bias pages at once took ~3 us.
+// server first thing at kernel start (it runs and its semaphores are initialized) and then once per round that reuses
+// a cb_weights slot; the server sets one flag per slot after the round's data, and the receiver clears it. The reuse
+// ack of round k + 1 goes out while round k is awaited, as soon as compute freed round k + 1's slot (acking only once
+// round k had landed held the server's round 2 behind every receiver's round 1). The server also multicasts the bias
+// into cb_bias and sets the bias flag (the semaphore after the slot flags): the receiver reserves cb_bias at kernel
+// start and pushes it once the flag is set, polled inside the round waits.
 //
 // K split (BLOCK_SHARDED, k_cols > 1; regime R4): every core of a grid row computes fp32 partials
 // [bm, all C_out] over its own channel slice, and grid column y owns output N-slice y. Per M-block the
@@ -204,6 +206,16 @@ void kernel_main() {
     // Weight servers: 1 on a receiver, then its server's (x, y).
     constexpr uint32_t server_arg = split_flag_arg + 1;
     [[maybe_unused]] const bool server_receiver = weight_servers && get_arg_val<uint32_t>(server_arg) != 0;
+    // Weight servers: the kernel-start ack goes out first (see the file comment); the server's first multicast waits
+    // for every receiver's.
+    [[maybe_unused]] uint64_t server_ack_noc = 0;
+    if (server_receiver) {
+        server_ack_noc = get_noc_addr(
+            get_arg_val<uint32_t>(server_arg + 1),
+            get_arg_val<uint32_t>(server_arg + 2),
+            get_semaphore(server_ack_sem_id));
+        noc_semaphore_inc(server_ack_noc, 1);
+    }
 
     constexpr uint32_t weight_k_block_tiles = block_k_tiles * block_n_tiles;
     constexpr uint32_t row_group_tiles = out_subblock_h * block_n_tiles;
@@ -605,15 +617,32 @@ void kernel_main() {
         }
     };
 #endif
-    // Weight servers: the bias reads go out now and complete after the first weight round (see the file comment).
-    // kw-fold needs the bias only in its final pass, and its first matmul waits for round 0: its reads go out once
-    // round 0 landed (~100 cores reading the same bias pages slowed round 0 by ~1 us when issued at kernel start) and
-    // are pushed as soon as they land, polled inside the round waits; the first M-block's last round blocks on them.
+    // Weight servers: on a server receiver the server multicasts the bias (see the file comment); cb_bias is reserved
+    // at kernel start and pushed once the bias flag is set. A core outside the channel reads it: at kernel start, or
+    // under kw-fold once round 0 landed (~100 cores reading the same bias pages slowed round 0 by ~1 us when issued at
+    // kernel start). Either is pushed as soon as it landed, polled inside the round waits; the first M-block's last
+    // round blocks on it.
     constexpr uint32_t TRID_BIAS_LATE = 7;
     conv2d_3x3::TaggedReads<false> late_bias_reads;
     [[maybe_unused]] bool late_bias_pending = false;
+    [[maybe_unused]] bool late_bias_issued = false;
+    [[maybe_unused]] volatile tt_l1_ptr uint32_t* server_bias_flag = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(
+        weight_servers ? get_semaphore(server_flag_sem_id + nslice_weight_depth) : 0);
+    [[maybe_unused]] auto late_bias_landed = [&]() -> bool {
+        if (server_receiver) {
+            invalidate_l1_cache();
+            return *server_bias_flag == VALID;
+        }
+        return ncrisc_noc_read_with_transaction_id_flushed(late_bias_reads.noc.get_noc_id(), TRID_BIAS_LATE);
+    };
     [[maybe_unused]] auto issue_late_bias = [&]() {
         if constexpr (weight_servers && has_bias && !slab_split) {
+            late_bias_issued = true;
+            if (server_receiver) {
+                cb_reserve_back(cb_bias, out_n_tiles);
+                late_bias_pending = true;
+                return;
+            }
             const uint32_t bias_tile_bytes = get_tile_size(cb_bias);
             const auto bias = TensorAccessor(bias_args, bias_addr, bias_tile_bytes);
             cb_reserve_back(cb_bias, out_n_tiles);
@@ -626,14 +655,13 @@ void kernel_main() {
             late_bias_pending = true;
         }
     };
-    if constexpr (!kw_fold) {
+    if (!kw_fold || server_receiver) {
         issue_late_bias();
     }
     // kw-fold: push the late bias as soon as it landed, from inside the weight waits (the reader decodes it into the
     // final pass's fp32 rows at ~1.3 us per tile, so it must not wait for the block's last round).
     [[maybe_unused]] auto try_finish_late_bias = [&]() {
-        if (late_bias_pending &&
-            ncrisc_noc_read_with_transaction_id_flushed(late_bias_reads.noc.get_noc_id(), TRID_BIAS_LATE)) {
+        if (late_bias_pending && late_bias_landed()) {
             late_bias_reads.wait(TRID_BIAS_LATE);
             cb_push_back(cb_bias, out_n_tiles);
             late_bias_pending = false;
@@ -642,7 +670,7 @@ void kernel_main() {
     [[maybe_unused]] auto finish_late_bias = [&]() {
         if (late_bias_pending) {
             MaybeDeviceZoneScope("writer_bias");
-            while (!ncrisc_noc_read_with_transaction_id_flushed(late_bias_reads.noc.get_noc_id(), TRID_BIAS_LATE)) {
+            while (!late_bias_landed()) {
                 serve_fill();
             }
             late_bias_reads.wait(TRID_BIAS_LATE);
@@ -650,14 +678,14 @@ void kernel_main() {
             late_bias_pending = false;
         }
     };
-    // Weight servers: the receiver's ack to its server (one per round that reuses a slot, plus one at kernel start).
-    [[maybe_unused]] uint64_t server_ack_noc = 0;
-    if (server_receiver) {
-        const uint32_t server_x = get_arg_val<uint32_t>(server_arg + 1);
-        const uint32_t server_y = get_arg_val<uint32_t>(server_arg + 2);
-        server_ack_noc = get_noc_addr(server_x, server_y, get_semaphore(server_ack_sem_id));
-        noc_semaphore_inc(server_ack_noc, 1);
-    }
+    // Weight servers: the slot-reuse acks sent so far (rounds nslice_weight_depth .. + server_reuse_acks - 1), and the
+    // rounds this receiver takes (kw-fold whole-K keeps its weights resident across M-blocks: one stream).
+    [[maybe_unused]] uint32_t server_reuse_acks = 0;
+#if defined(CONV2D_3X3_KW_FOLD) && !KWF_KBLOCKED
+    [[maybe_unused]] const uint32_t server_rounds = num_k_blocks;
+#else
+    [[maybe_unused]] const uint32_t server_rounds = total_k_blocks;
+#endif
     auto issue_weight_k_block = [&]() {
         {
             // Back-pressure from compute's matmul.
@@ -675,15 +703,26 @@ void kernel_main() {
         MaybeDeviceZoneScope("writer_weight_fetch");
         if (server_receiver) {
             // Weight server round (see the file comment); serves the fill hand-overs while it waits.
-            if (k_blocks_issued >= nslice_weight_depth) {
+            if (k_blocks_issued >= nslice_weight_depth &&
+                server_reuse_acks < k_blocks_issued + 1 - nslice_weight_depth) {
                 noc_semaphore_inc(server_ack_noc, 1);
+                ++server_reuse_acks;
             }
+            // Round k + 1's reuse ack, early: round k is reserved and not pushed, so two free rounds at the back mean
+            // compute freed round k + 1's slot.
+            const bool early_ack = nslice_weight_depth >= 2 && k_blocks_issued + 1 >= nslice_weight_depth &&
+                                   k_blocks_issued + 1 < server_rounds;
             volatile tt_l1_ptr uint32_t* flag = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(
                 get_semaphore(server_flag_sem_id + k_blocks_issued % nslice_weight_depth));
             while (true) {
                 invalidate_l1_cache();
                 if (*flag == VALID) {
                     break;
+                }
+                if (early_ack && server_reuse_acks < k_blocks_issued + 2 - nslice_weight_depth &&
+                    cb_pages_reservable_at_back(cb_weights, 2 * weight_k_block_tiles)) {
+                    noc_semaphore_inc(server_ack_noc, 1);
+                    ++server_reuse_acks;
                 }
                 serve_fill();
                 if constexpr (kw_fold) {
@@ -708,7 +747,10 @@ void kernel_main() {
         if constexpr (weight_servers) {
             if constexpr (kw_fold) {
                 if (k_blocks_issued == 1) {
-                    issue_late_bias();
+                    if (!late_bias_issued) {
+                        issue_late_bias();
+                    }
+                    try_finish_late_bias();
                 } else if (k_blocks_issued == num_k_blocks) {
                     finish_late_bias();
                 } else {

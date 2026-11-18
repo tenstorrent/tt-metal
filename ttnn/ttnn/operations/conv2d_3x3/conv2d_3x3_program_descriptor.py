@@ -220,8 +220,13 @@ WEIGHT_MCAST_PREFIX = "weight_mcast"
 # chunks. Measured (LoFi, bf8_b): res3.x 18.2 -> 15.7 us, sem dec res3 fc0 59.9 -> 45.9, fc1 49.5 -> 36.3, inst dec
 # res3 fc0 35.3 -> 29.0, at the weights-stubbed bound. Not on interleaved input: the server's NoC0 DRAM reads meet
 # every core's NoC0 DRAM fill there (32x64x128 ROW_MAJOR +4.9%, 64x128x128 +1.5% / +2.3%).
+# The server writer multicasts every landed chunk in one linked chain (one path set-up per chain, not per chunk), the
+# server multicasts the bias too (no receiver reads it from DRAM), and a receiver acks a slot's reuse as soon as compute
+# freed it. Measured together (LoFi, bf8_b, perf focus, bit-identical): res3.x 14.95 -> 12.12 (medians of 3), res2
+# 13.7 -> 12.2, center_head.1 11.7 -> 11.0, inst res2 fc1 -2.5%, the other server-fed layers flat. 3 chunks per round:
+# on res3.x 6 measured 12.6-12.9 (a chunk per path set-up where the reads pace the stream), 4 12.9, 2 12.3, 3 12.1.
 WEIGHT_SERVERS = True
-WEIGHT_SERVER_CHUNKS = 6
+WEIGHT_SERVER_CHUNKS = 3
 # Hardware multicast rectangles one channel may carry (dataflow_kernel_lib::MAX_MCAST_RECTANGLES).
 MAX_MCAST_RECTANGLES = 3
 
@@ -1484,9 +1489,11 @@ def create_program_descriptor(
     window_direct = strided_window and b.nslice
     row_sem_ids = tuple(range(len(sem_ids), len(sem_ids) + 5)) if row_split else (0, 0, 0, 0, 0)
     sem_ids += tuple(range(len(sem_ids), len(sem_ids) + 4 + ROW_QUEUE)) if row_split else ()
-    # Weight servers: the server's ack counter, then one data-ready flag per cb_weights slot.
+    # Weight servers: the server's ack counter, one data-ready flag per cb_weights slot, then the bias flag (the server
+    # multicasts the bias wherever the receivers take it from cb_bias: not under the split slab fill).
     server_sem_ids = (len(sem_ids), len(sem_ids) + 1) if weight_servers is not None else (0, 0)
-    sem_ids += tuple(range(len(sem_ids), len(sem_ids) + 1 + b.weight_depth)) if weight_servers is not None else ()
+    server_bias = weight_servers is not None and has_bias and not slab_split
+    sem_ids += tuple(range(len(sem_ids), len(sem_ids) + 2 + b.weight_depth)) if weight_servers is not None else ()
     k_padded = g.tensor_kkh_tiles * TILE > 3 * g.c_in_p
 
     def zero_im2col_once(slice_channels):
@@ -1895,6 +1902,10 @@ def create_program_descriptor(
             if cb.format_descriptors[0].buffer_index == CB_WEIGHTS:
                 pages = cb.total_size // g.weight_tile_bytes
                 cbs[i] = _cb(CB_WEIGHTS, weight_tensor.dtype, g.weight_tile_bytes, pages, sem_cores)
+            elif server_bias and cb.format_descriptors[0].buffer_index == CB_BIAS:
+                # HEIGHT: every receiver's cb_bias holds all of C_out, and the server multicasts it there.
+                assert ns == g.tensor_n_tiles
+                cbs[i] = _cb(CB_BIAS, bias_tensor.dtype, g.weight_tile_bytes, ns, sem_cores)
         # Whole-K kw-fold keeps its weights resident across M-blocks: one stream.
         num_rounds = (
             b.num_k_blocks
@@ -1916,6 +1927,7 @@ def create_program_descriptor(
                 hi.y,
                 lo.x,
                 lo.y,
+                bias_addr if server_bias else 0,
             ]
         server_cores = _core_range_set(servers)
         server_kernels = [
@@ -1930,7 +1942,21 @@ def create_program_descriptor(
             ttnn.KernelDescriptor(
                 kernel_source=str(KERNEL_DIR / "conv2d_3x3_weight_server_writer.cpp"),
                 core_ranges=server_cores,
-                compile_time_args=[CB_WEIGHTS, bk * bn, *server_sem_ids, b.weight_depth, num_chunks],
+                compile_time_args=[
+                    CB_WEIGHTS,
+                    bk * bn,
+                    *server_sem_ids,
+                    b.weight_depth,
+                    num_chunks,
+                    int(server_bias),
+                    CB_BIAS,
+                    g.tensor_n_tiles,
+                ]
+                + (
+                    ttnn.TensorAccessorArgs(bias_tensor).get_compile_time_args()
+                    if server_bias
+                    else ttnn.TensorAccessorArgs().get_compile_time_args()
+                ),
                 runtime_args=server_writer_rt,
                 config=ttnn.WriterConfigDescriptor(),
             ),

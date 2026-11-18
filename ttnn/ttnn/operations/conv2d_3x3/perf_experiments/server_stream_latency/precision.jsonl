@@ -1,0 +1,22 @@
+{"layer": "res2.{0,1,2}.conv2 @ LoFi [perf]", "activation": "relu", "base_pcc": 0.999829, "copy_pcc": 0.999829, "bit_identical": true, "identical_frac": 1.0}
+{"layer": "res2.{0,1,2}.conv2 @ LoFi [perf]", "activation": null, "base_pcc": 0.999789, "copy_pcc": 0.999789, "bit_identical": true, "identical_frac": 1.0}
+{"layer": "res3.0.conv2 @ LoFi [perf]", "activation": "relu", "base_pcc": 0.999026, "copy_pcc": 0.999026, "bit_identical": true, "identical_frac": 1.0}
+{"layer": "res3.0.conv2 @ LoFi [perf]", "activation": null, "base_pcc": 0.999825, "copy_pcc": 0.999825, "bit_identical": true, "identical_frac": 1.0}
+{"layer": "res3.{1,2,3}.conv2 + instance res3.fuse_conv.1 @ LoFi [perf]", "activation": "relu", "base_pcc": 0.999885, "copy_pcc": 0.999885, "bit_identical": true, "identical_frac": 1.0}
+{"layer": "res3.{1,2,3}.conv2 + instance res3.fuse_conv.1 @ LoFi [perf]", "activation": null, "base_pcc": 0.99983, "copy_pcc": 0.99983, "bit_identical": true, "identical_frac": 1.0}
+{"layer": "semantic decoder.res3.fuse_conv.0 @ LoFi [perf]", "activation": "relu", "base_pcc": 0.999757, "copy_pcc": 0.999757, "bit_identical": true, "identical_frac": 1.0}
+{"layer": "semantic decoder.res3.fuse_conv.0 @ LoFi [perf]", "activation": null, "base_pcc": 0.999854, "copy_pcc": 0.999854, "bit_identical": true, "identical_frac": 1.0}
+{"layer": "instance decoder.res3.fuse_conv.0 @ LoFi [perf]", "activation": "relu", "base_pcc": 1.0, "copy_pcc": 1.0, "bit_identical": true, "identical_frac": 1.0}
+{"layer": "instance decoder.res3.fuse_conv.0 @ LoFi [perf]", "activation": null, "base_pcc": 0.999945, "copy_pcc": 0.999945, "bit_identical": true, "identical_frac": 1.0}
+{"layer": "semantic decoder.res3.fuse_conv.1 @ LoFi [perf]", "activation": "relu", "base_pcc": 1.0, "copy_pcc": 1.0, "bit_identical": true, "identical_frac": 1.0}
+{"layer": "semantic decoder.res3.fuse_conv.1 @ LoFi [perf]", "activation": null, "base_pcc": 0.999916, "copy_pcc": 0.999916, "bit_identical": true, "identical_frac": 1.0}
+{"layer": "semantic decoder.res2.fuse_conv.0 @ LoFi [perf]", "activation": "relu", "base_pcc": 0.999019, "copy_pcc": 0.999019, "bit_identical": true, "identical_frac": 1.0}
+{"layer": "semantic decoder.res2.fuse_conv.0 @ LoFi [perf]", "activation": null, "base_pcc": 0.999631, "copy_pcc": 0.999631, "bit_identical": true, "identical_frac": 1.0}
+{"layer": "instance decoder.res2.fuse_conv.0 @ LoFi [perf]", "activation": "relu", "base_pcc": 0.999682, "copy_pcc": 0.999682, "bit_identical": true, "identical_frac": 1.0}
+{"layer": "instance decoder.res2.fuse_conv.0 @ LoFi [perf]", "activation": null, "base_pcc": 0.999645, "copy_pcc": 0.999645, "bit_identical": true, "identical_frac": 1.0}
+{"layer": "semantic res2.fuse_conv.1 + semantic_head.head.{0,1} @ LoFi [perf]", "activation": "relu", "base_pcc": 0.999255, "copy_pcc": 0.999255, "bit_identical": true, "identical_frac": 1.0}
+{"layer": "semantic res2.fuse_conv.1 + semantic_head.head.{0,1} @ LoFi [perf]", "activation": null, "base_pcc": 0.999787, "copy_pcc": 0.999787, "bit_identical": true, "identical_frac": 1.0}
+{"layer": "instance res2.fuse_conv.1 + center_head.0 + offset_head.0 @ LoFi [perf]", "activation": "relu", "base_pcc": 0.999449, "copy_pcc": 0.999449, "bit_identical": true, "identical_frac": 1.0}
+{"layer": "instance res2.fuse_conv.1 + center_head.0 + offset_head.0 @ LoFi [perf]", "activation": null, "base_pcc": 0.99992, "copy_pcc": 0.99992, "bit_identical": true, "identical_frac": 1.0}
+{"layer": "center_head.1 + offset_head.1 @ LoFi [perf]", "activation": "relu", "base_pcc": 1.0, "copy_pcc": 1.0, "bit_identical": true, "identical_frac": 1.0}
+{"layer": "center_head.1 + offset_head.1 @ LoFi [perf]", "activation": null, "base_pcc": 0.999839, "copy_pcc": 0.999839, "bit_identical": true, "identical_frac": 1.0}
