@@ -84,11 +84,10 @@ class MPIRolloutServer:
         atexit.register(os._exit, 1)
 
     def serve_forever(self) -> None:
-        """Block accepting requests until the peer sends ``OP_SHUTDOWN``, then close the sampler."""
+        """Block accepting requests until the peer sends ``OP_SHUTDOWN``. The caller owns the sampler and closes it."""
         with exit_on_error():
             self._serve()
         atexit.unregister(os._exit)
-        self._sampler.close()
 
     def _serve(self) -> None:
         while True:
