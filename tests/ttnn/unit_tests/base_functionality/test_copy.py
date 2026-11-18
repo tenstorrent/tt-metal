@@ -2747,15 +2747,15 @@ def test_copy_docstring_supported_inputs(dtype, layout, input_buffer_type, outpu
         device=device,
         memory_config=interleaved_memory_config(input_buffer_type),
     )
-    # input_b starts with other values, so the test sees them overwritten.
+    expected = ttnn.to_torch(input_a)
+    # Every value of input_b differs from input_a's, so the test sees each one overwritten.
+    other_values = torch.where(expected == 1, 2, 1).to(expected.dtype)
     memory_config = interleaved_memory_config(output_buffer_type)
-    input_b = ttnn.from_torch(
-        full_range_input(shape, dtype, seed=1), dtype=dtype, layout=layout, device=device, memory_config=memory_config
-    )
+    input_b = ttnn.from_torch(other_values, dtype=dtype, layout=layout, device=device, memory_config=memory_config)
     output = ttnn.copy(input_a, input_b)
 
     assert output.buffer_address() == input_b.buffer_address()
     assert output.dtype == dtype
     assert output.layout == layout
     assert output.memory_config() == memory_config
-    assert_exact(ttnn.to_torch(input_a), ttnn.to_torch(input_b))
+    assert_exact(expected, ttnn.to_torch(input_b))
