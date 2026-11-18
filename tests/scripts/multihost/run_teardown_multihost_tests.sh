@@ -79,8 +79,12 @@ select_launcher() {
 }
 launcher="$(select_launcher)" || { echo "::error::no mpirun-ulfm / mpirun on PATH"; exit 1; }
 
-# the production launch line: one rank per host, tcp transport only (no shared-memory layer), tagged output
-launch=(--host "$hosts" -np "$num_hosts" --map-by node --oversubscribe --bind-to none --mca btl self,tcp --tag-output)
+# the production launch line: one rank per host, tcp transport only (no shared-memory layer), tagged output.
+# -x forwards the fault settings to the SSH-launched remote ranks: mpirun does NOT pass the launching shell's
+# environment to remote ranks on its own, so without these the victim rank (on a remote host) would run the
+# clean default and no fault would be injected.
+launch=(--host "$hosts" -np "$num_hosts" --map-by node --oversubscribe --bind-to none --mca btl self,tcp --tag-output
+        -x PROBE_SCENARIO -x PROBE_VICTIM -x PROBE_NP)
 
 # --------------------------------------------------------------------------------------------------------------
 # helpers
