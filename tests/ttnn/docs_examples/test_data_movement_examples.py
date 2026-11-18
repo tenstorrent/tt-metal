@@ -196,6 +196,26 @@ def test_untilize(device):
     logger.info(f"Untilized Tensor Layout: {untilized_tensor.layout}")  # Layout.ROW_MAJOR
 
 
+def test_moe_expert_token_remap(device):
+    # Routing weights of 4 tokens (batch 4, seq 1) for 32 experts
+    batch, seq, experts = 4, 1, 32
+    weights = torch.rand((1, batch, seq, experts))
+    topk = ttnn.from_torch(weights, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+
+    # Place every expert on this single device
+    mapping = torch.ones((1, 1, experts, 1), dtype=torch.int32)
+    expert_mapping = ttnn.from_torch(mapping, dtype=ttnn.uint16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+
+    # Each token selects 2 experts
+    selected = torch.tensor([[0, 5], [1, 5], [2, 7], [3, 31]], dtype=torch.int32).reshape(1, batch, seq, 2)
+    expert_metadata = ttnn.from_torch(selected, dtype=ttnn.uint16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+
+    # Keep the weights of the selected experts, and flag the experts that each pair of tokens selects
+    local_weights, flags = ttnn.moe_expert_token_remap(topk, expert_mapping, expert_metadata, reduction_size=2)
+    logger.info(f"Local Weights Shape: {local_weights.shape}")  # Shape([1, 4, 1, 32])
+    logger.info(f"Flags Shape: {flags.shape}")  # Shape([1, 1, 2, 32])
+
+
 def test_untilize_with_unpadding(device):
     # Create a tilized tensor with padding
     tilized_tensor = ttnn.rand((1, 1, 64, 64), dtype=ttnn.bfloat16, layout=ttnn.Layout.TILE, device=device)
