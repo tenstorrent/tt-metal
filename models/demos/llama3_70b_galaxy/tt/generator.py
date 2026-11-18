@@ -114,6 +114,12 @@ def get_padded_prefill_len(seq_len: int) -> int:
     return padded_prefill_len(seq_len, PREFILL_EXTRA_SEQLENS)
 
 
+def _cpf_rep_max() -> int:
+    """LLAMA_GALAXY_PREFILL_CPF_REPLICA_MAX (default 5120): longest new-token length that uses the replica. Each length
+    up to it adds a write and a read ring trace per warmed prefix; 8192 needs a trace region above 560 MB."""
+    return int(os.environ.get("LLAMA_GALAXY_PREFILL_CPF_REPLICA_MAX", "5120"))
+
+
 def _cpf_rep_on() -> bool:
     """LLAMA_GALAXY_PREFILL_CPF_REPLICA=1 (read at call time): reuse the last broadcast prefix K|V of the CPF ring
     path when the next ring request has the same prefix tokens (llama_attention._cpf_ring_kv, mode "read")."""
@@ -524,7 +530,7 @@ class Generator(WarmupForwardMixin):
                         f"Running warmup prefill for CPF ring: prefill_seq_len={supported_length}, "
                         f"num_cached={prefix_len}, total_seq_len={total_seq_len}"
                     )
-                    rep_max = int(os.environ.get("LLAMA_GALAXY_PREFILL_CPF_REPLICA_MAX", "8192"))
+                    rep_max = _cpf_rep_max()
                     for force in ("write", "read") if _cpf_rep_on() and supported_length <= rep_max else (None,):
                         self._cpf_rep_force = force
                         self.prefill_forward_text(
@@ -820,7 +826,7 @@ class Generator(WarmupForwardMixin):
                 _cpf_rep_on()
                 and not work_use_batched_prefill
                 and num_cached_tokens > 0
-                and prefill_seq_len <= int(os.environ.get("LLAMA_GALAXY_PREFILL_CPF_REPLICA_MAX", "8192"))
+                and prefill_seq_len <= _cpf_rep_max()
                 and self._cpf_ring_request(prefill_seq_len, num_cached_tokens, get_block_size(kv_cache))
             ):
                 pre = tokens[request_idx, :num_cached_tokens].to(torch.int64).contiguous().numpy().tobytes()
@@ -831,6 +837,10 @@ class Generator(WarmupForwardMixin):
                     rep_mode = force
                 else:
                     rep_mode = "read" if self._cpf_rep_cur == self._cpf_rep_valid else "write"
+                if rep_mode == "write":
+                    # the write overwrites the replica layer by layer: nothing is valid until it has been dispatched
+                    # in full (an exception mid-forward must not leave the old prefix's marker on a mixed replica)
+                    self._cpf_rep_valid = None
             self._set_cpf_rep_mode(rep_mode)
 
             if page_table is not None:
