@@ -6,6 +6,7 @@
 #include "api/dataflow/dataflow_buffer.h"
 #include "api/dataflow/global_semaphore.h"
 #include "api/dataflow/noc.h"
+#include "api/scratchpad.h"
 #include "api/tensor/noc_traits.h"
 #include "experimental/kernel_args.h"
 #include "tt_metal/fabric/hw/inc/edm_fabric/edm_fabric_worker_adapters.hpp"
@@ -30,20 +31,16 @@ void kernel_main() {
     const uint8_t sender_num_hops = get_arg(args::sender_num_hops);
 
     Noc noc;
-    DataflowBuffer dfb_packet_header(dfb::packet_header);
-    DataflowBuffer dfb_packet(dfb::packet);
+    Scratchpad<volatile PACKET_HEADER_TYPE> packet_header(scratch::packet_header);
+    Scratchpad<uint8_t> packet(scratch::packet);
     DataflowBuffer dfb_receiver(dfb::receiver);
 
     auto fabric_connection = tt::tt_fabric::WorkerToFabricEdmSender::build_from_binding(fabric::connection);
     fabric_connection.open_start();
 
-    dfb_packet_header.reserve_back(1);
-    const uint32_t sem_header_addr = dfb_packet_header.get_write_ptr();
-    dfb_packet_header.push_back(1);
-
     const uint64_t sender_sem_noc_addr = get_noc_addr(sender_semaphore.address());
 
-    auto* sem_header_ptr = reinterpret_cast<volatile PACKET_HEADER_TYPE*>(sem_header_addr);
+    auto* sem_header_ptr = &packet_header[0];
     fabric_set_unicast_route<false>((tt::tt_fabric::LowLatencyPacketHeader*)sem_header_ptr, sender_num_hops);
     sem_header_ptr->to_noc_unicast_atomic_inc(tt::tt_fabric::NocUnicastAtomicIncCommandHeader{sender_sem_noc_addr, 1});
 
@@ -56,8 +53,7 @@ void kernel_main() {
 
     const auto packet_buffer = TensorAccessor(tensor::packet_buffer);
 
-    dfb_packet.reserve_back(1);
-    const uint64_t packet_l1_addr = dfb_packet.get_write_ptr();
+    const uint64_t packet_l1_addr = reinterpret_cast<uint32_t>(&packet[0]);
 
     sender_semaphore.wait(1);
 
@@ -71,8 +67,7 @@ void kernel_main() {
 
         for (uint32_t page_segment_idx = 0; page_segment_idx < page_segments; ++page_segment_idx) {
             if (page_idx == page_idx_start || packet_page_idx == curr_pages_per_packet) {
-                noc.async_read(
-                    packet_buffer, dfb_packet, packet_size_bytes, {.page_id = packet_idx}, {.offset_bytes = 0});
+                noc.async_read(packet_buffer, packet, packet_size_bytes, {.page_id = packet_idx}, {.offset_bytes = 0});
                 noc.async_read_barrier();
 
                 packet_page_idx = 0;
@@ -90,7 +85,6 @@ void kernel_main() {
         }
         dfb_receiver.push_back(1);
     }
-    dfb_packet.push_back(1);
 
     // clean up semaphore in case it is reused
     sender_semaphore.set(0);

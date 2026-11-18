@@ -23,8 +23,8 @@ ttnn::device_operation::ProgramArtifacts receive_program_factory(
 
     const KernelSpecName reader_kernel{"reader"};
     const KernelSpecName writer_kernel{"writer"};
-    const DFBSpecName packet_header_dfb{"packet_header"};
-    const DFBSpecName packet_dfb{"packet"};
+    const ScratchpadSpecName packet_header_scratchpad{"packet_header"};
+    const ScratchpadSpecName packet_scratchpad{"packet"};
     const DFBSpecName receiver_dfb{"receiver"};
     const TensorParamName intermediate_param{"intermediate"};
     const TensorParamName output_param{"output"};
@@ -56,7 +56,7 @@ ttnn::device_operation::ProgramArtifacts receive_program_factory(
 
     tt::DataFormat inter_dataformat = tt::tt_metal::datatype_to_dataformat_converter(intermediate_tensor.dtype());
 
-    // DFB for packet headers
+    // Scratchpad for packet headers
     constexpr auto buffering_factor = 2;  // this is in other fabric kernels
     constexpr auto num_packet_headers_storable = 2;
     const auto packet_header_size_bytes = tt::tt_fabric::get_tt_fabric_packet_header_size_bytes();
@@ -64,20 +64,19 @@ ttnn::device_operation::ProgramArtifacts receive_program_factory(
     // DFB for sender reader->writer kernels
     const uint32_t dfb_num_pages = 3 * num_pages_per_packet;
 
+    Group<ScratchpadSpec> scratchpads = {
+        ScratchpadSpec{
+            .unique_id = packet_header_scratchpad,
+            .size_per_node = packet_header_size_bytes * (num_packet_headers_storable * buffering_factor),
+        },
+        // Scratchpad for loading up pages that are collected into packets
+        ScratchpadSpec{
+            .unique_id = packet_scratchpad,
+            .size_per_node = packet_size_bytes * 1,
+        },
+    };
+
     Group<DataflowBufferSpec> dataflow_buffers = {
-        DataflowBufferSpec{
-            .unique_id = packet_header_dfb,
-            .entry_size = packet_header_size_bytes,
-            .num_entries = num_packet_headers_storable * buffering_factor,
-            .data_format_metadata = tt::DataFormat::RawUInt32,
-        },
-        // Scratch DFB for loading up pages that are collected into packets
-        DataflowBufferSpec{
-            .unique_id = packet_dfb,
-            .entry_size = packet_size_bytes,
-            .num_entries = 1,
-            .data_format_metadata = inter_dataformat,
-        },
         DataflowBufferSpec{
             .unique_id = receiver_dfb,
             .entry_size = output_page_size_bytes,
@@ -97,31 +96,21 @@ ttnn::device_operation::ProgramArtifacts receive_program_factory(
             "ttnn/cpp/ttnn/operations/point_to_point/device/kernels/dataflow/reader_receive_metal2.cpp"),
         .dfb_bindings =
             {
-                // The packet-header and packet DFBs are written and read by this kernel only.
-                DFBBinding{
-                    .dfb_spec_name = packet_header_dfb,
-                    .accessor_name = "packet_header",
-                    .endpoint_type = DFBEndpointType::PRODUCER,
-                },
-                DFBBinding{
-                    .dfb_spec_name = packet_header_dfb,
-                    .accessor_name = "packet_header",
-                    .endpoint_type = DFBEndpointType::CONSUMER,
-                },
-                DFBBinding{
-                    .dfb_spec_name = packet_dfb,
-                    .accessor_name = "packet",
-                    .endpoint_type = DFBEndpointType::PRODUCER,
-                },
-                DFBBinding{
-                    .dfb_spec_name = packet_dfb,
-                    .accessor_name = "packet",
-                    .endpoint_type = DFBEndpointType::CONSUMER,
-                },
                 DFBBinding{
                     .dfb_spec_name = receiver_dfb,
                     .accessor_name = "receiver",
                     .endpoint_type = DFBEndpointType::PRODUCER,
+                },
+            },
+        .scratchpad_bindings =
+            {
+                ScratchpadBinding{
+                    .scratchpad_spec_name = packet_header_scratchpad,
+                    .accessor_name = "packet_header",
+                },
+                ScratchpadBinding{
+                    .scratchpad_spec_name = packet_scratchpad,
+                    .accessor_name = "packet",
                 },
             },
         .tensor_bindings =
@@ -243,6 +232,7 @@ ttnn::device_operation::ProgramArtifacts receive_program_factory(
         .name = "point_to_point_receive",
         .kernels = {std::move(reader_kernel_spec), std::move(writer_kernel_spec)},
         .dataflow_buffers = std::move(dataflow_buffers),
+        .scratchpads = std::move(scratchpads),
         .tensor_parameters =
             {
                 TensorParameter{.unique_id = intermediate_param, .spec = intermediate_tensor.tensor_spec()},

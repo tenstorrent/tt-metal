@@ -5,6 +5,7 @@
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/dataflow_buffer.h"
 #include "api/dataflow/global_semaphore.h"
+#include "api/scratchpad.h"
 #include "experimental/kernel_args.h"
 #include "tt_metal/fabric/hw/inc/edm_fabric/edm_fabric_worker_adapters.hpp"
 #include "cpp/ttnn/operations/data_movement/common/kernels/common.hpp"
@@ -35,23 +36,26 @@ void kernel_main() {
     fabric_connection.open_start();
 
     DataflowBuffer dfb_sender(dfb::sender);
-    DataflowBuffer dfb_packet_header(dfb::packet_header);
-    DataflowBuffer dfb_packet(dfb::packet);
+    Scratchpad<volatile PACKET_HEADER_TYPE> packet_header(scratch::packet_header);
+    Scratchpad<uint8_t> packet(scratch::packet);
+
+    constexpr uint32_t packet_header_entry_elems = packet_header_size_bytes / sizeof(PACKET_HEADER_TYPE);
+    uint32_t packet_header_wr = 0;
 
     // set up packet header buffer
-    dfb_packet_header.reserve_back(1);
-    uint32_t packet_header_addr = dfb_packet_header.get_write_ptr();
-    dfb_packet_header.push_back(1);
+    auto* packet_header_ptr = &packet_header[packet_header_wr];
+    packet_header_wr += packet_header_entry_elems;
+    ASSERT(packet_header_wr <= packet_header.size());
+    if (packet_header_wr == packet_header.size()) {
+        packet_header_wr = 0;
+    }
 
-    auto* packet_header_ptr = reinterpret_cast<volatile PACKET_HEADER_TYPE*>(packet_header_addr);
     fabric_set_unicast_route<false>((tt::tt_fabric::LowLatencyPacketHeader*)packet_header_ptr, dst_num_hops);
 
     const auto dst_buffer = TensorAccessor(tensor::dst);
 
     // working memory to hold coalesced packet
-    dfb_packet.reserve_back(1);
-    const uint32_t packet_base_addr = dfb_packet.get_write_ptr();
-    dfb_packet.push_back(1);
+    const uint32_t packet_base_addr = reinterpret_cast<uint32_t>(&packet[0]);
 
     // initial packet size
     uint32_t curr_pages_per_packet = std::min(max_pages_per_packet, page_idx_end - page_idx_start);
@@ -81,7 +85,7 @@ void kernel_main() {
                 tt::tt_fabric::linear::to_noc_unicast_write(
                     align(payload_size_bytes, alignment), packet_header_ptr, packet_idx, dst_buffer);
                 // blocking+flush: drain the payload out of packet_base_addr before the next tt_memmove
-                // reuses the single-slot dfb_packet (the default overload leaves the source read in flight).
+                // reuses the packet scratchpad (the default overload leaves the source read in flight).
                 perform_payload_send<true, true>(
                     fabric_connection, packet_base_addr, payload_size_bytes, packet_header_ptr);
 
@@ -95,13 +99,9 @@ void kernel_main() {
         dfb_sender.pop_front(1);
     }
 
-    dfb_packet_header.reserve_back(1);
-    const uint32_t sem_header_addr = dfb_packet_header.get_write_ptr();
-    dfb_packet_header.push_back(1);
-
     const uint64_t receive_sem_noc_addr = get_noc_addr(receive_semaphore.address());
 
-    auto* sem_header_ptr = reinterpret_cast<volatile PACKET_HEADER_TYPE*>(sem_header_addr);
+    auto* sem_header_ptr = &packet_header[packet_header_wr];
     fabric_set_unicast_route<false>((tt::tt_fabric::LowLatencyPacketHeader*)sem_header_ptr, dst_num_hops);
     sem_header_ptr->to_noc_unicast_atomic_inc(tt::tt_fabric::NocUnicastAtomicIncCommandHeader{receive_sem_noc_addr, 1});
 

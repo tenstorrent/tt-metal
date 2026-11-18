@@ -28,8 +28,8 @@ ttnn::device_operation::ProgramArtifacts send_program_factory(
     const KernelSpecName reader_kernel{"reader"};
     const KernelSpecName writer_kernel{"writer"};
     const DFBSpecName sender_dfb{"sender"};
-    const DFBSpecName packet_header_dfb{"packet_header"};
-    const DFBSpecName packet_dfb{"packet"};
+    const ScratchpadSpecName packet_header_scratchpad{"packet_header"};
+    const ScratchpadSpecName packet_scratchpad{"packet"};
     const TensorParamName input_param{"input"};
     const TensorParamName intermediate_param{"intermediate"};
     const experimental::GlobalSemaphoreParamName receive_semaphore_param{"receive_semaphore"};
@@ -72,18 +72,17 @@ ttnn::device_operation::ProgramArtifacts send_program_factory(
             .num_entries = dfb_num_pages,
             .data_format_metadata = input_dataformat,
         },
-        DataflowBufferSpec{
-            .unique_id = packet_header_dfb,
-            .entry_size = packet_header_size_bytes,
-            .num_entries = num_packet_headers_storable * buffering_factor,
-            .data_format_metadata = tt::DataFormat::RawUInt32,
+    };
+
+    Group<ScratchpadSpec> scratchpads = {
+        ScratchpadSpec{
+            .unique_id = packet_header_scratchpad,
+            .size_per_node = packet_header_size_bytes * (num_packet_headers_storable * buffering_factor),
         },
-        // Scratch DFB for coalescing pages into packets
-        DataflowBufferSpec{
-            .unique_id = packet_dfb,
-            .entry_size = packet_size_bytes,
-            .num_entries = 1,
-            .data_format_metadata = input_dataformat,
+        // Scratchpad for coalescing pages into packets
+        ScratchpadSpec{
+            .unique_id = packet_scratchpad,
+            .size_per_node = packet_size_bytes * 1,
         },
     };
 
@@ -127,26 +126,16 @@ ttnn::device_operation::ProgramArtifacts send_program_factory(
                     .accessor_name = "sender",
                     .endpoint_type = DFBEndpointType::CONSUMER,
                 },
-                // The packet-header and packet DFBs are written and read by this kernel only.
-                DFBBinding{
-                    .dfb_spec_name = packet_header_dfb,
+            },
+        .scratchpad_bindings =
+            {
+                ScratchpadBinding{
+                    .scratchpad_spec_name = packet_header_scratchpad,
                     .accessor_name = "packet_header",
-                    .endpoint_type = DFBEndpointType::PRODUCER,
                 },
-                DFBBinding{
-                    .dfb_spec_name = packet_header_dfb,
-                    .accessor_name = "packet_header",
-                    .endpoint_type = DFBEndpointType::CONSUMER,
-                },
-                DFBBinding{
-                    .dfb_spec_name = packet_dfb,
+                ScratchpadBinding{
+                    .scratchpad_spec_name = packet_scratchpad,
                     .accessor_name = "packet",
-                    .endpoint_type = DFBEndpointType::PRODUCER,
-                },
-                DFBBinding{
-                    .dfb_spec_name = packet_dfb,
-                    .accessor_name = "packet",
-                    .endpoint_type = DFBEndpointType::CONSUMER,
                 },
             },
         .tensor_bindings =
@@ -244,6 +233,7 @@ ttnn::device_operation::ProgramArtifacts send_program_factory(
         .name = "point_to_point_send",
         .kernels = {std::move(reader_kernel_spec), std::move(writer_kernel_spec)},
         .dataflow_buffers = std::move(dataflow_buffers),
+        .scratchpads = std::move(scratchpads),
         .tensor_parameters =
             {
                 TensorParameter{.unique_id = input_param, .spec = input_tensor.tensor_spec()},
