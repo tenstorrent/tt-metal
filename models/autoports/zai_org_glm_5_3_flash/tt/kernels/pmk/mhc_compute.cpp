@@ -45,7 +45,7 @@
 #include "mhc_root_sfpu.hpp"
 #include "models/autoports/zai_org_glm_5_3_flash/tt/kernels/mhc_pre/mhc_pre_sfpu.hpp"
 #if defined(PMK_MEMBER)
-// the post's one-pass mix (7a's mhc_post_pf7a) pulls the LLK's internal sfpu/ckernel_sfpu_binary_bcast.h into the
+// the post's one-pass mix (7a's mhc_post_pf7a) pulls the LLK's ckernel_sfpu_binary_bcast.h into the
 // translation unit; the root's TU stays exactly 7a's mhc_pre_pf root TU (silicon 10:08Z / 10:3xZ: the root's Sinkhorn
 // loop produced the ITERS = 1 result (comb max |diff| 0.7373 = the host's iters=1 candidate to 4 digits) although
 // KERNEL_COMPILE_TIME_ARGS carried 20; the pass and its call are byte-identical to 7a's, so the TU-level differences --

@@ -127,17 +127,17 @@ FORCE_INLINE void mm_phase() {
 #else
     constexpr bool SCALE = false;
 #endif
-    copy_tile_to_dst_init_short(CB_PART);
+    copy_init(CB_PART);
     for (uint32_t j = 0; j < NR; ++j) {
         tile_regs_acquire();
         copy_tile(CB_PART, j, 0);
 #if defined(MK_SCALE_MASK)
         if constexpr (SCALE) {
-            copy_tile_to_dst_init_short(MK_INVH_CB);
+            copy_init(MK_INVH_CB);
             copy_tile(MK_INVH_CB, 0, 1);
             sfpu_mul_bcast_col_init();
             sfpu_mul_bcast_col(0, 1);
-            copy_tile_to_dst_init_short(CB_PART);
+            copy_init(CB_PART);
         }
 #endif
         tile_regs_commit();

@@ -170,10 +170,10 @@ FORCE_INLINE void mm_phase() {
             for (uint32_t c = 0; c < NR; ++c) {  // output row t * rs[t] (fp32 DST, column broadcast)
                 tile_regs_acquire();
                 reconfig_data_format_srca(CB_PART);
-                copy_tile_to_dst_init_short(CB_PART);
+                copy_init(CB_PART);
                 copy_tile(CB_PART, c, 0);
                 reconfig_data_format_srca(CB_RS);
-                copy_tile_to_dst_init_short(CB_RS);
+                copy_init(CB_RS);
                 copy_tile(CB_RS, 0, 1);
                 sfpu_mul_bcast_col_init();
                 sfpu_mul_bcast_col(0, 1);
@@ -185,7 +185,7 @@ FORCE_INLINE void mm_phase() {
         } else {
             reconfig_data_format_srca(CB_PART);
             pack_reconfig_data_format(OUT_CB);
-            copy_tile_to_dst_init_short(CB_PART);
+            copy_init(CB_PART);
             for (uint32_t c = 0; c < NR; ++c) {
                 tile_regs_acquire();
                 copy_tile(CB_PART, c, 0);

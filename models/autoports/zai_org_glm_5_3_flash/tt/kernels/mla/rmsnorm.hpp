@@ -29,7 +29,7 @@ namespace mlan {
 // dst[d] <- tile i of cb
 FORCE_INLINE void load(uint32_t cb, uint32_t i, uint32_t d) {
     reconfig_data_format_srca(cb);
-    copy_tile_to_dst_init_short(cb);
+    copy_init(cb);
     copy_tile(cb, i, d);
 }
 

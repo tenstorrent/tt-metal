@@ -38,7 +38,7 @@ void kernel_main() {
         cb_reserve_back(CB_OUT, 1);
         tile_regs_acquire();
         reconfig_data_format_srca(CB_INV);
-        copy_tile_to_dst_init_short(CB_INV);
+        copy_init(CB_INV);
         copy_tile(CB_INV, 0, 0);
         tile_regs_commit();
         tile_regs_wait();

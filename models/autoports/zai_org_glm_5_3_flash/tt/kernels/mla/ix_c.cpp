@@ -36,7 +36,7 @@ constexpr uint32_t CB_MEAN = CB_T0, CB_D = CB_T0 + 1, CB_INV = CB_T0 + 2, CB_L =
 
 FORCE_INLINE void load(uint32_t cb, uint32_t i, uint32_t d) {
     reconfig_data_format_srca(cb);
-    copy_tile_to_dst_init_short(cb);
+    copy_init(cb);
     copy_tile(cb, i, d);
 }
 FORCE_INLINE void emit(uint32_t d, uint32_t cb) {

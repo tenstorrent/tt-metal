@@ -285,7 +285,7 @@ class RowExchange:
         conn = []
         for rep in self.groups[coord]:
             dst = self.device.get_fabric_node_id(rep)
-            conn += list(ttnn.setup_fabric_connection(src, dst, self.link, program, self.xchg_core))
+            conn += list(ttnn.setup_fabric_connection(self.device, src, dst, self.link, program, self.xchg_core))
         xk = program.kernels[len(kernels) - 1]
         full = list(xk.runtime_args[self.xchg_core.x][self.xchg_core.y]) + conn
         xk.runtime_args[self.xchg_core.x][self.xchg_core.y] = full

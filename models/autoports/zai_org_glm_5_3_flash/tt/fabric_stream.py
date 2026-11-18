@@ -138,8 +138,8 @@ def _sem_cores(s_) -> set:
     }
 
 
-def fabric_connect(me, peer, link: int, prog, core, base: int | None = None) -> list:
-    """ttnn.setup_fabric_connection(me, peer, link, prog, core) with the connection's two worker words on semaphore ids
+def fabric_connect(mesh, me, peer, link: int, prog, core, base: int | None = None) -> list:
+    """ttnn.setup_fabric_connection(mesh, me, peer, link, prog, core) with the connection's two worker words on semaphore ids
     >= FAB_SEM_BASE of `core` (see FAB_SEM_BASE): the runtime args to append to the sender's list. `base`: a lower
     first id for a core that keeps no local words of its own (the fabric_ar lanes: 4 connections on the 8x4)"""
     base = FAB_SEM_BASE if base is None else int(base)
@@ -151,7 +151,7 @@ def fabric_connect(me, peer, link: int, prog, core, base: int | None = None) -> 
     if pad:
         prog.semaphores = sems + [ttnn.SemaphoreDescriptor(id=i, core_ranges=_crs([xy]), initial_value=0) for i in pad]
     n0 = len(list(prog.semaphores))
-    fab = ttnn.setup_fabric_connection(me, peer, link, prog, core)
+    fab = ttnn.setup_fabric_connection(mesh, me, peer, link, prog, core)
     if CONNECT_LOG is not None:
         CONNECT_LOG.append((xy, int(link), str(peer)))
     new = [int(s_.id) for s_ in list(prog.semaphores)[n0:]]
@@ -404,7 +404,7 @@ class _FabricStream:
             for d, rng in ((1, up), (-1, dn)):
                 if rng:
                     peer = mesh.get_fabric_node_id(ttnn.MeshCoordinate(*step(d)))
-                    fab = fabric_connect(me, peer, self.link_base + h, prog, core)
+                    fab = fabric_connect(self.mesh, me, peer, self.link_base + h, prog, core)
                     prog.kernels[ki].runtime_args[lane[0]][lane[1]].extend(fab)
 
     def run(self, x):
@@ -676,7 +676,7 @@ class FabricStreamC1:
             for d, rng in ((1, up), (-1, dn)):
                 if rng:
                     peer = self.mesh.get_fabric_node_id(ttnn.MeshCoordinate(*step(d)))
-                    fab = fabric_connect(me, peer, h, prog, ttnn.CoreCoord(*lane))
+                    fab = fabric_connect(self.mesh, me, peer, h, prog, ttnn.CoreCoord(*lane))
                     prog.kernels[send_kernel_index].runtime_args[lane[0]][lane[1]].extend(fab)
 
     def unit(self, x):
@@ -997,7 +997,7 @@ class FabricStreamRSR:
             for d, rng in ((1, up), (-1, dn)):
                 if rng:
                     peer = self.mesh.get_fabric_node_id(ttnn.MeshCoordinate(*step(d)))
-                    fab = fabric_connect(me, peer, h, prog, ttnn.CoreCoord(*lane))
+                    fab = fabric_connect(self.mesh, me, peer, h, prog, ttnn.CoreCoord(*lane))
                     prog.kernels[send_kernel_index].runtime_args[lane[0]][lane[1]].extend(fab)
 
     def __call__(self, pt):
@@ -1117,7 +1117,7 @@ class FabricStreamC1X(FabricStreamC1):
             for (nr, nc), rng in zip(steps, self._ranges(r, c)):
                 if rng:
                     peer = self.mesh.get_fabric_node_id(ttnn.MeshCoordinate(nr, nc))
-                    fab = fabric_connect(me, peer, h, prog, ttnn.CoreCoord(*lane))
+                    fab = fabric_connect(self.mesh, me, peer, h, prog, ttnn.CoreCoord(*lane))
                     prog.kernels[send_kernel_index].runtime_args[lane[0]][lane[1]].extend(fab)
 
 
@@ -1240,7 +1240,7 @@ class FabricStreamRSL:
             for d, rng in ((-1, c), (1, self.nc - 1 - c)):  # dir 0 = toward lower positions, dir 1 = higher
                 if rng:
                     peer = self.mesh.get_fabric_node_id(ttnn.MeshCoordinate(r, c + d))
-                    fab = fabric_connect(me_id, peer, h, prog, ttnn.CoreCoord(*lane))
+                    fab = fabric_connect(self.mesh, me_id, peer, h, prog, ttnn.CoreCoord(*lane))
                     prog.kernels[send_kernel_index].runtime_args[lane[0]][lane[1]].extend(fab)
 
     def __call__(self, r1):

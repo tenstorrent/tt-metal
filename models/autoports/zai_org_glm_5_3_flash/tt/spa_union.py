@@ -188,10 +188,12 @@ class SpaUnion:
         for d, rng in ((1, up), (-1, dn)):  # up first, then down (spa_us.cpp's order)
             if rng:
                 peer = self.mesh.get_fabric_node_id(ttnn.MeshCoordinate(*step(d)))
-                prog.kernels[0].runtime_args[lane.x][lane.y].extend(fabric_connect(me, peer, self.link, prog, lane))
+                prog.kernels[0].runtime_args[lane.x][lane.y].extend(
+                    fabric_connect(self.mesh, me, peer, self.link, prog, lane)
+                )
         if self.two:  # the column connection (up = to row 1, down = to row 0)
             peer = self.mesh.get_fabric_node_id(ttnn.MeshCoordinate(1 - r, c))
-            prog.kernels[3].runtime_args[col.x][col.y].extend(fabric_connect(me, peer, self.link, prog, col))
+            prog.kernels[3].runtime_args[col.x][col.y].extend(fabric_connect(self.mesh, me, peer, self.link, prog, col))
         return prog
 
     def tensors(self):

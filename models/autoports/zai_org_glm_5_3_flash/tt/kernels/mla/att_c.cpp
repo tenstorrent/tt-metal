@@ -113,7 +113,7 @@ constexpr Part NONE{0xFFu, 0xFFu};  // no running partial
 
 FORCE_INLINE void load(uint32_t cb, uint32_t i, uint32_t d) {
     reconfig_data_format_srca(cb);
-    copy_tile_to_dst_init_short(cb);
+    copy_init(cb);
     copy_tile(cb, i, d);
 }
 FORCE_INLINE void pack_to(uint32_t d, uint32_t cb) {

@@ -61,7 +61,7 @@ void kernel_main() {
     cb_reserve_back(CB_OUT, NR);
     reconfig_data_format_srca(CB_PART);
     pack_reconfig_data_format(CB_OUT);
-    copy_tile_to_dst_init_short(CB_PART);
+    copy_init(CB_PART);
     for (uint32_t j = 0; j < NR; ++j) {
         tile_regs_acquire();
         copy_tile(CB_PART, j, 0);

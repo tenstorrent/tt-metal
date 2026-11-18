@@ -81,7 +81,7 @@ class SpaGather:
         for d, rng in ((1, up), (-1, dn)):  # up first, then down (spa_send.cpp's order)
             if rng:
                 peer = self.mesh.get_fabric_node_id(ttnn.MeshCoordinate(*step(d)))
-                fab = fabric_connect(me, peer, self.link, prog, lane)
+                fab = fabric_connect(self.mesh, me, peer, self.link, prog, lane)
                 prog.kernels[0].runtime_args[lane.x][lane.y].extend(fab)
         return prog
 

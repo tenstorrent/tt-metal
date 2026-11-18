@@ -51,7 +51,7 @@ static_assert(HT % 2 == 0, "rotate-half pairs whole tiles");
 // dst[d] <- tile i of cb (exact fp32 for UnpackToDestFp32 CBs; bf16 CBs unpack exactly into the fp32 DST)
 FORCE_INLINE void load(uint32_t cb, uint32_t i, uint32_t d) {
     reconfig_data_format_srca(cb);
-    copy_tile_to_dst_init_short(cb);
+    copy_init(cb);
     copy_tile(cb, i, d);
 }
 

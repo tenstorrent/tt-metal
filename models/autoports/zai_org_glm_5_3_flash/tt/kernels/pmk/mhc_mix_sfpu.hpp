@@ -14,7 +14,7 @@
 #pragma once
 
 #ifdef TRISC_MATH
-#include "sfpu/ckernel_sfpu_binary_bcast.h"
+#include "ckernel_sfpu_binary_bcast.h"
 
 namespace ckernel::sfpu {
 

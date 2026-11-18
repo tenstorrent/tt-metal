@@ -168,7 +168,7 @@ FORCE_INLINE void mm_tile_qk(uint32_t in0, uint32_t in1, uint32_t i0, uint32_t i
 
 FORCE_INLINE void load(uint32_t cb, uint32_t i, uint32_t d) {
     reconfig_data_format_srca(cb);
-    copy_tile_to_dst_init_short(cb);
+    copy_init(cb);
     copy_tile(cb, i, d);
 }
 FORCE_INLINE void pack_to(uint32_t d, uint32_t cb) {

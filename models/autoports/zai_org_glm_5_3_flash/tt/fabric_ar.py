@@ -404,7 +404,7 @@ class FabricPhase:
         for h, lane in enumerate(self.lanes):
             core = ttnn.CoreCoord(*lane)
             for (nr, nc), rng in conns:
-                fab = fabric_connect(me, mesh.get_fabric_node_id(ttnn.MeshCoordinate(nr, nc)), h, prog, core,
+                fab = fabric_connect(self.mesh, me, mesh.get_fabric_node_id(ttnn.MeshCoordinate(nr, nc)), h, prog, core,
                                      base=base)  # fmt: skip
                 prog.kernels[send_kernel_index].runtime_args[lane[0]][lane[1]].extend(fab)
 

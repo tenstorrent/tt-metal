@@ -408,7 +408,12 @@ class MoePersistent:
                 for rep in g.groups[coord]:
                     conn += list(
                         ttnn.setup_fabric_connection(
-                            src, self.device.get_fabric_node_id(rep), g.link, program, ttnn.CoreCoord(*self.xchg_core)
+                            self.device,
+                            src,
+                            self.device.get_fabric_node_id(rep),
+                            g.link,
+                            program,
+                            ttnn.CoreCoord(*self.xchg_core),
                         )
                     )
                 xi = [i for i, k in enumerate(program.kernels) if str(k.kernel_source).endswith("xchg_moe.cpp")]

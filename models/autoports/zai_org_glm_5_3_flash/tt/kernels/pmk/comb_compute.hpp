@@ -152,7 +152,7 @@ FORCE_INLINE void phase_main() {
         cb_wait_front(CB_CRM, NT);
         reconfig_data_format_srca(CB_CRM);
         pack_reconfig_data_format(CB_COUT);
-        copy_tile_init(CB_CRM);
+        copy_init(CB_CRM);
         cb_reserve_back(CB_COUT, NT);
         for (uint32_t n = 0; n < NT; n += 4) {
             tile_regs_acquire();
