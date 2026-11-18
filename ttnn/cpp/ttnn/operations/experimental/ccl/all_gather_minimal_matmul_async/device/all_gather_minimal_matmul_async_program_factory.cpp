@@ -1446,7 +1446,7 @@ tt::tt_metal::ProgramDescriptor all_gather_minimal_matmul_async_factory_helper(
     // count M_tiles and the fused-ternary scalar are re-applied in override_runtime_arguments.
     // in0 common args: [in0_addr, in2_addr, in3_addr, sem_backward, sem_forward, barrier_sem, M_tiles,
     // [ternary_a, ternary_b, broadcast], output_addrs..., rank, forward route (2), backward route (2),
-    // in0 sender/receiver/valid semaphores, chain length, forward/backward fabric-sender positions, grid NoC coords...]
+    // in0 sender/receiver/valid semaphores, grid NoC coords...]
     {
         tt::tt_metal::KernelDescriptor::RTArgList in0_common_args;
         in0_common_args.push_back(in0_buffer);
@@ -1478,17 +1478,10 @@ tt::tt_metal::ProgramDescriptor all_gather_minimal_matmul_async_factory_helper(
         for (const uint32_t word : unicast_backward_args) {
             in0_common_args.push_back(word);  // smuggled-rta-ok: fabric route, fixed per device
         }
-        // Values the same on every core, so they are dispatched once instead of once per core: the relay semaphores,
-        // the in0 chain's length and the chain positions of its forward and backward fabric senders (beside the mux at
-        // the chain's far end).
-        const bool in0_increasing = (in0_noc == tt::tt_metal::NOC::NOC_0);
-        const uint32_t in0_core_order_size = in1_parallel_axis_cores;
+        // The relay semaphores are the same on every core: dispatched once instead of once per core.
         in0_common_args.push_back(in0_sender_semaphore_id);
         in0_common_args.push_back(in0_receiver_semaphore_id);
         in0_common_args.push_back(in0_valid_semaphore_id);
-        in0_common_args.push_back(in0_core_order_size);
-        in0_common_args.push_back(in0_increasing ? in0_core_order_size - 1 : 1u);  // forward fabric sender
-        in0_common_args.push_back(in0_increasing ? in0_core_order_size - 2 : 2u);  // backward fabric sender
         for (const uint32_t coord : grid_noc_coords) {
             in0_common_args.push_back(coord);
         }
@@ -1603,8 +1596,9 @@ tt::tt_metal::ProgramDescriptor all_gather_minimal_matmul_async_factory_helper(
         const auto in0_fwd_core = in0_core_order.at(in0_fwd_idx);
         const auto in0_bwd_core = in0_core_order.at(in0_bwd_idx);
 
-        // Each core computes its position, chain neighbours, M/N ranges and deferred K block on device from its
-        // logical coordinates (AgmmCore in matmul_dataflow_common.hpp); per-core args carry only fabric connections.
+        // Each core computes its chain position and neighbours, in0 index, N range and deferred K block on device
+        // from its logical coordinates (AgmmCore in matmul_dataflow_common.hpp); per-core args carry only fabric
+        // connections.
         std::vector<uint32_t> in0_args;
         if (in0_is_fabric_core) {
             uint32_t worker_idx = in0_idx % num_workers_per_link;

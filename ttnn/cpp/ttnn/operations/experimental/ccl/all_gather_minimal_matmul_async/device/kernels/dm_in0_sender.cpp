@@ -140,13 +140,13 @@ void kernel_main() {
 #else
     device_arg_idx += 4;  // the unicast routes, used with the mux only
 #endif
-    // The same on every core: the relay semaphores and the in0 chain's length and fabric-sender positions.
+    // The relay semaphores, the same on every core.
     const uint32_t in0_sender_semaphore_id = get_common_arg_val<uint32_t>(device_arg_idx++);
     const uint32_t in0_receiver_semaphore_id = get_common_arg_val<uint32_t>(device_arg_idx++);
     const uint32_t in0_valid_semaphore_id = get_common_arg_val<uint32_t>(device_arg_idx++);
-    [[maybe_unused]] const uint32_t in0_core_order_size = get_common_arg_val<uint32_t>(device_arg_idx++);
-    const uint32_t forward_in0_core_order_index = get_common_arg_val<uint32_t>(device_arg_idx++);
-    const uint32_t backward_in0_core_order_index = get_common_arg_val<uint32_t>(device_arg_idx++);
+    // The in0 chain's fabric senders sit beside the mux at its far (high-coordinate) end.
+    constexpr uint32_t forward_in0_core_order_index = in0_chain_increasing ? in0_chain_len - 1 : 1;
+    constexpr uint32_t backward_in0_core_order_index = in0_chain_increasing ? in0_chain_len - 2 : 2;
 
     // This core's position, in0 chain neighbours and N range. The common args end with the NoC coordinates of the
     // grid's columns and rows.
