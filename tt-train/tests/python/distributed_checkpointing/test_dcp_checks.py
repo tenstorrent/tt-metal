@@ -12,7 +12,7 @@ import numpy as np
 
 import ttml.distributed_checkpointing as dcp
 
-from ttml.distributed_checkpointing._errors import CheckpointError, LayoutError, MissingKeyError
+from ttml.distributed_checkpointing._errors import CheckpointError, LayoutError, LazyParameterError, MissingKeyError
 from ttml.distributed_checkpointing._index import Entry
 from ttml.distributed_checkpointing._layouts import Identity, fused_segments
 from ttml.distributed_checkpointing._planner import TensorInfo
@@ -27,7 +27,7 @@ from ttml.distributed_checkpointing._state_dict import (
     reshard_fsdp_modules,
 )
 from ttml.distributed_checkpointing._topology import Label, Placement, dist_coords, tp_split
-from ttml.modules.parameter import Parameter
+from ttml.modules.parameter import Parameter, TensorMetadata
 
 
 def _label(placements, dist_shape) -> Label:
@@ -230,6 +230,24 @@ def test_an_unknown_layout_declaration_is_refused(expect_error):
     # A misspelt key used to leave the weight undeclared: an identity layout that scrambles a cross-TP load.
     with expect_error(LayoutError, r"Root/w: checkpoint_layout declares \['fused_segments'\]"):
         _python_parameters(_Declaring({"fused_segments": (2, (64, 32, 32))}), {"Root/w": 0})
+
+
+class _Lazy:
+    """A Python module with an unmaterialized parameter, at the root or in the child ``blocks.0``."""
+
+    def __init__(self, nested: bool):
+        self.nested = nested
+        self.w = Parameter(TensorMetadata((1, 1, 32, 32), lambda shape, mapper: None))
+
+    def named_modules(self):
+        yield ("blocks.0", self) if self.nested else ("", self)
+
+
+def test_a_lazy_parameter_is_named_by_its_key(expect_error):
+    with expect_error(LazyParameterError, r"^Root/w has not been materialized; call ttml.materialize_module first"):
+        _python_parameters(_Lazy(nested=False), {"Root/x": 0})
+    with expect_error(LazyParameterError, r"^Root/blocks/0/w has not been materialized"):
+        _python_parameters(_Lazy(nested=True), {"Root/x": 0})
 
 
 def test_argument_errors_come_first(tmp_path, expect_error):

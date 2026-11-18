@@ -151,12 +151,10 @@ def _python_parameters(model, params) -> tuple[dict[int, list[str]], dict[int, d
         for attr, value in getattr(module, "__dict__", {}).items():
             if not isinstance(value, Parameter):
                 continue
-            if value.is_lazy:
-                raise LazyParameterError(
-                    f"{root}/{path}/{attr} has not been materialized; call ttml.materialize_module first"
-                )
-            tensor = value.tensor
             fqn = "/".join([root] + ([path.replace(".", "/")] if path else []) + [attr])
+            if value.is_lazy:
+                raise LazyParameterError(f"{fqn} has not been materialized; call ttml.materialize_module first")
+            tensor = value.tensor
             names.setdefault(id(tensor), []).append(fqn)
             declaration = getattr(value, "checkpoint_layout", None)
             if declaration:
