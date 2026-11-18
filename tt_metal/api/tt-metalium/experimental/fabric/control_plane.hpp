@@ -17,7 +17,6 @@
 #include <tt-metalium/experimental/fabric/routing_table_generator.hpp>
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/experimental/fabric/fabric_types.hpp>
-#include <tt-metalium/experimental/context/metal_env.hpp>
 #include <tt-metalium/experimental/fabric/link_health.hpp>
 #include <hostdevcommon/fabric_common.h>
 #include <tt-metalium/distributed_context.hpp>
@@ -39,6 +38,8 @@ struct EthCoord;
 
 namespace umd {
 class ClusterDescriptor;
+class TTDevice;
+struct CoreCoord;
 }
 
 namespace llrt {
@@ -58,6 +59,7 @@ class PhysicalSystemDescriptor;
 namespace tt::tt_fabric {
 
 class TopologyMapper;
+class FabricFlatAddressRoutingTableGenerator;
 
 // TODO: remove this once UMD provides API for UBB ID and bus ID
 struct UbbId {
@@ -101,7 +103,7 @@ public:
         const ::tt::llrt::RunTimeOptions& rtoptions,
         const ::tt::tt_metal::Hal& hal,
         const tt_metal::distributed::multihost::DistributedContext& distributed_context,
-        const tt_metal::FabricConfigDescriptor& config = {});
+        const tt_metal::FabricSettings& config = {});
 
     // Create control plane with custom mesh graph descriptor
     explicit ControlPlane(
@@ -110,7 +112,7 @@ public:
         const ::tt::tt_metal::Hal& hal,
         const tt_metal::distributed::multihost::DistributedContext& distributed_context,
         const std::string& mesh_graph_desc_file,
-        const tt_metal::FabricConfigDescriptor& config = {});
+        const tt_metal::FabricSettings& config = {});
 
     // Create control plane with custom mesh graph descriptor and logical mesh chip id to physical chip id mapping
     explicit ControlPlane(
@@ -120,7 +122,7 @@ public:
         const tt_metal::distributed::multihost::DistributedContext& distributed_context,
         const std::string& mesh_graph_desc_file,
         const std::map<FabricNodeId, ChipId>& logical_mesh_chip_id_to_physical_chip_id_mapping,
-        const tt_metal::FabricConfigDescriptor& config = {});
+        const tt_metal::FabricSettings& config = {});
 
     ~ControlPlane();
 
@@ -131,6 +133,8 @@ public:
     void print_all_ethernet_connections() const;
 
     // Converts chip level routing tables to per ethernet channel
+    bool fabric_uses_flat_addressing() const;
+    void configure_routing_tables_for_fabric_flat_address();
     void configure_routing_tables_for_fabric_ethernet_channels();
     void write_routing_tables_to_all_chips() const;
     void write_fabric_telemetry_to_all_chips(const FabricNodeId& fabric_node_id) const;
@@ -408,7 +412,7 @@ private:
     void init_control_plane_auto_discovery();
 
     // Validates this process's own mesh binding (config_.mesh_id / host_rank) against the mesh graph descriptor and
-    // checks the FabricConfigDescriptor of every rank: that each rank's mesh_id / host_rank exist in the mesh graph
+    // checks the FabricSettings of every rank: that each rank's mesh_id / host_rank exist in the mesh graph
     // descriptor, that ranks of a logical mesh share one FabricConfig, and that all other settings are identical on
     // every rank (only fabric_config, mesh_id and host_rank may differ). The local-binding checks emit the TT_MESH_ID /
     // TT_MESH_HOST_RANK diagnostics that tt-run users and tests rely on, and run on every init path. The cross-rank
@@ -417,7 +421,7 @@ private:
     // routing tables or FabricContext use the binding.
     void validate_fabric_config_compatibility();
 
-    // All-gather every rank's FabricConfigDescriptor into gathered_fabric_configs_. Done once, up front in
+    // All-gather every rank's FabricSettings into gathered_fabric_configs_. Done once, up front in
     // init_control_plane, so both the per-mesh MeshGraph build and validate_fabric_config_compatibility() share one
     // collective instead of each issuing its own.
     void gather_fabric_config_descriptors();
@@ -434,11 +438,11 @@ private:
     // Fabric settings. Strict system health mode (reliability_mode) requires (expects) all links/devices to be
     // live: any downed devices/links result in an error. Otherwise the control plane is free to instantiate
     // fewer routing planes according to which links are available.
-    tt_metal::FabricConfigDescriptor config_;
+    tt_metal::FabricSettings config_;
 
-    // Every rank's FabricConfigDescriptor, gathered once in gather_fabric_config_descriptors(). Indexed by rank.
+    // Every rank's FabricSettings, gathered once in gather_fabric_config_descriptors(). Indexed by rank.
     // Used to build each mesh's config in MeshGraph and to cross-check compatibility, without a second all-gather.
-    std::vector<tt_metal::FabricConfigDescriptor> gathered_fabric_configs_;
+    std::vector<tt_metal::FabricSettings> gathered_fabric_configs_;
 
     // Coordinate along that ring's axis of the neighbor reached by `direction`.
     std::optional<int> ring_coord_of_neighbor(
@@ -451,6 +455,7 @@ private:
     std::unique_ptr<tt::tt_metal::PhysicalSystemDescriptor> fsd_physical_system_descriptor_;
     std::unique_ptr<tt::tt_fabric::TopologyMapper> topology_mapper_;
     std::unique_ptr<RoutingTableGenerator> routing_table_generator_;
+    std::unique_ptr<FabricFlatAddressRoutingTableGenerator> fabric_flat_address_routing_table_generator_;
     std::unique_ptr<MeshGraph> mesh_graph_;
     // The live view re-discovered by refresh_connectivity_diff(). Held as a member because
     // link_health_ keeps a pointer to it between refreshes; physical_system_descriptor_ cannot be
@@ -481,6 +486,9 @@ private:
         intra_mesh_routing_tables_;  // table that will be written to each ethernet core
     std::map<FabricNodeId, std::vector<std::vector<chan_id_t>>>
         inter_mesh_routing_tables_;  // table that will be written to each ethernet core
+    // Fabric-over-NOC architectures: pre-built routing structs keyed by physical chip id.
+    // Populated by configure_routing_tables_for_fabric_flat_address() during discovery phase.
+    std::map<uint32_t, tt::tt_fabric::fabric_flat_address_routing_l1_info_t> fabric_flat_address_routing_tables_;
     // Store the logical direction assigned to each exit node (an exit node is fully specified by
     // a FabricNodeId and logical channel id)
     std::map<FabricNodeId, std::unordered_map<chan_id_t, RoutingDirection>> exit_node_directions_;
@@ -575,6 +583,10 @@ private:
 
     using Routing2DActionVectors = std::array<std::uint8_t, Routing2DCodec::ACTION_VECTOR_CAPACITY_BYTES>;
 
+    void write_routing_tables_for_fabric_flat_address_() const;
+    void write_routing_tables_for_fabric_ethernet_() const;
+    tt::tt_fabric::fabric_flat_address_routing_l1_info_t init_fabric_flat_address_routing_table_(
+        const FabricNodeId& src_node) const;
     void write_routing_tables_to_eth_cores(MeshId mesh_id, ChipId chip_id) const;
     void write_routing_info_to_devices(
         MeshId mesh_id,

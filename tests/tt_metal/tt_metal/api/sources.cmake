@@ -3,6 +3,7 @@
 
 set(UNIT_TESTS_API_SOURCES
     allocator/test_address_ranges.cpp
+    allocator/test_allocation_request.cpp
     allocator/test_free_list_opt_allocator.cpp
     allocator/test_l1_banking_allocator.cpp
     allocator/test_overlapped_bank_manager.cpp
@@ -37,6 +38,7 @@ set(UNIT_TESTS_API_SOURCES
     distribution_spec/test_buffer_distribution_spec.cpp
     sram_arena/test_sram_arena.cpp
     test_kernel_thread_sync.cpp
+    test_trisc_l1_cache.cpp
     test_banked.cpp
     test_bit_utils.cpp
     test_buffer_types_device_sync.cpp
@@ -85,6 +87,7 @@ set(UNIT_TESTS_API_SOURCES
     test_tile.cpp
     test_tilize_untilize.cpp
     test_worker_config_buffer.cpp
+    test_work_split.cpp
     test_blockfloat_common.cpp
     test_mx_common.cpp
     test_descriptor_patching.cpp

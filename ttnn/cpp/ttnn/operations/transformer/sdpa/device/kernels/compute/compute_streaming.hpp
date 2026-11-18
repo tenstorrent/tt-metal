@@ -2563,6 +2563,9 @@ void sdpa_ring_v2(
                     if (causal_active < active_Sk_param) {
                         active_Sk_param = causal_active;
                         chunk_sbw = largest_factor_le(active_Sk_param, qkt_subblock_w);
+                        // The partial tile lies past the active columns. The step stamps it at column active_Sk - 1,
+                        // here the last Q row's diagonal tile, so this chunk takes no partial stamp.
+                        lw_partial_tile_idx = 0;
                     }
                 }
             }

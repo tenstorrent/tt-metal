@@ -95,7 +95,6 @@ void kernel_main() {
     Semaphore<> reduce_sender_sem(sem::reduce_sender);
     Semaphore<> reduce_second_stage_sem(sem::reduce_second_stage);
     UnicastEndpoint remote_ep;
-    MulticastEndpoint mcast_ep;
 
     // RMSNorm only allocates the Var[x] partial buffer; the host skips the E[x] one.
 #ifdef RMSNORM
@@ -321,7 +320,6 @@ void kernel_main() {
         }
         noc.async_read_barrier();
 
-        const uint32_t l1_read_addr_ex_global = dfb_ex_global_obj.get_read_ptr();
         dfb_ex_global_obj.push_back(static_cast<uint16_t>(block_h * num_tiles_scaler));
         if constexpr (num_blocks > 1) {
             uint32_t mcast_src_offset = 0;
@@ -339,7 +337,7 @@ void kernel_main() {
                             const uint32_t src_offset = mcast_src_offset + offset + face * face_bytes;
                             noc.async_write_multicast(
                                 dfb_ex_global_obj,
-                                mcast_ep,
+                                read_ptr_view(dfb_ex_global_obj),
                                 face_bytes,
                                 num_mcast_dests,
                                 {.offset_bytes = src_offset},
@@ -347,14 +345,14 @@ void kernel_main() {
                                  .noc_y_start = mcast_dest_noc_start_y,
                                  .noc_x_end = mcast_dest_noc_end_x,
                                  .noc_y_end = mcast_dest_noc_end_y,
-                                 .addr = l1_read_addr_ex_global + src_offset},
+                                 .offset_bytes = src_offset},
                                 true);
                         }
                     }
                 } else {
                     noc.async_write_multicast(
                         dfb_ex_global_obj,
-                        mcast_ep,
+                        read_ptr_view(dfb_ex_global_obj),
                         num_tiles_scaler * num_tiles_bytes,
                         num_mcast_dests,
                         {.offset_bytes = mcast_src_offset},
@@ -362,7 +360,7 @@ void kernel_main() {
                          .noc_y_start = mcast_dest_noc_start_y,
                          .noc_x_end = mcast_dest_noc_end_x,
                          .noc_y_end = mcast_dest_noc_end_y,
-                         .addr = l1_read_addr_ex_global + mcast_src_offset},
+                         .offset_bytes = mcast_src_offset},
                         true);
                 }
                 reduce_sender_sem.set_multicast(

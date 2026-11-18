@@ -7,6 +7,7 @@
 #include <limits>
 #include <set>
 #include <span>
+#include <string_view>
 #include <unordered_map>
 #include <unordered_set>
 #include <variant>
@@ -44,6 +45,57 @@ const Table<NodeCoord, std::vector<uint32_t>>& kernel_runtime_varargs(const Prog
 const experimental::AdvancedKernelRunArgs::Varargs& kernel_common_runtime_varargs(
     const ProgramRunArgs::KernelRunArgs& kp) {
     return kp.advanced_options.common_runtime_varargs;
+}
+
+// UpdateProgramRunArgs drops the per-device values of the named args it lists (see ProgramImpl::PerDeviceRunArgDrops).
+// Tensor args, DFB overrides and varargs cannot have per-device values, so only named args are recorded.
+static void RecordPerDeviceRunArgDrops(detail::ProgramImpl& program_impl, const ProgramRunArgs& params) {
+    if (!program_impl.tracks_per_device_run_args()) {
+        return;
+    }
+    using Key = detail::ProgramImpl::PerDeviceRunArgKey;
+    for (const auto& kernel_params : params.kernel_run_args) {
+        const std::string& kernel_name = kernel_params.kernel.get();
+        const KernelHandle kernel = program_impl.get_kernel_handle(kernel_name);
+        if (!program_impl.tracks_per_device_run_args_of(kernel)) {
+            continue;
+        }
+        const KernelRTASchema* schema = program_impl.get_kernel_rta_schema(kernel_name);
+        TT_FATAL(schema != nullptr, "Kernel '{}' has no RTA schema registered.", kernel_name);
+        for (const auto& [name, per_node] : kernel_params.runtime_arg_values) {
+            const auto it = schema->runtime_arg_name_to_slot.find(name);
+            if (it == schema->runtime_arg_name_to_slot.end()) {
+                continue;  // the update itself fails on it
+            }
+            for (const auto& [node, value] : per_node) {
+                program_impl.record_per_device_run_arg_drop(Key{kernel, node, static_cast<uint32_t>(it->second)});
+            }
+        }
+        for (const auto& [name, per_node] : kernel_params.runtime_array_arg_values) {
+            const auto it = schema->runtime_array_arg_slots.find(name);
+            if (it == schema->runtime_array_arg_slots.end()) {
+                continue;
+            }
+            for (const auto& [node, value] : per_node) {
+                program_impl.record_per_device_run_arg_drop(
+                    Key{kernel, node, static_cast<uint32_t>(it->second.first_slot)});
+            }
+        }
+        for (const auto& [name, value] : kernel_params.common_runtime_arg_values) {
+            const auto it = schema->common_runtime_arg_name_to_slot.find(name);
+            if (it != schema->common_runtime_arg_name_to_slot.end()) {
+                program_impl.record_per_device_run_arg_drop(
+                    Key{kernel, std::nullopt, static_cast<uint32_t>(it->second)});
+            }
+        }
+        for (const auto& [name, value] : kernel_params.common_runtime_array_arg_values) {
+            const auto it = schema->common_runtime_array_arg_slots.find(name);
+            if (it != schema->common_runtime_array_arg_slots.end()) {
+                program_impl.record_per_device_run_arg_drop(
+                    Key{kernel, std::nullopt, static_cast<uint32_t>(it->second.first_slot)});
+            }
+        }
+    }
 }
 
 // Validation of the array args a KernelRunArgs supplies, shared by the full and partial-update paths:
@@ -136,6 +188,37 @@ static std::optional<BufferDistributionSpec> resolve_shard_distribution(const Te
     return spec.compute_buffer_sharding_args().buffer_distribution_spec();
 }
 
+// The tensor_layout part of report_tensor_arg_mismatch, shared by both relaxed modes. Checked in two
+// parts, because the alignment is the one component of tensor_layout that
+// relax_tensor_layout_alignment frees. mode_name names the active relaxation, for the messages.
+static void report_tensor_layout_mismatch(
+    const TensorParamName& param_name,
+    const TensorLayout& runtime_layout,
+    const TensorLayout& expected_layout,
+    const TensorSpecRelaxations& relaxation,
+    std::string_view mode_name) {
+    TT_FATAL(
+        runtime_layout.get_data_type() == expected_layout.get_data_type() &&
+            runtime_layout.get_page_config() == expected_layout.get_page_config() &&
+            runtime_layout.get_memory_config() == expected_layout.get_memory_config(),
+        "TensorArgument for binding '{}' supplied a MeshTensor whose tensor_layout does not match the "
+        "binding's declared layout. {} loosens the match only along the shape; dtype, page_config, and "
+        "memory_config must still match exactly.",
+        param_name,
+        mode_name);
+    if (!relaxation.relax_tensor_layout_alignment) {
+        TT_FATAL(
+            runtime_layout.get_alignment() == expected_layout.get_alignment(),
+            "TensorArgument for binding '{}' supplied a MeshTensor whose TensorLayout has {} where the binding "
+            "declares {}. {} lets the shape vary, but the tensor must still be padded to the declared alignment. "
+            "To accept other alignments, also set relax_tensor_layout_alignment.",
+            param_name,
+            runtime_layout.get_alignment(),
+            expected_layout.get_alignment(),
+            mode_name);
+    }
+}
+
 // Emit a precise diagnostic for a tensor argument that failed tensorspecs_match_with_relaxation, then
 // throw. Called only on the rejection path: the branches mirror the match to produce a specific
 // message, and the trailing TT_THROW guarantees rejection even if a branch ever drifts from the match.
@@ -145,28 +228,12 @@ static void report_tensor_arg_mismatch(
     const TensorSpec& expected_spec,
     const TensorSpecRelaxations& relaxation) {
     if (relaxation.dynamic_tensor_shape) {
-        // Checked in two parts, because the alignment is the one component of tensor_layout that
-        // relax_tensor_layout_alignment frees.
-        const TensorLayout& runtime_layout = runtime_spec.tensor_layout();
-        const TensorLayout& expected_layout = expected_spec.tensor_layout();
-        TT_FATAL(
-            runtime_layout.get_data_type() == expected_layout.get_data_type() &&
-                runtime_layout.get_page_config() == expected_layout.get_page_config() &&
-                runtime_layout.get_memory_config() == expected_layout.get_memory_config(),
-            "TensorArgument for binding '{}' supplied a MeshTensor whose tensor_layout does not match the "
-            "binding's declared layout. dynamic_tensor_shape loosens the match only along logical_shape; dtype, "
-            "page_config, and memory_config must still match exactly.",
-            param_name);
-        if (!relaxation.relax_tensor_layout_alignment) {
-            TT_FATAL(
-                runtime_layout.get_alignment() == expected_layout.get_alignment(),
-                "TensorArgument for binding '{}' supplied a MeshTensor whose TensorLayout has {} where the binding "
-                "declares {}. dynamic_tensor_shape lets the shape values vary, but the tensor must still be padded to "
-                "the declared alignment. To accept other alignments, also set relax_tensor_layout_alignment.",
-                param_name,
-                runtime_layout.get_alignment(),
-                expected_layout.get_alignment());
-        }
+        report_tensor_layout_mismatch(
+            param_name,
+            runtime_spec.tensor_layout(),
+            expected_spec.tensor_layout(),
+            relaxation,
+            "dynamic_tensor_shape");
         // The rank is the one shape term dynamic_tensor_shape still pins, and relax_logical_rank
         // frees it.
         if (!relaxation.relax_logical_rank) {
@@ -215,14 +282,12 @@ static void report_tensor_arg_mismatch(
                 expected_dist->cores().size());
         }
     } else if (relaxation.match_padded_shape_only) {
-        TT_FATAL(
-            runtime_spec.tensor_layout() == expected_spec.tensor_layout(),
-            "TensorArgument for binding '{}' supplied a MeshTensor whose tensor_layout does not match the "
-            "binding's "
-            "declared layout. match_padded_shape_only loosens the match only along logical_shape (within the "
-            "constraint that padded_shape is preserved); dtype, page_config, memory_config, and alignment must "
-            "still match exactly.",
-            param_name);
+        report_tensor_layout_mismatch(
+            param_name,
+            runtime_spec.tensor_layout(),
+            expected_spec.tensor_layout(),
+            relaxation,
+            "match_padded_shape_only");
         TT_FATAL(
             runtime_spec.padded_shape() == expected_spec.padded_shape(),
             "TensorArgument for binding '{}' supplied a MeshTensor whose padded_shape does not match the binding's "
@@ -265,13 +330,14 @@ static void report_tensor_arg_mismatch(
 //       - match_page_size=true (with dynamic_tensor_shape): as above, plus the page size must
 //         match. A TIGHTENING rather than a relaxation -- it declares that the width is constant
 //         even though the shape varies, so the accessor can keep the page size compile-time.
-//       - relax_tensor_layout_alignment=true (with dynamic_tensor_shape): tensor_layout() need not match on its
-//         alignment, so a tensor padded differently from the declared one is accepted. Composes
-//         with the two flags above.
-//     relax_logical_rank and relax_tensor_layout_alignment are inert unless dynamic_tensor_shape is also set;
-//     the load-bearing field set for every combination is derived in one place, by
-//     pertinent_fields() (tensor_spec_relaxations.cpp), which both this validation and the
-//     relaxation-aware hash use.
+//       - relax_tensor_layout_alignment=true (with either flag): tensor_layout() need not match on
+//         its alignment. Under match_padded_shape_only the padded shape is still pinned, so only
+//         the logical shape and alignment that produce it may differ. Under dynamic_tensor_shape a
+//         tensor padded differently is accepted; there it composes with the two flags above.
+//     relax_logical_rank is inert unless dynamic_tensor_shape is also set, and
+//     relax_tensor_layout_alignment unless either flag is. The load-bearing field set for every
+//     combination is derived in one place, by pertinent_fields() (tensor_spec_relaxations.cpp),
+//     which both this validation and the relaxation-aware hash use.
 //     See the field doc comments in tensor_spec_relaxations.hpp for the full contracts.
 //   - When require_all is true: every declared TensorParameter must be set.
 //   - When require_all is false (partial update): any TensorParameter may be omitted; its
@@ -372,6 +438,42 @@ void BindSRAMArenaArgs(
             }
         }
     }
+}
+
+// Validates a GlobalSemaphoreArgument list against the Program's GlobalSemaphoreParameters.
+void ValidateGlobalSemaphoreArgs(
+    const Program& program,
+    const Table<GlobalSemaphoreParamName, ProgramRunArgs::GlobalSemaphoreArgument>& global_semaphore_args,
+    bool require_all) {
+    const detail::ProgramImpl& program_impl = program.impl();
+    for (const auto& [param_name, arg] : global_semaphore_args) {
+        const distributed::MeshDevice* device = program_impl.get_global_semaphore_parameter_device(param_name.get());
+        TT_FATAL(
+            device != nullptr, "GlobalSemaphoreArgument references unknown GlobalSemaphoreParameter '{}'.", param_name);
+        TT_FATAL(
+            arg.get().device() == static_cast<const IDevice*>(device),
+            "GlobalSemaphoreArgument for '{}' supplies a GlobalSemaphore created on a different MeshDevice than the "
+            "one this Program was built for.",
+            param_name);
+    }
+    if (require_all) {
+        for (const std::string& declared : program_impl.get_registered_global_semaphore_parameter_names()) {
+            TT_FATAL(
+                global_semaphore_args.contains(GlobalSemaphoreParamName{declared}),
+                "GlobalSemaphoreParameter '{}' is declared in the Program but has no GlobalSemaphoreArgument entry.",
+                declared);
+        }
+    }
+}
+
+uint32_t GlobalSemaphoreAddressWord(const GlobalSemaphoreParamName& param_name, const GlobalSemaphore& semaphore) {
+    const DeviceAddr address = semaphore.address();
+    TT_FATAL(
+        address <= std::numeric_limits<uint32_t>::max(),
+        "GlobalSemaphore argument for '{}' has address {}, which exceeds uint32_t max",
+        param_name,
+        address);
+    return static_cast<uint32_t>(address);
 }
 
 // A PrefetcherPipe relay DFB is exactly the pipe ring (entry_size * num_entries == ring_size, entry
@@ -755,6 +857,8 @@ void ValidateProgramRunArgs(const Program& program, const ProgramRunArgs& params
     // Validate tensor runtime parameters (delegated to shared helper).
     ValidateTensorArgs(program, params.tensor_args);
 
+    ValidateGlobalSemaphoreArgs(program, params.global_semaphore_args, /*require_all=*/true);
+
     ValidateSRAMArenaArgs(program, params.advanced_options.sram_arena_args, /*require_all=*/true);
 
     // Validate PrefetcherPipe arguments (delegated to shared helper; full path requires all).
@@ -981,6 +1085,19 @@ void experimental::SetProgramRunArgs(Program& program, const ProgramRunArgs& par
         }
     };
 
+    auto append_global_semaphore_crtas = [&params](const auto& global_semaphore_handles, std::vector<uint32_t>& out) {
+        for (const auto& handle : global_semaphore_handles) {
+            const GlobalSemaphoreParamName param_name{handle.global_semaphore_parameter_name};
+            const auto arg = params.global_semaphore_args.get(param_name);
+            TT_FATAL(
+                arg.has_value(),
+                "Internal error: GlobalSemaphore binding '{}' has no GlobalSemaphoreArgument (validation should have "
+                "caught this).",
+                param_name);
+            out.push_back(GlobalSemaphoreAddressWord(param_name, arg->get()));
+        }
+    };
+
     // Install a kernel's assembled CRTA buffer. set_common_runtime_args allocates storage but fatals
     // if called twice, so it can only be used the first time; on subsequent SetProgramRunArgs calls
     // (e.g. re-enqueue with new args) the already-allocated buffer is patched in place. Shared by the
@@ -1180,7 +1297,8 @@ void experimental::SetProgramRunArgs(Program& program, const ProgramRunArgs& par
         //      the address slot position chosen here.
         //   3. Scratchpad section, in binding order, one word each (the allocated L1 base address,
         //      0 here until allocate_scratchpads patches it at program-compile time).
-        //   4. Common runtime varargs, in caller-supplied order.
+        //   4. GlobalSemaphore section, in binding order, one word each (the bound GlobalSemaphore's address).
+        //   5. Common runtime varargs, in caller-supplied order.
         const auto& binding_handles = kernel->tensor_binding_handles();
         std::vector<uint32_t> combined_crtas;
         combined_crtas.reserve(
@@ -1203,6 +1321,7 @@ void experimental::SetProgramRunArgs(Program& program, const ProgramRunArgs& par
         }
         append_binding_crtas(binding_handles, combined_crtas);
         append_scratchpad_crtas(kernel->scratchpad_binding_handles(), combined_crtas);
+        append_global_semaphore_crtas(kernel->global_semaphore_binding_handles(), combined_crtas);
         combined_crtas.insert(
             combined_crtas.end(),
             kernel_common_runtime_varargs(kernel_params).begin(),
@@ -1211,8 +1330,8 @@ void experimental::SetProgramRunArgs(Program& program, const ProgramRunArgs& par
         install_crtas(kernel, combined_crtas, kernel_name.get());
     }
 
-    // Second pass: kernels that bind tensors and/or a scratchpad but were omitted from kernel_run_args.
-    // A kernel whose only per-enqueue state is TensorBinding addresses and/or a scratchpad (no named
+    // Second pass: kernels that bind tensors, a scratchpad and/or a GlobalSemaphore but were omitted from
+    // kernel_run_args. A kernel whose only per-enqueue state is binding addresses (no named
     // RTAs/CRTAs and no varargs — a scratchpad's address is framework-supplied, not user-supplied) is
     // allowed to be absent from kernel_run_args (see ValidateProgramRunArgs). The loop above only visits
     // kernels present in kernel_run_args, so such a kernel's binding + scratchpad CRTA sections would
@@ -1229,10 +1348,11 @@ void experimental::SetProgramRunArgs(Program& program, const ProgramRunArgs& par
         std::shared_ptr<Kernel> kernel = program_impl.get_kernel_by_spec_name(kernel_name);
         const auto& binding_handles = kernel->tensor_binding_handles();
         const auto& scratchpad_handles = kernel->scratchpad_binding_handles();
-        if (binding_handles.empty() && scratchpad_handles.empty()) {
+        const auto& global_semaphore_handles = kernel->global_semaphore_binding_handles();
+        if (binding_handles.empty() && scratchpad_handles.empty() && global_semaphore_handles.empty()) {
             continue;  // No bindings => nothing to supply; no CRTA dispatch buffer needed.
         }
-        // Binding-only kernel: its CRTA buffer is exactly the TensorBinding + scratchpad sections (it has
+        // Binding-only kernel: its CRTA buffer is exactly the binding sections (it has
         // no named CRTAs or varargs, else validation would have required a kernel_run_args entry).
         // install_crtas allocates the buffer on the first SetProgramRunArgs call and patches it in place
         // on later ones (e.g. re-enqueue with a new tensor), mirroring the main loop.
@@ -1249,6 +1369,7 @@ void experimental::SetProgramRunArgs(Program& program, const ProgramRunArgs& par
         std::vector<uint32_t> combined_crtas;
         append_binding_crtas(binding_handles, combined_crtas);
         append_scratchpad_crtas(scratchpad_handles, combined_crtas);
+        append_global_semaphore_crtas(global_semaphore_handles, combined_crtas);
         install_crtas(kernel, combined_crtas, kernel_name);
     }
 
@@ -1280,6 +1401,9 @@ void experimental::SetProgramRunArgs(Program& program, const ProgramRunArgs& par
         program_impl.set_bound_tensor_footprint(param_name, tt_metal::detail::make_bound_tensor_footprint(*tensor));
     }
     program_impl.mark_program_run_args_initialized();
+    // Every arg was just set for the whole program: per-device values are dropped (see
+    // ProgramImpl::PerDeviceRunArgDrops).
+    program_impl.record_per_device_run_args_drop_all();
 }
 
 void experimental::UpdateTensorArgs(
@@ -1570,6 +1694,9 @@ void ValidateUpdateProgramRunArgs(const Program& program, const ProgramRunArgs& 
     // ones are validated against their declared spec.
     ValidateTensorArgs(program, params.tensor_args, /*require_all=*/false);
 
+    // GlobalSemaphore args: any may be omitted (its prior address is retained).
+    ValidateGlobalSemaphoreArgs(program, params.global_semaphore_args, /*require_all=*/false);
+
     ValidateSRAMArenaArgs(program, params.advanced_options.sram_arena_args, /*require_all=*/false);
 
     // PrefetcherPipe args: any may be omitted (the binding is sticky); a supplied one must name a
@@ -1595,7 +1722,6 @@ void experimental::UpdateProgramRunArgs(Program& program, const ProgramRunArgs& 
     if (!skip_validation) {
         ValidateUpdateProgramRunArgs(program, params);
     }
-
     // Patch the supplied args in place. Omitted named args and tensor params are left untouched,
     // retaining the value installed by the most recent SetProgramRunArgs. A supplied positional
     // vararg section refreshes that section wholesale.
@@ -1776,12 +1902,35 @@ void experimental::UpdateProgramRunArgs(Program& program, const ProgramRunArgs& 
         }
     }
 
+    // ---- GlobalSemaphore bindings: patch CRTA address slots for SUPPLIED GlobalSemaphores only ----
+    if (!params.global_semaphore_args.empty()) {
+        for (const auto& kernel_name : program_impl.get_registered_kernel_names()) {
+            std::shared_ptr<Kernel> kernel = program_impl.get_kernel_by_spec_name(kernel_name);
+            for (const auto& handle : kernel->global_semaphore_binding_handles()) {
+                const GlobalSemaphoreParamName param_name{handle.global_semaphore_parameter_name};
+                const auto arg = params.global_semaphore_args.get(param_name);
+                if (!arg.has_value()) {
+                    continue;
+                }
+                TT_FATAL(
+                    !kernel->common_runtime_args().empty(),
+                    "UpdateProgramRunArgs: kernel '{}' CRTA buffer not allocated; cannot patch GlobalSemaphore "
+                    "bindings. Call SetProgramRunArgs at least once before a partial update.",
+                    kernel_name);
+                kernel->common_runtime_args_data()[handle.addr_crta_word] =
+                    GlobalSemaphoreAddressWord(param_name, arg->get());
+            }
+        }
+    }
+
     // ---- PrefetcherPipe args: omitted parameters keep their bound pipe; a supplied one is bound
     //      (no-op when it is the already-bound object) ----
     BindPrefetcherPipeArgs(program_impl, params.advanced_options.prefetcher_pipe_args);
 
     // Install arena addresses after DFB, tensor, and pipe checks succeed.
     BindSRAMArenaArgs(program_impl, params.advanced_options.sram_arena_args);
+    // Only once the update succeeded: a failed update must not drop per-device values it never replaced.
+    RecordPerDeviceRunArgDrops(program_impl, params);
 }
 
 ProgramRunArgs MergeProgramRunArgs(ProgramRunArgs base, std::span<const ProgramRunArgs> rest, bool skip_validation) {
@@ -1809,6 +1958,18 @@ ProgramRunArgs MergeProgramRunArgs(ProgramRunArgs base, std::span<const ProgramR
             // the disjoint check the key is absent, so insert takes effect (under skip_validation a
             // collision keeps base's existing entry).
             base.tensor_args.insert({name, arg});
+        }
+
+        // GlobalSemaphore args: union by parameter name (disjoint). Same insert-not-[] reasoning as
+        // tensor_args: reference_wrapper is not default-constructible.
+        for (const auto& [name, arg] : other.global_semaphore_args) {
+            if (!skip_validation) {
+                TT_FATAL(
+                    !base.global_semaphore_args.contains(name),
+                    "MergeProgramRunArgs: GlobalSemaphoreParameter '{}' is specified in more than one ProgramRunArgs.",
+                    name);
+            }
+            base.global_semaphore_args.insert({name, arg});
         }
 
         // PrefetcherPipe args: union by parameter name (disjoint). Same insert-not-[] reasoning as
