@@ -210,11 +210,11 @@ inline void _calculate_max_pool_with_indices_generic_(
     // Each SFPLOAD of 4 Dest rows holds 2 logical rows (both faces) of one column parity, so the 32 rows of a
     // parity are 16 LREG pairs. The even columns are folded lane-wise into LREG0/LREG4 with the replay buffer's
     // first 3 slots (SWAP01, SWAP23, SWAP02: 4 pairs -> 1), loading 3 new pairs behind the running max for each
-    // further step. The odd columns are then folded into LREG3/LREG7 using only LREG1-3/LREG5-7, so both
-    // results share one fold of the 4 lane-rows (row r: F0, F1, row r+1: F0, F1) with the replay buffer's last
-    // 4 slots (TRANSP, SWAP02, SWAP13, TRANSP). That leaves the per-face maxima in lane-rows 0/1 of LREG0 (even)
-    // and LREG3 (odd), i.e. Dest rows 0/1 of the store.
-    // The running max (lower rows) is always the first SWAP operand, which keeps it on positive ties.
+    // further step. The odd columns are then folded into LREG3/LREG7 using only LREG1-3/LREG5-7 (slots 7-8:
+    // SWAP31, SWAP32, 2 new pairs per step), so both results share one fold of the 4 lane-rows (row r: F0, F1, row r+1:
+    // F0, F1) with the replay buffer's last 4 slots (TRANSP, SWAP02, SWAP13, TRANSP). That leaves the per-face maxima
+    // in lane-rows 0/1 of LREG0 (even) and LREG3 (odd), i.e. Dest rows 0/1 of the store. The running max (lower rows)
+    // is always the first SWAP operand, which keeps it on positive ties.
     constexpr std::uint32_t even_column_offset = 0;
     constexpr std::uint32_t odd_column_offset = 2;
     const std::uint32_t even_val = values_tile_offset + even_column_offset;
@@ -251,8 +251,7 @@ inline void _calculate_max_pool_with_indices_generic_(
     TT_SFPLOAD(p_sfpu::LREG7, instr_mod_index, ADDR_MOD_3, odd_idx + 0);
     TT_SFPLOAD(p_sfpu::LREG5, instr_mod_index, ADDR_MOD_3, odd_idx + 4);
     TT_SFPLOAD(p_sfpu::LREG6, instr_mod_index, ADDR_MOD_3, odd_idx + 8);
-    TTI_SFPSWAP(0, p_sfpu::LREG3, p_sfpu::LREG1, p_sfpswap::ALL_ROWS_MAX);
-    TTI_SFPSWAP(0, p_sfpu::LREG3, p_sfpu::LREG2, p_sfpswap::ALL_ROWS_MAX);
+    lltt::replay(7, 2);
 
     // Odd rows 6-29: 2 pairs at a time behind the running max
     for (std::uint32_t row_offset = 12; row_offset < dst_tile_size - 4; row_offset += 8) {
@@ -260,8 +259,7 @@ inline void _calculate_max_pool_with_indices_generic_(
         TT_SFPLOAD(p_sfpu::LREG2, InstrModLoadStore::DEFAULT, ADDR_MOD_3, odd_val + row_offset + 4);
         TT_SFPLOAD(p_sfpu::LREG5, instr_mod_index, ADDR_MOD_3, odd_idx + row_offset + 0);
         TT_SFPLOAD(p_sfpu::LREG6, instr_mod_index, ADDR_MOD_3, odd_idx + row_offset + 4);
-        TTI_SFPSWAP(0, p_sfpu::LREG3, p_sfpu::LREG1, p_sfpswap::ALL_ROWS_MAX);
-        TTI_SFPSWAP(0, p_sfpu::LREG3, p_sfpu::LREG2, p_sfpswap::ALL_ROWS_MAX);
+        lltt::replay(7, 2);
     }
 
     // Odd rows 30-31
@@ -330,7 +328,7 @@ inline void init_max_pool_with_indices() {
 
     if constexpr (layout == ckernel::DataLayout::ROW_MAJOR) {
         // Program replay buffer for row major layout
-        lltt::record(0, 7);
+        lltt::record(0, 9);
 
         TTI_SFPSWAP(0, p_sfpu::LREG0, p_sfpu::LREG1, p_sfpswap::ALL_ROWS_MAX);
         TTI_SFPSWAP(0, p_sfpu::LREG2, p_sfpu::LREG3, p_sfpswap::ALL_ROWS_MAX);
@@ -342,6 +340,10 @@ inline void init_max_pool_with_indices() {
         TTI_SFPSWAP(0, p_sfpu::LREG1, p_sfpu::LREG3, p_sfpswap::ALL_ROWS_MAX);
 
         TTI_SFPTRANSP(0, 0, 0, 0);
+
+        // Odd-column running max of the 32-row path
+        TTI_SFPSWAP(0, p_sfpu::LREG3, p_sfpu::LREG1, p_sfpswap::ALL_ROWS_MAX);
+        TTI_SFPSWAP(0, p_sfpu::LREG3, p_sfpu::LREG2, p_sfpswap::ALL_ROWS_MAX);
     } else {
         // Program replay buffer for tiled layout (original)
         lltt::record(0, 7);
