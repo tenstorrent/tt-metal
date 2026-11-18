@@ -145,18 +145,25 @@ def inspect_mcast_ct(kernel, prefix="mcast"):
     if control & (1 << 22):
         names = ("origin_x", "origin_y", "columns", "rows", "width", "height", "sender_dx", "sender_dy", "base")
         fields["grid"] = {name: take() for name in names}
+        fields["grid"]["staggered"] = bool(control & (1 << 23))
     fields["words"] = offset
     return fields
 
 
 def _grid_core(grid, core):
-    """(roles, group origin) of a core in a grid-derived channel; roles 0 outside the grid."""
+    """(roles, sender core relative to the grid origin) in a grid-derived channel; roles 0 outside the grid."""
     x, y = core.x - grid["origin_x"], core.y - grid["origin_y"]
     if not (0 <= x < grid["columns"] and 0 <= y < grid["rows"]):
         return 0, None
     gx, gy = x - x % grid["width"], y - y % grid["height"]
-    sends = (x - gx, y - gy) == (grid["sender_dx"], grid["sender_dy"])
-    return (1 if sends else 2), (gx, gy)
+    dx, dy = grid["sender_dx"], grid["sender_dy"]
+    if grid["staggered"]:
+        # Staggered lines: line n's sender advances n places along it.
+        if grid["height"] == 1:
+            dx = (dx + gy * (grid["columns"] // grid["width"]) + gx // grid["width"]) % grid["width"]
+        else:
+            dy = (dy + gx * (grid["rows"] // grid["height"]) + gy // grid["height"]) % grid["height"]
+    return (1 if (x - gx, y - gy) == (dx, dy) else 2), (gx + dx, gy + dy)
 
 
 def _core_runtime_args(kernel, core):
@@ -175,12 +182,12 @@ def inspect_mcast(kernel, core, prefix="mcast"):
     if grid is not None:
         # Grid-derived: no per-core words; the sender comes from the common-arg NoC table (columns, then rows).
         table = list(kernel.common_runtime_args)[grid["base"] : grid["base"] + grid["columns"] + grid["rows"]]
-        roles, group = _grid_core(grid, core)
+        roles, sender = _grid_core(grid, core)
         if ct["roles"] != 0xFFFFFFFF:
             roles = ct["roles"]
         coordinates = []
-        if ct["capabilities"] & 2 and group is not None:
-            coordinates = [table[group[0] + grid["sender_dx"]], table[grid["columns"] + group[1] + grid["sender_dy"]]]
+        if ct["capabilities"] & 2 and sender is not None:
+            coordinates = [table[sender[0]], table[grid["columns"] + sender[1]]]
         return dict(roles=roles, phase=0, rectangles=1, ack=ct["ack"], coordinates=coordinates)
     offset = 0
     roles = ct["roles"]

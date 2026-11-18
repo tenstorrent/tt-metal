@@ -373,6 +373,19 @@ GRID_DERIVED = [
         [([(x0, y), (x0 + 1, y)], [(x0, y)]) for y in range(2) for x0 in (0, 2)],
     ),
     GeometryCase("one-group", [([(x, y) for y in range(2) for x in range(3)], [(1, 1)])]),
+    # Staggered lines: line n's sender advances n places along it, wrapping (MMRS's diagonal senders).
+    GeometryCase(
+        "staggered-rows",
+        [([(x, y) for x in range(4)], [((1 + y) % 4, y)]) for y in range(4)],
+    ),
+    GeometryCase(
+        "staggered-columns",
+        [([(x, y) for y in range(4)], [(x, (3 + x) % 4)]) for x in range(3)],
+    ),
+    GeometryCase(
+        "staggered-half-rows",
+        [([(x0, y), (x0 + 1, y)], [(x0 + (y * 2 + x0 // 2) % 2, y)]) for y in range(2) for x0 in (0, 2)],
+    ),
 ]
 
 

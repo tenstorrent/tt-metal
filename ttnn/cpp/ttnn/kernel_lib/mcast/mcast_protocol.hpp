@@ -84,15 +84,18 @@ struct SenderCoordinateMetadata {
 // same offset, on a grid whose NoC coordinates split into columns and rows. Every core then derives its roles, its
 // group's sender and its group's NoC rectangle from its logical coordinates and a common runtime-arg table: the NoC x
 // of each grid column, then the NoC y of each grid row. No per-core words remain.
+// Staggered groups are lines (one row or one column) whose senders advance by one per line: line n's sender sits
+// (sender offset + n) mod the line length along it. Row lines are numbered row by row, column lines column by column.
 struct GridMetadata {
     bool derived = false;
+    bool staggered = false;
     uint32_t origin_x = 0;  // The grid's first logical column and row.
     uint32_t origin_y = 0;
     uint32_t columns = 0;  // The grid's extent, also the lengths of the table's two halves.
     uint32_t rows = 0;
     uint32_t group_width = 0;  // Each group's logical extent.
     uint32_t group_height = 0;
-    uint32_t sender_dx = 0;  // The sender's offset in its group.
+    uint32_t sender_dx = 0;  // The sender's offset in its group; the first group's when staggered.
     uint32_t sender_dy = 0;
     uint32_t common_base = 0;  // The table's first common runtime arg.
 };
@@ -111,6 +114,8 @@ struct GridPosition {
     bool sends = false;
     uint32_t group_x = 0;
     uint32_t group_y = 0;
+    uint32_t sender_dx = 0;  // The group's sender, relative to the group origin.
+    uint32_t sender_dy = 0;
 };
 constexpr GridPosition grid_position(const GridMetadata& grid, uint32_t logical_x, uint32_t logical_y);
 constexpr uint32_t grid_roles(GridPosition position);

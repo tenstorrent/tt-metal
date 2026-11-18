@@ -552,10 +552,15 @@ void McastImpl::prepare_grid_() const {
         const auto sender = group.senders_.front();
         if (range.grid_size() != first_range.grid_size() ||
             (range.start_coord.x - grid.origin_x) % grid.group_width != 0 ||
-            (range.start_coord.y - grid.origin_y) % grid.group_height != 0 ||
-            sender.x - range.start_coord.x != grid.sender_dx || sender.y - range.start_coord.y != grid.sender_dy) {
+            (range.start_coord.y - grid.origin_y) % grid.group_height != 0) {
             return;
         }
+        grid.staggered |=
+            sender.x - range.start_coord.x != grid.sender_dx || sender.y - range.start_coord.y != grid.sender_dy;
+    }
+    // Senders at varying offsets can only be staggered lines; the reconstruction below checks each one.
+    if (grid.staggered && grid.group_width != 1 && grid.group_height != 1) {
+        return;
     }
     // The grid's NoC coordinates must split into one x per column and one y per row.
     std::vector<uint32_t> table(grid.columns + grid.rows);

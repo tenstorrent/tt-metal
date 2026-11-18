@@ -246,7 +246,8 @@ struct McastArgsImpl<true, METADATA, Runtime, DataReadyBinding, ConsumerReadyBin
 
 private:
     using GridTableType = GridTable<Runtime, METADATA.grid.common_base>;
-    static mcast_wire::GridPosition grid_position_() {
+    // Out of line: every accessor of every grid-derived channel needs it, and inlining each copy grows the kernel.
+    __attribute__((noinline)) static mcast_wire::GridPosition grid_position_() {
         return mcast_wire::grid_position(METADATA.grid, get_absolute_logical_x(), get_absolute_logical_y());
     }
     uint32_t sender_coordinate_(uint32_t axis) const {

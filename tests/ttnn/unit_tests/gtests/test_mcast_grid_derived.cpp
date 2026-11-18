@@ -1,8 +1,9 @@
 // SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 // SPDX-License-Identifier: Apache-2.0
 
-// Grid-derived multicast arguments: fixed-sender groups that tile a rectangle carry no per-core words; each core
-// derives its roles, its sender and its group's NoC rectangle from a common-arg NoC table.
+// Grid-derived multicast arguments: fixed-sender groups that tile a rectangle, with their senders at one offset or
+// staggered along lines, carry no per-core words; each core derives its roles, its sender and its group's NoC
+// rectangle from a common-arg NoC table.
 
 #include "mcast_host_test_common.hpp"
 
@@ -132,6 +133,7 @@ struct Layout {
     uint32_t sender_index;
     std::vector<ExpectedGroup> groups;
     wire::GridMetadata grid;
+    McastSenderPlacement placement = McastSenderPlacement::Uniform;
 };
 
 std::vector<Layout> layouts() {
@@ -205,6 +207,68 @@ std::vector<Layout> layouts() {
           .group_height = 2,
           .sender_dx = 1,
           .sender_dy = 1}},
+        // Staggered rows: row n's sender is column (1 + n) % 4, wrapping on the last row (MMRS's diagonal senders).
+        {"staggered_rows",
+         CoreRange({1, 0}, {4, 3}),
+         4,
+         McastCoreOrder::RowMajor,
+         1,
+         {{CoreRange({1, 0}, {4, 0}), {2, 0}},
+          {CoreRange({1, 1}, {4, 1}), {3, 1}},
+          {CoreRange({1, 2}, {4, 2}), {4, 2}},
+          {CoreRange({1, 3}, {4, 3}), {1, 3}}},
+         {.derived = true,
+          .staggered = true,
+          .origin_x = 1,
+          .origin_y = 0,
+          .columns = 4,
+          .rows = 4,
+          .group_width = 4,
+          .group_height = 1,
+          .sender_dx = 1,
+          .sender_dy = 0},
+         McastSenderPlacement::Staggered},
+        // Staggered columns, starting past the line length: column n's sender is row (5 + n) % 4.
+        {"staggered_columns",
+         CoreRange({0, 1}, {2, 4}),
+         4,
+         McastCoreOrder::ColumnMajor,
+         5,
+         {{CoreRange({0, 1}, {0, 4}), {0, 2}},
+          {CoreRange({1, 1}, {1, 4}), {1, 3}},
+          {CoreRange({2, 1}, {2, 4}), {2, 4}}},
+         {.derived = true,
+          .staggered = true,
+          .origin_x = 0,
+          .origin_y = 1,
+          .columns = 3,
+          .rows = 4,
+          .group_width = 1,
+          .group_height = 4,
+          .sender_dx = 0,
+          .sender_dy = 1},
+         McastSenderPlacement::Staggered},
+        // Staggered half rows: lines are numbered row by row, two per row.
+        {"staggered_half_rows",
+         CoreRange({0, 0}, {5, 1}),
+         3,
+         McastCoreOrder::RowMajor,
+         0,
+         {{CoreRange({0, 0}, {2, 0}), {0, 0}},
+          {CoreRange({3, 0}, {5, 0}), {4, 0}},
+          {CoreRange({0, 1}, {2, 1}), {2, 1}},
+          {CoreRange({3, 1}, {5, 1}), {3, 1}}},
+         {.derived = true,
+          .staggered = true,
+          .origin_x = 0,
+          .origin_y = 0,
+          .columns = 6,
+          .rows = 2,
+          .group_width = 3,
+          .group_height = 1,
+          .sender_dx = 0,
+          .sender_dy = 0},
+         McastSenderPlacement::Staggered},
     };
 }
 
@@ -230,7 +294,7 @@ TEST_F(McastHostFixture, GridDerivedDescriptorMatchesPerCoreAndDeviceMapping) {
                     McastConfig{.noc = noc, .derive_regular_grid = derive},
                     CoreRangeSet(layout.receivers),
                     layout.group_size,
-                    McastFixedSenderConfig{.sender_index = layout.sender_index},
+                    McastFixedSenderConfig{.sender_index = layout.sender_index, .placement = layout.placement},
                     layout.order);
                 ProgramDescriptor descriptor;
                 auto all = make_kernel(CoreRangeSet(placed), noc);
@@ -257,6 +321,7 @@ TEST_F(McastHostFixture, GridDerivedDescriptorMatchesPerCoreAndDeviceMapping) {
                 auto expected_grid = layout.grid;
                 expected_grid.common_base = 1;
                 const auto grid = attached_metadata(all, "channel").grid;
+                EXPECT_EQ(grid.staggered, expected_grid.staggered);
                 EXPECT_EQ(
                     std::vector<uint32_t>(
                         {grid.origin_x,
@@ -398,16 +463,17 @@ TEST_F(McastHostFixture, GridDerivedFallsBackToPerCoreWords) {
                  *device_, {}, CoreRangeSet(CoreRange({0, 0}, {3, 0})), 4, McastExplicitFixedSenderConfig{{{0, 1}}});
          },
          CoreRangeSet(CoreRange({0, 0}, {3, 1}))},
-        {"staggered",
+        // Staggered 2x2 blocks: the sender moves within a block, which only lines can derive.
+        {"staggered_blocks",
          [&] {
              return Mcast(
                  *device_,
                  {},
-                 CoreRangeSet(rows),
+                 CoreRangeSet(CoreRange({0, 0}, {1, 3})),
                  4,
                  McastFixedSenderConfig{.sender_index = 0, .placement = McastSenderPlacement::Staggered});
          },
-         CoreRangeSet(rows)},
+         CoreRangeSet(CoreRange({0, 0}, {1, 3}))},
         {"irregular",
          [&] { return Mcast(*device_, {}, cores({{0, 0}, {2, 0}, {0, 1}, {2, 1}}), 2); },
          CoreRangeSet(rows)},

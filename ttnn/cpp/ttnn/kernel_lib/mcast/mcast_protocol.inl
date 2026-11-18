@@ -104,7 +104,24 @@ constexpr GridPosition grid_position(const GridMetadata& grid, uint32_t logical_
     }
     const uint32_t group_x = x - x % grid.group_width;
     const uint32_t group_y = y - y % grid.group_height;
-    return {true, x - group_x == grid.sender_dx && y - group_y == grid.sender_dy, group_x, group_y};
+    uint32_t sender_dx = grid.sender_dx;
+    uint32_t sender_dy = grid.sender_dy;
+    if (grid.staggered) {
+        if (grid.group_height == 1) {
+            const uint32_t line = group_y * (grid.columns / grid.group_width) + group_x / grid.group_width;
+            sender_dx = (sender_dx + line) % grid.group_width;
+        } else {
+            const uint32_t line = group_x * (grid.rows / grid.group_height) + group_y / grid.group_height;
+            sender_dy = (sender_dy + line) % grid.group_height;
+        }
+    }
+    return {
+        true,
+        x - group_x == sender_dx && y - group_y == sender_dy,
+        group_x,
+        group_y,
+        sender_dx,
+        sender_dy};
 }
 
 // A fixed sender does not receive its own payload.
@@ -115,8 +132,8 @@ constexpr uint32_t grid_roles(GridPosition position) {
 template <typename Table>
 constexpr uint32_t grid_sender_coordinate(
     const Table& table, const GridMetadata& grid, GridPosition position, uint32_t axis) {
-    return axis == SENDER_X ? table[position.group_x + grid.sender_dx]
-                            : table[grid.columns + position.group_y + grid.sender_dy];
+    return axis == SENDER_X ? table[position.group_x + position.sender_dx]
+                            : table[grid.columns + position.group_y + position.sender_dy];
 }
 
 template <typename Table>
@@ -145,6 +162,7 @@ constexpr uint32_t ROTATING = 1u << 19;
 constexpr uint32_t ACK_SHIFT = 20, ACK_MASK = 3u;
 enum class Ack : uint32_t { None, Constant, RemoteCount, Runtime };
 constexpr uint32_t GRID = 1u << 22;
+constexpr uint32_t GRID_STAGGERED = 1u << 23;
 constexpr Ack ack(uint32_t control) { return Ack((control >> ACK_SHIFT) & ACK_MASK); }
 }  // namespace ct_control
 
@@ -197,7 +215,8 @@ constexpr uint32_t compile_time_control(ArgumentMetadata input) {
            (metadata.kernel.capabilities << CAPABILITIES_SHIFT) |
            (uint32_t(metadata.coordinates.encoding) << COORD_ENCODING_SHIFT) |
            (mcast.remote_count_known ? REMOTE_KNOWN : 0u) | (mcast.rotating_span ? ROTATING : 0u) |
-           (uint32_t(ack_encoding) << ACK_SHIFT) | (metadata.grid.derived ? GRID : 0u);
+           (uint32_t(ack_encoding) << ACK_SHIFT) | (metadata.grid.derived ? GRID : 0u) |
+           (metadata.grid.derived && metadata.grid.staggered ? GRID_STAGGERED : 0u);
 }
 
 constexpr ArgumentMetadata compile_time_control_metadata(uint32_t control) {
@@ -212,6 +231,7 @@ constexpr ArgumentMetadata compile_time_control_metadata(uint32_t control) {
     metadata.kernel.capabilities = (control >> CAPABILITIES_SHIFT) & CAPABILITIES_MASK;
     metadata.coordinates.encoding = SenderCoordinateEncoding((control >> COORD_ENCODING_SHIFT) & COORD_ENCODING_MASK);
     metadata.grid.derived = (control & GRID) != 0;
+    metadata.grid.staggered = (control & GRID_STAGGERED) != 0;
     return metadata;
 }
 
