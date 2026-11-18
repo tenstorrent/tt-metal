@@ -34,7 +34,11 @@ def main():
         res(event="built", sec=round(time.time() - t0, 1))
         rnd = torch.Generator().manual_seed(3)
         ids = [torch.randint(0, 100000, (1, HC.CHUNK), generator=rnd) for _ in range(K)]
-        xs = [(torch.randn(1, 4, HC.CHUNK, 6144, generator=rnd) * 0.5) for _ in range(K)]
+        emb = ch.rd.get(
+            "model.embed_tokens.weight"
+        )  # [V, D]: realistic stream inputs (the embedding rows, 4 identical streams like Hy4Chain.embed_ids)
+        xs = [emb[ids[c][0]].float().reshape(1, 1, HC.CHUNK, 6144).repeat(1, 4, 1, 1) for c in range(K)]
+        del emb
         sync = lambda: ttnn.synchronize_device(md)
 
         # prefill K-1 chunks to build context (also warms the program cache), then time the last one K times (re-running the same start: append=True grows, so use fresh ch.reset each rep)
@@ -62,6 +66,65 @@ def main():
                 ttnn.deallocate(t)
             return tl
 
+        if (
+            os.environ.get("CMP") == "1"
+        ):  # fused iHC (HY4_B49_IHC=fused at build) vs the stock path (pf instances switched off), same layers / weights / inputs
+
+            def last_outs(fused):
+                outs = []
+                for ly in ch.layers:
+                    ly.attn.reset()
+                saved = [(ly.ihcpf_a, ly.ihcpf_m) for ly in ch.layers]
+                os.environ["HY4_B49_COLLAPSE"] = "1" if fused else os.environ.get("CMP_STOCK_COLLAPSE", "0")
+                if not fused:
+                    for ly in ch.layers:
+                        ly.ihcpf_a = ly.ihcpf_m = None
+                ibl = {}
+                for c in range(K):
+                    x4 = upload(md, xs[c], ttnn.float32)
+                    for ly in ch.layers:
+                        x4 = ly.prefill_chunk(x4, c * HC.CHUNK, ibl)
+                        if c == 0 and os.environ.get("DBGNAN") == "1":
+                            xt = ttnn.to_torch(ttnn.get_device_tensors(x4)[0]).float()
+                            res(
+                                event="dbg_layer",
+                                fused=fused,
+                                layer=ly.L,
+                                finite=bool(torch.isfinite(xt).all()),
+                                absmax=float(xt[torch.isfinite(xt)].abs().max()),
+                            )
+                    sync()
+                    outs.append(ttnn.to_torch(ttnn.get_device_tensors(x4)[0]).float().reshape(4, HC.CHUNK, 6144))
+                    ttnn.deallocate(x4)
+                for t in ibl.values():
+                    ttnn.deallocate(t)
+                for ly, (a_, m_) in zip(ch.layers, saved):
+                    ly.ihcpf_a, ly.ihcpf_m = a_, m_
+                return outs
+
+            def pcc(a, b):
+                a, b = a.flatten().double(), b.flatten().double()
+                a, b = a - a.mean(), b - b.mean()
+                return float((a * b).sum() / (a.norm() * b.norm()))
+
+            o_s0 = last_outs(False)  # cold pass (compiles)
+            o_s = last_outs(False)
+            o_s2 = last_outs(False)
+            o_f = last_outs(True)
+            o_f2 = last_outs(True)
+            for c in range(K):
+                fin = lambda t: bool(torch.isfinite(t).all())
+                res(
+                    event="cmp_chunk",
+                    c=c,
+                    finite=[fin(o_s0[c]), fin(o_s[c]), fin(o_s2[c]), fin(o_f[c]), fin(o_f2[c])],
+                    pcc_fused_vs_stock=round(pcc(o_f[c], o_s[c]), 8),
+                    pcc_stock_repeat=round(pcc(o_s2[c], o_s[c]), 8),
+                    maxabs=float((o_f[c] - o_s[c]).abs().max()),
+                    refabsmax=float(o_s[c].abs().max()),
+                    stock_repeat_equal=bool(torch.equal(o_s[c], o_s2[c])),
+                    fused_repeat_equal=bool(torch.equal(o_f[c], o_f2[c])),
+                )
         run_chunks(K)  # warm
         for r in range(REPS):
             d, w = run_chunks(K, True)
@@ -108,6 +171,23 @@ def main():
             return x4
 
         L.prefill_chunk = timed_prefill_chunk
+        # attention sub-stages (device-synced): wrap the methods of every layer's attention
+        for ly in ch.layers:
+            a_ = ly.attn
+            for mname in ("_sparse_prefill", "_finish", "_append_cache"):
+                f0 = getattr(a_, mname)
+                setattr(
+                    a_,
+                    mname,
+                    (lambda f0, nm, tag: (lambda *x, **k: T(f"{tag}.attn.{nm}", lambda: f0(*x, **k))))(
+                        f0, mname, f"L{ly.L}"
+                    ),
+                )
+            if a_.has_indexer:
+                f0 = a_.indexer.select
+                a_.indexer.select = (
+                    lambda f0, tag: (lambda *x, **k: T(f"{tag}.attn.indexer.select", lambda: f0(*x, **k)))
+                )(f0, f"L{ly.L}")
         run_chunks(K)
         acc.clear()
         disp.clear()
