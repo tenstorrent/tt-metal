@@ -147,8 +147,7 @@ tt::tt_metal::ProgramDescriptor FusedRecurrentGatedDeltaRuleProgramFactory::crea
     compute.source_type = KernelDescriptor::SourceType::FILE_PATH;
     compute.core_ranges = cores;
     compute.compile_time_args = compute_ct;
-    // Honor the caller's compute config (the public wrapper defaults it to HiFi4 (HiFi3 on Wormhole) / fp32 acc /
-    // exact).
+    // Honor the caller's compute config (the public wrapper defaults it to HiFi4 / fp32 acc / exact).
     auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
         get_compute_kernel_config_args(device->arch(), attrs.compute_kernel_config);
     compute.config = ComputeConfigDescriptor{

@@ -18,8 +18,7 @@ void bind_fused_recurrent_gated_delta_rule(nb::module_& mod) {
 
         Single-token decode (T=1) and K+1-token speculative verify are the same op: one Tensix core
         per head walks the T token axis sequentially, holding the recurrent state on-core. Matches
-        FLA `naive_recurrent_gated_delta_rule` (fp32/HiFi4; HiFi3 by default on Wormhole). q/k must be
-        L2-normalized over K on host.
+        FLA `naive_recurrent_gated_delta_rule` (fp32/HiFi4). q/k must be L2-normalized over K on host.
 
         Args:
             q (ttnn.Tensor):    [B, T, H,  K]  (L2-normalized over K)

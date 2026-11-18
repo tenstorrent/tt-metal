@@ -132,14 +132,10 @@ std::tuple<ttnn::Tensor, std::optional<ttnn::Tensor>> fused_recurrent_gated_delt
     }
 
     const auto out_mem = memory_config.value_or(ttnn::DRAM_MEMORY_CONFIG);
-    // Due to hardware bug (#38306), HiFi4 + fp32_dest_acc_en can sometime produce incorrect results on Wormhole.
-    // Use HiFi3 when fp32_dest_acc_en is True on Wormhole (less likely to give bad results).
-    const auto math_fidelity = dev->arch() == tt::ARCH::WORMHOLE_B0 ? MathFidelity::HiFi3 : MathFidelity::HiFi4;
-    ttnn::verify_numerical_configuration(dev->arch(), compute_kernel_config);
     const auto kernel_cfg = init_device_compute_kernel_config(
         dev->arch(),
         compute_kernel_config,
-        math_fidelity,
+        MathFidelity::HiFi4,
         /*default_approx_mode=*/false,
         /*default_fp32_acc=*/true,
         /*default_l1_acc=*/false);

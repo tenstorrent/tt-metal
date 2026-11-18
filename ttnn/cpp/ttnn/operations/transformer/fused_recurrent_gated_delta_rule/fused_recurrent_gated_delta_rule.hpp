@@ -17,7 +17,7 @@ namespace ttnn::transformer {
  *
  * The single-token decode kernel (T=1) and the K+1-token speculative-verify kernel are the same op:
  * one Tensix core per head walks the T token axis sequentially, holding the recurrent state on-core,
- * and matches FLA `naive_recurrent_gated_delta_rule` numerics (fp32/HiFi4; HiFi3 by default on Wormhole). The vLLM
+ * and matches FLA `naive_recurrent_gated_delta_rule` numerics (fp32/HiFi4). The vLLM
  * `fused_sigmoid_gating_delta_rule_update` is exactly this recurrence over the speculative tokens.
  *
  *   q    [B, T, H,  K]   (L2-normalized over K on host; use_qk_l2norm is not done here)
