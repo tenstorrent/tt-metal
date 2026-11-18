@@ -95,7 +95,7 @@ inline void read_in1_block_columns(
     noc.write_zeros_l1_barrier();
 }
 
-// Waits until every remote stripe in the block has its first `chunks` K chunks in. `arrived` remembers what we
+// Waits until every remote stripe in the block has its first `k_blocks` K blocks in. `arrived` remembers what we
 // already saw so each stripe's semaphore is polled only when it can still be behind.
 inline void wait_for_block_stripes(
     const uint32_t* cols,
@@ -103,19 +103,23 @@ inline void wait_for_block_stripes(
     uint32_t local_stripe,
     uint32_t stripe_tiles,
     const uint32_t* stripe_sem_addrs,
-    uint32_t chunks,
+    uint32_t k_blocks,
     uint32_t* arrived) {
     for (uint32_t j = 0; j < width; j++) {
         if (cols[j] == kPaddingColumn) {
             continue;
         }
         const uint32_t s = cols[j] / stripe_tiles;
-        if (s == local_stripe || arrived[s] >= chunks) {
+        if (s == local_stripe || arrived[s] >= k_blocks) {
             continue;
         }
-        // The sender bumps this core's semaphore once per K chunk of our piece of the stripe.
-        noc_semaphore_wait_min(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(stripe_sem_addrs[s]), chunks);
-        arrived[s] = chunks;
+        // The sender bumps the low half of this core's semaphore by the K blocks in each unit of our piece of the
+        // stripe that has landed - it is written remotely, hence the invalidate.
+        const auto* landed = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(stripe_sem_addrs[s]);
+        do {
+            invalidate_l1_cache();
+        } while ((*landed & kLandedCountMask) < k_blocks);
+        arrived[s] = k_blocks;
     }
 }
 
@@ -206,14 +210,15 @@ struct SendPieceArgs {
     uint32_t width = 0;
     uint32_t inj_noc_x = 0;  // the chain's injector, which waits for this piece on the next device
     uint32_t inj_noc_y = 0;
-    uint32_t notify = 0;  // the next device relays this piece further
+    uint32_t notify = 0;  // the last piece of a K chunk that the next device relays further
 };
 
-// Walks segment -> K chunk -> piece -> packet; a unit is one piece of one K chunk.
+// Walks the schedule segment -> K chunk -> piece. A K chunk is one or more of the matmul's K blocks, and a unit is one
+// piece of one K chunk: the tiles whose arrival the chain's injector on the next device is told about at once.
 class SendCursor {
 public:
-    SendCursor(uint32_t schedule_arg_idx, uint32_t K_tiles, uint32_t chunk_tiles, uint32_t tiles_per_packet) :
-        K_tiles_(K_tiles), chunk_tiles_(chunk_tiles), tiles_per_packet_(tiles_per_packet) {
+    SendCursor(uint32_t schedule_arg_idx, uint32_t K_tiles, uint32_t chunk_tiles) :
+        K_tiles_(K_tiles), chunk_tiles_(chunk_tiles) {
         args_ = reinterpret_cast<const tt_l1_ptr uint32_t*>(get_arg_addr(schedule_arg_idx));
         segments_left_ = *args_++;
         done_ = segments_left_ == 0;
@@ -231,58 +236,35 @@ public:
     const SendPieceArgs& piece() const {
         return pieces_[piece_idx_];
     }
-    // Units of the segment in send order; the relay counters count in the same order.
-    uint32_t unit_index() const {
-        return (chunk_idx_ * seg_->num_pieces) + piece_idx_;
+    uint32_t chunk_index() const {  // K chunks of the segment in send order; the relay counters count them
+        return chunk_idx_;
+    }
+    bool chunk_begin() const {  // at the K chunk's first piece
+        return piece_idx_ == 0;
     }
     uint32_t k_start() const {
         return k_start_;
     }
     uint32_t chunk() const {  // K tiles in this chunk; the last one can be short
-        return chunk_;
-    }
-    uint32_t row() const {
-        return row_;
-    }
-    uint32_t k() const {
-        return k_start_ + k_in_chunk_;
-    }
-    uint32_t count() const {  // tiles in the current packet; the unit's last packet can be short
-        return std::min(tiles_per_packet_, unit_tiles_ - t0_);
-    }
-    bool unit_begin() const {  // are we at the first packet of a unit?
-        return t0_ == 0;
-    }
-    bool unit_end() const {  // are we at the last packet of a unit?
-        return t0_ + tiles_per_packet_ >= unit_tiles_;
+        return std::min(chunk_tiles_, K_tiles_ - k_start_);
     }
 
-    // Next packet. Past the end of a unit: next piece, then next K chunk, then next segment.
-    void advance() {
-        if (!unit_end()) {
-            t0_ += tiles_per_packet_;
-            k_in_chunk_ += tiles_per_packet_;
-            while (k_in_chunk_ >= chunk_) {
-                k_in_chunk_ -= chunk_;
-                ++row_;
-            }
+    // Next piece, then next K chunk, then next segment.
+    void next_unit() {
+        if (++piece_idx_ < seg_->num_pieces) {
             return;
         }
-        t0_ = 0;
-        if (++piece_idx_ == seg_->num_pieces) {
-            piece_idx_ = 0;
-            k_start_ += chunk_tiles_;
-            ++chunk_idx_;
-            if (k_start_ >= K_tiles_) {
-                if (segments_left_ == 0) {
-                    done_ = true;
-                } else {
-                    load_segment();
-                }
-                return;
-            }
+        piece_idx_ = 0;
+        k_start_ += chunk_tiles_;
+        ++chunk_idx_;
+        if (k_start_ < K_tiles_) {
+            return;
         }
-        start_unit();
+        if (segments_left_ == 0) {
+            done_ = true;
+        } else {
+            load_segment();
+        }
     }
 
 private:
@@ -295,20 +277,10 @@ private:
         k_start_ = 0;
         chunk_idx_ = 0;
         piece_idx_ = 0;
-        t0_ = 0;
-        start_unit();
-    }
-
-    void start_unit() {
-        chunk_ = std::min(chunk_tiles_, K_tiles_ - k_start_);
-        unit_tiles_ = pieces_[piece_idx_].width * chunk_;
-        row_ = 0;
-        k_in_chunk_ = 0;
     }
 
     uint32_t K_tiles_;
     uint32_t chunk_tiles_;
-    uint32_t tiles_per_packet_;
     const tt_l1_ptr uint32_t* args_ = nullptr;
     uint32_t segments_left_ = 0;
     const tt_l1_ptr SendSegment* seg_ = nullptr;
@@ -316,10 +288,5 @@ private:
     uint32_t chunk_idx_ = 0;
     uint32_t piece_idx_ = 0;
     uint32_t k_start_ = 0;
-    uint32_t chunk_ = 0;
-    uint32_t t0_ = 0;  // first tile of the current packet within the unit
-    uint32_t row_ = 0;
-    uint32_t k_in_chunk_ = 0;
-    uint32_t unit_tiles_ = 0;
     bool done_ = true;
 };

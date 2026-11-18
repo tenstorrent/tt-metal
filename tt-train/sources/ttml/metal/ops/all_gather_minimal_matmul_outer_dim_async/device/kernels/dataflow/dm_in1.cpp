@@ -75,7 +75,7 @@ void kernel_main() {
     const uint32_t in0_upstream_noc_x = sink_in0 ? get_arg_val<uint32_t>(argidx++) : 0;
     const uint32_t in0_upstream_noc_y = sink_in0 ? get_arg_val<uint32_t>(argidx++) : 0;
     const uint32_t local_stripe = stripe_order[0];
-    uint32_t arrived[ring_size] = {};  // K chunks already seen per stripe
+    uint32_t arrived[ring_size] = {};  // K blocks already seen per stripe
 
     constexpr uint32_t K_num_blocks = padded_K_tiles / K_block_tiles;
     constexpr uint32_t in1_block_num_tiles = K_block_tiles * N_block_tiles;
@@ -119,7 +119,7 @@ void kernel_main() {
                 uint32_t in1_start_address = cb_in1.get_write_ptr();
                 if constexpr (is_injector_core) {
                     if (any_real) {
-                        // columns of other devices' stripes: wait until this K chunk is in the persistent buffer
+                        // columns of other devices' stripes: wait until this K block is in the persistent buffer
                         wait_for_block_stripes(
                             cols, width, local_stripe, stripe_tiles, stripe_sem_addrs, k_block + 1, arrived);
                         read_in1_block_columns<K_block_tiles, N_block_tiles, transpose_b>(

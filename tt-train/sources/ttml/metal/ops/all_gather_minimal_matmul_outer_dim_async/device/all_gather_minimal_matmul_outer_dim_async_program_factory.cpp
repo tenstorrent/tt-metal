@@ -20,6 +20,7 @@
 #include <utility>
 #include <vector>
 
+#include "kernels/all_gather_minimal_matmul_outer_dim_async_utils.hpp"
 #include "metal/common/program_utils.hpp"
 #include "stripe_layout.hpp"
 #include "ttnn/operations/cb_utils.hpp"
@@ -39,11 +40,14 @@ constexpr uint32_t kRtSenderShardAddrIdx = 0;
 constexpr uint32_t kRtSenderPwbAddrIdx = 1;
 constexpr uint32_t kRtSenderSemaphoresIdx = 2;
 constexpr uint32_t kMaxSendSlots = 16;
-constexpr uint32_t kMinTilesPerPacket = 2;
-constexpr uint32_t kMaxTilesPerPacket = 4;
+constexpr uint32_t kTilesPerPacket = 2;
 // Each send slot has its packet header in front of the payload (send_on_grid.cpp); the header area is the fabric's
 // packet header size rounded up to this alignment, which keeps the payload aligned for DRAM reads.
 constexpr uint32_t kSendSlotAlignBytes = 64;
+// A unit (one chain's piece of one K chunk) ends with a flushed increment, which stalls the next device's router until
+// the unit's writes have landed. Narrow pieces therefore send several K blocks per chunk: at least this many tiles
+// for the widest chain's slice (a chain one tile narrower sends less).
+constexpr uint32_t kMinUnitTiles = 32;
 
 std::pair<std::vector<ttnn::CoreCoord>, uint32_t> build_core_order_for_axis(
     const ttnn::CoreCoord& core,
@@ -85,11 +89,6 @@ ttnn::CoreCoord clamped_next(const std::vector<ttnn::CoreCoord>& order, uint32_t
 uint64_t padded_work_per_core(
     uint32_t M_tiles, uint32_t N_tiles, uint32_t ring_size, uint32_t m_cores, uint32_t n_chains) {
     return static_cast<uint64_t>(tt::div_up(M_tiles, m_cores)) * ring_size * tt::div_up(N_tiles / ring_size, n_chains);
-}
-
-// A scatter-write packet carries at most kMaxTilesPerPacket tiles (the caller requires at least kMinTilesPerPacket).
-uint32_t send_tiles_per_packet(uint32_t tile_size) {
-    return std::min<uint32_t>(kMaxTilesPerPacket, tt::tt_fabric::get_tt_fabric_max_payload_size_bytes() / tile_size);
 }
 
 // On the sink row one data-mover kernel takes both operands, which frees a RISC for the fabric sender.
@@ -237,13 +236,13 @@ AllGatherMinimalMatmulOuterDimAsyncProgramFactory::create_at(
     tt::tt_metal::create_cb(
         tt::CBIndex::c_3, program, core_grid, intermediate_tile_size, out_block_num_tiles, intermediate_data_format);
 
-    const uint32_t tiles_per_packet = send_tiles_per_packet(in1_tile_size);
+    const uint32_t tiles_per_packet = kTilesPerPacket;
     TT_FATAL(
-        tiles_per_packet >= kMinTilesPerPacket,
-        "all_gather_minimal_matmul_outer_dim_async: the fabric packet payload ({} B) must hold at least {} gathered "
-        "tiles of {} B",
+        tt::tt_fabric::get_tt_fabric_max_payload_size_bytes() >= tiles_per_packet * in1_tile_size,
+        "all_gather_minimal_matmul_outer_dim_async: the fabric packet payload ({} B) must hold {} gathered tiles of "
+        "{} B",
         tt::tt_fabric::get_tt_fabric_max_payload_size_bytes(),
-        kMinTilesPerPacket,
+        tiles_per_packet,
         in1_tile_size);
     const uint32_t slot_header_bytes = tt::round_up(
         static_cast<uint32_t>(tt::tt_fabric::get_tt_fabric_packet_header_size_bytes()), kSendSlotAlignBytes);
@@ -543,13 +542,15 @@ AllGatherMinimalMatmulOuterDimAsyncProgramFactory::create_at(
     const auto [forward_route, backward_route] = ttnn::ccl::get_forward_backward_line_unicast_configuration(
         mesh_coordinate, forward_coord, backward_coord, device);
 
-    const uint32_t chunk_tiles = K_block_tiles;  // senders ship K in the chunks the matmul consumes
+    // Senders ship K in whole K blocks, the chunks the matmul consumes.
+    const uint32_t chunk_blocks =
+        std::min<uint32_t>(tt::div_up(kMinUnitTiles, layout.piece_tiles * K_block_tiles), K_blocks);
+    const uint32_t chunk_tiles = chunk_blocks * K_block_tiles;
     const auto src_node_id = device->get_fabric_node_id(mesh_coordinate);
 
-    // Senders run on the sink row's free data movers - column 0 stays free. Each one sits in the column of the worker
-    // closest to its link's Ethernet core or in the nearest free column before it: its packets leave on
-    // large_input_noc, which goes one way round the row, so every column back costs one hop and a column past it
-    // costs almost the whole row.
+    // Senders run on the sink row's free data movers. Each one sits in the column of the worker closest to its link's
+    // Ethernet core or in the nearest free column before it: its packets leave on large_input_noc, which goes one way
+    // round the row, so every column back costs one hop and a column past it costs almost the whole row.
     auto sender_cores_at = [&](const ttnn::MeshCoordinate& coord) {
         const std::array<std::optional<ttnn::MeshCoordinate>, 2> peers = {
             ttnn::ccl::get_physical_neighbor_from_physical_coord(input_tensor, coord, 1, topology, axis),
@@ -557,7 +558,7 @@ AllGatherMinimalMatmulOuterDimAsyncProgramFactory::create_at(
         const tt::tt_metal::IDevice* chip = tt::tt_metal::internal::get_device(*device, coord);
         const auto src = device->get_fabric_node_id(coord);
         std::vector<ttnn::CoreCoord> cores(2 * num_links);
-        std::set<uint32_t> taken = {0};
+        std::set<uint32_t> taken;
         auto take_at_or_before = [&](uint32_t x) {
             x = std::min<uint32_t>(x, grid_size.x - 1);
             while (taken.contains(x)) {
@@ -600,6 +601,7 @@ AllGatherMinimalMatmulOuterDimAsyncProgramFactory::create_at(
             for (const auto& seg : segments) {
                 std::vector<uint32_t> piece_args;
                 uint32_t num_pieces = 0;
+                std::optional<size_t> notify_at;  // where the notify flag of the last relayed piece sits
                 for (const auto& p : seg.pieces) {
                     if (p.chain % num_links != link) {
                         continue;
@@ -612,11 +614,19 @@ AllGatherMinimalMatmulOuterDimAsyncProgramFactory::create_at(
                          layout.chain_width(p.chain),
                          static_cast<uint32_t>(injector.x),
                          static_cast<uint32_t>(injector.y),
-                         p.notify});
+                         0U});
+                    if (p.notify != 0) {
+                        notify_at = piece_args.size() - 1;
+                    }
                     ++num_pieces;
                 }
                 if (num_pieces == 0) {
                     continue;
+                }
+                // The next device's sender relays the notify pieces K chunk by K chunk: it is told once per chunk,
+                // behind the last of them.
+                if (notify_at.has_value()) {
+                    piece_args[*notify_at] = 1;
                 }
                 schedule_body.insert(schedule_body.end(), {seg.stripe, seg.distance, num_pieces});
                 schedule_body.insert(schedule_body.end(), piece_args.begin(), piece_args.end());
@@ -646,7 +656,13 @@ AllGatherMinimalMatmulOuterDimAsyncProgramFactory::create_at(
                 layout.ring_size,
                 static_cast<uint32_t>(transpose_b),
                 grid_send_slots,
-                slot_header_bytes};
+                slot_header_bytes,
+                K_block_tiles};
+            TT_FATAL(
+                send_ct.size() == kSendFixedCtArgs,
+                "all_gather_minimal_matmul_outer_dim_async: {} sender compile-time args, send_on_grid.cpp expects {}",
+                send_ct.size(),
+                kSendFixedCtArgs);
             const auto& route = dir == 0 ? forward_route : backward_route;
             send_ct.insert(send_ct.end(), route.begin(), route.end());
             tt::tt_metal::TensorAccessorArgs(*gathered_tensor.buffer()).append_to(send_ct);

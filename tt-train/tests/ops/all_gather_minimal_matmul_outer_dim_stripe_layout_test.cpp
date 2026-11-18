@@ -4,6 +4,7 @@
 
 #include <gtest/gtest.h>
 
+#include <algorithm>
 #include <cstdint>
 #include <vector>
 
@@ -39,18 +40,32 @@ void expect_layout_covers_every_tile_once(const StripeLayout& layout, uint32_t N
 void expect_relay_delivers_every_piece_once(const StripeLayout& layout, bool ring, uint32_t parity_unit) {
     const uint32_t r = layout.ring_size;
     const uint32_t chains = layout.num_chains;
+    std::vector<RelayPlan> plans;
+    plans.reserve(r);
+    for (uint32_t d = 0; d < r; ++d) {
+        plans.push_back(make_relay_plan(layout, d, ring, parity_unit));
+    }
     std::vector<uint32_t> received(r * r * chains, 0);
     for (uint32_t d = 0; d < r; ++d) {
-        const RelayPlan plan = make_relay_plan(layout, d, ring, parity_unit);
         for (const int32_t dir : {1, -1}) {
-            for (const auto& seg : (dir > 0 ? plan.forward : plan.backward)) {
+            for (const auto& seg : (dir > 0 ? plans[d].forward : plans[d].backward)) {
                 const int32_t to = static_cast<int32_t>(d) + dir;
                 ASSERT_TRUE(ring || (to >= 0 && to < static_cast<int32_t>(r)))
                     << "device " << d << " sends off the line";
                 const uint32_t dst = static_cast<uint32_t>(
                     ((to % static_cast<int32_t>(r)) + static_cast<int32_t>(r)) % static_cast<int32_t>(r));
+                const auto& onward = dir > 0 ? plans[dst].forward : plans[dst].backward;
+                const auto next = std::find_if(onward.begin(), onward.end(), [&](const auto& s) {
+                    return s.stripe == seg.stripe && s.distance == seg.distance + 1;
+                });
                 for (const auto& p : seg.pieces) {
                     received[(((dst * r) + seg.stripe) * chains) + p.chain]++;
+                    const bool sent_on = next != onward.end() &&
+                                         std::any_of(next->pieces.begin(), next->pieces.end(), [&](const auto& q) {
+                                             return q.chain == p.chain;
+                                         });
+                    ASSERT_EQ(p.notify != 0, sent_on)
+                        << "chain " << p.chain << "'s piece of stripe " << seg.stripe << " sent by device " << d;
                 }
             }
         }

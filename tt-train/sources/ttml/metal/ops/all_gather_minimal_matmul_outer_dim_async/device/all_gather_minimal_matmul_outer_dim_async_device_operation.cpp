@@ -5,7 +5,9 @@
 #include "all_gather_minimal_matmul_outer_dim_async_device_operation.hpp"
 
 #include <tt-metalium/constants.hpp>
+#include <tt-metalium/math.hpp>
 
+#include "kernels/all_gather_minimal_matmul_outer_dim_async_utils.hpp"
 #include "metal/common/tensor_validation.hpp"
 #include "ttnn/operations/ccl/ccl_common.hpp"
 #include "ttnn/operations/ccl/common/host/ccl_topology_utils.hpp"
@@ -196,13 +198,20 @@ void AllGatherMinimalMatmulOuterDimAsyncDeviceOperation::validate_on_program_cac
     const ttnn::CoreCoord matmul_grid =
         attrs.config.has_value() ? attrs.config->compute_with_storage_grid_size : device_grid;
     TT_FATAL(
-        2 * attrs.num_links <= matmul_grid.x - 1,
-        "{}: num_links={} needs {} fabric senders (one per link and direction) in the matmul grid's bottom row, which "
-        "has {} cores past column 0",
+        2 * attrs.num_links <= matmul_grid.x,
+        "{}: num_links={} needs {} fabric senders (one per link and direction) in one row of the matmul grid, which "
+        "has {} cores",
         kOp,
         attrs.num_links,
         2 * attrs.num_links,
-        matmul_grid.x - 1);
+        matmul_grid.x);
+    const uint32_t K_block_tiles = attrs.config.has_value() ? attrs.config->K_block_size : kDefaultBlockTiles;
+    const uint32_t K_blocks = tt::div_up(x.padded_shape()[-1] / TILE_WIDTH, K_block_tiles);
+    TT_FATAL(
+        2 * K_blocks <= kLandedCountMask,
+        "{}: {} K blocks overflow the stripe semaphores' 16-bit counters; use a larger K_block_size",
+        kOp,
+        K_blocks);
     const size_t available_links = ttnn::operations::ccl::common::get_num_links(*x.device(), attrs.cluster_axis);
     TT_FATAL(
         attrs.num_links <= available_links,

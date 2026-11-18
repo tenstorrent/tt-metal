@@ -10,6 +10,15 @@
 // A block column that only pads a narrow chain up to piece_tiles.
 constexpr uint32_t kPaddingColumn = 0xFFFFFFFFu;
 
+// Every core has one semaphore per stripe. Its low half counts the K blocks of the stripe that landed for the core's
+// injector and its high half the K chunks that landed for the core's fabric sender to relay, so a core can be both.
+// Each half holds at most a call's K blocks plus those a neighbour already delivered for the next call.
+constexpr uint32_t kRelayCountShift = 16;
+constexpr uint32_t kLandedCountMask = (1U << kRelayCountShift) - 1;
+
+// send_on_grid.cpp's compile-time args before the route and the tensor accessors.
+constexpr uint32_t kSendFixedCtArgs = 10;
+
 // Page of gathered tile (n, k), for a tensor stored [N, K] (transpose_b) or [K, N].
 template <bool transpose_b>
 inline uint32_t gathered_page(uint32_t n, uint32_t k, uint32_t K_tiles, uint32_t n_cols) {

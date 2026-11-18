@@ -210,7 +210,8 @@ void run_fabric_gather(
     bool transpose_b,
     ttnn::ccl::Topology topology,
     const std::optional<Block>& block,
-    uint32_t num_calls = kCalls) {
+    uint32_t num_calls = kCalls,
+    const std::optional<ttnn::CoreCoord>& matmul_grid = std::nullopt) {
     auto* device = &ttml::autograd::ctx().get_device();
     const auto grid = device->compute_with_storage_grid_size();
     std::optional<MinimalMatmulConfig> config;
@@ -221,7 +222,7 @@ void run_fabric_gather(
             .N_block_size = block->N_block,
             .subblock_h = block->subblock_h,
             .subblock_w = block->subblock_w,
-            .compute_with_storage_grid_size = grid};
+            .compute_with_storage_grid_size = matmul_grid.value_or(grid)};
     }
 
     const auto& s = p.shape;
@@ -421,9 +422,9 @@ TEST_F(AllGatherMinimalMatmulOuterDimAsyncTest, CacheHitWithOtherSemaphores) {
         for (const auto& device_y : ttnn::distributed::get_device_tensors(y)) {
             expect_close(p.y, ttml::core::to_xtensor(device_y));
         }
-        // Poisoning the first set proves later calls run on the second.
+        // Poisoning both counters of the first set proves later calls run on the second.
         for (const auto& semaphore : semaphores[0]) {
-            semaphore.reset_semaphore_value(1000);
+            semaphore.reset_semaphore_value((1000U << 16) | 1000U);
         }
     }
 }
@@ -481,7 +482,7 @@ TEST_F(AllGatherMinimalMatmulOuterDimAsyncTest, TinyShapes) {
     auto* device = &ttml::autograd::ctx().get_device();
     const auto replicate = ttnn::distributed::replicate_tensor_to_mesh_mapper(*device);
     const auto shard = ttnn::distributed::shard_tensor_to_mesh_mapper(*device, 0, kClusterAxis);
-    // 320 = 8 + 2 tiles: a short last K chunk after a full one.
+    // 320 = 8 + 2 tiles: a short last K block.
     for (const uint32_t K : {32U, 96U, 256U, 320U}) {
         for (const uint32_t N : {128U, 256U, 384U}) {
             const Shape s{128, K, N};
@@ -499,6 +500,40 @@ TEST_F(AllGatherMinimalMatmulOuterDimAsyncTest, TinyShapes) {
                 }
             }
         }
+    }
+}
+
+TEST_F(AllGatherMinimalMatmulOuterDimAsyncTest, ShortLastKBlockAfterFullChunks) {
+    auto* device = &ttml::autograd::ctx().get_device();
+    const auto replicate = ttnn::distributed::replicate_tensor_to_mesh_mapper(*device);
+    const auto shard = ttnn::distributed::shard_tensor_to_mesh_mapper(*device, 0, kClusterAxis);
+    // K = 20 and 34 tiles: a K chunk of 2 and of 4 whole K blocks, then a chunk that is one short K block.
+    for (const auto& s : std::array<Shape, 2>{{{128, 640, 2048}, {128, 1088, 256}}}) {
+        const Problem p = make_problem(s);
+        const auto x =
+            ttml::core::from_vector(p.x, ttnn::Shape({s.M, s.K}), device, ttnn::Layout::TILE, replicate.get());
+        const auto g =
+            ttml::core::from_vector(p.g_nk, ttnn::Shape({s.N, s.K}), device, ttnn::Layout::TILE, shard.get());
+        for (const uint32_t num_links : {2U, 1U}) {
+            SCOPED_TRACE(testing::Message() << "K=" << s.K << " N=" << s.N << " links=" << num_links);
+            run_fabric_gather(p, x, g, num_links, true, ttnn::ccl::Topology::Ring, std::nullopt);
+        }
+    }
+}
+
+// A 4-column matmul grid with 2 links has a fabric sender in every column of the sink row, and this shape turns the
+// grid so that the in1 injectors are column 0: one core is both, and its two counters share each semaphore.
+TEST_F(AllGatherMinimalMatmulOuterDimAsyncTest, SenderSharesACoreWithAnInjector) {
+    auto* device = &ttml::autograd::ctx().get_device();
+    const Shape s{128, 512, 3840};
+    const Problem p = make_problem(s);
+    const auto replicate = ttnn::distributed::replicate_tensor_to_mesh_mapper(*device);
+    const auto shard = ttnn::distributed::shard_tensor_to_mesh_mapper(*device, 0, kClusterAxis);
+    const auto x = ttml::core::from_vector(p.x, ttnn::Shape({s.M, s.K}), device, ttnn::Layout::TILE, replicate.get());
+    const auto g = ttml::core::from_vector(p.g_nk, ttnn::Shape({s.N, s.K}), device, ttnn::Layout::TILE, shard.get());
+    for (const auto topology : {ttnn::ccl::Topology::Ring, ttnn::ccl::Topology::Linear}) {
+        SCOPED_TRACE(testing::Message() << "ring=" << (topology == ttnn::ccl::Topology::Ring));
+        run_fabric_gather(p, x, g, 2, true, topology, Block{8, 8, 8, 4, 1}, kCalls, ttnn::CoreCoord{4, 10});
     }
 }
 
@@ -545,7 +580,7 @@ TEST_P(AllGatherMinimalMatmulOuterDimAsyncLargeTest, MatchesReference) {
     const size_t available_links = ttnn::operations::ccl::common::get_num_links(*device, kClusterAxis);
     bool ran = false;
     for (const uint32_t num_links : {2U, 4U}) {
-        if (num_links > available_links || 2 * num_links > grid.x - 1) {
+        if (num_links > available_links || 2 * num_links > grid.x) {
             continue;
         }
         for (const auto topology : {ttnn::ccl::Topology::Ring, ttnn::ccl::Topology::Linear}) {
