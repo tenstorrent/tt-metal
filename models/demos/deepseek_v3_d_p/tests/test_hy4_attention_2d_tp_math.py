@@ -8,10 +8,10 @@
   collectives in torch reproduces the fp32 HF reference sublayer (``reference/hy4_attention.py``), sink and gate
   included, for several mesh shapes, with the residual in and out as the prefill block's ``[S / sp, hidden / tp]``;
 * the gate's reduce over the hidden (TP) must precede the sigmoid (summing per-chip sigmoids is visibly wrong);
-* at Hy4's real dims on the SC1 mesh (SP 4 x TP 8) every projection is sharded once over all 32 chips (no replica),
+* at Hy4's real dims on the SC1 mesh (SP 8 on axis 0 x TP 4 on axis 1) every projection is sharded once over all 32 chips (no replica),
   with the per-chip shapes of the module docstring, and the head ownership of q_b / the gate / wkv_b / o_proj agree;
 * the sparse KV push's row-major chip order equals the TP-deduped cache's stripe order only with SP on mesh axis 0
-  (the TP=8 PCC drop of #65921, ``ttMLA.push_matches_stripe_order``);
+  (the TP=8 PCC drop of #65921, ``ttMLA.push_matches_stripe_order``), which is where SC1 puts SP;
 * the config switch keeps ttMLA for every model that does not opt in.
 """
 
@@ -110,12 +110,12 @@ def _emulate_2d(hn: torch.Tensor, w_hf: dict, topk: torch.Tensor, d: Hy4AttnDims
     qa = torch.cat([sum(x[t] @ W("q_a_proj", s, t) for t in range(tp)) for s in range(sp)], dim=1)
     q_ln = host["q_a_layernorm"][0].reshape(-1).to(F32)
     qn = qa * torch.rsqrt(qa.square().mean(-1, keepdim=True) + d.rms_norm_eps) * q_ln
-    # q_b: K (q_lora) over SP, column t's 8 heads (core order) -> reduce-scatter over SP: 2 heads per chip.
+    # q_b: K (q_lora) over TP, N = SP head block s -> reduce-scatter over TP: chunk t, 2 heads per chip.
     q_chip = {}
-    for t in range(tp):
-        col = sum(qn.chunk(sp, dim=1)[s] @ W("q_b_proj", s, t) for s in range(sp))
-        for s in range(sp):
-            q_chip[s, t] = col.chunk(sp, dim=1)[s].reshape(S, hpc, N + R)
+    for s in range(sp):
+        block = sum(qn.chunk(tp, dim=1)[t] @ W("q_b_proj", s, t) for t in range(tp))
+        for t in range(tp):
+            q_chip[s, t] = block.chunk(tp, dim=1)[t].reshape(S, hpc, N + R)
     # kv_a: K over both axes, reduced over all chips.
     kv = sum(x[t].chunk(sp, dim=1)[s] @ W("kv_a_proj_with_mqa", s, t)[0, 0] for s, t in chips)
     kv_ln = host["kv_a_layernorm"][0].reshape(-1).to(F32)
@@ -197,20 +197,21 @@ def test_gate_reduces_over_hidden_before_the_sigmoid():
 HY4 = Hy4AttnDims()  # num_heads 64, q_lora 2048, kv_lora 512, qk 192 + 64, v 256
 HY4_HIDDEN = 6144
 
-# Per-chip shard shapes on the SC1 mesh (SP 4 x TP 8), as the module docstring lists them.
+# Per-chip shard shapes on the SC1 mesh (SP 8 x TP 4: hidden over 4, heads over 8), as the module docstring lists.
+HY4_SP, HY4_TP = 8, 4
 HY4_CHIP_SHAPES = {
-    "q_a_proj": (768, 512),
+    "q_a_proj": (1536, 256),
     "q_b_proj": (512, 8 * 256),
     "kv_a_proj_with_mqa": (1, 1, 192, 576),
     "wkv_b1": (1, 2, 192, 512),
     "wkv_b2": (1, 2, 512, 256),
-    "g_proj": (768, 16 * 256),
-    "o_proj": (16 * 256, 768),
+    "g_proj": (1536, 8 * 256),
+    "o_proj": (8 * 256, 1536),
 }
 
 
 def test_hy4_weights_are_sharded_once_over_the_sc1_mesh():
-    sp, tp = 4, 8
+    sp, tp = HY4_SP, HY4_TP
     config = _config(HY4, HY4_HIDDEN)
     ttMLA2DTP.check_dims(config, sp, tp)
     host = ttMLA2DTP.host_weights_2d(None, config, sp, tp)
@@ -230,20 +231,22 @@ def test_hy4_weights_are_sharded_once_over_the_sc1_mesh():
 
 
 def test_head_ownership_agrees_across_q_b_gate_wkv_b_and_o_proj():
-    """Chip (s, t)'s heads: q_b's column t (core order) reduce-scattered over SP, chunk s; the gate's SP block s
-    reduce-scattered over TP, chunk t; wkv_b as loaded; and o_proj's SP block s is their all-gather over TP."""
-    H, sp, tp, V = 64, 4, 8, 4
+    """Chip (s, t)'s heads: q_b's and the gate's SP block s reduce-scattered over TP, chunk t; wkv_b as loaded; o_proj's
+    SP block s is their all-gather over TP; and the core sees them in core_head_order after the all-to-alls."""
+    H, sp, tp, V = 64, HY4_SP, HY4_TP, 4
     owned = {(s, t): ttMLA2DTP.heads_of_chip(H, sp, tp, s, t) for s in range(sp) for t in range(tp)}
     assert sorted(h for hs in owned.values() for h in hs) == list(range(H))
-    order = torch.tensor(ttMLA2DTP.core_head_order(H, sp, tp))
-    assert sorted(order.tolist()) == list(range(H))
-    host = {"wkv_b2": (torch.arange(H).float()[order].view(H, 1, 1).expand(H, 2, V).reshape(tp, H // tp, 2, V), 1, 0)}
+    assert owned[1, 2] == [12, 13]  # 8 s + 2 t
+    w_uv = torch.arange(H).float().view(H, 1, 1).expand(H, 2, V)
+    host = {"wkv_b2": (w_uv.reshape(sp, H // sp, 2, V), 0, 1)}
     for (s, t), mine in owned.items():
-        assert order.view(tp, H // tp)[t].chunk(sp)[s].tolist() == mine  # q_b
-        assert torch.arange(H).view(sp, H // sp)[s].chunk(tp)[t].tolist() == mine  # gate
+        assert torch.arange(H).view(sp, H // sp)[s].chunk(tp)[t].tolist() == mine  # q_b and the gate
         assert ttMLA2DTP.chip_shard(*host["wkv_b2"], sp, tp, s, t)[0, :, 0, 0].long().tolist() == mine  # wkv_b
     for s in range(sp):  # o_proj's K block s = the gate block s, in TP order
         assert [h for t in range(tp) for h in owned[s, t]] == list(range(s * H // sp, (s + 1) * H // sp))
+    # The core: all-to-all over SP (gather heads of column t in SP order), then over TP (gather the columns).
+    core = [h for t in range(tp) for s in range(sp) for h in owned[s, t]]
+    assert core == ttMLA2DTP.core_head_order(H, sp, tp) and sorted(core) == list(range(H))
 
 
 @pytest.mark.parametrize("mesh,sp_axis", [((8, 4), 0), ((8, 4), 1), ((4, 8), 0), ((4, 4), 1)])

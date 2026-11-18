@@ -4,15 +4,15 @@
 """Hy4-preview attention sublayer on the SC1 2D tensor-parallel layout vs the fp32 HF ``hy_v4`` reference (#65885).
 
 ``ttMLA2DTP`` (``tt/mla/mla_2d.py``) with REAL Hy4 weights, every projection sharded once over the 32 chips. Input and
-output are the prefill block's residual layout ``[S / 4, 6144 / 8]`` per chip (sequence over SP, hidden over TP), the
-same as the 2D shared expert / dense FFN of #65890.
+output are the prefill block's residual layout ``[S / 8, 6144 / 4]`` per chip (sequence over SP, hidden over TP), the
+same as the 2D shared expert / dense FFN of #65890 and iHC (#65891).
 
-Mesh: the physical 8x4 torus (``single_bh_galaxy_torus_xy``, dims [8, 4]) with TP 8 on axis 0 and SP 4 on axis 1, as
-#65890 runs it. That is TP32's 4x8 placement with its axes named by the fabric; no logical (4, 8) view is opened.
+Mesh: the physical 8x4 torus (``single_bh_galaxy_torus_xy``, dims [8, 4]) with SP 8 on axis 0 (sequence and heads, 8
+per chip) and TP 4 on axis 1 (hidden): #65884's 4x8 placement (hidden over its 4 rows, heads over its 8 columns) with
+its axes named by the fabric; no logical (4, 8) view is opened.
 
 Layers 0 (full indexer) and 2 (shared), both fed the top-k: the golden layer-0 top-k at 4K, a sliding causal window at
-longer lengths (seeded random tokens, no golden). The DSA indexer has no 2D layout yet (TtIndexer needs 128 / 8 = 16
-index dims per chip, #65887). Input: the layer-0 sublayer input ``hn = input_layernorm(embed)``, as in
+longer lengths (seeded random tokens, no golden). ttMLA2DTP does not build the DSA indexer yet (#65887). Input: the layer-0 sublayer input ``hn = input_layernorm(embed)``, as in
 ``test_hy4_attention.py`` (exact at layer 0, no iHC needed). Device weights come from the production Hy4 reader (RoPE
 frames reordered), the reference reads the raw HF tensors.
 
@@ -58,8 +58,8 @@ pytestmark = [
     pytest.mark.skipif(not (CHECKPOINT / "model.safetensors.index.json").is_file(), reason="no Hy4 checkpoint"),
 ]
 
-SP_AXIS = 1  # 4 chips: the residual's sequence, q_b's K, the gate / o_proj head blocks
-TP_AXIS = 0  # 8 chips: the residual's hidden, 8 heads per chip column
+SP_AXIS = 0  # 8 chips: the residual's sequence, the 8-head blocks of q_b / the gate / o_proj
+TP_AXIS = 1  # 4 chips: the residual's hidden, q_b's K
 
 
 def run_2d_attention(config, weights, mesh_device, hn, layer_idx, topology, topk):

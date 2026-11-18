@@ -7,51 +7,56 @@ ttMLA shards its projections over ONE mesh axis (TP) and replicates them over th
 sequence). ``ttMLA2DTP`` shards every projection over BOTH axes, once, with nothing replicated.
 
 Residual contract: the prefill block's, unchanged: ``[1, 1, S / sp, hidden / tp]`` per chip, the sequence over the SP
-axis (4 chips) and the hidden over the TP axis (8 chips). The 2D shared expert / dense FFN (``TtMlp2D``, #65890) uses
-the same, so attention and FFN hand the residual to each other with no reshuffle. Mesh: the physical 8x4 torus, TP on
-axis 0 and SP on axis 1 (no logical 4x8 view).
+axis and the hidden over the TP axis. On SC1 (#65884: hidden over its 4 rows, heads over its 8 columns) that is the
+physical 8x4 torus with SP 8 on axis 0 and TP 4 on axis 1, ``[S / 8, 6144 / 4]`` per chip (no logical 4x8 view). The
+2D shared expert / dense FFN (``TtMlp2D``, #65890) and iHC (#65891, ``MeshPlan(hidden_axis=1)``) use the same, so the
+sublayers hand the residual to each other with no reshuffle.
 
 Roles of the two axes:
 
-  * TP (8): the hidden of every hidden-side contraction (q_a, kv_a, gate: K over TP; o_proj: N over TP, as the
-    residual); the 8 heads per chip column of q_b and the attention core (``8 heads per chip``, #65884);
-  * SP (4): the residual's sequence; the K of q_b (q_lora); the head blocks of the gate and o_proj (16 heads each);
-    the sequence inside the attention core (ttMLA's SP axis).
+  * TP (4): the hidden of every hidden-side contraction (q_a, kv_a, gate: K over TP; o_proj: N over TP, as the
+    residual), and q_b's K (q_lora);
+  * SP (8): the residual's sequence; the heads, 8 per chip, of q_b's N, the gate's N and o_proj's K (``8 heads per
+    chip``, #65884); q_a's N; the sequence inside the attention core (ttMLA's SP axis).
 
-Per-weight sharding (``sp`` = 4, ``tp`` = 8; per-chip shapes for Hy4):
+Per-weight sharding (``sp`` = 8, ``tp`` = 4; per-chip shapes for Hy4):
 
   ============  ==========================  =============================================  =====================
   weight        [K, N]                      split                                          per chip
   ============  ==========================  =============================================  =====================
-  q_a_proj      [6144, 2048]                K (hidden) over TP, N over SP                  [768, 512]
-  q_b_proj      [2048, 64 * 256]            K (q_lora) over SP, N (heads) over TP          [512, 8 heads * 256]
+  q_a_proj      [6144, 2048]                K (hidden) over TP, N over SP                  [1536, 256]
+  q_b_proj      [2048, 64 * 256]            K (q_lora) over TP, N (8-head blocks) over SP  [512, 8 heads * 256]
   kv_a_proj     [6144, 576]                 K over TP x SP (576 is not 8 tiles)            [192, 576]
   wkv_b1        [64, 192, 512] per head     2 heads per chip                               [2, 192, 512]
   wkv_b2        [64, 512, 256] per head     2 heads per chip                               [2, 512, 256]
-  g_proj        [6144, 64 * 256]            K (hidden) over TP, N (16-head blocks) over SP [768, 16 heads * 256]
-  o_proj        [64 * 256, 6144]            K (16-head blocks) over SP, N (hidden) over TP [16 heads * 256, 768]
+  g_proj        [6144, 64 * 256]            K (hidden) over TP, N (8-head blocks) over SP  [1536, 8 heads * 256]
+  o_proj        [64 * 256, 6144]            K (8-head blocks) over SP, N (hidden) over TP  [8 heads * 256, 1536]
   ============  ==========================  =============================================  =====================
 
-  Chip (s, t) owns heads ``16 s + 2 t`` and ``16 s + 2 t + 1`` in the per-head ops (wkv_b1, wkv_b2, the gate multiply):
-  the gate's reduce-scatter over TP of its SP block picks exactly those. q_b, wkv_b and the sink are stored with the
-  heads permuted (``core_head_order``) so that q_b's column t, reduce-scattered over SP, lands the same heads, and the
-  attention core sees the 64 heads in that order. Only the two norms (2048 + 512) and the 64 sinks are replicated.
+  Chip (s, t) owns heads ``8 s + 2 t`` and ``8 s + 2 t + 1`` in the per-head ops (wkv_b1, wkv_b2, the gate multiply):
+  q_b's and the gate's 8-head block s, reduce-scattered over TP, chunk t. q_b, wkv_b, the gate and o_proj keep the
+  checkpoint's head order; only the sink is stored in the order the attention core sees the 64 heads after its two
+  all-to-alls (``core_head_order``: TP column t holds the heads of chips (0, t) .. (sp - 1, t)). Only the two norms
+  (2048 + 512) and the 64 sinks are replicated.
 
 Collectives (every reduce accumulates in fp32 inside ``matmul_reduce_scatter_prefill``):
 
   in:    all-gather(SP, sequence): x [S, hidden / tp]
   q_a:   x @ Wqa -> reduce-scatter(TP, N) -> all-gather(TP) -> all-gather(SP) -> q_a_layernorm on the full row
-  q_b:   q_lat[:, K_s] @ Wqb -> reduce-scatter(SP, N): this chip's 2 heads, every token -> wkv_b1 (2 heads)
+  q_b:   q_lat[:, K_t] @ Wqb -> reduce-scatter(TP, N): this chip's 2 heads, every token -> wkv_b1 (2 heads)
          -> all-to-all(SP) + all-to-all(TP), heads -> sequence: [64 heads, S / 32] -> RoPE -> the sparse core
   kv_a:  x[:, K_ts] @ Wkva -> reduce-scatter(SP, sequence) -> ttMLA's KV stem (TP gather + fp32 reduce)
          -> kv_a_layernorm, RoPE, KV cache write (ttMLA's SP x TP block-cyclic cache)
   core:  ttMLA's sparse path, unchanged: sparse_sdpa over all 64 heads per chip with the learnable sink
-         (``attention_sink``), each query's whole top-k on one chip -> all-to-all back to [8 heads, S / sp]
+         (``attention_sink``), each query's whole top-k on one chip -> all-to-all back to [16 heads, S / sp]
   wkv_b2: all-to-all(SP), sequence -> heads: [2 heads, S] -> wkv_b2 (2 heads)
   gate:  x @ Wg -> reduce-scatter(TP, N) -> sigmoid. The reduce over the hidden (TP) completes BEFORE the sigmoid
          (sigmoid of a partial sum would be wrong); the scatter only picks this chip's 2 heads.
-  o:     (v * g) -> all-gather(TP) [16 heads, S] -> @ Wo -> reduce-scatter(SP, sequence): [S / sp, hidden / tp], the
+  o:     (v * g) -> all-gather(TP) [8 heads, S] -> @ Wo -> reduce-scatter(SP, sequence): [S / sp, hidden / tp], the
          residual layout.
+
+With SP on mesh axis 0 the shared layers' sparse KV push addresses the chips in the cache's stripe order
+(``ttMLA.push_matches_stripe_order``), so the 2D layout uses the push, as GLM-5.3 does.
 
 The attention core is ttMLA's: per chip, all 64 heads over S / 32 queries, with the selected KV rows gathered to
 that chip, so each query's softmax is complete on one chip and the sink goes into ``sparse_sdpa`` exactly once. The
@@ -59,8 +64,11 @@ context-parallel stripe-and-LSE-merge core of #65884 (each chip attends over its
 LSE) is NOT used here; if it lands (#65886 / #65887) the sink must move to the merge,
 ``out = merged * sigmoid(lse - sink)`` (``tests/test_hy4_attention_math.py::test_lse_fold_is_the_same_function``).
 
-Not here: the DSA indexer on this layout (TtIndexer needs 128 / 8 = 16 index dims per chip, not tile aligned,
-#65887); this module takes the top-k as ``indexer_indices``.
+Not here: the DSA indexer on this layout (#65887; TtIndexer tiles at TP 4 but shards over TP only, replicated over
+SP); this module takes the top-k as ``indexer_indices``.
+
+Cache files: ``layer_{i}.mla2d_v2.*``. ``v2`` is this split; the first one (hidden over the 8-chip axis, q_b's K over
+SP and its heads over TP in ``core_head_order``) cached as ``mla2d`` and never loads as this one.
 """
 
 from __future__ import annotations
@@ -91,21 +99,21 @@ def mla_class(config):
 
 
 class ttMLA2DTP(ttMLA):
-    CACHE_PREFIX = "mla2d"  # its shards differ from ttMLA's TP-only ones; never share their cache files
+    CACHE_PREFIX = "mla2d_v2"  # never ttMLA's TP-only shards, nor the first 2D split's ("mla2d"; module docstring)
 
     # ------------------------------------------------------------------------------------------- host math
     @staticmethod
     def heads_of_chip(num_heads: int, sp: int, tp: int, s: int, t: int) -> list[int]:
-        """The heads chip (s on the SP axis, t on the TP axis) owns in the per-head ops: the gate's SP block s
-        (``num_heads / sp`` heads), reduce-scattered over TP, chunk t."""
+        """The heads chip (s on the SP axis, t on the TP axis) owns in the per-head ops: q_b's and the gate's SP block
+        s (``num_heads / sp`` heads), reduce-scattered over TP, chunk t."""
         block = num_heads // sp
         per_chip = block // tp
         return [s * block + t * per_chip + j for j in range(per_chip)]
 
     @staticmethod
     def core_head_order(num_heads: int, sp: int, tp: int) -> list[int]:
-        """The head order q_b, wkv_b and the sink are stored in, which is the order the attention core sees: TP column
-        t holds the heads of chips (0, t) .. (sp - 1, t), so q_b's reduce-scatter over SP hands chip (s, t) its own."""
+        """The order the attention core sees the 64 heads in after the all-to-alls over SP then TP (and the sink is
+        stored in): TP column t holds the heads of chips (0, t) .. (sp - 1, t)."""
         return [h for t in range(tp) for s in range(sp) for h in ttMLA2DTP.heads_of_chip(num_heads, sp, tp, s, t)]
 
     @staticmethod
@@ -141,9 +149,9 @@ class ttMLA2DTP(ttMLA):
         if real:
             sd = state_dict
             q_a = sd["q_a_proj.weight"].transpose(-2, -1)
-            q_b = sd["q_b_proj.weight"].reshape(H, N + R, Q)[order].reshape(H * (N + R), Q).transpose(-2, -1)
+            q_b = sd["q_b_proj.weight"].transpose(-2, -1)
             kv_a = sd["kv_a_proj_with_mqa.weight"].transpose(-2, -1)
-            kv_b = sd["kv_b_proj.weight"].reshape(H, N + V, L)[order]
+            kv_b = sd["kv_b_proj.weight"].reshape(H, N + V, L)
             w_uk = kv_b[:, :N, :]  # [H, N, L]: q_nope @ w_uk -> latent
             w_uv = kv_b[:, N:, :].transpose(-2, -1)  # [H, L, V]: latent @ w_uv -> v
             o = sd["o_proj.weight"].transpose(-2, -1)
@@ -165,12 +173,12 @@ class ttMLA2DTP(ttMLA):
             sink = torch.empty(1, 1, 1, H, dtype=torch.bfloat16) if use_sink else None
         out = {
             "q_a_proj": (q_a, 1, 0),
-            "q_b_proj": (q_b, 0, 1),
+            "q_b_proj": (q_b, 1, 0),
             # K over both axes: hidden index t * (hidden / tp) + s * (hidden / (tp * sp)) + k.
             "kv_a_proj_with_mqa": (kv_a.reshape(tp, sp, hidden // (sp * tp), L + R), 1, 0),
-            # Heads in core order: dim 0 is the TP column, dim 1 its SP chunks (2 heads each).
-            "wkv_b1": (w_uk.reshape(tp, H // tp, N, L), 1, 0),
-            "wkv_b2": (w_uv.reshape(tp, H // tp, L, V), 1, 0),
+            # Checkpoint head order: dim 0 is the SP block (q_b's / the gate's), dim 1 its TP chunks (2 heads each).
+            "wkv_b1": (w_uk.reshape(sp, H // sp, N, L), 0, 1),
+            "wkv_b2": (w_uv.reshape(sp, H // sp, L, V), 0, 1),
             "o_proj": (o, 0, 1),
             "q_a_layernorm": (q_a_ln, None, None),
             "kv_a_layernorm": (kv_a_ln, None, None),
@@ -357,11 +365,11 @@ class ttMLA2DTP(ttMLA):
         return self._q_a_norm(qr, ttnn.DRAM_MEMORY_CONFIG)
 
     def _q_stem_2d(self, qr: ttnn.Tensor, rope_tensors, kv_actual_isl, seq_len_local: int, metadata) -> ttnn.Tensor:
-        """q_b (K over SP) -> this chip's heads -> wkv_b1 -> heads to sequence -> RoPE: [1, H, S / (sp * tp), 576]
+        """q_b (K over TP) -> this chip's heads -> wkv_b1 -> heads to sequence -> RoPE: [1, H, S / (sp * tp), 576]
         row-major, the q ttMLA's sparse core takes (as _q_stem_seq_sharded returns it)."""
-        k_slice = ttnn.mesh_partition(qr, dim=3, cluster_axis=self.sp_axis)  # [S, q_lora / sp]
+        k_slice = ttnn.mesh_partition(qr, dim=3, cluster_axis=self.tp_axis)  # [S, q_lora / tp]
         ttnn.deallocate(qr)
-        q = self._mm_rs(k_slice, self.q_b_proj_weight, self.sp_axis, -1)  # [S, heads_per_chip * qk_head_dim]
+        q = self._mm_rs(k_slice, self.q_b_proj_weight, self.tp_axis, -1)  # [S, heads_per_chip * qk_head_dim]
         ttnn.deallocate(k_slice)
         q_nope, q_rope = ttnn.experimental.nlp_create_q_heads_split(
             q,
