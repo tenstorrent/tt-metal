@@ -35,6 +35,18 @@ jobs:
       - {name: CCACHE_COMPILERCHECK, value: content}
       - {name: TRACY_NO_INVARIANT_CHECK, value: '1'}
       - {name: TRACY_NO_ISA_EXTENSIONS, value: '1'}
+      # CPM's default source cache, named so configure stops re-fetching
+      # ~30 git sources and Boost on every checkout. Same path as the default
+      # keeps ccache's relative include paths (CCACHE_BASEDIR) unchanged.
+      - {name: CPM_SOURCE_CACHE, value: /workspace/.cpmcache}
+    # TorrentCI keys are literal (no hashFiles): restore the newest entry for
+    # this ref, then a protected ref's; the cpm-cache step drops a restored tree whose
+    # dependency-file hash differs, so a change refetches from scratch and
+    # the cache never accumulates stale sources. A miss fetches as before.
+    cache:
+      key: 'cpm-v1-${ref_name}-${commit_sha}'
+      restore-keys: ['cpm-v1-${ref_name}-', cpm-v1-]
+      save-paths: [.cpmcache]
     artifacts:
       publish:
         - name: packages-ubuntu-24.04-amd64-Release-x86_64-linux-clang-20-libstdcpp
@@ -56,6 +68,20 @@ jobs:
           run:
             - git submodule sync --recursive
             - git submodule update --init --recursive --depth 1 --jobs 4
+      - id: cpm-cache
+        kind: shell
+        shell:
+          run:
+            - >-
+              cat cmake/CPM.cmake third_party/CMakeLists.txt tt_metal/third_party/CMakeLists.txt
+              tt_metal/third_party/umd/third_party/CMakeLists.txt tt-train/cmake/dependencies.cmake
+              .gitmodules | sha256sum | cut -d' ' -f1 > /tmp/cpm-deps.sha256
+            - >-
+              if [ ! -f .cpmcache/.deps.sha256 ]; then echo "CPM cache: miss";
+              elif cmp -s .cpmcache/.deps.sha256 /tmp/cpm-deps.sha256; then
+              echo "CPM cache: hit, $(du -sh .cpmcache | cut -f1)"; touch /tmp/cpm-unchanged;
+              else echo "CPM cache: dependencies changed, dropping it"; rm -rf .cpmcache; fi
+            - mkdir -p .cpmcache && cp /tmp/cpm-deps.sha256 .cpmcache/.deps.sha256
       - id: configure
         kind: shell
         shell:
@@ -87,3 +113,11 @@ jobs:
             - test -s packages.list
             - tar -cf packages.tar -C build -T packages.list
             - ls -l packages.tar
+      - id: cpm-cache-save
+        kind: shell
+        shell:
+          run:
+            # An unchanged restored tree is already stored: remove it so the
+            # platform skips re-uploading it (save records skipped_empty).
+            - du -sh .cpmcache
+            - if [ -f /tmp/cpm-unchanged ]; then rm -rf .cpmcache; fi
