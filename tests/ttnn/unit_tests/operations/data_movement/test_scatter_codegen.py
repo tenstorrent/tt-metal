@@ -16,6 +16,15 @@ from tests.ttnn.utils_for_testing import assert_equal
 _force_native = ttnn._ttnn.operations.data_movement.scatter_force_native
 _force_codegen = ttnn._ttnn.operations.data_movement.scatter_force_codegen
 
+
+@pytest.fixture(autouse=True)
+def _require_codegen_arch(device):
+    # Codegen serves calls only on these architectures; elsewhere every call is native and the
+    # forced codegen leg has nothing to exercise.
+    if not (ttnn.device.is_wormhole_b0(device) or ttnn.device.is_blackhole(device)):
+        pytest.skip("scatter codegen runs only on Wormhole and Blackhole")
+
+
 _TWO_CORES = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 0))])
 _TWO_RANGES = ttnn.CoreRangeSet(
     [

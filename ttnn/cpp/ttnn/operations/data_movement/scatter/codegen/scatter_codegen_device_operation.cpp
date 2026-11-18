@@ -106,6 +106,14 @@ ttsl::hash::hash_t ScatterCodegenDeviceOperation::compute_program_hash(
         ttsl::hash::type_hash<ScatterCodegenDeviceOperation>, attributes, tensor_args, factory.index(), chunk_elems);
 }
 
+bool same_geometry(const ScatterCodegenParams& a, const ScatterCodegenParams& b) {
+    return a.Ht == b.Ht && a.Wt_output == b.Wt_output && a.Wt_index == b.Wt_index &&
+           a.output_logical_w == b.output_logical_w && a.idx_valid_h_last == b.idx_valid_h_last &&
+           a.idx_valid_w_last == b.idx_valid_w_last && a.Ht_per_batch_index == b.Ht_per_batch_index &&
+           a.num_sticks == b.num_sticks && a.input_stick_elems == b.input_stick_elems &&
+           a.index_stick_elems == b.index_stick_elems && a.page_map == b.page_map;
+}
+
 void ScatterCodegenDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& attributes, const tensor_args_t& tensor_args) {
     const auto& input_tensor = tensor_args.input_tensor;
@@ -154,6 +162,25 @@ void ScatterCodegenDeviceOperation::validate_on_program_cache_miss(
                 input_shape,
                 index_shape);
         }
+    }
+
+    // Every geometry field, the page map included, is derived from the operands, but a caller of
+    // device_operation::launch hands the op whatever attributes it built: the page map decides which
+    // source page each input page consumes, so a wrong one scatters updates into the wrong rows
+    // with no error, and a zero extent divides in map_scatter_input_page(). A hit re-runs this too,
+    // so both cache paths hold the attributes to the operands.
+    {
+        const ScatterCodegenParams derived = build_scatter_codegen_params(
+            input_tensor,
+            index_tensor,
+            src_tensor,
+            attributes.reduction_mode,
+            attributes.output_mem_config,
+            attributes.sub_core_grids);
+        TT_FATAL(
+            same_geometry(attributes, derived),
+            "scatter_codegen: attributes do not describe the operands' geometry; build them with "
+            "build_scatter_codegen_params().");
     }
 
     // Repeated ahead of supported_by_codegen(), which also rejects each, so a direct prim caller

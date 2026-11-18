@@ -72,6 +72,18 @@ ttnn::Shape codegen_working_shape(const ttnn::Shape& logical_shape, int32_t dim)
 // copies, or the sliced source), each at its tile-padded size; the dispatch, asking on the
 // transformed operands, owes nothing. Every evaluation thus sees the same frontier and none can
 // disagree on a unit row.
+// The L1 the dispatch still takes out of its operands before any factory runs (see the definition
+// for what is owed on and off the last axis), in `layout`; exposed so the accounting can be held to
+// what allocating those tensors actually moves the frontier by.
+uint64_t pending_operand_copies_bytes(
+    const Tensor& input_tensor,
+    const Tensor& index_tensor,
+    const Tensor& src_tensor,
+    int32_t axis,
+    const ttnn::Shape& working_input,
+    const ttnn::Shape& working_index,
+    tt::tt_metal::Layout layout);
+
 bool prefers_row_major_strategy(
     const Tensor& input_tensor,
     const Tensor& index_tensor,

@@ -21,6 +21,7 @@
 #include <tt_stl/reflection.hpp>
 
 #include "ttnn/device.hpp"
+#include "ttnn/device_operation.hpp"
 #include "ttnn/operations/creation/creation.hpp"
 #include "ttnn/operations/data_movement/scatter/codegen/scatter_codegen_device_operation.hpp"
 #include "ttnn/operations/data_movement/scatter/codegen/scatter_codegen_program_factory.hpp"
@@ -31,7 +32,18 @@
 
 namespace ttnn::operations::data_movement::scatter::test {
 
-class ScatterCodegenPrimFixture : public TTNNFixtureWithSuiteDevice<ScatterCodegenPrimFixture> {};
+// The prim is reachable on every architecture, but its factories build the data-movement kernels
+// only Wormhole and Blackhole run, and ttnn::scatter() routes native everywhere else.
+class ScatterCodegenPrimFixture : public TTNNFixtureWithSuiteDevice<ScatterCodegenPrimFixture> {
+protected:
+    void SetUp() override {
+        TTNNFixtureWithSuiteDevice::SetUp();
+        const auto arch = device_->arch();
+        if (arch != tt::ARCH::WORMHOLE_B0 && arch != tt::ARCH::BLACKHOLE) {
+            GTEST_SKIP() << "scatter codegen runs only on Wormhole and Blackhole";
+        }
+    }
+};
 
 namespace {
 
@@ -168,7 +180,7 @@ TEST_F(ScatterCodegenPrimFixture, SelectsTheFactoryEachMergeGateCaseIsNamedFor) 
     EXPECT_TRUE(detour(make_operands(device_, 64)));
 }
 
-TEST_F(ScatterCodegenPrimFixture, ColumnSplitCostFollowsTheRescans) {
+TEST(ScatterCodegenFactorySelection, ColumnSplitCostFollowsTheRescans) {
     // Per core, the row split costs rows x (2 x Wt_output + 18 x Wt_index) and the column split
     // columns x Ht x (2 + 18 x Wt_index) weighted tile operations; the split with less work on its
     // busiest core wins. Two rows already favour the row split (one scan per core against two), and
@@ -183,6 +195,72 @@ TEST_F(ScatterCodegenPrimFixture, ColumnSplitCostFollowsTheRescans) {
     EXPECT_FALSE(scatter_prefers_column_split(1, 1, 1, 110));
     EXPECT_FALSE(scatter_prefers_column_split(1, 64, 1, 1));
     EXPECT_FALSE(scatter_prefers_column_split(0, 64, 1, 110));
+}
+
+TEST_F(ScatterCodegenPrimFixture, RejectsAttributesThatDoNotDescribeTheOperands) {
+    // device_operation::launch takes whatever attributes a caller built; the page map decides which
+    // source page each input page consumes, so a wrong one would scatter updates into the wrong
+    // rows with no error. Every derived field is held to the operands, on a miss and on a hit.
+    const Operands ops = make_operands(device_, 64);
+    const ttnn::prim::ScatterCodegenInputs inputs{ops.input, ops.index, ops.src, std::nullopt};
+    const ttnn::prim::ScatterCodegenParams good = ttnn::prim::build_scatter_codegen_params(
+        ops.input, ops.index, ops.src, kReductionNone, ops.input.memory_config(), std::nullopt);
+    const auto with = [&](uint32_t Ht, const ttnn::prim::ScatterPageMap& page_map) {
+        return ttnn::prim::ScatterCodegenParams{
+            Ht,
+            good.Wt_output,
+            good.Wt_index,
+            good.output_logical_w,
+            good.idx_valid_h_last,
+            good.idx_valid_w_last,
+            good.Ht_per_batch_index,
+            good.num_sticks,
+            good.input_stick_elems,
+            good.index_stick_elems,
+            page_map,
+            good.reduction_mode,
+            good.output_mem_config,
+            good.sub_core_grids};
+    };
+    EXPECT_NO_THROW(ttnn::device_operation::launch<ttnn::prim::ScatterCodegenDeviceOperation>(good, inputs));
+    ttnn::prim::ScatterPageMap narrowed = good.page_map;
+    narrowed[1] += 1;
+    EXPECT_THROW(
+        ttnn::device_operation::launch<ttnn::prim::ScatterCodegenDeviceOperation>(with(good.Ht, narrowed), inputs),
+        std::exception);
+    EXPECT_THROW(
+        ttnn::device_operation::launch<ttnn::prim::ScatterCodegenDeviceOperation>(
+            with(good.Ht + 1, good.page_map), inputs),
+        std::exception);
+}
+
+TEST_F(ScatterCodegenPrimFixture, ChargesTheSlicedSourceAheadOfItsTranspose) {
+    // Off the last axis a source wider than the index is sliced and then transposed while the slice
+    // is still live; the transpose lands below it, so the frontier drops by both. The budget's slice
+    // term must be what allocating that slice moves the frontier by.
+    constexpr uint32_t kWidth = 4096;
+    const tt::tt_metal::MemoryConfig l1{tt::tt_metal::TensorMemoryLayout::INTERLEAVED, tt::tt_metal::BufferType::L1};
+    const Tensor input = ttnn::ones(ttnn::Shape({1, kWidth}), DataType::BFLOAT16, Layout::ROW_MAJOR, *device_);
+    const tt::tt_metal::TensorSpec index_spec(
+        ttnn::Shape({1, kWidth}),
+        tt::tt_metal::TensorLayout(
+            DataType::INT32, tt::tt_metal::PageConfig(Layout::ROW_MAJOR), tt::tt_metal::MemoryConfig{}));
+    const Tensor index = Tensor::from_vector(std::vector<int32_t>(kWidth, 0), index_spec, device_);
+    const Tensor wide = ttnn::zeros(ttnn::Shape({2, kWidth}), DataType::BFLOAT16, Layout::ROW_MAJOR, *device_, l1);
+    const Tensor narrow = ttnn::zeros(ttnn::Shape({1, kWidth}), DataType::BFLOAT16, Layout::ROW_MAJOR, *device_, l1);
+    const ttnn::Shape working_input = codegen_working_shape(input.logical_shape(), /*dim=*/0);
+    const ttnn::Shape working_index = codegen_working_shape(index.logical_shape(), /*dim=*/0);
+    const auto owed = [&](const Tensor& src) {
+        return pending_operand_copies_bytes(
+            input, index, src, /*axis=*/0, working_input, working_index, Layout::ROW_MAJOR);
+    };
+    const uint64_t with_slice = owed(wide);
+    const uint64_t without_slice = owed(narrow);
+    EXPECT_GT(with_slice, without_slice);
+    const uint64_t before = ttnn::prim::scatter_usable_l1(input);
+    const Tensor slice = ttnn::zeros(ttnn::Shape({1, kWidth}), DataType::BFLOAT16, Layout::ROW_MAJOR, *device_, l1);
+    const uint64_t after = ttnn::prim::scatter_usable_l1(input);
+    EXPECT_EQ(with_slice - without_slice, before - after);
 }
 
 TEST_F(ScatterCodegenPrimFixture, RejectsRankZeroRowMajorOperands) {

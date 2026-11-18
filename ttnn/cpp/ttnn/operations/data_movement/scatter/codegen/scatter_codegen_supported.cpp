@@ -267,11 +267,16 @@ uint64_t live_l1_budget(const Tensor& input_tensor, uint64_t pending_bytes) {
     return usable > pending_bytes ? usable - pending_bytes : 0;
 }
 
+}  // namespace
+
 // The tensors this call still cuts from its operands before any factory runs, each in `layout` and
 // its operand's own placement: off the last axis the transposed copy of each operand; on it nothing
 // is transposed, but a source wider than the index is sliced to the index's shape first, and that
-// slice is what the factory sees. A slice taken ahead of a transpose is released by it, so the two
-// are never owed together.
+// slice is what the factory sees. Off the last axis a wider source is sliced AND transposed, and
+// the slice is still live when its transpose is allocated: L1 buffers are placed top-down, so the
+// transpose lands below the slice and the frontier the factory's CBs are measured against drops by
+// both. Freeing the slice afterwards leaves a hole above the transpose, which raises nothing, so the
+// slice is owed as well.
 uint64_t pending_operand_copies_bytes(
     const Tensor& input_tensor,
     const Tensor& index_tensor,
@@ -282,19 +287,26 @@ uint64_t pending_operand_copies_bytes(
     Layout layout) {
     const int32_t rank = static_cast<int32_t>(input_tensor.logical_shape().rank());
     if (axis != rank - 1) {
+        const uint64_t slice_bytes = src_tensor.logical_shape() != index_tensor.logical_shape()
+                                         ? pending_l1_bytes(
+                                               input_tensor,
+                                               index_tensor.logical_shape(),
+                                               src_tensor.dtype(),
+                                               layout,
+                                               src_tensor.memory_config())
+                                         : 0;
         return pending_l1_bytes(
                    input_tensor, working_input, input_tensor.dtype(), layout, input_tensor.memory_config()) +
                pending_l1_bytes(
                    input_tensor, working_index, index_tensor.dtype(), layout, index_tensor.memory_config()) +
-               pending_l1_bytes(input_tensor, working_index, src_tensor.dtype(), layout, src_tensor.memory_config());
+               pending_l1_bytes(input_tensor, working_index, src_tensor.dtype(), layout, src_tensor.memory_config()) +
+               slice_bytes;
     }
     if (src_tensor.logical_shape() != index_tensor.logical_shape()) {
         return pending_l1_bytes(input_tensor, working_index, src_tensor.dtype(), layout, src_tensor.memory_config());
     }
     return 0;
 }
-
-}  // namespace
 
 bool prefers_row_major_strategy(
     const Tensor& input_tensor,
