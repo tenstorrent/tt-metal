@@ -316,13 +316,14 @@ TEST_F(VclusterMetalDescDeathTest, E2ChipIdBeyondTheList) {
         "TT_METAL_EMU_SOC_DESC has no descriptor for chip 3");
 }
 
-// E3: chip 1's Ethernet harvesting mask in the cluster descriptor is 1.
+// E3: chip 1's Ethernet harvesting mask in the cluster descriptor is 1. On Mock UMD refuses the mask when it builds
+// its own descriptor of the chip, before metal's check, so the text is UMD's and E3's own is not reached here.
 TEST_F(VclusterMetalDescDeathTest, E3EthernetHarvestingMask) {
     EXPECT_REFUSED(
         [](Files& files) {
             edit(files.cluster, [](YAML::Node& cluster) { cluster["harvesting"]["1"]["eth_harvesting_mask"] = 1; });
         },
-        "Chip 1 has Ethernet harvesting mask 0x1; a descriptor a chip takes none");
+        "ETH harvesting is supported only for Blackhole");
 }
 
 std::string e4(const std::string& key) {
