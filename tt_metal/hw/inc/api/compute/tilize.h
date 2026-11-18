@@ -5,6 +5,7 @@
 #pragma once
 
 #include "api/compute/common.h"
+#include "api/compute/reg_api.h"
 #include "api/compute/sentinel/compute_kernel_sentinel.h"
 #ifdef TRISC_MATH
 #include "llk_math_unary_datacopy_api.h"
@@ -168,6 +169,13 @@ ALWI void tilize_block(
         // Acquire dst
         MATH((llk_math_wait_for_dest_available()));
         PACK((llk_packer_wait_for_math_done()));
+
+#ifdef ARCH_QUASAR
+        if constexpr (UnpackToDestEn) {
+            MATH((tile_regs_borrow<DstClient::MATH, DstClient::UNPACK>()));
+            MATH((tile_regs_return<DstClient::MATH, DstClient::UNPACK>()));
+        }
+#endif
 
         MATH((llk_math_eltwise_unary_datacopy<
               DataCopyType::A2D,

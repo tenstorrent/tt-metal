@@ -22,8 +22,8 @@ std::uint32_t math_sync_tile_dst_index = 0;
 
 // TRISC2 <-> TRISC3 handshake around the s_a epilogue (both indices are unused by this kernel's
 // dest-dvalid pipeline).
-constexpr std::uint8_t ACC_READY_SEM     = ckernel::trisc::semaphore::PACK_UNPACK;
-constexpr std::uint8_t EPILOGUE_DONE_SEM = ckernel::trisc::semaphore::UNPACK_MATH;
+constexpr std::uint8_t ACC_READY_SEM     = ckernel::trisc::semaphore::PACK_UNPACK_L1;
+constexpr std::uint8_t EPILOGUE_DONE_SEM = 0;
 
 #ifdef LLK_TRISC_UNPACK
 

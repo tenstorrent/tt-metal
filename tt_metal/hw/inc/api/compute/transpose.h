@@ -5,6 +5,7 @@
 #pragma once
 
 #include "api/compute/common.h"
+#include "api/compute/reg_api.h"
 #include "api/compute/sentinel/compute_kernel_sentinel.h"
 #include "llk_assert.h"
 #include "sanitizer/api.h"
@@ -73,9 +74,7 @@ ALWI void transpose_init(uint32_t icb, uint32_t call_line = __builtin_LINE()) {
     const bool enable_unpack_to_dest =
         (dst_format == (std::uint32_t)DataFormat::Float32) || (dst_format == (std::uint32_t)DataFormat::Int32);
     if (enable_unpack_to_dest) {
-        // UNP_DEST writes the tile into DEST with transpose forced off. Math then does the full 32x32
-        // transpose, within each face and across faces. The section handshake in tile_regs_acquire /
-        // tile_regs_commit is gated on UnpackToDestEn, same as copy_tile.
+        // UNP_DEST cannot transpose. transpose_tile returns the unpack loan before math transposes the tile in place.
         LLK_ASSERT(UnpackToDestEn, "32-bit transpose on Quasar requires unpack-to-dest to be enabled");
         UNPACK((llk_unpack_A_init<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, UnpackToDestEn>(
             false /*transpose_of_faces*/, false /*within_face_16x16_transpose*/, icb)));
@@ -140,12 +139,13 @@ ALWI void transpose_tile(uint32_t icb, uint32_t itile, uint32_t idst) {
     const bool enable_unpack_to_dest =
         (dst_format == (std::uint32_t)DataFormat::Float32) || (dst_format == (std::uint32_t)DataFormat::Int32);
     if (enable_unpack_to_dest) {
-        // The unpacker places the tile at idst. Math starts only after tile_regs_commit posts the section,
-        // then transposes that DEST tile in place. SrcB dvalid is dummy: MOVD2B stalls on it.
+        // MOVD2B needs the dummy SrcB valid flag and must wait for the unpacker to finish writing to Dest.
         LLK_ASSERT(UnpackToDestEn, "32-bit transpose on Quasar requires unpack-to-dest to be enabled");
+        tile_regs_borrow<DstClient::MATH, DstClient::UNPACK>();
         UNPACK((llk_unpack_A<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, UnpackToDestEn>(
             icb, itile, idst)));
         UNPACK((llk_unpack_set_srcb_dummy_valid()));
+        tile_regs_return<DstClient::MATH, DstClient::UNPACK>();
         MATH((llk_math_eltwise_unary_datacopy<
               ckernel::DataCopyType::A2D,
               is_fp32_dest_acc_en,
