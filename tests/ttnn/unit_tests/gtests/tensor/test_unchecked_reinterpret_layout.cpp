@@ -57,6 +57,20 @@ TEST_F(UncheckedReinterpretLayoutDeviceTest, RowMajorToTilePreservesShapeAndDtyp
     EXPECT_EQ(tile_tensor.tensor_spec().tile(), rm_tensor.tensor_spec().tile());
 }
 
+// The view's buffer is described by the new spec: a tile page, not the row page of the source.
+TEST_F(UncheckedReinterpretLayoutDeviceTest, BufferPageSizeFollowsNewLayout) {
+    MemoryConfig mem_cfg{TensorMemoryLayout::INTERLEAVED, BufferType::DRAM};
+    ttnn::Shape shape({1, 1, 32, 32});
+    tt::tt_metal::TensorSpec spec(shape, TensorLayout(DataType::BFLOAT16, PageConfig(Layout::ROW_MAJOR), mem_cfg));
+
+    Tensor rm_tensor = ttnn::create_device_tensor(spec, device_);
+    Tensor tile_tensor = unchecked_reinterpret_layout(rm_tensor, Layout::TILE);
+
+    EXPECT_EQ(
+        tile_tensor.device_storage().get_mesh_buffer().page_size(),
+        tile_tensor.tensor_spec().compute_page_size_bytes());
+}
+
 TEST_F(UncheckedReinterpretLayoutDeviceTest, AliasesTheSameDeviceAddress) {
     MemoryConfig mem_cfg{TensorMemoryLayout::INTERLEAVED, BufferType::DRAM};
     ttnn::Shape shape({1, 1, 32, 32});
