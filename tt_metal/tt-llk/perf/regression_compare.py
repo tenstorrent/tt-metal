@@ -161,7 +161,7 @@ def compare_runs(
 ):
     """Median-vs-median comparison.
 
-    Returns ``{records, regressions, improvements, new_points, noise_filtered}``.
+    Returns ``{records, regressions, improvements, new_points, missing_points, noise_filtered}``.
     ``delta`` is the fractional change vs baseline (0.12 = 12% slower, -0.12 = 12%
     faster) and ``abs_delta`` is the same change in cycles. A regression needs
     ``delta > threshold`` AND ``abs_delta > min_cycles``; an improvement is the
@@ -218,11 +218,13 @@ def compare_runs(
             regressions.append(record)
         elif record["improvement"]:
             improvements.append(record)
+    missing_points = [k for k in base if k not in cur]
     return {
         "records": records,
         "regressions": regressions,
         "improvements": improvements,
         "new_points": new_points,
+        "missing_points": missing_points,
         "noise_filtered": noise_filtered,
     }
 
@@ -359,7 +361,8 @@ def render_report(
         f"- {len(result['records'])} points compared, "
         f"**{len(regs)} regressed point(s) in {len(reg_groups)} finding(s)**, "
         f"{len(imps)} improved point(s) in {len(imp_groups)} finding(s), "
-        f"{len(result['new_points'])} new point(s)",
+        f"{len(result['new_points'])} new point(s), "
+        f"{len(result['missing_points'])} point(s) the baseline has and this run does not",
     ]
     filtered = result.get("noise_filtered", 0)
     if filtered:
@@ -475,6 +478,11 @@ def main(argv=None):
         default="",
         help="per-module thresholds, e.g. perf_matmul=0.25,perf_math_matmul=0.25",
     )
+    ap.add_argument(
+        "--require-full-coverage",
+        action="store_true",
+        help="fail when a point on either side was not compared",
+    )
     ap.add_argument("--report", default="regression_report.md")
     ap.add_argument("--test", default="?")
     ap.add_argument("--arch", help="named in the title and the verdict")
@@ -549,9 +557,19 @@ def main(argv=None):
                 "status": "regressed" if result["regressions"] else "clean",
                 "regressions": len(result["regressions"]),
                 "points": len(result["records"]),
+                "new_points": len(result["new_points"]),
+                "missing_points": len(result["missing_points"]),
             },
             fh,
         )
+    if a.require_full_coverage and (result["new_points"] or result["missing_points"]):
+        print(
+            f"\u274c {len(result['new_points'])} point(s) have no baseline and "
+            f"{len(result['missing_points'])} baseline point(s) were not measured. "
+            f"{len(result['records'])} of "
+            f"{len(result['records']) + len(result['new_points'])} generated point(s) compared."
+        )
+        raise SystemExit(1)
     # exit non-zero if regressions, so the skill/CI can gate on it
     raise SystemExit(1 if result["regressions"] else 0)
 

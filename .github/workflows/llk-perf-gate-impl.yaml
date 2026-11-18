@@ -86,6 +86,13 @@ on:
         required: false
         default: true
         type: boolean
+      require_full_coverage:
+        description: >-
+          Fail the job when a generated point has no baseline, or a baseline point
+          was not measured.
+        required: false
+        default: false
+        type: boolean
       fail_without_baseline:
         description: >-
           Fail the job when no baseline is found, because the gate then compares nothing.
@@ -445,6 +452,7 @@ jobs:
           THRESHOLD: ${{ inputs.threshold }}
           MIN_CYCLES: ${{ inputs.min_cycles }}
           MODULE_THRESHOLDS: ${{ inputs.module_thresholds }}
+          REQUIRE_FULL_COVERAGE: ${{ inputs.require_full_coverage }}
           BASELINE_LABEL: >-
             ${{ inputs.baseline_artifact_pattern && 'branch point on main'
                 || inputs.baseline_pipeline == 'merge_baseline' && 'merge baseline'
@@ -456,7 +464,10 @@ jobs:
             BASELINE_LABEL="${BASELINE_LABEL}, stale"
           fi
 
+          COVERAGE_ARG=()
+          [ "$REQUIRE_FULL_COVERAGE" = "true" ] && COVERAGE_ARG=(--require-full-coverage)
           python3 ${{ env.LLK_PATH }}/perf/regression_compare.py \
+            "${COVERAGE_ARG[@]}" \
             --current 'current_perf/**/*.csv' \
             --baseline 'baseline_perf/**/*.csv' \
             --run-types "$RUN_TYPES" \

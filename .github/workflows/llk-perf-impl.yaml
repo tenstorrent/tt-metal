@@ -792,12 +792,14 @@ jobs:
             case "$arch" in wormhole) label=N150 ;; blackhole) label=P150 ;; *) label=none ;; esac
             want=$(python3 -c 'import json, os, sys; print(sum(sys.argv[1] in t["runs_on"][0] for t in json.loads(os.environ["MATRIX"] or "[]")))' "$label")
             got=$(ls "$GITHUB_WORKSPACE"/perf-data/perf-data-"$arch"-*/leg-complete 2>/dev/null | wc -l)
-            if (( want == 0 || got < want )); then
-              echo "::warning::$arch: $got of $want legs completed; not published."
+            if [ "$want" -eq 0 ] || [ "$got" -lt "$want" ]; then
+              echo "::error::$arch: $got of $want legs completed; not published."
               rm "$f"
+              short=1
             fi
           done
           ls "$GITHUB_WORKSPACE"/generated/llk_perf/*.parquet || { echo "::error::No complete architecture to publish."; exit 1; }
+          [ -z "$short" ] || exit 1
       # The LLK test image has the python env but no ssh client, and the
       # upload action shells out to sftp.
       - name: Install the SFTP client

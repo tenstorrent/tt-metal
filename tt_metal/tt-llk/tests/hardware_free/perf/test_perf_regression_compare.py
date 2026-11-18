@@ -205,6 +205,28 @@ def test_new_config_is_reported_not_flagged(tmp_path):
     assert not result["records"]  # nothing was actually compared
 
 
+def test_baseline_point_this_run_did_not_measure_is_counted(tmp_path):
+    baseline = [_csv(tmp_path, "b.csv", _INIT, _TILE_LOOP, tile_cnt=4)]
+    current = [_csv(tmp_path, "c.csv", _INIT, _TILE_LOOP, tile_cnt=8)]
+
+    result = compare_runs(current, baseline)
+
+    assert len(result["missing_points"]) == 2
+    assert len(result["new_points"]) == 2
+    assert not result["records"]
+
+
+def test_full_coverage_leaves_missing_points_empty(tmp_path):
+    baseline = [_csv(tmp_path, "b.csv", _INIT, _TILE_LOOP, tile_cnt=4)]
+    current = [_csv(tmp_path, "c.csv", _INIT, _TILE_LOOP, tile_cnt=4)]
+
+    result = compare_runs(current, baseline)
+
+    assert not result["missing_points"]
+    assert not result["new_points"]
+    assert len(result["records"]) == 2
+
+
 def test_run_type_filter_keeps_only_what_was_asked_for(tmp_path):
     baseline = [_csv(tmp_path, "b.csv", _INIT, _TILE_LOOP, run_type="L1_TO_L1")]
     current = [_csv(tmp_path, "c.csv", _INIT, _TILE_LOOP + 200, run_type="L1_TO_L1")]
