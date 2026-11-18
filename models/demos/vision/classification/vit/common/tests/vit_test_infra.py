@@ -91,7 +91,6 @@ class VitTestInfra:
         )
 
         if use_random_input_tensor == False:
-            ## IMAGENET INFERENCE
             data_loader = get_data_loader(
                 batch_size * self.num_devices, available_iterations(batch_size * self.num_devices, 1)
             )

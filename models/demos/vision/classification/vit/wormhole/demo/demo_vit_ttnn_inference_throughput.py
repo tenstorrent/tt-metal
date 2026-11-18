@@ -2,6 +2,7 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+import itertools
 import time
 
 import pytest
@@ -83,13 +84,11 @@ def test_vit(device, model_location_generator):
     else:
         head_masks = [None for _ in range(config.num_hidden_layers)]
 
-    # IMAGENET INFERENCE
-    #####################
-    iterations = available_iterations(batch_size, 2)
-    data_loader = get_data_loader(batch_size, iterations)
+    # The first pass compiles and the second is timed alone; a folder with one full batch replays it.
+    data_loader = itertools.cycle(get_data_loader(batch_size, available_iterations(batch_size, 2)))
 
     durations = []
-    for iter in range(iterations):
+    for _ in range(2):
         torch_pixel_values, labels = get_batch(data_loader, image_processor)
         start = time.time()
         torch_pixel_values = torch.permute(torch_pixel_values, (0, 2, 3, 1))
