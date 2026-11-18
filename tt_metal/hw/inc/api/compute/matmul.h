@@ -463,8 +463,8 @@ constexpr bool matmul_fe_main_math() {
 #ifdef TRISC_MATH
 // The smallest kt_dim from which a plain call that runs main's math because the front end sees no constant block takes the row
 // form (0: never), outside size mode: LoFi half sync from kt 3 (census 65c1c: 40 of 76 keys faster, 0 slower; kt <= 2 loses to the
-// row path's per-call cost), HiFi2 half sync with a 32-bit DEST from kt 2 (a kt-1 block loses: ccl F32 4x1x1 +1.05). The init and the
-// calls receive the same kt_dim.
+// row path's per-call cost). HiFi2 keeps the tile MOP: its row form loses on pack-bound blocks the front end cannot tell apart
+// (minimal_matmul M block 2 +0.2..+0.3 %). The init and the calls receive the same kt_dim.
 template <std::uint32_t llk_dir, bool row_mop_on, std::uint32_t kt_key>
 constexpr std::uint32_t matmul_fe_rowform_min_kt() {
     if constexpr (
@@ -473,8 +473,6 @@ constexpr std::uint32_t matmul_fe_rowform_min_kt() {
         return 0;
     } else if constexpr (MATH_FIDELITY == MathFidelity::LoFi) {
         return 3;
-    } else if constexpr (matmul_hifi2_half_wide(MATH_FIDELITY, true, DST_ACCUM_MODE, llk_math_matmul_kernel_has_32bit_cb())) {
-        return 2;
     } else {
         return 0;
     }
