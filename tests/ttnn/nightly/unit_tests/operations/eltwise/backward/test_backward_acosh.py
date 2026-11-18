@@ -110,10 +110,11 @@ def _acosh_bw_torch_reference(grad, x, flush):
 
 
 def _acosh_bw_reference(grad, x, flush):
-    """Torch, except on the declared lanes."""
+    """Torch, except: 0 where |x| >= 2^64, where Q(x) = x * x - 1.0 leaves the FP32 range (the composite's BF16
+    Q overflows there too)."""
     result = _acosh_bw_torch_reference(grad, x, flush)
     x32 = x.to(torch.float32)
-    result = torch.where((x32.abs() >= 1.8446744073709552e19) | (torch.isinf(x32)), torch.zeros_like(result), result)
+    result = torch.where(((x32.abs() >= 1.8446744073709552e19)) & torch.isfinite(x32), torch.zeros_like(result), result)
     return result
 
 

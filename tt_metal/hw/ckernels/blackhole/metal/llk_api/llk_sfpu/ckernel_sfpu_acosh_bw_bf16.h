@@ -56,11 +56,15 @@ inline void calculate_acosh_bw_bf16() {
             }
             v_endif;
         }
-        // An infinite x takes the derivative's limit and a NaN gives NaN.
-        // DEST holds x as BF16 bits: exponent 7:0, mantissa 14:8, sign 15 (not the encoding's 0x7f80, 0x007f).
+        // An infinite x takes the derivative's limit and a NaN gives NaN. An infinite or NaN grad times a limit of 0 is
+        // NaN, as torch gives. DEST holds x as BF16 bits: exponent 7:0, mantissa 14:8, sign 15 (not the encoding's
+        // 0x7f80, 0x007f).
         vUInt raw = dst_reg[d].mode<::sfpi::DataLayout::U16>();
         v_if((raw & 0x00ff) == 0x00ff) {
             result = 0.0f;
+            vUInt graw = dst_reg[32 + d].mode<::sfpi::DataLayout::U16>();
+            v_if((graw & 0x00ff) == 0x00ff) { result = std::numeric_limits<float>::quiet_NaN(); }
+            v_endif;
             v_if((raw & 0x7f00) != 0) { result = std::numeric_limits<float>::quiet_NaN(); }
             v_endif;
         }
