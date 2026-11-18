@@ -245,6 +245,7 @@ jobs:
           ARCH_NAME: wormhole_b0
           CMAKE_GENERATOR: Ninja
         run: |
+          git config --global --add safe.directory "$GITHUB_WORKSPACE"
           echo "Checking compatibility with $(cmake --version)"
           cmake -D BUILD_PROGRAMMING_EXAMPLES=ON -D TT_METAL_BUILD_TESTS=ON -B build .
   check-docker-bake-ci:
