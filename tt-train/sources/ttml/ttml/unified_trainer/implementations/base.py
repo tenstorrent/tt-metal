@@ -68,7 +68,7 @@ class Trainer(ABC):
             self._check_config()
             self._seed()
             self.train_dataloader, self.val_dataloader = self._load_dataloaders()
-            self._check_stopping_criteria()
+            self._check_train_data()
             self.device_manager = self._create_device_manager()
             self.model = self._load_model()
             self.optimizer = self._load_optimizer()
@@ -101,59 +101,60 @@ class Trainer(ABC):
             raise RuntimeError("Trainer.setup(config) must be called before train()")
 
         accumulation_steps = self.config.gradient_accumulation_steps
+        total_batches = self._total_batches()
         with self._train_lifecycle():
             self.step_loss = None
             if self._validation_enabled():
                 self.validate()
 
             self._train_mode()
-            for epoch in self._epochs():
-                if self._reached_step_limit():
-                    break
-                self.epoch = epoch
-                self.callback_handler("on_train_epoch_start")
+            self._zero_grad()
+            # The batches of the current accumulation window: one optimizer step's worth.
+            window_start, window = 0, min(accumulation_steps, total_batches)
+            epoch = None
+            batches = itertools.islice(self._batch_stream(), total_batches)
+            for index, (batch_epoch, batch) in enumerate(tqdm(batches, total=total_batches, desc="Training")):
+                if batch_epoch != epoch:
+                    if epoch is not None:
+                        self.callback_handler("on_train_epoch_end")
+                    epoch = self.epoch = batch_epoch
+                    self.callback_handler("on_train_epoch_start")
 
-                # A partial window left by the previous epoch must not leak into this epoch's first step.
-                accumulation_step = 0
-                self.step_loss = None
-                self._zero_grad()
+                self.callback_handler("on_train_batch_start", batch)
+                batch = self._prepare_batch(batch)
 
-                for batch in tqdm(self._train_batches(epoch), desc=f"Training (epoch {epoch})"):
-                    self.callback_handler("on_train_batch_start", batch)
-                    batch = self._prepare_batch(batch)
+                self.callback_handler("on_forward_start", batch)
+                loss = self._forward(batch)
+                self.callback_handler("on_forward_end", loss)
 
-                    self.callback_handler("on_forward_start", batch)
-                    loss = self._forward(batch)
-                    self.callback_handler("on_forward_end", loss)
+                # Scaled here, so `_forward` is shared with validation. By the window's own size: the last
+                # window of a run may be shorter than `gradient_accumulation_steps`.
+                scaled_loss = self._scale_loss(loss, window)
+                self.callback_handler("on_backward_start", loss)
+                self._backward(scaled_loss)
+                self.step_loss = self._accumulate_loss(self.step_loss, scaled_loss)
+                self.callback_handler("on_backward_end", loss)
+                self._clean_graph_state()
 
-                    # Scaled here, so `_forward` is shared with validation.
-                    scaled_loss = self._scale_loss(loss, accumulation_steps)
-                    self.callback_handler("on_backward_start", loss)
-                    self._backward(scaled_loss)
-                    self.step_loss = self._accumulate_loss(self.step_loss, scaled_loss)
-                    self.callback_handler("on_backward_end", loss)
-                    self._clean_graph_state()
+                if index + 1 - window_start == window:
+                    window_loss, self.step_loss = self.step_loss, None
+                    self.callback_handler("on_optimizer_step_start")
+                    # On the gradients of the whole window, which the hook above still sees unclipped.
+                    if self.config.max_grad_norm > 0:
+                        self._clip_gradients(self.config.max_grad_norm)
+                    self._optimizer_step()
+                    self.callback_handler("on_optimizer_step_end", window_loss)
 
-                    accumulation_step += 1
-                    if accumulation_step == accumulation_steps:
-                        window_loss, self.step_loss = self.step_loss, None
-                        self.callback_handler("on_optimizer_step_start")
-                        # On the gradients of the whole window, which the hook above still sees unclipped.
-                        if self.config.max_grad_norm > 0:
-                            self._clip_gradients(self.config.max_grad_norm)
-                        self._optimizer_step()
-                        self.callback_handler("on_optimizer_step_end", window_loss)
+                    window_start = index + 1
+                    window = min(accumulation_steps, total_batches - window_start)
+                    self.global_step += 1
+                    if self._validation_enabled() and self.global_step % self._validation_steps_freq() == 0:
+                        self.validate()
+                    self.callback_handler("on_step_end", self.global_step)
 
-                        accumulation_step = 0
-                        self.global_step += 1
-                        if self._validation_enabled() and self.global_step % self._validation_steps_freq() == 0:
-                            self.validate()
-                        self.callback_handler("on_step_end", self.global_step)
+                self.callback_handler("on_train_batch_end")
 
-                    self.callback_handler("on_train_batch_end")
-                    if self._reached_step_limit():
-                        break
-
+            if epoch is not None:
                 self.callback_handler("on_train_epoch_end")
 
     def validate(self) -> None:
@@ -182,36 +183,33 @@ class Trainer(ABC):
     def _validation_steps_freq(self) -> int:
         return self.config.metrics.validation.steps_freq
 
-    def _epochs(self) -> Iterable[int]:
-        """The epochs the loop trains: up to the limit of an epoch criterion. A step criterion sets no last epoch;
-        the loop ends once ``_reached_step_limit``."""
+    def _total_batches(self) -> int:
+        """The batches the run trains on, as the stopping criterion sets them: ``limit`` epochs of
+        ``len(train_dataloader)`` batches, or ``limit`` optimizer steps of ``gradient_accumulation_steps`` batches.
+
+        Accumulation windows run across epoch boundaries, so no batch is left out of an optimizer step; only the
+        run's last window may be shorter, with an epoch limit.
+        """
         stopping = self.config.stopping_criteria
-        return range(stopping.limit) if stopping.type == "epoch" else itertools.count()
+        if stopping.type == "epoch":
+            return stopping.limit * len(self.train_dataloader)
+        return stopping.limit * self.config.gradient_accumulation_steps
 
-    def _reached_step_limit(self) -> bool:
-        """Whether the run made the optimizer steps a step criterion limits it to. It then ends where it is, in
-        the middle of an epoch too; that epoch still gets its ``on_train_epoch_end``."""
-        stopping = self.config.stopping_criteria
-        return stopping.type == "step" and self.global_step >= stopping.limit
+    def _check_train_data(self) -> None:
+        """Raise if the train data has no batch: the batch stream would never yield one."""
+        if len(self.train_dataloader) == 0:
+            raise ValueError("dataset: the train split has no full batch")
 
-    def _check_stopping_criteria(self) -> None:
-        """Raise if the run would never end: a step limit, on epochs too short to make an optimizer step."""
-        if self.config.stopping_criteria.type != "step":
-            return
-        batches, accumulation_steps = len(self.train_dataloader), self.config.gradient_accumulation_steps
-        if batches < accumulation_steps:
-            raise ValueError(
-                f"stopping_criteria: an epoch of {batches} batches makes no optimizer step with "
-                f"gradient_accumulation_steps={accumulation_steps}, so the run would never reach its step limit"
-            )
-
-    def _train_batches(self, epoch: int) -> Iterable:
-        """The batches of epoch ``epoch``.
+    def _batch_stream(self) -> Iterator[tuple[int, Any]]:
+        """``(epoch, batch)`` for every batch of every epoch, from epoch 0, without end; the loop takes as many as
+        ``_total_batches``.
 
         Takes every pass over ``train_dataloader`` to yield the same batches; a subclass whose dataloader orders
         each epoch differently overrides it.
         """
-        return self.train_dataloader
+        for epoch in itertools.count():
+            for batch in self.train_dataloader:
+                yield epoch, batch
 
     # ------------------------------------------------------------------ run setup
 

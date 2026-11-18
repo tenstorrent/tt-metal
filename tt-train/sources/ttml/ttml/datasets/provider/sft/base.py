@@ -4,6 +4,7 @@
 
 from __future__ import annotations
 
+import itertools
 from functools import partial
 from typing import TYPE_CHECKING, Any, Iterator, Optional
 
@@ -25,6 +26,8 @@ class DatasetProvider:
         train = get_provider(config, "train", tokenizer)
         while (batch := train.next_batch()) is not None:
             ...
+
+    ``stream`` runs the epochs one after another, as a training loop takes them.
 
     A batch is ``config.batch_size`` examples as host arrays (``collate_causal_lm``); a last partial batch is dropped.
     The train split is shuffled, in an order that depends only on the seed and the epoch, which ``seek`` sets.
@@ -104,6 +107,14 @@ class DatasetProvider:
         """Continue with the first batch of epoch ``epoch``."""
         self._dataloader.set_state_dict({"seed": self.config.seed, "epoch": epoch, "position": 0})
         self._epoch_batches = None
+
+    def stream(self, start_epoch: int = 0) -> Iterator[tuple[int, dict[str, np.ndarray]]]:
+        """``(epoch, batch)`` for every batch of epoch ``start_epoch`` and of each epoch after it, without end; each
+        epoch in the order ``seek`` sets for it."""
+        for epoch in itertools.count(start_epoch):
+            self.seek(epoch)
+            for batch in self:
+                yield epoch, batch
 
     # ------------------------------------------------------------------ examples
 

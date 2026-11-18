@@ -4,7 +4,7 @@
 
 from __future__ import annotations
 
-from typing import Any, Optional
+from typing import Any, Iterator, Optional
 
 import numpy as np
 import ttnn
@@ -102,10 +102,9 @@ class SFTTrainer(Trainer):
 
     # ------------------------------------------------------------------ steps
 
-    def _train_batches(self, epoch: int) -> DatasetProvider:
+    def _batch_stream(self) -> Iterator[tuple[int, dict[str, np.ndarray]]]:
         # The shuffled order is a function of the seed and the epoch.
-        self.train_dataloader.seek(epoch)
-        return self.train_dataloader
+        return self.train_dataloader.stream()
 
     def _prepare_batch(self, batch: dict[str, np.ndarray]) -> dict[str, Any]:
         # The device manager places each array on the mesh `config.device` names.

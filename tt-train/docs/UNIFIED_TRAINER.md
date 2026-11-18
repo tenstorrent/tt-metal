@@ -126,8 +126,9 @@ stopping_criteria:
 | `epoch` | `limit` passes over the train data. |
 | `step` | `limit` optimizer steps, over as many epochs as they take. It ends in the middle of an epoch if the limit falls there. |
 
-A step limit needs every epoch to make an optimizer step, so `setup` rejects one on train data with fewer batches than
-`gradient_accumulation_steps`.
+The loop takes the batches as one stream, epoch after epoch, and an optimizer step takes the next
+`gradient_accumulation_steps` of them, across an epoch boundary too: every batch counts towards a step. With an `epoch`
+limit, the run's last step may take fewer batches, its loss averaged over those.
 
 ### Metrics and validation
 
@@ -350,8 +351,9 @@ Write it in `ttml/datasets/provider/sft/<dataset>.py`, with its prompt templates
 `ttml/datasets/provider/sft/__init__.py`, keyed by its `dataset.id`. `SST2Provider` in `ttml/datasets/provider/sft/sst2.py` is the reference.
 
 What a trainer uses of a provider: `next_batch()`, the next batch of the epoch as host arrays, or `None` once the
-epoch is over; iterating it, which takes the batches left in the epoch; `len()`, the batches of an epoch; and
-`seek(epoch)`, which starts epoch `epoch`, in the order that epoch shuffles the train split in.
+epoch is over; iterating it, which takes the batches left in the epoch; `len()`, the batches of an epoch;
+`seek(epoch)`, which starts epoch `epoch`, in the order that epoch shuffles the train split in; and `stream()`, the
+`(epoch, batch)` of every epoch, one after another, without end, which the training loop takes its batches from.
 
 ---
 
@@ -360,7 +362,8 @@ epoch is over; iterating it, which takes the batches left in the epoch; `len()`,
 A trainer subclasses `Trainer` in `ttml/unified_trainer/implementations/base.py`, which runs the training loop, and
 implements its abstract methods:
 
-- Setup: `_load_dataloaders()`, the train and validation batches (`None` without validation data);
+- Setup: `_load_dataloaders()`, the train and validation batches (`None` without validation data; `len()` of the
+  train batches is the batches of an epoch);
   `_create_device_manager()`, which opens the device; `_load_model()`, the model with its pretrained weights and those
   of `checkpoint.init_strategy`; and `_load_optimizer()`, over the trainable weights.
 - Steps: `_prepare_batch(batch)`, which moves a batch to the device; `_forward(batch)`, the batch's unscaled loss, in
@@ -370,6 +373,9 @@ implements its abstract methods:
 - Modes: `_train_mode()`, `_eval_mode()`, and `_no_grad()`, a context manager that disables gradient tracking.
 - For callbacks and hosts: `loss_to_float(loss)`, `parameter_counts()`, `current_learning_rate()` and
   `save_checkpoint(path, metadata)`, as [Running inside a service](#running-inside-a-service) describes.
+
+The loop takes its batches from `_batch_stream()`, `(epoch, batch)` pairs without end; by default it iterates the
+train batches again for each epoch, and a trainer whose epochs order the batches differently overrides it.
 
 It sets `config_class` to its config, a subclass of `TrainerConfig`, which a recipe for it validates as.
 
