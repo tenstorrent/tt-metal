@@ -29,6 +29,7 @@ enum class HarnessCheck : uint32_t {
                            // the nodes of one CCE need more than kMaxArgWordsPerCce runtime-argument words
     Disconnected = 7,      // H7: some device cannot reach another over the links
     RegionTooSmall = 8,    // H8: a region is smaller than the node's layout for this run
+    FabricChipNotDense = 9,  // H9: the devices' fabric_chip values are not 0 to N-1 with none missing
 };
 
 // One failing instance of an H row. A manifest can produce several findings for one row.
@@ -86,9 +87,8 @@ struct HarnessPlan {
 
 // The plan for running `manifest` with `shape`. next_port[d] is the first port on a shortest path to d, by
 // breadth-first search over the links, ties broken by the lowest port; the predicted counts follow every flow along
-// those routes. Precondition: check_manifest() and check_harness_manifest() reported nothing for these arguments and
-// every fabric_chip is below the number of devices. Throws std::runtime_error (TT_FATAL) when a fabric_chip is not
-// below the number of devices or a precondition the plan depends on does not hold.
+// those routes. Precondition: check_manifest() and check_harness_manifest() reported nothing for these arguments. Throws std::runtime_error (TT_FATAL) when a precondition the plan
+// depends on does not hold.
 HarnessPlan plan_harness(const Manifest& manifest, const RunShape& shape);
 
 // The runtime arguments of the node of fabric_chip `device`, in vc_node::Arg order, for a run tagged `nonce`. Throws

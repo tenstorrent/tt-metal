@@ -270,6 +270,21 @@ void check_region_size(const Manifest& manifest, const RunShape& shape, Findings
     }
 }
 
+// H9. Row 12 has refused a repeated fabric_chip, so N distinct values below N are 0 to N-1.
+void check_fabric_chips(const Manifest& manifest, Findings& findings) {
+    for (const Device& device : manifest.devices) {
+        if (device.fabric_chip >= manifest.devices.size()) {
+            add(findings,
+                HarnessCheck::FabricChipNotDense,
+                fmt::format(
+                    "device {}: fabric_chip {} is not below the {} devices",
+                    device.name,
+                    device.fabric_chip,
+                    manifest.devices.size()));
+        }
+    }
+}
+
 // The asserts SPEC-0012 § Manifest names: what check_manifest() has already refused.
 void assert_checked(const Manifest& manifest) {
     for (const Device& device : manifest.devices) {
@@ -323,6 +338,7 @@ std::vector<HarnessFinding> check_harness_manifest(
     check_ports(manifest, findings);
     check_connected(manifest, findings);
     check_region_size(manifest, shape, findings);
+    check_fabric_chips(manifest, findings);
     return findings;
 }
 
@@ -341,7 +357,7 @@ HarnessPlan plan_harness(const Manifest& manifest, const RunShape& shape) {
         const Device& device = manifest.devices[d];
         TT_FATAL(
             device.fabric_chip < n && !placed[device.fabric_chip],
-            "Device {}: fabric_chip {} is not one of 0 to {} or is taken; the node indexes routes by it",
+            "Device {}: fabric_chip {} is not one of 0 to {} or is taken; H9 and row 12 refuse it",
             device.name,
             device.fabric_chip,
             n - 1);
