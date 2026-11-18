@@ -49,6 +49,7 @@
 #include <tt-metalium/tensor/tensor_apis.hpp>
 #include <tt-metalium/mesh_device.hpp>
 #include <tt-metalium/distributed.hpp>
+#include <tt-metalium/vocabulary/node_coord.hpp>
 
 #include "impl/tensor/mesh_tensor_impl.hpp"
 
@@ -72,6 +73,7 @@ struct NdToLegacyShardingParams {
     Layout layout = Layout::TILE;
     CoreCoord grid_size;
     ShardDistributionStrategy shard_distribution_strategy = ShardDistributionStrategy::ROUND_ROBIN_1D;
+    ShardOrientation orientation = ShardOrientation::ROW_MAJOR;
 
     TensorMemoryLayout memory_layout = TensorMemoryLayout::BLOCK_SHARDED;
     std::optional<Shape2D> shard_shape_2d;
@@ -135,8 +137,7 @@ TEST_P(NdToLegacyShardingTests, NdToLegacySharding) {
     const auto& params = GetParam();
 
     CoreRangeSet cores(CoreRange(CoreCoord{0, 0}, CoreCoord{params.grid_size.x - 1, params.grid_size.y - 1}));
-    NdShardSpec nd_shard_spec{
-        params.shard_shape_nd, cores, ShardOrientation::ROW_MAJOR, params.shard_distribution_strategy};
+    NdShardSpec nd_shard_spec{params.shard_shape_nd, cores, params.orientation, params.shard_distribution_strategy};
     MemoryConfig memory_config{BufferType::L1, nd_shard_spec};
     TensorLayout tensor_layout(DataType::UINT16, PageConfig(params.layout), memory_config);
     TensorSpec tensor_spec(params.shape, tensor_layout);
@@ -401,6 +402,47 @@ INSTANTIATE_TEST_SUITE_P(
             .grid_size = CoreCoord{3, 4},
             .memory_layout = TensorMemoryLayout::ND_SHARDED,
             .shard_shape_2d = std::nullopt,  // Can't convert, different shard distribution
+        },
+        // COL_MAJOR places a row of shards (2 here) along the grid's y axis, so 1D distribution matches block
+        // sharding only when the grid's y size is 2.
+        NdToLegacyShardingParams{
+            .shape = Shape({2, 32 * 2, 32 * 2}),
+            .shard_shape_nd = Shape({1, 32, 32}),
+            .layout = Layout::TILE,
+            .grid_size = NodeCoord{5, 2},
+            .orientation = ShardOrientation::COL_MAJOR,
+            .memory_layout = TensorMemoryLayout::BLOCK_SHARDED,
+            .shard_shape_2d = Shape2D{32, 32},
+        },
+        NdToLegacyShardingParams{
+            .shape = Shape({2, 32 * 2, 32 * 2}),
+            .shard_shape_nd = Shape({1, 32, 32}),
+            .layout = Layout::TILE,
+            .grid_size = NodeCoord{4, 3},
+            .orientation = ShardOrientation::COL_MAJOR,
+            .memory_layout = TensorMemoryLayout::ND_SHARDED,
+            .shard_shape_2d = std::nullopt,  // Can't convert, different shard distribution
+        },
+        // GRID_2D with COL_MAJOR places the 4 rows of shards along the grid's x axis and the 2 columns along y.
+        NdToLegacyShardingParams{
+            .shape = Shape({2, 32 * 2, 32 * 2}),
+            .shard_shape_nd = Shape({1, 32, 32}),
+            .layout = Layout::TILE,
+            .grid_size = NodeCoord{4, 2},
+            .shard_distribution_strategy = ShardDistributionStrategy::GRID_2D,
+            .orientation = ShardOrientation::COL_MAJOR,
+            .memory_layout = TensorMemoryLayout::BLOCK_SHARDED,
+            .shard_shape_2d = Shape2D{32, 32},
+        },
+        NdToLegacyShardingParams{
+            .shape = Shape({2, 32 * 2, 32 * 2}),
+            .shard_shape_nd = Shape({1, 32, 32}),
+            .layout = Layout::TILE,
+            .grid_size = NodeCoord{2, 5},
+            .shard_distribution_strategy = ShardDistributionStrategy::GRID_2D,
+            .orientation = ShardOrientation::COL_MAJOR,
+            .memory_layout = TensorMemoryLayout::ND_SHARDED,
+            .shard_shape_2d = std::nullopt,  // Can't convert, 4 rows of shards don't fit the grid's x size of 2
         },
         NdToLegacyShardingParams{
             .shape = Shape({2, 32 * 2, 32 * 2}),

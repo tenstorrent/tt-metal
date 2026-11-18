@@ -398,9 +398,6 @@ std::optional<MemoryConfig> TensorSpec::populate_legacy_shard_spec_from_nd() con
     // Check that the number of shards fits onto the cores
     size_t num_shards_along_height = div_up(physical_shape().height(), shard_spec.shape[0]);
     size_t num_shards_along_width = div_up(physical_shape().width(), shard_spec.shape[1]);
-    if (shard_spec.orientation != ShardOrientation::ROW_MAJOR) {
-        std::swap(num_shards_along_height, num_shards_along_width);
-    }
     size_t total_num_shards = num_shards_along_height * num_shards_along_width;
     if (total_num_shards > shard_spec.grid.num_cores()) {
         return std::nullopt;
@@ -433,16 +430,21 @@ std::optional<MemoryConfig> TensorSpec::populate_legacy_shard_spec_from_nd() con
         return std::nullopt;
     }
 
-    // If 1D distribution is used, we need the number of shards along width to match the grid width to guarantee the
-    // same distribution of shards
+    // Block sharding places a row of shards along the grid's x axis for ROW_MAJOR, and along its y axis for COL_MAJOR
     CoreCoord shard_grid = shard_spec.grid.ranges()[0].grid_size();
+    const bool row_major = shard_spec.orientation == ShardOrientation::ROW_MAJOR;
+    const size_t grid_size_along_width = row_major ? shard_grid.x : shard_grid.y;
+    const size_t grid_size_along_height = row_major ? shard_grid.y : shard_grid.x;
+
+    // If 1D distribution is used, we need the number of shards along width to match the grid size along it to
+    // guarantee the same distribution of shards
     if (nd_shard_spec.shard_distribution_strategy == ShardDistributionStrategy::ROUND_ROBIN_1D &&
-        num_shards_along_width != shard_grid.x) {
+        num_shards_along_width != grid_size_along_width) {
         return std::nullopt;
     }
 
     // To match the shard distribution, the number of shards along width and height must fit into the grid
-    if (num_shards_along_width > shard_grid.x || num_shards_along_height > shard_grid.y) {
+    if (num_shards_along_width > grid_size_along_width || num_shards_along_height > grid_size_along_height) {
         return std::nullopt;
     }
 
