@@ -38,7 +38,7 @@ ALWI void transpose_dest_init([[maybe_unused]] uint32_t operand = 0) {
 /**
  * Performs a 32x32 in place transpose operation *B[w,h] = A[h,w]* on a tile in the DST register at idst.
  * Set transpose_of_faces=false to run only the inner face transpose used by 32-bit DST materialization paths.
- * The DST register buffer must be in acquired state via *acquire_dst* call.
+ * The DST register buffer must be in acquired state via *tile_regs_acquire* call.
  * This call is blocking and is only available on the compute engine.
  *
  * Return value: None

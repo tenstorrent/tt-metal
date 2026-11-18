@@ -16,7 +16,7 @@ namespace ckernel {
 /**
  * Performs element-wise mish activation:  mish(x) = x * tanh(softplus(x))
  * on each element of a tile in DST register at index tile_index.
- * The DST register buffer must be in acquired state via *acquire_dst* call.
+ * The DST register buffer must be in acquired state via *tile_regs_acquire* call.
  * This call is blocking and is only available on the compute engine.
  *
  * Implemented as a single SFPU kernel via the algebraic identity

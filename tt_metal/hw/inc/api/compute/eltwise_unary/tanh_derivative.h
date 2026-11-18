@@ -24,7 +24,7 @@ ALWI void tanh_derivative_tile_init() {
 /**
  * Performs element-wise computation of tanh derivative (sech²) on each element of a tile
  * in DST register at index tile_index. The DST register buffer must be in
- * acquired state via *acquire_dst* call. This call is blocking and is only
+ * acquired state via *tile_regs_acquire* call. This call is blocking and is only
  * available on the compute engine.
  *
  * Computes sech²(x) = 4·exp(-2|x|) / (1 + exp(-2|x|))² using accurate exp and reciprocal.

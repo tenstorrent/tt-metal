@@ -17,7 +17,7 @@ namespace ckernel {
  * Performs element-wise fmod computation on input x by y , where x is each element of a tile
  * in DST register at index tile_index. The input can be of float data type. The denominator is provided to
  * fmod_tile_init and loaded into the SFPU constant registers. The
- * DST register buffer must be in acquired state via *acquire_dst* call. This call is blocking and is only available on
+ * DST register buffer must be in acquired state via *tile_regs_acquire* call. This call is blocking and is only available on
  * the compute engine.
  *
  * Return value: None

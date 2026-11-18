@@ -28,7 +28,7 @@ namespace ckernel {
  * stock softplus_tile, whose bf16 polynomial has ~1.6e-3 relative error and drops the tail for |x| > 5.
  * Requires fp32 DEST (fp32_dest_acc_en): there is no bf16 rounding step.
  *
- * Both operands stay in DST. The DST register buffer must be in acquired state via *acquire_dst*
+ * Both operands stay in DST. The DST register buffer must be in acquired state via *tile_regs_acquire*
  * call. This call is blocking and is only available on the compute engine.
  *
  * Return value: None

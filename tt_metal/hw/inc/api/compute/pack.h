@@ -42,7 +42,7 @@ ALWI void pack_init(std::uint32_t ocb, std::uint32_t call_line = __builtin_LINE(
  * number n > 0 of tiles in the output CB. out_tile_index = 0 then references
  * the first tile in the reserved section of the CB, up to index n - 1, which will
  * then be visible to the consumer in the same order after a cb_push_back call.
- * The DEST register buffer must be in acquired state via *acquire_dst* call.
+ * The DEST register buffer must be in acquired state via *tile_regs_acquire* call.
  * This call is blocking and is only available on the compute engine.
  *
  * Each subsequent pack call will increment the write pointer in the cb by single
@@ -98,7 +98,7 @@ ALWI void pack_tile(std::uint32_t ifrom_dst, std::uint32_t icb, std::uint32_t ou
  * Copies a block of tiles from the DEST register buffer starting at a specified index
  * to a specified circular buffer (CB). This is the uniform block entry point for the pack
  * op group. The DEST register buffer must be in acquired
- * state via *acquire_dst* call. This call is blocking and is only available on the
+ * state via *tile_regs_acquire* call. This call is blocking and is only available on the
  * compute engine. Before calling this function, cb_reserve_back(n) must be called to
  * reserve at least n > 0 tiles in the output CB. Each call to `pack_block` will
  * copy `ntiles` tiles from the DEST register to the reserved region of the CB, starting

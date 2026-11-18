@@ -15,7 +15,7 @@ namespace ckernel {
 // clang-format off
 /**
  * Performs element-wise fill operation. The value to be filled in the tile is provided as const param0. The DST
- * register buffer must be in acquired state via *acquire_dst* call. This call is blocking and is only available on the
+ * register buffer must be in acquired state via *tile_regs_acquire* call. This call is blocking and is only available on the
  * compute engine.
  *
  * Return value: None
@@ -34,7 +34,7 @@ ALWI void fill_tile(uint32_t idst, float param0) {
 // clang-format off
 /**
  * Performs element-wise fill operation. The value to be filled in the tile is provided as const param0. The DST
- * register buffer must be in acquired state via *acquire_dst* call. This call is blocking and is only available on the
+ * register buffer must be in acquired state via *tile_regs_acquire* call. This call is blocking and is only available on the
  * compute engine.
  *
  * @tparam data_format Template argument specifying the data type.
@@ -68,7 +68,7 @@ ALWI void fill_tile_int(uint32_t idst, uint32_t param0) {
 /**
  * Performs element-wise fill operation. The value to be filled in the tile is provided as const param0, which is
  * interpreted as a bit-cast representation of a floating-point value. The DST register buffer must be in acquired
- * state via *acquire_dst* call. This call is blocking and is only available on the compute engine.
+ * state via *tile_regs_acquire* call. This call is blocking and is only available on the compute engine.
  *
  * Return value: None
  *

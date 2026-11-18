@@ -14,7 +14,7 @@ namespace ckernel {
 // clang-format off
 /**
  * Performs element-wise computation of the zeroth order modified Bessel function of the first kind on each element of a
- * tile in DST register at index tile_index. The DST register buffer must be in acquired state via *acquire_dst* call.
+ * tile in DST register at index tile_index. The DST register buffer must be in acquired state via *tile_regs_acquire* call.
  * This call is blocking and is only available on the compute engine.
  *
  * Return value: None

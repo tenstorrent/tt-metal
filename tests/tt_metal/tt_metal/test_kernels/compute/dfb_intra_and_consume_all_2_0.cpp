@@ -35,17 +35,19 @@ void kernel_main() {
     // HW requires a copy (unpack) instruction between wait_front and pop_front.
     // Configure unpack + pack hw against the consumer DFB (no separate output DFB
     // exists for this drain; this also programs the buffer-descriptor table the
-    // UNPACR reads) and discard the copied tile. The copy_tile / acquire_dst /
-    // release_dst LLK macros self-gate per-TRISC, so this is correct even though
+    // UNPACR reads) and discard the copied tile. The copy_tile / tile_regs_*
+    // LLK macros self-gate per-TRISC, so this is correct even though
     // only the UNPACK TRISC actually waits/pops here (PACK/MATH race through).
     compute_kernel_hw_startup(dfb_consumer.get_id(), dfb_consumer.get_id());
     copy_init(dfb_consumer.get_id());
     for (uint32_t i = 0; i < num_entries_consumer; ++i) {
-        acquire_dst();
+        tile_regs_acquire();
+        tile_regs_wait();
         dfb_consumer.wait_front(1);
         copy_tile(dfb_consumer.get_id(), 0, 0);
         dfb_consumer.pop_front(1);
-        release_dst();
+        tile_regs_commit();
+        tile_regs_release();
     }
     dfb_consumer.finish();
 
@@ -61,7 +63,7 @@ void kernel_main() {
     // read-done wait is only vacuously satisfied; with 4 Neos it races and deadlocks
     // some Neos in pop_front (their producer then wedges in finish()). Re-program
     // unpack + buffer-descriptor for dfb_intra and issue copy_tile in the consume so
-    // read-done is always satisfied; acquire_dst/release_dst balance the MATH<->PACK
+    // read-done is always satisfied; tile_regs_acquire/commit/wait/release balance the MATH<->PACK
     // dest handshake (no pack_tile needed, the copied tile is discarded).
     // Mid-kernel reprogram (Phase 1 already ran compute_kernel_hw_startup): re-point unpack SrcA and
     // re-init the copy datapath for dfb_intra via reconfig + copy_init, not a mid-kernel hw startup.
@@ -84,7 +86,8 @@ void kernel_main() {
 #endif
         dfb_intra.push_back(1);
 
-        acquire_dst();
+        tile_regs_acquire();
+        tile_regs_wait();
         dfb_intra.wait_front(1);
         copy_tile(dfb_intra.get_id(), 0, 0);  // UNPACR -> satisfies pop_front read-done
 #ifdef UCK_CHLKC_UNPACK
@@ -98,7 +101,8 @@ void kernel_main() {
         }
 #endif
         dfb_intra.pop_front(1);
-        release_dst();
+        tile_regs_commit();
+        tile_regs_release();
     }
     dfb_intra.finish();
 }

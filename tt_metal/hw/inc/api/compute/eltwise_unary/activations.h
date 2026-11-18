@@ -19,7 +19,7 @@ namespace ckernel {
 // clang-format off
 /**
 * Performs element-wise hardsigmoid operation. The DST
-* register buffer must be in acquired state via *acquire_dst* call. This call is blocking and is only available on the
+* register buffer must be in acquired state via *tile_regs_acquire* call. This call is blocking and is only available on the
 * compute engine.
 *
 * Return value: None
@@ -59,7 +59,7 @@ ALWI void hardsigmoid_tile_init_pack() { PACK(SFPU_UNARY_INIT_FN(hardsigmoid, sf
 // clang-format off
 /**
 * Performs element-wise softsign operation. The DST
-* register buffer must be in acquired state via *acquire_dst* call. This call is blocking and is only available on the
+* register buffer must be in acquired state via *tile_regs_acquire* call. This call is blocking and is only available on the
 * compute engine.
 *
 * Return value: None
@@ -82,7 +82,7 @@ ALWI void softsign_tile_init() { MATH(SFPU_UNARY_INIT_FN(softsign, sfpu::init_so
 // clang-format off
 /**
 * Performs element-wise celu operation. The DST
-* register buffer must be in acquired state via *acquire_dst* call. This call is blocking and is only available on the
+* register buffer must be in acquired state via *tile_regs_acquire* call. This call is blocking and is only available on the
 * compute engine.
 *
 * Return value: None
@@ -115,7 +115,7 @@ ALWI void celu_tile_init() { MATH(SFPU_UNARY_INIT(celu)); }
 // clang-format off
  /**
  * Performs element-wise softshrink operation. The DST
- * register buffer must be in acquired state via *acquire_dst* call. This call is blocking and is only available on the
+ * register buffer must be in acquired state via *tile_regs_acquire* call. This call is blocking and is only available on the
  * compute engine.
  *
  * Return value: None
@@ -125,7 +125,7 @@ ALWI void celu_tile_init() { MATH(SFPU_UNARY_INIT(celu)); }
  * | idst            | The index of the tile in DST register buffer to perform the computation on | uint32_t | Must be less than the size of the DST register buffer | True     |
  * | param0          | The λ value for the Softshrink formulation                                 | uint32   |                                                       | True     |
  */
- // clang-format on
+// clang-format on
 ALWI void softshrink_tile(uint32_t idst, uint32_t param0) {
      MATH(SFPU_UNARY_CALL(
          DST_SYNC_MODE,
@@ -146,7 +146,7 @@ ALWI void softshrink_tile_init() { MATH(SFPU_UNARY_INIT(softshrink)); }
 /**
 * Performs element-wise hardshrink operation on each element of a tile
 * in DST register at index idst. The DST register buffer must be in
-* acquired state via *acquire_dst* call. This call is blocking and is only
+* acquired state via *tile_regs_acquire* call. This call is blocking and is only
 * available on the compute engine.
 *
 * Formula: hardshrink(x, λ) = x if |x| > λ, else 0

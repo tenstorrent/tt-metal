@@ -16,7 +16,7 @@ namespace ckernel {
 /**
  * Performs element-wise left_shift computation on input x by param0 bits, where x is each element of a tile
  * in DST register at index idst. The input must be of integer data type: Int32, UInt32, or UInt16. The DST
- * register buffer must be in acquired state via *acquire_dst* call. This call is blocking and is only
+ * register buffer must be in acquired state via *tile_regs_acquire* call. This call is blocking and is only
  * available on the compute engine.
  *
  * A shift amount outside [0, 31] produces 0 for every element.
@@ -40,7 +40,7 @@ ALWI void left_shift_tile(uint32_t idst, uint32_t param0) {
  * Performs element-wise right_shift computation on input x by param0 bits, where x is each element of a tile in DST
  * register at index idst. The input must be of integer data type: Int32, UInt32, or UInt16. Int32 uses an arithmetic
  * shift (the sign bit is replicated into the vacated high bits). UInt32 and UInt16 use a logical shift (zeros fill the
- * vacated high bits). The DST register buffer must be in acquired state via *acquire_dst* call. This call is blocking
+ * vacated high bits). The DST register buffer must be in acquired state via *tile_regs_acquire* call. This call is blocking
  * and is only available on the compute engine.
  *
  * A shift amount >= 32 saturates to 31. For Int32 that yields 0 for non-negative inputs and -1 for negative inputs; for

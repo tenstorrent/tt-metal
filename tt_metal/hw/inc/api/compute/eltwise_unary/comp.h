@@ -18,7 +18,7 @@ namespace ckernel {
 /**
  * Performs element-wise computation of:  result = 1.0 if x!=value , where x is each element of a tile
  * in DST register at index tile_index. The value is provided as const param0 The DST register buffer must be in
- * acquired state via *acquire_dst* call. This call is blocking and is only
+ * acquired state via *tile_regs_acquire* call. This call is blocking and is only
  * available on the compute engine.
  *
  * Return value: None
@@ -44,7 +44,7 @@ ALWI void unary_ne_tile_init() { MATH(SFPU_UNARY_INIT(unary_ne)); }
 /**
  * Performs element-wise computation of:  result = 1 if x!=value , where x is each element of a tile
  * in DST register at index tile_index. The value is provided as const param0 The DST register buffer must be in
- * acquired state via *acquire_dst* call. This call is blocking and is only
+ * acquired state via *tile_regs_acquire* call. This call is blocking and is only
  * available on the compute engine.
  *
  * Return value: None
@@ -71,7 +71,7 @@ ALWI void unary_ne_tile_int32(uint32_t idst, uint32_t param0) {
 /**
  * Performs element-wise computation of:  result = 1.0 if x==value , where x is each element of a tile
  * in DST register at index tile_index. The value is provided as const param0 The DST register buffer must be in
- * acquired state via *acquire_dst* call. This call is blocking and is only
+ * acquired state via *tile_regs_acquire* call. This call is blocking and is only
  * available on the compute engine.
  *
  * Return value: None
@@ -97,7 +97,7 @@ ALWI void unary_eq_tile_init() { MATH(SFPU_UNARY_INIT(unary_eq)); }
 /**
  * Performs element-wise computation of:  result = 1 if x==value , where x is each element of a tile
  * in DST register at index tile_index. The value is provided as const param0 The DST register buffer must be in
- * acquired state via *acquire_dst* call. This call is blocking and is only
+ * acquired state via *tile_regs_acquire* call. This call is blocking and is only
  * available on the compute engine.
  *
  * Return value: None
@@ -124,7 +124,7 @@ ALWI void unary_eq_tile_int32(uint32_t idst, uint32_t param0) {
 /**
  * Performs element-wise computation of:  result = 1 if x > value , where x is each element of a tile
  * in DST register at index tile_index. The value is provided as const param0 The DST register buffer must be in
- * acquired state via *acquire_dst* call. This call is blocking and is only
+ * acquired state via *tile_regs_acquire* call. This call is blocking and is only
  * available on the compute engine.
  *
  * Return value: None
@@ -150,7 +150,7 @@ ALWI void unary_gt_tile_init() { MATH(SFPU_UNARY_INIT(unary_gt)); }
 /**
  * Performs element-wise computation of:  result = 1 if x>value , where x is each element of a tile
  * in DST register at index tile_index. The value is provided as const param0 The DST register buffer must be in
- * acquired state via *acquire_dst* call. This call is blocking and is only
+ * acquired state via *tile_regs_acquire* call. This call is blocking and is only
  * available on the compute engine.
  *
  * Return value: None
@@ -177,7 +177,7 @@ ALWI void unary_gt_tile_int32(uint32_t idst, uint32_t param0) {
 /**
  * Performs element-wise computation of:  result = 1 if x >= value , where x is each element of a tile
  * in DST register at index tile_index. The value is provided as const param0 The DST register buffer must be in
- * acquired state via *acquire_dst* call. This call is blocking and is only
+ * acquired state via *tile_regs_acquire* call. This call is blocking and is only
  * available on the compute engine.
  *
  * Return value: None
@@ -203,7 +203,7 @@ ALWI void unary_ge_tile_init() { MATH(SFPU_UNARY_INIT(unary_ge)); }
 /**
  * Performs element-wise computation of:  result = 1 if x>value , where x is each element of a tile
  * in DST register at index tile_index. The value is provided as const param0 The DST register buffer must be in
- * acquired state via *acquire_dst* call. This call is blocking and is only
+ * acquired state via *tile_regs_acquire* call. This call is blocking and is only
  * available on the compute engine.
  *
  * Return value: None
@@ -230,7 +230,7 @@ ALWI void unary_ge_tile_int32(uint32_t idst, uint32_t param0) {
 /**
  * Performs element-wise computation of:  result = 1 if x < value , where x is each element of a tile
  * in DST register at index tile_index. The value is provided as const param0 The DST register buffer must be in
- * acquired state via *acquire_dst* call. This call is blocking and is only
+ * acquired state via *tile_regs_acquire* call. This call is blocking and is only
  * available on the compute engine.
  *
  * Return value: None
@@ -251,7 +251,7 @@ ALWI void unary_lt_tile(uint32_t idst, uint32_t param0) {
 /**
  * Performs element-wise computation of:  result = 1 if x<value , where x is each element of a tile
  * in DST register at index tile_index. The value is provided as const param0 The DST register buffer must be in
- * acquired state via *acquire_dst* call. This call is blocking and is only
+ * acquired state via *tile_regs_acquire* call. This call is blocking and is only
  * available on the compute engine.
  *
  * Return value: None
@@ -283,7 +283,7 @@ ALWI void unary_lt_tile_init() { MATH(SFPU_UNARY_INIT(unary_lt)); }
 /**
  * Performs element-wise computation of:  result = 1 if x <= value , where x is each element of a tile
  * in DST register at index tile_index. The value is provided as const param0 The DST register buffer must be in
- * acquired state via *acquire_dst* call. This call is blocking and is only
+ * acquired state via *tile_regs_acquire* call. This call is blocking and is only
  * available on the compute engine.
  *
  * Return value: None
@@ -304,7 +304,7 @@ ALWI void unary_le_tile(uint32_t idst, uint32_t param0) {
 /**
  * Performs element-wise computation of:  result = 1 if x<value , where x is each element of a tile
  * in DST register at index tile_index. The value is provided as const param0 The DST register buffer must be in
- * acquired state via *acquire_dst* call. This call is blocking and is only
+ * acquired state via *tile_regs_acquire* call. This call is blocking and is only
  * available on the compute engine.
  *
  * Return value: None
@@ -334,7 +334,7 @@ ALWI void unary_le_tile_init() { MATH(SFPU_UNARY_INIT(unary_le)); }
 // clang-format off
 /**
  * Will store in the output of the compute core True if each element is greater than zero.
- * The DST register buffer must be in acquired state via *acquire_dst* call.
+ * The DST register buffer must be in acquired state via *tile_regs_acquire* call.
  * This call is blocking and is only
  * available on the compute engine.
  *
@@ -374,7 +374,7 @@ ALWI void gtz_tile_init() {
 // clang-format off
 /**
  * Will store in the output of the compute core True if each element is not equal to zero.
- * The DST register buffer must be in acquired state via *acquire_dst* call.
+ * The DST register buffer must be in acquired state via *tile_regs_acquire* call.
  * This call is blocking and is only
  * available on the compute engine.
  *
@@ -414,7 +414,7 @@ ALWI void nez_tile_init() {
 // clang-format off
 /**
  * Will store in the output of the compute core True if each element is greater than or equal to zero.
- * The DST register buffer must be in acquired state via *acquire_dst* call.
+ * The DST register buffer must be in acquired state via *tile_regs_acquire* call.
  * This call is blocking and is only
  * available on the compute engine.
  *
@@ -459,7 +459,7 @@ ALWI void gez_tile_init() {
 // clang-format off
 /**
  * Will store in the output of the compute core True if each element of a tile is less than zero.
- * The DST register buffer must be in acquired state via *acquire_dst* call.
+ * The DST register buffer must be in acquired state via *tile_regs_acquire* call.
  * This call is blocking and is only
  * available on the compute engine.
  *
@@ -499,7 +499,7 @@ ALWI void ltz_tile_init() {
 // clang-format off
 /**
  * Will store in the output of the compute core True if each element of a tile is equal to zero.
- * The DST register buffer must be in acquired state via *acquire_dst* call.
+ * The DST register buffer must be in acquired state via *tile_regs_acquire* call.
  * This call is blocking and is only
  * available on the compute engine.
  *
@@ -539,7 +539,7 @@ ALWI void eqz_tile_init() {
 // clang-format off
 /**
  * Will store in the output of the compute core True if each element is less than or equal to zero.
- * The DST register buffer must be in acquired state via *acquire_dst* call.
+ * The DST register buffer must be in acquired state via *tile_regs_acquire* call.
  * This call is blocking and is only
  * available on the compute engine.
  *
@@ -738,7 +738,7 @@ ALWI void unary_le_tile_uint32(uint32_t idst, uint32_t param0) {
 // clang-format off
 /**
  * Will store in the output of the compute core True if each element is greater than zero.
- * The DST register buffer must be in acquired state via *acquire_dst* call.
+ * The DST register buffer must be in acquired state via *tile_regs_acquire* call.
  * This call is blocking and is only
  * available on the compute engine.
  *
@@ -762,7 +762,7 @@ ALWI void gtz_tile_int32(uint32_t idst) {
 // clang-format off
 /**
  * Will store in the output of the compute core True if each element is not equal to zero.
- * The DST register buffer must be in acquired state via *acquire_dst* call.
+ * The DST register buffer must be in acquired state via *tile_regs_acquire* call.
  * This call is blocking and is only
  * available on the compute engine.
  *
@@ -781,7 +781,7 @@ ALWI void nez_tile_int32(uint32_t idst) {
 // clang-format off
 /**
  * Will store in the output of the compute core True if each element is greater than or equal to zero.
- * The DST register buffer must be in acquired state via *acquire_dst* call.
+ * The DST register buffer must be in acquired state via *tile_regs_acquire* call.
  * This call is blocking and is only
  * available on the compute engine.
  *
@@ -805,7 +805,7 @@ ALWI void gez_tile_int32(uint32_t idst) {
 // clang-format off
 /**
  * Will store in the output of the compute core True if each element of a tile is less than zero.
- * The DST register buffer must be in acquired state via *acquire_dst* call.
+ * The DST register buffer must be in acquired state via *tile_regs_acquire* call.
  * This call is blocking and is only
  * available on the compute engine.
  *
@@ -824,7 +824,7 @@ ALWI void ltz_tile_int32(uint32_t idst) {
 // clang-format off
 /**
  * Will store in the output of the compute core True if each element of a tile is equal to zero.
- * The DST register buffer must be in acquired state via *acquire_dst* call.
+ * The DST register buffer must be in acquired state via *tile_regs_acquire* call.
  * This call is blocking and is only
  * available on the compute engine.
  *
@@ -843,7 +843,7 @@ ALWI void eqz_tile_int32(uint32_t idst) {
 // clang-format off
 /**
  * Will store in the output of the compute core True if each element of a tile is equal to zero.
- * The DST register buffer must be in acquired state via *acquire_dst* call.
+ * The DST register buffer must be in acquired state via *tile_regs_acquire* call.
  * This call is blocking and is only
  * available on the compute engine.
  *
@@ -862,7 +862,7 @@ ALWI void eqz_tile_uint16(uint32_t idst) {
 // clang-format off
 /**
  * Will store in the output of the compute core True if each element of a tile is equal to zero.
- * The DST register buffer must be in acquired state via *acquire_dst* call.
+ * The DST register buffer must be in acquired state via *tile_regs_acquire* call.
  * This call is blocking and is only
  * available on the compute engine.
  *
@@ -881,7 +881,7 @@ ALWI void eqz_tile_uint32(uint32_t idst) {
 // clang-format off
 /**
  * Will store in the output of the compute core True if each element is less than or equal to zero.
- * The DST register buffer must be in acquired state via *acquire_dst* call.
+ * The DST register buffer must be in acquired state via *tile_regs_acquire* call.
  * This call is blocking and is only
  * available on the compute engine.
  *
@@ -905,7 +905,7 @@ ALWI void lez_tile_int32(uint32_t idst) {
 // clang-format off
 /**
  * Will store in the output of the compute core True if each element is not equal to zero.
- * The DST register buffer must be in acquired state via *acquire_dst* call.
+ * The DST register buffer must be in acquired state via *tile_regs_acquire* call.
  * This call is blocking and is only
  * available on the compute engine.
  *
@@ -929,7 +929,7 @@ ALWI void nez_tile_uint16(uint32_t idst) {
 // clang-format off
 /**
  * Will store in the output of the compute core True if each element is not equal to zero.
- * The DST register buffer must be in acquired state via *acquire_dst* call.
+ * The DST register buffer must be in acquired state via *tile_regs_acquire* call.
  * This call is blocking and is only
  * available on the compute engine.
  *
