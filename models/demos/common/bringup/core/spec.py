@@ -160,6 +160,7 @@ def _resolve(raw: dict) -> dict:
 
 GOLDEN_MIRROR_FILE = "mirror.json"  # F260: per golden dir, its files (size, mtime_ns) for the node-local mirror
 SCALED_ENV = "BRINGUP_SCALED"
+CHUNK_ENV = "BRINGUP_CHUNK"  # F271: a measurement run's chunk (the chunk-size sweep); the written spec keeps its own
 SEED_RUNG = "seed"  # F185: a seeded run's ladder rung over the seed's layers (W.1, the port to this box)
 
 
@@ -169,6 +170,12 @@ class Spec:
             raise SpecError("spec has no 'model'")
         self.raw = data
         self.data = _resolve(data)
+        if os.environ.get(CHUNK_ENV):  # F271: the run's chunk, e.g. a chunk-size sweep; not checked against
+            # serving.max_chunk (that limit is on the serving chunk the spec writes, validate() reads it from raw)
+            self.data = {
+                **self.data,
+                "target": {**(self.data.get("target") or {}), "chunk": int(os.environ[CHUNK_ENV])},
+            }
         self.path = Path(path).resolve() if path else None
         # F75: a partial bring-up on a box with fewer chips than the deployment box IS the scaled model. The deployment
         # box only gives the scale factors (the plan's roles, plan/boxes.py); once the plan exists, everything this
@@ -484,7 +491,7 @@ class Spec:
                 errs.append("deploy.seq is not a multiple of deploy.chunk")
             # F67: the serving chunk is one fixed size on every box, owner limit serving.max_chunk; tests stay below it
             cap = int(self.get("serving.max_chunk"))
-            chunks = [("deploy.chunk", dep.get("chunk")), ("target.chunk", self.get("target.chunk"))]
+            chunks = [("deploy.chunk", dep.get("chunk")), ("target.chunk", (self.raw.get("target") or {}).get("chunk"))]
             chunks += [(f"ladder rung {r.get('name')}", r.get("chunk")) for r in self.data.get("ladder") or []]
             chunks += [
                 (f"scaled.ladder rung {r.get('name')}", r.get("chunk"))

@@ -578,3 +578,17 @@ def test_metrics_live_in_their_own_committed_file(sandbox):
     assert led.state()["A.1"]["metrics"] == {"err_x": 0.5}
     led.update("A.1", status="PASS")
     assert led.state()["A.1"]["metrics"] == {"err_x": 0.5}
+
+
+def test_position_role_metrics():
+    """F272: a position profile with BRINGUP_CHUNK_LAST set must gate its metrics with the role suffix."""
+    from models.demos.common.bringup.core.ledger import position_role_metrics
+
+    cmd = "DS41_DECODER_SKIP=decode BRINGUP_CHUNK_LAST=0 BRINGUP_POS=145408 scripts/run_safe_pytest.sh tests/test_profile.py"
+    bad = {"gate": {"cmd": cmd, "metrics": {"device_ms_total_p145408": "> 0"}}}
+    good = {"gate": {"cmd": cmd, "metrics": {"device_ms_total_p145408_nonlast": "> 0"}}}
+    no_role = {"gate": {"cmd": cmd.replace("BRINGUP_CHUNK_LAST=0 ", ""), "metrics": {"device_ms_total_p145408": "> 0"}}}
+    other = {"gate": {"cmd": cmd, "metrics": {"steady_wall_ms_p145408": "> 0"}}}
+    assert "_nonlast" in position_role_metrics(bad)[0]
+    assert position_role_metrics(good) == [] and position_role_metrics(no_role) == []
+    assert position_role_metrics(other) == []  # test_skip_positions' metric: no role suffix

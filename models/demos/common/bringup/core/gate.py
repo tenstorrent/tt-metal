@@ -32,7 +32,13 @@ from models.demos.common.bringup.core import batch, freeze, hangdump, hostmem
 from models.demos.common.bringup.core import metrics as M
 from models.demos.common.bringup.core import stamps
 from models.demos.common.bringup.core.chunked import log_chunks, roll_log
-from models.demos.common.bringup.core.ledger import Ledger, fixed_accuracy, satisfied, wall_only_device_metrics
+from models.demos.common.bringup.core.ledger import (
+    Ledger,
+    fixed_accuracy,
+    position_role_metrics,
+    satisfied,
+    wall_only_device_metrics,
+)
 from models.demos.common.bringup.core.spec import CODE_ROOT, Spec
 
 OPS = {">=": operator.ge, "<=": operator.le, ">": operator.gt, "<": operator.lt, "==": operator.eq}
@@ -1319,6 +1325,7 @@ def run_gate(
         + device_policy_errors(task)
         + fixed_accuracy(task)
         + wall_only_device_metrics(task)
+        + position_role_metrics(task)
     ]
     if pre:
         res = GateResult(tid, "FAIL", lines=pre)

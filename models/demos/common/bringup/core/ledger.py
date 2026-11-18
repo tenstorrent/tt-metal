@@ -95,6 +95,45 @@ def fixed_accuracy(task: dict, conds: dict | None = None) -> list[str]:
     return out
 
 
+PROFILE_METRIC_PREFIXES = (
+    "device_ms",
+    "op_rows",
+    "chunk_wall",
+    "chunk_len",
+    "chunk_start",
+    "host_",
+    "deferred_cpu",
+    "timeline",
+)
+
+
+def position_role_metrics(task: dict) -> list[str]:
+    """F272: a test_profile.py segment run at a position (BRINGUP_POS=p) with BRINGUP_CHUNK_LAST=0/1 records every
+    metric as <name>_p<p>_nonlast / _last (F249). A gate naming <name>_p<p> without the role finds it MISSING after a
+    passing run, and a fix agent is started for a naming slip (DeepSeek-V4.1 X.6, X.7)."""
+    gate = task.get("gate") or {}
+    globs = [str(g) for g in (gate.get("metrics") or {})]
+    out = []
+    for seg in str(gate.get("cmd") or "").split("&&"):
+        if "test_profile.py" not in seg:
+            continue
+        pos = re.search(r"\bBRINGUP_POS=(\d+)", seg)
+        last = re.search(r"\bBRINGUP_CHUNK_LAST=([01])", seg)
+        if not pos or not last:
+            continue
+        role = "_last" if last.group(1) == "1" else "_nonlast"
+        bare = f"_p{pos.group(1)}"
+        for (
+            g
+        ) in globs:  # only test_profile's own metrics: other tests (test_skip_positions' steady_wall_ms_p<p>) differ
+            if g.endswith(bare) and g.startswith(PROFILE_METRIC_PREFIXES):
+                out.append(
+                    f"{g}: the profile at BRINGUP_POS={pos.group(1)} with BRINGUP_CHUNK_LAST={last.group(1)} "
+                    f"records it as {g}{role} (F249); name that"
+                )
+    return out
+
+
 def wall_only_device_metrics(task: dict) -> list[str]:
     """F212: a gate that needs device_ms_* but whose every test_profile.py segment is wall-only
     (BRINGUP_PROFILE_WALL=1): the gate then adds no profiled run (F114 with_clean_wall) and the metric is MISSING, an
@@ -181,7 +220,7 @@ class Ledger:
                 else:
                     errs += [f"{tid}: {e}" for e in fixed_accuracy(t, {glob: cond})]
             if (done.get(tid) or {}).get("status") not in ("PASS", "REJECTED"):  # a finished gate's cmd is history
-                errs += [f"{tid}: {e}" for e in wall_only_device_metrics(t)]
+                errs += [f"{tid}: {e}" for e in wall_only_device_metrics(t) + position_role_metrics(t)]
         try:
             self.topo_order()
         except LedgerError as e:
