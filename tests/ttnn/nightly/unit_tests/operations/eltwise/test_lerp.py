@@ -146,6 +146,8 @@ def _run_lerp_exact_inputs(device, torch_input, torch_end, weight, use_scalar_we
 @pytest.mark.parametrize("input_dtype", ["bfloat16", "float32"])
 def test_lerp_large_opposite_sign(device, magnitude, weight, use_scalar_weight, input_dtype):
     """|end - input| exceeds FLT_MAX although input, end and the interpolated value are all finite."""
+    if not ttnn.device.is_blackhole(device):
+        pytest.skip("Overflow-safe lerp is implemented on Blackhole only")
     torch_dtype = getattr(torch, input_dtype)
     h, w = 64, 64
     sign = torch.where(torch.arange(h * w) % 2 == 0, 1.0, -1.0).reshape((h, w))
@@ -164,6 +166,8 @@ def test_lerp_large_opposite_sign(device, magnitude, weight, use_scalar_weight, 
 @pytest.mark.parametrize("input_dtype", ["bfloat16", "float32"])
 def test_lerp_endpoint_passthrough(device, weight, use_scalar_weight, input_dtype):
     """weight == 0 returns input and weight == 1 returns end, bit-exact, across the finite range."""
+    if not ttnn.device.is_blackhole(device):
+        pytest.skip("Overflow-safe lerp is implemented on Blackhole only")
     torch_dtype = getattr(torch, input_dtype)
     h, w = 64, 64
     torch.manual_seed(0)

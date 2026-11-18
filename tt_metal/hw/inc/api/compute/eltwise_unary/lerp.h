@@ -4,7 +4,6 @@
 
 #pragma once
 
-#include <cstdint>
 #include "api/compute/common_globals.h"
 #ifdef TRISC_MATH
 #include "ckernel_sfpu_lerp.h"
@@ -15,9 +14,10 @@ namespace ckernel {
 
 // clang-format off
 /**
- * Performs elementwise linear interpolation (lerp): out = (1 - weight) * input + weight * end
+ * Performs elementwise linear interpolation (lerp): out = input + weight * (end - input)
  *
- * On Blackhole with is_fp32_dest_acc_en == false the result is rounded for a 16-bit Dest store only,
+ * Blackhole evaluates it as (input - weight * input) + weight * end, which stays finite when end - input
+ * overflows. There, with is_fp32_dest_acc_en == false, the result is rounded for a 16-bit Dest store only,
  * so Dest must not be in 32-bit mode.
  *
  * | Argument | Description                                                | Type     | Valid Range                                           | Required |
@@ -29,7 +29,7 @@ namespace ckernel {
  */
 // clang-format on
 template <DataFormat data_format, bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
-ALWI void lerp_tile(std::uint32_t idst0, std::uint32_t idst1, std::uint32_t idst2, std::uint32_t odst) {
+ALWI void lerp_tile(uint32_t idst0, uint32_t idst1, uint32_t idst2, uint32_t odst) {
 #ifdef ARCH_BLACKHOLE
     MATH((SFPU_TERNARY_CALL(
         DST_SYNC_MODE,
