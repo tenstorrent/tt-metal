@@ -37,6 +37,7 @@ from models.demos.common.prefill.prefill_chunk import (
     packed_forward_refusals,
     validate_chunks,
 )
+from models.demos.deepseek_v3_d_p.reference.kimi_k3_1_config import KimiK31Config
 from models.demos.deepseek_v3_d_p.tests.kda.utils import read_slab_layer
 from models.demos.deepseek_v3_d_p.tests.kimi_k3.synthetic import (
     CACHE_LEN,
@@ -78,6 +79,10 @@ PACKED_STATE_PCC = 0.998
 SINGLE_MODEL_OUTPUT_PCC = 0.99
 DISTINCT_USERS_MAX_PCC = 0.99
 TRACE_REGION_SIZE = 256 * 1024 * 1024
+# The model's L1_SMALL plus 512 B, as in the K3 test: the packed test builds a packed model and then a one-chunk model
+# on one device, and at the model's own size the second build ran out of L1_SMALL for an all-gather's global
+# semaphores (galaxy 8x4, job 220836), though the first model was freed.
+PACKED_TEST_L1_SMALL_SIZE = KimiK31Config.L1_SMALL_SIZE + 512
 # A pipeline split lands on an AttnRes block edge (a multiple of 12); layers 0-11 and 12-15 hold DSA layers 3, 7, 11
 # and 15.
 PIPELINE_LAYERS = 16
@@ -228,7 +233,11 @@ def _plain(hidden, block_residual=None):
 
 
 @pytest.mark.timeout(3600)
-@pytest.mark.parametrize("mesh_device, device_params", placements(), indirect=["mesh_device", "device_params"])
+@pytest.mark.parametrize(
+    "mesh_device, device_params",
+    placements(l1_small_size=PACKED_TEST_L1_SMALL_SIZE),
+    indirect=["mesh_device", "device_params"],
+)
 @pytest.mark.parametrize("residual", ["plain", "attnres"])
 def test_k31_packed_forward_matches_one_chunk_forwards(mesh_device, device_params, residual):
     """Packed forwards (slots 0..3) against each chunk alone in its own packed forward (slots 4..7), then against a
