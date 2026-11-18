@@ -5,18 +5,19 @@
 #include "ttnn/operations/experimental/ccl/slice_reshard_async/device/slice_reshard_async_program_factory.hpp"
 
 #include <cstdint>
+#include <filesystem>
+#include <functional>
 #include <optional>
-#include <ranges>
+#include <string>
 #include <algorithm>
 
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/buffer.hpp>
 #include <tt-metalium/work_split.hpp>
-#include <tt-metalium/host_api.hpp>
-#include <tt-metalium/program_descriptors.hpp>
-#include <tt-metalium/tensor_accessor_args.hpp>
 #include <tt-metalium/experimental/fabric/fabric.hpp>
+#include <tt-metalium/workload/specification/program_spec.hpp>
 
+#include "ttnn/operations/core/data_movement_kernel/datamovement_kernel_config.hpp"
 #include "ttnn/operations/math.hpp"
 #include "ttnn/operations/ccl/shared_with_host/hetergeneous_data_structs.hpp"
 #include "ttnn/operations/ccl/ccl_host_datastructures.hpp"
@@ -32,15 +33,39 @@ namespace ttnn::experimental::prim {
 namespace {
 namespace CMAKE_UNIQUE_NAMESPACE {
 
-tt::tt_metal::ProgramDescriptor build_slice_reshard_program_descriptor(
+constexpr uint32_t kNumDirections = 2;
+
+// The names the per-coordinate programs and the cache-hit override share.
+struct SliceReshardSpecNames {
+    tt::tt_metal::DFBSpecName sender_dfb{"sender"};
+    tt::tt_metal::TensorParamName input_param{"input"};
+    tt::tt_metal::TensorParamName output_param{"output"};
+    tt::tt_metal::experimental::GlobalSemaphoreParamName final_semaphore_param{"final_semaphore"};
+    tt::tt_metal::experimental::GlobalSemaphoreParamName barrier_semaphore_param{"barrier_semaphore"};
+    tt::tt_metal::experimental::FabricConnectionSpecName connection_spec{"connection"};
+};
+
+// The run args every dispatch supplies: the io tensors and the caller-supplied GlobalSemaphores.
+tt::tt_metal::ProgramRunArgs make_dispatch_run_args(
+    const SliceReshardAsyncParams& args, const Tensor& input_tensor, const Tensor& output_tensor) {
+    const SliceReshardSpecNames names;
+    tt::tt_metal::ProgramRunArgs run_args;
+    run_args.tensor_args.emplace(names.input_param, input_tensor.mesh_tensor());
+    run_args.tensor_args.emplace(names.output_param, output_tensor.mesh_tensor());
+    run_args.advanced_options.global_semaphore_args.emplace(
+        names.final_semaphore_param, std::cref(args.final_semaphore));
+    run_args.advanced_options.global_semaphore_args.emplace(
+        names.barrier_semaphore_param, std::cref(args.barrier_semaphore));
+    return run_args;
+}
+
+ttnn::device_operation::MeshWorkloadArtifacts::PerCoordProgram build_slice_reshard_program(
     const SliceReshardAsyncParams& args,
     const ttnn::MeshCoordinate& mesh_coord,
     const Tensor& input_tensor,
     const Tensor& output_tensor) {
     using namespace tt::tt_metal;
-    namespace dyn = slice_reshard_async_dynamic;
-
-    ProgramDescriptor desc;
+    const SliceReshardSpecNames names;
 
     auto* mesh_device = input_tensor.device();
     const auto& mesh_view = mesh_device->get_view();
@@ -63,13 +88,10 @@ tt::tt_metal::ProgramDescriptor build_slice_reshard_program_descriptor(
     // Tensor Info
     const auto& input_tensor_shape = input_tensor.padded_shape();
     const auto& output_tensor_shape = output_tensor.padded_shape();
-    Buffer* input_buffer = input_tensor.buffer();
-    Buffer* output_buffer = output_tensor.buffer();
-    TT_FATAL(input_buffer != nullptr, "slice_reshard_async: input tensor buffer is null");
-    TT_FATAL(output_buffer != nullptr, "slice_reshard_async: output tensor buffer is null");
+    TT_FATAL(input_tensor.buffer() != nullptr, "slice_reshard_async: input tensor buffer is null");
 
     // Get OP Config, topology config
-    const uint32_t page_size = static_cast<uint32_t>(input_buffer->page_size());
+    const uint32_t page_size = static_cast<uint32_t>(input_tensor.buffer()->page_size());
     uint32_t num_sticks_per_outer_dim = input_tensor_shape[1] * input_tensor_shape[2];
     uint32_t input_outer_dim_size = input_tensor_shape[0];
     uint32_t output_outer_dim_size = output_tensor_shape[0];
@@ -100,7 +122,7 @@ tt::tt_metal::ProgramDescriptor build_slice_reshard_program_descriptor(
         is_last_device ? 0 : std::max((int32_t)global_input_outer_dim_end - forward_device_output_start + 1, 0);
 
     // Get worker cores
-    CoreCoord core_grid(args.num_links * dyn::kNumDirections, 1);
+    CoreCoord core_grid(args.num_links * kNumDirections, 1);
     auto
         [num_cores,
          worker_core_ranges,
@@ -109,36 +131,49 @@ tt::tt_metal::ProgramDescriptor build_slice_reshard_program_descriptor(
          num_sticks_per_core_group_1,
          num_sticks_per_core_group_2] = tt::tt_metal::split_work_to_cores(core_grid, num_sticks_per_outer_dim * 2);
 
-    // L1 Scratch CB Creation
-    uint32_t l1_scratch_cb_page_size_bytes = page_size;
+    // L1 Scratch DFB Creation
+    uint32_t l1_scratch_dfb_page_size_bytes = page_size;
 
     uint32_t num_sticks_to_write_per_packet = 1;
-    uint32_t cb_num_pages = 3 * num_sticks_to_write_per_packet;  // triple buffering
+    uint32_t dfb_num_pages = 3 * num_sticks_to_write_per_packet;  // triple buffering
     tt::DataFormat df = tt::tt_metal::datatype_to_dataformat_converter(input_tensor.dtype());
 
-    // CBs for transferring data between reader and writer
-    uint32_t sender_cb_index = tt::CB::c_in0;
-    desc.cbs.push_back(CBDescriptor{
-        .total_size = cb_num_pages * l1_scratch_cb_page_size_bytes,
-        .core_ranges = worker_core_ranges,
-        .format_descriptors = {{CBFormatDescriptor{
-            .buffer_index = static_cast<uint8_t>(sender_cb_index),
-            .data_format = df,
-            .page_size = l1_scratch_cb_page_size_bytes,
-        }}},
+    ProgramSpec spec{.name = "slice_reshard_async"};
+
+    // DFB for transferring data between reader and writer
+    spec.dataflow_buffers.push_back(DataflowBufferSpec{
+        .unique_id = names.sender_dfb,
+        .entry_size = l1_scratch_dfb_page_size_bytes,
+        .num_entries = dfb_num_pages,
+        .data_format_metadata = df,
     });
 
-    const auto final_semaphore_address = static_cast<uint32_t>(args.final_semaphore.address());
-    const auto barrier_semaphore_address = static_cast<uint32_t>(args.barrier_semaphore.address());
+    spec.tensor_parameters = {
+        TensorParameter{.unique_id = names.input_param, .spec = input_tensor.tensor_spec()},
+        TensorParameter{.unique_id = names.output_param, .spec = output_tensor.tensor_spec()},
+    };
+    spec.advanced_options.global_semaphore_parameters = {
+        {.unique_id = names.final_semaphore_param, .memory_type = BufferType::L1},
+        {.unique_id = names.barrier_semaphore_param, .memory_type = BufferType::L1},
+    };
+
+    tt::tt_metal::experimental::FabricConnectionSpec fabric_connection{
+        .unique_id = names.connection_spec,
+        .src_fabric_node_id = mesh_device->get_fabric_node_id(mesh_coord),
+    };
+
+    ProgramRunArgs run_args = make_dispatch_run_args(args, input_tensor, output_tensor);
 
     // KERNEL CREATION
+    // Every worker core `{core_idx, 0}` (core_idx = link * kNumDirections + direction) gets its own reader kernel
+    // and its own writer kernel.
     uint32_t stick_start_id = 0;
     for (uint32_t link = 0; link < args.num_links; link++) {
         uint32_t num_sticks_to_read = 0;
-        for (uint32_t direction = 0; direction < dyn::kNumDirections; direction++) {
-            const uint32_t core_idx = (link * dyn::kNumDirections) + direction;
+        for (uint32_t direction = 0; direction < kNumDirections; direction++) {
+            const uint32_t core_idx = (link * kNumDirections) + direction;
             CoreCoord core = {core_idx, 0};
-            CoreCoord opposite_core = {(link * dyn::kNumDirections) + (1 - direction), 0};
+            CoreCoord opposite_core = {(link * kNumDirections) + (1 - direction), 0};
             CoreCoord virtual_core = mesh_device->worker_core_from_logical_core(core);
             CoreCoord virtual_opposite_core = mesh_device->worker_core_from_logical_core(opposite_core);
             if (core_group_1.contains(core)) {
@@ -147,181 +182,226 @@ tt::tt_metal::ProgramDescriptor build_slice_reshard_program_descriptor(
                 num_sticks_to_read = num_sticks_per_core_group_2;
             }
 
+            const KernelSpecName reader_kernel{"reader_" + std::to_string(core_idx)};
+            const KernelSpecName writer_kernel{"writer_" + std::to_string(core_idx)};
+
             // Reader
-            KernelDescriptor reader_desc;
-            reader_desc.kernel_source =
-                "ttnn/cpp/ttnn/operations/experimental/ccl/slice_reshard_async/device/kernels/"
-                "minimal_default_reader.cpp";
-            reader_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
-            reader_desc.core_ranges = CoreRangeSet(CoreRange(core));
-            reader_desc.compile_time_args = {
-                direction ? is_first_device : is_last_device,
-                direction ? is_last_device : is_first_device,
-                sender_cb_index,  // cb_forward_id
-                direction,
-                page_size,
+            KernelSpec reader_spec{
+                .unique_id = reader_kernel,
+                .source = std::filesystem::path(
+                    "ttnn/cpp/ttnn/operations/experimental/ccl/slice_reshard_async/device/kernels/"
+                    "minimal_default_reader.cpp"),
+                .dfb_bindings =
+                    {
+                        DFBBinding{
+                            .dfb_spec_name = names.sender_dfb,
+                            .accessor_name = "output",
+                            .endpoint_type = DFBEndpointType::PRODUCER,
+                        },
+                    },
+                .tensor_bindings =
+                    {
+                        TensorBinding{
+                            .tensor_parameter_name = names.input_param,
+                            .accessor_name = "src",
+                        },
+                    },
+                .compile_time_args =
+                    {
+                        {"is_first_chip", direction ? is_first_device : is_last_device},
+                        {"is_last_chip", direction ? is_last_device : is_first_device},
+                        {"direction", direction},
+                        {"stick_size", page_size},
+                    },
+                .runtime_arg_schema =
+                    {
+                        .runtime_arg_names =
+                            {
+                                "stick_start_id",
+                                "num_sticks_to_read",
+                                "input_outer_dim_size",
+                                "outer_dims_to_forward",
+                                "outer_dims_from_forward",
+                                "outer_dims_to_keep_start",
+                                "outer_dims_to_keep_end",
+                                "num_sticks_per_outer_dim",
+                            },
+                    },
+                .hw_config = ttnn::create_reader_datamovement_config(),
             };
-            TensorAccessorArgs(*input_buffer).append_to(reader_desc.compile_time_args);
-            reader_desc.named_compile_time_args = {{"cb_forward_id", sender_cb_index}};
-            reader_desc.config = ReaderConfigDescriptor{};
+            reader_spec.advanced_options.global_semaphore_bindings = {
+                {
+                    .global_semaphore_parameter_name = names.final_semaphore_param,
+                    .accessor_name = "out_ready_sem",
+                },
+            };
 
-            KernelDescriptor::RTArgList reader_rt_args;
-            reader_rt_args.push_back(input_buffer);          // input_tensor_address
-            reader_rt_args.push_back(stick_start_id);        // stick_start_id
-            reader_rt_args.push_back(num_sticks_to_read);    // num_sticks_to_read
-            reader_rt_args.push_back(input_outer_dim_size);  // input_outer_dim_size
-            reader_rt_args.push_back(
-                direction ? outer_dims_to_forward : outer_dims_to_backward);  // outer_dims_to_forward
-            reader_rt_args.push_back(outer_dims_from_forward);                // outer_dims_from_forward
-            reader_rt_args.push_back(outer_dims_to_keep_start);               // outer_dims_to_keep
-            reader_rt_args.push_back(outer_dims_to_keep_end);                 // outer_dims_to_keep
-            reader_rt_args.push_back(num_sticks_per_outer_dim);               // num_sticks_per_outer_dim
-            // out_ready_sem_bank_addr (absolute address)
-            reader_rt_args.push_back(final_semaphore_address);  // smuggled-rta-ok: caller-supplied GlobalSemaphore,
-                                                                // re-applied via override_runtime_arguments
-            reader_desc.emplace_runtime_args(core, reader_rt_args);
-
-            TT_FATAL(
-                desc.kernels.size() == dyn::reader_kernel_idx(core_idx),
-                "slice_reshard_async: reader kernel for core {} pushed at index {}, expected {}",
-                core_idx,
-                desc.kernels.size(),
-                dyn::reader_kernel_idx(core_idx));
-            desc.kernels.push_back(std::move(reader_desc));
+            KernelRunArgs reader_run_args{
+                .kernel = reader_kernel,
+                .runtime_arg_values = MakeRuntimeArgsForSingleNode(
+                    core,
+                    {
+                        {"stick_start_id", stick_start_id},
+                        {"num_sticks_to_read", num_sticks_to_read},
+                        {"input_outer_dim_size", input_outer_dim_size},
+                        {"outer_dims_to_forward", direction ? outer_dims_to_forward : outer_dims_to_backward},
+                        {"outer_dims_from_forward", outer_dims_from_forward},
+                        {"outer_dims_to_keep_start", outer_dims_to_keep_start},
+                        {"outer_dims_to_keep_end", outer_dims_to_keep_end},
+                        {"num_sticks_per_outer_dim", num_sticks_per_outer_dim},
+                    }),
+            };
 
             // Writer
-            KernelDescriptor writer_desc;
-            writer_desc.kernel_source =
-                "ttnn/cpp/ttnn/operations/experimental/ccl/slice_reshard_async/device/kernels/"
-                "minimal_default_writer.cpp";
-            writer_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
-            writer_desc.core_ranges = CoreRangeSet(CoreRange(core));
-            writer_desc.compile_time_args = {
-                direction ? is_first_device : is_last_device,
-                direction ? is_last_device : is_first_device,
-                sender_cb_index,  // cb_forward_id
-                direction,
+            KernelSpec writer_spec{
+                .unique_id = writer_kernel,
+                .source = std::filesystem::path(
+                    "ttnn/cpp/ttnn/operations/experimental/ccl/slice_reshard_async/device/kernels/"
+                    "minimal_default_writer.cpp"),
+                .dfb_bindings =
+                    {
+                        DFBBinding{
+                            .dfb_spec_name = names.sender_dfb,
+                            .accessor_name = "output",
+                            .endpoint_type = DFBEndpointType::CONSUMER,
+                        },
+                    },
+                .tensor_bindings =
+                    {
+                        TensorBinding{
+                            .tensor_parameter_name = names.output_param,
+                            .accessor_name = "dst",
+                        },
+                    },
+                .compile_time_args =
+                    {
+                        {"is_first_chip", direction ? is_first_device : is_last_device},
+                        {"is_last_chip", direction ? is_last_device : is_first_device},
+                        {"direction", direction},
+                    },
+                .runtime_arg_schema =
+                    {
+                        .runtime_arg_names =
+                            {
+                                "stick_size",
+                                "stick_start_id",
+                                "num_sticks_to_read",
+                                "output_outer_dim_size",
+                                "outer_dims_to_forward",
+                                "outer_dims_to_keep_start",
+                                "outer_dims_to_keep_end",
+                                "outer_dims_to_receive",
+                                "outer_dims_from_forward",
+                                "num_sticks_per_outer_dim",
+                                "out_ready_sem_noc0_x",
+                                "out_ready_sem_noc0_y",
+                                "use_barrier_sem",
+                                "barrier_sem_noc0_x",
+                                "barrier_sem_noc0_y",
+                            },
+                    },
+                .hw_config = ttnn::create_writer_datamovement_config(),
             };
-            TensorAccessorArgs(*output_buffer).append_to(writer_desc.compile_time_args);
-            writer_desc.named_compile_time_args = {{"cb_forward_id", sender_cb_index}};
-            writer_desc.config = WriterConfigDescriptor{};
+            writer_spec.advanced_options.global_semaphore_bindings = {
+                {
+                    .global_semaphore_parameter_name = names.final_semaphore_param,
+                    .accessor_name = "out_ready_sem",
+                },
+                {
+                    .global_semaphore_parameter_name = names.barrier_semaphore_param,
+                    .accessor_name = "barrier_sem",
+                },
+            };
+            writer_spec.advanced_options.fabric_connection_bindings = {
+                {
+                    .fabric_connection_spec_name = names.connection_spec,
+                    .accessor_name = "connection",
+                },
+            };
 
-            KernelDescriptor::RTArgList writer_rt_args;
-            writer_rt_args.push_back(input_buffer);           // input_tensor_address
-            writer_rt_args.push_back(output_buffer);          // output_tensor_address
-            writer_rt_args.push_back(page_size);              // stick_size
-            writer_rt_args.push_back(stick_start_id);         // stick_start_id
-            writer_rt_args.push_back(num_sticks_to_read);     // num_sticks_to_read
-            writer_rt_args.push_back(output_outer_dim_size);  // output_outer_dim_size
-            writer_rt_args.push_back(
-                direction ? outer_dims_to_forward : outer_dims_to_backward);  // outer_dims_to_forward
-            writer_rt_args.push_back(outer_dims_to_keep_start);               // outer_dims_to_keep
-            writer_rt_args.push_back(outer_dims_to_keep_end);                 // outer_dims_to_keep
-            writer_rt_args.push_back(
-                direction ? outer_dims_from_backward : outer_dims_from_forward);  // outer_dims_to_receive
-            writer_rt_args.push_back(outer_dims_from_forward);                    // outer_dims_from_forward
-            writer_rt_args.push_back(num_sticks_per_outer_dim);                   // num_sticks_per_outer_dim
-            writer_rt_args.push_back(static_cast<uint32_t>(virtual_core.x));      // out_ready_sem_noc0_x
-            writer_rt_args.push_back(static_cast<uint32_t>(virtual_core.y));      // out_ready_sem_noc0_y
-            // out_ready_sem_bank_addr (absolute address)
-            writer_rt_args.push_back(final_semaphore_address);  // smuggled-rta-ok: caller-supplied GlobalSemaphore,
-                                                                // re-applied via override_runtime_arguments
-            writer_rt_args.push_back(1u);                       // use_barrier_semaphore
-            writer_rt_args.push_back(static_cast<uint32_t>(virtual_opposite_core.x));  // barrier_sem_noc0_x
-            writer_rt_args.push_back(static_cast<uint32_t>(virtual_opposite_core.y));  // barrier_sem_noc0_y
-            writer_rt_args.push_back(barrier_semaphore_address);  // smuggled-rta-ok: caller-supplied GlobalSemaphore,
-                                                                  // re-applied via override_runtime_arguments
+            KernelRunArgs writer_run_args{
+                .kernel = writer_kernel,
+                .runtime_arg_values = MakeRuntimeArgsForSingleNode(
+                    core,
+                    {
+                        {"stick_size", page_size},
+                        {"stick_start_id", stick_start_id},
+                        {"num_sticks_to_read", num_sticks_to_read},
+                        {"output_outer_dim_size", output_outer_dim_size},
+                        {"outer_dims_to_forward", direction ? outer_dims_to_forward : outer_dims_to_backward},
+                        {"outer_dims_to_keep_start", outer_dims_to_keep_start},
+                        {"outer_dims_to_keep_end", outer_dims_to_keep_end},
+                        {"outer_dims_to_receive", direction ? outer_dims_from_backward : outer_dims_from_forward},
+                        {"outer_dims_from_forward", outer_dims_from_forward},
+                        {"num_sticks_per_outer_dim", num_sticks_per_outer_dim},
+                        {"out_ready_sem_noc0_x", static_cast<uint32_t>(virtual_core.x)},
+                        {"out_ready_sem_noc0_y", static_cast<uint32_t>(virtual_core.y)},
+                        {"use_barrier_sem", 1u},
+                        {"barrier_sem_noc0_x", static_cast<uint32_t>(virtual_opposite_core.x)},
+                        {"barrier_sem_noc0_y", static_cast<uint32_t>(virtual_opposite_core.y)},
+                    }),
+            };
 
-            std::vector<uint32_t> fabric_rt_args;
-            if (direction) {
-                fabric_rt_args.push_back(forward_fabric_node_id.has_value());
-                if (forward_fabric_node_id.has_value()) {
-                    const auto src_fabric_node_id = mesh_device->get_fabric_node_id(mesh_coord);
-                    tt::tt_fabric::append_fabric_connection_rt_args(
-                        *mesh_device,
-                        src_fabric_node_id,
-                        forward_fabric_node_id.value(),
-                        link,
-                        desc,
-                        core,
-                        fabric_rt_args);
-                }
-                fabric_rt_args.push_back(false);
-            } else {
-                fabric_rt_args.push_back(false);
-                fabric_rt_args.push_back(backward_fabric_node_id.has_value());
-                if (backward_fabric_node_id.has_value()) {
-                    const auto src_fabric_node_id = mesh_device->get_fabric_node_id(mesh_coord);
-                    tt::tt_fabric::append_fabric_connection_rt_args(
-                        *mesh_device,
-                        src_fabric_node_id,
-                        backward_fabric_node_id.value(),
-                        link,
-                        desc,
-                        core,
-                        fabric_rt_args);
-                }
+            // The direction-1 writer sends to the forward neighbor, the direction-0 writer to the backward one.
+            const auto& neighbor_fabric_node_id = direction ? forward_fabric_node_id : backward_fabric_node_id;
+            if (neighbor_fabric_node_id.has_value()) {
+                fabric_connection.targets[core] = {
+                    tt::tt_metal::experimental::FabricConnectionTarget{
+                        .dst_fabric_node_id = neighbor_fabric_node_id.value(),
+                        .link_idx = link,
+                    },
+                };
             }
-            writer_rt_args.append(fabric_rt_args);
-            writer_desc.emplace_runtime_args(core, writer_rt_args);
 
-            TT_FATAL(
-                desc.kernels.size() == dyn::writer_kernel_idx(core_idx),
-                "slice_reshard_async: writer kernel for core {} pushed at index {}, expected {}",
-                core_idx,
-                desc.kernels.size(),
-                dyn::writer_kernel_idx(core_idx));
-            desc.kernels.push_back(std::move(writer_desc));
+            spec.kernels.push_back(std::move(reader_spec));
+            spec.kernels.push_back(std::move(writer_spec));
+            spec.work_units.push_back(WorkUnitSpec{
+                .name = "core_" + std::to_string(core_idx),
+                .kernels = {reader_kernel, writer_kernel},
+                .target_nodes = core,
+            });
+            run_args.kernel_run_args.push_back(std::move(reader_run_args));
+            run_args.kernel_run_args.push_back(std::move(writer_run_args));
         }
         stick_start_id += num_sticks_to_read;
     }
 
-    return desc;
+    spec.advanced_options.fabric_connections = {std::move(fabric_connection)};
+
+    return {
+        .range = ttnn::MeshCoordinateRange(mesh_coord),
+        .spec = std::move(spec),
+        .run_params = std::move(run_args),
+    };
 }
 
 }  // namespace CMAKE_UNIQUE_NAMESPACE
 }  // namespace
 
-tt::tt_metal::WorkloadDescriptor SliceReshardAsyncProgramFactory::create_workload_descriptor(
+ttnn::device_operation::MeshWorkloadArtifacts SliceReshardAsyncProgramFactory::create_mesh_workload_artifacts(
     const SliceReshardAsyncParams& args,
     const Tensor& tensor_args,
     Tensor& tensor_return_value,
     const ttnn::MeshCoordinateRangeSet& tensor_coords) {
-    tt::tt_metal::WorkloadDescriptor workload_descriptor;
+    ttnn::device_operation::MeshWorkloadArtifacts artifacts;
     const auto coords = tensor_coords.coords();
-    workload_descriptor.programs.reserve(coords.size());
+    artifacts.programs.reserve(coords.size());
     // Ring index and forward/backward neighbors depend on the coordinate, so each coord gets its own program.
     for (const auto& coord : coords) {
-        auto desc = CMAKE_UNIQUE_NAMESPACE::build_slice_reshard_program_descriptor(
-            args, coord, tensor_args, tensor_return_value);
-        workload_descriptor.programs.push_back({ttnn::MeshCoordinateRange(coord), std::move(desc)});
+        artifacts.programs.push_back(
+            CMAKE_UNIQUE_NAMESPACE::build_slice_reshard_program(args, coord, tensor_args, tensor_return_value));
     }
-    return workload_descriptor;
+    return artifacts;
 }
 
-void SliceReshardAsyncProgramFactory::override_runtime_arguments(
-    tt::tt_metal::Program& program,
+tt::tt_metal::ProgramRunArgs SliceReshardAsyncProgramFactory::override_runtime_arguments(
     const SliceReshardAsyncParams& args,
-    const Tensor& /*tensor_args*/,
-    Tensor& /*tensor_return_value*/,
-    const std::optional<ttnn::MeshCoordinate>& /*mesh_dispatch_coordinate*/) {
-    namespace dyn = slice_reshard_async_dynamic;
-
+    const Tensor& tensor_args,
+    Tensor& tensor_return_value,
+    const ttnn::MeshCoordinateRange& /*range*/) {
     // final_semaphore / barrier_semaphore are excluded from
     // SliceReshardAsyncDeviceOperation::compute_program_hash, so they are re-applied here on every hit.
-    const auto final_semaphore_address = static_cast<uint32_t>(args.final_semaphore.address());
-    const auto barrier_semaphore_address = static_cast<uint32_t>(args.barrier_semaphore.address());
-
-    const uint32_t num_cores = args.num_links * dyn::kNumDirections;
-    for (uint32_t core_idx = 0; core_idx < num_cores; core_idx++) {
-        const tt::tt_metal::CoreCoord core = {core_idx, 0};
-        auto& reader_runtime_args = tt::tt_metal::GetRuntimeArgs(program, dyn::reader_kernel_idx(core_idx), core);
-        reader_runtime_args[dyn::kReaderOutReadySemArg] = final_semaphore_address;
-
-        auto& writer_runtime_args = tt::tt_metal::GetRuntimeArgs(program, dyn::writer_kernel_idx(core_idx), core);
-        writer_runtime_args[dyn::kWriterOutReadySemArg] = final_semaphore_address;
-        writer_runtime_args[dyn::kWriterBarrierSemArg] = barrier_semaphore_address;
-    }
+    return CMAKE_UNIQUE_NAMESPACE::make_dispatch_run_args(args, tensor_args, tensor_return_value);
 }
 
 }  // namespace ttnn::experimental::prim
