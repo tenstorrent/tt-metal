@@ -290,9 +290,9 @@ class Hy4ChainLayer:
             ):  # HY4_SKINNY=shared: bank-local decode kernel (second weight copy, 5 MB/layer/chip)
                 self.shared_dec = D.make_shared(md, *sw, limit=D.NO_CLAMP, decode=True)
             self.blk_tp = None
-            if (
-                os.environ.get("HY4_MOE_TP32", "0") == "1" and not self.mtp
-            ):  # kernel-track: TP32 routed experts for decode (second weight copy; prefill keeps the ring layout)
+            if os.environ.get("HY4_MOE_TP32", "0") == "1" and (
+                not self.mtp or os.environ.get("HY4_B42_MTP_TP24", "0") == "1"
+            ):  # B42: the MTP layer gets a tp24 copy too (HY4_B42_MTP_TP24=1, decode rows only). kernel-track: TP32 routed experts for decode (second weight copy; prefill keeps the ring layout)
                 from models.demos.blackhole.hy4_preview.tt import hy4_tp32_cache as _TC
                 from models.demos.blackhole.hy4_preview.tt.hy4_moe_tp32 import Tp32Experts
                 from models.demos.blackhole.hy4_preview.tt.hy4_moe_tp32_block import Hy4MoeTp32Block
@@ -306,7 +306,7 @@ class Hy4ChainLayer:
                 if not (
                     _root and _TC.check_layer(_root, L) is not None
                 ):  # no TP32 dump for this layer: pack from the checkpoint
-                    Wf = load_moe_layer(L, W=ch.W, experts=list(range(256)))
+                    Wf = load_moe_layer(L, W=ch.W, experts=list(range(256)), prefix="mtp.0." if self.mtp else None)
                 if (
                     os.environ.get("HY4_MOE_TP32_IMPL", "24") == "24"
                 ):  # tp24: 24-core variant (T up to 16), W2 layout v1
@@ -330,7 +330,7 @@ class Hy4ChainLayer:
                     self.blk_tp.shared_fuse = SkinnyShared(md, sw[0], sw[1], sw[2] * 0.25, limit=D.NO_CLAMP)
                 self.blk_pf = None
                 if (
-                    os.environ.get("HY4_TP32_PF", "0") == "1"
+                    os.environ.get("HY4_TP32_PF", "0") == "1" and not self.mtp
                 ):  # tp32-prefill2: grouped-GEMM prefill on the SAME weights (no second copy)
                     from models.demos.blackhole.hy4_preview.tt.hy4_moe_tp32_prefill_block import Hy4MoeTp32PrefillBlock
 
