@@ -515,3 +515,137 @@ No kernel_lib compute helper was bypassed: the graduated compute paths use `tili
 | no helper covers this (cross-core partial combine family) | capability | There is no helper for a point-to-point fp32 block send with a remote arrival count (write a slice into slot `my_col` of an owner, fence, bump the owner's semaphore). It is the per-slice form of R4's scatter, which was already raw. | n/a (no helper) | res5.1 45.9 us (scatter hidden behind the slice matmuls) | conv2d_3x3_combine_dataflow.hpp:50 (`send_slice`) |
 
 Helper-library feedback that was measured but not taken (not a bypass): `matmul_block` re-issues `pack_reconfig_data_format` and `llk_pack_reconfig_l1_acc` before every output subblock although both are constant within a K-block. Hoisting them to once per K-block measured 1.14x on a pack-bound K-blocked fp32 L1-acc walk (bk <= 3, 1x4 subblocks), bit-identical, flat when FPU-bound (`perf_experiments/l1acc_pack_hoist/`).
+
+## Perf 2
+- Date: 2026-11-18
+- Scope: perf tournament round 2 on the same six `[perf]` LOOSE cases (LoFi, fp32 DEST, bf8_b activation and weights, pinned shard grids; bias + ReLU). No SUPPORTED change. Base `c33f4181192` (end of Perf 1). Board: Blackhole p150b, AICLK 1350 MHz. DEVICE KERNEL DURATION from one fresh-cache run per variant, unless marked as a median.
+- Instrumentation: the Perf 1 zones were kept unchanged, and every new path carries zones (`writer_slab_dead_wait`, `writer_fill`, plus the existing ones).
+- Ablation hooks for this tree: `perf_experiments/ablation_r2/ablation_hooks.patch`, against `c33f4181192`. Its tokens are `gather, fill, weights, scatter, untilize, tilize, matmul`; `untilize` and `tilize` keep their CB traffic.
+- The NoC-estimator CLI is not built on this box, so the ceiling gate used peak arithmetic: BH NoC 64 B/cycle; LoFi matmul 16 cycles per tile-MAC.
+
+### Measured breakdown (before, zoned, us)
+Cumulative peels in both orders. Data movement first: full > gather > fill > weights > scatter > untilize > tilize > matmul (the last column is everything stubbed).
+
+| case | full | −gather | −fill | −weights | −scatter | −untilize | −tilize | −matmul |
+|---|---|---|---|---|---|---|---|---|
+| res5.1 | 45.9 | 46.2 | 45.5 | 42.2 | 40.5 | 39.5 | 36.8 | 15.8 |
+| aspp1 | 103.7 | 96.2 | 93.7 | 93.7 | 73.8 | 67.7 | 56.8 | 38.7 |
+| sem_res2 | 137.3 | 129.0 | 121.9 | 121.6 | 121.4 | 111.4 | 95.3 | 51.7 |
+| res4.0 | 44.8 | 26.9 | 26.5 | 26.0 | 23.1 | 15.2 | 14.4 | 8.6 |
+
+Compute first: full > matmul > tilize > untilize > gather.
+- res5.1: 45.9, 41.3, 42.0, 41.8, 41.1
+- aspp1: 103.7, 89.3, 83.2, 83.9, 84.5
+- sem_res2: 137.3, 105.5, 102.1, 96.7, 95.8
+- res4.0: 44.8, 43.7, 42.8, 40.4, 17.6
+
+Ranked, with the ceiling gate:
+1. **res4.0 is gather-bound.** The stride-2 split row gather costs 17.9 us. 147 KB of local copies would take ~3 us at NoC rate, so it is issue-bound at ~67 cycles per 192 B read. The untilize comes next: 7.9 us payload, on the slow 1-tile-wide helper path.
+2. **aspp: the K-blocked walk.**
+   - The fp32 L1-accumulation packs make a 38.7 us floor even with the matmul stubbed.
+   - The post-walk scatter tail is 19.9 us. NIU bytes allow ~7.5 us.
+   - The LoFi FPU floor is 41 us; the walk takes 69.
+3. **sem_res2: compute chain of 121 us** with no data movement.
+   - Matmul 43.6 us over the pack floor; tilize 16; untilize 10.
+   - Gather pacing the tilize: 8.3 us. Fill pacing the untilize: 7.1 us. The fill cost sits on the last-column cores, whose NoC0 reads of the next shard wrap the ring (fill 25.9 vs 13 us).
+   - The weight multicast alone is ~87-96 us of DM, hidden but close behind.
+4. **res5.x: co-bound.** The gather / untilize prelude, the weight rounds (~3.4 us each) and the slice walk (28.4 vs a 23.9 us floor) each remove ~0 alone. Not targeted.
+
+### Portfolio and verdicts
+Each idea was built and measured in isolation by its own optimizer (`perf_experiments/<slug>/`). Every option listed is bit-identical to the baseline output.
+
+| idea | verdict | focus result (us, isolated) | domain |
+|---|---|---|---|
+| `row_gather_fixed_state`: row gather walks output-row runs; in-image window found once per run, then `set_read_state` / `read_with_state` per pixel; out-of-image runs one zero fill | WIN | res4.0 44.7 -> 31.7 | every row gather, no exception. res4.0 HiFi4 62.7 -> 50.1, res3.0 39.3 -> 34.3, HEIGHT RM C_in 48 28.7 -> 16.0, dilated/padded-lane cases -5 to -10% (the single zero fill), tap-major shapes untouched |
+| `nslice_smaller_bm` (b): bm 8 N-slice-outer with `cb_combine_slots` in `cb_halo_slab`'s L1 and `cb_combined` in `cb_zero_src`'s, single-buffered slice CBs | WIN | aspp1 103.8 -> 76.9, aspp2 102.9 -> 76.7 | K splits with one M-block per core. Exception (inexpressible): more than one M-block per core. Option (a), N-slice-outer at bm 4, measured +20-22% (weights streamed twice): not taken |
+| `coarse_kblock_l1`: fewer K-blocks on sem_res2 by reshaping quanta (per-tap im2col unit, weights in N-chunks) | NULL | bk 24: flat to +1.5%; side option bm 10: -3% | per-K-block cost is hidden under a matmul at ~20 cycles/tile-MAC (walk with all DM/tilize stubbed: 95.3 -> 92.4 us at bk 24). The bm 10 option needed a `matmul_block` bypass and a gated dual path for -3% on one shape: not taken |
+| `deep_im2col_ring`: `cb_im2col_rm` grows to one K-block (bm tile-rows) in L1 left after the solve | WIN | sem_res2 135.3 -> 128.5 | every K-blocked walk with the non-split gather, no exception. aspp -2.9% (depth 3), res2 -8.3%, center_head1 -7.9%, interleaved 128x256x64 bf8b -6.9%, rest flat |
+| `tile_fill_split_nocs`: HEIGHT TILE fill split by owner direction; writer reads higher shards' tile-rows on NoC1 and serves hand-overs while waiting | WIN with carve-out | sem_res2 137.6 -> 129.8 | HEIGHT TILE layers. Carve-out (measured): the multicast sender and own-stream cores keep the reader-only fill; splitting them was 139.2 vs 129.8 us. In isolation res3_0_conv2 read +7.2% |
+| `narrow_untilize`: 1-tile-wide untilize, 4 tile-rows per DEST section, section packed as one contiguous L1 stream | WIN | res4.0 44.4 -> 42.3; untilize zone 9.5 -> 3.0 | every 1-tile-wide slab (compile-time), no exception. res4.x LoFi -7%, res4.x HiFi4 -3.8%. Wider-slice CB batching measured null |
+
+Not floated (cap of 6):
+- **K-blocked weight-multicast pipelining:** weights are hidden on every focus case (solo -0.3 us).
+- **A res5 fusion of prelude + weights + walk:** co-bound, so it needs three levers at once.
+
+### Graduated (one path each, old code deleted unless noted)
+1. **Fixed-state row gather** (`4a9d314a84e`). `RowGather::tile_row` is rewritten; edge pixels, dilated rows and padded lanes keep the per-tap body inside it. No predicate.
+2. **Deep im2col ring** (`df0440b790a`).
+   - `_im2col_ring_target` = max(2, bm) on the K-blocked walk with the non-split gather.
+   - `select_blocking` grows the ring only into L1 left at the solved (bm, bk, ub), so it never costs a coarser block.
+   - Host-only.
+3. **Narrow untilize** (`1e430406181`).
+   - Raw LLK in `conv2d_3x3_narrow_untilize.hpp`, taken when `untilize_width_tiles == 1`.
+   - Wider slabs keep `compute_kernel_lib::untilize`, which already runs `fast_untilize` there. That is the same helper the bypass replaces, not a dual path of this pattern.
+   - The experiment's RowMop / Strided / diagnostic modes and wide batching were dropped.
+4. **Shared-L1 N-slice walk** (`23f8e1d27bc`).
+   - `select_blocking` runs N-slice-outer with the slab / combine-slot and zero-block / combined regions shared wherever every core runs one M-block. Slice CBs are depth 1.
+   - The writer's credits wait for the reader's `slab_dead` (send_go's semaphore id, unused on this walk).
+   - **Not a carve-out:** the experiment's "only when plain N-slice does not fit" ordering. Shared everywhere was measured on the BLOCK harness: 8 shapes flat, res4.x LoFi median of 3 23.6 vs 23.3 us (noise). So the shared layout is the one-M-block path.
+   - Plain N-slice remains only for more than one M-block per core (inexpressible). The K-blocked walk remains only where neither fits.
+5. **Split TILE fill** (`520d5b2a2ea`).
+   - On by structure for HEIGHT TILE: sharded output, TILE input, no K split.
+   - Carve-out (measured): the multicast sender and the own-stream cores keep the reader-only fill.
+   - Measured in combination on the final tree (2 runs each side): sem_res2 128.3 -> 121.9; center_head1 -7.4%; inst_res3_fuse_conv0 -3.8%; sem_res2_fuse_conv0 / sem_res2_fuse_conv1 HiFi4 -2.0%; inst_res2_fuse_conv0/1 -1.7%.
+   - res3_0_conv2, once the row gather was fixed: 34.45 -> 34.95 (+1.4%, noise). It gets no carve-out.
+
+### Whole-op result (unzoned, us; same session; ttnn.conv2d target from feature_spec)
+
+| case | before (`c33f4181192`) | after (`520d5b2a2ea`) | speedup | ttnn target |
+|---|---|---|---|---|
+| res5.1.conv2 @ LoFi | 45.6 | 45.8 | flat | 75.5 |
+| res5.2.conv2 @ LoFi | 45.7 | 46.4 | flat (+1.5%) | 79.8 |
+| aspp.convs.1 @ LoFi | 102.9 | 76.2 | 1.35x | 159.3 |
+| aspp.convs.2 @ LoFi | 102.4 | 75.8 | 1.35x | 220.5 |
+| semantic res2.fuse_conv.1 @ LoFi | 135.4 | 121.2 | 1.12x | 145.6 |
+| res4.0.conv2 @ LoFi | 44.3 | 29.7 | 1.49x | 39.8 |
+
+All six now beat ttnn.conv2d on the same input. res4.0 was the last one behind (44.3 vs 39.8 us).
+
+### Guard set (whole perf harness, 47 shapes, unzoned, same session, before vs after)
+- **BLOCK:**
+  - res4.0 HiFi4 62.5 -> 47.0;
+  - res4.x HiFi4 42.9 -> 41.1;
+  - res4.x LoFi 24.5 -> 23.2;
+  - aspp.convs.1 / 2 HiFi4 228.4 / 228.1 -> 201.6 / 201.7;
+  - res5.0 / 5.1 / 5.2 and aspp.convs.3 flat (within ±0.4%).
+- **HEIGHT:**
+  - center_head1 43.7 -> 37.8;
+  - res3_0 38.9 -> 34.6;
+  - res2 36.6 -> 33.7;
+  - sem_res2_fuse_conv0 390.0 -> 373.4;
+  - sem_res2_fuse_conv1 HiFi4 343.5 -> 330.4;
+  - inst fuse convs -4.5 to -4.8%;
+  - stem_conv3 199.0 -> 194.8;
+  - the rest flat (res3_conv2 +0.9%, stem_conv1 -0.8%).
+- **Interleaved:**
+  - 128x256x64 tile bf8b 50.8 -> 47.7;
+  - the other 17 move -1.8% to +5.3%. The +5.3% outlier, H16_W16_Ci64 tile bf16 at ~10 us, took no graduated path; median of 3 per side is 9.84 vs 9.88 (rm 9.79 vs 9.90, bf8b 10.11 vs 9.99). Noise: no regression, no carve-out.
+- **Golden:** `eval/golden_tests/conv2d_3x3/` and the unit dir: 1747 passed, 480 skipped (INVALID), 0 failed, on the final tree.
+- **`--dev`:** the HEIGHT unit file plus the six focus cases are clean (47 / 47).
+
+### Bottleneck now (zoned, p50 core)
+- **res5.x (45.7 us): unchanged and co-bound.**
+  - untilize 2.8, gather 7.2 (tilize 7.5 waits on it), slice walk 29 us, combine 3.6.
+  - The weight rounds (27 us over 8) keep pace with the walk.
+- **aspp1/2 (77 us): compute-bound.**
+  - untilize 9.5, tilize 16 (paced by the 15.7 us gather), walk 44.8 (92% of the 41 us LoFi floor), combine 2.
+  - Lever: start the gather/tilize before all three bands are untilized, or overlap them with the first slices.
+- **sem_res2 (121.8 us):**
+  - walk 103 us, including tilize 16.6; the matmul runs at ~20 cycles/tile-MAC against 16. Untilize 10.3, bias 3.
+  - Lever: matmul efficiency at 1x4 subblocks.
+- **res4.0 (29.2 us):**
+  - tilize 12.1, paced by the split gather (reader 12.7 / writer 10.2 us); walk 9.1; untilize 2.6; combine 3.3.
+  - Lever: the gather's per-unit overhead and the all-band wait.
+
+### Helper bypasses
+
+| helper | kind | what was missing / hard | helper ns | raw ns | site |
+|---|---|---|---|---|---|
+| `compute_kernel_lib::untilize<1, ...>` | capability | At block width 1 BH cannot take `fast_untilize` (it needs >= 2 tiles), so the helper runs one `pack_untilize_block<1,1>` per tile-row: one DEST section and one CB sync per row, and the untilize MOP closes every 32-datum row and reprograms its L1 address. There is no multi-row-per-section or contiguous-stream mode for 1-wide rows. Two traps: `pack_untilize_block` with `block_rt_dim > 1` re-reads the same input tile; and a pack that leaves PAC ch0 Y non-zero silently corrupts the next BH tilize (PCC 0.9999, only a bit-exact check sees it). | 44400 (untilize zone 9.5 us; 157 ns/tile isolated) | 42297 (3.0 us; 43.5 ns/tile) | conv2d_3x3_compute.cpp:268, conv2d_3x3_narrow_untilize.hpp:114 |
+| `dataflow_kernel_lib` `ReceiverPipe::receive` (mcast) | capability | It blocks on the data-ready semaphore, with no poll / try-receive / idle-callback form, so a writer cannot serve other work (the split fill's hand-overs) while a round is in flight. The bypass re-implements the fixed-sender receive from `detail::positional_mcast_semaphore` / `mcast_wire` internals, which couples the op to the helper's private wire layout. | 138553 (split fill, blocking receive) | 129791 (polled) | conv2d_3x3_writer.cpp:314 |
+| `local_copy` trid barrier (`async_read_barrier_with_trid`) | capability | There is no non-blocking "is this transaction id flushed" query, so the bias prefetch cannot serve hand-overs while its DRAM reads land. Raw `ncrisc_noc_read_with_transaction_id_flushed`. | res3_conv2 +3.8% vs base (blocking bias read) | flat vs base (polled) | conv2d_3x3_writer.cpp:356 |
+| no helper covers this (CB / dataflow_buffer family) | capability | Same gap as the Perf 1 split row gather: one RISC cannot reserve CB slots on behalf of another, so the writer fills the `cb_input_tiles` slot the reader reserved, index-addressed (`base + (g % depth) * batch`), with a `fill_go` / `fill_done` handshake. | n/a (no helper) | sem_res2 121.9 vs 128.3 | conv2d_3x3_writer.cpp:243 (`fill_one`) |
+
+Helper feedback that was measured but not taken (not a bypass):
+- **`compute_kernel_lib::matmul_block`** waits for and pops one contiguous bk x bn weight block per K-block. It cannot consume a weight CB that holds fewer than two whole K-blocks (no per-N-chunk wait/pop), and that blocked the bm 10 option on sem_res2 (`perf_experiments/coarse_kblock_l1/`).
+- **`dataflow_kernel_lib::set_read_state` / `read_with_state`** take the size as a template argument, so the row gather instantiates two sizes (full and kernel-row tail). This is an ergonomic note; there is no bypass.
