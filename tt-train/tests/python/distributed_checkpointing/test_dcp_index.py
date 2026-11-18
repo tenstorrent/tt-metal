@@ -133,6 +133,23 @@ def test_index_round_trips_through_json_with_columnar_chunks():
     assert decoded.scalars == index.scalars and type(decoded.scalars["optimizer/amsgrad"]) is bool
     assert decoded.live_key_map()["model/Llama/tok_emb/weight"] == "model/Llama/fc/weight"
     assert all(entry["tp_split"] == [1, 1, 2, 1] for entry in encoded["state"].values()), "every entry records it"
+    # The three entries share one label: the index holds it once and the entries point at it.
+    assert len(encoded["labels"]) == 1 and all(entry["label"] == 0 for entry in encoded["state"].values())
+    assert len({id(entry.label) for entry in decoded.entries.values()}) == 1, "decoded once, shared"
+
+
+def test_entries_point_at_the_label_table_by_position(expect_error):
+    index = _index()
+    other = Label((Placement.shard(2),), (4,), tuple(dist_coords((2, 2))))
+    index.entries["optimizer/exp_avg/model/Llama/fc/weight"].label = other
+    encoded = json.loads(json.dumps(index.to_json()))
+    assert encoded["labels"] == [index.entries["model/Llama/fc/weight"].label.to_json(), other.to_json()]
+    assert [entry["label"] for entry in encoded["state"].values()] == [0, 1, 0], "in order of first use"
+    assert Index.from_json(encoded).entries == index.entries
+    for bad in (2, -1, "0", None):
+        encoded["state"]["model/Llama/fc/weight"]["label"] = bad
+        with expect_error(CheckpointError, f"'model/Llama/fc/weight': label {bad!r} is not a position in the index's"):
+            Index.from_json(encoded)
 
 
 def test_the_index_is_written_compact_and_a_paused_gc_stays_paused(tmp_path):
@@ -199,7 +216,10 @@ def test_a_bad_index_names_its_file(tmp_path, expect_error):
         return ckpt
 
     def placement(value):
-        return lambda encoded: encoded["state"]["model/Llama/fc/weight"]["label"]["placements"].__setitem__(1, value)
+        def change(encoded):
+            encoded["labels"][encoded["state"]["model/Llama/fc/weight"]["label"]]["placements"][1] = value
+
+        return change
 
     newer = written(lambda encoded: encoded.update(version=2))
     with expect_error(VersionError, f"{newer}/index.json: index version 2 is newer"):

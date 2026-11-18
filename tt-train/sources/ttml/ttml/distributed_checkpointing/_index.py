@@ -11,7 +11,8 @@ after ``index.json`` is fsynced, so a crashed attempt can never look complete an
 ``index.json`` is written by the coordinator only. It records, per canonical key, the global and canonical shapes,
 the transform, the topology label the writer trusted, every live name the tensor was seen under, and a columnar
 table of chunks: one row per unique shard, with its box in the global array, the file that holds it, its byte range
-and its CRC.
+and its CRC. A model's keys share a handful of labels, each listing every device's mesh coordinate, so the index
+holds each distinct label once, in a ``labels`` table, and an entry's ``label`` is its position there.
 
 Readers refuse a newer ``VERSION`` and ignore fields they do not know. A new field that a reader may ignore needs no
 bump. A field readers require, or one that changes how the rest is read (a reader ignoring it would load the wrong
@@ -109,6 +110,11 @@ class Index:
         return mapping
 
     def to_json(self) -> dict:
+        label_ids: dict[Label, int] = {}
+        state = {
+            key: _entry_to_json(entry, label_ids.setdefault(entry.label, len(label_ids)))
+            for key, entry in self.entries.items()
+        }
         return {
             "format": self.format,
             "version": self.version,
@@ -124,7 +130,8 @@ class Index:
                 }
                 for f in self.files
             ],
-            "state": {key: _entry_to_json(entry) for key, entry in self.entries.items()},
+            "labels": [label.to_json() for label in label_ids],
+            "state": state,
             "scalars": {key: _scalar_to_json(value) for key, value in self.scalars.items()},
         }
 
@@ -145,7 +152,8 @@ class Index:
             )
             for f in value["files"]
         ]
-        entries = {key: _entry_from_json(key, e) for key, e in value["state"].items()}
+        labels = [Label.from_json(label) for label in value["labels"]]
+        entries = {key: _entry_from_json(key, e, labels) for key, e in value["state"].items()}
         scalars = {key: _scalar_from_json(v) for key, v in value["scalars"].items()}
         return Index(
             checkpoint_id=str(value["checkpoint_id"]),
@@ -172,7 +180,7 @@ def _expand(values: list, n: int) -> list:
     return values * n if len(values) == 1 and n != 1 else values
 
 
-def _entry_to_json(entry: Entry) -> dict:
+def _entry_to_json(entry: Entry, label_id: int) -> dict:
     chunks = entry.chunks
     table = {
         "n": len(chunks),
@@ -190,7 +198,7 @@ def _entry_to_json(entry: Entry) -> dict:
         "global_shape": list(entry.global_shape),
         "canonical_shape": list(entry.canonical_shape),
         "transform": entry.transform.to_json(),
-        "label": entry.label.to_json(),
+        "label": label_id,
         "live_keys": list(entry.live_keys),
         "chunks": table,
     }
@@ -214,7 +222,7 @@ def _shape(key: str, what: str, value: Any, ndim: int | None = None) -> tuple[in
     return tuple(value)
 
 
-def _entry_from_json(key: str, value: dict) -> Entry:
+def _entry_from_json(key: str, value: dict, labels: Sequence[Label]) -> Entry:
     # Boxes are built unchecked (``Box``), so every shape and box an index holds is checked here.
     global_shape = _shape(key, "global_shape", value["global_shape"])
     ndim = len(global_shape)
@@ -250,6 +258,11 @@ def _entry_from_json(key: str, value: dict) -> Entry:
         or not all(isinstance(s, int) and s >= 1 for s in tp_split)
     ):
         raise CheckpointError(f"index entry {key!r}: malformed tp_split {tp_split!r}")
+    label_id = value["label"]
+    if type(label_id) is not int or not 0 <= label_id < len(labels):
+        raise CheckpointError(
+            f"index entry {key!r}: label {label_id!r} is not a position in the index's table of {len(labels)} labels"
+        )
     return Entry(
         key=key,
         role=str(value["role"]),
@@ -258,7 +271,7 @@ def _entry_from_json(key: str, value: dict) -> Entry:
         global_shape=global_shape,
         canonical_shape=_shape(key, "canonical_shape", value["canonical_shape"], ndim),
         transform=transform_from_json(value["transform"]),
-        label=Label.from_json(value["label"]),
+        label=labels[label_id],
         live_keys=tuple(value["live_keys"]),
         chunks=chunks,
         param_ref=value.get("param_ref"),
