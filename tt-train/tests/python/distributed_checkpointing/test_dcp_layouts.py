@@ -167,7 +167,8 @@ def test_declared_transform_refuses_layouts_it_cannot_describe(expect_error):
         declared_transform((1, 1, 64, 32), fsdp2_rows_tp4, fused=(2, (32, 16, 16)))
 
 
-def test_check_fused_segments_is_the_one_check_of_a_fused_declaration(expect_error):
+def test_check_fused_segments(expect_error):
+    """check_fused_segments is the one check of a fused declaration."""
     assert check_fused_segments([128, 64.0, 64], 256, 4) == (128, 64, 64), "sizes come back as ints"
     with expect_error(LayoutError, "sum to 254 but the fused dim has 256 rows"):
         check_fused_segments((128, 64, 62), 256, 2)

@@ -58,7 +58,8 @@ def test_short_and_truncated_files_are_refused(tmp_path, expect_error):
         os.close(fd)
 
 
-def test_file_written_at_fixed_offsets_opens_with_the_safetensors_package(tmp_path):
+def test_file_opens_with_safetensors(tmp_path):
+    """A file written at fixed offsets, out of order, opens with the safetensors package."""
     pytest.importorskip("safetensors")
     from safetensors import safe_open
 

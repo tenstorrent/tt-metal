@@ -153,7 +153,9 @@ def test_entries_point_at_the_label_table_by_position(expect_error):
             Index.from_json(encoded)
 
 
-def test_the_index_is_written_compact_and_a_paused_gc_stays_paused(tmp_path):
+def test_index_is_written_compact(tmp_path):
+    """index.json is compact JSON, and writing or reading it pauses the GC only while it runs: a GC the caller
+    paused stays paused."""
     directory = str(tmp_path)
     write_index(directory, _index())
     text = (tmp_path / "index.json").read_text()
@@ -273,7 +275,9 @@ def test_find_latest_orders_by_parsed_step_and_skips_partials(tmp_path):
     assert not is_complete(str(tmp_path / "step_0000040"))
 
 
-def test_find_latest_warns_about_the_leftovers_of_its_prefix_and_removes_none(tmp_path):
+def test_find_latest_warns_about_leftovers(tmp_path):
+    """find_latest warns about the .partial- and .replaced- directories of its prefix, naming each, and removes
+    none of them."""
     names = ["step_0000005", "step_0000010.partial-7", "step_0000005.replaced-3", "other_step_0000020.partial-1"]
     for name in names:
         (tmp_path / name).mkdir()
@@ -333,7 +337,8 @@ def test_a_header_save_would_not_write_is_refused(tmp_path, expect_error):
             read_user_header(ckpt)
 
 
-def test_a_staging_directory_is_named_by_its_nonce_and_only_a_shared_one_may_exist(tmp_path, expect_error):
+def test_staging_directory_naming(tmp_path, expect_error):
+    """A staging directory is named by its nonce, and only a shared one (a multi-rank save's) may already exist."""
     final = str(tmp_path / "step_0000010")
     staging = begin_staging(final, nonce=42, shared=False)
     assert staging == staging_dir(final, 42) == final + ".partial-42" and os.path.isdir(os.path.join(staging, "data"))
@@ -391,7 +396,8 @@ def test_the_crc_column_is_validated(expect_error):
         Index.from_json(unchecked)  # every chunk has a checksum
 
 
-def test_an_unreadable_index_or_header_is_an_incomplete_checkpoint(tmp_path, expect_error):
+def test_unreadable_index_or_header_is_incomplete(tmp_path, expect_error):
+    """An index or header that is missing, truncated or malformed is an IncompleteCheckpointError."""
     final = str(tmp_path / "step_0000010")
     staging = begin_staging(final, nonce=2, shared=False)
     write_index(staging, _index())
@@ -438,9 +444,9 @@ def test_only_bool_int_float_and_str_scalars_are_stored(expect_error):
         index.to_json()
 
 
-def test_without_overwrite_a_checkpoint_committed_during_finalize_is_refused_not_replaced(
-    tmp_path, monkeypatch, expect_error
-):
+def test_finalize_keeps_a_checkpoint_committed_meanwhile(tmp_path, monkeypatch, expect_error):
+    """Without overwrite, a checkpoint another save commits while this one finalizes is kept, and this save is
+    refused rather than moving it aside."""
     final = str(tmp_path / "step_0000010")
     staging = begin_staging(final, nonce=9, shared=False)
     write_index(staging, _index())
@@ -492,9 +498,8 @@ def test_a_failed_overwrite_puts_the_previous_checkpoint_back(tmp_path, monkeypa
     assert os.path.isdir(staging2), "the new checkpoint is untouched for the caller to retry or delete"
 
 
-def test_a_failed_overwrite_that_cannot_roll_back_says_where_the_previous_checkpoint_is(
-    tmp_path, monkeypatch, expect_error
-):
+def test_failed_rollback_names_the_previous_checkpoint(tmp_path, monkeypatch, expect_error):
+    """An overwrite that fails and cannot roll back says where the previous checkpoint is."""
     final = str(tmp_path / "step_0000010")
     staging = begin_staging(final, nonce=5, shared=False)
     write_index(staging, _index())
@@ -518,7 +523,8 @@ def test_a_failed_overwrite_that_cannot_roll_back_says_where_the_previous_checkp
     assert [n for n in os.listdir(tmp_path) if ".replaced-" in n], "the previous checkpoint is still aside"
 
 
-def test_an_overwrite_warns_when_the_previous_checkpoint_cannot_be_removed(tmp_path, monkeypatch):
+def test_overwrite_warns_if_old_checkpoint_stays(tmp_path, monkeypatch):
+    """An overwrite warns when the previous checkpoint, moved aside, cannot be removed."""
     final = str(tmp_path / "step_0000010")
     staging = begin_staging(final, nonce=7, shared=False)
     write_index(staging, _index())
@@ -535,7 +541,8 @@ def test_an_overwrite_warns_when_the_previous_checkpoint_cannot_be_removed(tmp_p
     assert is_complete(final), "the new checkpoint is in place"
 
 
-def test_check_json_returns_plain_json_and_names_what_would_not_read_back(expect_error):
+def test_check_json(expect_error):
+    """check_json returns plain JSON types and names the first value that would not read back as written."""
     assert check_json("header", {"step": 3, "lr": 1e-3, "shape": (1, 2), "tags": ["a"], "none": None}) == {
         "step": 3,
         "lr": 1e-3,

@@ -124,7 +124,9 @@ def test_fused_qkv_reorders_segments_across_tp_sizes(src_label, src_tp, dst_labe
         assert plan.fast_path_keys == ["w"]
 
 
-def test_fused_qkv_device_order_differs_per_tp_so_a_naive_load_would_be_wrong():
+def test_fused_qkv_order_depends_on_tp():
+    """A fused QKV weight's device row order differs per TP size, so loading it without its declaration would
+    interleave Q, K and V."""
     canonical = arange((1, 1, 256, 4))
     tp8_rows = per_shard_fused(canonical, QKV, 8, dim=2)
     assert not np.array_equal(tp8_rows, canonical), "the test would prove nothing if the layouts agreed"
@@ -155,7 +157,9 @@ def test_destination_boxes_follow_the_label_literally():
     }
 
 
-def test_padded_vocab_across_tp_sizes_fills_new_padding_and_keeps_old_padding_on_the_same_layout():
+def test_padded_vocab_across_tp_sizes():
+    """A padded vocab weight loaded at another TP size gets its new padding rows filled; on the same layout its
+    padding rows are copied."""
     # vocab 130 pads to 192 at tp=2 and to 160 at tp=1; saved padding rows hold -1 so a copy is distinguishable
     # from a fill.
     src_label, dst_label = world([R(), S(2)], (1, 2)), world([R()], (1,))
@@ -210,7 +214,8 @@ def test_shards_that_hold_only_padding_are_filled_without_reads():
     assert (shards[(2,)][:, :, 4:, :] == 0).all(), "shard 2's padding rows 68 to 95 are filled, not copied"
 
 
-def test_collapsed_source_label_loads_onto_an_nd_destination_and_back():
+def test_collapsed_label_to_nd_and_back():
+    """A checkpoint saved under a collapsed label loads onto an N-D destination, and back."""
     _, shards, expected = _round_trip(
         COLLAPSED_TP8_ON_2X4, Identity(), world([R(), S(2)], (2, 4)), Identity(), (1, 1, 256, 64)
     )
@@ -221,7 +226,8 @@ def test_collapsed_source_label_loads_onto_an_nd_destination_and_back():
     assert_shards_equal(shards, expected)
 
 
-def test_fsdp4_tp8_to_tp8_places_four_chunks_side_by_side_and_back():
+def test_fsdp4_tp8_to_tp8_and_back():
+    """FSDP4 x TP8 to TP8 places four saved chunks side by side in each shard, and back."""
     _, shards, expected = _round_trip(FSDP4_TP8, Identity(), TP8, Identity(), (1, 1, 128, 256))
     assert_shards_equal(shards, expected)
     _, shards, expected = _round_trip(TP8, Identity(), FSDP4_TP8, Identity(), (1, 1, 128, 256))
@@ -250,7 +256,8 @@ def test_same_world_reads_every_shard_whole(monkeypatch):
     assert part.keys["w"].fast_path and sorted(r.group for r in part.keys["w"].reads) == [(0,), (1,), (2,), (3,)]
 
 
-def test_save_plan_spreads_owners_over_every_file_and_fixes_offsets():
+def test_save_plan_spreads_owners_and_offsets():
+    """The save plan spreads the owners of replicated chunks over every device file and fixes their offsets."""
     infos = [
         TensorInfo(
             f"model/blocks/{i}/w",
@@ -279,7 +286,7 @@ def test_save_plan_spreads_owners_over_every_file_and_fixes_offsets():
     assert {plan.files[c.file].coord[1] for c in entries["model/blocks/3/w"].chunks} == set(range(8))
 
 
-def test_a_save_plan_writes_only_the_chunks_owner_of_gives_this_process():
+def test_save_plan_writes_only_owned_chunks():
     """Where another process writes a replica group, owner_of returns None for it: the group gets no write here, a key
     this process writes nothing of gets no entry in its part of the index, and only the coordinates that write get a
     file."""
@@ -343,7 +350,7 @@ def test_mismatches_are_refused_before_any_read(expect_error):
     assert plan.missing == [] and plan.unexpected == ["extra"]
 
 
-def test_a_rank_plans_only_the_shards_of_the_coordinates_it_holds():
+def test_rank_plans_only_its_coordinates():
     """With local_coords (a multi-rank load) only the replica groups with a coordinate this rank holds are planned;
     the ranks' parts together are the plan of one process."""
     canonical = arange((1, 1, 64, 32))
@@ -385,7 +392,8 @@ class _DroppingIdentity(Identity):
         return [(half, half)]
 
 
-def test_a_destination_shard_the_reads_leave_short_is_a_coverage_error(expect_error):
+def test_short_destination_shard_is_refused(expect_error):
+    """A destination shard the planned reads leave short is a CoverageError."""
     ckpt = FakeCheckpoint()
     ckpt.save({"w": (arange((1, 1, 64, 32)), SINGLE, Identity())})
     with expect_error(CoverageError, r"w: the saved chunks do not tile destination shard .*1024 of 2048 elements"):
@@ -456,7 +464,8 @@ def test_live_keys_resolve_tied_names():
     np.testing.assert_array_equal(shards["model/Llama/tok_emb/weight"][()], canonical)
 
 
-def test_a_label_sharding_a_dim_the_tensor_lacks_is_refused_at_save(expect_error):
+def test_save_refuses_shard_dim_out_of_range(expect_error):
+    """A label that shards a dim the tensor does not have is refused at save."""
     # A shard dim outside the tensor's rank gives every replica group the same box: without the check the save
     # writes duplicate chunks and every later load fails on coverage.
     for dim in (-1, 4):
@@ -476,7 +485,8 @@ def test_a_label_sharding_a_dim_the_tensor_lacks_is_refused_at_save(expect_error
             create_save_plan([info], lambda c: data_file_name(0, 0, c), one_process_owner)
 
 
-def test_saved_chunks_that_overlap_or_leave_a_gap_are_refused_at_load(expect_error):
+def test_load_refuses_chunks_that_do_not_tile(expect_error):
+    """Saved chunks that overlap or leave a gap are refused at load."""
     canonical = arange((1, 1, 64, 32))
     ckpt = FakeCheckpoint()
     ckpt.save({"w": (canonical, TP8_DP4, Identity())})
@@ -487,7 +497,8 @@ def test_saved_chunks_that_overlap_or_leave_a_gap_are_refused_at_load(expect_err
             ckpt.load({"w": (dest, Identity(), canonical.shape)})
 
 
-def test_a_live_tensor_matching_an_entry_of_another_role_is_refused(expect_error):
+def test_load_refuses_an_entry_of_another_role(expect_error):
+    """A live tensor that resolves to an entry of another role is refused."""
     canonical = arange((1, 1, 64, 32))
     ckpt = FakeCheckpoint()
     ckpt.save({"w": (canonical, SINGLE, Identity())})

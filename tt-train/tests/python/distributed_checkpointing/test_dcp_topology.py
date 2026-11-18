@@ -107,12 +107,14 @@ def _pairwise_tile(boxes, target) -> bool:
     return all(a.intersect(b) is None for i, a in enumerate(boxes) for b in boxes[i + 1 :])
 
 
-def test_boxes_of_different_ranks_name_both_ranks_when_intersected(expect_error):
+def test_intersect_names_both_ranks(expect_error):
+    """Intersecting boxes of different ranks is an error that names both ranks."""
     with expect_error(ValueError, "cannot intersect a 2-d box with a 3-d box"):
         Box((0, 0), (2, 2)).intersect(Box((0, 0, 0), (2, 2, 2)))
 
 
-def test_a_box_of_another_rank_is_not_contained_and_does_not_tile():
+def test_box_of_another_rank_neither_fits_nor_tiles():
+    """A box of another rank is not contained in a target and does not tile it."""
     # Neither check may pass a box of another rank on the dims the two boxes share.
     target = Box((0, 0), (2, 2))
     assert not target.contains(Box((0, 0, 99), (2, 2, 1)))
@@ -120,7 +122,8 @@ def test_a_box_of_another_rank_is_not_contained_and_does_not_tile():
     assert not boxes_tile([Box((0, 0, 99), (2, 2, 1))], target)
 
 
-def test_boxes_tile_grid_fast_path_agrees_with_the_pairwise_definition():
+def test_boxes_tile_agrees_with_pairwise_definition():
+    """boxes_tile's grid fast path agrees with the pairwise definition."""
     # Equal sizes off the grid: distinct offsets, the volume adding up, and yet an overlap and a gap. Only the
     # alignment check in grid_cell_size keeps them off the fast path, and the random cases below never make such boxes.
     off_grid = [Box((0,), (2,)), Box((1,), (2,))]
@@ -162,7 +165,7 @@ def test_boxes_tile_grid_fast_path_agrees_with_the_pairwise_definition():
     assert pairwise_cases > 200, "the pairwise path was exercised"
 
 
-def test_every_label_with_dims_in_range_tiles_and_its_replicas_share_a_box():
+def test_labels_tile_and_replicas_share_a_box():
     """The save planner checks only that a label's shard dims are in range and relies on the rest, so it is checked
     here over random labels: one box per replica group, the boxes tiling the global shape (by the pairwise
     definition), and every replica of a group holding the same box."""
@@ -190,7 +193,8 @@ def test_tp_split_counts_every_mesh_axis_but_fsdps():
     assert tp_split(world([R(), R()], (4, 8)), None, 4) == (1, 1, 1, 1)
 
 
-def test_crc31_is_crc32_without_its_top_bit_and_one_process_picks_as_bare_coordinates():
+def test_crc31_and_one_process_owner():
+    """crc31 is CRC32 without its top bit, and on one process owner picks what bare coordinates pick."""
     for text in ("", "model/x", "optimizer/exp_avg/model/blocks/0/weight"):
         assert crc31(text) == zlib.crc32(text.encode("utf-8")) & 0x7FFFFFFF < 2**31
     coords = [(1, 0), (0, 1), (0, 0), (1, 1)]
