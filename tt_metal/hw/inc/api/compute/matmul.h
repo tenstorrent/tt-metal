@@ -154,7 +154,9 @@ constexpr std::uint32_t llk_matmul_unpack_ttsync() {
     // LoFi class rule: the ttsync unpack gains on one-tile blocks (the poll binds) and loses where a call unpacks two
     // or more tiles of a row (its config writes then sit on the busy unpack thread); a block the front end cannot see
     // keeps the poll. A cell pick (3) stands
-    if constexpr (MATH_FIDELITY == MathFidelity::LoFi && unpack_auto_ttsync == 1 && !(block_rt == 1 && block_ct == 1)) {
+    if constexpr (
+        MATH_FIDELITY == MathFidelity::LoFi && unpack_auto_ttsync == 1 && !(block_rt == 1 && block_ct == 1) &&
+        !llk_unpack_AB_matmul_named_1x1_long_k()) {
         return 0;
     }
     if constexpr (
@@ -670,10 +672,7 @@ ALWI void matmul_block_llk(
     const std::uint32_t rt_dim,
     const std::uint32_t kt_dim,
     const std::uint32_t held_a = matmul_held_a_init) {
-    // a constant 1x1 call, or a kernel whose every init and call is a constant one-tile block (marks 13 without 14)
-    using K = std::integral_constant<std::uint32_t, block_rt + kt_key>;
-    constexpr bool one_tile_key = (block_rt == 1 && block_ct == 1) ||
-                                  (matmul_fe_mark::is_used_d<13, K>(0) && !matmul_fe_mark::is_used_d<14, K>(0));
+    constexpr bool one_tile_key = block_rt == 1 && block_ct == 1;
     UNPACK(
         (llk_unpack_AB_matmul < unpack_ttsync,
          kt_key,

@@ -16,8 +16,12 @@
 
 // matmul_kernel_ttsync of the kernel's JIT inputs
 constexpr bool llk_unpack_AB_matmul_kernel_ttsync() {
-    // a kernel bound by the kernel config buffer keeps the polling unpack at LoFi (the ttsync unpack is larger)
-    return matmul_kernel_ttsync(MATH_FIDELITY, DST_SYNC_MODE == DstSync::SyncFull, DST_ACCUM_MODE, unpack_src_format) &&
+    // a kernel bound by the kernel config buffer keeps the polling unpack at LoFi (the ttsync unpack is larger); a LoFi
+    // half-sync kernel of long-K one-tile calls takes it (its poll binds the call)
+    return (matmul_kernel_ttsync(
+                MATH_FIDELITY, DST_SYNC_MODE == DstSync::SyncFull, DST_ACCUM_MODE, unpack_src_format) ||
+            (MATH_FIDELITY == MathFidelity::LoFi && DST_SYNC_MODE == DstSync::SyncHalf &&
+             llk_unpack_AB_matmul_named_1x1_long_k())) &&
            !(MATH_FIDELITY == MathFidelity::LoFi && LLK_SIZE_MODE);
 }
 
@@ -101,7 +105,7 @@ inline void llk_unpack_AB_matmul_impl(
         kt_per_section == 0 ? 8u : get_dest_max_tiles<DST_SYNC_MODE, DST_ACCUM_MODE, DstTileShape::Tile32x32>(),
         stream_z,
         reuse_dir,
-        one_tile_key || llk_unpack_AB_matmul_named_1x1()>(
+        one_tile_key || llk_unpack_AB_matmul_named_1x1_long_k()>(
         base_address_a,
         base_address_b,
         tile_index_a,
