@@ -522,17 +522,33 @@ TEST(VclusterDescriptors, G2PortsNotDense) {
         Refusals{2});
 }
 
-// G3: fewer programmable DRAM views than devices: a package with two of its four views not programmable.
+// The package descriptor with its dram_views replaced by `views`, written to `path`.
+void write_package_with_views(const fs::path& path, const YAML::Node& views) {
+    YAML::Node package = YAML::LoadFile(package_soc_desc().string());
+    package["dram_views"] = views;
+    YAML::Emitter out;
+    out << package;
+    write_text(path, out.c_str());
+}
+
+// G3: fewer DRAM views than devices: a package with the first two of its four views, both programmable.
 TEST(VclusterDescriptors, G3TooFewDramViews) {
     const TempDir dir("g3");
-    std::string package = read_text(package_soc_desc());
-    for (int i = 0; i < 2; ++i) {
-        const size_t at = package.find("programmable: true");
-        ASSERT_NE(at, std::string::npos);
-        package.replace(at, std::string_view("programmable: true").size(), "programmable: false");
-    }
-    write_text(dir.path() / "package.yaml", package);
+    const YAML::Node views = YAML::LoadFile(package_soc_desc().string())["dram_views"];
+    YAML::Node two(YAML::NodeType::Sequence);
+    two.push_back(YAML::Clone(views[0]));
+    two.push_back(YAML::Clone(views[1]));
+    write_package_with_views(dir.path() / "package.yaml", two);
     EXPECT_EQ(refusals(checked(kLine, dir.path() / "package.yaml"), dir.path() / "package.yaml"), Refusals{3});
+}
+
+// G6: a DRAM view of the package is not programmable: the last of its four, so there are still enough views (no G3).
+TEST(VclusterDescriptors, G6ViewNotProgrammable) {
+    const TempDir dir("g6");
+    YAML::Node views = YAML::Clone(YAML::LoadFile(package_soc_desc().string())["dram_views"]);
+    views[views.size() - 1]["programmable"] = false;
+    write_package_with_views(dir.path() / "package.yaml", views);
+    EXPECT_EQ(refusals(checked(kLine, dir.path() / "package.yaml"), dir.path() / "package.yaml"), Refusals{6});
 }
 
 // G4: a router slot's core is not an Ethernet core of the package: a package whose eth list leaves out 4-3, which
