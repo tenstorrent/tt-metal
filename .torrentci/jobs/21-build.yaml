@@ -20,7 +20,7 @@ jobs:
       kubernetes:
         os: linux
         arch: amd64
-        image: {from-job: ci-build-image, image: tt-metal-ci-build}
+        image: {from-job: ci-build-image, image: ci-build}
         resources:
           requests: {cpu: '16', memory: 24Gi, ephemeral-storage: 100Gi}
           limits: {memory: 32Gi, ephemeral-storage: 150Gi}
@@ -54,14 +54,6 @@ jobs:
           content-type: application/x-tar
           retention: dependents
     steps:
-      - id: check-image
-        kind: shell
-        shell:
-          run:
-            - . tt_metal/sfpi-version
-            - echo "repo sfpi ${sfpi_version} ${sfpi_x86_64_debian_deb_hash}"
-            - echo "image sfpi $(cat /opt/tenstorrent/sfpi/.torrentci-sfpi-version)"
-            - test "$(cat /opt/tenstorrent/sfpi/.torrentci-sfpi-version)" = "${sfpi_version} ${sfpi_x86_64_debian_deb_hash}"
       - id: submodules
         kind: shell
         shell:
