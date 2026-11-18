@@ -46,15 +46,39 @@ inline void calculate_binary_max_min(const uint dst_index_in0, const uint dst_in
     constexpr int b = p_sfpu::LREG2;
     constexpr int c = p_sfpu::LREG3;
 
-    // Fully unrolled: with a partial unroll the per-row instruction words (they depend on
-    // i & 1) are rebuilt with RISC ALU ops in the remaining loop, which makes a 32-row
-    // (whole-tile) call issue-bound at ~2 RISC slots per SFPU instruction.
+    if (dst_index_out == dst_index_in0) {
+        // In place: a scheduled store writes to the address of the SFPLOADMACRO that scheduled
+        // it, so [a] can store its own result and a row takes 2 cycles instead of 3.
+        //
+        // t | Load | Simple              | Store  |
+        // - | ---- | ------------------- | ------ |
+        // 0 | [a]  |                     |        |
+        // 1 |  b   |                     |        |
+        // 0 | ...  | swap_minmax([a], b) |        |
+        // 1 | ...  |                     |        |
+        // 0 | ...  |                     | [a]    |
+        //
+        // b alternates between LREG2 and LREG3 (the next row's load lands on the swap's second
+        // cycle) and a rotates over three registers (the row two ahead loads on the store's cycle).
+        constexpr int a_regs[3] = {p_sfpu::LREG0, p_sfpu::LREG1, p_sfpu::LREG4};
 #pragma GCC unroll 32
-    for (int i = 0; i < ITERATIONS; ++i) {
-        int a = i & 1;  // alternate between p_sfpu::LREG0 and p_sfpu::LREG1
-        TT_SFPLOADMACRO((0 << 2) | (a & 3), InstrModLoadStore::DEFAULT, ADDR_MOD_3, offset0 | (a >> 2));
-        TT_SFPLOAD(b, InstrModLoadStore::DEFAULT, ADDR_MOD_3, offset1);
-        TT_SFPLOADMACRO((1 << 2) | (c & 3), InstrModLoadStore::DEFAULT, ADDR_MOD_2, offset2 | (c >> 2));
+        for (int i = 0; i < ITERATIONS; ++i) {
+            const int a = a_regs[i % 3];
+            const int k = i & 1;
+            TT_SFPLOADMACRO(((2 + k) << 2) | (a & 3), InstrModLoadStore::DEFAULT, ADDR_MOD_3, offset0 | (a >> 2));
+            TT_SFPLOAD(b + k, InstrModLoadStore::DEFAULT, ADDR_MOD_2, offset1);
+        }
+    } else {
+        // Fully unrolled: with a partial unroll the per-row instruction words (they depend on
+        // i & 1) are rebuilt with RISC ALU ops in the remaining loop, which makes a 32-row
+        // (whole-tile) call issue-bound at ~2 RISC slots per SFPU instruction.
+#pragma GCC unroll 32
+        for (int i = 0; i < ITERATIONS; ++i) {
+            int a = i & 1;  // alternate between p_sfpu::LREG0 and p_sfpu::LREG1
+            TT_SFPLOADMACRO((0 << 2) | (a & 3), InstrModLoadStore::DEFAULT, ADDR_MOD_3, offset0 | (a >> 2));
+            TT_SFPLOAD(b, InstrModLoadStore::DEFAULT, ADDR_MOD_3, offset1);
+            TT_SFPLOADMACRO((1 << 2) | (c & 3), InstrModLoadStore::DEFAULT, ADDR_MOD_2, offset2 | (c >> 2));
+        }
     }
 
     TTI_SFPNOP;
@@ -181,12 +205,39 @@ inline void binary_max_min_init() {
         TTI_SFPCONFIG(0, 4 + 1, 0);
     }
 
+    // InstructionTemplate[2]: as [0] with b in LREG3
+    TTI_SFPSWAP(0, p_sfpu::LREG3, 14, IS_MAX_OP ? 9 : sfpi::SFPSWAP_MOD1_VEC_MIN_MAX);
+
+    // Macro 2 (in place, b in LREG2): swap, then store [a] to its own row
+    {
+        constexpr uint simple_bits = 0x80 | 0x00 | (1 << 3) | 4;
+        constexpr uint mad_bits = 0;
+        constexpr uint round_bits = 0;
+        constexpr uint store_bits = 0x00 | 0x00 | (3 << 3) | 3;
+
+        TTI_SFPLOADI(0, sfpi::SFPLOADI_MOD0_LOWER, (mad_bits << 8) | simple_bits);
+        TTI_SFPLOADI(0, sfpi::SFPLOADI_MOD0_UPPER, (store_bits << 8) | round_bits);
+        TTI_SFPCONFIG(0, 4 + 2, 0);
+    }
+
+    // Macro 3 (in place, b in LREG3): as macro 2 with InstructionTemplate[2]
+    {
+        constexpr uint simple_bits = 0x80 | 0x00 | (1 << 3) | 6;
+        constexpr uint mad_bits = 0;
+        constexpr uint round_bits = 0;
+        constexpr uint store_bits = 0x00 | 0x00 | (3 << 3) | 3;
+
+        TTI_SFPLOADI(0, sfpi::SFPLOADI_MOD0_LOWER, (mad_bits << 8) | simple_bits);
+        TTI_SFPLOADI(0, sfpi::SFPLOADI_MOD0_UPPER, (store_bits << 8) | round_bits);
+        TTI_SFPCONFIG(0, 4 + 3, 0);
+    }
+
     // Misc: {
     //   StoreMod0: DEFAULT,
-    //   UsesLoadMod0ForStore: {1,1},
+    //   UsesLoadMod0ForStore: {1,1,1,1},
     //   UnitDelayKind: {1,1}, (WaitForElapsedInstructions=1)
     // }
-    TTI_SFPCONFIG(0x330, 8, 1);
+    TTI_SFPCONFIG(0x3f0, 8, 1);
 #endif
 }
 
