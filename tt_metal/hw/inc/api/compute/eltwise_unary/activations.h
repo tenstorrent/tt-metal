@@ -102,7 +102,7 @@ ALWI void celu_tile(uint32_t idst, uint32_t alpha, uint32_t alpha_recip) {
                 DST_SYNC_MODE,
                 is_fp32_dest_acc_en,
                 calculate_celu,
-                (APPROX, is_fp32_dest_acc_en, 32),
+                (APPROX, is_fp32_dest_acc_en, 32 /*ITERATIONS*/),
                 idst,
                 VectorMode::None,
                 alpha,

@@ -90,11 +90,10 @@ def test_celu_bf16_nonfinite_inputs(device):
 
 
 def test_celu_bf16_exhaustive_inputs(device):
-    """All 65,536 BF16 inputs: torch's result as stored, within STEPS BF16 steps, or STOCK's word per board.
+    """All 65,536 BF16 inputs: torch's result as stored, within STEPS BF16 steps, or STOCK's word.
 
     SKIP lists inputs the LLK sweep judges instead.
     """
-    board = "blackhole" if ttnn.device.is_blackhole(device) else "wormhole_b0"
     STOCK = {0xBF80: [(0xFF81, 0xFFFF)]}
     STEPS = 0
     SKIP = [(0x0002, 0x007F), (0x8002, 0x807F)]
