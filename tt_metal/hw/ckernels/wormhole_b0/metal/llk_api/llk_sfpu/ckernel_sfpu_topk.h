@@ -1014,46 +1014,56 @@ inline void _bitonic_topk_phases_steps(
         TOPK_SFPENCC_ALL_LANES_ON();
     }
 
+    // Fused keys: phases 0..4 run in the 32-datum register window (topk_fused_ph0_to_4_pair), then
+    // phase 5 (if requested) runs as a single-phase pass. That pass replays the load16/store16
+    // windows, so they are recorded (without executing) first.
+    if constexpr (FUSED) {
+        if (i_start_phase == 0 && i_end_phase >= 4) {
+            if (topk_replay_init >= 0) {
+                lltt::record<lltt::NoExec>(0, ldst_count);
+                bitonic_topk_load16<is_fp32_dest_acc_en, FUSED, RANK_STAMPED>(4, 8);
+                lltt::record<lltt::NoExec>(8, ldst_count);
+                bitonic_topk_store16<is_fp32_dest_acc_en, true, FUSED, RANK_STAMPED>(4, 8);
+            }
+            const bool argmin = (static_cast<bool>(idir) == static_cast<bool>(SortDir::ArgMin));
+            std::uint32_t dst_addr_offset = 0;
+            for (int face = 0; face < 2; face++) {
+                for (int col = 0; col < 2; col++) {
+                    TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
+                    topk_fused_ph0_to_4_pair(argmin, argmin);
+                    topk_fused_ph0_to_4_pair(argmin, !argmin);
+                    dst_addr_offset += 2;
+                    set_dst_write_addr(dst_addr_offset);
+                }
+                dst_addr_offset = 16;
+                set_dst_write_addr(dst_addr_offset);
+            }
+            if (i_end_phase > 4) {
+                set_dst_write_addr(0);
+                _bitonic_topk_phases_steps<
+                    APPROXIMATION_MODE,
+                    is_fp32_dest_acc_en,
+                    STABLE_SORT,
+                    FUSED,
+                    RANK_STAMPED,
+                    TIE_ORDER>(idir, 5, 5, 4, 6);
+            } else {
+                topk_replay_init = -1;
+            }
+            return;
+        }
+    }
+
     // init the replay buffer for local sort if uninitialized
     bool init_load = (topk_replay_init >= 0) ? true : false;
     bool init_store = (topk_replay_init >= 0) ? true : false;
     bool init_phase;
 
-    // Fused keys: phases 0..4 run in the 32-datum register window (topk_fused_ph0_to_4_pair) and
-    // the per-phase passes start at phase 5. The load16/store16 windows are still recorded
-    // (without executing) for the phase-5 steps-4..1 pass.
-    int ph_first = i_start_phase;
-    [[maybe_unused]] bool fused_window = false;
-    [[maybe_unused]] const bool argmin = (static_cast<bool>(idir) == static_cast<bool>(SortDir::ArgMin));
-    if constexpr (FUSED) {
-        if (i_start_phase == 0 && i_end_phase >= 4) {
-            fused_window = true;
-            if (init_load) {
-                lltt::record<lltt::NoExec>(0, ldst_count);
-                bitonic_topk_load16<is_fp32_dest_acc_en, FUSED, RANK_STAMPED>(4, 8);
-                init_load = false;
-            }
-            if (init_store) {
-                lltt::record<lltt::NoExec>(8, ldst_count);
-                bitonic_topk_store16<is_fp32_dest_acc_en, true, FUSED, RANK_STAMPED>(4, 8);
-                init_store = false;
-            }
-            ph_first = 5;
-        }
-    }
-
     std::uint32_t dst_addr_offset = 0;
     for (int face = 0; face < 2; face++) {
         for (int col = 0; col < 2; col++) {
             bool dir = idir;
-            if constexpr (FUSED) {
-                if (fused_window) {
-                    TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
-                    topk_fused_ph0_to_4_pair(argmin, argmin);
-                    topk_fused_ph0_to_4_pair(argmin, !argmin);
-                }
-            }
-            for (int ph = ph_first; ph < (i_end_phase + 1); ph++) {
+            for (int ph = i_start_phase; ph < (i_end_phase + 1); ph++) {
                 init_phase = true;  // init each new phase of local sort in replay buffer
 
                 TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
