@@ -12,6 +12,7 @@
 #include "ckernel_defs.h"
 #include "ckernel_sfpu_polyval.h"
 #include "ckernel_sfpu_sigmoid.h"
+#include "ckernel_sfpu_sigmoid_appx.h"  // lut_appx_store_row, lut_appx_init_addr_mod
 #include "sfpu/ckernel_sfpu_load_config.h"
 #include "ckernel_sfpu_recip.h"
 #include "ckernel_sfpu_expm1.h"
@@ -162,25 +163,26 @@ inline void calculate_tanh() {
         // and the rows pipeline: the next row's SFPLOAD and the previous row's SFPSTORE fill the
         // LUT's one-cycle shadow (3 slots per row, no SFPNOP). The steady-state body is recorded
         // once and replayed; the store walks dest through ADDR_MOD_2 -- physical slot 6 under the
-        // SFPU addr-mod base, programmed by tanh_init as dest += 2 -- so no TTI_INCRWC per row.
-        // Same instruction and mode bits as before; only the destination register and the
-        // schedule change.
+        // SFPU addr-mod base, programmed by tanh_init as dest += 2 -- so no TTI_INCRWC per row
+        // (one per row under MM_THROTTLE, see LUT_APPX_STORE_INCR). Same instruction and mode
+        // bits as before; only the destination register and the schedule change.
         static_assert(ITERATIONS >= 2, "calculate_tanh<true> pipelines at least two rows");
         constexpr unsigned LUT_MODE = sfpi::SFPLUTFP32_MOD0_FP16_6ENTRY_TABLE1 | sfpi::SFPLUTFP32_MOD0_SGN_RETAIN;
+        constexpr unsigned BODY_LEN = 2 + LUT_APPX_STORE_SLOTS;
 
         TTI_SFPLOAD(p_sfpu::LREG3, InstrModLoadStore::DEFAULT, ADDR_MOD_3, 0);
         TTI_SFPLUTFP32(p_sfpu::LREG7, LUT_MODE);
         // Body for row r: load row r+1, store row r (dest += 2), lut row r+1.
-        TTI_REPLAY(0, 3, 1, 1);
+        TTI_REPLAY(0, BODY_LEN, 1, 1);
         TTI_SFPLOAD(p_sfpu::LREG3, InstrModLoadStore::DEFAULT, ADDR_MOD_3, 2);
-        TTI_SFPSTORE(p_sfpu::LREG7, InstrModLoadStore::DEFAULT, ADDR_MOD_2, 0);
+        lut_appx_store_row<p_sfpu::LREG7>();
         TTI_SFPLUTFP32(p_sfpu::LREG7, LUT_MODE);
 #pragma GCC unroll 8
         for (int d = 2; d < ITERATIONS; d++) {
-            TTI_REPLAY(0, 3, 0, 0);
+            TTI_REPLAY(0, BODY_LEN, 0, 0);
         }
         TTI_SFPNOP;
-        TTI_SFPSTORE(p_sfpu::LREG7, InstrModLoadStore::DEFAULT, ADDR_MOD_2, 0);
+        lut_appx_store_row<p_sfpu::LREG7>();
     } else if constexpr (is_fp32_dest_acc_en) {  // APPROXIMATION_MODE is false
         for (int d = 0; d < ITERATIONS; d++) {
             sfpi::vFloat val = sfpi::dst_reg[0];
@@ -243,10 +245,7 @@ inline void tanh_init() {
         //
         // test_tanh_lut_consistency.py checks all four against the header, and holds the two
         // arch copies of this table together.
-        //
-        // calculate_tanh<true> stores through ADDR_MOD_2 (physical slot 6 under the SFPU addr-mod
-        // base): dest += 2 per row, the same programming typecast_init uses.
-        addr_mod_t{.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = 2}}.set(ADDR_MOD_6);
+        lut_appx_init_addr_mod();
 
         sfpi::l_reg[sfpi::LRegs::LReg0] = sfpi::vLut16ss(0.96191406f, 0.57617188f);
         sfpi::l_reg[sfpi::LRegs::LReg4] = sfpi::vLut16ii(0.0f, 0.192871094f);

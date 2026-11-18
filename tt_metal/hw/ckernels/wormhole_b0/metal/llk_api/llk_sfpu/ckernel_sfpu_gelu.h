@@ -17,6 +17,7 @@
 #include "ckernel_sfpu_erf.h"  // ERF_LUT, ERF_NUM_DEGREE, ERF_DEN_DEGREE (INP_FLOAT32 branch for FP32 path)
 #include "ckernel_sfpu_piecewise_rational.h"
 #include "ckernel_sfpu_tanh.h"  // _sfpu_tanh_fp32_accurate_ for gelu_tanh
+#include "ckernel_sfpu_sigmoid_appx.h"  // lut_appx_store_row, lut_appx_init_addr_mod
 #include "sfpi.h"
 
 namespace ckernel::sfpu {
@@ -207,9 +208,7 @@ template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en>
 void gelu_init() {
     math::reset_counters(p_setrwc::SET_ABD_F);
     if constexpr (APPROXIMATION_MODE) {
-        // calculate_gelu_appx stores through ADDR_MOD_2 (physical slot 6 under the SFPU addr-mod
-        // base): dest += 2 per row, the same programming typecast_init uses.
-        addr_mod_t{.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = 2}}.set(ADDR_MOD_6);
+        lut_appx_init_addr_mod();
 
         sfpi::vConstFloatPrgm0 = 0.5f;
 
@@ -246,30 +245,32 @@ void gelu_init() {
 // per row remains: LReg7 is the only free register next to the table, and the MAD needs both x
 // (LReg3) and lut(x) (LReg7) live. The steady-state body is recorded once and replayed; the store
 // walks dest through ADDR_MOD_2 -- physical slot 6 under the SFPU addr-mod base, programmed by
-// gelu_init as dest += 2 -- so no TTI_INCRWC per row. Same LUT mode bits and the same
-// x * LReg12 + lut MAD as before; only the destination register and the schedule change.
+// gelu_init as dest += 2 -- so no TTI_INCRWC per row (one per row under MM_THROTTLE, see
+// LUT_APPX_STORE_INCR). Same LUT mode bits and the same x * LReg12 + lut MAD as before; only the
+// destination register and the schedule change.
 template <int ITERATIONS>
 inline void calculate_gelu_appx() {
     static_assert(ITERATIONS >= 2, "calculate_gelu_appx pipelines at least two rows");
     constexpr unsigned LUT_MODE = sfpi::SFPLUTFP32_MOD0_FP16_6ENTRY_TABLE1 | sfpi::SFPLUTFP32_MOD0_SGN_UPDATE;
+    constexpr unsigned BODY_LEN = 4 + LUT_APPX_STORE_SLOTS;
 
     TTI_SFPLOAD(p_sfpu::LREG3, InstrModLoadStore::DEFAULT, ADDR_MOD_3, 0);
     TTI_SFPLUTFP32(p_sfpu::LREG7, LUT_MODE);
     TTI_SFPNOP;
     TTI_SFPMAD(p_sfpu::LREG3, p_sfpu::LREG12, p_sfpu::LREG7, p_sfpu::LREG7, 0);
     // Body for row r: load row r+1, store row r (dest += 2), lut row r+1, nop, mad row r+1.
-    TTI_REPLAY(0, 5, 1, 1);
+    TTI_REPLAY(0, BODY_LEN, 1, 1);
     TTI_SFPLOAD(p_sfpu::LREG3, InstrModLoadStore::DEFAULT, ADDR_MOD_3, 2);
-    TTI_SFPSTORE(p_sfpu::LREG7, InstrModLoadStore::DEFAULT, ADDR_MOD_2, 0);
+    lut_appx_store_row<p_sfpu::LREG7>();
     TTI_SFPLUTFP32(p_sfpu::LREG7, LUT_MODE);
     TTI_SFPNOP;
     TTI_SFPMAD(p_sfpu::LREG3, p_sfpu::LREG12, p_sfpu::LREG7, p_sfpu::LREG7, 0);
 #pragma GCC unroll 8
     for (int d = 2; d < ITERATIONS; d++) {
-        TTI_REPLAY(0, 5, 0, 0);
+        TTI_REPLAY(0, BODY_LEN, 0, 0);
     }
     TTI_SFPNOP;
-    TTI_SFPSTORE(p_sfpu::LREG7, InstrModLoadStore::DEFAULT, ADDR_MOD_2, 0);
+    lut_appx_store_row<p_sfpu::LREG7>();
 }
 
 // FP32 erf: n16/d16 parity rational coefficients, MaxULP=1 vs FP64.
