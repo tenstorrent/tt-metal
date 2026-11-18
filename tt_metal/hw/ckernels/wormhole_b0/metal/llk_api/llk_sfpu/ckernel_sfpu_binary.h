@@ -181,11 +181,11 @@ inline void calculate_sfpu_binary(
         rne_bias = kBf16RneBias;
         rne_mask = kBf16RneMask;
     }
-    // NEXTAFTER: the sign mask its NaN classifier applies to both operands, held in an LREG
-    // across the loop for the same reason. Loaded only for NEXTAFTER; unassigned otherwise.
-    sfpi::vInt abs_mask;
+    // NEXTAFTER: the +inf bit pattern its NaN classifier compares both magnitudes against, held
+    // in an LREG across the loop for the same reason. Loaded only for NEXTAFTER; unassigned otherwise.
+    sfpi::vInt inf_bits;
     if constexpr (BINOP == BinaryOp::NEXTAFTER || BINOP == BinaryOp::NEXTAFTER_BF16) {
-        abs_mask = 0x7FFFFFFF;
+        inf_bits = 0x7F800000;
     }
     // SFPU microcode
     for (int d = 0; d < ITERATIONS; d++) {
@@ -271,14 +271,17 @@ inline void calculate_sfpu_binary(
             sfpi::vFloat mag_a = sfpi::setsgn(in0, 0);
             sfpi::vFloat mag_b = sfpi::setsgn(in1, 0);
             sfpi::vFloat tiny = sfpi::as<sfpi::vFloat>(sfpi::vInt(kUlpStep));
-            v_if(mag_a == 0.0f && in1 > 0.0f) { result = tiny; }
-            v_endif;
-            v_if(mag_a == 0.0f && in1 < 0.0f) { result = -tiny; }
-            v_endif;
-            // Equal operands return the target, so two zeros return in1's zero, which is not
-            // always in0's: nextafter(+0, -0) is -0. This runs after the two guards above because
-            // they compare in1 against zero, which is itself unspecified when in1 is negative zero.
-            v_if(mag_a == 0.0f && mag_b == 0.0f) { result = in1; }
+            v_if(mag_a == 0.0f) {
+                // The smallest step toward in1 carries in1's sign, except that a positive in1 the
+                // direction compares flush to zero (+0, +denormal) keeps in0. For a zero in0 those
+                // compares leave step non-zero exactly when in1 is normal or infinite.
+                v_if(in1 < 0.0f || step != 0) { result = sfpi::copysgn(tiny, in1); }
+                v_endif;
+                // Equal operands return the target, so two zeros return in1's zero, which is not
+                // always in0's: nextafter(+0, -0) is -0.
+                v_if(mag_b == 0.0f) { result = in1; }
+                v_endif;
+            }
             v_endif;
             // A NaN in either operand has to propagate, and nothing above arranges that: SFPSETCC
             // is specified only for a comparand that is neither negative zero nor NaN, so the
@@ -288,12 +291,8 @@ inline void calculate_sfpu_binary(
             // reason ckernel_sfpu_isclose.h reads bit patterns for its own Inf/NaN lanes. A
             // widened bfloat16 NaN has that exponent and a non-zero mantissa too, so this serves
             // both entry points unchanged. Last, so it wins over the direction and zero arms.
-            // The mask is abs_mask, bound once above the loop; kInfBits stays a literal because
-            // holding it in an LREG as well spills.
-            constexpr int32_t kInfBits = 0x7F800000;
-            v_if((bits & abs_mask) > kInfBits) { result = nan; }
-            v_endif;
-            v_if((sfpi::as<sfpi::vInt>(in1) & abs_mask) > kInfBits) { result = nan; }
+            // setsgn(x, 0) clears only the sign bit, so the magnitudes above are the masked patterns.
+            v_if(sfpi::as<sfpi::vInt>(mag_a) > inf_bits || sfpi::as<sfpi::vInt>(mag_b) > inf_bits) { result = nan; }
             v_endif;
         }
 
