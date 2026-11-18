@@ -49,6 +49,11 @@ inline constexpr uint32_t relay_affine_prefix_max_heads_per_link =
 // The fabric connections a sender may open (the fewest RoutingPlaneConnectionManager::MaxConnections allows).
 inline constexpr uint32_t relay_affine_prefix_max_connections = 4;
 
+// The cores of each head: the op's cores are the heads' cores, head by head, then two senders per link.
+inline uint32_t relay_affine_prefix_cores_per_head(size_t cores, uint32_t heads, uint32_t num_links) {
+    return (cores - 2 * num_links) / heads;
+}
+
 // Legacy program descriptors: the metal2 ProgramSpec cannot yet open fabric connections.
 struct RelayAffinePrefixProgramFactory {
     // One program per coordinate: each sends to its own successor along the sequence-parallel axis. They differ only

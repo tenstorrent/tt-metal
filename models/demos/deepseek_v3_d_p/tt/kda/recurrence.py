@@ -24,7 +24,6 @@ from models.demos.deepseek_v3_d_p.tt.kda.config import (
     l1_when_it_fits,
     preparation_bytes,
 )
-from models.demos.deepseek_v3_d_p.tt.kda.entry_correction import EntryCorrection
 from models.demos.deepseek_v3_d_p.tt.kda.relay_affine_prefix import RelayAffinePrefix, SlabEntry
 
 
@@ -335,11 +334,10 @@ def _scan_sp_chunks(
     actual_end: ttnn.Tensor | None,
     compute_config: _RecurrenceComputeConfig,
     affine_relay: RelayAffinePrefix,
-    correction: EntryCorrection,
 ) -> RecurrenceResult:
     """One group per head: the summary writes the packed transform the relay carries (the identity for a rank without a
-    head) and each chunk's output terms, from which the entry correction forms the outputs once the relay has delivered
-    the rank's entry state."""
+    head) and each chunk's output terms, from which the relay forms the outputs once it has delivered the rank's entry
+    state."""
     grouped = _reshape_chunks_for_groups(
         prepared, geometry, group_heads=geometry.batch_heads, summary_group_chunks=geometry.num_chunks
     )
@@ -349,21 +347,18 @@ def _scan_sp_chunks(
         actual_start=actual_start,
         actual_end=actual_end,
         sequence_parallel_axis=sequence_parallel_axis,
-        memory_config=correction.memory_config,
+        memory_config=ttnn.L1_MEMORY_CONFIG,
         compute_kernel_config=compute_config.preparation,
         emit_outputs=True,
-        emit_memory_config=correction.terms_memory_config,
+        emit_memory_config=affine_relay.terms_memory_config,
     )
     # The summary is the chunk terms' last reader: free their L1 before the relay.
     for tensor in grouped.as_kernel_args():
         ttnn.deallocate(tensor)
     # The relay also forms the chunk's final carry, from the final transition emitted beside the terms.
     terms, final_e, final_b = emitted
-    entry_states, prefix_final_state, final_state = affine_relay(
-        packed, initial_state, final_e, final_b, actual_start, actual_end
-    )
-    output, rank_final = correction(terms, final_e, final_b, entry_states, prefix_final_state, actual_start, actual_end)
-    for tensor in (terms, final_e, final_b, entry_states, prefix_final_state, rank_final):
+    output, final_state = affine_relay(packed, terms, initial_state, final_e, final_b, actual_start, actual_end)
+    for tensor in (terms, final_e, final_b):
         ttnn.deallocate(tensor)
     return RecurrenceResult(output, final_state)
 
@@ -446,10 +441,10 @@ class KDARecurrence:
         # With sequence parallelism the SP prefix is a relay along the SP axis: each rank forwards its successor the
         # entry state (the last rank hands the final state to the first), and the first rank multicasts the chunk's
         # final carry.
-        # Each head is one group: the summary emits every chunk's output terms and the entry correction forms the chunk
-        # outputs from the relayed entry state, with the terms in L1 when they fit and streamed from DRAM otherwise.
+        # Each head is one group: the summary emits every chunk's output terms and the relay forms the chunk outputs
+        # from the relayed entry state (the entry correction), with the terms in L1 when they fit and streamed from DRAM
+        # otherwise.
         self._affine_relay = None
-        self._entry_correction = None
         if self._sequence_parallel:
             links = _sp_links(device, sequence_parallel_axis)
             if links == 0:
@@ -464,26 +459,15 @@ class KDARecurrence:
                 value_dim=value_dim,
                 num_links=links,
                 local_rows=local_rows,
+                max_cores=program_config.entry_correction_max_cores,
                 math_fidelity=program_config.affine_prefix_math_fidelity,
-            )
-            grid = device.compute_with_storage_grid_size()
-            max_cores = program_config.entry_correction_max_cores
-            self._entry_correction = EntryCorrection(
-                device,
-                sequence_parallel_axis=sequence_parallel_axis,
-                batch_heads=batch * heads,
-                num_chunks=local_rows // KDA_CHUNK_SIZE,
-                key_dim=key_dim,
-                local_rows=local_rows,
-                cores=[ttnn.CoreCoord(x, y) for y in range(grid.y) for x in range(grid.x)][:max_cores],
-                math_fidelity=program_config.scan_math_fidelity,
             )
         # Both scans read the chunk terms chunk by chunk; keeping them in L1 when they fit spares those DRAM reads
         # and chunk preparation's DRAM writes.
         preparation_size = preparation_bytes(batch * heads, local_rows // KDA_CHUNK_SIZE, key_dim, value_dim)
         preparation_budget = (
             KDA_PREPARATION_L1_BYTES_PER_CORE
-            if self._entry_correction is None
+            if self._affine_relay is None
             else KDA_PREPARATION_WITH_ENTRY_CORRECTION_L1_BYTES_PER_CORE
         )
         self._preparation_memory = l1_when_it_fits(device, preparation_size, preparation_budget)
@@ -602,7 +586,7 @@ class KDARecurrence:
         )
         result = self._execute(prepared, state, actual_start, actual_end)
         # Release the chunk terms as soon as the scan consumed them, so every call sees the same free memory (the
-        # summary already released them when the entry correction runs).
+        # summary already released them when the relay runs).
         for tensor in prepared.as_kernel_args():
             if tensor.is_allocated():
                 ttnn.deallocate(tensor)
@@ -669,5 +653,4 @@ class KDARecurrence:
             actual_end=actual_end,
             sequence_parallel_axis=self._sequence_parallel_axis,
             affine_relay=self._affine_relay,
-            correction=self._entry_correction,
         )
