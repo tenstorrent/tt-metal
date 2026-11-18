@@ -20,6 +20,7 @@ import socket
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 from collections import defaultdict
 from dataclasses import dataclass
@@ -47,6 +48,12 @@ PRTE_TIMEOUT_EXIT_CODE = 241
 # How long tt-run lets the launcher ignore a signal it forwarded (SIGINT/SIGTERM) before forcing it down. Only
 # ever armed after we relayed a stop signal, so it never acts on a job nobody asked to stop.
 SIGNAL_FORWARD_GRACE_S = 10.0
+
+# How long the launcher may linger after a rank's MPI_Abort before tt-run ends it (the prrte#2815 guard). Armed
+# only once prterun has printed its abort banner below — i.e. PRRTE already committed to ending the job, never on
+# a healthy one. prterun prints the banner on the launch host for a rank on ANY host, so the guard is multi-host-safe.
+ABORT_HANG_GRACE_S = 15.0
+_MPI_ABORT_BANNER = "MPI_ABORT was invoked"
 
 
 def remove_stale_launcher_leftovers() -> int:
@@ -127,10 +134,16 @@ class LaunchedJob:
         self.ended: List[int] = []  # ranks the teardown had to end itself (the launcher should have)
         self._previous_handlers: dict = {}
         self._teardown = contextlib.ExitStack()
+        self._abort_seen = False  # prterun announced a rank's MPI_Abort (the prrte#2815 guard arms on this)
 
     def __enter__(self) -> "LaunchedJob":
         remove_stale_launcher_leftovers()  # before launch: clear a prior killed job's /dev/shm + session-dir leak
-        self.proc = subprocess.Popen(self.cmd, cwd=self.cwd, start_new_session=True)
+        # Own only the launcher's stderr (stdout, the bulk of rank output, stays inherited) so a pump thread can
+        # watch for prterun's MPI_ABORT banner; the thread re-emits every line, so owning the pipe swallows nothing.
+        self.proc = subprocess.Popen(
+            self.cmd, cwd=self.cwd, start_new_session=True, stderr=subprocess.PIPE, text=True, bufsize=1
+        )
+        threading.Thread(target=self._pump_stderr, daemon=True).start()
         # Register the teardown NOW, right after Popen, so even if the setup below raises (os.getsid,
         # signal.signal) the launcher is still torn down: on failure we close the stack before re-raising, and
         # __exit__ closes it on the normal path. ExitStack runs callbacks LIFO, so registering in this order makes
@@ -155,6 +168,18 @@ class LaunchedJob:
 
     def __exit__(self, *exc) -> None:
         self._teardown.close()
+
+    def _pump_stderr(self) -> None:
+        """Re-emit the launcher's stderr and flag a rank's MPI_Abort when prterun announces it; the prrte#2815
+        guard in ``wait()`` keys on that flag. Draining the pipe also keeps the launcher off a full stderr buffer.
+        A daemon thread, so it dies with tt-run; the loop ends on its own when the launcher's stderr closes."""
+        try:
+            for line in self.proc.stderr:
+                sys.stderr.write(line)
+                if _MPI_ABORT_BANNER in line:
+                    self._abort_seen = True
+        except OSError:
+            pass
 
     def _relay(self, signum, frame) -> None:
         self.forwarded.append(signum)
@@ -195,33 +220,44 @@ class LaunchedJob:
     def wait(self) -> int:
         """Wait for the launcher; return its exit code, a death by signal normalized to the shell's 128 + signum.
 
-        Bounded cancellation: once a signal we forwarded (SIGINT/SIGTERM, via ``_relay``) has gone unanswered for
-        SIGNAL_FORWARD_GRACE_S — the launcher is ignoring the stop — force it down (``_shutdown_launcher``) instead
-        of blocking. This keys ONLY on a signal we relayed, never on the job's progress, so it cannot act on a
-        healthy job (multi-host included) that nobody asked to stop. With no signal forwarded it is a 1 s poll of
-        the launcher (no /proc scan), returning the instant the launcher exits.
+        A 1 s poll (no /proc scan) that returns the instant the launcher exits, with two bounded safeguards, each
+        keyed on an explicit event — never on the job's progress — so neither can act on a healthy multi-host job:
+
+        - Forwarded-signal cancellation: a signal we relayed (SIGINT/SIGTERM) has gone unanswered for
+          SIGNAL_FORWARD_GRACE_S, so the launcher is ignoring the stop — force it down.
+        - prrte#2815 abort guard: prterun announced a rank's MPI_Abort (``_abort_seen``, set by the stderr pump)
+          but is still alive ABORT_HANG_GRACE_S later — the launcher committed to ending the job and then hung, so
+          force it down and fail the job. The banner is printed for a rank on ANY host, so this is multi-host-safe.
         """
         forced_deadline = None
+        abort_deadline = None
         while True:
             try:
                 rc = self.proc.wait(timeout=1.0)
                 return 128 - rc if rc < 0 else rc
             except subprocess.TimeoutExpired:
                 pass
-            if not self.forwarded:  # nobody asked to stop the job — just keep waiting
-                continue
-            if forced_deadline is None:
-                forced_deadline = time.time() + SIGNAL_FORWARD_GRACE_S
-            elif time.time() >= forced_deadline:
-                logger.error(
-                    f"{TT_RUN_PREFIX} the launcher (pid {self.proc.pid}) did not exit "
-                    f"{SIGNAL_FORWARD_GRACE_S:.0f}s after the forwarded signal; forcing it down"
-                )
-                self._shutdown_launcher()
-                rc = self.proc.poll()
-                if rc is None:
-                    return 1
-                return 128 - rc if rc < 0 else rc
+            if self.forwarded:  # a stop we relayed has gone unanswered
+                if forced_deadline is None:
+                    forced_deadline = time.time() + SIGNAL_FORWARD_GRACE_S
+                elif time.time() >= forced_deadline:
+                    logger.error(
+                        f"{TT_RUN_PREFIX} the launcher (pid {self.proc.pid}) did not exit "
+                        f"{SIGNAL_FORWARD_GRACE_S:.0f}s after the forwarded signal; forcing it down"
+                    )
+                    self._shutdown_launcher()
+                    rc = self.proc.poll()
+                    return (128 - rc if rc < 0 else rc) if rc is not None else 1
+            elif self._abort_seen:  # a rank aborted and the launcher is lingering (the prrte#2815 hang)
+                if abort_deadline is None:
+                    abort_deadline = time.time() + ABORT_HANG_GRACE_S
+                elif time.time() >= abort_deadline:
+                    logger.error(
+                        f"{TT_RUN_PREFIX} the launcher (pid {self.proc.pid}) is still up "
+                        f"{ABORT_HANG_GRACE_S:.0f}s after a rank's MPI_Abort (openpmix/prrte#2815); ending it"
+                    )
+                    self._shutdown_launcher()
+                    return 1  # the job failed: a rank aborted and the launcher had to be ended
 
     def _survivors(self) -> List[int]:
         """Live pids of this job on this host — session id catches the ranks, process group catches a re-sessioned

@@ -1552,3 +1552,38 @@ class TestJobOwnership:
             if job.proc.poll() is None:
                 job.proc.kill()
                 job.proc.wait()
+
+    def test_wait_ends_a_launcher_that_lingers_after_an_mpi_abort(self, monkeypatch):
+        import time
+
+        from ttnn.distributed import ttrun as m
+
+        # prrte#2815 guard: a launcher that printed the MPI_ABORT banner and then hangs (here: ignores SIGTERM and
+        # never exits) must be ended by wait(), which returns the rank's errorcode — not left to block forever.
+        monkeypatch.setattr(m, "ABORT_HANG_GRACE_S", 1.0)
+        fake = (
+            "import sys,signal,time; signal.signal(signal.SIGTERM, signal.SIG_IGN); "
+            "sys.stderr.write('MPI_ABORT was invoked on rank 1 in communicator MPI_COMM_WORLD\\n'); "
+            "sys.stderr.flush(); time.sleep(600)"
+        )
+        with m.LaunchedJob([sys.executable, "-c", fake], Path(".")) as job:
+            t0 = time.time()
+            rc = job.wait()
+            assert rc != 0, f"a job whose launcher aborted-then-hung must fail, got {rc}"
+            assert job.proc.poll() is not None, "the lingering launcher was not ended"
+            assert time.time() - t0 < 20, "the abort guard did not fire promptly"
+
+    def test_wait_does_not_end_a_launcher_without_an_mpi_abort(self, monkeypatch):
+        import time
+
+        from ttnn.distributed import ttrun as m
+
+        # The safety property: no MPI_Abort banner → the abort guard never arms. A launcher that just runs a while
+        # and exits on its own (here past the grace, writing ordinary stderr) is returned, never force-ended.
+        monkeypatch.setattr(m, "ABORT_HANG_GRACE_S", 1.0)
+        fake = (
+            "import sys,time; sys.stderr.write('ordinary diagnostic, no abort\\n'); sys.stderr.flush(); time.sleep(3)"
+        )
+        with m.LaunchedJob([sys.executable, "-c", fake], Path(".")) as job:
+            rc = job.wait()
+            assert rc == 0, "a launcher that never aborted must return its own code, not be force-ended"
