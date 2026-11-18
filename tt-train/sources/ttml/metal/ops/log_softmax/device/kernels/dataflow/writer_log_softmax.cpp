@@ -13,6 +13,8 @@
 // first core. Backward: overwrites each row's selected element with the reconstructed gradient.
 // Cross-entropy forward: chunk 0 writes the row's loss tile. Cross-entropy backward: overwrites each
 // row's target element with its gradient s * expm1(y_t), where the target falls in this unit's columns.
+// Vocabulary-parallel stats: chunk 0 packs column 0 of the row's (m, k, tail, x_t) into columns 0-3 of one
+// FP32 tile. Combine: writes the row state (M, l) as two column-vector tiles, then the loss tile.
 void kernel_main() {
     constexpr uint32_t wt = get_compile_time_arg_val(0);
     constexpr uint32_t out_fp32 = get_compile_time_arg_val(2), chunks = get_compile_time_arg_val(3);
@@ -59,6 +61,43 @@ void kernel_main() {
             part.pop_front(partials);
             noc_semaphore_inc(get_noc_addr(leader_x, leader_y, get_semaphore(arrive_sem)), 1);
         }
+#if defined(VP_STATS)
+        {
+            DataflowBuffer records(31);
+            records.wait_front(4);
+            if (chunk == 0) {
+                pivots.reserve_back(1);
+                const uint32_t tile = pivots.get_write_ptr();
+                noc.async_write_zeros(pivots, fp32_bytes);
+                noc.write_zeros_l1_barrier();
+                for (uint32_t i = 0; i < 4; ++i)
+                    for (uint32_t r = 0; r < th; ++r)
+                        log_softmax_tile::copy_fp32(
+                            records.get_read_ptr() + i * fp32_bytes,
+                            log_softmax_tile::offset(r, 0),
+                            tile,
+                            log_softmax_tile::offset(r, i));
+                noc.async_write(pivots, output, fp32_bytes, {}, {.page_id = row});
+                noc.async_write_barrier();
+            }
+            records.pop_front(4);
+        }
+        continue;
+#elif defined(VP_COMBINE)
+        {
+            DataflowBuffer records(31);
+            records.wait_front(2);
+            for (uint32_t i = 0; i < 2; ++i)
+                noc.async_write(records, stats, fp32_bytes, {.offset_bytes = i * fp32_bytes}, {.page_id = 2 * row + i});
+            noc.async_write_barrier();
+            records.pop_front(2);
+            ob.wait_front(1);
+            noc.async_write(ob, output, bytes, {}, {.page_id = row});
+            noc.async_write_barrier();
+            ob.pop_front(1);
+        }
+        continue;
+#endif
 #if defined(CROSS_ENTROPY)
 #ifndef BACKWARD
         ob.wait_front(1);
