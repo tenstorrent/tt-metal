@@ -89,7 +89,7 @@ def torch_ttnn(monkeypatch):
         ),
     )
     monkeypatch.setattr(cv, "ttnn", stub)
-    monkeypatch.setattr(cv.tensor, "from_torch", lambda t, **kwargs: t.float())
+    monkeypatch.setattr(cv.tensor, "from_torch", lambda t, **kwargs: t.float().clone())
 
 
 CANVAS, IMAGE = (64, 48), (40, 24)  # (width, height); the image is 5 x 3 latent pixels at level 3
@@ -117,6 +117,14 @@ def test_masked_group_norm_is_group_norm_on_the_image(torch_ttnn, silu):
     ref = (F.silu(ref) if silu else ref).permute(0, 2, 3, 1)
     torch.testing.assert_close(out[:, :ih, :iw], ref, atol=1e-4, rtol=1e-4)
     assert not out[:, ih:].any() and not out[:, :, iw:].any()
+
+
+def test_masks_free_every_tensor_once(torch_ttnn):
+    freed = []
+    cv.ttnn.deallocate = freed.append
+    masks = cv.CanvasMasks(None, canvas=CANVAS, image=IMAGE)
+    masks.deallocate()
+    assert len(freed) == len({id(t) for t in freed}) == cv.LEVELS * 5 + 1
 
 
 def test_masked_attention_is_attention_on_the_image(torch_ttnn):

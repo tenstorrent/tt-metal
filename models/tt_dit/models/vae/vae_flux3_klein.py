@@ -208,7 +208,9 @@ class Flux3KleinVae:
         x = tensor.from_torch(
             x, device=self._device, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=ttnn.bfloat16, mesh_axes=[None] * 4
         )
-        out = self._encoder.forward_canvas(x, CanvasMasks(self._device, canvas=(cw, ch), image=(width, height)))
+        masks = CanvasMasks(self._device, canvas=(cw, ch), image=(width, height))
+        out = self._encoder.forward_canvas(x, masks)
+        masks.deallocate()
         ttnn.deallocate(x)
         mean = tensor.to_torch(out).float()[:, : height // SCALE, : width // SCALE]
         ttnn.deallocate(out)
