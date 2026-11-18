@@ -97,6 +97,10 @@ std::optional<int> reduce_scatter_route_dim(
     const ttsl::SmallVector<uint32_t>& cluster_axes,
     std::optional<ttnn::DataType> reduce_dtype) {
     check_reduce_dtype(reduce_dtype);
+    TT_FATAL(
+        tensor.device() != nullptr,
+        "reduce_scatter_route_dim: the tensor is not allocated on a device mesh (a host tensor, or a deallocated one); "
+        "the route is chosen for the mesh it is on");
     // The route pays off only for a sum in fp32 of a narrower tensor, whose all-gather then carries the narrower dtype.
     // It is taken for a sum over one axis, the DDP case it was measured for; a sum over several axes (DDP with CP)
     // keeps one all-reduce per axis.
@@ -183,8 +187,10 @@ void synchronize_gradients_along(
             continue;
         }
         ttsl::SmallVector<uint32_t> axes_for_param;
+        // The label is read off the stored tensor: the default bf16 view of an fp32 parameter would be cast for it.
+        const auto& value = tensor->get_value(autograd::PreferredPrecision::NATIVE);
         for (uint32_t axis : cluster_axes) {
-            if (!is_sharded_on_axis(tensor->get_value(), axis)) {
+            if (!is_sharded_on_axis(value, axis)) {
                 axes_for_param.push_back(axis);
             }
         }

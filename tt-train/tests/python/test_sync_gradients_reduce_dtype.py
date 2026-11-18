@@ -48,6 +48,14 @@ def test_rejects_reduce_dtypes_other_than_bf16_and_fp32(expect_error):
         ttml.sync_gradients(ttml.NamedParameters(), reduce_dtype=ttnn.DataType.UINT32)
 
 
+# The route is chosen for the mesh a tensor is on, so a host tensor is an error, as it is for is_sharded_on_axis.
+@pytest.mark.requires_device
+def test_reduce_scatter_route_dim_rejects_a_host_tensor(dp_mesh, expect_error):
+    gradient = per_device_tensor(make_gradients(64, 128, seed=3)).get_value()
+    with expect_error(RuntimeError, "not allocated on a device mesh"):
+        ttml.core.distributed.reduce_scatter_route_dim(gradient.cpu(), [_DP_AXIS], reduce_dtype=ttnn.DataType.FLOAT32)
+
+
 # Keyword-only, as in the C++ bindings, so a call always names it.
 def test_takes_reduce_dtype_by_keyword_only(expect_error):
     with expect_error(TypeError, "positional"):

@@ -27,7 +27,7 @@ std::optional<ttnn::DataType> resolve_reduce_dtype(std::optional<ttnn::DataType>
 // The tensor dim synchronize_tensor's reduce-scatter route scatters `tensor` along for these arguments, or none when
 // the sum takes the all-reduce. The route is taken only by a sum in fp32 of a narrower tensor over one mesh axis, of at
 // least 2^19 elements per device, along a dim that splits into whole-tile slices for that axis's devices and that no
-// other mesh axis already splits.
+// other mesh axis already splits. A tensor that is not on the device mesh (a host or deallocated one) is a TT_FATAL.
 std::optional<int> reduce_scatter_route_dim(
     const ttnn::Tensor& tensor,
     const ttsl::SmallVector<uint32_t>& cluster_axes,
@@ -37,8 +37,8 @@ std::optional<int> reduce_scatter_route_dim(
 // BFLOAT16 sums in the tensor's own dtype (bf16 gradients in tt-train); FLOAT32 sums a narrower tensor in fp32 and
 // writes the mean back in the tensor's dtype, which keeps most of the low bits a bf16 sum rounds away at every hop. The
 // fp32 sum is not exact fp32: the FPU aligns the smaller operand to the larger one with fewer fraction bits (#62595).
-// Large fp32 sums over one axis take a reduce-scatter and an all-gather instead of an all-reduce; the route rule is at
-// kFp32ReduceScatterMinElements in distributed.cpp.
+// Large fp32 sums over one axis take a reduce-scatter and an all-gather instead of an all-reduce:
+// reduce_scatter_route_dim() says which.
 ttnn::Tensor synchronize_tensor(
     const ttnn::Tensor& tensor,
     const ttsl::SmallVector<uint32_t>& cluster_axes,

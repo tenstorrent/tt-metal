@@ -23,6 +23,7 @@
 #include "test_utils/program_cache.hpp"
 #include "ttnn/distributed/distributed_tensor.hpp"
 #include "ttnn_fixed/distributed/ttnn_ops.hpp"
+#include "utils/memory_utils.hpp"
 
 using namespace ttml;
 using ::testing::HasSubstr;
@@ -240,6 +241,37 @@ TEST_F(SynchronizeTensorTest, OnlyALargeNarrowerTensorTakesTheReduceScatterRoute
     EXPECT_EQ(route(large, ttnn::DataType::BFLOAT16), std::nullopt);
     EXPECT_EQ(
         core::distributed::reduce_scatter_route_dim(large, {0U, kDdpAxis}, ttnn::DataType::FLOAT32), std::nullopt);
+    // A host tensor is on no mesh to choose a route for.
+    EXPECT_THAT(
+        [&] { (void)route(large.cpu(), ttnn::DataType::FLOAT32); },
+        ThrowsMessage<std::runtime_error>(HasSubstr("not allocated on a device mesh")));
+}
+
+// The sync reads each parameter's topology label off the stored tensor. Read through the default bf16 view, an fp32
+// parameter would be cast to a bf16 copy for it, and the copy would stay allocated. So the sync allocates the same for
+// an fp32 parameter as for a bf16 one.
+TEST_F(SynchronizeTensorTest, SynchronizeGradientsMakesNoBf16CopyOfAnFp32Parameter) {
+    const auto gradients = upload(make_gradients(64, 128, 10));
+    const auto allocated_by_the_sync = [&](ttnn::DataType value_dtype) {
+        auto parameter = autograd::create_tensor(
+            core::zeros(gradients.logical_shape(), &autograd::ctx().get_device(), value_dtype),
+            /* requires_grad */ true);
+        parameter->set_grad(gradients);
+        utils::MemoryUsageTracker::clear();
+        long long allocated = 0;
+        {
+            const auto guard = utils::MemoryUsageTracker::begin_capture();
+            core::distributed::synchronize_gradients({{"parameter", parameter}}, {kDdpAxis});
+            utils::MemoryUsageTracker::end_capture("sync");
+            // The guard clears the stored traces when it is destroyed, so read them before the block ends.
+            allocated = utils::MemoryUsageTracker::get_dram_usage("sync").total_allocations;
+        }
+        return allocated;
+    };
+    (void)allocated_by_the_sync(ttnn::DataType::BFLOAT16);  // compiles the sync's programs
+    const auto for_a_bf16_parameter = allocated_by_the_sync(ttnn::DataType::BFLOAT16);
+    EXPECT_GT(for_a_bf16_parameter, 0);
+    EXPECT_EQ(allocated_by_the_sync(ttnn::DataType::FLOAT32), for_a_bf16_parameter);
 }
 
 namespace {
