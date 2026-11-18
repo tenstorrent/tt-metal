@@ -5,6 +5,8 @@
 #include "manifest.hpp"
 
 #include <algorithm>
+#include <charconv>
+#include <type_traits>
 #include <fstream>
 #include <initializer_list>
 #include <map>
@@ -43,8 +45,47 @@ void check_keys(
     }
 }
 
-// The value of `key` in the map `node` as a T, or empty with an error when it is missing or does not convert. An
-// unsigned T refuses a negative number.
+// `text` as an unsigned T: decimal with no leading zero other than "0" itself, or hexadecimal after "0x" (SPEC-0011
+// § Checks). Empty for anything else, a sign included, or a value T cannot hold.
+template <typename T>
+std::optional<T> parse_integer(std::string_view text) {
+    static_assert(std::is_unsigned_v<T>);
+    constexpr std::string_view kHexPrefix = "0x";
+    constexpr int kHex = 16;
+    constexpr int kDecimal = 10;
+    int base = kDecimal;
+    if (text.starts_with(kHexPrefix)) {
+        text.remove_prefix(kHexPrefix.size());
+        base = kHex;
+    } else if (text.size() > 1 && text.front() == '0') {
+        return std::nullopt;
+    }
+    T out{};
+    const auto [end, ec] = std::from_chars(text.data(), text.data() + text.size(), out, base);
+    if (text.empty() || ec != std::errc{} || end != text.data() + text.size()) {
+        return std::nullopt;
+    }
+    return out;
+}
+
+// A plain (unquoted) scalar as a T: an integer by parse_integer(), a string as written.
+template <typename T>
+std::optional<T> decode_scalar(const YAML::Node& value) {
+    if (!value.IsScalar()) {
+        return std::nullopt;
+    }
+    if constexpr (std::is_same_v<T, std::string>) {
+        return value.Scalar();
+    } else {
+        // yaml-cpp tags a quoted scalar "!": a quoted number is a string.
+        if (value.Tag() == "!") {
+            return std::nullopt;
+        }
+        return parse_integer<T>(value.Scalar());
+    }
+}
+
+// The value of `key` in the map `node` as a T, or empty with an error when it is missing or does not decode.
 template <typename T>
 std::optional<T> read_value(const YAML::Node& node, const char* key, const std::string& where, Errors& errors) {
     const YAML::Node value = node[key];
@@ -52,12 +93,13 @@ std::optional<T> read_value(const YAML::Node& node, const char* key, const std::
         errors.push_back(fmt::format("{}: missing key '{}'", where, key));
         return std::nullopt;
     }
-    T out{};
-    if (!value.IsScalar() || !YAML::convert<T>::decode(value, out)) {
+    const std::optional<T> out = decode_scalar<T>(value);
+    if (!out) {
         errors.push_back(fmt::format(
-            "{}: '{}' has the wrong type or is negative ({})",
+            "{}: '{}' is not {} ({})",
             where,
             key,
+            std::is_same_v<T, std::string> ? "a string" : "a decimal or 0x integer in range, without sign or leading 0",
             value.IsScalar() ? value.Scalar() : std::string("not a scalar")));
         return std::nullopt;
     }
@@ -582,15 +624,14 @@ Manifest parse_manifest(std::string_view yaml_text) {
     }
     // An unknown version says nothing about the rest of the file, so it is the only error reported.
     const YAML::Node version = root["version"];
-    uint32_t version_value = 0;
-    if (!version || !version.IsScalar() || !YAML::convert<uint32_t>::decode(version, version_value) ||
-        version_value != kManifestVersion) {
+    const std::optional<uint32_t> version_value = version ? decode_scalar<uint32_t>(version) : std::nullopt;
+    if (version_value != kManifestVersion) {
         throw ManifestLoadError({fmt::format(
             "version {} is not {}", version && version.IsScalar() ? version.Scalar() : "<missing>", kManifestVersion)});
     }
     Errors errors;
     Manifest manifest;
-    manifest.version = version_value;
+    manifest.version = *version_value;
     check_keys(root, {"version", "capture", "devices", "links"}, "manifest", errors);
     if (root["capture"]) {
         if (const auto capture = read_value<std::string>(root, "capture", "manifest", errors)) {
