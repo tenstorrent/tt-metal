@@ -10,9 +10,10 @@ slicing of the canonical array says it should hold. The cases reshard between TP
 N-D labels, fused and padded weights, each in both directions, and check what the planner refuses.
 """
 
+import gc
 import json
 import zlib
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 import numpy as np
 import pytest
@@ -41,7 +42,7 @@ from ttml.distributed_checkpointing._errors import (
     ShapeMismatchError,
     TopologyError,
 )
-from ttml.distributed_checkpointing._index import ChunkRecord, data_file_name
+from ttml.distributed_checkpointing._index import ChunkRecord, Index, data_file_name
 from ttml.distributed_checkpointing._layouts import Identity, Pad, fused_segments
 from ttml.distributed_checkpointing._planner import TensorInfo, _ChunkLookup, create_load_plan, create_save_plan
 from ttml.distributed_checkpointing._topology import Label, Placement, dist_coords
@@ -533,6 +534,43 @@ def test_a_reshard_reads_only_the_chunks_it_needs():
         for box in kplan.boxes.values():
             overlapping = [i for i, c in enumerate(kplan.entry.chunks) if c.box.intersect(box) is not None]
             assert len(overlapping) == reads_per_shard and sorted(lookup.overlapping(box)) == overlapping, box
+
+
+@dataclass(frozen=True)
+class _GcRecordingIdentity(Identity):
+    """The identity, recording whether the cyclic garbage collector is on whenever the load planner asks for a
+    canonical shape."""
+
+    seen: list = field(default_factory=list, compare=False)
+
+    def canonical_shape(self, global_shape):
+        self.seen.append(gc.isenabled())
+        return super().canonical_shape(global_shape)
+
+
+def test_planning_pauses_the_gc_and_restores_it():
+    seen_on_save = []
+
+    def owner_of(key, group):
+        seen_on_save.append(gc.isenabled())
+        return one_process_owner(key, group)
+
+    infos = [info(key, TP8_DP4, (1, 1, 64, 32), Identity()) for key in ("w", "v")]
+    plan = create_save_plan(infos, lambda c: data_file_name(0, 0, c), owner_of)
+    assert seen_on_save and not any(seen_on_save), "save planning runs with the GC paused"
+    assert gc.isenabled(), "and turns it back on"
+    entry = plan.entries({(item.key, f.index): 0 for f in plan.files for item in f.items})
+    index = Index("i", {"group_size": 1}, [], entry)
+    recording = _GcRecordingIdentity()
+    create_load_plan(index, [info("w", FSDP32_ROWS, (1, 1, 64, 32), recording)])
+    assert recording.seen and not any(recording.seen), "load planning runs with the GC paused"
+    assert gc.isenabled()
+    gc.disable()
+    try:
+        create_save_plan(infos, lambda c: data_file_name(0, 0, c), one_process_owner)
+        assert not gc.isenabled(), "a GC the caller paused stays paused"
+    finally:
+        gc.enable()
 
 
 def test_save_planning_is_cached_per_label_and_shape(expect_error):

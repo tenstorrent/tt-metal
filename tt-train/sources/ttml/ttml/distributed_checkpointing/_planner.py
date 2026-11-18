@@ -39,7 +39,7 @@ from ._errors import (
     ShapeMismatchError,
     TopologyError,
 )
-from ._index import FORMAT, VERSION, ChunkRecord, Entry, Index
+from ._index import FORMAT, VERSION, ChunkRecord, Entry, Index, _gc_paused
 from ._layouts import Transform
 from ._safetensors import ITEMSIZE, build_header
 from ._topology import (
@@ -204,35 +204,39 @@ def create_save_plan(
     ``owner_of(key, replica group)`` returns the group's chunk this process writes, or ``None`` when another process
     writes it, so the election of the writers is the caller's. Every file's safetensors metadata names the format
     (``ttml.format``); which device wrote it is in the index and the file's name.
+
+    Planning pauses the cyclic garbage collector (``_index._gc_paused``): it allocates an object per chunk and
+    per file entry, none of which form cycles, and the collections they would trigger rescan all of them.
     """
-    infos = _by_key(infos, "saved")
-    owned: dict[str, list[Chunk]] = {}
-    for key, info in infos.items():
-        info.canonical_shape  # validates the transform against the global shape (raises LayoutError)
-        chosen: list[Chunk] = []
-        for group in _checked_groups(info).values():
-            own = owner_of(key, group)
-            if own is not None:
-                chosen.append(own)
-        owned[key] = chosen
-    coords = sorted({own.mesh_coord for chunks in owned.values() for own in chunks})
-    files = [FilePlan(i, c, file_for_coord(c)) for i, c in enumerate(coords)]
-    file_of = {c: i for i, c in enumerate(coords)}
-    items: dict[str, list[WriteItem]] = {}
-    for key, chunks in owned.items():
-        per_key: list[WriteItem] = []
-        for own in chunks:
-            item = WriteItem(key=key, chunk=own, file=file_of[own.mesh_coord], nbytes=infos[key].local_nbytes)
-            per_key.append(item)
-            files[item.file].items.append(item)
-        items[key] = per_key
-    for plan in files:
-        plan.items.sort(key=lambda it: (-it.nbytes, it.key))
-        tensors = [(it.key, infos[it.key].dtype, it.chunk.box.sizes, it.nbytes) for it in plan.items]
-        plan.header, offsets, plan.data_bytes = build_header(tensors, {"ttml.format": f"{FORMAT}/{VERSION}"})
-        for it in plan.items:
-            it.data_offset = offsets[it.key][0]
-    return SavePlan(infos, files, items)
+    with _gc_paused():
+        infos = _by_key(infos, "saved")
+        owned: dict[str, list[Chunk]] = {}
+        for key, info in infos.items():
+            info.canonical_shape  # validates the transform against the global shape (raises LayoutError)
+            chosen: list[Chunk] = []
+            for group in _checked_groups(info).values():
+                own = owner_of(key, group)
+                if own is not None:
+                    chosen.append(own)
+            owned[key] = chosen
+        coords = sorted({own.mesh_coord for chunks in owned.values() for own in chunks})
+        files = [FilePlan(i, c, file_for_coord(c)) for i, c in enumerate(coords)]
+        file_of = {c: i for i, c in enumerate(coords)}
+        items: dict[str, list[WriteItem]] = {}
+        for key, chunks in owned.items():
+            per_key: list[WriteItem] = []
+            for own in chunks:
+                item = WriteItem(key=key, chunk=own, file=file_of[own.mesh_coord], nbytes=infos[key].local_nbytes)
+                per_key.append(item)
+                files[item.file].items.append(item)
+            items[key] = per_key
+        for plan in files:
+            plan.items.sort(key=lambda it: (-it.nbytes, it.key))
+            tensors = [(it.key, infos[it.key].dtype, it.chunk.box.sizes, it.nbytes) for it in plan.items]
+            plan.header, offsets, plan.data_bytes = build_header(tensors, {"ttml.format": f"{FORMAT}/{VERSION}"})
+            for it in plan.items:
+                it.data_offset = offsets[it.key][0]
+        return SavePlan(infos, files, items)
 
 
 # --- load -----------------------------------------------------------------------------------------------------------
@@ -419,32 +423,36 @@ def create_load_plan(
     entries whose role is not in it ("param", "buffer", "optimizer_state") are not reported as unexpected, so a model
     alone loads from a checkpoint that also holds optimizer state. ``None`` means every role. A live tensor that
     resolves to an entry of another role is a ``RoleMismatchError``.
+
+    Planning pauses the cyclic garbage collector, as ``create_save_plan`` does: a reshard allocates several boxes
+    and a read item per read.
     """
-    infos = list(_by_key(infos, "loaded").values())
-    live_map = index.live_key_map()
-    wanted = None if roles is None else set(roles)
-    plans: dict[str, KeyPlan] = {}
-    missing: list[str] = []
-    used: set[str] = set()
-    for info in infos:
-        entry_key = live_map.get(info.key)
-        if entry_key is None:
-            for live in info.live_keys:
-                entry_key = live_map.get(live)
-                if entry_key is not None:
-                    break
-        if entry_key is None:
-            missing.append(info.key)
-            continue
-        entry = index.entries[entry_key]
-        if entry.role != info.role:
-            raise RoleMismatchError(
-                f"{info.key}: resolves to checkpoint entry {entry_key!r}, a {entry.role!r}, but the live tensor is a "
-                f"{info.role!r}"
-            )
-        used.add(entry_key)
-        plans[info.key] = plan_key(entry, info, local_coords)
-    return LoadPlan(plans, missing, unexpected_keys(index, used, wanted))
+    with _gc_paused():
+        infos = list(_by_key(infos, "loaded").values())
+        live_map = index.live_key_map()
+        wanted = None if roles is None else set(roles)
+        plans: dict[str, KeyPlan] = {}
+        missing: list[str] = []
+        used: set[str] = set()
+        for info in infos:
+            entry_key = live_map.get(info.key)
+            if entry_key is None:
+                for live in info.live_keys:
+                    entry_key = live_map.get(live)
+                    if entry_key is not None:
+                        break
+            if entry_key is None:
+                missing.append(info.key)
+                continue
+            entry = index.entries[entry_key]
+            if entry.role != info.role:
+                raise RoleMismatchError(
+                    f"{info.key}: resolves to checkpoint entry {entry_key!r}, a {entry.role!r}, but the live tensor "
+                    f"is a {info.role!r}"
+                )
+            used.add(entry_key)
+            plans[info.key] = plan_key(entry, info, local_coords)
+        return LoadPlan(plans, missing, unexpected_keys(index, used, wanted))
 
 
 def unexpected_keys(index: Index, used: set[str], wanted: set[str] | None) -> list[str]:
