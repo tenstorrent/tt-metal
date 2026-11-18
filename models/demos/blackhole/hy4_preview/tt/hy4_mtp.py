@@ -129,7 +129,8 @@ class Hy4MTP:
     def pre(self, e, h):
         """e bf16 [1,1,S,D] embeddings, h bf16 [1,1,S,D] main hidden -> x fp32 [1,1,S,D] = eh_proj(cat[enorm e, hnorm h])."""
         ch = self.ch
-        if self.rms_fused is not None:
+        # B47c fused rms supports T <= 16 tile rows (decode / spec rounds); the MTP PREFILL chunk (S >> 16) takes the stock path (mega0 boot: AssertionError 1 <= T <= 16 in warm())
+        if self.rms_fused is not None and int(e.shape[2]) <= 16:
             S = int(e.shape[2])
             cat = ttnn.allocate_tensor_on_device(
                 ttnn.Shape([1, 1, S, 2 * HID]), ttnn.bfloat16, ttnn.TILE_LAYOUT, self.md, ttnn.DRAM_MEMORY_CONFIG
@@ -211,7 +212,7 @@ class Hy4MTP:
         e = self.embed(tok)
         x = self.pre(e, h)
         ttnn.deallocate(e)
-        if self.rms_fused is not None and taps is None:
+        if self.rms_fused is not None and taps is None and int(x.shape[2]) <= 16:
             return self._forward_rf(x, tabs, dense8)
         tp("x0", x)
         h1 = self._norm(x, ly.w_in32)
