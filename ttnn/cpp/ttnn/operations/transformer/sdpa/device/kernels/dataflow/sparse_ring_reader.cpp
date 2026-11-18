@@ -579,9 +579,6 @@ void kernel_main() {
                 } else {
                     fetch_block(gathered_k_generator, k_slice, end_seq_tile, cb_k_in, k_addr, k_tile_bytes, true);
                 }
-                // Push before the forward: the forward only reads the page, its NoC write is flushed inside
-                // forward(), and the page is not reused before piece p+2's reserve.
-                cb_k.push_back(k_chunk_tiles);
                 // Arm V(p) (reserve its page, signal ready) before forwarding K(p) when the page is free.
                 const Slice v_slice(nb, nv, row0, row0 + Sk_chunk_t, v_col_offset_t, v_col_offset_t + vDHt);
                 CircularBuffer cb_v(cb_v_in);
@@ -593,9 +590,12 @@ void kernel_main() {
                     v_reserved = true;
                     v_chain.signal_ready(noc);
                 }
+                // forward() sends the page at the CB's write pointer (the receivers' reserved page), which is K(p)'s
+                // until it is pushed: push after the forward, as ring_joint_reader does.
                 if (k_chain_moves && k_chain.should_forward(nq, 0)) {
-                    k_chain.forward(noc, k_addr, k_chunk_tiles, k_tile_bytes);
+                    k_chain.forward(noc, cb_k, k_chunk_tiles, k_tile_bytes);
                 }
+                cb_k.push_back(k_chunk_tiles);
                 if (!v_reserved) {
                     cb_v.reserve_back(v_chunk_tiles);
                     v_addr = cb_v.get_write_ptr();
@@ -610,7 +610,6 @@ void kernel_main() {
                 } else {
                     fetch_block(gathered_v_generator, v_slice, end_seq_tile, cb_v_in, v_addr, v_tile_bytes, false);
                 }
-                cb_v.push_back(v_chunk_tiles);
                 // Arm K(p+1) before forwarding V(p) when there is a next piece and its page is free.
                 if (k_rx && has_next && cb_k.pages_reservable_at_back(k_chunk_tiles)) {
                     cb_k.reserve_back(k_chunk_tiles);
@@ -619,8 +618,9 @@ void kernel_main() {
                     k_chain.signal_ready(noc);
                 }
                 if (v_chain_moves && v_chain.should_forward(nv, 0)) {
-                    v_chain.forward(noc, v_addr);
+                    v_chain.forward(noc, cb_v);
                 }
+                cb_v.push_back(v_chunk_tiles);
             };
             // After each streamed piece's K/V: one key-bias tile per block of the piece whose real tokens end inside a
             // tile (count % 32 real columns in its last tile), in block order. Compute addresses a piece's tiles from
