@@ -304,10 +304,18 @@ if [ -n "${PREFILL_SCALED_FP8_KV_CACHE:-}" ]; then
   RUNNER_OVERRIDES="${RUNNER_OVERRIDES} export PREFILL_SCALED_FP8_KV_CACHE=${PREFILL_SCALED_FP8_KV_CACHE};"
 fi
 
-SC1_REQUEST_LEN=${SC1_REQUEST_LEN:-${REQUEST_LEN:-${SC1_MAX_SEQ_LEN}}}
-SC4_REQUEST_LEN=${REQUEST_LEN:-${SC4_MAX_SEQ_LEN}}
+# Capacity probes replace the config's request with one of their own, e.g. a full context at a probed
+# PREFILL_NUM_USERS, resolved here so the perf probes cover that request: whole chunks, within the context the
+# slots are allocated for.
+SC1_REQUEST_LEN=${PREFILL_REQUEST_LEN:-${SC1_REQUEST_LEN:-${REQUEST_LEN:-${SC1_MAX_SEQ_LEN}}}}
+SC4_REQUEST_LEN=${PREFILL_REQUEST_LEN:-${REQUEST_LEN:-${SC4_MAX_SEQ_LEN}}}
 REQUEST_LEN=${SC4_REQUEST_LEN}
 [ "${SCALE}" = sc1 ] && REQUEST_LEN=${SC1_REQUEST_LEN}
+if [ -n "${PREFILL_REQUEST_LEN:-}" ]; then
+  [ "${REQUEST_LEN}" -gt 0 ] && [ $((REQUEST_LEN % CHUNK_SIZE)) -eq 0 ] && [ "${REQUEST_LEN}" -le "${MAX_SEQ_LEN}" ] || {
+    echo "PREFILL_REQUEST_LEN=${PREFILL_REQUEST_LEN} must be whole ${CHUNK_SIZE}-token chunks within max_seq_len=${MAX_SEQ_LEN}" >&2; exit 2;
+  }
+fi
 echo "resolved shape for ${RUN_NAME}/${CONFIG}: max_seq_len=${MAX_SEQ_LEN} request_len=${REQUEST_LEN} num_users=${NUM_USERS}"
 
 REAL_CHUNKS=$((REQUEST_LEN / CHUNK_SIZE))
