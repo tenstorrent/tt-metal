@@ -4,9 +4,13 @@
 
 #include "ops/unary_ops.hpp"
 
+#include <algorithm>
 #include <array>
+#include <cstdint>
+#include <limits>
 #include <optional>
 #include <stdexcept>
+#include <vector>
 
 #include "autograd/auto_context.hpp"
 #include "autograd/graph.hpp"
@@ -15,8 +19,16 @@
 #include "core/compute_kernel_config.hpp"
 #include "core/tt_tensor_utils.hpp"
 #include "metal/operations.hpp"
+#include "metal/ops/log_softmax/log_softmax.hpp"
+#include "ttnn/operations/copy/typecast/typecast.hpp"
+#include "ttnn/operations/core/to_layout/to_layout_op.hpp"
+#include "ttnn/operations/core/to_memory_config/to_memory_config_op.hpp"
+#include "ttnn/operations/creation/creation.hpp"
+#include "ttnn/operations/data_movement/permute/permute.hpp"
 #include "ttnn/operations/data_movement/repeat/repeat.hpp"
+#include "ttnn/operations/data_movement/reshape_view/reshape.hpp"
 #include "ttnn/operations/eltwise/binary/binary.hpp"
+#include "ttnn/operations/eltwise/ternary/ternary.hpp"
 #include "ttnn/operations/eltwise/unary/unary.hpp"
 #include "ttnn/operations/eltwise/unary/unary_composite.hpp"
 #include "ttnn/operations/eltwise/unary_backward/unary_backward.hpp"
@@ -24,6 +36,8 @@
 #include "ttnn/operations/moreh/moreh_mean_backward/moreh_mean_backward.hpp"
 #include "ttnn/operations/moreh/moreh_softmax/moreh_softmax.hpp"
 #include "ttnn/operations/moreh/moreh_softmax_backward/moreh_softmax_backward.hpp"
+#include "ttnn/operations/reduction/argmax/argmax.hpp"
+#include "ttnn/operations/reduction/generic/generic_reductions.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn_fixed/trivial_ttnn_ops.hpp"
 
@@ -75,14 +89,131 @@ autograd::TensorPtr silu(const autograd::TensorPtr& tensor, bool use_composite_b
     return out;
 }
 
+namespace {
+
+// The composite's forward in FP32, before output rounding: the log-probabilities and the one-hot mask of the single
+// selected (first) maximum, which the backward needs.
+struct LogSoftmaxContext {
+    ttnn::Tensor log_probabilities;
+    ttnn::Tensor max_mask;
+};
+
+LogSoftmaxContext log_softmax_with_context(const ttnn::Tensor& t, int dim) {
+    const auto rank = static_cast<int>(t.logical_shape().rank());
+    TT_FATAL(dim >= -rank && dim < rank, "log_softmax: dimension {} out of range for rank {}", dim, rank);
+    dim = dim < 0 ? dim + rank : dim;
+    TT_FATAL(t.logical_shape()[dim] > 0, "log_softmax: reduction dimension must be nonempty");
+    TT_FATAL(
+        t.dtype() == ttnn::DataType::BFLOAT16 || t.dtype() == ttnn::DataType::FLOAT32,
+        "log_softmax: expected BFLOAT16 or FLOAT32 input");
+
+    auto input = ttnn::typecast(t, ttnn::DataType::FLOAT32);
+    auto t_max = ttnn::max(input, dim, /* keepdim */ true, std::nullopt, core::ComputeKernelConfig::precise());
+    auto shifted = ttnn::subtract(input, t_max);
+
+    // Select exactly one maximum, including for tied logits. FP32 indices are exact
+    // up to 2^24; BF16 indices would alias adjacent classes beyond 256.
+    TT_FATAL(t.logical_shape()[dim] <= (1U << 24), "log_softmax: reduction dimension exceeds exact FP32 index range");
+    ttnn::Tensor max_indices;
+    if (dim == rank - 1 && t.logical_volume() != 0) {
+        // TILE W argmax uses a single scalar reader. Reuse the ROW_MAJOR
+        // multicore path instead. keepdim=false batches the output rows and
+        // enables its second data-movement processor where supported.
+        auto row_major = ttnn::to_layout(input, ttnn::Layout::ROW_MAJOR);
+        // The multicore op stages one max/index pair per row per worker in L1.
+        // Bound each group to 256 rows, including for long sequence dimensions.
+        const auto row_count = t.logical_volume() / t.logical_shape()[dim];
+        auto group_rows = static_cast<uint32_t>(std::min<uint64_t>(row_count, 256));
+        while (row_count % group_rows != 0) {
+            --group_rows;
+        }
+        TT_FATAL(
+            row_count / group_rows <= std::numeric_limits<uint32_t>::max(),
+            "log_softmax: too many row groups for multicore argmax");
+        auto grouped = ttnn::reshape(
+            row_major,
+            ttnn::Shape({static_cast<uint32_t>(row_count / group_rows), 1, group_rows, t.logical_shape()[dim]}));
+        auto squeezed_indices = ttnn::argmax(grouped, /* dim */ 3, /* keepdim */ false);
+        std::vector<uint32_t> indices_shape(t.logical_shape().cbegin(), t.logical_shape().cend());
+        indices_shape[dim] = 1;
+        max_indices = ttnn::reshape(squeezed_indices, ttnn::Shape(indices_shape));
+    } else {
+        max_indices = ttnn::argmax(input, dim, /* keepdim */ true);
+    }
+    auto indices = ttnn::typecast(ttnn::to_layout(max_indices, ttnn::Layout::TILE), ttnn::DataType::FLOAT32);
+    auto positions = ttnn::arange(t.logical_shape()[dim], ttnn::DataType::FLOAT32, *t.device(), t.memory_config());
+    std::vector<uint32_t> index_shape(rank, 1);
+    index_shape[dim] = t.logical_shape()[dim];
+    positions = ttnn::to_layout(ttnn::reshape(positions, ttnn::Shape(index_shape)), ttnn::Layout::TILE);
+    auto max_mask = ttnn::eq(indices, positions);
+
+    // Eq. (5), https://arxiv.org/abs/2610.31642: exclude the selected e^0 = 1
+    // before summing. log1p preserves the tail even when 1 + tail rounds to 1.
+    auto others = ttnn::where(max_mask, 0.F, ttnn::exp(shifted));
+    auto log_normalizer = ttnn::log1p(ttnn_fixed::sum_ttnn(others, dim, /* keep_dim */ true));
+    return {ttnn::subtract(shifted, log_normalizer), max_mask};
+}
+
+// The composite's TTNN ops need interleaved tensors (argmax rejects sharded ones): a sharded tensor moves to
+// interleaved DRAM.
+ttnn::Tensor to_interleaved(const ttnn::Tensor& tensor) {
+    return tensor.is_sharded() ? ttnn::to_memory_config(tensor, ttnn::DRAM_MEMORY_CONFIG) : tensor;
+}
+
+// The corrected composite, built from TTNN ops: log_softmax's fallback for inputs the fused op does not support
+// (see metal::log_softmax_supported). It computes in interleaved memory; the output and the gradient take the input's
+// placement.
+autograd::TensorPtr log_softmax_composite(const autograd::TensorPtr& tensor, int dim) {
+    const auto& input = tensor->get_value(autograd::PreferredPrecision::NATIVE);
+    auto context = log_softmax_with_context(to_interleaved(input), dim);
+    const auto dtype = input.dtype();
+    const auto placement = input.memory_config();
+    const auto to_input_placement = [placement](const ttnn::Tensor& t) {
+        return t.memory_config() == placement ? t : ttnn::to_memory_config(t, placement);
+    };
+    auto out = autograd::create_tensor(to_input_placement(ttnn::typecast(context.log_probabilities, dtype)));
+    const auto rank = static_cast<int>(input.logical_shape().rank());
+    dim = dim < 0 ? dim + rank : dim;
+    autograd::GradFunction grad = [tensor, out, dim, dtype, context, to_input_placement]() {
+        auto upstream = ttnn::typecast(to_interleaved(out->get_grad()), ttnn::DataType::FLOAT32);
+        auto softmax = ttnn::exp(context.log_probabilities);
+        auto sum_grad = ttnn_fixed::sum_ttnn(upstream, dim, /* keep_dim */ true);
+        auto others = ttnn::where(context.max_mask, 0.F, ttnn::subtract(upstream, ttnn::multiply(softmax, sum_grad)));
+        // Eq. (7): reconstruct the maximum's gradient from the other entries,
+        // rather than subtracting nearly equal values at the dominant class.
+        auto max_grad = ttnn::neg(ttnn_fixed::sum_ttnn(others, dim, /* keep_dim */ true));
+        auto input_grad = ttnn::where(context.max_mask, max_grad, others);
+        tensor->add_grad(to_input_placement(ttnn::typecast(input_grad, dtype)));
+    };
+    out->set_node(autograd::add_backward_node(std::move(grad), out, tensor));
+    return out;
+}
+
+}  // namespace
+
 autograd::TensorPtr log_softmax(const autograd::TensorPtr& tensor, int dim) {
-    auto log_softmax = ttnn_fixed::log_softmax(tensor->get_value(), dim);
-    auto out = autograd::create_tensor(log_softmax);
-    autograd::GradFunction grad = [tensor, out, dim]() {
-        auto softmax = ttnn::exp(out->get_value());
-        auto sum_grad_over_dim = ttnn_fixed::sum_over_dim(out->get_grad(), dim);
-        auto grad = ttnn::subtract(out->get_grad(), ttnn::multiply(softmax, sum_grad_over_dim));
-        tensor->add_grad(grad);
+    const auto& native = tensor->get_value(autograd::PreferredPrecision::NATIVE);
+    const int rank = static_cast<int>(native.logical_shape().rank());
+    TT_FATAL(dim >= -rank && dim < rank, "log_softmax dimension {} out of range for rank {}", dim, rank);
+    dim = dim < 0 ? dim + rank : dim;
+    if (!ttml::metal::log_softmax_supported(native)) {
+        return log_softmax_composite(tensor, dim);
+    }
+    ttsl::SmallVector<int64_t> permutation{0, 1, 2, 3};
+    std::swap(permutation[dim], permutation[3]);
+    auto input = dim == 3 ? native : ttnn::permute(native, permutation);
+    auto values = ttml::metal::log_softmax_fw(input);
+    auto output = dim == 3 ? values[0] : ttnn::permute(values[0], permutation);
+    auto out = autograd::create_tensor(output);
+    auto state = values[1];
+    autograd::GradFunction grad = [tensor, out, input, state, permutation, dim]() {
+        auto upstream = out->get_grad();
+        if (dim != 3)
+            upstream = ttnn::permute(upstream, permutation);
+        auto result = ttml::metal::log_softmax_bw(input, upstream, state);
+        if (dim != 3)
+            result = ttnn::permute(result, permutation);
+        tensor->add_grad(result);
     };
     out->set_node(autograd::add_backward_node(std::move(grad), out, tensor));
     return out;
