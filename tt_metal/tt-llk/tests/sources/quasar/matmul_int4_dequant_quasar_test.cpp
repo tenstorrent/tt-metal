@@ -54,7 +54,6 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
     {
         START_PERF_MEASURE("INIT")
-        set_ttsync_enables<TRACK_ALL>(ckernel::TRISC_ID);
         // Matmul flips the unpacker roles: operand A drives UNPACR1/SrcB, operand B drives UNPACR0/SrcA.
         const auto bfd_a =
             ckernel::trisc::bfd_alloc_and_program<ckernel::trisc::BfdResource::Unp1>(tensor_shape_A, L1_ADDRESS(buffer_A[0]), formats.unpack_A_src);

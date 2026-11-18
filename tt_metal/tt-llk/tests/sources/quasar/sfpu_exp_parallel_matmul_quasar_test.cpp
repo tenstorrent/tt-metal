@@ -47,8 +47,6 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
     {
         START_PERF_MEASURE("INIT")
-        set_ttsync_enables<TRACK_ALL>(ckernel::TRISC_ID);
-
         const ckernel::TensorShape tensor_shape_A = ckernel::tensor_shape_from_num_faces(FACE_R_DIM, num_faces_A);
         const ckernel::TensorShape tensor_shape_B = ckernel::tensor_shape_from_num_faces(FACE_R_DIM, num_faces_B);
         // Matmul flips the unpacker roles: _llk_unpack_matmul_init_ arg0 drives UNPACR1/SrcB, arg1 drives

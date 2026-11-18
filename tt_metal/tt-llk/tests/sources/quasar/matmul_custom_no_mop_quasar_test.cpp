@@ -47,8 +47,6 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const std::uint32_t rt_block   = matmul_rows_per_dest_section<dest_sync, is_fp32_dest_acc_en>(RT_DIM, CT_DIM);
     const std::uint32_t num_blocks = RT_DIM / rt_block;
 
-    set_ttsync_enables<TRACK_ALL>(ckernel::TRISC_ID);
-
     // No-mop matmul is full-tile only: the replayed MVMUL walk covers all four 16x16 faces, so
     // num_faces_A/num_faces_B are always 4.
     // Matmul flips the unpacker roles: _llk_unpack_matmul_init_ arg0 drives UNPACR1/SrcB, arg1 drives
