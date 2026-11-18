@@ -248,9 +248,7 @@ def run_generate(
     generation_config = getattr(hf_reference_model, "generation_config", None)
     if generation_config is None:
         generation_config = hf_reference_model.config
-    logits_processor = get_logits_processor(
-        decoder_input_ids[:, :1], generation_config, encoder_input_ids=input_ids
-    )
+    logits_processor = get_logits_processor(decoder_input_ids[:, :1], generation_config, encoder_input_ids=input_ids)
 
     encoder_outputs = None
     use_cache = False
