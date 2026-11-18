@@ -471,6 +471,7 @@ def test_capabilities():
     assert caps["supports_spec_decode"] is True
     assert "device_propose" in caps["spec_requirements"]
     assert tuple(caps["spec_hidden_handoff"]) == ("on_device",)
+    assert caps["supports_prefill_resume_inside_kv_block"] is False
     assert caps["supports_async_decode"] is False
     assert caps["output_tokens_per_step"] == 1
     assert caps["supports_prefix_caching"] is False and not caps.get("supports_chunked_prefill", False)

@@ -61,7 +61,11 @@ class _Qwen36Generator(Generator, SupportsMultiModal):
     # supports_device_grammar=True: decode_forward defers to Generator, whose deferred payload and
     # sample_deferred_decode implement the plugin's device grammar contract; bucketed logits are
     # padded to the sampler width, so the full-batch mask applies to every bucket.
+    # supports_prefill_resume_inside_kv_block=False: Qwen36Model.prefill_traced_chunked continues a prefill only at a
+    # multiple of the KV block size, and gdn_block_state.prefill_segments raises for a prefill that resumes inside a
+    # block.
     model_capabilities = {
+        "supports_prefill_resume_inside_kv_block": False,
         "supports_prefix_caching": False,
         "supports_async_decode": False,
         "supports_sample_on_device": True,
