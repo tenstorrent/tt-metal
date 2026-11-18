@@ -87,7 +87,7 @@ inline void copy_dest_row(
         for (std::uint32_t i = 0; i < 4; i++) {
             const sfpi::vUInt x = sfpi::dst_reg[s.v[i]].mode<L>();
             sfpi::vUInt y = sfpi::dst_reg[d.v[i]].mode<L>();
-            const sfpi::vInt sub = sfpi::vConstTileId >> 4;
+            const sfpi::vInt sub = sfpi::as<sfpi::vInt>(sfpi::as<sfpi::vUInt>(sfpi::vConstTileId) >> 4);
             v_if(sub == ti_i) { y = x; }
             v_endif;
             sfpi::dst_reg[d.v[i]].mode<L>() = y;
@@ -138,7 +138,7 @@ inline void copy_dest_row(
         }
         sfpi::vUInt y0 = sfpi::dst_reg[d.v[2 * p]].mode<L>();
         sfpi::vUInt y1 = sfpi::dst_reg[d.v[2 * p + 1]].mode<L>();
-        const sfpi::vInt sub = sfpi::vConstTileId >> 4;
+        const sfpi::vInt sub = sfpi::as<sfpi::vInt>(sfpi::as<sfpi::vUInt>(sfpi::vConstTileId) >> 4);
         v_if(sub == ti_i) {
             y0 = ra;
             y1 = rb;
