@@ -29,7 +29,7 @@ FROM mirror.gcr.io/ubuntu:22.04 AS tree
 SHELL ["/bin/bash", "-euo", "pipefail", "-c"]
 
 # Sources: what the JIT build (tt_metal/, ttnn/ kernels), the suites (tools/, tests/) and
-# the weekly-tier pytest (conftest.py, models/, tt_py_test_utils_common/) read. Docs,
+# the deploy-tier pytest (conftest.py, models/, tt_py_test_utils_common/) read. Docs,
 # reports, CI config and media files are never read on a host.
 # build/: everything the scripts run (tools/, test/, lib/*.so), minus the tracy web UI,
 # the programming examples, tt-train, static libraries and CMake bookkeeping.
@@ -96,8 +96,7 @@ SHELL ["/bin/bash", "-euo", "pipefail", "-c"]
 #                              (tt-orchestration's health-check job)
 #   socat                      port and socket relays when the image runs as an
 #                              operations container on exabox hosts
-# journalctl (systemd) is left to the launchers of the tiers that read it: full,
-# pre_bmc_reboot and post_bmc_reboot.
+# journalctl (systemd) is left to the pre_reboot launchers, the only tier that reads it.
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
         ca-certificates \
@@ -138,7 +137,7 @@ COPY --from=dev --link /usr/local/bin/tt-smi /usr/local/bin/tt-smi
 ENV VIRTUAL_ENV=/opt/venv
 ENV PATH="/opt/venv/bin:/opt/openmpi-v5.0.7-ulfm/bin:${PATH}"
 
-# torch, pytest and loguru are the weekly tier's didt pytest; versions follow
+# torch, pytest and loguru are the deploy tier's didt pytest; versions follow
 # tt_metal/python_env/requirements-dev.txt. The wheel brings ttnn's own dependencies.
 # unsafe-best-match because the CPU torch index also serves numpy and friends.
 RUN --mount=from=uv,source=/uv,target=/usr/local/bin/uv \
@@ -177,7 +176,7 @@ WORKDIR /home/user/tt-metal
 # Smoke test, no hardware needed. Fails the build instead of pushing a broken image:
 # every binary a script runs resolves its libraries, the SFPI compiler the JIT build runs
 # compiles, the tools the suites shell out to
-# are present, and the Python entry points import, including the weekly-tier pytest's
+# are present, and the Python entry points import, including the deploy-tier pytest's
 # conftest and test base. What it writes is removed again: created here as the image user,
 # generated/ would not be writable by the host uids mpi-docker runs as.
 RUN for bin in \
