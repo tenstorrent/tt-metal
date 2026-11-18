@@ -91,10 +91,10 @@ constexpr PageLayout page_layout(const Format fmt)
     switch (fmt)
     {
         case Q8_0:    return make_layout(1, 1, 1024, 1, 0);
-        case Q4_0:    return make_layout(1, 1, 512, 1, 0);
-        case IQ4_NL:  return make_layout(1, 1, 512, 1, 0);
-        case MXFP4:   return make_layout(2, 1, 512, 1, 0);
+        case Q4_0:
+        case IQ4_NL:
         case NVFP4:   return make_layout(1, 1, 512, 1, 0);
+        case MXFP4:   return make_layout(2, 1, 512, 1, 0);
         case Q6_K:    return make_layout(8, 1, 768, 9, 1);
         case Q4_K:    return make_layout(8, 1, 512, 8, 0);
         case Q5_K:    return make_layout(8, 2, 1280, 8, 0);
@@ -129,12 +129,24 @@ constexpr PageLayout page_layout()
 // Linear formats: bits of a code's low plane and of its high plane above it (Q6_K: ql | qh << 4).
 constexpr std::uint32_t code_lo_bits(const Format fmt)
 {
-    return fmt == Q8_0 ? 8 : (fmt == Q3_K || fmt == Q2_K || fmt == TQ2_0 || fmt == Q2_0) ? 2 : fmt == Q1_0 ? 1 : 4;
+    if (fmt == Q8_0)
+    {
+        return 8;
+    }
+    if (fmt == Q3_K || fmt == Q2_K || fmt == TQ2_0 || fmt == Q2_0)
+    {
+        return 2;
+    }
+    return fmt == Q1_0 ? 1 : 4;
 }
 
 constexpr std::uint32_t code_hi_bits(const Format fmt)
 {
-    return (fmt == Q5_K || fmt == Q3_K || fmt == Q5_0 || fmt == Q5_1) ? 1 : fmt == Q6_K ? 2 : 0;
+    if (fmt == Q5_K || fmt == Q3_K || fmt == Q5_0 || fmt == Q5_1)
+    {
+        return 1;
+    }
+    return fmt == Q6_K ? 2 : 0;
 }
 
 // The formats whose group step (sfpu_gguf_decode_group) converts the fp16 d and dmin of a group once, past the page.
