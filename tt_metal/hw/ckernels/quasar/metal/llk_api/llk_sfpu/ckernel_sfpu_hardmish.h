@@ -28,10 +28,8 @@ namespace sfpu {
 // Clamping to [0, 1] gives exact boundary values (0 or 1),
 // so the final multiply produces exact 0 or exact x at transitions.
 inline void hardmish_init() {
-    // The paired store walks Dest through ADDR_MOD_6, advancing by the two rows the loop just wrote
-    // (one sfpi row is SFP_ROWS Dest counter rows), so the loop body needs no separate increment.
-    // The SFPU load/store addr_mod field is 3 bits wide on Quasar, so the store names slot 6 directly
-    // (as square does).
+    // The pair's second store advances Dest past both rows through ADDR_MOD_6, which the SFPU store names
+    // directly on Quasar (as square does).
     addr_mod_t{.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = 2 * ckernel::math::SFP_ROWS}}.set(ADDR_MOD_6);
     math::_reset_counters_<p_setrwc::SET_ABD_F>();
     // 0.5 lives in a programmable constant register so the body does not re-load it per row.

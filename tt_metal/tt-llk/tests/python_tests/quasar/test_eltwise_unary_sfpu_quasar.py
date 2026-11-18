@@ -1455,6 +1455,13 @@ def run_eltwise_unary_sfpu_quasar(
         formats.output_format,
     ), "Assert against golden failed"
 
+    if mathop == MathOperation.Hardmish:
+        # The suite tolerance passes a Float16_b result that was not rounded to nearest-even on the
+        # store; the kernel matches the golden bit for bit.
+        assert torch.equal(
+            res_tensor, golden_tensor
+        ), "hardmish is not bit-exact against the golden"
+
     if mathop == MathOperation.Tan:
         # The suite tolerance passes a tangent whose polynomial coefficients are bound in the
         # wrong order; the kernel itself stays within one output step of the golden.
