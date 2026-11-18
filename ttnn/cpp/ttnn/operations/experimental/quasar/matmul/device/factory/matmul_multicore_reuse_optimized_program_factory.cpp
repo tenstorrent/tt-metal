@@ -134,8 +134,9 @@ ttnn::device_operation::ProgramArtifacts MatmulMultiCoreReuseOptimizedProgramFac
     uint32_t per_core_M_per_batch = per_core_M > M ? M : per_core_M;
     uint32_t num_blocks = (K / in0_block_w);
     // Honor packer_l1_acc whenever partials are kept between K blocks. The partials CB takes the output
-    // format without it, which rounds partial sums through a block-float output (e.g. two K blocks).
-    bool packer_l1_acc_en = packer_l1_acc && num_blocks > 1;
+    // format without it, which rounds partial sums through a block-float output (e.g. two K blocks). fp32 partials
+    // always accumulate in L1 instead of being reloaded into Dest at every K block (see use_packer_l1_acc).
+    bool packer_l1_acc_en = operations::experimental::quasar::matmul::utilities::use_packer_l1_acc(packer_l1_acc, fp32_dest_acc_en, num_blocks);
 
     tt::DataFormat interm0_data_format = operations::experimental::quasar::matmul::utilities::get_interm_data_format(
         packer_l1_acc_en, fp32_dest_acc_en, output_data_format);
@@ -625,6 +626,7 @@ ttnn::device_operation::ProgramArtifacts MatmulMultiCoreReuseOptimizedProgramFac
         .tensor_parameters = std::move(tensor_parameters),
         .work_units = std::move(work_units),
     };
+    operations::experimental::quasar::matmul::utilities::set_fp32_dest_unpack_modes(spec);
 
     ProgramRunArgs run_args{
         .kernel_run_args = {std::move(reader_run_args), std::move(reader_writer_run_args)},

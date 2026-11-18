@@ -8,6 +8,8 @@
 #include <optional>
 #include <vector>
 
+#include <tt-metalium/workload/specification/program_spec.hpp>
+
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/distributed/types.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
@@ -53,6 +55,24 @@ uint32_t estimate_interm_tile_size(
 // would re-quantize the running sum on every K block, and the reload path (copy_block of the partials into Dest)
 // has only been run with bf16 / fp32 partials.
 tt::DataFormat get_interm_data_format(bool packer_l1_acc_en, bool fp32_dest_acc_en, tt::DataFormat output_data_format);
+
+/**
+ * Whether the packer accumulates the partials in L1 across K blocks: when requested, and always with fp32
+ * accumulation. fp32 partials must not be reloaded into Dest at every K block: through SrcA the reload rounds them to
+ * TF32 each time, and on Quasar the lossless reload (unpack-to-dest) is kernel-wide and needs a Dest section hand-off
+ * the LLK does not have yet (#62102). L1 accumulation adds in fp32, so the sum is read back once, at the last block.
+ */
+inline bool use_packer_l1_acc(bool packer_l1_acc, bool fp32_dest_acc_en, uint32_t num_blocks) {
+    return (packer_l1_acc || fp32_dest_acc_en) && num_blocks > 1;
+}
+
+/**
+ * Gives every compute kernel of a 32-bit-Dest matmul an UnpackToSrc entry for each Float32 DFB it consumes, as the
+ * Metal 2.0 validator requires. Every such operand, the partials included, goes through SrcA / SrcB: a to-dest entry
+ * would turn on unpack-to-dest for the whole kernel on Quasar (see use_packer_l1_acc). Run on the finished spec: each
+ * kernel only gets entries for DFBs it binds, and entries a factory already set are kept.
+ */
+void set_fp32_dest_unpack_modes(tt::tt_metal::ProgramSpec& spec);
 
 /**
  * L1 stride of an interleaved operand's tiles in the reader buffers: the tile size rounded up to the NOC's DRAM

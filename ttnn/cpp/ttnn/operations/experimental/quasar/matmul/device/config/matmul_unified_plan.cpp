@@ -241,7 +241,11 @@ MatmulUnifiedPlan make_plan(
     // from two when it adds straight onto the C slice, else more than two (the last K chunk spills and reloads).
     const bool can_accumulate_in_C_slice =
         !base.fp32_dest_acc_en && plan.C_format == tt::DataFormat::Float16_b && !base.has_fused_activation;
-    plan.packer_l1_acc_en = packer_l1_acc && plan.K_chunks_per_C_slice > (can_accumulate_in_C_slice ? 1 : 2);
+    // On Quasar fp32 partials are reloaded through SrcA (see MatmulUnifiedProgramFactory), so they always accumulate in
+    // L1 and are read back once instead of being rounded to TF32 at every K chunk.
+    const bool fp32_partials_in_l1 = is_quasar && base.fp32_dest_acc_en;
+    plan.packer_l1_acc_en =
+        (packer_l1_acc || fp32_partials_in_l1) && plan.K_chunks_per_C_slice > (can_accumulate_in_C_slice ? 1 : 2);
     plan.accumulate_in_C_slice = can_accumulate_in_C_slice && plan.packer_l1_acc_en;
     // An MX C keeps Float16_b partials (see get_interm_data_format): they must not be re-quantized per K chunk.
     plan.C_partials_format = ttnn::operations::experimental::quasar::matmul::utilities::get_interm_data_format(

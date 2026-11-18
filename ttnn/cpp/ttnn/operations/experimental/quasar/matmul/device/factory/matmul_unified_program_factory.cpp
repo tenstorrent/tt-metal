@@ -343,14 +343,20 @@ ttnn::device_operation::ProgramArtifacts MatmulUnifiedProgramFactory::create_pro
     if (plan.fp32_dest_acc_en) {
         // With a 32-bit DST every consumed 32-bit DFB needs an explicit unpack mode. The partials are
         // reloaded with a data copy into DST, so unpack them straight to DST and keep fp32 precision;
-        // fp32 operands feed the FPU and go through SrcA/SrcB.
+        // fp32 operands feed the FPU and go through SrcA/SrcB. Not on Quasar: there a to-dest entry turns on
+        // unpack-to-dest for the whole kernel, and its matmul sections deadlock without a Dest section hand-off
+        // (#62102). Quasar reloads the partials through SrcA instead, once, after accumulating them in L1 (see
+        // plan_unified_matmul).
         auto is_32bit = [](tt::DataFormat format) {
             return format == tt::DataFormat::Float32 || format == tt::DataFormat::Int32 ||
                    format == tt::DataFormat::UInt32;
         };
         ComputeHardwareConfig::ComputeUnpackModes& modes = compute_hw_config.unpack_modes;
         if (is_32bit(plan.C_partials_format)) {
-            modes.emplace(C_PARTIALS_DFB, tt::tt_metal::UnpackMode::UnpackToDest);
+            modes.emplace(
+                C_PARTIALS_DFB,
+                device.arch() == tt::ARCH::QUASAR ? tt::tt_metal::UnpackMode::UnpackToSrc
+                                                  : tt::tt_metal::UnpackMode::UnpackToDest);
         }
         if (is_32bit(plan.A_format)) {
             modes.emplace(A_SLICE_DFB, tt::tt_metal::UnpackMode::UnpackToSrc);
