@@ -56,8 +56,9 @@ The fork's custom ops are not in main:
 - same-width reshard
 - flip variant
 
-`test_equivalents.py` runs the closest stock op for each at the recovered shapes, i.e. the
-op `models/experimental/vadv2` uses for the same step:
+`test_equivalents.py` runs the closest stock op for each at the recovered shapes. Most are the
+ops `models/experimental/vad` uses for the same step; it masks keys instead of compacting them,
+so it calls neither `ttnn.nonzero` nor `ttnn.scatter_add`:
 
 | Fork op | Stock op tested |
 |---|---|
