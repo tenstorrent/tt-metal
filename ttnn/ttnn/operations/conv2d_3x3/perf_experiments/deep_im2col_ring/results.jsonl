@@ -1,0 +1,22 @@
+{"note": "DEVICE KERNEL DURATION ns, Blackhole p150b 1350 MHz, zoned on both sides, all variants on op_copy (d2 == committed op c33f4181192); every bm/dN output bit-identical to d2", "profiles": ["generated/profiler/reports/2026_11_18_02_11_01", "generated/profiler/reports/2026_11_18_02_18_47", "generated/profiler/reports/2026_11_18_02_21_16", "generated/profiler/reports/2026_11_18_02_22_59"]}
+{"case": "focus:semantic (sem_res2 LoFi)", "runs": {"d2": [135711, 134908], "d3": [130327], "bm(5)": [128389, 128699], "2bm(10)": [129304]}, "pcc": 0.999764}
+{"case": "focus:aspp_convs_1 LoFi", "depth": 3, "d2": [103656, 103604, 103521], "bm": [100811, 100627, 100482], "median_delta": -0.029}
+{"case": "focus:aspp_convs_2 LoFi", "depth": 3, "d2": [102986, 103148, 103058], "bm": [100098, 100256, 100153], "median_delta": -0.028}
+{"case": "block:aspp_convs1 HiFi4", "depth": 3, "d2": [228825], "bm": [226167]}
+{"case": "block:aspp_convs2 HiFi4", "depth": 3, "d2": [228251], "bm": [225619]}
+{"case": "height:stem_conv3", "depth": 4, "d2": [199559, 199760, 199571], "bm": [195385, 195439, 195476], "median_delta": -0.021}
+{"case": "height:res2_conv2", "depth": 10, "d2": [36860], "bm": [33808]}
+{"case": "height:res3_conv2", "depth": 3, "d2": [33070], "bm": [32897]}
+{"case": "height:sem_res2_fuse_conv0", "depth": 5, "d2": [392913, 392779, 393209], "bm": [383018, 382941, 382878], "median_delta": -0.025}
+{"case": "height:inst_res3_fuse_conv0", "depth": 3, "d2": [77191], "bm": [76570]}
+{"case": "height:sem_res3_fuse_conv1", "depth": 3, "d2": [106526], "bm": [106331]}
+{"case": "height:inst_res2_fuse_conv0", "depth": 7, "d2": [123159], "bm": [121210]}
+{"case": "height:sem_res2_fuse_conv1 HiFi4", "depth": 5, "d2": [346086, 344087, 346764], "bm": [337999, 338013, 338598], "median_delta": -0.023}
+{"case": "height:inst_res2_fuse_conv1", "depth": 10, "d2": [98199], "bm": [94718]}
+{"case": "height:center_head1", "depth": 10, "d2": [44067], "bm": [40569]}
+{"case": "inter:H64_W128_Ci128_Co128 rm_bf16", "depth": 3, "d2": [76856], "bm": [76379]}
+{"case": "inter:H64_W128_Ci128_Co128 tile_bf16", "depth": 3, "d2": [52384], "bm": [52130]}
+{"case": "inter:H64_W128_Ci128_Co128 tile_bf8b", "depth": 3, "d2": [43444], "bm": [43365]}
+{"case": "inter:H128_W256_Ci64_Co64 rm_bf16", "depth": 10, "d2": [185203], "bm": [184820]}
+{"case": "inter:H128_W256_Ci64_Co64 tile_bf16", "depth": 10, "d2": [63965], "bm": [63617]}
+{"case": "inter:H128_W256_Ci64_Co64 tile_bf8b", "depth": 10, "d2": [51288], "bm": [47770]}

@@ -122,7 +122,9 @@ NSLICE_SLICE_DEPTH = 2
 ROW_QUEUE = 2
 ROW_SPLIT_DEPTH_ROWS = 8
 
-# Buffer-depth knobs (Blocking Model depth table).
+# Buffer-depth knobs (Blocking Model depth table). On the K-blocked walk with the non-split gather, cb_im2col_rm then
+# grows past IM2COL_RM_DEPTH_ROWS toward one K-block of tile-rows, as far as the L1 left at the solved blocking allows
+# (_im2col_ring_target).
 IM2COL_RM_DEPTH_ROWS = 2
 WEIGHT_DEPTH = 2
 OUT_DEPTH_ROW_GROUPS = 2
@@ -400,12 +402,22 @@ def _row_split(g: Conv3x3Geometry, bm, bk):
     return bm > 1 and not face_direct_im2col(g, bk) and not _tap_major(g, bk)
 
 
-def _footprint(g: Conv3x3Geometry, core_m_tiles, bm, bk, bn, ub_cap=None, nslice=False):
+def _im2col_ring_target(g: Conv3x3Geometry, bm, bk, nslice):
+    """Tile-rows cb_im2col_rm aims for: one K-block on the K-blocked walk with the non-split gather, so the reader
+    gathers K-block k+1 while compute multiplies K-block k and the tilize never waits on a reserve-blocked gather. The
+    split row gather has its own ring, face-direct has no cb_im2col_rm, and the N-slice-outer walk tilizes all of K
+    before its first matmul, so there is nothing for the gather to run under."""
+    if nslice or face_direct_im2col(g, bk) or _row_split(g, bm, bk):
+        return IM2COL_RM_DEPTH_ROWS
+    return max(IM2COL_RM_DEPTH_ROWS, bm)
+
+
+def _footprint(g: Conv3x3Geometry, core_m_tiles, bm, bk, bn, ub_cap=None, nslice=False, im2col_depth=None):
     num_k_blocks = g.tensor_k_tiles // bk
     im2col_rm_depth_rows = (
         max(IM2COL_RM_DEPTH_ROWS, min(ROW_SPLIT_DEPTH_ROWS, bm * num_k_blocks))
         if _row_split(g, bm, bk)
-        else IM2COL_RM_DEPTH_ROWS
+        else (IM2COL_RM_DEPTH_ROWS if im2col_depth is None else im2col_depth)
     )
     max_m_blocks = _div_up(core_m_tiles, bm)
     num_slices = _div_up(g.tensor_n_tiles, g.out_n_tiles)
@@ -504,6 +516,12 @@ def select_blocking(g: Conv3x3Geometry, grid, l1_budget) -> Conv3x3Blocking:
             for ub_cap in range(ub_default, 0, -1):
                 fit = _footprint(g, core_m_tiles, bm, bk, bn, ub_cap, nslice)
                 if fit["footprint_bytes"] <= l1_budget:
+                    # The deeper im2col ring only takes L1 left at this (bm, bk, ub): it never costs a coarser block.
+                    for depth in range(_im2col_ring_target(g, bm, bk, nslice), IM2COL_RM_DEPTH_ROWS, -1):
+                        deep = _footprint(g, core_m_tiles, bm, bk, bn, ub_cap, nslice, im2col_depth=depth)
+                        if deep["footprint_bytes"] <= l1_budget:
+                            fit = deep
+                            break
                     return Conv3x3Blocking(
                         grid_x=grid_x,
                         core_m_tiles=core_m_tiles,
