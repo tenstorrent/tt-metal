@@ -269,7 +269,7 @@ def test_payload_refuses_overlapping_media(env, monkeypatch, expect_error):
 
 def test_media_config_needs_max_refs(monkeypatch, expect_error):
     for name in (
-        "GLOBAL_MESH_SHAPE",
+        "SP_FACTOR",
         "CHUNK_SIZE",
         "FORWARD_CHUNKS",
         "H2D_METADATA_SIZE_BYTES",
