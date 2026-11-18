@@ -165,12 +165,23 @@ CoreRangeSet::CoreRangeSet(const std::set<CoreRange>& core_ranges) : ranges_(cor
 CoreRangeSet::CoreRangeSet(const CoreRange& core_range) : ranges_{core_range} {}
 
 CoreRangeSet::CoreRangeSet(ttsl::Span<const CoreCoord> core_coords) {
-    std::vector<CoreRange> core_ranges;
-    core_ranges.reserve(core_coords.size());
-    for (const auto& core_coord : core_coords) {
-        core_ranges.push_back(CoreRange(core_coord));
+    // Single-core ranges overlap only where a core is listed twice: a sort finds that in O(n log n), where the
+    // pairwise check of the CoreRangeSet constructors (validate_no_overlap) is O(n^2) (a full grid's core list is ~100
+    // cores).
+    std::vector<CoreCoord> sorted_coords(core_coords.begin(), core_coords.end());
+    std::sort(sorted_coords.begin(), sorted_coords.end());
+    const auto duplicate = std::adjacent_find(sorted_coords.begin(), sorted_coords.end());
+    if (duplicate != sorted_coords.end()) {
+        TT_THROW(
+            "Cannot create CoreRangeSet with specified core ranges because core ranges {} and {} overlap!",
+            CoreRange(*duplicate).str(),
+            CoreRange(*duplicate).str());
     }
-    CoreRangeSet unmerged_set(std::move(core_ranges));
+    CoreRangeSet unmerged_set;
+    unmerged_set.ranges_.reserve(sorted_coords.size());
+    for (const auto& core_coord : sorted_coords) {
+        unmerged_set.ranges_.push_back(CoreRange(core_coord));
+    }
     *this = unmerged_set.merge_ranges();
 }
 

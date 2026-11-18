@@ -130,12 +130,17 @@ BufferShardingArgs TensorLayoutImpl::compute_buffer_sharding_args(const tt::tt_m
     std::optional<ShardSpecBuffer> shard_spec_buffer;
     std::optional<BufferDistributionSpec> distribution_spec;
 
-    if (auto shard_spec = memory_config_.shard_spec()) {
+    if (const auto& shard_spec = memory_config_.shard_spec()) {
         const auto width_in_pages = physical_size.width() / page_shape.width();
         const auto height_in_pages = physical_size.height() / page_shape.height();
         const std::array<uint32_t, 2> tensor2d_shape_in_pages{
             static_cast<uint32_t>(height_in_pages), static_cast<uint32_t>(width_in_pages)};
         shard_spec_buffer = ShardSpecBuffer(*shard_spec, std::array<uint32_t, 2>(page_shape), tensor2d_shape_in_pages);
+    }
+
+    // A TensorSpec can carry both specs (populate_sharding_specs), and then the ND spec's distribution wins: building
+    // one from the legacy spec as well would only be discarded, at the cost of a second core-list walk per allocation.
+    if (const auto& shard_spec = memory_config_.shard_spec(); shard_spec && !memory_config_.nd_shard_spec()) {
         auto padded_shape = compute_padded_shape(shape);
         if (padded_shape.rank() < 2) {  // Edge Case: For 1-D tensors and scalars, we need to make its shape 2D to
                                         // construct the buffer distribution spec, since the tensor rank cannot be less
