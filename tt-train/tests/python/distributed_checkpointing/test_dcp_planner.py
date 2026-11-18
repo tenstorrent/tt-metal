@@ -10,6 +10,7 @@ slicing of the canonical array says it should hold. The cases reshard between TP
 N-D labels, fused and padded weights, each in both directions, and check what the planner refuses.
 """
 
+import json
 import zlib
 from dataclasses import dataclass
 
@@ -236,6 +237,7 @@ def test_save_plan_spreads_owners_over_every_file_and_fixes_offsets():
     assert plan.bytes_written == 64 * 8 * 32 * 64 * 2
     for fplan in plan.files:
         assert (len(fplan.header) % 4096) == 0
+        assert json.loads(fplan.header[8:])["__metadata__"] == {"ttml.format": "ttml-dcp/1"}
         offsets = [it.data_offset for it in fplan.items]
         assert offsets == sorted(offsets) and offsets[0] == 0
         assert sum(it.nbytes for it in fplan.items) == fplan.data_bytes

@@ -39,7 +39,7 @@ from ._errors import (
     ShapeMismatchError,
     TopologyError,
 )
-from ._index import ChunkRecord, Entry, Index
+from ._index import FORMAT, VERSION, ChunkRecord, Entry, Index
 from ._layouts import Compose, Pad, Transform
 from ._safetensors import ITEMSIZE, build_header
 from ._topology import (
@@ -207,12 +207,12 @@ def create_save_plan(
     infos: Iterable[TensorInfo],
     file_for_coord: Callable[[tuple[int, ...]], str],
     owner_of: Callable[[str, list[Chunk]], Chunk | None],
-    file_metadata: Callable[[tuple[int, ...]], dict] | None = None,
 ) -> SavePlan:
     """One file per mesh coordinate that writes something; each key's unique boxes assigned to their elected owners.
 
     ``owner_of(key, replica group)`` returns the group's chunk this process writes, or ``None`` when another process
-    writes it, so the election of the writers is the caller's.
+    writes it, so the election of the writers is the caller's. Every file's safetensors metadata names the format
+    (``ttml.format``); which device wrote it is in the index and the file's name.
     """
     infos = _by_key(infos, "saved")
     owned: dict[str, list[Chunk]] = {}
@@ -238,8 +238,7 @@ def create_save_plan(
     for plan in files:
         plan.items.sort(key=lambda it: (-it.nbytes, it.key))
         tensors = [(it.key, infos[it.key].dtype, it.chunk.box.sizes, it.nbytes) for it in plan.items]
-        metadata = file_metadata(plan.coord) if file_metadata else None
-        plan.header, offsets, plan.data_bytes = build_header(tensors, metadata)
+        plan.header, offsets, plan.data_bytes = build_header(tensors, {"ttml.format": f"{FORMAT}/{VERSION}"})
         for it in plan.items:
             it.data_offset = offsets[it.key][0]
     return SavePlan(infos, files, items)
