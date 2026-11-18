@@ -87,6 +87,7 @@ class TtMoe(LightweightModule):
         latent_use_norm: bool = True,
         routed_expert_weights_dtype: ttnn.DataType = DEFAULT_ROUTED_EXPERT_WEIGHTS_DTYPE,
         gate_bias_centered: bool = False,
+        gate_bias_fp32: bool = False,
         shared_expert_2d_tp: bool = False,
         shared_expert_2d_layout=None,
     ) -> bool:
@@ -108,7 +109,9 @@ class TtMoe(LightweightModule):
         complete and the empty placeholder is loaded as the weights.
         """
         prefix = f"layer_{layer_idx}"
-        if not TtMoEGatePrefill.check_cache_complete(cache_path, f"{prefix}.gate", bias_centered=gate_bias_centered):
+        if not TtMoEGatePrefill.check_cache_complete(
+            cache_path, f"{prefix}.gate", bias_centered=gate_bias_centered, bias_fp32=gate_bias_fp32
+        ):
             return False
         if not TtRoutedExpert.check_cache_complete(
             cache_path, f"{prefix}.routed_expert", experts_per_chip, routed_expert_weights_dtype
@@ -146,6 +149,7 @@ class TtMoe(LightweightModule):
         latent_weights: dict | None = None,
         latent_use_norm: bool = True,
         gate_bias_centered: bool = False,
+        gate_bias_fp32: bool = False,
         sp_axis: int = 0,
         shared_expert_2d_tp: bool = False,
     ):
@@ -175,6 +179,7 @@ class TtMoe(LightweightModule):
                 dim=emb_dim,
                 n_routed_experts=gate_weights["weight"].shape[0],
                 bias_centered=gate_bias_centered,
+                bias_fp32=gate_bias_fp32,
             )
             gate_config.ccl_config["DISPATCH_AXIS"] = sp_axis
             gate_config.ccl_config["TP_AXIS"] = tp_axis
@@ -291,6 +296,7 @@ class TtMoe(LightweightModule):
         overlap_routed_expert_with_combine: Optional[bool] = False,
         moe_transport: Optional[str] = "direct",
         gate_bias_centered: bool = False,
+        gate_bias_fp32: bool = False,
         sp_axis: int = 0,
         shared_expert_2d_tp: bool = False,
     ):
@@ -410,6 +416,8 @@ class TtMoe(LightweightModule):
                 for the routed expert overlapped with combine.
             gate_bias_centered: cache and use the gate's correction bias mean-centred (the model config's
                 MOE_GATE_BIAS_CENTERED, see tt_moe_gate_prefill.centre_gate_bias).
+            gate_bias_fp32: keep the gate's correction bias fp32 on device (the model config's
+                MOE_GATE_BIAS_FP32, see tt_moe_gate_prefill.gate_bias_fp32).
             sp_axis: Mesh axis the dispatch groups (SP) run along; TP is the other axis. 0 (default)
                 is the 8x4 Galaxy layout; 1 puts SP on the 4-wide ring axis for the 4x4 prefill
                 stages. Dispatch / combine run on sp_axis; the gate all-reduce, shared expert, latent
@@ -497,6 +505,7 @@ class TtMoe(LightweightModule):
             route_scale=route_scale,
             max_sp_dim=max_gate_seq_len_per_chip,
             bias_centered=gate_bias_centered,
+            bias_fp32=gate_bias_fp32,
         )
         gate_config.ccl_config["DISPATCH_AXIS"] = self.sp_axis
         gate_config.ccl_config["TP_AXIS"] = self.tp_axis

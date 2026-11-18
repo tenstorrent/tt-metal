@@ -112,7 +112,11 @@ def missing_trunk_categories(
     ``TtPrefillTransformer.check_cache_complete``, one category at a time.
     """
     from models.demos.deepseek_v3_d_p.tt.moe.tt_mlp_2d import TtMlp2D, ffn_2d_layout, ffn_2d_tp
-    from models.demos.deepseek_v3_d_p.tt.moe.tt_moe_gate_prefill import TtMoEGatePrefill, gate_bias_centered
+    from models.demos.deepseek_v3_d_p.tt.moe.tt_moe_gate_prefill import (
+        TtMoEGatePrefill,
+        gate_bias_centered,
+        gate_bias_fp32,
+    )
     from models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert import TtRoutedExpert
     from models.demos.deepseek_v3_d_p.tt.moe.tt_shared_expert import TtSharedExpert
     from models.demos.deepseek_v3_d_p.tt.tt_distributed_rms_norm import TtDistributedRmsNorm
@@ -177,7 +181,10 @@ def missing_trunk_categories(
         if not (
             exists
             and TtMoEGatePrefill.check_cache_complete(
-                cache_path, f"{prefix}.gate", bias_centered=gate_bias_centered(model_cfg)
+                cache_path,
+                f"{prefix}.gate",
+                bias_centered=gate_bias_centered(model_cfg),
+                bias_fp32=gate_bias_fp32(model_cfg),
             )
         ):
             miss(MOE_GATE, layer_idx)

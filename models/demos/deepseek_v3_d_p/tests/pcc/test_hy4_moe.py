@@ -47,7 +47,13 @@ from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import (
 )
 from models.demos.deepseek_v3_d_p.tt.moe.tt_mlp_2d import TtMlp2D
 from models.demos.deepseek_v3_d_p.tt.moe.tt_moe import TtMoe
-from models.demos.deepseek_v3_d_p.tt.moe.tt_moe_gate_prefill import GateComputeMode, gate_bias_centered
+from models.demos.deepseek_v3_d_p.tt.moe.tt_moe_gate_prefill import (
+    GateComputeMode,
+    TtMoEGateConfig,
+    TtMoEGatePrefill,
+    gate_bias_centered,
+    gate_bias_fp32,
+)
 from models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert import ROUTED_EXPERT_ACTIVATION_BY_NAME
 from models.demos.deepseek_v3_d_p.tt.tt_ccl import per_axis_topology
 from tt_py_test_utils_common.utils_for_testing import comp_pcc
@@ -303,6 +309,7 @@ def test_hy4_moe(mesh_device, device_params, sp_axis, experts, case, layer):
         shared_expert_activation=CFG.SHARED_EXPERT_ACTIVATION,
         gate_fallback_mode=GateComputeMode.DEVICE_FP32,
         gate_bias_centered=gate_bias_centered(CFG),
+        gate_bias_fp32=gate_bias_fp32(CFG),
         weight_cache_path=cache,
         layer_idx=layer,
         moe_transport="direct",
@@ -340,3 +347,52 @@ def test_hy4_moe(mesh_device, device_params, sp_axis, experts, case, layer):
     assert row["gate_recall"] >= (GATE_RECALL if case == "real" else GATE_RECALL_CLAMP), row
     assert row["pcc_shared"] >= SHARED_PCC, row
     assert row["pcc_final"] >= MOE_PCC, row
+
+
+# ---------------------------------------------------------------------------------------------------- router bias
+BIAS_LAYERS = [int(n) for n in os.environ.get("HY4_ROUTER_BIAS_LAYERS", "1,2,20,40,77").split(",")]
+
+
+@pytest.mark.parametrize("mesh_device, device_params, sp_axis", MESHES[:1], indirect=["mesh_device", "device_params"])
+@pytest.mark.parametrize("layer", BIAS_LAYERS)
+@pytest.mark.timeout(1800)
+def test_hy4_router_bias_precision(mesh_device, device_params, sp_axis, layer):
+    """Expert picks of the device router (TtMoEGatePrefill, DEVICE_FP32) with the correction bias in bf16 (before) and
+    fp32 (MOE_GATE_BIAS_FP32, after) against the fp32 HF router on the same bf16 input. The input is the layer's real
+    FFN input where a golden has it (layers 1, 2), else layer 2's (the bias and the gate weight are the layer's own).
+    Recorded, and the fp32 bias must not lose picks."""
+    ckpt = _ckpt()
+    p = f"model.layers.{layer}.mlp."
+    gate_w = ckpt._read(p + "gate.weight")
+    bias = ckpt.get(p + "gate.e_score_correction_bias").float()
+    src = layer if (REF_DIR / f"layer_{layer}.safetensors").exists() else 2
+    x = _golden(src)["hn"].to(torch.bfloat16)
+    S = x.shape[0]
+    ref_idx, _ = ref.route(
+        x.float(), gate_w.float(), bias, top_k=CFG.NUM_EXPERTS_PER_TOKEN, routed_scaling_factor=CFG.ROUTE_SCALE
+    )
+    sp = mesh_device.shape[sp_axis]
+    row = dict(test="router_bias", layer=layer, input_layer=src, tokens=S)
+    row["bias_bf16_max_abs_err"] = float((bias.to(torch.bfloat16).float() - bias).abs().max())
+    for name, fp32 in (("bf16", False), ("fp32", True)):
+        config = TtMoEGateConfig.from_model_cfg(CFG, sp_dim=S // sp, bias_fp32=fp32)
+        config.ccl_config["DISPATCH_AXIS"] = sp_axis
+        config.ccl_config["TP_AXIS"] = 1 - sp_axis
+        config.ccl_config["NUM_LINKS"] = 2
+        config.ccl_config["TOPOLOGY"] = per_axis_topology(device_params["fabric_config"])[1 - sp_axis]
+        gate = TtMoEGatePrefill(
+            config, mesh_device, weight=gate_w, bias=bias, fallback_mode=GateComputeMode.DEVICE_FP32
+        )
+        assert gate.bias.dtype == (ttnn.float32 if fp32 else ttnn.bfloat16)
+        x_tt = _upload(x, mesh_device, sp_axis)
+        _, idx, _ = gate(ttnn.view(x_tt, (x_tt.shape[0] * x_tt.shape[1], x_tt.shape[2])))
+        tt_idx = ttnn.to_torch(idx, mesh_composer=get_sp_mesh_composer(mesh_device, sp_axis), dtype=torch.int32)
+        tt_idx = tt_idx.reshape(S, -1)[:, : CFG.NUM_EXPERTS_PER_TOKEN]
+        row[f"recall_{name}"] = _recall(tt_idx, ref_idx)
+        row[f"rows_exact_{name}"] = float(
+            (torch.sort(tt_idx.long(), -1).values == torch.sort(ref_idx.long(), -1).values).all(-1).float().mean()
+        )
+        del gate
+    _report(**row)
+    assert row["recall_fp32"] >= row["recall_bf16"] - 1e-3, row
+    assert row["recall_fp32"] >= GATE_RECALL, row

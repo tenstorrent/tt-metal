@@ -77,6 +77,9 @@ class Hy4Config(GLM53Config):
     # moe_fused_swiglu has no ClampedSiluGlu, so the routed-expert hybrid split (GLM: 320) must stay off:
     # every expert runs through unified_routed_expert_moe.
     ROUTED_EXPERT_HYBRID_TOKEN_THRESHOLD = None
+    # The checkpoint stores e_score_correction_bias in fp32; keep it fp32 on device (bf16 rounds it by up to 2.2e-4,
+    # layer 40, the size of the score margins that decide near-tie expert picks). moe_grouped_topk takes it as is.
+    MOE_GATE_BIAS_FP32 = True
     # Shared expert / dense layer-0 FFN placement (#65890). Off here: the dev SP8 x TP4 layout keeps GLM-5.3's TP-only
     # TtSharedExpert / TtFfn and their caches. The SC1 layout runs Hy4TP32Config, which turns it on (TtMlp2D).
     FFN_2D_TP = False

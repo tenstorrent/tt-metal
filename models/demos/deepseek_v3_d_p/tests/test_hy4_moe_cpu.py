@@ -369,3 +369,35 @@ def test_ffn_dram_per_chip_sc1():
     assert abs((bfp8["shared"] + bfp8["dense"]) / gb - 0.108) < 0.001
     assert abs((one_d["shared"] + one_d["dense"]) / gb - 0.862) < 0.001
     assert sum(bfp8.values()) / gb < 25.9 and sum(bfp4.values()) / gb < 14.1
+
+
+def test_router_bias_stays_fp32_for_hy4(tmp_path):
+    """Hy4 keeps the checkpoint's fp32 e_score_correction_bias on device (MOE_GATE_BIAS_FP32); GLM-5.3 keeps bf16. The
+    fp32 bias caches under its own name, so a bf16 bias cache never satisfies the fp32 check."""
+    import ttnn
+    from models.demos.deepseek_v3_d_p.reference.glm_5_3_config import GLM53Config
+    from models.demos.deepseek_v3_d_p.tt.moe.tt_moe_gate_prefill import (
+        TtMoEGateConfig,
+        TtMoEGatePrefill,
+        gate_bias_cache_name,
+        gate_bias_fp32,
+    )
+    from models.demos.deepseek_v3_d_p.utils.fast_cache_checker import init_checker
+
+    assert gate_bias_fp32(Hy4Config) and gate_bias_fp32(Hy4TP32Config) and not gate_bias_fp32(GLM53Config)
+    assert TtMoEGateConfig.from_model_cfg(Hy4Config).bias_dtype == ttnn.float32
+    assert TtMoEGateConfig.from_model_cfg(GLM53Config).bias_dtype == ttnn.bfloat16
+    assert gate_bias_cache_name(True, True) == "e_score_correction_bias_centered_fp32"
+    assert gate_bias_cache_name(True) == "e_score_correction_bias_centered"
+    prefix = "layer_1.gate"
+    for name in ("weight_dtype_BFLOAT16_layout_TILE", "e_score_correction_bias_centered_dtype_BFLOAT16_layout_TILE"):
+        (tmp_path / f"{prefix}.{name}.tensorbin").touch()
+    init_checker(tmp_path)
+    assert TtMoEGatePrefill.check_cache_complete(tmp_path, prefix, bias_centered=True)
+    assert not TtMoEGatePrefill.check_cache_complete(tmp_path, prefix, bias_centered=True, bias_fp32=True)
+    (tmp_path / f"{prefix}.e_score_correction_bias_centered_fp32_dtype_FLOAT32_layout_TILE.tensorbin").touch()
+    init_checker(tmp_path)
+    assert TtMoEGatePrefill.check_cache_complete(tmp_path, prefix, bias_centered=True, bias_fp32=True)
+    # The rounding fp32 avoids: a typical Hy4 bias magnitude in bf16 loses ~1e-4.
+    b = torch.tensor([7.123456e-2, -3.31e-2, 1.0e-3])
+    assert (b.to(torch.bfloat16).float() - b).abs().max() > 1e-5

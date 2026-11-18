@@ -23,7 +23,7 @@ from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import (
 )
 from models.demos.deepseek_v3_d_p.tt.moe.tt_mlp_2d import Mlp2DLayout, TtMlp2D, ffn_2d_layout, ffn_2d_tp
 from models.demos.deepseek_v3_d_p.tt.moe.tt_moe import TtMoe
-from models.demos.deepseek_v3_d_p.tt.moe.tt_moe_gate_prefill import GateComputeMode, gate_bias_centered
+from models.demos.deepseek_v3_d_p.tt.moe.tt_moe_gate_prefill import GateComputeMode, gate_bias_centered, gate_bias_fp32
 from models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert import (
     DEFAULT_ROUTED_EXPERT_WEIGHTS_DTYPE,
     ROUTED_EXPERT_ACTIVATION_BY_NAME,
@@ -157,6 +157,7 @@ class TtPrefillBlock(LightweightModule):
                 latent_use_norm=getattr(model_cfg, "LATENT_MOE_USE_NORM", True),
                 routed_expert_weights_dtype=routed_expert_weights_dtype,
                 gate_bias_centered=gate_bias_centered(model_cfg),
+                gate_bias_fp32=gate_bias_fp32(model_cfg),
                 shared_expert_2d_tp=ffn_2d_tp(model_cfg),
                 shared_expert_2d_layout=ffn_2d_layout(model_cfg) if ffn_2d_tp(model_cfg) else None,
             ):
@@ -295,6 +296,7 @@ class TtPrefillBlock(LightweightModule):
                 latent_weights=state_dict.get("latent_weights"),
                 latent_use_norm=getattr(model_cfg, "LATENT_MOE_USE_NORM", True),
                 gate_bias_centered=gate_bias_centered(model_cfg),
+                gate_bias_fp32=gate_bias_fp32(model_cfg),
                 sp_axis=sp_axis,
                 shared_expert_2d_tp=ffn_2d_tp(model_cfg),
             )
@@ -640,6 +642,7 @@ class TtPrefillBlock(LightweightModule):
             gate_score_func=getattr(model_cfg, "SCORE_FUNC", None),
             gate_weights=state_dict.get("gate_weights"),  # None if cache exists
             gate_bias_centered=gate_bias_centered(model_cfg),
+            gate_bias_fp32=gate_bias_fp32(model_cfg),
             # DeepSeek-V4 hash layers route via a frozen tid2eid[input_ids] table; None elsewhere.
             gate_hash_table=state_dict.get("hash_table"),
             gate_fallback_mode=gate_fallback_mode,
