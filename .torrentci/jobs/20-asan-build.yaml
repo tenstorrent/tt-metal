@@ -153,7 +153,7 @@ jobs:
           run:
             # The cache archive refuses symlinks (18 in these sources, e.g.
             # cadical's src/configure), hard links, setuid/setgid bits, more
-            # than 100k members (about 85k here, 62k of them Boost), names
+            # than 100k members (about 85k here, 62k of them Boost), holes, names
             # that collide ignoring case, and restores no `.git` path. CPM
             # only checks that a cached source directory exists, so drop the
             # clones' .git and replace each symlink with a copy of its target
@@ -163,6 +163,13 @@ jobs:
               find .cpmcache -type l -exec sh -c 'for l; do
               t=$(readlink -f "$l") && rm "$l" && cp -rL "$t" "$l" || true; done' _ {} +
             - find .cpmcache -type l -delete
+            # Densify files with holes (the archive refuses sparse files).
+            - >-
+              find .cpmcache -type f -size +0 -printf '%S %p\n' | awk '$1 < 1 {sub(/^[^ ]+ /, ""); print}'
+              | while IFS= read -r f; do echo "densify $f"; cp --sparse=never "$f" "$f.dense" && mv "$f.dense" "$f"; done
+            - >-
+              if command -v getfattr >/dev/null; then echo "xattr files:
+              $(getfattr -R -d -m - .cpmcache 2>/dev/null | grep -c '^# file')"; fi
             - >-
               echo "cpmcache: $(du -sh .cpmcache | cut -f1),
               $(find .cpmcache | wc -l) entries, $(find .cpmcache -type l | wc -l) symlinks,
