@@ -89,6 +89,7 @@ set(SOURCES
     ops/binary_ops_fw_test.cpp
     ops/binary_ops_bw_test.cpp
     ops/conv3d_op_test.cpp
+    ops/grouped_dynamic_causal_conv_op_test.cpp
     ops/mla_kv_assemble_op_test.cpp
     ops/multi_head_test.cpp
     ops/variable_matmul_test.cpp
