@@ -108,9 +108,8 @@ def test_linear_reuse_config_bias_broadcasts_into_optional_output(device, a_shap
 def test_sparse_matmul_rejects_multiple_m_blocks(device, expect_error):
     """mcast_in0 sends one M block to every core, so per_core_M must cover all of M."""
     torch.manual_seed(0)
-    m, k, n, experts = 32, 128, 512, 4
-    tile_h = 16
-    in0 = _dram(torch.randn(1, 1, m, k).bfloat16(), device, tile=ttnn.Tile((tile_h, 32)))
+    m, k, n, experts = 64, 128, 512, 4
+    in0 = _dram(torch.randn(1, 1, m, k).bfloat16(), device)
     in1 = _dram(torch.randn(1, experts, k, n).bfloat16(), device, dtype=ttnn.bfloat8_b)
     sparsity = ttnn.from_torch(
         torch.ones(1, 1, 1, experts).bfloat16(),
@@ -126,7 +125,7 @@ def test_sparse_matmul_rejects_multiple_m_blocks(device, expect_error):
         out_subblock_w=1,
         out_block_h=1,
         out_block_w=1,
-        per_core_M=m // tile_h // 2,
+        per_core_M=m // 32 // 2,
         per_core_N=n // 32,
         fuse_batch=False,
         fused_activation=None,
@@ -141,7 +140,6 @@ def test_sparse_matmul_rejects_multiple_m_blocks(device, expect_error):
             is_input_a_sparse=False,
             is_input_b_sparse=True,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            output_tile=ttnn.Tile([tile_h, 32]),
             program_config=program_config,
         )
 
