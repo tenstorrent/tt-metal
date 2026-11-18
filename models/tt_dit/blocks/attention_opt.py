@@ -450,7 +450,7 @@ class Attention(Module):
                 persistent_output_buffer=ag_persistent_buffer,
                 multi_device_global_semaphore=ag_global_semaphores,
                 num_links=self.ccl_manager.num_links,
-                topology=self.ccl_manager.topology,
+                topology=self.ccl_manager.axis_topology(parallel_config.tensor_parallel.mesh_axis),
                 cluster_axis=parallel_config.tensor_parallel.mesh_axis,
                 barrier_semaphore=None,
                 force_transpose=True,
