@@ -69,6 +69,7 @@
   "perf_rmsnorm_bcast_scalar_dest_reuse": 199.1,
   "perf_rmsnorm_clear_product_tile": 11.0,
   "perf_rope": 192.3,
+  "perf_sdpa_bcast_col_srca_srcb_reuse": 10.1,
   "perf_sdpa_bcast_col_srcb_reuse": 16.5,
   "perf_sdpa_custom_mm_reuse_dest_srcb": 9.4,
   "perf_sdpa_weighted_reduce": 7.9,
