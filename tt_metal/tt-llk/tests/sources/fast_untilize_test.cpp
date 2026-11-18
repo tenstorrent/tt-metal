@@ -67,7 +67,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         }
         else if constexpr (PERF_RUN_TYPE == PerfRunType::MATH_ISOLATE)
         {
-            _perf_unpack_loop_set_valid<true, is_fp32_dest_acc_en>(LOOP_FACTOR * FULL_RT_DIM * FULL_CT_DIM * 4);
+            _perf_unpack_stream_set_valid<true, is_fp32_dest_acc_en, PERF_RUN_TYPE>(LOOP_FACTOR * FULL_RT_DIM * FULL_CT_DIM * 4);
         }
         else if constexpr (FAST_UNTILIZE_SINGLE_UNIT)
         {
@@ -158,7 +158,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         }
         else if constexpr (PERF_RUN_TYPE == PerfRunType::UNPACK_ISOLATE)
         {
-            _perf_math_loop_clear_valid<true, is_fp32_dest_acc_en>(LOOP_FACTOR * FULL_RT_DIM * FULL_CT_DIM * 4);
+            _perf_math_stream_clear_valid<true, is_fp32_dest_acc_en, PERF_RUN_TYPE>(LOOP_FACTOR * FULL_RT_DIM * FULL_CT_DIM * 4);
             PROFILER_SYNC();
         }
         else if constexpr (FAST_UNTILIZE_SINGLE_UNIT)
@@ -228,10 +228,10 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const Operand& buffer_Res       = params.buffer_Res;
 #endif
 
-#ifdef LLK_PROFILER
-    constexpr std::uint32_t NUM_GUARD = 0;
-#else
+#ifndef SPEED_OF_LIGHT
     const std::uint32_t NUM_GUARD = params.NUM_GUARD_TILES;
+#else
+    constexpr std::uint32_t NUM_GUARD = NUM_GUARD_TILES;
 #endif
 
     const std::uint32_t total_tiles = FULL_RT_DIM * FULL_CT_DIM;

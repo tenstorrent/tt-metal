@@ -59,7 +59,8 @@ ttnn::Tensor hybrid_routed_expert_moe(
     const std::optional<GlobalSemaphore>& expert_go_semaphore,
     const std::optional<ttnn::Tensor>& forwarding_buffer,
     const std::vector<GlobalSemaphore>& channel_semaphores,
-    const std::optional<ttnn::Tensor>& weight_address_table) {
+    const std::optional<ttnn::Tensor>& weight_address_table,
+    const std::optional<uint32_t>& combine_fwd_vc_pages) {
     TT_FATAL(
         gate_projs.size() == up_projs.size() && gate_projs.size() == down_projs.size(),
         "gate/up/down projection lists must have the same length (got {}, {}, {})",
@@ -119,6 +120,13 @@ ttnn::Tensor hybrid_routed_expert_moe(
         "overlapped with combine, dispatched_buffer must be ROW_MAJOR (got {} {})",
         dispatched_buffer.dtype(),
         dispatched_buffer.layout());
+    // Combine's forwarding depth is the model's to choose; there is no depth that is right for every model.
+    TT_FATAL(
+        combine_fwd_vc_pages.has_value() == overlap_combine,
+        "combine_fwd_vc_pages is combine's and must be passed exactly when overlapping with combine "
+        "(dispatched_metadata {}, combine_fwd_vc_pages {})",
+        overlap_combine ? "passed" : "omitted",
+        combine_fwd_vc_pages.has_value() ? "passed" : "omitted");
     if (x_is_row_major) {
         output = ttnn::empty(
             dispatched_buffer.logical_shape(),
@@ -221,6 +229,7 @@ ttnn::Tensor hybrid_routed_expert_moe(
             .combine_num_links = combine_num_links,
             .num_experts_per_tok = num_experts_per_tok,
             .seq_len_per_chip = seq_len_per_chip,
+            .combine_fwd_vc_pages = combine_fwd_vc_pages,
             .fwd_arrived = fwd_arrived_semaphore,
             .final_arrived = final_arrived_semaphore,
             .expert_go = expert_go_semaphore,
@@ -229,8 +238,9 @@ ttnn::Tensor hybrid_routed_expert_moe(
             .final_arrived_addr = semaphore_addr(final_arrived_semaphore),
             .expert_go_addr = semaphore_addr(expert_go_semaphore),
             .channel_semaphore_addrs = semaphore_addrs(channel_semaphores),
-            .l1_arena_addr =
-                overlap_combine && l1_arena.has_value() ? static_cast<uint32_t>(l1_arena->buffer()->address()) : 0u},
+            .l1_arena_addr = overlap_combine && l1_arena.has_value()
+                                 ? static_cast<uint32_t>(l1_arena->mesh_buffer().address())
+                                 : 0u},
         OperationType::tensor_args_t{
             .x = dispatched_buffer,
             .gate_projs = gate_projs,
@@ -262,6 +272,7 @@ ttnn::Tensor hybrid_routed_expert_moe_forwarding_buffer(
     uint32_t experts_per_chip,
     uint32_t num_experts_per_tok,
     uint32_t seq_len_per_chip,
+    uint32_t combine_fwd_vc_pages,
     uint32_t combine_axis,
     uint32_t combine_num_links) {
     // The same fields combine_attributes hands combine, so the spec matches what validate_overlap expects.
@@ -272,6 +283,7 @@ ttnn::Tensor hybrid_routed_expert_moe_forwarding_buffer(
         .seq_len_per_chip = seq_len_per_chip,
         .axis = combine_axis,
         .num_links = combine_num_links,
+        .fwd_vc_pages = combine_fwd_vc_pages,
     };
     return create_device_tensor(
         combine::forwarding_buffer_spec(params, emb_dim * static_cast<uint32_t>(sizeof(uint16_t))), mesh_device);

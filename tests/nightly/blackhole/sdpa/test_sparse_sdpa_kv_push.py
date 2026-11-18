@@ -17,6 +17,7 @@ import torch
 from loguru import logger
 
 import ttnn
+from models.common.ci_failure import assert_perf_gate
 from models.common.utility_functions import run_for_blackhole
 
 K_DIM, V_DIM, TOPK, H = 576, 512, 2048, 64
@@ -392,4 +393,4 @@ def test_sparse_kv_push_glm_perf(mesh_device, layer):
     ceilings = (_GLM_PUSH_PERF_CEILING_US or {}).get(layer)
     if ceilings is not None:
         over = {name: (us, ceilings[name]) for name, us in measured.items() if us > ceilings[name]}
-        assert not over, f"L{layer} steps over their ceiling (measured, ceiling us): {over}"
+        assert_perf_gate(not over, f"L{layer} steps over their ceiling (measured, ceiling us): {over}")

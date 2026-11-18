@@ -13,16 +13,16 @@
 #include <string>
 #include <vector>
 
-#include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
-#include <tt-metalium/experimental/metal2_host_api/dataflow_buffer_spec.hpp>
-#include <tt-metalium/experimental/metal2_host_api/kernel_spec.hpp>
-#include <tt-metalium/experimental/metal2_host_api/node_coord.hpp>
-#include <tt-metalium/experimental/metal2_host_api/tensor_parameter.hpp>
+#include <tt-metalium/workload/specification/program_spec.hpp>
+#include <tt-metalium/workload/specification/dataflow_buffer_spec.hpp>
+#include <tt-metalium/workload/specification/kernel_spec.hpp>
+#include <tt-metalium/vocabulary/node_coord.hpp>
+#include <tt-metalium/workload/specification/tensor_parameter.hpp>
 #include <tt-metalium/experimental/per_core_allocation/memory_config.hpp>
 #include <tt-metalium/tensor/spec/tensor_spec.hpp>
 #include <tt-metalium/tensor/spec/layout/tensor_layout.hpp>
 #include <tt-metalium/work_split.hpp>
-#include "experimental/metal2_host_api/data_movement_hardware_config.hpp"
+#include <tt-metalium/workload/specification/data_movement_hardware_config.hpp>
 #include "kernel_types.hpp"
 
 // This file contains shortcut helper functions to create minimal valid ProgramSpec
@@ -32,7 +32,7 @@
 // See the Metal 2.0 Host API documentation and programming examples for
 // recommended patterns for constructing ProgramSpec objects in production code.
 
-namespace tt::tt_metal::experimental::test_helpers {
+namespace tt::tt_metal::test_helpers {
 
 // ============================================================================
 // Constants
@@ -65,10 +65,8 @@ inline KernelSpec MakeMinimalGen2DMKernel(std::string name, uint32_t num_threads
 // two dedicated-NOC DM kernels sharing a NOC hang the device (validation rejects it), so a helper
 // that always defaulted to NOC_0 would produce a pair that fails validation.
 inline KernelSpec MakeMinimalGen1DMKernel(
-    std::string name, tt::tt_metal::DataMovementProcessor processor = tt::tt_metal::DataMovementProcessor::RISCV_0) {
-    const tt::tt_metal::NOC noc = (processor == tt::tt_metal::DataMovementProcessor::RISCV_0)
-                                      ? tt::tt_metal::NOC::NOC_0
-                                      : tt::tt_metal::NOC::NOC_1;
+    std::string name, DataMovementProcessor processor = DataMovementProcessor::RISCV_0) {
+    const NOC noc = (processor == DataMovementProcessor::RISCV_0) ? NOC::NOC_0 : NOC::NOC_1;
     return KernelSpec{
         .unique_id = KernelSpecName{std::move(name)},
         .source = KernelSpec::SourceCode{MINIMAL_KERNEL_SOURCE},
@@ -146,12 +144,11 @@ inline WorkUnitSpec MakeMinimalWorkUnit(std::string name, const Nodes& nodes, co
 // Default layout: BFLOAT16, ROW_MAJOR, interleaved, shape {1, 32}. Hardware-agnostic;
 // works on any mock device (alignment + virtualized cores resolved by MakeProgramFromSpec).
 // buffer_type defaults to DRAM; pass BufferType::L1 for an SRAM-resident parameter.
-inline TensorParameter MakeMinimalTensorParameter(
-    std::string name, tt::tt_metal::BufferType buffer_type = tt::tt_metal::BufferType::DRAM) {
-    auto page_config = tt::tt_metal::PageConfig(tt::tt_metal::Layout::ROW_MAJOR);
-    auto memory_config = tt::tt_metal::MemoryConfig{tt::tt_metal::TensorMemoryLayout::INTERLEAVED, buffer_type};
-    auto tensor_layout = tt::tt_metal::TensorLayout(tt::tt_metal::DataType::BFLOAT16, page_config, memory_config);
-    auto spec = tt::tt_metal::TensorSpec(tt::tt_metal::Shape{1, 32}, tensor_layout);
+inline TensorParameter MakeMinimalTensorParameter(std::string name, BufferType buffer_type = BufferType::DRAM) {
+    auto page_config = PageConfig(Layout::ROW_MAJOR);
+    auto memory_config = MemoryConfig{TensorMemoryLayout::INTERLEAVED, buffer_type};
+    auto tensor_layout = TensorLayout(DataType::BFLOAT16, page_config, memory_config);
+    auto spec = TensorSpec(Shape{1, 32}, tensor_layout);
     return TensorParameter{
         .unique_id = TensorParamName{std::move(name)},
         .spec = std::move(spec),
@@ -194,38 +191,35 @@ inline void BindSemaphoreToKernels(
 // `tile` overrides the default 32x32 page tile (e.g. to exercise narrow / partial tiles).
 inline TensorParameter MakeShardedTensorParameter(
     std::string name,
-    const tt::tt_metal::Shape& logical_shape,
+    const Shape& logical_shape,
     const std::array<uint32_t, 2>& shard_shape,
     uint32_t num_cores,
-    tt::tt_metal::Layout layout = tt::tt_metal::Layout::TILE,
+    Layout layout = Layout::TILE,
     const std::optional<Tile>& tile = std::nullopt) {
-    auto shard_grid = tt::tt_metal::num_cores_to_corerangeset(num_cores, CoreCoord{num_cores, 1}, /*row_wise=*/true);
-    tt::tt_metal::ShardSpec shard_spec{
-        shard_grid, {shard_shape[0], shard_shape[1]}, tt::tt_metal::ShardOrientation::ROW_MAJOR};
-    tt::tt_metal::MemoryConfig memory_config{
-        tt::tt_metal::TensorMemoryLayout::HEIGHT_SHARDED, tt::tt_metal::BufferType::L1, shard_spec};
-    auto page_config = tt::tt_metal::PageConfig(layout, tile);
-    auto tensor_layout = tt::tt_metal::TensorLayout(tt::tt_metal::DataType::BFLOAT16, page_config, memory_config);
+    auto shard_grid = num_cores_to_corerangeset(num_cores, CoreCoord{num_cores, 1}, /*row_wise=*/true);
+    ShardSpec shard_spec{shard_grid, {shard_shape[0], shard_shape[1]}, ShardOrientation::ROW_MAJOR};
+    MemoryConfig memory_config{TensorMemoryLayout::HEIGHT_SHARDED, BufferType::L1, shard_spec};
+    auto page_config = PageConfig(layout, tile);
+    auto tensor_layout = TensorLayout(DataType::BFLOAT16, page_config, memory_config);
     return TensorParameter{
         .unique_id = TensorParamName{std::move(name)},
-        .spec = tt::tt_metal::TensorSpec(logical_shape, std::move(tensor_layout)),
+        .spec = TensorSpec(logical_shape, std::move(tensor_layout)),
     };
 }
 
 // Per-node allocated counterpart of MakeShardedTensorParameter: one 32x32 tile per node on `num_cores` nodes
 // in a row. per_node=false gives the otherwise identical lockstep layout.
 inline TensorParameter MakePerNodeTensorParameter(std::string name, uint32_t num_cores, bool per_node = true) {
-    auto shard_grid = tt::tt_metal::num_cores_to_corerangeset(num_cores, CoreCoord{num_cores, 1}, /*row_wise=*/true);
-    tt::tt_metal::MemoryConfig memory_config{
-        tt::tt_metal::TensorMemoryLayout::HEIGHT_SHARDED,
-        tt::tt_metal::BufferType::L1,
-        tt::tt_metal::ShardSpec{shard_grid, {32, 32}, tt::tt_metal::ShardOrientation::ROW_MAJOR}};
-    tt::tt_metal::experimental::per_core_allocation::set_per_core_allocation(memory_config, per_node);
-    auto tensor_layout = tt::tt_metal::TensorLayout(
-        tt::tt_metal::DataType::BFLOAT16, tt::tt_metal::PageConfig(tt::tt_metal::Layout::TILE), memory_config);
+    auto shard_grid = num_cores_to_corerangeset(num_cores, CoreCoord{num_cores, 1}, /*row_wise=*/true);
+    MemoryConfig memory_config{
+        TensorMemoryLayout::HEIGHT_SHARDED,
+        BufferType::L1,
+        ShardSpec{shard_grid, {32, 32}, ShardOrientation::ROW_MAJOR}};
+    experimental::per_core_allocation::set_per_core_allocation(memory_config, per_node);
+    auto tensor_layout = TensorLayout(DataType::BFLOAT16, PageConfig(Layout::TILE), memory_config);
     return TensorParameter{
         .unique_id = TensorParamName{std::move(name)},
-        .spec = tt::tt_metal::TensorSpec(tt::tt_metal::Shape{32 * num_cores, 32}, std::move(tensor_layout)),
+        .spec = TensorSpec(Shape{32 * num_cores, 32}, std::move(tensor_layout)),
     };
 }
 
@@ -240,25 +234,23 @@ inline TensorParameter MakePerNodeTensorParameter(std::string name, uint32_t num
 // BLOCK_SHARDED layout expresses, so populate_legacy_shard_spec_from_nd declines to fabricate one.
 inline TensorParameter MakeNdShardedTensorParameter(
     std::string name,
-    const tt::tt_metal::Shape& logical_shape,
-    const tt::tt_metal::Shape& shard_shape,
+    const Shape& logical_shape,
+    const Shape& shard_shape,
     uint32_t num_cores,
-    tt::tt_metal::Layout layout = tt::tt_metal::Layout::ROW_MAJOR,
-    tt::tt_metal::ShardDistributionStrategy shard_distribution_strategy =
-        tt::tt_metal::ShardDistributionStrategy::CONTIGUOUS_1D) {
-    auto shard_grid = tt::tt_metal::num_cores_to_corerangeset(num_cores, CoreCoord{num_cores, 1}, /*row_wise=*/true);
-    tt::tt_metal::NdShardSpec nd_shard_spec{
+    Layout layout = Layout::ROW_MAJOR,
+    ShardDistributionStrategy shard_distribution_strategy = ShardDistributionStrategy::CONTIGUOUS_1D) {
+    auto shard_grid = num_cores_to_corerangeset(num_cores, CoreCoord{num_cores, 1}, /*row_wise=*/true);
+    NdShardSpec nd_shard_spec{
         .shard_shape = shard_shape,
         .grid = shard_grid,
-        .orientation = tt::tt_metal::ShardOrientation::ROW_MAJOR,
+        .orientation = ShardOrientation::ROW_MAJOR,
         .shard_distribution_strategy = shard_distribution_strategy,
     };
-    tt::tt_metal::MemoryConfig memory_config{tt::tt_metal::BufferType::L1, nd_shard_spec};
-    auto tensor_layout =
-        tt::tt_metal::TensorLayout(tt::tt_metal::DataType::BFLOAT16, tt::tt_metal::PageConfig(layout), memory_config);
+    MemoryConfig memory_config{BufferType::L1, nd_shard_spec};
+    auto tensor_layout = TensorLayout(DataType::BFLOAT16, PageConfig(layout), memory_config);
     return TensorParameter{
         .unique_id = TensorParamName{std::move(name)},
-        .spec = tt::tt_metal::TensorSpec(logical_shape, std::move(tensor_layout)),
+        .spec = TensorSpec(logical_shape, std::move(tensor_layout)),
     };
 }
 
@@ -269,7 +261,7 @@ inline ProgramSpec MakeMinimalGen1ValidProgramSpec() {
     ProgramSpec spec;
     spec.name = "test_program";
 
-    auto dm_kernel = MakeMinimalGen1DMKernel("dm_kernel", tt::tt_metal::DataMovementProcessor::RISCV_0);
+    auto dm_kernel = MakeMinimalGen1DMKernel("dm_kernel", DataMovementProcessor::RISCV_0);
     auto compute_kernel = MakeMinimalGen1ComputeKernel("compute_kernel");
 
     auto dfb = MakeMinimalDFB("dfb_0");
@@ -320,7 +312,7 @@ inline ProgramSpec MakeMinimalValidProgramSpec() {
 //   - tensor_buffer_type defaults to L1 (the only legal choice for borrowing).
 inline ProgramSpec MakeBorrowedDFBProgramSpec(
     const std::string& tensor_param_name = "borrowed_tensor",
-    tt::tt_metal::BufferType tensor_buffer_type = tt::tt_metal::BufferType::L1,
+    BufferType tensor_buffer_type = BufferType::L1,
     uint32_t dfb_entry_size = 16,
     uint32_t dfb_num_entries = 2,
     bool bind_backing_to_kernel = true) {
@@ -352,4 +344,4 @@ inline ProgramSpec MakeBorrowedDFBProgramSpec(
     return spec;
 }
 
-}  // namespace tt::tt_metal::experimental::test_helpers
+}  // namespace tt::tt_metal::test_helpers

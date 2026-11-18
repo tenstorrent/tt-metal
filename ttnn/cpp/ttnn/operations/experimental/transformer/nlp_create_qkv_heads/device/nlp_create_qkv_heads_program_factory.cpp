@@ -6,9 +6,10 @@
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/work_split.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
+#include <tt-metalium/workload/specification/program_spec.hpp>
+#include <tt-metalium/workload/run_args/program_run_args.hpp>
 #include <tt-metalium/math.hpp>
+#include <tt-metalium/mesh_buffer.hpp>
 
 #include "nlp_create_qkv_heads_device_operation.hpp"
 #include "ttnn/operations/core/data_movement_kernel/datamovement_kernel_config.hpp"
@@ -18,7 +19,7 @@ namespace ttnn::operations::experimental::transformer {
 using namespace tt::constants;
 using namespace tt;
 using namespace tt::tt_metal;
-using namespace tt::tt_metal::experimental;
+using tt::tt_metal::experimental::AdvancedKernelRunArgs;
 
 namespace {
 
@@ -73,7 +74,7 @@ InterleavedWorkSplit build_interleaved_work_split(
 // outputs.  The names must match the TensorParameter unique_ids the factories declare.  Shared by
 // create_program_artifacts and override_runtime_arguments of both factories so a renamed or added tensor
 // parameter cannot drift between them.
-using TensorRunArgs = decltype(tt::tt_metal::experimental::ProgramRunArgs::tensor_args);
+using TensorRunArgs = decltype(ProgramRunArgs::tensor_args);
 TensorRunArgs build_qkv_tensor_run_args(
     const NlpCreateHeadsDeviceOperation::tensor_args_t& tensor_args,
     NlpCreateHeadsDeviceOperation::tensor_return_value_t& output) {
@@ -131,10 +132,10 @@ ttnn::device_operation::ProgramArtifacts NlpCreateHeadsDeviceOperation::Interlea
     const bool read_from_input_tensor_kv = input_tensor_kv.has_value();
 
     uint32_t single_tile_size = tt::tile_size(data_format);
-    TT_ASSERT(input_tensor.buffer()->size() % single_tile_size == 0);
+    TT_ASSERT(input_tensor.mesh_buffer().device_local_size() % single_tile_size == 0);
 
     if (read_from_input_tensor_kv) {
-        TT_ASSERT(input_tensor_kv->buffer()->size() % single_tile_size == 0);
+        TT_ASSERT(input_tensor_kv->mesh_buffer().device_local_size() % single_tile_size == 0);
     }
 
     ////////////////////////////////////////////////////////////////////////////
@@ -909,7 +910,7 @@ ttnn::device_operation::ProgramArtifacts NlpCreateHeadsDeviceOperation::Sharded:
 // re-point the three borrowed output buffers.  Every other runtime arg derives from the operation
 // attributes or the input/output TensorSpecs, which the program hash covers, so a cache hit means they are
 // identical by construction.
-tt::tt_metal::experimental::ProgramRunArgs NlpCreateHeadsDeviceOperation::Sharded::override_runtime_arguments(
+ProgramRunArgs NlpCreateHeadsDeviceOperation::Sharded::override_runtime_arguments(
     const operation_attributes_t& /*operation_attributes*/,
     const tensor_args_t& tensor_args,
     tensor_return_value_t& tensor_return_value,
@@ -921,7 +922,7 @@ tt::tt_metal::experimental::ProgramRunArgs NlpCreateHeadsDeviceOperation::Sharde
 
 // The reader takes the input (and optional KV input), the writer the three outputs; all five ride the
 // tensor bindings.  The Interleaved dataflow buffers are not borrowed, so there is nothing to re-point there.
-tt::tt_metal::experimental::ProgramRunArgs NlpCreateHeadsDeviceOperation::Interleaved::override_runtime_arguments(
+ProgramRunArgs NlpCreateHeadsDeviceOperation::Interleaved::override_runtime_arguments(
     const operation_attributes_t& /*operation_attributes*/,
     const tensor_args_t& tensor_args,
     tensor_return_value_t& tensor_return_value,

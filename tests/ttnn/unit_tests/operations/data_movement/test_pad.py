@@ -15,6 +15,13 @@ from tests.ttnn.unit_tests.operations.test_utils import (
 )
 from tests.ttnn.utils_for_testing import assert_with_pcc, assert_allclose
 from tests.ttnn.utils_for_testing import assert_equal as assert_tensors_equal
+from tests.ttnn.unit_tests.operations.data_movement.docstring_support import (
+    check_readable,
+    docstring_dtype_layout_params,
+    docstring_interleaved_buffer_type_params,
+    interleaved_memory_config,
+)
+from tests.ttnn.unit_tests.operations.data_movement.data_movement_test_utils import assert_exact, full_range_input
 import ttnn
 
 torch.manual_seed(0)
@@ -67,6 +74,34 @@ def test_pad_rm(device, n, c, h, w, padding, torch_padding, value, dtype):
 
     assert output_tensor.shape == torch_output_tensor.shape
     assert torch.equal(torch_output_tensor, output_tensor)
+
+
+@pytest.mark.parametrize(
+    "dtype, value",
+    [
+        (ttnn.bfloat16, 7.0),
+        (ttnn.float32, 7.0),
+        (ttnn.float32, 1.1),  # not representable in bfloat16
+        (ttnn.int32, 7.0),
+        (ttnn.uint32, 7.0),
+        (ttnn.uint16, 7.0),
+    ],
+)
+@pytest.mark.parametrize("use_multicore", [False, True])
+def test_pad_rm_interleaved_nonzero_value(device, dtype, value, use_multicore):
+    # W=26 leaves each padded row tail unaligned, and the H/C growth adds fully padded rows.
+    shape = [1, 2, 30, 26]
+    padded_shape = [1, 3, 32, 32]
+    padding = [(0, padded_shape[i] - shape[i]) for i in range(len(shape))]
+
+    torch_input = torch.rand(shape, dtype=torch.float32) if dtype == ttnn.float32 else random_torch_tensor(dtype, shape)
+    input_tensor = ttnn.from_torch(torch_input, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, dtype=dtype)
+    output = ttnn.to_torch(ttnn.pad(input_tensor, padding=padding, value=value, use_multicore=use_multicore))
+
+    expected = torch.full(padded_shape, value).to(output.dtype)
+    expected[: shape[0], : shape[1], : shape[2], : shape[3]] = torch_input.to(output.dtype)
+    assert output.shape == expected.shape
+    assert torch.equal(output, expected)
 
 
 @pytest.mark.parametrize(
@@ -345,6 +380,22 @@ def to_torch_padding(padspec):
             (0, 0, 0, 0),
             3.0,
             {"core_grid": ttnn.CoreGrid(x=1, y=6), "strategy": ttnn.ShardStrategy.HEIGHT},
+        ],
+        [
+            # height and width padding with a width front pad
+            (1, 1, 2, 4),
+            (1, 1, 4, 16),
+            (0, 0, 0, 4),
+            3.0,
+            {"core_grid": ttnn.CoreGrid(x=1, y=2), "strategy": ttnn.ShardStrategy.HEIGHT},
+        ],
+        [
+            # height and width padding with height and width front pads
+            (1, 1, 2, 4),
+            (1, 1, 4, 16),
+            (0, 0, 1, 4),
+            3.0,
+            {"core_grid": ttnn.CoreGrid(x=1, y=2), "strategy": ttnn.ShardStrategy.HEIGHT},
         ],
     ],
 )
@@ -1787,6 +1838,35 @@ def test_pad_rank_gt4_use_multicore(device, shape, padding, use_multicore):
     assert torch.equal(torch_output_tensor, output_tensor)
 
 
+@pytest.mark.parametrize("pad_value", [3.0, -1.5, 8.0])
+def test_pad_rm_sharded_width_only_bfloat16_value(device, pad_value):
+    input_shape, pad_to_shape = (1, 1, 12, 8), (1, 1, 12, 64)
+    core_grid = ttnn.CoreGrid(x=2, y=6)
+    if device.core_grid.x < core_grid.x or device.core_grid.y < core_grid.y:
+        pytest.skip("core grid for this test is not compatible with the device")
+
+    torch_input_tensor = torch.rand(input_shape, dtype=torch.bfloat16)
+    mem_config = ttnn.create_sharded_memory_config(input_shape, core_grid=core_grid, strategy=ttnn.ShardStrategy.HEIGHT)
+    tt_input = ttnn.interleaved_to_sharded(
+        ttnn.from_torch(torch_input_tensor, layout=ttnn.ROW_MAJOR_LAYOUT, device=device),
+        mem_config,
+        keep_l1_aligned=True,
+    )
+    tt_output = ttnn.to_torch(
+        ttnn.to_memory_config(ttnn.pad(tt_input, pad_to_shape, (0, 0, 0, 0), pad_value), ttnn.L1_MEMORY_CONFIG)
+    )
+
+    expected = torch.nn.functional.pad(torch_input_tensor, (0, pad_to_shape[-1] - input_shape[-1]), value=pad_value)
+    assert torch.equal(tt_output, expected)
+
+
+def test_pad_tile_rank1(device):
+    torch_input_tensor = torch.rand(40, dtype=torch.bfloat16)
+    tt_input = ttnn.from_torch(torch_input_tensor, layout=ttnn.TILE_LAYOUT, device=device)
+    tt_output = ttnn.to_torch(ttnn.pad(tt_input, [(0, 24)], 2.0))
+    assert torch.equal(tt_output, torch.nn.functional.pad(torch_input_tensor, (0, 24), value=2.0))
+
+
 # --- Codegen-path coverage ---
 #
 # ttnn.pad routes gate-supported TILE cases to codegen and offers no way to ask for a path, so the
@@ -2250,3 +2330,21 @@ def test_pad_one_row_block_shards_squeezed_rank1(device):
 
     expected = torch.nn.functional.pad(torch_input, (0, 0, 0, 0, 0, 0, 0, 3))
     assert torch.equal(ttnn.to_torch(output), expected)
+
+
+@pytest.mark.parametrize("buffer_type", docstring_interleaved_buffer_type_params(ttnn.pad))
+@pytest.mark.parametrize("dtype, layout", docstring_dtype_layout_params(ttnn.pad))
+def test_pad_docstring_supported_inputs(dtype, layout, buffer_type, device):
+    """Runs every dtype, layout and interleaved buffer type the ttnn.pad docstring lists."""
+    check_readable(dtype, layout, buffer_type)
+    memory_config = interleaved_memory_config(buffer_type)
+    input_tensor = ttnn.from_torch(
+        full_range_input((1, 1, 32, 32), dtype), dtype=dtype, layout=layout, device=device, memory_config=memory_config
+    )
+    output = ttnn.pad(input_tensor, [(0, 0), (0, 0), (0, 32), (0, 32)], 0.0, memory_config=memory_config)
+
+    assert output.dtype == dtype
+    assert output.layout == layout
+    assert output.memory_config().buffer_type == buffer_type
+    expected = torch.nn.functional.pad(ttnn.to_torch(input_tensor).to(torch.float64), (0, 32, 0, 32), value=0.0)
+    assert_exact(expected, ttnn.to_torch(output))

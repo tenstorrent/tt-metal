@@ -121,6 +121,9 @@ void kernel_main() {
         get_compile_time_arg_val(WIN_N);  // W window row stride (tiles): one wave's nominal width
     constexpr uint32_t kb = get_compile_time_arg_val(KB);
     constexpr uint32_t num_k_blocks = get_compile_time_arg_val(NUM_K_BLOCKS);
+    // Blackhole row MOP (api/compute/matmul.h): one MOP per inner-dim step instead of one per tile; bit-identical.
+    // Set by the factory from the arch: the row MOP does not build on Wormhole.
+    constexpr bool row_mop = get_compile_time_arg_val(ROW_MOP) != 0;
     constexpr uint32_t P = get_compile_time_arg_val(mrs::compute_ct::P);     // slot tiles (the largest wave)
     constexpr uint32_t num_entries = get_compile_time_arg_val(NUM_ENTRIES);  // G x num_waves
     constexpr uint32_t num_waves = get_compile_time_arg_val(NUM_WAVES);
@@ -130,8 +133,8 @@ void kernel_main() {
     constexpr uint32_t n_inner = get_compile_time_arg_val(N_INNER);        // chunks per outer (resident-axis) index
     constexpr bool resident = get_compile_time_arg_val(RESIDENT) != 0;
     static_assert(super_block >= 1 && num_k_blocks % super_block == 0, "super-block must divide the K-blocks");
-    // runtime args: per wave rows | cols << 8 | sb_h << 16 | sb_w << 24, then per entry role | lag << 8
-    constexpr uint32_t roles_idx = num_waves;
+    // common args: per wave rows | cols << 8 | sb_h << 16 | sb_w << 24, then per half and entry role | lag << 8
+    const uint32_t roles_idx = num_waves + get_arg_val<uint32_t>(mrs::compute_rt::HALF) * num_entries;
 
     compute_kernel_hw_startup<SrcOrder::Reverse>(cb_act_k_window, cb_weight_k_window, cb_partial_hold);
 
@@ -205,14 +208,14 @@ void kernel_main() {
             }
             if (any) {
                 reconfig_data_format(cb_partial_hold, cb_weight_k_window, srcb, cb_act_k_window);
-                ckernel::matmul_block_init(cb_act_k_window, cb_weight_k_window, false, w, h, kb);
+                ckernel::matmul_block_init<row_mop>(cb_act_k_window, cb_weight_k_window, false, w, h, kb);
             }
         };
 
     // One entry's matmul. fusable: its finish folds into the last super-block (an arrival entry: only if the
     // arrival landed by the end of that super-block's first subblock). Returns whether the finish is complete.
     auto matmul_entry = [&](uint32_t e, bool fill, bool fusable, uint32_t role) -> bool {
-        const uint32_t wave = get_arg_val<uint32_t>(e % num_waves);
+        const uint32_t wave = get_common_arg_val<uint32_t>(e % num_waves);
         const uint32_t rows = wave & 0xFF, cols = (wave >> 8) & 0xFF;
         const uint32_t sb_h = (wave >> 16) & 0xFF, sb_w = wave >> 24;
         const uint32_t n_sb_r = rows / sb_h, n_sb_c = cols / sb_w;
@@ -220,7 +223,7 @@ void kernel_main() {
         const uint32_t row_group = sb_h * cols;
         reconfig_data_format(cb_weight_k_window, cb_act_k_window);  // matmul: srcA = in1, srcB = in0
         PACK((pack_reconfig_data_format(cb_partial_hold)));
-        ckernel::matmul_block_init(cb_act_k_window, cb_weight_k_window, false, sb_w, sb_h, kb);
+        ckernel::matmul_block_init<row_mop>(cb_act_k_window, cb_weight_k_window, false, sb_w, sb_h, kb);
         const uint32_t S = fill ? 1 : super_block;  // an operand fill arrives at DRAM pace: pack per window
         const uint32_t n_super = num_k_blocks / S;
         const bool has_arrival = role != mrs::role::COPY;
@@ -277,14 +280,19 @@ void kernel_main() {
                             ca.fifo_rd_ptr = pa;
                             cw.fifo_rd_ptr = pw;
                         }));
-                        uint32_t in0_index = sr * sb_h * kb;
-                        uint32_t in1_index = sc * sb_w;
-                        for (uint32_t kk = 0; kk < kb; ++kk) {
-                            ckernel::matmul_block(
-                                cb_act_k_window, cb_weight_k_window, in0_index, in1_index, 0, false, sb_w, sb_h, kb);
-                            ++in0_index;
-                            in1_index += win_n;
-                        }
+                        // All kb inner-dim steps of the window in one call.
+                        ckernel::matmul_block_k<row_mop>(
+                            cb_act_k_window,
+                            cb_weight_k_window,
+                            sr * sb_h * kb /*in0_tile_index*/,
+                            sc * sb_w /*in1_tile_index*/,
+                            0 /*idst*/,
+                            false /*transpose*/,
+                            sb_w /*ct_dim*/,
+                            sb_h /*rt_dim*/,
+                            kb /*kt_dim*/,
+                            kb /*k_steps*/,
+                            win_n /*in1_k_stride*/);
                         if (last_sb) {  // frees each window as soon as it is consumed (fifo_rd_ptr is exact here)
                             act_buf.pop_front(a_win);
                             weight_buf.pop_front(w_win);
@@ -377,7 +385,7 @@ void kernel_main() {
         // the resident operand reloads in the first entry of a chunk whose outer index changed (always chunk 0)
         const bool chunk_fill = c == 0 || (resident && c % n_inner == 0);
         for (uint32_t e = 0; e < num_entries; ++e) {
-            const uint32_t word = get_arg_val<uint32_t>(roles_idx + e);
+            const uint32_t word = get_common_arg_val<uint32_t>(roles_idx + e);
             const uint32_t role = word & 0xFF;
             const bool lag =
                 (word >> mrs::role::LAG_SHIFT) & 1;  // host: arrival expected late -> finish behind the next matmul
@@ -385,7 +393,7 @@ void kernel_main() {
             const bool fused = matmul_entry(e, chunk_fill && e == 0, fusable, role);
             if (pending != NONE) {
                 finish_block<cb_partial_hold, cb_finished, cb_arrivals_fwd, cb_arrivals_bwd, P>(
-                    get_arg_val<uint32_t>(roles_idx + pending) & 0xFF, finish_bufs);
+                    get_common_arg_val<uint32_t>(roles_idx + pending) & 0xFF, finish_bufs);
                 pending = NONE;
             }
             if (lag) {

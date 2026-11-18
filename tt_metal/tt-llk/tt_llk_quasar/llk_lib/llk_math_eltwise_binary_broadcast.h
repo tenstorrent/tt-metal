@@ -29,7 +29,7 @@ inline void _llk_math_eltwise_binary_broadcast_mop_config_(const MathFidelitySch
 {
     static_assert((BROADCAST_TYPE != BroadcastType::NONE), "Broadcast type cannot be NONE for this operation");
     // Same count as non-broadcast math: two ELWs per tiny face on quasar_4row.
-    const std::uint32_t num_eltwise_instrn_per_face = _eltwise_binary_rows_per_face_(tensor_shape) >> rows_log2(ELTWISE_MATH_ROWS);
+    const std::uint32_t num_eltwise_instrn_per_face = padded_face_rows(tensor_shape) >> rows_log2(ELTWISE_MATH_ROWS);
 
     constexpr auto SRCB_BROADCAST_TYPE = (BROADCAST_TYPE == BroadcastType::COL)
                                              ? p_elwise::SRCB_BCAST_COL

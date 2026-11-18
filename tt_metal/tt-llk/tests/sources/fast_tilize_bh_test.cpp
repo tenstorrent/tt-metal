@@ -154,7 +154,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         else if constexpr (PERF_RUN_TYPE == PerfRunType::MATH_ISOLATE)
         {
             // Each unit produces 4 dvalids regardless of unit_dim
-            _perf_unpack_loop_set_valid<true, false>(units_per_row * 4 * LOOP_FACTOR);
+            _perf_unpack_stream_set_valid<true, false, PERF_RUN_TYPE>(units_per_row * 4 * LOOP_FACTOR);
         }
         else
         {
@@ -247,7 +247,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         }
         else if constexpr (PERF_RUN_TYPE == PerfRunType::UNPACK_ISOLATE)
         {
-            _perf_math_loop_clear_valid<true, false>(units_per_row * 4 * LOOP_FACTOR);
+            _perf_math_stream_clear_valid<true, false, PERF_RUN_TYPE>(units_per_row * 4 * LOOP_FACTOR);
         }
         else
         {
@@ -298,11 +298,10 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const std::uint32_t tile_bytes  = GET_L1_HEADERLESS_TILE_SIZE(formats.pack_dst) << 4;
 
     // Guard tile sentinel: gated by NUM_GUARD_TILES runtime param.
-    // Perf tests compile with LLK_PROFILER and don't have this param in their struct.
-#ifdef LLK_PROFILER
-    constexpr std::uint32_t NUM_GUARD = 0;
-#else
+#ifndef SPEED_OF_LIGHT
     const std::uint32_t NUM_GUARD = params.NUM_GUARD_TILES;
+#else
+    constexpr std::uint32_t NUM_GUARD = NUM_GUARD_TILES;
 #endif
     if (NUM_GUARD > 0)
     {

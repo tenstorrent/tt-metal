@@ -579,7 +579,7 @@ RingReduceScatterBaseTensorSlicer<DERIVED_SLICER_T>::RingReduceScatterBaseTensor
     this->slice_dim_is_width = input_tensor.padded_shape().rank() - 1 == slice_dim;
     this->is_sharded = input_tensor.is_sharded();
 
-    this->input_page_size = input_tensor.buffer()->page_size();
+    this->input_page_size = input_tensor.mesh_buffer().page_size();
     log_trace(tt::LogOp, "input_page_size={}", input_page_size);
     if (row_major) {
         this->num_cols = input_tensor.padded_shape()[-1];
@@ -1302,8 +1302,8 @@ std::tuple<std::array<uint32_t, 6>, std::array<uint32_t, 6>> get_forward_backwar
             if (coord) {
                 const auto& dev_coord = *coord;
                 auto device_fabric_node_id = mesh_device->get_fabric_node_id(dev_coord);
-                auto eth_chan_dir =
-                    tt::tt_fabric::get_eth_forwarding_direction(src_fabric_node_id, device_fabric_node_id);
+                auto eth_chan_dir = tt::tt_fabric::get_eth_forwarding_direction(
+                    *mesh_device, src_fabric_node_id, device_fabric_node_id);
                 args[0] = *device_fabric_node_id.mesh_id;
                 args[1] = device_fabric_node_id.chip_id;
                 args[2 + static_cast<std::uint8_t>(eth_chan_dir.value())] = num_targets;

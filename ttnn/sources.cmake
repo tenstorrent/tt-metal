@@ -26,6 +26,7 @@ set(TTNN_CORE_SRCS
     core/events.cpp
     core/global_circular_buffer.cpp
     core/global_semaphore.cpp
+    core/per_device_program_merge.cpp
     core/operation.cpp
     core/graph/graph_processor.cpp
     core/graph/graph_trace_utils.cpp
@@ -135,6 +136,7 @@ set(TTNN_SRC_PYBIND
     cpp/ttnn-nanobind/mesh_socket.cpp
     cpp/ttnn-nanobind/profiler.cpp
     cpp/ttnn-nanobind/program_descriptors.cpp
+    cpp/ttnn-nanobind/program_spec.cpp
     cpp/ttnn-nanobind/pytensor.cpp
     cpp/ttnn-nanobind/reports.cpp
     cpp/ttnn-nanobind/tensor.cpp
@@ -230,6 +232,7 @@ set(TTNNCPP_API_HEADERS
     api/ttnn/metal_v2_artifacts.hpp
     api/ttnn/operation.hpp
     api/ttnn/operation_concepts.hpp
+    api/ttnn/per_device_program_merge.hpp
     api/ttnn/prefetcher_pipe.hpp
     api/ttnn/reports.hpp
     api/ttnn/tensor/d2d_pipeline_descriptor.hpp
