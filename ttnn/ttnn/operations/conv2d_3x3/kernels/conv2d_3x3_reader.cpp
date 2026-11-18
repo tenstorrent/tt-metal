@@ -25,9 +25,9 @@
 // With combine_split_nocs the reader also sends the higher grid columns' N-slices of each M-block's
 // partials on NoC0 (see the writer's file comment): it waits for the writer's send_go, writes, fences and
 // raises send_done. It never waits on or pops the partials CB; the writer owns that CB's lifecycle.
-// N-slice-outer K split (see the writer's file comment): the reader gathers tile-row outer, K-block inner, so compute
-// tilizes in0 row-major over all of K, and it sends the +d owner slices on NoC0 from cb_slice_r, which it alone
-// consumes.
+// N-slice-outer K split (see conv2d_3x3_nslice_order.hpp): the reader gathers tile-row outer, K-block inner, so
+// compute tilizes in0 row-major over all of K, and it runs the ring reduce-scatter's forwarding: every partial
+// compute packs moves one column on (NoC0) into column my_col + 1's slots.
 //
 // im2col layout: by default one row per output pixel ([32, block_k_cols] per tile-row), costing one read
 // (or one per tap) per pixel per K-block. Tap-major (stride 1, whole unpadded taps): each tap of a tile-row
@@ -158,9 +158,9 @@ void kernel_main() {
     constexpr uint32_t gather_done_sem_id = get_compile_time_arg_val(44);
     constexpr uint32_t lane_zero_rows = get_compile_time_arg_val(45);
     constexpr uint32_t cb_zero_src = get_compile_time_arg_val(46);
-    // N-slice-outer K split (see conv2d_3x3_nslice_order.hpp): the reader sends the +d owner slices on NoC0.
+    // N-slice-outer K split (see conv2d_3x3_nslice_order.hpp): the reader forwards the ring's partials on NoC0.
     constexpr bool nslice_outer = get_compile_time_arg_val(47) != 0;
-    constexpr uint32_t cb_slice_r = get_compile_time_arg_val(48);
+    constexpr uint32_t cb_ring_token = get_compile_time_arg_val(48);
     constexpr uint32_t combine_credit_sem_id = get_compile_time_arg_val(49);
     constexpr uint32_t combine_arrival_sem_id = get_compile_time_arg_val(50);
     // Split row gather (see the file comment).
@@ -194,7 +194,9 @@ void kernel_main() {
     // cb_im2col_rm slot, cb_src_table holds one 16 B entry of tap source addresses that compute tilizes from.
     constexpr bool tap_direct = get_compile_time_arg_val(66) != 0;
     constexpr uint32_t cb_src_table = get_compile_time_arg_val(67);
-    constexpr auto input_args = TensorAccessorArgs<68>();
+    // N-slice ring: tile-rows per forwarded row group (one matmul subblock row of a slice).
+    constexpr uint32_t ring_group_rows = get_compile_time_arg_val(68);
+    constexpr auto input_args = TensorAccessorArgs<69>();
     static_assert(!alias_slab_combine || nslice_outer, "only the N-slice-outer walk aliases the slab");
 
     const uint32_t input_addr = get_arg_val<uint32_t>(0);
@@ -941,41 +943,109 @@ void kernel_main() {
         }
 
         if constexpr (nslice_outer) {
-            // NoC0 half of the slice sends: the +d owner slices, from cb_slice_r, in the shared order.
+            // Ring reduce-scatter forwarding (conv2d_3x3_nslice_order.hpp). Compute packs step j's partial into slot
+            // k_cols - 1 - j one row group at a time and pushes a ring token after each. The reader writes each group
+            // one column on (NoC0, +x) into slot k_cols - 2 - j of column my_col + 1 (that core's step j + 1 partial)
+            // and bumps that core's arrival count once the write landed, in issue order, with up to ring_inflight
+            // writes in flight (one transaction id each). It frees each token, and with it the packer's next group,
+            // once that group's incoming partial has landed here. Every wait polls the in-flight writes, so no wait
+            // delays an arrival.
+            MaybeDeviceZoneScope("reader_combine_send");
             constexpr uint32_t num_owning_cols = (tensor_n_tiles + out_n_tiles - 1) / out_n_tiles;
-            constexpr uint32_t slice_tiles = block_m_tiles * out_n_tiles;
+            constexpr uint32_t slot_tiles = block_m_tiles * out_n_tiles;
+            constexpr uint32_t groups = block_m_tiles / ring_group_rows;
+            static_assert(groups * ring_group_rows == block_m_tiles);
+            constexpr uint32_t ring_inflight = 2;
+            constexpr uint32_t ring_trid_base = 12;
             Semaphore<> credit(combine_credit_sem_id);
             Semaphore<> arrival(combine_arrival_sem_id);
             Noc noc;
-            const uint32_t tile_bytes = get_tile_size(cb_slice_r);
+            const uint32_t slot_bytes = slot_tiles * get_tile_size(cb_combine_slots);
+            const uint32_t group_bytes = slot_bytes / groups;
             const uint32_t combine_base = get_write_ptr(cb_combine_slots);
+            const uint32_t next_col = my_col + 1 == k_cols ? 0 : my_col + 1;
+            const uint32_t nx = get_arg_val<uint32_t>(row_peer_coords_arg + 2 * next_col);
+            const uint32_t ny = get_arg_val<uint32_t>(row_peer_coords_arg + 2 * next_col + 1);
+            volatile tt_l1_ptr uint32_t* arrived =
+                reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(combine_arrival_sem_id));
+            // Incoming row groups counted so far; the count only grows (every real step j >= 1 takes `groups`).
+            uint32_t need = m_block_idx * groups * conv2d_3x3::ring_incoming<k_cols, num_owning_cols>(my_col);
             bool credited = false;
-            for (uint32_t j = 0; j < k_cols; ++j) {
-                const uint32_t y = conv2d_3x3::nslice_owner<k_cols>(my_col, j);
-                if (y >= num_owning_cols || !conv2d_3x3::nslice_reader_sends<k_cols>(j)) {
-                    continue;
+            uint32_t issued = 0;
+            uint32_t retired = 0;
+            // Signals the oldest in-flight write once it landed (its counter is valid once the command left).
+            auto try_retire = [&]() {
+                if (retired == issued || !noc_cmd_buf_ready(noc_index, write_cmd_buf)) {
+                    return;
                 }
-                {
-                    MaybeDeviceZoneScope("reader_combine_wait_go");
-                    cb_wait_front(cb_slice_r, slice_tiles);
-                    if (!credited) {
-                        credit.wait_min((m_block_idx + 1) * num_owning_cols);
-                        credited = true;
+                if (ncrisc_noc_nonposted_write_with_transaction_id_flushed(
+                        noc_index, ring_trid_base + retired % ring_inflight)) {
+                    arrival.up(noc, nx, ny, 1);
+                    ++retired;
+                }
+            };
+            // Frees the outstanding token once the group the packer packs next (of step `next`; it has an incoming
+            // partial when next >= 1) has landed.
+            auto release_token = [&](uint32_t next) {
+                if (next >= 1 && next < k_cols) {
+                    ++need;
+                    while (true) {
+                        invalidate_l1_cache();
+                        if (*arrived >= need) {
+                            break;
+                        }
+                        try_retire();
                     }
                 }
-                {
-                    MaybeDeviceZoneScope("reader_combine_send");
-                    conv2d_3x3::send_slice<block_m_tiles, out_n_tiles, tensor_n_tiles>(
-                        get_read_ptr(cb_slice_r), combine_base, tile_bytes, my_col, y, row_peer_coords_arg);
-                    noc_async_write_barrier();
+                cb_pop_front(cb_ring_token, 1);
+            };
+            auto wait_token = [&]() {
+                while (!cb_pages_available_at_front(cb_ring_token, 1)) {
+                    try_retire();
                 }
-                arrival.up(
-                    noc,
-                    get_arg_val<uint32_t>(row_peer_coords_arg + 2 * y),
-                    get_arg_val<uint32_t>(row_peer_coords_arg + 2 * y + 1),
-                    1);
-                cb_pop_front(cb_slice_r, slice_tiles);
+            };
+            const uint32_t first = conv2d_3x3::ring_next_real<k_cols, num_owning_cols>(my_col, 0);
+            if (first >= 1 && first < k_cols) {
+                wait_token();
+                release_token(first);
             }
+            for (uint32_t j = first; j < k_cols;
+                 j = conv2d_3x3::ring_next_real<k_cols, num_owning_cols>(my_col, j + 1)) {
+                const uint32_t next_step = conv2d_3x3::ring_next_real<k_cols, num_owning_cols>(my_col, j + 1);
+                for (uint32_t g = 0; g < groups; ++g) {
+                    {
+                        MaybeDeviceZoneScope("reader_ring_wait_step");
+                        wait_token();
+                    }
+                    MaybeDeviceZoneScope("reader_ring_send");
+                    if (j + 1 < k_cols) {
+                        if (!credited) {
+                            // Column my_col + 1's slots are free (its slab is dead, its previous M-block combined).
+                            credit.wait_min(m_block_idx + 1);
+                            credited = true;
+                        }
+                        while (issued - retired >= ring_inflight) {
+                            try_retire();
+                        }
+                        const uint32_t trid = ring_trid_base + issued % ring_inflight;
+                        const uint32_t src = combine_base + (k_cols - 1 - j) * slot_bytes + g * group_bytes;
+                        const uint32_t dst = combine_base + (k_cols - 2 - j) * slot_bytes + g * group_bytes;
+                        for (uint32_t off = 0; off < group_bytes; off += NOC_MAX_BURST_SIZE) {
+                            const uint32_t bytes =
+                                group_bytes - off < NOC_MAX_BURST_SIZE ? group_bytes - off : NOC_MAX_BURST_SIZE;
+                            noc_async_write_one_packet_with_trid(
+                                src + off, get_noc_addr(nx, ny, dst + off), bytes, trid);
+                        }
+                        ++issued;
+                    }
+                    release_token(g + 1 < groups ? j : next_step);
+                }
+            }
+            while (retired < issued) {
+                try_retire();
+            }
+            // The firmware requires every NoC packet tag cleared at kernel end.
+            noc_async_write_set_trid(0);
         } else if constexpr (combine_send) {
             constexpr uint32_t num_owning_cols = (tensor_n_tiles + out_n_tiles - 1) / out_n_tiles;
             static_assert(num_owning_cols <= k_cols);

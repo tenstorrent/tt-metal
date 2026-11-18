@@ -45,19 +45,17 @@
 // in0 block is reserved and the slab complete), then writes every odd row group (in0_stream_rows tile-rows) on
 // NoC1, raising gather_done after each; the reader pushes the groups in order.
 //
-// N-slice-outer K split (the default under a K split when the resident in0 fits L1): compute multiplies one owner
-// N-slice at a time over the whole K, in the order of conv2d_3x3_nslice_order.hpp, so the partials of slice y are
-// final while slice y + 1 multiplies. The writer streams each slice's weights (K x out_n tiles, one multicast round
-// per slice down the column) two rounds ahead of the slice it sends next; the column's weight-reading core issues
-// round r + 1's DRAM reads (own transaction id) before it multicasts round r. Each slice is sent by one RISC: the
-// -d slices and the own slice by the writer on NoC1 from cb_matmul_partials, the +d slices by the reader on NoC0
-// from cb_slice_r. Both RISCs wait on the owners' credits and bump an owner's arrival count after their write to it
-// is acked; the owner pushes its slots after k_cols arrivals, as in the K-blocked round.
+// N-slice-outer K split (the default under a K split when the resident in0 fits L1): a ring reduce-scatter
+// (conv2d_3x3_nslice_order.hpp). Compute multiplies one owner N-slice at a time over the whole K and accumulates it
+// onto the partial column my_col - 1 sent; the reader forwards each partial to column my_col + 1. The writer streams
+// each slice's weights (K x out_n tiles, one multicast round per slice down the column), up to the weight CB's depth
+// ahead; the column's weight-reading core issues round r + 1's DRAM reads (own transaction id) before it multicasts
+// round r. It also gives column my_col - 1, the only core that writes this core's slots, one credit per M-block once
+// the slots are free.
 //
-// Shared-L1 N-slice walk (whenever every core runs one M-block): cb_combine_slots
-// shares cb_halo_slab's L1 and cb_combined cb_zero_src's, both dead once the core's gather landed. The owner's credits
-// therefore wait for the reader's slab_dead, so no peer writes a slot before then; the first weight rounds and the
-// split row gather's serving still go out before that wait.
+// Shared-L1 N-slice walk (whenever every core runs one M-block): cb_combine_slots shares cb_halo_slab's L1, dead once
+// the core's gather landed. The credit therefore waits for the reader's slab_dead, so no peer writes a slot before
+// then; the first weight rounds and the split row gather's serving still go out before that wait.
 //
 // Every push of cb_combine_slots is its whole capacity, so its write pointer never leaves the CB base and
 // the same base address is right on every core. The counters only grow, so round j waits for
@@ -542,8 +540,7 @@ void kernel_main() {
     static_assert(!nslice_outer || (k_split && output_sharded));
     constexpr uint32_t nslice_k_tiles = block_k_tiles * num_k_blocks;
     constexpr uint32_t slice_weight_tiles = nslice_k_tiles * out_n_tiles;
-    constexpr uint32_t slice_tiles = block_m_tiles * out_n_tiles;
-    // Rounds issued ahead of the slice the writer sends next.
+    // Rounds issued before the split row gather's serving and the credit.
     constexpr uint32_t nslice_weight_lookahead = 2;
     static_assert(!nslice_outer || nslice_weight_depth == 1 || nslice_weight_depth >= nslice_weight_lookahead + 2);
     // Every participant pushes one slice per round from the CB base, so slot round % depth is the same L1 address on
@@ -593,31 +590,29 @@ void kernel_main() {
         cb_push_back(cb_weights, slice_weight_tiles);
         ++k_blocks_issued;
     };
-    // before_sends runs once the first weight rounds are out, before the first slice send (the split row gather).
+    // before_sends runs once the first weight rounds are out, before the credit (the split row gather's serving).
     [[maybe_unused]] auto nslice_round = [&](uint32_t m_block_idx, auto&& before_sends) {
-        auto give_credits = [&]() {
-            if (out_valid_tiles > 0) {
-                cb_reserve_back(cb_combine_slots, k_cols * slot_tiles);
-                for (uint32_t col = 0; col < k_cols; ++col) {
-                    combine_credit.up(noc, peer_x(col), peer_y(col), 1);
-                }
+        // One credit per M-block to column my_col - 1, once this core's slots are free: its gather landed (shared-L1
+        // walk) and compute popped the previous M-block's slots (it pushes and pops the whole CB once per M-block,
+        // so its acked count is then m_block_idx whole CBs).
+        auto give_credit = [&]() {
+            MaybeDeviceZoneScope("writer_ring_credit");
+            const uintptr_t acked_ptr = (uintptr_t)get_cb_tiles_acked_ptr(cb_combine_slots);
+            const uint16_t acked_target = static_cast<uint16_t>(m_block_idx * k_cols * slot_tiles);
+            while (static_cast<uint16_t>(reg_read(acked_ptr)) != acked_target) {
+                invalidate_l1_cache();
             }
+            const uint32_t prev_col = my_col == 0 ? k_cols - 1 : my_col - 1;
+            combine_credit.up(noc, peer_x(prev_col), peer_y(prev_col), 1);
         };
-        if constexpr (!alias_slab_combine) {
-            give_credits();
-        }
         uint32_t order[k_cols];
-        uint32_t step[k_cols];
         uint32_t num_slices = 0;
         for (uint32_t j = 0; j < k_cols; ++j) {
             const uint32_t y = conv2d_3x3::nslice_owner<k_cols>(my_col, j);
             if (y < num_owning_cols) {
-                step[num_slices] = j;
                 order[num_slices++] = y;
             }
         }
-        const uint32_t tile_bytes = get_tile_size(cb_partials);
-        bool credited = false;
         uint32_t weights_issued = 0;
         auto issue_weights_through = [&](uint32_t end) {
             for (; weights_issued < end && weights_issued < num_slices; ++weights_issued) {
@@ -628,44 +623,13 @@ void kernel_main() {
         issue_weights_through(1 + nslice_weight_lookahead);
         before_sends();
         if constexpr (alias_slab_combine) {
-            // The combine slots are the slab's L1: peers may write them only once this core's gather landed.
-            {
-                MaybeDeviceZoneScope("writer_slab_dead_wait");
-                Semaphore<>(slab_dead_sem_id).wait_min(m_block_idx + 1);
-            }
-            give_credits();
+            // The combine slots are the slab's L1: column my_col - 1 may write them only once this core's gather
+            // landed.
+            MaybeDeviceZoneScope("writer_slab_dead_wait");
+            Semaphore<>(slab_dead_sem_id).wait_min(m_block_idx + 1);
         }
-        for (uint32_t j = 0; j < num_slices; ++j) {
-            issue_weights_through(j + 1 + nslice_weight_lookahead);
-            const uint32_t y = order[j];
-            if (conv2d_3x3::nslice_reader_sends<k_cols>(step[j])) {
-                continue;
-            }
-            {
-                MaybeDeviceZoneScope("writer_combine_wait_partials");
-                cb_wait_front(cb_partials, slice_tiles);
-            }
-            if (!credited) {
-                MaybeDeviceZoneScope("writer_combine_wait_credit");
-                combine_credit.wait_min((m_block_idx + 1) * num_owning_cols);
-                credited = true;
-            }
-            {
-                MaybeDeviceZoneScope("writer_combine_send");
-                conv2d_3x3::send_slice<block_m_tiles, out_n_tiles, tensor_n_tiles>(
-                    get_read_ptr(cb_partials), combine_base, tile_bytes, my_col, y, row_peer_coords_arg);
-                noc_async_write_barrier();
-            }
-            combine_arrival.up(noc, peer_x(y), peer_y(y), 1);
-            cb_pop_front(cb_partials, slice_tiles);
-        }
-        if (out_valid_tiles > 0) {
-            {
-                MaybeDeviceZoneScope("writer_combine_wait_arrivals");
-                combine_arrival.wait_min((m_block_idx + 1) * k_cols);
-            }
-            cb_push_back(cb_combine_slots, k_cols * slot_tiles);
-        }
+        give_credit();
+        issue_weights_through(num_slices);
     };
 
     // ---- fill_halo_slab, higher-shard half, and the trailing tile-rows of the face-direct gather (see the file

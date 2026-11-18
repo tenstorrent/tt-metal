@@ -58,11 +58,13 @@ CB_BIAS = 4
 CB_MATMUL_PARTIALS = 5
 CB_OUTPUT_TILES = 6
 CB_INPUT_TILES = 7
-# R4 only: every row peer's fp32 N-slice for this core's output columns, and their sum before the bias.
+# R4 only: every row peer's fp32 N-slice for this core's output columns, and (K-blocked walk) their sum before the
+# bias. On the N-slice-outer ring, slot k_cols - 1 - j holds step j's partial and slot 0 the row's sum.
 CB_COMBINE_SLOTS = 8
 CB_COMBINED = 9
-# N-slice-outer K split: the fp32 owner slices the reader sends on NoC0 (the writer's are in CB_MATMUL_PARTIALS).
-CB_SLICE_R = 10
+# N-slice-outer ring: one 16 B page per packed row group, compute (packer) -> reader (see conv2d_3x3_nslice_order.hpp).
+CB_RING_TOKEN = 10
+RING_TOKEN_BYTES = 16
 # Tap-major only: 32 zero pixels, so an out-of-image tap run is one read instead of one per 512 B MEM_ZEROS chunk.
 CB_ZERO_SRC = 11
 # Center-tap direct in0 (see CENTER_TAP_DIRECT): the kw = 1 K-blocks' input tiles, copied by the reader.
@@ -142,15 +144,13 @@ BIAS_STREAM_GROUPS = 5
 GATHER_SPLIT_RISCS = True
 
 # N-slice-outer K split (R4, the default when its resident in0 fits L1): the core tilizes its whole K of in0 once,
-# then multiplies one owner N-slice at a time over the whole K (one DEST accumulation, one fp32 pack, no L1-acc
-# passes) and sends slice y while slice y + 1 multiplies. Weight CB depth in slices (two rounds ahead of the slice
-# being sent, plus the sender's prefetch) and slice CB depth in slices, per sending RISC.
+# then multiplies one owner N-slice at a time over the whole K (one DEST accumulation) and the row reduce-scatters the
+# fp32 partials along a ring (conv2d_3x3_nslice_order.hpp): each step's slice is packed with L1 accumulation onto the
+# partial the previous column forwarded, one NoC hop per step, so the owner's sum is complete when its own slice lands
+# (no combine sum, no all-to-all). Weight CB depth in slices (two rounds ahead, plus the sender's prefetch).
 NSLICE_WEIGHT_DEPTH = 4
-NSLICE_SLICE_DEPTH = 2
-# Shared-L1 N-slice walk, whenever every core runs one M-block: cb_combine_slots shares cb_halo_slab's L1 (and
-# cb_combined cb_zero_src's), both dead once the core's gather landed; the owner's credits follow its gather. The slice
-# CBs are single-buffered there: the two sending RISCs alternate slices, so compute still runs a slice ahead.
-NSLICE_SHARED_SLICE_DEPTH = 1
+# Shared-L1 N-slice walk, whenever every core runs one M-block: cb_combine_slots shares cb_halo_slab's L1, dead once
+# the core's gather landed; the credit to the previous column follows it.
 
 # Split row gather (the per-pixel row gather with more than one tile-row per K-block): the writer gathers the units the
 # reader hands it (at most ROW_QUEUE outstanding) on NoC1, so two RISCs issue the reads. cb_im2col_rm then holds up to
@@ -303,11 +303,8 @@ class Conv3x3Blocking:
     footprint_bytes: int
     # The K split runs N-slice-outer (see NSLICE_WEIGHT_DEPTH).
     nslice: bool = False
-    # Shared-L1 N-slice walk (see NSLICE_SHARED_SLICE_DEPTH): byte sizes of the slab + combine-slots region and of the
-    # zero-block + combined region (0: not shared), and the slice CB depth.
+    # Shared-L1 N-slice walk (see NSLICE_WEIGHT_DEPTH): byte size of the slab + combine-slots region (0: not shared).
     shared_slab_bytes: int = 0
-    shared_zero_bytes: int = 0
-    slice_depth: int = NSLICE_SLICE_DEPTH
     # Center-tap direct mode in effect (CENTER_NONE / CENTER_K_BLOCK / CENTER_SLOTS), and the K-blocks cb_im2col_tiles
     # holds (2 under CENTER_SLOTS on the K-blocked walk).
     center_mode: int = 0
@@ -541,7 +538,6 @@ def _shared_region_bytes(a_bytes, a_page, b_bytes, b_page):
 def _footprint(
     g: Conv3x3Geometry, core_m_tiles, bm, bk, bn, ub_cap=None, nslice=False, im2col_depth=None, shared=False
 ):
-    slice_depth = NSLICE_SHARED_SLICE_DEPTH if shared else NSLICE_SLICE_DEPTH
     num_k_blocks = g.tensor_k_tiles // bk
     im2col_rm_depth_rows = (
         max(IM2COL_RM_DEPTH_ROWS, min(ROW_SPLIT_DEPTH_ROWS, bm * num_k_blocks))
@@ -557,8 +553,11 @@ def _footprint(
     sb_h, sb_w = _out_subblock(bm, bn)
     ns = g.out_n_tiles
     combine_sb_h, combine_sb_w = _out_subblock(bm, ns)
-    # R4: every row peer's slice of this core's output columns, plus their sum before the bias add.
-    combine_bytes = (g.k_cols * bm * ns + (bm * ns if g.has_bias else 0)) * TILE_BYTES_FP32 if g.k_split else 0
+    # R4: every row peer's slice of this core's output columns, plus (K-blocked walk) their sum before the bias add.
+    # The N-slice ring leaves the sum in slot 0 and adds the bias from there.
+    combine_bytes = (
+        (g.k_cols * bm * ns + (bm * ns if g.has_bias and not nslice else 0)) * TILE_BYTES_FP32 if g.k_split else 0
+    )
     if g.tile_input:
         ub = _default_untilize_batch_rows(g, band_len, raw_slab_rows)
         if ub_cap is not None:
@@ -572,20 +571,13 @@ def _footprint(
         slab_bytes = (2 * band_stride + band_len) * g.c_in_p * BF16_BYTES
         input_tile_bytes = 0
     zero_src_bytes = TILE * g.c_in_p * BF16_BYTES if _tap_major(g, bk) else 0
-    shared_slab_bytes = shared_zero_bytes = 0
+    shared_slab_bytes = 0
     if shared:
         slots_bytes = g.k_cols * bm * ns * TILE_BYTES_FP32
         slab_page = TILE_BYTES_BF16 if g.tile_input else g.c_in_p * BF16_BYTES
         shared_slab_bytes = _shared_region_bytes(slab_bytes, slab_page, slots_bytes, TILE_BYTES_FP32)
         combine_bytes -= slots_bytes
         slab_bytes = shared_slab_bytes
-        if g.has_bias and zero_src_bytes:
-            combined_bytes = bm * ns * TILE_BYTES_FP32
-            shared_zero_bytes = _shared_region_bytes(
-                zero_src_bytes, g.c_in_p * BF16_BYTES, combined_bytes, TILE_BYTES_FP32
-            )
-            combine_bytes -= combined_bytes
-            zero_src_bytes = shared_zero_bytes
     total = (
         slab_bytes
         + input_tile_bytes
@@ -594,7 +586,7 @@ def _footprint(
         + bm * (g.tensor_k_tiles if nslice else bk) * g.in0_tile_bytes
         + weight_depth * (g.tensor_k_tiles * ns if nslice else bk * bn) * g.weight_tile_bytes
         + (ns * g.weight_tile_bytes if g.has_bias else 0)
-        + (2 * slice_depth * bm * ns if nslice else bm * bn) * TILE_BYTES_FP32
+        + (RING_TOKEN_BYTES + TILE_BYTES_FP32 if nslice else bm * bn * TILE_BYTES_FP32)
         + combine_bytes
         + (0 if g.sharded_output else OUT_DEPTH_ROW_GROUPS * sb_h * bn * g.out_tile_bytes)
         + (_src_table_bytes(im2col_rm_depth_rows) if _tap_direct(g, bm, bk, nslice) else 0)
@@ -616,8 +608,6 @@ def _footprint(
         nslice=nslice,
         im2col_rm_depth_rows=im2col_rm_depth_rows,
         shared_slab_bytes=shared_slab_bytes,
-        shared_zero_bytes=shared_zero_bytes,
-        slice_depth=slice_depth,
     )
 
 
@@ -975,13 +965,8 @@ def create_program_descriptor(
             b.weight_depth * (g.tensor_k_tiles * ns if b.nslice else bk * bn),
             cores,
         ),
-        _cb(
-            CB_MATMUL_PARTIALS,
-            ttnn.float32,
-            TILE_BYTES_FP32,
-            b.slice_depth * bm * ns if b.nslice else bm * bn,
-            cores,
-        ),
+        # Unused by the N-slice ring: one page there keeps the face-direct startup's output format defined.
+        _cb(CB_MATMUL_PARTIALS, ttnn.float32, TILE_BYTES_FP32, 1 if b.nslice else bm * bn, cores),
     ]
     if g.sharded_output:
         # Packs land in the output shard; its capacity is the core's whole M range, and the M-blocks
@@ -1009,18 +994,8 @@ def create_program_descriptor(
         input_tile_pages = INPUT_TILE_DEPTH_BATCHES * b.untilize_batch_rows * g.c_in_tiles
         cbs.append(_cb(CB_INPUT_TILES, input_tensor.dtype, g.in0_tile_bytes, input_tile_pages, cores))
     if b.nslice:
-        cbs.append(_cb(CB_SLICE_R, ttnn.float32, TILE_BYTES_FP32, b.slice_depth * bm * ns, cores))
-    if b.shared_zero_bytes:
-        # The zero block is dead once the gather landed; the combined sum is packed only after every arrival.
-        cbs.append(
-            _shared_cb(
-                b.shared_zero_bytes,
-                (CB_ZERO_SRC, ttnn.bfloat16, pixel_bytes),
-                (CB_COMBINED, ttnn.float32, TILE_BYTES_FP32),
-                cores,
-            )
-        )
-    elif tap_major_im2col(g, b):
+        cbs.append(_cb(CB_RING_TOKEN, ttnn.float32, RING_TOKEN_BYTES, 1, cores))
+    if tap_major_im2col(g, b):
         cbs.append(_cb(CB_ZERO_SRC, ttnn.bfloat16, pixel_bytes, TILE, cores))
     tap_direct = _tap_direct(g, bm, bk, b.nslice)
     if tap_direct:
@@ -1031,7 +1006,7 @@ def create_program_descriptor(
     if g.k_split:
         if not b.shared_slab_bytes:
             cbs.append(_cb(CB_COMBINE_SLOTS, ttnn.float32, TILE_BYTES_FP32, g.k_cols * bm * ns, cores))
-        if has_bias and not b.shared_zero_bytes:
+        if has_bias and not b.nslice:
             cbs.append(_cb(CB_COMBINED, ttnn.float32, TILE_BYTES_FP32, bm * ns, cores))
 
     # Channel-slice reads (R4): the core's slice of input row v is page v * row_page_stride + col offset,
@@ -1128,7 +1103,7 @@ def create_program_descriptor(
             INPUT_TILE_DEPTH_BATCHES * b.untilize_batch_rows if g.tile_input else b.slab_px,
             CB_ZERO_SRC,
             int(b.nslice),
-            CB_SLICE_R,
+            CB_RING_TOKEN,
             SEM_COMBINE_CREDIT,
             SEM_COMBINE_ARRIVAL,
             int(row_split),
@@ -1145,6 +1120,8 @@ def create_program_descriptor(
             int(b.ring),
             int(tap_direct),
             CB_SRC_TABLE,
+            # N-slice ring: tile-rows per forwarded row group, the compute's slice subblock height.
+            _out_subblock(bm, ns)[0],
         ]
         args.extend(ttnn.TensorAccessorArgs(input_tensor).get_compile_time_args())
         return args
@@ -1181,7 +1158,7 @@ def create_program_descriptor(
         b.in0_stream_rows,
         max(1, min(BIAS_STREAM_GROUPS, _div_up(bm, b.in0_stream_rows))),
         int(b.nslice),
-        CB_SLICE_R,
+        CB_RING_TOKEN,
         *_out_subblock(bm, ns),
         b.untilize_batch_rows,
         int(strided_window),

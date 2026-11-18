@@ -21,8 +21,9 @@
 // matmul_block leaves packer L1 accumulation on and (OutWithRelu) PACK_RELU on; every later pack
 // (untilize, tilize, combine, bias add) first restores the state it needs.
 //
-// N-slice-outer K split (the default under a K split, when the resident in0 fits L1): see the branch below and
-// conv2d_3x3_nslice_order.hpp. The K-blocked walk below remains for K splits whose [bm, K] in0 does not fit.
+// N-slice-outer K split (the default under a K split, when the resident in0 fits L1): a ring reduce-scatter, see the
+// branch below and conv2d_3x3_nslice_order.hpp. The K-blocked walk below remains for K splits whose [bm, K] in0 does
+// not fit.
 //
 // K split (BLOCK_SHARDED, k_cols > 1): the matmul accumulates this core's channel slice into fp32
 // partials [bm, all C_out] that the WRITER consumes (it scatters N-slice y to grid column y of the row),
@@ -38,6 +39,7 @@
 #include "api/compute/compute_kernel_hw_startup.h"
 #include "api/compute/matmul.h"
 #include "api/compute/pack.h"
+#include "api/compute/tile_move_copy.h"
 #include "api/dataflow/circular_buffer.h"
 #include "api/dataflow/dataflow_buffer.h"
 #include "ttnn/cpp/ttnn/kernel_lib/tilize_helpers.hpp"
@@ -343,7 +345,8 @@ void kernel_main() {
     constexpr uint32_t in0_stream_rows = get_compile_time_arg_val(28);
     constexpr uint32_t bias_stream_groups = get_compile_time_arg_val(29);
     constexpr bool nslice_outer = get_compile_time_arg_val(30) != 0;
-    constexpr uint32_t cb_slice_r = get_compile_time_arg_val(31);
+    // N-slice ring: one page per packed row group, packer -> reader (see the N-slice branch).
+    constexpr uint32_t cb_ring_token = get_compile_time_arg_val(31);
     constexpr uint32_t slice_sb_h = get_compile_time_arg_val(32);
     constexpr uint32_t slice_sb_w = get_compile_time_arg_val(33);
     constexpr uint32_t untilize_batch_rows = get_compile_time_arg_val(34);
@@ -419,7 +422,6 @@ void kernel_main() {
     CircularBuffer output_tiles(cb_output_tiles);
     CircularBuffer bias(cb_bias);
     CircularBuffer combined(cb_combined);
-    [[maybe_unused]] CircularBuffer slice_r(nslice_outer ? cb_slice_r : cb_matmul_partials);
     DataflowBuffer combine_slots_dfb(cb_combine_slots);
     DataflowBuffer combined_dfb(cb_combined);
     DataflowBuffer output_tiles_dfb(cb_output_tiles);
@@ -543,11 +545,19 @@ void kernel_main() {
         }
 
         if constexpr (k_split && nslice_outer) {
-            // N-slice-outer K split: the whole K of in0 is tilized once into a resident [bm, K] block (the reader
-            // gathers tile-row outer, K-block inner). Then per owner N-slice, in the order of
-            // conv2d_3x3_nslice_order.hpp, one matmul call runs the whole K as one K-block: DEST accumulates over K,
-            // the fp32 [bm, out_n] slice is packed once, with no L1-accumulation pass, and pushed to the CB of the
-            // RISC that sends it (reader: cb_slice_r; writer: cb_matmul_partials) while the next slice multiplies.
+            // N-slice-outer K split as a ring reduce-scatter (conv2d_3x3_nslice_order.hpp): the whole K of in0 is
+            // tilized once into a resident [bm, K] block (the reader gathers tile-row outer, K-block inner). Step j
+            // multiplies owner my_col - 1 - j's slice over the whole K (DEST accumulates over K) and packs it into
+            // slot k_cols - 1 - j of cb_combine_slots with packer L1 accumulation onto the partial column my_col - 1
+            // sent for that owner (step 0 starts the chain: plain pack). The slots are reserved whole, so every pack
+            // is at an absolute offset. Each row group (one matmul subblock row) of a step is gated by the token CB:
+            // the packer reserves a page before packing the group, which the reader frees only once that group's
+            // incoming partial has landed, and pushes it after the pack, which tells the reader the group is ready
+            // to forward to my_col + 1. The last step (own slice) leaves the row's fp32 sum in slot 0, the front of
+            // cb_combine_slots: only the bias add (or a copy) and ReLU remain, packed into the output shard.
+            // Raw LLK (matmul_block / pack_tile): compute_kernel_lib::matmul_block cannot pack its only K-block
+            // with L1 accumulation onto a partial already in L1 (its L1-accumulating pack is "K-block > 0"), nor
+            // gate each subblock row's pack on a CB of another RISC.
             constexpr uint32_t k_tiles = block_k_tiles * num_k_blocks;
             constexpr uint32_t num_owning_cols = (block_n_tiles + out_n_tiles - 1) / out_n_tiles;
             static_assert(block_m_tiles % slice_sb_h == 0 && out_n_tiles % slice_sb_w == 0);
@@ -571,37 +581,98 @@ void kernel_main() {
                         im2col_rm_dfb, im2col_tiles_dfb, block_m_tiles * (k_tiles / im2col_tilize_width_tiles));
                 }
             }
+            CircularBuffer ring_token(cb_ring_token);
+            CircularBuffer slots(cb_combine_slots);
             {
                 MaybeDeviceZoneScope("compute_matmul_walk");
-                for (uint32_t j = 0; j < k_cols; ++j) {
-                    const uint32_t y = conv2d_3x3::nslice_owner<k_cols>(my_col, j);
-                    if (y >= num_owning_cols) {
-                        continue;
+                slots.reserve_back(k_cols * slot_tiles);
+                const uint32_t first = conv2d_3x3::ring_next_real<k_cols, num_owning_cols>(my_col, 0);
+                if (first >= 1 && first < k_cols) {
+                    // The first real step needs an incoming partial: a token the reader holds until it lands.
+                    ring_token.reserve_back(1);
+                    ring_token.push_back(1);
+                }
+                reconfig_data_format(cb_weights, cb_im2col_tiles);
+                pack_reconfig_data_format(cb_combine_slots);
+                ckernel::matmul_block_init(cb_im2col_tiles, cb_weights, false, slice_sb_w, slice_sb_h, k_tiles);
+                im2col_tiles.wait_front(block_m_tiles * k_tiles);
+                for (uint32_t j = first; j < k_cols;
+                     j = conv2d_3x3::ring_next_real<k_cols, num_owning_cols>(my_col, j + 1)) {
+                    weights.wait_front(k_tiles * out_n_tiles);
+                    pack_reconfig_l1_acc(j >= 1 ? 1 : 0);
+                    const uint32_t slot_base = (k_cols - 1 - j) * slot_tiles;
+                    for (uint32_t in0_sb = 0; in0_sb < block_m_tiles / slice_sb_h; ++in0_sb) {
+                        ring_token.reserve_back(1);
+                        for (uint32_t in1_sb = 0; in1_sb < out_n_tiles / slice_sb_w; ++in1_sb) {
+                            tile_regs_acquire();
+                            uint32_t in0_index = in0_sb * slice_sb_h * k_tiles;
+                            uint32_t in1_index = in1_sb * slice_sb_w;
+                            for (uint32_t k = 0; k < k_tiles; ++k) {
+                                ckernel::matmul_block(
+                                    cb_im2col_tiles,
+                                    cb_weights,
+                                    in0_index,
+                                    in1_index,
+                                    0,
+                                    false,
+                                    slice_sb_w,
+                                    slice_sb_h,
+                                    k_tiles);
+                                ++in0_index;
+                                in1_index += out_n_tiles;
+                            }
+                            tile_regs_commit();
+                            tile_regs_wait();
+                            ckl::pack_subblock_row_strided(
+                                0,
+                                cb_combine_slots,
+                                slot_base + in0_sb * slice_sb_h * out_n_tiles + in1_sb * slice_sb_w,
+                                out_n_tiles,
+                                slice_sb_h,
+                                slice_sb_w);
+                            tile_regs_release();
+                        }
+                        ring_token.push_back(1);
                     }
-                    CircularBuffer& slice_cb = conv2d_3x3::nslice_reader_sends<k_cols>(j) ? slice_r : partials;
-                    ckl::matmul_block<
-                        /*transpose=*/false,
-                        /*packer_l1_acc=*/false,
-                        ckl::LastBlockTarget::Out,
-                        ckl::OutputCBLayout::TileRowMajor,
-                        ckl::matmul_config::InitMode::Short,
-                        ckl::InputPolicy::WaitAndRetainOnLastBlock,
-                        ckl::InputPolicy::WaitAndPopPerKBlock>(
-                        im2col_tiles,
-                        weights,
-                        slice_cb,
-                        slice_cb,
-                        ckl::MatmulBlockShape::of(
-                            block_m_tiles / slice_sb_h, out_n_tiles / slice_sb_w, slice_sb_h, slice_sb_w, k_tiles, 1),
-                        {},
-                        {},
-                        /*in1_per_core_w=*/out_n_tiles,
-                        /*out_row_width=*/out_n_tiles);
+                    weights.pop_front(k_tiles * out_n_tiles);
                 }
                 im2col_tiles.pop_front(block_m_tiles * k_tiles);
+                pack_reconfig_l1_acc(0);
+                slots.push_back(k_cols * slot_tiles);
             }
-            if (owns_output_columns) {
-                combine_block();
+            {
+                MaybeDeviceZoneScope("compute_combine");
+                if (owns_output_columns) {
+                    if constexpr (apply_relu) {
+                        pack_relu_config(ReluConfig::zero());
+                    }
+                    if constexpr (has_bias) {
+                        ckl::add_bias_bcast_rows<ckl::BiasBroadcast::RowBroadcast, ckl::OutputCBLayout::TileRowMajor>(
+                            slots, bias, output_tiles, combine_bias_shape);
+                    } else {
+                        reconfig_data_format_srca(cb_combine_slots);
+                        pack_reconfig_data_format(cb_output_tiles);
+                        copy_init(cb_combine_slots);
+                        slots.wait_front(slot_tiles);
+                        output_tiles.reserve_back(slot_tiles);
+                        for (uint32_t t = 0; t < slot_tiles; ++t) {
+                            tile_regs_acquire();
+                            copy_tile(cb_combine_slots, t, 0);
+                            tile_regs_commit();
+                            tile_regs_wait();
+                            pack_tile(0, cb_output_tiles);
+                            tile_regs_release();
+                        }
+                        output_tiles.push_back(slot_tiles);
+                        slots.pop_front(slot_tiles);
+                    }
+                    // The other slots carried partials that moved on.
+                    slots.wait_front((k_cols - 1) * slot_tiles);
+                    slots.pop_front((k_cols - 1) * slot_tiles);
+                } else {
+                    slots.wait_front(k_cols * slot_tiles);
+                    slots.pop_front(k_cols * slot_tiles);
+                }
             }
         } else if constexpr (k_split) {
             {

@@ -1,13 +1,15 @@
 // SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 // SPDX-License-Identifier: Apache-2.0
 
-// N-slice-outer K split: the order in which a core of a grid row computes and sends the row's owner N-slices, and
-// which data-movement RISC sends each. Compute, writer and reader walk the same order, so each slice CB's FIFO order
-// matches its sender's. Step j handles owner my_col + 1, my_col - 1, my_col + 2, my_col - 2, ... (mod k_cols), the
-// core's own slice last: it is a local write, so every remote send overlaps a later slice's matmul. Owners past the
-// last C_out tile are skipped.
-// The +d steps go out on the reader's NoC0 (which runs toward higher columns), the -d steps and the own slice on the
-// writer's NoC1, so each core sends about half its slices on each NoC, each in its NoC's direction.
+// N-slice-outer K split: the row's fp32 partials are reduce-scattered along a ring. Step j of the core in grid column
+// my_col multiplies owner column my_col - 1 - j's N-slice (mod k_cols). The partial for owner o therefore starts on
+// column o + 1 at step 0 and moves one column on per step, each core adding its own slice to it, until o adds its own
+// slice last, at step k_cols - 1. Every hop is one column on the reader's NoC0 (+x), so no two partials of a row ever
+// share a NoC link (a direct all-to-all puts up to k_cols / 2 sends on each link, and those waves were the walk's
+// stall and the op's tail). Compute, writer (weights) and reader (forwarding) walk the same order.
+// Owners past the last C_out tile are skipped: a step is real when its owner owns output columns. Every core of the
+// row skips the same owners' whole chains, so a real step j >= 1 always receives the partial of step j - 1 from
+// column my_col - 1.
 
 #pragma once
 
@@ -17,16 +19,28 @@ namespace conv2d_3x3 {
 
 template <uint32_t k_cols>
 inline uint32_t nslice_owner(uint32_t my_col, uint32_t j) {
-    if (j == k_cols - 1) {
-        return my_col;
-    }
-    const uint32_t d = j / 2 + 1;
-    return (j % 2 == 0) ? (my_col + d) % k_cols : (my_col + k_cols - d) % k_cols;
+    return (my_col + 2 * k_cols - 1 - j) % k_cols;
 }
 
-template <uint32_t k_cols>
-inline bool nslice_reader_sends(uint32_t j) {
-    return j != k_cols - 1 && j % 2 == 0;
+// The first real step at or after j (k_cols: none).
+template <uint32_t k_cols, uint32_t num_owning_cols>
+inline uint32_t ring_next_real(uint32_t my_col, uint32_t j) {
+    for (; j < k_cols; ++j) {
+        if (nslice_owner<k_cols>(my_col, j) < num_owning_cols) {
+            return j;
+        }
+    }
+    return k_cols;
+}
+
+// Real steps j >= 1 of one M-block: each receives one partial from column my_col - 1.
+template <uint32_t k_cols, uint32_t num_owning_cols>
+inline uint32_t ring_incoming(uint32_t my_col) {
+    uint32_t n = 0;
+    for (uint32_t j = 1; j < k_cols; ++j) {
+        n += nslice_owner<k_cols>(my_col, j) < num_owning_cols ? 1 : 0;
+    }
+    return n;
 }
 
 }  // namespace conv2d_3x3
