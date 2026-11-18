@@ -17,6 +17,7 @@ groups must not interleave: the TP tests come first, the FSDP test last.
 import json
 import os
 import random
+import shutil
 
 import numpy as np
 import pytest
@@ -219,6 +220,29 @@ def test_incomplete_directory_and_existing_directory_are_refused(tp_mesh, tmp_pa
         dcp.save(path, model=model)
     dcp.save(path, model=model, overwrite=True)
     assert dcp.is_complete(path)
+
+
+def test_save_refuses_a_staging_directory_it_did_not_create(tp_mesh, tmp_path, monkeypatch, expect_error):
+    """A staging directory that already exists belongs to another save of the same step that drew the same nonce, or
+    to one that died: the save is refused before writing anything, and the directory is left as it was."""
+    import secrets
+
+    from ttml.distributed_checkpointing._index import staging_dir
+
+    model, params, opt = fresh_tp(DIM)
+    path = str(tmp_path / "step_0000002")
+    monkeypatch.setattr(secrets, "randbits", lambda bits: 12345)
+    other = staging_dir(path, 12345)
+    os.makedirs(os.path.join(other, "data"))
+    with open(os.path.join(other, "data", "other_save.safetensors"), "w") as f:
+        f.write("another save's file")
+    with expect_error(dcp.CheckpointError, r"step_0000002\.partial-12345 already exists: another save of this step"):
+        dcp.save(path, model=model)
+    assert os.listdir(os.path.join(other, "data")) == ["other_save.safetensors"], "the other save's files are kept"
+    assert not os.path.exists(path)
+    shutil.rmtree(other)
+    dcp.save(path, model=model)
+    assert dcp.is_complete(path) and not os.path.exists(other)
 
 
 class _LoraQKV(AbstractModuleBase):
