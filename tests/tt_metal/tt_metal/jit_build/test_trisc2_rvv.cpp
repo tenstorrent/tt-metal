@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Device-free (mock Blackhole) coverage for ComputeConfig::enable_trisc2_rvv — the opt-in
+// Compile-only coverage for ComputeConfig::enable_trisc2_rvv — the Blackhole opt-in
 // that compiles a kernel's TRISC2 (pack) translation unit with the RISC-V Vector (Zve32f)
 // extension.
 //
@@ -16,8 +16,11 @@
 //    knob-off compile of the same source contains none. Gated on the bundled sfpi toolchain
 //    accepting the Zve32f march string (older sfpi releases skip rather than fail).
 //
-// Everything here runs without silicon: the fixture configures a mock Blackhole device, and
-// compilation is pure host-side JIT.
+// The fixture follows the runner's architecture (jit_build_device_fixture.hpp): a mock Blackhole on
+// Wormhole, Blackhole and CPU-only hosts, so compilation is pure host-side JIT with no silicon; the
+// real device on a Quasar runner (simulator or silicon). Kernels are compiled, never dispatched.
+// On Quasar only the knob-off recipe check runs, built through Metal 2.0: enable_trisc2_rvv is
+// Blackhole-only (Quasar's opt-in is enable_unpack_rvv on TRISC0).
 
 #include <gtest/gtest.h>
 
@@ -36,6 +39,7 @@
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/kernel_types.hpp>
 #include <tt-metalium/tt_metal.hpp>
+#include <tt-metalium/workload/specification/program_spec.hpp>
 
 #include "impl/context/metal_context.hpp"
 #include "impl/kernels/kernel.hpp"
@@ -43,7 +47,7 @@
 #include "jit_build/build_env_manager.hpp"
 #include "jit_build/jit_build_utils.hpp"
 #include "llrt/rtoptions.hpp"
-#include "mock_blackhole_fixture.hpp"
+#include "jit_build_device_fixture.hpp"
 
 namespace tt::tt_metal {
 
@@ -54,6 +58,13 @@ constexpr const char* kRvvKernelPath = "tests/tt_metal/tt_metal/test_kernels/com
 constexpr const char* kBhRvvMarch = "-march=rv32im_zmmul_zaamo_zba_zbb_xtttensixbh_zve32f";
 // The -mcpu Blackhole TRISC compiles pass ahead of kBhRvvMarch; sfpi g++ rejects any command without one.
 constexpr const char* kBhTensixMcpu = "-mcpu=tt-bh-tensix";
+// L1 scratch base + element count for the vadd; compile-only, never dispatched.
+constexpr uint32_t kVaddScratchBase = 512 * 1024;
+constexpr uint32_t kVaddNumElements = 64;
+constexpr const char* kQuasarBlackholeOnly =
+    "enable_trisc2_rvv is Blackhole-only; Quasar's RVV opt-in is enable_unpack_rvv on TRISC0, and this "
+    "test kernel only uses vector code under TRISC_PACK (the legacy CreateKernel/ComputeConfig path it uses is "
+    "also rejected on Quasar, kernel.hpp:814)";
 
 // Resolve the sfpi g++ the JIT build uses (local runtime/sfpi, then system sfpi).
 std::string sfpi_gxx_path() {
@@ -143,9 +154,10 @@ bool elf_contains_vector_instructions(const std::string& elf_path) {
 // Fixture lives in the named namespace: gtest TEST_F classes derive from it
 // with external linkage, and an anonymous-namespace base trips
 // -Werror=subobject-linkage under gcc Unity builds (merge-queue build-sweeps).
-class Trisc2RvvMockBlackholeFixture : public MockBlackholeMeshDispatchFixture {
+class Trisc2RvvFixture : public JitBuildDeviceFixture {
 protected:
-    // Create + JIT-compile the RVV vadd kernel; returns the kernel (full name is set by compile).
+    // Create + JIT-compile the RVV vadd kernel through the legacy API (Wormhole/Blackhole only);
+    // returns the kernel (full name is set by compile).
     std::shared_ptr<Kernel> compile_rvv_kernel(bool enable_trisc2_rvv) {
         distributed::MeshDevice* device = devices_.at(0).get();
         Program program = CreateProgram(*device);
@@ -155,11 +167,38 @@ protected:
             CoreCoord{0, 0},
             ComputeConfig{
                 .enable_trisc2_rvv = enable_trisc2_rvv,
-                // L1 scratch base + element count for the vadd; compile-only, never dispatched.
-                .compile_args = {512 * 1024, 64},
+                .compile_args = {kVaddScratchBase, kVaddNumElements},
             });
         program.impl().compile(device);
         return program.impl().get_kernel(handle);
+    }
+
+    // Quasar: the same vadd kernel with no RVV opt-in and the same positional compile args, built
+    // through Metal 2.0 and compiled.
+    std::shared_ptr<Kernel> compile_rvv_kernel_metal2_knob_off() {
+        const KernelSpecName kernel_name{"trisc2_rvv_vadd"};
+        KernelSpec kernel_spec{
+            .unique_id = kernel_name,
+            .source = std::filesystem::path(kRvvKernelPath),
+            .hw_config = ComputeHardwareConfig{},
+        };
+        // Positional compile-time args, as on the legacy path. The kernel reads them only under
+        // TRISC_PACK with RVV enabled, so this knob-off build never reaches the reads.
+        kernel_spec.advanced_options.compile_time_varargs = {kVaddScratchBase, kVaddNumElements};
+        ProgramSpec spec{
+            .name = "trisc2_rvv_knob_off",
+            .kernels = {kernel_spec},
+            .work_units = {WorkUnitSpec{
+                .name = "main",
+                .kernels = {kernel_name},
+                .target_nodes = CoreCoord{0, 0},
+            }},
+        };
+        Program program = build_program_from_spec(spec);
+        // Plain compile is the first step of the compile_and_allocate that MakeProgramFromSpec runs;
+        // allocation is not needed to read the recipes.
+        program.impl().compile(devices_.at(0).get());
+        return program.impl().get_kernel(0);  // The spec's only kernel.
     }
 
     // Path of the kernel's compiled ELF for one compute processor (0=unpack, 1=math, 2=pack).
@@ -185,22 +224,24 @@ protected:
         return elf_contains_vector_instructions(kernel_elf_path(kernel, processor_id));
     }
 
-    // The kernel's exported compile recipe cflags for one compute processor.
-    std::string recipe_cflags(const std::shared_ptr<Kernel>& kernel, int processor_id) {
+    // The kernel's exported compile recipe cflags for one compute processor (a binary_processor_types() value).
+    std::string recipe_cflags(const std::shared_ptr<Kernel>& kernel, uint32_t processor_id) {
         return kernel_build_state(*kernel, processor_id).export_target_recipe(kernel.get()).cflags;
     }
 };
 
-TEST_F(Trisc2RvvMockBlackholeFixture, KnobOffRecipesCarryNoVectorFlags) {
-    auto kernel = compile_rvv_kernel(/*enable_trisc2_rvv=*/false);
-    for (int processor_id = 0; processor_id < 3; processor_id++) {
+TEST_F(Trisc2RvvFixture, KnobOffRecipesCarryNoVectorFlags) {
+    auto kernel =
+        is_quasar() ? compile_rvv_kernel_metal2_knob_off() : compile_rvv_kernel(/*enable_trisc2_rvv=*/false);
+    for (uint32_t processor_id : binary_processor_types(*kernel)) {
         const std::string cflags = recipe_cflags(kernel, processor_id);
         EXPECT_EQ(cflags.find("zve32f"), std::string::npos) << "trisc" << processor_id;
         EXPECT_EQ(cflags.find("-fno-lto"), std::string::npos) << "trisc" << processor_id;
     }
 }
 
-TEST_F(Trisc2RvvMockBlackholeFixture, KnobOnFlagsReachOnlyThePackRecipe) {
+TEST_F(Trisc2RvvFixture, KnobOnFlagsReachOnlyThePackRecipe) {
+    JIT_BUILD_SKIP_ON_QUASAR(kQuasarBlackholeOnly);
     if (!sfpi_supports_bh_zve32f()) {
         GTEST_SKIP() << "bundled sfpi toolchain does not accept " << kBhRvvMarch;
     }
@@ -218,7 +259,8 @@ TEST_F(Trisc2RvvMockBlackholeFixture, KnobOnFlagsReachOnlyThePackRecipe) {
     EXPECT_NE(pack_cflags.find("-fno-lto"), std::string::npos);
 }
 
-TEST_F(Trisc2RvvMockBlackholeFixture, VaddKernelCompilesToVectorCode) {
+TEST_F(Trisc2RvvFixture, VaddKernelCompilesToVectorCode) {
+    JIT_BUILD_SKIP_ON_QUASAR(kQuasarBlackholeOnly);
     if (!sfpi_supports_bh_zve32f()) {
         GTEST_SKIP() << "bundled sfpi toolchain does not accept " << kBhRvvMarch;
     }
