@@ -77,6 +77,11 @@ CB_CENTER_TILES = 12
 # K-blocked walk, a FIFO of one 16 B entry per unit (_tap_direct_fifo_units).
 CB_SRC_TABLE = 13
 
+# kw-fold halo exchange tokens (conv2d_3x3_kw_fold.hpp): compute pack -> writer (a boundary send is ready), writer ->
+# compute unpack (a neighbour's rows landed).
+CB_KWF_HALO_OUT = 14
+CB_KWF_HALO_IN = 15
+
 # R4 reduce-scatter semaphores; the weight multicast channel allocates its own after them.
 SEM_COMBINE_CREDIT = 0
 SEM_COMBINE_ARRIVAL = 1
@@ -1135,14 +1140,17 @@ KW_FOLD = True
 # kw-fold's final pass adds the bias as 8 srcB rows: 4 copies of the fp32 bias row of one output column tile.
 KWF_BIAS_ROWS_BYTES = 4 * TILE * 4
 IM2COL_NS_PER_TILE = 25
-# Either form recomputes the two halo tile-rows' products, about 6 * Ct * N extra tile-MACs per M-block, at the user's
-# fidelity, to save the im2col (tilized taps plus the untilized slab, ~25 ns per tile). The weights stream in column
-# rounds, so each Q tile-row is packed once and the first matmul starts when the first round lands; what decides is the
-# halo against the im2col, of which the tap-direct walk hides part (its prelude untilize and first tilize) under the
-# first weight round both walks wait for. Measured (Blackhole p150b, kw-fold vs the tap-direct walk, halo / im2col in
-# brackets): wins up to 0.52 (HiFi4 inst res2 fc1 0.52: 86.8 -> 83.9 us; LoFi inst dec res3 fc0 0.37: 29.0 -> 25.6, res2
-# 0.07: 16.7 -> 13.7; LoFi res3.x 0.37 flat), losses from 0.57 (LoFi sem dec res3 fc0 0.57: +3.4%, fc1 0.73: +6.1%;
-# HiFi4 res3 1.47: +5.7%, inst dec res3 fc0 1.47: +9.6%).
+# With more than one M-block per core either form recomputes the two halo tile-rows' products, about 6 * Ct * N extra
+# tile-MACs per M-block, at the user's fidelity, to save the im2col (tilized taps plus the untilized slab, ~25 ns per
+# tile). The weights stream in column rounds, so each Q tile-row is packed once and the first matmul starts when the
+# first round lands; what decides is the halo against the im2col, of which the tap-direct walk hides part (its prelude
+# untilize and first tilize) under the first weight round both walks wait for. Measured (Blackhole p150b, kw-fold vs the
+# tap-direct walk, halo / im2col in brackets): wins up to 0.52 (HiFi4 inst res2 fc1 0.52: 86.8 -> 83.9 us; LoFi inst dec
+# res3 fc0 0.37: 29.0 -> 25.6, res2 0.07: 16.7 -> 13.7; LoFi res3.x 0.37 flat), losses from 0.57 (LoFi sem dec res3 fc0
+# 0.57: +3.4%, fc1 0.73: +6.1%; HiFi4 res3 1.47: +5.7%, inst dec res3 fc0 1.47: +9.6%). With one M-block per core the
+# neighbour cores exchange the boundary rows instead (kw_fold_halo_exchange): no halo cost, so kw-fold is taken wherever
+# it fits. That flips sem dec res3 fc0 / fc1 onto kw-fold (LoFi 44.91 -> 40.97 / 36.22 -> 33.01 us; HiFi4 -2.8% / -2.5%)
+# and the HiFi4 res3-scale layers (res3 -12.4%, inst dec res3 fc0 -8.2%).
 KW_FOLD_MAX_HALO_SHARE = 0.55
 LOFI_NS_PER_TILE_MAC = 16 / 1.35
 FIDELITY_PHASES = {
@@ -1181,7 +1189,53 @@ def _kw_fold_pays(g, b, kb, math_fidelity):
     taps = 6 if b.center_mode != CENTER_NONE else 9
     im2col_ns = b.max_m_blocks_per_core * (taps * ct * bm + b.slab_tile_rows * ct) * IM2COL_NS_PER_TILE
     halo_ns = kb.max_m_blocks_per_core * 6 * ct * n * FIDELITY_PHASES[math_fidelity] * LOFI_NS_PER_TILE_MAC
+    if kw_fold_halo_exchange(kb):
+        # The neighbours exchange the boundary rows: no halo tile-row is recomputed.
+        halo_ns = 0
     return halo_ns <= KW_FOLD_MAX_HALO_SHARE * im2col_ns
+
+
+def kw_fold_halo_exchange(kb):
+    """kw-fold's halo exchange (kernels/conv2d_3x3_kw_fold.hpp): a core boundary inside an image row takes the boundary
+    rows' missing kw partial from the neighbour core instead of recomputing a halo tile-row. Only where every core runs
+    one M-block: with more, a core's first block would wait on its upper neighbour's last block (a chain)."""
+    return kb.max_m_blocks_per_core == 1
+
+
+def _kwf_xchg_flags(g, m_tile_start, actual_m_tiles):
+    """(top, bottom): the core's boundary with its upper / lower neighbour lies inside an image row."""
+    tpr = g.input_width // TILE
+    t_end = m_tile_start + actual_m_tiles
+    return int(m_tile_start % tpr != 0), int(t_end % tpr != 0 and t_end < g.tensor_m_tiles)
+
+
+def _kwf_rowbase(g, t0, i):
+    """Mirror of kw_fold.hpp rowbase: the ACC row of tile-row index i (tile-row t0 - 1 + i)."""
+    tpr = g.input_width // TILE
+    img0 = (t0 - 1 + tpr) // tpr
+    img = (t0 - 1 + i + tpr) // tpr
+    return g.dilation + TILE * i + g.dilation * (img - img0)
+
+
+def _kwf_xchg_writer_args(g, work, m_index, core_m_ranges, device):
+    """The writer's halo exchange args: [top, bottom, upper x, y, lower x, y, fv, lve, upper's lve, lower's fv] (ACC
+    rows: fv the core's first valid row, lve one past its last)."""
+
+    def fv_lve(i):
+        t, v = core_m_ranges[i]
+        return _kwf_rowbase(g, t, 1), _kwf_rowbase(g, t, v) + TILE
+
+    top, bot = _kwf_xchg_flags(g, *core_m_ranges[m_index])
+    fv, lve = fv_lve(m_index)
+    up = lo = (0, 0)
+    up_lve = lo_fv = 0
+    if top:
+        v = device.worker_core_from_logical_core(work[m_index - 1][0])
+        up, up_lve = (v.x, v.y), fv_lve(m_index - 1)[1]
+    if bot:
+        v = device.worker_core_from_logical_core(work[m_index + 1][0])
+        lo, lo_fv = (v.x, v.y), fv_lve(m_index + 1)[0]
+    return [top, bot, *up, *lo, fv, lve, up_lve, lo_fv]
 
 
 def _kw_fold_cb_bytes(g, kb):
@@ -1442,6 +1496,16 @@ def create_program_descriptor(
             _cb(CB_COMBINED, ttnn.float32, KWF_BIAS_ROWS_BYTES, ns, cores),
             # ACC-ready token, compute pack -> compute unpack, once per M-block.
             _cb(CB_SRC_TABLE, ttnn.float32, RING_TOKEN_BYTES, 1, cores),
+            # Halo exchange tokens (one per send / arrival, at most 3 each per n-group). Compute pops an n-group's
+            # arrivals at once after its final pass: a page per arrival of the kernel keeps that pop off the ring end.
+            _cb(CB_KWF_HALO_OUT, ttnn.float32, RING_TOKEN_BYTES, 3, cores),
+            _cb(
+                CB_KWF_HALO_IN,
+                ttnn.float32,
+                RING_TOKEN_BYTES,
+                3 * (g.tensor_n_tiles // _kw_fold_group(g.tensor_n_tiles)),
+                cores,
+            ),
         ]
         if tap_major_im2col(g, b):
             cbs.append(_cb(CB_ZERO_SRC, ttnn.bfloat16, pixel_bytes, TILE, cores))
@@ -1522,6 +1586,10 @@ def create_program_descriptor(
     server_sem_ids = (len(sem_ids), len(sem_ids) + 1) if weight_servers is not None else (0, 0)
     server_bias = weight_servers is not None and has_bias and not slab_split
     sem_ids += tuple(range(len(sem_ids), len(sem_ids) + 2 + b.weight_depth)) if weight_servers is not None else ()
+    # kw-fold halo exchange: rows-landed counters from the upper and from the lower neighbour.
+    kwf_xchg = kwf and kw_fold_halo_exchange(b)
+    kwf_xchg_sem_ids = (len(sem_ids), len(sem_ids) + 1) if kwf_xchg else (0, 0)
+    sem_ids += kwf_xchg_sem_ids if kwf_xchg else ()
     k_padded = g.tensor_kkh_tiles * TILE > 3 * g.c_in_p
 
     def zero_im2col_once(slice_channels):
@@ -1829,6 +1897,7 @@ def create_program_descriptor(
             )
         if kwf:
             compute_args += [m_tile_start, actual_m_tiles]
+            compute_args += _kwf_xchg_flags(g, m_tile_start, actual_m_tiles) if kwf_xchg else [0, 0]
         if b.ring:
             # Per M-block: tile-rows to untilize, and the unread tail rows of its last cb_input_tiles batch.
             ub = b.untilize_batch_rows
@@ -1858,6 +1927,7 @@ def create_program_descriptor(
             + row_peer_coords.get(m_index, [])
             + [int(split_of(core))]
             + server_rt_args(core)
+            + (_kwf_xchg_writer_args(g, work, m_index, core_m_ranges, device) if kwf_xchg else [])
         )
 
     # kw-fold kernels: the mode flag and its compile-time shape (defines keep the regular kernels' CT args intact).
@@ -1873,6 +1943,21 @@ def create_program_descriptor(
             ("KWF_N", str(g.tensor_n_tiles)),
             ("KWF_BIAS_BFP8", str(int(bias_tensor.dtype == ttnn.bfloat8_b))),
         ]
+        if kwf_xchg:
+            _kwf_dm_defines += [
+                ("KWF_XCHG", "1"),
+                ("KWF_CB_HALO_OUT", str(CB_KWF_HALO_OUT)),
+                ("KWF_CB_HALO_IN", str(CB_KWF_HALO_IN)),
+                ("KWF_CB_ACC", str(CB_MATMUL_PARTIALS)),
+                ("KWF_D", str(g.dilation)),
+                # ACC: one n-group's planes, one output column tile wide each (conv2d_3x3_kw_fold.hpp).
+                ("KWF_PITCH", str(TILE * 4)),
+                ("KWF_PLANE_BYTES", str(_kw_fold_plane_bytes(g, bm))),
+                ("KWF_PLANES", str(_kw_fold_group(g.tensor_n_tiles))),
+                ("KWF_NG", str(g.tensor_n_tiles // _kw_fold_group(g.tensor_n_tiles))),
+                ("KWF_SEM_FROM_UPPER", str(kwf_xchg_sem_ids[0])),
+                ("KWF_SEM_FROM_LOWER", str(kwf_xchg_sem_ids[1])),
+            ]
         _kwf_compute_defines = [
             ("CONV2D_3X3_KW_FOLD", "1"),
             ("KWF_D", str(g.dilation)),
@@ -1885,6 +1970,10 @@ def create_program_descriptor(
             ("KWF_PLANE_BYTES", str(_kw_fold_plane_bytes(g, bm))),
             # Out-of-line subblock (see conv2d_3x3_kw_fold.hpp): whole-K with multi-row subblocks.
             ("KWF_NOINLINE", str(int(not kw_fold_kblocked(g) and _sbh > 1))),
+            ("KWF_CB_HALO_OUT", str(CB_KWF_HALO_OUT)),
+            ("KWF_CB_HALO_IN", str(CB_KWF_HALO_IN)),
+            # The halo exchange's code only where it runs (it costs RISC time on small subblocks even when idle).
+            ("KWF_XCHG", str(int(kwf_xchg))),
         ]
     readers = [
         ttnn.KernelDescriptor(

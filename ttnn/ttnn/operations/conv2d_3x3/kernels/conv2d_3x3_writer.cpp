@@ -622,6 +622,101 @@ void kernel_main() {
         }
     };
 #endif
+    // ---- kw-fold halo exchange (conv2d_3x3_kw_fold.hpp, one M-block per core). The boundary between this core and
+    // its upper / lower neighbour lies inside an image row (runtime flags), and the neighbour, not a recomputed halo
+    // tile-row, supplies the boundary rows' missing kw partial, once per n-group pass. In ACC rows (fp32, every plane
+    // of the n-group): fv = this core's first valid row, lve = one past its last; up_lve = the upper core's lve, lo_fv
+    // = the lower core's fv.
+    //   A (lower -> upper, after the lower's first Q_1 group): rows [fv, fv + d) -> the upper's [up_lve, up_lve + d),
+    //     the spill rows its Q_0 then accumulates onto.
+    //   B (upper -> lower, after the upper's last Q_0 group): [lve - d, lve + d) -> the lower's [lo_fv - d, lo_fv + d):
+    //     the upper's last rows (Q_1 + Q_0) become the base of the lower's top spill rows and the lower's first rows
+    //     come back as Q_1 + Q_0, both for the lower's Q_2 to accumulate onto.
+    //   C (lower -> upper, after the lower's first Q_2 group): [fv - d, fv) -> the upper's [up_lve - d, up_lve).
+    // Every row thus sums Q_1, Q_0, Q_2 in the same order as with the recompute (bit-identical). Compute pushes one
+    // cb_halo_out token per send (pack thread: after the packer drained) and waits one cb_halo_in token per arrival;
+    // this writer moves the rows (write, barrier, then the receiver's semaphore) and turns semaphore counts into
+    // tokens, polled inside the weight waits (from round 1 on), the weight-slot reserve and the bias wait, and drained
+    // after the rounds. n-group g's counts: A 2g + 1 and C 2g + 2 from the lower neighbour, B g + 1 from the upper.
+    // The reserve must poll: with n-groups, compute can hold both weight slots at a gate this writer has to open.
+#ifdef KWF_XCHG
+    constexpr uint32_t khx_arg = server_arg + 3;
+    const bool khx_top = get_arg_val<uint32_t>(khx_arg) != 0;
+    const bool khx_bot = get_arg_val<uint32_t>(khx_arg + 1) != 0;
+    const uint32_t khx_fv = get_arg_val<uint32_t>(khx_arg + 6);
+    const uint32_t khx_lve = get_arg_val<uint32_t>(khx_arg + 7);
+    const uint32_t khx_up_lve = get_arg_val<uint32_t>(khx_arg + 8);
+    const uint32_t khx_lo_fv = get_arg_val<uint32_t>(khx_arg + 9);
+    const uint32_t khx_acc = get_write_ptr(KWF_CB_ACC);
+    const uint64_t khx_up_noc = get_noc_addr(get_arg_val<uint32_t>(khx_arg + 2), get_arg_val<uint32_t>(khx_arg + 3), 0);
+    const uint64_t khx_lo_noc = get_noc_addr(get_arg_val<uint32_t>(khx_arg + 4), get_arg_val<uint32_t>(khx_arg + 5), 0);
+    // Per n-group, sends in compute's order: A (top), B (bottom), C (top); arrivals in compute's order: A (bottom),
+    // B (top), C (bottom).
+    const uint32_t khx_out_g = (khx_top ? 2 : 0) + (khx_bot ? 1 : 0);
+    const uint32_t khx_in_g = (khx_bot ? 2 : 0) + (khx_top ? 1 : 0);
+    const uint32_t khx_out_n = KWF_NG * khx_out_g;
+    const uint32_t khx_in_n = KWF_NG * khx_in_g;
+    uint32_t khx_out_i = 0;
+    uint32_t khx_in_i = 0;
+    auto khx_send =
+        [&](uint64_t noc_base, uint32_t src_row, uint32_t dst_row, uint32_t rows, uint32_t sem_id, uint32_t sem_value) {
+            MaybeDeviceZoneScope("writer_khx_send");
+            for (uint32_t p = 0; p < KWF_PLANES; ++p) {
+                const uint32_t plane = khx_acc + p * KWF_PLANE_BYTES;
+                noc_async_write(
+                    plane + src_row * KWF_PITCH, noc_base | (plane + dst_row * KWF_PITCH), rows * KWF_PITCH);
+            }
+            noc_async_write_barrier();
+            // One writer per semaphore and its sends in order, so the count goes out as an inline write of its value: a
+            // NoC atomic increment here slowed the weight multicast landing beside it (center_head.1: rounds 2.05 ->
+            // 2.4-2.7 us apart, +3.3% whole op).
+            noc_inline_dw_write(noc_base | get_semaphore(sem_id), sem_value);
+        };
+    auto khx_poll = [&]() {
+        if (khx_out_i < khx_out_n && cb_pages_available_at_front(KWF_CB_HALO_OUT, 1)) {
+            // Which send this token is: the k-th of [A?, B?, C?] of n-group gi.
+            const uint32_t gi = khx_out_i / khx_out_g;
+            const uint32_t j = khx_out_i - gi * khx_out_g;
+            const uint32_t k = khx_top ? j : j + 1;  // 0 = A, 1 = B, 2 = C
+            if (k == 0) {
+                khx_send(khx_up_noc, khx_fv, khx_up_lve, KWF_D, KWF_SEM_FROM_LOWER, 2 * gi + 1);
+            } else if (k == 1 && khx_bot) {
+                khx_send(khx_lo_noc, khx_lve - KWF_D, khx_lo_fv - KWF_D, 2 * KWF_D, KWF_SEM_FROM_UPPER, gi + 1);
+            } else {
+                khx_send(khx_up_noc, khx_fv - KWF_D, khx_up_lve - KWF_D, KWF_D, KWF_SEM_FROM_LOWER, 2 * gi + 2);
+            }
+            cb_pop_front(KWF_CB_HALO_OUT, 1);
+            ++khx_out_i;
+        }
+        if (khx_in_i < khx_in_n) {
+            // The k-th of [A?, B?, C?] of n-group gi: A and C count on from_lower, B on from_upper.
+            const uint32_t gi = khx_in_i / khx_in_g;
+            const uint32_t j = khx_in_i - gi * khx_in_g;
+            const uint32_t k = khx_bot ? j : j + 1;
+            const bool from_upper = k == 1 && khx_top;
+            const uint32_t need = from_upper ? gi + 1 : (k == 0 ? 2 * gi + 1 : 2 * gi + 2);
+            invalidate_l1_cache();
+            const uint32_t have = *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(
+                get_semaphore(from_upper ? KWF_SEM_FROM_UPPER : KWF_SEM_FROM_LOWER));
+            if (have >= need && cb_pages_reservable_at_back(KWF_CB_HALO_IN, 1)) {
+                cb_reserve_back(KWF_CB_HALO_IN, 1);
+                cb_push_back(KWF_CB_HALO_IN, 1);
+                ++khx_in_i;
+            }
+        }
+    };
+    auto khx_drain = [&]() {
+        if (khx_out_i < khx_out_n || khx_in_i < khx_in_n) {
+            MaybeDeviceZoneScope("writer_khx_drain");
+            while (khx_out_i < khx_out_n || khx_in_i < khx_in_n) {
+                khx_poll();
+            }
+        }
+    };
+#else
+    auto khx_poll = [&]() {};
+    auto khx_drain = [&]() {};
+#endif
     // Weight servers: on a server receiver the server multicasts the bias (see the file comment); cb_bias is reserved
     // at kernel start and pushed once the bias flag is set. A core outside the channel reads it: at kernel start, or
     // under kw-fold once round 0 landed (~100 cores reading the same bias pages slowed round 0 by ~1 us when issued at
@@ -677,6 +772,7 @@ void kernel_main() {
             MaybeDeviceZoneScope("writer_bias");
             while (!late_bias_landed()) {
                 serve_fill();
+                khx_poll();
             }
             late_bias_reads.wait(TRID_BIAS_LATE);
             cb_push_back(cb_bias, out_n_tiles);
@@ -701,6 +797,12 @@ void kernel_main() {
                     serve_fill();
                 }
             }
+#ifdef KWF_XCHG
+            // Compute may sit at a halo-exchange gate before it frees the slot (see the exchange above).
+            while (!cb_pages_reservable_at_back(cb_weights, weight_k_block_tiles)) {
+                khx_poll();
+            }
+#endif
             cb_reserve_back(cb_weights, weight_k_block_tiles);
         }
         const uint32_t l1 = get_write_ptr(cb_weights);
@@ -732,6 +834,10 @@ void kernel_main() {
                 serve_fill();
                 if constexpr (kw_fold) {
                     try_finish_late_bias();
+                    // The exchange's first event follows compute's first group: nothing to poll in the round-0 wait.
+                    if (k_blocks_issued > 0) {
+                        khx_poll();
+                    }
                 }
             }
             *flag = INVALID;
@@ -1152,6 +1258,7 @@ void kernel_main() {
                 }
 #endif
             }
+            khx_drain();
             if constexpr (k_split) {
                 combine_round(m_block_idx);
             }
@@ -1216,6 +1323,10 @@ void kernel_main() {
     if constexpr (!output_sharded || remote_output) {
         noc_async_write_barrier();
     }
+#ifdef KWF_XCHG
+    // The last semaphore write of the halo exchange.
+    noc_async_write_barrier();
+#endif
     if constexpr (k_split || weight_servers) {
         noc_async_atomic_barrier();
     }

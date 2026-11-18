@@ -507,7 +507,7 @@ struct CenterTapIn0 {
 void kernel_main() {
 #ifdef CONV2D_3X3_KW_FOLD
     // kw-fold + output-shift path (conv2d_3x3_kw_fold.hpp); runtime args 3, 4: the core's first output tile-row and
-    // its valid tile-rows; 0: its M-blocks.
+    // its valid tile-rows; 0: its M-blocks; 5, 6: halo exchange with the upper / lower neighbour core.
     conv2d_3x3::kw_fold::run<
         get_compile_time_arg_val(14),  // cb_input_tiles: the slab
         get_compile_time_arg_val(2),   // cb_weights
@@ -516,6 +516,8 @@ void kernel_main() {
         get_compile_time_arg_val(4),   // cb_matmul_partials: the fp32 accumulator
         get_compile_time_arg_val(23),  // cb_combined: the fp32 bias rows (srcB of the final pass)
         get_compile_time_arg_val(40),  // cb_src_table: ACC-ready token (pack -> unpack)
+        KWF_CB_HALO_OUT,               // halo exchange: pack -> writer tokens
+        KWF_CB_HALO_IN,                // halo exchange: writer -> unpack tokens
         get_compile_time_arg_val(21),  // N
         get_compile_time_arg_val(17),  // C_in tiles
         get_compile_time_arg_val(6),   // bm
@@ -529,7 +531,13 @@ void kernel_main() {
         KWF_M_TILES,
         KWF_KBLOCKED != 0,
         KWF_PLANE_BYTES,
-        KWF_NOINLINE != 0>(get_arg_val<uint32_t>(3), get_arg_val<uint32_t>(4), get_arg_val<uint32_t>(0));
+        KWF_NOINLINE != 0,
+        KWF_XCHG != 0>(
+        get_arg_val<uint32_t>(3),
+        get_arg_val<uint32_t>(4),
+        get_arg_val<uint32_t>(0),
+        get_arg_val<uint32_t>(5) != 0,
+        get_arg_val<uint32_t>(6) != 0);
 #else
     constexpr uint32_t cb_im2col_rm = get_compile_time_arg_val(0);
     constexpr uint32_t cb_im2col_tiles = get_compile_time_arg_val(1);

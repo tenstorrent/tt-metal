@@ -9,11 +9,12 @@
 //     Q_kw[o] = sum_kh in[o + (kh - 1) d W] . Wt[kh, kw]
 // is a matmul whose in0 tiles ARE the input's TILE pages (the slab the reader fills: input tile-rows
 // [max(0, t0 - 1 - R), ...), consecutive). One matmul with K' = 3 C_in ((kh, c), c fastest) and N' = 3 C_out
-// ((kw, n), n fastest) gives [Q_0 | Q_1 | Q_2] at exactly the conv's MAC count (plus one halo tile-row each side whose
-// Q_0 / Q_2 spills d rows into this core's range), and out[o] = bias + Q_1[o] + [w >= d] Q_0[o - d] + [w < W - d]
-// Q_2[o + d]. The output columns are walked in n-groups of gw tiles (gw | N, at most 4), one pass each; within a
-// pass the columns kw go 1 first, then 0, then 2. The weights of column kw are W'[(kh, c), kw, n] (3 C_in x C_out
-// tiles, (kh, c, n) order), the prepared [K_p, C_out] tensor read tile-permuted (slot (kh, c, n) is prepared tile
+// ((kw, n), n fastest) gives [Q_0 | Q_1 | Q_2] at exactly the conv's MAC count (the halo tile-row each side whose Q_0 /
+// Q_2 spills d rows into this core's range comes from the neighbour core, see the halo exchange below, or is
+// recomputed), and out[o] = bias + Q_1[o] + [w >= d] Q_0[o - d] + [w < W - d] Q_2[o + d]. The output columns are walked
+// in n-groups of gw tiles (gw | N, at most 4), one pass each; within a pass the columns kw go 1 first, then 0, then 2.
+// The weights of column kw are W'[(kh, c), kw, n] (3 C_in x C_out tiles, (kh, c, n) order), the prepared [K_p, C_out]
+// tensor read tile-permuted (slot (kh, c, n) is prepared tile
 // ((kh * 3 + kw) Ct + c, n)). K-blocked, they stream in sub-rounds of one column and one n-group (3 C_in x gw tiles),
 // in pass order; whole-K, the three column rounds stay resident. Each Q_kw tile-row accumulates all its in-image
 // kernel rows in DEST and is packed once.
@@ -33,6 +34,30 @@
 // kw-fold run sem res2.fuse_conv.0 / .1 (C_out 256) in one M-block per core. Measured (Blackhole p150b, LoFi, against
 // the K-blocked tap-direct walk they ran before): 135.9 -> 100.4 and 108.8 -> 89.7 us; all planes resident measured the
 // same (89.4 us) at 215 KB more L1.
+//
+// Halo exchange (xchg: every core runs one M-block). Where a core boundary lies inside an image row, the d boundary
+// rows on each side miss one kw partial that lives in the neighbour's tile-row: the lower core's first d rows need
+// Q_0 of the upper core's last tile-row, the upper core's last d rows need Q_2 of the lower core's first tile-row.
+// Instead of recomputing that whole halo tile-row (3 Ct N tile-MACs and N packs each side, +2 / (3 bm) of the walk),
+// the neighbours pass d-row ACC strips (fp32, every plane of the n-group) over the NoC, so that every row still sums
+// Q_1, then Q_0, then Q_2 (bit-identical to the recompute). Per n-group pass, in ACC rows (fv: the lower core's first
+// valid row, lve: one past the upper core's last; the d rows past a core's range are its spill rows, which only these
+// strips write):
+//   A  lower -> upper, after the lower's first Q_1 group: [fv, fv + d) (Q_1) onto the upper's bottom spill rows,
+//      which the upper's last Q_0 group then accumulates onto (Q_1 + Q_0 of the lower's first rows);
+//   B  upper -> lower, after that group: [lve - d, lve + d) (both cores' boundary rows, Q_1 + Q_0) onto the lower's
+//      top spill and first rows, which the lower's first Q_2 group accumulates onto;
+//   C  lower -> upper, after that group: the lower's top spill rows (the upper's last rows, now complete) onto the
+//      upper's last d rows, before its final pass.
+// The pack thread pushes one cb_halo_out token per strip (after the packer drained), the writer moves it (NoC write,
+// barrier, then the receiver's semaphore) and turns the semaphore into a cb_halo_in token, which the unpack thread
+// waits for before the group (or final pass) that consumes the strip. Q_0 runs its last group first and the gates sit
+// a round after the sends. Every strip of n-group g is consumed before g's final pass, and the next n-group's strips
+// follow it. More than one M-block per core keeps the recompute (neighbours' blocks would chain). The exchange's code
+// is compiled in only where it runs (xchg): idle, it still cost stem.conv2's small subblocks ~0.2 us per round.
+// Measured (Blackhole p150b, perf focus, LoFi, medians of 3, bit-identical, before the n-group passes): inst dec res3
+// fc0 25.21 -> 22.63, sem dec res3 fc0 44.91 -> 40.97 and fc1 36.22 -> 33.01 us (both now kw-fold), inst dec res2 fc0
+// -3.9%, inst res2 fc1 -3.0%, res2 -3.8%; HiFi4 res3 -12.4%, inst dec res3 fc0 -8.2%.
 //
 // Raw LLK (capability): compute_kernel_lib::matmul_block reads in0 as one contiguous [M, K] block and packs at a CB's
 // write pointer; here a tile-row's K' comes from three slab tile-rows (whole input rows apart, one in0 base per kernel
@@ -222,6 +247,8 @@ template <
     uint32_t cb_acc,
     uint32_t cb_bias_rows,
     uint32_t cb_acc_ready,
+    uint32_t cb_halo_out,
+    uint32_t cb_halo_in,
     uint32_t N,
     uint32_t Ct,
     uint32_t bm,
@@ -235,8 +262,9 @@ template <
     uint32_t m_tiles,
     bool kblocked,
     uint32_t plane_bytes,
-    bool noinline>
-ALWI void run(uint32_t m_tile_start, uint32_t actual_m_tiles, uint32_t num_blocks) {
+    bool noinline,
+    bool xchg>
+ALWI void run(uint32_t m_tile_start, uint32_t actual_m_tiles, uint32_t num_blocks, bool xchg_top, bool xchg_bot) {
     constexpr uint32_t R = d * tpr;
     // ACC is gw planes of [rows, 32] fp32, one per output column tile of the n-group. Subblocks are sbh x 1 (a column
     // run: one stream per run of ACC-consecutive rows) or 1 x sbw (one 1-tile stream per column).
@@ -256,8 +284,11 @@ ALWI void run(uint32_t m_tile_start, uint32_t actual_m_tiles, uint32_t num_block
     CircularBuffer out(cb_out);
     CircularBuffer bias_rows(cb_bias_rows);
     CircularBuffer acc_ready(cb_acc_ready);
+    CircularBuffer halo_out(cb_halo_out);
+    CircularBuffer halo_in(cb_halo_in);
 
     compute_kernel_hw_startup(cb_w, cb_in, cb_acc);
+    uint32_t halo_seen = 0;  // exchange tokens waited for (held fronted until the n-group's final pass ends)
     [[maybe_unused]] uint32_t acc_base = 0;
     PACK((acc_base = get_local_cb_interface(get_output_id(cb_acc)).fifo_wr_ptr << 4));
     // M-blocks of bm tile-rows (one ACC: a block's Q_1 overwrite packs follow the previous block's final pass on the
@@ -268,8 +299,12 @@ ALWI void run(uint32_t m_tile_start, uint32_t actual_m_tiles, uint32_t num_block
         int32_t base[3];
         slab_bases<static_cast<int32_t>(tpr * 32), static_cast<int32_t>(m_tiles * 32), static_cast<int32_t>(d)>(
             t0 * 32, (t0 + valid) * 32, base);
-        const bool halo_top = t0 % tpr != 0;
-        const bool halo_bot = (t0 + valid) % tpr != 0 && t0 + valid < m_tiles;
+        // Halo exchange (see the file comment): at a core boundary inside an image row the boundary rows' missing
+        // partial comes from the neighbour core instead of a recomputed halo tile-row (one M-block per core only).
+        const bool xt = xchg && blk == 0 && xchg_top;               // the lower core of its top boundary
+        const bool xb = xchg && blk + 1 == num_blocks && xchg_bot;  // the upper core of its bottom boundary
+        const bool halo_top = t0 % tpr != 0 && !xt;
+        const bool halo_bot = (t0 + valid) % tpr != 0 && t0 + valid < m_tiles && !xb;
         uint32_t landed = 0;
         for (uint32_t g = 0; g < NG; ++g) {
             {
@@ -364,7 +399,8 @@ ALWI void run(uint32_t m_tile_start, uint32_t actual_m_tiles, uint32_t num_block
                     if (step < 2) {
                         pack_reconfig_l1_acc(step);
                     }
-                    // Q_0 reaches back to the halo tile-row above (t0 - 1), Q_2 to the one below (t_end).
+                    // Q_0 reaches back to the halo tile-row above (t0 - 1), Q_2 to the one below (t_end), unless the
+                    // neighbour core supplies those rows (exchange).
                     const uint32_t i_lo = kw == 0 && halo_top ? 0 : 1;
                     const uint32_t i_end = valid + (kw == 2 && halo_bot ? 2 : 1);
                     {
@@ -374,10 +410,45 @@ ALWI void run(uint32_t m_tile_start, uint32_t actual_m_tiles, uint32_t num_block
                         w.wait_front(kblocked ? ROUND_TILES : (step + 1) * ROUND_TILES);
                     }
                     const uint32_t w0 = kblocked ? 0 : step * ROUND_TILES + g * gw;
-                    for (uint32_t i0 = i_lo; i0 < i_end; i0 += sbh) {
-                        const uint32_t h = i_end - i0 < sbh ? i_end - i0 : sbh;
-                        for (uint32_t p0 = 0; p0 < gw; p0 += sbw) {
-                            subblock(i0, h, kw, w0 + p0, p0);
+                    // Exchange (file comment): the group a handshake sits on runs as part 0, gate before it, token
+                    // after it: Q_1's first group (A out), Q_0's last group (A in, B out; first, so B leaves a round
+                    // before the lower core's Q_2 needs it), Q_2's first group (B in, C out). The rest run as part 1,
+                    // through the same single subblock call site.
+                    uint32_t a0 = i_lo, a1 = i_lo, b0 = i_lo, b1 = i_end;  // part 0 = [a0, a1), part 1 = [b0, b1)
+                    bool push = false;
+                    if constexpr (xchg) {
+                        bool gate = false;
+                        if (kw != 0 && xt) {
+                            // Q_1: A out; Q_2: B in, C out (the first group).
+                            a1 = b0 = i_lo + sbh < i_end ? i_lo + sbh : i_end;
+                            gate = kw == 2;
+                            push = true;
+                        } else if (kw == 0 && xb) {
+                            // Q_0, its last group first: A in, B out.
+                            a0 = b1 = i_lo + ((i_end - 1 - i_lo) / sbh) * sbh;
+                            a1 = i_end;
+                            gate = true;
+                            push = true;
+                        }
+                        if (gate) {
+                            // Tokens stay fronted (popped once after the final pass: no unpacker drain per gate).
+                            MaybeDeviceZoneScope("compute_kwf_halo_wait");
+                            halo_in.wait_front(++halo_seen);
+                        }
+                    }
+                    for (uint32_t part = 0; part < 2; ++part) {
+                        const uint32_t lo = part ? b0 : a0;
+                        const uint32_t end = part ? b1 : a1;
+                        for (uint32_t i0 = lo; i0 < end; i0 += sbh) {
+                            const uint32_t h = i_end - i0 < sbh ? i_end - i0 : sbh;
+                            for (uint32_t p0 = 0; p0 < gw; p0 += sbw) {
+                                subblock(i0, h, kw, w0 + p0, p0);
+                            }
+                        }
+                        if (push) {
+                            halo_out.reserve_back(1);
+                            halo_out.push_back(1);
+                            push = false;
                         }
                     }
                     if constexpr (kblocked) {
@@ -419,6 +490,14 @@ ALWI void run(uint32_t m_tile_start, uint32_t actual_m_tiles, uint32_t num_block
                 }
                 const uint32_t n_first = g * gw;
                 const uint32_t total = valid * gw;
+                if constexpr (xchg) {
+                    if (xb) {
+                        // Exchange: the last d valid rows come back from the lower core (C), which sends them a round
+                        // before this pass.
+                        MaybeDeviceZoneScope("compute_kwf_halo_wait");
+                        halo_in.wait_front(++halo_seen);
+                    }
+                }
                 for (uint32_t f0 = 0; f0 < total; f0 += FINAL_BATCH) {
                     const uint32_t cnt = total - f0 < FINAL_BATCH ? total - f0 : FINAL_BATCH;
                     MATH((llk_math_wait_for_dest_available()));
@@ -448,6 +527,12 @@ ALWI void run(uint32_t m_tile_start, uint32_t actual_m_tiles, uint32_t num_block
                     out.push_back(bm * N);
                 }
                 acc_ready.pop_front(1);
+                if constexpr (xchg) {
+                    if (halo_seen > 0) {
+                        halo_in.pop_front(halo_seen);
+                        halo_seen = 0;
+                    }
+                }
                 tilize_uninit(cb_acc, cb_out);
                 if constexpr (relu) {
                     pack_relu_config(ReluConfig::none());
