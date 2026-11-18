@@ -44,6 +44,23 @@ def main():
         if mesh4:
             ch.build_head()
             ids4 = [torch.randint(1000, 100000, (4, HC.CHUNK), generator=rnd) for _ in range(K)]
+            if (
+                os.environ.get("REAL") == "1"
+            ):  # real text tokens (4 different slices of a long text) instead of random ids
+                from transformers import AutoTokenizer
+
+                tok = AutoTokenizer.from_pretrained(CKPT, trust_remote_code=True)
+                txt = (
+                    open("/home/container_app_user/tt-metal/README.md").read()
+                    + open("/home/container_app_user/tt-metal/METALIUM_GUIDE.md").read()
+                )
+                allids = tok(txt * 4, add_special_tokens=False)["input_ids"]
+                need = 4 * K * HC.CHUNK
+                assert len(allids) >= need, (len(allids), need)
+                for r_ in range(4):
+                    seg = torch.tensor(allids[r_ * 3000 : r_ * 3000 + K * HC.CHUNK]).reshape(K, HC.CHUNK)
+                    for c_ in range(K):
+                        ids4[c_][r_] = seg[c_]
             xs_dev = [ch.embed_ids(ids4[c]) for c in range(K)]
             xs = None
         else:

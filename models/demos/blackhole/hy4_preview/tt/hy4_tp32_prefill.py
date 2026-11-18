@@ -183,6 +183,22 @@ class Tp32PrefillExperts:
         return act, out
 
     # ------------------------------------------------------------------ K1c (full-row gather, single-buffered weights; needs a plan with xl1=False)
+    def _core_rt(self, cores):
+        """per-core runtime args [core index] of the K1/K2 kernels. HY4_B49_RTCACHE=1: built once (the 110 x proxy assignments cost ~0.4 ms of host time per launch)."""
+        if os.environ.get("HY4_B49_RTCACHE", "0") == "1":
+            rt = getattr(self, "_rt_cached", None)
+            if rt is None:
+                rt = self._rt_cached = self._build_rt(cores)
+            return rt
+        return self._build_rt(cores)
+
+    @staticmethod
+    def _build_rt(cores):
+        rt = ttnn.RuntimeArgs()
+        for i, c in enumerate(cores):
+            rt[c.x][c.y] = [i]
+        return rt
+
     def k1c(self, x, pt, act):
         cs, cores = self.cs, self.cores
         CB_X, CB_W, CB_O, CB_META, CB_WS, CB_RM, CB_SC, CB_O2, CB_IX = range(9)
@@ -197,9 +213,7 @@ class Tp32PrefillExperts:
             tile_cb(cs, CB_O2, 4, ttnn.bfloat16),
             u32_cb(cs, CB_IX, 2048),
         ]
-        rt = ttnn.RuntimeArgs()
-        for i, c in enumerate(cores):
-            rt[c.x][c.y] = [i]
+        rt = self._core_rt(cores)
         rd = ttnn.KernelDescriptor(
             kernel_source=f"{KDIR}/k1c_reader.cpp",
             source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
@@ -275,9 +289,7 @@ class Tp32PrefillExperts:
         cbs.append(tile_cb(cs, CB_RM1, 48 if self.split else 1, ttnn.bfloat16))
         if self.xl1:
             cbs.append(tile_cb(cs, CB_XS, tpc * 6, ttnn.bfloat16))
-        rt = ttnn.RuntimeArgs()
-        for i, c in enumerate(cores):
-            rt[c.x][c.y] = [i]
+        rt = self._core_rt(cores)
         rd = ttnn.KernelDescriptor(
             kernel_source=f"{KDIR}/k1b_reader.cpp",
             source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
@@ -403,9 +415,7 @@ class Tp32PrefillExperts:
             tile_cb(cs, CB_TIL, 32, ttnn.bfloat16),
             u32_cb(cs, CB_WS, 8192, 2048),
         ]
-        rt = ttnn.RuntimeArgs()
-        for i, c in enumerate(cores):
-            rt[c.x][c.y] = [i]
+        rt = self._core_rt(cores)
         rd = ttnn.KernelDescriptor(
             kernel_source=f"{KDIR}/k2b_reader.cpp",
             source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
@@ -477,9 +487,7 @@ class Tp32PrefillExperts:
             tile_cb(cs, CB_TIL, 32, ttnn.bfloat16),
             u32_cb(cs, CB_WS, 8192, 2048),
         ]
-        rt = ttnn.RuntimeArgs()
-        for i, c in enumerate(cores):
-            rt[c.x][c.y] = [i]
+        rt = self._core_rt(cores)
         rd = ttnn.KernelDescriptor(
             kernel_source=f"{KDIR}/k2f_reader.cpp",
             source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
