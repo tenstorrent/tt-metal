@@ -16,6 +16,7 @@
 
 #include <fmt/format.h>
 #include <fmt/ranges.h>
+#include <tt_stl/assert.hpp>
 #include <yaml-cpp/yaml.h>
 
 namespace tt::tt_fabric::vcluster {
@@ -34,13 +35,18 @@ constexpr uint32_t kReservedCce = 1;
 using Errors = std::vector<std::string>;
 using Findings = std::vector<ManifestFinding>;
 
-// Reports every key of the map `node` that is not in `known`.
+// Reports every key of the map `node` that is not in `known`, and every key that appears more than once: yaml-cpp
+// keeps both entries of a repeated key and node[key] returns one of them.
 void check_keys(
     const YAML::Node& node, std::initializer_list<std::string_view> known, const std::string& where, Errors& errors) {
+    std::set<std::string> seen;
     for (const auto& entry : node) {
         const std::string key = entry.first.IsScalar() ? entry.first.Scalar() : std::string("<not a scalar>");
         if (std::find(known.begin(), known.end(), key) == known.end()) {
             errors.push_back(fmt::format("{}: unknown key '{}'", where, key));
+        }
+        if (!seen.insert(key).second) {
+            errors.push_back(fmt::format("{}: duplicate key '{}'", where, key));
         }
     }
 }
@@ -68,7 +74,7 @@ std::optional<T> parse_integer(std::string_view text) {
     return out;
 }
 
-// A plain (unquoted) scalar as a T: an integer by parse_integer(), a string as written.
+// A scalar as a T: a string as written; an integer by parse_integer(), from a plain scalar with no tag only.
 template <typename T>
 std::optional<T> decode_scalar(const YAML::Node& value) {
     if (!value.IsScalar()) {
@@ -77,8 +83,9 @@ std::optional<T> decode_scalar(const YAML::Node& value) {
     if constexpr (std::is_same_v<T, std::string>) {
         return value.Scalar();
     } else {
-        // yaml-cpp tags a quoted scalar "!": a quoted number is a string.
-        if (value.Tag() == "!") {
+        // yaml-cpp tags a plain untagged scalar "?"; a quoted one gets "!", and an explicit tag (!!str, !!int, !foo)
+        // its own.
+        if (value.Tag() != "?") {
             return std::nullopt;
         }
         return parse_integer<T>(value.Scalar());
@@ -537,7 +544,9 @@ void check_links(const Manifest& manifest, Findings& findings) {
         const auto check_end = [&](char side, const LinkEnd& end) {
             if (find_device(manifest, end.device) == nullptr) {
                 add(findings, ManifestCheck::Link, fmt::format("{}: no such device", end_label(i, side, end)));
-            } else if (find_router(manifest, end) == nullptr) {
+                return;
+            }
+            if (find_router(manifest, end) == nullptr) {
                 add(findings,
                     ManifestCheck::Link,
                     fmt::format("{}: the device has no router on that port", end_label(i, side, end)));
@@ -613,12 +622,16 @@ Findings in_row_order(Findings findings) {
 }  // namespace
 
 Manifest parse_manifest(std::string_view yaml_text) {
-    YAML::Node root;
+    std::vector<YAML::Node> documents;
     try {
-        root = YAML::Load(std::string(yaml_text));
+        documents = YAML::LoadAll(std::string(yaml_text));
     } catch (const YAML::Exception& e) {
         throw ManifestLoadError({fmt::format("not YAML: {}", e.what())});
     }
+    if (documents.size() != 1) {
+        throw ManifestLoadError({fmt::format("a manifest is one YAML document; this one has {}", documents.size())});
+    }
+    const YAML::Node& root = documents.front();
     if (!root.IsMap()) {
         throw ManifestLoadError({"the root is not a map"});
     }
@@ -635,7 +648,11 @@ Manifest parse_manifest(std::string_view yaml_text) {
     check_keys(root, {"version", "capture", "devices", "links"}, "manifest", errors);
     if (root["capture"]) {
         if (const auto capture = read_value<std::string>(root, "capture", "manifest", errors)) {
-            manifest.capture = *capture;
+            if (capture->empty()) {
+                errors.push_back("manifest: 'capture' is empty");
+            } else {
+                manifest.capture = *capture;
+            }
         }
     }
     const YAML::Node devices = read_sequence(root, "devices", "manifest", errors);
@@ -677,6 +694,14 @@ Manifest load_manifest(const std::filesystem::path& path) {
 }
 
 std::vector<ManifestFinding> check_manifest(const Manifest& manifest, const PackageFacts& facts) {
+    TT_FATAL(
+        facts.harts_per_cce > 0, "PackageFacts::harts_per_cce is {}; the caller must fill it", facts.harts_per_cce);
+    TT_FATAL(
+        facts.sram_bytes_per_cce > 0,
+        "PackageFacts::sram_bytes_per_cce is {}; the caller must fill it",
+        facts.sram_bytes_per_cce);
+    TT_FATAL(!facts.cores.empty(), "PackageFacts::cores is empty; the caller must fill it");
+    TT_FATAL(!manifest.devices.empty(), "Manifest::devices is empty; parse_manifest() never returns one");
     Findings findings;
     // Stage A.
     check_reserved_values(manifest, facts, findings);
