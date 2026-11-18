@@ -36,6 +36,7 @@
   "perf_csa_index_remap": 12.5,
   "perf_custom_mm": 56.4,
   "perf_custom_mm_reuse_dest_srcb": 28.4,
+  "perf_dense_pack_untilize": 66.6,
   "perf_eltwise_add_scalar": 7.8,
   "perf_eltwise_bcast_col_custom": 96.3,
   "perf_eltwise_binary": 55.1,
