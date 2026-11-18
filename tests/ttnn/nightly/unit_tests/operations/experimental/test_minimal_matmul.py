@@ -954,7 +954,7 @@ def test_performance(device):
     logger.info(f"Utilization: {util*100:.1f}%")
 
     if ttnn.device.is_blackhole():
-        expected_util = 0.895
+        expected_util = 0.94
     else:
         expected_util = 0.582
 
