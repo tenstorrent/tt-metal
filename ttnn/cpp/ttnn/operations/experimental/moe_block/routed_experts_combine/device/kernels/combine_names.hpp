@@ -20,7 +20,7 @@
 //   row_cb / meta_cb / weight_cb           | CBs the accumulator's reader fills for its compute: rows, meta pages, gate
 //                                          |   weights
 //   accumulator_table_cb                   | CB of the accumulator's plan scratch (CB_TAB)
-//   accumulator_cb / output_cb             | CBs of the fp32 sums and of the finished bf16 rows
+//   accumulator_cb / output_cb             | CBs of the sums (int32 with the snap, else fp32) and of the bf16 rows
 //   row_bytes / row_tiles                  | bytes of a bf16 row / its tiles (flat 2 KB)
 //   landing_slot_bytes                     | bytes of a landing slot (a row + its 32 B trailer, 64 B aligned)
 //   injection_slot_bytes                   | the same in the injection ring
@@ -41,7 +41,7 @@
 //   local_ring_offset                      | the accumulators' local ring (arena-relative)
 //   local_ring_landed_word                 | misc word of the local ring's landed[] array
 //   local_ring_handoff_base_word           | misc word of the local ring's hand-off base
-//   snap_offset_bits                       | fp32 bits of C = 1.5 x 2^23 q of the deterministic rounding (0: off)
+//   snap_step_bits                         | fp32 bits of the snap step q: int32 sums of whole q's (0: off, fp32 sums)
 //   port_role_first_runtime_arg            | two-role kernels: the runtime arg where the port role's args start
 //   <role>_..._accessor_first_arg          | compile-time arg index of a TensorAccessorArgs chain (roles: port_reader,
 //                                          |   accumulator_reader, port_writer, accumulator_writer)
@@ -105,7 +105,7 @@ inline constexpr const char* kAccumulatorTableBytes = "accumulator_table_bytes";
 inline constexpr const char* kLocalRingOffset = "local_ring_offset";
 inline constexpr const char* kLocalRingLandedWord = "local_ring_landed_word";
 inline constexpr const char* kLocalRingHandoffBaseWord = "local_ring_handoff_base_word";
-inline constexpr const char* kSnapOffsetBits = "snap_offset_bits";
+inline constexpr const char* kSnapStepBits = "snap_step_bits";
 inline constexpr const char* kPortRoleFirstRuntimeArg = "port_role_first_runtime_arg";
 
 // ---- TensorAccessorArgs chains: the absolute compile-time arg index of the first arg ----

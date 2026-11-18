@@ -14,7 +14,8 @@ test_moe_block_accuracy: the block's output vs the model's host reference (rando
     output (Weka), PCC at least the case's floor.
 test_moe_block_determinism: `calls` eager calls, then `calls` replays of a captured trace, every output bit-identical to
     the first - compared on the device, one scalar a chip read back (op_checks.DeterminismMarker). Runs with the
-    combine's snap (q 2^-14): without it the combine's fp32 sums depend on the rows' arrival order.
+    combine's snap (q 2^-14: int32 sums of whole q's): without it the combine's fp32 sums depend on the rows' arrival
+    order.
 test_moe_block_perf: traced replays on the real-time program profiler, each op's device time (its slowest chip,
     the median over op_checks.PERF_RUNS (5) replays) no slower than its baseline + margin; baselines in
     moe_block_perf_baselines.json, per machine and case (MOE_PERF_RECORD=1 records them; a case without them on the
@@ -347,7 +348,7 @@ def test_moe_block_accuracy(case, mesh_device, device_params):
 @pytest.mark.skipif(not is_blackhole(), reason="Blackhole only")
 @pytest.mark.timeout(1800)
 def test_moe_block_determinism(case, mesh_device, device_params):
-    # (with the combine's snap: every routed term rounded to a multiple of q, so its fp32 sums do not depend on the order
+    # (with the combine's snap: every routed term an int32 count of q, so its integer sums do not depend on the order
     # the rows land in - without it they do, and runs differ in the last bits)
     run = _setup(case, mesh_device, combine_snap=COMBINE_SNAP)
     ttnn.deallocate(run())  # (weights, programs)

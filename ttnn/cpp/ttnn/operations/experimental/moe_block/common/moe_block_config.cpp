@@ -68,15 +68,18 @@ void MoEModelDims::check() const {
     router.check();
 }
 
-uint32_t snap_bits(float q) {
+uint32_t snap_step_bits(float q) {
     if (q == 0.0f) {
         return 0;
     }
     int e = 0;
     const float m = std::frexp(q, &e);  // q = m 2^e, m in [0.5, 1) (negative, inf, NaN: m is not 0.5)
-    TT_FATAL(m == 0.5f, "moe_block: combine_snap {} is not 0 (off) or a positive power of two", q);
-    // C = 1.5 x 2^23 q = 1.5 x 2^(e - 1 + 23)
-    return std::bit_cast<uint32_t>(std::ldexp(1.5f, e - 1 + 23));
+    // (q = 2^(e - 1); the kernel scales by 1 / q as well, so both must be normal fp32 powers of two)
+    TT_FATAL(
+        m == 0.5f && e - 1 >= -126 && e - 1 <= 126,
+        "moe_block: combine_snap {} is not 0 (off) or a power of two in [2^-126, 2^126]",
+        q);
+    return std::bit_cast<uint32_t>(q);
 }
 
 uint32_t expert_activation_code(ExpertActivationKind kind) {
@@ -143,7 +146,7 @@ uint32_t routed_activation_code(const ExpertActivation& act) {
     return expert_activation_code(act.kind);
 }
 
-uint32_t MoEBlockConfig::snap_bits() const { return moe_block::snap_bits(combine_snap); }
+uint32_t MoEBlockConfig::snap_step_bits() const { return moe_block::snap_step_bits(combine_snap); }
 
 void MoEBlockConfig::check() const {
     // The head hashes every token onto link 0 or 1 (route word link bit) and the dispatch ports only take their own
@@ -158,7 +161,7 @@ void MoEBlockConfig::check() const {
         "moe_block: a forward of {} tokens as {} chunks (1 .. 8, whole chunks)",
         chunk_tokens,
         forward_chunks);
-    (void)snap_bits();
+    (void)snap_step_bits();
 }
 
 }  // namespace ttnn::operations::experimental::moe_block
