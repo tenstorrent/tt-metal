@@ -168,8 +168,20 @@ IM2COL_RM_DEPTH_ROWS = 2
 TAP_DIRECT_GROUP = 3
 WEIGHT_DEPTH = 2
 OUT_DEPTH_ROW_GROUPS = 2
-# cb_input_tiles depth in untilize batches: the reader reads batch b+1 while compute untilizes b.
+# cb_input_tiles depth in untilize batches: the reader reads batch b+1 while compute untilizes b. Where every core runs
+# one M-block the ring instead holds the whole slab in cb_im2col_tiles' L1 (see create_program_descriptor).
 INPUT_TILE_DEPTH_BATCHES = 2
+
+# Windowed TILE fill (compacted slab): cb_input_tiles batches the reader keeps in flight, each under its own
+# transaction id, and the split fill's writer likewise. One batch at a time was one read round trip per batch: on
+# aspp.convs.1 @ LoFi (2-tile-row batches) the fill ran at ~22 GB/s and the untilize waited on it.
+FILL_WINDOW_BATCHES = 4
+FILL_WRITER_WINDOW_BATCHES = 4
+# The split TILE fill under a K split runs on a column receiver only when one of its M-blocks reads at least this many
+# bytes from higher-index shards. The split pays by taking those reads off NoC0's wrap-around; a small hand-over is
+# pure latency (res4 layers, ~3 KB per core: +2.0% / +4.3% median of 3 with the split; res5.0, ~11 KB: flat;
+# res5.1 / res5.2, ~20 KB, and aspp, 36-72 KB: faster).
+SPLIT_FILL_MIN_BYTES = 8192
 
 # Slab-fill start offset per core index (op_design lamp P9): consecutive pixels rotate over DRAM banks,
 # so offsetting each core's first read spreads the cores over the banks. 0 disables the stagger.
@@ -371,6 +383,32 @@ def _block_first_tap(g: Conv3x3Geometry, o_first):
     """Flat input index of tap (0, 0) of output pixel o_first (negative inside the top/left padding)."""
     ho0, wo0 = divmod(o_first, g.output_width)
     return (ho0 * g.stride - g.padding) * g.input_width + wo0 * g.stride - g.padding
+
+
+def _higher_shard_rows(g: Conv3x3Geometry, core_m_tiles, block_m_tiles, m_index, shard_rows):
+    """The most slab tile-rows one M-block of work index m_index reads from a higher-index input shard (the split
+    fill's writer share; mirror of the kernels' tile_slab_plan segments)."""
+    start, actual = _core_m_ranges(g.tensor_m_tiles, core_m_tiles)[m_index]
+    most = 0
+    for block_start in range(0, actual, block_m_tiles):
+        tiles = min(block_m_tiles, actual - block_start)
+        o_first = (start + block_start) * TILE
+        o_last = min((start + block_start + tiles) * TILE, g.num_out_px) - 1
+        band_len = _block_band_len(g, o_first, o_last)
+        f = _block_first_tap(g, o_first)
+        prev_hi = None
+        count = 0
+        for kh in range(3):
+            v_lo = f + kh * g.dilation * g.input_width
+            lo, hi = max(v_lo, 0), min(v_lo + band_len, g.num_in_px)
+            if lo >= hi:
+                continue
+            t_lo, t_hi = lo // TILE, _div_up(hi, TILE)
+            first_new = prev_hi if prev_hi is not None and t_lo < prev_hi else t_lo
+            count += sum(1 for r in range(first_new, t_hi) if r // shard_rows > m_index)
+            prev_hi = t_hi
+        most = max(most, count)
+    return most
 
 
 def _tile_slab_rows(g: Conv3x3Geometry, f, band_len):
@@ -1008,8 +1046,34 @@ def create_program_descriptor(
         )
     if has_bias:
         cbs.append(_cb(CB_BIAS, bias_tensor.dtype, g.weight_tile_bytes, ns, cores))
-    if g.tile_input:
-        input_tile_pages = INPUT_TILE_DEPTH_BATCHES * b.untilize_batch_rows * g.c_in_tiles
+    # Whole-slab input ring: where every core runs one M-block, cb_input_tiles shares cb_im2col_tiles' L1 (compute
+    # tilizes in0 only after its untilize consumed every input batch, and no reader write lands in in0 before then: no
+    # center-tap slots) and holds the whole slab, so the reader never waits on a reserve and the split fill hands the
+    # writer every batch up front. Costs no L1 (it frees the separate ring).
+    input_ring_batches = INPUT_TILE_DEPTH_BATCHES
+    alias_ring = False
+    if (
+        g.tile_input
+        and not b.ring
+        and b.max_m_blocks_per_core == 1
+        and b.center_mode == CENTER_NONE
+        and not face_direct
+    ):
+        in0_pages = bm * (g.tensor_k_tiles if b.nslice else bk * b.center_slot_blocks)
+        if b.slab_tile_rows * g.c_in_tiles <= in0_pages:
+            alias_ring = True
+            input_ring_batches = b.slab_tile_rows // b.untilize_batch_rows
+    if alias_ring:
+        for i, cb in enumerate(cbs):
+            if cb.format_descriptors[0].buffer_index == CB_IM2COL_TILES:
+                cbs[i] = _shared_cb(
+                    cb.total_size,
+                    (CB_IM2COL_TILES, input_tensor.dtype, g.in0_tile_bytes),
+                    (CB_INPUT_TILES, input_tensor.dtype, g.in0_tile_bytes),
+                    cores,
+                )
+    elif g.tile_input:
+        input_tile_pages = input_ring_batches * b.untilize_batch_rows * g.c_in_tiles
         cbs.append(_cb(CB_INPUT_TILES, input_tensor.dtype, g.in0_tile_bytes, input_tile_pages, cores))
     if b.nslice:
         cbs.append(_cb(CB_RING_TOKEN, ttnn.float32, RING_TOKEN_BYTES, 1, cores))
@@ -1030,7 +1094,10 @@ def create_program_descriptor(
     # Channel-slice reads (R4): the core's slice of input row v is page v * row_page_stride + col offset,
     # and one owner shard holds input_shard_rows consecutive rows of it contiguously.
     slab_split = SLAB_SPLIT_NOCS and g.sharded_output and not g.tile_input and not g.k_split
-    tile_fill_split = g.sharded_output and g.tile_input and not g.k_split
+    # Split TILE fill. Under a K split (N-slice-outer walk) only with the whole slab in the ring, where the reader hands
+    # the writer every batch up front; a per-batch hand-over on the 2-batch ring measured slower than no split there
+    # (aspp.convs.1 @ LoFi 75.8 vs 71.0 us).
+    tile_fill_split = g.sharded_output and g.tile_input and (not g.k_split or (b.nslice and alias_ring))
     if g.k_split:
         in_spec = input_tensor.memory_config().shard_spec
         page_cols = TILE if g.tile_input else g.c_in_p
@@ -1042,6 +1109,32 @@ def create_program_descriptor(
         row_page_stride, input_shard_rows = 0, int(input_tensor.memory_config().shard_spec.shape[0]) // TILE
     else:
         row_page_stride, input_shard_rows = 0, 0
+    core_m_ranges = _core_m_ranges(g.tensor_m_tiles, b.core_m_tiles)
+    m_blocks_per_index = [_div_up(actual_m_tiles, bm) for _, actual_m_tiles in core_m_ranges]
+    # The weight multicast's cores (the channel below is built from the same set). The split TILE fill runs on its pure
+    # receivers: not the sender (work core 0), nor the own-stream cores outside the channel.
+    mcast_receivers = None if g.k_split else _weight_mcast_cores(core_list, [m_blocks_per_index[i] for _, i, _ in work])
+    split_cores = set()
+    if tile_fill_split and mcast_receivers is not None:
+        split_cores = {(c.x, c.y) for c in core_list[1:] if mcast_receivers.contains(c)}
+    # K split: each column multiplies against its own weight K-slice, one stream per column (built once: the split
+    # fill picks its receivers from it).
+    column_channel = _column_weight_mcast(input_tensor, work, m_blocks_per_index) if g.k_split else None
+    if tile_fill_split and g.k_split and column_channel is not None:
+        # The column channels' pure receivers (the staggered sender of column g is participant row g % rows: its writer
+        # blocks in DRAM reads and multicast sends: measured +9% with it split) that read enough from higher shards.
+        most = max(m_blocks_per_index[i] for _, i, _ in work)
+        part_rows = sorted({i for _, i, _ in work if m_blocks_per_index[i] == most})
+        hi_bytes = {
+            row: _higher_shard_rows(g, b.core_m_tiles, bm, row, input_shard_rows) * g.c_in_tiles * g.in0_tile_bytes
+            for row in part_rows
+        }
+        for core, row, col in work:
+            if row in part_rows and row != part_rows[col % len(part_rows)] and hi_bytes[row] >= SPLIT_FILL_MIN_BYTES:
+                split_cores.add((core.x, core.y))
+
+    # Under a K split, the split kernel only where some core splits (no idle semaphores or accessor args otherwise).
+    tile_fill_split = tile_fill_split and (not g.k_split or bool(split_cores))
     pages_per_slice_row = g.c_in_tiles if g.tile_input else 1
     combine_split_nocs = g.k_split and COMBINE_SPLIT_NOCS
     tap_major = tap_major_im2col(g, b)
@@ -1068,9 +1161,10 @@ def create_program_descriptor(
     k_padded = g.tensor_kkh_tiles * TILE > 3 * g.c_in_p
 
     def zero_im2col_once(slice_channels):
-        """The reader zeroes cb_im2col_rm once (mirror of its zero_im2col_once)."""
+        """The reader zeroes cb_im2col_rm once (mirror of its zero_im2col_once; the tap-major gather copies whole slab
+        pixels, lanes included, so its im2col needs no zeroing)."""
         return (
-            not face_direct and bk == g.tensor_kkh_tiles and (slice_channels < g.c_in_p or k_padded) and not tap_direct
+            not face_direct and not tap_major and bk == g.tensor_kkh_tiles and (slice_channels < g.c_in_p or k_padded)
         )
 
     def reader_ct_args(slice_channels, split_core=None):
@@ -1119,8 +1213,8 @@ def create_program_descriptor(
             int(gather_split),
             stream_rows,
             *gather_sem_ids,
-            # Short-slice lane zeroing: cb_input_tiles tile-row slots (TILE) / slab pixels (ROW_MAJOR).
-            INPUT_TILE_DEPTH_BATCHES * b.untilize_batch_rows if g.tile_input else b.slab_px,
+            # Short-slice lane zeroing: slab pixels (ROW_MAJOR; TILE reads a row's padding tiles from the zero block).
+            0 if g.tile_input else b.slab_px,
             CB_ZERO_SRC,
             int(b.nslice),
             CB_RING_TOKEN,
@@ -1144,6 +1238,9 @@ def create_program_descriptor(
             _ring_subblock(bm, ns)[0],
             # Tap-direct group: at most half the ring, so compute always has the other half.
             max(1, min(TAP_DIRECT_GROUP, b.im2col_rm_depth_rows // 2)) if tap_direct else 1,
+            input_ring_batches,
+            # A window past the ring would reserve more than the CB holds.
+            min(FILL_WINDOW_BATCHES, input_ring_batches) if g.tile_input and not b.ring else 1,
         ]
         args.extend(ttnn.TensorAccessorArgs(input_tensor).get_compile_time_args())
         return args
@@ -1254,14 +1351,21 @@ def create_program_descriptor(
         CB_INPUT_TILES,
         b.slab_tile_rows,
         b.untilize_batch_rows,
-        INPUT_TILE_DEPTH_BATCHES,
+        input_ring_batches,
         int(b.ring),
+        int(g.k_split),
+        row_page_stride,
+        0,  # fill_zero_lanes, set per writer kernel
+        CB_ZERO_SRC,
+        FILL_WRITER_WINDOW_BATCHES if not b.ring else 1,
     ]
+    writer_zero_lanes_arg = len(writer_ct_args) - 3
 
     def writer_ct_args_for(slice_channels, split_core=None):
         args = list(writer_ct_args)
         args[writer_slice_arg] = slice_channels
         args[writer_slice_arg + 2] = int(zero_im2col_once(slice_channels))
+        args[writer_zero_lanes_arg] = int(tap_major and slice_channels < g.c_in_p)
         if split_core is not None:
             args[writer_split_arg] = int(split_core)
         return args
@@ -1292,19 +1396,11 @@ def create_program_descriptor(
     bias_addr = bias_tensor.buffer_address() if has_bias else 0
     output_addr = output_tensor.buffer_address()
     device = input_tensor.device()
-    core_m_ranges = _core_m_ranges(g.tensor_m_tiles, b.core_m_tiles)
-    m_blocks_per_index = [_div_up(actual_m_tiles, bm) for _, actual_m_tiles in core_m_ranges]
     row_peer_coords = {}
     if g.k_split:
         for core, row, _ in work:
             virtual = device.worker_core_from_logical_core(core)
             row_peer_coords.setdefault(row, []).extend([virtual.x, virtual.y])
-    # The weight multicast's cores (the channel below is built from the same set). The split TILE fill runs on its pure
-    # receivers: not the sender (work core 0), nor the own-stream cores outside the channel.
-    mcast_receivers = None if g.k_split else _weight_mcast_cores(core_list, [m_blocks_per_index[i] for _, i, _ in work])
-    split_cores = set()
-    if tile_fill_split and mcast_receivers is not None:
-        split_cores = {(c.x, c.y) for c in core_list[1:] if mcast_receivers.contains(c)}
 
     def split_of(core):
         return (core.x, core.y) in split_cores
@@ -1316,20 +1412,26 @@ def create_program_descriptor(
         # empty past the last C_out tile).
         out_n_tile_start = col * ns
         out_valid_tiles = max(0, min(ns, g.tensor_n_tiles - out_n_tile_start))
+        # The split is a runtime flag: a per-core kernel split fragments the core ranges (a staggered sender per
+        # column), and the launch of many-range kernels measured up to ~10 us of start skew.
         reader_cores, reader_rt = reader_groups.setdefault(
-            (_slice_channels(g, col), split_of(core)), ([], ttnn.RuntimeArgs())
+            (_slice_channels(g, col), bool(split_cores)), ([], ttnn.RuntimeArgs())
         )
         reader_cores.append(core)
-        reader_rt[core.x][core.y] = [
-            input_addr,
-            m_tile_start,
-            actual_m_tiles,
-            num_m_blocks_this_core,
-            m_index * SLAB_READ_STAGGER_PX_PER_CORE,
-            col * pages_per_slice_row,
-            col,
-            m_index,
-        ] + row_peer_coords.get(m_index, [])
+        reader_rt[core.x][core.y] = (
+            [
+                input_addr,
+                m_tile_start,
+                actual_m_tiles,
+                num_m_blocks_this_core,
+                m_index * SLAB_READ_STAGGER_PX_PER_CORE,
+                col * pages_per_slice_row,
+                col,
+                m_index,
+            ]
+            + row_peer_coords.get(m_index, [])
+            + [int(split_of(core))]
+        )
         compute_args = [num_m_blocks_this_core, int(out_valid_tiles > 0), col]
         if b.ring:
             # Per M-block: tile-rows to untilize, and the unread tail rows of its last cb_input_tiles batch.
@@ -1338,24 +1440,28 @@ def create_program_descriptor(
                 compute_args += [new_rows, -new_rows % ub]
         compute_rt[core.x][core.y] = compute_args
         writer_cores, writer_rt = writer_groups.setdefault(
-            (_slice_channels(g, col), split_of(core)), ([], ttnn.RuntimeArgs())
+            (_slice_channels(g, col), bool(split_cores)), ([], ttnn.RuntimeArgs())
         )
         writer_cores.append(core)
-        writer_rt[core.x][core.y] = [
-            weight_addr,
-            bias_addr,
-            output_addr,
-            m_tile_start,
-            actual_m_tiles,
-            num_m_blocks_this_core,
-            0,  # first N tile of the matmul block: the core multiplies against all of C_out
-            col * g.tensor_k_tiles,  # the column's weight K-slice (rows ordered (col, kh, kw, c))
-            out_n_tile_start,
-            out_valid_tiles,
-            col,
-            input_addr,
-            m_index,
-        ] + row_peer_coords.get(m_index, [])
+        writer_rt[core.x][core.y] = (
+            [
+                weight_addr,
+                bias_addr,
+                output_addr,
+                m_tile_start,
+                actual_m_tiles,
+                num_m_blocks_this_core,
+                0,  # first N tile of the matmul block: the core multiplies against all of C_out
+                col * g.tensor_k_tiles,  # the column's weight K-slice (rows ordered (col, kh, kw, c))
+                out_n_tile_start,
+                out_valid_tiles,
+                col,
+                input_addr,
+                m_index,
+            ]
+            + row_peer_coords.get(m_index, [])
+            + [int(split_of(core))]
+        )
 
     readers = [
         ttnn.KernelDescriptor(
@@ -1394,8 +1500,6 @@ def create_program_descriptor(
     weight_mcast_config = ttnn.McastConfig(noc=ttnn.NOC.NOC_1)
     weight_mcast = None
     if g.k_split:
-        # Each column multiplies against its own weight K-slice: one stream per column.
-        column_channel = _column_weight_mcast(input_tensor, work, m_blocks_per_index)
         if column_channel is not None:
             receivers, group_size, order = column_channel
             # Staggered senders: with every column's sender on one grid row, all the columns' DRAM read responses

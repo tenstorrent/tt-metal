@@ -35,11 +35,14 @@
 // writer reads the slab runs owned by higher-index input shards on NoC1, whose responses take the short way back,
 // and raises slab_fwd_done; from the second block on it first waits for the reader's slab_free.
 //
-// Split TILE fill (HEIGHT-sharded TILE input, pure weight-multicast receivers): the reader reserves each cb_input_tiles
-// batch and, when it holds tile-rows of higher-index input shards, hands it over (fill_go); the writer reads those rows
-// on NoC1 into the batch's ring slot and counts it (fill_done), and the reader pushes the batch after both halves. The
-// writer serves hand-overs wherever it waits (weight reserve and receive, bias read, row-gather serving), because
-// compute untilizes a block before it multiplies it.
+// Split TILE fill (sharded TILE input, pure weight-multicast receivers; a per-core runtime flag): the reader reserves
+// each cb_input_tiles batch and, when it holds tile-rows of higher-index input shards, hands it over (fill_go); the
+// writer reads those rows on NoC1 into the batch's ring slot and counts it (fill_done), and the reader pushes the batch
+// after both halves. On the compacted slab the writer keeps up to fill_writer_window handed-over batches in flight (own
+// transaction id each) and counts them in order as they land. The writer serves hand-overs wherever it waits (weight
+// reserve and receive, bias read, row-gather serving, and on the N-slice walk its weight-read, slab_dead, partials,
+// credit and arrival waits), because compute untilizes a block before it multiplies it. Under a K split the writer
+// reads the core's channel slice of each row, a short slice's padding tiles from the reader's zero block.
 //
 // Split face-direct gather: after issuing each K-block's weights the writer waits for the reader's gather_go (the
 // in0 block is reserved and the slab complete), then writes every odd row group (in0_stream_rows tile-rows) on
@@ -143,7 +146,19 @@ void kernel_main() {
     constexpr uint32_t input_tile_depth_batches = get_compile_time_arg_val(63);
     // Ring slab (see the reader): every M-block streams the input tile-rows [max(previous hi, lo), hi) of its window.
     constexpr bool ring_slab = get_compile_time_arg_val(64) != 0;
-    constexpr auto weight_args = TensorAccessorArgs<65>();
+    // Split TILE fill under a K split: the core's channel slice of input tile-row r is c_in_p / 32 pages from page
+    // r * fill_row_page_stride + my_col * c_in_p / 32; with fill_zero_lanes only the slice's real tiles are read and
+    // its padding tile columns are read from the reader's zero block.
+    constexpr bool fill_channel_slice = get_compile_time_arg_val(65) != 0;
+    constexpr uint32_t fill_row_page_stride = get_compile_time_arg_val(66);
+    constexpr bool fill_zero_lanes = get_compile_time_arg_val(67) != 0;
+    // The reader's zero block (tap-major, zeroed before the reader hands anything over): a short slice's padding tiles.
+    constexpr uint32_t cb_zero_src = get_compile_time_arg_val(68);
+    // Higher-shard batches the writer keeps in flight (own transaction id each).
+    constexpr uint32_t fill_writer_window = get_compile_time_arg_val(69);
+    static_assert(fill_writer_window >= 1 && fill_writer_window <= 8, "writer fill transaction ids 8..15");
+    static_assert(fill_writer_window == 1 || !ring_slab, "the ring slab's writer fill is one batch at a time");
+    constexpr auto weight_args = TensorAccessorArgs<70>();
     [[maybe_unused]] constexpr auto bias_args = TensorAccessorArgs<weight_args.next_compile_time_args_offset()>();
     [[maybe_unused]] constexpr auto output_args = TensorAccessorArgs<bias_args.next_compile_time_args_offset()>();
     [[maybe_unused]] constexpr auto input_args = TensorAccessorArgs<output_args.next_compile_time_args_offset()>();
@@ -165,6 +180,9 @@ void kernel_main() {
     [[maybe_unused]] const uint32_t input_addr = get_arg_val<uint32_t>(11);
     [[maybe_unused]] const uint32_t my_shard = get_arg_val<uint32_t>(12);
     constexpr uint32_t row_peer_coords_arg = 13;  // (x, y) of grid columns 0..k_cols-1 of this row
+    // Split TILE fill on this core (runtime: the kernel is shared with the cores that keep the reader-only fill).
+    constexpr uint32_t split_flag_arg = row_peer_coords_arg + (k_split ? 2 * k_cols : 0);
+    [[maybe_unused]] const bool split_here = tile_fill_split && get_arg_val<uint32_t>(split_flag_arg) != 0;
 
     constexpr uint32_t weight_k_block_tiles = block_k_tiles * block_n_tiles;
     constexpr uint32_t row_group_tiles = out_subblock_h * block_n_tiles;
@@ -219,6 +237,8 @@ void kernel_main() {
     [[maybe_unused]] int32_t ring_prev_hi = -1;
     conv2d_3x3::TaggedReads<false> fill_reads;
     constexpr uint32_t TRID_FILL = 6;
+    [[maybe_unused]] const uint64_t fill_zero_noc =
+        fill_zero_lanes ? get_noc_addr(get_write_ptr(cb_zero_src), fill_reads.noc.get_noc_id()) : 0;
     // Moves the cursor to the next batch holding higher shards' rows; false past the last block.
     [[maybe_unused]] auto fill_next = [&]() -> bool {
         if constexpr (ring_slab) {
@@ -293,10 +313,64 @@ void kernel_main() {
         }
         return false;
     };
-    [[maybe_unused]] auto fill_one = [&]() {
+    // Compacted slab: the cursor batch's higher-shard rows, issued under trid; advances the cursor.
+    [[maybe_unused]] auto fill_issue = [&](uint32_t trid) {
         MaybeDeviceZoneScope("writer_fill");
         const auto input = TensorAccessor(input_args, input_addr, input_page_bytes);
+        const uint32_t slot =
+            fill_ring_base + ((fill_m * fill_batches_per_block + fill_b) % input_tile_depth_batches) * fill_batch_bytes;
+        fill_reads.begin(trid);
+        conv2d_3x3::tile_batch_rows<untilize_batch_rows>(
+            fill_plan, fill_b, [&](uint32_t row0, uint32_t rows, uint32_t batch_row) {
+                const uint32_t lo = row0 > fill_hi_row ? row0 : fill_hi_row;
+                if (lo >= row0 + rows) {
+                    return;
+                }
+                uint32_t l1 = slot + (batch_row + lo - row0) * fill_row_bytes;
+                if constexpr (fill_channel_slice) {
+                    // One owner shard stores the slice's rows back to back, fill_row_bytes apart.
+                    constexpr uint32_t shard_rows = input_shard_rows > 0 ? input_shard_rows : 1;
+                    constexpr uint32_t real_row_bytes = (c_in / 32) * input_page_bytes;
+                    const uint32_t slice_page_offset = my_col * fill_c_in_tiles;
+                    for (uint32_t row = lo, end_row = row0 + rows; row < end_row;) {
+                        const uint32_t shard_end = (row / shard_rows + 1) * shard_rows;
+                        const uint32_t run_end = end_row < shard_end ? end_row : shard_end;
+                        const uint64_t src = input.get_noc_addr(row * fill_row_page_stride + slice_page_offset);
+                        if constexpr (fill_zero_lanes) {
+                            for (uint32_t i = 0; i < run_end - row; ++i) {
+                                fill_reads.read(src + i * fill_row_bytes, l1 + i * fill_row_bytes, real_row_bytes);
+                                fill_reads.read(
+                                    fill_zero_noc,
+                                    l1 + i * fill_row_bytes + real_row_bytes,
+                                    fill_row_bytes - real_row_bytes);
+                            }
+                        } else {
+                            fill_reads.read(src, l1, (run_end - row) * fill_row_bytes);
+                        }
+                        l1 += (run_end - row) * fill_row_bytes;
+                        row = run_end;
+                    }
+                    return;
+                }
+                for (uint32_t page = lo * fill_c_in_tiles, end_page = (row0 + rows) * fill_c_in_tiles;
+                     page < end_page;) {
+                    const uint32_t run = input.num_contiguous_pages(page, end_page);
+                    fill_reads.read(input.get_noc_addr(page), l1, run * input_page_bytes);
+                    page += run;
+                    l1 += run * input_page_bytes;
+                }
+            });
+        dataflow_kernel_lib::set_read_trid(fill_reads.noc, 0);
+        if (++fill_b == fill_batches_per_block) {
+            fill_b = 0;
+            ++fill_m;
+        }
+    };
+    // Ring slab: one handed-over batch, read and counted.
+    [[maybe_unused]] auto fill_one = [&]() {
+        MaybeDeviceZoneScope("writer_fill");
         if constexpr (ring_slab) {
+            const auto input = TensorAccessor(input_args, input_addr, input_page_bytes);
             const uint32_t slot =
                 fill_ring_base + ((ring_batch_base + fill_b) % input_tile_depth_batches) * fill_batch_bytes;
             const uint32_t row0 = ring_push_lo + fill_b * untilize_batch_rows;
@@ -319,50 +393,79 @@ void kernel_main() {
                 fill_b = 0;
                 ++fill_m;
             }
-            return;
-        }
-        const uint32_t slot =
-            fill_ring_base + ((fill_m * fill_batches_per_block + fill_b) % input_tile_depth_batches) * fill_batch_bytes;
-        fill_reads.begin(TRID_FILL);
-        conv2d_3x3::tile_batch_rows<untilize_batch_rows>(
-            fill_plan, fill_b, [&](uint32_t row0, uint32_t rows, uint32_t batch_row) {
-                const uint32_t lo = row0 > fill_hi_row ? row0 : fill_hi_row;
-                if (lo >= row0 + rows) {
-                    return;
-                }
-                uint32_t l1 = slot + (batch_row + lo - row0) * fill_row_bytes;
-                for (uint32_t page = lo * fill_c_in_tiles, end_page = (row0 + rows) * fill_c_in_tiles;
-                     page < end_page;) {
-                    const uint32_t run = input.num_contiguous_pages(page, end_page);
-                    fill_reads.read(input.get_noc_addr(page), l1, run * input_page_bytes);
-                    page += run;
-                    l1 += run * input_page_bytes;
-                }
-            });
-        fill_reads.wait(TRID_FILL);
-        dataflow_kernel_lib::set_read_trid(fill_reads.noc, 0);
-        Semaphore<>(slab_fwd_done_sem_id).up(1);
-        ++fill_served;
-        if (++fill_b == fill_batches_per_block) {
-            fill_b = 0;
-            ++fill_m;
         }
     };
-    // Every batch the reader has handed over so far.
+    // Windowed writer fill: batches [fill_served, fill_issued) are in flight, batch j under trid
+    // TRID_WFILL_BASE + j % fill_writer_window.
+    constexpr uint32_t TRID_WFILL_BASE = 8;
+    [[maybe_unused]] uint32_t fill_issued = 0;
+    // Every batch the reader has handed over so far (windowed: retire the landed ones, issue up to the window).
     [[maybe_unused]] auto serve_fill = [&]() {
         if constexpr (tile_fill_split) {
-            while (Semaphore<>(slab_free_sem_id).value() > fill_served) {
-                fill_next();
-                fill_one();
+            if constexpr (!ring_slab) {
+                while (fill_served < fill_issued &&
+                       ncrisc_noc_read_with_transaction_id_flushed(
+                           fill_reads.noc.get_noc_id(), TRID_WFILL_BASE + fill_served % fill_writer_window)) {
+                    Semaphore<>(slab_fwd_done_sem_id).up(1);
+                    ++fill_served;
+                }
+                while (fill_issued - fill_served < fill_writer_window &&
+                       Semaphore<>(slab_free_sem_id).value() > fill_issued) {
+                    fill_next();
+                    fill_issue(TRID_WFILL_BASE + fill_issued % fill_writer_window);
+                    ++fill_issued;
+                }
+            } else {
+                while (Semaphore<>(slab_free_sem_id).value() > fill_served) {
+                    fill_next();
+                    fill_one();
+                }
             }
         }
+    };
+    // Blocking waits of the K-split walk, serving the reader's fill hand-overs while they wait (split TILE fill).
+    [[maybe_unused]] auto reserve_serving = [&](uint32_t cb, uint32_t pages) {
+        if constexpr (tile_fill_split) {
+            while (!cb_pages_reservable_at_back(cb, pages)) {
+                serve_fill();
+            }
+        }
+        cb_reserve_back(cb, pages);
+    };
+    [[maybe_unused]] auto wait_front_serving = [&](uint32_t cb, uint32_t pages) {
+        if constexpr (tile_fill_split) {
+            while (!cb_pages_available_at_front(cb, pages)) {
+                serve_fill();
+            }
+        }
+        cb_wait_front(cb, pages);
+    };
+    [[maybe_unused]] auto sem_wait_serving = [&](uint32_t sem_id, uint32_t count) {
+        if constexpr (tile_fill_split) {
+            while (Semaphore<>(sem_id).value() < count) {
+                serve_fill();
+            }
+        }
+        Semaphore<>(sem_id).wait_min(count);
     };
     // The rest of the kernel's batches, waiting for each hand-over.
     [[maybe_unused]] auto drain_fill = [&]() {
         if constexpr (tile_fill_split) {
-            while (fill_next()) {
-                Semaphore<>(slab_free_sem_id).wait_min(fill_served + 1);
-                fill_one();
+            if (!split_here) {
+                return;
+            }
+            if constexpr (!ring_slab) {
+                while (true) {
+                    serve_fill();
+                    if (fill_served == fill_issued && !fill_next()) {
+                        break;
+                    }
+                }
+            } else {
+                while (fill_next()) {
+                    Semaphore<>(slab_free_sem_id).wait_min(fill_served + 1);
+                    fill_one();
+                }
             }
         }
     };
@@ -569,13 +672,19 @@ void kernel_main() {
         MaybeDeviceZoneScope("writer_weight_fetch");
         if (!weight_receiver || (weight_sender && weight_mcast.should_send(round))) {
             if (prefetched_round != round) {
-                cb_reserve_back(cb_weights, slice_weight_tiles);
+                reserve_serving(cb_weights, slice_weight_tiles);
                 start_weight_reads(round, y);
             }
             if (nslice_weight_depth > 1 && next_y < k_cols) {
-                cb_reserve_back(cb_weights, 2 * slice_weight_tiles);
+                reserve_serving(cb_weights, 2 * slice_weight_tiles);
                 start_weight_reads(round + 1, next_y);
                 prefetched_round = round + 1;
+            }
+            if constexpr (tile_fill_split) {
+                while (!ncrisc_noc_read_with_transaction_id_flushed(
+                    weight_reads.noc.get_noc_id(), TRID_WEIGHTS + (round & 1))) {
+                    serve_fill();
+                }
             }
             weight_reads.wait(TRID_WEIGHTS + (round & 1));
             if (weight_sender && weight_mcast.should_send(round)) {
@@ -584,8 +693,12 @@ void kernel_main() {
                 weight_sender->send(l1, l1, slice_weight_tiles * weight_tile_bytes);
             }
         } else {
-            cb_reserve_back(cb_weights, slice_weight_tiles);
-            weight_receiver->receive(round);
+            reserve_serving(cb_weights, slice_weight_tiles);
+            if constexpr (tile_fill_split) {
+                receive_serving(weight_mcast, round);
+            } else {
+                weight_receiver->receive(round);
+            }
         }
         cb_push_back(cb_weights, slice_weight_tiles);
         ++k_blocks_issued;
@@ -600,6 +713,7 @@ void kernel_main() {
             const uintptr_t acked_ptr = (uintptr_t)get_cb_tiles_acked_ptr(cb_combine_slots);
             const uint16_t acked_target = static_cast<uint16_t>(m_block_idx * k_cols * slot_tiles);
             while (static_cast<uint16_t>(reg_read(acked_ptr)) != acked_target) {
+                serve_fill();
                 invalidate_l1_cache();
             }
             const uint32_t prev_col = my_col == 0 ? k_cols - 1 : my_col - 1;
@@ -626,7 +740,7 @@ void kernel_main() {
             // The combine slots are the slab's L1: column my_col - 1 may write them only once this core's gather
             // landed.
             MaybeDeviceZoneScope("writer_slab_dead_wait");
-            Semaphore<>(slab_dead_sem_id).wait_min(m_block_idx + 1);
+            sem_wait_serving(slab_dead_sem_id, m_block_idx + 1);
         }
         give_credit();
         issue_weights_through(num_slices);
