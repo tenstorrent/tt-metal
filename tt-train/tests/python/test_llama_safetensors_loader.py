@@ -30,6 +30,7 @@ from ttml.models.llama.safetensors_loader import (
     _canonical,
     _check_coverage,
     _check_sources,
+    _export_dtype,
     _load_plan,
     _pad_to,
     _rules,
@@ -302,6 +303,28 @@ class TestHelpers:
         """Qwen3 unpermutes its 1-D Q/K biases with the same helper."""
         w = np.arange(12, dtype=np.float32).reshape(12, 1)
         assert np.array_equal(unpermute_proj_rows(w[:, 0], 2), unpermute_proj_rows(w, 2)[:, 0])
+
+
+class TestExportDtype:
+    @pytest.mark.parametrize(
+        "stored",
+        [np.float32, ml_dtypes.bfloat16],
+        ids=["f32 parameters", "bf16 parameters"],
+    )
+    def test_defaults_to_the_parameters_dtype(self, stored):
+        assert _export_dtype(None, {np.dtype(stored)}) == np.dtype(stored)
+
+    @pytest.mark.parametrize("dtype", [np.float32, np.float16, ml_dtypes.bfloat16], ids=["f32", "f16", "bf16"])
+    def test_an_explicit_dtype_overrides_the_parameters(self, dtype):
+        assert _export_dtype(dtype, {np.dtype(np.float32)}) == np.dtype(dtype)
+
+    def test_rejects_a_dtype_the_loader_cannot_read(self, expect_error):
+        with expect_error(ValueError, "float64"):
+            _export_dtype(np.float64, {np.dtype(np.float32)})
+
+    def test_rejects_parameters_that_disagree(self, expect_error):
+        with expect_error(ValueError, "pass dtype"):
+            _export_dtype(None, {np.dtype(np.float32), np.dtype(ml_dtypes.bfloat16)})
 
 
 def save_checkpoint(directory, *shards: dict[str, np.ndarray]) -> None:

@@ -500,7 +500,31 @@ _HF_CONFIG_FILES = (
 
 _WEIGHTS_NAME = "model.safetensors"
 _WEIGHTS_INDEX_NAME = "model.safetensors.index.json"
-_BF16_BYTES = 2
+
+# A parameter's stored dtype, as numpy writes it. float16 is not stored, but the loader reads it, so an
+# explicit ``dtype`` may still ask for it.
+_STORED_DTYPES = {
+    ttnn.DataType.FLOAT32: np.dtype(np.float32),
+    ttnn.DataType.BFLOAT16: np.dtype(ml_dtypes.bfloat16),
+}
+_EXPORT_DTYPES = frozenset((*_STORED_DTYPES.values(), np.dtype(np.float16)))
+
+
+def _export_dtype(dtype: np.dtype | type | None, stored: set[np.dtype]) -> np.dtype:
+    """The numpy dtype to write. *dtype* overrides; otherwise the one dtype the parameters share."""
+    if dtype is not None:
+        try:
+            resolved = np.dtype(dtype)
+        except TypeError:
+            resolved = None
+        if resolved not in _EXPORT_DTYPES:
+            names = ", ".join(sorted(item.name for item in _EXPORT_DTYPES))
+            raise ValueError(f"dtype must be one of {names}; the loader reads those back. Got {dtype!r}")
+        return resolved
+    if len(stored) != 1:
+        names = ", ".join(sorted(item.name for item in stored)) or "none"
+        raise ValueError(f"parameters are stored as {names}; pass dtype to write them as one dtype")
+    return next(iter(stored))
 
 
 def export_hf_model(
@@ -508,31 +532,45 @@ def export_hf_model(
     out_dir: str | os.PathLike,
     hf_source_dir: str | os.PathLike | None = None,
     max_shard_size: int | str = "5GB",
+    dtype: np.dtype | type | None = None,
 ) -> Path:
     """Write *model* as a HuggingFace Llama model directory, the inverse of ``load_from_safetensors``.
 
-    The weights are bf16, with HF tensor names: q/k rows are permuted back, fused parameters split, vocab
-    padding dropped, and a tied embedding written once. They're laid out as ``save_pretrained`` lays them out:
-    one ``model.safetensors``, or shards of at most *max_shard_size* (``model-00001-of-00004.safetensors``, ...)
-    with ``model.safetensors.index.json``. Each shard is written as soon as its tensors are read, so the host holds
-    about one shard. The config and tokenizer files of *hf_source_dir* (the checkpoint *model* was loaded from) are
-    copied alongside, so the directory loads with ``AutoModelForCausalLM.from_pretrained``.
+    The weights are written as *dtype* (float32, float16, or bfloat16; by default the dtype the parameters are
+    stored in), with HF tensor names: q/k rows are permuted back, fused parameters split, vocab padding dropped,
+    and a tied embedding written once. They're laid out as ``save_pretrained`` lays them out: one
+    ``model.safetensors``, or shards of at most *max_shard_size* (``model-00001-of-00004.safetensors``, ...) with
+    ``model.safetensors.index.json``. Each shard is written as soon as its tensors are read, so the host holds
+    about one shard. The config and tokenizer files of *hf_source_dir* (the checkpoint *model* was loaded from)
+    are copied alongside, so the directory loads with ``AutoModelForCausalLM.from_pretrained``.
 
     Raises:
         NotImplementedError: a parameter is sharded (TP or FSDP); only replicated models are exported.
+        ValueError: *dtype* is not float32, float16, or bfloat16; or it was left unset and the parameters are
+            stored as more than one dtype, or as a dtype this export cannot write.
     """
     from huggingface_hub import split_state_dict_into_shards_factory
     from safetensors.numpy import save_file
 
     parameters = model.parameters()
     layout = hf_layout(model)
+    stored: set[np.dtype] = set()
     for name in layout:
-        if not ttml.Sharding.from_tensor(parameters[name]).is_fully_replicated:
+        param = parameters[name]
+        if not ttml.Sharding.from_tensor(param).is_fully_replicated:
             raise NotImplementedError(f"{name}: sharded; export_hf_model reads replicated parameters only")
+        if dtype is None:
+            if (numpy_dtype := _STORED_DTYPES.get(param.dtype())) is None:
+                raise ValueError(
+                    f"{name}: stored as {param.dtype()}; pass dtype to export it as float32, float16, or bfloat16"
+                )
+            stored.add(numpy_dtype)
+    written = _export_dtype(dtype, stored)
     shapes = {tensor.name: tensor.shape for held in layout.values() for tensor in held.tensors}
+    bytes_per_element = written.itemsize
     split = split_state_dict_into_shards_factory(
         shapes,
-        get_storage_size=lambda shape: int(np.prod(shape)) * _BF16_BYTES,
+        get_storage_size=lambda shape: int(np.prod(shape)) * bytes_per_element,
         filename_pattern="model{suffix}.safetensors",
         max_shard_size=max_shard_size,
     )
@@ -553,7 +591,7 @@ def export_hf_model(
         # Replicated: every device holds the same values, concatenated along dim 0 by the composer.
         values = parameters[name].to_numpy(ttnn.DataType.FLOAT32, composer=composer)
         for hf_name, value in split_hf_tensors(values.reshape(-1, *values.shape[-2:])[0], held).items():
-            pending[hf_name] = value.astype(ml_dtypes.bfloat16)
+            pending[hf_name] = value.astype(written, copy=False)
         del values
         # Tensors come in shard order, so a shard is complete once its last tensor is read.
         while shard is not None and all(tensor in pending for tensor in shard[1]):
