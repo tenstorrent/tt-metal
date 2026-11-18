@@ -29,6 +29,8 @@ from ttnn.operations._op_contract import ExcludedCell, UnsupportedAxisValue
 
 from .conv2d_3x3_program_descriptor import (
     Conv3x3Geometry,
+    _core_m_ranges,
+    balanced_block_ranges,
     block_compute_rows,
     block_grid_shape,
     create_program_descriptor,
@@ -524,19 +526,7 @@ def conv2d_3x3(
         m_work_cores = block_grid_shape(in_spec)[0] if block_sharded else in_spec.grid.num_cores()
         work_grid = (m_work_cores, 1)
         core_m_tiles, _ = m_split(geometry, m_work_cores)
-        if block_sharded and geometry.k_split:
-            # The K split's M split may run down more grid rows than the shard grid has; the output keeps the input's
-            # shard grid and the shard rows' split.
-            rows = block_compute_rows(in_spec, device.compute_with_storage_grid_size(), geometry.tensor_m_tiles)
-            if rows != m_work_cores:
-                work_grid = (rows, 1)
-                geometry = dataclasses.replace(geometry, remote_output=True)
         n_tiles = geometry.out_n_tiles
-        output_memory_config = ttnn.MemoryConfig(
-            input_memory_config.memory_layout,
-            ttnn.BufferType.L1,
-            ttnn.ShardSpec(in_spec.grid, [core_m_tiles * TILE, n_tiles * TILE], in_spec.orientation),
-        )
         input_shard_pages = (
             (in_spec.shape[0] // TILE) * (in_spec.shape[1] // TILE)
             if input_tensor.layout == ttnn.TILE_LAYOUT
@@ -545,6 +535,30 @@ def conv2d_3x3(
         resident_shard_bytes = (
             input_shard_pages * input_tensor.buffer_aligned_page_size()
             + core_m_tiles * n_tiles * geometry.out_tile_bytes
+        )
+        if block_sharded and geometry.k_split:
+            # The K split's M split may run down more grid rows than the shard grid has; the output keeps the input's
+            # shard grid and the shard rows' split.
+            rows = block_compute_rows(in_spec, device.compute_with_storage_grid_size(), geometry.tensor_m_tiles)
+            if rows != m_work_cores:
+                work_grid = (rows, 1)
+                geometry = dataclasses.replace(geometry, remote_output=True)
+            # Work-balanced ranges over those rows (balanced_block_ranges); the output still keeps its shard spec, and
+            # every tile-row a grid row computes off its own shard is stored remotely.
+            balanced = balanced_block_ranges(
+                geometry,
+                rows,
+                tuple(_core_m_ranges(geometry.tensor_m_tiles, core_m_tiles)),
+                l1_cb_budget_bytes(resident_shard_bytes),
+            )
+            if balanced is not None:
+                ranges, remote = balanced
+                geometry = dataclasses.replace(geometry, m_ranges=ranges, remote_output=remote)
+                work_grid = (len(ranges), 1)
+        output_memory_config = ttnn.MemoryConfig(
+            input_memory_config.memory_layout,
+            ttnn.BufferType.L1,
+            ttnn.ShardSpec(in_spec.grid, [core_m_tiles * TILE, n_tiles * TILE], in_spec.orientation),
         )
     else:
         grid = device.compute_with_storage_grid_size()

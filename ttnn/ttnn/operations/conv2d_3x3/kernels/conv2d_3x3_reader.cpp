@@ -252,7 +252,13 @@ void kernel_main() {
     constexpr bool padded_slab = false;
     constexpr uint32_t pad_slots_max = 0;
 #endif
-    constexpr auto input_args = TensorAccessorArgs<75>();
+    // Work-balanced M split (the descriptor's balanced_block_ranges): the N-slice prelude (center copy, gather) and the
+    // ring forwarding run over the M-block's valid tile-rows only, and the TILE fill streams a host-given slab row
+    // count per M-block (runtime args from slab_rows_arg), so a grid row's prelude and walk scale with its own
+    // tile-rows.
+    constexpr bool rt_valid = get_compile_time_arg_val(75) != 0;
+    static_assert(!rt_valid || nslice_outer, "valid-row sizing is the N-slice walk's");
+    constexpr auto input_args = TensorAccessorArgs<76>();
     static_assert(!alias_slab_combine || nslice_outer, "only the N-slice-outer walk aliases the slab");
 
     const uint32_t input_addr = get_arg_val<uint32_t>(0);
@@ -267,6 +273,8 @@ void kernel_main() {
     // Split TILE fill on this core (runtime: the kernel is shared with the cores that keep the reader-only fill).
     constexpr uint32_t split_flag_arg = row_peer_coords_arg + (channel_slice ? 2 * k_cols : 0);
     [[maybe_unused]] const bool split_here = tile_fill_split && get_arg_val<uint32_t>(split_flag_arg) != 0;
+    // rt_valid: M-block m's slab rows (a whole number of untilize batches) at slab_rows_arg + m.
+    constexpr uint32_t slab_rows_arg = split_flag_arg + 1;
 
     constexpr uint32_t pixel_bytes = c_in_p * ELEM_BYTES;
     constexpr int32_t num_in_px = input_height * input_width;
@@ -542,6 +550,9 @@ void kernel_main() {
     // Ring slab: the input tile-row at the slab CB's front, its ring slot, and one past the last row pushed.
     [[maybe_unused]] int32_t ring_front_row = 0;
     [[maybe_unused]] uint32_t ring_front_slot = 0;
+    // rt_valid: incoming ring row groups counted over the previous M-blocks (their group counts may differ, and the
+    // per-block count is what the left column forwards).
+    [[maybe_unused]] uint32_t ring_need = 0;
     [[maybe_unused]] int32_t ring_pushed_hi = 0;
     for (uint32_t m_block_idx = 0; m_block_idx < num_m_blocks_this_core; ++m_block_idx) {
         const uint32_t block_tiles_done = m_block_idx * block_m_tiles;
@@ -550,6 +561,12 @@ void kernel_main() {
         const uint32_t o_first = (m_tile_start + block_tiles_done) * TILE_DIM;
         const uint32_t o_end_tiles = o_first + block_valid_tiles * TILE_DIM;
         const uint32_t o_end = o_end_tiles < num_out_px ? o_end_tiles : num_out_px;
+        // rt_valid: the slab rows this block untilizes, the tile-rows its prelude gathers (the split row gather hands
+        // out a CT unit sequence, so it keeps every row) and the tile-rows its ring walk multiplies and forwards.
+        [[maybe_unused]] const uint32_t slab_rows_m =
+            rt_valid ? get_arg_val<uint32_t>(slab_rows_arg + m_block_idx) : slab_tile_rows;
+        [[maybe_unused]] const uint32_t prelude_rows = (rt_valid && !row_split) ? block_valid_tiles : block_m_tiles;
+        [[maybe_unused]] const uint32_t walk_rows = rt_valid ? block_valid_tiles : block_m_tiles;
 
         const conv2d_3x3::SlabFootprint footprint =
             conv2d_3x3::block_footprint<output_width, input_width, stride, padding, dilation, band_last_tap>(
@@ -660,14 +677,16 @@ void kernel_main() {
                 // Windowed fill: batches [pushed, batch) are reserved and in flight, batch j at ring slot (write
                 // pointer + j - pushed) under transaction id TRID_FILL_BASE + j % fill_window; the oldest is pushed
                 // once its reads (and the writer's half) landed.
-                constexpr uint32_t num_batches = slab_tile_rows / untilize_batch_rows;
+                constexpr uint32_t max_batches = slab_tile_rows / untilize_batch_rows;
+                const uint32_t num_batches = slab_rows_m / untilize_batch_rows;
+                ASSERT(num_batches <= max_batches);
                 constexpr uint32_t batch_bytes = batch_pages * input_page_bytes;
                 constexpr uint32_t ring_bytes = input_ring_batches * batch_bytes;
                 constexpr uint32_t TRID_FILL_BASE = 8;
                 // The ring holds the whole slab: reserve it once and hand the writer all of its batches up front, so
                 // its higher-shard reads run alongside the reader's from the start.
-                constexpr bool whole_slab = input_ring_batches >= num_batches;
-                constexpr uint32_t wr_slots = whole_slab ? num_batches : fill_window;
+                constexpr bool whole_slab = input_ring_batches >= max_batches;
+                constexpr uint32_t wr_slots = whole_slab ? max_batches : fill_window;
                 [[maybe_unused]] bool writer_rows_of[wr_slots];
                 if constexpr (whole_slab) {
                     {
@@ -795,10 +814,12 @@ void kernel_main() {
                     }
                 }
             }
+            // rt_valid: rows past the block's valid ones are never multiplied, so they are not written.
+            const uint32_t center_rows = rt_valid ? block_valid_tiles : block_m_tiles;
             for (int32_t kh = 0; kh < 3; ++kh) {
                 const int32_t shift_rows = (kh * dilation - padding) * tile_rows_per_image_row;
                 uint32_t l1 = center_l1 + kh * block_m_tiles * row_bytes;
-                for (uint32_t r = 0; r < block_m_tiles;) {
+                for (uint32_t r = 0; r < center_rows;) {
                     const uint32_t t = t_first + r;
                     const int32_t h_in = static_cast<int32_t>(t / tile_rows_per_image_row) + kh * dilation - padding;
                     if (r >= block_valid_tiles || h_in < 0 || h_in >= input_height) {
@@ -1048,7 +1069,7 @@ void kernel_main() {
                 // tap_direct_group: one trid wait and one push per group. A group never crosses the ring end (a CB
                 // push must land exactly on it), so its slots are consecutive. The reader's per-unit work, not the
                 // read latency, paced the prelude, so the group is fenced in place.
-                constexpr uint32_t units_per_block = block_m_tiles * num_k_blocks;
+                const uint32_t units_per_block = prelude_rows * num_k_blocks;
                 const uint32_t unit_bytes = block_k_tiles * get_tile_size(cb_im2col_rm);
                 uint32_t g_left = 0;       // units of the current group still to issue
                 uint32_t g_size = 0;       // units in the current group
@@ -1057,7 +1078,7 @@ void kernel_main() {
                 uint32_t fixed_state = 0;  // the fill's reads reprogrammed the read command buffer
                 uint32_t u = 0;
                 TapPlannedT::Row plan;
-                for (uint32_t tile_row = 0; tile_row < block_m_tiles; ++tile_row) {
+                for (uint32_t tile_row = 0; tile_row < prelude_rows; ++tile_row) {
                     const uint32_t o = o_first + tile_row * TILE_DIM;
                     const bool planned = TapPlannedT::plan(plan, o, o_end);
                     for (uint32_t k_block_idx = 0; k_block_idx < num_k_blocks; ++k_block_idx, ++u, ++direct_seq) {
@@ -1119,7 +1140,7 @@ void kernel_main() {
                     }
                 }
             } else {
-                for (uint32_t tile_row = 0; tile_row < block_m_tiles; ++tile_row) {
+                for (uint32_t tile_row = 0; tile_row < prelude_rows; ++tile_row) {
                     for (uint32_t k_block_idx = 0; k_block_idx < num_k_blocks; ++k_block_idx) {
                         gather_unit(k_block_idx, tile_row);
                     }
@@ -1324,7 +1345,7 @@ void kernel_main() {
             }
         }
         if constexpr (tile_input && !ring_slab) {
-            constexpr uint32_t slab_pages = slab_tile_rows * c_in_tiles;
+            const uint32_t slab_pages = slab_rows_m * c_in_tiles;
             cb_wait_front(cb_halo_slab, slab_pages);
             cb_pop_front(cb_halo_slab, slab_pages);
         }
@@ -1345,7 +1366,9 @@ void kernel_main() {
             MaybeDeviceZoneScope("reader_combine_send");
             constexpr uint32_t num_owning_cols = (tensor_n_tiles + out_n_tiles - 1) / out_n_tiles;
             constexpr uint32_t slot_tiles = block_m_tiles * out_n_tiles;
-            constexpr uint32_t groups = (block_m_tiles + ring_group_rows - 1) / ring_group_rows;
+            // rt_valid: only the block's valid tile-rows are multiplied and forwarded (every core of the grid row has
+            // the same M range, so the row's columns agree on the groups).
+            const uint32_t groups = (walk_rows + ring_group_rows - 1) / ring_group_rows;
             constexpr uint32_t ring_inflight = 2;
             constexpr uint32_t ring_trid_base = 12;
             Semaphore<> credit(combine_credit_sem_id);
@@ -1360,7 +1383,9 @@ void kernel_main() {
             volatile tt_l1_ptr uint32_t* arrived =
                 reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(combine_arrival_sem_id));
             // Incoming row groups counted so far; the count only grows (every real step j >= 1 takes `groups`).
-            uint32_t need = m_block_idx * groups * conv2d_3x3::ring_incoming<k_cols, num_owning_cols>(my_col);
+            uint32_t need = rt_valid
+                                ? ring_need
+                                : m_block_idx * groups * conv2d_3x3::ring_incoming<k_cols, num_owning_cols>(my_col);
             bool credited = false;
             uint32_t issued = 0;
             uint32_t retired = 0;
@@ -1419,10 +1444,11 @@ void kernel_main() {
                             try_retire();
                         }
                         const uint32_t trid = ring_trid_base + issued % ring_inflight;
-                        const uint32_t r0 = conv2d_3x3::ring_group_row0<block_m_tiles, ring_group_rows>(
-                            conv2d_3x3::nslice_owner<k_cols>(my_col, j), g);
-                        const uint32_t rows =
-                            block_m_tiles - r0 < ring_group_rows ? block_m_tiles - r0 : ring_group_rows;
+                        const uint32_t owner = conv2d_3x3::nslice_owner<k_cols>(my_col, j);
+                        const uint32_t r0 = rt_valid
+                                                ? conv2d_3x3::ring_group_row0_rt<ring_group_rows>(walk_rows, owner, g)
+                                                : conv2d_3x3::ring_group_row0<block_m_tiles, ring_group_rows>(owner, g);
+                        const uint32_t rows = walk_rows - r0 < ring_group_rows ? walk_rows - r0 : ring_group_rows;
                         const uint32_t group_bytes = rows * row_bytes;
                         const uint32_t src = combine_base + (k_cols - 1 - j) * slot_bytes + r0 * row_bytes;
                         const uint32_t dst = combine_base + (k_cols - 2 - j) * slot_bytes + r0 * row_bytes;
@@ -1440,6 +1466,7 @@ void kernel_main() {
             while (retired < issued) {
                 try_retire();
             }
+            ring_need = need;
             // The firmware requires every NoC packet tag cleared at kernel end.
             noc_async_write_set_trid(0);
         } else if constexpr (combine_send) {

@@ -1,0 +1,20 @@
+--- a/tests/ttnn/unit_tests/operations/conv2d_3x3/test_conv2d_3x3_block_sharded.py
++++ b/tests/ttnn/unit_tests/operations/conv2d_3x3/test_conv2d_3x3_block_sharded.py
+@@ -262,7 +262,8 @@
+     """One-tile-row M-blocks over 20 output tile-rows on 3 grid rows of 7-tile-row shards: rows 0 and 1 run 7
+     M-blocks (21 weight multicast rounds per column, interleaved with 7 combine rounds), the last row runs 6 and
+     must stream its own weight slice. W_out = 40, so a tile-row's taps span two image rows. The grid sits on the
+-    device's last 3 rows, so the M split stays on them (block_compute_rows)."""
++    device's last 3 rows, so the M split stays on them (block_compute_rows), and it keeps the uniform split's ragged
++    last row (no work-balanced ranges, which may move the short row off the grid's edge)."""
+     torch.manual_seed(5)
+     (H, W, c_in), c_out = (16, 40, 64), 64
+     shard = (224, 32) if layout == ttnn.TILE_LAYOUT else (224, 16)
+@@ -292,6 +293,7 @@
+         return channel
+ 
+     monkeypatch.setattr(_op_module, "select_blocking", one_tile_row_blocks)
++    monkeypatch.setattr(_op_module, "balanced_block_ranges", lambda *args: None)
+     monkeypatch.setattr(_pd, "_column_weight_mcast", recording_column_mcast)
+     _run(((H, W, c_in), c_out, 1, 1, 1), dtype, layout, config, device, with_bias=True, relu=True)
+ 

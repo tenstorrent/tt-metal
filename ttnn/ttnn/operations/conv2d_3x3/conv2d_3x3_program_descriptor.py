@@ -23,7 +23,9 @@ k_cols contributions, adds bias, applies ReLU and packs its output shard [bm, ou
 single shard column is R2 on that column. The M split runs down the fewest grid rows, from the shard grid's first
 row to the device edge, that give the fewest output tile-rows per row (block_compute_rows); where those rows are not
 the output's shard rows, column y packs its finished block into a local CB and the writer NoC-writes each tile to
-the output shard that holds it (the output keeps the input's shard grid, shard shape and orientation).
+the output shard that holds it (the output keeps the input's shard grid, shard shape and orientation). On the N-slice
+walk those rows may own different tile-row counts (balanced_block_ranges: balanced by each row's prelude and in-image
+kernel-row walk), the CT block height being the largest.
 """
 
 from __future__ import annotations
@@ -143,6 +145,35 @@ NSLICE_CENTER_TAPS = True
 # tail rows are no longer untilized. Measured (Blackhole p150b, LoFi, bit-identical): res4.x 15901 -> 13431 ns (median
 # of 3; the prelude tilize 4.5 -> 2.4 us, now at its 1-wide payload rate), res5.x -3% to -5%, aspp.convs.x flat.
 PADDED_SLAB = True
+
+# Work-balanced BLOCK M split (balanced_block_ranges). On the N-slice ring walk a grid row's time is its prelude (fill-
+# paced untilize of its slab rows, gather-paced tilize of its tile-rows) plus its walk (in-image kernel rows of each ring
+# row group, after the kernel-row skip), so with dilation the rows whose output rows keep all three kernel rows in the
+# image are critical while the edge rows idle. balanced_m_ranges splits M into contiguous per-row ranges of different
+# tile-row counts that minimize the costliest row of a cost model; the CT block height is the largest range, the kernels
+# size the prelude, walk and ring forwarding by each row's valid tile-rows at runtime, and the walk's group matmuls take
+# the group height as a template constant. Measured (Blackhole p150b, LoFi, unchanged precision: bit-identical):
+# aspp.convs.2 59.4 -> 51.1 us, aspp.convs.1 58.6 -> 53.6, aspp.convs.3 27.1 -> 26.1, res5.1 36.6 -> 34.9, res5.2 36.6 ->
+# 35.6, res5.0 flat; HiFi4 BLOCK shapes -3% to -13%.
+# Row cost model, cycles (fitted on per-row zones of aspp.convs.1/2/3 and res5.2 @ LoFi): untilize per slab tile (fill-
+# paced), tilize per unit (tile-row x K-block) and per in0 tile (gather-paced), walk per k-tile of a ring row group of r
+# rows (an r x 1 subblock costs nearly as much for 1 row as for 4: the in1 unpack and the call cost are per group), and
+# per ring row group and step (token, pack, re-init). The uniform split's group heights are runtime (aspp.convs.2 per
+# grid row over 8 steps, 3 kernel rows: 4 + 1 rows 38.2 us; 2 kernel rows: 4 + 4 rows 30.0 us, 4 + 3 rows 28.0 us), the
+# balanced split's template constants (res5.2 4 + 1 rows, aspp.convs.1 4 + 2 rows; a 3-row group measured no faster).
+BALANCE_UNTILIZE_TILE = 115
+BALANCE_TILIZE_UNIT = 150
+BALANCE_TILIZE_TILE = 30
+BALANCE_WALK_GROUP_KTILE = {1: 49, 2: 54, 3: 61, 4: 70}
+BALANCE_WALK_GROUP_KTILE_CT = {1: 46, 2: 48, 3: 61, 4: 70}
+BALANCE_WALK_GROUP = 180
+# Among block heights whose costliest row is within this fraction of the best, the smallest wins (less L1, and the
+# model's prelude term is coarsest on the longest rows).
+BALANCE_CAP_TIE = 0.01
+# Largest range tried above the uniform split's (each step costs the CT block one more tile-row of L1 on every core).
+BALANCE_MAX_EXTRA_ROWS = 2
+# The balanced split is taken only when the model's costliest row drops by at least this fraction.
+BALANCE_MIN_GAIN = 0.02
 
 # Face-direct im2col: when one output pixel's step through the slab (stride * C_in_p channels) is exactly one
 # tile-face row (16 elements), the 16 im2col rows of a 16x16 face are one contiguous run of slab pixels. The
@@ -283,6 +314,9 @@ class Conv3x3Geometry:
     # K split on more grid rows than the output has shard rows (block_compute_rows): cb_output_tiles is a local CB of
     # one [bm, out_n] block, which the writer stores to the output shards.
     remote_output: bool = False
+    # K split with a work-balanced M split (balanced_m_ranges): grid row i owns output tile-rows
+    # [m_ranges[i][0], m_ranges[i][0] + m_ranges[i][1]); empty: the uniform split (_core_m_ranges).
+    m_ranges: tuple = ()
 
     @property
     def k_split(self):
@@ -451,13 +485,23 @@ def _nslice_kh_masks(g: Conv3x3Geometry, bm, sb_h, m_tile_start, actual_m_tiles,
 
 def m_split(g: Conv3x3Geometry, num_cores):
     """(core_m_tiles, num_m_groups): contiguous output tile-row ranges over `num_cores` cores. On a sharded
-    input this is also the output shard: roundup32(ceil(M / n)) / 32 == ceil(ceil(M / 32) / n)."""
+    input this is also the output shard: roundup32(ceil(M / n)) / 32 == ceil(ceil(M / 32) / n). With a balanced split
+    (g.m_ranges): the largest range and the range count."""
+    if g.m_ranges:
+        return max(n for _, n in g.m_ranges), len(g.m_ranges)
     core_m_tiles = _div_up(g.tensor_m_tiles, num_cores)
     return core_m_tiles, _div_up(g.tensor_m_tiles, core_m_tiles)
 
 
 def _core_m_ranges(tensor_m_tiles, core_m_tiles):
     return [(start, min(core_m_tiles, tensor_m_tiles - start)) for start in range(0, tensor_m_tiles, core_m_tiles)]
+
+
+def core_m_ranges(g: Conv3x3Geometry, core_m_tiles):
+    """(first output tile-row, tile-rows) per M work index: the balanced split's ranges, else the uniform split."""
+    if g.m_ranges:
+        return list(g.m_ranges)
+    return _core_m_ranges(g.tensor_m_tiles, core_m_tiles)
 
 
 def _block_band_len(g: Conv3x3Geometry, o_first, o_last):
@@ -477,7 +521,7 @@ def _block_first_tap(g: Conv3x3Geometry, o_first):
 def _higher_shard_rows(g: Conv3x3Geometry, core_m_tiles, block_m_tiles, m_index, shard_rows):
     """The most slab tile-rows one M-block of work index m_index reads from a higher-index input shard (the split
     fill's writer share; mirror of the kernels' tile_slab_plan segments)."""
-    start, actual = _core_m_ranges(g.tensor_m_tiles, core_m_tiles)[m_index]
+    start, actual = core_m_ranges(g, core_m_tiles)[m_index]
     most = 0
     for block_start in range(0, actual, block_m_tiles):
         tiles = min(block_m_tiles, actual - block_start)
@@ -549,7 +593,7 @@ def padded_slab_extent(g: Conv3x3Geometry, core_m_tiles, block_m_tiles):
     """(slots_max, slab pixels) over every M-block of every core: slots_max + 1 gaps of d pixels around slots_max rows
     of W pixels (the fill's unread tail rows are not untilized)."""
     slots_max = 0
-    for start, actual in _core_m_ranges(g.tensor_m_tiles, core_m_tiles):
+    for start, actual in core_m_ranges(g, core_m_tiles):
         for block_start in range(0, actual, block_m_tiles):
             tiles = min(block_m_tiles, actual - block_start)
             o_first = (start + block_start) * TILE
@@ -563,7 +607,7 @@ def padded_slab_extent(g: Conv3x3Geometry, core_m_tiles, block_m_tiles):
 def _block_extents(g: Conv3x3Geometry, core_m_tiles, block_m_tiles):
     """(max band_len_px, max TILE slab tile-rows) over every M-block of every core."""
     worst_band, worst_slab_rows = 0, 0
-    for start, actual in _core_m_ranges(g.tensor_m_tiles, core_m_tiles):
+    for start, actual in core_m_ranges(g, core_m_tiles):
         for block_start in range(0, actual, block_m_tiles):
             tiles = min(block_m_tiles, actual - block_start)
             o_first = (start + block_start) * TILE
@@ -863,7 +907,7 @@ def ring_plan(g: Conv3x3Geometry, core_m_tiles, block_m_tiles):
     image bottom may end lower), and new_rows = hi - max(previous hi, lo) the rows the block untilizes. None when a
     block touches no in-image row."""
     plans = []
-    for start, actual in _core_m_ranges(g.tensor_m_tiles, core_m_tiles):
+    for start, actual in core_m_ranges(g, core_m_tiles):
         windows = []
         for block_start in range(0, actual, block_m_tiles):
             tiles = min(block_m_tiles, actual - block_start)
@@ -1016,6 +1060,145 @@ def shard_cores(tensor):
     """A sharded tensor's cores in shard order (core i holds shard i), as the buffer assigns them."""
     spec = tensor.memory_config().shard_spec
     return ttnn.corerange_to_cores(spec.grid, None, spec.orientation == ttnn.ShardOrientation.ROW_MAJOR)
+
+
+def _group_ktile_cycles(rows, sb_w, ct_rows):
+    """Walk cycles per k-tile of one ring row group of `rows` rows (BALANCE_WALK_GROUP_KTILE: r x 1 subblocks; other
+    shapes scale with the unpacked tiles, rt + rt * ct per k-step, ct + ct * rt when rt > ct)."""
+    if sb_w == 1 and rows in BALANCE_WALK_GROUP_KTILE:
+        return (BALANCE_WALK_GROUP_KTILE_CT if ct_rows else BALANCE_WALK_GROUP_KTILE)[rows]
+    unpack = sb_w + sb_w * rows if rows > sb_w else rows + rows * sb_w
+    return BALANCE_WALK_GROUP_KTILE[4] * unpack / 5
+
+
+def _balance_cost_table(g: Conv3x3Geometry, cap, sb_h, sb_w, ct_rows):
+    """cost[a][n - 1] (cycles, n = 1..cap): the row cost model (BALANCE_*) of output tile-rows [a, a + n) on the N-slice
+    ring walk: untilize of the range's slab rows, gather + tilize of its tile-rows, and its walk over ring row groups of
+    sb_h valid rows, each multiplying its contiguous in-image kernel-row range (as _nslice_kh_masks)."""
+    M = g.tensor_m_tiles
+    tile_mask = []
+    for t in range(M):
+        o_a, o_b = t * TILE, min(t * TILE + TILE, g.num_out_px)
+        m = 0
+        for oy in range(o_a // g.output_width, (o_b - 1) // g.output_width + 1):
+            for kh in range(3):
+                if 0 <= oy * g.stride + kh * g.dilation - g.padding < g.input_height:
+                    m |= 1 << kh
+        tile_mask.append(m)
+    ns = g.out_n_tiles
+    steps = _div_up(g.tensor_n_tiles, ns)
+    kkh = g.tensor_kkh_tiles
+    in0_per_row = g.tensor_k_tiles
+    if g.stride == 1 and g.padding == g.dilation and g.input_width % TILE == 0:
+        in0_per_row -= 3 * g.c_in_tiles  # N-slice center taps: copied, not tilized
+    tilize_row = 3 * BALANCE_TILIZE_UNIT + BALANCE_TILIZE_TILE * in0_per_row
+
+    def group_cost(rows, mask):
+        mask = mask or 0b010
+        mask = 0b111 if mask == 0b101 else mask
+        return bin(mask).count("1") * kkh * (ns // sb_w) * _group_ktile_cycles(rows, sb_w, ct_rows)
+
+    table = []
+    for a in range(M):
+        row = []
+        done = 0  # cost of the complete groups
+        cur_rows, cur_mask = 0, 0
+        for n in range(1, min(cap, M - a) + 1):
+            cur_rows += 1
+            cur_mask |= tile_mask[a + n - 1]
+            groups = _div_up(n, sb_h)
+            walk = steps * (done + group_cost(cur_rows, cur_mask) + groups * BALANCE_WALK_GROUP)
+            if cur_rows == sb_h:
+                done += group_cost(cur_rows, cur_mask)
+                cur_rows, cur_mask = 0, 0
+            o_first = a * TILE
+            o_last = min((a + n) * TILE, g.num_out_px) - 1
+            slab = (
+                _tile_slab_rows(g, _block_first_tap(g, o_first), _block_band_len(g, o_first, o_last))
+                if g.tile_input
+                else 0
+            )
+            row.append(BALANCE_UNTILIZE_TILE * g.c_in_tiles * slab + tilize_row * n + walk)
+        table.append(row)
+    return table
+
+
+@functools.lru_cache(maxsize=256)
+def balanced_m_ranges(g: Conv3x3Geometry, rows, cap, ct_rows):
+    """(cost, ranges): the contiguous split of the output tile-rows over at most `rows` grid rows, each at most `cap`
+    tile-rows, that minimizes the costliest row of _balance_cost_table (exact DP); ties keep fewer tile-rows on the
+    costliest rows. None when no split fits."""
+    M = g.tensor_m_tiles
+    sb_h, sb_w = _ring_subblock(cap, g.out_n_tiles)
+    table = _balance_cost_table(g, cap, sb_h, sb_w, ct_rows)
+    inf = float("inf")
+    # best[r][a]: the least costliest row over splits of [a, M) into at most r rows.
+    best = [[inf] * (M + 1) for _ in range(rows + 1)]
+    take = [[0] * (M + 1) for _ in range(rows + 1)]
+    for r in range(rows + 1):
+        best[r][M] = 0.0
+    for r in range(1, rows + 1):
+        for a in range(M - 1, -1, -1):
+            costs = table[a]
+            for n in range(1, len(costs) + 1):
+                v = max(costs[n - 1], best[r - 1][a + n])
+                if v < best[r][a]:
+                    best[r][a], take[r][a] = v, n
+    if best[rows][0] == inf:
+        return None
+    ranges, a, r = [], 0, rows
+    while a < M:
+        n = take[r][a]
+        ranges.append((a, n))
+        a, r = a + n, r - 1
+    return best[rows][0], tuple(ranges)
+
+
+@functools.lru_cache(maxsize=256)
+def uniform_range_cost(g: Conv3x3Geometry, core_m_tiles, ct_rows):
+    """The row cost model's costliest row of the uniform split."""
+    sb_h, sb_w = _ring_subblock(core_m_tiles, g.out_n_tiles)
+    table = _balance_cost_table(g, core_m_tiles, sb_h, sb_w, ct_rows)
+    return max(table[a][n - 1] for a, n in _core_m_ranges(g.tensor_m_tiles, core_m_tiles))
+
+
+@functools.lru_cache(maxsize=256)
+def balanced_block_ranges(g: Conv3x3Geometry, rows, shard_ranges, l1_budget):
+    """K split on the N-slice walk with one M-block per core: (ranges, remote_output) of the work-balanced M split over
+    at most `rows` grid rows (balanced_m_ranges), at the uniform split's block height or up to BALANCE_MAX_EXTRA_ROWS
+    above it where that beats the smaller heights by more than BALANCE_CAP_TIE, and whose N-slice blocking fits L1 with
+    one M-block per core; remote_output unless the ranges are the output's shard rows. None where the uniform split
+    stays: the model's costliest row drops by less than BALANCE_MIN_GAIN, or no split fits."""
+    uniform_core_m, _ = m_split(g, rows)
+    try:
+        base = select_blocking(g, (rows, 1), l1_budget)
+    except ValueError:
+        return None
+    if not (base.nslice and base.max_m_blocks_per_core == 1 and base.block_m_tiles == uniform_core_m):
+        return None
+    # The uniform split keeps runtime group heights; the balanced one runs them as template constants.
+    base_cost = uniform_range_cost(g, uniform_core_m, False)
+    found = []
+    for cap in range(uniform_core_m, uniform_core_m + BALANCE_MAX_EXTRA_ROWS + 1):
+        split = balanced_m_ranges(g, rows, cap, _ring_subblock(cap, g.out_n_tiles) == (4, 1))
+        if split is not None and split[0] <= base_cost * (1 - BALANCE_MIN_GAIN):
+            found.append(split)
+    # Cheapest first; a larger block height only where it beats the smaller ones by more than BALANCE_CAP_TIE.
+    found.sort(key=lambda split: split[0])
+    if found:
+        best = found[0][0]
+        found.sort(key=lambda split: (split[0] > best * (1 + BALANCE_CAP_TIE), max(n for _, n in split[1]), split[0]))
+    for cost, ranges in found:
+        remote = tuple(ranges) != tuple(shard_ranges)
+        g2 = replace(g, m_ranges=tuple(ranges), remote_output=remote)
+        bm = max(n for _, n in ranges)
+        try:
+            b = select_blocking(g2, (len(ranges), 1), l1_budget)
+        except ValueError:
+            continue
+        if b.nslice and b.max_m_blocks_per_core == 1 and b.block_m_tiles == bm:
+            return tuple(ranges), remote
+    return None
 
 
 def block_compute_rows(shard_spec, device_grid, tensor_m_tiles):
@@ -1269,15 +1452,15 @@ def _kwf_rowbase(g, t0, i):
     return g.dilation + TILE * i + g.dilation * (img - img0)
 
 
-def _kwf_xchg_writer_args(g, work, m_index, core_m_ranges, device):
+def _kwf_xchg_writer_args(g, work, m_index, ranges, device):
     """The writer's halo exchange args: [top, bottom, upper x, y, lower x, y, fv, lve, upper's lve, lower's fv] (ACC
     rows: fv the core's first valid row, lve one past its last)."""
 
     def fv_lve(i):
-        t, v = core_m_ranges[i]
+        t, v = ranges[i]
         return _kwf_rowbase(g, t, 1), _kwf_rowbase(g, t, v) + TILE
 
-    top, bot = _kwf_xchg_flags(g, *core_m_ranges[m_index])
+    top, bot = _kwf_xchg_flags(g, *ranges[m_index])
     fv, lve = fv_lve(m_index)
     up = lo = (0, 0)
     up_lve = lo_fv = 0
@@ -1606,8 +1789,8 @@ def create_program_descriptor(
         row_page_stride, input_shard_rows = 0, int(input_tensor.memory_config().shard_spec.shape[0]) // TILE
     else:
         row_page_stride, input_shard_rows = 0, 0
-    core_m_ranges = _core_m_ranges(g.tensor_m_tiles, b.core_m_tiles)
-    m_blocks_per_index = [_div_up(actual_m_tiles, bm) for _, actual_m_tiles in core_m_ranges]
+    m_ranges = core_m_ranges(g, b.core_m_tiles)
+    m_blocks_per_index = [_div_up(actual_m_tiles, bm) for _, actual_m_tiles in m_ranges]
     # The weight multicast's cores (the channel below is built from the same set). The split TILE fill runs on its pure
     # receivers: not the sender (work core 0), nor the own-stream cores outside the channel.
     mcast_receivers = None if g.k_split else _weight_mcast_cores(core_list, [m_blocks_per_index[i] for _, i, _ in work])
@@ -1670,6 +1853,26 @@ def create_program_descriptor(
     kwf_xchg_sem_ids = (len(sem_ids), len(sem_ids) + 1) if kwf_xchg else (0, 0)
     sem_ids += kwf_xchg_sem_ids if kwf_xchg else ()
     k_padded = g.tensor_kkh_tiles * TILE > 3 * g.c_in_p
+    # Work-balanced M split (g.m_ranges): the N-slice prelude, walk and forwarding sized by each M-block's valid
+    # tile-rows (the split row gather keeps its CT unit sequence), the fill / untilize by the block's own slab rows where
+    # every core runs one M-block (the split fill's writer counts batches per block at the CT slab), and the walk's group
+    # matmuls specialized per group height. Not on the uniform split, where they only cost (measured, LoFi: runtime
+    # sizing alone aspp.convs.3 +4.4 / +5.2 / +6.2%, its ragged and one-kernel-row rows finishing early, +1.1% where no
+    # row is ragged; template group heights alone -1% to +2%).
+    rt_valid = bool(g.m_ranges) and g.k_split and b.nslice and not kwf
+    rt_prelude = rt_valid and not row_split
+    ct_group_rows = rt_valid and _ring_subblock(bm, ns) == (4, 1)
+
+    def rt_slab_rows(m_tile_start, actual_m_tiles, num_m_blocks):
+        if not (g.tile_input and b.max_m_blocks_per_core == 1):
+            return [b.slab_tile_rows] * num_m_blocks
+        o_first = m_tile_start * TILE
+        o_last = min((m_tile_start + actual_m_tiles) * TILE, g.num_out_px) - 1
+        rows = _tile_slab_rows(g, _block_first_tap(g, o_first), _block_band_len(g, o_first, o_last))
+        ub = b.untilize_batch_rows
+        rows = _div_up(max(rows, 1), ub) * ub
+        assert rows <= b.slab_tile_rows, (rows, b.slab_tile_rows)
+        return [rows]
 
     def zero_im2col_once(slice_channels):
         """The reader zeroes cb_im2col_rm once (mirror of its zero_im2col_once; the tap-major gather copies whole slab
@@ -1762,6 +1965,7 @@ def create_program_descriptor(
             tap_direct_fifo_units,
             int(tap_direct_windows),
             int(nslice_center),
+            int(rt_valid),
         ]
         args.extend(ttnn.TensorAccessorArgs(input_tensor).get_compile_time_args())
         return args
@@ -1811,6 +2015,9 @@ def create_program_descriptor(
         int(tap_direct_fifo_units > 0),
         int(tap_direct_windows),
         int(nslice_center),
+        int(rt_valid),
+        int(rt_prelude),
+        int(ct_group_rows),
     ]
 
     writer_ct_args = [
@@ -1941,7 +2148,7 @@ def create_program_descriptor(
         return [0, 0, 0]
 
     for core, m_index, col in work:
-        m_tile_start, actual_m_tiles = core_m_ranges[m_index]
+        m_tile_start, actual_m_tiles = m_ranges[m_index]
         num_m_blocks_this_core = m_blocks_per_index[m_index]
         # The core's output columns: all of C_out, or N-slice `col` under the K split (possibly short or
         # empty past the last C_out tile).
@@ -1953,6 +2160,8 @@ def create_program_descriptor(
             (_slice_channels(g, col), bool(split_cores)), ([], ttnn.RuntimeArgs())
         )
         reader_cores.append(core)
+        # rt_valid: each M-block's slab rows (reader args after the split flag, compute args after the masks).
+        slab_rows_per_block = rt_slab_rows(m_tile_start, actual_m_tiles, num_m_blocks_this_core) if rt_valid else []
         reader_rt[core.x][core.y] = (
             [
                 input_addr,
@@ -1966,6 +2175,7 @@ def create_program_descriptor(
             ]
             + row_peer_coords.get(m_index, [])
             + [int(split_of(core))]
+            + slab_rows_per_block
         )
         compute_args = [num_m_blocks_this_core, int(out_valid_tiles > 0), col]
         if g.k_split and b.nslice and not kwf:
@@ -1974,6 +2184,9 @@ def create_program_descriptor(
             compute_args += _nslice_kh_masks(
                 g, bm, _ring_subblock(bm, ns)[0], m_tile_start, actual_m_tiles, num_m_blocks_this_core
             )
+            if rt_valid:
+                for m in range(num_m_blocks_this_core):
+                    compute_args += [min(bm, actual_m_tiles - m * bm), slab_rows_per_block[m]]
         if kwf or padded_slab:
             compute_args += [m_tile_start, actual_m_tiles]
             compute_args += _kwf_xchg_flags(g, m_tile_start, actual_m_tiles) if kwf_xchg else [0, 0]
@@ -2006,7 +2219,7 @@ def create_program_descriptor(
             + row_peer_coords.get(m_index, [])
             + [int(split_of(core))]
             + server_rt_args(core)
-            + (_kwf_xchg_writer_args(g, work, m_index, core_m_ranges, device) if kwf_xchg else [])
+            + (_kwf_xchg_writer_args(g, work, m_index, m_ranges, device) if kwf_xchg else [])
         )
 
     # kw-fold kernels: the mode flag and its compile-time shape (defines keep the regular kernels' CT args intact).

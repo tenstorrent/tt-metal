@@ -100,6 +100,12 @@ inline void window_unpack_chunk(uint32_t src, uint32_t chunk, uint32_t col_start
 }
 #endif
 
+// A runtime group height with the call shape of std::integral_constant (group_mm in the N-slice ring walk).
+struct RuntimeRows {
+    uint32_t v;
+    uint32_t operator()() const { return v; }
+};
+
 template <uint32_t c_in_tiles, uint32_t cb_in, uint32_t cb_out>
 ALWI void window_tilize(DataflowBuffer& in, DataflowBuffer& out, uint32_t units) {
     constexpr uint32_t row_tiles = 2 * c_in_tiles;
@@ -261,6 +267,7 @@ template <
     int32_t dilation>
 ALWI void padded_tilize(
     DataflowBuffer& out,
+    uint32_t rows,
     [[maybe_unused]] uint32_t o_first,
     [[maybe_unused]] uint32_t o_end,
     [[maybe_unused]] const int32_t (&band_row_off)[3],
@@ -275,7 +282,7 @@ ALWI void padded_tilize(
     [[maybe_unused]] uint32_t prev_chunk = 0;
     [[maybe_unused]] constexpr uint32_t pixel_bytes = tw * 32 * 2;
     [[maybe_unused]] constexpr int32_t slot_px = input_width + dilation;
-    for (uint32_t t = 0; t < block_m_tiles; ++t) {
+    for (uint32_t t = 0; t < rows; ++t) {
         [[maybe_unused]] const uint32_t o = o_first + t * 32;
         [[maybe_unused]] const int32_t ho0 = o / output_width;
         [[maybe_unused]] const int32_t wo0 = o % output_width;
@@ -689,6 +696,17 @@ void kernel_main() {
     constexpr bool tap_direct_windows = get_compile_time_arg_val(43) != 0;
     // N-slice center taps (see the file comment).
     constexpr bool nslice_center = get_compile_time_arg_val(44) != 0;
+    // Work-balanced M split (the descriptor's balanced_block_ranges): on the N-slice walk the untilize runs a
+    // host-given slab row count, and the tilize (rt_prelude: not under the split row gather, whose unit sequence is CT)
+    // and the ring walk run over the M-block's valid tile-rows only. Per M-block runtime args (valid tile-rows, slab
+    // rows) after the masks.
+    constexpr bool rt_valid = get_compile_time_arg_val(45) != 0;
+    constexpr bool rt_prelude = get_compile_time_arg_val(46) != 0;
+    // The ring walk's group matmuls with the group height as a template constant (see group_mm).
+    constexpr bool ct_group_rows = get_compile_time_arg_val(47) != 0;
+    static_assert(!ct_group_rows || (k_split && nslice_outer && slice_sb_w == 1 && slice_sb_h == 4));
+    static_assert(!rt_valid || (k_split && nslice_outer));
+    static_assert(!rt_prelude || rt_valid);
     static_assert(!nslice_center || (tap_direct && block_k_tiles == 3 * c_in_tiles));
     // Padded slab (the descriptor's PADDED_SLAB, conv2d_3x3_padded_slab.hpp): N-slice center taps on a slab whose rows
     // sit in zero-gapped slots; the prelude tilizes every tap straight from it (padded_tilize), the reader only fills.
@@ -881,15 +899,17 @@ void kernel_main() {
         }
     };
 
-    // Padded slab: the block's output range (runtime args after the kernel-row masks), the slab and zero-block bases.
+    // Padded slab: the block's output range (runtime args after the kernel-row masks and the rt_valid per-M-block
+    // args), the slab and zero-block bases.
     [[maybe_unused]] uint32_t pad_m_tile_start = 0;
     [[maybe_unused]] uint32_t pad_actual_m_tiles = 0;
     [[maybe_unused]] uint32_t pad_slab_l1 = 0;
     [[maybe_unused]] uint32_t pad_zero_l1 = 0;
     if constexpr (padded_slab) {
         constexpr uint32_t kh_words = ((block_m_tiles + slice_sb_h - 1) / slice_sb_h + 9) / 10;
-        pad_m_tile_start = get_arg_val<uint32_t>(3 + num_m_blocks_this_core * kh_words);
-        pad_actual_m_tiles = get_arg_val<uint32_t>(4 + num_m_blocks_this_core * kh_words);
+        constexpr uint32_t rt_words = rt_valid ? 2 : 0;
+        pad_m_tile_start = get_arg_val<uint32_t>(3 + num_m_blocks_this_core * (kh_words + rt_words));
+        pad_actual_m_tiles = get_arg_val<uint32_t>(4 + num_m_blocks_this_core * (kh_words + rt_words));
         // The unpacker never pops either CB: their read pointers stay at the base.
         UNPACK((pad_slab_l1 = get_local_cb_interface(get_operand_id(cb_halo_slab)).fifo_rd_ptr << 4));
         UNPACK((pad_zero_l1 = get_local_cb_interface(get_operand_id(cb_zero_src)).fifo_rd_ptr << 4));
@@ -899,7 +919,15 @@ void kernel_main() {
     [[maybe_unused]] uint32_t pad_o_first = 0;
     [[maybe_unused]] uint32_t pad_o_end = 0;
 
+    // rt_valid: the per-M-block args follow the kernel-row masks (ceil(ring groups / 10) words per M-block).
+    constexpr uint32_t rt_ring_groups = (block_m_tiles + slice_sb_h - 1) / slice_sb_h;
+    [[maybe_unused]] const uint32_t rt_arg_base = 3 + ((rt_ring_groups + 9) / 10) * num_m_blocks_this_core;
     for (uint32_t m_block_idx = 0; m_block_idx < num_m_blocks_this_core; ++m_block_idx) {
+        [[maybe_unused]] const uint32_t valid_rows =
+            rt_valid ? get_arg_val<uint32_t>(rt_arg_base + 2 * m_block_idx) : block_m_tiles;
+        [[maybe_unused]] const uint32_t slab_rows =
+            rt_valid ? get_arg_val<uint32_t>(rt_arg_base + 2 * m_block_idx + 1) : slab_tile_rows;
+        [[maybe_unused]] const uint32_t prelude_rows = rt_prelude ? valid_rows : block_m_tiles;
         if constexpr (padded_slab) {
             const uint32_t done = m_block_idx * block_m_tiles;
             const uint32_t valid =
@@ -933,7 +961,7 @@ void kernel_main() {
                     wide_untilize::untilize_wide<wide_ct, cb_input_tiles, cb_halo_slab>(
                         input_tiles_dfb, halo_slab_dfb, rows, untilize_batch_rows, 0, untilize_ring_pos, px_bytes);
                 }
-                const uint32_t tail = slab_tile_rows - rows;
+                const uint32_t tail = slab_rows - rows;
                 if (tail > 0) {
                     input_tiles_dfb.wait_front(tail * c_in_tiles);
                     input_tiles_dfb.pop_front(tail * c_in_tiles);
@@ -954,9 +982,9 @@ void kernel_main() {
                 // Raw LLK on a measured win (see conv2d_3x3_narrow_untilize.hpp): the helper's 1-wide path is
                 // packer-bound at one DEST section and one CB sync per tile-row.
                 conv2d_3x3::narrow_untilize::untilize_1wide<cb_input_tiles, cb_halo_slab>(
-                    input_tiles_dfb, halo_slab_dfb, slab_tile_rows, untilize_batch_rows);
+                    input_tiles_dfb, halo_slab_dfb, slab_rows, untilize_batch_rows);
             } else {
-                untilize_wide_rows(slab_tile_rows, 0);
+                untilize_wide_rows(slab_rows, 0);
             }
         }
 
@@ -1015,7 +1043,7 @@ void kernel_main() {
                 MaybeDeviceZoneScope("compute_tilize");
                 if constexpr (strided_window) {
                     window_tilize<c_in_tiles, cb_im2col_rm, cb_im2col_tiles>(
-                        im2col_rm_dfb, im2col_tiles_dfb, block_m_tiles * num_k_blocks);
+                        im2col_rm_dfb, im2col_tiles_dfb, prelude_rows * num_k_blocks);
                 } else if constexpr (padded_slab) {
                     {
                         // The slab's last pack landed (the push is stored after the packer drained), and the reader's
@@ -1024,7 +1052,7 @@ void kernel_main() {
                         // center push measured flat (the center copy ends with the untilize) and would need the gaps
                         // zeroed earlier.
                         MaybeDeviceZoneScope("compute_tilize_wait");
-                        CircularBuffer(cb_halo_slab).wait_front(slab_tile_rows * c_in_tiles);
+                        CircularBuffer(cb_halo_slab).wait_front(slab_rows * c_in_tiles);
                         center.wait_front(3 * block_m_tiles * c_in_tiles);
                     }
                     padded_tilize<
@@ -1037,7 +1065,13 @@ void kernel_main() {
                         pad_in_w,
                         pad_p,
                         pad_d>(
-                        im2col_tiles_dfb, pad_o_first, pad_o_end, pad_plan.band_row_off, pad_slab_l1, pad_zero_l1);
+                        im2col_tiles_dfb,
+                        prelude_rows,
+                        pad_o_first,
+                        pad_o_end,
+                        pad_plan.band_row_off,
+                        pad_slab_l1,
+                        pad_zero_l1);
                     // The slab is dead: tell the reader (cb_src_table is a one-page token on this path).
                     CircularBuffer done_token(cb_src_table);
                     done_token.reserve_back(1);
@@ -1051,10 +1085,10 @@ void kernel_main() {
                         cb_im2col_tiles,
                         cb_src_table,
                         nslice_center ? 1 : -1>(
-                        im2col_rm_dfb, im2col_tiles_dfb, block_m_tiles * num_k_blocks, direct_seq);
+                        im2col_rm_dfb, im2col_tiles_dfb, prelude_rows * num_k_blocks, direct_seq);
                 } else {
                     conv2d_3x3::lean_tilize::tilize<im2col_tilize_width_tiles, cb_im2col_rm, cb_im2col_tiles>(
-                        im2col_rm_dfb, im2col_tiles_dfb, block_m_tiles * (k_tiles / im2col_tilize_width_tiles));
+                        im2col_rm_dfb, im2col_tiles_dfb, prelude_rows * (k_tiles / im2col_tilize_width_tiles));
                 }
             }
             CircularBuffer ring_token(cb_ring_token);
@@ -1072,7 +1106,9 @@ void kernel_main() {
                 pack_reconfig_data_format(cb_combine_slots);
                 ckernel::matmul_block_init(cb_im2col_tiles, cb_weights, false, slice_sb_w, slice_sb_h, k_tiles);
                 uint32_t init_rows = slice_sb_h;
-                im2col_tiles.wait_front(block_m_tiles * in0_k_tiles);
+                // rt_valid: the ring row groups over the block's valid tile-rows (the reader forwards the same ones).
+                const uint32_t walk_groups = (valid_rows + slice_sb_h - 1) / slice_sb_h;
+                im2col_tiles.wait_front(prelude_rows * in0_k_tiles);
                 if constexpr (nslice_center) {
                     center.wait_front(3 * block_m_tiles * c_in_tiles);
                 }
@@ -1082,9 +1118,10 @@ void kernel_main() {
                     weights.wait_front(k_tiles * out_n_tiles);
                     pack_reconfig_l1_acc(j >= 1 ? 1 : 0);
                     const uint32_t slot_base = (k_cols - 1 - j) * slot_tiles;
-                    for (uint32_t g = 0; g < ring_groups; ++g) {
-                        const uint32_t r0 = conv2d_3x3::ring_group_row0<block_m_tiles, slice_sb_h>(owner, g);
-                        const uint32_t rows = block_m_tiles - r0 < slice_sb_h ? block_m_tiles - r0 : slice_sb_h;
+                    for (uint32_t g = 0; g < walk_groups; ++g) {
+                        const uint32_t r0 = rt_valid ? conv2d_3x3::ring_group_row0_rt<slice_sb_h>(valid_rows, owner, g)
+                                                     : conv2d_3x3::ring_group_row0<block_m_tiles, slice_sb_h>(owner, g);
+                        const uint32_t rows = valid_rows - r0 < slice_sb_h ? valid_rows - r0 : slice_sb_h;
                         const uint32_t lo = kh_lo[r0 / slice_sb_h];
                         const uint32_t hi = kh_hi[r0 / slice_sb_h];
                         if (rows != init_rows) {
@@ -1092,95 +1129,117 @@ void kernel_main() {
                             init_rows = rows;
                         }
                         ring_token.reserve_back(1);
-                        for (uint32_t c0 = 0; c0 < out_n_tiles; c0 += slice_sb_w) {
-                            tile_regs_acquire();
-                            uint32_t in1_index = c0;
-                            if constexpr (nslice_center) {
-                                // K order unchanged (kh, kw, c). One loop per source, each with constant CB ids (a
-                                // single loop choosing the CB per k measured res5.1 +5.6%).
-                                constexpr uint32_t ct = c_in_tiles;
-                                uint32_t in0_index = r0 * in0_k_tiles + lo * 2 * ct;
-                                uint32_t ctr_index = r0 * ct + lo * block_m_tiles * ct;
-                                in1_index += lo * 3 * ct * out_n_tiles;
-                                UNPACK((set_matmul_in0_row_stride(in0_k_tiles)));
-                                for (uint32_t kh = lo; kh < hi; ++kh) {
-                                    for (uint32_t c = 0; c < ct; ++c) {
-                                        ckernel::matmul_block(
-                                            cb_im2col_tiles,
-                                            cb_weights,
-                                            in0_index++,
-                                            in1_index,
-                                            0,
-                                            false,
-                                            slice_sb_w,
-                                            rows,
-                                            in0_k_tiles);
-                                        in1_index += out_n_tiles;
-                                    }
-                                    UNPACK((set_matmul_in0_row_stride(ct)));
-                                    for (uint32_t c = 0; c < ct; ++c) {
-                                        ckernel::matmul_block(
-                                            cb_center_tiles,
-                                            cb_weights,
-                                            ctr_index++,
-                                            in1_index,
-                                            0,
-                                            false,
-                                            slice_sb_w,
-                                            rows,
-                                            ct);
-                                        in1_index += out_n_tiles;
-                                    }
-                                    ctr_index += (block_m_tiles - 1) * ct;
+                        // The group's matmuls and packs. ct_group_rows: the group height is a template constant (one
+                        // instance per height 1..slice_sb_h), so the r x 1 subblock's unpack / math loops are
+                        // specialized (on the balanced split's ranges; with runtime dims a 1-row group costs nearly a
+                        // full one: res5.2 @ LoFi, a 4 + 1-row walk 26.4 us vs 24.9 us with template heights).
+                        auto group_mm = [&](auto rows_c) {
+                            const uint32_t group_rows = rows_c();
+                            for (uint32_t c0 = 0; c0 < out_n_tiles; c0 += slice_sb_w) {
+                                tile_regs_acquire();
+                                uint32_t in1_index = c0;
+                                if constexpr (nslice_center) {
+                                    // K order unchanged (kh, kw, c). One loop per source, each with constant CB ids (a
+                                    // single loop choosing the CB per k measured res5.1 +5.6%).
+                                    constexpr uint32_t ct = c_in_tiles;
+                                    uint32_t in0_index = r0 * in0_k_tiles + lo * 2 * ct;
+                                    uint32_t ctr_index = r0 * ct + lo * block_m_tiles * ct;
+                                    in1_index += lo * 3 * ct * out_n_tiles;
                                     UNPACK((set_matmul_in0_row_stride(in0_k_tiles)));
-                                    for (uint32_t c = 0; c < ct; ++c) {
+                                    for (uint32_t kh = lo; kh < hi; ++kh) {
+                                        for (uint32_t c = 0; c < ct; ++c) {
+                                            ckernel::matmul_block(
+                                                cb_im2col_tiles,
+                                                cb_weights,
+                                                in0_index++,
+                                                in1_index,
+                                                0,
+                                                false,
+                                                slice_sb_w,
+                                                group_rows,
+                                                in0_k_tiles);
+                                            in1_index += out_n_tiles;
+                                        }
+                                        UNPACK((set_matmul_in0_row_stride(ct)));
+                                        for (uint32_t c = 0; c < ct; ++c) {
+                                            ckernel::matmul_block(
+                                                cb_center_tiles,
+                                                cb_weights,
+                                                ctr_index++,
+                                                in1_index,
+                                                0,
+                                                false,
+                                                slice_sb_w,
+                                                group_rows,
+                                                ct);
+                                            in1_index += out_n_tiles;
+                                        }
+                                        ctr_index += (block_m_tiles - 1) * ct;
+                                        UNPACK((set_matmul_in0_row_stride(in0_k_tiles)));
+                                        for (uint32_t c = 0; c < ct; ++c) {
+                                            ckernel::matmul_block(
+                                                cb_im2col_tiles,
+                                                cb_weights,
+                                                in0_index++,
+                                                in1_index,
+                                                0,
+                                                false,
+                                                slice_sb_w,
+                                                group_rows,
+                                                in0_k_tiles);
+                                            in1_index += out_n_tiles;
+                                        }
+                                    }
+                                } else {
+                                    // K order (kh, kw, c): kernel rows [lo, hi) are K tiles [lo * kkh, hi * kkh).
+                                    static_assert(k_tiles % 3 == 0);
+                                    constexpr uint32_t kkh = k_tiles / 3;
+                                    const uint32_t k_lo = lo * kkh;
+                                    const uint32_t k_hi = hi * kkh;
+                                    uint32_t in0_index = r0 * k_tiles + k_lo;
+                                    in1_index += k_lo * out_n_tiles;
+                                    for (uint32_t k = k_lo; k < k_hi; ++k) {
                                         ckernel::matmul_block(
                                             cb_im2col_tiles,
                                             cb_weights,
-                                            in0_index++,
+                                            in0_index,
                                             in1_index,
                                             0,
                                             false,
                                             slice_sb_w,
-                                            rows,
-                                            in0_k_tiles);
+                                            group_rows,
+                                            k_tiles);
+                                        ++in0_index;
                                         in1_index += out_n_tiles;
                                     }
                                 }
-                            } else {
-                                // K order (kh, kw, c): kernel rows [lo, hi) are K tiles [lo * kkh, hi * kkh).
-                                static_assert(k_tiles % 3 == 0);
-                                constexpr uint32_t kkh = k_tiles / 3;
-                                const uint32_t k_lo = lo * kkh;
-                                const uint32_t k_hi = hi * kkh;
-                                uint32_t in0_index = r0 * k_tiles + k_lo;
-                                in1_index += k_lo * out_n_tiles;
-                                for (uint32_t k = k_lo; k < k_hi; ++k) {
-                                    ckernel::matmul_block(
-                                        cb_im2col_tiles,
-                                        cb_weights,
-                                        in0_index,
-                                        in1_index,
-                                        0,
-                                        false,
-                                        slice_sb_w,
-                                        rows,
-                                        k_tiles);
-                                    ++in0_index;
-                                    in1_index += out_n_tiles;
-                                }
+                                tile_regs_commit();
+                                tile_regs_wait();
+                                ckl::pack_subblock_row_strided(
+                                    0,
+                                    cb_combine_slots,
+                                    slot_base + r0 * out_n_tiles + c0,
+                                    out_n_tiles,
+                                    group_rows,
+                                    slice_sb_w);
+                                tile_regs_release();
                             }
-                            tile_regs_commit();
-                            tile_regs_wait();
-                            ckl::pack_subblock_row_strided(
-                                0, cb_combine_slots, slot_base + r0 * out_n_tiles + c0, out_n_tiles, rows, slice_sb_w);
-                            tile_regs_release();
+                        };
+                        if constexpr (ct_group_rows) {
+                            switch (rows) {
+                                case 1: group_mm(std::integral_constant<uint32_t, 1>{}); break;
+                                case 2: group_mm(std::integral_constant<uint32_t, 2>{}); break;
+                                case 3: group_mm(std::integral_constant<uint32_t, 3>{}); break;
+                                default: group_mm(std::integral_constant<uint32_t, 4>{}); break;
+                            }
+                        } else {
+                            group_mm(RuntimeRows{rows});
                         }
                         ring_token.push_back(1);
                     }
                     weights.pop_front(k_tiles * out_n_tiles);
                 }
-                im2col_tiles.pop_front(block_m_tiles * in0_k_tiles);
+                im2col_tiles.pop_front(prelude_rows * in0_k_tiles);
                 if constexpr (nslice_center) {
                     center.pop_front(3 * block_m_tiles * c_in_tiles);
                 }

@@ -1,0 +1,904 @@
+diff --git a/ttnn/ttnn/operations/conv2d_3x3/conv2d_3x3.py b/ttnn/ttnn/operations/conv2d_3x3/conv2d_3x3.py
+index 38f8bff80ef..17a472d966f 100644
+--- a/ttnn/ttnn/operations/conv2d_3x3/conv2d_3x3.py
++++ b/ttnn/ttnn/operations/conv2d_3x3/conv2d_3x3.py
+@@ -29,6 +29,8 @@ from ttnn.operations._op_contract import ExcludedCell, UnsupportedAxisValue
+ 
+ from .conv2d_3x3_program_descriptor import (
+     Conv3x3Geometry,
++    _core_m_ranges,
++    balanced_block_ranges,
+     block_compute_rows,
+     block_grid_shape,
+     create_program_descriptor,
+@@ -524,6 +526,16 @@ def conv2d_3x3(
+         m_work_cores = block_grid_shape(in_spec)[0] if block_sharded else in_spec.grid.num_cores()
+         work_grid = (m_work_cores, 1)
+         core_m_tiles, _ = m_split(geometry, m_work_cores)
++        n_tiles = geometry.out_n_tiles
++        input_shard_pages = (
++            (in_spec.shape[0] // TILE) * (in_spec.shape[1] // TILE)
++            if input_tensor.layout == ttnn.TILE_LAYOUT
++            else in_spec.shape[0]
++        )
++        resident_shard_bytes = (
++            input_shard_pages * input_tensor.buffer_aligned_page_size()
++            + core_m_tiles * n_tiles * geometry.out_tile_bytes
++        )
+         if block_sharded and geometry.k_split:
+             # The K split's M split may run down more grid rows than the shard grid has; the output keeps the input's
+             # shard grid and the shard rows' split.
+@@ -531,21 +543,23 @@ def conv2d_3x3(
+             if rows != m_work_cores:
+                 work_grid = (rows, 1)
+                 geometry = dataclasses.replace(geometry, remote_output=True)
+-        n_tiles = geometry.out_n_tiles
++            # Work-balanced ranges over those rows (balanced_block_ranges); the output still keeps its shard spec, and
++            # every tile-row a grid row computes off its own shard is stored remotely.
++            balanced = balanced_block_ranges(
++                geometry,
++                rows,
++                tuple(_core_m_ranges(geometry.tensor_m_tiles, core_m_tiles)),
++                l1_cb_budget_bytes(resident_shard_bytes),
++            )
++            if balanced is not None:
++                ranges, remote = balanced
++                geometry = dataclasses.replace(geometry, m_ranges=ranges, remote_output=remote)
++                work_grid = (len(ranges), 1)
+         output_memory_config = ttnn.MemoryConfig(
+             input_memory_config.memory_layout,
+             ttnn.BufferType.L1,
+             ttnn.ShardSpec(in_spec.grid, [core_m_tiles * TILE, n_tiles * TILE], in_spec.orientation),
+         )
+-        input_shard_pages = (
+-            (in_spec.shape[0] // TILE) * (in_spec.shape[1] // TILE)
+-            if input_tensor.layout == ttnn.TILE_LAYOUT
+-            else in_spec.shape[0]
+-        )
+-        resident_shard_bytes = (
+-            input_shard_pages * input_tensor.buffer_aligned_page_size()
+-            + core_m_tiles * n_tiles * geometry.out_tile_bytes
+-        )
+     else:
+         grid = device.compute_with_storage_grid_size()
+         work_grid = (grid.x, grid.y)
+diff --git a/ttnn/ttnn/operations/conv2d_3x3/conv2d_3x3_program_descriptor.py b/ttnn/ttnn/operations/conv2d_3x3/conv2d_3x3_program_descriptor.py
+index d7d0caf3b7c..3b0ee572297 100644
+--- a/ttnn/ttnn/operations/conv2d_3x3/conv2d_3x3_program_descriptor.py
++++ b/ttnn/ttnn/operations/conv2d_3x3/conv2d_3x3_program_descriptor.py
+@@ -23,7 +23,9 @@ k_cols contributions, adds bias, applies ReLU and packs its output shard [bm, ou
+ single shard column is R2 on that column. The M split runs down the fewest grid rows, from the shard grid's first
+ row to the device edge, that give the fewest output tile-rows per row (block_compute_rows); where those rows are not
+ the output's shard rows, column y packs its finished block into a local CB and the writer NoC-writes each tile to
+-the output shard that holds it (the output keeps the input's shard grid, shard shape and orientation).
++the output shard that holds it (the output keeps the input's shard grid, shard shape and orientation). On the N-slice
++walk those rows may own different tile-row counts (balanced_block_ranges: balanced by each row's prelude and in-image
++kernel-row walk), the CT block height being the largest.
+ """
+ 
+ from __future__ import annotations
+@@ -128,6 +130,35 @@ CENTER_TAP_SLOTS = True
+ # M-block per core); elsewhere every tap is tilized. False tilizes every tap.
+ NSLICE_CENTER_TAPS = True
+ 
++# Work-balanced BLOCK M split (balanced_block_ranges). On the N-slice ring walk a grid row's time is its prelude (fill-
++# paced untilize of its slab rows, gather-paced tilize of its tile-rows) plus its walk (in-image kernel rows of each ring
++# row group, after the kernel-row skip), so with dilation the rows whose output rows keep all three kernel rows in the
++# image are critical while the edge rows idle. balanced_m_ranges splits M into contiguous per-row ranges of different
++# tile-row counts that minimize the costliest row of a cost model; the CT block height is the largest range, the kernels
++# size the prelude, walk and ring forwarding by each row's valid tile-rows at runtime, and the walk's group matmuls take
++# the group height as a template constant. Measured (Blackhole p150b, LoFi, unchanged precision: bit-identical):
++# aspp.convs.2 59.4 -> 51.1 us, aspp.convs.1 58.6 -> 53.6, aspp.convs.3 27.1 -> 26.1, res5.1 36.6 -> 34.9, res5.2 36.6 ->
++# 35.6, res5.0 flat; HiFi4 BLOCK shapes -3% to -13%.
++# Row cost model, cycles (fitted on per-row zones of aspp.convs.1/2/3 and res5.2 @ LoFi): untilize per slab tile (fill-
++# paced), tilize per unit (tile-row x K-block) and per in0 tile (gather-paced), walk per k-tile of a ring row group of r
++# rows (an r x 1 subblock costs nearly as much for 1 row as for 4: the in1 unpack and the call cost are per group), and
++# per ring row group and step (token, pack, re-init). The uniform split's group heights are runtime (aspp.convs.2 per
++# grid row over 8 steps, 3 kernel rows: 4 + 1 rows 38.2 us; 2 kernel rows: 4 + 4 rows 30.0 us, 4 + 3 rows 28.0 us), the
++# balanced split's template constants (res5.2 4 + 1 rows, aspp.convs.1 4 + 2 rows; a 3-row group measured no faster).
++BALANCE_UNTILIZE_TILE = 115
++BALANCE_TILIZE_UNIT = 150
++BALANCE_TILIZE_TILE = 30
++BALANCE_WALK_GROUP_KTILE = {1: 49, 2: 54, 3: 61, 4: 70}
++BALANCE_WALK_GROUP_KTILE_CT = {1: 46, 2: 48, 3: 61, 4: 70}
++BALANCE_WALK_GROUP = 180
++# Among block heights whose costliest row is within this fraction of the best, the smallest wins (less L1, and the
++# model's prelude term is coarsest on the longest rows).
++BALANCE_CAP_TIE = 0.01
++# Largest range tried above the uniform split's (each step costs the CT block one more tile-row of L1 on every core).
++BALANCE_MAX_EXTRA_ROWS = 2
++# The balanced split is taken only when the model's costliest row drops by at least this fraction.
++BALANCE_MIN_GAIN = 0.02
++
+ # Face-direct im2col: when one output pixel's step through the slab (stride * C_in_p channels) is exactly one
+ # tile-face row (16 elements), the 16 im2col rows of a 16x16 face are one contiguous run of slab pixels. The
+ # reader then writes the bf16 in0 tiles itself, one read per face run, and compute skips the tilize. False keeps
+@@ -262,6 +293,9 @@ class Conv3x3Geometry:
+     # K split on more grid rows than the output has shard rows (block_compute_rows): cb_output_tiles is a local CB of
+     # one [bm, out_n] block, which the writer stores to the output shards.
+     remote_output: bool = False
++    # K split with a work-balanced M split (balanced_m_ranges): grid row i owns output tile-rows
++    # [m_ranges[i][0], m_ranges[i][0] + m_ranges[i][1]); empty: the uniform split (_core_m_ranges).
++    m_ranges: tuple = ()
+ 
+     @property
+     def k_split(self):
+@@ -430,7 +464,10 @@ def _nslice_kh_masks(g: Conv3x3Geometry, bm, sb_h, m_tile_start, actual_m_tiles,
+ 
+ def m_split(g: Conv3x3Geometry, num_cores):
+     """(core_m_tiles, num_m_groups): contiguous output tile-row ranges over `num_cores` cores. On a sharded
+-    input this is also the output shard: roundup32(ceil(M / n)) / 32 == ceil(ceil(M / 32) / n)."""
++    input this is also the output shard: roundup32(ceil(M / n)) / 32 == ceil(ceil(M / 32) / n). With a balanced split
++    (g.m_ranges): the largest range and the range count."""
++    if g.m_ranges:
++        return max(n for _, n in g.m_ranges), len(g.m_ranges)
+     core_m_tiles = _div_up(g.tensor_m_tiles, num_cores)
+     return core_m_tiles, _div_up(g.tensor_m_tiles, core_m_tiles)
+ 
+@@ -439,6 +476,13 @@ def _core_m_ranges(tensor_m_tiles, core_m_tiles):
+     return [(start, min(core_m_tiles, tensor_m_tiles - start)) for start in range(0, tensor_m_tiles, core_m_tiles)]
+ 
+ 
++def core_m_ranges(g: Conv3x3Geometry, core_m_tiles):
++    """(first output tile-row, tile-rows) per M work index: the balanced split's ranges, else the uniform split."""
++    if g.m_ranges:
++        return list(g.m_ranges)
++    return _core_m_ranges(g.tensor_m_tiles, core_m_tiles)
++
++
+ def _block_band_len(g: Conv3x3Geometry, o_first, o_last):
+     """Pixels one kernel row of the block touches: from tap (kh, 0) of o_first to tap (kh, band_last_tap) of
+     o_last."""
+@@ -456,7 +500,7 @@ def _block_first_tap(g: Conv3x3Geometry, o_first):
+ def _higher_shard_rows(g: Conv3x3Geometry, core_m_tiles, block_m_tiles, m_index, shard_rows):
+     """The most slab tile-rows one M-block of work index m_index reads from a higher-index input shard (the split
+     fill's writer share; mirror of the kernels' tile_slab_plan segments)."""
+-    start, actual = _core_m_ranges(g.tensor_m_tiles, core_m_tiles)[m_index]
++    start, actual = core_m_ranges(g, core_m_tiles)[m_index]
+     most = 0
+     for block_start in range(0, actual, block_m_tiles):
+         tiles = min(block_m_tiles, actual - block_start)
+@@ -501,7 +545,7 @@ def _tile_slab_rows(g: Conv3x3Geometry, f, band_len):
+ def _block_extents(g: Conv3x3Geometry, core_m_tiles, block_m_tiles):
+     """(max band_len_px, max TILE slab tile-rows) over every M-block of every core."""
+     worst_band, worst_slab_rows = 0, 0
+-    for start, actual in _core_m_ranges(g.tensor_m_tiles, core_m_tiles):
++    for start, actual in core_m_ranges(g, core_m_tiles):
+         for block_start in range(0, actual, block_m_tiles):
+             tiles = min(block_m_tiles, actual - block_start)
+             o_first = (start + block_start) * TILE
+@@ -801,7 +845,7 @@ def ring_plan(g: Conv3x3Geometry, core_m_tiles, block_m_tiles):
+     image bottom may end lower), and new_rows = hi - max(previous hi, lo) the rows the block untilizes. None when a
+     block touches no in-image row."""
+     plans = []
+-    for start, actual in _core_m_ranges(g.tensor_m_tiles, core_m_tiles):
++    for start, actual in core_m_ranges(g, core_m_tiles):
+         windows = []
+         for block_start in range(0, actual, block_m_tiles):
+             tiles = min(block_m_tiles, actual - block_start)
+@@ -956,6 +1000,145 @@ def shard_cores(tensor):
+     return ttnn.corerange_to_cores(spec.grid, None, spec.orientation == ttnn.ShardOrientation.ROW_MAJOR)
+ 
+ 
++def _group_ktile_cycles(rows, sb_w, ct_rows):
++    """Walk cycles per k-tile of one ring row group of `rows` rows (BALANCE_WALK_GROUP_KTILE: r x 1 subblocks; other
++    shapes scale with the unpacked tiles, rt + rt * ct per k-step, ct + ct * rt when rt > ct)."""
++    if sb_w == 1 and rows in BALANCE_WALK_GROUP_KTILE:
++        return (BALANCE_WALK_GROUP_KTILE_CT if ct_rows else BALANCE_WALK_GROUP_KTILE)[rows]
++    unpack = sb_w + sb_w * rows if rows > sb_w else rows + rows * sb_w
++    return BALANCE_WALK_GROUP_KTILE[4] * unpack / 5
++
++
++def _balance_cost_table(g: Conv3x3Geometry, cap, sb_h, sb_w, ct_rows):
++    """cost[a][n - 1] (cycles, n = 1..cap): the row cost model (BALANCE_*) of output tile-rows [a, a + n) on the N-slice
++    ring walk: untilize of the range's slab rows, gather + tilize of its tile-rows, and its walk over ring row groups of
++    sb_h valid rows, each multiplying its contiguous in-image kernel-row range (as _nslice_kh_masks)."""
++    M = g.tensor_m_tiles
++    tile_mask = []
++    for t in range(M):
++        o_a, o_b = t * TILE, min(t * TILE + TILE, g.num_out_px)
++        m = 0
++        for oy in range(o_a // g.output_width, (o_b - 1) // g.output_width + 1):
++            for kh in range(3):
++                if 0 <= oy * g.stride + kh * g.dilation - g.padding < g.input_height:
++                    m |= 1 << kh
++        tile_mask.append(m)
++    ns = g.out_n_tiles
++    steps = _div_up(g.tensor_n_tiles, ns)
++    kkh = g.tensor_kkh_tiles
++    in0_per_row = g.tensor_k_tiles
++    if g.stride == 1 and g.padding == g.dilation and g.input_width % TILE == 0:
++        in0_per_row -= 3 * g.c_in_tiles  # N-slice center taps: copied, not tilized
++    tilize_row = 3 * BALANCE_TILIZE_UNIT + BALANCE_TILIZE_TILE * in0_per_row
++
++    def group_cost(rows, mask):
++        mask = mask or 0b010
++        mask = 0b111 if mask == 0b101 else mask
++        return bin(mask).count("1") * kkh * (ns // sb_w) * _group_ktile_cycles(rows, sb_w, ct_rows)
++
++    table = []
++    for a in range(M):
++        row = []
++        done = 0  # cost of the complete groups
++        cur_rows, cur_mask = 0, 0
++        for n in range(1, min(cap, M - a) + 1):
++            cur_rows += 1
++            cur_mask |= tile_mask[a + n - 1]
++            groups = _div_up(n, sb_h)
++            walk = steps * (done + group_cost(cur_rows, cur_mask) + groups * BALANCE_WALK_GROUP)
++            if cur_rows == sb_h:
++                done += group_cost(cur_rows, cur_mask)
++                cur_rows, cur_mask = 0, 0
++            o_first = a * TILE
++            o_last = min((a + n) * TILE, g.num_out_px) - 1
++            slab = (
++                _tile_slab_rows(g, _block_first_tap(g, o_first), _block_band_len(g, o_first, o_last))
++                if g.tile_input
++                else 0
++            )
++            row.append(BALANCE_UNTILIZE_TILE * g.c_in_tiles * slab + tilize_row * n + walk)
++        table.append(row)
++    return table
++
++
++@functools.lru_cache(maxsize=256)
++def balanced_m_ranges(g: Conv3x3Geometry, rows, cap, ct_rows):
++    """(cost, ranges): the contiguous split of the output tile-rows over at most `rows` grid rows, each at most `cap`
++    tile-rows, that minimizes the costliest row of _balance_cost_table (exact DP); ties keep fewer tile-rows on the
++    costliest rows. None when no split fits."""
++    M = g.tensor_m_tiles
++    sb_h, sb_w = _ring_subblock(cap, g.out_n_tiles)
++    table = _balance_cost_table(g, cap, sb_h, sb_w, ct_rows)
++    inf = float("inf")
++    # best[r][a]: the least costliest row over splits of [a, M) into at most r rows.
++    best = [[inf] * (M + 1) for _ in range(rows + 1)]
++    take = [[0] * (M + 1) for _ in range(rows + 1)]
++    for r in range(rows + 1):
++        best[r][M] = 0.0
++    for r in range(1, rows + 1):
++        for a in range(M - 1, -1, -1):
++            costs = table[a]
++            for n in range(1, len(costs) + 1):
++                v = max(costs[n - 1], best[r - 1][a + n])
++                if v < best[r][a]:
++                    best[r][a], take[r][a] = v, n
++    if best[rows][0] == inf:
++        return None
++    ranges, a, r = [], 0, rows
++    while a < M:
++        n = take[r][a]
++        ranges.append((a, n))
++        a, r = a + n, r - 1
++    return best[rows][0], tuple(ranges)
++
++
++@functools.lru_cache(maxsize=256)
++def uniform_range_cost(g: Conv3x3Geometry, core_m_tiles, ct_rows):
++    """The row cost model's costliest row of the uniform split."""
++    sb_h, sb_w = _ring_subblock(core_m_tiles, g.out_n_tiles)
++    table = _balance_cost_table(g, core_m_tiles, sb_h, sb_w, ct_rows)
++    return max(table[a][n - 1] for a, n in _core_m_ranges(g.tensor_m_tiles, core_m_tiles))
++
++
++@functools.lru_cache(maxsize=256)
++def balanced_block_ranges(g: Conv3x3Geometry, rows, shard_ranges, l1_budget):
++    """K split on the N-slice walk with one M-block per core: (ranges, remote_output) of the work-balanced M split over
++    at most `rows` grid rows (balanced_m_ranges), at the uniform split's block height or up to BALANCE_MAX_EXTRA_ROWS
++    above it where that beats the smaller heights by more than BALANCE_CAP_TIE, and whose N-slice blocking fits L1 with
++    one M-block per core; remote_output unless the ranges are the output's shard rows. None where the uniform split
++    stays: the model's costliest row drops by less than BALANCE_MIN_GAIN, or no split fits."""
++    uniform_core_m, _ = m_split(g, rows)
++    try:
++        base = select_blocking(g, (rows, 1), l1_budget)
++    except ValueError:
++        return None
++    if not (base.nslice and base.max_m_blocks_per_core == 1 and base.block_m_tiles == uniform_core_m):
++        return None
++    # The uniform split keeps runtime group heights; the balanced one runs them as template constants.
++    base_cost = uniform_range_cost(g, uniform_core_m, False)
++    found = []
++    for cap in range(uniform_core_m, uniform_core_m + BALANCE_MAX_EXTRA_ROWS + 1):
++        split = balanced_m_ranges(g, rows, cap, _ring_subblock(cap, g.out_n_tiles) == (4, 1))
++        if split is not None and split[0] <= base_cost * (1 - BALANCE_MIN_GAIN):
++            found.append(split)
++    # Cheapest first; a larger block height only where it beats the smaller ones by more than BALANCE_CAP_TIE.
++    found.sort(key=lambda split: split[0])
++    if found:
++        best = found[0][0]
++        found.sort(key=lambda split: (split[0] > best * (1 + BALANCE_CAP_TIE), max(n for _, n in split[1]), split[0]))
++    for cost, ranges in found:
++        remote = tuple(ranges) != tuple(shard_ranges)
++        g2 = replace(g, m_ranges=tuple(ranges), remote_output=remote)
++        bm = max(n for _, n in ranges)
++        try:
++            b = select_blocking(g2, (len(ranges), 1), l1_budget)
++        except ValueError:
++            continue
++        if b.nslice and b.max_m_blocks_per_core == 1 and b.block_m_tiles == bm:
++            return tuple(ranges), remote
++    return None
++
++
+ def block_compute_rows(shard_spec, device_grid, tensor_m_tiles):
+     """Grid rows the K split's M split runs down: the fewest rows, from the shard grid's first row to the device edge
+     along its M axis (y on a ROW_MAJOR grid, x on COL_MAJOR), that reach the fewest output tile-rows per row; the shard
+@@ -1430,8 +1613,8 @@ def create_program_descriptor(
+         row_page_stride, input_shard_rows = 0, int(input_tensor.memory_config().shard_spec.shape[0]) // TILE
+     else:
+         row_page_stride, input_shard_rows = 0, 0
+-    core_m_ranges = _core_m_ranges(g.tensor_m_tiles, b.core_m_tiles)
+-    m_blocks_per_index = [_div_up(actual_m_tiles, bm) for _, actual_m_tiles in core_m_ranges]
++    m_ranges = core_m_ranges(g, b.core_m_tiles)
++    m_blocks_per_index = [_div_up(actual_m_tiles, bm) for _, actual_m_tiles in m_ranges]
+     # The weight multicast's cores (the channel below is built from the same set). The split TILE fill runs on its pure
+     # receivers: not the sender (work core 0), nor the own-stream cores outside the channel.
+     mcast_receivers = None if g.k_split else _weight_mcast_cores(core_list, [m_blocks_per_index[i] for _, i, _ in work])
+@@ -1488,6 +1671,26 @@ def create_program_descriptor(
+     server_sem_ids = (len(sem_ids), len(sem_ids) + 1) if weight_servers is not None else (0, 0)
+     sem_ids += tuple(range(len(sem_ids), len(sem_ids) + 1 + b.weight_depth)) if weight_servers is not None else ()
+     k_padded = g.tensor_kkh_tiles * TILE > 3 * g.c_in_p
++    # Work-balanced M split (g.m_ranges): the N-slice prelude, walk and forwarding sized by each M-block's valid
++    # tile-rows (the split row gather keeps its CT unit sequence), the fill / untilize by the block's own slab rows where
++    # every core runs one M-block (the split fill's writer counts batches per block at the CT slab), and the walk's group
++    # matmuls specialized per group height. Not on the uniform split, where they only cost (measured, LoFi: runtime
++    # sizing alone aspp.convs.3 +4.4 / +5.2 / +6.2%, its ragged and one-kernel-row rows finishing early, +1.1% where no
++    # row is ragged; template group heights alone -1% to +2%).
++    rt_valid = bool(g.m_ranges) and g.k_split and b.nslice and not kwf
++    rt_prelude = rt_valid and not row_split
++    ct_group_rows = rt_valid and _ring_subblock(bm, ns) == (4, 1)
++
++    def rt_slab_rows(m_tile_start, actual_m_tiles, num_m_blocks):
++        if not (g.tile_input and b.max_m_blocks_per_core == 1):
++            return [b.slab_tile_rows] * num_m_blocks
++        o_first = m_tile_start * TILE
++        o_last = min((m_tile_start + actual_m_tiles) * TILE, g.num_out_px) - 1
++        rows = _tile_slab_rows(g, _block_first_tap(g, o_first), _block_band_len(g, o_first, o_last))
++        ub = b.untilize_batch_rows
++        rows = _div_up(max(rows, 1), ub) * ub
++        assert rows <= b.slab_tile_rows, (rows, b.slab_tile_rows)
++        return [rows]
+ 
+     def zero_im2col_once(slice_channels):
+         """The reader zeroes cb_im2col_rm once (mirror of its zero_im2col_once; the tap-major gather copies whole slab
+@@ -1580,6 +1783,7 @@ def create_program_descriptor(
+             tap_direct_fifo_units,
+             int(tap_direct_windows),
+             int(nslice_center),
++            int(rt_valid),
+         ]
+         args.extend(ttnn.TensorAccessorArgs(input_tensor).get_compile_time_args())
+         return args
+@@ -1629,6 +1833,9 @@ def create_program_descriptor(
+         int(tap_direct_fifo_units > 0),
+         int(tap_direct_windows),
+         int(nslice_center),
++        int(rt_valid),
++        int(rt_prelude),
++        int(ct_group_rows),
+     ]
+ 
+     writer_ct_args = [
+@@ -1759,7 +1966,7 @@ def create_program_descriptor(
+         return [0, 0, 0]
+ 
+     for core, m_index, col in work:
+-        m_tile_start, actual_m_tiles = core_m_ranges[m_index]
++        m_tile_start, actual_m_tiles = m_ranges[m_index]
+         num_m_blocks_this_core = m_blocks_per_index[m_index]
+         # The core's output columns: all of C_out, or N-slice `col` under the K split (possibly short or
+         # empty past the last C_out tile).
+@@ -1771,6 +1978,8 @@ def create_program_descriptor(
+             (_slice_channels(g, col), bool(split_cores)), ([], ttnn.RuntimeArgs())
+         )
+         reader_cores.append(core)
++        # rt_valid: each M-block's slab rows (reader args after the split flag, compute args after the masks).
++        slab_rows_per_block = rt_slab_rows(m_tile_start, actual_m_tiles, num_m_blocks_this_core) if rt_valid else []
+         reader_rt[core.x][core.y] = (
+             [
+                 input_addr,
+@@ -1784,6 +1993,7 @@ def create_program_descriptor(
+             ]
+             + row_peer_coords.get(m_index, [])
+             + [int(split_of(core))]
++            + slab_rows_per_block
+         )
+         compute_args = [num_m_blocks_this_core, int(out_valid_tiles > 0), col]
+         if g.k_split and b.nslice and not kwf:
+@@ -1792,6 +2002,9 @@ def create_program_descriptor(
+             compute_args += _nslice_kh_masks(
+                 g, bm, _ring_subblock(bm, ns)[0], m_tile_start, actual_m_tiles, num_m_blocks_this_core
+             )
++            if rt_valid:
++                for m in range(num_m_blocks_this_core):
++                    compute_args += [min(bm, actual_m_tiles - m * bm), slab_rows_per_block[m]]
+         if kwf:
+             compute_args += [m_tile_start, actual_m_tiles]
+         if b.ring:
+diff --git a/ttnn/ttnn/operations/conv2d_3x3/kernels/conv2d_3x3_compute.cpp b/ttnn/ttnn/operations/conv2d_3x3/kernels/conv2d_3x3_compute.cpp
+index ee1696a0fee..f0c67603852 100644
+--- a/ttnn/ttnn/operations/conv2d_3x3/kernels/conv2d_3x3_compute.cpp
++++ b/ttnn/ttnn/operations/conv2d_3x3/kernels/conv2d_3x3_compute.cpp
+@@ -94,6 +94,12 @@ inline void window_unpack_chunk(uint32_t src, uint32_t chunk, uint32_t col_start
+ }
+ #endif
+ 
++// A runtime group height with the call shape of std::integral_constant (group_mm in the N-slice ring walk).
++struct RuntimeRows {
++    uint32_t v;
++    uint32_t operator()() const { return v; }
++};
++
+ template <uint32_t c_in_tiles, uint32_t cb_in, uint32_t cb_out>
+ ALWI void window_tilize(DataflowBuffer& in, DataflowBuffer& out, uint32_t units) {
+     constexpr uint32_t row_tiles = 2 * c_in_tiles;
+@@ -583,6 +589,17 @@ void kernel_main() {
+     constexpr bool tap_direct_windows = get_compile_time_arg_val(43) != 0;
+     // N-slice center taps (see the file comment).
+     constexpr bool nslice_center = get_compile_time_arg_val(44) != 0;
++    // Work-balanced M split (the descriptor's balanced_block_ranges): on the N-slice walk the untilize runs a
++    // host-given slab row count, and the tilize (rt_prelude: not under the split row gather, whose unit sequence is CT)
++    // and the ring walk run over the M-block's valid tile-rows only. Per M-block runtime args (valid tile-rows, slab
++    // rows) after the masks.
++    constexpr bool rt_valid = get_compile_time_arg_val(45) != 0;
++    constexpr bool rt_prelude = get_compile_time_arg_val(46) != 0;
++    // The ring walk's group matmuls with the group height as a template constant (see group_mm).
++    constexpr bool ct_group_rows = get_compile_time_arg_val(47) != 0;
++    static_assert(!ct_group_rows || (k_split && nslice_outer && slice_sb_w == 1 && slice_sb_h == 4));
++    static_assert(!rt_valid || (k_split && nslice_outer));
++    static_assert(!rt_prelude || rt_valid);
+     static_assert(!nslice_center || (tap_direct && block_k_tiles == 3 * c_in_tiles));
+     static_assert(!tap_direct || (!face_direct && !strided_window));
+     static_assert(kb_tap_direct == (tap_direct && !(k_split && nslice_outer)));
+@@ -756,7 +773,15 @@ void kernel_main() {
+         }
+     };
+ 
++    // rt_valid: the per-M-block args follow the kernel-row masks (ceil(ring groups / 10) words per M-block).
++    constexpr uint32_t rt_ring_groups = (block_m_tiles + slice_sb_h - 1) / slice_sb_h;
++    [[maybe_unused]] const uint32_t rt_arg_base = 3 + ((rt_ring_groups + 9) / 10) * num_m_blocks_this_core;
+     for (uint32_t m_block_idx = 0; m_block_idx < num_m_blocks_this_core; ++m_block_idx) {
++        [[maybe_unused]] const uint32_t valid_rows =
++            rt_valid ? get_arg_val<uint32_t>(rt_arg_base + 2 * m_block_idx) : block_m_tiles;
++        [[maybe_unused]] const uint32_t slab_rows =
++            rt_valid ? get_arg_val<uint32_t>(rt_arg_base + 2 * m_block_idx + 1) : slab_tile_rows;
++        [[maybe_unused]] const uint32_t prelude_rows = rt_prelude ? valid_rows : block_m_tiles;
+         if constexpr (tile_input) {
+             // untilize_footprint: the reader streams slab_tile_rows input tile-rows in slab order.
+             MaybeDeviceZoneScope("compute_untilize");
+@@ -775,9 +800,9 @@ void kernel_main() {
+                 // Raw LLK on a measured win (see conv2d_3x3_narrow_untilize.hpp): the helper's 1-wide path is
+                 // packer-bound at one DEST section and one CB sync per tile-row.
+                 conv2d_3x3::narrow_untilize::untilize_1wide<cb_input_tiles, cb_halo_slab>(
+-                    input_tiles_dfb, halo_slab_dfb, slab_tile_rows, untilize_batch_rows);
++                    input_tiles_dfb, halo_slab_dfb, slab_rows, untilize_batch_rows);
+             } else {
+-                untilize_wide_rows(slab_tile_rows, 0);
++                untilize_wide_rows(slab_rows, 0);
+             }
+         }
+ 
+@@ -836,7 +861,7 @@ void kernel_main() {
+                 MaybeDeviceZoneScope("compute_tilize");
+                 if constexpr (strided_window) {
+                     window_tilize<c_in_tiles, cb_im2col_rm, cb_im2col_tiles>(
+-                        im2col_rm_dfb, im2col_tiles_dfb, block_m_tiles * num_k_blocks);
++                        im2col_rm_dfb, im2col_tiles_dfb, prelude_rows * num_k_blocks);
+                 } else if constexpr (tap_direct) {
+                     direct_tilize<
+                         im2col_tilize_width_tiles,
+@@ -846,10 +871,10 @@ void kernel_main() {
+                         cb_im2col_tiles,
+                         cb_src_table,
+                         nslice_center ? 1 : -1>(
+-                        im2col_rm_dfb, im2col_tiles_dfb, block_m_tiles * num_k_blocks, direct_seq);
++                        im2col_rm_dfb, im2col_tiles_dfb, prelude_rows * num_k_blocks, direct_seq);
+                 } else {
+                     conv2d_3x3::lean_tilize::tilize<im2col_tilize_width_tiles, cb_im2col_rm, cb_im2col_tiles>(
+-                        im2col_rm_dfb, im2col_tiles_dfb, block_m_tiles * (k_tiles / im2col_tilize_width_tiles));
++                        im2col_rm_dfb, im2col_tiles_dfb, prelude_rows * (k_tiles / im2col_tilize_width_tiles));
+                 }
+             }
+             CircularBuffer ring_token(cb_ring_token);
+@@ -867,7 +892,9 @@ void kernel_main() {
+                 pack_reconfig_data_format(cb_combine_slots);
+                 ckernel::matmul_block_init(cb_im2col_tiles, cb_weights, false, slice_sb_w, slice_sb_h, k_tiles);
+                 uint32_t init_rows = slice_sb_h;
+-                im2col_tiles.wait_front(block_m_tiles * in0_k_tiles);
++                // rt_valid: the ring row groups over the block's valid tile-rows (the reader forwards the same ones).
++                const uint32_t walk_groups = (valid_rows + slice_sb_h - 1) / slice_sb_h;
++                im2col_tiles.wait_front(prelude_rows * in0_k_tiles);
+                 if constexpr (nslice_center) {
+                     center.wait_front(3 * block_m_tiles * c_in_tiles);
+                 }
+@@ -877,9 +904,10 @@ void kernel_main() {
+                     weights.wait_front(k_tiles * out_n_tiles);
+                     pack_reconfig_l1_acc(j >= 1 ? 1 : 0);
+                     const uint32_t slot_base = (k_cols - 1 - j) * slot_tiles;
+-                    for (uint32_t g = 0; g < ring_groups; ++g) {
+-                        const uint32_t r0 = conv2d_3x3::ring_group_row0<block_m_tiles, slice_sb_h>(owner, g);
+-                        const uint32_t rows = block_m_tiles - r0 < slice_sb_h ? block_m_tiles - r0 : slice_sb_h;
++                    for (uint32_t g = 0; g < walk_groups; ++g) {
++                        const uint32_t r0 = rt_valid ? conv2d_3x3::ring_group_row0_rt<slice_sb_h>(valid_rows, owner, g)
++                                                     : conv2d_3x3::ring_group_row0<block_m_tiles, slice_sb_h>(owner, g);
++                        const uint32_t rows = valid_rows - r0 < slice_sb_h ? valid_rows - r0 : slice_sb_h;
+                         const uint32_t lo = kh_lo[r0 / slice_sb_h];
+                         const uint32_t hi = kh_hi[r0 / slice_sb_h];
+                         if (rows != init_rows) {
+@@ -887,95 +915,117 @@ void kernel_main() {
+                             init_rows = rows;
+                         }
+                         ring_token.reserve_back(1);
+-                        for (uint32_t c0 = 0; c0 < out_n_tiles; c0 += slice_sb_w) {
+-                            tile_regs_acquire();
+-                            uint32_t in1_index = c0;
+-                            if constexpr (nslice_center) {
+-                                // K order unchanged (kh, kw, c). One loop per source, each with constant CB ids (a
+-                                // single loop choosing the CB per k measured res5.1 +5.6%).
+-                                constexpr uint32_t ct = c_in_tiles;
+-                                uint32_t in0_index = r0 * in0_k_tiles + lo * 2 * ct;
+-                                uint32_t ctr_index = r0 * ct + lo * block_m_tiles * ct;
+-                                in1_index += lo * 3 * ct * out_n_tiles;
+-                                UNPACK((set_matmul_in0_row_stride(in0_k_tiles)));
+-                                for (uint32_t kh = lo; kh < hi; ++kh) {
+-                                    for (uint32_t c = 0; c < ct; ++c) {
+-                                        ckernel::matmul_block(
+-                                            cb_im2col_tiles,
+-                                            cb_weights,
+-                                            in0_index++,
+-                                            in1_index,
+-                                            0,
+-                                            false,
+-                                            slice_sb_w,
+-                                            rows,
+-                                            in0_k_tiles);
+-                                        in1_index += out_n_tiles;
+-                                    }
+-                                    UNPACK((set_matmul_in0_row_stride(ct)));
+-                                    for (uint32_t c = 0; c < ct; ++c) {
+-                                        ckernel::matmul_block(
+-                                            cb_center_tiles,
+-                                            cb_weights,
+-                                            ctr_index++,
+-                                            in1_index,
+-                                            0,
+-                                            false,
+-                                            slice_sb_w,
+-                                            rows,
+-                                            ct);
+-                                        in1_index += out_n_tiles;
+-                                    }
+-                                    ctr_index += (block_m_tiles - 1) * ct;
++                        // The group's matmuls and packs. ct_group_rows: the group height is a template constant (one
++                        // instance per height 1..slice_sb_h), so the r x 1 subblock's unpack / math loops are
++                        // specialized (on the balanced split's ranges; with runtime dims a 1-row group costs nearly a
++                        // full one: res5.2 @ LoFi, a 4 + 1-row walk 26.4 us vs 24.9 us with template heights).
++                        auto group_mm = [&](auto rows_c) {
++                            const uint32_t group_rows = rows_c();
++                            for (uint32_t c0 = 0; c0 < out_n_tiles; c0 += slice_sb_w) {
++                                tile_regs_acquire();
++                                uint32_t in1_index = c0;
++                                if constexpr (nslice_center) {
++                                    // K order unchanged (kh, kw, c). One loop per source, each with constant CB ids (a
++                                    // single loop choosing the CB per k measured res5.1 +5.6%).
++                                    constexpr uint32_t ct = c_in_tiles;
++                                    uint32_t in0_index = r0 * in0_k_tiles + lo * 2 * ct;
++                                    uint32_t ctr_index = r0 * ct + lo * block_m_tiles * ct;
++                                    in1_index += lo * 3 * ct * out_n_tiles;
+                                     UNPACK((set_matmul_in0_row_stride(in0_k_tiles)));
+-                                    for (uint32_t c = 0; c < ct; ++c) {
++                                    for (uint32_t kh = lo; kh < hi; ++kh) {
++                                        for (uint32_t c = 0; c < ct; ++c) {
++                                            ckernel::matmul_block(
++                                                cb_im2col_tiles,
++                                                cb_weights,
++                                                in0_index++,
++                                                in1_index,
++                                                0,
++                                                false,
++                                                slice_sb_w,
++                                                group_rows,
++                                                in0_k_tiles);
++                                            in1_index += out_n_tiles;
++                                        }
++                                        UNPACK((set_matmul_in0_row_stride(ct)));
++                                        for (uint32_t c = 0; c < ct; ++c) {
++                                            ckernel::matmul_block(
++                                                cb_center_tiles,
++                                                cb_weights,
++                                                ctr_index++,
++                                                in1_index,
++                                                0,
++                                                false,
++                                                slice_sb_w,
++                                                group_rows,
++                                                ct);
++                                            in1_index += out_n_tiles;
++                                        }
++                                        ctr_index += (block_m_tiles - 1) * ct;
++                                        UNPACK((set_matmul_in0_row_stride(in0_k_tiles)));
++                                        for (uint32_t c = 0; c < ct; ++c) {
++                                            ckernel::matmul_block(
++                                                cb_im2col_tiles,
++                                                cb_weights,
++                                                in0_index++,
++                                                in1_index,
++                                                0,
++                                                false,
++                                                slice_sb_w,
++                                                group_rows,
++                                                in0_k_tiles);
++                                            in1_index += out_n_tiles;
++                                        }
++                                    }
++                                } else {
++                                    // K order (kh, kw, c): kernel rows [lo, hi) are K tiles [lo * kkh, hi * kkh).
++                                    static_assert(k_tiles % 3 == 0);
++                                    constexpr uint32_t kkh = k_tiles / 3;
++                                    const uint32_t k_lo = lo * kkh;
++                                    const uint32_t k_hi = hi * kkh;
++                                    uint32_t in0_index = r0 * k_tiles + k_lo;
++                                    in1_index += k_lo * out_n_tiles;
++                                    for (uint32_t k = k_lo; k < k_hi; ++k) {
+                                         ckernel::matmul_block(
+                                             cb_im2col_tiles,
+                                             cb_weights,
+-                                            in0_index++,
++                                            in0_index,
+                                             in1_index,
+                                             0,
+                                             false,
+                                             slice_sb_w,
+-                                            rows,
+-                                            in0_k_tiles);
++                                            group_rows,
++                                            k_tiles);
++                                        ++in0_index;
+                                         in1_index += out_n_tiles;
+                                     }
+                                 }
+-                            } else {
+-                                // K order (kh, kw, c): kernel rows [lo, hi) are K tiles [lo * kkh, hi * kkh).
+-                                static_assert(k_tiles % 3 == 0);
+-                                constexpr uint32_t kkh = k_tiles / 3;
+-                                const uint32_t k_lo = lo * kkh;
+-                                const uint32_t k_hi = hi * kkh;
+-                                uint32_t in0_index = r0 * k_tiles + k_lo;
+-                                in1_index += k_lo * out_n_tiles;
+-                                for (uint32_t k = k_lo; k < k_hi; ++k) {
+-                                    ckernel::matmul_block(
+-                                        cb_im2col_tiles,
+-                                        cb_weights,
+-                                        in0_index,
+-                                        in1_index,
+-                                        0,
+-                                        false,
+-                                        slice_sb_w,
+-                                        rows,
+-                                        k_tiles);
+-                                    ++in0_index;
+-                                    in1_index += out_n_tiles;
+-                                }
++                                tile_regs_commit();
++                                tile_regs_wait();
++                                ckl::pack_subblock_row_strided(
++                                    0,
++                                    cb_combine_slots,
++                                    slot_base + r0 * out_n_tiles + c0,
++                                    out_n_tiles,
++                                    group_rows,
++                                    slice_sb_w);
++                                tile_regs_release();
+                             }
+-                            tile_regs_commit();
+-                            tile_regs_wait();
+-                            ckl::pack_subblock_row_strided(
+-                                0, cb_combine_slots, slot_base + r0 * out_n_tiles + c0, out_n_tiles, rows, slice_sb_w);
+-                            tile_regs_release();
++                        };
++                        if constexpr (ct_group_rows) {
++                            switch (rows) {
++                                case 1: group_mm(std::integral_constant<uint32_t, 1>{}); break;
++                                case 2: group_mm(std::integral_constant<uint32_t, 2>{}); break;
++                                case 3: group_mm(std::integral_constant<uint32_t, 3>{}); break;
++                                default: group_mm(std::integral_constant<uint32_t, 4>{}); break;
++                            }
++                        } else {
++                            group_mm(RuntimeRows{rows});
+                         }
+                         ring_token.push_back(1);
+                     }
+                     weights.pop_front(k_tiles * out_n_tiles);
+                 }
+-                im2col_tiles.pop_front(block_m_tiles * in0_k_tiles);
++                im2col_tiles.pop_front(prelude_rows * in0_k_tiles);
+                 if constexpr (nslice_center) {
+                     center.pop_front(3 * block_m_tiles * c_in_tiles);
+                 }
+diff --git a/ttnn/ttnn/operations/conv2d_3x3/kernels/conv2d_3x3_nslice_order.hpp b/ttnn/ttnn/operations/conv2d_3x3/kernels/conv2d_3x3_nslice_order.hpp
+index d647cd5621a..417eeef9467 100644
+--- a/ttnn/ttnn/operations/conv2d_3x3/kernels/conv2d_3x3_nslice_order.hpp
++++ b/ttnn/ttnn/operations/conv2d_3x3/kernels/conv2d_3x3_nslice_order.hpp
+@@ -47,6 +47,16 @@ inline uint32_t ring_group_row0(uint32_t owner, uint32_t g) {
+     return g * R;
+ }
+ 
++// ring_group_row0 over a slice of `rows` valid tile-rows known only at runtime (the work-balanced M split gives grid
++// rows different tile-row counts under one CT block height): the same order, with the short group of `rows`.
++template <uint32_t R>
++inline uint32_t ring_group_row0_rt(uint32_t rows, uint32_t owner, uint32_t g) {
++    if (rows % R != 0 && (owner & 1)) {
++        return g == 0 ? (rows / R) * R : (g - 1) * R;
++    }
++    return g * R;
++}
++
+ // Real steps j >= 1 of one M-block: each receives one partial from column my_col - 1.
+ template <uint32_t k_cols, uint32_t num_owning_cols>
+ inline uint32_t ring_incoming(uint32_t my_col) {
+diff --git a/ttnn/ttnn/operations/conv2d_3x3/kernels/conv2d_3x3_reader.cpp b/ttnn/ttnn/operations/conv2d_3x3/kernels/conv2d_3x3_reader.cpp
+index adb08b1289c..d6895870730 100644
+--- a/ttnn/ttnn/operations/conv2d_3x3/kernels/conv2d_3x3_reader.cpp
++++ b/ttnn/ttnn/operations/conv2d_3x3/kernels/conv2d_3x3_reader.cpp
+@@ -235,7 +235,13 @@ void kernel_main() {
+     constexpr bool tap_direct_windows = get_compile_time_arg_val(73) != 0;
+     // N-slice center taps (see the file comment).
+     constexpr bool nslice_center = get_compile_time_arg_val(74) != 0;
+-    constexpr auto input_args = TensorAccessorArgs<75>();
++    // Work-balanced M split (the descriptor's balanced_block_ranges): the N-slice prelude (center copy, gather) and the
++    // ring forwarding run over the M-block's valid tile-rows only, and the TILE fill streams a host-given slab row
++    // count per M-block (runtime args from slab_rows_arg), so a grid row's prelude and walk scale with its own
++    // tile-rows.
++    constexpr bool rt_valid = get_compile_time_arg_val(75) != 0;
++    static_assert(!rt_valid || nslice_outer, "valid-row sizing is the N-slice walk's");
++    constexpr auto input_args = TensorAccessorArgs<76>();
+     static_assert(!alias_slab_combine || nslice_outer, "only the N-slice-outer walk aliases the slab");
+ 
+     const uint32_t input_addr = get_arg_val<uint32_t>(0);
+@@ -250,6 +256,8 @@ void kernel_main() {
+     // Split TILE fill on this core (runtime: the kernel is shared with the cores that keep the reader-only fill).
+     constexpr uint32_t split_flag_arg = row_peer_coords_arg + (channel_slice ? 2 * k_cols : 0);
+     [[maybe_unused]] const bool split_here = tile_fill_split && get_arg_val<uint32_t>(split_flag_arg) != 0;
++    // rt_valid: M-block m's slab rows (a whole number of untilize batches) at slab_rows_arg + m.
++    constexpr uint32_t slab_rows_arg = split_flag_arg + 1;
+ 
+     constexpr uint32_t pixel_bytes = c_in_p * ELEM_BYTES;
+     constexpr int32_t num_in_px = input_height * input_width;
+@@ -521,6 +529,9 @@ void kernel_main() {
+     // Ring slab: the input tile-row at the slab CB's front, its ring slot, and one past the last row pushed.
+     [[maybe_unused]] int32_t ring_front_row = 0;
+     [[maybe_unused]] uint32_t ring_front_slot = 0;
++    // rt_valid: incoming ring row groups counted over the previous M-blocks (their group counts may differ, and the
++    // per-block count is what the left column forwards).
++    [[maybe_unused]] uint32_t ring_need = 0;
+     [[maybe_unused]] int32_t ring_pushed_hi = 0;
+     for (uint32_t m_block_idx = 0; m_block_idx < num_m_blocks_this_core; ++m_block_idx) {
+         const uint32_t block_tiles_done = m_block_idx * block_m_tiles;
+@@ -529,6 +540,12 @@ void kernel_main() {
+         const uint32_t o_first = (m_tile_start + block_tiles_done) * TILE_DIM;
+         const uint32_t o_end_tiles = o_first + block_valid_tiles * TILE_DIM;
+         const uint32_t o_end = o_end_tiles < num_out_px ? o_end_tiles : num_out_px;
++        // rt_valid: the slab rows this block untilizes, the tile-rows its prelude gathers (the split row gather hands
++        // out a CT unit sequence, so it keeps every row) and the tile-rows its ring walk multiplies and forwards.
++        [[maybe_unused]] const uint32_t slab_rows_m =
++            rt_valid ? get_arg_val<uint32_t>(slab_rows_arg + m_block_idx) : slab_tile_rows;
++        [[maybe_unused]] const uint32_t prelude_rows = (rt_valid && !row_split) ? block_valid_tiles : block_m_tiles;
++        [[maybe_unused]] const uint32_t walk_rows = rt_valid ? block_valid_tiles : block_m_tiles;
+ 
+         const conv2d_3x3::SlabFootprint footprint =
+             conv2d_3x3::block_footprint<output_width, input_width, stride, padding, dilation, band_last_tap>(
+@@ -639,14 +656,16 @@ void kernel_main() {
+                 // Windowed fill: batches [pushed, batch) are reserved and in flight, batch j at ring slot (write
+                 // pointer + j - pushed) under transaction id TRID_FILL_BASE + j % fill_window; the oldest is pushed
+                 // once its reads (and the writer's half) landed.
+-                constexpr uint32_t num_batches = slab_tile_rows / untilize_batch_rows;
++                constexpr uint32_t max_batches = slab_tile_rows / untilize_batch_rows;
++                const uint32_t num_batches = slab_rows_m / untilize_batch_rows;
++                ASSERT(num_batches <= max_batches);
+                 constexpr uint32_t batch_bytes = batch_pages * input_page_bytes;
+                 constexpr uint32_t ring_bytes = input_ring_batches * batch_bytes;
+                 constexpr uint32_t TRID_FILL_BASE = 8;
+                 // The ring holds the whole slab: reserve it once and hand the writer all of its batches up front, so
+                 // its higher-shard reads run alongside the reader's from the start.
+-                constexpr bool whole_slab = input_ring_batches >= num_batches;
+-                constexpr uint32_t wr_slots = whole_slab ? num_batches : fill_window;
++                constexpr bool whole_slab = input_ring_batches >= max_batches;
++                constexpr uint32_t wr_slots = whole_slab ? max_batches : fill_window;
+                 [[maybe_unused]] bool writer_rows_of[wr_slots];
+                 if constexpr (whole_slab) {
+                     {
+@@ -757,10 +776,12 @@ void kernel_main() {
+             constexpr int32_t tile_rows_per_image_row = input_width >= TILE_DIM ? input_width / TILE_DIM : 1;
+             const uint32_t t_first = m_tile_start + block_tiles_done;
+             reads.begin(TRID_CENTER);
++            // rt_valid: rows past the block's valid ones are never multiplied, so they are not written.
++            const uint32_t center_rows = rt_valid ? block_valid_tiles : block_m_tiles;
+             for (int32_t kh = 0; kh < 3; ++kh) {
+                 const int32_t shift_rows = (kh * dilation - padding) * tile_rows_per_image_row;
+                 uint32_t l1 = center_l1 + kh * block_m_tiles * row_bytes;
+-                for (uint32_t r = 0; r < block_m_tiles;) {
++                for (uint32_t r = 0; r < center_rows;) {
+                     const uint32_t t = t_first + r;
+                     const int32_t h_in = static_cast<int32_t>(t / tile_rows_per_image_row) + kh * dilation - padding;
+                     if (r >= block_valid_tiles || h_in < 0 || h_in >= input_height) {
+@@ -1003,7 +1024,7 @@ void kernel_main() {
+                 // tap_direct_group: one trid wait and one push per group. A group never crosses the ring end (a CB
+                 // push must land exactly on it), so its slots are consecutive. The reader's per-unit work, not the
+                 // read latency, paced the prelude, so the group is fenced in place.
+-                constexpr uint32_t units_per_block = block_m_tiles * num_k_blocks;
++                const uint32_t units_per_block = prelude_rows * num_k_blocks;
+                 const uint32_t unit_bytes = block_k_tiles * get_tile_size(cb_im2col_rm);
+                 uint32_t g_left = 0;       // units of the current group still to issue
+                 uint32_t g_size = 0;       // units in the current group
+@@ -1012,7 +1033,7 @@ void kernel_main() {
+                 uint32_t fixed_state = 0;  // the fill's reads reprogrammed the read command buffer
+                 uint32_t u = 0;
+                 TapPlannedT::Row plan;
+-                for (uint32_t tile_row = 0; tile_row < block_m_tiles; ++tile_row) {
++                for (uint32_t tile_row = 0; tile_row < prelude_rows; ++tile_row) {
+                     const uint32_t o = o_first + tile_row * TILE_DIM;
+                     const bool planned = TapPlannedT::plan(plan, o, o_end);
+                     for (uint32_t k_block_idx = 0; k_block_idx < num_k_blocks; ++k_block_idx, ++u, ++direct_seq) {
+@@ -1074,7 +1095,7 @@ void kernel_main() {
+                     }
+                 }
+             } else {
+-                for (uint32_t tile_row = 0; tile_row < block_m_tiles; ++tile_row) {
++                for (uint32_t tile_row = 0; tile_row < prelude_rows; ++tile_row) {
+                     for (uint32_t k_block_idx = 0; k_block_idx < num_k_blocks; ++k_block_idx) {
+                         gather_unit(k_block_idx, tile_row);
+                     }
+@@ -1274,7 +1295,7 @@ void kernel_main() {
+             }
+         }
+         if constexpr (tile_input && !ring_slab) {
+-            constexpr uint32_t slab_pages = slab_tile_rows * c_in_tiles;
++            const uint32_t slab_pages = slab_rows_m * c_in_tiles;
+             cb_wait_front(cb_halo_slab, slab_pages);
+             cb_pop_front(cb_halo_slab, slab_pages);
+         }
+@@ -1295,7 +1316,9 @@ void kernel_main() {
+             MaybeDeviceZoneScope("reader_combine_send");
+             constexpr uint32_t num_owning_cols = (tensor_n_tiles + out_n_tiles - 1) / out_n_tiles;
+             constexpr uint32_t slot_tiles = block_m_tiles * out_n_tiles;
+-            constexpr uint32_t groups = (block_m_tiles + ring_group_rows - 1) / ring_group_rows;
++            // rt_valid: only the block's valid tile-rows are multiplied and forwarded (every core of the grid row has
++            // the same M range, so the row's columns agree on the groups).
++            const uint32_t groups = (walk_rows + ring_group_rows - 1) / ring_group_rows;
+             constexpr uint32_t ring_inflight = 2;
+             constexpr uint32_t ring_trid_base = 12;
+             Semaphore<> credit(combine_credit_sem_id);
+@@ -1310,7 +1333,9 @@ void kernel_main() {
+             volatile tt_l1_ptr uint32_t* arrived =
+                 reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(combine_arrival_sem_id));
+             // Incoming row groups counted so far; the count only grows (every real step j >= 1 takes `groups`).
+-            uint32_t need = m_block_idx * groups * conv2d_3x3::ring_incoming<k_cols, num_owning_cols>(my_col);
++            uint32_t need = rt_valid
++                                ? ring_need
++                                : m_block_idx * groups * conv2d_3x3::ring_incoming<k_cols, num_owning_cols>(my_col);
+             bool credited = false;
+             uint32_t issued = 0;
+             uint32_t retired = 0;
+@@ -1369,10 +1394,11 @@ void kernel_main() {
+                             try_retire();
+                         }
+                         const uint32_t trid = ring_trid_base + issued % ring_inflight;
+-                        const uint32_t r0 = conv2d_3x3::ring_group_row0<block_m_tiles, ring_group_rows>(
+-                            conv2d_3x3::nslice_owner<k_cols>(my_col, j), g);
+-                        const uint32_t rows =
+-                            block_m_tiles - r0 < ring_group_rows ? block_m_tiles - r0 : ring_group_rows;
++                        const uint32_t owner = conv2d_3x3::nslice_owner<k_cols>(my_col, j);
++                        const uint32_t r0 = rt_valid
++                                                ? conv2d_3x3::ring_group_row0_rt<ring_group_rows>(walk_rows, owner, g)
++                                                : conv2d_3x3::ring_group_row0<block_m_tiles, ring_group_rows>(owner, g);
++                        const uint32_t rows = walk_rows - r0 < ring_group_rows ? walk_rows - r0 : ring_group_rows;
+                         const uint32_t group_bytes = rows * row_bytes;
+                         const uint32_t src = combine_base + (k_cols - 1 - j) * slot_bytes + r0 * row_bytes;
+                         const uint32_t dst = combine_base + (k_cols - 2 - j) * slot_bytes + r0 * row_bytes;
+@@ -1390,6 +1416,7 @@ void kernel_main() {
+             while (retired < issued) {
+                 try_retire();
+             }
++            ring_need = need;
+             // The firmware requires every NoC packet tag cleared at kernel end.
+             noc_async_write_set_trid(0);
+         } else if constexpr (combine_send) {
