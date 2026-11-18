@@ -655,6 +655,8 @@ def mesh_device(request, silicon_arch_name, device_params):
     updated_device_params = get_updated_device_params(device_params)
     updated_device_params.pop("require_exact_physical_num_devices", False)
     fabric_config = updated_device_params.pop("fabric_config", None)
+    if fabric_config and os.environ.get("TT_FABRIC_OVERRIDE"):
+        fabric_config = getattr(ttnn.FabricConfig, os.environ["TT_FABRIC_OVERRIDE"])
     fabric_tensix_config = updated_device_params.pop("fabric_tensix_config", None)
     reliability_mode = updated_device_params.pop("reliability_mode", None)
     fabric_manager = updated_device_params.pop("fabric_manager", None)
@@ -722,6 +724,8 @@ def pcie_mesh_device(request, silicon_arch_name, silicon_arch_wormhole_b0, devic
 
     updated_device_params = get_updated_device_params(device_params)
     fabric_config = updated_device_params.pop("fabric_config", None)
+    if fabric_config and os.environ.get("TT_FABRIC_OVERRIDE"):
+        fabric_config = getattr(ttnn.FabricConfig, os.environ["TT_FABRIC_OVERRIDE"])
     fabric_tensix_config = updated_device_params.pop("fabric_tensix_config", None)
     reliability_mode = updated_device_params.pop("reliability_mode", None)
     set_fabric(fabric_config, reliability_mode, fabric_tensix_config)
@@ -756,6 +760,8 @@ def bh_1d_mesh_device(request, silicon_arch_name, silicon_arch_blackhole, device
     request.node.pci_ids = ttnn.get_pcie_device_ids()
     updated_device_params = get_updated_device_params(device_params)
     fabric_config = updated_device_params.pop("fabric_config", None)
+    if fabric_config and os.environ.get("TT_FABRIC_OVERRIDE"):
+        fabric_config = getattr(ttnn.FabricConfig, os.environ["TT_FABRIC_OVERRIDE"])
     fabric_tensix_config = updated_device_params.pop("fabric_tensix_config", None)
     reliability_mode = updated_device_params.pop("reliability_mode", None)
     fabric_manager = updated_device_params.pop("fabric_manager", None)
@@ -785,6 +791,8 @@ def bh_2d_mesh_device_context(device_params):
         raise RuntimeError("bh_2d_mesh_device requires 1, 2, 4, 8, or 32 devices (got %s)" % ttnn.get_num_devices())
     updated_device_params = get_updated_device_params(device_params)
     fabric_config = updated_device_params.pop("fabric_config", None)
+    if fabric_config and os.environ.get("TT_FABRIC_OVERRIDE"):
+        fabric_config = getattr(ttnn.FabricConfig, os.environ["TT_FABRIC_OVERRIDE"])
     fabric_tensix_config = updated_device_params.pop("fabric_tensix_config", None)
     reliability_mode = updated_device_params.pop("reliability_mode", None)
     fabric_manager = updated_device_params.pop("fabric_manager", None)

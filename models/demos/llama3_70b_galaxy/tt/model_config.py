@@ -738,8 +738,14 @@ class TtModelArgs:
             self.model_config["GALAXY_NUM_LINKS"] = {"6U": 4, "4U": 3}.get(self.galaxy_type)
             self.model_config["GALAXY_PREFILL_NUM_LINKS"] = self.model_config["GALAXY_NUM_LINKS"]
         # GALAXY_PREFILL_LINKS_<SITE> overrides the prefill link count of one collective, e.g. ATTN_QKV or MLP_W2OUT.
-        self.model_config["PREFILL_LINKS"] = lambda site, default: int(os.getenv(f"GALAXY_PREFILL_LINKS_{site}", default))
+        self.model_config["PREFILL_LINKS"] = lambda site, default: int(
+            os.getenv(f"GALAXY_PREFILL_LINKS_{site}", default)
+        )
         self.model_config["CCL_TOPOLOGY"] = {"6U": ttnn.Topology.Ring, "4U": ttnn.Topology.Linear}.get(self.galaxy_type)
+        if self.is_blackhole and os.environ.get("LLAMA_BH_CCL_TOPOLOGY"):
+            # Blackhole has no galaxy_type, so CCL_TOPOLOGY was None (each op's default). On a FABRIC_1D_RING fabric,
+            # Ring roughly halves the decode reduce-scatter (32x3584 bf8 over a mesh row: ~17-20 us -> ~10 us).
+            self.model_config["CCL_TOPOLOGY"] = getattr(ttnn.Topology, os.environ["LLAMA_BH_CCL_TOPOLOGY"].capitalize())
         if device is not None:  # Avoid issue with test_llama_torch.py not having a device
             self.n_local_heads = self.n_heads // self.cluster_shape[1]
 
@@ -783,8 +789,10 @@ class TtModelArgs:
                 fp32_dest_acc_en=True,
                 packer_l1_acc=True,
             )
+            sdpa_fidelity_name = os.environ.get("LLAMA_BH_SDPA_FIDELITY", "HiFi4")
+            sdpa_fidelity = getattr(ttnn.MathFidelity, sdpa_fidelity_name, ttnn.MathFidelity.HiFi4)
             self.compute_kernel_config_sdpa = ttnn.WormholeComputeKernelConfig(
-                math_fidelity=ttnn.MathFidelity.HiFi4,
+                math_fidelity=sdpa_fidelity,
                 math_approx_mode=False,
                 fp32_dest_acc_en=True,
                 packer_l1_acc=False,
@@ -858,8 +866,12 @@ class TtModelArgs:
             # exp_approx_mode=True keeps the replay-buffer exponential the model was tuned on. Since #57180 the
             # fp32-dest SDPA kernel honours False with the accurate SFPU exponential, ~20x the SFPU cost per QK
             # tile, which doubled prefill latency at 128k tokens (see the prefix-caching benchmark).
-            self.model_config["SDPA_PROGCFG"] = lambda seqlen, chunk_start_idx=0: ttnn.SDPAProgramConfig(
-                compute_with_storage_grid_size=(7, 10),
+            sdpa_grid_x = int(os.environ.get("LLAMA_BH_SDPA_GRID_X", "7"))
+            sdpa_grid_y = int(os.environ.get("LLAMA_BH_SDPA_GRID_Y", "10"))
+            self.model_config[
+                "SDPA_PROGCFG"
+            ] = lambda seqlen, chunk_start_idx=0, _gx=sdpa_grid_x, _gy=sdpa_grid_y: ttnn.SDPAProgramConfig(
+                compute_with_storage_grid_size=(_gx, _gy),
                 exp_approx_mode=True,
                 q_chunk_size=256
                 if seqlen >= 2048 and chunk_start_idx == 0
@@ -880,8 +892,10 @@ class TtModelArgs:
             # For flexible chunked SDPA (chunk_start_idx_tensor): fixed program config so one trace
             # works for any block-aligned chunk_start at replay.
             # Chunk sizes must match SDPA_CHUNK_ALIGN; generator aligns num_cached_tokens to it.
-            self.model_config["SDPA_PROGCFG_FLEXIBLE_CHUNK"] = lambda seqlen, page_size: ttnn.SDPAProgramConfig(
-                compute_with_storage_grid_size=(7, 10),
+            self.model_config[
+                "SDPA_PROGCFG_FLEXIBLE_CHUNK"
+            ] = lambda seqlen, page_size, _gx=sdpa_grid_x, _gy=sdpa_grid_y: ttnn.SDPAProgramConfig(
+                compute_with_storage_grid_size=(_gx, _gy),
                 exp_approx_mode=True,
                 q_chunk_size=SDPA_CHUNK_ALIGN,
                 k_chunk_size=SDPA_CHUNK_ALIGN,
@@ -1697,7 +1711,9 @@ class TtModelArgs:
                 # LM_HEAD_OUTPUT_GRID's permuted order encodes the WH DRAM-sharded in1 bank mapping. Blackhole
                 # reads the decode weight DRAM-interleaved (lm_head.py): ring core i computes global N slice i,
                 # so the output shards follow the input ring order (as in qwen_model_config).
-                core_grid=lm_head_ring_core_input_range_set if self.is_blackhole else lm_head_ring_core_output_range_set,
+                core_grid=lm_head_ring_core_input_range_set
+                if self.is_blackhole
+                else lm_head_ring_core_output_range_set,
                 strategy=ttnn.ShardStrategy.WIDTH,
                 orientation=ttnn.ShardOrientation.ROW_MAJOR,
                 use_height_and_width_as_shard_shape=True,

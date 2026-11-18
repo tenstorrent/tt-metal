@@ -2,6 +2,8 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+import os
+
 import torch
 import ttnn
 from models.common.lightweightmodule import LightweightModule
@@ -373,11 +375,68 @@ class TtLlamaMLP(LightweightModule):
         minimal_pc_1_3 = self.model_config["PREFILL_FF1_FF3_MINIMAL_MATMUL_CONFIG"](seq_len)
         minimal_pc_2 = self.model_config["PREFILL_FF2_MINIMAL_MATMUL_CONFIG"](seq_len)
 
-        if 1024 <= seq_len < 4096:
+        # Blackhole prefill switches (env, default off):
+        #   LLAMA_BH_PREFILL_MINIMAL_2K=1: 2048 <= seq_len < 4096 (vLLM's 2K chunks) also takes the minimal_matmul path.
+        #   LLAMA_BH_PREFILL_MM_TUNED=1: larger minimal_matmul grids (isolated sweep, one BH chip:
+        #     M=4096 FF1/FF3 273->177 us, FF2 543->289 us; M=2048 FF1/FF3 135->119 us, FF2 286->149 us).
+        #   LLAMA_BH_PREFILL_FF13_BF8=1: FF1/FF3 minimal_matmul output in bf8 (halves the reduce-scatter bytes;
+        #     the <4K ttnn.linear path already outputs bf8).
+        bh_min_2k = (
+            self.args.is_blackhole
+            and batch_size == 1
+            and 2048 <= seq_len < 4096
+            and os.environ.get("LLAMA_BH_PREFILL_MINIMAL_2K", "0") == "1"
+        )
+        use_linear_13 = (seq_len < 4096 or batch_size > 1) and not bh_min_2k
+        if self.args.is_blackhole and seq_len >= 2048 and os.environ.get("LLAMA_BH_PREFILL_MM_TUNED", "0") == "1":
+            if seq_len < 4096:
+                minimal_pc_1_3 = ttnn.MinimalMatmulConfig(
+                    M_block_size=4,
+                    K_block_size=8,
+                    N_block_size=8,
+                    subblock_h=4,
+                    subblock_w=2,
+                    compute_with_storage_grid_size=ttnn.CoreCoord(11, 10),
+                )
+                minimal_pc_2 = ttnn.MinimalMatmulConfig(
+                    M_block_size=4,
+                    K_block_size=8,
+                    N_block_size=8,
+                    subblock_h=4,
+                    subblock_w=2,
+                    compute_with_storage_grid_size=ttnn.CoreCoord(11, 10),
+                )
+            else:
+                minimal_pc_1_3 = ttnn.MinimalMatmulConfig(
+                    M_block_size=8,
+                    K_block_size=8,
+                    N_block_size=8,
+                    subblock_h=1,
+                    subblock_w=8,
+                    compute_with_storage_grid_size=ttnn.CoreCoord(11, 9),
+                )
+                minimal_pc_2 = ttnn.MinimalMatmulConfig(
+                    M_block_size=8,
+                    K_block_size=8,
+                    N_block_size=4,
+                    subblock_h=2,
+                    subblock_w=4,
+                    compute_with_storage_grid_size=ttnn.CoreCoord(11, 10),
+                )
+        ff13_dtype = (
+            ttnn.bfloat8_b
+            if (
+                self.args.is_qwen
+                or (self.args.is_blackhole and os.environ.get("LLAMA_BH_PREFILL_FF13_BF8", "0") == "1")
+            )
+            else None
+        )
+
+        if 1024 <= seq_len < 4096 and not bh_min_2k:
             x = ttnn.reshape(x, (1, seq_len // 1024, 1024, -1))
 
         # For shorter sequence lengths use the original matmul since it performs better than the minimal matmul
-        if seq_len < 4096 or batch_size > 1:
+        if use_linear_13:
             w1_out = ttnn.linear(
                 x,
                 self.w1_interleaved if use_w1_w3_interleaved else self.w1,
@@ -395,7 +454,7 @@ class TtLlamaMLP(LightweightModule):
                 input_tensor=x,
                 weight_tensor=self.w1_interleaved if use_w1_w3_interleaved else self.w1,
                 # Qwen's residual can be BF16; FF1/FF3 CCL buffers remain BF8.
-                dtype=ttnn.bfloat8_b if self.args.is_qwen else None,
+                dtype=ff13_dtype,
                 config=minimal_pc_1_3,
                 compute_kernel_config=self.args.compute_kernel_config_lofi,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
@@ -413,7 +472,7 @@ class TtLlamaMLP(LightweightModule):
         ttnn.deallocate(w1_out)
 
         # For shorter sequence lengths use the original matmul since it performs better than the minimal matmul
-        if seq_len < 4096 or batch_size > 1:
+        if use_linear_13:
             w3_out = ttnn.linear(
                 x,
                 self.w3_interleaved if use_w1_w3_interleaved else self.w3,
@@ -430,7 +489,7 @@ class TtLlamaMLP(LightweightModule):
             w3_out = ttnn.experimental.minimal_matmul(
                 input_tensor=x,
                 weight_tensor=self.w3_interleaved if use_w1_w3_interleaved else self.w3,
-                dtype=ttnn.bfloat8_b if self.args.is_qwen else None,
+                dtype=ff13_dtype,
                 config=minimal_pc_1_3,
                 compute_kernel_config=self.args.compute_kernel_config_lofi,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
@@ -467,14 +526,31 @@ class TtLlamaMLP(LightweightModule):
                 dim=3,
             )
             ttnn.deallocate(w2_in)
-            w2_out = ttnn.linear(
-                w2_in_gathered,
-                self.w2_interleaved,
-                compute_kernel_config=self.args.compute_kernel_config_hifi2_fp16,
-                dtype=self.prefill_output_dtype,
-                program_config=short_lens_pc_2,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            )
+            # LLAMA_BH_PREFILL_FF2_MINIMAL=1: FF2 on minimal_matmul after the unfused gather (4K: 653 -> 527 us/layer).
+            if (
+                self.args.is_blackhole
+                and (seq_len >= 4096 or bh_min_2k)
+                and batch_size == 1
+                and os.environ.get("LLAMA_BH_PREFILL_FF2_MINIMAL", "0") == "1"
+            ):
+                w2_out = ttnn.experimental.minimal_matmul(
+                    input_tensor=w2_in_gathered,
+                    weight_tensor=self.w2_interleaved,
+                    config=minimal_pc_2,
+                    compute_kernel_config=self.args.compute_kernel_config_hifi2_fp16,
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                )
+                if w2_out.dtype != self.prefill_output_dtype:
+                    w2_out = ttnn.typecast(w2_out, self.prefill_output_dtype)
+            else:
+                w2_out = ttnn.linear(
+                    w2_in_gathered,
+                    self.w2_interleaved,
+                    compute_kernel_config=self.args.compute_kernel_config_hifi2_fp16,
+                    dtype=self.prefill_output_dtype,
+                    program_config=short_lens_pc_2,
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                )
         else:
             # Match the input format before communicating its bytes.
             if w2_in.dtype != self.prefill_output_dtype:

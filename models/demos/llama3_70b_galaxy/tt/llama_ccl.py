@@ -1255,7 +1255,9 @@ class TT_CCL:
                     memory_config=memory_config,
                     topology=self.model_config["CCL_TOPOLOGY"],
                     num_links=num_links,
-                    num_workers_per_link=1,
+                    # LLAMA_BH_PREFILL_RS_WORKERS: with 1 worker/link this RS is ~3x slower than an equal-size
+                    # all-gather; 4 workers take the 4K prefill RS from 1.71 to 0.92 ms/layer.
+                    num_workers_per_link=int(os.environ.get("LLAMA_BH_PREFILL_RS_WORKERS", "1")),
                     subdevice_id=self.worker_sub_device_id,
                 )
                 ttnn_tensor_out = ttnn.reshape(ttnn_tensor_out, (1, B, seqlen // B, ttnn_tensor_out.shape[-1]))
@@ -1317,6 +1319,9 @@ class TT_CCL:
                     topology=self.model_config["CCL_TOPOLOGY"],
                     subdevice_id=self.worker_sub_device_id,
                     cluster_axis=cluster_axis,
+                    num_workers_per_link=(
+                        int(os.environ["LLAMA_BH_RS_WORKERS"]) if os.environ.get("LLAMA_BH_RS_WORKERS") else None
+                    ),
                 )
                 self.gather_idx[cluster_axis] = (idx + 1) % self.num_cbs
             elif not self.use_prefetcher:
@@ -1394,9 +1399,7 @@ class TT_CCL:
         persistent_buffers_list = list(persistent_buffers.values()) if persistent_buffers else None
         # Wormhole / prefetcher path keeps main's fixed link count (4); Blackhole caps to the links
         # physically available on the mesh (Blackhole Galaxy exposes 2, not 4).
-        num_links = (
-            4 if (self.use_prefetcher and not self.is_blackhole) else min(4, self._galaxy_links())
-        )
+        num_links = 4 if (self.use_prefetcher and not self.is_blackhole) else min(4, self._galaxy_links())
         # Seeing better performance for longer sequence lengths with num_workers_per_link = 4
         if seqlen > 128:
             num_workers_per_link = 4
@@ -1576,9 +1579,7 @@ class TT_CCL:
 
         # Wormhole / prefetcher path keeps main's fixed link count (4); Blackhole caps to the links
         # physically available on the mesh (Blackhole Galaxy exposes 2, not 4).
-        num_links = (
-            4 if (self.use_prefetcher and not self.is_blackhole) else min(4, self._galaxy_links())
-        )
+        num_links = 4 if (self.use_prefetcher and not self.is_blackhole) else min(4, self._galaxy_links())
         if reverse_order:
             all_gather_function = ttnn.experimental.all_gather_async_reversed
         else:

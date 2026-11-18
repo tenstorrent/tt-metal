@@ -2,6 +2,8 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+import os
+
 import torch
 import ttnn
 from models.common.lightweightmodule import LightweightModule
@@ -116,6 +118,9 @@ class TtLlamaAttention(LightweightModule):
         self.compute_kernel_config_hifi2_fp16 = configuration.compute_kernel_config_hifi2_fp16
 
         self.compute_kernel_config_hifi4 = configuration.compute_kernel_config_hifi4
+        self.compute_kernel_config_sdpa = getattr(
+            configuration, "compute_kernel_config_sdpa", self.compute_kernel_config_hifi4
+        )
 
         self.transformation_mats = transformation_mats
 
@@ -799,7 +804,22 @@ class TtLlamaAttention(LightweightModule):
             # format expected by the non-fused decode rotary op. get_rm_rot_mats
             # expands to [1, expanded_batch, heads, head_dim] for the fused path;
             # keep a fallback for callers that still provide that layout.
-            if rot_mats[0].shape[1] == 1:
+            # The sliced/tilized cos/sin depend only on the decode positions, so every layer of a decode step
+            # gets the same tiles: build them once (first layer) and share them across layers. That removes
+            # 4 slice + 4 pad + 4 tilize ops from every other layer. The cache holds the rot_mats tensors it
+            # was built from and is matched by identity, so a later step with new rot_mats never hits a stale
+            # entry; under trace capture the first layer's ops are recorded and replayed every step.
+            rope_cache = self.model_config.get("_DECODE_ROPE_TILE_CACHE")
+            rope_key_shapes = (tuple(q_heads_pre_rot_1BQD.shape), tuple(k_heads_pre_rot_1BKD.shape))
+            if (
+                os.environ.get("LLAMA_DECODE_ROPE_CACHE", "1") == "1"
+                and rope_cache is not None
+                and rope_cache["cos"] is rot_mats[0]
+                and rope_cache["sin"] is rot_mats[1]
+                and rope_cache["shapes"] == rope_key_shapes
+            ):
+                q_rot_cos, q_rot_sin, k_rot_cos, k_rot_sin = rope_cache["tiles"]
+            elif rot_mats[0].shape[1] == 1:
                 q_rot_cos = ttnn.to_layout(rot_mats[0], ttnn.TILE_LAYOUT)
                 q_rot_sin = ttnn.to_layout(rot_mats[1], ttnn.TILE_LAYOUT)
                 k_rot_cos = q_rot_cos
@@ -855,6 +875,12 @@ class TtLlamaAttention(LightweightModule):
                 q_rot_sin = ttnn.to_layout(q_rot_sin, ttnn.TILE_LAYOUT)
                 k_rot_cos = ttnn.to_layout(k_rot_cos, ttnn.TILE_LAYOUT)
                 k_rot_sin = ttnn.to_layout(k_rot_sin, ttnn.TILE_LAYOUT)
+            self.model_config["_DECODE_ROPE_TILE_CACHE"] = {
+                "cos": rot_mats[0],
+                "sin": rot_mats[1],
+                "shapes": rope_key_shapes,
+                "tiles": (q_rot_cos, q_rot_sin, k_rot_cos, k_rot_sin),
+            }
             q_heads_1BQD = ttnn.experimental.rotary_embedding_llama(
                 q_heads_pre_rot_1BQD,
                 q_rot_cos,
@@ -961,7 +987,7 @@ class TtLlamaAttention(LightweightModule):
                 multi_device_global_semaphore=_ag_sems,
                 persistent_output_tensor=None,
                 barrier_semaphore=_ccl.get_and_cycle_barrier_semaphore_handle(_ca),
-                num_links=1,
+                num_links=int(os.environ.get("LLAMA_BH_ATTN_AG_LINKS", "1")),
                 memory_config=self.model_config["GATHER_USERS_MEMCFG"](self.cluster_shape[1]),
                 subdevice_id=_ccl.worker_sub_device_id,
             )
@@ -1236,7 +1262,7 @@ class TtLlamaAttention(LightweightModule):
                 v_heads_1VSD_8b,
                 ring_size=4,  # Number of devices in the ring topology (4 devices per row in 8x4 mesh)
                 scale=self.scale,
-                compute_kernel_config=self.compute_kernel_config_hifi4,
+                compute_kernel_config=self.compute_kernel_config_sdpa,
                 program_config=self.model_config["SDPA_PROGCFG"](seq_len, chunk_start_idx=0),
                 page_table=None,
                 chunk_start_idx=None,
@@ -1256,7 +1282,7 @@ class TtLlamaAttention(LightweightModule):
                     input_tensor_v=values_BKSD,
                     page_table_tensor=page_table,
                     chunk_start_idx_tensor=chunk_start_idx_tensor,
-                    compute_kernel_config=self.compute_kernel_config_hifi4,
+                    compute_kernel_config=self.compute_kernel_config_sdpa,
                     program_config=self.model_config["SDPA_PROGCFG_FLEXIBLE_CHUNK"](seq_len, page_size),
                 )
 
@@ -1286,7 +1312,7 @@ class TtLlamaAttention(LightweightModule):
                     v_heads_1VSD_8b,
                     is_causal=True,
                     scale=self.scale,
-                    compute_kernel_config=self.compute_kernel_config_hifi4,
+                    compute_kernel_config=self.compute_kernel_config_sdpa,
                     program_config=self.model_config["SDPA_PROGCFG"](
                         seq_len // batch_size if seq_len // batch_size == 128 else seq_len
                     ),
@@ -1376,7 +1402,7 @@ class TtLlamaAttention(LightweightModule):
             cluster_axis=0,
             num_links=self.model_config["PREFILL_LINKS"]("ATTN_OUT", prefill_num_links),
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            buffer_key="WO_AG" if seq_len <= 4096 else "WO",
+            buffer_key="WO_AG" if (seq_len <= 4096 and os.environ.get("LLAMA_BH_PREFILL_WO_RS", "0") != "1") else "WO",
         )
         output_11SH.deallocate()
 

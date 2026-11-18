@@ -143,7 +143,7 @@ class TtLlamaPrefetcherSetup(LightweightModule):
 
     def create_global_cb(self):
         if not hasattr(self, "global_circular_buffer") or self.global_circular_buffer is None:
-            if self.is_blackhole:
+            if self.is_blackhole and os.environ.get("LLAMA_BH_PIN_CB", "1") == "1":
                 self._create_global_cb_bh()
             else:
                 self.global_circular_buffer = ttnn.create_global_circular_buffer(

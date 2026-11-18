@@ -982,6 +982,9 @@ class TtTransformer(LightweightModule):
                     self.tt_ccl.reset_global_semaphores()
 
         else:
+            # Decode RoPE tiles (llama_attention) live in L1 until the next decode forward; free them before prefill,
+            # whose static CBs need that L1 (vLLM switches decode -> prefill for every new request).
+            self.args.model_config["_DECODE_ROPE_TILE_CACHE"] = None
             if self.is_decode_setup:
                 self.tt_ccl.close()
                 self.tt_ccl_decode = self.tt_ccl
@@ -1057,6 +1060,9 @@ class TtTransformer(LightweightModule):
 
         h = None
         # x needs to be in bfloat16_b as it gets reused as the residual tensor
+        # Shared per-step RoPE cos/sin tiles (llama_attention decode): drop the previous step's so the first
+        # layer always rebuilds them inside this forward (and inside any trace being captured).
+        self.args.model_config["_DECODE_ROPE_TILE_CACHE"] = None
         for i, layer in enumerate(self.layers):
             x, h = layer(
                 x,
