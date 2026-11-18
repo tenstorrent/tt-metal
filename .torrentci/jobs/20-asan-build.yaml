@@ -8,8 +8,8 @@
 # .ddeb files flat and uncompressed (their compression-level 0), and the
 # stripped ttnn-import tree with zstd -1 (their compression-level 1). Names
 # drop the ref and run-id suffix: TorrentCI scopes artifacts to the producing
-# job execution. ccache is remote; no TorrentCI cache (large restores fail
-# today, torrentci#1179). On afuller/baby-steps it runs on every merge-queue
+# job execution. ccache is remote; CPM's source cache is a TorrentCI cache
+# (large restores have failed, torrentci#1179; a failed restore runs cold). On afuller/baby-steps it runs on every merge-queue
 # entry; here it runs through the pr-gate and merge-gate dashboards.
 jobs:
   - id: asan-build
@@ -42,6 +42,18 @@ jobs:
       - {name: CCACHE_COMPILERCHECK, value: content}
       - {name: TRACY_NO_INVARIANT_CHECK, value: '1'}
       - {name: TRACY_NO_ISA_EXTENSIONS, value: '1'}
+      # CPM's default source cache, named so configure stops re-fetching
+      # ~30 git sources and Boost on every checkout. Same path as the default
+      # keeps ccache's relative include paths (CCACHE_BASEDIR) unchanged.
+      - {name: CPM_SOURCE_CACHE, value: /workspace/.cpmcache}
+    # TorrentCI keys are literal (no hashFiles): restore the newest entry for
+    # this ref, then a protected ref's; the cpm-cache step drops a restored tree whose
+    # dependency-file hash differs, so a change refetches from scratch and
+    # the cache never accumulates stale sources. A miss fetches as before.
+    cache:
+      key: 'cpm-v1-${ref_name}-${commit_sha}'
+      restore-keys: ['cpm-v1-${ref_name}-', cpm-v1-]
+      save-paths: [.cpmcache]
     artifacts:
       publish:
         # Consumed as packages-artifact-name by smoke, sdk-examples and
@@ -70,6 +82,20 @@ jobs:
           run:
             - git submodule sync --recursive
             - git submodule update --init --recursive --depth 1 --jobs 4
+      - id: cpm-cache
+        kind: shell
+        shell:
+          run:
+            - >-
+              cat cmake/CPM.cmake third_party/CMakeLists.txt tt_metal/third_party/CMakeLists.txt
+              tt_metal/third_party/umd/third_party/CMakeLists.txt tt-train/cmake/dependencies.cmake
+              .gitmodules | sha256sum | cut -d' ' -f1 > /tmp/cpm-deps.sha256
+            - >-
+              if [ ! -f .cpmcache/.deps.sha256 ]; then echo "CPM cache: miss";
+              elif cmp -s .cpmcache/.deps.sha256 /tmp/cpm-deps.sha256; then
+              echo "CPM cache: hit, $(du -sh .cpmcache | cut -f1)"; touch /tmp/cpm-unchanged;
+              else echo "CPM cache: dependencies changed, dropping it"; rm -rf .cpmcache; fi
+            - mkdir -p .cpmcache && cp /tmp/cpm-deps.sha256 .cpmcache/.deps.sha256
       - id: configure
         kind: shell
         shell:
@@ -121,3 +147,11 @@ jobs:
             - du -sh ttnn-import ttnn-import/build/lib
             - tar -I 'zstd -1 -T0' -cf ttnn-import.tar.zst -C ttnn-import .
             - ls -l ttnn-import.tar.zst
+      - id: cpm-cache-save
+        kind: shell
+        shell:
+          run:
+            # An unchanged restored tree is already stored: remove it so the
+            # platform skips re-uploading it (save records skipped_empty).
+            - du -sh .cpmcache
+            - if [ -f /tmp/cpm-unchanged ]; then rm -rf .cpmcache; fi
