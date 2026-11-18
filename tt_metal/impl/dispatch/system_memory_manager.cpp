@@ -127,7 +127,7 @@ SystemMemoryManager::SystemMemoryManager(MetalEnvImpl& env, MetalContext& ctx, C
     cq_alignment_(env.get_hal().get_alignment(is_dram_backed_ ? HalMemType::DRAM : HalMemType::HOST)),
     device_id(device_id),
     completion_byte_addrs(num_hw_cqs),
-    cq_to_event_locks(num_hw_cqs),
+    cq_events_(std::make_unique<CqEventProgress[]>(num_hw_cqs)),
     prefetcher_cores(num_hw_cqs),
     prefetch_q_dev_ptrs(num_hw_cqs),
     prefetch_q_dev_fences(num_hw_cqs),
@@ -140,8 +140,6 @@ SystemMemoryManager::SystemMemoryManager(MetalEnvImpl& env, MetalContext& ctx, C
         this->cq_size = 65536;
         this->cq_sysmem_start = nullptr;
         this->channel_offset = 0;
-        this->cq_to_event.resize(num_hw_cqs, 0);
-        this->cq_to_last_completed_event.resize(num_hw_cqs, 0);
         const uint32_t alignment = env_.get_hal().get_alignment(HalMemType::HOST);
         for (uint8_t cq_id = 0; cq_id < num_hw_cqs; cq_id++) {
             this->cq_interfaces.emplace_back(0, cq_id, this->cq_size, 0, alignment);
@@ -293,73 +291,40 @@ void SystemMemoryManager::init_dispatch_core_interfaces(uint8_t num_hw_cqs, uint
             "Issue queue for cq_id {} has size of {} which is too small",
             cq_id,
             this->get_issue_queue_size(cq_id));
-        this->cq_to_event.push_back(0);
-        this->cq_to_last_completed_event.push_back(0);
         this->prefetch_q_dev_ptrs[cq_id] = prefetch_q_base;
         this->prefetch_q_dev_fences[cq_id] =
             prefetch_q_base + mem_map.prefetch_q_entries() * mem_map.prefetch_q_entry_size_bytes();
     }
 }
 
-uint32_t SystemMemoryManager::get_next_event(const uint8_t cq_id) {
-    if (is_mock_device()) {
-        return ++this->cq_to_event[cq_id];
-    }
-    cq_to_event_locks[cq_id].lock();
-    uint32_t next_event = ++this->cq_to_event[cq_id];  // Event ids start at 1
-
-    cq_to_event_locks[cq_id].unlock();
-    return next_event;
+void SystemMemoryManager::set_last_issued_event(const uint8_t cq_id, const uint32_t event_id) {
+    this->cq_events_[cq_id].last_issued.store(event_id, std::memory_order_relaxed);
 }
 
-// Get last issued event to Command Queue
-uint32_t SystemMemoryManager::get_last_event(const uint8_t cq_id) {
-    std::lock_guard<std::mutex> lock(cq_to_event_locks[cq_id]);
-    return this->cq_to_event[cq_id];
-}
-
-void SystemMemoryManager::set_current_and_last_completed_event(
-    const uint8_t cq_id, const uint32_t current_event_id, const uint32_t last_completed_event_id) {
-    cq_to_event_locks[cq_id].lock();
-
-    this->cq_to_event[cq_id] = current_event_id;
-    this->cq_to_last_completed_event[cq_id] = last_completed_event_id;
-    cq_to_event_locks[cq_id].unlock();
+uint32_t SystemMemoryManager::get_last_issued_event(const uint8_t cq_id) const {
+    return this->cq_events_[cq_id].last_issued.load(std::memory_order_relaxed);
 }
 
 void SystemMemoryManager::set_last_completed_event(const uint8_t cq_id, const uint32_t event_id) {
-    if (is_mock_device()) {
-        this->cq_to_last_completed_event[cq_id] = event_id;
-        return;
-    }
+    std::atomic<uint32_t>& last_completed = this->cq_events_[cq_id].last_completed;
     TT_ASSERT(
-        wrap_ge(event_id, this->cq_to_last_completed_event[cq_id]),
+        wrap_ge(event_id, last_completed.load(std::memory_order_relaxed)),
         "Event ID is expected to increase. Wrapping not supported for sync. Completed event {} but last recorded "
         "completed event is {}, manager {}",
         event_id,
-        this->cq_to_last_completed_event[cq_id],
+        last_completed.load(std::memory_order_relaxed),
         fmt::ptr(this));
-    cq_to_event_locks[cq_id].lock();
-
-    this->cq_to_last_completed_event[cq_id] = event_id;
-    cq_to_event_locks[cq_id].unlock();
+    // Pairs with the acquire in get_last_completed_event, publishing the completion reader's earlier writes.
+    last_completed.store(event_id, std::memory_order_release);
 }
 
-uint32_t SystemMemoryManager::get_current_event(const uint8_t cq_id) {
-    cq_to_event_locks[cq_id].lock();
-    uint32_t current_event = this->cq_to_event[cq_id];
-    cq_to_event_locks[cq_id].unlock();
-    return current_event;
+uint32_t SystemMemoryManager::get_last_completed_event(const uint8_t cq_id) const {
+    return this->cq_events_[cq_id].last_completed.load(std::memory_order_acquire);
 }
 
-uint32_t SystemMemoryManager::get_last_completed_event(const uint8_t cq_id) {
-    if (is_mock_device()) {
-        return this->cq_to_last_completed_event[cq_id];
-    }
-    cq_to_event_locks[cq_id].lock();
-    uint32_t last_completed_event = this->cq_to_last_completed_event[cq_id];
-    cq_to_event_locks[cq_id].unlock();
-    return last_completed_event;
+void SystemMemoryManager::reset_events(const uint8_t cq_id, const uint32_t event_id) {
+    this->cq_events_[cq_id].last_issued.store(event_id, std::memory_order_relaxed);
+    this->cq_events_[cq_id].last_completed.store(event_id, std::memory_order_release);
 }
 
 void SystemMemoryManager::reset(const uint8_t cq_id) {
