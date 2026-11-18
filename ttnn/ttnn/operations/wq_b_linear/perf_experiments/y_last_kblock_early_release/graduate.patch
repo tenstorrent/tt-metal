@@ -1,0 +1,247 @@
+--- a/ttnn/ttnn/operations/wq_b_linear/kernels/wq_b_linear_compute.cpp
++++ b/ttnn/ttnn/operations/wq_b_linear/kernels/wq_b_linear_compute.cpp
+@@ -2,7 +2,8 @@
+ // SPDX-License-Identifier: Apache-2.0
+ 
+ // y block (block_m_tiles x core_n_tiles) = x (resident, K-blocked) @ W (streamed, K-blocked),
+-// accumulated in place in cb_y_tiles via packer L1 accumulation.
++// accumulated in place in cb_y_tiles via packer L1 accumulation. The last K-block runs column group by column group
++// and releases each group to the y store as soon as it is packed.
+ // Regime R4 (has_slices): a core may also own a K-slice (slice_k_blocks K-blocks from slice_kb_start) of one
+ // leftover column. That matmul runs nested in the main one, after main K-block slice_after_block, reading x
+ // through cb_x_slice (an alias of cb_x_resident with its own FIFO pointers) and packing to cb_partial. The owner
+@@ -20,6 +21,60 @@
+ 
+ using namespace compute_kernel_lib;
+ 
++// Raw-LLK last K-block (bypasses compute_kernel_lib::matmul_block): with caller_owns_pack_target the helper pushes
++// nothing until the caller's single push after the whole K-loop, and its L1-accumulation switch is keyed on the block
++// index within one call, so a separate one-block helper call would overwrite the earlier blocks' partials. This loop
++// issues the helper's LLK sequence for that block (same subblocks, same per-tile k order, L1-accumulating pack) with
++// column groups outermost, and pushes sb_w tiles after each group but the last. Each push moves the write pointer
++// sb_w tiles on, so later packs subtract the tiles pushed so far. Returns the tiles pushed.
++ALWI uint32_t last_k_block_by_column(
++    CircularBuffer& x_buf,
++    CircularBuffer& w_buf,
++    CircularBuffer& y_buf,
++    uint32_t block_m_tiles,
++    uint32_t core_n_tiles,
++    uint32_t sb_h,
++    uint32_t sb_w,
++    uint32_t k_block_tiles,
++    bool first_k_block) {
++    const uint32_t cb_x = x_buf.get_cb_id();
++    const uint32_t cb_w = w_buf.get_cb_id();
++    const uint32_t cb_y = y_buf.get_cb_id();
++    if (first_k_block) {
++        ckernel::matmul_block_init(cb_x, cb_w, false, sb_w, sb_h, k_block_tiles);
++    }
++    x_buf.wait_front(block_m_tiles * k_block_tiles);
++    w_buf.wait_front(k_block_tiles * core_n_tiles);
++    PACK((llk_pack_reconfig_l1_acc(first_k_block ? 0 : 1)));
++    uint32_t pushed = 0;
++    for (uint32_t n0 = 0; n0 < core_n_tiles; n0 += sb_w) {
++        for (uint32_t m0 = 0; m0 < block_m_tiles; m0 += sb_h) {
++            tile_regs_acquire();
++#ifndef SKIP_COMPUTE
++            for (uint32_t k = 0; k < k_block_tiles; ++k) {
++                ckernel::matmul_block(
++                    cb_x, cb_w, m0 * k_block_tiles + k, n0 + k * core_n_tiles, 0, false, sb_w, sb_h, k_block_tiles);
++            }
++#endif
++            tile_regs_commit();
++            tile_regs_wait();
++            for (uint32_t r = 0; r < sb_h; ++r) {
++                for (uint32_t c = 0; c < sb_w; ++c) {
++                    pack_tile<true>(r * sb_w + c, cb_y, (m0 + r) * core_n_tiles + n0 + c - pushed);
++                }
++            }
++            tile_regs_release();
++        }
++        if (n0 + sb_w < core_n_tiles) {
++            y_buf.push_back(sb_w);
++            pushed += sb_w;
++        }
++    }
++    x_buf.pop_front(block_m_tiles * k_block_tiles);
++    w_buf.pop_front(k_block_tiles * core_n_tiles);
++    return pushed;
++}
++
+ template <typename PostKBlockFn>
+ ALWI void accumulate_block(
+     CircularBuffer& in0,
+@@ -79,6 +134,7 @@
+         MatmulBlockShape::of(block_m_tiles / sb_h, core_n_tiles / sb_w, sb_h, sb_w, k_block_tiles, num_k_blocks);
+ 
+     y_buf.reserve_back(y_tiles);
++    uint32_t pushed = 0;
+     {
+         MaybeDeviceZoneScope("compute_first_kblock_wait");
+         x_buf.wait_front(block_m_tiles * k_block_tiles);
+@@ -161,7 +217,17 @@
+         };
+         accumulate_block(x_buf, w_buf, y_buf, main_shape, between_k_blocks);
+     } else {
+-        accumulate_block(x_buf, w_buf, y_buf, main_shape, NoPostKBlock{});
++        if constexpr (num_k_blocks > 1) {
++            accumulate_block(
++                x_buf,
++                w_buf,
++                y_buf,
++                MatmulBlockShape::of(
++                    block_m_tiles / sb_h, core_n_tiles / sb_w, sb_h, sb_w, k_block_tiles, num_k_blocks - 1),
++                NoPostKBlock{});
++        }
++        pushed = last_k_block_by_column(
++            x_buf, w_buf, y_buf, block_m_tiles, core_n_tiles, sb_h, sb_w, k_block_tiles, num_k_blocks == 1);
+     }
+-    y_buf.push_back(y_tiles);
++    y_buf.push_back(y_tiles - pushed);
+ }
+--- a/ttnn/ttnn/operations/wq_b_linear/kernels/wq_b_linear_reader.cpp
++++ b/ttnn/ttnn/operations/wq_b_linear/kernels/wq_b_linear_reader.cpp
+@@ -7,8 +7,8 @@
+ // their slots; this kernel stays the CB's only producer and pushes them once the writer's handoff semaphore
+ // says they landed. A core with a K-slice of a leftover column (regime R4) first reads that slice into
+ // cb_w_slice under its own trid, so it is resident before compute reaches it.
+-// Once its W stream is done, this kernel also stores y_reader_tiles of the core's y block on NoC0 beside the
+-// writer's NoC1 share (see wq_b_linear_y_store.hpp). It only peeks cb_y_tiles; the writer stays its only consumer
++// Once its W stream is done, this kernel also stores the last y_reader_tiles rows of every y column on NoC0 beside
++// the writer's NoC1 share, each column as compute releases it (see wq_b_linear_y_store.hpp). It only peeks cb_y_tiles; the writer stays its only consumer
+ // and pops once the y_done semaphore says these writes landed.
+ 
+ #include <cstdint>
+@@ -129,9 +129,8 @@
+         }
+     }
+ 
+-    const uint32_t y_block_tiles = block_m_tiles * core_n_tiles;
+-    const uint32_t reader_tiles = y_reader_tiles(y_block_tiles, y_reader_share_tenths);
+-    if (reader_tiles == 0) {
++    const uint32_t reader_rows = y_reader_tiles(block_m_tiles, y_reader_share_tenths);
++    if (reader_rows == 0) {
+         return;
+     }
+     const uint32_t y_page_bytes = get_tile_size(cb_y_tiles);
+@@ -139,11 +138,11 @@
+     CircularBuffer cb_y(cb_y_tiles);
+     {
+         MaybeDeviceZoneScope("reader_y_wait");
+-        cb_y.wait_front(y_block_tiles);
++        cb_y.wait_front(1);
+     }
+     MaybeDeviceZoneScope("reader_y_store");
+     store_y_share(
+-        noc, cb_y, y, y_page_bytes, block_m_tiles, core_n_tiles, tensor_n_tiles, n_start, n_stride, reader_tiles, true);
++        noc, cb_y, y, y_page_bytes, block_m_tiles, core_n_tiles, tensor_n_tiles, n_start, n_stride, reader_rows, true);
+     noc.async_write_barrier();
+     noc_semaphore_set(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(y_done_sem_id)), 1);
+ }
+--- a/ttnn/ttnn/operations/wq_b_linear/kernels/wq_b_linear_writer.cpp
++++ b/ttnn/ttnn/operations/wq_b_linear/kernels/wq_b_linear_writer.cpp
+@@ -8,8 +8,9 @@
+ //   per_round: round r travels on its own fixed-sender channel x_mcast_r, fired once per launch.
+ //   rotating:  all rounds travel on x_mcast_0 with rotating senders.
+ // Chained rounds go out in order (the round-r injector has received round r - 1 first); concurrent rounds go
+-// out at once. Then the core writes its (block_m_tiles x core_n_tiles) y block to L1-interleaved y, less the
+-// y_reader_tiles the reader stores on NoC0; it pops cb_y_tiles once the reader's y_done semaphore is raised.
++// out at once. Then the core writes its (block_m_tiles x core_n_tiles) y block to L1-interleaved y column by column
++// as compute releases them, less the rows the reader stores on NoC0; it pops cb_y_tiles once the reader's y_done
++// semaphore is raised.
+ // With w_noc1_k_blocks > 0 this kernel also reads the last w_noc1_k_blocks W K-blocks on NoC1 into their
+ // cb_w_stream slots (the reader owns the CB and pushes them) and raises the reader's handoff semaphore once
+ // they landed; the x prefetch then waits on its own trid instead of every outstanding read. The reads go out
+@@ -323,10 +324,10 @@
+     const uint32_t y_tiles = y_block_tiles + (owns_leftover ? block_m_tiles : 0);
+     {
+         MaybeDeviceZoneScope("writer_y_wait");
+-        cb_y.wait_front(y_tiles);
++        cb_y.wait_front(1);
+     }
+     MaybeDeviceZoneScope("writer_y_store");
+-    const uint32_t reader_tiles = y_reader_tiles(y_block_tiles, y_reader_share_tenths);
++    const uint32_t reader_rows = y_reader_tiles(block_m_tiles, y_reader_share_tenths);
+     store_y_share(
+         noc,
+         cb_y,
+@@ -337,8 +338,9 @@
+         tensor_n_tiles,
+         n_start,
+         n_stride,
+-        reader_tiles,
++        reader_rows,
+         false);
++    cb_y.wait_front(y_tiles);
+     uint32_t offset = y_block_tiles * y_page_bytes;
+     if (owns_leftover) {
+         for (uint32_t m = 0; m < block_m_tiles; ++m) {
+@@ -347,7 +349,7 @@
+         }
+     }
+     noc.async_write_barrier();
+-    if (reader_tiles > 0) {
++    if (reader_rows > 0) {
+         auto* y_done = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(y_done_sem_id));
+         noc_semaphore_wait(y_done, 1);
+         noc_semaphore_set(y_done, 0);
+--- a/ttnn/ttnn/operations/wq_b_linear/kernels/wq_b_linear_y_store.hpp
++++ b/ttnn/ttnn/operations/wq_b_linear/kernels/wq_b_linear_y_store.hpp
+@@ -8,19 +8,15 @@
+ #include "api/dataflow/noc.h"
+ #include "api/dataflow/circular_buffer.h"
+ 
+-// The y block (block_m_tiles x core_n_tiles, tile (m, n) at CB slot m * core_n_tiles + n) is stored by two RISCs:
+-// the reader (NoC0) owns the last reader_tiles slots in column-major (n, m) order, the writer (NoC1) the rest.
++// The y block (block_m_tiles x core_n_tiles, tile (m, n) at CB slot m * core_n_tiles + n) is stored by two RISCs,
++// column by column as compute releases them: column n is ready once wait_front(n + 1) passes. In every column the
++// reader (NoC0) owns the last y_reader_tiles(block_m_tiles, share) rows, the writer (NoC1) the rest.
+ FORCE_INLINE uint32_t y_reader_tiles(uint32_t total_tiles, uint32_t share_tenths) {
+     return (total_tiles * share_tenths + 5) / 10;
+ }
+ 
+-FORCE_INLINE bool reader_owns_y_slot(
+-    uint32_t m, uint32_t n, uint32_t block_m_tiles, uint32_t total, uint32_t reader_tiles) {
+-    return n * block_m_tiles + m >= total - reader_tiles;
+-}
+-
+-// Writes this RISC's share of the y block from cb_y (read pointer = slot 0) to the interleaved y pages
+-// m * tensor_n_tiles + n_start + n * n_stride. The caller has waited for the block and issues the barrier.
++// Waits for each column, then writes this RISC's rows of it from cb_y (read pointer = slot 0) to the interleaved
++// y pages m * tensor_n_tiles + n_start + n * n_stride. The caller issues the barrier.
+ template <typename Accessor>
+ FORCE_INLINE void store_y_share(
+     Noc& noc,
+@@ -32,17 +28,22 @@
+     uint32_t tensor_n_tiles,
+     uint32_t n_start,
+     uint32_t n_stride,
+-    uint32_t reader_tiles,
++    uint32_t reader_rows,
+     bool is_reader) {
+-    const uint32_t total = block_m_tiles * core_n_tiles;
+-    uint32_t offset = 0;
+-    for (uint32_t m = 0; m < block_m_tiles; ++m) {
+-        const uint32_t row_page = m * tensor_n_tiles + n_start;
+-        for (uint32_t n = 0; n < core_n_tiles; ++n) {
+-            if (reader_owns_y_slot(m, n, block_m_tiles, total, reader_tiles) == is_reader) {
+-                noc.async_write(cb_y, y, y_page_bytes, {.offset_bytes = offset}, {.page_id = row_page + n * n_stride});
+-            }
+-            offset += y_page_bytes;
++    const uint32_t m_first = is_reader ? block_m_tiles - reader_rows : 0;
++    const uint32_t m_end = is_reader ? block_m_tiles : block_m_tiles - reader_rows;
++    if (m_first == m_end) {
++        return;
++    }
++    for (uint32_t n = 0; n < core_n_tiles; ++n) {
++        cb_y.wait_front(n + 1);
++        for (uint32_t m = m_first; m < m_end; ++m) {
++            noc.async_write(
++                cb_y,
++                y,
++                y_page_bytes,
++                {.offset_bytes = (m * core_n_tiles + n) * y_page_bytes},
++                {.page_id = m * tensor_n_tiles + n_start + n * n_stride});
+         }
+     }
+ }
