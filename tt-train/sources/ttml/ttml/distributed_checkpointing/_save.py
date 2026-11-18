@@ -112,6 +112,87 @@ def _write_chunk(fd: int, offset: int, view: np.ndarray, budget: _ByteBudget, ch
         budget.release(charged)
 
 
+def _write_plan(
+    staging: str,
+    plan: SavePlan,
+    by_key: dict[str, LiveTensor],
+    threads: int | None,
+    max_inflight_bytes: int,
+    stats: dict,
+) -> dict[tuple[str, int], int]:
+    """Create this process's files in ``staging`` and write every planned chunk into them; returns the CRC32 per
+    (key, file). Files are synced to the filesystem before they are closed, the first failed write stops the readback
+    of the keys after it, and every descriptor opened is closed whatever fails."""
+    fds: dict[int, int] = {}
+    data_start: dict[int, int] = {}
+    budget = _ByteBudget(max_inflight_bytes)
+    crcs: dict[tuple[str, int], int] = {}
+    t2 = time.perf_counter()
+    readback_s = 0.0
+    synced = False
+    try:
+        for fplan in plan.files:
+            path = os.path.join(staging, fplan.path)
+            os.makedirs(os.path.dirname(path), exist_ok=True)
+            data_start[fplan.index] = create_file(path, fplan.header, fplan.data_bytes)
+            fds[fplan.index] = os.open(path, os.O_RDWR)
+        workers = max(1, len(plan.files)) if threads is None else threads
+        failed: list[BaseException] = []
+
+        def record_failure(future) -> None:
+            if not future.cancelled() and future.exception() is not None:
+                failed.append(future.exception())
+
+        with ThreadPoolExecutor(max_workers=workers) as pool:
+            futures = []
+            order = sorted(plan.items, key=lambda k: (-plan.infos[k].local_nbytes * len(plan.items[k]), k))
+            for key in order:
+                if failed:
+                    pool.shutdown(wait=True, cancel_futures=True)
+                    raise failed[0]
+                items = plan.items[key]
+                info = plan.infos[key]
+                live_tensor = by_key[key]
+                charged = info.local_nbytes * len(items)
+                budget.acquire(charged)
+                value = live_tensor.tensor.get_value(NATIVE)
+                t_read = time.perf_counter()
+                # One read for the owned coordinates; each shard comes back as a single-device host tensor.
+                shards = value.cpu_shards([ttnn.MeshCoordinate(list(it.chunk.mesh_coord)) for it in items])
+                shards = [shard.to(ttnn.ROW_MAJOR_LAYOUT) for shard in shards]
+                readback_s += time.perf_counter() - t_read
+                check_label_unchanged(live_tensor, "during readback")
+                per_item = charged // len(items)
+                for it, shard in zip(items, shards):
+                    data = shard.host_buffer().get_shard(ttnn.MeshCoordinate(0, 0))  # its one shard
+                    view = _logical_bytes(np.from_dlpack(data), it.chunk.box.sizes, info.itemsize)
+                    if view.nbytes != it.nbytes:
+                        raise CheckpointError(
+                            f"{key}: shard at {it.chunk.mesh_coord} is {view.nbytes} bytes, planned {it.nbytes}"
+                        )
+                    future = pool.submit(
+                        _write_chunk, fds[it.file], data_start[it.file] + it.data_offset, view, budget, per_item
+                    )
+                    future.add_done_callback(record_failure)
+                    futures.append((key, it.file, future))
+                del shards
+            for key, file_index, future in futures:
+                crcs[(key, file_index)] = future.result()
+        for fd in fds.values():
+            os.fdatasync(fd)
+        synced = True
+    finally:
+        for fd in fds.values():
+            try:
+                os.close(fd)
+            except OSError:
+                if synced:
+                    raise
+    stats["readback_s"] = readback_s
+    stats["write_s"] = time.perf_counter() - t2
+    return crcs
+
+
 def save(
     ckpt_dir: str,
     *,
@@ -182,73 +263,7 @@ def save(
         )
         stats["plan_s"] = time.perf_counter() - t1
 
-        fds: dict[int, int] = {}
-        data_start: dict[int, int] = {}
-        budget = _ByteBudget(max_inflight_bytes)
-        crcs: dict[tuple[str, int], int] = {}
-        t2 = time.perf_counter()
-        readback_s = 0.0
-        synced = False
-        try:
-            for fplan in plan.files:
-                path = os.path.join(staging, fplan.path)
-                os.makedirs(os.path.dirname(path), exist_ok=True)
-                data_start[fplan.index] = create_file(path, fplan.header, fplan.data_bytes)
-                fds[fplan.index] = os.open(path, os.O_RDWR)
-            workers = max(1, len(plan.files)) if threads is None else threads
-            failed: list[BaseException] = []  # the first failed write stops the readback of the keys after it
-
-            def record_failure(future) -> None:
-                if not future.cancelled() and future.exception() is not None:
-                    failed.append(future.exception())
-
-            with ThreadPoolExecutor(max_workers=workers) as pool:
-                futures = []
-                order = sorted(plan.items, key=lambda k: (-plan.infos[k].local_nbytes * len(plan.items[k]), k))
-                for key in order:
-                    if failed:
-                        pool.shutdown(wait=True, cancel_futures=True)
-                        raise failed[0]
-                    items = plan.items[key]
-                    info = plan.infos[key]
-                    live_tensor = by_key[key]
-                    charged = info.local_nbytes * len(items)
-                    budget.acquire(charged)
-                    value = live_tensor.tensor.get_value(NATIVE)
-                    t_read = time.perf_counter()
-                    # One read for the owned coordinates; each shard comes back as a single-device host tensor.
-                    shards = value.cpu_shards([ttnn.MeshCoordinate(list(it.chunk.mesh_coord)) for it in items])
-                    shards = [shard.to(ttnn.ROW_MAJOR_LAYOUT) for shard in shards]
-                    readback_s += time.perf_counter() - t_read
-                    check_label_unchanged(live_tensor, "during readback")
-                    per_item = charged // len(items)
-                    for it, shard in zip(items, shards):
-                        data = shard.host_buffer().get_shard(ttnn.MeshCoordinate(0, 0))  # its one shard
-                        view = _logical_bytes(np.from_dlpack(data), it.chunk.box.sizes, info.itemsize)
-                        if view.nbytes != it.nbytes:
-                            raise CheckpointError(
-                                f"{key}: shard at {it.chunk.mesh_coord} is {view.nbytes} bytes, planned {it.nbytes}"
-                            )
-                        future = pool.submit(
-                            _write_chunk, fds[it.file], data_start[it.file] + it.data_offset, view, budget, per_item
-                        )
-                        future.add_done_callback(record_failure)
-                        futures.append(((key, it.file), future))
-                    del shards
-                for key_file, future in futures:
-                    crcs[key_file] = future.result()
-            for fd in fds.values():
-                os.fdatasync(fd)
-            synced = True
-        finally:
-            for fd in fds.values():
-                try:
-                    os.close(fd)
-                except OSError:
-                    if synced:
-                        raise
-        stats["readback_s"] = readback_s
-        stats["write_s"] = time.perf_counter() - t2
+        crcs = _write_plan(staging, plan, by_key, threads, max_inflight_bytes, stats)
 
         write_header(
             staging,
