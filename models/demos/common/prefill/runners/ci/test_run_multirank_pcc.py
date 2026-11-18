@@ -22,6 +22,8 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
+from models.demos.deepseek_v3_d_p.utils.chunk_config import prefill_chunk_tokens
+
 HARNESS = Path(__file__).with_name("run_multirank_pcc.sh")
 REPO = HARNESS.resolve().parents[6]
 MANIFESTS = "models/demos/deepseek_v3_d_p/tt/runners/manifests"
@@ -363,7 +365,7 @@ class MultirankPccHarnessTests(unittest.TestCase):
                 self.assertEqual(producer["PREFILL_MAX_SEQ_LEN"], str(expected_length))
                 # The request can be shorter than the window: GLM-5.3 sends 1044480 of its 1064960.
                 request_len = {"kimi27": 256000, "glm53": 1044480}[model]
-                self.assertEqual(producer["PREFILL_PRODUCER_CHUNKS"], str(request_len // 5120))
+                self.assertEqual(producer["PREFILL_PRODUCER_CHUNKS"], str(request_len // prefill_chunk_tokens()))
 
     def test_sc1_windows_preserve_model_defaults(self):
         for model, config, expected_length in (
@@ -814,12 +816,17 @@ class PerfGateTableTests(unittest.TestCase):
         argv = ["perf_gate.py", str(perf_json), "--table", str(root / "table.json"), "--model", model]
         argv += ["--config", "sc1"] + (["--power", power] if power else []) + list(extra_args)
         out, err = io.StringIO(), io.StringIO()
-        with mock.patch.object(sys, "argv", argv), mock.patch.dict(
-            # CI_FAILURE_RECORDS blanked unless a test sets it: these deliberate gate failures must never
-            # mark the CI job running this suite as non-retryable.
-            os.environ,
-            {"PREFILL_SUMMARIES": str(root / "summaries"), "CI_FAILURE_RECORDS": "", **(env or {})},
-        ), contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+        with (
+            mock.patch.object(sys, "argv", argv),
+            mock.patch.dict(
+                # CI_FAILURE_RECORDS blanked unless a test sets it: these deliberate gate failures must never
+                # mark the CI job running this suite as non-retryable.
+                os.environ,
+                {"PREFILL_SUMMARIES": str(root / "summaries"), "CI_FAILURE_RECORDS": "", **(env or {})},
+            ),
+            contextlib.redirect_stdout(out),
+            contextlib.redirect_stderr(err),
+        ):
             returncode = self.perf_gate.main()
         result = types.SimpleNamespace(returncode=returncode, stdout=out.getvalue(), stderr=err.getvalue())
         verdicts = root / "summaries" / "perf" / "run_sc1_gate.md"

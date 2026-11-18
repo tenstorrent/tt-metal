@@ -738,8 +738,10 @@ void bind_sdpa(nb::module_& mod) {
             dynamic_local_n (bool): Treat the per-chip padded sequence length as a runtime quantity: the program
                 hash ignores it, so one cached program serves every per-chip length up to the persistent
                 buffers' capacity, and a cache hit rewrites the per-core work split only when the length changed.
-                Requires logical_n as a tensor, non-causal MHA with a separate V and no joint tensors. The
-                program config should then be fixed per capacity, not per length. Defaults to False.
+                Requires logical_n as a tensor, MHA or grouped GQA (more than one K head per chip) with a
+                separate V, no joint tensors and no balanced or cross attention; causal attention is served
+                unbalanced. The program config should then be fixed per capacity, not per length. Defaults to
+                False.
             kv_valid_end_tensor (ttnn.Tensor, optional): Global count of real tokens, read on-device;
                 attention stops at the tile holding the last real token of a partially filled chunk. Output
                 rows in the tiles past it are not written and hold unspecified values. Same one-element

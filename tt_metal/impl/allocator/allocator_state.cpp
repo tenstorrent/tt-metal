@@ -26,19 +26,6 @@ void AllocatorState::BufferTypeState::merge(const BufferTypeState& other) {
     allocated_regions.reserve(allocated_regions.size() + other.allocated_regions.size());
     allocated_regions.insert(allocated_regions.end(), other.allocated_regions.begin(), other.allocated_regions.end());
 
-    // Merge source tracking if both states track sources
-    if (!region_source_allocator_ids.empty() && !other.region_source_allocator_ids.empty()) {
-        region_source_allocator_ids.reserve(
-            region_source_allocator_ids.size() + other.region_source_allocator_ids.size());
-        region_source_allocator_ids.insert(
-            region_source_allocator_ids.end(),
-            other.region_source_allocator_ids.begin(),
-            other.region_source_allocator_ids.end());
-    } else {
-        // If either state doesn't track sources, disable tracking
-        region_source_allocator_ids.clear();
-    }
-
     // Normalize to sort and coalesce regions
     normalize();
 }
@@ -49,9 +36,6 @@ void AllocatorState::BufferTypeState::normalize() {
     }
 
     allocated_regions = allocator::coalesce(std::move(allocated_regions));
-
-    // After coalescing, source tracking is no longer accurate, so clear it
-    region_source_allocator_ids.clear();
 }
 
 bool AllocatorState::BufferTypeState::is_compatible_with(const BufferTypeState& other) const {
@@ -112,10 +96,6 @@ void AllocatorState::merge(const AllocatorState& other) {
             states_per_buffer_type_[buffer_type] = other_state;
         }
     }
-
-    // Merge buffer pointers
-    all_allocated_buffers_.insert(
-        all_allocated_buffers_.end(), other.all_allocated_buffers_.begin(), other.all_allocated_buffers_.end());
 }
 
 DeviceAddr AllocatorState::total_allocated_size() const {
@@ -126,10 +106,6 @@ DeviceAddr AllocatorState::total_allocated_size() const {
     return total;
 }
 
-bool AllocatorState::has_buffer_type(BufferType buffer_type) const {
-    return states_per_buffer_type_.contains(buffer_type);
-}
-
 const std::vector<std::pair<DeviceAddr, DeviceAddr>>& AllocatorState::get_allocated_regions(
     BufferType buffer_type) const {
     static const std::vector<std::pair<DeviceAddr, DeviceAddr>> empty_vector;
@@ -138,23 +114,6 @@ const std::vector<std::pair<DeviceAddr, DeviceAddr>>& AllocatorState::get_alloca
         return empty_vector;
     }
     return it->second.allocated_regions;
-}
-
-AllocatorState::BufferTypeState& AllocatorState::get_or_create_buffer_type_state(BufferType buffer_type) {
-    auto it = states_per_buffer_type_.find(buffer_type);
-    if (it == states_per_buffer_type_.end()) {
-        it = states_per_buffer_type_.emplace(buffer_type, BufferTypeState{}).first;
-        it->second.buffer_type = buffer_type;
-    }
-    return it->second;
-}
-
-const AllocatorState::BufferTypeState* AllocatorState::get_buffer_type_state(BufferType buffer_type) const {
-    auto it = states_per_buffer_type_.find(buffer_type);
-    if (it == states_per_buffer_type_.end()) {
-        return nullptr;
-    }
-    return &it->second;
 }
 
 }  // namespace tt::tt_metal

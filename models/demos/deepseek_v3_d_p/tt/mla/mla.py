@@ -33,6 +33,7 @@ from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import (
     is_tp_deduped_kv_cache,
     striped_cache_to_host,
 )
+from models.demos.deepseek_v3_d_p.utils.weight_cache_dump import weight_cache_dump_mode
 
 # Axis 0 is N/S (mesh rows), axis 1 is E/W (mesh cols) -- the same convention high_bw_all_gather uses.
 
@@ -206,6 +207,7 @@ class ttMLA:
                 memory_config=mem if on_device else None,
                 mesh_mapper=mapper,
                 cache_file_name=name,
+                cache_dump_mode=weight_cache_dump_mode(),
             )
 
         def _wkv_b1():
@@ -246,6 +248,7 @@ class ttMLA:
                     memory_config=mem,
                     mesh_mapper=mapper_tp3,
                     cache_file_name=tp_name if cached else None,
+                    cache_dump_mode=weight_cache_dump_mode(),
                 )
             local = ttnn.mesh_partition(replicated, dim=2, cluster_axis=tp_axis)
             row = ttnn.reshape(local, (1, 1, 1, q_lora_rank // mesh_device.shape[tp_axis]))
@@ -265,6 +268,7 @@ class ttMLA:
                 memory_config=mem,
                 mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
                 cache_file_name=_cache_name("kv_a_layernorm"),
+                cache_dump_mode=weight_cache_dump_mode(),
             ),
             "kv_a_proj_with_mqa": ttnn.as_tensor(
                 kv_a_proj,
@@ -274,6 +278,7 @@ class ttMLA:
                 memory_config=mem,
                 mesh_mapper=mapper_tp0,
                 cache_file_name=_cache_name("kv_a_proj_with_mqa"),
+                cache_dump_mode=weight_cache_dump_mode(),
             ),
         }
         if not kv_only:
@@ -287,6 +292,7 @@ class ttMLA:
                         memory_config=mem,
                         mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
                         cache_file_name=_cache_name("q_a_layernorm"),
+                        cache_dump_mode=weight_cache_dump_mode(),
                     ),
                     "q_a_proj": ttnn.as_tensor(
                         q_a_proj,
@@ -296,6 +302,7 @@ class ttMLA:
                         memory_config=mem,
                         mesh_mapper=mapper_tp0,
                         cache_file_name=_cache_name("q_a_proj"),
+                        cache_dump_mode=weight_cache_dump_mode(),
                     ),
                     "q_b_proj": ttnn.as_tensor(
                         q_b_proj,
@@ -305,6 +312,7 @@ class ttMLA:
                         memory_config=mem,
                         mesh_mapper=mapper_tp1,
                         cache_file_name=_cache_name("q_b_proj"),
+                        cache_dump_mode=weight_cache_dump_mode(),
                     ),
                     "wkv_b1": _wkv_b1(),
                     "wkv_b2": ttnn.as_tensor(
@@ -315,6 +323,7 @@ class ttMLA:
                         memory_config=mem,
                         mesh_mapper=mapper_tp1,
                         cache_file_name=_cache_name("wkv_b2"),
+                        cache_dump_mode=weight_cache_dump_mode(),
                     ),
                     "o_proj": ttnn.as_tensor(
                         o_proj,
@@ -324,6 +333,7 @@ class ttMLA:
                         memory_config=mem,
                         mesh_mapper=mapper_tp0,
                         cache_file_name=_cache_name("o_proj"),
+                        cache_dump_mode=weight_cache_dump_mode(),
                     ),
                 }
             )
@@ -338,6 +348,7 @@ class ttMLA:
                     memory_config=mem,
                     mesh_mapper=mapper_tp1,
                     cache_file_name=_cache_name("g_proj"),
+                    cache_dump_mode=weight_cache_dump_mode(),
                 )
             if tp_shard_q_a_norm:
                 result["q_a_layernorm_tp"] = _q_a_layernorm_tp(result["q_a_layernorm"])
@@ -1655,7 +1666,7 @@ class ttMLA:
         the two in step by hand -- a divergence shows up only as a copy/shape failure at runtime.
 
         NOTE ON RESIDENCY: the cache holds one [1, 1, chunk, q_lora_rank] bf16 tensor per distinct
-        offset -- 1.31 MB per entry at 8x4 / chunk 5120 (3.28 MB before the scale moved from Q onto the
+        offset -- 1.31 MB per entry at 8x4 at the production chunk (3.28 MB before the scale moved from Q onto the
         q_a latent; the figures below were measured at that size), freed only with the model. Growth is linear in
         context depth, since an offset is visited once per request and never repeats.
         TtPrefillTransformer builds ONE dict and threads it down, so the layers pay that once. Measured
@@ -1678,7 +1689,7 @@ class ttMLA:
         the sharing stops here.
 
         An LRU cap is NOT the answer: offsets never repeat within a request, so every chunk would
-        miss and rebuild a 21 MB host tensor ([1, 1, 5120, 1024] fp32; 52 MB in the Q-shaped layout
+        miss and rebuild a 21 MB host tensor ([1, 1, chunk, 1024] fp32; 52 MB in the Q-shaped layout
         it was measured with), which measured 3x slower at long context.
 
         BUILDING THESE AT WARM-UP instead of lazily is the natural next step, and the transformer is
@@ -2560,13 +2571,13 @@ class ttMLA:
                 loaded = True
                 ttnn.tracy_message("`TT_SIGNPOST: SPARSE_MLA_OVERLAP_START`")
                 ttnn.tracy_message("`TT_SIGNPOST: SPARSE_MLA_LOCAL_TOPK`")
-                # The KV gather's readers stream from DRAM on NoC0 concurrently; reading the logits on NoC1 keeps
-                # top-k off that traffic.
+                # Logits on NoC0: NoC1 reads here contend with the gather's fabric routers writing the KV prefix to
+                # DRAM on NoC1, which costs more than sharing NoC0 with the gather's link-worker reads.
                 local_indices = self._indexer.select_local(
                     selection_state,
                     subdevice_id=resources.topk_subdevice_id,
                     sub_core_grids=resources.topk_core_grid,
-                    dram_read_noc=ttnn.NOC.NOC_1,
+                    dram_read_noc=ttnn.NOC.NOC_0,
                 )
                 ttnn.tracy_message("`TT_SIGNPOST: SPARSE_MLA_KV_GATHER`")
                 kvpe_dev = self._gather_kvpe_prefix(

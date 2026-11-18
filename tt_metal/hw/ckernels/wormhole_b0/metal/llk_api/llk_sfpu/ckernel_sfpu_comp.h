@@ -288,35 +288,27 @@ inline void calculate_nez_uint32() {
 
 template <bool APPROXIMATION_MODE, SfpuType COMP_MODE, int ITERATIONS = 8>
 inline void calculate_comp_unary_int(int scalar) {
-    // Convert both operands to two's complement format
-    //
-    // LOGIC:
-    // - Scalar is already in two's complement (from host)
-    // - Convert SFPU input data from sign-magnitude to two's complement
-    // - Perform comparison with both in two's complement format
-
-    // Scalar stays in original two's complement format
-    vInt converted_scalar = scalar;
+    // Equality is a compare of the 32-bit words, so the tile word is loaded as stored
+    // (DataLayout::I32, SFPLOAD INT32). The default vInt load (INT32_SM) converts the word from
+    // sign-magnitude to two's complement on the way in, and the explicit conversion this kernel
+    // used to apply on top of it undid that for every word except 0x80000000, which the load turns
+    // into 0: a tile value of INT32_MIN compared equal to 0 and unequal to its own scalar.
+    vInt s = scalar;
 
 #pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++) {
-        vInt v = dst_reg[0];
+        vInt v = dst_reg[0].mode<sfpi::DataLayout::I32>();
         vInt val = 0;
 
-        // Convert input data from sign-magnitude to two's complement
-        v = sfpu_sign_mag_to_twos_comp(v);
-
-        // Now both operands are in two's complement format
-        // Use simple comparison like Blackhole
         if constexpr (COMP_MODE == SfpuType::unary_ne) {
-            v_if(v != converted_scalar) { val = 1; }
+            v_if(v != s) { val = 1; }
             v_endif;
         } else if constexpr (COMP_MODE == SfpuType::unary_eq) {
-            v_if(v == converted_scalar) { val = 1; }
+            v_if(v == s) { val = 1; }
             v_endif;
         }
 
-        dst_reg[0] = val;
+        dst_reg[0].mode<sfpi::DataLayout::I32>() = val;
         dst_reg++;
     }
 }
@@ -404,6 +396,34 @@ sfpi_inline void _calculate_comp_unary_int_(int scalar) {
         sfpi::vInt val = 0;
 
         apply_unary_comp_int<COMP_MODE>(val, v, scalar);
+
+        sfpi::dst_reg[0].mode<sfpi::DataLayout::I32>() = val;
+        sfpi::dst_reg++;
+    }
+}
+
+// Unsigned order maps onto signed order once the sign bit of both operands is flipped:
+// a <u b  <=>  (a ^ 0x80000000) <s (b ^ 0x80000000). eq / ne only test bit equality and need no flip.
+template <bool APPROXIMATION_MODE, SfpuType COMP_MODE, int ITERATIONS = 8>
+sfpi_inline void calculate_comp_unary_uint32(const std::uint32_t scalar) {
+    static_assert(
+        COMP_MODE == SfpuType::unary_eq || COMP_MODE == SfpuType::unary_ne || COMP_MODE == SfpuType::unary_gt ||
+            COMP_MODE == SfpuType::unary_ge || COMP_MODE == SfpuType::unary_lt || COMP_MODE == SfpuType::unary_le,
+        "calculate_comp_unary_uint32 supports only unary_eq, unary_ne, unary_gt, unary_ge, unary_lt and unary_le");
+    constexpr bool is_equality = COMP_MODE == SfpuType::unary_eq || COMP_MODE == SfpuType::unary_ne;
+    constexpr std::uint32_t sign_bit = 0x80000000u;
+    const int biased_scalar = static_cast<int>(is_equality ? scalar : scalar ^ sign_bit);
+    const sfpi::vInt sign_mask = static_cast<int>(sign_bit);
+
+#pragma GCC unroll 8
+    for (int d = 0; d < ITERATIONS; d++) {
+        sfpi::vInt v = sfpi::dst_reg[0].mode<sfpi::DataLayout::I32>();
+        if constexpr (!is_equality) {
+            v = v ^ sign_mask;
+        }
+        sfpi::vInt val = 0;
+
+        apply_unary_comp_int<COMP_MODE>(val, v, biased_scalar);
 
         sfpi::dst_reg[0].mode<sfpi::DataLayout::I32>() = val;
         sfpi::dst_reg++;

@@ -58,7 +58,7 @@ void bind_slice(nb::module_& mod) {
             input_tensor (ttnn.Tensor): Input tensor, on device.
             slice_start (List[int]): Start indices of input tensor. Negative values count from the end of the dim; other values must be in ``[0, input_tensor_shape[i])``.
             slice_end (List[int]): End indices of input tensor (exclusive). Negative values count from the end of the dim; other values must be in ``(0, input_tensor_shape[i]]``.
-            slice_step (List[int], optional): Step size for each dim. Defaults to `None`, which uses a step of 1 for every dim.
+            slice_step (List[int], optional): Step size for each dim. Each value must be positive. Defaults to `None`, which uses a step of 1 for every dim.
 
         Keyword Args:
             memory_config (ttnn.MemoryConfig, optional): Memory configuration for the output tensor. Defaults to `None`, which uses the input tensor's memory configuration.
