@@ -156,7 +156,11 @@ def build_lane5(
     ln = lanes((R, Cn), lc)
     # (a 2-chip cycle: both directions lead to the same chip over the group's link - one mux a group, WL5_ONEMUX)
     onemux = len(lane_cycles(ln[0])[0]) == 2
-    nmux = 1 if onemux else 2
+    # (one-way lanes: group g's packets on its own mux (direction 0), its credits on header-only channels of its
+    # partner g ^ 1's mux - the partner's direction 0 is g's direction 1; one mux a group)
+    oneway = lc.oneway
+    assert not (oneway and onemux), "one-way lanes need cycles of 3+ chips"
+    nmux = 1 if (onemux or oneway) else 2
     groups = [g5_lane_cores(l5, g) for g in range(G)]
     C = [c for gr in groups for c in gr]
     muxes = [(l5.mux_cols[g], l5.mux_rows[g][d]) for g in range(G) for d in range(nmux)]
@@ -220,14 +224,21 @@ def build_lane5(
     st = stamps_tensor(mesh, C, words=max(64, -(-(512 + T["E"]) // 128) * 16))
     mcfg = fabric_mux.Config(
         num_full_size_channels=GC5,
-        num_header_only_channels=0,
+        num_header_only_channels=GC5 if oneway else 0,
         num_buffers_per_full_size_channel=lc.nbuf,
-        num_buffers_per_header_only_channel=0,
+        num_buffers_per_header_only_channel=lc.nbuf if oneway else 0,
         full_size_channel_buffer_size_bytes=fabric_mux.channel_buffer_size_bytes(mesh),
         base_l1_address=ttnn.get_allocator_base_address(mesh, ttnn.BufferType.L1),
     )
     ctype = fabric_mux.ChannelType.FULL_SIZE
-    client_ct = list(fabric_mux.client_compile_time_args(num_clients=GC5, channel_type=ctype, config=mcfg))
+    hotype = fabric_mux.ChannelType.HEADER_ONLY
+    nclients = 2 * GC5 if oneway else GC5  # (a mux's clients: its termination master waits for the rest)
+    client_ct = list(fabric_mux.client_compile_time_args(num_clients=nclients, channel_type=ctype, config=mcfg))
+    ho_defs = []
+    if oneway:
+        ho_ct = list(fabric_mux.client_compile_time_args(num_clients=nclients, channel_type=hotype, config=mcfg))
+        assert ho_ct[0] == client_ct[0] and ho_ct[2:] == client_ct[2:], (ho_ct, client_ct)
+        ho_defs = [("WL5_HO_BUFSZ", str(ho_ct[1]))]
     mesh_id = int(node(mesh, (0, 0)).mesh_id)
     dm = lambda risc: ttnn.DataMovementConfigDescriptor(
         processor=ttnn.DataMovementProcessor.RISCV_0 if risc == 0 else ttnn.DataMovementProcessor.RISCV_1,
@@ -380,6 +391,7 @@ def build_lane5(
                             )
                             + ([("WL5_HMC2", "1")] if l5.hmc == 2 else [])
                             + ([("WL5_ONEMUX", "1")] if onemux else [])
+                            + ho_defs
                             + ([("WL5_GATHER0", "1")] if l5.hmc == 2 and l5.gather0 else []),
                             config=dm(1),
                         )
@@ -531,8 +543,62 @@ def build_lane5(
                             mux_logical_core=ttnn.CoreCoord(*m),
                         )
                     )
+            # (the full-size clients of every group's direction-0 mux first: one-way lanes' header-only clients on the
+            # partner's mux take its termination master and semaphore)
+            fs_args, fs_sem = {}, {}
+            for g, gr in enumerate(groups):
+                m = (l5.mux_cols[g], l5.mux_rows[g][0])
+                mux_vc = mesh.worker_core_from_logical_core(ttnn.CoreCoord(*m))
+                master_vc = mesh.worker_core_from_logical_core(ttnn.CoreCoord(*gr[0]))
+                term_sem = None
+                for j, (x, y) in enumerate(gr):
+                    args = fabric_mux.client_runtime_args(
+                        connection_valid=True,
+                        is_termination_master=j == 0,
+                        channel_type=ctype,
+                        mux_virtual_core=mux_vc,
+                        client_index=j,
+                        client_logical_core=ttnn.CoreCoord(x, y),
+                        config=mcfg,
+                        program_descriptor=p,
+                        termination_master_virtual_core=master_vc,
+                        termination_master_semaphore_id=term_sem,
+                    )
+                    if j == 0:
+                        term_sem = args[10]
+                    fs_args[(g, j)] = list(args)
+                fs_sem[g] = term_sem
+            for g, gr in enumerate(groups):
                 d0_args = {}
                 for d in range(2):
+                    if d == 0:
+                        for j, (x, y) in enumerate(gr):
+                            own = 1 if core_geom(cfg, j)[6] else 0
+                            p.kernels[rd_idx[(g, own)]].runtime_args[x][y].extend(fs_args[(g, j)])
+                            d0_args[j] = fs_args[(g, j)]
+                        continue
+                    if oneway:  # (credits: header-only channel j of the partner's mux)
+                        pg = g ^ 1
+                        assert ln[pg][1] == ln[g][1], "partner lanes on one link"
+                        m = (l5.mux_cols[pg], l5.mux_rows[pg][0])
+                        mux_vc = mesh.worker_core_from_logical_core(ttnn.CoreCoord(*m))
+                        master_vc = mesh.worker_core_from_logical_core(ttnn.CoreCoord(*groups[pg][0]))
+                        for j, (x, y) in enumerate(gr):
+                            args = fabric_mux.client_runtime_args(
+                                connection_valid=True,
+                                is_termination_master=False,
+                                channel_type=hotype,
+                                mux_virtual_core=mux_vc,
+                                client_index=j,
+                                client_logical_core=ttnn.CoreCoord(x, y),
+                                config=mcfg,
+                                program_descriptor=p,
+                                termination_master_virtual_core=master_vc,
+                                termination_master_semaphore_id=fs_sem[pg],
+                            )
+                            own = 1 if core_geom(cfg, j)[6] else 0
+                            p.kernels[rd_idx[(g, own)]].runtime_args[x][y].extend(args)
+                        continue
                     if d >= nmux:  # (onemux: direction 1's RT args are direction 0's, unused)
                         for j, (x, y) in enumerate(gr):
                             own = 1 if core_geom(cfg, j)[6] else 0

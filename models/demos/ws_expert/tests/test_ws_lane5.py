@@ -204,3 +204,35 @@ def test_ws_lane5_tray_e640(mesh_device):
     Ms = [586] * cfg.nexp
     rows, pcs = run5(mesh_device, cfg, lc, l5, Ms, "tray 640 experts M 586", warm=2, meas=3)
     assert min(pcs.values()) > 0.999
+
+
+@pytest.mark.parametrize("mesh_device", [(2, 4)], indirect=True)
+@pytest.mark.parametrize("device_params", [FAB], indirect=True)
+@pytest.mark.parametrize("M", [586, 0], ids=["m586", "mzero"])
+def test_ws_lane5_tray_oneway(mesh_device, M):
+    """One-way lanes (LCfg.oneway) on the 8-chip snake cycle as a Galaxy column's ring: 2 links x 2 directions = 4
+    lanes, G 4 (the 12 x 10 grid), 160 experts (40 a lane, 5 a chip a lane: a Galaxy EP-4 column's load), credits on
+    header-only channels of the partner lane's mux; hub h multicast (hmc 2), muxes on NOC1. WS_ONEWAY_SLOTS: the slot
+    types (default d0,d0,any,any); WS_NEXP overrides 160. M 0: weights only."""
+    cfg, lc, l5 = configs(int(os.environ.get("WS_NEXP", "160")), 4, 8192)
+    lc.oneway = True
+    lc.slots = os.environ.get("WS_ONEWAY_SLOTS", "d0,d0,any,any")
+    if not os.environ.get("WS_L5"):
+        l5 = L5Cfg(hmc=2)
+    Ms = [M] * cfg.nexp
+    rows, pcs = run5(mesh_device, cfg, lc, l5, Ms, f"tray one-way G 4 M {M}", warm=3, meas=3)
+    assert M == 0 or min(pcs.values()) > 0.999
+
+
+@pytest.mark.parametrize("mesh_device", [(2, 4)], indirect=True)
+@pytest.mark.parametrize("device_params", [FAB], indirect=True)
+@pytest.mark.parametrize("M", [586, 0], ids=["m586", "mzero"])
+def test_ws_lane5_tray_bidir160(mesh_device, M):
+    """The bidirectional lanes' twin of test_ws_lane5_tray_oneway: the same 8-chip snake, hmc 2 with muxes on NOC1,
+    160 experts on G 2 (80 a lane: the same 35 experts a link direction a mux)."""
+    cfg, lc, l5 = configs(int(os.environ.get("WS_NEXP", "160")), 2, 8192)
+    if not os.environ.get("WS_L5"):
+        l5 = L5Cfg(hmc=2)
+    Ms = [M] * cfg.nexp
+    rows, pcs = run5(mesh_device, cfg, lc, l5, Ms, f"tray bidirectional G 2 M {M}", warm=3, meas=3)
+    assert M == 0 or min(pcs.values()) > 0.999

@@ -31,19 +31,20 @@ def slot_types(spec):
     return tuple(names[x] for x in spec.split(","))
 
 
-def lane_plan(N, E, spread=7):
-    """Owner position on the cycle and hops on direction 0 (kf) for lane-local expert i; direction 1 covers the rest."""
+def lane_plan(N, E, spread=7, oneway=False):
+    """Owner position on the cycle and hops on direction 0 (kf) for lane-local expert i; direction 1 covers the rest.
+    oneway: every expert all N - 1 hops on direction 0 (direction 1 carries only credits)."""
     owners = [(i * spread + i // N) % N for i in range(E)]
-    kf = [N // 2 if i % 2 else (N - 1) // 2 for i in range(E)]
+    kf = [N - 1] * E if oneway else [N // 2 if i % 2 else (N - 1) // 2 for i in range(E)]
     return owners, kf
 
 
 class Lane:
-    def __init__(self, N, E, P=15, C=9, GU=10, keep=1, sched=None, prob=1.0, seed=0, types=TYPES):
+    def __init__(self, N, E, P=15, C=9, GU=10, keep=1, sched=None, prob=1.0, seed=0, types=TYPES, oneway=False):
         self.N, self.E, self.P, self.C, self.GU, self.keep = N, E, P, C, GU, keep
         self.K = len(types)
         self.types = types
-        self.owners, self.kf = lane_plan(N, E)
+        self.owners, self.kf = lane_plan(N, E, oneway=oneway)
         self.sched, self.prob, self.rng = sched, prob, random.Random(seed)
         self.nxt = lambda x, d: (x + 1) % N if d == 0 else (x - 1) % N
         self.route = {}  # (i, position) -> (direction it arrives on, hops left after it)
@@ -92,8 +93,11 @@ class Lane:
         for x in range(N):
             for d in (0, 1):
                 y = self.nxt(x, d)
-                cand = [self.slot[(x, s)] for s in range(K)
-                        if self.slot[(x, s)] and d in self.slot[(x, s)]["fwd"] and self.slot[(x, s)]["fwd"][d] < P]
+                cand = [
+                    self.slot[(x, s)]
+                    for s in range(K)
+                    if self.slot[(x, s)] and d in self.slot[(x, s)]["fwd"] and self.slot[(x, s)]["fwd"][d] < P
+                ]
                 if not cand:
                     continue
                 if self.sched is not None:
@@ -170,7 +174,7 @@ class Lane:
         self.t += 1
         return moved
 
-    def run(self, limit=10 ** 7, stall=50000):
+    def run(self, limit=10**7, stall=50000):
         idle = 0
         while self.done < self.total and self.t < limit:
             if self.step():

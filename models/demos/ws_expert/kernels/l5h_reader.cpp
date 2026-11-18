@@ -170,12 +170,18 @@ void kernel_main() {
         const uint32_t l_bufidx = get_semaphore(get_arg_val<uint32_t>(a_++));
         tmx[d] = get_arg_val<uint32_t>(a_++);
         tmy[d] = get_arg_val<uint32_t>(a_++);
+#ifdef WL5_HO_BUFSZ
+        // (one-way lanes: direction 1 is a header-only channel of the partner lane's mux, for the credits)
+        const size_t bufsz = d == 1 ? WL5_HO_BUFSZ : mux_bufsz;
+#else
+        const size_t bufsz = mux_bufsz;
+#endif
         mux[d] = tt::tt_fabric::build_connection_to_fabric_endpoint<mux_nbuf>(
             muxx[d],
             muxy[d],
             chan,
             mux_nbuf,
-            mux_bufsz,
+            bufsz,
             ch_base,
             conn_info,
             handshake,
@@ -980,14 +986,19 @@ void kernel_main() {
     noc_async_write_barrier();
 #endif
 #endif
+    // (every connection's done signal before any master's wait: with one-way lanes two groups' masters each count the
+    // other group's clients)
     for (uint32_t d = 0; d < NMUX; ++d) {
         tt::tt_fabric::fabric_client_disconnect(mux[d]);
+        if (!master[d]) {
+            noc_semaphore_inc(get_noc_addr(tmx[d], tmy[d], term_sync[d]), 1);
+            noc_async_atomic_barrier();
+        }
+    }
+    for (uint32_t d = 0; d < NMUX; ++d) {
         if (master[d]) {
             noc_semaphore_wait(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(term_sync[d]), mux_clients - 1);
             tt::tt_fabric::fabric_endpoint_terminate(muxx[d], muxy[d], mux_term);
-        } else {
-            noc_semaphore_inc(get_noc_addr(tmx[d], tmy[d], term_sync[d]), 1);
-            noc_async_atomic_barrier();
         }
     }
     st[58] = n_fwd;

@@ -1617,3 +1617,22 @@ speed-of-light ep4_targets.py.
   (15.9 GB/s a connection), router-space wait 3.2 ms of it; adders mostly wait for port credits (1 slot a port).
   Floor on this line: the end chips' connections carry 105 MB each, 4.2 ms at 25 GB/s (7.7 KB packets: ~18 GB/s by
   the bench_unicast fit) - the LoudBox X phases run at the per-connection rate, not 50 GB/s.
+
+### Galaxy prep: one-way lanes (LCfg.oneway; ws_lane5, l5h_reader WL5_HO_BUFSZ)
+- Why: in EP-4 the weights get only the Y ring (8 chips, 2 links). Bidirectional lanes give 1 cycle x 2 links = 2
+  lanes, so G 2: 50 cores, compute-bound at ~11 ms (as on the LoudBox), against the 5.8 ms stream. One-way lanes give 4:
+  each (cycle, link) is two lanes, one a direction (the second on the reversed cycle), every expert 7 hops one way. A
+  lane's credits go back on the other direction's connection, its partner lane's (g ^ 1): header-only channels on the
+  partner's mux (25 full-size + 25 header-only channels a mux, one mux a group). Every connection signals its done
+  before any termination master waits (two groups' masters count each other's clients).
+- Schedule model (lock-step, N 8, 40 experts a lane, P 14): one-way 98-100% of the link floor, bidirectional (80 a
+  lane, same per-link load) 86%.
+- LoudBox proxy (the 8-chip snake as the ring, 2 links x 2 directions, G 4 on the 12 x 10 grid, 160 experts = 40 a
+  lane = a Galaxy column's load, hmc 2, muxes on NOC1: muxes on NOC0 would send the partner group's credits across a
+  rectangle on NOC0), T 8192, 3 + 3 launches:
+  - M 586: PCC 0.99988 every expert, 23.5% util, 11.4 ms a launch (lanes on link 0 end at 7.9 ms, link 1 at 11.4).
+  - M 0 (weights only): 8.39 / 8.25 ms a lane = 17.3 / 17.6 GB/s a link direction (35 experts, 145 MB, each link
+    direction). nbuf 3: 8.37 / 8.18; 5 slots (smaller rings): 8.43 / 8.26 - no change.
+  - Bidirectional twin (same snake and config, G 2, 80 experts a lane: the same 35 experts a mux): 6.93 / 7.90 ms =
+    21.0 / 18.4 GB/s. One-way costs ~10%; the larger gap is this lane configuration's delivery (~17-21 GB/s a link
+    direction) against the Galaxy's 25 GB/s links: 145 MB at 17.5 GB/s is 8.3 ms, not the 5.8 ms stream floor.
