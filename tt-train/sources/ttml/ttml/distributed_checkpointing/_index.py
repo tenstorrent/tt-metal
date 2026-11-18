@@ -200,11 +200,27 @@ def _entry_to_json(entry: Entry) -> dict:
     return value
 
 
+def _shape(key: str, what: str, value: Any, ndim: int | None = None) -> tuple[int, ...]:
+    """``value`` from an index as a tuple of non-negative ints (``ndim`` of them when given), or a
+    ``CheckpointError`` naming the entry."""
+    if (
+        not isinstance(value, list)
+        or (ndim is not None and len(value) != ndim)
+        or not all(type(v) is int and v >= 0 for v in value)
+    ):
+        raise CheckpointError(f"index entry {key!r}: malformed {what} {value!r}")
+    return tuple(value)
+
+
 def _entry_from_json(key: str, value: dict) -> Entry:
+    # Boxes are built unchecked (``Box``), so every shape and box an index holds is checked here.
+    global_shape = _shape(key, "global_shape", value["global_shape"])
+    ndim = len(global_shape)
     table = value["chunks"]
     n = int(table["n"])
     offsets = table["offsets"]
-    sizes = _expand(table["sizes"], n)
+    # A broadcast sizes column holds one row: checked once, then repeated.
+    sizes = _expand([_shape(key, "chunk sizes", s, ndim) for s in table["sizes"]], n)
     files = table["file"]
     data_offsets = table["data_offset"]
     nbytes = _expand(table["nbytes"], n)
@@ -217,7 +233,7 @@ def _entry_from_json(key: str, value: dict) -> Entry:
         raise CheckpointError(f"index entry {key!r}: malformed crc32 column") from None
     chunks = [
         ChunkRecord(
-            box=Box(tuple(offsets[i]), tuple(sizes[i])),
+            box=Box(_shape(key, "chunk offsets", offsets[i], ndim), sizes[i]),
             file=int(files[i]),
             data_offset=int(data_offsets[i]),
             nbytes=int(nbytes[i]),
@@ -228,7 +244,7 @@ def _entry_from_json(key: str, value: dict) -> Entry:
     tp_split = value["tp_split"]
     if (
         not isinstance(tp_split, list)
-        or len(tp_split) != len(value["global_shape"])
+        or len(tp_split) != ndim
         or not all(isinstance(s, int) and s >= 1 for s in tp_split)
     ):
         raise CheckpointError(f"index entry {key!r}: malformed tp_split {tp_split!r}")
@@ -237,8 +253,8 @@ def _entry_from_json(key: str, value: dict) -> Entry:
         role=str(value["role"]),
         dtype=str(value["dtype"]),
         layout=str(value["layout"]),
-        global_shape=tuple(value["global_shape"]),
-        canonical_shape=tuple(value["canonical_shape"]),
+        global_shape=global_shape,
+        canonical_shape=_shape(key, "canonical_shape", value["canonical_shape"], ndim),
         transform=transform_from_json(value["transform"]),
         label=Label.from_json(value["label"]),
         live_keys=tuple(value["live_keys"]),

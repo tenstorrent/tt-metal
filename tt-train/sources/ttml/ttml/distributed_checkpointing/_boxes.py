@@ -17,22 +17,16 @@ from typing import Iterable, Sequence
 
 @dataclass(frozen=True)
 class Box:
-    """``offsets`` and ``sizes`` along every dim of the array the box lives in."""
+    """``offsets`` and ``sizes`` along every dim of the array the box lives in: tuples of non-negative ints, one per
+    dim. The constructor takes them as given, since the planner derives most of its boxes from boxes it already
+    holds; the boxes an index holds are checked where the index is decoded (``_index``)."""
 
     offsets: tuple[int, ...]
     sizes: tuple[int, ...]
 
-    def __post_init__(self) -> None:
-        if len(self.offsets) != len(self.sizes):
-            raise ValueError(f"Box: {len(self.offsets)} offsets but {len(self.sizes)} sizes")
-        object.__setattr__(self, "offsets", tuple(int(o) for o in self.offsets))
-        object.__setattr__(self, "sizes", tuple(int(s) for s in self.sizes))
-        if any(s < 0 for s in self.sizes) or any(o < 0 for o in self.offsets):
-            raise ValueError(f"Box: negative offset or size in {self}")
-
     @staticmethod
     def whole(shape: Sequence[int]) -> "Box":
-        return Box((0,) * len(shape), tuple(shape))
+        return Box((0,) * len(shape), tuple(int(s) for s in shape))
 
     @property
     def ndim(self) -> int:

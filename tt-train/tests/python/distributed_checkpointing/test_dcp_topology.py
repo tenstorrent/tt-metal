@@ -113,8 +113,7 @@ def test_boxes_of_different_ranks_name_both_ranks_when_intersected(expect_error)
 
 
 def test_a_box_of_another_rank_is_not_contained_and_does_not_tile():
-    # A malformed index could hold a chunk of the wrong rank: it must fail the tiling check, which names the entry,
-    # rather than pass it on the dims the two boxes share.
+    # Neither check may pass a box of another rank on the dims the two boxes share.
     target = Box((0, 0), (2, 2))
     assert not target.contains(Box((0, 0, 99), (2, 2, 1)))
     assert not Box((0, 0, 0), (2, 2, 2)).contains(Box((0, 0), (1, 1)))
