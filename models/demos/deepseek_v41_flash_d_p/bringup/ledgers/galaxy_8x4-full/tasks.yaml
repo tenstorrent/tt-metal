@@ -5145,3 +5145,88 @@ tasks:
       steady_wall_ms_p32768: '> 0'
       steady_wall_ms_p262144: '> 0'
   device: true
+- id: P.77
+  title: 'OWNER DECISION 2026-11-18: 4-bit compressed-KV attention history on prefill''s own path (packed from the
+    SERVED bf16 rows every chunk, pack-before-gather, sparse attention reads 4-bit records); the served format stays bf16'
+  step: perf
+  role: perf
+  device: true
+  deps:
+  - X.6
+  paths:
+  - models/demos/deepseek_v41_flash_d_p/tt
+  - models/demos/deepseek_v41_flash_d_p/tests/
+  - models/demos/deepseek_v41_flash_d_p/bringup/BREADCRUMBS.md
+  - models/demos/deepseek_v41_flash_d_p/bringup/known_issues.md
+  - ttnn/ttnn/bringup
+  brief:
+    details: 'OWNER DECISION 2026-11-18: everything we optimize from now on is on a 4-bit compressed-KV path, as the
+      DeepSeek reference does (fp4 e2m1 with an e4m3 scale per 16 values: reference/ds41_ref.py:78,
+      reference/official_checks.py:14). This task is part (a), prefill''s own path. Today (STATIC_TABLES=off, the
+      default) every chunk all-gathers each KV source''s compressed history [0, start) from the SERVED bf16
+      compress_kv cache (1 KiB a row) into persistent buffers (tt/history_gather.py, prefetched during the engram wait,
+      P.74 / P.75), and sparse attention reads bf16 rows. Change it so that: each chip packs ITS OWN served bf16 shard
+      into 4-bit records BEFORE the gather (P.11-style pack-before-gather: CKV_PACK_BEFORE_GATHER, the per-chip pack
+      that existed for the old table), the all-gather moves the 4-bit records (3.2x fewer bytes: 320 B a row as
+      bfp4_rows, or the reference''s e2m1 + e4m3-per-16 if a fork does it as cheaply), and sparse attention reads the
+      4-bit records (the sdpa fork''s ROW_BFP4 read, as with CKV_FORMAT=bfp4_rows before P.38; ttnn.bringup.ckv_bfp4
+      packs bf16 tiles to those records). Derived from the served rows EVERY chunk: no private per-slot copy, correct
+      whoever wrote the slot (tests/test_outside_history.py must stay bit-identical under the new default). The chunk''s
+      own new rows: packed the same way before their tail gather. The served cache format stays bf16 (decode reads it;
+      part (b) is an owner decision, do not change it). Check INDEX first (ttnn/ttnn/bringup/INDEX.md: ckv_bfp4, the sdpa
+      fork''s ROW_BFP4, CKV_PACK_BEFORE_GATHER, P.11 / FIX.8 / P.38 history in BREADCRUMBS): reuse, do not rebuild.
+      Note the device stores the compressed KV unquantized in bf16 (compressor.py:14: the reference''s fp4 q-dq is not
+      emulated), so 4-bit is lossy vs today''s 16-bit path: the accuracy gate judges it (limits are the reference''s
+      own drift x 2: do not loosen any). Behind a switch (e.g. HISTORY_FORMAT=bf16|bfp4); keep bf16 working; the accept ships bfp4 as the default (owner decision: every later optimization is baselined on it).
+      Bit-identical determinism. Every Python-built op through ttnn.bringup.prepare_program / run_prepared; matmuls
+      within 110 cores; no weight rebuild; no fork regression suites. Measure and report: gathered bytes a chunk and
+      gather device ms per source at 142k and 1M, DRAM per chip (persistent buffers), accuracy vs the ladder limits and
+      vs the 16-bit path. Stop after your checks (decoder skip test, determinism, outside-history test); the
+      orchestrator measures both sides. Stop rule: if accuracy misses a limit, report the evidence and stop (no
+      precision raise beyond the reference''s 4 bits).'
+  ab:
+    env:
+      HISTORY_FORMAT: bf16
+    change:
+      HISTORY_FORMAT: bfp4
+  ab_mode: full
+  ab_rungs:
+  - last
+  gate:
+    cmd: BRINGUP_RUNG=last scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_ladder.py
+      && scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_determinism.py
+      && scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/test_decoder_skip_decode.py
+      && scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_contract.py
+      && scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/test_outside_history.py
+      && DS41_DECODER_SKIP=decode SKIP_POS=51200,145408,262144,1024000 scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/test_skip_positions.py
+    metrics:
+      err_layer_L*: <= limit
+      err_state_*_L*: <= limit
+      err_final_hidden: <= limit
+      top5_overlap: '>= limit'
+      determinism_max_abs_diff: == 0
+      contract_checks_failed: == 0
+      contract_checks_failed_decoder_skip: == 0
+      outside_history_max_abs_diff: == 0
+      steady_wall_ms_p145408: '> 0'
+      steady_wall_ms_p1024000: '> 0'
+- id: X.7
+  title: 'OWNER 2026-11-18: one profile of a full 5120-token chunk at ~142k history on the default tree: device time
+    per op group and host time per chunk (input to the roofline)'
+  step: perf
+  deps:
+  - P.77
+  brief:
+    details: 'Owner 2026-11-18. Not for walls (X.6 has the clean walls). One steady chunk (BRINGUP_CHUNK_LAST=0,
+      DECODER_SKIP=decode) at BRINGUP_POS=145408 on the committed default tree (with P.77''s 4-bit history: the owner baselines every optimization on it), with the program real-time profiler
+      and per-op rows (BRINGUP_PROFILE_OPS=1) for every layer, and the host cProfile (BRINGUP_PROFILE_HOST=1): device
+      ms per op and per section, the per-chip timeline (idle gaps), and host ms per chunk. The overseer groups the rows
+      (MoE dispatch / experts / combine / shared expert / router; attention: window, sparse sdpa, q / kv / output
+      projections; indexer: score ring, top-k; history gather (prefetch + tail); norms and mHC; other CCLs; engram) for
+      the roofline.'
+  gate:
+    cmd: DS41_DECODER_SKIP=decode BRINGUP_CHUNK_LAST=0 BRINGUP_POS=145408 BRINGUP_PROFILE_OPS=1 BRINGUP_PROFILE_HOST=1 scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_profile.py
+    metrics:
+      device_ms_total_p145408: '> 0'
+      op_rows_p145408: '>= 1'
+  device: true
