@@ -41,7 +41,7 @@ constexpr uint32_t scaler_bits = get_compile_time_arg_val(1);  // Cross-entropy 
 constexpr uint32_t cx = 0, cdy = 1, ccols = 2, cm = 3, cs = 4, cic = 5, ci = 6, cmax = 7, cstateout = 8, cstatein = 9,
                    cpivot = 10, ctail = 11, cd = 12, cnorm = 13, csum = 14, cothers = 15, cout = 16, cpart0 = 17,
                    cpart1 = 18, cpart2 = 19, cpivotdy = 20, cpivotgrad = 21, cpartout = 23, ctargetx = 25,
-                   cfirstcol = 27, cupstream = 29;
+                   cfirstcol = 27, cupstream = 29, crecords = 31;
 // Any FP32 buffer: names the statistics format as the old or new operand of a source-A reconfiguration.
 constexpr uint32_t cfp32 = ccols;
 
@@ -77,7 +77,7 @@ inline void broadcast_column_tile(uint32_t cb, uint32_t index, uint32_t out) {
     tile_regs_release();
 }
 
-#if !defined(BACKWARD) || defined(CROSS_ENTROPY)
+#if !defined(BACKWARD) || defined(CROSS_ENTROPY) || defined(VP_COMBINE)
 // The four steps of combine_lanes (below). Per lane: m (cb_m), i (cb_i), t (cb_t); per row: M, K, T.
 
 // M = max over lanes of m: cb_m -> cmax.
@@ -170,7 +170,8 @@ inline void combined_tail_tile(uint32_t cb_i, uint32_t cb_t) {
 //   cb_t: t, the part's tail: sum of exp(x - m) over the part, except that first maximum.
 // The parts are
 //   - the SFPU lanes of one core, after its pass over its tile columns;
-//   - the cores sharing a row (chunks > 1), one per lane, after the exchange through DRAM.
+//   - the cores sharing a row (chunks > 1), one per lane, after the exchange through DRAM;
+//   - (VP_COMBINE) the vocabulary shards of a row, one per lane, with global column indices.
 // The inputs are consumed (popped).
 //
 // Outputs, one value per row (a column vector), each pushed to its buffer:
@@ -207,7 +208,9 @@ inline void log_normalizer_tile() {
     tile_regs_release();
     cb_pop_front(ctail, 1);
 }
+#endif
 
+#if !defined(BACKWARD) || defined(CROSS_ENTROPY)
 // Pass 1 over this unit's logits, online per lane: the running maximum m, the tail t (sum of exp(x - m) except one
 // first maximum) and the tile column c of that first maximum: cx -> cm, cs, cic. Pops each logits tile.
 inline void lane_statistics_tiles(uint32_t begin, uint32_t end) {
@@ -281,7 +284,8 @@ inline void partial_statistics_tiles() {
     cb_pop_front(ctail, 1);
 }
 
-// The row's statistics from this unit's logits: M (cmax), K (cpivot) and l = log1p(T) (cnorm).
+// The row's statistics from this unit's logits: M (cmax), K (cpivot) and l = log1p(T) (cnorm). VP_STATS stops before
+// the log1p and leaves the raw tail T (ctail) instead, to be combined across shards.
 inline void row_statistics(uint32_t begin, uint32_t end) {
     lane_statistics_tiles(begin, end);  // cm, cs, cic = m, t, c per lane
     absolute_column_tile();             // ci = i
@@ -290,11 +294,13 @@ inline void row_statistics(uint32_t begin, uint32_t end) {
         partial_statistics_tiles();             // cpartout = this core's (M, K, T)
         combine_lanes(cpart0, cpart1, cpart2);  // cmax, cpivot, ctail = M, K, T of the whole row
     }
+#ifndef VP_STATS
     log_normalizer_tile();  // cnorm = l = log1p(T)
+#endif
 }
 #endif
 
-#ifdef CROSS_ENTROPY
+#if defined(CROSS_ENTROPY) || defined(VP_COMBINE)
 // Loss of each row from its target logit x_t (column 0 of ctargetx; zero for an out-of-range target):
 // -y_t with y_t = (x_t - M) - l, computed exactly as the log_softmax output. When the target is
 // the selected maximum, x_t - M = 0 and the loss is l = log1p(T) itself, however small.
@@ -428,7 +434,7 @@ inline void cross_entropy_grad_tiles(uint32_t begin, uint32_t end) {
 }
 
 // One row of the cross-entropy gradient: dx = s * softmax(x), with the writer substituting the target's dx_t.
-// Consumes the row statistics cmax, cpivot, cnorm.
+// Consumes the row statistics cmax, cnorm (and cpivot, which the vocabulary-parallel backward does not have).
 inline void cross_entropy_grad_row(uint32_t begin, uint32_t end) {
     cross_entropy_scale_tile();        // cd = q
     broadcast_column_tile(cd, 0, cs);  // cs = q in every column
@@ -436,7 +442,9 @@ inline void cross_entropy_grad_row(uint32_t begin, uint32_t end) {
     target_gradient_tile();              // cpivotgrad = dx_t
     broadcast_column_tile(cmax, 0, cm);  // cm = M in every column
     cb_pop_front(cmax, 1);
+#ifndef VP_BACKWARD
     cb_pop_front(cpivot, 1);
+#endif
     cb_pop_front(cnorm, 1);
     cross_entropy_grad_tiles(begin, end);  // cout = dx
     cb_pop_front(cm, 1);
@@ -444,7 +452,63 @@ inline void cross_entropy_grad_row(uint32_t begin, uint32_t end) {
 }
 #endif
 
-#if !defined(BACKWARD) && !defined(CROSS_ENTROPY)
+#ifdef VP_STATS
+// This shard's record of a row: (m, first_v + k, tail without x[k], x_t), each a column vector, for the writer:
+// cmax, cpivot, ctail, ctargetx -> crecords. Pops the four.
+inline void vocab_parallel_record_tiles(uint32_t first_v_bits) {
+    cb_wait_front(cmax, 1);
+    cb_wait_front(cpivot, 1);
+    cb_wait_front(ctail, 1);
+    cb_wait_front(ctargetx, 1);
+    tile_regs_acquire();
+    copy_init(cmax);
+    copy_tile(cmax, 0, 0);  // dst0 = m, this shard's maximum
+    copy_init(cpivot);
+    copy_tile(cpivot, 0, 1);  // dst1 = k, its first-maximum column in the shard
+    binop_with_scalar_tile_init();
+    add_unary_tile(1, first_v_bits);  // dst1 = first_v + k, the global column
+    copy_init(ctail);
+    copy_tile(ctail, 0, 2);  // dst2 = the shard's tail without x[k]
+    copy_init(ctargetx);
+    copy_tile(ctargetx, 0, 3);  // dst3 = x_t, or 0 when the target is on another shard
+    tile_regs_commit();
+    tile_regs_wait();
+    pack_n_tiles(crecords, 4);  // crecords = this shard's record
+    tile_regs_release();
+    cb_pop_front(cmax, 1);
+    cb_pop_front(cpivot, 1);
+    cb_pop_front(ctail, 1);
+    cb_pop_front(ctargetx, 1);
+}
+#endif
+
+#ifdef VP_COMBINE
+// The row state (M, l) for the vocabulary-parallel backward: cmax, cnorm -> crecords.
+inline void vocab_parallel_row_state_tiles() {
+    cb_wait_front(cmax, 1);
+    cb_wait_front(cnorm, 1);
+    tile_regs_acquire();
+    copy_init(cmax);
+    copy_tile(cmax, 0, 0);  // dst0 = M
+    copy_init(cnorm);
+    copy_tile(cnorm, 0, 1);  // dst1 = l
+    tile_regs_commit();
+    tile_regs_wait();
+    pack_n_tiles(crecords, 2);  // crecords = row state (M, l)
+    tile_regs_release();
+}
+
+// The shards of a row as lanes: one global first maximum K (lowest shard on ties), the tail without exactly x[K],
+// l = log1p(tail). Hands the row state (M, l) to the writer, then the loss -((x_t - M) - l).
+inline void vocab_parallel_combine_row() {
+    combine_lanes(cpart0, cpart1, cpart2);  // cmax, cpivot, ctail = M, K, T over every shard
+    log_normalizer_tile();                  // cnorm = l = log1p(T)
+    vocab_parallel_row_state_tiles();       // crecords = (M, l)
+    cross_entropy_loss_tile();              // cout = loss
+}
+#endif
+
+#if !defined(BACKWARD) && !defined(CROSS_ENTROPY) && !defined(VP_COMBINE)
 // The row state (M, K, l) for the backward: cmax, cpivot, cnorm -> cstateout.
 inline void log_softmax_row_state_tiles() {
     cb_wait_front(cmax, 1);
@@ -686,14 +750,23 @@ inline void log_softmax_backward_row(uint32_t begin, uint32_t end) {
 
 void kernel_main() {
     const uint32_t count = get_arg_val<uint32_t>(0), begin = get_arg_val<uint32_t>(1), end = get_arg_val<uint32_t>(2);
+    [[maybe_unused]] const uint32_t first_v_bits = get_arg_val<uint32_t>(3);
     compute_kernel_hw_startup(cx, cx, cout);
     reconfig_data_format_srca(cx, cfp32);  // Steps start with source A set for the FP32 statistics.
     cb_wait_front(ccols, 1);
-#if defined(CROSS_ENTROPY) && !defined(BACKWARD)
+#if (defined(CROSS_ENTROPY) && !defined(BACKWARD)) || defined(VP_COMBINE)
     cb_wait_front(cfirstcol, 1);
 #endif
     for (uint32_t row = 0; row < count; ++row) {
-#if defined(CROSS_ENTROPY)
+#if defined(VP_COMBINE)
+        vocab_parallel_combine_row();
+#elif defined(VP_STATS)
+        row_statistics(begin, end);                 // cmax, cpivot, ctail = M, K, T of this shard
+        vocab_parallel_record_tiles(first_v_bits);  // crecords = this shard's record
+#elif defined(VP_BACKWARD)
+        // The row state (M, l) of the combined statistics, in cmax and cnorm from the reader.
+        cross_entropy_grad_row(begin, end);
+#elif defined(CROSS_ENTROPY)
         row_statistics(begin, end);  // cmax, cpivot, cnorm = M, K, l
 #ifndef BACKWARD
         cross_entropy_loss_tile();  // cout = loss
@@ -706,7 +779,7 @@ void kernel_main() {
         log_softmax_backward_row(begin, end);
 #endif
     }
-#if defined(CROSS_ENTROPY) && !defined(BACKWARD)
+#if (defined(CROSS_ENTROPY) && !defined(BACKWARD)) || defined(VP_COMBINE)
     cb_pop_front(cfirstcol, 1);
 #endif
     cb_pop_front(ccols, 1);

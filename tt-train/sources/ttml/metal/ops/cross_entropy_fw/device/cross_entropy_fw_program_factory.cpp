@@ -16,7 +16,7 @@ tt::tt_metal::WorkloadDescriptor CrossEntropyForwardProgramFactory::create_workl
     const auto& input = tensor_args.input;
     const auto& target = tensor_args.target;
     constexpr auto kind = row_softmax::Kind::CrossEntropyForward;
-    auto scratch = row_softmax::make_scratch(input);
+    auto scratch = row_softmax::make_scratch(input, kind);
     // One row-major target page per batch-channel slice, one target per physical row of each tile row.
     const row_softmax::Options options{
         .kind = kind,

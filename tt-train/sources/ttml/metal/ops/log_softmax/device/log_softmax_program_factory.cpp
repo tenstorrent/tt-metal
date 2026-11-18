@@ -16,7 +16,7 @@ tt::tt_metal::WorkloadDescriptor LogSoftmaxProgramFactory::create_workload_descr
     const bool backward = operation_attributes.backward;
     const auto& input = tensor_args.input;
     const auto kind = backward ? row_softmax::Kind::LogSoftmaxBackward : row_softmax::Kind::LogSoftmaxForward;
-    auto scratch = row_softmax::make_scratch(input);
+    auto scratch = row_softmax::make_scratch(input, kind);
     const row_softmax::Options options{
         .kind = kind, .upstream_dtype = backward ? tensor_args.upstream->dtype() : input.dtype()};
     const row_softmax::Buffers buffers{
