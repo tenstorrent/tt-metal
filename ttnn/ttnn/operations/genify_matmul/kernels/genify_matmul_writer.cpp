@@ -33,6 +33,8 @@
 // left L1. PERF FOCUS 1 write stream 60 -> 44 us (17.8 MB from 110 cores; all-NoC1 ~300 GB/s, split ~410).
 //   wr_ds_round   one R4 A round (reserve + round + push), per K-block
 //   wr_a_inject / wr_a_receive   one R1b A K-walk (injector: reads + multicasts; receiver: acks + waits)
+//   wr_a_barrier / wr_a_send     (Refinement 15) the fixed injector's per-K-block read barrier / multicast (incl. acks)
+//   wr_a_rotate   one R1b A K-walk under rotating injectors (sends on this core's turns, receives otherwise)
 #include <cstdint>
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
@@ -43,6 +45,19 @@
 #include "ttnn/ttnn/operations/genify_matmul/kernels/tail_split.hpp"
 #include "ttnn/ttnn/operations/genify_matmul/kernels/out_chunks.hpp"
 #include "ttnn/ttnn/operations/genify_matmul/kernels/a_segments.hpp"
+
+// R1b bank-local stream (Refinement 15): output column c of a core's region is col0 + c * GM_OUT_STRIDE (the B
+// units' bank stride, in output columns); 1 = adjacent columns.
+#ifndef GM_OUT_STRIDE
+#define GM_OUT_STRIDE 1
+#endif
+// R1b rotating injectors (Refinement 15, host ACT_STREAM_INJECTORS): the `act` channel's senders take turns, A
+// K-block round r is read and multicast by injector r % GM_ACT_INJECTORS. An injector issues the read of its NEXT
+// turn (round r + injectors) right after sending round r, so the injectors' A reads overlap each other's multicasts
+// and the stream runs at the multicast rate instead of the read + multicast rate of one core. 1 = one fixed injector.
+#ifndef GM_ACT_INJECTORS
+#define GM_ACT_INJECTORS 1
+#endif
 
 namespace {
 // Valid extent of a block starting at `start` inside a region of `valid` tiles (0 when the block lies
@@ -127,6 +142,10 @@ void kernel_main() {
     static_assert(mc_act.active == (act_mode != 0));
     static_assert(!act_stream || block_batches == 1);
     static_assert(act_ahead >= 1 && (!act_stream || act_ahead <= act_cb_blocks));
+    constexpr uint32_t act_injectors = GM_ACT_INJECTORS;
+    // An injector reserves through its next turn r + injectors while compute may still hold round r (packing its
+    // output into a CB this RISC has not drained yet), so the ring must hold injectors + 1 K-blocks.
+    static_assert(act_injectors == 1 || (act_stream && !act_resident && act_injectors < act_cb_blocks));
     Noc noc;
     [[maybe_unused]] auto a_sender = mc_act.optional_sender(noc);
     [[maybe_unused]] auto a_receiver = mc_act.optional_receiver(noc);
@@ -135,6 +154,62 @@ void kernel_main() {
     constexpr uint32_t act_block_tiles = block_m_tiles * block_k_tiles;
     [[maybe_unused]] constexpr uint32_t act_block_bytes = act_block_tiles * a_tile_bytes;
     [[maybe_unused]] uint32_t act_seq = 0;  // R1b: A K-blocks pushed so far (the write pointer's ring slot)
+    // R1b: A K-block j of the block rows starting at `blk_r0` (`blk_rows` valid) into the ring slot at `l1_slot`.
+    [[maybe_unused]] auto read_act_kblock = [&](uint32_t l1_slot, uint32_t blk_r0, uint32_t blk_rows, uint32_t j) {
+        const uint32_t k_valid = (j == num_k_blocks - 1) ? last_block_k_tiles : block_k_tiles;
+        if constexpr (a_segments::num > 1) {
+            const a_segments::Pos at = a_segments::locate(a_tab, j * block_k_tiles);
+            for (uint32_t r = 0; r < blk_rows; ++r) {
+                a_segments::read_row(
+                    a_args,
+                    a_tab,
+                    a_page_bytes,
+                    a_tile_bytes,
+                    l1_slot + r * block_k_tiles * a_tile_bytes,
+                    row0 + blk_r0 + r,
+                    at,
+                    k_valid);
+            }
+        } else {
+            for (uint32_t r = 0; r < blk_rows; ++r) {
+                const uint32_t page = (row0 + blk_r0 + r) * tensor_k_tiles + j * block_k_tiles;
+                uint32_t l1 = l1_slot + r * block_k_tiles * a_tile_bytes;
+                for (uint32_t k = 0; k < k_valid; ++k) {
+#ifndef GM_ABLATE_A
+                    noc_async_read(a_acc.get_noc_addr(page + k), l1, a_tile_bytes);
+#endif
+                    l1 += a_tile_bytes;
+                }
+            }
+        }
+    };
+    // Rotating injectors: the ring base (the CB is exactly act_cb_blocks K-blocks) and this core's pending turn.
+    [[maybe_unused]] const uint32_t act_ring_base = get_write_ptr(cb_act_tiles);
+    [[maybe_unused]] const uint32_t act_rounds = nb_b * nb_m * nb_n * num_k_blocks;
+    // Round r's block rows: rounds walk (mb, nbk, kb) with kb fastest (nb_b = block_batches = 1 under R1b).
+    [[maybe_unused]] auto round_rows = [&](uint32_t r, uint32_t& blk_r0, uint32_t& blk_rows) {
+        blk_r0 = ((r / num_k_blocks) / nb_n % nb_m) * block_m_tiles;
+        blk_rows = block_extent(rows_valid, blk_r0, block_m_tiles);
+    };
+    // Issue this core's read for its turn `r` (r >= act_seq): reserve through r's slot, read under trid 1.
+    [[maybe_unused]] auto issue_turn = [&](uint32_t r) {
+        cb_reserve_back(cb_act_tiles, (r - act_seq + 1) * act_block_tiles);
+        uint32_t blk_r0, blk_rows;
+        round_rows(r, blk_r0, blk_rows);
+        dataflow_kernel_lib::set_read_trid(noc, 1);
+        read_act_kblock(act_ring_base + (r % act_cb_blocks) * act_block_bytes, blk_r0, blk_rows, r % num_k_blocks);
+        dataflow_kernel_lib::set_read_trid(noc, 0);
+    };
+    if constexpr (act_stream && act_injectors > 1) {
+        if (a_sender) {
+            for (uint32_t r = 0; r < act_injectors && r < act_rounds; ++r) {
+                if (mc_act.should_send(r)) {
+                    issue_turn(r);  // this injector's first turn
+                    break;
+                }
+            }
+        }
+    }
     if constexpr (ds_act && !ds_worker) {
         genify_ds::send_only(
             ds_blocks, mc_act, a_sender, get_write_ptr(cb_act_tiles), act_cb_blocks, nb_m, num_k_blocks);
@@ -169,12 +244,36 @@ void kernel_main() {
             for (uint32_t nbk = 0; nbk < nb_n; ++nbk) {
                 const uint32_t blk_c0 = nbk * out_block_n_tiles;
                 const uint32_t blk_cols = block_extent(cols_valid, blk_c0, out_block_n_tiles);
-                const out_chunks::Col blk_col = out_chunks::locate(out_tab, col0 + blk_c0);
+                const out_chunks::Col blk_col = out_chunks::locate(out_tab, col0 + blk_c0 * GM_OUT_STRIDE);
                 if constexpr (act_stream) {
                     // R1b: this block's K-walk of A (once per M-block when A is resident across N-blocks).
                     // Every core walks the same nominal sequence, so the cb_act_tiles write pointers are in
                     // lockstep and the injector multicasts its own freshly read slot to the same address.
-                    if (!act_resident || nbk == 0) {
+                    if constexpr (act_injectors > 1) {
+                        MaybeDeviceZoneScope("wr_a_rotate");
+                        for (uint32_t kb = 0; kb < num_k_blocks; ++kb) {
+                            const uint32_t r = act_seq;
+                            if (a_sender && mc_act.should_send(r)) {
+                                dataflow_kernel_lib::async_read_barrier_with_trid(noc, 1);  // issued last turn
+                                const uint32_t slot = act_ring_base + (r % act_cb_blocks) * act_block_bytes;
+#ifdef GM_ABLATE_A_SEND
+                                a_sender->send(slot, slot, 32);
+#else
+                                a_sender->send(slot, slot, act_block_bytes);
+#endif
+                                cb_push_back(cb_act_tiles, act_block_tiles);
+                                ++act_seq;
+                                if (r + act_injectors < act_rounds) {
+                                    issue_turn(r + act_injectors);  // the next turn's read overlaps others' sends
+                                }
+                            } else {
+                                cb_reserve_back(cb_act_tiles, act_block_tiles);
+                                a_receiver->receive(r);
+                                cb_push_back(cb_act_tiles, act_block_tiles);
+                                ++act_seq;
+                            }
+                        }
+                    } else if (!act_resident || nbk == 0) {
                         if (a_sender) {
                             MaybeDeviceZoneScope("wr_a_inject");
                             // Injector: K-block j lands (j - kb) slots past the write pointer (the CB is
@@ -207,7 +306,9 @@ void kernel_main() {
                                         const uint32_t page = (row0 + blk_r0 + r) * tensor_k_tiles + j * block_k_tiles;
                                         uint32_t l1 = l1_slot + r * block_k_tiles * a_tile_bytes;
                                         for (uint32_t k = 0; k < k_valid; ++k) {
+#ifndef GM_ABLATE_A
                                             noc_async_read(a_acc.get_noc_addr(page + k), l1, a_tile_bytes);
+#endif
                                             l1 += a_tile_bytes;
                                         }
                                     }
@@ -220,9 +321,19 @@ void kernel_main() {
                                 if (kb + act_ahead - 1 < num_k_blocks) {
                                     issue(kb + act_ahead - 1);
                                 }
-                                dataflow_kernel_lib::async_read_barrier_with_trid(noc, kb % act_ahead + 1);
+                                {
+                                    MaybeDeviceZoneScope("wr_a_barrier");
+                                    dataflow_kernel_lib::async_read_barrier_with_trid(noc, kb % act_ahead + 1);
+                                }
                                 const uint32_t slot = get_write_ptr(cb_act_tiles);
-                                a_sender->send(slot, slot, act_block_bytes);
+                                {
+                                    MaybeDeviceZoneScope("wr_a_send");
+#ifdef GM_ABLATE_A_SEND
+                                    a_sender->send(slot, slot, 32);
+#else
+                                    a_sender->send(slot, slot, act_block_bytes);
+#endif
+                                }
                                 cb_push_back(cb_act_tiles, act_block_tiles);
                                 ++issued_from;
                                 ++act_seq;
@@ -277,7 +388,8 @@ void kernel_main() {
                                     batch * tensor_m_tiles + row0 + blk_r0 + blk_row,
                                     blk_col,
                                     blk_cols,
-                                    [&](uint32_t n) { return !tail || !tail_split::reader_owns(n, blk_cols); });
+                                    [&](uint32_t n) { return !tail || !tail_split::reader_owns(n, blk_cols); },
+                                    GM_OUT_STRIDE);
                             }
                             noc_async_writes_flushed();  // slot is free once the writes left L1
                         }

@@ -216,8 +216,47 @@ ACT_STREAM_AHEAD = 2
 ACT_STREAM_INJECTOR_COST = 18
 # R1b injector: index of the broadcasting core in the split's row-wise core order.
 ACT_STREAM_INJECTOR = 0
+# R1b rotating injectors (Refinement 15): A K-block round r is read and multicast by injector r % n, each injector
+# reading its next turn while the others multicast (one injector reads + multicasts serially: Qwen3.8 M = 128 down
+# streamed its 1.1 MB A in 38 us). n cores evenly spaced in the split's row-wise order; clamped below the act ring
+# depth (an injector reserves through its next turn); one-rectangle splits only (the helper's rotating senders need
+# a rectangular receiver group: the bank-local split, a flat split of whole rows). Measured 1 / 2 / 3 on the R15 set:
+# M = 128 down 46.1 / 41.7 / 41.3 us, FLUX attn-out 113 / 109 / 107, context_embedder 260 / 253 / 251, the rest flat.
+# 1 = the single fixed injector (ACT_STREAM_INJECTOR).
+ACT_STREAM_INJECTORS = 3
 # R1b NoC: the writer RISC's (BRISC, WriterConfigDescriptor).
 ACT_STREAM_NOC = ttnn.NOC.NOC_1
+# R1b bank-local B stream (Refinement 15). An interleaved DRAM page p lives in bank p % banks at bank offset
+# (p // banks) * page, so the B columns n, n + banks, n + 2 * banks, ... of one K row are consecutive pages of ONE
+# bank. Small-M weight streaming was bound by the B stream's per-tile reads (Qwen3.8 M = 128 gate_up: 576 B bfp4
+# pages, 25 MB at ~300 GB/s, the slowest cores 3x behind the fastest), and its flat 1-D split is two rectangles,
+# so the A broadcast went out twice. True: the split candidate `bank` -- the whole compute grid (one multicast
+# rectangle), each core owning a run of bank-strided units (B columns; swiglu: (gate, up) pairs) of one bank
+# class, read as ONE contiguous bank run per K row (two under swiglu) and placed by BANK_LOCAL_PLACEMENT; the
+# output columns follow the same stride. The split cost model ranks it beside the flat R1b split. False: off.
+ACT_STREAM_BANK_LOCAL = True
+# Core -> bank-class assignment of the `bank` split (bank_layout). "row" (measured best): a bank's units go to the
+# cores of its home row -- the row of its optimal NoC0 reader (get_optimal_dram_bank_to_logical_worker_assignment,
+# R4's workers) -- so its read responses travel one grid row and never turn into a column (Qwen3.8 M = 128 down,
+# B alone: 34 us vs ~95 us when a bank's cores spread over rows: on NoC0 a core's B rate fell 3-4x with the rows
+# its responses crossed). "near": each class takes, in turn, its nearest free core (Manhattan); "spread": row-major
+# cores dealt round-robin over the classes.
+BANK_LOCAL_PLACEMENT = "row"
+# Grid rows of the bank-local split (its rectangle is the first rows): None = the whole grid (with "row" placement
+# every row either homes a bank or fills in for the most loaded one); an int pins a band of the first rows.
+BANK_LOCAL_ROWS = None
+# swiglu under the bank-local split. A (gate, up) pair's two tiles live in banks 2s and 2s + 1, whose home rows
+# differ, so half of every core's bytes cross grid rows: Qwen3.8 M = 128 gate_up B alone 76 us (home rows only) /
+# 100 us (filled) vs 93 us flat, the whole op 101 / 111 vs 109 us; FLUX FF1 667 vs 631 us. False: swiglu keeps the
+# flat R1b split.
+BANK_LOCAL_SWIGLU = False
+# "row" placement: True = every core of no home row joins the most loaded class (by units per core), nearest its
+# homes; False = home rows only (the other cores idle).
+BANK_LOCAL_ROW_FILL = True
+# Split-ranking prices of the bank-local split: its B stream's DRAM rate (bank runs: ~460 GB/s at 1.35 GHz) and
+# its A injector (one rectangle: each A byte is multicast once) in streamed-byte equivalents (cf. ACT_STREAM_*).
+BANK_LOCAL_DRAM_BYTES_PER_CYCLE = 330
+BANK_LOCAL_INJECTOR_COST = 9
 # N quantum on a 1-D N split (Refinement 9). Q_N_MAX makes a 4-wide subblock exist when a core owns one
 # tile row; when it owns all rows (grid_m == 1) a subblock of height h (the largest power of two <= 4
 # dividing core_m) needs only q_n = Q_N_MAX / h columns. FLUX FF1 256x6144x18432 swiglu: core_n 8 -> 6
@@ -280,6 +319,11 @@ SHARDED_B_ROUND_BYTES = 32 * 1024
 BS_B_MCAST_MIN_SAVED_BYTES = 3 * 1024 * 1024
 # own_kb sentinel for every regime without a resident own K-slice (R1 / R1a / R4).
 NO_OWN_KB = 0xFFFFFFFF
+# Perf tooling (Refinement 15, /perf-measure ablations): defines appended to every R1-family kernel. Payload stubs
+# that keep every handshake, barrier and trip count: SKIP_COMPUTE + CKL_ELTWISE_CHAIN_SKIP_COMPUTE (the math),
+# GM_ABLATE_A (the R1b injector's A reads), GM_ABLATE_A_SEND (the R1b multicast payload, 32 B per round),
+# GM_ABLATE_B (the reader's B reads), '+'-separated (a GENIFY_MATMUL_KNOBS value). Empty = production.
+ABLATE_DEFINES = ""
 
 
 def _cdiv(a, b):
@@ -322,6 +366,11 @@ class Geometry:
     a_in_l1: bool = False  # operand A / B is an L1 tensor (split ranking: L1_READ_COST)
     b_in_l1: bool = False
     fidelity_phases: int = 4  # math fidelity passes per tile-K (split_cost); LoFi 1 .. HiFi4 4
+    # Refinement 15: DRAM banks of an interleaved DRAM B whose aligned page is exactly its tile (consecutive pages
+    # of a bank are contiguous: the bank-local stream can read bank runs), else 0; output tensors (chunks).
+    b_banks: int = 0
+    out_chunks: int = 1
+    bank_home: tuple = ()  # per DRAM bank: its optimal NoC0 reader (x, y) (bank-local placement)
 
     @property
     def swiglu(self):
@@ -345,7 +394,7 @@ class GridChoice:
     core_m_tiles: int
     core_n_tiles: int
     q_n: int
-    placement: str  # "rect" (x=n, y=m), "rect_t" (x=m, y=n) or "flat" (row-wise list)
+    placement: str  # "rect" (x=n, y=m), "rect_t" (x=m, y=n), "flat" (row-wise list) or "bank" (Refinement 15)
 
 
 @dataclass(frozen=True)
@@ -459,7 +508,28 @@ def _geometry(a, b, out, fp32_dest_acc_en, epilogue="none", row=None, residual=N
         a_in_l1=a.memory_config().buffer_type == ttnn.BufferType.L1,
         b_in_l1=b.memory_config().buffer_type == ttnn.BufferType.L1,
         fidelity_phases=_FIDELITY_PHASES.get(math_fidelity, 4),
+        b_banks=_bank_run_banks(b),
+        out_chunks=len(outs),
+        bank_home=_bank_homes(b),
     )
+
+
+def _bank_homes(t):
+    """Per DRAM bank, its optimal NoC0 reader's logical (x, y) (bank-local placement), when B streams bank runs."""
+    if not _bank_run_banks(t):
+        return ()
+    opt = ttnn.get_optimal_dram_bank_to_logical_worker_assignment(t.device(), ttnn.NOC.NOC_0)
+    return tuple((c.x, c.y) for c in opt)
+
+
+def _bank_run_banks(t):
+    """Banks of an interleaved DRAM tensor whose aligned page equals its tile (bank runs are contiguous), else 0."""
+    mc = t.memory_config()
+    if mc.buffer_type != ttnn.BufferType.DRAM or mc.memory_layout != ttnn.TensorMemoryLayout.INTERLEAVED:
+        return 0
+    if t.layout != ttnn.TILE_LAYOUT or t.buffer_aligned_page_size() != ttnn.tile_size(t.dtype):
+        return 0
+    return ttnn.get_memory_view(t.device(), ttnn.BufferType.DRAM).num_banks
 
 
 # ---------------------------------------------------------------------------
@@ -511,7 +581,125 @@ def grid_candidates(geom: Geometry, gx: int, gy: int):
                         continue
                     grid = GridChoice(ub, um, un, core_b, core_m, core_n, q, placement)
                     seen.setdefault((ub, um, un, core_b, core_m, core_n, q), grid)
-    return list(seen.values())
+    return list(seen.values()) + bank_candidates(geom, gx, gy)
+
+
+def bank_eligible(geom: Geometry):
+    """ACT_STREAM_BANK_LOCAL: single B and one output tensor, B interleaved in DRAM with contiguous bank runs;
+    swiglu only under BANK_LOCAL_SWIGLU."""
+    return (
+        ACT_STREAM_BANK_LOCAL
+        and (BANK_LOCAL_SWIGLU or not geom.swiglu)
+        and geom.b_banks > 0
+        and geom.out_chunks == 1
+        and geom.tensor_batches == 1
+        and geom.weight_batch_stride == 0
+    )
+
+
+def bank_classes(geom: Geometry):
+    """(unit, U, sizes): the bank-local stream's units (one B column, or a swiglu (gate, up) pair of 2) fall in U
+    = banks / unit classes -- unit i is in class i % U, so class u's units are U apart and, for unit = 1, all in
+    bank u (unit = 2: gates in bank 2u, ups in 2u + 1) whenever the row length is a multiple of the banks."""
+    unit = 2 if geom.swiglu else 1
+    U = geom.b_banks // unit
+    n_units = geom.tensor_n_tiles // unit
+    return unit, U, [len(range(u, n_units, U)) for u in range(U)]
+
+
+def _even_runs(n, cores):
+    """n units cut into `cores` contiguous runs, as even as possible (the longer runs first): [(t0, w)]."""
+    out, t = [], 0
+    for i in range(cores):
+        w = n // cores + (1 if i < n % cores else 0)
+        out.append((t, w))
+        t += w
+    return out
+
+
+def bank_layout(geom: Geometry, gx: int, rows: int, placement=None):
+    """The bank-local split of the first `rows` grid rows: {(x, y): (class u, first class unit t0, units w)} for
+    every core of the rectangle (w = 0: an idle core), by BANK_LOCAL_PLACEMENT; None when infeasible.
+      "row"    each class owns the cores of its banks' home rows (the row of the bank's optimal NoC0 reader, so
+               the bank's responses never turn into a grid column); a row homing two classes is split by x.
+               Cores outside every home row idle. A class's units go to its cores in even runs, nearest first.
+      "near"   each class takes, in turn, its nearest free core (Manhattan to its homes),
+               quotas tracking the class sizes.
+      "spread" row-major cores dealt round-robin over the classes. Both work min(cores, units) cores."""
+    placement = placement or BANK_LOCAL_PLACEMENT
+    unit, U, sizes = bank_classes(geom)
+    cores = [(x, y) for y in range(rows) for x in range(gx)]
+    homes = [[geom.bank_home[unit * u + i] for i in range(unit)] for u in range(U)]
+    local = geom.tensor_n_tiles % geom.b_banks == 0  # a class's units stay in its banks on every K row
+    if placement == "row" and local:
+        members = {u: [] for u in range(U)}
+        for x, y in cores:
+            cands = [(abs(x - hx), u) for u in range(U) for hx, hy in homes[u] if hy == y]
+            if cands:
+                members[min(cands)[1]].append((x, y))
+        if any(not members[u] for u in range(U) if sizes[u]):
+            return None
+        # BANK_LOCAL_ROW_FILL: the cores of no home row join, one at a time, the class whose cores carry the most
+        # units (banks sharing a home row would otherwise stream on half the cores), nearest to its homes first.
+        spare = [xy for xy in cores if all(xy not in m for m in members.values())] if BANK_LOCAL_ROW_FILL else []
+        for _ in range(len(spare)):
+            u = max(range(U), key=lambda u: (sizes[u] / len(members[u]) if members[u] else 0, -u))
+            xy = min(spare, key=lambda c: (min(abs(c[0] - hx) + abs(c[1] - hy) for hx, hy in homes[u]), c[1], c[0]))
+            spare.remove(xy)
+            members[u].append(xy)
+        out = {xy: (0, 0, 0) for xy in cores}
+        for u in range(U):
+            near = sorted(members[u], key=lambda c: (min(abs(c[0] - hx) + abs(c[1] - hy) for hx, hy in homes[u]), c))
+            for xy, (t0, w) in zip(near, _even_runs(sizes[u], len(near))):
+                out[xy] = (u, t0, w)
+        return out
+    working = min(len(cores), sum(sizes))  # more cores than units: the rest idle
+    quota = [0] * U  # each core goes to the class whose busiest core is busiest
+    for _ in range(working):
+        u = max(
+            (u for u in range(U) if quota[u] < sizes[u]),
+            key=lambda u: (_cdiv(sizes[u], quota[u]) if quota[u] else 1 << 30, -u),
+        )
+        quota[u] += 1
+    runs = {u: [(u, t0, w) for t0, w in _even_runs(sizes[u], quota[u])] for u in range(U)}
+    out = {}
+    if placement == "near" and local:
+        free = list(cores)
+        while any(runs.values()):
+            for u in range(U):
+                if runs[u]:
+                    xy = min(
+                        free, key=lambda c: (min(abs(c[0] - hx) + abs(c[1] - hy) for hx, hy in homes[u]), c[1], c[0])
+                    )
+                    free.remove(xy)
+                    out[xy] = runs[u].pop(0)
+    else:
+        order = [runs[u][i] for i in range(max(quota)) for u in range(U) if i < quota[u]]
+        out = dict(zip(cores, order))
+    return {xy: out.get(xy, (0, 0, 0)) for xy in cores}
+
+
+def bank_candidates(geom: Geometry, gx: int, gy: int):
+    """R1b bank-local splits: the first `rows` grid rows (one multicast rectangle), every working core one bank-class
+    run (bank_layout); the nominal per-core width is the longest run."""
+    if not bank_eligible(geom):
+        return []
+    unit, _, _ = bank_classes(geom)
+    out = []
+    for rows in [gy if BANK_LOCAL_ROWS is None else BANK_LOCAL_ROWS]:
+        layout = bank_layout(geom, gx, rows)
+        if layout is None or gx * rows < 2:
+            continue
+        core_n = unit * max(w for _, _, w in layout.values())
+        out.append(GridChoice(1, 1, gx * rows, 1, geom.tensor_m_tiles, core_n, unit, "bank"))
+    return out
+
+
+def bank_core_columns(geom: Geometry, grid: GridChoice, gx: int):
+    """{(x, y): (col0, cols_valid)} in B columns for a `bank` split (bank_layout): units U * unit columns apart."""
+    unit, U, _ = bank_classes(geom)
+    layout = bank_layout(geom, gx, grid.grid_n // gx)
+    return {xy: (unit * (u + U * t0), unit * w) for xy, (u, t0, w) in layout.items()}
 
 
 def uses_operand_mcast(geom: Geometry, grid: GridChoice, blk: "Blocking"):
@@ -640,6 +828,10 @@ def read_traffic(geom: Geometry, grid: GridChoice, blk: "Blocking"):
     if mode == 1:
         # R1a: one A read per grid row-line, one B read per column-line.
         return a_per_core * grid.grid_m + b_per_core * grid.grid_n
+    if mode == 2 and grid.placement == "bank":
+        # R1b bank-local: B exactly once (no nominal padding), A through the one-rectangle injector.
+        b_total = geom.tensor_k_tiles * geom.tensor_n_tiles * geom.b_tile_bytes
+        return max(a_per_core + b_total, a_per_core * BANK_LOCAL_INJECTOR_COST)
     if mode == 2:
         # R1b: A read once (by the injector), B per core; the single injector's throughput caps it.
         return max(a_per_core + b_per_core * grid.grid_n, a_per_core * ACT_STREAM_INJECTOR_COST)
@@ -669,7 +861,8 @@ def split_cost_terms(geom: Geometry, grid: GridChoice, blk: "Blocking"):
     """(K-walk, DRAM stream, busiest core's reads, busiest core's writes) in cycles."""
     walk = padded_work(grid, blk) * geom.tensor_k_tiles * tile_k_cycles(geom, blk.sb_h, blk.sb_w)
     out_bytes = geom.tensor_batches * geom.tensor_m_tiles * geom.out_n_tiles * geom.o_tile_bytes
-    dram = (read_traffic(geom, grid, blk) + out_bytes) / DRAM_BYTES_PER_CYCLE
+    rate = BANK_LOCAL_DRAM_BYTES_PER_CYCLE if grid.placement == "bank" else DRAM_BYTES_PER_CYCLE
+    dram = (read_traffic(geom, grid, blk) + out_bytes) / rate
     # The busiest reading core: R1 reads its own A (once per N-block) and B (once per M-block); an R1a line
     # injector reads + multicasts one of them for its line; R1b's injector is priced inside read_traffic.
     nb_m = 1 if blk.weight_resident else _cdiv(grid.core_m_tiles, blk.block_m_tiles)
@@ -699,6 +892,8 @@ def choose_split(geom: Geometry, gx: int, gy: int, budget: int):
                 blk = choose_blocking(geom, grid, budget)
             except RuntimeError:
                 continue
+            if grid.placement == "bank" and operand_mode(geom, grid, blk) != 2:
+                continue  # the bank-local column map exists only on the R1b reader / writer
             key = (
                 split_cost(geom, grid, blk),
                 read_traffic(geom, grid, blk),
@@ -719,6 +914,8 @@ def choose_split(geom: Geometry, gx: int, gy: int, budget: int):
             blk = choose_blocking(geom, grid, budget)
         except RuntimeError:
             continue
+        if grid.placement == "bank" and operand_mode(geom, grid, blk) != 2:
+            continue
         key = (read_traffic(geom, grid, blk), grid_work(grid), grid.grid_b * grid.grid_m * grid.grid_n)
         if best_key is None or key < best_key:
             best_key, best = key, (grid, blk)
@@ -735,6 +932,8 @@ def _logical_cores(grid: GridChoice, gx: int):
             for j in range(grid.grid_n):
                 if grid.placement == "rect":
                     x, y = j, i
+                elif grid.placement == "bank":
+                    x, y = j % gx, j // gx
                 elif grid.placement == "rect_t":
                     x, y = i, j
                 else:
@@ -743,6 +942,8 @@ def _logical_cores(grid: GridChoice, gx: int):
                 out.append((b, i, j, ttnn.CoreCoord(x, y)))
     if grid.placement == "rect":
         ranges = [ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid.grid_n - 1, grid.grid_m - 1))]
+    elif grid.placement == "bank":
+        ranges = [ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(gx - 1, grid.grid_n // gx - 1))]
     elif grid.placement == "rect_t":
         ranges = [ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid.grid_m - 1, grid.grid_n - 1))]
     else:
@@ -917,7 +1118,7 @@ def _choose_blocking(geom: Geometry, grid: GridChoice, budget: int, depths=None)
             if _footprint(geom, cm, cn, bk, partials=True) <= budget:
                 return _make_blocking(geom, block_b, cm, cn, bk)
         whole = _make_blocking(geom, block_b, cm, cn, tk)
-        resident = _resident_split(geom, grid)
+        resident = None if grid.placement == "bank" else _resident_split(geom, grid)
         # The split must not cost the R1a / R1b operand multicast: a smaller K-block can drop under
         # MCAST_MIN_KBLOCK_BYTES (2048x256x512 bf8b, 16-bit DEST: 52 -> 26 KB A rounds, +11% as plain R1).
         if resident is not None and operand_mode(geom, grid, resident) == operand_mode(geom, grid, whole):
@@ -1243,13 +1444,17 @@ def create_program_descriptor(
     out_div = 2 if geom.swiglu else 1  # B columns per output column
     reader_roles = {}  # core -> (a_sends, b_sends)
     reader_args = {}  # core -> reader runtime args (placed per role group below)
+    bank_cols = bank_core_columns(geom, grid, gx) if grid.placement == "bank" else None
     for bi, i, j, core in cores:
         b0 = bi * grid.core_batches
         batches_valid = min(grid.core_batches, geom.tensor_batches - b0)
         row0 = i * grid.core_m_tiles
         rows_valid = min(grid.core_m_tiles, geom.tensor_m_tiles - row0)
-        col0 = j * grid.core_n_tiles
-        cols_valid = min(grid.core_n_tiles, geom.tensor_n_tiles - col0)
+        if bank_cols is not None:
+            col0, cols_valid = bank_cols[(core.x, core.y)]  # bank-local: units S columns apart from col0
+        else:
+            col0 = j * grid.core_n_tiles
+            cols_valid = min(grid.core_n_tiles, geom.tensor_n_tiles - col0)
         nb_b = _cdiv(batches_valid, blk.block_batches)
         if operand_mcast or act_stream:
             # Every core of a line (R1b: of the split) walks the same nominal block sequence (CB pointers in lockstep, one
@@ -1334,7 +1539,11 @@ def create_program_descriptor(
     descriptor = ttnn.ProgramDescriptor(kernels=[], semaphores=[], cbs=cbs)
     _attach_operand_channels(descriptor, readers, grid, core_ranges, device, operand_mcast, act_offset, weight_offset)
     if act_stream:
-        _attach_act_stream(descriptor, writer, core_ranges, device)
+        rounds = _cdiv(grid.core_m_tiles, blk.block_m_tiles) * _cdiv(grid.core_n_tiles, blk.block_n_tiles)
+        # The helper's rotating senders need one rectangle (a flat split's partial row keeps the fixed injector).
+        rect = len(core_ranges.ranges()) == 1
+        injectors = act_stream_injectors(blk, rounds * blk.num_k_blocks) if rect and not blk.act_resident else 1
+        _attach_act_stream(descriptor, writer, core_ranges, device, injectors)
     else:
         ttnn.attach_absent_mcast(writer, "act")  # the writer's A role (R4 rounds / R1b stream) is absent
     _attach_tail_split(descriptor, readers, writer, core_ranges, blk, out_block_n_tiles, geom, out)
@@ -1344,6 +1553,15 @@ def create_program_descriptor(
     if len(a_segs) > 1:
         for k in (*readers, writer):
             k.defines = list(k.defines) + [("GM_A_SEGMENTS", str(len(a_segs)))]
+    if grid.placement == "bank":
+        unit, U, _ = bank_classes(geom)
+        for k in readers:
+            k.defines = list(k.defines) + [
+                ("GM_BANK_STRIDE", str(unit * U)),
+                ("GM_BANK_RUNS", "1"),
+                ("GM_OUT_STRIDE", str(U)),
+            ]
+        writer.defines = list(writer.defines) + [("GM_OUT_STRIDE", str(U))]
     _attach_k_head_ramp(readers, compute, blk, mode, epilogue)
     walk, *streams = split_cost_terms(geom, grid, blk)
     if NONE_RAW_WALK and epilogue == "none" and walk >= NONE_RAW_WALK_MIN_RATIO * max(streams):
@@ -1352,6 +1570,8 @@ def create_program_descriptor(
         defs = [("GM_R1A_AHEAD", str(R1A_INJECTOR_AHEAD)), ("GM_R1A_DEPTH", str(min(blk.depth_act, blk.depth_weight)))]
         for k in readers:
             k.defines = list(k.defines) + defs
+    for k in (*readers, writer, compute):
+        k.defines = list(k.defines) + [(d, "1") for d in ABLATE_DEFINES.split("+") if d]
     descriptor.kernels = [*readers, writer, compute]
     return descriptor
 
@@ -1383,13 +1603,27 @@ def _attach_tail_split(descriptor, readers, writer, core_ranges, blk, out_block_
     writer.defines = list(writer.defines) + common
 
 
-def _attach_act_stream(descriptor, writer, core_ranges, device):
-    """R1b: one channel over the whole split (one group: every core needs every A K-block), a fixed
-    in-group injector (ACT_STREAM_INJECTOR in row-wise order) on the writer RISC's NoC. A flat split's
-    core set (full rows + a partial row) is an irregular receiver set: one hardware multicast per
-    rectangle."""
+def act_stream_injectors(blk: "Blocking", rounds: int):
+    """R1b injector count: ACT_STREAM_INJECTORS, below the act ring depth and at most the A rounds."""
+    return max(1, min(ACT_STREAM_INJECTORS, blk.depth_act - 1, rounds))
+
+
+def _attach_act_stream(descriptor, writer, core_ranges, device, injectors=1):
+    """R1b: one channel over the whole split (one group: every core needs every A K-block) on the writer RISC's
+    NoC: a fixed in-group injector (ACT_STREAM_INJECTOR in row-wise order), or `injectors` rotating senders evenly
+    spaced in row-wise order. A flat split's core set (full rows + a partial row) is an irregular receiver set:
+    one hardware multicast per rectangle."""
     config = ttnn.McastConfig(noc=ACT_STREAM_NOC, handshake=True)
-    sender = ttnn.McastFixedSenderConfig(sender_index=ACT_STREAM_INJECTOR)
+    if injectors > 1:
+        cores = ttnn.corerange_to_cores(core_ranges, None, True)
+        picks = [cores[i * len(cores) // injectors] for i in range(injectors)]
+        sender = ttnn.McastRotatingSenderConfig(
+            sender_cores=ttnn.CoreRangeSet([ttnn.CoreRange(c, c) for c in picks]),
+            sender_order=ttnn.McastCoreOrder.RowMajor,
+        )
+        writer.defines = list(writer.defines) + [("GM_ACT_INJECTORS", str(injectors))]
+    else:
+        sender = ttnn.McastFixedSenderConfig(sender_index=ACT_STREAM_INJECTOR)
     mc = ttnn.Mcast(device, config, core_ranges, core_ranges.num_cores(), sender, ttnn.McastCoreOrder.RowMajor)
     mc.attach(descriptor, "act", [writer], 0)  # the only channel of an R1b program (R1a's are absent)
 

@@ -57,6 +57,8 @@ FORCE_INLINE Col locate(const Table& t, uint32_t gcol) {
 // Write `cols` consecutive output tiles of tile row `trow` (batch * tensor_m_tiles + row), starting at block
 // column `start` (from `locate`), from L1 tiles packed `tile_bytes` apart at `l1`. `owns(n)` selects the tiles
 // this RISC writes (n = 0 .. cols-1, the block-relative column); the others are skipped.
+// `stride` (Refinement 15, the R1b bank-local stream): block column n lands at output column start + n * stride;
+// the host only sets it > 1 with one chunk.
 template <typename Args, typename Owns>
 FORCE_INLINE void write_row(
     const Args& args,
@@ -67,7 +69,8 @@ FORCE_INLINE void write_row(
     uint32_t trow,
     Col start,
     uint32_t cols,
-    Owns owns) {
+    Owns owns,
+    uint32_t stride = 1) {
     uint32_t c = start.chunk;
     uint32_t lc = start.local;
     uint32_t n = 0;
@@ -82,7 +85,7 @@ FORCE_INLINE void write_row(
         const uint32_t page = trow * t.row_tiles + lc;
         for (uint32_t j = 0; j < seg; ++j) {
             if (owns(n + j)) {
-                noc_async_write(l1, acc.get_noc_addr(page + j), tile_bytes);
+                noc_async_write(l1, acc.get_noc_addr(page + j * stride), tile_bytes);
             }
             l1 += tile_bytes;
         }

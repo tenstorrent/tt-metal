@@ -125,6 +125,21 @@
 #ifndef GM_R1A_AHEAD
 #define GM_R1A_AHEAD 1
 #endif
+// R1b bank-local B stream (Refinement 15, host ACT_STREAM_BANK_LOCAL): a core's CB units (B columns; swiglu:
+// (gate, up) column pairs) are GM_BANK_STRIDE B columns apart instead of adjacent -- with the stride equal to the
+// number of DRAM banks every unit of a core lives in one bank (a column's bank is page % banks), and consecutive
+// units are consecutive pages of that bank. GM_BANK_RUNS (host: B's aligned page == its tile, stride == banks):
+// those units are one contiguous bank run, so each K row of the core's slice is ONE read (two under swiglu: the
+// gate run and the up run, landing in the CB's gate / up halves). 0 = the adjacent-column mapping.
+#ifndef GM_BANK_STRIDE
+#define GM_BANK_STRIDE 0
+#endif
+#ifndef GM_BANK_RUNS
+#define GM_BANK_RUNS 0
+#endif
+#ifndef GM_OUT_STRIDE
+#define GM_OUT_STRIDE 1
+#endif
 #ifndef GM_R1A_DEPTH
 #define GM_R1A_DEPTH 2
 #endif
@@ -261,6 +276,12 @@ void kernel_main() {
     constexpr bool has_row = epilogue == 1 || epilogue == 2 || epilogue == 4;
     constexpr bool has_residual = epilogue == 4;
     constexpr uint32_t half_n = block_n_tiles / 2;
+    // CB unit -> B column: unit u of a core's region is B column col0 + u * unit_stride (+1 for swiglu's up tile).
+    constexpr uint32_t unit_cols = is_swiglu ? 2 : 1;
+    constexpr uint32_t unit_stride = GM_BANK_STRIDE != 0 ? GM_BANK_STRIDE : unit_cols;
+    constexpr bool bank_runs = GM_BANK_RUNS != 0;
+    static_assert(!bank_runs || GM_BANK_STRIDE != 0);
+    static_assert(GM_BANK_STRIDE == 0 || (act_on_writer && !weight_resident && !act_resident));
     constexpr uint32_t num_row_groups = block_m_tiles / sb_h;
     constexpr uint32_t residual_group_tiles = sb_h * block_n_tiles;
 
@@ -357,7 +378,7 @@ void kernel_main() {
     const uint32_t t_blk_rows = block_extent(t_rows_valid, t_blk_r0, block_m_tiles);
     const uint32_t t_blk_c0 = (t_nb_n - 1) * t_out_block_n;
     const uint32_t t_blk_cols = block_extent(t_cols_valid, t_blk_c0, t_out_block_n);
-    const out_chunks::Col t_blk_col = out_chunks::locate(t_out_tab, t_col0 + t_blk_c0);
+    const out_chunks::Col t_blk_col = out_chunks::locate(t_out_tab, t_col0 + t_blk_c0 * GM_OUT_STRIDE);
     // The tail is the LAST block-batch of that block only (see the writer): its output follows the reader's final
     // K-block push, so serving it after the walk can never hold the writer while this reader still has reads.
     constexpr uint32_t t_bi = block_batches - 1;
@@ -385,7 +406,8 @@ void kernel_main() {
                     batch * t_tensor_m_tiles + t_row0 + t_blk_r0 + blk_row,
                     t_blk_col,
                     t_blk_cols,
-                    [&](uint32_t n) { return tail_split::reader_owns(n, t_blk_cols); });
+                    [&](uint32_t n) { return tail_split::reader_owns(n, t_blk_cols); },
+                    GM_OUT_STRIDE);
             }
             noc_async_writes_flushed();  // the reader's share left L1
         }
@@ -465,19 +487,33 @@ void kernel_main() {
     // B K-block: CB slot k*block_n + c  <-  page b_base + (k0 + k) * Nt + col(c)
     // (col(c) = c, or the swiglu gate/up permutation).
     auto read_weight = [&](uint32_t weight_l1, uint32_t b_base, uint32_t k0, uint32_t k_valid, uint32_t blk_cols) {
+#ifdef GM_ABLATE_B
+        return;
+#endif
         for (uint32_t k = 0; k < k_valid; ++k) {
             uint32_t page = b_base + (k0 + k) * tensor_n_tiles;
             uint32_t l1 = weight_l1 + k * block_n_tiles * b_tile_bytes;
-            if constexpr (is_swiglu) {
-                // blk_cols is even: pair p = (gate 2p, up 2p+1) -> slots p, h + p.
+            if constexpr (bank_runs) {
+                // Bank-local stream: the row's units are one run of consecutive pages of one bank.
+                if (blk_cols != 0) {
+                    if constexpr (is_swiglu) {
+                        const uint32_t run = (blk_cols / 2) * b_tile_bytes;
+                        noc_async_read(b_acc.get_noc_addr(page), l1, run);
+                        noc_async_read(b_acc.get_noc_addr(page + 1), l1 + half_n * b_tile_bytes, run);
+                    } else {
+                        noc_async_read(b_acc.get_noc_addr(page), l1, blk_cols * b_tile_bytes);
+                    }
+                }
+            } else if constexpr (is_swiglu) {
+                // blk_cols is even: pair p = (gate, up) at B columns (+p * unit_stride, +1) -> slots p, h + p.
                 for (uint32_t p = 0; p < blk_cols / 2; ++p) {
-                    noc_async_read(b_acc.get_noc_addr(page + 2 * p), l1 + p * b_tile_bytes, b_tile_bytes);
+                    noc_async_read(b_acc.get_noc_addr(page + unit_stride * p), l1 + p * b_tile_bytes, b_tile_bytes);
                     noc_async_read(
-                        b_acc.get_noc_addr(page + 2 * p + 1), l1 + (half_n + p) * b_tile_bytes, b_tile_bytes);
+                        b_acc.get_noc_addr(page + unit_stride * p + 1), l1 + (half_n + p) * b_tile_bytes, b_tile_bytes);
                 }
             } else {
                 for (uint32_t n = 0; n < blk_cols; ++n) {
-                    noc_async_read(b_acc.get_noc_addr(page + n), l1, b_tile_bytes);
+                    noc_async_read(b_acc.get_noc_addr(page + unit_stride * n), l1, b_tile_bytes);
                     l1 += b_tile_bytes;
                 }
             }
@@ -539,7 +575,7 @@ void kernel_main() {
                     const bool batch_valid = bi < blk_b_valid;
                     const uint32_t batch = b0 + blk_b0 + bi;
                     const uint32_t a_row_base = batch * tensor_m_tiles + row0 + blk_r0;
-                    const uint32_t b_base = batch * weight_batch_stride + col0 + blk_c0;
+                    const uint32_t b_base = batch * weight_batch_stride + col0 + (blk_c0 / unit_cols) * unit_stride;
                     // R2a / R3a (Refinement 10): the walk's first bias / gate row is the same on every core of the
                     // B group too (a DRAM hotspot when each core reads it: ~2.5 us bank-serialized on PDL's 86-103
                     // core HS sets), so the injector reads it beside B (own transaction id) and multicasts it in
@@ -551,9 +587,9 @@ void kernel_main() {
                     auto issue_row = [&]() {
                         cb_reserve_back(cb_row, block_n_tiles);
                         uint32_t l1 = get_write_ptr(cb_row);
-                        const uint32_t page = col0 + blk_c0;
+                        const uint32_t page = col0 + blk_c0 * unit_stride;  // has_row: unit = one column
                         for (uint32_t n = 0; n < blk_cols; ++n) {
-                            noc_async_read(row_acc.get_noc_addr(page + n), l1, row_tile_bytes);
+                            noc_async_read(row_acc.get_noc_addr(page + n * unit_stride), l1, row_tile_bytes);
                             l1 += row_tile_bytes;
                         }
                     };
@@ -826,10 +862,12 @@ void kernel_main() {
                                     if (blk_row >= blk_rows) {
                                         break;
                                     }
-                                    const uint32_t page = (a_row_base + blk_row) * tensor_n_tiles + col0 + blk_c0;
+                                    const uint32_t page =
+                                        (a_row_base + blk_row) * tensor_n_tiles + col0 + blk_c0 * unit_stride;
                                     uint32_t l1 = res_l1 + r * block_n_tiles * res_tile_bytes;
                                     for (uint32_t n = 0; n < blk_cols; ++n) {
-                                        noc_async_read(res_acc.get_noc_addr(page + n), l1, res_tile_bytes);
+                                        noc_async_read(
+                                            res_acc.get_noc_addr(page + n * unit_stride), l1, res_tile_bytes);
                                         l1 += res_tile_bytes;
                                     }
                                 }
