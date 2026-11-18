@@ -38,8 +38,8 @@ ALWI void gguf_decode_init() {
     GGUF_DECODE_ON(thr, llk_math_gguf_decode_init<fmt, beside_unpack>());
 }
 
-// Group step (Q4_K, Q5_K, Q3_K, Q2_K): before a group's first tile, a page of the group in tile idst + 1; tiles idst + 2
-// and idst + 1 past the page stay untouched until the group ends. delta: also to the tiles at idst + delta.
+// Group step (Q4_K, Q5_K, Q3_K, Q2_K): before a group's first tile, a page of the group in tile idst + 1; tiles idst +
+// 2 and idst + 1 past the page stay untouched until the group ends. delta: also to the tiles at idst + delta.
 template <std::uint32_t fmt, GgufDecodeThread thr = GgufDecodeThread::Math, int delta = 0>
 ALWI void gguf_decode_group(const std::uint32_t idst, const std::uint32_t rows = 0) {
     GGUF_DECODE_ON(thr, llk_math_gguf_decode_group<fmt, delta>(idst, rows));

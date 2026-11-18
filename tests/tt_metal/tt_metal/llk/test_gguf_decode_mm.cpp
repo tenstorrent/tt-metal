@@ -86,7 +86,9 @@ std::uint32_t random_fp16(std::mt19937& rng, std::uint32_t exp, float& value) {
 }
 
 // MXFP4 pages: E2M1 code q (sign bit 3) as the page's block-float code, and its value.
-std::uint32_t fp4_page_code(std::uint32_t q) { return (q & 8) | std::array<std::uint32_t, 8>{0, 1, 4, 5, 6, 7, 2, 3}[q & 7]; }
+std::uint32_t fp4_page_code(std::uint32_t q) {
+    return (q & 8) | std::array<std::uint32_t, 8>{0, 1, 4, 5, 6, 7, 2, 3}[q & 7];
+}
 float fp4_value(std::uint32_t q) {
     return ((q & 8) ? -1.0f : 1.0f) * std::array<float, 8>{0.0f, 0.5f, 1.0f, 1.5f, 2.0f, 3.0f, 4.0f, 6.0f}[q & 7];
 }
@@ -194,8 +196,7 @@ std::vector<std::uint32_t> run(distributed::MeshDevice& mesh, const Case& c, con
     const CoreCoord core{0, 0};
     Program program = CreateProgram(mesh);
     const std::uint32_t pbytes = page_bytes(c.fmt);
-    const Tile page_tile(
-        layout(c.fmt).rows == 16 ? std::array<uint32_t, 2>{16, 16} : std::array<uint32_t, 2>{16, 32});
+    const Tile page_tile(layout(c.fmt).rows == 16 ? std::array<uint32_t, 2>{16, 16} : std::array<uint32_t, 2>{16, 32});
     const Tile in0_tile(c.in0_rows == 32 ? std::array<uint32_t, 2>{32, 32} : std::array<uint32_t, 2>{16, 32});
     const Tile out_tile;
     const std::uint32_t in0_bytes = in0_tile.get_tile_size(tt::DataFormat::Float16_b);
@@ -209,16 +210,16 @@ std::vector<std::uint32_t> run(distributed::MeshDevice& mesh, const Case& c, con
     auto page_buffer = buffer(c.k_tiles * pbytes);
     auto in0_buffer = buffer(c.k_tiles * in0_bytes);
     auto out_buffer = buffer(out_tiles * 4096);
-    auto make_cb = [&](tt::CBIndex index, tt::DataFormat format, const Tile& tile, std::uint32_t depth,
-                       std::uint32_t page = 0) {
-        const auto bytes = page ? page : tile.get_tile_size(format);
-        CreateCircularBuffer(
-            program,
-            core,
-            CircularBufferConfig(depth * bytes, {{index, format}})
-                .set_page_size(index, bytes)
-                .set_tile_dims(index, tile));
-    };
+    auto make_cb =
+        [&](tt::CBIndex index, tt::DataFormat format, const Tile& tile, std::uint32_t depth, std::uint32_t page = 0) {
+            const auto bytes = page ? page : tile.get_tile_size(format);
+            CreateCircularBuffer(
+                program,
+                core,
+                CircularBufferConfig(depth * bytes, {{index, format}})
+                    .set_page_size(index, bytes)
+                    .set_tile_dims(index, tile));
+        };
     make_cb(tt::CBIndex::c_0, tt::DataFormat::UInt32, page_tile, c.k_tiles, pbytes);
     make_cb(tt::CBIndex::c_1, tt::DataFormat::Float16_b, in0_tile, c.k_tiles);
     make_cb(tt::CBIndex::c_16, tt::DataFormat::Float32, out_tile, 2);
@@ -250,7 +251,8 @@ std::vector<std::uint32_t> run(distributed::MeshDevice& mesh, const Case& c, con
     auto& cq = mesh.mesh_command_queue();
     distributed::EnqueueWriteMeshBuffer(cq, page_buffer, in.pages, true);
     distributed::EnqueueWriteMeshBuffer(cq, in0_buffer, in.in0, true);
-    SetRuntimeArgs(program, reader, core, {page_buffer->address(), c.k_tiles * pbytes, in0_buffer->address(), c.k_tiles});
+    SetRuntimeArgs(
+        program, reader, core, {page_buffer->address(), c.k_tiles * pbytes, in0_buffer->address(), c.k_tiles});
     SetRuntimeArgs(program, writer, core, {out_buffer->address(), 0, out_tiles});
     SetRuntimeArgs(program, compute, core, {c.k_tiles});
     distributed::MeshWorkload workload;
@@ -294,8 +296,8 @@ void check_decoded(const Case& c, const Inputs& in, const std::vector<std::uint3
 // the group step (Q4_K).
 TEST_F(LLKBlackholeSingleCardFixture, GgufDecodeTileExact) {
     std::mt19937 rng(1);
-    for (const auto [fmt, k_tiles] : std::vector<std::pair<std::uint32_t, std::uint32_t>>{
-             {kQ8_0, 3}, {kQ4_0, 3}, {kMXFP4, 4}, {kQ4_K, 16}}) {
+    for (const auto [fmt, k_tiles] :
+         std::vector<std::pair<std::uint32_t, std::uint32_t>>{{kQ8_0, 3}, {kQ4_0, 3}, {kMXFP4, 4}, {kQ4_K, 16}}) {
         const Case c{.fmt = fmt, .k_tiles = k_tiles, .mm = false};
         SCOPED_TRACE(name(c));
         const Inputs in = make_inputs(c, rng);
