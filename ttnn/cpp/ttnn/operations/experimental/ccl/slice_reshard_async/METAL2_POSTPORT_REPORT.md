@@ -37,3 +37,24 @@ Nothing was changed, so the before and after trees are the same tree: sentinel s
   `disable_dfb_implicit_sync_for_all` (default `false`). Their header says DM kernels doing many sub-tile ("stick") NOC
   transfers stall the 2xx implicit credit accounting. Both kernels of this op move one stick per DFB entry. Whether to set
   the flag is a Quasar-uplift decision for the op owner; it has no effect on Gen1.
+
+## Pass 2 — Replace fake-FIFO DM self-loops with a scratchpad (`semantic/dm_self_loop_dfbs.md`)
+
+### Outcome
+
+**NO SITES FOUND.** No `KernelSpec` binds a DFB as both PRODUCER and CONSUMER. Nothing was changed.
+
+### Sites
+
+None. The only DFB, `sender` (`device/slice_reshard_async_program_factory.cpp:144`), is bound by `reader_<i>` as PRODUCER
+only (`:197-199`) and by `writer_<i>` as CONSUMER only (`:264-266`) — a real cross-kernel handoff on every core.
+
+### Verification
+
+Nothing was changed, so the before and after trees are the same tree: sentinel set green (5 passed).
+
+### Noticed, not done
+
+- **Packet headers come from `PacketHeaderPool`** (`minimal_default_writer.cpp:71-73,80`), not from a DFB, so the op has no
+  packet-header self-loop (unlike `point_to_point` before its pass). Whether `PacketHeaderPool` is available on Gen2 is a
+  Quasar-uplift question outside this recipe.
