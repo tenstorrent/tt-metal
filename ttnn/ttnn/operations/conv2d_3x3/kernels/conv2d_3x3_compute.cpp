@@ -36,6 +36,7 @@
 #include "ttnn/cpp/ttnn/kernel_lib/matmul_block_helpers.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/bias_add_helpers.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/perf_instrumentation.hpp"
 
 namespace ckl = compute_kernel_lib;
 
@@ -65,8 +66,12 @@ struct TilizeIm2colKBlock {
             pack_relu_config(ReluConfig::none());
         }
         static_assert(block_k_tiles % tilize_width_tiles == 0);
-        ckl::tilize<tilize_width_tiles, cb_im2col_rm, cb_im2col_tiles>(
-            *rm, *tiles, block_m_tiles * (block_k_tiles / tilize_width_tiles));
+        {
+            // Includes the unpacker's per-tile-row wait on the reader's gather.
+            MaybeDeviceZoneScope("compute_tilize");
+            ckl::tilize<tilize_width_tiles, cb_im2col_rm, cb_im2col_tiles>(
+                *rm, *tiles, block_m_tiles * (block_k_tiles / tilize_width_tiles));
+        }
         if constexpr (relu_on_last_matmul_pack) {
             if (is_last) {
                 pack_relu_config(ReluConfig::zero());
@@ -193,6 +198,7 @@ void kernel_main() {
 
     // finalize_block over `shape`'s rows of the matmul partials: + bias, ReLU on this pack only.
     auto add_bias = [&](const ckl::BiasAddShape& shape) {
+        MaybeDeviceZoneScope("compute_bias_add");
         // matmul_block leaves packer L1 accumulation on after its last K-block.
         pack_reconfig_l1_acc(0);
         if constexpr (apply_relu) {
@@ -205,6 +211,12 @@ void kernel_main() {
     // Sum the row's k_cols contributions per output tile and pack them; with a bias the fp32 sum goes
     // through cb_combined into the bias add, otherwise straight to the output shard.
     auto combine_block = [&]() {
+        {
+            // The row's slices arrive over the NoC; waiting here keeps that wait out of the sum's zone.
+            MaybeDeviceZoneScope("compute_combine_wait");
+            combine_slots_dfb.wait_front(k_cols * slot_tiles);
+        }
+        MaybeDeviceZoneScope("compute_combine");
         pack_reconfig_l1_acc(0);
         if constexpr (apply_relu && !has_bias) {
             pack_relu_config(ReluConfig::zero());
@@ -239,43 +251,50 @@ void kernel_main() {
     for (uint32_t m_block_idx = 0; m_block_idx < num_m_blocks_this_core; ++m_block_idx) {
         if constexpr (tile_input) {
             // untilize_footprint: the reader streams slab_tile_rows input tile-rows in slab order.
+            MaybeDeviceZoneScope("compute_untilize");
             pack_reconfig_l1_acc(0);
             ckl::untilize<untilize_width_tiles, cb_input_tiles, cb_halo_slab>(
                 input_tiles_dfb, halo_slab_dfb, slab_tile_rows);
         }
 
         if constexpr (k_split) {
-            partials.reserve_back(partials_tiles);
-            ckl::matmul_block<
-                /*transpose=*/false,
-                /*packer_l1_acc=*/true,
-                ckl::LastBlockTarget::Interm,
-                ckl::OutputCBLayout::TileRowMajor,
-                ckl::matmul_config::InitMode::ShortAfterPreKBlock,
-                ckl::InputPolicy::WaitAndPopPerKBlock,
-                ckl::InputPolicy::WaitAndPopPerKBlock,
-                ckl::NoPostCompute,
-                PreKBlockFn,
-                ckl::NoPostKBlock,
-                /*untilize_block_ct_dim=*/0,
-                ckl::NoKBlockInnerDimFn,
-                ckl::NoIn0Source,
-                ckl::NoIn1BaseOffset,
-                /*caller_owns_pack_target=*/true>(
-                im2col_tiles,
-                weights,
-                output_tiles,
-                partials,
-                mm_shape,
-                {},
-                pre_k_block,
-                /*in1_per_core_w=*/block_n_tiles,
-                /*out_row_width=*/block_n_tiles);
-            partials.push_back(partials_tiles);
+            {
+                // The whole K walk, tilize hooks included (compute_tilize is the tilize share).
+                MaybeDeviceZoneScope("compute_matmul_walk");
+                partials.reserve_back(partials_tiles);
+                ckl::matmul_block<
+                    /*transpose=*/false,
+                    /*packer_l1_acc=*/true,
+                    ckl::LastBlockTarget::Interm,
+                    ckl::OutputCBLayout::TileRowMajor,
+                    ckl::matmul_config::InitMode::ShortAfterPreKBlock,
+                    ckl::InputPolicy::WaitAndPopPerKBlock,
+                    ckl::InputPolicy::WaitAndPopPerKBlock,
+                    ckl::NoPostCompute,
+                    PreKBlockFn,
+                    ckl::NoPostKBlock,
+                    /*untilize_block_ct_dim=*/0,
+                    ckl::NoKBlockInnerDimFn,
+                    ckl::NoIn0Source,
+                    ckl::NoIn1BaseOffset,
+                    /*caller_owns_pack_target=*/true>(
+                    im2col_tiles,
+                    weights,
+                    output_tiles,
+                    partials,
+                    mm_shape,
+                    {},
+                    pre_k_block,
+                    /*in1_per_core_w=*/block_n_tiles,
+                    /*out_row_width=*/block_n_tiles);
+                partials.push_back(partials_tiles);
+            }
             if (owns_output_columns) {
                 combine_block();
             }
         } else if constexpr (in0_groups > 1) {
+            // Matmul and bias calls interleave with the streamed in0 groups; one zone for the whole block.
+            MaybeDeviceZoneScope("compute_matmul_stream");
             for (uint32_t group = 0; group < in0_groups; ++group) {
                 const uint32_t group_end =
                     (group + 1) * in0_stream_rows < block_m_tiles ? (group + 1) * in0_stream_rows : block_m_tiles;
@@ -321,6 +340,7 @@ void kernel_main() {
             }
             weights.pop_front(block_k_tiles * block_n_tiles);
         } else {
+            MaybeDeviceZoneScope("compute_matmul_walk");
             ckl::matmul_block<
                 /*transpose=*/false,
                 /*packer_l1_acc=*/true,

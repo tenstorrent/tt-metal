@@ -55,6 +55,7 @@
 #include "api/dataflow/circular_buffer.h"
 #include "ttnn/cpp/ttnn/kernel_lib/local_copy_helpers_dataflow.hpp"
 #include "api/semaphore.h"
+#include "ttnn/cpp/ttnn/kernel_lib/perf_instrumentation.hpp"
 #include "conv2d_3x3_combine_dataflow.hpp"
 #include "conv2d_3x3_slab_dataflow.hpp"
 #include "conv2d_3x3_gather_dataflow.hpp"
@@ -266,6 +267,7 @@ void kernel_main() {
 
         if constexpr (tile_input) {
             // ---- fill_halo_slab (TILE): plan the slab rows, then stream input tile-rows in slab order.
+            MaybeDeviceZoneScope("reader_fill");
             uint32_t seg_first[3];
             uint32_t seg_count[3];
             uint32_t num_segs = 0;
@@ -305,7 +307,11 @@ void kernel_main() {
             uint32_t seg = 0;
             uint32_t seg_row = 0;
             for (uint32_t batch = 0; batch < slab_tile_rows / untilize_batch_rows; ++batch) {
-                cb_reserve_back(cb_input_tiles, batch_pages);
+                {
+                    // Back-pressure from compute's untilize.
+                    MaybeDeviceZoneScope("reader_fill_reserve");
+                    cb_reserve_back(cb_input_tiles, batch_pages);
+                }
                 uint32_t l1 = get_write_ptr(cb_input_tiles);
                 reads.begin(TRID_INPUT_TILES);
                 for (uint32_t r = 0; r < untilize_batch_rows && seg < num_segs;) {
@@ -328,6 +334,7 @@ void kernel_main() {
         } else {
             // ---- fill_halo_slab (ROW_MAJOR): band kh tagged trid kh + 1; overlapping bands read only their
             // new tail.
+            MaybeDeviceZoneScope("reader_fill");
             if constexpr (slab_split) {
                 if (m_block_idx > 0) {
                     // The writer refills the slab only after this block's gather no longer reads it.
@@ -346,6 +353,7 @@ void kernel_main() {
                     }
                 });
             if constexpr (slab_split) {
+                MaybeDeviceZoneScope("reader_fill_fwd_wait");
                 Semaphore<>(slab_fwd_done_sem_id).wait_min(m_block_idx + 1);
             }
         }
@@ -357,6 +365,8 @@ void kernel_main() {
             const uint32_t col_lo = (k_tile0 - kh * tensor_kkh_tiles) * TILE_DIM;
             const uint32_t col_hi = col_lo + block_k_cols;
             if (col_lo == 0) {
+                // The band's slab rows: compute's untilize (TILE) or this core's own band reads (ROW_MAJOR).
+                MaybeDeviceZoneScope("reader_band_wait");
                 for (int32_t band = kh; band < kh + static_cast<int32_t>(kh_per_k_block); ++band) {
                     if constexpr (tile_input) {
                         if (slab_ready_pages[band] > 0) {
@@ -368,6 +378,8 @@ void kernel_main() {
                 }
             }
 
+            // Occupancy: includes the per-tile-row cb_reserve_back on compute's tilize / matmul.
+            MaybeDeviceZoneScope("reader_gather");
             if constexpr (face_direct) {
                 cb_reserve_back(cb_im2col_tiles, block_m_tiles * block_k_tiles);
                 const uint32_t tiles_l1 = get_write_ptr(cb_im2col_tiles);
@@ -533,7 +545,11 @@ void kernel_main() {
             static_assert(num_owning_cols <= k_cols);
             Semaphore<> send_go(combine_send_go_sem_id);
             Semaphore<> send_done(combine_send_done_sem_id);
-            send_go.wait_min(m_block_idx + 1);
+            {
+                MaybeDeviceZoneScope("reader_combine_wait_go");
+                send_go.wait_min(m_block_idx + 1);
+            }
+            MaybeDeviceZoneScope("reader_combine_send");
             conv2d_3x3::scatter_partial_slices<block_m_tiles, block_n_tiles, out_n_tiles, tensor_n_tiles>(
                 get_read_ptr(cb_partials),
                 get_write_ptr(cb_combine_slots),

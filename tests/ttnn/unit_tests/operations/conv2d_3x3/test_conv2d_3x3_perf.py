@@ -244,3 +244,79 @@ def test_conv2d_3x3_block_sharded_perf(layer, case, shard_shape, grid_xy, bias_r
     ref = ref.permute(0, 2, 3, 1).reshape(1, 1, -1, c_out)
     if not ABLATION:
         assert_with_pcc(ref, ttnn.to_torch(tt_output).float(), 0.99)
+
+
+# The perf-flagged Panoptic LOOSE_CASES (feature_spec "[perf]" rows), at their exact config: shard pin, dtypes,
+# fidelity, bias and ReLU. One dispatch per case, so the profiler's DEVICE KERNEL DURATION row is the op.
+def _perf_focus_cases():
+    from eval.golden_tests.conv2d_3x3.feature_spec import LOOSE_CASES
+
+    cases = [c for c in LOOSE_CASES if "[perf]" in c["extras"]["layer"]]
+    ids = [c["extras"]["layer"].split(" ")[0].replace(".", "_") for c in cases]
+    return cases, ids
+
+
+_FOCUS_CASES, _FOCUS_IDS = _perf_focus_cases()
+
+
+@pytest.mark.parametrize("case", _FOCUS_CASES, ids=_FOCUS_IDS)
+def test_conv2d_3x3_perf_focus(case, device):
+    from eval.golden_tests.conv2d_3x3 import helpers
+
+    torch.manual_seed(0)
+    (H, W, c_in), c_out, padding, stride, dilation = case["inputs"]
+    extras = case["extras"]
+    dtype, weight_dtype, layout = case["dtype"], case["weight_dtype"], case["layout"]
+    memory_config = helpers.build_input_memory_config(
+        (1, 1, H * W, c_in), case["memory_layout"], layout=layout, dtype=dtype, device=device, extras=extras
+    )
+    if memory_config.shard_spec is None or list(memory_config.shard_spec.shape) != list(extras["shard_shape"]):
+        pytest.skip(f"{extras['layer']}: pinned shard geometry does not fit this device's grid")
+    kwargs = dict(
+        stride=stride,
+        padding=padding,
+        dilation=dilation,
+        input_dtype=dtype,
+        input_layout=layout,
+        weight_dtype=weight_dtype,
+        input_memory_config=memory_config,
+        device=device,
+    )
+    torch_weight = helpers.make_weight(c_out, c_in, dtype=torch.bfloat16)
+    has_bias = case["bias_mode"] == "with_bias"
+    activation = None if case["activation"] == "none" else case["activation"]
+    torch_bias = helpers.make_bias(c_out, dtype=torch.bfloat16) if has_bias else None
+    tt_weight = prepare_conv2d_weights(torch_weight, **kwargs)
+    tt_bias = prepare_conv2d_bias(torch_bias, **kwargs) if has_bias else None
+    torch_input = helpers.make_activation(H, W, c_in, dtype=torch.bfloat16)
+    tt_input = ttnn.from_torch(torch_input, dtype=dtype, layout=layout, device=device, memory_config=memory_config)
+
+    tt_output = conv2d_3x3(
+        tt_input,
+        tt_weight,
+        input_height=H,
+        input_width=W,
+        bias=tt_bias,
+        padding=padding,
+        stride=stride,
+        dilation=dilation,
+        activation=activation,
+        compute_kernel_config=helpers.make_compute_kernel_config(
+            case["fp32_dest_acc_en"], extras.get("math_fidelity", ttnn.MathFidelity.HiFi4)
+        ),
+    )
+    if ABLATION:
+        return
+    ref = helpers.pytorch_conv2d_3x3(
+        torch_input,
+        torch_weight,
+        input_height=H,
+        input_width=W,
+        bias=torch_bias,
+        padding=padding,
+        stride=stride,
+        dilation=dilation,
+        activation=activation,
+    )
+    pcc, _ = extras.get("tolerance", (0.99, None))
+    assert_with_pcc(ref.float(), ttnn.to_torch(tt_output).float().reshape(ref.shape), pcc)

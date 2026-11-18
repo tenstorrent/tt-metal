@@ -48,6 +48,7 @@
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
 #include "api/semaphore.h"
+#include "ttnn/cpp/ttnn/kernel_lib/perf_instrumentation.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/mcast/kernel/mcast_args.hpp"
 #include "conv2d_3x3_combine_dataflow.hpp"
 #include "conv2d_3x3_slab_dataflow.hpp"
@@ -131,6 +132,7 @@ void kernel_main() {
     // it follows the first block's slab reads, which the reader waits on before it can gather.
     auto prefetch_bias = [&]() {
         if constexpr (has_bias) {
+            MaybeDeviceZoneScope("writer_bias");
             const uint32_t bias_tile_bytes = get_tile_size(cb_bias);
             const auto bias = TensorAccessor(bias_args, bias_addr, bias_tile_bytes);
             cb_reserve_back(cb_bias, out_n_tiles);
@@ -164,8 +166,14 @@ void kernel_main() {
     auto weight_sender = weight_mcast.optional_sender(noc);
     auto weight_receiver = weight_mcast.optional_receiver(noc);
     auto issue_weight_k_block = [&]() {
-        cb_reserve_back(cb_weights, weight_k_block_tiles);
+        {
+            // Back-pressure from compute's matmul.
+            MaybeDeviceZoneScope("writer_weight_reserve");
+            cb_reserve_back(cb_weights, weight_k_block_tiles);
+        }
         const uint32_t l1 = get_write_ptr(cb_weights);
+        // DRAM read (+ multicast) on a sender or own-stream core; the multicast wait on a receiver.
+        MaybeDeviceZoneScope("writer_weight_fetch");
         if (weight_sender && weight_mcast.should_send(k_blocks_issued)) {
             read_weight_k_block(l1);
             weight_sender->send(l1, l1, weight_k_block_tiles * weight_tile_bytes);
@@ -200,23 +208,44 @@ void kernel_main() {
                 combine_credit.up(noc, peer_x(col), peer_y(col), 1);
             }
         }
-        cb_wait_front(cb_partials, partials_tiles);
-        combine_credit.wait_min((m_block_idx + 1) * num_owning_cols);
+        {
+            MaybeDeviceZoneScope("writer_combine_wait_partials");
+            cb_wait_front(cb_partials, partials_tiles);
+        }
+        {
+            // Every owning column's slots are free.
+            MaybeDeviceZoneScope("writer_combine_wait_credit");
+            combine_credit.wait_min((m_block_idx + 1) * num_owning_cols);
+        }
         if constexpr (combine_split_nocs) {
             combine_send_go.up(1);
         }
-        conv2d_3x3::scatter_partial_slices<block_m_tiles, block_n_tiles, out_n_tiles, tensor_n_tiles>(
-            partials_base, combine_base, get_tile_size(cb_partials), my_col, 0, writer_cols_end, row_peer_coords_arg);
-        noc_async_write_barrier();
-        if constexpr (combine_split_nocs) {
-            combine_send_done.wait_min(m_block_idx + 1);
+        {
+            // This RISC's half of the scatter, then the reader's half (send_done).
+            MaybeDeviceZoneScope("writer_combine_send");
+            conv2d_3x3::scatter_partial_slices<block_m_tiles, block_n_tiles, out_n_tiles, tensor_n_tiles>(
+                partials_base,
+                combine_base,
+                get_tile_size(cb_partials),
+                my_col,
+                0,
+                writer_cols_end,
+                row_peer_coords_arg);
+            noc_async_write_barrier();
+            if constexpr (combine_split_nocs) {
+                combine_send_done.wait_min(m_block_idx + 1);
+            }
         }
         for (uint32_t col = 0; col < num_owning_cols; ++col) {
             combine_arrival.up(noc, peer_x(col), peer_y(col), 1);
         }
         cb_pop_front(cb_partials, partials_tiles);
         if (out_valid_tiles > 0) {
-            combine_arrival.wait_min((m_block_idx + 1) * k_cols);
+            {
+                // The row's slowest sender.
+                MaybeDeviceZoneScope("writer_combine_wait_arrivals");
+                combine_arrival.wait_min((m_block_idx + 1) * k_cols);
+            }
             cb_push_back(cb_combine_slots, k_cols * slot_tiles);
         }
     };
@@ -229,6 +258,7 @@ void kernel_main() {
     uint32_t o_end = 0;
     [[maybe_unused]] auto fill_forward_slab = [&](uint32_t m_block_idx) {
         static_assert(!slab_split || input_shard_rows > 0);
+        MaybeDeviceZoneScope("writer_slab_fwd");
         // Compiled on every path; only the split fill runs it.
         constexpr uint32_t shard_rows = input_shard_rows > 0 ? input_shard_rows : 1;
         if (m_block_idx > 0) {
@@ -279,7 +309,11 @@ void kernel_main() {
     // Every in0 K-block starts at the CB base: its capacity is one K-block.
     const uint32_t in0_l1 = get_write_ptr(cb_im2col_tiles);
     [[maybe_unused]] auto gather_odd_groups = [&](uint32_t k_block_seq) {
-        Semaphore<>(gather_go_sem_id).wait_min(k_block_seq + 1);
+        {
+            MaybeDeviceZoneScope("writer_gather_wait_go");
+            Semaphore<>(gather_go_sem_id).wait_min(k_block_seq + 1);
+        }
+        MaybeDeviceZoneScope("writer_gather");
         const int32_t kh = (k_block_seq % num_k_blocks) * block_k_tiles / tensor_kkh_tiles;
         constexpr uint32_t in0_groups = (block_m_tiles + in0_stream_rows - 1) / in0_stream_rows;
         for (uint32_t group = 1; group < in0_groups; group += 2) {
@@ -318,6 +352,7 @@ void kernel_main() {
         }
         if constexpr (!output_sharded) {
             // ---- store_block: valid output tile-rows only; the ragged tail keeps nominal CB counts.
+            MaybeDeviceZoneScope("writer_store");
             const uint32_t out_tile_bytes = get_tile_size(cb_output_tiles);
             const auto output = TensorAccessor(output_args, output_addr, out_tile_bytes);
             const uint32_t block_tile0 = m_block_idx * block_m_tiles;
