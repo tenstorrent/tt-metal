@@ -1102,27 +1102,40 @@ KW_FOLD_MIN_KBLOCK_RATIO = 0.8
 # 16.9 -> 18.2 us, center_head.1 (8.8 us) 21.6 -> 16.4.
 KW_FOLD_WHOLE_K_EXPOSED_NS = 7000
 IM2COL_NS_PER_TILE = 25
+# Either form recomputes the two halo tile-rows' products, about 6 * Ct * N extra tile-MACs per M-block, at the user's
+# fidelity; they must cost less than the im2col removed. inst dec res3 fc0 (bm 3) wins at LoFi (34.8 -> 26.2 us) and
+# lost at HiFi4 (69.3 -> 74.3 us), where its halo MACs (11.4 us) outweigh its im2col (7.8 us).
+LOFI_NS_PER_TILE_MAC = 16 / 1.35
+FIDELITY_PHASES = {
+    ttnn.MathFidelity.LoFi: 1,
+    ttnn.MathFidelity.HiFi2: 2,
+    ttnn.MathFidelity.HiFi3: 3,
+    ttnn.MathFidelity.HiFi4: 4,
+}
 
 
-def kw_fold_mode(g, b, has_bias, l1_budget):
+def kw_fold_mode(g, b, has_bias, l1_budget, math_fidelity):
     if not (KW_FOLD and has_bias and g.tile_input and g.sharded_output and not g.k_split):
         return False
     if g.stride != 1 or g.padding != g.dilation or not 1 <= g.dilation <= 32:
         return False
     if g.input_width % TILE or g.c_in % TILE or g.c_in_p != g.c_in:
         return False
-    return _kw_fold_pays(g, b) and _kw_fold_cb_bytes(g, _kw_fold_blocking(g, b)) <= l1_budget
+    return _kw_fold_pays(g, b, math_fidelity) and _kw_fold_cb_bytes(g, _kw_fold_blocking(g, b)) <= l1_budget
 
 
-def _kw_fold_pays(g, b):
-    """Whether kw-fold beats the K-blocked walk `b` would run (see KW_FOLD_MIN_KBLOCK_RATIO and
-    KW_FOLD_WHOLE_K_EXPOSED_NS)."""
+def _kw_fold_pays(g, b, math_fidelity):
+    """Whether kw-fold beats the K-blocked walk `b` would run (see KW_FOLD_MIN_KBLOCK_RATIO, KW_FOLD_WHOLE_K_EXPOSED_NS
+    and LOFI_NS_PER_TILE_MAC)."""
     ct, n, bm = g.c_in_tiles, g.tensor_n_tiles, b.block_m_tiles
+    taps = 6 if b.center_mode != CENTER_NONE else 9
+    im2col_ns = b.max_m_blocks_per_core * (taps * ct * bm + b.slab_tile_rows * ct) * IM2COL_NS_PER_TILE
+    halo_ns = b.max_m_blocks_per_core * 6 * ct * n * FIDELITY_PHASES[math_fidelity] * LOFI_NS_PER_TILE_MAC
+    if halo_ns > im2col_ns:
+        return False
     if kw_fold_kblocked(g):
         return ct * bm >= KW_FOLD_MIN_KBLOCK_RATIO * n * (bm + 2)
-    taps = 6 if b.center_mode != CENTER_NONE else 9
-    im2col_tiles = b.max_m_blocks_per_core * (taps * ct * bm + b.slab_tile_rows * ct)
-    return im2col_tiles * IM2COL_NS_PER_TILE >= KW_FOLD_WHOLE_K_EXPOSED_NS
+    return im2col_ns >= KW_FOLD_WHOLE_K_EXPOSED_NS
 
 
 def _kw_fold_cb_bytes(g, kb):
@@ -1206,7 +1219,7 @@ def create_program_descriptor(
         if g.sharded_output and g.tile_input
         else 0
     )
-    kwf = kw_fold_mode(g, b, has_bias, l1_cb_budget_bytes(resident))
+    kwf = kw_fold_mode(g, b, has_bias, l1_cb_budget_bytes(resident), compute_kernel_config.math_fidelity)
     # The reader keeps the original K-blocking in its CT args (it only fills the slab: its K-block asserts stay true).
     reader_bk, reader_nkb = b.block_k_tiles, b.num_k_blocks
     if kwf:
