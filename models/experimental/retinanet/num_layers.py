@@ -32,7 +32,7 @@ def reduce_layers(retinanet: torch.nn.Module, num_layers: int) -> None:
     """Keep ``num_layers`` repeats of every stack of identical layers of a torchvision RetinaNet,
     in place: the blocks of each ResNet stage, and the conv blocks of the classification and
     regression heads. A ResNet stage keeps its first block in addition, since that block alone
-    strides and projects the shortcut. The TT model takes its layer counts from the parameters
+    projects the shortcut (and, from layer2 on, strides). The TT model takes its layer counts from the parameters
     preprocessed from this model, so it has the same layers."""
     if num_layers < 1:
         raise ValueError(f"num_layers must be at least 1, got {num_layers}")

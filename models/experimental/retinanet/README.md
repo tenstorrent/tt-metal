@@ -75,9 +75,10 @@ The override is the inclusive end coordinate of the worker grid, so `1,0` is a 2
 ### Reduced layer count
 
 `RETINANET_NUM_LAYERS=N` keeps `N` repeats of every stack of identical layers: the repeated
-bottlenecks of each ResNet stage (each stage also keeps its first, strided block) and the conv
-blocks of both heads. The reference is reduced the same way, so the PCC thresholds still apply,
-but the reduced model is not the trained detector. The E2E, backbone and head tests support it:
+bottlenecks of each ResNet stage and the conv blocks of both heads. Each stage also keeps its
+first block, which projects the shortcut and, from layer2 on, strides. The reference is reduced
+the same way, so the PCC thresholds still apply, but the reduced model is not the trained
+detector. The E2E, backbone and head tests support it:
 
 ```sh
 RETINANET_NUM_LAYERS=1 pytest models/experimental/retinanet/tests/pcc/test_retinanet.py
