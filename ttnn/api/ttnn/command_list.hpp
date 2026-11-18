@@ -11,13 +11,11 @@
 #include <unordered_map>
 #include <vector>
 
-#include <tt-metalium/experimental/command_list.hpp>
+#include <tt-metalium/command_list.hpp>
 
 #include "ttnn/command_list_params.hpp"
 #include "ttnn/common/guard.hpp"
 #include "ttnn/common/queue_id.hpp"
-
-// Experimental and subject to change.
 
 namespace ttnn::device_operation::detail {
 struct CmdListProgramBindings;
@@ -109,7 +107,7 @@ private:
         std::size_t start;  // index into binds_ where the scope starts
     };
 
-    tt::tt_metal::experimental::CommandListBuilder metal_builder_;
+    tt::tt_metal::CommandListBuilder metal_builder_;
     bool recording_ = false;
     std::vector<BindScope> bind_scopes_;
     std::vector<ActiveBind> binds_;  // the binds of every scope in bind_scopes_, in push order
@@ -141,9 +139,9 @@ public:
 
 private:
     friend class CommandListBuilder;
-    CommandList(tt::tt_metal::experimental::CommandList metal_list, detail::CmdListLayout layout);
+    CommandList(tt::tt_metal::CommandList metal_list, detail::CmdListLayout layout);
 
-    tt::tt_metal::experimental::CommandList metal_list_;
+    tt::tt_metal::CommandList metal_list_;
     detail::CmdListLayout layout_;
 };
 

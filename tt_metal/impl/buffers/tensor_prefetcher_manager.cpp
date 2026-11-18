@@ -1596,10 +1596,10 @@ void TensorPrefetcherManager::capture(
     const std::vector<experimental::TensorPrefetcherInput>& tensors) {
     const RequestTarget target = target_for(prefetcher_pipes);
     auto lock = lock_api_function_();
-    TT_FATAL(active_, "CommandListBuilder::add_tensor_prefetcher_request called before StartTensorPrefetcher");
+    TT_FATAL(active_, "AddTensorPrefetcherRequest called before StartTensorPrefetcher");
     TT_FATAL(
         captured.requests.empty() || captured.run_id == run_id_,
-        "CommandListBuilder::add_tensor_prefetcher_request: the builder holds requests from a Tensor prefetcher that "
+        "AddTensorPrefetcherRequest: the builder holds requests from a Tensor prefetcher that "
         "has since been stopped. Call clear() on the builder after StopTensorPrefetcher.");
     std::vector<std::shared_ptr<const Request>> requests = build_requests(target, device_subset, tensors);
     captured.run_id = run_id_;

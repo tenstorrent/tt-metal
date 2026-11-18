@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <tt-metalium/experimental/command_list.hpp>
+#include <tt-metalium/command_list.hpp>
 
 #include <algorithm>
 #include <bit>
@@ -15,6 +15,7 @@
 
 #include <tt-metalium/mesh_command_queue.hpp>
 #include <tt-metalium/experimental/allocation_context.hpp>
+#include <tt-metalium/experimental/tensor_prefetcher.hpp>
 #include <tt-metalium/math.hpp>
 #include <tt-metalium/workload/specification/tensor_spec_relaxations.hpp>
 #include <tt_stl/fmt.hpp>
@@ -45,12 +46,27 @@
 #include "tt_metal/impl/trace/trace_node.hpp"
 #include <internal/service/service_core_manager.hpp>
 
-namespace tt::tt_metal::experimental {
-using namespace tt::tt_metal::distributed;
+namespace tt::tt_metal {
+
+using distributed::build_go_signal_sequence;
+using distributed::coordinate_index_in_range;
+using distributed::DeviceLocalBufferConfig;
+using distributed::FDMeshCommandQueue;
+using distributed::MeshBuffer;
+using distributed::MeshBufferPatch;
+using distributed::MeshCommandQueue;
+using distributed::MeshCoordinateRange;
+using distributed::MeshDevice;
+using distributed::MeshShape;
+using distributed::MeshWorkload;
+using distributed::partition_mesh_coordinate_ranges;
+using distributed::PerDeviceRuntimeArgs;
+using distributed::ReplicatedBufferConfig;
+using distributed::resolve_per_device_runtime_args;
+using distributed::ResolvedPerDeviceRuntimeArgsField;
+using distributed::snapshot_per_device_runtime_args;
 
 namespace detail {
-
-using BoundTensorFootprint = ::tt::tt_metal::detail::BoundTensorFootprint;
 
 struct CommandListData {
     MeshCoordinateRange device_range = MeshCoordinateRange(MeshShape(0, 0));
@@ -349,9 +365,9 @@ public:
 
     void add(MeshCommandQueue& binary_upload_cq, MeshWorkload& workload, const CmdListParameters& parameters);
     void add_tensor_prefetcher_request(
-        const std::vector<std::reference_wrapper<const PrefetcherPipe>>& prefetcher_pipes,
+        const std::vector<std::reference_wrapper<const experimental::PrefetcherPipe>>& prefetcher_pipes,
         ttsl::optional_reference<const distributed::MeshCoordinateRangeSet> device_subset,
-        const std::vector<TensorPrefetcherInput>& input_tensors);
+        const std::vector<experimental::TensorPrefetcherInput>& input_tensors);
     CommandList build(MeshCommandQueue& cq) const;
     MeshDevice& device() const;
     void clear();
@@ -1177,9 +1193,9 @@ void CommandListBuilderImpl::add(
 }
 
 void CommandListBuilderImpl::add_tensor_prefetcher_request(
-    const std::vector<std::reference_wrapper<const PrefetcherPipe>>& prefetcher_pipes,
+    const std::vector<std::reference_wrapper<const experimental::PrefetcherPipe>>& prefetcher_pipes,
     ttsl::optional_reference<const distributed::MeshCoordinateRangeSet> device_subset,
-    const std::vector<TensorPrefetcherInput>& input_tensors) {
+    const std::vector<experimental::TensorPrefetcherInput>& input_tensors) {
     TT_FATAL(valid, "CommandListBuilder has been deallocated");
     mesh_device.impl()
         .tensor_prefetcher(&mesh_device)
@@ -1253,14 +1269,6 @@ void CommandListBuilder::add(
     impl_->add(binary_upload_cq, workload, parameters);
 }
 
-void CommandListBuilder::add_tensor_prefetcher_request(
-    const std::vector<std::reference_wrapper<const PrefetcherPipe>>& prefetcher_pipes,
-    ttsl::optional_reference<const distributed::MeshCoordinateRangeSet> device_subset,
-    const std::vector<TensorPrefetcherInput>& input_tensors) {
-    TT_FATAL(impl_ != nullptr, "CommandListBuilder has been moved from");
-    impl_->add_tensor_prefetcher_request(prefetcher_pipes, device_subset, input_tensors);
-}
-
 CommandList CommandListBuilder::build(MeshCommandQueue& cq) const {
     TT_FATAL(impl_ != nullptr, "CommandListBuilder has been moved from");
     return impl_->build(cq);
@@ -1280,6 +1288,11 @@ void CommandListBuilder::deallocate() {
     if (impl_) {
         impl_->deallocate();
     }
+}
+
+detail::CommandListBuilderImpl& CommandListBuilder::impl() {
+    TT_FATAL(impl_ != nullptr, "CommandListBuilder has been moved from");
+    return *impl_;
 }
 
 CommandList::CommandList(std::unique_ptr<Impl> impl) : impl_(std::move(impl)) {}
@@ -1317,6 +1330,18 @@ void EnqueueCommandList(MeshCommandQueue& cq, CommandList& command_list, bool bl
     TT_FATAL(&command_list.device() == cq.device(), "CommandList belongs to a different MeshDevice");
     TT_FATAL(command_list.cq_id() == cq.id(), "CommandList was built for a different command queue");
     command_list.replay(blocking, check_dram_overlap);
+}
+
+}  // namespace tt::tt_metal
+
+namespace tt::tt_metal::experimental {
+
+void AddTensorPrefetcherRequest(
+    CommandListBuilder& builder,
+    const std::vector<std::reference_wrapper<const PrefetcherPipe>>& prefetcher_pipes,
+    ttsl::optional_reference<const distributed::MeshCoordinateRangeSet> device_subset,
+    const std::vector<TensorPrefetcherInput>& input_tensors) {
+    builder.impl().add_tensor_prefetcher_request(prefetcher_pipes, device_subset, input_tensors);
 }
 
 }  // namespace tt::tt_metal::experimental

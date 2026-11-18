@@ -47,7 +47,7 @@ CmdListValue to_value(nb::handle value) {
     throw nb::type_error("Command-list values must be ttnn.Tensor, float, or int");
 }
 
-// A str, or a ttnn.experimental.CmdListParam (read through its name, so the class can stay Python).
+// A str, or a ttnn.CmdListParam (read through its name, so the class can stay Python).
 std::string to_name(nb::handle key) {
     return nb::isinstance<nb::str>(key) ? nb::cast<std::string>(key) : nb::cast<std::string>(key.attr("name"));
 }
@@ -56,7 +56,7 @@ std::string to_name(nb::handle key) {
 
 void py_module_types(nb::module_& mod) {
     nb::class_<CommandListBuilder>(mod, "CommandListBuilder", R"doc(
-        Records TTNN operations into command lists instead of running them (experimental).
+        Records TTNN operations into command lists instead of running them.
 
         Inside ``with builder:``, every device operation launched on the calling thread is recorded, not executed.
         Outputs are allocated but hold stale data until a built list replays. Host reads and writes, and other calls
@@ -119,7 +119,7 @@ void py_module_types(nb::module_& mod) {
                         command queue.
 
                 Returns:
-                    ttnn.experimental.CommandList
+                    ttnn.CommandList
             )doc")
         .def(
             "clear",
@@ -134,7 +134,7 @@ void py_module_types(nb::module_& mod) {
         .def_prop_ro("is_recording", &CommandListBuilder::is_recording);
 
     nb::class_<CommandList>(mod, "CommandList", R"doc(
-        A replayable command list in device DRAM, bound to the command queue it was built for (experimental).
+        A replayable command list in device DRAM, bound to the command queue it was built for.
 
         Lists record raw device addresses, not tensors. Replay reads and writes those addresses whether or not the
         tensors are still allocated; what lives there is the caller's responsibility. Released when garbage collected
@@ -179,7 +179,7 @@ void py_module_types(nb::module_& mod) {
                 tensor's spec.
 
                 Args:
-                    values (dict): New values keyed by ``ttnn.experimental.CmdListParam`` or its name. Each value is
+                    values (dict): New values keyed by ``ttnn.CmdListParam`` or its name. Each value is
                         a ``ttnn.Tensor``, ``float``, or ``int``.
 
                 Keyword Args:

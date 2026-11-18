@@ -68,7 +68,7 @@ uint32_t uint16_of(const ttnn::command_list::CmdListScalar& scalar, std::string_
 
 namespace ttnn::command_list::detail {
 
-namespace metal = tt::tt_metal::experimental;
+namespace metal = tt::tt_metal;
 
 struct RecordedTensor {
     std::string name;  // TTNN param
@@ -245,7 +245,7 @@ void record_to_command_list(
 
 namespace ttnn::command_list {
 
-namespace metal = tt::tt_metal::experimental;
+namespace metal = tt::tt_metal;
 
 tt::tt_metal::ArgValue encode_uint32(const CmdListScalar& scalar) {
     return static_cast<uint32_t>(integer_in(scalar, 0, std::numeric_limits<uint32_t>::max(), "encode_uint32"));
