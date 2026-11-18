@@ -21,9 +21,11 @@ namespace cce_eth = internal_::cce_eth;
 namespace {
 
 constexpr overlay::CmdBuf kCmdBuf = overlay::CMDBUF_1;
-// A node's one send in flight: request VC 4 + hart, transaction id 8 + hart (SPEC-0012 § A send on a link).
+// A node's one send in flight: request VC 4 + hart, transaction id 8 on every hart (SPEC-0012 § A send on a link).
+// Each hart has its own command buffers and acknowledgement counts.
 constexpr uint32_t kFirstReqVc = 4;
-constexpr uint32_t kFirstTrid = 8;
+constexpr uint32_t kTrid = overlay::CMDBUF_1_TRID_START;
+static_assert(kTrid == 8 && kTrid <= overlay::CMDBUF_1_TRID_END, "SPEC-0012: id 8, inside command buffer 1's range");
 // What cce_noc::copy() programs; no document assigns it.
 constexpr uint32_t kRespVc = overlay::CMDBUF_WR_RESP_VC;
 
@@ -44,7 +46,6 @@ struct Node {
     uint32_t nonce;
     uint32_t own_tile;
     uint32_t req_vc;
-    uint32_t trid;
     uint32_t slot_bytes;
     uint32_t control;
     uint32_t staging;
@@ -89,14 +90,14 @@ void copy(const Node& n, uint32_t src, uint64_t dest, uint32_t bytes) {
     setup_ongoing_cmdbuf<kCmdBuf>(AutoIncConfig{});
     setup_wrapping_vcs_cmdbuf<kCmdBuf>(
         VcRange{.start = n.req_vc, .end = n.req_vc}, VcRange{.start = kRespVc, .end = kRespVc});
-    setup_trids_cmdbuf<kCmdBuf>(n.trid);
+    setup_trids_cmdbuf<kCmdBuf>(kTrid);
     set_dest_cmdbuf<kCmdBuf>(dest, 0, 0, 0);
     set_src_cmdbuf<kCmdBuf>(cce_eth::sram_local_addr(n.own_tile, src), 0, 0, 0);
     set_len_cmdbuf<kCmdBuf>(bytes);
     setup_max_bytes_in_packet_cmdbuf<kCmdBuf>(cce_eth::kMaxBytesInPacket);
     setup_packet_tags_cmdbuf<kCmdBuf>(PacketTags{});
     issue_cmdbuf<kCmdBuf>();
-    while (!idma_acked_cmdbuf<kCmdBuf>(n.trid)) {
+    while (!idma_acked_cmdbuf<kCmdBuf>(kTrid)) {
     }
 }
 
@@ -271,9 +272,7 @@ bool load_args(Node& n) {
             return halt(n, kHaltNocPeerOnOwnTile, p);
         }
     }
-    const uint32_t hart = internal_::get_hw_thread_idx();
-    n.req_vc = kFirstReqVc + hart;
-    n.trid = kFirstTrid + hart;
+    n.req_vc = kFirstReqVc + internal_::get_hw_thread_idx();
     return true;
 }
 
