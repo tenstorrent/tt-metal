@@ -53,6 +53,14 @@ def full_range_input(shape, dtype, seed=0, nan=True):
     raise ValueError(f"no input for {dtype}")
 
 
+def one_exponent_input(shape, seed=0):
+    """Values in +-[1, 2) for a block float. They share one exponent, so values an op moves into another block of the
+    tile come back exactly."""
+    torch.manual_seed(seed)
+    magnitude = 1 + torch.rand(shape)
+    return torch.where(torch.rand(shape) < 0.5, -magnitude, magnitude)
+
+
 def assert_exact(expected, actual, signed_zeros=True):
     """Same shape and the same values, compared as float64 so every dtype above compares exactly.
 

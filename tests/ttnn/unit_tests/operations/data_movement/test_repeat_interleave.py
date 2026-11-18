@@ -17,7 +17,11 @@ from tests.ttnn.unit_tests.operations.data_movement.docstring_support import (
     docstring_interleaved_buffer_type_params,
     interleaved_memory_config,
 )
-from tests.ttnn.unit_tests.operations.data_movement.data_movement_test_utils import assert_exact, full_range_input
+from tests.ttnn.unit_tests.operations.data_movement.data_movement_test_utils import (
+    assert_exact,
+    full_range_input,
+    one_exponent_input,
+)
 
 
 @pytest.mark.parametrize("repeats", [1, 2, 3, 58])
@@ -128,14 +132,6 @@ def test_repeat_interleave_with_repeat_tensor(device):
 _BLOCK_FLOATS = (ttnn.bfloat8_b, ttnn.bfloat4_b)
 
 
-def _one_exponent_input(shape, seed=0):
-    """Values in +-[1, 2) for a block float. They share one exponent, so values an op moves into another block of the
-    tile come back exactly."""
-    torch.manual_seed(seed)
-    magnitude = 1 + torch.rand(shape)
-    return torch.where(torch.rand(shape) < 0.5, -magnitude, magnitude)
-
-
 @pytest.mark.parametrize("buffer_type", docstring_interleaved_buffer_type_params(ttnn.repeat_interleave))
 @pytest.mark.parametrize("dtype, layout", docstring_dtype_layout_params(ttnn.repeat_interleave))
 def test_repeat_interleave_docstring_supported_inputs(dtype, layout, buffer_type, device):
@@ -149,7 +145,7 @@ def test_repeat_interleave_docstring_supported_inputs(dtype, layout, buffer_type
         # floats get values with one exponent.
         last_dim_bfloat16 = dim == -1 and dtype == ttnn.bfloat16
         if dim == -1 and dtype in _BLOCK_FLOATS:
-            x = _one_exponent_input((2, 3, 32, 64))
+            x = one_exponent_input((2, 3, 32, 64))
         else:
             x = full_range_input((2, 3, 32, 64), dtype, nan=not last_dim_bfloat16)
         input_tensor = ttnn.from_torch(x, dtype=dtype, layout=layout, device=device, memory_config=memory_config)
