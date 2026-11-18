@@ -4,6 +4,7 @@
 """MiniMax-M3 media module and stored-value format, host only."""
 
 import pickle
+import warnings
 
 import numpy as np
 import pytest
@@ -54,6 +55,27 @@ def test_prepare_matches_hf(hw):
 def test_prepare_rejects(expect_error, kind, image, message):
     with expect_error(ValueError, message):
         MiniMaxM3Media(CONFIG).prepare(kind, image)
+
+
+def test_prepare_takes_read_only_and_flipped_images(monkeypatch):
+    """prepare takes a read-only image with no warning, and a flipped or channel-swapped view like its copy."""
+    from_numpy = torch.from_numpy
+
+    def from_numpy_warns_every_time(array):  # torch itself warns about a read-only array once per process
+        if not array.flags.writeable:
+            warnings.warn("The given NumPy array is not writable")
+        return from_numpy(array)
+
+    monkeypatch.setattr(torch, "from_numpy", from_numpy_warns_every_time)
+    media = MiniMaxM3Media(CONFIG)
+    image = rgb(100, 60)
+    read_only = image.copy()
+    read_only.flags.writeable = False
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        assert np.array_equal(media.prepare("image", read_only).pixels, media.prepare("image", image).pixels)
+    for view in (image[::-1], image[:, ::-1], image[..., ::-1]):
+        assert np.array_equal(media.prepare("image", view).pixels, media.prepare("image", view.copy()).pixels)
 
 
 def test_stub_encode_writes_a_value_prefill_reads(expect_error):
