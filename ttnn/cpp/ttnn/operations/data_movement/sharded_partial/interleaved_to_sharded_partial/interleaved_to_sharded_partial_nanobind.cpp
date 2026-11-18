@@ -15,27 +15,44 @@
 #include "ttnn/types.hpp"
 namespace ttnn::operations::data_movement {
 
-// TODO: Add more descriptions to the arguments
 void bind_interleaved_to_sharded_partial(nb::module_& mod) {
     const auto* doc = R"doc(
-        Converts a partial tensor from interleaved to sharded memory layout
+        Copies one slice of an interleaved TILE tensor into a sharded tensor in L1.
+
+        The input of shape ``[N, C, H, W]`` is read as ``N*C*H`` rows of width ``W``. The rows are split into
+        `num_slices` equal slices, and the output holds slice `slice_index`. ``ttnn.sharded_to_interleaved_partial`` with
+        the same `num_slices` and `slice_index` writes the slice back into the same rows of an interleaved TILE tensor
+        with the input's shape and the output's dtype.
 
         Args:
-            * :attr:`input_tensor` (ttnn.Tensor): input tensor. Must be TILE layout with the standard 32x32 tile.
-            * :attr:`grid` (ttnn.CoreGrid): Grid of sharded tensor
-            * :attr:`shard_shape` (List[int]): Shape [height, width] of each shard, in elements. Both must be greater than 0.
-            * :attr:`num_slices` (int): Number of slices.
-            * :attr:`slice_index` (int): Slice index.
-            * :attr:`shard_scheme` (ttl.tensor.TensorMemoryLayout): Sharding scheme(height, width or block).
-            * :attr:`shard_orientation` (ttl.tensor.ShardOrientation): Shard orientation (ROW or COL major).
+            input_tensor (ttnn.Tensor): the interleaved input tensor, on device, of shape ``[N, C, H, W]``, in TILE layout with 32x32 tiles. ``H`` and ``W`` must be multiples of 32.
+            grid (ttnn.CoreCoord): size of the core grid to shard over. One core per shard is taken from it, a row of the grid at a time for ``ROW_MAJOR`` orientation or a column at a time for ``COL_MAJOR``. It must fit in the device's compute grid. For ``BLOCK_SHARDED``, its x size (``ROW_MAJOR``) or y size (``COL_MAJOR``) must equal the number of shards across the width.
+            shard_shape (List[int]): ``[height, width]`` of each shard. Both must be multiples of 32.
+            num_slices (int): number of slices to split the rows into. Must be at least 1, and ``N*C*H / num_slices`` must be a multiple of 32.
+            slice_index (int): index of the slice to copy, from 0 to ``num_slices - 1``.
+            shard_scheme (ttnn.TensorMemoryLayout): ``HEIGHT_SHARDED``, ``WIDTH_SHARDED`` or ``BLOCK_SHARDED``.
+            shard_orientation (ttnn.ShardOrientation): ``ROW_MAJOR`` or ``COL_MAJOR`` order of the shards on the cores.
 
         Keyword Args:
-            * :attr:`output_dtype` (Optional[ttnn.DataType]): Output data type, defaults to same as input.
+            output_dtype (ttnn.DataType, optional): Data type of the output. Defaults to `None`, which keeps the input dtype. An input of BFLOAT16, FLOAT32 or BFLOAT8_B can be converted to any of these three dtypes. Input values must not be NaN when the dtype changes.
 
-        Example:
+        Returns:
+            ttnn.Tensor: the slice, of shape ``[1, 1, N*C*H / num_slices, W]``, in TILE layout and sharded in L1 with `shard_scheme`.
 
-            >>> sharded_tensor = ttnn.sharded_to_interleaved(tensor, ttnn.CoreGrid(3,3), 2, 2, ttl.tensor.TensorMemoryLayout.HEIGHT_SHARDED, ttl.tensor.ShardOrientation.ROW_MAJOR)
+        Note:
+            Supported dtypes and layouts:
 
+            .. list-table::
+               :header-rows: 1
+
+               * - Dtypes
+                 - Layouts
+               * - BFLOAT16, FLOAT32, INT32, UINT32, UINT16, UINT8, BFLOAT8_B, BFLOAT4_B
+                 - TILE
+
+        Memory Support:
+            - Input: interleaved DRAM and L1
+            - Output: HEIGHT_SHARDED, WIDTH_SHARDED and BLOCK_SHARDED in L1
         )doc";
 
     ttnn::bind_function<"interleaved_to_sharded_partial">(
