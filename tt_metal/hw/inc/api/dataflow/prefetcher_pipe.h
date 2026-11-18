@@ -490,13 +490,20 @@ public:
 
             uint32_t current_src_addr = src_addr;
             destination_offset_bytes_ = 0;
-            // Non-posted: flush_writes waits for completion before pages_sent (posted can reorder).
             noc.set_async_write_state(*this, coalesced_page_size, {.receiver_idx = i});
+            const auto write_page = [&](uint32_t page_src_addr, uint32_t page_bytes) {
+                noc.async_write_with_state(
+                    CoreLocalMem<uint32_t>(page_src_addr), *this, page_bytes, {}, {.receiver_idx = i});
+            };
             for (uint32_t h = 0; h < num_rows; ++h) {
                 const uint32_t row_src_start = current_src_addr;
                 for (uint32_t w = 0; w < coalesced_num_pages_per_row; ++w) {
-                    noc.async_write_with_state(
-                        CoreLocalMem<uint32_t>(current_src_addr), *this, coalesced_page_size, {}, {.receiver_idx = i});
+                    if (h + 1 == num_rows && w + 1 == coalesced_num_pages_per_row) {
+                        // The receiver's last page orders its rows ahead of the credit.
+                        write_flush_tagged(current_src_addr, coalesced_page_size, write_page);
+                    } else {
+                        write_page(current_src_addr, coalesced_page_size);
+                    }
                     current_src_addr += coalesced_page_size;
                     destination_offset_bytes_ += coalesced_page_size;
                 }
@@ -559,6 +566,10 @@ public:
             return;
         }
         const uint32_t num_recv = cross_node_dfb_num_receivers(iface.num_receivers_and_remote_pages_sent_ptr);
+#ifdef ARCH_QUASAR
+        tt_buf_rw::note_if_bound<tt_buf_rw::kRead, Src>();  // op-to-op R/W inference (api/dataflow/buf_rw_note.h)
+        const uint32_t src_addr = noc_traits_t<Src>::template src_addr<Noc::AddressType::LOCAL_L1>(src, noc, src_args);
+#endif
 
         destination_offset_bytes_ = 0;
         for (uint32_t i = 0; i < num_recv; ++i) {
@@ -568,7 +579,9 @@ public:
             const uint32_t wr_offset = sender_wr_offset(iface, i);
             assert_contiguous_write(iface, wr_offset, num_entries);
 #ifdef ARCH_QUASAR
-            noc.async_write(src, *this, len_bytes, src_args, {.receiver_idx = i});
+            write_flush_tagged(src_addr, len_bytes, [&](uint32_t part_src_addr, uint32_t part_bytes) {
+                noc.async_write(CoreLocalMem<uint32_t>(part_src_addr), *this, part_bytes, {}, {.receiver_idx = i});
+            });
 #else
             noc.async_write<NocOptions::POSTED>(src, *this, len_bytes, src_args, {.receiver_idx = i});
 #endif
@@ -600,7 +613,19 @@ public:
         assert_contiguous_write(iface, wr_offset, num_entries);
         destination_offset_bytes_ = 0;
 #ifdef ARCH_QUASAR
-        noc.async_write<opts>(src, *this, len_bytes, src_args, {.receiver_idx = receiver_idx}, noc_opts);
+        tt_buf_rw::note_if_bound<tt_buf_rw::kRead, Src>();  // op-to-op R/W inference (api/dataflow/buf_rw_note.h)
+        write_flush_tagged(
+            noc_traits_t<Src>::template src_addr<Noc::AddressType::LOCAL_L1>(src, noc, src_args),
+            len_bytes,
+            [&](uint32_t part_src_addr, uint32_t part_bytes) {
+                noc.async_write<opts>(
+                    CoreLocalMem<uint32_t>(part_src_addr),
+                    *this,
+                    part_bytes,
+                    {},
+                    {.receiver_idx = receiver_idx},
+                    noc_opts);
+            });
 #else
         static_assert(!has_flag(opts, NocOptions::TXN_ID), "flush_writes cannot wait on a transaction id here");
         noc.async_write<opts | NocOptions::POSTED>(
@@ -608,15 +633,15 @@ public:
 #endif
     }
 
-    // Flush payload writes from this core before publishing pages_sent.
-    // WH/BH: posted flush (depart queue). Quasar: write barrier so destination TL1 is
-    // complete before pages_sent — posted payload + credit can otherwise reorder for
-    // interleaved STRIDED relay consumers under same-program backpressure. With
-    // NocOptions::TXN_ID (Quasar only) the barrier waits only on writes tagged noc_opts.trid.
+    // Waits until this core's payload writes have left its L1, so their source may be reused. It does not wait
+    // for them to land: the payload and the credit that follows both go on NOC_UNICAST_WRITE_VC, which reaches
+    // a receiver in issue order, and on Quasar each payload's last packet also carries the flush tag
+    // (write_flush_tagged) so the receiver commits it first. With NocOptions::TXN_ID (Quasar only) it waits
+    // only on writes tagged noc_opts.trid.
     template <NocOptions opts = NocOptions::DEFAULT>
     FORCE_INLINE void flush_writes(const Noc& noc = Noc{}, const NocOptVals& noc_opts = {}) {
 #ifdef ARCH_QUASAR
-        noc.async_write_barrier<opts>(noc_opts);
+        noc.async_writes_flushed<opts>(noc_opts);
 #else
         static_assert(!has_flag(opts, NocOptions::TXN_ID), "Posted writes flushed does not support TXN_ID");
         noc.async_writes_flushed<opts | NocOptions::POSTED>();
@@ -958,6 +983,29 @@ private:
         atomic_noc_mask_ |= static_cast<uint8_t>(1u << noc_id);
 #endif
     }
+
+#ifdef ARCH_QUASAR
+    // Writes len_bytes from src_addr at destination_offset_bytes_ through issue(src_addr, len_bytes), with the
+    // NoC flush tag on the last packet. Quasar delivers one VC's packets to a receiver in order but may commit
+    // them to its L1 out of order; the receiver commits every packet before a flush-tagged one ahead of
+    // anything after it, so the credit atomic that follows on NOC_UNICAST_WRITE_VC cannot land before the
+    // payload. Only the last packet carries the tag, as each tagged packet holds the receiver's later
+    // commits. The overlay cuts a transfer into NOC_OVERLAY_MAX_BYTES_IN_PACKET packets from its start, so
+    // the last packet is what is left after the whole ones, sent as its own transfer.
+    template <typename Issue>
+    FORCE_INLINE void write_flush_tagged(uint32_t src_addr, uint32_t len_bytes, Issue&& issue) {
+        const uint32_t head_bytes =
+            len_bytes == 0 ? 0 : (len_bytes - 1) / NOC_OVERLAY_MAX_BYTES_IN_PACKET * NOC_OVERLAY_MAX_BYTES_IN_PACKET;
+        if (head_bytes != 0) {
+            issue(src_addr, head_bytes);
+            destination_offset_bytes_ += head_bytes;
+        }
+        noc_set_packet_tags<write_cmd_buf>(/*snoop=*/false, /*flush=*/true);
+        issue(src_addr + head_bytes, len_bytes - head_bytes);
+        noc_set_packet_tags<write_cmd_buf>(/*snoop=*/false, /*flush=*/false);
+        destination_offset_bytes_ -= head_bytes;
+    }
+#endif
 
     // [base, base + size) of the credit words this core writes through the cached view: the
     // whole SENT block on the sender, this receiver's ACKED slots (all lanes) on a receiver.

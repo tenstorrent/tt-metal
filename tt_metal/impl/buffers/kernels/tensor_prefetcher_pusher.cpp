@@ -117,9 +117,10 @@ bool push_tensor(
             continue;
         }
         WAYPOINT("TPPW");
-        // The blocks must land before the credits that advertise them, and before the reader may reuse
-        // their stage slots. Every lane's writes went out on `noc` with this kernel's id, so one flush covers them
-        // all and waits on nothing else.
+        // Each block's last packet carries the NoC flush tag, so its receiver commits it before the credit below.
+        // The flush only waits for the blocks to leave their stage slots, which the reader may then reuse. Every
+        // lane's writes went out on `noc` with this kernel's id, so one flush covers them all and waits on nothing
+        // else.
         pipes[0].flush_writes<NocOptions::TXN_ID>(noc, {.trid = tensor_prefetcher::kTrid});
         for (uint32_t i = 0; i < stream.num_receivers; ++i) {
             if (writing & (1u << i)) {
