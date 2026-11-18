@@ -13,6 +13,7 @@ set(UNIT_TESTS_FABRIC_SRC
     keraunos/test_keraunos_eth_semaphore.cpp
     keraunos/vcluster/manifest.cpp
     keraunos/vcluster/descriptors.cpp
+    keraunos/vcluster/harness.cpp
     keraunos/vcluster/test_vc_node.cpp
     fabric_router/test_pipeline_builder.cpp
     fabric_router/test_mesh_graph_descriptor.cpp
