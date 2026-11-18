@@ -126,29 +126,29 @@ def test_shard_and_gather(mesh_device: ttnn.MeshDevice, expect_error) -> None:  
     assert not model.is_loaded() and model.is_sharded()
     assert params["replicated"].mesh_axes == (1, None)
     assert params["tensor_parallel"].mesh_axes == (1, 0)
-    assert params["tensor_parallel"].declared_mesh_axes == (None, 0)
+    assert params["tensor_parallel"].durable_mesh_axes == (None, 0)
     assert not params["small"].is_sharded()  # no dim splits into whole tiles
     assert_layout_matches_data()
     with expect_error(RuntimeError, "gather it first"):
         params["replicated"].data  # noqa: B018
 
-    # Axis 0 is declared for `tensor_parallel`, axis 1 already sharded: both refuse, and change nothing.
-    with expect_error(ValueError, "declared"):
+    # Axis 0 is in `tensor_parallel`'s durable layout, axis 1 already transient: both refuse, and change nothing.
+    with expect_error(ValueError, "durable layout"):
         model.shard(0)
-    with expect_error(ValueError, "already sharded"):
+    with expect_error(ValueError, "already has a transient split"):
         model.shard(1)
     assert params["replicated"].mesh_axes == (1, None)
 
     model.gather(ccl_manager)
     assert model.is_loaded() and not model.is_sharded()
     for name, p in params.items():
-        assert p.mesh_axes == p.declared_mesh_axes, name
+        assert p.mesh_axes == p.durable_mesh_axes, name
     for name in ("replicated", "small"):
         for device_tensor in ttnn.get_device_tensors(params[name].data):
             assert torch.equal(ttnn.to_torch(device_tensor), state[name]), name
     assert_layout_matches_data()
 
-    # A parameter with no declared split can be sharded over both axes and gathered back in one call.
+    # A parameter with no durable split can be split transiently over both axes and gathered back in one call.
     replicated = params["replicated"]
     replicated.shard(1)
     replicated.shard(0)

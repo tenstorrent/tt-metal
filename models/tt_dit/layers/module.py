@@ -293,8 +293,9 @@ class Module(ABC):
 
     def shard(self, mesh_axis: int) -> None:
         """Evict to 1/n of the weights, n being the device count along `mesh_axis`: each parameter keeps only this
-        device's slice of one dim it does not already split, and declares that dim split over `mesh_axis` (a
-        parameter with no such dim that divides evenly stays whole). `gather` reverses it, bit-identically.
+        device's slice of one dim it does not already split, a transient split over `mesh_axis` recorded in its
+        `mesh_axes` (a parameter with no such dim that divides evenly stays whole). `gather` restores the durable
+        layout, bit-identically.
 
         For a module that has to make room for a while but would otherwise reload from the host: on a Wormhole
         Galaxy a replicated multi-GB module reloads at PCIe speed (seconds), while the gather runs on the fabric.
@@ -327,7 +328,7 @@ class Module(ABC):
         self._mark_loaded()
 
     def is_sharded(self) -> bool:
-        """Whether `shard` sliced any parameter that `gather` has not restored."""
+        """Whether any parameter has a transient split (`shard` without `gather`)."""
         return any(p.is_sharded() for p in self._all_parameters())
 
     def _all_modules(self) -> Iterator[Module]:
@@ -495,9 +496,10 @@ class Parameter:
             pad_value: See `ttnn.from_torch()`. Defaults to `None`.
             mesh_axes: Maps tensor dimensions to mesh device axes for distribution.
                 For a rank-3 tensor whose second and third dimensions are sharded on mesh axes 0 and
-                1, respectively, use `[None, 0, 1]`. This is the declared layout (`declared_mesh_axes`),
-                the one the owning module's forward expects; `shard` can split further, on other mesh
-                axes, until `gather` (`mesh_axes` is the current layout).
+                1, respectively, use `[None, 0, 1]`. This is the durable layout (`durable_mesh_axes`):
+                how the parameter is loaded, saved and cached, and the one the owning module's forward
+                is written for. `shard` adds a transient split over other mesh axes until `gather`;
+                `mesh_axes` is the current layout.
             on_host: If `True`, keep the tensor in host memory instead of device memory.
         """
         total_shape = tuple(total_shape)
@@ -519,7 +521,7 @@ class Parameter:
         self.dtype = dtype
         self.memory_config = memory_config
         self.pad_value = pad_value
-        self.declared_mesh_axes = mesh_axes
+        self.durable_mesh_axes = mesh_axes
         self.mesh_axes = mesh_axes
         self.on_host = on_host
         self._data = None
@@ -547,7 +549,7 @@ class Parameter:
             dtype=self.dtype,
             memory_config=self.memory_config,
             pad_value=self.pad_value,
-            mesh_axes=self.declared_mesh_axes,
+            mesh_axes=self.durable_mesh_axes,
             on_host=self.on_host,
         )
 
@@ -570,8 +572,8 @@ class Parameter:
             msg = "parameter has no data"
             raise RuntimeError(msg)
         if self.is_sharded():
-            axes = [self.mesh_axes[d] for d in self.sharded_dims()]
-            msg = f"parameter is sharded over mesh axes {axes} beyond its declared layout; gather it first"
+            axes = [self.mesh_axes[d] for d in self.transient_dims()]
+            msg = f"parameter has a transient split over mesh axes {axes}; gather it first"
             raise RuntimeError(msg)
         return self._data
 
@@ -585,32 +587,32 @@ class Parameter:
         if self._data is not None:
             ttnn.deallocate(self._data)
             self._data = None
-        self.mesh_axes = self.declared_mesh_axes
+        self.mesh_axes = self.durable_mesh_axes
 
     def is_sharded(self) -> bool:
-        """Whether `shard` split this parameter beyond its declared layout and `gather` has not restored it."""
-        return self.mesh_axes != self.declared_mesh_axes
+        """Whether the parameter has a transient split: `shard` split it and `gather` has not restored it."""
+        return self.mesh_axes != self.durable_mesh_axes
 
-    def sharded_dims(self) -> list[int]:
-        """The dims `shard` split beyond the declared layout."""
-        return [d for d, (a, b) in enumerate(zip(self.mesh_axes, self.declared_mesh_axes, strict=True)) if a != b]
+    def transient_dims(self) -> list[int]:
+        """The dims split beyond the durable layout, by `shard`."""
+        return [d for d, (a, b) in enumerate(zip(self.mesh_axes, self.durable_mesh_axes, strict=True)) if a != b]
 
     def check_shard_axis(self, mesh_axis: int) -> None:
-        """Raise if `mesh_axis` already splits this parameter: by declaration (the owning module's forward expects
-        that split, so it cannot be gathered away) or by an earlier `shard`."""
-        if mesh_axis in self.declared_mesh_axes:
+        """Raise if `mesh_axis` already splits this parameter: in its durable layout (the owning module's forward is
+        written for that split, so it cannot be gathered away) or transiently, by an earlier `shard`."""
+        if mesh_axis in self.durable_mesh_axes:
             msg = (
-                f"mesh axis {mesh_axis} is declared for this parameter (mesh_axes {self.declared_mesh_axes}); "
-                "shard can only split over an undeclared mesh axis"
+                f"mesh axis {mesh_axis} is part of this parameter's durable layout (durable_mesh_axes "
+                f"{self.durable_mesh_axes}); shard can only split over another mesh axis"
             )
             raise ValueError(msg)
         if mesh_axis in self.mesh_axes:
-            msg = f"parameter is already sharded over mesh axis {mesh_axis}"
+            msg = f"parameter already has a transient split over mesh axis {mesh_axis}"
             raise ValueError(msg)
 
     def shard(self, mesh_axis: int, /, *, retired: list[ttnn.Tensor] | None = None) -> None:
-        """Keep only this device's slice of one dim not yet split over the mesh, and mark that dim split over
-        `mesh_axis` in `mesh_axes`. Raises as `check_shard_axis` does. Does nothing without device data, if
+        """Keep only this device's slice of one dim not yet split over the mesh: a transient split over `mesh_axis`,
+        recorded in `mesh_axes`. Raises as `check_shard_axis` does. Does nothing without device data, if
         `mesh_axis` has one device, or if no dim divides evenly (whole tiles, for the last two dims of a tiled
         tensor).
 
@@ -636,11 +638,11 @@ class Parameter:
         self._retire(full, retired)
 
     def gather(self, ccl_manager: Any, /, *, retired: list[ttnn.Tensor] | None = None) -> None:  # noqa: ANN401
-        """Undo `shard`: all-gather every dim split beyond the declared layout, back to that layout.
+        """Undo `shard`: all-gather every transiently split dim, back to the durable layout.
 
         The slice is deallocated, or appended to `retired` for the caller to free.
         """
-        dims = self.sharded_dims()
+        dims = self.transient_dims()
         if not dims or self._data is None:
             return
         piece = current = self._data
@@ -654,7 +656,7 @@ class Parameter:
             )
             if current is not piece:
                 ttnn.deallocate(current)
-            self._set_mesh_axis(dim, self.declared_mesh_axes[dim])
+            self._set_mesh_axis(dim, self.durable_mesh_axes[dim])
             current = ttnn.reshape(gathered, self.local_shape)
         if current.memory_config() != self.memory_config:
             current = ttnn.to_memory_config(current, self.memory_config)
