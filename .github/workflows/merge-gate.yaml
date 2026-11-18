@@ -637,8 +637,8 @@ jobs:
       changed: ${{ steps.classify.outputs.changed }}
       # The gate's thresholds, for the compare job and for stage 2 in the Blackhole legs.
       thresholds: >-
-        {"blackhole": {"threshold": "0.015", "module_thresholds": ""},
-         "wormhole": {"threshold": "0.02", "module_thresholds": ""}}
+        {"blackhole": {"threshold": "0.01", "module_thresholds": ""},
+         "wormhole": {"threshold": "0.01", "module_thresholds": ""}}
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2 cachew: keep
         timeout-minutes: 20

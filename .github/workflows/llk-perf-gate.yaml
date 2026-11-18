@@ -152,7 +152,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        include: ${{ fromJSON(inputs.arch == 'wormhole' && '[{"arch":"wormhole","threshold":"0.02"}]' || inputs.arch == 'blackhole' && '[{"arch":"blackhole","threshold":"0.015"}]' || '[{"arch":"blackhole","threshold":"0.015"},{"arch":"wormhole","threshold":"0.02"}]') }}
+        include: ${{ fromJSON(inputs.arch == 'wormhole' && '[{"arch":"wormhole","threshold":"0.01"}]' || inputs.arch == 'blackhole' && '[{"arch":"blackhole","threshold":"0.01"}]' || '[{"arch":"blackhole","threshold":"0.01"},{"arch":"wormhole","threshold":"0.01"}]') }}
     uses: ./.github/workflows/llk-perf-gate-impl.yaml
     with:
       arch: ${{ matrix.arch }}
