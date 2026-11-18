@@ -10,6 +10,7 @@ set(UNIT_TESTS_FABRIC_SRC
     fabric_router/test_routing_tables.cpp
     keraunos/test_keraunos_co_launched_workers.cpp
     keraunos/test_keraunos_eth_semaphore.cpp
+    keraunos/vcluster/manifest.cpp
     keraunos/vcluster/test_vcluster_manifest.cpp
     fabric_router/test_pipeline_builder.cpp
     fabric_router/test_mesh_graph_descriptor.cpp
