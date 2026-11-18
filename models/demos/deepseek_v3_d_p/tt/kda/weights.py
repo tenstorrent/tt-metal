@@ -23,7 +23,7 @@ _CACHE_SCHEMA_VERSION = 3
 # Stored at the caller's `projection_dtype`.
 PROJECTION_ARTIFACTS = ("input_projection_head_major", "decay_output_projection", "output_projection")
 # A bounded gate sigmoid(A (f_b r + dt_bias)) keeps its per-head scale A and offset A dt_bias in FP32, and the decay
-# projection writes FP32 logits that one FP32 add rounds once to the BF16 gate (ttKDA._compute_decay). In BF16, A and
+# projection adds the offset to its FP32 logits and rounds once to the BF16 gate (ttKDA._compute_decay). In BF16, A and
 # A dt_bias bias every token's sigmoid argument of a channel the same way, a systematic gate error that the recurrence
 # accumulates over each chunk instead of averaging out. On the first 5,120 tokens of Kimi-K3 layers.0, against FP64:
 # mean dG/G -1.8e-4 and mean |per-channel bias| 2.1e-3, against +2.1e-3 and 1.0e-2 with BF16 scale and offset passed as

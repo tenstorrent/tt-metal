@@ -10,6 +10,7 @@
 #include "ttnn/operations/eltwise/binary/common/binary_op_dtype_policy.hpp"
 #include "ttnn/operations/eltwise/binary/common/binary_op_utils.hpp"
 #include "binary_ng_utils.hpp"
+#include "ttnn/operations/eltwise/unary/device/unary_device_operation.hpp"
 #include "ttnn/operations/core/to_memory_config/to_memory_config_op.hpp"
 #include "ttnn/tensor/tensor_ops.hpp"
 #include <cmath>
@@ -109,6 +110,7 @@ bool is_binary_sfpu_op(BinaryOpType val, DataType a, DataType b, bool fast_and_a
         case ISCLOSE:
         // Fused SFPU kernel only: there is no FPU form, so every float dtype routes here.
         case SITU_GLU: return true;
+        case GEGLU_TANH: return a == b && (a == BFLOAT16 || a == BFLOAT8_B);
         default: return false;
     }
     return false;
@@ -383,6 +385,15 @@ void BinaryNgDeviceOperation::validate_on_program_cache_miss(
     }
 
     BinaryNgDeviceOperation::validate_on_program_cache_hit(attributes, tensor_args);
+
+    auto validate_activations = [](const auto& activations, DataType dtype) {
+        unary::validate_integer_input_dtype({activations.begin(), activations.end()}, dtype);
+    };
+    validate_activations(attributes.lhs_activations, input_tensor_a.dtype());
+    if (input_tensor_b.has_value()) {
+        validate_activations(attributes.rhs_activations, input_tensor_b->dtype());
+    }
+    validate_activations(attributes.post_activations, attributes.dtype.value_or(input_tensor_a.dtype()));
 
     if (attributes.dtype.has_value() && output_tensor.has_value()) {
         TT_FATAL(
