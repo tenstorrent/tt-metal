@@ -2,6 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <numeric>
+
 #include <tt_stl/fmt.hpp>
 #include <tt_stl/assert.hpp>
 #include <tt-metalium/tensor/spec/layout/tensor_layout.hpp>
@@ -99,7 +101,9 @@ void TensorLayoutImpl::initialize_alignment() {
     }
     for (size_t i = 0; i < default_alignment.size(); i++) {
         size_t result_idx = i + result.size() - default_alignment.size();
-        result[result_idx] = CMAKE_UNIQUE_NAMESPACE::round_up(result[result_idx], default_alignment[i]);
+        // lcm, not rounding up: the padded dimension must be a multiple of both alignments, and rounding the custom one
+        // up to the default isn't always a multiple of the custom one (32 with 48 gives 48).
+        result[result_idx] = std::lcm(result[result_idx], default_alignment[i]);
     }
     alignment_ = Alignment(std::move(result));
 }

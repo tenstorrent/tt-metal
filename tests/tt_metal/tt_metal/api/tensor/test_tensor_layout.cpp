@@ -19,6 +19,7 @@
 #include <tt-metalium/tensor/tensor_types.hpp>
 #include <tt_metal/impl/tensor/spec/layout/tensor_layout_impl.hpp>
 #include <tt-metalium/experimental/tensor_layout_apis_with_custom_alignment.hpp>
+#include <tt-metalium/vocabulary/node_coord.hpp>
 
 namespace tt::tt_metal {
 namespace {
@@ -471,6 +472,30 @@ INSTANTIATE_TEST_SUITE_P(
             .tile = Tile({16, 32}),
             .expected_alignment = tt::tt_metal::Alignment({32, 96}),
         }));
+
+// A custom alignment is combined with the default one so that the padded shape is a multiple of both.
+TEST(TensorLayoutTests, CustomAlignmentCombinesWithDefaultByLcm) {
+    const MemoryConfig memory_config(
+        BufferType::L1,
+        NdShardSpec{.shard_shape = Shape{1, 48}, .grid = NodeRangeSet(NodeRange{NodeCoord{0, 0}, NodeCoord{0, 0}})});
+    const TensorLayout layout = tt::tt_metal::experimental::tensor_layout_with_custom_alignment(
+        DataType::UINT32, PageConfig(Layout::ROW_MAJOR), memory_config, tt::tt_metal::Alignment({32}));
+
+    EXPECT_EQ(layout.get_alignment(), tt::tt_metal::Alignment({96}));
+    EXPECT_EQ(layout.impl().compute_padded_shape(Shape{2, 40}), Shape({2, 96}));
+}
+
+// A padded width unrelated to the shard width is not combined with it by lcm: an ND-sharded ROW_MAJOR tensor is padded
+// to its shard width.
+TEST(TensorLayoutTests, FromPaddedShapePadsShardedRowMajorWidthToShard) {
+    const MemoryConfig memory_config(
+        BufferType::L1,
+        NdShardSpec{.shard_shape = Shape{1, 48}, .grid = NodeRangeSet(NodeRange{NodeCoord{0, 0}, NodeCoord{0, 0}})});
+    const TensorLayout layout = tt::tt_metal::experimental::tensor_layout_from_padded_shape(
+        DataType::UINT32, PageConfig(Layout::ROW_MAJOR), memory_config, Shape{2, 30}, Shape{2, 31});
+
+    EXPECT_EQ(layout.impl().compute_padded_shape(Shape{2, 30}), Shape({2, 48}));
+}
 
 struct ConsumedMemoryBytesPerBankTestParams {
     Shape shape;
