@@ -4,6 +4,7 @@
 
 from __future__ import annotations
 
+import functools
 import hashlib
 import json
 import os
@@ -126,6 +127,42 @@ def _kernel_capture_only() -> bool:
     return os.environ.get("TT_METAL_KERNEL_CAPTURE_ONLY", "") != ""
 
 
+# Set while an in-process capture pass (set_kernel_capture_only) has dispatch off.
+_runtime_capture_only = False
+
+
+def set_kernel_capture_only(enabled: bool) -> None:
+    """Flip kernel-prewarm capture-only at runtime and remember it, so weight loads can lift it.
+
+    The in-process cold start runs its capture warmup this way. A module loaded lazily inside that
+    warmup (the Gemma encoder, the feature extractor) would otherwise prepare its weights with
+    dispatch off: the on-device prep ops never run, the tensors keep stale DRAM, and the module stays
+    marked loaded with those values for the real run (blx06 2026-11-18: every chip of the feature
+    extractor's bias held another tensor's data, caught only by the replicated-shard check on publish).
+    """
+    global _runtime_capture_only
+    ttnn._ttnn.device.kernel_prewarm_set_capture_only(enabled)
+    _runtime_capture_only = enabled
+
+
+def _dispatch_during_capture(fn):
+    """Run a weight load with dispatch on when a runtime capture pass has it off, then restore it."""
+
+    @functools.wraps(fn)
+    def wrapper(*args, **kwargs):
+        if not _runtime_capture_only:
+            return fn(*args, **kwargs)
+        logger.info("kernel capture-only pass: loading weights with dispatch on")
+        set_kernel_capture_only(False)
+        try:
+            return fn(*args, **kwargs)
+        finally:
+            set_kernel_capture_only(True)
+
+    return wrapper
+
+
+@_dispatch_during_capture
 def load_model(
     tt_model: Module,
     *,

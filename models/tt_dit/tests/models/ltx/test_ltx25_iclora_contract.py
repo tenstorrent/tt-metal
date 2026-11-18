@@ -431,6 +431,7 @@ def constructor_native(contract, monkeypatch):
         StateTensor=lambda: object(),
         resolve_audio_traced=lambda traced, audio: traced if audio is None else audio,
         set_kernel_prewarm_capturing=lambda flag: events.append(("tracer_capture_only", flag)),
+        cache_module=SimpleNamespace(set_kernel_capture_only=capture_only),
         logger=SimpleNamespace(info=lambda *a: None, warning=lambda *a: None),
         safe_open=lambda *a, **kw: nullcontext(SimpleNamespace(metadata=lambda: {"model_version": "2.5"})),
     )

@@ -482,7 +482,7 @@ class LTXPipeline:
                 # compiles off-device before the reservation, so it never reaches here (_cold is False).
                 if _cold and not self.dynamic_load:
                     logger.info("cold build_key: capturing kernel manifest for off-device batch compile")
-                    _kp.kernel_prewarm_set_capture_only(True)
+                    cache_module.set_kernel_capture_only(True)
                     # Capture at the run's OWN traced setting: a traced run's real kernels are the
                     # trace-VARIANT programs (persistent-buffer configs), which an eager capture never
                     # builds -- so under traced we run the capture denoise traced too, with the tracer
@@ -504,7 +504,7 @@ class LTXPipeline:
                         )
                     finally:
                         set_kernel_prewarm_capturing(False)
-                        _kp.kernel_prewarm_set_capture_only(False)
+                        cache_module.set_kernel_capture_only(False)
                     _built = _kp.kernel_prewarm_offline_compile()
                     logger.info(f"cold build_key: batch-compiled {_built} kernels off-device in-process")
                     # The capture pass ran the pipeline under capture-only (no gcc, no dispatch), leaving
