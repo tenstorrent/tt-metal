@@ -74,6 +74,7 @@ set(SOURCES
     ops/embedding_op_test.cpp
     ops/softmax_test.cpp
     ops/softmax_backward_op_test.cpp
+    ops/softmax_backward_collapse_test.cpp
     ops/silu_op_test.cpp
     ops/qkv_causal_conv1d_silu_op_test.cpp
     ops/sdpa_fw_op_test.cpp
