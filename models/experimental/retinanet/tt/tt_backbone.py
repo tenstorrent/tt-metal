@@ -10,10 +10,11 @@ from models.experimental.retinanet.tt.tt_fpn import resnet50Fpn, fpn_optimisatio
 
 class TTBackbone:
     def __init__(self, parameters, model_config, name="backbone"):
-        layers = [3, 4, 6, 3]
         self.inplanes = 64
         parameters_fpn = parameters.fpn
         parameters_body = parameters.body
+        # Each stage's block count comes from its parameters, which RETINANET_NUM_LAYERS may reduce.
+        layers = [len(parameters_body[f"layer{i}"]) for i in range(1, 5)]
 
         # stem
         class StemParams:

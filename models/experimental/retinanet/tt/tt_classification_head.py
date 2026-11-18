@@ -147,7 +147,7 @@ def ttnn_retinanet_classification_head(
         fpn_final_config = head_conv_config(device, fpn_final_config_dict)
 
         x = feature_map
-        for conv_idx in range(4):
+        for conv_idx in range(len(parameters["conv"])):
             conv_block = Conv2dNormActivation(
                 parameters=parameters["conv"][conv_idx],
                 device=device,

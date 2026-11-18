@@ -8,6 +8,8 @@ from models.experimental.retinanet.tt.utils import cls_logits_slice_config, grou
 import pickle
 import os
 from torchvision.models.detection import retinanet_resnet50_fpn_v2, RetinaNet_ResNet50_FPN_V2_Weights
+
+from models.experimental.retinanet.num_layers import load_reduced
 from tt_py_test_utils_common.utils_for_testing import assert_with_pcc
 from loguru import logger
 from models.experimental.retinanet.tt.tt_classification_head import ttnn_retinanet_classification_head
@@ -22,7 +24,7 @@ def create_classification_head_parameters(torch_head, device, model_config):
         ttnn.TILE_LAYOUT if model_config["WEIGHTS_DTYPE"] in [ttnn.bfloat8_b, ttnn.bfloat4_b] else ttnn.ROW_MAJOR_LAYOUT
     )
     parameters["conv"] = []
-    for i in range(4):
+    for i in range(len(torch_head.conv)):
         conv_weight = torch_head.conv[i][0].weight.detach().to(torch.bfloat16)
         bias = torch.zeros(conv_weight.shape[0])
 
@@ -158,6 +160,7 @@ def test_classification_head_full(device, pcc, reset_seeds):
 
     torch_model = retinanet_resnet50_fpn_v2(weights=RetinaNet_ResNet50_FPN_V2_Weights.DEFAULT)
     torch_model.eval()
+    load_reduced(torch_model)
     torch_model = torch_model.to(dtype=torch.bfloat16)
     classification_head = torch_model.head.classification_head
 

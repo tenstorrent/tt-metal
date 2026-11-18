@@ -8,6 +8,8 @@ from loguru import logger
 from ttnn.model_preprocessing import preprocess_model_parameters
 from tt_py_test_utils_common.utils_for_testing import check_with_pcc
 from torchvision.models.detection import retinanet_resnet50_fpn_v2, RetinaNet_ResNet50_FPN_V2_Weights
+
+from models.experimental.retinanet.num_layers import load_reduced
 from PIL import Image
 from torchvision import transforms
 from models.experimental.retinanet.tt.tt_backbone import TTBackbone
@@ -34,6 +36,7 @@ class BackboneTestInfra:
         # Load RetinaNet model to extract backbone
         retinanet = retinanet_resnet50_fpn_v2(weights=RetinaNet_ResNet50_FPN_V2_Weights.DEFAULT)
         retinanet.eval()
+        load_reduced(retinanet)
 
         # Store only backbone
         self.torch_backbone = retinanet.backbone

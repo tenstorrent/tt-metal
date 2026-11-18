@@ -10,6 +10,8 @@ from ttnn.model_preprocessing import preprocess_model_parameters
 from tt_py_test_utils_common.utils_for_testing import check_with_pcc
 
 from torchvision.models.detection import retinanet_resnet50_fpn_v2, RetinaNet_ResNet50_FPN_V2_Weights
+
+from models.experimental.retinanet.num_layers import load_reduced
 from PIL import Image
 from torchvision import transforms
 
@@ -44,6 +46,7 @@ class RetinaNetTestInfra:
         # Load full RetinaNet model
         retinanet = retinanet_resnet50_fpn_v2(weights=RetinaNet_ResNet50_FPN_V2_Weights.DEFAULT)
         retinanet.eval()
+        load_reduced(retinanet)
 
         # Store backbone, regression head, and classification head
         self.torch_backbone = retinanet.backbone
