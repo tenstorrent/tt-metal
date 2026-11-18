@@ -70,7 +70,7 @@ INSTANTIATE_TEST_SUITE_P(
             Expected{
                 .physical_size = {5 * 4 * 32, 32},
                 .alignment = tt::tt_metal::Alignment({32, 32}),
-                .strides = tt::tt_metal::Strides({32 * 3 * 4, 32 * 3, 32, 1})}},
+                .strides = tt::tt_metal::Strides({4 * 32 * 32, 32 * 32, 32, 1})}},
 
         // Row Major, bfloat16, requires padding to 2
         TensorLayoutTestParams{
@@ -102,7 +102,7 @@ INSTANTIATE_TEST_SUITE_P(
             Expected{
                 .physical_size = {32, 32},
                 .alignment = tt::tt_metal::Alignment({32, 32}),
-                .strides = tt::tt_metal::Strides({32, 32, 32, 1})}},
+                .strides = tt::tt_metal::Strides({32 * 32, 32 * 32, 32, 1})}},
 
         // Row Major, 1 element
         TensorLayoutTestParams{
@@ -297,13 +297,13 @@ INSTANTIATE_TEST_SUITE_P(
             .padded_shape = Shape{32, 32, 32},
             .expected_alignment = tt::tt_metal::Alignment({1024, 32, 32}),
             .expected_physical_shape = tt::tt_metal::Shape2D{1024, 32},
-            .expected_strides = tt::tt_metal::Strides({640, 32, 1})},
+            .expected_strides = tt::tt_metal::Strides({32 * 32, 32, 1})},
         RowMajorPaddedShapeAlignmentTestParams{
             .shape = Shape{2, 3, 16, 16},
             .padded_shape = Shape{2, 16, 32, 32},
             .expected_alignment = tt::tt_metal::Alignment({1024, 512, 32, 32}),
             .expected_physical_shape = tt::tt_metal::Shape2D{1024, 32},
-            .expected_strides = tt::tt_metal::Strides({1536, 512, 32, 1})}));
+            .expected_strides = tt::tt_metal::Strides({16 * 32 * 32, 32 * 32, 32, 1})}));
 
 // Regression tests for `legacyShapeToAlignment` on TILE-layout tensors that
 // take the "INTERLEAVED with (deprecated) non-height/width padding" branch

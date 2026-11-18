@@ -295,15 +295,13 @@ Shape2D TensorLayoutImpl::compute_page_shape(const Shape2D& physical_size) const
 }
 
 Strides TensorLayoutImpl::compute_strides(const tt::tt_metal::Shape& logical_shape) const {
+    // Dense strides of the padded shape, at the logical rank. The padded shape can have a higher rank than the logical
+    // one (0-D and 1-D TILE tensors), so it is indexed from the end.
+    const tt::tt_metal::Shape padded_shape = compute_padded_shape(logical_shape);
     const int rank = static_cast<int>(logical_shape.rank());
-    const int alignment_rank = static_cast<int>(alignment_.size());
     Strides strides(rank, 1);
     for (int i = rank - 2; i >= 0; i--) {
-        strides[i] = strides[i + 1] * logical_shape[i + 1];
-        const int alignment_index = i - (rank - alignment_rank) + 1;
-        if (alignment_index >= 0) {
-            strides[i] = CMAKE_UNIQUE_NAMESPACE::round_up(strides[i], alignment_[alignment_index]);
-        }
+        strides[i] = strides[i + 1] * padded_shape[i + 1 - rank];
     }
     return strides;
 }

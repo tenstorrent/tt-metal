@@ -223,7 +223,6 @@ HostTensor pad_impl(
     if (input_padded_shape.rank() < 2) {
         input_padded_shape = input_padded_shape.to_rank(2);
     }
-    const auto input_strides = tensor.strides();
 
     auto pad = [&input_padded_shape, &output_padded_shape, &input_tensor_start, &pad_value_](
                    const HostBuffer& input_host_buffer) {
