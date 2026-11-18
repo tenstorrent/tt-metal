@@ -3,12 +3,14 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // Fabric unicast on a Keraunos test line, with the sender and receiver on CCE1 of the end routers' HSIO tiles, launched
-// as ordinary programs once fabric is up. Run with TT_METAL_SLOW_DISPATCH_MODE=1. On Mock
+// as ordinary programs once fabric is up, and chosen links backed by the NOC: the fabric program extension sets the
+// kind word of the link record on both ends of each chosen link. Run with TT_METAL_SLOW_DISPATCH_MODE=1. On Mock
 // the run compiles the kernels and skips: UMD MockChip reads and writes are no-ops.
 
 #pragma once
 
 #include <cstdint>
+#include <utility>
 #include <vector>
 
 #include <tt-metalium/experimental/fabric/fabric.hpp>
@@ -16,6 +18,9 @@
 #include "fabric_fixture.hpp"
 
 namespace tt::tt_fabric::fabric_router_tests {
+
+// Links of the line backed by the NOC, each by its two ends' fabric chip ids. Empty: every link is Ethernet.
+using NocLinks = std::vector<std::pair<uint32_t, uint32_t>>;
 
 // A worker beside a router: the router's Ethernet channel, and the worker's core, CCE1 of the router's tile
 // (BaseFabricFixture::get_worker_beside_router).
@@ -40,10 +45,11 @@ Line line_ends();
 
 class KeraunosCoLaunchedWorkers : public BaseFabricFixture {
 protected:
-    // Opens the devices with 1D fabric, sends kNumPackets from the line's first chip to its last, then checks both
-    // workers' results and that every router terminates. Skips off Quasar, and on Mock after compiling the workers'
-    // kernels.
-    void run_line_unicast();
+    // Opens the devices with 1D fabric, sends kNumPackets from the line's first chip to its last with the links in
+    // `noc_links` on the NOC and the rest on Ethernet, then checks the link records, both workers' results and that
+    // every router terminates. Skips off Quasar, when a link in `noc_links` is not on the open line, and on Mock after
+    // compiling the workers' kernels.
+    void run_line_unicast(const NocLinks& noc_links);
 
     static void SetUpTestSuite() {}
     static void TearDownTestSuite() {}
