@@ -357,6 +357,69 @@ class Generator(WarmupForwardMixin):
                 ccl_obj._cpf_rep_mode = mode
         self._cpf_rep_last_mode = mode
 
+    def _cpf_rep_tensors(self, P):
+        """Per-layer replica tensors ([1, 1, 2P, head_dim], prefix K rows 0..P-1, V rows P..2P-1) for prefix length P,
+        in layer order, or None when any layer has none (llama_attention._cpf_ring_kv allocates them)."""
+        reps = []
+        for layer in self.model.layers:
+            attn = layer.attention
+            st = getattr(getattr(attn, "tt_ccl", None), "_cpf_ring_state", None)
+            rep = (st or {}).get("rep", {}).get((attn.layer_num, P))
+            if rep is None:
+                return None
+            reps.append(rep)
+        return reps
+
+    def _cpf_rep_miss_prefix(self, tokens_row, prompt_len, block_size):
+        """LLAMA_GALAXY_PREFILL_CPF_REPLICA_MISS=1 (opt-in, read at call time): for a request with no cached prefix,
+        the prefix length P the device replica can serve, else 0. It can when the replica is valid for (P, sha1 of
+        P tokens) and this prompt's first P tokens hash the same, the prompt is longer than P, and the new rows take
+        the replica-read ring path (ring eligible, padded length <= REPLICA_MAX). A lane's first request for a prefix
+        another lane holds is such a miss: its prefix K|V are then read from the replica (same rows as a hit) and
+        copied into this lane's paged cache (_cpf_rep_fill_prefix) instead of being recomputed."""
+        if os.environ.get("LLAMA_GALAXY_PREFILL_CPF_REPLICA_MISS", "0") != "1" or not _cpf_rep_on():
+            return 0
+        if self._cpf_rep_valid is None:
+            return 0
+        P = int(self._cpf_rep_valid[0])
+        if prompt_len <= P:
+            return 0
+        padded = self._padded_new_len(prompt_len - P, P, block_size)
+        if padded > _cpf_rep_max() or not self._cpf_ring_request(padded, P, block_size):
+            return 0
+        pre = tokens_row[:P].to(torch.int64).contiguous().numpy().tobytes()
+        if (P, hashlib.sha1(pre).hexdigest()) != self._cpf_rep_valid:
+            return 0
+        if self._cpf_rep_tensors(P) is None:
+            return 0
+        return P
+
+    def _cpf_rep_fill_prefix(self, kv_cache, page_table_row, P, user_id, block_size):
+        """Copy the replica's prefix K|V (P rows per layer) into user_id's paged cache: page_table_row [1, >= P /
+        block_size] holds the request's blocks; the owning mesh column (user_id // 8) gets them, the other columns
+        -1 (paged_fill_cache skips). Eager ops on the one command queue, so they are ordered before the forward."""
+        nb = P // block_size
+        cols = 4
+        pt = torch.full((cols, ((nb + 7) // 8) * 8), -1, dtype=torch.int32)
+        pt[user_id // 8, :nb] = page_table_row[0, :nb].to(torch.int32)
+        tt_pt = ttnn.from_torch(
+            pt,
+            device=self.mesh_device,
+            dtype=ttnn.int32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            mesh_mapper=ttnn.ShardTensor2dMesh(
+                self.mesh_device, dims=(None, 0), mesh_shape=self.model_args.cluster_shape
+            ),
+        )
+        reps = self._cpf_rep_tensors(P)
+        for i, rep in enumerate(reps):
+            head_dim = int(rep.shape[3])
+            for j, lo in enumerate((0, P)):
+                part = ttnn.slice(rep, [0, 0, lo, 0], [1, 1, lo + P, head_dim])
+                ttnn.experimental.paged_fill_cache(kv_cache[i][j], part, tt_pt, batch_idx=0)
+                ttnn.deallocate(part)
+        ttnn.deallocate(tt_pt)
+
     def prefill_warmup(
         self,
         tokens: torch.Tensor,
@@ -645,6 +708,22 @@ class Generator(WarmupForwardMixin):
                 ):
                     num_cached_tokens_list[idx] = ring_cached
 
+        # CPF replica miss (opt-in): a single-request miss whose prefix the replica holds runs as a replica-read hit
+        # over that prefix; rep_fill_prefix[idx] = P marks the prefix rows to copy into the request's paged cache.
+        rep_fill_prefix = [0] * batch
+        if (
+            batch == 1
+            and num_cached_tokens_list[0] == 0
+            and kv_cache is not None
+            and page_table is not None
+            and not self.warming_up_prefill
+            and not CHUNKED_PREFILL
+        ):
+            P = self._cpf_rep_miss_prefix(tokens[0], int(prompt_lens[0]), get_block_size(kv_cache))
+            if P:
+                num_cached_tokens_list[0] = P
+                rep_fill_prefix[0] = P
+
         # Heuristic: revert to non-cached path when prefix-caching overhead
         # exceeds the compute savings (chunked-SDPA penalty, column masking,
         # replication).  Overwriting cached KV blocks with identical data is
@@ -666,6 +745,7 @@ class Generator(WarmupForwardMixin):
                         f"(seq_len={int(seq_len)}, cached={num_cached_tokens_list[idx]})"
                     )
                     num_cached_tokens_list[idx] = 0
+                    rep_fill_prefix[idx] = 0
 
         # Calculate and pad prefill_seq_lens excluding cached tokens
         prefill_seq_lens = [
@@ -920,6 +1000,23 @@ class Generator(WarmupForwardMixin):
             num_cached = num_cached_tokens_list[request_idx]
             last_token_idx_output = last_token_idx - num_cached if num_cached > 0 else last_token_idx
 
+            if not work_use_batched_prefill and rep_fill_prefix[request_idx]:
+                if rep_mode != "read":
+                    raise RuntimeError(
+                        f"CPF replica miss: prefix {rep_fill_prefix[request_idx]} chosen for user {user_id} but the "
+                        f"replica mode is {rep_mode!r} (cur {self._cpf_rep_cur}, valid {self._cpf_rep_valid})"
+                    )
+                logger.info(
+                    f"CPF replica miss: user {user_id} prefix {rep_fill_prefix[request_idx]} from the replica, "
+                    f"{seq_len - rep_fill_prefix[request_idx]} new tokens"
+                )
+                self._cpf_rep_fill_prefix(
+                    kv_cache,
+                    page_table[request_idx : request_idx + 1, :],
+                    rep_fill_prefix[request_idx],
+                    user_id,
+                    get_block_size(kv_cache),
+                )
             if user_enable_trace:
                 tt_tok = self._easy_trace_prefill(**prefill_kwargs, prefill_seq_len=prefill_seq_len)
             else:
