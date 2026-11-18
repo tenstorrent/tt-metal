@@ -341,11 +341,73 @@ def _whole_chunk_reads(entry: Entry, info: TensorInfo, boxes: Mapping[tuple[int,
     return reads
 
 
-def plan_key(entry: Entry, info: TensorInfo, local_coords: set[tuple[int, ...]] | None = None) -> KeyPlan:
+@dataclass(frozen=True)
+class _Layout:
+    """The reads and fills of a key's destination shards, without the key: each read as the position of the saved
+    chunk it copies from, the box it copies and where it goes. Keys whose saved chunk boxes, transforms and
+    destination shards agree share one, whatever files their chunks are in."""
+
+    reads: tuple[tuple[int, Box, Box, tuple[int, ...]], ...]  # (chunk, src, dst, group)
+    fills: tuple[tuple[Box, tuple[int, ...]], ...]  # (dst, group)
+
+
+def _plan_layout(
+    entry: Entry, info: TensorInfo, boxes: Mapping[tuple[int, ...], Box], same_layout: bool, dest_global
+) -> _Layout:
+    """The general path of ``plan_key``: every destination shard through the transforms, intersected with the
+    saved chunks found by the lookup. Raises ``CoverageError`` naming ``info.key`` when the reads and fills do not
+    tile a shard."""
+    reads: list[tuple[int, Box, Box, tuple[int, ...]]] = []
+    fills: list[tuple[Box, tuple[int, ...]]] = []
+    lookup = _ChunkLookup(entry)
+    for group, dbox in boxes.items():
+        group_reads: list[tuple[int, Box, Box, tuple[int, ...]]] = []
+        group_fills: list[tuple[Box, tuple[int, ...]]] = []
+        if same_layout:
+            pieces = [(dbox, dbox)]
+        else:
+            pieces = []
+            for d_piece, c_piece in info.transform.to_canonical(dbox):
+                for c_sub, s_sub in entry.transform.from_canonical(c_piece):
+                    pieces.append((d_piece.corresponding(c_sub, c_piece), s_sub))
+            for pad_box in info.transform.padding_boxes(dest_global):
+                overlap = pad_box.intersect(dbox)
+                if overlap is not None:
+                    group_fills.append((overlap.relative_to(dbox), group))
+        for d_piece, s_piece in pieces:
+            for ci in lookup.overlapping(s_piece):
+                chunk = entry.chunks[ci]
+                overlap = s_piece.intersect(chunk.box)
+                if overlap is None:
+                    continue
+                d_overlap = d_piece.corresponding(overlap, s_piece)
+                group_reads.append((ci, overlap.relative_to(chunk.box), d_overlap.relative_to(dbox), group))
+        # The saved chunks tile their global shape (checked by the lookup) and a transform's pieces partition the
+        # box they map (tested with the transforms), so the reads cannot overlap. Every read and fill lies inside the
+        # shard by construction (relative_to raises otherwise), which leaves the total volume to check.
+        covered = sum(dst.volume for _, _, dst, _ in group_reads) + sum(dst.volume for dst, _ in group_fills)
+        if covered != prod(dbox.sizes):
+            raise CoverageError(
+                f"{info.key}: the saved chunks do not tile destination shard {dbox} (group {group}); "
+                f"{covered} of {prod(dbox.sizes)} elements covered"
+            )
+        reads.extend(group_reads)
+        fills.extend(group_fills)
+    return _Layout(tuple(reads), tuple(fills))
+
+
+def plan_key(
+    entry: Entry,
+    info: TensorInfo,
+    local_coords: set[tuple[int, ...]] | None = None,
+    layouts: dict | None = None,
+) -> KeyPlan:
     """The reads and fills that build every destination shard of one key from the saved chunks.
 
     With ``local_coords`` (a multi-rank world), only the replica groups with a coordinate this rank holds are
-    planned; the other ranks plan theirs.
+    planned; the other ranks plan theirs. ``layouts`` caches the reads of each layout (``_Layout``) across the keys
+    of one load: a model's keys come in a handful of layouts (every expert's weights and moments share one, say), so
+    a reshard plans each layout once and every other key of it only looks up its chunks' files.
     """
     if entry.dtype != info.dtype:
         raise DtypeMismatchError(f"{info.key}: checkpoint holds {entry.dtype} but the live tensor is {info.dtype}")
@@ -366,46 +428,24 @@ def plan_key(entry: Entry, info: TensorInfo, local_coords: set[tuple[int, ...]] 
         whole = _whole_chunk_reads(entry, info, boxes)
         if whole is not None:
             return KeyPlan(info.key, entry, info, boxes, whole, [], True)
-    reads: list[ReadItem] = []
-    fills: list[FillItem] = []
-    lookup = _ChunkLookup(entry)
-    for group, dbox in boxes.items():
-        group_reads: list[ReadItem] = []
-        group_fills: list[FillItem] = []
-        if same_layout:
-            pieces = [(dbox, dbox)]
-        else:
-            pieces = []
-            for d_piece, c_piece in info.transform.to_canonical(dbox):
-                for c_sub, s_sub in entry.transform.from_canonical(c_piece):
-                    pieces.append((d_piece.corresponding(c_sub, c_piece), s_sub))
-            for pad_box in info.transform.padding_boxes(dest_global):
-                overlap = pad_box.intersect(dbox)
-                if overlap is not None:
-                    group_fills.append(FillItem(info.key, overlap.relative_to(dbox), group))
-        for d_piece, s_piece in pieces:
-            for ci in lookup.overlapping(s_piece):
-                chunk = entry.chunks[ci]
-                overlap = s_piece.intersect(chunk.box)
-                if overlap is None:
-                    continue
-                d_overlap = d_piece.corresponding(overlap, s_piece)
-                group_reads.append(
-                    ReadItem(
-                        info.key, chunk.file, ci, overlap.relative_to(chunk.box), d_overlap.relative_to(dbox), group
-                    )
-                )
-        # The saved chunks tile their global shape (checked by the lookup) and a transform's pieces partition the
-        # box they map (tested with the transforms), so the reads cannot overlap. Every read and fill lies inside the
-        # shard by construction (relative_to raises otherwise), which leaves the total volume to check.
-        covered = sum(r.dst.volume for r in group_reads) + sum(f.dst.volume for f in group_fills)
-        if covered != prod(dbox.sizes):
-            raise CoverageError(
-                f"{info.key}: the saved chunks do not tile destination shard {dbox} (group {group}); "
-                f"{covered} of {prod(dbox.sizes)} elements covered"
-            )
-        reads.extend(group_reads)
-        fills.extend(group_fills)
+    # Everything the reads depend on except the key and its chunks' files.
+    layout_key = (
+        tuple(c.box for c in entry.chunks),
+        tuple(entry.global_shape),
+        entry.transform,
+        info.transform,
+        info.label,
+        tuple(info.local_shape),
+        tuple(boxes),
+    )
+    layout = layouts.get(layout_key) if layouts is not None else None
+    if layout is None:
+        layout = _plan_layout(entry, info, boxes, same_layout, dest_global)
+        if layouts is not None:
+            layouts[layout_key] = layout
+    chunks = entry.chunks
+    reads = [ReadItem(info.key, chunks[ci].file, ci, src, dst, group) for ci, src, dst, group in layout.reads]
+    fills = [FillItem(info.key, dst, group) for dst, group in layout.fills]
     return KeyPlan(info.key, entry, info, boxes, reads, fills, False)
 
 
@@ -434,6 +474,7 @@ def create_load_plan(
         plans: dict[str, KeyPlan] = {}
         missing: list[str] = []
         used: set[str] = set()
+        layouts: dict = {}  # the reads of each layout, shared by the keys of this load (plan_key)
         for info in infos:
             entry_key = live_map.get(info.key)
             if entry_key is None:
@@ -451,7 +492,7 @@ def create_load_plan(
                     f"is a {info.role!r}"
                 )
             used.add(entry_key)
-            plans[info.key] = plan_key(entry, info, local_coords)
+            plans[info.key] = plan_key(entry, info, local_coords, layouts)
         return LoadPlan(plans, missing, unexpected_keys(index, used, wanted))
 
 

@@ -573,6 +573,28 @@ def test_planning_pauses_the_gc_and_restores_it():
         gc.enable()
 
 
+def test_keys_of_one_layout_share_its_reads(monkeypatch):
+    """A load plans the reads of each layout once: keys whose saved chunks, transforms and destination agree (an
+    expert's weights and moments, say) reuse them, each with its own chunks' files. The saved keys are replicated over
+    DP4, so their writers, and with them the files their chunks are in, differ from key to key."""
+    canonical = {k: arange((1, 1, 64, 32)) + i for i, k in enumerate("abcdef")}
+    ckpt = FakeCheckpoint()
+    ckpt.save({k: (v, TP8_DP4, Identity()) for k, v in canonical.items()})
+    layouts_planned = []
+    real = planner_module._plan_layout
+    monkeypatch.setattr(planner_module, "_plan_layout", lambda *a: layouts_planned.append(a[1].key) or real(*a))
+    plan, shards = ckpt.load({k: (FSDP32_ROWS, Identity(), (1, 1, 64, 32)) for k in canonical})
+    assert len(layouts_planned) == 1, "one layout, planned once"
+    files = {k: tuple(r.file for r in plan.keys[k].reads) for k in canonical}
+    assert len(set(files.values())) > 1, "the keys read the same boxes from different files"
+    for k, v in canonical.items():
+        assert_shards_equal(shards[k], expected_shards(v, FSDP32_ROWS))
+    # Another destination is another layout.
+    layouts_planned.clear()
+    ckpt.load({"a": (FSDP32_ROWS, Identity(), (1, 1, 64, 32)), "b": (TP4_DP8, Identity(), (1, 1, 64, 32))})
+    assert len(layouts_planned) == 2
+
+
 def test_save_planning_is_cached_per_label_and_shape(expect_error):
     from ttml.distributed_checkpointing._planner import _replica_layout
 
