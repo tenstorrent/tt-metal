@@ -11,12 +11,33 @@ device constant is cached before the first capture and a chunk transient after i
 
 from __future__ import annotations
 
+import contextlib
 import dataclasses
 import pathlib
 from types import SimpleNamespace
 
+import pytest
+from loguru import logger
+
 from models.demos.glm53_flash.tt import mesh as mesh_mod
 from models.demos.glm53_flash.tt.mesh import GLMMesh, lazy_const
+
+
+@pytest.fixture
+def expect_error():
+    """The root conftest's ``expect_error`` fixture (the CI triager's [EXPECTED_ERROR] markers), local to this module:
+    the host suite runs with ``--noconftest`` because the root conftest imports ttnn at collection."""
+
+    @contextlib.contextmanager
+    def expect_error_(error, message):
+        logger.info(f'[EXPECTED_ERROR BEGIN] {error.__name__} message="{message}"')
+        try:
+            with pytest.raises(error, match=message) as exc_info:  # allow-pytest.raises: the fixture body, no conftest
+                yield exc_info
+        finally:
+            logger.info(f'[EXPECTED_ERROR END] {error.__name__} message="{message}"')
+
+    return expect_error_
 
 
 class _Buf:
