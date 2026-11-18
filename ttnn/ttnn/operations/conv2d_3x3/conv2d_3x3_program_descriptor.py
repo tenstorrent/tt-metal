@@ -69,7 +69,8 @@ RING_TOKEN_BYTES = 16
 CB_ZERO_SRC = 11
 # Center-tap direct in0 (see CENTER_TAP_DIRECT): the kw = 1 K-blocks' input tiles, copied by the reader.
 CB_CENTER_TILES = 12
-# Tap-direct N-slice prelude (see _tap_direct): one 16 B entry of tap source addresses per cb_im2col_rm unit slot.
+# Tap-direct (see _tap_direct): N-slice prelude, one 16 B entry of tap source addresses per cb_im2col_rm unit slot;
+# K-blocked walk, a FIFO of one 16 B entry per unit (_tap_direct_fifo_units).
 CB_SRC_TABLE = 13
 
 # R4 reduce-scatter semaphores; the weight multicast channel allocates its own after them.
@@ -166,6 +167,8 @@ IM2COL_RM_DEPTH_ROWS = 2
 # two groups from the L1 left after the solve (_im2col_ring_target). The reader's per-unit work, not its reads, paced
 # the prelude tilize, so one trid wait and one push per group instead of per unit.
 TAP_DIRECT_GROUP = 3
+# Tap-direct on the K-blocked walk: the reader reserves, fences and pushes this many unit entries at a time.
+TAP_DIRECT_FIFO_GROUP = 4
 WEIGHT_DEPTH = 2
 OUT_DEPTH_ROW_GROUPS = 2
 # cb_input_tiles depth in untilize batches: the reader reads batch b+1 while compute untilizes b. Where every core runs
@@ -515,21 +518,38 @@ CENTER_NONE, CENTER_K_BLOCK, CENTER_SLOTS = 0, 1, 2
 
 
 def _tap_direct(g: Conv3x3Geometry, bm, bk, nslice):
-    """Tap-direct N-slice prelude: compute tilizes each tap block of a unit from an L1 address the reader publishes (a
-    slab run when the tile-row's pixels are one output-row run inside the image, the zero block for a kernel row
-    outside it, else the unit's slot, which the reader gathers as before). Saves the reader's copy of most tap blocks,
-    which is what paces the N-slice prelude. Needs the tap-major gather."""
+    """Tap-direct: compute tilizes each tap block of a unit from an L1 address the reader publishes (a slab run when the
+    tile-row's pixels are one output-row run inside the image, the zero block for a kernel row outside it, else a block
+    the reader gathers as before). Saves the reader's copy of most tap blocks, which paced the N-slice prelude and the
+    K-blocked walk's tilize (HEIGHT stem / res2 / center-head layers). Needs the tap-major gather. N-slice prelude: one
+    entry per cb_im2col_rm slot; K-blocked walk: an entry FIFO (_tap_direct_fifo_units)."""
     return (
-        nslice
-        and _tap_major(g, bk)
-        and not face_direct_im2col(g, bk)
-        and not _row_split(g, bm, bk)
-        and not _strided_window(g, bk)
+        _tap_major(g, bk) and not face_direct_im2col(g, bk) and not _row_split(g, bm, bk) and not _strided_window(g, bk)
     )
 
 
 def _src_table_bytes(ring_units):
     return _div_up(ring_units * 16, 64) * 64
+
+
+def _tap_direct_fifo_units(g: Conv3x3Geometry, bm, bk, nslice):
+    """K-blocked tap-direct: entries of the unit FIFO, one K-block (so the reader runs a whole K-block ahead of the tilize
+    and, under the center-tap slots, no further). cb_im2col_rm then holds only gathered tap blocks. 0 on the N-slice
+    walk or without tap-direct."""
+    return bm if not nslice and _tap_direct(g, bm, bk, nslice) else 0
+
+
+def _tap_direct_windows(g: Conv3x3Geometry, bm, bk, nslice, center_mode):
+    """K-blocked tap-direct window units: with d = 1, three taps per unit (one kernel row per K-block) and no center
+    slots, a unit whose taps are adjacent slab runs is one strided window tilized c_in_tiles-strided, 3 * c_in_tiles
+    wide (stem.conv2 @ LoFi 52.5 -> 47.6 us). One-tile taps keep the per-tile unpack tilize."""
+    return bool(
+        _tap_direct_fifo_units(g, bm, bk, nslice)
+        and g.dilation == 1
+        and bk == 3 * g.c_in_tiles
+        and g.c_in_tiles > 1
+        and center_mode != CENTER_SLOTS
+    )
 
 
 def center_tap_mode(g: Conv3x3Geometry, bm, bk):
@@ -645,7 +665,11 @@ def _footprint(
         + (RING_TOKEN_BYTES + TILE_BYTES_FP32 if nslice else bm * bn * TILE_BYTES_FP32)
         + combine_bytes
         + (0 if g.sharded_output else OUT_DEPTH_ROW_GROUPS * sb_h * bn * g.out_tile_bytes)
-        + (_src_table_bytes(im2col_rm_depth_rows) if _tap_direct(g, bm, bk, nslice) else 0)
+        + (
+            (_tap_direct_fifo_units(g, bm, bk, nslice) * 16 or _src_table_bytes(im2col_rm_depth_rows))
+            if _tap_direct(g, bm, bk, nslice)
+            else 0
+        )
     )
     return dict(
         num_k_blocks=num_k_blocks,
@@ -1080,7 +1104,11 @@ def create_program_descriptor(
     if tap_major_im2col(g, b):
         cbs.append(_cb(CB_ZERO_SRC, ttnn.bfloat16, pixel_bytes, TILE, cores))
     tap_direct = _tap_direct(g, bm, bk, b.nslice)
-    if tap_direct:
+    tap_direct_fifo_units = _tap_direct_fifo_units(g, bm, bk, b.nslice)
+    tap_direct_windows = _tap_direct_windows(g, bm, bk, b.nslice, b.center_mode)
+    if tap_direct_fifo_units:
+        cbs.append(_cb(CB_SRC_TABLE, ttnn.bfloat16, 16, tap_direct_fifo_units, cores))
+    elif tap_direct:
         cbs.append(_cb(CB_SRC_TABLE, ttnn.bfloat16, 64, _src_table_bytes(b.im2col_rm_depth_rows) // 64, cores))
     center_mode = b.center_mode
     if center_mode == CENTER_K_BLOCK:
@@ -1236,11 +1264,20 @@ def create_program_descriptor(
             CB_SRC_TABLE,
             # N-slice ring: tile-rows per forwarded row group, the compute's slice subblock height.
             _ring_subblock(bm, ns)[0],
-            # Tap-direct group: at most half the ring, so compute always has the other half.
-            max(1, min(TAP_DIRECT_GROUP, b.im2col_rm_depth_rows // 2)) if tap_direct else 1,
+            # Tap-direct group: N-slice prelude, at most half the ring, so compute always has the other half; K-blocked
+            # walk, entries of the unit FIFO.
+            (
+                max(1, min(TAP_DIRECT_FIFO_GROUP, tap_direct_fifo_units))
+                if tap_direct_fifo_units
+                else max(1, min(TAP_DIRECT_GROUP, b.im2col_rm_depth_rows // 2))
+            )
+            if tap_direct
+            else 1,
             input_ring_batches,
             # A window past the ring would reserve more than the CB holds.
             min(FILL_WINDOW_BATCHES, input_ring_batches) if g.tile_input and not b.ring else 1,
+            tap_direct_fifo_units,
+            int(tap_direct_windows),
         ]
         args.extend(ttnn.TensorAccessorArgs(input_tensor).get_compile_time_args())
         return args
@@ -1287,6 +1324,8 @@ def create_program_descriptor(
         int(tap_direct),
         CB_SRC_TABLE,
         b.im2col_rm_depth_rows,
+        int(tap_direct_fifo_units > 0),
+        int(tap_direct_windows),
     ]
 
     writer_ct_args = [

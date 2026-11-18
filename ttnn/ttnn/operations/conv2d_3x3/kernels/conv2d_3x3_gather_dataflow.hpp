@@ -756,6 +756,366 @@ struct TapDirectPlanned {
     }
 };
 
+// Tap-direct on the K-blocked walk (one unit = one tile-row of one K-block, K-block outer): compute tilizes every tap
+// block from an L1 source the reader publishes, so the reader copies only the taps that are not one contiguous run of
+// the slab. The unit stream is a FIFO of 16 B entries (cb_table, table_units deep): words 0..taps-1 the tap sources (a
+// slab run, the 32-pixel zero block, or a gathered block), word 3 the cb_blocks pages compute pops after the unit. Only
+// a gathered tap (an image edge, a run across the ring slab's end, a tile-row straddling two output rows) gets storage:
+// one [32 px, c_in_p] block (blk_pages bf16 pages) of cb_blocks, a FIFO of num_blocks blocks, allocated in unit order.
+// So the reader runs table_units units (one K-block) ahead at 16 B each, whatever the L1 left for gathered blocks.
+// ring_px > 0: the ring slab (a pixel's ring position is reduced into [0, ring_px); a run across the ring end is
+// gathered in two pieces). skip_kw >= 0: the center-tap slots (that tap is neither published nor gathered).
+// Entries are reserved in groups that never cross the table's ring end; a flush fences the gathers and pushes the
+// pending blocks (split at the block ring's end), then the entries written so far. A block is always pushed with (or
+// before) the entry that points at it, and a full block ring forces a flush first, so compute can always free blocks
+// (num_blocks >= 2 * taps: one unit's blocks never fill the ring). Measured (Blackhole p150b, LoFi, zoned): the copying
+// gather paced the tilize of every K-block on the HEIGHT stem and res2 / center-head layers; stem.conv2 68.6 -> 52.5 us
+// (window units: 47.6), bit-identical. Zero-once: blk_zkw[b] = kw + 1 while block b holds the canonical zero rows of
+// tap kw (W_out a multiple of 32, three taps per unit); a later canonical gather of tap kw into b reads only its run.
+template <
+    uint32_t output_width,
+    int32_t input_height,
+    int32_t input_width,
+    int32_t padding,
+    int32_t dilation,
+    uint32_t c_in_p,
+    uint32_t block_k_tiles,
+    int32_t skip_kw,
+    int32_t ring_px,
+    uint32_t num_blocks,
+    uint32_t table_units,
+    uint32_t cb_blocks,
+    uint32_t cb_table,
+    uint32_t trid,
+    bool windows = false>
+struct TapDirectFifo {
+    static constexpr int32_t TILE_DIM = 32;
+    static constexpr uint32_t pixel_bytes = c_in_p * 2;
+    static constexpr uint32_t blk_bytes = TILE_DIM * pixel_bytes;
+    static constexpr uint32_t blk_pages = c_in_p / TILE_DIM;
+    static constexpr uint32_t taps = block_k_tiles * TILE_DIM / c_in_p;
+    static constexpr bool canon_enabled = taps == 3;
+    static constexpr TapEdgeCanon canon_kw[3] = {
+        tap_edge_canon<output_width, input_width, padding, dilation, canon_enabled>(0),
+        tap_edge_canon<output_width, input_width, padding, dilation, canon_enabled>(1),
+        tap_edge_canon<output_width, input_width, padding, dilation, canon_enabled>(2)};
+    static constexpr bool zero_once = canon_kw[0].on || canon_kw[1].on || canon_kw[2].on;
+    static constexpr uint32_t edge_bytes(uint32_t kw) {
+        return canon_kw[kw].on &&
+                       static_cast<uint32_t>(canon_kw[kw].hi - canon_kw[kw].zl) * pixel_bytes <= NOC_MAX_BURST_SIZE
+                   ? static_cast<uint32_t>(canon_kw[kw].hi - canon_kw[kw].zl) * pixel_bytes
+                   : 0;
+    }
+    // Window units (d = 1, three taps, no center slots): a unit whose three taps are all slab runs is one run of n + 2
+    // pixels, and tap kw's tile j sits at its base + (kw * c_in_tiles + j) * 64 B with a one-pixel row stride, so
+    // compute tilizes it as one 3 * c_in_tiles-wide strided window. Flagged in the entry's pop word (bit 31).
+    static constexpr uint32_t WINDOW_FLAG = 0x80000000u;
+    static_assert(!windows || (dilation == 1 && taps == 3 && skip_kw < 0), "a window unit is one kernel row, d = 1");
+
+    uint32_t blk_base = 0;
+    uint32_t table_base = 0;
+    uint32_t blk_head = 0;      // block index at cb_blocks' write pointer
+    uint32_t blk_pending = 0;   // blocks reserved and written since the last flush
+    uint32_t tbl_head = 0;      // entry index at cb_table's write pointer
+    uint32_t tbl_written = 0;   // entries written since the last flush
+    uint32_t tbl_reserved = 0;  // entries reserved from tbl_head
+    uint32_t in_flight = 0;     // gather reads issued since the last fence
+    uint32_t fixed_state = 0;   // bytes of the stateful read setup (0: none)
+    uint8_t blk_zkw[zero_once ? num_blocks : 1];
+
+    FORCE_INLINE void init(uint32_t blocks_l1, uint32_t table_l1) {
+        blk_base = blocks_l1;
+        table_base = table_l1;
+        for (uint32_t b = 0; b < (zero_once ? num_blocks : 1); ++b) {
+            blk_zkw[b] = 0;
+        }
+    }
+
+    static FORCE_INLINE int32_t ring_x(int32_t x) {
+        if constexpr (ring_px > 0) {
+            if (x >= ring_px) {
+                x -= ring_px;
+            }
+        }
+        return x;
+    }
+    static FORCE_INLINE bool crosses(int32_t x, int32_t n) {
+        if constexpr (ring_px > 0) {
+            return x + n > ring_px;
+        } else {
+            return false;
+        }
+    }
+    template <typename Reads>
+    FORCE_INLINE void run(Reads& reads, uint64_t slab_noc, int32_t x, uint32_t dst, int32_t n) {
+        fixed_state = 0;
+        ++in_flight;
+        if (crosses(x, n)) {
+            const int32_t first = ring_px - x;
+            reads.read(slab_noc + x * pixel_bytes, dst, first * pixel_bytes);
+            reads.read(slab_noc, dst + first * pixel_bytes, (n - first) * pixel_bytes);
+        } else {
+            reads.read(slab_noc + x * pixel_bytes, dst, n * pixel_bytes);
+        }
+    }
+    template <typename Reads>
+    FORCE_INLINE void zeros(Reads& reads, uint64_t zero_noc, uint32_t dst, int32_t n) {
+        fixed_state = 0;
+        ++in_flight;
+        reads.read(zero_noc, dst, n * pixel_bytes);
+    }
+
+    template <typename Reads>
+    FORCE_INLINE void flush(Reads& reads) {
+        if (in_flight > 0) {
+            reads.wait(trid);
+            in_flight = 0;
+        }
+        if (blk_pending > 0) {
+            const uint32_t to_end = num_blocks - blk_head;
+            const uint32_t first = blk_pending < to_end ? blk_pending : to_end;
+            cb_push_back(cb_blocks, first * blk_pages);
+            if (blk_pending > first) {
+                cb_push_back(cb_blocks, (blk_pending - first) * blk_pages);
+            }
+            blk_head += blk_pending;
+            if (blk_head >= num_blocks) {
+                blk_head -= num_blocks;
+            }
+            blk_pending = 0;
+        }
+        if (tbl_written > 0) {
+            cb_push_back(cb_table, tbl_written);
+            tbl_head += tbl_written;
+            if (tbl_head >= table_units) {
+                tbl_head -= table_units;
+            }
+            tbl_reserved -= tbl_written;
+            tbl_written = 0;
+        }
+    }
+
+    // A fresh block for this unit; returns its index.
+    template <typename Reads>
+    FORCE_INLINE uint32_t alloc(Reads& reads) {
+        if (blk_pending == num_blocks) {
+            flush(reads);
+        }
+        cb_reserve_back(cb_blocks, (blk_pending + 1) * blk_pages);
+        uint32_t b = blk_head + blk_pending;
+        if (b >= num_blocks) {
+            b -= num_blocks;
+        }
+        ++blk_pending;
+        return b;
+    }
+
+    // Reserve entries for the next units: at most `group`, `units_left`, and never past the table's ring end.
+    FORCE_INLINE void reserve(uint32_t group, uint32_t units_left) {
+        if (tbl_reserved > tbl_written) {
+            return;
+        }
+        // Here tbl_written == tbl_reserved == 0 (the caller flushes a full group).
+        const uint32_t to_end = table_units - tbl_head;
+        uint32_t g = group < units_left ? group : units_left;
+        g = g < to_end ? g : to_end;
+        cb_reserve_back(cb_table, g);
+        tbl_reserved = g;
+    }
+
+    // One tap's 32 rows across output-row runs (a tile-row straddling two output rows) into dst.
+    template <typename Reads>
+    FORCE_INLINE void gather_runs(
+        Reads& reads,
+        uint64_t slab_noc,
+        uint64_t zero_noc,
+        uint32_t dst,
+        uint32_t o,
+        uint32_t o_end,
+        int32_t kh,
+        int32_t kw,
+        int32_t slab_x_base_kh) {
+        const uint32_t row_end = o + TILE_DIM < o_end ? o + TILE_DIM : o_end;
+        int32_t ho = o / output_width;
+        int32_t wo = o % output_width;
+        for (uint32_t p = o; p < row_end;) {
+            const int32_t n = row_end - p < output_width - wo ? row_end - p : output_width - wo;
+            const int32_t h_in = ho + kh * dilation - padding;
+            const int32_t w_lo = wo - padding + kw * dilation;
+            int32_t in_lo = w_lo < 0 ? (-w_lo < n ? -w_lo : n) : 0;
+            int32_t in_hi = input_width - w_lo < n ? input_width - w_lo : n;
+            if (h_in < 0 || h_in >= input_height || in_hi < in_lo) {
+                in_lo = in_hi = n;
+            }
+            if (in_lo > 0) {
+                zeros(reads, zero_noc, dst, in_lo);
+            }
+            if (in_hi > in_lo) {
+                run(reads,
+                    slab_noc,
+                    ring_x(slab_x_base_kh + h_in * input_width + w_lo + in_lo),
+                    dst + in_lo * pixel_bytes,
+                    in_hi - in_lo);
+            }
+            if (n > in_hi) {
+                zeros(reads, zero_noc, dst + in_hi * pixel_bytes, n - in_hi);
+            }
+            dst += n * pixel_bytes;
+            p += n;
+            wo = 0;
+            ++ho;
+        }
+    }
+
+    // One unit: tile-row pixels [o, min(o + 32, o_end)) of kernel row kh, taps kw_first.. Writes its entry (an entry
+    // must be reserved), allocates and gathers the taps that need storage; flushes when its group is complete.
+    template <typename Reads>
+    FORCE_INLINE void unit(
+        Reads& reads,
+        uint32_t slab_l1,
+        uint64_t slab_noc,
+        uint32_t zero_l1,
+        uint64_t zero_noc,
+        uint32_t o,
+        uint32_t o_end,
+        int32_t kh,
+        uint32_t kw_first,
+        int32_t slab_x_base_kh) {
+        volatile tt_l1_ptr uint32_t* e =
+            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(table_base + (tbl_head + tbl_written) * 16);
+        const int32_t n_all = static_cast<int32_t>(o_end) - static_cast<int32_t>(o);
+        const int32_t n = n_all < TILE_DIM ? n_all : TILE_DIM;
+        const int32_t ho0 = o / output_width;
+        const int32_t wo0 = o % output_width;
+        const int32_t h_in0 = ho0 + kh * dilation - padding;
+        const bool one_run = wo0 + n <= static_cast<int32_t>(output_width);
+        uint32_t pages = 0;
+        if (n <= 0 || (one_run && (h_in0 < 0 || h_in0 >= input_height))) {
+            for (uint32_t t = 0; t < taps; ++t) {
+                e[t] = zero_l1;
+            }
+        } else if (!one_run) {
+            for (uint32_t t = 0; t < taps; ++t) {
+                const int32_t kw = static_cast<int32_t>(kw_first + t);
+                if (kw == skip_kw) {
+                    continue;
+                }
+                const uint32_t b = alloc(reads);
+                const uint32_t dst = blk_base + b * blk_bytes;
+                if constexpr (zero_once) {
+                    blk_zkw[b] = 0;
+                }
+                gather_runs(reads, slab_noc, zero_noc, dst, o, o_end, kh, kw, slab_x_base_kh);
+                e[t] = dst;
+                pages += blk_pages;
+            }
+        } else {
+            const int32_t row_x = slab_x_base_kh + h_in0 * input_width;
+            if constexpr (windows) {
+                const int32_t w_lo0 = wo0 - padding;
+                if (w_lo0 >= 0 && w_lo0 + n + 2 <= input_width) {
+                    const int32_t x = ring_x(row_x + w_lo0);
+                    if (!crosses(x, n + 2)) {
+                        const uint32_t src = slab_l1 + static_cast<uint32_t>(x) * pixel_bytes;
+                        e[0] = src;
+                        e[3] = WINDOW_FLAG;
+                        ++tbl_written;
+                        if (tbl_written == tbl_reserved) {
+                            flush(reads);
+                        }
+                        return;
+                    }
+                }
+            }
+            for (uint32_t t = 0; t < taps; ++t) {
+                const int32_t kw = static_cast<int32_t>(kw_first + t);
+                if (kw == skip_kw) {
+                    continue;
+                }
+                const int32_t w_lo = wo0 - padding + kw * dilation;
+                if (w_lo >= 0 && w_lo + n <= input_width) {
+                    const int32_t x = ring_x(row_x + w_lo);
+                    if (!crosses(x, n)) {
+                        e[t] = slab_l1 + static_cast<uint32_t>(x) * pixel_bytes;
+                        continue;
+                    }
+                    // A slab run across the ring end: gathered.
+                    const uint32_t b = alloc(reads);
+                    const uint32_t dst = blk_base + b * blk_bytes;
+                    if constexpr (zero_once) {
+                        blk_zkw[b] = 0;
+                    }
+                    run(reads, slab_noc, x, dst, n);
+                    e[t] = dst;
+                    pages += blk_pages;
+                    continue;
+                }
+                const int32_t zl = -w_lo < 0 ? 0 : (-w_lo > n ? n : -w_lo);
+                int32_t hi = input_width - w_lo;
+                hi = hi < zl ? zl : (hi > n ? n : hi);
+                if (hi == zl) {
+                    e[t] = zero_l1;
+                    continue;
+                }
+                const uint32_t b = alloc(reads);
+                const uint32_t dst = blk_base + b * blk_bytes;
+                e[t] = dst;
+                pages += blk_pages;
+                const int32_t x = ring_x(row_x + w_lo + zl);
+                bool fill = true;
+                if constexpr (zero_once) {
+                    const bool canon = canon_kw[kw].on && zl == canon_kw[kw].zl && hi == canon_kw[kw].hi;
+                    fill = !canon || blk_zkw[b] != static_cast<uint8_t>(kw + 1);
+                    blk_zkw[b] = canon ? static_cast<uint8_t>(kw + 1) : 0;
+                    if (!fill && !crosses(x, hi - zl)) {
+                        const uint32_t src = slab_l1 + static_cast<uint32_t>(x) * pixel_bytes;
+                        const uint32_t d = dst + zl * pixel_bytes;
+                        if (kw == 0) {
+                            if constexpr (edge_bytes(0) > 0) {
+                                fixed_read<edge_bytes(0)>(reads, src, d);
+                                continue;
+                            }
+                        } else if (kw == 2) {
+                            if constexpr (edge_bytes(2) > 0) {
+                                fixed_read<edge_bytes(2)>(reads, src, d);
+                                continue;
+                            }
+                        } else {
+                            if constexpr (edge_bytes(1) > 0) {
+                                fixed_read<edge_bytes(1)>(reads, src, d);
+                                continue;
+                            }
+                        }
+                    }
+                }
+                if (fill && zl > 0) {
+                    zeros(reads, zero_noc, dst, zl);
+                }
+                run(reads, slab_noc, x, dst + zl * pixel_bytes, hi - zl);
+                if (fill && n > hi) {
+                    zeros(reads, zero_noc, dst + hi * pixel_bytes, n - hi);
+                }
+            }
+        }
+        e[3] = pages;
+        ++tbl_written;
+        if (tbl_written == tbl_reserved) {
+            flush(reads);
+        }
+    }
+
+    template <uint32_t bytes, typename Reads>
+    FORCE_INLINE void fixed_read(Reads& reads, uint32_t src_l1, uint32_t dst_l1) {
+        if (fixed_state != bytes) {
+            dataflow_kernel_lib::set_read_state<bytes>(reads.noc, src_l1);
+            fixed_state = bytes;
+        }
+        dataflow_kernel_lib::read_with_state<bytes>(reads.noc, dst_l1, src_l1);
+        reads.count_packets(1);
+        ++in_flight;
+    }
+};
+
 // Strided window (stride 2, d 1, C_in_p whole tiles, one K-block per kernel row): im2col row i of a tile-row is the 3
 // consecutive input pixels from 2 * wo_i - padding, and inside one output-row run row i + 1 starts two pixels after row
 // i. So the run's rows are overlapping windows of one input run: pixel slot j of the unit holds input pixel

@@ -91,6 +91,14 @@
 //     cb_im2col_tiles holds two K-blocks, so K-block k's slots (k % 2) are free once the reader can reserve K-block k's
 //     first im2col row: compute then began K-block k - 1, so the matmul of K-block k - 2 is done.
 //
+// Tap-direct on the K-blocked walk (TapDirectFifo in conv2d_3x3_gather_dataflow.hpp): every unit (tile-row x K-block)
+// is one 16 B entry of cb_src_table, a FIFO one K-block deep, holding the L1 source compute tilizes each tap from: a
+// slab run, the zero block, or a block of cb_im2col_rm the reader gathered (image edges, a run across the ring slab's
+// end, a tile-row straddling two output rows), so the reader copies only those. With d = 1 and one kernel row per
+// K-block (no center slots) a unit of three slab runs is flagged as one strided window. The slab must outlive compute's
+// tilize: on TILE input compute itself is the slab's next writer (its untilize of the next M-block follows its tilize
+// of this one), on ROW_MAJOR the reader waits for compute to pop every entry before it refills the slab.
+//
 // Lanes C_in..C_in_p of a slab pixel are not data (DRAM page padding or tile padding) and may hold
 // NaN. The gather copies only the C_in real channels of each tap; the lanes of an im2col row are
 // zero either from a one-time zeroing of cb_im2col_rm (when every K-block has the same column
@@ -199,9 +207,9 @@ void kernel_main() {
     // slab_tile_rows consecutive input tile-rows across M-blocks. Each M-block streams only the rows past the previous
     // block's window and pops only the rows below its own window; every band gathers at one base and wraps.
     constexpr bool ring_slab = get_compile_time_arg_val(65) != 0;
-    // Tap-direct N-slice prelude (the descriptor's _tap_direct; TapDirectPlanned / TapDirect in
+    // Tap-direct (the descriptor's _tap_direct). N-slice prelude (TapDirectPlanned / TapDirect in
     // conv2d_3x3_gather_dataflow.hpp): per cb_im2col_rm slot, cb_src_table holds one 16 B entry of tap source addresses
-    // that compute tilizes from.
+    // that compute tilizes from. K-blocked walk: see TapDirectFifo (args 72, 73).
     constexpr bool tap_direct = get_compile_time_arg_val(66) != 0;
     constexpr uint32_t cb_src_table = get_compile_time_arg_val(67);
     // N-slice ring: tile-rows per forwarded row group (compute's slice subblock height; the last group of a slice may
@@ -213,7 +221,12 @@ void kernel_main() {
     // up to fill_window of them in flight, each under its own transaction id (TRID_FILL_BASE + batch % fill_window).
     constexpr uint32_t input_ring_batches = get_compile_time_arg_val(70);
     constexpr uint32_t fill_window = get_compile_time_arg_val(71);
-    constexpr auto input_args = TensorAccessorArgs<72>();
+    // Tap-direct on the K-blocked walk (TapDirectFifo): cb_src_table is a FIFO of this many 16 B unit entries, and
+    // cb_im2col_rm holds only the gathered tap blocks; window units (d = 1, one kernel row per K-block, no center
+    // slots).
+    constexpr uint32_t tap_direct_fifo_units = get_compile_time_arg_val(72);
+    constexpr bool tap_direct_windows = get_compile_time_arg_val(73) != 0;
+    constexpr auto input_args = TensorAccessorArgs<74>();
     static_assert(!alias_slab_combine || nslice_outer, "only the N-slice-outer walk aliases the slab");
 
     const uint32_t input_addr = get_arg_val<uint32_t>(0);
@@ -314,14 +327,40 @@ void kernel_main() {
         conv2d_3x3::TapDirect<output_width, input_height, input_width, padding, dilation, c_in_p, block_k_tiles>;
     using TapPlannedT =
         conv2d_3x3::TapDirectPlanned<output_width, input_height, input_width, padding, dilation, c_in_p, block_k_tiles>;
+    // Tap-direct on the K-blocked walk (TapDirectFifo); the N-slice prelude keeps the slot-indexed table.
+    constexpr bool kb_tap_direct = tap_direct && !nslice_outer;
+    constexpr uint32_t fifo_taps = c_in_p >= TILE_DIM ? block_k_tiles * TILE_DIM / c_in_p : 1;
+    using TapFifoT = conv2d_3x3::TapDirectFifo<
+        output_width,
+        input_height,
+        input_width,
+        padding,
+        dilation,
+        c_in_p,
+        block_k_tiles,
+        center_mode == 2 ? 1 : -1,
+        ring_slab ? static_cast<int32_t>(slab_tile_rows * TILE_DIM) : 0,
+        im2col_rm_depth_rows * fifo_taps,
+        (tap_direct_fifo_units > 0 ? tap_direct_fifo_units : 1),
+        cb_im2col_rm,
+        cb_src_table,
+        TRID_GATHER,
+        tap_direct_windows>;
     static_assert(
-        !tap_direct ||
-            (tap_direct_group >= 1 && (tap_direct_group == 1 || 2 * tap_direct_group <= im2col_rm_depth_rows) &&
-             (!TapPlannedT::zero_once || im2col_rm_depth_rows * 3 <= 32)),
+        !tap_direct || (tap_direct_group >= 1 &&
+                        (kb_tap_direct || tap_direct_group == 1 || 2 * tap_direct_group <= im2col_rm_depth_rows) &&
+                        (kb_tap_direct || !TapPlannedT::zero_once || im2col_rm_depth_rows * 3 <= 32)),
         "tap-direct groups: half the ring at most; the zero-once mask holds 3 bits per slot");
     static_assert(
-        !tap_direct || (tap_major && nslice_outer && !center_direct && !ring_slab && !face_direct),
-        "tap-direct: the tap-major N-slice-outer gather");
+        !tap_direct || (tap_major && !face_direct && !row_split && !strided_window &&
+                        (!nslice_outer || (!center_direct && !ring_slab))),
+        "tap-direct: the tap-major gather (N-slice prelude or K-blocked walk)");
+    static_assert(
+        !kb_tap_direct || (tap_direct_fifo_units > 0 && im2col_rm_depth_rows >= 2 &&
+                           (center_mode != 2 || tap_direct_fifo_units <= block_m_tiles) &&
+                           (center_mode != 1 || block_k_tiles == c_in_p / TILE_DIM)),
+        "K-blocked tap-direct: a unit's blocks never fill the block ring; center slots: at most one K-block of "
+        "entries");
     // The unit address word compute tilizes from: the last 16 B of the unit's cb_im2col_rm pages.
     constexpr uint32_t window_header_offset = block_k_tiles * TILE_DIM * TILE_DIM * ELEM_BYTES - 16;
     static_assert(
@@ -374,6 +413,10 @@ void kernel_main() {
     // Tap-direct: units pushed so far; unit u's source entry is slot u % im2col_rm_depth_rows (compute's direct_seq).
     [[maybe_unused]] uint32_t direct_seq = 0;
     [[maybe_unused]] uint32_t zeroed_blocks = 0;  // tap-direct zero-once: slot blocks holding their zero rows
+    [[maybe_unused]] TapFifoT fifo;               // K-blocked tap-direct state
+    if constexpr (kb_tap_direct) {
+        fifo.init(get_write_ptr(cb_im2col_rm), src_table_l1);
+    }
     conv2d_3x3::TaggedReads<face_direct> reads;
 
     if constexpr (zero_im2col_once) {
@@ -1015,6 +1058,44 @@ void kernel_main() {
                 while (assign_cursor < kb_end) {
                     take_unit(kb_end);
                 }
+            } else if constexpr (kb_tap_direct) {
+                // Tap-direct K-block (TapDirectFifo): one entry per unit, reserved and pushed tap_direct_group at a
+                // time. Center-tap slots: the center tiles are issued once the K-block's first group is reserved (at
+                // most one K-block of entries is outstanding, so compute began the previous K-block: the matmul of
+                // K-block k - 2, the last reader of slot k % 2, is done) and land before its last entry is pushed.
+                const uint32_t kw_first = col_lo / c_in_p;
+                [[maybe_unused]] const uint32_t k_block_seq = m_block_idx * num_k_blocks + k_block_idx;
+                fifo.fixed_state = 0;
+                reads.begin(TRID_GATHER);
+                for (uint32_t tile_row = 0; tile_row < block_m_tiles; ++tile_row) {
+                    fifo.reserve(tap_direct_group, block_m_tiles - tile_row);
+                    if constexpr (center_mode == 2) {
+                        if (tile_row == 0) {
+                            issue_center_rows(
+                                kh,
+                                im2col_tiles_base +
+                                    ((k_block_seq % 2) * block_m_tiles * block_k_tiles + c_in_tiles) * input_page_bytes,
+                                block_k_tiles * input_page_bytes);
+                            fifo.fixed_state = 0;
+                            reads.begin(TRID_GATHER);
+                        }
+                        if (tile_row + 1 == block_m_tiles) {
+                            MaybeDeviceZoneScope("reader_center_wait");
+                            reads.wait(TRID_CENTER);
+                        }
+                    }
+                    fifo.unit(
+                        reads,
+                        slab_l1,
+                        slab_noc,
+                        zero_src_l1,
+                        zero_src_noc,
+                        o_first + tile_row * TILE_DIM,
+                        o_end,
+                        kh,
+                        kw_first,
+                        slab_x_base[kh]);
+                }
             } else if constexpr (center_mode == 2) {
                 // Reserving this K-block's first im2col row implies compute began the previous K-block (the ring is at
                 // most bm rows), so the matmul of K-block k - 2, the last reader of slot k % 2, is done.
@@ -1047,9 +1128,16 @@ void kernel_main() {
             }
         }
 
-        if constexpr (window_direct || tap_direct) {
+        if constexpr (window_direct || (tap_direct && nslice_outer)) {
             // Compute tilizes slab runs in place: the slab is dead only once compute popped every unit.
             cb_reserve_back(cb_im2col_rm, im2col_rm_depth_rows * block_k_tiles);
+        } else if constexpr (kb_tap_direct && !tile_input) {
+            // ROW_MAJOR: this reader refills the slab for the next M-block itself, so it waits until compute popped
+            // every entry pointing into it. TILE needs no wait: compute's untilize of the next block, the slab's only
+            // writer, runs after its own tilize of this one (same unpacker, in order).
+            if (m_block_idx + 1 < num_m_blocks_this_core) {
+                cb_reserve_back(cb_src_table, tap_direct_fifo_units);
+            }
         }
         if constexpr (tile_input && !ring_slab) {
             constexpr uint32_t slab_pages = slab_tile_rows * c_in_tiles;

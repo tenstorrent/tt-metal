@@ -218,6 +218,140 @@ ALWI void direct_tilize(DataflowBuffer& in, DataflowBuffer& out, uint32_t units,
 constexpr uint32_t CENTER_K_BLOCK = 1;
 constexpr uint32_t CENTER_SLOTS = 2;
 
+// Tap-direct on the K-blocked walk (TapDirectFifo in conv2d_3x3_gather_dataflow.hpp): one 16 B entry of cb_table per
+// unit (tap sources, then the cb_in pages to pop after the unit); cb_in holds only the tap blocks the reader gathered,
+// in unit order, each tw pages (never across the ring end). skip_center: tap 1's tiles are the reader's center slots,
+// reserved and pushed unpacked. Same tiles, same order as the copying gather and tilize (bit-identical).
+// Raw LLK (capability), as direct_tilize: ckl::tilize / fast_tilize_block read at the CB read pointer and tie the row
+// stride to the block width. Measured (Blackhole p150b, LoFi, zoned): stem.conv2 68.6 -> 52.5 us (per-tap tilize),
+// 47.6 us with window units; stem.conv3 85.4 -> 69.8; center_head.1 26.3 -> 22.4; res2 19.9 -> 17.0.
+#ifdef TRISC_UNPACK
+template <uint32_t cb_table, uint32_t taps>
+inline uint32_t fifo_unit_sources(uint32_t (&src)[taps]) {
+    invalidate_l1_cache();
+    const uint32_t entry = get_local_cb_interface(get_operand_id(cb_table)).fifo_rd_ptr << 4;
+    volatile uint32_t* w = reinterpret_cast<volatile uint32_t*>(entry);
+    for (uint32_t t = 0; t < taps; ++t) {
+        src[t] = w[t];
+    }
+    return w[3];
+}
+#endif
+
+// windows: a unit flagged in bit 31 of its pop word is one strided window of 3 * tw tiles from src[0] (TapDirectFifo:
+// three adjacent slab runs, row stride one pixel = tw tiles), tilized in fast-tilize chunks of that width, as
+// window_tilize does at stride 2. UNPACK hands the flag to MATH and PACK through their mailboxes (as get_tile_address),
+// since the DEST sections differ. Same tiles, same order.
+template <
+    uint32_t tw,
+    uint32_t taps,
+    bool skip_center,
+    uint32_t cb_in,
+    uint32_t cb_out,
+    uint32_t cb_table,
+    bool windows>
+ALWI void fifo_tilize(DataflowBuffer& in, DataflowBuffer& out, DataflowBuffer& table, uint32_t units) {
+    static_assert(tw != 0 && taps <= 3, "a source entry is 16 B: at most 3 taps and the pop count");
+    static_assert(!windows || (taps == 3 && !skip_center && tw > 1), "a window unit is three adjacent taps");
+    reconfig_data_format_srca(cb_in);
+    pack_reconfig_data_format(cb_out);
+    fast_tilize_init(cb_in, tw, cb_out);
+    if constexpr (tw > 1) {
+        PACK((conv2d_3x3::lean_tilize::pack_init()));
+    }
+    [[maybe_unused]] uint32_t prev_chunk = 0;
+    for (uint32_t u = 0; u < units; ++u) {
+        table.wait_front(1);
+        [[maybe_unused]] uint32_t src[taps];
+        uint32_t pages = 0;
+        UNPACK((pages = fifo_unit_sources<cb_table, taps>(src)));
+        if constexpr (windows) {
+            uint32_t window = 0;
+            UNPACK({
+                window = pages >> 31;
+                pages &= 0x7fffffffu;
+                ckernel::mailbox_write(ckernel::ThreadId::MathThreadId, window);
+                ckernel::mailbox_write(ckernel::ThreadId::PackThreadId, window);
+            })
+            MATH(window = ckernel::mailbox_read(ckernel::ThreadId::UnpackThreadId);)
+            PACK(window = ckernel::mailbox_read(ckernel::ThreadId::UnpackThreadId);)
+            if (window != 0) {
+                constexpr uint32_t wt = 3 * tw;
+                out.reserve_back(wt);
+                PACK((conv2d_3x3::lean_tilize::pack_row_begin(cb_out, 0)));
+                for (uint32_t tiles_done = 0; tiles_done < wt;) {
+                    const uint32_t chunk = conv2d_3x3::lean_tilize::chunk_of(wt - tiles_done);
+                    MATH((llk_math_wait_for_dest_available()));
+                    PACK((llk_packer_wait_for_math_done()));
+                    if (chunk != prev_chunk) {
+                        UNPACK((llk_unpack_fast_tilize_reinit_xdim(chunk)));
+                        prev_chunk = chunk;
+                    }
+                    UNPACK((window_unpack_chunk<cb_in>(src[0], chunk, tiles_done)));
+                    MATH((llk_math_fast_tilize_block_<DST_ACCUM_MODE>(0, cb_in, 4)));
+                    PACK((conv2d_3x3::lean_tilize::pack_row_chunk(chunk)));
+                    MATH((llk_math_dest_section_done<DST_ACCUM_MODE>()));
+                    PACK((llk_pack_dest_section_done<DST_ACCUM_MODE>()));
+                    tiles_done += chunk;
+                }
+                out.push_back(wt);
+                table.pop_front(1);
+                continue;
+            }
+        }
+        for (uint32_t t = 0; t < taps; ++t) {
+            if constexpr (skip_center) {
+                if (t == 1) {
+                    out.reserve_back(tw);
+                    out.push_back(tw);
+                    continue;
+                }
+            }
+            if constexpr (tw == 1) {
+                out.reserve_back(1);
+                UNPACK((direct_unpack_tilize<cb_in>(src[t])));
+                MATH((llk_math_wait_for_dest_available()));
+                PACK((llk_packer_wait_for_math_done()));
+                MATH((llk_math_eltwise_unary_datacopy<
+                      DataCopyType::A2D,
+                      DST_ACCUM_MODE,
+                      BroadcastType::NONE,
+                      UnpackToDestEn>(0, cb_in)));
+                PACK((llk_pack<DST_ACCUM_MODE, true, PackMode::Default>(0, cb_out, 0)));
+                MATH((llk_math_dest_section_done<DST_ACCUM_MODE>()));
+                PACK((llk_pack_dest_section_done<DST_ACCUM_MODE>()));
+                out.push_back(1);
+            } else {
+                out.reserve_back(tw);
+                PACK((conv2d_3x3::lean_tilize::pack_row_begin(cb_out, 0)));
+                for (uint32_t tiles_done = 0; tiles_done < tw;) {
+                    const uint32_t chunk = conv2d_3x3::lean_tilize::chunk_of(tw - tiles_done);
+                    MATH((llk_math_wait_for_dest_available()));
+                    PACK((llk_packer_wait_for_math_done()));
+                    if (chunk != prev_chunk) {
+                        UNPACK((llk_unpack_fast_tilize_reinit_xdim(chunk)));
+                        prev_chunk = chunk;
+                    }
+                    UNPACK((window_unpack_chunk<cb_in>(src[t], chunk, tiles_done)));
+                    MATH((llk_math_fast_tilize_block_<DST_ACCUM_MODE>(0, cb_in, 4)));
+                    PACK((conv2d_3x3::lean_tilize::pack_row_chunk(chunk)));
+                    MATH((llk_math_dest_section_done<DST_ACCUM_MODE>()));
+                    PACK((llk_pack_dest_section_done<DST_ACCUM_MODE>()));
+                    tiles_done += chunk;
+                }
+                out.push_back(tw);
+            }
+        }
+        // pages is set on the unpacker only, the only thread with a wait / pop.
+        for (uint32_t p = 0; p < pages; p += tw) {
+            in.wait_front(tw);
+            in.pop_front(tw);
+        }
+        table.pop_front(1);
+    }
+    fast_tilize_uninit(cb_in, cb_out, tw);
+}
+
 // Center-tap slots: tilizes num_rows im2col rows of three taps (tap-major, each a [32, tw * 32] block), except tap 1,
 // whose tw tiles the reader wrote into their in0 slots: those are reserved and pushed unpacked, and the row's empty
 // tap-1 block is popped unread. One tilize init / uninit for all of it, as in the one-call form.
@@ -258,10 +392,15 @@ template <
     bool relu_on_last_matmul_pack,
     bool strided_window,
     uint32_t c_in_tiles,
-    uint32_t center_mode>
+    uint32_t center_mode,
+    bool tap_direct,
+    bool windows,
+    uint32_t cb_table>
 struct TilizeIm2colKBlock {
     DataflowBuffer* rm;
     DataflowBuffer* tiles;
+    // Tap-direct: the unit entry FIFO (cb_src_table).
+    DataflowBuffer* table;
 
     ALWI void operator()(uint32_t block, uint32_t /*num_k_blocks*/, bool is_last) const {
         if constexpr (center_mode == CENTER_K_BLOCK) {
@@ -281,7 +420,23 @@ struct TilizeIm2colKBlock {
         if constexpr (center_mode == CENTER_SLOTS) {
             static_assert(block_k_tiles == 3 * tilize_width_tiles && block_m_tiles >= 2);
             MaybeDeviceZoneScope("compute_tilize");
-            tilize_rows_skip_center<tilize_width_tiles, cb_im2col_rm, cb_im2col_tiles>(*rm, *tiles, block_m_tiles);
+            if constexpr (tap_direct) {
+                fifo_tilize<tilize_width_tiles, 3, true, cb_im2col_rm, cb_im2col_tiles, cb_table, false>(
+                    *rm, *tiles, *table, block_m_tiles);
+            } else {
+                tilize_rows_skip_center<tilize_width_tiles, cb_im2col_rm, cb_im2col_tiles>(*rm, *tiles, block_m_tiles);
+            }
+        } else if constexpr (tap_direct) {
+            // Includes the unpacker's per-unit wait on the reader.
+            MaybeDeviceZoneScope("compute_tilize");
+            fifo_tilize<
+                tilize_width_tiles,
+                block_k_tiles / tilize_width_tiles,
+                false,
+                cb_im2col_rm,
+                cb_im2col_tiles,
+                cb_table,
+                windows>(*rm, *tiles, *table, block_m_tiles);
         } else {
             // Includes the unpacker's per-tile-row wait on the reader's gather.
             MaybeDeviceZoneScope("compute_tilize");
@@ -365,7 +520,11 @@ void kernel_main() {
     constexpr bool tap_direct = get_compile_time_arg_val(39) != 0;
     constexpr uint32_t cb_src_table = get_compile_time_arg_val(40);
     constexpr uint32_t im2col_rm_depth_rows = get_compile_time_arg_val(41);
-    static_assert(!tap_direct || (k_split && !face_direct && !strided_window));
+    // Tap-direct on the K-blocked walk: cb_src_table is a FIFO of unit entries (fifo_tilize), with window units.
+    constexpr bool kb_tap_direct = get_compile_time_arg_val(42) != 0;
+    constexpr bool tap_direct_windows = get_compile_time_arg_val(43) != 0;
+    static_assert(!tap_direct || (!face_direct && !strided_window));
+    static_assert(kb_tap_direct == (tap_direct && !(k_split && nslice_outer)));
     static_assert(!ring_slab || (tile_input && !k_split && !face_direct && c_in_tiles > 1));
     static_assert(center_mode == 0 || (tile_input && !face_direct && !k_split));
 
@@ -440,12 +599,16 @@ void kernel_main() {
         relu_on_last_matmul_pack,
         strided_window,
         c_in_tiles,
-        center_mode>;
+        center_mode,
+        kb_tap_direct,
+        tap_direct_windows,
+        cb_src_table>;
+    DataflowBuffer src_table_dfb(cb_src_table);
     auto make_pre_k_block = [&]() {
         if constexpr (face_direct) {
             return ckl::NoPreKBlock{};
         } else {
-            return TilizeFn{&im2col_rm_dfb, &im2col_tiles_dfb};
+            return TilizeFn{&im2col_rm_dfb, &im2col_tiles_dfb, &src_table_dfb};
         }
     };
     const auto pre_k_block = make_pre_k_block();
