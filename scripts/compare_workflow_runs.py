@@ -291,12 +291,12 @@ def compare_runs(branch_run: WorkflowRun, main_run: Optional[WorkflowRun]) -> di
 
         # Main has no verdict for this job (skipped or cancelled), so a branch failure has no baseline
         # here: older main runs decide it, as for a job missing from main's latest run.
-        if main_job.conclusion in ("skipped", "cancelled") and job_failed(branch_job):
-            result["unmatched_failures"].append(name)
-            continue
-
-        if main_job.conclusion == "skipped":
-            result["same_success"].append(name)
+        if main_job.conclusion in ("skipped", "cancelled"):
+            if job_failed(branch_job):
+                result["unmatched_failures"].append(name)
+            else:
+                # A cancelled main job is not a main failure, so a passing branch job is not a fix.
+                result["same_success"].append(name)
             continue
 
         if main_passed is None:  # Main still in progress

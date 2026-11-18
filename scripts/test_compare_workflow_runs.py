@@ -65,6 +65,13 @@ def test_skipped_job_without_a_branch_failure_stays_neutral():
     assert c["same_success"] == [QB2]
 
 
+def test_cancelled_main_job_is_not_a_fix_when_the_branch_passes():
+    """FIXED means "failed on main", so a main job that was cancelled is not a baseline failure."""
+    c = cwr.compare_runs(run([job(QB2)], branch="feature"), run([job(QB2, "cancelled")], run_id=10))
+    assert c["fixed"] == []
+    assert c["same_success"] == [QB2]
+
+
 def test_branch_only_in_progress_job_counts_as_in_progress():
     branch = run([job(QB2, None, status="in_progress")], branch="feature")
     assert cwr.compare_runs(branch, None)["in_progress"] == [QB2]
