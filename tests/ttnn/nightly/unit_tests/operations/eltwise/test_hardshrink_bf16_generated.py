@@ -92,8 +92,7 @@ def test_hardshrink_bf16_nonfinite_inputs(device):
 
 
 def test_hardshrink_bf16_exhaustive_inputs(device):
-    """All 65,536 BF16 inputs: torch's result as stored, within STEPS BF16 steps, or STOCK's word per board."""
-    board = "blackhole" if ttnn.device.is_blackhole(device) else "wormhole_b0"
+    """All 65,536 BF16 inputs: torch's result as stored, within STEPS BF16 steps, or STOCK's word."""
     STOCK = {0xFF80: [(0xFF81, 0xFFFF)]}
     STEPS = 0
     bits = torch.arange(1 << 16, dtype=torch.int32)

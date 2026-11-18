@@ -18,7 +18,7 @@ inline bool bf16_dest_hardshrink() {
     return false;
 #endif
 }
-// calculate_simple_forward's instructions in a stall-filling order, constants held in LRegs.
+// The kernel's instructions in a stall-filling order, constants held in LRegs.
 inline void calculate_hardshrink_bf16_scheduled() {
     TTI_SFPLOADI(7, 8, 0x3f00);
     TTI_SFPLOAD(0, 0, 7, 0);
