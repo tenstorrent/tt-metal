@@ -307,8 +307,15 @@ inline void _init_log_() {
  *   exponent term as e_float * 2^-23, so log2 of a power of two is exact. log_base_scale_factor is
  *   always applied, and the result is log2(a) only when the factor is the fp32 bits of 1/ln(2)
  *   (0x3FB8AA3B). Requires HAS_BASE_SCALING, enforced below.
+ * @tparam INPUT_NORMALISED If true, skip the input normalisation below. Only for a caller whose a is
+ *   the result of an SFPMAD/SFPADD/SFPMUL, which never returns -0.0 or a subnormal on Wormhole.
  */
-template <bool FAST_APPROX, bool HAS_BASE_SCALING, bool is_fp32_dest_acc_en, bool IS_BASE_TWO = false>
+template <
+    bool FAST_APPROX,
+    bool HAS_BASE_SCALING,
+    bool is_fp32_dest_acc_en,
+    bool IS_BASE_TWO = false,
+    bool INPUT_NORMALISED = false>
 sfpi_inline sfpi::vFloat calculate_log_body(sfpi::vFloat a, const uint log_base_scale_factor) {
     static_assert(
         !IS_BASE_TWO || HAS_BASE_SCALING,
@@ -325,7 +332,9 @@ sfpi_inline sfpi::vFloat calculate_log_body(sfpi::vFloat a, const uint log_base_
     // addexp(a, -1) with a zero exponent field and a non-zero mantissa, where
     // the wrap to exponent 255 makes a NaN instead of the +inf the special-case
     // handling relies on.
-    a = a * 1.0f + 0.0f;
+    if constexpr (!INPUT_NORMALISED) {
+        a = a * 1.0f + 0.0f;
+    }
 
     sfpi::vFloat three_quarters = 0.75f;
     sfpi::vInt e = sfpi::as<sfpi::vInt>(a) - sfpi::as<sfpi::vInt>(three_quarters);
