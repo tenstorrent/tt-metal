@@ -1,0 +1,291 @@
+--- a/ttnn/ttnn/operations/conv2d_3x3/conv2d_3x3_program_descriptor.py
++++ b/ttnn/ttnn/operations/conv2d_3x3/conv2d_3x3_program_descriptor.py
+@@ -1087,24 +1087,20 @@
+ # dilation, W % 32 == 0 and whole-tile C_in, the kernel rows are whole input tile-rows apart, so [Q_0 | Q_1 | Q_2] is
+ # one matmul on the input's own tiles (K' = 3 C_in, N' = 3 C_out) and the kw shift moves to the output (fp32 packer
+ # L1 accumulation at a +-d row offset). No untilize, gather or tilize. Measured against the K-blocked tap-direct walk
+-# (Blackhole p150b, LoFi bf8_b, perf focus): stem.conv2 47.7 -> 40.6, stem.conv3 69.7 -> 60.2, center_head.1 21.6 ->
+-# 16.4, inst res2.fuse_conv.0 44.4 -> 34.4, inst res3.fuse_conv.0 28.7 -> 26.2 us. Where it does not pay
+-# (_kw_fold_pays) the K-blocked walk runs.
++# (Blackhole p150b, LoFi bf8_b, perf focus): stem.conv2 47.9 -> 36.4, stem.conv3 69.8 -> 51.7, center_head.1 22.1 ->
++# 12.1, inst res2.fuse_conv.0 44.4 -> 33.3, inst res2.fuse_conv.1 34.7 -> 28.1, inst res3.fuse_conv.0 29.0 -> 25.6,
++# res2 16.7 -> 13.7 us. Where it does not pay (_kw_fold_pays) the K-blocked walk runs.
+ KW_FOLD = True
+-# K-blocked kw-fold packs every K-block's [Q_0 | Q_1 | Q_2] over bm + 2 tile-rows into the fp32 accumulator (three
+-# passes) to save a tilize proportional to C_in * bm: it lost below Ct * bm / (N * (bm + 2)) = 0.8 (res3.x 0.6: +3.5%,
+-# sem dec res3 fc0 0.75: +3.6%, fc1 0.6: +7.7%) and won above it (inst dec res2 fc0 0.83: -2.9%, res2 fc1 1.04: -22%,
+-# inst dec res3 fc0 1.5: -8.5%).
+-KW_FOLD_MIN_KBLOCK_RATIO = 0.8
+-# Whole-K kw-fold exposes a fixed latency the K-blocked walk hides under its prelude: the bias read before its first pack
+-# and the whole weight stream before its first matmul (~7 us on res2 / center_head.1). It pays only where the im2col it
+-# removes (tilized taps plus the untilized slab, ~25 ns per tile) takes longer: res2 (4.4 us of im2col) measured
+-# 16.9 -> 18.2 us, center_head.1 (8.8 us) 21.6 -> 16.4.
+-KW_FOLD_WHOLE_K_EXPOSED_NS = 7000
+ IM2COL_NS_PER_TILE = 25
+ # Either form recomputes the two halo tile-rows' products, about 6 * Ct * N extra tile-MACs per M-block, at the user's
+-# fidelity; they must cost less than the im2col removed. inst dec res3 fc0 (bm 3) wins at LoFi (34.8 -> 26.2 us) and
+-# lost at HiFi4 (69.3 -> 74.3 us), where its halo MACs (11.4 us) outweigh its im2col (7.8 us).
++# fidelity, to save the im2col (tilized taps plus the untilized slab, ~25 ns per tile). The weights stream in column
++# rounds, so each Q tile-row is packed once and the first matmul starts when the first round lands; what decides is the
++# halo against the im2col, of which the tap-direct walk hides part (its prelude untilize and first tilize) under the
++# first weight round both walks wait for. Measured (Blackhole p150b, kw-fold vs the tap-direct walk, halo / im2col in
++# brackets): wins up to 0.52 (HiFi4 inst res2 fc1 0.52: 86.8 -> 83.9 us; LoFi inst dec res3 fc0 0.37: 29.0 -> 25.6, res2
++# 0.07: 16.7 -> 13.7; LoFi res3.x 0.37 flat), losses from 0.57 (LoFi sem dec res3 fc0 0.57: +3.4%, fc1 0.73: +6.1%;
++# HiFi4 res3 1.47: +5.7%, inst dec res3 fc0 1.47: +9.6%).
++KW_FOLD_MAX_HALO_SHARE = 0.55
+ LOFI_NS_PER_TILE_MAC = 16 / 1.35
+ FIDELITY_PHASES = {
+     ttnn.MathFidelity.LoFi: 1,
+@@ -1125,17 +1121,12 @@
+ 
+ 
+ def _kw_fold_pays(g, b, math_fidelity):
+-    """Whether kw-fold beats the K-blocked walk `b` would run (see KW_FOLD_MIN_KBLOCK_RATIO, KW_FOLD_WHOLE_K_EXPOSED_NS
+-    and LOFI_NS_PER_TILE_MAC)."""
++    """Whether kw-fold beats the K-blocked walk `b` would run (see KW_FOLD_MAX_HALO_SHARE)."""
+     ct, n, bm = g.c_in_tiles, g.tensor_n_tiles, b.block_m_tiles
+     taps = 6 if b.center_mode != CENTER_NONE else 9
+     im2col_ns = b.max_m_blocks_per_core * (taps * ct * bm + b.slab_tile_rows * ct) * IM2COL_NS_PER_TILE
+     halo_ns = b.max_m_blocks_per_core * 6 * ct * n * FIDELITY_PHASES[math_fidelity] * LOFI_NS_PER_TILE_MAC
+-    if halo_ns > im2col_ns:
+-        return False
+-    if kw_fold_kblocked(g):
+-        return ct * bm >= KW_FOLD_MIN_KBLOCK_RATIO * n * (bm + 2)
+-    return im2col_ns >= KW_FOLD_WHOLE_K_EXPOSED_NS
++    return halo_ns <= KW_FOLD_MAX_HALO_SHARE * im2col_ns
+ 
+ 
+ def _kw_fold_cb_bytes(g, kb):
+@@ -1149,10 +1140,10 @@
+     return total
+ 
+ 
+-# K-blocked kw-fold (one pass per kernel row as its weights land, every pack accumulating) vs whole-K (one pass once
+-# all weights landed: a third of the packs): K-blocked when the weights are at least KW_FOLD_KBLOCK_MIN_WEIGHT_TILES
+-# tiles, where today's weight stream paces the walk (res3.x: 19.3 K-blocked vs 23.2 us whole-K; with the weights
+-# stubbed whole-K wins, 13.0 vs 14.9 us).
++# K-blocked kw-fold (the column rounds double-buffered, re-streamed per M-block) vs whole-K (all three resident across
++# M-blocks): K-blocked from KW_FOLD_KBLOCK_MIN_WEIGHT_TILES weight tiles, for L1. Both pack each Q tile-row once and
++# start at round 0; whole-K on the K-blocked LoFi cases measured flat (res3.x 14.94 -> 14.48, inst res2 fc1 28.09 ->
++# 28.14 us, medians of 3).
+ KW_FOLD_KBLOCK_MIN_WEIGHT_TILES = 128
+ 
+ 
+@@ -1175,7 +1166,7 @@
+         block_k_tiles=ct,
+         block_n_tiles=3 * n,
+         num_k_blocks=3,
+-        # Whole-K multiplies once every K-block landed; K-blocked streams them (double-buffered).
++        # Whole-K keeps the three column rounds resident; K-blocked streams them (double-buffered).
+         weight_depth=2 if kw_fold_kblocked(g) else 3,
+         center_mode=CENTER_NONE,
+         center_slot_blocks=1,
+--- a/ttnn/ttnn/operations/conv2d_3x3/kernels/conv2d_3x3_kw_fold.hpp
++++ b/ttnn/ttnn/operations/conv2d_3x3/kernels/conv2d_3x3_kw_fold.hpp
+@@ -11,11 +11,12 @@
+ // [max(0, t0 - 1 - R), ...), consecutive). One matmul with K' = 3 C_in ((kh, c), c fastest) and N' = 3 C_out
+ // ((kw, n), n fastest) gives [Q_0 | Q_1 | Q_2] at exactly the conv's MAC count (plus one halo tile-row each side whose
+ // Q_0 / Q_2 spills d rows into this core's range), and out[o] = bias + Q_1[o] + [w >= d] Q_0[o - d] + [w < W - d]
+-// Q_2[o + d]. The weights are the prepared [K_p, C_out] tensor read tile-permuted by the writer (W'[kh Ct + c, kw N +
+-// n] is prepared tile ((kh * 3 + kw) Ct + c, n)).
++// Q_2[o + d]. The weights stream in column rounds: round kw is W'[(kh, c), kw, n] (3 C_in x C_out tiles, (kh, c, n)
++// order), the prepared [K_p, C_out] tensor read tile-permuted (slot (kh, c, n) is prepared tile ((kh * 3 + kw) Ct +
++// c, n)). Each Q_kw tile-row accumulates all its in-image kernel rows in DEST and is packed once.
+ //
+ // The shift: each Q_kw tile-row is pack-untilized (fp32 rows) into one fp32 accumulator ACC (cb_acc) at row
+-// rowbase(t) + (1 - kw) d with packer L1 accumulation, so bias, K sum and kw shift all sum in fp32 in the packer.
++// rowbase(t) + (1 - kw) d with packer L1 accumulation, so bias and kw shift sum in fp32 in the packer (K in fp32 DEST).
+ // ACC leaves a d-row gap after every image row: the wrapped rows of Q_0 (w >= W - d) and Q_2 (w < d) land there and are
+ // never read (the masks cost nothing). The reader seeds each valid ACC region with the fp32 bias rows compute packs
+ // once (cb_bias_rm) and hands it over (cb_tok), so no pack ever overwrites. With a full-width subblock (sbw == N) each
+@@ -23,7 +24,8 @@
+ // the same rounding today's bias add applies to the fp32 partials) and packed with ReLU.
+ //
+ // Raw LLK (capability): compute_kernel_lib::matmul_block reads in0 as one contiguous [M, K] block and packs at a CB's
+-// write pointer; here a tile-row's K' comes from three slab tile-rows, out-of-image kernel rows are skipped, and each
++// write pointer; here a tile-row's K' comes from three slab tile-rows (whole input rows apart, one in0 base per kernel
++// row, all accumulated in DEST before the one pack of a column round), out-of-image kernel rows are skipped, and each
+ // subblock is pack-untilized at a computed ACC row offset (llk_pack_untilize_impl / a stream MOP with an explicit
+ // base). compute_kernel_lib::tilize reads at the CB read pointer; the final pass tilizes from computed ACC rows.
+ 
+@@ -181,7 +183,6 @@
+     bool noinline>
+ ALWI void run(uint32_t m_tile_start, uint32_t actual_m_tiles, uint32_t num_blocks) {
+     constexpr uint32_t R = d * tpr;
+-    constexpr uint32_t N3 = 3 * N;
+     // ACC is N / sbw column planes of [rows, sbw * 32] fp32: a subblock covers the full width of its plane, so every
+     // subblock pack is one contiguous stream.
+     constexpr uint32_t PITCH = sbw * 32 * 4;
+@@ -237,9 +238,11 @@
+         const bool halo_bot = (t0 + valid) % tpr != 0 && t0 + valid < m_tiles;
+         {
+             MaybeDeviceZoneScope("compute_kwf_matmul_shift");
+-            // Whole-K: one pass over K' once every weight K-block landed (fewest packs). K-blocked (weight-paced
+-            // shapes): one pass per kernel row kh as its weight K-block lands, each pack accumulating onto ACC.
+-            constexpr uint32_t num_passes = kblocked ? 3 : 1;
++            // One pass per weight column round kw, as the round lands: Q_kw's rows each accumulate every in-image
++            // kernel row in DEST and are packed onto ACC once (Q_0: tile-rows t0 - 1 .. t_end - 1, Q_1: the valid
++            // rows, Q_2: t0 .. t_end). K-blocked: one round at a time (double-buffered, popped after its pass).
++            // Whole-K: the rounds stay resident across M-blocks; pass kw waits only for rounds 0 .. kw.
++            constexpr uint32_t round_tiles = 3 * Ct * N;
+             reconfig_data_format(cb_w, cb_in);
+             pack_reconfig_data_format(cb_acc);
+             pack_untilize_dest_init<sbw, sbw>(cb_acc);
+@@ -250,8 +253,6 @@
+             uint32_t ready = 0;
+             uint32_t landed = 0;
+             // Rows [i0, i0 + h) (tile-row t0 - 1 + i), one kw, columns [n0, n0 + sbw).
+-            uint32_t kh_lo = 0;
+-            uint32_t kh_hi = 3;
+             auto subblock_body = [&](uint32_t i0, uint32_t h, uint32_t kw, uint32_t n0) {
+                 const uint32_t t_first = t0 - 1 + i0;
+                 // Slab pages up to the last in0 row this subblock reads (the highest in-image kernel row), clamped to
+@@ -277,7 +278,7 @@
+                     }
+                 }
+                 tile_regs_acquire();
+-                for (uint32_t kh = kh_lo; kh < kh_hi; ++kh) {
++                for (uint32_t kh = 0; kh < 3; ++kh) {
+                     // Rows of the group whose kernel row kh is inside the image: a contiguous [a, b).
+                     uint32_t a = 0;
+                     uint32_t b = h;
+@@ -296,9 +297,9 @@
+                     }
+                     const uint32_t in0 =
+                         static_cast<uint32_t>(static_cast<int32_t>(t_first + a + kh * R - R) + base[kh]) * Ct;
+-                    const uint32_t in1 = (kblocked ? 0 : kh * Ct * N3) + kw * N + n0;
++                    const uint32_t in1 = (kblocked ? 0 : kw * round_tiles) + kh * Ct * N + n0;
+                     for (uint32_t c = 0; c < Ct; ++c) {
+-                        matmul_block(cb_in, cb_w, in0 + c, in1 + c * N3, a * sbw, false, sbw, b - a, Ct);
++                        matmul_block(cb_in, cb_w, in0 + c, in1 + c * N, a * sbw, false, sbw, b - a, Ct);
+                     }
+                 }
+                 tile_regs_commit();
+@@ -315,10 +316,10 @@
+                 }
+                 tile_regs_release();
+             };
+-            // TRISC code size is a measured lever here: with noinline the subblock code exists once for its three call
+-            // sites (stem.conv2 45.6 -> 40.6 us, an unrolled kernel-row loop instead: 49.2 us), but the call costs more
+-            // than it saves on 1-row subblocks and on the K-blocked walk (inst res2.fuse_conv.1 36.2 -> 42.0 us). The
+-            // descriptor picks it (noinline): whole-K with multi-row subblocks.
++            // TRISC code size is a measured lever here: with noinline the subblock code exists once (stem.conv2 45.6
++            // -> 40.6 us, an unrolled kernel-row loop instead: 49.2 us), but on 1-row subblocks the call cost more than
++            // it saved before column rounds (inst res2.fuse_conv.1 36.2 -> 42.0 us) and is flat with them (28.1 vs
++            // 28.3 us). The descriptor picks it (noinline): whole-K with multi-row subblocks.
+             auto subblock_out_of_line = [&](uint32_t i0, uint32_t h, uint32_t kw, uint32_t n0)
+                                             __attribute__((noinline)) { subblock_body(i0, h, kw, n0); };
+             auto subblock = [&](uint32_t i0, uint32_t h, uint32_t kw, uint32_t n0) {
+@@ -328,37 +329,24 @@
+                     subblock_body(i0, h, kw, n0);
+                 }
+             };
+-            for (uint32_t pass = 0; pass < num_passes; ++pass) {
+-                if constexpr (kblocked) {
+-                    kh_lo = pass;
+-                    kh_hi = pass + 1;
+-                }
++            for (uint32_t kw = 0; kw < 3; ++kw) {
+                 {
+-                    // Whole-K: every K-block, popped at the end. K-blocked: this pass's K-block at the front (the
+-                    // previous one was popped), so its in1 tiles start at index 0.
++                    // K-blocked: this round at the front (the previous one was popped), so its in1 tiles start at
++                    // index 0. Whole-K: rounds 0 .. kw.
+                     MaybeDeviceZoneScope("compute_kwf_weight_wait");
+-                    w.wait_front(kblocked ? Ct * N3 : 3 * Ct * N3);
+-                }
+-                if (halo_top) {
+-                    for (uint32_t n0 = 0; n0 < N; n0 += sbw) {
+-                        subblock(0, 1, 0, n0);
+-                    }
+-                }
+-                for (uint32_t i0 = 1; i0 <= valid; i0 += sbh) {
+-                    const uint32_t h = valid + 1 - i0 < sbh ? valid + 1 - i0 : sbh;
+-                    for (uint32_t kw = 0; kw < 3; ++kw) {
+-                        for (uint32_t n0 = 0; n0 < N; n0 += sbw) {
+-                            subblock(i0, h, kw, n0);
+-                        }
+-                    }
++                    w.wait_front(kblocked ? round_tiles : (kw + 1) * round_tiles);
+                 }
+-                if (halo_bot) {
++                // Q_0 reaches back to the halo tile-row above (t0 - 1), Q_2 to the one below (t_end).
++                const uint32_t i_lo = kw == 0 && halo_top ? 0 : 1;
++                const uint32_t i_end = valid + (kw == 2 && halo_bot ? 2 : 1);
++                for (uint32_t i0 = i_lo; i0 < i_end; i0 += sbh) {
++                    const uint32_t h = i_end - i0 < sbh ? i_end - i0 : sbh;
+                     for (uint32_t n0 = 0; n0 < N; n0 += sbw) {
+-                        subblock(valid + 1, 1, 2, n0);
++                        subblock(i0, h, kw, n0);
+                     }
+                 }
+                 if constexpr (kblocked) {
+-                    w.pop_front(Ct * N3);
++                    w.pop_front(round_tiles);
+                 }
+             }
+             pack_untilize_uninit(cb_acc);
+@@ -418,7 +406,7 @@
+         in.pop_front(slab_pages);
+     }
+     if constexpr (!kblocked) {
+-        w.pop_front(3 * Ct * N3);
++        w.pop_front(9 * Ct * N);
+     }
+     bias.pop_front(N);
+ }
+--- a/ttnn/ttnn/operations/conv2d_3x3/kernels/conv2d_3x3_weight_server_reader.cpp
++++ b/ttnn/ttnn/operations/conv2d_3x3/kernels/conv2d_3x3_weight_server_reader.cpp
+@@ -22,7 +22,8 @@
+     constexpr uint32_t block_n_tiles = get_compile_time_arg_val(2);
+     constexpr uint32_t num_k_blocks = get_compile_time_arg_val(3);
+     constexpr uint32_t num_chunks = get_compile_time_arg_val(4);
+-    // kw-fold (conv2d_3x3_kw_fold.hpp): K-block kh is [C_in, 3 C_out] with (c, kw, n) order, block_n_tiles = 3 C_out.
++    // kw-fold (conv2d_3x3_kw_fold.hpp): round kw is the weight column [3 C_in, C_out] in (kh, c, n) order
++    // (block_k_tiles = C_in, block_n_tiles = 3 C_out: the same round size).
+     constexpr bool kw_fold = get_compile_time_arg_val(5) != 0;
+     constexpr auto weight_args = TensorAccessorArgs<6>();
+     constexpr uint32_t round_tiles = block_k_tiles * block_n_tiles;
+@@ -39,16 +40,17 @@
+         cb_reserve_back(cb_weights, round_tiles);
+         const uint32_t l1 = get_write_ptr(cb_weights);
+         MaybeDeviceZoneScope("server_read");
+-        // The K-block's tiles are consecutive pages (bn is the whole C_out on this path); kw-fold reads the prepared
+-        // tile ((kh * 3 + kw) C_in + c, n) for slot (c, kw, n).
+-        const uint32_t kh = r % num_k_blocks;
+-        const uint32_t page0 = kh * round_tiles;
++        // The K-block's tiles are consecutive pages (bn is the whole C_out on this path); kw-fold's round kw reads the
++        // prepared tile ((kh * 3 + kw) C_in + c, n) for slot (kh, c, n).
++        const uint32_t kb = r % num_k_blocks;
++        const uint32_t page0 = kb * round_tiles;
+         auto page_of = [&](uint32_t t) -> uint32_t {
+             if constexpr (kw_fold) {
+                 constexpr uint32_t n_tiles = block_n_tiles / 3;
+                 const uint32_t n = t % n_tiles;
+-                const uint32_t ck = t / n_tiles;
+-                return ((kh * 3 + ck % 3) * block_k_tiles + ck / 3) * n_tiles + n;
++                const uint32_t kc = t / n_tiles;
++                const uint32_t kh = kc / block_k_tiles;
++                return ((kh * 3 + kb) * block_k_tiles + (kc - kh * block_k_tiles)) * n_tiles + n;
+             } else {
+                 return page0 + t;
+             }
+--- a/ttnn/ttnn/operations/conv2d_3x3/kernels/conv2d_3x3_writer.cpp
++++ b/ttnn/ttnn/operations/conv2d_3x3/kernels/conv2d_3x3_writer.cpp
+@@ -496,11 +496,11 @@
+     uint32_t k_blocks_issued = 0;
+     auto read_weight_k_block = [&](uint32_t l1) {
+ #ifdef CONV2D_3X3_KW_FOLD
+-        // kw-fold: K-block kh holds W'[kh Ct + c, kw N + n] = prepared tile ((kh * 3 + kw) Ct + c, n), c-major,
+-        // (kw, n)-fastest (block_k_tiles = Ct, block_n_tiles = 3 N).
+-        const uint32_t kh = k_blocks_issued % num_k_blocks;
+-        for (uint32_t c = 0; c < block_k_tiles; ++c) {
+-            for (uint32_t kw = 0; kw < 3; ++kw) {
++        // kw-fold: column round kw holds W'[kh Ct + c, kw N + n] = prepared tile ((kh * 3 + kw) Ct + c, n),
++        // (kh, c)-major, n-fastest (block_k_tiles = Ct, block_n_tiles = 3 N: the same round size).
++        const uint32_t kw = k_blocks_issued % num_k_blocks;
++        for (uint32_t kh = 0; kh < 3; ++kh) {
++            for (uint32_t c = 0; c < block_k_tiles; ++c) {
+                 const uint32_t row_page = ((kh * 3 + kw) * block_k_tiles + c) * tensor_n_tiles;
+                 for (uint32_t n = 0; n < tensor_n_tiles; ++n, l1 += weight_tile_bytes) {
+                     noc_async_read_page(row_page + n, weights, l1);

@@ -1,0 +1,78 @@
+diff --git a/ttnn/ttnn/operations/conv2d_3x3/conv2d_3x3_program_descriptor.py b/ttnn/ttnn/operations/conv2d_3x3/conv2d_3x3_program_descriptor.py
+index c3872d69e26..4fb01f8def5 100644
+--- a/ttnn/ttnn/operations/conv2d_3x3/conv2d_3x3_program_descriptor.py
++++ b/ttnn/ttnn/operations/conv2d_3x3/conv2d_3x3_program_descriptor.py
+@@ -187,6 +187,13 @@ TAP_DIRECT_GROUP = 3
+ # Tap-direct on the K-blocked walk: the reader reserves, fences and pushes this many unit entries at a time.
+ TAP_DIRECT_FIFO_GROUP = 4
+ WEIGHT_DEPTH = 2
++# Resident weight rounds (K-blocked walk): cb_weights deepens from WEIGHT_DEPTH toward one slot per K-block of an
++# M-block, so the weight server / sender streams every round of the M-block without waiting for a receiver to free a
++# slot. It only takes the L1 left after every other leftover-L1 feature (im2col ring, center taps, ring slab). Ahead of
++# them it measured slower (LoFi, medians of 3): sem res2.fuse_conv.1 107.7 -> 117.2 us at depth 4 (center K-block,
++# ring slab and two im2col rows dropped), sem dec res3.fuse_conv.1 36.0 -> 37.0 us at depth 3 (center slots dropped).
++# Capped so the weight server's flags (one semaphore per slot) fit next to every other semaphore set (16 per core).
++RESIDENT_WEIGHT_MAX_DEPTH = 4
+ OUT_DEPTH_ROW_GROUPS = 2
+ # cb_input_tiles depth in untilize batches: the reader reads batch b+1 while compute untilizes b. Where every core runs
+ # one M-block the ring instead holds the whole slab in cb_im2col_tiles' L1 (see create_program_descriptor).
+@@ -803,6 +810,20 @@ def ring_capable(g: Conv3x3Geometry, bm, bk):
+     )
+ 
+ 
++def _resident_weights(g: Conv3x3Geometry, fit, bk, bn, l1_budget):
++    """The deepest cb_weights, up to num_k_blocks rounds of bk * bn tiles, that the L1 left in `fit` allows (see
++    WEIGHT_DEPTH). K-blocked walk only; the N-slice walk keeps NSLICE_WEIGHT_DEPTH."""
++    if fit["nslice"]:
++        return fit
++    target = min(fit["num_k_blocks"] * fit["max_m_blocks_per_core"], fit["num_k_blocks"], RESIDENT_WEIGHT_MAX_DEPTH)
++    round_bytes = bk * bn * g.weight_tile_bytes
++    for depth in range(target, fit["weight_depth"], -1):
++        extra = (depth - fit["weight_depth"]) * round_bytes
++        if fit["footprint_bytes"] + extra <= l1_budget:
++            return dict(fit, weight_depth=depth, footprint_bytes=fit["footprint_bytes"] + extra)
++    return fit
++
++
+ def ring_rows(g: Conv3x3Geometry, core_m_tiles, bm):
+     """Ring capacity: the largest M-block window."""
+     return max(hi - lo for core in ring_plan(g, core_m_tiles, bm) for lo, hi, _ in core)
+@@ -878,6 +899,7 @@ def select_blocking(g: Conv3x3Geometry, grid, l1_budget) -> Conv3x3Blocking:
+                             fit = dict(
+                                 fit, ring=True, slab_tile_rows=ring, footprint_bytes=fit["footprint_bytes"] + delta
+                             )
++                    fit = _resident_weights(g, fit, bk, bn, l1_budget)
+                     return Conv3x3Blocking(
+                         grid_x=grid_x,
+                         core_m_tiles=core_m_tiles,
+@@ -1458,6 +1480,8 @@ def create_program_descriptor(
+     # Weight servers: the server's ack counter, then one data-ready flag per cb_weights slot.
+     server_sem_ids = (len(sem_ids), len(sem_ids) + 1) if weight_servers is not None else (0, 0)
+     sem_ids += tuple(range(len(sem_ids), len(sem_ids) + 1 + b.weight_depth)) if weight_servers is not None else ()
++    if len(sem_ids) > 16:
++        raise ValueError(f"conv2d_3x3: {len(sem_ids)} semaphores per core (weight depth {b.weight_depth}) > 16")
+     k_padded = g.tensor_kkh_tiles * TILE > 3 * g.c_in_p
+ 
+     def zero_im2col_once(slice_channels):
+diff --git a/ttnn/ttnn/operations/conv2d_3x3/l1_ledger.md b/ttnn/ttnn/operations/conv2d_3x3/l1_ledger.md
+index c26da4f6df6..2f26e852e0e 100644
+--- a/ttnn/ttnn/operations/conv2d_3x3/l1_ledger.md
++++ b/ttnn/ttnn/operations/conv2d_3x3/l1_ledger.md
+@@ -29,7 +29,7 @@ operand alone exceeds L1 (K = 18432 x N = 256 bf16 = 9.4 MB). It shrinks `bk` fi
+ | `cb_input_tiles` (TILE only; page = `T_in` = input tile) | `INPUT_TILE_DEPTH_BATCHES * ub * Ct` = `2*ub*Ct` (`ub` = `untilize_batch_rows`) | `ub * Ct` per party | `{M: streams -> ub footprint tile-rows (depth 2); N: —; K: spans c (one whole tile-row of channels: the untilize block)}` | input dtype (bf16 / bf8_b) | reader (one trid fence per batch) | compute (untilize, one tile-row of `Ct` tiles per block) | one batch | none — 2x gap is double buffering (reader reads batch b+1 while compute untilizes b). `ub` defaults to the tile-rows one band can touch (about one fence per band) and is the FIRST extent the L1 solve shrinks (to 1): a smaller batch costs a fence per tile-row, a smaller `bk` a whole K-block. Measured 8x16x2048 TILE bf16: `ub` 3 -> 1 lets `bk` stay at 16 instead of 3, 526 -> 463 us. |
+ | `cb_im2col_rm` (page = `T_bf16`, RM content: 32 rows x 32 cols; tap-major: `bk / Ct` blocks of 32 pixels x `c_in_p`, same bytes) | `im2col_rm_depth_rows * bk` = `2*bk` | `bk` per party (one tile-row being filled, one being tilized) | `{M: streams -> 1 tile-row window (depth 2); N: —; K: spans -> bk}` | bfloat16 (RM bytes in tile-sized pages) | reader | compute (tilize) | one tile-row | none — gap to live set (2x) is double buffering (reader fills t+1 while compute tilizes t); concurrent with `cb_im2col_tiles` (tilize reads one while writing the other). **Not allocated on face-direct shapes** (the gather writes tiles directly; removed by inventory, not solved). |
+ | `cb_im2col_tiles` (page = `T_in0`) | `bm * bk` | `bm * bk` (matmul waits the whole in0 block, `matmul_block_helpers.inl:265`) | `{M: spans -> bm; N: —; K: spans -> bk}` | in0 = activation dtype (bfloat16 in Phase 0). An operand, not an accumulator: values are exact in this format and srcB unpacks at most tf32, so audit 2's under-case does not apply. | compute (tilize, in PreKBlockFn); face-direct: the reader (reserve once per K-block, push per row group of `in0_stream_rows`; the writer writes the odd row groups into the reserved block, so capacity must be exactly one K-block, starting at the CB base every time) | compute (matmul; streamed: one call per row group) | one K-block | none — concurrent with `cb_matmul_partials` (matmul reads it while accumulating); alias with `cb_output_tiles` rejected above (cross-block pipelining). Face-direct stem.conv1: `bk = tensor_k_tiles` = 3 makes it 228 KB, the whole K walk in one block (P1). |
+-| `cb_weights` (page = `T_w`) | `weight_depth * bk * bn` (`weight_depth` = 2; 1 only if `num_k_blocks * num_m_blocks_this_core == 1`) | `bk * bn` per party | `{M: — (re-streamed per M-block; R5 would make it span K whole); N: spans -> bn; K: spans -> bk, streams K-blocks}` | weight_dtype (bf16 Phase 0) | writer (R1: the sender's writer reads from DRAM, every other participant's writer receives the multicast into its own slot) | compute (matmul) | one K-block per slot | none — 2x gap is double buffering (writer streams K-block k+1 during matmul k); concurrent with all compute CBs. |
++| `cb_weights` (page = `T_w`) | `weight_depth * bk * bn` (`weight_depth` = 2, deepened toward `min(num_k_blocks, 4)` from the L1 left after every other leftover-L1 feature (`_resident_weights`); 1 only if `num_k_blocks * num_m_blocks_this_core == 1`) | `bk * bn` per party | `{M: — (re-streamed per M-block; R5 would make it span K whole); N: spans -> bn; K: spans -> bk, streams K-blocks}` | weight_dtype (bf16 Phase 0) | writer (R1: the sender's writer reads from DRAM, every other participant's writer receives the multicast into its own slot) | compute (matmul) | one K-block per slot | none — 2x gap is double buffering (writer streams K-block k+1 during matmul k); concurrent with all compute CBs. |
+ | `cb_bias` (page = `T_w`; allocated only when `has_bias`) | `ns` (= `bn`, except under R4: the core's output N-slice) | `ns` (fronted for the whole kernel) | `{M: — (shared by every M-block); N: spans -> ns; K: —}` | weight_dtype | writer | compute (bias add) | whole kernel | none — live for the whole kernel. |
+ | `cb_matmul_partials` (page = `T_fp32`) | exactly `bm * bn` (mechanism cap #2: L1-acc lands on the same addresses every K-block) | `bm * bn` (accumulated in place across all K-blocks) | `{M: spans -> bm; N: spans -> bn; K: streams (reduced over, never materialized per K-block)}` | Float32 — `fp32_dest_acc_en=True`, so the accumulation keeps fp32 across K-blocks (audit 2: correct width) | compute (matmul pack; R4: one caller-owned reserve/push per M-block) | compute (matmul drain/reload; bias add). R4: the writer (scatter, one wait/pop per M-block; the reader reads its higher-column slices in place between the writer's send_go and its own send_done) | one M-block | none — TileRowMajor interm must be its own region; Float32 vs output format; concurrent with `cb_output_tiles` during the bias add. |
+ | `cb_output_tiles` (page = `T_out`) | `out_depth_row_groups * sbh * bn` = `2*sbh*bn` | `sbh * bn` per party | `{M: streams -> one row group of sbh tile-rows (depth 2); N: spans -> bn; K: —}` | output dtype = input dtype (the output tensor's format by contract; not an intermediate) | compute | writer | one row group | none — 2x gap is double buffering (writer drains row group g while compute packs g+1). **R2 (HEIGHT): backed on the output shard** (`cb_descriptor_from_sharded_tensor`, capacity = `core_m_tiles * bn` pages = the shard, not CB-region bytes); compute packs every M-block of the core into it in order and nothing pops it, so `bm` must divide `core_m_tiles` (pushes = capacity exactly). |
+@@ -49,7 +49,7 @@ operand alone exceeds L1 (K = 18432 x N = 256 bf16 = 9.4 MB). It shrinks `bk` fi
+ | `band_stride_px` | slab offset between bands | `= min(d*W, band_len_px)` | d, W, `band_len_px` |
+ | `slab_tile_rows` | TILE slab capacity in tile-rows | max over the core's M-blocks of the reader's band plan, rounded up to a multiple of `ub` | `_tile_slab_rows` (host mirror of the reader plan) |
+ | `ub` = `untilize_batch_rows` | TILE footprint tile-rows per reader push / compute untilize call | `1 <= ub <= min(raw slab tile-rows, ceil(band_len_px/32) + 1)` | L1 solve (shrunk first) |
+-| `im2col_rm_depth_rows`, `weight_depth`, `out_depth_row_groups` | buffer depths | 2, {1, 2}, 2 | Blocking Model depth table |
++| `im2col_rm_depth_rows`, `weight_depth`, `out_depth_row_groups` | buffer depths | 2, {1, 2..min(num_k_blocks, 4)}, 2 | Blocking Model depth table |
+ | `L1_CB_BUDGET_BYTES` | CB budget per core | `get_max_worker_l1_unreserved_size() - 128 KB headroom - RESIDENT_SHARD_SETS * (input shard + output shard)`; `RESIDENT_SHARD_SETS = 2` in R2 (this call's pair plus the previous call's, which a chained model and the golden harness's cache-hit dispatch keep alive; every enqueue re-checks the CB region against the lowest live L1 buffer), 0 shard bytes in R0/R3 | `l1_cb_budget_bytes`, `select_blocking` |
+ 
+ ## Total per-core footprint

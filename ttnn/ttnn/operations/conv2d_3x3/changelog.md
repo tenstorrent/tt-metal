@@ -1111,3 +1111,153 @@ The full-grid split and the weight-server placement use no raw LLK.
 Helper feedback measured but not taken (not a bypass):
 - **`dataflow_kernel_lib` multicast:** several senders multicasting concurrently into one rectangle measured 1.6x to 3.7x slower than one sender, and chaining them was still slower. A multicast helper that offers several senders should serialize them per rectangle.
 - **`Mcast` grouping:** groups are equal consecutive chunks of one ordered core set, so a slice whose participants are two rectangles (its column plus a row of spare columns) cannot be one group. This blocked the spare-column BLOCK split.
+
+## Perf 7
+- Date: 2026-11-18
+- Scope: perf tournament (run round 2 of 5) on the 22 `[perf]` LOOSE cases (LoFi, fp32 DEST, bf8_b activation and weights except stem.conv1, bias + ReLU except aspp.convs.3, pinned shard grids). Goal: >= 70% compute utilization against an ideal on 110 cores, worked in priority order. No SUPPORTED change. Base `e40c435b625` (end of Perf 6). Board: Blackhole p150b, 11x10 = 110 cores, AICLK 1350 MHz. DEVICE KERNEL DURATION, one fresh run per variant unless noted.
+- Outcome: 3 of 6 ideas graduated, 2 null, 1 regression. No case reaches 70%: aspp.convs.3 (priority 1) goes 48% -> 60%, stem.conv3 reaches 65%. All 3x3 layers of one inference: 1538 -> 1456 us (-5.3%). No focus or guard cell regressed beyond noise.
+- Instrumentation: Perf 1-6 zones kept. kw-fold's `reader_kwf_seed` and `compute_kwf_bias_block` are gone with the code they timed. New zone: `reader_kwf_bias_rows` (the reader's bias decode, wait included). The kernel-row skip and the column rounds run inside `compute_matmul_walk` / `compute_kwf_matmul_shift`.
+- Ablation hooks: `perf_experiments/ablation_r7/` (the round-6 patch rebased onto `e40c435b625`, plus hooks for the weight servers, the K-blocked tap-direct FIFO, `fifo_tilize`, kw-fold's matmul, and a `direct_tilize` stub that skips the N-slice center tap). Also `timeline.py` (one core's zones over time) and `endgrid.py` (every core's kernel end).
+
+### Measured breakdown (before, zoned, us)
+DM-first cumulative peel: full > gather > fill > weights > scatter > untilize > tilize > matmul (everything stubbed). "mm only": the matmul alone stubbed.
+
+| case | full | -gather | -fill | -weights | -scatter | -untilize | -tilize | -matmul | mm only |
+|---|---|---|---|---|---|---|---|---|---|
+| aspp.convs.3 | 33.6 | 33.3 | 31.5 | 31.6 | 30.9 | 29.4 | 26.9 | 11.4 | 22.3 |
+| sem res2 fc1 | 107.7 | 107.8 | 105.8 | 105.7 | 105.7 | 101.6 | 93.4 | 53.5 | 71.6 |
+| res4.x | 16.2 | 13.9 | 13.3 | 13.6 | 12.5 | 12.7 | 11.1 | 8.3 | 15.6 |
+| res3.x | 15.6 | 15.2 | 13.6 | 12.9 | 12.9 | 11.7 | 10.5 | 5.9 | 13.1 |
+| stem.conv2 | 40.7 | 40.7 | 39.8 | 35.3 | 35.3 | 35.3 | 35.3 | 33.9 | 34.8 |
+| res2 | 16.7 | 16.1 | 14.3 | 14.2 | 14.2 | 14.2 | 11.0 | 8.2 | 15.2 |
+| center_head.1 | 16.2 | 16.5 | 16.5 | 11.6 | 11.6 | 11.6 | 11.6 | 9.4 | 11.2 |
+| inst res2 fc1 | 33.9 | 33.6 | 33.2 | 33.1 | 33.1 | 33.0 | 33.2 | 33.1 | 33.1 |
+
+All 22 cases are in `ablation_r7/peel_results.txt`. kw-fold cases (stem.conv2/3, center_head.1, inst res2 fc1, inst dec res2/res3 fc0) keep their pack stream, final pass and seed under every hook.
+
+Ranked:
+1. **The K-blocked kw-fold walk is pack-bound.**
+   - inst res2 fc1 is 33.1 us with the matmul stubbed, and its packer zone is 25.5 us: 432 fp32 L1-acc untilize tile packs at ~80 cycles per tile, 3 passes x 3N columns x (bm + 2) rows.
+   - Same structure on inst dec res2 fc0 (34.5) and inst dec res3 fc0 (26.5).
+2. **aspp.convs.3 multiplies a kernel row of zeros.**
+   - At d = 18 on a 64-tile-row image, R = 36 tile-rows, so no output pixel has more than 2 in-image kernel rows. The ring walk still multiplies all 3: 21.4 us of 1512 tile-MACs per core, at ~19 cycles per MAC.
+   - The prelude (fill-paced untilize 5.2 us, tilize 4.4 us) runs before the walk.
+3. **kw-fold start-up.**
+   - The writer's blocking bias read (~3 us: ~100 cores on the same DRAM pages) gates the weight stream, and compute packs a bias block before its first matmul.
+   - Whole-K waits for all weights: center_head.1's compute sits until 8.3 of 16.2 us, stem.conv2's until 9.9 of 40.7.
+4. **HEIGHT K-blocked weight-slot reuse.** The server waits on acks before round 2: 3.5-8.7 us on res2, and round 2 lands at 12.0 us on res3.x.
+5. **res4.x prelude.** The 1-wide tap tilize zone is 4.7 us, and the gather runs alongside it.
+6. **sem res2 fc1 walk.** 22.4 cycles per tile-MAC. 43 us of the K-blocked skeleton remains with everything stubbed.
+
+### Portfolio and verdicts
+Each idea was built and measured in isolation by its own optimizer (`perf_experiments/<slug>/`).
+
+| idea | verdict | focus result (us) | domain / notes |
+|---|---|---|---|
+| `nslice_kernel_row_skip`: the BLOCK N-slice ring walk multiplies, per ring row group, only the kernel rows in-image for some row of the group (host-sent 3-bit masks) | WIN | aspp.convs.3 33.73 -> 27.30 (median of 3), bit-identical | Every N-slice ring walk, both loops. Flat elsewhere: aspp.convs.1/2, res5.x and res4 keep all 3 kernel rows on their middle grid rows, so the slowest core does not move. A per-kernel-row mask loop measured +2.7% on a 4 + 1-row-group check shape, so the contiguous-range loop graduated instead. Skipping the zero units' prelude tilize was flat: the reader's gather paces that prelude. |
+| `kw_fold_column_rounds`: kw-fold streams weights per output column kw (3 Ct x N per round) instead of per kernel row; each Q tile-row accumulates every in-image kh in DEST and is packed once | WIN | inst res2 fc1 33.82 -> 28.09, bit-identical | Every kw-fold case: stem.conv2 -10.9%, stem.conv3 -13.8%, center_head.1 -26%, inst dec res2 fc0 -3.4%, inst dec res3 fc0 flat. The faster kw-fold supports one gate, halo_ns <= 0.55 x im2col_ns: wins measured up to 0.52, losses from 0.57. That gate adds res2 (16.68 -> 13.97) and res3.x (flat). Measured exceptions, left to the gate: sem dec res3 fc0 (LoFi +3.4%) and fc1 (+6.1%), and the HiFi4 res3-scale layers (+5.7% to +16%). 2x2 subblocks: much slower. |
+| `kw_fold_seedless`: kw-fold's Q_1 packed as an overwrite before Q_0 / Q_2 accumulate; no reader seed, no bias block or bias wait in front of the weights; bias added in the final pass (the tilize MOP's srcB op loads 8 rows of fp32 bias the reader decodes) | WIN | stem.conv2 40.62 -> 37.62, stem.conv3 60.00 -> 53.34 (medians of 3) | Every kw-fold case: the inst cases -2.5% to -3.1%, center_head.1 flat. Precision equal to the base op, not bit-identical: tf32(Q) + bias instead of tf32(bias + Q), with 99.6-99.98% of outputs identical and the rest one bf8_b step apart. Writer-side decode and compute-built bias rows were measured as options and lost. |
+| `height_weight_resident`: HEIGHT K-blocked weights fully resident (no slot reuse, no ack waits) | NULL | res3.x 15.36 -> 15.62 (median of 3) | The slowest cores never wait on a reused slot. Their bound is the fill-paced untilize and the round-0 latency, which depth cannot change. Taking depth before the leftover-L1 features measured +8.8% on sem res2 fc1. |
+| `nslice_narrow_tilize`: batch the 1-wide tap tilize of res4 (4 tiles per DEST section) | NULL | res4.x 15.85 -> 15.75 (2 runs each), bit-identical | Split zones show the reader paces the prelude. `TapDirectPlanned::unit` costs ~200 cycles per unit, and the tilize waits 2.7 of its 5.3 us. Its own work is ~2.3 us for 42 tiles. |
+| `height_nslice_outer`: HEIGHT walk as N-slice-outer (in0 [bm, K] resident, whole-K matmul per N-slice, one pack per output tile) | REGRESSION | sem res2 fc1: bench +5.2% to +8.9% at the only fitting slice width (s = 1) | s = 1 runs bm 5's row 4 as 1x1 subblocks (~33 cycles per MAC). s >= 2 measured -4% to -6% but does not fit L1. Shrinking bm to fit measured +13.2% whole-op. sem dec res2 fc0: inexpressible (in0 alone 430 KB). |
+
+Not floated (cap of 6): the reader's per-unit tap-direct planning cost (res4's prelude bound); round-0 weight latency (~4.3 us on every server-fed HEIGHT case); a non-uniform BLOCK M split by real kernel rows. On that last one, the row-skip optimizer counted the possible cut of the busiest grid row: aspp.convs.2 -31%, res5.2 -24%, aspp.convs.1 -20%, aspp.convs.3 -14%.
+
+### Graduated (one path each)
+1. **Kernel-row skip** (`e6f05eb034b`).
+   - It is the only N-slice ring walk; the loops it replaced are deleted. No carve-out.
+   - Raw LLK on the existing raw ring walk.
+2. **Column rounds** (`6f76657e49c`).
+   - Rounds of the K-blocked and whole-K forms; the kh-round loop is deleted.
+   - The two old gates (K-blocked `Ct*bm >= 0.8*N*(bm+2)`, whole-K im2col >= 7 us) became the single measured halo-share rule above. The gate is the only carve-out, and it is earned by the measured losses in the table.
+3. **Seedless start** (`2b848923eac`), merged by hand onto (2).
+   - Column rounds now stream kw = 1, 0, 2: Q_1's round is the overwrite. The writer, the weight server and the compute kernel share that order.
+   - **Merge fix (measured on the combined tree).** The optimizer's blocking bias read after the weights cost the short whole-K server cases: the bias landed ~2.8 us late, then the reader decoded it at ~1.3 us per tile in front of the final pass (res2 13.9 -> 14.8, center_head.1 12.1 -> 12.6 us).
+     - Issuing the bias at kernel start fixed those two but slowed round 0 on the K-blocked cases by ~1 us.
+     - Issuing it once round 0 landed and pushing it when it lands, polled inside the round waits, wins everywhere.
+     - The bf8_b decode's `__builtin_clz` became a <= 6-step normalize.
+     - Cores without servers (stem.conv2 / conv3) keep the optimizer's read after the weights.
+   - Deleted: the reader seed, the token CB, the compute bias block and the writer's bias wait.
+   - Added `tests/.../test_conv2d_3x3_kw_fold.py`: 10 forced-kw-fold shapes, because no other unit shape takes kw-fold.
+
+Combined-tree steps (zoned, us; full focus set after each step in `ablation_r7/peel_results.txt`):
+
+| case | base | +row skip | +column rounds | +seedless (as built) | + bias at kernel start | + after round 0, blocking finish | final |
+|---|---|---|---|---|---|---|---|
+| stem.conv2 | 40.7 | 40.7 | 36.2 | 34.2 | 34.2 | 34.2 | 34.2 |
+| res2 | 16.7 | 16.7 | 13.9 | 14.8 | 13.9 | 13.9 | 14.0 |
+| res3.x | 15.6 | 15.7 | 15.3 | 15.5 | 15.7 | 17.6 | 15.2 |
+| inst res2 fc1 | 33.9 | 33.9 | 28.2 | 27.3 | 28.0 | 27.2 | 27.2 |
+| center_head.1 | 16.2 | 16.5 | 12.1 | 12.6 | 11.5 | 11.7 | 11.9 |
+| aspp.convs.3 | 33.6 | 27.5 | 27.1 | 27.5 | 27.2 | 27.2 | 27.3 |
+
+### Precision
+- Row skip and column rounds are bit-identical to their predecessors. Column rounds sum kh in fp32 DEST instead of the fp32 packer; outputs on the 6 kw-fold cases were identical.
+- Moving res2 and res3.x onto kw-fold changes 0.061% / 0.039% of outputs by one bf8_b step. PCC 0.999804 unchanged.
+- Seedless: PCC and mean abs error vs a fp32 torch conv equal the base op's on every kw-fold case. For example stem.conv2 is 0.999922 / 0.35011 vs 0.999922 / 0.35012.
+
+### Whole-op result (unzoned, us; base `e40c435b625` and final `2b848923eac`, mean of 2 each, alternating; target = t_ideal / 0.7; utilization = t_ideal / measured)
+
+| prio | case | before | after | speedup | target | util before -> after |
+|---|---|---|---|---|---|---|
+| 1 | aspp.convs.3 | 32.84 | 26.66 | 1.23x | 22.7 | 48% -> 60% |
+| 2 | sem res2.fuse_conv.1 + head.{0,1} | 106.54 | 106.45 | 1.00x | 90.8 | 60% -> 60% |
+| 3 | res4.{1..5}.conv2 | 14.75 | 14.72 | 1.00x | 5.7 | 27% -> 27% |
+| 4 | res3.{1,2,3}.conv2 | 14.95 | 15.07 | 0.99x | 5.7 | 27% -> 26% |
+| 5 | stem.conv2 | 40.13 | 33.83 | 1.19x | 22.7 | 40% -> 47% |
+| 6 | aspp.convs.2 | 58.64 | 58.97 | 0.99x | 45.4 | 54% -> 54% |
+| 7 | aspp.convs.1 | 57.94 | 57.94 | 1.00x | 45.4 | 55% -> 55% |
+| 8 | res2.{0,1,2}.conv2 | 16.42 | 13.30 | 1.23x | 5.7 | 24% -> 30% |
+| 9 | center_head.1 + offset_head.1 | 15.62 | 11.49 | 1.36x | 5.7 | 25% -> 35% |
+| 10 | inst res2.fuse_conv.1 + heads.0 | 33.84 | 26.88 | 1.26x | 22.7 | 47% -> 59% |
+| 11 | stem.conv3 | 58.99 | 48.61 | 1.21x | 45.4 | 54% -> 65% |
+| 12 | sem dec res2.fuse_conv.0 | 134.87 | 134.87 | 1.00x | 102.1 | 53% -> 53% |
+| 13 | sem dec res3.fuse_conv.0 | 44.76 | 44.57 | 1.00x | 28.4 | 44% -> 45% |
+| 14 | sem dec res3.fuse_conv.1 | 35.79 | 36.25 | 0.99x | 22.7 | 44% -> 44% |
+| 15 | stem.conv1 | 22.52 | 22.77 | 0.99x | 1.1 | 3% -> 3% |
+| 16 | inst dec res3.fuse_conv.0 | 26.11 | 25.13 | 1.04x | 14.2 | 38% -> 40% |
+| 17 | inst dec res2.fuse_conv.0 | 34.36 | 32.04 | 1.07x | 28.4 | 58% -> 62% |
+| 18 | res5.2.conv2 | 36.53 | 36.60 | 1.00x | 22.7 | 43% -> 43% |
+| 19 | res5.1.conv2 | 36.08 | 36.03 | 1.00x | 22.7 | 44% -> 44% |
+| 20 | res5.0.conv2 | 35.50 | 35.27 | 1.01x | 22.7 | 45% -> 45% |
+| 21 | res3.0.conv2 | 17.56 | 17.46 | 1.01x | 5.7 | 23% -> 23% |
+| 22 | res4.0.conv2 | 15.41 | 15.41 | 1.00x | 5.7 | 26% -> 26% |
+
+All 3x3 layers of one Panoptic inference (each case x its calls): 1538 -> 1456 us (-5.3%).
+
+### Guard set (whole perf harness, 41 shapes plus the 22 focus cases, unzoned, same session, alternating; `ablation_r7/ab_results.txt`)
+- **HEIGHT (HiFi4):** center_head1 28.20 -> 24.45 (-13.3%), res2 29.14 -> 24.91 (-14.5%), stem_conv3 -6.3%, stem_conv2 -6.1%, inst_res2_fuse_conv1 -2.5%, inst_res2_fuse_conv0 -2.2%; the other 8 within -0.5% to +0.1%.
+- **BLOCK:** aspp_convs3 HiFi4 87.96 -> 63.16 (-28.2%); all others within -1.1% to +0.1%.
+- **Interleaved (18 shapes):** -1.4% to +1.1%. The interleaved path is unchanged.
+- **Focus cells above +0.5%:**
+
+  | case | before (two runs) | after (two runs) | change | path |
+  |---|---|---|---|---|
+  | sem dec res3 fc1 | 35.67, 35.91 | 35.85, 36.65 | +1.3% | unchanged |
+  | stem.conv1 | 22.30, 22.73 | 22.83, 22.70 | +1.1% | unchanged |
+  | res3.x | 15.00, 14.89 | 15.06, 15.09 | +0.8% | now kw-fold; the optimizer measured it flat, median of 3 |
+  | aspp.convs.2 | 58.82, 58.46 | 59.25, 58.69 | +0.6% | row skip, nothing to skip on its slowest row |
+
+  All are inside the noise band. Flat is not a carve-out, so no carve-out was taken.
+- **Golden:** `eval/golden_tests/conv2d_3x3/` 1518 passed, 480 skipped (INVALID), 0 failed after every graduation and on the final tree.
+- **Unit tests:** the unit dir passed 266/266 before the new file and 276/276 with it. The forced-kw-fold file is 10/10, also under `--dev`.
+
+### Bottleneck now
+- **Small configs (res3.x / res4.x / res2 / center_head.1 / res3.0 / res4.0, 11.5-17.5 us vs 5.7).**
+  - **Round-0 weight latency.** Round 0 lands at ~4.3 us on every server-fed HEIGHT layer: center_head.1, res2 and res3.x all wait for it.
+  - **res3.x's fill-paced untilize** (5 us).
+  - **res4's prelude**, paced by the reader's per-unit tap-direct planning (~200 cycles per unit).
+  - The 5.7 us target stays below these fixed costs.
+- **aspp.convs.1/2, res5.x (flat):** their middle grid rows keep all 3 kernel rows. A non-uniform M split by real kernel rows would cut the busiest row by up to 31% (aspp.convs.2).
+- **sem res2 fc1 / sem dec res2 fc0 (priority 2 / 12, flat):** these are the K-blocked walk at ~22 cycles per MAC. kw-fold does not fit L1. N-slice-outer only fits at s = 1, which loses.
+
+### Helper bypasses
+
+| helper | kind | what was missing / hard | helper ns | raw ns | site |
+|---|---|---|---|---|---|
+| `compute_kernel_lib::matmul_block` | capability | No per-subblock K window. The ring walk must multiply only a row group's in-image kernel rows, a contiguous K range that differs per group; the helper multiplies the whole K of every subblock. | n/a (the ring walk had no helper form; raw full-K walk 33729, aspp.convs.3) | 27297 | conv2d_3x3_compute.cpp:901, :953 (ring walk); descriptor `_nslice_kh_masks` |
+| `compute_kernel_lib::matmul_block` | capability | A column round's K loop runs over three non-contiguous in0 bases (one per kernel row, whole input rows apart) with out-of-image rows skipped, all accumulated in DEST, then packed at a computed ACC row offset. The helper takes one contiguous in0 block and packs at the CB write pointer. | 34710 (inst res2 fc1 on the tap-direct helper walk) | 28090 | conv2d_3x3_kw_fold.hpp:257 (`subblock_body`), :325 (column-round loop) |
+| `compute_kernel_lib::tilize` / `binary_dest_reuse_tiles` | capability | No tilize with a second operand. An add after the tilize via dest-reuse needs an unpacker re-init per DEST batch plus a second unpack and FPU pass per tile. The fp32-DEST tilize copy is already an ELWADD with a zeroed srcB, so the raw MOP loads 8 fp32 bias rows into srcB instead. | not built (estimated several us more on stem.conv2, unmeasured) | 37620 (stem.conv2; final pass 3.0 us with and without the add) | conv2d_3x3_kw_fold.hpp:134 (`tilize_bias_mop_config`), :146, :386 |
+| no helper (dataflow format conversion) | capability | Nothing converts a bf8_b / bf16 tile's row 0 to fp32 row-major on a data-movement RISC. The reader decodes it in plain RISC code. | n/a | ~1.3 us per tile with `__builtin_clz` (res3.x, N 4: 5.4 us); normalize loop not timed separately, hidden on every focus case | conv2d_3x3_reader.cpp:810 |
+
+The row skip's host masks and the weight-round order use no raw LLK beyond the walks above.

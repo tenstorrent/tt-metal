@@ -1,0 +1,130 @@
+SAFE_PYTEST: Waiting for device lock...
+SAFE_PYTEST: Device lock acquired
+SAFE_PYTEST: dispatch_timeout=5s
+PRECOMPILE: on — collect + parallel compile (x64) inside the pytest session, local
+SAFE_PYTEST: env UP_FRONT_INLINE=1 UP_FRONT_COLLECT=1 UP_FRONT_REAL_ALLOC=1 UP_FRONT_COLLECT_WORKERS=64 PYTHONPATH=/localdev/pmilojevic/workspaces/opgen:/localdev/pmilojevic/workspaces/opgen python -m tracy -r -m pytest -p tests.plugins.up_front_collect --import-mode=prepend ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kw_fold_seedless/test_kwfs_op.py::test_conv2d_3x3_perf_focus\[stem_conv2\] ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kw_fold_seedless/test_kwfs_op.py::test_conv2d_3x3_perf_focus\[stem_conv3\] ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kw_fold_seedless/test_kwfs_op.py::test_conv2d_3x3_perf_focus\[instance0\] ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kw_fold_seedless/test_kwfs_op.py::test_conv2d_3x3_perf_focus\[instance1\] ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kw_fold_seedless/test_kwfs_op.py::test_conv2d_3x3_perf_focus\[instance2\] ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kw_fold_seedless/test_kwfs_op.py::test_conv2d_3x3_perf_focus\[center_head_1\]
+========================================
+2026-11-18 18:45:57.797 | INFO     | __main__:main:381 - Using port 8086
+2026-11-18 18:45:57.797 | INFO     | tracy:run_report_setup:91 - Verifying tracy profiling tools
+2026-11-18 18:45:57.841 | INFO     | __main__:run_workload:416 - Test process started
+2026-11-18 18:46:00.225 | DEBUG    | ttnn:<module>:45 - Initial ttnn.CONFIG:
+Config{cache_path=/home/pmilojevic/.cache/ttnn,model_cache_path=/home/pmilojevic/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,validate_program_args=false,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_graph_python_stack_traces=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,strict_ccl_topology=false,verify_replicated_shards_on_dump=true,std::nullopt}
+============================= test session starts ==============================
+platform linux -- Python 3.10.19, pytest-9.0.3, pluggy-1.7.0 -- /localdev/pmilojevic/workspaces/opgen/python_env/bin/python
+cachedir: .pytest_cache
+benchmark: 5.2.3 (defaults: timer=time.perf_counter disable_gc=False min_rounds=5 min_time=0.000005 max_time=1.0 calibration_precision=10 warmup=False warmup_iterations=100000)
+rootdir: /localdev/pmilojevic/workspaces/opgen
+configfile: pytest.ini
+plugins: split-0.11.0, repeat-0.9.4, anyio-4.16.0, benchmark-5.2.3, github-actions-annotate-failures-0.3.0, timeout-2.4.0, cov-7.0.0, dash-2.15.0
+timeout: 300.0s
+timeout method: signal
+timeout func_only: False
+collecting ... 2026-11-18 18:46:05.188 | info     |          Device | Opening user mode device driver (tt_cluster.cpp:252)
+2026-11-18 18:46:05.188 | info     |             UMD | Cluster constructor started. (cluster.cpp:434)
+2026-11-18 18:46:05.190 | info     |             UMD | Creating TopologyDiscovery for architecture: blackhole (topology_discovery.cpp:137)
+2026-11-18 18:46:05.190 | info     |             UMD | Starting topology discovery. (topology_discovery.cpp:156)
+2026-11-18 18:46:05.214 | info     |             UMD | Established firmware bundle version: 19.16.1 (topology_discovery.cpp:700)
+2026-11-18 18:46:05.215 | info     |             UMD | Completed topology discovery. (topology_discovery.cpp:161)
+2026-11-18 18:46:05.476 | info     |             UMD | Opening local chip ids/PCIe ids: {0, 1, 2, 3, 4, 5, 6, 7}/[2, 3, 1, 0, 6, 7, 5, 4] and remote chip ids {} (cluster.cpp:174)
+2026-11-18 18:46:05.476 | info     |             UMD | IOMMU: enabled (cluster.cpp:148)
+2026-11-18 18:46:05.476 | info     |             UMD | KMD version: 2.9.0 (cluster.cpp:151)
+2026-11-18 18:46:05.476 | info     |             UMD | Cluster constructor completed. (cluster.cpp:893)
+2026-11-18 18:46:05.484 | info     |             UMD | Starting devices in cluster (cluster.cpp:1482)
+2026-11-18 18:46:05.962 | info     |             UMD | Starting devices in cluster completed. (cluster.cpp:1491)
+2026-11-18 18:46:06.109 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:571)
+2026-11-18 18:46:06.109 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:624)
+2026-11-18 18:46:06.293 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using distributed::MeshDevice::create_unit_meshes(). (device_manager.cpp:265)
+2026-11-18 18:46:06.312 | info     |           Metal | Profiler started on device 0 (profiler_initializer.cpp:49)
+collected 6 items
+
+UP_FRONT_INLINE: collect pass over 6 item(s) took 2.6s
+UP_FRONT_INLINE: compile route local (programs=6, farm_min=10)
+
+UP_FRONT_COLLECT: 6 ops stashed across 6 bodies -> 6 unique programs (swallowed 0, skipped-capture 0)
+UP_FRONT_COLLECT: fast-shallow from_torch — shape-only=18 fallback=0
+2026-11-18 18:46:07.985 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using distributed::MeshDevice::create_unit_meshes(). (device_manager.cpp:265)
+2026-11-18 18:46:08.003 | info     |           Metal | Profiler started on device 0 (profiler_initializer.cpp:49)
+2026-11-18 18:46:08.083 | info     |           Metal | Enabling program cache on MeshDevice 3 (mesh_device.cpp:1322)
+UP_FRONT_COLLECT: 6 collected · 6 built · 0 already compiled in 0.2s (workers=64, errors=0) -> on-disk JIT cache warm
+UP_FRONT_COLLECT_RESULT: status=ok reason=ok unique=6 programs=6 errors=0 pytest_exit=0 xpass_strict=0 other_failures=0 built=6 compile_s=0.5 collect_s=2.6 route=local
+UP_FRONT_INLINE: compile step took 0.5s; starting the real pass
+
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kw_fold_seedless/test_kwfs_op.py::test_conv2d_3x3_perf_focus[stem_conv2] <- tests/ttnn/unit_tests/operations/conv2d_3x3/test_conv2d_3x3_perf.py 2026-11-18 18:46:08.470 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using distributed::MeshDevice::create_unit_meshes(). (device_manager.cpp:265)
+2026-11-18 18:46:08.472 | info     |           Metal | Profiler started on device 0 (profiler_initializer.cpp:49)
+PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kw_fold_seedless/test_kwfs_op.py::test_conv2d_3x3_perf_focus[stem_conv3] <- tests/ttnn/unit_tests/operations/conv2d_3x3/test_conv2d_3x3_perf.py PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kw_fold_seedless/test_kwfs_op.py::test_conv2d_3x3_perf_focus[instance0] <- tests/ttnn/unit_tests/operations/conv2d_3x3/test_conv2d_3x3_perf.py PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kw_fold_seedless/test_kwfs_op.py::test_conv2d_3x3_perf_focus[instance1] <- tests/ttnn/unit_tests/operations/conv2d_3x3/test_conv2d_3x3_perf.py PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kw_fold_seedless/test_kwfs_op.py::test_conv2d_3x3_perf_focus[instance2] <- tests/ttnn/unit_tests/operations/conv2d_3x3/test_conv2d_3x3_perf.py PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kw_fold_seedless/test_kwfs_op.py::test_conv2d_3x3_perf_focus[center_head_1] <- tests/ttnn/unit_tests/operations/conv2d_3x3/test_conv2d_3x3_perf.py PASSED2026-11-18 18:46:09.673 | info     |           Metal | Device kernel duration perf summary (device=0): count=6, min=16223ns, avg=33232.8ns, max=53367ns (profiler_analysis.cpp:729)
+2026-11-18 18:46:09.673 | info     |           Metal | Device kernel duration perf histogram (device=0): (buckets=10, bucket_size=3800ns, range=[15200..53200), underflow(<15200ns)=0, overflow(>=53200ns)=1) (profiler_analysis.cpp:772)
+2026-11-18 18:46:09.673 | info     |           Metal |   [       15200 ..        19000) |####################                    |        1 (profiler_analysis.cpp:777)
+2026-11-18 18:46:09.673 | info     |           Metal |   [       19000 ..        22800) |                                        |        0 (profiler_analysis.cpp:777)
+2026-11-18 18:46:09.673 | info     |           Metal |   [       22800 ..        26600) |####################                    |        1 (profiler_analysis.cpp:777)
+2026-11-18 18:46:09.673 | info     |           Metal |   [       26600 ..        30400) |                                        |        0 (profiler_analysis.cpp:777)
+2026-11-18 18:46:09.673 | info     |           Metal |   [       30400 ..        34200) |########################################|        2 (profiler_analysis.cpp:777)
+2026-11-18 18:46:09.673 | info     |           Metal |   [       34200 ..        38000) |####################                    |        1 (profiler_analysis.cpp:777)
+2026-11-18 18:46:09.673 | info     |           Metal |   [       38000 ..        41800) |                                        |        0 (profiler_analysis.cpp:777)
+2026-11-18 18:46:09.673 | info     |           Metal |   [       41800 ..        45600) |                                        |        0 (profiler_analysis.cpp:777)
+2026-11-18 18:46:09.673 | info     |           Metal |   [       45600 ..        49400) |                                        |        0 (profiler_analysis.cpp:777)
+2026-11-18 18:46:09.673 | info     |           Metal |   [       49400 ..        53200) |                                        |        0 (profiler_analysis.cpp:777)
+UP_FRONT_INLINE: real pass took 1.4s
+
+
+- generated xml file: /localdev/pmilojevic/workspaces/opgen/generated/test_reports/most_recent_tests.xml -
+============================= slowest 25 durations =============================
+0.40s call     ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kw_fold_seedless/test_kwfs_op.py::test_conv2d_3x3_perf_focus[stem_conv3]
+0.26s call     ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kw_fold_seedless/test_kwfs_op.py::test_conv2d_3x3_perf_focus[stem_conv2]
+0.26s setup    ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kw_fold_seedless/test_kwfs_op.py::test_conv2d_3x3_perf_focus[stem_conv2]
+0.13s call     ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kw_fold_seedless/test_kwfs_op.py::test_conv2d_3x3_perf_focus[instance1]
+0.12s teardown ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kw_fold_seedless/test_kwfs_op.py::test_conv2d_3x3_perf_focus[center_head_1]
+0.11s call     ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kw_fold_seedless/test_kwfs_op.py::test_conv2d_3x3_perf_focus[instance2]
+0.05s call     ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kw_fold_seedless/test_kwfs_op.py::test_conv2d_3x3_perf_focus[center_head_1]
+0.05s call     ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kw_fold_seedless/test_kwfs_op.py::test_conv2d_3x3_perf_focus[instance0]
+0.00s setup    ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kw_fold_seedless/test_kwfs_op.py::test_conv2d_3x3_perf_focus[stem_conv3]
+0.00s setup    ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kw_fold_seedless/test_kwfs_op.py::test_conv2d_3x3_perf_focus[instance0]
+0.00s setup    ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kw_fold_seedless/test_kwfs_op.py::test_conv2d_3x3_perf_focus[instance2]
+0.00s setup    ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kw_fold_seedless/test_kwfs_op.py::test_conv2d_3x3_perf_focus[center_head_1]
+0.00s setup    ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kw_fold_seedless/test_kwfs_op.py::test_conv2d_3x3_perf_focus[instance1]
+0.00s teardown ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kw_fold_seedless/test_kwfs_op.py::test_conv2d_3x3_perf_focus[instance2]
+0.00s teardown ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kw_fold_seedless/test_kwfs_op.py::test_conv2d_3x3_perf_focus[stem_conv2]
+0.00s teardown ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kw_fold_seedless/test_kwfs_op.py::test_conv2d_3x3_perf_focus[instance1]
+0.00s teardown ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kw_fold_seedless/test_kwfs_op.py::test_conv2d_3x3_perf_focus[stem_conv3]
+0.00s teardown ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kw_fold_seedless/test_kwfs_op.py::test_conv2d_3x3_perf_focus[instance0]
+============================== 6 passed in 5.21s ===============================
+2026-11-18 18:46:11.114 | info     |    BuildKernels | JIT cache stats: 57/57 hits (100.0%) [57 cached, 268 build-once dedup, 0 merged artifacts, 0 merged genfiles] (build_cache_telemetry.cpp:362)
+2026-11-18 18:46:11.114 | info     |    BuildKernels | JIT telemetry: 38 registered TelemetryTokens (build_cache_telemetry.cpp:510)
+2026-11-18 18:46:11.162 | info     |          Device | Closing user mode device drivers (tt_cluster.cpp:605)
+2026-11-18 18:46:11.162 | info     |             UMD | Closing devices in cluster (cluster.cpp:1496)
+2026-11-18 18:46:11.600 | info     |             UMD | Closing devices in cluster completed. (cluster.cpp:1506)
+2026-11-18 18:46:11.600 | info     |             UMD | Cluster destructor started. (cluster.cpp:1227)
+2026-11-18 18:46:11.600 | info     |             UMD | Cluster destructor completed. (cluster.cpp:1240)
+2026-11-18 18:46:11.881 | INFO     | __main__:main:490 - Copying /localdev/pmilojevic/workspaces/opgen/generated/profiler/.logs/tracy_profile_log_host.tracy to /localdev/pmilojevic/workspaces/opgen/build/profiler/build_wasm/traces/test_kwfs_op_2026_11_18_18_46_11.tracy
+2026-11-18 18:46:11.883 | INFO     | __main__:main:493 - Copied /localdev/pmilojevic/workspaces/opgen/generated/profiler/.logs/tracy_profile_log_host.tracy to /localdev/pmilojevic/workspaces/opgen/build/profiler/build_wasm/traces/test_kwfs_op_2026_11_18_18_46_11.tracy
+2026-11-18 18:46:11.884 | INFO     | __main__:main:502 - embed.tracy -> traces/test_kwfs_op_2026_11_18_18_46_11.tracy
+2026-11-18 18:46:11.884 | INFO     | tracy.serve_wasm:launch_server_subprocess:310 - Launching tracy web app GUI server subprocess...
+2026-11-18 18:46:11.884 | INFO     | tracy.serve_wasm:launch_server_subprocess:313 - Tracy WASM web UI (open in browser): http://localhost:8080/ (WebSocket for live reload: ws://localhost:8081/)
+2026-11-18 18:46:11.884 | INFO     | tracy.serve_wasm:launch_server_subprocess:320 - Tracy WASM server already serving port 8080; reusing it (live-reload refreshes the browser).
+2026-11-18 18:46:13.126 | INFO     | tracy:generate_report:162 - Host side ops time report generated at /localdev/pmilojevic/workspaces/opgen/generated/profiler/.logs/tracy_ops_times.csv
+2026-11-18 18:46:13.182 | INFO     | tracy:generate_report:173 - Host side ops data report generated at /localdev/pmilojevic/workspaces/opgen/generated/profiler/.logs/tracy_ops_data.csv
+2026-11-18 18:46:13.182 | INFO     | tracy.process_ops_logs:import_tracy_op_logs:430 - Importing ops logs
+/localdev/pmilojevic/workspaces/opgen/tools/tracy/process_ops_logs.py:535: DtypeWarning: Columns (3,4,8) have mixed types. Specify dtype option on import or set low_memory=False.
+  df = pd.read_csv(tracyOpTimesLog)
+2026-11-18 18:46:15.170 | INFO     | tracy.perf_counter_analysis:get_device_op_data:420 - Getting device ops
+2026-11-18 18:46:15.170 | INFO     | tracy.process_ops_logs:append_device_data:995 - Appending device data
+2026-11-18 18:46:15.313 | INFO     | tracy.process_ops_logs:generate_reports:1323 - OPs' perf analysis is finished! Generating reports ...
+2026-11-18 18:46:15.314 | INFO     | tracy.process_ops_logs:generate_reports:1343 - Copying runtime artifacts
+2026-11-18 18:46:15.342 | INFO     | tracy.process_ops_logs:generate_reports:1352 - Generating OPs CSV
+2026-11-18 18:46:15.349 | INFO     | tracy.process_ops_logs:generate_reports:1814 - OPs csv generated at: /localdev/pmilojevic/workspaces/opgen/generated/profiler/reports/2026_11_18_18_46_15/ops_perf_results_2026_11_18_18_46_15.csv
+========================================
+PRECOMPILE: UP_FRONT_INLINE: collect pass over 6 item(s) took 2.6s
+PRECOMPILE: UP_FRONT_INLINE: compile route local (programs=6, farm_min=10)
+PRECOMPILE: UP_FRONT_COLLECT: 6 ops stashed across 6 bodies -> 6 unique programs (swallowed 0, skipped-capture 0)
+PRECOMPILE: UP_FRONT_COLLECT: fast-shallow from_torch — shape-only=18 fallback=0
+PRECOMPILE: UP_FRONT_COLLECT: 6 collected · 6 built · 0 already compiled in 0.2s (workers=64, errors=0) -> on-disk JIT cache warm
+PRECOMPILE: UP_FRONT_INLINE: compile step took 0.5s; starting the real pass
+PRECOMPILE: UP_FRONT_INLINE: real pass took 1.4s
+SAFE_PYTEST: PROFILER CSV: /localdev/pmilojevic/workspaces/opgen/generated/profiler/reports/2026_11_18_18_46_15/ops_perf_results_2026_11_18_18_46_15.csv
+SAFE_PYTEST_RESULT: PASS
+========================================
+SAFE_PYTEST_TOTAL_RUNTIME: 0m20s (20s total, device-lock-acquired -> exit)
