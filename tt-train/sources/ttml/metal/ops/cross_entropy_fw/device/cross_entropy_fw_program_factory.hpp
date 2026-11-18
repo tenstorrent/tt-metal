@@ -4,28 +4,22 @@
 
 #pragma once
 
-#include <optional>
-#include <tt-metalium/program_descriptors.hpp>
+#include <tt-metalium/workload_descriptor.hpp>
 
 #include "cross_entropy_fw_device_operation_types.hpp"
 #include "metal/ttnn_all_includes.hpp"
 
 namespace ttml::metal::ops::cross_entropy_fw::device {
 
+// The collapse-resistant row-softmax program shared with the fused log_softmax
+// (metal/ops/log_softmax/device/row_softmax_program.hpp). The workload owns the DRAM scratch the cores sharing a row
+// exchange partial statistics through; a program-cache hit only re-patches buffer addresses.
 struct CrossEntropyForwardProgramFactory {
-    static tt::tt_metal::ProgramDescriptor create_descriptor(
-        const operation_attributes_t& operation_attributes,
-        const tensor_args_t& tensor_args,
-        tensor_return_value_t& tensor_return_value);
-
-    // The only thing a cache hit runs: rewrites the buffer addresses on every core. Every other runtime arg follows
-    // from the program hash.
-    static void override_runtime_arguments(
-        tt::tt_metal::Program& program,
+    static tt::tt_metal::WorkloadDescriptor create_workload_descriptor(
         const operation_attributes_t& operation_attributes,
         const tensor_args_t& tensor_args,
         tensor_return_value_t& tensor_return_value,
-        const std::optional<ttnn::MeshCoordinate>& mesh_dispatch_coordinate);
+        const ttnn::MeshCoordinateRangeSet& tensor_coords);
 };
 
 }  // namespace ttml::metal::ops::cross_entropy_fw::device
