@@ -1,0 +1,348 @@
+--- ttnn/ttnn/operations/conv2d_3x3/conv2d_3x3_program_descriptor.py	2026-11-18 02:02:19.414419110 +0000
++++ ttnn/ttnn/operations/conv2d_3x3/perf_experiments/nslice_smaller_bm/op_copy/conv2d_3x3_program_descriptor.py	2026-11-18 02:26:43.321433724 +0000
+@@ -116,6 +116,23 @@
+ NSLICE_WEIGHT_DEPTH = 4
+ NSLICE_SLICE_DEPTH = 2
+
++# --- nslice_smaller_bm experiment knobs (perf_experiments/nslice_smaller_bm) ---
++# A: when N-slice-outer does not fit at the K-blocked solve's bm, retry it at every smaller bm before falling back.
++NSLICE_SMALLER_BM = False
++# B: when it does not fit, retry it at the same bm with cb_combine_slots sharing cb_halo_slab's L1 (one M-block per core
++# only: the slab is dead once the core's gather landed, and the owner's credits go out only after that).
++NSLICE_ALIAS_SLAB_COMBINE = False
++# B: the alias configs tried in order: (slice CB depth, also alias cb_combined onto cb_zero_src). cb_combined in
++# cb_zero_src is free (the zero block is dead once the gather landed) and buys one more untilize batch row on aspp;
++# the aliased walk keeps the slice CBs single-buffered (the two senders alternate, so compute still runs a slice ahead),
++# which lets the coarsest tap-aligned bk fit (bk is what pays: bk 18 gathers in a third of bk 6's fenced units).
++NSLICE_ALIAS_CONFIGS = ((1, True),)
++# Correctness coverage: take the aliased N-slice-outer solve whenever it is legal (one M-block per core), even where the
++# plain one fits.
++NSLICE_ALIAS_ALWAYS = False
++# Force a blocking (bm, bk, nslice) for attribution runs; None = solve.
++FORCE_BLOCKING = None
++
+ # Split row gather (the per-pixel row gather with more than one tile-row per K-block): the writer gathers the units the
+ # reader hands it (at most ROW_QUEUE outstanding) on NoC1, so two RISCs issue the reads. cb_im2col_rm then holds up to
+ # ROW_SPLIT_DEPTH_ROWS units, so both RISCs and the next K-block's units stay in flight during a matmul.
+@@ -265,6 +282,11 @@
+     footprint_bytes: int
+     # The K split runs N-slice-outer (see NSLICE_WEIGHT_DEPTH).
+     nslice: bool = False
++    # nslice_smaller_bm experiment: cb_combine_slots shares cb_halo_slab's L1 region (and cb_combined cb_zero_src's).
++    alias_slab_combine: bool = False
++    alias_region_bytes: int = 0
++    alias_combined_region_bytes: int = 0
++    slice_depth: int = 2
+
+     @property
+     def slab_px(self):
+@@ -400,7 +422,25 @@
+     return bm > 1 and not face_direct_im2col(g, bk) and not _tap_major(g, bk)
+
+
+-def _footprint(g: Conv3x3Geometry, core_m_tiles, bm, bk, bn, ub_cap=None, nslice=False):
++def _lcm(a, b):
++    import math
++
++    return a * b // math.gcd(a, b)
++
++
++def _footprint(
++    g: Conv3x3Geometry,
++    core_m_tiles,
++    bm,
++    bk,
++    bn,
++    ub_cap=None,
++    nslice=False,
++    alias=False,
++    slice_depth=None,
++    alias_combined=False,
++):
++    slice_depth = NSLICE_SLICE_DEPTH if slice_depth is None else slice_depth
+     num_k_blocks = g.tensor_k_tiles // bk
+     im2col_rm_depth_rows = (
+         max(IM2COL_RM_DEPTH_ROWS, min(ROW_SPLIT_DEPTH_ROWS, bm * num_k_blocks))
+@@ -430,15 +470,35 @@
+         ub, slab_tile_rows = 1, 0
+         slab_bytes = (2 * band_stride + band_len) * g.c_in_p * BF16_BYTES
+         input_tile_bytes = 0
++    zero_src_bytes = TILE * g.c_in_p * BF16_BYTES if _tap_major(g, bk) else 0
++    alias_region = alias_combined_region = 0
++    if alias:
++        # cb_combine_slots lives in cb_halo_slab's L1: one region, a multiple of both page sizes.
++        slab_page = TILE_BYTES_BF16 if g.tile_input else g.c_in_p * BF16_BYTES
++        slots_bytes = g.k_cols * bm * ns * TILE_BYTES_FP32
++        alias_region = _div_up(max(slab_bytes, slots_bytes), _lcm(slab_page, TILE_BYTES_FP32)) * _lcm(
++            slab_page, TILE_BYTES_FP32
++        )
++        combine_bytes -= slots_bytes
++        slab_bytes = alias_region
++        if alias_combined and g.has_bias and zero_src_bytes:
++            # cb_combined lives in cb_zero_src's L1 (the zero block is dead once the gather landed).
++            combined_bytes = bm * ns * TILE_BYTES_FP32
++            page = g.c_in_p * BF16_BYTES
++            alias_combined_region = _div_up(max(zero_src_bytes, combined_bytes), _lcm(page, TILE_BYTES_FP32)) * _lcm(
++                page, TILE_BYTES_FP32
++            )
++            combine_bytes -= combined_bytes
++            zero_src_bytes = alias_combined_region
+     total = (
+         slab_bytes
+         + input_tile_bytes
+         + (0 if face_direct_im2col(g, bk) else im2col_rm_depth_rows * bk * TILE_BYTES_BF16)
+-        + (TILE * g.c_in_p * BF16_BYTES if _tap_major(g, bk) else 0)
++        + zero_src_bytes
+         + bm * (g.tensor_k_tiles if nslice else bk) * g.in0_tile_bytes
+         + weight_depth * (g.tensor_k_tiles * ns if nslice else bk * bn) * g.weight_tile_bytes
+         + (ns * g.weight_tile_bytes if g.has_bias else 0)
+-        + (2 * NSLICE_SLICE_DEPTH * bm * ns if nslice else bm * bn) * TILE_BYTES_FP32
++        + (2 * slice_depth * bm * ns if nslice else bm * bn) * TILE_BYTES_FP32
+         + combine_bytes
+         + (0 if g.sharded_output else OUT_DEPTH_ROW_GROUPS * sb_h * bn * g.out_tile_bytes)
+     )
+@@ -458,6 +518,10 @@
+         footprint_bytes=total,
+         nslice=nslice,
+         im2col_rm_depth_rows=im2col_rm_depth_rows,
++        alias_slab_combine=alias,
++        alias_region_bytes=alias_region,
++        alias_combined_region_bytes=alias_combined_region,
++        slice_depth=slice_depth,
+     )
+
+
+@@ -495,14 +559,14 @@
+     search = [(bm, bk) for bm in bm_candidates for bk in bk_above_floor]
+     search += [(bm_candidates[-1], bk) for bk in bk_below_floor]
+
+-    def solve(candidates, nslice):
++    def solve(candidates, nslice, alias=False, slice_depth=None, alias_combined=False):
+         for bm, bk in candidates:
+             # The untilize batch shrinks first: a smaller batch costs one more read fence per tile-row,
+             # a smaller bk costs a whole K-block (tilize, matmul init, L1-acc pass).
+             band_len, raw_slab_rows = _block_extents(g, core_m_tiles, bm)
+             ub_default = _default_untilize_batch_rows(g, band_len, raw_slab_rows)
+             for ub_cap in range(ub_default, 0, -1):
+-                fit = _footprint(g, core_m_tiles, bm, bk, bn, ub_cap, nslice)
++                fit = _footprint(g, core_m_tiles, bm, bk, bn, ub_cap, nslice, alias, slice_depth, alias_combined)
+                 if fit["footprint_bytes"] <= l1_budget:
+                     return Conv3x3Blocking(
+                         grid_x=grid_x,
+@@ -516,11 +580,47 @@
+                     )
+         return None
+
++    if FORCE_BLOCKING is not None:
++        fbm, fbk, fns = FORCE_BLOCKING[:3]
++        fcfg = FORCE_BLOCKING[3] if len(FORCE_BLOCKING) > 3 else None
++        if fcfg is None:
++            forced = solve([(fbm, fbk)], nslice=fns)
++        else:
++            forced = solve([(fbm, fbk)], nslice=fns, alias=True, slice_depth=fcfg[0], alias_combined=fcfg[1])
++        if forced is None:
++            raise ValueError(f"conv2d_3x3 experiment: forced blocking {FORCE_BLOCKING} does not fit")
++        return forced
+     blocking = solve(search, nslice=False)
+     if blocking is not None and g.k_split:
+         # N-slice-outer at the K-blocked solve's bm, unless its resident [bm, K] in0 does not fit. There bk only sets
+         # the gather / tilize granularity and costs almost no L1, so the coarsest that fits wins.
+-        nslice = solve([(blocking.block_m_tiles, bk) for bk in bk_above_floor + bk_below_floor], nslice=True)
++        nslice_bks = bk_above_floor + bk_below_floor
++
++        def alias_solve():
++            if not (NSLICE_ALIAS_SLAB_COMBINE and blocking.max_m_blocks_per_core == 1):
++                return None
++            # Tap-aligned bk first under every alias config: a bk below the tap floor loses tap-major im2col.
++            for bks in (bk_above_floor, bk_below_floor):
++                for depth, alias_combined in NSLICE_ALIAS_CONFIGS:
++                    found = solve(
++                        [(blocking.block_m_tiles, bk) for bk in bks],
++                        nslice=True,
++                        alias=True,
++                        slice_depth=depth,
++                        alias_combined=alias_combined,
++                    )
++                    if found is not None:
++                        return found
++            return None
++
++        nslice = alias_solve() if NSLICE_ALIAS_ALWAYS else None
++        if nslice is None:
++            nslice = solve([(blocking.block_m_tiles, bk) for bk in nslice_bks], nslice=True)
++        if nslice is None:
++            nslice = alias_solve()
++        if nslice is None and NSLICE_SMALLER_BM:
++            smaller = [bm for bm in bm_candidates if bm < blocking.block_m_tiles]
++            nslice = solve([(bm, bk) for bm in smaller for bk in nslice_bks], nslice=True)
+         blocking = nslice or blocking
+     if blocking is not None:
+         return blocking
+@@ -675,6 +775,23 @@
+         slab_cb = _cb(CB_HALO_SLAB, ttnn.bfloat16, TILE_BYTES_BF16, b.slab_tile_rows * g.c_in_tiles, cores)
+     else:
+         slab_cb = _cb(CB_HALO_SLAB, ttnn.bfloat16, pixel_bytes, b.slab_px, cores)
++    if b.alias_slab_combine:
++        # One region, two CB indices: the slab (dead once the core's gather landed) and the row's combine slots (written
++        # by peers only after this core's credit, which follows the gather). One M-block per core: each index is pushed
++        # once, so neither write pointer ever wraps.
++        slab_fmt = slab_cb.format_descriptors[0]
++        slab_cb = ttnn.CBDescriptor(
++            total_size=b.alias_region_bytes,
++            core_ranges=cores,
++            format_descriptors=[
++                ttnn.CBFormatDescriptor(
++                    buffer_index=CB_HALO_SLAB, data_format=ttnn.bfloat16, page_size=slab_fmt.page_size
++                ),
++                ttnn.CBFormatDescriptor(
++                    buffer_index=CB_COMBINE_SLOTS, data_format=ttnn.float32, page_size=TILE_BYTES_FP32
++                ),
++            ],
++        )
+     face_direct = face_direct_im2col(g, bk)
+     cbs = [slab_cb]
+     if not face_direct:
+@@ -693,7 +810,7 @@
+             CB_MATMUL_PARTIALS,
+             ttnn.float32,
+             TILE_BYTES_FP32,
+-            NSLICE_SLICE_DEPTH * bm * ns if b.nslice else bm * bn,
++            b.slice_depth * bm * ns if b.nslice else bm * bn,
+             cores,
+         ),
+     ]
+@@ -723,12 +840,30 @@
+         input_tile_pages = INPUT_TILE_DEPTH_BATCHES * b.untilize_batch_rows * g.c_in_tiles
+         cbs.append(_cb(CB_INPUT_TILES, input_tensor.dtype, g.in0_tile_bytes, input_tile_pages, cores))
+     if b.nslice:
+-        cbs.append(_cb(CB_SLICE_R, ttnn.float32, TILE_BYTES_FP32, NSLICE_SLICE_DEPTH * bm * ns, cores))
++        cbs.append(_cb(CB_SLICE_R, ttnn.float32, TILE_BYTES_FP32, b.slice_depth * bm * ns, cores))
++    alias_combined = b.alias_combined_region_bytes > 0
+     if tap_major_im2col(g, b):
+-        cbs.append(_cb(CB_ZERO_SRC, ttnn.bfloat16, pixel_bytes, TILE, cores))
++        if alias_combined:
++            cbs.append(
++                ttnn.CBDescriptor(
++                    total_size=b.alias_combined_region_bytes,
++                    core_ranges=cores,
++                    format_descriptors=[
++                        ttnn.CBFormatDescriptor(
++                            buffer_index=CB_ZERO_SRC, data_format=ttnn.bfloat16, page_size=pixel_bytes
++                        ),
++                        ttnn.CBFormatDescriptor(
++                            buffer_index=CB_COMBINED, data_format=ttnn.float32, page_size=TILE_BYTES_FP32
++                        ),
++                    ],
++                )
++            )
++        else:
++            cbs.append(_cb(CB_ZERO_SRC, ttnn.bfloat16, pixel_bytes, TILE, cores))
+     if g.k_split:
+-        cbs.append(_cb(CB_COMBINE_SLOTS, ttnn.float32, TILE_BYTES_FP32, g.k_cols * bm * ns, cores))
+-        if has_bias:
++        if not b.alias_slab_combine:
++            cbs.append(_cb(CB_COMBINE_SLOTS, ttnn.float32, TILE_BYTES_FP32, g.k_cols * bm * ns, cores))
++        if has_bias and not alias_combined:
+             cbs.append(_cb(CB_COMBINED, ttnn.float32, TILE_BYTES_FP32, bm * ns, cores))
+
+     # Channel-slice reads (R4): the core's slice of input row v is page v * row_page_stride + col offset,
+@@ -823,6 +958,10 @@
+             int(row_split),
+             ROW_QUEUE,
+             *row_sem_ids,
++            # nslice_smaller_bm: the slab shares its L1 with cb_combine_slots; the reader raises slab_dead (send_go's
++            # id, unused on the N-slice path) once the M-block's gather landed.
++            int(b.alias_slab_combine),
++            SEM_COMBINE_SEND_GO,
+         ]
+         args.extend(ttnn.TensorAccessorArgs(input_tensor).get_compile_time_args())
+         return args
+@@ -915,8 +1054,10 @@
+         g.c_in_p,  # this core's slice channels, set per writer kernel
+         int(g.tile_input),
+         0,  # zero_im2col_once, set per writer kernel
++        int(b.alias_slab_combine),
++        SEM_COMBINE_SEND_GO,
+     ]
+-    writer_slice_arg = len(writer_ct_args) - 3
++    writer_slice_arg = len(writer_ct_args) - 5
+
+     def writer_ct_args_for(slice_channels):
+         args = list(writer_ct_args)
+--- ttnn/ttnn/operations/conv2d_3x3/kernels/conv2d_3x3_reader.cpp	2026-11-18 02:02:19.415419125 +0000
++++ ttnn/ttnn/operations/conv2d_3x3/perf_experiments/nslice_smaller_bm/op_copy/kernels/conv2d_3x3_reader.cpp	2026-11-18 02:12:01.173766585 +0000
+@@ -147,7 +147,11 @@
+     constexpr uint32_t row_limit_sem_id = get_compile_time_arg_val(55);
+     constexpr uint32_t row_assigned_sem_id = get_compile_time_arg_val(56);
+     constexpr uint32_t row_mailbox_sem_id = get_compile_time_arg_val(57);  // row_queue consecutive ids
+-    constexpr auto input_args = TensorAccessorArgs<58>();
++    // nslice_smaller_bm: cb_combine_slots shares the slab's L1; slab_dead tells the writer the gather landed.
++    constexpr bool alias_slab_combine = get_compile_time_arg_val(58) != 0;
++    constexpr uint32_t slab_dead_sem_id = get_compile_time_arg_val(59);
++    constexpr auto input_args = TensorAccessorArgs<60>();
++    static_assert(!alias_slab_combine || nslice_outer, "only the N-slice-outer walk aliases the slab");
+
+     const uint32_t input_addr = get_arg_val<uint32_t>(0);
+     const uint32_t m_tile_start = get_arg_val<uint32_t>(1);
+@@ -594,6 +598,11 @@
+             cb_wait_front(cb_halo_slab, slab_pages);
+             cb_pop_front(cb_halo_slab, slab_pages);
+         }
++        if constexpr (alias_slab_combine) {
++            // Every gather read of the slab (and zero block) has landed and compute's untilize is complete: the
++            // writer may now let the row's peers write their slices into this L1.
++            Semaphore<>(slab_dead_sem_id).up(1);
++        }
+
+         if constexpr (nslice_outer) {
+             // NoC0 half of the slice sends: the +d owner slices, from cb_slice_r, in the shared order.
+--- ttnn/ttnn/operations/conv2d_3x3/kernels/conv2d_3x3_writer.cpp	2026-11-18 02:02:19.415419125 +0000
++++ ttnn/ttnn/operations/conv2d_3x3/perf_experiments/nslice_smaller_bm/op_copy/kernels/conv2d_3x3_writer.cpp	2026-11-18 02:11:55.366682522 +0000
+@@ -123,7 +123,10 @@
+     constexpr uint32_t c_in = get_compile_time_arg_val(54);  // this core's channel slice
+     constexpr bool tile_input = get_compile_time_arg_val(55) != 0;
+     constexpr bool zero_im2col_once = get_compile_time_arg_val(56) != 0;
+-    constexpr auto weight_args = TensorAccessorArgs<57>();
++    // nslice_smaller_bm: cb_combine_slots shares the slab's L1; credits wait for the reader's slab_dead.
++    constexpr bool alias_slab_combine = get_compile_time_arg_val(57) != 0;
++    constexpr uint32_t slab_dead_sem_id = get_compile_time_arg_val(58);
++    constexpr auto weight_args = TensorAccessorArgs<59>();
+     [[maybe_unused]] constexpr auto bias_args = TensorAccessorArgs<weight_args.next_compile_time_args_offset()>();
+     [[maybe_unused]] constexpr auto output_args = TensorAccessorArgs<bias_args.next_compile_time_args_offset()>();
+     [[maybe_unused]] constexpr auto input_args = TensorAccessorArgs<output_args.next_compile_time_args_offset()>();
+@@ -332,11 +335,16 @@
+     };
+     // before_sends runs once the first weight rounds are out, before the first slice send (the split row gather).
+     [[maybe_unused]] auto nslice_round = [&](uint32_t m_block_idx, auto&& before_sends) {
+-        if (out_valid_tiles > 0) {
+-            cb_reserve_back(cb_combine_slots, k_cols * slot_tiles);
+-            for (uint32_t col = 0; col < k_cols; ++col) {
+-                combine_credit.up(noc, peer_x(col), peer_y(col), 1);
++        auto give_credits = [&]() {
++            if (out_valid_tiles > 0) {
++                cb_reserve_back(cb_combine_slots, k_cols * slot_tiles);
++                for (uint32_t col = 0; col < k_cols; ++col) {
++                    combine_credit.up(noc, peer_x(col), peer_y(col), 1);
++                }
+             }
++        };
++        if constexpr (!alias_slab_combine) {
++            give_credits();
+         }
+         uint32_t order[k_cols];
+         uint32_t step[k_cols];
+@@ -359,6 +367,14 @@
+         };
+         issue_weights_through(1 + nslice_weight_lookahead);
+         before_sends();
++        if constexpr (alias_slab_combine) {
++            // The combine slots are the slab's L1: peers may write them only once this core's gather landed.
++            {
++                MaybeDeviceZoneScope("writer_slab_dead_wait");
++                Semaphore<>(slab_dead_sem_id).wait_min(m_block_idx + 1);
++            }
++            give_credits();
++        }
+         for (uint32_t j = 0; j < num_slices; ++j) {
+             issue_weights_through(j + 1 + nslice_weight_lookahead);
+             const uint32_t y = order[j];

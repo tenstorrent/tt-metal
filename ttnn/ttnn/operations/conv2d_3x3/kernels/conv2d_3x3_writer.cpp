@@ -48,6 +48,11 @@
 // from cb_slice_r. Both RISCs wait on the owners' credits and bump an owner's arrival count after their write to it
 // is acked; the owner pushes its slots after k_cols arrivals, as in the K-blocked round.
 //
+// Shared-L1 N-slice walk (whenever every core runs one M-block): cb_combine_slots
+// shares cb_halo_slab's L1 and cb_combined cb_zero_src's, both dead once the core's gather landed. The owner's credits
+// therefore wait for the reader's slab_dead, so no peer writes a slot before then; the first weight rounds and the
+// split row gather's serving still go out before that wait.
+//
 // Every push of cb_combine_slots is its whole capacity, so its write pointer never leaves the CB base and
 // the same base address is right on every core. The counters only grow, so round j waits for
 // (j + 1) x the per-round count.
@@ -123,7 +128,10 @@ void kernel_main() {
     constexpr uint32_t c_in = get_compile_time_arg_val(54);  // this core's channel slice
     constexpr bool tile_input = get_compile_time_arg_val(55) != 0;
     constexpr bool zero_im2col_once = get_compile_time_arg_val(56) != 0;
-    constexpr auto weight_args = TensorAccessorArgs<57>();
+    // Shared-L1 N-slice walk: cb_combine_slots shares the slab's L1, so the credits wait for the reader's slab_dead.
+    constexpr bool alias_slab_combine = get_compile_time_arg_val(57) != 0;
+    constexpr uint32_t slab_dead_sem_id = get_compile_time_arg_val(58);
+    constexpr auto weight_args = TensorAccessorArgs<59>();
     [[maybe_unused]] constexpr auto bias_args = TensorAccessorArgs<weight_args.next_compile_time_args_offset()>();
     [[maybe_unused]] constexpr auto output_args = TensorAccessorArgs<bias_args.next_compile_time_args_offset()>();
     [[maybe_unused]] constexpr auto input_args = TensorAccessorArgs<output_args.next_compile_time_args_offset()>();
@@ -332,11 +340,16 @@ void kernel_main() {
     };
     // before_sends runs once the first weight rounds are out, before the first slice send (the split row gather).
     [[maybe_unused]] auto nslice_round = [&](uint32_t m_block_idx, auto&& before_sends) {
-        if (out_valid_tiles > 0) {
-            cb_reserve_back(cb_combine_slots, k_cols * slot_tiles);
-            for (uint32_t col = 0; col < k_cols; ++col) {
-                combine_credit.up(noc, peer_x(col), peer_y(col), 1);
+        auto give_credits = [&]() {
+            if (out_valid_tiles > 0) {
+                cb_reserve_back(cb_combine_slots, k_cols * slot_tiles);
+                for (uint32_t col = 0; col < k_cols; ++col) {
+                    combine_credit.up(noc, peer_x(col), peer_y(col), 1);
+                }
             }
+        };
+        if constexpr (!alias_slab_combine) {
+            give_credits();
         }
         uint32_t order[k_cols];
         uint32_t step[k_cols];
@@ -359,6 +372,14 @@ void kernel_main() {
         };
         issue_weights_through(1 + nslice_weight_lookahead);
         before_sends();
+        if constexpr (alias_slab_combine) {
+            // The combine slots are the slab's L1: peers may write them only once this core's gather landed.
+            {
+                MaybeDeviceZoneScope("writer_slab_dead_wait");
+                Semaphore<>(slab_dead_sem_id).wait_min(m_block_idx + 1);
+            }
+            give_credits();
+        }
         for (uint32_t j = 0; j < num_slices; ++j) {
             issue_weights_through(j + 1 + nslice_weight_lookahead);
             const uint32_t y = order[j];

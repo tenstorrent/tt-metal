@@ -147,7 +147,11 @@ void kernel_main() {
     constexpr uint32_t row_limit_sem_id = get_compile_time_arg_val(55);
     constexpr uint32_t row_assigned_sem_id = get_compile_time_arg_val(56);
     constexpr uint32_t row_mailbox_sem_id = get_compile_time_arg_val(57);  // row_queue consecutive ids
-    constexpr auto input_args = TensorAccessorArgs<58>();
+    // Shared-L1 N-slice walk: cb_combine_slots shares the slab's L1, and slab_dead tells the writer the gather landed.
+    constexpr bool alias_slab_combine = get_compile_time_arg_val(58) != 0;
+    constexpr uint32_t slab_dead_sem_id = get_compile_time_arg_val(59);
+    constexpr auto input_args = TensorAccessorArgs<60>();
+    static_assert(!alias_slab_combine || nslice_outer, "only the N-slice-outer walk aliases the slab");
 
     const uint32_t input_addr = get_arg_val<uint32_t>(0);
     const uint32_t m_tile_start = get_arg_val<uint32_t>(1);
@@ -593,6 +597,11 @@ void kernel_main() {
             constexpr uint32_t slab_pages = slab_tile_rows * c_in_tiles;
             cb_wait_front(cb_halo_slab, slab_pages);
             cb_pop_front(cb_halo_slab, slab_pages);
+        }
+        if constexpr (alias_slab_combine) {
+            // Every gather read of the slab (and zero block) has landed and compute's untilize is complete: the
+            // writer may now let the row's peers write their slices into this L1.
+            Semaphore<>(slab_dead_sem_id).up(1);
         }
 
         if constexpr (nslice_outer) {
