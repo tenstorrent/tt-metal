@@ -125,7 +125,7 @@ _PLACEMENTS = [
         MESH_4X4,
         (MESH_4X4, SP_AXIS_4X4, TP_AXIS_4X4, CHUNK_4X4),
         STAGES_4X4,
-        [3] * 7 + [2],
+        [3] * 8,  # MLA layers 3, 7, 11 of each block; 87, 91 and the last layer, 92, on the 9-layer tail
         marks=pytest.mark.requires_mesh_topology(mesh_shape=MESH_4X4, topology="mesh-4x4"),
         id="4x4-sp1",
     ),
