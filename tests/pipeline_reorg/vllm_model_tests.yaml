@@ -388,8 +388,14 @@
   prefix-caching-test: true
   multimodal: true
   sampling-tests: true
+  # test_mixed_params_batch expects a seeded request to reproduce in a shuffled
+  # batch with penalty companions. Qwen36 samples penalties on the host
+  # (supports_device_penalties False) and the plugin picks one sampler per step,
+  # so those companions move seeded steps between the host and device random
+  # streams (vllm-tt-plugin issue 153, accepted behaviour).
+  sampling-test-filter: "not test_mixed_params_batch"
   sampling-test-timeout: 20
-  server-timeout: 85
+  server-timeout: 60
   benchmark-timeout: 15
   mesh-device: P150x8
   arch: arch-blackhole
@@ -397,10 +403,10 @@
   additional-server-args: "--max_model_len 262144 --max_num_seqs 8 --block_size 1024 --enable-prefix-caching --prefix-cache-retention-interval 0 --enable-chunked-prefill --max_num_batched_tokens 525312 --long_prefill_token_threshold 16384 --async-scheduling --limit-mm-per-prompt.image 1 --limit-mm-per-prompt.video 1 --mm-processor-cache-gb 0 --mm-processor-kwargs.max_pixels 1048576 --speculative-config.method custom_class --speculative-config.model vllm_tt_plugin.model_owned_drafter --speculative-config.num_speculative_tokens 3"
   additional-benchmark-args: "--max-concurrency 8 --num-prompts 16 --temperature 0"
   default-chat-template-kwargs: '{"enable_thinking": false}'
-  extra-env: "TT_QWEN35_TEXT_VER=qwen36_blackhole TT_MODEL_CLASS_OVERRIDES=TTQwen3_5ForConditionalGeneration=models.demos.blackhole.qwen36.tt.qwen36_vllm:Qwen36MTPContractForCausalLM QWEN36_SPEC_K=3 QWEN36_MAX_TOKENS_ALL_USERS=525312 QWEN_SDPA_BF8=1 TT_METAL_PINNED_MEMORY_CACHE_LIMIT_BYTES=0 OMP_NUM_THREADS=8 OMP_WAIT_POLICY=PASSIVE TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/Qwen--Qwen3.8-27B-mambaspec-tp8 HF_HUB_OFFLINE=0 CI=false"
+  extra-env: "TT_QWEN35_TEXT_VER=qwen36_blackhole TT_MODEL_CLASS_OVERRIDES=TTQwen3_5ForConditionalGeneration=models.demos.blackhole.qwen36.tt.qwen36_vllm:Qwen36MTPContractForCausalLM QWEN36_SPEC_K=3 QWEN36_MAX_TOKENS_ALL_USERS=525312 QWEN_SDPA_BF8=1 TT_METAL_PINNED_MEMORY_CACHE_LIMIT_BYTES=0 OMP_NUM_THREADS=8 OMP_WAIT_POLICY=PASSIVE TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/Qwen--Qwen3.8-27B-mambaspec-tp8"
   skus:
     bh_loudbox:
-      timeout: 110
+      timeout: 100
       tier: 1
   owner_id: U09LTAPEU2U # Viktor Pus
   team: models

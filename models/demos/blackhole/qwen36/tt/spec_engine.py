@@ -494,6 +494,8 @@ def spec_memory_costs(
     nb = int(nb) if nb else (-(-int(max_seq_len) // int(block_size)) if max_seq_len else 0)
     groups = B * _SPEC_SDPA_GROUPS_PER_USER[T] if T in _SPEC_SDPA_GROUPS_PER_USER else 1
     logits_w = tp * _pad32(vocab // tp) if vocab % tp == 0 else _pad32(vocab)  # vocab-sharded head gathers
+    # The fused per-shard argmax (vocab-sharded head, at most one tile of rows) writes one 32-lane row.
+    ids_lanes = 32 if tp > 1 and vocab % tp == 0 and rows <= 32 else rows
     verify_io = (
         _rm_bytes([VERIFY_STEP_ROWS, pack_width(rows)], i32)  # step_buf
         + _rm_bytes([rows, nb], i32)
@@ -504,7 +506,7 @@ def spec_memory_costs(
         + _tile_bytes([1, 1, rows, logits_w], bf)
         + _rm_bytes([1, 1, rows, logits_w], bf)  # logits TILE + RM copy
         + _tile_bytes([1, 1, rows, dim_frac], bf)  # rows_out (drafter feed)
-        + _rm_bytes([1, 1, rows], i32)  # ids_out
+        + _rm_bytes([1, 1, ids_lanes], i32)  # ids_out
     )
     block_bytes = 2 * n_local_kv * int(block_size) * head_dim * int(kv_dtype_bytes)
     buckets = _MASK_BUCKETS_DEFAULT if mask_buckets is None else mask_buckets
