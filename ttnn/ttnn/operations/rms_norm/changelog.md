@@ -213,3 +213,26 @@
   - `tests/ttnn/unit_tests/operations/rms_norm/test_rms_norm_dense.py`: 15 cases + 1 permanent-exclusion skip. Each asserts the dense schedule was chosen. Covers BLOCK TILE perf shapes (acc on/off, HiFi2 0.9995 gate), a 48-row block (two dense groups), γ none / TILE / RM, fp32 input, bf8b input, ROW_MAJOR BLOCK, and a multi-row WIDTH grid.
   - Probe `probes/blk_probe_r4.py` (blocking per perf case).
   - Unit suites green: 266 passed, 7 skipped.
+
+## Refinement 4b — Speed up the block-sharded prefill profile (debug: gate violation "REGRESSION 4218/4904")
+- Date: 2026-11-18
+- What was done: diagnosis plus a FULL golden re-run. The kernels and host code are unchanged from the R4 commit (`d4020d75`).
+  - The harness's R4 golden run (`io/logs/refinements/golden_refinement_4`) has 668 `supported_fail` cells. All of them are `status=error, failure_category=infra`, items that no device job reported. There are also 4979 `invalid_unexpected` and 169 `xfail_wrong_mode`, from the same unreported items. Every cell that did execute passed: PASSED=4231, FAILED=0, HANGS=0.
+  - The unreported items came from 7 chunks (002, 004, 006, 008, 011, 014, 019) that the broker reaped as `hung` for "no output for 300 s". The chunk retries were reaped as well.
+  - The cause is the one diagnosed in R2b:
+    - The eval runner writes pytest output to a file, so the broker sees no output.
+    - Its precompile warm pass fails in this environment (`ImportError: Error importing plugin "bench_devfilter"`).
+    - R4's kernel edits invalidated the JIT cache, so every test JIT-compiled inline and serially, at ~1.2 s per test cold.
+    - A 4000-item chunk with 250–500 runnable tests therefore ran past 300 s.
+  - The `assert.hpp` / `trisc build failed` tails of the reaped chunks are the compiler being killed. They are not kernel errors.
+- Accuracy achieved: unchanged from Refinement 4. Every supported golden cell passes its harness tolerance; the BLOCK perf cases hold PCC ≥ 0.9998 at the 0.9995 gate.
+- Golden test progress: a FULL suite run through `eval/eval_test_runner.sh eval/golden_tests/rms_norm/ … --ignore=…/test_translated.py` (the harness's exact chunked broker path; 40046 items, 11 chunks, 23–106 s each):
+  - PASSED=4899, FAILED=0, ERRORS=0, HANGS=0.
+  - `verify_supported`: supported_pass 4886, supported_fail 0, xfail_expected 1229, xpass_drift 0, xfail_wrong_mode 0, invalid_unexpected 0, infeasible_skipped 18. This is identical to the R2 verified state.
+  - 0 regressions against the union of the R2 and R4 harness passes (4886 cells).
+  - Unit dir `tests/ttnn/unit_tests/operations/rms_norm/`: 284 passed, 7 skipped.
+- Issues encountered / findings:
+  - The op's exposure to the broker limit is cold-compile volume. Every golden test is a distinct program, because shape-specific CT args (`block_rows`, `core_w_tiles`, `Wt`, `w_valid_last`, page sizes, sharded TensorAccessor args, dense-group extents) are crossed with the data formats.
+  - Any kernel edit puts the next harness run back in this regime until the cache is re-warmed. Phases that edit kernels should end with one full golden run through `eval/eval_test_runner.sh`; warm, it takes ~10 min.
+  - The structural fix is to make the TILE kernels' shape extents runtime args, so binaries are shared across shapes. It was not done here: it rewrites all three kernels, would invalidate the cache this run just warmed, and is a perf-neutral-at-best change outside R4's scope.
+- Tests added: none.

@@ -189,6 +189,21 @@ No SUPPORTED change.
 - **Next steps.** Fuse sumsq and the x·γ prescale into one pass over x, which needs an `eltwise_chain` with two outputs (x² DEST-accumulated plus x·γ packed) and would save one unpack of every x tile. Scope the dense finalize to the block's valid columns.
 - **Why not done here.** All five cases already beat their targets by 30–44 %. The fusion needs a helper capability the chain does not expose today.
 
+
+
+### [x] Refinement 4b — Speed up the block-sharded prefill profile (per-core compute throughput) (debug: fix gate violations)
+
+**Goal**: fix the hard violation from Refinement 4 so the completion gate's three bullets hold.
+
+**Verifier notes** (mechanical, from the harness completion gate):
+
+```
+Bullet 3 FAIL: REGRESSION — prior-passing golden cells no longer pass (responsible cells 4218/4904). A prior-passing cell that failed, hung, or never ran (suite hung before reaching it) is a regression.
+```
+
+**Done when**: the gate passes — zero hangs in SUPPORTED, acceptance + refinement tests pass, golden majority with no regression.
+
+**Outcome**: the R4 kernels were not at fault. All 668 `supported_fail` cells were `error/infra`, "not reported by its device job", from 7 golden chunks (002, 004, 006, 008, 011, 014, 019) that the broker reaped as hung for 300 s of no output. The cause is the R2b one: the precompile warm pass fails with `bench_devfilter` ImportError, and R4's kernel edits invalidated the JIT cache, so every test compiled cold, inline and serially, at ~1.2 s per test. Every cell that ran passed (PASSED=4231 FAILED=0 HANGS=0). A FULL golden run through `eval/eval_test_runner.sh` (same chunked broker path) on the unchanged R4 code gave PASSED=4899 FAILED=0 ERRORS=0 HANGS=0, chunks 23–106 s. `verify_supported`: supported_pass 4886, supported_fail 0, xfail_expected 1229, xfail_wrong_mode 0, invalid_unexpected 0, xpass_drift 0, and 0 regressions against every prior pass. Kernels are unchanged. The structural fix is runtime-arg shape extents, so binaries are shared across shapes and fewer programs need compiling; see the changelog.
 ### [ ] Refinement 5 — Speed up the interleaved perf profile (DRAM-bound prefill, latency-bound decode)
 
 **Type**: perf
