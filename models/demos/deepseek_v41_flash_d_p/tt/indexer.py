@@ -59,7 +59,7 @@ import torch
 
 import ttnn
 
-from . import ccl, cores
+from . import ccl, cores, index_keys
 from . import mm_configs as mm
 from .ccl import dealloc
 from .common import DRAM, SP_AXIS, TP_AXIS, attn_compute_config, cast, dense_dtype, gemm_dtype, gemm_input, tp_sum
@@ -248,11 +248,16 @@ class TtIndexer:
             self._rounded[key] = out
         return ttnn.bringup.bfp_round(x, out=out, prepared=self.prepared, compact=True, max_grid=max_grid()), True
 
-    def _keys(self, cache) -> ttnn.Tensor:
+    def _keys(self, cache, start: int) -> ttnn.Tensor:
         """The served index-key cache's slab [1, 1, rows / r, hd] bf16 ROW_MAJOR (ND-sharded) -> compressed rows
         [1, 1, rows / r, hd] bf16 TILE (INDEX_K_FORMAT=bfp4 / bfp8: rounded to bfloat4_b / bfloat8_b), interleaved: the ring's k_local
         (block-cyclic layout unchanged). INDEX_K_COPY=bfp8 (P.41): the cache's persistent bfloat8_b copy itself (the
-        compressor rounded each chunk's keys into it once; never freed here)."""
+        compressor rounded each chunk's keys into it once; never freed here). INDEX_K_SOURCE=served (P.76): the served
+        192-byte rows of [0, the chunk's end) decoded into the source's shared bfloat8_b buffer (tt/index_keys.keys;
+        the history usually prefetched at the engram wait; never freed here)."""
+        if getattr(cache, "k_served", False):
+            assert self.k_dtype == ttnn.bfloat8_b, "INDEX_K_SOURCE=served needs INDEX_K_FORMAT=bfp8"
+            return index_keys.keys(cache, start)
         if cache.k8 is not None:
             assert self.k_dtype == ttnn.bfloat8_b, "INDEX_K_COPY=bfp8 needs INDEX_K_FORMAT=bfp8"
             return cache.k8
@@ -436,8 +441,9 @@ class TtIndexer:
         # (LOWBIT_HOST=on with INDEX_K_FORMAT=bfp4 / bfp8: the keys are the layer's persistent buffer, never freed; a memo
         # holds it as Kept, which its drop leaves alone; INDEX_K_COPY=bfp8, P.41: the cache's own bfp8 copy, likewise)
         k_kept = (self.lowbit_host and self.k_dtype != ttnn.bfloat16) or cache.k8 is not None
+        k_kept = k_kept or getattr(cache, "k_served", False)  # (P.76: the shared decoded-key buffer)
         if k_local is None:
-            k_local = self._keys(cache)
+            k_local = self._keys(cache, start)
             if shared:  # INDEXER_GLUE=on (P.16): the re-index layers score the same tiled keys (L24 = L20's)
                 self._memo[0].put(("keys", self._memo[1]), kkey, Kept(k_local) if k_kept else k_local)
         logits = ttnn.bringup.ring_indexer_score_dsa(

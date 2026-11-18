@@ -915,6 +915,19 @@ TABLE = {
         "path: the bfp8 copy k8 typecast to bf16, then encoded (fp8(bfp8(key))). The scored bfp8 copy is the same "
         "either way. No effect under INDEX_K_COPY=bf16 (served rows from the bf16 copy)",
     ),
+    "INDEX_K_SOURCE": Setting(
+        "served",
+        ("served", "private"),
+        "P.76 (OWNER 2026-11-18, item 3 of the slot-state page): what the prefill indexer scores. served = ONLY the "
+        "served state: Blaze decode's 192-byte index rows (INDEX_K_SERVED=fp8_row192) of [0, the chunk's end) decoded "
+        "each chunk (ttnn.bringup.unpack_fp8_rows: e4m3 x scale, nearest even onto bfloat8_b) into a persistent "
+        "bfloat8_b buffer per KV source (tt/index_keys.py, shared by every user/slot; no per-user copy), which the "
+        "ring score reads as before; the history [0, c S) is decoded at the chunk's first engram wait (as P.75's "
+        "history gather), the chunk's own W blocks at the indexer. Correct whatever wrote the slot's history (a store "
+        "load, a d2p pull, a reused slot). The keys scored are bfp8(fp8(key)). Needs INDEX_K_SERVED=fp8_row192 and "
+        "INDEX_K_FORMAT=bfp8 (else falls back to private). private = the path before P.76: the private copy "
+        "INDEX_K_COPY picks (P.41 k8), written by this process only",
+    ),
     "INDEX_Q_FORMAT": Setting(
         "bfp4",
         ("bf16", "bfp4"),

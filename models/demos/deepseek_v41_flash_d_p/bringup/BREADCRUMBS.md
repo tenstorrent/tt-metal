@@ -2559,3 +2559,50 @@ Measured (8x4, `gate FIX.31 --check`, after the last edit)
   unwritten_records_changed 0, steady wall p51200 105.7 ms, p1024000 120.7 ms (P.75's on side: 118.3-125.4 ms at 1M).
 - Re-run: `PYTHONPATH=$PWD python -m models.demos.common.bringup gate FIX.38 --spec
   models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/spec.yaml --check`.
+
+## P.76 perf (attempt 1): the indexer scores the served fp8 index rows (INDEX_K_SOURCE served | private)
+
+- Owner 2026-11-18, item 3 of the slot-state page: the private bfloat8_b copy k8 (P.41) is right only if this
+  process wrote every earlier chunk of the slot. Switch INDEX_K_SOURCE: served (change on, default) | private (P.41).
+- Expected (written before the model runs; per chunk, DECODER_SKIP=decode: scored sources 2 / 8 / 14, ratio 2,
+  wr = 320 local rows a W block on 8x4). At the layer: private = bfp_round of the chunk into k8 (+ the region path at
+  start % S != 0); served = one unpack_fp8_rows of the chunk's W blocks (10-20 bands): device ~0, host ~0 (+0.1 ms
+  op, -0.05..0.1 ms bfp_round) a source. Hidden: the history [0, c wr) decoded at layer 1's engram wait:
+  ~100 / ~500 / ~2000 bands a source at 51k / 256k / 1M: ~0.03 / ~0.1 / ~0.4 ms device a
+  source (0.1 / 0.3 / 1.2 ms a chunk), host ~0.2-0.38 ms a source on the main thread while the engram worker runs.
+  Wall: ~0 if it fits in the engram wait (P.75 left 17.9 ms host gap at 1M). DRAM: no per-user k8 (8.9 MB a ratio-2
+  source, 17.8 MB layer 20, a chip at 1M) for one shared buffer a source.
+- New fork op ttnn.bringup.unpack_fp8_rows (fp8_rows_ttnn, next to pack_fp8_rows): rows [lo, hi) of a batch of the
+  ND-sharded served tensor -> bfloat8_b tiles in place, e4m3 x scale in fp32 (SFPU) rounded to nearest even
+  (ckv_round_bfp_face<7>). Chosen over the stock per_token_cast_back (needs an FP8_E4M3 tensor plus a separate fp32
+  scale tensor, writes RM bf16 / fp32: + slices, bitcasts, tilize, bfp_round, every op over the whole history). One
+  prepared program per (shapes, core count), the range 5 value slots a core (OV-23); cores = min(110, bands)
+  (per-core value slots cost ~3 us host a core on 32 chips: 0.096 ms at 10 cores, 0.377 at 110).
+  Cores: <= MAX_WORKER_CORES (max_grid 11 x 10).
+- Gotchas: DS41-292 (copy_init does not reconfigure the unpacker between the fp8 and fp32 CBs: reconfig_data_format_srca);
+  DS41-293 (ttnn's host bfp8 packer rounds just-above-tie fp32 values as ties; the device is exact RNE, the tests use a
+  float64 RNE reference).
+- Model (tt/index_keys.py): one bfloat8_b buffer [1, 1, crows, 128] per (crows, source layer), shared by every
+  slot / state (TtServedRows acquires it at the state's build, frees with the last). keys(cache, start) decodes
+  [0, hi) (hi = end of the chunk's W blocks) or, after prefetch in the same chunk (epoch moved by begin_chunk; cache
+  serial, start, version within one write), only [c wr, hi); a memo reader (re-index layers) reuses it. Rows past hi
+  are later positions (causally masked). TtServedRows under served: no slab, no k8; _put encodes the chunk's bf16
+  keys (fp8_rows) into the served rows + mirrors only. TtDS41Model.prefetch_index_keys at the first take_engram_rows
+  (index_sources(): blocks with an indexer not skipped this chunk). indexer._keys(cache, start).
+- Precision: the scored keys are bfp8(fp8(key)) (decode scores the same), not bfp8(key); not bit-identical to private.
+- Device tests (8x4): fork tests/unit/test_unpack_fp8_rows.py (exact, 65536 rows a chip, timing);
+  tests/test_index_k_served.py (ratio 2 and 1, 6 writes incl. 32 mod 64 starts, full and prefetch + tail paths exact vs
+  the host decode on 32 chips; served bytes = the private path's; a reused slot written by another cache: served exact,
+  a private copy would score all-zero rows); tests/test_index_k_copy.py still passes with INDEX_K_SOURCE=private.
+- Re-run: `scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/test_index_k_served.py
+  ttnn/ttnn/bringup/fp8_rows_ttnn/tests/unit/test_unpack_fp8_rows.py -s`
+- Model checks (change on, `orchestrator measure --task P.76`, all rc 0): test_decoder_skip_decode; determinism
+  max_abs_diff 0.0 (state 0.0); test_contract; test_skip_positions; rung last: err_final_hidden 0.1271 (limit 0.242;
+  P.75's on side 0.1268), final hidden PCC 0.992, top1 / top5 1.0, err L19 0.1232 (0.1231), L39 0.781 (0.794): the
+  bfp8(fp8(key)) keys move the metrics within noise.
+- Measured (skip_positions, steady, vs P.75's on side, another run): engram_rows section (where the prefetch runs)
+  0.71 / 2.88 / 10.84 ms at 51k / 256k / 1M (0.63 / 2.54 / 9.95): the history decode costs +0.08 / +0.34 / +0.89 ms
+  device a chunk (3 sources), inside the engram wait. Indexer section 1.38 / 4.86 / 17.58 (1.33 / 4.79 / 17.56):
+  the layer-time decode of the chunk's W blocks is within noise. Wall 105.2 / 108.9 / 122.4 ms (109.3 / 108.7 /
+  123.4; spread ~10 ms): no change visible. DRAM state 16.09 / 17.08 / 20.74 GiB (same: one user, the shared buffer
+  replaces k8 at the same size; saving = k8 x (users - 1)).

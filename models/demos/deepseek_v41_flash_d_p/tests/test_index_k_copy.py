@@ -76,7 +76,8 @@ def test_index_k_copy_bfp8(mesh_device, monkeypatch):
         (2 * chunk, [(0, chunk), (1312, chunk + 1312)]),
         (chunk, [(0, chunk - 64), (0, chunk)]),
     ]
-    _set(monkeypatch, INDEX_K_FORMAT="bfp8", INDEX_K_SERVED="fp8_row192")
+    # (P.76: the private copy is INDEX_K_SOURCE=private's path; served has none, tests/test_index_k_served.py)
+    _set(monkeypatch, INDEX_K_FORMAT="bfp8", INDEX_K_SERVED="fp8_row192", INDEX_K_SOURCE="private")
     gen = torch.Generator().manual_seed(41)
     # P.44: the served rows' source (the orchestrator sets INDEX_K_SERVED_FROM)
     from_bf16 = settings.get("INDEX_K_SERVED_FROM") == "bf16"

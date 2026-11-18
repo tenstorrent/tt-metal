@@ -1,4 +1,4 @@
-# ttnn.bringup.pack_fp8_rows (fp8_rows_ttnn)
+# ttnn.bringup.pack_fp8_rows, ttnn.bringup.unpack_fp8_rows (fp8_rows_ttnn)
 
 ## What it does
 New op (Python ProgramDescriptor; deepseek_v41_flash_d_p P.39, INDEX_K_SERVED=fp8_row192). Packs the outputs of the
@@ -52,6 +52,29 @@ rows = ttnn.bringup.pack_fp8_rows(e4m3, scale, memory_config=ttnn.DRAM_MEMORY_CO
 ## Used by
 - deepseek_v41_flash_d_p: `tt/compressor.py` (`fp8_rows`, TtServedRows' writes of the served index keys,
   INDEX_K_SERVED=fp8_row192, P.39).
+
+## unpack_fp8_rows (deepseek_v41_flash_d_p P.76)
+The inverse reader, onto the device's own 8-bit format:
+
+    rows [B, .., R, 192] UINT8 ROW_MAJOR (DRAM, interleaved or ND-sharded: one 192-byte row a page), rows [row_lo,
+    row_hi) of batch `batch`  ->  out [.., M, 128] BFLOAT8_B TILE (DRAM interleaved), rows [out_row0, + n) in place:
+    e4m3 x scale (fp32, the SFPU), rounded to nearest even onto the bfloat8_b grid (16 values of a row a group)
+
+- Program: per 32-row band, the reader reads the 32 rows and writes 4 FP8_E4M3 tiles (16-byte pieces into face
+  order: word copies) and one FLOAT32 tile holding each row's scale in every column; compute copies the fp8 tiles
+  into a fp32 DEST (exact), the scale tile UnpackToDestFp32, multiplies on the SFPU and rounds with ckv_bfp4_ttnn's
+  `ckv_round_bfp_face<7>` (the pack then only copies bits); the writer writes the 4 tiles. CBs double-buffered.
+- Options: `row_lo`, `row_hi`, `out_row0` (default row_lo; multiples of 32), `batch` (default 0: the leading index,
+  page = batch x R + row), `max_grid` (as pack_fp8_rows'). Always prepared: one program per (shapes, memory configs,
+  core count), the range 5 value slots a core; cores = min(grid, bands) (the per-core slots cost host time a core).
+  Realistic (use by default): the only path.
+- Measured (8x4, tests/unit, warm): exact vs float64 RNE on 65536 rows a chip x 32 chips (ttnn's host bfloat8_b
+  packer differs on 1.1e-4 of the rows: it rounds an fp32 value just above a tie as a tie). Host a call: 0.096 ms
+  (320 rows, 10 cores), 0.118 (640, 20), 0.169 (1280, 40), 0.226 (2048, 64), 0.377 ms (65536 rows, 110 cores); synced
+  0.41 ms for 65536 rows a chip (device <= ~0.4 ms: ~19 bands a core). pack_fp8_rows 640 rows: 0.070 ms host.
+- Limits: whole tile rows (32) only; width 128 and one fp32 scale a row; zero scale or zero values decode to 0; a
+  16-value group whose max is below 2^-120 comes out 0 (the round's limit).
+- Used by: deepseek_v41_flash_d_p `tt/index_keys.py` (INDEX_K_SOURCE=served, P.76).
 
 ## History
 CHANGELOG.md

@@ -65,7 +65,7 @@ import torch
 
 import ttnn
 
-from . import ccl, cores, history_gather, host_alloc
+from . import ccl, cores, history_gather, host_alloc, index_keys
 from . import mm_configs as mm
 from .ccl import dealloc
 from .common import DRAM, SP_AXIS, TP_AXIS, attn_compute_config, bf16_activations, cast, tp_sum
@@ -214,6 +214,27 @@ def index_k_copy() -> str:
             "need it (bfp8 needs INDEX_K_FORMAT=bfp8 and INDEX_K_SERVED=fp8_row192)"
         )
     return "bf16"
+
+
+def index_k_source() -> str:
+    """INDEX_K_SOURCE (P.76, owner 2026-11-18) as it applies: "served" (the indexer scores the served 192-byte rows,
+    decoded per chunk into a shared buffer, tt/index_keys.py; no private copy) needs INDEX_K_SERVED=fp8_row192 and
+    INDEX_K_FORMAT=bfp8 (the ring scores bfloat8_b keys); otherwise "private" (INDEX_K_COPY's copy, logged once)."""
+    want = settings.get("INDEX_K_SOURCE")
+    if want != "served":
+        return want
+    fmt, served = settings.get("INDEX_K_FORMAT"), settings.get("INDEX_K_SERVED")
+    if fmt == "bfp8" and served == "fp8_row192":
+        return "served"
+    if ("source", fmt, served) not in _COPY_NOTED:
+        _COPY_NOTED.add(("source", fmt, served))
+        from loguru import logger
+
+        logger.info(
+            f"INDEX_K_SOURCE=served falls back to private: INDEX_K_FORMAT={fmt} / INDEX_K_SERVED={served} (served needs "
+            "INDEX_K_FORMAT=bfp8 and INDEX_K_SERVED=fp8_row192)"
+        )
+    return "private"
 
 
 def _check_cast_cores(mesh, n: int) -> None:
@@ -445,7 +466,11 @@ class TtServedRows:
     any other start (a follow-up, the pulled-back last chunk: the chunk's rows then sit at a different local row on
     the c_start SP row, 16 rows off a tile for a ratio-2 start at 32 mod 64) through ``_region``. The served rows are
     encoded (``fp8_rows_tile``) per INDEX_K_SERVED_FROM: bf16 (P.44, the default) from the chunk's tiled bf16 keys,
-    fp8(key) as Blaze's writer; bfp8 (P.41) from the bfp8 keys typecast to bf16 (exact), fp8(bfp8(key))."""
+    fp8(key) as Blaze's writer; bfp8 (P.41) from the bfp8 keys typecast to bf16 (exact), fp8(bfp8(key)).
+
+    INDEX_K_SOURCE=served (P.76, ``k_served``; with ``fp8``, the default): neither slab nor k8. A write encodes the
+    chunk's bf16 keys into the served rows (and the mirrors) only; the indexer decodes the served rows into the
+    shared bfloat8_b buffer of (crows, ``layer``) (tt/index_keys.py) and scores that."""
 
     def __init__(
         self,
@@ -459,6 +484,7 @@ class TtServedRows:
         attn_table: bool = False,
         fp8: bool = False,
         mirrors: list | None = None,
+        layer: int | None = None,
     ):
         assert width % ratio == 0 and 32 % ratio == 0, (width, ratio)
         assert not (fp8 and (dedup or attn_table or width != FP8_VALUES)), (fp8, dedup, attn_table, width)
@@ -474,15 +500,22 @@ class TtServedRows:
         self.fp8 = fp8
         self.served, self.mirrors = None, []
         self.k8 = None  # INDEX_K_COPY=bfp8 (P.41): the private bfloat8_b copy in place of the bf16 slab
+        # INDEX_K_SOURCE=served (P.76): no private copy at all; the indexer decodes the served rows into the shared
+        # buffer of (crows, key_layer) (tt/index_keys.py); ``serial`` tells caches apart in that buffer's record
+        self.k_served = fp8 and index_k_source() == "served"
+        self.key_layer = layer
+        self.serial = index_keys.new_serial()
         if fp8:  # P.39: the served 192-byte rows (the engine's slab or an own tensor), the bf16 compute copy as slab
             self.served = slab if slab is not None else self._own_fp8(dedup)
             self.mirrors = [m if m is not None else self._own_fp8(dedup) for m in (mirrors or [])]
             for m in (self.served, *self.mirrors):
                 assert (m.rows, m.width) == (self.crows, FP8_ROW_BYTES), (m.rows, m.width, self.crows)
             slab = None
-            if index_k_copy() == "bfp8":
+            if self.k_served:
+                index_keys.acquire(self)
+            elif index_k_copy() == "bfp8":
                 self.k8 = _alloc_zeroed(mesh, [1, 1, self.crows, width], ttnn.bfloat8_b)
-        if self.k8 is None:
+        if self.k8 is None and not self.k_served:
             if slab is None:  # (an own slab: its rows rounded up to a tile and a whole chunk's stripe, DS41-289)
                 unit = math.lcm(32, self.stripe // ratio)  # (update_padded_kv_cache: rows % the chip's chunk rows)
                 own_rows = -(-self.crows // unit) * unit
@@ -490,7 +523,7 @@ class TtServedRows:
                 assert (slab.rows, slab.width) == (own_rows, width), (slab.rows, slab.width, own_rows, width)
             else:
                 assert (slab.rows, slab.width) == (self.crows, width), (slab.rows, slab.width, self.crows, width)
-        self.slab = slab  # (None under INDEX_K_COPY=bfp8)
+        self.slab = slab  # (None under INDEX_K_COPY=bfp8 and INDEX_K_SOURCE=served)
         self.version = 0  # bumped by every write (INDEXER_GLUE=on: tt/sparse_attention.ChunkMemo keys on it)
         # STATIC_TABLES=on (P.21): a KV source's compressed KV keeps the sparse-attention table of its readers in step
         self.table = AttnTable(mesh, tables, self.max_seq // ratio, width) if attn_table and static_tables() else None
@@ -546,6 +579,12 @@ class TtServedRows:
         self.version += 1
         if self.k8 is not None:
             self._put8(slab, start, end)
+            return
+        if self.k_served:  # P.76: only the served rows (fp8(key), as Blaze's writer and P.44)
+            rows8 = fp8_rows(self.mesh, slab)
+            for target in (self.served, *self.mirrors):
+                self._put_into(target, rows8, start, end)
+            dealloc(rows8)
             return
         self._put_into(self.slab, slab, start, end)
         if not self.fp8:
@@ -754,6 +793,9 @@ class TtServedRows:
             self.slab.free()
         if self.k8 is not None and self.k8.is_allocated():
             dealloc(self.k8)
+        if self.k_served:
+            index_keys.release(self)
+            self.k_served = False
         for m in ([self.served] if self.fp8 else []) + self.mirrors:
             m.free()
 
@@ -779,7 +821,18 @@ class TtCompressCaches:
     """A KV-source layer's two served caches (one slot): compressed KV (TP-dedup) and index keys (TP-replicated).
     ``slabs``: {config name: CacheSlab} of the serving engine's tensors; None = tensors of their own."""
 
-    def __init__(self, mesh, tables, max_seq: int, ratio: int, head_dim: int, index_dim: int, slabs=None, mirrors=None):
+    def __init__(
+        self,
+        mesh,
+        tables,
+        max_seq: int,
+        ratio: int,
+        head_dim: int,
+        index_dim: int,
+        slabs=None,
+        mirrors=None,
+        layer: int | None = None,
+    ):
         """``mirrors`` (INDEX_K_SERVED=fp8_row192, P.39): one entry per re-index layer that reads these index keys
         (Blaze decode serves the same rows under it): its engine slab of the index config, or None (an own tensor)."""
         self.ratio = ratio
@@ -799,6 +852,7 @@ class TtCompressCaches:
             slab=slabs.get(self.names[1]),
             fp8=fp8,
             mirrors=list(mirrors or []) if fp8 else None,
+            layer=layer,  # (P.76, INDEX_K_SOURCE=served: the decoded-key buffer of this source)
         )
 
     def by_config(self) -> dict:

@@ -58,7 +58,7 @@ import torch
 import ttnn
 from models.demos.common.bringup.reference.interface import Ctx, run_block
 
-from . import ccl, ffn_feed, history_gather, host_alloc, lean
+from . import ccl, ffn_feed, history_gather, host_alloc, index_keys, lean
 from .attention import TtWindowAttention, TtWindowCache, WindowTables, attention_weights, snapshot_cap, window_keep
 from .ccl import dealloc
 from .collapse import TtHcCollapse
@@ -305,6 +305,7 @@ class DS41DeviceState:
                 cfg.index_dim,
                 slabs=slabs.get(i),
                 mirrors=mirrors(i),
+                layer=i,  # (P.76, INDEX_K_SOURCE=served: one decoded-key buffer per source, shared by every slot)
             )
             for i in model.layers
             if cfg.is_kv_source(i)
@@ -1112,6 +1113,7 @@ class TtDS41Model:
             and settings.get("HISTORY_GATHER") == "rows"
         )
         self._pf_start = None
+        self._kpf_start = None  # P.76 (INDEX_K_SOURCE=served): the chunk's start until prefetch_index_keys ran
         # embedding: [V, H/TP] bf16 ROW_MAJOR per chip (the chip's hidden columns), replicated over SP
         if tail_of is not None:  # (P.31: the decoder tail takes its input from the main model's layers)
             self.vocab, self.embed_w = tail_of.vocab, None
@@ -1407,6 +1409,10 @@ class TtDS41Model:
             st.memo.clear()
         # HISTORY_GATHER_HIDE=on (P.75): the sources' history gathers wait for the first engram layer's host rows
         self._pf_start = int(start) if self._hide else None
+        # INDEX_K_SOURCE=served (P.76): nothing decoded before this chunk is trusted; the index sources' served history
+        # is decoded at the first engram wait (prefetch_index_keys)
+        index_keys.new_chunk()
+        self._kpf_start = int(start)
         if not self.engram:
             return
         self.wait_engram()  # a job of the last chunk whose layer did not run: done before its tensor is freed
@@ -1637,9 +1643,32 @@ class TtDS41Model:
             if c is not None and i not in st.shared_compress:
                 history_gather.prefetch(c.ckv, start, self.chunk)
 
+    def index_sources(self) -> set:
+        """P.76: the KV sources whose index keys some indexer of this chunk scores: every loaded block with an
+        indexer, but none skipped this chunk (DECODER_SKIP=decode: the decoder layers never run their indexer; exact
+        / replay128: a not-last chunk skips the decoder)."""
+        skipped = self._decoder_set if (self.skip_mode == "decode" or self._skip) else frozenset()
+        return {b.kv_src for i, b in self.blocks.items() if b.indexer is not None and i not in skipped}
+
+    def prefetch_index_keys(self) -> None:
+        """INDEX_K_SOURCE=served (P.76): every scored source's served index rows [0, c wr) of the active state
+        (complete before the chunk) decoded into the source's buffer (tt/index_keys.prefetch), enqueued at the
+        chunk's first engram wait (the device idles for the host's rows, P.73 / P.75). Once a chunk; the indexer then
+        decodes only the chunk's own W blocks."""
+        start, self._kpf_start = self._kpf_start, None
+        st = self.state
+        if start is None or st is None or self.tail_of is not None:
+            return
+        for i in sorted(self.index_sources()):
+            c = st.compress.get(i)
+            if c is not None and getattr(c.index_k, "k_served", False):
+                index_keys.prefetch(c.index_k, start)
+
     def take_engram_rows(self, layer: int) -> ttnn.Tensor:
         if self._pf_start is not None:  # P.75: before the wait (the first engram layer of the chunk)
             self.prefetch_history()
+        if self._kpf_start is not None:  # P.76: likewise the served index keys' history
+            self.prefetch_index_keys()
         self._wait_job(layer)  # ENGRAM_ASYNC=on: layer 1 waits for its own job only, layer 14 for its own
         t = self._engram_dev.pop(layer, None)
         assert t is not None, f"layer {layer}: no engram rows for this chunk (begin_chunk(tokens, start) first)"
