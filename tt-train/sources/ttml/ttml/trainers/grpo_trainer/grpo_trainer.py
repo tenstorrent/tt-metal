@@ -334,6 +334,13 @@ class GRPOConfig:
                     f"'num_iterations' (got {self.weight_sync_every} and {self.num_iterations}), because the "
                     "trainer pushes weights only between generation batches."
                 )
+            if self.max_staleness < self.weight_sync_every - self.num_iterations:
+                raise ValueError(
+                    f"grpo_config: max_staleness={self.max_staleness} < weight_sync_every - num_iterations="
+                    f"{self.weight_sync_every - self.num_iterations} locks rollout_backend='ttt_remote_async': "
+                    "training waits for a fresh batch from inference, and inference waits for new weights from "
+                    "training, forever. 'max_staleness' >= 'weight_sync_every' - 'num_iterations' is required."
+                )
         if not self.backend.in_process and self.remote_rollout is None:
             raise ValueError(
                 f"grpo_config: rollout_backend={self.rollout_backend!r} needs a top-level "

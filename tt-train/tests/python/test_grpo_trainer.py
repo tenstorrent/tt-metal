@@ -748,9 +748,29 @@ def test_grpo_config_rejects_async_weight_sync_every_not_a_multiple_of_num_itera
         )
 
 
+@pytest.mark.parametrize("weight_sync_every, num_iterations, max_staleness", [(2, 1, 0), (4, 2, 1), (6, 2, 3)])
+def test_grpo_config_rejects_async_max_staleness_below_weight_sync_every_minus_num_iterations(
+    expect_error, weight_sync_every, num_iterations, max_staleness
+):
+    with expect_error(ValueError, "training waits for a fresh batch from inference"):
+        _remote_grpo_config(
+            rollout_backend="ttt_remote_async",
+            weight_sync_every=weight_sync_every,
+            num_iterations=num_iterations,
+            max_staleness=max_staleness,
+        )
+
+
 @pytest.mark.parametrize(
     "rollout_backend, weight_sync_every, num_iterations, max_staleness",
-    [("ttt_remote_sync", 3, 2, 0), ("ttt_remote_async", 2, 2, 0), ("ttt_remote_async", 6, 3, 3)],
+    [
+        ("ttt_remote_sync", 3, 2, 0),
+        ("ttt_remote_sync", 2, 1, 0),
+        ("ttt_remote_async", 2, 2, 0),
+        ("ttt_remote_async", 6, 3, 3),
+        ("ttt_remote_async", 2, 1, 1),
+        ("ttt_remote_async", 6, 2, 4),
+    ],
 )
 def test_grpo_config_accepts_remote_weight_sync_schedule(
     rollout_backend, weight_sync_every, num_iterations, max_staleness
