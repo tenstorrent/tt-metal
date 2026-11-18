@@ -202,6 +202,25 @@
 
 namespace {
 
+// R1 A in-flight cap (Refinement 19, host R1_A_INFLIGHT_TILES): a plain R1 core's A reads retire every GM_A_INFLIGHT
+// tiles (transaction-id ring of two chunks: chunk c goes out under trid GM_A_TRID0 + c % 2 once chunk c - 2 has
+// landed), so at most 2 x GM_A_INFLIGHT A tiles of a core are on the NoC at once. A grid-wide burst of block-sized
+// reads (every core issuing its whole K-block at once) collapses the NoC: PDL decoder res2 (32768x256x32, A in L1
+// interleaved, 103 cores) 25.9 -> 16.1 us at 8. 0 = no cap (one barrier per K-block).
+#ifndef GM_A_INFLIGHT
+#define GM_A_INFLIGHT 0
+#endif
+#define GM_A_TRID0 13
+// R1 B multicast (Refinement 19, host R1_B_MCAST): on a plain R1 walk whose B is resident (read once, on the first
+// M-block), one injector per B group (a rectangle of the split's cores) reads B -- and the walk's bias / gate row
+// into cb_weight_tiles' tail, past B -- from DRAM once and multicasts both in ONE handshake-free delivery (the
+// walk's only B delivery lands in fresh slots: the R2a one-shot channel). Every core copies the row L1 -> L1 into
+// cb_row. Without it every core of a tall, narrow split reads the same few B / bias pages: bank-serialized DRAM
+// hot spots (PDL res3.0 conv1 on 103 cores: ~17 us of B + bias reads). 0 = every core reads its own B.
+#ifndef GM_R1_B_MCAST
+#define GM_R1_B_MCAST 0
+#endif
+
 // Valid extent of a block starting at `start` inside a region of `valid` tiles (0 when the block lies
 // wholly in the padded tail of a ragged edge region: the grid-uniform R1a walk visits such blocks).
 FORCE_INLINE uint32_t block_extent(uint32_t valid, uint32_t start, uint32_t nominal) {
@@ -371,9 +390,11 @@ void kernel_main() {
     constexpr auto mc_weight = dataflow_kernel_lib::McastArgs<
         get_named_compile_time_arg_val("weight_ct_offset"),
         get_named_compile_time_arg_val("weight_rt_offset")>();
+    constexpr bool r1_b_mcast = GM_R1_B_MCAST != 0;
+    static_assert(!r1_b_mcast || (operand_mode == 0 && weight_resident && !dram_sharded && !block_sharded));
     static_assert(
         mc_act.active == ((operand_mcast && !r1a_split) || (dram_sharded && ds_reader_act) || bs_mcast) &&
-        mc_weight.active == (operand_mcast || bs_b_mcast));
+        mc_weight.active == (operand_mcast || bs_b_mcast || r1_b_mcast));
     static_assert(
         !bs_b_mcast ||
         (block_sharded && b_chunks >= 1 && b_chunks <= 8 && b_round_kblocks >= 1 &&
@@ -513,9 +534,10 @@ void kernel_main() {
     [[maybe_unused]] auto a_sender = mc_act.optional_sender(noc);
     [[maybe_unused]] auto a_receiver = mc_act.optional_receiver(noc);
     // R2a / R3a: the B group's injector (sender face) or a receiver of its multicast.
-    [[maybe_unused]] auto b_sender = make_bs_face<bs_b_mcast, true>(mc_weight, noc);
-    [[maybe_unused]] auto b_receiver = make_bs_face<bs_b_mcast, false>(mc_weight, noc);
-    [[maybe_unused]] const bool b_injector = bs_has_face<bs_b_mcast>(b_sender);
+    // (Refinement 19: also the R1 B group's one-shot channel, GM_R1_B_MCAST.)
+    [[maybe_unused]] auto b_sender = make_bs_face < bs_b_mcast || r1_b_mcast, true > (mc_weight, noc);
+    [[maybe_unused]] auto b_receiver = make_bs_face < bs_b_mcast || r1_b_mcast, false > (mc_weight, noc);
+    [[maybe_unused]] const bool b_injector = bs_has_face < bs_b_mcast || r1_b_mcast > (b_sender);
     // Refinement 18 R3 split roles (GM_BS_ROLE): 0 = this kernel runs the whole R2 / R3 walk; 1 = only its A half
     // (A rounds, residual: NCRISC); 2 = only its B half (B rounds, the bias / gate row: BRISC / NoC1, the in-place
     // output needing no writer).
@@ -548,6 +570,9 @@ void kernel_main() {
     // `a_stride`: the slot's A row stride in tiles (block_k; the delivery's K width under GM_COMPACT_A).
     auto read_act =
         [&](uint32_t act_l1, uint32_t a_row_base, uint32_t k0, uint32_t blk_rows, uint32_t k_valid, uint32_t a_stride) {
+#ifdef GM_ABLATE_A_RD
+            return;
+#endif
             if constexpr (a_segments::num > 1) {
                 // Refinement 14: the K-block's rows of concat(A_i) -- one run per segment it touches.
                 const a_segments::Pos at = a_segments::locate(a_tab, k0);
@@ -567,9 +592,27 @@ void kernel_main() {
                     uint32_t page = (a_row_base + r) * tensor_k_tiles + k0;
                     uint32_t l1 = act_l1 + r * a_stride * a_tile_bytes;
                     for (uint32_t k = 0; k < k_valid; ++k) {
+                        if constexpr (GM_A_INFLIGHT != 0) {
+                            // The in-flight cap: chunk boundaries retire the chunk two back (same trid).
+                            const uint32_t t = r * k_valid + k;
+                            if (t % GM_A_INFLIGHT == 0) {
+                                const uint32_t c = t / GM_A_INFLIGHT;
+                                if (c >= 2) {
+                                    dataflow_kernel_lib::async_read_barrier_with_trid(noc, GM_A_TRID0 + c % 2);
+                                }
+                                dataflow_kernel_lib::set_read_trid(noc, GM_A_TRID0 + c % 2);
+                            }
+                        }
+#if defined(GM_EXP_A_LOCAL)
+                        noc_async_read(get_noc_addr(l1), l1, a_tile_bytes);  // EXPERIMENT: zero-distance floor
+#else
                         noc_async_read(a_acc.get_noc_addr(page + k), l1, a_tile_bytes);
+#endif
                         l1 += a_tile_bytes;
                     }
+                }
+                if constexpr (GM_A_INFLIGHT != 0) {
+                    dataflow_kernel_lib::set_read_trid(noc, 0);  // (the caller's K-block barrier retires the rest)
                 }
             }
         };
@@ -735,6 +778,9 @@ void kernel_main() {
                     constexpr uint32_t row_trid = 15;
                     static_assert(!bs_b_mcast || b_chunks < row_trid);
                     auto read_row = [&](uint32_t l1) {
+#ifdef GM_ABLATE_ROW
+                        return;
+#endif
                         const uint32_t page = col0 + blk_c0 * unit_stride;  // has_row: unit = one column
                         for (uint32_t n = 0; n < blk_cols; ++n) {
                             noc_async_read(row_acc.get_noc_addr(page + n * unit_stride), l1, row_tile_bytes);
@@ -1026,6 +1072,32 @@ void kernel_main() {
                             }
 #ifndef GM_ABLATE_DM
                             else if constexpr (reads_act || reads_weight) {
+                                if constexpr (r1_b_mcast) {
+                                    // The group's injector: B (+ the walk's row in the tail) first, under its own
+                                    // trid, then the one-shot delivery -- before its own A, so the group's
+                                    // compute waits on one B read, not on the injector's A block too.
+                                    if (load_weight && b_injector) {
+                                        MaybeDeviceZoneScope("rd_b_issue");
+                                        dataflow_kernel_lib::set_read_trid(noc, 1);
+                                        if (batch_valid) {
+                                            read_weight(weight_l1, b_base, k0, k_valid, blk_cols);
+                                        }
+                                        if constexpr (has_row) {
+                                            read_row(weight_l1 + weight_block_bytes);
+                                        }
+                                        dataflow_kernel_lib::set_read_trid(noc, 0);
+                                        dataflow_kernel_lib::async_read_barrier_with_trid(noc, 1);
+                                        bs_b_deliver<r1_b_mcast>(
+                                            true,
+                                            b_sender,
+                                            b_receiver,
+                                            weight_l1,
+                                            weight_block_bytes + (has_row ? row_bytes : 0));
+                                    }
+                                    if (load_weight) {
+                                        row_tail_l1 = weight_l1 + weight_block_bytes;
+                                    }
+                                }
                                 {
                                     MaybeDeviceZoneScope("rd_issue");
                                     if (batch_valid && reads_act && load_act) {
@@ -1037,12 +1109,21 @@ void kernel_main() {
                                             k_valid,
                                             gm_ks::compact_a ? k_valid : block_k_tiles);
                                     }
-                                    if (batch_valid && reads_weight && load_weight) {
+                                    if (batch_valid && reads_weight && load_weight && !r1_b_mcast) {
                                         read_weight(weight_l1, b_base, k0, k_valid, blk_cols);
                                     }
                                 }
-                                MaybeDeviceZoneScope("rd_barrier");
-                                noc_async_read_barrier();  // one barrier per K-block, both operands
+                                {
+                                    MaybeDeviceZoneScope("rd_barrier");
+                                    noc_async_read_barrier();  // one barrier per K-block, both operands
+                                }
+                                if constexpr (r1_b_mcast) {
+                                    if (load_weight && !b_injector) {
+                                        MaybeDeviceZoneScope("rd_b_round");
+                                        // the group's B (+ row) landed in the slot
+                                        bs_b_deliver<r1_b_mcast>(false, b_sender, b_receiver, weight_l1, 0);
+                                    }
+                                }
                             }
 #endif
                             // R1a: A over its line, then B over its line (fixed order on every core).
@@ -1078,7 +1159,23 @@ void kernel_main() {
 
                     if constexpr (has_row && bs_does_b) {
                         // bias / gate row of this N-block: once per block, after the first K-walk.
-                        if (bi == 0) {
+                        // Refinement 19 (R1 family): a core whose column range is one N-block (nb_n == 1) needs the
+                        // same row for every block, and cb_row holds exactly one row, so after the first block the
+                        // slot it re-reserves still holds it (compute only reads it): no re-read (it was a
+                        // bank-serialized DRAM hot spot, the same pages read by every core once per M-block).
+                        constexpr bool r1_family = !dram_sharded && !block_sharded;
+                        const bool row_kept = r1_family && nb_n == 1 && !(bb == 0 && mb == 0);
+                        if (bi == 0 && row_kept) {
+                            cb_reserve_back(cb_row, block_n_tiles);
+                            cb_push_back(cb_row, block_n_tiles);
+                        } else if (bi == 0 && r1_b_mcast) {
+                            // The row rode in B's delivery (cb_weight_tiles' tail): copy it L1 -> L1.
+                            MaybeDeviceZoneScope("rd_row");
+                            cb_reserve_back(cb_row, block_n_tiles);
+                            noc_async_read(get_noc_addr(row_tail_l1), get_write_ptr(cb_row), row_bytes);
+                            noc_async_read_barrier();
+                            cb_push_back(cb_row, block_n_tiles);
+                        } else if (bi == 0) {
                             MaybeDeviceZoneScope("rd_row");
                             if (row_early) {
                                 // (issued with the walk's first K-block)
