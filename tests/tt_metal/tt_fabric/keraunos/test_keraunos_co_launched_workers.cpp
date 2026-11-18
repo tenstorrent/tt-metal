@@ -17,7 +17,6 @@
 #include <fmt/ranges.h>
 
 #include <algorithm>
-#include <array>
 #include <chrono>
 #include <cstdint>
 #include <map>
@@ -33,6 +32,7 @@
 #include <tt-metalium/experimental/fabric/fabric.hpp>
 
 #include "fabric_fixture.hpp"
+#include "hostdev/eth_link.h"
 #include "impl/context/metal_context.hpp"
 #include "impl/kernels/kernel.hpp"
 #include "impl/program/program_impl.hpp"
@@ -56,15 +56,6 @@ constexpr uint32_t kResultsSizeBytes = 128;
 // the iDMA, the router and the host see them.
 constexpr uint32_t kCceUncachedAlias = 0x800000;
 constexpr auto kTimeout = std::chrono::minutes(20);
-
-// The link record internal_::cce_eth::EthLink (tt-2xx/quasar/eth_cce_send.h) as the test reads it: `valid` in word 1,
-// and per PLAN-0008 § Design `kind` in word 2, the first reserved word. These mirror EthLink.
-constexpr uint32_t kEthLinkValidWord = 1;
-constexpr uint32_t kEthLinkValid = 0x4B4E494C;  // MEM_IERISC_FABRIC_ETH_LINK_VALID
-constexpr uint32_t kEthLinkKindWord = 2;
-constexpr uint32_t kEthLinkKindEthernet = 0;
-constexpr uint32_t kEthLinkKindNoc = 1;
-using EthLinkRecord = std::array<uint32_t, 4>;
 
 // Links of the line backed by the NOC, each by its two ends' fabric chip ids. Empty: every link is Ethernet.
 using NocLinks = std::vector<std::pair<uint32_t, uint32_t>>;
@@ -214,19 +205,18 @@ void add_line_workers(
 struct NocRouter {
     ChipId chip;
     CoreCoord virtual_core;
-    EthLinkRecord as_found;
+    EthLink as_found;
 };
 
 uint64_t eth_link_address() {
     return MetalContext::instance().hal().get_dev_addr(HalProgrammableCoreType::ACTIVE_ETH, HalL1MemAddrType::ETH_LINK);
 }
 
-EthLinkRecord read_eth_link(ChipId chip, const CoreCoord& virtual_core) {
-    std::vector<uint32_t> words;
+EthLink read_eth_link(ChipId chip, const CoreCoord& virtual_core) {
+    EthLink link{};
     MetalContext::instance().get_cluster().read_core(
-        words, sizeof(EthLinkRecord), tt_cxy_pair(chip, virtual_core), eth_link_address());
-    TT_FATAL(words.size() == 4, "Link record read on chip {} returned {} words", chip, words.size());
-    return {words[0], words[1], words[2], words[3]};
+        &link, sizeof(link), tt_cxy_pair(chip, virtual_core), eth_link_address());
+    return link;
 }
 
 // Sets the NOC kind in the record of every fabric router of `chip` whose link is in `noc_links`, and returns those
@@ -250,10 +240,9 @@ std::vector<NocRouter> set_noc_links(ChipId chip, const NocLinks& noc_links) {
         const CoreCoord virtual_core =
             cluster.get_virtual_coordinate_from_logical_coordinates(chip, logical, CoreType::ETH);
         NocRouter router{chip, virtual_core, read_eth_link(chip, virtual_core)};
-        EthLinkRecord record = router.as_found;
-        record[kEthLinkKindWord] = kEthLinkKindNoc;
-        cluster.write_core_immediate(
-            record.data(), sizeof(record), tt_cxy_pair(chip, virtual_core), eth_link_address());
+        EthLink record = router.as_found;
+        record.kind = ETH_LINK_KIND_NOC;
+        cluster.write_core_immediate(&record, sizeof(record), tt_cxy_pair(chip, virtual_core), eth_link_address());
         routers.push_back(router);
     }
     return routers;
@@ -411,7 +400,8 @@ void KeraunosCoLaunchedWorkers::run_line_unicast(const NocLinks& noc_links) {
     std::once_flag noc_links_written;
     set_fabric_program_extension([&](tt::tt_metal::IDevice* device, tt::tt_metal::Program& program) {
         add_line_workers(device, program, nonce, seed);
-        // Every call waits here, so the records of every chip are written before the first device is configured.
+        // Every call waits here, so the records of every chip are written before the first device is configured. A
+        // throw lets a waiting call rerun the write, which can append duplicate entries to noc_routers.
         std::call_once(noc_links_written, [&] {
             if (is_mock()) {
                 return;
@@ -466,17 +456,18 @@ void KeraunosCoLaunchedWorkers::run_line_unicast(const NocLinks& noc_links) {
         const auto noc = std::find_if(noc_routers.begin(), noc_routers.end(), [&](const NocRouter& r) {
             return r.chip == router.chip && r.virtual_core == router.virtual_core;
         });
-        const EthLinkRecord now = read_eth_link(router.chip, router.virtual_core);
+        const EthLink now = read_eth_link(router.chip, router.virtual_core);
         const std::string where = fmt::format("chip {} router {}", router.chip, router.logical.str());
-        log_info(tt::LogTest, "{} link record {:#x}", where, fmt::join(now, " "));
-        EXPECT_EQ(now[kEthLinkValidWord], kEthLinkValid) << where;
+        log_info(
+            tt::LogTest, "{} link record peer_tile {} valid {:#x} kind {}", where, now.peer_tile, now.valid, now.kind);
+        EXPECT_EQ(now.valid, ETH_LINK_VALID) << where;
         if (noc == noc_routers.end()) {
-            EXPECT_EQ(now[kEthLinkKindWord], kEthLinkKindEthernet) << where;
+            EXPECT_EQ(now.kind, ETH_LINK_KIND_ETHERNET) << where;
             continue;
         }
-        EXPECT_EQ(noc->as_found[kEthLinkValidWord], kEthLinkValid) << where;
-        EXPECT_EQ(noc->as_found[kEthLinkKindWord], kEthLinkKindEthernet) << where;
-        EXPECT_EQ(now[kEthLinkKindWord], kEthLinkKindNoc) << where;
+        EXPECT_EQ(noc->as_found.valid, ETH_LINK_VALID) << where;
+        EXPECT_EQ(noc->as_found.kind, ETH_LINK_KIND_ETHERNET) << where;
+        EXPECT_EQ(now.kind, ETH_LINK_KIND_NOC) << where;
     }
 
     const auto deadline = std::chrono::steady_clock::now() + kTimeout;
