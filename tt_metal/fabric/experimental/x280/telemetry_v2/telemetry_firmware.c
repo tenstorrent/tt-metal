@@ -52,7 +52,7 @@ void heart_beat() {
     if (x280_mtime() >= g_next_heartbeat) {
         g_next_heartbeat += g_ticks_per_ms;
         g_heartbeat->counter = g_heartbeat->counter + 1;
-        if (g_heartbeat->counter >= UINT32_MAX-1) {
+        if (g_heartbeat->counter >= UINT64_MAX-1) {
             g_heartbeat->counter = 1;
         }
     }
@@ -228,8 +228,6 @@ void update_arc_data_in_table() {
 
 int main(uint64_t hartid) {
     if (hartid == 0) {
-        //volatile Heartbeat* heartbeat = (volatile Heartbeat*)X280_STANDALONE_HEARTBEAT_ADDR;
-
         g_heartbeat->counter = 0;
         x280_fence_ow();
         g_heartbeat->magic = X280_STANDALONE_HEARTBEAT_MAGIC;  // Last, so the host never sees the magic with a stale counter.
