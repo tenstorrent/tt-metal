@@ -51,8 +51,100 @@ using tt::tt_metal::MeshDevice1x2Fixture;
 
 constexpr const char* kUnaryKernels = "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels";
 constexpr const char* kMatmulKernels = "ttnn/cpp/ttnn/operations/matmul/device/kernels";
-constexpr const char* kBinaryKernels = "tests/ttnn/unit_tests/operations/debug/kernels/program_spec_mul";
 constexpr const char* kSemaphoreKernels = "tests/tt_metal/tt_metal/test_kernels/dataflow";
+
+// The kernels of tests/ttnn/unit_tests/operations/debug/kernels/program_spec_mul, as source code, because the merge
+// gate runs these tests from the tt-nn-validation package, which ships no kernel files from tests/ttnn/. They keep
+// only what the tests here use: out = a + b, with named runtime arguments or, with USE_VARARGS, runtime varargs.
+constexpr const char* kAddReaderSource = R"(
+#include "api/dataflow/dataflow_api.h"
+#include "api/dataflow/dataflow_buffer.h"
+#include "api/dataflow/noc.h"
+#include "api/tensor/noc_traits.h"
+#include "experimental/kernel_args.h"
+
+void kernel_main() {
+#ifdef USE_VARARGS
+    const uint32_t num_tiles = get_vararg(0);
+    const uint32_t start_id = get_vararg(1);
+#else
+    const uint32_t num_tiles = get_arg(args::num_tiles);
+    const uint32_t start_id = get_arg(args::start_id);
+#endif
+    DataflowBuffer dfb_a(dfb::in_a);
+    DataflowBuffer dfb_b(dfb::in_b);
+    Noc noc;
+    const auto tensor_a = TensorAccessor(tensor::a);
+    const auto tensor_b = TensorAccessor(tensor::b);
+    const uint32_t tile_bytes = dfb_a.get_tile_size();
+    for (uint32_t i = start_id; i < start_id + num_tiles; ++i) {
+        dfb_a.reserve_back(1);
+        dfb_b.reserve_back(1);
+        noc.async_read(tensor_a, dfb_a, tile_bytes, {.page_id = i}, {.offset_bytes = 0});
+        noc.async_read(tensor_b, dfb_b, tile_bytes, {.page_id = i}, {.offset_bytes = 0});
+        noc.async_read_barrier();
+        dfb_a.push_back(1);
+        dfb_b.push_back(1);
+    }
+}
+)";
+constexpr const char* kAddComputeSource = R"(
+#include "api/compute/common.h"
+#include "api/compute/compute_kernel_hw_startup.h"
+#include "api/compute/eltwise_binary.h"
+#include "api/dataflow/dataflow_buffer.h"
+#include "experimental/kernel_args.h"
+
+void kernel_main() {
+    const uint32_t num_tiles = get_arg(args::num_tiles);
+    DataflowBuffer dfb_a(dfb::in_a);
+    DataflowBuffer dfb_b(dfb::in_b);
+    DataflowBuffer dfb_out(dfb::out);
+    compute_kernel_hw_startup(dfb::in_a, dfb::in_b, dfb::out);
+    add_init(dfb::in_a, dfb::in_b);
+    for (uint32_t i = 0; i < num_tiles; ++i) {
+        dfb_a.wait_front(1);
+        dfb_b.wait_front(1);
+        tile_regs_acquire();
+        add_tiles(dfb::in_a, dfb::in_b, 0, 0, 0);
+        tile_regs_commit();
+        dfb_a.pop_front(1);
+        dfb_b.pop_front(1);
+        dfb_out.reserve_back(1);
+        tile_regs_wait();
+        pack_tile(0, dfb::out, 0);
+        tile_regs_release();
+        dfb_out.push_back(1);
+    }
+}
+)";
+constexpr const char* kAddWriterSource = R"(
+#include "api/dataflow/dataflow_api.h"
+#include "api/dataflow/dataflow_buffer.h"
+#include "api/dataflow/noc.h"
+#include "api/tensor/noc_traits.h"
+#include "experimental/kernel_args.h"
+
+void kernel_main() {
+#ifdef USE_VARARGS
+    const uint32_t num_tiles = get_vararg(0);
+    const uint32_t start_id = get_vararg(1);
+#else
+    const uint32_t num_tiles = get_arg(args::num_tiles);
+    const uint32_t start_id = get_arg(args::start_id);
+#endif
+    DataflowBuffer dfb_out(dfb::out);
+    Noc noc;
+    const auto tensor_out = TensorAccessor(tensor::out);
+    const uint32_t tile_bytes = dfb_out.get_tile_size();
+    for (uint32_t i = start_id; i < start_id + num_tiles; ++i) {
+        dfb_out.wait_front(1);
+        noc.async_write(dfb_out, tensor_out, tile_bytes, {.offset_bytes = 0}, {.page_id = i});
+        noc.async_write_barrier();
+        dfb_out.pop_front(1);
+    }
+}
+)";
 
 struct Program {
     m2::ProgramSpec spec;
@@ -192,9 +284,8 @@ void leave_out_a_core(m2::ProgramRunArgs& run_args) {
     num_tiles.erase(node);
 }
 
-// out = a + b with the tiles split over the cores, with the kernels that test_generic_op_program_spec.py runs for
-// a * b. With varargs, which only C++ can set, the reader and writer take each core's tile count and first tile as
-// runtime varargs 0 and 1 instead of named arguments.
+// out = a + b with the tiles split over the cores, with the kernels above. With varargs, which only C++ can set, the
+// reader and writer take each core's tile count and first tile as runtime varargs 0 and 1 instead of named arguments.
 Program make_add_program(const Tensor& a, const Tensor& b, const Tensor& out, bool varargs = false) {
     const uint32_t num_tiles = a.physical_volume() / tt::constants::TILE_HW;
     const auto [num_cores, cores, group_1, group_2, tiles_1, tiles_2] =
@@ -206,7 +297,7 @@ Program make_add_program(const Tensor& a, const Tensor& b, const Tensor& out, bo
 
     m2::KernelSpec reader{
         .unique_id = m2::KernelSpecName{"reader"},
-        .source = std::string(kBinaryKernels) + "/reader.cpp",
+        .source = m2::KernelSpec::SourceCode{.code = kAddReaderSource},
         .dfb_bindings = {m2::ProducerOf(in_a, "in_a"), m2::ProducerOf(in_b, "in_b")},
         .tensor_bindings =
             {{.tensor_parameter_name = m2::TensorParamName{"a"}, .accessor_name = "a"},
@@ -216,15 +307,14 @@ Program make_add_program(const Tensor& a, const Tensor& b, const Tensor& out, bo
     };
     const m2::KernelSpec compute{
         .unique_id = m2::KernelSpecName{"compute"},
-        .source = std::string(kBinaryKernels) + "/compute.cpp",
-        .compiler_options = {.defines = {{"BINARY_ADD", "1"}}},
+        .source = m2::KernelSpec::SourceCode{.code = kAddComputeSource},
         .dfb_bindings = {m2::ConsumerOf(in_a, "in_a"), m2::ConsumerOf(in_b, "in_b"), m2::ProducerOf(dfb_out, "out")},
         .runtime_arg_schema = {.runtime_arg_names = {"num_tiles"}},
         .hw_config = m2::ComputeHardwareConfig{},
     };
     m2::KernelSpec writer{
         .unique_id = m2::KernelSpecName{"writer"},
-        .source = std::string(kBinaryKernels) + "/writer.cpp",
+        .source = m2::KernelSpec::SourceCode{.code = kAddWriterSource},
         .dfb_bindings = {m2::ConsumerOf(dfb_out, "out")},
         .tensor_bindings = {{.tensor_parameter_name = m2::TensorParamName{"out"}, .accessor_name = "out"}},
         .runtime_arg_schema = {.runtime_arg_names = {"num_tiles", "start_id"}},
@@ -341,8 +431,12 @@ Tensor make_unused_output(tt::tt_metal::distributed::MeshDevice* device) {
         device);
 }
 
+}  // namespace
+
 // Per-core allocation needs the HYBRID allocator, which Metal reads from the environment once per process, before the
-// fixture runs. So these tests run only when the binary runs with TT_METAL_ALLOCATOR_MODE_HYBRID=1.
+// fixture runs. So these tests run only when the binary runs with TT_METAL_ALLOCATOR_MODE_HYBRID=1. The fixture is
+// outside the anonymous namespace because a TEST_F class derives from it, and GCC rejects a base in an anonymous
+// namespace when unity builds include this file (-Werror=subobject-linkage).
 class GenericOpProgramSpecHybridAllocatorTest : public TTNNFixtureWithDevice {
 protected:
     void SetUp() override {
@@ -352,8 +446,6 @@ protected:
         TTNNFixtureWithDevice::SetUp();
     }
 };
-
-}  // namespace
 
 // The rule test_generic_op_hashing.cpp checks for the ProgramDescriptor form: argument names and compile-time values
 // change the hash. Runtime values live in the ProgramRunArgs, which the hash does not see.
