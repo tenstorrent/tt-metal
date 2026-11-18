@@ -907,6 +907,30 @@ PERF_TEST_SCHEMAS = {
             "perf_sdpa_bcast_col_srcb_reuse": "perf_sdpa_bcast_col_srcb_reuse"
         },
     },
+    "perf_top32_rm": {
+        "version": 1,
+        "columns": [
+            "datum_bytes",
+            "dest_acc",
+            "formats.input_A",
+            "formats.input_B",
+            "formats.output",
+            "formats.register_A",
+            "formats.register_B",
+            "formats.sfpu_dst",
+            "formats.sfpu_src",
+            "loop_factor",
+            "marker",
+            "row_elements",
+            "top32_mode",
+            "top_min",
+            "tile_cnt",
+            "unpack_to_dest",
+            "via_wrappers",
+        ],
+        "aliases": {},
+        "test_name_aliases": {"perf_top32_rm": "perf_top32_rm"},
+    },
     "perf_transpose_dest": {
         "version": 5,
         "columns": [

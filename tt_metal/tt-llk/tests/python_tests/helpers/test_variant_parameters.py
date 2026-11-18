@@ -1446,14 +1446,6 @@ class TOPK_XL(TemplateParameter):
 class TOP32_RM(TemplateParameter):
     """Compile-time knobs for ``top32_rm_test.cpp`` (the DeepSeek top32_rm family).
 
-    ``row_elements``  length of the row being reduced to its top 32. The driver walks it in
-                      64-element chunks, so a value that is 32 (mod 64) is what reaches the
-                      ``num_faces=2`` tail path -- the same shape the Metal dev test covers
-                      with row=160.
-    ``datum_bytes``   L1 datum size of both operands, which is the only thing the driver
-                      needs to turn a chunk index into an address: one chunk is
-                      ``64 * datum_bytes`` bytes, and unpacker addresses count 16-byte words.
-                      Must match the format the stimuli are written in.
     ``top_min``       ``_bitonic_top32_merge_``'s template polarity. False (the consumer's
                       value) keeps the max half of each compare-exchange, i.e. a top-32.
     ``top32_mode``    0 walks the row in 64-element chunks through this family's own unpack
@@ -1473,11 +1465,8 @@ class TOP32_RM(TemplateParameter):
                       ``experimental/llk_unpack_A_top32_rm_api.h`` too, which picks its own
                       branch (Float32 takes SrcA there, not unpack-to-dest, so those cells differ
                       from their primitives-path namesakes) and the per-chunk L1 offset, so
-                      ``datum_bytes`` is then only the primitives' fallback for mode 1.
     """
 
-    row_elements: int = 64
-    datum_bytes: int = 2
     top_min: bool = False
     via_wrappers: bool = False
     # Named for the constant it emits rather than bare `mode`: field names have to be unique
@@ -1486,25 +1475,15 @@ class TOP32_RM(TemplateParameter):
     top32_mode: int = 0
 
     def convert_to_cpp(self) -> str:
-        if self.row_elements % 32 != 0:
-            raise ValueError(
-                f"row_elements must be a multiple of 32, got {self.row_elements}"
-            )
         if self.top32_mode not in (0, 1):
             raise ValueError(
                 f"top32_mode must be 0 (plain) or 1 (pre-sorted), got {self.top32_mode}"
             )
-        if self.top32_mode == 1 and self.row_elements < 1024:
-            raise ValueError(
-                "the pre-sorted mode needs at least one whole 1024-element chunk, got "
-                f"{self.row_elements}"
-            )
         return "\n".join(
             [
-                f"constexpr std::uint32_t TOP32_ROW_ELEMENTS = {self.row_elements}u;",
-                f"constexpr std::uint32_t TOP32_DATUM_BYTES = {self.datum_bytes}u;",
                 f"constexpr bool TOP32_TOP_MIN = {str(self.top_min).lower()};",
                 f"constexpr std::uint32_t TOP32_MODE = {self.top32_mode}u;",
+                f"#define TOP32_PRE_SORTED_MODE {int(self.top32_mode == 1)}",
                 f"#define TOP32_VIA_WRAPPERS {int(self.via_wrappers)}",
             ]
         )
@@ -1741,6 +1720,36 @@ class LOOP_FACTOR(RuntimeParameter):
 
     def convert_to_struct_fields(self) -> tuple[str, str]:
         return f"std::uint32_t LOOP_FACTOR;", "I"
+
+
+@dataclass
+class TOP32_GEOMETRY(RuntimeParameter):
+    """Top32 row geometry: runtime in normal builds, generated constants in SoL."""
+
+    row_elements: int
+    datum_bytes: int
+
+    def __post_init__(self):
+        if self.row_elements % 32 != 0:
+            raise ValueError(
+                f"row_elements must be a multiple of 32, got {self.row_elements}"
+            )
+        if self.datum_bytes not in (2, 4):
+            raise ValueError(f"datum_bytes must be 2 or 4, got {self.datum_bytes}")
+
+    def convert_to_cpp(self) -> str:
+        return "\n".join(
+            [
+                f"constexpr std::uint32_t TOP32_ROW_ELEMENTS = {self.row_elements}u;",
+                f"constexpr std::uint32_t TOP32_DATUM_BYTES = {self.datum_bytes}u;",
+            ]
+        )
+
+    def convert_to_struct_fields(self) -> tuple[str, str]:
+        return (
+            "std::uint32_t TOP32_ROW_ELEMENTS;\n" "std::uint32_t TOP32_DATUM_BYTES;",
+            "II",
+        )
 
 
 @dataclass

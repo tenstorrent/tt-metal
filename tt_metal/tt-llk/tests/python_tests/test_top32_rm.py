@@ -75,9 +75,15 @@ from helpers.constraints import skip_if_32bit_input_without_dest_acc
 from helpers.format_config import DataFormat
 from helpers.llk_params import DestAccumulation, format_dict
 from helpers.param_config import input_output_formats, parametrize
+from helpers.perf.blaze import execute_llk, with_functional_defaults
 from helpers.stimuli_config import StimuliConfig
 from helpers.test_config import TestConfig
-from helpers.test_variant_parameters import TOP32_RM
+from helpers.test_variant_parameters import (
+    LOOP_FACTOR,
+    TILE_COUNT,
+    TOP32_GEOMETRY,
+    TOP32_RM,
+)
 from helpers.utils import passed_test
 
 pytestmark = [skip_for_wormhole, skip_for_quasar]
@@ -153,7 +159,17 @@ def _pad_to_tile(flat):
     row_elements=ROW_ELEMENTS,
     dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
 )
-def test_top32_rm(formats, row_elements, dest_acc, via_wrappers=False):
+def test_top32_rm(
+    formats,
+    row_elements,
+    dest_acc,
+    via_wrappers=False,
+    *,
+    is_perf=False,
+    perf_report=None,
+    run_types=None,
+    loop_factor=1,
+):
     is_32bit = formats.input_format.is_32_bit()
     # Through the Metal wrappers Float32 goes through SrcA, narrowed to Float16_b (dest_acc=No) or
     # Tf32 (dest_acc=Yes) as the consumer configures its scores; driving the primitives, Float32 is
@@ -173,19 +189,25 @@ def test_top32_rm(formats, row_elements, dest_acc, via_wrappers=False):
 
     tiles_per_operand = max(1, -(-row_elements // ELEMENTS_PER_TILE))
 
-    configuration = TestConfig(
-        "sources/top32_rm_test.cpp",
-        formats,
+    test_config_kwargs = dict(
+        test_name="sources/top32_rm_test.cpp",
+        formats=formats,
         templates=[
             TOP32_RM(
-                row_elements=row_elements,
-                datum_bytes=4 if is_32bit else 2,
                 top_min=False,
                 top32_mode=0,
                 via_wrappers=via_wrappers,
-            )
+            ),
         ],
-        runtimes=[],
+        runtimes=[
+            TOP32_GEOMETRY(
+                row_elements=row_elements,
+                datum_bytes=4 if is_32bit else 2,
+            ),
+            LOOP_FACTOR(loop_factor),
+            # Each row-major chunk stages values and indices separately.
+            TILE_COUNT(tile_cnt=2 * -(-row_elements // ELEMENTS_PER_CHUNK)),
+        ],
         variant_stimuli=StimuliConfig(
             _pad_to_tile(values),
             formats.input_format,
@@ -201,6 +223,17 @@ def test_top32_rm(formats, row_elements, dest_acc, via_wrappers=False):
         dest_acc=dest_acc,
         include_dirs=METAL_WRAPPER_INCLUDE_DIRS if via_wrappers else None,
     )
+    if is_perf:
+        execute_llk(
+            is_perf=True,
+            perf_report=perf_report,
+            run_types=run_types,
+            loop_factor=loop_factor,
+            test_config_kwargs=test_config_kwargs,
+        )
+        return
+
+    configuration = TestConfig(**with_functional_defaults(test_config_kwargs))
 
     # Round the stimuli to the format the unpacker hands on (the input format on the primitives
     # path; Float16_b or Tf32 through the wrappers) so the golden is about what the device sorts.
@@ -222,7 +255,6 @@ def test_top32_rm(formats, row_elements, dest_acc, via_wrappers=False):
         f"row_elements={row_elements}: no element of the top-32 lies in the last chunk "
         f"(index >= {last_chunk_first}), so this case does not exercise the chunk offset"
     )
-
     result = configuration.run().result
 
     # Each result tile carries its 32 datums at the front: the sort leaves the survivors in
@@ -311,7 +343,16 @@ def _pre_sorted_stimuli(row_elements):
     formats=PRE_SORTED_FORMATS,
     row_elements=PRE_SORTED_ROW_ELEMENTS,
 )
-def test_top32_rm_pre_sorted(formats, row_elements, via_wrappers=False):
+def test_top32_rm_pre_sorted(
+    formats,
+    row_elements,
+    via_wrappers=False,
+    *,
+    is_perf=False,
+    perf_report=None,
+    run_types=None,
+    loop_factor=1,
+):
     """The >= 1024-element path: transpose whole tiles, then prep / combine / final."""
     values, indices = _pre_sorted_stimuli(row_elements)
 
@@ -332,19 +373,29 @@ def test_top32_rm_pre_sorted(formats, row_elements, via_wrappers=False):
     # is read 64 elements at a time out of the same row-major buffer, so it needs L1 behind it.
     tiles_per_operand = -(-row_elements // ELEMENTS_PER_TILE)
 
-    configuration = TestConfig(
-        "sources/top32_rm_test.cpp",
-        formats,
+    test_config_kwargs = dict(
+        test_name="sources/top32_rm_test.cpp",
+        formats=formats,
         templates=[
             TOP32_RM(
-                row_elements=row_elements,
-                datum_bytes=4,  # Float32
                 top_min=False,
                 top32_mode=1,
                 via_wrappers=via_wrappers,
-            )
+            ),
         ],
-        runtimes=[],
+        runtimes=[
+            TOP32_GEOMETRY(row_elements=row_elements, datum_bytes=4),
+            LOOP_FACTOR(loop_factor),
+            # Each whole tile or tail chunk stages values and indices separately.
+            TILE_COUNT(
+                tile_cnt=2
+                * (
+                    row_elements // ELEMENTS_PER_TILE
+                    + ((row_elements % ELEMENTS_PER_TILE) + ELEMENTS_PER_CHUNK - 1)
+                    // ELEMENTS_PER_CHUNK
+                )
+            ),
+        ],
         variant_stimuli=StimuliConfig(
             values,
             formats.input_format,
@@ -363,7 +414,16 @@ def test_top32_rm_pre_sorted(formats, row_elements, via_wrappers=False):
         # tail keeps the primitives (see the driver); the roots are needed to compile them.
         include_dirs=METAL_WRAPPER_INCLUDE_DIRS if via_wrappers else None,
     )
-
+    if is_perf:
+        execute_llk(
+            is_perf=True,
+            perf_report=perf_report,
+            run_types=run_types,
+            loop_factor=loop_factor,
+            test_config_kwargs=test_config_kwargs,
+        )
+        return
+    configuration = TestConfig(**with_functional_defaults(test_config_kwargs))
     result = configuration.run().result
 
     device_values = torch.tensor(result[:TOP_K], dtype=torch_format).to(torch.float32)
@@ -437,26 +497,35 @@ def test_top32_rm_32bit_partial_chunk(formats, row_elements, request):
     torch_format = format_dict[formats.output_format]
 
     configuration = TestConfig(
-        "sources/top32_rm_test.cpp",
-        formats,
-        templates=[
-            TOP32_RM(
-                row_elements=row_elements, datum_bytes=4, top_min=False, top32_mode=0
+        **with_functional_defaults(
+            dict(
+                test_name="sources/top32_rm_test.cpp",
+                formats=formats,
+                templates=[
+                    TOP32_RM(
+                        top_min=False,
+                        top32_mode=0,
+                    ),
+                ],
+                runtimes=[
+                    TOP32_GEOMETRY(row_elements=row_elements, datum_bytes=4),
+                    LOOP_FACTOR(1),
+                    TILE_COUNT(tile_cnt=2 * -(-row_elements // ELEMENTS_PER_CHUNK)),
+                ],
+                variant_stimuli=StimuliConfig(
+                    _pad_to_tile(values),
+                    formats.input_format,
+                    _pad_to_tile(indices),
+                    formats.input_format,
+                    formats.output_format,
+                    tile_count_A=1,
+                    tile_count_B=1,
+                    tile_count_res=2,
+                ),
+                unpack_to_dest=True,
+                dest_acc=DestAccumulation.Yes,
             )
-        ],
-        runtimes=[],
-        variant_stimuli=StimuliConfig(
-            _pad_to_tile(values),
-            formats.input_format,
-            _pad_to_tile(indices),
-            formats.input_format,
-            formats.output_format,
-            tile_count_A=1,
-            tile_count_B=1,
-            tile_count_res=2,
-        ),
-        unpack_to_dest=True,
-        dest_acc=DestAccumulation.Yes,
+        )
     )
 
     result = configuration.run().result
@@ -494,7 +563,16 @@ def test_top32_rm_32bit_partial_chunk(formats, row_elements, request):
     row_elements=[64, 160],
     dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
 )
-def test_top32_rm_via_metal_wrappers(formats, row_elements, dest_acc):
+def test_top32_rm_via_metal_wrappers(
+    formats,
+    row_elements,
+    dest_acc,
+    *,
+    is_perf=False,
+    perf_report=None,
+    run_types=None,
+    loop_factor=1,
+):
     """The plain mode, driven entirely through the Metal wrapper layer.
 
     Same assertions as ``test_top32_rm`` -- values and indices, exactly -- so a wrapper that
@@ -506,17 +584,59 @@ def test_top32_rm_via_metal_wrappers(formats, row_elements, dest_acc):
     160 rather than 128 for the multi-chunk row: it has a chunk at tile_index 1 *and* a
     32-element tail, so the wrapper's chunk offset is exercised twice and the tail path once.
     """
-    test_top32_rm(formats, row_elements, dest_acc, via_wrappers=True)
+    test_top32_rm(
+        formats,
+        row_elements,
+        dest_acc,
+        via_wrappers=True,
+        is_perf=is_perf,
+        perf_report=perf_report,
+        run_types=run_types,
+        loop_factor=loop_factor,
+    )
 
 
 @parametrize(
     formats=PRE_SORTED_FORMATS,
     row_elements=[1024, 1088],
 )
-def test_top32_rm_pre_sorted_via_metal_wrappers(formats, row_elements):
+def test_top32_rm_pre_sorted_via_metal_wrappers(
+    formats,
+    row_elements,
+    *,
+    is_perf=False,
+    perf_report=None,
+    run_types=None,
+    loop_factor=1,
+):
     """The pre-sorted mode through the wrappers: `_prep`, `_combine`, `_final`.
 
     1088 rather than only 1024 so the tail path runs too, which is what puts `_rebuild` and
     `_merge` through the wrapper layer in this mode as well.
     """
-    test_top32_rm_pre_sorted(formats, row_elements, via_wrappers=True)
+    test_top32_rm_pre_sorted(
+        formats,
+        row_elements,
+        via_wrappers=True,
+        is_perf=is_perf,
+        perf_report=perf_report,
+        run_types=run_types,
+        loop_factor=loop_factor,
+    )
+
+
+def test_top32_rm_pack_state_repeats():
+    test_top32_rm(
+        FORMATS[0],
+        ELEMENTS_PER_CHUNK,
+        DestAccumulation.No,
+        loop_factor=2,
+    )
+
+
+def test_top32_rm_pre_sorted_tail_state_repeats():
+    test_top32_rm_pre_sorted(
+        PRE_SORTED_FORMATS[0],
+        ELEMENTS_PER_TILE + ELEMENTS_PER_CHUNK,
+        loop_factor=2,
+    )
