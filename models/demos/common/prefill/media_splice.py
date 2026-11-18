@@ -103,6 +103,7 @@ class MediaSpliceBuffers:
         self._tables.clear()
         self.table = None
 
+    # TODO(#66176): write each forward's image rows straight to each chip's shard, without the host table.
     def refill(self, plan: SplicePlan) -> None:
         self.table, host, views = self.table_for(plan.height)
         cols = self.hidden // self.tp
