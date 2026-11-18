@@ -101,8 +101,9 @@ SliceRmRuntimeArgs get_slice_runtime_args_rm(
     uint32_t unpadded_row_size_bytes_offset = tt::round_up(unpadded_row_size_bytes, alignment);
 
     // A sharded RM page is one shard row, which an ND shard narrower than the tensor makes shorter than a
-    // tensor row, so every sharded layout takes the buffer's page size. Interleaved falls back to the row:
-    // padded for the reader tensor, unpadded for the writer tensor.
+    // tensor row. HEIGHT and ND sharded tensors take the buffer's aligned page size; BLOCK and WIDTH sharded
+    // tensors take the unaligned shard_W * element_size. Interleaved falls back to the row: padded for the
+    // reader tensor, unpadded for the writer tensor.
     using ttnn::operations::data_movement::per_shard_page_size_bytes;
     const uint32_t reader_page_size = per_shard_page_size_bytes(input_tensor, padded_row_size_bytes);
 

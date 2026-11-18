@@ -24,6 +24,10 @@ uint32_t get_rm_start_offset(const Tensor& tensor, const ttnn::Shape& slice_star
 uint32_t get_tiled_start_offset(const Tensor& input_tensor, const ttnn::Shape& slice_start, bool round_up = false);
 uint32_t get_tiled_start_offset(const ttnn::Shape& input_shape, const ttnn::Shape& slice_start, bool round_up = false);
 
+// Rejects a CONTIGUOUS_1D ND output spec whose shard count is not a multiple of its core count. Shared by the
+// device op and slice()'s composite fallback, which converts into the requested config without running the op.
+void validate_contiguous_nd_output_spec(const tt::tt_metal::TensorSpec& output_spec);
+
 }  // namespace ttnn::operations::experimental::quasar
 
 namespace ttnn::prim::qsr {
