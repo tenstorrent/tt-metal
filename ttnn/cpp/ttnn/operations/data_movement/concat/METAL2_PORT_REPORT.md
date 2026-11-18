@@ -58,3 +58,64 @@ No port capitulation. All three of the brief's unproven seams held (see Successe
 - **Test coverage, aliasing:** no suite test sends aliased inputs (`concat([x, y, x])`) through S2SMulti. An ad-hoc script outside the repo covered it, on 3-input height-sharded (width concat) and width-sharded (height concat) TILE bf16 over 2 cores. It ran distinct inputs as a miss then a hit with fresh buffers, `[0,1,0]` as a miss then a hit with fresh buffers, `[0,0,0]`, then distinct again. All 12 cases matched `torch.cat` exactly, and cache-entry counts showed the aliasing signature keying separate programs. Candidate: a sharded case in `test_concat_cache_aliasing.py`.
 - **Test coverage, dead branches:** `test_concat_iterative.py::test_concat_mid_tensor_1` has `sharded_width` / `sharded_height` / `sharded_block` branches, but its only `input_mem_config` value is `interleaved_dram`, so they never run.
 - **Shared kernel touches:** none. `reader_s2s_tensor_concat.cpp` is bound only by this factory and was modified in place.
+
+---
+
+# Port Report — concat (`ConcatBlockShardedProgramFactory`)
+
+## Outcome
+
+**`PORTED`** — `ConcatBlockShardedProgramFactory` only, to `ProgramSpecFactoryConcept`. Before and after the port, the same 9 concat test files gave identical per-test results (1,080 passed, 84 skipped, 4 xfailed, 1 failed), with Watcher on and the Metal 2.0 legality checks forced on and proven live. 78 of those tests reach this factory, all passing before and after. The one failure is unrelated and identical on both sides (below). Device kernel time is unchanged within noise.
+
+## Provenance
+
+- **Recipe docs:** the same untracked recipe copy as the S2SMulti port; not pinnable.
+- **Brief:** `BlockShardedHandoff.md`, written against `0de8c7f` and PR #62362's Oct 30 revision; appended to `METAL2_PORT_BRIEF.md`.
+- **Port base:** `e38dfa66343` (origin/main, 2026-11-18), which contains #62362 (`9490a5f3a2d`). Branch `edwinlee/port_concat`, rebased onto it from `0de8c7f3aad`.
+
+## TTNN ProgramFactory
+
+- **Concept realized:** `ProgramSpecFactoryConcept`; `create_program_artifacts` returns `ProgramArtifacts{spec, run_params}`. No `override_runtime_arguments`.
+- **Custom hash:** `concat_device_operation.cpp:102-136`, left intact. No `TensorSpec` legality failure on cache hits across the run.
+- **Device-op class edits:** none. **Pybind entry points removed:** none.
+
+## Handoff points
+
+- **Not a port issue, reproduced before the port:** `test_concat_codegen_routing.py`, the 49-input bfloat8_b case, fails with Watcher on because `reader_concat_interleaved_start_id` (the interleaved codegen route, untouched here) overflows NCRISC code space (0x4230 > 0x4000). It passes with Watcher off. Owner: concat codegen / interleaved reader.
+
+## Successes
+
+- **Every unproven seam in the brief held.** `with_input` combined with `ShardView::ResolvedShard` compiles and is byte-correct; runtime array args with per-RISC sizes and zero padding work, including a writer with zero copies on every core (array size 1).
+- **Brief, "temporary development assert":** comparing each shard id's core (`BufferDistributionSpec::cores()[id]`) against the legacy coordinate table caught the brief's `shards_per_row` error on the first TILE test, before any data was wrong. It was then silent across all 78 reaching tests and removed before commit.
+- **Reach check:** a temporary log marker (not a throw) in the factory, read back per test from the logs, gave the baseline and the reach set in one run. Reach: `test_concat_block_sharded.py` (63), `test_concat_memory_configs_and_layouts.py` (10), unit `test_concat.py` (5: `…_leading_dims_block_sharded` ×4, `…_height_interleaves_leading_dims` ×1). Covered: ROW_MAJOR and COL_MAJOR, width and height concat, RM and TILE, ragged widths and heights, leading dims. No case had to be added.
+- **Binary size (brief asked):** NCRISC `.text` with Watcher on is 3,024 B legacy, 3,876 B ported at ≤ 4 inputs, and 10,724 B at the 16-input cap (checked with an ad-hoc 16-input RM/TILE × width/height run, all exact). Limit 16,384 B.
+- **Performance (brief asked):** device kernel duration, median of 20 runs after 3 warm-ups, Watcher and DPRINT off, WH n150, 4 × 4 grid:
+
+  | case | before (ns) | after (ns) | change |
+  |---|---|---|---|
+  | RM width, narrow 16 B rows | 918 | 882 | −3.9% |
+  | RM height, narrow | 951 | 908 | −4.5% |
+  | RM width, 4 inputs | 2,930 | 2,921 | −0.3% |
+  | RM height, 4 inputs | 2,988 | 2,995 | +0.2% |
+  | RM height, 8 leading indices | 2,502 | 2,310 | −7.6% |
+  | RM width, COL_MAJOR | 948 | 914 | −3.5% |
+  | RM height, COL_MAJOR | 921 | 894 | −3.0% |
+  | TILE width | 729 | 738 | +1.2% |
+  | TILE height | 720 | 740 | +2.9% |
+  | TILE width, COL_MAJOR | 1,034 | 1,055 | +2.0% |
+  | TILE height, 3 inputs, COL_MAJOR | 1,310 | 1,304 | −0.4% |
+
+  Small RM copies (many rows per copy) are slightly faster; TILE cases (few rows per copy, so per-copy cost shows) move by ±3%, within run-to-run spread (minimums move in both directions).
+- **Anti-pattern self-audit** (3 port files, 45 op source files): buffer address / `Buffer*` in factory 0; legacy kernel idioms (`get_arg_val`, `get_compile_time_arg_val`, `TensorAccessorArgs`, `DataflowBuffer`, `UnicastEndpoint`, `bank_base`) 0; CB names 0; positional CTAs 0; multi-binding 0; `.md` citations 0; `tt_metal/` files in diff 0. `TT_FATAL` census: factory 12 → 14, all 12 legacy checks kept; the two new ones are the brief's output core-order check and a "has a distribution spec" guard. `hw_config` reader/writer defaults as legacy; no `opt_level` either side (DM O2).
+
+## Friction
+
+- **Brief error: `shards_per_row` from the distribution spec.** `div_up(tensor_shape_in_pages()[-1], shard_shape_in_pages()[-1])` is right for RM (`[64, 2]` / `[32, 1]`) but wrong for TILE: the spec can merge dimensions, so a 2 × 2 grid of one-tile shards is `[4]` / `[1]` and shard (1, 0) became id 4 instead of 2. Shard ids still run along shard rows; only the row width has to come from the tensor's 2D physical width over the shard width. Anyone porting from coordinates to shard ids elsewhere should not read the grid shape off `tensor_shape_in_pages()`.
+- **Recipe gap: the profiler refuses to start while DPRINT is enabled** (`Both DPRINT and Profiler cannot be enabled`). Perf runs need `TT_METAL_DPRINT_CORES` unset.
+- **Recipe gap: `python -m tracy` with a test file outside the repo** segfaults in the `device` fixture (the repo `conftest.py` isn't found); the perf script had to sit under `tests/` temporarily.
+- **Rebase cost:** #63424 moved the Metal 2.0 headers out of `experimental/`, which broke the already-ported S2SMulti factory's includes after the rebase. Fixed in a separate commit, mirroring what #63424 did to its siblings.
+
+## Open items for downstream
+
+- **16-input cap is now arbitrary here too.** No CB ids remain; the real limits are the RTA budget (31 copies per RISC) and kernel size (10.7 KB of 16 KB at 16 inputs, Watcher on). `calculate_max_tensors_per_concat` (`concat_device_operation.cpp:378-382`) still cites CB ids.
+- **Per-node arrays are padded to the busiest core.** For uneven copy counts every core carries the longest list's RTA words. Harmless at today's sizes.

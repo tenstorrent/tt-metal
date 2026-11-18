@@ -88,3 +88,79 @@ No buffer-address RTAs, semaphore RTAs, `TensorAccessorArgs`, or page-size 3rd a
 - Kernel-side whitelist deviation, authorised by the brief: the transfer endpoints change (`UnicastEndpoint{my_x,my_y,addr}` → `LocalTensorAccessor` + `offset_bytes`). The loopback NoC address an LTA resolves (`internal/local_mem/noc_traits.h:28-38`) is built from exactly the same `UnicastEndpoint{my_x, my_y, addr}`, so the transfers are byte-identical.
 - `TT_FATAL(num_input_tensors <= 16, …)` (`:88`) stays with its limit; its message (which blames CB ids) is reworded per the brief.
 - Unproven seams (brief): LTA into `set_async_read_state`/`async_read_with_state` (no prior user), `make_local_tensor_accessors` (no ttnn caller), runtime array args (no ttnn caller). Stop and report if any fails.
+
+---
+
+# Port Plan — concat (`ConcatBlockShardedProgramFactory`)
+
+Second port in this op, 2026-11-18. Scope: `ConcatBlockShardedProgramFactory` and its kernel `reader_writer_block_sharded_concat.cpp` only. Port base: `e38dfa66343` (origin/main, 2026-11-18, includes #62362), branch `edwinlee/port_concat`. Brief: `BlockShardedHandoff.md`, appended to `METAL2_PORT_BRIEF.md`. Audit: RED, waived for this factory (see the audit's waiver note).
+
+## Legacy Inventory
+
+### Legacy factory shape
+- Concept: `ProgramDescriptorFactoryConcept` (`create_descriptor`, `concat_block_sharded_program_factory.hpp:13`), a struct in `program_factory_t` (`concat_device_operation.hpp:36`).
+- Variants: one factory; RM vs TILE (unit size) and width vs height concat change only values.
+- Custom `compute_program_hash` at `concat_device_operation.cpp:102-136` — left intact.
+
+### Kernels
+| unique_id | source | core_ranges | CTAs (positional) | CTAs (named) | RTAs | CRTAs | defines | opt_level | config |
+|---|---|---|---|---|---|---|---|---|---|
+| reader | `kernels/dataflow/reader_writer_block_sharded_concat.cpp` | `all_cores` = input 0 shard grid (one rectangle) | `[0] cb_dst_id=16` (`:443`) | none | per core: `num_transfers`, then 9 per transfer `{src_noc_x, src_noc_y, src_cb_id, src_l1_offset, src_stride, dst_offset, dst_stride, copy_size, num_rows}` — first `ceil(total/2)` of the core's transfers (`:463-491`) | none | none | unset → O2 | `ReaderConfigDescriptor{}` → RISCV_1 / NOC_0 |
+| writer | same source | `all_cores` | same | none | same layout, the remaining transfers | none | none | unset → O2 | `WriterConfigDescriptor{}` → RISCV_0 / NOC_1 |
+
+### CBs
+| index | total_size | core_ranges | data_format | page_size | backing |
+|---|---|---|---|---|---|
+| 0..N-1 | `unit_size * input shard units` | `all_cores` | output dtype | `unit_size` | `.buffer = input_tensors[i].buffer()` (borrowed) |
+| 16 | `unit_size * output shard units` | `all_cores` | output dtype | `unit_size` | `.buffer = output.buffer()` (borrowed) |
+
+Kernel-touch census: input CB id comes from a runtime arg (`DataflowBuffer src_dfb(src_dfb_id)`, kernel `:44`), used only for `get_read_ptr()`, and that *local* address is then read on a *remote* core (`:45, 55`); output CB only `get_write_ptr()` (`:27-28`). No credit calls. All sync-free address sources.
+
+### Semaphores / Tensor accessors
+none / none.
+
+### Work split
+No `split_work_to_cores`. Every core of the grid builds its own output shard; "Pass 1" (`:258-385`) lists each core's rectangle copies, many from other cores' input shards. Reader gets `ceil(total/2)` of a core's copies, writer the rest.
+
+### Shared kernels
+none — the kernel is bound only by this factory.
+
+### Flags
+- `physical_cores` table + `shard_core(r, c)` (`:240-256`) assume core `(start_x + gx, start_y + gy)` holds shard `(r, c)` at the same L1 address on every core.
+- `calculate_max_tensors_per_concat` (`concat_device_operation.cpp:378-382`) cites the CB-id ceiling for the 16-input cap; device op is off-limits, the cap stays.
+
+## TTNN ProgramFactory
+- Concept: `ProgramSpecFactoryConcept` (`create_program_artifacts` → `ProgramArtifacts`). Header switches to `ttnn/metal_v2_artifacts.hpp`.
+- Custom hash left intact. No `override_runtime_arguments`, no pybind `create_descriptor`, no op-owned tensors.
+
+## Planned Spec Shape
+- KernelSpecs `reader`, `writer` — one source, 1:1 with legacy. Each binds `input_0..input_{N-1}` and `output` and declares `TensorBindingSequence{"inputs", input_0..}`.
+- DataflowBufferSpecs: none. SemaphoreSpecs: none.
+- TensorParameters: `input_0..input_{N-1}`, `output`.
+- WorkUnitSpecs: `main` = `{reader, writer}` over `all_cores`.
+
+## Preserved Multiplicity
+| legacy KernelDescriptors | KernelSpecs | WorkUnitSpecs | shared resources |
+|---|---|---|---|
+| reader, writer of one source, different per-core transfer lists | `reader`, `writer` | `main` | none; both bind every TensorParameter |
+
+## Dropped Plumbing
+| legacy location | legacy form | Metal 2.0 replacement |
+|---|---|---|
+| factory `:214-226`, kernel `:44-45` | input CB *i* borrowed; `DataflowBuffer(src_dfb_id).get_read_ptr()` read on the remote core | `TensorBinding` per input + sequence `inputs`; kernel `with_input` → `TensorAccessor(std::get<I>(tensor::inputs))` → `ShardView(..).shard(shard_id, noc_id)` |
+| factory `:228-238`, CTA 0, kernel `:24-28` | output CB 16, `cb_dst_id` CTA | `TensorBinding{output}`; kernel `LocalTensorAccessor<uint32_t>(tensor::output)` |
+| factory `:240-256`, RTAs `src_noc_x/y`, kernel `:48-56` | physical-core table, raw `UnicastEndpoint{x, y, addr}` | per-copy `shard_id = shard_row × shards_per_row + shard_col` |
+| RTAs, kernel `:30-42` | `num_transfers` + 9 positional words per transfer | named RTA `num_copies` + 8 per-node runtime **array** args (`input_index, shard_id, src_offset, src_stride, dst_offset, dst_stride, copy_size, num_rows`), each sized to that RISC's max copy count over cores (≥ 1) and zero-padded |
+
+## Applied Patterns
+- Tensor binding sequence + `with_input` (runtime → compile-time input index), from the ported interleaved reader.
+- Remote shard by id via `ShardView::ResolvedShard` (#62362): one lookup per copy, a 32-bit add per row.
+- Dual-instance same-source work split, from `ConcatS2SRMProgramFactory` / S2SMulti.
+- Runtime array args with padding (the brief's `reshard_reader` pattern).
+
+## Deferred / Flagged
+- Kernel-side whitelist deviation, authorised by the brief: transfer endpoints change (raw coordinates → `ResolvedShard` source, LTA destination).
+- **Brief correction:** the brief takes `shards_per_row` from the distribution spec's `tensor_shape_in_pages()[-1] / shard_shape_in_pages()[-1]`. That is wrong for TILE: the spec can merge dimensions (a 2 × 2 grid of one-tile shards is `[4]` pages in 1D), so it gave id 4 for shard (1, 0). Taken from the tensor's 2D physical width over the shard width instead; the temporary core check confirmed it on every reaching test.
+- New `TT_FATAL`s: output core order (brief), and "tensor has a distribution spec". The brief's temporary shard-id→core development assert was used during testing and removed before commit.
+- RTA budget `TT_FATAL`s re-derived at 8 words per copy: 31 copies per RISC (was 28).
+- 16-input cap kept (`concat_device_operation.cpp:232`, `:449`).

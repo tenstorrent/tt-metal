@@ -30,7 +30,7 @@ Kernels used only by the already-ported factories (`reader_concat_*_interleaved_
 | Field | Value |
 |---|---|
 | **Op directory** | `ttnn/cpp/ttnn/operations/data_movement/concat` |
-| **Overall** | **RED** — 3/7 factories already ported; the remaining 4 are all blocked; no portable subset. **2026-11-12: GREEN (user waiver) for `ConcatS2SMultiProgramFactory` only** — see the waiver note below the table |
+| **Overall** | **RED** — 3/7 factories already ported; the remaining 4 are all blocked; no portable subset. **2026-11-12: GREEN (user waiver) for `ConcatS2SMultiProgramFactory`; 2026-11-18: GREEN (user waiver) for `ConcatBlockShardedProgramFactory`** — see the waiver notes below the table |
 | **DOps / Factories** | `ConcatDeviceOperation` → done: `ConcatProgramFactory`, `ConcatS2SRMProgramFactory`, `ConcatS2STiledProgramFactory` · audited: `ConcatS2SMultiProgramFactory`, `ConcatS2IProgramFactory`, `ConcatBlockShardedProgramFactory`, `ConcatTiledUnalignedProgramFactory` |
 | *Prereqs* — Device 2.0 (every kernel used) | Yes for every kernel that exists. S2I's reader `reader_s2i_width.cpp` is missing from the tree — cannot be assessed (moot: S2I is dead code) |
 | *Prereqs* — Cross-op escapes | Ok (in-family `common/kernels/common.hpp`, shared `kernel_lib` — no borrowed kernel files) |
@@ -52,6 +52,8 @@ Kernels used only by the already-ported factories (`reader_concat_*_interleaved_
 | *Port work* — CB endpoints | TiledUnaligned: all legal (4 × 1P+1C FIFO). Others: skipped |
 
 > **Waiver (2026-11-12, Edwin):** `ConcatS2SMultiProgramFactory` proceeds to port as **GREEN (user waiver)**. Basis: the 2026-11-06 update below found every Metal 2.0 feature it needs on main, and the 2026-11-08 handoff (committed as `METAL2_PORT_BRIEF.md`) gives the redesign — a `TensorBindingSequence` over `LocalTensorAccessor`s replacing the runtime-indexed borrowed CBs. The other three audited factories stay RED. Concat changes between this audit's last check (`882c6e0953d`) and the port base (`0de8c7f3aad`): #63855 (`buffer()->alignment()` → `mesh_buffer().alignment()` in S2SMulti, cosmetic) and #64498 (validation matrix, outside the factory). Neither affects a finding.
+
+> **Waiver (2026-11-18, Edwin):** `ConcatBlockShardedProgramFactory` proceeds to port as **GREEN (user waiver)**, on the same basis as S2SMulti: the 2026-11-06 update found the features it needs on main, and the Block-sharded handoff (appended to `METAL2_PORT_BRIEF.md`) gives the redesign — inputs addressed by shard id through `ShardView::ResolvedShard` (#62362, merged 2026-11-18 as `9490a5f3a2d`) instead of borrowed CBs and a NoC coordinate table. Port base `e38dfa66343`. Concat changes since the S2SMulti port base: #65249 (row-major mixed L1/DRAM page overflow, `ConcatProgramFactory`) and #63424 (Metal 2.0 headers moved out of `experimental/`). Neither touches this factory. S2I and TiledUnaligned stay RED.
 
 ## Result
 
