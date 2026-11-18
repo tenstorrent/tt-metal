@@ -43,6 +43,7 @@ inline void calculate_lerp(
     const auto off_in1 = dst_index_in1 * dst_tile_size_sfpi;
     const auto off_in2 = dst_index_in2 * dst_tile_size_sfpi;
     const auto off_out = dst_index_out * dst_tile_size_sfpi;
+    const sfpi::vFloat half = 0.5f;
     // RNE constants, loaded once per call. Unassigned unless rounding, which also gates their use.
     sfpi::vUInt rne_bias;
     sfpi::vUInt rne_one;
@@ -50,24 +51,39 @@ inline void calculate_lerp(
         rne_bias = 0x7fffU;
         rne_one = 1;
     }
-    // lerp: out = input + weight * (end - input); lanes where end - input is not finite use
-    // (input - weight * input) + weight * end. No instruction reads the SFPMAD right before it.
-#pragma GCC unroll 8
-    for (int d = 0; d < ITERATIONS; d++) {
-        const sfpi::vFloat in0 = sfpi::dst_reg[off_in0];
-        const sfpi::vFloat in1 = sfpi::dst_reg[off_in1];
-        const sfpi::vFloat diff = in1 - in0;
-        const sfpi::vFloat in2 = sfpi::dst_reg[off_in2];
-        const sfpi::vFloat rem = in0 - in2 * in0;
-        const sfpi::vFloat diff_nan = diff - diff;  // 0 for finite diff, NaN otherwise
-        sfpi::vFloat res = in2 * in1 + rem;
-        v_if(diff_nan == 0.0f) { res = in0 + in2 * diff; }
-        v_endif;
+    auto finish = [&](const sfpi::vFloat half_res) {
+        sfpi::vFloat res = half_res * 2.0f;
         if constexpr (!is_fp32_dest_acc_en) {
             res = _lerp_bf16_rne_for_16b_store_(res, rne_bias, rne_one);
         }
-        sfpi::dst_reg[off_out].mode(ADDR_MOD_5) = res;
+        return res;
+    };
+    // lerp: out = input + weight * (end - input), evaluated at half scale as
+    // 2 * (input / 2 + weight * (end / 2 - input / 2)): for weight in [0, 1] no intermediate can
+    // overflow, and the power-of-two scalings are exact above the bottom binade, so the result is
+    // the same as the direct form wherever that one is finite.
+    //
+    // One row per iteration, rotated: row d is formed while row d - 1 is scaled back and stored,
+    // so no instruction reads the result of the SFPMAD right before it.
+    sfpi::vFloat half_res;
+    {
+        const sfpi::vFloat in0_half = sfpi::dst_reg[off_in0] * 0.5f;
+        const sfpi::vFloat in1 = sfpi::dst_reg[off_in1];
+        const sfpi::vFloat in2 = sfpi::dst_reg[off_in2];
+        const sfpi::vFloat diff_half = in1 * half - in0_half;
+        half_res = in2 * diff_half + in0_half;
     }
+#pragma GCC unroll 8
+    for (int d = 1; d < ITERATIONS; d++) {
+        const sfpi::vFloat in0_half = sfpi::dst_reg[off_in0 + 1] * 0.5f;
+        const sfpi::vFloat in1 = sfpi::dst_reg[off_in1 + 1];
+        const sfpi::vFloat prev = finish(half_res);
+        const sfpi::vFloat in2 = sfpi::dst_reg[off_in2 + 1];
+        const sfpi::vFloat diff_half = in1 * half - in0_half;
+        sfpi::dst_reg[off_out].mode(ADDR_MOD_5) = prev;
+        half_res = in2 * diff_half + in0_half;
+    }
+    sfpi::dst_reg[off_out].mode(ADDR_MOD_5) = finish(half_res);
 }
 
 }  // namespace ckernel::sfpu
