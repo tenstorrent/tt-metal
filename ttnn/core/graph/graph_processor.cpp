@@ -20,6 +20,7 @@
 #include <cstring>
 #include <fstream>
 #include <optional>
+#include <ranges>
 #include <sstream>
 #include <system_error>
 #include <unistd.h>
@@ -1350,8 +1351,8 @@ namespace {
 // active: popping the top unchecked would then remove that memory tracker.
 std::shared_ptr<GraphProcessor> innermost_graph_capture() {
     const auto& processors = tt::tt_metal::GraphTracker::instance().get_processors();
-    for (auto it = processors.rbegin(); it != processors.rend(); ++it) {
-        if (auto capture = std::dynamic_pointer_cast<GraphProcessor>(*it)) {
+    for (const auto& processor : std::views::reverse(processors)) {
+        if (auto capture = std::dynamic_pointer_cast<GraphProcessor>(processor)) {
             return capture;
         }
     }
@@ -1367,8 +1368,8 @@ void remove_graph_capture(const std::shared_ptr<GraphProcessor>& capture) {
         tracker.pop_processor();
     }
     tracker.pop_processor();
-    for (auto it = above.rbegin(); it != above.rend(); ++it) {
-        tracker.push_processor(*it);
+    for (const auto& processor : std::views::reverse(above)) {
+        tracker.push_processor(processor);
     }
 }
 
