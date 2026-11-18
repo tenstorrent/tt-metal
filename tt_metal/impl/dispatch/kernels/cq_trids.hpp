@@ -25,13 +25,18 @@ constexpr uint32_t PREFETCH_FETCH_Q_READ_COUNT = 4U;
 // Prefetch: relay_linear scratch double-buffer halves.
 constexpr uint32_t PREFETCH_RELAY_LINEAR_READ[2] = {6U, 7U};
 
+// Dispatch: writes sourced from the dispatch CB, alternating per CB block (see CBReaderWithReleasePolicy).
+constexpr uint32_t DISPATCH_CB_WRITE[2] = {8U, 9U};
+
 static_assert(PREFETCH_EXEC_BUF_READ > DEFAULT);
 static_assert(PREFETCH_FETCH_Q_READ_BASE > PREFETCH_EXEC_BUF_READ);
 static_assert(PREFETCH_RELAY_LINEAR_READ[0] >= PREFETCH_FETCH_Q_READ_BASE + PREFETCH_FETCH_Q_READ_COUNT);
 static_assert(PREFETCH_RELAY_LINEAR_READ[1] == PREFETCH_RELAY_LINEAR_READ[0] + 1U);
+static_assert(DISPATCH_CB_WRITE[0] > PREFETCH_RELAY_LINEAR_READ[1]);
+static_assert(DISPATCH_CB_WRITE[1] == DISPATCH_CB_WRITE[0] + 1U);
 
 // Highest trid in use. Must fit in NOC_MAX_TRANSACTION_ID on every arch.
-constexpr uint32_t MAX_USED = PREFETCH_RELAY_LINEAR_READ[1];
+constexpr uint32_t MAX_USED = DISPATCH_CB_WRITE[1];
 
 }  // namespace cq_trids
 
