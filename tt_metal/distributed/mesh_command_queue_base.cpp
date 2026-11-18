@@ -455,7 +455,8 @@ void MeshCommandQueueBase::enqueue_read_shards_nolock(
     ScopedTransferStats transfer_stats(
         *this, HostTransferCategory::BufferReadFastDispatch, shard_device_range(shard_data_transfers));
 
-    // A sharded read issues a command sequence per core; an interleaved one issues too little to pay for the workers.
+    // A sharded read issues a command sequence per core; an interleaved one issues one per device, too few to pay for
+    // the workers on small meshes.
     const bool fan_out = is_sharded(buffer->device_local_config().sharding_args.buffer_layout());
     bool has_pinned_memory = false;
     std::vector<uint32_t> local_shards;
