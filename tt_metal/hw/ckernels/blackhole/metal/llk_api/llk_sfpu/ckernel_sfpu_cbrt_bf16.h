@@ -18,7 +18,7 @@ inline bool bf16_dest_cbrt() {
     return false;
 #endif
 }
-// calculate_newton_root's instructions in a stall-filling order, constants held in LRegs.
+// The kernel's instructions in a stall-filling order, constants held in LRegs.
 inline void calculate_cbrt_bf16_scheduled() {
     TTI_SFPLOAD(3, 0, 7, 0);
     TTI_SFPLOAD(0, 0, 7, 2);
