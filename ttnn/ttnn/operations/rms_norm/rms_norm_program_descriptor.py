@@ -43,6 +43,12 @@ OUT_RM_DEPTH = 2  # cb_out_rm depth in tile-rows
 READ_CHUNK_TILES = 8  # reader tiles per barrier+push (TILE)
 GAMMA_CHUNK_DEPTH = 2  # cb_gamma / cb_gamma_rm depth in W-chunks when γ streams (w_chunk_tiles < core_w_tiles)
 SHARDED_CB_MARGIN_BYTES = 16 << 10  # slack below the resident shard buffers (CB alignment / rounding)
+# W_SPLIT rendezvous knobs (Refinement 3; op_design.md lamps L4 / L5):
+GATHER_COL_FACES = True  # L4: gather only faces 0 + 2 of each column-0-valid partial (False: whole tiles)
+# L5: no receiver-ready round trip on the rinv multicast. Safe by the causal chain: a core sends partial(b+1) only
+# after its normalize(b) consumed cb_rinv(b) (and its reader cleared round b's data-ready flag), and the root sends
+# rinv(b+1) only after every partial(b+1) landed — so the landing slot and the flag are always free.
+RINV_MCAST_HANDSHAKE = False
 
 # ---- CB indices (semantic names) ----
 CB_X_RM = 0
@@ -635,6 +641,7 @@ def create_program_descriptor(input_tensor, gamma, output_tensor, epsilon, compu
         dram_align,  # 22
         wc,  # 23 w_chunk_tiles (RM staging / γ chunk)
         int(gamma_streams),  # 24 γ streamed per block in w_chunk_tiles chunks
+        int(GATHER_COL_FACES),  # 25 L4: partial gather sends faces 0 + 2 only
     ]
     writer_ct.extend(ttnn.TensorAccessorArgs(output_tensor).get_compile_time_args())
     writer_ct.extend(
@@ -680,7 +687,7 @@ def create_program_descriptor(input_tensor, gamma, output_tensor, epsilon, compu
         order = ttnn.McastCoreOrder.ColumnMajor if (shard is not None and shard.col_major) else ttnn.McastCoreOrder.RowMajor
         mcast = ttnn.Mcast(
             device,
-            ttnn.McastConfig(noc=ttnn.NOC.NOC_1),
+            ttnn.McastConfig(noc=ttnn.NOC.NOC_1, handshake=RINV_MCAST_HANDSHAKE),
             crs,
             k,
             ttnn.McastFixedSenderConfig(sender_index=0),

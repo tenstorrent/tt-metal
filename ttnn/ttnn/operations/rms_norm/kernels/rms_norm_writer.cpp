@@ -71,8 +71,12 @@ void kernel_main() {
     static_assert(!gamma_rm_staged || es_g % 2 == 0, "staged RM γ elements are 2 or 4 bytes");
     constexpr uint32_t w_chunk_tiles = get_compile_time_arg_val(23);
     constexpr bool gamma_streams = get_compile_time_arg_val(24) != 0;
+    // L4: a partial is column-0-valid (REDUCE_ROW output) -> send only faces 0 and 2 (rows 0-15 / 16-31 of columns
+    // 0-15), half the gather fan-in bytes into the root. The root's slots keep stale faces 1 / 3, which the
+    // elementwise combine carries along and nothing downstream reads (finalize consumes column 0 only).
+    constexpr bool gather_col_faces = get_compile_time_arg_val(25) != 0;
     constexpr uint32_t num_w_chunks = core_w_tiles / w_chunk_tiles;  // RM pitch is a chunk multiple
-    constexpr auto y_args = TensorAccessorArgs<25>();
+    constexpr auto y_args = TensorAccessorArgs<26>();
     constexpr auto g_args = TensorAccessorArgs<y_args.next_compile_time_args_offset()>();
     constexpr auto mcast = McastArgs<
         get_named_compile_time_arg_val("rinv_mcast_ct_offset"),
@@ -175,11 +179,16 @@ void kernel_main() {
                 noc_async_read(g_acc.get_noc_addr(w_start + c0 + c), l1 + c * g_tile_bytes, g_tile_bytes);
             }
         } else {
-            // TILE γ: only row 0 matters (row broadcast) -> read face0-row0 and face1-row0 of each valid tile.
+            // TILE γ: only row 0 matters (the Row-broadcast FPU op reads row 0 of srcB faces 0/1 only) -> read
+            // face0-row0 and face1-row0 of each valid tile; rows 1-31 stay as they are (never read). Only the
+            // nominal tail tiles past the slice's valid range are zeroed.
             CircularBuffer g_buf(cb_gamma);
             cb_reserve_back(cb_gamma, w_chunk_tiles);
-            noc.async_write_zeros(g_buf, w_chunk_tiles * g_tile_bytes);
-            noc.write_zeros_l1_barrier();
+            if (cv < w_chunk_tiles) {
+                noc.async_write_zeros(
+                    g_buf, (w_chunk_tiles - cv) * g_tile_bytes, {.offset_bytes = cv * g_tile_bytes});
+                noc.write_zeros_l1_barrier();
+            }
             const uint32_t l1 = get_write_ptr(cb_gamma);
             constexpr uint32_t face_row_bytes = FACE_DIM * es_g;
             constexpr uint32_t face1_offset = FACE_DIM * FACE_DIM * es_g;
@@ -195,12 +204,16 @@ void kernel_main() {
         gamma_issue(j);
         gamma_commit();
     };
-    // Resident γ (whole kernel). LOCAL: loaded up front. W_SPLIT: issued right after block 0's partial send and
-    // committed after the root's multicast, so neither the issue nor the γ DRAM latency delays the gather.
+    // Resident γ (whole kernel). LOCAL: loaded up front. W_SPLIT: reads issued up front (while compute is still
+    // producing the first partial), committed right after block 0's partial send, so the γ DRAM latency never
+    // delays the gather and γ is resident long before normalize (or the x·γ prescale) needs it.
     constexpr bool gamma_resident = has_gamma && !gamma_streams;
     constexpr bool gamma_deferred = gamma_resident && is_wsplit;
-    if constexpr (gamma_resident && !gamma_deferred) {
-        load_gamma_chunk(0);
+    if constexpr (gamma_resident) {
+        gamma_issue(0);
+        if constexpr (!gamma_deferred) {
+            gamma_commit();
+        }
     }
 
     // ---------------- W_SPLIT plumbing ----------------
@@ -228,17 +241,23 @@ void kernel_main() {
             cb_wait_front(cb_partial, rows);
             const uint32_t src = get_read_ptr(cb_partial);
             for (uint32_t r = 0; r < rows; ++r) {
-                noc_async_write(
-                    src + r * int_tile_bytes,
-                    get_noc_addr(root_x, root_y, gathered_base + (r * w_split + line_pos) * int_tile_bytes),
-                    int_tile_bytes);
+                const uint32_t s = src + r * int_tile_bytes;
+                const uint64_t d =
+                    get_noc_addr(root_x, root_y, gathered_base + (r * w_split + line_pos) * int_tile_bytes);
+                if constexpr (gather_col_faces) {
+                    constexpr uint32_t face_bytes = int_tile_bytes / 4;
+                    noc_async_write(s, d, face_bytes);                                    // face 0
+                    noc_async_write(s + 2 * face_bytes, d + 2 * face_bytes, face_bytes);  // face 2
+                } else {
+                    noc_async_write(s, d, int_tile_bytes);
+                }
             }
             noc_async_write_barrier();
             sem_partials.up(noc, root_x, root_y, 1);
             cb_pop_front(cb_partial, rows);
             if constexpr (gamma_deferred) {
                 if (b == 0) {
-                    gamma_issue(0);
+                    gamma_commit();
                 }
             }
 
@@ -252,12 +271,6 @@ void kernel_main() {
                 }
                 cb_pop_front(cb_rinv_bcast, rows);
                 sem_rinv_local.set(b + 1);  // send() barriered the loopback copy: own cb_rinv holds rinv(b)
-            }
-        }
-
-        if constexpr (gamma_deferred) {
-            if (b == 0) {
-                gamma_commit();
             }
         }
 
@@ -340,7 +353,7 @@ void kernel_main() {
     }
     if constexpr (gamma_deferred) {
         if (num_blocks == 0) {
-            load_gamma_chunk(0);
+            gamma_commit();
         }
     }
     (void)es;
