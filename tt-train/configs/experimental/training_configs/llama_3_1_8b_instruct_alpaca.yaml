@@ -1,7 +1,7 @@
 # Full fine-tuning of Llama 3.1 8B Instruct on Alpaca, on a single chip.
 #
-#   python -m ttml.unified_trainer \
-#     --config tt-train/configs/training_configs/unified_trainer/llama_3_1_8b_instruct_alpaca.yaml
+#   python -m ttml.experimental.trainer \
+#     --config tt-train/configs/experimental/training_configs/llama_3_1_8b_instruct_alpaca.yaml
 #
 # No model.lora section: every weight is trained.
 model:

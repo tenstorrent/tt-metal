@@ -110,6 +110,6 @@ class CheckpointConfig(BaseModel):
     format: CheckpointFormat = Field(default_factory=CheckpointFormat)
 
     # Checkpoints go to <project_dir>/checkpoints/.
-    project_dir: str = "runs/unified_trainer"
+    project_dir: str = "runs"
     # Saved at the end of the run unless save_strategy is "none".
     final_checkpoint_name: str = "final"

@@ -1,7 +1,7 @@
 # Full fine-tuning of Llama 3.2 1B Instruct on SST-2, on a single chip.
 #
-#   python -m ttml.unified_trainer \
-#     --config tt-train/configs/training_configs/unified_trainer/llama_3_2_1b_instruct_sst2.yaml
+#   python -m ttml.experimental.trainer \
+#     --config tt-train/configs/experimental/training_configs/llama_3_2_1b_instruct_sst2.yaml
 #
 # No model.lora section: every weight is trained. Checkpoints are HuggingFace model
 # directories under <project_dir>/checkpoints/.

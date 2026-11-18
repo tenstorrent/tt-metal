@@ -10,7 +10,7 @@ from ...utils.sft.templates.custom import custom_prompt_and_response, resolve_co
 from .base import DatasetProvider
 
 if TYPE_CHECKING:
-    from ttml.unified_trainer.configs import SFTTrainerConfig
+    from ttml.experimental.trainer.configs import SFTTrainerConfig
 
 
 class CustomProvider(DatasetProvider):

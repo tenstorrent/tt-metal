@@ -2,7 +2,7 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""python -m ttml.unified_trainer --config <recipe.yaml> [--trainer sft] [--set dotted.key=value ...]"""
+"""python -m ttml.experimental.trainer --config <recipe.yaml> [--trainer sft] [--set dotted.key=value ...]"""
 
 from __future__ import annotations
 
@@ -16,7 +16,7 @@ from .implementations import TRAINERS
 
 def main(argv: Optional[Sequence[str]] = None) -> None:
     parser = argparse.ArgumentParser(
-        prog="python -m ttml.unified_trainer", description="Fine-tune an HF model on ttml."
+        prog="python -m ttml.experimental.trainer", description="Fine-tune an HF model on ttml."
     )
     parser.add_argument("--config", required=True, help="YAML recipe: the fields of the trainer's config")
     parser.add_argument(

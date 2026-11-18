@@ -1,8 +1,8 @@
-# Unified Trainer
+# Productization of Training
 
-`ttml.unified_trainer` exists to productize training. A run is a config a product can validate, start, and run
-again, from the command line or from a service. tt-inference-server builds one trainer and runs one job after
-another on it; the same config drives both.
+The experimental trainer, `ttml.experimental.trainer`, exists to productize training. A run is a config a product
+can validate, start, and run again, from the command line or from a service. tt-inference-server builds one
+experimental trainer and runs one job after another on it; the same config drives both.
 
 Training is productized by splitting it into components that are built and improved on their own. The training
 loop, the model, the dataset, the optimizer, and checkpoints each have their own code and their own contract. A
@@ -13,26 +13,27 @@ that joins them stays put.
 
 | Component | Built on its own as |
 |---|---|
-| Training loop | A trainer (`SFTTrainer` so far) in `ttml/unified_trainer/`. It owns the loop and the job lifecycle a host calls: `setup`, `train`, `cleanup`. |
+| Training loop | A trainer (`SFTTrainer` so far) in `ttml/experimental/trainer/`. It owns the loop and the job lifecycle a host calls: `setup`, `train`, `cleanup`. |
 | Model | A model provider in `ttml/models/provider/`. It builds the model for an HF hub id, checks that the config can train it, and loads and exports its weights. |
 | Dataset | A dataset provider in `ttml/datasets/provider/`. It serves one dataset as the batches the loop consumes. |
-| Optimizer | An entry in `OPTIMIZERS` (`ttml/unified_trainer/configs/optimizer.py`), selected by the `optimizer` section. It names which weights train, and with which optimizer and settings. |
+| Optimizer | An entry in `OPTIMIZERS` (`ttml/experimental/trainer/configs/optimizer.py`), selected by the `optimizer` section. It names which weights train, and with which optimizer and settings. |
 | Checkpoints | The `checkpoint` section, written and read by the model provider. It names when to save, which checkpoints to keep, and which weights a run starts from. |
 
 A new model, dataset, optimizer, or trainer is registered next to the ones that exist. The rest of this document
 is the join as it stands today: what a run trains, the config that selects the components, and how to add one.
 
-`unified_trainer` is a working name. The existing `ttml.trainers` package is unchanged and works as before.
+The experimental trainer lives under `ttml.experimental` until it moves into the main `ttml` package. The existing
+`ttml.trainers` package is unchanged and works as before.
 
 ---
 
 ## Quick start
 
-From the command line, with a recipe from `tt-train/configs/training_configs/unified_trainer/`:
+From the command line, with a recipe from `tt-train/configs/experimental/training_configs/`:
 
 ```bash
-python -m ttml.unified_trainer \
-  --config tt-train/configs/training_configs/unified_trainer/llama_3_2_1b_instruct_sst2_lora.yaml \
+python -m ttml.experimental.trainer \
+  --config tt-train/configs/experimental/training_configs/llama_3_2_1b_instruct_sst2_lora.yaml \
   --set stopping_criteria.limit=100 --set model.lora.r=8
 ```
 
@@ -42,7 +43,7 @@ Each `--set key=value` overrides one field; dotted keys reach into sections, and
 From Python:
 
 ```python
-from ttml.unified_trainer import CheckpointCallback, MetricsCallback, SFTTrainer, load_config
+from ttml.experimental.trainer import CheckpointCallback, MetricsCallback, SFTTrainer, load_config
 
 trainer = SFTTrainer(callbacks=[MetricsCallback(), CheckpointCallback()])
 try:
@@ -234,7 +235,7 @@ The `checkpoint` section:
 | `rotation_strategy` | `type: last` | Which checkpoints to keep; see below. |
 | `init_strategy` | unset | A checkpoint to start from; see [Starting from a checkpoint](#starting-from-a-checkpoint). Unset starts from the pretrained weights. |
 | `format` | `type: hf` | How a checkpoint stores the model; see above. |
-| `project_dir` | `runs/unified_trainer` | Checkpoints go in `<project_dir>/checkpoints/`. |
+| `project_dir` | `runs` | Checkpoints go in `<project_dir>/checkpoints/`. |
 | `final_checkpoint_name` | `final` | |
 
 Each strategy is a section whose `type` picks it, and with it the other fields it takes:
@@ -296,9 +297,9 @@ It takes effect with or without `CheckpointCallback`, and a checkpoint that does
 
 ## Running inside a service
 
-This is the product surface. A host hands the trainer a config, and the trainer joins the training loop, the
-model, the dataset, the optimizer, and the checkpoints that config names. The host builds one trainer with its
-callbacks and runs each job as:
+This is the product surface. A host hands the experimental trainer a config, and the trainer joins the training
+loop, the model, the dataset, the optimizer, and the checkpoints that config names. The host builds one trainer
+with its callbacks and runs each job as:
 
 ```python
 try:
@@ -387,7 +388,7 @@ epoch is over; iterating it, which takes the batches left in the epoch; `len()`,
 
 The training loop is one component of the join. A new trainer runs over the model, dataset, optimizer, and
 checkpoint components the config already names. It subclasses `Trainer` in
-`ttml/unified_trainer/implementations/base.py`, which runs the training loop, and implements its abstract methods:
+`ttml/experimental/trainer/implementations/base.py`, which runs the training loop, and implements its abstract methods:
 
 - Setup: `_load_dataloaders()`, the train and validation batches (`None` without validation data; `len()` of the
   train batches is the batches of an epoch);
@@ -406,6 +407,6 @@ train batches again for each epoch, and a trainer whose epochs order the batches
 
 It sets `config_class` to its config, a subclass of `TrainerConfig`, which a recipe for it validates as.
 
-Write it in `ttml/unified_trainer/implementations/<trainer>.py` and add it to `TRAINERS` in
-`ttml/unified_trainer/implementations/__init__.py`, keyed by the name `--trainer` takes. `SFTTrainer` in
-`ttml/unified_trainer/implementations/sft.py` is the reference.
+Write it in `ttml/experimental/trainer/implementations/<trainer>.py` and add it to `TRAINERS` in
+`ttml/experimental/trainer/implementations/__init__.py`, keyed by the name `--trainer` takes. `SFTTrainer` in
+`ttml/experimental/trainer/implementations/sft.py` is the reference.

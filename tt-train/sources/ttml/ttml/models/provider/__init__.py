@@ -18,7 +18,7 @@ from .base import ModelProvider
 from .llama import LlamaProvider
 
 if TYPE_CHECKING:
-    from ttml.unified_trainer.configs import TrainerConfig
+    from ttml.experimental.trainer.configs import TrainerConfig
 
 
 def providers() -> dict[str, type[ModelProvider]]:

@@ -33,7 +33,7 @@ from ..utils.peft import check_peft_keys, lora_to_peft, peft_adapter_config, pef
 from .base import ModelProvider
 
 if TYPE_CHECKING:
-    from ttml.unified_trainer.configs import LoraConfig, SFTTrainerConfig
+    from ttml.experimental.trainer.configs import LoraConfig, SFTTrainerConfig
 
 SUPPORTED_DTYPES = ("bfloat16",)
 # Rows and columns of the device mesh: a single chip.

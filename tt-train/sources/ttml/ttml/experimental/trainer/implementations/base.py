@@ -37,7 +37,7 @@ class Trainer(ABC):
                 trainer.cleanup()
     """
 
-    # The config the trainer takes; `python -m ttml.unified_trainer` validates a recipe as it.
+    # The config the trainer takes; `python -m ttml.experimental.trainer` validates a recipe as it.
     config_class: ClassVar[type[TrainerConfig]] = TrainerConfig
 
     def __init__(self, callbacks: Any = None) -> None:

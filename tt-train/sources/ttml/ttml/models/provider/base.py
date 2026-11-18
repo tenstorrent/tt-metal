@@ -10,7 +10,7 @@ from typing import TYPE_CHECKING, Any
 from ..utils.checkpoint import PathLike
 
 if TYPE_CHECKING:
-    from ttml.unified_trainer.configs import TrainerConfig
+    from ttml.experimental.trainer.configs import TrainerConfig
 
 
 class ModelProvider(ABC):

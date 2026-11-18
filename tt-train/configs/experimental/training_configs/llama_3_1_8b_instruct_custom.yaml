@@ -1,7 +1,7 @@
 # Full fine-tuning of Llama 3.1 8B Instruct on your own instruction data, on a single chip.
 #
-#   python -m ttml.unified_trainer \
-#     --config tt-train/configs/training_configs/unified_trainer/llama_3_1_8b_instruct_custom.yaml
+#   python -m ttml.experimental.trainer \
+#     --config tt-train/configs/experimental/training_configs/llama_3_1_8b_instruct_custom.yaml
 #
 # The default files are small Alpaca-format samples. Point the paths at your own JSONL to train on that instead.
 # Each line is one example with "instruction", "output" and optionally "input";
@@ -15,8 +15,8 @@ dataset:
   id: custom
   custom_options:
     file_type: jsonl
-    train_dataset_path: tt-train/configs/training_configs/unified_trainer/samples/train.jsonl
-    val_dataset_path: tt-train/configs/training_configs/unified_trainer/samples/val.jsonl
+    train_dataset_path: tt-train/configs/experimental/training_configs/samples/train.jsonl
+    val_dataset_path: tt-train/configs/experimental/training_configs/samples/val.jsonl
     template: alpaca
 
 optimizer:

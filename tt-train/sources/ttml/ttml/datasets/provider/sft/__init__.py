@@ -21,7 +21,7 @@ from .custom import CustomProvider
 from .sst2 import SST2Provider
 
 if TYPE_CHECKING:
-    from ttml.unified_trainer.configs import SFTTrainerConfig
+    from ttml.experimental.trainer.configs import SFTTrainerConfig
 
 
 def providers() -> dict[str, type[DatasetProvider]]:
