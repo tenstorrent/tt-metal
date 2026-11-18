@@ -506,31 +506,18 @@ class Qwen36ModelArgs(ModelArgs):
         return None
 
     def is_distributed_norm(self, mode):
-        """Force the distributed-norm path for multi-device MoE prefill.
+        """Multi-device prefill always takes the distributed-norm path.
 
         The prefill norm-all-gather fusion (all_gather_minimal_matmul_async in-proj) needs the norm
         to honor enable_all_gather and leave its output hidden-fractured for the fused matmul to
         gather. The base enables the distributed-norm path only for dim>4096 (an L1 heuristic the
-        dense 27B's 5120 hits but the MoE 35B-A3B's 2048 misses) — on the miss it force-gathers the
-        norm output, so the AGMM in-proj double-gathers (K mismatch). Only the MoE configs need this
-        override (dense variants either hit the dim>4096 heuristic like the 27B, or are validated on
-        the base path), so gate it on moe_num_experts to avoid diverging the dense path from base.
+        dense 27B's 5120 hits but the MoE 35B-A3B's 2048 and the dense 9B's 4096 miss) -- on the miss
+        it force-gathers the norm output, so the AGMM in-proj double-gathers (K mismatch). Decode
+        keeps the base rule.
         """
         from models.tt_transformers.tt.common import Mode
 
-        if self.moe_num_experts > 0 and self.is_multichip and mode == Mode.PREFILL:
-            return True
-        # Dense checkpoints whose dim does not exceed the base heuristic's 4096 (Qwen3.5-9B, dim 4096) hit the same
-        # double-gather on a (1,N) mesh: the TP config DRAM-shards the GDN / attention in-projections, so layer.py fuses
-        # the norm all-gather into the AGMM in-proj; the base rule would pre-gather in DistributedNorm and the AGMM
-        # gather again (K mismatch), and the spec-feed final norm needs the fractured output. Decode keeps the base
-        # rule.
-        if (
-            self.moe_num_experts <= 0
-            and self.is_multichip
-            and mode == Mode.PREFILL
-            and getattr(self, "gdn_qkvz_weight_memcfg", None) is not None
-        ):
+        if self.is_multichip and mode == Mode.PREFILL:
             return True
         return super().is_distributed_norm(mode)
 
