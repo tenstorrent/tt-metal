@@ -21,6 +21,7 @@
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/workload/run_args/program_run_args.hpp>
+#include <tt-metalium/workload/specification/global_semaphore_parameter.hpp>
 #include <tt-metalium/workload/specification/program_spec.hpp>
 #include <tt-metalium/experimental/per_core_allocation/memory_config.hpp>
 #include <tt-metalium/experimental/prefetcher_pipe.hpp>
@@ -498,6 +499,16 @@ TEST(GenericOpProgramSpecHash, PrefetcherPipeParameterNamesChangeHash) {
     const auto base = ttnn::experimental::compute_program_spec_hash(spec);
     spec.advanced_options.prefetcher_pipe_parameters[0].unique_id =
         m2::experimental::PrefetcherPipeParamName{"other_pipe"};
+    EXPECT_NE(ttnn::experimental::compute_program_spec_hash(spec), base);
+}
+
+// GlobalSemaphore parameters are C++ only too. Run args name each GlobalSemaphore by its parameter, so another
+// parameter name must give another cache entry.
+TEST(GenericOpProgramSpecHash, GlobalSemaphoreParameterNamesChangeHash) {
+    auto spec = make_hash_spec();
+    spec.global_semaphore_parameters = {{.unique_id = m2::GlobalSemaphoreParamName{"sem"}}};
+    const auto base = ttnn::experimental::compute_program_spec_hash(spec);
+    spec.global_semaphore_parameters[0].unique_id = m2::GlobalSemaphoreParamName{"other_sem"};
     EXPECT_NE(ttnn::experimental::compute_program_spec_hash(spec), base);
 }
 

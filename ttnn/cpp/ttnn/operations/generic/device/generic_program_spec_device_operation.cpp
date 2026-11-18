@@ -453,7 +453,7 @@ ttsl::hash::hash_t compute_program_spec_hash(const m2::ProgramSpec& spec) {
     // Tripwires: these three types are hashed field by field below. Every other type goes through ttsl's reflection
     // hash, which picks up a new field by itself.
     static_assert(
-        reflect::size<m2::ProgramSpec>() == 8,
+        reflect::size<m2::ProgramSpec>() == 9,
         "ProgramSpec gained or lost a field: hash it in compute_program_spec_hash, then update this count.");
     static_assert(
         reflect::size<m2::WorkUnitSpec>() == 3,
@@ -463,9 +463,15 @@ ttsl::hash::hash_t compute_program_spec_hash(const m2::ProgramSpec& spec) {
         "TensorParameter gained or lost a field: hash it in compute_program_spec_hash, then update this count.");
 
     // ProgramSpec::name and WorkUnitSpec::name are left out: they are for messages only. Lists are hashed with their
-    // lengths, so an element cannot move from one list to the next without changing the hash.
+    // lengths, so an element cannot move from one list to the next without changing the hash. Run args name each
+    // GlobalSemaphore by its parameter, so the parameters are hashed like the other resources.
     ttsl::hash::hash_t hash = ttsl::hash::hash_objects_with_default_seed(
-        spec.kernels, spec.dataflow_buffers, spec.semaphores, spec.scratchpads, spec.advanced_options);
+        spec.kernels,
+        spec.dataflow_buffers,
+        spec.semaphores,
+        spec.scratchpads,
+        spec.global_semaphore_parameters,
+        spec.advanced_options);
     // A tensor parameter's spec is hashed under its relaxations, so a relaxed field such as a dynamic shape does not
     // change the hash.
     hash = ttsl::hash::hash_objects(hash, spec.tensor_parameters.size());
@@ -518,8 +524,8 @@ ttsl::hash::hash_t GenericProgramSpecDeviceOperation::compute_program_hash(
     // The framework adds the op's type to the key. Each program's spec hash is combined with its range. The spec hash
     // covers what run args refer to: on a later call Metal writes run args into the cached program by name, keeps
     // whatever they leave out, and places arrays and varargs by the lengths and counts it compiled, so a cached program
-    // whose arguments, array lengths, vararg counts, tensor parameters, buffers, pipe parameters or nodes differ is
-    // never reused.
+    // whose arguments, array lengths, vararg counts, tensor parameters, buffers, pipe or GlobalSemaphore parameters, or
+    // nodes differ is never reused.
     ttsl::hash::hash_t hash = 0;
     for (const auto& program : operation_attributes.programs) {
         hash = ttsl::hash::hash_objects(hash, program.range, compute_program_spec_hash(program.spec));
