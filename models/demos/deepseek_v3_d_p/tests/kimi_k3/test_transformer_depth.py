@@ -425,6 +425,11 @@ def test_depth_ladder_matches_golden(mesh_device, device_params, sp_axis, tp_axi
 # The bar is K3's, per layer by depth: SHALLOW_LAYER_PCC through layer 11, DEEP_LAYER_PCC through layer 23 (K3's
 # depth-24 bar, set for the second seal). KV: KV_CACHE_PCC at every DSA layer. Measured at 10K:
 # worst 0.9966 (layers 0-11), 0.9869 (12-23).
+# Re-measured on 4x4-sp1, stages 0 and 1 on one tray half, at the same bars (bh-glx-110-c10u20, 2026-11-18,
+# 8x4 alongside it): 10K worst 0.99661 (layer 3) / 0.98533 (layer 23, chunk 3: prompt rows 7680-8191), 8x4
+# 0.99665 / 0.98708 (layer 19); 128K worst 0.99623 (layer 4) / 0.98630 (layer 19), 8x4 0.99633 / 0.98652. Every
+# other layer is within 0.0006 of 8x4, except layer 23 (10K 0.98533 vs 0.99170; 128K 0.98772 vs 0.99089), and the
+# caches and top-k recall agree to 1e-3 or better. The layer-23 gap is observed, not explained.
 #
 # The DSA indexer, per DSA layer, as GLM-5.3's runner gate and the package's indexer tests measure it:
 #
