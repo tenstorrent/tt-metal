@@ -48,6 +48,7 @@
 #include "ttnn/cpp/ttnn/kernel_lib/perf_instrumentation.hpp"
 #include "conv2d_3x3_nslice_order.hpp"
 #include "conv2d_3x3_narrow_untilize.hpp"
+#include "conv2d_3x3_wide_untilize.hpp"
 
 namespace ckl = compute_kernel_lib;
 
@@ -404,6 +405,21 @@ void kernel_main() {
         }
     };
 
+    // Untilize of a >= 2-tile-wide slab. Raw LLK on a measured win (see conv2d_3x3_wide_untilize.hpp): the helper's
+    // fast_untilize packs every slab row of a > 4-tile row as its own L1 stream and syncs per tile-row. ring_rows > 0:
+    // cb_halo_slab is the ring slab, and a section group never crosses its end.
+    [[maybe_unused]] uint32_t untilize_ring_pos = 0;
+    [[maybe_unused]] auto untilize_wide_rows = [&](uint32_t rows, uint32_t ring_rows) {
+        // kernel_main is not a template: this is instantiated on ROW_MAJOR paths too (untilize_width_tiles = 1).
+        constexpr uint32_t wide_ct = untilize_width_tiles < 2 ? 2 : untilize_width_tiles;
+        if constexpr (ckl::can_use_fast_untilize<untilize_width_tiles, cb_input_tiles, cb_halo_slab>()) {
+            wide_untilize::untilize_wide<wide_ct, cb_input_tiles, cb_halo_slab>(
+                input_tiles_dfb, halo_slab_dfb, rows, untilize_batch_rows, ring_rows, untilize_ring_pos);
+        } else {
+            ckl::untilize<untilize_width_tiles, cb_input_tiles, cb_halo_slab>(input_tiles_dfb, halo_slab_dfb, rows);
+        }
+    };
+
     for (uint32_t m_block_idx = 0; m_block_idx < num_m_blocks_this_core; ++m_block_idx) {
         if constexpr (tile_input) {
             // untilize_footprint: the reader streams slab_tile_rows input tile-rows in slab order.
@@ -413,8 +429,7 @@ void kernel_main() {
                 const uint32_t rows = get_arg_val<uint32_t>(3 + 2 * m_block_idx);
                 const uint32_t tail_rows = get_arg_val<uint32_t>(4 + 2 * m_block_idx);
                 if (rows > 0) {
-                    ckl::untilize<untilize_width_tiles, cb_input_tiles, cb_halo_slab>(
-                        input_tiles_dfb, halo_slab_dfb, rows);
+                    untilize_wide_rows(rows, slab_tile_rows);
                 }
                 if (tail_rows > 0) {
                     input_tiles_dfb.wait_front(tail_rows * c_in_tiles);
@@ -426,8 +441,7 @@ void kernel_main() {
                 conv2d_3x3::narrow_untilize::untilize_1wide<cb_input_tiles, cb_halo_slab>(
                     input_tiles_dfb, halo_slab_dfb, slab_tile_rows, untilize_batch_rows);
             } else {
-                ckl::untilize<untilize_width_tiles, cb_input_tiles, cb_halo_slab>(
-                    input_tiles_dfb, halo_slab_dfb, slab_tile_rows);
+                untilize_wide_rows(slab_tile_rows, 0);
             }
         }
 
