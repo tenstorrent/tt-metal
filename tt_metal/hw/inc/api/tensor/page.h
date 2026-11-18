@@ -34,7 +34,7 @@ struct PageAccess {
                                     : transfer_shard_noc_addr(
                                           page.accessor(),
                                           page.shard_id(),
-                                          page.page_in_shard() * page.accessor().get_aligned_page_size(),
+                                          page.page_in_shard() * page.accessor().get_bank_page_stride(),
                                           page.noc_);
     }
 };

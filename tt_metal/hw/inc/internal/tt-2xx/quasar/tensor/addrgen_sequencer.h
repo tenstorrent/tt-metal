@@ -567,7 +567,7 @@ inline bool plan_cross_bank(const Accessor& acc, uint32_t page_id, uint8_t noc, 
     if (band_banks < 2) {
         return false;
     }
-    const uint32_t page_size = acc.get_aligned_page_size();
+    const uint32_t page_stride = acc.get_bank_page_stride();
     const uint32_t segment = pos.shard_k * pos.inner_volume;  // pages
     const uint32_t row_start = page_id - pos.coord_k * pos.inner_volume - pos.inner_flat;
 
@@ -592,11 +592,11 @@ inline bool plan_cross_bank(const Accessor& acc, uint32_t page_id, uint8_t noc, 
         if (shards_k > band_banks) {
             const uint64_t wrap = ::tensor_accessor::detail::transfer_noc_addr(acc, band_banks * segment, 0, noc);
             if (window.selector(wrap) != selector0 ||
-                window.local_address(wrap) != local0 + static_cast<uint64_t>(segment) * page_size) {
+                window.local_address(wrap) != local0 + static_cast<uint64_t>(segment) * page_stride) {
                 return false;
             }
         }
-        outer_start += static_cast<uint64_t>(shard_j / band_banks) * segment * page_size;
+        outer_start += static_cast<uint64_t>(shard_j / band_banks) * segment * page_stride;
     }
     seek.prog.banking = overlay::BankingConfig{
         .endpoint_id_shift = window.endpoint_shift,
@@ -606,12 +606,12 @@ inline bool plan_cross_bank(const Accessor& acc, uint32_t page_id, uint8_t noc, 
         .current = shard_j % band_banks,
         .bank_order = overlay::BANK_MIDDLE,
     };
-    seek.prog.inner_stride = page_size;
+    seek.prog.inner_stride = page_stride;
     seek.prog.inner_start =
-        static_cast<uint64_t>((pos.coord_k % pos.shard_k) * pos.inner_volume + pos.inner_flat) * page_size;
-    seek.prog.inner_end = static_cast<uint64_t>(segment) * page_size;
+        static_cast<uint64_t>((pos.coord_k % pos.shard_k) * pos.inner_volume + pos.inner_flat) * page_stride;
+    seek.prog.inner_end = static_cast<uint64_t>(segment) * page_stride;
     seek.prog.outer_start = window.compare + outer_start;
-    seek.prog.outer_stride = static_cast<uint64_t>(segment) * page_size;
+    seek.prog.outer_stride = static_cast<uint64_t>(segment) * page_stride;
     const uint32_t row_pages = pos.extent_k * pos.inner_volume;
     seek.run_end = page_id + (pos.k == 0 ? acc.dspec().tensor_volume() - page_id
                                          : rows_left_in_band(acc, pos) * row_pages - (page_id - row_start));
@@ -634,11 +634,11 @@ inline bool plan_row_round_robin(const Accessor& acc, uint32_t page_id, uint8_t 
     if (num_banks < 2 || shards_k <= num_banks) {
         return false;  // no wrap within the row (plan_cross_bank's case, or a single bank)
     }
-    const uint32_t page_size = acc.get_aligned_page_size();
+    const uint32_t page_stride = acc.get_bank_page_stride();
     const uint32_t segment = pos.shard_k * pos.inner_volume;                    // pages
-    const uint64_t segment_bytes = static_cast<uint64_t>(segment) * page_size;  // one row of a shard
+    const uint64_t segment_bytes = static_cast<uint64_t>(segment) * page_stride;  // one row of a shard
     // A bank holds its shards back to back, one whole (padded) shard per slot.
-    const uint64_t slot_bytes = static_cast<uint64_t>(acc.dspec().shard_volume()) * page_size;
+    const uint64_t slot_bytes = static_cast<uint64_t>(acc.dspec().shard_volume()) * page_stride;
     const uint32_t row_start = page_id - pos.coord_k * pos.inner_volume - pos.inner_flat;
     const uint64_t addr0 = ::tensor_accessor::detail::transfer_noc_addr(acc, row_start, 0, noc);
     const noc_att::Window& window =
@@ -678,9 +678,9 @@ inline bool plan_row_round_robin(const Accessor& acc, uint32_t page_id, uint8_t 
         .current = b % num_banks,
         .bank_order = overlay::BANK_MIDDLE,
     };
-    seek.prog.inner_stride = page_size;
+    seek.prog.inner_stride = page_stride;
     seek.prog.inner_start =
-        static_cast<uint64_t>((pos.coord_k % pos.shard_k) * pos.inner_volume + pos.inner_flat) * page_size;
+        static_cast<uint64_t>((pos.coord_k % pos.shard_k) * pos.inner_volume + pos.inner_flat) * page_stride;
     seek.prog.inner_end = segment_bytes;
     seek.prog.outer_start = window.compare + local0 + static_cast<uint64_t>(b / num_banks) * slot_bytes;
     seek.prog.outer_stride = slot_bytes;
@@ -704,7 +704,7 @@ TT_TA_SEEK_NOINLINE inline Seek plan_sharded(const Accessor& acc, uint32_t page_
         return seek;
     }
     seek.prog = plan_single_bank(
-        ::tensor_accessor::detail::transfer_noc_addr(acc, page_id, 0, noc), acc.get_aligned_page_size());
+        ::tensor_accessor::detail::transfer_noc_addr(acc, page_id, 0, noc), acc.get_bank_page_stride());
     seek.run_end = page_id + contiguous_run(acc, page_id);
     return seek;
 }
@@ -1071,12 +1071,12 @@ struct ShardPagesRecipe {
     static uint64_t page_addr(const void* acc_ptr, uint32_t shard_volume, uint8_t noc, uint32_t i) {
         const Accessor& acc = *static_cast<const Accessor*>(acc_ptr);
         return ::tensor_accessor::detail::transfer_shard_noc_addr(
-            acc, i / shard_volume, (i % shard_volume) * acc.get_aligned_page_size(), noc);
+            acc, i / shard_volume, (i % shard_volume) * acc.get_bank_page_stride(), noc);
     }
     static Seek plan(const void* acc_ptr, uint32_t shard_volume, uint8_t noc, uint32_t i) {
         const Accessor& acc = *static_cast<const Accessor*>(acc_ptr);
         return Seek{
-            .prog = plan_single_bank(page_addr(acc_ptr, shard_volume, noc, i), acc.get_aligned_page_size()),
+            .prog = plan_single_bank(page_addr(acc_ptr, shard_volume, noc, i), acc.get_bank_page_stride()),
             .run_end = (i / shard_volume + 1) * shard_volume,  // the end of i's shard
         };
     }
@@ -1152,7 +1152,7 @@ TT_TA_SEEK_NOINLINE inline Seek plan_shard_bases(const Accessor& acc, uint32_t s
     const uint32_t num_shards = ds.num_shards();
     const uint32_t num_banks = ds.num_banks();
     const uint32_t banks = num_shards < num_banks ? num_shards : num_banks;
-    const uint64_t shard_bytes = static_cast<uint64_t>(ds.shard_volume()) * acc.get_aligned_page_size();
+    const uint64_t shard_bytes = static_cast<uint64_t>(ds.shard_volume()) * acc.get_bank_page_stride();
     const Seek single{
         .prog =
             plan_single_bank(::tensor_accessor::detail::transfer_shard_noc_addr(acc, shard_id, 0, noc), shard_bytes),
