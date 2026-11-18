@@ -168,10 +168,6 @@ def save(
             [lt.info for lt in live],
             file_for_coord=lambda c: data_file_name(0, 0, c),
             owner_of=_one_process_owner,
-            file_metadata=lambda c: {
-                "ttml.format": f"{FORMAT}/{VERSION}",
-                "ttml.writer": {"world_rank": 0, "mesh_id": 0, "coord": list(c)},
-            },
         )
         stats["plan_s"] = time.perf_counter() - t1
 

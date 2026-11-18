@@ -31,7 +31,7 @@ from ttml.modules.parameter import Parameter
 
 from ._errors import CheckpointError, FSDPStateError, LayoutError, LazyParameterError, MissingKeyError, TopologyError
 from ._index import Entry
-from ._layouts import DECLARATIONS, Compose, Identity, Segments, Transform, declared_transform
+from ._layouts import DECLARATIONS, Identity, Segments, Transform, declared_transform
 from ._planner import TensorInfo
 from ._topology import Label, Placement, global_shape, tp_split
 
@@ -339,8 +339,7 @@ def collect_optimizer(optimizer, params: list[LiveTensor]) -> tuple[list[LiveTen
 def _undescribed_split(transform: Transform, split: tuple[int, ...]) -> tuple[int, ...]:
     """The TP split of a fused-looking weight that its layout does not describe: none when its transform reorders
     segments (a declared fusion), else the TP split itself."""
-    steps = transform.steps if isinstance(transform, Compose) else (transform,)
-    return (1,) * len(split) if any(isinstance(step, Segments) for step in steps) else tuple(split)
+    return (1,) * len(split) if isinstance(transform, Segments) else tuple(split)
 
 
 def check_undeclared_fusion(live: LiveTensor, entry: Entry) -> None:
