@@ -75,6 +75,10 @@ static inline void prepare_sender(
     tt_metal::Program* send_program) {
     /* ==================== */
     *send_delta_addr = l1_alloc(send_allocator, sizeof(uint64_t));
+    if (!send_program) {
+        return;
+    }
+
     uint32_t send_l1_address = l1_alloc(send_allocator, transfer_size);
     tt::tt_metal::MetalContext::instance().get_cluster().write_core(
         send_device->id(), send_device->ethernet_core_from_logical_core(send_core), inputs, send_l1_address);
@@ -117,9 +121,12 @@ static inline void prepare_receiver(
     uint32_t* recv_l1_address,
     tt_metal::Program* recv_program) {
     /* ==================== */
-    std::vector<uint32_t> all_zeros(inputs.size(), 0);
-
     *recv_l1_address = l1_alloc(recv_allocator, transfer_size);
+    if (!recv_program) {
+        return;
+    }
+
+    std::vector<uint32_t> all_zeros(inputs.size(), 0);
     tt::tt_metal::MetalContext::instance().get_cluster().write_core(
         recv_device->id(), recv_device->ethernet_core_from_logical_core(recv_core), all_zeros, *recv_l1_address);
 
