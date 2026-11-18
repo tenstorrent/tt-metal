@@ -4,8 +4,10 @@
 
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
-#include "api/dataflow/circular_buffer.h"
-#include "tt_metal/fabric/hw/inc/edm_fabric/fabric_connection_manager.hpp"
+#include "api/dataflow/dataflow_buffer.h"
+#include "api/dataflow/global_semaphore.h"
+#include "experimental/kernel_args.h"
+#include "tt_metal/fabric/hw/inc/edm_fabric/edm_fabric_worker_adapters.hpp"
 #include "cpp/ttnn/operations/ccl/common/kernels/minimal_ccl_common.hpp"
 #include "tt_metal/fabric/hw/inc/noc_addr.h"
 #include "tt_metal/fabric/hw/inc/tt_fabric_api.h"
@@ -19,19 +21,17 @@ using address_t = uint32_t;
 // COMPILE TIME ARGS
 ///////////////////////////////////////////////////
 
-constexpr uint32_t my_ring_id = get_compile_time_arg_val(0);
-constexpr uint32_t ring_size = get_compile_time_arg_val(1);
-constexpr uint32_t reserved_packet_header_cb_id = get_compile_time_arg_val(2);
-constexpr uint32_t num_packet_headers_storable = get_compile_time_arg_val(3);
-constexpr uint32_t cb0_id = get_compile_time_arg_val(4);
-constexpr uint32_t packet_size_in_pages = get_compile_time_arg_val(5);
-constexpr uint32_t tensor0_page_size = get_compile_time_arg_val(6);
-constexpr uint32_t num_targets_forward_direction = get_compile_time_arg_val(7);
-constexpr uint32_t num_targets_backward_direction = get_compile_time_arg_val(8);
-constexpr bool dynamic_alternate = get_compile_time_arg_val(9);
-constexpr uint32_t chunk_granularity = get_compile_time_arg_val(10);
-constexpr uint32_t contig_pages_advanced = get_compile_time_arg_val(11);
-constexpr uint32_t N_DRAM_BANKS = get_compile_time_arg_val(12);
+constexpr uint32_t my_ring_id = get_arg(args::my_ring_id);
+constexpr uint32_t ring_size = get_arg(args::ring_size);
+constexpr uint32_t num_packet_headers_storable = get_arg(args::num_packet_headers_storable);
+constexpr uint32_t packet_size_in_pages = get_arg(args::packet_size_in_pages);
+constexpr uint32_t tensor0_page_size = get_arg(args::tensor0_page_size);
+constexpr uint32_t num_targets_forward_direction = get_arg(args::num_targets_forward_direction);
+constexpr uint32_t num_targets_backward_direction = get_arg(args::num_targets_backward_direction);
+constexpr bool dynamic_alternate = get_arg(args::dynamic_alternate);
+constexpr uint32_t chunk_granularity = get_arg(args::chunk_granularity);
+constexpr uint32_t contig_pages_advanced = get_arg(args::contig_pages_advanced);
+constexpr uint32_t N_DRAM_BANKS = get_arg(args::num_dram_banks);
 
 constexpr uint32_t num_max_targets = std::max(num_targets_forward_direction, num_targets_backward_direction);
 constexpr uint32_t num_sync_targets_forward = dynamic_alternate ? num_max_targets : num_targets_forward_direction;
@@ -46,42 +46,49 @@ void kernel_main() {
     // ARGS
     ///////////////////////////////////////////////////
 
-    size_t arg_idx = 0;
-    address_t intermediate_buffer_addr = get_arg_val<address_t>(arg_idx++);
-    address_t output_buffer_addr = get_arg_val<address_t>(arg_idx++);
-    uint32_t global_semaphore_addr = get_arg_val<uint32_t>(arg_idx++);
-    uint32_t out_row_tiles = get_arg_val<uint32_t>(arg_idx++);
-    uint32_t out_col_tiles = get_arg_val<uint32_t>(arg_idx++);
-    uint32_t out_row_start = get_arg_val<uint32_t>(arg_idx++);
-    uint32_t out_col_start = get_arg_val<uint32_t>(arg_idx++);
-    uint32_t input_shard_row_tiles = get_arg_val<uint32_t>(arg_idx++);
-    uint32_t input_shard_col_tiles = get_arg_val<uint32_t>(arg_idx++);
-    bool wait_output_semaphore = get_arg_val<uint32_t>(arg_idx++);
-    bool reset_global_semaphore = get_arg_val<uint32_t>(arg_idx++);
-    uint32_t receiver_core_x = get_arg_val<uint32_t>(arg_idx++);
-    uint32_t receiver_core_y = get_arg_val<uint32_t>(arg_idx++);
-    size_t arg_for_fab = arg_idx;
+    experimental::GlobalSemaphore global_semaphore(global_sem::semaphore);
+    uint32_t out_row_tiles = get_arg(args::out_row_tiles);
+    uint32_t out_col_tiles = get_arg(args::out_col_tiles);
+    uint32_t out_row_start = get_arg(args::out_row_start);
+    uint32_t out_col_start = get_arg(args::out_col_start);
+    uint32_t input_shard_row_tiles = get_arg(args::input_shard_row_tiles);
+    uint32_t input_shard_col_tiles = get_arg(args::input_shard_col_tiles);
+    bool wait_output_semaphore = get_arg(args::wait_output_semaphore);
+    bool reset_global_semaphore = get_arg(args::reset_global_semaphore);
+    uint32_t receiver_core_x = get_arg(args::receiver_core_x);
+    uint32_t receiver_core_y = get_arg(args::receiver_core_y);
 
-    auto fabric_connection = FabricConnectionManager::build_from_args<
-        FabricConnectionManager::BuildFromArgsMode::BUILD_AND_OPEN_CONNECTION_START_ONLY>(arg_idx);
+    // Build and start opening the forward and backward fabric connections; the open finishes below.
+    const bool has_forward_connection = tt::tt_fabric::has_fabric_connection(fabric::forward);
+    tt::tt_fabric::WorkerToFabricEdmSender forward_connection;
+    if (has_forward_connection) {
+        forward_connection = tt::tt_fabric::WorkerToFabricEdmSender::build_from_binding(fabric::forward);
+        forward_connection.open_start();
+    }
+    const bool has_backward_connection = tt::tt_fabric::has_fabric_connection(fabric::backward);
+    tt::tt_fabric::WorkerToFabricEdmSender backward_connection;
+    if (has_backward_connection) {
+        backward_connection = tt::tt_fabric::WorkerToFabricEdmSender::build_from_binding(fabric::backward);
+        backward_connection.open_start();
+    }
 
     Noc noc_obj;
-    CircularBuffer cb_packet_header(reserved_packet_header_cb_id);
-    CircularBuffer cb0(cb0_id);
+    DataflowBuffer dfb_packet_header(dfb::packet_header);
+    DataflowBuffer dfb0(dfb::sender_data);
 
     uint32_t out_row_end = out_row_start + input_shard_row_tiles;
     uint32_t out_col_end = out_col_start + input_shard_col_tiles;
 
-    // packet header cb
-    cb_packet_header.reserve_back(1);
-    auto packet_header_buffer_addr_forward = cb_packet_header.get_write_ptr();
-    cb_packet_header.push_back(1);
-    cb_packet_header.reserve_back(1);
-    auto packet_header_buffer_addr_backward = cb_packet_header.get_write_ptr();
-    cb_packet_header.push_back(1);
-    cb_packet_header.reserve_back(1);
-    auto packet_header_buffer_seminc = cb_packet_header.get_write_ptr();
-    cb_packet_header.push_back(1);
+    // packet header dfb
+    dfb_packet_header.reserve_back(1);
+    auto packet_header_buffer_addr_forward = dfb_packet_header.get_write_ptr();
+    dfb_packet_header.push_back(1);
+    dfb_packet_header.reserve_back(1);
+    auto packet_header_buffer_addr_backward = dfb_packet_header.get_write_ptr();
+    dfb_packet_header.push_back(1);
+    dfb_packet_header.reserve_back(1);
+    auto packet_header_buffer_seminc = dfb_packet_header.get_write_ptr();
+    dfb_packet_header.push_back(1);
 
     // pre-populate packet headers
     volatile PACKET_HEADER_TYPE* pkt_hdr_forward =
@@ -89,18 +96,18 @@ void kernel_main() {
     volatile PACKET_HEADER_TYPE* pkt_hdr_backward =
         reinterpret_cast<volatile PACKET_HEADER_TYPE*>(packet_header_buffer_addr_backward);
 
-    constexpr auto intermediate_tensor_args = TensorAccessorArgs<13>();
-    auto intermediate_tensor_addrgen = TensorAccessor(intermediate_tensor_args, intermediate_buffer_addr);
-    constexpr auto output_tensor_args = TensorAccessorArgs<intermediate_tensor_args.next_compile_time_args_offset()>();
-    auto output_tensor_addrgen = TensorAccessor(output_tensor_args, output_buffer_addr);
+    auto intermediate_tensor_addrgen = TensorAccessor(tensor::intermediate);
 
-    if (fabric_connection.is_logically_connected()) {
-        fabric_connection.open_finish();
+    if (has_forward_connection) {
+        forward_connection.open_finish();
+    }
+    if (has_backward_connection) {
+        backward_connection.open_finish();
     }
 
     // Set up seminc packet
     uint64_t output_semaphore_noc_addr_in_pkt =
-        safe_get_noc_addr(receiver_core_x, receiver_core_y, global_semaphore_addr, 0);
+        safe_get_noc_addr(receiver_core_x, receiver_core_y, global_semaphore.address(), 0);
     volatile PACKET_HEADER_TYPE* pkt_hdr_seminc =
         reinterpret_cast<volatile PACKET_HEADER_TYPE*>(packet_header_buffer_seminc);
 
@@ -123,7 +130,7 @@ void kernel_main() {
         uint32_t dst_ring_id =
             cur_is_forward ? (my_ring_id + cur_hops) % ring_size : (my_ring_id - cur_hops + ring_size) % ring_size;
         tt::tt_fabric::WorkerToFabricEdmSender& cur_connection =
-            cur_is_forward ? fabric_connection.get_forward_connection() : fabric_connection.get_backward_connection();
+            cur_is_forward ? forward_connection : backward_connection;
         cur_pkt_header = cur_is_forward ? pkt_hdr_forward : pkt_hdr_backward;
         fabric_set_unicast_route<false>(cur_pkt_header, cur_hops);
 
@@ -134,8 +141,8 @@ void kernel_main() {
 
         for (uint32_t out_row_id = out_row_start; out_row_id < out_row_end; out_row_id++) {
             for (uint32_t out_col_id = out_col_start; out_col_id < out_col_end; out_col_id += packet_size_in_pages) {
-                cb0.wait_front(packet_size_in_pages);
-                size_t l1_read_addr = cb0.get_read_ptr();
+                dfb0.wait_front(packet_size_in_pages);
+                size_t l1_read_addr = dfb0.get_read_ptr();
                 uint32_t num_pages_to_read = std::min(out_col_end - out_col_id, packet_size_in_pages);
 
                 constexpr uint32_t payload_size_bytes = contig_pages_advanced * tensor0_page_size;
@@ -176,7 +183,7 @@ void kernel_main() {
                     l1_read_addr += payload_size_bytes;
                 }
 
-                cb0.pop_front(packet_size_in_pages);
+                dfb0.pop_front(packet_size_in_pages);
             }
         }
 
@@ -191,8 +198,17 @@ void kernel_main() {
         cur_hops++;
     }
 
-    if (fabric_connection.is_logically_connected()) {
-        fabric_connection.close();
+    if (has_forward_connection) {
+        forward_connection.close_start();
+    }
+    if (has_backward_connection) {
+        backward_connection.close_start();
+    }
+    if (has_forward_connection) {
+        forward_connection.close_finish();
+    }
+    if (has_backward_connection) {
+        backward_connection.close_finish();
     }
 
     noc_obj.async_write_barrier();

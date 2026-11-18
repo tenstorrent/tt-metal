@@ -4,7 +4,8 @@
 
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
-#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
+#include "experimental/kernel_args.h"
 #include <cstdint>
 #include <utility>
 #include "api/tensor/noc_traits.h"
@@ -15,35 +16,31 @@ using address_t = uint32_t;
 // COMPILE TIME ARGS
 ///////////////////////////////////////////////////
 
-constexpr uint32_t my_ring_id = get_compile_time_arg_val(0);
-constexpr uint32_t ring_size = get_compile_time_arg_val(1);
-constexpr uint32_t cb0_id = get_compile_time_arg_val(2);
-constexpr uint32_t packet_size_in_pages = get_compile_time_arg_val(3);
-constexpr uint32_t tensor0_page_size = get_compile_time_arg_val(4);
-constexpr uint32_t num_targets_forward_direction = get_compile_time_arg_val(5);
-constexpr uint32_t num_targets_backward_direction = get_compile_time_arg_val(6);
+constexpr uint32_t my_ring_id = get_arg(args::my_ring_id);
+constexpr uint32_t ring_size = get_arg(args::ring_size);
+constexpr uint32_t packet_size_in_pages = get_arg(args::packet_size_in_pages);
+constexpr uint32_t tensor0_page_size = get_arg(args::tensor0_page_size);
+constexpr uint32_t num_targets_forward_direction = get_arg(args::num_targets_forward_direction);
+constexpr uint32_t num_targets_backward_direction = get_arg(args::num_targets_backward_direction);
 
 void kernel_main() {
     ///////////////////////////////////////////////////
     // ARGS
     ///////////////////////////////////////////////////
 
-    size_t arg_idx = 0;
-    address_t tensor_address0 = get_arg_val<address_t>(arg_idx++);
-    uint32_t in_row_tiles = get_arg_val<uint32_t>(arg_idx++);
-    uint32_t in_col_tiles = get_arg_val<uint32_t>(arg_idx++);
-    uint32_t input_row_device_stride = get_arg_val<uint32_t>(arg_idx++);
-    uint32_t input_col_device_stride = get_arg_val<uint32_t>(arg_idx++);
-    uint32_t input_shard_row_tiles = get_arg_val<uint32_t>(arg_idx++);
-    uint32_t input_shard_col_tiles = get_arg_val<uint32_t>(arg_idx++);
-    uint32_t out_row_offset = get_arg_val<uint32_t>(arg_idx++);
-    uint32_t out_col_offset = get_arg_val<uint32_t>(arg_idx++);
+    uint32_t in_row_tiles = get_arg(args::in_row_tiles);
+    uint32_t in_col_tiles = get_arg(args::in_col_tiles);
+    uint32_t input_row_device_stride = get_arg(args::input_row_device_stride);
+    uint32_t input_col_device_stride = get_arg(args::input_col_device_stride);
+    uint32_t input_shard_row_tiles = get_arg(args::input_shard_row_tiles);
+    uint32_t input_shard_col_tiles = get_arg(args::input_shard_col_tiles);
+    uint32_t out_row_offset = get_arg(args::out_row_offset);
+    uint32_t out_col_offset = get_arg(args::out_col_offset);
 
-    constexpr auto tensor0_args = TensorAccessorArgs<7>();
-    auto tensor0_addrgen = TensorAccessor(tensor0_args, tensor_address0);
+    auto tensor0_addrgen = TensorAccessor(tensor::input);
 
     Noc noc_obj;
-    CircularBuffer cb0(cb0_id);
+    DataflowBuffer dfb0(dfb::sender_data);
 
     bool cur_is_forward = num_targets_forward_direction > num_targets_backward_direction;
     uint32_t forward_hops = 1;
@@ -75,13 +72,13 @@ void kernel_main() {
             for (uint32_t col_tile_id = shard_col_start_id; col_tile_id < shard_col_end_id;
                  col_tile_id += packet_size_in_pages) {
                 uint32_t tile_id = row_tile_id * in_col_tiles + col_tile_id;
-                cb0.reserve_back(packet_size_in_pages);
+                dfb0.reserve_back(packet_size_in_pages);
 
                 uint32_t num_pages_to_read = std::min(shard_col_end_id - col_tile_id, packet_size_in_pages);
                 for (uint32_t j = 0; j < num_pages_to_read; j++) {
                     noc_obj.async_read(
                         tensor0_addrgen,
-                        cb0,
+                        dfb0,
                         tensor0_page_size,
                         {.page_id = tile_id},
                         {.offset_bytes = j * tensor0_page_size});
@@ -89,7 +86,7 @@ void kernel_main() {
                 }
 
                 noc_obj.async_read_barrier();
-                cb0.push_back(packet_size_in_pages);
+                dfb0.push_back(packet_size_in_pages);
             }
         }
     }

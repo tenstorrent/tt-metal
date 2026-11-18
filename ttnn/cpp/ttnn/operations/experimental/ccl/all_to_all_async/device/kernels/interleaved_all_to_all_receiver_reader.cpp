@@ -4,7 +4,9 @@
 
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
-#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
+#include "api/dataflow/global_semaphore.h"
+#include "experimental/kernel_args.h"
 #include "api/tensor/noc_traits.h"
 
 using address_t = uint32_t;
@@ -13,48 +15,41 @@ using address_t = uint32_t;
 // COMPILE TIME ARGS
 ///////////////////////////////////////////////////
 
-constexpr uint32_t my_ring_id = get_compile_time_arg_val(0);
-constexpr uint32_t ring_size = get_compile_time_arg_val(1);
-constexpr uint32_t num_pages_per_packet = get_compile_time_arg_val(2);
-constexpr uint32_t chunk_granularity = get_compile_time_arg_val(3);
-constexpr uint32_t chunk_num_tiles = get_compile_time_arg_val(4);
-constexpr uint32_t num_chunks_per_shard = get_compile_time_arg_val(5);
-constexpr uint32_t page_size = get_compile_time_arg_val(6);
-constexpr uint32_t cb_id = get_compile_time_arg_val(7);
-constexpr uint32_t contig_pages_advanced = get_compile_time_arg_val(8);
-constexpr uint32_t N_DRAM_BANKS = get_compile_time_arg_val(9);
+constexpr uint32_t my_ring_id = get_arg(args::my_ring_id);
+constexpr uint32_t ring_size = get_arg(args::ring_size);
+constexpr uint32_t num_pages_per_packet = get_arg(args::packet_size_in_pages);
+constexpr uint32_t chunk_granularity = get_arg(args::chunk_granularity);
+constexpr uint32_t chunk_num_tiles = get_arg(args::chunk_num_tiles);
+constexpr uint32_t num_chunks_per_shard = get_arg(args::num_chunks_per_shard);
+constexpr uint32_t page_size = get_arg(args::page_size);
+constexpr uint32_t contig_pages_advanced = get_arg(args::contig_pages_advanced);
+constexpr uint32_t N_DRAM_BANKS = get_arg(args::num_dram_banks);
 
 constexpr uint32_t NUM_SENDERS = ring_size - 1;
 
 void kernel_main() {
-    size_t arg_idx = 0;
-
-    address_t intermediate_buffer_addr = get_arg_val<address_t>(arg_idx++);
-    address_t input_buffer_addr = get_arg_val<address_t>(arg_idx++);
-    uint32_t global_semaphore_addr = get_arg_val<uint32_t>(arg_idx++);
-    uint32_t in_row_tiles = get_arg_val<uint32_t>(arg_idx++);
-    uint32_t in_col_tiles = get_arg_val<uint32_t>(arg_idx++);
-    uint32_t input_row_device_stride = get_arg_val<uint32_t>(arg_idx++);
-    uint32_t input_col_device_stride = get_arg_val<uint32_t>(arg_idx++);
-    uint32_t input_shard_row_tiles = get_arg_val<uint32_t>(arg_idx++);
-    uint32_t input_shard_col_tiles = get_arg_val<uint32_t>(arg_idx++);
-    uint32_t out_row_start = get_arg_val<uint32_t>(arg_idx++);
-    uint32_t out_col_start = get_arg_val<uint32_t>(arg_idx++);
-    uint32_t out_row_tiles = get_arg_val<uint32_t>(arg_idx++);
-    uint32_t out_col_tiles = get_arg_val<uint32_t>(arg_idx++);
-    uint32_t num_pages_per_packet = get_arg_val<uint32_t>(arg_idx++);
-    uint32_t remote_device_ring_id = get_arg_val<uint32_t>(arg_idx++);
+    experimental::GlobalSemaphore global_semaphore(global_sem::semaphore);
+    uint32_t in_row_tiles = get_arg(args::in_row_tiles);
+    uint32_t in_col_tiles = get_arg(args::in_col_tiles);
+    uint32_t input_row_device_stride = get_arg(args::input_row_device_stride);
+    uint32_t input_col_device_stride = get_arg(args::input_col_device_stride);
+    uint32_t input_shard_row_tiles = get_arg(args::input_shard_row_tiles);
+    uint32_t input_shard_col_tiles = get_arg(args::input_shard_col_tiles);
+    uint32_t out_row_start = get_arg(args::out_row_start);
+    uint32_t out_col_start = get_arg(args::out_col_start);
+    uint32_t out_row_tiles = get_arg(args::out_row_tiles);
+    uint32_t out_col_tiles = get_arg(args::out_col_tiles);
+    uint32_t num_pages_per_packet = get_arg(args::num_pages_per_packet);
+    uint32_t remote_device_ring_id = get_arg(args::remote_device_ring_id);
 
     uint32_t out_row_end = out_row_start + input_shard_row_tiles;
     uint32_t out_col_end = out_col_start + input_shard_col_tiles;
 
-    constexpr auto input_tensor_args = TensorAccessorArgs<10>();
-    auto input_tensor_addrgen = TensorAccessor(input_tensor_args, input_buffer_addr);
-    constexpr auto intermediate_tensor_args = TensorAccessorArgs<input_tensor_args.next_compile_time_args_offset()>();
-    auto intermediate_tensor_addrgen = TensorAccessor(intermediate_tensor_args, intermediate_buffer_addr);
+    auto input_tensor_addrgen = TensorAccessor(tensor::input);
+    auto intermediate_tensor_addrgen = TensorAccessor(tensor::intermediate);
 
     Noc noc_obj;
-    CircularBuffer cb(cb_id);
+    DataflowBuffer dfb(dfb::receiver_data);
 
     if (my_ring_id == remote_device_ring_id) {
         // Follows same logic as sender reader for local copy.
@@ -67,17 +62,17 @@ void kernel_main() {
             for (uint32_t col_tile_id = shard_col_start_id; col_tile_id < shard_col_end_id;
                  col_tile_id += num_pages_per_packet) {
                 uint32_t tile_id = row_tile_id * in_col_tiles + col_tile_id;
-                cb.reserve_back(num_pages_per_packet);
+                dfb.reserve_back(num_pages_per_packet);
 
                 uint32_t num_pages_to_read = std::min(shard_col_end_id - col_tile_id, num_pages_per_packet);
                 for (uint32_t j = 0; j < num_pages_to_read; j++) {
                     noc_obj.async_read(
-                        input_tensor_addrgen, cb, page_size, {.page_id = tile_id}, {.offset_bytes = j * page_size});
+                        input_tensor_addrgen, dfb, page_size, {.page_id = tile_id}, {.offset_bytes = j * page_size});
                     tile_id++;
                 }
 
                 noc_obj.async_read_barrier();
-                cb.push_back(num_pages_per_packet);
+                dfb.push_back(num_pages_per_packet);
             }
         }
     } else {
@@ -88,14 +83,12 @@ void kernel_main() {
         const uint32_t sender_relative_ring_id =
             (remote_device_ring_id < my_ring_id) ? remote_device_ring_id : remote_device_ring_id - 1;
 
-        volatile tt_l1_ptr uint32_t* global_semaphore_ptr =
-            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(global_semaphore_addr);
         uint32_t packet_id = 0;
 
         for (uint32_t out_row_id = out_row_start; out_row_id < out_row_end; out_row_id++) {
             for (uint32_t out_col_id = out_col_start; out_col_id < out_col_end; out_col_id += num_pages_per_packet) {
-                cb.reserve_back(num_pages_per_packet);
-                size_t l1_write_addr = cb.get_write_ptr();
+                dfb.reserve_back(num_pages_per_packet);
+                size_t l1_write_addr = dfb.get_write_ptr();
                 uint32_t num_pages_to_read = std::min(out_col_end - out_col_id, num_pages_per_packet);
 
                 constexpr uint32_t payload_size_bytes = contig_pages_advanced * page_size;
@@ -104,8 +97,7 @@ void kernel_main() {
                 uint32_t current_chunk_id = packet_id / chunk_granularity;
                 uint32_t wait_chunk_id = current_chunk_id + 1;  // Chunks are 1-based
                 // Ensure that current chunk has been sent
-                // Device 2.0 migration: legacy primitive retained: global_semaphore_addr is a GlobalSemaphore address.
-                noc_semaphore_wait_min(global_semaphore_ptr, wait_chunk_id);
+                global_semaphore.wait_min(wait_chunk_id);
 
                 for (uint32_t j = 0; j < num_pages_to_read; j += contig_pages_advanced) {
                     uint32_t global_id = sender_relative_ring_id + packet_id * NUM_SENDERS;
@@ -120,12 +112,11 @@ void kernel_main() {
                 }
                 noc_obj.async_read_barrier();
 
-                cb.push_back(num_pages_per_packet);
+                dfb.push_back(num_pages_per_packet);
             }
         }
     }
 
     // Reset global semaphore
-    // Device 2.0 migration: legacy primitive retained: global_semaphore_addr is a GlobalSemaphore address.
-    noc_semaphore_set(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(global_semaphore_addr), 0);
+    global_semaphore.set(0);
 }

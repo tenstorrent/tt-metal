@@ -7,24 +7,24 @@
 #include "all_to_all_async_device_operation_types.hpp"
 #include "ttnn/device_operation.hpp"
 #include "ttnn/distributed/types.hpp"
-#include <tt-metalium/program_descriptors.hpp>
-#include <optional>
+#include "ttnn/metal_v2_artifacts.hpp"
+#include <tt-metalium/workload/run_args/program_run_args.hpp>
 
 namespace ttnn::experimental::prim {
 
 struct AllToAllAsyncProgram {
-    static tt::tt_metal::ProgramDescriptor create_descriptor(
+    static ttnn::device_operation::MeshWorkloadArtifacts create_mesh_workload_artifacts(
         const AllToAllAsyncParams& operation_attributes,
         const AllToAllAsyncInputs& tensor_args,
         Tensor& tensor_return_value,
-        const std::optional<ttnn::MeshCoordinate>& mesh_dispatch_coordinate);
+        const ttnn::MeshCoordinateRangeSet& tensor_coords);
 
-    static void override_runtime_arguments(
-        tt::tt_metal::Program& program,
+    // Re-applies the caller-supplied GlobalSemaphore and the input, intermediate and output tensors on every cache hit.
+    static tt::tt_metal::ProgramRunArgs override_runtime_arguments(
         const AllToAllAsyncParams& operation_attributes,
         const AllToAllAsyncInputs& tensor_args,
         Tensor& tensor_return_value,
-        const std::optional<ttnn::MeshCoordinate>& coord = std::nullopt);
+        const ttnn::MeshCoordinateRange& range);
 };
 
 }  // namespace ttnn::experimental::prim
