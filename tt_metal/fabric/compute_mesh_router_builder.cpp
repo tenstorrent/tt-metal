@@ -260,7 +260,8 @@ std::unique_ptr<ComputeMeshRouterBuilder> ComputeMeshRouterBuilder::build(
     const RouterLocation& location,
     const ChipRoutingFacts& chip_facts,
     std::shared_ptr<ConnectionRegistry> connection_registry,
-    std::optional<RouterArchetype> archetype_override) {
+    std::optional<RouterArchetype> archetype_override,
+    std::optional<RouterGraphInputs> graph_inputs) {
     // Get fabric config
     const auto& builder_context = fabric_context.get_builder_context();
     const auto topology = fabric_context.get_fabric_topology();
@@ -363,39 +364,51 @@ std::unique_ptr<ComputeMeshRouterBuilder> ComputeMeshRouterBuilder::build(
     std::vector<bool> router_injection_flags;
     router_injection_flags.reserve(total_router_channels);
 
-    // Express routing derives each producer's effect from the protected-ring facts. The cardinal
-    // axis-turn heuristic cannot express it: at an express node the same Z output is transit when fed
-    // by the ring and an acquisition when fed by a leaf attachment, and both share one axis pair.
-    // Non-express meshes keep the heuristic untouched.
-    // This router's producer-slot mapping, shared by every VC's derivation.
-    const builder::RouterProducerSlots producer_slots(
-        builder::routing_direction_to_eth_direction(location.direction), vc_shape.sender_counts);
-    // The policy is a per-router fact: express enablement is mesh-wide, so it is selected once,
-    // not per VC. Its facts arrive bound from the chip scope (the queries were bound in the
-    // FabricBuilder constructor; the capabilities were classified at discovery).
-    const NonExpressInjectionPolicy non_express_policy(topology, eth_direction);
-    const ExpressInjectionPolicy express_policy(
-        chip_facts.protected_ring_queries,
-        chip_facts.per_direction_capabilities,
-        chip_z_role,
-        location.direction,
-        edge_capability);
-    const InjectionPolicy& injection_policy = express_enabled ? static_cast<const InjectionPolicy&>(express_policy)
-                                                              : static_cast<const InjectionPolicy&>(non_express_policy);
+    if (graph_inputs) {
+        TT_FATAL(
+            graph_inputs->injection.size() == total_router_channels &&
+                graph_inputs->serviced.size() == total_router_channels,
+            "Router graph inputs have {} injection and {} serviced flags for {} sender channels",
+            graph_inputs->injection.size(),
+            graph_inputs->serviced.size(),
+            total_router_channels);
+        router_injection_flags = graph_inputs->injection;
+    } else {
+        // Express routing derives each producer's effect from the protected-ring facts. The cardinal
+        // axis-turn heuristic cannot express it: at an express node the same Z output is transit when fed
+        // by the ring and an acquisition when fed by a leaf attachment, and both share one axis pair.
+        // Non-express meshes keep the heuristic untouched.
+        // This router's producer-slot mapping, shared by every VC's derivation.
+        const builder::RouterProducerSlots producer_slots(
+            builder::routing_direction_to_eth_direction(location.direction), vc_shape.sender_counts);
+        // The policy is a per-router fact: express enablement is mesh-wide, so it is selected once,
+        // not per VC. Its facts arrive bound from the chip scope (the queries were bound in the
+        // FabricBuilder constructor; the capabilities were classified at discovery).
+        const NonExpressInjectionPolicy non_express_policy(topology, eth_direction);
+        const ExpressInjectionPolicy express_policy(
+            chip_facts.protected_ring_queries,
+            chip_facts.per_direction_capabilities,
+            chip_z_role,
+            location.direction,
+            edge_capability);
+        const InjectionPolicy& injection_policy = express_enabled
+                                                      ? static_cast<const InjectionPolicy&>(express_policy)
+                                                      : static_cast<const InjectionPolicy&>(non_express_policy);
 
-    for (uint32_t vc = 0; vc < num_vcs; ++vc) {
-        uint32_t num_channels_in_vc = vc_shape.sender_counts[vc];
-        // A policy answers whether a slot acquires a protected ring; whether that acquisition is
-        // guarded is the separate question of which VCs realize bubble flow control. The express
-        // derivation classifies a VC1 intermesh landing's first protected egress as an acquisition,
-        // which is the correct classification, but VC1 runs unguarded today -- so emitting the flag
-        // there would demand a bubble the rest of the stack does not provide.
-        auto vc_injection_flags = builder_config::bubble_flow_control_enabled_on_vc(vc)
-                                      ? compute_sender_channel_injection_flags(producer_slots, vc, injection_policy)
-                                      : std::vector<bool>(num_channels_in_vc, false);
-        // Flatten into router-level vector
-        for (uint32_t ch_idx = 0; ch_idx < num_channels_in_vc; ++ch_idx) {
-            router_injection_flags.push_back(vc_injection_flags.at(ch_idx));
+        for (uint32_t vc = 0; vc < num_vcs; ++vc) {
+            uint32_t num_channels_in_vc = vc_shape.sender_counts[vc];
+            // A policy answers whether a slot acquires a protected ring; whether that acquisition is
+            // guarded is the separate question of which VCs realize bubble flow control. The express
+            // derivation classifies a VC1 intermesh landing's first protected egress as an acquisition,
+            // which is the correct classification, but VC1 runs unguarded today -- so emitting the flag
+            // there would demand a bubble the rest of the stack does not provide.
+            auto vc_injection_flags = builder_config::bubble_flow_control_enabled_on_vc(vc)
+                                          ? compute_sender_channel_injection_flags(producer_slots, vc, injection_policy)
+                                          : std::vector<bool>(num_channels_in_vc, false);
+            // Flatten into router-level vector
+            for (uint32_t ch_idx = 0; ch_idx < num_channels_in_vc; ++ch_idx) {
+                router_injection_flags.push_back(vc_injection_flags.at(ch_idx));
+            }
         }
     }
 
@@ -563,7 +576,8 @@ std::unique_ptr<ComputeMeshRouterBuilder> ComputeMeshRouterBuilder::build(
         actual_sender_channels_per_vc,
         actual_receiver_channels_per_vc,
         channel_trimming_overrides_for_router,
-        local_vc0_fast_path_info));
+        local_vc0_fast_path_info,
+        graph_inputs ? &*graph_inputs : nullptr));
 
     if (cluster.arch() == tt::ARCH::BLACKHOLE && fabric_context.get_rtoptions().get_enable_2_erisc_mode()) {
         // Enable updates at a fixed interval for link stability and link status updates
@@ -873,19 +887,27 @@ void ComputeMeshRouterBuilder::configure_connection(
     establish_connections_to_router(peer_compute);
     peer_compute.establish_connections_to_router(*this);
 
-    // Configure NOC VC based on link index (must be same for both routers)
-    auto edm_noc_vc = tt::tt_fabric::FabricEriscDatamoverConfig::DEFAULT_NOC_VC +
-                      (link_idx % tt::tt_fabric::FabricEriscDatamoverConfig::NUM_EDM_NOC_VCS);
-    erisc_builder_->config.edm_noc_vc = edm_noc_vc;
-    peer_compute.erisc_builder_->config.edm_noc_vc = edm_noc_vc;
+    // NOC VC by link index (must be the same for both routers)
+    const auto edm_noc_vc = tt::tt_fabric::FabricEriscDatamoverConfig::DEFAULT_NOC_VC +
+                            (link_idx % tt::tt_fabric::FabricEriscDatamoverConfig::NUM_EDM_NOC_VCS);
+    apply_link_settings(peer_compute, edm_noc_vc, link_idx, num_links, topology, is_galaxy);
+}
 
-    // Apply core placement optimizations
+void ComputeMeshRouterBuilder::apply_link_settings(
+    ComputeMeshRouterBuilder& peer,
+    uint32_t noc_vc,
+    uint32_t link_idx,
+    uint32_t num_links,
+    Topology topology,
+    bool is_galaxy) {
+    erisc_builder_->config.edm_noc_vc = noc_vc;
+    peer.erisc_builder_->config.edm_noc_vc = noc_vc;
     core_placement::CorePlacementContext cctx{
         .topology = topology,
         .is_galaxy = is_galaxy,
         .num_links = num_links,
     };
-    core_placement::apply_core_placement_optimizations(cctx, *erisc_builder_, *peer_compute.erisc_builder_, link_idx);
+    core_placement::apply_core_placement_optimizations(cctx, *erisc_builder_, *peer.erisc_builder_, link_idx);
 }
 
 void ComputeMeshRouterBuilder::configure_for_dispatch() {

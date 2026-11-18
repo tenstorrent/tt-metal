@@ -171,5 +171,51 @@ TEST(FabricStaticSizedChannelsAllocatorTest, RouterLaysOutOnlyItsChannels) {
     EXPECT_EQ(full_router.get_receiver_channel_base_address(1, 0), fabric.get_receiver_channel_base_address(1, 0));
 }
 
+// A router built from a layout (a fabric graph's placement) takes it as is, and rejects one that doesn't fit.
+TEST(FabricStaticSizedChannelsAllocatorTest, RouterFromLayout) {
+    constexpr size_t channel_buffer_size = 14432;
+    constexpr size_t available_space = 360800;
+    constexpr std::array<size_t, builder_config::MAX_NUM_VCS> fabric_senders = {5, 4, 0};
+    constexpr std::array<size_t, builder_config::MAX_NUM_VCS> receiver_channels = {1, 1, 0};
+    const std::vector<MemoryRegion> memory_regions = {{0x1000, available_space}};
+    const FabricStaticSizedChannelsAllocator fabric(
+        Topology::Mesh,
+        silicon_options(),
+        fabric_senders,
+        receiver_channels,
+        channel_buffer_size,
+        available_space,
+        memory_regions);
+    const FabricStaticSizedChannelsAllocator router(fabric, {4, 3, 0});
+    const RouterChannelLayout layout = router.get_layout();
+
+    const FabricStaticSizedChannelsAllocator from_layout(fabric, layout);
+    const RouterChannelLayout round_trip = from_layout.get_layout();
+    for (size_t vc = 0; vc < builder_config::MAX_NUM_VCS; ++vc) {
+        for (const auto& [mine, theirs] :
+             {std::pair{&layout.senders[vc], &round_trip.senders[vc]},
+              std::pair{&layout.receivers[vc], &round_trip.receivers[vc]}}) {
+            ASSERT_EQ(mine->size(), theirs->size());
+            for (size_t i = 0; i < mine->size(); ++i) {
+                EXPECT_EQ((*mine)[i].base_address, (*theirs)[i].base_address);
+                EXPECT_EQ((*mine)[i].num_slots, (*theirs)[i].num_slots);
+            }
+        }
+    }
+    EXPECT_EQ(from_layout.get_channel_buffers_end_address(), router.get_channel_buffers_end_address());
+
+    auto missing_receiver = layout;
+    missing_receiver.receivers[1].clear();
+    EXPECT_ANY_THROW(FabricStaticSizedChannelsAllocator(fabric, missing_receiver));
+
+    auto past_l1 = layout;
+    past_l1.receivers[0][0].base_address = 0xF0000000;
+    EXPECT_ANY_THROW(FabricStaticSizedChannelsAllocator(fabric, past_l1));
+
+    auto too_many_senders = layout;
+    too_many_senders.senders[0].resize(fabric_senders[0] + 1, layout.senders[0][0]);
+    EXPECT_ANY_THROW(FabricStaticSizedChannelsAllocator(fabric, too_many_senders));
+}
+
 }  // namespace
 }  // namespace tt::tt_fabric
