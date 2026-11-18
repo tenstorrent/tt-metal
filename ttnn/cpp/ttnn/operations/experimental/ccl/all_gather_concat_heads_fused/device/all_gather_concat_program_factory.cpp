@@ -580,7 +580,7 @@ ProgramDescriptor build_program_descriptor(
 
         // Set reader runtime args. Slot 0 is the input buffer; slot 1 is the caller-owned semaphore.
         std::vector<uint32_t> reader_rt_args = {
-            input_tensor.buffer()->address(),  // tensor_address0, replaced with the input Buffer*
+            input_tensor.mesh_buffer().address(),  // tensor_address0, replaced with the input Buffer*
             semaphore_address,
             input_tensor_shard_num_pages,
             worker_num_tiles_to_read,                            // num_tiles_to_read
@@ -600,8 +600,8 @@ ProgramDescriptor build_program_descriptor(
         bool wait_output_semaphore = (link == 0) && !enable_async_output_tensor;
         bool reset_global_semaphore = (link == 0) && !enable_async_output_tensor;
         std::vector<uint32_t> writer_rt_args = {
-            temp_tensor.buffer()->address(),  // tensor_address0, replaced with the buffer tensor Buffer*
-            semaphore_address,                // out_ready_sem_bank_addr (absolute address)
+            temp_tensor.mesh_buffer().address(),  // tensor_address0, replaced with the buffer tensor Buffer*
+            semaphore_address,                    // out_ready_sem_bank_addr (absolute address)
             input_tensor_shard_num_pages,
             worker_num_tiles_to_read,                             // num_tiles_to_read
             output_first_core_tile_start_offset,                  // first_core_tile_start_offset

@@ -86,10 +86,10 @@ ProgramDescriptor MSDAOperation::create_descriptor(
     const uint32_t attn_stick_raw = P * attn.element_size();
     const uint32_t output_stick_raw = D * output.element_size();
 
-    const uint32_t value_stick_aligned = aligned_page_size(value_stick_raw, value.buffer()->buffer_type());
-    const uint32_t grid_stick_aligned = aligned_page_size(grid_stick_raw, grid.buffer()->buffer_type());
-    const uint32_t attn_stick_aligned = aligned_page_size(attn_stick_raw, attn.buffer()->buffer_type());
-    const uint32_t output_stick_aligned = aligned_page_size(output_stick_raw, output.buffer()->buffer_type());
+    const uint32_t value_stick_aligned = aligned_page_size(value_stick_raw, value.memory_config().buffer_type());
+    const uint32_t grid_stick_aligned = aligned_page_size(grid_stick_raw, grid.memory_config().buffer_type());
+    const uint32_t attn_stick_aligned = aligned_page_size(attn_stick_raw, attn.memory_config().buffer_type());
+    const uint32_t output_stick_aligned = aligned_page_size(output_stick_raw, output.memory_config().buffer_type());
 
     // Tile size (bf16): 32 * 32 * 2 = 2048 bytes.
     const auto data_format = datatype_to_dataformat_converter(DataType::BFLOAT16);

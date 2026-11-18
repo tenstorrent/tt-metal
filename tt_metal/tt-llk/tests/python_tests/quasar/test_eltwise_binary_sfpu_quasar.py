@@ -24,10 +24,12 @@ from helpers.llk_params import (
     format_dict,
 )
 from helpers.param_config import (
+    DEST_DEPTH_BLOCK_COUNTS,
     InputOutputFormat,
     generate_quasar_sfpu_format_variants,
     input_output_formats,
     parametrize,
+    quasar_sfpu_fpu_route_variants,
     resolve_quasar_sfpu_variant,
     runtime,
 )
@@ -98,38 +100,18 @@ def _stage_binary_operands(op0_flat, op1_flat, tile_indices, dtype):
     return torch.cat(tiles), tile_cnt
 
 
-def _run_sfpu_binary_llk_golden(
+def _sfpu_binary_block_golden(
     formats,
-    dest_acc,
+    input_dimensions,
     tile_indices,
     mathop,
-    binary_op,
     prepare_stimuli,
-    post_check=None,
-    *,
-    approx_mode=ApproximationMode.No,
-    run_types=(PerfRunType.L1_TO_L1,),
-    loop_factor=1,
-    is_perf=False,
-    perf_report=None,
-    dst_rounding_mode=DstRoundingMode.Default,
-    format_variant=None,
-    max_ulp=None,
-    sign_magnitude=False,
-    broadcast_type=BroadcastType.None_,
+    torch_format_out,
+    sign_magnitude,
+    broadcast_type,
 ):
-    """Shared driver for the LLK-golden binary SFPU ops.
-
-    ``prepare_stimuli(formats, input_dimensions, src0_idx, src1_idx, mathop)``
-    returns ``(src_A, tile_cnt_A, src_B)``; both operands live in ``src_A`` at
-    tiles ``src0_idx`` / ``src1_idx``. ``post_check(res_tensor)`` is an optional
-    extra assertion (e.g. div's x/x special-case lanes). ``broadcast_type``
-    broadcasts the ``src1_idx`` tile in the golden.
-    """
+    """One operand set's stimuli and its result-tile golden: (src_A, tile_cnt_A, src_B, golden)."""
     src0_idx, src1_idx, dst_idx = tile_indices
-    input_dimensions = [(max(src0_idx, src1_idx, dst_idx) + 1) * 32, 32]
-    num_faces = MAX_NUM_FACES
-
     src_A, tile_cnt_A, src_B = prepare_stimuli(
         formats, input_dimensions, src0_idx, src1_idx, mathop
     )
@@ -156,7 +138,6 @@ def _run_sfpu_binary_llk_golden(
         formats.input_format,
     ).flatten()
     dst_start = dst_idx * MAX_TILE_ELEMENTS
-    torch_format_out = format_dict[formats.output_format]
     golden_tensor = golden_full[dst_start : dst_start + MAX_TILE_ELEMENTS].to(
         torch_format_out
     )
@@ -164,6 +145,63 @@ def _run_sfpu_binary_llk_golden(
         # SIGN_MAGNITUDE_FORMAT reads and writes Dest as SMAG32.
         src_A = int32_to_smag32(src_A)
         golden_tensor = int32_to_smag32(golden_tensor)
+    return src_A, tile_cnt_A, src_B, golden_tensor
+
+
+def _run_sfpu_binary_llk_golden(
+    formats,
+    dest_acc,
+    tile_indices,
+    mathop,
+    binary_op,
+    prepare_stimuli,
+    post_check=None,
+    *,
+    approx_mode=ApproximationMode.No,
+    run_types=(PerfRunType.L1_TO_L1,),
+    loop_factor=1,
+    is_perf=False,
+    perf_report=None,
+    dst_rounding_mode=DstRoundingMode.Default,
+    format_variant=None,
+    max_ulp=None,
+    sign_magnitude=False,
+    broadcast_type=BroadcastType.None_,
+    num_blocks=1,
+):
+    """Shared driver for the LLK-golden binary SFPU ops.
+
+    ``prepare_stimuli(formats, input_dimensions, src0_idx, src1_idx, mathop)``
+    returns ``(src_A, tile_cnt_A, src_B)``; both operands live in ``src_A`` at
+    tiles ``src0_idx`` / ``src1_idx``. ``post_check(res_tensor)`` is an optional
+    extra assertion (e.g. div's x/x special-case lanes). ``broadcast_type``
+    broadcasts the ``src1_idx`` tile in the golden. ``num_blocks`` runs that many independent
+    operand sets, each in its own Dest section with its own result tile.
+    """
+    src0_idx, src1_idx, dst_idx = tile_indices
+    input_dimensions = [(max(src0_idx, src1_idx, dst_idx) + 1) * 32, 32]
+    num_faces = MAX_NUM_FACES
+    torch_format_out = format_dict[formats.output_format]
+
+    block_src_A, block_src_B, block_golden = [], [], []
+    for _ in range(num_blocks):
+        src_A, tile_cnt_A, src_B, golden_tensor = _sfpu_binary_block_golden(
+            formats,
+            input_dimensions,
+            tile_indices,
+            mathop,
+            prepare_stimuli,
+            torch_format_out,
+            sign_magnitude,
+            broadcast_type,
+        )
+        block_src_A.append(torch.as_tensor(src_A).flatten())
+        block_src_B.append(torch.as_tensor(src_B).flatten())
+        block_golden.append(golden_tensor)
+    if num_blocks > 1:
+        src_A = torch.cat(block_src_A)
+        src_B = torch.cat(block_src_B)
+        golden_tensor = torch.cat(block_golden)
 
     if is_perf and perf_report is None:
         raise ValueError("perf_report must be provided when is_perf=True")
@@ -191,7 +229,7 @@ def _run_sfpu_binary_llk_golden(
             BROADCAST_TYPE(broadcast_type),
         ],
         "runtimes": [
-            TILE_COUNT(tile_cnt_A),
+            TILE_COUNT(tile_cnt_A * num_blocks),
             NUM_FACES(num_faces),
             TEST_FACE_DIMS(),
             DEST_INDEX(0),
@@ -205,9 +243,9 @@ def _run_sfpu_binary_llk_golden(
             src_B,
             formats.input_format,
             formats.output_format,
-            tile_count_A=tile_cnt_A,
-            tile_count_B=tile_cnt_A,
-            tile_count_res=1,
+            tile_count_A=tile_cnt_A * num_blocks,
+            tile_count_B=tile_cnt_A * num_blocks,
+            tile_count_res=num_blocks,
             num_faces=num_faces,
             twos_complement=formats.input_format.is_integer(),
         ),
@@ -531,6 +569,129 @@ def test_eltwise_binary_sfpu_float_quasar(
         perf_report=perf_report,
         format_variant=format_variant,
         max_ulp=max_ulp,
+    )
+
+
+# ===========================================================================
+# logsigmoid(x), x in tile src0 and exp(-x) in tile src1.
+# ===========================================================================
+# The kernel has three regions: x <= -4 passes x through, -4 < x <= 4 evaluates a polynomial
+# whose top coefficients logsigmoid_init programs, x > 4 returns -exp(-x) from the second operand.
+_LOGSIGMOID_KNEE = 4.0
+_LOGSIGMOID_RANGE = 8.0
+# Absolute bounds, about twice the kernel's own error. Up to the upper knee that is the passthrough
+# (logsigmoid(-4) is -4.018, returned as -4) and the polynomial fit, both near 0.02; past it the
+# result is -exp(-x), within 2e-4 of the reference.
+_LOGSIGMOID_ATOL = 0.04
+_LOGSIGMOID_TAIL_ATOL = 0.0005
+
+
+def _logsigmoid_knee_points(data_format):
+    """+-4 and the representable values either side of each, in *data_format*."""
+    torch_format = format_dict[data_format]
+    knee = torch.tensor([_LOGSIGMOID_KNEE], dtype=torch.float32)
+    if data_format == DataFormat.Float32:
+        below = torch.nextafter(knee, torch.tensor([0.0]))
+        above = torch.nextafter(knee, torch.tensor([_LOGSIGMOID_RANGE]))
+    else:
+        # bfloat16 keeps 7 mantissa bits: one step is 2**-6 in [2, 4) and 2**-5 in [4, 8).
+        below, above = knee - 2.0**-6, knee + 2.0**-5
+    points = torch.cat([below, knee, above])
+    return torch.cat([points, -points]).to(torch_format)
+
+
+def _prepare_logsigmoid_stimuli(formats, input_dimensions, src0_idx, src1_idx, mathop):
+    """x sweeps [-8, 8] with the knee points planted in every face; the second operand is exp(-x)."""
+    torch_format = format_dict[formats.input_format]
+    x = torch.linspace(-_LOGSIGMOID_RANGE, _LOGSIGMOID_RANGE, MAX_TILE_ELEMENTS)
+    # The tile is laid out face by face, so striding by a prime spreads each region over all faces.
+    x = x[(torch.arange(MAX_TILE_ELEMENTS) * 389) % MAX_TILE_ELEMENTS].to(torch_format)
+    knees = _logsigmoid_knee_points(formats.input_format)
+    face_elems = MAX_TILE_ELEMENTS // MAX_NUM_FACES
+    for face in range(MAX_NUM_FACES):
+        start = face * face_elems + 5 * face
+        x[start : start + len(knees)] = knees
+    exp_neg_x = torch.exp(-x.to(torch.float32)).to(torch_format)
+    src_A, tile_cnt = _stage_binary_operands(
+        x, exp_neg_x, (src0_idx, src1_idx, 0), torch_format
+    )
+    return src_A, tile_cnt, torch.zeros_like(src_A)
+
+
+@pytest.mark.quasar
+@parametrize(
+    formats=[variant.formats for variant in _FLOAT_VARIANTS],
+    dest_acc=_dest_acc_for_float_formats,
+    tile_indices=runtime(_TILE_INDEX_VARIANTS),
+)
+def test_eltwise_binary_sfpu_logsigmoid_quasar(formats, dest_acc, tile_indices):
+    """Binary SFPU logsigmoid across its three regions and both knees."""
+    mathop = MathOperation.SfpuLogsigmoid
+    format_variant = resolve_quasar_sfpu_variant(
+        MathOperation.SfpuElwadd, formats, dest_acc
+    )
+    assert (
+        format_variant is not None
+    ), f"no Quasar SFPU route for {formats} dest_acc={dest_acc}"
+    src0_idx, src1_idx, _ = tile_indices
+    x = _prepare_logsigmoid_stimuli(formats, None, src0_idx, src1_idx, mathop)[0][
+        src0_idx * MAX_TILE_ELEMENTS : (src0_idx + 1) * MAX_TILE_ELEMENTS
+    ].to(torch.float64)
+    for region in (
+        x <= -_LOGSIGMOID_KNEE,
+        (x > -_LOGSIGMOID_KNEE) & (x <= _LOGSIGMOID_KNEE),
+        x > _LOGSIGMOID_KNEE,
+    ):
+        assert bool(region.any()), "logsigmoid stimulus misses a kernel region"
+
+    def _check_every_region(res_tensor):
+        # The suite tolerance is 5% of the result plus 0.05, wider than the polynomial tail
+        # logsigmoid_init programs (0.2 at the knees); hold every lane to the kernel's own error.
+        error = (res_tensor.to(torch.float64) - torch.nn.functional.logsigmoid(x)).abs()
+        bound = torch.where(
+            x > _LOGSIGMOID_KNEE, _LOGSIGMOID_TAIL_ATOL, _LOGSIGMOID_ATOL
+        )
+        worst = int((error - bound).argmax())
+        assert error[worst] <= bound[worst], (
+            f"logsigmoid({x[worst].item()}) = {res_tensor[worst].item()}, "
+            f"{error[worst].item():.3e} from the reference"
+        )
+
+    _run_sfpu_binary_llk_golden(
+        formats,
+        dest_acc,
+        tile_indices,
+        mathop,
+        mathop.cpp_enum_value,
+        prepare_stimuli=_prepare_logsigmoid_stimuli,
+        post_check=_check_every_region,
+        format_variant=format_variant,
+    )
+
+
+# The float routes above plus the FPU datacopy routes their dedup drops for Unpack-to-Dest.
+_DEST_DEPTH_FLOAT_VARIANTS = _FLOAT_VARIANTS + quasar_sfpu_fpu_route_variants(
+    input_output_formats([DataFormat.Float16_b, DataFormat.Float32], same=True),
+)
+
+
+@pytest.mark.quasar
+@parametrize(
+    format_variant=_DEST_DEPTH_FLOAT_VARIANTS,
+    mathop=[MathOperation.SfpuElwadd, MathOperation.SfpuElwmul],
+    num_blocks=runtime(list(DEST_DEPTH_BLOCK_COUNTS)),
+)
+def test_eltwise_binary_sfpu_dest_depth_quasar(format_variant, mathop, num_blocks):
+    """4 and 8 operand sets, each staged, combined and packed in its own Dest section."""
+    _run_sfpu_binary_llk_golden(
+        format_variant.formats,
+        format_variant.dest_acc,
+        DEFAULT_SFPU_BINARY_TILE_INDICES,
+        mathop,
+        mathop.cpp_enum_value,
+        prepare_stimuli=_prepare_float_stimuli,
+        format_variant=format_variant,
+        num_blocks=num_blocks,
     )
 
 

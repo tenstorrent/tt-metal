@@ -98,7 +98,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         }
         else if constexpr (PERF_RUN_TYPE == PerfRunType::MATH_ISOLATE)
         {
-            _perf_unpack_loop_set_valid<true /*set_a*/, true /*set_b*/>(LOOP_FACTOR * TILE_CNT * reduce_src_dvalids_per_tile(tensor_shape));
+            _perf_unpack_stream_set_valid<true /*set_a*/, true /*set_b*/, PERF_RUN_TYPE>(LOOP_FACTOR * TILE_CNT * reduce_src_dvalids_per_tile(tensor_shape));
         }
         else
         {
@@ -153,9 +153,10 @@ void run_kernel(RUNTIME_PARAMETERS params)
         if constexpr (PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE)
         {
         }
-        else if constexpr (PERF_RUN_TYPE == PerfRunType::UNPACK_ISOLATE || PERF_RUN_TYPE == PerfRunType::L1_CONGESTION)
+        else if constexpr (PERF_RUN_TYPE == PerfRunType::UNPACK_ISOLATE)
         {
-            _perf_math_loop_clear_valid<true /*clear_a*/, true /*clear_b*/>(LOOP_FACTOR * TILE_CNT * reduce_src_dvalids_per_tile(tensor_shape));
+            _perf_math_stream_clear_valid<true /*clear_a*/, true /*clear_b*/, PERF_RUN_TYPE>(
+                LOOP_FACTOR * TILE_CNT * reduce_src_dvalids_per_tile(tensor_shape));
         }
         else
         {
@@ -210,7 +211,8 @@ inline void pack_tiles(const std::uint32_t output_tile_cnt, const std::uint32_t 
         {
             _llk_pack_<DstSync::SyncHalf, is_fp32_dest_acc_en, ckernel::PackMode::Default>(tile, L1_ADDRESS(buffer_Res[block_start + tile]));
         }
-        if constexpr (sync_with_math)
+        // Wormhole: the pack isolate loops release the dest section too, as production's tile_regs_release does
+        if constexpr (sync_with_math || PERF_PACK_SECTION_RELEASE)
         {
             _llk_pack_dest_section_done_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
         }
@@ -239,7 +241,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const std::uint32_t num_faces = tensor_shape.total_num_faces();
     const bool partial_face       = tensor_shape.face_r_dim < FACE_R_DIM;
     const bool narrow_tile        = tensor_shape.num_faces_c_dim == 1;
-    constexpr bool sync_with_math = PERF_RUN_TYPE != PerfRunType::PACK_ISOLATE && PERF_RUN_TYPE != PerfRunType::L1_CONGESTION;
+    constexpr bool sync_with_math = PERF_RUN_TYPE != PerfRunType::PACK_ISOLATE;
 
     {
         START_PERF_MEASURE("INIT")

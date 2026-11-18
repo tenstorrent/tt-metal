@@ -200,15 +200,16 @@ tt::tt_metal::ProgramDescriptor AllReduceAsyncMeshWorkloadFactory::create_descri
         coord, forward_coord, backward_coord, num_targets_forward, num_targets_backward, mesh_device);
 
     // Tensor Info
-    [[maybe_unused]] const auto input_tensor_num_pages = input_tensor.buffer()->num_pages();
+    [[maybe_unused]] const auto input_tensor_num_pages = input_tensor.mesh_buffer().num_pages();
     const auto input_tensor_cores = input_tensor.memory_config().shard_spec()->grid;
     const auto input_tensor_shard_shape = input_tensor.memory_config().shard_spec()->shape;
     const auto input_tensor_shard_num_pages = input_tensor_shard_shape[0] * input_tensor_shard_shape[1] / TILE_HW;
     const auto num_input_cores = input_tensor_cores.num_cores();
-    const auto output_tensor_num_pages = output_tensor.buffer()->num_pages();
+    const auto output_tensor_num_pages = output_tensor.mesh_buffer().num_pages();
     // Get only cores that have actual data
     const auto& output_tensor_original_corerangeset = output_tensor.memory_config().shard_spec()->grid;
-    const auto& cores_with_data = output_tensor.buffer()->buffer_distribution_spec()->cores_with_data();
+    const auto& cores_with_data =
+        output_tensor.mesh_buffer().device_local_config().sharding_args.buffer_distribution_spec()->cores_with_data();
 
     // filter output_tensor_cores to only include cores that have data and preserve original order
     CoreRangeSet output_tensor_cores;
@@ -682,7 +683,7 @@ void AllReduceAsyncMeshWorkloadFactory::override_runtime_arguments(
     const std::optional<ttnn::MeshCoordinate>& coord) {
     (void)coord;
     tt::tt_metal::GetCommonRuntimeArgs(program, kWorkerReader)[ttnn::ccl::AllReduceReaderCommonArgs::input] =
-        tensor_args.input_tensor.buffer()->address();
+        tensor_args.input_tensor.mesh_buffer().address();
     tt::tt_metal::GetCommonRuntimeArgs(program, kWorkerWriter)[ttnn::ccl::AllReduceSemaphoreCommonArgs::semaphore] =
         static_cast<uint32_t>(operation_attributes.semaphore.address());
     tt::tt_metal::GetCommonRuntimeArgs(program, kReductionReader)[ttnn::ccl::AllReduceSemaphoreCommonArgs::semaphore] =

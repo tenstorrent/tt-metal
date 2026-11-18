@@ -31,6 +31,7 @@
 #include "ttnn/kernel_lib/mcast/host/mcast.hpp"
 #include "ttnn/global_semaphore.hpp"
 #include "ttnn/operations/ccl/ccl_common.hpp"
+#include "ttnn/per_device_program_merge.hpp"
 #include "ttnn/tensor/tensor_ops.hpp"
 #include "ttnn/tensor/tensor_utils.hpp"
 
@@ -70,6 +71,11 @@ KernelDescriptor::RTArgList mrs_rt_list(const std::vector<SlotValue>& slots) {
         std::visit([&list](auto value) { list.push_back(value); }, slot);
     }
     return list;
+}
+
+// Appends schedule words to a common runtime-arg list.
+void mrs_append(std::vector<SlotValue>& dst, const std::vector<uint32_t>& src) {
+    dst.insert(dst.end(), src.begin(), src.end());
 }
 
 void mrs_append(std::vector<uint32_t>& dst, const std::vector<uint32_t>& src) {
@@ -463,8 +469,9 @@ ProgramDescriptor MatmulReduceScatterPrefillProgramFactory::create_descriptor(
 
     const uint32_t nkb = Kt / kb;
     const bool resident = plan.resident;
-    // Per-regime fill levers: resident 2 senders per line, W reads on NoC1, look-ahead after the read
-    // barrier, disjoint diagonal senders; stream 1 sender, both reads on NoC0, look-ahead before, diagonal senders.
+    // Per-regime fill levers: resident 2 senders per line, W reads on NoC1 (NoC0 on a thin wide grid, below),
+    // look-ahead after the read barrier, disjoint diagonal senders; stream 1 sender, both reads on NoC0, look-ahead
+    // before, diagonal senders.
     const uint32_t senders = resident ? 2 : 1;
     const uint32_t a_split = senders >= 2 && win_m >= 2 ? tt::div_up(win_m, 2u) : win_m;
     const uint32_t w_split = senders >= 2 && kb >= 2 ? tt::div_up(kb, 2u) : kb;
@@ -472,8 +479,8 @@ ProgramDescriptor MatmulReduceScatterPrefillProgramFactory::create_descriptor(
     const uint32_t rW = (resident && scatter_dim == -2) ? 1 : 0;
     const uint32_t a_pages = rA != 0 ? core_m * Kt : plan.depths[0] * win_m * kb;
     const uint32_t w_pages = rW != 0 ? Kt * core_n : plan.depths[1] * kb * win_n;
-    const auto tA = static_cast<uint32_t>(a.buffer()->aligned_page_size());
-    const auto tW = static_cast<uint32_t>(w.buffer()->aligned_page_size());
+    const auto tA = static_cast<uint32_t>(a.mesh_buffer().aligned_page_size());
+    const auto tW = static_cast<uint32_t>(w.mesh_buffer().aligned_page_size());
     const uint32_t a_row_per_block = scatter_dim == -2 ? block_m : 0;
     const uint32_t w_col_per_block = scatter_dim == -1 ? block_n : 0;
 
@@ -522,7 +529,17 @@ ProgramDescriptor MatmulReduceScatterPrefillProgramFactory::create_descriptor(
     reader_ct[args::reader_ct::PREFETCH_STEPS] = detail::kPrefetchSteps;
     reader_ct[args::reader_ct::LOOKAHEAD_AFTER_BARRIER] = resident ? 1 : 0;
     reader_ct[args::reader_ct::A_READ_NOC] = 0;
-    reader_ct[args::reader_ct::W_READ_NOC] = resident ? 1 : 0;
+    // A resident plan scattering on N streams W through every entry while A is read once, so on a thin grid W is
+    // nearly all the DRAM traffic. With N along x (>= 10 columns, M on <= 4 rows) W reads on NoC0: NoC1 ran it 1.4-3x
+    // slower (QB2 1x4 ring, traced, M=32/64 K=3584: N=2560-7168 at 0.33-0.72x the NoC1 time; Kimi K2.7 o_proj
+    // decode 181 -> 62 us). With N along y (the planner's M-on-x grids, N=1024-3072 on 6-8 lines) NoC1 stays faster
+    // (NoC0 1.01-1.59x slower), and on taller grids, where A's reads are as heavy, the NoC split is neutral: both keep
+    // NoC1. N along x on fewer than 10 columns is unmeasured and keeps NoC1.
+    // The row (<= 4) and column (>= 10) bounds are empirical: the envelope of the shapes measured so far, not a
+    // derived rule (the likely mechanism, each NoC's dimension order funnelling the DRAM responses into the W senders'
+    // rows or columns, is unverified). Subject to change as more grid shapes are measured.
+    const bool w_noc0_thin_wide = resident && scatter_dim == -1 && !m_on_x && gd.grid_m <= 4 && gd.grid_n >= 10;
+    reader_ct[args::reader_ct::W_READ_NOC] = (resident && !w_noc0_thin_wide) ? 1 : 0;
     reader_ct[args::reader_ct::NUM_WAVES] = W;
     reader_ct[args::reader_ct::NUM_CHUNKS] = num_chunks;
     reader_ct[args::reader_ct::N_INNER] = n_inner;
@@ -552,6 +569,7 @@ ProgramDescriptor MatmulReduceScatterPrefillProgramFactory::create_descriptor(
     compute_ct[args::compute_ct::NUM_CHUNKS] = num_chunks;
     compute_ct[args::compute_ct::N_INNER] = n_inner;
     compute_ct[args::compute_ct::RESIDENT] = resident ? 1 : 0;
+    compute_ct[args::compute_ct::ROW_MOP] = mesh->arch() == tt::ARCH::BLACKHOLE ? 1 : 0;
 
     std::vector<uint32_t> writer_ct(args::writer_ct::COUNT);
     writer_ct[args::writer_ct::CB_FINISHED] = args::cb::FINISHED;
@@ -708,12 +726,12 @@ ProgramDescriptor MatmulReduceScatterPrefillProgramFactory::create_descriptor(
         r_rt[args::reader_rt::SLOTS_BWD] = n_arr[kBwd];
         r_rt[args::reader_rt::REP_FWD_XY] = n_arr[kFwd] != 0 ? mrs_xy16(*rep[kFwd]) : 0;
         r_rt[args::reader_rt::REP_BWD_XY] = n_arr[kBwd] != 0 ? mrs_xy16(*rep[kBwd]) : 0;
-        mrs_append(r_rt, wave_words);
-        mrs_append(r_rt, ent_words[h]);
+        // The schedule tables are common args (one copy per half); a core only says which half it follows.
+        r_rt[args::reader_rt::HALF] = h;
         reader.runtime_args.emplace_back(core, std::move(r_rt));
 
-        std::vector<uint32_t> c_rt = wave_mm_words;
-        mrs_append(c_rt, roles_words[h]);
+        std::vector<uint32_t> c_rt(args::compute_rt::COUNT);
+        c_rt[args::compute_rt::HALF] = h;
         compute.runtime_args.emplace_back(core, std::move(c_rt));
 
         std::vector<uint32_t> w_rt(args::writer_rt::COUNT);
@@ -722,8 +740,7 @@ ProgramDescriptor MatmulReduceScatterPrefillProgramFactory::create_descriptor(
         w_rt[args::writer_rt::FWD_PORT_XY] = pf.has_value() ? mrs_xy16(*pf) : 0;
         w_rt[args::writer_rt::BWD_PORT_XY] = pb.has_value() ? mrs_xy16(*pb) : 0;
         w_rt[args::writer_rt::MAILBOX_SLOT_OFFSET] = k * detail::kMailboxStride;
-        mrs_append(w_rt, wave_words);
-        mrs_append(w_rt, kind_words[h]);
+        w_rt[args::writer_rt::HALF] = h;
         writer.runtime_args.emplace_back(core, std::move(w_rt));
     }
 
@@ -733,11 +750,23 @@ ProgramDescriptor MatmulReduceScatterPrefillProgramFactory::create_descriptor(
     reader_common[args::reader_common::ARR_FWD_ADDR] = arr_addr[kFwd];
     reader_common[args::reader_common::ARR_BWD_ADDR] = arr_addr[kBwd];
     reader_common[args::reader_common::REPORT_CHUNKS] = credit_chunks;
+    mrs_append(reader_common, wave_words);
+    mrs_append(reader_common, ent_words[0]);
+    mrs_append(reader_common, ent_words[1]);
     reader.emplace_common_runtime_args(mrs_rt_list(reader_common));
+
+    std::vector<SlotValue> compute_common;
+    mrs_append(compute_common, wave_mm_words);
+    mrs_append(compute_common, roles_words[0]);
+    mrs_append(compute_common, roles_words[1]);
+    compute.emplace_common_runtime_args(mrs_rt_list(compute_common));
 
     std::vector<SlotValue> writer_common(args::writer_common::COUNT, 0u);
     writer_common[args::writer_common::OUT_ADDR] = output.buffer();
     writer_common[args::writer_common::MAILBOX_ADDR] = res.mailbox.buffer();
+    mrs_append(writer_common, wave_words);
+    mrs_append(writer_common, kind_words[0]);
+    mrs_append(writer_common, kind_words[1]);
     writer.emplace_common_runtime_args(mrs_rt_list(writer_common));
 
     // ---- multicast families (after the reader's own args) ----
@@ -759,16 +788,19 @@ ProgramDescriptor MatmulReduceScatterPrefillProgramFactory::create_descriptor(
     }
 
     // ---- port cores ----
+    // use_column_major_ccl stacks every port in one column: on NoC0 (+x, then +y) the reader's pulls all funnel through
+    // that column's links, so there it pulls on NoC1 (-y, then -x) and the sender takes NoC0.
+    const bool reader_noc1 = attrs.plan_inputs.column_major_ccl;
     KernelDescriptor port_reader;
     port_reader.kernel_source = mrs_kernel_path("matmul_reduce_scatter_prefill_port_reader.cpp");
     port_reader.compile_time_args = port_ct;
-    port_reader.config =
-        DataMovementConfigDescriptor{.processor = DataMovementProcessor::RISCV_1, .noc = NOC::RISCV_0_default};
+    port_reader.config = DataMovementConfigDescriptor{
+        .processor = DataMovementProcessor::RISCV_1, .noc = reader_noc1 ? NOC::NOC_1 : NOC::NOC_0};
     KernelDescriptor port_sender;
     port_sender.kernel_source = mrs_kernel_path("matmul_reduce_scatter_prefill_port_sender.cpp");
     port_sender.compile_time_args = std::move(port_ct);
-    port_sender.config =
-        DataMovementConfigDescriptor{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_1_default};
+    port_sender.config = DataMovementConfigDescriptor{
+        .processor = DataMovementProcessor::RISCV_0, .noc = reader_noc1 ? NOC::NOC_0 : NOC::NOC_1};
 
     const auto src_node = mesh->get_fabric_node_id(coord);
     std::vector<CoreRange> port_ranges;
@@ -918,17 +950,54 @@ MatmulReduceScatterPrefillMeshWorkloadFactory::create_mesh_workload(
     Tensor& output) {
     tt::tt_metal::distributed::MeshWorkload workload;
     std::unordered_map<ttnn::MeshCoordinateRange, shared_variables_t> shared;
-    for (const auto& coord : tensor_coords.coords()) {
-        Program program{MatmulReduceScatterPrefillProgramFactory::create_descriptor(attrs, tensor_args, output, coord)};
+    auto& mesh_device = *tensor_args.input_tensor.device();
+    auto add = [&](const ttnn::MeshCoordinateRange& range, Program program) {
         shared_variables_t sv{
             .reader = GetCommonRuntimeArgs(program, args::kernel_index::READER),
             .writer = GetCommonRuntimeArgs(program, args::kernel_index::WRITER),
             .port_reader = GetCommonRuntimeArgs(program, args::kernel_index::PORT_READER),
             .port_sender = GetCommonRuntimeArgs(program, args::kernel_index::PORT_SENDER),
         };
-        const ttnn::MeshCoordinateRange range(coord);
         workload.add_program(range, std::move(program));
         shared.emplace(range, sv);
+    };
+    // The chips' programs differ in runtime-arg values and in which strip cells run the port kernels (each chip places
+    // its ports near its own Ethernet cores; the strip holds no matmul core). One program per range runs the port
+    // kernels on the union of the chips' port cells, idle where a chip has no port: zero cores, units, ready fence and
+    // credits make both port kernels return before touching the fabric or a mailbox.
+    ttnn::ProgramMergeOptions options;
+    options.pad_runtime_args = true;
+    options.idle_runtime_args = [](size_t kernel_index, const CoreCoord&) -> std::optional<std::vector<uint32_t>> {
+        if (kernel_index == args::kernel_index::PORT_READER) {
+            return std::vector<uint32_t>(args::port_reader_rt::COUNT, 0u);
+        }
+        if (kernel_index == args::kernel_index::PORT_SENDER) {
+            std::vector<uint32_t> idle(args::port_sender_rt::COUNT, 0u);
+            idle[args::port_sender_rt::ZONE_CB] = args::cb::ARRIVALS_FWD;
+            return idle;
+        }
+        return std::nullopt;
+    };
+    for (const auto& range : tensor_coords.ranges()) {
+        std::vector<ProgramDescriptor> descriptors;
+        descriptors.reserve(range.shape().mesh_size());
+        for (const auto& coord : range) {
+            descriptors.push_back(
+                MatmulReduceScatterPrefillProgramFactory::create_descriptor(attrs, tensor_args, output, coord));
+        }
+        auto merged = descriptors.size() > 1 && tt::tt_metal::distributed::ArePerDeviceRuntimeArgsSupported(
+                                                    *tensor_args.input_tensor.device(), range)
+                          ? ttnn::merge_per_device_program_descriptors(descriptors, options)
+                          : std::nullopt;
+        if (merged.has_value()) {
+            add(range, Program{mesh_device, merged->descriptor});
+            ttnn::apply_per_device_runtime_args(workload, range, merged->per_device_runtime_args);
+            continue;
+        }
+        size_t i = 0;
+        for (const auto& coord : range) {
+            add(ttnn::MeshCoordinateRange(coord), Program{mesh_device, descriptors[i++]});
+        }
     }
     return cached_mesh_workload_t{std::move(workload), std::move(shared)};
 }
@@ -944,9 +1013,9 @@ void MatmulReduceScatterPrefillMeshWorkloadFactory::override_runtime_arguments(
     // - the global semaphores and the mailbox: never. They are created once per mesh (ensure_mesh_resources) and live
     //   as long as the mesh and its program cache, so create_descriptor's values stay right.
     //   port_sender_rt::ARRIVAL_ADDR (per core) is the same kind of address.
-    const auto a_addr = static_cast<uint32_t>(tensor_args.input_tensor.buffer()->address());
-    const auto w_addr = static_cast<uint32_t>(tensor_args.weight.buffer()->address());
-    const auto out_addr = static_cast<uint32_t>(output.buffer()->address());
+    const auto a_addr = static_cast<uint32_t>(tensor_args.input_tensor.mesh_buffer().address());
+    const auto w_addr = static_cast<uint32_t>(tensor_args.weight.mesh_buffer().address());
+    const auto out_addr = static_cast<uint32_t>(output.mesh_buffer().address());
     for (const auto& [range, sv] : cached.shared_variables) {  // a walk, no lookup per program
         sv.reader.get()[args::reader_common::A_ADDR] = a_addr;
         sv.reader.get()[args::reader_common::W_ADDR] = w_addr;

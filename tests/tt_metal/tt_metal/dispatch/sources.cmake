@@ -11,6 +11,7 @@ set(UNIT_TESTS_DISPATCH_SMOKE_SOURCES
     # Host-only (no-silicon) suites; their test cases carry the CPU_ prefix and run
     # on the github_hosted_cpu leg of the smoke pipeline instead of device runners.
     dispatch_buffer/test_BufferCorePageMapping_Iterator.cpp
+    dispatch_util/test_aux_region_allocator.cpp
     dispatch_util/test_ringbuffer_cache.cpp
     dispatch_util/test_device_command.cpp
     dispatch_util/test_dispatch_telemetry.cpp

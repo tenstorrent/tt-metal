@@ -4,6 +4,8 @@
 
 #pragma once
 
+#include <memory>
+
 #include "high_bw_all_gather_device_operation_types.hpp"
 
 #include "ttnn/device_operation.hpp"
@@ -35,6 +37,10 @@ struct HighBwAllGatherFabricFactory {
         tt::tt_metal::GlobalSemaphore shards_arrived_counter;
         CoreRangeSet fabric_link_worker_cores;  // the cores that use the two global counters
         ChipShardPageGeometry chip_shard_geometry;
+        // Common args last written to every program by a completed cache-hit update; empty until the first.
+        // Only the first program's shared state keeps this record (see override_runtime_arguments).
+        std::vector<uint32_t> applied_reader_common;
+        std::vector<uint32_t> applied_writer_common;
     };
 
     using cached_mesh_workload_t = ttnn::device_operation::AdaptedCachedMeshWorkload<shared_variables_t>;

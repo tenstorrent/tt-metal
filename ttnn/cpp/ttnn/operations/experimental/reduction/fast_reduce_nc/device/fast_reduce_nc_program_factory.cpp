@@ -17,7 +17,6 @@ namespace ttnn::experimental::prim {
 using namespace tt;
 using namespace tt::constants;
 using namespace tt::tt_metal;
-using namespace tt::tt_metal::experimental;
 
 namespace {
 
@@ -67,9 +66,9 @@ std::tuple<uint32_t, uint32_t, uint32_t, uint32_t> extract_and_scale_spatial_dim
 
 // The tensor arguments create_program_artifacts and override_runtime_arguments both bind: the input, the
 // output and, when the output is split, the right channel region.
-decltype(tt::tt_metal::experimental::ProgramRunArgs::tensor_args) build_tensor_run_args(
+decltype(ProgramRunArgs::tensor_args) build_tensor_run_args(
     const FastReduceNCInputs& tensor_args, std::vector<Tensor>& outputs) {
-    decltype(tt::tt_metal::experimental::ProgramRunArgs::tensor_args) tensor_run_args;
+    decltype(ProgramRunArgs::tensor_args) tensor_run_args;
     tensor_run_args.emplace(FRNC_INPUT, TensorArgument{tensor_args.input.mesh_tensor()});
     tensor_run_args.emplace(FRNC_OUTPUT, TensorArgument{outputs.front().mesh_tensor()});
     if (outputs.size() > 1) {
@@ -142,7 +141,8 @@ ttnn::device_operation::ProgramArtifacts FastReduceNCProgramFactory::create_prog
     bool nd_sharded = tensor_args.input.nd_shard_spec().has_value() && tensor_return_value.nd_shard_spec().has_value();
     bool same_tiles = input_tile[0] == output_tile[0] && input_tile[1] == output_tile[1];
     bool divide_by_shards = false;
-    const auto& dspec = *tensor_return_value.buffer()->buffer_distribution_spec();
+    const auto& dspec =
+        *tensor_return_value.mesh_buffer().device_local_config().sharding_args.buffer_distribution_spec();
     if (nd_sharded && same_tiles && operation_attributes.dim == 0) {
         const NdShardSpec& input_nd_shard_spec = tensor_args.input.nd_shard_spec().value();
         const NdShardSpec& output_nd_shard_spec = tensor_return_value.nd_shard_spec().value();
@@ -423,7 +423,7 @@ ttnn::device_operation::ProgramArtifacts FastReduceNCProgramFactory::create_prog
 
 // Only the tensor bindings carry per-dispatch state (buffer addresses); every other runtime arg derives
 // from the operation attributes and the TensorSpecs, which the program hash covers.
-tt::tt_metal::experimental::ProgramRunArgs FastReduceNCProgramFactory::override_runtime_arguments(
+ProgramRunArgs FastReduceNCProgramFactory::override_runtime_arguments(
     const FastReduceNCParams& /*operation_attributes*/,
     const FastReduceNCInputs& tensor_args,
     std::vector<Tensor>& outputs,

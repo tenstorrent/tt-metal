@@ -11,11 +11,11 @@
 constexpr uint32_t cb_combine_input_id = tt::CBIndex::c_0;
 
 constexpr uint32_t num_experts = get_compile_time_arg_val(0);
-// Number of tile-sized CB pages needed to hold one row of emb_dim elements
-// (ceil(emb_dim / 1024) when emb_dim is a multiple of 32 but not 1024).
+// Number of tile-sized CB pages needed to hold this core's slice of one emb_dim row: the whole row
+// (ceil(emb_dim / 1024) when emb_dim is a multiple of 32 but not 1024) unless the factory slices emb_dim.
 constexpr uint32_t emb_dim_cb_tiles = get_compile_time_arg_val(1);
-// Raw byte count of one emb_dim row — used for the NoC read so we transfer
-// exactly emb_dim bytes and tolerate non-1024-aligned embedding dims.
+// Raw byte count of this core's slice of one emb_dim row — used for the NoC read so we transfer
+// exactly those bytes and tolerate non-1024-aligned embedding dims.
 constexpr uint32_t emb_dim_bytes = get_compile_time_arg_val(2);
 // Experts read per NoC barrier: num_experts (all of a token's rows at once) when the factory sized
 // c_0 for it, else 1. One barrier per 8 KB row left the reader latency-bound.
@@ -41,6 +41,8 @@ void kernel_main() {
     uint32_t combine_addr = get_arg_val<uint32_t>(0);
     uint32_t token_start_idx = get_arg_val<uint32_t>(1);
     uint32_t num_chunks = get_arg_val<uint32_t>(2);
+    // Byte offset of this core's emb slice within a combine row (0 when the factory does not slice emb_dim).
+    const uint32_t slice_offset_bytes = get_arg_val<uint32_t>(3);
 
     Noc noc;
     CircularBuffer cb_combine_input(cb_combine_input_id);
@@ -61,7 +63,7 @@ void kernel_main() {
     for (uint32_t chunk = 0; chunk < num_chunks; ++chunk) {
         if constexpr (row_indexed) {
             const auto row_index_addrg =
-                TensorAccessor(row_index_accessor_args, get_arg_val<uint32_t>(3), row_index_aligned_page_size);
+                TensorAccessor(row_index_accessor_args, get_arg_val<uint32_t>(4), row_index_aligned_page_size);
             for (uint32_t i = 0; i < TOKENS_PER_CHUNK; ++i) {
                 noc.async_read(
                     row_index_addrg,
@@ -92,7 +94,7 @@ void kernel_main() {
                         combine_addrg,
                         cb_combine_input,
                         emb_dim_bytes,
-                        {.page_id = expert_page_idx},
+                        {.page_id = expert_page_idx, .offset_bytes = slice_offset_bytes},
                         {.offset_bytes = e * emb_dim_cb_tiles * input_tile_size});
                 }
                 noc.async_read_barrier();

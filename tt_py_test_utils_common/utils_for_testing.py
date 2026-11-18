@@ -1102,3 +1102,38 @@ def make_sharded_memory_config(device, shape, strategy, layout, dtype=ttnn.bfloa
     if buffer_type == ttnn.BufferType.L1:
         return l1_cfg
     return ttnn.MemoryConfig(l1_cfg.memory_layout, buffer_type, l1_cfg.shard_spec)
+
+
+def assert_program_cache_flat(mesh_device, run, variants, *, warm_index=0, miss_indices=()):
+    """Warm the program cache with run(variants[warm_index]), then run the other variants in order and
+    require each of them to hit it, except those at `miss_indices`, which must add at least one entry
+    (`run` may enqueue several programs; callers that need an exact count check the returned total).
+    Order matters: the cache state carries from one variant to the next, so a caller sequences e.g.
+    M, M+32, M-32 after warming at M, or a must-miss variant and then the variants that must hit its
+    program. Returns the entry count."""
+    mesh_device.disable_and_clear_program_cache()
+    mesh_device.enable_program_cache()
+    # Clearing the cache keeps its miss policy, so an earlier test that forbade misses would fail the warm-up.
+    mesh_device.set_program_cache_misses_allowed(True)
+    run(variants[warm_index])
+    entries = mesh_device.num_program_cache_entries()
+    try:
+        for i, variant in enumerate(variants):
+            if i == warm_index:
+                continue
+            must_miss = i in miss_indices
+            mesh_device.set_program_cache_misses_allowed(must_miss)
+            try:
+                run(variant)
+            except RuntimeError as e:
+                # With misses forbidden, the device refuses a miss before any program is added.
+                if "cache misses are forbidden" in str(e):
+                    raise AssertionError(f"variant {i} ({variant}) missed the program cache: {e}") from e
+                raise
+            if must_miss:
+                now = mesh_device.num_program_cache_entries()
+                assert now > entries, f"variant {i} ({variant}) was expected to miss but added no program"
+                entries = now
+    finally:
+        mesh_device.set_program_cache_misses_allowed(True)
+    return entries

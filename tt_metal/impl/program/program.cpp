@@ -101,7 +101,6 @@
 #include <internal/service/service_core_manager.hpp>
 #include "impl/internal/service/service_core_manager_impl.hpp"
 #include "tt_metal/tools/profiler/tracy_debug_zones.hpp"
-#include <fmt/ranges.h>
 #include "distributed/mesh_device_impl.hpp"
 
 namespace tt {
@@ -194,7 +193,11 @@ SummaryRows program_config_breakdown(
         }
     }
     rows.emplace_back("  text-sizing group, cores", sizing_group.core_ranges.str());
-    rows.emplace_back("  text-sizing group, kernels", fmt::format("{}", fmt::join(names, ", ")));
+    std::string joined_names;
+    for (size_t i = 0; i < names.size(); ++i) {
+        joined_names += (i == 0 ? "" : ", ") + names[i];
+    }
+    rows.emplace_back("  text-sizing group, kernels", joined_names);
     return rows;
 }
 
@@ -513,6 +516,17 @@ Program::Program(std::shared_ptr<detail::ProgramImpl> impl) : internal_(std::mov
 Program::Program(const ProgramDescriptor& descriptor) : internal_(std::make_shared<detail::ProgramImpl>()) {
     LIGHT_METAL_TRACE_FUNCTION_ENTRY();
     LIGHT_METAL_TRACE_FUNCTION_CALL(CaptureProgramConstructor, *this);
+    populate_from_descriptor(descriptor);
+}
+
+Program::Program(distributed::MeshDevice& mesh_device, const ProgramDescriptor& descriptor) :
+    internal_(std::make_shared<detail::ProgramImpl>(mesh_device.impl().get_context_id())) {
+    LIGHT_METAL_TRACE_FUNCTION_ENTRY();
+    LIGHT_METAL_TRACE_FUNCTION_CALL(CaptureProgramConstructor, *this);
+    populate_from_descriptor(descriptor);
+}
+
+void Program::populate_from_descriptor(const ProgramDescriptor& descriptor) {
     ScopedBusyClock build_busy(kProgramBuildBusy);
 
     if (descriptor.reload_table.has_value()) {
@@ -669,10 +683,6 @@ KernelHandle detail::ProgramImpl::add_kernel(
                     coreCoord.str());
             }
         }
-    }
-
-    if (!kernel->scratchpad_binding_handles().empty()) {
-        register_ephemeral_allocation(this->dfb_allocation_metadata_, kernel->core_range_set());
     }
 
     kernels_[index].insert({id, kernel});
@@ -869,13 +879,31 @@ void ProgramImpl::reserve_runtime_arg_buffers() {
 }
 
 void ProgramImpl::register_tensor_parameter(
-    const std::string& name, const TensorSpec& spec, const experimental::TensorSpecRelaxations& relaxations) {
+    const std::string& name, const TensorSpec& spec, const TensorSpecRelaxations& relaxations) {
     if (!metal2_registry_) {
         metal2_registry_ = Metal2NameRegistry{};
     }
     auto [it, inserted] = metal2_registry_->tensor_parameter_layouts.try_emplace(
         name, Metal2NameRegistry::RegisteredTensorParameter{spec, relaxations});
     TT_FATAL(inserted, "Duplicate tensor parameter name: {}", name);
+}
+
+void ProgramImpl::register_sram_arena_parameter(
+    const std::string& name,
+    const experimental::SRAMArenaProperties& properties,
+    const distributed::MeshDevice& device) {
+    if (!metal2_registry_) {
+        metal2_registry_ = Metal2NameRegistry{};
+    }
+    const auto [it, inserted] = metal2_registry_->sram_arena_parameters.try_emplace(
+        name, RegisteredSRAMArenaParameter{properties, std::cref(device)});
+    TT_FATAL(inserted, "Duplicate SRAM arena parameter name: {}", name);
+}
+
+const std::unordered_map<std::string, ProgramImpl::RegisteredSRAMArenaParameter>&
+ProgramImpl::get_sram_arena_parameters() const {
+    static const std::unordered_map<std::string, RegisteredSRAMArenaParameter> empty;
+    return metal2_registry_ ? metal2_registry_->sram_arena_parameters : empty;
 }
 
 const TensorSpec* ProgramImpl::get_tensor_parameter_layout(const std::string& name) const {
@@ -889,7 +917,7 @@ const TensorSpec* ProgramImpl::get_tensor_parameter_layout(const std::string& na
     return &it->second.spec;
 }
 
-experimental::TensorSpecRelaxations ProgramImpl::get_tensor_parameter_relaxations(const std::string& name) const {
+TensorSpecRelaxations ProgramImpl::get_tensor_parameter_relaxations(const std::string& name) const {
     if (!metal2_registry_) {
         return {};
     }
@@ -941,19 +969,19 @@ const detail::BoundTensorFootprint* ProgramImpl::get_bound_tensor_footprint(cons
     return &*it->second.bound;
 }
 
-void ProgramImpl::register_dfb_borrowed_binding(uint32_t dfb_id, const std::string& tensor_parameter_name) {
+void ProgramImpl::register_dfb_storage_binding(DFBStorageBinding binding) {
     if (!metal2_registry_) {
         metal2_registry_ = Metal2NameRegistry{};
     }
-    metal2_registry_->dfb_borrowed_bindings.emplace_back(dfb_id, tensor_parameter_name);
+    metal2_registry_->dfb_storage_bindings.push_back(std::move(binding));
 }
 
-const std::vector<std::pair<uint32_t, std::string>>& ProgramImpl::get_dfb_borrowed_bindings() const {
-    static const std::vector<std::pair<uint32_t, std::string>> empty;
+const std::vector<ProgramImpl::DFBStorageBinding>& ProgramImpl::get_dfb_storage_bindings() const {
+    static const std::vector<DFBStorageBinding> empty;
     if (!metal2_registry_) {
         return empty;
     }
-    return metal2_registry_->dfb_borrowed_bindings;
+    return metal2_registry_->dfb_storage_bindings;
 }
 // ============================================================================
 
@@ -2164,7 +2192,13 @@ void detail::ProgramImpl::update_dynamic_cross_node_dfb_address(uint8_t remote_d
         relay_dfb->set_borrowed_memory_base_addr(gdfb.buffer_address());
     }
 
-    // Invalidate cached command sequences so they are re-assembled with new addresses.
+    // Invalidate cached command sequences so they are re-assembled with new addresses. The runtime-arg views point
+    // into them (and hold the current values): move the values back into the kernels first.
+    for (auto& kernels : kernels_) {
+        for (auto& [handle, kernel] : kernels) {
+            kernel->reclaim_runtime_args_from_command_sequence();
+        }
+    }
     cached_program_command_sequences_.clear();
     trace_cached_program_command_sequences_.clear();
 }
@@ -2282,22 +2316,43 @@ void detail::ProgramImpl::invalidate_circular_buffer_allocation() {
     this->local_circular_buffer_allocation_needed_ = true;
 }
 
-void detail::ProgramImpl::prepare_ephemeral_allocation(const IDevice* device) {
-    // Shared scratchpads allocate over the union of their binders' nodes. Register
-    // those exact ranges before initializing region bases and allocating DFBs.
-    std::unordered_map<ScratchpadBindingHandle::AllocationIdentifier, CoreRangeSet> shared_cores;
-    for (const auto& kernels_of_core_type : this->kernels_) {
+std::vector<detail::ProgramImpl::ScratchpadAllocationGroup> detail::ProgramImpl::scratchpad_allocation_groups() {
+    std::vector<ScratchpadAllocationGroup> groups;
+    std::unordered_map<ScratchpadBindingHandle::AllocationIdentifier, ScratchpadAllocationGroup> shared;
+    for (const auto& kernels_of_core_type : kernels_) {
         for (const auto& [kernel_handle, kernel] : kernels_of_core_type) {
-            for (const auto& handle : kernel->scratchpad_binding_handles()) {
+            for (auto& handle : kernel->scratchpad_binding_handles()) {
+                // SRAMArena-backed bindings take their address from the bound arena.
+                if (handle.allocation_override) {
+                    continue;
+                }
+                const auto& cores = handle.placement;
                 if (handle.shared_allocation_identifier) {
-                    auto& cores = shared_cores[*handle.shared_allocation_identifier];
-                    cores = cores.merge(kernel->core_range_set());
+                    auto& group = shared[*handle.shared_allocation_identifier];
+                    group.cores = group.cores.merge(cores);
+                    group.bindings.emplace_back(kernel.get(), &handle);
+                } else {
+                    groups.push_back({cores, {{kernel.get(), &handle}}});
                 }
             }
         }
     }
-    for (const auto& [identifier, cores] : shared_cores) {
-        register_ephemeral_allocation(this->dfb_allocation_metadata_, cores);
+    // Allocate private bindings first, then shared specs.
+    for (auto& [identifier, group] : shared) {
+        groups.push_back(std::move(group));
+    }
+    return groups;
+}
+
+void detail::ProgramImpl::prepare_ephemeral_allocation(const IDevice* device) {
+    // Register the ranges used by scratchpad allocation groups before preparing bases/seals
+    // and allocating DFBs.
+    for (const auto& group : scratchpad_allocation_groups()) {
+        // Register each binding range and the union used by its allocation group.
+        for (const auto& [kernel, handle] : group.bindings) {
+            register_ephemeral_allocation(this->dfb_allocation_metadata_, handle->placement);
+        }
+        register_ephemeral_allocation(this->dfb_allocation_metadata_, group.cores);
     }
 
     auto& persistent_l1 = device->allocator_impl()->persistent_l1();
@@ -2313,84 +2368,37 @@ void detail::ProgramImpl::allocate_scratchpads(const IDevice* device) {
 
     const uint32_t alignment = device->allocator()->get_alignment(BufferType::DRAM);
 
-    // Set address to a given scratchpad binding handle and it's kernel
-    auto set_address_on_scratchpad = [](DeviceAddr addr, ScratchpadBindingHandle& handle, Kernel& kernel) {
-        TT_FATAL(
-            addr != 0,
-            "Internal error: scratchpad '{}' on kernel '{}' "
-            "has a 0 allocated address (allocation failed or was skipped).",
-            handle.accessor_name,
-            kernel.name());
-
-        handle.allocated_address = static_cast<uint32_t>(addr);
-
-        // Patch the allocated address into the kernel's CRTA buffer if it exists.
-        // On the Metal 2.0 factory path, reserve_runtime_arg_buffers pre-sizes the CRTA
-        // buffer before this runs, so the address is updated here. If CRTA is not yet allocated
-        // (legacy order: SetProgramRunArgs first), SetProgramRunArgs copies
-        // handle.allocated_address into the scratchpad section when it builds the buffer.
-        // This allows for allocation of scratchpad and the CRTA buffer to be order agnostic.
-        //
-        // Usage of the CRTA buffer:
-        //  - FD: the fast/mesh path snapshots the CRTA buffer into the command stream
-        //  - SD: the slow-dispatch path writes it via WriteRuntimeArgsToDevice
-        if (!kernel.common_runtime_args().empty()) {
-            RuntimeArgsData& crta = kernel.common_runtime_args_data();
-            crta[handle.addr_crta_word] = handle.allocated_address;
-        }
-    };
-
-    // Backticks needed to set a binding handle's address
-    struct ScratchpadBindingRef {
-        ScratchpadBindingHandle& handle;
-        Kernel& kernel;
-    };
-
-    // Multiple Scratchpad bindings could share the same allocation through:
-    // ScratchpadAdvancedOptions::allow_instance_multi_binding.
-    //
-    // Shared allocation are identified by an ID.
-    std::unordered_map<ScratchpadBindingHandle::AllocationIdentifier, std::vector<ScratchpadBindingRef>>
-        multi_binded_scratchpads;
-
-    // Going through all single-binded scratchpads
-    for (auto& kernels_of_core_type : this->kernels_) {
-        for (auto& [kernel_handle, kernel] : kernels_of_core_type) {
-            auto& scratchpad_handles = kernel->scratchpad_binding_handles();
-            if (scratchpad_handles.empty()) {
-                continue;
-            }
-            const CoreRangeSet& kernel_cores = kernel->core_range_set();
-            for (auto& handle : scratchpad_handles) {
-                // Multi-binded scratchpad, let's collect it and deal with it later
-                if (auto id = handle.shared_allocation_identifier) {
-                    multi_binded_scratchpads[*id].emplace_back(handle, *kernel);
-                    continue;
-                }
-
-                DeviceAddr addr =
-                    allocate_scratchpad(this->dfb_allocation_metadata_, kernel_cores, handle.size_bytes, alignment);
-                set_address_on_scratchpad(addr, handle, *kernel);
-            }
-        }
-    }
-
-    // Now let's deal with multi-binded scratchpads
-    for (auto& [id, refs] : multi_binded_scratchpads) {
-        auto size_bytes = refs.front().handle.size_bytes;
-
-        CoreRangeSet cores = std::accumulate(
-            refs.begin(), refs.end(), CoreRangeSet{}, [](const CoreRangeSet& cores, const auto& handle) {
-                return cores.merge(handle.kernel.core_range_set());
-            });
-
-        DeviceAddr addr = allocate_scratchpad(this->dfb_allocation_metadata_, cores, size_bytes, alignment);
-        for (auto& handle : refs) {
-            set_address_on_scratchpad(addr, handle.handle, handle.kernel);
+    for (const auto& group : scratchpad_allocation_groups()) {
+        const auto size_bytes = group.bindings.front().second->size_bytes;
+        const DeviceAddr addr = allocate_scratchpad(this->dfb_allocation_metadata_, group.cores, size_bytes, alignment);
+        for (const auto& [kernel, handle] : group.bindings) {
+            SetScratchpadBindingAddress(*kernel, *handle, addr);
         }
     }
 
     this->scratchpads_allocated_ = true;
+}
+
+void detail::ProgramImpl::validate_scratchpad_bindings() const {
+    // Mock devices are exempt, as for borrowed-memory DFBs: nothing they serialize reaches hardware (issue #57022).
+    if (MetalContext::instance(this->context_id_).get_cluster().get_target_device_type() == tt::TargetDevice::Mock) {
+        return;
+    }
+    for (const auto& kernels_of_core_type : this->kernels_) {
+        for (const auto& [kernel_handle, kernel] : kernels_of_core_type) {
+            for (const auto& binding : kernel->scratchpad_binding_handles()) {
+                if (binding.allocation_override) {
+                    TT_FATAL(
+                        binding.allocated_address != 0,
+                        "Scratchpad '{}' on kernel '{}' has no bound SRAMArena '{}'. "
+                        "Supply its arena argument through SetProgramRunArgs before dispatch.",
+                        binding.accessor_name,
+                        kernel->name(),
+                        binding.allocation_override->arena);
+                }
+            }
+        }
+    }
 }
 
 void detail::ProgramImpl::allocate_circular_buffers(const IDevice* device) {

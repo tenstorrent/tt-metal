@@ -42,6 +42,7 @@
 #include "kernels/kernel.hpp"
 #include "dispatch/dispatch_settings.hpp"
 #include "device/device_impl.hpp"
+#include "distributed/mesh_device_impl.hpp"
 #include "hal_types.hpp"
 #include "kernel_types.hpp"
 #include "lightmetal/host_api_capture_helpers.hpp"
@@ -165,7 +166,8 @@ void ValidateLegacyRuntimeArgsAPI(const Program& program, std::string_view api_n
     TT_FATAL(
         !program.impl().has_metal2_registry(),
         "{} cannot be used with a Program created from a Metal 2.0 ProgramSpec. "
-        "Use experimental::SetProgramRunArgs or experimental::UpdateProgramRunArgs instead.",
+        "Use tt::tt_metal::experimental::SetProgramRunArgs or tt::tt_metal::experimental::UpdateProgramRunArgs "
+        "instead.",
         api_name);
 }
 
@@ -589,7 +591,7 @@ void SetRootDir(const std::string& root_dir) { tt::llrt::RunTimeOptions::set_roo
 Program CreateProgram() { return Program(); }
 
 Program CreateProgram(distributed::MeshDevice& mesh_device) {
-    return Program(std::make_shared<detail::ProgramImpl>(extract_context_id(&mesh_device)));
+    return Program(std::make_shared<detail::ProgramImpl>(mesh_device.impl().get_context_id()));
 }
 
 KernelHandle CreateDataMovementKernel(
@@ -964,7 +966,8 @@ uint32_t CreateSemaphore(
 
 GlobalSemaphore CreateGlobalSemaphore(
     distributed::MeshDevice& device, CoreRangeSet cores, uint32_t initial_value, BufferType buffer_type) {
-    return GlobalSemaphore(GlobalSemaphoreImpl(device, std::move(cores), initial_value, buffer_type, /*cq_id=*/0));
+    return GlobalSemaphore(
+        GlobalSemaphoreImpl(device.mesh_command_queue(0), std::move(cores), initial_value, buffer_type));
 }
 
 void AssignGlobalBufferToProgram(const std::shared_ptr<Buffer>& buffer, Program& program) {
