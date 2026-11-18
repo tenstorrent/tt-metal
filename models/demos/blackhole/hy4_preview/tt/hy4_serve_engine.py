@@ -495,7 +495,7 @@ class Hy4Engine:
     # B39 (RESULT_B39.md): the Fabric Mux V2 of selective_reduce_combine / moe_compute carves RAW L1 from the allocator base upward and fits its buffers-per-channel to mesh.lowest_occupied_compute_l1_address() AT PROGRAM-BUILD
     # time (the program cache does not key on it). Any L1 buffer that is created later and sits BELOW that address (lazily created persistent global semaphores, trace scratch moved down by a stash) shifts every later
     # eager transient down by its size and, when it is larger than the slack of that program's mux map, the transients overwrite the map tail: first long prompt hangs in the MoE combine (mux free slots).
-    # HY4_L1_GUARD_PAD=N: hold N bytes/bank of L1 from the start of warm() (before any program is built) until after the captures, then free it: every build sees a floor N lower than the later steady state, so a later
+    # (superseded, negative result: HY4_L1_GUARD_HOLD=N) hold N bytes/bank of L1 from the start of warm() (before any program is built) until after the captures, then free it: every build sees a floor N lower than the later steady state, so a later
     # persistent buffer of up to N bytes lands in the freed hole and no later transient is lower than the build snapshot. HY4_L1_MAP=1: log the L1 allocator probe at every warm-up milestone (default off).
     def _l1_probe(self, tag):
         if os.environ.get("HY4_L1_MAP", "0") != "1":
@@ -514,34 +514,68 @@ class Hy4Engine:
             logger.info(f"HY4 L1MAP[{tag}]: failed {e!r}")
 
     def _l1_wrap_moe(self):
-        """HY4_L1_MAP=1: log the L1 allocator probe (~ lowest occupied L1 address) before every distinct moe_compute call signature, i.e. the state its fabric-mux fit sees at program build and at later calls."""
-        if os.environ.get("HY4_L1_MAP", "0") != "1" or getattr(self, "_moe_wrapped", False):
+        """HY4_L1_GUARD_PAD=N (bytes per bank): the first call of every distinct moe_compute signature (= the program build, where the fabric-mux map is fitted under the lowest occupied L1 address, which at that moment is
+        the bottom of the op's own transient L1 outputs) runs with an N-byte L1 pad held on top, so the build sees a floor N lower than every later call: N bytes of slack for persistent L1 buffers created after the build
+        (global semaphores, eager-path constants) - the failure mode of RESULT_B39.md. The pad is freed right after the call (never persistent). HY4_L1_MAP=1: also log the allocator probe at every distinct call.
+        """
+        pad = int(os.environ.get("HY4_L1_GUARD_PAD", "0"))
+        mp = os.environ.get("HY4_L1_MAP", "0") == "1"
+        if (pad <= 0 and not mp) or getattr(self, "_moe_wrapped", False):
             return
         self._moe_wrapped = True
+        pad = (pad + 31) // 32 * 32
         orig = ttnn.experimental.moe_compute
         seen = {}
         eng = self
+        nb = ttnn.get_memory_view(self.md, ttnn.BufferType.L1).num_banks
+
+        def key_of(a, k):
+            sh = tuple(tuple(x.shape) if hasattr(x, "shape") else repr(x) for x in a)
+            kk = tuple(sorted((n, tuple(v.shape) if hasattr(v, "shape") else repr(v)) for n, v in k.items()))
+            return (sh, kk)
+
+        def probe():
+            pr = ttnn.allocate_tensor_on_device(
+                ttnn.Shape([1, 1, 32, 32]), ttnn.bfloat16, ttnn.TILE_LAYOUT, eng.md, ttnn.L1_MEMORY_CONFIG
+            )
+            addr = pr.buffer_address()
+            ttnn.deallocate(pr)
+            return addr
 
         def wrapped(*a, **k):
+            if getattr(eng, "_capturing", False):
+                return orig(*a, **k)
+            key = key_of(a, k)
+            first = key not in seen
+            seen[key] = seen.get(key, 0) + 1
+            padt = None
             try:
-                if not getattr(eng, "_capturing", False):
-                    pr = ttnn.allocate_tensor_on_device(
-                        ttnn.Shape([1, 1, 32, 32]), ttnn.bfloat16, ttnn.TILE_LAYOUT, eng.md, ttnn.L1_MEMORY_CONFIG
+                if mp and (first or seen[key] <= 2):
+                    logger.info(
+                        f"HY4 L1MAP moe_compute call #{sum(seen.values())}: in0 {tuple(a[0].shape)} layer {k.get('layer_id')} first={first} probe {probe()} (distinct keys {len(seen)})"
                     )
-                    addr = pr.buffer_address()
-                    ttnn.deallocate(pr)
-                    key = (tuple(a[0].shape) if a and hasattr(a[0], "shape") else None, addr)
-                    seen[key] = seen.get(key, 0) + 1
-                    if seen[key] == 1 and len(seen) <= 400:
-                        logger.info(f"HY4 L1MAP moe_compute call: in0 {key[0]} probe {addr} (distinct #{len(seen)})")
+                if first and pad > 0:
+                    padt = ttnn.allocate_tensor_on_device(
+                        ttnn.Shape([1, 1, nb, pad // 2]),
+                        ttnn.bfloat16,
+                        ttnn.ROW_MAJOR_LAYOUT,
+                        eng.md,
+                        ttnn.L1_MEMORY_CONFIG,
+                    )
             except Exception as e:  # noqa: BLE001
-                logger.info(f"HY4 L1MAP moe wrap failed {e!r}")
-            return orig(*a, **k)
+                logger.info(f"HY4 L1 guard moe wrap failed {e!r}")
+            try:
+                return orig(*a, **k)
+            finally:
+                if padt is not None:
+                    ttnn.deallocate(padt)
 
         ttnn.experimental.moe_compute = wrapped
 
     def _l1_guard_hold(self):
-        n = int(os.environ.get("HY4_L1_GUARD_PAD", "0"))
+        n = int(
+            os.environ.get("HY4_L1_GUARD_HOLD", "0")
+        )  # NEGATIVE RESULT (b39 d1: hangs the first warm prefill); kept for the record, default off
         self._l1_guard = None
         if n <= 0:
             return
