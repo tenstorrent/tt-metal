@@ -182,7 +182,7 @@ def ttnn_retinanet_classification_head(
             conv_config=fpn_final_config,
             memory_config=activation_memory_config(device),
             # Prepared for this same slicing (custom_preprocessor).
-            slice_config=cls_logits_slice_config(device) or ttnn.Conv2dL1FullSliceConfig,
+            slice_config=cls_logits_slice_config(device),
         )
 
         N, H_out, W_out, _ = cls_logits.shape

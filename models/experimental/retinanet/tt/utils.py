@@ -43,9 +43,10 @@ def bbox_reg_slice_config(device):
 
 def cls_logits_slice_config(device):
     """The cls_logits conv's slicing on ``device``, which its weights and bias are prepared for:
-    conv2d's own height slices on a reduced grid; None on the full grid, where it runs unsliced in
-    L1 (Conv2dL1FullSliceConfig)."""
-    return REDUCED_GRID_SLICE_CONFIG if reduced_grid(device) else None
+    conv2d's own height slices on a reduced grid; unsliced in L1 on the full grid. Preparation
+    takes its input from DRAM, where no slice config would mean DRAM slicing, so the full grid's
+    is explicit."""
+    return REDUCED_GRID_SLICE_CONFIG if reduced_grid(device) else ttnn.Conv2dL1FullSliceConfig
 
 
 def head_conv_config(device, config_dict):
