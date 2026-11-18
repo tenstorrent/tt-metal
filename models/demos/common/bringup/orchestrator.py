@@ -1953,6 +1953,11 @@ class Orchestrator:
             if only is not None and name not in only and kind not in only:
                 continue
             stamp = {"code": code, "env": env, "cmd": cmd, "extra": extra}
+            full = dict(base, **env, **extra)  # F270: a knob its tests read, set in the environment the side inherits
+            knobs = {k: full[k] for k in sorted(stamps.knob_names(cmd.split(), self.spec.repo)) if k in full}
+            knobs = {k: v for k, v in knobs.items() if k not in env and k not in extra and not stamps.ignored_env(k)}
+            if knobs:
+                stamp["knobs"] = knobs
             label = f"  [{tid}] A/B {'on' if side == 'new' else 'off'}: {name}"
             kept_stamp = dict((items.get(name) or {}).get("stamp") or {})
             if code is None:  # F230: the 'before' side of ab.before, measured on the tree before the change

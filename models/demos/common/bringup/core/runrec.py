@@ -67,13 +67,17 @@ def canonical_args(args: list[str]) -> tuple[list[str], list[str]]:
     return tests, other
 
 
-def identity(args: list[str], env: dict, keys: tuple[str, str], spec=None) -> dict:
-    """What a run measured: its canonical arguments, measuring environment, code key, goldens key and waivers."""
+def identity(args: list[str], env: dict, keys: tuple[str, str], spec=None, prefix: dict | None = None) -> dict:
+    """What a run measured: its canonical arguments, measuring environment, code key, goldens key and waivers.
+    F270: the environment with the knobs its tests read and every variable of its command-line ``prefix``
+    (stamps.run_env); ``prefix`` None: the run's command line is not known (a plain shell run): ``prefix: false``, a
+    key no gate unit has, so such a run is never reused (an unseen `FOO=1` on its command line could change it)."""
     tests, other = canonical_args(args)
     return {
         "tests": tests,
         "args": other,
-        "env": stamps.measuring_env(env),
+        "env": stamps.run_env(env, tests, prefix, spec.repo if spec is not None else None),
+        "prefix": prefix is not None,
         "code": keys[0],
         "goldens": keys[1],
         "waivers": stamps.waiver_key(spec, " ".join(tests)) if spec is not None else "",
@@ -113,7 +117,34 @@ def unit_keys(cmd: str, env: dict, keys: tuple[str, str], spec=None) -> list[str
     runs = segment_runs(cmd)
     if runs is None:
         return None
-    return [run_key(identity(args, dict(env, **pre), keys, spec)) for pre, args in runs]
+    return [run_key(identity(args, dict(env, **pre), keys, spec, pre)) for pre, args in runs]
+
+
+_CD = re.compile(r"^cd\s+\S+$")
+
+
+def launch_prefix(env: dict, args: list[str]) -> dict | None:
+    """F270: the `VAR=value` prefix this safe-runner run was launched with, from the command its launcher names
+    (stamps.UNIT_CMD_ENV: a gate unit's command, a devjob's): the segment that runs these arguments. None when not
+    known: no such command, no segment or two with different prefixes, or another step that could set the
+    environment (anything but a safe-runner call or a `cd`)."""
+    cmd = env.get(stamps.UNIT_CMD_ENV)
+    if not cmd:
+        return None
+    want = sorted(sum(canonical_args(args), []))
+    found = []
+    for seg in (s.strip() for s in re.split(r"&&|;|\n", cmd)):
+        if not seg or _CD.match(seg):
+            continue
+        one = segment_runs(seg)
+        if one is None:
+            return None
+        pre, a = one[0]
+        if sorted(sum(canonical_args(a), [])) == want:
+            found.append(pre)
+    if not found or any(p != found[0] for p in found):
+        return None
+    return found[0]
 
 
 class RunStore:
@@ -216,7 +247,7 @@ def begin(state: Path, args: list[str]) -> int:
     env = dict(os.environ)
     keys = (stamps.code_key(spec.repo, spec), stamps.goldens_key(spec))
     stamps.ensure_aliases(run_dir, spec.repo, spec, env)
-    ident = identity(args, env, keys, spec)
+    ident = identity(args, env, keys, spec, launch_prefix(env, args))  # F270
     task, root, m0, f0 = _results_view(env)
     st = {
         "run_dir": str(run_dir),
@@ -258,6 +289,7 @@ def _file(store: RunStore, key: str, ident: dict, rc, metrics: dict, files: list
         "s": round(float(secs or 0), 1),
         "cmd": " ".join(ident["tests"] + ident["args"]),
         "env": ident["env"],
+        "prefix_known": ident.get("prefix", False),  # F270
         "task": task,
         "record_task": rtask,
         "launched": st["launched"],
@@ -291,7 +323,14 @@ def end(state: Path, rc: int) -> int:
             if not r or r.get("rc") is None:
                 continue  # never reached (or skipped): no record
             given = {k: str(v) for k, v in (e.get("env") or {}).items()}
-            ident = identity(list(e["args"]), dict(st["env0"], **given), keys, spec)
+            # F270: an entry's environment is its unit segment's prefix (known); a knob its tests read is taken from
+            # the environment the batch was given
+            base = {
+                k: v
+                for k, v in os.environ.items()
+                if not k.startswith(stamps.ENV_PREFIXES + stamps.settings_prefixes())
+            }
+            ident = identity(list(e["args"]), dict(base, **st["env0"], **given), keys, spec, given)
             task, root, _, _ = _results_view(dict(os.environ, **given))
             outs = [root / n for n in r.get("files") or [] if (root / n).exists() and n != f"{task}.json"]
             # a hang ends the process inside a run that never reports: it has no rc and no record (above)

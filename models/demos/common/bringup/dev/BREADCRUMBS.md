@@ -2817,3 +2817,25 @@ No new process after a hang/death or when a fresh process ran none of its runs (
 itself needs two model configurations fails; tests/test_batch.py fails a process that left runs and has no driver
 (BRINGUP_BATCH_DRIVEN, ignored in the env key). Selftests: test_fresh_process.py; test_one_process.py (refused, not
 reloaded).
+
+## F270: a gate reused a run made at other test inputs: a test's own env knob was in no reuse key (owner 2026-11-18)
+
+X.6's gate ran `DS41_DECODER_SKIP=decode SKIP_POS=32768,...,262144 ... test_skip_positions.py` and reused an earlier run
+of it at its default points (51200..1024000): stamps.measuring_env keeps only BRINGUP_* / TT_* / the models' settings
+prefixes, so SKIP_POS (and HANGLOOP_*, P73_POSITIONS, any variable a test reads) was in no key. Owner rule: a unit is
+reused only if it passed on exactly the code, settings and test inputs it exercises. Fix: stamps.run_env, a run's
+environment = measuring_env + every knob its test files name (a quoted upper-case name with an underscore, e.g.
+os.environ.get("SKIP_POS"); stamps.knob_names) that is set + every variable of its command-line `VAR=value` prefix,
+whatever its name (never where results are filed: BRINGUP_TASK ...). The safe-runner record key (runrec.identity) has
+it; the runner learns its prefix from the command its launcher names (BRINGUP_UNIT_CMD: set by the gate per unit and by
+devjob; a batch entry's env is its prefix); a run whose command line is unknown (a plain shell, an `export` step, two
+segments with different prefixes) is keyed `prefix: false` and never reused. The gate stamp and the task's delta (F169)
+key the env with the knobs (stamps.unit_env_key; the prefix is in the command hash); the A/B side stamp adds the knobs
+it inherits. The gate log names what a reused unit is reused from: `reused: same code key <8> and env <8>, same command
+(stamp <8>): PASS at <t> in the <task> gate`; a runner record: its launch, command, time and task, code key and env; the
+F169 line: under-test key and env. tt/settings.py is code (code key and under-test key): a default change re-runs.
+Existing stamps keep their key unless a knob is set; every safe-runner record is re-keyed (its runs re-measure once).
+Residual: a variable neither measuring, nor named by the test files, nor on the command line (exported in the
+launcher's shell) is not seen. Selftests: test_reuse_env_key.py (a: SKIP_POS exported / on the command line / FOO on a
+hand run's command line; b: a settings default; c: a model file; d: the same tree and env reused, the source named);
+test_count_runs_once.py (a hand run keyed with its command line).

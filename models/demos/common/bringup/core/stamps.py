@@ -108,6 +108,7 @@ ENV_IGNORED = {  # where a gate files its results, not what it measures
     "BRINGUP_BATCH_MAX_SEQ",
     "BRINGUP_BATCH_KEEP_GOING",
     "BRINGUP_BATCH_DRIVEN",  # F269: a driver runs what the process leaves to a fresh one
+    "BRINGUP_UNIT_CMD",  # F270: the command a safe-runner run was launched from (its prefix is in the run's key)
 }
 ENV_IGNORED_PREFIXES = (
     "TT_METAL_JIT_SERVER",  # F170: where kernels compile (a JIT server or locally), not the result
@@ -236,6 +237,7 @@ BOOKKEEPING = {
         "_hook_fixed", "_refused", "commit_only",
         # FIX.31
         "_lookup", "_restore_found", "_live_gate", "PRE_RUN", "_pre_rec", "_gates_log_dir", "_gates_log",
+        "OWN_STAMP",  # F270
     ),
     BATCH_PY: (
         # which units share a process (launch, F259 / FIX.29; the device side re-checks the switches) and its results
@@ -594,6 +596,75 @@ def env_key(env: dict) -> str:
     return sha16(json.dumps(measuring_env(env), sort_keys=True))
 
 
+# F270 (owner 2026-11-18: X.6's gate, SKIP_POS=32768..262144, reused a run at the default points): a test's own
+# environment knob (SKIP_POS, HANGLOOP_*, P73_POSITIONS, ...) changes what it measures although it is none of the
+# measuring prefixes. A run's environment (run_env) is the measuring env, every knob its test files name (a quoted
+# upper-case name with an underscore, read from the environment: os.environ.get("SKIP_POS")) that is set, and every
+# variable on its command line (its `VAR=value` prefix, whatever the name).
+UNIT_CMD_ENV = "BRINGUP_UNIT_CMD"  # (in ENV_IGNORED)
+_KNOB = re.compile(r"""["']([A-Z][A-Z0-9]*_[A-Z0-9_]*[A-Z0-9])["']""")
+_TEST_WORD = re.compile(r"[\w./-]+")
+
+
+def ignored_env(name: str) -> bool:
+    return name in ENV_IGNORED or name.startswith(ENV_IGNORED_PREFIXES)
+
+
+@functools.lru_cache(maxsize=512)
+def _file_knobs(path: str, mtime_ns: int, size: int) -> frozenset:
+    try:
+        return frozenset(_KNOB.findall(Path(path).read_text(errors="ignore")))
+    except OSError:
+        return frozenset()
+
+
+def knob_files(words, repo: Path | None = None) -> list[Path]:
+    """F270: the test files a command / argument list names (a file, a node id's file, a directory's test_*.py)."""
+    root = Path(repo) if repo is not None else _REPO_ROOT
+    out = []
+    for w in words:
+        for tok in _TEST_WORD.findall(str(w).split("::", 1)[0]):
+            p = Path(tok) if Path(tok).is_absolute() else root / tok
+            if tok.endswith(".py") and p.is_file():
+                out.append(p)
+            elif "/" in tok and "test" in tok and p.is_dir():
+                out += sorted(p.rglob("test_*.py"))[:200]
+    return out
+
+
+def knob_names(words, repo: Path | None = None) -> set:
+    """F270: every environment name the test files of ``words`` mention (quoted upper-case with an underscore)."""
+    found = set()
+    for p in knob_files(words, repo):
+        try:
+            s = p.stat()
+        except OSError:
+            continue
+        found |= _file_knobs(str(p), s.st_mtime_ns, s.st_size)
+    return found
+
+
+def run_env(env: dict, words=(), prefix: dict | None = None, repo: Path | None = None) -> dict:
+    """F270: what a run measured on: measuring_env(env), the knobs its tests read that ``env`` sets, and every
+    variable of its command-line prefix (whatever its name; never where results are filed: BRINGUP_TASK, ...)."""
+    env = dict(env, **(prefix or {}))
+    out = measuring_env(env)  # (TT_METAL_HOME only when it names another checkout, prefixed or not)
+    measured = ENV_PREFIXES + settings_prefixes()  # (those count as measuring_env says)
+    for k in knob_names(words, repo):
+        if k in env and not ignored_env(k) and not k.startswith(measured):
+            out[k] = env[k]
+    for k, v in (prefix or {}).items():
+        if not ignored_env(k) and k != "TT_METAL_HOME":
+            out[k] = v
+    return out
+
+
+def unit_env_key(cmd: str, env: dict, repo: Path | None = None) -> str:
+    """F270: a gate unit's environment key: its measuring env and the knobs its tests read (its command's own prefix
+    is in its command hash)."""
+    return sha16(json.dumps(run_env(env, cmd.split(), None, repo), sort_keys=True))
+
+
 # FIX.31: the env key before measuring_env (records made before it carry it; env_aliases maps them)
 _LEGACY_ENV_IGNORED = {
     "BRINGUP_TASK",
@@ -617,11 +688,11 @@ def legacy_env_key(env: dict) -> str:
     return sha16(json.dumps(keep, sort_keys=True))
 
 
-def stamp(cmd: str, frozen, env: dict, code: str, goldens: str, waivers: str = "") -> dict:
+def stamp(cmd: str, frozen, env: dict, code: str, goldens: str, waivers: str = "", repo: Path | None = None) -> dict:
     return {
-        "cmd": sha16(cmd),
+        "cmd": sha16(cmd),  # (its `VAR=value` prefixes included)
         "frozen": sha16(json.dumps(frozen, sort_keys=True)),
-        "env": env_key(env),
+        "env": unit_env_key(cmd, env, repo),  # F270: with the knobs its tests read
         "code": code,
         "goldens": goldens,
         "waivers": waivers,  # F162: only the owner waivers this unit's tests read

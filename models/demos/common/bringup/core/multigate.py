@@ -49,7 +49,7 @@ def plan(spec, ledger, tids: list[str]) -> dict:
         for u, cmd, st, sid in units:
             uenv = dict(env, **{M.TASK_ENV: gate.unit_base(u)})
             whole = len(units) == 1
-            if gate._kept(delta.get(u), unders, cmd, uenv, limits, whole, store.aliases()):
+            if gate._kept(delta.get(u), unders, cmd, uenv, limits, whole, store.aliases(), spec.repo):
                 out["skipped"].append((tid, u, "kept: passed in its task's gate on the same code under test"))
                 continue
             if gate._lookup(spec, store, u, cmd, st, sid, uenv, tasks, limits, whole):

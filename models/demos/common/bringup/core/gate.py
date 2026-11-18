@@ -637,7 +637,7 @@ def unit_stamps(spec: Spec, task: dict, env: dict, tasks: dict | None = None, ke
     out = []
     for u, cmd in gate_units(task, tasks):
         frozen, uenv = (tasks.get(unit_base(u)) or task).get("frozen"), dict(env, **{M.TASK_ENV: unit_base(u)})
-        st = stamps.stamp(cmd, frozen, uenv, code, goldens, stamps.waiver_key(spec, cmd))  # F162
+        st = stamps.stamp(cmd, frozen, uenv, code, goldens, stamps.waiver_key(spec, cmd), spec.repo)  # F162, F270
         out.append((u, cmd, st, stamps.stamp_id(st)))
     return out
 
@@ -703,13 +703,16 @@ def under_test_paths(task: dict, tasks: dict | None = None) -> list[str]:
     return sorted(set(out))
 
 
-def _kept(d: dict | None, under: str, cmd: str, uenv: dict, limits: dict, whole: bool, aliases=None) -> bool:
+def _kept(d: dict | None, under: str, cmd: str, uenv: dict, limits: dict, whole: bool, aliases=None, repo=None) -> bool:
     """F169: a unit that passed in this task's gate on the same code under test, command and environment (FIX.31: an
-    environment key from before measuring_env counts when it is this environment's, or aliases to it)."""
+    environment key from before measuring_env counts when it is this environment's, or aliases to it; F270: the
+    environment with the knobs the unit's tests read, so a legacy key only when none is set)."""
     if not d:
         return False
-    env = stamps.env_key(uenv)
-    envs = {env, stamps.legacy_env_key(uenv)} | {k for k, v in ((aliases or {}).get("env") or {}).items() if v == env}
+    env = stamps.unit_env_key(cmd, uenv, repo)
+    envs = {env}
+    if env == stamps.env_key(uenv):
+        envs |= {stamps.legacy_env_key(uenv)} | {k for k, v in ((aliases or {}).get("env") or {}).items() if v == env}
     return (
         d.get("verdict") == "PASS"
         and d.get("under_test") in ((under,) if isinstance(under, str) else tuple(under))  # F175: (semantic, bytes)
@@ -753,6 +756,7 @@ def waived_failures(text: str, waivers: list[dict]) -> str | None:
     return "; ".join(str(w.get("why", "")) for w in waivers)
 
 
+OWN_STAMP = "same code key"  # F270: a unit reused from its own stamp (the log line names the keys and the source)
 PRE_RUN = "pre-run"  # FIX.31: a unit run in a multi-task shared process just before this gate (core/multigate.py)
 
 
@@ -773,7 +777,8 @@ def _lookup(spec, store, u: str, cmd: str, st: dict, sid: str, uenv: dict, tasks
     if reusable(rec, limits, whole):
         return (
             rec,
-            f"same code (PASS at {rec.get('t')} in the {rec.get('by')} gate)",
+            f"{OWN_STAMP} {st['code'][:8]} and env {st['env'][:8]}, same command (stamp {sid[:8]}): PASS at "
+            f"{rec.get('t')} in the {rec.get('by')} gate",
             (lambda results, tid: _restore_found(store, rec.get("_from", u), sid, rec, results, tid)),
         )
     aliases = store.aliases() if hasattr(store, "aliases") else {}
@@ -782,7 +787,8 @@ def _lookup(spec, store, u: str, cmd: str, st: dict, sid: str, uenv: dict, tasks
         if reusable(rec, limits, whole):
             return (
                 rec,
-                f"same code and environment, stamped before FIX.31 (PASS at {rec.get('t')} by {rec.get('by')})",
+                f"same code and environment, stamped before FIX.31 (PASS at {rec.get('t')} in the {rec.get('by')} "
+                f"gate; today's code key {st['code'][:8]} and env {st['env'][:8]} alias to its keys)",
                 (lambda results, tid, a=alt, r=rec: _restore_found(store, r.get("_from", u), a, r, results, tid)),
             )
     keys = runrec.unit_keys(cmd, uenv, (st["code"], st["goldens"]), spec)
@@ -795,7 +801,12 @@ def _lookup(spec, store, u: str, cmd: str, st: dict, sid: str, uenv: dict, tasks
         for r in found:
             got.update(r.get("metrics") or {})
         if unit_ok(limits, got, whole):
-            src = ", ".join(f"{r.get('launched')} run of {r.get('cmd', '')[:60]} at {r.get('t')}" for r in found)
+            src = ", ".join(  # F270: what it is reused from, so a reader can check it
+                f"{r.get('launched')} run of {r.get('cmd', '')[:60]} at {r.get('t')} in task {r.get('task') or '-'}"
+                for r in found
+            )
+            env8 = stamps.sha16(json.dumps(found[0].get("env"), sort_keys=True))[:8]
+            src += f"; same code key {st['code'][:8]}, env {env8} and command-line prefix"
             rec = {"verdict": "PASS", "rc": 0, "metrics": got, "t": found[-1].get("t"), "by": "runner"}
 
             def restore(results, tid, found=found):
@@ -835,7 +846,8 @@ def _lookup(spec, store, u: str, cmd: str, st: dict, sid: str, uenv: dict, tasks
                 continue
             return (
                 r,
-                f"the same runs as {other} (PASS at {r.get('t')}: the same tests, measuring environment and code)",
+                f"the same runs as {other} (PASS at {r.get('t')} in the {r.get('by')} gate: the same tests, "
+                f"command-line prefix, measuring environment and code key {st['code'][:8]})",
                 (lambda results, tid, o=other, a=osid, rr=r: _restore_found(store, o, a, rr, results, tid)),
             )
     return None
@@ -906,7 +918,7 @@ def run_units(
             return False
         uenv = dict(env, **{M.TASK_ENV: unit_base(u)})
         d = delta.get(u) if delta is not None and not fresh and u not in rerun else None
-        if only is None and _kept(d, unders, cmd, uenv, limits, len(plan) == 1, aliases):
+        if only is None and _kept(d, unders, cmd, uenv, limits, len(plan) == 1, aliases, spec.repo):
             return False
         if u in (pre or {}):
             return False
@@ -932,12 +944,15 @@ def run_units(
                 continue
             uenv = dict(env, **{M.TASK_ENV: unit_base(u)})  # F166: a split unit runs as its task
             d = delta.get(u) if delta is not None and not fresh and u not in rerun else None
-            if only is None and _kept(d, unders, cmd, uenv, limits, len(plan) == 1, aliases):
+            if only is None and _kept(d, unders, cmd, uenv, limits, len(plan) == 1, aliases, spec.repo):
                 _merge_metrics(results, tid, d["metrics"])
                 srec = store.get(u, d.get("sid")) if store is not None and d.get("sid") else None
                 if srec:
                     store.restore(u, d["sid"], srec, results, tid)
-                f.write(f"# {u}: reused: same code under test, passed in this gate at {d.get('t')} (F169), not run\n")
+                f.write(  # F270: the keys it matched
+                    f"# {u}: reused: same code under test, passed in this gate at {d.get('t')} (F169; under-test key "
+                    f"{str(d.get('under_test'))[:8]}, env {str(d.get('env'))[:8]}, same command), not run\n"
+                )
                 reused.append(u)
                 note(k, n, u, "KEPT", 0.0)
                 continue
@@ -951,11 +966,11 @@ def run_units(
                 _merge_metrics(results, tid, rec["metrics"])
                 outs = restore(results, tid)
                 f.write(f"# {u}: reused: {how}, not run\n")
-                if not how.startswith("same code (PASS"):  # FIX.31: filed under this unit's own stamp too
+                if not how.startswith(OWN_STAMP):  # FIX.31: filed under this unit's own stamp too
                     keep = {k2: v for k2, v in rec.items() if k2 not in ("outputs", "_from", "stamp")}
                     store.put(u, sid, dict(keep, stamp=st, cmd_text=cmd, via=how), outs, tid)
                 if delta is not None:
-                    delta.put(u, _delta_rec("PASS", under, cmd, uenv, sid, rec["metrics"], 0.0))
+                    delta.put(u, _delta_rec("PASS", under, cmd, uenv, sid, rec["metrics"], 0.0, spec.repo))
                 reused.append(u)
                 note(k, n, u, "KEPT", 0.0)
                 continue
@@ -1006,7 +1021,8 @@ def run_units(
                     batch.unit_plan(cmd, plan_f, spec)
                     f.write(f"# {u}: its runs in one process (F259, tests.one_process)\n$ {batch.command(plan_f)}\n")
                     f.flush()
-                penv = dict(uenv, **hostmem_env(log, [cmd], f))  # FIX.30
+                # FIX.30; F270: the unit's command, so the safe runner files its runs under their command-line prefix
+                penv = dict(uenv, **hostmem_env(log, [cmd], f), **{stamps.UNIT_CMD_ENV: cmd})
 
                 def proc(c, k=0):
                     if k:  # F269: the unit's runs needing another model, in a fresh process
@@ -1081,7 +1097,7 @@ def run_units(
                         lf.seek(start)
                         infra = rc != 0 and bool(INFRA_STOP.search(lf.read()))
                     dv = "STOPPED" if infra else ("PASS" if verdict == "PASS" else "FAIL")
-                    delta.put(u, _delta_rec(dv, under, cmd, uenv, sid, got, round(time.time() - t0, 1)))
+                    delta.put(u, _delta_rec(dv, under, cmd, uenv, sid, got, round(time.time() - t0, 1), spec.repo))
                     stop = verdict != "PASS"  # F169: a unit whose metrics missed stops the gate here too
                     note(k, n, u, dv, round(time.time() - t0, 1))
             if rc != 0 or stop:
@@ -1097,7 +1113,7 @@ def run_units(
                         rec = {"stamp": st2, "verdict": NOT_RUN, "rc": shared[u2]["rc"], "s": 0.0, "metrics": {}}
                         store.put(u2, sid2, dict(rec, by=tid, t=time.strftime("%Y-%m-%dT%H:%M:%S"), why=why), [], tid)
                     if delta is not None:
-                        delta.put(u2, dict(_delta_rec(NOT_RUN, under, cmd2, u2env, sid2, {}, 0.0), why=why))
+                        delta.put(u2, dict(_delta_rec(NOT_RUN, under, cmd2, u2env, sid2, {}, 0.0, spec.repo), why=why))
                     note(k2, n, u2, NOT_RUN, 0.0)
                 f.flush()
                 break
@@ -1178,12 +1194,12 @@ def _run_group(spec: Spec, group: list, env: dict, log: Path, results: Path, tid
     return out
 
 
-def _delta_rec(verdict: str, under: str, cmd: str, uenv: dict, sid, metrics: dict, secs: float) -> dict:
+def _delta_rec(verdict: str, under: str, cmd: str, uenv: dict, sid, metrics: dict, secs: float, repo=None) -> dict:
     return {
         "verdict": verdict,
         "under_test": under,
         "cmd": stamps.sha16(cmd),
-        "env": stamps.env_key(uenv),
+        "env": stamps.unit_env_key(cmd, uenv, repo),  # F270
         "sid": sid,
         "metrics": metrics,
         "s": secs,
@@ -1237,7 +1253,7 @@ def delta_status(spec: Spec, ledger: Ledger, tid: str) -> list[tuple[str, str]]:
     for u, cmd in units:
         d = delta.get(u)
         uenv = dict(env, **{M.TASK_ENV: unit_base(u)})
-        if _kept(d, under, cmd, uenv, limits, len(units) == 1, aliases):
+        if _kept(d, under, cmd, uenv, limits, len(units) == 1, aliases, spec.repo):
             out.append((u, f"kept (PASS at {d.get('t')})"))
         elif not d:
             out.append((u, "not run"))

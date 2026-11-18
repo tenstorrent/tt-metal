@@ -58,6 +58,8 @@ def start(name: str, cmd: list[str]) -> int:
             stdin=subprocess.DEVNULL,
             cwd=os.getcwd(),
             start_new_session=True,
+            # F270: the command, so the safe runner files the run under its `VAR=value` prefix (core/runrec.py)
+            env=dict(os.environ, BRINGUP_UNIT_CMD=line),
         )
     (d / "cmd.json").write_text(json.dumps({"cmd": line, "pid": p.pid, "cwd": os.getcwd(), "t": time.time()}))
     print(f"devjob {name}: started pid {p.pid}; log {d / 'log'}; then `devjob wait {name}`")

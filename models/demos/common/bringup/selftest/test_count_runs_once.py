@@ -38,8 +38,10 @@ def _ladders(calls) -> list[str]:
     return [c for c in (calls.read_text().splitlines() if calls.exists() else []) if "test_ladder" in c]
 
 
-def _runner_run(sandbox, monkeypatch, args, rc, env=None, metrics=None):
-    """One safe-runner run as scripts/lib/tt_safe_run.sh files it: runrec begin, the test, runrec end."""
+def _runner_run(sandbox, monkeypatch, args, rc, env=None, metrics=None, unit_cmd=None):
+    """One safe-runner run as scripts/lib/tt_safe_run.sh files it: runrec begin, the test, runrec end. F270: launched
+    as a devjob does (stamps.UNIT_CMD_ENV: its command, ``unit_cmd``, by default the plain call of ``args``); False:
+    from a plain shell (its command line unknown)."""
     led = sandbox.ledger
     monkeypatch.setenv("BRINGUP_SPEC", str(sandbox.spec_path))
     monkeypatch.setenv(M.RESULTS_ENV, str(led.results_dir))
@@ -47,6 +49,8 @@ def _runner_run(sandbox, monkeypatch, args, rc, env=None, metrics=None):
     monkeypatch.delenv(M.RECORD_ENV, raising=False)
     for k, v in (env or {}).items():
         monkeypatch.setenv(k, v)
+    if unit_cmd is not False:
+        monkeypatch.setenv(stamps.UNIT_CMD_ENV, unit_cmd or "scripts/run_safe_pytest.sh " + " ".join(args))
     st = sandbox.repo.parent / "runrec.json"
     assert runrec.main(["begin", "--state", str(st), "--", *args]) == 0
     for k, v in (metrics or {}).items():
@@ -56,6 +60,7 @@ def _runner_run(sandbox, monkeypatch, args, rc, env=None, metrics=None):
         monkeypatch.delenv(k)
     for k in ("BRINGUP_SPEC", M.TASK_ENV):
         monkeypatch.delenv(k)
+    monkeypatch.delenv(stamps.UNIT_CMD_ENV, raising=False)
 
 
 def test_the_run_key_ignores_how_a_run_was_launched_not_what_it_measures():
@@ -76,8 +81,9 @@ def test_the_run_key_ignores_how_a_run_was_launched_not_what_it_measures():
         runrec.identity([LADDER_T], dict(a["env"]), ("code2", "goldens")),
     ):
         assert runrec.run_key(other) != runrec.run_key(a)
-    # a gate unit's runs: the prefix variables are the run's environment
-    assert runrec.unit_keys(LADDER, {}, keys) == [runrec.run_key(a)]
+    # a gate unit's runs: the prefix variables are the run's environment (F270: and its command line is known)
+    assert runrec.unit_keys(LADDER, {}, keys) == [runrec.run_key(dict(a, prefix=True))]
+    assert runrec.run_key(a) != runrec.run_key(dict(a, prefix=True))  # a run whose command line is unknown: never
     assert runrec.unit_keys(f"echo x && {LADDER}", {}, keys) is None  # a setup step: found by its stamp only
 
 
