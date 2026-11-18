@@ -108,3 +108,36 @@ against the converted kernel.
   `get_tt_fabric_packet_header_size_bytes()` is a stop, not a reuse. The argument for reuse is above; the alternative
   is to leave the self-loop (Quasar debt).
 - **Recipe/API drift:** `Scratchpad::get_base_address()` is named by the recipe but absent here.
+
+## Pass 3 — Add the Gen2 hardware configs (`semantic/gen2_hardware_configs.md`)
+
+### Outcome
+
+**NO SITES FOUND.** All four `hw_config`s come from the arch-agnostic TTNN DM helpers (shape 1), and nothing sets a field
+on them afterwards. Nothing was changed.
+
+### Sites
+
+None. Survey (`grep -rn "hw_config\|to_compute_hardware_config\|Gen1Config\|1XXConfig\|std::get<\|std::get_if<\|holds_alternative"`
+over the op directory, 13 `.cpp`/`.hpp` files):
+
+| KernelSpec | `hw_config` | Shape |
+|---|---|---|
+| `sender_reader` | `ttnn::create_reader_datamovement_config()` (`device/all_to_all_async_program_factory.cpp:366`) | 1 |
+| `sender_writer` | `ttnn::create_writer_datamovement_config()` (`:426`) | 1 |
+| `receiver_writer` | `ttnn::create_writer_datamovement_config()` (`:493`) | 1 |
+| `receiver_reader` | `ttnn::create_reader_datamovement_config()` (`:549`) | 1 |
+
+No compute kernel, no hand-written `DataMovement1XXConfig`, no `std::get` / `std::get_if` / `holds_alternative`.
+
+### Verification
+
+Nothing was changed, so the before and after trees are the same tree: sentinel set green (6 passed, on `3c26d153570`).
+
+### Noticed, not done
+
+- **Helper signature drift.** The recipe spells the helpers `create_reader_datamovement_config(arch)`; on this branch they
+  take no arch and always fill both `config_1xx` and `config_2xx`
+  (`ttnn/cpp/ttnn/operations/core/data_movement_kernel/datamovement_kernel_config.hpp`). Same outcome: shape 1, no work.
+- **`disable_dfb_implicit_sync_for_all`** stays at its default (`false`) on all four kernels. Whether a Quasar bring-up
+  needs it for these kernels is for the op owner.
