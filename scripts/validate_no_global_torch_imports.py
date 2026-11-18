@@ -13,15 +13,21 @@ class TorchImportVisitor(ast.NodeVisitor):
         self.global_torch_imports = []
         self.scope_level = 0  # Track scope level: we care about imports in scope 0 (global)
 
+    @staticmethod
+    def _is_torch(module):
+        # "torch" plus its submodules ("torch.nn", "torch.distributed", ...).
+        # A bare prefix check would also match "torchvision", hence the dot.
+        return module == "torch" or module.startswith("torch.")
+
     def visit_Import(self, node):
         if self.scope_level == 0:
             for alias in node.names:
-                if alias.name == "torch":
+                if self._is_torch(alias.name):
                     self.global_torch_imports.append((node.lineno, f"import {alias.name}"))
         self.generic_visit(node)
 
     def visit_ImportFrom(self, node):
-        if self.scope_level == 0 and node.module == "torch":
+        if self.scope_level == 0 and node.module and self._is_torch(node.module):
             self.global_torch_imports.append((node.lineno, f"from {node.module} import ..."))
         self.generic_visit(node)
 
