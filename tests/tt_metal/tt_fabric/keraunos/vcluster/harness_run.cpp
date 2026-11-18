@@ -17,6 +17,7 @@
 
 #include "impl/context/metal_context.hpp"
 #include "impl/dispatch/slow_dispatch.hpp"
+#include "impl/kernels/kernel.hpp"
 #include "impl/program/slow_dispatch.hpp"
 
 namespace tt::tt_fabric::vcluster {
