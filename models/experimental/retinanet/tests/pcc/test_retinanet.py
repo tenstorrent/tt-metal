@@ -22,6 +22,12 @@ from models.experimental.retinanet.tt.custom_preprocessor import (
 
 from models.experimental.retinanet.tt.tt_regression_head import ttnn_retinanet_regression_head
 from models.experimental.retinanet.tt.tt_classification_head import ttnn_retinanet_classification_head
+from models.experimental.retinanet.tt.tt_postprocess import TTDetectionDecoder, retinanet_anchors
+from models.experimental.retinanet.tests.pcc.postprocess_reference import (
+    assert_candidates_match,
+    device_candidates,
+    reference_candidates,
+)
 from models.experimental.retinanet.tests.pcc.synthetic_input import synthetic_image
 
 
@@ -110,6 +116,9 @@ class RetinaNetTestInfra:
 
         # TTNN backbone model
         self.ttnn_model = TTBackbone(parameters=self.backbone_parameters, model_config=model_config)
+        self.image_size = (height, width)
+        self.topk_candidates = retinanet.topk_candidates
+        self.decoder = TTDetectionDecoder(device, self.image_size, topk_candidates=self.topk_candidates)
 
         # Move input to device
         self.input_tensor = ttnn.to_device(tt_host_tensor, device)
@@ -171,6 +180,9 @@ class RetinaNetTestInfra:
             optimization_profile="optimized",
         )
 
+        # The device postprocessing on the heads' own outputs
+        self.candidates = self.decoder(classification_output, regression_output)
+
         # Combine all outputs
         self.output_tensor = {
             **backbone_output,
@@ -197,6 +209,7 @@ class RetinaNetTestInfra:
         self.pcc_passed_all = []
         self.pcc_message_all = []
         pcc_results = {}
+        tt_head_outputs = {}
         for key in tt_output:
             tt_output_tensor = tt_output[key]
             torch_output_tensor = self.torch_output_tensor[key]
@@ -204,6 +217,7 @@ class RetinaNetTestInfra:
             # Convert TTNN output to torch
             if key == "regression" or key == "classification":
                 tt_output_tensor_torch = ttnn.to_torch(tt_output_tensor)
+                tt_head_outputs[key] = tt_output_tensor_torch.float()
             else:
                 # Backbone FPN outputs need permutation
                 tt_output_tensor_torch = ttnn.to_torch(
@@ -228,6 +242,20 @@ class RetinaNetTestInfra:
             pcc_results[key] = pcc_message
 
         assert all(self.pcc_passed_all), logger.error(f"PCC check failed: {self.pcc_message_all}")
+
+        # The device candidates against torchvision's selection and decoding of the same head
+        # outputs, so this checks the decoder on what the heads produce, not on the reference's.
+        reference = reference_candidates(
+            tt_head_outputs["classification"],
+            tt_head_outputs["regression"],
+            retinanet_anchors(self.image_size),
+            self.topk_candidates,
+            self.image_size,
+        )
+        candidates = device_candidates(*self.candidates)
+        for level, (device_level, reference_level) in enumerate(zip(zip(*candidates), zip(*reference))):
+            box_error, score_error = assert_candidates_match(device_level, reference_level, level)
+            logger.info(f"Candidates of level {level}: max box error {box_error:.4f} px, score error {score_error:.2e}")
         pcc_summary = ", ".join([f"{k}={v}" for k, v in pcc_results.items()])
         logger.info(
             f"\nRetinaNet - batch_size={self.batch_size}, "

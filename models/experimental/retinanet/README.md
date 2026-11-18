@@ -54,7 +54,8 @@ pytest --disable-warnings models/experimental/retinanet/tests/pcc
     selection and box decoding, and the host's detections against torchvision's
     `postprocess_detections`, on random head outputs.
 - `test_retinanet.py` runs the whole model and checks the five pyramid levels and both head
-  outputs. Run it independently with:
+  outputs, and the device's candidates on those head outputs against torchvision's selection and
+  box decoding of them. Run it independently with:
 
 ```sh
 pytest --disable-warnings models/experimental/retinanet/tests/pcc/test_retinanet.py
