@@ -505,6 +505,28 @@ def test_bitwise_uint32_scalar_full_range(device, ttnn_function, torch_function,
     assert torch.equal(golden, tt_out.to(torch.int64))
 
 
+@pytest.mark.parametrize(
+    "ttnn_function, torch_function",
+    [
+        (ttnn.bitwise_and, torch.bitwise_and),
+        (ttnn.bitwise_or, torch.bitwise_or),
+        (ttnn.bitwise_xor, torch.bitwise_xor),
+    ],
+)
+@pytest.mark.parametrize("scalar", [65535, 65536, 0x12345, 0x1000001, 2147483647, -1, -3, -65536])
+@pytest.mark.parametrize("lhs_activations", [None, [ttnn.UnaryOpType.RELU]])
+def test_bitwise_uint16_scalar_uses_low_16_bits(device, ttnn_function, torch_function, scalar, lhs_activations):
+    x_torch = torch.arange(0, 65536, 32, dtype=torch.int32).reshape(32, 64)
+    x_torch[0, :4] = torch.tensor([0, 1, 0x1234, 65535])
+    golden = torch_function(x_torch.to(torch.int64), scalar & 0xFFFF)
+
+    x_tt = ttnn.from_torch(x_torch, dtype=ttnn.uint16, layout=ttnn.TILE_LAYOUT, device=device)
+    kwargs = {} if lhs_activations is None else {"input_tensor_a_activations": lhs_activations}
+    tt_out = ttnn.to_torch(ttnn_function(x_tt, scalar, **kwargs)).to(torch.int64)
+
+    assert torch.equal(golden, tt_out)
+
+
 @pytest.mark.parametrize("ttnn_function", [ttnn.bitwise_and, ttnn.bitwise_or, ttnn.bitwise_xor])
 @pytest.mark.parametrize("dtype", [ttnn.int32, ttnn.uint16])
 def test_bitwise_scalar_above_int32_max_requires_uint32(device, expect_error, ttnn_function, dtype):

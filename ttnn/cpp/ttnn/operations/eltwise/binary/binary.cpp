@@ -471,7 +471,7 @@
     }
 
 #define TTNN_BINARY_OP_TENSOR_UINT32_BITWISE_IMPL(NAME, OP_TYPE)                                 \
-    Tensor NAME(                                                                                 \
+    Tensor detail::NAME##_uint32_scalar(                                                         \
         const Tensor& lhs,                                                                       \
         uint32_t rhs,                                                                            \
         const std::optional<MemoryConfig>& memory_config,                                        \
@@ -482,7 +482,7 @@
         const std::optional<CoreRangeSet>& sub_core_grids,                                       \
         const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id) {                         \
         if (rhs <= static_cast<uint32_t>(std::numeric_limits<int32_t>::max())) {                 \
-            return NAME(                                                                         \
+            return ttnn::NAME(                                                                   \
                 lhs,                                                                             \
                 static_cast<int32_t>(rhs),                                                       \
                 memory_config,                                                                   \
