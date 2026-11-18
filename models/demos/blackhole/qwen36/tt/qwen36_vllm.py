@@ -275,11 +275,13 @@ class Qwen36ForCausalLM(_Qwen36Generator):
 
     # supports_chunked_prefill: a prefill continues from its start block (prefill_forward). supports_prefix_caching:
     # mamba_cache_mode "align" restores prefixes from the state blocks vLLM keeps; the plugin requires chunked prefill
-    # with it.
+    # with it. supports_multimodal_prefill_resume False: prefill_forward builds a multimodal row's vision rows and
+    # M-RoPE positions from position 0 of the row, so the row starts at 0 with every image in it.
     model_capabilities = {
         **_Qwen36Generator.model_capabilities,
         "supports_prefix_caching": True,
         "supports_chunked_prefill": True,
+        "supports_multimodal_prefill_resume": False,
     }
 
     @classmethod

@@ -575,6 +575,7 @@ def test_capabilities():
     assert caps["supports_async_decode"] is False
     assert caps["output_tokens_per_step"] == 1
     assert caps["supports_prefix_caching"] is True and caps["supports_chunked_prefill"] is True
+    assert caps["supports_multimodal_prefill_resume"] is False
     assert issubclass(CLS, Qwen36ForCausalLM)
     for key in Qwen36ForCausalLM.model_capabilities:
         assert key in caps
