@@ -42,8 +42,6 @@ This runs an end-to-end flow that:
 - Post-processes outputs
 - Compares results and validates PCC
 
-Note: GroupNorm in the head is set to fall back to the PyTorch implementation because the TTNN version resulted in lower PCC (around 0.97 for the regression head and 0.88 for the classification head). With the fallback enabled, the PCC improves to approximately 0.99. To disable this behavior, set `export FALLBACK_ON_GROUPNORM=0`.
-
 ### Performance
 ### Run Device Performance Test
 ```bash
