@@ -194,6 +194,10 @@ def _global_shape(param, shard_dim: int | None, mesh_size: int) -> tuple[int, in
     )
 
 
+# (blocks, one per source) -> blocks of the same shapes.
+BlockTransform = Callable[..., list[np.ndarray]]
+
+
 @dataclass(frozen=True)
 class _Rule:
     """One parameter and the checkpoint tensors that feed it, in fused-block order."""
@@ -206,25 +210,17 @@ class _Rule:
     # The rows each source must have, for a fused parameter: a short block next to a long one still
     # fills the parameter. None for a single source, whose rows the parameter's shape already fixes.
     block_rows: tuple[int, ...] | None = None
-    # Per source, the heads its rows are RoPE-permuted over (HF's half-split -> TTML's interleaved
-    # pairs), or None for a source that is not rotated. None when no source is.
-    rope_heads: tuple[int | None, ...] | None = None
+    # The checkpoint's blocks -> the parameter's, when the checkpoint layout is not what the parameter wants.
+    # A LoRA adapter's B is mapped by it too, so on an adapted layer it must act on rows alone, whatever the columns.
+    transform: BlockTransform | None = None
+    # The parameter's blocks -> the checkpoint's: the inverse of `transform`, for export.
+    inverse: BlockTransform | None = None
 
     def __post_init__(self) -> None:
         if len(self.sources) > 1 and len(self.block_rows or ()) != len(self.sources):
             raise ValueError(f"{self.param}: a fused rule needs block_rows for each of its {len(self.sources)} sources")
-        if self.rope_heads is not None and len(self.rope_heads) != len(self.sources):
-            raise ValueError(f"{self.param}: rope_heads needs an entry for each of its {len(self.sources)} sources")
-
-    @property
-    def transform(self) -> Callable[..., list[np.ndarray]] | None:
-        """(arrays) -> blocks of the same shapes, laid out as the parameter wants them; None if they already are."""
-        if self.rope_heads is None:
-            return None
-        return lambda *blocks: [
-            block if heads is None else unpermute_proj_rows(block, heads)
-            for block, heads in zip(blocks, self.rope_heads)
-        ]
+        if (self.transform is None) != (self.inverse is None):
+            raise ValueError(f"{self.param}: a transform needs its inverse, to export the parameter back")
 
 
 def _load_plan(
@@ -259,6 +255,21 @@ def _rules(config: LlamaConfig, parameter_names: set[str]) -> Iterator[_Rule]:
     q_rows, kv_rows = config.num_attention_heads * head_dim, config.num_key_value_heads * head_dim
     intermediate_size = config.intermediate_size or compute_swiglu_intermediate_size(config.hidden_size)
 
+    # HF's half-split RoPE rows <-> TTML's interleaved pairs, for q and k; V is not rotated.
+    def rope_unpermute(q: np.ndarray, k: np.ndarray, v: np.ndarray) -> list[np.ndarray]:
+        return [
+            unpermute_proj_rows(q, config.num_attention_heads),
+            unpermute_proj_rows(k, config.num_key_value_heads),
+            v,
+        ]
+
+    def rope_permute(q: np.ndarray, k: np.ndarray, v: np.ndarray) -> list[np.ndarray]:
+        return [
+            permute_proj_rows(q, config.num_attention_heads),
+            permute_proj_rows(k, config.num_key_value_heads),
+            v,
+        ]
+
     for layer in range(config.num_hidden_layers):
         param, hf = f"Llama/blocks/{layer}", f"layers.{layer}"
         yield _Rule(f"{param}/attention_norm/gamma", (f"{hf}.input_layernorm.weight",))
@@ -268,7 +279,8 @@ def _rules(config: LlamaConfig, parameter_names: set[str]) -> Iterator[_Rule]:
             f"{param}/attention/qkv_linear/weight",
             tuple(f"{hf}.self_attn.{p}_proj.weight" for p in ("q", "k", "v")),
             block_rows=(q_rows, kv_rows, kv_rows),
-            rope_heads=(config.num_attention_heads, config.num_key_value_heads, None),  # V is not rotated
+            transform=rope_unpermute,
+            inverse=rope_permute,
         )
         yield _Rule(f"{param}/attention/out_linear/weight", (f"{hf}.self_attn.o_proj.weight",))
         # Block order is the contract with swiglu_packed, which reads [gate | up].
@@ -414,14 +426,29 @@ class HfTensor:
 
     name: str  # as HF names it, e.g. "model.layers.0.self_attn.q_proj.weight"
     shape: tuple[int, ...]  # its HF shape: 1-D for norm weights, [out, in] otherwise
-    rope_heads: int | None = None  # heads its rows are RoPE-permuted over in the parameter, None if not rotated
+
+    @property
+    def rows(self) -> int:
+        """The rows it fills in the parameter: the loader reads a 1-D tensor (a norm weight) as one row."""
+        return self.shape[0] if len(self.shape) == 2 else 1
+
+
+@dataclass(frozen=True)
+class HfTensors:
+    """The HF tensors one TTML parameter holds as blocks of its rows, in order, and how their rows are laid out."""
+
+    tensors: tuple[HfTensor, ...]
+    # The HF blocks -> the parameter's, of the same shapes; None when the parameter holds them as HF does.
+    transform: BlockTransform | None = None
+    # The parameter's blocks -> the HF ones: the inverse of `transform`.
+    inverse: BlockTransform | None = None
 
 
 def _hf_name(canonical: str) -> str:
     return canonical if canonical == "lm_head.weight" else f"model.{canonical}"
 
 
-def hf_layout(model: Llama) -> dict[str, tuple[HfTensor, ...]]:
+def hf_layout(model: Llama) -> dict[str, HfTensors]:
     """Map each parameter of *model* to the HF tensors its rows hold, in order.
 
     The table ``load_from_safetensors`` loads by: a fused parameter holds several tensors (``qkv_linear``
@@ -436,33 +463,27 @@ def hf_layout(model: Llama) -> dict[str, tuple[HfTensor, ...]]:
         param = parameters[rule.param]
         rows, cols = rule.source_shape or _global_shape(param, _sharded_dim(param, tp, rule.param), mesh_size)
         block_rows = rule.block_rows or (rows,)
-        rope_heads = rule.rope_heads or (None,) * len(rule.sources)
-        layout[rule.param] = tuple(
-            # The loader reads a 1-D tensor (a norm weight) as one row.
-            HfTensor(_hf_name(source), (cols,) if source.endswith("norm.weight") else (block, cols), heads)
-            for source, block, heads in zip(rule.sources, block_rows, rope_heads)
+        tensors = tuple(
+            HfTensor(_hf_name(source), (cols,) if source.endswith("norm.weight") else (block, cols))
+            for source, block in zip(rule.sources, block_rows)
         )
+        layout[rule.param] = HfTensors(tensors, transform=rule.transform, inverse=rule.inverse)
     return layout
 
 
-def split_hf_tensors(array: np.ndarray, tensors: Sequence[HfTensor]) -> dict[str, np.ndarray]:
+def split_hf_tensors(array: np.ndarray, held: HfTensors) -> dict[str, np.ndarray]:
     """The HF tensors one parameter holds, from its ``[rows, cols]`` values: the inverse of how
     ``load_from_safetensors`` assembles them. Rows past the tensors (vocab padding) are dropped, and
     each tensor is a copy, never a view of *array*."""
-    rows = [tensor.shape[0] if len(tensor.shape) == 2 else 1 for tensor in tensors]
+    rows = [tensor.rows for tensor in held.tensors]
     if array.ndim != 2 or array.shape[0] < sum(rows):
         raise RuntimeError(
-            f"{[t.name for t in tensors]}: need a 2-D array of at least {sum(rows)} rows, got {array.shape}"
+            f"{[t.name for t in held.tensors]}: need a 2-D array of at least {sum(rows)} rows, got {array.shape}"
         )
-    split = {}
-    start = 0
-    for tensor, count in zip(tensors, rows):
-        block = array[start : start + count]
-        start += count
-        if tensor.rope_heads is not None:
-            block = permute_proj_rows(block, tensor.rope_heads)
-        split[tensor.name] = block.reshape(tensor.shape).copy()
-    return split
+    blocks = np.split(array[: sum(rows)], np.cumsum(rows)[:-1])
+    if held.inverse is not None:
+        blocks = held.inverse(*blocks)
+    return {tensor.name: block.reshape(tensor.shape).copy() for tensor, block in zip(held.tensors, blocks)}
 
 
 # What a model directory needs besides the weights to load with AutoModelForCausalLM / AutoTokenizer.
@@ -508,7 +529,7 @@ def export_hf_model(
     for name in layout:
         if not ttml.Sharding.from_tensor(parameters[name]).is_fully_replicated:
             raise NotImplementedError(f"{name}: sharded; export_hf_model reads replicated parameters only")
-    shapes = {tensor.name: tensor.shape for held in layout.values() for tensor in held}
+    shapes = {tensor.name: tensor.shape for held in layout.values() for tensor in held.tensors}
     split = split_state_dict_into_shards_factory(
         shapes,
         get_storage_size=lambda shape: int(np.prod(shape)) * _BF16_BYTES,

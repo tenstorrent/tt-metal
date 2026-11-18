@@ -724,7 +724,7 @@ tt-train/** @tenstorrent/tt-train
 tt-train/sources/ttml/metal/** @tenstorrent/tt-train @lgalasTT
 tt-train/sources/ttml/ops/** @tenstorrent/tt-train @lgalasTT
 tt-train/tests/** @tenstorrent/tt-train @lgalasTT @abustamanteTT
-# Files related to the productization of training effort.
+# Files related to the productization of training. Code ownership is limited until support is stable.
 tt-train/configs/training_configs/unified_trainer/** @mmilosevicTT @mcupacTT @jmalone-tt @vladimirjovanovicTT
 tt-train/sources/ttml/ttml/datasets/provider/** @mmilosevicTT @mcupacTT @jmalone-tt @vladimirjovanovicTT
 tt-train/sources/ttml/ttml/datasets/utils/** @mmilosevicTT @mcupacTT @jmalone-tt @vladimirjovanovicTT

@@ -184,7 +184,7 @@ class LlamaProvider(ModelProvider):
             if len(projections) == 1:
                 continue
             rows = {
-                tuple(tensor.shape[0] for tensor in held)
+                tuple(tensor.shape[0] for tensor in held.tensors)
                 for parameter, held in layout.items()
                 if re.search(pattern, _layer_name(parameter))
             }
@@ -203,7 +203,7 @@ class LlamaProvider(ModelProvider):
         root = next(iter(llama.parameters())).split("/", 1)[0]
         for name, layer in _lora_named_layers(llama):
             held = layout[f"{root}/{name.replace('.', '/')}/weight"]
-            yield layer, held, layer.blocks.adapted if layer.blocks is not None else (True,) * len(held)
+            yield layer, held, layer.blocks.adapted if layer.blocks is not None else (True,) * len(held.tensors)
 
     def load_weights(self, model: Any, directory: PathLike) -> None:
         directory = Path(directory)
