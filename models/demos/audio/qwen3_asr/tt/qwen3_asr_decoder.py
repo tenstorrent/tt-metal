@@ -17,6 +17,7 @@ import time
 import torch
 
 import ttnn
+from models.common.utility_functions import is_blackhole
 from models.tt_transformers.tt.common import copy_host_to_device
 from models.tt_transformers.tt.model import Transformer
 
@@ -65,14 +66,13 @@ class Qwen3ASRDecoder(Transformer):
         positions invisible to the last real token."""
         S = inputs_embeds.shape[-2]
         last = S - 1
-        # Always pad prefill to a multiple of 512 (the Blackhole prefill_len_cutoff), min 512.
-        # The MLP reshapes x to [1, S//512, 512, -1] only when S >= 512, so a 256-pad prefill
-        # takes a DIFFERENT (no-reshape) code path. Mixing 256-pad and >=512-pad prefills in
-        # one long-lived process corrupts the model (every later request returns garbage/empty)
-        # — likely a program-cache/KV-shape inconsistency across the two paths. Forcing every
-        # prefill onto the >=512 reshape path keeps it consistent. (256 alone is fine; mixing
-        # is not.) Caps single-shot at max_seq_len (2048 -> ~150s). Trailing pad is causal-masked.
-        S_pad = ((S + 511) // 512) * 512
+        # Attention prefill needs a multiple of 128. On Blackhole, mixing prefills below and
+        # at or above the 512 MLP cutoff in one process corrupts later transcripts, so every
+        # prefill pads to a multiple of 512 there. Wormhole mixes bucket sizes correctly
+        # (tests/test_interleaved_lengths.py). Caps single-shot at max_seq_len (2048 -> ~150s).
+        # Trailing pad is causal-masked.
+        pad = 512 if is_blackhole() else 128
+        S_pad = ((S + pad - 1) // pad) * pad
         if S_pad != S:
             inputs_embeds = torch.nn.functional.pad(inputs_embeds, (0, 0, 0, S_pad - S))
         # tt_transformers.Transformer.prepare_inputs_prefill returns 6 values
