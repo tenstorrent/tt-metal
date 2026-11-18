@@ -36,7 +36,7 @@ from dataclasses import dataclass, field
 from typing import Any, Iterator, Sequence
 
 from ._boxes import Box
-from ._errors import CheckpointError, IncompleteCheckpointError, VersionError
+from ._errors import CheckpointError, IncompleteCheckpointError, LayoutError, VersionError
 from ._layouts import Transform, transform_from_json
 from ._topology import Label
 
@@ -154,6 +154,12 @@ class Index:
         ]
         labels = [Label.from_json(label) for label in value["labels"]]
         entries = {key: _entry_from_json(key, e, labels) for key, e in value["state"].items()}
+        for key, entry in entries.items():
+            for chunk in entry.chunks:
+                if chunk.file >= len(files):
+                    raise CheckpointError(
+                        f"index entry {key!r}: chunk file {chunk.file} is not one of the index's {len(files)} files"
+                    )
         scalars = {key: _scalar_from_json(v) for key, v in value["scalars"].items()}
         return Index(
             checkpoint_id=str(value["checkpoint_id"]),
@@ -222,6 +228,28 @@ def _shape(key: str, what: str, value: Any, ndim: int | None = None) -> tuple[in
     return tuple(value)
 
 
+def _transform(key: str, value: Any, global_shape: tuple[int, ...], canonical_shape: tuple[int, ...]) -> Transform:
+    """An entry's transform, checked against its shapes: the dim it names within the tensor's rank (a negative or
+    too large dim would index the wrong dim or none), and the canonical shape it gives from the global shape the one
+    recorded."""
+    transform = transform_from_json(value)
+    dim = getattr(transform, "dim", None)
+    if dim is not None and not 0 <= dim < len(global_shape):
+        raise CheckpointError(
+            f"index entry {key!r}: transform {transform.to_json()} names dim {dim} of a rank-{len(global_shape)} tensor"
+        )
+    try:
+        canonical = transform.canonical_shape(global_shape)
+    except LayoutError as err:
+        raise LayoutError(f"index entry {key!r}: {err}") from None
+    if tuple(canonical) != tuple(canonical_shape):
+        raise CheckpointError(
+            f"index entry {key!r}: its transform gives canonical shape {list(canonical)}, not the recorded "
+            f"{list(canonical_shape)}"
+        )
+    return transform
+
+
 def _entry_from_json(key: str, value: dict, labels: Sequence[Label]) -> Entry:
     # Boxes are built unchecked (``Box``), so every shape and box an index holds is checked here.
     global_shape = _shape(key, "global_shape", value["global_shape"])
@@ -231,7 +259,7 @@ def _entry_from_json(key: str, value: dict, labels: Sequence[Label]) -> Entry:
     offsets = table["offsets"]
     # A broadcast sizes column holds one row: checked once, then repeated.
     sizes = _expand([_shape(key, "chunk sizes", s, ndim) for s in table["sizes"]], n)
-    files = table["file"]
+    files = _shape(key, "file column", table["file"])  # in range of the index's files: checked by Index.from_json
     data_offsets = table["data_offset"]
     nbytes = _expand(table["nbytes"], n)
     crcs = table["crc32"]
@@ -244,7 +272,7 @@ def _entry_from_json(key: str, value: dict, labels: Sequence[Label]) -> Entry:
     chunks = [
         ChunkRecord(
             box=Box(_shape(key, "chunk offsets", offsets[i], ndim), sizes[i]),
-            file=int(files[i]),
+            file=files[i],
             data_offset=int(data_offsets[i]),
             nbytes=int(nbytes[i]),
             crc32=crc_values[i],
@@ -263,14 +291,16 @@ def _entry_from_json(key: str, value: dict, labels: Sequence[Label]) -> Entry:
         raise CheckpointError(
             f"index entry {key!r}: label {label_id!r} is not a position in the index's table of {len(labels)} labels"
         )
+    canonical_shape = _shape(key, "canonical_shape", value["canonical_shape"], ndim)
+    transform = _transform(key, value["transform"], global_shape, canonical_shape)
     return Entry(
         key=key,
         role=str(value["role"]),
         dtype=str(value["dtype"]),
         layout=str(value["layout"]),
         global_shape=global_shape,
-        canonical_shape=_shape(key, "canonical_shape", value["canonical_shape"], ndim),
-        transform=transform_from_json(value["transform"]),
+        canonical_shape=canonical_shape,
+        transform=transform,
         label=labels[label_id],
         live_keys=tuple(value["live_keys"]),
         chunks=chunks,
@@ -341,9 +371,12 @@ def find_latest(root: str, prefix: str = "", include_replaced: bool = False) -> 
 
     Directories left by saves that did not finish, ``.partial-`` ones of saves that died and ``.replaced-`` ones of
     interrupted overwrites, can each hold a whole checkpoint. Nothing removes them, since a ``.partial-`` directory may
-    belong to a save still running in another job; this warns about those of ``prefix``, naming each."""
+    belong to a save still running in another job; this warns about those of ``prefix``, naming each. A
+    ``.replaced-`` directory whose step has no complete final directory is that step's only copy, so for it the
+    warning says to rename it back instead."""
     best: tuple[int, int, str, str] | None = None
     leftovers: list[str] = []
+    only_copies: list[tuple[str, str]] = []  # (.replaced- name, the final name it must be renamed back to)
     try:
         names = os.listdir(root)
     except FileNotFoundError:
@@ -355,7 +388,10 @@ def find_latest(root: str, prefix: str = "", include_replaced: bool = False) -> 
             candidate = name.split(mark, 1)[0]
             stem = parse_dir_name(candidate)
             if stem is not None and stem[0] == prefix:
-                leftovers.append(name)
+                if mark == REPLACED_MARK and not is_complete(os.path.join(root, candidate)):
+                    only_copies.append((name, candidate))
+                else:
+                    leftovers.append(name)
             if mark == PARTIAL_MARK or not include_replaced:
                 continue
         parsed = parse_dir_name(candidate)
@@ -376,6 +412,12 @@ def find_latest(root: str, prefix: str = "", include_replaced: bool = False) -> 
             f"running.",
             stacklevel=2,
         )
+    for name, final in sorted(only_copies):
+        warnings.warn(
+            f"{os.path.join(root, name)} is the only copy of {final}: an overwrite was interrupted after moving it "
+            f"aside and before moving the new checkpoint in. Rename it back to {final} rather than removing it.",
+            stacklevel=2,
+        )
     return best[3] if best else None
 
 
@@ -386,11 +428,12 @@ def staging_dir(final_dir: str, nonce: int) -> str:
     return f"{final_dir.rstrip('/')}{PARTIAL_MARK}{int(nonce)}"
 
 
-def begin_staging(final_dir: str, nonce: int, shared: bool) -> str:
-    """Create ``<final_dir>.partial-<nonce>/data`` and return the staging path. Save passes the nonce its ranks agreed
-    on; with ``shared`` the directory may already exist, since every rank of a multi-rank save creates it."""
+def begin_staging(final_dir: str, nonce: int) -> str:
+    """Create ``<final_dir>.partial-<nonce>/data`` unless it exists and return the staging path. Save passes the
+    nonce its ranks agreed on, and every rank of a multi-rank save creates the same directory, so an existing one is
+    accepted: another save reaches it only by saving the same step with the same random nonce."""
     staging = staging_dir(final_dir, nonce)
-    os.makedirs(os.path.join(staging, DATA_DIR), exist_ok=shared)
+    os.makedirs(os.path.join(staging, DATA_DIR), exist_ok=True)
     return staging
 
 

@@ -296,7 +296,7 @@ def save(
         if group.is_coordinator and os.path.exists(ckpt_dir) and not overwrite:
             raise CheckpointError(f"{ckpt_dir} already exists; pass overwrite=True to replace it")
         os.makedirs(os.path.dirname(ckpt_dir), exist_ok=True)
-        begin_staging(ckpt_dir, nonce, shared=True)  # every rank creates the same directory
+        begin_staging(ckpt_dir, nonce)  # every rank creates the same directory
 
     try:
         group.phase("checking the target directory", check_target)
