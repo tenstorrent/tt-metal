@@ -118,3 +118,44 @@ Nothing was changed, so the before and after trees are the same tree: sentinel s
 
 - **Quasar note.** `metadata_buffer` is the last DFB with no credit calls in this op; it is a two-kernel DFB (reader and
   writer on one node), so it is neither this pass's target nor convertible by pass 1 (see the pass 1 feature request).
+
+## Pass 3 — Add the Gen2 hardware configs (`semantic/gen2_hardware_configs.md`)
+
+### Outcome
+
+**APPLIED (2 sites).** Both kernels had a hand-written Gen1-only DM config (shape 4, data movement). Each now also carries
+the default-constructed Gen2 config.
+
+### Sites
+
+- `device/all_to_all_dispatch_program_factory.cpp:459` — reader `hw_config` (Gen1: `RISCV_1`, `NOC_1`, `DM_DEDICATED_NOC`).
+- `device/all_to_all_dispatch_program_factory.cpp:541` — writer `hw_config` (Gen1: `RISCV_0`, `NOC_0`, `DM_DEDICATED_NOC`).
+
+Survey (`grep -rn "hw_config\|to_compute_hardware_config\|Gen1Config\|1XXConfig\|2XXConfig\|std::get<\|std::get_if<\|holds_alternative\|disable_dfb_implicit"`
+over the op directory): the two `hw_config`s above and nothing else — no compute kernel, no helper-built config, no field
+set after the fact, no `disable_dfb_implicit_sync*` anywhere in the op.
+
+**Shape on this branch.** As for `all_to_all_combine`: the recipe describes `hw_config` as a variant over
+`DataMovementGen1Config` / `DataMovementGen2Config`, chosen by an `arch` branch. On this branch
+`DataMovementHardwareConfig` is one struct with two optional members, `config_1xx` and `config_2xx`, and the target
+architecture picks one at program construction. So the mechanical equivalent of "default-construct the Gen2 config" is
+`.config_2xx = DataMovementHardwareConfig::DataMovement2XXConfig{}` next to the existing `.config_1xx`, with no `arch`
+branch — what the arch-agnostic TTNN helpers do (`datamovement_kernel_config.hpp`). The Gen1 initializers are textually
+unchanged (two added lines in the diff, nothing removed). `disable_dfb_implicit_sync_for_all` /
+`disable_dfb_implicit_sync_for` are not set. No `unpack_modes` marker: both sites are DM.
+
+### Verification
+
+Sentinel set green before (8 passed, on `cbc77b0e1c2`) and after (8 passed); the sentinel spec carries the same
+`config_2xx`. This exercises only the Gen1 path; nothing here checks the Gen2 values (none were authored — the Gen2
+config is default-constructed).
+
+### Noticed, not done
+
+- **Implicit sync on Quasar.** The reader moves one row-major page per DFB entry into `input` / `indices` with explicit
+  `reserve_back` / `push_back`, and fills `mapping` with `mapping_pages` reads under one `reserve_back(mapping_pages)`;
+  the writer consumes with `wait_front` / `pop_front`. `metadata_buffer` has no credit calls and is filled by fabric
+  writes from other devices. Whether this op needs `disable_dfb_implicit_sync_for_all` (or a per-DFB opt-out for
+  `metadata_buffer`) on Quasar is a Quasar-uplift decision for the op owner; this pass does not set it.
+- **Recipe drift.** The recipe's variant-and-`arch`-branch shape does not match this branch's `config_1xx` /
+  `config_2xx` struct.

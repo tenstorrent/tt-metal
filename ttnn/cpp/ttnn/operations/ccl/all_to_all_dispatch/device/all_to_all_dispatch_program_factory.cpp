@@ -464,6 +464,7 @@ ttnn::device_operation::MeshWorkloadArtifacts::PerCoordProgram build_dispatch_pr
                         .noc = NOC::NOC_1,
                         .noc_mode = NOC_MODE::DM_DEDICATED_NOC,
                     },
+                .config_2xx = DataMovementHardwareConfig::DataMovement2XXConfig{},
             },
     };
     reader_kernel_spec.advanced_options.global_semaphore_bindings = {
@@ -545,6 +546,7 @@ ttnn::device_operation::MeshWorkloadArtifacts::PerCoordProgram build_dispatch_pr
                         .noc = NOC::NOC_0,
                         .noc_mode = NOC_MODE::DM_DEDICATED_NOC,
                     },
+                .config_2xx = DataMovementHardwareConfig::DataMovement2XXConfig{},
             },
     };
     writer_kernel_spec.advanced_options.global_semaphore_bindings = {
