@@ -21,6 +21,8 @@ from .vision_helpers import grid_device
 
 CONFIG = MiniMaxM3VisionConfig()
 NUM_HEADS, PADDED_HEAD_DIM = CONFIG.num_attention_heads, nearest_32(CONFIG.head_dim)
+# The k chunk of every config, common.SDPA_K_CHUNK_SIZE, pinned here so that a change to it shows.
+K_CHUNK = 256
 # The q chunk per core grid and patch count. Each comment gives the slowest core's query rows for q chunks of 128, 160,
 # 192 and 256: the fewest rows win, the larger chunk on a tie.
 Q_CHUNKS = {
@@ -67,7 +69,7 @@ Q_CHUNKS = {
 
 
 def test_vision_sdpa_program_config_q_chunks():
-    """Each grid and patch count gets the q chunk of Q_CHUNKS, k chunks of 128 and the whole grid.
+    """Each grid and patch count gets the q chunk of Q_CHUNKS, k chunks of K_CHUNK and the whole grid.
 
     Changing a config leaves the next call's config as it was.
     """
@@ -75,7 +77,8 @@ def test_vision_sdpa_program_config_q_chunks():
         for patches, q_chunk in q_chunks.items():
             config = sdpa_program_config(grid_device(x, y), patches, NUM_HEADS)
             grid = config.compute_with_storage_grid_size
-            assert (config.q_chunk_size, config.k_chunk_size, grid.x, grid.y) == (q_chunk, 128, x, y), (x, y, patches)
+            got = (config.q_chunk_size, config.k_chunk_size, grid.x, grid.y)
+            assert got == (q_chunk, K_CHUNK, x, y), (x, y, patches)
             config.q_chunk_size = 32
             assert sdpa_program_config(grid_device(x, y), patches, NUM_HEADS).q_chunk_size == q_chunk, (x, y, patches)
 
@@ -87,9 +90,11 @@ def test_vision_attention_sdpa_call(monkeypatch, patches):
     device, events = grid_device(12, 10), []  # events: (op, inputs, keyword arguments, output)
 
     def tensor(*shape):
-        """A device tensor stand-in: its shape, padded to whole tiles, and its device."""
+        """A device tensor stand-in in DRAM, with its shape padded to whole tiles."""
         padded_shape = shape[:-2] + tuple(nearest_32(d) for d in shape[-2:])
-        return SimpleNamespace(shape=shape, padded_shape=padded_shape, device=lambda: device)
+        return SimpleNamespace(
+            shape=shape, padded_shape=padded_shape, device=lambda: device, memory_config=lambda: ttnn.DRAM_MEMORY_CONFIG
+        )
 
     def op(name, output):
         def run(*inputs, **kwargs):
@@ -137,7 +142,8 @@ def test_vision_attention_sdpa_call(monkeypatch, patches):
     _, _, kwargs, attn = events[5]
     config = kwargs.pop("program_config")
     grid = config.compute_with_storage_grid_size
-    assert (config.q_chunk_size, config.k_chunk_size, grid.x, grid.y) == (Q_CHUNKS[12, 10][patches], 128, 12, 10)
+    got = (config.q_chunk_size, config.k_chunk_size, grid.x, grid.y)
+    assert got == (Q_CHUNKS[12, 10][patches], K_CHUNK, 12, 10), got
     assert kwargs == dict(
         is_causal=False,
         scale=attention.scale,

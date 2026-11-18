@@ -26,6 +26,8 @@ import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.common.tensor_utils import get_rot_transformation_mat
 from models.demos.minimax_m3.tt.vision.common import (
+    DRAM_PLACEMENT,
+    BlockPlacement,
     as_linear_bias,
     hifi4_compute_config,
     linear,
@@ -189,15 +191,21 @@ class M3VLAttention(LightweightModule):
         x: ttnn.Tensor,  # (1, 1, L, hidden_size)
         cos: ttnn.Tensor,  # (1, 1, L, padded_head_dim)
         sin: ttnn.Tensor,
+        placement: BlockPlacement = DRAM_PLACEMENT,
     ) -> ttnn.Tensor:
-        xqkv = linear(x, self.wqkv, self.wqkv_bias, self.compute_kernel_config)
+        """Run self-attention on x, writing each output where placement says.
+
+        QKV and the heads write placement.qkv, the RoPE ops write where their input is, SDPA writes DRAM and the output
+        projection writes placement.residual.
+        """
+        xqkv = linear(x, self.wqkv, self.wqkv_bias, self.compute_kernel_config, memory_config=placement.qkv)
 
         q_heads, k_heads, v_heads = ttnn.experimental.nlp_create_qkv_heads(
             xqkv,
             num_heads=self.num_heads,
             num_kv_heads=self.num_heads,
             transpose_k_heads=False,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            memory_config=placement.qkv,
         )
         ttnn.deallocate(xqkv)
 
@@ -220,6 +228,6 @@ class M3VLAttention(LightweightModule):
         ttnn.deallocate(k_heads)
         ttnn.deallocate(v_heads)
 
-        out = linear(attn, self.wo, self.wo_bias, self.compute_kernel_config)
+        out = linear(attn, self.wo, self.wo_bias, self.compute_kernel_config, memory_config=placement.residual)
         ttnn.deallocate(attn)
         return out
