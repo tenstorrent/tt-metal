@@ -90,6 +90,10 @@ bool unary_op_supports_integer_dtype(UnaryOpType op_type, DataType dtype) {
         case UnaryOpType::IDENTITY:
         case UnaryOpType::TYPECAST: return true;
 
+        // Only carries the quant/requant zero points to binary_ng's QUANT/REQUANT/DEQUANT kernels; it never runs as
+        // a unary op, and quant and requant outputs are integer.
+        case UnaryOpType::ZERO_POINT: return true;
+
         default: return false;
     }
 }
