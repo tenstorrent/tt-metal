@@ -47,20 +47,10 @@ export MIMO_GOLDEN=golden_48l.pt
 
 pytest models/experimental/mimo_v2_6_flash/tests/test_kv_tables.py               # page tables, host only
 pytest models/experimental/mimo_v2_6_flash/tests/test_prefill_helpers.py          # prefill padding, host only
-pytest models/experimental/mimo_v2_6_flash/tests/test_sample_verify_host.py       # device acceptance's mirror, host only
 pytest models/experimental/mimo_v2_6_flash/tests/test_decoder_tp8_dp4.py          # one layer per type, prefill + decode
 pytest models/experimental/mimo_v2_6_flash/tests/test_chunked_prefill_tp8_dp4.py  # chunked prefill, one layer per type
-pytest models/experimental/mimo_v2_6_flash/tests/test_moe_decode_tp8.py           # streaming MoE decode vs prefill
 pytest models/experimental/mimo_v2_6_flash/tests/test_model_tp8_dp4.py            # 48 layers vs the fp32 golden
 pytest models/experimental/mimo_v2_6_flash/tests/test_model_chunked_tp8_dp4.py    # 48 layers: chunked, prefix hit
-pytest models/experimental/mimo_v2_6_flash/tests/test_model_traced_tp8_dp4.py     # traced decode, device greedy loop
-pytest models/experimental/mimo_v2_6_flash/tests/test_dflash_tp8.py               # DFlash drafter vs the fp32 reference
-pytest models/experimental/mimo_v2_6_flash/tests/test_vision_reference_host.py    # ViT reference == HF, host only
-TT_VISIBLE_DEVICES=<row chips> pytest models/experimental/mimo_v2_6_flash/tests/test_vision_tp8.py  # ViT on one row
-pytest models/experimental/mimo_v2_6_flash/tests/test_multimodal_host.py          # multimodal items, cache, scatter, host only
-pytest models/experimental/mimo_v2_6_flash/tests/test_prefill_embeds_tp8.py       # prefill from embeddings == from tokens
-python -m models.experimental.mimo_v2_6_flash.reference.make_golden_mm --audio clip.wav --out golden_mm_48l.pt
-MIMO_MM_GOLDEN=golden_mm_48l.pt pytest models/experimental/mimo_v2_6_flash/tests/test_model_mm_tp8.py  # image / audio
 ```
 
 The device tests can outlast pytest's default 300 s timeout on a cold weight cache; pass `--timeout 3000`.

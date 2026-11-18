@@ -5,7 +5,7 @@
 
 Mirrors the HF remote code ``modeling_mimo_v2.py`` (``tokenize_audio_batch``, ``AudioTokenizerEncoder``,
 ``ResidualVectorQuantizer``, ``MiMoAudioEncoder.get_audio_feature``) op for op, without transformers: in fp32 the
-codes and the embeddings are bit-identical to the HF modules (tests/test_audio_reference_host.py). One audio item:
+codes and the embeddings are bit-identical to the HF modules. One audio item:
 
   waveform (mono, 24 kHz) -> log-magnitude mel [T, 128], 100 frames/s (vLLM processor; ``log_mel_spectrogram``)
   -> 6000-frame (60 s) segments, encoded as one zero-padded batch

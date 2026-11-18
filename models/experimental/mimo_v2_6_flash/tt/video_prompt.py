@@ -16,7 +16,7 @@ template's outer pair stays around the expansion:
     <|vision_start|> <|mimo_video_start|> ... <|mimo_video_end|> <|vision_end|>
 
 With MIMO_VIDEO_PROMPT=hf (the default) the update targets the whole placeholder, so the prompt is the checkpoint
-processor's (tests/test_video_prompt_host.py), and Xiaomi's API's (its prompt for the same 32 frames is 2 tokens
+processor's, and Xiaomi's API's (its prompt for the same 32 frames is 2 tokens
 shorter than upstream's); ``vllm`` keeps upstream's. Images and audio are the same either way (their targets already
 give the processor's tokens).
 

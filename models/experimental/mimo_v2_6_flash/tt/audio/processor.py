@@ -58,7 +58,7 @@ MIMO_AUDIO_TOKENIZER=device (the default) runs the tokenizer encoder on the engi
 the API server and the engine read it): the item then reaches the engine as ``audio_mel_bits``, the fp32 mel as int32
 bits [T, 128] (512 B per 10 ms frame), and this processor runs no encoder at all, so items no longer queue behind a
 long clip here. The device encoder takes ~0.1 s for 30 s of audio where the host one takes ~1.6 s; its codes differ
-from the fp32 reference in ~3.5-5 % of the frames (Blackhole matmul accumulation; tests/test_audio_tokenizer_tp8.py),
+from the fp32 reference in ~3.5-5 % of the frames (Blackhole matmul accumulation),
 which does not cost accuracy. Serving A/B on bhg2 row 1 (one row engine, the release MTP config, full LibriSpeech
 test-clean through tests/evals/run_eval.sh at concurrency 8): ``frontend`` (host patch encoder) WER 1.969 %, 1
 degenerate output; ``device`` with the device patch encoder (integration 96920daecad, MIMO_MM_VIT_RESERVE_GB 0.35)

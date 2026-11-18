@@ -8,8 +8,8 @@
                                         # -> bf16 [audio_token_len(T), 4096], one row per <|audio_pad|> placeholder
 
 The tokenizer encoder (mel -> 20 RVQ codes per 40 ms) runs in fp32, so the codes are the HF fp32 module's (bf16
-would change a code in ~70 % of the frames: tests/test_audio_reference_host.py), with the reference's ops except
-``is_causal`` attention on the full layers, which is bit-identical (tests/test_audio_host_backend_host.py). The patch
+would change a code in ~70 % of the frames), with the reference's ops except
+``is_causal`` attention on the full layers, which is bit-identical. The patch
 encoder (codes -> embeddings) runs in ``patch_dtype``: bf16 by default (PCC ~0.9999 against fp32; the codes are
 not affected), fp32 for embeddings identical to the reference's.
 
@@ -47,8 +47,7 @@ def check_audio_places(patch, tokenizer):
 
 
 class CausalAudioTokenizerEncoder(ref.AudioTokenizerEncoder):
-    """The reference encoder with cheaper attention, bit-identical hidden states (checked on 5 s to 600 s of speech,
-    tests/test_audio_host_backend_host.py):
+    """The reference encoder with cheaper attention, bit-identical hidden states (checked on 5 s to 600 s of speech):
 
     * Full-attention layers: SDPA's ``is_causal`` instead of HF's additive causal mask, so the CPU flash kernel
       skips the key blocks above the diagonal instead of adding -inf to them.

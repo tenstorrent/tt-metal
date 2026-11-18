@@ -2703,7 +2703,7 @@ MM_MODALITIES = tuple(m for m in os.environ.get("MIMO_MM_MODALITIES", ",".join(m
 
 # The device ViT's patch rows per pass (tt/vision; a single image always runs in one pass) and weight dtype.
 VIT_MAX_ROWS = int(os.environ.get("MIMO_VIT_MAX_ROWS", "16384"))
-# Free DRAM per chip (MB) one ViT pass of a row bucket needs (tests/test_vit_dram_headroom_tp8.py measures it): what
+# Free DRAM per chip (MB) one ViT pass of a row bucket needs (measured): what
 # the multimodal LLM must leave after its KV cache and traces (MiMoV2OmniForCausalLM: KV reservation, startup check).
 # Measured on bhg4 (one row, bf16 weights): 96 / 192 / 368 / 736 MB at 4096 / 8192 / 16384 / 32768 rows (the bisection
 # step is 16 MB); these add ~13 % for a fragmented heap. Plus the ViT's warmed programs (~20 MB per chip).

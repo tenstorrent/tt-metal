@@ -1,15 +1,11 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-import contextlib
 import math
 import os
-import threading
-import time
 
 import pytest
 import torch
-from loguru import logger
 
 from models.experimental.mimo_v2_6_flash.reference.checkpoint import MiMoCheckpoint, default_model_path
 from models.experimental.mimo_v2_6_flash.reference.config import MiMoConfig
@@ -62,29 +58,6 @@ def golden_path():
     return path
 
 
-@contextlib.contextmanager
-def heartbeat(what, every_sec=60):
-    """Log a line every ``every_sec`` seconds while the block runs.
-
-    The tt-device-mcp broker reaps a job that prints nothing for 300 s as hung
-    (TT_DEVICE_MCP_HUNG_SILENCE_SEC). A long prefill waits on the device in silence, so long
-    tests wrap those waits in this."""
-    stop = threading.Event()
-    t0 = time.time()
-
-    def beat():
-        while not stop.wait(every_sec):
-            logger.info(f"{what}: still running after {time.time() - t0:.0f} s")
-
-    thread = threading.Thread(target=beat, daemon=True)
-    thread.start()
-    try:
-        yield
-    finally:
-        stop.set()
-        thread.join()
-
-
 def pcc(a, b):
     """Pearson correlation. Raises on NaN: callers take min() over scores, and min() would skip a NaN score."""
     a = a.flatten().double()
@@ -129,22 +102,3 @@ def dp_submeshes(mesh_device):
     subs = create_dp_submeshes(mesh_device, DP)  # also registers the streaming kernels' bank cores per row
     assert len(subs) == DP
     return subs
-
-
-# Single-replica tests open one 1x8 row when the process sees only a row's 8 chips (TT_VISIBLE_DEVICES, as a row
-# lock exports), else the whole 4x8 Galaxy and use its row 0.
-ROW_MESH = (1, TP) if len([c for c in os.environ.get("TT_VISIBLE_DEVICES", "").split(",") if c]) == TP else (DP, TP)
-
-
-def first_row(mesh_device):
-    """The 1x8 replica a single-replica test runs on: the mesh itself (ROW_MESH 1x8) or row 0 of the Galaxy."""
-    if tuple(mesh_device.shape) == (1, TP):
-        return create_dp_submeshes(mesh_device, 1)[0]
-    return dp_submeshes(mesh_device)[0]
-
-
-def block_page_table(max_batch, blocks_per_user, seed=0):
-    """A shuffled slot -> block mapping, so the paged path is exercised with non-contiguous blocks."""
-    g = torch.Generator().manual_seed(seed)
-    perm = torch.randperm(max_batch * blocks_per_user, generator=g)
-    return perm.reshape(max_batch, blocks_per_user).to(torch.int32)

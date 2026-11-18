@@ -103,7 +103,7 @@ def test_model_tp8_dp4(mesh_device):
         f"PCC min {min(pccs):.4f} mean {sum(pccs) / len(pccs):.4f}"
     )
     # Rows whose reference top-2 margin is under ~0.2 logits are near coin flips with bfloat4_b experts (measured on
-    # thousands of positions: test_model_decode_eval_tp8_dp4.py), so the raw top-1 above moves by a row or two between
+    # thousands of positions), so the raw top-1 above moves by a row or two between
     # equivalent builds; the rows with a clear reference answer show real errors.
     clear = [r for r in rows if r["ref_margin"] >= 0.2]
     logger.info(

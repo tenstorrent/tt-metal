@@ -6,7 +6,7 @@
 Sequences of ``--seq-len`` tokens are cut from C4 documents, skipping the first ``--skip`` documents (the expert GPTQ
 calibrates on the start of the same shard). The fp32 reference runs them layer by layer (attention per sequence, the
 FFN over every token at once) and the last layer's hidden states are saved; the scorer applies the final norm and LM
-head (tests/test_model_error_tp8_dp4.py with MIMO_GOLDEN pointing here), which keeps the file small.
+head, which keeps the file small.
 
     python -m models.experimental.mimo_v2_6_flash.reference.make_golden_large --calib c4-train.00000-of-01024.json.gz \
         --out golden_large.pt

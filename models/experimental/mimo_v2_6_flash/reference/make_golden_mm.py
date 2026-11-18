@@ -12,7 +12,7 @@ before the next loads.
 
 Saved per prompt: the processor's token ids and fields, the multimodal rows, ``inputs_embeds`` (bf16), the hidden
 state after every layer (bf16, [num_layers + 1, S, hidden]), the logits of the last ``--tail`` positions (fp32) and the
-greedy next token. The device test is tests/test_model_mm_tp8.py.
+greedy next token.
 
     python -m models.experimental.mimo_v2_6_flash.reference.make_golden_mm --audio speech_5s.wav --out golden_mm.pt
 """

@@ -23,7 +23,7 @@ measured before the merges, at that commit with plugin 47cc860.
 | Greedy vs the standalone generator, 16 chat prompts (15-552 tokens), 32 tokens | 16/16 identical (32K server; at ee6895badd4: 15/16, and 14/16 on the 1M server) |
 | Decode-trace recaptures | 0 over startup, the HTTP suite, the greedy run and the benchmarks (36 at ee6895badd4) |
 | `test_model_tp8_dp4` (48 layers, fp32 golden) | top-1 0.925 (37/40), logits PCC min 0.9581 / mean 0.9922; each merged change alone gives 0.950 |
-| `test_model_traced_tp8_dp4` | traced == eager (PCC 1.000000) |
+| Traced decode against eager decode | traced == eager (PCC 1.000000) |
 | Qualitative, 6 readiness prompts, greedy and sampled (t=1.0, top_p=0.95) (ee6895badd4) | coherent and correct; the `mimo` reasoning parser separates reasoning from content |
 | Tool calling (`--tool-call-parser mimo --enable-auto-tool-choice`) | `get_weather({"city": "Paris", "unit": "celsius"})`, `finish_reason=tool_calls` |
 | `--max-model-len 1048576` (ee6895badd4) | serves; KV pool 1.27M tokens per lane (1.21x one 1M request); a 20,936-token needle prompt recalls correctly (87 s, mostly prefill) |
@@ -347,8 +347,7 @@ the merge against full attention, the warmup's coverage, the capacity and the ad
 table widths, that `prefill_forward` moving a chunk start back reads only sliding-window blocks vLLM still holds (at
 every offset, with vLLM's own freeing rule; the model's 128 window as vLLM's trips at offsets 63 and up), and, where
 vLLM and the plugin are installed, that vLLM 0.30 groups the specs with block sizes 128 / 64 on one page size and that
-the plugin's pool at 6.7 GB holds 4 x 1M by vLLM's accounting and passes its planner. `tests/test_kv_pair_split_tp8.py`
-(device, one Galaxy row): the positions program and the merge against their host mirrors (merge PCC 0.999999), a
+the plugin's pool at 6.7 GB holds 4 x 1M by vLLM's accounting and passes its planner. Measured on one Galaxy row: the positions program and the merge against their host mirrors (merge PCC 0.999999), a
 global layer's prefill chunks and decode steps with the split on vs off (positions straddling 64 / 128: prefill PCC
 0.99999, decode 0.99998; 32K context: 0.99999 / 0.99998), and the serving decode configurations (the compact SDPA
 over 4 table rows, and verifies writing K / V slot by slot at 62..65 and 126..129: 0.99999 / 0.99998); the split cache
@@ -403,9 +402,7 @@ the 64 rotated dims (`compact`, `ROPE_TABLE_FULL_WIDTH_MAX_LEN` in generator_vll
 constant 1 / 0 tail of the other 128 dims with one `ttnn.concat` (a persistent tile per value): 537 MB per chip at 1M
 (67 MB at 128K, where the whole-row tables of 201 MB are kept). The tables run `ROPE_TABLE_MARGIN` (32) rows past
 `max_seq_len - 1`, so a position derived on device a few steps ahead of the host never indexes past them.
-`MIMO_DEVICE_ROPE=0` uploads the cos / sin every step instead. `tests/test_rope_tables_host.py` checks the rows
-against the host cos / sin bit for bit (every position to 1M, both thetas, whole and compact);
-`tests/test_spec_inputs_tp8.py` checks the device rows against the host-uploaded cos / sin.
+`MIMO_DEVICE_ROPE=0` uploads the cos / sin every step instead.
 
 ## Trace safety
 
@@ -559,25 +556,6 @@ vllm serve ... \
   deferred verify is in flight: it writes only its slots' page-table rows and K / V, behind the verify on the device
   queue, and the verify's pages are already on their way to the host, so its read and propose follow as usual;
   nothing chains onto it afterwards, and the lane's MTP ring restarts.
-- **Tests.** `tests/test_spec_decode_host.py` (no device): the planning, the ring addressing, and speculative greedy
-  equal to plain greedy on a small fp32 MiMo with an MTP, an oracle and a partially wrong drafter.
-  `tests/test_spec_inputs_host.py` (no device): the packed inputs' torch mirrors against the host-built inputs;
-  `tests/test_spec_inputs_tp8.py` (one Galaxy row): the device programs against the same values, eager and traced,
-  and the chain and drafts steps bit for bit against their mirror. `tests/test_spec_chain_host.py` (no device): the
-  chain's mirror against the host plan (every accepted count, the ring's wrap, the context limit) and after the accept
-  kernel's greedy mirror; `tests/test_spec_chain_adapter_host.py` (no device, needs vllm-tt-plugin): the adapter's
-  verify / propose on fake lanes made of the mirrors (chained and host-planned drafts, the fallbacks);
-  `tests/test_spec_async_adapter_host.py` (no device, needs vllm-tt-plugin): the same lanes driven through the
-  plugin's async calls (overlapped ordinary steps and their proposes, deferred verifies read on another thread,
-  chained verifies equal to the synchronous path token for token, the contract's refusals).
-  `tests/test_sample_verify_host.py` (no device): the accept kernel's integer mirror against the plugin's accept-walk
-  semantics (accept boundaries, the residual without the draft, the bonus, greedy ties, top_k and top_p, truncation),
-  and against `vllm_tt_plugin.spec_accept` itself when the plugin is installed.
-  `tests/test_spec_decode_tp8_dp4.py` (Galaxy, needs vllm-tt-plugin): the adapter's speculative tokens equal its
-  greedy tokens, and its first verifies agree across modes (logits argmax, greedy and sampled fused_sample against the
-  plugin's walk); every propose after a verify returns the chained drafts, the first ones equal to the host plan's;
-  logs the mean accepted length and ms per token. `tests/test_verify_sampler_tp8.py` (Galaxy): the
-  kernel bit for bit against the mirror on the device's own candidate pages, eager and traced.
 - **Open.** The chained verifies on hardware with every MTP layer and the backfill (the relay, deferred reads and
   chained verifies ran on BH Galaxy with one layer); the accept step's SampleScan on all-greedy passes (only
   SampleVerify's argmax walk is needed there); more than one speculating request per lane (16 / 32
@@ -601,8 +579,7 @@ vllm serve ... --max-num-seqs 8 \
   rows. A request's first chunk, or a draft that does not continue the ring, resets it.
 - **Draft.** One traced program per replica: [anchor, 7 x mask] through the 5 layers (DRAM-sharded projections, the
   block's attention as one decode-SDPA user whose 64 query heads are the (row, head) pairs), the target LM head and a
-  GreedyHead over rows 1-7. 2.5 ms per draft on one row; drafts equal the fp32 reference's on 99.6% of 480
-  (`tests/test_dflash_tp8.py`).
+  GreedyHead over rows 1-7. 2.5 ms per draft on one row; drafts equal the fp32 reference's on 99.6% of 480.
 - **Chain.** As MTP's (Speculative decoding above): the accept trace's chain step writes the DFlash draft's packed
   upload from what the device committed (`reference/spec_chain.py` `dflash_chain_step`: the committed columns' slots
   as context rows at their positions, the last committed token at the bonus as the anchor), and the draft trace ends
@@ -691,7 +668,7 @@ from layer i. The layers are not chained: each takes the target's hidden (SGLang
 same way, `chain_mtp_hidden_states` off). The device drafts that way by default (`MIMO_MTP_LAYERS=3`); `1` restores the
 one-layer drafter unchanged (same programs and uploads), for A/B. The host reference (`reference/spec_decode.py`
 `plan_mtp_layers`, `reference/mtp.py` `ReferenceMTPDrafter`) is checked against a recomputation of every layer over the
-whole sequence after steps of every accepted count (`tests/test_spec_decode_host.py`).
+whole sequence after steps of every accepted count.
 
 - **Equations.** Committed tokens x (the last at B), drafts d, x~ = x then d_1, d_2. Layer i at position q takes the
   target's final normed hidden h_q and the embedding of x~[q + i + 1], RoPE at q, K / V at q in its own cache; draft
@@ -731,17 +708,6 @@ whole sequence after steps of every accepted count (`tests/test_spec_decode_host
   reports it as the chained draft wait). Memory per replica: 2 more layers, ~0.74 GB (92 MB per chip; eh_proj 8192 x 4096, SWA
   q / k / v / o, dense MLP 4096 -> 16384 -> 4096), 2 more ring caches (~0.2 MB per chip each), the stash (256 KB of
   hidden rows per chip, one 128-byte page) and the inputs (9 pages of 128 bytes).
-- **Tests.** `tests/test_spec_chain_host.py`: the chain step's description against propose's, the plan step against
-  plan_mtp_layers for every commit count, a plain step's slot, stash hits, misses and holes, the ring's wrap and the
-  context end, the tokens step against mtp_layer_tokens, and the whole program's mirror against the reference
-  drafter (exactly equal drafts and outputs, equal to the recomputation) over every pair of accepted counts and plain
-  steps. `tests/test_spec_chain_adapter_host.py`: the adapter on fake lanes running the program's mirror: every
-  chained draft equals the host reference drafter's for the plugin's commit, the chain check finds no difference, a
-  differing commit drafts the reference's tokens from the host description. `tests/test_spec_inputs_tp8.py`
-  `test_spec_chain_layers_tp8` (Galaxy row): the chain, drafts, plan and tokens modes bit for bit against the mirror,
-  eager and traced.
-  `tests/test_spec_decode_tp8_dp4.py` (Galaxy): speculative greedy == plain greedy, and chained == host-planned
-  drafts, with 3 layers and with 1.
 - **Plugin.** No change: still 3 drafts per step.
 
 ### MTP ring backfill (target-hidden history)
@@ -779,15 +745,13 @@ with one mechanism, for 1 and 3 MTP layers:
   continues the draft before it. Under async scheduling the ring a chained draft left is known once its page is read
   (`mtp_ring` holds the verify's handle until then), and a propose the plugin made stale drafts nothing, so the
   backfill comes with the propose that does.
-- **Exactness** (host, `tests/test_mtp_backfill_host.py`): a lane serving request X (its prompt in chunks, a plain
+- **Exactness** (checked on the host): a lane serving request X (its prompt in chunks, a plain
   step, speculative steps with every accepted count), then X beside a second request for 3, 12 or 40 plain steps
   (its prompt resets the rings), then X alone again: every draft equals the drafts of an MTP that saw every position
   (a recomputation over X's whole sequence), for 1 and 3 layers; without the backfill the first drafts differ. A
   backfill right after a verify (a prompt reset the rings while X speculates) leaves every layer's K / V over the
   window the draft reads equal to that recomputation's, for m = 1 .. 4 and 1 and 3 layers, with the history sized as
   production sizes it (`history_rows`: the window and a verify pass).
-  `tests/test_spec_inputs_tp8.py` `test_mtp_history_tp8` checks the kernel's four modes bit for bit on a Galaxy row;
-  `tests/test_spec_decode_tp8_dp4.py` runs with and without it.
 - **Cost.** Per decode step ~10-20 us (one copy, one untilize of [32, 4096], one kernel moving 4 rows of 8 KB and a
   4 KB page) against a ~13 ms step; per verify pass one kernel; per prefill chunk a final norm and untilize of its
   rows and one kernel; per backfill (once per transition: a new request's first draft, a lane back to one request)

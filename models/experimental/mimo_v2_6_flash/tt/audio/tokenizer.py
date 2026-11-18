@@ -29,7 +29,7 @@ races (rows that change run to run). So:
   output projection and FC2 are column-parallel too (128 output columns per chip), and their fp32 outputs are gathered
   as bf16 parts and re-added into the replicated fp32 residual stream. The convolutions are replicated.
 
-Even so, the codes are not the fp32 reference's (tests/test_audio_tokenizer_tp8.py, bhg2): 3.9-5.6 % of the 25 Hz
+Even so, the codes are not the fp32 reference's (measured on bhg2): 3.9-5.6 % of the 25 Hz
 code frames change on 5 to 300 s of speech (an fp64 encoder changes ~0.01 %), at RVQ decision margins up to ~1e-3
 (median frame margin ~9e-4), and the LLM embeddings reach PCC 0.9989-0.9991 against the fp32 path. The outputs are
 deterministic. Time on one row (eager): 94 / 122 / 729 / 1587 ms for 5 / 30 / 120 / 300 s of audio.
@@ -376,7 +376,7 @@ class PassInputs:
 class HostRVQ:
     """The reference's 20-stage residual VQ in fp32 on the host (``AudioTokenizerEncoder.quantize``, same code), on
     blocks of ``rows`` rows: the ops are per row and give every row the codes of one call over all rows
-    (tests/test_audio_host_backend_host.py: 300 s of speech in blocks of 1000-4096 rows at 1 and 8 threads), while the
+    (checked on 300 s of speech in blocks of 1000-4096 rows at 1 and 8 threads), while the
     blocks' [rows, 1024] temporaries stay in cache: 41K frames (a 27 min video's track) took 0.87 s instead of 3.27 s
     at 8 threads on bhg2, with the same codes."""
 

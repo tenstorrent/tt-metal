@@ -56,7 +56,7 @@ def partial_rope_table(num_positions, head_dim, rope_dim, theta, width=None, bat
     the tensor it is computed in (vector grouping, thread split): one call over all 32K or 128K positions, as these
     tables were made before, left 1-9% of the rows a bit off the per-step values on an arm64 host (equal after bf16
     rounding there, but not by construction). In the host's own call shape each row is computed exactly as in a decode
-    step, whatever the step's other positions (tests/test_rope_tables_host.py). ~1.3 s per 1M positions."""
+    step, whatever the step's other positions. ~1.3 s per 1M positions."""
     width = head_dim if width is None else width
     assert rope_dim <= width <= head_dim
     cos = torch.empty(num_positions, width)

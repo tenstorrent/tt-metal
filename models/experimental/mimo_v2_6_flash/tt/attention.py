@@ -149,7 +149,7 @@ KV_LIMIT = 65280.0
 def finite_kv(t, keep=False):
     """``t`` as the cache stores it (KV_SANITIZE): clamped to +-KV_LIMIT, in ``t``'s memory config; ``t`` is
     deallocated unless ``keep``. Unchanged without KV_SANITIZE. One op: the SFPU clamp also maps NaN to one of the
-    bounds (its compares are not IEEE: tests/test_kv_sanitize.py checks it), a third of isfinite + where + clamp."""
+    bounds (its compares are not IEEE), a third of isfinite + where + clamp."""
     if not KV_SANITIZE:
         return t
     out = ttnn.clamp(t, min=-KV_LIMIT, max=KV_LIMIT, memory_config=t.memory_config())

@@ -29,7 +29,6 @@ most N frames) and returns them with their source indices and fps (``frames_indi
   label's interval are not used. Exact per-frame times from the indices are not an option while vLLM rebuilds the
   tokens from two numbers per video (start, interval): a non-uniform or unrounded series gives different tokens on
   the two sides and the prompt update fails.
-  ``tests/test_video_input_host.py::test_loader_times_drift_is_bounded`` pins the bound.
 * ``VideoInfoMixin`` also applies Xiaomi's API's frame sizes (measured on its token counts, which these reproduce
   exactly): every frame at most MIMO_VIDEO_MAX_PIXELS (307200: a 1280x720 frame becomes 736x384, 276 merged tokens a
   frame pair; the checkpoint allows 8388608, 880) and at most MIMO_VIDEO_TOTAL_MAX_PIXELS / frames (268435456, the
