@@ -178,6 +178,7 @@ def test_pack_untilize_quasar(
     *,
     is_perf=False,
     perf_report=None,
+    stimuli_config_cls=StimuliConfig,
 ):
     combination = formats_dest_acc_sync_dimensions_tile_dims
     if len(combination) == 1 and isinstance(combination[0], tuple):
@@ -230,7 +231,7 @@ def test_pack_untilize_quasar(
             NUM_FACES_R_DIM(tile_shape.num_faces_r_dim),
             NUM_FACES_C_DIM(tile_shape.num_faces_c_dim),
         ],
-        "variant_stimuli": StimuliConfig(
+        "variant_stimuli": stimuli_config_cls(
             src_A,
             formats.input_format,
             src_B,
