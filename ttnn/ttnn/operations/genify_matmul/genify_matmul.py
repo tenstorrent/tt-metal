@@ -386,6 +386,9 @@ def _check_chunks(weight, activation, chunks):
     """Split output contract: N_out % chunks == 0 and every chunk a whole number of tiles wide."""
     if isinstance(chunks, bool) or not isinstance(chunks, int) or chunks < 1:
         raise ValueError(f"genify_matmul: chunks must be an int >= 1, got {chunks!r}")
+    if chunks == 1:
+        # No split: a non-tile-aligned N is validate()'s call (alignment axis -> NotImplementedError).
+        return
     n_out = weight.shape[-1] // 2 if activation == "swiglu" else weight.shape[-1]
     if n_out % chunks or (n_out // chunks) % TILE:
         raise ValueError(
