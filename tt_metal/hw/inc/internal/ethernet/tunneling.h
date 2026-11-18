@@ -125,8 +125,11 @@ FORCE_INLINE void eth_write_remote_reg(uint32_t q_num, uint32_t reg_addr, uint64
     }
     cce_eth::send_dword(q_num, reg_addr, val);
 }
+// Assumes !eth_txq_is_busy(q_num): on a NOC link send_dword rewrites the queue's staging word, which the queue's
+// previous copy may still be reading.
 FORCE_INLINE
 void eth_write_remote_reg_no_txq_check(uint32_t q_num, uint32_t reg_addr, uint64_t val) {
+    ASSERT(!eth_txq_is_busy(q_num));
     cce_eth::send_dword(q_num, reg_addr, val);
 }
 #else
