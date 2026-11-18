@@ -8,9 +8,8 @@ warmup's prompt attends 80), without a reference and with references that fill o
 bucket.
 
 The prompt length and the reference's size within its bucket reach ring SDPA only as the device tensors the transformer
-writes per request, so every request runs the programs warmup compiled for its bucket. A reference of a new shape still
-compiles the VAE encoder, so the test encodes each reference once before its requests and asserts no new program-cache
-entries around every request.
+writes per request, so every request runs the programs warmup compiled for its bucket, and the VAE encoder runs the
+programs warmup compiled for the reference's canvas. The test asserts no new program-cache entries around every request.
 """
 
 from pathlib import Path
@@ -29,7 +28,6 @@ from ....pipelines.flux3_klein.pipeline_flux3_klein import (
     WARMUP_PROMPT,
     Flux3KleinPipeline,
     Flux3KleinRequest,
-    prepare_reference,
     reference_bucket,
 )
 from ....utils.test import ring_params_8k
@@ -125,7 +123,6 @@ def test_serving(*, mesh_device: ttnn.MeshDevice, model: str, sizes: tuple[int, 
     failures = []
     for side, reference in references.items():
         if reference is not None:
-            pipeline._vae.encode(prepare_reference(reference))
             logger.info(f"SERVE reference {side}: {tokens[side]} tokens in bucket {reference_bucket(tokens[side])}")
         for size in sizes:
             for name, prompt in prompts.items():

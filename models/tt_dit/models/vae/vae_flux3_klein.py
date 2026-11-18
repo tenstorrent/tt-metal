@@ -3,8 +3,9 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """The FLUX.2 32-channel KL autoencoder on the FLUX 3 Klein mesh: Flux2VaeDecoder splits the image's rows over one
-mesh axis and its columns over the other, Flux2VaeEncoder is tensor-parallel and replicated. One instance of each
-serves every shape (a Conv2d keeps its prepared weights per input shape); their conv slicing is set per instance."""
+mesh axis and its columns over the other, Flux2VaeEncoder is tensor-parallel and replicated on fixed reference
+canvases (canvas_flux3_klein). One instance of each serves every shape (a Conv2d keeps its prepared weights per
+input shape); their conv slicing is set per instance."""
 
 from __future__ import annotations
 
@@ -20,7 +21,8 @@ from ...layers.conv2d import Conv2dBlocking, configure_conv2d
 from ...parallel.config import Flux2VaeParallelConfig
 from ...parallel.manager import CCLManager
 from ...utils import cache, tensor
-from .vae_flux2 import Flux2VaeDecoder, Flux2VaeEncoder
+from .canvas_flux3_klein import CanvasMasks, CanvasVaeEncoder, canvas_for
+from .vae_flux2 import Flux2VaeDecoder
 
 SUBFOLDER = "vae"
 VAE_WEIGHTS = "diffusion_pytorch_model.safetensors"
@@ -96,10 +98,6 @@ def decoder_conv_blocking(slice_table) -> dict[tuple[int, int, int, int], Conv2d
     return table
 
 
-# Larger encoder GroupNorm blocks (e.g. 95 rows for a 1600x912 reference) collide with the pipeline's resident L1.
-GROUP_NORM_MAX_BLOCK_ROWS = 64
-
-
 class Flux3KleinVae:
     def __init__(
         self,
@@ -162,12 +160,10 @@ class Flux3KleinVae:
         load(self._decoder, decoder_parallel, SUBFOLDER)
 
         encoder_parallel = Flux2VaeParallelConfig.from_axes(device, tp_axis=tp_axis, h_axis=None, w_axis=None)
-        self._encoder = Flux2VaeEncoder(
-            parallel_config=encoder_parallel, group_norm_max_block_rows=GROUP_NORM_MAX_BLOCK_ROWS, **common
-        )
-        # ttnn picks the encoder's conv slicing (a reference can have any 16-px shape), not the shared table
+        self._encoder = CanvasVaeEncoder(parallel_config=encoder_parallel, **common)
+        # ttnn picks the encoder's conv slicing (the canvas shapes), not the shared table
         configure_conv2d(self._encoder, slice_params={mesh_shape: {}}, replace=True)
-        load(self._encoder, encoder_parallel, "vae_encoder_main")
+        load(self._encoder, encoder_parallel, "vae_encoder_canvas")
 
         state = state_dict()
         self._bn_mean = state["bn.running_mean"].float()
@@ -202,19 +198,19 @@ class Flux3KleinVae:
         return out
 
     def encode(self, image) -> torch.Tensor:
-        """`[h * w, 128]` bf16 latent tokens of a PIL image (sides multiples of 16): Flux2VaeEncoder gives the latent mean,
-        then the 2x2 patchify and the BatchNorm on the host, as pipeline_flux2.py does."""
-        x = torch.from_numpy(np.asarray(image)).float() / 127.5 - 1.0
+        """`[h * w, 128]` bf16 latent tokens of a PIL image (sides multiples of 16, at most a reference canvas):
+        the encoder on the image in the top-left corner of its canvas gives the latent mean, cropped to the image, then
+        the 2x2 patchify and the BatchNorm on the host, as pipeline_flux2.py does."""
+        width, height = image.size
+        cw, ch = canvas_for(width, height)
+        x = torch.zeros(1, ch, cw, 3)
+        x[0, :height, :width] = torch.from_numpy(np.asarray(image)).float() / 127.5 - 1.0
         x = tensor.from_torch(
-            x[None].contiguous(),
-            device=self._device,
-            layout=ttnn.ROW_MAJOR_LAYOUT,
-            dtype=ttnn.bfloat16,
-            mesh_axes=[None, None, None, None],
+            x, device=self._device, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=ttnn.bfloat16, mesh_axes=[None] * 4
         )
-        out = self._encoder.forward(x)
+        out = self._encoder.forward_canvas(x, CanvasMasks(self._device, canvas=(cw, ch), image=(width, height)))
         ttnn.deallocate(x)
-        mean = tensor.to_torch(out).float()
+        mean = tensor.to_torch(out).float()[:, : height // SCALE, : width // SCALE]
         ttnn.deallocate(out)
         b, h, w, c = mean.shape
         tokens = (

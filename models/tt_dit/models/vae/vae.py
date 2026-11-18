@@ -51,7 +51,6 @@ class VaeContext:
     use_conv3d: bool = False
     # VaeAttention computes only each device's own query rows (its H partition, split over tp_axis where even).
     local_query_attention: bool = False
-    group_norm_max_block_rows: int | None = None
     group_norm_2d: bool = False
     local_attention: bool = False
 
@@ -1011,7 +1010,6 @@ def _norm(
             mesh_axis=ctx.tp_axis,
             mesh_device=ctx.device,
             activation_fn=activation_fn,
-            max_block_rows=ctx.group_norm_max_block_rows,
         )
     if isinstance(norm, VaeNormDescRms):
         # VaeRmsNorm normalizes per spatial position over the channel dim → SP-safe as-is.
