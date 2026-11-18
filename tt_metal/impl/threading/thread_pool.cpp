@@ -125,7 +125,9 @@ CpuPlacement& cpu_placement() {
     return placement.get();
 }
 
-uint32_t get_cpu_core_for_physical_device(ContextId context_id, uint32_t physical_device_id) {
+// pool_cpus: the CPUs already picked for the caller's pool, which the pick avoids first.
+uint32_t get_cpu_core_for_physical_device(
+    ContextId context_id, uint32_t physical_device_id, const std::vector<uint32_t>& pool_cpus) {
     auto& placement = cpu_placement();
     const std::lock_guard<std::mutex> lock(placement.mutex);
     // One snapshot of the allowed CPUs, taken on first use, feeds both the NUMA map and the fallback.
@@ -168,16 +170,21 @@ uint32_t get_cpu_core_for_physical_device(ContextId context_id, uint32_t physica
     }
     if (cpu_cores_per_numa_node.contains(numa_node)) {
         const auto& cpu_cores_on_node = cpu_cores_per_numa_node[numa_node];
-        uint32_t least_used = UINT32_MAX;
+        // CPUs outside the pool first, so its workers keep their spin window; then the least-used.
+        const auto rank = [&](uint32_t cpu) {
+            return std::pair{
+                std::find(pool_cpus.begin(), pool_cpus.end(), cpu) != pool_cpus.end(), workers_per_cpu[cpu]};
+        };
+        auto best = rank(cpu_cores_on_node.front());
         for (const uint32_t cpu : cpu_cores_on_node) {
-            least_used = std::min(least_used, workers_per_cpu[cpu]);
+            best = std::min(best, rank(cpu));
         }
-        // Round robin among the least-used CPUs.
+        // Round robin among the best-ranked CPUs.
         size_t& next = placement.next_cpu_per_numa_node[numa_node];
         for (size_t i = 0;; i++) {
             const size_t index = (next + i) % cpu_cores_on_node.size();
             const uint32_t cpu = cpu_cores_on_node[index];
-            if (workers_per_cpu[cpu] == least_used) {
+            if (rank(cpu) == best) {
                 next = index + 1;
                 workers_per_cpu[cpu]++;
                 return cpu;
@@ -787,9 +794,10 @@ public:
         std::chrono::nanoseconds spin_window = std::chrono::nanoseconds(0)) :
         num_workers_(physical_devices.size()) {
         allocate_jobs();
-        cpu_cores_.resize(num_workers_);
+        cpu_cores_.reserve(num_workers_);
         for (uint32_t i = 0; i < num_workers_; i++) {
-            cpu_cores_[i] = thread_binding::get_cpu_core_for_physical_device(context_id, physical_devices[i]->id());
+            cpu_cores_.push_back(
+                thread_binding::get_cpu_core_for_physical_device(context_id, physical_devices[i]->id(), cpu_cores_));
         }
         spin_window = spin_window_for(cpu_cores_, spin_window);
         workers_.reserve(num_workers_);
@@ -807,7 +815,7 @@ public:
         workers_.reserve(thread_count);
 
         for (uint32_t i = 0; i < thread_count; i++) {
-            cpu_cores_.push_back(thread_binding::get_cpu_core_for_physical_device(context_id, i));
+            cpu_cores_.push_back(thread_binding::get_cpu_core_for_physical_device(context_id, i, cpu_cores_));
             workers_.emplace_back(std::make_unique<NumaAwareExecutor>(
                 cpu_cores_.back(),
                 completion_,

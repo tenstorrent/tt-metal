@@ -135,25 +135,35 @@ TEST(ThreadPoolTest, ParallelForUsesWorkers) {
     EXPECT_LT(on_caller, static_cast<int64_t>(ran_on.size()));
 }
 
-// Each pool's workers get CPUs of their own while the process may run on enough CPUs, also when pools are recreated.
-// Binding the process to fewer CPUs than the host has (taskset -c 0-2) makes the node lists overlap.
-TEST(ThreadPoolTest, RecreatedPoolWorkersOnDistinctCpus) {
+// Number of distinct CPUs the pool's workers run on.
+size_t distinct_worker_cpus(ThreadPool& thread_pool, uint32_t num_devices) {
+    std::vector<int> cpus(num_devices);
+    for (uint32_t device = 0; device < num_devices; device++) {
+        thread_pool.enqueue([&cpus, device] { cpus[device] = sched_getcpu(); }, device);
+    }
+    thread_pool.wait();
+    std::sort(cpus.begin(), cpus.end());
+    return std::unique(cpus.begin(), cpus.end()) - cpus.begin();
+}
+
+// Every pool spreads its workers over as many CPUs as the first, also after others are destroyed and next to live
+// pools. Binding the process to fewer CPUs (taskset -c 0-2) makes the node lists overlap.
+TEST(ThreadPoolTest, PoolsKeepDistinctWorkerCpus) {
     const uint32_t num_devices = MetalContext::instance(DEFAULT_CONTEXT_ID).get_cluster().number_of_user_devices();
-    cpu_set_t allowed;
-    ASSERT_EQ(sched_getaffinity(0, sizeof(allowed), &allowed), 0);
-    if (num_devices < 2 || static_cast<uint32_t>(CPU_COUNT(&allowed)) < num_devices) {
-        GTEST_SKIP() << "Needs 2 devices and a CPU per device";
+    if (num_devices < 2) {
+        GTEST_SKIP() << "Needs 2 devices";
     }
+    const size_t expected = distinct_worker_cpus(*create_pool_per_device(), num_devices);
     for (int pool = 0; pool < 6; pool++) {
-        auto thread_pool = create_pool_per_device();
-        std::vector<int> cpus(num_devices);
-        for (uint32_t device = 0; device < num_devices; device++) {
-            thread_pool->enqueue([&cpus, device] { cpus[device] = sched_getcpu(); }, device);
-        }
-        thread_pool->wait();
-        std::sort(cpus.begin(), cpus.end());
-        EXPECT_EQ(std::unique(cpus.begin(), cpus.end()), cpus.end()) << "pool " << pool;
+        EXPECT_EQ(distinct_worker_cpus(*create_pool_per_device(), num_devices), expected) << "pool " << pool;
     }
+    std::array<std::shared_ptr<ThreadPool>, 3> live_pools;
+    for (auto& pool : live_pools) {
+        pool = create_pool_per_device();
+        EXPECT_EQ(distinct_worker_cpus(*pool, num_devices), expected);
+    }
+    live_pools[1].reset();
+    EXPECT_EQ(distinct_worker_cpus(*create_pool_per_device(), num_devices), expected) << "after a live pool";
 }
 
 TEST(ThreadPoolTest, ParallelForOneWorkerRunsOnCaller) {
