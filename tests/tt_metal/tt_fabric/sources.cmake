@@ -11,6 +11,7 @@ set(UNIT_TESTS_FABRIC_SRC
     keraunos/test_keraunos_co_launched_workers.cpp
     keraunos/test_keraunos_eth_semaphore.cpp
     keraunos/vcluster/manifest.cpp
+    keraunos/vcluster/descriptors.cpp
     keraunos/vcluster/test_vcluster_manifest.cpp
     keraunos/vcluster/test_vcluster_descriptors.cpp
     fabric_router/test_pipeline_builder.cpp
