@@ -594,6 +594,7 @@ def test_capabilities():
     assert caps["supports_prefill_resume_inside_kv_block"] is False
     assert caps["output_tokens_per_step"] == 1
     assert caps["supports_prefix_caching"] is True and caps["supports_chunked_prefill"] is True
+    assert caps["supports_multimodal_prefill_resume"] is False
     assert issubclass(CLS, Qwen36ForCausalLM)
     # device sampling: the verify sampler (spec_sample) draws one token per verify column, without penalties or masks
     assert caps["supports_sample_on_device"] is True and caps["spec_ids_are_sampled"] is True
