@@ -50,8 +50,9 @@ namespace sfpu {
 //                rows, then eltwise-combined with the data tile.
 //
 // Implementation strategy (BCAST_COL):
-//   For each 4-row band of the source/dest tiles:
-//     (1) Load col 0 (8 values, one per SFPU column) into LREG_DATA.
+//   For each 4-row band of the source/dest tiles (two bands at a time, as the
+//   two interleaved chains of the dual broadcast; see that section below):
+//     (1) Load col 0 (8 values, one per SFPU column) into a broadcast LREG.
 //         After load, only "SFPU column 0" in each 8-lane sub-vector carries
 //         the useful value (the data broadcast target); the other 7 SFPU
 //         columns hold d[row][cols 1..7] which we must discard.
@@ -71,8 +72,8 @@ namespace sfpu {
 //         load the data tile's corresponding slot, perform the elementwise
 //         op against the broadcast value, and store the result.
 //
-// All "compute" sequences that are identical across row bands are recorded
-// into the SFPU replay buffer so the loop body is short.
+// The address-free part of steps (2)-(3) is recorded into the SFPU replay
+// buffer by sfpu_bcast_col_init() and replayed for every band pair.
 //
 // Implementation strategy (BCAST_ROW):
 //   SFPTRANSP + in-place eltwise, with the bcast load hoisted out of the
@@ -110,6 +111,7 @@ constexpr std::uint32_t FACE3_BASE = 48;
 // Within a face, each "row band" (4 dest rows) starts every 4 addr units.
 constexpr std::uint32_t ROW_BAND_STRIDE = 4;
 constexpr std::uint32_t NUM_ROW_BANDS_PER_FACE_HALF = 4;  // 16 rows / 4 rows-per-band
+constexpr std::uint32_t NUM_BANDS_PER_PAIR = 2;           // BCAST_COL add/sub/mul: bands per dual broadcast
 constexpr std::uint32_t ODD_COLS_OFFSET = 2;              // addr +2 selects cols 8..15 of a face
 
 // ============================================================================
@@ -119,9 +121,11 @@ constexpr std::uint32_t ODD_COLS_OFFSET = 2;              // addr +2 selects col
 // BCAST_COL path:
 //   LREG_MASK  (LREG6)  - one-time lane mask: all ones in SFPU col 0, zero elsewhere.
 //                         Built once in _sfpu_binary_bcast_init_().
-//   LREG_BCAST (LREG0)  - broadcast value (after load+mask+rotate-add).
-//   LREG_TMP   (LREG2)  - scratch for rotate-and-add inside the broadcast
-//                         sequence; reused as -bcast scratch in the SUB path.
+//   LREG_DUAL_A (LREG0) / LREG_DUAL_A_TMP (LREG2) - broadcast value and
+//                         rotate-and-add scratch of the even band of a pair.
+//   LREG_DUAL_B (LREG7) / LREG_DUAL_B_TMP (LREG1 = LREG_DATA0) - the same for
+//                         the odd band; LREG1 is loaded with data only after
+//                         the broadcast has finished.
 //   LREG_DATA{0..3} (LREG1, LREG3, LREG4, LREG5) - 4 data tile values
 //                         pre-loaded per row band so the per-slot binops can
 //                         pipeline back-to-back without inter-instruction
@@ -220,8 +224,8 @@ constexpr std::uint32_t dest_addr_wrap(std::uint32_t addr) { return addr & DEST_
 // INCRWC's dest increment field is 4 bits; a 16-row face jump is two steps.
 constexpr std::uint32_t INCRWC_FACE_HALF_STEP = 8;
 
-// BCAST_ROW col-group offsets within a face pair (face N + face N+1), in
-// dest addr units. A "col group" is one 4-row x 8-col SFPLOAD/SFPSTORE slot.
+// Col-group offsets within a face pair (face N + face N+1), in dest addr
+// units; the band slots of both BCAST_ROW and BCAST_COL. A "col group" is one 4-row x 8-col SFPLOAD/SFPSTORE slot.
 // For the upper tile half, faces are 0 (left, cols 0-15) and 1 (right, cols
 // 16-31). For each face, +0 selects cols 0-7 and +2 selects cols 8-15.
 constexpr std::uint32_t COL_GROUP_OFFSETS[4] = {
@@ -237,8 +241,8 @@ constexpr std::uint32_t COL_GROUP_OFFSETS[4] = {
 //
 // Dest addressing is RWC-relative so that the per-band body is a sequence of
 // immediates: DEST_TARGET_REG_CFG_MATH_Offset is pointed at the data tile for
-// the duration of the call and RWC.Dst walks the 8 row bands (INCRWC 4 per
-// band, +16 at the face-pair boundary). Every other tile (bcast/statistics,
+// the duration of the call and RWC.Dst walks the 8 row bands (it advances 4
+// per band, +16 at the face-pair boundary). Every other tile (bcast/statistics,
 // residual, out-of-place output) is addressed through a 10-bit wrapped offset
 // relative to the data tile (the SFPU dest address adder is 10 bits wide, so
 // a negative offset wraps correctly).
@@ -466,7 +470,7 @@ inline void _calculate_sfpu_binary_bcast_col_full_tile_(
     _col_tile_begin_(dst_index_data);
     // Upper tile half (faces 0/1), then lower half (faces 2/3); two bands per pair.
     for (std::uint32_t half = 0; half < 2; half++) {
-        for (std::uint32_t pair = 0; pair < NUM_ROW_BANDS_PER_FACE_HALF / 2; pair++) {
+        for (std::uint32_t pair = 0; pair < NUM_ROW_BANDS_PER_FACE_HALF / NUM_BANDS_PER_PAIR; pair++) {
             TT_SFPLOAD(LREG_DUAL_A, IM, ADDR_MOD_3, bcast_rel);
             TT_SFPLOAD(LREG_DUAL_B, IM, ADDR_MOD_3, bcast_next_rel);
             _dual_broadcast_mask_b_();
@@ -474,7 +478,7 @@ inline void _calculate_sfpu_binary_bcast_col_full_tile_(
             _dual_broadcast_finish_();
             _col_bcast_binop_band_store_<BINOP, LREG_DUAL_A, 0>(out_rel);
             _col_bcast_binop_band_store_<BINOP, LREG_DUAL_B, ROW_BAND_STRIDE>(out_rel);
-            TTI_INCRWC(0, 2 * ROW_BAND_STRIDE, 0, 0);
+            TTI_INCRWC(/*rwc_cr*/ 0, /*rwc_d*/ NUM_BANDS_PER_PAIR * ROW_BAND_STRIDE, /*rwc_b*/ 0, /*rwc_a*/ 0);
         }
         if (half == 0) {
             _col_next_face_pair_();
