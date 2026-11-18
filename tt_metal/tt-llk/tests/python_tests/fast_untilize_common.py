@@ -37,3 +37,4 @@ def fast_untilize_dest_acc_modes(formats):
     if formats.output_format == DataFormat.Float32:
         return [DestAccumulation.Yes]
     return [DestAccumulation.No, DestAccumulation.Yes]
+# gate-timing comparison marker (comment only)
