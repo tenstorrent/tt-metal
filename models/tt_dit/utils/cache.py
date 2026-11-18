@@ -145,6 +145,20 @@ def set_kernel_capture_only(enabled: bool) -> None:
     _runtime_capture_only = enabled
 
 
+def _forget_capture_only_builds(mesh_device) -> None:
+    """Make kernels first seen during the capture pass compile for real on their next use.
+
+    Under capture-only, ProgramImpl::compile writes a kernel's genfiles through jit_build_once and skips
+    gcc, so the build memo marks that kernel hash built with no ELF on disk, and the program cache keeps
+    a binary-less program. A weight load that lifts capture-only then reuses both and fails to read the
+    ELF (blx06 2026-11-18: a VAE-encoder cache miss inside the capture pass died with
+    'writer_unary_interleaved_start_id .../brisc.elf: cannot map elf file into memory').
+    """
+    ttnn.device.ClearKernelCache()
+    if mesh_device is not None:
+        mesh_device.clear_program_cache()
+
+
 def _dispatch_during_capture(fn):
     """Run a weight load with dispatch on when a runtime capture pass has it off, then restore it."""
 
@@ -154,6 +168,7 @@ def _dispatch_during_capture(fn):
             return fn(*args, **kwargs)
         logger.info("kernel capture-only pass: loading weights with dispatch on")
         set_kernel_capture_only(False)
+        _forget_capture_only_builds(kwargs.get("mesh_device"))
         try:
             return fn(*args, **kwargs)
         finally:
