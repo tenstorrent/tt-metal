@@ -14,7 +14,7 @@ inherited from GLM-5.3 on purpose.
 Deltas that are plain configuration (handled here, consumed by the existing TT prefill stack):
 
   * explicit indexer map: ``indexer_types`` lists 21 ``full`` layers (0, 1, 5, 9, ..., 77) and 57
-    ``shared`` layers (config.json; the 20 / 58 in the tracking issue is wrong).
+    ``shared`` layers (config.json; the tracking issue #65884 says the same, 21 / 57).
   * one dense layer (layer 0) with an 18432 FFN, instead of GLM's three 12288 dense layers.
   * vocab 120,832; ``routed_scaling_factor`` 2.827; ``swiglu_limit`` 10 (clamped SiLU-GLU on the
     routed experts only; the shared expert and dense layer 0 are HF ``HYV4MLP``, plain SiLU-GLU);

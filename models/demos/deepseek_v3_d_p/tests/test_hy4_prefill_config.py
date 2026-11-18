@@ -341,8 +341,11 @@ def test_layouts_and_heads_per_chip():
     assert hy4_layout.DEFAULT_LAYOUT == tp32.name and tp32.role == "production"
     assert dev.role == "dev" and "DEV / NUMERICS" in dev.note and dev.runnable
     assert tp32.sp * tp32.tp == dev.sp * dev.tp == 32
-    assert tp32.heads_per_chip(64) == 8  # heads over the 8 columns of the 4x8 mesh
-    assert dev.heads_per_chip(64) == 16
+    # Same 8x4 mesh, same axes: sequence (SP 8) on axis 0, hidden (TP 4) on axis 1. They differ in where the heads go.
+    assert (tp32.sp, tp32.tp, tp32.sp_axis) == (dev.sp, dev.tp, dev.sp_axis) == (8, 4, 0)
+    assert tp32.hidden_axis == dev.hidden_axis == 1
+    assert tp32.heads_per_chip(64) == 8  # heads over the 8-chip axis 0 (#65884's 8 columns), with the sequence
+    assert dev.heads_per_chip(64) == 16  # heads over the 4-chip TP axis, with the hidden
     # TP32 is blocked until the shared stack has its placement; every blocker names its owning issue.
     assert not tp32.runnable
     assert {issue for _, issue in tp32.blockers} == {"#65885", "#65887", "#65890", "#65892"}
@@ -352,7 +355,7 @@ def test_layout_cache_keys_differ():
     tp32 = hy4_layout.HY4_PREFILL_LAYOUTS["tp32"]
     dev = hy4_layout.HY4_PREFILL_LAYOUTS["glm_prefill_sp8_tp4"]
     assert dev.cache_key("8x4") == "8x4"  # existing dev caches stay valid
-    assert tp32.cache_key("4x8") == "4x8_tp32"  # 2D-TP shards never share an SP x TP 4x8 cache
+    assert tp32.cache_key("8x4") == "8x4_tp32"  # 2D-TP shards never share the dev layout's 8x4 cache
 
 
 def test_resolve_layout(monkeypatch, expect_error):

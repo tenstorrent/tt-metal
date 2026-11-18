@@ -3,17 +3,29 @@
 
 """Hy4-preview prefill mesh layouts.
 
-The Hy4 layout is TP32 / DP1 (``tp32``): one engine on the full 4x8 Blackhole Galaxy with every weight sharded
-over all 32 chips once and nothing replicated per row, the SC1 unit of #65884:
+The Hy4 layout is TP32 / DP1 (``tp32``): one engine on the full Blackhole Galaxy with every weight sharded over all
+32 chips once and nothing replicated per row, the SC1 unit of #65884. #65884 writes the mesh as 4x8 (4 rows x 8
+columns). The fabric's torus is 8x4 (``single_bh_galaxy_torus_xy``, dims [8, 4]) and ``tp32`` runs on it as is (a
+logical 4x8 view of it hung in the TP all-to-all), so #65884's 8 columns are mesh axis 0 (8 chips) and its 4 rows
+are mesh axis 1 (4 chips):
 
-  * attention projections (q_a, q_b, kv_a, kv_b, gate, o_proj): 2D tensor parallel, heads over the 8 columns
-    (8 heads per chip) and hidden over the 4 rows (#65885);
+  * hidden (6144) over axis 1, 4 ways: every weight that contracts over the hidden splits it there, and its other
+    dimension 8 ways over axis 0;
+  * heads over axis 0: 8 heads per chip in the attention projections (q_a, q_b, kv_a, kv_b, gate, o_proj; #65885),
+    the intermediate dim of the shared expert and the dense layer-0 FFN (#65890);
+  * the prefill residual / activations between sublayers are ``[S / 8, 6144 / 4]`` per chip: the sequence over
+    axis 0, the hidden over axis 1, the same for attention, FFN / MoE and iHC (#65891, ``MeshPlan(hidden_axis=1)``),
+    so nothing is reshuffled between sublayers;
   * MLA latent + index-key cache: context parallel, 128-token blocks block-cyclic over all 32 chips (#65886);
   * indexer: each chip scores its own stripe and keeps a local top-2048, one gather + merge picks the global
     top-2048; sparse attention runs per chip with all 64 heads over the rows it holds, partials merge by LSE
     (#65887);
-  * routed experts EP32 (8 per chip); shared expert and dense layer 0 2D TP like attention (#65890);
-  * embedding and LM head vocab-sharded over 32 chips (#65892).
+  * routed experts EP32 (8 per chip); embedding and LM head vocab-sharded over 32 chips (#65892).
+
+In the runner's knobs that is the sequence (SP) on axis 0 and the hidden (TP) on axis 1: ``PREFILL_SP=8
+PREFILL_TP=4 PREFILL_SP_AXIS=0``, the same mesh as the dev layout below. The two differ in where the weights go,
+not in the mesh: ``tp32`` puts the heads on the SP axis (``heads_over="sp"``) and shards every weight once, the dev
+layout puts the heads on the TP axis and replicates attention over SP. ``PREFILL_HY4_LAYOUT`` picks one.
 
 The shared prefill stack cannot run ``tp32`` yet (``TP32_BLOCKERS``), so selecting it fails at runner start
 with the blockers and their issues. An issue that removes a blocker deletes its entry.
@@ -25,13 +37,13 @@ PCC against the HF golden) can be brought up while the TP32 blockers are open. S
 ``PREFILL_HY4_LAYOUT=glm_prefill_sp8_tp4``.
 
 Selection: ``PREFILL_HY4_LAYOUT`` names a layout; unset means ``tp32``. The runner still opens its mesh from
-``PREFILL_SP`` / ``PREFILL_TP`` / ``PREFILL_SP_AXIS`` (default 8 / 4 / 0, the dev mesh); the adapter rejects a
-mesh that disagrees with the selected layout. A mesh of fewer than 32 chips with no layout named is a test
-mesh and runs unchecked.
+``PREFILL_SP`` / ``PREFILL_TP`` / ``PREFILL_SP_AXIS`` (default 8 / 4 / 0); the adapter rejects a mesh that disagrees
+with the selected layout. A mesh of fewer than 32 chips with no layout named is a test mesh and runs unchecked.
 
 Weight caches are keyed by mesh and layout (``Hy4PrefillLayout.cache_key``): the dev layout keeps the bare
 ``{rows}x{cols}`` key, so existing 8x4 caches stay valid; ``tp32`` adds ``_tp32``, because its 2D-TP shards
-differ from an SP x TP cache on the same 4x8 mesh.
+differ from the dev layout's on the same 8x4 mesh. (Earlier ``tp32`` caches, built with the hidden over axis 0, sit
+under other mesh keys, ``4x8_tp32`` / ``8x4_sp1_tp32``, and are never read.)
 """
 
 from __future__ import annotations
@@ -48,24 +60,19 @@ SC1_CHIPS = 32
 # (sparse_sdpa_device_operation.cpp). ttMLA's sparse path all-to-alls heads to sequence before the op
 # (reshards_heads_to_seq), so every chip attends with all 64 heads at any TP, and SC1's planned core (64 heads
 # over the local KV stripe, LSE merge) does too. Context-parallel KV over all 32 chips and EP32 routed experts
-# (256 / 32 = 8 per chip) already run in the dev layout.
+# (256 / 32 = 8 per chip) already run in the dev layout, which is the same 8x4 mesh with the same SP / TP axes.
 TP32_BLOCKERS = (
     (
-        "2D TP attention: ttMLA shards q_a / q_b / kv_a / wkv_b / o_proj / g_proj over the TP mesh axis only and "
-        "replicates them over the other axis, which carries the sequence (mla.py _convert_and_cache_weights); "
-        "there is no hidden split over the 4 rows. The output gate likewise all-gathers the hidden over TP before "
-        "g_proj (ttMLA._output_gate); with hidden over the rows its partial x @ W_gate must be all-reduced over the "
-        "rows before the sigmoid",
+        "2D TP attention: ttMLA shards q_a / q_b / kv_a / wkv_b / o_proj / g_proj over the TP mesh axis only (axis "
+        "1, 4 chips: 16 heads per chip) and replicates them over the SP axis (axis 0, 8 chips), which TP32 uses for "
+        "the heads, 8 per chip, next to the sequence (mla.py _convert_and_cache_weights). The output gate likewise "
+        "all-gathers the hidden over TP before g_proj (ttMLA._output_gate); with the hidden split its partial "
+        "x @ W_gate must be reduced over TP before the sigmoid",
         "#65885",
     ),
     (
-        "a 4x8 mesh on the Galaxy fabric: the torus descriptor is 8x4 (single_bh_galaxy_torus_xy, dims [8, 4]); a "
-        "logical 4x8 view of it hung in the TP all-to-all after sparse_sdpa (seen on the #65921 branch)",
-        "#65885",
-    ),
-    (
-        "DSA indexer at 8-way head TP: TtIndexer asserts index_head_dim % (tp * 32) == 0 for its TP all-gather of "
-        "the index keys; 128 / 8 = 16 columns per chip is not tile aligned (indexer.py)",
+        "DSA indexer on the 2D layout: TtIndexer runs on this mesh (128 index dims / TP 4 = 32 per chip, tile "
+        "aligned) but shards its weights over TP only and replicates them over the 8 SP chips (indexer.py)",
         "#65887",
     ),
     (
@@ -88,7 +95,8 @@ DEFAULT_LAYOUT = TP32_LAYOUT
 @dataclass(frozen=True)
 class Hy4PrefillLayout:
     name: str
-    # The runner knobs that open this layout's mesh (mesh shape (sp, tp) at sp_axis 0).
+    # The runner knobs that open this layout's mesh: SP (the sequence) and TP (the hidden) mesh sizes, and the mesh
+    # axis SP is on; TP is on the other one.
     sp: int
     tp: int
     sp_axis: int
@@ -97,15 +105,25 @@ class Hy4PrefillLayout:
     # Appended to the mesh key of the weight-cache dir; "" keeps the bare {rows}x{cols} key.
     cache_suffix: str = ""
     blockers: tuple = ()
+    # The mesh axis the attention heads split over in the projections: "tp" (ttMLA, GLM-5.3: heads with the hidden)
+    # or "sp" (2D TP, #65884: heads with the sequence, the hidden alone on TP).
+    heads_over: str = "tp"
 
     @property
     def runnable(self) -> bool:
         return not self.blockers
 
+    @property
+    def hidden_axis(self) -> int:
+        """The mesh axis the hidden (and the residual's hidden) splits over: the TP axis."""
+        return 1 - self.sp_axis
+
     def heads_per_chip(self, num_heads: int) -> int:
-        if num_heads % self.tp:
-            raise ValueError(f"{num_heads} heads do not split over TP={self.tp}")
-        return num_heads // self.tp
+        """Heads per chip in the attention projections (q_b's / the gate's N, o_proj's K)."""
+        n = self.sp if self.heads_over == "sp" else self.tp
+        if num_heads % n:
+            raise ValueError(f"{num_heads} heads do not split over {self.heads_over.upper()}={n}")
+        return num_heads // n
 
     def matches(self, sp: int, tp: int, sp_axis: int) -> bool:
         return (self.sp, self.tp, self.sp_axis) == (sp, tp, sp_axis)
@@ -132,14 +150,15 @@ HY4_PREFILL_LAYOUTS = {
     for layout in (
         Hy4PrefillLayout(
             name=TP32_LAYOUT,
-            sp=4,
-            tp=8,
+            sp=8,
+            tp=4,
             sp_axis=0,
             role="production",
-            note="TP32 / DP1, the SC1 placement of #65884: 2D TP attention with 8 heads per chip, every weight "
-            "sharded once over the 4x8 mesh",
+            note="TP32 / DP1, the SC1 placement of #65884: hidden over the 4-chip axis 1, heads (8 per chip) and "
+            "sequence over the 8-chip axis 0, every weight sharded once over the 8x4 mesh",
             cache_suffix="_tp32",
             blockers=TP32_BLOCKERS,
+            heads_over="sp",
         ),
         Hy4PrefillLayout(
             name=DEV_LAYOUT,

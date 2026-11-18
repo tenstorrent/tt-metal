@@ -13,10 +13,11 @@ from its explicit ``indexer_types`` by ``full_indexer_rank``. What it changes:
     readable it is validated against the constants and supplies the per-layer maps.
   * weights: ``TtHy4Runtime`` rebuilds a missing weight cache through the Hy4 checkpoint reader
     (``tt/runners/hy4_checkpoint.py``: fused experts, MXFP8 scales, ``linear_gate`` -> ``g_proj``).
-  * mesh layout: TP32 / DP1 (``tp32``, the SC1 placement of #65884), selected by default. The shared prefill
+  * mesh layout: TP32 / DP1 (``tp32``, the SC1 placement of #65884: hidden over the 4-chip mesh axis 1, heads and
+    sequence over the 8-chip axis 0, residual ``[S / 8, 6144 / 4]``), selected by default. The shared prefill
     stack cannot run it yet, so it fails at runner start naming the blocking issues; GLM-5.3's SP 8 x TP 4
-    stays as the explicitly selected DEV / NUMERICS layout (``PREFILL_HY4_LAYOUT=glm_prefill_sp8_tp4``). See
-    ``tt/hy4/layout.py``. The weight cache is keyed by mesh and layout.
+    stays as the explicitly selected DEV / NUMERICS layout (``PREFILL_HY4_LAYOUT=glm_prefill_sp8_tp4``) on the same
+    8x4 mesh. See ``tt/hy4/layout.py``. The weight cache is keyed by mesh and layout.
   * deltas the stack does not implement yet are refused unless a bring-up override is set (below).
 """
 
@@ -118,7 +119,11 @@ class Hy4Adapter(GLM53Adapter):
 
     def _check_layout(self, params) -> None:
         layout = self._resolve_layout(params.sp_factor, params.tp_factor, params.sp_axis)
-        heads = Hy4Config.NUM_ATTENTION_HEADS // params.tp_factor
+        heads = (
+            layout.heads_per_chip(Hy4Config.NUM_ATTENTION_HEADS)
+            if layout is not None
+            else Hy4Config.NUM_ATTENTION_HEADS // params.tp_factor
+        )
         if layout is None:
             logger.info(
                 f"Hy4: test mesh SP={params.sp_factor} x TP={params.tp_factor} ({heads} heads per chip), no layout"
