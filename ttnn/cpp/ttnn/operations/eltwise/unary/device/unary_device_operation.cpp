@@ -88,8 +88,7 @@ bool unary_op_supports_integer_dtype(UnaryOpType op_type, DataType dtype) {
         // Copy / typecast kernels; valid on integer tiles without a separate integer LLK.
         case UnaryOpType::BITCAST:
         case UnaryOpType::IDENTITY:
-        case UnaryOpType::TYPECAST: return true;
-
+        case UnaryOpType::TYPECAST:
         // Only carries the quant/requant zero points to binary_ng's QUANT/REQUANT/DEQUANT kernels; it never runs as
         // a unary op, and quant and requant outputs are integer.
         case UnaryOpType::ZERO_POINT: return true;
