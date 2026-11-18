@@ -89,7 +89,12 @@ FORCE_INLINE void count_local_writes(uint32_t writes) {
 }
 
 // An atomic increment; a flushed one first waits for every earlier write to be acknowledged.
+#if defined(ARCH_WORMHOLE)
+// Needed for wormhole to get around small IRAM size.
+__attribute__((noinline)) void local_atomic_inc(uint64_t addr, uint32_t value, bool flush, uint8_t channel) {
+#else
 FORCE_INLINE void local_atomic_inc(uint64_t addr, uint32_t value, bool flush, uint8_t channel) {
+#endif
     if (flush) {
         flush_write_to_noc_pipeline</*all_writes_counted=*/counts_local_writes>(channel);
     }
