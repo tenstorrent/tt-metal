@@ -222,6 +222,7 @@ def main(argv=None) -> int:
         "bos_prepended": bos is not None,
         "generator": "models.demos.deepseek_v3_d_p.reference.hy4.generate_golden",
         "reference": "Hy4PrefillReference fp32 (HF hy_v4 semantics; rope angles fp64)",
+        "norm_eps": {"rms_norm_eps": cfg.rms_norm_eps, "low_rank_norm_eps": cfg.low_rank_norm_eps},
         "host": socket.gethostname(),
         "started_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
         "prefix_of_longest": len(lens) > 1,

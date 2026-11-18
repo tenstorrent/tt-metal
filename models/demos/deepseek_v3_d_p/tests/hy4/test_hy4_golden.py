@@ -328,3 +328,49 @@ def test_real_config_layer_maps():
     assert [i for i in range(78) if cfg.is_dense(i)] == [0]
     assert (cfg.vocab_size, cfg.routed_scaling_factor, cfg.swiglu_limit, cfg.rope_theta) == (120832, 2.827, 10.0, 1e7)
     assert cfg.kvpe_dim == 576 and cfg.index_head_dim == 128 and cfg.index_topk == 2048
+    assert (cfg.rms_norm_eps, cfg.low_rank_norm_eps) == (1e-5, 1e-6)
+
+
+# ------------------------------------------------------------------------------------- norm epsilons
+def test_low_rank_norm_eps_is_hf_rmsnorm_default():
+    """HF builds q_a_layernorm / kv_a_layernorm as ``HYV4RMSNorm(dim)`` -- the class default eps (1e-6),
+    not ``config.rms_norm_eps`` (1e-5), which only the decoder/final/iHC norms and the indexer k_norm take."""
+    assert Hy4RefConfig().low_rank_norm_eps == 1e-6
+    assert "low_rank_norm_eps" not in tiny_random_config().to_hf_dict()  # HF hard-codes it, never reads it
+    if hf_hy_v4_available():
+        import inspect
+
+        from transformers.models.hy_v4 import modeling_hy_v4 as hf
+
+        default = inspect.signature(hf.HYV4RMSNorm.__init__).parameters["eps"].default
+        assert default == Hy4RefConfig().low_rank_norm_eps
+        cfg = tiny_random_config()
+        attn = hf.HYV4Attention(hf.HYV4Config(**cfg.to_hf_dict()), layer_idx=0)
+        assert attn.q_a_layernorm.variance_epsilon == cfg.low_rank_norm_eps
+        assert attn.kv_a_layernorm.variance_epsilon == cfg.low_rank_norm_eps
+
+
+def test_reference_norm_eps_wiring(tiny_ckpt, token_ids, monkeypatch):
+    """Every RMSNorm the reference applies uses the eps HF uses for that norm (distinct eps values here so
+    a swapped argument cannot pass)."""
+    import dataclasses
+
+    from models.demos.deepseek_v3_d_p.reference.hy4 import model as ref_model
+
+    cfg = dataclasses.replace(tiny_ckpt.config, rms_norm_eps=3e-5, low_rank_norm_eps=7e-7).truncated(2)
+    w0 = ref_model.load_layer_weights(tiny_ckpt, cfg, 0)
+    by_width = {
+        cfg.q_lora_rank: ("q_a_layernorm", w0["q_a_layernorm"]),
+        cfg.kv_lora_rank: ("kv_a_layernorm", w0["kv_a_layernorm"]),
+    }
+    seen = {}
+    real = ref_model.rms_norm
+
+    def spy(x, weight, eps):
+        name = by_width.get(x.shape[-1], ("hidden",))[0]
+        seen.setdefault(name, set()).add(eps)
+        return real(x, weight, eps)
+
+    monkeypatch.setattr(ref_model, "rms_norm", spy)
+    Hy4PrefillReference(tiny_ckpt, cfg, prefetch=False).run(token_ids, _Capture(), num_layers=2)
+    assert seen == {"q_a_layernorm": {7e-7}, "kv_a_layernorm": {7e-7}, "hidden": {3e-5}}, seen

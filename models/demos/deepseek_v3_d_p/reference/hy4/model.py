@@ -176,9 +176,9 @@ class Hy4PrefillReference:
         for a, b in _blocks(S, self.proj_block):
             post[a:b], h = hyper_connection(x4[a:b], w["attn_hc.fn"], w["attn_hc.base"], w["attn_hc.scale"], cfg)
             hn[a:b] = rms_norm(h, w["input_layernorm"], cfg.rms_norm_eps)
-            q_resid[a:b] = rms_norm(hn[a:b] @ w["q_a_proj"].T, w["q_a_layernorm"], cfg.rms_norm_eps)
+            q_resid[a:b] = rms_norm(hn[a:b] @ w["q_a_proj"].T, w["q_a_layernorm"], cfg.low_rank_norm_eps)
             ckv = hn[a:b] @ w["kv_a_proj_with_mqa"].T
-            kvpe[a:b, :L] = rms_norm(ckv[:, :L], w["kv_a_layernorm"], cfg.rms_norm_eps)
+            kvpe[a:b, :L] = rms_norm(ckv[:, :L], w["kv_a_layernorm"], cfg.low_rank_norm_eps)
             kvpe[a:b, L:] = apply_rope_half_split(ckv[:, L:], cos[a:b], sin[a:b])
             if full:
                 k = F.layer_norm(

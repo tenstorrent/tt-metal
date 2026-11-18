@@ -46,6 +46,9 @@ class Hy4RefConfig:
     hc_eps: float = 1e-6
     hc_magnitude: float = 2.0
     rms_norm_eps: float = 1e-5
+    # HF builds q_a_layernorm / kv_a_layernorm as HYV4RMSNorm(dim) with its default eps=1e-6, NOT
+    # rms_norm_eps (modeling_hy_v4.py). Not a config.json field: HF never reads it from there.
+    low_rank_norm_eps: float = 1e-6
     rope_theta: float = 1e7
     bos_token_id: int = 120000
     eos_token_id: int = 120025
@@ -125,6 +128,7 @@ class Hy4RefConfig:
         """A ``config.json`` HF ``HYV4Config`` loads (used to save the random smoke-test checkpoint)."""
         d = asdict(self)
         d.pop("rope_theta")
+        d.pop("low_rank_norm_eps")  # HF hard-codes it (HYV4RMSNorm default), not a config field
         d["indexer_types"] = list(self.indexer_types)
         d["mlp_layer_types"] = list(self.mlp_layer_types)
         d.update(
