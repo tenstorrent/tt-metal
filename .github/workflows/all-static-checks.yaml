@@ -13,6 +13,7 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       docs-changed: ${{ steps.find-changes.outputs.docs-changed }}
+      cmake-changed: ${{ steps.find-changes.outputs.cmake-changed }}
     steps:
       - id: find-changes
         uses: tenstorrent/tt-metal/.github/actions/find-changed-files@main
@@ -224,60 +225,28 @@ jobs:
           python tests/sweep_framework/framework/sweeps_workflow_verification.py
   cmake-version:
     # Configure with CMake 3.25 inside ci-build to avoid apt at job time.
+    needs: find-changed-files
+    if: needs.find-changed-files.outputs.cmake-changed == 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 60
+    container: ghcr.io/tenstorrent/tt-metal/tt-metalium/ubuntu-24.04-ci-build-amd64:latest
     permissions:
       contents: read
-      packages: read
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2 cachew: keep
         timeout-minutes: 20
         with:
           submodules: recursive
-      - name: Look for changed CMake files
-        id: find-changes
-        uses: ./.github/actions/find-changed-files
-      - name: Resolve ci-build image
-        id: image
-        if: steps.find-changes.outputs.cmake-changed == 'true'
-        run: |
-          set -euo pipefail
-          DATA=$(.github/scripts/compute-platform-data.sh 24.04 "${{ github.repository }}" --no-check-exists)
-          IMAGE=$(echo "$DATA" | jq -er .ci_build_tag)
-          echo "tag=$IMAGE" >> "$GITHUB_OUTPUT"
-          echo "Using $IMAGE"
-      - name: Log in to GHCR
-        if: steps.find-changes.outputs.cmake-changed == 'true'
-        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3.7.0
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-      - name: Pull ci-build image
-        if: steps.find-changes.outputs.cmake-changed == 'true'
-        run: docker pull "${{ steps.image.outputs.tag }}"
       - uses: lukka/get-cmake@b516803a3c5fac40e2e922349d15cdebdba01e60 # v3.30.5
-        if: steps.find-changes.outputs.cmake-changed == 'true'
         with:
-          cmakeVersion: "~3.25.0"
+          cmakeVersion: "3.25.0"
       - name: Check CMake compatibility
-        if: steps.find-changes.outputs.cmake-changed == 'true'
         env:
           ARCH_NAME: wormhole_b0
           CMAKE_GENERATOR: Ninja
         run: |
-          set -euo pipefail
-          CMAKE_PREFIX=$(dirname "$(dirname "$(command -v cmake)")")
-          docker run --rm \
-            -u "$(id -u):$(id -g)" \
-            -e HOME="${{ github.workspace }}" \
-            -v "${{ github.workspace }}:${{ github.workspace }}" \
-            -w "${{ github.workspace }}" \
-            -v "$CMAKE_PREFIX:/opt/cmake-3.25:ro" \
-            -e ARCH_NAME \
-            -e CMAKE_GENERATOR \
-            "${{ steps.image.outputs.tag }}" \
-            bash -c 'export PATH="/opt/cmake-3.25/bin:$PATH"; echo "Checking compatibility with $(cmake --version)"; cmake --version | grep -q "cmake version 3.25"; cmake -D BUILD_PROGRAMMING_EXAMPLES=ON -D TT_METAL_BUILD_TESTS=ON -B build .'
+          echo "Checking compatibility with $(cmake --version)"
+          cmake -D BUILD_PROGRAMMING_EXAMPLES=ON -D TT_METAL_BUILD_TESTS=ON -B build .
   check-docker-bake-ci:
     runs-on: ubuntu-latest
     steps:
