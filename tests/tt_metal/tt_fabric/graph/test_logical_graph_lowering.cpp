@@ -444,7 +444,7 @@ std::vector<uint32_t> max_senders(const ChannelGraph& cg) {
 }
 
 TEST(FabricGraphChannels, StockIndexing) {
-    const auto cg = lower_to_channels(lower(metal_mgd("single_bh_galaxy_mesh_graph_descriptor.textproto"), k2D).graph, true);
+    const auto cg = lower_to_channels(lower(metal_mgd("single_bh_galaxy_mesh_graph_descriptor.textproto"), k2D).graph, Topology::Mesh);
     // E-facing: [worker, W, N, S]; N-facing: [worker, E, W, S] (compact rank in E, W, N, S order).
     EXPECT_EQ(index_of(cg, "m0.c5.E.p0", 0, "worker"), 0u);
     EXPECT_EQ(index_of(cg, "m0.c5.E.p0", 0, "W"), 1u);
@@ -459,14 +459,14 @@ TEST(FabricGraphChannels, StockIndexing) {
 }
 
 TEST(FabricGraphChannels, OneDimensionalUsesSlotOne) {
-    const auto cg = lower_to_channels(lower(metal_mgd("single_bh_galaxy_mesh_graph_descriptor.textproto"), k1D).graph, false);
+    const auto cg = lower_to_channels(lower(metal_mgd("single_bh_galaxy_mesh_graph_descriptor.textproto"), k1D).graph, Topology::Linear);
     EXPECT_EQ(index_of(cg, "m0.c5.N.p0", 0, "S"), 1u);
     EXPECT_EQ(index_of(cg, "m0.c5.E.p0", 0, "W"), 1u);
     EXPECT_EQ(max_senders(cg), (std::vector<uint32_t>{2}));
 }
 
 TEST(FabricGraphChannels, ZBoundaryMaxima) {
-    const auto cg = lower_to_channels(lower_mesh_graph(dual_2x4(/*z=*/true), kInterMesh).graph, true);
+    const auto cg = lower_to_channels(lower_mesh_graph(dual_2x4(/*z=*/true), kInterMesh).graph, Topology::Mesh);
     // Stock with a Z boundary: [5, 4] senders. Mesh 1's Z chips (its top row) have an S port, so
     // their Z router uses worker + E, W, S = index 4; VC1 "from Z" sits at index 3 on cardinals.
     EXPECT_EQ(max_senders(cg), (std::vector<uint32_t>{5, 4}));
@@ -482,7 +482,7 @@ TEST(FabricGraphChannels, ExpressAndVc2Maxima) {
                      .vc_config = vc2_only(),
                      .express_axis = {{MeshId{0}, ExpressAxis::Y}}})
                  .graph;
-    const auto cg = lower_to_channels(std::move(g), true);
+    const auto cg = lower_to_channels(std::move(g), Topology::Torus);
     // Stock express family: 5 VC0 senders (a chord feeding E/W lands at index 4); VC2: one worker.
     EXPECT_EQ(max_senders(cg), (std::vector<uint32_t>{5, 0, 1}));
     EXPECT_EQ(index_of(cg, "m0.c9.E.p0", 0, "Z"), 4u);
@@ -490,14 +490,14 @@ TEST(FabricGraphChannels, ExpressAndVc2Maxima) {
 }
 
 TEST(FabricGraphChannels, LegacyStockSenderCounts) {
-    auto cg = lower_to_channels(lower(metal_mgd("single_bh_galaxy_mesh_graph_descriptor.textproto"), k2D).graph, true);
+    auto cg = lower_to_channels(lower(metal_mgd("single_bh_galaxy_mesh_graph_descriptor.textproto"), k2D).graph, Topology::Mesh);
     EXPECT_EQ(cg.sender_counts[*cg.logical.find_router("m0.c0.S.p0")][0], 2u);  // corner: worker + E
     legacy_stock_sender_counts(cg, k2D);
     for (const auto& counts : cg.sender_counts) {
         EXPECT_EQ(counts, (std::vector<uint32_t>{4}));  // stock: every 2D router is 4 wide
     }
 
-    auto zb = lower_to_channels(lower_mesh_graph(dual_2x4(/*z=*/true), kInterMesh).graph, true);
+    auto zb = lower_to_channels(lower_mesh_graph(dual_2x4(/*z=*/true), kInterMesh).graph, Topology::Mesh);
     legacy_stock_sender_counts(zb, kInterMesh);
     const auto counts = [&](const std::string& id) { return zb.sender_counts[*zb.logical.find_router(id)]; };
     EXPECT_EQ(counts("m0.c5.Z.p0"), (std::vector<uint32_t>{5, 4}));  // boundary, nothing on its VC1
@@ -531,7 +531,7 @@ ChannelAllocator fake_allocator(std::vector<std::vector<uint32_t>> sender_slots,
 }
 
 TEST(FabricGraphPhysical, AddressesComeFromTheAllocator) {
-    auto cg = lower_to_channels(lower(metal_mgd("single_bh_galaxy_mesh_graph_descriptor.textproto"), k2D).graph, true);
+    auto cg = lower_to_channels(lower(metal_mgd("single_bh_galaxy_mesh_graph_descriptor.textproto"), k2D).graph, Topology::Mesh);
     const std::vector<uint32_t> slots{18, 16, 16, 16, 16};
     const auto pg = lower_to_physical(std::move(cg), fake_allocator({slots}, {16}));
     for (ChannelIndex c = 0; c < pg.logical.channels.size(); ++c) {
@@ -552,7 +552,7 @@ TEST(FabricGraphPhysical, AddressesComeFromTheAllocator) {
 }
 
 TEST(FabricGraphPhysical, RejectsTooSmallAllocation) {
-    auto cg = lower_to_channels(lower(metal_mgd("single_bh_galaxy_mesh_graph_descriptor.textproto"), k2D).graph, true);
+    auto cg = lower_to_channels(lower(metal_mgd("single_bh_galaxy_mesh_graph_descriptor.textproto"), k2D).graph, Topology::Mesh);
     // stock 2D needs 4 VC0 senders
     EXPECT_ANY_THROW(lower_to_physical(std::move(cg), fake_allocator({{18, 16, 16}}, {16})));
 }
@@ -613,7 +613,7 @@ TEST(FabricGraphRouterInputs, TorusRingEntries) {
     const WiringOptions torus{.topology = Topology::Torus};
     auto cg = lower_to_channels(
         lower(metal_path("tests/tt_metal/tt_fabric/custom_mesh_descriptors/bh_galaxy_2x16_torus_xy_mesh_graph_descriptor.textproto"), torus).graph,
-        true);
+        Topology::Torus);
     legacy_stock_sender_counts(cg, torus);
     mark_ring_entries(cg, torus, kNoRingQueries);
     EXPECT_TRUE(cg.enters_ring[channel_of(cg, "m0.c3.E.p0", 0, "worker")]);
@@ -627,7 +627,7 @@ TEST(FabricGraphRouterInputs, TorusRingEntries) {
 }
 
 TEST(FabricGraphRouterInputs, MeshHasNoRingEntries) {
-    auto cg = lower_to_channels(lower(metal_mgd("single_bh_galaxy_mesh_graph_descriptor.textproto"), k2D).graph, true);
+    auto cg = lower_to_channels(lower(metal_mgd("single_bh_galaxy_mesh_graph_descriptor.textproto"), k2D).graph, Topology::Mesh);
     legacy_stock_sender_counts(cg, k2D);
     mark_ring_entries(cg, k2D, kNoRingQueries);
     EXPECT_TRUE(std::none_of(cg.enters_ring.begin(), cg.enters_ring.end(), [](bool b) { return b; }));
@@ -666,7 +666,7 @@ TEST(FabricGraphRouterInputs, EthChannelBinding) {
 
 // The layout a router hands its link peer is the peer router's, across an intermesh boundary too.
 TEST(FabricGraphRouterInputs, PeerLayoutAcrossIntermesh) {
-    auto cg = lower_to_channels(lower_mesh_graph(dual_2x4(/*z=*/true), kInterMesh).graph, true);
+    auto cg = lower_to_channels(lower_mesh_graph(dual_2x4(/*z=*/true), kInterMesh).graph, Topology::Mesh);
     legacy_stock_sender_counts(cg, kInterMesh);
     const auto pg = lower_to_physical(std::move(cg), fake_allocator({{18, 16, 16, 16, 16}, {16, 16, 16, 16}}, {16, 12}));
     const auto& g = pg.logical;

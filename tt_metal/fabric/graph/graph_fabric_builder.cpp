@@ -55,7 +55,6 @@ RouterGraphInputs GraphFabricBuilder::inputs_of(RouterIndex router) const {
     const size_t num_senders = base.back() + counts.back();
     RouterGraphInputs in{
         .layout = graph_.layouts[router],
-        .peer_layout = graph_.layouts[g.routers[router].peer.value()],
         .injection = std::vector<bool>(num_senders, false),
         .serviced = std::vector<bool>(num_senders, false)};
     for (ChannelIndex c : g.channels_of(router, ChannelKind::Sender)) {

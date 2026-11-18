@@ -23,15 +23,15 @@ public:
         for (const auto& p : ports) {
             chips_[p.node].at(*p.direction) = p.capability;
         }
-        two_d_ = is_2D_topology(options.topology);
+        is_2d_ = is_2D_topology(options.topology);
     }
 
     std::vector<Vc> vcs() const override {
         std::vector<Vc> vcs{{.id = 0, .name = "vc0"}};
-        if (two_d_ && options_.vc_config.requires_vc1) {
+        if (is_2d_ && options_.vc_config.requires_vc1) {
             vcs.push_back({.id = 1, .name = "vc1_intermesh"});
         }
-        if (two_d_ && options_.vc_config.requires_vc2) {
+        if (is_2d_ && options_.vc_config.requires_vc2) {
             vcs.push_back({.id = 2, .name = "vc2"});
         }
         return vcs;
@@ -54,7 +54,7 @@ public:
     }
 
     bool folds_corners(MeshId mesh) const override {
-        return !two_d_ && options_.topology != Topology::NeighborExchange &&
+        return !is_2d_ && options_.topology != Topology::NeighborExchange &&
                options_.wrap_around_meshes.contains(mesh);
     }
 
@@ -66,7 +66,7 @@ private:
 
     WiringOptions options_;
     std::map<FabricNodeId, PerDirectionCapabilities> chips_;
-    bool two_d_ = false;
+    bool is_2d_ = false;
 };
 
 }  // namespace

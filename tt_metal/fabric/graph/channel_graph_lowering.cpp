@@ -35,7 +35,7 @@ std::array<uint32_t, builder_config::MAX_NUM_VCS> counts_of(const ChannelGraph& 
 
 }  // namespace
 
-uint32_t stock_channel_index(const LogicalGraph& g, ChannelIndex c, bool two_d) {
+uint32_t stock_channel_index(const LogicalGraph& g, ChannelIndex c, Topology topology) {
     const auto& ch = g.channels[c];
     if (ch.kind == ChannelKind::Receiver) {
         return 0;
@@ -44,13 +44,13 @@ uint32_t stock_channel_index(const LogicalGraph& g, ChannelIndex c, bool two_d) 
         return get_worker_connected_sender_channel();
     }
     return builder::get_downstream_sender_channel_for_vc(
-        two_d,
+        is_2D_topology(topology),
         ch.vc,
         builder::routing_direction_to_eth_direction(**ch.from),
         builder::routing_direction_to_eth_direction(*g.routers[ch.router].port.direction));
 }
 
-ChannelGraph lower_to_channels(LogicalGraph logical, bool two_d) {
+ChannelGraph lower_to_channels(LogicalGraph logical, Topology topology) {
     ChannelGraph cg;
     uint32_t num_vcs = 0;
     for (const auto& vc : logical.vcs) {
@@ -64,7 +64,7 @@ ChannelGraph lower_to_channels(LogicalGraph logical, bool two_d) {
     for (ChannelIndex c = 0; c < logical.channels.size(); ++c) {
         const auto& ch = logical.channels[c];
         TT_FATAL(ch.vc < num_vcs, "fabric graph: channel on vc{} but only {} VCs", ch.vc, num_vcs);
-        const uint32_t idx = stock_channel_index(logical, c, two_d);
+        const uint32_t idx = stock_channel_index(logical, c, topology);
         TT_FATAL(
             taken.emplace(ch.router, ch.vc, ch.kind, idx).second,
             "fabric graph: router {} has two {} channels at vc{} index {}",

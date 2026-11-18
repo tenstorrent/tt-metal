@@ -854,9 +854,6 @@ FabricEriscDatamoverBuilder::FabricEriscDatamoverBuilder(
         sender_channel_connection_liveness_check_disable_array.begin(),
         sender_channel_connection_liveness_check_disable_array.end(),
         false);
-    if (graph_inputs != nullptr) {
-        graph_peer_layout_ = graph_inputs->peer_layout;
-    }
 
     TT_FATAL(
         config.channel_allocator.get() != nullptr,
@@ -1049,18 +1046,11 @@ FabricEriscDatamoverBuilder::CompileTimeArgs FabricEriscDatamoverBuilder::get_co
         sender_channel_to_check);
     TT_FATAL(receiver_channel_num_buffers > 0, "Receiver channel num buffers must be greater than 0");
 
-    // The router across the link, as published before any kernel is emitted (FabricBuilderContext). The graph
-    // lowers the peer itself; it must match what the peer's host built.
+    // The router across the link published its receivers before any kernel is emitted (FabricBuilderContext).
     const auto [link_peer_node, link_peer_chan] =
         control_plane.get_connected_mesh_chip_chan_ids(this->local_fabric_node_id, this->my_eth_channel);
-    const RouterChannelLayout& published_peer_layout =
+    const RouterChannelLayout& peer_layout =
         fabric_context.get_builder_context().get_router_channel_layout(link_peer_node, link_peer_chan);
-    TT_FATAL(
-        !graph_peer_layout_ || graph_peer_layout_->receivers == published_peer_layout.receivers,
-        "fabric graph: the receivers of the router at {} channel {} differ from what its host built",
-        link_peer_node,
-        link_peer_chan);
-    const RouterChannelLayout& peer_layout = graph_peer_layout_ ? *graph_peer_layout_ : published_peer_layout;
 
     constexpr bool enable_risc_cpu_data_cache = false;
 

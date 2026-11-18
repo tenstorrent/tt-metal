@@ -35,10 +35,10 @@ struct ChannelGraph {
 };
 
 // The slot the kernel expects this channel in: the worker's, or the one stock gives the producer's direction.
-uint32_t stock_channel_index(const LogicalGraph& graph, ChannelIndex channel, bool two_d);
+uint32_t stock_channel_index(const LogicalGraph& graph, ChannelIndex channel, Topology topology);
 
 // A router gets the senders it uses (at least one per fabric VC, so the kernel sees every VC).
-ChannelGraph lower_to_channels(LogicalGraph logical, bool two_d);
+ChannelGraph lower_to_channels(LogicalGraph logical, Topology topology);
 
 // Legacy pass: widen every router to the stock shape (router_vc_shape), used slots or not, and keep the
 // unused slots as legacy_slots. Stock sizes a router by its family, not by what feeds it; this is here for

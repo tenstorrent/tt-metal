@@ -67,6 +67,32 @@ TurnRole turn_role(RoutingDirection dir, EdgeCapability cap, ExpressAxis express
     return TurnRole::UNRESTRICTED;  // Y cardinal, any capability
 }
 
+}  // namespace
+
+// Emit flat-index prefix sums and enforce capacity ceilings at the common construction site.
+// Express with VC2 reaches the sender ceiling exactly (5+4+1).
+void finalize_vc_shape_bases(RouterVcShape& shape) {
+    uint32_t sender_base = 0;
+    uint32_t receiver_base = 0;
+    for (size_t vc = 0; vc < shape.sender_counts.size(); ++vc) {
+        shape.sender_flat_base[vc] = sender_base;
+        sender_base += shape.sender_counts[vc];
+        shape.receiver_flat_base[vc] = receiver_base;
+        receiver_base += shape.receiver_counts[vc];
+    }
+    TT_FATAL(
+        sender_base <= builder_config::num_max_sender_channels,
+        "Router shape needs {} sender channels, over the {}-channel ceiling",
+        sender_base,
+        builder_config::num_max_sender_channels);
+    TT_FATAL(
+        receiver_base <= builder_config::num_max_receiver_channels,
+        "Router shape needs {} receiver channels, over the {}-channel ceiling",
+        receiver_base,
+        builder_config::num_max_receiver_channels);
+}
+
+namespace {
 
 // This router's own edge, read off the chip it sits on. A router exists because discovery
 // classified a neighbor in its facing direction, so an absent entry is a caller error rather than
@@ -108,29 +134,6 @@ void check_vc0_downstream_capacity(const RouterTurnSet& turn_set, ExpressAxis ex
 }
 
 }  // namespace
-
-// Emit flat-index prefix sums and enforce capacity ceilings at the common construction site.
-// Express with VC2 reaches the sender ceiling exactly (5+4+1).
-void finalize_vc_shape_bases(RouterVcShape& shape) {
-    uint32_t sender_base = 0;
-    uint32_t receiver_base = 0;
-    for (size_t vc = 0; vc < shape.sender_counts.size(); ++vc) {
-        shape.sender_flat_base[vc] = sender_base;
-        sender_base += shape.sender_counts[vc];
-        shape.receiver_flat_base[vc] = receiver_base;
-        receiver_base += shape.receiver_counts[vc];
-    }
-    TT_FATAL(
-        sender_base <= builder_config::num_max_sender_channels,
-        "Router shape needs {} sender channels, over the {}-channel ceiling",
-        sender_base,
-        builder_config::num_max_sender_channels);
-    TT_FATAL(
-        receiver_base <= builder_config::num_max_receiver_channels,
-        "Router shape needs {} receiver channels, over the {}-channel ceiling",
-        receiver_base,
-        builder_config::num_max_receiver_channels);
-}
 
 bool wires_into(
     RoutingDirection producer_direction,
