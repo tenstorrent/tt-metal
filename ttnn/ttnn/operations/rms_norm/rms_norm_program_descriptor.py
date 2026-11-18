@@ -72,6 +72,9 @@ COLLAPSE_REDUCE_TILE = True
 DENSE_RINV = True
 DENSE_MIN_ROWS = 4
 DENSE_GROUP = TILE  # tile-rows per dense tile: one column each
+# Interleaved work-split knobs (Refinement 5):
+FORCE_W_SPLIT = 0  # probe override of the interleaved w_split (0 = auto)
+MIN_BLOCKS_PER_LINE = 1  # cap block_rows so each line streams >= this many blocks (1 = whole line per block)
 
 # ---- CB indices (semantic names) ----
 CB_X_RM = 0
@@ -171,17 +174,19 @@ def _collapse_reduce_tile(g: OpGeometry) -> bool:
     return COLLAPSE_REDUCE_TILE and g.sumsq_parts == 1
 
 
-def _norm_block(is_tile: bool, y_resident: bool, br: int, cw: int) -> int:
+def _norm_block(is_tile: bool, y_resident: bool, cw: int) -> int:
     """DEST window of the normalize / prescale chains. A window reserves its tiles contiguously, so it must never
-    straddle the end of the output CB ring: the resident output shard and cb_xg are consumed whole per block; the
-    interleaved cb_y ring is safe when both the ring and the block are window multiples. RM normalizes in place
-    with per-tile credit (window 1)."""
+    straddle the end of the output CB ring: the resident output shard and cb_xg are consumed whole per block. The
+    interleaved cb_y ring: the chain cuts every tile-row (cw tiles) into windows from its first tile (row-blocked
+    grid), so a window is ring-safe iff it divides both cw and the ring — the largest such window <= NORM_DEST_BLOCK
+    (a block-level divisibility check is not enough: cw = 20, window 8 cuts rows 8/8/4 and the next row's windows
+    straddle a 16-tile ring). RM normalizes in place with per-tile credit (window 1)."""
     if not is_tile or NORM_DEST_BLOCK <= 1:
         return 1
     if y_resident:
         return NORM_DEST_BLOCK
     ring = Y_DEPTH * Y_CHUNK_TILES
-    return NORM_DEST_BLOCK if (ring % NORM_DEST_BLOCK == 0 and (br * cw) % NORM_DEST_BLOCK == 0) else 1
+    return next(nb for nb in range(NORM_DEST_BLOCK, 0, -1) if cw % nb == 0 and ring % nb == 0)
 
 
 def _per_row_bytes(g: OpGeometry, cw: int, k: int) -> int:
@@ -322,14 +327,17 @@ def select_blocking(
         raise UnsupportedAxisValue("rms_norm: row too wide to hold resident across the grid")
     k_occ = 1 if R >= C else max(1, min(C // R, Wt // MIN_CORE_W_TILES))
     k = max(k_fit, k_occ)
+    if FORCE_W_SPLIT:
+        k = max(k_fit, FORCE_W_SPLIT)
     cw = _div_up(Wt, k)
     w_split = _div_up(Wt, cw)  # every core of a line has >= 1 valid tile
     num_lines = min(R, C // w_split)
     line_rows_tiles_max = _div_up(R, num_lines)
+    br_max = _div_up(line_rows_tiles_max, MIN_BLOCKS_PER_LINE)
     br_fit = (L1_CB_BUDGET_BYTES - _fixed_bytes(g, cw)) // _per_row_bytes(g, cw, w_split)
-    block_rows = max(1, min(line_rows_tiles_max, br_fit))
+    block_rows = max(1, min(br_max, br_fit))
     regime = "LOCAL" if w_split == 1 else "W_SPLIT"
-    br_dense = _dense_block_rows(g, cw, cw, w_split, line_rows_tiles_max, L1_CB_BUDGET_BYTES)
+    br_dense = _dense_block_rows(g, cw, cw, w_split, br_max, L1_CB_BUDGET_BYTES)
     dense = br_dense > 0
     if dense:
         block_rows = br_dense
@@ -603,7 +611,7 @@ def create_program_descriptor(input_tensor, gamma, output_tensor, epsilon, compu
     collapse_rt = _collapse_reduce_tile(geo) and not dense
     if collapse_rt:
         cbs.append(_cb(CB_REDUCE_SCALER, 1, ttnn.tile_size(ttnn.bfloat16), ttnn.bfloat16, crs))
-    norm_block = _norm_block(is_tile, y_resident, br, cw)
+    norm_block = _norm_block(is_tile, y_resident, cw)
     # Σx² partial / rinv units per block: a tile per tile-row (sparse) or per DENSE_GROUP tile-rows (dense).
     n_units = _dense_groups(br) if dense else br
     jsel_tiles = _jsel_tiles(br) if dense else 0
