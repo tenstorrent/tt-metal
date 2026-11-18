@@ -76,7 +76,8 @@ FORCE_INLINE void consume_packets_sent_credit() {
 }
 
 // The sender sent one packet. Assumes !SenderLinkTransport::is_busy(), and must follow the payload on
-// SenderLinkTransport.
+// SenderLinkTransport; on a Keraunos NOC link that order holds if an acked copy has landed or one VC delivers in order
+// (CM-081, open).
 template <uint32_t PKTS_SENT_ID>
 FORCE_INLINE void send_packets_sent_credit() {
     if constexpr (stream_registers_available) {

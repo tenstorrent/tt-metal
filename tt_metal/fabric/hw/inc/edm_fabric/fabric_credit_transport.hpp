@@ -17,16 +17,18 @@
 
 #ifdef KERAUNOS_CCE
 // Send @p value into the peer's 16-byte slot at @p dest_addr on TX queue @p txq, after the sends before it on that
-// queue, as an 8-byte inline write the peer snoops (compat cce_eth_send_counter); @p src_addr is not read.
-// Assumes !eth_txq_is_busy(txq).
+// queue (on a NOC link, if an acked copy has landed or one VC delivers in order: CM-081, open), as an 8-byte write, on
+// an Ethernet link inline and snooped by the peer (compat cce_eth_send_counter); @p src_addr is not read. Assumes
+// !eth_txq_is_busy(txq).
 FORCE_INLINE void fabric_send_credit_word(uint32_t txq, uint32_t /*src_addr*/, uint32_t dest_addr, uint32_t value) {
     ASSERT(!internal_::eth_txq_is_busy(txq));
     internal_::cce_eth::send_dword(txq, dest_addr, value, /*snoop=*/true);
 }
 
 // Send @p num_bytes of credit totals from @p src_addr into the peer at @p dest_addr on TX queue @p txq, after the sends
-// before it on that queue, as a copy the peer snoops (compat cce_eth_send). Not inline writes: an inline value carries
-// 52 bits, and the block packs 32-bit totals 4 bytes apart. Assumes !eth_txq_is_busy(txq).
+// before it on that queue (on a NOC link, if an acked copy has landed or one VC delivers in order: CM-081, open), as a
+// copy, on an Ethernet link snooped by the peer (compat cce_eth_send). Not inline writes: an inline value carries 52
+// bits, and the block packs 32-bit totals 4 bytes apart. Assumes !eth_txq_is_busy(txq).
 FORCE_INLINE void fabric_send_credit_block(uint32_t txq, uint32_t src_addr, uint32_t dest_addr, uint32_t num_bytes) {
     ASSERT(!internal_::eth_txq_is_busy(txq));
     internal_::cce_eth::send_bytes(txq, src_addr, dest_addr, num_bytes, /*snoop=*/true);
