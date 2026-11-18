@@ -321,16 +321,6 @@ void kernel_main() {
         c_in_p,
         block_k_tiles,
         zero_im2col_once>;
-    using TapMajorT = conv2d_3x3::TapMajorGather<
-        output_width,
-        input_height,
-        input_width,
-        padding,
-        dilation,
-        c_in_p,
-        block_k_tiles,
-        center_mode == 2 ? 1 : -1,
-        ring_slab ? static_cast<int32_t>(slab_tile_rows * TILE_DIM) : 0>;
     using WindowT = conv2d_3x3::WindowGather<output_width, input_height, input_width, padding, c_in_p>;
     // N-slice center taps: the tap-direct units leave tap 1 to cb_center_tiles.
     constexpr int32_t unit_skip_kw = nslice_center ? 1 : -1;
@@ -354,6 +344,10 @@ void kernel_main() {
         "slab in the input ring");
     // Tap-direct on the K-blocked walk (TapDirectFifo); the N-slice prelude keeps the slot-indexed table.
     constexpr bool kb_tap_direct = tap_direct && !nslice_outer;
+#ifndef CONV2D_3X3_KW_FOLD
+    // Every tap-major gather publishes tap sources (the descriptor's _tap_direct); kw-fold has no gather.
+    static_assert(!tap_major || tap_direct, "tap-major units are tap-direct");
+#endif
     constexpr uint32_t fifo_taps = c_in_p >= TILE_DIM ? block_k_tiles * TILE_DIM / c_in_p : 1;
     using TapFifoT = conv2d_3x3::TapDirectFifo<
         output_width,
@@ -842,9 +836,7 @@ void kernel_main() {
             const uint32_t col_lo = (k_tile0 - kh * tensor_kkh_tiles) * TILE_DIM;
             const uint32_t o = o_first + tile_row * TILE_DIM;
             reads.begin(TRID_GATHER);
-            if constexpr (tap_major) {
-                TapMajorT::tile_row(reads, slab_noc, zero_src_noc, rows_l1, o, o_end, kh, col_lo, slab_x_base[kh]);
-            } else if constexpr (strided_window) {
+            if constexpr (strided_window) {
                 uint32_t src = 0;
                 if constexpr (window_direct) {
                     src = WindowT::direct_source(slab_l1, o, o_end, kh, slab_x_base[kh]);
