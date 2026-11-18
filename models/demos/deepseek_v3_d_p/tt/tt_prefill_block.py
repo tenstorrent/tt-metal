@@ -525,6 +525,8 @@ class TtPrefillBlock(LightweightModule):
             # Absent on the models whose routed-expert shape never favours the composite, so
             # they keep the single-op path rather than paying a second dispatch for nothing.
             routed_expert_hybrid_token_threshold=getattr(model_cfg, "ROUTED_EXPERT_HYBRID_TOKEN_THRESHOLD", None),
+            # Model-dependent gate/up K-block width; absent configs keep the op's default.
+            routed_expert_in0_block_w_gu=getattr(model_cfg, "ROUTED_EXPERT_IN0_BLOCK_W_GU", None),
             shared_hidden_dim=getattr(model_cfg, "SHARED_EXPERT_INTERMEDIATE_SIZE", None),
             latent_weights=state_dict.get("latent_weights"),  # None if cache exists
             latent_use_norm=getattr(model_cfg, "LATENT_MOE_USE_NORM", True),

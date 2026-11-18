@@ -30,6 +30,11 @@ class GLM53Config:
     # routed-expert matmul shape, expert count and activation (6144x2048, 256 experts, top-8, no
     # pre-projection, SiLU). Re-measure if any of those change.
     ROUTED_EXPERT_HYBRID_TOKEN_THRESHOLD = 320
+    # Requested gate/up K-block width (tiles) for unified_routed_expert_moe and the unified half of
+    # hybrid_routed_expert_moe (emb 6144 => K_gate_tiles 192). Swept over {4..32} on the 6144x2048 bf4
+    # SiLU expert, x_rm, ND-sharded, BH p100a (#56654): 8 beats the op's default 16 by ~1.3% on the hybrid
+    # unified half (-2..-4% from 1024 active tokens up, +3.5% at 512); 24 and wider are ~3.5% slower.
+    ROUTED_EXPERT_IN0_BLOCK_W_GU = 8
     # Opts this model into TtMoe's routed expert / combine_fabric2d overlap (Blackhole, traced and untraced). Every
     # config that does not name it runs the routed expert then combine as separate ops.
     ROUTED_EXPERT_COMBINE_OVERLAP = True

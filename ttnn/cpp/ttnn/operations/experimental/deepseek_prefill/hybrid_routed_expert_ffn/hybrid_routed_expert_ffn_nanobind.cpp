@@ -50,6 +50,10 @@ void bind_hybrid_routed_expert_ffn(nb::module_& mod) {
         args, which is what lets the union program fit its kernel-config ring at the production
         expert count. The caller builds it once, alongside the weights, and keeps the two in step:
         only its shape is checked.
+
+        in0_block_w_gu is the unified half's requested gate/up K-block width in tiles (default 16):
+        an upper bound the op snaps to a divisor of emb/32 and narrows to fit L1. Set it per model
+        (8 for GLM-5.3, 18 for gpt-oss); the fused half does not read it.
         )doc",
         &hybrid_routed_expert_moe,
         nb::arg("dispatched_buffer").noconvert(),
@@ -80,7 +84,8 @@ void bind_hybrid_routed_expert_ffn(nb::module_& mod) {
         nb::arg("forwarding_buffer") = nb::none(),
         nb::arg("channel_semaphores") = std::vector<GlobalSemaphore>{},
         nb::arg("weight_address_table") = nb::none(),
-        nb::arg("combine_fwd_vc_pages") = nb::none());
+        nb::arg("combine_fwd_vc_pages") = nb::none(),
+        nb::arg("in0_block_w_gu") = unified_routed_expert_ffn::kDefaultIn0BlockWGu);
 
     ttnn::bind_function<
         "hybrid_routed_expert_moe_channel_semaphore_count",

@@ -28,6 +28,13 @@ namespace ttnn::operations::experimental::deepseek_prefill::unified_routed_exper
 inline constexpr uint32_t kCoreGridX = 11;
 inline constexpr uint32_t kCoreGridY = 8;
 
+// Default requested gate/up K-block width (in0_block_w_gu), in tiles. The program factory treats the
+// request as an upper bound: it snaps it down to a divisor of K_gate_tiles and narrows it further if
+// the CBs do not fit in L1. 16 divides every 512-multiple emb. The best width is shape- and
+// activation-dependent (more K-blocks pipeline DRAM reads better but each pays a fixed mcast barrier),
+// so models request their measured one through the op arg (GLM-5.3: 8 of 192, gpt-oss: 18 of 90).
+inline constexpr uint32_t kDefaultIn0BlockWGu = 16;
+
 // Maximum number of global experts the op supports.
 //
 // The reader fetches the per-global-expert `counts` vector (and the
@@ -121,6 +128,10 @@ struct UnifiedRoutedExpertFfnParams {
     // pairs point at) names it here instead of zeroing it with a separate op.
     uint32_t zero_output_row = std::numeric_limits<uint32_t>::max();
 
+    // Requested gate/up K-block width in tiles (upper bound; see kDefaultIn0BlockWGu). It sizes the
+    // CBs and the K-loop, so it is part of the program-cache key.
+    uint32_t in0_block_w_gu = kDefaultIn0BlockWGu;
+
     static constexpr auto attribute_names = std::forward_as_tuple(
         "m_tiles",
         "experts_per_chip",
@@ -132,7 +143,8 @@ struct UnifiedRoutedExpertFfnParams {
         "l1_end",
         "x_indexed",
         "output_row_major",
-        "zero_output_row");
+        "zero_output_row",
+        "in0_block_w_gu");
     auto attribute_values() const {
         return std::forward_as_tuple(
             m_tiles,
@@ -145,7 +157,8 @@ struct UnifiedRoutedExpertFfnParams {
             l1_end,
             x_indexed,
             output_row_major,
-            zero_output_row);
+            zero_output_row,
+            in0_block_w_gu);
     }
 };
 

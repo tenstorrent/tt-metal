@@ -47,6 +47,7 @@ from tests.ttnn.nightly.unit_tests.operations.experimental.deepseek_prefill.test
     _SITU_BETA_GATE,
     _SITU_BETA_UP,
     _TORCH_ACTIVATION,
+    _block_width_params,
     _isl_params,
     expert_golden,
     expert_weights,
@@ -107,13 +108,15 @@ def run_hybrid_routed_expert(
     pcc_threshold: float = 0.97,
     min_cap_frac: tuple[float, float] | None = None,
     threshold: int = _THRESHOLD,
+    in0_block_w_gu: int | None = None,
 ):
     """One expert over an ``allocated_tokens`` region with ``active_tokens`` live rows, served by
     one half of the union op and swept over by the other.
 
     Signature mirrors ``run_single_routed_expert`` so the imported case matrices apply unchanged;
     see that docstring for what each knob is for. ``threshold`` is the one addition -- it decides
-    which half owns the expert.
+    which half owns the expert. ``in0_block_w_gu`` is the unified half's requested gate/up K-block
+    width (None: the op's default).
     """
     if active_tokens is None:
         active_tokens = allocated_tokens
@@ -191,6 +194,7 @@ def run_hybrid_routed_expert(
         compute_kernel_config=tt_expert.compute_kernel_config,
         activation=activation,
         weight_address_table=tt_expert.weight_address_table,
+        **({} if in0_block_w_gu is None else {"in0_block_w_gu": in0_block_w_gu}),
     )
     tt_output_torch = ttnn.to_torch(tt_output, mesh_composer=ttnn.ConcatMeshToTensor(device, dim=0))
     tt_output_active = tt_output_torch[:active_tokens]
@@ -223,6 +227,33 @@ def test_hybrid_routed_expert_functional(
         hidden_dim,
         active_tokens=active_tokens,
         x_row_major=x_row_major,
+    )
+
+
+@pytest.mark.uncollect_if(pred=ci_pruning.tiled_x_input)
+@pytest.mark.parametrize("x_row_major", [True, False], ids=["x_rm", "x_tile"])
+@pytest.mark.parametrize(
+    "allocated_tokens, active_tokens, emb_dim, hidden_dim, in0_block_w_gu", _block_width_params(_ISL_FUNCTIONAL_SWEEP)
+)
+@pytest.mark.skipif(not is_blackhole(), reason="the routed expert is Blackhole-only")
+def test_hybrid_routed_expert_model_block_width(
+    device,
+    allocated_tokens: int,
+    active_tokens: int,
+    emb_dim: int,
+    hidden_dim: int,
+    in0_block_w_gu: int,
+    x_row_major: bool,
+):
+    """The unified half at the model-dependent gate/up K-block width (GLM-5.3: 8, gpt-oss: 18)."""
+    run_hybrid_routed_expert(
+        device,
+        allocated_tokens,
+        emb_dim,
+        hidden_dim,
+        active_tokens=active_tokens,
+        x_row_major=x_row_major,
+        in0_block_w_gu=in0_block_w_gu,
     )
 
 

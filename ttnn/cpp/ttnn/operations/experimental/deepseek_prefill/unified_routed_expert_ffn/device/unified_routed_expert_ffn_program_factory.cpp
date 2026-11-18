@@ -22,6 +22,7 @@
 #include <tt-metalium/math.hpp>
 #include <tt-metalium/program_descriptors.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
+#include <tt-logger/tt-logger.hpp>
 
 #include "ttnn/operation.hpp"
 
@@ -234,7 +235,10 @@ tt::tt_metal::ProgramDescriptor UnifiedRoutedExpertFfnProgramFactory::create_des
     // chunks to divisors of per_core_M_max.
     constexpr uint32_t kMaxChunkMTiles = 4 * kCoreGridY;  // per_core_M <= 4 (see above)
     uint32_t chunk_M_tiles = kMaxChunkMTiles;
-    uint32_t in0_block_w_gu = 16;
+    // Model-dependent request (op.in0_block_w_gu, default kDefaultIn0BlockWGu): an upper bound
+    // that is snapped to a divisor of K_gate_tiles and fitted to L1 below.
+    TT_FATAL(op.in0_block_w_gu >= 1, "unified_routed_expert_ffn: in0_block_w_gu must be >= 1");
+    uint32_t in0_block_w_gu = op.in0_block_w_gu;
     const auto grid_size = t.x.device()->compute_with_storage_grid_size();
     TT_FATAL(
         grid_size.x >= kCoreGridX && grid_size.y >= kCoreGridY,
@@ -268,11 +272,12 @@ tt::tt_metal::ProgramDescriptor UnifiedRoutedExpertFfnProgramFactory::create_des
 
     // in0_block_w_gu (the gate/up K-loop block width) must divide K_gate_tiles.
     // The short_seq picker above already restricts itself to divisors, but the
-    // general 2D path leaves the default 16 unchanged — valid only when emb is a
-    // multiple of 512 (=> K_gate_tiles a multiple of 16). Models with a different
-    // emb (e.g. GPT-OSS 120B: emb 2880 => K_gate_tiles 90) need the default
-    // snapped down to the largest divisor of K_gate_tiles that does not exceed
-    // it. No-op for short_seq and for every shipped 512-multiple emb; the L1
+    // general 2D path leaves the requested width unchanged — the default 16 is
+    // valid only when emb is a multiple of 512 (=> K_gate_tiles a multiple of 16).
+    // A request that does not divide K_gate_tiles (e.g. the default 16 on GPT-OSS
+    // 120B: emb 2880 => K_gate_tiles 90) is snapped down to the largest divisor of
+    // K_gate_tiles that does not exceed it. Callers pick a request that already
+    // divides (gpt-oss asks for 18 of 90, GLM-5.3 for 8 of 192), making this a no-op; the L1
     // guard below may narrow it further. Previously divisor-snapping only ran as
     // a side effect of the L1-overflow guard, so non-512 emb slipped through on
     // the TILE x layout — whose smaller footprint fits at 16 and skips the guard.
@@ -567,6 +572,16 @@ tt::tt_metal::ProgramDescriptor UnifiedRoutedExpertFfnProgramFactory::create_des
     per_core_M = fit_M;
     in0_block_w_gu = fit_w;
     chunk_M_tiles = per_core_M * GRID_Y;
+    log_debug(
+        tt::LogOp,
+        "unified_routed_expert_ffn: in0_block_w_gu requested {} -> {} (K_gate_tiles {}), per_core_M {}, CB footprint "
+        "{} of {} B",
+        op.in0_block_w_gu,
+        in0_block_w_gu,
+        K_gate_tiles,
+        per_core_M,
+        cb_footprint_bytes(per_core_M, in0_block_w_gu),
+        l1_budget);
 
     // in0_block_w_gu must divide K_gate_tiles (the gate/up K-loop bound); the
     // divisor-snap after the short_seq picker and the L1 guard above both

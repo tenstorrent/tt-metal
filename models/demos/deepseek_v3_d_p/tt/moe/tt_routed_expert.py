@@ -425,6 +425,7 @@ class TtRoutedExpert(LightweightModule):
         *,
         activation: "ttnn.RoutedExpertActivation",
         hybrid_token_threshold: Optional[int] = None,
+        in0_block_w_gu: Optional[int] = None,
         weights_dram_nd_sharded: Optional[bool] = None,
         cache_dump_mode: Optional[ttnn.DumpTensorMode] = None,
         sp_axis: int = 0,
@@ -459,6 +460,10 @@ class TtRoutedExpert(LightweightModule):
                           MiniMax-M3 / gpt-oss clamped swigluoai activation, or
                           RoutedExpertActivation.SituGlu for Kimi K3's SiTU-GLU. Keyword-only
                           and without a default so the caller must choose explicitly.
+            in0_block_w_gu: Requested gate/up K-block width in tiles for the unified routed-expert op
+                          (and the unified half of the hybrid op). None (default) keeps the op's default
+                          (16). An upper bound: the op snaps it to a divisor of emb/32 and narrows it to
+                          fit L1. Model-dependent (ROUTED_EXPERT_IN0_BLOCK_W_GU in the model config).
             weights_dram_nd_sharded: DRAM placement of the expert weights. None (default) picks
                           the arch default: ND-sharded on Blackhole, interleaved elsewhere. True
                           forces ND-sharded (Blackhole only), False forces interleaved. See
@@ -519,6 +524,10 @@ class TtRoutedExpert(LightweightModule):
                     "expert on the composite."
                 )
         self.hybrid_token_threshold = hybrid_token_threshold
+        if in0_block_w_gu is not None and in0_block_w_gu < 1:
+            raise ValueError(f"in0_block_w_gu must be >= 1, got {in0_block_w_gu}")
+        # Forwarded only when set, so a model without a measured width keeps the op's own default.
+        self._unified_block_kwargs = {} if in0_block_w_gu is None else {"in0_block_w_gu": in0_block_w_gu}
 
         # DRAM placement of the expert weights. The Blackhole default is ND-sharded: both fused
         # routed-expert ops then read a per-core weight slice as ONE NoC transaction per K-row
@@ -783,6 +792,7 @@ class TtRoutedExpert(LightweightModule):
                     up_biases=self.up_biases,
                     down_biases=self.down_biases,
                     min_active_tokens=0 if threshold is None else threshold + 1,
+                    **self._unified_block_kwargs,
                 )
             else:
                 # Nobody allocated for us. Match what the composite hands back: one shared
@@ -947,4 +957,5 @@ class TtRoutedExpert(LightweightModule):
             channel_semaphores=list(combine_semaphores[3:]),
             weight_address_table=self.weight_address_table,
             combine_fwd_vc_pages=combine_fwd_vc_pages,
+            **self._unified_block_kwargs,
         )

@@ -75,7 +75,10 @@ ttnn::Tensor unified_routed_expert_moe(
     const std::optional<ttnn::Tensor>& x_row_index = std::nullopt,
     // ROW_MAJOR bf16 output instead of TILE bf8 (row-major dispatched_buffer only), and one of its rows zeroed.
     bool output_row_major = false,
-    uint32_t zero_output_row = std::numeric_limits<uint32_t>::max());
+    uint32_t zero_output_row = std::numeric_limits<uint32_t>::max(),
+    // Requested gate/up K-block width in tiles: an upper bound the op snaps to a divisor of emb/32 and
+    // narrows to fit L1. Model-dependent; see kDefaultIn0BlockWGu.
+    uint32_t in0_block_w_gu = kDefaultIn0BlockWGu);
 
 }  // namespace ttnn::operations::experimental::deepseek_prefill::unified_routed_expert_ffn
 

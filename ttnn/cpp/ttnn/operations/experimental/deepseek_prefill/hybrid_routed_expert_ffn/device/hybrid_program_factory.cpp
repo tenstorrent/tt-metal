@@ -1400,7 +1400,10 @@ void append_to_descriptor(
     // chunks to divisors of per_core_M_max.
     const uint32_t kMaxChunkMTiles = 4 * GRID_Y;  // per_core_M <= 4 (see above)
     uint32_t chunk_M_tiles = kMaxChunkMTiles;
-    uint32_t in0_block_w_gu = 16;
+    // Model-dependent request (op.in0_block_w_gu, default unified::kDefaultIn0BlockWGu): an upper
+    // bound that is snapped to a divisor of K_gate_tiles and fitted to L1 below.
+    TT_FATAL(op.in0_block_w_gu >= 1, "hybrid_routed_expert_ffn: in0_block_w_gu must be >= 1");
+    uint32_t in0_block_w_gu = op.in0_block_w_gu;
     const auto grid_size = t.x.device()->compute_with_storage_grid_size();
     TT_FATAL(
         grid_size.x >= GRID_X && grid_size.y >= ORIGIN_Y + GRID_Y,
@@ -1674,6 +1677,16 @@ void append_to_descriptor(
     per_core_M = fit_M;
     in0_block_w_gu = fit_w;
     chunk_M_tiles = per_core_M * GRID_Y;
+    log_debug(
+        tt::LogOp,
+        "hybrid_routed_expert_ffn (unified half): in0_block_w_gu requested {} -> {} (K_gate_tiles {}), per_core_M {}, "
+        "CB footprint {} of {} B",
+        op.in0_block_w_gu,
+        in0_block_w_gu,
+        K_gate_tiles,
+        per_core_M,
+        cb_footprint_bytes(per_core_M, in0_block_w_gu),
+        l1_budget);
 
     // in0_block_w_gu must divide K_gate_tiles (the gate/up K-loop bound); the
     // divisor-snap after the short_seq picker and the L1 guard above both
@@ -3101,6 +3114,7 @@ unified::UnifiedRoutedExpertFfnParams unified_attributes(const HybridRoutedExper
         .grid_y = kGridY,
         .origin_y = kOriginY,
         .far_chunk_table = op.overlap_combine,
+        .in0_block_w_gu = op.in0_block_w_gu,
     };
 }
 

@@ -60,7 +60,8 @@ ttnn::Tensor hybrid_routed_expert_moe(
     const std::optional<ttnn::Tensor>& forwarding_buffer,
     const std::vector<GlobalSemaphore>& channel_semaphores,
     const std::optional<ttnn::Tensor>& weight_address_table,
-    const std::optional<uint32_t>& combine_fwd_vc_pages) {
+    const std::optional<uint32_t>& combine_fwd_vc_pages,
+    uint32_t in0_block_w_gu) {
     TT_FATAL(
         gate_projs.size() == up_projs.size() && gate_projs.size() == down_projs.size(),
         "gate/up/down projection lists must have the same length (got {}, {}, {})",
@@ -224,6 +225,7 @@ ttnn::Tensor hybrid_routed_expert_moe(
                                          ? std::optional<ttnn::DeviceComputeKernelConfig>(*compute_kernel_config)
                                          : std::nullopt,
             .hybrid_token_threshold = hybrid_token_threshold,
+            .in0_block_w_gu = in0_block_w_gu,
             .overlap_combine = overlap_combine,
             .combine_axis = combine_axis,
             .combine_num_links = combine_num_links,

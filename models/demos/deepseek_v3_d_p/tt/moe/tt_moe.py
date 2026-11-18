@@ -239,6 +239,7 @@ class TtMoe(LightweightModule):
         routed_expert_weights_dtype=DEFAULT_ROUTED_EXPERT_WEIGHTS_DTYPE,
         routed_expert_activation=ttnn.RoutedExpertActivation.Silu,
         routed_expert_hybrid_token_threshold=None,
+        routed_expert_in0_block_w_gu=None,
         routed_expert_weights_dram_nd_sharded: Optional[bool] = None,
         shared_expert_activations_dtype=ttnn.bfloat16,
         shared_expert_weights_dtype=ttnn.bfloat8_b,
@@ -342,6 +343,8 @@ class TtMoe(LightweightModule):
                 host sync. The crossover is per model and per shape, not a constant -- measure
                 before choosing T: the two ops' per-shape device times are gated by
                 test_moe_fused_swiglu_perf.py and test_single_routed_expert_perf.py.
+            routed_expert_in0_block_w_gu: requested gate/up K-block width (tiles) of the unified
+                routed-expert op. None (default) keeps the op's default; see TtRoutedExpert.
             routed_expert_weights_dram_nd_sharded: DRAM placement of the routed-expert weights.
                 None (default) takes TtRoutedExpert's arch default -- ND-sharded on Blackhole, where
                 both routed-expert ops read a per-core weight slice as one NoC transaction per
@@ -749,6 +752,7 @@ class TtMoe(LightweightModule):
             cache_name_prefix=f"layer_{layer_idx}.routed_expert",
             activation=routed_expert_activation,
             hybrid_token_threshold=routed_expert_hybrid_token_threshold,
+            in0_block_w_gu=routed_expert_in0_block_w_gu,
             weights_dram_nd_sharded=routed_expert_weights_dram_nd_sharded,
             sp_axis=self.sp_axis,
         )

@@ -66,6 +66,8 @@ inline constexpr uint32_t MAX_GLOBAL_EXPERTS = tt::constants::TILE_HW;  // 1024
 // to Python once, as ttnn.RoutedExpertActivation, and a redeclaration here would be a distinct C++
 // type that no nanobind caster knows -- which fails at module import, not at call time.
 using ttnn::operations::experimental::deepseek_prefill::unified_routed_expert_ffn::RoutedExpertActivation;
+// Same for the default gate/up K-block width request: one value for the standalone op and this half.
+using ttnn::operations::experimental::deepseek_prefill::unified_routed_expert_ffn::kDefaultIn0BlockWGu;
 
 // Attributes (the constants known at host time).
 struct UnifiedRoutedExpertFfnParams {
@@ -121,6 +123,9 @@ struct UnifiedRoutedExpertFfnParams {
     // Overlapped with combine: append to the counts table the chunk each expert's combine walks open on,
     // so the chunk loop can start there. Implied by the hybrid op's own overlap flag, which is hashed.
     bool far_chunk_table = false;
+    // Requested gate/up K-block width in tiles (upper bound, snapped to a divisor of K_gate_tiles and
+    // fitted to L1). Model-dependent; sizes the CBs and the K-loop, so it is hashed.
+    uint32_t in0_block_w_gu = unified::kDefaultIn0BlockWGu;
 
     static constexpr auto attribute_names = std::forward_as_tuple(
         "m_tiles",
@@ -132,7 +137,8 @@ struct UnifiedRoutedExpertFfnParams {
         "max_active_tokens",
         "grid_x",
         "grid_y",
-        "origin_y");
+        "origin_y",
+        "in0_block_w_gu");
     auto attribute_values() const {
         return std::forward_as_tuple(
             m_tiles,
@@ -144,7 +150,8 @@ struct UnifiedRoutedExpertFfnParams {
             max_active_tokens,
             grid_x,
             grid_y,
-            origin_y);
+            origin_y,
+            in0_block_w_gu);
     }
 };
 
@@ -317,6 +324,10 @@ struct HybridRoutedExpertFfnParams {
     // so the merged binaries are the same shape either way.
     uint32_t hybrid_token_threshold = 0;
 
+    // The unified half's requested gate/up K-block width in tiles (see unified::kDefaultIn0BlockWGu).
+    // Model-dependent: GLM-5.3 asks for 8, gpt-oss for 18. The fused half does not read it.
+    uint32_t in0_block_w_gu = unified::kDefaultIn0BlockWGu;
+
     // Overlapped with combine in the same program: combine runs on rows 0-1 and takes each expert as soon
     // as this op has written it, and the op returns combine's output. The fields below are combine's and
     // are read only in this mode.
@@ -355,6 +366,7 @@ struct HybridRoutedExpertFfnParams {
         "fuse_bias",
         "compute_kernel_config",
         "hybrid_token_threshold",
+        "in0_block_w_gu",
         "overlap_combine",
         "combine_axis",
         "combine_num_links",
@@ -376,6 +388,7 @@ struct HybridRoutedExpertFfnParams {
             fuse_bias,
             compute_kernel_config,
             hybrid_token_threshold,
+            in0_block_w_gu,
             overlap_combine,
             combine_axis,
             combine_num_links,

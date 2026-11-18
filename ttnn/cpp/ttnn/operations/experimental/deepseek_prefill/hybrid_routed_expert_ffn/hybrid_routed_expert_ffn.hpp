@@ -66,7 +66,9 @@ ttnn::Tensor hybrid_routed_expert_moe(
     const std::optional<ttnn::Tensor>& forwarding_buffer = std::nullopt,
     const std::vector<GlobalSemaphore>& channel_semaphores = {},
     const std::optional<ttnn::Tensor>& weight_address_table = std::nullopt,
-    const std::optional<uint32_t>& combine_fwd_vc_pages = std::nullopt);
+    const std::optional<uint32_t>& combine_fwd_vc_pages = std::nullopt,
+    // The unified half's requested gate/up K-block width in tiles (upper bound; model-dependent).
+    uint32_t in0_block_w_gu = unified_routed_expert_ffn::kDefaultIn0BlockWGu);
 
 // How many `channel_semaphores` the overlap needs on this mesh. Create that many once, before the first
 // overlapped forward, and pass the same ones every call -- combine's channel credits cross chips and

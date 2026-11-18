@@ -158,6 +158,7 @@ def run_single_routed_expert(
     pcc_threshold: float = 0.97,
     min_cap_frac: tuple[float, float] | None = None,
     count_overshoot: int = 0,
+    in0_block_w_gu: int | None = None,
 ):
     """
     Simplest scenario: 1 chip, 1 expert. Shared body for the per-model entrypoints below — they
@@ -196,6 +197,8 @@ def run_single_routed_expert(
     ``count_overshoot`` is added to the token count handed to the device only, so the op sees
     more active rows than its ``allocated_tokens`` capacity. The kernels must clamp it to the
     capacity; the reference and the PCC still cover the ``active_tokens`` real rows.
+
+    ``in0_block_w_gu`` is the requested gate/up K-block width; None keeps the op's default (16).
     """
     if active_tokens is None:
         active_tokens = allocated_tokens
@@ -305,6 +308,7 @@ def run_single_routed_expert(
         # Both placements are swept explicitly: the module's None default would pick ND-sharded on
         # Blackhole and leave the interleaved path uncovered.
         weights_dram_nd_sharded=weights_dram_sharded,
+        in0_block_w_gu=in0_block_w_gu,
     )
 
     # Run TTNN forward
@@ -425,6 +429,28 @@ def _isl_params(active_sweep, only_models=None):
     return params
 
 
+def _block_width_params(active_sweep):
+    """(allocated_tokens, active_tokens, emb_dim, hidden_dim, in0_block_w_gu) for every model whose config
+    requests a non-default gate/up K-block width (ROUTED_EXPERT_IN0_BLOCK_W_GU, #56654)."""
+    params = []
+    for name, config, _extended in SINGLE_EXPERT_MODELS:
+        width = getattr(config, "ROUTED_EXPERT_IN0_BLOCK_W_GU", None)
+        if width is None:
+            continue
+        for active in active_sweep:
+            params.append(
+                pytest.param(
+                    _ISL_ALLOCATED_TOKENS,
+                    active,
+                    config.EMB_SIZE,
+                    config.MOE_INTERMEDIATE_SIZE,
+                    width,
+                    id=f"{name}-w{width}-isl-{active}",
+                )
+            )
+    return params
+
+
 @pytest.mark.parametrize("allocated_tokens, active_tokens, emb_dim, hidden_dim", _isl_params(_ISL_FUNCTIONAL_SWEEP))
 @pytest.mark.parametrize("x_row_major", [True], ids=["x_rm"])
 def test_single_routed_expert_functional(
@@ -442,6 +468,31 @@ def test_single_routed_expert_functional(
         hidden_dim,
         active_tokens=active_tokens,
         x_row_major=x_row_major,
+    )
+
+
+@pytest.mark.parametrize(
+    "allocated_tokens, active_tokens, emb_dim, hidden_dim, in0_block_w_gu", _block_width_params(_ISL_FUNCTIONAL_SWEEP)
+)
+@pytest.mark.parametrize("x_row_major", [True, False], ids=["x_rm", "x_tile"])
+def test_single_routed_expert_model_block_width(
+    device,
+    allocated_tokens: int,
+    active_tokens: int,
+    emb_dim: int,
+    hidden_dim: int,
+    in0_block_w_gu: int,
+    x_row_major: bool,
+):
+    """The model-dependent gate/up K-block width (GLM-5.3: 8, gpt-oss: 18) builds, fits L1 and stays accurate."""
+    run_single_routed_expert(
+        device,
+        allocated_tokens,
+        emb_dim,
+        hidden_dim,
+        active_tokens=active_tokens,
+        x_row_major=x_row_major,
+        in0_block_w_gu=in0_block_w_gu,
     )
 
 
