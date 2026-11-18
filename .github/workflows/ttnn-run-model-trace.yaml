@@ -246,6 +246,7 @@ jobs:
       run:
         shell: bash
         working-directory: /work
+    timeout-minutes: ${{ fromJSON(inputs.timeout-minutes) }}
     runs-on: >-
       ${{
         (inputs.runner-label == 'topology-6u' || inputs.runner-label == 'BH-LoudBox') && fromJSON(format('["{0}", "in-service", "bare-metal"]', inputs.runner-label))
