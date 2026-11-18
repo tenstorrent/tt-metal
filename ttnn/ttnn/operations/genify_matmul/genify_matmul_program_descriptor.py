@@ -401,6 +401,16 @@ BS_SPLIT_B_DEPTH = 2
 # split vs one reader): aspp_proj 87 KB 16.8 vs 18.6, res4_reduce 70 KB 18.4 vs 18.8, res4_reduce5 35 KB 12.7 vs
 # 12.2, res4_expand 8.7 KB 13.9 vs 13.1. 0 = split every in-place R3 walk.
 BS_SPLIT_MIN_A_ROUND_BYTES = 64 * 1024
+# Refinement 18, R3a: a single-block walk whose cb_act_tiles can hold all num_k_blocks K-blocks (L1 budget) runs
+# its row's A exchange in one shot -- every core multicasts its shard into its own slot on every row peer at
+# once (handshake-free, counter signal; GM_BS_A_ONE_SHOT) -- instead of num_k_blocks handshaked rounds in turn.
+# The matmul then starts only after the whole exchange, so it pays when the walk's K-loop (its tile-K
+# products at tile_k_cycles) is at most BS_A_ONE_SHOT_MAX_KWALK_CYCLES. False: the rounds (Refinement 5).
+# Parked False: measured slower on every PDL R3 case, worst on the one it targets -- ASPP pool (8 cores x 16 KB
+# shards) 9.3 -> 15.9 us, the concurrent exchange alone 9.4 us: eight multicasts over the same 1 x 8 row serialize
+# on its links (no faster than the rounds) and the matmul / B reads lose their overlap with them.
+BS_A_ONE_SHOT = False
+BS_A_ONE_SHOT_MAX_KWALK_CYCLES = 1 << 30
 # own_kb sentinel for every regime without a resident own K-slice (R1 / R1a / R4).
 NO_OWN_KB = 0xFFFFFFFF
 # Perf tooling (Refinement 15, /perf-measure ablations): defines appended to every R1-family kernel. Payload stubs
@@ -2823,6 +2833,24 @@ def create_block_sharded_program_descriptor(
                 depth_weight = d
                 break
 
+    # R3a one-shot A exchange: the walk's only block, every K-block slot resident at once (BS_A_ONE_SHOT).
+    a_one_shot = False
+    if BS_A_ONE_SHOT and row_mcast and walk_k_blocks == blk.num_k_blocks:
+        kwalk = blk.block_m_tiles * blk.block_n_tiles * geom.tensor_k_tiles * tile_k_cycles(geom, blk.sb_h, blk.sb_w)
+        f = _footprint(
+            geom,
+            blk.block_m_tiles,
+            blk.block_n_tiles,
+            blk.block_k_tiles,
+            partials=blk.use_partials,
+            out_in_place=in_place,
+            depth_weight=depth_weight,
+            act_cb=True,
+            depth_act=blk.num_k_blocks,
+        )
+        a_one_shot = kwalk <= BS_A_ONE_SHOT_MAX_KWALK_CYCLES and f + row_tail * geom.b_tile_bytes <= budget
+    depth_act = blk.num_k_blocks if a_one_shot else DEPTH_ACT
+
     # ---- CBs ----
     # The own K-slice: backed on A's resident shard (zero-copy).
     act_shard_cb = ttnn.cb_descriptor_from_sharded_tensor(CB_ACT_SHARD, a)
@@ -2840,7 +2868,7 @@ def create_block_sharded_program_descriptor(
     ]
     if not topo.act_resident:
         cbs.append(
-            _cb(CB_ACT_TILES, a.dtype, geom.a_tile_bytes, DEPTH_ACT * blk.block_m_tiles * blk.block_k_tiles, grid)
+            _cb(CB_ACT_TILES, a.dtype, geom.a_tile_bytes, depth_act * blk.block_m_tiles * blk.block_k_tiles, grid)
         )
     if in_place:
         # Output packed in place into the core's own L1 shard (block_n == the shard's B columns).
@@ -2933,6 +2961,8 @@ def create_block_sharded_program_descriptor(
             k.defines = list(k.defines) + [("GM_BS_ROW_TAIL", "1")]
         if role:
             k.defines = list(k.defines) + [("GM_BS_ROLE", str(role))]
+        if a_one_shot and role != 2:
+            k.defines = list(k.defines) + [("GM_BS_A_ONE_SHOT", "1")]
         return k
 
     if split_roles:
@@ -2965,9 +2995,14 @@ def create_block_sharded_program_descriptor(
     if row_mcast:
         # One channel group per grid row (RowMajor groups of `cols` cores); the senders rotate through
         # the row in column (= K shard) order, so round kb's sender is the core owning K shard kb.
+        # (One-shot exchange: handshake-free on a counter, every core sending once, all at once.)
         mc = ttnn.Mcast(
             device,
-            ttnn.McastConfig(handshake=True),
+            (
+                ttnn.McastConfig(handshake=False, data_ready=ttnn.McastDataReady.Counter)
+                if a_one_shot
+                else ttnn.McastConfig(handshake=True)
+            ),
             grid,
             topo.cols,
             ttnn.McastRotatingSenderConfig(),

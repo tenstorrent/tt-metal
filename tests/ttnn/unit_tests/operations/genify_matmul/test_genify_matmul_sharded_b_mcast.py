@@ -241,3 +241,22 @@ def test_bs_split_roles(device, monkeypatch, case):
         outs.append(seen["out"])
     assert {"1", "2"} in roles  # the split descriptor carries both halves
     assert torch.equal(outs[0], outs[1]), f"max diff {(outs[0].float() - outs[1].float()).abs().max()}"
+
+
+@pytest.mark.parametrize(
+    "case",
+    [
+        (32, 2048, 256, 8, 1, [32, 256], "bias_relu", _BF16),  # PDL ASPP pool (one grid row, M = 1)
+        (2048, 1024, 512, 8, 10, [224, 128], "bias_relu", _BFP8),  # PDL res5 reduce (B multicast + split roles)
+    ],
+    ids=["aspp_pool", "res5_reduce"],
+)
+def test_bs_a_one_shot_parked(device, monkeypatch, case):
+    """Refinement 18: the parked one-shot A exchange (BS_A_ONE_SHOT, measured slower) stays a correct live knob:
+    bit-identical to the handshaked rounds."""
+    m, k, n, gx, gy, shard, epilogue, dtype = case
+    outs = []
+    for on in (False, True):
+        monkeypatch.setattr(pd, "BS_A_ONE_SHOT", on)
+        outs.append(_run_both(device, monkeypatch, m, k, n, _rect(gx, gy), shard, _BS, epilogue, dtype=dtype)["out"])
+    assert torch.equal(outs[0], outs[1]), f"max diff {(outs[0].float() - outs[1].float()).abs().max()}"

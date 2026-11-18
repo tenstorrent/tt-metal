@@ -177,6 +177,13 @@
 #ifndef GM_BS_ROLE
 #define GM_BS_ROLE 0
 #endif
+// R3a one-shot A exchange (Refinement 18, host BS_A_ONE_SHOT): a single-block walk whose cb_act_tiles holds every
+// K-block (one slot per grid column, all fresh) exchanges the row's shards at once -- every core multicasts its
+// shard into its own column's slot on every row peer up front (handshake-free, counter signal) and waits for the
+// count to reach the row's column count -- instead of num_k_blocks handshaked rounds in turn.
+#ifndef GM_BS_A_ONE_SHOT
+#define GM_BS_A_ONE_SHOT 0
+#endif
 
 namespace {
 
@@ -494,6 +501,8 @@ void kernel_main() {
     static_assert(bs_role <= 2 && (bs_role == 0 || block_sharded));
     static_assert(bs_does_b || !bs_b_mcast);
     static_assert(bs_does_a || !bs_mcast);
+    constexpr bool a_one_shot = GM_BS_A_ONE_SHOT != 0;
+    static_assert(!a_one_shot || bs_mcast);
     constexpr bool row_tail = GM_BS_ROW_TAIL != 0;
     static_assert(!row_tail || (bs_b_mcast && has_row && b_chunks == 1));
     [[maybe_unused]] constexpr uint32_t row_bytes = block_n_tiles * row_tile_bytes;
@@ -781,7 +790,19 @@ void kernel_main() {
                                 // The block rows of this core's own shard are resident: hand them over.
                                 cb_reserve_back(cb_act_shard, act_block_tiles);
                             }
-                            if constexpr (bs_mcast) {
+                            if constexpr (bs_mcast && a_one_shot) {
+                                if (kb == 0) {
+                                    // Refinement 18: the whole exchange up front (the walk's only block). This
+                                    // core's shard (the block) lands in slot own_kb of every row peer.
+                                    MaybeDeviceZoneScope("rd_a_exchange");
+                                    cb_reserve_back(cb_act_tiles, num_k_blocks * act_block_tiles);
+                                    a_sender->send(
+                                        get_write_ptr(cb_act_shard),
+                                        get_write_ptr(cb_act_tiles) + own_kb * act_block_bytes,
+                                        act_block_bytes);
+                                    a_receiver->receive(num_k_blocks - 1);  // count >= num_k_blocks: all landed
+                                }
+                            } else if constexpr (bs_mcast) {
                                 // Every core reserves round kb's slot (the sender too: lockstep pointers).
                                 cb_reserve_back(cb_act_tiles, act_block_tiles);
                                 if (own) {
