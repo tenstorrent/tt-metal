@@ -172,7 +172,7 @@ def save(
     if os.path.exists(ckpt_dir) and not overwrite:
         raise CheckpointError(f"{ckpt_dir} already exists; pass overwrite=True to replace it")
     os.makedirs(os.path.dirname(ckpt_dir), exist_ok=True)
-    staging = begin_staging(ckpt_dir, secrets.randbits(31), shared=False)
+    staging = begin_staging(ckpt_dir, secrets.randbits(31))
     try:
         t1 = time.perf_counter()
         plan: SavePlan = create_save_plan(
