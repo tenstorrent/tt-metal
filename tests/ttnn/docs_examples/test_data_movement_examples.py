@@ -133,6 +133,27 @@ def test_tilize(device):
     logger.info(f"Tilized Tensor Layout: {tilized_tensor.layout}")  # Layout.TILE
 
 
+def test_interleaved_to_sharded_partial(device):
+    # Create an interleaved tensor of 128 rows, and a tensor to write its slices back into
+    input_tensor = ttnn.rand((1, 1, 128, 64), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    output_tensor = ttnn.zeros((1, 1, 128, 64), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+
+    for slice_index in range(2):
+        # Height-shard slice slice_index of 2, 64 of the 128 rows, in L1 over a 2x1 core grid, 32 rows per core
+        sharded_slice = ttnn.interleaved_to_sharded_partial(
+            input_tensor,
+            ttnn.CoreCoord(2, 1),
+            [32, 64],
+            2,
+            slice_index,
+            ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+            ttnn.ShardOrientation.ROW_MAJOR,
+        )
+        # Write the slice back into the same rows of output_tensor
+        ttnn.sharded_to_interleaved_partial(sharded_slice, output_tensor, 2, slice_index)
+    logger.info(f"Sharded Slice Shape: {sharded_slice.shape}")  # Shape([1, 1, 64, 64])
+
+
 def test_tilize_with_val_padding(device):
     # Create a tensor to tilize with value padding
     input_tensor = ttnn.rand((1, 1, 64, 32), dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
