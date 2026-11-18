@@ -73,11 +73,15 @@ private:
 
 // The KMD writes `value` to the DRISC's L1 at `addr` when this object is destroyed, or when the process dies without
 // destroying it (tt::umd::NocCleanupWrite, whose fork caveat applies). The process's other fds may close first, so host
-// memory they pinned can be gone before the core sees the write. Not copyable or movable.
+// memory they pinned can be gone before the core sees the write; memory pinned through pin() is not. Not copyable or
+// movable.
 class ExitWrite {
 public:
     // Throws whatever tt::umd::NocCleanupWrite throws.
     ExitWrite(const DriscCore& core, uint32_t addr, uint32_t value);
+
+    // Pins host memory on this write's fd, so the KMD unpins it only after sending the write. Returns its IOVA.
+    uint64_t pin(void* addr, size_t size) { return cleanup_.pin(addr, size); }
 
 private:
     tt::umd::NocCleanupWrite cleanup_;

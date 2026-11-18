@@ -6,10 +6,12 @@
 
 #include <algorithm>
 #include <atomic>
+#include <cerrno>
 #include <cstdlib>
 #include <cstring>
 #include <mutex>
 #include <span>
+#include <sys/mman.h>
 #include <thread>
 #include <unordered_map>
 
@@ -237,6 +239,28 @@ abi::NocEndpoint PeerWindows::endpoint(ChipId peer, const tt::umd::CoreCoord& co
     return {dma_addr + (addr - base), pcie_noc_xy_addr_};
 }
 
+void UnmapPages::operator()(void* va) const noexcept { ::munmap(va, size); }
+
+namespace {
+
+std::unique_ptr<void, UnmapPages> map_host_pages(size_t size) {
+    void* va = ::mmap(nullptr, size, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    TT_FATAL(va != MAP_FAILED, "drisc_service: mapping {} bytes of host memory failed: {}", size, std::strerror(errno));
+    return std::unique_ptr<void, UnmapPages>(va, UnmapPages{size});
+}
+
+uint64_t pin_host_pages(ExitWrite& exit_write, void* va, size_t size) {
+    const uint64_t iova = exit_write.pin(va, size);
+    TT_FATAL(
+        iova + size <= pcie_direct_window_end,
+        "drisc_service: host pages got IOVA {:#x}, past the {:#x} the PCIe tile passes through",
+        iova,
+        pcie_direct_window_end);
+    return iova;
+}
+
+}  // namespace
+
 std::unique_ptr<tt::umd::SysmemBuffer> allocate_host_buffer(
     tt::umd::Cluster& cluster, ChipId chip, size_t size, uint64_t& device_addr) {
     auto* sysmem = cluster.get_chip(chip)->get_sysmem_manager();
@@ -335,10 +359,10 @@ metal_SocDescriptor soc_descriptor(tt::umd::Cluster& cluster, ChipId chip, const
 SeatClient::SeatClient(
     tt::umd::Cluster& cluster, const Seat& seat, const ll_api::ElfFile& image, IssuePath issue_path) :
     seat_(seat), core_(cluster, seat.chip, seat.translated), issue_path_(issue_path) {
-    control_page_buffer_ = allocate_host_buffer(cluster, seat.chip, abi::CONTROL_PAGE_SIZE, control_page_device_addr_);
-    batch_buffer_ = allocate_host_buffer(cluster, seat.chip, abi::BATCH_REGION_SIZE, batch_device_addr_);
-    control_page_ = static_cast<abi::ControlPage*>(control_page_buffer_->get_va());
-    batch_slots_ = static_cast<abi::KernelCommand*>(batch_buffer_->get_va());
+    control_page_memory_ = map_host_pages(abi::CONTROL_PAGE_SIZE);
+    batch_memory_ = map_host_pages(abi::BATCH_REGION_SIZE);
+    control_page_ = static_cast<abi::ControlPage*>(control_page_memory_.get());
+    batch_slots_ = static_cast<abi::KernelCommand*>(batch_memory_.get());
     pcie_noc_xy_addr_ = pcie_noc_xy(cluster, seat.chip);
 
     SeatGate gate(seat.id, gate_timeout);
@@ -473,6 +497,8 @@ void SeatClient::request_attach(uint32_t slot) {
     slot_ = slot;
     exit_write_.emplace(
         core_, abi::L1CommandBlockLayout::exit_mailbox_addr(slot), abi::slot_word(abi::SLOT_DETACH, gen_));
+    control_page_device_addr_ = pin_host_pages(*exit_write_, control_page_memory_.get(), abi::CONTROL_PAGE_SIZE);
+    batch_device_addr_ = pin_host_pages(*exit_write_, batch_memory_.get(), abi::BATCH_REGION_SIZE);
     const abi::NocEndpoint control_page{control_page_device_addr_, pcie_noc_xy_addr_};
     core_.write_l1(abi::L1CommandBlockLayout::control_page_addr(slot), &control_page, sizeof(control_page));
     core_.write_l1_u32(abi::L1CommandBlockLayout::doorbell_addr(slot), 0);
@@ -509,8 +535,8 @@ SeatClient::~SeatClient() {
     }
     if (!freed) {
         // The kernel may still write into them.
-        (void)control_page_buffer_.release();
-        (void)batch_buffer_.release();
+        (void)control_page_memory_.release();
+        (void)batch_memory_.release();
         if (peers_ != nullptr) {
             peers_->leak();
         }
