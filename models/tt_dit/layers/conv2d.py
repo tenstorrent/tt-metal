@@ -558,12 +558,15 @@ class Conv2d(Module):
         # The prepared layout depends on the shard scheme and the slice config. The input size reaches
         # it through conv2d's per-size pick of the scheme, through kernel-stride folding (stride equal
         # to the kernel, decided by whether the size divides by the stride) and, for channel counts
-        # that are not whole tiles, through the channel alignment the per-size DRAM slicing sets. So a
-        # fixed scheme makes the key size-free only without those two. The input memory config,
-        # layout and dtype also reach prepare_conv_weights but are not in the key: this assumes each
-        # Conv2d instance always gets inputs with the same memory config, layout and dtype.
+        # that are not whole tiles, through the channel alignment the per-size DRAM slicing sets. A
+        # sharded input sets the scheme itself, from a shard spec that follows the size. So a fixed
+        # scheme makes the key size-free only for an interleaved input and without those two. The
+        # input layout and dtype also reach prepare_conv_weights but are not in the key: this assumes
+        # each Conv2d instance always gets inputs with the same memory config, layout and dtype.
         may_fold = self.stride == self.kernel_size and self.stride != (1, 1)
-        size_free = self.shard_layout is not None and not may_fold and in_channels % ttnn.TILE_SIZE == 0
+        size_free = (
+            self.shard_layout is not None and not x.is_sharded() and not may_fold and in_channels % ttnn.TILE_SIZE == 0
+        )
         prepared_key = (num_slices,) if size_free else (b, h, w, num_slices)
         prepared_weight, prepared_bias = self._prepared.get(prepared_key, (None, None))
         if prepared_weight is None:
