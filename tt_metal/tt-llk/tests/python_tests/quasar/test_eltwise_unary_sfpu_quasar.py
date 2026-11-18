@@ -304,6 +304,11 @@ def prepare_inputs_for_operation(
         max_val = 10.0
         src_A = min_val + src_A.to(torch.float32) * (max_val - min_val)
         src_A = src_A.to(torch_format)
+    elif mathop == MathOperation.Hardmish:
+        # for_op spans the piecewise region [-2, 0] and both linear sides.
+        spec = for_op(mathop, input_format).spec_A
+        src_A = spec.low + src_A.to(torch.float32) * (spec.high - spec.low)
+        src_A = src_A.to(torch_format)
     elif mathop == MathOperation.Gelu:
         # Scale to range [-10, 10] for gelu - balanced negative/near-zero/positive coverage
         min_val = -10.0
@@ -1068,6 +1073,8 @@ OP_CONFIGS = [
     OpConfig(MathOperation.Tanh, TENSOR_DIMS, DEST_SYNC_MODES, uniform_spec=True),
     OpConfig(MathOperation.Sigmoid, TENSOR_DIMS, DEST_SYNC_MODES, uniform_spec=True),
     OpConfig(MathOperation.Silu, TENSOR_DIMS, DEST_SYNC_MODES, uniform_spec=True),
+    # Reaches hardmish through SFPU_UNARY_INIT(hardmish), the Compute API's hardmish_tile_init.
+    OpConfig(MathOperation.Hardmish, TENSOR_DIMS, DEST_SYNC_MODES, uniform_spec=True),
     OpConfig(MathOperation.Clamp, TENSOR_DIMS, DEST_SYNC_MODES, uniform_spec=True),
     OpConfig(MathOperation.Neg, TENSOR_DIMS, DEST_SYNC_MODES, uniform_spec=True),
     # p = 0 only (golden x * 2.0); seeding is test_dropout_reseed_quasar, p = 1 the fuser YAMLs.
@@ -1447,6 +1454,13 @@ def run_eltwise_unary_sfpu_quasar(
         res_tensor,
         formats.output_format,
     ), "Assert against golden failed"
+
+    if mathop == MathOperation.Hardmish:
+        # The suite tolerance passes a Float16_b result that was not rounded to nearest-even on the
+        # store; the kernel matches the golden bit for bit.
+        assert torch.equal(
+            res_tensor, golden_tensor
+        ), "hardmish is not bit-exact against the golden"
 
     if mathop == MathOperation.Tan:
         # The suite tolerance passes a tangent whose polynomial coefficients are bound in the
