@@ -7,6 +7,7 @@
 #include <stdlib.h>
 #include <unistd.h>
 
+#include <cerrno>
 #include <filesystem>
 #include <string>
 #include <system_error>
@@ -28,7 +29,9 @@ inline std::string sfpi_gxx_path(const std::string& root_dir) {
 }
 
 // True when the sfpi g++ exists and exits 0 on `flags`. Runs through the JIT build's shell-free launcher
-// (posix_spawn with a fixed argv) in a scratch directory that is removed afterwards.
+// (posix_spawn with a fixed argv) in a scratch directory that is removed afterwards. Throws when the
+// scratch directory cannot be made, so a broken TMPDIR fails the caller instead of reading as a toolchain
+// that rejects the flags (callers skip on false).
 inline bool sfpi_gxx_accepts(const std::string& root_dir, const std::vector<std::string>& flags) {
     const std::string gxx = sfpi_gxx_path(root_dir);
     if (gxx.empty()) {
@@ -36,7 +39,7 @@ inline bool sfpi_gxx_accepts(const std::string& root_dir, const std::vector<std:
     }
     auto pattern = (std::filesystem::temp_directory_path() / "tt_metal_sfpi_probe_XXXXXX").string();
     if (mkdtemp(pattern.data()) == nullptr) {
-        return false;
+        throw std::system_error(errno, std::generic_category(), "mkdtemp " + pattern);
     }
     const std::filesystem::path scratch = pattern;
     std::vector<std::string> args = {gxx};
