@@ -132,6 +132,14 @@ def test_kimi_k3_1_manifest_deploys_k31_as_k3_is_deployed(monkeypatch):
 
     # The context must be whole 2560-token chunks.
     assert int(k31["PREFILL_MAX_SEQ_LEN"]) == MAX_SEQ_LEN and MAX_SEQ_LEN % CHUNK_4X4 == 0
-    # PROVISIONAL: the 8x4 PP4 capacity (measured, see k31_stage.PP4_MAX_USERS), held until the 4x4 count is
-    # measured at this context on 2x[4,4] and replaces it here and in the manifest.
-    assert int(k31["PREFILL_NUM_USERS"]) == PP4_MAX_USERS
+    # The slots allocated are the measured maximum, as for the 8x4 stage (PP4_MAX_USERS, which the *_8x4 configs keep).
+    assert int(k31["PREFILL_NUM_USERS"]) == STAGE0_4X4_MAX_USERS > PP4_MAX_USERS
+
+
+# The most users the first 4x4 stage (layers 0-11, SP=4 on axis 1) fits at MAX_SEQ_LEN, measured on bh-glx-110-c10u20
+# through run_multirank_pcc.sh kimi_k3_1 sc1 (2x[4,4], rank 0 = stage 0 exactly), pass at N and fail at N+1 as K3's
+# 4x4 count was (#61481): 96 serves one full 1,049,600-token request; 97 fails in compile, the DSA indexer's score
+# buffer (42.6 MB per DRAM bank) finding no contiguous block (largest 38.4 MB of 63.3 MB free): fragmentation, not
+# total DRAM. 98 fails there too, 100 at the MoE dispatch buffer, 104 at the KDA slabs, 112 and up at the kvpe cache.
+# K3 allocates two slots under its limit (127 of 129); K3.1 allocates its measured maximum, at 4x4 and 8x4.
+STAGE0_4X4_MAX_USERS = 96
