@@ -9,7 +9,9 @@ from __future__ import annotations
 
 import multiprocessing
 import os
+import pickle
 import re
+import socket
 import threading
 
 import pytest
@@ -121,6 +123,43 @@ def test_serve_warms_every_group_before_ready_and_closes_the_mesh(monkeypatch, g
     assert calls[-groups - 1 :] == [("close", m) for m in meshes] + [("close_mesh", mesh)]
 
 
+def _explode():
+    raise ValueError("cannot rebuild")
+
+
+class Unpicklable:
+    def __reduce__(self):
+        return (_explode, ())
+
+
+@pytest.mark.filterwarnings(
+    "ignore::pytest.PytestUnhandledThreadExceptionWarning"
+)  # the loop's error, logged by the thread
+def test_a_request_loop_that_dies_closes_its_pipe(monkeypatch, expect_error):
+    import ttnn
+
+    class FakePipeline:
+        def generate(self, request):
+            return request
+
+        def close(self):
+            pass
+
+    monkeypatch.setattr(dp, "open_group_mesh", lambda n: "mesh")
+    monkeypatch.setattr(pl.Flux3KleinPipeline, "create", classmethod(lambda cls, m, **kw: FakePipeline()))
+    monkeypatch.setattr(ttnn, "close_mesh_device", lambda m: None)
+    parent, child = multiprocessing.Pipe()
+    thread = threading.Thread(target=dp.serve, args=([child], {}, False), daemon=True)
+    thread.start()
+    assert parent.recv() == ("ready", None)
+    parent.send(Unpicklable())  # pickles here, fails to unpickle in the request loop
+    assert parent.poll(5)
+    with expect_error(EOFError, "^$"):
+        parent.recv()
+    thread.join(5)
+    assert not thread.is_alive()
+
+
 class ThreadProcess:
     """A process as a thread; keeps the environment it was started with."""
 
@@ -140,11 +179,18 @@ class ThreadProcess:
 
 
 class ThreadEnd:
-    """A child pipe end the parent's close() leaves open (a thread shares it, a process has its own copy); die() closes it
-    as a crashed process would."""
+    """A child pipe end the parent's close() leaves open (a thread shares it, a process has its own copy); die() shuts it
+    down as a crashed process's exit would (a plain close leaves the socket open under a recv blocked in another thread).
+    """
 
     def __init__(self, conn):
-        self.send, self.recv, self.die = conn.send, conn.recv, conn.close
+        self._conn = conn
+        self.send, self.recv = conn.send, conn.recv
+
+    def die(self):
+        with socket.socket(fileno=os.dup(self._conn.fileno())) as end:
+            end.shutdown(socket.SHUT_RDWR)
+        self._conn.close()
 
     def close(self):
         pass
@@ -170,13 +216,14 @@ def fake_serve(conns, pipeline_kwargs, warmup):
         try:
             while (request := conn.recv()) is not None:
                 if request in ("die", "die_process"):
-                    for c in conns if request == "die_process" else [conn]:
+                    for c in [c for c in conns if c is not conn] if request == "die_process" else []:
                         c.die()
+                    conn.die()  # last, so the parent sees this EOF only after the siblings are closed
                     return
                 conn.send(
                     ("error", "ValueError: bad size") if request == "bad" else ("ok", (request, f"{id(conns)}/{group}"))
                 )
-        except (OSError, TypeError):  # a sibling thread closed this end ("die_process"); recv then reads a None handle
+        except (EOFError, OSError, TypeError):  # a sibling thread shut this end down ("die_process")
             pass
 
     threads = [threading.Thread(target=answer, args=(conn, i), daemon=True) for i, conn in enumerate(conns)]
@@ -248,18 +295,23 @@ def test_a_dead_group_fails_its_request_and_is_dropped(groups, expect_error):
     assert len({group for _, group in results}) == 2
 
 
-def test_a_dead_two_group_process_drops_both_groups_and_the_other_process_serves(halves, expect_error):
+def test_a_dead_two_group_process_fails_only_the_request_it_held(halves, expect_error):
     with expect_error(RuntimeError, "died"):
         halves.submit("die_process").result(timeout=10)
-    results = []
-    for i in range(8):
-        try:
-            results.append(halves.submit(f"r{i}").result(timeout=10))
-        except RuntimeError as e:
-            assert "died" in str(e)
+    results = [
+        halves.submit(f"r{i}").result(timeout=10) for i in range(8)
+    ]  # the dead idle sibling's turn goes elsewhere
+    assert [r for r, _ in results] == [f"r{i}" for i in range(8)]
     assert halves.alive_groups == 2
     assert len({group for _, group in results}) == 2
-    assert [r for r, _ in halves.generate(["a", "b", "c", "d"])] == ["a", "b", "c", "d"]
+
+
+def test_a_request_that_does_not_pickle_keeps_its_group(groups, expect_error):
+    with expect_error((AttributeError, pickle.PicklingError), "pickle"):
+        groups.submit(lambda: None).result(timeout=10)
+    assert groups.alive_groups == 3
+    results = groups.generate([f"r{i}" for i in range(9)])
+    assert len({group for _, group in results}) == 3
 
 
 def test_requests_fail_instead_of_hanging_once_every_group_is_dead(groups, expect_error):

@@ -3,8 +3,9 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """FLUX 3 Klein data parallel across processes: one Flux3KleinPipeline per (4, 2) group of a Blackhole Galaxy. Each
-process sees only its chips (TT_VISIBLE_DEVICES), opens them as one mesh (TT_MESH_GRAPH_DESC_PATH) and serves one group,
-or two groups in two threads, so the groups' host dispatch does not share one Python GIL."""
+process sees only its chips (TT_VISIBLE_DEVICES), opens them as one mesh (TT_MESH_GRAPH_DESC_PATH) and serves one group
+(GROUP_PCIE_IDS, the default) or two groups in two threads (HALF_PCIE_IDS), so the groups' host dispatch does not share one
+Python GIL."""
 
 from __future__ import annotations
 
@@ -68,12 +69,15 @@ def _send_error(conns, e: Exception) -> None:
 
 
 def _answer(conn, pipeline) -> None:
-    conn.send(("ready", None))
-    while (request := conn.recv()) is not None:
-        try:
-            conn.send(("ok", pipeline.generate(request)))
-        except Exception as e:  # noqa: BLE001
-            conn.send(("error", f"{type(e).__name__}: {e}"))
+    try:
+        conn.send(("ready", None))
+        while (request := conn.recv()) is not None:
+            try:
+                conn.send(("ok", pipeline.generate(request)))
+            except Exception as e:  # noqa: BLE001
+                conn.send(("error", f"{type(e).__name__}: {e}"))
+    finally:
+        conn.close()  # a loop that dies (a request that does not unpickle) fails the parent's request instead of hanging it
 
 
 def serve(conns: Sequence, pipeline_kwargs: Mapping, warmup: bool | Sequence[int]) -> None:
@@ -191,9 +195,12 @@ class Flux3KleinProcessGroups:
             raise RuntimeError("no group process is alive")
         try:
             conn.send(request)
-        except OSError as e:
-            self._drop(conn)
-            raise RuntimeError(f"group process {self._names[conn]} died ({type(e).__name__})") from e
+        except OSError:
+            self._drop(conn)  # nothing was delivered: another group takes the request
+            return self._run(request)
+        except BaseException:
+            self._free.put(conn)  # the request did not pickle; nothing was written, the group is intact
+            raise
         try:
             result = self._receive(conn)
         except RuntimeError as e:
