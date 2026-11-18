@@ -345,7 +345,8 @@ template <
     bool row_end_fold = false,
     bool half_end_fold = false,
     std::uint32_t key_ct = 0,
-    std::uint32_t key_rt = 0>
+    std::uint32_t key_rt = 0,
+    bool inline_rows = false>
 ALWI void matmul_block_math_dynamic_throttle(
     std::uint32_t in0_cb_id,
     std::uint32_t in1_cb_id,
@@ -380,8 +381,14 @@ ALWI void matmul_block_math_dynamic_throttle(
                     matmul_runtime_reuse_a = held_a != 0;
                 }
             }
-            MATH((llk_math_matmul_init_switch<matmul_elided_fidelity<in0_format, in1_format, out_format>(), MM_THROTTLE, row_mop, tile_mop, in1_order, reuse_dir, row_end_fold, half_end_fold, key_ct, key_rt>(
-                in0_cb_id, in1_cb_id, transpose, ct_dim, rt_dim)));
+            if constexpr (inline_rows) {
+                // the run-time row form's block init again, so the kernel holds one row init
+                MATH((llk_math_matmul_init<matmul_elided_fidelity<in0_format, in1_format, out_format>(), MM_THROTTLE, row_mop, tile_mop, in1_order, reuse_dir, row_end_fold, half_end_fold, key_ct, key_rt, true>(
+                    in0_cb_id, in1_cb_id, transpose, ct_dim, rt_dim)));
+            } else {
+                MATH((llk_math_matmul_init_switch<matmul_elided_fidelity<in0_format, in1_format, out_format>(), MM_THROTTLE, row_mop, tile_mop, in1_order, reuse_dir, row_end_fold, half_end_fold, key_ct, key_rt>(
+                    in0_cb_id, in1_cb_id, transpose, ct_dim, rt_dim)));
+            }
             throttled_mop_status = 0;
         }
         MATH((llk_math_matmul<matmul_elided_fidelity<in0_format, in1_format, out_format>(), MM_THROTTLE, /*num_faces=*/4, row_mop, tile_mop, reuse_dir, row_end_fold>(idst, ct_dim, rt_dim, held_a)));
@@ -520,7 +527,8 @@ ALWI void matmul_block_init_llk(
                     row_end_fold,
                     llk_math_matmul_half_end_fold<false, matmul_elided_fidelity<in0_format, in1_format, out_format>(), kt_key, out_format, in0_format, in1_format, block_rt, block_ct, block_kt>(),
                     block_ct,
-                    block_rt>(in0_cb_id, in1_cb_id, transpose, ct_dim, rt_dim);
+                    block_rt,
+                    true>(in0_cb_id, in1_cb_id, transpose, ct_dim, rt_dim);
                 return;
             }
         }
@@ -625,7 +633,8 @@ ALWI void matmul_block_llk(
                     row_end_fold,
                     llk_math_matmul_half_end_fold<false, matmul_elided_fidelity<in0_format, in1_format, out_format>(), kt_key, out_format, in0_format, in1_format, block_rt, block_ct, block_kt>(),
                     block_ct,
-                    block_rt>(in0_cb_id, in1_cb_id, idst, transpose, ct_dim, rt_dim, held_a);
+                    block_rt,
+                    true>(in0_cb_id, in1_cb_id, idst, transpose, ct_dim, rt_dim, held_a);
                 return;
             }
         }

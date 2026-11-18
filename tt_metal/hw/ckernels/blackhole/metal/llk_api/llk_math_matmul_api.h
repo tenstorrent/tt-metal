@@ -115,7 +115,8 @@ template <
     bool row_end_fold = false,
     bool half_end_fold = false,
     std::uint32_t key_ct = 0,
-    std::uint32_t key_rt = 0>
+    std::uint32_t key_rt = 0,
+    bool inline_rows = false>
 inline void llk_math_matmul_init(
     const std::uint32_t operandA,
     const std::uint32_t operandB,
@@ -146,6 +147,14 @@ inline void llk_math_matmul_init(
         StateDiscard<std::uint32_t>(in1_tile_c_dim),
         StateDiscard<bool>(partial_face)));
 
+    if constexpr (inline_rows && THROTTLE_LEVEL == 0 && !row_mop && !tile_mop && reuse_dir == 0) {
+        if ((in0_tile_r_dim > FACE_R_DIM) && (in0_tile_c_dim > FACE_C_DIM) && (in1_tile_r_dim > FACE_R_DIM) &&
+            (in1_tile_c_dim > FACE_C_DIM)) {
+            _llk_math_matmul_init_rows_<math_fidelity, row_end_fold, key_ct, key_rt, key_ct == 0 || key_rt == 0 || llk_math_matmul_bias_class<math_fidelity, key_ct, key_rt>()>(
+                transpose, ct_dim, rt_dim);
+            return;
+        }
+    }
     llk_math_matmul_init_impl<math_fidelity, THROTTLE_LEVEL, row_mop, tile_mop, in1_order, reuse_dir, row_end_fold, half_end_fold, key_ct, key_rt>(
         in0_tile_r_dim, in0_tile_c_dim, in1_tile_r_dim, in1_tile_c_dim, partial_face, transpose, ct_dim, rt_dim);
 }

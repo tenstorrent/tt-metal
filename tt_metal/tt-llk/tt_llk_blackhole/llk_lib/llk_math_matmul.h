@@ -581,13 +581,15 @@ inline void matmul_set_row_tile_end_dest(const std::uint32_t dest_tile_stride)
     }
 }
 
-// Record MVMUL 1 to 15 of a full 32x32 tile; the MOP issues the 16th, which ends the phase, the tile or the row.
-inline void matmul_load_row_replay()
+// Record MVMUL 1 to 15 of a full 32x32 tile; the MOP issues the 16th, which ends the phase, the tile or the row. tile_shape adds the
+// tile end the row MOP never replays: on main's record shape the SFPI replay optimization leaves the kernel's SFPU loops as main's.
+template <bool tile_shape = false>
+inline void matmul_load_row_replay([[maybe_unused]] const bool reuse_a = true)
 {
     load_replay_buf(
         ckernel::math::replay_buf_offset,
-        15,
-        []
+        tile_shape ? 16 : 15,
+        [reuse_a]
         {
             TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_0, 0);
             TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_1, 0);
@@ -607,6 +609,17 @@ inline void matmul_load_row_replay()
             TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_0, 0);
             TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_1, 0);
             TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_0, 0);
+            if constexpr (tile_shape)
+            {
+                if (reuse_a)
+                {
+                    TTI_MVMUL(p_setrwc::CLR_A, 0, ADDR_MOD_5, 0);
+                }
+                else
+                {
+                    TTI_MVMUL(p_setrwc::CLR_B, 0, ADDR_MOD_5, 0);
+                }
+            }
         });
 }
 
@@ -728,7 +741,7 @@ inline bool matmul_rows_fold = false;
 
 // Default form for full 32x32 tiles: one MOP per reuse row, its tile count carried in the MOP instruction. Only
 // ADDR_MOD_3 and ADDR_MOD_5 change, so SFPU ops initialised once around matmul calls keep ADDR_MOD_6 and 7.
-template <MathFidelity math_fidelity, bool row_end_fold = false>
+template <MathFidelity math_fidelity, bool row_end_fold = false, bool tile_record = false>
 inline void matmul_configure_mop_rows(const std::uint32_t ct_dim, const std::uint32_t rt_dim)
 {
     constexpr bool high_fidelity = is_high_fidelity(math_fidelity);
@@ -743,7 +756,7 @@ inline void matmul_configure_mop_rows(const std::uint32_t ct_dim, const std::uin
     }
     const std::uint32_t dest_stride = matmul_row_dest_stride(ct_dim, rt_dim);
     matmul_set_row_tile_end_dest(dest_stride);
-    matmul_load_row_replay();
+    matmul_load_row_replay<tile_record>(reuse_a);
 
     constexpr std::uint32_t inner_loops = high_fidelity ? to_underlying(math_fidelity) : 1;
     const std::uint32_t tile_end        = TT_OP_MVMUL(reuse_a ? p_setrwc::CLR_A : p_setrwc::CLR_B, 0, ADDR_MOD_3, 0);
@@ -1266,6 +1279,22 @@ inline void _llk_math_matmul_init_(
     // llk_math_reconfig_data_format_srca(old, new) skips the LLK reconfig entirely when old == new format, so on a
     // same-format reconfig the reset never runs. Without this line MVMUL would inherit a stale keep-denormals flag
     // (denormal Src results differ). Mirrors what reduce/transpose/datacopy inits already do.
+    math::_configure_default_zero_flag_state_();
+}
+
+// The row form of @ref _llk_math_matmul_init_ for full 32x32 tiles at no throttle, inlined whole: out of line, its record no longer
+// shapes the caller's SFPU code (bias gelu +32 cy per tile).
+template <MathFidelity math_fidelity, bool row_end_fold, std::uint32_t key_ct, std::uint32_t key_rt, bool bias_write>
+__attribute__((always_inline, flatten)) inline void _llk_math_matmul_init_rows_(
+    const std::uint32_t transpose, const std::uint32_t ct_dim, const std::uint32_t rt_dim)
+{
+    constexpr bool fold_keys   = key_ct != 0 && key_rt != 0 && !(key_ct == 1 && key_rt == 1);
+    const std::uint32_t blk_ct = fold_keys ? key_ct : ct_dim;
+    const std::uint32_t blk_rt = fold_keys ? key_rt : rt_dim;
+    matmul_configure_addrmod<math_fidelity, 0, true, 0, false, bias_write>(transpose);
+    matmul_configure_mop_rows<math_fidelity, row_end_fold, true>(blk_ct, blk_rt);
+    LLK_ASSERT_BLOCK(math_matmul_init_reuse_a = matmul_reuse_a<0>(blk_ct, blk_rt));
+    math::reset_counters(p_setrwc::SET_ABD_F);
     math::_configure_default_zero_flag_state_();
 }
 
