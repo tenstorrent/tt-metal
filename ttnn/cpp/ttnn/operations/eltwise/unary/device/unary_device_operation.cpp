@@ -42,10 +42,6 @@ bool unary_op_supports_integer_dtype(UnaryOpType op_type, DataType dtype) {
         case UnaryOpType::ABS: return is_unsigned_int(dtype);
         case UnaryOpType::ABS_INT32:
         case UnaryOpType::CLAMP_TSS:
-        case UnaryOpType::GEZ:
-        case UnaryOpType::GTZ:
-        case UnaryOpType::LEZ:
-        case UnaryOpType::LTZ:
         case UnaryOpType::NEG:
         case UnaryOpType::SIGNBIT: return is_int32(dtype);
 
@@ -54,6 +50,10 @@ bool unary_op_supports_integer_dtype(UnaryOpType op_type, DataType dtype) {
         case UnaryOpType::LEAKY_RELU: return is_unsigned_int(dtype);
 
         case UnaryOpType::ADD_UNARY_SFPU:
+        case UnaryOpType::GEZ:
+        case UnaryOpType::GTZ:
+        case UnaryOpType::LEZ:
+        case UnaryOpType::LTZ:
         case UnaryOpType::MAXIMUM:
         case UnaryOpType::MINIMUM:
         case UnaryOpType::RSUB:
@@ -97,16 +97,13 @@ void validate_integer_input_dtype(const std::vector<EltwiseUnaryWithParam>& op_c
     if (!is_integer_dtype(input_dtype)) {
         return;
     }
-    // A TYPECAST in a multi-op chain changes the dtype for later ops; this checker only
-    // sees the original tensor dtype, so skip rather than reject a valid post-cast float op.
-    if (op_chain.size() > 1) {
-        for (const auto& op : op_chain) {
-            if (op.type() == UnaryOpType::TYPECAST) {
-                return;
-            }
-        }
-    }
+    // A TYPECAST changes the dtype for the ops after it; this checker only knows the original
+    // tensor dtype, so it stops there rather than reject a valid post-cast float op. The ops
+    // before the cast still run on the integer input and are checked.
     for (const auto& op : op_chain) {
+        if (op.type() == UnaryOpType::TYPECAST) {
+            break;
+        }
         TT_FATAL(
             unary_op_supports_integer_dtype(op.type(), input_dtype),
             "Unary: {} does not support integer input dtype {}",

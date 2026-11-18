@@ -9,7 +9,7 @@ import ttnn
 from models.experimental.patchtsmixer.reference.pytorch_patchtsmixer import PatchTSMixerLinearHead
 from models.experimental.patchtsmixer.tt.patchtsmixer import TtPatchTSMixerLinearHead
 from models.experimental.patchtsmixer.tt.model_processing import preprocess_linear_head
-from tests.ttnn.utils_for_testing import assert_with_pcc
+from tt_py_test_utils_common.utils_for_testing import assert_with_pcc
 
 
 @pytest.mark.parametrize("head_aggregation", [None, "use_last", "max_pool", "avg_pool"])

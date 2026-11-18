@@ -1824,6 +1824,21 @@ uint32_t DataflowBufferImpl::serialized_size() const {
     return sz;
 }
 
+void DataflowBufferImpl::set_configured_address(uint32_t alloc_addr) {
+    // Fill alloc_addr per core in each group. All configured cores get the same address,
+    // including cores on which the DFB does not reserve backing memory.
+    if (core_lookup_.empty() || uniform_alloc_addr() != alloc_addr) {
+        ++config_generation_;
+    }
+    core_lookup_.clear();
+    for (size_t gi = 0; gi < groups.size(); gi++) {
+        for (auto& [core, addr] : groups[gi].l1_by_core) {
+            addr = alloc_addr;
+            core_lookup_.emplace(core, std::make_pair(gi, alloc_addr));
+        }
+    }
+}
+
 void DataflowBufferImpl::update_size(std::optional<uint32_t> new_entry_size, std::optional<uint32_t> new_num_entries) {
     if (!new_entry_size.has_value() && !new_num_entries.has_value()) {
         return;
@@ -2217,7 +2232,10 @@ uint32_t ProgramImpl::assign_dfb_device_slot(const DataflowBufferImpl& dfb) cons
     return slot;
 }
 
-uint32_t ProgramImpl::add_dataflow_buffer(const CoreRangeSet& core_range_set, const DataflowBufferConfig& config) {
+uint32_t ProgramImpl::add_dataflow_buffer(
+    const CoreRangeSet& core_range_set,
+    const DataflowBufferConfig& config,
+    ttsl::optional_reference<const CoreRangeSet> allocation_core_range_set) {
     TT_FATAL(this->compiled_.empty(), "Cannot add dataflow buffer to an already compiled program {}", this->id);
 
     TT_FATAL(this->circular_buffers_.empty(), "Cannot add dataflow buffer to a program with circular buffers");
@@ -2260,6 +2278,9 @@ uint32_t ProgramImpl::add_dataflow_buffer(const CoreRangeSet& core_range_set, co
     dfb->context_id_ = this->context_id_;
 
     dfb->core_ranges = core_range_set.merge_ranges();
+    if (allocation_core_range_set.has_value()) {
+        dfb->allocation_placement = allocation_core_range_set->merge_ranges();
+    }
     dfb->config = config;
 
     dfb->device_slot = this->assign_dfb_device_slot(*dfb);
@@ -2302,7 +2323,7 @@ uint32_t ProgramImpl::add_dataflow_buffer(const CoreRangeSet& core_range_set, co
         }
     }
     if (!dfb->borrows_memory()) {  // borrowed dfb does not need to allocate
-        register_ephemeral_allocation(this->dfb_allocation_metadata_, dfb->core_ranges);
+        register_ephemeral_allocation(this->dfb_allocation_metadata_, dfb->allocation_core_ranges());
     }
 
     this->local_dataflow_buffer_allocation_needed_ = true;
@@ -3022,38 +3043,17 @@ void ProgramImpl::allocate_dataflow_buffers(const IDevice* device) {
         } else {
             const uint64_t computed_addr = allocate_dfb(
                 this->dfb_allocation_metadata_,
-                dfb->core_ranges,
+                dfb->allocation_core_ranges(),
                 dfb->total_size(),
                 device->allocator()->get_alignment(BufferType::DRAM));
             alloc_addr = static_cast<uint32_t>(computed_addr);
         }
-        // Fill alloc_addr per core in each group.  All cores of a DFB get the same alloc_addr so the L1 buffer is at a
-        // uniform absolute address on every physical core.
-        if (dfb->core_lookup_.empty() || dfb->uniform_alloc_addr() != alloc_addr) {
-            ++dfb->config_generation_;
-        }
-        dfb->core_lookup_.clear();
-        for (size_t gi = 0; gi < dfb->groups.size(); gi++) {
-            for (auto& [core, addr] : dfb->groups[gi].l1_by_core) {
-                addr = alloc_addr;
-                dfb->core_lookup_.emplace(core, std::make_pair(gi, alloc_addr));
-            }
-        }
+        dfb->set_configured_address(alloc_addr);
 
         // Propagate this primary's address to all alias secondaries immediately,
         // so they share the same L1 region without an additional allocator call.
         for (uint32_t sec_id : dfb->alias_secondary_ids) {
-            auto& sec = this->dataflow_buffers_[sec_id];
-            if (sec->core_lookup_.empty() || sec->uniform_alloc_addr() != alloc_addr) {
-                ++sec->config_generation_;
-            }
-            sec->core_lookup_.clear();
-            for (size_t gi = 0; gi < sec->groups.size(); gi++) {
-                for (auto& [core, addr] : sec->groups[gi].l1_by_core) {
-                    addr = alloc_addr;
-                    sec->core_lookup_.emplace(core, std::make_pair(gi, alloc_addr));
-                }
-            }
+            this->dataflow_buffers_[sec_id]->set_configured_address(alloc_addr);
         }
     }
     this->local_dataflow_buffer_allocation_needed_ = false;

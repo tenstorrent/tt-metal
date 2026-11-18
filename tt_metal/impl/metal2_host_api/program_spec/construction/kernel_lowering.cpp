@@ -22,7 +22,7 @@
 #include "impl/context/metal_context.hpp"
 #include "impl/metal2_host_api/helpers.hpp"
 
-namespace tt::tt_metal::experimental {
+namespace tt::tt_metal {
 
 namespace {
 
@@ -386,6 +386,7 @@ LoweredKernel LowerKernel(
     // crta_layout that flows into the kernel ctor reflects all four sections.
     ScratchpadBindingsForKernel sp_bindings = ResolveScratchpadBindingsForKernel(
         kernel_spec,
+        node_ranges,
         collected.scratchpad_by_name,
         /*scratchpad_base_crta_word=*/ta_bindings.crta_layout.vararg_section_offset);
     ta_bindings.crta_layout.scratchpad_section_words = sp_bindings.section_words;
@@ -606,4 +607,4 @@ void AddKernels(
     }
 }
 
-}  // namespace tt::tt_metal::experimental
+}  // namespace tt::tt_metal

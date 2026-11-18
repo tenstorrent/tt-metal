@@ -89,8 +89,8 @@ namespace ttml::metal::ops::moe_group::device {
 
 namespace {
 
-// The grouped output's tile rows (t_cap / TILE_HEIGHT) over the device's compute grid. create_descriptor() pins it
-// against split_work_to_cores, and override_runtime_arguments() walks the same cores from it.
+// The grouped output's tile rows (t_cap / TILE_HEIGHT) over the device's compute grid: the cores and counts that
+// split_work_to_cores gives create_descriptor(), for override_runtime_arguments() to walk.
 WorkSplit make_work_split(const operation_attributes_t& attrs, const tensor_args_t& args) {
     return compute_work_split(
         args.dispatched.device()->compute_with_storage_grid_size(), attrs.t_cap / tt::constants::TILE_HEIGHT);
@@ -148,8 +148,6 @@ tt::tt_metal::ProgramDescriptor MoeGroupProgramFactory::create_descriptor(
     // remainders.
     auto [num_workers, worker_all, worker_group_1, worker_group_2, tiles_group_1, tiles_group_2] =
         tt::tt_metal::split_work_to_cores(compute_grid, total_tiles);
-    const WorkSplit split = make_work_split(attrs, args);
-    check_work_split(split, num_workers, worker_group_1, worker_group_2, tiles_group_1, tiles_group_2);
 
     const uint32_t num_total_cores = num_workers;  // every core does scan + worker
 

@@ -50,6 +50,7 @@ from models.demos.deepseek_v3_d_p.tests.attn_res.model.harness import (
     placements,
     random_case,
     random_queries,
+    stage_4x4_placements,
 )
 from models.demos.deepseek_v3_d_p.tests.fabric_profiles import (
     fabric2d_device_params,
@@ -57,8 +58,6 @@ from models.demos.deepseek_v3_d_p.tests.fabric_profiles import (
     torus_xy_device_params,
 )
 from models.demos.deepseek_v3_d_p.tt.attn_res.attn_res import TtAttnRes
-
-TP_AXIS = 1
 
 # `attn_res_block_stats` counts its peers' arrivals on a semaphore of the op's own: it is
 # consumed by subtraction, so it is not one to share. It is the only global semaphore the
@@ -76,33 +75,39 @@ REPEATS = 50
 TRACE_REGION_SIZE = 23887872
 TRACED = {**FABRIC, "trace_region_size": TRACE_REGION_SIZE}
 
-on_mesh = pytest.mark.parametrize("mesh_device, device_params", placements(), indirect=True)
+on_mesh = pytest.mark.parametrize(
+    "mesh_device, device_params, sp_axis", placements(), indirect=["mesh_device", "device_params"]
+)
 # The traced arms mirror `placements()` rather than sampling it: a trace freezes the
 # fabric routes its captured programs resolved, so a route that only goes wrong on a
 # wrapped axis stays wrong for the whole replay and cannot be caught on the other arms.
 _TRACED_BOX = {"trace_region_size": TRACE_REGION_SIZE, "require_exact_physical_num_devices": True}
 
 on_traced_mesh = pytest.mark.parametrize(
-    "mesh_device, device_params",
+    "mesh_device, device_params, sp_axis",
     [
-        pytest.param((2, 4), TRACED, id="mesh-2x4"),
+        pytest.param((2, 4), TRACED, 0, id="mesh-2x4"),
         pytest.param(
             (8, 4),
             fabric2d_device_params(l1_small_size=L1_SMALL_SIZE, **_TRACED_BOX),
+            0,
             id="mesh-8x4",
         ),
         pytest.param(
             (8, 4),
             torus_x_device_params(l1_small_size=L1_SMALL_SIZE, **_TRACED_BOX),
+            0,
             id="torusx-mesh-8x4",
         ),
         pytest.param(
             (8, 4),
             torus_xy_device_params(l1_small_size=L1_SMALL_SIZE, **_TRACED_BOX),
+            0,
             id="torusxy-mesh-8x4",
         ),
+        *stage_4x4_placements(trace_region_size=TRACE_REGION_SIZE),
     ],
-    indirect=True,
+    indirect=["mesh_device", "device_params"],
 )
 
 pytestmark = blackhole_only
@@ -129,7 +134,7 @@ def _read_block_on_device(op, tt_block, tt_prefix, tt_queries):
 
 
 @on_mesh
-def test_read_repeats_exactly_without_disturbing_its_inputs(mesh_device, device_params):
+def test_read_repeats_exactly_without_disturbing_its_inputs(mesh_device, device_params, sp_axis):
     """`REPEATS` back-to-back runs of a 24-site block, no sync between them: same bits out,
     same bits left behind.
 
@@ -146,7 +151,7 @@ def test_read_repeats_exactly_without_disturbing_its_inputs(mesh_device, device_
     share their parent's buffer, which makes an accidental in-place write land in a caller's
     tensor rather than a temporary — and every read after it would still match its own oracle.
     """
-    op = TtAttnRes(mesh_device, hidden_size=HIDDEN_SIZE, eps=EPS, tp_axis=TP_AXIS)
+    op = TtAttnRes(mesh_device, hidden_size=HIDDEN_SIZE, eps=EPS, sp_axis=sp_axis, tp_axis=1 - sp_axis)
     num_tokens = PER_CHIP_TOKENS * op.sp_factor
     running_sum, block_residual, queries = _host_inputs(num_tokens)
 
@@ -192,7 +197,7 @@ def test_read_repeats_exactly_without_disturbing_its_inputs(mesh_device, device_
 
 
 @on_traced_mesh
-def test_trace_replay_matches_eager(mesh_device, device_params):
+def test_trace_replay_matches_eager(mesh_device, device_params, sp_axis):
     """A captured read replays to the same bits it produced eagerly.
 
     The walk is traced in production, and capture changes what the host does without
@@ -205,7 +210,7 @@ def test_trace_replay_matches_eager(mesh_device, device_params):
     One site, not the block. Capture cost scales with the call sequence and the sequence
     that matters here is a single fused read.
     """
-    op = TtAttnRes(mesh_device, hidden_size=HIDDEN_SIZE, eps=EPS, tp_axis=TP_AXIS)
+    op = TtAttnRes(mesh_device, hidden_size=HIDDEN_SIZE, eps=EPS, sp_axis=sp_axis, tp_axis=1 - sp_axis)
     num_tokens = PER_CHIP_TOKENS * op.sp_factor
     running_sum, block_residual, queries = _host_inputs(num_tokens)
 
@@ -239,7 +244,7 @@ def test_trace_replay_matches_eager(mesh_device, device_params):
 
 
 @on_mesh
-def test_the_statistics_semaphores_predate_the_first_read(mesh_device, device_params):
+def test_the_statistics_semaphores_predate_the_first_read(mesh_device, device_params, sp_axis):
     """Construction is what allocates them, not the read that first needs them.
 
     Creating a global semaphore resets it through a blocking mesh write, and a write
@@ -261,7 +266,7 @@ def test_the_statistics_semaphores_predate_the_first_read(mesh_device, device_pa
     monkeypatch = pytest.MonkeyPatch()
     monkeypatch.setattr(ttnn, "create_global_semaphore", counting)
     try:
-        TtAttnRes(mesh_device, hidden_size=HIDDEN_SIZE, eps=EPS, tp_axis=TP_AXIS)
+        TtAttnRes(mesh_device, hidden_size=HIDDEN_SIZE, eps=EPS, sp_axis=sp_axis, tp_axis=1 - sp_axis)
     finally:
         monkeypatch.undo()
 

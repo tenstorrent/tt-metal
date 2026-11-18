@@ -10,7 +10,7 @@
 #include <optional>
 #include <vector>
 
-#include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
+#include <tt-metalium/workload/specification/program_spec.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program.hpp>
 
 #include "impl/kernels/kernel.hpp"
@@ -86,6 +86,20 @@ TEST_F(ProgramSpecTestQuasar, ScratchpadLlkFormatAffectsKernelHash) {
     auto hash_f32 = prog_f32.impl().get_kernel_by_spec_name("compute_kernel")->compute_hash();
     EXPECT_NE(hash_none, hash_f16);
     EXPECT_NE(hash_f16, hash_f32);
+}
+
+TEST_F(ProgramSpecTestQuasar, CPU_ScratchpadOverrideDoesNotChangeKernelHash) {
+    // Changing only scratchpad placement preserves the kernel hash.
+    distributed::MeshDevice& fixture_device = *mesh_device_;
+    auto spec = MakeMinimalValidProgramSpec();
+    spec.work_units[0].target_nodes = NodeRange({0, 0}, {1, 0});
+    spec.scratchpads = {ScratchpadSpec{.unique_id = ScratchpadSpecName{"pad"}, .size_per_node = 64}};
+    spec.kernels[0].scratchpad_bindings = {{ScratchpadSpecName{"pad"}, "pad"}};
+    auto original = MakeProgramFromSpec(fixture_device, spec);
+    const auto hash = original.impl().get_kernel_by_spec_name("dm_kernel")->compute_hash();
+    spec.scratchpads[0].advanced_options.override_placement = CoreRangeSet(CoreRange({1, 0}));
+    auto overridden = MakeProgramFromSpec(fixture_device, spec);
+    EXPECT_EQ(hash, overridden.impl().get_kernel_by_spec_name("dm_kernel")->compute_hash());
 }
 
 }  // namespace
