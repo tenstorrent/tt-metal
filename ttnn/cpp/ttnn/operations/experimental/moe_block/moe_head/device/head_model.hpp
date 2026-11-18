@@ -98,7 +98,7 @@ public:
     Regions router_offsets;
     int64_t router_bytes = 0, logits_partials_bytes = 0;
     // the mailbox words
-    uint32_t handoff_bytes = 16, logits_words_offset = 0, port_words = 16, zone_words_offset = 0, mailbox_words = 0;
+    uint32_t handoff_bytes = 16, logits_words_offset = 0, port_words = 1, zone_words_offset = 0, mailbox_words = 0;
     // routing
     uint32_t tokens_per_chip = 0, tokens_per_chip_all_blocks = 0, row_blocks = 1, splits = 1, experts_per_chip = 0,
              accumulators = 0, routing_links = 2, planner_instances = 0, rows_capacity = 0, entries_capacity = 0;

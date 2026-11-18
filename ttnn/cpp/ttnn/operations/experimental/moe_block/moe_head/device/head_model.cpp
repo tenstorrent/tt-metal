@@ -510,7 +510,9 @@ std::shared_ptr<const HeadModel> make_head_model(
     // (the logits words: past both hand-off arrays and the latent's gap, kFlagWords aligned - head_program_common.hpp)
     const uint32_t handoff_words = 2 * engine_columns * engine_rows * model.handoff_bytes / 4 + kLatentHandoffsGap / 4;
     model.logits_words_offset = (handoff_words + kFlagWords - 1) / kFlagWords * kFlagWords;
-    model.port_words = std::max<uint32_t>(16, (tp_size - 1) * u32(ceil_div(router_cores_needed, model.gather_links)));
+    // (a port's logits sub-block words: a destination a direction x the link's router cores - head_gather_program.cpp
+    // checks the bound; every flag is a persistent word on the port cores, so no more than that)
+    model.port_words = std::max<uint32_t>(1, (tp_size - 1) * u32(ceil_div(router_cores_needed, model.gather_links)));
     model.zone_words_offset = model.logits_words_offset + kFlagWords * model.port_words;
     model.mailbox_words = model.zone_words_offset + kZoneWordsBytes / 4;
 
