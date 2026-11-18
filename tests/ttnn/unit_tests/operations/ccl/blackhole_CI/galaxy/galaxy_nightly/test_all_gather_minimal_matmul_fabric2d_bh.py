@@ -275,3 +275,42 @@ _FABRIC_1D_CASES = [
 @pytest.mark.parametrize("use_mcast", [True, False], ids=["mcast", "relay"])
 def test_all_gather_minimal_matmul_fabric1d(mesh_device, case, use_mcast):
     _run(mesh_device, **case, use_mcast=use_mcast)
+
+
+# The transposed grid (12 x 9: M over the core columns, N over the rows) keeps the core-to-core relay on Fabric2D.
+_TRANSPOSED = dict(_KDA, force_transpose=True, use_mcast=False, rows_per_device=12 * 2 * 32, n_per_device=9 * 36 * 32)
+
+
+@pytest.mark.parametrize(
+    "mesh_device, device_params", [_galaxy(ttnn.FabricConfig.FABRIC_2D_TORUS_XY, "SP8xTP4-torus-xy")], indirect=True
+)
+@pytest.mark.parametrize(
+    "case",
+    [
+        pytest.param(_TRANSPOSED, id="ring_tp"),
+        pytest.param(dict(_TRANSPOSED, K=1024), id="ring_tp_one_k_block_per_device"),
+        pytest.param(dict(_TRANSPOSED, gelu=True), id="ring_tp_fused_gelu"),
+        pytest.param(dict(_TRANSPOSED, gather_axis=0, n_per_device=9 * 20 * 32, N_block=20), id="ring_sp_8"),
+    ],
+)
+def test_all_gather_minimal_matmul_fabric2d_transposed(mesh_device, case):
+    _run(mesh_device, **case)
+
+
+@pytest.mark.parametrize(
+    "mesh_device, device_params",
+    [
+        _galaxy(ttnn.FabricConfig.FABRIC_2D_TORUS_Y, "SP8xTP4-torus-y"),
+        _galaxy(ttnn.FabricConfig.FABRIC_2D, "SP8xTP4-mesh"),
+    ],
+    indirect=True,
+)
+@pytest.mark.parametrize(
+    "case",
+    [
+        pytest.param(dict(_TRANSPOSED, topology=ttnn.Topology.Linear), id="linear_tp"),
+        pytest.param(dict(_TRANSPOSED, topology=ttnn.Topology.Linear, K=4 * 36 * 32), id="linear_tp_k_tail_block"),
+    ],
+)
+def test_all_gather_minimal_matmul_fabric2d_transposed_linear(mesh_device, case):
+    _run(mesh_device, **case)
