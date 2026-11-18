@@ -305,6 +305,31 @@ def test_ws_lane5_glx_g(mesh_device):
         group_report(cfg, sts[ci], f"chip {ci}")
 
 
+def yc_report(cfg, l5, st_chip, yst_chip, tag=None):
+    """WS_L5 yc: the collectors' latest end from the chip's earliest group-core loop start (cycles); with tag, a line a
+    collector (K cycles): row tiles, total, waits for the 25 arrivals, for the destinations, the row writes (issue / sent
+    waits), the slot credits, the end's fence (the BRISC's when split)."""
+    import torch
+
+    NC, ny = cfg.G * cfg.GC, cfg.G * l5.yc
+    s = (ttnn.to_torch(st_chip).to(torch.int64) & 0xFFFFFFFF).reshape(NC, -1)
+    y = (ttnn.to_torch(yst_chip).to(torch.int64) & 0xFFFFFFFF).reshape(ny, -1)
+    s00 = int(s[0, 0])
+    rel = lambda v: ((v - s00 + (1 << 31)) & 0xFFFFFFFF) - (1 << 31)
+    t0 = int(min(rel(s[:, 0]).min(), rel(s[:, 485]).min(), rel(s[:, 496]).min()))
+    if tag:
+        k = lambda v: round(int(v) / 1000)
+        for i in range(ny):
+            r = y[i]
+            logger.info(
+                f"WL5YC {tag} group {i // l5.yc} collector {i % l5.yc}: tiles {int(r[6])}, end {k(rel(r[7]) - t0)} K, "
+                f"total {k(r[1])} K; waits arrivals {k(r[2])} K, destinations {k(r[3])} K; row writes {k(r[4])} K "
+                f"(issue {k(r[9])}, sent {k(r[10])}; BRISC go {k(r[16])}, issue {k(r[17])}, sent {k(r[18])}); credits "
+                f"{k(r[5])} K; fence {k(r[8])} K (BRISC {k(r[19])})"
+            )
+    return int(rel(y[:, 7]).max()) - t0
+
+
 @pytest.mark.parametrize("mesh_device", [(8, 4)], indirect=True)
 @pytest.mark.parametrize("device_params", [TORUS], indirect=True)
 def test_ws_lane5_glx_yrm(mesh_device):
@@ -312,7 +337,8 @@ def test_ws_lane5_glx_yrm(mesh_device):
     per-chip destination lists: every (expert, token) its own row, WSW_DEST "spread" (rows in random order over the
     whole buffer, every bank, as the layer's t S + k; the buffer holds max(T 12, the rows routed) rows) or "side" (a group's rows only in the DRAM banks of its side:
     channels 4-7 at NoC x 9 for groups 2 / 3, 0-3 at x 0 for groups 0 / 1). PCC on WSW_PCC_CHIPS (default 0 and the
-    last) over every expert's rows."""
+    last) over every expert's rows. WS_L5 yc: through the row collectors; the time ends with the collectors' last end
+    (each fenced its row writes) when that is later than the compute's, and a line a collector of chip 0 is logged."""
     import torch
     from models.demos.ws_expert.bench_util import pcc
 
@@ -364,7 +390,7 @@ def test_ws_lane5_glx_yrm(mesh_device):
     tab_t = L5.tables_tensor(mesh_device, T["tabs"])
     clk = L5.aiclk_mhz(0)
     warm, meas = int(os.environ.get("WS_WARM", "20")), int(os.environ.get("WS_MEAS", "5"))
-    e2e = []
+    e2e, yc_lat = [], []
     for i in range(warm + meas):
         mpd, io, st = L5.build_lane5(
             mesh_device, cfg, lc, l5, dev["x_t"], dev["idx_t"], dev["counts_t"], dev["ws_t"], res_t, tab_t, T, out_rows,
@@ -375,7 +401,16 @@ def test_ws_lane5_glx_yrm(mesh_device):
         ttnn.synchronize_device(mesh_device)
         if i >= warm:
             sts = ttnn.get_device_tensors(st)
-            e2e.append(max(L5.chip_time(cfg, Ms, T, ci, sts[ci])[3] for ci in range(N)) / clk)
+            ends = [L5.chip_time(cfg, Ms, T, ci, sts[ci])[3] for ci in range(N)]
+            if l5.yc:
+                ysts = ttnn.get_device_tensors(io[-1])
+                yends = [yc_report(cfg, l5, sts[ci], ysts[ci]) for ci in range(N)]
+                yc_lat.append(max(b - a for a, b in zip(ends, yends)) / clk)
+                ends = [max(a, b) for a, b in zip(ends, yends)]
+                if i == warm + meas - 1:
+                    yc_report(cfg, l5, sts[0], ysts[0], f"yrm {mode} chip 0")
+                del ysts
+            e2e.append(max(ends) / clk)
             if i == warm + meas - 1:
                 group_report(cfg, sts[0], f"yrm {mode} chip 0")
             del sts
@@ -393,5 +428,6 @@ def test_ws_lane5_glx_yrm(mesh_device):
     logger.info(
         f"WL5Y SUMMARY dest {mode}: {warm} warm-up + {meas} measured launches, aiclk {clk} MHz, end to end (slowest "
         f"chip) median {statistics.median(e2e):.1f} us (samples {[round(v, 1) for v in e2e]}), pcc {pcs}"
+        + (f"; collectors yc {l5.yc} sink {l5.yc_sink}: their end minus the compute's (latest over chips) median {statistics.median(yc_lat):.1f} us" if l5.yc else "")
     )
     assert not pcs or min(pcs.values()) > 0.999

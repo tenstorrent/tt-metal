@@ -62,6 +62,14 @@ class L5Cfg:
     # yrm (and not yt), 0 never, 1 always (diagnostics: untilize cost with tile writes, row writes without untilize)
     cu: int = -1
     ystate: int = 0  # yrm: a row tile's row writes grouped by DRAM bank with the stateful one-packet writes (WL5_YSTATE)
+    # yrm: the rows through yc row collectors a group (l5_ycoll.cpp, WL5_YC): spare cores in the muxes' column, which
+    # gather each row tile's column slices from the 25 cores and write every row whole; yc_sink: without the row writes
+    # (a diagnostic: the cores' traffic and the protocol only)
+    yc: int = 0
+    yc_sink: int = 0
+    # yc: the east half's collectors (DRAM column x 9 east of them) write on NOC0 from the BRISC instead of NOC1 the
+    # long way round; outside the NoC rule (the fence's acks return through the rectangles on NOC0), diagnostics
+    yc_n0: int = 0
     # group g: top-left logical core, its muxes' column (west of the group) and rows (direction 0, direction 1). The tray
     # (11 x 10, G 2) uses the first two; a Galaxy chip (12 x 10, logical columns 0-6 and 7-11 NoC contiguous) all four
     origins: tuple = ((1, 0), (1, 5), (7, 0), (7, 5))
@@ -129,11 +137,23 @@ def build_lane5(
     assert cfg.GC == GC5 and cfg.PAIRS == OWN_ROWS * NCOL and cfg.KT == 120 and cfg.HT == 120
     assert lc.out_all, "the 5 x 5 lane writes every expert's rows"
     assert not l5.yrm or (l5.hmc == 2 and dest_t is not None and not l5.oaff), "yrm: hmc 2, dest_t, no oaff"
+    assert not l5.yc or (l5.yrm and not l5.yt and not l5.ystate and fence_row is not None), "yc: yrm rows, fenced"
     ln = lanes((R, Cn), lc)
     groups = [g5_lane_cores(l5, g) for g in range(G)]
     C = [c for gr in groups for c in gr]
     muxes = [(l5.mux_cols[g], l5.mux_rows[g][d]) for g in range(G) for d in range(2)]
     assert not set(muxes) & set(C)
+    # yc: group g's collectors - the first yc spare cores of its muxes' column within its rows (outside the rectangle;
+    # the cores reach them west on NOC1); every collector transfer on NOC1 (the row writes, the destination reads, the
+    # slot credits), except with yc_n0 (split: the east half's row writes on NOC0 from the BRISC)
+    colls = []
+    for g in range(G if l5.yc else 0):
+        x0, y0 = l5.origins[g]
+        free = [(l5.mux_cols[g], y0 + r) for r in range(NR) if (l5.mux_cols[g], y0 + r) not in muxes]
+        assert len(free) >= l5.yc, (g, free)
+        colls.append(free[: l5.yc])
+    ycores = [xy for cl in colls for xy in cl]
+    assert not set(ycores) & set(C)
     KTD, NS, LT, NH = cfg.PAIRS, cfg.NS, 2 * NR, OWN_ROWS * NCOL
     assert NS >= cfg.dn_lag + 1, "h ring below DN_LAG + 1 rows"
     DB = 4
@@ -166,6 +186,18 @@ def build_lane5(
     table_l1 = sharded_l1(mesh, C, [1, TLW + 16], U, RM, torch.int32)
     a64 = lambda a: (a + 63) // 64 * 64
     cnt_base, idx_addr, tab_base = (a64(t.buffer_address()) for t in (counts_l1, idx_l1, table_l1))
+    if l5.yc:
+        assert cfg.H * 2 == cfg.HT * 64 and cfg.out_dt == ttnn.bfloat16
+        SLOTB = 32 * cfg.H * 2
+        NSL = min(3, K * SLOT_MAX * wtile // SLOTB)  # (the staging slots fit in the weight ring's range)
+        assert NSL >= 2, NSL
+        ycw = w16(8)  # (on the group cores: word c the collector c's freed row tiles, word 3 the collectors done)
+        ycw_b = a64(ycw.buffer_address())
+        yw = sharded_l1(mesh, ycores, [40, 4], U, RM, torch.int32)
+        ycnt = sharded_l1(mesh, ycores, [1, 32 + max(4, cfg.nexp)], U, RM, torch.int32)
+        ytab = sharded_l1(mesh, ycores, [1, TLW + 16], U, RM, torch.int32)
+        yst = stamps_tensor(mesh, ycores)
+        yw_b = a64(yw.buffer_address())
     st = stamps_tensor(mesh, C)
     mcfg = fabric_mux.Config(
         num_full_size_channels=GC5,
@@ -245,6 +277,7 @@ def build_lane5(
                             hmc_rt[(x, y)] += [counts_t.buffer_address(), k0, tab_t.buffer_address()]
                             hmc_rt[(x, y)] += [ws_t.buffer_address(), ch0[j]]
                             hmc_rt[(x, y)] += [dest_t.buffer_address()] if l5.yrm else []
+                            hmc_rt[(x, y)] += [(lambda q: q[0] | q[1] << 8)(noc(mesh, *xy)) for xy in colls[g]] if l5.yc else []
                     if l5.hmc == 2:
                         for j, (x, y) in sub:
                             (hx0, hy0), (hx1, hy1) = noc(mesh, *gr[0]), noc(mesh, *gr[-1])
@@ -301,6 +334,12 @@ def build_lane5(
                             + ([("WL5_YSTATE", "1")] if l5.yrm and l5.ystate else [])
                             + ([("WL5_YT", str(ysh.buffer_address()))] if l5.yrm and l5.yt else [])
                             + ([("WL5_Y_FENCE", str(fence_row))] if l5.yrm and fence_row is not None else [])
+                            + (
+                                [("WL5_YC", str(l5.yc)), ("WL5_YC_NSL", str(NSL)), ("WL5_YC_ARR", str(yw_b))]
+                                + [("WL5_YC_CRED", str(ycw_b))]
+                                if l5.yc
+                                else []
+                            )
                             + ([("WL5_HMC2", "1")] if l5.hmc == 2 else [])
                             + ([("WL5_GATHER0", "1")] if l5.hmc == 2 and l5.gather0 else []),
                             config=dm(1),
@@ -323,6 +362,42 @@ def build_lane5(
                         config=dm(0),
                     )
                 )
+            if l5.yc:
+                y_ct = [NSL, cfg.H * 2, wring.buffer_address(), yw_b, ycw_b, cfg.RMAX, cfg.nexp, TB]
+                y_ct += [a64(ycnt.buffer_address()), a64(ytab.buffer_address()), GC5, 0, l5.yc_sink]
+                for t in (counts_t, tab_t, dest_t, out_t):
+                    y_ct += list(ttnn.TensorAccessorArgs(t).get_compile_time_args())
+                y_rt, w_rt, split_cores = ttnn.RuntimeArgs(), ttnn.RuntimeArgs(), []
+                for g, cl in enumerate(colls):
+                    split = 1 if l5.yc_n0 and l5.mux_cols[g] != 0 else 0
+                    for ci, (x, y) in enumerate(cl):
+                        args = [g, ci, l5.yc, E, counts_t.buffer_address(), tab_t.buffer_address()]
+                        args += [dest_t.buffer_address(), out_t.buffer_address(), fence_row, yst.buffer_address(), split]
+                        args += [(lambda q: q[0] | q[1] << 8)(noc(mesh, *xy)) for xy in groups[g]]
+                        y_rt[x][y] = args
+                        if split:
+                            w_rt[x][y] = list(args)
+                            split_cores.append((x, y))
+                kernels.append(
+                    ttnn.KernelDescriptor(
+                        kernel_source=kpath("l5_ycoll.cpp"),
+                        core_ranges=crs(ycores),
+                        compile_time_args=y_ct,
+                        runtime_args=y_rt,
+                        config=dm(1),
+                    )
+                )
+                if split_cores:
+                    kernels.append(
+                        ttnn.KernelDescriptor(
+                            kernel_source=kpath("l5_ycoll.cpp"),
+                            core_ranges=crs(split_cores),
+                            compile_time_args=y_ct,
+                            defines=[("YC_WRITER", "1")],
+                            runtime_args=w_rt,
+                            config=dm(0),
+                        )
+                    )
             cp_rt = {own: ttnn.RuntimeArgs() for own in (1, 0)}
             for g, gr in enumerate(groups):
                 for j, (x, y) in enumerate(gr):
@@ -439,4 +514,5 @@ def build_lane5(
     io += [xcred]
     io += [land, lflags, lcred, pring, scr, counts_l1, idx_l1, table_l1, st, out_t] + ([hcons] if l5.hmc else [])
     io += [ysh, dest_t] if l5.yrm else []
+    io += [ycw, yw, ycnt, ytab, yst] if l5.yc else []  # (yc: the collectors' stamps last)
     return mpd, io, st

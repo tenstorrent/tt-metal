@@ -27,7 +27,8 @@
 // WL5_Y_RM: row-major result rows - each down row tile's rows (CB 17, pack-untilized) to their rows in the expert's
 // destination list, at this core's columns, posted, fenced (WL5_Y_FENCE: the result buffer's spare rows). WL5_YT (the
 // staging slot's L1 address): the rows come from the BRISC's transposed copy (l5h_writer.cpp QT; YREADY / YDONE in
-// scratch words 12 / 13) instead of CB 17.
+// scratch words 12 / 13) instead of CB 17. WL5_YC: the rows go to the group's row collectors instead (QY below); RT
+// 62 .. 62 + WL5_YC - 1 their NoC coordinates (x | y << 8).
 #include "api/dataflow/dataflow_api.h"
 #include "tt_metal/fabric/hw/inc/tt_fabric_mux_interface.hpp"
 #include "tt_metal/fabric/hw/inc/packet_header_pool.h"
@@ -552,7 +553,56 @@ void kernel_main() {
         return true;
     };
 
-#if defined(WL5_Y_RM)
+#if defined(WL5_Y_RM) && defined(WL5_YC)
+    // ---- QY (WL5_YC: the group's WL5_YC row collectors, l5_ycoll.cpp): row tile n goes to collector n % WL5_YC, its
+    // staging slot (n / WL5_YC) % WL5_YC_NSL (32 rows of HT 64 B at the weight ring's address there: the ring is sharded
+    // on the group cores only, so that range is free on the collectors); this core's rows land at its columns (DS 64 B
+    // into each row), posted, once the collector freed the slot (its count of freed row tiles, word c of WL5_YC_CRED
+    // here); once the writes have left, + 1 on the slot's arrival word (WL5_YC_ARR + 16 s there: the same NoC and VC
+    // as the rows, behind them) and CB 17's pages are freed. The collector writes each full row to its destination.
+    constexpr uint32_t NCY = WL5_YC, NSL = WL5_YC_NSL;
+    constexpr uint32_t seg = DCOLS * 64, ROWB = HT * 64, SLOTB = 32 * ROWB;
+    uint32_t ycx[NCY];
+    for (uint32_t i = 0; i < NCY; ++i) {
+        ycx[i] = get_arg_val<uint32_t>(RX + 8 + i);
+    }
+    uint32_t drained = 0, d_n = 0, d_r = 0, y_state = 0;
+    auto qy = [&]() -> bool {
+        if (y_state == 1) {
+            if (!ncrisc_noc_posted_writes_sent(noc_index)) {
+                return false;
+            }
+            const uint32_t c = drained % NCY, s = (drained / NCY) % NSL;
+            noc_semaphore_inc(get_noc_addr(ycx[c] & 0xFF, ycx[c] >> 8, WL5_YC_ARR + s * 16), 1);
+            cb_pop_front(y_cb, DCOLS);
+            ++d_r;
+            ++drained;
+            y_state = 0;
+            return true;
+        }
+        if (drained >= total_rows) {
+            return false;
+        }
+        while (d_r >= rows_of(d_n)) {
+            ++d_n;
+            d_r = 0;
+        }
+        const uint32_t c = drained % NCY, k = drained / NCY;
+        invalidate_l1_cache();
+        if (k >= *W(WL5_YC_CRED + c * 16) + NSL || !cb_pages_available_at_front(y_cb, DCOLS)) {
+            return false;
+        }
+        const uint32_t m = counts[16 + (order[d_n] & 0xFFFF)] - d_r * 32;
+        const uint32_t nr = m < 32 ? m : 32;
+        uint32_t l1 = get_read_ptr(y_cb);
+        const uint64_t base = get_noc_addr(ycx[c] & 0xFF, ycx[c] >> 8, wring + (k % NSL) * SLOTB + DS * 64);
+        for (uint32_t r = 0; r < nr; ++r, l1 += seg) {
+            noc_async_write<NOC_MAX_BURST_SIZE + 1, true, true>(l1, base + r * ROWB, seg);
+        }
+        y_state = 1;
+        return true;
+    };
+#elif defined(WL5_Y_RM)
     // ---- QY: each row of a down row tile to its destination row of the row-major result buffer, at this core's
     // columns (wl_reader.cpp's WL_Y_RM): a state machine (0: next row tile, 1: its 32 destinations requested, 2: its rows
     // written); the destinations (the expert's destination list, the token lists' layout) are read on their own
@@ -907,7 +957,13 @@ void kernel_main() {
     noc_async_atomic_barrier();
 #if defined(WL5_Y_RM)
     noc_async_posted_writes_flushed();
-#if defined(WL5_Y_FENCE)
+#if defined(WL5_YC)
+    if (J == 0) {  // (the stream ends with the collectors: each fenced its row writes, then + 1 here)
+        do {
+            invalidate_l1_cache();
+        } while (*W(WL5_YC_CRED + 3 * 16) < WL5_YC);
+    }
+#elif defined(WL5_Y_FENCE)
     // the posted row writes' fence: an acknowledged 4-B write into every DRAM bank (the result buffer's spare rows from
     // WL5_Y_FENCE, nobody reads them) after them on the same NoC and VC; its acks mean every row landed
     for (uint32_t i = 0; i < NUM_DRAM_BANKS; ++i) {
