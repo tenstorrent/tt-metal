@@ -696,7 +696,7 @@ TEST_F(LaunchOperation2x4Test, TensorAliasSignature) {
     EXPECT_THAT(compute_tensor_alias_signature(TensorRefs{a, b, b, a, c}), ElementsAre(0u, 1u, 1u, 0u, 4u));
 
     // A copied handle shares its MeshTensor, and so does a storage re-wrapping it in new TensorAttributes.
-    const Tensor a_copy = a;
+    const Tensor& a_copy = a;
     const auto a_coords = a.device_storage().get_coords();
     const Tensor a_rewrapped{
         ttnn::DeviceStorage(a.device_storage(), std::vector<ttnn::MeshCoordinate>(a_coords.begin(), a_coords.end()))};
@@ -705,6 +705,7 @@ TEST_F(LaunchOperation2x4Test, TensorAliasSignature) {
 
     // Past the pairwise-scan limit the sort-based path must give the same answers.
     std::vector<Tensor> distinct_tensors;
+    distinct_tensors.reserve(20);
     for (int i = 0; i < 20; ++i) {
         distinct_tensors.push_back(make_tensor());
     }
