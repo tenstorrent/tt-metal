@@ -943,6 +943,10 @@
 - name: GPT-OSS 20B e2e tests
   cmd: |
     export TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/openai--gpt-oss-20b/ HF_MODEL=openai/gpt-oss-20b
+    # The release settings (models/demos/gpt_oss/__init__.py) read GPTQ-rounded weights from a pinned Hugging Face Hub
+    # revision. A run with mlperf-write-access goes online once to put them in the shared Hub cache and rebuild the
+    # shared tensor cache; read-only runs then load everything offline from the two caches.
+    [ "${MLPERF_READ_ONLY:-true}" = "false" ] && export HF_HUB_OFFLINE=0
     pytest models/demos/gpt_oss/demo/text_demo.py --timeout 600
     # DFlash accuracy (QuietBox 2; skips elsewhere). The drafter is not in the shared HF cache (read-only, offline here):
     # download it into a job-local cache.

@@ -51,7 +51,13 @@ class GptOssLazyStateDict(Mapping[str, torch.Tensor]):
     - Every other float tensor is returned as bf16 (``from_pretrained(torch_dtype=torch.bfloat16)``).
     """
 
-    def __init__(self, weights_path: str | os.PathLike, head_dim: int, convert_to_meta_format: bool = True):
+    def __init__(
+        self,
+        weights_path: str | os.PathLike,
+        head_dim: int,
+        convert_to_meta_format: bool = True,
+        with_decode_rounded: bool = True,
+    ):
         self._dir = resolve_checkpoint_dir(weights_path)
         self._head_dim = head_dim
         self._convert_to_meta_format = convert_to_meta_format
@@ -78,8 +84,9 @@ class GptOssLazyStateDict(Mapping[str, torch.Tensor]):
         # TEMP experiment: GPT_OSS_DENSE_ROUNDED_DECODE = a file of GPTQ-rounded dense weights (dense_gptq.py; q / k in
         # Meta order); each of its keys is also served as "<key>_decode", which only the fused decode stream copies
         # read (attention/weights.py, topk.py, model.py LM head), so prefill keeps the checkpoint weights.
-        self._decode_rounded_path = env_path(
-            "GPT_OSS_DENSE_ROUNDED_DECODE"
+        # (with_decode_rounded=False: no fused decode copy will read them, so the file is not resolved / downloaded)
+        self._decode_rounded_path = (
+            env_path("GPT_OSS_DENSE_ROUNDED_DECODE") if with_decode_rounded else ""
         )  # a local file or hf://... (tt/weight_source.py)
         self._decode_rounded = None
         if self._decode_rounded_path:

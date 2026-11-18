@@ -13,6 +13,8 @@ on QuietBox 2 (the tt-inference-server P300X2 entry), for gpt-oss-20b only.
   GPT_OSS_DECODE_SPLIT_NATIVE_FOLD=0, GPT_OSS_BOUNDARY_FIDELITY=HiFi2, or GPT_OSS_DENSE_ROUNDED_DECODE= ).
 - GPT_OSS_RELEASE_DEFAULTS=0 turns all of them off (the old behavior: every switch off unless set).
 - gpt-oss-120b gets none of them: the per-layer ranks and the rounded weights below are gpt-oss-20b's.
+- Nor does a config-only gpt-oss-20b directory (the unit tests' models/demos/gpt_oss/configs/gpt-oss-20b, random
+  weights): the rounded weights replace the checkpoint's values, so they only fit the real checkpoint.
 - The decode switches act only on the fused decode path (1x4 Blackhole mesh); elsewhere they are read and unused.
 - The rounded weights are Hugging Face Hub locations at pinned revisions (tt/weight_source.py), downloaded once into
   the Hub cache. The experts use the K-GPTQ rounding for decode and prefill (GPT_OSS_PREFILL_KGPTQ).
@@ -65,9 +67,18 @@ def is_gpt_oss_20b(path):
     return "20b" in name and "120b" not in name
 
 
+def has_checkpoint(path):
+    """Whether path names real weights: a Hub id (not a local directory) or a directory with safetensors files. The
+    repo's config-only directories (models/demos/gpt_oss/configs/*, random weights) have none."""
+    if not os.path.isdir(path):
+        return True
+    return any(f.endswith(".safetensors") or f.endswith(".safetensors.index.json") for f in os.listdir(path))
+
+
 def apply_release_defaults():
-    """Set each unset GPT_OSS_* release variable (gpt-oss-20b only); returns the names it set."""
-    if os.environ.get("GPT_OSS_RELEASE_DEFAULTS", "1") == "0" or not is_gpt_oss_20b(_model_path()):
+    """Set each unset GPT_OSS_* release variable (gpt-oss-20b with its real weights only); returns the names it set."""
+    path = _model_path()
+    if os.environ.get("GPT_OSS_RELEASE_DEFAULTS", "1") == "0" or not is_gpt_oss_20b(path) or not has_checkpoint(path):
         return []
     applied = [k for k in RELEASE_DEFAULTS_20B if k not in os.environ]
     for k in applied:
