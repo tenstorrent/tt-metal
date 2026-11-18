@@ -295,6 +295,7 @@ set(JITAPI_FILES
     impl/dispatch/kernels/device_print_dispatch.h
     impl/buffers/kernels/tensor_prefetcher.cpp
     impl/buffers/kernels/tensor_prefetcher_fifo_device.h
+    impl/buffers/kernels/tensor_prefetcher_groups.h
     impl/buffers/kernels/tensor_prefetcher_pusher.cpp
     impl/buffers/kernels/tensor_prefetcher_reader.cpp
     impl/buffers/kernels/tensor_prefetcher_reader.h

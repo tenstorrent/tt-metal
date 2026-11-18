@@ -19,9 +19,17 @@
 // count does (tensor_prefetcher_fifo.hpp), so the reader runs on into the next tensor while the pusher
 // is still sending the last one's blocks.
 //
+// A reader that is the first kernel in tensor_prefetcher_kernels() plans each tensor (kPlansBlocks): its source
+// decides how many blocks each receiver gets, and the reader publishes that in the slot's plan. A reader further
+// down follows the plan the first kernel published.
+//
 // A BlockSource has these members, `i` naming a receiver of the tensor's TensorStream:
-//   void begin_tensor(volatile tt_l1_ptr fifo::SlotHeader* slot, uint32_t e, const TensorStream& stream)
-//       Before the reader stages tensor `e` of `slot`, planned as `stream`.
+//   uint32_t plan_blocks(volatile tt_l1_ptr fifo::SlotHeader* slot, uint32_t e, const TensorStream& stream)
+//       Only in a planning reader: how many blocks each receiver gets of tensor `e` of `slot`, planned as
+//       `stream`. GroupSelection (tensor_prefetcher_groups.h) picks a grouped tensor's groups.
+//   void begin_tensor(volatile tt_l1_ptr fifo::SlotHeader* slot, uint32_t e, const TensorStream& stream,
+//                     uint32_t blocks)
+//       Before the reader stages `blocks` blocks of tensor `e` for each receiver.
 //   bool ready(uint32_t i, uint32_t block)
 //       Whether receiver `i`'s block `block` can be read now. A block that is not ready waits for a later
 //       pass, as one whose stage slot is still full does.
@@ -57,22 +65,22 @@ inline bool wait_for_pusher(const FifoConsumer& requests, uint32_t num_receivers
     return true;
 }
 
-// Stages every block of one tensor. False if termination was requested first.
+// Stages `blocks` blocks of one tensor for each receiver. False if termination was requested first.
 template <typename BlockSource>
-bool stage_tensor(const FifoConsumer& requests, const TensorStream& stream, BlockSource& source) {
+bool stage_tensor(const FifoConsumer& requests, const TensorStream& stream, uint32_t blocks, BlockSource& source) {
     uint32_t staged[fifo::kMaxReceivers];
     uint32_t next_block[fifo::kMaxReceivers];
     for (uint32_t i = 0; i < stream.num_receivers; ++i) {
         staged[i] = *region.staged(i);
         next_block[i] = 0;
     }
-    uint32_t remaining = stream.num_receivers * stream.block_count;
+    uint32_t remaining = stream.num_receivers * blocks;
     WAYPOINT("TRSW");
     while (remaining > 0) {
         uint32_t reading = 0;
         bool waiting_on_pusher = false;
         for (uint32_t i = 0; i < stream.num_receivers; ++i) {
-            if (next_block[i] == stream.block_count) {
+            if (next_block[i] == blocks) {
                 continue;
             }
             if (staged[i] - *region.pushed(i) == fifo::kStageSlotsPerReceiver) {
@@ -140,8 +148,15 @@ bool stage_request(
             }
             layout_receivers = stream.num_receivers;
         }
-        source.begin_tensor(slot, e, stream);
-        if (!stage_tensor(requests, stream, source)) {
+        uint32_t blocks = 0;
+        if constexpr (kPlansBlocks) {
+            blocks = source.plan_blocks(slot, e, stream);
+            *tensor_blocks(slot, e) = blocks;
+        } else if (!wait_for_tensor_blocks(requests, slot, e, blocks)) {
+            return false;
+        }
+        source.begin_tensor(slot, e, stream, blocks);
+        if (!stage_tensor(requests, stream, blocks, source)) {
             return false;
         }
     }

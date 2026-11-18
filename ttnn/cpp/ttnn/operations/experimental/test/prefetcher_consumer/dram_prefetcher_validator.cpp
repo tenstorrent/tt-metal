@@ -195,6 +195,41 @@ ValidatorGeometry compute_validator_geometry(const ttnn::Tensor& source_tensor, 
     return geom;
 }
 
+// The groups of a grouped weight the pipe validator expects, as its kernel takes them: the weight's group
+// count (dim -3 of its shape, 1 for an ungrouped weight) and a bit per group that arrives.
+struct GroupSelection {
+    uint32_t num_groups = 1;
+    uint32_t mask = 1;
+};
+
+// `groups` lists the groups the prefetcher delivers, ascending; empty means every group.
+GroupSelection select_validated_groups(const ttnn::Tensor& source_tensor, const std::vector<uint32_t>& groups) {
+    const auto& shape = source_tensor.padded_shape();
+    GroupSelection selection;
+    selection.num_groups = shape.rank() >= 3 ? shape[-3] : 1;
+    constexpr uint32_t kMaskBits = 32;
+    TT_FATAL(
+        selection.num_groups <= kMaskBits,
+        "Validator: the pipe validator follows at most {} groups in its group mask, but the weight has {}",
+        kMaskBits,
+        selection.num_groups);
+    if (groups.empty()) {
+        selection.mask = selection.num_groups == kMaskBits ? ~0u : (1u << selection.num_groups) - 1;
+        return selection;
+    }
+    selection.mask = 0;
+    for (size_t k = 0; k < groups.size(); ++k) {
+        TT_FATAL(
+            groups[k] < selection.num_groups && (k == 0 || groups[k] > groups[k - 1]),
+            "Validator: groups must be ascending group indices below the weight's {} groups; entry {} is {}",
+            selection.num_groups,
+            k,
+            groups[k]);
+        selection.mask |= 1u << groups[k];
+    }
+    return selection;
+}
+
 // Physical block the receiver at `ring_pos` expects at FIFO position 0 under streaming:
 // rotation[ring_pos] when a rotation was supplied (it must be the one queued to the prefetcher),
 // else ring_pos for the identity (natural topology) order. Ignored by the kernel when not
@@ -373,7 +408,8 @@ tt::tt_metal::distributed::MeshWorkload make_tensor_prefetcher_pipe_validator_wo
     const std::vector<std::shared_ptr<tt::tt_metal::experimental::PrefetcherPipe>>& prefetcher_pipes,
     const std::vector<std::pair<uint32_t, CoreRangeSet>>& bank_to_receivers,
     bool streaming,
-    const std::vector<uint32_t>& rotation) {
+    const std::vector<uint32_t>& rotation,
+    const std::vector<uint32_t>& groups) {
     using namespace tt::tt_metal;
 
     TT_FATAL(!prefetcher_pipes.empty(), "prefetcher_pipes must hold at least one pipe");
@@ -426,11 +462,14 @@ tt::tt_metal::distributed::MeshWorkload make_tensor_prefetcher_pipe_validator_wo
     receiver.tensor_bindings = {{.tensor_parameter_name = source_name, .accessor_name = "source_tensor"}};
     receiver.scratchpad_bindings = {{.scratchpad_spec_name = scratch_name, .accessor_name = "expected"}};
     receiver.advanced_options.prefetcher_pipe_bindings = {{.pipe_parameter_names = names, .accessor_name = "in"}};
+    const GroupSelection selection = select_validated_groups(source_tensor, groups);
     receiver.compile_time_args = {
         {"num_layers", num_layers},
         {"num_blocks", geom.num_blocks},
         {"print_stride", print_stride},
-        {"streaming", streaming ? 1u : 0u}};
+        {"streaming", streaming ? 1u : 0u},
+        {"num_groups", selection.num_groups},
+        {"group_mask", selection.mask}};
     receiver.runtime_arg_schema.runtime_arg_names = {
         "bank_id",
         "recv_idx_in_bank",
@@ -484,9 +523,18 @@ void test_tensor_prefetcher_pipe_validator(
     const std::vector<std::shared_ptr<tt::tt_metal::experimental::PrefetcherPipe>>& prefetcher_pipes,
     const std::vector<std::pair<uint32_t, CoreRangeSet>>& bank_to_receivers,
     bool streaming,
-    const std::vector<uint32_t>& rotation) {
+    const std::vector<uint32_t>& rotation,
+    const std::vector<uint32_t>& groups) {
     tt::tt_metal::distributed::MeshWorkload workload = make_tensor_prefetcher_pipe_validator_workload(
-        mesh_device, source_tensor, num_layers, print_stride, prefetcher_pipes, bank_to_receivers, streaming, rotation);
+        mesh_device,
+        source_tensor,
+        num_layers,
+        print_stride,
+        prefetcher_pipes,
+        bank_to_receivers,
+        streaming,
+        rotation,
+        groups);
     tt::tt_metal::distributed::EnqueueMeshWorkload(mesh_device->mesh_command_queue(), workload, /*blocking=*/false);
     tt::tt_metal::distributed::Finish(mesh_device->mesh_command_queue());
 }
