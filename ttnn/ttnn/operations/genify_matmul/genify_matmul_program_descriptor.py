@@ -392,14 +392,22 @@ _FIDELITY_PHASES = {
 }
 
 
+def _out_list(out):
+    """The output tensor(s): one tensor, or the `chunks` equal-width column chunks of a split output
+    (Refinement 13; interleaved placement only). The geometry is the LOGICAL output, the chunks side by side."""
+    return list(out) if isinstance(out, (list, tuple)) else [out]
+
+
 def _geometry(a, b, out, fp32_dest_acc_en, epilogue="none", row=None, residual=None, math_fidelity=None):
+    outs = _out_list(out)
+    out = outs[0]
     a_shape = list(a.shape)
     b_shape = list(b.shape)
     lead = a_shape[:-2]
     img_m_tiles = _cdiv(a_shape[-2], TILE)
     tensor_k_tiles = _cdiv(a_shape[-1], TILE)
     tensor_n_tiles = _cdiv(b_shape[-1], TILE)
-    out_n_tiles = _cdiv(list(out.shape)[-1], TILE)
+    out_n_tiles = sum(_cdiv(list(o.shape)[-1], TILE) for o in outs)
     lead_prod = 1
     for d in lead:
         lead_prod *= d
@@ -985,7 +993,7 @@ def plan(a, b, out, fp32_dest_acc_en, device, epilogue="none", row=None, residua
     geom = _geometry(a, b, out, fp32_dest_acc_en, epilogue, row, residual, math_fidelity)
     grid_size = device.compute_with_storage_grid_size()
     gx, gy = grid_size.x, grid_size.y
-    budget = l1_cb_budget(device, [t for t in (a, b, out, row, residual) if t is not None])
+    budget = l1_cb_budget(device, [t for t in (a, b, *_out_list(out), row, residual) if t is not None])
     grid, blocking = choose_split(geom, gx, gy, budget)
     return geom, grid, blocking, (gx, gy)
 
@@ -1137,6 +1145,13 @@ def create_program_descriptor(
         math_fidelity=compute_config.math_fidelity,
     )
     cores, core_ranges = _logical_cores(grid, gx)
+    # Split output (Refinement 13): the chunks share one memory config / dtype / shape, so chunk 0 stands in
+    # for every per-tensor property; the writer (and the reader's tail share) route each output tile column
+    # to its chunk through the address table appended to their runtime args (kernels/out_chunks.hpp).
+    outs = _out_list(out)
+    out = outs[0]
+    out_row_tiles = geom.out_n_tiles // len(outs)  # tiles per tile row of ONE output tensor
+    chunk_addrs = [o.buffer_address() for o in outs[1:]]
 
     out_block_n_tiles = geom.out_block_n(blk.block_n_tiles)  # swiglu halves the output width
     cb_row = CB_GATE_ROW if epilogue == "addcmul" else CB_BIAS_ROW
@@ -1244,9 +1259,9 @@ def create_program_descriptor(
         # The writer walks output columns: swiglu halves col0 / cols_valid (both even, q_n >= 2).
         out_region = [b0, batches_valid, row0, rows_valid, col0 // out_div, cols_valid // out_div, nb_b, nb_m, nb_n]
         a_stream_rt = [a_addr, geom.tensor_k_tiles] if act_stream else []  # R1b: the writer reads A
-        wrt = [out_addr, *out_region, geom.tensor_m_tiles, geom.out_n_tiles, *a_stream_rt]
+        wrt = [out_addr, *out_region, geom.tensor_m_tiles, out_row_tiles, *a_stream_rt, *chunk_addrs]
         # Tail write split (Perf 2): the reader serves part of the last block's writes on NoC0.
-        reader_args[(core.x, core.y)] += [out_addr, *out_region, geom.tensor_m_tiles, geom.out_n_tiles]
+        reader_args[(core.x, core.y)] += [out_addr, *out_region, geom.tensor_m_tiles, out_row_tiles, *chunk_addrs]
         writer_rt[core.x][core.y] = wrt
         compute_rt[core.x][core.y] = [nb_b * nb_m * nb_n, NO_OWN_KB, nb_n]
 
@@ -1300,6 +1315,9 @@ def create_program_descriptor(
     else:
         ttnn.attach_absent_mcast(writer, "act")  # the writer's A role (R4 rounds / R1b stream) is absent
     _attach_tail_split(descriptor, readers, writer, core_ranges, blk, out_block_n_tiles, geom, out)
+    if len(outs) > 1:
+        for k in (*readers, writer):
+            k.defines = list(k.defines) + [("GM_OUT_CHUNKS", str(len(outs)))]
     _attach_k_head_ramp(readers, compute, blk, mode, epilogue)
     walk, *streams = split_cost_terms(geom, grid, blk)
     if NONE_RAW_WALK and epilogue == "none" and walk >= NONE_RAW_WALK_MIN_RATIO * max(streams):

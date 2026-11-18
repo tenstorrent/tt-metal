@@ -41,6 +41,7 @@
 #include "ttnn/ttnn/operations/genify_matmul/kernels/genify_matmul_ds_act.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/perf_instrumentation.hpp"
 #include "ttnn/ttnn/operations/genify_matmul/kernels/tail_split.hpp"
+#include "ttnn/ttnn/operations/genify_matmul/kernels/out_chunks.hpp"
 
 namespace {
 // Valid extent of a block starting at `start` inside a region of `valid` tiles (0 when the block lies
@@ -105,12 +106,14 @@ void kernel_main() {
     const uint32_t nb_m = get_arg_val<uint32_t>(arg++);
     const uint32_t nb_n = get_arg_val<uint32_t>(arg++);
     const uint32_t tensor_m_tiles = get_arg_val<uint32_t>(arg++);
+    // Output tiles per tile row of one output tensor (N_out, or N_out / chunks for a split output).
     const uint32_t out_n_tiles = get_arg_val<uint32_t>(arg++);
     // R4 A rounds: the A shard's L1 address. R1b: A's buffer address.
     [[maybe_unused]] const uint32_t a_addr = act_mode != 0 ? get_arg_val<uint32_t>(arg++) : 0;
     [[maybe_unused]] const uint32_t tensor_k_tiles = act_stream ? get_arg_val<uint32_t>(arg++) : 0;  // R1b
+    // Refinement 13 split output: chunk 0 is out_addr, chunks 1.. follow (out_chunks.hpp).
+    const out_chunks::Table out_tab = out_chunks::read_table(out_addr, out_n_tiles, arg);
 
-    const auto out_acc = TensorAccessor(out_args, out_addr, o_page_bytes);
     [[maybe_unused]] const auto a_acc = TensorAccessor(a_args, a_addr, a_page_bytes);
 
     constexpr auto mc_act = dataflow_kernel_lib::
@@ -160,6 +163,7 @@ void kernel_main() {
             for (uint32_t nbk = 0; nbk < nb_n; ++nbk) {
                 const uint32_t blk_c0 = nbk * out_block_n_tiles;
                 const uint32_t blk_cols = block_extent(cols_valid, blk_c0, out_block_n_tiles);
+                const out_chunks::Col blk_col = out_chunks::locate(out_tab, col0 + blk_c0);
                 if constexpr (act_stream) {
                     // R1b: this block's K-walk of A (once per M-block when A is resident across N-blocks).
                     // Every core walks the same nominal sequence, so the cb_act_tiles write pointers are in
@@ -243,15 +247,16 @@ void kernel_main() {
                                 if (blk_row >= blk_rows) {
                                     break;
                                 }
-                                const uint32_t page =
-                                    (batch * tensor_m_tiles + row0 + blk_r0 + blk_row) * out_n_tiles + col0 + blk_c0;
-                                uint32_t l1 = l1_base + r * out_block_n_tiles * o_tile_bytes;
-                                for (uint32_t n = 0; n < blk_cols; ++n) {
-                                    if (!tail || !tail_split::reader_owns(n, blk_cols)) {
-                                        noc_async_write(l1, out_acc.get_noc_addr(page + n), o_tile_bytes);
-                                    }
-                                    l1 += o_tile_bytes;
-                                }
+                                out_chunks::write_row(
+                                    out_args,
+                                    out_tab,
+                                    o_page_bytes,
+                                    o_tile_bytes,
+                                    l1_base + r * out_block_n_tiles * o_tile_bytes,
+                                    batch * tensor_m_tiles + row0 + blk_r0 + blk_row,
+                                    blk_col,
+                                    blk_cols,
+                                    [&](uint32_t n) { return !tail || !tail_split::reader_owns(n, blk_cols); });
                             }
                             noc_async_writes_flushed();  // slot is free once the writes left L1
                         }

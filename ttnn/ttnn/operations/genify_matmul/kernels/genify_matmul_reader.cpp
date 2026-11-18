@@ -114,6 +114,7 @@
 #include "ttnn/ttnn/operations/genify_matmul/kernels/genify_matmul_ds_act.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/perf_instrumentation.hpp"
 #include "ttnn/ttnn/operations/genify_matmul/kernels/tail_split.hpp"
+#include "ttnn/ttnn/operations/genify_matmul/kernels/out_chunks.hpp"
 #include "ttnn/ttnn/operations/genify_matmul/kernels/genify_matmul_kschedule.hpp"
 
 // R1a injector stall-shadow (Refinement 11, host R1A_INJECTOR_AHEAD): a line injector issues K-block kb+1's
@@ -339,8 +340,8 @@ void kernel_main() {
     const uint32_t t_nb_m = get_arg_val<uint32_t>(arg++);
     const uint32_t t_nb_n = get_arg_val<uint32_t>(arg++);
     const uint32_t t_tensor_m_tiles = get_arg_val<uint32_t>(arg++);
-    const uint32_t t_out_n_tiles = get_arg_val<uint32_t>(arg++);
-    const auto t_out_acc = TensorAccessor(out_args, t_out_addr, TAIL_O_PAGE_BYTES);
+    const uint32_t t_out_n_tiles = get_arg_val<uint32_t>(arg++);  // per output tensor (chunk)
+    const out_chunks::Table t_out_tab = out_chunks::read_table(t_out_addr, t_out_n_tiles, arg);
     const uint32_t tail_mbox = get_semaphore(TAIL_SEM_MBOX);
     const uint32_t tail_post = get_semaphore(TAIL_SEM_POST);
     const uint32_t tail_done = get_semaphore(TAIL_SEM_DONE);
@@ -352,6 +353,7 @@ void kernel_main() {
     const uint32_t t_blk_rows = block_extent(t_rows_valid, t_blk_r0, block_m_tiles);
     const uint32_t t_blk_c0 = (t_nb_n - 1) * t_out_block_n;
     const uint32_t t_blk_cols = block_extent(t_cols_valid, t_blk_c0, t_out_block_n);
+    const out_chunks::Col t_blk_col = out_chunks::locate(t_out_tab, t_col0 + t_blk_c0);
     // The tail is the LAST block-batch of that block only (see the writer): its output follows the reader's final
     // K-block push, so serving it after the walk can never hold the writer while this reader still has reads.
     constexpr uint32_t t_bi = block_batches - 1;
@@ -370,15 +372,16 @@ void kernel_main() {
                 if (blk_row >= t_blk_rows) {
                     break;
                 }
-                const uint32_t page =
-                    (batch * t_tensor_m_tiles + t_row0 + t_blk_r0 + blk_row) * t_out_n_tiles + t_col0 + t_blk_c0;
-                uint32_t l1 = l1_base + r * t_out_block_n * t_o_tile_bytes;
-                for (uint32_t n = 0; n < t_blk_cols; ++n) {
-                    if (tail_split::reader_owns(n, t_blk_cols)) {
-                        noc_async_write(l1, t_out_acc.get_noc_addr(page + n), t_o_tile_bytes);
-                    }
-                    l1 += t_o_tile_bytes;
-                }
+                out_chunks::write_row(
+                    out_args,
+                    t_out_tab,
+                    TAIL_O_PAGE_BYTES,
+                    t_o_tile_bytes,
+                    l1_base + r * t_out_block_n * t_o_tile_bytes,
+                    batch * t_tensor_m_tiles + t_row0 + t_blk_r0 + blk_row,
+                    t_blk_col,
+                    t_blk_cols,
+                    [&](uint32_t n) { return tail_split::reader_owns(n, t_blk_cols); });
             }
             noc_async_writes_flushed();  // the reader's share left L1
         }

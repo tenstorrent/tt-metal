@@ -222,3 +222,7 @@ PERF FOCUS 3 (32 × 512×128 @ 128×1024 bf8b, B in L1): split 32×1×3 → **32
 | output, bias / gate, residual | as R1 | unchanged (per-core) | none |
 
 PERF FOCUS 4 (256×6144 @ 6144×18432 bf16, swiglu; 96 cores, block 8×6): DRAM = A 3.1 MB + B 226 MB + out 4.7 MB ≈ 234 MB (the roofline's traffic), NoC = 3.1 MB A multicast to 95 cores. Before (R1a 8×9, 72 cores): the same DRAM bytes, but B streamed by only the 9 column injectors (25 MB each), 1125 µs; now 633–646 µs, B-stream-bound (B alone 550 µs ≈ 411 GB/s for interleaved 2 KB tile reads; with the A lockstep 578 µs). The single injector caps R1b at ~23 GB/s of A, so the split ranking counts R1b at `max(A + B, ACT_STREAM_INJECTOR_COST · A)` (= 18): text-encoder down 512×16384×5120 (A = 19% of B) keeps R1a.
+
+## Refinement 13 — split output (`chunks`)
+- **No CB change.** `cb_output_tiles` keeps its size and its single producer (compute) / single consumer (writer). The reader still writes its tail share straight out of that CB's L1 under the existing post / done handshake, without popping it.
+- **Data-movement budget unchanged.** The output is written once, tile by tile, as before; only the destination tensor of each tile column changes (`kernels/out_chunks.hpp`). There is no full-width intermediate and no extra op. The `chunks` tensors are DRAM (or L1) interleaved like the unsplit output: `l1_cb_budget` counts all of them when they live in L1.

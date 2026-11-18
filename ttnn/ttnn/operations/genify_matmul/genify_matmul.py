@@ -341,6 +341,17 @@ def _check_contract(input_tensor, weight, bias, activation, residual, gate):
         )
 
 
+def _check_chunks(weight, activation, chunks):
+    """Split output contract: N_out % chunks == 0 and every chunk a whole number of tiles wide."""
+    if isinstance(chunks, bool) or not isinstance(chunks, int) or chunks < 1:
+        raise ValueError(f"genify_matmul: chunks must be an int >= 1, got {chunks!r}")
+    n_out = weight.shape[-1] // 2 if activation == "swiglu" else weight.shape[-1]
+    if n_out % chunks or (n_out // chunks) % TILE:
+        raise ValueError(
+            f"genify_matmul: chunks={chunks} must split N_out={n_out} into equal widths that are multiples of {TILE}"
+        )
+
+
 # ---------------------------------------------------------------------------
 # Public entry point
 # ---------------------------------------------------------------------------
@@ -363,14 +374,15 @@ def genify_matmul(
 
     input_tensor: one tensor A (..., M, K), or a list [A_0, A_1, ...] of K segments read as
     concat(A_i, dim=-1) without materializing the concatenation (K = the segments' K summed).
-    chunks: > 1 returns the output split along its last dim into `chunks` equal tensors, as a list.
-    Neither is implemented yet: both raise UnsupportedAxisValue (see op_requirements.md).
+    chunks: > 1 returns the output split along its last dim into `chunks` equal tensors, as a list
+    (Refinement 13): chunk i is columns [i*w, (i+1)*w) of the output, w = N_out / chunks, each written
+    directly by the same program (no full-width intermediate). Interleaved placement only.
+    A list input is not implemented yet: it raises UnsupportedAxisValue (see op_requirements.md).
     """
     if isinstance(input_tensor, (list, tuple)):
         raise UnsupportedAxisValue("genify_matmul: A as a list of K segments (concat over K) is not implemented yet")
-    if chunks != 1:
-        raise UnsupportedAxisValue("genify_matmul: chunks > 1 (split output) is not implemented yet")
     _check_contract(input_tensor, weight, bias, activation, residual, gate)
+    _check_chunks(weight, activation, chunks)
     axes = validate(
         input_tensor,
         weight,
@@ -381,6 +393,12 @@ def genify_matmul(
         compute_kernel_config=compute_kernel_config,
         memory_config=memory_config,
     )
+
+    if chunks != 1 and axes["placement"] != "interleaved":
+        raise UnsupportedAxisValue(
+            f"genify_matmul: chunks > 1 (split output) is implemented for the interleaved placement only; "
+            f"got {axes['placement']}"
+        )
 
     cfg = _resolve_compute_config(compute_kernel_config)
     device = input_tensor.device()
@@ -399,16 +417,22 @@ def genify_matmul(
 
     a_shape = list(input_tensor.shape)
     n_out = weight.shape[-1] // 2 if activation == "swiglu" else weight.shape[-1]
-    out_shape = a_shape[:-1] + [n_out]
+    # Split output: `chunks` equal-width tensors, each with memory_config and dtype (chunks == 1: one tensor).
+    out_shape = a_shape[:-1] + [n_out // chunks]
 
     # allocate_tensor_on_device takes positional args only.
-    output_tensor = ttnn.allocate_tensor_on_device(ttnn.Shape(out_shape), out_dtype, ttnn.TILE_LAYOUT, device, out_mc)
+    outputs = [
+        ttnn.allocate_tensor_on_device(ttnn.Shape(out_shape), out_dtype, ttnn.TILE_LAYOUT, device, out_mc)
+        for _ in range(chunks)
+    ]
+    output_tensor = outputs if chunks != 1 else outputs[0]
 
     epilogue = _classify_epilogue(bias, activation, residual, gate)
     row = bias if bias is not None else gate  # the (1, N) row the epilogue broadcasts
     program_descriptor = create_program_descriptor(
         input_tensor, weight, output_tensor, cfg, epilogue=epilogue, row=row, residual=residual, placement=placement
     )
-    # Exactly one dispatch; the output tensor is last.
+    # Exactly one dispatch; the output tensor(s) last.
     io_tensors = [t for t in (input_tensor, weight, row, residual) if t is not None]
-    return ttnn.generic_op(io_tensors + [output_tensor], program_descriptor)
+    result = ttnn.generic_op(io_tensors + outputs, program_descriptor)
+    return outputs if chunks != 1 else result

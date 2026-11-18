@@ -38,6 +38,7 @@
 | `dtype` | ttnn.DataType | no | bf16 / bf8b / fp32 | A's dtype | output CB format CT |
 | `memory_config` | ttnn.MemoryConfig | no | see Output | DRAM interleaved | — |
 | `compute_kernel_config` | ttnn.ComputeConfigDescriptor | no | any fidelity / approx; fp32_dest_acc_en bool | `default_compute_kernel_config()` = (HiFi4, fp32_dest_acc_en=True, math_approx_mode=False) | compute kernel config |
+| `chunks` | int | no | ≥ 1; N_out % chunks == 0 and (N_out / chunks) % 32 == 0 (else `ValueError`); > 1 on interleaved placement only (else `UnsupportedAxisValue`) | 1 | `GM_OUT_CHUNKS` define (reader + writer); chunk addresses RT |
 
 **Exports from `ttnn.operations.genify_matmul`:** `genify_matmul`, `default_compute_kernel_config`, `INPUT_TAGGERS`, `SUPPORTED`, `EXCLUSIONS`, `validate`. `eval/golden_tests/genify_matmul/axes.py` imports `INPUT_TAGGERS` and `default_compute_kernel_config`. Passing `None` resolves through that one factory, both in the op and in the golden tagger.
 
@@ -91,6 +92,8 @@ The contract checks run **before** the support gate. A call such as `activation=
 | Memory | `memory_config` (default DRAM interleaved). height/block_sharded: exactly the requested shard spec. dram_sharded (`L1_WIDTH_SHARDED_MEMORY_CONFIG` with no spec): the op builds `MemoryConfig(WIDTH_SHARDED, L1, ShardSpec(worker_cores, [M_pad_total, out_shard_w_tiles·32], ROW_MAJOR))` |
 
 Allocation: `ttnn.allocate_tensor_on_device(ttnn.Shape(out_shape), out_dtype, TILE_LAYOUT, device, out_mc)` (positional args). Dispatch: `ttnn.generic_op([A, B, <bias/gate/residual present>, out], program_descriptor)`, with the output last. This is exactly one dispatch.
+
+**Split output (`chunks` > 1, Refinement 13).** The op allocates `chunks` tensors of shape A[:-1] + [N_out / chunks] (each with `memory_config` and `dtype`) and returns them as a list; `generic_op` gets all of them last. The program is the unsplit one: same split, blocking, compute. Only the store address changes. The host geometry is the logical output (the chunks side by side). The writer and the reader's tail-write share map output tile column gc to chunk gc / w, local column gc % w (w = chunk width in tiles), through `kernels/out_chunks.hpp`. Chunk 0's address is the existing output-address RT arg; chunks 1.. are appended to the RT args. The chunks share one memory config, so one `TensorAccessorArgs` serves all of them. A block row that straddles a chunk boundary is written as one run per chunk; the chunk is located once per block.
 
 ---
 

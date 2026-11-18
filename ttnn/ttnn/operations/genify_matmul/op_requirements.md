@@ -426,7 +426,7 @@ Find the root cause and fix it for every shape and dtype it can reach. A guard o
 
 **Outcome**: root cause = the tail write split (`tail_split.hpp`) held the WHOLE last block's output for the reader, but on a multi-batch block (block_batches > 1; bf16 plans R1a with block_batches = 32, bfp8 plans block_batches = 1) the reader only serves after its walk over the block's later batches -> output CB full -> compute stalls -> reader stuck in `cb_reserve_back` (triage: 64 writers in `wait_at_least`, 64 readers in `cb_reserve_back`). Fix: the split covers only the tail block's LAST batch, whose output exists only after the reader's final K-block push, so the handshake has no cycle for any block_batches / K-block / depth / dtype. Both golden cases pass with and without `--dev`; bf16 H pass now runs in 136.0 us (it hung before). bfp8 H pass: 66.6 -> 67.6 us (medians of 4 A/B runs on the same box, +1.5%: inside the noise band; bfp8's block_batches = 1 goes through the same handshake). Not done here: the bf16 H pass is 2x the bfp8 one. Its plan (R1a, 32-batch blocks of 2x4 tiles, 8x8 grid) has not been profiled; that is perf work for a later round.
 
-### [ ] Refinement 13 — Split output: `chunks` (FLUX.2 QKV ×3, time_mod ×17)
+### [x] Refinement 13 — Split output: `chunks` (FLUX.2 QKV ×3, time_mod ×17)
 
 *Filed by the run operator for the #65150 follow-up.*
 
@@ -450,6 +450,8 @@ Golden: the six `test_op_feature[..._chunksN-...]` cases:
 - The six cases pass.
 - Each FLUX.2 `chunks` case runs within 2% of the same call without `chunks`; LOOSE_CASES has each one. The split is free.
 - Golden is green, and nothing else is slower.
+
+**Outcome**: the writer (and the reader's tail-write share) route each output tile column to its chunk through an address table in the runtime args (`kernels/out_chunks.hpp`); split, blocking and compute unchanged. All six golden cases pass (PCC >= 0.99999 per chunk). Device ns, `chunks` vs the same LOOSE call: double QKV img 962.8 vs 963.9 us; single QKV 1121.1 vs 1122.1 us; time_mod 1605.5 vs 1602.7 us (+0.2%); double QKV txt, 3 runs each, median 328.8 vs 325.4 us (+1.0%, both spread 320-336 us: noise). The split is free. The bottleneck is the matmul itself; nothing left to do for chunks.
 
 ### [ ] Refinement 14 — A as a list of K segments (FLUX.2 single-block out = [attention | MLP])
 
