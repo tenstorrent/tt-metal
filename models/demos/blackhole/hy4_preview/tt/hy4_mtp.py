@@ -147,7 +147,8 @@ class Hy4MTP:
         if self.moe_fn is None:
             S = int(h2.shape[2])
             tok = ttnn.reshape(ttnn.to_layout(h2, ttnn.ROW_MAJOR_LAYOUT), [S, 1, 1, HID])
-            out = ly.blk.forward(h2, tok, fold=part)
+            _blk = ly.blk_tp if getattr(ly, "blk_tp", None) is not None else ly.blk  # B42: tp24 MTP MoE when built
+            out = _blk.forward(h2, tok, fold=part)
             ttnn.deallocate(part)
             out = ttnn.to_memory_config(out, ttnn.DRAM_MEMORY_CONFIG)
             y = ch.mc.allgather(out, ch.ccl, axis=1, dim=3)

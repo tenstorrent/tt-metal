@@ -327,6 +327,12 @@ class Hy4SpecRunner:
         ly.blk = (
             ly.blk.for_batch(self.S) if getattr(ly, "blk", None) is not None else None
         )  # the MTP MoE at batch_per_device = S too
+        if getattr(ly, "blk_tp", None) is not None and ly.blk is not None:
+            # B42 (HY4_B42_MTP_TP24=1): the MTP MoE on the tp24 kernel (TP32) instead of the EP ring block: block at T = S tokens per mesh row, router of the batch-S block
+            from models.demos.blackhole.hy4_preview.tt.hy4_moe_tp32_block import Hy4MoeTp32Block
+
+            assert self.S * int(md.shape[0]) <= 16
+            ly.blk_tp = Hy4MoeTp32Block(md, ch.ccl, ly.blk.gate, ly.blk_tp.tpe, self.S)
         self.mtp_kv = ttnn.empty(
             [1, 1, pages * 64, 656],
             dtype=ttnn.fp8_e4m3,
