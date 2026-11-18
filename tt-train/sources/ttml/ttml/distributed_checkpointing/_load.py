@@ -14,6 +14,7 @@ never corrupt the next save.
 from __future__ import annotations
 
 import os
+import struct
 import time
 import zlib
 from concurrent.futures import ThreadPoolExecutor
@@ -26,7 +27,7 @@ import ttnn
 from ._errors import CheckpointError, IncompleteCheckpointError, MissingKeyError, UnexpectedKeyError
 from ._index import Index, is_complete, read_checked_header, read_index
 from ._planner import KeyPlan, LoadPlan, ReadItem, create_load_plan
-from ._safetensors import pread_all, read_file_header
+from ._safetensors import pread_all
 from ._state_dict import (
     NATIVE,
     NUMPY_CARRIERS,
@@ -178,7 +179,13 @@ class _DataFiles:
                     f"data file {path} is {size} bytes but the index records {record.nbytes}; the checkpoint is "
                     "truncated or corrupt"
                 )
-            _, self.data_start[file_index] = read_file_header(path)
+            # The data section starts after the 8-byte header length and the header, which load does not parse.
+            (length,) = struct.unpack("<Q", pread_all(self.fds[file_index], 8, 0))
+            if 8 + length > size:
+                raise IncompleteCheckpointError(
+                    f"data file {path} declares a {length}-byte header but is {size} bytes; the checkpoint is corrupt"
+                )
+            self.data_start[file_index] = 8 + length
 
     def close(self) -> None:
         for fd in self.fds.values():

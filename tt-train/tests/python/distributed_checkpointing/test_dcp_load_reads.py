@@ -4,18 +4,21 @@
 
 """The load path's file reads, device-free. ``_read_chunk`` reads a chunk with one ``pread`` when the destination
 shards together need at least half of it (on one host they tile the whole tensor, so this is the usual case) and
-falls back to one read per contiguous run otherwise; both must put the same bytes in the same places."""
+falls back to one read per contiguous run otherwise; both must put the same bytes in the same places. A data file's
+data section starts where its 8-byte header length says."""
 
 import os
+import struct
+from types import SimpleNamespace
 
 import numpy as np
 from dcp_oracle import R, S, FakeCheckpoint, arange, assert_shards_equal, expected_shards, world
 
 from ttml.distributed_checkpointing import _load
-from ttml.distributed_checkpointing._errors import CheckpointError
+from ttml.distributed_checkpointing._errors import CheckpointError, IncompleteCheckpointError
 from ttml.distributed_checkpointing._layouts import Identity
 from ttml.distributed_checkpointing._load import _read_chunk
-from ttml.distributed_checkpointing._safetensors import ITEMSIZE
+from ttml.distributed_checkpointing._safetensors import ITEMSIZE, create_file
 
 TP2_COLS = world([R(), S(3)], (1, 2))  # a row-parallel weight: columns split over two devices
 FSDP4_ROWS = world([S(2), R()], (4, 1))  # rows split over four devices: every shard needs rows of both chunks
@@ -145,3 +148,34 @@ def test_a_whole_chunk_read_checks_the_chunk_crc(tmp_path, expect_error):
     finally:
         for fd in fds.values():
             os.close(fd)
+
+
+def test_data_files_take_their_data_offset_from_the_header_length(tmp_path, expect_error):
+    """Load takes each data file's data offset from its 8-byte header length, without parsing the header, and refuses
+    a length that runs past the end of the file."""
+    body = b'{"__metadata__":{}}   '
+    header = struct.pack("<Q", len(body)) + body
+    good = create_file(str(tmp_path / "good.safetensors"), header, 64)
+    (tmp_path / "bad.safetensors").write_bytes(struct.pack("<Q", 1 << 20) + bytes(64))
+    index = SimpleNamespace(
+        files=[
+            SimpleNamespace(path="good.safetensors", nbytes=good + 64),
+            SimpleNamespace(path="bad.safetensors", nbytes=72),
+        ]
+    )
+
+    def plan(*files):
+        return SimpleNamespace(keys={"w": SimpleNamespace(reads=[SimpleNamespace(file=f) for f in files])})
+
+    data_files = _load._DataFiles()
+    try:
+        data_files.open(str(tmp_path), index, plan(0))
+        assert data_files.data_start == {0: len(header)}
+    finally:
+        data_files.close()
+    data_files = _load._DataFiles()
+    try:
+        with expect_error(IncompleteCheckpointError, r"bad.safetensors declares a 1048576-byte header but is 72 bytes"):
+            data_files.open(str(tmp_path), index, plan(1))
+    finally:
+        data_files.close()
