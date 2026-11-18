@@ -4,9 +4,6 @@
 import ttnn
 from typing import List, Optional
 from dataclasses import dataclass
-from loguru import logger
-import tt_lib.fallback_ops as fallback_ops
-import os
 
 # The bbox_reg conv's DRAM slicing. Its weights and bias are prepared for this same slicing
 # (custom_preprocessor): weights prepared for another slicing are laid out for another program.
@@ -154,8 +151,6 @@ class Conv2dNormActivation:
         self.conv_bias = parameters["bias"]
         self.norm_weight = parameters["norm_weight"]
         self.norm_bias = parameters["norm_bias"]
-        # GroupNorm fallback flag
-        self.fallback_on_groupnorm = os.environ.get("FALLBACK_ON_GROUPNORM", "1") == "1"
         self.grid_size = grid_size if grid_size is not None else ttnn.CoreGrid(y=8, x=8)
 
         self.input_mask = input_mask
@@ -170,8 +165,6 @@ class Conv2dNormActivation:
         batch_size: int,
         input_height: int,
         input_width: int,
-        fpn_level: int = None,
-        conv_block_idx: int = None,
     ) -> ttnn.Tensor:
         """
         Forward pass: Conv2d -> GroupNorm -> ReLU
@@ -181,18 +174,10 @@ class Conv2dNormActivation:
             batch_size: Batch size
             input_height: Input height
             input_width: Input width
-            fpn_level: FPN level
-            conv_block_idx: Index of the convolution block
 
         Returns:
             Output tensor after Conv2d + GroupNorm + ReLU
         """
-
-        prefix = (
-            f"[FPN{fpn_level}][Conv{conv_block_idx}]"
-            if fpn_level is not None and conv_block_idx is not None
-            else "[Conv]"
-        )
 
         x, [H_out, W_out], [prepared_weight, prepared_bias] = ttnn.conv2d(
             input_tensor=x,
@@ -216,54 +201,29 @@ class Conv2dNormActivation:
 
         N, H_out, W_out, C = x.shape
 
-        if self.fallback_on_groupnorm:
-            x = ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT)
-            x = ttnn.reshape(x, (N, H_out, W_out, C))
-            x = ttnn.permute(x, (0, 3, 1, 2))
+        spatial_size = H_out * W_out
+        x_flat = ttnn.reshape(x, (N, 1, spatial_size, C))
 
-            x = fallback_ops.group_norm(
-                x,
-                num_groups=self.num_groups,
-                weight=self.norm_weight,
-                bias=self.norm_bias,
-            )
-            x = x.to(self.device)
-            x = ttnn.permute(x, (0, 2, 3, 1))  # NCHW -> NHWC
-            x = ttnn.to_layout(x, ttnn.TILE_LAYOUT)
+        # group_norm counts every row it is given in the group statistics, so the level is not
+        # padded; its grid rows instead divide the level's tile rows. The grid keeps its width,
+        # which the norm weight and bias are prepared for (create_group_norm_weight_bias_rm).
+        tile_rows = -(-spatial_size // 32)
+        grid_rows = max(y for y in range(1, self.grid_size.y + 1) if tile_rows % y == 0)
+        x_normalized = ttnn.group_norm(
+            x_flat,
+            num_groups=self.num_groups,
+            input_mask=self.input_mask,
+            weight=self.norm_weight,
+            bias=self.norm_bias,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            core_grid=ttnn.CoreGrid(y=grid_rows, x=self.grid_size.x),
+            inplace=False,
+            # A few grid rows leave each core many tile rows; group_norm splits them to fit L1.
+            num_out_blocks=-1,
+            compute_kernel_config=self.compute_config,
+        )
 
-        else:
-            # Use TTNN native GroupNorm (when FALLBACK_ON_GROUPNORM=0)
-            logger.debug(f"{prefix} Using TTNN native GroupNorm")
-
-            spatial_size = H_out * W_out
-            required_size = ((spatial_size + self.grid_size.y * 32 - 1) // (self.grid_size.y * 32)) * (
-                self.grid_size.y * 32
-            )
-
-            if spatial_size != required_size:
-                pad_amount = required_size - spatial_size
-                x_flat = ttnn.reshape(x, (N, 1, spatial_size, C))
-                x_padded = ttnn.pad(x_flat, padding=((0, 0), (0, 0), (0, pad_amount), (0, 0)), value=0.0)
-            else:
-                x_padded = ttnn.reshape(x, (N, 1, spatial_size, C))
-
-            # Apply GroupNorm
-            x_normalized = ttnn.group_norm(
-                x_padded,
-                num_groups=self.num_groups,
-                input_mask=self.input_mask,
-                weight=self.norm_weight,
-                bias=self.norm_bias,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                core_grid=self.grid_size,
-                inplace=False,
-                compute_kernel_config=self.compute_config,
-            )
-
-            if spatial_size != required_size:
-                x_normalized = x_normalized[:, :, :spatial_size, :]
-
-            x = ttnn.reshape(x_normalized, (N, input_height, input_width, C))
+        x = ttnn.reshape(x_normalized, (N, input_height, input_width, C))
 
         # ReLU activation
         x = ttnn.relu(x)
@@ -346,9 +306,7 @@ def ttnn_retinanet_regression_head(
         x = feature_map
         for conv_idx, conv_block in enumerate(conv_blocks):
             x = ttnn.to_memory_config(x, ttnn.DRAM_MEMORY_CONFIG)
-            x = conv_block(
-                x, batch_size=batch_size, input_height=H, input_width=W, fpn_level=fpn_idx, conv_block_idx=conv_idx
-            )
+            x = conv_block(x, batch_size=batch_size, input_height=H, input_width=W)
 
         # Final bbox_reg conv layer with config
         if final_conv_config is not None:

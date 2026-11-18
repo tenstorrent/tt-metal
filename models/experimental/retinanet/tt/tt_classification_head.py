@@ -157,9 +157,7 @@ def ttnn_retinanet_classification_head(
                 conv_config=fpn_conv_config,
             )
             x = ttnn.to_memory_config(x, ttnn.DRAM_MEMORY_CONFIG)
-            x = conv_block(
-                x, batch_size=batch_size, input_height=H, input_width=W, fpn_level=fpn_idx, conv_block_idx=conv_idx
-            )
+            x = conv_block(x, batch_size=batch_size, input_height=H, input_width=W)
 
         cls_logits = ttnn.conv2d(
             input_tensor=x,
