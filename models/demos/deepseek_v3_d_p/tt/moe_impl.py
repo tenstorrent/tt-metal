@@ -42,14 +42,15 @@ _MODEL_L1_SMALL = {
 }
 _L1_SMALL_ALIGN = 64  # (the allocator's alignment of the slab and of the model's last buffer)
 
-# The persistent words' slab a core, where the model's word sets need less than MoEBlockConfig.words_slab_bytes:
-# - Kimi-K3: 1920 B (1904 B used at 8x4 chunk 5120, the tail's words now per-call CBs). The default 2304 put the
-#   mesh's L1_SMALL at 3584 B, which pushed the K3 L24 model's top L1 buffer (5376 B) into ring_mla's static CBs
-#   (their region ends at 1564224: L1_SMALL <= 3264 B cleared it then); 1920 gave 3152 B. Nov 6: with
-#   matmul_reduce_scatter_prefill's semaphores and mailbox the mesh opens with 4992 B and the K3 L24 depth test passes
-#   (no CB clash) on b09u02.
+# The persistent words' slab a core, where the model's word sets need less than MoEBlockConfig.words_slab_bytes. The
+# slab sits in L1_SMALL, at the top of L1 with the model's own L1_SMALL and its top L1 buffers, all above ring_mla's
+# static CBs (MLA's chunked attention places them up to a fixed ceiling, 1564224): every byte here is a byte less for
+# them, so the slab is the busiest core's need plus 16 B.
+# - Kimi-K3: 1712 B. Its busiest cores are the head's ports at chunk 5120 (4x4 SP-axis-1 stage and 8x4): the mailbox,
+#   the x gather's and routing exchange's words, the padded-forward metadata (64 B aligned), the combine barrier, the
+#   dispatch semaphores and the router iteration words - 1696 B.
 _MODEL_WORDS_SLAB = {
-    "KimiK3Config": 1920,
+    "KimiK3Config": 1712,
 }
 
 
