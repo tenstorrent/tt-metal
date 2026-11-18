@@ -31,10 +31,14 @@ def _gdn_fused_env():
     mode = os.environ.get("QWEN36_GDN", "chain")
     if mode not in {"chain", "fused"}:
         raise ValueError(f"QWEN36_GDN must be 'chain' or 'fused', got {mode!r}")
-    return mode == "fused" and os.environ.get("QWEN36_SPEC") == "0"
+    return mode == "fused" and (os.environ.get("QWEN36_SPEC") == "0" or _GDN_SPEC_PREFILL)
 
 
+# QWEN36_GDN_SPEC_PREFILL=1 (default off, measurement switch): with spec decode on, QWEN36_GDN=fused serves the prefill
+# calls it can; decode, seed, draft and verify stay on the native path.
+_GDN_SPEC_PREFILL = os.environ.get("QWEN36_GDN_SPEC_PREFILL") == "1"
 _GDN_FUSED = _gdn_fused_env()
+_GDN_FUSED_DECODE = _GDN_FUSED and os.environ.get("QWEN36_SPEC") == "0"
 # QWEN36_GDN_PACKED (default 1, read only with QWEN36_GDN=fused): the fused op takes the projection output as it is,
 # packed [qkv | z | a | b] rows in L1; 0 slices it into qkv / z / a / b in DRAM first.
 _GDN_PACKED = _GDN_FUSED and os.environ.get("QWEN36_GDN_PACKED", "1") != "0"
@@ -1664,7 +1668,13 @@ class TPGatedDeltaNet:
         # works at any width. The B==Bmax path is byte-identical to before.
         B = x.shape[-2]
 
-        _fused = self._gdn_fused and B == Bmax and not self.use_fused_recurrent_decode and self._gdn_fused_state_ok(B)
+        _fused = (
+            self._gdn_fused
+            and _GDN_FUSED_DECODE
+            and B == Bmax
+            and not self.use_fused_recurrent_decode
+            and self._gdn_fused_state_ok(B)
+        )
         GDN_PATH_CALLS["decode", "fused" if _fused else "chain"] += 1
         if _fused:
             return self._forward_decode_fused(x, B)
