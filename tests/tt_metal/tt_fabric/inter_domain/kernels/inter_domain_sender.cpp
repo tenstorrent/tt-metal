@@ -10,6 +10,14 @@
 #include "hostdev/fabric_edm_packet_header.hpp"
 #include "tt_metal/fabric/hw/inc/edm_fabric/edm_fabric_worker_adapters.hpp"
 
+#include <climits>
+#include <type_traits>
+
+// one route entry per hop, packed into runtime-arg words (the host packs the same way)
+using RouteEntry = std::remove_extent_t<decltype(PACKET_HEADER_TYPE::route_buffer)>;
+constexpr uint32_t kEntriesPerArg = sizeof(uint32_t) / sizeof(RouteEntry);
+constexpr uint32_t kEntryBits = sizeof(RouteEntry) * CHAR_BIT;
+
 void kernel_main() {
     size_t i = 0;
     const uint32_t dst_x = get_arg_val<uint32_t>(i++);
@@ -21,20 +29,20 @@ void kernel_main() {
     const uint32_t packet_size = get_arg_val<uint32_t>(i++);
     const uint32_t dst_mesh = get_arg_val<uint32_t>(i++);  // the destination in its own domain
     const uint32_t dst_chip = get_arg_val<uint32_t>(i++);
-    const uint32_t route_len = get_arg_val<uint32_t>(i++);  // route bytes, 4 per word
+    const uint32_t route_len = get_arg_val<uint32_t>(i++);  // route entries, kEntriesPerArg per arg
 
     auto* header = reinterpret_cast<volatile tt_l1_ptr PACKET_HEADER_TYPE*>(header_addr);
-    for (uint32_t w = 0; w < sizeof(PACKET_HEADER_TYPE) / 4; w++) {
+    for (uint32_t w = 0; w < sizeof(PACKET_HEADER_TYPE) / sizeof(uint32_t); w++) {
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(header_addr)[w] = 0;
     }
     header->dst_start_mesh_id = dst_mesh;  // the landing router routes on it in the destination domain
     header->dst_start_chip_id = dst_chip;
     uint32_t word = 0;
     for (uint32_t b = 0; b < route_len; b++) {
-        if (b % 4 == 0) {
+        if (b % kEntriesPerArg == 0) {
             word = get_arg_val<uint32_t>(i++);
         }
-        header->route_buffer[b] = (word >> (8 * (b % 4))) & 0xFF;
+        header->route_buffer[b] = static_cast<RouteEntry>(word >> (kEntryBits * (b % kEntriesPerArg)));
     }
     auto sender = tt::tt_fabric::WorkerToFabricEdmSender::build_from_args<ProgrammableCoreType::TENSIX>(i);
 

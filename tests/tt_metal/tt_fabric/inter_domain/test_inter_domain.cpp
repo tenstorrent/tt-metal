@@ -12,6 +12,7 @@
 #include <gtest/gtest.h>
 
 #include <chrono>
+#include <climits>
 #include <cstdlib>
 #include <filesystem>
 #include <functional>
@@ -21,6 +22,7 @@
 #include <sstream>
 #include <string>
 #include <thread>
+#include <type_traits>
 
 #include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/distributed.hpp>
@@ -36,6 +38,7 @@
 
 #include "impl/context/metal_context.hpp"
 #include "tt_metal/fabric/builder/router_wiring_rules.hpp"
+#include "tt_metal/hw/inc/hostdev/fabric_edm_packet_header.hpp"
 
 namespace tt::tt_fabric::inter_domain_test {
 namespace {
@@ -47,6 +50,10 @@ namespace fs = std::filesystem;
 constexpr uint32_t kNumPackets = 64;
 constexpr uint32_t kPacketSize = 1024;
 constexpr uint32_t kBytes = kNumPackets * kPacketSize;
+// the 2D header's route entries (one per hop), packed into runtime-arg words as the sender kernel unpacks them
+using RouteEntry = std::remove_extent_t<decltype(HybridMeshPacketHeader::route_buffer)>;
+constexpr size_t kEntriesPerArg = sizeof(uint32_t) / sizeof(RouteEntry);
+constexpr size_t kEntryBits = sizeof(RouteEntry) * CHAR_BIT;
 constexpr uint32_t kHeaderOffset = 0;
 constexpr uint32_t kSrcOffset = 4096;
 constexpr uint32_t kDstOffset = kSrcOffset + kBytes;  // kSlots receive slots
@@ -254,7 +261,7 @@ TEST(InterDomain, Sanity) {
             CoreCoord core;
             uint64_t to;
             uint32_t slot;
-            std::vector<uint8_t> route;
+            std::vector<RouteEntry> route;
             std::function<void(Program&, std::vector<uint32_t>&)> connect;
         };
         // by pass, then sending chip: a router's worker channel takes one worker at a time, so the sends through the
@@ -285,7 +292,7 @@ TEST(InterDomain, Sanity) {
                 const auto shape = mesh_graph.get_mesh_shape(exit.mesh_id);
                 const auto at = mesh_graph.chip_to_coordinate(exit.mesh_id, exit.chip_id);
                 const auto ingress = get_opposite_direction(*out);
-                std::vector<uint8_t> route(shape[0] + shape[1], 0);
+                std::vector<RouteEntry> route(shape[0] + shape[1], 0);
                 const bool x_axis = ingress == RoutingDirection::E || ingress == RoutingDirection::W;
                 route[x_axis ? shape[0] + at[1] : at[0]] =
                     1u << control_plane.routing_direction_to_eth_direction(port.direction);
@@ -330,10 +337,10 @@ TEST(InterDomain, Sanity) {
                     rx.mesh,
                     rx.chip,
                     static_cast<uint32_t>(send.route.size())};
-                for (size_t b = 0; b < send.route.size(); b += 4) {
+                for (size_t b = 0; b < send.route.size(); b += kEntriesPerArg) {
                     uint32_t word = 0;
-                    for (size_t k = 0; k < 4 && b + k < send.route.size(); ++k) {
-                        word |= uint32_t{send.route[b + k]} << (8 * k);
+                    for (size_t k = 0; k < kEntriesPerArg && b + k < send.route.size(); ++k) {
+                        word |= uint32_t{send.route[b + k]} << (kEntryBits * k);
                     }
                     args.push_back(word);
                 }
