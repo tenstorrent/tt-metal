@@ -1,0 +1,33 @@
+{
+  "op": "wq_b_linear",
+  "cases": {
+    "a65a1ea36b40": {
+      "label": "dsa_wq_b_chip",
+      "inputs": [[1, 1, 160, 1536], [1536, 4096]],
+      "axes": {
+        "dtype": "DataType.BFLOAT16",
+        "weight_dtype": "DataType.BFLOAT8_B",
+        "layout": "Layout.TILE",
+        "fp32_dest_acc_en": false
+      },
+      "placement": {"out": "L1_INTERLEAVED", "w": "DRAM_INTERLEAVED", "x": "DRAM_INTERLEAVED"},
+      "compute": {"math_approx_mode": false, "math_fidelity": "MathFidelity.HiFi2"},
+      "data": {"seed": 0, "w_dist": "randn", "w_scale": 0.02, "x_dist": "randn"},
+      "pass": {"pcc": 0.9998}
+    }
+  },
+  "results": [
+    {
+      "case": "a65a1ea36b40",
+      "date": "2026-11-18",
+      "board": {"arch": "blackhole", "dram_channels": 7, "grid": [11, 10]},
+      "method": "device_kernel",
+      "k": 5,
+      "ns_median": 20542.5,
+      "ns_min": 20526.2,
+      "ns_max": 20675.8,
+      "pcc": 0.9999709419215943,
+      "sol_ns": 16018
+    }
+  ]
+}
