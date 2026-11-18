@@ -263,3 +263,24 @@ Qwen3.8 M = 128 down (4352×5120 bfp4, A in L1): DRAM = B 12.5 MB + out 1.3 MB; 
 | output, bias / gate, residual | as R1 | unchanged | none |
 
 DRAM bytes are R1a's; what changes is who issues them: a line's reads are spread over its cores (Qwen3.8 M = 512 in_proj: a column line's 1920 bfp4 tile reads, ~50 µs on one core's RISC, now ~1/8 per core) and over the rounds (chunks over the `R1A_LINE_WINDOW = 2` rounds before each turn).
+
+## Refinement 18 — PDL sharded 1×1 convs: one-shot B channel, B groups, split roles
+
+| CB | Capacity (pages) | Live set | Axis accounting | Page format | Producer | Consumer | Lifetime | Shares with / why not |
+|----|------------------|----------|-----------------|-------------|----------|----------|----------|-----------------------|
+| `cb_weight_tiles` (R2 / R3, one-shot walks with a row epilogue) | `depth_weight · block_k_tiles · block_n_tiles` **+ `row_tail` pages** (`row_tail = ceil(block_n · row_tile_bytes / b_tile_bytes)`, `sharded_b_one_shot`) | the walk's only B round, plus the first bias / gate row in the tail past it (until every core copied it into `cb_row`) | `{b: streams, m: streams, n: spans → block_n_tiles, k: spans → K}` (one round = the whole walk); the tail holds one N-block row | B dtype (the tail is raw bytes of the row's dtype; it is never pushed) | reader (the group's injector reads B + the row into it; the multicast lands both on every core) | compute (the round); the reader itself (the tail, L1 → L1 into `cb_row`) | kernel | **Shares the allocation with the row's landing zone.** One delivery per walk is what makes the channel handshake-free and race-free (one flag set, one clear), so the row must ride in B's delivery; a separate `cb_row` landing would need a second flag delivery. Priced in `sharded_b_one_shot` (falls back to the handshaked rounds when the tail does not fit). |
+| `cb_act_tiles` (R3a, parked `BS_A_ONE_SHOT`) | `num_k_blocks · block_m_tiles · block_k_tiles` when on (default `DEPTH_ACT = 2`) | every peer shard of the walk's only block | `{k: spans → K}` | A dtype | reader | compute | kernel | **None** (in0 of the matmul). Parked off: measured slower (concurrent row multicasts serialize). |
+
+- **Producers under the R3 split roles** (`BS_B_ON_WRITER`, in-place R3 walks): `cb_weight_tiles` and `cb_row` are produced by the reader-kernel instance on BRISC (`GM_BS_ROLE 2`); `cb_act_tiles` / `cb_act_shard` and `cb_residual_tiles` by the NCRISC instance (`GM_BS_ROLE 1`). Each CB keeps exactly one producer and one consumer (compute). The output CB is the output's own shard (packed in place, sized to the whole shard), so it has no consumer kernel: the writer kernel is not placed (compute never waits on its space).
+- **R2a B-read helper** (`SHARDED_B_READ_HELPER`): on each multicasting group's injector, a reader instance on BRISC (`GM_BS_ROLE 3`) issues the last `floor(K / 2)` K rows of the walk's only B round into the same `cb_weight_tiles` slot. It never reserves or pushes; the NCRISC reader stays the CB's only producer and pushes after the helper's post. One extra L1 semaphore per core (`GM_BS_B_HELPER_SEM`, the post word). The writer kernel is not placed (in-place output).
+- **Semaphores**: R2 now attaches one `weight` channel per B group (disjoint core sets, each at its own ids). The one-shot channel is handshake-free (1 flag semaphore instead of 2).
+- **No other CB change.** `BS_SPLIT_B_DEPTH` (split, per-core B, parked at 2 = `DEPTH_WEIGHT`) and `BS_SPLIT_B_LOOKAHEAD` (parked at 0) are live knobs that deepen `cb_weight_tiles` to the whole walk; measured flat.
+
+**Data-movement budget, Refinement 18:**
+
+| Tensor | DRAM crossings | Why that many | Cross-core traffic added |
+|--------|----------------|---------------|--------------------------|
+| B (R2) | **one per B group** (= rectangle of the HS core set: 2 on PDL's 86 / 103 / 64-core sets) | each group's injector reads B once (`SHARDED_B_RECT_GROUPS`); before, one injector sent B to the rectangles one after another | multicast of B to each group (the groups multicast concurrently) |
+| bias / gate (R2 one-shot) | 1 per group | read by the injector into `cb_weight_tiles`' tail, delivered with B | rides B's multicast (+`block_n` tiles per delivery) |
+| B (R3 split) | 1 per grid column (now also below the old 3 MiB traffic gate: `BS_SPLIT_B_MCAST_MIN_SAVED_BYTES = 0`) | the column injector's BRISC reads each K-block once, one K-block per round (`BS_SPLIT_B_ROUND_BYTES`) | multicast down the column on NoC1, concurrent with the A row exchange on NoC0 |
+| A, output, residual | unchanged | | |

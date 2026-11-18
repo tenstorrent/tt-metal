@@ -1179,3 +1179,80 @@ Artifacts: `perf_experiments/<slug>/` and `tests/.../genify_matmul/perf_experime
 - Tests added:
   - `test_genify_matmul_dram_sharded.py`: `test_cores_per_bank_split` gains a ragged split (C = 2 over 3-column banks); `test_plan_blocking` pins PERF FOCUS 2 at LoFi (C = 4, 5-column slices, every slice reader in its bank's row) and qkvg (14 columns → 4, 4, 4, 2).
   - `perf/test_genify_matmul_perf_r17.py`: the 10 decode cases.
+
+## Refinement 18 — PDL: sharded 1×1 convs and the bilinear upsample
+- Date: 2026-11-18
+- What was done:
+  - **Fixed cost first** (`/perf-measure`, per-core zone timelines; scripts in this phase's commits). PDL heads (32768×32×32, 103 cores, 1-tile B): the B round ended at +1.9 µs, the bias-row round at +3.4 µs, the epilogue at +4.0 µs. Both rounds were handshake + multicast. Dropping only the handshake (counter signal) left the receivers' arrival times unchanged: the cost was the injector's serial sends (two rectangles one after another, then a second delivery for the row), not the 102 acks.
+  - **R2 one-shot weight channel** (`SHARDED_B_ONE_SHOT`, reader `GM_BS_ROW_TAIL`). A walk of exactly one B round in one chunk (every PDL HS conv) lands in slots no core has used, so the channel runs handshake-free with one linked-flag delivery per walk. The first bias / gate row rides in that delivery from `cb_weight_tiles`' tail (`row_tail` extra pages), and every core copies it L1 → L1 into `cb_row`. A counter signal (two deliveries) needs a write barrier per rectangle: measured 0.9–4.7 µs slower.
+  - **Injector early push**: the injector hands its landed K-block to compute before multicasting it (the send only reads the slot). The injector had been the op's last core.
+  - **R2 B groups** (`SHARDED_B_RECT_GROUPS`, `sharded_b_groups`): each rectangle of the HS core set is its own B group with its own `ttnn.Mcast`, injector and reader `KernelDescriptor`, all multicasting concurrently. Before, one injector sent B to the rectangles in turn: res3's 9-core partial row got B 1.35 µs after the 77-core block. `SHARDED_B_GROUP_ROWS` (bands of 1 / 2 / 4 rows) measured worse (more injectors contend for DRAM), so it is parked at `None`.
+  - **R2a B-read helper** (`SHARDED_B_READ_HELPER`, reader `GM_BS_ROLE 3` + `GM_BS_B_HELPER_SEM`). The injector's B read issue is RISC-serial (~27 ns a tile: 2.2 µs for res3 expand's 80 tiles before the first byte goes out). A reader instance on the injector's BRISC, which has no writer work since the output is in place, issues the last floor(K / 2) K rows into the same slot and posts a local semaphore.
+  - **R3 split roles** (`BS_B_ON_WRITER`, reader `GM_BS_ROLE 1 / 2`). This is the R10-recorded next lever. On in-place R3 walks a second reader instance on BRISC / NoC1 runs the B half (B rounds or reads, the bias / gate row), and NCRISC keeps the A row exchange and the residual. The writer is not placed. Under the split:
+    - one K-block per B round (`BS_SPLIT_B_ROUND_BYTES = 1`; 32 KB / 64 KB / all-K measured worse);
+    - R10's 3 MiB traffic gate lifted (`BS_SPLIT_B_MCAST_MIN_SAVED_BYTES = 0`; res4 reduce 1024 → 256: 12.2 → 9.7 µs);
+    - without a channel, the split only for heavy A rounds or a single grid row (`BS_SPLIT_MIN_A_ROUND_BYTES = 64 KB`, `BS_SPLIT_SINGLE_ROW`; res4 expand / res4 reduce5 per-core on NoC1 were +6 / +4 %);
+    - the per-core B half issues the block's row with its first K-block.
+  - **Measured and parked (correct, live knobs, unit-tested):**
+    - `BS_A_ONE_SHOT`: the whole R3a A exchange at once on a counter. ASPP pool 9.3 → 15.9 µs; eight concurrent multicasts over one 1×8 row serialize on its links, and the matmul loses its overlap.
+    - `BS_SPLIT_B_DEPTH` / `BS_SPLIT_B_LOOKAHEAD`: per-core B read-ahead on the split, flat on ASPP pool.
+  - **Reused / Added.**
+    - Reused: the R2 / R3 walk, CBs, compute kernel, `ttnn.Mcast` channels, `tail_split`'s local-word helpers, the reader kernel itself (its other instances run the B half / the helper).
+    - Added: reader defines `GM_BS_ROW_TAIL`, `GM_BS_ROLE`, `GM_BS_A_ONE_SHOT`, `GM_BS_B_HELPER_SEM`, `GM_BS_B_AHEAD`; host `sharded_b_one_shot`, `sharded_b_groups`, and the knobs above; zones `rd_b_helper`, `rd_b_ahead`, `rd_a_exchange`.
+    - No new kernel file, no new CB index.
+- Device µs (one fresh run each; before = this phase's start; stock `achievable_ns`):
+
+  | Case | Before | After | Stock |
+  |---|---|---|---|
+  | HS res2 shortcut | 10.7 | 10.0 | 9.8 |
+  | HS res2 reduce 128→64 | 4.9 | 3.8 | 4.0 |
+  | HS res2 expand | 8.9 | 8.2 | 8.7 |
+  | HS res2 reduce 256→64 | 6.1 | 5.1 | 5.0 |
+  | HS res3 reduce 32768×256×128 | 10.3 | 9.3 | 9.4 |
+  | HS res3 expand | 9.9 | 8.3 | 8.2 |
+  | HS res3 reduce | 8.4 | 6.6 | 6.9 |
+  | HS decoder skip 8192×512×64 | 6.0 | 4.7 | 4.65 |
+  | HS decoder skip 32768×256×32 | 4.4 | 3.4 | 3.6 |
+  | HS semantic logits | 4.4 | 3.4 | 3.6 |
+  | HS heads | 4.4 | 2.8 | 3.5 |
+  | HS res3 shortcut (bf16 A) | 15.7 | 12.6 | 13.05 |
+  | BS res4 reduce 512→256 | 18.9 | 18.4 | 16.6 |
+  | BS res4 expand | 13.1 | 12.9 | 13.6 |
+  | BS res4 reduce 1024→256 | 12.1 | 9.7–10.0 | 9.4 |
+  | BS res5 shortcut | 30.3 | 28.7 | 72.4 |
+  | BS res5 reduce 1024→512 | 14.9 | 11.6 | 10.6 |
+  | BS res5 expand | 24.0 | 22.8 | 24.2 |
+  | BS res5 reduce 2048→512 | 23.0 | 16.6 | 16.1 |
+  | BS ASPP 1×1 | 18.4 | 13.9–14.1 | 13.8 |
+  | BS ASPP pool | 9.3 | 8.8–9.4 | 6.9 |
+  | BS ASPP projection | 18.6 | 16.7 | 16.8 |
+  | BS res4 shortcut (bf16 A) | 17.2 | 14.2 | 16.2 |
+  | upsample H pass (×3) | 66.6 | 66.8 | 123.0 (roofline 43.5) |
+  | upsample W pass (×3) | 12.4 | 12.7 | 15.4 |
+
+- **Measured floors for what is still above stock / roofline:**
+  - **H pass.** Write-only (reads + compute stubbed, all sync kept) is 62.6 µs vs 67 µs full: 17.8 MB of 1088 B tile writes at ~285 GB/s. The 1.2× roofline target (52 µs) is below that floor. Every write lever measured flat or worse:
+    - writing all output over both NoCs (single block + tail split at 25 / 36 / 50 %): 65–82 µs;
+    - more cores, NoC0, bank stagger, batching: Refinement 8.
+  - **R3 (ablation: compute stubbed / B stubbed / both, handshakes kept).**
+    - res4 reduce 512→256: 18.5 / 18.5 / 15.9. The handshaked A row exchange alone is 15.9 (stock 16.6), and it overlaps imperfectly with the 32×16-tile-K matmul.
+    - res5 reduce: 11.7 / 10.1 / 9.0.
+    - res5 reduce 2: 16.7 / 14.9 / 12.3.
+    - res4 reduce 1024→256 (before the gate lift): 12.1 / 9.9 / 9.9.
+    - ASPP pool: 9.2 / 6.7 / 6.5. Its A rounds alone run 6.5 µs (stock 6.9); with B traffic in flight they stretch from ~0.6 to ~1.0 µs each (contention, not B latency: read-ahead measured flat).
+  - **HS.** Within 1–3 % of stock on res2 shortcut / reduce 256→64, res3 expand and decoder skip 8192: injector read issue (now split over two RISCs) + multicast + an FPU-bound LoFi matmul + the bias epilogue pass.
+- Guard (base = this phase's start commit's descriptor + reader, same session; `/tmp` harness swapping the two files):
+  - perf_guard 62 ops: worst +4.0 % on 2048×256×512 HiFi2, which re-ran 3× at −2.2..+2.0 % (noise); PDL sharded rows −6..−25 %.
+  - r17 (R4) worst +0.9 %, r15 (R1b) +1.8 %, r16 (R1a split lines) +2.0 %, r11 +1.4 %, PERF FOCUS 1 0.0 %.
+  - ASPP pool's single-reader path measured +4 % from reader codegen alone (host descriptor byte-identical); the single-row split restored it.
+- Accuracy achieved: every multicast, split-role, one-shot and helper path is bit-identical to the per-core-read single-reader walk (`torch.equal`, `test_genify_matmul_sharded_b_mcast.py`). Golden PDL loose cases pass at their helpers.TOLERANCES gates (bf8b LoFi).
+- Golden test progress: `test_golden.py -k "(test_op_loose and (height_sharded or block_sharded)) or (test_op and not loose and (height_sharded or block_sharded) and (bias_relu or addcmul or bias)) or (batched and interleaved)"`: 551 passed, 105 xfailed (the permanent EXCLUSIONs), 0 failed. Unit: every file but the precision matrix, 252/252.
+- Issues encountered:
+  - `static_assert` inside `if constexpr` in `kernel_main` (non-template) is still evaluated; hoisted as a conditional assert.
+  - The test spy recorded only the last `_sharded_b_channel` call. R2 now builds one channel per group, so the spy records "any group multicasts" plus a channel count.
+  - The B-read helper first assumed a core list on R3 single-K-shard grids (ZeroDivisionError). It is R2-only.
+- Tests added (`test_genify_matmul_sharded_b_mcast.py`):
+  - `test_hs_one_shot_rect_groups` (heads, res3 expand, addcmul, swiglu: channel count per rectangle, one-shot + row tail);
+  - `test_bs_split_roles` (res5 reduce, ASPP pool, addcmul × lookahead 0 / 2: both halves present, bit-identical);
+  - `test_bs_a_one_shot_parked` (ASPP pool, res5 reduce);
+  - `test_bs_traffic_gate` now pins the gate on one reader and the multicast under the split.

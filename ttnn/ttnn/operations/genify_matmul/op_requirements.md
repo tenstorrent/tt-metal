@@ -618,7 +618,7 @@ Start with qkvg: N = 3584 is 112 tiles, 14 per bank, so the banks are balanced, 
 
 **Outcome**: device µs before → after (roofline): qkvg 31.9 → 24.2 (22.4, 1.08×; stock 29.2), LM head last chunk 100.9 → 83.9 (80.8, 1.04×), in_proj 33.1 → 30.3 (28.8, 1.05×), down 29.5 → 29.3 (27.2, 1.08×), gate_up + SwiGLU 62.4 → 60.1 (57.6, 1.04×), LM head 104.1 → 100.7 (102.4, 0.98×), batch 32 gate_up 62.0 → 60.3, batch 32 down 30.1 → 29.6 (1.09×); out_proj 11.3 → 11.6 / batch 16 11.3 → 11.2 (9.6, 1.17–1.21×) is at its measured floor (compute + A payload stubbed 10.8 µs; every payload stubbed 9.3 µs, 3.5 µs without the 8 A rounds). Levers: ragged bank slices + the smallest compute-hiding cores_per_bank (qkvg was compute-bound at C = 2: 1120 tile products per core), home-row segment placement (the shared row 9 slowed both of its banks ~20 % when a slice reader sat left of the col-6 bank), the LM head's ragged last bank now splits like the others (C = 3, 17-column slices). The B ring at 2 K-blocks in flight measured flat to +6 % (lm_last) and stays parked at 1. Bottleneck now: the bank stream itself (compute stubbed: qkvg 23.1, lm_head ~98). Next lever, not tried: fewer A rounds for short-K shapes (out_proj's 8 handshaked rounds cost ~6 µs alone, overlapped) — e.g. workers reading A's shards directly — because out_proj's B stream (10.8 µs stubbed-compute) would still bind.
 
-### [ ] Refinement 18 — PDL: sharded 1×1 convs and the bilinear upsample
+### [x] Refinement 18 — PDL: sharded 1×1 convs and the bilinear upsample
 
 **Type**: perf
 
@@ -657,3 +657,18 @@ Measure the fixed cost first: ablate the smallest case, the center head 32768×3
 - Every PDL case is at or under its stock `achievable_ns`, and the H pass is within 1.2× of its `roofline_ns`; otherwise the remaining gap is explained by a measured floor.
 - Golden is green.
 - Nothing else is slower beyond ±3%.
+
+**Outcome**: Measured the fixed cost first: on heads it was two serial injector deliveries (B, then the bias row), not the acks. Landed: R2 one-shot handshake-free B channel with the row riding in B's delivery, injector early push, one B group per rectangle of the HS core set, a B-read helper on the injector's BRISC, and R3 split roles (B half on BRISC/NoC1 with one-K-block rounds and no traffic gate). PDL sharded set, device µs before → after (stock):
+- **Fixed cost:** heads 4.4 → 2.8 (3.5).
+- **HS:** res3 shortcut 15.7 → 12.6 (13.05), res3 expand 9.9 → 8.3 (8.2), res3 reduce 8.4 → 6.6 (6.9), res2 reduce 4.9 → 3.8 (4.0).
+- **R3:** res5 reduce 2 23.0 → 16.6 (16.1), ASPP 1×1 18.4 → 14.0 (13.8), res5 reduce 14.9 → 11.6 (10.6), res4 reduce 1024 12.1 → 9.8 (9.4), res4 shortcut 17.2 → 14.2 (16.2), ASPP projection 18.6 → 16.7 (16.8).
+
+Now at or under stock: 13 of 23 sharded cases plus the W pass. Five more are within 1–3%: res2 shortcut, res2 reduce 256→64, res3 expand, decoder skip 8192, ASPP 1×1.
+
+Measured floors for the rest (ablation, handshakes kept):
+- **H pass:** 66.8 µs against a 62.6 µs write-only floor (17.8 MB of 1088 B tile writes at ~285 GB/s). The 1.2× roofline target (52 µs) is below that floor. Splitting the writes over both NoCs measured 65–82 µs.
+- **ASPP pool:** 8.8–9.4 against a 6.5 µs A-round floor. Its A rounds slow from ~0.6 to ~1.0 µs each under B traffic.
+- **res4 reduce 512→256:** 18.4 against a 15.9 µs A-exchange floor that overlaps imperfectly with its 512-product matmul.
+- **res5 reduce / reduce 2:** A floors 9.0 / 12.3, with B and compute adding on top.
+
+Next lever, not done: an R3a A exchange without the per-round loopback write barrier (each sender's include-source multicast waits for all write acks before it can ack the next round). It needs a send-without-loopback mode in the shared Mcast helper, outside this op. The one-shot concurrent exchange was tried and measured worse (parked: `BS_A_ONE_SHOT`).

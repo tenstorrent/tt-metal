@@ -46,3 +46,4 @@
 {"event":"test_run","refinement":17,"status":"pass","test":"test_genify_matmul_dram_sharded.py","detail":"16/16 after ragged slices + segment placement + compute-hiding C rule","ts":"2026-11-18T04:12:19+00:00"}
 {"event":"fix_applied","refinement":18,"what":"R2 one-shot weight channel (handshake-free, row tail), injector early push, per-rectangle B groups","result":"heads 4.4->2.8us, res3_shortcut 15.7->14.4, res3_expand 9.9->9.3, res2_reduce 4.9->4.0","ts":"2026-11-18T04:57:43+00:00"}
 {"event":"test_run","status":"pass","tests":"test_genify_matmul_sharded_b_mcast.py, test_genify_matmul_height_sharded.py","result":"34 passed; B-read helper: res3_shortcut 14.4->12.6, res3_expand 9.4->8.4","ts":"2026-11-18T05:22:39+00:00"}
+{"event":"test_run","status":"pass","tests":"golden sharded loose + HS/BS row-epilogue cartesian","result":"323 passed, 60 xfailed","ts":"2026-11-18T05:52:57+00:00"}
