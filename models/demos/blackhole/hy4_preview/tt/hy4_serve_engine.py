@@ -968,6 +968,8 @@ class Hy4Engine:
         self.pp.set_keep(None)
         self.ret = [None] * ROWS  # the warm-up prompts are synthetic: nothing retained
         self.pfx_stats = dict(calls=0, hit_calls=0, hit_tokens=0, prompt_tokens=0, computed_tokens=0)
+        self._b50_chain_guard()
+        self._b50_dram_log()
         probe = os.environ.get("HY4_PF_HYBRID_PROBE", "")
         if probe:
             self._probe_chain_cap([int(x) for x in probe.split(",")])
@@ -976,6 +978,64 @@ class Hy4Engine:
         logger.info(
             f"HY4 warm-up: prefill 4 x {n} {t1 - t0:.1f} s (compile incl.), captures {time.time() - t1:.1f} s, dram {dram_view(self.md)}; first tokens {first}"
         )
+
+    def _b50_dram_log(self):
+        """HY4_B50_DRAMLOG_S=<seconds> (default 0 = off): daemon thread; polls the host-side allocator view every HY4_B50_DRAMLOG_POLL_S (default 1 s) and logs every <seconds> one line
+        'HY4 DRAMLOG free=<now> min_free=<low-water since the last line> largest=<now> min_largest=<low-water> alloc_max=<peak>' (MiB per bank) for the long-uptime soak (oom15).
+        """
+        every = float(os.environ.get("HY4_B50_DRAMLOG_S", "0"))
+        if every <= 0:
+            return
+        import threading
+
+        from models.demos.blackhole.hy4_preview.tt.hy4_chain import dram_view
+
+        poll = float(os.environ.get("HY4_B50_DRAMLOG_POLL_S", "1"))
+
+        def run():
+            mn_f = mn_l = 1 << 62
+            mx_a = 0
+            t_last = time.time()
+            while True:
+                v = dram_view(self.md)
+                if v.get("alloc_per_bank", -1) >= 0:
+                    mn_f, mn_l = min(mn_f, v["free_per_bank"]), min(mn_l, v["largest_free_per_bank"])
+                    mx_a = max(mx_a, v["alloc_per_bank"])
+                    if time.time() - t_last >= every:
+                        logger.info(
+                            f"HY4 DRAMLOG free={v['free_per_bank'] / 1048576:.1f} min_free={mn_f / 1048576:.1f} largest={v['largest_free_per_bank'] / 1048576:.1f} min_largest={mn_l / 1048576:.1f} alloc_max={mx_a / 1048576:.1f} MiB/bank"
+                        )
+                        mn_f = mn_l = 1 << 62
+                        mx_a = 0
+                        t_last = time.time()
+                time.sleep(poll)
+
+        threading.Thread(target=run, daemon=True, name="b50-dramlog").start()
+
+    def _b50_chain_guard(self):
+        """HY4_B50_CHAIN_GUARD=1 (default off): size the chain (hybrid) prefill cap from the DRAM that is really free after the captures. The chain prefill keeps a replicated cache + indexer keys (+ per-layer masks) that grow
+        with the prompt (measured per token at warm-up: ``pp.chain_bpt``, B per bank) and needs HY4_B50_CHAIN_RESERVE_MB (default 128) of headroom for its transients (iHC collapse 50 MB/bank with the stock sum, MoE / attention
+        temporaries; oom15 RESULT_OOM15: e15 died at a ~12k chain prompt with 95 MB/bank free and a 87 KB-too-small largest block). cap = min(hybrid_cap, (free - reserve) / bpt) rounded down to 512; 0 = the pool prefill only.
+        A larger bpt estimate can be forced with HY4_B50_CHAIN_BPT (B/bank/token). Prompts above the cap use the direct-to-pool prefill (slower, memory-flat).
+        """
+        if os.environ.get("HY4_B50_CHAIN_GUARD", "0") != "1" or self.hybrid_cap <= 0:
+            return
+        from models.demos.blackhole.hy4_preview.tt.hy4_chain import dram_view
+
+        dv = dram_view(self.md)
+        bpt = float(os.environ.get("HY4_B50_CHAIN_BPT", "0")) or float(getattr(self.pp, "chain_bpt", 0.0)) or 9600.0
+        reserve = int(float(os.environ.get("HY4_B50_CHAIN_RESERVE_MB", "128")) * (1 << 20))
+        room = (
+            min(dv["free_per_bank"], dv["largest_free_per_bank"] * 2)
+            - reserve
+            - float(getattr(self.pp, "chain_fixed", 0.0))
+        )
+        cap = max(0, int(room / bpt) // 512 * 512)
+        new = min(self.hybrid_cap, cap)
+        logger.info(
+            f"HY4 B50 chain guard: free {dv['free_per_bank'] >> 20} MiB/bank (largest {dv['largest_free_per_bank'] >> 20}), reserve {reserve >> 20} MiB, bpt {bpt:.0f} B/bank/token -> cap {cap}; hybrid cap {self.hybrid_cap} -> {new}"
+        )
+        self.hybrid_cap = new
 
     def _probe_chain_cap(self, lens):
         """HY4_PF_HYBRID_PROBE=n1,n2,...: after the captures, chain prefill of ONE n-token prompt (row 0; the cache size does not depend on the number of rows) per length, ascending; logs the DRAM low-water mark

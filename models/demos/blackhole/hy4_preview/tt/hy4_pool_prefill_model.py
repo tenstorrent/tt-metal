@@ -171,6 +171,9 @@ class Hy4PoolPrefill:
                     ttnn.deallocate(kb)
         ttnn.synchronize_device(self.md)
         self.ch.reset()
+        from models.demos.blackhole.hy4_preview.tt.hy4_indexer import drop_shared_masks
+
+        drop_shared_masks()  # B50 shared causal mask (no-op when HY4_B50_MASKSHARE is off)
         for ly in self.ch.layers:  # lazily cached indexer tensors grow with the prompt: drop them (serve-long D75-1)
             ix = getattr(ly.attn, "indexer", None)
             if ix is None:
@@ -225,6 +228,10 @@ class Hy4PoolPrefill:
             res.logits = [None] * self.rows
         ids_by_layer = {}
         t0 = time.time()
+        chain_alloc = []
+        a0 = (
+            dram_view(md).get("alloc_per_bank", -1) if chain else -1
+        )  # B50: persistent growth of a chain prefill (replicated cache + keys + per-layer lazies), measured per token
         for c in range(start // PF, nch):
             ids = torch.full((self.rows, PF), PAD, dtype=torch.long)
             for r in range(self.rows):
@@ -269,6 +276,8 @@ class Hy4PoolPrefill:
             if sync_every_chunk:
                 ttnn.synchronize_device(md)
             ttnn.deallocate(x4)
+            if chain:
+                chain_alloc.append(dram_view(md).get("alloc_per_bank", -1))
             dt = time.time() - tc
             res.chunk_sec.append(dt)
             mem = {}
@@ -282,6 +291,12 @@ class Hy4PoolPrefill:
         for t in ids_by_layer.values():
             ttnn.deallocate(t)
         if chain:
+            a1 = dram_view(md).get("alloc_per_bank", -1)
+            if a0 >= 0 and len(chain_alloc) >= 2 and chain_alloc[-1] >= chain_alloc[0]:
+                # per-bank bytes that stay allocated per prompt token (slope between the first and the last chunk) and the chunk independent part (ids carried between layers etc.)
+                self.chain_bpt = (chain_alloc[-1] - chain_alloc[0]) / float((len(chain_alloc) - 1) * PF)
+                self.chain_fixed = max(0.0, chain_alloc[0] - a0 - self.chain_bpt * PF)
+                self.chain_peak_bytes = max(getattr(self, "chain_peak_bytes", 0), a1 - a0)
             th = time.time()
             self._handoff(nch * 512)
             res.handoff_sec = time.time() - th

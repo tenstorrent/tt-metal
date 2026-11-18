@@ -10,6 +10,8 @@ keys, k = the key count (multiple of 16) and the ids are padded to 2048 with the
 Shared layers do not run this: they reuse the ids of ``cfg.indexer_source(layer)`` (see ``Hy4Attention``).
 The oracle omits the V3.2 Hadamard rotation of q and k (invariant for q.k in exact arithmetic); so does this.
 """
+import os
+
 import ttnn
 from models.demos.blackhole.hy4_preview.tt.hy4_common import SENTINEL, compute_cfg, upload  # noqa: F401
 from models.demos.blackhole.hy4_preview.tt.hy4_pf_opt import PfOpt, plinear
@@ -62,11 +64,16 @@ class Hy4Indexer:
 
             self._tm = upload(self.md, get_rot_transformation_mat())
         if n not in self._c128:
-            self._c128[n] = (upload(self.md, torch.ones(1, 1, n, self.d - self.rd)), upload(self.md, torch.zeros(1, 1, n, self.d - self.rd)))
+            self._c128[n] = (
+                upload(self.md, torch.ones(1, 1, n, self.d - self.rd)),
+                upload(self.md, torch.zeros(1, 1, n, self.d - self.rd)),
+            )
         ones, zeros = self._c128[n]
         c = ttnn.concat([cos, ones] if self.idx_rope_first else [ones, cos], dim=3)
         s_ = ttnn.concat([sin, zeros] if self.idx_rope_first else [zeros, sin], dim=3)
-        out = ttnn.experimental.rotary_embedding_llama(x, c, s_, self._tm, is_decode_mode=False, compute_kernel_config=self.ckc)
+        out = ttnn.experimental.rotary_embedding_llama(
+            x, c, s_, self._tm, is_decode_mode=False, compute_kernel_config=self.ckc
+        )
         ttnn.deallocate(c)
         ttnn.deallocate(s_)
         return out
@@ -79,12 +86,24 @@ class Hy4Indexer:
         import torch
 
         key = (n, T, start)
+        if (
+            _B50_MASKSHARE
+        ):  # B50: ONE [n, T] mask shared by all indexer layers of the chunk (instead of one per full-indexer layer: ~22 x n*T*2 B, 35 MB/bank at T=12288); same bytes -> bit-exact
+            out = ttnn.add(score, shared_causal_mask(self.md, n, T, start))
+            ttnn.deallocate(score)
+            return out
         if key not in self._mask_full:
-            for old in self._mask_full.values():  # one mask only: a per-(start, T) cache leaked n*T*2 bytes per chunk and layer (OOM in the 60k real-prefill needle run)
+            for (
+                old
+            ) in (
+                self._mask_full.values()
+            ):  # one mask only: a per-(start, T) cache leaked n*T*2 bytes per chunk and layer (OOM in the 60k real-prefill needle run)
                 ttnn.deallocate(old)
             self._mask_full.clear()
             m = torch.zeros(n, T)
-            m[:, start : start + n] = torch.zeros(n, n).masked_fill(torch.ones(n, n, dtype=torch.bool).triu(1), float("-inf"))
+            m[:, start : start + n] = torch.zeros(n, n).masked_fill(
+                torch.ones(n, n, dtype=torch.bool).triu(1), float("-inf")
+            )
             self._mask_full[key] = upload(self.md, m.reshape(1, 1, n, T), ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT)
         out = ttnn.add(score, self._mask_full[key])
         ttnn.deallocate(score)
@@ -208,6 +227,31 @@ class Hy4Indexer:
             ttnn.deallocate(ids)
             ids = ids2
         return ids
+
+
+_B50_MASKSHARE = os.environ.get("HY4_B50_MASKSHARE", "0") == "1"
+_SHARED_MASK = {}  # (id(md), n, T, start) -> device tensor; at most ONE entry
+
+
+def shared_causal_mask(md, n, T, start):
+    """[1,1,n,T] bf16 RM: 0 left of / -inf above the diagonal of the last n columns (see Hy4Indexer._causal_mask1); one entry, rebuilt when (n, T, start) changes (once per chunk, not once per layer)."""
+    import torch
+
+    key = (id(md), n, T, start)
+    if key not in _SHARED_MASK:
+        drop_shared_masks()
+        m = torch.zeros(n, T)
+        m[:, start : start + n] = torch.zeros(n, n).masked_fill(
+            torch.ones(n, n, dtype=torch.bool).triu(1), float("-inf")
+        )
+        _SHARED_MASK[key] = upload(md, m.reshape(1, 1, n, T), ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT)
+    return _SHARED_MASK[key]
+
+
+def drop_shared_masks():
+    for t in _SHARED_MASK.values():
+        ttnn.deallocate(t)
+    _SHARED_MASK.clear()
 
 
 def upload_sentinel(md, n, width):
