@@ -1123,24 +1123,20 @@ def _work_items(input_tensor, g: Conv3x3Geometry, b: Conv3x3Blocking):
 # dilation, W % 32 == 0 and whole-tile C_in, the kernel rows are whole input tile-rows apart, so [Q_0 | Q_1 | Q_2] is
 # one matmul on the input's own tiles (K' = 3 C_in, N' = 3 C_out) and the kw shift moves to the output (fp32 packer
 # L1 accumulation at a +-d row offset). No untilize, gather or tilize. Measured against the K-blocked tap-direct walk
-# (Blackhole p150b, LoFi bf8_b, perf focus): stem.conv2 47.7 -> 40.6, stem.conv3 69.7 -> 60.2, center_head.1 21.6 ->
-# 16.4, inst res2.fuse_conv.0 44.4 -> 34.4, inst res3.fuse_conv.0 28.7 -> 26.2 us. Where it does not pay
-# (_kw_fold_pays) the K-blocked walk runs.
+# (Blackhole p150b, LoFi bf8_b, perf focus): stem.conv2 47.9 -> 36.4, stem.conv3 69.8 -> 51.7, center_head.1 22.1 ->
+# 12.1, inst res2.fuse_conv.0 44.4 -> 33.3, inst res2.fuse_conv.1 34.7 -> 28.1, inst res3.fuse_conv.0 29.0 -> 25.6,
+# res2 16.7 -> 13.7 us. Where it does not pay (_kw_fold_pays) the K-blocked walk runs.
 KW_FOLD = True
-# K-blocked kw-fold packs every K-block's [Q_0 | Q_1 | Q_2] over bm + 2 tile-rows into the fp32 accumulator (three
-# passes) to save a tilize proportional to C_in * bm: it lost below Ct * bm / (N * (bm + 2)) = 0.8 (res3.x 0.6: +3.5%,
-# sem dec res3 fc0 0.75: +3.6%, fc1 0.6: +7.7%) and won above it (inst dec res2 fc0 0.83: -2.9%, res2 fc1 1.04: -22%,
-# inst dec res3 fc0 1.5: -8.5%).
-KW_FOLD_MIN_KBLOCK_RATIO = 0.8
-# Whole-K kw-fold exposes a fixed latency the K-blocked walk hides under its prelude: the bias read before its first pack
-# and the whole weight stream before its first matmul (~7 us on res2 / center_head.1). It pays only where the im2col it
-# removes (tilized taps plus the untilized slab, ~25 ns per tile) takes longer: res2 (4.4 us of im2col) measured
-# 16.9 -> 18.2 us, center_head.1 (8.8 us) 21.6 -> 16.4.
-KW_FOLD_WHOLE_K_EXPOSED_NS = 7000
 IM2COL_NS_PER_TILE = 25
 # Either form recomputes the two halo tile-rows' products, about 6 * Ct * N extra tile-MACs per M-block, at the user's
-# fidelity; they must cost less than the im2col removed. inst dec res3 fc0 (bm 3) wins at LoFi (34.8 -> 26.2 us) and
-# lost at HiFi4 (69.3 -> 74.3 us), where its halo MACs (11.4 us) outweigh its im2col (7.8 us).
+# fidelity, to save the im2col (tilized taps plus the untilized slab, ~25 ns per tile). The weights stream in column
+# rounds, so each Q tile-row is packed once and the first matmul starts when the first round lands; what decides is the
+# halo against the im2col, of which the tap-direct walk hides part (its prelude untilize and first tilize) under the
+# first weight round both walks wait for. Measured (Blackhole p150b, kw-fold vs the tap-direct walk, halo / im2col in
+# brackets): wins up to 0.52 (HiFi4 inst res2 fc1 0.52: 86.8 -> 83.9 us; LoFi inst dec res3 fc0 0.37: 29.0 -> 25.6, res2
+# 0.07: 16.7 -> 13.7; LoFi res3.x 0.37 flat), losses from 0.57 (LoFi sem dec res3 fc0 0.57: +3.4%, fc1 0.73: +6.1%;
+# HiFi4 res3 1.47: +5.7%, inst dec res3 fc0 1.47: +9.6%).
+KW_FOLD_MAX_HALO_SHARE = 0.55
 LOFI_NS_PER_TILE_MAC = 16 / 1.35
 FIDELITY_PHASES = {
     ttnn.MathFidelity.LoFi: 1,
@@ -1161,17 +1157,12 @@ def kw_fold_mode(g, b, has_bias, l1_budget, math_fidelity):
 
 
 def _kw_fold_pays(g, b, math_fidelity):
-    """Whether kw-fold beats the K-blocked walk `b` would run (see KW_FOLD_MIN_KBLOCK_RATIO, KW_FOLD_WHOLE_K_EXPOSED_NS
-    and LOFI_NS_PER_TILE_MAC)."""
+    """Whether kw-fold beats the K-blocked walk `b` would run (see KW_FOLD_MAX_HALO_SHARE)."""
     ct, n, bm = g.c_in_tiles, g.tensor_n_tiles, b.block_m_tiles
     taps = 6 if b.center_mode != CENTER_NONE else 9
     im2col_ns = b.max_m_blocks_per_core * (taps * ct * bm + b.slab_tile_rows * ct) * IM2COL_NS_PER_TILE
     halo_ns = b.max_m_blocks_per_core * 6 * ct * n * FIDELITY_PHASES[math_fidelity] * LOFI_NS_PER_TILE_MAC
-    if halo_ns > im2col_ns:
-        return False
-    if kw_fold_kblocked(g):
-        return ct * bm >= KW_FOLD_MIN_KBLOCK_RATIO * n * (bm + 2)
-    return im2col_ns >= KW_FOLD_WHOLE_K_EXPOSED_NS
+    return halo_ns <= KW_FOLD_MAX_HALO_SHARE * im2col_ns
 
 
 def _kw_fold_cb_bytes(g, kb):
@@ -1185,10 +1176,10 @@ def _kw_fold_cb_bytes(g, kb):
     return total
 
 
-# K-blocked kw-fold (one pass per kernel row as its weights land, every pack accumulating) vs whole-K (one pass once
-# all weights landed: a third of the packs): K-blocked when the weights are at least KW_FOLD_KBLOCK_MIN_WEIGHT_TILES
-# tiles, where today's weight stream paces the walk (res3.x: 19.3 K-blocked vs 23.2 us whole-K; with the weights
-# stubbed whole-K wins, 13.0 vs 14.9 us).
+# K-blocked kw-fold (the column rounds double-buffered, re-streamed per M-block) vs whole-K (all three resident across
+# M-blocks): K-blocked from KW_FOLD_KBLOCK_MIN_WEIGHT_TILES weight tiles, for L1. Both pack each Q tile-row once and
+# start at round 0; whole-K on the K-blocked LoFi cases measured flat (res3.x 14.94 -> 14.48, inst res2 fc1 28.09 ->
+# 28.14 us, medians of 3).
 KW_FOLD_KBLOCK_MIN_WEIGHT_TILES = 128
 
 
@@ -1211,7 +1202,7 @@ def _kw_fold_blocking(g, b):
         block_k_tiles=ct,
         block_n_tiles=3 * n,
         num_k_blocks=3,
-        # Whole-K multiplies once every K-block landed; K-blocked streams them (double-buffered).
+        # Whole-K keeps the three column rounds resident; K-blocked streams them (double-buffered).
         weight_depth=2 if kw_fold_kblocked(g) else 3,
         center_mode=CENTER_NONE,
         center_slot_blocks=1,

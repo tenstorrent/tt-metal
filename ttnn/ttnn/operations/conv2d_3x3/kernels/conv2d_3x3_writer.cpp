@@ -496,11 +496,11 @@ void kernel_main() {
     uint32_t k_blocks_issued = 0;
     auto read_weight_k_block = [&](uint32_t l1) {
 #ifdef CONV2D_3X3_KW_FOLD
-        // kw-fold: K-block kh holds W'[kh Ct + c, kw N + n] = prepared tile ((kh * 3 + kw) Ct + c, n), c-major,
-        // (kw, n)-fastest (block_k_tiles = Ct, block_n_tiles = 3 N).
-        const uint32_t kh = k_blocks_issued % num_k_blocks;
-        for (uint32_t c = 0; c < block_k_tiles; ++c) {
-            for (uint32_t kw = 0; kw < 3; ++kw) {
+        // kw-fold: column round kw holds W'[kh Ct + c, kw N + n] = prepared tile ((kh * 3 + kw) Ct + c, n),
+        // (kh, c)-major, n-fastest (block_k_tiles = Ct, block_n_tiles = 3 N: the same round size).
+        const uint32_t kw = k_blocks_issued % num_k_blocks;
+        for (uint32_t kh = 0; kh < 3; ++kh) {
+            for (uint32_t c = 0; c < block_k_tiles; ++c) {
                 const uint32_t row_page = ((kh * 3 + kw) * block_k_tiles + c) * tensor_n_tiles;
                 for (uint32_t n = 0; n < tensor_n_tiles; ++n, l1 += weight_tile_bytes) {
                     noc_async_read_page(row_page + n, weights, l1);

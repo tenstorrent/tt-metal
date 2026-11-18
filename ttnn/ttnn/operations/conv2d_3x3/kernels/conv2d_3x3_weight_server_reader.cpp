@@ -22,7 +22,8 @@ void kernel_main() {
     constexpr uint32_t block_n_tiles = get_compile_time_arg_val(2);
     constexpr uint32_t num_k_blocks = get_compile_time_arg_val(3);
     constexpr uint32_t num_chunks = get_compile_time_arg_val(4);
-    // kw-fold (conv2d_3x3_kw_fold.hpp): K-block kh is [C_in, 3 C_out] with (c, kw, n) order, block_n_tiles = 3 C_out.
+    // kw-fold (conv2d_3x3_kw_fold.hpp): round kw is the weight column [3 C_in, C_out] in (kh, c, n) order
+    // (block_k_tiles = C_in, block_n_tiles = 3 C_out: the same round size).
     constexpr bool kw_fold = get_compile_time_arg_val(5) != 0;
     constexpr auto weight_args = TensorAccessorArgs<6>();
     constexpr uint32_t round_tiles = block_k_tiles * block_n_tiles;
@@ -39,16 +40,17 @@ void kernel_main() {
         cb_reserve_back(cb_weights, round_tiles);
         const uint32_t l1 = get_write_ptr(cb_weights);
         MaybeDeviceZoneScope("server_read");
-        // The K-block's tiles are consecutive pages (bn is the whole C_out on this path); kw-fold reads the prepared
-        // tile ((kh * 3 + kw) C_in + c, n) for slot (c, kw, n).
-        const uint32_t kh = r % num_k_blocks;
-        const uint32_t page0 = kh * round_tiles;
+        // The K-block's tiles are consecutive pages (bn is the whole C_out on this path); kw-fold's round kw reads the
+        // prepared tile ((kh * 3 + kw) C_in + c, n) for slot (kh, c, n).
+        const uint32_t kb = r % num_k_blocks;
+        const uint32_t page0 = kb * round_tiles;
         auto page_of = [&](uint32_t t) -> uint32_t {
             if constexpr (kw_fold) {
                 constexpr uint32_t n_tiles = block_n_tiles / 3;
                 const uint32_t n = t % n_tiles;
-                const uint32_t ck = t / n_tiles;
-                return ((kh * 3 + ck % 3) * block_k_tiles + ck / 3) * n_tiles + n;
+                const uint32_t kc = t / n_tiles;
+                const uint32_t kh = kc / block_k_tiles;
+                return ((kh * 3 + kb) * block_k_tiles + (kc - kh * block_k_tiles)) * n_tiles + n;
             } else {
                 return page0 + t;
             }
