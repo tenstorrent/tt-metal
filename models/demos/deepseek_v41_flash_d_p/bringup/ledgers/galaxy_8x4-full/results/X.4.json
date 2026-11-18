@@ -1,0 +1,85 @@
+{
+ "metrics": {
+  "determinism_chunk_max_abs_diff_code": {
+   "t": "2026-11-18T15:03:07",
+   "value": [
+    0.0,
+    0.0,
+    0.0,
+    0.0
+   ]
+  },
+  "determinism_chunk_max_abs_diff_novel": {
+   "t": "2026-11-18T15:03:07",
+   "value": [
+    0.0,
+    0.0,
+    0.0,
+    0.0
+   ]
+  },
+  "determinism_chunks": {
+   "t": "2026-11-18T15:03:07",
+   "value": 4
+  },
+  "determinism_elements_differ": {
+   "t": "2026-11-18T15:03:07",
+   "value": 0
+  },
+  "determinism_max_abs_diff": {
+   "t": "2026-11-18T15:03:07",
+   "value": 0.0
+  },
+  "determinism_max_abs_diff_code": {
+   "t": "2026-11-18T15:03:07",
+   "value": 0.0
+  },
+  "determinism_max_abs_diff_novel": {
+   "t": "2026-11-18T15:03:07",
+   "value": 0.0
+  },
+  "determinism_rows_code": {
+   "t": "2026-11-18T15:03:07",
+   "value": [
+    0,
+    0,
+    0,
+    0
+   ]
+  },
+  "determinism_rows_novel": {
+   "t": "2026-11-18T15:03:07",
+   "value": [
+    0,
+    0,
+    0,
+    0
+   ]
+  },
+  "determinism_runs": {
+   "t": "2026-11-18T15:03:07",
+   "value": 3
+  },
+  "determinism_s": {
+   "t": "2026-11-18T15:03:07",
+   "value": 111.6
+  },
+  "determinism_state_max_abs_diff": {
+   "t": "2026-11-18T15:03:07",
+   "value": 0.0
+  },
+  "model_loads": {
+   "by": "X.4::X.4#test_determinism.0",
+   "ns": 1795014075130133919,
+   "pid": 2698110,
+   "t": "2026-11-18T15:01:15",
+   "total": 1,
+   "value": 1
+  },
+  "model_shared": {
+   "t": "2026-11-18T15:01:15",
+   "value": 0
+  }
+ },
+ "task": "X.4"
+}
