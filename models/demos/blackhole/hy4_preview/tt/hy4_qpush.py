@@ -16,6 +16,9 @@ import ttnn
 
 KDIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "hy4_qpush_kernels")
 RING, NC = 8, 8
+MC = (
+    os.environ.get("HY4_B47B_PUSH_MC", "0") == "1"
+)  # B47b: chip-multicast write + one multicast flag increment per lane instead of unicast packets per peer
 
 
 def _acc(t):
@@ -29,7 +32,8 @@ def _cores(lst):
 class Push:
     """push-gather of ``nr`` pages of ``pb`` bytes per source column over the 8-chip ring axis (see module doc); ``rp`` pages per fabric packet (rp * pb <= 4352)"""
 
-    def __init__(self, md, nr, pb, rp, links=2, lanes=None):
+    def __init__(self, md, nr, pb, rp, links=2, lanes=None, mc=None):
+        self.mc = MC if mc is None else bool(mc)
         assert tuple(md.shape)[1] == RING and rp * pb <= 4352
         self.md, self.nr, self.pb, self.links = md, nr, pb, links
         self.lanes = lanes or int(os.environ.get("HY4_B29_QLANES", str(links)))
@@ -71,6 +75,87 @@ class Push:
         return (
             [fx, fy] + list(self.flag_addrs) + [self.cnt_addr]
         )  # (packets per source / rows per packet go in as compile-time args: see sparse_sdpa_split)
+
+    def comm_phys(self):
+        """physical (x, y) of the comm cores in the order fwd lanes then bwd lanes (B47b fold: the writers of the q-prep program signal these)"""
+        return [self._phys(*self.comm[(d, l)]) for d in (0, 1) for l in range(self.lanes)]
+
+    def fold_mesh(self, kernels, sems, cbs, q_out, extra_tensors, tag):
+        """B47b (HY4_B47B_QFOLD): MeshProgramDescriptor = the given single-chip program parts (the fused q-prep) + this push's comm cores. The comm cores wait for the
+        q-prep writers (local semaphore 0, one increment per writer core) and then read ``q_out`` [1,8,S,576] RM from DRAM and push it exactly like ``__call__``.
+        Returns (mpd, tensors) for ttnn.generic_op."""
+        md = self.md
+        PKT = self.rp * self.pb
+        NP = self.np
+        gper = max(len(range(ln, NP, self.lanes)) for ln in range(self.lanes))
+        fx, fy = self._phys(*self.fcore)
+        comm_set = _cores(list(self.comm.values()))
+        CBI = 20
+        cb = ttnn.CBDescriptor(
+            total_size=PKT * gper,
+            core_ranges=comm_set,
+            format_descriptors=[ttnn.CBFormatDescriptor(buffer_index=CBI, data_format=ttnn.bfloat16, page_size=PKT)],
+        )
+        sem = ttnn.SemaphoreDescriptor(0, ttnn.CoreType.WORKER, comm_set, 0)
+        rows, cols = tuple(md.shape)
+        mpd = ttnn.MeshProgramDescriptor()
+        for r in range(rows):
+            for col in range(cols):
+                coord = ttnn.MeshCoordinate(r, col)
+                src = md.get_fabric_node_id(coord)
+                fwd_n = md.get_fabric_node_id(ttnn.MeshCoordinate(r, (col + 1) % RING))
+                bwd_n = md.get_fabric_node_id(ttnn.MeshCoordinate(r, (col - 1) % RING))
+                ck, kidx = [], {}
+                for name, ndist, dr in (("fwd", 4, 0), ("bwd", 3, 1)):
+                    for lk in range(self.lanes):
+                        cx, cy = self.comm[(dr, lk)]
+                        rt = ttnn.RuntimeArgs()
+                        rt[cx][cy] = [col, fx, fy] + list(self.flag_addrs)
+                        kd = ttnn.KernelDescriptor(
+                            kernel_source=f"{KDIR}/qp_comm.cpp",
+                            source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
+                            core_ranges=_cores([(cx, cy)]),
+                            compile_time_args=[
+                                dr,
+                                ndist,
+                                self.nr,
+                                lk,
+                                self.lanes,
+                                CBI,
+                                3 + NC,
+                                self.nh,
+                                self.rp,
+                                self.pb,
+                            ]
+                            + _acc(q_out)
+                            + _acc(self.land),
+                            runtime_args=rt,
+                            common_runtime_args=[q_out.buffer_address(), self.land.buffer_address()],
+                            config=ttnn.WriterConfigDescriptor(),
+                        )
+                        kd.defines = [("QF_WAIT", str(self.fold_nsig))] + ([("QP_MC", "1")] if self.mc else [])
+                        ck.append(kd)
+                        kidx[(name, lk)] = len(kernels) + len(ck) - 1
+                prog = ttnn.ProgramDescriptor(
+                    kernels=list(kernels) + ck, semaphores=list(sems) + [sem], cbs=list(cbs) + [cb]
+                )
+                for (name, lk), ki in kidx.items():
+                    dst = fwd_n if name == "fwd" else bwd_n
+                    cx, cy = self.comm[(0 if name == "fwd" else 1, lk)]
+                    fargs = ttnn.setup_routing_plane_connection(
+                        src, [dst], [lk % self.links], prog, ki, ttnn.CoreCoord(cx, cy)
+                    )
+                    prog.kernels[ki].runtime_args[cx][cy].extend(fargs)
+                prog.custom_program_hash = (0x7BA << 40) | (
+                    hash(
+                        (tag, self.nr, self.pb, self.links, self.lanes, self.nh, self.rp, col, self.fold_nsig, self.mc)
+                    )
+                    & ((1 << 40) - 1)
+                )
+                mpd[ttnn.MeshCoordinateRange(coord, coord)] = prog
+        return mpd, extra_tensors + [self.land]
+
+    fold_nsig = 0
 
     def __call__(self, q_rm):
         md = self.md
@@ -126,6 +211,8 @@ class Push:
                                 config=ttnn.WriterConfigDescriptor(),
                             )
                         )
+                        if self.mc:
+                            kernels[-1].defines = [("QP_MC", "1")]
                         kidx[(name, lk)] = len(kernels) - 1
                 prog = ttnn.ProgramDescriptor(kernels=kernels, semaphores=[], cbs=cbs)
                 for (name, lk), ki in kidx.items():
@@ -145,6 +232,7 @@ class Push:
                             self.nh,
                             self.rp,
                             col,
+                            self.mc,
                             tuple(_acc(q_rm)),
                             tuple(_acc(self.land)),
                         )
@@ -159,6 +247,6 @@ class Push:
 class QPush(Push):
     """q push of the split SDPA: q_rm [1,8,S,576] RM bf16 (page r = h*S + s, 1152 B), 3 rows per packet"""
 
-    def __init__(self, md, S, links=2, lanes=None):
+    def __init__(self, md, S, links=2, lanes=None, mc=None):
         self.S = S
-        super().__init__(md, 8 * S, 1152, int(os.environ.get("HY4_B29_QRP", "3")), links, lanes)
+        super().__init__(md, 8 * S, 1152, int(os.environ.get("HY4_B29_QRP", "3")), links, lanes, mc)

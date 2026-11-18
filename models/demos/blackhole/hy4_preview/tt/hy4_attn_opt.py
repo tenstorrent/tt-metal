@@ -227,7 +227,7 @@ class Hy4AttentionOpt(Hy4Attention):
         return self.indexer._rot_first(x, cos, sin)
 
     # ---------------------------------------------------------------- decode
-    def front(self, h, o, tabs, append_cache=True, qrm=False, kvf=None):
+    def front(self, h, o, tabs, append_cache=True, qrm=False, kvf=None, qpush=None):
         """h [1,1,S,6144] -> dict(qa, lat, k_pe, qfull, g, ik, iw). Everything of the decode layer before the sparse kernel (plus the gate of the o path)."""
         cfg, ix = self.cfg, self.indexer
         S = h.shape[2]
@@ -355,8 +355,9 @@ class Hy4AttentionOpt(Hy4Attention):
             ):  # HY4_KV_FUSE=2: KV append inside the fused_q program
                 kvargs = (lat, k_pe, kvf[0], kvf[1])
                 d["kv_done"] = True
-            d["qfull"] = FA.fused_q(q, self.w_uk, cos, sin, self._tm, kv=kvargs)
+            d["qfull"] = FA.fused_q(q, self.w_uk, cos, sin, self._tm, kv=kvargs, push=qpush)
             d["qrm"] = True
+            d["qpushed"] = qpush is not None
             ttnn.deallocate(q)
             return d
         q_nope, q_pe = ttnn.experimental.nlp_create_q_heads_split(

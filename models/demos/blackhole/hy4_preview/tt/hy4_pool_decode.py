@@ -256,11 +256,13 @@ class PoolCtx:
             ttnn.Shape([1, 1, NC * self.S, K]), ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT, self.md, ttnn.DRAM_MEMORY_CONFIG
         )
 
-    def attend(self, qfull, kv_pool, idx8, sink, q_rm=False):
+    def attend(self, qfull, kv_pool, idx8, sink, q_rm=False, q_pushed=False):
         """qfull [1,8,S,576] TILE bf16 (the column's 8 heads; q_rm=True: already ROW_MAJOR, B17 fused q-prep) -> o_lat [1,8,S,512] TILE bf16 (merged over the 8 columns, sink included)."""
         S = self.S
         q_rm = qfull if q_rm else ttnn.to_layout(qfull, ttnn.ROW_MAJOR_LAYOUT)
-        if self.qpush is not None:
+        if self.qpush is not None and q_pushed:
+            qg = self.qpush.land  # B47b: the push already ran inside the fused q-prep program
+        elif self.qpush is not None:
             qg = self.qpush(q_rm)  # persistent landing tensor (flag-gated read in the split reader)
         else:
             qg = self.gather_q(q_rm)  # [1,8,8S,576]
@@ -536,7 +538,14 @@ class Hy4AttentionPool(Hy4AttentionOpt):
             and self.w_uk.dtype == ttnn.bfloat16
             and tuple(self.w_uk.shape)[1:] == (8, 192, 512)
         )
-        d = self.front(h, o, tabs, qrm=qrm, kvf=(ctx.wr, self.kv_pool))
+        qfold = (
+            qrm
+            and ctx.qpush is not None
+            and os.environ.get("HY4_B47B_QFOLD", "0") == "1"
+            and FA.kv_in_q()
+            and ctx.S <= 4
+        )  # B47b: the q push runs inside the fused q-prep program
+        d = self.front(h, o, tabs, qrm=qrm, kvf=(ctx.wr, self.kv_pool), qpush=ctx.qpush if qfold else None)
         if not d.get("kv_done"):
             self.pool_append_kv(d["lat"], d["k_pe"])
         for t in (d["lat"], d["k_pe"]):
@@ -555,7 +564,9 @@ class Hy4AttentionPool(Hy4AttentionOpt):
             ctx.ids8[self.layer] = idx8
         else:
             idx8 = dense_ids8 if ctx.mode == "dense" else ctx.ids8[self.spec.indexer_source]
-        o_lat = ctx.attend(d["qfull"], self.kv_pool, idx8, self.sink_pool, q_rm=d.get("qrm", False))
+        o_lat = ctx.attend(
+            d["qfull"], self.kv_pool, idx8, self.sink_pool, q_rm=d.get("qrm", False), q_pushed=d.get("qpushed", False)
+        )
         ttnn.deallocate(d["qfull"])
         out = self.back(o, o_lat, d["g"], d.get("gfold", False))
         if not (getattr(ctx.xm, "hm", False) or ctx.hm_compact):
