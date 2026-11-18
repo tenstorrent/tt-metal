@@ -39,9 +39,10 @@ def device_params(spec):
     Staletovic's V4.1 setting, FLAT_COMBINE_OVERLAP_WORKLOG.md). (tt-metal's pinned-memory limit is no longer set
     here: the routed experts' upload raises it only while it runs, tt/experts.py pinned_upload.)"""
     from models.demos.common.bringup.testing import harness
-    from models.demos.deepseek_v41_flash_d_p.tt.weighted_combine import FABRIC_PAYLOAD
+    from models.demos.deepseek_v41_flash_d_p.tt.weighted_combine import fabric_payload
 
-    return harness.device_params(_WeightedPayloadSpec(spec, FABRIC_PAYLOAD))
+    # (MOE_BLOCK_SRC=block, MOE_BLOCK_SPLIT_ROWS=on: 6208 B, the block's rows in two packets - weighted_combine.fabric_payload)
+    return harness.device_params(_WeightedPayloadSpec(spec, fabric_payload()))
 
 
 def weight_cache_patterns(spec):
@@ -56,8 +57,10 @@ def weight_cache_patterns(spec):
 
     impl = settings.get("EXPERTS_IMPL")
     pats = [f"L??.{impl}.*.bm.bin", f"L??.{impl}.*.done.json"]
-    if settings.get("MOE_BLOCK_SRC") == "main":
+    if settings.get("MOE_BLOCK_SRC") in ("main", "block"):  # (block: reads main's files when laid out the same)
         pats.append(f"L??.{impl}.*.moe_main.*.tensorbin")
+    if settings.get("MOE_BLOCK_SRC") == "block":  # (tt/moe_block_v2_adapter.py: its own layout's files)
+        pats.append(f"L??.{impl}.*.moe_blk.*.tensorbin")
     return pats
 
 

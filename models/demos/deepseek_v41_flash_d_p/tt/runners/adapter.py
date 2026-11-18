@@ -75,9 +75,9 @@ class _FabricPayload(type):
 
     @property
     def FABRIC_PAYLOAD_SIZE(cls) -> int:
-        from models.demos.deepseek_v41_flash_d_p.tt.weighted_combine import FABRIC_PAYLOAD
+        from models.demos.deepseek_v41_flash_d_p.tt.weighted_combine import fabric_payload
 
-        return int(FABRIC_PAYLOAD)
+        return int(fabric_payload())  # (MOE_BLOCK_SPLIT_ROWS=on: 6208 B)
 
 
 class DS41Config(metaclass=_FabricPayload):

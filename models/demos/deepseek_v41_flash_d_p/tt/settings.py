@@ -502,8 +502,8 @@ TABLE = {
         "sends; the same output (bf16 TILE, then GLUE_FOLD's typecast as for ops)",
     ),
     "MOE_BLOCK_SRC": Setting(
-        "main",
-        ("carried", "main"),
+        "block",
+        ("carried", "main", "block"),
         "MOE_IMPL=block, MOE_HEAD=fused only: which MoE block runs the layer (owner 2026-11-06). carried = the block "
         "this branch runs since P.17 (models/demos/moe_block: Python ProgramDescriptor ops, the routed experts' gate / "
         "up weights pushed by the DRAM cores' RISCs, DRISC; tt/moe_block_adapter.py). main = Marko Staletovic's "
@@ -517,7 +517,25 @@ TABLE = {
         "TP all-to-all into its head and a local tail; not (owner, P.37 out of scope) the carried block's prepared / "
         "HOST_ALLOC hooks, EXPERTS_IMPL=bfp8_down4; not MOE_HEAD=ops (no ops head on the main ops). "
         "Its routed weights are laid out from the checkpoint (cached beside the carried block's: "
-        "<expert cache>.moe_main.<plan>.{w_gu,w_d}.tensorbin)",
+        "<expert cache>.moe_main.<plan>.{w_gu,w_d}.tensorbin). "
+        "block (owner 2026-11-18, the default) = Marko's block as merged in his stack (mstaletovic/moe-block-65124-"
+        "split-rows + moe-block-int32-snap: models/demos/moe_block/tt/moe_block.py MoEBlock - moe_head, sparse "
+        "dispatch, routed experts + combine, moe_tail) on this branch's fork of its ops ttnn.bringup.moe_block "
+        "(ttnn/ttnn/bringup/moe_block_ttnn; tt/moe_block_v2_adapter.py): weights_nk, the core cap, EXPERT_X_PIECES and "
+        "OWN_ROWS / FFN_FEED / LEAN_PY / replay128 as main; its combine's int32 snap (q 2^-15, order-free to 65536) "
+        "instead of COMBINE_SPLIT; its args table instead of MESH_PROGRAMS' cached_slots; the shared expert's x / h in "
+        "bf16 (no shared_activations / SE_PACK_PRECISE, no xq twin for NORM_INTO_MOE); the fabric payload by "
+        "MOE_BLOCK_SPLIT_ROWS. Its routed weights: the main block's cache files where its flat plan lays them out the "
+        "same, else <expert cache>.moe_blk.<plan>.{w_gu,w_d}.tensorbin",
+    ),
+    "MOE_BLOCK_SPLIT_ROWS": Setting(
+        "on",
+        ("off", "on"),
+        "MOE_BLOCK_SRC=block only (owner 2026-11-18: a smaller fabric packet against the intermittent device hangs; "
+        "Marko's MOE_BLOCK_SPLIT_ROWS=1, tt-metal#64573). on = the mesh opens with a fabric payload of 6208 B "
+        "(tt/weighted_combine.fabric_payload): below a 10240 B token row + its 32 B trailer, so the block's dispatch "
+        "and combine send each row as two packets (the ops read the payload the mesh opened with). off = 10880 B, a "
+        "row a packet, as MOE_BLOCK_SRC=main / carried",
     ),
     "MESH_PROGRAMS": Setting(
         "on",

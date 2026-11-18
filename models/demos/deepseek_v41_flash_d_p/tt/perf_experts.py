@@ -190,9 +190,9 @@ def test_transpose_b_exact(mesh_device):
 def _weighted_params() -> dict:
     """The run's device params with the fabric payload the weighted combine needs (bringup/hooks.py:device_params)."""
     from models.demos.common.bringup.testing import harness
-    from models.demos.deepseek_v41_flash_d_p.tt.weighted_combine import FABRIC_PAYLOAD
+    from models.demos.deepseek_v41_flash_d_p.tt.weighted_combine import fabric_payload
 
-    return harness.device_params(hooks._WeightedPayloadSpec(spec(), FABRIC_PAYLOAD))
+    return harness.device_params(hooks._WeightedPayloadSpec(spec(), fabric_payload()))
 
 
 def _host(mesh, t) -> torch.Tensor:

@@ -56,6 +56,25 @@ from .settings import settings
 TILE = 32
 LINKS = 2  # fabric links of the column's port (one port core per direction drives both: ports_per_direction)
 FABRIC_PAYLOAD = 10880  # B: one 10240 B expert row + its 32 B trailer per packet (Marko's V4.1 setting)
+
+
+def fabric_payload() -> int:
+    """The fabric packet payload the model's meshes open with: FABRIC_PAYLOAD (a row a packet), or with MOE_IMPL=block,
+    MOE_BLOCK_SRC=block and MOE_BLOCK_SPLIT_ROWS=on the block's split-rows payload (tt/moe_block_v2_adapter.py
+    FABRIC_PAYLOAD_SPLIT, 6208 B: a row as two packets)."""
+    from .settings import settings
+
+    if (
+        settings.get("MOE_IMPL") == "block"
+        and settings.get("MOE_BLOCK_SRC") == "block"
+        and settings.get("MOE_BLOCK_SPLIT_ROWS") == "on"
+    ):
+        from .moe_block_v2_adapter import FABRIC_PAYLOAD_SPLIT
+
+        return FABRIC_PAYLOAD_SPLIT
+    return FABRIC_PAYLOAD
+
+
 # the arena may grow past what the flat expert needs, for the accumulators (Marko's FC_ARENA_KB): up to the largest
 # arena the flat op itself uses on this grid (bf16 x / h plan: 1356 KB per core, 2x2 p300c, l1_small 24 KB)
 ARENA_MAX = 1356 * 1024
