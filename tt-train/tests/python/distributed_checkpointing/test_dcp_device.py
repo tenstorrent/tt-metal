@@ -13,6 +13,9 @@ device of its own.
 groups must not interleave: the TP tests come first, the FSDP test last.
 """
 
+import threading
+from concurrent.futures import ThreadPoolExecutor
+
 import numpy as np
 import pytest
 import ttnn
@@ -20,6 +23,7 @@ from tp_block import TPBlock, device_slices, fresh_tp, make_adamw, train_step
 
 import ttml
 import ttml.distributed_checkpointing as dcp
+from ttml.distributed_checkpointing import _load, _save
 from ttml.distributed_checkpointing._state_dict import collect_model
 from ttml.fsdp import _ShardedState
 from ttml.modules import AbstractModuleBase, Buffer, LinearLayer, ModuleList, Parameter
@@ -212,6 +216,35 @@ def test_a_moment_laid_out_unlike_its_parameter_is_refused(tp_mesh, tmp_path, ex
     with expect_error(dcp.CheckpointError, r"over the mesh but its parameter .* it is not sharded as its parameter is"):
         dcp.save(str(tmp_path / "step_0000001"), model=model, optimizer=opt)
     assert not (tmp_path / "step_0000001").exists()
+
+
+def test_threads_sizes_the_writers_and_the_reader_pool(tp_mesh, tmp_path, monkeypatch):
+    """Save starts one writer thread per data file, or ``threads`` of them sharing the files; load reads with a pool of
+    ``threads`` (32 by default). Two devices write two files."""
+    model, params, opt = fresh_tp(DIM)
+    train_step(model, opt, DIM)
+    writers, pools = [], []
+    real_writer = _save._writer
+
+    def counting_writer(*args):
+        writers.append(threading.current_thread().name)
+        return real_writer(*args)
+
+    class CountingPool(ThreadPoolExecutor):
+        def __init__(self, max_workers=None, **kwargs):
+            pools.append(max_workers)
+            super().__init__(max_workers=max_workers, **kwargs)
+
+    monkeypatch.setattr(_save, "_writer", counting_writer)
+    monkeypatch.setattr(_load, "ThreadPoolExecutor", CountingPool)
+    for threads, expected in ((None, 2), (1, 1), (8, 2)):
+        writers.clear()
+        result = dcp.save(str(tmp_path / f"threads_{threads}"), model=model, optimizer=opt, threads=threads)
+        assert len(result.files) == 2 and len(writers) == expected, (threads, writers)
+    for threads, expected in ((None, 32), (3, 3)):
+        pools.clear()
+        dcp.load(str(tmp_path / "threads_1"), model=model, optimizer=opt, threads=threads)
+        assert pools == [expected], (threads, pools)
 
 
 def test_strict_load_names_the_mismatch(tp_mesh, tmp_path, expect_error):

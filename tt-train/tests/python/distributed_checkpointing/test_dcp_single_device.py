@@ -7,8 +7,8 @@
 The device is the one ``AutoContext`` opens on first use, so ``ttml.maybe_mesh()`` is None and the index records the
 device's own shape. The cases: a FLOAT32 parameter (every other test is BF16), the optimizers beyond plain AdamW
 (AdamW with amsgrad, SGD with momentum, Muon), optimizer state not keyed by a parameter of the model passed, the byte
-budget that bounds the host buffers in flight, ``threads``, a missing data file and a restored tensor whose spec does
-not match the live one.
+budget that bounds the host buffers in flight, a missing data file and a restored tensor whose spec does not match the
+live one.
 """
 
 import os
@@ -156,8 +156,8 @@ def test_state_of_other_parameters_is_saved_as_is(tmp_path):
     assert _same(_state_slices(fresh_opt), _state_slices(opt))
 
 
-def test_one_byte_budget_and_threads(tmp_path, monkeypatch):
-    """A one-byte in-flight budget writes one key at a time, and the thread count is honoured."""
+def test_one_byte_budget(tmp_path, monkeypatch):
+    """A one-byte in-flight budget writes one key at a time."""
     model = _Pair(DIM)
     opt = make_adamw(model.parameters())
     train_step(model, opt, DIM)
@@ -170,12 +170,12 @@ def test_one_byte_budget_and_threads(tmp_path, monkeypatch):
 
     monkeypatch.setattr(_save, "_ByteBudget", _Recording)
     path = str(tmp_path / "step_0000001")
-    dcp.save(path, model=model, optimizer=opt, max_inflight_bytes=1, threads=1)
+    dcp.save(path, model=model, optimizer=opt, max_inflight_bytes=1)
     assert len(in_flight) > 1 and all(used == n for used, n in in_flight), "each key waited for the one before"
 
     fresh = _Pair(DIM)
     fresh_opt = make_adamw(fresh.parameters())
-    dcp.load(path, model=fresh, optimizer=fresh_opt, threads=1)
+    dcp.load(path, model=fresh, optimizer=fresh_opt)
     assert _same(_slices(fresh.parameters()), _slices(model.parameters()))
     assert _same(_state_slices(fresh_opt), _state_slices(opt))
 
