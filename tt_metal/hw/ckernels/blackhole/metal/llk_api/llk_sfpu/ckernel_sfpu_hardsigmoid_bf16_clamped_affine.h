@@ -39,7 +39,7 @@ inline void clamped_affine_pairs() {
     TTI_SFPLOADI(p_sfpu::LREG6, sfpi::SFPLOADI_MOD0_LOWER, Config::kSlopeBits & 0xffffu);
     TTI_SFPLOADI(p_sfpu::LREG7, sfpi::SFPLOADI_MOD0_UPPER, Config::kInterceptBits >> 16);
     TTI_SFPLOADI(p_sfpu::LREG7, sfpi::SFPLOADI_MOD0_LOWER, Config::kInterceptBits & 0xffffu);
-    // The pair up to its terminal: its loads, the affine step or the -1 clamp, then the +1 clamp.
+    // The pair up to its terminal: its loads, the affine step or the lower clamp, then the upper clamp.
     constexpr uint32_t head_slots = Config::kRoute == 1u ? 8u : 6u;
     auto row_head = [&] {
         TTI_SFPLOAD(p_sfpu::LREG0, 0, kClampHold, 0);

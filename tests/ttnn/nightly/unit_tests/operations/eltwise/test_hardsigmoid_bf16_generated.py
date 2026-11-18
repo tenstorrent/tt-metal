@@ -145,7 +145,7 @@ def test_hardsigmoid_bf16_nonfinite_inputs(device):
 def test_hardsigmoid_bf16_exhaustive_inputs(device):
     """All 65,536 BF16 inputs: torch's result as stored, within STEPS BF16 steps, or STOCK's word per board.
 
-    MODEL: per board, the kernel's offset in BF16 steps from torch's word.
+    MODEL: the kernel's offset in BF16 steps from torch's word.
     """
     board = "blackhole" if ttnn.device.is_blackhole(device) else "wormhole_b0"
     STOCK = {
