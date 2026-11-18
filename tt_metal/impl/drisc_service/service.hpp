@@ -70,6 +70,12 @@ metal_SocDescriptor soc_descriptor(tt::umd::Cluster& cluster, ChipId chip, const
 std::unique_ptr<tt::umd::SysmemBuffer> allocate_host_buffer(
     tt::umd::Cluster& cluster, ChipId chip, size_t size, uint64_t& device_addr);
 
+// Unmaps pages from map_host_pages().
+struct UnmapPages {
+    size_t size;
+    void operator()(void* va) const noexcept;
+};
+
 // How SeatClient::issue() and issue_batch() write a command and its doorbell into the seat's L1.
 // Window, the default: through a write-combining TLB window the seat maps on its first issue and keeps, as tt-d-gen's
 // link does; about 1 us per issue instead of 3 us on a host with a TSC clock. Each window holds one of the device's
@@ -189,8 +195,9 @@ private:
     PeerWindows* peers_ = nullptr;  // the owning Client's; null for a SeatClient of its own
     DriscCore core_;
     std::optional<ClientSeatLock> lock_;
-    std::unique_ptr<tt::umd::SysmemBuffer> control_page_buffer_;
-    std::unique_ptr<tt::umd::SysmemBuffer> batch_buffer_;
+    // Pinned on exit_write_'s fd, so the KMD sends the detach before unpinning them.
+    std::unique_ptr<void, UnmapPages> control_page_memory_;
+    std::unique_ptr<void, UnmapPages> batch_memory_;
     uint64_t control_page_device_addr_ = 0;
     uint64_t batch_device_addr_ = 0;
     abi::ControlPage* control_page_ = nullptr;
