@@ -3,7 +3,6 @@
 #pragma once
 #include "ckernel.h"
 #include "ckernel_defs.h"
-#include "ckernel_sfpu_recip.h"
 #include "ckernel_sfpu_silu_bf16_exponent_alu_product_core.h"
 #include "sfpi.h"
 #include <cstdint>

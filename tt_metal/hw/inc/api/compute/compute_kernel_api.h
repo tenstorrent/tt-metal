@@ -198,7 +198,12 @@ ALWI void silu_tile(uint32_t idst) {
 #else
     MATH(if constexpr (ckernel::sfpu::silu_bf16_whole_tile && !is_fp32_dest_acc_en) {
         SFPU_UNARY_CALL(
-            DST_SYNC_MODE, is_fp32_dest_acc_en, calculate_silu, (is_fp32_dest_acc_en, 32), idst, VectorMode::None);
+            DST_SYNC_MODE,
+            is_fp32_dest_acc_en,
+            calculate_silu,
+            (is_fp32_dest_acc_en, 32 /*ITERATIONS*/),
+            idst,
+            VectorMode::None);
         return;
     });
     MATH(SFPU_UNARY_CALL(

@@ -19,7 +19,7 @@ inline bool bf16_dest_silu() {
     return false;
 #endif
 }
-// calculate_exponent_alu_product's instructions in a stall-filling order, constants held in LRegs.
+// The kernel's instructions in a stall-filling order, constants held in LRegs.
 inline void calculate_silu_bf16_scheduled() {
 // A loop, not unrolled: the body stays in the instruction cache.
 #pragma GCC unroll 1
