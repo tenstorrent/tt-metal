@@ -12,7 +12,6 @@ from models.demos.common.prefill.runners import model_descriptor
 
 ARGS = dict(
     model_id="moonshotai/Kimi-K2.7-Code",
-    max_context_len=262144,
     max_slots=16,
     kv_depth=131072,
     num_layers=61,
@@ -34,7 +33,7 @@ def test_the_descriptor_carries_the_runners_settings():
     assert d == {
         "schema_version": 1,
         "role": "prefill",
-        "model": {"id": "moonshotai/Kimi-K2.7-Code", "max_context_len": 262144},
+        "model": {"id": "moonshotai/Kimi-K2.7-Code"},
         "capacity": {"max_slots": 16, "kv_depth": 131072},
         "kv": {"num_layers": 61, "layer_begin": 0, "layer_end": 61, "page_tokens": 32},
         "prefill": {"chunk_size": 5120, "sp_factor": 8, "max_chunks_per_batch": 2, "num_mtp_tokens": 1},

@@ -29,7 +29,6 @@ def process_started_at() -> float:
 def prefill_descriptor(
     *,
     model_id: str,
-    max_context_len: int,
     max_slots: int,
     kv_depth: int,
     num_layers: int,
@@ -50,7 +49,7 @@ def prefill_descriptor(
             "pid": os.getpid(),
             "started_at": process_started_at(),
         },
-        "model": {"id": model_id, "max_context_len": max_context_len},
+        "model": {"id": model_id},
         "capacity": {"max_slots": max_slots, "kv_depth": kv_depth},
         "kv": {"num_layers": num_layers, "layer_begin": 0, "layer_end": num_layers, "page_tokens": page_tokens},
         "prefill": {

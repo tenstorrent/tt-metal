@@ -1269,11 +1269,10 @@ def main() -> None:
     logger.info(f"[pp rank {rank}] shutdown complete")
 
 
-def _write_model_descriptor(hf_config, service_id: str, ack_shm_name: str) -> None:
+def _write_model_descriptor(service_id: str, ack_shm_name: str) -> None:
     path = os.environ[model_descriptor.PATH_ENV]
     doc = model_descriptor.prefill_descriptor(
         model_id=os.environ.get("PREFILL_HF_MODEL", ADAPTER.hf_model_default),
-        max_context_len=int(hf_config.max_position_embeddings),
         max_slots=NUM_USERS,
         kv_depth=MAX_SEQ_LEN,
         num_layers=NUM_LAYERS,
@@ -1533,7 +1532,7 @@ def _serve_request(runtime, kv_caches, mesh_device, hf_config, rank: int, num_ra
             layer_ack_service.start()
 
     if rank == master_rank and os.environ.get(model_descriptor.PATH_ENV):
-        _write_model_descriptor(hf_config, service_id, ack_shm_name)
+        _write_model_descriptor(service_id, ack_shm_name)
 
     logger.info(f"[pp rank {rank}] setup complete, entering request loop")
 
