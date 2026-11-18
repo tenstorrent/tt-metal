@@ -39,10 +39,11 @@ def hm_out(md, hm_users):
     return _HM_OUT[key]
 
 
-def merge_fused(x, sink, S, nsplit=None, out=None, full=False, hm_users=0):
+def merge_fused(x, sink, S, nsplit=None, out=None, full=False, hm_users=0, xp=None):
     """hm_users > 0 (HY4_ATTN_HM=1, compact verify rows): S = tile rows TR, the writer scatters into the PERSISTENT head-major tensor [1,8,hm_users,512] (shared by all layers; the caller must not deallocate it)."""
     md = x.device()
-    assert x.layout == ttnn.TILE_LAYOUT and x.dtype == ttnn.bfloat16
+    assert xp is not None or (x.layout == ttnn.TILE_LAYOUT and x.dtype == ttnn.bfloat16)
+    assert xp is None or S == 1, "B47a XPUSH: TR == 1 (<= 4 users)"
     nsplit = nsplit or int(
         os.environ.get("HY4_MRG_NSPLIT", "16" if S * 16 <= 120 else "8")
     )  # S=8 verify rows: 8 cores per row
@@ -92,11 +93,11 @@ def merge_fused(x, sink, S, nsplit=None, out=None, full=False, hm_users=0):
     rt_r, rt_w, rt_c = ttnn.RuntimeArgs(), ttnn.RuntimeArgs(), ttnn.RuntimeArgs()
     for i, (cx, cy) in enumerate(cores):
         s, g = i // nsplit, i % nsplit
-        rt_r[cx][cy] = [s, g * tpc]
+        rt_r[cx][cy] = [s, g * tpc] + (xp.consumer_args() if xp is not None else [])
         rt_w[cx][cy] = [s, g * tpc]
         rt_c[cx][cy] = []
     reader = ttnn.KernelDescriptor(
-        kernel_source=f"{KDIR}/mrg_reader.cpp",
+        kernel_source=(xp.reader_path if xp is not None else f"{KDIR}/mrg_reader.cpp"),
         source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
         core_ranges=core_set,
         compile_time_args=[S, tpc, ST, A, ONE] + _acc(x) + _acc(sink),
@@ -133,6 +134,7 @@ def merge_fused(x, sink, S, nsplit=None, out=None, full=False, hm_users=0):
                 nsplit,
                 int(full),
                 hm_users,
+                xp is not None,
                 os.environ.get("HY4_MRG_DBG", "0"),
                 tuple(_acc(x)),
                 tuple(_acc(sink)),

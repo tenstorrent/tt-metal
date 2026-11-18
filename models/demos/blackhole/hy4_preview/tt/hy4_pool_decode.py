@@ -48,6 +48,7 @@ _POOL_AG_LINKS = int(
 
 _XMC = {}  # B26: one compact exchange object per (mesh, S)
 _QP = {}  # B29: one q push object per (mesh, S)
+_XPU = {}  # B47a: one XPUSH object per (mesh, S)
 
 
 class PoolCtx:
@@ -144,6 +145,15 @@ class PoolCtx:
 
                 _QP[key] = hy4_qpush.QPush(md, S)
             self.qpush = _QP[key]
+        # B47a (default OFF): HY4_B47A_XPUSH=1: the cross-column exchange runs inside the split program (comm cores + flag-waiting merge reader), compact verify layout with head-major merge output, S <= 4
+        self.xpu = None
+        if int(os.environ.get("HY4_B47A_XPUSH", "0")) == 1 and self.compact and self.hm_compact and S <= 4:
+            key = (id(md), S)
+            if key not in _XPU:
+                from models.demos.blackhole.hy4_preview.tt import hy4_xpush
+
+                _XPU[key] = hy4_xpush.XPush(md, S)
+            self.xpu = _XPU[key]
         self.ids8 = {}  # index-source layer -> idx8 tensor of the current step
         self.ids8_dense = None
         self.step_pos = None
@@ -265,6 +275,25 @@ class PoolCtx:
         else:
             qg = self.gather_q(q_rm)  # [1,8,8S,576]
         ttnn.deallocate(q_rm)
+        if self.xpu is not None:
+            from models.demos.blackhole.hy4_preview.tt import hy4_merge
+
+            out = self.xpu.split(
+                qg,
+                kv_pool,
+                idx8,
+                self.mod,
+                self.kc,
+                self.G,
+                self.ckc,
+                SCALE,
+                qland=(self.qpush, S) if self.qpush is not None else None,
+            )
+            if self.qpush is None:
+                ttnn.deallocate(qg)
+            res = hy4_merge.merge_fused(self.xpu.land, sink, self.TR, full=S > 2, hm_users=S, xp=self.xpu)
+            ttnn.deallocate(out)
+            return res
         out = self.mod.sparse_sdpa_split(
             qg,
             kv_pool,
