@@ -870,7 +870,7 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
         // ports. Needs TT_METAL_FABRIC_GRAPH_BUILDER=1 and a 2D fabric.
         // Default: false
         // Usage: export TT_METAL_FABRIC_INTER_DOMAIN=1
-        case EnvVarID::TT_METAL_FABRIC_INTER_DOMAIN: this->fabric_inter_domain = true; break;
+        case EnvVarID::TT_METAL_FABRIC_INTER_DOMAIN: this->fabric_inter_domain = is_env_enabled(value); break;
 
         // RELIABILITY_MODE
         // Sets the fabric reliability mode (STRICT, RELAXED, or DYNAMIC).
