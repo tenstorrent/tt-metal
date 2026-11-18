@@ -265,6 +265,7 @@ class GRPOConfig:
         # the dataset loop. Fail fast at config-construction time.
         for _name, _val in (
             ("per_device_train_batch_size", self.per_device_train_batch_size),
+            ("num_iterations", self.num_iterations),
             ("gradient_accumulation_steps", self.gradient_accumulation_steps),
             ("prompts_to_train", self.prompts_to_train),
         ):
@@ -326,6 +327,13 @@ class GRPOConfig:
             )
         if self.max_staleness < 0:
             raise ValueError(f"grpo_config: 'max_staleness' must be >= 0 (got {self.max_staleness}).")
+        if self.rollout_backend == "ttt_remote_async":
+            if self.weight_sync_every % self.num_iterations != 0:
+                raise ValueError(
+                    "grpo_config: rollout_backend='ttt_remote_async' needs 'weight_sync_every' to be a multiple of "
+                    f"'num_iterations' (got {self.weight_sync_every} and {self.num_iterations}), because the "
+                    "trainer pushes weights only between generation batches."
+                )
         if not self.backend.in_process and self.remote_rollout is None:
             raise ValueError(
                 f"grpo_config: rollout_backend={self.rollout_backend!r} needs a top-level "

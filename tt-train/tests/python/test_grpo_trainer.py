@@ -732,6 +732,38 @@ def test_grpo_config_rejects_weight_sync_every_for_in_process(expect_error):
         GRPOConfig(**_HOST_GRPO_CONFIG, weight_sync_every=2)
 
 
+@pytest.mark.parametrize("num_iterations", [0, -1])
+def test_grpo_config_rejects_num_iterations_below_one(expect_error, num_iterations):
+    with expect_error(ValueError, "'num_iterations' must be > 0"):
+        GRPOConfig(**{**_HOST_GRPO_CONFIG, "num_iterations": num_iterations})
+
+
+@pytest.mark.parametrize("weight_sync_every, num_iterations", [(1, 2), (3, 2), (4, 3)])
+def test_grpo_config_rejects_async_weight_sync_every_not_a_multiple_of_num_iterations(
+    expect_error, weight_sync_every, num_iterations
+):
+    with expect_error(ValueError, "needs 'weight_sync_every' to be a multiple of 'num_iterations'"):
+        _remote_grpo_config(
+            rollout_backend="ttt_remote_async", weight_sync_every=weight_sync_every, num_iterations=num_iterations
+        )
+
+
+@pytest.mark.parametrize(
+    "rollout_backend, weight_sync_every, num_iterations, max_staleness",
+    [("ttt_remote_sync", 3, 2, 0), ("ttt_remote_async", 2, 2, 0), ("ttt_remote_async", 6, 3, 3)],
+)
+def test_grpo_config_accepts_remote_weight_sync_schedule(
+    rollout_backend, weight_sync_every, num_iterations, max_staleness
+):
+    cfg = _remote_grpo_config(
+        rollout_backend=rollout_backend,
+        weight_sync_every=weight_sync_every,
+        num_iterations=num_iterations,
+        max_staleness=max_staleness,
+    )
+    assert cfg.weight_sync_every == weight_sync_every
+
+
 def test_validate_clip_grad_norm_rejects_sharded_params(monkeypatch, expect_error):
     from ttml.common.utils import validate_clip_grad_norm
 
@@ -1167,12 +1199,13 @@ class _FailingTrainBegin(TrainerCallback):
         raise ValueError("on_train_begin failed")
 
 
-def _remote_grpo_config():
+def _remote_grpo_config(**overrides):
     return GRPOConfig(
         **{
             **_HOST_GRPO_CONFIG,
             "rollout_backend": "ttt_remote_sync",
             "remote_rollout": RemoteRolloutConfig(mesh_shape=[1, 1], max_batch_size=1, max_seq_len=64),
+            **overrides,
         }
     )
 
