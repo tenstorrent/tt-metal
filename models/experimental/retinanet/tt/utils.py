@@ -92,6 +92,11 @@ def group_norm_channel_chunks(device, num_channels, num_groups):
 
 
 class TTConv2D:
+    """A conv of the backbone or FPN. ``parameters`` hold its host 'weight' (OIHW) and 'bias', which
+    conv2d replaces with its prepared tensors on the first call. ``model_config`` keys:
+    MATH_FIDELITY, WEIGHTS_DTYPE and ACTIVATIONS_DTYPE, which the matching arguments override,
+    and optionally FP32_DEST_ACC_EN (default True)."""
+
     def __init__(
         self,
         kernel_size: int = 1,
@@ -99,7 +104,7 @@ class TTConv2D:
         padding: int = 0,
         dilation: int = 1,
         parameters: dict | None = None,
-        kernel_fidelity: dict | None = None,
+        model_config: dict | None = None,
         *,
         memory_config=None,
         act_block_h=None,
@@ -148,7 +153,7 @@ class TTConv2D:
         else:
             raise ValueError("Invalid config: dilation must be int or tuple")
 
-        self.kernel_fidelity = kernel_fidelity
+        self.model_config = model_config
         self.weights = parameters["weight"]
         self.bias = parameters["bias"]
         self.deallocate_activation = deallocate_activation
@@ -157,7 +162,7 @@ class TTConv2D:
         # backbone's sums run over thousands of products, and bfloat16 accumulation of them costs
         # its feature levels most of their margin to the reference.
         if fp32_dest_acc_en is None:
-            fp32_dest_acc_en = self.kernel_fidelity.get("FP32_DEST_ACC_EN", True)
+            fp32_dest_acc_en = self.model_config.get("FP32_DEST_ACC_EN", True)
         self.fp32_dest_acc_en = fp32_dest_acc_en
         self.packer_l1_acc = packer_l1_acc
         self.math_approx_mode = math_approx_mode
@@ -184,25 +189,26 @@ class TTConv2D:
         if dtype is not None:
             self.dtype = dtype
         else:
-            self.dtype = self.kernel_fidelity["ACTIVATIONS_DTYPE"]
+            self.dtype = self.model_config["ACTIVATIONS_DTYPE"]
         if weights_dtype is not None:
             self.weights_dtype = weights_dtype
         else:
-            self.weights_dtype = self.kernel_fidelity["WEIGHTS_DTYPE"]
+            self.weights_dtype = self.model_config["WEIGHTS_DTYPE"]
         if math_fidelity is not None:
             self.math_fidelity = math_fidelity
         else:
-            self.math_fidelity = self.kernel_fidelity["MATH_FIDELITY"]
+            self.math_fidelity = self.model_config["MATH_FIDELITY"]
 
     # A spatial conv's weight block may take at most 1/WEIGHT_L1_DIVISOR of a core's L1 on a
     # reduced grid; the rest holds its activation, halo and output blocks.
     WEIGHT_L1_DIVISOR = 4
 
     def _weight_split(self, device):
-        """How many blocks a reduced grid splits the conv's input channels into so that a block
-        of its bfloat16 weights takes at most 1/WEIGHT_L1_DIVISOR of a core's L1; 1 if whole.
-        Width sharding first splits the channels over the grid's cores, and each block must stay
-        whole tiles of a core's share; conv2d does not reject a split that breaks a tile."""
+        """How many blocks a reduced grid splits the conv's input channels into, aiming for a block
+        of its bfloat16 weights within 1/WEIGHT_L1_DIVISOR of a core's L1; 1 if whole. Width
+        sharding first splits the channels over the grid's cores, and each block must stay whole
+        tiles of a core's share, which conv2d does not check; so the split stops at the last one
+        that does, and a block can stay over the aim."""
         in_channels = self.in_channels
         weight_bytes = in_channels * self.kernel_size[0] * self.kernel_size[1] * self.out_channels * 2
         budget = ttnn.get_memory_view(device, ttnn.BufferType.L1).total_bytes_per_bank // self.WEIGHT_L1_DIVISOR
@@ -285,7 +291,7 @@ class TTConv2D:
         )
         compute_config = ttnn.init_device_compute_kernel_config(
             device.arch(),
-            math_fidelity=self.kernel_fidelity["MATH_FIDELITY"],
+            math_fidelity=self.model_config["MATH_FIDELITY"],
             fp32_dest_acc_en=self.fp32_dest_acc_en,
             packer_l1_acc=self.packer_l1_acc,
             math_approx_mode=self.math_approx_mode,
