@@ -2793,3 +2793,10 @@ Selftests: 670 pass, 1 old failure (xing40 server_rules.py:393 fixed threshold).
 `overseer fix` without --paths wrote `ledger_dir.parent / "tt"`: for a seeded run (ledger
 bringup/ledgers/<box>-<mode>) that is bringup/ledgers/tt, so the fix agent could not touch the model's code (FIX.13 and
 FIX.36 had it). Now `default_fix_paths(spec)`: spec.model_dir / "tt". Selftest: selftest/test_fix_default_paths.py.
+
+## F268: a seeded run's brief named the knowledge-use report under the bringup dir (DS41 FIX.36, 2026-11-18)
+
+The brief's `$knowledge_report` used `bringup_dir/results/knowledge_use/...`, while the orchestrator reads, validates and
+allows the report under `ledger_dir/results/knowledge_use/` (orchestrator.py report check, gate.py ignored paths). In a
+seeded run they differ: FIX.36 attempt 2 wrote where the brief said and its passed gate STOPPED on a path violation. Now
+the brief names the ledger's path. Selftest: test_seeded.py (the brief names the ledger's report, not the bringup dir's).

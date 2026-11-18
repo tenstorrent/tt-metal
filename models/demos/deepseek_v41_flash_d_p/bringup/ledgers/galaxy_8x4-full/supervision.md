@@ -1821,3 +1821,14 @@ https://claude.ai/artifact/V6jTfy2imD5wQz6UQXPPbR.
   Unaccounted RAM 3.9 GiB after (2.7 at boot).
 - 05:17 FIX.36 attempt 2, hang #3 of the hunt (devjob fix36_w1, watcher run): round 15, p256000 resumed, after 1157 s; node stayed up (recovery without sys-triage). The agent is at its 3-hang limit and reports next.
 - 05:42 FIX.36 attempt 2 testing a fix (devjob fix36_fix1, since 05:18): every op of the skip flow capped to the model's core grid (sub_core_grids=sub_cores(..), agent rule 18: attention, compressor, engram_add, indexer, moe adapter, sparse_attention): ops on the full grid were the lead. Round 29 at 05:42, no hang (previous hangs at rounds 7, 13, 15). Unaccounted RAM 15.3 GiB (3.9 at 04:57: +11.4 over the watcher run, its hang and reset, and this run so far).
+- 06:01 FIX.36 PASS -> eb61d3743da. CAUSE (DS41-285): stock binary ops left uncapped ran on 120 cores (beyond the model's
+  110-core cap, agent rule 18): the MoE output add (20 a chunk a chip) and an sfpu scalar op (5 a chunk); a hang took one
+  chip (15, 3, 7: not a single bad chip) and its CCL partners waited. Fix: sub_core_grids on every uncapped stock op in tt/.
+  Proof: 41 loop rounds = 7,544 chunks clean, determinism 0.0; device/wall within noise of FIX.34. Test fix DS41-284.
+  The run STOPPED after the commit on a path violation: the brief told the agent to write its knowledge-use report under
+  bringup/results/ while the orchestrator reads/allows the ledger's results/ (seeded run). FRAMEWORK F268: the brief names
+  the ledger's path; selftest test_seeded.py (11 of 12 pass; the 12th, an imported-golden test missing
+  models/tt_transformers/tests/tale-of-two-cities.txt.bz2, fails without the change too). Stray raw report moved to
+  /scratch/dnijemcevic/phase_1117/stray/ (the ledger copy is committed).
+- 06:1x P.73 (hide the history gather) applied to tasks.yaml; launching: resume --only FIX.36 (clears the stop, no agent),
+  then --only P.73. Pending framework fix before any gate that runs test_full_prefill: F259 batch reload OOM.

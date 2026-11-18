@@ -1910,12 +1910,21 @@
     "s": 2.0,
     "status": "PASS",
     "t": "2026-11-18T06:01:47"
+   },
+   {
+    "status": "STOPPED",
+    "t": "2026-11-18T06:01:51"
    }
   ],
   "last_run": "2026-11-18T06:01:45",
   "log": "/scratch/dnijemcevic/bringup/deepseek_v41_flash_d_p/runs/galaxy_8x4-full/run1/logs/FIX.36.log",
   "rc": 0,
-  "reason": [],
+  "reason": [
+   "gate passed and committed, but the attempt changed files outside its paths: revert or keep them, then resume (the passed units are reused, no agent starts). changed files outside the allowed paths (revert them): ['models/demos/deepseek_v41_flash_d_p/bringup/results/knowledge_use/FIX.36.overseer.2.json']"
+  ],
+  "review": [
+   "changed files outside the allowed paths (revert them): ['models/demos/deepseek_v41_flash_d_p/bringup/results/knowledge_use/FIX.36.overseer.2.json']"
+  ],
   "role": "overseer",
   "stamp": {
    "reused": [
@@ -1928,7 +1937,7 @@
    }
   },
   "started": "2026-11-18T06:01:43",
-  "status": "PASS",
+  "status": "STOPPED",
   "units": {
    "FIX.34": "PASS",
    "FIX.36#test_determinism": "PASS"

@@ -429,6 +429,23 @@ notes:
     orchestrator measures both sides itself). Its on-side measure hung at p256000 in test_skip_positions (dispatch timeout,
     cores 15-2/15-3, on path untouched by your diff): not yours to debug in this task. Only: finish the BREADCRUMBS P.72
     entry (what was broken, the fix, the two passing checks) and the known_issues entry, then stop.'
+- id: OV-43
+  tasks:
+  - FIX.36
+  status: open
+  t: '2026-11-18T04:43:35'
+  text: 'Attempt 1 was cut off by the node going down at 04:36 (not yours): the safe runner''s recover-hosts reached sys-triage''s
+    tt-fw-terminal step on the hung box, which has taken the host down twice. Recovery now skips sys-triage (node_env.sh
+    TTPOOL_RECOVER_CMD), so a hang costs a ~2 min glx reset, not the node. Your attempt-1 work is in the tree and stands
+    (test fix DS41-284, test_skip_hang_loop.py, BREADCRUMBS/known_issues entries). Continue with your leads in order. Make
+    each reproduction as cheap as possible: the loop hung in round 13 right after a profiled run''s finish_rt (sync, 1 s
+    idle, unregister), and the 23:18 P.72 hang was also ~3 s after a profiled run: test HANGLOOP_PROFILE=0 (no rt profiler)
+    first; if it never hangs in ~3x the rounds that hung before, the trigger is the profiled run / its teardown, and the
+    fix belongs there (the framework''s profile path, models/demos/common/bringup/testing/profile.py, and its fork), not
+    in the model. Also record which chip''s dispatch core dies each time (chip 15 / M0D14 last time, one of the 4 chips
+    with ''only 2 routing planes'' at open): the same chip every time points at that chip''s links, which is a box report
+    for the owner, not a code fix. After a hang: stop, let the safe runner reset (~2 min), check the box test, continue;
+    at most 3 hangs in this attempt, then report.'
 fixes:
 - id: FIX.1
   title: 'Owner order: no padding to get around a kernel limit'
@@ -1105,7 +1122,7 @@ fixes:
     it
   gate:
   - FIX.34
-  status: queued
+  status: placed
   t: '2026-11-18T01:42:20'
   text: 'Shipped tree (STATIC_TABLES=on, DECODER_SKIP=decode) hung 2 of 4 runs of tests/test_skip_positions.py on the 8x4:
     2026-11-17 14:26 at p256000 and 23:18 at p1024000 (TT_THROW ''TIMEOUT: device timeout, potential hang detected'', system_memory_manager.cpp:806;
@@ -1128,6 +1145,7 @@ fixes:
   - models/demos/deepseek_v41_flash_d_p/bringup/known_issues.md
   - ttnn/ttnn/bringup
   released: '2026-11-18T04:07:08'
+  placed: '2026-11-18T04:08:51'
 classified:
   L.smoke:
     kind: framework

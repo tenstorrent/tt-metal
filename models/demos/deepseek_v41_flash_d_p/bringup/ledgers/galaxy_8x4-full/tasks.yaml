@@ -4674,3 +4674,73 @@ tasks:
       steady_wall_ms_p1024000: '> 0'
       resumed_wall_ms_p1024000: '> 0'
       e2e_wall_s_p1024000: '> 0'
+- id: P.73
+  title: 'OWNER 2026-11-18: hide the history all-gather of STATIC_TABLES=off behind compute (sub-device overlap), so the
+    served-state-only path costs close to the persistent table'
+  step: perf
+  role: perf
+  device: true
+  deps:
+  - FIX.36
+  paths:
+  - models/demos/deepseek_v41_flash_d_p/tt
+  - models/demos/deepseek_v41_flash_d_p/tests/
+  - models/demos/deepseek_v41_flash_d_p/bringup/BREADCRUMBS.md
+  - models/demos/deepseek_v41_flash_d_p/bringup/known_issues.md
+  - ttnn/ttnn/bringup
+  brief:
+    details: 'OWNER 2026-11-18 (per-slot private state phase, step 4). Goal: STATIC_TABLES=off (the path that reads only
+      the served compressed cache, correct when a slot''s history was written by someone else) at close to STATIC_TABLES=on
+      speed, by running its per-chunk history all-gather concurrently with compute. Today (P.72, 8x4, DECODER_SKIP=decode,
+      steady chunk) off costs vs on: wall +4.6 ms at 51k, +10 at 256k, +25 at 768k, +33 at 1M; device +2.5 .. +30 ms. The
+      gather (sparse_attention.py _compressed / _gather_mesh, high_bw_all_gather TP then SP) runs once per KV source per
+      chunk at the first layer reading it (layers 2, 8, 14 under decode), after the compressor and indexer, before sparse
+      attention, serialized with everything on the one CQ. Read first: /scratch/dnijemcevic/phase_1117/step1_report.md
+      (code reading, file:line): ops on one CQ serialize per sub-device (go signal waits for the whole sub-device), so
+      overlap needs a sub-device split; deepseek_v3_d_p already does exactly this on one CQ (V3 tt_ccl.py:46-60, 336-355;
+      mla/mla.py:2009-2049, 2468-2475: load_sub_device_manager, top-k on rows 1-9 and high_bw_all_gather on row 0 next to
+      the Ethernet row with subdevice_id + sub_core_grids + its own semaphores, clear_loaded_sub_device_manager as the
+      join). Costs to check: load/clear drains the CQ on the device (once per region, not a host sync); sub-device-local L1
+      allocations block a load (ffn_feed''s persistent L1); inside the region every op must fit its sub-device grid (today
+      11x10 at (0,0); a row-0 gather leaves 12x9 from (0,1)). The history rows [0, start) are complete before the chunk
+      starts, so the gather of a source needs nothing of the chunk: options, in this order: (a) start the gather of source
+      s at the beginning of layer s''s attention block and overlap it with that layer''s compressor + indexer (the
+      indexer needs only k8 and the queries); (b) start it earlier (behind layers 0-1 for source 2; behind the previous
+      source''s layers for 8 and 14), holding the gathered buffer until layer s, if (a) does not hide enough. Measure
+      what you hide, per source and position. Put it behind a new switch in tt/settings.py (e.g. HISTORY_GATHER_OVERLAP
+      off|on, default off; only meaningful with STATIC_TABLES=off). Hard requirements: bit-identical outputs with the
+      switch on vs off (the same gathered rows, the same keys) and determinism unchanged (the gate checks both); no new
+      hang: at the first device hang stop device work and report (each hang so far took the node down). Every Python-built
+      op through ttnn.bringup.prepare_program / run_prepared. No fork regression or unit suites on the 8x4; only the tests
+      you add and the model-level checks. If the split cannot work (L1, grids, a CCL that cannot take a sub-device), stop
+      with the evidence and the next option, do not force it. Report short: what is hidden at each position, device and
+      wall, vs off and vs on (P.72''s table).'
+  ab:
+    keep_default: true
+    env:
+      STATIC_TABLES: 'off'
+      HISTORY_GATHER_OVERLAP: 'off'
+    change:
+      STATIC_TABLES: 'off'
+      HISTORY_GATHER_OVERLAP: 'on'
+  ab_mode: full
+  ab_rungs:
+  - last
+  gate:
+    cmd: BRINGUP_RUNG=last scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_ladder.py
+      && scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_determinism.py
+      && scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/test_determinism.py
+      && scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/test_decoder_skip_decode.py
+      && DS41_DECODER_SKIP=decode scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/test_skip_positions.py
+    metrics:
+      err_layer_L*: <= limit
+      err_state_*_L*: <= limit
+      err_final_hidden: <= limit
+      top5_overlap: '>= limit'
+      determinism_max_abs_diff: == 0
+      determinism_max_abs_diff_decoder_skip: == 0
+      contract_checks_failed_decoder_skip: == 0
+      unwritten_records_changed_decoder_skip: == 0
+      steady_wall_ms_p51200: '> 0'
+      steady_wall_ms_p1024000: '> 0'
+      resumed_wall_ms_p1024000: '> 0'

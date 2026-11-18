@@ -189,6 +189,9 @@ def test_the_port_brief_names_the_seed(fx, monkeypatch, tmp_path):
     assert "## Seed" in text and "Role: port" in text and "models/demos/fixture/bringup/spec.yaml" in text
     assert "mesh 2x2" not in text or "8x4" in text
     assert str(grown.ledger_dir.relative_to(grown.repo)) + "/results/knowledge_use" in text
+    # F268: the report the brief names is the one the orchestrator reads (the ledger's, not the bringup dir's)
+    assert str(grown.ledger_dir.relative_to(grown.repo)) + "/results/knowledge_use/W.1.port.1.json" in text
+    assert str(grown.bringup_dir.relative_to(grown.repo)) + "/results/knowledge_use/W.1" not in text
 
 
 def test_the_skill_and_readme_name_the_seeded_mode():

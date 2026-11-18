@@ -766,7 +766,8 @@ class Orchestrator:
             "task_id": task["id"],
             "repo": str(s.repo),
             "breadcrumbs": f"{rel(s, b)}/BREADCRUMBS.md",
-            "knowledge_report": rel(s, kusage.report_path(b, task["id"], role, attempt)),
+            # F268: the ledger dir's report, which the orchestrator reads and allows (a seeded run: not b)
+            "knowledge_report": rel(s, kusage.report_path(s.ledger_dir, task["id"], role, attempt)),
             "ab_switch": ab_switch_text(task),
             "scaled_hf": str(s.scaled_hf_dir) if s.has_deploy else "",
         }
