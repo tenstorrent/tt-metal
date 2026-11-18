@@ -119,16 +119,15 @@ void loop_and_wait_with_timeout(
 }
 }  // namespace
 
-bool d2h_uses_hugepage_fallback(const MetalContext& ctx) {
-    return !ctx.hal().get_supports_64_bit_pcie_addressing() && !ctx.get_cluster().is_iommu_enabled();
-}
-
 SystemMemoryManager::SystemMemoryManager(MetalEnvImpl& env, MetalContext& ctx, ChipId device_id, uint8_t num_hw_cqs) :
     env_(env),
     ctx_(ctx),
+    is_mock_device_(env.get_cluster().is_mock_or_emulated()),
+    is_dram_backed_(env.get_rtoptions().get_dram_backed_cq()),
+    cq_alignment_(env.get_hal().get_alignment(is_dram_backed_ ? HalMemType::DRAM : HalMemType::HOST)),
     device_id(device_id),
     completion_byte_addrs(num_hw_cqs),
-    cq_to_event_locks(num_hw_cqs),
+    cq_events_(std::make_unique<CqEventProgress[]>(num_hw_cqs)),
     prefetcher_cores(num_hw_cqs),
     prefetch_q_dev_ptrs(num_hw_cqs),
     prefetch_q_dev_fences(num_hw_cqs),
@@ -141,8 +140,6 @@ SystemMemoryManager::SystemMemoryManager(MetalEnvImpl& env, MetalContext& ctx, C
         this->cq_size = 65536;
         this->cq_sysmem_start = nullptr;
         this->channel_offset = 0;
-        this->cq_to_event.resize(num_hw_cqs, 0);
-        this->cq_to_last_completed_event.resize(num_hw_cqs, 0);
         const uint32_t alignment = env_.get_hal().get_alignment(HalMemType::HOST);
         for (uint8_t cq_id = 0; cq_id < num_hw_cqs; cq_id++) {
             this->cq_interfaces.emplace_back(0, cq_id, this->cq_size, 0, alignment);
@@ -178,19 +175,15 @@ SystemMemoryManager::SystemMemoryManager(MetalEnvImpl& env, MetalContext& ctx, C
         this->cq_sysmem_start = this->dram_region_staging_buffer.get();
         this->channel_offset = 0;
 
-        // Carve out the hugepage "auxiliary" tail (same layout as the MMIO path below).
-        // Per HW CQ we reserve two TRANSFER_PAGE_SIZE (4 KiB) pages outside the issue/completion
-        // fifo layout; they are pooled after all CQ slots in free_region_* and allocated via
-        // allocate_region() when host code needs extra device-visible sysmem (e.g. D2H socket
-        // hugepage fallback for fifo data and bytes-sent counters).
-        static constexpr uint32_t AUX_PAGES_PER_CQ_SIM = 2;
-        uint32_t per_cq_reduction_sim = AUX_PAGES_PER_CQ_SIM * DispatchSettings::TRANSFER_PAGE_SIZE;
-        this->cq_size -= per_cq_reduction_sim;
-        uint32_t total_cq_space_sim = static_cast<uint32_t>(num_hw_cqs) * this->cq_size;
-        this->free_region_start_ = this->channel_offset + total_cq_space_sim;
-        this->free_region_size_ = static_cast<uint32_t>(num_hw_cqs) * per_cq_reduction_sim;
-        this->free_region_host_ptr_ = this->cq_sysmem_start + total_cq_space_sim;
-        this->free_region_bump_ = 0;
+        // No D2H fallback reserve: that fallback needs a hugepage, and DRAM-backed CQs have none.
+        const uint32_t per_cq_reduction = AuxRegionAllocator::reserved_bytes_per_cq(num_hw_cqs, false);
+        this->cq_size -= per_cq_reduction;
+        const uint32_t total_cq_space = static_cast<uint32_t>(num_hw_cqs) * this->cq_size;
+        this->aux_region_allocator_ = AuxRegionAllocator(
+            this->cq_sysmem_start + total_cq_space,
+            this->channel_offset + total_cq_space,
+            static_cast<uint32_t>(num_hw_cqs) * per_cq_reduction,
+            /*has_d2h_fallback_reserve=*/false);
         this->init_dispatch_core_interfaces(num_hw_cqs, 0);
         return;
     }
@@ -218,13 +211,8 @@ SystemMemoryManager::SystemMemoryManager(MetalEnvImpl& env, MetalContext& ctx, C
     this->channel_offset = DispatchSettings::MAX_HUGEPAGE_SIZE * get_umd_channel(channel) +
                            (channel >> 2) * DispatchSettings::MAX_DEV_CHANNEL_SIZE;
 
-    static constexpr uint32_t AUX_PAGES_PER_CQ = 2;
-    uint32_t per_cq_reduction = AUX_PAGES_PER_CQ * DispatchSettings::TRANSFER_PAGE_SIZE;
-    if (d2h_uses_hugepage_fallback(ctx_)) {
-        per_cq_reduction += tt::align(
-            (DispatchSettings::HUGEPAGE_D2H_FALLBACK_RESERVE_BYTES + num_hw_cqs - 1) / num_hw_cqs,
-            DispatchSettings::TRANSFER_PAGE_SIZE);
-    }
+    const bool d2h_fallback = env_.get_cluster().needs_d2h_hugepage_fallback();
+    const uint32_t per_cq_reduction = AuxRegionAllocator::reserved_bytes_per_cq(num_hw_cqs, d2h_fallback);
     TT_FATAL(
         this->cq_size > per_cq_reduction,
         "Command queue size {} B is too small for the {} B aux reservation",
@@ -232,11 +220,12 @@ SystemMemoryManager::SystemMemoryManager(MetalEnvImpl& env, MetalContext& ctx, C
         per_cq_reduction);
     this->cq_size -= per_cq_reduction;
 
-    uint32_t total_cq_space = static_cast<uint32_t>(num_hw_cqs) * this->cq_size;
-    this->free_region_start_ = this->channel_offset + total_cq_space;
-    this->free_region_size_ = static_cast<uint32_t>(num_hw_cqs) * per_cq_reduction;
-    this->free_region_host_ptr_ = this->cq_sysmem_start + total_cq_space;
-    this->free_region_bump_ = 0;
+    const uint32_t total_cq_space = static_cast<uint32_t>(num_hw_cqs) * this->cq_size;
+    this->aux_region_allocator_ = AuxRegionAllocator(
+        this->cq_sysmem_start + total_cq_space,
+        this->channel_offset + total_cq_space,
+        static_cast<uint32_t>(num_hw_cqs) * per_cq_reduction,
+        d2h_fallback);
 
     this->init_dispatch_core_interfaces(num_hw_cqs, channel);
 }
@@ -289,10 +278,8 @@ void SystemMemoryManager::init_dispatch_core_interfaces(uint8_t num_hw_cqs, uint
             {.size = completion_q_rd_ptr + sizeof(uint32_t)}));
         this->completion_byte_addrs[cq_id] = completion_q_rd_ptr;
 
-        const uint32_t alignment = is_dram_backed() ? env_.get_hal().get_alignment(HalMemType::DRAM)
-                                                    : env_.get_hal().get_alignment(HalMemType::HOST);
         const uint32_t base = is_dram_backed() ? this->get_dram_region_base_addr() : 0;
-        this->cq_interfaces.emplace_back(channel, cq_id, this->cq_size, cq_start, alignment, base);
+        this->cq_interfaces.emplace_back(channel, cq_id, this->cq_size, cq_start, cq_alignment_, base);
         // Prefetch queue acts as the sync mechanism to ensure that issue queue has space to write, so issue queue
         // must be as large as the max amount of space the prefetch queue can specify Plus 1 to handle wrapping plus
         // PREFETCH_MAX_OUTSTANDING_PCIE_READS to allow us to start writing to issue queue
@@ -304,95 +291,40 @@ void SystemMemoryManager::init_dispatch_core_interfaces(uint8_t num_hw_cqs, uint
             "Issue queue for cq_id {} has size of {} which is too small",
             cq_id,
             this->get_issue_queue_size(cq_id));
-        this->cq_to_event.push_back(0);
-        this->cq_to_last_completed_event.push_back(0);
         this->prefetch_q_dev_ptrs[cq_id] = prefetch_q_base;
         this->prefetch_q_dev_fences[cq_id] =
             prefetch_q_base + mem_map.prefetch_q_entries() * mem_map.prefetch_q_entry_size_bytes();
     }
 }
 
-bool SystemMemoryManager::is_mock_device() const { return env_.get_cluster().is_mock_or_emulated(); }
-
-uint32_t SystemMemoryManager::get_next_event(const uint8_t cq_id) {
-    if (is_mock_device()) {
-        return ++this->cq_to_event[cq_id];
-    }
-    cq_to_event_locks[cq_id].lock();
-    uint32_t next_event = ++this->cq_to_event[cq_id];  // Event ids start at 1
-
-    cq_to_event_locks[cq_id].unlock();
-    return next_event;
+void SystemMemoryManager::set_last_issued_event(const uint8_t cq_id, const uint32_t event_id) {
+    this->cq_events_[cq_id].last_issued.store(event_id, std::memory_order_relaxed);
 }
 
-// Get last issued event to Command Queue
-uint32_t SystemMemoryManager::get_last_event(const uint8_t cq_id) {
-    std::lock_guard<std::mutex> lock(cq_to_event_locks[cq_id]);
-    return this->cq_to_event[cq_id];
-}
-
-void SystemMemoryManager::set_current_and_last_completed_event(
-    const uint8_t cq_id, const uint32_t current_event_id, const uint32_t last_completed_event_id) {
-    cq_to_event_locks[cq_id].lock();
-
-    this->cq_to_event[cq_id] = current_event_id;
-    this->cq_to_last_completed_event[cq_id] = last_completed_event_id;
-    cq_to_event_locks[cq_id].unlock();
-}
-
-void SystemMemoryManager::reset_event_id(const uint8_t cq_id) {
-    if (is_mock_device()) {
-        this->cq_to_event[cq_id] = 0;
-        return;
-    }
-    cq_to_event_locks[cq_id].lock();
-    this->cq_to_event[cq_id] = 0;
-    cq_to_event_locks[cq_id].unlock();
-}
-
-void SystemMemoryManager::increment_event_id(const uint8_t cq_id, const uint32_t val) {
-    if (is_mock_device()) {
-        this->cq_to_event[cq_id] += val;
-        return;
-    }
-    cq_to_event_locks[cq_id].lock();
-    this->cq_to_event[cq_id] += val;
-    cq_to_event_locks[cq_id].unlock();
+uint32_t SystemMemoryManager::get_last_issued_event(const uint8_t cq_id) const {
+    return this->cq_events_[cq_id].last_issued.load(std::memory_order_relaxed);
 }
 
 void SystemMemoryManager::set_last_completed_event(const uint8_t cq_id, const uint32_t event_id) {
-    if (is_mock_device()) {
-        this->cq_to_last_completed_event[cq_id] = event_id;
-        return;
-    }
+    std::atomic<uint32_t>& last_completed = this->cq_events_[cq_id].last_completed;
     TT_ASSERT(
-        wrap_ge(event_id, this->cq_to_last_completed_event[cq_id]),
+        wrap_ge(event_id, last_completed.load(std::memory_order_relaxed)),
         "Event ID is expected to increase. Wrapping not supported for sync. Completed event {} but last recorded "
         "completed event is {}, manager {}",
         event_id,
-        this->cq_to_last_completed_event[cq_id],
+        last_completed.load(std::memory_order_relaxed),
         fmt::ptr(this));
-    cq_to_event_locks[cq_id].lock();
-
-    this->cq_to_last_completed_event[cq_id] = event_id;
-    cq_to_event_locks[cq_id].unlock();
+    // Pairs with the acquire in get_last_completed_event, publishing the completion reader's earlier writes.
+    last_completed.store(event_id, std::memory_order_release);
 }
 
-uint32_t SystemMemoryManager::get_current_event(const uint8_t cq_id) {
-    cq_to_event_locks[cq_id].lock();
-    uint32_t current_event = this->cq_to_event[cq_id];
-    cq_to_event_locks[cq_id].unlock();
-    return current_event;
+uint32_t SystemMemoryManager::get_last_completed_event(const uint8_t cq_id) const {
+    return this->cq_events_[cq_id].last_completed.load(std::memory_order_acquire);
 }
 
-uint32_t SystemMemoryManager::get_last_completed_event(const uint8_t cq_id) {
-    if (is_mock_device()) {
-        return this->cq_to_last_completed_event[cq_id];
-    }
-    cq_to_event_locks[cq_id].lock();
-    uint32_t last_completed_event = this->cq_to_last_completed_event[cq_id];
-    cq_to_event_locks[cq_id].unlock();
-    return last_completed_event;
+void SystemMemoryManager::reset_events(const uint8_t cq_id, const uint32_t event_id) {
+    this->cq_events_[cq_id].last_issued.store(event_id, std::memory_order_relaxed);
+    this->cq_events_[cq_id].last_completed.store(event_id, std::memory_order_release);
 }
 
 void SystemMemoryManager::reset(const uint8_t cq_id) {
@@ -405,16 +337,6 @@ void SystemMemoryManager::reset(const uint8_t cq_id) {
     cq_interface.issue_fifo_wr_toggle = false;
     cq_interface.completion_fifo_rd_ptr = cq_interface.issue_fifo_limit;
     cq_interface.completion_fifo_rd_toggle = false;
-}
-
-void SystemMemoryManager::set_issue_queue_size(const uint8_t cq_id, const uint32_t issue_queue_size) {
-    if (is_mock_device()) {
-        return;
-    }
-
-    SystemMemoryCQInterface& cq_interface = this->cq_interfaces[cq_id];
-    cq_interface.issue_fifo_size = (issue_queue_size >> 4);
-    cq_interface.issue_fifo_limit = (cq_interface.cq_start + cq_interface.offset + issue_queue_size) >> 4;
 }
 
 void SystemMemoryManager::set_bypass_mode(const bool enable, const bool clear) {
@@ -531,9 +453,7 @@ void* SystemMemoryManager::issue_queue_reserve(uint32_t cmd_size_B, const uint8_
     uint32_t issue_q_write_ptr = this->get_issue_queue_write_ptr(cq_id);
 
     const uint32_t command_issue_limit = this->get_issue_queue_limit(cq_id);
-    const uint32_t alignment = is_dram_backed() ? env_.get_hal().get_alignment(tt::tt_metal::HalMemType::DRAM)
-                                                : env_.get_hal().get_alignment(tt::tt_metal::HalMemType::HOST);
-    if (issue_q_write_ptr + align(cmd_size_B, alignment) > command_issue_limit) {
+    if (issue_q_write_ptr + align(cmd_size_B, cq_alignment_) > command_issue_limit) {
         this->wrap_issue_queue_wr_ptr(cq_id);
         issue_q_write_ptr = this->get_issue_queue_write_ptr(cq_id);
     }
@@ -595,9 +515,7 @@ void SystemMemoryManager::issue_queue_push_back(uint32_t push_size_B, const uint
         this->bypass_buffer_write_offset += push_size_B;
         return;
     }
-    const uint32_t alignment = is_dram_backed() ? env_.get_hal().get_alignment(tt::tt_metal::HalMemType::DRAM)
-                                                : env_.get_hal().get_alignment(tt::tt_metal::HalMemType::HOST);
-    const uint32_t push_size_16B = align(push_size_B, alignment) >> 4;
+    const uint32_t push_size_16B = align(push_size_B, cq_alignment_) >> 4;
 
     SystemMemoryCQInterface& cq_interface = this->cq_interfaces[cq_id];
     uint32_t issue_q_wr_ptr = ctx_.dispatch_mem_map().get_host_command_queue_addr(CommandQueueHostAddrType::ISSUE_Q_WR);
@@ -815,16 +733,6 @@ void SystemMemoryManager::wrap_issue_queue_wr_ptr(const uint8_t cq_id) {
     cq_interface.issue_fifo_wr_toggle = not cq_interface.issue_fifo_wr_toggle;
 }
 
-void SystemMemoryManager::wrap_completion_queue_rd_ptr(const uint8_t cq_id) {
-    if (is_mock_device()) {
-        return;
-    }
-
-    SystemMemoryCQInterface& cq_interface = this->cq_interfaces[cq_id];
-    cq_interface.completion_fifo_rd_ptr = cq_interface.issue_fifo_limit;
-    cq_interface.completion_fifo_rd_toggle = not cq_interface.completion_fifo_rd_toggle;
-}
-
 void SystemMemoryManager::completion_queue_pop_front(uint32_t num_pages_read, const uint8_t cq_id) {
     if (is_mock_device()) {
         return;
@@ -897,8 +805,6 @@ void SystemMemoryManager::fetch_queue_write(uint32_t command_size_B, const uint8
     this->prefetch_q_dev_ptrs[cq_id] += entry_bytes;
 }
 
-bool SystemMemoryManager::is_dram_backed() const { return env_.get_rtoptions().get_dram_backed_cq(); }
-
 uint32_t SystemMemoryManager::get_dram_region_base_addr() const {
     TT_FATAL(this->is_dram_backed(), "CQs are not DRAM backed");
     return env_.get_hal().get_dev_addr(HalDramMemAddrType::DRAM_BACKED_COMMAND_QUEUES);
@@ -907,29 +813,6 @@ uint32_t SystemMemoryManager::get_dram_region_base_addr() const {
 uint32_t SystemMemoryManager::get_dram_region_bank_id() const {
     TT_FATAL(this->is_dram_backed(), "CQs are not DRAM backed");
     return 0;
-}
-
-std::pair<void*, uint32_t> SystemMemoryManager::allocate_region(uint32_t size) {
-    if (free_region_host_ptr_ == nullptr || free_region_size_ == 0) {
-        return {nullptr, 0};
-    }
-
-    static constexpr uint32_t kMinAlignment = 64;
-    uint32_t aligned_size = tt::align(size, kMinAlignment);
-    TT_FATAL(
-        free_region_bump_ + aligned_size <= free_region_size_,
-        "Hugepage auxiliary region exhausted: requested {} bytes ({} aligned), {} of {} used",
-        size,
-        aligned_size,
-        free_region_bump_,
-        free_region_size_);
-
-    void* host_ptr = free_region_host_ptr_ + free_region_bump_;
-    uint32_t device_addr = free_region_start_ + free_region_bump_;
-    free_region_bump_ += aligned_size;
-
-    std::memset(host_ptr, 0, aligned_size);
-    return {host_ptr, device_addr};
 }
 
 }  // namespace tt::tt_metal

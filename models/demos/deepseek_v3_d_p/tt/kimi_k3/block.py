@@ -83,6 +83,7 @@ class TtKimiK3Block(LightweightModule):
         # `TtPrefillBlock` stores the TP element under `self.topology` and this does the same.
         tp_topology = topology[tp_axis] if isinstance(topology, (tuple, list)) else topology
         self.topology = tp_topology
+        self.tp_axis = tp_axis
 
         self.attn_norm = TtDistributedRmsNorm(
             mesh_device=mesh_device,
@@ -150,6 +151,7 @@ class TtKimiK3Block(LightweightModule):
                 torch_weights=state_dict.get("ffn_weights"),
                 num_links=num_links,
                 topology=tp_topology,
+                tp_axis=tp_axis,
                 activations_dtype=shared_expert_activations_dtype,
                 weights_dtype=shared_expert_weights_dtype,
                 weight_cache_path=weight_cache_path,
@@ -162,24 +164,22 @@ class TtKimiK3Block(LightweightModule):
 
     def set_trace_controller(self, controller):
         """Attach (or clear with None) a SubDeviceTraceController, so a ttnn trace captured over
-        forward() is split at this block's shared-expert/dispatch sub-device boundaries.
+        forward() is split at this block's sub-device boundaries: the MoE's shared-expert/dispatch
+        overlap and, on a K3.1 DSA layer, sparse MLA's top-k / KV-gather overlap (as `TtPrefillBlock`).
 
         `forward` already reads `self._trace_controller` for the migration-ack site; without this
         setter it stayed unset and `TtPrefillRuntime._prepare_trace` failed outright on the model.
-
-        No indexer guard here, unlike `TtPrefillBlock`: Kimi-K3's attention is KDA or dense MLA, and
-        neither carries an indexer. See the note in kimi_k3/attention.py.
         """
         self._trace_controller = controller
-        ffn = getattr(self, "ffn", None)
-        if ffn is not None and hasattr(ffn, "set_trace_controller"):
-            ffn.set_trace_controller(controller)
+        for part in (self.attention, getattr(self, "ffn", None)):
+            if part is not None and hasattr(part, "set_trace_controller"):
+                part.set_trace_controller(controller)
 
     def release_sub_device_managers(self):
-        """Drop this block's MoE overlap sub-device manager before mesh close (no-op for a dense FFN)."""
-        ffn = getattr(self, "ffn", None)
-        if ffn is not None and hasattr(ffn, "release_sub_device_manager"):
-            ffn.release_sub_device_manager()
+        """Drop this block's overlap sub-device managers (MoE, and sparse MLA on a DSA layer) before mesh close."""
+        for part in (self.attention, getattr(self, "ffn", None)):
+            if part is not None and hasattr(part, "release_sub_device_manager"):
+                part.release_sub_device_manager()
 
     def forward(
         self,
@@ -284,9 +284,9 @@ class TtKimiK3Block(LightweightModule):
 
         # Dense: gather to the full hidden dim, then TtFfn reduce-scatters internally — the same
         # collective pair the KDA attention above already uses.
-        if self.mesh_device.shape[1] > 1:
+        if self.mesh_device.shape[self.tp_axis] > 1:
             gathered = ttnn.all_gather(
-                ffn_norm_out, dim=-1, cluster_axis=1, num_links=self.num_links, topology=self.topology
+                ffn_norm_out, dim=-1, cluster_axis=self.tp_axis, num_links=self.num_links, topology=self.topology
             )
             out = self.ffn(gathered)
             ttnn.deallocate(gathered)
