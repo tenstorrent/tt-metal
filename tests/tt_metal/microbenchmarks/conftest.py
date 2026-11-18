@@ -8,3 +8,4 @@ def pytest_addoption(parser):
     parser.addoption("--num-iterations", action="store", type=int, help="Number of iterations to run each test config")
     parser.addoption("--num-packets", action="store", type=int, help="Number of packets to send during each iteration")
     parser.addoption("--packet-size", action="store", type=int, help="Packet size in bytes")
+# gate-timing comparison marker (comment only)
