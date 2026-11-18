@@ -184,9 +184,7 @@ def test_same_world_through_the_driver_matches_exactly(tmp_path, release_metal_e
     assert "RESULT: OK" in out
 
 
-def test_a_tp2_checkpoint_with_its_fused_declarations_stripped_is_refused_on_one_device(
-    tmp_path, release_metal_env, skip_if_host_too_small, mgd_path
-):
+def test_stripped_fused_declarations_are_refused(tmp_path, release_metal_env, skip_if_host_too_small, mgd_path):
     """Without its fused_segments declarations a TP2 checkpoint holds its fused rows in TP2's per-shard order and its
     index says nothing about it; loaded onto one device it would scramble Q, K and V, so the load refuses it."""
     skip_if_host_too_small((2,), "the stripped-declarations case")
@@ -215,9 +213,7 @@ def test_a_scrambled_fused_weight_fails_the_logits_check(tmp_path, release_metal
 DUAL_RANK_MGD = "tests/ttnn/distributed/config/bh_1x4_dual_rank_mesh_graph_descriptor.textproto"
 
 
-def test_a_checkpoint_two_ranks_wrote_on_one_mesh_loads_on_one_process(
-    tmp_path, release_metal_env, skip_if_host_too_small
-):
+def test_two_ranks_on_one_mesh_load_on_one_process(tmp_path, release_metal_env, skip_if_host_too_small):
     """Two ranks co-owning one [1, 4] mesh split most keys' chunks between their files (the other two-rank cases
     give each rank a whole mesh, so each key is written by one rank). The test_dcp_multirank module's source test
     saves such a checkpoint under tt-run; one process with one device loads it, and every parameter must equal the

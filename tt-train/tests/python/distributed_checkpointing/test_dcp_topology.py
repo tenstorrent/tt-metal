@@ -107,21 +107,28 @@ def _pairwise_tile(boxes, target) -> bool:
     return all(a.intersect(b) is None for i, a in enumerate(boxes) for b in boxes[i + 1 :])
 
 
-def test_boxes_of_different_ranks_name_both_ranks_when_intersected(expect_error):
+def test_intersect_names_both_ranks(expect_error):
+    """Intersecting boxes of different ranks is an error that names both ranks."""
     with expect_error(ValueError, "cannot intersect a 2-d box with a 3-d box"):
         Box((0, 0), (2, 2)).intersect(Box((0, 0, 0), (2, 2, 2)))
 
 
-def test_a_box_of_another_rank_is_not_contained_and_does_not_tile():
-    # A malformed index could hold a chunk of the wrong rank: it must fail the tiling check, which names the entry,
-    # rather than pass it on the dims the two boxes share.
+def test_box_of_another_rank_neither_fits_nor_tiles():
+    """A box of another rank is not contained in a target and does not tile it."""
+    # Neither check may pass a box of another rank on the dims the two boxes share.
     target = Box((0, 0), (2, 2))
     assert not target.contains(Box((0, 0, 99), (2, 2, 1)))
     assert not Box((0, 0, 0), (2, 2, 2)).contains(Box((0, 0), (1, 1)))
     assert not boxes_tile([Box((0, 0, 99), (2, 2, 1))], target)
 
 
-def test_boxes_tile_grid_fast_path_agrees_with_the_pairwise_definition():
+def test_boxes_tile_agrees_with_pairwise_definition():
+    """boxes_tile's grid fast path agrees with the pairwise definition."""
+    # Equal sizes off the grid: distinct offsets, the volume adding up, and yet an overlap and a gap. Only the
+    # alignment check in grid_cell_size keeps them off the fast path, and the random cases below never make such boxes.
+    off_grid = [Box((0,), (2,)), Box((1,), (2,))]
+    assert grid_cell_size(off_grid, (0,)) is None
+    assert not boxes_tile(off_grid, Box((0,), (4,)))
     rng = np.random.default_rng(7)
     grid_cases = pairwise_cases = 0
     for _ in range(3000):
@@ -158,6 +165,23 @@ def test_boxes_tile_grid_fast_path_agrees_with_the_pairwise_definition():
     assert pairwise_cases > 200, "the pairwise path was exercised"
 
 
+def test_labels_tile_and_replicas_share_a_box():
+    """The save planner checks only that a label's shard dims are in range and relies on the rest, so it is checked
+    here over random labels: one box per replica group, the boxes tiling the global shape (by the pairwise
+    definition), and every replica of a group holding the same box."""
+    rng = np.random.default_rng(11)
+    for _ in range(1000):
+        rank = int(rng.integers(1, 5))
+        dist_shape = tuple(int(rng.integers(1, 4)) for _ in range(int(rng.integers(1, 4))))
+        placements = [R() if rng.integers(0, 3) == 0 else S(int(rng.integers(0, rank))) for _ in dist_shape]
+        label = world(placements, dist_shape)
+        local = tuple(int(rng.integers(1, 4)) for _ in range(rank))
+        groups = replica_groups(chunk_boxes(label, local))
+        assert all(c.box == chunks[0].box for chunks in groups.values() for c in chunks), label
+        boxes = [chunks[0].box for chunks in groups.values()]
+        assert _pairwise_tile(boxes, Box.whole(global_shape(label, local))), (label, local)
+
+
 def test_tp_split_counts_every_mesh_axis_but_fsdps():
     # Distribution axis 0 shards dim 3 (an FSDP axis), axis 1 shards dim 2 (tensor parallel).
     fsdp_tp = world([S(3), S(2)], (4, 8))
@@ -169,7 +193,8 @@ def test_tp_split_counts_every_mesh_axis_but_fsdps():
     assert tp_split(world([R(), R()], (4, 8)), None, 4) == (1, 1, 1, 1)
 
 
-def test_crc31_is_crc32_without_its_top_bit_and_one_process_picks_as_bare_coordinates():
+def test_crc31_and_one_process_owner():
+    """crc31 is CRC32 without its top bit, and on one process owner picks what bare coordinates pick."""
     for text in ("", "model/x", "optimizer/exp_avg/model/blocks/0/weight"):
         assert crc31(text) == zlib.crc32(text.encode("utf-8")) & 0x7FFFFFFF < 2**31
     coords = [(1, 0), (0, 1), (0, 0), (1, 1)]

@@ -445,7 +445,7 @@ def _same_description(a: TensorInfo, b: TensorInfo) -> bool:
 
 def _groups_of(info: TensorInfo) -> tuple[dict[tuple[int, ...], tuple[Chunk, ...]], dict[tuple[int, ...], tuple]]:
     """A key's replica groups (cached per label and shape) and, per mesh coordinate, the group it holds."""
-    groups = _checked_groups(info)  # a TopologyError or CoverageError naming the key
+    groups = _checked_groups(info)  # a TopologyError naming the key
     by_coord = {chunk.mesh_coord: group for group, chunks in groups.items() for chunk in chunks}
     return groups, by_coord
 
@@ -534,11 +534,15 @@ class ResultPart:
     train_state: dict = field(default_factory=dict)
 
     def to_bytes(self) -> bytes:
+        # Entries name their labels by position in a table, as in index.json.
+        label_ids: dict[Label, int] = {}
+        entries = {k: _entry_to_json(e, label_ids.setdefault(e.label, len(label_ids))) for k, e in self.entries.items()}
         return json.dumps(
             {
                 "record": self.record.to_json(),
                 "files": [{"path": f.path, "nbytes": f.nbytes, "coord": list(f.coord)} for f in self.files],
-                "entries": {k: _entry_to_json(e) for k, e in self.entries.items()},
+                "labels": [label.to_json() for label in label_ids],
+                "entries": entries,
                 "rng": self.rng,
                 "scalars": self.scalars,
                 "header": self.header,
@@ -554,7 +558,8 @@ class ResultPart:
             FileRecord(f["path"], int(f["nbytes"]), record.world_rank, record.mesh_id, tuple(f["coord"]))
             for f in value["files"]
         ]
-        entries = {k: _entry_from_json(k, e) for k, e in value["entries"].items()}
+        labels = [Label.from_json(label) for label in value["labels"]]
+        entries = {k: _entry_from_json(k, e, labels) for k, e in value["entries"].items()}
         return ResultPart(
             record,
             files,

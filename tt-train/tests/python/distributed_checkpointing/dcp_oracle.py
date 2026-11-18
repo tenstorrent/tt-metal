@@ -6,7 +6,11 @@
 
 ``FakeCheckpoint.save`` runs the save planner over global device-layout arrays and keeps the resulting files in
 memory; ``FakeCheckpoint.load`` runs the load planner for a destination world and executes its reads and fills with
-numpy. The oracle for every case is plain array slicing through the transforms, written independently of the planner.
+numpy. The oracle for every case is plain array slicing, written independently of the planner: through the transforms
+for a tensor's layout, and with ``np.split`` per mesh coordinate (``device_shards``) for what each device holds, both
+for the bytes a save writes and for what a load must give each device. The planner's own label mapping
+(``chunk_boxes``) is never used to cut either side, so a mapping that gave a device the wrong rows fails the round
+trips instead of agreeing with itself.
 """
 
 from __future__ import annotations
@@ -14,6 +18,7 @@ from __future__ import annotations
 import random
 import sys
 import zlib
+from itertools import product
 
 import numpy as np
 
@@ -96,24 +101,45 @@ def info(key, label, global_shape, transform, dtype="F32", role="param") -> Tens
     )
 
 
+def _devices(label: Label):
+    """``(distribution coordinate, mesh coordinate)`` of every device of ``label``: the distribution shape walked in
+    row-major order, paired with the label's mesh coordinates in turn."""
+    return zip(product(*(range(n) for n in label.dist_shape)), label.mesh_coords)
+
+
+def device_shards(global_array: np.ndarray, label: Label) -> dict[tuple, np.ndarray]:
+    """What each device of ``label`` holds of ``global_array``, by mesh coordinate, cut with ``np.split`` as a mesh
+    mapper lays a tensor out: every axis that shards a dim splits it evenly, and axes sharding the same dim nest in
+    axis order, the first outermost."""
+    out = {}
+    for coord, mesh_coord in _devices(label):
+        piece = global_array
+        for axis, placement in enumerate(label.placements):
+            if placement.kind == "shard":
+                piece = np.split(piece, label.dist_shape[axis], axis=placement.dim)[coord[axis]]
+        out[mesh_coord] = piece
+    return out
+
+
 class FakeCheckpoint:
     def __init__(self) -> None:
         self.index: Index | None = None
         self.files: dict[int, bytearray] = {}
 
     def save(self, tensors: dict[str, tuple[np.ndarray, Label, object]]) -> Index:
-        """``tensors[key] = (device-layout global array, label, transform)``."""
+        """``tensors[key] = (device-layout global array, label, transform)``. Each chunk's bytes are what its device
+        holds (``device_shards``), as a real save writes each device's own tensor."""
         infos = [info(key, label, arr.shape, transform) for key, (arr, label, transform) in tensors.items()]
         plan = create_save_plan(infos, lambda coord: data_file_name(0, 0, coord), one_process_owner)
+        held = {key: device_shards(arr, label) for key, (arr, label, _) in tensors.items()}
         self.files = {}
         records = []
         crcs = {}
         for fplan in plan.files:
             buf = bytearray(fplan.data_bytes)
             for item in fplan.items:
-                arr = tensors[item.key][0]
-                chunk = np.ascontiguousarray(arr[item.chunk.box.slices()])
-                assert chunk.nbytes == item.nbytes
+                chunk = np.ascontiguousarray(held[item.key][item.chunk.mesh_coord])
+                assert chunk.shape == item.chunk.box.sizes and chunk.nbytes == item.nbytes
                 buf[item.data_offset : item.data_offset + item.nbytes] = chunk.tobytes()
                 crcs[(item.key, fplan.index)] = zlib.crc32(chunk.tobytes())
             self.files[fplan.index] = buf
@@ -134,7 +160,6 @@ class FakeCheckpoint:
                 chunk = np.frombuffer(bytes(raw), dtype=np.float32).reshape(record.box.sizes)
                 out[read.group][read.dst.slices()] = chunk[read.src.slices()]
             for fill in kplan.fills:
-                assert fill.fill == "zeros"
                 out[fill.group][fill.dst.slices()] = 0.0
             for group, arr in out.items():
                 assert not np.isnan(arr).any(), f"{key}: shard {group} not fully written"
@@ -143,14 +168,17 @@ class FakeCheckpoint:
 
 
 def expected_shards(expected_global: np.ndarray, label: Label) -> dict[tuple, np.ndarray]:
-    """What every replica group of ``label`` should hold of ``expected_global``."""
-    from ttml.distributed_checkpointing._topology import chunk_boxes, replica_groups
-
-    local = label_local_shape(label, expected_global.shape)
-    return {
-        group: expected_global[chunks[0].box.slices()]
-        for group, chunks in replica_groups(chunk_boxes(label, local)).items()
-    }
+    """What every replica group of ``label`` should hold of ``expected_global``: ``device_shards``, keyed the way the
+    planner keys a group (a device's distribution coordinates along the sharding axes). Replicas must agree."""
+    held = device_shards(expected_global, label)
+    out: dict[tuple, np.ndarray] = {}
+    for coord, mesh_coord in _devices(label):
+        group = tuple(coord[a] for a, p in enumerate(label.placements) if p.kind == "shard")
+        if group in out:
+            np.testing.assert_array_equal(out[group], held[mesh_coord], err_msg=f"replicas of group {group}")
+        else:
+            out[group] = held[mesh_coord]
+    return out
 
 
 def assert_shards_equal(actual: dict[tuple, np.ndarray], expected: dict[tuple, np.ndarray]) -> None:

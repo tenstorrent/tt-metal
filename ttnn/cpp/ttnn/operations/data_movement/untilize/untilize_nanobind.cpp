@@ -16,25 +16,43 @@
 namespace ttnn::operations::data_movement::detail {
 
 void bind_untilize(nb::module_& mod) {
+    // The BFLOAT16 NaN rule in this docstring tracks tenstorrent/tt-metal#31406; drop it once that issue is fixed.
     const auto* doc =
         R"doc(
-            Changes data layout of input tensor to ROW_MAJOR.
+            Changes the layout of the input tensor from TILE to ROW_MAJOR.
 
-            Input tensor must be on TT accelerator device, in TILE layout, and have BFLOAT16 data type.
-
-            Output tensor will be on TT accelerator device, in ROW_MAJOR layout, and have BFLOAT16 data type.
+            The output has the input's logical shape: the tile padding of a tensor whose last two dimensions are not
+            multiples of 32 is left out.
 
             Args:
-                input_tensor (ttnn.Tensor): the input tensor.
+                input_tensor (ttnn.Tensor): the input tensor, on device, in TILE layout with 32x32 tiles.
 
             Keyword Args:
-
-                memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`.
+                memory_config (ttnn.MemoryConfig, optional): Memory configuration of the output. Defaults to `None`, which uses the input tensor's memory configuration. A BLOCK_SHARDED output must be in L1. When an interleaved input has tile padding, the operation can derive a sharded output's shard shape from the output shape instead of taking it from ``memory_config``.
                 use_multicore (bool, optional): Whether to use multicore. Defaults to `True`.
-                sub_core_grids (ttnn.CoreRangeSet, optional): Sub core grids. Defaults to `None`.
+                sub_core_grids (ttnn.CoreRangeSet, optional): Cores to run the operation on. Defaults to `None`, which lets the operation choose its cores. It needs an interleaved input and output and ``use_multicore=True``. When the last two dimensions are multiples of 32, the input must also be one tile row tall: the product of all its dimensions but the last must be 32.
 
             Returns:
-                List of ttnn.Tensor: the output tensor.
+                ttnn.Tensor: the output tensor, in ROW_MAJOR layout with the input's dtype. A ``BFLOAT8_B`` input gives a ``BFLOAT16`` output.
+
+            Note:
+                Supported dtypes and layouts:
+
+                .. list-table::
+                   :header-rows: 1
+
+                   * - Dtypes
+                     - Layouts
+                   * - BFLOAT16, FLOAT32, BFLOAT8_B, INT32, UINT32, UINT16, UINT8
+                     - TILE
+
+                ``BFLOAT16`` input values must not be NaN.
+
+            Memory Support:
+                - Interleaved: DRAM and L1
+                - Sharded input: HEIGHT_SHARDED, WIDTH_SHARDED and BLOCK_SHARDED in L1; HEIGHT_SHARDED and WIDTH_SHARDED in DRAM
+                - Sharded output: HEIGHT_SHARDED and WIDTH_SHARDED in L1 or DRAM; BLOCK_SHARDED in L1
+                - ND sharded: L1 input and output; an ND sharded output from an interleaved input needs the last two dimensions to be multiples of 32
         )doc";
 
     ttnn::bind_function<"untilize">(
