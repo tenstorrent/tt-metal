@@ -221,7 +221,7 @@ FORCE_INLINE void setup_send(uint32_t q_num, uint32_t dest) {
         setup_wrapping_vcs_cmdbuf<kCmdBuf>(
             VcRange{.start = vc, .end = vc}, VcRange{.start = kNocRespVc, .end = kNocRespVc});
         setup_trids_cmdbuf<kCmdBuf>(noc_trid(q_num));
-        set_dest_cmdbuf<kCmdBuf>(sram_system_addr(peer_tile, dest));
+        set_dest_cmdbuf<kCmdBuf>(sram_system_addr(peer_tile, dest), 0, 0, 0);
     } else {
         const uint32_t vc = txq_req_vc(q_num);
         setup_wrapping_vcs_cmdbuf<kCmdBuf>(VcRange{.start = vc, .end = vc});
@@ -237,7 +237,11 @@ FORCE_INLINE void send_bytes(uint32_t q_num, uint32_t src, uint32_t dest, uint32
     // A core store to the source must reach SRAM before the copy reads it.
     asm volatile("fence" ::: "memory");
     setup_send(q_num, dest);
-    set_src_cmdbuf<kCmdBuf>(sram_local_addr(hsio_tile(), src));
+    if (link_copy.kind == ETH_LINK_KIND_NOC) {
+        set_src_cmdbuf<kCmdBuf>(sram_local_addr(hsio_tile(), src), 0, 0, 0);
+    } else {
+        set_src_cmdbuf<kCmdBuf>(sram_local_addr(hsio_tile(), src));
+    }
     set_len_cmdbuf<kCmdBuf>(num_bytes);
     setup_max_bytes_in_packet_cmdbuf<kCmdBuf>(kMaxBytesInPacket);
     setup_packet_tags_cmdbuf<kCmdBuf>(link_copy.kind == ETH_LINK_KIND_NOC ? PacketTags{} : PacketTags{.snoop = snoop});
