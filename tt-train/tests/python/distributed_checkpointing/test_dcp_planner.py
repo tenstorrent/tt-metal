@@ -595,6 +595,63 @@ def test_keys_of_one_layout_share_its_reads(monkeypatch):
     assert len(layouts_planned) == 2
 
 
+def test_keys_that_differ_in_one_part_of_their_layout_do_not_share_it(monkeypatch):
+    """Each pair agrees on every part of a layout but one, so a layout missing that part would hand the second key
+    the first key's reads. Qwen3-1.7B's q_proj and fused kv_proj are such a pair: same shape and label, different
+    transforms. All eight keys load at once, and each must plan its own layout and hold its own data."""
+    tp2, tp4 = world([R(), S(2)], (1, 2)), world([R(), S(2)], (1, 4))
+    rows8, cols8 = world([R(), S(2)], (1, 8)), world([R(), S(3)], (1, 8))
+    rows_cols, cols_rows = world([S(2), S(3)], (2, 2)), world([S(3), S(2)], (2, 2))  # the same shards, transposed
+    fused = {n: fused_segments(2, QKV, n) for n in (2, 4)}
+    c = {k: arange((1, 1, 256, 4)) + 1000 * i for i, k in enumerate(("a_plain", "a_fused", "b_plain", "b_fused"))}
+    c.update({k: arange((1, 1, 64, 64)) + 1000 * i for i, k in enumerate(("c_rows", "c_cols", "d_rc", "d_cr"), 4)})
+    ckpt = FakeCheckpoint()
+    ckpt.save(
+        {
+            # a: only the saved transform differs (one plain, one fused at TP2; both loaded onto one device).
+            "a_plain": (c["a_plain"], tp2, Identity()),
+            "a_fused": (per_shard_fused(c["a_fused"], QKV, 2, dim=2), tp2, fused[2]),
+            # b: only the destination transform differs (both saved on one device, loaded at TP4).
+            "b_plain": (c["b_plain"], SINGLE, Identity()),
+            "b_fused": (c["b_fused"], SINGLE, Identity()),
+            # c: only the saved chunk boxes differ (rows and columns over eight devices, loaded onto one).
+            "c_rows": (c["c_rows"], rows8, Identity()),
+            "c_cols": (c["c_cols"], cols8, Identity()),
+            # d: only the destination label differs (the same local shape and replica groups, the boxes transposed).
+            "d_rc": (c["d_rc"], SINGLE, Identity()),
+            "d_cr": (c["d_cr"], SINGLE, Identity()),
+        }
+    )
+    layouts_planned = []
+    real = planner_module._plan_layout
+    monkeypatch.setattr(planner_module, "_plan_layout", lambda *a: layouts_planned.append(a[1].key) or real(*a))
+    _, shards = ckpt.load(
+        {
+            "a_plain": (SINGLE, Identity(), (1, 1, 256, 4)),
+            "a_fused": (SINGLE, Identity(), (1, 1, 256, 4)),
+            "b_plain": (tp4, Identity(), (1, 1, 256, 4)),
+            "b_fused": (tp4, fused[4], (1, 1, 256, 4)),
+            "c_rows": (SINGLE, Identity(), (1, 1, 64, 64)),
+            "c_cols": (SINGLE, Identity(), (1, 1, 64, 64)),
+            "d_rc": (rows_cols, Identity(), (1, 1, 64, 64)),
+            "d_cr": (cols_rows, Identity(), (1, 1, 64, 64)),
+        }
+    )
+    assert sorted(layouts_planned) == sorted(c), "every key plans its own layout"
+    expected = {
+        "a_plain": expected_shards(c["a_plain"], SINGLE),
+        "a_fused": expected_shards(c["a_fused"], SINGLE),
+        "b_plain": expected_shards(c["b_plain"], tp4),
+        "b_fused": expected_shards(per_shard_fused(c["b_fused"], QKV, 4, dim=2), tp4),
+        "c_rows": expected_shards(c["c_rows"], SINGLE),
+        "c_cols": expected_shards(c["c_cols"], SINGLE),
+        "d_rc": expected_shards(c["d_rc"], rows_cols),
+        "d_cr": expected_shards(c["d_cr"], cols_rows),
+    }
+    for key, shard in expected.items():
+        assert_shards_equal(shards[key], shard)
+
+
 def test_save_planning_is_cached_per_label_and_shape(expect_error):
     from ttml.distributed_checkpointing._planner import _replica_layout
 
