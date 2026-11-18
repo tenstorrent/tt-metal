@@ -29,6 +29,25 @@ void kernel_main() {
     const uint32_t w2_addr = get_common_arg_val<uint32_t>(1);
     const uint32_t route_addr = get_common_arg_val<uint32_t>(2);
 
+#ifdef XPUSH
+    {  // B47b: wait until all 4 group sources have pushed (flag[i] >= launch counter + XP_NPT); RT 3..: flag core x y,
+       // 4 flag addrs, counter addr
+        DeviceZoneScopedN("XR_WAIT");
+        const uint32_t fx = get_arg_val<uint32_t>(3), fy = get_arg_val<uint32_t>(4);
+        volatile tt_l1_ptr uint32_t* cnt = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_arg_val<uint32_t>(9));
+        const uint32_t target = *cnt + XP_NPT;
+        *cnt = target;
+        const uint32_t scr = get_write_ptr(cb_rt);
+        volatile tt_l1_ptr uint32_t* sp = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(scr);
+        for (uint32_t i = 0; i < 4; ++i) {
+            const uint64_t fn = get_noc_addr(fx, fy, get_arg_val<uint32_t>(5 + i));
+            do {
+                noc_async_read(fn, scr, 4);
+                noc_async_read_barrier();
+            } while ((int32_t)(sp[0] - target) < 0);
+        }
+    }
+#endif
     // route -> plan
     const auto r_acc = TensorAccessor(r_args, route_addr, T * 64);
     const uint32_t rt_l1 = get_write_ptr(cb_rt);
