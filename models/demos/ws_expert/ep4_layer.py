@@ -68,15 +68,18 @@ def make_inputs(mesh, lc: EP4Cfg, routing="uniform", seed=0):
 
 
 def head_outputs(mesh, lc: EP4Cfg):
-    """ws_router.ep4_outputs with the route words' tensor [1, 1, 1, TXP] zeroed (tokens >= TX stay 0: no route)."""
+    """ws_router.ep4_outputs with the route words in KP pieces, each [1, 1, 1, SP] zeroed (tokens >= TX stay 0: no
+    route): the head writes them, the dispatch's calls read them (persistent, so a traced layer can replay)."""
     outs = ep4_outputs(mesh, lc)
-    outs["route"] = ttnn.zeros(
-        [1, 1, 1, lc.TXP],
+    z = lambda: ttnn.zeros(
+        [1, 1, 1, lc.SP],
         dtype=ttnn.uint32,
         layout=ttnn.ROW_MAJOR_LAYOUT,
         device=mesh,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
+    outs["route_pieces"] = [z() for _ in range(lc.KP)]
+    outs["route_sp"] = lc.SP
     return outs
 
 
@@ -140,9 +143,9 @@ def xbuf_tensor(mesh, lc: EP4Cfg, x):
     return ttnn.reshape(out, [1, 1, XR, lc.H])
 
 
-def route_pieces(lc: EP4Cfg, route):
-    """The route words of each dispatch piece ([1, 1, 1, SP] slices of the head's [1, 1, 1, TXP])."""
-    return [ttnn.slice(route, [0, 0, 0, p * lc.SP], [1, 1, 1, (p + 1) * lc.SP]) for p in range(lc.KP)]
+def route_pieces(lc: EP4Cfg, outs):
+    """The route words of each dispatch piece (the head's outputs)."""
+    return outs["route_pieces"]
 
 
 def dispatch(lc: EP4Cfg, xbuf, routes, res, N):
@@ -479,9 +482,9 @@ def build_combine(mesh, lc: EP4Cfg, res, louts, O, P, cnt_t, fence):
             for me, ((x, y), (a, nt)) in enumerate(zip(acores, rng)):
                 rd_rt[x][y] = [louts["runs"].buffer_address(), O.buffer_address(), a, nt, ast.buffer_address()]
                 cp_rt[x][y] = [nt, ast.buffer_address()]
-                wr_rt[x][y] = [me, a, nt, c, P.buffer_address(), fence.buffer_address(), ast.buffer_address()]
-                wr_rt[x][y] += [pidx.get((h, l), 0xFF) for h in range(4) for l in range(2)]
-                wr_rt[x][y] += [xy(p[2]) for p in pl] + [0] * (8 - NP)
+                args = [me, a, nt, c, P.buffer_address(), fence.buffer_address(), ast.buffer_address()]
+                args += [pidx.get((h, l), 0xFF) for h in range(4) for l in range(2)]
+                wr_rt[x][y] = args + [xy(p[2]) for p in pl] + [0] * (8 - NP)
             kernels = [
                 ttnn.KernelDescriptor(
                     kernel_source=kpath("e4_comb_rd.cpp"),
@@ -511,8 +514,8 @@ def build_combine(mesh, lc: EP4Cfg, res, louts, O, P, cnt_t, fence):
             pt_rt = ttnn.RuntimeArgs()
             chip_ids = [int(node(mesh, (r, h)).chip_id) if h != c else 0xFF for h in range(4)]
             for pi, (d, li, (x, y), link, peer) in enumerate(pl):
-                pt_rt[x][y] = [P.buffer_address(), pi, c, gx, int(node(mesh, (r, c)).mesh_id)] + chip_ids
-                pt_rt[x][y] += [pst.buffer_address()] + [xy(ac) for ac in acores]
+                args = [P.buffer_address(), pi, c, gx, int(node(mesh, (r, c)).mesh_id)] + chip_ids
+                pt_rt[x][y] = args + [pst.buffer_address()] + [xy(ac) for ac in acores]
             kernels.append(
                 ttnn.KernelDescriptor(
                     kernel_source=kpath("e4_comb_port.cpp"),
@@ -587,8 +590,8 @@ def build_home(mesh, lc: EP4Cfg, P, tk, rcounts, cnt_t, y_t):
         for c in range(Cn):
             rd_rt, cp_rt, wr_rt = ttnn.RuntimeArgs(), ttnn.RuntimeArgs(), ttnn.RuntimeArgs()
             for me, ((x, y), (t0, n)) in enumerate(zip(cores, rng)):
-                rd_rt[x][y] = [P.buffer_address(), tk.buffer_address(), rcounts.buffer_address(), t0, n, c, me, NC]
-                rd_rt[x][y] += [st.buffer_address()] + xy
+                args = [P.buffer_address(), tk.buffer_address(), rcounts.buffer_address(), t0, n, c, me, NC]
+                rd_rt[x][y] = args + [st.buffer_address()] + xy
                 cp_rt[x][y] = [n, st.buffer_address()]
                 wr_rt[x][y] = [y_t.buffer_address(), t0, n, st.buffer_address()]
             kernels = [

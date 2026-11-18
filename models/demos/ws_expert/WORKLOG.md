@@ -1574,3 +1574,46 @@ speed-of-light ep4_targets.py.
   expected counts); head -> exchange -> lists bit-identical over two runs. O rows used / 12 n: uniform 0.993-1.009,
   zipf 0.908-1.070.
 - Traced: 0.59 ms uniform, 1.07 ms zipf (owners serial over their records; the hot experts' owners carry more).
+
+### Stage 5: experts with weights on Y (the 5 x 5 lane on the Y columns; ep4_layer.lane_cfgs / lane_program)
+- The lane on 2-chip column cycles (LCfg.subcycles, one mux a group: WL5_ONEMUX), EPC = 160 local experts, xbuf rows
+  (the lists' token lists), O rows from the lists through the row collectors (yc 3, yc_n0 1), G 2 (2 links = 2 lanes).
+- 302K-eq, 2 x 4: O PCC 0.99988 on every chip (6 sampled experts a chip), both routings.
+- Weights only (zero counts): 5.25 ms for 40 experts a direction a lane = 31.5 GB/s a link direction - the lane's
+  own ceiling (fabric ~40 a link direction; earlier tray lane runs 26-30), not the link.
+- Expert phase (end to end, max over chips): 10.95-11.02 ms uniform, 11.66 ms zipf (busiest chip 1.07 x the rows),
+  against 3.40 ms speed of light (DRAM) / 4.15 (stream @40). G 2 is compute bound: 1.67 TFLOP a chip on 50 cores at
+  the lane's ~54% utilization. G 4 (100 cores; the 12 x 10 grid holds it) needs the own experts forwarded without
+  being computed: groups 0-1 own the 2 links and compute the partner's 80, groups 2-3 compute the own 80 from DRAM, so
+  the links' groups must send own experts they do not compute. Not built yet.
+
+### Stage 6: pre-sum, combine, home pass, in sequence (kernels e4_comb_*.cpp, e4_home_rd.cpp; test_ep4_layer)
+- Pre-sum: every core but the X ports an adder over a range of the group's tokens (BRISC reads run records and O rows
+  on NOC0; compute sums w_j row_j in fp32 DEST, j order, packs bf16; NCRISC writes the own column's partial to local P
+  (posted) or into its slot at the port of (direction of home, link g & 1), a flag after it). Ports
+  (resources.port_cores, one fabric connection a (X direction, link)) send each partial into the home's P page t 5 + c;
+  per home one atomic increment by the rows sent, flushed (the last router waits for every write it delivered to be
+  acked), into the gate core's counter. Shared expert (ws_shared, S 5, KSH 4) into P slot 4. Home pass: core 0 waits
+  for every other chip's counter to reach the expected count (from the lists), clears them, releases the cores; per
+  token the present slots (mask from the topk row; absent slots zeroed in L1, never read) + the shared row, summed in
+  slot order (we_compute S 5).
+- y min PCC 0.99988 on every chip (32 sampled tokens a chip against torch on the device's routing), both routings; two
+  layers bit-identical.
+- Per-phase device ms, 302K-eq uniform (max over chips; exchange / dispatch traced; others the programs' stamps):
+| phase | ms | LoudBox SOL (@50 / @40) |
+|---|---|---|
+| head | 0.91 | |
+| exchange | 0.09 | |
+| dispatch (8 pieces) | 4.24 | 2.11 / 2.64 |
+| lists | 0.51 (zipf 0.99) | |
+| experts (G 2) | 11.0 (zipf 11.7) | 3.40 / 4.15 |
+| shared | 1.60 | 1.05 (math) |
+| pre-sum + combine | 7.03 | max(1.84, 2.81 / 3.51) |
+| home pass | 1.04 | 0.83 |
+| sum | 26.5 | 9.2 / 11.1 |
+- Combine steps: a flushed fused write + inc a packet 10.07 ms; plain writes + one flushed inc a (port, home) 8.20;
+  + PIPE 3 in flight with credits retired in batches 8.06; + route-preset headers and the connection's slot API (the
+  mesh API flushes before every packet and sets the route each time) 7.03. End chip ports: 13.7K rows each in 6.6 ms
+  (15.9 GB/s a connection), router-space wait 3.2 ms of it; adders mostly wait for port credits (1 slot a port).
+  Floor on this line: the end chips' connections carry 105 MB each, 4.2 ms at 25 GB/s (7.7 KB packets: ~18 GB/s by
+  the bench_unicast fit) - the LoudBox X phases run at the per-connection rate, not 50 GB/s.

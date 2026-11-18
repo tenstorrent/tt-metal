@@ -137,7 +137,7 @@ def test_ep4_head(mesh_device, routing):
     ttnn.synchronize_device(mesh)
     span = router_span_us(st, 0, clk)
     tk = [rows32(v) for v in per_chip(outs["w"])]
-    rt = per_chip(outs["route"])
+    rt = [torch.cat([v.reshape(-1) for v in parts]) for parts in zip(*[per_chip(t) for t in outs["route_pieces"]])]
     gp = [rows32(v) for v in per_chip(grp)]
     ids = torch.empty(R, C, n, lc.K, dtype=torch.int64)
     for r in range(R):
@@ -224,10 +224,13 @@ def test_ep4_dispatch(mesh_device, routing):
     res = dispatch_resources(mesh, lc)
     xbuf = xbuf_tensor(mesh, lc, host["x"])
     clk = aiclk_mhz(0)
-    routes = route_pieces(lc, outs["route"])
+    routes = route_pieces(lc, outs)
     out = dispatch(lc, xbuf, routes, res, N)
     ttnn.synchronize_device(mesh)
-    rt = [d.reshape(-1).to(torch.int64) & 0xFFFFFFFF for d in per_chip(outs["route"])]
+    rt = [
+        torch.cat([v.reshape(-1) for v in parts]).to(torch.int64) & 0xFFFFFFFF
+        for parts in zip(*[per_chip(t) for t in outs["route_pieces"]])
+    ]
     got = per_chip(out)
     bad, routed, held = 0, 0, 0
     for ch in range(N):
@@ -408,7 +411,7 @@ def front(mesh, lc: EP4Cfg, routing, pos=None):
     exchange(hout["w"], grp)
     res = dispatch_resources(mesh, lc)
     xbuf = xbuf_tensor(mesh, lc, host["x"])
-    xbuf = dispatch(lc, xbuf, route_pieces(lc, hout["route"]), res, mesh.get_num_devices())
+    xbuf = dispatch(lc, xbuf, route_pieces(lc, hout), res, mesh.get_num_devices())
     pos_t = pos_tensor(mesh, pos)
     louts = lists_outputs(mesh, lc)
     run_free(build_lists(mesh, lc, grp, pos_t, louts))
@@ -538,6 +541,20 @@ def test_ep4_experts(mesh_device, routing):
     assert min(pccs.values()) > 0.999
 
 
+def span_us(sts, ci, clk, start=0, end=63):
+    """Device span on chip ci over stamps tensors sts (lists of 8 x 64-word stamps a core, one wall clock a chip):
+    latest end - earliest start, us."""
+    vals = []
+    for st in sts:
+        s = (ttnn.to_torch(ttnn.get_device_tensors(st)[ci]).to(torch.int64) & 0xFFFFFFFF).reshape(-1, 8 * 64)
+        live = (s[:, start] != 0) | (s[:, end] != 0)  # (cores that ran nothing on this chip keep zeros)
+        if live.any():
+            vals.append((s[live, start], s[live, end]))
+    ref = int(vals[0][0][0])
+    rel = lambda v: ((v - ref + (1 << 31)) & 0xFFFFFFFF) - (1 << 31)
+    return (max(int(rel(e).max()) for _, e in vals) - min(int(rel(b).min()) for b, _ in vals)) / clk
+
+
 def run_phase(mesh, fn, reps=1):
     """fn() reps times, each synchronized: median wall ms."""
     ws = []
@@ -614,36 +631,91 @@ def test_ep4_layer(mesh_device, routing):
         exchange(hout["w"], grp)
 
     def ph_disp():
-        state["xbuf"] = dispatch(lc, xbuf0, route_pieces(lc, hout["route"]), res, N)
+        state["xbuf"] = dispatch(lc, xbuf0, route_pieces(lc, hout), res, N)
 
+    # (each custom phase keeps its stamps until read: a function of chip -> device us)
     def ph_lists():
-        run_free(build_lists(mesh, lc, grp, pos_t, louts))
+        b = build_lists(mesh, lc, grp, pos_t, louts)
+        run_free(b, keep=[b[2]])
+        return [b[2]], lambda ci: span_us([b[2]], ci, clk)
 
     def ph_experts():
-        run_free(lane_program(mesh, lc, cfg, lane, l5, T, tab_t, state["xbuf"], louts, ws_t, O))
+        from models.demos.ws_expert.tests.test_ws_lane import chip_time
+
+        b = lane_program(mesh, lc, cfg, lane, l5, T, tab_t, state["xbuf"], louts, ws_t, O)
+        run_free(b, keep=[b[2]])
+        if "counts" not in state:
+            ttnn.synchronize_device(mesh)
+            state["counts"] = [(c_.reshape(-1).to(torch.int64) & 0xFFFFFFFF) for c_ in per_chip(louts["counts"])]
+        Ms = lambda ci: [int(v) for v in state["counts"][ci]]
+        return [b[2]], lambda ci: chip_time(cfg, Ms(ci), T, ci, ttnn.get_device_tensors(b[2])[ci], x0=512)[3] / clk
 
     def ph_shared():
-        run_free(build_shared(mesh, scfg, dev["x_rm"], w13_t, w2s_t, P)[:3])
+        from models.demos.ws_expert.ws_shared import shared_span_us
+
+        b = build_shared(mesh, scfg, dev["x_rm"], w13_t, w2s_t, P)
+        sts = list(b[2]) if isinstance(b[2], (list, tuple)) else [b[2]]
+        run_free(b[:3], keep=sts)
+        return sts, lambda ci: shared_span_us(sts, ci, clk)
 
     def ph_comb():
-        run_free(build_combine(mesh, lc, res, louts, O, P, cnt_t, fence), keep=[cnt_t])
+        b = build_combine(mesh, lc, res, louts, O, P, cnt_t, fence)
+        run_free(b, keep=[cnt_t, b[2], b[3]])
+
+        def span(ci):
+            a_, p_ = span_us([b[2]], ci, clk), span_us([b[3]], ci, clk)
+            if ci in (0, 1) and "comb_diag" not in state:
+                g = lambda t_: (ttnn.to_torch(ttnn.get_device_tensors(t_)[ci]).to(torch.int64) & 0xFFFFFFFF).reshape(
+                    -1, 8 * 64
+                )
+                sa, sp = g(b[2]), g(b[3])
+                live = sp[:, 63] != 0
+                k = lambda v: [round(float(x) / clk, 1) for x in v]
+                logger.info(
+                    f"EP4 combine diag chip {ci}: ports rows sent {sp[live, 10].tolist()}, router-space wait us "
+                    f"{k(sp[live, 11])}, loop us {k(sp[live, 12])}; adders mean / max us: credit wait "
+                    f"{k([sa[:, 7].double().mean(), sa[:, 7].max()])}, row wait {k([sa[:, 8].double().mean(), sa[:, 8].max()])}, "
+                    f"O reads wait {k([sa[:, 5].double().mean(), sa[:, 5].max()])}, CB space {k([sa[:, 6].double().mean(), sa[:, 6].max()])}, "
+                    f"compute in {k([sa[:, 1].double().mean(), sa[:, 1].max()])}, out {k([sa[:, 2].double().mean(), sa[:, 2].max()])}"
+                )
+                if ci == 1:
+                    state["comb_diag"] = True
+            dev_ms.setdefault("combine:adders", []).append(a_ / 1e3)
+            dev_ms.setdefault("combine:ports", []).append(p_ / 1e3)
+            return span_us([b[2], b[3]], ci, clk)
+
+        return [b[2], b[3]], span
 
     def ph_home():
-        run_free(build_home(mesh, lc, P, hout["w"], louts["rcounts"], cnt_t, y_t), keep=[cnt_t])
+        b = build_home(mesh, lc, P, hout["w"], louts["rcounts"], cnt_t, y_t)
+        run_free(b, keep=[cnt_t, b[2]])
+        return [b[2]], lambda ci: span_us([b[2]], ci, clk)
 
-    phases = [("head", ph_head), ("exchange", ph_exch), ("dispatch", ph_disp), ("lists", ph_lists)]
+    def ph_head_t():
+        b = head_program(mesh, lc, dev, hout)
+        run_free(b, keep=[b[2]])
+        return [b[2]], lambda ci: router_span_us(b[2], ci, clk)["end"]
+
+    phases = [("head", ph_head_t), ("exchange", ph_exch), ("dispatch", ph_disp), ("lists", ph_lists)]
     phases += [("experts", ph_experts), ("shared", ph_shared), ("combine", ph_comb), ("home", ph_home)]
-    times = {}
+    dev_ms = {}
     ys = []
-    for it in range(2):
+    for it in range(max(2, reps)):
         for name, fn in phases:
-            ms = run_phase(mesh, fn)
-            times.setdefault(name, []).append(ms)
-        ys.append(per_chip(y_t))
+            ttnn.synchronize_device(mesh)
+            out = fn()
+            ttnn.synchronize_device(mesh)
+            if out is not None:
+                sts, span = out
+                dev_ms.setdefault(name, []).append(max(span(ci) for ci in range(N)) / 1e3)
+                for t_ in sts:
+                    ttnn.deallocate(t_)
+        if it < 2:
+            ys.append(per_chip(y_t))
     same = all(torch.equal(a.view(torch.int16), b.view(torch.int16)) for a, b in zip(ys[0], ys[1]))
-    for _ in range(reps - 2 if reps > 2 else 0):
-        for name, fn in phases:
-            times[name].append(run_phase(mesh, fn))
+    # the ttnn ops alone, traced (stateless)
+    dev_ms["exchange"] = [traced(mesh, ph_exch, warm=5, meas=5)]
+    dev_ms["dispatch"] = [traced(mesh, ph_disp, warm=5, meas=5)]
     clk2 = aiclk_mhz(0)
     # y against torch on sampled tokens of every chip (the device's routing and gate weights)
     ntok = int(os.environ.get("EP4_TOKENS", "32"))
@@ -662,10 +734,12 @@ def test_ep4_layer(mesh_device, routing):
             acc += torch.where(m.any(-1, keepdim=True), part.to(torch.bfloat16).float(), torch.zeros_like(part))
         yref = (acc + ref.shared(ch, toks).to(torch.bfloat16).float()).to(torch.bfloat16)
         pccs[ch] = pcc(ys[1][ch][toks].float(), yref.float())
-    med = {k: round(statistics.median(v), 3) for k, v in times.items()}
+    order = ["head", "exchange", "dispatch", "lists", "experts", "shared", "combine", "home"]
+    med = {k: round(statistics.median(dev_ms[k]), 3) for k in order}
     logger.info(
         f"EP4 layer SUMMARY {routing} {LEN} (n {n}) G {G}: y min PCC per chip {[round(v, 5) for v in pccs.values()]}; "
-        f"two layers bit-identical {same}; per-phase wall ms (synchronized, median of {len(times['head'])}) {med}, sum "
-        f"{sum(med.values()):.2f}; aiclk {clk} -> {clk2} MHz"
+        f"two layers bit-identical {same}; per-phase device ms (max over chips, median; exchange / dispatch traced) "
+        f"{med}, sum {sum(med.values()):.2f}; combine adders / ports (max over chips and runs) "
+        f"{max(dev_ms['combine:adders']):.3f} / {max(dev_ms['combine:ports']):.3f}; aiclk {clk} -> {clk2} MHz"
     )
     assert same and min(pccs.values()) > 0.999

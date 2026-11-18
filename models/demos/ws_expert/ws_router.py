@@ -172,7 +172,7 @@ def build_router(mesh, lc, x_rm, wrT, ids_t, outs, logd=None, side=0, ep4=0):
     ccfg.unpack_to_dest_mode = utd
     ta = lambda t: list(ttnn.TensorAccessorArgs(t).get_compile_time_args())
     defs = [("WSR_DEBUG_LOGITS", "1")] if debug else []
-    defs += [("WSR_EP4", str(ep4))] if ep4 else []
+    defs += [("WSR_EP4", str(ep4)), ("WSR_EP4_SP", str(outs["route_sp"]))] if ep4 else []
     if side:
         banks = mesh.dram_grid_size().x
         assert banks % 2 == 0 and side % 2 == 0
@@ -201,7 +201,7 @@ def build_router(mesh, lc, x_rm, wrT, ids_t, outs, logd=None, side=0, ep4=0):
             + [gring.buffer_address(), idm, RTX, NR, relay.buffer_address()]
             + [bufs[k].buffer_address() for k in ("rflags", "rgrant")]
             + ta(logd)
-            + (ta(outs["route"]) if ep4 else []),
+            + (ta(outs["route_pieces"][0]) if ep4 else []),
             defines=rdefs,
             runtime_args=rt,
             config=dm(1),
@@ -252,13 +252,13 @@ def build_router(mesh, lc, x_rm, wrT, ids_t, outs, logd=None, side=0, ep4=0):
             for c in range(Cn):
                 rt = ttnn.RuntimeArgs()
                 for x, y in cores:
-                    rt[x][y] = rt_py[(x, y)] + [r * Cn, c, outs["route"].buffer_address()]
+                    rt[x][y] = rt_py[(x, y)] + [r * Cn, c] + [t.buffer_address() for t in outs["route_pieces"]]
                 ks = list(kernels[:2]) + [route_kd(rt)]
                 mc = ttnn.MeshCoordinate(r, c)
                 mpd[ttnn.MeshCoordinateRange(mc, mc)] = ttnn.ProgramDescriptor(kernels=ks, semaphores=sems, cbs=cbs)
     io = [x_rm, wrT, ids_t, wl1, ring, relay, xst, gring, idl1, st] + list(bufs.values())
     io += ([logd] if debug else []) + [outs[k] for k in ("w", "idx_t", "dest_t", "counts_t", "fence_t")]
-    io += [outs["route"]] if ep4 else []
+    io += list(outs["route_pieces"]) if ep4 else []
     return mpd, io, st
 
 
