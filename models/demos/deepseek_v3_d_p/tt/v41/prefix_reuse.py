@@ -66,6 +66,14 @@ arena (21 x 128 x 512 bf16 = 2.625 MiB each), after the burst's last chunk (``af
 (``_load_carries``: replicated upload + ``ttnn.copy`` INTO the live carry buffers, whose addresses the islands captured).
 Memory: two fixed arenas (``SlotArena``), RSS <= the budget whatever the eviction history (G53F-0315), plus the
 ``V41_PREFILL_PREFIX_HOST_RESERVE_GB`` MemAvailable floor (default 32). One store per user slot (the budget split evenly).
+
+``V41_PREFILL_RESTORE_GATHER=1`` (tt-blaze DS41F-0161, 11-18; unset = the replicated uploads above, call for call): a restore
+uploads each block of rows SHARDED over mesh axis 0 (each of its 8 chips gets n / 8 rows, replicated over the 4 of axis 1: 50
+instead of 400 MiB of H2D per 4096-token chunk) and ``ttnn.all_gather``s it back to the replicated tensor the writers take. The
+bytes only move, so the restored rows are the same (host 40 bench: byte-identical on all 32 chips); 24.7 -> 4.8 ms per chunk
+(``v41ax_logs/restore_upload_bench.py``). The gather's programs -- and the global semaphores they keep in the program cache -- are
+built once in ``__init__``, before the trace-island capture (DS4F-0262 class). A block whose rows do not split into tiles over
+the axis (the 128-row tip carries) is uploaded replicated as before.
 """
 
 from __future__ import annotations
@@ -91,6 +99,8 @@ ENV_STORE_GB = "V41_PREFILL_PREFIX_STORE_GB"
 ENV_STORE_TIP_GB = "V41_PREFILL_PREFIX_STORE_TIP_GB"
 ENV_RESERVE_GB = "V41_PREFILL_PREFIX_HOST_RESERVE_GB"
 ENV_SPILL_TIPS = "V41_PREFILL_PREFIX_SPILL_TIPS"
+# restore uploads sharded over mesh axis 0 + all_gather instead of replicated (module docstring; unset / 0 = replicated)
+ENV_RESTORE_GATHER = "V41_PREFILL_RESTORE_GATHER"
 TAG = "v41-prefix"
 
 
@@ -244,6 +254,7 @@ class V41PrefixReuse:
         self.last_silent = 0  # how many (tt-blaze DS41F-0152: runtime's reuse count drops them)
         self.stores = self._build_stores(runtime) if store_gb() > 0 else {}  # H2; {} = off
         self.spill_tips = int(os.environ.get(ENV_SPILL_TIPS, "2"))
+        self.gather_rows = self._gather_rows() if self.stores else 0  # 0 = replicated restore uploads
         h2 = {
             s: (
                 dict(
@@ -502,6 +513,55 @@ class V41PrefixReuse:
                 ttnn.deallocate(part)
         return parts
 
+    def _gather_rows(self) -> int:
+        """``ENV_RESTORE_GATHER``: the chips of mesh axis 0 a restore shards its rows over (0 = off / a mesh without that axis).
+        Builds the gather's programs for every restore block shape now, before the trace-island capture (module docstring).
+        """
+        if os.environ.get(ENV_RESTORE_GATHER, "0") != "1":
+            return 0
+        mesh = self.rt.mesh_device
+        shape = tuple(mesh.shape) if hasattr(mesh, "shape") else (1,)
+        if len(shape) != 2 or int(shape[0]) < 2:
+            logger.info(f"[{TAG}] {ENV_RESTORE_GATHER}=1 ignored: mesh {shape} has no axis 0 to shard over")
+            return 0
+        self.gather_rows = int(shape[0])
+        t0 = time.perf_counter()
+        blocks = set()
+        for _L, _attn, st, ratio, _blk in entry_sources(self.pf):
+            n = self.chunk // ratio
+            for src in (st.compressed_kv, st.index_k):
+                blocks.add((n, int(src.shape[3]), src.dtype))
+        for n, W, dtype in sorted(blocks, key=str):
+            ttnn.deallocate(self._upload_rows(torch.zeros(n, W, dtype=torch.bfloat16), dtype))
+        ttnn.synchronize_device(mesh)
+        logger.info(
+            f"[{TAG}] {ENV_RESTORE_GATHER}=1: restores upload rows sharded over mesh axis 0 ({self.gather_rows} chips) + "
+            f"all_gather; {len(blocks)} block shape(s) built in {time.perf_counter() - t0:.2f} s"
+        )
+        return self.gather_rows
+
+    def _upload_rows(self, t: torch.Tensor, dtype):
+        """A host [n, W] block -> [1, 1, n, W] TILE replicated on every chip: sharded over mesh axis 0 + all_gather when
+        ``gather_rows`` and the rows split into tiles over it, else ``_upload``."""
+        R = getattr(self, "gather_rows", 0)
+        n = int(t.shape[-2])
+        if not R or n % (R * ttnn.TILE_SIZE):
+            return self._upload(t, dtype)
+        mesh = self.rt.mesh_device
+        part = ttnn.from_torch(
+            t.reshape(1, 1, n, int(t.shape[-1])),
+            dtype=dtype,
+            layout=ttnn.TILE_LAYOUT,
+            device=mesh,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=ttnn.ShardTensor2dMesh(mesh, mesh_shape=tuple(mesh.shape), dims=(2, None)),
+        )
+        full = ttnn.all_gather(
+            part, dim=2, cluster_axis=0, topology=ttnn.Topology.Linear, memory_config=ttnn.DRAM_MEMORY_CONFIG
+        )
+        ttnn.deallocate(part)
+        return full
+
     def _upload(self, t: torch.Tensor, dtype):
         """A host [n, W] block -> [1, 1, n, W] TILE on every chip (replicated, as the states are)."""
         mesh = self.rt.mesh_device
@@ -529,8 +589,8 @@ class V41PrefixReuse:
         assert len(parts) == 2 * len(srcs), (len(parts), len(srcs))
         for i, (_L, attn, st, ratio, blk) in enumerate(srcs):
             e0 = start // ratio
-            rows = self._upload(parts[2 * i], st.compressed_kv.dtype)
-            keys = self._upload(parts[2 * i + 1], st.index_k.dtype)
+            rows = self._upload_rows(parts[2 * i], st.compressed_kv.dtype)
+            keys = self._upload_rows(parts[2 * i + 1], st.index_k.dtype)
             ttnn.kv_cache.fill_cache_for_user_(st.compressed_kv, rows, 0, update_idx=e0)
             ttnn.kv_cache.fill_cache_for_user_(st.index_k, keys, 0, update_idx=e0)
             if blk and getattr(attn, "sparse_path", False):
