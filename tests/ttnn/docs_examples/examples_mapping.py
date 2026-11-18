@@ -393,6 +393,7 @@ FUNCTION_TO_EXAMPLES_MAPPING_DICT = {
     "ttnn.fill_rm": data_movement.test_fill_rm,
     "ttnn.fill_ones_rm": data_movement.test_fill_ones_rm,
     "ttnn.untilize": data_movement.test_untilize,
+    "ttnn.interleaved_to_sharded": data_movement.test_interleaved_to_sharded,
     "ttnn.untilize_with_unpadding": data_movement.test_untilize_with_unpadding,
     "ttnn.indexed_fill": data_movement.test_indexed_fill,
     "ttnn.gather": data_movement.test_gather,

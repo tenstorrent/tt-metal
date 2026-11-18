@@ -16,42 +16,49 @@
 #include "ttnn/types.hpp"
 namespace ttnn::operations::data_movement {
 
-// TODO: Add more descriptions to the arguments
 void bind_interleaved_to_sharded(nb::module_& mod) {
     const auto* doc =
         R"doc(
-        Converts a tensor from interleaved to sharded memory layout
+        Copies an interleaved tensor into a sharded tensor with the memory configuration `sharded_memory_config`. The
+        output has the input's shape, layout and values. `output_dtype` converts a TILE input to another dtype.
+
+        A second overload builds an L1 sharded memory configuration from a core grid: ``ttnn.interleaved_to_sharded(input_tensor, grid, shard_shape, shard_scheme, shard_orientation, output_dtype=None, *, keep_l1_aligned=False)``.
+        ``grid`` is a ``ttnn.CoreRangeSet`` of the cores to use, or a ``ttnn.CoreCoord`` grid size from which one core
+        per shard is taken, a row of the grid at a time for ``ROW_MAJOR`` orientation or a column at a time for
+        ``COL_MAJOR``. For ``BLOCK_SHARDED`` with a ``ttnn.CoreCoord`` grid, the grid's x size (``ROW_MAJOR``) or y size
+        (``COL_MAJOR``) must equal the number of shards across the width. ``shard_shape`` is the ``[height, width]`` of
+        each shard, ``shard_scheme`` is ``ttnn.TensorMemoryLayout.HEIGHT_SHARDED``, ``WIDTH_SHARDED`` or
+        ``BLOCK_SHARDED``, and ``shard_orientation`` is a ``ttnn.ShardOrientation``.
 
         Args:
-            * :attr:`input_tensor` (ttnn.Tensor): input tensor
-            * :attr:`grid` (ttnn.CoreGrid): Grid of sharded tensor
-            * :attr:`shard_shape` (List(int[2])): Sharding shape.
-            * :attr:`shard_scheme` (ttl.tensor.TensorMemoryLayout): Sharding scheme(height, width or block).
-            * :attr:`shard_orientation` (ttl.tensor.ShardOrientation): Shard orientation (ROW or COL major).
-            * :attr:`sharded_memory_config` (MemoryConfig): Instead of shard_shape, shard_scheme and orientation you can provide a single MemoryConfig representing the sharded tensor.
+            input_tensor (ttnn.Tensor): the interleaved input tensor, on device. A TILE input must have 32x32 tiles.
+            sharded_memory_config (ttnn.MemoryConfig): sharded memory configuration of the output, see Memory Support. For a TILE input, the shard height and width must be multiples of 32. For a ROW_MAJOR input, the shard width in bytes must be a multiple of 16.
+            output_dtype (ttnn.DataType, optional): Data type of the output. Defaults to `None`, which keeps the input dtype. A TILE input of BFLOAT16, FLOAT32 or BFLOAT8_B can be converted to any of these three dtypes. Input values must not be NaN when the dtype changes.
 
         Keyword Args:
-            * :attr:`output_dtype` (Optional[ttnn.DataType]): Output data type, defaults to same as input.
+            keep_l1_aligned (bool, optional): Defaults to `False`.
+            preallocated_output (ttnn.Tensor, optional): Tensor to write the output into, on the input's device. It must have the input's shape and layout, the output dtype and `sharded_memory_config` as its memory configuration. Defaults to `None`.
 
-        Example 1 (using grid, shape, scheme, orienttion):
+        Returns:
+            ttnn.Tensor: the sharded output tensor, with the input's shape and layout.
 
-            >>> sharded_tensor = ttnn.interleaved_to_sharded(tensor, ttnn.CoreGrid(3,3), [32,32], ttl.tensor.TensorMemoryLayout.HEIGHT_SHARDED, ttl.tensor.ShardOrientation.ROW_MAJOR)
+        Note:
+            Supported dtypes and layouts:
 
+            .. list-table::
+               :header-rows: 1
 
-        Example 2 (using sharded memory config):
-            >>> sharded_memory_config_dict = dict(
-                core_grid=ttnn.CoreRangeSet(
-                    {
-                        ttnn.CoreRange(
-                            ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 1)
-                        ),
-                    }
-                ),
-                strategy=ttnn.ShardStrategy.BLOCK,
-            ),
-            >>> shard_memory_config = ttnn.create_sharded_memory_config(input_shape, **input_sharded_memory_config_args)
-            >>> sharded_tensor = ttnn.interleaved_to_sharded(tensor, shard_memory_config)
+               * - Dtypes
+                 - Layouts
+               * - BFLOAT16, FLOAT32, INT32, UINT32, UINT16, UINT8
+                 - TILE, ROW_MAJOR
+               * - BFLOAT8_B, BFLOAT4_B
+                 - TILE
 
+        Memory Support:
+            - Input: interleaved DRAM and L1
+            - Output: HEIGHT_SHARDED, WIDTH_SHARDED and BLOCK_SHARDED in L1; HEIGHT_SHARDED and WIDTH_SHARDED in DRAM
+            - ND sharded output: the ND shard spec must be equivalent to a HEIGHT_SHARDED, WIDTH_SHARDED or BLOCK_SHARDED shard spec
         )doc";
 
     ttnn::bind_function<"interleaved_to_sharded">(

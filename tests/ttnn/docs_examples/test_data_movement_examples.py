@@ -124,6 +124,31 @@ def test_slice(device):
     logger.info(f"Sliced Tensor Shape: {output.shape}")  # Shape([1, 1, 32, 32])
 
 
+def test_interleaved_to_sharded(device):
+    # Create an interleaved tensor
+    input_tensor = ttnn.rand((1, 1, 128, 64), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+
+    # Height-shard it in L1 over 4 cores, 32 rows per core
+    shard_spec = ttnn.ShardSpec(
+        ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(3, 0))}),
+        [32, 64],
+        ttnn.ShardOrientation.ROW_MAJOR,
+    )
+    sharded_memory_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, shard_spec)
+    sharded_tensor = ttnn.interleaved_to_sharded(input_tensor, sharded_memory_config)
+    logger.info(f"Shard Shape: {sharded_tensor.memory_config().shard_spec.shape}")  # [32, 64]
+
+    # The same sharding, from a 4x1 core grid, the shard shape, the sharding scheme and the shard orientation
+    sharded_tensor = ttnn.interleaved_to_sharded(
+        input_tensor,
+        ttnn.CoreCoord(4, 1),
+        [32, 64],
+        ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+        ttnn.ShardOrientation.ROW_MAJOR,
+    )
+    logger.info(f"Sharded Tensor Shape: {sharded_tensor.shape}")  # Shape([1, 1, 128, 64])
+
+
 def test_tilize(device):
     # Create a tensor to tilize
     input_tensor = ttnn.rand((1, 1, 64, 32), dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
