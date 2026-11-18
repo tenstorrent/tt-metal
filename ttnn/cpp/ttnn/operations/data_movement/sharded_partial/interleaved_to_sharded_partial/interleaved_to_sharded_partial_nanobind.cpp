@@ -27,7 +27,7 @@ void bind_interleaved_to_sharded_partial(nb::module_& mod) {
         Args:
             input_tensor (ttnn.Tensor): the interleaved input tensor, on device, of shape ``[N, C, H, W]``, in TILE layout with 32x32 tiles. ``H`` and ``W`` must be multiples of 32.
             grid (ttnn.CoreCoord): size of the core grid to shard over. One core per shard is taken from it, a row of the grid at a time for ``ROW_MAJOR`` orientation or a column at a time for ``COL_MAJOR``. It must fit in the device's compute grid. For ``BLOCK_SHARDED``, its x size (``ROW_MAJOR``) or y size (``COL_MAJOR``) must equal the number of shards across the width.
-            shard_shape (List[int]): ``[height, width]`` of each shard. Both must be multiples of 32.
+            shard_shape (List[int]): ``[height, width]`` of each shard. Both must be positive multiples of 32. For ``HEIGHT_SHARDED`` the width must be ``W``, and for ``WIDTH_SHARDED`` the height must be ``N*C*H / num_slices``.
             num_slices (int): number of slices to split the rows into. Must be at least 1, and ``N*C*H / num_slices`` must be a multiple of 32.
             slice_index (int): index of the slice to copy, from 0 to ``num_slices - 1``.
             shard_scheme (ttnn.TensorMemoryLayout): ``HEIGHT_SHARDED``, ``WIDTH_SHARDED`` or ``BLOCK_SHARDED``.
