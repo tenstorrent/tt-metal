@@ -7,6 +7,16 @@ import torch
 from loguru import logger
 
 
+def test_view(device):
+    # Create a TILE tensor of shape [2, 1, 64, 32]
+    input_tensor = ttnn.rand((2, 1, 64, 32), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+
+    # View it as [128, 32]: the last dimension stays 32, and 64 and 128 are multiples of 32
+    output_tensor = ttnn.view(input_tensor, (128, 32))
+    logger.debug(f"View Shape: {output_tensor.shape}")  # Shape([128, 32])
+    logger.debug(f"Same buffer: {output_tensor.buffer_address() == input_tensor.buffer_address()}")  # True
+
+
 def test_concat(device):
     # Create two tensors to concatenate
     tensor1 = ttnn.rand([1, 1, 64, 32], dtype=ttnn.bfloat16, device=device)
