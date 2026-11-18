@@ -673,7 +673,7 @@
     k31_dsa_trace || exit $?
     echo "===== all 4 sections passed ====="
   test_type: k31_transformer_suite
-  test_tags: [kimi_k3_1, transformer, k31_dsa_block, k31_chunked_prefill, k31_pipeline_split, k31_dsa_trace]
+  test_tags: [kimi_k3_1, transformer, k31_dsa_block, k31_chunked_prefill, k31_pipeline_split, k31_dsa_trace, k3_prefill_runner_24l]
   test_group: module
   skus:
     bh_sc1:
@@ -2477,7 +2477,7 @@
     export TABLE_WAIT_SECS=2400
     exec bash models/demos/common/prefill/runners/ci/run_multirank_pcc.sh kimi_k3_1 sc1
   test_type: k31_prefill_runner_24l
-  test_tags: [kimi_k3_1, runner, kv_cache]
+  test_tags: [kimi_k3_1, runner, kv_cache, k3_prefill_runner_24l]
   test_group: disagg_prefill
   skus:
     bh_sc1_high_power:
