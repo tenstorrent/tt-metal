@@ -268,7 +268,7 @@ private:
 
     // The L1 hand-off of the current row tile's next unit: its next rows while their destinations have granted slots.
     UnitIssued issue_handoff_unit(uint32_t source, uint32_t first_row, uint32_t rows) {
-        namespace fmt = combine_formats;
+        namespace formats = combine_formats;
         using namespace combine_handoff;
         auto& state = handoff;
         const uint32_t unit = state.units_issued % in_flight;
@@ -308,18 +308,18 @@ private:
             return UnitIssued::None;
         }
         // the trailers in flight (column-0 writer): 32 rows of a unit each
-        const uint32_t stage = state.words + kWordsTrailerStageBytes + unit * 32 * fmt::kTrailerBytes;
+        const uint32_t stage = state.words + kWordsTrailerStageBytes + unit * 32 * formats::kTrailerBytes;
         if (column_offset == 0) {
             for (uint32_t row = state.tile_rows_issued; row < unit_end; ++row) {
                 volatile tt_l1_ptr uint32_t* trailer =
-                    reinterpret_cast<volatile tt_l1_ptr uint32_t*>(stage + row * fmt::kTrailerBytes);
-                for (uint32_t word = 0; word < fmt::kTrailerBytes / 4; ++word) {
+                    reinterpret_cast<volatile tt_l1_ptr uint32_t*>(stage + row * formats::kTrailerBytes);
+                for (uint32_t word = 0; word < formats::kTrailerBytes / 4; ++word) {
                     trailer[word] = 0;
                 }
-                trailer[fmt::kTrailerHeader] = table_rows[2 * row + 1];
-                trailer[fmt::kTrailerWeight] = table_weight_bits(table_rows[2 * row]);
-                trailer[fmt::kTrailerFlagLow] = 1;
-                trailer[fmt::kTrailerFlagHigh] = 1;
+                trailer[formats::kTrailerHeader] = table_rows[2 * row + 1];
+                trailer[formats::kTrailerWeight] = table_weight_bits(table_rows[2 * row]);
+                trailer[formats::kTrailerFlagLow] = 1;
+                trailer[formats::kTrailerFlagHigh] = 1;
             }
             // (the NoC reads the stage straight from L1: these stores must land first, or a trailer write can carry
             // the stage's previous words - e.g. a zeroed flag (the stage is zeroed every call), and the row is never
@@ -341,9 +341,9 @@ private:
                 y_vc);
             if (column_offset == 0) {  // its trailer, staged above, after the row's H bf16
                 noc_async_write_one_packet_with_trid(
-                    stage + row * fmt::kTrailerBytes,
+                    stage + row * formats::kTrailerBytes,
                     get_noc_addr(state.dest_x[d], state.dest_y[d], slot + hidden_tiles * 64, y_noc),
-                    fmt::kTrailerBytes,
+                    formats::kTrailerBytes,
                     trid,
                     write_cmd_buf,
                     y_noc,

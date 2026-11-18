@@ -95,9 +95,18 @@ def moe_block_enabled(model_cfg=None, moe_impl: Optional[str] = None) -> bool:
     return moe_impl_of(model_cfg, moe_impl) == BLOCK
 
 
+def moe_block_split_rows() -> bool:
+    """MOE_BLOCK_SPLIT_ROWS=1: the block's meshes open with half a row's payload, and dispatch and combine send each row
+    as two packets (TtMoe's MOE_FABRIC2D_SPLIT_TOKENS) - the mitigation for the fabric routers' ~12 KB NOC1 DRAM
+    writes that hang the DRAM endpoint under attention (tt-metal#64573). Off by default."""
+    return os.environ.get("MOE_BLOCK_SPLIT_ROWS", "0") == "1"
+
+
 def moe_block_fabric_payload(emb_dim: int) -> int:
-    """Fabric payload bytes the block's combine needs: one row (emb_dim bf16) plus its trailer, 64-B aligned."""
-    return (2 * emb_dim + 32 + 63) // 64 * 64
+    """Fabric payload bytes the block's combine needs: one row (emb_dim bf16) plus its trailer, 64-B aligned - or half
+    a row plus the trailer with moe_block_split_rows, and never below one fp32 tile (the head's router logits packets)."""
+    row_bytes = emb_dim if moe_block_split_rows() else 2 * emb_dim
+    return max(4096, (row_bytes + 32 + 63) // 64 * 64)
 
 
 def moe_block_mesh_params(
@@ -109,6 +118,8 @@ def moe_block_mesh_params(
     if not moe_block_enabled(model_cfg, moe_impl):
         return fabric_payload, l1_small_size
     width = getattr(model_cfg, "ROUTED_EXPERT_HIDDEN_SIZE", None) or model_cfg.EMB_SIZE
+    if moe_block_split_rows():  # (not TtMoe's whole-token raise of fabric_payload: the model's own and half a row)
+        fabric_payload = model_cfg.FABRIC_PAYLOAD_SIZE
     return max(fabric_payload, moe_block_fabric_payload(width)), model_l1_small_with_block(model_cfg, l1_small_size)
 
 

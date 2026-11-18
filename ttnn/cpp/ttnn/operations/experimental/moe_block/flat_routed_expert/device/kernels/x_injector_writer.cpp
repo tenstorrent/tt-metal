@@ -31,20 +31,21 @@ constexpr uint32_t kXnh = 2;  // the helper relays feeding a primary
 
 void kernel_main() {
     moe_block_args::load();  // (this core's args from the DRAM table, or the runtime args: moe_block_args.hpp)
-    constexpr uint32_t mt = flat_options::row_tiles_per_sub_block;
-    constexpr uint32_t tb = flat_options::x_tile_bytes;
+    constexpr uint32_t row_tiles = flat_options::row_tiles_per_sub_block;
+    constexpr uint32_t tile_bytes = flat_options::x_tile_bytes;
     constexpr uint32_t x_slots = flat_options::x_ring_blocks;
     constexpr uint32_t xarr_sem = flat_options::x_arrived_sem;
     constexpr uint32_t kblk = flat_options::x_block_k_tiles;
-    constexpr uint32_t num_e = flat_options::local_experts, nsb = flat_options::super_blocks_per_sub_block;
-    constexpr uint32_t sbt = flat_options::super_block_tiles;
-    constexpr uint32_t per_sb = sbt / kblk;
-    constexpr uint32_t sb_tiles = mt * sbt;
-    static_assert(sbt % kblk == 0);
-    constexpr uint32_t blk_bytes = mt * kblk * tb, piece = kblk * tb;
+    constexpr uint32_t num_e = flat_options::local_experts,
+                       super_blocks_per_sub_block = flat_options::super_blocks_per_sub_block;
+    constexpr uint32_t super_block_tiles = flat_options::super_block_tiles;
+    constexpr uint32_t per_sb = super_block_tiles / kblk;
+    constexpr uint32_t sb_tiles = row_tiles * super_block_tiles;
+    static_assert(super_block_tiles % kblk == 0);
+    constexpr uint32_t blk_bytes = row_tiles * kblk * tile_bytes, piece = kblk * tile_bytes;
     const uint32_t ring = moe_block_args::arg(0);
-    const uint32_t hxy = moe_block_args::arg(1);
-    const uint64_t head_xarr = get_noc_addr(hxy >> 16, hxy & 0xFFFF, get_semaphore(xarr_sem));
+    const uint32_t head_xy = moe_block_args::arg(1);
+    const uint64_t head_xarr = get_noc_addr(head_xy >> 16, head_xy & 0xFFFF, get_semaphore(xarr_sem));
     volatile tt_l1_ptr uint32_t* freed = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(moe_block_args::arg(2));
     // the freed word restarts every launch: zeroed here (the head only bumps it after consuming x this relay sent in
     // this launch), so no host write is needed between launches
@@ -56,7 +57,7 @@ void kernel_main() {
     constexpr uint32_t schedule_args = 7;
     ExpertSchedule schedule;
     load_schedule<num_e>(schedule, schedule_args, schedule_scratch(ScratchOwner::Ncrisc));
-    const uint32_t num_sb = schedule.total_sub_blocks * nsb;
+    const uint32_t num_sb = schedule.total_sub_blocks * super_blocks_per_sub_block;
     uint32_t sent = 0;
     constexpr uint32_t kChainDepth = 4;  // batches of head writes in flight (transaction ids 1..kChainDepth)
     // Batch b's head writes carry transaction id 1 + b % DEPTH; once they are acknowledged the head's XARR moves by
@@ -79,14 +80,16 @@ void kernel_main() {
         // Super-block b was read and tilized by helper h = b % kXnh (x_injector_helper_writer.cpp) into landing ring h
         // here (ring h follows ring h - 1); DATA sem help_sem[h] here counts arrivals, the CREDIT sem x_credit_sem on
         // the helper counts freed slots.
-        const uint32_t hh = b % kXnh, hb = b / kXnh;
+        const uint32_t helper = b % kXnh, helper_super_block = b / kXnh;
         constexpr uint32_t help_sem[kXnh] = {4, 7};
-        while (*reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(help_sem[hh])) < hb + 1) {
+        while (*reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(help_sem[helper])) <
+               helper_super_block + 1) {
             invalidate_l1_cache();
             chain_retire(kChainDepth);  // (waiting: count acknowledged batches into the head's XARR)
         }
-        noc_semaphore_wait_min(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(help_sem[hh])), hb + 1);
-        const uint32_t src = land + (hh * land_slots + hb % land_slots) * sb_tiles * tb;
+        noc_semaphore_wait_min(
+            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(help_sem[helper])), helper_super_block + 1);
+        const uint32_t src = land + (helper * land_slots + helper_super_block % land_slots) * sb_tiles * tile_bytes;
         // The whole super-block goes out as one batch once its last block's ring slot is free. Batches in flight are
         // only counted into the head's XARR on retirement: every wait retires the acknowledged ones, else a compute
         // that needs the whole ring (row passes: all Ht / KBLK blocks of a sub-block resident, GLM-5.3 24 of 24)
@@ -100,13 +103,13 @@ void kernel_main() {
         // along the snake, gate_up_core_reader.cpp
         chain_retire(kChainDepth - 1);  // (room for this batch's id)
         // (a short last sub-block: only its row tiles holding tokens go; the head's XARR still counts every piece)
-        const uint32_t lr = sub_block_row_tiles(schedule, b / nsb);
+        const uint32_t token_row_tiles = sub_block_row_tiles(schedule, b / super_blocks_per_sub_block);
         for (uint32_t k = 0; k < per_sb; ++k) {
             const uint32_t dst = ring + ((sent + k) % x_slots) * blk_bytes;
-            for (uint32_t m = 0; m < lr; ++m) {
+            for (uint32_t m = 0; m < token_row_tiles; ++m) {
                 noc_async_write_one_packet_with_trid(
-                    src + (m * sbt + k * kblk) * tb,
-                    get_noc_addr(hxy >> 16, hxy & 0xFFFF, dst + m * piece),
+                    src + (m * super_block_tiles + k * kblk) * tile_bytes,
+                    get_noc_addr(head_xy >> 16, head_xy & 0xFFFF, dst + m * piece),
                     piece,
                     1 + cb_iss % kChainDepth);
             }
@@ -116,7 +119,8 @@ void kernel_main() {
         sent += per_sb;
         noc_async_writes_flushed();
         noc_semaphore_inc(
-            get_noc_addr(helper_xy[hh] >> 16, helper_xy[hh] & 0xFFFF, get_semaphore(flat_options::x_credit_sem)),
+            get_noc_addr(
+                helper_xy[helper] >> 16, helper_xy[helper] & 0xFFFF, get_semaphore(flat_options::x_credit_sem)),
             1);  // slot free
     }
     chain_retire(0);

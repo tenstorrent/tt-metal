@@ -2,10 +2,10 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// The combine's per-call zeroing inside its own program (the arena is allocated per call: its L1 holds another op's data
-// between calls). Every core that owns combine state (a port's sender, an accumulator's reader; the flat expert's y
-// writers for their words) zeroes it at its start and counts in on the chip's gate core (accumulator 0); once every one
-// of them did, the gate releases every combine core of its chip. A kernel that writes into another core's state (an
+// The combine's per-call zeroing inside its own program (the arena is allocated per call: its L1 holds another op's
+// data between calls). Every core that owns combine state (a port's sender, an accumulator's reader; the flat expert's
+// y writers for their words) zeroes it at its start and counts in on the chip's gate core (accumulator 0); once every
+// one of them did, the gate releases every combine core of its chip. A kernel that writes into another core's state (an
 // accumulator publishing ring layouts / returning credits to its ports, a reader granting writer slots, a sender's
 // cross-chip barrier) waits for the release first. Remote chips are ordered by the senders' cross-chip barrier, which
 // now also means "that chip is zeroed".
@@ -57,14 +57,14 @@ FORCE_INLINE void count_in(uint32_t gate_x, uint32_t gate_y, uint32_t bar_addr) 
     noc_async_atomic_barrier();
 }
 
-// The gate (accumulator 0's reader): every one of the chip's nz count-ins of call `call` arrived -> release each
-// combine core (n_cores (x, y) pairs from runtime arg `a`).
-FORCE_INLINE void release(uint32_t bar_addr, uint32_t call, uint32_t nz, uint32_t n_cores, size_t a) {
+// The gate (accumulator 0's reader): every one of the chip's zero_count_ins count-ins of call `call` arrived -> release
+// each combine core (n_cores (x, y) pairs from runtime arg `a`).
+FORCE_INLINE void release(uint32_t bar_addr, uint32_t call, uint32_t zero_count_ins, uint32_t n_cores, size_t a) {
     volatile tt_l1_ptr uint32_t* w = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(bar_addr);
-    const uint32_t tgt = call * nz;
+    const uint32_t target = call * zero_count_ins;
     do {
         invalidate_l1_cache();
-    } while (static_cast<int32_t>(w[BAR_ZEROED] - tgt) < 0);
+    } while (static_cast<int32_t>(w[BAR_ZEROED] - target) < 0);
     for (uint32_t i = 0; i < n_cores; ++i, a += 2) {
         noc_semaphore_inc(
             get_noc_addr(moe_block_args::arg(a), moe_block_args::arg(a + 1), bar_addr + 4 * BAR_RELEASED), 1);

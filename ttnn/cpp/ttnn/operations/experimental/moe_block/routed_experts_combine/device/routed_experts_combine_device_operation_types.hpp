@@ -54,12 +54,13 @@ struct RoutedExpertsCombineParams {
 };
 
 struct RoutedExpertsCombineInputs {
-    Tensor plan;                // the device plan [1, 1024] uint32 (the MoE head's planner)
-    Tensor table;               // the hand-off table [rows_cap / 32, 64] uint32 (the MoE head's planner)
-    Tensor out;                 // y_own [1, 1, S, Hr] bf16 row-major (persistent, the resources')
-    Tensor bar;                 // the start barrier / zero gate words (persistent, every worker core)
-    Tensor hcache;              // the senders' routed header cache (persistent DRAM)
-    std::optional<Tensor> lut;  // per-chip accumulator roles: the senders' accumulator LUT (persistent DRAM)
+    Tensor plan;     // the device plan [1, 1024] uint32 (the MoE head's planner)
+    Tensor table;    // the hand-off table [rows_cap / 32, 64] uint32 (the MoE head's planner)
+    Tensor out;      // y_own [1, 1, S, Hr] bf16 row-major (persistent, the resources')
+    Tensor barrier;  // the start barrier / zero gate words (persistent, every worker core)
+    Tensor hcache;   // the senders' routed header cache (persistent DRAM)
+    std::optional<Tensor>
+        accumulator_lut;  // per-chip accumulator roles: the senders' accumulator LUT (persistent DRAM)
     // the flat routed expert's: x = the dispatched rows, arena = the call's arena (every worker core: the flat
     // expert's buffers on its cores, the combine's on its own, the y writers' words), output = its (unwritten) y
     flat_routed_expert::FlatRoutedExpertInputs flat;

@@ -158,7 +158,8 @@ tt::tt_metal::WorkloadDescriptor build_workload(const SparseDispatch2dParams& ar
          {names::kRowBytes, row_bytes},
          {names::kGroup, args.group},
          {names::kManifestBatch, args.manifest_batch},
-         {names::kRowsPerPacket, args.pack}});
+         {names::kRowsPerPacket, args.pack},
+         {names::kRowPieces, row_pieces(row_bytes, tt::tt_fabric::get_tt_fabric_max_payload_size_bytes())}});
     KernelDescriptor::CompileTimeArgs sender_ct;
     tt::tt_metal::TensorAccessorArgs(out_buf).append_to(sender_ct);
 

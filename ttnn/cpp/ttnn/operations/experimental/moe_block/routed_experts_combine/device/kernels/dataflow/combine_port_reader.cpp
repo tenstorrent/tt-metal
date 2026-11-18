@@ -52,33 +52,33 @@ void kernel_main() {
     size_t a = 0;
     const uint32_t area = moe_block_args::arg(a++);  // the arena (same address on every core and chip)
     const uint32_t plan = moe_block_args::arg(a++);
-    const uint32_t bar = moe_block_args::arg(a++);
+    const uint32_t barrier_addr = moe_block_args::arg(a++);
     const uint32_t W = moe_block_args::arg(a++);
-    const uint32_t did = moe_block_args::arg(a++), Q = moe_block_args::arg(a++);
+    const uint32_t port_id = moe_block_args::arg(a++), Q = moe_block_args::arg(a++);
     const uint32_t words = area + WORDS_OFF;
-    const uint32_t call = rec::next_call(bar, BAR_SLOT);
+    const uint32_t call = rec::next_call(barrier_addr, BAR_SLOT);
     uint32_t n = 0;
     {
         cb_reserve_back(cb_tab, 1);
-        const uint32_t sc = (get_write_ptr(cb_tab) + 63) & ~63u;
-        noc_async_read(TensorAccessor(plan_args, plan, moe_block_plan_words::kPlanBytes).get_noc_addr(0), sc, 64);
+        const uint32_t scratch = (get_write_ptr(cb_tab) + 63) & ~63u;
+        noc_async_read(TensorAccessor(plan_args, plan, moe_block_plan_words::kPlanBytes).get_noc_addr(0), scratch, 64);
         noc_async_read_barrier();
-        n = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(sc)[did];
+        n = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(scratch)[port_id];
     }
-    uint32_t wx[32], wy[32];
+    uint32_t writer_x[32], writer_y[32];
     for (uint32_t w = 0; w < W; ++w) {
-        wx[w] = moe_block_args::arg(a++);
-        wy[w] = moe_block_args::arg(a++);
+        writer_x[w] = moe_block_args::arg(a++);
+        writer_y[w] = moe_block_args::arg(a++);
     }
-    rec::wait_released(bar, call);  // (this core's state and every writer's words zeroed)
+    rec::wait_released(barrier_addr, call);  // (this core's state and every writer's words zeroed)
     volatile tt_l1_ptr uint32_t* misc = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(area + MISC);
     volatile tt_l1_ptr uint32_t* landed = misc + combine_formats::kMiscPortLanded;
     const uint32_t base = misc[combine_formats::kMiscPortHandoffBase];
     uint32_t granted = 0, pushed = 0;
     auto grant_to = [&](uint32_t g) {
-        const uint32_t dlt = g - granted;
+        const uint32_t delta = g - granted;
         for (uint32_t w = 0; w < W; ++w) {
-            noc_semaphore_inc(get_noc_addr(wx[w], wy[w], words + 4 * did), dlt);
+            noc_semaphore_inc(get_noc_addr(writer_x[w], writer_y[w], words + 4 * port_id), delta);
         }
         granted = g;
     };

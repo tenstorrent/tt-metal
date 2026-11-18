@@ -344,21 +344,21 @@ inline void load_schedule(ExpertSchedule& schedule, uint32_t args, uint32_t scra
     const uint32_t ids_l1 = scratch + row_read_bytes;
     const auto counts_reader = TensorAccessor(flat_acc::counts, counts_address, row_bytes);
     const auto regions_reader = TensorAccessor(flat_acc::regions, regions_address, row_bytes);
-    const auto ids_reader = TensorAccessor(flat_acc::ids, ids_address, ids_bytes);
+    const auto ids_reader = TensorAccessor(flat_acc::global_expert_ids, ids_address, ids_bytes);
     noc_async_read(counts_reader.get_noc_addr(0), scratch, row_read_bytes);
     noc_async_read(regions_reader.get_noc_addr(0), scratch + buffer_bytes, row_read_bytes);
     noc_async_read(ids_reader.get_noc_addr(0), ids_l1, (ids_bytes + 63) / 64 * 64);
     noc_async_read_barrier();
     volatile tt_l1_ptr uint32_t* counts = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(scratch);
     volatile tt_l1_ptr uint32_t* regions = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(scratch + buffer_bytes);
-    volatile tt_l1_ptr uint32_t* ids = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(ids_l1);
+    volatile tt_l1_ptr uint32_t* global_expert_ids = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(ids_l1);
     build_schedule(
         schedule,
         local_experts,
         lowest_tokens,
         highest_tokens,
-        [&](uint32_t expert) { return counts[ids[expert]]; },
-        [&](uint32_t expert) { return regions[ids[expert]]; });
+        [&](uint32_t expert) { return counts[global_expert_ids[expert]]; },
+        [&](uint32_t expert) { return regions[global_expert_ids[expert]]; });
     pin_hot_expert(schedule);
     assign_ring_regions(schedule);  // (the plain order: always assignable)
 }
