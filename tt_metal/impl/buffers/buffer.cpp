@@ -42,7 +42,7 @@ namespace tt::tt_metal {
 namespace {
 
 BufferShardingArgsImpl make_sharding_args_impl(std::optional<BufferDistributionSpec> spec) {
-    const auto layout = spec.has_value() ? TensorMemoryLayout::BLOCK_SHARDED : TensorMemoryLayout::INTERLEAVED;
+    const auto layout = spec.has_value() ? TensorMemoryLayout::ND_SHARDED : TensorMemoryLayout::INTERLEAVED;
     return BufferShardingArgsImpl{std::move(spec), std::nullopt, layout};
 }
 
@@ -57,7 +57,7 @@ BufferShardingArgs::BufferShardingArgs(std::nullopt_t) : BufferShardingArgs(Buff
 
 BufferShardingArgs::BufferShardingArgs(BufferDistributionSpec buffer_distribution_spec) :
     BufferShardingArgs(
-        BufferShardingArgsImpl{std::move(buffer_distribution_spec), std::nullopt, TensorMemoryLayout::BLOCK_SHARDED}) {}
+        BufferShardingArgsImpl{std::move(buffer_distribution_spec), std::nullopt, TensorMemoryLayout::ND_SHARDED}) {}
 
 BufferShardingArgs::BufferShardingArgs(std::optional<BufferDistributionSpec> buffer_distribution_spec) :
     BufferShardingArgs(make_sharding_args_impl(std::move(buffer_distribution_spec))) {}

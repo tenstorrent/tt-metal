@@ -613,6 +613,17 @@ TEST(BufferDistributionSpecContiguousPages, CPU_NumContiguousPages) {
     EXPECT_EQ(single_page_shard.contiguous_page_stride(), 1u);
 }
 
+// A buffer described only by a distribution spec is ND-sharded, not block-sharded.
+TEST_F(BufferDistributionSpecFixture, DistributionSpecOnlyBufferIsNdSharded) {
+    const BufferDistributionSpec spec(
+        Shape{4, 1}, Shape{1, 1}, NodeRangeSet(NodeRange({0, 0}, {1, 0})), ShardOrientation::ROW_MAJOR);
+    const auto mesh_buffer = distributed::MeshBuffer::create(
+        distributed::ReplicatedBufferConfig{.size = 4 * 64},
+        distributed::DeviceLocalBufferConfig{.page_size = 64, .buffer_type = BufferType::L1, .sharding_args = spec},
+        mesh_device_.get());
+    EXPECT_EQ(mesh_buffer->device_local_config().sharding_args.buffer_layout(), TensorMemoryLayout::ND_SHARDED);
+}
+
 // With both specs, the buffer is sized from the distribution spec, which can place several shards on a node.
 TEST_F(BufferDistributionSpecFixture, NumDevPagesFollowsDistributionSpec) {
     const NodeRangeSet grid(NodeRange({0, 0}, {1, 0}));  // 2 nodes, 4 single-page shards
