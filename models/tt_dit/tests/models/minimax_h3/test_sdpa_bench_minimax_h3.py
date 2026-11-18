@@ -60,7 +60,6 @@ def test_h3_ring_sdpa_bench(mesh_device):
         bucket_ladder=None,
         dynamic_length=None,
         coresident=preset.get("coresident", True),
-        topology=topology,
     ).dynamic_length
     tp, sp = mesh_device.shape[tp_axis], mesh_device.shape[sp_axis]
     local_heads = HEADS // tp
