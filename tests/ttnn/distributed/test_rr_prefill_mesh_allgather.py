@@ -4,8 +4,8 @@
 
 """Fabric init and a ring all-gather on both axes of every [RING,RING] 4x4 prefill mesh.
 
-Run on its own (one rank, one in-Galaxy torus) it checks a single mesh. Each rank opens the 4x4 mesh it belongs to with FABRIC_2D_TORUS_XY: an in-Galaxy torus is owned by one
-rank, a seam torus by two ranks on two hosts. Chip (r, c) of a mesh holds a block filled with r * 4 + c + 1;
+Each rank opens the 4x4 mesh it belongs to with FABRIC_2D_TORUS_XY: an in-Galaxy torus is owned by one
+rank, a seam torus by two ranks on two hosts. Run alone (one rank), it checks the single in-Galaxy torus. Chip (r, c) of a mesh holds a block filled with r * 4 + c + 1;
 a ring all-gather along each axis must return the blocks of the whole row or column in mesh order, on
 every chip the rank owns.
 
@@ -32,7 +32,7 @@ def rank_of_process():
 
 def barrier():
     if ttnn.using_distributed_env():
-        barrier()
+        ttnn.distributed_context_barrier()
 
 
 @pytest.fixture(scope="module")
