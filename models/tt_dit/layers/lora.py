@@ -57,8 +57,9 @@ swap cycles. In production this is bounded automatically by
 ``dynamic_load=True`` (``cache.load_model`` restores the cached base
 on every page-in). For static pipelines (``dynamic_load=False``) that
 need bit-exact restore across many swaps, snapshot the state dict once
-at construction and call ``load_torch_state_dict`` to re-seed W when
-drift becomes material. On a traced pipeline, call ``release_traces()``
+at construction and, when drift becomes material, re-seed W with
+``deallocate_weights()`` followed by ``load_torch_state_dict``: a loaded
+module is not loaded again. On a traced pipeline, call ``release_traces()``
 after the re-seed and before the next call: the re-seed replaces weights
 the traces read, and a trace over a replaced weight refuses to run. (With the A/B cache enabled — ``cache_capacity>0``
 — unbind subtracts the *same* device delta that bind added for a cached

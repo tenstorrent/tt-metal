@@ -132,8 +132,8 @@ Both variants use the same MoE two-stage denoising architecture with separate hi
 resident and off for meshes that offload them (`offload_weights`). Pass `trace=False` to
 `WanPipelineConfig.default`, or `config_overrides={"trace": False}` to `create_pipeline`, to run eager.
 A traced pipeline on a mesh opened without a `trace_region_size` takes its trace buffers from DRAM.
-Replacing a module's weights after the first call (for example a LoRA re-seed with `load_torch_state_dict`)
-requires `pipeline.release_traces()` before the next call.
+Replacing a module's weights after the first call (for example a LoRA re-seed with `deallocate_weights()`
+followed by `load_torch_state_dict`) requires `pipeline.release_traces()` before the next call.
 
 ## Step caching (DBCache)
 
