@@ -18,6 +18,7 @@ gate = sigmoid(linear(h)) with h the NORMED input. Everything bf16 here (weights
 import os
 
 import ttnn
+from models.demos.blackhole.hy4_preview.tt import hy4_ccl_safe as _ccl_safe
 from models.demos.blackhole.hy4_preview.tt.hy4_attn_weights import build_attn_host_weights
 from models.demos.blackhole.hy4_preview.tt.hy4_common import RopeDev, compute_cfg, upload
 from models.demos.blackhole.hy4_preview.tt.hy4_indexer import Hy4Indexer
@@ -236,7 +237,7 @@ class Hy4Attention:
             qfull,
             in_dim=1,
             out_dim=2,
-            num_links=2 if self.pf.a2a2 else 1,
+            num_links=_ccl_safe.A2A_LINKS if self.pf.a2a2 else 1,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             cluster_axis=1,
         )  # [1,64,n/8,576] TILE (the op takes TILE only)
@@ -262,7 +263,7 @@ class Hy4Attention:
             out_t,
             in_dim=2,
             out_dim=1,
-            num_links=2 if self.pf.a2a2 else 1,
+            num_links=_ccl_safe.A2A_LINKS if self.pf.a2a2 else 1,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             cluster_axis=1,
         )  # [1,8,n,512]

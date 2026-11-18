@@ -99,6 +99,12 @@ class Hy4Engine:
         t0 = time.time()
         links = hy4_fabric_selftest(md)
         pool_decode._POOL_AG_LINKS = links.pool_ag
+        if (
+            os.environ.get("HY4_B51_SELFTEST_PF", "0") == "1"
+        ):  # B51: prefill-size selftest cases decide the a2a links too
+            from models.demos.blackhole.hy4_preview.tt import hy4_ccl_safe
+
+            hy4_ccl_safe.A2A_LINKS = links.a2a
         logger.info(
             f"Hy4 fabric self-test: num_links={links.num_links} pool_ag={links.pool_ag} ({links.seconds:.1f} s)"
         )

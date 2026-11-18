@@ -25,6 +25,19 @@ def main():
     else:
         full, md = open_row()
     try:
+        if (
+            os.environ.get("SEM_GRID") == "full"
+        ):  # NAN49 hypothesis: CCLManager's semaphores cover only an 8x8 core range, the ops' workers lie outside
+            g = md.compute_with_storage_grid_size()
+            full_rs = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(g.x - 1, g.y - 1))})
+            _orig = CCLManager._init_subdevice
+
+            def _patched(self_):
+                _orig(self_)
+                self_.ccl_cores = full_rs
+
+            CCLManager._init_subdevice = _patched
+            res(event="grid", x=g.x, y=g.y)
         extra = int(os.environ.get("EXTRA_SEMS", "0"))
         _hold = [
             ttnn.create_global_semaphore(
