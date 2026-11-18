@@ -119,6 +119,96 @@ ALWI void window_tilize(DataflowBuffer& in, DataflowBuffer& out, uint32_t units)
     fast_tilize_uninit(cb_in, cb_out, row_tiles);
 }
 
+// Tap-direct tilize (N-slice-outer prelude; see TapDirect in conv2d_3x3_gather_dataflow.hpp): every tap block (tw
+// tiles, a [32, c_in_p] row-major block) of a unit is tilized from the L1 address the reader published in its slot's
+// entry of cb_src_table: a slab run, the zero block, or the block the reader gathered into the slot. Same tiles, same
+// order as ckl::tilize over the slot (bit-identical).
+// Raw LLK, UNPACK only (capability): ckl::tilize / fast_tilize_block always read at the CB read pointer; the loop is
+// fast_tilize_block's (as window_tilize), with the unpacker's base taken from the published address. It removes the
+// reader's copy of most tap blocks, which paced the prelude: aspp.convs.1 @ LoFi 76.7 -> 74.7 us.
+#ifdef TRISC_UNPACK
+template <uint32_t cb_table, uint32_t taps>
+inline void direct_unit_sources(uint32_t slot, uint32_t (&src)[taps]) {
+    invalidate_l1_cache();
+    const uint32_t table = get_local_cb_interface(get_operand_id(cb_table)).fifo_rd_ptr << 4;
+    volatile uint32_t* entry = reinterpret_cast<volatile uint32_t*>(table + slot * 16);
+    for (uint32_t t = 0; t < taps; ++t) {
+        src[t] = entry[t];
+    }
+}
+
+// One-tile-wide tap block: BH tilizes it with the per-tile unpack tilize (fast_tilize_block's one-tile path); the base
+// is the published address instead of the CB read pointer.
+template <uint32_t cb_in>
+inline void direct_unpack_tilize(uint32_t src) {
+    const uint32_t id = get_operand_id(cb_in);
+    llk_unpack_tilize_impl(
+        (src >> 4) - 1,
+        0,
+        unpack_src_format[id],
+        unpack_dst_format[id],
+        get_operand_face_r_dim(id),
+        get_operand_num_faces(id),
+        get_operand_narrow_tile(id));
+}
+#endif
+
+template <uint32_t tw, uint32_t taps, uint32_t ring, uint32_t cb_in, uint32_t cb_out, uint32_t cb_table>
+ALWI void direct_tilize(DataflowBuffer& in, DataflowBuffer& out, uint32_t units, uint32_t& seq) {
+    static_assert(tw != 0 && taps <= 4, "a source entry is 16 B: at most 4 taps per unit");
+    reconfig_data_format_srca(cb_in);
+    pack_reconfig_data_format(cb_out);
+    fast_tilize_init(cb_in, tw, cb_out);
+    [[maybe_unused]] uint32_t prev_chunk = 0;
+    for (uint32_t u = 0; u < units; ++u, ++seq) {
+        in.wait_front(tw * taps);
+        [[maybe_unused]] uint32_t src[taps];
+        UNPACK((direct_unit_sources<cb_table, taps>(seq % ring, src)));
+        for (uint32_t t = 0; t < taps; ++t) {
+            if constexpr (tw == 1) {
+                out.reserve_back(1);
+                UNPACK((direct_unpack_tilize<cb_in>(src[t])));
+                MATH((llk_math_wait_for_dest_available()));
+                PACK((llk_packer_wait_for_math_done()));
+                MATH((llk_math_eltwise_unary_datacopy<
+                      DataCopyType::A2D,
+                      DST_ACCUM_MODE,
+                      BroadcastType::NONE,
+                      UnpackToDestEn>(0, cb_in)));
+                PACK((llk_pack<DST_ACCUM_MODE, true, PackMode::Default>(0, cb_out, 0)));
+                MATH((llk_math_dest_section_done<DST_ACCUM_MODE>()));
+                PACK((llk_pack_dest_section_done<DST_ACCUM_MODE>()));
+                out.push_back(1);
+            } else {
+                out.reserve_back(tw);
+                PACK((llk_pack_fast_tilize_row_begin(cb_out, 0)));
+                for (uint32_t tiles_done = 0; tiles_done < tw;) {
+                    // BH fast-tilize chunks are 2..4 tiles (fast_tilize_block's split: 5 -> 2 + 3).
+                    const uint32_t remaining = tw - tiles_done;
+                    const uint32_t chunk = (remaining > 5) ? 4 : (remaining == 5) ? 2 : remaining;
+                    MATH((llk_math_wait_for_dest_available()));
+                    PACK((llk_packer_wait_for_math_done()));
+                    if (chunk != prev_chunk) {
+                        UNPACK((llk_unpack_fast_tilize_reinit_xdim(chunk)));
+                        PACK((llk_pack_fast_tilize_reinit_unit_dim(cb_out, chunk)));
+                        prev_chunk = chunk;
+                    }
+                    UNPACK((window_unpack_chunk<cb_in>(src[t], chunk, tiles_done)));
+                    MATH((llk_math_fast_tilize_block_<DST_ACCUM_MODE>(0, cb_in, 4)));
+                    PACK((llk_pack_fast_tilize_row_chunk(0, cb_out, chunk)));
+                    MATH((llk_math_dest_section_done<DST_ACCUM_MODE>()));
+                    PACK((llk_pack_dest_section_done<DST_ACCUM_MODE>()));
+                    tiles_done += chunk;
+                }
+                PACK((llk_pack_fast_tilize_row_end()));
+                out.push_back(tw);
+            }
+        }
+        in.pop_front(tw * taps);
+    }
+    fast_tilize_uninit(cb_in, cb_out, tw);
+}
+
 // Center-tap direct modes (the descriptor's center_tap_mode).
 constexpr uint32_t CENTER_K_BLOCK = 1;
 constexpr uint32_t CENTER_SLOTS = 2;
@@ -263,6 +353,11 @@ void kernel_main() {
     // Ring slab (see the reader): M-block m untilizes runtime arg 3 + 2m tile-rows and pops runtime arg 4 + 2m unread
     // tail rows of its last cb_input_tiles batch.
     constexpr bool ring_slab = get_compile_time_arg_val(38) != 0;
+    // Tap-direct N-slice prelude: tap block sources from cb_src_table (one entry per cb_im2col_rm unit slot).
+    constexpr bool tap_direct = get_compile_time_arg_val(39) != 0;
+    constexpr uint32_t cb_src_table = get_compile_time_arg_val(40);
+    constexpr uint32_t im2col_rm_depth_rows = get_compile_time_arg_val(41);
+    static_assert(!tap_direct || (k_split && !face_direct && !strided_window));
     static_assert(!ring_slab || (tile_input && !k_split && !face_direct && c_in_tiles > 1));
     static_assert(center_mode == 0 || (tile_input && !face_direct && !k_split));
 
@@ -409,6 +504,8 @@ void kernel_main() {
     // fast_untilize packs every slab row of a > 4-tile row as its own L1 stream and syncs per tile-row. ring_rows > 0:
     // cb_halo_slab is the ring slab, and a section group never crosses its end.
     [[maybe_unused]] uint32_t untilize_ring_pos = 0;
+    // Tap-direct: units tilized so far (the reader's direct_seq).
+    [[maybe_unused]] uint32_t direct_seq = 0;
     [[maybe_unused]] auto untilize_wide_rows = [&](uint32_t rows, uint32_t ring_rows) {
         // kernel_main is not a template: this is instantiated on ROW_MAJOR paths too (untilize_width_tiles = 1).
         constexpr uint32_t wide_ct = untilize_width_tiles < 2 ? 2 : untilize_width_tiles;
@@ -461,6 +558,14 @@ void kernel_main() {
                 if constexpr (strided_window) {
                     window_tilize<c_in_tiles, cb_im2col_rm, cb_im2col_tiles>(
                         im2col_rm_dfb, im2col_tiles_dfb, block_m_tiles * num_k_blocks);
+                } else if constexpr (tap_direct) {
+                    direct_tilize<
+                        im2col_tilize_width_tiles,
+                        block_k_tiles / im2col_tilize_width_tiles,
+                        im2col_rm_depth_rows,
+                        cb_im2col_rm,
+                        cb_im2col_tiles,
+                        cb_src_table>(im2col_rm_dfb, im2col_tiles_dfb, block_m_tiles * num_k_blocks, direct_seq);
                 } else {
                     ckl::tilize<im2col_tilize_width_tiles, cb_im2col_rm, cb_im2col_tiles>(
                         im2col_rm_dfb, im2col_tiles_dfb, block_m_tiles * (k_tiles / im2col_tilize_width_tiles));

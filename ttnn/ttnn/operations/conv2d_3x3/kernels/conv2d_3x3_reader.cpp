@@ -190,7 +190,11 @@ void kernel_main() {
     // slab_tile_rows consecutive input tile-rows across M-blocks. Each M-block streams only the rows past the previous
     // block's window and pops only the rows below its own window; every band gathers at one base and wraps.
     constexpr bool ring_slab = get_compile_time_arg_val(65) != 0;
-    constexpr auto input_args = TensorAccessorArgs<66>();
+    // Tap-direct N-slice prelude (the descriptor's _tap_direct; TapDirect in conv2d_3x3_gather_dataflow.hpp): per
+    // cb_im2col_rm slot, cb_src_table holds one 16 B entry of tap source addresses that compute tilizes from.
+    constexpr bool tap_direct = get_compile_time_arg_val(66) != 0;
+    constexpr uint32_t cb_src_table = get_compile_time_arg_val(67);
+    constexpr auto input_args = TensorAccessorArgs<68>();
     static_assert(!alias_slab_combine || nslice_outer, "only the N-slice-outer walk aliases the slab");
 
     const uint32_t input_addr = get_arg_val<uint32_t>(0);
@@ -280,6 +284,11 @@ void kernel_main() {
         center_mode == 2 ? 1 : -1,
         ring_slab ? static_cast<int32_t>(slab_tile_rows * TILE_DIM) : 0>;
     using WindowT = conv2d_3x3::WindowGather<output_width, input_height, input_width, padding, c_in_p>;
+    using TapDirectT =
+        conv2d_3x3::TapDirect<output_width, input_height, input_width, padding, dilation, c_in_p, block_k_tiles>;
+    static_assert(
+        !tap_direct || (tap_major && nslice_outer && !center_direct && !ring_slab && !face_direct),
+        "tap-direct: the tap-major N-slice-outer gather");
     // The unit address word compute tilizes from: the last 16 B of the unit's cb_im2col_rm pages.
     constexpr uint32_t window_header_offset = block_k_tiles * TILE_DIM * TILE_DIM * ELEM_BYTES - 16;
     static_assert(
@@ -326,6 +335,9 @@ void kernel_main() {
     // so the slab always starts at the CB base.
     const uint32_t slab_l1 = tile_input ? get_read_ptr(cb_halo_slab) : get_write_ptr(cb_halo_slab);
     const uint64_t slab_noc = get_noc_addr(slab_l1);
+    [[maybe_unused]] const uint32_t src_table_l1 = tap_direct ? get_write_ptr(cb_src_table) : 0;
+    // Tap-direct: units pushed so far; unit u's source entry is slot u % im2col_rm_depth_rows (compute's direct_seq).
+    [[maybe_unused]] uint32_t direct_seq = 0;
     conv2d_3x3::TaggedReads<face_direct> reads;
 
     if constexpr (zero_im2col_once) {
@@ -360,6 +372,7 @@ void kernel_main() {
         reads.noc.write_zeros_l1_barrier();
         zero_src_noc = get_noc_addr(get_write_ptr(cb_zero_src));
     }
+    [[maybe_unused]] const uint32_t zero_src_l1 = tap_major ? get_write_ptr(cb_zero_src) : 0;
 
     // Input pages [page, end_page) into consecutive L1 page slots from l1. With the split fill, runs of higher
     // shards are the writer's.
@@ -731,6 +744,36 @@ void kernel_main() {
                 while (assign_cursor < m_seq_end) {
                     take_unit(m_seq_end);
                 }
+            } else if constexpr (tap_direct) {
+                for (uint32_t tile_row = 0; tile_row < block_m_tiles; ++tile_row) {
+                    for (uint32_t k_block_idx = 0; k_block_idx < num_k_blocks; ++k_block_idx) {
+                        cb_reserve_back(cb_im2col_rm, block_k_tiles);
+                        const uint32_t k_tile0 = k_block_idx * block_k_tiles;
+                        const int32_t kh = k_tile0 / tensor_kkh_tiles;
+                        const uint32_t col_lo = (k_tile0 - kh * tensor_kkh_tiles) * TILE_DIM;
+                        volatile tt_l1_ptr uint32_t* srcs = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(
+                            src_table_l1 + (direct_seq % im2col_rm_depth_rows) * 16);
+                        reads.begin(TRID_GATHER);
+                        const uint32_t gathered = TapDirectT::tile_row(
+                            reads,
+                            slab_l1,
+                            slab_noc,
+                            zero_src_l1,
+                            zero_src_noc,
+                            get_write_ptr(cb_im2col_rm),
+                            o_first + tile_row * TILE_DIM,
+                            o_end,
+                            kh,
+                            col_lo,
+                            slab_x_base[kh],
+                            srcs);
+                        if (gathered > 0) {
+                            reads.wait(TRID_GATHER);
+                        }
+                        cb_push_back(cb_im2col_rm, block_k_tiles);
+                        ++direct_seq;
+                    }
+                }
             } else {
                 for (uint32_t tile_row = 0; tile_row < block_m_tiles; ++tile_row) {
                     for (uint32_t k_block_idx = 0; k_block_idx < num_k_blocks; ++k_block_idx) {
@@ -882,7 +925,7 @@ void kernel_main() {
             }
         }
 
-        if constexpr (window_direct) {
+        if constexpr (window_direct || tap_direct) {
             // Compute tilizes slab runs in place: the slab is dead only once compute popped every unit.
             cb_reserve_back(cb_im2col_rm, im2col_rm_depth_rows * block_k_tiles);
         }

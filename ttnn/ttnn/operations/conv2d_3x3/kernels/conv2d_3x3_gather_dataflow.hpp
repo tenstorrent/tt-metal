@@ -431,6 +431,101 @@ struct TapMajorGather {
     }
 };
 
+// Tap-direct (N-slice-outer prelude): compute tilizes each tap block of a unit from an L1 address the reader publishes
+// per (unit slot, tap). A tap block [32 pixels, c_in_p] is already a contiguous run of slab pixels when the tile-row's
+// valid pixels are one output-row run whose tap lies inside the image row: its address is the slab run itself (no
+// copy). A tap whose kernel row lies outside the image, or a tile-row wholly past o_end, is the 32-pixel zero block.
+// Only the other taps (a run touching the left / right padding, or a tile-row straddling two output rows) are gathered
+// into the unit's own slot, as TapMajorGather does. Rows past o_end read whatever follows the run: every phase
+// downstream is row-independent and the writer never stores them.
+template <
+    uint32_t output_width,
+    int32_t input_height,
+    int32_t input_width,
+    int32_t padding,
+    int32_t dilation,
+    uint32_t c_in_p,
+    uint32_t block_k_tiles>
+struct TapDirect {
+    static constexpr uint32_t TILE_DIM = 32;
+    static constexpr uint32_t pixel_bytes = c_in_p * 2;
+    static constexpr uint32_t tap_cols = 3 * c_in_p;
+
+    // Publishes the unit's tap sources into srcs; returns the number of taps gathered (reads issued) into the slot.
+    template <typename Reads>
+    FORCE_INLINE static uint32_t tile_row(
+        Reads& reads,
+        uint32_t slab_l1,
+        uint64_t slab_noc,
+        uint32_t zero_l1,
+        uint64_t zero_src_noc,
+        uint32_t rows_l1,
+        uint32_t o,
+        uint32_t o_end,
+        int32_t kh,
+        uint32_t col_lo,
+        int32_t slab_x_base_kh,
+        volatile tt_l1_ptr uint32_t* srcs) {
+        const uint32_t col_hi = col_lo + block_k_tiles * TILE_DIM;
+        const uint32_t data_hi = col_hi < tap_cols ? col_hi : tap_cols;
+        const int32_t kw_first = col_lo / c_in_p;
+        const int32_t kw_last = (data_hi - 1) / c_in_p;
+        const uint32_t row_end = o + TILE_DIM < o_end ? o + TILE_DIM : o_end;
+        uint32_t gathered = 0;
+        const int32_t ho0 = o / output_width;
+        const int32_t wo0 = o % output_width;
+        const int32_t n = static_cast<int32_t>(row_end) - static_cast<int32_t>(o);
+        const bool one_run = n > 0 && wo0 + n <= static_cast<int32_t>(output_width);
+        const int32_t h_in0 = ho0 + kh * dilation - padding;
+        const bool row_out = h_in0 < 0 || h_in0 >= input_height;
+        for (int32_t kw = kw_first; kw <= kw_last; ++kw) {
+            const uint32_t dst = rows_l1 + (kw - kw_first) * TILE_DIM * pixel_bytes;
+            const int32_t w_lo0 = wo0 - padding + kw * dilation;
+            uint32_t src = dst;
+            if (n <= 0 || (one_run && row_out)) {
+                src = zero_l1;
+            } else if (one_run && w_lo0 >= 0 && w_lo0 + n <= input_width) {
+                src = slab_l1 + static_cast<uint32_t>(slab_x_base_kh + h_in0 * input_width + w_lo0) * pixel_bytes;
+            }
+            srcs[kw - kw_first] = src;
+            if (src != dst) {
+                continue;
+            }
+            ++gathered;
+            uint32_t d = dst;
+            int32_t ho = ho0;
+            int32_t wo = wo0;
+            for (uint32_t p = o; p < row_end;) {
+                const int32_t run = row_end - p < output_width - wo ? row_end - p : output_width - wo;
+                const int32_t h_in = ho + kh * dilation - padding;
+                const int32_t w_lo = wo - padding + kw * dilation;
+                int32_t in_lo = w_lo < 0 ? (-w_lo < run ? -w_lo : run) : 0;
+                int32_t in_hi = input_width - w_lo < run ? input_width - w_lo : run;
+                if (h_in < 0 || h_in >= input_height || in_hi < in_lo) {
+                    in_lo = in_hi = run;
+                }
+                if (in_lo > 0) {
+                    reads.read(zero_src_noc, d, in_lo * pixel_bytes);
+                }
+                if (in_hi > in_lo) {
+                    reads.read(
+                        slab_noc + (slab_x_base_kh + h_in * input_width + w_lo + in_lo) * pixel_bytes,
+                        d + in_lo * pixel_bytes,
+                        (in_hi - in_lo) * pixel_bytes);
+                }
+                if (run > in_hi) {
+                    reads.read(zero_src_noc, d + in_hi * pixel_bytes, (run - in_hi) * pixel_bytes);
+                }
+                d += run * pixel_bytes;
+                p += run;
+                wo = 0;
+                ++ho;
+            }
+        }
+        return gathered;
+    }
+};
+
 // Strided window (stride 2, d 1, C_in_p whole tiles, one K-block per kernel row): im2col row i of a tile-row is the 3
 // consecutive input pixels from 2 * wo_i - padding, and inside one output-row run row i + 1 starts two pixels after row
 // i. So the run's rows are overlapping windows of one input run: pixel slot j of the unit holds input pixel

@@ -67,6 +67,8 @@ CB_SLICE_R = 10
 CB_ZERO_SRC = 11
 # Center-tap direct in0 (see CENTER_TAP_DIRECT): the kw = 1 K-blocks' input tiles, copied by the reader.
 CB_CENTER_TILES = 12
+# Tap-direct N-slice prelude (see _tap_direct): one 16 B entry of tap source addresses per cb_im2col_rm unit slot.
+CB_SRC_TABLE = 13
 
 # R4 reduce-scatter semaphores; the weight multicast channel allocates its own after them.
 SEM_COMBINE_CREDIT = 0
@@ -462,6 +464,24 @@ def _strided_window(g: Conv3x3Geometry, bk):
 CENTER_NONE, CENTER_K_BLOCK, CENTER_SLOTS = 0, 1, 2
 
 
+def _tap_direct(g: Conv3x3Geometry, bm, bk, nslice):
+    """Tap-direct N-slice prelude: compute tilizes each tap block of a unit from an L1 address the reader publishes (a
+    slab run when the tile-row's pixels are one output-row run inside the image, the zero block for a kernel row
+    outside it, else the unit's slot, which the reader gathers as before). Saves the reader's copy of most tap blocks,
+    which is what paces the N-slice prelude. Needs the tap-major gather."""
+    return (
+        nslice
+        and _tap_major(g, bk)
+        and not face_direct_im2col(g, bk)
+        and not _row_split(g, bm, bk)
+        and not _strided_window(g, bk)
+    )
+
+
+def _src_table_bytes(ring_units):
+    return _div_up(ring_units * 16, 64) * 64
+
+
 def center_tap_mode(g: Conv3x3Geometry, bm, bk):
     """How the kw = 1 taps skip the tilize (see CENTER_TAP_DIRECT): they are whole input tile-rows (a vertical-only
     shift by whole tile-rows).
@@ -577,6 +597,7 @@ def _footprint(
         + (2 * slice_depth * bm * ns if nslice else bm * bn) * TILE_BYTES_FP32
         + combine_bytes
         + (0 if g.sharded_output else OUT_DEPTH_ROW_GROUPS * sb_h * bn * g.out_tile_bytes)
+        + (_src_table_bytes(im2col_rm_depth_rows) if _tap_direct(g, bm, bk, nslice) else 0)
     )
     return dict(
         num_k_blocks=num_k_blocks,
@@ -1000,6 +1021,9 @@ def create_program_descriptor(
         )
     elif tap_major_im2col(g, b):
         cbs.append(_cb(CB_ZERO_SRC, ttnn.bfloat16, pixel_bytes, TILE, cores))
+    tap_direct = _tap_direct(g, bm, bk, b.nslice)
+    if tap_direct:
+        cbs.append(_cb(CB_SRC_TABLE, ttnn.bfloat16, 64, _src_table_bytes(b.im2col_rm_depth_rows) // 64, cores))
     center_mode = b.center_mode
     if center_mode == CENTER_K_BLOCK:
         cbs.append(_cb(CB_CENTER_TILES, input_tensor.dtype, g.in0_tile_bytes, bm * bk, cores))
@@ -1118,6 +1142,8 @@ def create_program_descriptor(
             center_mode,
             CB_CENTER_TILES,
             int(b.ring),
+            int(tap_direct),
+            CB_SRC_TABLE,
         ]
         args.extend(ttnn.TensorAccessorArgs(input_tensor).get_compile_time_args())
         return args
@@ -1161,6 +1187,9 @@ def create_program_descriptor(
         center_mode,
         CB_CENTER_TILES,
         int(b.ring),
+        int(tap_direct),
+        CB_SRC_TABLE,
+        b.im2col_rm_depth_rows,
     ]
 
     writer_ct_args = [
