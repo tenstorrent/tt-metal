@@ -145,11 +145,14 @@ def _host_shard(array: np.ndarray, dtype_name: str):
 
 
 def _same_spec(a, b) -> bool:
+    """Whether two tensors have the same ``TensorSpec``: dtype, layout, shape, tile, memory config and alignment."""
+    return a.spec == b.spec
+
+
+def _describe_spec(t) -> str:
     return (
-        a.dtype == b.dtype
-        and a.layout == b.layout
-        and list(a.shape) == list(b.shape)
-        and str(a.memory_config()) == str(b.memory_config())
+        f"{t.dtype}, {t.layout}, shape {list(t.shape)} padded to {list(t.padded_shape)}, {t.spec.tile}, "
+        f"{t.memory_config()}"
     )
 
 
@@ -168,8 +171,8 @@ def _place(live: LiveTensor, arrays: dict[tuple, np.ndarray], device) -> None:
         on_device = ttnn.to_memory_config(on_device, value.memory_config())
     if not _same_spec(on_device, value):
         raise CheckpointError(
-            f"{live.key}: the restored tensor ({on_device.dtype}, {on_device.layout}, {list(on_device.shape)}) does not match "
-            f"the live tensor ({value.dtype}, {value.layout}, {list(value.shape)})"
+            f"{live.key}: the restored tensor ({_describe_spec(on_device)}) does not match the live tensor "
+            f"({_describe_spec(value)})"
         )
     live.tensor.set_value(on_device)
     check_label_unchanged(live, "after set_value")
