@@ -105,6 +105,12 @@ FORCE_INLINE void v_rs_send(uint32_t part, uint32_t r0, uint32_t r1, uint32_t ni
     noc_async_write_barrier();
     for (uint32_t r = r0; r < r1; ++r) noc_semaphore_inc(get_noc_addr(cx, cy[r], rs_word), 1);
 }
+#if defined(MK_VRS_NOC0)   // E1_VRS_NOC0: the writer sends both halves; one out-of-line copy (writer text budget)
+__attribute__((noinline)) void v_rs_send_ni(uint32_t part, uint32_t r0, uint32_t r1, uint32_t nitem, uint32_t ipt, const uint32_t* cy,
+                                            uint32_t cx, uint32_t rsbuf, uint32_t k, uint32_t R, uint32_t rs_word) {
+    v_rs_send(part, r0, r1, nitem, ipt, cy, cx, rsbuf, k, R, rs_word);
+}
+#endif
 // h all-gather: h_k (one tile) to column rows [r0, r1), then H += 1 on each
 FORCE_INLINE void v_hu_send(uint32_t src, uint32_t r0, uint32_t r1, const uint32_t* cy, uint32_t cx, uint32_t hdst,
                             uint32_t R, uint32_t h_word) {

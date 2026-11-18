@@ -443,6 +443,11 @@ def setup_bench(dev, MESH, mesh_identity):
         assert all(((AMASK >> L_) & 1) == ((AMASK >> (L_ % 32)) & 1) for L_ in range(NL)), \
             f"NL64: MK_AMASK {AMASK:#x} must repeat with period 32 over NL={NL} layers (e.g. 0x8888888888888888)"
         MKDEF += [('MKA_LPER', '1'), ('MKA_NA_PASS', str(sum((AMASK >> L_) & 1 for L_ in range(NL))))]
+    # hang arm (default off): the split-K column reduce-scatter + h all-gather 'rows above' sends move from the STREAM reader (NOC1) to the writer (NOC0)
+    # hang arm (default 1 = unchanged): 0 = the SDPA tree root's reader skips its DRAM copy of the attention output (`outs`, bench check only under
+    # MKA_RWO: the model's output goes to the owners' A rows) -- the last non-posted DRAM write on NOC1 in the attention kernels (tt-metal #66031)
+    if os.environ.get('E1_ATT_OUTW', '1') == '0': MKDEF += [('MK_ATT_OUTW_OFF', '1')]; print('[mk1] E1_ATT_OUTW=0: no attention `outs` DRAM write on the reader (NOC1)', flush=True)
+    if os.environ.get('E1_VRS_NOC0', '0') == '1': MKDEF += [('MK_VRS_NOC0', '1')]; print('[mk1] E1_VRS_NOC0=1: column RS / h sends all on the writer (NOC0)', flush=True)
     if os.environ.get('MKA_EXT_LEANZ', '0') == '1': MKDEF += [('MKA_EXT_LEANZ', '1')]
     if os.environ.get('MKA_STREAM_LEANZ', '0') == '1': MKDEF += [('MKA_STREAM_LEANZ', '1')]   # profiled runs: STREAM DM zones out (W-ARWAIT kept)   # profiled runs: EXT DM zones out (mka2_common.hpp MKZ)
     print(f'[mk1] defines {MKDEF}', flush=True)
@@ -2105,7 +2110,7 @@ def setup_bench(dev, MESH, mesh_identity):
             cgar = role == 'r' and os.environ.get('MK_CGAR_EARLY', '0') == '1'
             if cgar:
                 assert _gar and (gmask & a2) == gmask, "MK_CGAR_EARLY needs MK_REAL_GAR (2 ARs on every GDN-type layer, the GAR first)"
-                assert 'GDN_SP_RD' in str(list(kd.defines)), "MK_CGAR_EARLY: the hook sits before the reader's S' write-back (GDN_SP_RD)"
+                assert 'GDN_SP_RD' in str(list(kd.defines)) or os.environ.get('E1_SP_RD', '1') == '0', "MK_CGAR_EARLY: the hook sits before the reader's S' write-back (GDN_SP_RD; E1_SP_RD=0 = hang arm, S' on the writer / NOC0: the hook keeps its place, gdn_pre_sp_hook() does not depend on rd_sp)"
             ar_it0 = ('g_cgar_done' if cgar else '0')
             new_loop = (f'\n  {obj}\n  ar_s.init(0, {nc});\n  uint32_t ar_it = 0, gL = 0;\n'
                         + ('  g_cgar_s = &ar_s; g_cgar_it = &ar_it;\n' if cgar else '') +

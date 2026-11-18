@@ -700,10 +700,12 @@ void kernel_main() {
             V_NB_WAIT_VA();
             cb_wait_front(CB_VA, V_NTM);
             *vw(vg[VG_LA]) = 2 * L + 1;
+#if !defined(MK_VRS_NOC0)   // E1_VRS_NOC0: the writer (NOC0) sends the rows above as well
 #if defined(MK_GDN_INPROJ)
             v_rs_send(get_read_ptr(CB_VA), 0, vk, att ? qsk_nt(vn) : gnt, 1, vcy, vcx, vrsbuf, vk, vR, vg[VG_RS]);
 #else
             v_rs_send(get_read_ptr(CB_VA), 0, vk, qsk_nt(vn), 1, vcy, vcx, vrsbuf, vk, vR, vg[VG_RS]);
+#endif
 #endif
             noc_semaphore_wait_min(vw(vg[VG_LB]), 2 * L + 1);
             cb_pop_front(CB_VA, V_NTM);
@@ -930,7 +932,11 @@ void kernel_main() {
             if (is_root) {
                 cb_wait_front(CB_OA, DH);
                 const uint32_t rp = get_read_ptr(CB_OA);
+#if defined(MK_ATT_OUTW_OFF) && defined(MKA_RWO)   // E1_ATT_OUTW=0 (hang arm, #66031): no non-posted DRAM write on NOC1; A rows below carry the output
+                (void)out;
+#else
                 for (uint32_t t = 0; t < DH; ++t) noc_async_write(rp + t * OATB, out.get_noc_addr((L * NUSR + user) * DH + t), OATB);
+#endif
 #if defined(MKA_RWO)
                 {   // O rows (4h + j, head h, candidate j) -> A rows 4u + j, cols h * 256 + t * 32 (tile h * 8 + t): 128 B blocks
                     noc_semaphore_wait_min(l1w(gs[GS_AADDR]), 1);
@@ -1034,12 +1040,18 @@ void kernel_main() {
             V_NB_WAIT_VA();
             cb_wait_front(CB_VA, V_NTM);
             *vw(vg[VG_LA]) = V_LV(L);
+#if !defined(MK_VRS_NOC0)
             v_rs_send(get_read_ptr(CB_VA), 0, vk < vnn ? vk : vnn, vnn, 2, vcy, vcx, vrsbuf, vk, vR, vg[VG_RS]);   // rows above (NOC1)
+#else
+            (void)vrsbuf; (void)vhbuf; (void)vcy; (void)vcx;   // the writer sends (NOC0)
+#endif
             noc_semaphore_wait_min(vw(vg[VG_LB]), V_LV(L));
             cb_pop_front(CB_VA, V_NTM);
             if (vk < vnn) {
                 cb_wait_front(CB_VHO2, 1);
+#if !defined(MK_VRS_NOC0)
                 if (vk > 0) { v_hu_send(get_read_ptr(CB_VHO2), 0, vk, vcy, vcx, vhbuf + vk * V_PTB, vR, vg[VG_H]); }
+#endif
                 cb_pop_front(CB_VHO2, 1);
             }
             cb_wait_front(CB_VDO2, V_OT);

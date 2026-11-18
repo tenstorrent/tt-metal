@@ -1209,7 +1209,15 @@ void kernel_main() {
 #endif
             if (mrs) {
                 noc_semaphore_wait_min(vw(vg[VG_LA]), 2 * L + 1);
+#if defined(MK_VRS_NOC0)   // hang arm (E1_VRS_NOC0): the rows above too (the reader / NOC1 sends nothing in the column RS)
 #if defined(MK_GDN_INPROJ)
+                v_rs_send_ni(vabase, 0, vk, att ? qsk_nt(vn) : gnt, 1, vcy, vcx, vrsbuf, vk, vR, vg[VG_RS]);
+                v_rs_send_ni(vabase, vk + 1, V_NROW, att ? qsk_nt(vn) : gnt, 1, vcy, vcx, vrsbuf, vk, vR, vg[VG_RS]);
+#else
+                v_rs_send_ni(vabase, 0, vk, qsk_nt(vn), 1, vcy, vcx, vrsbuf, vk, vR, vg[VG_RS]);
+                v_rs_send_ni(vabase, vk + 1, V_NROW, qsk_nt(vn), 1, vcy, vcx, vrsbuf, vk, vR, vg[VG_RS]);
+#endif
+#elif defined(MK_GDN_INPROJ)
                 v_rs_send(vabase, vk + 1, V_NROW, att ? qsk_nt(vn) : gnt, 1, vcy, vcx, vrsbuf, vk, vR, vg[VG_RS]);   // rows below (NOC0)
 #else
                 v_rs_send(vabase, vk + 1, V_NROW, qsk_nt(vn), 1, vcy, vcx, vrsbuf, vk, vR, vg[VG_RS]);   // rows below (NOC0)
@@ -1713,7 +1721,12 @@ void kernel_main() {
             }
 #endif
             noc_semaphore_wait_min(vw(vg[VG_LA]), V_LV(L));
+#if defined(MK_VRS_NOC0)   // hang arm (E1_VRS_NOC0): the rows above too (reader / NOC1: no column RS / h sends)
+            v_rs_send_ni(vabase, 0, vk < vnn ? vk : vnn, vnn, 2, vcy, vcx, vrsbuf, vk, vR, vg[VG_RS]);
+            v_rs_send_ni(vabase, vk + 1, vnn, vnn, 2, vcy, vcx, vrsbuf, vk, vR, vg[VG_RS]);
+#else
             v_rs_send(vabase, vk + 1, vnn, vnn, 2, vcy, vcx, vrsbuf, vk, vR, vg[VG_RS]);   // rows below (NOC0)
+#endif
             *vw(vg[VG_LB]) = V_LV(L);
             if (own_h) {
 #if defined(MK_WMIX_MP) && defined(MKA_QSK)
@@ -1725,7 +1738,11 @@ void kernel_main() {
                 cb_reserve_back(CB_VRS, 2 * V_NROW);
                 cb_push_back(CB_VRS, 2 * V_NROW);
                 cb_wait_front(CB_VHO, 1);
+#if defined(MK_VRS_NOC0)
+                { v_hu_send(get_read_ptr(CB_VHO), 0, V_NROW, vcy, vcx, vhbuf + vk * V_PTB, vR, vg[VG_H]); }
+#else
                 { v_hu_send(get_read_ptr(CB_VHO), vk, V_NROW, vcy, vcx, vhbuf + vk * V_PTB, vR, vg[VG_H]); }
+#endif
                 cb_pop_front(CB_VHO, 1);
             }
 #if defined(MK_WMIX_MP) && defined(MKA_QSK)
