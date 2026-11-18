@@ -445,8 +445,9 @@ models:
     # 2385 -> 2463 (+78, PR #64830): K3.1 synthetic suite 47 (traced DSA replay 12 of it), K3.1 L24 / L24-128k
     # depth 45, K3 / K3.1 KV table rows 2 (94 min, 16 of it from existing headroom).
     # 2463 -> 2478 (+15, PR #63859): Kimi-K3 multi-user section (interleaved, packed and traced packed forwards).
-    bh_sc1: 2478
-    bh_sc1_high_power: 500
+    # 2478 -> 2497 (+19, PR #63262): GLM packed forwards (high_power 500 -> 580).
+    bh_sc1: 2497
+    bh_sc1_high_power: 580
     bh_sc4: 60
     wh_n150: 500
     wh_n150_civ2: 300
