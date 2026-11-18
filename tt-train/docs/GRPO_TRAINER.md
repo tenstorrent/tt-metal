@@ -227,6 +227,12 @@ Rules and limitations of `ttt_remote_async`, on top of those of `ttt_remote_sync
   around the dataset, so the prompts from its start are trained on again.
 - **A weight push waits while the previous push has not been consumed.** Rank 1
   installs weights only between batches, so a push can wait up to one generation.
+  When the rollout queue stays full for 0.5 s, rank 1 drops its batch, installs the
+  newest weights and generates a new batch. It logs a warning the first time.
+  `rollouts_dropped` does not count these drops.
+- **Shutdown waits for rank 1.** Rank 1 checks for the end of training only between
+  batches. So a shutdown on rank 0 can wait for up to two rank 1 generations and one
+  weight transfer.
 
 ---
 
