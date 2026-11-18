@@ -5066,3 +5066,42 @@ tasks:
       unwritten_records_changed_decoder_skip: == 0
       steady_wall_ms_p51200: '> 0'
       steady_wall_ms_p1024000: '> 0'
+- id: X.5
+  title: 'Full gate (owner 2026-11-18) on the final tree: full-target accuracy, full prefill 0 -> 1M, positions, determinism,
+    serving contract, outside-written history'
+  step: perf
+  deps:
+  - FIX.39
+  brief:
+    details: 'Owner 2026-11-18: after the rebase onto main 8a317f39a8d, Marko''s MoE block with split rows (hang fix),
+      non-matmul ops on 120 cores, STATIC_TABLES=off + the hidden history gather (item 4), INDEX_K_SOURCE=served
+      (item 3), the outside-history test (FIX.39) and the framework''s one-model-per-process batches (F269): X.3''s set
+      plus the serving checks, on the final tree.'
+  gate:
+    cmd: DS41_ENGRAM_TABLE=resident BRINGUP_RUNG=s56320 scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_ladder.py
+      && scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_determinism.py
+      && scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/test_determinism.py
+      && scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/test_decoder_skip_decode.py
+      && scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_contract.py
+      && scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/bringup/contract/test_adapter_acks.py
+      && scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/test_outside_history.py
+      && DS41_DECODER_SKIP=decode scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/test_skip_positions.py
+      && DS41_DECODER_SKIP=decode scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/test_full_prefill.py
+      && DS41_ENGRAM_TABLE=resident scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_positions.py
+    metrics:
+      err_layer_L*: <= limit
+      err_state_*_L*: <= limit
+      err_final_hidden: <= limit
+      top5_overlap: '>= limit'
+      determinism_max_abs_diff: == 0
+      determinism_max_abs_diff_decoder_skip: == 0
+      contract_checks_failed: == 0
+      acks_early: == 0
+      contract_checks_failed_decoder_skip: == 0
+      unwritten_records_changed_decoder_skip: == 0
+      outside_history_max_abs_diff: == 0
+      steady_wall_ms_p1024000: '> 0'
+      e2e_wall_s_p1024000: '> 0'
+      e2e_tok_s_p1024000: '> 0'
+      pos_chunk: '>= 1'
+  device: true
