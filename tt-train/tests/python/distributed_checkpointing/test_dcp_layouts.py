@@ -15,12 +15,10 @@ from dcp_oracle import canonical_of, device_global, per_shard_fused, world
 from ttml.distributed_checkpointing._boxes import Box, boxes_tile
 from ttml.distributed_checkpointing._errors import LayoutError
 from ttml.distributed_checkpointing._layouts import (
-    Compose,
     Identity,
     Pad,
     Segments,
     check_fused_segments,
-    compose,
     declared_transform,
     fused_segments,
     padded_extent,
@@ -99,36 +97,12 @@ def test_pad_clips_to_the_logical_extent_and_reports_padding(expect_error):
         transform_from_json({"kind": "pad", "dim": 2, "logical": 130, "padded": 192, "fill": "ones"})
 
 
-def test_compose_pad_then_segments_round_trips(expect_error):
-    # A vocab weight both padded and fused would be unusual; the point is that pieces chain through steps.
-    transform = compose(Pad(2, logical=24, padded=32), fused_segments(3, (8, 8), 2))
-    assert isinstance(transform, Compose)
-    canonical = np.arange(24 * 16, dtype=np.float32).reshape(1, 1, 24, 16)
-    device = np.full((1, 1, 32, 16), -1.0, dtype=np.float32)
-    device[:, :, :24, :] = per_shard_fused(canonical, (8, 8), 2, dim=3)
-
-    np.testing.assert_array_equal(canonical_of(device, transform, canonical.shape), canonical)
-    back = device_global(canonical, transform, device.shape, np.nan)
-    np.testing.assert_array_equal(back[:, :, :24, :], device[:, :, :24, :])
-    assert np.isnan(back[:, :, 24:, :]).all(), "padding rows have no canonical source"
-    assert transform.padding_boxes((1, 1, 32, 16)) == [Box((0, 0, 24, 0), (1, 1, 8, 16))]
-    with expect_error(LayoutError, "first step"):
-        Compose((fused_segments(3, (8, 8), 2), Pad(2, 24, 32))).padding_boxes((1, 1, 32, 16))
-
-
-def test_compose_drops_identities():
-    assert isinstance(compose(Identity(), Identity()), Identity)
-    pad = Pad(2, 4, 8)
-    assert compose(Identity(), pad) == pad
-
-
 @pytest.mark.parametrize(
     "transform",
     [
         Identity(),
         Pad(2, 130, 192, "zeros"),
         fused_segments(2, (4, 2, 2), 2),
-        compose(Pad(2, 24, 32), fused_segments(3, (8, 8), 2)),
     ],
 )
 def test_transforms_round_trip_through_json(transform):
@@ -156,10 +130,6 @@ def test_declared_transform_from_declarations(expect_error):
     assert declared_transform((1, 1, 64, 32), FSDP2_TP4_COLS, fused=(2, (32, 16, 16))) == fused_segments(
         2, (32, 16, 16), 4
     ), "FSDP on the columns leaves the fused rows to TP"
-    # Fusion and padding along different dims compose.
-    both = declared_transform((1, 1, 64, 192), TP4, fused=(2, (32, 16, 16)), logical_extent=(3, 130))
-    assert both == compose(Pad(3, 130, 192), fused_segments(2, (32, 16, 16), 4))
-    assert both.canonical_shape((1, 1, 64, 192)) == (1, 1, 64, 130)
     with expect_error(LayoutError, "sum to"):
         declared_transform((1, 1, 64, 32), TP4, fused=(2, (32, 16)))
 
@@ -171,7 +141,7 @@ def test_declared_dims_count_from_the_end_and_are_range_checked(expect_error):
     fsdp2_rows_tp4 = world([Placement.shard(2), Placement.shard(2)], (2, 4))
     with expect_error(LayoutError, "2 mesh axes shard"):
         declared_transform((1, 1, 64, 32), fsdp2_rows_tp4, fused=(-2, (32, 16, 16)))
-    with expect_error(LayoutError, "both declared on dim 2"):
+    with expect_error(LayoutError, r"fused_segments \(dim 2\) and logical_extent \(dim 2\) both declared"):
         declared_transform((1, 1, 64, 32), TP4, fused=(-2, (32, 16, 16)), logical_extent=(2, 60))
     with expect_error(LayoutError, "model/w: fused_segments declares dim 5, out of range for a rank-4 tensor"):
         declared_transform((1, 1, 64, 32), TP4, fused=(5, (32, 16, 16)), key="model/w")
@@ -187,9 +157,11 @@ def test_declaration_errors_name_the_key(expect_error):
 
 
 def test_declared_transform_refuses_layouts_it_cannot_describe(expect_error):
-    # A fused weight padded along its fused dim: every TP shard would carry its own padding inside its segments.
-    with expect_error(LayoutError, "both declared on dim 2"):
-        declared_transform((1, 1, 64, 32), TP4, fused=(2, (32, 16, 16)), logical_extent=(2, 60))
+    # A weight both fused and padded, along one dim or two: no layer declares one, and no transform describes it.
+    with expect_error(LayoutError, r"model/w: fused_segments \(dim 2\) and logical_extent \(dim 2\) both declared"):
+        declared_transform((1, 1, 64, 32), TP4, fused=(2, (32, 16, 16)), logical_extent=(2, 60), key="model/w")
+    with expect_error(LayoutError, r"fused_segments \(dim 2\) and logical_extent \(dim 3\) both declared"):
+        declared_transform((1, 1, 64, 192), TP4, fused=(2, (32, 16, 16)), logical_extent=(3, 130))
     # FSDP sharding the fused rows next to TP, which would make the label's count describe an interleave the weight
     # does not have: at TP 1 (fused_segments would claim 2 shards where the rows are canonical) and at TP 4.
     fsdp2_rows_tp1 = world([Placement.shard(2), Placement.shard(2)], (2, 1))

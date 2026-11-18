@@ -41,7 +41,7 @@ from ttml.distributed_checkpointing._errors import (
     TopologyError,
 )
 from ttml.distributed_checkpointing._index import ChunkRecord, data_file_name
-from ttml.distributed_checkpointing._layouts import Compose, Identity, Pad, fused_segments
+from ttml.distributed_checkpointing._layouts import Identity, Pad, fused_segments
 from ttml.distributed_checkpointing._planner import TensorInfo, _ChunkLookup, create_load_plan, create_save_plan
 from ttml.distributed_checkpointing._topology import Label, Placement, dist_coords
 
@@ -410,19 +410,6 @@ def test_a_renamed_tensor_loads_through_its_previous_live_name():
     )
     plan = create_load_plan(ckpt.index, [renamed])
     assert plan.keys["model/new"].entry.key == "model/old" and plan.missing == []
-
-
-def test_padding_through_a_compose_is_filled_with_zeros():
-    # Fusion on dim 2 and padding on dim 3 compose; a load that grows the padded extent fills the new padding.
-    tp2 = world([R(), S(2)], (1, 2))
-    src_t = Compose((Pad(3, 24, 32), fused_segments(2, (8, 8), 2)))
-    dst_t = Compose((Pad(3, 24, 40), fused_segments(2, (8, 8), 2)))
-    canonical = arange((1, 1, 16, 24))
-    ckpt = FakeCheckpoint()
-    ckpt.save({"w": (device_global(canonical, src_t, (1, 1, 16, 32), pad_value=-1.0), tp2, src_t)})
-    plan, shards = ckpt.load({"w": (tp2, dst_t, (1, 1, 16, 40))})
-    assert plan.keys["w"].fills and all(f.fill == "zeros" for f in plan.keys["w"].fills)
-    assert_shards_equal(shards["w"], expected_shards(device_global(canonical, dst_t, (1, 1, 16, 40), 0.0), tp2))
 
 
 def test_live_keys_resolve_tied_names():

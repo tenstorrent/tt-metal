@@ -40,7 +40,7 @@ from ._errors import (
     TopologyError,
 )
 from ._index import FORMAT, VERSION, ChunkRecord, Entry, Index
-from ._layouts import Compose, Pad, Transform
+from ._layouts import Pad, Transform
 from ._safetensors import ITEMSIZE, build_header
 from ._topology import (
     Chunk,
@@ -292,10 +292,6 @@ class LoadPlan:
 def _padding_fill(transform: Transform) -> str:
     if isinstance(transform, Pad):
         return transform.fill
-    if isinstance(transform, Compose):
-        for step in transform.steps:
-            if isinstance(step, Pad):
-                return step.fill
     return "zeros"
 
 

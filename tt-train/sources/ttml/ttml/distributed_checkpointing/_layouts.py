@@ -190,66 +190,7 @@ class Segments:
         return {"kind": "segments", "dim": self.dim, "map": [list(t) for t in self.map]}
 
 
-@dataclass(frozen=True)
-class Compose:
-    """``steps`` applied in order on the way to canonical, in reverse on the way back."""
-
-    kind: ClassVar[str] = "compose"
-    steps: tuple["Transform", ...]
-
-    def _chain(self, box: Box, steps: Sequence["Transform"], forward: bool) -> list[Piece]:
-        pieces: list[Piece] = [(box, box)]
-        for step in steps:
-            next_pieces: list[Piece] = []
-            for origin, current in pieces:
-                for current_sub, mapped in step.to_canonical(current) if forward else step.from_canonical(current):
-                    next_pieces.append((origin.corresponding(current_sub, current), mapped))
-            pieces = next_pieces
-        return pieces
-
-    def to_canonical(self, box: Box) -> list[Piece]:
-        return self._chain(box, self.steps, forward=True)
-
-    def from_canonical(self, box: Box) -> list[Piece]:
-        return self._chain(box, tuple(reversed(self.steps)), forward=False)
-
-    def canonical_shape(self, global_shape: Sequence[int]) -> tuple[int, ...]:
-        shape = tuple(global_shape)
-        for step in self.steps:
-            shape = step.canonical_shape(shape)
-        return shape
-
-    def padding_boxes(self, global_shape: Sequence[int]) -> list[Box]:
-        # Padding boxes are reported in device coordinates, so only the first step may declare padding: a later
-        # step's padding would need mapping back through the steps before it.
-        boxes = list(self.steps[0].padding_boxes(global_shape))
-        shape = self.steps[0].canonical_shape(global_shape)
-        for step in self.steps[1:]:
-            if step.padding_boxes(shape):
-                raise LayoutError("compose: padding must be declared on the first step")
-            shape = step.canonical_shape(shape)
-        return boxes
-
-    def to_json(self) -> dict:
-        return {"kind": "compose", "steps": [s.to_json() for s in self.steps]}
-
-
-Transform = Union[Identity, Pad, Segments, Compose]
-
-
-def compose(*transforms: Transform) -> Transform:
-    """The composition of ``transforms`` with identities dropped: Identity, a single transform, or a Compose."""
-    steps: list[Transform] = []
-    for t in transforms:
-        if isinstance(t, Compose):
-            steps.extend(t.steps)
-        elif not isinstance(t, Identity):
-            steps.append(t)
-    if not steps:
-        return Identity()
-    if len(steps) == 1:
-        return steps[0]
-    return Compose(tuple(steps))
+Transform = Union[Identity, Pad, Segments]
 
 
 def transform_from_json(value: dict) -> Transform:
@@ -260,8 +201,6 @@ def transform_from_json(value: dict) -> Transform:
         return Pad(int(value["dim"]), int(value["logical"]), int(value["padded"]), str(value["fill"]))
     if kind == "segments":
         return Segments(int(value["dim"]), tuple(tuple(int(x) for x in t) for t in value["map"]))
-    if kind == "compose":
-        return Compose(tuple(transform_from_json(s) for s in value["steps"]))
     raise LayoutError(f"unknown transform kind {kind!r}")
 
 
@@ -339,9 +278,10 @@ def declared_transform(
       not have, and a load onto another TP size would scramble the segments. ``fully_shard`` cannot build such a
       label: it picks another dim by default, and with an explicit ``shard_dim`` on the fused rows ttnn's mesh mapper
       refuses two placements sharding one dim. The check guards labels built by hand.
-    - Fusion and padding on the same dim. Under TP every shard would hold its own padding inside its segments, which
-      neither ``Pad`` (a tail of padding rows) nor ``Segments`` describes. No layer builds such a weight today;
-      supporting one needs a transform for per-shard padding, and this refusal is the place to change.
+    - Fusion and padding together. No layer declares both, so no transform composes the two. On the same dim one
+      could not be composed anyway: under TP every shard would hold its own padding inside its segments, which
+      neither ``Pad`` (a tail of padding rows) nor ``Segments`` describes. A layer that needs both needs a new
+      transform, and this refusal is the place to change.
     """
     where = f"{key}: " if key else ""
     ndim = len(global_shape)
@@ -356,16 +296,15 @@ def declared_transform(
         fused = (resolve(fused[0], "fused_segments"), fused[1])
     if logical_extent is not None:
         logical_extent = (resolve(logical_extent[0], "logical_extent"), logical_extent[1])
-    if fused is not None and logical_extent is not None and int(fused[0]) == int(logical_extent[0]):
+    if fused is not None and logical_extent is not None:
         raise LayoutError(
-            f"{where}fused_segments and logical_extent both declared on dim {int(fused[0])}; a fused weight padded "
-            f"along its fused dim has no supported layout (each TP shard would carry its own padding)"
+            f"{where}fused_segments (dim {fused[0]}) and logical_extent (dim {logical_extent[0]}) both declared; no "
+            f"transform describes a weight that is both fused and padded"
         )
-    steps: list[Transform] = []
     if logical_extent is not None:
         dim, logical = logical_extent
         try:
-            steps.append(padded_extent(dim, logical, int(global_shape[dim])))
+            return padded_extent(dim, logical, int(global_shape[dim]))
         except LayoutError as err:
             raise LayoutError(f"{where}{err}") from None
     if fused is not None:
@@ -379,7 +318,7 @@ def declared_transform(
             )
         try:
             sizes = check_fused_segments(sizes, int(global_shape[dim]), label.shard_count(dim))
-            steps.append(fused_segments(dim, sizes, label.shard_count(dim)))
+            return fused_segments(dim, sizes, label.shard_count(dim))
         except LayoutError as err:
             raise LayoutError(f"{where}{err}") from None
-    return compose(*steps)
+    return Identity()
