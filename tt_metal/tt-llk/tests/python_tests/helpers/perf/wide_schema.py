@@ -160,7 +160,9 @@ DB_SCHEMA = [
     Column("rmsnorm_num_faces", "int64", True, "configuration"),
     Column("rmsnorm_num_tiles", "int64", True, "configuration"),
     Column("rmsnorm_preserve_src_zero_flag", "bool", True, "configuration"),
+    Column("scale_bf16", "int64", True, "configuration"),
     Column("sdpa_bcast_num_tiles", "int64", True, "configuration"),
+    Column("sdpa_fw_op", "string", True, "configuration"),
     Column("sfpu_bcast_dim", "string", True, "configuration"),
     Column("sign_magnitude", "bool", True, "configuration"),
     Column("srca_reuse_count", "int64", True, "configuration"),
@@ -204,6 +206,8 @@ DB_SCHEMA = [
     Column("x_stride", "int64", True, "configuration"),
     Column("chunk_size", "int64", True, "configuration"),
     Column("dest_tiles", "int64", True, "configuration"),
+    Column("h16_tile_index", "int64", True, "configuration"),
+    Column("hadamard_normalize", "bool", True, "configuration"),
     # timing (complete {mean, std} x base grid — see _TIMING_COLUMNS above)
     *_TIMING_COLUMNS,
     # ── provenance: stamped by the publish layer, never emitted by a test ──
