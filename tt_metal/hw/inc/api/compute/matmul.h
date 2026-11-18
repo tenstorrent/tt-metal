@@ -434,10 +434,11 @@ constexpr bool matmul_fe_tile_mop() {
     } else if constexpr (
         !row_mop_on && kt_key == 0 && MATH_FIDELITY == MathFidelity::LoFi && DST_SYNC_MODE == DstSync::SyncHalf &&
         matmul_fe_mark::is_used_d<8, K>(0) && !matmul_fe_mark::is_used_d<13, K>(0) &&
-        !matmul_fe_mark::is_used_d<15, K>(0)) {
+        !matmul_fe_mark::is_used_d<15, K>(0) && !matmul_kernel_lofi_mix(unpack_src_format)) {
         // LoFi half sync: the row form in a kernel with a constant block and no constant one-tile or kt-1 block, whose
         // call it slows (bmm's reload init passes its constant block through a helper's parameters, so tag 7 does not
-        // tell a run-time-block kernel)
+        // tell a run-time-block kernel); a kernel pairing a 32-bit operand with a fast one keeps the tile MOP (the row form hangs
+        // the 2D-mcast bmm of Float32 x Float16_b blocks of two or more rows)
         return false;
     } else {
         return llk_math_matmul_tile_mop<row_mop_on, kt_key, form_out>();
