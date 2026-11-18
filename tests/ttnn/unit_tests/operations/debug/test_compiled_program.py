@@ -130,7 +130,7 @@ def test_run_from_kernel_config_buffer(device, expect_error):
     descriptor = copy_descriptor(input_tensor, output_tensor, plain_cb())
     compiled = ttnn.experimental.compile_generic_op(io_tensors, descriptor)
     buffer = ttnn.experimental.create_kernel_config_buffer(compiled)
-    assert buffer.size > 0
+    assert buffer.max_size > 0
 
     ttnn.experimental.run_compiled_program(compiled, io_tensors, descriptor, kernel_config_buffer=buffer)
     assert torch.equal(output_of(device, output_tensor), data)

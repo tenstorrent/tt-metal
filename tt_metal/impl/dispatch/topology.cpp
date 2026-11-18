@@ -811,10 +811,7 @@ void DispatchTopology::compile_cq_programs() {
     // the dispatch kernels signal each other's program semaphores.
     const bool outgrows_window = std::any_of(programs.begin(), programs.end(), [](const auto& device_program) {
         const auto& [device, program] = device_program;
-        const auto& hal = MetalContext::instance(extract_context_id(device)).hal();
-        const uint32_t window = device->allocator_impl()->get_config().l1_unreserved_base -
-                                hal.get_dev_addr(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::KERNEL_CONFIG);
-        return experimental::LargestTensixKernelConfigBlock(*program) > window;
+        return !program->impl().kernel_config_fits_window(device, HalProgrammableCoreType::TENSIX);
     });
     if (outgrows_window) {
         TT_FATAL(

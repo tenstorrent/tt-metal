@@ -405,6 +405,10 @@ public:
     // which ValidateKernelConfigBuffer checks. Does nothing for a program that is not finalized.
     void check_kernel_config_fits_window(IDevice* device, bool tensix_from_buffer = false);
 
+    // Whether this program's kernel config fits the KERNEL_CONFIG window of `core_type` on `device`. The program
+    // must be finalized.
+    bool kernel_config_fits_window(IDevice* device, HalProgrammableCoreType core_type) const;
+
     // The same check for programs laid out together, as a MeshWorkload's are: `program` is any of them,
     // since they share one layout, and the getters name the kernels of all of them, for the error's
     // breakdown.
