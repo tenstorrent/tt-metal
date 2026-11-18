@@ -10,6 +10,9 @@
 namespace nb = nanobind;
 
 // BEGIN FORKED OPS (fork_op.py)
+namespace ttnn::operations::bringup::moe_block {
+void bind_moe_block(nb::module_& mod);
+}
 namespace ttnn::operations::bringup::slice_write {
 void bind_slice_write(nb::module_& mod);
 }
@@ -80,6 +83,7 @@ namespace ttnn::bringup {
 
 void py_module(nb::module_& mod) {
     // BEGIN FORKED OPS (fork_op.py)
+    ::ttnn::operations::bringup::moe_block::bind_moe_block(mod);
     ::ttnn::operations::bringup::slice_write::bind_slice_write(mod);
     ::ttnn::operations::bringup::detail::bind_nlp_create_qkv_heads(mod);
     ::ttnn::operations::bringup::detail::bind_rotary_embedding_indexed(mod);
