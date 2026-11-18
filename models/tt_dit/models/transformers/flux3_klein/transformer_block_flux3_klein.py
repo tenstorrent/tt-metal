@@ -33,6 +33,9 @@ RING_SDPA_CHUNKS_BY_LOCAL_ROWS: dict[int, tuple[int, int]] = {
     8192: (224, 512),
     8320: (224, 512),
     8960: (160, 512),
+    # DP4 (SP4 x TP2) at 4096, every image / joined row count: SP4 has no shared-table key, so its default k chunk is 256 where
+    # SP8 x TP4's is 512, and the extra softmax merges cost 7 dB of image vs SP8 x TP4 (job 219220: 28.4 -> 35.3 dB with these)
+    **{rows: (224, 512) for rows in (16384, 16640, 16896, 17408, 17920, 18432, 20736, 20992, 21504)},
 }
 # The ring all-gather keeps the CCL row's cores x < 4 with 2 links
 RING_SDPA_CCL_ROW_START_X = 4

@@ -43,7 +43,7 @@ def _reference(q, k, v, logical_n, rows_idx):
 @pytest.mark.timeout(2400)
 @pytest.mark.parametrize("device_params", [{**ring_params_8k, "l1_small_size": 65536}], indirect=True)
 @pytest.mark.parametrize("mesh_device", [(4, 8)], indirect=True)
-@pytest.mark.parametrize("rows", sorted(RING_SDPA_CHUNKS_BY_LOCAL_ROWS))
+@pytest.mark.parametrize("rows", sorted(TEXT_BUCKET_BY_ROWS))
 def test_ring_sdpa_flux3_klein(*, mesh_device: ttnn.MeshDevice, rows: int) -> None:
     q_chunk, k_chunk = RING_SDPA_CHUNKS_BY_LOCAL_ROWS[rows]
     bucket = TEXT_BUCKET_BY_ROWS[rows]
