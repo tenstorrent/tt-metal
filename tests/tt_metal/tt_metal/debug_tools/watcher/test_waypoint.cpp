@@ -182,7 +182,18 @@ void RunTest(MeshWatcherFixture* fixture, const std::shared_ptr<distributed::Mes
             FileContainsAllStrings(fixture->log_file_name, poll_strings);  // logs what's missing, and the file
         }
         ASSERT_LT(elapsed, timeout_ms) << "Timed out waiting for watcher to log " << waypoint << " waypoints";
-        std::this_thread::sleep_for(std::chrono::milliseconds(1000));
+        if (MetalContext::instance().rtoptions().get_simulator_enabled()) {
+            // A simulator only advances while the host clocks it, and this loop reads no device memory. Clock it
+            // here, or the workload takes minutes to reach the waypoint.
+            const auto& cluster = MetalContext::instance().get_cluster();
+            const auto device_id = mesh_device->get_device_ids()[0];
+            const auto clock_until = std::chrono::steady_clock::now() + std::chrono::milliseconds(1000);
+            while (std::chrono::steady_clock::now() < clock_until) {
+                cluster.advance_device_execution(device_id);
+            }
+        } else {
+            std::this_thread::sleep_for(std::chrono::milliseconds(1000));
+        }
     }
     log_info(tt::LogTest, "All patterns found!");
 
