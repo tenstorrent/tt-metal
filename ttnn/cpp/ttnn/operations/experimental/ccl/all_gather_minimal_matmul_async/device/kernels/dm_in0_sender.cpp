@@ -32,6 +32,14 @@ constexpr uint32_t K_block_tiles = get_compile_time_arg_val(5);
 constexpr uint32_t N_block_tiles = get_compile_time_arg_val(6);
 constexpr uint32_t out_piece_tiles = get_named_compile_time_arg_val("out_piece_w");  // the compute's output pieces
 constexpr bool mcast = get_named_compile_time_arg_val("mcast");  // blocks go along the row in one multicast
+// The core grid and the in0 chain through it, from which each core computes its own position (AgmmCore).
+constexpr bool transpose_grid = get_named_compile_time_arg_val("transpose_grid");
+constexpr uint32_t grid_x = get_named_compile_time_arg_val("grid_x");
+constexpr uint32_t N_tiles_per_core = get_named_compile_time_arg_val("N_tiles_per_core");
+constexpr uint32_t k_blocks_per_core = get_named_compile_time_arg_val("k_blocks_per_core");
+constexpr uint32_t K_blocks = get_named_compile_time_arg_val("K_blocks");
+constexpr uint32_t in0_chain_len = get_named_compile_time_arg_val("in0_chain_len");
+constexpr bool in0_chain_increasing = get_named_compile_time_arg_val("in0_chain_increasing");
 constexpr uint32_t N_blocks_per_core = get_compile_time_arg_val(7);
 constexpr uint32_t in0_tile_size = get_compile_time_arg_val(8);
 constexpr uint32_t out_tile_size = get_compile_time_arg_val(9);
@@ -140,25 +148,33 @@ void kernel_main() {
     const uint32_t forward_in0_core_order_index = get_common_arg_val<uint32_t>(device_arg_idx++);
     const uint32_t backward_in0_core_order_index = get_common_arg_val<uint32_t>(device_arg_idx++);
 
-    // Load per-core runtime args
-    uint32_t argidx = 0;
-    const uint32_t is_sink_core = get_arg_val<uint32_t>(argidx++);
-    const uint32_t in0_dest_noc_x = get_arg_val<uint32_t>(argidx++);
-    const uint32_t in0_dest_noc_y = get_arg_val<uint32_t>(argidx++);
-    const uint32_t in0_sender_noc_x = get_arg_val<uint32_t>(argidx++);
-    const uint32_t in0_sender_noc_y = get_arg_val<uint32_t>(argidx++);
+    // This core's position, in0 chain neighbours and N range. The common args end with the NoC coordinates of the
+    // grid's columns and rows.
+    const uint32_t noc_coords_arg = device_arg_idx;
+    const AgmmCore core = agmm_core<transpose_grid>();
+    const RelayChain in0_chain =
+        relay_chain<grid_x>(core, !transpose_grid, in0_chain_len, in0_chain_increasing, noc_coords_arg);
+    const uint32_t is_sink_core = in0_chain.is_sink;
+    const uint32_t in0_dest_noc_x = in0_chain.next_noc_x;
+    const uint32_t in0_dest_noc_y = in0_chain.next_noc_y;
+    const uint32_t in0_sender_noc_x = in0_chain.prev_noc_x;
+    const uint32_t in0_sender_noc_y = in0_chain.prev_noc_y;
     Semaphore<> in0_sender_sem(in0_sender_semaphore_id);
     Semaphore<> in0_receiver_sem(in0_receiver_semaphore_id);
     Semaphore<> in0_valid_sem(in0_valid_semaphore_id);
-    const uint32_t in0_idx = get_arg_val<uint32_t>(argidx++);
-    const uint32_t N_start_tile = get_arg_val<uint32_t>(argidx++);
-    const uint32_t N_end_tile = get_arg_val<uint32_t>(argidx++);
-    const uint32_t defer_write_k_block = get_arg_val<uint32_t>(argidx++);
-    const uint8_t out_ready_sem_noc0_x = get_arg_val<uint32_t>(argidx++);
-    const uint8_t out_ready_sem_noc0_y = get_arg_val<uint32_t>(argidx++);
-    const uint8_t out_ready_sem_injector_noc0_x = get_arg_val<uint32_t>(argidx++);
-    const uint8_t out_ready_sem_injector_noc0_y = get_arg_val<uint32_t>(argidx++);
-    const uint32_t in0_core_order_index = get_arg_val<uint32_t>(argidx++);
+    const uint32_t in0_idx = core.in0_idx;
+    const uint32_t N_start_tile = N_tiles_per_core * core.in1_idx;
+    const uint32_t N_end_tile = N_start_tile + N_tiles_per_core;
+    // Defer the write to the K block with the same coordinate as the core
+    const uint32_t defer_write_k_block = std::min(core.y * k_blocks_per_core, K_blocks - 1);
+    const uint8_t out_ready_sem_noc0_x = get_common_arg_val<uint32_t>(noc_coords_arg + core.x);
+    const uint8_t out_ready_sem_noc0_y = get_common_arg_val<uint32_t>(noc_coords_arg + grid_x + core.y);
+    const uint8_t out_ready_sem_injector_noc0_x = in0_chain.injector_noc_x;
+    const uint8_t out_ready_sem_injector_noc0_y = in0_chain.injector_noc_y;
+    const uint32_t in0_core_order_index = in0_chain.index;
+
+    // Per-core runtime args: a fabric sender core's mux connection (and Fabric2D role)
+    [[maybe_unused]] uint32_t argidx = 0;
 
     // Tensor accessor for input tensor
     constexpr auto in0_args = TensorAccessorArgs<ct_arg_count>();

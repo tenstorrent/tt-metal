@@ -161,15 +161,6 @@ static inline std::pair<std::vector<tt::tt_metal::CoreCoord>, uint32_t> build_co
     return {order, index_of_current};
 }
 
-static inline tt::tt_metal::CoreCoord clamped_prev(const std::vector<tt::tt_metal::CoreCoord>& order, uint32_t index) {
-    return order.at(index == 0 ? 0 : index - 1);
-}
-
-static inline tt::tt_metal::CoreCoord clamped_next(const std::vector<tt::tt_metal::CoreCoord>& order, uint32_t index) {
-    const uint32_t last = static_cast<uint32_t>(order.size() - 1);
-    return order.at(index >= last ? last : index + 1);
-}
-
 void fabric_mux_connection_ct_args(
     const uint32_t num_workers_per_link,
     const tt::tt_fabric::FabricMuxChannelType channel_type,
@@ -1431,10 +1422,31 @@ tt::tt_metal::ProgramDescriptor all_gather_minimal_matmul_async_factory_helper(
         }
     }
 
+    // The NoC coordinates of the grid's logical columns, then of its rows, after each data movement kernel's other
+    // common args: a core finds its chain neighbours' coordinates there (relay_chain in matmul_dataflow_common.hpp),
+    // which needs the logical-to-NoC map to be separable in x and y.
+    std::vector<uint32_t> grid_noc_coords;
+    grid_noc_coords.reserve(grid_size.x + grid_size.y);
+    for (uint32_t x = 0; x < grid_size.x; ++x) {
+        grid_noc_coords.push_back(static_cast<uint32_t>(device->worker_core_from_logical_core({x, 0}).x));
+    }
+    for (uint32_t y = 0; y < grid_size.y; ++y) {
+        grid_noc_coords.push_back(static_cast<uint32_t>(device->worker_core_from_logical_core({0, y}).y));
+    }
+    for (const auto& core : cores) {
+        const auto noc_core = device->worker_core_from_logical_core(core);
+        TT_FATAL(
+            noc_core.x == grid_noc_coords[core.x] && noc_core.y == grid_noc_coords[grid_size.x + core.y],
+            "all_gather_minimal_matmul_async: logical core {} is at NoC {}, not on its column's x and row's y",
+            core,
+            noc_core);
+    }
+
     // Common runtime args (same for all cores). Buffer addresses, global-semaphore addresses, the row
     // count M_tiles and the fused-ternary scalar are re-applied in override_runtime_arguments.
     // in0 common args: [in0_addr, in2_addr, in3_addr, sem_backward, sem_forward, barrier_sem, M_tiles,
-    // [ternary_a, ternary_b, broadcast], output_addrs...]
+    // [ternary_a, ternary_b, broadcast], output_addrs..., rank, forward route (2), backward route (2),
+    // in0 sender/receiver/valid semaphores, chain length, forward/backward fabric-sender positions, grid NoC coords...]
     {
         tt::tt_metal::KernelDescriptor::RTArgList in0_common_args;
         in0_common_args.push_back(in0_buffer);
@@ -1477,13 +1489,17 @@ tt::tt_metal::ProgramDescriptor all_gather_minimal_matmul_async_factory_helper(
         in0_common_args.push_back(in0_core_order_size);
         in0_common_args.push_back(in0_increasing ? in0_core_order_size - 1 : 1u);  // forward fabric sender
         in0_common_args.push_back(in0_increasing ? in0_core_order_size - 2 : 2u);  // backward fabric sender
+        for (const uint32_t coord : grid_noc_coords) {
+            in0_common_args.push_back(coord);
+        }
         desc.kernels[kIn0SenderKernelIdx].emplace_common_runtime_args(in0_common_args);
         desc.kernels[kIn0ReceiverFabricKernelIdx].emplace_common_runtime_args(in0_common_args);
         desc.kernels[kIn0ReceiverNoFabricKernelIdx].emplace_common_runtime_args(in0_common_args);
     }
 
     // in1 common args: [in1_addr, in2_addr, M_tiles, [ternary_a, ternary_b, broadcast_ternary_b],
-    //                   [local_weight_addr, fsdp_sem_backward, fsdp_sem_forward], output_addrs...]
+    //                   [local_weight_addr, fsdp_sem_backward, fsdp_sem_forward], output_addrs..., rank,
+    //                   in1 sender/receiver/valid semaphores, grid NoC coords...]
     {
         tt::tt_metal::KernelDescriptor::RTArgList in1_common_args;
         in1_common_args.push_back(in1_buffer);
@@ -1512,6 +1528,9 @@ tt::tt_metal::ProgramDescriptor all_gather_minimal_matmul_async_factory_helper(
         in1_common_args.push_back(in1_sender_semaphore_id);
         in1_common_args.push_back(in1_receiver_semaphore_id);
         in1_common_args.push_back(in1_valid_semaphore_id);
+        for (const uint32_t coord : grid_noc_coords) {
+            in1_common_args.push_back(coord);
+        }
         desc.kernels[kIn1SenderKernelIdx].emplace_common_runtime_args(in1_common_args);
         desc.kernels[kIn1ReceiverKernelIdx].emplace_common_runtime_args(in1_common_args);
     }
@@ -1554,7 +1573,6 @@ tt::tt_metal::ProgramDescriptor all_gather_minimal_matmul_async_factory_helper(
 
     for (uint32_t core_id = 0; core_id < num_cores; ++core_id) {
         tt::tt_metal::CoreCoord core = cores.at(core_id);
-        tt::tt_metal::CoreCoord virtual_core = device->worker_core_from_logical_core(core);
         uint32_t in0_idx = transpose_core_grid ? core.x : core.y;
         uint32_t in1_idx = transpose_core_grid ? core.y : core.x;
 
@@ -1577,11 +1595,6 @@ tt::tt_metal::ProgramDescriptor all_gather_minimal_matmul_async_factory_helper(
             /*axis_is_x_when_not_transposed=*/false,
             /*initial_endpoint=*/(transpose_core_grid ? left_core : top_core));
 
-        auto in0_prev_core = clamped_prev(in0_core_order, in0_core_order_index);
-        auto in0_next_core = clamped_next(in0_core_order, in0_core_order_index);
-        auto in1_prev_core = clamped_prev(in1_core_order, in1_core_order_index);
-        auto in1_next_core = clamped_next(in1_core_order, in1_core_order_index);
-
         // Fabric senders sit beside the mux at the in0 chain's far (high-coordinate) end
         const bool in0_increasing = (in0_noc == tt::tt_metal::NOC::NOC_0);
         const uint32_t in0_fwd_idx = in0_increasing ? static_cast<uint32_t>(in0_core_order.size() - 1) : 1u;
@@ -1590,46 +1603,9 @@ tt::tt_metal::ProgramDescriptor all_gather_minimal_matmul_async_factory_helper(
         const auto in0_fwd_core = in0_core_order.at(in0_fwd_idx);
         const auto in0_bwd_core = in0_core_order.at(in0_bwd_idx);
 
-        auto in0_prev_core_physical = device->worker_core_from_logical_core(in0_prev_core);
-        auto in0_next_core_physical = device->worker_core_from_logical_core(in0_next_core);
-        auto in1_prev_core_physical = device->worker_core_from_logical_core(in1_prev_core);
-        auto in1_next_core_physical = device->worker_core_from_logical_core(in1_next_core);
-
-        /**
-         * NOTE: Some cores are doing unnecessary work, on blocks which are processed just to make
-         * the total number of blocks divisible by the number of cores.
-         * We can't yet get rid of these blocks, since the receiver cores must ack
-         * all blocks that sender cores are expected to send.
-         * The M range is derived on device from in0_idx and the M_tiles common arg.
-         */
-        uint32_t N_start_tile = N_tiles_per_core * in1_idx;
-        uint32_t N_end_tile = N_tiles_per_core * (in1_idx + 1);
-
-        // Defer write to K block with same coordinate as core
-        // The writer receiver cores always have core.x > 0
-        uint32_t defer_write_k_block = core.y * k_blocks_per_core;
-        defer_write_k_block = std::min(defer_write_k_block, K_blocks - 1);
-
-        bool is_in0_sink = core == in0_core_order.back();
-        bool is_in1_sink = core == in1_core_order.back();
-
-        auto in0_injector_virtual_core = device->worker_core_from_logical_core(in0_core_order.front());
-        // Per-core args only (common values set via SetCommonRuntimeArgs above)
-        std::vector<uint32_t> in0_args = {
-            is_in0_sink,
-            (std::uint32_t)in0_next_core_physical.x,  // in0_dest_noc_x
-            (std::uint32_t)in0_next_core_physical.y,  // in0_dest_noc_y
-            (std::uint32_t)in0_prev_core_physical.x,  // in0_sender_noc_x
-            (std::uint32_t)in0_prev_core_physical.y,  // in0_sender_noc_y
-            in0_idx,
-            N_start_tile,
-            N_end_tile,
-            defer_write_k_block,
-            virtual_core.x,
-            virtual_core.y,
-            in0_injector_virtual_core.x,
-            in0_injector_virtual_core.y,
-            in0_core_order_index};
+        // Each core computes its position, chain neighbours, M/N ranges and deferred K block on device from its
+        // logical coordinates (AgmmCore in matmul_dataflow_common.hpp); per-core args carry only fabric connections.
+        std::vector<uint32_t> in0_args;
         if (in0_is_fabric_core) {
             uint32_t worker_idx = in0_idx % num_workers_per_link;
 
@@ -1700,30 +1676,12 @@ tt::tt_metal::ProgramDescriptor all_gather_minimal_matmul_async_factory_helper(
                 append_fabric_2d_roles(in0_args, is_in0_backward_sender);
             }
         }
-        if (in0_core_order_index == 0) {
-            // in0 sender
-            desc.kernels[kIn0SenderKernelIdx].emplace_runtime_args(core, as_runtime_args(in0_args));
-        } else if (in0_is_fabric_core) {
-            // in0 receiver fabric
-            desc.kernels[kIn0ReceiverFabricKernelIdx].emplace_runtime_args(core, as_runtime_args(in0_args));
-        } else {
-            // in0 receiver no fabric
-            desc.kernels[kIn0ReceiverNoFabricKernelIdx].emplace_runtime_args(core, as_runtime_args(in0_args));
+        if (!in0_args.empty()) {
+            const uint32_t in0_kernel = in0_core_order_index == 0 ? kIn0SenderKernelIdx : kIn0ReceiverFabricKernelIdx;
+            desc.kernels[in0_kernel].emplace_runtime_args(core, as_runtime_args(in0_args));
         }
 
-        // Per-core args only (common values set via SetCommonRuntimeArgs above)
-        auto in1_injector_virtual_core = device->worker_core_from_logical_core(in1_core_order.front());
-        std::vector<uint32_t> in1_args = {
-            is_in1_sink,
-            (std::uint32_t)in1_next_core_physical.x,  // in1_dest_noc_x
-            (std::uint32_t)in1_next_core_physical.y,  // in1_dest_noc_y
-            (std::uint32_t)in1_prev_core_physical.x,  // in1_sender_noc_x
-            (std::uint32_t)in1_prev_core_physical.y,  // in1_sender_noc_y
-            in0_idx,
-            N_start_tile,
-            N_end_tile,
-            defer_write_k_block,
-        };
+        std::vector<uint32_t> in1_args;
         // FSDP fabric senders are the in1 chain tail — the last two cores of in1_core_order, one per
         // direction (size-2 backward, size-1 forward). For a transpose grid the in1 chain runs along
         // X, so the tail relays a short horizontal NOC_1 hop to its mux in the freed last column (see
@@ -1761,6 +1719,8 @@ tt::tt_metal::ProgramDescriptor all_gather_minimal_matmul_async_factory_helper(
         // FSDP-only per-core args: kernel parses these under FSDP_FUSED. The two sender indices tell
         // the kernel which cores in this row's chain relay (backward / forward direction).
         if (fsdp_fused) {
+            const auto virtual_core = device->worker_core_from_logical_core(core);
+            const auto in1_injector_virtual_core = device->worker_core_from_logical_core(in1_core_order.front());
             in1_args.push_back(virtual_core.x);
             in1_args.push_back(virtual_core.y);
             in1_args.push_back(in1_injector_virtual_core.x);
@@ -1864,21 +1824,10 @@ tt::tt_metal::ProgramDescriptor all_gather_minimal_matmul_async_factory_helper(
                     in1_args);
             }
         }
-        if (in1_core_order_index == 0) {
-            // in1 sender
-            desc.kernels[kIn1SenderKernelIdx].emplace_runtime_args(core, as_runtime_args(in1_args));
-        } else {
-            // in1 receiver
-            desc.kernels[kIn1ReceiverKernelIdx].emplace_runtime_args(core, as_runtime_args(in1_args));
+        if (!in1_args.empty()) {
+            const uint32_t in1_kernel = in1_core_order_index == 0 ? kIn1SenderKernelIdx : kIn1ReceiverKernelIdx;
+            desc.kernels[in1_kernel].emplace_runtime_args(core, as_runtime_args(in1_args));
         }
-
-        // Per-core compute args (M_tiles and the scalar are in common args)
-        std::vector<uint32_t> compute_runtime_args = {
-            in0_idx,
-            N_start_tile,
-            N_end_tile,
-        };
-        desc.kernels[kComputeKernelIdx].emplace_runtime_args(core, as_runtime_args(compute_runtime_args));
     }
 
     for (const uint32_t k :
@@ -1889,6 +1838,18 @@ tt::tt_metal::ProgramDescriptor all_gather_minimal_matmul_async_factory_helper(
           kIn1ReceiverKernelIdx,
           kComputeKernelIdx}) {
         desc.kernels[k].named_compile_time_args = agmm_named_args;
+        // The grid and chains each core computes its own position from (AgmmCore in matmul_dataflow_common.hpp)
+        desc.kernels[k].named_compile_time_args.insert(
+            desc.kernels[k].named_compile_time_args.end(),
+            {{"transpose_grid", transpose_core_grid},
+             {"grid_x", static_cast<uint32_t>(grid_size.x)},
+             {"N_tiles_per_core", N_tiles_per_core},
+             {"k_blocks_per_core", k_blocks_per_core},
+             {"K_blocks", K_blocks},
+             {"in0_chain_len", in1_parallel_axis_cores},
+             {"in0_chain_increasing", in0_noc == tt::tt_metal::NOC::NOC_0},
+             {"in1_chain_len", in0_parallel_axis_cores},
+             {"in1_chain_increasing", in1_noc == tt::tt_metal::NOC::NOC_0}});
     }
 
     // in1 down each column from row 0, in0 along each row from x = 0; without multicast the channels are absent.

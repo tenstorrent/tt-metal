@@ -32,6 +32,14 @@ void kernel_main() {
     constexpr uint32_t out_piece_tiles = get_named_compile_time_arg_val("out_piece_w");  // the compute's output pieces
     constexpr bool mcast = get_named_compile_time_arg_val("mcast");  // blocks go down the column in one multicast
     constexpr uint32_t in1_chunk_w = get_named_compile_time_arg_val("in1_chunk_w");  // 0: whole in1 blocks
+    // The core grid and the in1 chain through it, from which each core computes its own position (AgmmCore).
+    constexpr bool transpose_grid = get_named_compile_time_arg_val("transpose_grid");
+    constexpr uint32_t grid_x = get_named_compile_time_arg_val("grid_x");
+    constexpr uint32_t N_tiles_per_core = get_named_compile_time_arg_val("N_tiles_per_core");
+    constexpr uint32_t k_blocks_per_core = get_named_compile_time_arg_val("k_blocks_per_core");
+    constexpr uint32_t K_blocks = get_named_compile_time_arg_val("K_blocks");
+    constexpr uint32_t in1_chain_len = get_named_compile_time_arg_val("in1_chain_len");
+    constexpr bool in1_chain_increasing = get_named_compile_time_arg_val("in1_chain_increasing");
     constexpr uint32_t in1_chunks = N_block_tiles / (in1_chunk_w > 0 ? in1_chunk_w : N_block_tiles);  // 1: whole
     constexpr uint32_t N_blocks_per_core = get_compile_time_arg_val(7);
     constexpr uint32_t in1_tile_size = get_compile_time_arg_val(8);
@@ -109,20 +117,28 @@ void kernel_main() {
     const uint32_t in1_receiver_semaphore_id = get_common_arg_val<uint32_t>(out_addr_common_arg_start + N_chunks + 2);
     const uint32_t in1_valid_semaphore_id = get_common_arg_val<uint32_t>(out_addr_common_arg_start + N_chunks + 3);
 
-    // Load per-core runtime args
-    uint32_t argidx = 0;
-    const uint32_t is_sink_core = get_arg_val<uint32_t>(argidx++);
-    const uint32_t in1_dest_noc_x = get_arg_val<uint32_t>(argidx++);
-    const uint32_t in1_dest_noc_y = get_arg_val<uint32_t>(argidx++);
-    const uint32_t in1_sender_noc_x = get_arg_val<uint32_t>(argidx++);
-    const uint32_t in1_sender_noc_y = get_arg_val<uint32_t>(argidx++);
+    // This core's position, in1 chain neighbours and N range. The common args end with the NoC coordinates of the
+    // grid's columns and rows.
+    const uint32_t noc_coords_arg = out_addr_common_arg_start + N_chunks + 4;
+    const AgmmCore core = agmm_core<transpose_grid>();
+    const RelayChain in1_chain =
+        relay_chain<grid_x>(core, transpose_grid, in1_chain_len, in1_chain_increasing, noc_coords_arg);
+    const uint32_t is_sink_core = in1_chain.is_sink;
+    const uint32_t in1_dest_noc_x = in1_chain.next_noc_x;
+    const uint32_t in1_dest_noc_y = in1_chain.next_noc_y;
+    const uint32_t in1_sender_noc_x = in1_chain.prev_noc_x;
+    const uint32_t in1_sender_noc_y = in1_chain.prev_noc_y;
     Semaphore<> in1_sender_sem(in1_sender_semaphore_id);
     Semaphore<> in1_receiver_sem(in1_receiver_semaphore_id);
     Semaphore<> in1_valid_sem(in1_valid_semaphore_id);
-    const uint32_t in0_idx = get_arg_val<uint32_t>(argidx++);
-    const uint32_t N_start_tile = get_arg_val<uint32_t>(argidx++);
-    const uint32_t N_end_tile = get_arg_val<uint32_t>(argidx++);
-    const uint32_t defer_write_k_block = get_arg_val<uint32_t>(argidx++);
+    const uint32_t in0_idx = core.in0_idx;
+    const uint32_t N_start_tile = N_tiles_per_core * core.in1_idx;
+    const uint32_t N_end_tile = N_start_tile + N_tiles_per_core;
+    // Defer the write to the K block with the same coordinate as the core
+    const uint32_t defer_write_k_block = std::min(core.y * k_blocks_per_core, K_blocks - 1);
+
+    // Per-core runtime args: FSDP's chain positions and a fabric sender core's mux connection
+    [[maybe_unused]] uint32_t argidx = 0;
 
 #ifdef FSDP_FUSED
     const uint32_t my_virtual_x = get_arg_val<uint32_t>(argidx++);
