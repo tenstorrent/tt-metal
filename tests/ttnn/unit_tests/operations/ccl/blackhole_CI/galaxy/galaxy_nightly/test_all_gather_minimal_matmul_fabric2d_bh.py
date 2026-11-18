@@ -292,3 +292,13 @@ def test_all_gather_minimal_matmul_fabric2d_transposed(mesh_device, case):
 )
 def test_all_gather_minimal_matmul_fabric2d_transposed_linear(mesh_device, case):
     _run(mesh_device, **case)
+
+
+@pytest.mark.parametrize(
+    "mesh_device, device_params", [_galaxy(ttnn.FabricConfig.FABRIC_2D_TORUS_Y, "SP8xTP4-torus-y")], indirect=True
+)
+@pytest.mark.parametrize("case", [pytest.param(_KDA, id="grid"), pytest.param(_TRANSPOSED, id="transposed_grid")])
+def test_all_gather_minimal_matmul_fabric2d_linear_tp2_submeshes(mesh_device, case):
+    # Data parallel over four (4, 2) submeshes, a model on each: K gathered over a Linear line of 2 devices.
+    for submesh in mesh_device.create_submeshes(ttnn.MeshShape(4, 2)):
+        _run(submesh, **dict(case, topology=ttnn.Topology.Linear, K=3072))
