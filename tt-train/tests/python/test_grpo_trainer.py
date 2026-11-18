@@ -36,7 +36,6 @@ import contextlib
 import json
 import os
 import queue
-import struct
 import threading
 from types import SimpleNamespace
 
@@ -74,6 +73,7 @@ from ttml.trainers.grpo_trainer.remote_rollout import (
 from ttml.trainers.grpo_trainer.remote_rollout.async_remote_rollout_batch_source import AsyncRemoteRolloutBatchSource
 from ttml.trainers.grpo_trainer.remote_rollout.rollout_queue import RolloutQueue
 from ttml.trainers.grpo_trainer.remote_rollout.sync_remote_rollout_batch_source import SyncRemoteRolloutBatchSource
+from ttml.trainers.grpo_trainer.remote_rollout.transport import send_frame
 from ttml.trainers.grpo_trainer.remote_rollout.weight_bridge import TTML_RANK, TTT_RANK, _torch_save_bytes
 from ttml.trainers.grpo_trainer.rollout_batch_source import (
     InProcessRolloutBatchSource,
@@ -1617,7 +1617,7 @@ def test_threaded_weight_bridge_receiver_locks_trace_capture_until_close(monkeyp
     assert ttnn.begin_trace_capture is threaded_weight_bridge._begin_trace_capture
     sender.close()  # sends the 0-length manifest that ends the receiver loop
 
-    receiver = bridge.receiver(peer_rank=TTML_RANK, mesh_device=None, submeshes=[None])
+    receiver = bridge.receiver(peer_rank=TTML_RANK, submeshes=[None])
     receiver.connect()
     assert ttnn.begin_trace_capture is threaded_weight_bridge._begin_trace_capture_locked
     assert ttnn.end_trace_capture is threaded_weight_bridge._end_trace_capture_locked
@@ -1641,15 +1641,11 @@ def test_threaded_weight_bridge_receiver_waits_for_the_cq0_reads_before_the_next
         threaded_weight_bridge, "duplicate_distributed_context", lambda: _LoopbackContext(TTT_RANK, queues)
     )
     trainer = _LoopbackContext(TTML_RANK, queues)
-    receiver = threaded_weight_bridge.ThreadedWeightBridge.receiver(
-        peer_rank=TTML_RANK, mesh_device=None, submeshes=["submesh"]
-    )
+    receiver = threaded_weight_bridge.ThreadedWeightBridge.receiver(peer_rank=TTML_RANK, submeshes=["submesh"])
     receiver.connect()
 
     def send(blob, len_tag, body_tag):
-        trainer.send(struct.pack("<Q", len(blob)), TTT_RANK, len_tag)
-        if blob:
-            trainer.send(blob, TTT_RANK, body_tag)
+        send_frame(trainer.send, blob, TTT_RANK, len_tag, body_tag)
 
     entry = {"key": "w", "shape": [1], "dtype": "BFLOAT16", "layout": "TILE"}
     for version in (1, 2):
