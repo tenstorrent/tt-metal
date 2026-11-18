@@ -20,7 +20,10 @@ grid row r and channel slice c of the input. It runs the same pipeline over its 
 column's weight K-slice and hands its fp32 partials [bm, all C_out] to the writer, which scatters N-slice
 y to column y of the same grid row (row-local reduce-scatter, two semaphores per core). Column y sums the
 k_cols contributions, adds bias, applies ReLU and packs its output shard [bm, out_n_tiles] in place. A
-single shard column is R2 on that column.
+single shard column is R2 on that column. The M split runs down the fewest grid rows, from the shard grid's first
+row to the device edge, that give the fewest output tile-rows per row (block_compute_rows); where those rows are not
+the output's shard rows, column y packs its finished block into a local CB and the writer NoC-writes each tile to
+the output shard that holds it (the output keeps the input's shard grid, shard shape and orientation).
 """
 
 from __future__ import annotations
@@ -242,6 +245,9 @@ class Conv3x3Geometry:
     sharded_output: bool = False
     # Core columns K's channel component is split over (BLOCK_SHARDED: one input shard column each).
     k_cols: int = 1
+    # K split on more grid rows than the output has shard rows (block_compute_rows): cb_output_tiles is a local CB of
+    # one [bm, out_n] block, which the writer stores to the output shards.
+    remote_output: bool = False
 
     @property
     def k_split(self):
@@ -673,7 +679,11 @@ def _footprint(
         + (ns * g.weight_tile_bytes if g.has_bias else 0)
         + (RING_TOKEN_BYTES + TILE_BYTES_FP32 if nslice else bm * bn * TILE_BYTES_FP32)
         + combine_bytes
-        + (0 if g.sharded_output else OUT_DEPTH_ROW_GROUPS * sb_h * bn * g.out_tile_bytes)
+        + (
+            bm * ns * g.out_tile_bytes
+            if g.remote_output
+            else (0 if g.sharded_output else OUT_DEPTH_ROW_GROUPS * sb_h * bn * g.out_tile_bytes)
+        )
         + (
             (_tap_direct_fifo_units(g, bm, bk, nslice) * 16 or _src_table_bytes(im2col_rm_depth_rows))
             if _tap_direct(g, bm, bk, nslice)
@@ -879,6 +889,34 @@ def shard_cores(tensor):
     return ttnn.corerange_to_cores(spec.grid, None, spec.orientation == ttnn.ShardOrientation.ROW_MAJOR)
 
 
+def block_compute_rows(shard_spec, device_grid, tensor_m_tiles):
+    """Grid rows the K split's M split runs down: the fewest rows, from the shard grid's first row to the device edge
+    along its M axis (y on a ROW_MAJOR grid, x on COL_MAJOR), that reach the fewest output tile-rows per row; the shard
+    rows unless more rows lower that. Every row of the K split is k_cols cores, one per channel slice; rows past the
+    shard grid read their whole slab from the column's owner shards, like any halo. The walk, untilize and tilize are
+    M-proportional (aspp.convs @ LoFi: 64 tile-rows on 10 rows of 7 instead of 8 rows of 8, -7 to -9%)."""
+    rows, _ = block_grid_shape(shard_spec)
+    start = shard_spec.grid.bounding_box().start
+    if shard_spec.orientation == ttnn.ShardOrientation.ROW_MAJOR:
+        max_rows = device_grid.y - start.y
+    else:
+        max_rows = device_grid.x - start.x
+    best = rows
+    for r in range(rows + 1, max_rows + 1):
+        if _div_up(tensor_m_tiles, r) < _div_up(tensor_m_tiles, best):
+            best = r
+    return best
+
+
+def block_core(shard_spec, row, col):
+    """Core of BLOCK grid position (row, col), rows past the shard grid included: a ROW_MAJOR grid runs the rows down y
+    (shard (h, w) on (x0 + w, y0 + h)), COL_MAJOR down x."""
+    start = shard_spec.grid.bounding_box().start
+    if shard_spec.orientation == ttnn.ShardOrientation.ROW_MAJOR:
+        return ttnn.CoreCoord(start.x + col, start.y + row)
+    return ttnn.CoreCoord(start.x + row, start.y + col)
+
+
 def block_grid_shape(shard_spec):
     """(rows, cols) of a BLOCK shard grid. Shard (h, w) sits on shard core h * cols + w: a ROW_MAJOR
     orientation runs the height shards down the grid's y axis, COL_MAJOR down its x axis."""
@@ -1010,8 +1048,8 @@ def _work_items(input_tensor, g: Conv3x3Geometry, b: Conv3x3Blocking):
     [i * core_m_tiles, ...); under a K split all k_cols cores of grid row i share it."""
     if not g.k_split:
         return [(core, i, 0) for i, core in enumerate(_work_cores(input_tensor, b.num_m_groups, b.grid_x))]
-    grid_cores = shard_cores(input_tensor)
-    return [(grid_cores[row * g.k_cols + col], row, col) for row in range(b.num_m_groups) for col in range(g.k_cols)]
+    spec = input_tensor.memory_config().shard_spec
+    return [(block_core(spec, row, col), row, col) for row in range(b.num_m_groups) for col in range(g.k_cols)]
 
 
 def create_program_descriptor(
@@ -1078,7 +1116,10 @@ def create_program_descriptor(
         # Unused by the N-slice ring: one page there keeps the face-direct startup's output format defined.
         _cb(CB_MATMUL_PARTIALS, ttnn.float32, TILE_BYTES_FP32, 1 if b.nslice else bm * bn, cores),
     ]
-    if g.sharded_output:
+    if g.remote_output:
+        # One [bm, out_n] block (tile-row major), drained by the writer to the output shards every M-block.
+        cbs.append(_cb(CB_OUTPUT_TILES, output_tensor.dtype, g.out_tile_bytes, bm * ns, cores))
+    elif g.sharded_output:
         # Packs land in the output shard; its capacity is the core's whole M range, and the M-blocks
         # (bm divides core_m_tiles) push exactly that many tiles, so compute never waits on a consumer.
         output_cb = ttnn.cb_descriptor_from_sharded_tensor(CB_OUTPUT_TILES, output_tensor, core_ranges=cores)
@@ -1437,8 +1478,9 @@ def create_program_descriptor(
         FILL_WRITER_WINDOW_BATCHES if not b.ring else 1,
         int(weight_servers is not None),
         *server_sem_ids,
+        int(g.remote_output),
     ]
-    writer_zero_lanes_arg = len(writer_ct_args) - 6
+    writer_zero_lanes_arg = len(writer_ct_args) - 7
 
     def writer_ct_args_for(slice_channels, split_core=None):
         args = list(writer_ct_args)
@@ -1457,7 +1499,7 @@ def create_program_descriptor(
     )
     writer_ct_args.extend(
         ttnn.TensorAccessorArgs().get_compile_time_args()
-        if g.sharded_output
+        if g.sharded_output and not g.remote_output
         else ttnn.TensorAccessorArgs(output_tensor).get_compile_time_args()
     )
     writer_ct_args.extend(

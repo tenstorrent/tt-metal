@@ -21,12 +21,15 @@ across each grid row on device.
 
 from __future__ import annotations
 
+import dataclasses
+
 import ttnn
 
 from ttnn.operations._op_contract import ExcludedCell, UnsupportedAxisValue
 
 from .conv2d_3x3_program_descriptor import (
     Conv3x3Geometry,
+    block_compute_rows,
     block_grid_shape,
     create_program_descriptor,
     l1_cb_budget_bytes,
@@ -521,6 +524,13 @@ def conv2d_3x3(
         m_work_cores = block_grid_shape(in_spec)[0] if block_sharded else in_spec.grid.num_cores()
         work_grid = (m_work_cores, 1)
         core_m_tiles, _ = m_split(geometry, m_work_cores)
+        if block_sharded and geometry.k_split:
+            # The K split's M split may run down more grid rows than the shard grid has; the output keeps the input's
+            # shard grid and the shard rows' split.
+            rows = block_compute_rows(in_spec, device.compute_with_storage_grid_size(), geometry.tensor_m_tiles)
+            if rows != m_work_cores:
+                work_grid = (rows, 1)
+                geometry = dataclasses.replace(geometry, remote_output=True)
         n_tiles = geometry.out_n_tiles
         output_memory_config = ttnn.MemoryConfig(
             input_memory_config.memory_layout,

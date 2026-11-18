@@ -1,0 +1,216 @@
+--- a/ttnn/ttnn/operations/conv2d_3x3/conv2d_3x3.py
++++ b/ttnn/ttnn/operations/conv2d_3x3/conv2d_3x3.py
+@@ -21,12 +21,15 @@
+ 
+ from __future__ import annotations
+ 
++import dataclasses
++
+ import ttnn
+ 
+ from ttnn.operations._op_contract import ExcludedCell, UnsupportedAxisValue
+ 
+ from .conv2d_3x3_program_descriptor import (
+     Conv3x3Geometry,
++    block_compute_rows,
+     block_grid_shape,
+     create_program_descriptor,
+     l1_cb_budget_bytes,
+@@ -521,6 +524,13 @@
+         m_work_cores = block_grid_shape(in_spec)[0] if block_sharded else in_spec.grid.num_cores()
+         work_grid = (m_work_cores, 1)
+         core_m_tiles, _ = m_split(geometry, m_work_cores)
++        if block_sharded and geometry.k_split:
++            # The K split's M split may run down more grid rows than the shard grid has; the output keeps the input's
++            # shard grid and the shard rows' split.
++            rows = block_compute_rows(in_spec, device.compute_with_storage_grid_size(), geometry.tensor_m_tiles)
++            if rows != m_work_cores:
++                work_grid = (rows, 1)
++                geometry = dataclasses.replace(geometry, remote_output=True)
+         n_tiles = geometry.out_n_tiles
+         output_memory_config = ttnn.MemoryConfig(
+             input_memory_config.memory_layout,
+--- a/ttnn/ttnn/operations/conv2d_3x3/conv2d_3x3_program_descriptor.py
++++ b/ttnn/ttnn/operations/conv2d_3x3/conv2d_3x3_program_descriptor.py
+@@ -20,7 +20,10 @@
+ column's weight K-slice and hands its fp32 partials [bm, all C_out] to the writer, which scatters N-slice
+ y to column y of the same grid row (row-local reduce-scatter, two semaphores per core). Column y sums the
+ k_cols contributions, adds bias, applies ReLU and packs its output shard [bm, out_n_tiles] in place. A
+-single shard column is R2 on that column.
++single shard column is R2 on that column. The M split runs down the fewest grid rows, from the shard grid's first
++row to the device edge, that give the fewest output tile-rows per row (block_compute_rows); where those rows are not
++the output's shard rows, column y packs its finished block into a local CB and the writer NoC-writes each tile to
++the output shard that holds it (the output keeps the input's shard grid, shard shape and orientation).
+ """
+ 
+ from __future__ import annotations
+@@ -230,6 +233,9 @@
+     sharded_output: bool = False
+     # Core columns K's channel component is split over (BLOCK_SHARDED: one input shard column each).
+     k_cols: int = 1
++    # K split on more grid rows than the output has shard rows (block_compute_rows): cb_output_tiles is a local CB of
++    # one [bm, out_n] block, which the writer stores to the output shards.
++    remote_output: bool = False
+ 
+     @property
+     def k_split(self):
+@@ -644,7 +650,11 @@
+         + (ns * g.weight_tile_bytes if g.has_bias else 0)
+         + (RING_TOKEN_BYTES + TILE_BYTES_FP32 if nslice else bm * bn * TILE_BYTES_FP32)
+         + combine_bytes
+-        + (0 if g.sharded_output else OUT_DEPTH_ROW_GROUPS * sb_h * bn * g.out_tile_bytes)
++        + (
++            bm * ns * g.out_tile_bytes
++            if g.remote_output
++            else (0 if g.sharded_output else OUT_DEPTH_ROW_GROUPS * sb_h * bn * g.out_tile_bytes)
++        )
+         + (_src_table_bytes(im2col_rm_depth_rows) if _tap_direct(g, bm, bk, nslice) else 0)
+     )
+     return dict(
+@@ -846,6 +856,34 @@
+     return ttnn.corerange_to_cores(spec.grid, None, spec.orientation == ttnn.ShardOrientation.ROW_MAJOR)
+ 
+ 
++def block_compute_rows(shard_spec, device_grid, tensor_m_tiles):
++    """Grid rows the K split's M split runs down: the fewest rows, from the shard grid's first row to the device edge
++    along its M axis (y on a ROW_MAJOR grid, x on COL_MAJOR), that reach the fewest output tile-rows per row; the shard
++    rows unless more rows lower that. Every row of the K split is k_cols cores, one per channel slice; rows past the
++    shard grid read their whole slab from the column's owner shards, like any halo. The walk, untilize and tilize are
++    M-proportional (aspp.convs @ LoFi: 64 tile-rows on 10 rows of 7 instead of 8 rows of 8, -7 to -9%)."""
++    rows, _ = block_grid_shape(shard_spec)
++    start = shard_spec.grid.bounding_box().start
++    if shard_spec.orientation == ttnn.ShardOrientation.ROW_MAJOR:
++        max_rows = device_grid.y - start.y
++    else:
++        max_rows = device_grid.x - start.x
++    best = rows
++    for r in range(rows + 1, max_rows + 1):
++        if _div_up(tensor_m_tiles, r) < _div_up(tensor_m_tiles, best):
++            best = r
++    return best
++
++
++def block_core(shard_spec, row, col):
++    """Core of BLOCK grid position (row, col), rows past the shard grid included: a ROW_MAJOR grid runs the rows down y
++    (shard (h, w) on (x0 + w, y0 + h)), COL_MAJOR down x."""
++    start = shard_spec.grid.bounding_box().start
++    if shard_spec.orientation == ttnn.ShardOrientation.ROW_MAJOR:
++        return ttnn.CoreCoord(start.x + col, start.y + row)
++    return ttnn.CoreCoord(start.x + row, start.y + col)
++
++
+ def block_grid_shape(shard_spec):
+     """(rows, cols) of a BLOCK shard grid. Shard (h, w) sits on shard core h * cols + w: a ROW_MAJOR
+     orientation runs the height shards down the grid's y axis, COL_MAJOR down its x axis."""
+@@ -956,8 +994,8 @@
+     [i * core_m_tiles, ...); under a K split all k_cols cores of grid row i share it."""
+     if not g.k_split:
+         return [(core, i, 0) for i, core in enumerate(_work_cores(input_tensor, b.num_m_groups, b.grid_x))]
+-    grid_cores = shard_cores(input_tensor)
+-    return [(grid_cores[row * g.k_cols + col], row, col) for row in range(b.num_m_groups) for col in range(g.k_cols)]
++    spec = input_tensor.memory_config().shard_spec
++    return [(block_core(spec, row, col), row, col) for row in range(b.num_m_groups) for col in range(g.k_cols)]
+ 
+ 
+ def create_program_descriptor(
+@@ -1024,7 +1062,10 @@
+         # Unused by the N-slice ring: one page there keeps the face-direct startup's output format defined.
+         _cb(CB_MATMUL_PARTIALS, ttnn.float32, TILE_BYTES_FP32, 1 if b.nslice else bm * bn, cores),
+     ]
+-    if g.sharded_output:
++    if g.remote_output:
++        # One [bm, out_n] block (tile-row major), drained by the writer to the output shards every M-block.
++        cbs.append(_cb(CB_OUTPUT_TILES, output_tensor.dtype, g.out_tile_bytes, bm * ns, cores))
++    elif g.sharded_output:
+         # Packs land in the output shard; its capacity is the core's whole M range, and the M-blocks
+         # (bm divides core_m_tiles) push exactly that many tiles, so compute never waits on a consumer.
+         output_cb = ttnn.cb_descriptor_from_sharded_tensor(CB_OUTPUT_TILES, output_tensor, core_ranges=cores)
+@@ -1358,8 +1399,9 @@
+         0,  # fill_zero_lanes, set per writer kernel
+         CB_ZERO_SRC,
+         FILL_WRITER_WINDOW_BATCHES if not b.ring else 1,
++        int(g.remote_output),
+     ]
+-    writer_zero_lanes_arg = len(writer_ct_args) - 3
++    writer_zero_lanes_arg = len(writer_ct_args) - 4
+ 
+     def writer_ct_args_for(slice_channels, split_core=None):
+         args = list(writer_ct_args)
+@@ -1378,7 +1420,7 @@
+     )
+     writer_ct_args.extend(
+         ttnn.TensorAccessorArgs().get_compile_time_args()
+-        if g.sharded_output
++        if g.sharded_output and not g.remote_output
+         else ttnn.TensorAccessorArgs(output_tensor).get_compile_time_args()
+     )
+     writer_ct_args.extend(
+--- a/ttnn/ttnn/operations/conv2d_3x3/kernels/conv2d_3x3_writer.cpp
++++ b/ttnn/ttnn/operations/conv2d_3x3/kernels/conv2d_3x3_writer.cpp
+@@ -8,7 +8,10 @@
+ //
+ // Sharded output: cb_output_tiles is backed on the output shard, so compute packs in place and
+ // store_block is empty. The writer only streams bias and weights; compute never waits on the output
+-// CB there, so blocking weight reserves cannot deadlock.
++// CB there, so blocking weight reserves cannot deadlock. A K split on more grid rows than the output has shard rows
++// (remote_output) packs into a local CB of one [bm, out_n] block instead, which the writer drains after the M-block's
++// weights and NoC-writes tile by tile to the output shard that holds each tile-row (a TensorAccessor over the sharded
++// output); compute never waits on it within a block.
+ //
+ // Weight multicast (regime R1, the `weight_mcast` channel): every K-block is one round. The sender
+ // reads it from DRAM into its own cb_weights slot and multicasts it to the same slot on every
+@@ -158,7 +161,10 @@
+     constexpr uint32_t fill_writer_window = get_compile_time_arg_val(69);
+     static_assert(fill_writer_window >= 1 && fill_writer_window <= 8, "writer fill transaction ids 8..15");
+     static_assert(fill_writer_window == 1 || !ring_slab, "the ring slab's writer fill is one batch at a time");
+-    constexpr auto weight_args = TensorAccessorArgs<70>();
++    // K split on more grid rows than the output has shard rows (see the file comment).
++    constexpr bool remote_output = get_compile_time_arg_val(70) != 0;
++    static_assert(!remote_output || (k_split && output_sharded));
++    constexpr auto weight_args = TensorAccessorArgs<71>();
+     [[maybe_unused]] constexpr auto bias_args = TensorAccessorArgs<weight_args.next_compile_time_args_offset()>();
+     [[maybe_unused]] constexpr auto output_args = TensorAccessorArgs<bias_args.next_compile_time_args_offset()>();
+     [[maybe_unused]] constexpr auto input_args = TensorAccessorArgs<output_args.next_compile_time_args_offset()>();
+@@ -948,6 +954,33 @@
+                 combine_round(m_block_idx);
+             }
+         }
++        if constexpr (remote_output) {
++            // ---- store_block (remote output shard): compute pushes the owner's [bm, out_n] block (per bias row
++            // group, or whole); each valid tile-row goes to the output shard that holds it, as soon as it is packed.
++            if (out_valid_tiles > 0) {
++                MaybeDeviceZoneScope("writer_store");
++                const uint32_t out_tile_bytes = get_tile_size(cb_output_tiles);
++                const auto output = TensorAccessor(output_args, output_addr, out_tile_bytes);
++                const uint32_t block_tile0 = m_block_idx * block_m_tiles;
++                const uint32_t l1_base = get_read_ptr(cb_output_tiles);
++                for (uint32_t r = 0; r < block_m_tiles; ++r) {
++                    const uint32_t local_tile_row = block_tile0 + r;
++                    if (local_tile_row >= actual_m_tiles) {
++                        break;
++                    }
++                    wait_front_serving(cb_output_tiles, (r + 1) * out_n_tiles);
++                    const uint32_t row_page = (m_tile_start + local_tile_row) * tensor_n_tiles + out_n_tile_start;
++                    const uint32_t l1 = l1_base + r * out_n_tiles * out_tile_bytes;
++                    for (uint32_t n = 0; n < out_valid_tiles; ++n) {
++                        noc_async_write_page(row_page + n, output, l1 + n * out_tile_bytes);
++                    }
++                }
++                // The ragged tail's rows are packed too (nominal counts); the CB is popped whole.
++                wait_front_serving(cb_output_tiles, block_m_tiles * out_n_tiles);
++                noc_async_writes_flushed();
++                cb_pop_front(cb_output_tiles, block_m_tiles * out_n_tiles);
++            }
++        }
+         if constexpr (!output_sharded) {
+             // ---- store_block: valid output tile-rows only; the ragged tail keeps nominal CB counts.
+             MaybeDeviceZoneScope("writer_store");
+@@ -978,7 +1011,7 @@
+         }
+     }
+     drain_fill();
+-    if constexpr (!output_sharded) {
++    if constexpr (!output_sharded || remote_output) {
+         noc_async_write_barrier();
+     }
+     if constexpr (k_split) {

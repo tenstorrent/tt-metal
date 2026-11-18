@@ -8,7 +8,10 @@
 //
 // Sharded output: cb_output_tiles is backed on the output shard, so compute packs in place and
 // store_block is empty. The writer only streams bias and weights; compute never waits on the output
-// CB there, so blocking weight reserves cannot deadlock.
+// CB there, so blocking weight reserves cannot deadlock. A K split on more grid rows than the output has shard rows
+// (remote_output) packs into a local CB of one [bm, out_n] block instead, which the writer drains after the M-block's
+// weights and NoC-writes tile by tile to the output shard that holds each tile-row (a TensorAccessor over the sharded
+// output); compute never waits on it within a block.
 //
 // Weight multicast (regime R1, the `weight_mcast` channel): every K-block is one round. The sender
 // reads it from DRAM into its own cb_weights slot and multicasts it to the same slot on every
@@ -170,7 +173,10 @@ void kernel_main() {
     constexpr bool weight_servers = get_compile_time_arg_val(70) != 0;
     constexpr uint32_t server_ack_sem_id = get_compile_time_arg_val(71);
     constexpr uint32_t server_flag_sem_id = get_compile_time_arg_val(72);
-    constexpr auto weight_args = TensorAccessorArgs<73>();
+    // K split on more grid rows than the output has shard rows (see the file comment).
+    constexpr bool remote_output = get_compile_time_arg_val(73) != 0;
+    static_assert(!remote_output || (k_split && output_sharded));
+    constexpr auto weight_args = TensorAccessorArgs<74>();
     [[maybe_unused]] constexpr auto bias_args = TensorAccessorArgs<weight_args.next_compile_time_args_offset()>();
     [[maybe_unused]] constexpr auto output_args = TensorAccessorArgs<bias_args.next_compile_time_args_offset()>();
     [[maybe_unused]] constexpr auto input_args = TensorAccessorArgs<output_args.next_compile_time_args_offset()>();
@@ -1016,6 +1022,33 @@ void kernel_main() {
                 combine_round(m_block_idx);
             }
         }
+        if constexpr (remote_output) {
+            // ---- store_block (remote output shard): compute pushes the owner's [bm, out_n] block (per bias row
+            // group, or whole); each valid tile-row goes to the output shard that holds it, as soon as it is packed.
+            if (out_valid_tiles > 0) {
+                MaybeDeviceZoneScope("writer_store");
+                const uint32_t out_tile_bytes = get_tile_size(cb_output_tiles);
+                const auto output = TensorAccessor(output_args, output_addr, out_tile_bytes);
+                const uint32_t block_tile0 = m_block_idx * block_m_tiles;
+                const uint32_t l1_base = get_read_ptr(cb_output_tiles);
+                for (uint32_t r = 0; r < block_m_tiles; ++r) {
+                    const uint32_t local_tile_row = block_tile0 + r;
+                    if (local_tile_row >= actual_m_tiles) {
+                        break;
+                    }
+                    wait_front_serving(cb_output_tiles, (r + 1) * out_n_tiles);
+                    const uint32_t row_page = (m_tile_start + local_tile_row) * tensor_n_tiles + out_n_tile_start;
+                    const uint32_t l1 = l1_base + r * out_n_tiles * out_tile_bytes;
+                    for (uint32_t n = 0; n < out_valid_tiles; ++n) {
+                        noc_async_write_page(row_page + n, output, l1 + n * out_tile_bytes);
+                    }
+                }
+                // The ragged tail's rows are packed too (nominal counts); the CB is popped whole.
+                wait_front_serving(cb_output_tiles, block_m_tiles * out_n_tiles);
+                noc_async_writes_flushed();
+                cb_pop_front(cb_output_tiles, block_m_tiles * out_n_tiles);
+            }
+        }
         if constexpr (!output_sharded) {
             // ---- store_block: valid output tile-rows only; the ragged tail keeps nominal CB counts.
             MaybeDeviceZoneScope("writer_store");
@@ -1046,7 +1079,7 @@ void kernel_main() {
         }
     }
     drain_fill();
-    if constexpr (!output_sharded) {
+    if constexpr (!output_sharded || remote_output) {
         noc_async_write_barrier();
     }
     if constexpr (k_split || weight_servers) {
