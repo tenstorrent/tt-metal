@@ -8,12 +8,10 @@ from __future__ import annotations
 import atexit
 import itertools
 import os
-import time
-from typing import Any, Callable, Dict, List, Optional
+from typing import Optional
 
 from ..distributed import exit_on_error
-from ..grpo_trainer import RolloutSampler
-from ..rollout_batch_source import ScoredRolloutBatch, score_rollout
+from ..rollout_batch_source import InProcessRolloutBatchSource, ScoredRolloutBatch
 from .rollout_queue import RolloutQueue
 from .threaded_weight_bridge import ThreadedWeightBridge
 from .weight_bridge import TTML_RANK, TTT_RANK, _require_distributed_context
@@ -50,66 +48,34 @@ class AsyncRolloutServer:
     """Rollout-rank end of ttt_remote_async: generates and scores rollouts in a loop, without requests from the trainer.
 
     Unlike MPIRolloutServer, which generates only the prompts the trainer sends and installs weights only when
-    asked, this server walks ``prompts`` itself in batches of ``batch_prompts``, wrapping around at the end. It
-    scores each batch with ``reward_funcs`` and pushes the ScoredRolloutBatch to the RolloutQueue; a full queue
-    blocks the push. Weights arrive in the background on the ThreadedWeightBridge while a batch generates. The
-    newest received weights are installed into ``sampler`` before each batch, so every batch is generated with one
-    weight version, which it carries. The server waits only for the first weights, and stops once the trainer
-    closes the bridge. The caller owns ``sampler`` and closes it.
+    asked, this server cycles ``rollout_batch_source`` itself, wrapping around at the end. It pushes each
+    ScoredRolloutBatch to the RolloutQueue; a full queue blocks the push. Weights arrive in the background on the
+    ThreadedWeightBridge while a batch generates. The newest received weights are installed into
+    ``rollout_batch_source.sampler`` before each batch, so every batch is generated with one weight version, which
+    it carries. The server waits only for the first weights, and stops once the trainer closes the bridge. The
+    caller owns ``rollout_batch_source.sampler`` and closes it.
     """
 
     def __init__(
-        self,
-        *,
-        bridge: ThreadedWeightBridge,
-        queue: RolloutQueue,
-        sampler: RolloutSampler,
-        prompts: List[List[int]],
-        extra_columns: Dict[str, list],
-        batch_prompts: int,
-        tokenizer: Any,
-        reward_funcs: List[Callable[..., List[float]]],
-        num_generations: int,
+        self, *, bridge: ThreadedWeightBridge, queue: RolloutQueue, rollout_batch_source: InProcessRolloutBatchSource
     ) -> None:
         local_rank = _require_distributed_context("AsyncRolloutServer")
         if local_rank != TTT_RANK:
             raise RuntimeError(f"AsyncRolloutServer must run on TTT_RANK={TTT_RANK} (got local rank {local_rank}).")
         self._bridge = bridge
         self._queue = queue
-        self._sampler = sampler
-        self._prompts = prompts
-        self._extra_columns = extra_columns
-        self._batch_prompts = batch_prompts
-        self._tokenizer = tokenizer
-        self._reward_funcs = reward_funcs
-        self._num_generations = num_generations
+        self._rollout_batch_source = rollout_batch_source
         self._bridge.connect()
         self._queue.connect()
         # The peer waits on this rank until serve_forever returns; a normal exit before that hangs both ranks.
         atexit.register(os._exit, 1)
 
     def serve_forever(self) -> None:
-        n = self._batch_prompts
-        starts = itertools.cycle(range(0, len(self._prompts), n))
+        scored_batches = itertools.chain.from_iterable(itertools.repeat(self._rollout_batch_source))
         try:
             with exit_on_error():
                 while self._install_newest_weights():
-                    start = next(starts)
-                    prompts = self._prompts[start : start + n]
-                    extra = {k: col[start : start + n] for k, col in self._extra_columns.items()}
-                    t0 = time.perf_counter()
-                    rollout = self._sampler.generate(prompts)
-                    self._queue.push(
-                        score_rollout(
-                            rollout,
-                            prompts,
-                            extra,
-                            tokenizer=self._tokenizer,
-                            reward_funcs=self._reward_funcs,
-                            num_generations=self._num_generations,
-                            generation_time_s=time.perf_counter() - t0,
-                        )
-                    )
+                    self._queue.push(next(scored_batches))
         finally:
             atexit.unregister(os._exit)
             self._queue.close()
@@ -117,8 +83,9 @@ class AsyncRolloutServer:
 
     def _install_newest_weights(self) -> bool:
         """Waits for the first weights; returns False once the trainer has closed the bridge."""
-        with self._bridge.receive_weights(block=self._sampler.weight_version < 0) as received:
+        sampler = self._rollout_batch_source.sampler
+        with self._bridge.receive_weights(block=sampler.weight_version < 0) as received:
             if received is not None:
                 version, weights = received
-                self._sampler.update_weights(weights, version)
+                sampler.update_weights(weights, version)
         return not self._bridge.peer_closed

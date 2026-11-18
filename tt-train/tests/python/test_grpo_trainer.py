@@ -1715,9 +1715,7 @@ class _RecordingQueue:
 
 
 def _async_rollout_server(bridge, queue, sampler, reward_funcs):
-    return async_rollout.AsyncRolloutServer(
-        bridge=bridge,
-        queue=queue,
+    rollout_batch_source = InProcessRolloutBatchSource(
         sampler=sampler,
         prompts=[[1], [2]],
         extra_columns={"answer": ["a", "b"]},
@@ -1725,7 +1723,15 @@ def _async_rollout_server(bridge, queue, sampler, reward_funcs):
         tokenizer=_IdsTokenizer(),
         reward_funcs=reward_funcs,
         num_generations=1,
+        max_completion_length=4,
     )
+    return async_rollout.AsyncRolloutServer(bridge=bridge, queue=queue, rollout_batch_source=rollout_batch_source)
+
+
+def test_async_rollout_server_rejects_an_empty_dataset(expect_error):
+    config = _remote_grpo_config(rollout_backend="ttt_remote_async")
+    with expect_error(ValueError, "needs a non-empty dataset"):
+        GRPOTrainer._build_rollout_server(SimpleNamespace(config=config), lambda: [])
 
 
 def test_async_rollout_server_walks_prompts_with_the_newest_weights(monkeypatch):
