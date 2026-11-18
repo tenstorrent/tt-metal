@@ -581,6 +581,14 @@ TEST(BufferDistributionSpecConstruction, CPU_EmptyNodeListOnlyForEmptyTensor) {
     EXPECT_ANY_THROW(BufferDistributionSpec(Shape{2, 4}, Shape{1, 1}, {}));
 }
 
+// A shard that ends in a partial page still takes that page, as in BufferDistributionSpec.
+TEST(ShardSpecBufferPages, CPU_PartialPageRoundsUp) {
+    const ShardSpecBuffer shard_spec(
+        NodeRangeSet(NodeRange({0, 0}, {0, 0})), {33, 32}, ShardOrientation::ROW_MAJOR, {32, 32}, {2, 1});
+    EXPECT_EQ(shard_spec.shape_in_pages(), (std::array<uint32_t, 2>{2, 1}));
+    EXPECT_EQ(shard_spec.num_pages(), 2u);
+}
+
 // Shape-only; the grid is arbitrary.
 TEST(BufferDistributionSpecContiguousPages, CPU_NumContiguousPages) {
     const CoreRangeSet grid(CoreRange({0, 0}, {1, 0}));

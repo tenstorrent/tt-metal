@@ -306,9 +306,10 @@ std::tuple<std::vector<std::vector<uint32_t>>, std::vector<std::array<uint32_t, 
     const std::array<uint32_t, 2>& page_shape,
     const std::array<uint32_t, 2>& shard_shape,
     const std::array<uint32_t, 2>& tensor2d_size) {
+    // A partial page takes a whole page, as in BufferDistributionSpec.
     std::array<uint32_t, 2> shard_in_pages = {
-        page_shape[0] == 0 ? 0 : shard_shape[0] / page_shape[0],
-        page_shape[1] == 0 ? 0 : shard_shape[1] / page_shape[1]};
+        page_shape[0] == 0 ? 0 : div_up(shard_shape[0], page_shape[0]),
+        page_shape[1] == 0 ? 0 : div_up(shard_shape[1], page_shape[1])};
     std::vector<std::vector<uint32_t>> ret_vec(num_shards);
     std::vector<std::array<uint32_t, 2>> ret_shard_shape(num_shards, shard_in_pages);
 
@@ -944,8 +945,9 @@ bool ShardSpec::operator==(const ShardSpec&) const = default;
 bool ShardSpec::operator!=(const ShardSpec&) const = default;
 
 std::array<uint32_t, 2> ShardSpecBuffer::shape_in_pages() const {
-    auto height_in_pages = page_shape[0] == 0 ? 0 : tensor_shard_spec.shape[0] / page_shape[0];
-    auto width_in_pages = page_shape[1] == 0 ? 0 : tensor_shard_spec.shape[1] / page_shape[1];
+    // A partial page takes a whole page, as in BufferDistributionSpec.
+    auto height_in_pages = page_shape[0] == 0 ? 0 : div_up(tensor_shard_spec.shape[0], page_shape[0]);
+    auto width_in_pages = page_shape[1] == 0 ? 0 : div_up(tensor_shard_spec.shape[1], page_shape[1]);
     return {height_in_pages, width_in_pages};
 }
 
