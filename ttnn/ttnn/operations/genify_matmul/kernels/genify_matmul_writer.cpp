@@ -40,6 +40,8 @@
 //   wr_a_inject / wr_a_receive   one R1b A K-walk (injector: reads + multicasts; receiver: acks + waits)
 //   wr_a_barrier / wr_a_send     (Refinement 15) the fixed injector's per-K-block read barrier / multicast (incl. acks)
 //   wr_a_rotate   one R1b A K-walk under rotating injectors (sends on this core's turns, receives otherwise)
+//   wr_a_issue    (rotating) an injector's turn reads that were not issued ahead (its slots were busy, or the paced
+//                 issue had not finished by the turn); wr_a_wait  a non-injector round's wait for the data flag
 #include <cstdint>
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
@@ -52,6 +54,8 @@
 #include "ttnn/ttnn/operations/genify_matmul/kernels/a_segments.hpp"
 #include "ttnn/ttnn/operations/genify_matmul/kernels/line_stream.hpp"
 #include "ttnn/ttnn/operations/genify_matmul/kernels/genify_matmul_kschedule.hpp"
+#include "genify_matmul_rx_split.hpp"
+#include <type_traits>
 
 // R1b bank-local stream (Refinement 15): output column c of a core's region is col0 + c * GM_OUT_STRIDE (the B
 // units' bank stride, in output columns); 1 = adjacent columns.
@@ -61,10 +65,15 @@
 // R1b rotating injectors (Refinement 15, host ACT_STREAM_INJECTORS): the `act` channel's senders take turns, A
 // K-block round r is read and multicast by injector r % GM_ACT_INJECTORS, each injector reading its NEXT turn (round
 // r + injectors, the other of two transaction ids) while the others multicast, so the stream runs near the multicast
-// rate instead of one core's read + multicast rate. When the next turn's slots are already free the read is issued
-// BEFORE sending r (hidden under the wait for r's acks; issued after the send it holds this core's ack of round r + 1
-// for the whole issue: 13.6 us rounds instead of ~5 on Qwen M = 128); otherwise after the send, never blocking the
-// send on compute (blocking cost FLUX attn-out 107 -> 135 us). 1 = one fixed injector.
+// rate instead of one core's read + multicast rate. 1 = one fixed injector.
+// Tournament 2 (perf_experiments/t2p2_act_stream_rounds): the ack and the wait of a round are split
+// (genify_matmul_rx_split.hpp). An injector starts its next turn's reads only AFTER its send and after its ack of
+// round r + 1, never in front of the send (HEAD issued it before the send whenever the slots were free: ~3 us in front
+// of every first-cycle send), and issues them ONE TILE PER POLL of the data flag while it waits for the other
+// injectors' rounds: paced by its own request injection, its read responses take only the multicast's spare NoC
+// bandwidth (a burst slowed each overlapped round ~1.3 us). Turn reads still pending at the turn are issued then;
+// a turn whose slots never freed in time is issued (blocking) at the turn, never blocking a send on compute.
+// Qwen3.8 M = 128 gate_up, bank split, A alone 47.4 -> 41.6 us; FLUX context_embedder whole op 248 -> 231 us.
 #ifndef GM_ACT_INJECTORS
 #define GM_ACT_INJECTORS 1
 #endif
@@ -160,6 +169,40 @@ void kernel_main() {
     // Perf 1 (tournament 2) tail policy: the host's per-core reader share of the tail (GM_TAIL_POLICY; else
     // TAIL_NC_PCT).
     const tail_split::Policy tail_pol = tail_split::read_policy(arg);
+#ifdef GM_SWX
+    // t2p2_swiglu_bank_exchange (host BANK_LOCAL_SWIGLU_XCHG): swiglu on one-column bank units -- a core's block is
+    // all gate columns (role 0) or all up columns (role 1). Per block, after its K-walk, each core writes the partner
+    // rows of its accumulated block (cb_partials, partials format) into its partners' GM_SWX_CB at the same block
+    // positions (same L1 address on every core: one block, the write pointer never leaves the base), bumps their DATA
+    // by the tiles sent, then waits for its own DATA and fronts GM_SWX_CB to compute. The gate core keeps rows
+    // [0, GM_SWX_ROWS) and sends the rest, the up core sends rows [0, GM_SWX_ROWS) and keeps the rest (one-sided:
+    // GM_SWX_ROWS == block_m, the up core keeps none: its writer pops the partials and writes no output). READY: a
+    // receiver frees GM_SWX_CB (reserve) and signals each partner once per block before the walk.
+    // Table: role, expected tiles per block, parts, 5 words per part (noc x, noc y, my col, partner col, cols).
+    // The tail write split is off under GM_SWX: this RISC writes every output row of the core.
+    constexpr uint32_t swx_cb = GM_SWX_CB;
+    constexpr uint32_t swx_pcb = GM_SWX_PARTIALS_CB;
+    constexpr uint32_t swx_tile_bytes = GM_SWX_TILE_BYTES;
+    constexpr uint32_t swx_block_n = out_block_n_tiles;  // one output column per B column
+    constexpr uint32_t swx_blk_tiles = block_m_tiles * swx_block_n;
+    constexpr uint32_t swx_rows = GM_SWX_ROWS;
+    static_assert(swx_rows == block_m_tiles || 2 * swx_rows == block_m_tiles);
+    const uint32_t swx_role = get_arg_val<uint32_t>(arg++);  // 0 gate, 1 up, 2 idle (no columns)
+    const bool swx_up = swx_role == 1;
+    const uint32_t swx_expect = get_arg_val<uint32_t>(arg++);
+    const uint32_t swx_nparts = get_arg_val<uint32_t>(arg++);
+    const uint32_t swx_part0 = arg;
+    auto swx_part = [&](uint32_t p, uint32_t i) { return get_arg_val<uint32_t>(swx_part0 + 5 * p + i); };
+    const uint32_t swx_ready = get_semaphore(GM_SWX_SEM_READY);
+    const uint32_t swx_data = get_semaphore(GM_SWX_SEM_DATA);
+    // rows this core sends / keeps (output rows of each block: [swx_row0, swx_row0 + swx_out_rows))
+    const uint32_t swx_send_lo = swx_up ? 0 : swx_rows;
+    const uint32_t swx_send_hi = swx_up ? swx_rows : block_m_tiles;
+    const uint32_t swx_row0 = swx_up ? swx_rows : 0;
+    const uint32_t swx_out_rows = swx_role == 2 ? 0 : swx_up ? block_m_tiles - swx_rows : swx_rows;
+    const bool swx_sends = swx_send_hi > swx_send_lo && swx_nparts != 0;
+    uint32_t swx_seq = 0;
+#endif
 
     [[maybe_unused]] const auto a_acc = TensorAccessor(a_args, a_addr, a_page_bytes);
 
@@ -236,16 +279,65 @@ void kernel_main() {
         read_act_kblock(act_ring_base + (r % act_cb_blocks) * act_block_bytes, blk_r0, blk_rows, r % num_k_blocks);
         dataflow_kernel_lib::set_read_trid(noc, 0);
     };
+    // Rotating injectors: this injector's next turn whose reads are not started yet (>= act_rounds: none), and the
+    // read cursor of the turn being issued one tile per poll (cur_left tiles to go; contiguous A only).
+    [[maybe_unused]] uint32_t act_pending = act_rounds;
+    [[maybe_unused]] uint32_t act_acked = 0;  // rounds below this were acked ahead (an injector's ack after its send)
+    [[maybe_unused]] uint32_t cur_turn = 0, cur_left = 0, cur_page = 0, cur_l1 = 0, cur_k = 0, cur_kv = 0;
     if constexpr (act_stream && act_injectors > 1) {
         if (a_sender) {
             for (uint32_t r = 0; r < act_injectors && r < act_rounds; ++r) {
                 if (mc_act.should_send(r)) {
-                    issue_turn(r);  // this injector's first turn
+                    issue_turn(r);  // this injector's first turn (the ring is empty: no stream traffic yet)
+                    act_pending = r + act_injectors;
                     break;
                 }
             }
         }
     }
+    using ActRx = std::conditional_t<
+        act_stream && (act_injectors > 1),
+        gm_rx::SplitReceiver<std::remove_cv_t<decltype(mc_act)>, get_named_compile_time_arg_val("act_rt_offset")>,
+        gm_rx::NoReceiver>;
+    [[maybe_unused]] auto cur_issue = [&](uint32_t n) {
+        dataflow_kernel_lib::set_read_trid(noc, turn_trid(cur_turn));
+        for (; n && cur_left; --n) {
+#ifndef GM_ABLATE_A
+            noc_async_read(a_acc.get_noc_addr(cur_page + cur_k), cur_l1, a_tile_bytes);
+#endif
+            cur_l1 += a_tile_bytes;
+            --cur_left;
+            if (++cur_k == cur_kv) {  // the K-block's next A row (the slot's row stride is block_k)
+                cur_k = 0;
+                cur_page += tensor_k_tiles;
+                cur_l1 += (block_k_tiles - cur_kv) * a_tile_bytes;
+            }
+        }
+        dataflow_kernel_lib::set_read_trid(noc, 0);
+    };
+    // Start the pending turn when its previous turn is sent (the two trids alternate) and its slots are free.
+    [[maybe_unused]] auto try_start_turn = [&]() {
+        const uint32_t p = act_pending;
+        if (!a_sender || cur_left != 0 || p >= act_rounds || p >= act_seq + act_injectors ||
+            !cb_pages_reservable_at_back(cb_act_tiles, (p - act_seq + 1) * act_block_tiles)) {
+            return;
+        }
+        act_pending += act_injectors;
+        if constexpr (a_segments::num > 1) {
+            MaybeDeviceZoneScope("wr_a_issue");
+            issue_turn(p);  // segmented A: one burst
+        } else {
+            uint32_t blk_r0, blk_rows;
+            round_rows(p, blk_r0, blk_rows);
+            const uint32_t j = p % num_k_blocks;
+            cur_turn = p;
+            cur_kv = (j == num_k_blocks - 1) ? last_block_k_tiles : block_k_tiles;
+            cur_left = blk_rows * cur_kv;
+            cur_page = (row0 + blk_r0) * tensor_k_tiles + j * block_k_tiles;
+            cur_l1 = act_ring_base + (p % act_cb_blocks) * act_block_bytes;
+            cur_k = 0;
+        }
+    };
     // R1a split lines: this core's A row line (rotating injectors); round r = (block, K-block) of the walk.
     constexpr uint32_t a_line_span = act_line ? mc_act.num_senders : 1;
     // K tiles [k_lo, k_hi) of round r's A K-block (its block rows), into the slot-shaped buffer at `l1` (the line
@@ -336,6 +428,15 @@ void kernel_main() {
                 const uint32_t blk_c0 = nbk * out_block_n_tiles;
                 const uint32_t blk_cols = block_extent(cols_valid, blk_c0, out_block_n_tiles);
                 const out_chunks::Col blk_col = out_chunks::locate(out_tab, col0 + blk_c0 * GM_OUT_STRIDE);
+#ifdef GM_SWX
+                if (swx_expect != 0) {
+                    MaybeDeviceZoneScope("wr_swx_ready");
+                    cb_reserve_back(swx_cb, swx_blk_tiles);  // compute released the previous block
+                    for (uint32_t p = 0; p < swx_nparts; ++p) {
+                        noc_semaphore_inc(get_noc_addr(swx_part(p, 0), swx_part(p, 1), swx_ready), 1);
+                    }
+                }
+#endif
                 if constexpr (act_line) {
                     for (uint32_t d = 0; d < k_deliveries; ++d) {
                         // Only the delivery's valid A tiles go on the wire under GM_COMPACT_A (else the full slot).
@@ -350,37 +451,58 @@ void kernel_main() {
                     // lockstep and the injector multicasts its own freshly read slot to the same address.
                     if constexpr (act_injectors > 1) {
                         MaybeDeviceZoneScope("wr_a_rotate");
+                        ActRx rx(noc);
                         for (uint32_t kb = 0; kb < num_k_blocks; ++kb) {
                             const uint32_t r = act_seq;
                             if (a_sender && mc_act.should_send(r)) {
-                                const uint32_t next = r + act_injectors;
-                                bool next_issued = next >= act_rounds;
-                                if (!next_issued &&
-                                    cb_pages_reservable_at_back(cb_act_tiles, (next - act_seq + 1) * act_block_tiles)) {
+                                if (cur_left != 0 && cur_turn == r) {
                                     MaybeDeviceZoneScope("wr_a_issue");
-                                    issue_turn(next);  // slots free: the next turn's read hides under r's acks
-                                    next_issued = true;
+                                    cur_issue(cur_left);  // the paced reads not issued by now
+                                }
+                                if (act_pending == r) {
+                                    MaybeDeviceZoneScope("wr_a_issue");
+                                    issue_turn(r);  // its slots were busy until now: blocking
+                                    act_pending += act_injectors;
                                 }
                                 {
                                     MaybeDeviceZoneScope("wr_a_barrier");
                                     dataflow_kernel_lib::async_read_barrier_with_trid(noc, turn_trid(r));
                                 }
                                 const uint32_t slot = act_ring_base + (r % act_cb_blocks) * act_block_bytes;
-                                MaybeDeviceZoneScope("wr_a_send");
+                                {
+                                    MaybeDeviceZoneScope("wr_a_send");
 #ifdef GM_ABLATE_A_SEND
-                                a_sender->send(slot, slot, 32);
+                                    a_sender->send(slot, slot, 32);
 #else
-                                a_sender->send(slot, slot, act_block_bytes);
+                                    a_sender->send(slot, slot, act_block_bytes);
 #endif
+                                }
                                 cb_push_back(cb_act_tiles, act_block_tiles);
                                 ++act_seq;
-                                if (!next_issued) {
-                                    issue_turn(next);  // after the send: compute frees the slots meanwhile
+                                // Round r + 1's ack BEFORE this injector starts its next turn (the ack gates r + 1's
+                                // send; this core consumed round r - 1's flag before its own turn).
+                                if (act_seq < act_rounds && !mc_act.should_send(act_seq) &&
+                                    cb_pages_reservable_at_back(cb_act_tiles, act_block_tiles)) {
+                                    rx.ack(act_seq);
+                                    act_acked = act_seq + 1;
                                 }
+                                try_start_turn();
                             } else {
                                 MaybeDeviceZoneScope("wr_a_recv1");
-                                cb_reserve_back(cb_act_tiles, act_block_tiles);
-                                a_receiver->receive(r);
+                                if (act_acked <= r) {
+                                    cb_reserve_back(cb_act_tiles, act_block_tiles);
+                                    rx.ack(r);
+                                }
+                                try_start_turn();
+                                {
+                                    MaybeDeviceZoneScope("wr_a_wait");
+                                    while (!rx.ready(r)) {
+                                        if (cur_left != 0) {
+                                            cur_issue(1);  // one read per poll: paced by the NoC's own injection
+                                        }
+                                    }
+                                    rx.wait(r);
+                                }
                                 cb_push_back(cb_act_tiles, act_block_tiles);
                                 ++act_seq;
                             }
@@ -461,6 +583,77 @@ void kernel_main() {
                         }
                     }
                 }
+#ifdef GM_SWX
+                ++swx_seq;
+                {
+                    {
+                        MaybeDeviceZoneScope("wr_swx_wait_partials");
+                        cb_wait_front(swx_pcb, swx_blk_tiles);
+                    }
+                    if (swx_sends) {
+                        {
+                            MaybeDeviceZoneScope("wr_swx_wait_ready");
+                            noc_semaphore_wait_min(
+                                reinterpret_cast<volatile tt_l1_ptr uint32_t*>(swx_ready), swx_nparts * swx_seq);
+                        }
+                        MaybeDeviceZoneScope("wr_swx_send");
+                        const uint32_t src = get_read_ptr(swx_pcb);
+                        const uint32_t dst = get_write_ptr(swx_cb);
+                        for (uint32_t p = 0; p < swx_nparts; ++p) {
+                            const uint32_t x = swx_part(p, 0), y = swx_part(p, 1), c_me = swx_part(p, 2),
+                                           c_peer = swx_part(p, 3), n = swx_part(p, 4);
+                            for (uint32_t r = swx_send_lo; r < swx_send_hi; ++r) {
+                                noc_async_write(
+                                    src + (r * swx_block_n + c_me) * swx_tile_bytes,
+                                    get_noc_addr(x, y, dst + (r * swx_block_n + c_peer) * swx_tile_bytes),
+                                    n * swx_tile_bytes);
+                            }
+                        }
+                        noc_async_write_barrier();
+                        for (uint32_t p = 0; p < swx_nparts; ++p) {
+                            noc_semaphore_inc(
+                                get_noc_addr(swx_part(p, 0), swx_part(p, 1), swx_data),
+                                (swx_send_hi - swx_send_lo) * swx_part(p, 4));
+                        }
+                    }
+                    if (swx_out_rows == 0) {
+                        cb_pop_front(swx_pcb, swx_blk_tiles);  // one-sided up / idle core: compute runs no epilogue
+                    }
+                    if (swx_expect != 0) {
+                        {
+                            MaybeDeviceZoneScope("wr_swx_wait_data");
+                            noc_semaphore_wait_min(
+                                reinterpret_cast<volatile tt_l1_ptr uint32_t*>(swx_data), swx_expect * swx_seq);
+                        }
+                        cb_push_back(swx_cb, swx_blk_tiles);
+                    }
+                    // the core's output rows, one row of out_block_n tiles per compute push
+                    for (uint32_t r = 0; r < swx_out_rows; ++r) {
+                        {
+                            MaybeDeviceZoneScope("wr_wait_out");
+                            cb_wait_front(cb_output_tiles, out_block_n_tiles);
+                        }
+                        const uint32_t blk_row = swx_row0 + r;
+                        if (blk_row < blk_rows) {
+                            MaybeDeviceZoneScope("wr_write");
+                            out_chunks::write_row(
+                                out_args,
+                                out_tab,
+                                o_page_bytes,
+                                o_tile_bytes,
+                                get_read_ptr(cb_output_tiles),
+                                (b0 + blk_b0) * tensor_m_tiles + row0 + blk_r0 + blk_row,
+                                blk_col,
+                                blk_cols,
+                                [&](uint32_t) { return true; },
+                                GM_OUT_STRIDE);
+                            noc_async_writes_flushed();
+                        }
+                        cb_pop_front(cb_output_tiles, out_block_n_tiles);
+                    }
+                    continue;  // (the generic output loop below is the non-exchange path)
+                }
+#endif
                 const bool last_block = bb + 1 == nb_b && mb + 1 == nb_m && nbk + 1 == nb_n;
                 for (uint32_t bi = 0; bi < block_batches; ++bi) {
                     const bool batch_valid = bi < blk_b_valid;
@@ -521,4 +714,7 @@ void kernel_main() {
     }
     MaybeDeviceZoneScope("wr_final_barrier");
     noc_async_write_barrier();
+#ifdef GM_SWX
+    noc_async_atomic_barrier();  // the READY / DATA increments left
+#endif
 }

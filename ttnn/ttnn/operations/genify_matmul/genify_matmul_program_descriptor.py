@@ -60,6 +60,7 @@ CB_WEIGHT_STAGE = 7  # B column line, reader
 CB_OUTPUT_TILES = 16  # output row groups, compute -> writer
 CB_OUTPUT_SHARD = 17  # R4: the output's own L1 shard (zero-copy), compute -> writer (wait/pop only)
 CB_PARTIALS = 24  # K-accumulator (packer L1 acc), compute -> compute; num_k_blocks > 1 or epilogue != none
+CB_XCHG = 25  # swiglu partner exchange: the up partner's accumulated up block (partials format), NoC -> compute
 
 # ---- Epilogue kinds (compile-time arg shared by reader and compute) ----
 EPILOGUES = {"none": 0, "bias": 1, "bias_relu": 2, "swiglu": 3, "addcmul": 4}
@@ -298,14 +299,31 @@ BANK_LOCAL_PLACEMENT = "row"
 # Grid rows of the bank-local split (its rectangle is the first rows): None = the whole grid (with "row" placement
 # every row either homes a bank or fills in for the most loaded one); an int pins a band of the first rows.
 BANK_LOCAL_ROWS = None
-# swiglu under the bank-local split. A (gate, up) pair's two tiles live in banks 2s and 2s + 1, whose home rows
-# differ, so half of every core's bytes cross grid rows: Qwen3.8 M = 128 gate_up B alone 76 us (home rows only) /
+# swiglu under the bank-local split with (gate, up) PAIR units (BANK_LOCAL_SWIGLU_XCHG off). A (gate, up) pair's two
+# tiles live in banks 2s and 2s + 1, whose home rows differ, so half of every core's bytes cross grid rows: Qwen3.8 M = 128 gate_up B alone 76 us (home rows only) /
 # 100 us (filled) vs 93 us flat, the whole op 101 / 111 vs 109 us; FLUX FF1 667 vs 631 us. False: swiglu keeps the
 # flat R1b split.
 BANK_LOCAL_SWIGLU = False
 # "row" placement: True = every core of no home row joins the most loaded class (by units per core), nearest its
 # homes; False = home rows only (the other cores idle).
 BANK_LOCAL_ROW_FILL = True
+# swiglu under the bank-local split with a gate / up PARTNER EXCHANGE (tournament 2, t2p2_swiglu_bank_exchange): the
+# split's unit is one B column (8 classes, every core streams ONE bank on its home row, as the non-swiglu split), so a
+# core owns gate columns (even banks) or up columns (odd banks). After the K-walk an up core ships its accumulated up
+# block (cb_partials: the K-accumulated value in the partials format, fp32 under fp32_dest_acc_en) to the gate
+# core(s) owning the matching gate columns (writer RISC, NoC writes into their CB_XCHG + a semaphore handshake); the
+# gate core runs the swiglu epilogue on (its partials, CB_XCHG) and writes the output. True: every swiglu cell the
+# bank split can express takes it; False: BANK_LOCAL_SWIGLU decides (pair units).
+BANK_LOCAL_SWIGLU_XCHG = True
+# The exchange's output rows: True = shared (an even block_m: the gate core keeps rows [0, block_m / 2) and sends the
+# rest of its gate tiles to the up core, which keeps rows [block_m / 2, block_m): both halves of the epilogue and of
+# the exchange run in parallel); False = one-sided (the up core ships its whole block, the gate core runs every row).
+BANK_LOCAL_SWIGLU_XCHG_SPLIT = True
+# The swiglu cells that take the exchange split. "r1b" (measured): the cells whose own choice is an R1b walk -- the flat
+# 1-D N split it replaces (Qwen3.8 M = 128 gate_up 108.8 -> 69.1 us, M = 256 138.7 -> 102.2, M = 32 96.5 -> 75.2, FLUX
+# FF1 623.7 -> 524.0). "all": also the R1a cells -- the split cost model ranks the bank split ahead there but it loses
+# (Qwen3.8 M = 512 gate_up R1a 156.2 us -> 206.1 us: every core streams all 16 A rows).
+BANK_LOCAL_SWIGLU_XCHG_SCOPE = "r1b"
 # Split-ranking prices of the bank-local split: its B stream's DRAM rate (bank runs: ~460 GB/s at 1.35 GHz) and
 # its A injector (one rectangle: each A byte is multicast once) in streamed-byte equivalents (cf. ACT_STREAM_*).
 BANK_LOCAL_DRAM_BYTES_PER_CYCLE = 330
@@ -501,6 +519,8 @@ class Geometry:
     b_banks: int = 0
     out_chunks: int = 1
     bank_home: tuple = ()  # per DRAM bank: its optimal NoC0 reader (x, y) (bank-local placement)
+    # BANK_LOCAL_SWIGLU_XCHG: swiglu on one-column bank units (gate and up columns on different cores, exchanged)
+    xchg: bool = False
 
     @property
     def swiglu(self):
@@ -509,10 +529,11 @@ class Geometry:
     @property
     def q_n_min(self):
         # swiglu: whole (gate, up) tile pairs per core and per block (N % 64 == 0 makes Nt even).
-        return 2 if self.swiglu else 1
+        return 2 if self.swiglu and not self.xchg else 1
 
     def out_block_n(self, block_n_tiles):
-        return block_n_tiles // 2 if self.swiglu else block_n_tiles
+        # xchg: a gate core's block is all gate columns, one output column each
+        return block_n_tiles // 2 if self.swiglu and not self.xchg else block_n_tiles
 
 
 @dataclass(frozen=True)
@@ -722,7 +743,7 @@ def bank_eligible(geom: Geometry):
     swiglu only under BANK_LOCAL_SWIGLU."""
     return (
         ACT_STREAM_BANK_LOCAL
-        and (BANK_LOCAL_SWIGLU or not geom.swiglu)
+        and (BANK_LOCAL_SWIGLU or not geom.swiglu or geom.xchg)
         and geom.b_banks > 0
         and geom.out_chunks == 1
         and geom.tensor_batches == 1
@@ -734,7 +755,7 @@ def bank_classes(geom: Geometry):
     """(unit, U, sizes): the bank-local stream's units (one B column, or a swiglu (gate, up) pair of 2) fall in U
     = banks / unit classes -- unit i is in class i % U, so class u's units are U apart and, for unit = 1, all in
     bank u (unit = 2: gates in bank 2u, ups in 2u + 1) whenever the row length is a multiple of the banks."""
-    unit = 2 if geom.swiglu else 1
+    unit = 2 if geom.swiglu and not geom.xchg else 1
     U = geom.b_banks // unit
     n_units = geom.tensor_n_tiles // unit
     return unit, U, [len(range(u, n_units, U)) for u in range(U)]
@@ -1180,6 +1201,7 @@ def _footprint(geom, bm, bn, bk, partials, out_in_place=False, depth_weight=None
         + (0 if out_in_place else DEPTH_OUT * sb_h * geom.out_block_n(bn) * geom.o_tile_bytes)
         + bn * geom.row_tile_bytes  # cb_bias_row / cb_gate_row: one N-block row
         + DEPTH_RESIDUAL * sb_h * bn * geom.r_tile_bytes  # cb_residual_tiles
+        + (bm * bn * geom.p_tile_bytes if geom.xchg else 0)  # CB_XCHG: the up partner's block
     )
 
 
@@ -1437,7 +1459,56 @@ def plan(a, b, out, fp32_dest_acc_en, device, epilogue="none", row=None, residua
     gx, gy = grid_size.x, grid_size.y
     budget = l1_cb_budget(device, [t for t in (*_a_list(a), b, *_out_list(out), row, residual) if t is not None])
     grid, blocking = choose_split(geom, gx, gy, budget)
+    if BANK_LOCAL_SWIGLU_XCHG and geom.swiglu and xchg_applies(geom, grid, blocking):
+        xchg = xchg_plan(replace(geom, xchg=True), gx, gy, budget)
+        if xchg is not None:
+            return (*xchg, (gx, gy))
     return geom, grid, blocking, (gx, gy)
+
+
+def xchg_applies(geom: Geometry, grid: GridChoice, blk: Blocking):
+    """BANK_LOCAL_SWIGLU_XCHG_SCOPE: "r1b" = the cells whose chosen split is an R1b walk (the flat 1-D N split the
+    exchange replaces); "all" = every cell the bank split can express."""
+    return BANK_LOCAL_SWIGLU_XCHG_SCOPE == "all" or operand_mode(geom, grid, blk) == 2
+
+
+def xchg_plan(geom: Geometry, gx: int, gy: int, budget: int):
+    """BANK_LOCAL_SWIGLU_XCHG: (geom, grid, blocking) of the one-column bank split of a swiglu cell, or None when it
+    cannot be expressed: no bank candidate (bank_eligible: interleaved DRAM B of bank runs, one output; every class
+    local: N % banks == 0), the walk misses R1b, or a core's columns span more than one N-block (the exchange
+    pairs whole blocks)."""
+    if not bank_eligible(geom) or geom.b_banks % 2 or geom.tensor_n_tiles % geom.b_banks:
+        return None
+    for grid in bank_candidates(geom, gx, gy):
+        try:
+            blk = choose_blocking(geom, grid, budget)
+        except RuntimeError:
+            continue
+        if operand_mode(geom, grid, blk) == 2 and blk.block_n_tiles == grid.core_n_tiles:
+            return geom, grid, blk
+    return None
+
+
+def xchg_partners(geom: Geometry, grid: GridChoice, gx: int):
+    """{(x, y): (role, parts)} of the exchange: role 0 = gate core, 1 = up core; parts = (x, y, my_c0, peer_c0, cols):
+    the partner core whose block columns [peer_c0, peer_c0 + cols) hold the same class units as this core's
+    [my_c0, my_c0 + cols). Gate class 2s and up class 2s + 1 hold the same class units t (output column s + (U / 2) t),
+    each cut into its own runs; idle cores (no columns) are role 2: no parts, no epilogue, no output."""
+    layout = bank_layout(geom, gx, grid.grid_n // gx)
+    gates = {}
+    for xy, (u, t0, w) in layout.items():
+        if w and u % 2 == 0:
+            gates.setdefault(u, []).append((xy, t0, w))
+    out = {xy: ((u % 2) if w else 2, []) for xy, (u, t0, w) in layout.items()}
+    for xy, (u, t0, w) in layout.items():
+        if not w or u % 2 == 0:
+            continue
+        for gxy, g0, gw in gates.get(u - 1, []):
+            lo, hi = max(t0, g0), min(t0 + w, g0 + gw)
+            if lo < hi:
+                out[xy][1].append((gxy[0], gxy[1], lo - t0, lo - g0, hi - lo))
+                out[gxy][1].append((xy[0], xy[1], lo - g0, lo - t0, hi - lo))
+    return out
 
 
 # ---------------------------------------------------------------------------
@@ -1650,12 +1721,17 @@ def create_program_descriptor(
             )
         )
 
+    if geom.xchg:
+        # The up partner's accumulated block (exactly one block, written over the NoC, partials format).
+        cbs.append(_cb(CB_XCHG, geom.p_dtype, geom.p_tile_bytes, blk.block_m_tiles * blk.block_n_tiles, core_ranges))
+
     # Absent epilogue tensors: B stands in for the accessor CT args (never dereferenced).
     row_t = row if row is not None else b
     res_t = residual if residual is not None else b
 
     # ---- Kernels ----
-    reader_ct = _reader_ct(geom, blk, a, b, epilogue, cb_row, row_t, res_t)
+    # xchg: the reader streams one-column bank units (no gate / up permutation): its walk is the epilogue-none one.
+    reader_ct = _reader_ct(geom, blk, a, b, "none" if geom.xchg else epilogue, cb_row, row_t, res_t)
     # [operand_mcast, a_sends, b_sends] + the R4 role args go between reader_ct and the accessors,
     # set per kernel group below.
     reader_accessor_ct = _reader_accessor_ct(a, b, row_t, res_t)
@@ -1686,6 +1762,8 @@ def create_program_descriptor(
     row_addr = row.buffer_address() if row is not None else 0
     res_addr = residual.buffer_address() if residual is not None else 0
     out_div = 2 if geom.swiglu else 1  # B columns per output column
+    xchg = xchg_partners(geom, grid, gx) if geom.xchg else None
+    virt = lambda x, y: (lambda v: (v.x, v.y))(device.worker_core_from_logical_core(ttnn.CoreCoord(x, y)))
     reader_roles = {}  # core -> (a_sends, b_sends)
     reader_args = {}  # core -> reader runtime args (placed per role group below)
     bank_cols = bank_core_columns(geom, grid, gx) if grid.placement == "bank" else None
@@ -1731,6 +1809,16 @@ def create_program_descriptor(
         ]
         # The writer walks output columns: swiglu halves col0 / cols_valid (both even, q_n >= 2).
         out_region = [b0, batches_valid, row0, rows_valid, col0 // out_div, cols_valid // out_div, nb_b, nb_m, nb_n]
+        xchg_rt = []
+        if xchg is not None:
+            # A gate core writes its gate columns' outputs (gate column 2s + 2Ut <-> output s + Ut); an up core none.
+            role, parts = xchg[(core.x, core.y)]
+            keep = (xchg_rows(blk), blk.block_m_tiles - xchg_rows(blk), 0)[role]  # output rows of each block
+            out_region[5] = cols_valid if keep else 0
+            expect = keep * cols_valid  # partner tiles per block (the kept rows of this core's columns)
+            xchg_rt = [role, expect, len(parts)]
+            for px, py, s0, d0, n in parts:
+                xchg_rt += [*virt(px, py), s0, d0, n]
         # R1b / R1a split lines: the writer reads A.
         a_stream_rt = [a_addr, geom.tensor_k_tiles, *a_seg_table] if (act_stream or split) else []
         wrt = [out_addr, *out_region, geom.tensor_m_tiles, out_row_tiles, *a_stream_rt, *chunk_addrs]
@@ -1739,8 +1827,11 @@ def create_program_descriptor(
         if tail_pol is not None:  # GM_TAIL_POLICY: right after the chunk table on both RISCs
             wrt += list(tail_pol[(core.x, core.y)])
             reader_args[(core.x, core.y)] += list(tail_pol[(core.x, core.y)])
+        if xchg is not None:
+            wrt += xchg_rt
+            reader_args[(core.x, core.y)] += xchg_rt[:1]
         writer_rt[core.x][core.y] = wrt
-        compute_rt[core.x][core.y] = [nb_b * nb_m * nb_n, NO_OWN_KB, nb_n]
+        compute_rt[core.x][core.y] = [nb_b * nb_m * nb_n, NO_OWN_KB, nb_n] + xchg_rt[:1]
 
     # One reader kernel per (a_sends, b_sends) role group: under R1a the line injectors are CT-
     # specialized, so every core hosts exactly one reader. Plain R1 is a single group (0, 0).
@@ -1827,13 +1918,16 @@ def create_program_descriptor(
             k.defines = list(k.defines) + [("GM_A_SEGMENTS", str(len(a_segs)))]
     if grid.placement == "bank":
         unit, U, _ = bank_classes(geom)
+        out_stride = U // 2 if geom.xchg else U  # xchg: output columns of a gate class are U / 2 apart
         for k in readers:
             k.defines = list(k.defines) + [
                 ("GM_BANK_STRIDE", str(unit * U)),
                 ("GM_BANK_RUNS", "1"),
-                ("GM_OUT_STRIDE", str(U)),
+                ("GM_OUT_STRIDE", str(out_stride)),
             ]
-        writer.defines = list(writer.defines) + [("GM_OUT_STRIDE", str(U))]
+        writer.defines = list(writer.defines) + [("GM_OUT_STRIDE", str(out_stride))]
+    if geom.xchg:
+        _attach_xchg(descriptor, readers, writer, compute, core_ranges, blk, geom)
     _attach_k_head_ramp(readers, compute, blk, mode, epilogue, writer if split else None)
     walk, *streams = split_cost_terms(geom, grid, blk)
     if NONE_RAW_WALK and epilogue == "none" and walk >= NONE_RAW_WALK_MIN_RATIO * max(streams):
@@ -1846,6 +1940,35 @@ def create_program_descriptor(
         k.defines = list(k.defines) + [(d, "1") for d in ABLATE_DEFINES.split("+") if d]
     descriptor.kernels = [*readers, writer, compute]
     return descriptor
+
+
+def xchg_rows(blk: Blocking):
+    """The gate core's output rows of each block (GM_SWX_ROWS): half under BANK_LOCAL_SWIGLU_XCHG_SPLIT (even
+    block_m), else all."""
+    m = blk.block_m_tiles
+    return m // 2 if BANK_LOCAL_SWIGLU_XCHG_SPLIT and m % 2 == 0 else m
+
+
+def _attach_xchg(descriptor, readers, writer, compute, core_ranges, blk, geom):
+    """BANK_LOCAL_SWIGLU_XCHG: two semaphores (READY on an up core: its gate partners' CB_XCHG is free; DATA on a gate
+    core: up tiles landed) and the GM_SWX defines (role = the last RT arg of the reader / compute, the writer's xchg
+    table after its tail policy)."""
+    sems = list(descriptor.semaphores)
+    base = max([sm.id for sm in sems], default=-1) + 1
+    for i in range(2):
+        sems.append(ttnn.SemaphoreDescriptor(id=base + i, core_ranges=core_ranges, initial_value=0))
+    descriptor.semaphores = sems
+    defs = [
+        ("GM_SWX", "1"),
+        ("GM_SWX_CB", str(CB_XCHG)),
+        ("GM_SWX_PARTIALS_CB", str(CB_PARTIALS)),
+        ("GM_SWX_TILE_BYTES", str(geom.p_tile_bytes)),
+        ("GM_SWX_SEM_READY", str(base)),
+        ("GM_SWX_SEM_DATA", str(base + 1)),
+        ("GM_SWX_ROWS", str(xchg_rows(blk))),
+    ]
+    for k in (*readers, writer, compute):
+        k.defines = list(k.defines) + defs
 
 
 def bank_tail_policy(geom: Geometry, grid: GridChoice, bank_cols, out):

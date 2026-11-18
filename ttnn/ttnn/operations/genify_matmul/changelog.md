@@ -1348,3 +1348,106 @@ Precision: no option traded precision.
 | helper | kind | what was missing / hard | helper ns | raw ns | site |
 |---|---|---|---|---|---|
 | `compute_kernel_lib::matmul_block` (LLK `_llk_math_matmul_` under every flavour) | capability | (1) No multi-tile MVMUL sequence that advances DEST by address modifier instead of writing the DEST offset (SETC16) before every output tile, for any rt_dim × ct_dim: ~2.5 cycles per HiFi2 tile-K on a 4×1 subblock. (2) No "accumulate in an L1 partials block, emit to the output row group by row group during the last K-block" target. `LastBlockTarget::Out` reloads the partials into DEST per subblock, with a data-format reconfig + `copy_init` + `matmul_block_init` per subblock (20× per block on the focus). `Interm` leaves the whole block for an after-walk copy. | 404100 (whole op); 337900 (isolated K-walk, 35.63 cyc/tile-K) | 379100; 313400 (33.06 cyc/tile-K) | `kernels/genify_matmul_compute.cpp:320`, `:367` → `kernels/genify_matmul_kwalk.hpp:189` |
+
+## Perf 2 (tournament 2) — PERF FOCUS: Qwen3.8 prefill MLP gate_up + SwiGLU, 128 tokens, A in L1
+- Date: 2026-11-18. Round 2 of the second perf tournament. The earlier `## Perf 2` entry belongs to the first tournament.
+- **Focus** (`LOOSE_CASES` attention #1, exact config):
+  - A (1, 128, 5120) bf16, L1 interleaved; B (5120, 8704) bfloat4_b, DRAM interleaved; bf16 output in DRAM.
+  - swiglu, LoFi, fp32 DEST, math_approx off.
+  - Roofline 56.8 µs; stock 105.4 µs.
+  - Every knob is in `SUPPORTED`.
+- **Before:** 106.4 / 106.6 µs on the flat R1b split. 1×68 cores, each owning 4 B columns (2 (gate, up) pairs); sb 1×4; 5 K-blocks of 32; one fixed A injector. The 68 cores form two multicast rectangles, so A goes out twice.
+- **Bench:**
+  - `agent_logs/t2p2_run.sh <id> "<knobs>"` runs one case.
+  - `agent_logs/t2p2_coremap.py <csv> <zone>` prints a per-core zone-end map.
+  - `agent_logs/t2p2_guard.sh` runs the base-vs-new guard.
+
+### Measured breakdown (cumulative ablation, µs)
+- full 106.5
+- compute stubbed: 93.0
+- B stubbed: 69.5
+- A stubbed: 108.5
+- **B stream alone** (compute and A stubbed): **94.3**
+- A stream alone (compute and B stubbed): 60.8
+- compute alone (A and B stubbed): 38.8
+- everything stubbed: 10.5
+
+What the per-core zones show:
+- **B stream:** the end of `rd_issue` follows the NoC0 row. Logical rows 0–1 finish at ~88 µs, row 4 at ~55, rows 5–6 at ~27. This is the Refinement-15 effect: responses that cross grid rows are slow.
+- **A stream on the flat split:** `wr_a_inject` takes 58.8 µs: ~20 µs of A reads serialized with 39 µs of sends (two rectangles).
+- **Existing knob `BANK_LOCAL_SWIGLU=True`** (pair units):
+  - With row fill: 113.6 µs.
+  - Home rows only: 98.8 µs. Here B alone is 75.7 and A alone 47.5. Compute alone is 62.1, because cores get 6 columns.
+  - Pair units span banks 2s / 2s+1. On this board their NoC0 home rows are (9, 0), (7, 3), (9, 1), (6, 4).
+
+Ceilings (the analytic Step-4b numbers; the `noc_estimate` CLI is not built on this checkout):
+- B: 25.07 MB at 460.8 GB/s → 54.4 µs.
+- A ingress: 1.31 MB at 64 B/cycle × 1.35 GHz → 15.2 µs.
+- Compute: ~33 µs.
+
+**Ranked:**
+1. B stream: 94 µs against a 54 µs floor.
+2. A multicast: 61 µs flat, 47.5 µs bank split, against a 15 µs floor.
+3. Tail (epilogue + write after the last MAC): ~5–8 µs.
+4. Compute: near its roofline; not floated.
+
+### Portfolio (4 experiments, one perf-part-optimizer each) and verdicts
+| idea | stage | verdict | focus µs (base → candidate) | domain / notes |
+|---|---|---|---|---|
+| `t2p2_swiglu_bank_exchange`: bank-local split on ONE-column units (every core streams one bank on its home row); gate and up columns on different cores, exchanged after the K-walk | B stream | **WIN** | 107.6 → 69.5 (split exchange); 73.9 one-sided | Bit-identical on the focus. B alone 92.8 → 59.4 µs (~420 GB/s). Domain: every swiglu cell whose split is R1b. f256_ff1 −17 %, Qwen M=256 −26 %, M=32 −22 %. Measured regression on R1a cells when forced (q512 gate_up 156.2 → 206.1: every core streams all 16 A rows) → carve-out. Inexpressible (falls back to flat R1b): no interleaved-DRAM bank-run B, N not a multiple of the banks, chunked output, a core's columns over more than one N-block. |
+| `t2p2_swiglu_pair_placement`: keep pair units; place them to avoid the NoC0 +y torus seam and cap 2 pairs per core; add a seam term to the split cost | B stream | WIN, **superseded** | 107.5 → 77.6 | Bit-identical. Mutually exclusive with the exchange (both are the swiglu bank split); the exchange is 8 µs faster. Its finding (NoC0 responses that wrap the +y seam deliver ~26 B/cycle; the x wrap is cheap) is the round-3 lever for the exchange's fill-row cores, below. Not graduated. |
+| `t2p2_act_stream_rounds`: R1b rotating injectors: split the pipe's receive into ack / wait so an injector acks round r+1 right after its send and issues its next turn's reads one tile per poll | A stream | **WIN** (isolated, composes) | Whole op flat on the old base (B-bound); A alone 47.4 → 41.6 | Bit-identical. f256_ctx 248.4 → 230.7. Domain: every rotating-injector (bank split) cell, no exceptions; the flat split's fixed injector is untouched. Not graduated: "ack one round ahead" (38.7 µs A alone), which is safe only by a timing margin (a violation would hang). |
+| `t2p2_swiglu_stream_epilogue`: stream silu(gate)·up per row group inside the last K-block | tail | **NULL** | 108.0 → 107.8 | Bit-identical. The SFPU passes run on TRISC1, the same thread as the FPU walk, which is saturated on LoFi bfp4 (17.7 cycles/tile-K), so the work is only reordered. r11 s_ff1 −2.8 % is inside the 2–3 % noise band, so it is not a win. Not graduated: no raw-LLK bypass for a noise-level gain. |
+
+Precision: no option traded precision. Every candidate was bit-identical to HEAD on the focus. The exchange's f256_ff1 had 59 of 2.36 M elements off by 1 bf16 ulp, from a different K-blocking (8×24 vs 10×20 block_k × K-blocks); PCC and rel-RMS match to 6 digits.
+
+### Graduated (aggregate: exchange + A-stream rounds; placement superseded, epilogue streaming null)
+1. **Swiglu partner exchange.**
+   - Changes: `genify_matmul_program_descriptor.py` (`BANK_LOCAL_SWIGLU_XCHG`, `xchg_plan`, `xchg_partners`, `_attach_xchg`, `CB_XCHG = 25`, two semaphores) and the reader / writer / compute kernels under `GM_SWX`.
+   - Split: under swiglu the bank split uses one-column units, 8 classes, "row" placement plus row fill. Each up core's writer sends the gate partner its K-accumulated up block straight from `cb_partials` (partials format, fp32 under fp32 DEST) over NoC1 into `CB_XCHG`, with a READY / DATA semaphore handshake.
+   - Shared rows (`BANK_LOCAL_SWIGLU_XCHG_SPLIT`, even block_m): the gate core keeps rows [0, M/2) and sends its other gate rows to the up core, which keeps [M/2, M). Both cores run the existing SwiGluMul `eltwise_chain` epilogue on half the rows.
+   - Where it applies: every swiglu cell whose own split choice is R1b. That flat 1-D N split is the code it replaces; it remains only as the fallback for the inexpressible cases above.
+   - **Carve-out** (`BANK_LOCAL_SWIGLU_XCHG_SCOPE = "r1b"`): cells whose split is R1a keep R1a. Earned by a measured regression: q512 gate_up 156.2 → 206.1 µs when forced, and the cost model mis-ranks it (115.9 vs 118.3 estimated).
+   - Instrumentation (PERMANENT): `wr_swx_ready`, `wr_swx_wait_partials`, `wr_swx_wait_ready`, `wr_swx_send`, `wr_swx_wait_data`. The zone-hash check finds no collisions, and on the focus the zones cover the whole kernel span.
+   - The old pair-unit bank swiglu (`BANK_LOCAL_SWIGLU`, default False, never production) is still an off knob.
+2. **A-stream rounds** (`kernels/genify_matmul_rx_split.hpp`, writer's rotating-injector branch).
+   - It is the only rotating-injector path, with no guard and no dual path; the old "issue before send when slots are free" ordering is deleted.
+   - New PERMANENT zone `wr_a_wait`.
+- **Whole op, focus:** 106.4 / 106.6 → **68.8 / 70.3 / 68.8 µs (−35 %)**, then 70.2 in the guard run. That is 1.21× the 56.8 µs roofline and 0.66× stock. PCC 0.999991, rel-RMS 0.00831, unchanged.
+  - Exchange alone: 69.5. Adding the A rounds moves the A stream's end from 49.7 to 43.8 µs and the median core's K-walk end from 54.3 to 48.5 µs. It does not move the wall yet.
+  - **What binds now:** the fill-row cores (logical rows 2 / 5 / 8, home to no bank) stream banks homed on other rows. Their K-walk ends at 58–64 µs against 48.5 for the median core. Home rows only (`BANK_LOCAL_ROW_FILL=False`) measured 95.2 µs, so fill stays.
+  - Round-3 lever: seam-aware fill-row assignment / weighting on the one-column layout, from the placement experiment's finding.
+
+### Guard (no regression)
+- **Method:** base = HEAD's descriptor and kernels (checked out), new = graduation, same session, one fresh run per cell. Files: r15 (17), r16 (15), r17 (10), r11 (15), flux (20), focus (1), sharded (46), guard (62).
+- **Faster beyond 3 %:**
+  - q128 gate_up: r15 107.4 → 70.2, flux L1-out 107.2 → 69.2, guard 108.5 → 70.6.
+  - f256_ff1: 629.7 → 518.1 (r15) and 627.7 → 521.6 (flux).
+  - f256_ctx: 248.6 → 228.2 / 248.4 → 229.7.
+  - te_qkv_bf16_hifi4: 175.3 → 150.1.
+  - f256_attn: 103.8 → 98.3 / 104.2 → 98.9 / 95.9 → 92.0.
+  - guard 256×9216×6144: −6.9 %; 256×15360×3072: HiFi4 −4.1 %, HiFi2 −8.6 %.
+  - hs_res2_expand: −3.8 %.
+  - Every other cell within ±3 %.
+- **Flagged slower and re-run** (alternating base / new, 3 reps each; every cell is over 32 tiles). All are noise, so no carve-out:
+
+| cell | new µs | base µs | read |
+|---|---|---|---|
+| hs_res2_reduce | 6.2 / 6.2 / 6.4 | 6.2 / 6.2 / 6.2 | equal |
+| bs_res5_reduce2 | 40.5 / 39.8 / 39.0 | 40.5 / 38.7 / 40.2 | equal |
+| bs_aspp_pool | 8.8 / 9.2 / 9.6 | 9.3 / 8.8 / 8.7 | ranges overlap; neither patch changes this path's behaviour |
+| guard 32×1024×2048 | 11.8 / 12.0 / 12.1 | 12.0 / 12.2 / 11.8 | equal |
+| q128_in | 49.3 / 50.2 / 50.5 | 50.5 / 50.6 / 51.4 | new faster |
+
+- **Correctness:**
+  - Golden `test_golden.py`: 1425 passed + 375 xfailed (the permanent EXCLUSIONs) for the cartesian, run per epilogue (swiglu, addcmul, bias + bias_relu, none). Loose + feature: 98 passed.
+  - `test_regression.py`: 10/10.
+  - Unit (bank_local, stream_mcast, sharded_b_mcast, epilogue, mcast, tail_split, segments, chunks, main, extended, residency, block / height / dram sharded, split_lines, precision_baseline): 255 passed.
+- **Artifacts:** `perf_experiments/t2p2_{swiglu_bank_exchange,swiglu_pair_placement,act_stream_rounds,swiglu_stream_epilogue}/`, each with its graduation patch, plus the shim tests under `tests/.../genify_matmul/perf_experiments/t2p2_*`.
+
+### Helper bypasses
+| helper | kind | what was missing / hard | helper ns | raw ns | site |
+|---|---|---|---|---|---|
+| `dataflow_kernel_lib::ReceiverPipe::receive(round)` (mcast pipe, `mcast_pipe.inl`) | capability | `receive()` fuses "ack round r's sender" (consumer_ready.up) with "wait for / clear round r's data-ready flag" in one call. A rotating injector therefore cannot ack round r+1 and THEN spend its idle time issuing its next turn's reads: the work sits either before its own send or before its ack (which gates the next sender). Needed: `receive_ack(round)` / `ready(round)` (non-blocking poll) / `receive_wait(round)` as separate calls. Also: a data-ready flag carrying the round number, so acking one round ahead would be safe by construction (it is not today, so that faster option was left out). | 47400 (A stream alone, focus, bank split); 248400 (f256_ctx whole op) | 41600; 230700 | `kernels/genify_matmul_writer.cpp:300` → `kernels/genify_matmul_rx_split.hpp` |
+
+The exchange itself uses no raw LLK: standard dataflow API (`noc_async_write`, semaphores) and the existing `eltwise_chain` SwiGluMul epilogue.

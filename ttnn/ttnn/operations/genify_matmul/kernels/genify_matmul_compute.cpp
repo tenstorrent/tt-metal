@@ -302,11 +302,70 @@ ALWI void run_epilogue(
     }
 }
 
+#ifdef GM_SWX
+// t2p2_swiglu_bank_exchange (host BANK_LOCAL_SWIGLU_XCHG): one-column bank units, so a core's block holds only gate
+// columns (role 0) or only up columns (role 1). The partner's matching tiles arrive over the NoC in GM_SWX_CB at the
+// same block positions, in the partials format (the K-accumulated value the epilogue sees today). The block's output
+// rows are shared: the gate core runs rows [0, GM_SWX_ROWS), the up core rows [GM_SWX_ROWS, block_m) (none when
+// GM_SWX_ROWS == block_m: one-sided exchange). out(r, c) = silu(gate(r, c)) * up(r, c), packed row by row.
+constexpr uint32_t swx_rows = GM_SWX_ROWS;
+static_assert(is_swiglu && block_batches == 1);
+static_assert(swx_rows == block_m_tiles || 2 * swx_rows == block_m_tiles);
+template <uint32_t cb_gate, uint32_t cb_up>
+ALWI void swx_chain(DataflowBuffer& gate_dfb, DataflowBuffer& up_dfb, DataflowBuffer& out_dfb, uint32_t base) {
+    using namespace ckl;
+    constexpr bool grade = silu_fp32_precision && DST_ACCUM_MODE;
+    eltwise_chain(
+        IterationShape::grid(swx_rows, block_n_tiles).block_size(epilogue_block_tiles),
+        CopyTile<
+            input(
+                cb_gate,
+                WaitPolicy::None,
+                PopPolicy::None,
+                InputTileMapping::Block,
+                DataFormatReconfig::Enabled,
+                TileAddressing::Strided),
+            Dst::D0>{gate_dfb, StridedTileRange{base, block_n_tiles}},
+        CopyTile<
+            input(
+                cb_up,
+                WaitPolicy::None,
+                PopPolicy::None,
+                InputTileMapping::Block,
+                DataFormatReconfig::Enabled,
+                TileAddressing::Strided),
+            Dst::D1>{up_dfb, StridedTileRange{base, block_n_tiles}},
+        SwiGluMul<grade>{},
+        PackTile<output(cb_output_tiles, ReservePolicy::PerOuter, PushPolicy::PerOuter), SwiGluMul<grade>::out_slot>{
+            out_dfb});
+}
+ALWI void swx_epilogue(bool up) {
+    constexpr uint32_t cb_xchg = GM_SWX_CB;
+    CircularBuffer partials_buf(cb_partials), xchg_buf(cb_xchg);
+    DataflowBuffer partials_dfb(cb_partials), xchg_dfb(cb_xchg), out_dfb(cb_output_tiles);
+    partials_buf.wait_front(block_tiles);
+    xchg_buf.wait_front(block_tiles);
+    if (!up) {
+        swx_chain<cb_partials, cb_xchg>(partials_dfb, xchg_dfb, out_dfb, 0);
+    } else {
+        swx_chain<cb_xchg, cb_partials>(xchg_dfb, partials_dfb, out_dfb, swx_rows * block_n_tiles);
+    }
+    partials_buf.pop_front(block_tiles);
+    xchg_buf.pop_front(block_tiles);
+}
+#endif
+
 void kernel_main() {
     const uint32_t num_blocks = get_arg_val<uint32_t>(0);
     const uint32_t own_kb = get_arg_val<uint32_t>(1);  // R3: this core's K shard; NO_OWN_KB elsewhere
     // A residency: blocks per M-block (N-blocks, n fastest); A is popped after each group. R1 only.
     [[maybe_unused]] const uint32_t nb_n = act_resident ? get_arg_val<uint32_t>(2) : 1;
+#ifdef GM_SWX
+    // t2p2_swiglu_bank_exchange: role 0 = gate core, 1 = up core (swx_epilogue), 2 = idle core.
+    const uint32_t swx_role = get_arg_val<uint32_t>(3);  // 2 = idle (no columns): no epilogue
+    const bool swx_up = swx_role == 1;
+    const bool swx_epi = swx_role == 0 || (swx_up && swx_rows != block_m_tiles);
+#endif
 
     // matmul maps in0 -> SrcB, in1 -> SrcA: Reverse is mandatory.
     compute_kernel_hw_startup<SrcOrder::Reverse>(cb_act_tiles, cb_weight_tiles, cb_output_tiles);
@@ -388,10 +447,18 @@ void kernel_main() {
                         row_buf.wait_front(block_n_tiles);
                     }
                 }
+#ifdef GM_SWX
+                // an up core of a one-sided exchange runs no rows: its writer ships and pops the partials
+                if (swx_epi) {
+                    MaybeDeviceZoneScope("cmp_epilogue");
+                    swx_epilogue(swx_up);
+                }
+#else
                 {
                     MaybeDeviceZoneScope("cmp_epilogue");
                     run_epilogue(interm_buf, row_buf, out_buf, partials_dfb, row_dfb, residual_dfb, out_dfb);
                 }
+#endif
             }
             if constexpr (has_row) {
                 row_buf.pop_front(block_n_tiles);

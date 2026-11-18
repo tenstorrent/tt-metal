@@ -431,6 +431,13 @@ void kernel_main() {
     const out_chunks::Table t_out_tab = out_chunks::read_table(t_out_addr, t_out_n_tiles, arg);
     // Perf 1 (tournament 2) tail policy (GM_TAIL_POLICY): this RISC's tiles of every tail row.
     const tail_split::Policy t_pol = tail_split::read_policy(arg);
+#ifdef GM_SWX
+    // t2p2_swiglu_bank_exchange: the writer writes every output row of the core (no tail post): serve none.
+    [[maybe_unused]] const uint32_t swx_role = get_arg_val<uint32_t>(arg++);
+    constexpr bool swx_up = true;
+#else
+    constexpr bool swx_up = false;
+#endif
     const uint32_t tail_mbox = get_semaphore(TAIL_SEM_MBOX);
     const uint32_t tail_post = get_semaphore(TAIL_SEM_POST);
     const uint32_t tail_done = get_semaphore(TAIL_SEM_DONE);
@@ -1133,7 +1140,9 @@ void kernel_main() {
 #if TAIL_SPLIT_MODE != 0
     {
         MaybeDeviceZoneScope("rd_tail_write");
-        serve_before(0xFFFFFFFFu);  // the rest of the tail
+        if (!swx_up) {
+            serve_before(0xFFFFFFFFu);  // the rest of the tail
+        }
         noc_async_write_barrier();
     }
 #endif

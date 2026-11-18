@@ -1,0 +1,44 @@
+ASRHASH test_perf_r15[q128_in] (1, 128, 5120) 377e869bc123602e
+ASRHASH test_perf_r15[q128_in] (5120, 4160) 5ea454ca34bac4db
+ASRHASH test_perf_r15[q128_in] (1, 128, 4160) b9e7322d79d6cd96
+ASRHASH test_perf_r15[q128_down] (1, 128, 4352) 171d70a7e4dc2012
+ASRHASH test_perf_r15[q128_down] (4352, 5120) f561853a2eb183e0
+ASRHASH test_perf_r15[q128_down] (1, 128, 5120) 377e869bc123602e
+ASRHASH test_perf_r15[f256_qkv] (1, 256, 6144) 1e5f8def40bb0cb0
+ASRHASH test_perf_r15[f256_qkv] (6144, 9216) 91e17968d0d6fc76
+ASRHASH test_perf_r15[f256_qkv] (1, 256, 9216) 821937f946b0fceb
+ASRHASH test_perf_r15[f256_ff1] (1, 256, 6144) 1e5f8def40bb0cb0
+ASRHASH test_perf_r15[f256_ff1] (6144, 18432) 3b60918b704785f9
+ASRHASH test_perf_r15[f256_ff1] (1, 256, 9216) 821937f946b0fceb
+ASRHASH test_perf_r15[f256_ctx] (1, 256, 15360) 62db3a343498be95
+ASRHASH test_perf_r15[f256_ctx] (15360, 3072) b48aa78732df9c11
+ASRHASH test_perf_r15[f256_ctx] (1, 256, 3072) 95823c334fce5596
+ASRHASH test_perf_r15[f1_tmod] (1, 6144) ebdd38b69cd5b9f2
+ASRHASH test_perf_r15[f1_tmod] (6144, 52224) 27d641ddf1e2470b
+ASRHASH test_perf_r15[f1_tmod] (1, 52224) 488bbd197add2c08
+ASRHASH test_perf_r15[f1_tmod] (1, 52224) 488bbd197add2c08
+ASRHASH test_perf_r15[q128_in] (1, 128, 5120) 6beda20ac5d7af76
+ASRHASH test_perf_r15[q128_in] (5120, 4160) c381184ca12b1339
+ASRHASH test_perf_r15[q128_in] (1, 128, 4160) 33b07b0d21638115
+CHECK q128_in pcc=1.000000 rel_rms=0.00458
+ASRHASH test_perf_r15[q128_down] (1, 128, 4352) 6cc3cc29f547f940
+ASRHASH test_perf_r15[q128_down] (4352, 5120) 4df97249c16de8f2
+ASRHASH test_perf_r15[q128_down] (1, 128, 5120) d409c3121677a75c
+CHECK q128_down pcc=0.999991 rel_rms=0.00457
+ASRHASH test_perf_r15[f256_qkv] (1, 256, 6144) 334d0b1c535fc9fc
+ASRHASH test_perf_r15[f256_qkv] (6144, 9216) 740234270b2d6926
+ASRHASH test_perf_r15[f256_qkv] (1, 256, 9216) 54d76d2c5de711f6
+CHECK f256_qkv pcc=0.999983 rel_rms=0.00460
+ASRHASH test_perf_r15[f256_ff1] (1, 256, 6144) 334d0b1c535fc9fc
+ASRHASH test_perf_r15[f256_ff1] (6144, 18432) e9739f5a9b4b6cec
+ASRHASH test_perf_r15[f256_ff1] (1, 256, 9216) 2121e2a35a41c137
+CHECK f256_ff1 pcc=0.999991 rel_rms=0.00823
+ASRHASH test_perf_r15[f256_ctx] (1, 256, 15360) 44283260a4f5d64d
+ASRHASH test_perf_r15[f256_ctx] (15360, 3072) 187fff9c786fe44f
+ASRHASH test_perf_r15[f256_ctx] (1, 256, 3072) 69a5c82ea9dba246
+CHECK f256_ctx pcc=0.999986 rel_rms=0.00461
+ASRHASH test_perf_r15[f1_tmod] (1, 6144) ae7c937771334b13
+ASRHASH test_perf_r15[f1_tmod] (6144, 52224) f5fa2b18aaa58f3d
+ASRHASH test_perf_r15[f1_tmod] (1, 52224) a6361eff08a01bd2
+ASRHASH test_perf_r15[f1_tmod] (1, 52224) 8bbd30b0a27b788c
+CHECK f1_tmod pcc=0.999992 rel_rms=0.00491

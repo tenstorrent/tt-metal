@@ -1,0 +1,183 @@
+--- a/ttnn/ttnn/operations/genify_matmul/genify_matmul_program_descriptor.py
++++ b/ttnn/ttnn/operations/genify_matmul/genify_matmul_program_descriptor.py
+@@ -300,12 +300,24 @@
+ BANK_LOCAL_ROWS = None
+ # swiglu under the bank-local split. A (gate, up) pair's two tiles live in banks 2s and 2s + 1, whose home rows
+ # differ, so half of every core's bytes cross grid rows: Qwen3.8 M = 128 gate_up B alone 76 us (home rows only) /
+-# 100 us (filled) vs 93 us flat, the whole op 101 / 111 vs 109 us; FLUX FF1 667 vs 631 us. False: swiglu keeps the
+-# flat R1b split.
+-BANK_LOCAL_SWIGLU = False
++# 100 us (filled) vs 93 us flat, the whole op 101 / 111 vs 109 us; FLUX FF1 667 vs 631 us. With the seam placement
++# (BANK_LOCAL_PAIR_SEAM) and its split-ranking term, Qwen3.8 M = 128 gate_up 106.5 -> ~78 us, FLUX FF1 keeps the flat
++# split. False: swiglu keeps the flat R1b split.
++BANK_LOCAL_SWIGLU = True
+ # "row" placement: True = every core of no home row joins the most loaded class (by units per core), nearest its
+ # homes; False = home rows only (the other cores idle).
+ BANK_LOCAL_ROW_FILL = True
++# swiglu placement of the bank-local split (bank_seam_layout). NoC0 delivers a read response +x along its bank's home
++# row, then +y down the core's column; the +y torus seam (last grid row -> first) is the slow part: a bank whose
++# responses cross it streams them at ~26 B/cycle (Qwen3.8 M = 128 gate_up, gate banks 0 / 4 homed on the last row:
++# 85-94 us for one bank wholly across the seam vs 53 us for a pair class on rows below both its homes), while the +x
++# seam streams at full rate (a class placed across it: 55 us either side). True: each pair class first takes the cells
++# below both its banks' home rows, then cells crossing the seam for one bank, spread over the columns (Qwen3.8
++# M = 128 gate_up 106.5 us flat -> ~78 us; "row" home rows 98.4 us). False: the "row" placement above.
++BANK_LOCAL_PAIR_SEAM = True
++# Split-ranking price of that seam: a bank's seam-crossing bytes per cycle (measured 25-27: Qwen3.8 M = 128 gate_up
++# 2.2 MB of gate bank 4 in ~60 us, FLUX FF1 22.4 MB in ~655 us), folded into the bank split's B-stream term.
++BANK_LOCAL_SEAM_BYTES_PER_CYCLE = 26
+ # Split-ranking prices of the bank-local split: its B stream's DRAM rate (bank runs: ~460 GB/s at 1.35 GHz) and
+ # its A injector (one rectangle: each A byte is multicast once) in streamed-byte equivalents (cf. ACT_STREAM_*).
+ BANK_LOCAL_DRAM_BYTES_PER_CYCLE = 330
+@@ -525,6 +537,8 @@
+     core_n_tiles: int
+     q_n: int
+     placement: str  # "rect" (x=n, y=m), "rect_t" (x=m, y=n), "flat" (row-wise list) or "bank" (Refinement 15)
++    # `bank` under swiglu: the most B bytes one bank streams across the NoC0 +y seam (BANK_LOCAL_PAIR_SEAM)
++    seam_bytes: int = 0
+ 
+ 
+ @dataclass(frozen=True)
+@@ -764,6 +778,8 @@
+     cores = [(x, y) for y in range(rows) for x in range(gx)]
+     homes = [[geom.bank_home[unit * u + i] for i in range(unit)] for u in range(U)]
+     local = geom.tensor_n_tiles % geom.b_banks == 0  # a class's units stay in its banks on every K row
++    if placement == "row" and local and unit == 2 and BANK_LOCAL_PAIR_SEAM:
++        return bank_seam_layout(gx, rows, homes, sizes)
+     if placement == "row" and local:
+         members = {u: [] for u in range(U)}
+         for x, y in cores:
+@@ -812,6 +828,95 @@
+     return {xy: out.get(xy, (0, 0, 0)) for xy in cores}
+ 
+ 
++def bank_seam_layout(gx: int, rows: int, homes, sizes):
++    """BANK_LOCAL_PAIR_SEAM: the swiglu pair classes (homes[u]: the NoC0 home (x, y) of each bank of class u, sizes[u]
++    its units) on the grid rows [0, rows), as bank_layout's {(x, y): (u, t0, w)}; None when infeasible. A cell on row r
++    crosses the +y seam for every bank of its class homed below r (home row > r).
++      1. units per core w: the smallest that fits (every core walks the grid's nominal max run);
++      2. seam-free cells: the class with the fewest free ones claims first, its cells ordered by +x distance from its
++         banks' DRAM column, then row; a row several classes need equally goes, cell by cell, to the nearest in +x;
++      3. cells crossing the seam for one bank, then for both: greedy over (class, cell) by the column's seam load
++         (units already crossing it there), the hops past the seam, then +x distance -- the seam traffic spreads over
++         every column instead of stacking."""
++    U = len(sizes)
++    cells = [(x, y) for y in range(rows) for x in range(gx)]
++    hx = [homes[u][0][0] for u in range(U)]
++
++    def wraps(u, r):
++        return sum(1 for _, hy in homes[u] if r < hy)
++
++    def xpref(u, x):
++        return (x - hx[u]) % gx
++
++    def hops(u, r):
++        return max([r + rows - hy for _, hy in homes[u] if r < hy] or [0])
++
++    for w in range(max(1, _cdiv(sum(sizes), len(cells))), max(sizes) + 1):
++        need = [_cdiv(s, w) for s in sizes]
++        if sum(need) > len(cells):
++            continue
++        owner, claimed = {}, {u: [] for u in range(U)}
++
++        def claim(u, xy):
++            owner[xy] = u
++            claimed[u].append(xy)
++            need[u] -= 1
++
++        while True:  # 2. seam-free cells
++            free0 = {u: [c for c in cells if c not in owner and wraps(u, c[1]) == 0] for u in range(U) if need[u] > 0}
++            free0 = {u: f for u, f in free0.items() if f}
++            if not free0:
++                break
++            scarce = min(len(f) for f in free0.values())
++            group = sorted(u for u, f in free0.items() if len(f) == scarce)
++            mine = {u: [] for u in group}
++            for c in sorted(set().union(*[free0[u] for u in group]), key=lambda c: (c[1], c[0])):
++                mine[min((u for u in group if c in free0[u]), key=lambda u: (xpref(u, c[0]), u))].append(c)
++            for u in group:
++                for c in sorted(mine[u], key=lambda c: (xpref(u, c[0]), c[1]))[: need[u]]:
++                    claim(u, c)
++            for u in group:  # a member short of its own cells takes the others' leftovers
++                rest = sorted((c for c in free0[u] if c not in owner), key=lambda c: (xpref(u, c[0]), c[1]))
++                for c in rest[: max(0, need[u])]:
++                    claim(u, c)
++        load = [0] * gx  # 3. seam cells, one crossing bank, then two
++        for k in (1, 2):
++            while any(n > 0 for n in need):
++                best = None
++                for u in (u for u in range(U) if need[u] > 0):
++                    for c in cells:
++                        if c not in owner and wraps(u, c[1]) == k:
++                            key = (load[c[0]] + w * k, hops(u, c[1]), -need[u], xpref(u, c[0]), c[1], u)
++                            if best is None or key < best[0]:
++                                best = (key, u, c)
++                if best is None:
++                    break
++                claim(best[1], best[2])
++                load[best[2][0]] += w * k
++        if any(n > 0 for n in need):
++            continue
++        out = {c: (0, 0, 0) for c in cells}
++        for u in range(U):
++            for xy, (t0, wu) in zip(claimed[u], _even_runs(sizes[u], len(claimed[u]))):
++                out[xy] = (u, t0, wu)
++        return out
++    return None
++
++
++def bank_seam_bytes(geom: Geometry, layout):
++    """The most B bytes one bank streams across the NoC0 +y seam under a swiglu bank layout (cores on rows above the
++    bank's home row), else 0."""
++    if not geom.swiglu:
++        return 0
++    unit = 2
++    seam = [0] * geom.b_banks
++    for (_, y), (u, _, w) in layout.items():
++        for i in range(unit):
++            if w and y < geom.bank_home[unit * u + i][1]:
++                seam[unit * u + i] += w
++    return max(seam) * geom.tensor_k_tiles * geom.b_tile_bytes
++
++
+ def bank_candidates(geom: Geometry, gx: int, gy: int):
+     """R1b bank-local splits: the first `rows` grid rows (one multicast rectangle), every working core one bank-class
+     run (bank_layout); the nominal per-core width is the longest run."""
+@@ -824,7 +929,8 @@
+         if layout is None or gx * rows < 2:
+             continue
+         core_n = unit * max(w for _, _, w in layout.values())
+-        out.append(GridChoice(1, 1, gx * rows, 1, geom.tensor_m_tiles, core_n, unit, "bank"))
++        seam = bank_seam_bytes(geom, layout)
++        out.append(GridChoice(1, 1, gx * rows, 1, geom.tensor_m_tiles, core_n, unit, "bank", seam))
+     return out
+ 
+ 
+@@ -1051,7 +1157,14 @@
+         # K-block of every block (64x16384x256, 16-bit DEST: 64 rounds of 32 KB on 8 working cores, 134 us vs 84 us
+         # on its R1 split).
+         rounds = _cdiv(grid.core_m_tiles, blk.block_m_tiles) * _cdiv(grid.core_n_tiles, blk.block_n_tiles)
+-        core_cycles = max(b_core / CORE_READ_BYTES_PER_CYCLE, rounds * blk.num_k_blocks * BANK_LOCAL_ROUND_CYCLES)
++        # swiglu: and the bank whose responses cross the NoC0 +y seam most, once per M-block pass of its B run
++        # (BANK_LOCAL_PAIR_SEAM; FLUX FF1 256x6144x18432: 22.4 MB of gate bank 4 across it -> 685 us vs 629 us flat;
++        # 1024x6144x18432, 4 M-blocks: 2636 us vs 1120 us on its R1a split).
++        core_cycles = max(
++            b_core / CORE_READ_BYTES_PER_CYCLE,
++            rounds * blk.num_k_blocks * BANK_LOCAL_ROUND_CYCLES,
++            grid.seam_bytes * nb_m / BANK_LOCAL_SEAM_BYTES_PER_CYCLE,
++        )
+     core_out = grid.core_batches * grid.core_m_tiles * geom.out_block_n(grid.core_n_tiles) * geom.o_tile_bytes
+     return walk, dram, core_cycles, core_out / CORE_WRITE_BYTES_PER_CYCLE
+ 
+--- a/tests/ttnn/unit_tests/operations/genify_matmul/test_genify_matmul_bank_local.py
++++ b/tests/ttnn/unit_tests/operations/genify_matmul/test_genify_matmul_bank_local.py
+@@ -100,8 +100,8 @@
+ 
+ 
+ def test_bank_swiglu(device, monkeypatch):
+-    # swiglu is off the bank split by default (measured slower); kept correct behind its knob.
+-    monkeypatch.setattr(pd, "BANK_LOCAL_SWIGLU", True)
++    # swiglu rides the bank split by default (BANK_LOCAL_SWIGLU, seam placement: BANK_LOCAL_PAIR_SEAM).
++    monkeypatch.setattr(pd, "BANK_LOCAL_SWIGLU", True)  # the default; pinned so the knob stays exercised
+     geom, grid, blk = _plan(device, (1, 128, 2048), (2048, 4096), "swiglu")
+     assert grid.placement == "bank", f"{grid} {blk}"
+     _run(((1, 128, 2048), (2048, 4096)), "swiglu", device)
