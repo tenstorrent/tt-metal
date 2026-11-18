@@ -155,14 +155,15 @@ def _tanh_bw_torch_reference(grad, x, flush):
         torch.tanh(x64).backward(g)
         autograd, x64 = x64.grad, x64.detach()
         return torch.where(
-            torch.isfinite(x64),
+            torch.isfinite(x64) & torch.isfinite(autograd),
             g * (4.0 * torch.exp(-2.0 * x64.abs()) / (1.0 + torch.exp(-2.0 * x64.abs())) ** 2),
             autograd,
         )
 
 
 def _tanh_bw_reference(grad, x, flush):
-    """Torch, except on the declared lanes."""
+    """Torch, except: 0 where |x| >= 65.849, where even exp(-2|x|) * 2^64 is below the smallest normal, for a
+    finite grad."""
     result = _tanh_bw_torch_reference(grad, x, flush)
     x32 = x.to(torch.float32)
     result = torch.where(torch.isfinite(grad) & (x32.abs() >= 65.84899139404297), torch.zeros_like(result), result)
