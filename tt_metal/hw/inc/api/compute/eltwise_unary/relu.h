@@ -211,7 +211,7 @@ ALWI void leaky_relu_tile(uint32_t idst, uint32_t slope = 0) {
                 DST_SYNC_MODE,
                 DST_ACCUM_MODE,
                 calculate_lrelu,
-                (APPROX, 32, DST_ACCUM_MODE),
+                (APPROX, 32 /*ITERATIONS*/, DST_ACCUM_MODE),
                 idst,
                 VectorMode::None,
                 slope);

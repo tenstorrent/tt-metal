@@ -18,7 +18,7 @@ inline bool bf16_dest_leaky_relu() {
     return false;
 #endif
 }
-// calculate_slope_max's instructions in a stall-filling order, constants held in LRegs.
+// The kernel's instructions in a stall-filling order, constants held in LRegs.
 inline void calculate_leaky_relu_bf16_scheduled() {
     TTI_SFPLOADI(4, 8, 0x3c23);
     TTI_SFPLOADI(4, 0xa, 0xd70a);
