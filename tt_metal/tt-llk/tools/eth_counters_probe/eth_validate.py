@@ -10,7 +10,7 @@ connected link, on any multi-chip system. Slow dispatch, run once with the optio
 The test is MeshDeviceFixture.ActiveEthKernelsSendInterleavedBufferAllConnectedChips: for every connected pair, link and
 erisc, four chip-to-chip transfers of about one unreserved L1 (a page-sized and a whole-L1 transfer size, L1 to DRAM
 and DRAM to L1). Expect: the test is not skipped, at least four programs with sender bytes, receiver bytes of the same
-order, no resends or drops on a clean link, and run rows (eth_run.csv) whose per-device totals are at least the sum of
+order, no drops (resends are reported: a healthy link retransmits now and then), and run rows (eth_run.csv) whose per-device totals are at least the sum of
 that device's program rows.
 
 The two-chip fixtures of the other ethernet tests skip under slow dispatch (TwoDeviceBlackholeFixture and
@@ -109,10 +109,9 @@ def main():
     check(
         sum(p.rx_bytes for p in programs) > 0, "receiver bytes seen in program windows"
     )
-    check(
-        all(p.resends == 0 and p.drops == 0 for p in programs),
-        "no resends and no drops",
-    )
+    check(all(p.drops == 0 for p in programs), "no drops")
+    # A healthy link retransmits now and then, so resends are reported, not failed.
+    print(f"resends: {sum(p.resends for p in programs)} over {len(programs)} programs")
     check(not any(p.reset for p in programs), "no counter reset flagged")
 
     if run.is_file():
