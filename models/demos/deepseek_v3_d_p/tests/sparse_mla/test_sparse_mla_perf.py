@@ -57,19 +57,18 @@ from tt_py_test_utils_common.perf.cpu_clock import hold_full_cpu_clock
 MODES = ("untraced", "traced")
 # Host time of one chunk forward through device synchronization, in ms, per case: (warm untraced, warm traced, long
 # untraced, long traced), run as the CI jobs run them (LOGURU_LEVEL=ERROR, TT_METAL_SHM_TRACKING_DISABLED=1, one pytest
-# process per model). Traced is the mean of the runs; untraced is the fastest run. LoudBox and Galaxy: CI hosts. Galaxy
-# 4x4 (2 runs): one local Galaxy, unscaled, as its CI leg has no recent run; recheck once it runs. Galaxy 4x4 subtorus
-# has no CI leg: measured on a subtorus-cabled Galaxy (3 runs), unscaled.
+# process per model). Traced is the mean of the runs; untraced is the fastest run. LoudBox, Galaxy and Galaxy 4x4: CI
+# hosts. Galaxy 4x4 subtorus has no CI leg: measured on a subtorus-cabled Galaxy (3 runs), unscaled.
 _TARGETS_MS = {
     "Galaxy": {
-        "kimi_k3_1": (3.20, 2.81, 7.17, 6.88),
+        "kimi_k3_1": (3.31, 3.06, 8.06, 7.75),
         "glm_5_3": (3.01, 2.52, 6.46, 6.01),
         "glm_5_3-no_indexer": (2.34, 2.03, 2.39, 2.09),
     },
     "Galaxy 4x4": {
-        "kimi_k3_1": (3.87, 3.56, 7.98, 7.58),
-        "glm_5_3": (3.38, 3.07, 7.30, 6.93),
-        "glm_5_3-no_indexer": (2.69, 2.58, 5.10, 4.92),
+        "kimi_k3_1": (3.61, 3.41, 8.77, 8.47),
+        "glm_5_3": (3.00, 2.78, 6.89, 6.62),
+        "glm_5_3-no_indexer": (2.35, 2.32, 4.72, 4.63),
     },
     "Galaxy 4x4 subtorus": {
         "kimi_k3_1": (3.48, 3.14, 7.32, 6.93),
@@ -77,9 +76,9 @@ _TARGETS_MS = {
         "glm_5_3-no_indexer": (2.40, 2.11, 2.48, 2.20),
     },
     "LoudBox": {
-        "kimi_k3_1": (2.73, 2.56, 3.88, 3.74),
+        "kimi_k3_1": (2.77, 2.64, 4.34, 4.19),
         "glm_5_3": (2.48, 2.25, 3.61, 3.41),
-        "glm_5_3-no_indexer": (2.00, 1.94, 2.60, 2.55),
+        "glm_5_3-no_indexer": (1.97, 1.95, 2.71, 2.70),
     },
 }
 PERF_TARGETS_MS = {

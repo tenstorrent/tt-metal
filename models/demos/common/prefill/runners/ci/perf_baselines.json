@@ -51,9 +51,9 @@
       "sc1_4x4": {
         "probe": "@1020k",
         "14kw": {
-          "throughput_tok_s": 5624,
-          "ttft_s": 129.83,
-          "chunk_time_ms": 872
+          "throughput_tok_s": 5896,
+          "ttft_s": 125.85,
+          "chunk_time_ms": 836
         }
       }
     },
