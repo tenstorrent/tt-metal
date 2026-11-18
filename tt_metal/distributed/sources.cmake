@@ -1,4 +1,5 @@
 set(DISTRIBUTED_SRC
+    ${CMAKE_CURRENT_SOURCE_DIR}/command_list.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/distributed.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/distributed_coordinate_translator.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/mesh_buffer.cpp
@@ -37,7 +38,6 @@ set(DISTRIBUTED_SRC
     ${CMAKE_CURRENT_SOURCE_DIR}/host_d2h_leg.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/host_h2d_leg.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/experimental/blitz_decode_pipeline.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/experimental/command_list.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/experimental/internal_cluster.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/experimental/mesh_device_properties.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/layer_completion/layer_completion_queue.cpp

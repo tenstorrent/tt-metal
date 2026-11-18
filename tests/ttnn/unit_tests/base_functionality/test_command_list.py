@@ -17,7 +17,7 @@ SHAPE = (1, 1, 64, 128)
 
 @pytest.fixture
 def builder(device):
-    builder = ttnn.experimental.CommandListBuilder(device)
+    builder = ttnn.CommandListBuilder(device)
     yield builder
     if builder.is_recording:
         builder.__exit__(None, None, None)
@@ -260,7 +260,7 @@ def test_calls_that_depend_on_recorded_work_fail_while_recording(device, builder
 @skip_for_slow_dispatch()
 def test_one_builder_per_device(device, builder, expect_error):
     with expect_error(RuntimeError, "Only one CommandListBuilder may exist for a MeshDevice"):
-        ttnn.experimental.CommandListBuilder(device)
+        ttnn.CommandListBuilder(device)
 
 
 SOFTMAX_SHAPE = (1, 1, 64, 64)
@@ -284,8 +284,8 @@ def test_update_args_changes_input_and_scale(device, builder, command_lists, mas
     expected_b = ttnn.to_torch(ttnn.scale_mask_softmax(input_b, 0.25, mask))
     num_entries_before = device.num_program_cache_entries()
 
-    x = ttnn.experimental.CmdListParam(input_a, "x")
-    scale = ttnn.experimental.CmdListParam(0.5, "scale")
+    x = ttnn.CmdListParam(input_a, "x")
+    scale = ttnn.CmdListParam(0.5, "scale")
     with builder:
         out = ttnn.scale_mask_softmax(input_tensor=x, scale=scale, mask=mask)
     # The eager call created the cache entry; recording bound the hit.
@@ -306,7 +306,7 @@ def test_update_args_moves_an_in_place_op_to_the_new_input(device, builder, comm
     expected_b = to_device(device, torch_b)
     ttnn.scale_mask_softmax_in_place(expected_b, 0.5, mask)
 
-    x = ttnn.experimental.CmdListParam(input_a, "x")
+    x = ttnn.CmdListParam(input_a, "x")
     with builder:
         ttnn.scale_mask_softmax_in_place(input_tensor=x, scale=0.5, mask=mask)
     command_list = builder.build()
@@ -323,8 +323,8 @@ def test_update_args_moves_an_in_place_op_to_the_new_input(device, builder, comm
 def test_cmd_list_param_runs_with_its_default_outside_recording(device, mask):
     torch_input = torch.randn(SOFTMAX_SHAPE, dtype=torch.bfloat16)
     expected = ttnn.to_torch(ttnn.scale_mask_softmax(to_device(device, torch_input), 0.5, mask))
-    x = ttnn.experimental.CmdListParam(to_device(device, torch_input), "x")
-    out = ttnn.scale_mask_softmax(input_tensor=x, scale=ttnn.experimental.CmdListParam(0.5, "scale"), mask=mask)
+    x = ttnn.CmdListParam(to_device(device, torch_input), "x")
+    out = ttnn.scale_mask_softmax(input_tensor=x, scale=ttnn.CmdListParam(0.5, "scale"), mask=mask)
     assert torch.equal(ttnn.to_torch(out), expected)
 
 
@@ -333,8 +333,8 @@ def test_update_args_rejects_unknown_names_and_kinds(device, builder, command_li
     device_input = to_device(device, torch.randn(SOFTMAX_SHAPE, dtype=torch.bfloat16))
     with builder:
         ttnn.scale_mask_softmax(
-            input_tensor=ttnn.experimental.CmdListParam(device_input, "x"),
-            scale=ttnn.experimental.CmdListParam(0.5, "scale"),
+            input_tensor=ttnn.CmdListParam(device_input, "x"),
+            scale=ttnn.CmdListParam(0.5, "scale"),
             mask=mask,
         )
     command_list = builder.build()
@@ -353,7 +353,7 @@ def test_cmd_list_param_must_be_passed_by_keyword(device, builder, mask, expect_
     device_input = to_device(device, torch.randn(SOFTMAX_SHAPE, dtype=torch.bfloat16))
     with builder:
         with expect_error(TypeError, "CmdListParam 'x' must be passed by keyword"):
-            ttnn.scale_mask_softmax(ttnn.experimental.CmdListParam(device_input, "x"), 0.5, mask)
+            ttnn.scale_mask_softmax(ttnn.CmdListParam(device_input, "x"), 0.5, mask)
 
 
 @skip_for_slow_dispatch()
@@ -362,7 +362,7 @@ def test_unsupported_param_is_recorded_with_its_default(device, builder, command
     expected = ttnn.to_torch(ttnn.relu(device_input))
     with builder:
         # relu's factory maps no keywords.
-        out = ttnn.relu(input_tensor=ttnn.experimental.CmdListParam(device_input, "x"))
+        out = ttnn.relu(input_tensor=ttnn.CmdListParam(device_input, "x"))
     command_list = builder.build()
     command_lists.append(command_list)
 
@@ -386,9 +386,7 @@ def test_param_the_op_replaces_is_rejected(device, builder, mask, expect_error, 
     device_input = to_device(device, torch.randn(shape, dtype=torch.bfloat16), layout=layout)
     with builder:
         with expect_error(RuntimeError, message):
-            ttnn.scale_mask_softmax(
-                input_tensor=ttnn.experimental.CmdListParam(device_input, "x"), scale=0.5, mask=mask
-            )
+            ttnn.scale_mask_softmax(input_tensor=ttnn.CmdListParam(device_input, "x"), scale=0.5, mask=mask)
 
 
 @skip_for_slow_dispatch()

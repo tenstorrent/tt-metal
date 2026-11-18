@@ -20,6 +20,7 @@ set(TT_METAL_PUBLIC_API
     api/tt-metalium/circular_buffer_config.hpp
     api/tt-metalium/circular_buffer_constants.h
     api/tt-metalium/cluster.hpp
+    api/tt-metalium/command_list.hpp
     api/tt-metalium/constants.hpp
     api/tt-metalium/core_coord.hpp
     api/tt-metalium/device.hpp
@@ -76,7 +77,6 @@ set(TT_METAL_PUBLIC_API
     api/tt-metalium/experimental/lightmetal/lightmetal_replay.hpp
     api/tt-metalium/experimental/mesh_program_descriptor.hpp
     api/tt-metalium/experimental/blaze/named_kernel_args.hpp
-    api/tt-metalium/experimental/command_list.hpp
     api/tt-metalium/experimental/metal2_host_api/advanced_options.hpp
     api/tt-metalium/workload/utils/arg_value.hpp
     api/tt-metalium/workload/specification/compute_hardware_config.hpp

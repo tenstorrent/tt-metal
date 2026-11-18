@@ -100,7 +100,7 @@ void py_module(nb::module_& mod) {
     trace::py_module_types(m_trace);
     trace::py_module(m_trace);
 
-    auto m_command_list = mod.def_submodule("command_list", "command list operations (experimental)");
+    auto m_command_list = mod.def_submodule("command_list", "command list operations");
     command_list::py_module_types(m_command_list);
     command_list::py_module(m_command_list);
 
