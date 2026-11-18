@@ -4,6 +4,8 @@
 
 #include "graph_fabric_build_session.hpp"
 
+#include <set>
+
 #include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/experimental/fabric/control_plane.hpp>
 #include <tt_stl/assert.hpp>
@@ -37,6 +39,11 @@ std::map<MeshId, ExpressAxis> express_axes(const ControlPlane& control_plane) {
         }
     }
     return axes;
+}
+
+std::set<MeshId> local_meshes(const ControlPlane& control_plane) {
+    const auto bound = control_plane.get_local_mesh_id_bindings();
+    return {bound.begin(), bound.end()};
 }
 
 // the graph's link peers are the control plane's, down to the eth channel
@@ -100,9 +107,13 @@ GraphFabricBuildSession::GraphFabricBuildSession(FabricContext& fabric_context) 
 
     // physical: addresses from the stock allocator, then the legacy link pairings
     const auto& reference = stock_allocator(fabric_context);
-    graph_ = lower_to_physical(std::move(channels), [&reference](const auto& sender_counts) {
-        return FabricStaticSizedChannelsAllocator(reference, sender_counts).get_layout();
-    });
+    // only this host's meshes: the reference is sized for them, and other hosts' receivers come from the exchange
+    graph_ = lower_to_physical(
+        std::move(channels),
+        [&reference](const auto& sender_counts) {
+            return FabricStaticSizedChannelsAllocator(reference, sender_counts).get_layout();
+        },
+        [local = local_meshes(control_plane)](const FabricNodeId& node) { return local.contains(node.mesh_id); });
     graph_->eth_chans = bind_eth_channels(graph_->logical, [&control_plane](const FabricNodeId& node, RoutingDirection d) {
         return control_plane.get_active_fabric_eth_routing_planes_in_direction(node, d);
     });

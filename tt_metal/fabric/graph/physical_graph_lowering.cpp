@@ -15,15 +15,19 @@
 
 namespace tt::tt_fabric::graph {
 
-PhysicalGraph lower_to_physical(ChannelGraph graph, const ChannelAllocator& allocate) {
+PhysicalGraph lower_to_physical(ChannelGraph graph, const ChannelAllocator& allocate, const IsLocal& is_local) {
     PhysicalGraph pg;
     static_cast<ChannelGraph&>(pg) = std::move(graph);
     const auto& g = pg.logical;
     pg.addresses.resize(g.channels.size());
+    pg.layouts.resize(g.routers.size());
     for (RouterIndex r = 0; r < g.routers.size(); ++r) {
+        if (is_local && !is_local(g.routers[r].port.node)) {
+            continue;
+        }
         std::array<size_t, builder_config::MAX_NUM_VCS> counts{};
         std::copy(pg.sender_counts[r].begin(), pg.sender_counts[r].end(), counts.begin());
-        const RouterChannelLayout& layout = pg.layouts.emplace_back(allocate(counts));
+        const RouterChannelLayout& layout = pg.layouts[r] = allocate(counts);
         for (uint32_t vc = 0; vc < pg.sender_counts[r].size(); ++vc) {
             TT_FATAL(
                 layout.senders[vc].size() == pg.sender_counts[r][vc],

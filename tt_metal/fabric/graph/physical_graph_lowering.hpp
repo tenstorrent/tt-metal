@@ -37,8 +37,8 @@ struct LinkPairing {
 // Where every channel lives in L1, which eth channel each router runs on, and the NoC settings of each link
 // pairing. Noc command buffers stay auto.
 struct PhysicalGraph : ChannelGraph {
-    std::vector<RouterChannelLayout> layouts;  // [router] every slot, legacy ones included
-    std::vector<ChannelAddress> addresses;     // [channel]
+    std::vector<RouterChannelLayout> layouts;  // [router] every slot, legacy ones included; empty if not local
+    std::vector<ChannelAddress> addresses;     // [channel] zero if not local
     std::vector<chan_id_t> eth_chans;          // [router]
     std::vector<LinkPairing> links;
     std::map<FabricNodeId, RouterIndex> handshake_masters;  // per chip
@@ -48,8 +48,12 @@ struct PhysicalGraph : ChannelGraph {
 using ChannelAllocator =
     std::function<RouterChannelLayout(const std::array<size_t, builder_config::MAX_NUM_VCS>& sender_counts)>;
 
-// Addresses from the allocator, one router at a time. Link pairings come from a separate pass.
-PhysicalGraph lower_to_physical(ChannelGraph graph, const ChannelAllocator& allocate);
+// Which chips this host lays out. Other hosts lay out theirs; the layout exchange carries what crosses.
+using IsLocal = std::function<bool(const FabricNodeId&)>;
+
+// Addresses from the allocator, one local router at a time (every router without is_local). Link pairings come
+// from a separate pass.
+PhysicalGraph lower_to_physical(ChannelGraph graph, const ChannelAllocator& allocate, const IsLocal& is_local = {});
 
 // The live eth channels facing a direction, by plane. On device:
 // ControlPlane::get_active_fabric_eth_routing_planes_in_direction.

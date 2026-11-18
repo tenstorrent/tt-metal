@@ -644,6 +644,21 @@ TEST(FabricGraphPhysical, RejectsTooSmallAllocation) {
     EXPECT_ANY_THROW(lower_to_physical(std::move(cg), fake_allocator({{18, 16, 16}}, {16})));
 }
 
+TEST(FabricGraphPhysical, LaysOutOnlyLocalChips) {
+    auto cg = lower_to_channels(lower(metal_mgd("single_bh_galaxy_mesh_graph_descriptor.textproto"), k2D).graph, Topology::Mesh);
+    // another host's router wider than this host's allocator allows (an express mesh's extra VC0 sender)
+    const std::vector<uint32_t> slots{18, 16, 16, 16, 16};
+    cg.sender_counts[*cg.logical.find_router("m0.c1.E.p0")][0] = slots.size() + 1;
+    const auto allocate = fake_allocator({slots}, {16});
+    const auto pg = lower_to_physical(std::move(cg), allocate, [](const FabricNodeId& n) { return n.chip_id == 0; });
+    for (ChannelIndex c = 0; c < pg.logical.channels.size(); ++c) {
+        const auto r = pg.logical.channels[c].router;
+        const bool local = pg.logical.routers[r].port.node.chip_id == 0;
+        EXPECT_EQ(pg.addresses[c].slots != 0, local) << pg.logical.routers[r].id;
+        EXPECT_EQ(pg.layouts[r].receivers[0].empty(), !local) << pg.logical.routers[r].id;
+    }
+}
+
 size_t pairings_on(const LogicalGraph& g, const std::vector<LinkPairing>& links, const std::string& chip_prefix) {
     return std::count_if(links.begin(), links.end(), [&](const LinkPairing& l) {
         return g.routers[l.a].id.starts_with(chip_prefix);
