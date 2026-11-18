@@ -67,7 +67,8 @@ inline void calculate_lerp(
     // so no instruction reads the result of the SFPMAD right before it.
     sfpi::vFloat half_res;
     {
-        const sfpi::vFloat in0_half = sfpi::dst_reg[off_in0] * 0.5f;
+        const sfpi::vFloat in0 = sfpi::dst_reg[off_in0];
+        const sfpi::vFloat in0_half = in0 * 0.5f;
         const sfpi::vFloat in1 = sfpi::dst_reg[off_in1];
         const sfpi::vFloat in2 = sfpi::dst_reg[off_in2];
         const sfpi::vFloat diff_half = in1 * half - in0_half;
@@ -75,7 +76,8 @@ inline void calculate_lerp(
     }
 #pragma GCC unroll 8
     for (int d = 1; d < ITERATIONS; d++) {
-        const sfpi::vFloat in0_half = sfpi::dst_reg[off_in0 + 1] * 0.5f;
+        const sfpi::vFloat in0 = sfpi::dst_reg[off_in0 + 1];
+        const sfpi::vFloat in0_half = in0 * 0.5f;
         const sfpi::vFloat in1 = sfpi::dst_reg[off_in1 + 1];
         const sfpi::vFloat prev = finish(half_res);
         const sfpi::vFloat in2 = sfpi::dst_reg[off_in2 + 1];
