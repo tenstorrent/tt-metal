@@ -97,45 +97,51 @@ inline constexpr std::array<float, 84> PRECOMPUTED_POW10_TABLE = {
     1e25F,  1e26F,  1e27F,  1e28F,  1e29F,  1e30F,  1e31F,  1e32F,  1e33F,  1e34F,  1e35F,  1e36F,  1e37F,  1e38F,
 };
 
+// Applies row(i) to ITERATIONS dest rows. Inside a group of 8 rows, row i is addressed as dst_reg[i], so the group
+// advances the dest pointer with 3 increments instead of 8 (one INCRWC advances dst_reg by at most 3).
+template <int ITERATIONS, typename Row>
+sfpi_inline void _for_each_row_(Row row) {
+    constexpr int GROUP = ITERATIONS % 8 == 0 ? 8 : 1;
+    for (int d = 0; d < ITERATIONS; d += GROUP) {
+#pragma GCC unroll 8
+        for (int i = 0; i < GROUP; i++) {
+            row(i);
+        }
+        if constexpr (GROUP == 8) {
+            sfpi::dst_reg += 3;
+            sfpi::dst_reg += 3;
+            sfpi::dst_reg += 2;
+        } else {
+            sfpi::dst_reg++;
+        }
+    }
+}
+
 template <bool APPROXIMATION_MODE, int ITERATIONS = 8>
 sfpi_inline void _calculate_floor_() {
     _load_trunc_k23_();
-#pragma GCC unroll 4
-    for (int d = 0; d < ITERATIONS; d++) {
-        sfpi::dst_reg[0] = _floor_body_<false>(sfpi::dst_reg[0]);
-        sfpi::dst_reg++;
-    }
+    _for_each_row_<ITERATIONS>([](int i) { sfpi::dst_reg[i] = _floor_body_<false>(sfpi::dst_reg[i]); });
 }
 
 template <bool APPROXIMATION_MODE, int ITERATIONS = 8>
 sfpi_inline void _calculate_ceil_() {
     _load_trunc_k23_();
-#pragma GCC unroll 4
-    for (int d = 0; d < ITERATIONS; d++) {
-        sfpi::dst_reg[0] = _ceil_body_<false>(sfpi::dst_reg[0]);
-        sfpi::dst_reg++;
-    }
+    _for_each_row_<ITERATIONS>([](int i) { sfpi::dst_reg[i] = _ceil_body_<false>(sfpi::dst_reg[i]); });
 }
 
 template <bool APPROXIMATION_MODE, int ITERATIONS = 8>
 sfpi_inline void _calculate_trunc_() {
     _load_trunc_k23_();
-#pragma GCC unroll 2
-    for (int d = 0; d < ITERATIONS; d++) {
-        sfpi::dst_reg[0] = _trunc_body_<false>(sfpi::dst_reg[0]);
-        sfpi::dst_reg++;
-    }
+    _for_each_row_<ITERATIONS>([](int i) { sfpi::dst_reg[i] = _trunc_body_<false>(sfpi::dst_reg[i]); });
 }
 
 template <bool APPROXIMATION_MODE, int ITERATIONS = 8>
 sfpi_inline void _calculate_frac_() {
     _load_trunc_k23_();
-#pragma GCC unroll 2
-    for (int d = 0; d < ITERATIONS; d++) {
-        sfpi::vFloat x = sfpi::dst_reg[0];
-        sfpi::dst_reg[0] = x - _trunc_body_<false>(x);
-        sfpi::dst_reg++;
-    }
+    _for_each_row_<ITERATIONS>([](int i) {
+        sfpi::vFloat x = sfpi::dst_reg[i];
+        sfpi::dst_reg[i] = x - _trunc_body_<false>(x);
+    });
 }
 
 sfpi_inline sfpi::vFloat _round_even_(sfpi::vFloat v) {
