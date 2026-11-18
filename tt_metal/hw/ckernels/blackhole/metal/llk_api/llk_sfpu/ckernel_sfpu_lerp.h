@@ -55,27 +55,26 @@ inline void calculate_lerp(
         rne_bias = 0x7fffU;
         rne_one = 1;
     }
-    // lerp: out = (1 - weight) * input + weight * end
+    // lerp: out = (input - weight * input) + weight * end
     // Convex form: no (end - input) difference, so finite inputs cannot overflow for weight in [0, 1],
-    // and weight == 0 / weight == 1 return input / end bit-exact.
+    // and weight == 0 / weight == 1 return input / end bit-exact. (1 - weight) * input is formed by
+    // one SFPMAD as input - weight * input, so 1 - weight is never rounded on its own.
     //
     // Two rows (a, b) per iteration, ordered so that no instruction reads the result of the SFPMAD
-    // right before it. Each row needs three LREGs (prod and rem replace end and weight), which
-    // leaves two for the RNE constants.
+    // right before it. Each row needs three LREGs (rem replaces input), which leaves two for the
+    // RNE constants.
 #pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d += 2) {
-        const sfpi::vFloat a_in1 = sfpi::dst_reg[off_in1];
-        const sfpi::vFloat a_in2 = sfpi::dst_reg[off_in2];
-        const sfpi::vFloat a_prod = a_in2 * a_in1;
-        const sfpi::vFloat a_rem = 1.0f - a_in2;
-        const sfpi::vFloat b_in1 = sfpi::dst_reg[off_in1 + 1];
-        const sfpi::vFloat b_in2 = sfpi::dst_reg[off_in2 + 1];
-        const sfpi::vFloat b_prod = b_in2 * b_in1;
-        const sfpi::vFloat b_rem = 1.0f - b_in2;
         const sfpi::vFloat a_in0 = sfpi::dst_reg[off_in0];
+        const sfpi::vFloat a_in2 = sfpi::dst_reg[off_in2];
+        const sfpi::vFloat a_rem = a_in0 - a_in2 * a_in0;
         const sfpi::vFloat b_in0 = sfpi::dst_reg[off_in0 + 1];
-        sfpi::vFloat a_res = a_rem * a_in0 + a_prod;
-        sfpi::vFloat b_res = b_rem * b_in0 + b_prod;
+        const sfpi::vFloat b_in2 = sfpi::dst_reg[off_in2 + 1];
+        const sfpi::vFloat b_rem = b_in0 - b_in2 * b_in0;
+        const sfpi::vFloat a_in1 = sfpi::dst_reg[off_in1];
+        const sfpi::vFloat b_in1 = sfpi::dst_reg[off_in1 + 1];
+        sfpi::vFloat a_res = a_in2 * a_in1 + a_rem;
+        sfpi::vFloat b_res = b_in2 * b_in1 + b_rem;
         if constexpr (!is_fp32_dest_acc_en) {
             a_res = _lerp_bf16_rne_for_16b_store_(a_res, rne_bias, rne_one);
             b_res = _lerp_bf16_rne_for_16b_store_(b_res, rne_bias, rne_one);
