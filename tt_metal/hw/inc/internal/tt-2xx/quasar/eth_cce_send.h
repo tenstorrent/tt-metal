@@ -115,9 +115,9 @@ struct LinkCopy {
 };
 inline LinkCopy link_copy;
 
-// Reads the slot through eth_link(), waiting as it does, checks it, and latches it into link_copy. Halts with
-// BadLinkKind on an unknown kind and with NocPeerOnOwnTile on a NOC link whose peer is this CCE's own tile, which has
-// no documented system-address route back. Reads PF_CTRL_TILE_ID on a NOC link.
+// Reads the slot through eth_link(), waiting as it does, checks it, and latches it into link_copy. On a NOC link also
+// reads PF_CTRL_TILE_ID and resets the command buffer. Halts with BadLinkKind on an unknown kind and with
+// NocPeerOnOwnTile on a NOC link whose peer is this CCE's own tile, which has no documented system-address route back.
 [[gnu::cold, gnu::noinline]] inline void latch_link() {
     const volatile EthLink& slot = eth_link();
     const uint32_t kind = slot.kind;
@@ -127,6 +127,11 @@ inline LinkCopy link_copy;
     }
     if (kind == ETH_LINK_KIND_NOC && peer_tile == hsio_tile()) {
         halt(HaltCode::NocPeerOnOwnTile, peer_tile);
+    }
+    if (kind == ETH_LINK_KIND_NOC) {
+        // Not repeated per send: txq_busy reads each queue's ack count, and no document says a reset keeps it
+        // (PLAN-0008, hub 62db7e799795-D10).
+        reset_cmdbuf<kCmdBuf>();
     }
     link_copy = LinkCopy{.kind = kind, .peer_tile = peer_tile, .latched = true};
 }
@@ -198,7 +203,9 @@ FORCE_INLINE void setup_send(uint32_t q_num, uint32_t dest) {
     const LinkCopy& copy = link();
     const uint32_t peer_tile = copy.peer_tile;
     const bool noc = copy.kind == ETH_LINK_KIND_NOC;
-    reset_cmdbuf<kCmdBuf>();
+    if (!noc) {
+        reset_cmdbuf<kCmdBuf>();
+    }
     idma_setup_as_copy_cmdbuf<kCmdBuf>();
     setup_ongoing_cmdbuf<kCmdBuf>(AutoIncConfig{});
     if (noc) {
