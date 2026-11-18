@@ -119,17 +119,18 @@ class VocabParallelEmbedding(AbstractModuleBase):
         # ``num_embeddings_per_partition`` rows. A ``weight_init`` that allocates
         # per-device (rather than sharding a global tensor) may round the shard up
         # to a tile boundary, which silently shifts every rank after the first by
-        # the difference -- so check the tensor we actually got.
-        # A lazy weight has no tensor yet, so only an eager one is checked; a lazy one is materialized later, by the
-        # same weight_init, unchecked.
-        local_rows = None if self.weight.is_lazy else self.weight.tensor.shape()[2]
-        if local_rows is not None and local_rows != self.num_embeddings_per_partition:
-            raise ValueError(
-                f"VocabParallelEmbedding weight has {local_rows} rows per device but ownership "
-                f"offsets assume {self.num_embeddings_per_partition} "
-                f"(num_embeddings {num_embeddings} // tp_size {self.tp_size}). Pad num_embeddings "
-                f"to a multiple of 32 * tp_size ({32 * self.tp_size}) so the shard is tile-aligned."
-            )
+        # the difference -- so check the tensor we actually got. A lazy weight is checked once it is materialized.
+        def check_local_rows(weight: Parameter) -> None:
+            local_rows = weight.tensor.shape()[2]
+            if local_rows != self.num_embeddings_per_partition:
+                raise ValueError(
+                    f"VocabParallelEmbedding weight has {local_rows} rows per device but ownership "
+                    f"offsets assume {self.num_embeddings_per_partition} "
+                    f"(num_embeddings {num_embeddings} // tp_size {self.tp_size}). Pad num_embeddings "
+                    f"to a multiple of 32 * tp_size ({32 * self.tp_size}) so the shard is tile-aligned."
+                )
+
+        self.weight.add_post_materialize_callback(check_local_rows)
 
         # Per-device vocab-start offset (one shard per TP rank); int32 + row-major to
         # match the ids so the subtract in forward stays off the tile path.
