@@ -1,9 +1,11 @@
 # EXPLORATION (not for merge): one MiniMax-H3 transformer block, dense ring SDPA vs VSA (sparse_ring_sdpa), at the
 # ref2va campaign's request layouts, with per-section timings. Written on WH 4x8 to find where VSA loses; meant to be
-# rerun on BH 4x8 for comparison.
+# rerun on BH 4x8 for comparison. Handoff, run list and WH reference numbers: VSA_BH_COMPARISON.md (same dir).
 #
-#   TIME_VSA=1 pytest -s models/tt_dit/tests/models/minimax_h3/test_scratch_vsa_breakdown.py -k "vsa- and fsdp1 and uc4_10s"
-#   (use "dense-" / "vsa-" in -k: plain "vsa" also matches the file name)
+#   WH: TIME_VSA=1 pytest -s models/tt_dit/tests/models/minimax_h3/test_scratch_vsa_breakdown.py -k "vsa- and fsdp1 and uc4_10s"
+#   BH: TIME_VSA=1 pytest -s models/tt_dit/tests/models/minimax_h3/test_scratch_vsa_breakdown.py -k "vsa- and 4x8sp1tp0nl2 and uc4_10s"
+#   (the BH 4x8 fixture row is fsdp0 / 2 links, so "fsdp1" selects nothing there; use "dense-" / "vsa-" in -k:
+#   plain "vsa" also matches the file name)
 #
 # Knobs (env):
 #   SCRATCH_SPARSITY=0.9          VSA sparsity (0.0 keeps every block)
