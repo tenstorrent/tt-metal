@@ -11,6 +11,9 @@
                               unchanged after encoding other-length clips in between
                               (guards the length-keyed state bug that motivates the
                               fixed-prefill workaround — see tt/qwen3_asr_decoder.py).
+  test_encoder_windowed_pcc   encode_mel vs vLLM-equivalent windowed golden for clips of
+                              several lengths (QWEN3ASR_ENCODER_GOLDEN_DIR, written by
+                              reference/dump_encoder_windowed.py), all in one process.
 
 Golden tensors and the HF snapshot are supplied via env vars; see tests/conftest.py.
 Run on a P150 (single Blackhole) box that has them staged, e.g.:
@@ -18,6 +21,10 @@ Run on a P150 (single Blackhole) box that has them staged, e.g.:
   pytest models/demos/audio/qwen3_asr/tests/test_audio_encoder.py \
     --device-params '{"l1_small_size": 32768}'   # or via the parametrize below
 """
+import glob
+import os
+
+import numpy as np
 import pytest
 import torch
 
@@ -31,6 +38,11 @@ QWEN3ASR_L1_SMALL_SIZE = 32768
 
 PCC_CONV = 0.99
 PCC_ENCODER = 0.99
+# bf16 TT vs the fp32 windowed golden. Clips >= 1 s measure 0.983-0.992; full attention
+# instead of windows measures 0.913-0.971 there, so 0.98 separates them. A sub-second clip
+# has only a few tokens of mostly onset audio, where bf16 error is larger (0.965 measured).
+PCC_ENCODER_WINDOWED = 0.98
+PCC_ENCODER_WINDOWED_SUBSECOND = 0.96
 PCC_DETERMINISTIC = 0.999  # greedy/static graph -> identical inputs must give ~identical output
 
 
@@ -95,3 +107,24 @@ def test_encoder_length_stability(device, golden, audio_tower_weights):
     assert torch.isfinite(eBl).all(), "30s encode produced non-finite values"
     assert_with_pcc(eA, eA2, PCC_DETERMINISTIC)  # deterministic
     assert_with_pcc(eA, eA3, PCC_DETERMINISTIC)  # no state leak across lengths
+
+
+@pytest.mark.parametrize("device_params", [{"l1_small_size": QWEN3ASR_L1_SMALL_SIZE}], indirect=True)
+def test_encoder_windowed_pcc(device, audio_tower_weights):
+    """encode_mel matches the windowed (vLLM) audio tower for every golden clip length.
+
+    Clips cover one and several 104-token windows, a partial last chunk, and 30 s."""
+    gdir = os.environ.get("QWEN3ASR_ENCODER_GOLDEN_DIR")
+    if not gdir or not os.path.isdir(gdir):
+        pytest.skip("set QWEN3ASR_ENCODER_GOLDEN_DIR (reference/dump_encoder_windowed.py output)")
+    names = sorted(p[: -len(".mel.npy")] for p in glob.glob(os.path.join(gdir, "*.mel.npy")))
+    if not names:
+        pytest.skip(f"no *.mel.npy in {gdir}")
+    params = tt_enc.preprocess_weights(audio_tower_weights, device)
+    for name in names + names[:1]:
+        mel = torch.from_numpy(np.load(f"{name}.mel.npy")).float()
+        gold = torch.from_numpy(np.load(f"{name}.audio_tower.npy")).float()
+        out = tt_enc.encode_mel(mel, params, device).float()
+        assert out.shape == gold.shape, (os.path.basename(name), tuple(out.shape), tuple(gold.shape))
+        pcc = PCC_ENCODER_WINDOWED if mel.shape[1] >= 100 else PCC_ENCODER_WINDOWED_SUBSECOND
+        assert_with_pcc(gold, out, pcc)
