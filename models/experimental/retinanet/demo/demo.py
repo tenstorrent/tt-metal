@@ -25,6 +25,9 @@ from models.experimental.retinanet.tt.custom_preprocessor import (
     preprocess_classification_head_parameters,
 )
 
+# The input size the model runs at, (H, W); every image is resized to it.
+IMAGE_SIZE = (512, 512)
+
 # torchvision's 91 COCO category slots, which the labels index; unused slots are N/A.
 CATEGORY_NAMES = RetinaNet_ResNet50_FPN_V2_Weights.DEFAULT.meta["categories"]
 
@@ -35,7 +38,6 @@ class Demo:
     """RetinaNet detection on one image: the TTNN model on device, its detections drawn on the image."""
 
     def __init__(self) -> None:
-        self.torch_model: Optional[Any] = None
         self.ttnn_model: Optional[Any] = None
         self.ttnn_device: Optional[Any] = None
 
@@ -48,29 +50,24 @@ class Demo:
     # Inference
     # ---------------------------------------------------------------------
 
-    def run_torch_inference(self, input_tensor, model_config):
-        """Run PyTorch inference."""
-        self.decoder = TTDetectionDecoder(device, image_size=tuple(input_tensor.shape[-2:]))
+    def prepare_model(self, image_size, model_config):
+        """Prepares the TT model's parameters and its detection decoder for ``image_size`` (H, W)
+        from the pretrained torchvision RetinaNet, whose postprocessing settings the demo keeps."""
         retinanet = retinanet_resnet50_fpn_v2(weights=RetinaNet_ResNet50_FPN_V2_Weights.DEFAULT)
         retinanet.eval()
-        self.torch_backbone = retinanet.backbone
-        self.torch_regression_head = retinanet.head.regression_head
-        self.torch_classification_head = retinanet.head.classification_head
 
-        self.parameters = preprocess_model_parameters(
+        parameters = preprocess_model_parameters(
             initialize_model=lambda: retinanet,
             custom_preprocessor=create_custom_mesh_preprocessor(self.weights_mesh_mapper),
             device=None,
         )
-        self.backbone_parameters = self.parameters.get("backbone", self.parameters)
-
+        self.backbone_parameters = parameters.get("backbone", parameters)
         self.regression_parameters = preprocess_regression_head_parameters(
             torch_head=retinanet.head.regression_head,
             device=device,
             mesh_mapper=self.weights_mesh_mapper,
             model_config=model_config,
         )
-
         self.classification_parameters = preprocess_classification_head_parameters(
             torch_head=retinanet.head.classification_head,
             device=device,
@@ -78,17 +75,12 @@ class Demo:
             model_config=model_config,
         )
 
-        backbone_features = self.torch_backbone(input_tensor)
-        torch_regression_output = self.torch_regression_head(list(backbone_features.values()))
-        torch_classification_output = self.torch_classification_head(list(backbone_features.values()))
-
-        output = {
-            "backbone_features": backbone_features,  # FPN levels: "0", "1", "2", "p6", "p7"
-            "regression": torch_regression_output,
-            "classification": torch_classification_output,
+        self.decoder = TTDetectionDecoder(device, image_size, topk_candidates=retinanet.topk_candidates)
+        self.postprocess_settings = {
+            "score_thresh": retinanet.score_thresh,
+            "nms_thresh": retinanet.nms_thresh,
+            "detections_per_img": retinanet.detections_per_img,
         }
-
-        return output
 
     def run_ttnn_inference(self, input_tensor, model_config, device):
         """Run the TTNN model on ``input_tensor`` (NHWC) and return the device candidates of every
@@ -132,7 +124,7 @@ class Demo:
 
         return self.decoder(classification_output, regression_output)
 
-    def preprocess_image(self, image_path: str, output_dir: str, target_size=(800, 800)):
+    def preprocess_image(self, image_path: str, output_dir: str, target_size=IMAGE_SIZE):
         """The image resized to ``target_size`` and normalized, as (1, 3, H, W), and its original
         (H, W). Saves the resized image, denormalized, as restored.jpg in ``output_dir``."""
         image = Image.open(image_path).convert("RGB")
@@ -205,7 +197,7 @@ class Demo:
         logger.info("Starting demo for image: {}", image_path)
 
         # Preprocess image
-        self.torch_input, original_image_sizes = self.preprocess_image(image_path, output_dir, target_size=(512, 512))
+        self.torch_input, original_image_sizes = self.preprocess_image(image_path, output_dir)
 
         self.ttnn_input = ttnn.from_torch(self.torch_input.permute(0, 2, 3, 1), dtype=ttnn.bfloat16)
         self.ttnn_input = ttnn.to_device(self.ttnn_input, device)
@@ -217,9 +209,9 @@ class Demo:
             "ACTIVATIONS_DTYPE": ttnn.bfloat16,
         }
 
-        self.run_torch_inference(self.torch_input, model_config)  # Sets up parameters as side effect
+        self.prepare_model(IMAGE_SIZE, model_config)
         boxes, scores, labels = self.run_ttnn_inference(self.ttnn_input, model_config, device)
-        detections = [select_detections(boxes, scores, labels)]
+        detections = [select_detections(boxes, scores, labels, **self.postprocess_settings)]
         image_sizes = [tuple(self.torch_input.shape[-2:])]
         for i, (pred, im_s, o_im_s) in enumerate(zip(detections, image_sizes, original_image_sizes)):
             detections[i]["boxes"] = Demo.resize_boxes(pred["boxes"], im_s, o_im_s)
@@ -267,7 +259,12 @@ def _parse_args(argv: Optional[list[str]] = None) -> argparse.Namespace:
         default="models/experimental/retinanet/resources/outputs",
         help="Output directory for results",
     )
-    parser.add_argument("--threshold", type=float, default=0.5, help="Minimum score of a drawn detection")
+    parser.add_argument(
+        "--threshold",
+        type=float,
+        default=0.5,
+        help="Minimum score of a drawn detection; the model drops scores below 0.05 before drawing",
+    )
     return parser.parse_args(argv)
 
 
