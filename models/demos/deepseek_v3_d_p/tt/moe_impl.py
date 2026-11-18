@@ -42,6 +42,9 @@ _BLOCK_DEFAULT = ("GLM53Config", "KimiK3Config")  # model config classes whose M
 # Every other model: its l1_small_size.
 _MODEL_L1_SMALL = {
     "KimiK3Config": 3328,
+    # Kimi-K3.1 (opt-in, MOE_IMPL=block): K3's figure plus the 512 B its own L1_SMALL_SIZE adds over K3's for the DSA
+    # layers' sparse-MLA CCLs - provisional, not measured.
+    "KimiK31Config": 3840,
     "GLM53Config": 3328,
 }
 _L1_SMALL_ALIGN = 64  # (the allocator's alignment of the slab and of the model's last buffer)
@@ -55,6 +58,7 @@ _L1_SMALL_ALIGN = 64  # (the allocator's alignment of the slab and of the model'
 #   dispatch semaphores and the router iteration words - 1696 B.
 _MODEL_WORDS_SLAB = {
     "KimiK3Config": 1712,
+    "KimiK31Config": 1712,  # (K3's MoE: the same word sets)
 }
 
 

@@ -168,8 +168,14 @@ def block_order_perm(mesh, epc, sp_axis: int = 0) -> torch.Tensor:
     return torch.tensor(perm, dtype=torch.long)
 
 
-def _k3_checkpoint() -> Path:
-    """Kimi-K3's checkpoint: $KIMI_K3_CKPT, else the prefill runner's $PREFILL_HF_MODEL (its K3 runs set only that)."""
+_K31_CHECKPOINT = "/mnt/weka/model-weights/llm/moonshotai/Kimi-K3.1-Pro-dequantized"  # (KimiK31Adapter's)
+
+
+def _k3_checkpoint(model_name: str = "KimiK3Config") -> Path:
+    """The checkpoint of a Kimi-K3 family model: K3 - $KIMI_K3_CKPT, else the prefill runner's $PREFILL_HF_MODEL (its
+    K3 runs set only that); K3.1 (the same MoE) - $KIMI_K31_HF_MODEL, else $PREFILL_HF_MODEL, else the adapter's."""
+    if model_name == "KimiK31Config":
+        return Path(os.environ.get("KIMI_K31_HF_MODEL") or os.environ.get("PREFILL_HF_MODEL") or _K31_CHECKPOINT)
     return Path(os.environ.get("KIMI_K3_CKPT") or os.environ.get("PREFILL_HF_MODEL") or "")
 
 
@@ -204,7 +210,7 @@ def _glm_nonrouted(layer_idx: int, hf_config):
     return dequantize_state_dict(t, hf_config, dtype=torch.float32), p
 
 
-def host_weights(mesh, dims, layer_idx: int, hf_config=None, sp_axis: int = 0):
+def host_weights(mesh, dims, layer_idx: int, hf_config=None, sp_axis: int = 0, model_name: str = "KimiK3Config"):
     """The layer's non-routed weights in the block's expert order: dict of float32 torch tensors (router weight / bias,
     shared gate / up / down, K3: latent down / up / norm)."""
     from models.demos.deepseek_v3_d_p.tt.kimi_k3.weights import (
@@ -227,7 +233,7 @@ def host_weights(mesh, dims, layer_idx: int, hf_config=None, sp_axis: int = 0):
             "up": t[sp + "up_proj.weight"].float(),
             "down": t[sp + "down_proj.weight"].float(),
         }
-    ckpt = _k3_checkpoint()
+    ckpt = _k3_checkpoint(model_name)
     assert (ckpt / "model.safetensors.index.json").is_file(), f"K3 MoE block: no checkpoint at {ckpt}"
     p = layer_prefix(ckpt, layer_idx)
     keys = {f"g.{k}": p + v for k, v in GATE_KEYS.items()}
@@ -575,7 +581,15 @@ class TtK3MoEBlockFfn:
             from concurrent.futures import ThreadPoolExecutor
 
             pool = ThreadPoolExecutor(max_workers=1)
-            fut = pool.submit(host_weights, self.mesh, self.dims, self.layer_idx, self.hf_config, self.options.sp_axis)
+            fut = pool.submit(
+                host_weights,
+                self.mesh,
+                self.dims,
+                self.layer_idx,
+                self.hf_config,
+                self.options.sp_axis,
+                self.model_name,
+            )
         routed = self._routed_w.get(routed_key)
         if routed is None:
             routed = (
