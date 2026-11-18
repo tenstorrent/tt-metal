@@ -1893,7 +1893,7 @@
   },
   "attempt": 2,
   "attempts": 0,
-  "duration_s": 2.0,
+  "duration_s": 2.6,
   "history": [
    {
     "attempt": 1,
@@ -1914,14 +1914,28 @@
    {
     "status": "STOPPED",
     "t": "2026-11-18T06:01:51"
+   },
+   {
+    "attempt": 2,
+    "from": "STOPPED",
+    "role": "overseer",
+    "status": "RESUMED",
+    "t": "2026-11-18T06:04:07"
+   },
+   {
+    "reused": [
+     "FIX.36#test_determinism",
+     "FIX.34"
+    ],
+    "s": 2.6,
+    "status": "PASS",
+    "t": "2026-11-18T06:04:46"
    }
   ],
-  "last_run": "2026-11-18T06:01:45",
+  "last_run": "2026-11-18T06:04:44",
   "log": "/scratch/dnijemcevic/bringup/deepseek_v41_flash_d_p/runs/galaxy_8x4-full/run1/logs/FIX.36.log",
   "rc": 0,
-  "reason": [
-   "gate passed and committed, but the attempt changed files outside its paths: revert or keep them, then resume (the passed units are reused, no agent starts). changed files outside the allowed paths (revert them): ['models/demos/deepseek_v41_flash_d_p/bringup/results/knowledge_use/FIX.36.overseer.2.json']"
-  ],
+  "reason": [],
   "review": [
    "changed files outside the allowed paths (revert them): ['models/demos/deepseek_v41_flash_d_p/bringup/results/knowledge_use/FIX.36.overseer.2.json']"
   ],
@@ -1936,8 +1950,8 @@
     "FIX.36#test_determinism": "0bcc10c935e07bfb"
    }
   },
-  "started": "2026-11-18T06:01:43",
-  "status": "STOPPED",
+  "started": "2026-11-18T06:04:41",
+  "status": "PASS",
   "units": {
    "FIX.34": "PASS",
    "FIX.36#test_determinism": "PASS"
