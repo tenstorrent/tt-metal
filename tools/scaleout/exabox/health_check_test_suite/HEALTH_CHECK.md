@@ -115,10 +115,14 @@ The eth deployment tests are registered as `TensixDeploymentEthernet<NN><Name>`
 two-digit index: `eth_link_up` is `*TensixDeploymentEthernet*LinkUp` and
 `eth_bandwidth` is `*TensixDeploymentEthernet*Bandwidth*`. The trailing wildcard
 on `eth_bandwidth` means it runs both `Bandwidth` and `BandwidthBidir`, both of
-which `tests/tt_metal/tt_metal/deployment/sources.cmake` now compiles.
+which `tests/tt_metal/tt_metal/deployment/sources.cmake` now compiles. Both run
+with `TT_METAL_SLOW_DISPATCH_MODE=1`: fast dispatch to active ethernet cores was
+removed, and under fast dispatch each eth test skips itself and exits 0.
 
-(Filters without the index wildcard match zero tests, so gtest exits 0 and the
-check is silently recorded as PASS without running — avoid that form.)
+A gtest check passes only if at least one of its test cases passed, as a pytest
+check does. A filter that matches nothing (one without the index wildcard, say)
+and a run whose tests all skip both exit 0 having tested nothing, and are
+recorded as FAIL with the `passed` / `failed` / `skipped` counts.
 
 `weekly` and `full` also run `didt_matmul_galaxy`, a pytest-based dI/dt stress
 test: 1000 matmul iterations on the full (8, 4) mesh with a determinism
@@ -638,7 +642,7 @@ miscabled.
             dm_app_fw_consistent             SKIP   not applicable to Galaxy
             dm_bl_fw_consistent              SKIP   not applicable to Galaxy
   tests          PASS  (25.2s)
-    other:  eth_link_up                      PASS   filter=*TensixDeploymentEthernet*LinkUp rc=0 dur=25.2s passed=1 failed=0 log=./logs/eth_link_up.log
+    other:  eth_link_up                      PASS   filter=*TensixDeploymentEthernet*LinkUp rc=0 dur=25.2s passed=1 failed=0 skipped=0 log=./logs/eth_link_up.log
   OVERALL        WARN
 ```
 

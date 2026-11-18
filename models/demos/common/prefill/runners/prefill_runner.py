@@ -59,6 +59,7 @@ from models.demos.common.prefill.runners.runner_utils import (
     stage_mesh_shape,
 )
 from models.demos.deepseek_v3_d_p.tt.mla.utils import mtp_lookahead_positions
+from models.demos.deepseek_v3_d_p.utils.chunk_config import prefill_chunk_tokens
 from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import MlaKvCacheFormat
 from models.demos.deepseek_v3_d_p.utils.sub_device_trace import CapturedCall
 
@@ -132,7 +133,7 @@ NUM_LAYERS = int(os.environ.get("PREFILL_NUM_LAYERS", MODEL_CFG.NUM_LAYERS))
 # PREFILL_PP_LAYER_COUNTS=12,9). Rank 0 still takes the H2D input, so it also holds the embedding. When set,
 # only the model's real last layer is built KV-only, not the last layer of the run.
 PP_LAYER_OFFSET = os.environ.get("PREFILL_PP_LAYER_OFFSET")
-CHUNK_SIZE = int(os.environ.get("PREFILL_CHUNK_SIZE", 5 * 1024))
+CHUNK_SIZE = prefill_chunk_tokens()
 # Tokens per forward, a multiple of the chunk size: FORWARD_CHUNKS chunks per forward, metadata in prefill_chunk.
 FORWARD_TOKENS_BUDGET = int(os.environ.get("PREFILL_FORWARD_TOKENS_BUDGET", CHUNK_SIZE))
 assert (

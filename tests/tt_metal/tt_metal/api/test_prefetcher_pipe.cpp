@@ -948,7 +948,7 @@ experimental::PrefetcherPipe PrefetcherPipeFixture::make_pipe(
     uint32_t ring_size,
     uint32_t num_credit_lanes) {
     spaces_.push_back(
-        experimental::CreatePrefetcherPipeSpace(*device, one_pipe_space_config(sender, receivers, ring_size)));
+        experimental::CreatePrefetcherPipeSpace(device->mesh_command_queue(0), one_pipe_space_config(sender, receivers, ring_size)));
     return spaces_.back().create_pipe(sender, receivers, num_credit_lanes);
 }
 
@@ -964,7 +964,7 @@ TEST_F(PrefetcherPipeFixture, PrefetcherPipeSpace_CarveRejects) {
     const CoreCoord sender(0, 0);
     const CoreRangeSet domain(CoreRange({1, 0}, {2, 0}));
     auto space = experimental::CreatePrefetcherPipeSpace(
-        *mesh_device,
+        mesh_device->mesh_command_queue(0),
         experimental::PrefetcherPipeSpaceConfig{
             .sender_cores = CoreRangeSet(CoreRange(sender)),
             .receiver_domain = domain,
@@ -1013,42 +1013,42 @@ TEST_F(PrefetcherPipeFixture, PrefetcherPipeSpace_ConfigRejects) {
         return c;
     };
     EXPECT_THROW(
-        experimental::CreatePrefetcherPipeSpace(*mesh_device, with([](auto& c) { c.ring_size = 0; })), std::exception);
+        experimental::CreatePrefetcherPipeSpace(mesh_device->mesh_command_queue(0), with([](auto& c) { c.ring_size = 0; })), std::exception);
     EXPECT_THROW(
-        experimental::CreatePrefetcherPipeSpace(*mesh_device, with([](auto& c) { c.ring_size = 33; })), std::exception);
+        experimental::CreatePrefetcherPipeSpace(mesh_device->mesh_command_queue(0), with([](auto& c) { c.ring_size = 33; })), std::exception);
     EXPECT_THROW(
-        experimental::CreatePrefetcherPipeSpace(*mesh_device, with([](auto& c) { c.buffer_type = BufferType::DRAM; })),
+        experimental::CreatePrefetcherPipeSpace(mesh_device->mesh_command_queue(0), with([](auto& c) { c.buffer_type = BufferType::DRAM; })),
         std::exception);
     EXPECT_THROW(
-        experimental::CreatePrefetcherPipeSpace(*mesh_device, with([](auto& c) { c.max_receivers_per_pipe = 0; })),
+        experimental::CreatePrefetcherPipeSpace(mesh_device->mesh_command_queue(0), with([](auto& c) { c.max_receivers_per_pipe = 0; })),
         std::exception);
     // A pipe cannot have more receivers than the domain it is carved from.
     EXPECT_THROW(
         experimental::CreatePrefetcherPipeSpace(
-            *mesh_device, with([](auto& c) { c.max_receivers_per_pipe = c.receiver_domain.num_cores() + 1; })),
+            mesh_device->mesh_command_queue(0), with([](auto& c) { c.max_receivers_per_pipe = c.receiver_domain.num_cores() + 1; })),
         std::exception);
     // No receiver domain: nothing could ever be carved.
     EXPECT_THROW(
         experimental::CreatePrefetcherPipeSpace(
-            *mesh_device, with([](auto& c) { c.receiver_domain = CoreRangeSet{}; })),
+            mesh_device->mesh_command_queue(0), with([](auto& c) { c.receiver_domain = CoreRangeSet{}; })),
         std::exception);
     EXPECT_THROW(
-        experimental::CreatePrefetcherPipeSpace(*mesh_device, with([](auto& c) {
+        experimental::CreatePrefetcherPipeSpace(mesh_device->mesh_command_queue(0), with([](auto& c) {
             c.sender_cores = CoreRangeSet{};
             c.receiver_domain = CoreRangeSet{};
         })),
         std::exception);
     // Worker and DRAM sender capacity may coexist; exact DRAM senders are selected later.
     EXPECT_NO_THROW(
-        experimental::CreatePrefetcherPipeSpace(*mesh_device, with([](auto& c) { c.num_dram_senders = 1; })));
+        experimental::CreatePrefetcherPipeSpace(mesh_device->mesh_command_queue(0), with([](auto& c) { c.num_dram_senders = 1; })));
     // DRAM senders take their worker L1 from the allocator, never from the persistent arena.
     EXPECT_THROW(
-        experimental::CreatePrefetcherPipeSpace(*mesh_device, with([](auto& c) {
+        experimental::CreatePrefetcherPipeSpace(mesh_device->mesh_command_queue(0), with([](auto& c) {
             c.num_dram_senders = 1;
             c.l1_source = experimental::PrefetcherPipeL1Source::PersistentArena;
         })),
         std::exception);
-    EXPECT_NO_THROW(experimental::CreatePrefetcherPipeSpace(*mesh_device, config));
+    EXPECT_NO_THROW(experimental::CreatePrefetcherPipeSpace(mesh_device->mesh_command_queue(0), config));
 }
 
 TEST_F(PrefetcherPipeFixture, PrefetcherPipeSpace_PipesShareAddressesByContract) {
@@ -1058,7 +1058,7 @@ TEST_F(PrefetcherPipeFixture, PrefetcherPipeSpace_PipesShareAddressesByContract)
     auto mesh_device = devices_[0];
     // One space over two disjoint sender/receiver pairs: both pipes sit at the space's addresses.
     auto space = experimental::CreatePrefetcherPipeSpace(
-        *mesh_device,
+        mesh_device->mesh_command_queue(0),
         experimental::PrefetcherPipeSpaceConfig{
             .sender_cores = CoreRangeSet(std::vector<CoreRange>{CoreRange({0, 0}), CoreRange({2, 0})}),
             .receiver_domain = CoreRangeSet(std::vector<CoreRange>{CoreRange({1, 0}), CoreRange({3, 0})}),
@@ -1099,7 +1099,7 @@ TEST_F(PrefetcherPipeFixture, MultipleDisjointOneToNPipesShareL1Address) {
     // M=3 independent 1:N pipes (N=2) carved from one space in one batch. Their cores are
     // disjoint, so every ring/config sits at the same per-core L1 address.
     auto space = experimental::CreatePrefetcherPipeSpace(
-        *mesh_device,
+        mesh_device->mesh_command_queue(0),
         experimental::PrefetcherPipeSpaceConfig{
             .sender_cores = CoreRangeSet(CoreRange({0, 0}, {0, 2})),
             .receiver_domain = CoreRangeSet(CoreRange({1, 0}, {2, 2})),
@@ -1139,7 +1139,7 @@ TEST_F(PrefetcherPipeFixture, PersistentArenaSerializesOverlappingSpacesAndReuse
         // Each space is declared before its pipe so the pipe dies first.
         const CoreRangeSet shared_receiver = CoreRangeSet(CoreRange({1, 0}));
         auto space0 = experimental::CreatePrefetcherPipeSpace(
-            *mesh_device, one_pipe_space_config(CoreCoord(0, 0), shared_receiver, 1024));
+            mesh_device->mesh_command_queue(0), one_pipe_space_config(CoreCoord(0, 0), shared_receiver, 1024));
         auto pipe0 = space0.create_pipe(CoreCoord(0, 0), shared_receiver);
         first_ring_address = pipe0.buffer_address();
         first_config_address = pipe0.config_address();
@@ -1147,7 +1147,7 @@ TEST_F(PrefetcherPipeFixture, PersistentArenaSerializesOverlappingSpacesAndReuse
 
         // A second space sharing (1,0) cannot alias the first one's L1 there.
         auto space1 = experimental::CreatePrefetcherPipeSpace(
-            *mesh_device, one_pipe_space_config(CoreCoord(2, 0), shared_receiver, 1024));
+            mesh_device->mesh_command_queue(0), one_pipe_space_config(CoreCoord(2, 0), shared_receiver, 1024));
         auto pipe1 = space1.create_pipe(CoreCoord(2, 0), shared_receiver);
         EXPECT_GE(pipe1.buffer_address(), pipe0.config_address() + pipe0.config_page_size());
     }
@@ -1165,11 +1165,11 @@ TEST_F(PrefetcherPipeFixture, DefaultL1SourceFollowsSenderType) {
     auto mesh_device = devices_[0];
     auto config = one_pipe_space_config(CoreCoord(0, 0), CoreRangeSet(CoreRange({1, 0})), 1024);
     EXPECT_EQ(
-        experimental::CreatePrefetcherPipeSpace(*mesh_device, config).l1_source(),
+        experimental::CreatePrefetcherPipeSpace(mesh_device->mesh_command_queue(0), config).l1_source(),
         experimental::PrefetcherPipeL1Source::PersistentArena);
     config.num_dram_senders = 1;
     EXPECT_EQ(
-        experimental::CreatePrefetcherPipeSpace(*mesh_device, config).l1_source(),
+        experimental::CreatePrefetcherPipeSpace(mesh_device->mesh_command_queue(0), config).l1_source(),
         experimental::PrefetcherPipeL1Source::Allocator);
 }
 
@@ -1184,7 +1184,7 @@ TEST_F(PrefetcherPipeFixture, AllocatorSpaceTakesItsL1FromTheAllocator) {
     uint32_t first_ring_address = 0;
     uint32_t first_config_address = 0;
     {
-        auto space = experimental::CreatePrefetcherPipeSpace(*mesh_device, config);
+        auto space = experimental::CreatePrefetcherPipeSpace(mesh_device->mesh_command_queue(0), config);
         first_ring_address = space.buffer_address();
         first_config_address = space.config_address();
         EXPECT_EQ(space.config_address() % PREFETCHER_PIPE_CREDIT_BLOCK_ALIGN, 0u);
@@ -1195,7 +1195,7 @@ TEST_F(PrefetcherPipeFixture, AllocatorSpaceTakesItsL1FromTheAllocator) {
     }
 
     // Destroying the space handed its L1 back, so an identical space lands where it was.
-    auto space = experimental::CreatePrefetcherPipeSpace(*mesh_device, config);
+    auto space = experimental::CreatePrefetcherPipeSpace(mesh_device->mesh_command_queue(0), config);
     EXPECT_EQ(space.buffer_address(), first_ring_address);
     EXPECT_EQ(space.config_address(), first_config_address);
 }
@@ -1217,10 +1217,10 @@ TEST_F(PrefetcherPipeFixture, AllocatorSpaceCanBeCreatedAfterProgramLocalL1) {
     // The live program's CB seals the persistent arena on the receivers.
     auto config = one_pipe_space_config(sender, receivers, entry_size * num_entries);
     config.l1_source = experimental::PrefetcherPipeL1Source::PersistentArena;
-    EXPECT_THROW(experimental::CreatePrefetcherPipeSpace(*mesh_device, config), std::exception);
+    EXPECT_THROW(experimental::CreatePrefetcherPipeSpace(mesh_device->mesh_command_queue(0), config), std::exception);
 
     config.l1_source = experimental::PrefetcherPipeL1Source::Allocator;
-    auto space = experimental::CreatePrefetcherPipeSpace(*mesh_device, config);
+    auto space = experimental::CreatePrefetcherPipeSpace(mesh_device->mesh_command_queue(0), config);
     auto pipe = space.create_pipe(sender, receivers);
     EXPECT_EQ(run_persistent_1toN_cross_program(mesh_device, pipe, entry_size, num_entries, /*write_primitive=*/0), 2u);
 }
@@ -1242,13 +1242,13 @@ TEST_F(PrefetcherPipeFixture, SpacesCreatedTogetherShareL1) {
 
     // Spaces that share L1 addresses need disjoint cores and one source.
     EXPECT_THROW(
-        experimental::CreatePrefetcherPipeSpaces(*mesh_device, std::vector{configs[0], configs[0]}), std::exception);
+        experimental::CreatePrefetcherPipeSpaces(mesh_device->mesh_command_queue(0), std::vector{configs[0], configs[0]}), std::exception);
     auto mixed = configs;
     mixed[1].l1_source = experimental::PrefetcherPipeL1Source::PersistentArena;
-    EXPECT_THROW(experimental::CreatePrefetcherPipeSpaces(*mesh_device, mixed), std::exception);
+    EXPECT_THROW(experimental::CreatePrefetcherPipeSpaces(mesh_device->mesh_command_queue(0), mixed), std::exception);
 
     std::vector<experimental::PrefetcherPipeSpace> spaces =
-        experimental::CreatePrefetcherPipeSpaces(*mesh_device, configs);
+        experimental::CreatePrefetcherPipeSpaces(mesh_device->mesh_command_queue(0), configs);
     ASSERT_EQ(spaces.size(), 2u);
     EXPECT_EQ(spaces[0].buffer_address(), spaces[1].buffer_address());
     EXPECT_EQ(spaces[0].config_address(), spaces[1].config_address());
@@ -3301,7 +3301,7 @@ TEST_F(PrefetcherPipeFixture, PrefetcherPipe_MultiPipeAccessor_CrossProgram_2S2R
     const CoreRangeSet receiver_cores(CoreRange(receiver_a, receiver_b));
 
     auto space = experimental::CreatePrefetcherPipeSpace(
-        *mesh_device,
+        mesh_device->mesh_command_queue(0),
         experimental::PrefetcherPipeSpaceConfig{
             .sender_cores = sender_cores,
             .receiver_domain = receiver_cores,
