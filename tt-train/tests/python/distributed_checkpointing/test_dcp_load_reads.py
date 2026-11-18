@@ -23,6 +23,8 @@ from ttml.distributed_checkpointing._safetensors import ITEMSIZE, create_file
 TP2_COLS = world([R(), S(3)], (1, 2))  # a row-parallel weight: columns split over two devices
 FSDP4_ROWS = world([S(2), R()], (4, 1))  # rows split over four devices: every shard needs rows of both chunks
 TP4_COLS = world([R(), S(3)], (1, 4))  # columns split over four devices
+FSDP2_ROWS = world([S(2), R()], (2, 1))  # rows split over two devices
+ROWS4_COLS4 = world([S(2), S(3)], (4, 4))  # rows split over four devices and columns over four
 SHAPE = (1, 1, 8, 16)
 
 
@@ -122,6 +124,36 @@ def test_a_column_slice_of_a_chunk_is_read_row_by_row(tmp_path, monkeypatch):
         itemsize = ITEMSIZE["F32"]
         run, start, row = 4 * itemsize, 4 * itemsize, SHAPE[3] * itemsize
         assert sorted(reads) == [(run, start)] * 4 + [(run, row + start)] * 4, reads
+    finally:
+        for fd in fds.values():
+            os.close(fd)
+
+
+def test_a_block_from_the_middle_of_a_chunk_reads_its_own_rows(tmp_path, monkeypatch):
+    """A destination needing rows 2-3 of a 4-row chunk and some of its columns reads two runs that start at chunk rows
+    2 and 3: the block's offset into the chunk counts on every dim before the run's, not just on the run's own."""
+    kplan, fds, src = _plan_and_files(tmp_path, saved=FSDP2_ROWS, loaded=ROWS4_COLS4)
+    reads = []
+    real_pread = _load.pread_all
+
+    def counting_pread(fd, nbytes, offset):
+        reads.append((nbytes, offset))
+        return real_pread(fd, nbytes, offset)
+
+    monkeypatch.setattr(_load, "pread_all", counting_pread)
+    try:
+        group = next(g for g, box in kplan.boxes.items() if tuple(box.offsets) == (0, 0, 2, 4))  # rows 2-3, cols 4-7
+        one = {group: np.zeros(kplan.boxes[group].sizes, np.float32)}
+        for items in _by_chunk(kplan).values():
+            mine = [i for i in items if i.group == group]
+            if mine:
+                _read_chunk(fds[items[0].file], 0, kplan, mine, ITEMSIZE["F32"], np.float32, one, "file")
+
+        np.testing.assert_array_equal(one[group], expected_shards(src, ROWS4_COLS4)[group])
+        # Chunk 0 holds rows 0-3; the block is columns 4-7 of its rows 2 and 3.
+        itemsize = ITEMSIZE["F32"]
+        run, start, row = 4 * itemsize, 4 * itemsize, SHAPE[3] * itemsize
+        assert sorted(reads) == [(run, 2 * row + start), (run, 3 * row + start)], reads
     finally:
         for fd in fds.values():
             os.close(fd)
