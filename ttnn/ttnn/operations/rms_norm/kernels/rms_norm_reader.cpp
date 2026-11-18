@@ -112,6 +112,9 @@ void kernel_main() {
     const uint32_t stick_start = get_arg_val<uint32_t>(8);
     const uint32_t stick_end = get_arg_val<uint32_t>(9);
     const uint32_t x_col_offset = get_arg_val<uint32_t>(10);  // interleaved RM: slice byte offset in a stick
+    // Bank stagger (interleaved TILE): rotate each chunk's issue order by this core's offset so the grid's
+    // simultaneous requests spread over the DRAM banks instead of all starting on the same one (0: in order).
+    const uint32_t stagger = get_arg_val<uint32_t>(11);
 
     const auto x_acc = TensorAccessor(x_args, x_addr, x_page_bytes);
     Noc noc;
@@ -236,7 +239,9 @@ void kernel_main() {
                 const uint32_t n = (block_tiles - i0 < read_chunk_tiles) ? (block_tiles - i0) : read_chunk_tiles;
                 cb_reserve_back(cb_x, n);
                 const uint32_t l1 = get_write_ptr(cb_x);
-                for (uint32_t j = 0; j < n; ++j) {
+                const uint32_t rot = stagger % n;
+                for (uint32_t jj = 0; jj < n; ++jj) {
+                    const uint32_t j = (jj + rot < n) ? (jj + rot) : (jj + rot - n);
                     const uint32_t i = i0 + j;
                     const uint32_t r = i / core_w_tiles;
                     const uint32_t c = i - r * core_w_tiles;

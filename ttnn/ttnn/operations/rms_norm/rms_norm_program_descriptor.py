@@ -21,6 +21,7 @@ re-strided core-locally (L1 -> L1) into cb_x_rm and back out of cb_out_rm (tiliz
 
 from __future__ import annotations
 
+import math
 import struct
 from dataclasses import dataclass
 from pathlib import Path
@@ -80,6 +81,11 @@ DENSE_GROUP = TILE  # tile-rows per dense tile: one column each
 # leaves R > C on a LOCAL split whose last ceil(R / C) round runs on R % C cores.
 BALANCED_W_SPLIT = True
 W_SPLIT_ROW_COST_TILES = 1
+# Bank stagger (catalog `bank_stagger`, lamp L9): interleaved TILE reader / writer rotate each chunk's issue order by
+# the core's index, so the grid's simultaneous requests start on different DRAM banks. Applied only where the cores
+# walk the banks in lockstep (_bank_stagger: every core's chunks start on a chunk-multiple page); a slice width off
+# the chunk grain already staggers the cores' starting banks naturally. False: in-order issue (rotation 0).
+BANK_STAGGER = True
 FORCE_W_SPLIT = 0  # probe override of the interleaved w_split (0 = auto)
 MIN_BLOCKS_PER_LINE = 1  # cap block_rows so each line streams >= this many blocks (1 = whole line per block)
 
@@ -194,6 +200,11 @@ def _norm_block(is_tile: bool, y_resident: bool, cw: int) -> int:
         return NORM_DEST_BLOCK
     ring = Y_DEPTH * Y_CHUNK_TILES
     return next(nb for nb in range(NORM_DEST_BLOCK, 0, -1) if cw % nb == 0 and ring % nb == 0)
+
+
+def _bank_stagger(x_sharded: bool, is_tile: bool, Wt: int, cw: int) -> bool:
+    grain = math.lcm(READ_CHUNK_TILES, Y_CHUNK_TILES)
+    return BANK_STAGGER and is_tile and not x_sharded and Wt % grain == 0 and cw % grain == 0
 
 
 def _per_row_bytes(g: OpGeometry, cw: int, k: int) -> int:
@@ -670,8 +681,10 @@ def create_program_descriptor(input_tensor, gamma, output_tensor, epsilon, compu
     inv_w_bits = _f32_bits(1.0 / W)
     eps_bits = _f32_bits(epsilon)
 
-    for w in work:
+    stagger_on = _bank_stagger(x_sharded, is_tile, Wt, cw)
+    for ci, w in enumerate(work):
         core = w.core
+        stagger = ci if stagger_on else 0
         root_v = device.worker_core_from_logical_core(w.root)
         is_root = 1 if w.pos == 0 else 0
         # byte offset of the slice inside one interleaved stick (sharded sticks hold only the slice)
@@ -689,6 +702,7 @@ def create_program_descriptor(input_tensor, gamma, output_tensor, epsilon, compu
             w.stick_start,
             w.stick_end,
             x_col_off,
+            stagger,
         ]
         writer_rt[core.x][core.y] = [
             y_addr,
@@ -706,6 +720,7 @@ def create_program_descriptor(input_tensor, gamma, output_tensor, epsilon, compu
             w.stick_end,
             w.w_start_elems * geo.es_g,  # RM γ byte offset of the slice
             y_col_off,
+            stagger,
         ]
         compute_rt[core.x][core.y] = [
             w.line_rows,

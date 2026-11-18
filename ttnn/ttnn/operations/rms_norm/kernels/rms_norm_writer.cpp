@@ -100,6 +100,7 @@ void kernel_main() {
     const uint32_t stick_end = get_arg_val<uint32_t>(12);
     const uint32_t g_col_offset = get_arg_val<uint32_t>(13);  // RM γ: byte offset of the slice in the γ stick
     const uint32_t y_col_offset = get_arg_val<uint32_t>(14);  // interleaved RM y: slice byte offset in a stick
+    const uint32_t stagger = get_arg_val<uint32_t>(15);  // bank stagger: chunk issue-order rotation (0: in order)
 
     const auto y_acc = TensorAccessor(y_args, y_addr, y_page_bytes);
     Noc noc;
@@ -336,7 +337,9 @@ void kernel_main() {
                 }
                 cb_wait_front(cb_y, n);
                 const uint32_t l1 = get_read_ptr(cb_y);
-                for (uint32_t j = 0; j < n; ++j) {
+                const uint32_t rot = stagger % n;
+                for (uint32_t jj = 0; jj < n; ++jj) {
+                    const uint32_t j = (jj + rot < n) ? (jj + rot) : (jj + rot - n);
                     const uint32_t i = i0 + j;
                     const uint32_t r = i / core_w_tiles;
                     const uint32_t c = i - r * core_w_tiles;
