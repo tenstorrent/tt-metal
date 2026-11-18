@@ -487,7 +487,11 @@
 #define MEM_IERISC_FABRIC_ETH_LINK_VALID 0x4B4E494C  // EthLink::valid once written: "LINK"
 #define MEM_IERISC_FABRIC_ETH_LINK_BASE \
     (MEM_IERISC_FABRIC_KERNEL_HEARTBEAT_BASE + MEM_IERISC_FABRIC_KERNEL_HEARTBEAT_SIZE)
-#define MEM_IERISC_FABRIC_ROUTER_END (MEM_IERISC_FABRIC_ETH_LINK_BASE + MEM_IERISC_FABRIC_ETH_LINK_SIZE)
+// The router's 8-byte staging word of each TX queue for a single-word send on a NOC link (eth_cce_send.h send_dword).
+// Written only through the uncached alias, so no cached line covers it.
+#define MEM_IERISC_FABRIC_NOC_DWORD_STAGE_SIZE 32
+#define MEM_IERISC_FABRIC_NOC_DWORD_STAGE_BASE (MEM_IERISC_FABRIC_ETH_LINK_BASE + MEM_IERISC_FABRIC_ETH_LINK_SIZE)
+#define MEM_IERISC_FABRIC_ROUTER_END (MEM_IERISC_FABRIC_NOC_DWORD_STAGE_BASE + MEM_IERISC_FABRIC_NOC_DWORD_STAGE_SIZE)
 #define MEM_IERISC_ROUTER_UNRESERVED_BASE ((MEM_IERISC_FABRIC_ROUTER_END + 63) & ~63)
 
 // Offset 0 is the reset-vector register. Every hart starts there.
