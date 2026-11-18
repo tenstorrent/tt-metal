@@ -946,9 +946,11 @@ TEST_F(TTNNFixtureWithDevice, TestGenericOpProgramSpecMatmul) {
 TEST_F(TTNNFixtureWithDevice, TestGenericOpProgramSpecLaterCallRejectsADifferentPrefetcherPipe) {
     // A space must outlive its pipes, and a pipe every program bound to it: the cleanup empties the program cache
     // before the pipes go.
-    auto space = m2::experimental::CreatePrefetcherPipeSpace(*this->device_, make_pipe_space_config());
+    auto space =
+        m2::experimental::CreatePrefetcherPipeSpace(this->device_->mesh_command_queue(0), make_pipe_space_config());
     auto pipe = space.create_pipe(pipe_sender(), pipe_receivers());
-    auto other_space = m2::experimental::CreatePrefetcherPipeSpace(*this->device_, make_pipe_space_config());
+    auto other_space =
+        m2::experimental::CreatePrefetcherPipeSpace(this->device_->mesh_command_queue(0), make_pipe_space_config());
     auto other_pipe = other_space.create_pipe(pipe_sender(), pipe_receivers());
     const auto clear_program_cache = ttsl::make_cleanup([this] { this->device_->clear_program_cache(); });
     const Tensor output = make_unused_output(this->device_);
@@ -968,7 +970,8 @@ TEST_F(TTNNFixtureWithDevice, TestGenericOpProgramSpecLaterCallRejectsADifferent
 // A pipe re-carved in its space after the bound pipe is destroyed has the same addresses and geometry, so it can take
 // the bound pipe's place: a later call with it reuses the cached program, which ttnn's framework rebinds to it.
 TEST_F(TTNNFixtureWithDevice, TestGenericOpProgramSpecLaterCallTakesAPipeReCarvedInPlace) {
-    auto space = m2::experimental::CreatePrefetcherPipeSpace(*this->device_, make_pipe_space_config());
+    auto space =
+        m2::experimental::CreatePrefetcherPipeSpace(this->device_->mesh_command_queue(0), make_pipe_space_config());
     std::optional<m2::experimental::PrefetcherPipe> pipe = space.create_pipe(pipe_sender(), pipe_receivers());
     const auto clear_program_cache = ttsl::make_cleanup([this] { this->device_->clear_program_cache(); });
     const Tensor output = make_unused_output(this->device_);
@@ -995,7 +998,8 @@ TEST_F(TTNNFixtureWithDevice, TestGenericOpProgramSpecLaterCallTakesAPipeReCarve
 // Every call checks that the run args give a pipe for each PrefetcherPipe parameter the spec declares, and for no other
 // name, before Metal sees them: a first call, and a later call with validate_program_args on or off.
 TEST_F(TTNNFixtureWithDevice, TestGenericOpProgramSpecChecksThePipesOfEveryCall) {
-    auto space = m2::experimental::CreatePrefetcherPipeSpace(*this->device_, make_pipe_space_config());
+    auto space =
+        m2::experimental::CreatePrefetcherPipeSpace(this->device_->mesh_command_queue(0), make_pipe_space_config());
     auto pipe = space.create_pipe(pipe_sender(), pipe_receivers());
     const auto clear_program_cache = ttsl::make_cleanup([this] { this->device_->clear_program_cache(); });
     const Tensor output = make_unused_output(this->device_);
