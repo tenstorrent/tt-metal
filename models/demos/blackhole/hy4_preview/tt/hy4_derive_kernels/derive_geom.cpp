@@ -37,6 +37,18 @@ void kernel_main() {
     constexpr auto il_args = TensorAccessorArgs<ih_args.next_compile_time_args_offset()>();
     constexpr auto up_args =
         TensorAccessorArgs<il_args.next_compile_time_args_offset()>();  // shared by the S upd tensors (same layout)
+    // B47d (HY4_B47D_ROPE): optional rope block appended after the upd accessor args (the ih / il outputs are then
+    // unused):
+    //   CT: ROPE, FIRST, PMAX, then TensorAccessorArgs(cosT) (sinT) (cos_out) (sin_out) (c128_out) (s128_out)
+    constexpr uint32_t ROPE = get_compile_time_arg_val(up_args.next_compile_time_args_offset());
+    constexpr uint32_t FIRST = get_compile_time_arg_val(up_args.next_compile_time_args_offset() + 1);
+    constexpr int32_t PMAX = get_compile_time_arg_val(up_args.next_compile_time_args_offset() + 2);
+    constexpr auto ct_args = TensorAccessorArgs<up_args.next_compile_time_args_offset() + 3>();
+    constexpr auto st_args = TensorAccessorArgs<ct_args.next_compile_time_args_offset()>();
+    constexpr auto co_args = TensorAccessorArgs<st_args.next_compile_time_args_offset()>();
+    constexpr auto so_args = TensorAccessorArgs<co_args.next_compile_time_args_offset()>();
+    constexpr auto c1_args = TensorAccessorArgs<so_args.next_compile_time_args_offset()>();
+    constexpr auto s1_args = TensorAccessorArgs<c1_args.next_compile_time_args_offset()>();
     Noc noc;
     experimental::CB cb(cb_id);
     cb.reserve_back(1);
@@ -60,6 +72,20 @@ void kernel_main() {
     volatile tt_l1_ptr uint32_t* ih = sc + 5 * 16;
     volatile tt_l1_ptr uint32_t* il = sc + 6 * 16;
     const int32_t n0 = p + 1;
+    if constexpr (ROPE) {
+        // rows of the (bf16 final) cos / sin tables at positions p + j (clamped), 128 B each: cos rows at +1024, sin
+        // rows at +1536
+        const auto ct_acc = TensorAccessor(ct_args, get_common_arg_val<uint32_t>(11), 128);
+        const auto st_acc = TensorAccessor(st_args, get_common_arg_val<uint32_t>(12), 128);
+        for (int32_t j = 0; j < (int32_t)S; ++j) {
+            int32_t pv = p + j;
+            pv = pv > PMAX ? PMAX : pv;
+            noc.async_read(
+                ct_acc, cb, 128, {.page_id = (uint32_t)pv, .offset_bytes = 0}, {.offset_bytes = 1024u + j * 128u});
+            noc.async_read(
+                st_acc, cb, 128, {.page_id = (uint32_t)pv, .offset_bytes = 0}, {.offset_bytes = 1536u + j * 128u});
+        }
+    }
     for (int32_t j = 0; j < 16; ++j) {
         wr[j] = -1;
         kv[j] = 0u;
@@ -107,6 +133,38 @@ void kernel_main() {
     for (uint32_t j = 0; j < S; ++j) {
         const auto u_acc = TensorAccessor(up_args, get_common_arg_val<uint32_t>(7 + j), 64);
         noc.async_write(cb, u_acc, 64, {.offset_bytes = (7 + j) * 64}, {.page_id = 0, .offset_bytes = 0});
+    }
+    if constexpr (ROPE) {
+        noc.async_read_barrier();
+        invalidate_l1_cache();
+        // the persistent tabs are zero-initialised and their padding rows are never written: only the 32 B face-row
+        // pieces of rows < S are (cos/sin rows are used from L1 in place)
+        volatile tt_l1_ptr uint32_t* ones = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(base + 2048);
+        for (uint32_t w = 0; w < 8; ++w) {
+            ones[w] = 0x3F803F80u;
+        }
+        const auto co_acc = TensorAccessor(co_args, get_common_arg_val<uint32_t>(13), 2048);
+        const auto so_acc = TensorAccessor(so_args, get_common_arg_val<uint32_t>(14), 2048);
+        const auto c1_acc = TensorAccessor(c1_args, get_common_arg_val<uint32_t>(15), 2048);
+        const auto s1_acc = TensorAccessor(s1_args, get_common_arg_val<uint32_t>(16), 2048);
+        for (uint32_t j = 0; j < S; ++j) {
+            for (uint32_t k = 0; k < 4; ++k) {  // 16-column chunks of the 64-wide row: tile k>>1, face k&1, tile row j
+                const uint32_t tile = k >> 1, dst = (k & 1) * 512u + j * 32u;
+                const uint32_t cs = 1024u + j * 128u + k * 32u, ss = 1536u + j * 128u + k * 32u;
+                noc.async_write(cb, co_acc, 32, {.offset_bytes = cs}, {.page_id = tile, .offset_bytes = dst});
+                noc.async_write(cb, so_acc, 32, {.offset_bytes = ss}, {.page_id = tile, .offset_bytes = dst});
+                noc.async_write(
+                    cb, c1_acc, 32, {.offset_bytes = cs}, {.page_id = (FIRST ? 0u : 2u) + tile, .offset_bytes = dst});
+                noc.async_write(
+                    cb,
+                    c1_acc,
+                    32,
+                    {.offset_bytes = 2048u},
+                    {.page_id = (FIRST ? 2u : 0u) + tile, .offset_bytes = dst});
+                noc.async_write(
+                    cb, s1_acc, 32, {.offset_bytes = ss}, {.page_id = (FIRST ? 0u : 2u) + tile, .offset_bytes = dst});
+            }
+        }
     }
     noc.async_write_barrier();
 }

@@ -135,6 +135,22 @@ class Hy4IHCGen:
 
     @staticmethod
     def collapse(x4, pre):
+        if os.environ.get("HY4_B49_IHC", "0") != "0" and os.environ.get("HY4_B49_COLLAPSE", "1") != "0":
+            # B49: sum_i pre_i x_i as 4 slice * bcast-multiply + 3 adds (the stock ttnn.sum over the stream dim 1 of [1,4,n,D] fp32 costs 5.1 ms at n=512, this 0.82 ms; fp32 reorder only)
+            n, Dd = x4.shape[2], x4.shape[3]
+            acc = None
+            for i in range(NSTREAM):
+                xi = ttnn.slice(x4, [0, i, 0, 0], [1, i + 1, n, Dd])
+                pi = ttnn.slice(pre, [0, i, 0, 0], [1, i + 1, n, 1])
+                t = ttnn.multiply(xi, pi)  # (xi / pi are NOT deallocated: ttnn.slice may return a view of x4 / pre)
+                if acc is None:
+                    acc = t
+                else:
+                    a2 = ttnn.add(acc, t)
+                    ttnn.deallocate(acc)
+                    ttnn.deallocate(t)
+                    acc = a2
+            return acc
         w = ttnn.multiply(x4, pre)
         h = ttnn.sum(w, dim=1, keepdim=True)  # [1,1,n,D] fp32
         ttnn.deallocate(w)
@@ -176,6 +192,26 @@ class Hy4ChainLayer:
         self.mtp = L >= cfg.num_hidden_layers
         if not self.mtp:
             self.ihc_a, self.ihc_m = hc("attn"), hc("mlp")
+            self.ihcpf_a = self.ihcpf_m = None
+            if (
+                os.environ.get("HY4_B49_IHC", "0") == "fused"
+            ):  # B49: prefill iHC as 5 JIT programs per site (tt/hy4_ihc_pf.py), shares the hc_fn tensor of the stock iHC
+                from models.demos.blackhole.hy4_preview.tt.hy4_ihc_pf import Hy4IHCPF
+
+                mkpf = lambda s_, g_, nw: Hy4IHCPF(
+                    md,
+                    g_.w,
+                    sd[f"hc_{s_}_layer.hc_pre.hc_base"],
+                    sd[f"hc_{s_}_layer.hc_pre.hc_scale"],
+                    sd[nw],
+                    cfg.hc_eps,
+                    cfg.rms_norm_eps,
+                    cfg.hc_magnitude,
+                    dim=HID,
+                    n=CHUNK,
+                )
+                self.ihcpf_a = mkpf("attn", self.ihc_a, "input_layernorm.weight")
+                self.ihcpf_m = mkpf("mlp", self.ihc_m, "post_attention_layernorm.weight")
             if (
                 os.environ.get("HY4_IHC_FUSED", "0") == "1"
             ):  # fused iHC kernels (ihc-fuse e037d61bccb): packed [1,1,4T,D] streams, decode only
@@ -426,6 +462,8 @@ class Hy4ChainLayer:
     def prefill_chunk(self, x4, start, ids_by_layer, taps=None):
         """x4 [1,4,n,D] fp32 -> x4' (same layout). ids_by_layer: layer -> top-k ids of the full-indexer layers (IndexCache carry).
         taps (dict, debugging): host copies of pre_a, post_a, h_a, a, x4a, pre_m, post_m, h_m, y."""
+        if getattr(self, "ihcpf_a", None) is not None and taps is None and x4.shape[2] == self.ihcpf_a.n:
+            return self._prefill_chunk_pf(x4, start, ids_by_layer)
         pre, post = self.ihc_a.pre_post(x4)
         self._dbg(taps, "pre_a", pre)
         self._dbg(taps, "post_a", post)
@@ -460,6 +498,31 @@ class Hy4ChainLayer:
         x4 = self.ihc_m.expand(x4, y, post)
         ttnn.deallocate(y)
         return x4
+
+    def _prefill_chunk_pf(self, x4, start, ids_by_layer):
+        """B49 fused-iHC variant of prefill_chunk (same data flow; the iHC of both sites is 5 programs each)."""
+        bf = lambda t: t if t.dtype == ttnn.bfloat16 else ttnn.typecast(t, ttnn.bfloat16)
+        h, st = self.ihcpf_a.pre(x4)
+        src = self.spec.indexer_source
+        ids_in = None if self.spec.indexer == FULL else ids_by_layer[src]
+        a, ids = self.attn.prefill_chunk(h, start, ids_in=ids_in)
+        ttnn.deallocate(h)
+        if self.spec.indexer == FULL:
+            if self.L in ids_by_layer:
+                ttnn.deallocate(ids_by_layer[self.L])
+            ids_by_layer[self.L] = ids
+        ab = bf(a)
+        x4a = self.ihcpf_a.expand(x4, ab, st)
+        for t in (x4, st) + ((a, ab) if ab is not a else (a,)):
+            ttnn.deallocate(t)
+        h, st = self.ihcpf_m.pre(x4a)
+        y = self._mlp_prefill(h)
+        ttnn.deallocate(h)
+        yb = bf(y)
+        x4n = self.ihcpf_m.expand(x4a, yb, st)
+        for t in (x4a, st) + ((y, yb) if yb is not y else (y,)):
+            ttnn.deallocate(t)
+        return x4n
 
 
 # ------------------------------------------------------------------ model
