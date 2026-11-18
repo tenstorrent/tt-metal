@@ -19,8 +19,12 @@ dashboards:
   # Missing from pr-gate.yaml: runtime-smoke-tests, ttnn-smoke-tests,
   # runtime-examples, ttnn-examples, code-analysis, model-charts-sync,
   # build-docs, llk-smoke-tests, llk-quasar-tests, verify-time-budgets.
-  # smoke-cpu-asan, smoke-n150-asan and llk-smoke-n150-g1/g2 exist here but
-  # are not validated against the PR Gate, so they are not members yet.
+  # smoke-cpu-asan, smoke-n150-asan, llk-smoke-n150-g1/g2 and
+  # ttnn-smoke-n150-asan (ttnn-smoke-tests) exist here but are not validated
+  # against the PR Gate, so they are not members yet. runtime-examples and
+  # ttnn-examples wait on torrentci#1849 P3 (distro packages in the card VM);
+  # build-docs needs the real Dockerfile's ci-test image (images.bake,
+  # torrentci#2556 S5c).
   - id: pr-gate
     description: tt-metal PR Gate (pr-gate.yaml), the ported part
     report: {check: true}
