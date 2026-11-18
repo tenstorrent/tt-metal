@@ -1,166 +1,22 @@
 # SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-import torch
 import pytest
+import torch
 import ttnn
-import pickle
-import os
 from loguru import logger
 from torchvision.models.detection import retinanet_resnet50_fpn_v2, RetinaNet_ResNet50_FPN_V2_Weights
 
 from models.experimental.retinanet.num_layers import load_reduced
-from tt_py_test_utils_common.utils_for_testing import assert_with_pcc
+from models.experimental.retinanet.tt.custom_preprocessor import preprocess_regression_head_parameters
 from models.experimental.retinanet.tt.tt_regression_head import ttnn_retinanet_regression_head
-from models.experimental.retinanet.tt.utils import bbox_reg_slice_config, group_norm_channel_chunks
-
-
-def create_regression_head_parameters(torch_head, device, model_config):
-    """Convert PyTorch regression head weights to TTNN format."""
-    parameters = {}
-
-    channel_chunks = group_norm_channel_chunks(device, num_channels=256, num_groups=32)
-    layout = (
-        ttnn.TILE_LAYOUT if model_config["WEIGHTS_DTYPE"] in [ttnn.bfloat8_b, ttnn.bfloat4_b] else ttnn.ROW_MAJOR_LAYOUT
-    )
-    parameters["conv"] = []
-    for i in range(len(torch_head.conv)):
-        conv_weight = torch_head.conv[i][0].weight.detach().to(torch.bfloat16)
-        bias = torch.zeros(conv_weight.shape[0]).to(torch.bfloat16)
-
-        norm_weight = torch_head.conv[i][1].weight.detach()
-        norm_bias = torch_head.conv[i][1].bias.detach()
-
-        formatted_norm_weight = ttnn.create_group_norm_weight_bias_rm(
-            norm_weight, num_channels=256, num_cores_x=channel_chunks
-        )
-        formatted_norm_bias = ttnn.create_group_norm_weight_bias_rm(
-            norm_bias, num_channels=256, num_cores_x=channel_chunks
-        )
-        prepared_weight = ttnn.prepare_conv_weights(
-            weight_tensor=ttnn.from_torch(conv_weight, dtype=ttnn.bfloat16),
-            input_memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            input_layout=ttnn.TILE_LAYOUT,
-            weights_format="OIHW",
-            in_channels=conv_weight.shape[1],
-            out_channels=conv_weight.shape[0],
-            batch_size=1,
-            input_height=64,
-            input_width=64,
-            kernel_size=(3, 3),
-            stride=(1, 1),
-            padding=(1, 1),
-            dilation=(1, 1),
-            has_bias=True,
-            groups=1,
-            device=device,
-            input_dtype=ttnn.bfloat16,
-        )
-
-        prepared_bias = ttnn.prepare_conv_bias(
-            bias_tensor=ttnn.from_torch(bias.reshape(1, 1, 1, -1), dtype=ttnn.bfloat16),
-            input_memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            input_layout=ttnn.TILE_LAYOUT,
-            in_channels=conv_weight.shape[1],
-            out_channels=conv_weight.shape[0],
-            batch_size=1,
-            input_height=64,
-            input_width=64,
-            kernel_size=(3, 3),
-            stride=(1, 1),
-            padding=(1, 1),
-            dilation=(1, 1),
-            groups=1,
-            device=device,
-            input_dtype=ttnn.bfloat16,
-            conv_config=ttnn.Conv2dConfig(weights_dtype=model_config["WEIGHTS_DTYPE"]),
-        )
-        conv_params = {
-            "weight": prepared_weight,
-            "bias": prepared_bias,
-            "norm_weight": ttnn.from_torch(
-                formatted_norm_weight,
-                dtype=model_config["WEIGHTS_DTYPE"],
-                layout=layout,
-                device=device,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            ),
-            "norm_bias": ttnn.from_torch(
-                formatted_norm_bias,
-                dtype=model_config["WEIGHTS_DTYPE"],
-                layout=layout,
-                device=device,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            ),
-        }
-
-        parameters["conv"].append(conv_params)
-
-        # Convert bbox_reg layer
-        bbox_weight = torch_head.bbox_reg.weight.detach().to(torch.bfloat16)
-        bbox_bias = torch_head.bbox_reg.bias.detach().to(torch.bfloat16)
-        bbox_weight_ttnn = ttnn.from_torch(bbox_weight, dtype=model_config["WEIGHTS_DTYPE"])
-        # First convert to TTNN format
-        bbox_bias_ttnn = ttnn.from_torch(
-            bbox_bias.reshape(1, 1, 1, -1),
-            dtype=ttnn.bfloat16,
-        )
-        # Use prepare_conv_weights to transform to proper format
-        prepared_bbox_weight = ttnn.prepare_conv_weights(
-            weight_tensor=bbox_weight_ttnn,
-            input_memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            input_layout=ttnn.TILE_LAYOUT,
-            weights_format="OIHW",
-            in_channels=256,
-            out_channels=bbox_weight.shape[0],
-            batch_size=1,
-            input_height=64,
-            input_width=64,
-            kernel_size=[3, 3],
-            stride=[1, 1],
-            padding=[1, 1],
-            dilation=[1, 1],
-            has_bias=True,
-            groups=1,
-            device=device,
-            input_dtype=ttnn.bfloat16,
-            output_dtype=model_config["WEIGHTS_DTYPE"],
-            conv_config=ttnn.Conv2dConfig(weights_dtype=model_config["WEIGHTS_DTYPE"]),
-            slice_config=bbox_reg_slice_config(device),
-            compute_config=None,
-        )
-        # Prepare the bias using prepare_conv_bias
-        prepared_bbox_bias = ttnn.prepare_conv_bias(
-            bias_tensor=bbox_bias_ttnn,
-            input_memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            input_layout=ttnn.TILE_LAYOUT,
-            in_channels=256,
-            out_channels=bbox_weight.shape[0],
-            batch_size=1,
-            input_height=64,
-            input_width=64,
-            kernel_size=(3, 3),
-            stride=(1, 1),
-            padding=(1, 1),
-            dilation=(1, 1),
-            groups=1,
-            device=device,
-            input_dtype=ttnn.bfloat16,
-            conv_config=ttnn.Conv2dConfig(weights_dtype=model_config["WEIGHTS_DTYPE"]),
-            slice_config=bbox_reg_slice_config(device),
-        )
-        parameters["bbox_reg"] = {
-            "weight": prepared_bbox_weight,
-            "bias": prepared_bbox_bias,
-        }
-
-    return parameters
+from tt_py_test_utils_common.utils_for_testing import assert_with_pcc
 
 
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
 @pytest.mark.parametrize("pcc", [0.99])
-def test_retinanet_v2_regression_head_ttnn_5_fpn_with_real_features(device, pcc, reset_seeds):
-    """Test TTNN RetinaNet V2 regression head with 5 FPN levels using real features."""
+def test_regression_head(device, pcc, reset_seeds):
+    """The TTNN regression head on random features of the five pyramid levels."""
     torch.manual_seed(0)
 
     # Load pretrained model
@@ -170,31 +26,11 @@ def test_retinanet_v2_regression_head_ttnn_5_fpn_with_real_features(device, pcc,
     torch_model = torch_model.to(dtype=torch.bfloat16)
     regression_head = torch_model.head.regression_head
 
-    # Load pickled FPN features
-    pickle_path = "models/experimental/retinanet/data/fpn_features.pkl"
-
-    if os.path.exists(pickle_path):
-        logger.info(f"Loading FPN features from {pickle_path}")
-        with open(pickle_path, "rb") as f:
-            saved_data = pickle.load(f)
-
-        torch_features = saved_data["features"]
-        input_shapes = saved_data["input_shapes"]
-        batch_size = saved_data["batch_size"]
-        in_channels = saved_data["in_channels"]
-
-        logger.info(f"  Loaded {len(torch_features)} FPN levels:")
-        for i, feat in enumerate(torch_features):
-            logger.info(f"    Level {i}: {feat.shape}")
-    else:
-        logger.info(f"Pickle file not found at {pickle_path}, using random features")
-
-        # Fallback to random features
-        batch_size = 1
-        in_channels = 256
-        input_shapes = [(100, 100), (50, 50), (25, 25), (13, 13), (7, 7)]
-
-        torch_features = [torch.randn(batch_size, in_channels, H, W, dtype=torch.bfloat16) for H, W in input_shapes]
+    # Random features of the pyramid levels of a 512x512 input.
+    batch_size = 1
+    in_channels = 256
+    input_shapes = [(64, 64), (32, 32), (16, 16), (8, 8), (4, 4)]
+    torch_features = [torch.randn(batch_size, in_channels, H, W, dtype=torch.bfloat16) for H, W in input_shapes]
 
     num_anchors = 9
 
@@ -219,7 +55,7 @@ def test_retinanet_v2_regression_head_ttnn_5_fpn_with_real_features(device, pcc,
         "ACTIVATIONS_DTYPE": ttnn.bfloat16,
     }
     # Create TTNN parameters
-    ttnn_parameters = create_regression_head_parameters(regression_head, device, model_config)
+    ttnn_parameters = preprocess_regression_head_parameters(regression_head, device, None, model_config)
 
     # TTNN forward pass
     ttnn_output = ttnn_retinanet_regression_head(
