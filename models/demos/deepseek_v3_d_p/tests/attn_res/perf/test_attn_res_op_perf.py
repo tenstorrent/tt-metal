@@ -33,14 +33,14 @@ from loguru import logger
 import ttnn
 from models.common.ci_failure import assert_perf_gate
 from models.common.utility_functions import run_for_blackhole
-from models.demos.deepseek_v3_d_p.tests.attn_res.device_determinism import deterministic_input
 from models.demos.deepseek_v3_d_p.tests.attn_res.model.harness import EXACT_BOX, HIDDEN_SIZE, L1_SMALL_SIZE
 from models.demos.deepseek_v3_d_p.tests.fabric_profiles import torus_xy_device_params, tp_axis_is_wrapped
+from models.demos.deepseek_v3_d_p.tests.measure.determinism import deterministic_input
 from models.demos.deepseek_v3_d_p.tt.attn_res.attn_res import EPS, STATS_FIDELITY
 from models.demos.deepseek_v3_d_p.tt.tt_ccl import get_num_links, per_axis_topology
 from models.demos.deepseek_v3_d_p.utils.prefill_summary_utils import emit_perf_metrics
 from models.demos.deepseek_v3_d_p.utils.smbus_telemetry import require_high_power
-from tests.ttnn.profiling.realtime_profiler_utils import profile_realtime_program_merged, require_realtime_profiler
+from tt_py_test_utils_common.realtime_profiler_utils import profile_realtime_program_merged, require_realtime_profiler
 
 pytestmark = [run_for_blackhole(), pytest.mark.perf, pytest.mark.timeout(900)]
 

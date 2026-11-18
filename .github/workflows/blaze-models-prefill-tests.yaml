@@ -3,22 +3,102 @@ name: "Blaze Models Prefill tests"
 on:
   workflow_dispatch:
     inputs:
-      test-type:
-        # Authoritative list of valid tokens lives in the test matrix
-        # (tests/pipeline_reorg/blaze_models_prefill_tests.yaml) and is enforced
-        # by the validate-test-type job below. This text is just UX help.
-        description: >-
-          Comma-separated stages to run, e.g. "mla_chunked,glm_moe,kimi_moe".
-          Empty or "all" runs every stage. Groups: "module" runs every stage,
-          "sdpa_perf" runs ring-joint SDPA, high-bandwidth all-gather and the sparse KV push,
-          "disagg_prefill" runs the disaggregated-prefill runner+producer legs on SC1 and SC4.
-          "gemma4_d_p_layer_perf" needs a Tracy build and runs only when named; "all" and tags exclude it.
-          "dsv4_transformer_depth" (real weights, every layer of both DeepSeek-V4 models) also runs only when named.
-          Valid stages: dsv4_prefill_perf_suite, dsv4_prefill_suite, dsv4_transformer_depth, gemma4_d_p, gemma4_d_p_layer_perf, gemma4_d_p_perf, gemma4_d_p_prefill_accuracy, gemma4_prefill_kv_pcc, glm_chunked_accuracy_suite, glm_chunked_perf_suite, glm_components_suite, gpt_oss_prefill_suite, high_bw_all_gather_sparse_kv_push_perf, k3_accuracy_suite, k3_dspark_runner, k3_dspark_suite, k3_mla_perf, k3_prefill_runner_24l, k3_prefill_runner_93l, k3_transformer_suite, kimi_chunked_accuracy_suite, kimi_chunked_perf_suite, kimi_components_suite, kimi_k3_moe, kimi_moe_perf, kimi_rmsnorm, kv_cache_table, llama31_prefill_runner, llama31_prefill_suite, minimax_prefill_kv_pcc, minimax_prefill_perf, mistral4_chunked_padded, mistral4_chunked_perf, mistral4_mla, mistral4_mla_chunked, mistral4_moe, mistral4_pp4_kv_pcc, mistral4_prefill_block, mistral4_prefill_suite, mistral4_prefill_transformer, mistral4_traced_vs_eager, moe_gate, prefill_runner, prefill_runner_kv_pcc, ring_joint_sdpa_perf.
-          Tags (each runs every matching stage): accuracy, block, ccl, csa, csa_chunked, csa_chunked_pro, determinism, dflash, dsa_mla_glm, dspark, dsv4_flash, gate, gemma4_d_p, glm_5_3, glm_chunked, glm_chunked_accuracy, glm_chunked_padded, glm_chunked_untraced_perf, glm_moe, glm_mtp, glm_mtp_kv_share, glm_prefill_block, gpt_oss_prefill_kv_pcc, gpt_oss_prefill_kv_pcc_1k, gpt_oss_varchunk_smoke, hca, hca_chunked, hca_perf, k3_chunked_prefill, k3_contracts, k3_kda, k3_kda_perf, k3_mla, k3_mla_trace, k3_transformer_depth, k3_transformer_traced, kda, kimi_chunked, kimi_chunked_padded, kimi_chunked_untraced_perf, kimi_dflash, kimi_k2_7, kimi_k3, kimi_moe, kv_cache, llama31, llama31_prefill_book_top5, llama31_prefill_components, minimax_m3, mistral4, mistral4_chunked_padded, mistral4_mla, mistral4_mla_chunked, mistral4_moe, mistral4_prefill_block, mistral4_prefill_transformer, mla, mla_chunked, moe, mtp, prefill_block_determinism, prefill_transformer_determinism, runner, sdpa, sparse_kv_push, swa, swa_mixed, swa_perf, transformer, v4_block_chunked, v4_transformer.
-        required: false
-        type: string
-        default: "all"
+      # Test selection. Each checkbox's id IS a token from the test matrix
+      # (tests/pipeline_reorg/blaze_models_prefill_tests.yaml): a test_type, test_group
+      # or test_tag. validate-test-type joins the ticked ids into the comma-separated
+      # selection, so ids must stay snake_case (hyphenated ids like enable-lto are
+      # ignored) and must be valid matrix tokens. Nothing ticked runs everything,
+      # which is what the nightly schedule does.
+      # workflow_dispatch allows at most 25 inputs and all 25 are used: adding a box
+      # means removing one.
+      kimi_k3:
+        type: boolean
+        default: false
+        description: "Kimi-K3: every K3 leg (also pulls kimi_moe_perf, ring_joint_sdpa_perf)"
+      k3_mla_perf:
+        type: boolean
+        default: false
+        description: "K3 > k3_mla_perf"
+      k3_accuracy_suite:
+        type: boolean
+        default: false
+        description: "K3 > k3_accuracy_suite"
+      k3_prefill_runner_24l:
+        type: boolean
+        default: false
+        description: "K3 > k3_prefill_runner_24l"
+      k3_prefill_runner_93l:
+        type: boolean
+        default: false
+        description: "K3 > k3_prefill_runner_93l"
+      k3_dspark_runner:
+        type: boolean
+        default: false
+        description: "K3 > k3_dspark_runner"
+      kimi_k2_7:
+        type: boolean
+        default: false
+        description: "Kimi-K2.7: every K2.7 leg (also pulls kv_cache_table, kimi_moe_perf, ring_joint_sdpa_perf)"
+      glm_5_3:
+        type: boolean
+        default: false
+        description: "GLM-5.3: every GLM leg (also pulls kv_cache_table)"
+      glm_chunked_perf_suite:
+        type: boolean
+        default: false
+        description: "GLM > glm_chunked_perf_suite"
+      glm_components_suite:
+        type: boolean
+        default: false
+        description: "GLM > glm_components_suite"
+      dsv4_flash:
+        type: boolean
+        default: false
+        description: "DeepSeek-V4: every V4 leg except transformer depth"
+      dsv4_transformer_depth:
+        type: boolean
+        default: false
+        description: "DeepSeek-V4 > dsv4_transformer_depth (real weights, every layer; only runs when ticked)"
+      gemma4_d_p:
+        type: boolean
+        default: false
+        description: "Gemma4: every Gemma4 leg except layer perf"
+      gemma4_prefill_kv_pcc:
+        type: boolean
+        default: false
+        description: "Gemma4 > gemma4_prefill_kv_pcc"
+      gemma4_d_p_layer_perf:
+        type: boolean
+        default: false
+        description: "Gemma4 > gemma4_d_p_layer_perf (Tracy build; only runs when ticked)"
+      minimax_m3:
+        type: boolean
+        default: false
+        description: "MiniMax-M3: every MiniMax leg"
+      mistral4:
+        type: boolean
+        default: false
+        description: "Mistral4: every Mistral4 leg (also pulls kv_cache_table)"
+      llama31:
+        type: boolean
+        default: false
+        description: "Llama3.1: every Llama3.1 leg"
+      gpt_oss_prefill_suite:
+        type: boolean
+        default: false
+        description: "gpt-oss: gpt_oss_prefill_suite"
+      disagg_prefill:
+        type: boolean
+        default: false
+        description: "Group: every disaggregated-prefill runner+producer leg (SC1 and SC4)"
+      sdpa_perf:
+        type: boolean
+        default: false
+        description: "Group: ring-joint SDPA perf + high-bandwidth all-gather / sparse KV push perf"
+      moe_gate:
+        type: boolean
+        default: false
+        description: "Cross-model: moe_gate"
       platform:
         required: false
         type: choice
@@ -61,12 +141,25 @@ jobs:
         timeout-minutes: 20
       - name: Install dependencies
         run: pip3 install PyYAML
+      - name: Collect ticked checkboxes
+        id: collect
+        # Pass inputs via env (not direct ${{ }} interpolation) to avoid shell injection.
+        # Only snake_case ids are test tokens; this skips platform/build-type/enable-lto.
+        env:
+          INPUTS_JSON: ${{ toJSON(inputs) }}
+        run: |
+          selection=$(python3 -c '
+          import json, os, re
+          inputs = json.loads(os.environ.get("INPUTS_JSON") or "{}") or {}
+          print(",".join(k for k, v in inputs.items()
+                         if re.fullmatch(r"[a-z0-9_]+", k) and v in (True, "true")))
+          ')
+          echo "Ticked: ${selection:-(none, running all)}"
+          echo "selection=${selection}" >> "$GITHUB_OUTPUT"
       - name: Validate test-type selection
         id: validate
-        # Pass the user input via env (not direct ${{ }} interpolation) to avoid
-        # shell injection from the workflow_dispatch input.
         env:
-          TEST_TYPE: ${{ inputs.test-type }}
+          TEST_TYPE: ${{ steps.collect.outputs.selection }}
         run: |
           python3 .github/scripts/utils/validate_test_type_selection.py \
             "${{ env.TESTS_YAML_PATH }}" \
@@ -282,6 +375,8 @@ jobs:
         run: |
           python3 models/demos/common/prefill/runners/ci/scaling_summary.py \
             --metrics-dir perf_metrics --model "${{ matrix.model }}" ${{ matrix.sc4_only && '--sc4-only' || '' }} \
+            ${{ matrix.ref && format('--ref {0}', matrix.ref) || '' }} \
+            ${{ matrix.base && format('--base {0}', matrix.base) || '' }} \
             ${{ steps.gantt.outputs.url && format('--gantt-url {0}', steps.gantt.outputs.url) || '' }} \
             ${{ steps.chunk-time.outputs.artifact-url && format('--chunk-time-url {0}', steps.chunk-time.outputs.artifact-url) || '' }}
 
