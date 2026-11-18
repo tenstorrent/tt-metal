@@ -127,8 +127,8 @@ struct Layout {
     }
 };
 
-// The region layout of a node with these arguments. Exact for payload_bytes below 2^32 and ring_slots below 2^32 with
-// num_ports at most kMaxPorts.
+// The region layout of a node with these arguments. Exact while ring_slots * slot_bytes fits 64 bits; H8 bounds it by
+// the region before calling this.
 constexpr Layout layout(uint32_t num_ports, uint32_t ring_slots, uint32_t payload_bytes) {
     Layout l{};
     l.slot_bytes = align_up(sizeof(PacketHeader) + static_cast<uint64_t>(payload_bytes));

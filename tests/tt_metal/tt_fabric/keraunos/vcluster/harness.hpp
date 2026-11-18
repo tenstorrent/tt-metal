@@ -50,7 +50,7 @@ constexpr uint32_t kMaxArgWordsPerCce = 256;
 // check_manifest(`manifest`, `facts`) with no finding. Returns every failing instance of every H row, in row order;
 // empty means the manifest can run with `shape`. Reads no device. Throws std::runtime_error (TT_FATAL) only on a
 // caller bug: a manifest without `router: harness` or with no devices; `facts` with no cores, 0 harts, 0 SRAM bytes
-// or a 0 unreserved_base; `shape` with 0 packets_per_flow or a payload_bytes that is not a multiple of
+// or more than 2^32, or a 0 unreserved_base; `shape` with 0 packets_per_flow or a payload_bytes that is not a multiple of
 // vc_node::kPayloadGranule; or a manifest that check_manifest() would have refused in a way the rows depend on (a
 // device with no router slot, a slot or region with no matching region or slot on its CCE, a link naming a device
 // that does not exist).

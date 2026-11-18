@@ -1,0 +1,18 @@
+# Two harness nodes on harts 0 and 1 of tile 0's CCE0, one local link (SPEC-0012 § Verification 3).
+version: 1
+router: harness
+devices:
+  - name: D0
+    fabric_chip: 0
+    slots:
+      - {tile: 0, cce: 0, hart: 0, role: router, port: 0}
+    regions:
+      - {tile: 0, cce: 0, base: 0x100000, size: 0x10000}
+  - name: D1
+    fabric_chip: 1
+    slots:
+      - {tile: 0, cce: 0, hart: 1, role: router, port: 0}
+    regions:
+      - {tile: 0, cce: 0, base: 0x110000, size: 0x10000}
+links:
+  - {a: {device: D0, port: 0}, b: {device: D1, port: 0}, backend: local}
