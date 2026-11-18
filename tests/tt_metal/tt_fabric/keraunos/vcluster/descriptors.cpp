@@ -20,18 +20,23 @@
 
 namespace tt::tt_fabric::vcluster {
 
-DescriptorGenerationError::DescriptorGenerationError(std::vector<GenerationFinding> findings) :
+DescriptorGenerationError::DescriptorGenerationError(
+    std::vector<ManifestFinding> rows, std::vector<GenerationFinding> findings) :
     std::runtime_error(fmt::format(
         "descriptor generation refused: {}",
         fmt::join(
             [&] {
                 std::vector<std::string> lines;
+                for (const auto& row : rows) {
+                    lines.push_back(fmt::format("row {}: {}", static_cast<uint32_t>(row.check), row.detail));
+                }
                 for (const auto& f : findings) {
                     lines.push_back(fmt::format("G{}: {}", static_cast<uint32_t>(f.refusal), f.detail));
                 }
                 return lines;
             }(),
             "; "))),
+    rows_(std::move(rows)),
     findings_(std::move(findings)) {}
 
 namespace {
@@ -48,7 +53,8 @@ const std::vector<std::pair<uint32_t, uint32_t>> kWiredEthernetTilePairs = {{0, 
 
 constexpr const char* kClusterDescFile = "cluster_desc.yaml";
 constexpr const char* kMeshGraphDescFile = "mesh_graph_descriptor.textproto";
-constexpr const char* kEnvFile = "env";
+constexpr const char* kEnvEmuFile = "env.emu";
+constexpr const char* kEnvMockFile = "env.mock";
 
 YAML::Node load_package(const std::filesystem::path& path) {
     try {
@@ -95,19 +101,11 @@ std::vector<Slot> routers_by_port(const Device& device) {
     return routers;
 }
 
-std::vector<YAML::Node> programmable_views(const YAML::Node& dram_views) {
-    std::vector<YAML::Node> views;
-    for (const auto& view : dram_views) {
-        if (view["programmable"] && view["programmable"].as<bool>()) {
-            views.push_back(view);
-        }
-    }
-    return views;
-}
+bool is_programmable(const YAML::Node& view) { return view["programmable"] && view["programmable"].as<bool>(); }
 
-// G1 to G5, every one that holds.
+// G1 to G6, every one that holds.
 std::vector<GenerationFinding> refusals(
-    const Manifest& manifest, const YAML::Node& eth, const YAML::Node& cores, std::size_t num_programmable_views) {
+    const Manifest& manifest, const YAML::Node& eth, const YAML::Node& cores, const std::vector<YAML::Node>& views) {
     std::vector<GenerationFinding> findings;
     const auto num_devices = static_cast<uint32_t>(manifest.devices.size());
 
@@ -169,11 +167,10 @@ std::vector<GenerationFinding> refusals(
         }
     }
 
-    if (num_programmable_views < num_devices) {
+    if (views.size() < num_devices) {
         findings.push_back(
             {GenerationRefusal::TooFewDramViews,
-             fmt::format(
-                 "the package has {} programmable DRAM views for {} devices", num_programmable_views, num_devices)});
+             fmt::format("the package has {} DRAM views for {} devices", views.size(), num_devices)});
     }
 
     for (const Device& device : manifest.devices) {
@@ -202,6 +199,13 @@ std::vector<GenerationFinding> refusals(
         findings.push_back(
             {GenerationRefusal::HasCapture,
              fmt::format("the manifest names a capture ({})", manifest.capture->string())});
+    }
+    for (std::size_t i = 0; i < views.size(); i++) {
+        if (!is_programmable(views[i])) {
+            findings.push_back(
+                {GenerationRefusal::DramViewNotProgrammable,
+                 fmt::format("the package's DRAM view {} is not programmable: true", i)});
+        }
     }
     return findings;
 }
@@ -239,7 +243,7 @@ std::string soc_desc(
     eth.SetStyle(YAML::EmitterStyle::Flow);
     desc["eth"] = eth;
     desc["keraunos"]["cores"] = device_cores;
-    // V programmable views, N devices: device 0 takes views 0 to V-N, device k >= 1 takes view V-N+k (SPEC-0011).
+    // V views in list order, N devices: device 0 takes views 0 to V-N, device k >= 1 takes view V-N+k (SPEC-0011).
     const std::size_t first_shared = views.size() - num_devices;
     YAML::Node dram_views(YAML::NodeType::Sequence);
     if (device.fabric_chip == 0) {
@@ -271,11 +275,17 @@ std::string cluster_desc(const Manifest& manifest) {
     out << YAML::EndMap;
     out << YAML::Key << "ethernet_connections" << YAML::Value << YAML::BeginSeq;
     for (const Link& link : manifest.links) {
+        // The end with the lower chip first, whatever the manifest's a and b.
+        std::pair<uint32_t, uint32_t> ends[] = {
+            {device_named(manifest, link.a.device)->fabric_chip, link.a.port},
+            {device_named(manifest, link.b.device)->fabric_chip, link.b.port}};
+        if (ends[1].first < ends[0].first) {
+            std::swap(ends[0], ends[1]);
+        }
         out << YAML::Flow << YAML::BeginSeq;
-        for (const LinkEnd* end : {&link.a, &link.b}) {
-            out << YAML::Flow << YAML::BeginMap << YAML::Key << "chip" << YAML::Value
-                << device_named(manifest, end->device)->fabric_chip << YAML::Key << "chan" << YAML::Value << end->port
-                << YAML::EndMap;
+        for (const auto& [chip, chan] : ends) {
+            out << YAML::Flow << YAML::BeginMap << YAML::Key << "chip" << YAML::Value << chip << YAML::Key << "chan"
+                << YAML::Value << chan << YAML::EndMap;
         }
         out << YAML::EndSeq;
     }
@@ -341,12 +351,15 @@ GeneratedDescriptors generate_descriptors(
     const YAML::Node package = load_package(package_soc_desc);
     const YAML::Node eth = package_key(package, "eth", package_soc_desc);
     const YAML::Node cores = package_key(package_key(package, "keraunos", package_soc_desc), "cores", package_soc_desc);
-    const std::vector<YAML::Node> views = programmable_views(package_key(package, "dram_views", package_soc_desc));
+    const YAML::Node dram_views = package_key(package, "dram_views", package_soc_desc);
+    const std::vector<YAML::Node> views(dram_views.begin(), dram_views.end());
 
-    if (auto findings = refusals(manifest, eth, cores, views.size()); !findings.empty()) {
+    std::vector<ManifestFinding> rows = check_manifest(manifest, package_facts(package_soc_desc));
+    std::vector<GenerationFinding> findings = refusals(manifest, eth, cores, views);
+    if (!rows.empty() || !findings.empty()) {
         std::stable_sort(
             findings.begin(), findings.end(), [](const auto& x, const auto& y) { return x.refusal < y.refusal; });
-        throw DescriptorGenerationError(std::move(findings));
+        throw DescriptorGenerationError(std::move(rows), std::move(findings));
     }
 
     std::filesystem::create_directories(out_dir);
@@ -367,14 +380,19 @@ GeneratedDescriptors generate_descriptors(
     for (const auto& path : generated.soc_descs) {
         soc_paths.push_back(path.string());
     }
-    generated.env = dir / kEnvFile;
-    write_file(
-        generated.env,
-        fmt::format(
-            "TT_METAL_EMU_CLUSTER_DESC={}\nTT_METAL_EMU_SOC_DESC={}\nTT_MESH_GRAPH_DESC_PATH={}\n",
+    const auto env = [&](const char* cluster_desc_variable) {
+        return fmt::format(
+            "{}={}\nTT_METAL_EMU_SOC_DESC={}\nTT_MESH_GRAPH_DESC_PATH={}\n",
+            cluster_desc_variable,
             generated.cluster_desc.string(),
             fmt::join(soc_paths, ","),
-            generated.mesh_graph_desc.string()));
+            generated.mesh_graph_desc.string());
+    };
+    // Metal refuses TT_METAL_EMU_CLUSTER_DESC without an emulator server; Mock takes TT_METAL_MOCK_CLUSTER_DESC_PATH.
+    generated.env_emu = dir / kEnvEmuFile;
+    write_file(generated.env_emu, env("TT_METAL_EMU_CLUSTER_DESC"));
+    generated.env_mock = dir / kEnvMockFile;
+    write_file(generated.env_mock, env("TT_METAL_MOCK_CLUSTER_DESC_PATH"));
     return generated;
 }
 
