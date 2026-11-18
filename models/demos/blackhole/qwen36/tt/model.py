@@ -1558,8 +1558,9 @@ class Qwen36Model:
         # Fused spec verify (QWEN36_GDN_SPEC=1): the commit mask, shared by all GDN layers, staged per replay.
         self._vfy_gdn_fused = all(getattr(dn, "_gdn_spec_verify", False) for dn in gdn)
         if self._vfy_gdn_fused:
+            self._vfy_pending = [False] * B  # per user: its last verify's rows await their commit
             self._vfy_gdn_mask = ttnn.from_torch(
-                self._vfy_gdn_mask_host([0] * B, True),
+                self._vfy_gdn_mask_host([0] * B),
                 dtype=ttnn.bfloat16,
                 layout=ttnn.TILE_LAYOUT,
                 device=dev,
@@ -1567,6 +1568,7 @@ class Qwen36Model:
             )
             for dn in gdn:
                 dn._spec_mask = self._vfy_gdn_mask
+                dn._spec_pending = self._vfy_pending
 
         # Throwaway seed, only to fill the program cache. The spec loop calls seed_spec_state() again after
         # this capture (the warmup/capture passes below overwrite the ring and the window), and that call
@@ -1587,12 +1589,12 @@ class Qwen36Model:
         self._vfy_att0 = _att0
         self._vfy_prepared_key = key
 
-    def _vfy_gdn_mask_host(self, mi, skip):
+    def _vfy_gdn_mask_host(self, mi):
         from models.demos.blackhole.qwen36.tt.gdn.tp import spec_commit_mask
 
         dn = next(layer.attention for layer in self.layers if not layer.is_full_attention)
         return spec_commit_mask(
-            mi, self._vfy_B, dn._spec_Tp, dn.qkvz_dim_tp + 2 * dn.Nv, dn.qkvz_dim_tp, 2 * dn.Nv, skip=skip
+            mi, self._vfy_B, dn._spec_Tp, dn.qkvz_dim_tp + 2 * dn.Nv, dn.qkvz_dim_tp, 2 * dn.Nv, self._vfy_pending
         )
 
     def record_verify_trace(self):
@@ -1731,19 +1733,17 @@ class Qwen36Model:
         )
         ttnn.copy_host_to_device_tensor(_h, self._vfy_conv_sel)
         if getattr(self, "_vfy_gdn_fused", False):
-            # The commit of the previous replay's rows: rows past mi_prev are switched off; all of them after a seed.
-            gdn = [layer.attention for layer in self.layers if not layer.is_full_attention]
-            skip = gdn[0]._spec_skip_commit
-            for dn in gdn:
-                dn._spec_skip_commit = False
+            # The commit of each user's previous rows: rows past mi_prev are switched off, every row of a user with
+            # nothing pending. This replay's rows are pending afterwards, except those of the rows run as padding.
             _h = ttnn.from_torch(
-                self._vfy_gdn_mask_host(mi_prev, skip),
+                self._vfy_gdn_mask_host(mi_prev),
                 dtype=ttnn.bfloat16,
                 layout=ttnn.TILE_LAYOUT,
                 device=None,
                 mesh_mapper=rep,
             )
             ttnn.copy_host_to_device_tensor(_h, self._vfy_gdn_mask)
+            self._vfy_pending[:] = [True] * B if inactive is None else [not bool(x) for x in inactive]
 
         ttnn.execute_trace(dev, self._vfy_trace_id, cq_id=0, blocking=False)
         ttnn.synchronize_device(dev)

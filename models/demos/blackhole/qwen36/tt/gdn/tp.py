@@ -49,13 +49,14 @@ _GDN_FUSED_DECODE = _GDN_FUSED and os.environ.get("QWEN36_SPEC") == "0"
 _GDN_FUSED_PREFILL = _GDN_FUSED and (os.environ.get("QWEN36_SPEC") == "0" or _GDN_SPEC_PREFILL)
 
 
-def spec_commit_mask(mi, n_users, Tp, width, gate_col, n_gate, skip=False):
+def spec_commit_mask(mi, n_users, Tp, width, gate_col, n_gate, pending):
     """Additive row mask of the fused spec commit: [1, n_users*Tp, width] bf16, SPEC_GATE_OFF in the a / b columns
-    [gate_col, gate_col + n_gate) of every row past user u's last accepted row mi[u] (all rows with skip), else 0.
+    [gate_col, gate_col + n_gate) of every row past user u's last accepted row mi[u], else 0. A user without
+    pending rows (after a seed, a join, while left out) has every row off.
     Tp: rows per user of the op call (the T verify rows, then pad rows)."""
     m = torch.zeros(1, n_users * Tp, width, dtype=torch.bfloat16)
     for u in range(n_users):
-        first = 0 if skip else int(mi[u]) + 1
+        first = int(mi[u]) + 1 if pending[u] else 0
         m[0, u * Tp + first : (u + 1) * Tp, gate_col : gate_col + n_gate] = SPEC_GATE_OFF
     return m
 
@@ -508,14 +509,16 @@ class TPGatedDeltaNet:
         self._gdn_fused = "gdn_fused" in tw
         self._gdn_packed = self._gdn_fused and _GDN_PACKED and self._fuse_ab
         # QWEN36_GDN_SPEC=1: fused spec verify (see _verify_fused). Buffers from prepare_spec_verify; _spec_mask is the
-        # model's shared commit mask; _spec_skip_commit: the next verify follows a seed and commits nothing.
+        # model's shared commit mask; _spec_pending (one list shared by all layers): per user, whether
+        # _spec_prev_rows holds rows of its last verify that the next verify still has to commit.
         self._gdn_spec_verify = self._gdn_packed and _GDN_SPEC_VERIFY
         self._spec_prev_rows = None
         self._spec_scr_state = None
         self._spec_scr_conv = None
         self._spec_mask = None
         self._spec_Tp = None
-        self._spec_skip_commit = True
+        self._spec_pending = None
+        self._spec_rec_keep = None
 
     def _release_spec_bufs(self):
         """Free the batched spec-verify buffers and forget their shape (prepare_spec_verify reallocs)."""
@@ -526,6 +529,7 @@ class TPGatedDeltaNet:
             "_spec_prev_rows",
             "_spec_scr_state",
             "_spec_scr_conv",
+            "_spec_rec_keep",
         ):
             buf = getattr(self, name, None)
             if buf is not None:
@@ -1504,6 +1508,13 @@ class TPGatedDeltaNet:
         ttnn.copy(new, r4)
         ttnn.deallocate(new)
         self._gather_indices(self._verify_win_buf, idx, dim=0)
+        if self._gdn_spec_verify:  # each user's uncommitted verify rows move with it (rec_state: remap_slots)
+            Tp, W = self._spec_Tp, self._spec_prev_rows.shape[-1]
+            p3 = self._spec_prev_users()
+            parts = [ttnn.slice(p3, (j, 0, 0), (j + 1, Tp, W)) for j in idx]
+            if not tpc.aliases(p3, self._spec_prev_rows):
+                ttnn.deallocate(p3)
+            self._spec_prev_write(parts)
 
     def _gather_indices(self, buf, idx, dim):
         """Rebuild `buf` so slice i along `dim` becomes old slice idx[i], then copy back in place.
@@ -1907,6 +1918,10 @@ class TPGatedDeltaNet:
             self._spec_scr_conv = ttnn.zeros(
                 [1, (K - 1) * B, C], device=self.mesh, dtype=cdt, layout=ttnn.TILE_LAYOUT, memory_config=mc
             )
+            if B > 1:  # spec_rec_backup / spec_rec_restore around a join's seed step
+                self._spec_rec_keep = ttnn.zeros(
+                    [B, Nv, Dk, Dv], device=self.mesh, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, memory_config=mc
+                )
         self._spec_shape = (n_users, T)
         self._ensure_conv_win()
 
@@ -1918,7 +1933,8 @@ class TPGatedDeltaNet:
         rows 1 .. K-1). The window's remaining T-1 rows are zero padding no mi = 0 selector reaches.
         """
         assert self._spec_ring is not None, "seed_spec_state before prepare_spec_verify"
-        self._spec_skip_commit = True  # fused verify: rec_state is the committed state, nothing pending
+        if self._spec_pending is not None:  # fused verify: rec_state is the committed state, nothing pending
+            self._spec_pending[:] = [False] * len(self._spec_pending)
         B, Nv, Dk, Dv = self.B, self.Nv, self.Dk, self.Dv
         T = self._spec_shape[1]
         # 4D views: slice_write needs input/output/bounds at equal rank and a rank-4 sharded input,
@@ -2001,6 +2017,107 @@ class TPGatedDeltaNet:
         new = ttnn.concat(eparts, dim=0, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         for e in eparts:
             ttnn.deallocate(e)
+        ttnn.copy(new, self._verify_win_buf)
+        ttnn.deallocate(new)
+
+    # ---- fused spec verify (QWEN36_GDN_SPEC=1): per-user state outside the trace ----
+    # A user's state is rec_state[u] (committed), its rows of _spec_prev_rows (its last verify, committed by the next
+    # one through the mask) and its E_prev row. The ring is not read.
+
+    def spec_rec_backup(self):
+        """Before a join's seed step, which advances rec_state of every row: keep the running users' committed state."""
+        ttnn.copy(self.rec_state, self._spec_rec_keep)
+
+    def spec_rec_restore(self, fresh):
+        """After the seed step: rec_state of the users not in ``fresh`` back from spec_rec_backup."""
+        B, Nv, Dk, Dv = self.B, self.Nv, self.Dk, self.Dv
+        fresh = {int(u) for u in fresh}
+        parts = [
+            ttnn.slice(self.rec_state if u in fresh else self._spec_rec_keep, (u, 0, 0, 0), (u + 1, Nv, Dk, Dv))
+            for u in range(B)
+        ]
+        new = ttnn.concat(parts, dim=0, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        for t in parts:
+            ttnn.deallocate(t)
+        ttnn.copy(new, self.rec_state)
+        ttnn.deallocate(new)
+
+    def _spec_prev_users(self):
+        """_spec_prev_rows as [B, Tp, W] (a copy when a user's rows do not start a tile row)."""
+        return ttnn.reshape(self._spec_prev_rows, (self.B, self._spec_Tp, self._spec_prev_rows.shape[-1]))
+
+    def _spec_prev_write(self, parts):
+        """Per-user [1, Tp, W] tensors -> _spec_prev_rows, in place. Deallocates them."""
+        new = ttnn.concat(parts, dim=0, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        for t in parts:
+            ttnn.deallocate(t)
+        flat = _replace(new, ttnn.reshape(new, tuple(self._spec_prev_rows.shape)))
+        ttnn.copy(flat, self._spec_prev_rows)
+        ttnn.deallocate(flat)
+
+    def save_spec_user_fused(self, u):
+        """Host copy of user u's committed state, its uncommitted verify rows and its E_prev row:
+        ([D, Nv, Dk, Dv], [D, Tp, W], [D, K-1+T, C]); D = devices."""
+        Nv, Dk, Dv, K, C = self.Nv, self.Dk, self.Dv, self.K, self.qkv_dim_tp
+        T, Tp, W = self._spec_shape[1], self._spec_Tp, self._spec_prev_rows.shape[-1]
+        comp = ttnn.ConcatMeshToTensor(self.mesh, dim=0)
+        p3 = self._spec_prev_users()
+        devs = (
+            ttnn.slice(self.rec_state, (u, 0, 0, 0), (u + 1, Nv, Dk, Dv)),
+            ttnn.slice(p3, (u, 0, 0), (u + 1, Tp, W)),
+            ttnn.slice(self._verify_win_buf, (u, 0, 0), (u + 1, K - 1 + T, C)),
+        )
+        out = tuple(ttnn.to_torch(t, mesh_composer=comp) for t in devs)
+        for t in devs:
+            ttnn.deallocate(t)
+        if not tpc.aliases(p3, self._spec_prev_rows):
+            ttnn.deallocate(p3)
+        return out
+
+    def load_spec_users_fused(self, states):
+        """Write back {u: save_spec_user_fused(u)}; the other users keep theirs."""
+        B, Nv, Dk, Dv, K, C = self.B, self.Nv, self.Dk, self.Dv, self.K, self.qkv_dim_tp
+        T, Tp, W = self._spec_shape[1], self._spec_Tp, self._spec_prev_rows.shape[-1]
+        mapper = ttnn.ShardTensorToMesh(self.mesh, dim=0)
+        mc = ttnn.DRAM_MEMORY_CONFIG
+
+        def up(x, dtype):
+            return ttnn.from_torch(
+                x, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=self.mesh, mesh_mapper=mapper, memory_config=mc
+            )
+
+        parts = [
+            (
+                up(states[u][0], ttnn.float32)
+                if u in states
+                else ttnn.slice(self.rec_state, (u, 0, 0, 0), (u + 1, Nv, Dk, Dv))
+            )
+            for u in range(B)
+        ]
+        new = ttnn.concat(parts, dim=0, memory_config=mc)
+        for t in parts:
+            ttnn.deallocate(t)
+        ttnn.copy(new, self.rec_state)
+        ttnn.deallocate(new)
+        p3 = self._spec_prev_users()
+        parts = [
+            up(states[u][1], ttnn.bfloat16) if u in states else ttnn.slice(p3, (u, 0, 0), (u + 1, Tp, W))
+            for u in range(B)
+        ]
+        if not tpc.aliases(p3, self._spec_prev_rows):
+            ttnn.deallocate(p3)
+        self._spec_prev_write(parts)
+        parts = [
+            (
+                up(states[u][2], self._verify_win_buf.dtype)
+                if u in states
+                else ttnn.slice(self._verify_win_buf, (u, 0, 0), (u + 1, K - 1 + T, C))
+            )
+            for u in range(B)
+        ]
+        new = ttnn.concat(parts, dim=0, memory_config=mc)
+        for t in parts:
+            ttnn.deallocate(t)
         ttnn.copy(new, self._verify_win_buf)
         ttnn.deallocate(new)
 

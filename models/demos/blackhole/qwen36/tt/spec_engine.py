@@ -14,6 +14,7 @@ Verify row j of user u processes tokens[u, j] at start_pos[u] + j. After m accep
 committed_tokens[u, :m+1] = accepted drafts + bonus token, at committed_positions[u, :m+1] =
 start_pos + 1 .. start_pos + m + 1. The bonus is the next ``pending``; the anchor hidden is verify row m.
 The drafter pairs (hidden at slot s, token at s+1) -> slot s."""
+
 import math
 import os
 import time
@@ -427,6 +428,7 @@ class MTPSpecEngine:
         )
         self._timing = bool(int(os.environ.get("QWEN36_SPEC_TIMING", "0")))
         self.last_verify_timing = None  # (device_s, readback_s) of the last verify when timing is on
+        self._parked_pend = {}  # fused verify: a parked slot's pending-commit flag
         self.mtp_extra_steps = 0  # drafter forwards spent on KV maintenance (reseed)
 
         self.prefill_prepared = False
@@ -642,6 +644,14 @@ class MTPSpecEngine:
                 dn.seed_spec_rows(range(0, B, 2))
                 dn.seed_spec_rows(range(1, B, 2))
                 dn.remap_spec_slots(list(range(B))[::-1])  # a full reversal slices every row offset once
+            if self._gdn_fused():  # the fused verify's join and park programs (one layer compiles them for all)
+                dn = self._gdn[0]
+                dn.spec_rec_backup()
+                dn.spec_rec_restore(range(0, B, 2))
+                dn.spec_rec_restore(range(1, B, 2))
+                saved = {u: dn.save_spec_user_fused(u) for u in range(B)}
+                dn.load_spec_users_fused({u: saved[u] for u in range(0, B, 2)})
+                dn.load_spec_users_fused({u: saved[u] for u in range(1, B, 2)})
             z = ttnn.zeros(
                 [1, 1, B * T, self._dim_frac],
                 device=self.mesh,
@@ -824,12 +834,18 @@ class MTPSpecEngine:
         self._active.discard(slot)
         self._fresh.pop(slot, None)
         self._parked.pop(slot, None)
+        getattr(self, "_parked_pend", {}).pop(slot, None)
         self._prompts.pop(slot, None)
         self._fresh_dirty.discard(slot)
         reset_draft_skip(self, slot)
         # the leaving request may be why other rows' drafts were withheld: offer them again
         self._no_draft.clear()
         self._withheld_streak.clear()
+
+    def _gdn_fused(self):
+        """QWEN36_GDN_SPEC=1: the verify runs the fused op and a user's GDN state is rec_state plus its uncommitted
+        rows, not the ring (TPGatedDeltaNet._verify_fused)."""
+        return bool(self._gdn) and bool(getattr(self._gdn[0], "_gdn_spec_verify", False))
 
     def remap_slots(self, remap):
         """Apply a runner slot_remap (row i takes slot remap[i]'s state) to every GDN layer and the per-slot host
@@ -841,7 +857,11 @@ class MTPSpecEngine:
             return
         for dn in self._gdn:
             dn.remap_spec_slots(idx)
+        if self._gdn_fused():
+            pend = self.model._vfy_pending
+            pend[:] = [pend[j] for j in idx]
         new_of = {old: new for new, old in enumerate(idx)}
+        self._parked_pend = {new_of[u]: v for u, v in getattr(self, "_parked_pend", {}).items()}
         self._last_hidden = [self._last_hidden[j] for j in idx]
         self._fresh = {new_of[u]: n for u, n in self._fresh.items()}
         self._withheld_streak = {new_of[u]: n for u, n in self._withheld_streak.items()}
@@ -955,10 +975,21 @@ class MTPSpecEngine:
         # contract 4e: a live row left out of a step keeps its GDN state on host until it returns
         for u in range(B):
             if not active[u] and u in self._active and u not in self._fresh and u not in self._parked:
-                self._parked[u] = [dn.save_spec_user(u) for dn in self._gdn]
+                if self._gdn_fused():
+                    self._parked[u] = [dn.save_spec_user_fused(u) for dn in self._gdn]
+                    self._parked_pend[u] = self.model._vfy_pending[u]
+                else:
+                    self._parked[u] = [dn.save_spec_user(u) for dn in self._gdn]
                 logger.info(f"[spec_engine] parked slot {u} (left out of a step)")
         back = [u for u in rows if u in self._parked]
-        if back:
+        if back and self._gdn_fused():
+            # Its committed state, uncommitted rows and window as it left; this verify commits the rows with its mi.
+            for li, dn in enumerate(self._gdn):
+                dn.load_spec_users_fused({u: self._parked[u][li] for u in back})
+            for u in back:
+                del self._parked[u]
+                self.model._vfy_pending[u] = self._parked_pend.pop(u, True)
+        elif back:
             for li, dn in enumerate(self._gdn):
                 dn.load_spec_users({u: parked_rows_host(*self._parked[u][li], int(mi_prev[u]), T) for u in back})
             for u in back:
@@ -1098,7 +1129,14 @@ class MTPSpecEngine:
             dn.sync_conv_win()
         st, sp, spt = tokens[:, 0].clone(), start_pos.clone(), pt.clone()
         st[~fmask], sp[~fmask], spt[~fmask] = 0, 0, 0
+        fused = self._gdn_fused()
+        if fused:  # the seed step advances rec_state of every row; the running rows' is their committed state
+            for dn in self._gdn:
+                dn.spec_rec_backup()
         lt, feed = self.model.seed_spec_step(st.tolist(), sp.tolist(), spt)
+        if fused:
+            for dn in self._gdn:
+                dn.spec_rec_restore(fresh)
         for dn in self._gdn:
             dn.seed_spec_rows(fresh)
         self._merge_seed_rows(feed, fresh, self.model._vfy_rows_out)
