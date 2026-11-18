@@ -151,7 +151,7 @@ it is classified differently on different systems.
 | MobileNetV3 | WH N150 |
 | RetinaNet | WH N150 |
 | SSD512 | WH N150 |
-| VAD v2 | WH N150 |
+| VAD | WH N150 |
 | OpenPDN-MNIST | WH N150 |
 | YuNet | WH N150 |
 | VibeVoice-1.5B | BH P150 |

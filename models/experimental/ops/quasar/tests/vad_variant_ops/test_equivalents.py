@@ -7,8 +7,9 @@ Stock-ttnn equivalents of the fork's custom ops, at the shapes the model ran.
 The model's fork adds ops that are not in
 main, so they can't be called here. Their compile-time args were decoded from the cache
 (fork-specific; interleaved tensor accessors are ``(cfg, page_size)``, cfg 2 = DRAM) and each
-is exercised below through the stock op the reference port (``models/experimental/vadv2``)
-uses for the same step of spatial cross-attention (SCA) / temporal self-attention (TSA):
+is exercised below through the closest stock op for the same step of spatial cross-attention
+(SCA) / temporal self-attention (TSA). Most are the ops ``models/experimental/vad`` uses; it masks
+keys instead of compacting them, so it calls neither ``ttnn.nonzero`` nor ``ttnn.scatter_add``:
 
 Recovered invocations
 ---------------------
@@ -121,7 +122,7 @@ def test_nonzero(ttnn_mesh_device, reset_seeds, num_hits):
 @U.with_default_mesh()
 @pytest.mark.parametrize("num_idx", [3680, 992], ids=lambda n: f"idx{n}")
 def test_embedding_query_gather(ttnn_mesh_device, reset_seeds, num_idx):
-    """vadv2's stock form of the fork's getitem: ttnn.embedding over the (10000, 256) query table."""
+    """Stock form of the fork's getitem: ttnn.embedding over the (10000, 256) query table."""
     mesh = ttnn_mesh_device
     table = U.torch_rand((Q, E))
     idx = torch.randint(0, Q, (1, num_idx), dtype=torch.int32)
@@ -156,7 +157,7 @@ def test_moreh_getitem_query_gather(ttnn_mesh_device, reset_seeds, num_idx):
 @U.with_default_mesh()
 @pytest.mark.parametrize("max_len", [3680, 992], ids=lambda n: f"maxlen{n}")
 def test_scatter_add_slots(ttnn_mesh_device, reset_seeds, max_len):
-    """vadv2's stock form of the SCA scatter: scatter_add rows of the per-camera attention
+    """Stock form of the SCA scatter: scatter_add rows of the per-camera attention
     output into slots (10000 + 1 sentinel row, 256), padded indices routed to the sentinel."""
     mesh = ttnn_mesh_device
     slots = U.torch_rand((Q + 1, E))
