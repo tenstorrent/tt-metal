@@ -440,9 +440,9 @@ models:
     bh_quietbox_2: 80
   demo:
     bh_galaxy: 470
-    # 2385 -> 2458 (+73, PR #64830): K3.1 synthetic suite 47 (traced DSA replay 12 of it), K3.1 L24 / L24-128k
-    # depth 45, K3 / K3.1 KV table rows 2 (94 min, 21 of it from existing headroom).
-    bh_sc1: 2458
+    # 2385 -> 2463 (+78, PR #64830): K3.1 synthetic suite 47 (traced DSA replay 12 of it), K3.1 L24 / L24-128k
+    # depth 45, K3 / K3.1 KV table rows 2 (94 min, 16 of it from existing headroom).
+    bh_sc1: 2463
     bh_sc1_high_power: 500
     bh_sc4: 60
     wh_n150: 500
