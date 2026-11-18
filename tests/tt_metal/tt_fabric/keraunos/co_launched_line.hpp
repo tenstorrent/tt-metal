@@ -27,7 +27,7 @@ using NocLinks = std::vector<std::pair<uint32_t, uint32_t>>;
 // Called once by run_line_unicast(), on the test's thread, after the devices are open with fabric and before any
 // traffic. It reads the open cluster through MetalContext::instance() (get_control_plane(), get_cluster()) and may use
 // gtest assertions; after a fatal failure in it, run_line_unicast() returns and the fixture's TearDown closes the
-// devices. Not called on Mock or when the run skips before opening.
+// devices. Called on Mock too, before the Mock skip; not called when the run skips before opening.
 using AfterOpen = std::function<void()>;
 
 // A worker beside a router: the router's Ethernet channel and core, on DM1.
