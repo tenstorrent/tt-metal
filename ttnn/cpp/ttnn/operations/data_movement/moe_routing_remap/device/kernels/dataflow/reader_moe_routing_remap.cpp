@@ -47,9 +47,11 @@ void kernel_main() {
     auto local_weight_idx_ptr = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(local_weights_idxs_l1_addr);
 
     noc.async_read_barrier();
+    // Mask off the IEEE-754 sign bit so -0.0 (bf16 0x8000 / fp32 0x80000000) is treated as zero.
+    constexpr weight_addr_t magnitude_mask = static_cast<weight_addr_t>(~weight_addr_t{0} >> 1);
     for (uint32_t i = 0, weight_offset_count = 0, device_weights_count = 0; i < num_cluster_experts; ++i) {
         const auto& val = routing_weights_ptr[i];
-        if (val != 0) {
+        if ((val & magnitude_mask) != 0) {
             if (weight_offset_count < device_weights_count_offset) {
                 ++weight_offset_count;
             } else {
