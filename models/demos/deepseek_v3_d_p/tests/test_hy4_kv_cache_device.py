@@ -3,7 +3,8 @@
 """Hy4 context-parallel KV cache on device (#65886), read back de-striped with ``tt/hy4/kv_cache.py`` only.
 
 ``test_hy4_kv_stripe_golden_round_trip`` (op level, both mappings of the 32-chip stripe on the physical 8x4
-Galaxy mesh: the dev layout SP 8 on axis 0 x TP 4, and TP32's SP 4 on axis 1 x TP 8 on axis 0):
+Galaxy mesh: TP32's SP 8 on axis 0 x TP 4 on axis 1, which is also the dev layout's, and SP 4 on axis 1 x TP 8 on
+axis 0, which the stripe module still supports):
 
   * writes layer 0 of the HF golden (latent, rope, index keys, in the device frame) into the real Hy4 cache pair
     (scaled-FP8 KVPE + BFP8 index keys, allocated as ``GLM53Adapter.allocate_kv_cache`` does) with
@@ -16,7 +17,8 @@ Galaxy mesh: the dev layout SP 8 on axis 0 x TP 4, and TP32's SP 4 on axis 1 x T
 
 ``test_hy4_prefill_layer0_cache_destriped`` (dev layout, the prefill path): runs layer 0 of the 4K golden through
 ``TtPrefillTransformer`` (the chunked driver the device smoke uses), captures the caches it wrote and scores them
-after de-striping with ``KvStripe`` instead of the driver's own un-rotation.
+after de-striping with ``KvStripe`` instead of the driver's own un-rotation. The dev layout runs TP32's mesh and axes,
+so the stripe it writes is TP32's.
 
 Env: ``PREFILL_TRACE_DIR`` (the 4K golden), and for the prefill test the smoke's ``HY4_HF_MODEL`` /
 ``PREFILL_TTNN_CACHE`` and ``PREFILL_CHUNK_SIZE=4096``. ``HY4_KV_REPORT``: optional JSON path for the measurements.
@@ -54,7 +56,8 @@ GOLDEN = Path(os.environ.get("PREFILL_TRACE_DIR", "/mnt/tt-data/dwadhwani/hy4-go
 S = 4096
 PCC_FLOOR = 0.99
 KV_LORA, ROPE, INDEX_DIM = 512, 64, 128
-STRIPES = {"dev-sp8tp4": KvStripe(sp=8, tp=4, sp_axis=0), "tp32-phys8x4": KvStripe(sp=4, tp=8, sp_axis=1)}
+# tp32 (and dev): sequence over SP 8 on axis 0, hidden over TP 4 on axis 1. sp4-axis1: SP on the 4 columns.
+STRIPES = {"tp32-sp8tp4": KvStripe(sp=8, tp=4, sp_axis=0), "sp4-axis1": KvStripe(sp=4, tp=8, sp_axis=1)}
 # Per user slot, the chunk starts its prefill is written with (tokens [0, S) in every case).
 HISTORIES = {
     "one_shot": [0],
@@ -415,7 +418,7 @@ def test_hy4_prefill_layer0_cache_destriped(
     if not cache.is_dir() or not hc.mla_cache_stamp(cache, 0).exists():
         pytest.skip(f"no stamped Hy4 weight cache for layer 0 at {cache}")
     stripe = KvStripe.from_mesh(tuple(mesh_device.shape), sp_axis, smoke.CHUNK_SIZE)
-    assert stripe == STRIPES["dev-sp8tp4"]
+    assert stripe == STRIPES["tp32-sp8tp4"]
 
     captured = {}
     monkeypatch.setattr(chunked, "_record_kv_cache_pcc", lambda trace, layout, c, *a, **kw: captured.update(kvpe=c))

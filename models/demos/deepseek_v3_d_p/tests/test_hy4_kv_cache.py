@@ -3,8 +3,10 @@
 """CPU tests for the Hy4 context-parallel KV stripe (``tt/hy4/kv_cache.py``, #65886).
 
 * the token -> (chip, row) map, its inverse and the host stripe / de-stripe;
-* the mesh coordinate of each chip for the dev layout (SP 8 on axis 0 x TP 4) and the TP32 layout on the physical
-  8x4 Galaxy mesh (SP 4 on axis 1 x TP 8 on axis 0);
+* the mesh coordinate of each chip on the physical 8x4 Galaxy mesh for the TP32 layout, which is also the dev
+  layout's mesh (sequence over SP 8 on axis 0, hidden over TP 4 on axis 1: chip = 4 * row + col, row-major), and for
+  SP on axis 1 (SP 4 on axis 1 x TP 8 on axis 0, the first TP32 split and GLM-5.3's PREFILL_SP_AXIS=1: chip =
+  8 * col + row);
 * a Python model of ``update_padded_kv_cache``'s writer and reader (the per-chip offset and source-row math of
   ``writer_update_padded_kv_cache.cpp`` / ``reader_update_padded_kv_cache.cpp``, with the producer's chunk rotation
   ``chunk_layout.rotate_chunk_tokens``): chunked prefill from any tile-aligned start, prefix-cache resume and a
@@ -39,9 +41,10 @@ from models.demos.deepseek_v3_d_p.tt.hy4.kv_cache import (
     stripe_key_axis,
 )
 
-DEV = KvStripe(sp=8, tp=4, sp_axis=0)  # glm_prefill_sp8_tp4 on the 8x4 mesh
-TP32 = KvStripe(sp=4, tp=8, sp_axis=1)  # SP4 x TP8 on the physical 8x4 mesh: SP over the 4 columns
-STRIPES = [pytest.param(DEV, id="dev-sp8tp4"), pytest.param(TP32, id="tp32-phys8x4")]
+TP32 = KvStripe(sp=8, tp=4, sp_axis=0)  # tp32 (#65884: sequence over the 8-chip axis 0, hidden over the 4-chip axis 1)
+DEV = TP32  # glm_prefill_sp8_tp4: the same 8x4 mesh and axes, so the same stripe
+SP_AXIS1 = KvStripe(sp=4, tp=8, sp_axis=1)  # SP over the 4 columns: the module still supports it
+STRIPES = [pytest.param(TP32, id="tp32-sp8tp4"), pytest.param(SP_AXIS1, id="sp4-axis1")]
 MANIFEST = Path(__file__).resolve().parents[1] / "tt" / "runners" / "manifests" / "hy4_preview.json"
 
 
@@ -83,11 +86,13 @@ def test_each_chip_holds_one_32nd(stripe, expect_error):
 
 
 def test_mesh_coords(expect_error):
-    # dev: chip = row * 4 + col on the 8x4 mesh
-    assert [DEV.coord(c) for c in (0, 1, 3, 4, 31)] == [(0, 0), (0, 1), (0, 3), (1, 0), (7, 3)]
-    # TP32 on the physical 8x4 mesh: SP position = mesh column, TP position = mesh row, chip = col * 8 + row
-    assert [TP32.coord(c) for c in (0, 1, 7, 8, 31)] == [(0, 0), (1, 0), (7, 0), (0, 1), (7, 3)]
-    for s in (DEV, TP32):
+    # TP32 (and dev): SP position = mesh row, TP position = mesh column, chip = row * 4 + col, the row-major mesh order
+    # the shared layers' sparse KV push assumes (ttMLA.push_matches_stripe_order holds with SP on axis 0)
+    assert [TP32.coord(c) for c in (0, 1, 3, 4, 31)] == [(0, 0), (0, 1), (0, 3), (1, 0), (7, 3)]
+    assert [TP32.chip_of_coord((r, c)) for r in range(8) for c in range(4)] == list(range(32))
+    # SP on axis 1: SP position = mesh column, TP position = mesh row, chip = col * 8 + row (not row-major)
+    assert [SP_AXIS1.coord(c) for c in (0, 1, 7, 8, 31)] == [(0, 0), (1, 0), (7, 0), (0, 1), (7, 3)]
+    for s in (TP32, SP_AXIS1):
         coords = [s.coord(c) for c in range(32)]
         assert sorted(coords) == [(r, c) for r in range(8) for c in range(4)]
         assert [s.chip_of_coord(x) for x in coords] == list(range(32))
@@ -321,7 +326,19 @@ def test_chunk_size_contract(mesh_shape, sp_axis, expect_error):
 def test_from_mesh_matches_the_op_block():
     # update_padded_kv_cache writes chunk / (sp * tp) rows per chip
     assert KvStripe.from_mesh((8, 4), 0, 5120).block == 160
-    assert KvStripe.from_mesh((8, 4), 1, 4096) == TP32
+    assert KvStripe.from_mesh((8, 4), 0, 4096) == TP32
+    assert KvStripe.from_mesh((8, 4), 1, 4096) == SP_AXIS1
+
+
+def test_tp32_layout_writes_the_tp32_stripe():
+    """The tp32 layout's mesh knobs (sequence on SP, axis 0) give the stripe decode reads; dev's are the same."""
+    from models.demos.deepseek_v3_d_p.tt.hy4 import layout as hy4_layout
+
+    for name in (hy4_layout.TP32_LAYOUT, hy4_layout.DEV_LAYOUT):
+        lay = hy4_layout.HY4_PREFILL_LAYOUTS[name]
+        mesh = [0, 0]
+        mesh[lay.sp_axis], mesh[1 - lay.sp_axis] = lay.sp, lay.tp
+        assert hy4_stripe(tuple(mesh), lay.sp_axis, 4096) == TP32, name
 
 
 def test_manifest_chunk_writes_the_stripe():

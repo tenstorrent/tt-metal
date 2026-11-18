@@ -16,6 +16,10 @@ Where token ``t`` lives (``KvStripe``)::
     slot index   = user * num_layers + layer       KVPE: every layer; index-K: full-indexer rank (21 layers)
     mesh coord   = coord[sp_axis] = chip // tp, coord[tp_axis] = chip % tp
 
+On Hy4's 8x4 mesh (tp32 and the dev layout alike: the sequence over SP 8 on axis 0, the hidden over TP 4 on axis 1)
+chip = 4 * row + col, the row-major mesh order, which is also the order the shared layers' sparse KV push addresses
+chips in. With SP on axis 1 (SP 4 x TP 8) it would be chip = 8 * col + row.
+
 The map depends on the position only, not on how the prompt was chunked: ``update_padded_kv_cache`` writes each
 chip's rows at the offsets this map gives for any tile-aligned chunk start (its reader inverts the producer's
 rotation of a mid-slab chunk, ``common/prefill/chunk_layout.py``), so a resumed or prefix-hit prefill and a
