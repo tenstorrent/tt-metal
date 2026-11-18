@@ -74,11 +74,13 @@ void kernel_main() {
     const uint32_t head = core / cores_per_head;
     const uint32_t first_chunk = core % cores_per_head * core_chunks;
     const bool relay_head = core % cores_per_head == 0;
-    const uint32_t arrival_semaphore = get_common_arg_val<uint32_t>(8);
-    const uint32_t final_semaphore = get_common_arg_val<uint32_t>(9);
-    const uint32_t sp_rank = get_common_arg_val<uint32_t>(10);
+    // The landing buffer, at the same address on every head core.
+    const uint32_t landing_address = get_common_arg_val<uint32_t>(8);
+    const uint32_t arrival_semaphore = get_common_arg_val<uint32_t>(9);
+    const uint32_t final_semaphore = get_common_arg_val<uint32_t>(10);
+    const uint32_t sp_rank = get_common_arg_val<uint32_t>(11);
     // Then every core's NoC x | y << 16, in order: this head's from head * cores_per_head.
-    const size_t head_core_args = 11 + head * cores_per_head;
+    const size_t head_core_args = 12 + head * cores_per_head;
 
     // The bounds, each into its own page (a DRAM read keeps its source's alignment).
     cb_reserve_back(cb_chron, 1);
@@ -127,6 +129,42 @@ void kernel_main() {
         has_actual_end ? kda_chronology::derive_interval(actual_start, ctl[0], sp_rank, sp_size, local_rows) : topology;
     const uint32_t position = (topology.rank + sp_size - topology.first_rank) % sp_size;
     const bool holder = position == 0;
+    // A request's head (or no slab entry): the chunk starts from zeros.
+    const bool zero_entry = slab && (actual_start == 0 || index >= slab_index_limit);
+    const uint32_t state_tile = get_tile_size(cb_seed);
+    const uint32_t column_bytes = kt * state_tile;
+    // The relay starts from the first rank's entry state, and every rank waits for it. Its head cores' DRAM reads set
+    // the pace, so the head's other cores read tile column j (j % cores_per_head their place in the head) and post it
+    // into the head core's landing buffer as a predecessor would, counting it in the arrival counter, which the first
+    // rank has no predecessor to count in. They stage it in their seed buffer, unused until the relay is done.
+    const uint32_t place = core % cores_per_head;
+    const uint32_t entry_base = slab ? (index * slab_scale + slab_offset) * entry_tiles : 0;
+    const auto read_entry_column = [&](uint32_t j, uint32_t destination) {
+        const auto init = TensorAccessor(init_args, get_common_arg_val<uint32_t>(1));
+        for (uint32_t r = 0; r < kt; ++r) {
+            noc_async_read_page(entry_base + head * state_tiles + r * kt + j, init, destination + r * state_tile);
+        }
+    };
+    if (holder && !zero_entry && place != 0) {
+        const uint32_t stage = get_write_ptr(cb_seed);
+        uint32_t posted = 0;
+        for (uint32_t j = place; j < kt; j += cores_per_head) {
+            read_entry_column(j, stage + j * column_bytes);
+        }
+        noc_async_read_barrier();
+        const uint32_t head_xy = get_common_arg_val<uint32_t>(head_core_args);
+        for (uint32_t j = place; j < kt; j += cores_per_head) {
+            noc_async_write(
+                stage + j * column_bytes,
+                get_noc_addr(head_xy & 0xFFFF, head_xy >> 16, landing_address + j * column_bytes),
+                column_bytes);
+            ++posted;
+        }
+        noc_async_write_barrier();
+        if (posted != 0) {
+            noc_semaphore_inc(get_noc_addr(head_xy & 0xFFFF, head_xy >> 16, arrival_semaphore), posted);
+        }
+    }
     // This core's valid chunks; those before the reset start from the entry state, the rest from the tail's seed.
     const uint32_t valid = interval.valid_chunks(0, 1);
     const uint32_t reset = interval.reset_chunk(0, 1);
@@ -152,8 +190,6 @@ void kernel_main() {
     // The head's first core copies each landed tile column of a K x K state (column-major by tile) into a seed buffer
     // of every core of the head (at the same address on each), then counts it there (a program semaphore, zero at
     // launch): each core's chunk outputs need only the seed's columns that have landed.
-    const uint32_t state_tile = get_tile_size(cb_seed);
-    const uint32_t column_bytes = kt * state_tile;
     const uint32_t landed = get_semaphore(landed_semaphore_id);
     // The landing buffer's slots on the head core: the entry state (cb_ein's storage), then the relayed final state.
     const uint32_t landing = relay_head ? get_write_ptr(cb_ein) : 0;
@@ -200,25 +236,31 @@ void kernel_main() {
         cb_reserve_back(cb_ein, state_tiles);
         cb_reserve_back(cb_ein_exact, state_tiles);
         if (holder) {
-            if (slab && (actual_start == 0 || index >= slab_index_limit)) {
-                // A request's head (or no slab entry): the chunk starts from zeros.
+            // The columns the head's other cores post (see above).
+            uint32_t posted = 0;
+            if (zero_entry) {
                 const uint64_t zeros = get_noc_addr(MEM_ZEROS_BASE);
                 for (uint32_t offset = 0; offset < state_tiles * state_tile; offset += MEM_ZEROS_SIZE) {
                     noc_async_read(zeros, landing + offset, MEM_ZEROS_SIZE);
                 }
             } else {
-                const auto init = TensorAccessor(init_args, get_common_arg_val<uint32_t>(1));
-                const uint32_t entry_base = slab ? (index * slab_scale + slab_offset) * entry_tiles : 0;
                 for (uint32_t j = 0; j < kt; ++j) {
-                    for (uint32_t r = 0; r < kt; ++r) {
-                        noc_async_read_page(
-                            entry_base + head * state_tiles + r * kt + j, init, landing + (j * kt + r) * state_tile);
+                    if (j % cores_per_head == 0) {
+                        read_entry_column(j, landing + j * column_bytes);
+                    } else {
+                        ++posted;
                     }
                 }
             }
             noc_async_read_barrier();
-            cb_push_back(cb_ein, state_tiles);
-            cb_push_back(cb_ein_exact, state_tiles);
+            // Column 0 is this core's own: compute starts on it while the others land.
+            cb_push_back(cb_ein, kt);
+            cb_push_back(cb_ein_exact, kt);
+            if (posted != 0) {
+                kda_counter::wait_and_consume(arrival_semaphore, posted);
+            }
+            cb_push_back(cb_ein, state_tiles - kt);
+            cb_push_back(cb_ein_exact, state_tiles - kt);
             // The first rank applies its final transition to P when the interval ends in a separated tail. P lands only
             // after the whole lap, so E and B are read after the entry state: the relay starts from the first rank, and
             // every rank waits for it.

@@ -320,7 +320,8 @@ tt::tt_metal::ProgramDescriptor build_program(
           in.final_b.buffer(),
           actual_end.buffer(),
           in.terms.buffer(),
-          slab_index.buffer()}) {
+          slab_index.buffer(),
+          in.landing.buffer()}) {
         reader_args.push_back(buffer);
     }
     reader_args.push_back(arrival_address);
