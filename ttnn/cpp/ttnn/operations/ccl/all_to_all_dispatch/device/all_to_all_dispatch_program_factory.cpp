@@ -139,8 +139,8 @@ ttnn::device_operation::MeshWorkloadArtifacts::PerCoordProgram build_dispatch_pr
     const DFBSpecName input_dfb{"input"};
     const DFBSpecName indices_dfb{"indices"};
     const DFBSpecName mapping_dfb{"mapping"};
-    const DFBSpecName packet_header_dfb{"packet_header"};
-    const DFBSpecName send_preparation_buffer_dfb{"send_preparation_buffer"};
+    const ScratchpadSpecName packet_header_scratchpad{"packet_header"};
+    const ScratchpadSpecName send_preparation_buffer_scratchpad{"send_preparation_buffer"};
     const DFBSpecName metadata_buffer_dfb{"metadata_buffer"};
     const TensorParamName input_param{"input"};
     const TensorParamName indices_param{"indices"};
@@ -302,19 +302,17 @@ ttnn::device_operation::MeshWorkloadArtifacts::PerCoordProgram build_dispatch_pr
             .num_entries = dfb_sizes[2] / dfb_page_sizes[2],
             .data_format_metadata = mapping_data_format,
         },
+    };
+    Group<ScratchpadSpec> scratchpads = {
         // client interface
-        DataflowBufferSpec{
-            .unique_id = packet_header_dfb,
-            .entry_size = dfb_page_sizes[5],
-            .num_entries = dfb_sizes[5] / dfb_page_sizes[5],
-            .data_format_metadata = tt::DataFormat::RawUInt32,
+        ScratchpadSpec{
+            .unique_id = packet_header_scratchpad,
+            .size_per_node = dfb_sizes[5],
         },
         // book-keeping buffer to avoid sending the same token multiple times
-        DataflowBufferSpec{
-            .unique_id = send_preparation_buffer_dfb,
-            .entry_size = dfb_page_sizes[3],
-            .num_entries = dfb_sizes[3] / dfb_page_sizes[3],
-            .data_format_metadata = tt::DataFormat::UInt8,
+        ScratchpadSpec{
+            .unique_id = send_preparation_buffer_scratchpad,
+            .size_per_node = dfb_sizes[3],
         },
     };
     if (full_packet) {
@@ -396,28 +394,6 @@ ttnn::device_operation::MeshWorkloadArtifacts::PerCoordProgram build_dispatch_pr
         DFBBinding{
             .dfb_spec_name = mapping_dfb,
             .accessor_name = "mapping",
-            .endpoint_type = DFBEndpointType::CONSUMER,
-        },
-        // packet headers, only touched by the writer
-        DFBBinding{
-            .dfb_spec_name = packet_header_dfb,
-            .accessor_name = "packet_header",
-            .endpoint_type = DFBEndpointType::PRODUCER,
-        },
-        DFBBinding{
-            .dfb_spec_name = packet_header_dfb,
-            .accessor_name = "packet_header",
-            .endpoint_type = DFBEndpointType::CONSUMER,
-        },
-        // send book-keeping, only touched by the writer
-        DFBBinding{
-            .dfb_spec_name = send_preparation_buffer_dfb,
-            .accessor_name = "send_preparation_buffer",
-            .endpoint_type = DFBEndpointType::PRODUCER,
-        },
-        DFBBinding{
-            .dfb_spec_name = send_preparation_buffer_dfb,
-            .accessor_name = "send_preparation_buffer",
             .endpoint_type = DFBEndpointType::CONSUMER,
         },
     };
@@ -503,6 +479,19 @@ ttnn::device_operation::MeshWorkloadArtifacts::PerCoordProgram build_dispatch_pr
             "ttnn/cpp/ttnn/operations/ccl/all_to_all_dispatch/device/kernels/dataflow/writer_all_to_all_dispatch.cpp"),
         .compiler_options = {.defines = std::move(writer_defines)},
         .dfb_bindings = std::move(writer_dfb_bindings),
+        .scratchpad_bindings =
+            {
+                // packet headers, only touched by the writer
+                ScratchpadBinding{
+                    .scratchpad_spec_name = packet_header_scratchpad,
+                    .accessor_name = "packet_header",
+                },
+                // send book-keeping, only touched by the writer
+                ScratchpadBinding{
+                    .scratchpad_spec_name = send_preparation_buffer_scratchpad,
+                    .accessor_name = "send_preparation_buffer",
+                },
+            },
         .tensor_bindings =
             {
                 TensorBinding{
@@ -639,6 +628,7 @@ ttnn::device_operation::MeshWorkloadArtifacts::PerCoordProgram build_dispatch_pr
         .name = "all_to_all_dispatch",
         .kernels = {std::move(reader_kernel_spec), std::move(writer_kernel_spec)},
         .dataflow_buffers = std::move(dataflow_buffers),
+        .scratchpads = std::move(scratchpads),
         .tensor_parameters =
             {
                 TensorParameter{.unique_id = input_param, .spec = input_tensor.tensor_spec()},

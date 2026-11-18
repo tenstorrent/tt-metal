@@ -5,6 +5,7 @@
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/dataflow_buffer.h"
+#include "api/scratchpad.h"
 #include "api/dataflow/noc.h"
 #include "api/core_local_mem.h"
 #include "api/tensor/noc_traits.h"
@@ -53,9 +54,9 @@ inline void dispatch_metadata_local_device(
     }
 }
 
-void zero_buffer_async(const DataflowBuffer& dfb, uint32_t bytes) {
+void zero_buffer_async(const Scratchpad<uint8_t>& scratchpad, uint32_t bytes) {
     Noc noc;
-    noc.async_write_zeros(dfb, bytes);
+    noc.async_write_zeros(scratchpad, bytes);
 }
 
 void zero_buffer_barrier() {
@@ -162,12 +163,11 @@ void kernel_main() {
     DataflowBuffer dfb_input(dfb::input);
     DataflowBuffer dfb_indices(dfb::indices);
     DataflowBuffer dfb_mapping(dfb::mapping);
-    DataflowBuffer dfb_packet_header(dfb::packet_header);
-    DataflowBuffer dfb_send_preparation_buffer(dfb::send_preparation_buffer);
+    Scratchpad<uint8_t> packet_header(scratch::packet_header);
+    Scratchpad<uint8_t> send_preparation_buffer(scratch::send_preparation_buffer);
 
-    uint32_t send_preparation_buffer_address = dfb_send_preparation_buffer.get_write_ptr();
     detail::zero_buffer_async(
-        dfb_send_preparation_buffer, (token_end_idx - token_start_idx) * num_devices * sizeof(uint8_t));
+        send_preparation_buffer, (token_end_idx - token_start_idx) * num_devices * sizeof(uint8_t));
 
 #ifdef AXIS
     constexpr ReplicateGroup axis = ReplicateGroup(AXIS);
@@ -199,7 +199,7 @@ void kernel_main() {
     const auto output_addr_gen = TensorAccessor(tensor::output);
     const auto metadata_addr_gen = TensorAccessor(tensor::metadata);
 
-    uint32_t packet_header_buffer_address = dfb_packet_header.get_read_ptr();
+    uint32_t packet_header_buffer_address = reinterpret_cast<uint32_t>(&packet_header[0]);
     auto* unicast_packet_header = reinterpret_cast<volatile PACKET_HEADER_TYPE*>(packet_header_buffer_address);
     auto* metadata_packet_header =
         reinterpret_cast<volatile PACKET_HEADER_TYPE*>(packet_header_buffer_address + sizeof(PACKET_HEADER_TYPE));
@@ -229,7 +229,6 @@ void kernel_main() {
 
     // Based on the selected experts, we dispatch the input tokens to the corresponding devices
     dfb_mapping.wait_front(mapping_pages);
-    uint8_t* send_preparation_buffer = (uint8_t*)send_preparation_buffer_address;
     for (uint32_t local_token = token_start_idx; local_token < token_end_idx; local_token++) {
         // global_token is the global token index for the current token
         // we need the global token index to write to the output buffer – each global token that could potentially be
