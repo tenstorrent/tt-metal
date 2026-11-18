@@ -150,3 +150,66 @@
   - The fused SFPU body first ran out of LREGs (1/W and ε held live across the rsqrt body). The constants are now re-materialized per vector.
 - Remaining headroom (finding, not a follow-up): see the Refinement 3 **Outcome** line in `op_requirements.md`.
 - Tests added: probes `probes/perf_r3_width_decode.py` (the 4 perf cases, ns + PCC) and `probes/perf_r3_guard.py` (13-shape guard set, `xg` A/B). Unit suites re-run green: sharded 51, acceptance 110, numeric 74 + 6 skipped, precision baseline 16.
+
+## Refinement 4 — Speed up the block-sharded prefill profile (per-core compute throughput)
+- Date: 2026-11-18
+- What was done (perf; no SUPPORTED change). Zone profiling of the 8192×1024 8×8 BLOCK case (R3 code, root core, math cycles) showed it compute-bound end to end:
+  - normalize 27.2k, finalize 14.1k (12k of it the column-scoped rsqrt at 375 cycles / tile-row), combine 11.4k (256 column-tile adds), collapse 10k (SFPU lane reduce, ~305 / tile), sumsq 5.5k.
+  - `cb_gathered` (`k·br` tiles) also split the shard into 2 serialized rendezvous blocks and kept the x·γ prescale off.
+- Four levers, each measured on device and kept as a host knob in `rms_norm_program_descriptor.py`:
+  - **L13 `NORM_DEST_BLOCK = 8`** (catalog `compute_block_size`). The normalize / prescale chains used the default per-tile output lifecycle, which clamps `block_size` to 1.
+    - Now: `PerBlockSize` output (and `cb_xg` input) lifecycle + `.block_size(8)`, wherever a window can never straddle the output ring (`_norm_block`: resident output shard, `cb_xg`, or an interleaved `cb_y` ring and block that are both multiples of 8; RM in-place stays 1).
+    - Measured: 8192×1024 50.7 → 45.7 µs on its own; in the final config leave-one-out (`=1`) costs 1.15–1.31× on all 5 BLOCK cases.
+  - **L14 `COLLAPSE_REDUCE_TILE`.** The collapse runs on the ReduceTile datapath: the reduce helper with `ReduceAlgorithm::ReduceTile`, against a ones scaler in the new `cb_reduce_scaler` (CB 15), filled by `calculate_and_prepare_reduce_scaler<SUM, REDUCE_ROW>`.
+    - Collapse dropped 10k → 1.7k cycles; 8192×1024 45.7 → 40.0 µs.
+    - The masked partial-W collapse keeps AccumulateViaAdd and its 0/1 lane mask.
+    - The scaler is built after block 0's x is published.
+  - **L15 `DENSE_RINV` (`DENSE_MIN_ROWS = 4`).** W_SPLIT blocks of ≥ 4 tile-rows pack the per-row Σx² of up to 32 tile-rows into ONE dense tile: `densify_block`, `D = Σ_r S_r @ J_r`, a `matmul_block` against one-hot column selectors `cb_jsel` (CB 17).
+    - Gather, root combine, rsqrt finalize (`RinvColumn<true>`, full tile) and the rinv multicast then run on `⌈rows/32⌉` tiles. The root combines into the new `cb_dense_sum` (CB 16).
+    - Every core expands its received dense rinv back to per-row broadcast tiles: `expand_block`, `R @ J_rᵀ`, `matmul_block<transpose>`.
+    - `cb_gathered` shrinks 32×, so a whole tall shard is one block and the x·γ prescale fits. The prescale then measures 1.25–1.27× on those shapes (catalog `compute_fusion`: the L1 round trip beats FPU DEST-reuse).
+    - The selectors are built by the reader *after* block 0's x is published. It writes the 16 one-hot faces (256 stores) and assembles the rest with local 512 B NoC copies.
+    - The first version built them before the x push, which put ~8k cycles in front of sumsq. Moving the build: 8192×1024 22.0 → 16.3 µs.
+    - Measured: blocks of 2 tile-rows (640×6144 / 640×7168) are 2–4 % slower dense, hence the `DENSE_MIN_ROWS` gate.
+  - Reused: every compute chain, the reduce / matmul / eltwise helpers, the gather + Mcast topology, `select_blocking`.
+  - Added:
+    - `densify_block` / `expand_block` / `finalize_dense_block`; `RinvColumn<kDense>`
+    - `_footprint_dense` / `_dense_block_rows`; `Blocking.dense`
+    - CBs 15–17; 3 host knobs + `DENSE_MIN_ROWS`
+- Perf (device kernel ns, BH p150b at 1350 MHz; `achievable_ns` applies unscaled):
+
+  | BLOCK perf case | R3 | R4 | Speedup | `achievable_ns` | R4 / ach |
+  |---|---|---|---|---|---|
+  | 640×6144 9×10 | 11996 | 10710 | 1.12× | 19039 | 0.56 |
+  | 640×7168 7×10 | 14800 | 12700 | 1.17× | 21669 | 0.59 |
+  | 7168×1024 8×10 | 31122 | 13201 | 2.36× | 18871 | 0.70 |
+  | 7168×2048 11×10 | 47550 | 16998 | 2.80× | 25947 | 0.66 |
+  | 8192×1024 8×8 | 50706 | 16269 | 3.12× | 25640 | 0.63 |
+
+  Final-config leave-one-out (5 cases, µs):
+  - `NORM_DEST_BLOCK=1`: 12.3 / 15.1 / 16.6 / 22.3 / 21.0
+  - `DENSE_RINV=False`: 10.7 / 12.8 / 23.6 / 37.4 / 39.5
+  - `COLLAPSE_REDUCE_TILE=False`: within ±2 % on the BLOCK cases, since dense has no collapse. Across the guard set (3× medians, after the scaler move): −1 to −4 % on decode / RM WIDTH with the lever, +1–2 % on the 2-row 640 BLOCK cases (noise band), tied on HEIGHT / interleaved LOCAL.
+
+  Guard set (vs R3), all equal or faster:
+  - WIDTH decode: 2923 / 3339 / 3691 / 3796 ns (R3: 2978 / 3347 / 3750 / 3792)
+  - HEIGHT 1024×4096: 31.4 → 26.6 µs
+  - RM WIDTH 32×4096: 9.8 → 9.7 µs
+  - interleaved 32×1024 / 4096 / 7168: 4.2 / 5.4 / 6.8 → 4.1 / 5.2 / 6.6 µs
+  - interleaved RM 32×4096: 8.8 µs, unchanged
+  - interleaved 7168×1024 (LOCAL) and 8192×7168 (W_SPLIT): DRAM-bound and unchanged. 8192×7168 3× median 550.8 µs with the levers vs 551.2 µs without; R3's recorded 543 is run-to-run drift.
+- Accuracy achieved: the five BLOCK perf cases at PCC 0.99986–0.999998 (gate 0.9995), identical to R3 to 6 digits; every existing unit tolerance holds.
+- Golden test progress (targeted slices; the harness's full run is the record):
+  - `test_op_loose`, all placements: 353 passed, 3 infeasible-skipped
+  - `test_op` cartesian 1x1x128x4096 + 1x1x17x50 + HEIGHT / interleaved loose: 442 passed, 69 xfailed
+  - `test_translated -k sharded`: 48 passed, 2 failed. The 2 are the known INVALID bf8b × non-aligned-W cells; their host `ValueError` is unchanged since R2b.
+- Issues encountered:
+  - Dense footprint first charged interleaved `cb_x` per block instead of per tile-row. It picked block_rows = 5 for interleaved 8192×7168 and OOMed L1 (2.7 MB). Fixed; interleaved W_SPLIT shapes stay sparse (block_rows = 1), so dense effectively applies to tall sharded W_SPLIT shards.
+  - `input(cb_xg, PerTile, PerTile, Block)` fails a chain static_assert when `norm_block == 1`. The mapping is now `Scalar` there.
+  - Profiler zone hash collisions when zone names were reused across builds. Profiling only; zones are not committed.
+  - Dense rinv changes the blast radius of a NaN / inf in tile padding: `S_r[i,:]·0 = NaN` would reach element-row i of every tile-row in the group. Finite poison (1000.0, the tested case) is exact.
+- Remaining headroom (finding, not a follow-up): see the Refinement 4 **Outcome** line in `op_requirements.md`.
+- Tests added:
+  - `tests/ttnn/unit_tests/operations/rms_norm/test_rms_norm_dense.py`: 15 cases + 1 permanent-exclusion skip. Each asserts the dense schedule was chosen. Covers BLOCK TILE perf shapes (acc on/off, HiFi2 0.9995 gate), a 48-row block (two dense groups), γ none / TILE / RM, fp32 input, bf8b input, ROW_MAJOR BLOCK, and a multi-row WIDTH grid.
+  - Probe `probes/blk_probe_r4.py` (blocking per perf case).
+  - Unit suites green: 266 passed, 7 skipped.

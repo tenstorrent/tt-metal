@@ -140,7 +140,7 @@ The implementer owns the lever choice. No SUPPORTED change.
 - **Next steps.** Replace the barrier + atomic with flushed writes + a per-sender flag write on the same NoC/VC (the chain-pipe ordering pattern; kernel_lib documents no ordering between departed writes and an atomic). Let the root normalize from its own `cb_rinv_bcast` instead of waiting for the loopback fence. Scope the collapse's within-tile SFPU reduce to column 0.
 - **Why not done here.** These are new synchronization protocols with hang risk, the targets are already beaten by ~30%, and a tree / scatter combine would only add serial rendezvous at one tile-row per core.
 
-### [ ] Refinement 4 — Speed up the block-sharded prefill profile (per-core compute throughput)
+### [x] Refinement 4 — Speed up the block-sharded prefill profile (per-core compute throughput)
 
 **Type**: perf
 
@@ -164,6 +164,30 @@ No SUPPORTED change.
 **Verifier notes**: these are compute-side T2 levers, so several fit in one phase. Gate each one on a measured win. Remove a lever that does not move device ns.
 
 **Done when**: measured device ns improves on the five BLOCK_SHARDED perf cases; their 0.9995 PCC gate holds; the golden suite is green; and there is no regression across the same config-spanning guard set as Refinement 3.
+
+**Outcome**:
+- **Measured.** Device-kernel ns on BH p150b at 1350 MHz, so `achievable_ns` applies unscaled. BLOCK 640×6144 / 640×7168 / 7168×1024 / 7168×2048 / 8192×1024:
+  - before (R3): 11996 / 14800 / 31122 / 47550 / 50706
+  - after: 10710 / 12700 / 13201 / 16998 / 16269
+  - speedup 1.12 / 1.17 / 2.36 / 2.80 / 3.12×; now 0.56–0.70× of `achievable_ns`
+  - PCC unchanged (0.99986–0.999998)
+- **Levers, all kept as host knobs:**
+  - `NORM_DEST_BLOCK = 8`: chain DEST window, catalog `compute_block_size`
+  - `COLLAPSE_REDUCE_TILE`: FPU ReduceTile collapse instead of the SFPU lane reduce
+  - `DENSE_RINV` / `DENSE_MIN_ROWS = 4`: Σx² / rinv densified 32 tile-rows per tile via selector matmuls, so the root's combine + rsqrt run on ⌈rows/32⌉ tiles and `cb_gathered` shrinks 32×. That lets the whole shard be one block and turns on the x·γ prescale, the catalog `compute_fusion` winner at 1.25×.
+  - `sfpu_tile_scope` is the existing `RinvColumn`, extended to the dense full tile.
+- **What binds now** (8192×1024, root, math cycles, 22.1k total):
+  - sumsq 5.6k
+  - normalize `xg·rinv` 6.0k
+  - x·γ prescale 4.8k
+  - finalize 2.6k
+  - densify 1.1k
+  - expand 1.1k
+  - combine 0.24k
+
+  Compute-bound on per-tile FPU work at the configured HiFi2: roughly 44 cycles per x tile per pass, over three passes of x. The root carries ~2k cycles (combine + finalize) more than the other cores.
+- **Next steps.** Fuse sumsq and the x·γ prescale into one pass over x, which needs an `eltwise_chain` with two outputs (x² DEST-accumulated plus x·γ packed) and would save one unpack of every x tile. Scope the dense finalize to the block's valid columns.
+- **Why not done here.** All five cases already beat their targets by 30–44 %. The fusion needs a helper capability the chain does not expose today.
 
 ### [ ] Refinement 5 — Speed up the interleaved perf profile (DRAM-bound prefill, latency-bound decode)
 
