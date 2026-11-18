@@ -4,14 +4,25 @@
 
 #include "ops/linear_op.hpp"
 
+#include <fmt/ranges.h>
 #include <gtest/gtest.h>
 
 #include <algorithm>
+#include <cstdint>
+#include <string>
+#include <vector>
+#include <xtensor-blas/xlinalg.hpp>
+#include <xtensor/core/xmath.hpp>
 
 #include "autograd/auto_context.hpp"
+#include "autograd/tensor.hpp"
 #include "core/compute_kernel_config.hpp"
 #include "core/tt_tensor_utils.hpp"
 #include "init/tensor_initializers.hpp"
+#include "test_utils/program_cache.hpp"
+#include "test_utils/random_data.hpp"
+#include "ttnn/operations/matmul/device/matmul_device_operation.hpp"
+#include "ttnn/operations/moreh/moreh_sum/device/moreh_sum_device_operation.hpp"
 
 class LinearOpTest : public ::testing::Test {
 protected:
@@ -145,3 +156,108 @@ TEST_F(LinearOpTest, TTNNLargeLinearOpWithBias) {
 //                    moreh_bias_grad, eps);
 //     EXPECT_FALSE(success);
 // }
+
+namespace {
+
+// out = x @ W^T + b with x: [batch, 1, S, in], W: [1, 1, out, in], b: [1, 1, 1, out]. Each row freezes a different set
+// of inputs, so it runs a different subset of ttnn_linear_backward's guarded grad branches.
+struct LinearFrozenCase {
+    std::string name;
+    bool x_requires_grad = true;
+    bool w_requires_grad = true;
+    bool b_requires_grad = true;
+    bool has_bias = true;
+};
+
+constexpr uint32_t kBatch = 2U, kSeq = 32U, kIn = 64U, kOut = 96U;
+
+// make_small_ints keeps every product and partial sum exact in bf16: |x|, |W| <= 2 and |out_grad| <= 1 bound dW by
+// 2 * batch * S = 128, dx by 2 * out = 192 and db by batch * S = 64, all < 256, so the device grads must equal the host
+// reference bit for bit.
+using ttml::test_utils::flatten_rows;
+using ttml::test_utils::make_small_ints;
+
+}  // namespace
+
+class LinearOpFrozenInputTest : public ttml::test_utils::DeviceSuiteTest,
+                                public ::testing::WithParamInterface<LinearFrozenCase> {
+protected:
+    void TearDown() override {
+        ttml::autograd::ctx().reset_graph();
+    }
+};
+
+// add_grad drops a frozen tensor's grad, so the grads alone cannot show that a frozen input's grad was skipped.
+// backward runs once under a NORMAL-mode capture: the ops really execute, giving the grads to check, and the trace
+// counts the dW / dx matmuls and the db reduction launched.
+TEST_P(LinearOpFrozenInputTest, BackwardComputesOnlyTrainableGrads) {
+    const LinearFrozenCase c = GetParam();
+    auto* device = &ttml::autograd::ctx().get_device();
+    const xt::xarray<float> x = make_small_ints({kBatch, 1U, kSeq, kIn}, /*bound=*/2.4F, /*seed=*/1U);
+    const xt::xarray<float> w = make_small_ints({1U, 1U, kOut, kIn}, /*bound=*/2.4F, /*seed=*/2U);
+    const xt::xarray<float> b = make_small_ints({1U, 1U, 1U, kOut}, /*bound=*/2.4F, /*seed=*/3U);
+    const xt::xarray<float> out_grad = make_small_ints({kBatch, 1U, kSeq, kOut}, /*bound=*/1.4F, /*seed=*/4U);
+
+    const auto t_x = ttml::autograd::create_tensor(ttml::core::from_xtensor(x, device), c.x_requires_grad);
+    const auto t_w = ttml::autograd::create_tensor(ttml::core::from_xtensor(w, device), c.w_requires_grad);
+    const auto t_b =
+        c.has_bias ? ttml::autograd::create_tensor(ttml::core::from_xtensor(b, device), c.b_requires_grad) : nullptr;
+    const auto out = ttml::ops::linear_op(t_x, t_w, t_b);
+
+    // With every input frozen add_backward_node records no node, so linear_op's grad function can never run.
+    const bool needs_b_grad = c.has_bias && c.b_requires_grad;
+    const bool any_trainable = c.x_requires_grad || c.w_requires_grad || needs_b_grad;
+    ASSERT_EQ(out->get_node().has_value(), any_trainable) << c.name;
+    if (!any_trainable) {
+        return;
+    }
+    out->set_grad(ttml::core::from_xtensor(out_grad, device));
+
+    const auto calls = ttml::test_utils::backward_calltrace(out);
+
+    // One matmul each for dW and dx, one reduction for db.
+    const auto matmul_name = ttml::test_utils::op_name<ttnn::prim::MatmulDeviceOperation>();
+    const auto sum_name = ttml::test_utils::op_name<ttnn::operations::moreh::moreh_sum::MorehSumOperation>();
+    const auto trace_msg = fmt::format("{} backward ops: {}", c.name, fmt::join(calls, ", "));
+    EXPECT_EQ(
+        std::ranges::count(calls, matmul_name),
+        static_cast<int>(c.w_requires_grad) + static_cast<int>(c.x_requires_grad))
+        << trace_msg;
+    EXPECT_EQ(std::ranges::count(calls, sum_name), static_cast<int>(needs_b_grad)) << trace_msg;
+
+    // With the batch flattened into rows: dW = out_grad^T @ x, dx = out_grad @ W, db = sum of out_grad's rows.
+    const xt::xarray<float> x_2d = flatten_rows(x);
+    const xt::xarray<float> w_2d = flatten_rows(w);
+    const xt::xarray<float> out_grad_2d = flatten_rows(out_grad);
+    if (c.w_requires_grad) {
+        ASSERT_TRUE(t_w->is_grad_initialized()) << c.name;
+        xt::xarray<float> expected = xt::linalg::dot(xt::transpose(out_grad_2d), x_2d);
+        expected.reshape(w.shape());
+        EXPECT_TRUE(xt::all(xt::equal(ttml::core::to_xtensor(t_w->get_grad()), expected))) << c.name << " grad_w";
+    }
+    if (c.x_requires_grad) {
+        ASSERT_TRUE(t_x->is_grad_initialized()) << c.name;
+        xt::xarray<float> expected = xt::linalg::dot(out_grad_2d, w_2d);
+        expected.reshape(x.shape());
+        EXPECT_TRUE(xt::all(xt::equal(ttml::core::to_xtensor(t_x->get_grad()), expected))) << c.name << " grad_x";
+    }
+    if (needs_b_grad) {
+        ASSERT_TRUE(t_b->is_grad_initialized()) << c.name;
+        xt::xarray<float> expected = xt::sum(out_grad_2d, {0});
+        expected.reshape(b.shape());
+        EXPECT_TRUE(xt::all(xt::equal(ttml::core::to_xtensor(t_b->get_grad()), expected))) << c.name << " grad_b";
+    }
+}
+
+INSTANTIATE_TEST_SUITE_P(
+    LinearFrozenCases,
+    LinearOpFrozenInputTest,
+    ::testing::Values(
+        LinearFrozenCase{.name = "AllTrainable"},
+        LinearFrozenCase{
+            .name = "AllFrozen", .x_requires_grad = false, .w_requires_grad = false, .b_requires_grad = false},
+        LinearFrozenCase{.name = "FrozenX", .x_requires_grad = false},
+        LinearFrozenCase{.name = "FrozenW", .w_requires_grad = false},
+        LinearFrozenCase{.name = "FrozenB", .b_requires_grad = false},
+        LinearFrozenCase{.name = "NoBias", .has_bias = false}),
+    [](const ::testing::TestParamInfo<LinearFrozenCase>& info) { return info.param.name; });

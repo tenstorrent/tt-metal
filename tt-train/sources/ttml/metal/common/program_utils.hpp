@@ -8,6 +8,7 @@
 #include <bit>
 #include <cstdint>
 #include <map>
+#include <optional>
 #include <string>
 #include <tt-metalium/allocator.hpp>
 #include <tt-metalium/experimental/work_split.hpp>
@@ -37,6 +38,30 @@ inline uint32_t get_num_heads_of_head_merged(const ttnn::Tensor& head_major, con
 
 inline uint32_t get_address_or_zero(const tt::tt_metal::Buffer* buffer) {
     return buffer != nullptr ? buffer->address() : 0U;
+}
+
+/**
+ *   The buffer of an optional tensor (an optional input, or an output that was not requested), or nullptr.
+ */
+inline tt::tt_metal::Buffer* get_buffer_or_null(const std::optional<ttnn::Tensor>& tensor) {
+    return tensor.has_value() ? tensor->buffer() : nullptr;
+}
+
+/**
+ *   An optional output of a device operation: nullopt when `spec` is nullopt (the output was not requested), else
+ *   `preallocated` when given, else a new device tensor of `spec`.
+ */
+inline std::optional<ttnn::Tensor> create_optional_output_tensor(
+    const std::optional<tt::tt_metal::TensorSpec>& spec,
+    const std::optional<ttnn::Tensor>& preallocated,
+    ttnn::distributed::MeshDevice* device) {
+    if (!spec.has_value()) {
+        return std::nullopt;
+    }
+    if (preallocated.has_value()) {
+        return preallocated;
+    }
+    return ttnn::create_device_tensor(spec.value(), device);
 }
 
 /**

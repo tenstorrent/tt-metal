@@ -7,6 +7,13 @@
 #include "api/dataflow/dataflow_api.h"
 #include "tt-train/sources/ttml/metal/common/dataflow_utils.hpp"
 
+// V (for dP = dO @ V^T) and u_scaler are only read for grad_K; grad_V only needs Q, K, the mask, lse and dO.
+#ifdef COMPUTE_GRAD_KEY
+constexpr bool compute_grad_key = true;
+#else
+constexpr bool compute_grad_key = false;
+#endif
+
 void kernel_main() {
     uint32_t runtime_args_counter = 0;
     const uint32_t grad_output_addr = get_arg_val<uint32_t>(runtime_args_counter++);
@@ -27,7 +34,6 @@ void kernel_main() {
     constexpr uint32_t cb_attn_mask = tt::CBIndex::c_5;
 #endif
     constexpr uint32_t cb_intermediates = tt::CBIndex::c_6;
-    constexpr uint32_t cb_matmul_reduce = tt::CBIndex::c_7;
     constexpr uint32_t cb_u_scalar_row = tt::CBIndex::c_14;
 
     constexpr uint32_t qWt = get_compile_time_arg_val(0);              // Q/K width in tiles
@@ -62,8 +68,6 @@ void kernel_main() {
         TensorAccessor(intermediates_args, intermediates_addr, interm_tile_bytes);
     const auto u_scaler_address_generator = TensorAccessor(u_scaler_args, u_scaler_addr);
 
-    generate_matmul_row_reduce_tile(cb_matmul_reduce);
-
     const uint32_t num_of_groups = q_heads / heads_per_group;
 
 #ifdef BALANCED_PARALLELISM
@@ -74,7 +78,9 @@ void kernel_main() {
         const uint32_t v_start_idx = global_row_idx * vWt;
 
         read_tiles_by_row(cb_key, key_address_generator, k_start_idx, kWt, tile_bytes, kWt);
-        read_tiles_by_row(cb_value, value_address_generator, v_start_idx, vWt, tile_bytes, vWt);
+        if constexpr (compute_grad_key) {
+            read_tiles_by_row(cb_value, value_address_generator, v_start_idx, vWt, tile_bytes, vWt);
+        }
 
         const uint32_t group_idx = (global_row_idx / Ht) % num_of_groups;
         const uint32_t batch_idx = global_row_idx / (Ht * num_of_groups);
@@ -111,7 +117,9 @@ void kernel_main() {
                 const uint32_t vo_start_idx = vo_offset + (q_head_idx * Ht + h) * vWt;
                 read_tiles_by_row(cb_grad_output, grad_output_address_generator, vo_start_idx, vWt, tile_bytes, vWt);
 
-                read_one_tile(cb_u_scalar_row, u_scaler_address_generator, u_scaler_head_offset + h);
+                if constexpr (compute_grad_key) {
+                    read_one_tile(cb_u_scalar_row, u_scaler_address_generator, u_scaler_head_offset + h);
+                }
             }
             intermediates_offset += Ht * num_of_interm_tiles;
         }
@@ -140,7 +148,9 @@ void kernel_main() {
         const uint32_t v_start_idx = global_row_idx * vWt;
 
         read_tiles_by_row(cb_key, key_address_generator, k_start_idx, kWt, tile_bytes, kWt);
-        read_tiles_by_row(cb_value, value_address_generator, v_start_idx, vWt, tile_bytes, vWt);
+        if constexpr (compute_grad_key) {
+            read_tiles_by_row(cb_value, value_address_generator, v_start_idx, vWt, tile_bytes, vWt);
+        }
 
         const uint32_t group_idx = (global_row_idx / Ht) % num_of_groups;
         const uint32_t batch_idx = global_row_idx / (Ht * num_of_groups);
@@ -190,7 +200,9 @@ void kernel_main() {
                 const uint32_t vo_start_idx = vo_offset + (q_head_idx * Ht + h) * vWt;
                 read_tiles_by_row(cb_grad_output, grad_output_address_generator, vo_start_idx, vWt, tile_bytes, vWt);
 
-                read_one_tile(cb_u_scalar_row, u_scaler_address_generator, u_scaler_head_offset + h);
+                if constexpr (compute_grad_key) {
+                    read_one_tile(cb_u_scalar_row, u_scaler_address_generator, u_scaler_head_offset + h);
+                }
             }
             intermediates_offset += Ht * num_of_interm_tiles;
         }

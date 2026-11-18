@@ -84,7 +84,7 @@ RMSNormForwardBuffers get_buffers(const tensor_args_t& tensor_args, const tensor
     return RMSNormForwardBuffers{
         .input = tensor_args.input.buffer(),
         .gamma = tensor_args.gamma.buffer(),
-        .gate = tensor_args.gate.has_value() ? tensor_args.gate->buffer() : nullptr,
+        .gate = get_buffer_or_null(tensor_args.gate),
         .output = output.front().buffer(),
         .rms = output.size() > 1U ? output[1].buffer() : nullptr,
     };

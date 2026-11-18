@@ -59,6 +59,12 @@ constexpr bool compute_dgamma = true;
 constexpr bool compute_dgamma = false;
 #endif
 
+#ifdef COMPUTE_DA
+constexpr bool compute_da = true;
+#else
+constexpr bool compute_da = false;
+#endif
+
 #ifdef GATED
 constexpr bool gated = true;
 #else
@@ -67,6 +73,13 @@ constexpr bool gated = false;
 static_assert(
     !gated || everything_fits_in_l1,
     "Gated mode needs the row resident in L1: cb_du holds the whole row for the stages after the gate stage.");
+static_assert(compute_da || compute_dgamma || gated, "rmsnorm_bw must compute at least one output");
+
+// Without dL_da there is no scale: no scale components, no reduction, no cb_scale, and none of the mask, scaler and
+// matmul reduce tiles. Gamma and the zero tile are still read in gated mode, for dL_dgate.
+constexpr bool reads_gamma = compute_da || gated;
+// In gated mode du feeds dL_da and dL_dgamma_components only.
+constexpr bool computes_du = gated && (compute_da || compute_dgamma);
 
 // Gradient with respect to the RMSNorm output, read by every stage below. In gated mode cb_dL_out holds the gradient
 // of the gated output rmsnorm(a) * silu(gate), so the stages read du = dL_dout * silu(gate) from cb_du instead.
@@ -74,7 +87,7 @@ constexpr uint32_t cb_rmsnorm_dL_dout_idx = gated ? cb_du_idx : cb_dL_out_idx;
 
 // Gated with frozen gamma: cb_du holds gained_du = (gamma / rms_a) * du instead of du, so compute_dL_da does not form
 // gamma / rms_a again. Trained gamma keeps du, which dL_dgamma_components needs.
-constexpr bool fold_gain = gated && !compute_dgamma;
+constexpr bool fold_gain = gated && !compute_dgamma && compute_da;
 
 // DEST registers that hold the gate stage's outputs at commit.
 constexpr uint32_t gate_stage_dL_dgate_register = 0U;
@@ -221,14 +234,15 @@ inline void compute_recip_rms_a_bcasted() {
 
 inline void compute_gate_stage_tile(const uint32_t col, const uint32_t block_idx) {
     // With q = (gamma / rms_a) * dL_dout: du = dL_dout * silu(gate), dL_dgate = q * silu'(gate) * a, and the scale
-    // component a * (gamma / rms_a) * du. With fold_gain, du_register gets gained_du = q * silu(gate) instead.
+    // component a * (gamma / rms_a) * du. With fold_gain, du_register gets gained_du = q * silu(gate) instead. du is
+    // only formed when computes_du, and the scale component only with compute_da.
     constexpr uint32_t one = 0x3F800000U;                       // (float)1.0 -> uint32_t
     const uint32_t q_register = gate_stage_dL_dgate_register;   // gamma / rms_a, q, q * s, q * silu', dL_dgate
     const uint32_t scale_register = gate_stage_scale_register;  // gate, silu(gate), a, the scale component
     const uint32_t sigmoid_register = 2U;                       // s, gate, 1 + gate - silu(gate), gamma / rms_a, mask
     const uint32_t du_register = gate_stage_du_register;        // dL_dout, then du or gained_du
     // The CB of the tile's last unpack, which the next tile starts on.
-    constexpr uint32_t cb_last_srca = fold_gain ? cb_input_idx : cb_recip_rms_a_bcasted_idx;
+    constexpr uint32_t cb_last_srca = fold_gain || !compute_da ? cb_input_idx : cb_recip_rms_a_bcasted_idx;
 
     // SrcA is on the previous tile's last CB, or on cb_rms_a (bf16) at the start of a row.
     compute_scaled_gain<cb_last_srca>(col + block_idx, q_register);
@@ -247,7 +261,9 @@ inline void compute_gate_stage_tile(const uint32_t col, const uint32_t block_idx
 
     mul_binary_tile_init();
     mul_binary_tile(scale_register, sigmoid_register, scale_register);
-    mul_binary_tile(fold_gain ? q_register : du_register, scale_register, du_register);
+    if constexpr (computes_du) {
+        mul_binary_tile(fold_gain ? q_register : du_register, scale_register, du_register);
+    }
     mul_binary_tile(q_register, sigmoid_register, q_register);
 
     copy_init(cb_gate_idx);
@@ -264,6 +280,9 @@ inline void compute_gate_stage_tile(const uint32_t col, const uint32_t block_idx
     copy_tile(cb_input_idx, col + block_idx, scale_register);
     mul_binary_tile_init();
     mul_binary_tile(q_register, scale_register, q_register);
+    if constexpr (!compute_da) {
+        return;
+    }
     mul_binary_tile(scale_register, du_register, scale_register);
     if constexpr (!fold_gain) {
         compute_scaled_gain<cb_input_idx>(col + block_idx, sigmoid_register);
@@ -290,7 +309,10 @@ inline void compute_du_and_dL_dgate(const uint32_t row) {
     //   the scale components a * (gamma / rms_a) * du, summed into one cb_scale tile by packer L1 accumulation.
     // silu'(gate) is evaluated entirely in fp32 DEST; swiglu_gate_bw_block's CB round trips lose precision. With
     // fold_gain, cb_du gets gained_du = q * silu(gate) instead of du. cb_du keeps the whole row for the later stages.
-    cb_reserve_back(cb_scale_idx, onetile);
+    // Without compute_da there are no scale components, and without computes_du no cb_du.
+    if constexpr (compute_da) {
+        cb_reserve_back(cb_scale_idx, onetile);
+    }
     for (uint32_t col = 0; col < Wt; col += block_size) {
         // The input and gamma are read again after this loop, so their waits are cumulative; dL_dout and the gate are
         // not, so their blocks are popped here.
@@ -300,7 +322,9 @@ inline void compute_du_and_dL_dgate(const uint32_t row) {
         cb_wait_front(cb_input_idx, col + block_size);
         cb_wait_front(cb_dL_out_idx, block_size);
         cb_wait_front(cb_gate_idx, block_size);
-        cb_reserve_back(cb_du_idx, block_size);
+        if constexpr (computes_du) {
+            cb_reserve_back(cb_du_idx, block_size);
+        }
         cb_reserve_back(cb_dL_dgate_idx, block_size);
         for (uint32_t block_idx = 0; block_idx < block_size; ++block_idx) {
             tile_regs_acquire();
@@ -308,22 +332,30 @@ inline void compute_du_and_dL_dgate(const uint32_t row) {
             tile_regs_commit();
 
             tile_regs_wait();
-            pack_reconfig_data_format(cb_du_idx);
-            pack_tile(gate_stage_du_register, cb_du_idx);
+            if constexpr (computes_du) {
+                pack_reconfig_data_format(cb_du_idx);
+                pack_tile(gate_stage_du_register, cb_du_idx);
+            }
             pack_reconfig_data_format(cb_dL_dgate_idx);
             pack_tile(gate_stage_dL_dgate_register, cb_dL_dgate_idx);
-            pack_reconfig_data_format(cb_scale_idx);
-            pack_reconfig_l1_acc(col + block_idx == 0 ? 0U : 1U);
-            pack_tile</* out_of_order_output = */ true>(gate_stage_scale_register, cb_scale_idx, 0U);
-            pack_reconfig_l1_acc(0U);
+            if constexpr (compute_da) {
+                pack_reconfig_data_format(cb_scale_idx);
+                pack_reconfig_l1_acc(col + block_idx == 0 ? 0U : 1U);
+                pack_tile</* out_of_order_output = */ true>(gate_stage_scale_register, cb_scale_idx, 0U);
+                pack_reconfig_l1_acc(0U);
+            }
             tile_regs_release();
         }
-        cb_push_back(cb_du_idx, block_size);
+        if constexpr (computes_du) {
+            cb_push_back(cb_du_idx, block_size);
+        }
         cb_push_back(cb_dL_dgate_idx, block_size);
         cb_pop_front(cb_dL_out_idx, block_size);
         cb_pop_front(cb_gate_idx, block_size);
     }
-    cb_push_back(cb_scale_idx, onetile);
+    if constexpr (compute_da) {
+        cb_push_back(cb_scale_idx, onetile);
+    }
 }
 
 inline void reduce_scale() {
@@ -468,17 +500,29 @@ inline void compute_scale(const uint32_t row) {
 }
 #endif  // EVERYTHING_FITS_IN_L1
 
-void kernel_main() {
-    if constexpr (do_mask_w) {
-        cb_wait_front(cb_mask_w_idx, onetile);
-    }
-    cb_wait_front(cb_scaler_idx, onetile);
-    cb_wait_front(cb_mat_mul_reduce, onetile);
-    cb_wait_front(cb_zero_idx, onetile);
+// The CBs that hardware startup configures the unpackers and the packer for; each exists in every mode that uses it
+// and has the same data format as the CB it stands in for.
+constexpr uint32_t cb_startup_srcb_idx = reads_gamma ? cb_gamma_idx : cb_dL_out_idx;
+constexpr uint32_t cb_startup_out_idx =
+    compute_da ? cb_dL_da_idx : (compute_dgamma ? cb_dL_dgamma_components : cb_dL_dgate_idx);
 
-    compute_kernel_hw_startup(cb_input_idx, cb_gamma_idx, cb_dL_da_idx);
+void kernel_main() {
+    if constexpr (compute_da) {
+        if constexpr (do_mask_w) {
+            cb_wait_front(cb_mask_w_idx, onetile);
+        }
+        cb_wait_front(cb_scaler_idx, onetile);
+        cb_wait_front(cb_mat_mul_reduce, onetile);
+    }
+    if constexpr (reads_gamma) {
+        cb_wait_front(cb_zero_idx, onetile);
+    }
+
+    compute_kernel_hw_startup(cb_input_idx, cb_startup_srcb_idx, cb_startup_out_idx);
     copy_init(cb_input_idx);
-    reconfig_data_format(cb_mat_mul_reduce, cb_scale_idx);
+    if constexpr (compute_da) {
+        reconfig_data_format(cb_mat_mul_reduce, cb_scale_idx);
+    }
     for (uint32_t row = 0; row < num_rows_per_core; ++row) {
         cb_wait_front(cb_rms_a_idx, onetile);
         // This value is constant for the whole row, so we can compute it once per row.
@@ -487,29 +531,43 @@ void kernel_main() {
         if constexpr (gated) {
             // The gate stage accumulates the scale components; its input and gamma waits already cover the row.
             compute_du_and_dL_dgate(row);
-            reduce_scale();
-            cb_wait_front(cb_du_idx, Wt);
-        } else {
+            if constexpr (compute_da) {
+                reduce_scale();
+            }
+            if constexpr (computes_du) {
+                cb_wait_front(cb_du_idx, Wt);
+            }
+        } else if constexpr (compute_da) {
             // To compute scale we must iterate over all inner dimension.
             compute_scale(row);
+        } else if constexpr (everything_fits_in_l1) {
+            // Without the scale pass nothing has waited for the row yet.
+            cb_wait_front(cb_dL_out_idx, Wt);
+            cb_wait_front(cb_input_idx, Wt);
         }
-        // Wait for the reduced cb_scale to be ready.
-        cb_wait_front(cb_scale_idx, onetile);
+        if constexpr (compute_da) {
+            // Wait for the reduced cb_scale to be ready.
+            cb_wait_front(cb_scale_idx, onetile);
+        }
 
         for (uint32_t col = 0; col < Wt; col += block_size) {
-            cb_reserve_back(cb_dL_da_idx, block_size);
+            if constexpr (compute_da) {
+                cb_reserve_back(cb_dL_da_idx, block_size);
+            }
             if constexpr (compute_dgamma) {
                 cb_reserve_back(cb_dL_dgamma_components, block_size);
             }
             if constexpr (!everything_fits_in_l1) {
-                cb_wait_front(cb_gamma_idx, block_size);
+                if constexpr (compute_da) {
+                    cb_wait_front(cb_gamma_idx, block_size);
+                }
                 cb_wait_front(cb_dL_out_idx, block_size);
                 cb_wait_front(cb_input_idx, block_size);
             }
             // A resident row is indexed from its first tile, a streamed block from its own.
             const uint32_t tile_base = everything_fits_in_l1 ? col : 0U;
-            // Compute dL_da.
-            {
+            if constexpr (compute_da) {
+                // Compute dL_da.
                 uint32_t dL_da_register;  // Depending on the block_idx, it will be 0 or 1.
                 const uint32_t rhs_register = 2U;
                 const uint32_t tile_register = 3U;
@@ -544,26 +602,37 @@ void kernel_main() {
                 pack_and_push_block(cb_dL_dgamma_components, block_size);
             }
             if constexpr (!everything_fits_in_l1) {
-                cb_pop_front(cb_gamma_idx, block_size);
+                if constexpr (compute_da) {
+                    cb_pop_front(cb_gamma_idx, block_size);
+                }
                 cb_pop_front(cb_dL_out_idx, block_size);
                 cb_pop_front(cb_input_idx, block_size);
             }
         }
         if constexpr (everything_fits_in_l1) {
-            cb_pop_front(cb_rmsnorm_dL_dout_idx, Wt);
+            // Gated mode pops dL_dout block by block in the gate stage; cb_du only exists when computes_du.
+            if constexpr (!gated || computes_du) {
+                cb_pop_front(cb_rmsnorm_dL_dout_idx, Wt);
+            }
             cb_pop_front(cb_input_idx, Wt);
         }
         cb_pop_front(cb_rms_a_idx, onetile);
         cb_pop_front(cb_recip_rms_a_bcasted_idx, onetile);
-        cb_pop_front(cb_scale_idx, onetile);
+        if constexpr (compute_da) {
+            cb_pop_front(cb_scale_idx, onetile);
+        }
     }
-    if constexpr (everything_fits_in_l1) {
+    if constexpr (everything_fits_in_l1 && reads_gamma) {
         cb_pop_front(cb_gamma_idx, Wt);
     }
-    cb_pop_front(cb_scaler_idx, onetile);
-    cb_pop_front(cb_mat_mul_reduce, onetile);
-    cb_pop_front(cb_zero_idx, onetile);
-    if constexpr (do_mask_w) {
-        cb_pop_front(cb_mask_w_idx, onetile);
+    if constexpr (compute_da) {
+        cb_pop_front(cb_scaler_idx, onetile);
+        cb_pop_front(cb_mat_mul_reduce, onetile);
+        if constexpr (do_mask_w) {
+            cb_pop_front(cb_mask_w_idx, onetile);
+        }
+    }
+    if constexpr (reads_gamma) {
+        cb_pop_front(cb_zero_idx, onetile);
     }
 }

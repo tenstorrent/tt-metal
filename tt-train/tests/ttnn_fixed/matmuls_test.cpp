@@ -154,8 +154,8 @@ TEST_F(MatmulsTest, MatMulBackwardNoTranspose) {
 
     // Compute the backward pass.
     auto grads = matmul_backward(t_a, t_b, t_out_grad, false, false);
-    xt::xarray<float> grad_a = core::to_xtensor(grads.first);
-    xt::xarray<float> grad_b = core::to_xtensor(grads.second);
+    xt::xarray<float> grad_a = core::to_xtensor(grads.first.value());
+    xt::xarray<float> grad_b = core::to_xtensor(grads.second.value());
 
     // Expected gradients:
     // grad_a = out_grad * (b^T) and grad_b = (a^T) * out_grad.
@@ -177,8 +177,8 @@ TEST_F(MatmulsTest, MatMulBackwardTransposeA) {
     auto t_out_grad = core::from_xtensor(out_grad, &autograd::ctx().get_device());
 
     auto grads = matmul_backward(t_a, t_b, t_out_grad, true, false);
-    xt::xarray<float> grad_a = core::to_xtensor(grads.first);
-    xt::xarray<float> grad_b = core::to_xtensor(grads.second);
+    xt::xarray<float> grad_a = core::to_xtensor(grads.first.value());
+    xt::xarray<float> grad_b = core::to_xtensor(grads.second.value());
 
     // For y = (a^T) * b:
     // Expected gradients:
@@ -201,8 +201,8 @@ TEST_F(MatmulsTest, MatMulBackwardTransposeB) {
     auto t_out_grad = core::from_xtensor(out_grad, &autograd::ctx().get_device());
 
     auto grads = matmul_backward(t_a, t_b, t_out_grad, false, true);
-    xt::xarray<float> grad_a = core::to_xtensor(grads.first);
-    xt::xarray<float> grad_b = core::to_xtensor(grads.second);
+    xt::xarray<float> grad_a = core::to_xtensor(grads.first.value());
+    xt::xarray<float> grad_b = core::to_xtensor(grads.second.value());
 
     // For y = a * (b^T):
     // Expected gradients:
@@ -225,8 +225,8 @@ TEST_F(MatmulsTest, MatMulBackwardTransposeBoth) {
     auto t_out_grad = core::from_xtensor(out_grad, &autograd::ctx().get_device());
 
     auto grads = matmul_backward(t_a, t_b, t_out_grad, true, true);
-    xt::xarray<float> grad_a = core::to_xtensor(grads.first);
-    xt::xarray<float> grad_b = core::to_xtensor(grads.second);
+    xt::xarray<float> grad_a = core::to_xtensor(grads.first.value());
+    xt::xarray<float> grad_b = core::to_xtensor(grads.second.value());
 
     // For y = (a^T) * (b^T):
     // Expected gradients:

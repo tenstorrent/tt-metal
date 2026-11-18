@@ -7,6 +7,19 @@
 #include "api/dataflow/dataflow_api.h"
 #include "tt-train/sources/ttml/metal/common/dataflow_utils.hpp"
 
+// Which outputs to write. A skipped output has no CB and placeholder accessor args.
+#ifdef COMPUTE_GRAD_KEY
+constexpr bool compute_grad_key = true;
+#else
+constexpr bool compute_grad_key = false;
+#endif
+
+#ifdef COMPUTE_GRAD_VALUE
+constexpr bool compute_grad_value = true;
+#else
+constexpr bool compute_grad_value = false;
+#endif
+
 void kernel_main() {
     uint32_t runtime_args_counter = 0;
     const uint32_t grad_key_addr = get_arg_val<uint32_t>(runtime_args_counter++);
@@ -31,8 +44,8 @@ void kernel_main() {
     generate_causal_mask_tile(cb_attn_mask);
 #endif
 
-    const uint32_t tile_bytes_k = get_tile_size(cb_grad_key);
-    const uint32_t tile_bytes_v = get_tile_size(cb_grad_value);
+    const uint32_t tile_bytes_k = compute_grad_key ? get_tile_size(cb_grad_key) : 0U;
+    const uint32_t tile_bytes_v = compute_grad_value ? get_tile_size(cb_grad_value) : 0U;
 
     // TensorAccessor definitions with chained offsets
     constexpr auto grad_key_args = TensorAccessorArgs<5>();
@@ -44,20 +57,26 @@ void kernel_main() {
 
     const uint32_t num_of_groups = q_heads / heads_per_group;
 
-#ifdef BALANCED_PARALLELISM
-    constexpr uint32_t pairs_per_seq = Ht / 2;
-
+    // Writes grad_V and grad_K for one global row of the (B, num_of_groups, Ht) grid of K/V tile rows; each output has
+    // the same shape as its input, (B, kNH, S, kEmbd) and (B, vNH, S, vEmbd).
     auto write_row = [&](const uint32_t global_row_idx) {
         const uint32_t batch_idx = global_row_idx / (num_of_groups * Ht);
-        const uint32_t s_tile_idx = global_row_idx % Ht;
-        const uint32_t group_idx = (global_row_idx / Ht) % num_of_groups;
+        const uint32_t s_tile_idx = global_row_idx % Ht;                   // position in sequence (tile idx)
+        const uint32_t group_idx = (global_row_idx / Ht) % num_of_groups;  // which group of K and V we are processing
 
-        const uint32_t grad_v_row_base_tiles = ((batch_idx * num_of_groups + group_idx) * Ht + s_tile_idx) * vWt;
-        write_tiles_by_row(cb_grad_value, grad_value_addr_generator, grad_v_row_base_tiles, vWt, tile_bytes_v, vWt);
+        if constexpr (compute_grad_value) {
+            const uint32_t grad_v_row_base_tiles = ((batch_idx * num_of_groups + group_idx) * Ht + s_tile_idx) * vWt;
+            write_tiles_by_row(cb_grad_value, grad_value_addr_generator, grad_v_row_base_tiles, vWt, tile_bytes_v, vWt);
+        }
 
-        const uint32_t grad_k_row_base_tiles = ((batch_idx * num_of_groups + group_idx) * Ht + s_tile_idx) * kWt;
-        write_tiles_by_row(cb_grad_key, grad_key_addr_generator, grad_k_row_base_tiles, kWt, tile_bytes_k, kWt);
+        if constexpr (compute_grad_key) {
+            const uint32_t grad_k_row_base_tiles = ((batch_idx * num_of_groups + group_idx) * Ht + s_tile_idx) * kWt;
+            write_tiles_by_row(cb_grad_key, grad_key_addr_generator, grad_k_row_base_tiles, kWt, tile_bytes_k, kWt);
+        }
     };
+
+#ifdef BALANCED_PARALLELISM
+    constexpr uint32_t pairs_per_seq = Ht / 2;
 
     // Runtime args reuse: num_rows_to_process = num_pairs, start_row = start_pair_idx
     for (uint32_t p = 0; p < num_rows_to_process; ++p) {
@@ -78,19 +97,7 @@ void kernel_main() {
 #else
     const uint32_t end_row = start_row + num_rows_to_process;
     for (uint32_t r = start_row; r < end_row; r++) {
-        // Convert global row index to tensor coordinates
-        const uint32_t batch_idx = r / (num_of_groups * Ht);
-        const uint32_t s_tile_idx = r % Ht;  // position in sequence (tile idx)
-
-        const uint32_t group_idx = (r / Ht) % num_of_groups;  // which group of K and V we are processing
-
-        // -------- Grad Value: same shape as Value (B, vNH, S, vEmbd) --------
-        const uint32_t grad_v_row_base_tiles = ((batch_idx * num_of_groups + group_idx) * Ht + s_tile_idx) * vWt;
-        write_tiles_by_row(cb_grad_value, grad_value_addr_generator, grad_v_row_base_tiles, vWt, tile_bytes_v, vWt);
-
-        // -------- Grad Key: same shape as Key (B, kNH, S, kEmbd) --------
-        const uint32_t grad_k_row_base_tiles = ((batch_idx * num_of_groups + group_idx) * Ht + s_tile_idx) * kWt;
-        write_tiles_by_row(cb_grad_key, grad_key_addr_generator, grad_k_row_base_tiles, kWt, tile_bytes_k, kWt);
+        write_row(r);
     }
 #endif
 }

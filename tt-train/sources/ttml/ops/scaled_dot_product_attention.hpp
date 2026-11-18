@@ -11,8 +11,8 @@ namespace ttml::ops {
 // Fused implementation using custom sdpa_fw and sdpa_bw kernels (default)
 // When no mask is provided, uses on-device causal mask generation
 // When a gate is provided, the output is sdpa(Q, K, V) * sigmoid(gate); gate has the output's
-// shape (B, H, S, Dv) and receives its own gradient in backward. To save memory, the gated backward
-// overwrites the output's value with grad_gate: don't read it after backward, and don't run backward
+// shape (B, H, S, Dv) and receives its own gradient in backward. To save memory, when the gate requires grad
+// backward overwrites the output's value with grad_gate: don't read it after backward, and don't run backward
 // twice over a retained graph (it throws).
 autograd::TensorPtr scaled_dot_product_attention(
     const autograd::TensorPtr& query,
