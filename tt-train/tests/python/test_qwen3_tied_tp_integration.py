@@ -368,7 +368,7 @@ def test_tied_backward_matches_untied_reference(legs):
     np.testing.assert_allclose(grad_tied, grad_embed + grad_head, rtol=2e-2, atol=1e-4)
 
 
-def test_replicated_norm_weights_get_the_same_gradient_on_every_tp_device(legs):
+def test_replicated_norm_gradients_agree_across_tp(legs):
     """A replicated parameter must end the backward with one gradient, equal on every device, or its copies train
     apart. The QK-norm weights normalize only each device's own heads, so the attention has to sum their gradient
     across TP (#65654); the layer and final norms see whole hidden states and agree without it."""
