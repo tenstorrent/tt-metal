@@ -49,6 +49,8 @@
 #include "ttnn/operations/data_movement/sort/sort_nanobind.hpp"
 #include "ttnn/operations/data_movement/gather/gather_nanobind.hpp"
 #include "ttnn/operations/data_movement/gather/tosa/gather_tosa_nanobind.hpp"
+#include "ttnn/operations/data_movement/get_rows/get_rows_nanobind.hpp"
+#include "ttnn/operations/data_movement/set_rows/set_rows_nanobind.hpp"
 
 namespace ttnn::operations::data_movement {
 
@@ -101,5 +103,7 @@ void py_module(nb::module_& mod) {
     detail::bind_sort_operation(mod);
     detail::bind_gather_operation(mod);
     detail::bind_gather_tosa_operation(mod);
+    detail::bind_get_rows_operation(mod);
+    detail::bind_set_rows_operation(mod);
 }
 }  // namespace ttnn::operations::data_movement
