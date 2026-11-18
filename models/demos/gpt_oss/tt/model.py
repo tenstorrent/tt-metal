@@ -16,7 +16,7 @@ from models.tt_transformers.tt.common import copy_host_to_device, rope_scaling_m
 from models.tt_transformers.tt.rope import RotarySetup
 
 from .batched_prefill import gather_users, last_token_rows, partition_users
-from .fused_decode.config import FULL_FIDELITY, fused_decode_supported
+from .fused_decode.config import fused_decode_supported
 from .fused_decode.inputs import DecodeInputs
 from .fused_decode.terminal import DecodeTerminal, FusedSamplingGenerator
 from .host_readback import DecodeHostReadback, DecodeHostRows
@@ -330,9 +330,7 @@ class Model:
             lm_head_weight,
             device=mesh_device,
             layout=ttnn.TILE_LAYOUT,
-            dtype=(
-                ttnn.bfloat16 if FULL_FIDELITY and os.environ.get("GPT_OSS_FF_DENSE_BF8") != "1" else ttnn.bfloat8_b
-            ),
+            dtype=ttnn.bfloat8_b,
             cache_file_name=get_cache_file_name(tensor_cache_path, "lm_head_padded_pow2.weight"),
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             mesh_mapper=self.mesh_config.column_parallel(mesh_device),
@@ -635,7 +633,7 @@ class Model:
         """Final norm + vocab-sharded LM head (logits [..., vocab / TP] per device, bf8). x: replicated [..., H].
         Also the generator's batched on-device sampling hook (after extract_last_tokens_batched_prefill)."""
         normed = self.norm(x)
-        logits = ttnn.matmul(normed, self.lm_head_weight, dtype=ttnn.bfloat16 if FULL_FIDELITY else ttnn.bfloat8_b)
+        logits = ttnn.matmul(normed, self.lm_head_weight, dtype=ttnn.bfloat8_b)
         normed.deallocate(True)
         self._prefill_sampling_active = False
         return logits
@@ -783,7 +781,7 @@ class Model:
                 tokens_for_embed,
                 self.embedding_weight,
                 layout=ttnn.TILE_LAYOUT,
-                dtype=ttnn.bfloat16 if FULL_FIDELITY else ttnn.bfloat8_b,
+                dtype=ttnn.bfloat8_b,
             )
             input_embeds = ttnn.unsqueeze(input_embeds, 0)
             # Get RoPE embeddings via on-device embedding lookup (matches tt-transformers)
@@ -1379,9 +1377,7 @@ class Model:
             tokens,
             self.embedding_weight,
             layout=ttnn.TILE_LAYOUT,
-            dtype=ttnn.bfloat16
-            if FULL_FIDELITY or os.environ.get("GPT_OSS_PREFILL_RESIDUAL_BF16") == "1"
-            else ttnn.bfloat8_b,
+            dtype=ttnn.bfloat16 if os.environ.get("GPT_OSS_PREFILL_RESIDUAL_BF16") == "1" else ttnn.bfloat8_b,
         )
         # Keep `tokens` allocated: trace replay updates this same device buffer via copy_host_to_device.
         # Deallocating it here breaks prefill trace replay with "Buffer must be allocated on device".
@@ -1436,9 +1432,7 @@ class Model:
                 tokens,
                 self.embedding_weight,
                 layout=ttnn.TILE_LAYOUT,
-                dtype=ttnn.bfloat16
-                if FULL_FIDELITY or os.environ.get("GPT_OSS_PREFILL_RESIDUAL_BF16") == "1"
-                else ttnn.bfloat8_b,
+                dtype=ttnn.bfloat16 if os.environ.get("GPT_OSS_PREFILL_RESIDUAL_BF16") == "1" else ttnn.bfloat8_b,
             )
             tokens.deallocate(True)
 

@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 // SPDX-License-Identifier: Apache-2.0
 
-// TEMP experiment (GPT_OSS_DECODE_EXPERTS_SPLIT=1): compile-time arrays of the compressed custom_mm per-tile metadata
+// GPT_OSS_DECODE_EXPERTS_SPLIT: compile-time arrays of the compressed custom_mm per-tile metadata
 // words (fused_decode/mxfp4_split.py metadata_words). Each element is get_compile_time_arg_val(START + i).
 
 #pragma once

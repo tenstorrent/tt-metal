@@ -15,8 +15,7 @@ on QuietBox 2 (the tt-inference-server P300X2 entry), for gpt-oss-20b only.
 - gpt-oss-120b gets none of them: the per-layer ranks and the rounded weights below are gpt-oss-20b's.
 - The decode switches act only on the fused decode path (1x4 Blackhole mesh); elsewhere they are read and unused.
 - The rounded weights are Hugging Face Hub locations at pinned revisions (tt/weight_source.py), downloaded once into
-  the Hub cache. The experts use the K-GPTQ rounding for decode and prefill (GPT_OSS_PREFILL_KGPTQ), so the
-  output-grouped package of GPT_OSS_DECODE_BF4_ROUNDED / GPT_OSS_PREFILL_BF4_ROUNDED is not needed.
+  the Hub cache. The experts use the K-GPTQ rounding for decode and prefill (GPT_OSS_PREFILL_KGPTQ).
 """
 
 import os
@@ -24,7 +23,7 @@ import os
 _KGPTQ = "hf://jerrywangTT/gpt-oss-20b-qb2-kgptq@110a7d8d43e2a0ec9ac12bea3f6b681e2c2d0961"
 
 # gpt-oss-20b's release settings (tt-inference-server workflows/model_specs/dev/llm.yaml, gpt-oss-20b on P300X2),
-# with the K-GPTQ prefill experts in place of GPT_OSS_DECODE_BF4_ROUNDED + GPT_OSS_PREFILL_BF4_ROUNDED.
+# with the K-GPTQ prefill experts in place of that entry's output-grouped GPTQ expert package.
 RELEASE_DEFAULTS_20B = {
     # dense weights (attention, router, LM head) GPTQ-rounded for the fused decode copies
     "GPT_OSS_DENSE_ROUNDED_DECODE": f"{_KGPTQ}/dense/dense_gptq_device.pt",

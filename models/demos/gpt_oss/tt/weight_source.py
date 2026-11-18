@@ -3,8 +3,8 @@
 
 """Where the offline-rounded gpt-oss weights named by environment variables come from.
 
-GPT_OSS_DECODE_BF4_ROUNDED, GPT_OSS_DECODE_SPLIT_ROUND_DIR (directories of layer_<L>.pt) and
-GPT_OSS_DENSE_ROUNDED_DECODE (one file) take either a local path or a Hugging Face Hub location at a pinned revision:
+GPT_OSS_DECODE_SPLIT_ROUND_DIR (a directory of layer_<L>.pt) and GPT_OSS_DENSE_ROUNDED_DECODE (one file) take either
+a local path or a Hugging Face Hub location at a pinned revision:
 
     hf://<owner>/<repo>@<revision>[/<path in the repo>]
 

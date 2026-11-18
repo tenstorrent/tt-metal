@@ -101,8 +101,7 @@ ROUTED_CACHE_SUBDIR = "experts_routed_ep"
 # groups run along the input dimension and hold those values exactly; the expert op transposes the tiles back as it
 # unpacks them (weights_tile_transposed). The tile grid, sharding and reads are unchanged. Prefills the routed path does
 # not take on its own (shorter than its minimum, or not a multiple of 64) are padded into it (MLP.__call__), so every
-# batch-1 prefill reads these weights and no separately rounded prefill copy (GPT_OSS_DECODE_BF4_ROUNDED with
-# GPT_OSS_PREFILL_BF4_ROUNDED) is needed. The bfloat8_b layers keep the checkpoint values.
+# batch-1 prefill reads these weights. The bfloat8_b layers keep the checkpoint values.
 PREFILL_KGPTQ_ENV = "GPT_OSS_PREFILL_KGPTQ"
 ROUTED_WEIGHTS_DTYPE = ttnn.bfloat4_b
 # Layers whose routed expert weights are bfloat8_b instead of bfloat4_b ("all", "" or a comma list of layer ids).

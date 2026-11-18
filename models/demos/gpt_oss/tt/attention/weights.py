@@ -75,14 +75,6 @@ def load_attention_weights(
     o_proj_pad_size = padded_local_hidden - local_hidden
     o_proj_cache_suffix = f"_padded" if o_proj_pad_size > 0 and mesh_config.tp > 1 else ""
     decode_rounded_tag = "_drnd" if os.environ.get("GPT_OSS_DENSE_ROUNDED_DECODE") else ""
-    # TEMP (layer-PCC campaign): GPT_OSS_KV_SMOOTH changes the q / k weight values (utils/lazy_state_dict.py _kv_smooth),
-    # so their caches get their own names (the scales file + mode) instead of being read stale or overwritten.
-    kv_smooth = os.environ.get("GPT_OSS_KV_SMOOTH", "")
-    kv_smooth_tag = ""
-    if kv_smooth:
-        import hashlib
-
-        kv_smooth_tag = "_kvs" + hashlib.sha1(kv_smooth.encode()).hexdigest()[:8]
 
     if state_dict:
         # Extract projection weights from state dict
@@ -146,9 +138,7 @@ def load_attention_weights(
         o_proj_bias_decode = o_proj_bias
         qkv_decode = qkv_cat
         dec = {n: substate(state_dict, n).get("weight_decode") for n in ("q_proj", "k_proj", "v_proj", "o_proj")}
-        if all(
-            v is not None for v in dec.values()
-        ):  # TEMP experiment GPT_OSS_DENSE_ROUNDED_DECODE (lazy_state_dict.py)
+        if all(v is not None for v in dec.values()):  # GPT_OSS_DENSE_ROUNDED_DECODE (utils/lazy_state_dict.py)
             parts = [
                 torch.cat(
                     [
@@ -207,7 +197,7 @@ def load_attention_weights(
         layout=ttnn.TILE_LAYOUT,
         dtype=weight_dtype,
         mesh_mapper=col_mesh_mapper,
-        cache_file_name=get_cache_file_name(tensor_cache_path, f"wqkv{kv_smooth_tag}"),
+        cache_file_name=get_cache_file_name(tensor_cache_path, "wqkv"),
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
 
@@ -217,7 +207,7 @@ def load_attention_weights(
         layout=ttnn.TILE_LAYOUT,
         dtype=bias_dtype,
         mesh_mapper=col_mesh_mapper,
-        cache_file_name=get_cache_file_name(tensor_cache_path, f"wqkv_bias{kv_smooth_tag}"),
+        cache_file_name=get_cache_file_name(tensor_cache_path, "wqkv_bias"),
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
 
@@ -279,7 +269,7 @@ def load_attention_weights(
 
         wqkv_stream_tt = stream(
             qkv_layouts,
-            ("wqkv_kvfirst" if QKV_FUSED_ROPE_KV else "wqkv") + kv_smooth_tag,
+            "wqkv_kvfirst" if QKV_FUSED_ROPE_KV else "wqkv",
             hidden_size,
             local_qkv,
             QKV_DECODE_WEIGHT_DTYPE,
