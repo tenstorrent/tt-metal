@@ -79,10 +79,10 @@ on:
         type: boolean
         default: false
         description: "Mistral4: every Mistral4 leg (also pulls kv_cache_table)"
-      llama31:
+      glm53_runner_perf_probe:
         type: boolean
         default: false
-        description: "Llama3.1: every Llama3.1 leg"
+        description: "PROBE: GLM-5.3 SC1 + SC4 runner legs only"
       gpt_oss_prefill_suite:
         type: boolean
         default: false
