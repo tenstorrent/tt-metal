@@ -249,6 +249,9 @@ class MiniMaxH3ImagePipeline(MiniMaxH3Pipeline):
         # The base `encode_prompt` frees this manager's transient ping-pong pairs after every encode (on video it is
         # shared by the VAE and the vision tower); here nothing else allocates through it, so the scope is a no-op.
         self.vae_ccl_manager = CCLManager(mesh_device=mesh_device, num_links=num_links, topology=topology)
+        # The base `_encode_prompt_device` runs the encoder to this depth; None (all layers) outside the video
+        # pipeline's reduced warm-up, which the image pipeline does not use (it warms every presentation rung in full).
+        self._warm_encoder_layers: int | None = None
         self.dit_parallel_config = DiTParallelConfig(
             tensor_parallel=ParallelFactor(mesh_axis=self.tp_axis, factor=self.tp_factor),
             sequence_parallel=ParallelFactor(mesh_axis=self.sp_axis, factor=self.sp_factor),
