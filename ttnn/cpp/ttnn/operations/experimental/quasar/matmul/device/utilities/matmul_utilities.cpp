@@ -99,6 +99,35 @@ tt::DataFormat get_interm_data_format(bool packer_l1_acc_en, bool fp32_dest_acc_
     }
 }
 
+void set_fp32_dest_unpack_modes(
+    tt::tt_metal::ProgramSpec& spec, const tt::tt_metal::DFBSpecName& partials_dfb, bool partials_to_dest) {
+    using tt::tt_metal::ComputeHardwareConfig;
+    using tt::tt_metal::DFBEndpointType;
+    using tt::tt_metal::UnpackMode;
+    for (auto& kernel : spec.kernels) {
+        auto* config = std::get_if<ComputeHardwareConfig>(&kernel.hw_config);
+        if (config == nullptr || !config->enable_32_bit_dest) {
+            continue;
+        }
+        for (const auto& binding : kernel.dfb_bindings) {
+            if (binding.endpoint_type != DFBEndpointType::CONSUMER ||
+                config->unpack_modes.find(binding.dfb_spec_name) != config->unpack_modes.end()) {
+                continue;
+            }
+            const auto dfb =
+                std::find_if(spec.dataflow_buffers.begin(), spec.dataflow_buffers.end(), [&](const auto& d) {
+                    return d.unique_id == binding.dfb_spec_name;
+                });
+            if (dfb == spec.dataflow_buffers.end() || dfb->data_format_metadata != tt::DataFormat::Float32) {
+                continue;
+            }
+            const bool to_dest = partials_to_dest && binding.dfb_spec_name == partials_dfb;
+            config->unpack_modes.emplace(
+                binding.dfb_spec_name, to_dest ? UnpackMode::UnpackToDest : UnpackMode::UnpackToSrc);
+        }
+    }
+}
+
 uint32_t get_interleaved_tile_stride(uint32_t tile_size) {
     // NOC_DRAM_READ_ALIGNMENT_BYTES (noc_parameters.h), which the readers use. Hal::get_read_alignment is not
     // reachable from TTNN (all_gather / concat note the same gap); Quasar is the one architecture whose NOC reads

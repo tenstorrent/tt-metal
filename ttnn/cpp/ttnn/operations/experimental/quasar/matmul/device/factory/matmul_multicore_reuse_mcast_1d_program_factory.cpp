@@ -5434,7 +5434,10 @@ ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_artifacts(
     const bool fuse_op = false;
 
     uint32_t num_blocks = K / in0_block_w;
-    bool packer_l1_acc_en = packer_l1_acc && num_blocks > 1;
+    // An fp32 matmul with a fused bias accumulates in L1: its partials cannot be reloaded into Dest (see
+    // partials_unpack_to_dest).
+    bool packer_l1_acc_en = operations::experimental::quasar::matmul::utilities::use_packer_l1_acc(
+        packer_l1_acc, fp32_dest_acc_en, bias_tensor.has_value(), num_blocks);
 
     tt::DataFormat interm0_data_format = operations::experimental::quasar::matmul::utilities::get_interm_data_format(
         packer_l1_acc_en, fp32_dest_acc_en, output_data_format);
@@ -6471,6 +6474,11 @@ ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_artifacts(
         .tensor_parameters = std::move(tensor_parameters),
         .work_units = std::move(work_units),
     };
+    operations::experimental::quasar::matmul::utilities::set_fp32_dest_unpack_modes(
+        spec,
+        RO_INTERM0_DFB,
+        operations::experimental::quasar::matmul::utilities::partials_unpack_to_dest(
+            fp32_dest_acc_en, bias_tensor.has_value()));
 
     return ttnn::device_operation::ProgramArtifacts{
         .spec = std::move(spec),
@@ -6531,7 +6539,10 @@ ttnn::device_operation::ProgramArtifacts create_program_mcast_in1_artifacts(
     uint32_t num_blocks = K / in0_block_w;
     // Honor packer_l1_acc whenever partials are kept between K blocks. The partials CB takes the output
     // format without it, which rounds partial sums through a block-float output (e.g. two K blocks).
-    bool packer_l1_acc_en = packer_l1_acc && num_blocks > 1;
+    // An fp32 matmul with a fused bias accumulates in L1: its partials cannot be reloaded into Dest (see
+    // partials_unpack_to_dest).
+    bool packer_l1_acc_en = operations::experimental::quasar::matmul::utilities::use_packer_l1_acc(
+        packer_l1_acc, fp32_dest_acc_en, bias_tensor.has_value(), num_blocks);
 
     tt::DataFormat interm0_data_format = operations::experimental::quasar::matmul::utilities::get_interm_data_format(
         packer_l1_acc_en, fp32_dest_acc_en, output_data_format);
@@ -7446,6 +7457,11 @@ ttnn::device_operation::ProgramArtifacts create_program_mcast_in1_artifacts(
         .tensor_parameters = std::move(tensor_parameters),
         .work_units = std::move(work_units),
     };
+    operations::experimental::quasar::matmul::utilities::set_fp32_dest_unpack_modes(
+        spec,
+        RO_INTERM0_DFB,
+        operations::experimental::quasar::matmul::utilities::partials_unpack_to_dest(
+            fp32_dest_acc_en, bias_tensor.has_value()));
 
     return ttnn::device_operation::ProgramArtifacts{
         .spec = std::move(spec),
