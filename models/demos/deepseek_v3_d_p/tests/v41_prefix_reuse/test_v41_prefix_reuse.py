@@ -117,19 +117,22 @@ def _base_env(layout: str, flag: bool, ckpts: int = 8) -> dict:
 class System:
     """One runner: the runtime (built like the runner does: compile, on_services_ready) over a fake device and export."""
 
-    def __init__(self, rt_mod=RT, kx_mod=KX, *, users=1, topk=64, flag=False):
+    def __init__(self, rt_mod=RT, kx_mod=KX, *, users=1, topk=64, flag=False, marked=False):
+        """``marked``: DS41F-0073 marked decoder chunks (every layer a block; the runtime's DECODER_MARKED must be on)."""
         F.SYS.reset()
         rt = object.__new__(rt_mod.V41PrefillRuntime)
         rt.mesh_device, rt.cfg = F.MESH, CFG
         rt.config = SimpleNamespace(is_first_rank=True, is_last_rank=True, use_trace=False, num_users=users)
         rt.chunk_size, rt.max_seq_len, rt.num_users = C, MAXSEQ, users
-        rt.pf = F.FakePrefill(CFG, chunk=C, max_seq_len=MAXSEQ, num_users=users, topk=topk)
+        rt.pf = F.FakePrefill(CFG, chunk=C, max_seq_len=MAXSEQ, num_users=users, topk=topk, decoder_marked=marked)
         rt.engram = F.FakeEngram(users, MAXSEQ)
         rt.vit, rt.num_layers, rt._request_id = None, int(CFG.n_layers), 0
         self.acks = []
         rt._ack = lambda L: self.acks.append((rt._request_id, L))
         rt._prefix = None  # what V41PrefillRuntime.__init__ sets (the base commit's runtime never reads it)
-        self.rt, self.kv = rt, F.make_export(kx_mod, CFG, max_seq_len=MAXSEQ, num_users=users)
+        rt._reuse_table, rt._reused = None, [0] * users  # ... and its DS41F-0152 reuse count
+        self.rt = rt
+        self.kv = F.make_export(kx_mod, CFG, max_seq_len=MAXSEQ, num_users=users, decoder=marked)
         self.request = 0
         self.last_did = []
         rt.compile(self.kv)

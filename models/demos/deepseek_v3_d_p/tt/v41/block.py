@@ -297,6 +297,32 @@ class V41PrefillBlock(LightweightModule):
         mark("hc.mix")
         return streams, ffn_pre
 
+    def kv_only(self, streams: list, pre_row, *, real_len: int) -> None:
+        """DS41F-0073 marked decoder chunks (V41_PREFILL_DECODER_MARKED): layer 20 on a chunk that does not run the decoder --
+        what the default prefill's KV-only layer computes (``V41Prefill._chunk``: collapse + attn norm + ``kv_only``), from
+        this block's own modules (the same weights) into this block's state, and its path-A slab entry rows. The streams are
+        left to the caller (nothing after layer 20 reads them on such a chunk)."""
+        h = self.attn_norm(self.attn_hc.collapse(streams, pre_row))
+        self.attn.kv_only(h, seq_len_actual=real_len, state=self.state, slab=True)
+        ttnn.deallocate(h)
+
+    def kv_only_islands(self, streams: list, pre_row, *, real_len: int, owned: bool, owned_pre: bool = False) -> None:
+        """``kv_only`` on the captured islands: copy the inputs in and replay island A only (mixes + collapse + attn norm; its
+        h is a persistent output, read here and never freed), then ``kv_only`` eagerly. Island B (the attention mix, MoE)
+        is not replayed: no state of it outlives a replay, and nothing reads its outputs on such a chunk."""
+        A, _B, S_in, pre_in, _y = self._islands
+        assert 0 < real_len <= self._island_chunk, (real_len, self._island_chunk)
+        for dst, src in zip(S_in, streams):
+            copy_into(dst, src)
+        copy_into(pre_in, pre_row)
+        if owned:
+            for t in streams:
+                ttnn.deallocate(t)
+        if owned_pre:
+            ttnn.deallocate(pre_row)
+        _attn_pre, _post, _comb, h = A.replay()
+        self.attn.kv_only(h, seq_len_actual=real_len, state=self.state, slab=True)
+
     # ---- trace islands (V41_PREFILL_ISLANDS, DS41F-0037 C-P1; V4-Flash's DS4F-0246/0247 pattern) ---------------------------
     # The eager prefill is host-issue bound and the mHC sites + MoE are ~60% of its programs and know nothing about the
     # chunk position: island A = attn mixes + collapse + attn norm, island B = attn mix + ffn mixes + collapse + ffn norm +

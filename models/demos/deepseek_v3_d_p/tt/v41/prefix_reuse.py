@@ -36,6 +36,14 @@ previous chunk boundary's (rows [128, 256), written by the chunk before); a skip
 partial chunk costs at most one chunk on an exact re-send and writes the ring as a cold prefill does (a resume at a boundary
 already restores the boundary's carry: _on_resume). Skips ending ON a chunk boundary (one carry) are unaffected.
 
+DS41F-0073 marked decoder chunks (V41_PREFILL_DECODER_MARKED, ``V41Prefill.decoder_marked``): every layer is built, but only
+the chunks tt-d-gen marks run layers 20..39; the others run the encoder + layer 20 KV-only into layer 20's block state. The
+retention sees what the default prefill has: layer 20 (now a block, so its restore also writes its path-A slab) and the 21
+window carries of layers 0..20 (``carry_states`` / ``V41Prefill.window_blocks``; the decoder windows are written only by
+decoder chunks), so the checkpoints and the H2 tips keep their layout. A decoder chunk is never skipped or restored
+(``begin_chunk(force=True)``: the retention resumes the model at its start and it is computed), and the chunks rebuilt silently
+before a resume run KV-only (``_compute_silent``).
+
 Image prompts: a chunk with a virtual image-span id (>= vocab) is never matched (the same span layout gives the same ids for
 different images): it is computed -- resumed at its start first, like any computed chunk, when a skipped / restored prefix
 precedes it -- and nothing of the prompt from it on is retained (nor stored, H2). The text chunks before it depend on their own
@@ -111,9 +119,17 @@ def entry_sources(pf) -> list:
     return out
 
 
+def _window_blocks(pf) -> list:
+    """``V41Prefill.window_blocks``: every block, except with marked decoder chunks the decoder layers 21..39 (stand-ins without
+    the method: every block)."""
+    wb = getattr(pf, "window_blocks", None)
+    return wb() if wb is not None else list(pf.blocks)
+
+
 def carry_states(pf, slot: int) -> list:
-    """The attention states of ``slot`` whose window carry a checkpoint holds: the blocks in order, then layer 20 KV-only."""
-    out = [blk.states[slot] for blk in pf.blocks]
+    """The attention states of ``slot`` whose window carry a checkpoint holds: the blocks in order (with marked decoder chunks
+    layers 0..20 only), then layer 20 KV-only."""
+    out = [blk.states[slot] for blk in _window_blocks(pf)]
     if pf.kv_attn is not None:
         out.append(pf.kv_states[slot])
     return out
@@ -284,9 +300,12 @@ class V41PrefixReuse:
         """H2: one ChunkStore per user slot (``ENV_STORE_GB`` split evenly). The restore writes the encoder + layer-20 KV-only
         layout's bf16 states (the production layer set, V41_PREFILL_DECODER=0); anything else is refused at startup."""
         pf, cfg = self.pf, runtime.cfg
-        assert pf.kv_attn is not None and len(pf.blocks) == cfg.first_decoder_layer, (
-            f"{ENV_STORE_GB} needs the encoder + layer-20 KV-only prefill (V41_PREFILL_DECODER=0): {len(pf.blocks)} blocks, "
-            f"kv-only {pf.kv_attn is not None}"
+        # the default prefill, or (DS41F-0073) marked decoder chunks: the same stored rows (2 / 8 / 14 and layer 20, now a block)
+        # and the same 21 carries; V41_PREFILL_DECODER=1 alone (every chunk through 40 layers) is refused
+        marked = bool(getattr(pf, "decoder_marked", False))
+        assert (pf.kv_attn is not None and len(pf.blocks) == cfg.first_decoder_layer) or marked, (
+            f"{ENV_STORE_GB} needs the encoder + layer-20 KV-only prefill (V41_PREFILL_DECODER=0) or marked decoder chunks "
+            f"(V41_PREFILL_DECODER_MARKED=1): {len(pf.blocks)} blocks, kv-only {pf.kv_attn is not None}"
         )
         for L, _attn, st, ratio, _blk in entry_sources(pf):
             assert st.compressed_kv.dtype == ttnn.bfloat16 and st.index_k.dtype == ttnn.bfloat16, (
@@ -324,9 +343,9 @@ class V41PrefixReuse:
             self.hwm[s] = 0
             self.bypass[s] = False
 
-    def begin_chunk(self, slot: int, ids, start: int, end: int, last, request_id: int = 0) -> bool:
+    def begin_chunk(self, slot: int, ids, start: int, end: int, last, request_id: int = 0, force: bool = False) -> bool:
         """True = the runtime only acknowledges this chunk (the device holds it); False = compute it (resumed first if the
-        prompt matched so far)."""
+        prompt matched so far). ``force``: always compute it (a marked decoder chunk, DS41F-0073)."""
         pr = self.ret[slot]
         self.last_restored = False
         self.replayed = False  # the resume below ran chunks through the model (silent rebuild): runtime._ids_stale
@@ -345,7 +364,9 @@ class V41PrefixReuse:
             # leaves the counters, the mask and the carries elsewhere (a7830ff1d74 skipped that: A, then an image prompt sharing
             # A's chunk 0, tripped the runtime's kv_actual assert -- host repro in test_v41_prefix_store.py)
             silent0 = pr.stats.silent_chunks
-            skipped = pr.begin_chunk(torch.tensor([int(t) for t in ids], dtype=torch.int32), start, end, last)
+            skipped = pr.begin_chunk(
+                torch.tensor([int(t) for t in ids], dtype=torch.int32), start, end, last, force_compute=bool(force)
+            )
             self.replayed = pr.stats.silent_chunks > silent0
             self.last_silent = pr.stats.silent_chunks - silent0
             assert not (image and skipped), "an image-span chunk was skipped / restored"
@@ -437,7 +458,9 @@ class V41PrefixReuse:
         embedding path (``_ids_dev`` None: bit-identical rows to the device one, DS41F-0119)."""
         assert self.pf.slot == slot, (self.pf.slot, slot)
         self.pf._ids_dev = None
-        self.pf._chunk([int(v) for v in ids.tolist()], int(start), self.rt.engram, None)
+        # marked decoder chunks: KV-only (a silent chunk precedes the resume point; the decoder starts at a computed chunk)
+        kw = {"decoder": False} if getattr(self.pf, "decoder_marked", False) else {}
+        self.pf._chunk([int(v) for v in ids.tolist()], int(start), self.rt.engram, None, **kw)
 
     def _on_resume(self, slot: int, pos: int) -> None:
         """The live carries are at the resume point ``pos`` and the chunk at ``pos`` is computed next: the export as a cold

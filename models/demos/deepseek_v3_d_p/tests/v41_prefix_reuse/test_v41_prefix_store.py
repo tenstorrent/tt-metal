@@ -421,6 +421,7 @@ class GeoSystem:
         rt.pf = F.FakePrefill(CFG, chunk=chunk, max_seq_len=maxseq, num_users=1, topk=topk)
         rt.engram = F.FakeEngram(1, maxseq)
         rt.vit, rt.num_layers, rt._request_id, rt._prefix = None, int(CFG.n_layers), 0, None
+        rt._reuse_table, rt._reused = None, [0]  # V41PrefillRuntime.__init__'s DS41F-0152 reuse count (one slot)
         rt._ack = lambda L: None
         self.C, self.rt, self.kv, self.req = int(chunk), rt, F.make_export(KX, CFG, max_seq_len=maxseq), 0
         rt.compile(self.kv)

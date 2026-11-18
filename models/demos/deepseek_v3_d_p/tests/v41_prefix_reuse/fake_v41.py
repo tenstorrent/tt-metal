@@ -22,6 +22,13 @@ carries are read to the host; the fake mesh's tensors are their replicated conte
 top-k x ratio)) gathers its source entries from the slab, not from ``compressed_kv`` (which only chunk 0's path B reads), so a
 restore that skips the slab write changes every later row. ``FakeEngram.hash_ids`` advances the n-gram history without rows.
 
+DS41F-0073 marked decoder chunks (``FakePrefill(decoder_marked=True)``, the runtime's V41_PREFILL_DECODER_MARKED): every layer is
+a block -- layer 20 a ratio-1 KV source with its own path-A slab and no A3 score mask (V4.1 runs it eagerly), layers 21..39 its
+consumers (Reuse / Reindex) -- and ``_chunk(decoder=...)`` runs layers 20..39 only when asked. A KV-only chunk runs layer 20's
+source step (the fake models ``kv_only`` as writing the rows its full forward writes: entries, keys, slab rows, carry) and skips
+21..39; the first decoder chunk of a prompt starts 21..39 at its start position from zero carries, as
+``V41Prefill._decoder_begin``.
+
 The trace-island aliasing rule (``trace_island.py``: no buffer allocated after a capture may live across a replay; DS41F-0037
 attempt 1, the H2D ids that "arrived as garbage"): every tensor records whether it was allocated after the islands' capture,
 and every chunk run on the islands REPLAYS -- it overwrites every live post-capture tensor (``SYS.replays``). A full text chunk
@@ -430,7 +437,7 @@ class FakeEngram:
 class FakePrefill:
     """The parts of ``V41Prefill`` the runtime, the export and prefix reuse touch (see the module docstring)."""
 
-    def __init__(self, cfg, *, chunk, max_seq_len, num_users=1, sp=8, topk=64):
+    def __init__(self, cfg, *, chunk, max_seq_len, num_users=1, sp=8, topk=64, decoder_marked=False):
         self.cfg, self.chunk, self.max_seq_len, self.num_users, self.sp = (
             cfg,
             int(chunk),
@@ -441,8 +448,11 @@ class FakePrefill:
         self.slot = 0
         self.islands = False
         self._ids_dev = None
-        self.n_layers = cfg.first_decoder_layer
-        self.kv_only_layer = cfg.first_decoder_layer
+        self.decoder_marked = bool(decoder_marked)
+        first = cfg.first_decoder_layer
+        self.n_layers = cfg.n_layers if self.decoder_marked else first
+        self.kv_only_layer = None if self.decoder_marked else first
+        self.dec_from = {s: None for s in range(num_users)}
         self.engrams = {L: None for L in cfg.engram_layer_ids if L < self.n_layers}
         self.blocks = []
         S_l = self.chunk // sp
@@ -452,7 +462,12 @@ class FakePrefill:
             attn = FakeAttn(L, role, topk)
             states = {}
             for s in range(num_users):
-                if role.mode == "full":
+                if role.mode == "full" and L >= first:
+                    # marked decoder chunks: layer 20 as a block -- its own slab (allocated at build), no A3 score mask
+                    cap = -(-(-(-max_seq_len // role.compress_ratio) + self.chunk) // 128) * 128
+                    slab = -(-(self.chunk + cap + WINDOW) // self.chunk) * self.chunk
+                    states[s] = FakeState(s, cap, None, slab_rows=slab)
+                elif role.mode == "full":
                     r = role.compress_ratio
                     cap = -(-max_seq_len // r) + self.chunk  # + one chunk's padded width
                     cap = -(-cap // 128) * 128
@@ -468,11 +483,15 @@ class FakePrefill:
                     states[s] = FakeState(s)
             self.blocks.append(FakeBlock(L, attn, states))
         self.by_layer = {b.layer: b for b in self.blocks}
-        r20 = cfg.role(self.kv_only_layer).compress_ratio
-        self.kv_attn = FakeAttn(self.kv_only_layer, cfg.role(self.kv_only_layer), topk)
-        self.kv_states = {s: FakeState(s, -(-max_seq_len // r20) + self.chunk) for s in range(num_users)}
+        if self.decoder_marked:
+            self.kv_attn, self.kv_states = None, {}
+        else:
+            r20 = cfg.role(self.kv_only_layer).compress_ratio
+            self.kv_attn = FakeAttn(self.kv_only_layer, cfg.role(self.kv_only_layer), topk)
+            self.kv_states = {s: FakeState(s, -(-max_seq_len // r20) + self.chunk) for s in range(num_users)}
         self.kv_actuals = {s: 0 for s in range(num_users)}
         self.calls = []
+        self.chunk_kinds = []  # (slot, start, ran the decoder) per _chunk
 
     @property
     def kv_state(self):
@@ -498,6 +517,7 @@ class FakePrefill:
         for st in states:
             st.kv_actual, st.entry_count = 0, 0
         self.kv_actual = 0
+        self.dec_from[self.slot] = None
         seen = set()
         for b in self.blocks:
             m = getattr(b.state, "score_mask", None)
@@ -509,14 +529,49 @@ class FakePrefill:
         rec("pf.enable_islands")
         assert not self.islands
         for b in self.blocks:
-            if b.attn.role.mode == "full":
+            if b.attn.role.mode == "full" and b.layer < self.cfg.first_decoder_layer:  # layer 20 (ratio 1) stays eager
                 b._attn_islands = True
         self.islands = True
         SYS.captured = True
 
+    # ---- DS41F-0073 marked decoder chunks (== V41Prefill's) ---------------------------------------------------------
+    @property
+    def decoder_from(self):
+        return self.dec_from[self.slot]
+
+    def window_blocks(self):
+        if not self.decoder_marked:
+            return list(self.blocks)
+        return [b for b in self.blocks if b.layer <= self.cfg.first_decoder_layer]
+
+    def _decoder_begin(self, start):
+        first = self.cfg.first_decoder_layer
+        if self.dec_from[self.slot] is None:
+            for b in self.blocks:
+                if b.layer > first:
+                    b.state.kv_actual = int(start)
+                    b.state.entry_count = int(start) // (self.cfg.role(b.layer).compress_ratio or 1)
+                    b.state.sliding_carry.data.zero_()
+                    rec("zero_carry", b.state.sliding_carry)
+            self.dec_from[self.slot] = int(start)
+            return
+        for b in self.blocks:
+            if b.layer > first:
+                assert b.state.kv_actual == int(start), (b.layer, b.state.kv_actual, start)
+
     # ---- the compute ------------------------------------------------------------------------------------------------
-    def _chunk(self, part, start, engram_host, on_hidden):
+    def _chunk(self, part, start, engram_host, on_hidden, decoder=None):
         real, C = len(part), self.chunk
+        run = True
+        if self.decoder_marked:
+            run = True if decoder is None else bool(decoder)
+            if run:
+                self._decoder_begin(start)
+            else:
+                self.dec_from[self.slot] = None
+        else:
+            assert not decoder, "decoder chunks need decoder_marked"
+        self.chunk_kinds.append((self.slot, int(start), bool(run)))
         rec("pf._chunk", self.slot, start, real, H(*[int(t) for t in part]) if part else 0)
         assert 0 < real <= C and (real == C or real % 128 == 0), real
         ids = torch.zeros(C, dtype=torch.int64)
@@ -529,19 +584,22 @@ class FakePrefill:
         h = H(3, ids, torch.arange(C) + start)
         rows = engram_host.rows_for(self.slot, part, start) if engram_host is not None else {}
         for blk in self.blocks:
+            if not run and blk.layer > self.cfg.first_decoder_layer:
+                break  # a KV-only chunk: layer 20 wrote its rows above, 21..39 are skipped
             if blk.layer in rows:
                 er = torch.zeros(C, dtype=torch.int64)
                 er[:real] = rows[blk.layer]
                 h = H(h, er)
             h = self._attn(blk, h, start, real)
-        st = self.kv_state
-        assert st.kv_actual == start, (st.kv_actual, start)
-        E0 = st.entry_count
-        st.compressed_kv.data[0, 0, E0 : E0 + C] = H(20, h).unsqueeze(-1)
-        st.index_k.data[0, 0, E0 : E0 + C] = H(21, h).unsqueeze(-1)
-        st.sliding_carry.data[0, 0] = H(22, h[real - WINDOW : real]).unsqueeze(-1)
-        st.entry_count += real
-        st.kv_actual += real
+        if self.kv_attn is not None:
+            st = self.kv_state
+            assert st.kv_actual == start, (st.kv_actual, start)
+            E0 = st.entry_count
+            st.compressed_kv.data[0, 0, E0 : E0 + C] = H(20, h).unsqueeze(-1)
+            st.index_k.data[0, 0, E0 : E0 + C] = H(21, h).unsqueeze(-1)
+            st.sliding_carry.data[0, 0] = H(22, h[real - WINDOW : real]).unsqueeze(-1)
+            st.entry_count += real
+            st.kv_actual += real
         self.kv_actual += real
 
     def _attn(self, blk, h, start, real):
@@ -608,15 +666,16 @@ class FakePrefill:
 
 
 # ----------------------------------------------------------------------------------------------------------- the export
-def make_export(kv_export_mod, cfg, *, max_seq_len, num_users=1):
-    """A ``V41KvExport`` of FakeT tensors in the real shapes / layouts (allocate_v41_kv_export, decoder off)."""
+def make_export(kv_export_mod, cfg, *, max_seq_len, num_users=1, decoder=False):
+    """A ``V41KvExport`` of FakeT tensors in the real shapes / layouts (allocate_v41_kv_export; ``decoder``: the window rings
+    of every compressed layer 2..39, DS41F-0073)."""
     RING = 256
     U = num_users
 
     def t(b, rows, w, dtype, layout):
         return FakeT(torch.zeros(b, 1, rows, w, dtype=torch.int64), dtype, layout, MESH)
 
-    n_win = cfg.first_decoder_layer + 1 - 2
+    n_win = (cfg.n_layers if decoder else cfg.first_decoder_layer + 1) - 2
     return kv_export_mod.V41KvExport(
         swa=t(U * 2, RING, WIDTH, "bfp8", "TILE"),
         win=t(U * n_win, RING, WIDTH, "bf16", "RM"),
@@ -650,6 +709,8 @@ def model_state(pf, slot, S, live: bool = True) -> dict:
             out[b.layer] += [st.compressed_kv.data[0, 0, :n].clone(), st.index_k.data[0, 0, :n].clone()]
         if st.slab_rm is not None:  # path A's entry rows [chunk, chunk + S / ratio)
             out[b.layer].append(st.slab_rm.data[0, 0, pf.chunk : pf.chunk + S // r].clone())
+    if pf.kv_attn is None:  # marked decoder chunks: layer 20 is a block (above)
+        return out
     st = pf.kv_states[slot]
     out[20] = ([st.kv_actual, st.entry_count, st.sliding_carry.data.clone()] if live else []) + [
         st.compressed_kv.data[0, 0, :S].clone(),

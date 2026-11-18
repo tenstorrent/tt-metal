@@ -25,8 +25,9 @@ import torch
 from loguru import logger
 
 import ttnn
-from models.demos.common.prefill.prefix_reuse import split_slot_word
+from models.demos.common.prefill.prefix_reuse import decoder_chunk_flag, split_slot_word
 
+from .decoder_cone import CONE, cone_exact
 from .kv_export import allocate_v41_kv_export, build_v41_kv_chunk_table, export_chunk
 from .prefill import V41Prefill
 
@@ -34,6 +35,14 @@ from .prefill import V41Prefill
 # decoder Reuse layers) and exports every decoder layer's window ring, so the ring replays only the prompt's last < 128
 # tokens instead of R >= 2541 (V4-Flash's prefill also ran every layer). Default 0: the encoder + layer 20 KV-only.
 DECODER = os.environ.get("V41_PREFILL_DECODER", "0") == "1"
+# DS41F-0073 marked decoder chunks: with DECODER, V41_PREFILL_DECODER_MARKED=1 runs layers 20..39 only on the chunks tt-d-gen
+# marks (pd_decoder_cone: slot word bit 28, the chunks covering the migrated prefix's last cone tokens); every other chunk runs
+# the encoder + layer 20 KV-only, as the default prefill. The decoder starts at the first marked chunk from zero windows --
+# exact at the prefix end when it started >= V41_PREFILL_DECODER_CONE (20 x 127 + 1) positions before it, or at 0, which the
+# burst's last chunk checks (decoder_cone.py). An unmarked header (an engine that does not mark) runs the decoder
+# (V41_PREFILL_DECODER=1's behaviour), so a misconfigured pair is slow, never inexact.
+DECODER_MARKED = DECODER and os.environ.get("V41_PREFILL_DECODER_MARKED", "0") == "1"
+DECODER_CONE = int(os.environ.get("V41_PREFILL_DECODER_CONE", str(CONE)))
 
 
 class V41PrefillRuntime:
@@ -81,6 +90,7 @@ class V41PrefillRuntime:
             n_layers=cfg.n_layers if DECODER else None,
             kv_only=not DECODER,
             num_users=num_users,
+            decoder_marked=DECODER_MARKED,
         )
         from blaze.models.deepseek_v4_1_flash_4_GLX.engram_host import EngramHost  # tt-blaze's ttnn-free host half
 
@@ -125,6 +135,8 @@ class V41PrefillRuntime:
         # prefill-side prefix reuse H1 (V41_PREFILL_PREFIX_REUSE=1, tt/v41/prefix_reuse.py): built in compile(); None = off.
         # H2 (+ V41_PREFILL_PREFIX_STORE_GB > 0): its host chunk store
         self._prefix = None
+        # DS41F-0073 marked decoder chunks: (slot, burst end, decoder start) per marked burst's last chunk (tests read it)
+        self.cone_checks: list = []
 
     # ---- KV export ----------------------------------------------------------------------------------------------------
     def allocate_kv_cache(self):
@@ -173,6 +185,13 @@ class V41PrefillRuntime:
         self.prefill_chunk(
             [0] * self.chunk_size, kv_caches, slot_id=0, actual_start=0, actual_end=self.chunk_size, warmup=True
         )
+        if DECODER_MARKED:
+            # the KV-only chunk's programs (layer 20 kv_only + its slab write; position-independent) next to the decoder
+            # chunk's, before any capture -- from a clean slate (the warm-ups above may have run to the capacity)
+            C = self.chunk_size
+            self.pf.reset()
+            self.pf._chunk([0] * C, 0, self.engram, None, decoder=False)
+            export_chunk(kv_caches, self.pf, 0, 0, C, decoder=False)
         self.pf.reset()
         kv_caches.zero_all()
         ttnn.synchronize_device(self.mesh_device)
@@ -215,8 +234,11 @@ class V41PrefillRuntime:
     ):
         # tt-d-gen device.prefill.mark_last_chunk (tt-blaze G53F-0311): bit 29 of the slot word on every chunk header, bit 30 on
         # a burst's last one. Split always (a plain slot word passes through unchanged); only prefix reuse reads `last`.
-        slot_id, last = split_slot_word(slot_id)
+        word = slot_id
+        slot_id, last = split_slot_word(word)
         assert 0 <= slot_id < self.num_users, (slot_id, self.num_users)
+        # DS41F-0073 marked decoder chunks: None = every built layer (default prefill / V41_PREFILL_DECODER=1)
+        decoder = self._decoder_for(word) if not warmup else None
         if int(actual_end) <= int(actual_start):
             return self._empty_chunk(input_tensor, int(slot_id), int(actual_start), int(request_id), warmup)
         self.pf.use_slot(int(slot_id))
@@ -237,7 +259,10 @@ class V41PrefillRuntime:
             if int(actual_start) == 0:
                 self._request_image_rows(int(slot_id))  # the request's sidecar even when its chunk 0 is skipped
                 image_rows_done = True
-            if reuse.begin_chunk(int(slot_id), ids[:real], int(actual_start), int(actual_end), last, int(request_id)):
+            # a decoder chunk is always computed (resumed at its start): neither a skip nor a restore runs layers 21..39
+            if reuse.begin_chunk(
+                int(slot_id), ids[:real], int(actual_start), int(actual_end), last, int(request_id), force=bool(decoder)
+            ):
                 self._skip_chunk(
                     int(slot_id), int(actual_start), int(actual_end), int(request_id), t_skip, reuse.last_restored
                 )
@@ -266,7 +291,7 @@ class V41PrefillRuntime:
                 f"islands while this chunk's H2D ids tensor waited unread)"
             )
         try:
-            self.pf._chunk([int(v) for v in ids[:real]], int(actual_start), self.engram, None)
+            self.pf._chunk([int(v) for v in ids[:real]], int(actual_start), self.engram, None, decoder=decoder)
         except BaseException:
             if reuse is not None:
                 reuse.invalidate(int(slot_id), "a chunk failed")
@@ -274,7 +299,9 @@ class V41PrefillRuntime:
         finally:
             self.pf._ids_dev = None
         t1 = time.time()
-        export_chunk(kv_caches, self.pf, slot_id, int(actual_start), int(actual_end))
+        export_chunk(kv_caches, self.pf, slot_id, int(actual_start), int(actual_end), decoder=decoder)
+        if DECODER_MARKED and last and not warmup:
+            self._check_cone(int(slot_id), int(actual_end))
         if self._prefix is not None:
             self._prefix.note_export(int(slot_id), int(actual_start))
         if reuse is not None:
@@ -316,8 +343,45 @@ class V41PrefillRuntime:
             f"(compute issue {t1 - t0:.2f} + export issue {t2 - t1:.2f} + sync {t3 - t2:.2f} + acks {t4 - t3:.2f})"
             + (f" (incl. host-store read {t_store:.3f})" if t_store else "")
             + (" (warm-up)" if warmup else "")
+            + ({True: " (decoder)", False: " (encoder + layer 20 KV-only)"}.get(decoder, "") if DECODER_MARKED else "")
         )
         return None
+
+    def _decoder_for(self, word: int):
+        """DS41F-0073: what a chunk runs, from its header's slot word -- None (every built layer) unless
+        V41_PREFILL_DECODER_MARKED; then True on a chunk tt-d-gen marks for the decoder, False on another marked one, and True
+        (logged once) on an unmarked header: an engine that does not mark may send any chunk as the last."""
+        if not DECODER_MARKED:
+            return None
+        flag = decoder_chunk_flag(word)
+        if flag is None:
+            if not getattr(self, "_warned_unmarked", False):
+                self._warned_unmarked = True
+                logger.warning(
+                    "[v41 runtime] V41_PREFILL_DECODER_MARKED: unmarked chunk headers (tt-d-gen without "
+                    "device.prefill.mark_last_chunk + pd_decoder_cone): every chunk runs the decoder layers"
+                )
+            return True
+        return flag
+
+    def _check_cone(self, slot: int, end: int) -> None:
+        """A marked burst's last chunk: the export's decoder windows are exact only when the decoder started at 0 or at least
+        DECODER_CONE positions before ``end`` (prefill.py's docstring). Logged, not fatal: a burst the decode side declined is
+        cut short (decline_cuts_prefill) and never shipped, and the runner cannot tell it from a prefix end; on a shipped one
+        it means tt-d-gen's pd_decoder_cone / pd_decoder_chunk do not match this runner."""
+        d = self.pf.decoder_from
+        if d is None:
+            logger.warning(
+                f"[v41 runtime] slot {slot}: burst ended at {end} with no decoder chunk (a declined burst cut short, or "
+                f"tt-d-gen without pd_decoder_cone: then the decode side must replay >= {DECODER_CONE} tokens)"
+            )
+        elif not cone_exact(end, d, DECODER_CONE):
+            logger.warning(
+                f"[v41 runtime] slot {slot}: the decoder started at {d}, {end - d} < {DECODER_CONE} positions before the "
+                f"burst's end {end}: its windows are not exact there (a declined burst cut short, or a tt-d-gen "
+                f"pd_decoder_cone / pd_decoder_chunk mismatch)"
+            )
+        self.__dict__.setdefault("cone_checks", []).append((int(slot), int(end), d))
 
     @staticmethod
     def _ids_stale(reuse) -> bool:
@@ -521,6 +585,7 @@ class V41PrefillRuntime:
         n = 0
         for s0 in range(start, self.max_seq_len, self.chunk_size):
             real = min(self.chunk_size, self.max_seq_len - s0)
+            # every built layer (marked decoder chunks: the decoder's live-width programs at every position too)
             self.pf._chunk([int(v) for v in ids[:real]], s0, self.engram, None)
             export_chunk(kv_caches, self.pf, slot, s0, s0 + real)
             n += 1

@@ -26,7 +26,9 @@ export's state at a partial end needs more than the carries at ``e`` (V4.1's win
 Which chunk is last: the prefill worker marks it (tt-d-gen ``device.prefill.mark_last_chunk``): every chunk header's slot
 word carries bit 29 ("this header is marked") and, on a burst's last chunk, bit 30 (``split_slot_word``). Per header, so
 nothing is learned across requests (an aborted request ends without a last chunk; a restarted engine may not mark). An
-unmarked header may be the last chunk.
+unmarked header may be the last chunk. tt-d-gen ``pd_decoder_cone`` (tt-blaze DS41F-0073) also sets bit 28 on a MARKED header
+whose chunk the runner must compute through every layer it built (``decoder_chunk_flag``); ``begin_chunk(force_compute=True)``
+then never skips or restores it (it is resumed at its start like any computed chunk).
 
 The first chunk that is not skipped RESUMES the model at its start ``s``: its non-positional state is restored from the
 checkpoint at ``s`` (or is live), or rebuilt from the nearest checkpoint ``b < s`` by recomputing ``[b, s)`` in full chunks
@@ -73,6 +75,7 @@ import torch
 
 MARKED_FLAG = 1 << 29  # tt-d-gen device.prefill.mark_last_chunk: set in EVERY chunk header's slot word
 LAST_CHUNK_FLAG = 1 << 30  # ... and this one on a burst's last chunk
+DECODER_CHUNK_FLAG = 1 << 28  # tt-d-gen pd_decoder_cone: this chunk runs every layer (V4.1's decoder cone)
 _SENTINEL_BIT = 1 << 31  # the runner's shutdown / warm-up words (0xFFFFFFFF-style): never split
 
 
@@ -83,7 +86,16 @@ def split_slot_word(word: int) -> tuple[int, Optional[bool]]:
     word = int(word)
     if word < 0 or word & _SENTINEL_BIT or not word & MARKED_FLAG:
         return word, None
-    return word & ~(MARKED_FLAG | LAST_CHUNK_FLAG), bool(word & LAST_CHUNK_FLAG)
+    return word & ~(MARKED_FLAG | LAST_CHUNK_FLAG | DECODER_CHUNK_FLAG), bool(word & LAST_CHUNK_FLAG)
+
+
+def decoder_chunk_flag(word: int) -> Optional[bool]:
+    """tt-d-gen pd_decoder_cone: True / False on a marked header (bit 28 = run the decoder layers on this chunk), None on an
+    unmarked one or a sentinel (an engine that does not mark: nothing is known)."""
+    word = int(word)
+    if word < 0 or word & _SENTINEL_BIT or not word & MARKED_FLAG:
+        return None
+    return bool(word & DECODER_CHUNK_FLAG)
 
 
 # ------------------------------------------------------------------------------------------------ H2: chain hash, memory
@@ -538,6 +550,7 @@ class ReuseStats:
     checkpoints_saved: int = 0
     carry_exports: int = 0
     marked_chunks: int = 0
+    forced_chunks: int = 0  # begin_chunk(force_compute=True): computed whatever the retention holds
     invalidations: int = 0
     # H2
     restored_chunks: int = 0
@@ -637,10 +650,13 @@ class PrefixRetention:
         return None if slot is None else ("ckpt", slot)
 
     # ------------------------------------------------------------------ per chunk
-    def begin_chunk(self, ids: torch.Tensor, start: int, end: int, last: Optional[bool]) -> bool:
+    def begin_chunk(
+        self, ids: torch.Tensor, start: int, end: int, last: Optional[bool], force_compute: bool = False
+    ) -> bool:
         """Called before a non-empty chunk ``[start, end)``; ``last`` from ``split_slot_word`` (None = unmarked header).
         True = skipped or (H2) restored (the caller only acknowledges it); False = compute it (the model is resumed at
-        ``start`` first if the prompt matched so far)."""
+        ``start`` first if the prompt matched so far). ``force_compute``: never skip or restore this chunk (a chunk that
+        must run layers a skip or a restore cannot rebuild, e.g. tt-d-gen ``pd_decoder_cone``'s decoder chunks)."""
         start, end = int(start), int(end)
         self.last_restored = False
         if last is not None:
@@ -650,7 +666,9 @@ class PrefixRetention:
         ids = ids.to(torch.int32).flatten()
         self._chain_step(ids, start, end)
         partial = (end - start) < self.chunk  # a partial (ragged) chunk is always the burst's last
-        if (
+        if force_compute:
+            self.stats.forced_chunks += 1
+        elif (
             self.matching
             and start == self.cursor
             and end <= self.length
@@ -911,7 +929,7 @@ class PrefixRetention:
             f"{sorted(p // self.chunk for p in self.pool.by_pos)} chunk(s); prompts {s.prompts}, resumed {s.resumed_prompts}, "
             f"skipped {s.skipped_chunks} chunk(s) / {s.skipped_tokens} tokens, silent {s.silent_chunks}, computed "
             f"{s.computed_chunks}, checkpoints saved {s.checkpoints_saved} (evicted {self.pool.evictions}), carry exports "
-            f"{s.carry_exports}, marked headers {s.marked_chunks}, invalidations {s.invalidations}"
+            f"{s.carry_exports}, marked headers {s.marked_chunks}, forced {s.forced_chunks}, invalidations {s.invalidations}"
             + (
                 f"; restored {s.restored_chunks} chunk(s) / {s.restored_tokens} tokens, stored {s.stored_chunks}, spills "
                 f"{s.spills}, host carries {s.host_carries_loaded}; {self.store.summary()}"

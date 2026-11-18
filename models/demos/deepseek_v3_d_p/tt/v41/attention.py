@@ -1078,10 +1078,16 @@ class V41CSAReindex(_V41QStem, TtCSA):
         return self._o_proj(attn)
 
 
-def _kv_only(self, hidden_states, seq_len_actual=None, *, state):
+def _kv_only(self, hidden_states, seq_len_actual=None, *, state, slab: bool = False):
     """Layer 20 in the prefill (DS41F-0037): the decoder's shared KV and index keys from the encoder output -- the window KV
     stem, the ratio-1 compressor (``norm(wkv(x))`` + RoPE) and the index keys -- written to ``state`` with no attention, no
-    o-proj and no FFN (the ring replays the prompt's tail through layers 20..39 itself)."""
+    o-proj and no FFN (the ring replays the prompt's tail through layers 20..39 itself).
+
+    ``slab`` (DS41F-0073 marked decoder chunks, V41_PREFILL_DECODER_MARKED): ``state`` is layer 20's BLOCK state, whose full
+    forward later runs on the decoder chunks of the same prompt -- its path-A sparse gather and its consumers' read the
+    entries from the slab ``[chunk | entries | carry]``, not from ``compressed_kv``, so the entries go there too, at the row
+    ``TtCSA.forward`` writes them (chunk + entry index). The KV-only layer of the default prefill has no slab (False).
+    """
     real_len = hidden_states.shape[2] * self.sp_factor if seq_len_actual is None else int(seq_len_actual)
     rate = self.compressor.compress_rate
     assert state.kv_actual % ttnn.TILE_SIZE == 0 and state.kv_actual + real_len <= state.max_seq_len
@@ -1092,6 +1098,8 @@ def _kv_only(self, hidden_states, seq_len_actual=None, *, state):
     keys, _, _ = self.indexer.compressor(hidden_states, real_len, fwp, state.prior_i, need_mask=False)
     ttnn.kv_cache.fill_cache_for_user_(state.compressed_kv, entries, 0, update_idx=state.entry_count)
     ttnn.kv_cache.fill_cache_for_user_(state.index_k, keys, 0, update_idx=state.entry_count)
+    if slab and self.sparse_path:
+        self._slab_write(state, entries, hidden_states.shape[2] * self.sp_factor + state.entry_count)
     if self.sp_factor > 1:
         sliding_kv = ttnn.experimental.all_gather_async(
             sliding_kv,

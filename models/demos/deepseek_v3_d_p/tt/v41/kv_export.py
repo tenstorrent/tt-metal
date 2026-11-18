@@ -273,12 +273,16 @@ def _carry_ring_block(state, kv_actual: int):
     return (kv_actual - 128) % RING, state.sliding_carry
 
 
-def export_chunk(exp: V41KvExport, pf, slot: int, start: int, end: int) -> None:
+def export_chunk(exp: V41KvExport, pf, slot: int, start: int, end: int, decoder=None) -> None:
     """Write the rows chunk [start, end) produced into the export caches (after ``pf._chunk``). ``pf`` is the
-    ``V41Prefill``; its states already include the chunk."""
+    ``V41Prefill``; its states already include the chunk. ``decoder`` False (DS41F-0073 marked decoder chunks: a KV-only
+    chunk) skips the decoder layers 21..39, whose states the chunk did not touch: their window rings are written by decoder
+    chunks only (zero until then, as after zero_slot)."""
     E = int(end)
     for blk in pf.blocks:
         L, attn, st = blk.layer, blk.attn, blk.state
+        if decoder is False and L > pf.cfg.first_decoder_layer:
+            continue
         r = pf.cfg.role(L)
         row0, carry = _carry_ring_block(st, E)
         if r.mode == "swa":
@@ -384,7 +388,8 @@ def export_windows(exp: V41KvExport, pf, slot: int, end: int, carries=None) -> N
     state, in ``prefix_reuse.carry_states`` order: the blocks, then the KV-only layer) or, None, the live states."""
     row0 = _ring_row0(end)
     i = 0
-    for blk in pf.blocks:
+    wb = getattr(pf, "window_blocks", None)  # DS41F-0073 marked decoder chunks: layers 0..20 (carry_states' blocks)
+    for blk in wb() if wb is not None else pf.blocks:
         L, attn = blk.layer, blk.attn
         carry = blk.state.sliding_carry if carries is None else carries[i]
         i += 1

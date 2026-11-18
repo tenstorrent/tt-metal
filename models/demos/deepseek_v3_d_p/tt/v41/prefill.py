@@ -7,6 +7,16 @@ before 1 and 14) in full and layer 20 KV-only, eager, chunked.
     pf.prefill(ids, engram_host)            # tt-blaze EngramHost: the n-gram hashes + table rows per position
     snap = pf.cache_snapshot()              # == tt-blaze golden ``cache_snapshot_of`` (prefill_trace.py) for layers 0..20
 
+DS41F-0073 marked decoder chunks (``decoder_marked``, the runtime's V41_PREFILL_DECODER_MARKED=1 with V41_PREFILL_DECODER=1):
+all 40 layers are built, but a chunk runs layers 20..39 only when asked (``_chunk(decoder=True)``, tt-d-gen marks the chunks
+covering the migrated prefix's last ``pd_decoder_cone`` tokens); every other chunk runs the encoder and layer 20 KV-only into
+layer 20's BLOCK state (``V41PrefillBlock.kv_only``: its entries, index keys, window carry and path-A slab rows), i.e. what
+the default prefill computes. The first decoder chunk of a prompt starts layers 21..39 at its start position from ZERO windows
+(the zero rows the ring's replay starts from today): by the replay argument below, every decoder layer's state is exact from
+20 x 127 + 1 positions on, so the export at the prefix end is exact when the decoder started >= 2541 positions before it (or at
+0). Zeroing (not keeping the slot's previous prompt's windows) changes no exact row; it makes every row independent of what the
+slot held before, so runs compare byte for byte.
+
 What the decode ring needs after the prompt (tt-blaze ``docs/deepseek_v4_1_flash/disagg_prefill_plan.md``): every layer's
 window (the last 128 positions), the KV sources' compressed entries (2 / 8 / 14 at ratio 2; layer 20 at ratio 1) and the
 index keys (2 / 8 / 14 / 20). The decoder layers 21..39 start empty: the ring replays the prompt's last R >= 2541 tokens,
@@ -120,6 +130,7 @@ class V41Prefill:
         weight_cache_path=None,
         load_routed_from_cache: bool = False,
         num_users: int = 1,
+        decoder_marked: bool = False,
     ):
         self.mesh, self.cfg, self.ck = mesh_device, cfg, ck
         self.num_users, self.slot = int(num_users), 0
@@ -136,6 +147,13 @@ class V41Prefill:
         self.kv_only_layer = (
             cfg.first_decoder_layer if kv_only else None
         )  # layer 20: the decoder's shared KV + index keys
+        # DS41F-0073 marked decoder chunks: every layer built, layers 20..39 run only on the chunks _chunk is told to
+        self.decoder_marked = bool(decoder_marked)
+        assert not self.decoder_marked or (
+            not kv_only and self.n_layers == cfg.n_layers
+        ), "decoder_marked needs all layers built as blocks (n_layers = cfg.n_layers, kv_only=False)"
+        # per slot: where the current prompt's decoder started (None = not since the last reset / KV-only chunk)
+        self.dec_from = {s: None for s in range(self.num_users)}
         S_l = self.chunk // self.sp
         self.rotary_emb = DeepseekV4RotaryEmbedding(v41_hf_config(cfg, max_seq=self.max_seq_len))
         mk = dict(sp_axis=sp_axis, tp_axis=tp_axis, topology=topology)
@@ -165,7 +183,15 @@ class V41Prefill:
                 **mk,
             )
             for slot in range(self.num_users):  # one attention state per user (the weights are shared)
-                blk.alloc_state(self.max_seq_len, self.chunk, slot=slot)
+                st = blk.alloc_state(self.max_seq_len, self.chunk, slot=slot)
+                if self.decoder_marked and L > cfg.first_decoder_layer and getattr(self, "_zero_carry", None) is None:
+                    # the zero window _decoder_begin copies into layers 21..39's carries: a fresh state's carry (zeros), cloned
+                    # now -- before any trace-island capture
+                    self._zero_carry = ttnn.clone(st.sliding_carry)
+                if self.decoder_marked and L == cfg.first_decoder_layer and getattr(blk.attn, "sparse_path", False):
+                    # layer 20's path-A slab now, not at its first write: a KV-only chunk writes it (kv_only(slab=True)),
+                    # possibly first on a later request, after the trace-island capture (DS41F-0037 10-10 21:25 class)
+                    blk.attn._slab_alloc(st)
             self.blocks.append(blk)
             logger.info(f"[v41 prefill] layer {L} ({cfg.role(L).mode}) built, {time.time() - t0:.0f} s")
         self.kv_attn = self.kv_hc = self.kv_norm = None
@@ -233,6 +259,39 @@ class V41Prefill:
         for b in self.blocks:
             b.use_slot(self.slot)
 
+    # ---- DS41F-0073 marked decoder chunks ------------------------------------------------------------------------------
+    @property
+    def decoder_from(self):
+        """The CURRENT slot's prompt: where its decoder layers started (None = no decoder chunk since the last reset or the
+        last KV-only chunk)."""
+        return self.dec_from[self.slot]
+
+    def window_blocks(self) -> list:
+        """The blocks whose window carry a KV-only chunk keeps current (prefix reuse checkpoints them; the export's window rings
+        from carries write them): every block, except with ``decoder_marked`` the decoder layers 21..39, whose windows
+        only decoder chunks write."""
+        if not self.decoder_marked:
+            return list(self.blocks)
+        return [b for b in self.blocks if b.layer <= self.cfg.first_decoder_layer]
+
+    def _decoder_begin(self, start: int) -> None:
+        """A decoder chunk at ``start``: the first of the prompt (or the first after a KV-only chunk) starts layers 21..39 here
+        -- counters at ``start``, their window carries zero (the replay argument: exact >= 2541 positions on); a later one
+        must continue them."""
+        first = self.cfg.first_decoder_layer
+        if self.dec_from[self.slot] is None:
+            for b in self.blocks:
+                if b.layer > first:
+                    ratio = self.cfg.role(b.layer).compress_ratio or 1
+                    b.state.kv_actual = int(start)
+                    b.state.entry_count = int(start) // ratio
+                    ttnn.copy(self._zero_carry, b.state.sliding_carry)  # INTO the buffer (the islands read its address)
+            self.dec_from[self.slot] = int(start)
+            return
+        for b in self.blocks:
+            if b.layer > first:
+                assert b.state.kv_actual == int(start), (b.layer, b.state.kv_actual, start)
+
     def reset(self) -> None:
         """A new prompt in the CURRENT slot: its attention states' counters back to 0. Path B's masks are built from the counters
         (entries / window rows past them read -inf, chunk 0's carry columns are masked), so no device contents need to
@@ -241,6 +300,7 @@ class V41Prefill:
         for st in states:
             st.kv_actual, st.entry_count = 0, 0
         self.kv_actual = 0
+        self.dec_from[self.slot] = None
         # DS41F-0068 path A3: the static scorer reads the slot's score mask (shared by the slot's sources), which each traced
         # chunk's glue opens column by column -> every entry column back to -inf (a device copy), once per mask
         seen = set()
@@ -413,9 +473,25 @@ class V41Prefill:
         self.islands = True
         logger.info(f"[v41 prefill] trace islands captured for {len(self.blocks)} blocks in {time.time() - t0:.1f} s")
 
-    def _chunk(self, part: list[int], start: int, engram_host, on_hidden):
+    def _run_decoder(self, decoder, start: int) -> bool:
+        """``_chunk``'s ``decoder`` -> run layers 20..39 on this chunk? None = every built layer (the default prefill: the
+        encoder + layer 20 KV-only; V41_PREFILL_DECODER=1: all 40). False needs ``decoder_marked``."""
+        if not self.decoder_marked:
+            assert decoder is None or bool(decoder) == (self.kv_only_layer is None), (decoder, self.kv_only_layer)
+            return False
+        run = True if decoder is None else bool(decoder)
+        if run:
+            self._decoder_begin(start)
+        else:
+            self.dec_from[self.slot] = None  # a KV-only chunk: a later decoder chunk starts the decoder afresh
+        return run
+
+    def _chunk(self, part: list[int], start: int, engram_host, on_hidden, decoder=None):
+        """One chunk at ``start``. ``decoder`` (``decoder_marked`` only; None = all built layers): True runs layers 20..39
+        too, False the encoder + layer 20 KV-only."""
+        kv_only20 = not self._run_decoder(decoder, start) and self.decoder_marked
         if self.islands:
-            return self._chunk_islands(part, start, engram_host)
+            return self._chunk_islands(part, start, engram_host, kv_only20=kv_only20)
         real_len = len(part)
         prof = PhaseProfile(self.mesh) if PROFILE else None
         mark = prof if prof is not None else (lambda name: None)
@@ -427,6 +503,10 @@ class V41Prefill:
         mark("engram.host")
         for blk in self.blocks:
             L = blk.layer
+            if kv_only20 and L >= self.cfg.first_decoder_layer:
+                blk.kv_only(streams, pre, real_len=real_len)  # layer 20 KV-only; 21..39 skipped
+                mark("kv_only")
+                break
             if L in self.engrams:
                 assert L in rows, f"layer {L} needs Engram rows (pass an EngramHost)"
                 rd = self.engrams[L].upload_rows(rows[L], self.chunk)
@@ -450,9 +530,10 @@ class V41Prefill:
         if prof is not None:
             self.last_profile = prof.report(f"chunk [{start}, {start + real_len}) slot {self.slot}")
 
-    def _chunk_islands(self, part: list[int], start: int, engram_host):
+    def _chunk_islands(self, part: list[int], start: int, engram_host, kv_only20: bool = False):
         """``_chunk`` on the captured islands: the embedding streams, the pre row and the Engram outputs are eager (owned,
-        freed by the block after its copy-in); each block's outputs are its island's persistent buffers."""
+        freed by the block after its copy-in); each block's outputs are its island's persistent buffers. ``kv_only20``:
+        layer 20 replays only its island A, then KV-only (``V41PrefillBlock.kv_only_islands``); 21..39 are skipped."""
         real_len = len(part)
         prof = PhaseProfile(self.mesh) if PROFILE else None
         mark = prof if prof is not None else (lambda name: None)
@@ -489,6 +570,10 @@ class V41Prefill:
                         ttnn.deallocate(t)
                 streams, owned = new, True
                 mark("engram.dev")
+            if kv_only20 and L >= self.cfg.first_decoder_layer:
+                blk.kv_only_islands(streams, pre, real_len=real_len, owned=owned, owned_pre=blk is self.blocks[0])
+                mark("kv_only")
+                break
             streams, pre = blk.forward_islands(
                 streams, pre, real_len=real_len, owned=owned, owned_pre=blk is self.blocks[0]
             )
