@@ -175,7 +175,7 @@ and so on, in list order.
 
 A checkpoint is a directory holding the model's weights in the format `checkpoint.format` picks, and
 `trainer_state.json`: the step, epoch and metrics at the save, the format, and the base model the run trains
-(`name_or_path`, and `revision`: the hub commit it was downloaded at, `null` for a local directory).
+(`name_or_path`).
 
 ```yaml
 checkpoint:
@@ -199,7 +199,7 @@ k and v fused, the q and k rows permuted for RoPE, and the vocabulary padded.
 
 The base model comes back from what the checkpoint records:
 
-- A PEFT adapter names it in `adapter_config.json`, as `base_model_name_or_path` and `revision`, so
+- A PEFT adapter names it in `adapter_config.json`, as `base_model_name_or_path`, so
   `AutoPeftModelForCausalLM.from_pretrained(path)` loads the adapter on the model it was trained on.
 - A `tt` checkpoint names it in the header of `checkpoint.pkl`, with the LoRA `r`, `alpha` and `target_modules`.
 

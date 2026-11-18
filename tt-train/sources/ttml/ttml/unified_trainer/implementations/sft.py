@@ -16,8 +16,6 @@ from ttml.datasets.provider.sft import get_provider as get_dataset_provider
 from ttml.datasets.provider.sft import providers as dataset_providers
 from ttml.models.provider import UnsupportedTrainingConfig
 from ttml.models.provider import get_provider as get_model_provider
-from ttml.models.utils.hub import model_revision
-
 from ..configs import SFTTrainerConfig
 from ..managers.device import DeviceManager
 from ..utils import CombinedOptimizer, assign_parameters, staged_directory, write_trainer_state
@@ -186,5 +184,5 @@ class SFTTrainer(Trainer):
             )
 
     def _base_model(self) -> dict:
-        """The model the run trains, as a checkpoint records it: its name, and its hub commit."""
-        return {"name_or_path": self.config.model.name, "revision": model_revision(self.config.model.name)}
+        """The model the run trains, as a checkpoint records it."""
+        return {"name_or_path": self.config.model.name}

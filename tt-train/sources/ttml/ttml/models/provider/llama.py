@@ -28,7 +28,7 @@ import numpy as np
 
 from ..utils.checkpoint import TT_CHECKPOINT, AdapterState, PathLike, read_adapter, write_adapter
 from ..utils.errors import UnsupportedTrainingConfig
-from ..utils.hub import load_hf_config, model_dir, model_revision, same_model
+from ..utils.hub import load_hf_config, model_dir, same_model
 from ..utils.peft import check_peft_keys, lora_to_peft, peft_adapter_config, peft_to_lora, with_peft_prefix
 from .base import ModelProvider
 
@@ -250,7 +250,7 @@ class LlamaProvider(ModelProvider):
 
     def _tt_header(self) -> dict:
         return {
-            "base_model": {"name_or_path": self.config.model.name, "revision": model_revision(self.config.model.name)},
+            "base_model": {"name_or_path": self.config.model.name},
             "model_type": self.hf_config.get("model_type"),
             "lora": self._lora_settings(),
         }
@@ -298,7 +298,6 @@ class LlamaProvider(ModelProvider):
                 dropout=lora.dropout,
                 target_modules=hf_target_modules(lora),
                 task_type=lora.task_type,
-                revision=model_revision(self.config.model.name),
             ),
         )
 

@@ -9,7 +9,7 @@ from __future__ import annotations
 import json
 import os
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any
 
 # What a model is built from: the weights, the configs and the tokenizer.
 _MODEL_FILES = ["*.safetensors", "*.json", "tokenizer.model", "chat_template.jinja"]
@@ -35,14 +35,6 @@ def model_dir(model_name: str, local_only: bool = False) -> str:
     from huggingface_hub import snapshot_download
 
     return snapshot_download(model_name, allow_patterns=_MODEL_FILES, local_files_only=local_only)
-
-
-def model_revision(model_name: str) -> Optional[str]:
-    """The hub commit of the copy of a hub model that ``model_dir`` downloaded; None for a local directory."""
-    if Path(model_name).is_dir():
-        return None
-    # The hub cache keeps each commit in snapshots/<commit>/.
-    return Path(model_dir(model_name, local_only=True)).name
 
 
 def same_model(base: Any, model_name: str) -> bool:

@@ -131,15 +131,13 @@ def peft_adapter_config(
     dropout: float,
     target_modules: Sequence[str],
     task_type: str,
-    revision: Optional[str] = None,
 ) -> dict[str, Any]:
-    """The ``adapter_config.json`` ``PeftModel.save_pretrained`` writes for this adapter, of ``base_model`` at the hub
-    commit ``revision`` (None for a local directory)."""
+    """The ``adapter_config.json`` ``PeftModel.save_pretrained`` writes for this adapter of ``base_model``."""
     return {
         "peft_type": "LORA",
         "task_type": task_type,
         "base_model_name_or_path": base_model,
-        "revision": revision,
+        "revision": None,
         "r": r,
         "lora_alpha": alpha,
         "lora_dropout": dropout,
