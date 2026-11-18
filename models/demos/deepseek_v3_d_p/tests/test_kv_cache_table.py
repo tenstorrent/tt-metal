@@ -530,7 +530,9 @@ def test_kimi_k3_kv_cache_table(mesh_device, device_params, model, tmp_path, mon
                     shard_major[slot * len(layers) + slab], natural_positions, _K3_STAGE_SEQ_LEN
                 ).to(torch.bfloat16)
                 for position in range(0, _K3_STAGE_SEQ_LEN, NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK):
-                    raw = table.read_device_chunk(layer=layer, position=position, slot=slot, config_id=config_id)
+                    raw = table.read_device_chunk(
+                        mesh_device, layer=layer, position=position, slot=slot, config_id=config_id
+                    )
                     assert_equal(
                         _decode_kv_chunk(raw, head_dim).to(torch.bfloat16),
                         expected[position : position + NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK],
@@ -547,7 +549,8 @@ def test_kimi_k3_kv_cache_table(mesh_device, device_params, model, tmp_path, mon
         for (slot, layer), pattern in patterns.items():
             segments = {
                 segment: segment_to_torch(
-                    table.read_device_chunk(layer, kda_position(geometry, kind, segment), slot, config_id), geometry
+                    table.read_device_chunk(mesh_device, layer, kda_position(geometry, kind, segment), slot, config_id),
+                    geometry,
                 )
                 for segment in range(kda_segments_per_layer(geometry, kind))
             }
