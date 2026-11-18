@@ -1377,14 +1377,17 @@ class TestJobOwnership:
 
         from ttnn.distributed.ttrun import run_launcher
 
-        # a launcher that would run for a long time; SIGTERM at tt-run must reach it and end the wait quickly
+        # A SIGTERM at tt-run is relayed to the launcher as SIGUSR1 (which PRRTE forwards to the ranks for a
+        # graceful teardown). This launcher models that: it traps SIGUSR1 and exits 0 as prterun would once its
+        # ranks finalize. tt-run must still report the stop as 128 + SIGTERM (the original signal).
         def later():
             time.sleep(0.5)
             os.kill(os.getpid(), signal.SIGTERM)
 
         threading.Thread(target=later, daemon=True).start()
         t0 = time.time()
-        rc = run_launcher(["sleep", "30"], cwd=Path.cwd())
+        # short sleeps so the USR1 trap runs promptly (bash defers a trap until the running command returns)
+        rc = run_launcher(["bash", "-c", "trap 'exit 0' USR1; while :; do sleep 0.2; done"], cwd=Path.cwd())
         assert time.time() - t0 < 5
         assert rc == 128 + signal.SIGTERM
 

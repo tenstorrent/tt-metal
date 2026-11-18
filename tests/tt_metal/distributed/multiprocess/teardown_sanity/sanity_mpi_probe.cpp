@@ -35,6 +35,12 @@
 static int g_rank = -1;
 static double g_t0;
 
+// Set from a SIGINT/SIGTERM handler that is installed ONLY for the all_hang scenario (other scenarios must still
+// die on the default disposition). It lets a spinning rank show it RECEIVED the forwarded stop — the launcher
+// relayed it to every rank, the ones on remote hosts included — and exit gracefully, instead of being killed.
+static volatile sig_atomic_t g_caught_signal = 0;
+static void on_terminate_signal(int signum) { g_caught_signal = signum; }
+
 static double now_s() {
     return std::chrono::duration<double>(std::chrono::steady_clock::now().time_since_epoch()).count();
 }
@@ -144,11 +150,27 @@ int main(int argc, char** argv) {
 
     const int is_victim = (g_rank == victim);
     if (!strcmp(scenario, "all_hang")) {
+        // Catch the forwarded stop ONLY in this scenario, so a rank can prove it RECEIVED the signal rather than
+        // being killed outright. Every other scenario keeps the default disposition (SIGTERM ends the rank).
+        // SIGUSR1/SIGUSR2 is what tt-run relays through PRRTE for a graceful Ctrl-C (ess_hnp_forward_signals);
+        // SIGINT/SIGTERM are caught too for a signal delivered straight to the rank.
+        std::signal(SIGUSR1, on_terminate_signal);
+        std::signal(SIGUSR2, on_terminate_signal);
+        std::signal(SIGINT, on_terminate_signal);
+        std::signal(SIGTERM, on_terminate_signal);
+        // Poll on a short granularity: sleep_for does not return early on a signal, so a long sleep would let the
+        // launcher escalate to SIGKILL before this loop noticed the flag. 100 ms keeps the catch well inside the
+        // launcher's SIGTERM->SIGKILL grace. Heartbeat stays ~5 s (every 50 ticks).
         for (int i = 0;; i++) {
-            if (i % 5 == 0) {
+            if (g_caught_signal) {
+                mark("caught signal %d; exiting gracefully", (int)g_caught_signal);
+                mark("main_exit");
+                return 0;  // atexit -> MPI_Finalize: a graceful exit, not a kill
+            }
+            if (i % 50 == 0) {
                 mark("all_hang heartbeat");
             }
-            sleep_ms(1000);
+            sleep_ms(100);
         }
     }
     if (is_victim && strcmp(scenario, "clean") != 0) {

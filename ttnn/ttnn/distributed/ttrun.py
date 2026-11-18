@@ -55,6 +55,13 @@ SIGNAL_FORWARD_GRACE_S = 10.0
 ABORT_HANG_GRACE_S = 15.0
 _MPI_ABORT_BANNER = "MPI_ABORT was invoked"
 
+# A stop at tt-run (SIGINT/SIGTERM) is relayed to the launcher as THIS signal, not the original. PRRTE forwards
+# SIGUSR1 to every rank on every host (enabled by ess_hnp_forward_signals on the launch line), so a rank's handler
+# can tear down gracefully and release its device. SIGINT/SIGTERM to the launcher are consumed by PRRTE as an
+# immediate SIGKILL of the ranks, which skips their cleanup — measured on Open MPI 5.0.7. The original signal is
+# still recorded for the exit-code contract, and the forwarded-signal watchdog in wait() is the bounded backstop.
+GRACEFUL_TEARDOWN_SIGNAL = signal.SIGUSR1
+
 # Minimum age of an unmapped /dev/shm segment before the leftover sweep removes it. Below this it may be a
 # concurrent same-user job's segment that is created but not yet mapped (uncertain ownership), so it is preserved;
 # a genuine leak from a job that is gone has sat unmapped far longer. A short job's own leak is instead cleared by
@@ -66,6 +73,13 @@ SHM_MIN_STALE_AGE_S = 30.0
 # launcher returns — a graceful finish, not a leftover — and on real hardware a rank in uninterruptible sleep (D)
 # releasing /dev/tenstorrent can take several seconds. Only a process that OUTLASTS this is ended.
 SURVIVOR_SETTLE_S = 10.0
+
+
+def graceful_teardown_mca_args() -> List[str]:
+    """PRRTE args that make the launcher forward ``GRACEFUL_TEARDOWN_SIGNAL`` to every rank on every host when
+    tt-run relays a stop (see :meth:`LaunchedJob._relay`), so a rank's handler can release its device instead of
+    being SIGKILLed. Added to every launch command."""
+    return ["--prtemca", "ess_hnp_forward_signals", signal.Signals(GRACEFUL_TEARDOWN_SIGNAL).name]
 
 
 def remove_stale_launcher_leftovers() -> int:
@@ -200,12 +214,18 @@ class LaunchedJob:
             pass
 
     def _relay(self, signum, frame) -> None:
+        # Record the ORIGINAL signal (the exit-code contract reports 128 + it). Relay GRACEFUL_TEARDOWN_SIGNAL, not
+        # the original: PRRTE forwards it to every rank (all hosts) so they tear down gracefully, whereas SIGINT/
+        # SIGTERM to the launcher is an immediate SIGKILL. If the launcher ignores it, wait()'s forwarded-signal
+        # watchdog forces it down after the grace (the bounded backstop).
         self.forwarded.append(signum)
+        relayed = signal.Signals(GRACEFUL_TEARDOWN_SIGNAL).name
         logger.warning(
-            f"{TT_RUN_PREFIX} {signal.Signals(signum).name} received, forwarding to the launcher (pid {self.proc.pid})"
+            f"{TT_RUN_PREFIX} {signal.Signals(signum).name} received; relaying {relayed} to the launcher "
+            f"(pid {self.proc.pid}) so it forwards a graceful teardown to every rank"
         )
         try:
-            self.proc.send_signal(signum)
+            self.proc.send_signal(GRACEFUL_TEARDOWN_SIGNAL)
         except ProcessLookupError:
             pass
 
@@ -1394,6 +1414,10 @@ def build_generate_rank_bindings_mpi_cmd(
     # Always enable tagged output for easier debugging (prefixes output with rank info)
     cmd.extend(["--tag-output"])
 
+    # Forward a catchable teardown signal to every rank on a stop at tt-run, so a Ctrl-C during discovery lets
+    # ranks release their devices instead of being SIGKILLed by PRRTE.
+    cmd.extend(graceful_teardown_mca_args())
+
     parent_env_prefix = _parent_env_prefix_from_environ()
 
     if mock_rank_to_desc:
@@ -2511,6 +2535,11 @@ def build_mpi_command(
 
     # Always enable tagged output for easier debugging (prefixes output with rank info)
     cmd.extend(["--tag-output"])
+
+    # Make a stop at tt-run reach the ranks as a CATCHABLE signal: PRRTE forwards GRACEFUL_TEARDOWN_SIGNAL to every
+    # rank (all hosts), so a rank can release its device before exiting. Without this, tt-run's only lever is
+    # SIGINT/SIGTERM to the launcher, which PRRTE turns into an immediate SIGKILL of the ranks (no cleanup).
+    cmd.extend(graceful_teardown_mca_args())
 
     # When oversubscribed (mock / CPU-only multi-host: more ranks than cores), make idle ranks
     # yield the CPU instead of busy-polling MPI progress, or co-located idle workers starve the

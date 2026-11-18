@@ -204,6 +204,47 @@ rc=$?
 wait "$inject_pid"  # require the injector to finish and report what it did before we judge the teardown
 expect torn_down "multihost_remote_daemon_death" $rc
 
+echo "--- 5. an interrupt at tt-run is forwarded to EVERY rank (P7), remote hosts included, as a catchable signal the"
+echo "       rank handles — NOT a direct kill. The probe runs all_hang THROUGH tt-run (so tt-run's own SIGINT relay is"
+echo "       what is tested); on SIGINT each rank prints 'caught signal' from its handler and exits. We require that"
+echo "       marker from all $num_hosts ranks (so a remote rank got it too) and nothing left. A killed rank never prints it."
+# Resolve tt-run: an override, then tt-run on PATH, then the module. Skip (not fail) if it will not run here, so
+# an environment without the ttnn package does not fail the raw-launcher cases above; the SC4 lane has tt-run.
+if [ -n "${TEARDOWN_TTRUN:-}" ]; then read -r -a ttrun_cmd <<<"$TEARDOWN_TTRUN"
+elif command -v tt-run >/dev/null 2>&1; then ttrun_cmd=(tt-run)
+else ttrun_cmd=(python3 -m ttnn.distributed.ttrun); fi
+if ! "${ttrun_cmd[@]}" --help >/dev/null 2>&1; then
+  echo "  SKIP  multihost_interrupt_forwarded_to_ranks  (tt-run not runnable here: ${ttrun_cmd[*]})"
+else
+  binding="$(mktemp --suffix=.yaml)"
+  { echo "rank_bindings:"
+    for r in $(seq 0 $((num_hosts - 1))); do printf '  - rank: %d\n    mesh_id: 0\n' "$r"; done
+    echo 'mesh_graph_desc_path: "tt_metal/fabric/mesh_graph_descriptors/dual_galaxy_mesh_graph_descriptor.textproto"'
+  } >"$binding"
+  sig_log="$(mktemp)"
+  PROBE_SCENARIO=all_hang PROBE_NP="$num_hosts" \
+    "${ttrun_cmd[@]}" --rank-binding "$binding" \
+      --mpi-args "--host $hosts -np $num_hosts --map-by node --oversubscribe --bind-to none --tag-output -x PROBE_SCENARIO -x PROBE_NP" \
+      "$probe" >"$sig_log" 2>&1 &
+  ttrun_pid=$!
+  for _ in $(seq 1 60); do [ "$(ranks_still_alive)" = "$num_hosts" ] && break; sleep 1; done  # all ranks up first
+  kill -INT "$ttrun_pid" 2>/dev/null  # the interrupt tt-run relays to the launcher, which fans it out to the ranks
+  for _ in $(seq 1 60); do kill -0 "$ttrun_pid" 2>/dev/null || break; sleep 1; done
+  kill -9 "$ttrun_pid" 2>/dev/null || true
+  wait "$ttrun_pid" 2>/dev/null; sig_rc=$?
+  caught=$(grep -c "caught signal" "$sig_log" 2>/dev/null || echo 0)
+  sleep 2; sig_alive=$(ranks_still_alive)
+  grep "caught signal" "$sig_log" 2>/dev/null | sed 's/^/    /'
+  if [ "$caught" -eq "$num_hosts" ] && [ "$sig_alive" = 0 ]; then
+    echo "  PASS  multihost_interrupt_forwarded_to_ranks  ($caught/$num_hosts ranks caught the forwarded signal, nothing left; exit $sig_rc)"
+  else
+    echo "::error::  FAIL  multihost_interrupt_forwarded_to_ranks  (caught=$caught/$num_hosts, alive=$sig_alive, exit $sig_rc — a rank was killed without receiving the signal, or a leftover remains)"
+    echo "---- tt-run output ----"; tail -40 "$sig_log"
+    failures=$((failures + 1)); kill_stragglers
+  fi
+  rm -f "$sig_log" "$binding"
+fi
+
 # --------------------------------------------------------------------------------------------------------------
 kill_stragglers
 if [ "$failures" -eq 0 ]; then
