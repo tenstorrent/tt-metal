@@ -563,6 +563,26 @@ class MultirankPccHarnessTests(unittest.TestCase):
             self.assertEqual(producer["PREFILL_PRODUCER_CHUNKS"], "4")
         self.assertIn("PCC GATE PASS", result.stdout)
 
+    def test_a_capacity_probe_sends_its_own_request_at_its_own_slot_count(self):
+        """PREFILL_REQUEST_LEN replaces the config's request (K3.1 sc1: 10240) and PREFILL_NUM_USERS the slots."""
+        probe = {"PREFILL_REQUEST_LEN": "1049600", "PREFILL_NUM_USERS": "90"}
+        result, records = self.run_harness("kimi_k3_1", config="sc1", hosts=self.SC4_HOSTS[:1], extra_env=probe)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual(self.one_record(records, "runner")["env"]["PREFILL_NUM_USERS"], "90")
+        self.assertEqual(self.one_record(records, "producer")["env"]["PREFILL_PRODUCER_CHUNKS"], "410")
+        # Partial chunks, an empty request and one past the slots' context are rejected before launch.
+        for request_len in ("1000", "0", str(1064960 + 2560)):
+            with self.subTest(request_len=request_len):
+                result, records = self.run_harness(
+                    "kimi_k3_1",
+                    config="sc1",
+                    hosts=self.SC4_HOSTS[:1],
+                    extra_env={"PREFILL_REQUEST_LEN": request_len},
+                )
+                self.assertEqual(result.returncode, 2, result.stdout + result.stderr)
+                self.assertIn("PREFILL_REQUEST_LEN", result.stderr)
+                self.assertFalse([r for r in records if r["kind"] == "runner_launch"])
+
     def test_kimi_8x4_configs_put_the_8x4_stage_back(self):
         for model, (config, descriptor, layers) in itertools.product(
             ("kimi_k3", "kimi_k3_1"),
