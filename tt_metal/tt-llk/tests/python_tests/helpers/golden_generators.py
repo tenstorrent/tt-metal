@@ -3239,13 +3239,11 @@ class UnarySFPUGolden:
         # Modified Bessel I0; two-region kernel: Maclaurin |x| <= 6, asymptotic beyond.
         # torch.special.i0 returns NaN at +/-inf, which is a torch limitation rather than the
         # mathematics: I0 is even and unbounded, so I0(+/-inf) = +inf, as the kernel returns.
+        # Past |x| = 91.9008 the float64 value exceeds float32's range; the sweep excuses an
+        # infinite answer there (nonfinite_failures' past_range).
         if math.isnan(x):
             return x
-        # The kernel returns +inf past I0_MAX_INPUT = 88.5 (Q's fitted boundary), while
-        # torch.special.i0 stays finite until exp() saturates at 88.7228. Mirror the kernel's
-        # cutoff so stimuli drawn in (88.5, 88.7228] compare inf against inf, not inf against
-        # a finite golden -- see ckernel_sfpu_i0.h for why the band is accepted.
-        if math.isinf(x) or abs(x) > 88.5:
+        if math.isinf(x):
             return self.handle_infinite_numbers(math.inf)
         return self._torch_unary(x, torch.special.i0)
 

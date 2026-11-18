@@ -20,8 +20,8 @@ namespace ckernel::sfpu {
 //   |x| <= 6:    I0 = 1 + t * P(t), t = x^2, P a minimax fit for relative error.
 //   |x| >  6:    I0 = exp(|x|) / sqrt(|x|) * Q(1/|x|)  (Abramowitz & Stegun
 //                9.7.1), with 1/sqrt(2*pi) folded into Q's leading term.
-//   |x| > 88.5:  +inf (88.5 is the end of Q's fit); +/-inf gives +inf and
-//                NaN gives NaN.
+//   |x| > 91.9008: +inf (the largest float32 x whose I0 is finite); +/-inf
+//                gives +inf and NaN gives NaN.
 //
 // Region 1 runs for every vector and the asymptotic result overwrites it on
 // lanes with |x| > 6. Each piece is sized to the DEST width
@@ -30,11 +30,15 @@ namespace ckernel::sfpu {
 //
 //                32-bit DEST                      16-bit DEST
 //   P(t)         degree 8 in t                    degree 5 in t
-//   exp(|x|)     _sfpu_exp_fp32_accurate_         bit pattern of |x|/ln2 + 383,
-//                nonneg_unsafe_                   cubic correction
+//   exp(|x|)     _sfpu_exp_fp32_accurate_         bit pattern of |x|/ln2 + 375,
+//                nonneg_unsafe_<8>                cubic correction
 //   1/sqrt(|x|)  magic seed, cubic correction,    magic seed, cubic correction
 //                one Newton step
 //   Q(u)         degree 5                         degree 1
+//
+// exp(|x|) overflows float32 at 88.72, before I0 does, so both columns form
+// exp(|x|) * 2^-8 and carry the 2^8 in Q's coefficients: a power-of-two scale
+// changes no rounding, and the result overflows only where I0 does.
 //
 // Coefficients are bf16- or fp16-exact where accuracy allows, so each loads
 // with one SFPLOADI instead of two; the rsqrt constants live in the
@@ -48,23 +52,23 @@ namespace ckernel::sfpu {
 // 16-bit DEST: exp(|x|) * rsqrt_y * Q(rsqrt_y^2), with rsqrt_y = 1/sqrt(|x|)
 // from the caller, ordered so independent work fills SFPMAD latency slots.
 // 1/|x| = (1/sqrt(|x|))^2 reuses the rsqrt instead of a fresh reciprocal;
-// Q(u) is fit on u in [1/88.5, 1/6] for relative error. The 32-bit DEST
+// Q(u) is fit for relative error on u in [1/91.9, 1/6]. The 32-bit DEST
 // counterpart is written out in calculate_i0.
 inline sfpi::vFloat calculate_i0_asymptotic_bf16_(const sfpi::vFloat abs_x, const sfpi::vFloat rsqrt_y) {
-    // exp(|x|) from the bit pattern of w = |x|/ln2 + 383: for |x| in
-    // [0, 89.4], w lies in [383, 512), so its exponent is fixed and its 23
-    // fraction bits hold (|x|/ln2 + 127) * 2^15. Shifted left by 8 they
-    // read as a float32 z = 2^n * (1 + r), n = floor(|x|/ln2), r the
+    // exp(|x|) * 2^-8 from the bit pattern of w = |x|/ln2 + 375: for |x| in
+    // [0, 94.9], w lies in [375, 512), so its exponent is fixed and its 23
+    // fraction bits hold (|x|/ln2 + 119) * 2^15. Shifted left by 8 they
+    // read as a float32 z = 2^(n-8) * (1 + r), n = floor(|x|/ln2), r the
     // fraction to 15 bits -- the integer split costs two instructions.
-    // exp(|x|) = z * C(m), C(m) = 2^(m-1)/m with m = 1 + r, a cubic fit
-    // (8.7e-4 relative, all four coefficients fp16-exact).
-    const sfpi::vFloat w = abs_x * 1.442695f + 383.0f;
+    // exp(|x|) * 2^-8 = z * C(m), C(m) = 2^(m-1)/m with m = 1 + r, a cubic
+    // fit (8.7e-4 relative, all four coefficients fp16-exact).
+    const sfpi::vFloat w = abs_x * 1.442695f + 375.0f;
     const sfpi::vFloat inv_abs_x = rsqrt_y * rsqrt_y;
     const sfpi::vFloat z = sfpi::as<sfpi::vFloat>(sfpi::as<sfpi::vUInt>(sfpi::exman(w)) << 8);
     const sfpi::vFloat c = PolynomialEvaluator::eval(
         sfpi::setexp(z, 127), 1.775390625f, -1.376953125f, 0.70751953125f, -0.10650634765625f);
-    // Degree 1, fit 4.9e-4 relative, both coefficients fp16-exact.
-    const sfpi::vFloat correction = inv_abs_x * 0.05609130859375f + 0.398681640625f;
+    // Q * 2^8: degree 1, fit 4.9e-4 relative, both coefficients fp16-exact.
+    const sfpi::vFloat correction = inv_abs_x * 14.359375f + 102.0625f;
     return z * c * rsqrt_y * correction;
 }
 
@@ -80,7 +84,10 @@ inline void i0_init() {
 
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en, int ITERATIONS = 8>
 inline void calculate_i0() {
-    constexpr float I0_MAX_INPUT = 88.5f;
+    // The largest x whose I0 is finite in float32 (0x42b7cd31). A 16-bit DEST
+    // holds bf16 or fp16 inputs, whose largest such value, 91.875, loads in
+    // one SFPLOADI.
+    constexpr float I0_MAX_INPUT = is_fp32_dest_acc_en ? 91.90076446533203f : 91.875f;
     constexpr float I0_THRESHOLD = 6.0f;
 
 #pragma GCC unroll 1
@@ -126,19 +133,12 @@ inline void calculate_i0() {
                 val = p * t + 1.0f;
                 rsqrt_y = c * half_y + rsqrt_y;
 
-                // Q(u), u = 1/|x| = rsqrt_y^2 in [1/88.5, 1/6]: degree 5, fit 3.4e-8
+                // Q(u) * 2^8, u = 1/|x| = rsqrt_y^2 in [1/91.9, 1/6]: degree 5, 3.4e-8
                 // relative. Evaluated ahead of the |x| > 6 compare, which then fills
                 // the latency slot before the multiply by rsqrt_y.
-                const sfpi::vFloat q5 = 0.62109375f;
+                const sfpi::vFloat q5 = 159.0f;
                 const sfpi::vFloat inv_abs_x = rsqrt_y * rsqrt_y;
-                q = PolynomialEvaluator::eval(
-                    inv_abs_x,
-                    3.9894217e-01f,
-                    4.9883097e-02f,
-                    0.0273284912109375f,
-                    0.04400634765625f,
-                    -0.0947265625f,
-                    q5);
+                q = PolynomialEvaluator::eval(inv_abs_x, 102.129196f, 12.770073f, 6.99609375f, 11.265625f, -24.25f, q5);
             } else {
                 // Degree 5 in t, 1.3e-4 relative, every coefficient bf16- or
                 // fp16-exact: bf16 output cannot see the terms the 32-bit fit
@@ -157,13 +157,13 @@ inline void calculate_i0() {
             }
         }
 
-        // ─── Asymptotic overwrite for |x| > 6; +inf past 88.5 ─────────────
-        // Both exp constructions assume |x| <= 88.5; lanes above it are
+        // ─── Asymptotic overwrite for |x| > 6; +inf past 91.9 ─────────────
+        // Both exp constructions assume |x| < 93.9; lanes above 91.9 are
         // overwritten here. abs_x * inf maps +/-inf to +inf and keeps NaN.
         v_if(abs_x > I0_THRESHOLD) {
             if constexpr (is_fp32_dest_acc_en) {
                 const sfpi::vFloat scale = rsqrt_y * q;
-                val = _sfpu_exp_fp32_accurate_nonneg_unsafe_(abs_x) * scale;
+                val = _sfpu_exp_fp32_accurate_nonneg_unsafe_<8>(abs_x) * scale;
             } else {
                 val = calculate_i0_asymptotic_bf16_(abs_x, rsqrt_y);
             }

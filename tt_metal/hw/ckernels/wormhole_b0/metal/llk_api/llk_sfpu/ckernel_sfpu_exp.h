@@ -1087,10 +1087,13 @@ inline __attribute__((always_inline)) void exp_init() {
 }
 
 /*
- * exp(x) for 0 <= x < 88.72 (the float32 overflow point), 7.6e-8 relative (0.9 float32
+ * exp(x) * 2^-SCALE_EXP for 0 <= x < (128 + SCALE_EXP) * ln2, 7.6e-8 relative (0.9 float32
  * ULP) in float32 arithmetic, for a caller that has established that range itself: there
- * are no guards, and a negative x or one past the overflow point returns garbage. i0's
- * asymptotic path, |x| in [6, 88.5], is one such caller.
+ * are no guards, and a negative x or one past the top of the range returns garbage. With
+ * SCALE_EXP = 0 the range ends at float32 overflow, 88.72; a positive SCALE_EXP lets a
+ * caller that multiplies by something small afterwards go further. The power-of-two scale
+ * changes no rounding. i0's asymptotic path, |x| in [6, 91.9] with SCALE_EXP = 8, is one
+ * such caller.
  *
  * Same scheme as _sfpu_exp_fp32_accurate_: j = rint(x/ln2), f = x - j*ln2 in two parts,
  * e^f = 1 + f(1 + f(c2 + ... + f*c6)) (minimax, 3.97e-9 relative on |f| <= 0.348), then 2^j
@@ -1098,11 +1101,12 @@ inline __attribute__((always_inline)) void exp_init() {
  *   - j >= 0, so the sign-magnitude form of j is already the integer the exponent needs,
  *     with no abs/copysgn conversion;
  *   - ln2_hi = 0.693359375 = 355/512 is fp16-exact (one SFPLOADI) with 9 significant bits,
- *     so j*ln2_hi is exact for j <= 128 and x - j*ln2_hi is exact (Sterbenz);
+ *     so j*ln2_hi is exact for any j in range and x - j*ln2_hi is exact (Sterbenz);
  *   - c5 and c6 are fp16-exact.
  * ln2_hi is materialised before the rounding to j, so its SFPLOADI fills the slot in which
  * the rounding waits for the multiply that produces x/ln2.
  */
+template <int SCALE_EXP = 0>
 sfpi_inline sfpi::vFloat _sfpu_exp_fp32_accurate_nonneg_unsafe_(const sfpi::vFloat x) {
     const sfpi::vFloat jx = x * 1.442695f;
     const sfpi::vFloat neg_ln2_hi = -0.693359375f;
@@ -1114,7 +1118,11 @@ sfpi_inline sfpi::vFloat _sfpu_exp_fp32_accurate_nonneg_unsafe_(const sfpi::vFlo
         f, 4.9999994e-01f, 1.6666515e-01f, 4.1668385e-02f, 0.00836944580078125f, 1.3818741e-03f);
     r = r * f + 1.0f;
     r = r * f + 1.0f;
-    return sfpi::setexp(r, sfpi::exexp(r, sfpi::ExponentMode::Biased) + sfpi::as<sfpi::vInt>(j));
+    sfpi::vInt exp_r = sfpi::exexp(r, sfpi::ExponentMode::Biased);
+    if constexpr (SCALE_EXP != 0) {
+        exp_r = exp_r - SCALE_EXP;
+    }
+    return sfpi::setexp(r, exp_r + sfpi::as<sfpi::vInt>(j));
 }
 
 }  // namespace sfpu
