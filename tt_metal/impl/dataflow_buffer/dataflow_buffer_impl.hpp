@@ -178,14 +178,25 @@ uint32_t dm1_remapper_blob_core_size(const std::vector<std::shared_ptr<DataflowB
 std::vector<uint8_t> serialize_dm1_remapper_core_blob(
     const CoreCoord& core, const std::vector<std::shared_ptr<DataflowBufferImpl>>& dfbs_on_core);
 
+// A word of a serialized per-core DFB config that holds `address >> shift`, where address lies in the L1 buffer of DFB
+// dfb_id.
+struct DfbConfigAddressWord {
+    uint32_t dfb_id;
+    uint32_t byte_offset;
+    uint32_t address;
+    uint8_t shift;
+};
+
 // Packs the architecture-specific per-core DFB config into caller-owned storage.
 // WH/BH uses a sparse, device-slot-indexed format table; Quasar uses
 // [header | offset table | DM1 blobs | DM0 blobs | per-DFB layouts].
-// Returns the number of bytes to transfer.
+// Returns the number of bytes to transfer. If address_words is set, appends every word of the config that holds an
+// address in a DFB's buffer.
 size_t serialize_dfb_config_for_core(
     const CoreCoord& core,
     const std::vector<std::shared_ptr<DataflowBufferImpl>>& dfbs_on_core,
-    std::span<uint8_t> out);
+    std::span<uint8_t> out,
+    std::vector<DfbConfigAddressWord>* address_words = nullptr);
 
 class TileCounterAllocator {
 public:

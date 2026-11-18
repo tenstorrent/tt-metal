@@ -10,6 +10,7 @@
 #include <functional>
 #include <map>
 #include <optional>
+#include <set>
 #include <unordered_map>
 #include <utility>
 
@@ -30,6 +31,8 @@
 #include "tt_metal/impl/buffers/tensor_prefetcher_manager.hpp"
 #include "tt_metal/impl/context/metal_context.hpp"
 #include "tt_metal/impl/context/metal_env_impl.hpp"
+#include "tt_metal/impl/dataflow_buffer/dataflow_buffer_impl.hpp"
+#include "tt_metal/impl/dataflow_buffer/prefetcher_pipe.hpp"
 #include "tt_metal/impl/dispatch/device_command.hpp"
 #include "tt_metal/impl/dispatch/dispatch_mem_map.hpp"
 #include "tt_metal/impl/dispatch/dispatch_settings.hpp"
@@ -44,6 +47,7 @@
 #include "tt_metal/impl/program/program_impl.hpp"
 #include "tt_metal/impl/trace/dispatch.hpp"
 #include "tt_metal/impl/trace/trace_node.hpp"
+#include "hostdev/remote_dfb_constants.h"
 #include <internal/service/service_core_manager.hpp>
 
 namespace tt::tt_metal {
@@ -131,6 +135,35 @@ struct CapturedTensorPatch {
     std::shared_ptr<const TensorPatchBinding> binding;
 };
 
+using PrefetcherPipeBindingKey = ::tt::tt_metal::detail::ProgramImpl::PrefetcherPipeBindingKey;
+
+// A recorded (program, PrefetcherPipeParameter) and the pipe it currently runs.
+struct PrefetcherPipeBindingSnapshot {
+    CmdListPrefetcherPipeArgName name;
+    experimental::PrefetcherPipeParamName param_name;
+    const MeshDevice* device = nullptr;
+    experimental::PrefetcherPipeIdentity identity{0};
+    PrefetcherPipeBindingKey key;
+};
+
+enum class PrefetcherPipeAddress : uint8_t { Config, Buffer };
+
+// A word that holds (address + offset) >> shift, for address one of its pipes' config page or ring addresses.
+struct PrefetcherPipeWord {
+    PrefetcherPipeAddress address = PrefetcherPipeAddress::Config;
+    uint32_t offset = 0;
+    uint8_t shift = 0;
+    // Indices into the recorded PrefetcherPipeBindingSnapshots of the parameters whose pipes the word serves.
+    std::vector<size_t> owners;
+    // The word also serves a pipe bound to a parameter that is not a command-list parameter, so it cannot change.
+    bool has_unlisted_owner = false;
+};
+
+struct CapturedPrefetcherPipePatch {
+    const uint8_t* dst = nullptr;
+    PrefetcherPipeWord word;
+};
+
 struct CapturedProgram {
     MeshCoordinateRange device_range;
     TraceNode trace_node;
@@ -140,6 +173,7 @@ struct CapturedProgram {
     std::vector<CapturedRuntimePatch> runtime_patches;
     std::vector<CapturedCommonRuntimePatch> common_runtime_patches;
     std::vector<CapturedTensorPatch> tensor_patches;
+    std::vector<CapturedPrefetcherPipePatch> prefetcher_pipe_patches;
 };
 
 struct StagedCommandListNode {
@@ -161,6 +195,11 @@ struct TensorPatchTarget {
     std::shared_ptr<const TensorPatchBinding> binding;
 };
 
+struct PrefetcherPipePatchTarget {
+    PatchTarget target;
+    PrefetcherPipeWord word;
+};
+
 // Patch locations of one command list. Device writes must be DRAM-aligned, so the registry keeps the current contents
 // of each aligned window that holds a parameter, but not the rest of the command stream.
 struct CommandListParameterRegistry {
@@ -177,6 +216,10 @@ struct CommandListParameterRegistry {
     std::vector<BoundTensorFootprint> tensor_regions;
     // Indices into tensor_regions that each command-list tensor parameter patches.
     std::unordered_map<CmdListTensorArgName, std::vector<size_t>> tensor_region_slots;
+    std::vector<PrefetcherPipeBindingSnapshot> prefetcher_pipe_bindings;
+    // Indices into prefetcher_pipe_bindings that each command-list PrefetcherPipe parameter patches.
+    std::unordered_map<CmdListPrefetcherPipeArgName, std::vector<size_t>> prefetcher_pipe_binding_slots;
+    std::vector<PrefetcherPipePatchTarget> prefetcher_pipe_targets;
 };
 
 struct CommandListAssembly {
@@ -234,16 +277,19 @@ size_t record_patch_targets(
     size_t range_index,
     detail::CommandListParameterRegistry& registry) {
     const auto chunk_begin = reinterpret_cast<uintptr_t>(chunk);
-    auto locate = [&](const detail::CapturedArgLocation& location) -> std::optional<detail::PatchTarget> {
-        const auto& update = command_sequence.rta_updates.at(location.rta_update_index);
-        const auto target = reinterpret_cast<uintptr_t>(update.dst) + location.byte_offset;
-        if (target < chunk_begin || target + location.num_words * sizeof(uint32_t) > chunk_begin + chunk_size) {
+    auto locate_words = [&](const void* dst, uint32_t num_words) -> std::optional<detail::PatchTarget> {
+        const auto target = reinterpret_cast<uintptr_t>(dst);
+        if (target < chunk_begin || target + num_words * sizeof(uint32_t) > chunk_begin + chunk_size) {
             return std::nullopt;
         }
         return detail::PatchTarget{
             .range_index = range_index,
             .stream_offset = chunk_offset + static_cast<uint32_t>(target - chunk_begin),
-            .num_words = location.num_words};
+            .num_words = num_words};
+    };
+    auto locate = [&](const detail::CapturedArgLocation& location) {
+        const auto& update = command_sequence.rta_updates.at(location.rta_update_index);
+        return locate_words(static_cast<const uint8_t*>(update.dst) + location.byte_offset, location.num_words);
     };
 
     size_t num_recorded = 0;
@@ -262,6 +308,12 @@ size_t record_patch_targets(
     for (const auto& patch : program.tensor_patches) {
         if (auto target = locate(patch.location)) {
             registry.tensor_targets[patch.name].push_back({.target = *target, .binding = patch.binding});
+            ++num_recorded;
+        }
+    }
+    for (const auto& patch : program.prefetcher_pipe_patches) {
+        if (auto target = locate_words(patch.dst, 1)) {
+            registry.prefetcher_pipe_targets.push_back({.target = *target, .word = patch.word});
             ++num_recorded;
         }
     }
@@ -298,6 +350,141 @@ void capture_patch_windows(
     for (const auto& [_, targets] : registry.tensor_targets) {
         for (const auto& tensor_target : targets) {
             capture(tensor_target.target);
+        }
+    }
+    for (const auto& pipe_target : registry.prefetcher_pipe_targets) {
+        capture(pipe_target.target);
+    }
+}
+
+uint32_t read_word(const uint8_t* src) {
+    uint32_t word = 0;
+    std::memcpy(&word, src, sizeof(word));
+    return word;
+}
+
+// Appends to captured.prefetcher_pipe_patches every word of its commands that holds an address of a pipe bound to one
+// of bindings, each paired with its index among the recorded PrefetcherPipeBindingSnapshots: the config page address
+// in each copy of the PrefetcherPipe index, and the ring addresses in each relay DFB config.
+void record_prefetcher_pipe_words(
+    detail::CapturedProgram& captured,
+    const ProgramCommandSequence& command_sequence,
+    const Hal& hal,
+    const std::vector<std::pair<size_t, const detail::PrefetcherPipeBindingSnapshot*>>& bindings) {
+    const auto& program = *captured.trace_node.program;
+    const auto& per_core_pipes = program.get_per_core_prefetcher_pipes();
+    auto identities_on = [&](const CoreRange& cores, uint8_t prefetcher_pipe_id) {
+        std::set<experimental::PrefetcherPipeIdentity> identities;
+        for (const CoreCoord& core : cores) {
+            const auto it = per_core_pipes.find(core);
+            if (it == per_core_pipes.end()) {
+                continue;
+            }
+            for (const auto& participant : it->second) {
+                if (participant.prefetcher_pipe_id == prefetcher_pipe_id && participant.is_bound()) {
+                    identities.insert(participant.pipe_identity);
+                }
+            }
+        }
+        return identities;
+    };
+    // The word serving the pipes bound to slot prefetcher_pipe_id on cores, or nullopt if none is one of bindings.
+    auto make_word = [&](const CoreRange& cores, uint8_t prefetcher_pipe_id, detail::PrefetcherPipeAddress address)
+        -> std::optional<std::pair<detail::PrefetcherPipeWord, const detail::PrefetcherPipeBindingSnapshot*>> {
+        const auto identities = identities_on(cores, prefetcher_pipe_id);
+        detail::PrefetcherPipeWord word{.address = address};
+        const detail::PrefetcherPipeBindingSnapshot* owner = nullptr;
+        std::set<experimental::PrefetcherPipeIdentity> listed;
+        for (const auto& [index, binding] : bindings) {
+            if (identities.contains(binding->identity)) {
+                word.owners.push_back(index);
+                listed.insert(binding->identity);
+                owner = binding;
+            }
+        }
+        if (owner == nullptr) {
+            return std::nullopt;
+        }
+        word.has_unlisted_owner = listed.size() != identities.size();
+        return std::pair{std::move(word), owner};
+    };
+
+    const uint8_t num_slots = program.num_prefetcher_pipe_slots();
+    for (const auto& location : command_sequence.prefetcher_pipe_index_locations) {
+        for (uint8_t prefetcher_pipe_id = 0; prefetcher_pipe_id < num_slots; ++prefetcher_pipe_id) {
+            auto word = make_word(location.logical_cores, prefetcher_pipe_id, detail::PrefetcherPipeAddress::Config);
+            if (!word) {
+                continue;
+            }
+            const uint32_t byte_offset =
+                (REMOTE_DFB_REGION_HEADER_WORDS + prefetcher_pipe_id * UINT32_WORDS_PER_REMOTE_DFB_CONFIG) *
+                sizeof(uint32_t);
+            TT_FATAL(
+                byte_offset + sizeof(uint32_t) <= location.size &&
+                    read_word(location.dst + byte_offset) == word->second->key.config_address,
+                "Internal error: PrefetcherPipe slot {} is not at its expected place in the PrefetcherPipe index",
+                prefetcher_pipe_id);
+            captured.prefetcher_pipe_patches.push_back(
+                {.dst = location.dst + byte_offset, .word = std::move(word->first)});
+        }
+    }
+
+    const uint32_t dfb_size =
+        program.get_program_config(hal.get_programmable_core_type_index(HalProgrammableCoreType::TENSIX)).dfb_size;
+    const auto dfb_ranges = program.dataflow_buffers_unique_coreranges();
+    for (size_t i = 0; i < command_sequence.dfb_config_updates.size(); ++i) {
+        const auto& update = command_sequence.dfb_config_updates[i];
+        const auto& recorded = captured.trace_node.dfb_configs_payloads.at(i);
+        const auto range = std::ranges::find(dfb_ranges, update.logical_core, &CoreRange::start_coord);
+        TT_FATAL(
+            range != dfb_ranges.end(), "Internal error: no DFB core range starts at {}", update.logical_core.str());
+        std::optional<std::vector<experimental::dfb::detail::DfbConfigAddressWord>> address_words;
+        for (uint8_t prefetcher_pipe_id = 0; prefetcher_pipe_id < num_slots; ++prefetcher_pipe_id) {
+            const auto& slot = program.get_prefetcher_pipe_slot(prefetcher_pipe_id);
+            if (!slot.relay_dfb_host_id.has_value()) {
+                continue;
+            }
+            const auto relay = program.get_dataflow_buffer(*slot.relay_dfb_host_id);
+            if (std::ranges::find(update.dataflow_buffers, relay) == update.dataflow_buffers.end()) {
+                continue;
+            }
+            auto word = make_word(*range, prefetcher_pipe_id, detail::PrefetcherPipeAddress::Buffer);
+            if (!word) {
+                continue;
+            }
+            TT_FATAL(
+                !relay->alias_primary_id.has_value(),
+                "PrefetcherPipe relay DFB {} is an alias of DFB {}, which command lists cannot patch",
+                relay->id,
+                *relay->alias_primary_id);
+            if (!address_words.has_value()) {
+                address_words.emplace();
+                std::vector<uint8_t> scratch(dfb_size, 0);
+                experimental::dfb::detail::serialize_dfb_config_for_core(
+                    update.logical_core, update.dataflow_buffers, scratch, &*address_words);
+            }
+            const uint32_t ring_address = word->second->key.buffer_address;
+            const uint32_t ring_size = word->second->key.ring_size;
+            for (const auto& address_word : *address_words) {
+                if (address_word.dfb_id != relay->id &&
+                    std::ranges::find(relay->alias_secondary_ids, address_word.dfb_id) ==
+                        relay->alias_secondary_ids.end()) {
+                    continue;
+                }
+                TT_FATAL(
+                    address_word.address >= ring_address && address_word.address - ring_address <= ring_size &&
+                        address_word.byte_offset + sizeof(uint32_t) <= recorded.size() &&
+                        read_word(recorded.data() + address_word.byte_offset) ==
+                            address_word.address >> address_word.shift,
+                    "Internal error: relay DFB {} of PrefetcherPipe slot {} does not hold the ring of its pipe",
+                    relay->id,
+                    prefetcher_pipe_id);
+                auto relay_word = word->first;
+                relay_word.offset = address_word.address - ring_address;
+                relay_word.shift = address_word.shift;
+                captured.prefetcher_pipe_patches.push_back(
+                    {.dst = update.dst + address_word.byte_offset, .word = std::move(relay_word)});
+            }
         }
     }
 }
@@ -376,9 +563,14 @@ public:
 private:
     struct OfflineDispatchState;
 
-    // Appends the location of each parameter to the runtime_patches, common_runtime_patches, or tensor_patches of
-    // the CapturedProgram in staged_node that it belongs to.
-    void resolve_parameters(StagedCommandListNode& staged_node, const CmdListParameters& parameters) const;
+    // Appends the location of each parameter to the runtime_patches, common_runtime_patches, tensor_patches, or
+    // prefetcher_pipe_patches of the CapturedProgram in staged_node that it belongs to. Appends a snapshot of each
+    // PrefetcherPipe parameter to new_pipe_bindings; patches index the snapshots as if appended to
+    // prefetcher_pipe_bindings.
+    void resolve_parameters(
+        StagedCommandListNode& staged_node,
+        const CmdListParameters& parameters,
+        std::vector<PrefetcherPipeBindingSnapshot>& new_pipe_bindings) const;
     static std::vector<MeshCoordinateRange> compute_device_ranges(
         const std::vector<StagedCommandListNode>& staged_nodes, const MeshCoordinateRange& local_mesh_range);
     // One entry per staged node: the program it runs on range, or nullptr if it has none there.
@@ -410,6 +602,9 @@ private:
     // Become CommandListParameterRegistry::tensor_regions and tensor_region_slots at build().
     std::vector<BoundTensorFootprint> tensor_regions;
     std::unordered_map<CmdListTensorArgName, std::vector<size_t>> tensor_region_slots;
+    // Become CommandListParameterRegistry::prefetcher_pipe_bindings and prefetcher_pipe_binding_slots at build().
+    std::vector<PrefetcherPipeBindingSnapshot> prefetcher_pipe_bindings;
+    std::unordered_map<CmdListPrefetcherPipeArgName, std::vector<size_t>> prefetcher_pipe_binding_slots;
     distributed::TensorPrefetcherManager::CapturedRequests tensor_prefetcher_requests;
     bool valid = true;
     bool lock_held = false;
@@ -635,6 +830,85 @@ void CommandList::Impl::update_args(const CmdListArgPatch& patch, bool blocking)
         }
     }
 
+    // The new pipe of each patched entry of registry.prefetcher_pipe_bindings.
+    std::map<size_t, const experimental::PrefetcherPipeImpl*> staged_pipes;
+    // The new pipe of each replaced pipe, or null if two parameters bound to it get different ones.
+    std::map<experimental::PrefetcherPipeIdentity, const experimental::PrefetcherPipe*> replacements;
+    for (const auto& [name, argument] : patch.prefetcher_pipe_args) {
+        const auto it = registry.prefetcher_pipe_binding_slots.find(name);
+        TT_FATAL(
+            it != registry.prefetcher_pipe_binding_slots.end(),
+            "Unknown command-list PrefetcherPipe parameter '{}'",
+            *name);
+        const auto& pipe = argument.get().impl();
+        for (const size_t slot : it->second) {
+            const auto [replacement, inserted] =
+                replacements.try_emplace(registry.prefetcher_pipe_bindings[slot].identity, &argument.get());
+            if (!inserted && replacement->second != &argument.get()) {
+                replacement->second = nullptr;
+            }
+            const auto& binding = registry.prefetcher_pipe_bindings[slot];
+            TT_FATAL(
+                pipe.get_device() == binding.device,
+                "Command-list PrefetcherPipe parameter '{}' supplies a pipe on a different MeshDevice than the Program "
+                "of PrefetcherPipeParameter '{}'",
+                *name,
+                binding.param_name);
+            TT_FATAL(
+                binding.key.same_geometry(::tt::tt_metal::detail::ProgramImpl::prefetcher_pipe_binding_key(pipe)),
+                "Command-list PrefetcherPipe parameter '{}' supplies a pipe whose sender, receivers, ring size, entry "
+                "size or credit lanes differ from those of the pipe PrefetcherPipeParameter '{}' was recorded with",
+                *name,
+                binding.param_name);
+            staged_pipes.emplace(slot, &pipe);
+        }
+    }
+    for (const auto& [target, word] : registry.prefetcher_pipe_targets) {
+        const auto patched =
+            std::ranges::find_if(word.owners, [&](size_t owner) { return staged_pipes.contains(owner); });
+        if (patched == word.owners.end()) {
+            continue;
+        }
+        const auto& patched_name = *registry.prefetcher_pipe_bindings[*patched].name;
+        const char* address_name = word.address == detail::PrefetcherPipeAddress::Config ? "config page" : "ring";
+        TT_FATAL(
+            !word.has_unlisted_owner,
+            "Command-list PrefetcherPipe parameter '{}' shares its {} address with a pipe whose parameter is not a "
+            "command-list parameter, so it cannot be patched",
+            patched_name,
+            address_name);
+        std::optional<uint32_t> address;
+        for (const size_t owner : word.owners) {
+            const auto staged = staged_pipes.find(owner);
+            const auto& owner_name = *registry.prefetcher_pipe_bindings[owner].name;
+            TT_FATAL(
+                staged != staged_pipes.end(),
+                "Command-list PrefetcherPipe parameters '{}' and '{}' share a {} address. Patch them in one "
+                "update_args() call",
+                patched_name,
+                owner_name,
+                address_name);
+            const uint32_t owner_address = word.address == detail::PrefetcherPipeAddress::Config
+                                               ? staged->second->config_address()
+                                               : staged->second->buffer_address();
+            TT_FATAL(
+                !address.has_value() || *address == owner_address,
+                "Command-list PrefetcherPipe parameters '{}' and '{}' share a {} address, so their new pipes must too",
+                patched_name,
+                owner_name,
+                address_name);
+            address = owner_address;
+        }
+        const uint32_t value = (*address + word.offset) >> word.shift;
+        stage(target, ttsl::Span<const uint32_t>(&value, 1));
+    }
+    std::optional<distributed::TensorPrefetcherManager::CapturedRequests> retargeted_requests;
+    if (!replacements.empty() && !tensor_prefetcher_requests.requests.empty()) {
+        retargeted_requests = mesh_device->impl()
+                                  .tensor_prefetcher(mesh_device)
+                                  .retarget_captured(tensor_prefetcher_requests, replacements);
+    }
+
     std::vector<MeshBufferPatch> patches;
     patches.reserve(staged_windows.size());
     for (const auto& [key, words] : staged_windows) {
@@ -647,6 +921,14 @@ void CommandList::Impl::update_args(const CmdListArgPatch& patch, bool blocking)
     }
     for (auto& [slot, region] : staged_regions) {
         registry.tensor_regions[slot] = region;
+    }
+    for (const auto& [slot, pipe] : staged_pipes) {
+        auto& binding = registry.prefetcher_pipe_bindings[slot];
+        binding.identity = pipe->identity();
+        binding.key = ::tt::tt_metal::detail::ProgramImpl::prefetcher_pipe_binding_key(*pipe);
+    }
+    if (retargeted_requests.has_value()) {
+        tensor_prefetcher_requests = std::move(*retargeted_requests);
     }
     if (blocking) {
         cq.finish();
@@ -877,7 +1159,7 @@ CommandListData CommandListBuilderImpl::serialize_range(
             "Failed to locate every per-device runtime argument in the serialized command stream");
         TT_FATAL(
             num_recorded == captured.runtime_patches.size() + captured.common_runtime_patches.size() +
-                                captured.tensor_patches.size(),
+                                captured.tensor_patches.size() + captured.prefetcher_pipe_patches.size(),
             "Failed to locate every command list parameter in the serialized command stream");
 
         if (staged_node.multicast_go_signals) {
@@ -1005,7 +1287,9 @@ std::shared_ptr<MeshBuffer> CommandListBuilderImpl::allocate_and_commit(
 }
 
 void CommandListBuilderImpl::resolve_parameters(
-    StagedCommandListNode& staged_node, const CmdListParameters& parameters) const {
+    StagedCommandListNode& staged_node,
+    const CmdListParameters& parameters,
+    std::vector<PrefetcherPipeBindingSnapshot>& new_pipe_bindings) const {
     auto find_captured_program = [&](const Program& program) -> CapturedProgram& {
         for (auto& captured : staged_node.programs) {
             if (captured.trace_node.program.get() == &program.impl()) {
@@ -1115,6 +1399,41 @@ void CommandListBuilderImpl::resolve_parameters(
             TT_FATAL(bound, "TensorParameter '{}' is not bound by any kernel", info.param_name);
         }
     }
+
+    std::map<CapturedProgram*, std::vector<size_t>> pipe_bindings_of;
+    std::set<std::pair<const ::tt::tt_metal::detail::ProgramImpl*, std::string>> listed_pipe_parameters;
+    for (const auto& [name, infos] : parameters.prefetcher_pipe_parameters) {
+        for (const auto& info : infos) {
+            auto& captured = find_captured_program(info.program.get());
+            const auto& program = *captured.trace_node.program;
+            const auto* binding = program.get_prefetcher_pipe_parameter(*info.param_name);
+            TT_FATAL(
+                binding != nullptr, "PrefetcherPipeParameter '{}' is not declared by the program", info.param_name);
+            TT_FATAL(
+                binding->is_bound(),
+                "PrefetcherPipeParameter '{}' has no bound pipe. Call SetProgramRunArgs before recording the workload",
+                info.param_name);
+            TT_FATAL(
+                listed_pipe_parameters.emplace(&program, *info.param_name).second,
+                "PrefetcherPipeParameter '{}' is listed more than once in the command-list parameters",
+                info.param_name);
+            pipe_bindings_of[&captured].push_back(new_pipe_bindings.size());
+            new_pipe_bindings.push_back(
+                {.name = name,
+                 .param_name = info.param_name,
+                 .device = binding->device,
+                 .identity = binding->bound_pipe_identity,
+                 .key = binding->bound_pipe_key});
+        }
+    }
+    const auto& hal = mesh_device.impl().metal_env().get_hal();
+    for (auto& [captured, local_indices] : pipe_bindings_of) {
+        std::vector<std::pair<size_t, const PrefetcherPipeBindingSnapshot*>> bindings;
+        for (const size_t local_index : local_indices) {
+            bindings.emplace_back(prefetcher_pipe_bindings.size() + local_index, &new_pipe_bindings[local_index]);
+        }
+        record_prefetcher_pipe_words(*captured, command_sequence_of(*captured), hal, bindings);
+    }
 }
 
 void CommandListBuilderImpl::add(
@@ -1150,7 +1469,8 @@ void CommandListBuilderImpl::add(
              .per_device_runtime_args =
                  per_device != nullptr ? snapshot_per_device_runtime_args(*per_device) : nullptr});
     }
-    resolve_parameters(staged_node, parameters);
+    std::vector<PrefetcherPipeBindingSnapshot> new_pipe_bindings;
+    resolve_parameters(staged_node, parameters, new_pipe_bindings);
 
     std::vector<BoundTensorFootprint> new_regions;
     std::map<std::pair<const ::tt::tt_metal::detail::ProgramImpl*, std::string>, size_t> region_slot_of;
@@ -1190,6 +1510,10 @@ void CommandListBuilderImpl::add(
         auto& all_slots = tensor_region_slots[name];
         all_slots.insert(all_slots.end(), slots.begin(), slots.end());
     }
+    for (auto& binding : new_pipe_bindings) {
+        prefetcher_pipe_binding_slots[binding.name].push_back(prefetcher_pipe_bindings.size());
+        prefetcher_pipe_bindings.push_back(std::move(binding));
+    }
 }
 
 void CommandListBuilderImpl::add_tensor_prefetcher_request(
@@ -1214,6 +1538,8 @@ CommandList CommandListBuilderImpl::build(MeshCommandQueue& cq) const {
     auto assembly = assemble(cq, staged_nodes, worker_descriptors);
     assembly.registry.tensor_regions = tensor_regions;
     assembly.registry.tensor_region_slots = tensor_region_slots;
+    assembly.registry.prefetcher_pipe_bindings = prefetcher_pipe_bindings;
+    assembly.registry.prefetcher_pipe_binding_slots = prefetcher_pipe_binding_slots;
     auto command_buffer = allocate_and_commit(cq, assembly.descriptor, assembly.serialized_ranges);
     return CommandList(std::make_unique<CommandList::Impl>(
         mesh_device,
@@ -1238,6 +1564,8 @@ void CommandListBuilderImpl::clear() {
     retained_binary_buffers.clear();
     tensor_regions.clear();
     tensor_region_slots.clear();
+    prefetcher_pipe_bindings.clear();
+    prefetcher_pipe_binding_slots.clear();
     tensor_prefetcher_requests = {};
 }
 
@@ -1247,6 +1575,8 @@ void CommandListBuilderImpl::deallocate() {
     retained_binary_buffers.clear();
     tensor_regions.clear();
     tensor_region_slots.clear();
+    prefetcher_pipe_bindings.clear();
+    prefetcher_pipe_binding_slots.clear();
     tensor_prefetcher_requests = {};
     valid = false;
     if (lock_held) {

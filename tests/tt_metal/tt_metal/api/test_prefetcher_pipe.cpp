@@ -10,6 +10,7 @@
 // DFBAdvancedOptions::prefetcher_pipe_relays; the live pipe object arrives through
 // AdvancedProgramRunArgs::prefetcher_pipe_args.
 
+#include <gmock/gmock.h>
 #include <gtest/gtest.h>
 #include <algorithm>
 #include <array>
@@ -34,6 +35,7 @@
 #include <tt-metalium/program.hpp>
 #include <tt-metalium/sub_device.hpp>
 
+#include <tt-metalium/command_list.hpp>
 #include <tt-metalium/experimental/dispatch_context.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program.hpp>
 #include <tt-metalium/workload/run_args/program_run_args.hpp>
@@ -3399,6 +3401,197 @@ TEST_F(PrefetcherPipeFixture, PrefetcherPipe_MultiPipeAccessor_CrossProgram_2S2R
         verify_relay_results(
             device, receiver_cores, result_addr, 1, m2::DFBAccessPattern::STRIDED, total_entries, total_entries),
         2u);
+}
+
+// ============================================================================
+// Command lists: PrefetcherPipe parameters
+// ============================================================================
+
+// One Program relays pipes "a" and "b". They are carved from one space, so they share their addresses in the recorded
+// commands, and here also one relay DFB.
+TEST_F(PrefetcherPipeFixture, PrefetcherPipe_CommandList_PatchesPipeAndRelayAddresses) {
+    if (!is_fast_dispatch() || is_quasar()) {
+        GTEST_SKIP() << "Command lists require fast dispatch on Wormhole B0 or Blackhole";
+    }
+    if (const auto reason = insufficient_worker_grid_reason(2, 2); !reason.empty()) {
+        GTEST_SKIP() << reason;
+    }
+    auto mesh_device = devices_[0];
+    distributed::MeshDevice& device = *mesh_device;
+    auto& cq = mesh_device->mesh_command_queue();
+    constexpr uint32_t entry_size = 256;
+    constexpr uint32_t ring_depth = 4;
+    constexpr uint32_t total_entries = 8;
+    const CoreCoord sender_a(0, 0);
+    const CoreCoord sender_b(1, 0);
+    const CoreRangeSet senders(CoreRange(sender_a, sender_b));
+    const CoreRangeSet receivers(CoreRange(CoreCoord(0, 1), CoreCoord(1, 1)));
+    const std::vector<std::pair<CoreCoord, CoreRangeSet>> mappings = {
+        {sender_a, CoreRangeSet(CoreRange(CoreCoord(0, 1)))}, {sender_b, CoreRangeSet(CoreRange(CoreCoord(1, 1)))}};
+    const auto make_space = [&](uint32_t ring_size) {
+        return experimental::CreatePrefetcherPipeSpace(
+            device,
+            experimental::PrefetcherPipeSpaceConfig{
+                .sender_cores = senders,
+                .receiver_domain = receivers,
+                .ring_size = ring_size,
+                .max_receivers_per_pipe = 1,
+            });
+    };
+    auto space = make_space(entry_size * ring_depth);
+    auto moved_space = make_space(entry_size * ring_depth);
+    auto bigger_space = make_space(2 * entry_size * ring_depth);
+    std::vector<experimental::PrefetcherPipe> pipes = space.create_pipes(mappings);
+    std::vector<experimental::PrefetcherPipe> moved = moved_space.create_pipes(mappings);
+    std::vector<experimental::PrefetcherPipe> bigger = bigger_space.create_pipes(mappings);
+    ASSERT_NE(moved[0].config_address(), pipes[0].config_address());
+    ASSERT_NE(moved[0].buffer_address(), pipes[0].buffer_address());
+
+    const experimental::PrefetcherPipeParamName name_a{"a"};
+    const experimental::PrefetcherPipeParamName name_b{"b"};
+    auto result_buffer = cross_node_dfb_test::make_cross_node_data_buffer(device, receivers, 32, 1);
+    const uint32_t result_addr = static_cast<uint32_t>(result_buffer->address());
+    const SenderKernelParams sender_params{.entry_size = entry_size, .num_entries = total_entries};
+    RelayConsumerSpecs consumer = make_relay_consumer(
+        {name_a, name_b},
+        RelayConsumerParams{
+            .entry_size = entry_size,
+            .ring_depth = ring_depth,
+            .pipe_total_entries = total_entries,
+            .entries_per_consumer = total_entries,
+        });
+    m2::ProgramSpec spec{
+        .name = "pipe_relay_command_list",
+        .kernels = {sender_kernel_spec("sender", {name_a, name_b}, sender_params), consumer.receiver, consumer.compute},
+        .dataflow_buffers = {consumer.relay},
+        .work_units =
+            {work_unit("sender_wu", {"sender"}, senders), work_unit("receiver_wu", {"receiver", "compute"}, receivers)},
+        .advanced_options =
+            {.prefetcher_pipe_parameters =
+                 {pipe_parameter(name_a, pipes[0], entry_size), pipe_parameter(name_b, pipes[1], entry_size)}},
+    };
+    Program program = experimental::MakeProgramFromSpec(device, spec);
+    {
+        m2::ProgramRunArgs args;
+        m2::ProgramRunArgs::KernelRunArgs sender_args{.kernel = m2::KernelSpecName{"sender"}};
+        for (const auto& pipe : pipes) {
+            prefetcher_pipe_test::write_sender_l1_staging(
+                device, pipe.sender_cores(), pipe, sender_params.data_pattern(), entry_size, total_entries, 1);
+            m2::AddRuntimeArgsForNode(
+                sender_args.runtime_arg_values,
+                pipe.sender_core(),
+                {{"staging_addr", prefetcher_pipe_test::sender_l1_staging_address(pipe)}});
+        }
+        args.kernel_run_args = {std::move(sender_args), compute_result_args(receivers, result_addr)};
+        args.advanced_options.prefetcher_pipe_args = {
+            {name_a, experimental::PrefetcherPipeArgument{pipes[0]}},
+            {name_b, experimental::PrefetcherPipeArgument{pipes[1]}}};
+        experimental::SetProgramRunArgs(program, args);
+    }
+    distributed::MeshWorkload workload;
+    workload.add_program(persistent_unit_mesh_device_range(), std::move(program));
+    const Program& recorded = workload.get_programs().begin()->second;
+
+    const CmdListPrefetcherPipeArgName arg_a{"a"};
+    const CmdListPrefetcherPipeArgName arg_b{"b"};
+    const auto pipe_info = [&](const experimental::PrefetcherPipeParamName& name) {
+        return std::vector<CmdListPrefetcherPipeArgInfo>{{.program = recorded, .param_name = name}};
+    };
+    const auto patch_args = [&](experimental::PrefetcherPipe& a, experimental::PrefetcherPipe* b) {
+        CmdListArgPatch patch{.prefetcher_pipe_args = {{arg_a, experimental::PrefetcherPipeArgument{a}}}};
+        if (b != nullptr) {
+            patch.prefetcher_pipe_args.emplace(arg_b, experimental::PrefetcherPipeArgument{*b});
+        }
+        return patch;
+    };
+
+    // A pipe sharing its addresses with a pipe whose parameter is not on the list cannot move.
+    {
+        CommandListBuilder builder(device);
+        builder.add(
+            cq, workload, CmdListParameters{.prefetcher_pipe_parameters = {{arg_a, pipe_info(name_a)}}});
+        auto list = builder.build(cq);
+        builder.deallocate();
+        EXPECT_THAT(
+            [&] { list.update_args(patch_args(moved[0], nullptr)); },
+            ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("not a command-list parameter")));
+        list.deallocate();
+    }
+
+    // Replays `list` and checks its senders wrote, and its relays read, the rings of `used` and not of `unused`.
+    const auto expect_replay_uses = [&](CommandList& list,
+                                        const std::vector<experimental::PrefetcherPipe>& used,
+                                        const std::vector<experimental::PrefetcherPipe>& unused) {
+        for (size_t i = 0; i < used.size(); ++i) {
+            prefetcher_pipe_test::zero_receiver_rings(device, used[i]);
+            prefetcher_pipe_test::zero_receiver_rings(device, unused[i]);
+            slow_dispatch::WriteToL1(
+                device,
+                mappings[i].second.ranges().front().start_coord,
+                result_addr,
+                std::vector<uint32_t>(2, 0),
+                CoreType::WORKER);
+        }
+        EnqueueCommandList(cq, list, /*blocking=*/true);
+        EXPECT_EQ(
+            verify_relay_results(
+                device, receivers, result_addr, 1, m2::DFBAccessPattern::STRIDED, total_entries, total_entries),
+            2u);
+        for (size_t i = 0; i < used.size(); ++i) {
+            const CoreCoord receiver = mappings[i].second.ranges().front().start_coord;
+            EXPECT_TRUE(prefetcher_pipe_test::verify_receiver_ring(
+                device,
+                used[i],
+                receiver,
+                sender_params.data_pattern(),
+                entry_size,
+                ring_depth,
+                0,
+                1,
+                total_entries - ring_depth));
+            const auto old_ring =
+                prefetcher_pipe_test::read_receiver_ring_bytes(device, unused[i], receiver, unused[i].ring_size());
+            EXPECT_TRUE(std::ranges::all_of(old_ring, [](uint8_t b) { return b == 0; }));
+        }
+    };
+
+    CommandListBuilder builder(device);
+    builder.add(
+        cq,
+        workload,
+        CmdListParameters{
+            .prefetcher_pipe_parameters = {{arg_a, pipe_info(name_a)}, {arg_b, pipe_info(name_b)}}});
+    auto list = builder.build(cq);
+    auto unpatched = builder.build(cq);
+    builder.deallocate();
+
+    EXPECT_THAT(
+        [&] {
+            list.update_args(CmdListArgPatch{
+                .prefetcher_pipe_args = {
+                    {CmdListPrefetcherPipeArgName{"unknown"},
+                     experimental::PrefetcherPipeArgument{moved[0]}}}});
+        },
+        ::testing::ThrowsMessage<std::runtime_error>(
+            ::testing::HasSubstr("Unknown command-list PrefetcherPipe parameter")));
+    EXPECT_THAT(
+        [&] { list.update_args(patch_args(bigger[0], &bigger[1])); },
+        ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("differ from those of the pipe")));
+    EXPECT_THAT(
+        [&] { list.update_args(patch_args(moved[0], nullptr)); },
+        ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("Patch them in one update_args() call")));
+    EXPECT_THAT(
+        [&] { list.update_args(patch_args(moved[0], &pipes[1])); },
+        ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("so their new pipes must too")));
+    // A rejected patch leaves the list on its pipes.
+    expect_replay_uses(list, pipes, moved);
+
+    list.update_args(patch_args(moved[0], &moved[1]));
+    expect_replay_uses(list, moved, pipes);
+    // A list built from the same recording keeps the old pipes.
+    expect_replay_uses(unpatched, pipes, moved);
+    list.deallocate();
+    unpatched.deallocate();
 }
 
 }  // namespace tt::tt_metal

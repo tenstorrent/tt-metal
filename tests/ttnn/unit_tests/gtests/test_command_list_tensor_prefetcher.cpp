@@ -15,6 +15,7 @@
 #include <memory>
 #include <optional>
 #include <random>
+#include <string>
 #include <utility>
 #include <vector>
 
@@ -36,6 +37,10 @@ namespace metal_exp = ::tt::tt_metal::experimental;
 using ::tt::constants::TILE_HEIGHT;
 using ::tt::constants::TILE_WIDTH;
 using ::tt::tt_metal::BufferType;
+using ::tt::tt_metal::CmdListArgPatch;
+using ::tt::tt_metal::CmdListParameters;
+using ::tt::tt_metal::CmdListPrefetcherPipeArgInfo;
+using ::tt::tt_metal::CmdListPrefetcherPipeArgName;
 using ::tt::tt_metal::CommandListBuilder;
 using ::tt::tt_metal::CoreCoord;
 using ::tt::tt_metal::CoreRange;
@@ -221,6 +226,58 @@ TEST_F(CommandListTensorPrefetcherFixture, ReplayUnderAnotherSubDeviceManagerSen
     }
     metal_exp::StopTensorPrefetcher(*device_);
     device_->remove_sub_device_manager(other_manager);
+}
+
+// The validator's PrefetcherPipeParameter for pipe i.
+std::string validator_pipe_name(size_t i) { return "pipe_" + std::to_string(i); }
+
+TEST_F(CommandListTensorPrefetcherFixture, PatchedPipesCarryTheRecordedRequest) {
+    PrefetchCase prefetch(device_);
+    PrefetchCase moved(device_);
+    auto& cq = device_->mesh_command_queue();
+    metal_exp::StartTensorPrefetcher(*device_, {});
+    {
+        CommandListBuilder builder(*device_);
+        metal_exp::AddTensorPrefetcherRequest(builder, prefetch.pipe_refs(), std::nullopt, prefetch.inputs());
+        auto validator = ttnn::operations::experimental::test::make_tensor_prefetcher_pipe_validator_workload(
+            device_, prefetch.weight, /*num_layers=*/1, /*print_stride=*/0, prefetch.pipes, prefetch.bank_to_receivers);
+        const auto& program = validator.get_programs().begin()->second;
+        CmdListParameters parameters;
+        for (size_t i = 0; i < prefetch.pipes.size(); ++i) {
+            parameters.prefetcher_pipe_parameters.emplace(
+                CmdListPrefetcherPipeArgName{validator_pipe_name(i)},
+                std::vector<CmdListPrefetcherPipeArgInfo>{
+                    {.program = program, .param_name = metal_exp::PrefetcherPipeParamName{validator_pipe_name(i)}}});
+        }
+        builder.add(cq, validator, parameters);
+        auto patched = builder.build(cq);
+        auto unpatched = builder.build(cq);
+        builder.deallocate();
+        EnqueueCommandList(cq, patched, /*blocking=*/true);
+
+        // The pipes share their space's addresses, and the request targets all of them, so moving one is rejected.
+        EXPECT_ANY_THROW(patched.update_args(CmdListArgPatch{
+            .prefetcher_pipe_args = {
+                {CmdListPrefetcherPipeArgName{validator_pipe_name(0)},
+                 metal_exp::PrefetcherPipeArgument{*moved.pipes[0]}}}}));
+
+        // The validator reads the pipes it was patched to, so a replay only finishes if the request followed them.
+        CmdListArgPatch patch;
+        for (size_t i = 0; i < moved.pipes.size(); ++i) {
+            patch.prefetcher_pipe_args.emplace(
+                CmdListPrefetcherPipeArgName{validator_pipe_name(i)},
+                metal_exp::PrefetcherPipeArgument{*moved.pipes[i]});
+        }
+        patched.update_args(patch);
+        for (uint32_t i = 0; i < kReplayCount; ++i) {
+            EnqueueCommandList(cq, patched, /*blocking=*/true);
+        }
+        // A list built from the same recording keeps the old pipes and request.
+        EnqueueCommandList(cq, unpatched, /*blocking=*/true);
+        patched.deallocate();
+        unpatched.deallocate();
+    }
+    metal_exp::StopTensorPrefetcher(*device_);
 }
 
 }  // namespace

@@ -11,6 +11,7 @@
 #include <cstdint>
 #include <deque>
 #include <functional>
+#include <map>
 #include <memory>
 #include <mutex>
 #include <optional>
@@ -124,8 +125,19 @@ public:
     // immutable, so every replay re-queues the same pages. Valid only while the prefetcher run that
     // serialized them (start() to stop()) is active.
     struct CapturedRequests {
+        // The requests of one capture() call.
+        struct Group {
+            // identity() of each pipe the call was given, in the order of its requests' sender pages.
+            std::vector<experimental::PrefetcherPipeIdentity> pipes;
+            std::vector<std::pair<CoreCoord, CoreRangeSet>> mapping;
+            std::vector<uint32_t> recv_index_base_per_sender;
+            // The call's requests are requests[first_request, first_request + num_requests).
+            size_t first_request = 0;
+            size_t num_requests = 0;
+        };
         uint64_t run_id = 0;
         std::vector<std::shared_ptr<const Request>> requests;
+        std::vector<Group> groups;
     };
 
     // Serialize a request as queue() does and append it to `captured` instead of sending it. Same
@@ -135,6 +147,14 @@ public:
         const std::vector<std::reference_wrapper<const experimental::PrefetcherPipe>>& prefetcher_pipes,
         ttsl::optional_reference<const MeshCoordinateRangeSet> device_subset,
         const std::vector<experimental::TensorPrefetcherInput>& tensors);
+
+    // A copy of `captured` with the requests of each capture() call whose pipes are all keys of `replacements` (the
+    // identity of a recorded pipe) aimed at the pipes that replace them. Rejects a call whose pipes are only partly
+    // replaced, or a pipe replaced by null. A replacement must have the sender, receivers and slab base of the pipe it
+    // replaces, and becomes a drain target of stop(). Requests that are not retargeted are shared with `captured`.
+    CapturedRequests retarget_captured(
+        const CapturedRequests& captured,
+        const std::map<experimental::PrefetcherPipeIdentity, const experimental::PrefetcherPipe*>& replacements);
 
     // Re-queue `captured` for immediate fan-out, in capture order. No-op if it is empty. TT_FATALs if the
     // prefetcher run that captured it has stopped. Caller holds the API lock, which keeps a concurrent stop()

@@ -218,7 +218,8 @@ void QueueTensorPrefetcherRequest(
 // replay.
 //
 // Built lists can be replayed only while the prefetcher that was active here is still running. Keep the
-// tensors and pipes alive until it stops.
+// tensors alive until it stops, and the pipes alive until it stops or until CommandList::update_args() replaces
+// them through a PrefetcherPipe parameter.
 void AddTensorPrefetcherRequest(
     CommandListBuilder& builder,
     const std::vector<std::reference_wrapper<const PrefetcherPipe>>& prefetcher_pipes,

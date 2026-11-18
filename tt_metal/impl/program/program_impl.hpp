@@ -537,6 +537,9 @@ public:
         uint32_t ring_size = 0;
         uint32_t num_credit_lanes = 1;
         bool operator==(const PrefetcherPipeBindingKey&) const = default;
+        // Equal but for config_address and buffer_address: a program bound to a pipe with one key runs a pipe with
+        // the other once those two addresses are rewritten in its commands.
+        bool same_geometry(const PrefetcherPipeBindingKey& other) const;
     };
     static PrefetcherPipeBindingKey prefetcher_pipe_binding_key(
         const experimental::PrefetcherPipeImpl& prefetcher_pipe);

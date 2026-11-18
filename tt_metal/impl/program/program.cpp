@@ -2073,6 +2073,13 @@ detail::ProgramImpl::PrefetcherPipeBindingKey detail::ProgramImpl::prefetcher_pi
         .num_credit_lanes = prefetcher_pipe.num_credit_lanes()};
 }
 
+bool detail::ProgramImpl::PrefetcherPipeBindingKey::same_geometry(const PrefetcherPipeBindingKey& other) const {
+    PrefetcherPipeBindingKey relocated = other;
+    relocated.config_address = config_address;
+    relocated.buffer_address = buffer_address;
+    return *this == relocated;
+}
+
 bool detail::ProgramImpl::PrefetcherPipeParameterBinding::accepts(const experimental::PrefetcherPipeImpl& pipe) const {
     return !is_bound() || bound_pipe_identity == pipe.identity() || bound_pipe_key == prefetcher_pipe_binding_key(pipe);
 }

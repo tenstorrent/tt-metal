@@ -1058,6 +1058,9 @@ struct Transfer {
     // If set, this transfer materializes one host-only CrossNode page into its
     // dedicated config Buffer and must be refreshed before every cached enqueue.
     std::optional<std::pair<CoreCoord, uint8_t>> cross_node_config;
+    // If set, this transfer writes the dense PrefetcherPipe index to these logical cores. Command lists record where
+    // it lands so they can patch the pipe addresses in it.
+    std::optional<CoreRange> prefetcher_pipe_index_cores;
     size_t end() const { return start + data.size(); }
 };
 struct PairHash {
@@ -1693,7 +1696,8 @@ public:
                         std::vector<Transfer>{
                             {.start = start_addr,
                              .data = ttsl::Span<const uint8_t>(
-                                 reinterpret_cast<const uint8_t*>(payload.data()), payload_bytes)}};
+                                 reinterpret_cast<const uint8_t*>(payload.data()), payload_bytes),
+                             .prefetcher_pipe_index_cores = core_range}};
                 }
             }
         }
@@ -2165,6 +2169,12 @@ public:
                     program_command_sequence.cross_node_config_updates.push_back(
                         {logical_core,
                          remote_dfb_id,
+                         data_collection_location[j],
+                         static_cast<uint32_t>(transfer.data.size())});
+                }
+                if (transfer.prefetcher_pipe_index_cores.has_value()) {
+                    program_command_sequence.prefetcher_pipe_index_locations.push_back(
+                        {*transfer.prefetcher_pipe_index_cores,
                          data_collection_location[j],
                          static_cast<uint32_t>(transfer.data.size())});
                 }

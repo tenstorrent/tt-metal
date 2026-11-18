@@ -1602,8 +1602,89 @@ void TensorPrefetcherManager::capture(
         "AddTensorPrefetcherRequest: the builder holds requests from a Tensor prefetcher that "
         "has since been stopped. Call clear() on the builder after StopTensorPrefetcher.");
     std::vector<std::shared_ptr<const Request>> requests = build_requests(target, device_subset, tensors);
+    CapturedRequests::Group group{
+        .mapping = target.mapping,
+        .recv_index_base_per_sender = target.recv_index_base_per_sender,
+        .first_request = captured.requests.size(),
+        .num_requests = requests.size()};
+    for (const experimental::PrefetcherPipe& pipe : prefetcher_pipes) {
+        group.pipes.push_back(pipe.impl().identity());
+    }
     captured.run_id = run_id_;
     captured.requests.insert(captured.requests.end(), requests.begin(), requests.end());
+    captured.groups.push_back(std::move(group));
+}
+
+TensorPrefetcherManager::CapturedRequests TensorPrefetcherManager::retarget_captured(
+    const CapturedRequests& captured,
+    const std::map<experimental::PrefetcherPipeIdentity, const experimental::PrefetcherPipe*>& replacements) {
+    struct Retarget {
+        size_t group;
+        std::vector<std::reference_wrapper<const experimental::PrefetcherPipe>> pipes;
+        RequestTarget target;
+    };
+    std::vector<Retarget> retargets;
+    for (size_t g = 0; g < captured.groups.size(); ++g) {
+        const auto& group = captured.groups[g];
+        Retarget retarget{.group = g};
+        for (const auto identity : group.pipes) {
+            const auto it = replacements.find(identity);
+            if (it == replacements.end()) {
+                continue;
+            }
+            TT_FATAL(
+                it->second != nullptr,
+                "A PrefetcherPipe of a recorded Tensor prefetcher request is replaced by two different pipes in one "
+                "update_args() call");
+            retarget.pipes.emplace_back(*it->second);
+        }
+        if (retarget.pipes.empty()) {
+            continue;
+        }
+        TT_FATAL(
+            retarget.pipes.size() == group.pipes.size(),
+            "A recorded Tensor prefetcher request uses {} PrefetcherPipes, but update_args() replaces only {} of them. "
+            "Replace all of them in one call.",
+            group.pipes.size(),
+            retarget.pipes.size());
+        retarget.target = target_for(retarget.pipes);
+        TT_FATAL(
+            retarget.target.mapping == group.mapping &&
+                retarget.target.recv_index_base_per_sender == group.recv_index_base_per_sender,
+            "The pipes that replace those of a recorded Tensor prefetcher request must have the same senders, "
+            "receivers and slab bases, in the same order");
+        retargets.push_back(std::move(retarget));
+    }
+
+    CapturedRequests retargeted = captured;
+    if (retargets.empty()) {
+        return retargeted;
+    }
+    auto lock = lock_api_function_();
+    TT_FATAL(
+        active_ && captured.run_id == run_id_,
+        "This command list records Tensor prefetcher requests, but the Tensor prefetcher they were recorded for "
+        "is no longer running. Rebuild the command list after StartTensorPrefetcher.");
+    for (const auto& [g, pipes, target] : retargets) {
+        auto& group = retargeted.groups[g];
+        for (size_t r = group.first_request; r < group.first_request + group.num_requests; ++r) {
+            auto request = std::make_shared<Request>(*captured.requests[r]);
+            for (size_t s = 0; s < request->sender_pages.size(); ++s) {
+                auto* header = reinterpret_cast<TensorPrefetcherRequestHeader*>(request->sender_pages[s].data());
+                header->prefetch.target_config_page_addr = target.config_page_addr_per_sender[s];
+            }
+            retargeted.requests[r] = std::move(request);
+        }
+        const std::vector<uint32_t> sender_indices = sender_indices_for_target(target);
+        for (size_t s = 0; s < sender_indices.size(); ++s) {
+            record_drain_target(
+                sender_indices[s], target.config_page_addr_per_sender[s], target.config_page_alloc_per_sender[s]);
+        }
+        for (size_t p = 0; p < pipes.size(); ++p) {
+            group.pipes[p] = pipes[p].get().impl().identity();
+        }
+    }
+    return retargeted;
 }
 
 void TensorPrefetcherManager::replay_captured_nolock(const CapturedRequests& captured) {

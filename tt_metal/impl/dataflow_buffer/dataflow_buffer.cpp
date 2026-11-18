@@ -594,7 +594,8 @@ static void validate_implicit_burst_fits_one_packet(const DataflowBufferImpl& df
 size_t serialize_dfb_config_for_core(
     const CoreCoord& core,
     const std::vector<std::shared_ptr<DataflowBufferImpl>>& dfbs_on_core,
-    std::span<uint8_t> out) {
+    std::span<uint8_t> out,
+    std::vector<DfbConfigAddressWord>* address_words) {
     if (dfbs_on_core.empty()) {
         return 0;
     }
@@ -635,6 +636,13 @@ size_t serialize_dfb_config_for_core(
                 dfb->config.entry_size,
             };
             std::memcpy(out.data() + byte_offset, words, sizeof(words));
+            if (address_words != nullptr) {
+                address_words->push_back(
+                    {.dfb_id = dfb->id,
+                     .byte_offset = static_cast<uint32_t>(byte_offset),
+                     .address = alloc_addr,
+                     .shift = 0});
+            }
         }
         return bytes_written;
     }
@@ -964,12 +972,20 @@ size_t serialize_dfb_config_for_core(
             uint32_t tc_pairs_off = offset + static_cast<uint32_t>(sizeof(entry));
             for (uint8_t t = 0; t < num_tcs; t++) {
                 dfb_blob_tc_pair_t pair = {};
-                if (h >= ::dfb::TENSIX_RISC_OFFSET) {
-                    pair.base_addr = rc.config.base_addr[t] >> kTRISCCbAddrShift;
-                    pair.limit = rc.config.limit[t] >> kTRISCCbAddrShift;
-                } else {
-                    pair.base_addr = rc.config.base_addr[t];
-                    pair.limit = rc.config.limit[t];
+                const uint8_t shift = h >= ::dfb::TENSIX_RISC_OFFSET ? static_cast<uint8_t>(kTRISCCbAddrShift) : 0;
+                pair.base_addr = rc.config.base_addr[t] >> shift;
+                pair.limit = rc.config.limit[t] >> shift;
+                if (address_words != nullptr) {
+                    address_words->push_back(
+                        {.dfb_id = dfb->id,
+                         .byte_offset = tc_pairs_off + static_cast<uint32_t>(offsetof(dfb_blob_tc_pair_t, base_addr)),
+                         .address = rc.config.base_addr[t],
+                         .shift = shift});
+                    address_words->push_back(
+                        {.dfb_id = dfb->id,
+                         .byte_offset = tc_pairs_off + static_cast<uint32_t>(offsetof(dfb_blob_tc_pair_t, limit)),
+                         .address = rc.config.limit[t],
+                         .shift = shift});
                 }
                 std::memcpy(out.data() + tc_pairs_off, &pair, sizeof(pair));
                 tc_pairs_off += static_cast<uint32_t>(sizeof(pair));

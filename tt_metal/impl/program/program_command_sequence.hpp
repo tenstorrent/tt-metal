@@ -67,6 +67,12 @@ struct ProgramCommandSequence {
         void* dst;
         uint32_t size;
     };
+    struct PrefetcherPipeIndexLocation {
+        // Logical cores the payload is multicast to.
+        CoreRange logical_cores;
+        uint8_t* dst;
+        uint32_t size;
+    };
     struct DataflowBufferConfigUpdate {
         std::vector<std::shared_ptr<experimental::dfb::detail::DataflowBufferImpl>> dataflow_buffers;
         // The logical core the payload was serialized for, so trace capture can re-serialize it.
@@ -132,6 +138,9 @@ struct ProgramCommandSequence {
     // Copies the current host-only CrossNode page image into the cached launch command
     // before each enqueue. The destination is the dedicated config Buffer.
     std::vector<CrossNodeConfigUpdate> cross_node_config_updates;
+    // Where each copy of the dense PrefetcherPipe index sits in program_config_buffer_command_sequence. The payload is
+    // static, so nothing rewrites it on enqueue; command lists use these to patch pipe addresses.
+    std::vector<PrefetcherPipeIndexLocation> prefetcher_pipe_index_locations;
     std::vector<LaunchMsgData> launch_messages;
     std::vector<CQDispatchWritePackedCmd*> launch_msg_write_packed_cmd_ptrs;
     CQDispatchGoSignalMcastCmd* mcast_go_signal_cmd_ptr{};
