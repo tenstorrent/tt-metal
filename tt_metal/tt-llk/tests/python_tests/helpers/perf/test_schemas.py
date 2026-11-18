@@ -932,6 +932,31 @@ PERF_TEST_SCHEMAS = {
         "aliases": {},
         "test_name_aliases": {"perf_top32_rm": "perf_top32_rm"},
     },
+    "perf_topk_pack_supplied_indices": {
+        "version": 1,
+        "columns": [
+            "dest_acc",
+            "dest_sync",
+            "formats.input_A",
+            "formats.input_B",
+            "formats.output",
+            "formats.register_A",
+            "formats.register_B",
+            "formats.sfpu_dst",
+            "formats.sfpu_src",
+            "loop_factor",
+            "marker",
+            "pack_k",
+            "tile_cnt",
+            "topk_pack_alias",
+            "topk_score_half",
+            "unpack_to_dest",
+        ],
+        "aliases": {},
+        "test_name_aliases": {
+            "perf_topk_pack_supplied_indices": "perf_topk_pack_supplied_indices"
+        },
+    },
     "perf_transpose_dest": {
         "version": 5,
         "columns": [
