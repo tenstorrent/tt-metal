@@ -42,7 +42,7 @@ ALWI void erf_tile(uint32_t idst) {
             DST_SYNC_MODE,
             DST_ACCUM_MODE,
             calculate_erf,
-            (fast_and_approx, 32, DST_ACCUM_MODE),
+            (fast_and_approx, 32 /*ITERATIONS*/, DST_ACCUM_MODE),
             idst,
             VectorMode::None);
         return;
