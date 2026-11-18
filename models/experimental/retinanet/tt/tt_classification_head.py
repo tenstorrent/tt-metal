@@ -3,7 +3,7 @@
 
 import ttnn
 from typing import List
-from models.experimental.retinanet.tt.tt_regression_head import Conv2dNormActivation
+from models.experimental.retinanet.tt.utils import Conv2dNormActivation
 from dataclasses import dataclass
 
 

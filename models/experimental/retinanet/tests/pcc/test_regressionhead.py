@@ -9,7 +9,8 @@ import os
 from loguru import logger
 from torchvision.models.detection import retinanet_resnet50_fpn_v2, RetinaNet_ResNet50_FPN_V2_Weights
 from tt_py_test_utils_common.utils_for_testing import assert_with_pcc
-from models.experimental.retinanet.tt.tt_regression_head import BBOX_REG_SLICE_CONFIG, ttnn_retinanet_regression_head
+from models.experimental.retinanet.tt.tt_regression_head import ttnn_retinanet_regression_head
+from models.experimental.retinanet.tt.utils import BBOX_REG_SLICE_CONFIG
 
 
 def create_regression_head_parameters(torch_head, device, model_config):
