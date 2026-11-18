@@ -212,6 +212,11 @@ ttnn::Tensor ring_shift(
     const uint32_t cluster_axis_value = cluster_axis.has_value() ? cluster_axis.value() : 0;
     const uint32_t ring_size = mesh_shape[cluster_axis_value];
     TT_FATAL(ring_size % 2 == 0, "ring_shift requires an even number of devices in the ring, got {}", ring_size);
+    // ring_shift requires tensors of the same page size (see #64664).
+    TT_FATAL(
+        tensor.layout() == ttnn::Layout::TILE &&
+            (tensor.dtype() == ttnn::DataType::BFLOAT16 || tensor.dtype() == ttnn::DataType::FLOAT32),
+        "ring_shift requires TILE bf16/fp32 tensors");
 
     if (ring_size <= 1U) {
         return tensor;
@@ -246,10 +251,7 @@ ttnn::Tensor ring_shift(
     // For intra-mesh, we use same distributed context and rank (same host)
     const core::distributed::InterHostParameters inter_host_params{distributed_ctx, distributed_ctx->rank()};
 
-    // No host synchronization: each send/recv waits only on its peer, through the socket's flow-control state on
-    // device. This stays deadlock-free because every device issues the same socket ops in the same order (per shift,
-    // one send or recv per phase, phase 1 before phase 2), so a blocked op only ever waits on an op that is earlier in
-    // that order. Re-check this if the sends and recvs below are reordered.
+    // No host sync needed: the two-phase exchange below is deadlock-free.
     // Phase 1: Even positions send, odd positions receive
     const core::distributed::IntraMeshParameters even_to_odd_params{even_to_odd_connections};
     socket_manager.send(tensor, inter_host_params, even_to_odd_params);
