@@ -16,6 +16,7 @@
 #include "impl/context/metal_context.hpp"
 #include "impl/metal2_host_api/program_spec/collection/collect_metadata.hpp"
 #include "impl/metal2_host_api/program_spec/construction/construct_program.hpp"
+#include "impl/metal2_host_api/program_spec/program_spec_internal.hpp"
 #include "impl/metal2_host_api/program_spec/validation/validate_spec.hpp"
 #include "impl/program/program_impl.hpp"
 
