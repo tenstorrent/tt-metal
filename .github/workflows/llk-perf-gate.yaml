@@ -133,9 +133,33 @@ jobs:
       pipeline: pr
     secrets: inherit
 
+  gate-policy:
+    name: "Gate policy"
+    if: >-
+      ${{ !cancelled() &&
+      (
+        (github.event_name == 'workflow_dispatch' && inputs.baseline_run_id != '') ||
+        (
+          github.event.pull_request.head.repo.full_name == github.repository &&
+          (
+            (github.event.action == 'labeled' && github.event.label.name == 'llk-perf-gate') ||
+            (github.event.action == 'synchronize'
+             && contains(github.event.pull_request.labels.*.name, 'llk-perf-gate'))
+          )
+        )
+      ) }}
+    runs-on: ubuntu-slim
+    outputs:
+      threshold: ${{ steps.policy.outputs.threshold }}
+    steps:
+      - id: policy
+        env:
+          THRESHOLD: "0.01"
+        run: echo "threshold=$THRESHOLD" >> "$GITHUB_OUTPUT"
+
   llk-perf-gate:
     name: "LLK perf regression gate (${{ matrix.arch }})"
-    needs: [branch-point, measure, measure-branch-point]
+    needs: [gate-policy, branch-point, measure, measure-branch-point]
     if: >-
       ${{ !cancelled() &&
       (
@@ -152,12 +176,12 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        include: ${{ fromJSON(inputs.arch == 'wormhole' && '[{"arch":"wormhole","threshold":"0.01"}]' || inputs.arch == 'blackhole' && '[{"arch":"blackhole","threshold":"0.01"}]' || '[{"arch":"blackhole","threshold":"0.01"},{"arch":"wormhole","threshold":"0.01"}]') }}
+        arch: ${{ fromJSON(inputs.arch == 'wormhole' && '["wormhole"]' || inputs.arch == 'blackhole' && '["blackhole"]' || '["blackhole","wormhole"]') }}
     uses: ./.github/workflows/llk-perf-gate-impl.yaml
     with:
       arch: ${{ matrix.arch }}
       run_types: ${{ inputs.run_types || 'L1_TO_L1' }}
-      threshold: ${{ matrix.threshold }}
+      threshold: ${{ needs.gate-policy.outputs.threshold }}
       min_cycles: "30"
       fail_on_regression: false
       measure_result: >-
@@ -321,7 +345,7 @@ jobs:
 
   placement-gate:
     name: "Stage 2: decide on ${{ matrix.arch }}"
-    needs: [placement-plan, placement-measure-head, placement-measure-base]
+    needs: [gate-policy, placement-plan, placement-measure-head, placement-measure-base]
     if: ${{ !cancelled() && needs.placement-plan.outputs.arches != '[]' && needs.placement-plan.outputs.arches != '' }}
     strategy:
       fail-fast: false
@@ -360,7 +384,7 @@ jobs:
       - name: Decide
         env:
           ARCH: ${{ matrix.arch }}
-          THRESHOLD: "0.02"
+          THRESHOLD: ${{ needs.gate-policy.outputs.threshold }}
           HEAD_RESULT: ${{ needs.placement-measure-head.result }}
           BASE_RESULT: ${{ needs.placement-measure-base.result }}
           SOURCE_RUN: ${{ needs.placement-plan.outputs.run }}
