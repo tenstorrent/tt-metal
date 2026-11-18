@@ -56,7 +56,7 @@ def test_copy(device):
 
     # Copy the values of input_a into input_b
     output = ttnn.copy(input_a, input_b)
-    logger.info(f"Copied Tensor Shape: {output.shape}")  # Shape([1, 1, 64, 32])
+    logger.debug(f"Copied Tensor Shape: {output.shape}")  # Shape([1, 1, 64, 32])
 
 
 def test_reshape(device):
