@@ -1224,15 +1224,49 @@ class TtLlamaAttention(LightweightModule):
         # grouped (default): the gather runs as P / G independent batch rows of G = 8 blocks each (page table
         # [P / G, 8], the smallest 32-byte page-table row), so each query row scores G keys instead of up to P.
         # full: one causal pass over all P rows (LLAMA_GALAXY_PREFILL_CPF_RING_GATHER=full).
+        # LLAMA_GALAXY_PREFILL_CPF_RING_GROUP=<1|2|4> (opt-in, read at call time): G = that many blocks per group
+        # instead of 8, so each query row scores G keys (gather work P * G). The page table rows stay 8 entries
+        # wide (32 bytes): row r holds blocks r*gb .. r*gb+7 (overlapping windows built from 8/gb shifted slices
+        # of the user's row, interleaved); the SDPA reads only the first gb of them (K length = G, chunk start 0).
         grouped = os.environ.get("LLAMA_GALAXY_PREFILL_CPF_RING_GATHER", "grouped") != "full"
-        group = 8 * block_size
-        grouped = grouped and P % group == 0
+        gb = int(os.environ.get("LLAMA_GALAXY_PREFILL_CPF_RING_GROUP", "8"))
+        if gb not in (1, 2, 4, 8):
+            gb = 8
+        group = gb * block_size
+        nb = P // block_size
+        grouped = grouped and P % (8 * block_size) == 0
         qcode = self._cpf_ring_qcode(st, P, head_dim, group if grouped else P)
         if self.layer_num == 0:
             ttnn.experimental.paged_fill_cache(st["code_cache"], qcode, page_table, batch_idx=0)
+        pcfg = st["pcfg"]
         if grouped:
             gather_q = ttnn.reshape(qcode, [P // group, 1, group, head_dim])
-            gather_pt = ttnn.reshape(ttnn.slice(page_table, [0, 0], [1, P // block_size]), [P // group, 8])
+            if gb == 8:
+                gather_pt = ttnn.reshape(ttnn.slice(page_table, [0, 0], [1, nb]), [P // group, 8])
+            else:
+                # built by layer 0 of every forward (also inside a trace capture, so a replay rebuilds it from the
+                # replayed page table), reused by the other layers of that forward
+                gkey = (P, gb)
+                if self.layer_num == 0 or st.get("gpt_key") != gkey:
+                    parts = [
+                        ttnn.reshape(ttnn.slice(page_table, [0, s], [1, s + nb]), [nb // 8, 1, 8])
+                        for s in range(0, 8, gb)
+                    ]
+                    cat = ttnn.concat(parts, dim=1)
+                    for t in parts:
+                        ttnn.deallocate(t)
+                    st["gpt"] = (ttnn.reshape(cat, [nb // gb, 8]),)
+                    st["gpt_key"] = gkey
+                gather_pt = st["gpt"][0]
+                key = ("pcfg", group)
+                if key not in st:
+                    st[key] = ttnn.SDPAProgramConfig(
+                        compute_with_storage_grid_size=(7, 10),
+                        exp_approx_mode=False,
+                        q_chunk_size=CPF_RING_GATHER_Q_CHUNK,
+                        k_chunk_size=min(CPF_RING_GATHER_K_CHUNK, group),
+                    )
+                pcfg = st[key]
         else:
             gather_q, gather_pt = qcode, page_table
         mask = ttnn.slice(self.tt_ccl._prefill_column_mask, [0, 0, 0, 0], [1, 1, 1, 1])
@@ -1245,7 +1279,7 @@ class TtLlamaAttention(LightweightModule):
                 gather_pt,
                 chunk_start_idx=0,
                 scale=CPF_RING_GATHER_SCALE,
-                program_config=st["pcfg"],
+                program_config=pcfg,
                 compute_kernel_config=st["ckcfg"],
             )
             gathered.append(ttnn.reshape(g, [1, 1, P, head_dim]) if grouped else g)
@@ -1285,14 +1319,20 @@ class TtLlamaAttention(LightweightModule):
             for g, new in zip(gathered, (k_new, v_new)):
                 fulls.append(ttnn.concat([broadcast(g), new], dim=2, memory_config=ttnn.DRAM_MEMORY_CONFIG))
         out = [ttnn.reshape(f, [int(f.shape[2]) // block_size, 1, block_size, head_dim]) for f in fulls]
-        if grouped:
+        if grouped and gb == 8:
             ttnn.deallocate(gather_pt)
         out.append(st["ident_pt"])
         return out
 
-    def _prefill_qkv_seqsplit_enabled(self, seq_len, batch_size, chunk_start_idx):
-        """LLAMA_GALAXY_PREFILL_QKV_SEQSPLIT=1 (opt-in, read at call time): cold batch-1 ring prefill on Wormhole."""
+    def _prefill_qkv_seqsplit_enabled(self, seq_len, batch_size, chunk_start_idx, cpf_ring=False):
+        """LLAMA_GALAXY_PREFILL_QKV_SEQSPLIT=1 (opt-in, read at call time): cold batch-1 ring prefill on Wormhole.
+        LLAMA_GALAXY_PREFILL_CPF_QKV_SEQSPLIT=1 (opt-in, read at call time) extends it to a prefill over a cached
+        prefix that takes the CPF ring path (cpf_ring): the N new rows are split the same way, RoPE uses the
+        prefix-offset cos/sin rows the model already sliced for this call."""
         if os.environ.get("LLAMA_GALAXY_PREFILL_QKV_SEQSPLIT", "0") != "1":
+            return False
+        cold = chunk_start_idx is None or chunk_start_idx == 0
+        if not cold and not (cpf_ring and os.environ.get("LLAMA_GALAXY_PREFILL_CPF_QKV_SEQSPLIT", "0") == "1"):
             return False
         ring = self.mesh_device.shape[1]
         return (
@@ -1300,16 +1340,26 @@ class TtLlamaAttention(LightweightModule):
             and not self.is_blackhole
             and not self.qk_norm
             and batch_size == 1
-            and (chunk_start_idx is None or chunk_start_idx == 0)
             and seq_len >= 2048
             and seq_len % (ring * 32) == 0
         )
 
-    def _prefill_qkv_seqsplit_rot(self, rot_mats, seq_len):
+    def _prefill_qkv_seqsplit_rot(self, rot_mats, seq_len, per_call=False):
         """This device's seqlen/4 rows of the prefill cos/sin tables (row block = position along cluster_axis 1).
-        Built once per (seqlen, table) and shared by every layer through tt_ccl."""
-        cache = self.tt_ccl.__dict__.setdefault("_qkv_seqsplit_rot_cache", {})
-        key = (seq_len, id(rot_mats[0]), id(rot_mats[1]))
+        Built once per (seqlen, table) and shared by every layer through tt_ccl.
+        per_call (cached prefix): rot_mats is this call's prefix-offset slice, sliced on device every forward, so
+        the parts live in a one-entry cache rebuilt by layer 0 of every forward (inside a trace capture they are
+        trace ops like the slice itself) and reused by the other layers."""
+        if per_call:
+            # rebuilt by layer 0 of every forward (inside a trace capture too), reused by the other layers
+            cache = self.tt_ccl.__dict__.get("_qkv_seqsplit_rot_cpf", {})
+            key = (seq_len, id(rot_mats[0]), id(rot_mats[1]))
+            if self.layer_num == 0 or key not in cache:
+                cache = {}
+                self.tt_ccl._qkv_seqsplit_rot_cpf = cache
+        else:
+            cache = self.tt_ccl.__dict__.setdefault("_qkv_seqsplit_rot_cache", {})
+            key = (seq_len, id(rot_mats[0]), id(rot_mats[1]))
         if key not in cache:
             parts = []
             for t in rot_mats[:2]:
@@ -1319,7 +1369,7 @@ class TtLlamaAttention(LightweightModule):
             cache[key] = (parts[0], parts[1], rot_mats[0], rot_mats[1])  # keep the sources alive: ids stay unique
         return cache[key][0], cache[key][1]
 
-    def _prefill_qkv_seqsplit_heads_rope(self, xqkv, rot_mats, seq_len):
+    def _prefill_qkv_seqsplit_heads_rope(self, xqkv, rot_mats, seq_len, per_call_rot=False):
         """QKV all-reduce over cluster_axis 1 as a reduce-scatter on the sequence (dim 2): each device of a mesh row
         keeps seqlen/4 rows of all 1280 QKV columns, splits heads, casts and rotates only those rows, then gathers
         Q, K and V back to the full sequence (dim 2). Same CCL bytes as the RS+AG on dim 3, 1/4 of the eltwise work.
@@ -1334,7 +1384,7 @@ class TtLlamaAttention(LightweightModule):
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
         ttnn.deallocate(xqkv_local)
-        cos_loc, sin_loc = self._prefill_qkv_seqsplit_rot(rot_mats, seq_len)
+        cos_loc, sin_loc = self._prefill_qkv_seqsplit_rot(rot_mats, seq_len, per_call=per_call_rot)
         out = []
         for t_pre in (q_pre, k_pre):
             if t_pre.dtype != ttnn.bfloat16:  # Rotary embeddings require bfloat16 inputs
@@ -1436,10 +1486,22 @@ class TtLlamaAttention(LightweightModule):
         ttnn.deallocate(x_11SH)
 
         # LLAMA_GALAXY_PREFILL_QKV_SEQSPLIT: heads, RoPE and the dtype casts on seqlen/4 rows per device.
-        qkv_seqsplit = self._prefill_qkv_seqsplit_enabled(seq_len, batch_size, chunk_start_idx)
+        cpf_ring_pre = (
+            chunk_start_idx is not None
+            and chunk_start_idx > 0
+            and os.environ.get("LLAMA_GALAXY_PREFILL_CPF_QKV_SEQSPLIT", "0") == "1"
+            and self._cpf_ring_enabled(
+                seq_len,
+                batch_size,
+                chunk_start_idx,
+                page_table,
+                int((kv_cache[0] if kv_cache else self.layer_past[0]).shape[2]),
+            )
+        )
+        qkv_seqsplit = self._prefill_qkv_seqsplit_enabled(seq_len, batch_size, chunk_start_idx, cpf_ring=cpf_ring_pre)
         if qkv_seqsplit:
             q_heads_1QSD_8b, k_heads_1KSD_8b, v_heads_1VSD_8b = self._prefill_qkv_seqsplit_heads_rope(
-                xqkv, rot_mats, seq_len
+                xqkv, rot_mats, seq_len, per_call_rot=cpf_ring_pre
             )
             k_fill = k_heads_1KSD_8b
             v_fill = v_heads_1VSD_8b
