@@ -152,10 +152,13 @@ jobs:
         shell:
           run:
             # The cache archive refuses symlinks (18 in these sources, e.g.
-            # cadical's src/configure), more than 100k members (about 85k
-            # here, 62k of them Boost), hard links and setuid/setgid bits.
-            # Replace each symlink with a copy of its target; drop dangling
-            # ones.
+            # cadical's src/configure), hard links, setuid/setgid bits, more
+            # than 100k members (about 85k here, 62k of them Boost), names
+            # that collide ignoring case, and restores no `.git` path. CPM
+            # only checks that a cached source directory exists, so drop the
+            # clones' .git and replace each symlink with a copy of its target
+            # (dangling ones are dropped).
+            - find .cpmcache -name .git -prune -exec rm -rf {} +
             - >-
               find .cpmcache -type l -exec sh -c 'for l; do
               t=$(readlink -f "$l") && rm "$l" && cp -rL "$t" "$l" || true; done' _ {} +
@@ -164,7 +167,11 @@ jobs:
               echo "cpmcache: $(du -sh .cpmcache | cut -f1),
               $(find .cpmcache | wc -l) entries, $(find .cpmcache -type l | wc -l) symlinks,
               $(find .cpmcache -type f -links +1 | wc -l) hard-linked,
-              $(find .cpmcache -type f -perm /7000 | wc -l) special-mode"
+              $(find .cpmcache -perm /5000 | wc -l) setuid/sticky,
+              $(find .cpmcache -type f -perm /2000 | wc -l) setgid files,
+              $(find .cpmcache -type f -size +0 -printf '%S\n' | awk '$1 < 1' | wc -l) sparse,
+              $(find .cpmcache | tr A-Z a-z | sort | uniq -d | wc -l) case collisions"
+            - find .cpmcache | tr A-Z a-z | sort | uniq -d | head || true
             # An unchanged restored tree is already stored: remove it so the
             # platform skips re-uploading it (save records skipped_empty).
             - if [ -f /tmp/cpm-unchanged ]; then rm -rf .cpmcache; fi
