@@ -571,6 +571,9 @@ for mock in \
   fi
 done
 
+# Pipeline of three one-chip meshes (one rank per chip) linked over plain N/E/S/W ports.
+run_test env TT_METAL_MOCK_CLUSTER_DESC_PATH=tt_metal/third_party/tt-cluster-descriptors/blackhole/bh_galaxy_xyz_cluster_desc/bh_galaxy_xyz_cluster_desc.yaml tt-run --rank-binding tests/tt_metal/distributed/config/bh_galaxy_1x1_chain_rank_bindings.yaml --mpi-args "--allow-run-as-root --oversubscribe" ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="MultiHost.BHGalaxy1x1MeshChainRoutingPlanes"
+
 fi # bh-single-galaxy
 
 ######################################

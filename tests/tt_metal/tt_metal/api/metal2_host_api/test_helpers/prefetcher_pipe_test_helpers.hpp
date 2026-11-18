@@ -226,7 +226,7 @@ inline experimental::PrefetcherPipe PipeSpaceOwner::MakePipeFor(
         },
         param.receivers);
     spaces_.push_back(experimental::CreatePrefetcherPipeSpace(
-        device,
+        device.mesh_command_queue(0),
         experimental::PrefetcherPipeSpaceConfig{
             .sender_cores = CoreRangeSet(CoreRange(sender)),
             .receiver_domain = receivers,
