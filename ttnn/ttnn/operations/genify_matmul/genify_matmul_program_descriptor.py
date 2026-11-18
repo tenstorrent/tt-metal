@@ -3005,7 +3005,8 @@ def create_block_sharded_program_descriptor(
         # R2a B-read helper: BRISC of each multicasting group's injector (its fixed sender: the group's
         # SHARDED_B_INJECTOR-th core in row-major order; each R2 group is its own Mcast, group index 0).
         helpers = []
-        if SHARDED_B_READ_HELPER and topo.cols == 1 and in_place and one_shot and blk.block_k_tiles >= 2:
+        # (R2 only -- topo.core_list: its groups' fixed senders are known here; R3's single-K-shard grid is not)
+        if SHARDED_B_READ_HELPER and topo.core_list and in_place and one_shot and blk.block_k_tiles >= 2:
             injectors = []
             for g, mc in zip(b_groups, b_channels):
                 if mc is not None:
