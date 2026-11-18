@@ -53,6 +53,36 @@ inline __attribute__((always_inline)) void assert_valid_count(const bool valid)
     LLK_ASSERT(valid, "Template 1 MOP loop count must fit in 10 bits");
 }
 
+/**
+ * @brief Check whether a Template 1 configuration hits the UnsupportedFunctionality EndOp1 read.
+ *
+ * @param start_op: StartOp.
+ * @param inner_count: InnerCount.
+ * @param end_op: EndOp0.
+ * @note Covers ISA MOPExpander, ExpandTemplate1: `elif IsNop(StartOp) and InnerCount == 0 and not IsNop(EndOp1)` (Blackhole).
+ *       A subcase of @ref issues_nothing.
+ */
+constexpr bool triggers_unsupported_end_op1_read(const std::uint32_t start_op, const std::uint32_t inner_count, const std::uint32_t end_op)
+{
+    return is_nop(start_op) && inner_count == 0 && is_nop(end_op);
+}
+
+/** @brief Check whether a Template 1 configuration issues nothing. */
+constexpr bool issues_nothing(const std::uint32_t outer_count, const std::uint32_t start_op, const std::uint32_t inner_count, const std::uint32_t end_op)
+{
+    return outer_count == 0 || (is_nop(start_op) && inner_count == 0 && is_nop(end_op));
+}
+
+inline __attribute__((always_inline)) void assert_no_unsupported_end_op1_read(const bool valid)
+{
+    LLK_ASSERT(valid, "Template 1 MOP configuration with no start op, an empty inner loop and no end op is unsupported");
+}
+
+inline __attribute__((always_inline)) void assert_issues_something(const bool valid)
+{
+    LLK_ASSERT(valid, "Template 1 MOP configuration issues nothing");
+}
+
 inline __attribute__((always_inline)) void assert_no_count_anomaly(const bool valid)
 {
     LLK_ASSERT(valid, "Template 1 MOP configuration triggers the no-start/zero-inner/end-op outer count anomaly");
@@ -61,6 +91,11 @@ inline __attribute__((always_inline)) void assert_no_count_anomaly(const bool va
 inline __attribute__((always_inline)) void assert_patch_reachable(const bool valid)
 {
     LLK_ASSERT(valid, "Template 1 MOP last-iteration ops are never issued with an empty inner loop");
+}
+
+inline __attribute__((always_inline)) void assert_last_inner_reachable(const bool valid)
+{
+    LLK_ASSERT(valid, "Template 1 MOP last_inner op is never issued with an outer count of 1");
 }
 
 inline __attribute__((always_inline)) void assert_valid_run_count(const bool valid)
@@ -290,12 +325,17 @@ struct cfg<detail::Template1Plan<HasEndOp>>
      * @param last: Iteration whose final inner op is replaced, values = <last_outer/last_inner>.
      * @param instruction: Encoded instruction issued instead.
      * @note Without a patch, both last-iteration ops repeat the last op of the inner loop body.
+     *       A last_inner patch needs an outer count above 1.
      */
     template <std::uint32_t Word>
     [[nodiscard]] constexpr cfg patch(const Field<Word> last, const std::uint32_t instruction) const
     {
         static_assert(Word == 7 || Word == 8, "Template 1 MOP patch replaces last_outer or last_inner");
         detail::check<detail::assert_patch_reachable>(inner_count != 0);
+        if constexpr (Word == 8)
+        {
+            detail::check<detail::assert_last_inner_reachable>(outer_count != 1);
+        }
 
         cfg patched = *this;
         if constexpr (Word == 7)
@@ -342,6 +382,8 @@ constexpr cfg<Template1Plan<HasEndOp>> make_loop(
     check<assert_valid_count>(is_valid_count(outer_count));
     check<assert_valid_count>(is_valid_count(inner.count));
     check<assert_no_count_anomaly>(!triggers_count_anomaly(outer_count, inner.count, start_op, end_op, second_end_op));
+    check<assert_no_unsupported_end_op1_read>(!triggers_unsupported_end_op1_read(start_op, inner.count, end_op));
+    check<assert_issues_something>(!issues_nothing(outer_count, start_op, inner.count, end_op));
 
     // The expander replaces the last op of the body, so repeating it keeps the issued sequence unchanged.
     const std::uint32_t last_op = is_nop(inner.alternate_op) ? inner.op : inner.alternate_op;
@@ -505,7 +547,7 @@ inline constexpr std::uint32_t occurrences = (0u + ... + static_cast<std::uint32
  * @note Program a Template 1 configuration with @ref program first. MopCfg is write-only, so
  *       the new words are not checked against it: keep a programmed inner count of 0 at 0, since
  *       an empty inner loop leaves its op words unwritten, and keep the result clear of the count
- *       anomaly rejected by @ref loop.
+ *       anomaly and the unsupported EndOp1 read rejected by @ref loop. An outer count of 0 is rejected.
  */
 template <std::uint32_t... Words>
 inline __attribute__((always_inline)) void update(const Update<Words>... updates)
@@ -518,6 +560,7 @@ inline __attribute__((always_inline)) void update(const Update<Words>... updates
     volatile std::uint32_t *mop_cfg = reinterpret_cast<volatile std::uint32_t *>(TENSIX_MOP_CFG_BASE);
 
     (detail::assert_valid_count(Words > 1 || detail::is_valid_count(updates.value)), ...);
+    (detail::assert_issues_something(Words != 0 || updates.value != 0), ...);
 
     ckernel::mop_sync();
 
