@@ -24,7 +24,7 @@ jobs:
     kubernetes:
       os: linux
       arch: amd64
-      image: {from-job: ci-build-image, image: ci-build}
+      image: {from-job: ci-build-image, image: tt-metal-ci-build}
       accelerator: {type: n150, count: 1}
       resources:
         requests: {cpu: '16', memory: 24Gi, ephemeral-storage: 30Gi}
@@ -54,7 +54,7 @@ jobs:
     kubernetes:
       os: linux
       arch: amd64
-      image: {from-job: ci-build-image, image: ci-build}
+      image: {from-job: ci-build-image, image: tt-metal-ci-build}
       accelerator: {type: n150, count: 1}
       resources:
         requests: {cpu: '16', memory: 24Gi, ephemeral-storage: 30Gi}

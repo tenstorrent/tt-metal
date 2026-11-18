@@ -27,7 +27,7 @@ jobs:
       kubernetes:
         os: linux
         arch: amd64
-        image: {from-job: ci-build-image, image: ci-build}
+        image: {from-job: ci-build-image, image: tt-metal-ci-build}
         resources:
           requests: {cpu: '4', memory: 16Gi, ephemeral-storage: 30Gi}
           limits: {cpu: '4', memory: 16Gi, ephemeral-storage: 40Gi}
