@@ -1,0 +1,58 @@
+---
+# PR Gate ttnn-smoke-tests (smoke.yaml with product tt-nn, test-category
+# pr_gate; tests/pipeline_reorg/ttnn_validation_pr_gate_tests.yaml, the
+# wh_n150_civ2 entry): tt-nn-validation-smoke on one n150 against
+# asan-build's packages, installed in the guest by apt before the first step.
+# It verifies that the installed TT-NN runtime opens a Wormhole card and runs
+# its smoke op set under ASan. Same shape as 41-smoke-n150-asan.yaml.
+#
+# Differences from the GitHub job, all forced by the platform:
+# - No per-suite prebuilt image: the packages come straight from asan-build's
+#   tar onto the ci-build chain image (GitHub builds build-ttnn-smoke-image).
+# - No hugepages (vIOMMU guest) and no remote kernel ccache (the VM path
+#   allows no compiler-cache), so kernel JIT runs cold: 8 vCPUs and a 45 m
+#   test timeout instead of GitHub's 15 m.
+# Run it by hand. asan-build is an implicit dependency.
+jobs:
+  - id: ttnn-smoke-n150-asan
+    checkout: false
+    description: "Run the PR Gate ttnn validation smoke test on one n150 with the ASan packages"
+    timeout: 1h30m
+    runs-on:
+      kubernetes:
+        os: linux
+        arch: amd64
+        image: {from-job: ci-build-image, image: tt-metal-ci-build}
+        accelerator: {type: n150, count: 1}
+        resources:
+          requests: {cpu: '8', memory: 16Gi, ephemeral-storage: 30Gi}
+          limits: {cpu: '8', memory: 16Gi, ephemeral-storage: 30Gi}
+    packages:
+      artifacts:
+        - from-job: asan-build
+          name: packages-ubuntu-24.04-amd64-ASan-x86_64-linux-clang-20-libstdcpp
+          install: [tt-metalium, tt-metalium-validation, tt-nn, tt-nn-validation]
+    env:
+      - {name: HOME, value: /tmp/home}
+      - {name: TT_METAL_CACHE, value: /tmp/tt-metal-cache}
+      - {name: ASAN_OPTIONS, value: color=always}
+      - {name: UBSAN_OPTIONS, value: "color=always:print_stacktrace=1:halt_on_error=1"}
+      - {name: GTEST_COLOR, value: 'yes'}
+      - {name: TT_METAL_WATCHER_TEST_MODE, value: '1'}
+      - {name: TT_LOGGER_LEVEL, value: warn}
+      - {name: TT_METAL_RUNTIME_ROOT, value: /usr/libexec/tt-metalium}
+      - {name: LSAN_OPTIONS, value: "suppressions=/usr/share/tt-metalium/lsan.supp"}
+    steps:
+      - id: ttnn-smoke-n150
+        kind: shell
+        shell:
+          run:
+            - mkdir -p "$HOME" "$TT_METAL_CACHE" test-reports
+            - cat .torrentci/packages.json 2>/dev/null || true
+            - dpkg -s tt-metalium tt-metalium-validation tt-nn tt-nn-validation | grep -e '^Package' -e '^Version'
+            - ls -l /dev/tenstorrent/
+            # Log to a file and print the tail, as smoke-n150-asan does.
+            - >-
+              ulimit -n 4096; rc=0; timeout 45m tt-nn-validation-smoke
+              --gtest_output=xml:test-reports/ >/tmp/smoke.log 2>&1 || rc=$?;
+              tail -c 20000 /tmp/smoke.log; exit $rc
