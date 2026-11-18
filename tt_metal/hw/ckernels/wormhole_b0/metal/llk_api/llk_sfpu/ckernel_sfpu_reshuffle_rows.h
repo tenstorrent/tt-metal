@@ -10,6 +10,7 @@
 #include "ckernel_addrmod.h"
 #include "ckernel_instr_params.h"
 #include "cmath_common.h"
+#include "llk_assert.h"
 #include "sfpi.h"
 
 namespace ckernel {
@@ -52,15 +53,15 @@ inline void calculate_reshuffle_rows(uint idx_addr) {
     //     TT_SFPSTORE(p_sfpu::LCONST_0, 0, ADDR_MOD_3, output_tile_offset + row + 34);
     // }
 
-    // Skip tile header, hence + 16:
-    volatile tt_l1_ptr std::uint8_t* idx_ptr = reinterpret_cast<volatile tt_l1_ptr std::uint8_t*>(idx_addr + 16);
+    // Skip tile header, hence + 16. The mask is read one 4-row group (4 bytes, little endian) per L1 load, so
+    // idx_addr must be 4-byte aligned (callers pass a CB tile / L1 buffer address minus the 16-byte header).
+    LLK_ASSERT((idx_addr & 0x3) == 0, "reshuffle_rows: idx_addr must be 4-byte aligned");
+    volatile tt_l1_ptr std::uint32_t* idx_ptr = reinterpret_cast<volatile tt_l1_ptr std::uint32_t*>(idx_addr + 16);
 
     // TODO: Add dynamic assert for idx_ptr being within L1 memory bounds
     // using hardware memory map constants: MEM_L1_BASE and MEM_L1_SIZE
 
     static constexpr std::uint32_t input_lreg[4] = {p_sfpu::LREG0, p_sfpu::LREG1, p_sfpu::LREG2, p_sfpu::LREG3};
-    static constexpr std::uint32_t output_lreg[4] = {p_sfpu::LREG4, p_sfpu::LREG5, p_sfpu::LREG6, p_sfpu::LREG7};
-
     // One SFPLOAD covers 4 consecutive rows, so rows 4g..4g+3 share one input block in LREG0-3. The
     // input tile is never written (outputs go to tile 1) and the two SFPTRANSPs around each
     // accumulation are an involution on LREG0-3 (only LREG4-7 change), so the block is loaded once
@@ -75,6 +76,8 @@ inline void calculate_reshuffle_rows(uint idx_addr) {
         // Rows 16-19 → addr 32 (16 + 16 = 32) Faces 2/3, group 0
         // Rows 20-23 → addr 36 (20 + 16 = 36) Faces 2/3, group 1
         std::uint32_t input_row_addr = group + (group & 0x10);
+        // Issued ahead of the input loads so the L1 read latency overlaps them
+        const std::uint32_t group_dst_rows = idx_ptr[group / 4];
 
         // load in the input block once per group, targeting even/odd columns with +2 offset
         TT_SFPLOAD(p_sfpu::LREG0, 0, ADDR_MOD_3, input_row_addr);       // Face 0/2, even columns
@@ -85,13 +88,13 @@ inline void calculate_reshuffle_rows(uint idx_addr) {
         for (std::uint32_t row = group; row < group + 4; row++) {
             std::uint32_t input_row_lreg = input_lreg[row % 4];
 
-            std::uint32_t dst_row = static_cast<std::uint32_t>(idx_ptr[row]);
+            std::uint32_t dst_row = (group_dst_rows >> (8 * (row % 4))) & 0xFF;
             // Skip if dst_row is 255, i.e. mask is invalid and we don't want to process the current row
             if (dst_row >= 32) {
                 continue;
             }
             std::uint32_t output_row_addr = output_tile_offset + (dst_row & ~0x3) + (dst_row & 0x10);
-            std::uint32_t output_row_lreg = output_lreg[dst_row % 4];
+            std::uint32_t output_row_lreg = p_sfpu::LREG4 + (dst_row % 4);
 
             // load in the output row
             TT_SFPLOAD(p_sfpu::LREG4, 0, ADDR_MOD_3, output_row_addr);       // Face 0/2, even columns
