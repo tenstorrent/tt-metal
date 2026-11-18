@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import ttnn
-from models.experimental.retinanet.tt.utils import BBOX_REG_SLICE_CONFIG, Conv2dNormActivation
+from models.experimental.retinanet.tt.utils import BBOX_REG_SLICE_CONFIG, Conv2dNormActivation, group_norm_grid
 from typing import List
 from dataclasses import dataclass
 
@@ -132,7 +132,7 @@ def ttnn_retinanet_regression_head(
 
     all_bbox_regression = []
 
-    grid_size = ttnn.CoreGrid(y=8, x=8)
+    grid_size = group_norm_grid(device)
 
     compute_config = ttnn.init_device_compute_kernel_config(
         device.arch(),

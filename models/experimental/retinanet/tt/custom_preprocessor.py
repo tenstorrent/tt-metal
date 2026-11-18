@@ -5,7 +5,7 @@ import torch
 import ttnn
 from ttnn.model_preprocessing import fold_batch_norm2d_into_conv2d
 
-from models.experimental.retinanet.tt.utils import BBOX_REG_SLICE_CONFIG
+from models.experimental.retinanet.tt.utils import BBOX_REG_SLICE_CONFIG, group_norm_channel_chunks
 
 
 def conv_bn_to_params(conv, bn, mesh_mapper):
@@ -70,7 +70,7 @@ def preprocess_regression_head_parameters(torch_head, device, mesh_mapper, model
     """Convert PyTorch regression head weights to TTNN format."""
     parameters = {}
 
-    grid_size = ttnn.CoreGrid(y=8, x=8)
+    channel_chunks = group_norm_channel_chunks(device, num_channels=256, num_groups=32)
     layout = (
         ttnn.TILE_LAYOUT if model_config["WEIGHTS_DTYPE"] in [ttnn.bfloat8_b, ttnn.bfloat4_b] else ttnn.ROW_MAJOR_LAYOUT
     )
@@ -83,10 +83,10 @@ def preprocess_regression_head_parameters(torch_head, device, mesh_mapper, model
         norm_bias = torch_head.conv[i][1].bias.detach()
 
         formatted_norm_weight = ttnn.create_group_norm_weight_bias_rm(
-            norm_weight, num_channels=256, num_cores_x=grid_size.y
+            norm_weight, num_channels=256, num_cores_x=channel_chunks
         )
         formatted_norm_bias = ttnn.create_group_norm_weight_bias_rm(
-            norm_bias, num_channels=256, num_cores_x=grid_size.y
+            norm_bias, num_channels=256, num_cores_x=channel_chunks
         )
         prepared_weight = ttnn.prepare_conv_weights(
             weight_tensor=ttnn.from_torch(conv_weight, dtype=ttnn.bfloat16),
@@ -207,7 +207,7 @@ def preprocess_classification_head_parameters(torch_head, device, mesh_mapper, m
     """Convert PyTorch classification head weights to TTNN format."""
     parameters = {}
 
-    grid_size = ttnn.CoreGrid(y=8, x=8)
+    channel_chunks = group_norm_channel_chunks(device, num_channels=256, num_groups=32)
     layout = (
         ttnn.TILE_LAYOUT if model_config["WEIGHTS_DTYPE"] in [ttnn.bfloat8_b, ttnn.bfloat4_b] else ttnn.ROW_MAJOR_LAYOUT
     )
@@ -221,10 +221,10 @@ def preprocess_classification_head_parameters(torch_head, device, mesh_mapper, m
         norm_bias = torch_head.conv[i][1].bias.detach()
 
         formatted_norm_weight = ttnn.create_group_norm_weight_bias_rm(
-            norm_weight, num_channels=256, num_cores_x=grid_size.y
+            norm_weight, num_channels=256, num_cores_x=channel_chunks
         )
         formatted_norm_bias = ttnn.create_group_norm_weight_bias_rm(
-            norm_bias, num_channels=256, num_cores_x=grid_size.y
+            norm_bias, num_channels=256, num_cores_x=channel_chunks
         )
         prepared_weight = ttnn.prepare_conv_weights(
             weight_tensor=ttnn.from_torch(conv_weight, dtype=ttnn.bfloat16),

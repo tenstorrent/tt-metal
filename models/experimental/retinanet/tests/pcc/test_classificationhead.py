@@ -4,6 +4,7 @@
 import torch
 import pytest
 import ttnn
+from models.experimental.retinanet.tt.utils import group_norm_channel_chunks
 import pickle
 import os
 from torchvision.models.detection import retinanet_resnet50_fpn_v2, RetinaNet_ResNet50_FPN_V2_Weights
@@ -16,7 +17,7 @@ def create_classification_head_parameters(torch_head, device, model_config):
     """Convert PyTorch classification head weights to TTNN format."""
     parameters = {}
 
-    grid_size = ttnn.CoreGrid(y=8, x=8)
+    channel_chunks = group_norm_channel_chunks(device, num_channels=256, num_groups=32)
     layout = (
         ttnn.TILE_LAYOUT if model_config["WEIGHTS_DTYPE"] in [ttnn.bfloat8_b, ttnn.bfloat4_b] else ttnn.ROW_MAJOR_LAYOUT
     )
@@ -29,10 +30,10 @@ def create_classification_head_parameters(torch_head, device, model_config):
         norm_bias = torch_head.conv[i][1].bias.detach()
 
         formatted_norm_weight = ttnn.create_group_norm_weight_bias_rm(
-            norm_weight, num_channels=256, num_cores_x=grid_size.y
+            norm_weight, num_channels=256, num_cores_x=channel_chunks
         )
         formatted_norm_bias = ttnn.create_group_norm_weight_bias_rm(
-            norm_bias, num_channels=256, num_cores_x=grid_size.y
+            norm_bias, num_channels=256, num_cores_x=channel_chunks
         )
         prepared_weight = ttnn.prepare_conv_weights(
             weight_tensor=ttnn.from_torch(conv_weight, dtype=ttnn.bfloat16),

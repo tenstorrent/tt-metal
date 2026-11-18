@@ -4,15 +4,29 @@
 from typing import Optional
 
 import ttnn
+from ttnn.operations.normalization import dram_group_norm_virtual_columns
 from tt_py_test_utils_common.ttnn_utility_functions import get_shard_grid_from_num_cores
 
 # ---------------------------
-# Head conv settings, shared by both heads and their weight preparation
+# Head conv and GroupNorm settings, shared by both heads and their weight preparation
 # ---------------------------
 
 # The bbox_reg conv's DRAM slicing. Its weights and bias are prepared for this same slicing
 # (custom_preprocessor): weights prepared for another slicing are laid out for another program.
 BBOX_REG_SLICE_CONFIG = ttnn.Conv2dSliceConfig(slice_type=ttnn.Conv2dDRAMSliceHeight, num_slices=4)
+
+
+def group_norm_grid(device):
+    """The heads' GroupNorm grid: the device's. Each level uses as many of its rows as divide the
+    level's tile rows (Conv2dNormActivation)."""
+    grid = device.compute_with_storage_grid_size()
+    return ttnn.CoreGrid(y=grid.y, x=grid.x)
+
+
+def group_norm_channel_chunks(device, num_channels, num_groups):
+    """The channel chunks group_norm splits ``num_channels`` into on group_norm_grid, which its
+    weight and bias are prepared for (create_group_norm_weight_bias_rm)."""
+    return dram_group_norm_virtual_columns(group_norm_grid(device), num_channels, num_groups)
 
 
 # ---------------------------
@@ -272,7 +286,7 @@ class Conv2dNormActivation:
             stride: Convolution stride
             padding: Convolution padding
             num_groups: Number of groups for GroupNorm
-            grid_size: CoreGrid for GroupNorm (defaults to 8x8)
+            grid_size: CoreGrid for GroupNorm (defaults to group_norm_grid)
             input_mask: Pre-created input mask for GroupNorm
         """
         self.device = device
@@ -289,7 +303,7 @@ class Conv2dNormActivation:
         self.conv_bias = parameters["bias"]
         self.norm_weight = parameters["norm_weight"]
         self.norm_bias = parameters["norm_bias"]
-        self.grid_size = grid_size if grid_size is not None else ttnn.CoreGrid(y=8, x=8)
+        self.grid_size = grid_size if grid_size is not None else group_norm_grid(device)
 
         self.input_mask = input_mask
 
