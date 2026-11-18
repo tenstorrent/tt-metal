@@ -167,6 +167,18 @@ def test_fill_rm(device):
     logger.info(f"Filled Tensor Shape: {output.shape}")  # Shape([2, 3, 64, 96])
 
 
+def test_move(device):
+    # Create a tensor in L1
+    input_tensor = ttnn.rand(
+        (1, 1, 64, 32), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.L1_MEMORY_CONFIG
+    )
+
+    # Move it to DRAM; the move deallocates the input tensor
+    moved_tensor = ttnn.move(input_tensor, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    logger.debug(f"Input Tensor Allocated: {input_tensor.is_allocated()}")  # False
+    logger.debug(f"Moved Tensor Shape: {moved_tensor.shape}")  # Shape([1, 1, 64, 32])
+
+
 def test_fill_ones_rm(device):
     # Define tensor dimensions
     N = 2
