@@ -90,6 +90,27 @@ uint32_t get_rm_start_offset(const Tensor& tensor, const ttnn::Shape& slice_star
     return start_offset;
 }
 
+void validate_contiguous_nd_output_spec(const tt::tt_metal::TensorSpec& output_spec) {
+    const auto& output_nd_shard_spec = output_spec.memory_config().nd_shard_spec();
+    if (!output_nd_shard_spec.has_value() ||
+        output_nd_shard_spec->shard_distribution_strategy != tt::tt_metal::ShardDistributionStrategy::CONTIGUOUS_1D ||
+        output_spec.logical_shape().volume() == 0) {
+        return;
+    }
+    // The allocator only enforces this in compute_page_mapping, which the slice kernels never call, so an
+    // invalid output spec would otherwise reach the device and hang it.
+    const auto distribution = output_spec.compute_buffer_sharding_args().buffer_distribution_spec();
+    TT_FATAL(
+        distribution.has_value() && distribution->num_shards() % distribution->num_cores() == 0,
+        "Slice output ND shard spec {} is CONTIGUOUS_1D but splits the output shape {} into {} shard(s), which is "
+        "not a multiple of its {} core(s). Pass a memory_config that fits the sliced shape, or omit memory_config "
+        "to derive one from the input.",
+        *output_nd_shard_spec,
+        output_spec.logical_shape(),
+        distribution.has_value() ? distribution->num_shards() : 0,
+        distribution.has_value() ? distribution->num_cores() : 0);
+}
+
 }  // namespace ttnn::operations::experimental::quasar
 
 namespace ttnn::prim::qsr {
@@ -163,23 +184,7 @@ void SliceDeviceOperation::validate_on_program_cache_miss(
             out_tensor.tensor_spec().tensor_layout());
     }
     const auto output_spec = compute_output_specs(args, tensor_args);
-    const auto& output_nd_shard_spec = output_spec.memory_config().nd_shard_spec();
-    if (output_nd_shard_spec.has_value() &&
-        output_nd_shard_spec->shard_distribution_strategy == tt::tt_metal::ShardDistributionStrategy::CONTIGUOUS_1D &&
-        output_spec.logical_shape().volume() != 0) {
-        // The allocator only enforces this in compute_page_mapping, which the slice kernels never call, so an
-        // invalid output spec would otherwise reach the device and hang it.
-        const auto distribution = output_spec.compute_buffer_sharding_args().buffer_distribution_spec();
-        TT_FATAL(
-            distribution.has_value() && distribution->num_shards() % distribution->num_cores() == 0,
-            "Slice output ND shard spec {} is CONTIGUOUS_1D but splits the output shape {} into {} shard(s), which is "
-            "not a multiple of its {} core(s). Pass a memory_config that fits the sliced shape, or omit memory_config "
-            "to derive one from the input.",
-            *output_nd_shard_spec,
-            output_spec.logical_shape(),
-            distribution.has_value() ? distribution->num_shards() : 0,
-            distribution.has_value() ? distribution->num_cores() : 0);
-    }
+    ttnn::operations::experimental::quasar::validate_contiguous_nd_output_spec(output_spec);
     const auto& output_tensor_shape = output_spec.logical_shape();
     if (has_step) {  // if all ones modify before passing in to function
         TT_FATAL(
