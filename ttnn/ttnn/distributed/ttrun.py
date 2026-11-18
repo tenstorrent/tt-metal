@@ -62,10 +62,10 @@ _MPI_ABORT_BANNER = "MPI_ABORT was invoked"
 SHM_MIN_STALE_AGE_S = 30.0
 
 # How long a process still in the launcher's session, when the launcher has just exited, is given to leave on its
-# own before tt-run treats it as a leak. A rank (or a UMD helper child the rank spawned) can still be in its exit
-# path for a fraction of a second after the launcher returns — a graceful finish, not a leftover. Only a process
-# that OUTLASTS this is a genuine leak worth ending and failing on.
-SURVIVOR_SETTLE_S = 3.0
+# own before tt-run acts on it. A rank (or a UMD helper child it spawned) can still be in its exit path after the
+# launcher returns — a graceful finish, not a leftover — and on real hardware a rank in uninterruptible sleep (D)
+# releasing /dev/tenstorrent can take several seconds. Only a process that OUTLASTS this is ended.
+SURVIVOR_SETTLE_S = 10.0
 
 
 def remove_stale_launcher_leftovers() -> int:
@@ -300,8 +300,9 @@ class LaunchedJob:
         finishing a hair late or a genuine leak. Give survivors a bounded settle to leave on their own — a
         graceful exit is the norm and is NOT a leak — and act only on what OUTLASTS it: forward the stop
         (SIGTERM) to each one first, then SIGKILL only what refuses. tt-run never kills a rank it has not first
-        asked to stop. A real leak is recorded on ``self.ended`` (so the caller fails the job) and logged
-        critically with per-process detail (state / wchan / cmdline) so it can be chased down.
+        asked to stop. A survivor is recorded on ``self.ended`` (so a clean run that leaked fails) and logged with
+        per-process detail (state / wchan / cmdline): critically on a clean launcher exit, which is a genuine leak,
+        and at warning after a signalled or aborted teardown, where a straggler is expected cleanup, not a leak.
 
         TODO(#66310): this sees only the launch host's /proc; once the launcher is gone, ranks on other hosts
         are reached only by their own prted's disconnect teardown (best effort). Tier A (an ssh reaper keyed on
@@ -314,11 +315,21 @@ class LaunchedJob:
             survivors = self._survivors()
         if not survivors:
             return
-        logger.critical(
-            f"{TT_RUN_PREFIX} the launcher exited while {len(survivors)} process(es) of its job were still alive "
-            f"on {socket.gethostname()} after {settle_s:.0f}s — a leak (the launcher should have torn the job "
-            f"down itself). Ending them:\n" + "\n".join(self._describe(pid) for pid in survivors)
-        )
+        detail = "\n".join(self._describe(pid) for pid in survivors)
+        if self.forwarded or self._abort_seen:
+            # The job was already being stopped (a signal we relayed, or a rank's MPI_Abort). Ranks the launcher
+            # had not finished reaping are expected cleanup, not a leak — end them, but do not cry "leak".
+            logger.warning(
+                f"{TT_RUN_PREFIX} ending {len(survivors)} straggler(s) the launcher left on "
+                f"{socket.gethostname()} after a signalled teardown:\n{detail}"
+            )
+        else:
+            # A clean launcher exit that still left ranks alive is the genuine anomaly.
+            logger.critical(
+                f"{TT_RUN_PREFIX} the launcher exited cleanly while {len(survivors)} process(es) of its job were "
+                f"still alive on {socket.gethostname()} after {settle_s:.0f}s — a leak (the launcher should have "
+                f"torn the job down itself). Ending them:\n{detail}"
+            )
         self.ended = list(survivors)
         for sig in (signal.SIGTERM, signal.SIGKILL):
             for pid in survivors:
