@@ -7,6 +7,7 @@
 #include <vector>
 
 #include <tt-metalium/constants.hpp>
+#include <tt-metalium/hal.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include <tt-metalium/experimental/fabric/fabric.hpp>
@@ -18,12 +19,16 @@ namespace ttnn::experimental::prim {
 
 namespace {
 
-constexpr uint32_t cb_a = 0;
+constexpr uint32_t cb_e = 0;
 constexpr uint32_t cb_b = 1;
 constexpr uint32_t cb_ein = 2;
 constexpr uint32_t cb_eout = 3;
 constexpr uint32_t cb_chron = 4;
 constexpr uint32_t cb_stage = 5;
+// cb_ein's landing slot again, which compute unpacks straight to DST to add the entry state exactly.
+constexpr uint32_t cb_ein_exact = 6;
+// One BF16 identity tile: compute adds B as I @ B in the matmul, exactly (B in srcA, 1.0 in srcB).
+constexpr uint32_t cb_identity = 7;
 // On the head cores: the sender releases a head once it has read the head's last column.
 constexpr uint32_t ack_semaphore_id = 0;
 // On the sender cores, ids 0, 1, ...: per head the sender serves, the head's finished columns.
@@ -54,8 +59,8 @@ tt::tt_metal::ProgramDescriptor build_program(
     first_hop[axis] = successor_forward ? (sp_rank + 1) % sp_size : (sp_rank + sp_size - 1) % sp_size;
     const bool fabric_2d = tt::tt_fabric::is_2d_fabric_config(tt::tt_fabric::GetFabricConfig());
 
-    const uint32_t batch_heads = in.initial_state.logical_shape()[0];
-    const uint32_t kt = in.initial_state.logical_shape()[1] / tt::constants::TILE_HEIGHT;
+    const auto [batch_heads, key_dim] = relay_state_geometry(in);
+    const uint32_t kt = key_dim / tt::constants::TILE_HEIGHT;
     const uint32_t state_tiles = kt * kt;
     const uint32_t state_tile = tt::constants::TILE_HW * sizeof(float);
     const uint32_t summary_tile = tt::constants::TILE_HW * sizeof(uint16_t);
@@ -71,6 +76,8 @@ tt::tt_metal::ProgramDescriptor build_program(
     const auto eout_set = head_set.merge(sender_set);
 
     const uint32_t sender_slots = relay_affine_prefix_sender_slots(kt, mesh->arch());
+    const uint32_t chron_slot_bytes =
+        std::max(tt::tt_metal::hal::get_dram_alignment(), tt::tt_metal::hal::get_l1_alignment());
     // A K x K slot of the landing buffer on each head core, in place.
     const auto landing_slot_cb = [&](uint32_t index, uint32_t slot) {
         auto cb = kda_factory_detail::cb_descriptor(index, state_tiles, state_tile, tt::DataFormat::Float32, head_set);
@@ -79,11 +86,14 @@ tt::tt_metal::ProgramDescriptor build_program(
         return cb;
     };
     desc.cbs = {
-        kda_factory_detail::cb_descriptor(cb_a, state_tiles, summary_tile, tt::DataFormat::Float16_b, head_set),
+        kda_factory_detail::cb_descriptor(cb_e, state_tiles, summary_tile, tt::DataFormat::Float16_b, head_set),
         kda_factory_detail::cb_descriptor(cb_b, state_tiles, summary_tile, tt::DataFormat::Float16_b, head_set),
         landing_slot_cb(cb_ein, 0),
+        landing_slot_cb(cb_ein_exact, 0),
+        kda_factory_detail::cb_descriptor(cb_identity, 1, summary_tile, tt::DataFormat::Float16_b, head_set),
         kda_factory_detail::cb_descriptor(cb_eout, state_tiles, state_tile, tt::DataFormat::Float32, eout_set),
-        kda_factory_detail::cb_descriptor(cb_chron, 1, 64, tt::DataFormat::UInt32, head_set),
+        // Two DRAM-aligned slots: actual_start, then the slab index.
+        kda_factory_detail::cb_descriptor(cb_chron, 1, 2 * chron_slot_bytes, tt::DataFormat::UInt32, head_set),
         // One page: the sender addresses its slots itself.
         kda_factory_detail::cb_descriptor(
             cb_stage, 1, sender_slots * kt * state_tile, tt::DataFormat::Float32, sender_set),
@@ -95,11 +105,22 @@ tt::tt_metal::ProgramDescriptor build_program(
             .id = first_notify_semaphore_id + k, .core_ranges = sender_set, .initial_value = 0});
     }
 
-    const std::vector<uint32_t> chronology = {sp_rank, sp_size, attrs.local_rows};
-    std::vector<uint32_t> reader_ct = {cb_a, cb_b, cb_ein, cb_chron};
+    // sp_rank and successor_hops are runtime args, so a range's per-chip programs merge into one.
+    const std::vector<uint32_t> chronology = {sp_size, attrs.local_rows};
+    std::vector<uint32_t> reader_ct = {cb_e, cb_b, cb_ein, cb_chron};
     reader_ct.insert(reader_ct.end(), chronology.begin(), chronology.end());
     reader_ct.push_back(kt);
-    for (const auto* tensor : {&in.packed, &in.initial_state, &in.actual_start}) {
+    reader_ct.push_back(cb_ein_exact);
+    reader_ct.push_back(cb_identity);
+    const bool slab = in.slab_index.has_value();
+    for (const uint32_t arg : kda_factory_detail::slab_kernel_args(
+             slab ? &in.initial_state : nullptr, attrs.slab_index_scale, attrs.slab_index_offset)) {
+        reader_ct.push_back(arg);
+    }
+    reader_ct.push_back(batch_heads * state_tiles);
+    reader_ct.push_back(chron_slot_bytes / sizeof(uint32_t));
+    const auto& slab_index = slab ? *in.slab_index : in.actual_start;
+    for (const auto* tensor : {&in.packed, &in.initial_state, &in.actual_start, &slab_index}) {
         tt::tt_metal::TensorAccessorArgs(tensor->buffer()).append_to(reader_ct);
     }
     std::vector<uint32_t> writer_ct = {cb_eout, cb_chron};
@@ -112,8 +133,7 @@ tt::tt_metal::ProgramDescriptor build_program(
     std::vector<uint32_t> sender_ct = {cb_stage, cb_eout};
     sender_ct.insert(sender_ct.end(), chronology.begin(), chronology.end());
     sender_ct.insert(
-        sender_ct.end(),
-        {kt * state_tile, relay_affine_prefix_packet_bytes(), kt, sender_slots, ack_semaphore_id, successor_hops});
+        sender_ct.end(), {kt * state_tile, relay_affine_prefix_packet_bytes(), kt, sender_slots, ack_semaphore_id});
     tt::tt_metal::TensorAccessorArgs(in.actual_start.buffer()).append_to(sender_ct);
 
     tt::tt_metal::KernelDescriptor reader{
@@ -128,11 +148,14 @@ tt::tt_metal::ProgramDescriptor build_program(
         .compile_time_args = std::move(writer_ct),
         .config = tt::tt_metal::WriterConfigDescriptor{},
     };
+    auto compute_config = kda_factory_detail::compute_config_descriptor(mesh->arch(), attrs.compute_kernel_config);
+    compute_config.unpack_to_dest_mode.assign(NUM_CIRCULAR_BUFFERS, tt::tt_metal::UnpackToDestMode::Default);
+    compute_config.unpack_to_dest_mode[cb_ein_exact] = tt::tt_metal::UnpackToDestMode::UnpackToDestFp32;
     tt::tt_metal::KernelDescriptor compute{
         .kernel_source = std::string(kernel_dir) + "compute/relay_affine_prefix.cpp",
         .core_ranges = head_set,
-        .compile_time_args = {cb_a, cb_b, cb_ein, cb_eout, kt},
-        .config = kda_factory_detail::compute_config_descriptor(mesh->arch(), attrs.compute_kernel_config),
+        .compile_time_args = {cb_e, cb_b, cb_ein, cb_eout, kt, cb_ein_exact, cb_identity},
+        .config = std::move(compute_config),
     };
     tt::tt_metal::KernelDescriptor sender{
         .kernel_source = std::string(kernel_dir) + "dataflow/sender_relay_affine_prefix.cpp",
@@ -147,7 +170,8 @@ tt::tt_metal::ProgramDescriptor build_program(
 
     const auto [arrival_address, final_address] = attrs.semaphore_addresses;
     // Every core reads the same buffers, so they are bound once per kernel.
-    reader.emplace_common_runtime_args({in.packed.buffer(), in.initial_state.buffer(), in.actual_start.buffer()});
+    reader.emplace_common_runtime_args(
+        {in.packed.buffer(), in.initial_state.buffer(), in.actual_start.buffer(), slab_index.buffer()});
     writer.emplace_common_runtime_args({entry.buffer(), final_state.buffer(), in.landing.buffer()});
     for (uint32_t h = 0; h < batch_heads; ++h) {
         const auto& core = head_cores[h];
@@ -155,6 +179,7 @@ tt::tt_metal::ProgramDescriptor build_program(
         tt::tt_metal::KernelDescriptor::RTArgList reader_rt;
         reader_rt.push_back(h);
         reader_rt.push_back(arrival_address);
+        reader_rt.push_back(sp_rank);
         reader.emplace_runtime_args(core, reader_rt);
         tt::tt_metal::KernelDescriptor::RTArgList writer_rt;
         writer_rt.push_back(h);
@@ -162,6 +187,7 @@ tt::tt_metal::ProgramDescriptor build_program(
         writer_rt.push_back(first_notify_semaphore_id + h / attrs.num_links);
         writer_rt.push_back(static_cast<uint32_t>(sender_core.x));
         writer_rt.push_back(static_cast<uint32_t>(sender_core.y));
+        writer_rt.push_back(sp_rank);
         writer.emplace_runtime_args(core, writer_rt);
     }
     desc.kernels = {std::move(reader), std::move(writer), std::move(compute), std::move(sender)};
@@ -190,6 +216,8 @@ tt::tt_metal::ProgramDescriptor build_program(
         sender_rt.push_back(static_cast<uint32_t>(destination_node.chip_id));
         sender_rt.push_back(arrival_address);
         sender_rt.push_back(final_address);
+        sender_rt.push_back(sp_rank);
+        sender_rt.push_back(successor_hops);
         sender_rt.push_back(static_cast<uint32_t>(heads.size()));
         sender_rt.append(heads);
         sender_rt.append(notify);

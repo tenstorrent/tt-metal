@@ -11,13 +11,19 @@ after ``index.json`` is fsynced, so a crashed attempt can never look complete an
 ``index.json`` is written by the coordinator only. It records, per canonical key, the global and canonical shapes,
 the transform, the topology label the writer trusted, every live name the tensor was seen under, and a columnar
 table of chunks: one row per unique shard, with its box in the global array, the file that holds it, its byte range
-and its CRC. Readers reject a higher major version and ignore unknown fields.
+and its CRC. A model's keys share a handful of labels, each listing every device's mesh coordinate, so the index
+holds each distinct label once, in a ``labels`` table, and an entry's ``label`` is its position there.
+
+Readers refuse a newer ``VERSION`` and ignore fields they do not know. A new field that a reader may ignore needs no
+bump. A field readers require, or one that changes how the rest is read (a reader ignoring it would load the wrong
+data), bumps ``VERSION``, so that an older reader refuses the checkpoint instead of misreading it.
 """
 
 from __future__ import annotations
 
 import datetime
 import errno
+import gc
 import json
 import math
 import os
@@ -25,8 +31,9 @@ import re
 import secrets
 import shutil
 import warnings
+from contextlib import contextmanager
 from dataclasses import dataclass, field
-from typing import Any, Sequence
+from typing import Any, Iterator, Sequence
 
 from ._boxes import Box
 from ._errors import CheckpointError, IncompleteCheckpointError, VersionError
@@ -103,6 +110,11 @@ class Index:
         return mapping
 
     def to_json(self) -> dict:
+        label_ids: dict[Label, int] = {}
+        state = {
+            key: _entry_to_json(entry, label_ids.setdefault(entry.label, len(label_ids)))
+            for key, entry in self.entries.items()
+        }
         return {
             "format": self.format,
             "version": self.version,
@@ -118,7 +130,8 @@ class Index:
                 }
                 for f in self.files
             ],
-            "state": {key: _entry_to_json(entry) for key, entry in self.entries.items()},
+            "labels": [label.to_json() for label in label_ids],
+            "state": state,
             "scalars": {key: _scalar_to_json(value) for key, value in self.scalars.items()},
         }
 
@@ -139,7 +152,8 @@ class Index:
             )
             for f in value["files"]
         ]
-        entries = {key: _entry_from_json(key, e) for key, e in value["state"].items()}
+        labels = [Label.from_json(label) for label in value["labels"]]
+        entries = {key: _entry_from_json(key, e, labels) for key, e in value["state"].items()}
         scalars = {key: _scalar_from_json(v) for key, v in value["scalars"].items()}
         return Index(
             checkpoint_id=str(value["checkpoint_id"]),
@@ -166,7 +180,7 @@ def _expand(values: list, n: int) -> list:
     return values * n if len(values) == 1 and n != 1 else values
 
 
-def _entry_to_json(entry: Entry) -> dict:
+def _entry_to_json(entry: Entry, label_id: int) -> dict:
     chunks = entry.chunks
     table = {
         "n": len(chunks),
@@ -184,7 +198,7 @@ def _entry_to_json(entry: Entry) -> dict:
         "global_shape": list(entry.global_shape),
         "canonical_shape": list(entry.canonical_shape),
         "transform": entry.transform.to_json(),
-        "label": entry.label.to_json(),
+        "label": label_id,
         "live_keys": list(entry.live_keys),
         "chunks": table,
     }
@@ -196,11 +210,27 @@ def _entry_to_json(entry: Entry) -> dict:
     return value
 
 
-def _entry_from_json(key: str, value: dict) -> Entry:
+def _shape(key: str, what: str, value: Any, ndim: int | None = None) -> tuple[int, ...]:
+    """``value`` from an index as a tuple of non-negative ints (``ndim`` of them when given), or a
+    ``CheckpointError`` naming the entry."""
+    if (
+        not isinstance(value, list)
+        or (ndim is not None and len(value) != ndim)
+        or not all(type(v) is int and v >= 0 for v in value)
+    ):
+        raise CheckpointError(f"index entry {key!r}: malformed {what} {value!r}")
+    return tuple(value)
+
+
+def _entry_from_json(key: str, value: dict, labels: Sequence[Label]) -> Entry:
+    # Boxes are built unchecked (``Box``), so every shape and box an index holds is checked here.
+    global_shape = _shape(key, "global_shape", value["global_shape"])
+    ndim = len(global_shape)
     table = value["chunks"]
     n = int(table["n"])
     offsets = table["offsets"]
-    sizes = _expand(table["sizes"], n)
+    # A broadcast sizes column holds one row: checked once, then repeated.
+    sizes = _expand([_shape(key, "chunk sizes", s, ndim) for s in table["sizes"]], n)
     files = table["file"]
     data_offsets = table["data_offset"]
     nbytes = _expand(table["nbytes"], n)
@@ -213,7 +243,7 @@ def _entry_from_json(key: str, value: dict) -> Entry:
         raise CheckpointError(f"index entry {key!r}: malformed crc32 column") from None
     chunks = [
         ChunkRecord(
-            box=Box(tuple(offsets[i]), tuple(sizes[i])),
+            box=Box(_shape(key, "chunk offsets", offsets[i], ndim), sizes[i]),
             file=int(files[i]),
             data_offset=int(data_offsets[i]),
             nbytes=int(nbytes[i]),
@@ -224,19 +254,24 @@ def _entry_from_json(key: str, value: dict) -> Entry:
     tp_split = value["tp_split"]
     if (
         not isinstance(tp_split, list)
-        or len(tp_split) != len(value["global_shape"])
+        or len(tp_split) != ndim
         or not all(isinstance(s, int) and s >= 1 for s in tp_split)
     ):
         raise CheckpointError(f"index entry {key!r}: malformed tp_split {tp_split!r}")
+    label_id = value["label"]
+    if type(label_id) is not int or not 0 <= label_id < len(labels):
+        raise CheckpointError(
+            f"index entry {key!r}: label {label_id!r} is not a position in the index's table of {len(labels)} labels"
+        )
     return Entry(
         key=key,
         role=str(value["role"]),
         dtype=str(value["dtype"]),
         layout=str(value["layout"]),
-        global_shape=tuple(value["global_shape"]),
-        canonical_shape=tuple(value["canonical_shape"]),
+        global_shape=global_shape,
+        canonical_shape=_shape(key, "canonical_shape", value["canonical_shape"], ndim),
         transform=transform_from_json(value["transform"]),
-        label=Label.from_json(value["label"]),
+        label=labels[label_id],
         live_keys=tuple(value["live_keys"]),
         chunks=chunks,
         param_ref=value.get("param_ref"),
@@ -302,20 +337,27 @@ def find_latest(root: str, prefix: str = "", include_replaced: bool = False) -> 
     ``include_replaced`` also considers ``.replaced-`` directories, which ``finalize_staging`` leaves behind only if
     a process dies between moving the old checkpoint aside and moving the new one in. It is a recovery aid: a final
     directory always wins a step tie, and a replaced directory it returns must be renamed back to its final name
-    before ``load`` (or ``is_complete``) accepts it."""
+    before ``load`` (or ``is_complete``) accepts it.
+
+    Directories left by saves that did not finish, ``.partial-`` ones of saves that died and ``.replaced-`` ones of
+    interrupted overwrites, can each hold a whole checkpoint. Nothing removes them, since a ``.partial-`` directory may
+    belong to a save still running in another job; this warns about those of ``prefix``, naming each."""
     best: tuple[int, int, str, str] | None = None
+    leftovers: list[str] = []
     try:
         names = os.listdir(root)
     except FileNotFoundError:
         return None
     for name in names:
         candidate = name
-        if REPLACED_MARK in name:
-            if not include_replaced:
+        mark = REPLACED_MARK if REPLACED_MARK in name else PARTIAL_MARK if PARTIAL_MARK in name else None
+        if mark is not None:
+            candidate = name.split(mark, 1)[0]
+            stem = parse_dir_name(candidate)
+            if stem is not None and stem[0] == prefix:
+                leftovers.append(name)
+            if mark == PARTIAL_MARK or not include_replaced:
                 continue
-            candidate = name.split(REPLACED_MARK, 1)[0]
-        elif PARTIAL_MARK in name:
-            continue
         parsed = parse_dir_name(candidate)
         if parsed is None or parsed[0] != prefix:
             continue
@@ -325,6 +367,15 @@ def find_latest(root: str, prefix: str = "", include_replaced: bool = False) -> 
         rank = (parsed[1], 0 if REPLACED_MARK in name else 1, name, path)
         if best is None or rank > best:
             best = rank
+    if leftovers:
+        count = f"{len(leftovers)} director{'y' if len(leftovers) == 1 else 'ies'}"
+        warnings.warn(
+            f"{root} holds {count} left by saves that did not finish: {', '.join(sorted(leftovers))}. A .partial- "
+            f"directory is the staging directory of a save that died, or of one still running; a .replaced- one is a "
+            f"previous checkpoint that an interrupted overwrite moved aside. Remove them once no save into {root} is "
+            f"running.",
+            stacklevel=2,
+        )
     return best[3] if best else None
 
 
@@ -428,20 +479,37 @@ def check_json(name: str, value: Any) -> Any:
     return walk(value, "")
 
 
-def _atomic_write_json(path: str, value: Any) -> None:
+def _atomic_write_text(path: str, text: str) -> None:
     tmp = f"{path}.tmp"
     with open(tmp, "w", encoding="utf-8") as f:
-        json.dump(value, f, indent=1, sort_keys=False)
+        f.write(text)
         f.flush()
         os.fsync(f.fileno())
     os.replace(tmp, path)
     _fsync_dir(os.path.dirname(path) or ".")
 
 
+@contextmanager
+def _gc_paused() -> Iterator[None]:
+    """The cyclic garbage collector paused, for building or parsing an index: both allocate millions of small objects
+    that form no cycles, so the collections their allocation triggers would scan them for nothing."""
+    enabled = gc.isenabled()
+    gc.disable()
+    try:
+        yield
+    finally:
+        if enabled:
+            gc.enable()
+
+
 def write_index(directory: str, index: Index) -> None:
+    """``index.json`` as compact JSON: about a third of the indented size, and written by CPython's C encoder, which
+    any ``indent`` replaces with the pure-Python one. Unlike ``header.json``, it is read by machines."""
     if not index.created:
         index.created = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-    _atomic_write_json(os.path.join(directory, INDEX_NAME), index.to_json())
+    with _gc_paused():
+        text = json.dumps(index.to_json(), separators=(",", ":"))
+    _atomic_write_text(os.path.join(directory, INDEX_NAME), text)
 
 
 def _refuse_staging(directory: str) -> None:
@@ -459,7 +527,7 @@ def read_index(directory: str) -> Index:
     if not os.path.isfile(path):
         raise IncompleteCheckpointError(f"{directory} has no {INDEX_NAME}; it is not a complete checkpoint")
     try:
-        with open(path, "r", encoding="utf-8") as f:
+        with open(path, "r", encoding="utf-8") as f, _gc_paused():
             return Index.from_json(json.load(f))
     except CheckpointError as err:
         raise type(err)(f"{path}: {err}") from err
@@ -470,7 +538,7 @@ def read_index(directory: str) -> Index:
 
 
 def write_header(directory: str, header: dict) -> None:
-    _atomic_write_json(os.path.join(directory, HEADER_NAME), header)
+    _atomic_write_text(os.path.join(directory, HEADER_NAME), json.dumps(header, indent=1))
 
 
 def read_header_json(directory: str) -> dict:

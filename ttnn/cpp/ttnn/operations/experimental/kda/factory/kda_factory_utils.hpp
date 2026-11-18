@@ -3,6 +3,7 @@
 
 #pragma once
 
+#include <array>
 #include <initializer_list>
 #include <optional>
 #include <span>
@@ -55,11 +56,25 @@ void check_distinct_buffers(
     std::initializer_list<std::pair<const Tensor*, std::string_view>> tensors, std::string_view operation_name);
 void check_actual_start(const Tensor& reference, const Tensor& actual_start, std::string_view operation_name);
 void check_output_interleaved(const tt::tt_metal::MemoryConfig& memory_config, std::string_view operation_name);
-void check_compute_config(const DeviceComputeKernelConfig& config, std::string_view operation_name);
-// Kernels that carry the recurrent state in FP32 through DST (UnpackToDest) need a 32-bit DST.
-void check_fp32_dest_acc(const DeviceComputeKernelConfig& config, std::string_view operation_name);
 
-// Affine summaries are one tensor [S, N, K, K+V] holding K rows of [A | B] per transform: slot 0 holds head
+// A state slab `[entries, ...]` addressed at entry `index * scale + offset`, `index` being the replicated UINT32
+// `slab_index` scalar read on device (a captured trace follows it). The kernels take {slab, limit, scale, offset},
+// index < limit <=> entry < entries; without a slab {0, 1, 1, 0}, entry 0.
+std::array<uint32_t, 4> slab_kernel_args(const Tensor* slab, uint32_t scale, uint32_t offset);
+// An allocated DRAM slab (any layout: kernels use its TensorAccessor), and a slab_index scalar and entry for it.
+void check_slab_index(
+    const Tensor& reference,
+    const Tensor& slab,
+    const Tensor& slab_index,
+    uint32_t scale,
+    uint32_t offset,
+    std::string_view operation_name);
+void check_compute_config(const DeviceComputeKernelConfig& config, std::string_view operation_name);
+// Kernels that form FP32 values in DST need a 32-bit DST; `reason` says what the operation forms there.
+void check_fp32_dest_acc(
+    const DeviceComputeKernelConfig& config, std::string_view operation_name, std::string_view reason);
+
+// Affine summaries are one tensor [S, N, K, K+V] holding K rows of [E | B] (E = A - I) per transform: slot 0 holds head
 // transforms and slot 1, when present, tail transforms. Kernels address it by page through TensorAccessor.
 struct PackedSummaryShape {
     uint32_t slots;

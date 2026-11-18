@@ -21,13 +21,13 @@ namespace ckernel
 namespace sfpu
 {
 
-static constexpr std::uint32_t generic_moe_gate_dst_tile_offset = 64;
-static constexpr std::uint32_t generic_moe_gate_scores_tile     = 0;
-static constexpr std::uint32_t generic_moe_gate_indices_tile    = 1 * generic_moe_gate_dst_tile_offset;
-static constexpr std::uint32_t generic_moe_gate_bias_tile       = 2 * generic_moe_gate_dst_tile_offset;
-static constexpr std::uint32_t generic_moe_gate_interm_tile     = 3 * generic_moe_gate_dst_tile_offset;
+constexpr std::uint32_t generic_moe_gate_dst_tile_offset = 64;
+constexpr std::uint32_t generic_moe_gate_scores_tile     = 0;
+constexpr std::uint32_t generic_moe_gate_indices_tile    = 1 * generic_moe_gate_dst_tile_offset;
+constexpr std::uint32_t generic_moe_gate_bias_tile       = 2 * generic_moe_gate_dst_tile_offset;
+constexpr std::uint32_t generic_moe_gate_interm_tile     = 3 * generic_moe_gate_dst_tile_offset;
 
-static constexpr std::uint16_t generic_moe_gate_neg_inf_bf16 = 0xFF80; // bf16 -inf; SFPLOADI FLOATB widens it to fp32 0xFF800000
+constexpr std::uint16_t generic_moe_gate_neg_inf_bf16 = 0xFF80; // bf16 -inf; SFPLOADI FLOATB widens it to fp32 0xFF800000
 
 // Load a full 16-row face. LREG0-3 hold biased scores; LREG4-7 pack
 // indices into LO16 and original scores into HI16.

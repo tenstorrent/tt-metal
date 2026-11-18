@@ -13,8 +13,14 @@ import glob
 import json
 import os
 import re
+import runpy
+from pathlib import Path
 
 import pandas as pd
+
+canonical_test_name = runpy.run_path(
+    str(Path(__file__).with_name("test_name_aliases.py"))
+)["canonical_test_name"]
 
 # 5 runs of one commit on Blackhole moved at most 1.9% and 25 cycles (#53752).
 DEFAULT_THRESHOLD = 0.02
@@ -45,6 +51,10 @@ def _is_metric(col):
 
 
 MODULE_COL = "test_module"
+
+
+def _canonical_module(module):
+    return canonical_test_name(module)
 
 
 def _is_ignored(col):
@@ -129,12 +139,13 @@ def _module_of(path):
 
 
 def _read_frames(paths):
-    """Each side's frames, stamped with their test module unless they carry one."""
+    """Read frames and canonicalize legacy module names before point matching."""
     frames = []
     for path in paths:
         frame = pd.read_csv(path)
         if MODULE_COL not in frame.columns:
             frame[MODULE_COL] = _module_of(path)
+        frame[MODULE_COL] = frame[MODULE_COL].map(_canonical_module)
         frames.append(frame)
     return frames
 

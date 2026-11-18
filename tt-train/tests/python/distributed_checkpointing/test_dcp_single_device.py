@@ -83,7 +83,8 @@ def _same(actual: dict, expected: dict) -> bool:
     )
 
 
-def test_a_float32_parameter_round_trips_and_the_index_records_the_device(tmp_path):
+def test_float32_round_trip_records_the_device(tmp_path):
+    """A float32 parameter round trips, and the index records the device."""
     assert ttml.maybe_mesh() is None
     model = _F32(seed=1)
     assert model.w.tensor.get_value(NATIVE).dtype == ttnn.DataType.FLOAT32, "precondition"
@@ -137,7 +138,8 @@ def test_optimizer_state_round_trips_and_the_next_step_matches(tmp_path, make_op
     assert _same(_slices(fresh.parameters()), _slices(model.parameters())), "the restored state steps alike"
 
 
-def test_state_not_keyed_by_a_parameter_of_the_model_is_saved_as_it_is(tmp_path):
+def test_state_of_other_parameters_is_saved_as_is(tmp_path):
+    """Optimizer state not keyed by a parameter of the model passed is saved as it is."""
     # The optimizer covers the whole pair, the model passed is one half: none of the state's names is one of its
     # parameters, so each state tensor is saved under its own key with an identity layout, and loads back the same way.
     pair = _Pair(DIM)
@@ -154,7 +156,8 @@ def test_state_not_keyed_by_a_parameter_of_the_model_is_saved_as_it_is(tmp_path)
     assert _same(_state_slices(fresh_opt), _state_slices(opt))
 
 
-def test_a_one_byte_budget_writes_one_key_at_a_time_and_threads_are_honoured(tmp_path, monkeypatch):
+def test_one_byte_budget_and_threads(tmp_path, monkeypatch):
+    """A one-byte in-flight budget writes one key at a time, and the thread count is honoured."""
     model = _Pair(DIM)
     opt = make_adamw(model.parameters())
     train_step(model, opt, DIM)
@@ -177,9 +180,8 @@ def test_a_one_byte_budget_writes_one_key_at_a_time_and_threads_are_honoured(tmp
     assert _same(_state_slices(fresh_opt), _state_slices(opt))
 
 
-def test_a_missing_data_file_and_a_mismatched_spec_are_refused_before_anything_is_placed(
-    tmp_path, monkeypatch, expect_error
-):
+def test_missing_file_or_bad_spec_is_refused_first(tmp_path, monkeypatch, expect_error):
+    """A missing data file and a mismatched spec are refused before anything is placed."""
     model = _Pair(DIM)
     path = str(tmp_path / "step_0000001")
     dcp.save(path, model=model)

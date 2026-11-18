@@ -298,9 +298,8 @@ def test_save_refuses_bad_state_before_writing_and_leaks_nothing(tp_mesh, tmp_pa
     assert os.listdir(tmp_path) == [], "the staging directory is removed"
 
 
-def test_a_load_that_fails_after_placing_says_the_model_is_partly_restored(
-    tp_mesh, tmp_path, monkeypatch, expect_error
-):
+def test_failed_load_says_model_is_partly_restored(tp_mesh, tmp_path, monkeypatch, expect_error):
+    """A load that fails after placing tensors says the model is partly restored."""
     from ttml.distributed_checkpointing import _load
 
     model, params, opt = fresh_tp(DIM)
@@ -332,7 +331,8 @@ def test_a_load_that_fails_after_placing_says_the_model_is_partly_restored(
     assert type(raised.value) is RuntimeError, "nothing was placed: the error as it was raised"
 
 
-def test_a_truncated_data_file_is_refused_before_anything_is_placed(tp_mesh, tmp_path, expect_error):
+def test_truncated_data_file_is_refused_first(tp_mesh, tmp_path, expect_error):
+    """A truncated data file is refused before anything is placed."""
     import glob
 
     model, params, opt = fresh_tp(DIM)
@@ -398,7 +398,8 @@ def _cpp_llama():
     return ttml.models.distributed.llama.create_llama_model(cfg)
 
 
-def test_a_cpp_model_round_trips_on_the_same_world_and_warns_that_only_this_tp_size_works(tp_mesh, tmp_path):
+def test_cpp_model_round_trips_on_the_same_world(tp_mesh, tmp_path):
+    """A C++ model round trips on the same world, with a warning that only this TP size can load it."""
     model = _cpp_llama()
     saved = _model_shards(model.parameters())
     path = str(tmp_path / "ckpt")
@@ -427,7 +428,8 @@ class _Qkv(AbstractModuleBase):
         self.qkv_linear = ColumnParallelLinear(dim, 2 * dim, has_bias=False, fused_segments=fused_segments)
 
 
-def test_an_undeclared_fused_weight_loads_only_where_its_row_order_is_left_alike(tp_mesh, tmp_path, expect_error):
+def test_undeclared_fused_weight_needs_same_row_order(tp_mesh, tmp_path, expect_error):
+    """An undeclared fused weight loads only where its row order is left alike."""
     model = _Qkv(DIM)  # no declaration: its rows are in TP2's per-shard order, which only the TP split records
     path = str(tmp_path / "undeclared")
     with pytest.warns(UserWarning, match="declares no fused_segments"):
@@ -675,7 +677,8 @@ def test_fsdp_round_trip_and_the_sharded_state_gate(fsdp_mesh, tmp_path, expect_
     ttml.autograd.AutoContext.get_instance().reset_graph()
 
 
-def test_fsdp_load_refuses_a_gathered_module_and_an_optimizer_built_before_sharding(fsdp_mesh, tmp_path, expect_error):
+def test_fsdp_load_refuses_gathered_or_early_optimizer(fsdp_mesh, tmp_path, expect_error):
+    """An FSDP load refuses a gathered module, and an optimizer built before sharding."""
     model = _Stack(DIM)
     ttml.fsdp.fully_shard(model)
     opt = make_adamw(model.parameters())

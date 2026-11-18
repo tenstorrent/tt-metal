@@ -258,11 +258,11 @@ KBlock choose_k_block(uint32_t Kt, uint64_t budget, uint32_t kb_max, const Geo& 
     throw L1Miss("matmul_reduce_scatter_prefill: even kb=1 exceeds the L1 budget (regime DRAM-landing is deferred)");
 }
 
-GridChoice choose_grid(uint32_t gx, uint32_t gy, uint32_t block_m, uint32_t block_n, uint32_t L) {
+GridChoice choose_grid(uint32_t gx, uint32_t gy, uint32_t block_m, uint32_t block_n, uint32_t L, bool column_major) {
     std::optional<std::pair<std::tuple<bool, uint64_t, int64_t, uint64_t, uint64_t, bool>, GridChoice>> best;
     for (Strip strip : {Strip::Row, Strip::Col}) {
         const uint32_t strip_len = strip == Strip::Row ? gx : gy;
-        if (2 * L > strip_len) {
+        if (2 * L > strip_len || (column_major && strip == Strip::Row)) {
             continue;
         }
         const uint32_t rx = strip == Strip::Row ? gx : gx - 1;
@@ -335,7 +335,7 @@ Plan plan_chunk_geometry(uint32_t n_m_req, uint32_t n_n_req, const PlanInputs& i
     pl.n_n = tt::div_up(in.block_n, pl.chunk_n);
     const uint32_t chunks = pl.n_m * pl.n_n;
     pl.zone_sets = chunks == 1 ? 1 : std::max(1u, std::min(kZoneSets, chunks));
-    pl.grid = choose_grid(in.gx, in.gy, pl.chunk_m, pl.chunk_n, in.L);
+    pl.grid = choose_grid(in.gx, in.gy, pl.chunk_m, pl.chunk_n, in.L, in.column_major_ccl);
     const GridChoice& gd = pl.grid;
     if (in.kind == ScheduleKind::RingBalanced && gd.grid_m * gd.grid_n < 2) {
         throw GeometryMiss("matmul_reduce_scatter_prefill: a balanced ring needs >= 2 matmul cores (two halves)");
@@ -631,7 +631,8 @@ const Plan& solve_plan(const PlanInputs& in) {
         in.tA,
         in.tW,
         in.scatter_dim,
-        in.budget);
+        in.budget,
+        in.column_major_ccl);
     static std::mutex solved_mutex;
     static std::map<std::remove_const_t<decltype(key)>, Plan> solved;
     const std::lock_guard<std::mutex> lock(solved_mutex);

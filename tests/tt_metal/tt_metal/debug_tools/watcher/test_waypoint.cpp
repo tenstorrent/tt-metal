@@ -175,9 +175,12 @@ void RunTest(MeshWatcherFixture* fixture, const std::shared_ptr<distributed::Mes
 
     constexpr int timeout_ms = 30000;
     auto start = std::chrono::steady_clock::now();
-    while (!FileContainsAllStrings(fixture->log_file_name, poll_strings)) {
+    while (!FileContainsAllStrings(fixture->log_file_name, poll_strings, /*report_missing=*/false)) {
         auto elapsed =
             std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - start).count();
+        if (elapsed >= timeout_ms) {
+            FileContainsAllStrings(fixture->log_file_name, poll_strings);  // logs what's missing, and the file
+        }
         ASSERT_LT(elapsed, timeout_ms) << "Timed out waiting for watcher to log " << waypoint << " waypoints";
         std::this_thread::sleep_for(std::chrono::milliseconds(1000));
     }
@@ -303,9 +306,12 @@ void RunEthTest(MeshWatcherFixture* fixture, const std::shared_ptr<distributed::
 
     constexpr int timeout_ms = 30000;
     auto start = std::chrono::steady_clock::now();
-    while (!FileContainsAllStrings(fixture->log_file_name, poll_strings)) {
+    while (!FileContainsAllStrings(fixture->log_file_name, poll_strings, /*report_missing=*/false)) {
         auto elapsed =
             std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - start).count();
+        if (elapsed >= timeout_ms) {
+            FileContainsAllStrings(fixture->log_file_name, poll_strings);  // logs what's missing, and the file
+        }
         ASSERT_LT(elapsed, timeout_ms) << "Timed out waiting for watcher to log ETH waypoints";
         std::this_thread::sleep_for(std::chrono::milliseconds(1000));
     }
