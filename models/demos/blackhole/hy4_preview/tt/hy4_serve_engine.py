@@ -468,6 +468,10 @@ class Hy4Engine:
                 n = (len(prompts_by_row[r]) // PAGE) * PAGE
                 self.ret[r] = torch.as_tensor(prompts_by_row[r][:n], dtype=torch.int32).numpy().copy() if n else None
                 self.ret_t[r] = now
+        if self.blocks_on:
+            self._dram(
+                "blocks: after prefill call"
+            )  # steady-state free DRAM per bank (low-water proxy for the mega-bundle gate)
         first = {}
         for r in rows:
             sp = (sampling or {}).get(r, (0.0, -1, 1.0, 0))

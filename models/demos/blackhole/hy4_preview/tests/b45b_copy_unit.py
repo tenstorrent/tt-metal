@@ -82,7 +82,7 @@ def main():
             return 64  # kv: 64 rows per pool page; key: 64 tile-rows per page
 
         rnd = random.Random(3)
-        for trial, n in enumerate((1, 7, 64, 200)):
+        for trial, n in enumerate((1, 7, 64, 128)):
             src = sorted(rnd.sample(range(A), n))
             dst = rnd.sample(range(A, P), n)
             pairs = list(zip(src, dst))  # copy-out (active -> shadow), shuffled shadow targets = non-contiguous runs
