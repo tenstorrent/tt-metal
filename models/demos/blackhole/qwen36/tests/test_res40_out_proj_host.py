@@ -63,9 +63,9 @@ def progcfg_fields(monkeypatch):
     monkeypatch.setattr(ttnn, "MatmulMultiCoreReuseMultiCast1DProgramConfig", lambda **kw: SimpleNamespace(**kw))
 
 
-def _tp_args(tp):
+def _tp_args(tp, grid=(11, 10)):
     args = SimpleNamespace(num_devices=tp, **_QWEN38)
-    mesh = SimpleNamespace(shape=(1, tp), compute_with_storage_grid_size=lambda: SimpleNamespace(x=11, y=10))
+    mesh = SimpleNamespace(shape=(1, tp), compute_with_storage_grid_size=lambda: SimpleNamespace(x=grid[0], y=grid[1]))
     Qwen36ModelArgs._init_tp_config(args, mesh)
     return args
 
@@ -143,3 +143,10 @@ def test_the_tp8_in_projections_take_wider_grids_with_the_same_k_blocks(progcfg_
     assert tp4.gdn_qkvz_decode_1d_progcfg.compute_with_storage_grid_size == (11, 4)
     for pc in (qkv, qkvz, tp4.attn_qkv_decode_1d_progcfg, tp4.gdn_qkvz_decode_1d_progcfg):
         assert pc.in0_block_w == 8 and pc.per_core_M == 1 and pc.mcast_in0 and pc.fused_activation is None
+
+
+def test_a_tp8_grid_too_narrow_for_84_cores_keeps_the_tp4_in_projection_grids(progcfg_fields):
+    """84 cores need 11 rows of an 8-wide (Wormhole) grid, so TP=8 there keeps the grids that fit."""
+    tp8 = _tp_args(8, grid=(8, 8))
+    assert tp8.attn_qkv_decode_1d_progcfg.compute_with_storage_grid_size == (8, 8)
+    assert tp8.gdn_qkvz_decode_1d_progcfg.compute_with_storage_grid_size == (8, 6)
