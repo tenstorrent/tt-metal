@@ -161,11 +161,10 @@ def test_lerp_large_opposite_sign(device, magnitude, weight, use_scalar_weight, 
     assert_with_ulp(expected_result=golden, actual_result=calculated, ulp_threshold=1)
 
 
-@pytest.mark.parametrize("weight", [0.0, 1.0])
 @pytest.mark.parametrize("use_scalar_weight", [True, False])
 @pytest.mark.parametrize("input_dtype", ["bfloat16", "float32"])
-def test_lerp_endpoint_passthrough(device, weight, use_scalar_weight, input_dtype):
-    """weight == 0 returns input and weight == 1 returns end, bit-exact, across the finite range."""
+def test_lerp_zero_weight_passthrough(device, use_scalar_weight, input_dtype):
+    """weight == 0 returns input bit-exact across the finite range, also where end - input overflows."""
     if not ttnn.device.is_blackhole(device):
         pytest.skip("Overflow-safe lerp is implemented on Blackhole only")
     torch_dtype = getattr(torch, input_dtype)
@@ -178,7 +177,6 @@ def test_lerp_endpoint_passthrough(device, weight, use_scalar_weight, input_dtyp
     values = torch.where(torch.isfinite(values), values, torch.ones_like(values))
     torch_input, torch_end = values[0], values[1]
 
-    calculated = _run_lerp_exact_inputs(device, torch_input, torch_end, weight, use_scalar_weight)
+    calculated = _run_lerp_exact_inputs(device, torch_input, torch_end, 0.0, use_scalar_weight)
 
-    expected = torch_input if weight == 0.0 else torch_end
-    assert torch.equal(calculated, expected)
+    assert torch.equal(calculated, torch_input)

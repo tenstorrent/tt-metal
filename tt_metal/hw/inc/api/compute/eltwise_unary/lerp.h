@@ -16,9 +16,9 @@ namespace ckernel {
 /**
  * Performs elementwise linear interpolation (lerp): out = input + weight * (end - input)
  *
- * Blackhole evaluates it as (input - weight * input) + weight * end, which stays finite when end - input
- * overflows. There, with is_fp32_dest_acc_en == false, the result is rounded for a 16-bit Dest store only,
- * so Dest must not be in 32-bit mode.
+ * On Blackhole, lanes where end - input is not finite are evaluated as (input - weight * input) + weight * end,
+ * and with is_fp32_dest_acc_en == false the result is rounded for a 16-bit Dest store only, so Dest must not
+ * be in 32-bit mode.
  *
  * | Argument | Description                                                | Type     | Valid Range                                           | Required |
  * |----------|------------------------------------------------------------|----------|-------------------------------------------------------|----------|

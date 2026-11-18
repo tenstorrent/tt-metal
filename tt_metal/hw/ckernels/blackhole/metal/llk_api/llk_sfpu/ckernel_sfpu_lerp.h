@@ -12,16 +12,12 @@ namespace ckernel::sfpu {
 
 template <bool APPROXIMATION_MODE>
 inline void lerp_init() {
-    // Dest advance of calculate_lerp's last store per iteration (one sfpi row is two dest counter steps):
-    // two rows for the fp32 loop, one row for the bf16 loop.
-    addr_mod_t{.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = 4}}.set(ADDR_MOD_6);
+    // calculate_lerp's store advances dest by one sfpi row (two dest counter steps).
     addr_mod_t{.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = 2}}.set(ADDR_MOD_5);
 }
 
-// fp32 -> bf16 round-to-nearest-even ("bits + 0x7fff + lsb") for a value that goes straight to a
-// 16-bit Dest store. The low 16 bits are not cleared: the 16-bit store keeps only the high half,
-// so the result must not stay in an fp32 Dest or be read back before the store.
-// bias (0x7fff) and one (1) are bound by the caller, which keeps them in LREGs across rows.
+// fp32 -> bf16 round-to-nearest-even for a value stored straight to a 16-bit Dest: the low 16 bits
+// are left as is, so the result must not be read back or kept in an fp32 Dest.
 sfpi_inline sfpi::vFloat _lerp_bf16_rne_for_16b_store_(
     const sfpi::vFloat in, const sfpi::vUInt bias, const sfpi::vUInt one) {
     sfpi::vUInt bits = sfpi::as<sfpi::vUInt>(in);
@@ -30,7 +26,7 @@ sfpi_inline sfpi::vFloat _lerp_bf16_rne_for_16b_store_(
     return sfpi::as<sfpi::vFloat>(bits);
 }
 
-// Requires lerp_init() (programs ADDR_MOD_5 and ADDR_MOD_6).
+// Requires lerp_init() (programs ADDR_MOD_5).
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en, DataFormat data_format, int ITERATIONS>
 inline void calculate_lerp(
     const uint dst_index_in0,  // input (start)
@@ -40,7 +36,6 @@ inline void calculate_lerp(
     static_assert(
         data_format == DataFormat::Float32 || data_format == DataFormat::Float16_b,
         "Unsupported data format for calculate_lerp(). Supported data formats are: Float32, Float16_b.");
-    static_assert(ITERATIONS % 2 == 0, "calculate_lerp() processes dest rows in pairs.");
 
     // size of each tile in Dest is 64/SFP_DESTREG_STRIDE = 32 rows when using sfpi to load/store
     constexpr uint dst_tile_size_sfpi = 32;
@@ -55,48 +50,23 @@ inline void calculate_lerp(
         rne_bias = 0x7fffU;
         rne_one = 1;
     }
-    // lerp: out = (input - weight * input) + weight * end
-    // No (end - input) difference, so finite inputs cannot overflow for weight in [0, 1], and
-    // weight == 0 / weight == 1 return input / end bit-exact. (1 - weight) * input is formed by
-    // one SFPMAD as input - weight * input, so 1 - weight is never rounded on its own.
-    //
-    // Both loops are ordered so that no instruction reads the result of the SFPMAD right before it.
-    if constexpr (is_fp32_dest_acc_en) {
-        // Two rows (a, b) per iteration.
+    // lerp: out = input + weight * (end - input); lanes where end - input is not finite use
+    // (input - weight * input) + weight * end. No instruction reads the SFPMAD right before it.
 #pragma GCC unroll 8
-        for (int d = 0; d < ITERATIONS; d += 2) {
-            const sfpi::vFloat a_in0 = sfpi::dst_reg[off_in0];
-            const sfpi::vFloat a_in2 = sfpi::dst_reg[off_in2];
-            const sfpi::vFloat a_rem = a_in0 - a_in2 * a_in0;
-            const sfpi::vFloat b_in0 = sfpi::dst_reg[off_in0 + 1];
-            const sfpi::vFloat b_in2 = sfpi::dst_reg[off_in2 + 1];
-            const sfpi::vFloat b_rem = b_in0 - b_in2 * b_in0;
-            const sfpi::vFloat a_in1 = sfpi::dst_reg[off_in1];
-            const sfpi::vFloat b_in1 = sfpi::dst_reg[off_in1 + 1];
-            const sfpi::vFloat a_res = a_in2 * a_in1 + a_rem;
-            const sfpi::vFloat b_res = b_in2 * b_in1 + b_rem;
-            sfpi::dst_reg[off_out] = a_res;
-            sfpi::dst_reg[off_out + 1].mode(ADDR_MOD_6) = b_res;
+    for (int d = 0; d < ITERATIONS; d++) {
+        const sfpi::vFloat in0 = sfpi::dst_reg[off_in0];
+        const sfpi::vFloat in1 = sfpi::dst_reg[off_in1];
+        const sfpi::vFloat diff = in1 - in0;
+        const sfpi::vFloat in2 = sfpi::dst_reg[off_in2];
+        const sfpi::vFloat rem = in0 - in2 * in0;
+        const sfpi::vFloat diff_nan = diff - diff;  // 0 for finite diff, NaN otherwise
+        sfpi::vFloat res = in2 * in1 + rem;
+        v_if(diff_nan == 0.0f) { res = in0 + in2 * diff; }
+        v_endif;
+        if constexpr (!is_fp32_dest_acc_en) {
+            res = _lerp_bf16_rne_for_16b_store_(res, rne_bias, rne_one);
         }
-    } else {
-        // One row per iteration, rotated: row d is formed while row d - 1 is rounded and stored,
-        // which keeps the loop body within the 16 SFPU replay slots.
-        const sfpi::vFloat f_in0 = sfpi::dst_reg[off_in0];
-        const sfpi::vFloat f_in2 = sfpi::dst_reg[off_in2];
-        const sfpi::vFloat f_rem = f_in0 - f_in2 * f_in0;
-        const sfpi::vFloat f_in1 = sfpi::dst_reg[off_in1];
-        sfpi::vFloat res = f_in2 * f_in1 + f_rem;
-#pragma GCC unroll 8
-        for (int d = 1; d < ITERATIONS; d++) {
-            const sfpi::vFloat in0 = sfpi::dst_reg[off_in0 + 1];
-            const sfpi::vFloat in2 = sfpi::dst_reg[off_in2 + 1];
-            const sfpi::vFloat rem = in0 - in2 * in0;
-            const sfpi::vFloat prev = _lerp_bf16_rne_for_16b_store_(res, rne_bias, rne_one);
-            const sfpi::vFloat in1 = sfpi::dst_reg[off_in1 + 1];
-            sfpi::dst_reg[off_out].mode(ADDR_MOD_5) = prev;
-            res = in2 * in1 + rem;
-        }
-        sfpi::dst_reg[off_out].mode(ADDR_MOD_5) = _lerp_bf16_rne_for_16b_store_(res, rne_bias, rne_one);
+        sfpi::dst_reg[off_out].mode(ADDR_MOD_5) = res;
     }
 }
 
