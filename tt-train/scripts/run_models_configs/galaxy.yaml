@@ -50,6 +50,18 @@ models:
       hf_tokenizer: "meta-llama/Llama-3.1-8B-Instruct"
       output_file: "data/tokenized_shakespeare_llama8b"
 
+  - name: "Llama 8B CP=8 TP=4 16k Shakespeare (C++)"
+    filename: "llama_8b_cp8_tp4_shakespeare"
+    binary: "${TT_METAL_RUNTIME_ROOT}/build/tt-train/sources/examples/nano_gpt/nano_gpt"
+    args:
+      - "-c ${TT_METAL_RUNTIME_ROOT}/tt-train/configs/training_configs/llama8b/training_shakespeare_llama_8b_cp8_tp4.yaml"
+      - "--track_memory"
+    mgd: "${TT_METAL_RUNTIME_ROOT}/tt-train/configs/mgd/bh_galaxy_8_4_ring_ring.textproto"
+    tokenize:
+      text_file: "data/shakespeare.txt"
+      hf_tokenizer: "meta-llama/Llama-3.1-8B-Instruct"
+      output_file: "data/tokenized_shakespeare_llama8b"
+
   - name: "Qwen 3 1.7B DDP=32 Shakespeare"
     filename: "qwen3_1_7b_ddp32_shakespeare"
     binary: "${TT_METAL_RUNTIME_ROOT}/tt-train/sources/examples/train/train.py"
