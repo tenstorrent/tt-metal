@@ -1080,10 +1080,12 @@ def test_ws_layer_trace_bisect_chip(mesh_device):
 @pytest.mark.parametrize("mesh_device", [(8, 4)], indirect=True)
 @pytest.mark.parametrize("device_params", [dict(TORUS, trace_region_size=TRACE_REGION)], indirect=True)
 def test_ws_layer_trace_bisect_glx(mesh_device):
-    """run_trace_bisect on the Galaxy torus (the layer with the device barrier; WSY_BISECT clocks, layer)."""
-    lc = LayerCfg(T=31250, nexp=640, fold=FOLD)
+    """run_trace_bisect on the Galaxy torus (the layer with the device barrier; WSY_BISECT clocks, layer); WSY_T tokens
+    a chip (default 31250)."""
+    T = int(os.environ.get("WSY_T", "31250"))
+    lc = LayerCfg(T=T, nexp=640, fold=FOLD)
     rlc = routed_glx(mesh_device)
-    run_trace_bisect(mesh_device, lc, rlc, "trace bisect glx e640 T 31250")
+    run_trace_bisect(mesh_device, lc, rlc, f"trace bisect glx e640 T {T}")
 
 
 @pytest.mark.parametrize("mesh_device", [(1, 1)], indirect=True)
@@ -1098,11 +1100,12 @@ def test_ws_layer_trace_chip(mesh_device):
 @pytest.mark.parametrize("mesh_device", [(8, 4)], indirect=True)
 @pytest.mark.parametrize("device_params", [dict(TORUS, trace_region_size=TRACE_REGION)], indirect=True)
 def test_ws_layer_trace_glx(mesh_device):
-    """The traced layer on the Galaxy torus, as test_ws_layer_glx."""
-    lc = LayerCfg(T=31250, nexp=640, fold=FOLD)
+    """The traced layer on the Galaxy torus, as test_ws_layer_glx; WSY_T tokens a chip (default 31250)."""
+    T = int(os.environ.get("WSY_T", "31250"))
+    lc = LayerCfg(T=T, nexp=640, fold=FOLD)
     rlc = routed_glx(mesh_device)
     chips = [int(c) for c in os.environ.get("WSY_CHIPS", "0,31").split(",")]
-    run_trace(mesh_device, lc, rlc, "trace glx e640 T 31250", chips, int(os.environ.get("WSY_TOKENS", 64)))
+    run_trace(mesh_device, lc, rlc, f"trace glx e640 T {T}", chips, int(os.environ.get("WSY_TOKENS", 64)))
 
 
 def soak_aiclks():
