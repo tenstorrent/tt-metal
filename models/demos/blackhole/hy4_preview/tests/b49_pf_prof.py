@@ -304,6 +304,32 @@ def main():
                 fused_repeat=cmp(outs["fused"][0], outs["fused"][1]),
                 fused_vs_stock=cmp(outs["fused"][0], outs["stock"][0]),
             )
+        if os.environ.get(
+            "ENVAB"
+        ):  # ENVAB='[{"name":"a","env":{"K":"V"}}, ...]': eager chunk wall per env variant (flags are read at call time), 2 passes, REPS reps each
+            variants = json.loads(os.environ["ENVAB"])
+            keys = sorted({k for v in variants for k in v["env"]})
+            base = {k: os.environ.get(k) for k in keys}
+            for rnd_ in range(2):
+                for v in variants:
+                    for k in keys:
+                        if k in v["env"]:
+                            os.environ[k] = v["env"][k]
+                        elif base[k] is None:
+                            os.environ.pop(k, None)
+                        else:
+                            os.environ[k] = base[k]
+                    run_chunks(K)
+                    ws = []
+                    for r in range(REPS):
+                        d, w = run_chunks(K, True)
+                        ws.append(round(w * 1e3 / NL, 2))
+                    res(event="envab", round=rnd_, variant=v["name"], per_layer_ms=ws)
+            for k in keys:
+                if base[k] is None:
+                    os.environ.pop(k, None)
+                else:
+                    os.environ[k] = base[k]
         if (
             os.environ.get("OPCOUNT") == "1"
         ):  # host op counts / host time per ttnn callable for one layer of each type (fused path as configured)

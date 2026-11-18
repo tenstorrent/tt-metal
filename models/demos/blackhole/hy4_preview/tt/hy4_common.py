@@ -1,6 +1,8 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 """Small device helpers shared by the Hy4 attention modules (upload with mesh mappers, compute configs, rope on device)."""
+import os
+
 import torch
 
 import ttnn
@@ -62,6 +64,15 @@ class RopeDev:
 
     def apply(self, x, cos, sin, ckc=None):
         """x [1,H,n,64] -> x * cos + (x @ P) * sin (cos/sin [1,1,n,64] broadcast over heads)."""
+        if self.interleave and x.shape[2] >= 256 and os.environ.get("HY4_B49_ROPE_LLAMA", "0") == "1":
+            # B49: prefill chunks: ONE rotary_embedding_llama (adjacent-pair rotation) instead of matmul + 2 multiply + add (+ 3 deallocations)
+            if getattr(self, "_tm", None) is None:
+                from models.tt_transformers.tt.common import get_rot_transformation_mat
+
+                self._tm = upload(self.md, get_rot_transformation_mat())
+            return ttnn.experimental.rotary_embedding_llama(
+                x, cos, sin, self._tm, is_decode_mode=False, compute_kernel_config=ckc
+            )
         rot = ttnn.matmul(x, self.P, compute_kernel_config=ckc)
         a = ttnn.multiply(x, cos)
         b = ttnn.multiply(rot, sin)
