@@ -163,6 +163,77 @@ def main():
             for ly, (a_, m_) in zip(ch.layers, saved):
                 ly.ihcpf_a, ly.ihcpf_m = a_, m_
             os.environ["HY4_B49_COLLAPSE"] = "1"
+        if (
+            os.environ.get("OPCOUNT") == "1"
+        ):  # host op counts / host time per ttnn callable for one layer of each type (fused path as configured)
+            import types
+
+            counts = {}
+            cur = {"layer": None}
+            skip = {
+                "deallocate",
+                "synchronize_device",
+                "from_torch",
+                "to_torch",
+                "get_device_tensors",
+                "allocate_tensor_on_device",
+            }
+            wrapped = []
+
+            def wrap(owner, nm, obj):
+                def w(*a, **k):
+                    t0 = time.perf_counter()
+                    try:
+                        return obj(*a, **k)
+                    finally:
+                        e = counts.setdefault(cur["layer"], {}).setdefault(nm, [0, 0.0])
+                        e[0] += 1
+                        e[1] += time.perf_counter() - t0
+
+                w.__wrapped__ = obj
+                setattr(owner, nm, w)
+                wrapped.append((owner, nm, obj))
+
+            for owner in (ttnn, getattr(ttnn, "experimental", None), getattr(ttnn, "transformer", None)):
+                if owner is None:
+                    continue
+                for nm in dir(owner):
+                    if nm.startswith("_") or nm in skip:
+                        continue
+                    try:
+                        obj = getattr(owner, nm)
+                    except Exception:
+                        continue
+                    if isinstance(obj, (type, types.ModuleType)) or not callable(obj):
+                        continue
+                    if owner is not ttnn:
+                        nm_full = nm
+                    wrap(owner, nm, obj)
+            orig = HC.Hy4ChainLayer.prefill_chunk
+
+            def counted(self, x4, start, ids_by_layer, taps=None):
+                cur["layer"] = f"L{self.L}"
+                return orig(self, x4, start, ids_by_layer, taps)
+
+            HC.Hy4ChainLayer.prefill_chunk = counted
+            run_chunks(K)
+            counts.clear()
+            run_chunks(K)
+            sync()
+            for lay, d in counts.items():
+                tot = sum(v[0] for v in d.values())
+                tms = sum(v[1] for v in d.values()) * 1e3
+                top = sorted(d.items(), key=lambda kv: -kv[1][1])[:14]
+                res(
+                    event="opcount",
+                    layer=lay,
+                    total_calls=tot,
+                    total_host_ms=round(tms, 2),
+                    top=[(k, v[0], round(v[1] * 1e3, 2)) for k, v in top],
+                )
+            for owner, nm, obj in wrapped:
+                setattr(owner, nm, obj)
+            HC.Hy4ChainLayer.prefill_chunk = orig
         run_chunks(K)  # warm
         from models.demos.blackhole.hy4_preview.tt import hy4_ihc_pf as _pfm
 
