@@ -131,18 +131,13 @@ void run_kernel(RUNTIME_PARAMETERS params)
         {
             for (std::uint32_t loop = 0; loop < LOOP_FACTOR; ++loop)
             {
-                if (loop != 0)
+                // PACK's section release clears the bank before MATH reacquires it.
+                if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1)
                 {
-                    if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1)
+                    if (loop != 0)
                     {
                         _llk_math_wait_for_dest_available_<dest_sync>();
                     }
-                    if constexpr (PERF_RUN_TYPE == PerfRunType::MATH_ISOLATE && HADAMARD_NORMALIZE)
-                    {
-                        TTI_STALLWAIT(p_stall::STALL_MATH, p_stall::WAIT_SFPU);
-                    }
-                    // Clear only the acquired bank; PACK may still be draining the other one.
-                    _llk_math_clear_dest_section_<dest_sync, is_fp32_dest_acc_en>();
                 }
 
                 for (std::uint32_t tile = 0; tile < TILE_CNT; ++tile)
