@@ -6407,6 +6407,108 @@
    "X.5#test_skip_positions": "PASS"
   }
  },
+ "X.6": {
+  "agent": {
+   "defs": {
+    "models/demos/common/bringup/agents/bringup-engineer.md": {
+     "blob": "592203d1364e20d30b11e752804d818787b5365a",
+     "dirty": false
+    },
+    "models/demos/common/bringup/briefs/brief.md": {
+     "blob": "3a81858569143578c4beac9c613747508e11748f",
+     "dirty": false
+    },
+    "models/demos/common/bringup/briefs/roles.yaml": {
+     "blob": "e6413c1d49e3d144b0349ea968e1ea4d7d941470",
+     "dirty": false
+    }
+   },
+   "model": "claude-opus-5-5",
+   "session_id": "835d02ae-ff3e-4b2c-a726-95f63db124c8"
+  },
+  "attempt": 2,
+  "attempts": 2,
+  "duration_s": 335.3,
+  "history": [
+   {
+    "reused": [
+     "X.6#test_determinism",
+     "X.6#test_skip_positions"
+    ],
+    "s": 325.3,
+    "status": "FAIL",
+    "t": "2026-11-18T21:53:57"
+   },
+   {
+    "status": "ABORTED",
+    "t": "2026-11-18T21:54:11",
+    "why": "overseer: X.6's units all passed; the gate failed on metric names the overseer wrote wrong in tasks.yaml (framework/ledger), nothing to fix in code"
+   },
+   {
+    "reused": [
+     "X.6#test_determinism",
+     "X.6#test_profile",
+     "X.6#test_profile.3.0",
+     "X.6#test_profile.4.0",
+     "X.6#test_profile.5.0",
+     "X.6#test_profile.6.0",
+     "X.6#test_skip_positions"
+    ],
+    "s": 2.0,
+    "status": "FAIL",
+    "t": "2026-11-18T21:54:41"
+   },
+   {
+    "reused": [
+     "X.6#test_determinism",
+     "X.6#test_profile",
+     "X.6#test_profile.3.0",
+     "X.6#test_profile.4.0",
+     "X.6#test_profile.5.0",
+     "X.6#test_profile.6.0"
+    ],
+    "s": 335.3,
+    "status": "PASS",
+    "t": "2026-11-18T22:00:44"
+   }
+  ],
+  "last_run": "2026-11-18T22:00:42",
+  "log": "/scratch/dnijemcevic/bringup/deepseek_v41_flash_d_p/runs/galaxy_8x4-full/run1/logs/X.6.log",
+  "rc": 0,
+  "reason": [],
+  "role": "fix",
+  "stamp": {
+   "reused": [
+    "X.6#test_determinism",
+    "X.6#test_profile",
+    "X.6#test_profile.3.0",
+    "X.6#test_profile.4.0",
+    "X.6#test_profile.5.0",
+    "X.6#test_profile.6.0"
+   ],
+   "units": {
+    "X.6#test_determinism": "3e78fbc18d60f5da",
+    "X.6#test_profile": "bff0e548ad36f867",
+    "X.6#test_profile.3.0": "e6a126a131a68845",
+    "X.6#test_profile.4.0": "e23ab6a0aad38d62",
+    "X.6#test_profile.5.0": "dd58b3be718239b7",
+    "X.6#test_profile.6.0": "46bd694833364013",
+    "X.6#test_skip_positions": "cdac6dc5f572c6a3"
+   }
+  },
+  "started": "2026-11-18T21:55:07",
+  "status": "PASS",
+  "units": {
+   "X.6#test_determinism": "PASS",
+   "X.6#test_profile": "PASS",
+   "X.6#test_profile.3.0": "PASS",
+   "X.6#test_profile.4.0": "PASS",
+   "X.6#test_profile.5.0": "PASS",
+   "X.6#test_profile.6.0": "PASS",
+   "X.6#test_skip_positions": "PASS"
+  },
+  "waiting": null
+ },
  "_run": {
   "branch": "dnijemcevic/model_bringup",
   "created": "2026-10-26T10:41:59",

@@ -5134,14 +5134,14 @@ tasks:
       && DS41_DECODER_SKIP=decode SKIP_POS=32768,65536,97280,145408,262144 scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/test_skip_positions.py
     metrics:
       determinism_max_abs_diff_decoder_skip: == 0
-      chunk_wall_ms_p32768: '> 0'
-      chunk_wall_ms_p65536: '> 0'
-      chunk_wall_ms_p97280: '> 0'
-      chunk_wall_ms_p145408: '> 0'
-      chunk_wall_ms_p262144: '> 0'
-      chunk_wall_clean_p262144: == 1
-      device_ms_total_p32768: '> 0'
-      device_ms_total_p262144: '> 0'
+      chunk_wall_ms_p32768_nonlast: '> 0'
+      chunk_wall_ms_p65536_nonlast: '> 0'
+      chunk_wall_ms_p97280_nonlast: '> 0'
+      chunk_wall_ms_p145408_nonlast: '> 0'
+      chunk_wall_ms_p262144_nonlast: '> 0'
+      chunk_wall_clean_p262144_nonlast: == 1
+      device_ms_total_p32768_nonlast: '> 0'
+      device_ms_total_p262144_nonlast: '> 0'
       steady_wall_ms_p32768: '> 0'
       steady_wall_ms_p262144: '> 0'
   device: true

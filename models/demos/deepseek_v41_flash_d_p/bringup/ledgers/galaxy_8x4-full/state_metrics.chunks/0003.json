@@ -3284,5 +3284,18 @@
   "top5_overlap": 1.0,
   "top5_overlap_limit": 0.994286,
   "unwritten_records_changed_decoder_skip": 0
+ },
+ "X.6": {
+  "chunk_wall_clean_p262144_nonlast": 1,
+  "chunk_wall_ms_p145408_nonlast": 154.8,
+  "chunk_wall_ms_p262144_nonlast": 161.0,
+  "chunk_wall_ms_p32768_nonlast": 166.1,
+  "chunk_wall_ms_p65536_nonlast": 154.9,
+  "chunk_wall_ms_p97280_nonlast": 153.4,
+  "determinism_max_abs_diff_decoder_skip": 0.0,
+  "device_ms_total_p262144_nonlast": 88.47,
+  "device_ms_total_p32768_nonlast": 82.08,
+  "steady_wall_ms_p262144": 110.7,
+  "steady_wall_ms_p32768": 105.9
  }
 }
