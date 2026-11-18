@@ -241,10 +241,11 @@ class GRPOConfig:
     # num_generations. Kept only so older configs that still set it construct
     # without error; the trainer ignores any value provided here.
     batch_size: Optional[int] = None
-    # ttt_remote_sync and ttt_remote_async: push the policy weights to the rollout rank at a generation-batch boundary
-    # once N optimizer steps have passed since the last push.
+    # ttt_remote_sync and ttt_remote_async: push the policy weights to the rollout rank at a
+    # generation-batch boundary once N optimizer steps have passed since the last push.
     weight_sync_every: int = 1
-    # ttt_remote_sync and ttt_remote_async: rollout rank settings, from the top-level remote_rollout_config yaml section.
+    # ttt_remote_sync and ttt_remote_async: rollout rank settings, from the top-level
+    # remote_rollout_config yaml section.
     remote_rollout: Optional[RemoteRolloutConfig] = None
     # ttt_remote_async: drop a batch generated with weights more than max_staleness optimizer steps older than the policy.
     max_staleness: int = 0
