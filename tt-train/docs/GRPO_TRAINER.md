@@ -202,9 +202,13 @@ In `ttt_remote_async` the ranks no longer take turns:
 Rules and limitations of `ttt_remote_async`, on top of those of `ttt_remote_sync`:
 
 - **Rewards run on rank 1**, between generations. Reward functions with side
-  effects or state see rank 1's copy of the script.
-- **Rank 0 trains on one device.** Both meshes are opened with 2 command queues:
-  the bridge copies weights on CQ1 while generation and training use CQ0.
+  effects or state see rank 1's copy of the script. A reward function that
+  raises ends the job from rank 1 with `os._exit(1)`. In `ttt_remote_sync` the
+  reward functions run on rank 0, so the exception is raised there.
+- **Rank 0 trains on one device.** Both meshes are opened with 2 command queues.
+  On rank 0 the training thread copies the weights into staging pads on CQ0,
+  and the bridge thread reads the pads to host on CQ1. On rank 1 the bridge
+  thread writes the received weights on CQ1 while generation uses CQ0.
 - **Staleness is counted in optimizer steps.** With `num_iterations = k`, a batch
   generated one push behind has staleness `k`. Dropped batches are reported as
   `rollouts_dropped` and don't shorten training: rank 1 keeps generating until
@@ -326,7 +330,7 @@ from ttml.trainers import GRPOConfig
 | `clip_grad_norm_max_norm` | `float` | `1.0` | `max_grad_norm` | Maximum gradient norm when `use_clip_grad_norm` is set. |
 | `rollout_backend` | `str` | — | *(no direct equivalent)* | Which sampler generates and where it runs: `"ttml_in_process_sync"`, `"ttt_remote_sync"` or `"ttt_remote_async"`; see [Rollout modes](#rollout-modes). Required in `grpo_config`. |
 | `max_staleness` | `int` | `0` | *(no direct equivalent)* | `ttt_remote_async` only: drop a batch generated with weights more than this many optimizer steps older than the policy. |
-| `weight_sync_every` | `int` | `1` | *(no direct equivalent)* | `ttt_remote_sync` only: push the policy weights to the rollout rank at a generation-batch boundary once *N* optimizer steps have passed since the last push. |
+| `weight_sync_every` | `int` | `1` | *(no direct equivalent)* | `ttt_remote_sync` and `ttt_remote_async`: push the policy weights to the rollout rank at a generation-batch boundary once *N* optimizer steps have passed since the last push. |
 | `remote_rollout` | `RemoteRolloutConfig \| None` | `None` | *(no direct equivalent)* | Rollout rank settings, required for `ttt_remote_sync` and `ttt_remote_async`. `get_grpo_config` reads it from the top-level `remote_rollout_config` YAML section: `mesh_shape`, `max_batch_size` (per tt-transformers model), `max_seq_len`, and optional `top_k` (default 32), `top_p` (default 1.0), `rollout_queue_capacity` (`ttt_remote_async` only, default 2). |
 | `output_dir` | `str` | — | `output_dir` | Directory for logs, metrics CSV, and checkpoints. |
 | `checkpointing` | `bool` | — | *(use `save_steps`)* | Whether to save checkpoints during training. |

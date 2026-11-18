@@ -177,7 +177,7 @@ class RemoteRolloutConfig:
     max_seq_len: int
     top_k: int = 32
     top_p: float = 1.0
-    # remote_async: scored batches buffered on each rank.
+    # ttt_remote_async: scored batches buffered on each rank.
     rollout_queue_capacity: int = 2
 
 
@@ -241,12 +241,12 @@ class GRPOConfig:
     # num_generations. Kept only so older configs that still set it construct
     # without error; the trainer ignores any value provided here.
     batch_size: Optional[int] = None
-    # ttt_remote_sync: push the policy weights to the rollout rank at a generation-batch boundary
+    # ttt_remote_sync and ttt_remote_async: push the policy weights to the rollout rank at a generation-batch boundary
     # once N optimizer steps have passed since the last push.
     weight_sync_every: int = 1
-    # ttt_remote_sync: rollout rank settings, from the top-level remote_rollout_config yaml section.
+    # ttt_remote_sync and ttt_remote_async: rollout rank settings, from the top-level remote_rollout_config yaml section.
     remote_rollout: Optional[RemoteRolloutConfig] = None
-    # remote_async: drop a batch generated with weights more than max_staleness optimizer steps older than the policy.
+    # ttt_remote_async: drop a batch generated with weights more than max_staleness optimizer steps older than the policy.
     max_staleness: int = 0
 
     def __post_init__(self) -> None:
@@ -1120,7 +1120,7 @@ class GRPOTrainer:
         With ``rollout_backend="ttt_remote_sync"`` the same script runs on both tt-run ranks. Rank
         1 only opens the rollout mesh and builds its :class:`RolloutSampler`
         and RPC server; it never calls ``dataset_func``, and ``train()``
-        serves rollouts there. In ``remote_async`` mode rank 1 also calls
+        serves rollouts there. In ``ttt_remote_async`` mode rank 1 also calls
         ``dataset_func`` and generates and scores its batches in a loop.
         """
         if optimizer_dict is None:
