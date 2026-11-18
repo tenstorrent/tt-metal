@@ -6424,11 +6424,11 @@
     }
    },
    "model": "claude-opus-5-5",
-   "session_id": "835d02ae-ff3e-4b2c-a726-95f63db124c8"
+   "session_id": "6ef2dd0e-994e-4d7b-b378-8a630ecbd5fd"
   },
-  "attempt": 2,
+  "attempt": 3,
   "attempts": 2,
-  "duration_s": 335.3,
+  "duration_s": 2.8,
   "history": [
    {
     "reused": [
@@ -6470,9 +6470,30 @@
     "s": 335.3,
     "status": "PASS",
     "t": "2026-11-18T22:00:44"
+   },
+   {
+    "attempt": 3,
+    "from": "RUNNING",
+    "role": "fix",
+    "status": "RESUMED",
+    "t": "2026-11-18T22:41:01"
+   },
+   {
+    "reused": [
+     "X.6#test_determinism",
+     "X.6#test_profile",
+     "X.6#test_profile.3.0",
+     "X.6#test_profile.4.0",
+     "X.6#test_profile.5.0",
+     "X.6#test_profile.6.0",
+     "X.6#test_skip_positions"
+    ],
+    "s": 2.8,
+    "status": "PASS",
+    "t": "2026-11-18T22:42:21"
    }
   ],
-  "last_run": "2026-11-18T22:00:42",
+  "last_run": "2026-11-18T22:42:19",
   "log": "/scratch/dnijemcevic/bringup/deepseek_v41_flash_d_p/runs/galaxy_8x4-full/run1/logs/X.6.log",
   "rc": 0,
   "reason": [],
@@ -6484,7 +6505,8 @@
     "X.6#test_profile.3.0",
     "X.6#test_profile.4.0",
     "X.6#test_profile.5.0",
-    "X.6#test_profile.6.0"
+    "X.6#test_profile.6.0",
+    "X.6#test_skip_positions"
    ],
    "units": {
     "X.6#test_determinism": "3e78fbc18d60f5da",
@@ -6496,7 +6518,7 @@
     "X.6#test_skip_positions": "cdac6dc5f572c6a3"
    }
   },
-  "started": "2026-11-18T21:55:07",
+  "started": "2026-11-18T22:42:16",
   "status": "PASS",
   "units": {
    "X.6#test_determinism": "PASS",
