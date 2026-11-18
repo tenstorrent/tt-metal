@@ -345,6 +345,15 @@ RouterVcShape router_vc_shape(
         vc2_receivers = (requires_vc2 && !z_boundary_router) ? 1 : 0;
     }
 
+    // The host_rdma channel: one more VC0 sender, after the worker and every forwarding channel, on every topology. It
+    // has no producer router, so it stays out of the direction-to-slot bijection
+    // (RouterVcShape::producer_sender_counts).
+    if (vc_config && vc_config->requires_host_rdma) {
+        TT_FATAL(!express_routing_enabled, "TT_METAL_ENABLE_FABRIC_HOST_RDMA is not supported with express routing");
+        shape.host_rdma_channel = vc0_senders;
+        vc0_senders += 1;
+    }
+
     shape.sender_counts = {vc0_senders, vc1_senders, vc2_senders};
     shape.receiver_counts = {vc0_receivers, vc1_receivers, vc2_receivers};
     finalize_vc_shape_bases(shape);

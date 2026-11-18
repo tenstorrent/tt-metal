@@ -277,6 +277,10 @@ FabricEriscDatamoverConfig::FabricEriscDatamoverConfig(const FabricContext& fabr
     // Allocate L1 addresses for global max sender channels so layout is stable across all configs
     uint32_t num_sender_channels =
         is_2D_routing ? builder_config::num_max_sender_channels : builder_config::get_sender_channel_count(false);
+    // A 1D router's host_rdma channel follows its two VC0 senders (2D already sets aside the maximum).
+    if (!is_2D_routing && rtoptions.get_enable_fabric_host_rdma()) {
+        num_sender_channels += 1;
+    }
     uint32_t num_downstream_edms = builder_config::get_downstream_edm_count(is_2D_routing);
     // Global
     size_t next_l1_addr = erisc_l1_unreserved_base;
@@ -1104,8 +1108,18 @@ FabricEriscDatamoverBuilder::CompileTimeArgs FabricEriscDatamoverBuilder::get_co
         return channel_id == get_worker_connected_sender_channel() ||
                (actual_sender_channels_vc2 > 0 && channel_id == vc2_first);
     };
+    // The host_rdma channel (IntermeshVCConfig::requires_host_rdma): VC0's last sender channel, which the host writes
+    // packets into directly. It has no connection protocol: the host credits itself from what the router writes back.
+    const bool router_has_host_rdma_channel =
+        fabric_context.get_builder_context().requires_host_rdma() && actual_sender_channels_vc0 > 0;
+    auto is_host_rdma_channel = [&](size_t channel_id) -> bool {
+        return router_has_host_rdma_channel && channel_id == actual_sender_channels_vc0 - 1;
+    };
     auto should_force_internal_sender_skip = [&](size_t channel_id) -> bool {
         if (channel_id >= num_sender_channels || channel_trimming_overrides_.has_value()) {
+            return false;
+        }
+        if (is_host_rdma_channel(channel_id)) {
             return false;
         }
 
@@ -1410,8 +1424,10 @@ FabricEriscDatamoverBuilder::CompileTimeArgs FabricEriscDatamoverBuilder::get_co
         const bool has_static_peer =
             (i < num_sender_channels) ? this->sender_channel_connection_liveness_check_disable_array[i] : false;
         named_args[fmt::format("SENDER_CH_{}_LIVE_CHECK_SKIP", i)] =
-            (i < num_sender_channels) ? static_cast<uint32_t>(has_static_peer || should_force_internal_sender_skip(i))
-                                      : 0;
+            (i < num_sender_channels)
+                ? static_cast<uint32_t>(
+                      has_static_peer || should_force_internal_sender_skip(i) || is_host_rdma_channel(i))
+                : 0;
     }
     for (size_t i = 0; i < builder_config::num_max_sender_channels; i++) {
         // Gate the bringup wait on trimming: a trimmed sender channel is never stepped, so it must
@@ -1431,6 +1447,10 @@ FabricEriscDatamoverBuilder::CompileTimeArgs FabricEriscDatamoverBuilder::get_co
     for (size_t i = 0; i < builder_config::num_max_sender_channels; i++) {
         named_args[fmt::format("SENDER_CH_{}_IS_WORKER_CHANNEL", i)] =
             (i < num_sender_channels) ? static_cast<uint32_t>(is_worker_channel(i)) : 0;
+    }
+    for (size_t i = 0; i < builder_config::num_max_sender_channels; i++) {
+        named_args[fmt::format("SENDER_CH_{}_IS_HOST_RDMA_CHANNEL", i)] =
+            (i < num_sender_channels) ? static_cast<uint32_t>(is_host_rdma_channel(i)) : 0;
     }
     for (size_t i = 0; i < builder_config::num_max_sender_channels; i++) {
         named_args[fmt::format("SENDER_CH_{}_IS_INJECTION", i)] =

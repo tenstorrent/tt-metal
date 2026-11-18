@@ -369,7 +369,7 @@ std::unique_ptr<ComputeMeshRouterBuilder> ComputeMeshRouterBuilder::build(
     // Non-express meshes keep the heuristic untouched.
     // This router's producer-slot mapping, shared by every VC's derivation.
     const builder::RouterProducerSlots producer_slots(
-        builder::routing_direction_to_eth_direction(location.direction), vc_shape.sender_counts);
+        builder::routing_direction_to_eth_direction(location.direction), vc_shape.producer_sender_counts());
     // The policy is a per-router fact: express enablement is mesh-wide, so it is selected once,
     // not per VC. Its facts arrive bound from the chip scope (the queries were bound in the
     // FabricBuilder constructor; the capabilities were classified at discovery).
@@ -392,7 +392,17 @@ std::unique_ptr<ComputeMeshRouterBuilder> ComputeMeshRouterBuilder::build(
         // there would demand a bubble the rest of the stack does not provide.
         auto vc_injection_flags = builder_config::bubble_flow_control_enabled_on_vc(vc)
                                       ? compute_sender_channel_injection_flags(producer_slots, vc, injection_policy)
-                                      : std::vector<bool>(num_channels_in_vc, false);
+                                      : std::vector<bool>(producer_slots.sender_count(vc), false);
+        // The host_rdma channel (last on VC0, outside the producer slots) injects like the worker channel: it starts
+        // packets on this router, so it takes the worker's bubble on a ring or torus.
+        if (vc == 0 && vc_shape.host_rdma_channel.has_value()) {
+            TT_FATAL(
+                vc_injection_flags.size() == *vc_shape.host_rdma_channel,
+                "The host_rdma channel must follow every other VC0 sender channel");
+            const bool participates = builder_config::bubble_flow_control_enabled_on_vc(vc) &&
+                                      injection_policy.participates(vc) && injection_policy.worker_is_injection(vc);
+            vc_injection_flags.push_back(participates);
+        }
         // Flatten into router-level vector
         for (uint32_t ch_idx = 0; ch_idx < num_channels_in_vc; ++ch_idx) {
             router_injection_flags.push_back(vc_injection_flags.at(ch_idx));
@@ -747,7 +757,7 @@ void ComputeMeshRouterBuilder::establish_connections_to_router(ComputeMeshRouter
     // this router (as producer) feeds is read off the same mapping the injection-flag derivation
     // names producers from, so placement and naming cannot drift apart.
     const builder::RouterProducerSlots downstream_slots(
-        downstream_router.get_eth_direction(), downstream_router.vc_shape_.sender_counts);
+        downstream_router.get_eth_direction(), downstream_router.vc_shape_.producer_sender_counts());
 
     for (uint32_t vc = 0; vc < num_vcs; ++vc) {
         const auto& targets = turns_by_vc_[vc];

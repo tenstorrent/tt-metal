@@ -109,6 +109,7 @@ enum class EnvVarID {
     TT_METAL_FABRIC_TRIMMING_PROFILE,                   // Path to channel trimming profile YAML for import
     TT_METAL_FABRIC_TRIMMING_OVERRIDE,                  // Path to channel trimming global override YAML
     TT_METAL_ENABLE_FABRIC_VC2,                         // Enable fabric VC2 (neighbour exchange)
+    TT_METAL_ENABLE_FABRIC_HOST_RDMA,                   // Enable the host_rdma sender channel (host-injected traffic)
     TT_METAL_ENABLE_FABRIC_MESH_PASS_THROUGH,           // Enable experimental VC1 inter-mesh pass-through
     TT_METAL_FORCE_REINIT,                              // Force context reinitialization
     TT_METAL_DISABLE_FABRIC_TWO_ERISC,                  // Disable fabric 2-ERISC mode
@@ -845,6 +846,13 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
         // Default: false
         // Usage: export TT_METAL_ENABLE_FABRIC_VC2=1
         case EnvVarID::TT_METAL_ENABLE_FABRIC_VC2: this->enable_fabric_vc2 = true; break;
+
+        // TT_METAL_ENABLE_FABRIC_HOST_RDMA
+        // Adds a host_rdma sender channel to every fabric router's VC0, which the host writes packets into directly
+        // (host-initiated RDMA). Not supported with express routing or the Tensix mux/UDM extensions.
+        // Default: false
+        // Usage: export TT_METAL_ENABLE_FABRIC_HOST_RDMA=1
+        case EnvVarID::TT_METAL_ENABLE_FABRIC_HOST_RDMA: this->enable_fabric_host_rdma = is_env_enabled(value); break;
 
         // TT_METAL_ENABLE_FABRIC_MESH_PASS_THROUGH
         // EXPERIMENTAL: Enables VC1 inter-mesh pass-through routing (e.g. A->B->C), where inter-mesh
