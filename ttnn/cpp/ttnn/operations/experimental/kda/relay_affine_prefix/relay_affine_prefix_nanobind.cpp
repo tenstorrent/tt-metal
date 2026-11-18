@@ -55,8 +55,7 @@ void bind_relay_affine_prefix(nb::module_& mod) {
             actual_end (ttnn.Tensor, optional): Replicated UINT32 exclusive valid end, which decides whether the
                 interval ends in a separated tail. Omitted, the chunk runs to its full capacity.
             sequence_parallel_axis (int, optional): Mesh axis partitioning the sequence, of at least two ranks
-                (the last rank's hand-off to the first crosses the axis when it does not wrap). On a 2D fabric
-                it must be straight.
+                (the last rank's hand-off to the first crosses the axis when it does not wrap).
             entry_memory_config (ttnn.MemoryConfig, optional): Interleaved memory of the entry states.
                 Defaults to DRAM.
             compute_kernel_config (ttnn.DeviceComputeKernelConfig, optional): The hop's matmul fidelity;
