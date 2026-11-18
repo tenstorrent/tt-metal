@@ -22,7 +22,7 @@ jobs:
       kubernetes:
         os: linux
         arch: amd64
-        image: {from-job: ci-build-image, image: tt-metal-ci-build}
+        image: {from-job: ci-build-image, image: ci-build}
         resources:
           # Two cold runs (resource-summary, main container): 16 jobs peaked at
           # 13.2 GiB anon memory, 32 jobs at 22.7 GiB. No CPU limit: a 16-CPU
