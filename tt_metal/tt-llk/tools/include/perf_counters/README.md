@@ -16,7 +16,8 @@ RISC-V performance monitor (the counters inside the cores, not the Tensix banks 
   `baby_events` with a one-line meaning per event, Quasar's `trisc_extra_events` (its TRISCs add two events to the
   baby-core table) and `dm_events`; Wormhole's is empty because those cores have no counters.
 - `riscv_pmc_hw.h`: the CSR addresses, `read_csr<csr>()`, `write_csr<csr>(value)`, `select` and `zero_counters`, and
-  `select_upper` and `zero_counters_upper` for counters 5 and 6 of the Quasar data-movement cores.
+  `select_upper` and `zero_counters_upper` for counters 5 and 6 of the Quasar data-movement cores; the capture steps
+  built on them, `arm`, `arm_upper`, `reference`, `sample` and `sample_upper`.
 
 NoC interface (NIU) event counters, namespace `llk::perf::noc`:
 
@@ -24,7 +25,9 @@ NoC interface (NIU) event counters, namespace `llk::perf::noc`:
   and the `noc_counters` table in capture order, the same on every architecture.
 - `noc_counters_blackhole.h`, `noc_counters_wormhole.h`, `noc_counters_quasar.h`: `NIU_STATUS_BASE`, `NIU_NOC_STRIDE`,
   `NIU_NOCS` and `NIU_DATA_WORD_BYTES`.
-- `noc_counters_inventory.h`: picks the arch header from `ARCH_*`, `selected_regs<GroupMask>()`.
+- `noc_counters_inventory.h`: picks the arch header from `ARCH_*`, `selected_regs<GroupMask>()`, `selected_offsets<GroupMask>()`.
+- `noc_counters_hw.h`: the capture step `capture<GroupMask>(values, delta)` (start readings, then deltas with wrap) and
+  `value_count<GroupMask>()`.
 
 Reference: `docs/performance_counters/noc_counters.md`.
 
@@ -49,7 +52,7 @@ NoC router counters (per output or input port and virtual channel), namespace `l
   `COUNT_KIND`. Wormhole's table is empty.
 - `router_counters_inventory.h`: picks the arch table from `ARCH_*`, `selected_bank_offsets<Option>()`,
   `selected_vcs<Option>()`, `value_count(option)`.
-- `router_counters_hw.h`: `read(noc, bank_offset, vc)`.
+- `router_counters_hw.h`: `read(noc, bank_offset, vc)` and the capture step `capture<Option>(values, delta)` (start readings, then deltas with wrap).
 
 Reference: `docs/performance_counters/router_counters.md`.
 
@@ -68,10 +71,15 @@ names, the host decodes a select by looking it up in the arch table. Reference: 
 
 Two consumers use these headers and nothing else describes the counters:
 
-- the metal profiler (`tt_metal/hw/inc/internal/profiler/perf_counters.hpp`), which adds its record format,
-  group bit contract and emission into the profiler buffer;
-- the LLK perf harness (`tt_metal/tt-llk/tests/helpers/include/counters.h`), which adds its L1 ABI,
-  zones and barriers.
+- the metal profiler (`tt_metal/hw/inc/internal/profiler/{perf_counters,riscv_pmc,noc_counters,router_counters,tile_counters}.hpp`),
+  which adds its record format, group bit contract and emission into the profiler buffer;
+- the LLK perf harness (`tt_metal/tt-llk/tests/helpers/include/counters.h`, with `tests/python_tests/helpers/counters.py`
+  on the host), which adds its L1 ABI, zones and barriers. It captures the Tensix banks and the RISC-V monitor per zone and
+  the NoC interface and router counters per launch, with the same primitives and capture steps as the profiler; DRAM
+  tile and ethernet counters are read by the host and the harness runs no DRAM or ethernet traffic, so it has no part in them.
+
+A capture sequence both consumers need (arm, snapshot, delta with wrap) is a function in the `*_hw.h` header, not code in a
+consumer: `riscv::arm`, `riscv::reference`, `riscv::sample`, `noc::capture` and `router::capture`.
 
 Adding a counter: append the name to the end of `PerfCounterType` (never reorder or remove, the
 ordinals are decoded by position on the host), add one `{PerfCounterType::NAME, select}` entry to the

@@ -58,7 +58,15 @@ The headers are in tt-llk next to the Tensix counter headers (`tools/include/per
 
 A record carries the raw `mhpmevent` select, not an enumerator ordinal, because the select format is the hardware's own and a run may OR several events. The host decodes names by looking selects up in the tables, so `PmcEvent` only has to stay append only.
 
+There are two consumers, the metal profiler and the LLK perf harness; both run the capture steps of `riscv_pmc_hw.h`: `arm(event3, event4)` selects and zeroes, `reference()` takes the `mcycle` and `minstret` a window starts from and `sample(...)` reads the window (`arm_upper` and `sample_upper` for counters 5 and 6).
+
+The second consumer is the LLK perf harness (`tests/helpers/include/counters.h`), described in [The LLK perf harness](#the-llk-perf-harness) below. Both call `arm`, `reference` and `sample`, so the capture sequence exists once.
+
 Adding an event: append the enumerator to `PmcEvent`, add one `{PmcEvent::NAME, select}` entry to the right table and bump the array size. The host parsers read the headers, so nothing else changes.
+
+### The LLK perf harness
+
+The LLK perf harness captures the monitor of each TRISC per zone with `--perf-riscv-pmc=EV3[,EV4]` (Blackhole and Quasar; on Wormhole the option is refused with a message, and the device header has an `#error` for it). It uses the same tables, so an event is named as in section 6, `--perf-riscv-pmc=BP_PC_STALL_ANY,0xA0000000`, or `+` joins names that one counter ORs. Each TRISC opens a window when it leaves a zone's entry rendezvous (`arm`, `reference`) and closes it before the exit rendezvous (`sample`), and keeps `mcycle` and `minstret` as deltas and the two counters in its own block of the zone in L1; the select it armed is stored with the counts. The host decodes the names with `tt_llk_perf.riscv_pmc` and writes `cycles`, `instructions` and one column per event for each of `RISCV_UNPACK`, `RISCV_MATH`, `RISCV_PACK` (and `RISCV_SFPU` on Quasar) into the counters CSV. The cores the harness runs are the TRISCs: BRISC runs no zone and is not captured, and the Quasar harness starts no data-movement core, so the four-counter data-movement variant is metal only. Details and the L1 layout: [performance_counters.md](performance_counters.md#other-counter-families).
 
 ## 3. Using it in tt-metal
 

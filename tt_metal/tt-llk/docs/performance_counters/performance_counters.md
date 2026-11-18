@@ -10,11 +10,11 @@
 - Shared counter definitions (names, select tables, registers, primitives): [tools/include/perf_counters/](../../tools/include/perf_counters/)
 - Shared host package (header parsers, metric engine): [tools/python/tt_llk_perf/](../../tools/python/tt_llk_perf/)
 - Report schema (metric columns derive from the shared engine): [tests/python_tests/helpers/perf/schema.py](../../tests/python_tests/helpers/perf/schema.py)
-- RISC-V performance monitor (CSRs, event tables, metal option): [riscv_pmc.md](riscv_pmc.md)
-- NoC interface counters (event tables, metal option): [noc_counters.md](noc_counters.md)
-- NoC router counters (per port and virtual channel packet and flit counts, metal option): [router_counters.md](router_counters.md)
-- DRAM tile traffic counters (NIU registers, metal option, decode): [dram_counters.md](dram_counters.md)
-- Ethernet link counters (queue registers, firmware link counters, metal option, decode): [eth_counters.md](eth_counters.md)
+- RISC-V performance monitor (CSRs, event tables, metal option, harness capture): [riscv_pmc.md](riscv_pmc.md)
+- NoC interface counters (event tables, metal option, harness capture): [noc_counters.md](noc_counters.md)
+- NoC router counters (per port and virtual channel packet and flit counts, metal option, harness capture): [router_counters.md](router_counters.md)
+- DRAM tile traffic counters (NIU registers, metal option, decode; not in the harness): [dram_counters.md](dram_counters.md)
+- Ethernet link counters (queue registers, firmware link counters, metal option, decode; not in the harness): [eth_counters.md](eth_counters.md)
 - Host-side counter readback: [tests/python_tests/helpers/counters.py](../../tests/python_tests/helpers/counters.py)
 - Host-side derived metrics adapter: [tests/python_tests/helpers/metrics.py](../../tests/python_tests/helpers/metrics.py)
 - Test driver: [tests/python_tests/helpers/perf/core.py](../../tests/python_tests/helpers/perf/core.py)
@@ -35,6 +35,8 @@ Tensix cores contain five hardware performance counter banks (four on Quasar, wh
 | TDMA_UNPACK | Unpacker busy signals, math pipeline status, srcA/B write port and overwrite signals |
 | TDMA_PACK | Packer busy, dest-read availability, math availability |
 | L1 | NoC ring transactions and L1 port arbitration (mux-selected). Absent on Quasar, where bank slot 3 carries the one l1_client CSR selection instead |
+
+Three more families can be captured next to the banks, each with its own option: the RISC-V performance monitor inside each TRISC (per zone), and the NoC interface and router counters of the tile (per launch). They are described under [Other counter families](#other-counter-families). The harness reads them with the same tt-llk headers the metal profiler does, as the second consumer of the shared counter definitions; the DRAM tile and ethernet counters are not part of it, because the harness runs no DRAM or ethernet traffic and those counters are read by the host.
 
 ## How It Works
 
@@ -101,7 +103,7 @@ Expands to a `perf_counter_scoped<PERF_RUN_TYPE>` RAII object in both builds (in
 
 2. **Body.** Every thread runs the work inside the scope. Counters tick continuously on the shared backend.
 
-3. **Destructor (zone exit).** For the run types that keep the exit rendezvous, the action thread freezes the counters in that rendezvous and reads the zone if the launch counts it; otherwise the measured thread freezes directly (`freeze_zone`, which records the zone as pending) and reads it later, after `run_kernel` (`read_last_zone`) or in the next zone's entry rendezvous, so no readout runs inside a window. Note `PROFILER_SYNC()` (`tensix_sync`) is a hand-written statement in each kernel and the isolate paths can `return` past it, so a thread's backend is not guaranteed drained when the stop bit is written; `fence_compiler()` around the rendezvous is a compiler barrier only. The freeze writes the rising-edge stop bit to the same four registers. The readout (`read_all_counters`) stores each bank's `OUT_L` (reference cycles) in the zone's five cycle words, writes the built-in config into the shared 200-word config buffer at `0x169000` and, for every valid slot, programs the bank's mode register with the `counter_sel`, reads `OUT_H` (the event count) and stores it in the per-zone data area. On Quasar slot 3 is the l1_client selection: its value is `l1_client_read()` of the clear-on-read `CNT` register and its cycles are the INSTRN bank's. It then writes the zone's `SYNC_ZONE_COMPLETE` flag with the launch's token above it; the host reads only the zones the launch counted, only with that token, and fails the test when one has no such readout.
+3. **Destructor (zone exit).** For the run types that keep the exit rendezvous, the action thread freezes the counters in that rendezvous and reads the zone if the launch counts it; otherwise the measured thread freezes directly (`freeze_zone`, which records the zone as pending) and reads it later, after `run_kernel` (`read_last_zone`) or in the next zone's entry rendezvous, so no readout runs inside a window. Note `PROFILER_SYNC()` (`tensix_sync`) is a hand-written statement in each kernel and the isolate paths can `return` past it, so a thread's backend is not guaranteed drained when the stop bit is written; `fence_compiler()` around the rendezvous is a compiler barrier only. The freeze writes the rising-edge stop bit to the same four registers. The readout (`read_all_counters`) stores each bank's `OUT_L` (reference cycles) in the zone's five cycle words, writes the built-in config into the shared 128-word config buffer at `0x169000` and, for every valid slot, programs the bank's mode register with the `counter_sel`, reads `OUT_H` (the event count) and stores it in the per-zone data area. On Quasar slot 3 is the l1_client selection: its value is `l1_client_read()` of the clear-on-read `CNT` register and its cycles are the INSTRN bank's. It then writes the zone's `SYNC_ZONE_COMPLETE` flag with the launch's token above it; the host reads only the zones the launch counted, only with that token, and fails the test when one has no such readout.
 
 Each zone gets its own data block in L1 (see [L1 Layout](#l1-layout-and-zone-buffers)) so multiple measurement scopes in the same kernel produce independent snapshots. The device supports `PERF_COUNTERS_MAX_ZONES = 8` zones, but the host counts only two: zone 0 is `INIT` and zone 1 is `TILE_LOOP`, and the launch word names one of them per launch, so a third `START_PERF_MEASURE` zone keeps its rendezvous and its wall clock but is never counted. Zone names in use are `INIT`, `TILE_LOOP`, and `UNINIT` in `fast_tilize_bh` / `fast_untilize` only; `UNINIT` uses bare `ZONE_SCOPED`, so it is timing-only with no rendezvous; identical names share a zone.
 
@@ -123,6 +125,8 @@ Before any TRISC kernel runs, BRISC calls `clear_debug_features()` and, in the W
 
 - Clears `DBG_FEATURE_DISABLE` to `0` in every launch of both builds, see [DBG_FEATURE_DISABLE scrub](#dbg_feature_disable-scrub) below.
 - In a WC launch that counts a zone, programs each bank's reference-period and mode registers and sets `PERF_CNT_MUX_CTRL` for L1. Registers only: BRISC reading an L1 config right before the release moved the TRISCs' timing.
+
+When the tile counters are selected (see [Other counter families](#other-counter-families)), BRISC also takes the start readings of the NoC interface and router counters in that launch, and after the TRISCs are done, before it marks the launch done for the host, the end readings.
 
 Nothing is armed here: each zone's arm starts the counters. The readout writes the per-architecture `BUILTIN_COUNTER_CONFIG` (110 slots on WH, 101 on BH, since only one L1 mux group is emitted; 77 on Quasar, 78 with an l1_client selection) into the shared L1 config buffer at `0x169000` next to the counts, and stamps the zone's sync word with the launch's token; the host reads only the zones the launch counted and only with that token. That array is built at compile time from the shared select tables, see [Shared counter definitions](hardware_reference.md#where-the-definitions-live).
 
@@ -176,8 +180,35 @@ Without the flag the suite builds the NC variant, which compiles no counter code
 |------|----------------------------------|--------|
 | `--enable-perf-counters` | no | Build the WC variant and collect raw counters per zone |
 | `--dump-perf-counters` | yes | Export raw counter values to a separate `<test>.counters.csv` alongside the main results CSV |
+| `--perf-riscv-pmc=EV3[,EV4]` | yes (and `--dump-perf-counters`) | Also capture the RISC-V performance monitor of every TRISC per zone, with these two `mhpmevent` selects |
+| `--perf-noc-counters=GROUPS` | yes (and `--dump-perf-counters`) | Also capture the NoC interface counters of the tile per launch |
+| `--perf-router-counters=OPTION` | yes (and `--dump-perf-counters`) | Also capture the NoC router counters of the tile per launch |
 
 `--dump-perf-counters` implicitly enables counter collection; you don't need to specify `--enable-perf-counters` separately.
+
+### Other counter families
+
+These ride on the counter machinery above: each is compiled in by its own define next to `PERF_COUNTERS_COMPILED`, adds nothing when its option is off (the device code of a build without the option is the same as before), and reports through the raw counters CSV, not the main one. Their hardware description is the shared tt-llk headers, the same ones the metal profiler uses; the harness adds only its L1 ABI, the zones and the barriers.
+
+| Option | Define | What it captures | Where |
+|---|---|---|---|
+| `--perf-riscv-pmc=EV3[,EV4]` | `LLK_PERF_RISCV_PMC`, `LLK_PERF_RISCV_EV3`, `LLK_PERF_RISCV_EV4` | `mcycle`, `minstret` and the two programmable counters of each TRISC | every zone, on every TRISC that runs it; Blackhole and Quasar |
+| `--perf-noc-counters=GROUPS` | `LLK_PERF_NOC_GROUPS` | the tile's NoC interface (NIU) counters of the selected groups, every NoC | once per launch, on BRISC; Wormhole and Blackhole |
+| `--perf-router-counters=OPTION` | `LLK_PERF_ROUTER_OPTION` | the tile's NoC router counters of the selected banks and virtual channels | once per launch, on BRISC; Blackhole |
+
+The options take what the metal profiler options take, plus names. `EV3` and `EV4` are numbers (hex allowed) or event names of `tools/include/perf_counters/riscv_pmc_*.h` joined with `+`, which arms several events on one counter (it counts their OR) and must be events of different pipeline domains, because the select has one 4-bit field per domain and the option refuses two of one domain: `--perf-riscv-pmc=BP_PC_STALL_ANY,0xA0000000`, or `0x10110111,0xA0000000` for the stall union of every domain and `MEM_INS_BUF_WRITE`. `GROUPS` is a group mask or `MASTER`, `SLAVE`, `ATOMIC`, `ALL` joined with `+`. `OPTION` is the router option mask of [router_counters.md](router_counters.md) (virtual channels in bits 0 to 15, banks from bit 16, bit 24 keeps the channels apart) or `ALL`, optionally `+PER_VC`. A selection is a compile-time constant of the ELFs, so it is part of the artefact suffix: each selection needs its own producer run.
+
+An unsupported selection fails with a clear message before anything is built: the Wormhole RISC-V cores have no performance counter CSRs (`--perf-riscv-pmc` is refused, and the device header has an `#error` for it), Wormhole has no router counters, and on Quasar `--perf-noc-counters` and `--perf-router-counters` are refused because the Quasar harness has no BRISC and no TRISC is known to read the tile's NoC registers (the metal profiler reads them from the data-movement core DM0, which the harness does not run).
+
+**RISC-V monitor, per zone.** Each TRISC reads its own CSRs. The counters belong to the core, so a window cannot be read from another thread: the zone object of every thread opens its own window when it leaves the zone's entry rendezvous (`llk::perf::riscv::arm` selects the events and zeroes the two counters, `reference` reads `mcycle` and `minstret`) and closes it before the exit rendezvous (`sample` reads the counters and returns the `mcycle` and `minstret` deltas, modulo 2^32). The window therefore covers the thread's own work in the zone, plus the few instructions of the zone's profiler markers, and not the time the thread waits at the exit rendezvous for the others. Every launch runs these instructions, counted or not, so a counted launch and a timing launch execute the same code; the readout is a few stores into the thread's own block of the zone, which the host reads like the Tensix readout: a flag word with the launch's token is written last and the host raises when a counted zone has no block with this launch's token. The selects are stored with the counts, so a block describes itself.
+
+On Blackhole one TRISC is one baby core, so its stall counters (for example `BP_PC_STALL_ANY`) and its instruction count are the ones of [riscv_pmc.md](riscv_pmc.md). A single-issue pipeline gives stall union plus IPC of about 1 ([riscv_pmc.md](riscv_pmc.md), section 9), so the check on a card is that a thread's instructions plus the stall union come to the window's cycles; it has not been run through the harness on silicon yet.
+
+**NoC interface and router counters, per launch.** Both belong to the tile and are free running (nothing resets them), so a capture is a delta. In the harness BRISC is the only core that reads them: TRISC access to the NIU and router registers is not established for this harness, and BRISC is what the metal profiler uses. BRISC reads them just before it releases the TRISCs and again once the TRISCs are done (`llk::perf::noc::capture`, `llk::perf::router::capture`: the start readings are stored in the launch block, the second call turns them into deltas), so a window is the whole launch, boot of the TRISCs and every zone included, not one zone. The host reports it under the zone the launch counted, as `LAUNCH_<zone>` in the `marker` column. Current perf tests move data only between L1 buffers of the tile, so the counts are near zero; the capture exists to make the families available to tests that use the NoC. The BRISC reads happen only in a launch that counts a zone, and they sit before the TRISC release: they can move the timing of that launch by their own few loads, so compare a counted launch's wall clock with and without the option before reading timing from it.
+
+**What is not in the harness.** The DRAM tile counters and the ethernet counters are read by the host, through registers of tiles the harness never runs a program on, and the harness issues no DRAM or ethernet traffic: there is nothing to capture, so neither is added. The RISC-V monitor of BRISC and of the Quasar data-movement cores is not captured either: BRISC runs no zone, and the Quasar harness starts no data-movement core.
+
+**Columns.** The counters CSV gets, per zone, the banks `RISCV_UNPACK`, `RISCV_MATH`, `RISCV_PACK` (and `RISCV_SFPU` on Quasar) with the counters `cycles`, `instructions` and one column per armed event (the event name, or the names joined with `|` when one select arms several), as `<RUN_TYPE>_mean(RISCV_MATH.cycles)` and so on, and for the launch rows the banks `NOC0`, `NOC1` (the NIU counter names of [noc_counters.md](noc_counters.md) plus the byte totals `noc_read_bytes`, `noc_write_bytes`, `noc_bytes_in`, `noc_bytes_out`, ...) and `ROUTER0`, `ROUTER1` (the port, with `_VC<n>` when the channels are kept apart). The `.cycles` variant of a RISC-V column is the window's `mcycle` delta; of a NoC or router column it is empty, because those counters have no reference. None of these rows enters the Tensix derived metrics.
 
 ### Output
 
@@ -190,7 +221,7 @@ The NC build emits per-zone wall-clock cycle counts in the same results DataFram
 
 ## Hardware reference
 
-The counter inventory per architecture, where the shared definitions live and how to add a counter, the debug registers, the L1 mux groups and the hardware limitations are in [hardware_reference.md](hardware_reference.md). On top of that the harness emits one L1 mux group per build, so `BUILTIN_COUNTER_CONFIG` holds 110 slots on Wormhole, 101 slots on Blackhole, 77 (78 with an l1_client selection) slots on Quasar, written into the 200 config words in L1 with the rest zero.
+The counter inventory per architecture, where the shared definitions live and how to add a counter, the debug registers, the L1 mux groups and the hardware limitations are in [hardware_reference.md](hardware_reference.md). On top of that the harness emits one L1 mux group per build, so `BUILTIN_COUNTER_CONFIG` holds 110 slots on Wormhole, 101 slots on Blackhole, 77 (78 with an l1_client selection) slots on Quasar, written into the 128 config words in L1 with the rest zero.
 
 ## L1 Layout and Zone Buffers
 
@@ -198,27 +229,33 @@ Counter state lives at a fixed L1 address determined entirely at compile time. N
 
 ```
 0x169000 +────────────────────────────────────────────+
-         │ Shared config:  200 words × 4 = 800 bytes │  Slot encoding:
+         │ Shared config:  128 words × 4 = 512 bytes │  Slot encoding:
          │   bit 31     = valid                      │   bit 31     valid
          │   bits 19:17 = l1_mux                     │   bits 19:17 l1_mux
          │   bits 16:8  = counter_sel                │   bits 16:8  counter_sel
          │   bits 7:0   = bank_id                    │   bits 7:0   bank_id
-0x169320 +────────────────────────────────────────────+
+0x169200 +────────────────────────────────────────────+
          │ Zone 0 cycles (5 words: one per bank)    │
-         │ Zone 0 data   (200 words: counter values) │
-         │ Zone 0 sync   (40 bytes; SYNC flag + pad) │  = PERF_COUNTERS_ZONE_SIZE
+         │ Zone 0 data   (128 words: counter values) │
+         │ Zone 0 sync   (40 bytes; SYNC flag + pad) │
+         │ Zone 0 RISC-V (4 threads × 8 words)       │  = PERF_COUNTERS_ZONE_SIZE
          +────────────────────────────────────────────+
-         │ Zone 1 cycles / data / sync               │
+         │ Zone 1 cycles / data / sync / RISC-V      │
          │ ...                                       │
-         │ Zone 7 cycles / data / sync               │
+         │ Zone 7 cycles / data / sync / RISC-V      │
          +────────────────────────────────────────────+
          │ Quasar: the launch word (counters.h)      │
          +────────────────────────────────────────────+
+         │ Launch block: NoC and router flags,       │
+         │ selects and deltas (68 words)             │
+         +────────────────────────────────────────────+
 ```
 
-The layout is bounded by two `static_assert`s to stay below `0x16AFF0` (the profiler region boundary). Each zone reserves `PERF_COUNTERS_ZONE_SIZE = (5 + 200) × 4 + 40 = 860` bytes, supporting up to `PERF_COUNTERS_MAX_ZONES = 8` zones per kernel.
+The layout is bounded by two `static_assert`s to stay below `0x16AFF0` (the profiler region boundary). Each zone reserves `PERF_COUNTERS_ZONE_SIZE = (5 + 128) × 4 + 40 + 4 × 8 × 4 = 700` bytes, supporting up to `PERF_COUNTERS_MAX_ZONES = 8` zones per kernel; the launch block follows the launch word and ends at `0x16A8F4`. The Tensix banks need at most 110 of the 128 config and data words (Wormhole), and a `static_assert` fails the build if an inventory ever outgrows them.
 
-The 200-word shared config, written by every readout, is the authoritative record of which counters are recorded for every zone (the host reads it back to decode). There is no per-zone configuration: every zone records the same set of counters but stores its own snapshot.
+A thread's RISC-V block is eight words: the flag with the launch's token (written last), the two selects, the `mcycle` and `minstret` words (the window's start while it is open, its deltas after), the two counter values and a spare. The launch block is the NoC flag and group mask, the router flag and option mask, then up to 32 NoC deltas and 32 router deltas.
+
+The 128-word shared config, written by every readout, is the authoritative record of which counters are recorded for every zone (the host reads it back to decode). There is no per-zone configuration: every zone records the same set of counters but stores its own snapshot.
 
 ## Derived Metrics Reference
 
@@ -252,7 +289,7 @@ A metric whose counters this architecture does not expose, or whose counter grou
 - **One L1 mux group per run.** `PERF_CNT_MUX_CTRL` selects the group while the counters count, not when they are read, so the freeze path cannot re-aim it and a run observes exactly one group. Select it with `LLK_PERF_L1_MUX_GROUP` and sweep it across runs.
 - **Counters off compiles no counter code.** Only WC gets `-DPERF_COUNTERS_COMPILED` and the L1 selection; NC keeps each zone's rendezvous and the `DBG_FEATURE_DISABLE` scrub, and its host writes no launch word. Every counter access sits under `#if defined(PERF_COUNTERS_COMPILED)`, and without it the launch hooks `brisc.cpp` and `trisc.cpp` call are empty. The two builds are therefore different programs: the counter code moves every later address in WC, and Wormhole timing follows code placement, so a WC minus NC delta includes the layout effect any code change has, not only counter overhead.
 - **Test isolation.** As with every LLK test, counter state at kernel entry is whatever the previous test left behind. Nothing clears the zone buffers: the host reads only the zones a launch counted, and only when the zone's sync word carries that launch's token. HW counter registers may carry residual values until the first `MEASURE_PERF_COUNTERS` rising-edge clear.
-- **WC's configure before the release writes registers only.** When BRISC read the 200 config words from L1 there, the L1 arbiter state it left moved 859 of 1508 Wormhole TILE_LOOP values against a launch without them, while register writes or a delay of the same length moved none.
+- **WC's configure before the release writes registers only.** When BRISC read the config words from L1 there, the L1 arbiter state it left moved 859 of 1508 Wormhole TILE_LOOP values against a launch without them, while register writes or a delay of the same length moved none.
 - **L1 layout must stay below the profiler region.** `PERF_COUNTERS_LAYOUT_END` must not overlap the profiler's lowest L1 address (`llk_profiler::EPOCH_ADDR`). Two `static_assert`s enforce this: a literal one in the always-compiled section (BRISC has no `llk_profiler` namespace) and a symbolic one in the `LLK_PROFILER` section that tracks the profiler layout automatically.
 - **Minimum window size.** Size every measured window above ~1k cycles using the test's `LOOP_FACTOR`; PR #51912 raised the suite's factors for exactly this reason. Below that, a few cycles of instrument floor read as a large percentage, and the timing `mean` is affected as well as the derived ratios. Note the report divides `TILE_LOOP` wall-clock by `loop_factor x tile_cnt` but leaves `INIT` and every counter column absolute.
 

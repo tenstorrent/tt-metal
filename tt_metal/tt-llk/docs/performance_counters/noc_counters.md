@@ -49,12 +49,19 @@ The metal firmware reads only the barrier counters (`RD_RESP_RECEIVED`, `NONPOST
 ## 3. Where the definitions live
 
 The headers are in tt-llk (`tools/include/perf_counters/noc_counters_*.h`, namespace `llk::perf::noc`) and the host
-side is `tools/python/tt_llk_perf/`; the two READMEs there list what each file holds. The metal side is
-`tt_metal/hw/inc/internal/profiler/noc_counters.hpp`: marker ids, payload layout and emission.
+side is `tools/python/tt_llk_perf/`; the two READMEs there list what each file holds. There are two consumers,
+`tt_metal/hw/inc/internal/profiler/noc_counters.hpp` (marker ids, payload layout and emission) and the LLK perf harness;
+both read the counters with `capture<GroupMask>(values, delta)` of `noc_counters_hw.h`.
+
+The second consumer is the LLK perf harness, described in [The LLK perf harness](#the-llk-perf-harness) below.
 
 Adding a counter: append the enumerator to `NocCounter`, add one `{NocCounter::NAME, index, NocGroup::GROUP}` entry to
 the `noc_counters` table and bump the array size. Keep the counters of every group an even number per NoC (they are
 emitted in pairs). The host parsers read the headers, so nothing else changes.
+
+### The LLK perf harness
+
+`--perf-noc-counters=GROUPS` makes the LLK perf harness capture the same counters (Wormhole and Blackhole; refused on Quasar, where the harness has no BRISC and no TRISC is known to read the tile's NoC registers). The harness reads them once per launch from BRISC with `capture<GroupMask>`: the start readings go into the launch block in L1 before BRISC releases the TRISCs, and after the TRISCs are done the second call turns them into deltas, so the window is the whole launch and not one zone. The host decodes the block with `tt_llk_perf.noc_counters`, checks the echoed group mask against the requested one, and writes one row per counter and NoC, plus the byte totals of `noc_metrics`, under the marker `LAUNCH_<zone>` of the zone the launch counted. The perf tests move data between L1 buffers of the tile only, so the counts are near zero; the capture is there for tests that use the NoC. Details: [performance_counters.md](performance_counters.md#other-counter-families).
 
 ## 4. Using it in tt-metal
 
