@@ -256,17 +256,7 @@ def test_mean_multi_axis_bf16(device):
         ((1, 2, 32, 64), ttnn.TILE_LAYOUT),
         ((1, 2, 32, 64), ttnn.ROW_MAJOR_LAYOUT),
         ((1, 2, 32, 2048), ttnn.TILE_LAYOUT),
-        pytest.param(
-            (1, 2, 32, 2048),
-            ttnn.ROW_MAJOR_LAYOUT,
-            marks=pytest.mark.xfail(
-                reason=(
-                    "https://github.com/tenstorrent/tt-metal/issues/62259: "
-                    "fp32-Dest row reduce leaks column 16 into the chunk accumulator"
-                ),
-                strict=True,
-            ),
-        ),
+        ((1, 2, 32, 2048), ttnn.ROW_MAJOR_LAYOUT),
     ],
 )
 def test_mean_full_tensor_bf16(device, dim, shape, layout):
