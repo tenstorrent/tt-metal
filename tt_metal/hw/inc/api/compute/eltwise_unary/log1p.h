@@ -42,7 +42,7 @@ ALWI void log1p_tile(uint32_t idst) {
             DST_SYNC_MODE,
             is_fp32_dest_acc_en,
             calculate_log1p,
-            (APPROX, fast_and_approx, is_fp32_dest_acc_en, 32),
+            (APPROX, fast_and_approx, is_fp32_dest_acc_en, 32 /*ITERATIONS*/),
             idst,
             VectorMode::None);
         return;
