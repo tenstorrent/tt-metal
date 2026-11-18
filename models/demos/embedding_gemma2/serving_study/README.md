@@ -81,12 +81,18 @@ What changed in `emb_serve_fastapi.py`:
 - **Least-loaded dispatch** (`emb_batcher.pick_chip`). The old pool queued `max_batch` slots per chip in a row, so
   with `--max-batch 32` the first 32 requests all went to chip 0 as one batch while the other chips idled. A chip now
   gets a second text only when every ready chip holds one; requests beyond `dp x max_batch` wait in arrival order.
-- **`--max-batch 1` for DP, and the trace ladder follows it.** Traced multi-row forwards hang intermittently on Galaxy
-  chips: `emb_hang_repro.py` with batch-8 only (one trace, no switching) hung on 1 of 2 chips; mixed b1/b8 hung on
-  3 of 4; batch 1 passed 8000 forwards on 2/2 chips, `emb_shape_soak.py` batch 1 at random lengths 2-2048 passed
-  6000 forwards on 8/8 chips, eager b8 passed 2/2. The hang is inside the trace (host waits in `to_torch`), not in the
-  server, and is not caused by trace switching, the 160 W cap or throttle 0. The worker now builds the model with
-  `max_batch_size = --max-batch`, so a b1 server captures only b1 traces.
+- **Batched forwards: `MAXB=32`, ladder 1,2,4,8,16,32 (launcher defaults).** A chip gets a second text only once every
+  chip holds one, so light load still runs batch 1 (8.3 ms at 1 in flight, as before). Under load a worker takes what
+  is queued, up to 32 texts, padded to the next ladder rung. The rungs matter at 512 tokens: one chip runs b1 in
+  8.2 ms, b2 11.3, b4 19.1, b8 37.1, so with a 1/8/32 ladder two texts padded to 8 rows cost more than they save
+  (512-token peak 2,769 req/s, below b1's 3,095); with 2 and 4 in the ladder it is 3,936. At 128 tokens b8 is 9.6 ms
+  (1.2 ms per text against 5.3 for b1). The worker builds the model with `max_batch_size = --max-batch` and the rungs
+  from `EMBEDDING_GEMMA2_SERVE_BATCHES` (39 traces, inside the 512 MiB trace region).
+- **Batching needs the SDPA reader write barrier** (commit `sdpa: wait for K/V chain write acks before the reader
+  exits`). Without it traced batch-8 x 128 forwards hang on most Galaxy chips within 8000 forwards (11 of 16): the
+  SDPA reader leaves K/V chain write acks in flight on NOC0, and the next kernel's brisc, which re-reads the ack
+  counter at launch, then waits forever in its write barrier. With it: every served b8 and b32 shape 8000 forwards
+  on 3/3 chips, `emb_shape_soak.py` over the 1-32 ladder at random lengths 8000 forwards on 30/30 chips, 0 hangs.
 - **One event loop serves ~700 req/s**; 32 chips at b1 can do ~5,200 texts/s at 128 tokens (6.1 ms device each).
   `--reuse-port` lets several servers, each with its own `--chips`, share the port (`FRONTENDS=K` in the launcher);
   responses are encoded with `orjson` + numpy (the FastAPI default built 768 Python floats per row).
@@ -99,11 +105,13 @@ single-text requests, 128 tokens:
 | Server | 1 in flight | 8 | 32 | 64 | 128 | 256 | 512 |
 |---|---|---|---|---|---|---|---|
 | original, 1 chip, `--max-batch 1` | 105 (9.5) | 121 (67) | 120 (264) | | | | |
-| original, 1 chip, `--max-batch 32` | 88 (11.4) | hang | | | | | |
+| original, 1 chip, `--max-batch 32`, before the SDPA fix | 88 (11.4) | hang | | | | | |
 | original code, `--dp 32` | 101 (10.4) | | 673 (46) | | 633 (192) | | |
 | DP=32, 1 front-end, before orjson | 97 (10.4) | 614 (12.6) | 683 (45) | 664 (92) | 644 (189) | 628 (382) | 610 (775) |
 | DP=32, 1 front-end, orjson | 115 (8.7) | | 1,001 (34) | | 778 (154) | | |
-| **DP=32, 8 front-ends** | **121 (8.3)** | **947 (8.4)** | **3,648 (8.0)** | **4,322 (14)** | **4,351 (29)** | **4,347 (58)** | **4,297 (118)** |
+| DP=32, 8 front-ends, b1 | 121 (8.3) | 947 (8.4) | 3,648 (8.0) | 4,322 (14) | 4,351 (29) | 4,347 (58) | 4,297 (118) |
+| DP=32, 8 front-ends, `MAXB=32` ladder 1/8/32 | 124 (8.2) | 928 (8.5) | 3,566 (7.6) | 4,356 (14) | 5,406 (22) | 6,998 (33) | 6,684 (66) |
+| **DP=32, 8 front-ends, `MAXB=32` ladder 1-32** | **124 (8.3)** | **924 (8.6)** | **3,565 (7.7)** | **4,666 (13)** | **6,254 (19)** | **7,782 (30)** | **7,790 (55)** |
 
 512 tokens: original 1 chip b1 76 req/s (13.3 ms) at 1 in flight, 88 (357 ms) at 32; DP=32 x 8 front-ends 81 (12.4)
 at 1, 2,543 (11.9) at 32, 3,024 (19) at 64, 3,095 (43) at 128 = 1.58 M tokens/s. Peak DP=32 / original 1 chip:
@@ -111,6 +119,11 @@ at 1, 2,543 (11.9) at 32, 3,024 (19) at 64, 3,095 (43) at 128 = 1.58 M tokens/s.
 front-end, 4 chips, 8 b1 forwards each); 16 such requests in flight give 4,302 texts/s. Soak: 120 s at 256 in flight,
 517,781 requests, 4,315 req/s, 0 errors.
 
+Batched (`MAXB=32`, ladder 1-32): 512 tokens 80 req/s (12.5 ms) at 1 in flight, 2,382 (11.9) at 32, 3,016 (20) at
+64, 3,654 (33) at 128, 3,936 (60) at 256 = 2.02 M tokens/s. List requests of 32 x 128-token texts: 39 ms at 1 in
+flight (827 texts/s), 8,584 texts/s at 16, 10,242 at 32. Soak 120 s at 256 in flight: 7,593 req/s, 0 errors.
+
 Correctness (`emb_hf_ref.py` + `emb_check_dp.py`, server with `--debug-chip`): 22 texts (4-2048 tokens) on every one
 of the 32 chips, cosine vs HF fp32 (transformers 5.20.2 overlay) min 0.99943, mean 0.99965, the 32 chips
-bit-identical; 2,816 rows of concurrent list requests, same min. Gate 0.99.
+bit-identical; 2,816 rows of concurrent list requests, same min. Gate 0.99. Batched server (ladder 1-32): per chip
+min 0.99943; list-request rows (batched) min 0.99927.

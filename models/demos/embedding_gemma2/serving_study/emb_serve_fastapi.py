@@ -177,8 +177,8 @@ def _bge_worker(chip_id, args, normalize, task_q, result_q, ctrl_q, worker_cores
             device = ttnn.open_mesh_device(ttnn.MeshShape(1, 1), trace_region_size=512 * 1024 * 1024)
             # The constructor compiles and captures a trace for every served (batch, bucket) shape; forward() pads
             # every request to one of them, so serving never compiles or captures (checked in test_emb_serve.py).
-            # The trace ladder follows --max-batch (1 -> batch-1 traces only): traced multi-row forwards hang
-            # intermittently on Galaxy chips (emb_hang_repro.py / emb_shape_soak.py), batch 1 does not.
+            # The trace ladder is capped at --max-batch (1 -> batch-1 traces only); its rungs come from
+            # EMBEDDING_GEMMA2_SERVE_BATCHES (generator_vllm.py).
             model = EmbeddingGemma2ForEmbedding(
                 device=device, max_batch_size=max(1, int(args.max_batch)), max_seq_len=MAX_SEQ_LEN, model_name=MODEL_ID
             )

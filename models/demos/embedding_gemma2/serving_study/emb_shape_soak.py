@@ -1,8 +1,8 @@
 """Model-only soak of one serving configuration (no HTTP): N forwards of random (rows, tokens) drawn from given ranges,
 as the server worker builds the model (EmbeddingGemma2ForEmbedding, MeshShape(1,1), trace region 512 MiB).
 
-Used to decide which batch ladder the DP server may run: traced batch-8 forwards hang intermittently on Galaxy chips
-(emb_hang_repro.py), batch 1 does not. faulthandler dumps the stack if a forward takes over 60 s.
+Used to clear a batch ladder for the DP server (EMBEDDING_GEMMA2_SERVE_BATCHES picks the rungs). faulthandler dumps the
+stack if a forward takes over 60 s.
 
 Usage: emb_shape_soak.py --rows 1 --tokens 2-2048 --n 6000 [--max-batch 1] [--seed 0]
   --rows / --tokens: "K" or "A-B" (uniform). --max-batch: the model's max_batch_size (its trace ladder).
