@@ -44,6 +44,7 @@ from helpers.stimuli_generator import (
 from helpers.test_config import TestConfig
 from helpers.test_variant_parameters import (
     APPROX_MODE,
+    DEST_INDEX,
     DEST_SYNC,
     ITERATIONS,
     LOOP_FACTOR,
@@ -405,26 +406,13 @@ def _skip_where_config(formats, dest_acc):
         pytest.skip("DataFormat.Float16_b not supported with DestAccumulation.Yes")
 
 
-@parametrize(
-    formats=input_output_formats(
-        [
-            DataFormat.Float16_b,
-            DataFormat.Float32,
-            DataFormat.Int32,
-        ],
-        same=True,
-    ),
-    dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
-    mathop=MathOperation.TTNNWhere,
-    test_case=["mixed", "all_ones", "all_zeros"],
-    input_dimensions=_INPUT_DIMENSIONS,
-)
-def test_ttnn_where(
+def _run_ttnn_where(
     formats,
     dest_acc,
     mathop,
     test_case,
     input_dimensions,
+    dst_index_out=0,
 ):
     _skip_where_config(formats, dest_acc)
 
@@ -451,6 +439,15 @@ def test_ttnn_where(
         src_A = torch.ones_like(src_A)
     elif test_case == "all_zeros":
         src_A = torch.zeros_like(src_A)
+    elif test_case == "all_negative_zeros":
+        if formats.input_format not in (DataFormat.Float32, DataFormat.Float16_b):
+            pytest.skip("Negative zero only applies to floating-point formats")
+        src_A = torch.full_like(src_A, -0.0)
+    elif test_case == "signed_zeros":
+        if formats.input_format not in (DataFormat.Float32, DataFormat.Float16_b):
+            pytest.skip("Negative zero only applies to floating-point formats")
+        pattern = torch.tensor([0.0, -0.0, 1.0, -1.0], dtype=src_A.dtype)
+        src_A = pattern.repeat(src_A.numel() // 4).reshape(src_A.shape)
 
     golden_generator = get_golden_generator(WhereGolden)
     golden = golden_generator(src_A, src_B, src_C)
@@ -465,7 +462,11 @@ def test_ttnn_where(
             DEST_SYNC(),
             PERF_RUN_TYPE(PerfRunType.L1_TO_L1),
         ],
-        runtimes=[NUM_BLOCKS(tile_cnt_A), NUM_TILES_IN_BLOCK(1)],
+        runtimes=[
+            NUM_BLOCKS(tile_cnt_A),
+            NUM_TILES_IN_BLOCK(1),
+            DEST_INDEX(dst_index_out),
+        ],
         variant_stimuli=StimuliConfig(
             src_A.flatten(),
             formats.input_format,
@@ -509,6 +510,49 @@ def test_ttnn_where(
     )
 
     assert torch_equal_nan(golden_tensor, res_tensor), "Assert against golden failed"
+
+
+@parametrize(
+    formats=input_output_formats(
+        [
+            DataFormat.Float16_b,
+            DataFormat.Float32,
+            DataFormat.Int32,
+        ],
+        same=True,
+    ),
+    dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
+    mathop=MathOperation.TTNNWhere,
+    test_case=["mixed", "all_ones", "all_zeros", "all_negative_zeros", "signed_zeros"],
+    input_dimensions=_INPUT_DIMENSIONS,
+)
+def test_ttnn_where(
+    formats,
+    dest_acc,
+    mathop,
+    test_case,
+    input_dimensions,
+):
+    _run_ttnn_where(formats, dest_acc, mathop, test_case, input_dimensions)
+
+
+@parametrize(
+    formats=input_output_formats([DataFormat.Float32], same=True),
+    dest_acc=[DestAccumulation.Yes],
+    mathop=MathOperation.TTNNWhere,
+    test_case=["all_negative_zeros", "signed_zeros"],
+    input_dimensions=_INPUT_DIMENSIONS,
+)
+def test_ttnn_where_out_of_place_negative_zero(
+    formats,
+    dest_acc,
+    mathop,
+    test_case,
+    input_dimensions,
+):
+    _run_ttnn_where(
+        formats, dest_acc, mathop, test_case, input_dimensions, dst_index_out=3
+    )
 
 
 @parametrize(

@@ -488,8 +488,8 @@ def test_where_without_sfploadmacro_replay_record_is_gathering_bracketed():
     )
     from helpers.tile_constants import MAX_NUM_FACES
 
-    # bf16 is the LO16 where path; the record is the same for every supported format.
-    formats = input_output_formats([DataFormat.Float16_b], same=True)[0]
+    # Int32 has no signed zero and uses the 6-instruction plain-SFPLOAD path; floating-point formats add SFPSHFT (7 instructions).
+    formats = input_output_formats([DataFormat.Int32], same=True)[0]
     input_dimensions = [32, 32]
     src_A, tile_cnt_A, src_B, tile_cnt_B = generate_stimuli(
         stimuli_format_A=formats.input_format,

@@ -61,6 +61,29 @@ std::uint32_t ternary_num_tiles_in_block(const T& params)
     }
 }
 
+template <typename T, typename = void>
+struct has_dst_index : std::false_type
+{
+};
+
+template <typename T>
+struct has_dst_index<T, std::void_t<decltype(std::declval<T>().DST_INDEX)>> : std::true_type
+{
+};
+
+template <typename T>
+std::uint32_t ternary_dst_index_out(const T& params)
+{
+    if constexpr (has_dst_index<T>::value)
+    {
+        return static_cast<std::uint32_t>(params.DST_INDEX);
+    }
+    else
+    {
+        return 0;
+    }
+}
+
 #ifdef LLK_TRISC_UNPACK
 
 #include "llk_unpack_A.h"
@@ -252,6 +275,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #ifdef SFPU_CLOBBER_LREGS
                         ckernel::sfpu::clobber_sfpu_lregs();
 #endif
+                        const std::uint32_t dst_index_out = ternary_dst_index_out(params);
                         test_utils::call_ternary_sfpu_operation_init<SFPU_TERNARY_OPERATION, APPROX_MODE, is_fp32_dest_acc_en>();
                         test_utils::call_ternary_sfpu_operation<
                             DST_SYNC_MODE,
@@ -264,7 +288,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
                             0 /* dst_index_in0 */,
                             1 /* dst_index_in1 */,
                             2 /* dst_index_in2 */,
-                            0 /* dst_index_out */,
+                            dst_index_out,
                             SFPU_TERNARY_SCALAR /* value */,
                             VECTOR_MODE /* vector_mode */);
                         _llk_math_dest_section_done_<DST_SYNC_MODE, is_fp32_dest_acc_en>();
@@ -321,6 +345,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         }
         else if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1)
         {
+            const std::uint32_t dst_index_out = ternary_dst_index_out(params);
             for (std::uint32_t loop = 0; loop < LOOP_FACTOR; ++loop)
             {
                 for (std::uint32_t block = 0; block < NUM_BLOCKS; ++block)
@@ -329,7 +354,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
                     {
                         const std::uint32_t result_tile = block * NUM_TILES_IN_BLOCK + tile;
                         _llk_packer_wait_for_math_done_();
-                        _llk_pack_<DST_SYNC_MODE, is_fp32_dest_acc_en>(0 /* dst_index */, L1_ADDRESS(buffer_Res[result_tile]));
+                        _llk_pack_<DST_SYNC_MODE, is_fp32_dest_acc_en>(dst_index_out, L1_ADDRESS(buffer_Res[result_tile]));
                         _llk_pack_dest_section_done_<DST_SYNC_MODE, is_fp32_dest_acc_en>();
                     }
                 }
