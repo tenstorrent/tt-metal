@@ -332,9 +332,12 @@ TEST(FabricGraphValidation, RejectsUnwiredTransit) {
     const auto n5 = *g.find_router("m0.c5.N.p0");
     const auto fwd = g.channels_of(n5, ChannelKind::Sender).back();
     g.edges.push_back(LogicalEdge{.from = *g.receiver(e5, 0), .to = fwd, .transport = Transport::Noc});
+    // it also feeds a sender that belongs to another ingress direction
     const auto problems = find_problems(g, *rules, ValidationLimits{});
-    ASSERT_EQ(problems.size(), 1u);
-    EXPECT_NE(problems.front().find("don't wire this"), std::string::npos) << problems.front();
+    ASSERT_EQ(problems.size(), 2u);
+    EXPECT_TRUE(std::any_of(problems.begin(), problems.end(), [](const std::string& p) {
+        return p.find("don't wire this") != std::string::npos;
+    }));
 }
 
 TEST(FabricGraphValidation, ChannelLimits) {
@@ -383,6 +386,15 @@ TEST(FabricGraphValidation, RejectsEachMalformation) {
         {"must run receiver -> sender",
          [&](LogicalGraph& g) {
              g.edges.push_back({sender(g, "m0.c5.E.p0", true), sender(g, "m0.c5.N.p0", false), Transport::Noc});
+         }},
+        {"forwarding sender for its ingress direction",
+         [&](LogicalGraph& g) {
+             g.edges.push_back({rx(g, "m0.c5.W.p0"), sender(g, "m0.c5.E.p0", true), Transport::Noc});
+         }},
+        {"forwarding sender for its ingress direction",
+         [&](LogicalGraph& g) {
+             const auto fwd = sender(g, "m0.c5.E.p0", false);
+             g.channels[fwd].from = g.routers[g.channels[fwd].router].port.direction;
          }},
         {"U-turn",
          [&](LogicalGraph& g) {

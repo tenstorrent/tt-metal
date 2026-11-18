@@ -66,6 +66,9 @@ std::vector<std::string> find_problems(
         const std::string what = where(e.from) + " -> " + where(e.to);
         if (from.kind != ChannelKind::Receiver || to.kind != ChannelKind::Sender) {
             problems.push_back(what + ": noc edge must run receiver -> sender");
+        } else if (to.injection || to.from != up.direction) {
+            // a sender slot has one producer: the forwarding sender for where the traffic came in
+            problems.push_back(what + ": noc edge must feed the forwarding sender for its ingress direction");
         }
         if (from.router == to.router) {
             problems.push_back(what + ": U-turn into its own router");
