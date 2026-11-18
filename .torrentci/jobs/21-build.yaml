@@ -32,6 +32,7 @@ jobs:
       - {name: CCACHE_COMPRESS, value: 'true'}
       - {name: CCACHE_COMPRESSLEVEL, value: '3'}
       - {name: CCACHE_MAXSIZE, value: 4G}
+      - {name: CCACHE_COMPILERCHECK, value: content}
       - {name: TRACY_NO_INVARIANT_CHECK, value: '1'}
       - {name: TRACY_NO_ISA_EXTENSIONS, value: '1'}
     artifacts:
