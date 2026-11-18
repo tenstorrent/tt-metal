@@ -5480,7 +5480,7 @@
   "attempt": 1,
   "attempts": 1,
   "duration_s": 2.2,
-  "full_pending": true,
+  "full_pending": false,
   "history": [
    {
     "s": 0.0,
@@ -5991,6 +5991,61 @@
    "X.3#test_ladder": "PASS",
    "X.3#test_positions": "PASS",
    "X.3#test_profile": "PASS"
+  }
+ },
+ "X.4": {
+  "attempts": 0,
+  "duration_s": 2.9,
+  "history": [
+   {
+    "reused": [
+     "X.4#test_ladder",
+     "X.4#test_determinism",
+     "X.4#test_determinism.3.0",
+     "X.4#test_decoder_skip_decode",
+     "X.4#test_contract",
+     "X.4#test_adapter_acks",
+     "X.4#test_skip_positions"
+    ],
+    "s": 2.9,
+    "status": "PASS",
+    "t": "2026-11-18T15:10:37"
+   }
+  ],
+  "last_run": "2026-11-18T15:10:35",
+  "log": "/scratch/dnijemcevic/bringup/deepseek_v41_flash_d_p/runs/galaxy_8x4-full/run1/logs/X.4.log",
+  "rc": 0,
+  "reason": [],
+  "stamp": {
+   "reused": [
+    "X.4#test_ladder",
+    "X.4#test_determinism",
+    "X.4#test_determinism.3.0",
+    "X.4#test_decoder_skip_decode",
+    "X.4#test_contract",
+    "X.4#test_adapter_acks",
+    "X.4#test_skip_positions"
+   ],
+   "units": {
+    "X.4#test_adapter_acks": "9348c20e8e89b020",
+    "X.4#test_contract": "6677da4953f8c669",
+    "X.4#test_decoder_skip_decode": "2a755b371d3fb82a",
+    "X.4#test_determinism": "573923ceca76efcb",
+    "X.4#test_determinism.3.0": "a571d5b40e6a6d03",
+    "X.4#test_ladder": "9c60c6da9118e906",
+    "X.4#test_skip_positions": "4079776ecaea21cf"
+   }
+  },
+  "started": "2026-11-18T15:10:32",
+  "status": "PASS",
+  "units": {
+   "X.4#test_adapter_acks": "PASS",
+   "X.4#test_contract": "PASS",
+   "X.4#test_decoder_skip_decode": "PASS",
+   "X.4#test_determinism": "PASS",
+   "X.4#test_determinism.3.0": "PASS",
+   "X.4#test_ladder": "PASS",
+   "X.4#test_skip_positions": "PASS"
   }
  },
  "_run": {
