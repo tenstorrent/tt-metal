@@ -143,8 +143,13 @@ def main():
             os.environ.get("AB") == "1"
         ):  # eager chunk wall: stock iHC / collapse-only variant / fused iHC, same layers (HY4_B49_IHC=fused at build)
             saved = [(ly.ihcpf_a, ly.ihcpf_m) for ly in ch.layers]
-            for name, pf_on, coll in (("stock", False, "0"), ("collapse", False, "1"), ("fused", True, "1")):
+            for name, pf_on, coll, ropec in (
+                ("stock", False, "0", "0"),
+                ("fused", True, "1", "0"),
+                ("fused+ropecache", True, "1", "1"),
+            ):
                 os.environ["HY4_B49_COLLAPSE"] = coll
+                os.environ["HY4_B49_ROPE_CACHE"] = ropec
                 for ly, (a_, m_) in zip(ch.layers, saved):
                     ly.ihcpf_a, ly.ihcpf_m = (a_, m_) if pf_on else (None, None)
                 run_chunks(K)
@@ -163,6 +168,32 @@ def main():
             for ly, (a_, m_) in zip(ch.layers, saved):
                 ly.ihcpf_a, ly.ihcpf_m = a_, m_
             os.environ["HY4_B49_COLLAPSE"] = "1"
+        if os.environ.get("CPROF") == "1":  # cProfile of the last chunk (host python + pybind time by function)
+            import cProfile
+            import io
+            import pstats
+
+            run_chunks(K)
+            pr = cProfile.Profile()
+            for ly in ch.layers:
+                ly.attn.reset()
+            ibl = {}
+            for c in range(K - 1):
+                x4 = mk_x(c)
+                for ly in ch.layers:
+                    x4 = ly.prefill_chunk(x4, c * HC.CHUNK, ibl)
+                ttnn.deallocate(x4)
+            sync()
+            x4 = mk_x(K - 1)
+            pr.enable()
+            for ly in ch.layers:
+                x4 = ly.prefill_chunk(x4, (K - 1) * HC.CHUNK, ibl)
+            pr.disable()
+            sync()
+            sio = io.StringIO()
+            pstats.Stats(pr, stream=sio).sort_stats("tottime").print_stats(28)
+            for line in sio.getvalue().splitlines():
+                print("CPROF " + line[:200], flush=True)
         if (
             os.environ.get("OPCOUNT") == "1"
         ):  # host op counts / host time per ttnn callable for one layer of each type (fused path as configured)

@@ -15,12 +15,18 @@ Dataflow per column c (heads 8c..8c+7), input h [1,1,n,6144] bf16 replicated ove
 Open conventions (default = the oracle's, flags for A/B): rope pairing ``rope_interleave`` (adjacent pairs), sink = extra softmax logit in the post-scale domain (the op takes sink/scale),
 gate = sigmoid(linear(h)) with h the NORMED input. Everything bf16 here (weights bf16, ``wdtype`` switches to bfp8).
 """
+import os
+
 import ttnn
 from models.demos.blackhole.hy4_preview.tt.hy4_attn_weights import build_attn_host_weights
 from models.demos.blackhole.hy4_preview.tt.hy4_common import RopeDev, compute_cfg, upload
 from models.demos.blackhole.hy4_preview.tt.hy4_indexer import Hy4Indexer
 from models.demos.blackhole.hy4_preview.tt.hy4_kv_cache import KVCache
 from models.demos.blackhole.hy4_preview.tt.hy4_pf_opt import PfOpt, plinear
+
+_ROPE_TABS = (
+    {}
+)  # B49 (HY4_B49_ROPE_CACHE=1): key -> (cos, sin, idx_cos, idx_sin) of the current prefill chunk, shared by all layers
 
 
 class Hy4Attention:
@@ -105,12 +111,35 @@ class Hy4Attention:
 
     def rope_tabs(self, start, n):
         """(cos, sin, idx_cos, idx_sin) device tables for positions start .. start + n (host uploads: call outside a trace)."""
+        key = None
+        if n >= 256 and os.environ.get("HY4_B49_ROPE_CACHE", "0") == "1":
+            # B49: the tables of a prefill chunk are the same for every layer (identical rope parameters): built / uploaded once per chunk (2.7 ms of host time per layer otherwise)
+            key = (
+                id(self.md),
+                start,
+                n,
+                self.rope.dim,
+                self.rope.theta,
+                self.rope.interleave,
+                self.idx_rope.interleave,
+            )
+            hit = _ROPE_TABS.get(key)
+            if hit is not None:
+                c, s, ic, is_ = hit
+                if self.has_indexer and ic is None:
+                    pos = list(range(start, start + n))
+                    ic, is_ = self.idx_rope.tables(pos)
+                    _ROPE_TABS[key] = (c, s, ic, is_)
+                return (c, s, ic, is_) if self.has_indexer else (c, s, None, None)
         pos = list(range(start, start + n))
         c, s = self.rope.tables(pos)
         if self.has_indexer:
             ic, is_ = self.idx_rope.tables(pos)
         else:
             ic = is_ = None
+        if key is not None:
+            _ROPE_TABS.clear()  # keep only the current chunk's tables (the previous chunk's are freed with the dict entry)
+            _ROPE_TABS[key] = (c, s, ic, is_)
         return c, s, ic, is_
 
     def _free(self, t, name):
@@ -204,7 +233,12 @@ class Hy4Attention:
         """heads->sequence all_to_all over the columns, stock sparse_sdpa on H=64 x n/8 rows, back."""
         n = qfull.shape[2]
         q_t = ttnn.experimental.all_to_all_async_generic(
-            qfull, in_dim=1, out_dim=2, num_links=2 if self.pf.a2a2 else 1, memory_config=ttnn.DRAM_MEMORY_CONFIG, cluster_axis=1
+            qfull,
+            in_dim=1,
+            out_dim=2,
+            num_links=2 if self.pf.a2a2 else 1,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            cluster_axis=1,
         )  # [1,64,n/8,576] TILE (the op takes TILE only)
         q_seq = ttnn.to_layout(q_t, ttnn.ROW_MAJOR_LAYOUT)
         ttnn.deallocate(q_t)
@@ -225,7 +259,12 @@ class Hy4Attention:
         out_t = ttnn.to_layout(out, ttnn.TILE_LAYOUT)
         ttnn.deallocate(out)
         o_lat = ttnn.experimental.all_to_all_async_generic(
-            out_t, in_dim=2, out_dim=1, num_links=2 if self.pf.a2a2 else 1, memory_config=ttnn.DRAM_MEMORY_CONFIG, cluster_axis=1
+            out_t,
+            in_dim=2,
+            out_dim=1,
+            num_links=2 if self.pf.a2a2 else 1,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            cluster_axis=1,
         )  # [1,8,n,512]
         ttnn.deallocate(out_t)
         return o_lat
