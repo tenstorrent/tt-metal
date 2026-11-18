@@ -605,6 +605,12 @@ def _k31_rung(rung, trace, mesh_device, hf_config, stages) -> list[str]:
     # Scored chunk by chunk on the prompt rows, so host memory holds one chunk's taps.
     scores = {}  # (global layer, chunk) -> PCC
 
+    # Diagnostic, not gated: every layer's pooled PCC over the 8x4 chunk grid (`k31_stage.CHUNK` rows), so 4x4's
+    # 2560-token chunks are compared with 8x4 on the same rows. Each window accumulates comp_pcc's sums in float64.
+    grid = k31_stage.CHUNK
+    assert grid % chunk == 0, f"chunk {chunk} does not tile the {grid}-row grid"
+    grid_sums = {}  # (global layer, window) -> [n, sx, sy, sxx, syy, sxy]
+
     def score(c, taps):
         lo = c * chunk
         hi = min(lo + chunk, prompt_len)
@@ -613,6 +619,10 @@ def _k31_rung(rung, trace, mesh_device, hf_config, stages) -> list[str]:
         for layer, got in sorted(taps.items()):
             golden = trace.decoder_output(layer, lo, hi)
             scores[(layer, c)] = pcc(golden, got[: hi - lo].float())
+            x, y = golden.double().flatten(), got[: hi - lo].double().flatten()
+            sums = grid_sums.setdefault((layer, lo // grid), [0] + [0.0] * 5)
+            for i, v in enumerate((x.numel(), x.sum(), y.sum(), (x * x).sum(), (y * y).sum(), (x * y).sum())):
+                sums[i] += float(v)
 
     # Per DSA layer, the top-k recall of every prompt row, filled chunk by chunk (the indices are not kept).
     recall = {}  # global layer -> [prompt rows] float
@@ -722,6 +732,12 @@ def _k31_rung(rung, trace, mesh_device, hf_config, stages) -> list[str]:
         if gated.mean() < K31_TOPK_RECALL[golden_path] or full.min() < 1:
             topk_failures.append(f"layer {layer}: {gated.mean():.6f} (rows < {topk_k}: min {full.min():.4f})")
 
+    for layer in sorted({l for l, _ in grid_sums}):
+        windows = []
+        for (l, w), (n, sx, sy, sxx, syy, sxy) in sorted(grid_sums.items()):
+            if l == layer:
+                windows.append((sxy - sx * sy / n) / ((sxx - sx * sx / n) * (syy - sy * sy / n)) ** 0.5)
+        logger.info(f"K31 {rung} layer {layer} on {grid}-row windows: " + " ".join(f"{v:.7f}" for v in windows))
     for layer in sorted({l for l, _ in scores}):
         worst_chunk = min((c for l, c in scores if l == layer), key=lambda c: scores[(layer, c)])
         logger.info(
