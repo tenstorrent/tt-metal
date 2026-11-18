@@ -181,6 +181,19 @@
         const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt,                 \
         const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id = std::nullopt);
 
+// Scalars above INT32_MAX are only valid for UINT32 inputs.
+#define TTNN_BINARY_OP_TENSOR_UINT32_BITWISE(NAME, OP_TYPE)                               \
+    Tensor NAME(                                                                          \
+        const Tensor& lhs,                                                                \
+        uint32_t rhs,                                                                     \
+        const std::optional<MemoryConfig>& memory_config = std::nullopt,                  \
+        const std::optional<Tensor>& output = std::nullopt,                               \
+        ttsl::Span<const operations::unary::EltwiseUnaryWithParam> post_activations = {}, \
+        ttsl::Span<const operations::unary::EltwiseUnaryWithParam> lhs_activations = {},  \
+        ttsl::Span<const operations::unary::EltwiseUnaryWithParam> rhs_activations = {},  \
+        const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt,                 \
+        const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id = std::nullopt);
+
 // Inplace binary op that calls invoke_binary_ng (logical_and_, logical_or_, logical_xor_, rsub_, bias_gelu_)
 #define TTNN_BINARY_OP_INPLACE_INVOKE(NAME, OP_TYPE)                                      \
     Tensor NAME(                                                                          \
@@ -513,10 +526,13 @@ TTNN_BINARY_OP_TENSOR_TENSOR(logical_right_shift, LOGICAL_RIGHT_SHIFT)
 TTNN_BINARY_OP_TENSOR_SCALAR(logical_right_shift, LOGICAL_RIGHT_SHIFT)
 TTNN_BINARY_OP_TENSOR_TENSOR_BITWISE(bitwise_and, BITWISE_AND)
 TTNN_BINARY_OP_TENSOR_INT32_BITWISE(bitwise_and, BITWISE_AND)
+TTNN_BINARY_OP_TENSOR_UINT32_BITWISE(bitwise_and, BITWISE_AND)
 TTNN_BINARY_OP_TENSOR_TENSOR_BITWISE(bitwise_or, BITWISE_OR)
 TTNN_BINARY_OP_TENSOR_INT32_BITWISE(bitwise_or, BITWISE_OR)
+TTNN_BINARY_OP_TENSOR_UINT32_BITWISE(bitwise_or, BITWISE_OR)
 TTNN_BINARY_OP_TENSOR_TENSOR_BITWISE(bitwise_xor, BITWISE_XOR)
 TTNN_BINARY_OP_TENSOR_INT32_BITWISE(bitwise_xor, BITWISE_XOR)
+TTNN_BINARY_OP_TENSOR_UINT32_BITWISE(bitwise_xor, BITWISE_XOR)
 TTNN_BINARY_OP_TENSOR_TENSOR_BITWISE(bitwise_left_shift, LEFT_SHIFT)
 TTNN_BINARY_OP_TENSOR_INT32_BITWISE(bitwise_left_shift, LEFT_SHIFT)
 TTNN_BINARY_OP_TENSOR_TENSOR_BITWISE(bitwise_right_shift, RIGHT_SHIFT)
@@ -589,6 +605,7 @@ ttnn::Tensor operator<=(const ttnn::Tensor& lhs, InputBType rhs) {
 #undef TTNN_BINARY_OP_TENSOR_SCALAR
 #undef TTNN_BINARY_OP_TENSOR_TENSOR_BITWISE
 #undef TTNN_BINARY_OP_TENSOR_INT32_BITWISE
+#undef TTNN_BINARY_OP_TENSOR_UINT32_BITWISE
 #undef TTNN_BINARY_OP_INPLACE
 #undef TTNN_BINARY_OP_INPLACE_RELATIONAL
 #undef TTNN_BINARY_OP_INPLACE_INVOKE

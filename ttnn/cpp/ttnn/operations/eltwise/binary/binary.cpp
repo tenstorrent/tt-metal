@@ -4,8 +4,13 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "binary.hpp"
+<<<<<<< HEAD
 #include <algorithm>
+=======
+#include <bit>
+>>>>>>> 8fcda9eede2 (#66106: Widen the scalar type in the bitwise_and/or/xor tensor- scalar)
 #include <cmath>
+#include <limits>
 #include <tt-metalium/sub_device_types.hpp>
 #include <tt-logger/tt-logger.hpp>
 
@@ -463,6 +468,59 @@
             /*fast_and_approximate_mode*/ false,                                                           \
             sub_core_grids,                                                                                \
             sub_device_id);                                                                                \
+    }
+
+#define TTNN_BINARY_OP_TENSOR_UINT32_BITWISE_IMPL(NAME, OP_TYPE)                                 \
+    Tensor NAME(                                                                                 \
+        const Tensor& lhs,                                                                       \
+        uint32_t rhs,                                                                            \
+        const std::optional<MemoryConfig>& memory_config,                                        \
+        const std::optional<Tensor>& output,                                                     \
+        ttsl::Span<const operations::unary::EltwiseUnaryWithParam> post_activations,             \
+        ttsl::Span<const operations::unary::EltwiseUnaryWithParam> lhs_activations,              \
+        ttsl::Span<const operations::unary::EltwiseUnaryWithParam> rhs_activations,              \
+        const std::optional<CoreRangeSet>& sub_core_grids,                                       \
+        const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id) {                         \
+        if (rhs <= static_cast<uint32_t>(std::numeric_limits<int32_t>::max())) {                 \
+            return NAME(                                                                         \
+                lhs,                                                                             \
+                static_cast<int32_t>(rhs),                                                       \
+                memory_config,                                                                   \
+                output,                                                                          \
+                post_activations,                                                                \
+                lhs_activations,                                                                 \
+                rhs_activations,                                                                 \
+                sub_core_grids,                                                                  \
+                sub_device_id);                                                                  \
+        }                                                                                        \
+        TT_FATAL(                                                                                \
+            lhs.dtype() == DataType::UINT32,                                                     \
+            #NAME " with scalar {} (> INT32_MAX) requires a UINT32 input tensor, got {}",        \
+            rhs,                                                                                 \
+            lhs.dtype());                                                                        \
+        if (!sub_device_id.has_value() && post_activations.empty() && lhs_activations.empty() && \
+            rhs_activations.empty()) {                                                           \
+            return ttnn::unary_with_int32_param(                                                 \
+                operations::unary::UnaryOpType::OP_TYPE,                                         \
+                lhs,                                                                             \
+                std::bit_cast<int32_t>(rhs),                                                     \
+                memory_config,                                                                   \
+                output,                                                                          \
+                sub_core_grids);                                                                 \
+        }                                                                                        \
+        return ttnn::detail::invoke_binary_ng(                                                   \
+            lhs,                                                                                 \
+            rhs,                                                                                 \
+            operations::binary::BinaryOpType::OP_TYPE,                                           \
+            std::nullopt,                                                                        \
+            memory_config,                                                                       \
+            output,                                                                              \
+            post_activations,                                                                    \
+            lhs_activations,                                                                     \
+            rhs_activations,                                                                     \
+            /*fast_and_approximate_mode*/ false,                                                 \
+            sub_core_grids,                                                                      \
+            sub_device_id);                                                                      \
     }
 
 namespace ttnn::operations::binary::detail {
@@ -1396,10 +1454,13 @@ TTNN_BINARY_OP_TENSOR_TENSOR_IMPL(logical_right_shift, LOGICAL_RIGHT_SHIFT)
 TTNN_BINARY_OP_TENSOR_SCALAR_IMPL(logical_right_shift, LOGICAL_RIGHT_SHIFT)
 TTNN_BINARY_OP_TENSOR_TENSOR_BITWISE_IMPL(bitwise_and, BITWISE_AND)
 TTNN_BINARY_OP_TENSOR_INT32_BITWISE_IMPL(bitwise_and, BITWISE_AND)
+TTNN_BINARY_OP_TENSOR_UINT32_BITWISE_IMPL(bitwise_and, BITWISE_AND)
 TTNN_BINARY_OP_TENSOR_TENSOR_BITWISE_IMPL(bitwise_or, BITWISE_OR)
 TTNN_BINARY_OP_TENSOR_INT32_BITWISE_IMPL(bitwise_or, BITWISE_OR)
+TTNN_BINARY_OP_TENSOR_UINT32_BITWISE_IMPL(bitwise_or, BITWISE_OR)
 TTNN_BINARY_OP_TENSOR_TENSOR_BITWISE_IMPL(bitwise_xor, BITWISE_XOR)
 TTNN_BINARY_OP_TENSOR_INT32_BITWISE_IMPL(bitwise_xor, BITWISE_XOR)
+TTNN_BINARY_OP_TENSOR_UINT32_BITWISE_IMPL(bitwise_xor, BITWISE_XOR)
 TTNN_BINARY_OP_TENSOR_TENSOR_BITWISE_IMPL(bitwise_left_shift, LEFT_SHIFT)
 TTNN_BINARY_OP_TENSOR_INT32_BITWISE_IMPL(bitwise_left_shift, LEFT_SHIFT)
 TTNN_BINARY_OP_TENSOR_TENSOR_BITWISE_IMPL(bitwise_right_shift, RIGHT_SHIFT)
@@ -1790,6 +1851,7 @@ TTNN_BINARY_OP_INPLACE_INVOKE_IMPL(bias_gelu_, BIAS_GELU)
 #undef TTNN_BINARY_OP_TENSOR_SCALAR_IMPL
 #undef TTNN_BINARY_OP_TENSOR_TENSOR_BITWISE_IMPL
 #undef TTNN_BINARY_OP_TENSOR_INT32_BITWISE_IMPL
+#undef TTNN_BINARY_OP_TENSOR_UINT32_BITWISE_IMPL
 #undef TTNN_BINARY_OP_INPLACE_IMPL
 #undef TTNN_BINARY_OP_INPLACE_RELATIONAL_IMPL
 #undef TTNN_BINARY_OP_INPLACE_INVOKE_IMPL
