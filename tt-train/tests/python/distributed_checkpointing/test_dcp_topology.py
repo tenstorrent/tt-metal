@@ -124,13 +124,8 @@ def test_box_of_another_rank_neither_fits_nor_tiles():
 
 def test_boxes_tile_agrees_with_pairwise_definition():
     """boxes_tile's grid fast path agrees with the pairwise definition."""
-    # Equal sizes off the grid: distinct offsets, the volume adding up, and yet an overlap and a gap. Only the
-    # alignment check in grid_cell_size keeps them off the fast path, and the random cases below never make such boxes.
-    off_grid = [Box((0,), (2,)), Box((1,), (2,))]
-    assert grid_cell_size(off_grid, (0,)) is None
-    assert not boxes_tile(off_grid, Box((0,), (4,)))
     rng = np.random.default_rng(7)
-    grid_cases = pairwise_cases = 0
+    grid_cases = pairwise_cases = equal_off_grid_cases = 0
     for _ in range(3000):
         ndim = int(rng.integers(1, 4))
         cell = tuple(int(rng.integers(1, 4)) for _ in range(ndim))
@@ -139,7 +134,7 @@ def test_boxes_tile_agrees_with_pairwise_definition():
         boxes = [
             Box(tuple(i * c for i, c in zip(idx, cell)), cell) for idx in np.ndindex(*counts)
         ]  # a full, exact grid
-        mutation = int(rng.integers(0, 5))
+        mutation = int(rng.integers(0, 6))
         if mutation == 1 and len(boxes) > 1:
             boxes[int(rng.integers(len(boxes)))] = boxes[0]  # a duplicate cell and a gap: same volume
         elif mutation == 2:
@@ -154,15 +149,30 @@ def test_boxes_tile_agrees_with_pairwise_definition():
                 boxes += [b.with_dim(0, b.offsets[0], k), b.with_dim(0, b.offsets[0] + k - 1, b.sizes[0] - k)]
         elif mutation == 4:
             boxes = [Box((b.offsets[0] + 1,) + b.offsets[1:], b.sizes) for b in boxes]  # shifted past the target
+        elif mutation == 5:
+            # Shift one cell by less than its size toward a neighbour: every box keeps the cell's size, the offsets stay
+            # distinct and the volumes add up, yet the cell overlaps its neighbour and leaves a gap. Only the alignment
+            # check in grid_cell_size keeps such boxes off the fast path.
+            dims = [d for d in range(ndim) if counts[d] >= 2 and cell[d] >= 2]
+            if dims:
+                d = dims[int(rng.integers(len(dims)))]
+                i = int(rng.integers(len(boxes)))
+                b = boxes[i]
+                k = int(rng.integers(1, cell[d]))
+                toward = 1 if b.offsets[d] + cell[d] < target.sizes[d] else -1
+                boxes[i] = b.with_dim(d, b.offsets[d] + toward * k, cell[d])
         kept = [b for b in boxes if not b.is_empty()]
         grid = grid_cell_size(kept, target.offsets) is not None
         grid_cases += grid
-        pairwise_cases += (
-            not grid and all(target.contains(b) for b in kept) and sum(b.volume for b in kept) == target.volume
-        )
+        inside = all(target.contains(b) for b in kept) and sum(b.volume for b in kept) == target.volume
+        pairwise_cases += not grid and inside
+        equal_off_grid_cases += not grid and inside and len({b.sizes for b in kept}) == 1
         assert boxes_tile(boxes, target) == _pairwise_tile(boxes, target), (boxes, target)
     assert grid_cases > 1000, "the fast path was exercised"
     assert pairwise_cases > 200, "the pairwise path was exercised"
+    assert (
+        equal_off_grid_cases > 100
+    ), "equal-size boxes off the grid were generated, which only the alignment check stops"
 
 
 def test_labels_tile_and_replicas_share_a_box():
