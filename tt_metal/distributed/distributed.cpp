@@ -22,6 +22,9 @@
 #include "impl/context/metal_env_impl.hpp"
 #include "impl/program/slow_dispatch.hpp"
 #include "llrt/tt_cluster.hpp"
+#ifdef TT_METAL_USE_EMULE
+#include "emulated_program_runner.hpp"  // emule::note_fd_enqueue
+#endif
 
 namespace tt::tt_metal::distributed {
 
@@ -125,6 +128,17 @@ void EnqueueMeshWorkload(MeshCommandQueue& mesh_cq, MeshWorkload& mesh_workload,
         mesh_workload.impl().compile(mesh_cq.device());
         mesh_workload.impl().load_binaries(mesh_cq);
         mesh_workload.impl().generate_dispatch_commands(mesh_cq);
+#ifdef TT_METAL_USE_EMULE
+        if (env.get_cluster().get_target_device_type() == tt::TargetDevice::Emule) {
+            for (auto& [device_range, program] : programs) {
+                for (const auto& coord : device_range) {
+                    if (auto* device = mesh_cq.device()->impl().get_device(coord)) {
+                        emule::note_fd_enqueue(device, program);
+                    }
+                }
+            }
+        }
+#endif
     } else if (env.get_cluster().get_target_device_type() == tt::TargetDevice::Mock) {
         // Slow dispatch normally JIT-compiles inside LaunchProgram, but the SD mesh CQ
         // short-circuits for mock devices (no hardware to dispatch to). Compile here so
