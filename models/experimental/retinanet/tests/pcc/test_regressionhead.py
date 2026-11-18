@@ -55,7 +55,9 @@ def test_regression_head(device, pcc, reset_seeds):
         "ACTIVATIONS_DTYPE": ttnn.bfloat16,
     }
     # Create TTNN parameters
-    ttnn_parameters = preprocess_regression_head_parameters(regression_head, device, None, model_config)
+    ttnn_parameters = preprocess_regression_head_parameters(
+        torch_head=regression_head, device=device, mesh_mapper=None, model_config=model_config
+    )
 
     # TTNN forward pass
     ttnn_output = ttnn_retinanet_regression_head(

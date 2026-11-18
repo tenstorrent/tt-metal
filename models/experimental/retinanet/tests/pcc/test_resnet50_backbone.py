@@ -40,8 +40,6 @@ class BackboneTestInfra:
         # Store only backbone
         self.torch_backbone = retinanet.backbone
 
-        # Torch input preprocessing
-
         self.torch_input_tensor = synthetic_image()
 
         # Get backbone features

@@ -56,7 +56,9 @@ def test_classification_head_full(device, pcc, reset_seeds):
         "ACTIVATIONS_DTYPE": ttnn.bfloat16,
     }
     # Create TTNN parameters
-    ttnn_parameters = preprocess_classification_head_parameters(classification_head, device, None, model_config)
+    ttnn_parameters = preprocess_classification_head_parameters(
+        torch_head=classification_head, device=device, mesh_mapper=None, model_config=model_config
+    )
 
     # TTNN forward pass
     ttnn_output = ttnn_retinanet_classification_head(
