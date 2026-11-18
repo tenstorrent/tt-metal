@@ -68,18 +68,21 @@ class TtKimiK3Transformer(LightweightModule):
         """
         from models.demos.deepseek_v3_d_p.reference.kimi_k3_config import KimiK3Config
         from models.demos.deepseek_v3_d_p.tt.kimi_k3.weights import layer_is_cached, layer_is_stale
+        from models.demos.deepseek_v3_d_p.utils.fast_cache_checker import FastCacheChecker
 
         if cache_path is None:
             return False
         model_cfg = model_cfg if model_cfg is not None else KimiK3Config
         layers = range(first_layer_idx, first_layer_idx + num_layers)
-        stale = [idx for idx in layers if layer_is_stale(Path(cache_path), idx, model_cfg)]
+        root = Path(cache_path)
+        listing = FastCacheChecker(root)  # one directory listing for the whole slice; nothing writes during the check
+        stale = [idx for idx in layers if layer_is_stale(root, idx, model_cfg, listing=listing)]
         if stale:
             logger.warning(
                 f"Kimi-K3 cache at {cache_path}: layers {stale} lack current-format attention weights (KDA or "
                 f"indexer); rebuild them from the checkpoint (load_layer_state_dict_cached rebuilds only those)"
             )
-        return all(layer_is_cached(Path(cache_path), idx, model_cfg) for idx in layers)
+        return all(layer_is_cached(root, idx, model_cfg, listing=listing) for idx in layers)
 
     def __init__(
         self,
