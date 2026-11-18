@@ -121,6 +121,11 @@ def test_a_box_of_another_rank_is_not_contained_and_does_not_tile():
 
 
 def test_boxes_tile_grid_fast_path_agrees_with_the_pairwise_definition():
+    # Equal sizes off the grid: distinct offsets, the volume adding up, and yet an overlap and a gap. Only the
+    # alignment check in grid_cell_size keeps them off the fast path, and the random cases below never make such boxes.
+    off_grid = [Box((0,), (2,)), Box((1,), (2,))]
+    assert grid_cell_size(off_grid, (0,)) is None
+    assert not boxes_tile(off_grid, Box((0,), (4,)))
     rng = np.random.default_rng(7)
     grid_cases = pairwise_cases = 0
     for _ in range(3000):
