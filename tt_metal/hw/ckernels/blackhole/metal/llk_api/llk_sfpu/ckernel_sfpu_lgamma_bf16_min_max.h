@@ -5,8 +5,9 @@
 #pragma once
 
 namespace ckernel::sfpu::ttpoly::lgamma {
-using namespace ::sfpi;
 using ::sfpi::DataLayout;
+using ::sfpi::min_max;
+using ::sfpi::vFloat;
 __attribute__((always_inline)) inline void ordered_min_max(vFloat& a, vFloat& b) {
     auto r = min_max(a, b);
     a = r.first;

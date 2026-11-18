@@ -5,8 +5,24 @@
 #pragma once
 
 namespace ckernel::sfpu::ttpoly::lgamma {
-using namespace ::sfpi;
+using ::sfpi::as;
+using ::sfpi::convert;
 using ::sfpi::DataLayout;
+using ::sfpi::dst_reg;
+using ::sfpi::exexp;
+using ::sfpi::ExponentMode;
+using ::sfpi::is_zero;
+using ::sfpi::polynomial;
+using ::sfpi::RoundMode;
+using ::sfpi::setexp;
+using ::sfpi::setsgn;
+using ::sfpi::vConstFloatPrgm0;
+using ::sfpi::vConstFloatPrgm1;
+using ::sfpi::vConstFloatPrgm2;
+using ::sfpi::vFloat;
+using ::sfpi::vFloat16b;
+using ::sfpi::vInt;
+using ::sfpi::vSMag;
 template <class Config>
 inline void root_native_log_constants() {
     static_assert(Config::kLogDegree >= 2);

@@ -132,7 +132,7 @@ ALWI void lgamma_adjusted_tile_init() { MATH(SFPU_TERNARY_INIT(lgamma)); }
 /**
  * Performs element-wise computation of lgamma on each element of a tile in DEST, which holds
  * BF16 data, with one pass of a generated SFPU kernel. The DEST register buffer must be in acquired
- * state via *acquire_dst* call. This call is blocking and is only available on the compute engine.
+ * state via *tile_regs_acquire* call. This call is blocking and is only available on the compute engine.
  *
  * It computes ttnn.lgamma of the tile's own values in this one call. `lgamma_stirling_tile`, `lgamma_stirling_float_tile`, `lgamma_adjusted_tile`, above, are steps of TT-NN's own lgamma kernel, which take other operands and are unchanged.
  *
@@ -147,7 +147,8 @@ template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE, bool on_board = false>
 ALWI void lgamma_tile([[maybe_unused]] uint32_t idst) {
 #if defined(ARCH_BLACKHOLE)
     static_assert(!is_fp32_dest_acc_en, "lgamma_tile evaluates BF16 DEST");
-    MATH(SFPU_UNARY_CALL(DST_SYNC_MODE, is_fp32_dest_acc_en, calculate_lgamma_bf16, (32), idst, VectorMode::None));
+    MATH(SFPU_UNARY_CALL(
+        DST_SYNC_MODE, is_fp32_dest_acc_en, calculate_lgamma_bf16, (32 /*ITERATIONS*/), idst, VectorMode::None));
 #else
     static_assert(on_board, "lgamma_tile: Blackhole only");
 #endif

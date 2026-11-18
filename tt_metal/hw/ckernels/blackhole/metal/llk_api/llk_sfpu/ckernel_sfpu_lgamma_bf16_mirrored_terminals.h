@@ -5,8 +5,13 @@
 #pragma once
 
 namespace ckernel::sfpu::ttpoly::lgamma {
-using namespace ::sfpi;
+using ::sfpi::copysgn;
 using ::sfpi::DataLayout;
+using ::sfpi::is_zero;
+using ::sfpi::setsgn;
+using ::sfpi::SFPMAD_MOD1_OFFSET_NONE;
+using ::sfpi::vFloat;
+using ::sfpi::vUInt;
 template <int CODE>
 __attribute__((always_inline)) inline vFloat target_raw_terminal_value(vFloat computed, float constant = 0.0f) {
     static_assert(CODE >= 0 && CODE <= 6, "unsupported raw terminal class");
