@@ -124,11 +124,6 @@ ALWI void fill_scalar(
     volatile tt_l1_ptr uint32_t* entry = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(scalar_cb.get_write_ptr());
     if (entry[0] != (scalar_value | (scalar_value << 16))) {
         fill_with_val(scalar_cb.get_write_ptr(), FACE_WIDTH, scalar_value);
-#ifdef ARCH_QUASAR
-        // CPU-store fill goes through the DM L1/L2 cache; compute reads TL1 directly -- write it back
-        // (same as the one-scalar init in the reader).
-        flush_l2_cache_range(static_cast<uintptr_t>(scalar_cb.get_write_ptr()), static_cast<size_t>(FACE_WIDTH) * 2);
-#endif
     }
 
     scalar_cb.push_back(1);

@@ -669,23 +669,7 @@ ttnn::device_operation::ProgramArtifacts pool2d_create_program_artifacts(
     const bool is_output_block_format = is_block_float(output_tensors[0].dtype());
     const bool zero_pages = is_output_tiled && is_output_block_format;
     const bool indexes_32_bit = return_indices && params.index_nbytes == 4;
-    if (return_indices && tt::tt_metal::hal::get_arch() == tt::ARCH::QUASAR) {
-        // Quasar indices are Int32 and walk signed values (padding indices and wrap increments are
-        // negative), so the padded index range must fit in int32.
-        TT_FATAL(
-            static_cast<uint64_t>(in_h_padded) * in_w_padded <= std::numeric_limits<int32_t>::max(),
-            "max_pool2d return_indices: padded input {}x{} exceeds the int32 index range",
-            in_h_padded,
-            in_w_padded);
-        TT_FATAL(
-            !params.is_large_kernel,
-            "max_pool2d return_indices on Quasar does not yet support windows of {}x{} (more than {} rows per "
-            "reduction)",
-            kernel_h,
-            kernel_w,
-            params.max_rows_for_reduction);
-    }
-
+    const bool indexes_int32 = return_indices && params.index_format == tt::DataFormat::Int32;
     // MPWI index increments (host computation, unchanged).
     uint32_t right_inc = 0, down_left_wrap_inc = 0, up_left_wrap_inc = 0;
     uint32_t intra_kernel_right_inc = 0, intra_kernel_down_left_wrap_inc = 0;
@@ -981,6 +965,7 @@ ttnn::device_operation::ProgramArtifacts pool2d_create_program_artifacts(
         reader_cta["intra_kernel_right_inc"] = intra_kernel_right_inc;
         reader_cta["intra_kernel_down_left_wrap_inc"] = intra_kernel_down_left_wrap_inc;
         reader_cta["indexes_32_bit"] = static_cast<uint32_t>(indexes_32_bit);
+        reader_cta["indexes_int32"] = static_cast<uint32_t>(indexes_int32);
     }
 
     // -----------------------------------------------------------------------
@@ -1398,7 +1383,7 @@ ttnn::device_operation::ProgramArtifacts pool2d_create_program_artifacts(
         .fp32_dest_acc_en = get_fp32_dest_acc_en(device_compute_kernel_config),
         .dst_full_sync_en = get_dst_full_sync_en(device_compute_kernel_config)});
     // Int32 index tiles cannot pass through SrcA on Quasar; unpack them straight to Dest.
-    if (return_indices && params.index_format == tt::DataFormat::Int32) {
+    if (indexes_int32) {
         for (const auto& dfb :
              {DFB_IN_IDX,
               DFB_RIGHT_INC,

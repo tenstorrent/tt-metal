@@ -31,6 +31,7 @@ struct IndexType<false> {
 
 template <
     typename IndexType,
+    bool sign_magnitude,
     uint32_t kernel_h,
     uint32_t kernel_w,
     uint32_t fill_c,
@@ -49,12 +50,12 @@ void fill_indexes(IdxDFB& idx_cb, uint32_t init_index) {
             if (!is_large_kernel || hw < sticks_per_chunk) {
                 volatile tt_l1_ptr IndexType* base_ptr = &idx_ptr[hw * TILE_WIDTH];
                 IndexType index = static_cast<IndexType>(init_index + kernel_idx);
-#ifdef ARCH_QUASAR
-                // Quasar's SFPU Int32 add is sign-magnitude: encode negative (padding) indices to match.
-                if (static_cast<int32_t>(index) < 0) {
-                    index = 0x80000000u | static_cast<uint32_t>(-static_cast<int32_t>(index));
+                // Int32 indices (Quasar) are added sign-magnitude: encode negative padding indices to match.
+                if constexpr (sign_magnitude) {
+                    if (static_cast<int32_t>(index) < 0) {
+                        index = 0x80000000u | static_cast<uint32_t>(-static_cast<int32_t>(index));
+                    }
                 }
-#endif
 
                 for (uint32_t c = 0; c < fill_c; ++c) {
                     base_ptr[c] = index;
@@ -64,10 +65,6 @@ void fill_indexes(IdxDFB& idx_cb, uint32_t init_index) {
         }
         kernel_idx += row_stride;
     }
-#ifdef ARCH_QUASAR
-    // CPU stores go through the DM cache; write back so the unpacker reads them from L1.
-    flush_l2_cache_range(static_cast<uintptr_t>(idx_cb.get_write_ptr()), static_cast<size_t>(idx_cb.get_entry_size()));
-#endif
 }
 
 // Initialize indices and increment tiles for return_indices functionality
@@ -88,6 +85,7 @@ template <
     uint32_t intra_kernel_right_inc,
     uint32_t intra_kernel_down_left_wrap_inc,
     bool indexes_32_bit,
+    bool indexes_int32,
     typename IdxDFB,
     typename RightIncDFB,
     typename DownLeftWrapIncDFB,
@@ -145,6 +143,7 @@ ALWI void initialize_return_indices_data(
     idx_cb.reserve_back(1);
     fill_indexes<
         typename IndexType<indexes_32_bit>::type,
+        indexes_int32,
         kernel_h,
         kernel_w,
         fill_c,
@@ -160,22 +159,18 @@ ALWI void initialize_return_indices_data(
     constexpr uint32_t inc_rows = is_large_kernel ? sticks_per_chunk : window_size_hw;
     if constexpr (indexes_32_bit) {
         auto fill_inc_32 = [&](auto& inc_cb, uint32_t inc) __attribute__((always_inline)) {
-#ifdef ARCH_QUASAR
             // Sign-magnitude, as for the indices (wrap and large-kernel increments are negative).
-            if (static_cast<int32_t>(inc) < 0) {
-                inc = 0x80000000u | static_cast<uint32_t>(-static_cast<int32_t>(inc));
+            if constexpr (indexes_int32) {
+                if (static_cast<int32_t>(inc) < 0) {
+                    inc = 0x80000000u | static_cast<uint32_t>(-static_cast<int32_t>(inc));
+                }
             }
-#endif
             volatile tt_l1_ptr uint32_t* ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(inc_cb.get_write_ptr());
             for (uint32_t k = 0; k < inc_rows; ++k) {
                 for (uint32_t c = 0; c < fill_c; ++c) {
                     ptr[k * TILE_WIDTH + c] = inc;
                 }
             }
-#ifdef ARCH_QUASAR
-            flush_l2_cache_range(
-                static_cast<uintptr_t>(inc_cb.get_write_ptr()), static_cast<size_t>(inc_cb.get_entry_size()));
-#endif
         };
 
         right_inc_cb.reserve_back(1);
@@ -499,6 +494,7 @@ void kernel_main() {
     constexpr uint32_t intra_kernel_right_inc = get_arg(args::intra_kernel_right_inc);
     constexpr uint32_t intra_kernel_down_left_wrap_inc = get_arg(args::intra_kernel_down_left_wrap_inc);
     constexpr uint32_t indexes_32_bit = get_arg(args::indexes_32_bit);
+    constexpr bool indexes_int32 = get_arg(args::indexes_int32);
 
     constexpr uint32_t in_w_padded = in_w + pad_w + ceil_pad_w;
     constexpr bool last_tile_is_partial = in_c % TILE_WIDTH != 0;
@@ -523,21 +519,8 @@ void kernel_main() {
     DataflowBuffer in_scalar_cb(in_scalar_cb_id_0);
 
     fill_with_val(clear_value_cb.get_write_ptr(), TILE_HEIGHT * TILE_WIDTH, bf16_init_value);
-#ifdef ARCH_QUASAR
-    flush_l2_cache_range(
-        static_cast<uintptr_t>(clear_value_cb.get_write_ptr()), static_cast<size_t>(clear_value_cb.get_entry_size()));
-#endif
     clear_value_cb.push_back(1);
-#ifdef ARCH_QUASAR
-    {
-        // The clear_out_tiles NoC self-loopback is unreliable on Quasar: fill the in_cb ring directly.
-        const uint32_t in_cb_bytes = in_cb.get_entry_size() * in_cb.get_total_num_entries();
-        fill_with_val(in_cb.get_write_ptr(), in_cb_bytes / 2, bf16_init_value);
-        flush_l2_cache_range(static_cast<uintptr_t>(in_cb.get_write_ptr()), static_cast<size_t>(in_cb_bytes));
-    }
-#else
     clear_out_tiles<in_cb_id, clear_value_cb_id>(Noc(), in_cb, clear_value_cb);
-#endif
 
     {
         initialize_return_indices_data<
@@ -556,7 +539,8 @@ void kernel_main() {
             up_left_wrap_inc,
             intra_kernel_right_inc,
             intra_kernel_down_left_wrap_inc,
-            indexes_32_bit>(
+            indexes_32_bit,
+            indexes_int32>(
             in_idx_cb,
             right_inc_cb,
             down_left_wrap_inc_cb,
@@ -571,10 +555,6 @@ void kernel_main() {
         // for the remaining faces will be reused from the first one. This is safe here because there’s no difference
         // between the first and second face.
         fill_with_val(in_scalar_cb.get_write_ptr(), FACE_WIDTH, bf16_scalar >> 16);
-#ifdef ARCH_QUASAR
-        flush_l2_cache_range(
-            static_cast<uintptr_t>(in_scalar_cb.get_write_ptr()), static_cast<size_t>(in_scalar_cb.get_entry_size()));
-#endif
         in_scalar_cb.push_back(1);
     }
 #else

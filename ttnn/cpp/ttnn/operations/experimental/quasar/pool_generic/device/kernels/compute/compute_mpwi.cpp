@@ -87,7 +87,7 @@ void kernel_main() {
     DataflowBuffer in_cb_0(in_cb_id_0);
 
 #ifdef ARCH_QUASAR
-    constexpr DataFormat copy_format = DataFormat::Int32;
+    constexpr DataFormat copy_format = DataFormat::Int32;  // Quasar's DataFormat has no UInt16/UInt32
 #else
     constexpr DataFormat copy_format = indexes_32_bit ? DataFormat::UInt32 : DataFormat::UInt16;
 #endif
@@ -134,7 +134,7 @@ void kernel_main() {
     right_inc_cb.wait_front(1);
     down_left_wrap_inc_cb.wait_front(1);
     up_left_wrap_inc_cb.wait_front(1);
-    clear_value_cb.wait_front(1);  // the reader always pushes it; pop it on every path to balance credits
+    clear_value_cb.wait_front(1);
     if constexpr (is_large_kernel) {
         intra_kernel_right_inc_cb.wait_front(1);
         intra_kernel_down_left_wrap_inc_cb.wait_front(1);
