@@ -67,6 +67,12 @@ constexpr Approx kRsqrtApprox = rsqrt_approx ? Approx::Fast : Approx::Exact;
 constexpr bool x_resident = get_compile_time_arg_val(8) != 0;
 constexpr bool mask_partial = get_compile_time_arg_val(9) != 0;
 constexpr uint32_t cb_collapse_scaler = mask_partial ? cb_wmask : cb_x;
+// W-chunk of the RM staging and of γ (== core_w_tiles: unchunked). Only a sharded row too wide to stage whole next
+// to its resident shards is chunked; then γ streams through cb_gamma chunk by chunk on every normalize pass.
+constexpr uint32_t w_chunk_tiles = get_compile_time_arg_val(10);
+constexpr bool gamma_streams = get_compile_time_arg_val(11) != 0;
+constexpr uint32_t num_w_chunks = core_w_tiles / w_chunk_tiles;  // RM: the pitch is a chunk multiple
+constexpr uint32_t num_g_chunks = (core_w_tiles + w_chunk_tiles - 1) / w_chunk_tiles;
 
 // Normalize output: TILE -> separate cb_y window; RM -> in place into cb_x (compute is its only producer/consumer).
 constexpr uint32_t cb_norm_out = is_rm ? cb_x : cb_y;
@@ -196,6 +202,80 @@ ALWI void normalize_block(uint32_t rows) {
     }
 }
 
+// γ chunk j for the next normalize pass: RM γ is tilized chunk by chunk (1 valid row page per chunk).
+ALWI void gamma_chunk_ready() {
+    if constexpr (gamma_is_rm) {
+        tilize<w_chunk_tiles, cb_gamma_rm, cb_gamma>(1, 1);
+    }
+    cb_wait_front(cb_gamma, w_chunk_tiles);
+}
+
+// normalize_block with γ streamed in W-chunks (wide sharded rows). Same math and FP order as normalize_block:
+// y = (x * γ[row bcast]) * rinv.
+//   TILE (resident x and y): per chunk, a Strided grid over the chunk's columns of the whole block; y is packed at
+//         its final position in the output shard (cb_y reserved for the block up front, pushed after).
+//   RM:   in place on cb_x tile-row by tile-row (per-tile credit, as normalize_block); rinv row r by Offset.
+ALWI void normalize_block_gamma_streamed(uint32_t rows) {
+    cb_wait_front(cb_rinv, rows);
+    if constexpr (is_rm) {
+        for (uint32_t r = 0; r < rows; ++r) {
+            for (uint32_t j = 0; j < num_g_chunks; ++j) {
+                gamma_chunk_ready();
+                eltwise_chain(
+                    IterationShape::grid(1, w_chunk_tiles),
+                    BinaryFpu<
+                        BinaryFpuOp::Mul,
+                        input(cb_x, WaitPolicy::PerTile, PopPolicy::PerTile),
+                        input(
+                            cb_gamma, BroadcastDim::Row, WaitPolicy::None, PopPolicy::None, InputTileMapping::Row)>{},
+                    DestReuseBinary<
+                        BinaryFpuOp::Mul,
+                        input(
+                            cb_rinv,
+                            WaitPolicy::None,
+                            PopPolicy::None,
+                            InputTileMapping::Col,
+                            DataFormatReconfig::Enabled,
+                            TileAddressing::Offset),
+                        DestReuseType::DEST_TO_SRCA>{r},
+                    PackTile<output(cb_x)>{});
+                cb_pop_front(cb_gamma, w_chunk_tiles);
+            }
+        }
+    } else {
+        cb_reserve_back(cb_y, rows * core_w_tiles);
+        for (uint32_t j = 0; j < num_g_chunks; ++j) {
+            const uint32_t c0 = j * w_chunk_tiles;
+            const uint32_t n = (core_w_tiles - c0 < w_chunk_tiles) ? (core_w_tiles - c0) : w_chunk_tiles;
+            gamma_chunk_ready();
+            eltwise_chain(
+                IterationShape::grid(rows, n),
+                BinaryFpu<
+                    BinaryFpuOp::Mul,
+                    input(
+                        cb_x,
+                        WaitPolicy::None,
+                        PopPolicy::None,
+                        InputTileMapping::Block,
+                        DataFormatReconfig::Enabled,
+                        TileAddressing::Strided),
+                    input(cb_gamma, BroadcastDim::Row, WaitPolicy::None, PopPolicy::None, InputTileMapping::Row)>{
+                    StridedTileRange{c0, core_w_tiles}},
+                DestReuseBinary<
+                    BinaryFpuOp::Mul,
+                    input(cb_rinv, WaitPolicy::None, PopPolicy::None, InputTileMapping::Col),
+                    DestReuseType::DEST_TO_SRCA>{},
+                PackTile<output(
+                    cb_y, ReservePolicy::None, PushPolicy::None, DataFormatReconfig::Enabled, TileAddressing::Strided)>{
+                    StridedTileRange{c0, core_w_tiles}});
+            cb_pop_front(cb_gamma, w_chunk_tiles);
+        }
+        cb_push_back(cb_y, rows * core_w_tiles);
+        cb_pop_front(cb_x, rows * core_w_tiles);
+    }
+    cb_pop_front(cb_rinv, rows);
+}
+
 void kernel_main() {
     const uint32_t line_rows = get_arg_val<uint32_t>(0);
     const uint32_t is_root = get_arg_val<uint32_t>(1);
@@ -216,7 +296,7 @@ void kernel_main() {
         const uint32_t rows = (line_rows - row0 < block_rows) ? (line_rows - row0) : block_rows;
 
         if constexpr (is_rm) {
-            tilize<core_w_tiles, cb_x_rm, cb_x>(rows);  // tilize_x_block
+            tilize<w_chunk_tiles, cb_x_rm, cb_x>(rows * num_w_chunks);  // tilize_x_block (chunk by chunk)
         }
 
         uint32_t parts = 1;
@@ -254,7 +334,7 @@ void kernel_main() {
             finalize_rinv_block<cb_rinv>(rows, inv_w_bits, eps_bits);
         }
 
-        if constexpr (has_gamma) {
+        if constexpr (has_gamma && !gamma_streams) {
             if (b == 0) {
                 if constexpr (gamma_is_rm) {
                     tilize<core_w_tiles, cb_gamma_rm, cb_gamma>(1, 1);  // tilize_gamma (1 valid row page)
@@ -263,14 +343,18 @@ void kernel_main() {
             }
         }
 
-        normalize_block(rows);
+        if constexpr (gamma_streams) {
+            normalize_block_gamma_streamed(rows);
+        } else {
+            normalize_block(rows);
+        }
 
         if constexpr (is_rm) {
-            untilize<core_w_tiles, cb_x, cb_out_rm>(rows);  // untilize_y_block
+            untilize<w_chunk_tiles, cb_x, cb_out_rm>(rows * num_w_chunks);  // untilize_y_block (chunk by chunk)
         }
     }
 
-    if constexpr (has_gamma) {
+    if constexpr (has_gamma && !gamma_streams) {
         if (num_blocks > 0) {
             cb_pop_front(cb_gamma, core_w_tiles);
         }

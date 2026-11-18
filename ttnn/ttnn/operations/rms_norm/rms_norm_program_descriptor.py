@@ -41,6 +41,8 @@ Y_CHUNK_TILES = 8  # cb_y writer chunk
 Y_DEPTH = 2  # cb_y depth in chunks
 OUT_RM_DEPTH = 2  # cb_out_rm depth in tile-rows
 READ_CHUNK_TILES = 8  # reader tiles per barrier+push (TILE)
+GAMMA_CHUNK_DEPTH = 2  # cb_gamma / cb_gamma_rm depth in W-chunks when γ streams (w_chunk_tiles < core_w_tiles)
+SHARDED_CB_MARGIN_BYTES = 16 << 10  # slack below the resident shard buffers (CB alignment / rounding)
 
 # ---- CB indices (semantic names) ----
 CB_X_RM = 0
@@ -92,7 +94,8 @@ class OpGeometry:
     x_resident: bool = False  # TILE sharded input: cb_x backed on the shard (no allocator budget)
     y_resident: bool = False  # TILE sharded output: cb_y backed on the shard (no allocator budget)
     sumsq_parts: int = 1  # raw Σx² tiles per tile-row (2 when a resident partial-W tile is squared apart + masked)
-    gamma_stage_bytes: int = 0  # cb_gamma_stage bytes (0 = absent)
+    gamma_staged: bool = False  # cb_gamma_stage present (RM γ slice offset off the DRAM read grain)
+    dram_align: int = 64
 
 
 @dataclass(frozen=True)
@@ -102,6 +105,14 @@ class Blocking:
     core_w_tiles: int
     num_lines: int
     block_rows: int
+    # W-chunk extent of the per-row staging (RM cb_x_rm / cb_out_rm) and of γ (cb_gamma / cb_gamma_rm). == core_w_tiles
+    # (no chunking) unless a sharded row is too wide to stage whole next to its resident shards; then γ streams in
+    # chunks per block and RM tilize / untilize run chunk by chunk (core_w_tiles is padded to a chunk multiple).
+    w_chunk_tiles: int = 0
+
+    @property
+    def gamma_streams(self) -> bool:
+        return self.w_chunk_tiles < self.core_w_tiles
 
 
 @dataclass(frozen=True)
@@ -128,25 +139,39 @@ def _per_row_bytes(g: OpGeometry, cw: int, k: int) -> int:
     return b
 
 
-def _fixed_bytes(g: OpGeometry, cw: int) -> int:
+def _gamma_depth(cw: int, wc: int) -> int:
+    return 1 if wc >= cw else GAMMA_CHUNK_DEPTH
+
+
+def _gamma_stage_bytes(g: OpGeometry, wc: int) -> int:
+    return wc * TILE * g.es_g + 2 * g.dram_align if g.gamma_staged else 0
+
+
+def _fixed_bytes(g: OpGeometry, cw: int, wc: int = None) -> int:
+    wc = cw if wc is None else wc
     b = 0
     if g.has_gamma:
-        b += cw * g.t_g  # cb_gamma
+        gd = _gamma_depth(cw, wc)
+        b += gd * wc * g.t_g  # cb_gamma
         if g.gamma_is_rm:
-            b += cw * TILE * g.es_g  # cb_gamma_rm
+            b += gd * wc * TILE * g.es_g  # cb_gamma_rm
     if g.is_tile:
         if not g.y_resident:
             b += Y_DEPTH * Y_CHUNK_TILES * g.t_in  # cb_y
     else:
-        b += X_RM_DEPTH * cw * g.t_in + OUT_RM_DEPTH * cw * g.t_in  # cb_x_rm, cb_out_rm
+        b += X_RM_DEPTH * wc * g.t_in + OUT_RM_DEPTH * wc * g.t_in  # cb_x_rm, cb_out_rm
     if g.sumsq_parts > 1:
         b += g.t_int  # cb_wmask
-    b += g.gamma_stage_bytes  # cb_gamma_stage
+    b += _gamma_stage_bytes(g, wc)  # cb_gamma_stage
     return b
 
 
 def _footprint(g: OpGeometry, br: int, cw: int, k: int) -> int:
     return br * _per_row_bytes(g, cw, k) + _fixed_bytes(g, cw)
+
+
+def _round_up(a, b):
+    return _div_up(a, b) * b
 
 
 def select_blocking(
@@ -161,16 +186,25 @@ def select_blocking(
     from ttnn.operations._op_contract import UnsupportedAxisValue
 
     if shard is not None:
-        k, cw = shard.w_split, shard.core_w_tiles
-        per_row = _per_row_bytes(g, cw, k)
-        br_fit = (budget - _fixed_bytes(g, cw)) // per_row
+        k, cw_valid = shard.w_split, shard.core_w_tiles
+        # Coarsest W-chunk whose one-tile-row footprint fits: the whole slice (no chunking) first. Chunking shrinks
+        # the γ and RM staging terms only; the resident row (cb_x) is never chunked (x is read once).
+        br_fit, cw, wc = 0, cw_valid, cw_valid
+        for m in range(1, cw_valid + 1):
+            wc = _div_up(cw_valid, m)
+            if m > 1 and wc == _div_up(cw_valid, m - 1):
+                continue
+            cw = cw_valid if g.is_tile else _round_up(cw_valid, wc)  # RM: tilize chunks of CT width wc
+            br_fit = (budget - _fixed_bytes(g, cw, wc)) // _per_row_bytes(g, cw, k)
+            if br_fit >= 1:
+                break
         if br_fit < 1:
             raise UnsupportedAxisValue("rms_norm: shard too wide for one tile-row of working CBs in L1")
         rows_unit = 1 if g.is_tile else TILE
         line_rows_max = max(_div_up(n, rows_unit) for (_, n) in shard.line_units)
         block_rows = max(1, min(line_rows_max, br_fit))
         regime = "LOCAL" if k == 1 else "W_SPLIT"
-        return Blocking(regime, k, cw, len(shard.lines), block_rows)
+        return Blocking(regime, k, cw, len(shard.lines), block_rows, wc)
 
     k_fit = None
     for k in range(1, C + 1):
@@ -188,7 +222,7 @@ def select_blocking(
     br_fit = (L1_CB_BUDGET_BYTES - _fixed_bytes(g, cw)) // _per_row_bytes(g, cw, w_split)
     block_rows = max(1, min(line_rows_tiles_max, br_fit))
     regime = "LOCAL" if w_split == 1 else "W_SPLIT"
-    return Blocking(regime, w_split, cw, num_lines, block_rows)
+    return Blocking(regime, w_split, cw, num_lines, block_rows, cw)
 
 
 def _core_range_set(cores):
@@ -358,22 +392,23 @@ def create_program_descriptor(input_tensor, gamma, output_tensor, epsilon, compu
         x_resident=x_resident,
         y_resident=y_resident,
         sumsq_parts=2 if mask_partial else 1,
-        gamma_stage_bytes=0,
+        gamma_staged=gamma_rm_staged,
+        dram_align=dram_align,
     )
-    if gamma_rm_staged:
-        cw_ = shard.core_w_tiles
-        geo = OpGeometry(**{**geo.__dict__, "gamma_stage_bytes": cw_ * TILE * es_g + 2 * dram_align})
 
-    # CB region budget: below every L1-resident buffer this program touches (sharded I/O lives at the L1 top).
+    # CB region budget. Interleaved: the L1_CB_BUDGET_BYTES knob. Sharded: the CB region grows up from the L1
+    # allocator base and must end below the resident shard buffers (allocated from the L1 top) — the real limit.
     budget = L1_CB_BUDGET_BYTES
     l1_addrs = [t.buffer_address() for t in (input_tensor, output_tensor) if _is_sharded(t)]
     if l1_addrs:
         l1_base = int(ttnn._ttnn.device.GetAllocatorBaseAddress(device, ttnn.BufferType.L1))
-        budget = min(budget, min(l1_addrs) - l1_base)
+        budget = min(l1_addrs) - l1_base - SHARDED_CB_MARGIN_BYTES
 
     blk = select_blocking(geo, R, Wt, C, shard=shard, budget=budget)
-    k, cw, br = blk.w_split, blk.core_w_tiles, blk.block_rows
+    k, cw, br, wc = blk.w_split, blk.core_w_tiles, blk.block_rows, blk.w_chunk_tiles
     is_ws = blk.regime == "W_SPLIT"
+    gamma_streams = has_gamma and blk.gamma_streams
+    gd = _gamma_depth(cw, wc)
 
     # ---- per-core work: (line, position, row range, W slice) ----
     work = []
@@ -438,17 +473,17 @@ def create_program_descriptor(input_tensor, gamma, output_tensor, epsilon, compu
     t_in = geo.t_in
     cbs = []
     if not is_tile:
-        cbs.append(_cb(CB_X_RM, X_RM_DEPTH * cw, t_in, dtype, crs))
+        cbs.append(_cb(CB_X_RM, X_RM_DEPTH * wc, t_in, dtype, crs))
     if x_resident:
         cbs.append(ttnn.cb_descriptor_from_sharded_tensor(CB_X, input_tensor, core_ranges=crs))
     else:
         cbs.append(_cb(CB_X, (X_BLOCK_DEPTH * br * cw) if is_tile else (br * cw), t_in, dtype, crs))
     if has_gamma:
         if gamma_is_rm:
-            cbs.append(_cb(CB_GAMMA_RM, 1, cw * TILE * geo.es_g, g_dtype, crs))
-        cbs.append(_cb(CB_GAMMA, cw, geo.t_g, g_dtype, crs))
+            cbs.append(_cb(CB_GAMMA_RM, gd, wc * TILE * geo.es_g, g_dtype, crs))
+        cbs.append(_cb(CB_GAMMA, gd * wc, geo.t_g, g_dtype, crs))
     if gamma_rm_staged:
-        cbs.append(_cb(CB_GAMMA_STAGE, 1, geo.gamma_stage_bytes, g_dtype, crs))
+        cbs.append(_cb(CB_GAMMA_STAGE, 1, _gamma_stage_bytes(geo, wc), g_dtype, crs))
     cbs.append(_cb(CB_SUMSQ_RAW, geo.sumsq_parts * br, t_int, int_fmt, crs))
     if mask_partial:
         cbs.append(_cb(CB_WMASK, 1, t_int, int_fmt, crs))
@@ -464,7 +499,7 @@ def create_program_descriptor(input_tensor, gamma, output_tensor, epsilon, compu
         else:
             cbs.append(_cb(CB_Y, Y_DEPTH * Y_CHUNK_TILES, t_in, dtype, crs))
     else:
-        cbs.append(_cb(CB_OUT_RM, OUT_RM_DEPTH * cw, t_in, dtype, crs))
+        cbs.append(_cb(CB_OUT_RM, OUT_RM_DEPTH * wc, t_in, dtype, crs))
 
     semaphores = []
     if is_ws:
@@ -550,6 +585,7 @@ def create_program_descriptor(input_tensor, gamma, output_tensor, epsilon, compu
         SEM_RINV_LOCAL,  # 14
         int(x_sharded),  # 15 input is an L1 shard (TILE: resident cb_x; RM: core-local re-stride)
         int(mask_partial),  # 16 owner of the partial-W tile fills cb_wmask
+        wc,  # 17 w_chunk_tiles (RM staging chunk)
     ]
     reader_ct.extend(ttnn.TensorAccessorArgs(input_tensor).get_compile_time_args())
 
@@ -597,6 +633,8 @@ def create_program_descriptor(input_tensor, gamma, output_tensor, epsilon, compu
         int(y_sharded),  # 20 output is an L1 shard (TILE: resident cb_y; RM: core-local re-stride)
         int(gamma_rm_staged),  # 21 RM γ slice read through an aligned staging window
         dram_align,  # 22
+        wc,  # 23 w_chunk_tiles (RM staging / γ chunk)
+        int(gamma_streams),  # 24 γ streamed per block in w_chunk_tiles chunks
     ]
     writer_ct.extend(ttnn.TensorAccessorArgs(output_tensor).get_compile_time_args())
     writer_ct.extend(
@@ -623,6 +661,8 @@ def create_program_descriptor(input_tensor, gamma, output_tensor, epsilon, compu
         int(bool(compute_config.math_approx_mode)),  # 7 rsqrt approx
         int(x_resident),  # 8 cb_x is the resident input shard (strided sumsq over valid tiles)
         int(mask_partial),  # 9 partial-W tile squared apart and masked in the collapse
+        wc,  # 10 w_chunk_tiles (RM tilize / untilize chunk, γ chunk)
+        int(gamma_streams),  # 11 γ streamed per block in w_chunk_tiles chunks
     ]
     compute = ttnn.KernelDescriptor(
         kernel_source=str(KERNEL_DIR / "rms_norm_compute.cpp"),

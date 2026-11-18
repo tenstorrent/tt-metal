@@ -172,3 +172,29 @@ def test_sharded_default_output_inherits(device):
     out = rms_norm(tx)
     assert out.memory_config() == mc
     assert _pcc(_ref(x, None), ttnn.to_torch(out).float()) >= 0.995
+
+
+WIDE_HEIGHT_CASES = [
+    # A HEIGHT shard pins a whole row to one core: γ (and RM staging) must stream in W-chunks next to the shards.
+    # (id, shape, dtype, layout, gamma_dtype, gamma_layout, shard_shape, grid)
+    ("tile_bf16_w8192_g_fp32", (1, 1, 32, 8192), ttnn.bfloat16, ttnn.TILE_LAYOUT, ttnn.float32, ttnn.TILE_LAYOUT,
+     (32, 8192), _grid(1, 1)),
+    ("tile_fp32_w4096_g_fp32_rm", (1, 1, 128, 4096), ttnn.float32, ttnn.TILE_LAYOUT, ttnn.float32,
+     ttnn.ROW_MAJOR_LAYOUT, (32, 4096), _grid(4, 1)),
+    ("tile_bf16_w11008", (1, 1, 160, 11008), ttnn.bfloat16, ttnn.TILE_LAYOUT, ttnn.bfloat16, ttnn.TILE_LAYOUT,
+     (32, 11008), _grid(5, 1)),
+    ("rm_bf16_w3072", (1, 1, 224, 3072), ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT, ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT,
+     (3, 3072), _row_major_cores(75, 11)),
+    ("rm_bf16_w11008", (1, 1, 160, 11008), ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT, ttnn.bfloat16,
+     ttnn.ROW_MAJOR_LAYOUT, (2, 11008), _row_major_cores(80, 11)),
+    ("rm_fp32_w8192", (1, 1, 128, 8192), ttnn.float32, ttnn.ROW_MAJOR_LAYOUT, ttnn.float32, ttnn.ROW_MAJOR_LAYOUT,
+     (2, 8192), _row_major_cores(64, 11)),
+    ("rm_bf16_w4095_multirow", (1, 1, 96, 4095), ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT, ttnn.float32,
+     ttnn.ROW_MAJOR_LAYOUT, (48, 4096), _grid(2, 1)),
+]
+
+
+@pytest.mark.parametrize("case", WIDE_HEIGHT_CASES, ids=[c[0] for c in WIDE_HEIGHT_CASES])
+def test_sharded_wide_height(device, case):
+    _, shape, dtype, layout, gd, gl, shard_shape, grid = case
+    _run(device, shape, dtype, layout, _mc(ML.HEIGHT_SHARDED, shard_shape, grid), gamma_dtype=gd, gamma_layout=gl)

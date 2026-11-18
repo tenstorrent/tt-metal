@@ -80,7 +80,10 @@ void kernel_main() {
     constexpr bool x_sharded = get_compile_time_arg_val(15) != 0;
     constexpr bool mask_partial = get_compile_time_arg_val(16) != 0;
     constexpr bool x_resident = x_sharded && !is_rm;
-    constexpr auto x_args = TensorAccessorArgs<17>();
+    constexpr uint32_t w_chunk_tiles = get_compile_time_arg_val(17);  // RM staging chunk (== core_w_tiles: none)
+    constexpr uint32_t num_w_chunks = core_w_tiles / w_chunk_tiles;
+    static_assert(!is_rm || num_w_chunks * w_chunk_tiles == core_w_tiles, "RM pitch is a chunk multiple");
+    constexpr auto x_args = TensorAccessorArgs<18>();
     // Block-float input (bf8b: tile_bytes != 32*32*es) has no per-element addressing: the RM stick path and the
     // pad-lane zeroing must never be reached for it (host guard in create_program_descriptor).
     constexpr bool is_block_float = tile_bytes != TILE_DIM * TILE_DIM * es;
@@ -109,7 +112,7 @@ void kernel_main() {
     if constexpr (is_rm) {
         // Stick reads cover only [0, valid_bytes) of each stick slot: W padding and tail tiles stay zero.
         CircularBuffer x_rm_buf(cb_x_rm);
-        noc.async_write_zeros(x_rm_buf, x_rm_depth * core_w_tiles * tile_bytes);
+        noc.async_write_zeros(x_rm_buf, x_rm_depth * w_chunk_tiles * tile_bytes);
         noc.write_zeros_l1_barrier();
     } else if constexpr (!x_resident) {
         if (w_valid < core_w_tiles) {
@@ -136,24 +139,43 @@ void kernel_main() {
         const uint32_t row0 = block_idx * block_rows;
         const uint32_t rows = (line_rows - row0 < block_rows) ? (line_rows - row0) : block_rows;
         if constexpr (is_rm) {
-            constexpr uint32_t stick_stride = core_w_tiles * TILE_DIM * es;
-            const uint32_t valid_bytes = w_valid_elems * es;
+            // One staging push per (tile-row, W-chunk): 32 sticks x w_chunk_tiles*32 elements, in tile-row-major
+            // chunk order (what tilize<w_chunk_tiles>(rows * num_w_chunks) consumes). Unchunked: one push per row.
+            constexpr uint32_t chunk_elems = w_chunk_tiles * TILE_DIM;
+            constexpr uint32_t stick_stride = chunk_elems * es;
+            CircularBuffer x_rm_slot(cb_x_rm);
             for (uint32_t r = 0; r < rows; ++r) {
                 const uint32_t stick0 = stick_start + (row0 + r) * TILE_DIM;
-                cb_reserve_back(cb_x_rm, core_w_tiles);
-                const uint32_t l1 = get_write_ptr(cb_x_rm);
-                for (uint32_t s = 0; s < TILE_DIM && stick0 + s < stick_end; ++s) {
-                    uint64_t src;
-                    if constexpr (x_sharded) {
-                        // own shard, core-local: stick pitch = shard page (x_page_bytes), slice starts at byte 0
-                        src = get_noc_addr(x_addr + (stick0 + s - stick_start) * x_page_bytes);
-                    } else {
-                        src = x_acc.get_noc_addr(stick0 + s, x_col_offset);
+                for (uint32_t j = 0; j < num_w_chunks; ++j) {
+                    const uint32_t e0 = j * chunk_elems;
+                    const uint32_t valid = (w_valid_elems > e0) ? ((w_valid_elems - e0 < chunk_elems)
+                                                                       ? (w_valid_elems - e0)
+                                                                       : chunk_elems)
+                                                                : 0;
+                    cb_reserve_back(cb_x_rm, w_chunk_tiles);
+                    const uint32_t l1 = get_write_ptr(cb_x_rm);
+                    if constexpr (num_w_chunks > 1) {
+                        // Slots rotate across chunks: a short chunk must not inherit a full chunk's stale tail.
+                        if (valid < chunk_elems) {
+                            noc.async_write_zeros(x_rm_slot, w_chunk_tiles * tile_bytes);
+                            noc.write_zeros_l1_barrier();
+                        }
                     }
-                    noc_async_read(src, l1 + s * stick_stride, valid_bytes);
+                    if (valid > 0) {
+                        for (uint32_t s = 0; s < TILE_DIM && stick0 + s < stick_end; ++s) {
+                            uint64_t src;
+                            if constexpr (x_sharded) {
+                                // own shard, core-local: stick pitch = shard page (x_page_bytes)
+                                src = get_noc_addr(x_addr + (stick0 + s - stick_start) * x_page_bytes + e0 * es);
+                            } else {
+                                src = x_acc.get_noc_addr(stick0 + s, x_col_offset + e0 * es);
+                            }
+                            noc_async_read(src, l1 + s * stick_stride, valid * es);
+                        }
+                        noc_async_read_barrier();
+                    }
+                    cb_push_back(cb_x_rm, w_chunk_tiles);
                 }
-                noc_async_read_barrier();
-                cb_push_back(cb_x_rm, core_w_tiles);
             }
         } else if constexpr (x_resident) {
             // The block is already resident: cb_x is backed on the input shard. Publish it (no NoC traffic).

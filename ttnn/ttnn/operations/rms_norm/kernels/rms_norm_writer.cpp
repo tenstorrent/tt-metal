@@ -68,7 +68,11 @@ void kernel_main() {
     constexpr bool gamma_rm_staged = get_compile_time_arg_val(21) != 0;
     constexpr uint32_t dram_align = get_compile_time_arg_val(22);
     constexpr bool y_resident = y_sharded && !is_rm;
-    constexpr auto y_args = TensorAccessorArgs<23>();
+    static_assert(!gamma_rm_staged || es_g % 2 == 0, "staged RM γ elements are 2 or 4 bytes");
+    constexpr uint32_t w_chunk_tiles = get_compile_time_arg_val(23);
+    constexpr bool gamma_streams = get_compile_time_arg_val(24) != 0;
+    constexpr uint32_t num_w_chunks = core_w_tiles / w_chunk_tiles;  // RM pitch is a chunk multiple
+    constexpr auto y_args = TensorAccessorArgs<25>();
     constexpr auto g_args = TensorAccessorArgs<y_args.next_compile_time_args_offset()>();
     constexpr auto mcast = McastArgs<
         get_named_compile_time_arg_val("rinv_mcast_ct_offset"),
@@ -94,77 +98,95 @@ void kernel_main() {
     Noc noc;
     const uint32_t num_blocks = (line_rows + block_rows - 1) / block_rows;
 
-    // ---------------- load_gamma (once per kernel) ----------------
-    if constexpr (has_gamma) {
-        const auto g_acc = TensorAccessor(g_args, g_addr, g_page_bytes);
+    // ---------------- load_gamma ----------------
+    // One γ chunk = the tiles [j*w_chunk_tiles, (j+1)*w_chunk_tiles) of this core's W-slice (nominal width; tiles
+    // past the slice's valid range are zero). Unchunked (w_chunk_tiles == core_w_tiles): chunk 0, once per kernel.
+    // Streamed (gamma_streams): every chunk once per normalize pass (per block; RM: per tile-row).
+    constexpr uint32_t num_g_chunks = (core_w_tiles + w_chunk_tiles - 1) / w_chunk_tiles;
+    const auto g_acc = TensorAccessor(g_args, g_addr, g_page_bytes);
+    auto load_gamma_chunk = [&](uint32_t j) {
+        const uint32_t c0 = j * w_chunk_tiles;
+        // valid tiles of this chunk within the slice
+        const uint32_t cv = (w_valid > c0) ? ((w_valid - c0 < w_chunk_tiles) ? (w_valid - c0) : w_chunk_tiles) : 0;
         if constexpr (gamma_is_rm) {
-            // One stick slice of the W-slice into a pre-zeroed row page; compute tilizes it (1 valid row).
+            // One stick slice into a pre-zeroed row page; compute tilizes it (1 valid row).
+            const uint32_t e0 = c0 * TILE_DIM;
+            const uint32_t ev = (w_valid_elems > e0)
+                                    ? ((w_valid_elems - e0 < w_chunk_tiles * TILE_DIM) ? (w_valid_elems - e0)
+                                                                                       : w_chunk_tiles * TILE_DIM)
+                                    : 0;
             CircularBuffer g_rm_buf(cb_gamma_rm);
             cb_reserve_back(cb_gamma_rm, 1);
-            noc.async_write_zeros(g_rm_buf, core_w_tiles * TILE_DIM * es_g);
+            noc.async_write_zeros(g_rm_buf, w_chunk_tiles * TILE_DIM * es_g);
             noc.write_zeros_l1_barrier();
-            const uint32_t g_bytes = w_valid_elems * es_g;
-            if constexpr (gamma_rm_staged) {
-                // DRAM reads need src ≡ dst (mod dram_align): land the aligned window at an aligned stage address,
-                // then move the slice core-locally (both ends on the 16 B L1 grain: shard pages are L1-aligned).
-                const uint32_t aligned_off = g_col_offset & ~(dram_align - 1);
-                const uint32_t lead = g_col_offset - aligned_off;
-                const uint32_t stage = (get_write_ptr(cb_gamma_stage) + dram_align - 1) & ~(dram_align - 1);
-                noc_async_read(g_acc.get_noc_addr(0, aligned_off), stage, lead + g_bytes);
-                noc_async_read_barrier();
-                if ((lead & (NOC_L1_READ_ALIGNMENT_BYTES - 1)) == 0) {
-                    noc_async_read(get_noc_addr(stage + lead), get_write_ptr(cb_gamma_rm), g_bytes);
-                } else {
-                    // slice offset off the 16 B L1 grain (e.g. fp32 RM shard + bf16 γ): one slice-sized
-                    // element copy, once per kernel.
-                    static_assert(es_g % 2 == 0, "RM γ elements are 2 or 4 bytes");
-                    volatile tt_l1_ptr uint16_t* src = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(stage + lead);
-                    volatile tt_l1_ptr uint16_t* dst =
-                        reinterpret_cast<volatile tt_l1_ptr uint16_t*>(get_write_ptr(cb_gamma_rm));
-                    for (uint32_t i = 0; i < g_bytes / 2; ++i) {
-                        dst[i] = src[i];
+            const uint32_t g_bytes = ev * es_g;
+            const uint32_t g_off = g_col_offset + e0 * es_g;
+            if (g_bytes > 0) {
+                if constexpr (gamma_rm_staged) {
+                    // DRAM reads need src ≡ dst (mod dram_align): land the aligned window at an aligned stage
+                    // address, then move the slice core-locally.
+                    const uint32_t aligned_off = g_off & ~(dram_align - 1);
+                    const uint32_t lead = g_off - aligned_off;
+                    const uint32_t stage = (get_write_ptr(cb_gamma_stage) + dram_align - 1) & ~(dram_align - 1);
+                    noc_async_read(g_acc.get_noc_addr(0, aligned_off), stage, lead + g_bytes);
+                    noc_async_read_barrier();
+                    if ((lead & (NOC_L1_READ_ALIGNMENT_BYTES - 1)) == 0) {
+                        noc_async_read(get_noc_addr(stage + lead), get_write_ptr(cb_gamma_rm), g_bytes);
+                    } else {
+                        // slice offset off the 16 B L1 grain (e.g. fp32 RM shard + bf16 γ): one slice-sized
+                        // element copy.
+                        volatile tt_l1_ptr uint16_t* src =
+                            reinterpret_cast<volatile tt_l1_ptr uint16_t*>(stage + lead);
+                        volatile tt_l1_ptr uint16_t* dst =
+                            reinterpret_cast<volatile tt_l1_ptr uint16_t*>(get_write_ptr(cb_gamma_rm));
+                        for (uint32_t i = 0; i < g_bytes / 2; ++i) {
+                            dst[i] = src[i];
+                        }
                     }
+                } else {
+                    noc_async_read(g_acc.get_noc_addr(0, g_off), get_write_ptr(cb_gamma_rm), g_bytes);
                 }
-            } else {
-                noc_async_read(g_acc.get_noc_addr(0, g_col_offset), get_write_ptr(cb_gamma_rm), g_bytes);
+                noc_async_read_barrier();
             }
-            noc_async_read_barrier();
             cb_push_back(cb_gamma_rm, 1);
         } else if constexpr (gamma_is_block_float) {
             // TILE block-float γ (bf8b): a tile is a shared-exponent section + a mantissa section, so face-row
             // addressing is meaningless -> read the valid tiles whole (contiguous pages, one barrier). The nominal
-            // tail tiles [w_valid, core_w_tiles) are zeroed (all-zero bf8b bytes decode to 0).
+            // tail tiles are zeroed (all-zero bf8b bytes decode to 0).
             CircularBuffer g_buf(cb_gamma);
-            cb_reserve_back(cb_gamma, core_w_tiles);
+            cb_reserve_back(cb_gamma, w_chunk_tiles);
             const uint32_t l1 = get_write_ptr(cb_gamma);
-            if (w_valid < core_w_tiles) {
+            if (cv < w_chunk_tiles) {
                 noc.async_write_zeros(
-                    g_buf, (core_w_tiles - w_valid) * g_tile_bytes, {.offset_bytes = w_valid * g_tile_bytes});
+                    g_buf, (w_chunk_tiles - cv) * g_tile_bytes, {.offset_bytes = cv * g_tile_bytes});
                 noc.write_zeros_l1_barrier();
             }
-            for (uint32_t c = 0; c < w_valid; ++c) {
-                noc_async_read(g_acc.get_noc_addr(w_start + c), l1 + c * g_tile_bytes, g_tile_bytes);
+            for (uint32_t c = 0; c < cv; ++c) {
+                noc_async_read(g_acc.get_noc_addr(w_start + c0 + c), l1 + c * g_tile_bytes, g_tile_bytes);
             }
             noc_async_read_barrier();
-            cb_push_back(cb_gamma, core_w_tiles);
+            cb_push_back(cb_gamma, w_chunk_tiles);
         } else {
             // TILE γ: only row 0 matters (row broadcast) -> read face0-row0 and face1-row0 of each valid tile.
             CircularBuffer g_buf(cb_gamma);
-            cb_reserve_back(cb_gamma, core_w_tiles);
-            noc.async_write_zeros(g_buf, core_w_tiles * g_tile_bytes);
+            cb_reserve_back(cb_gamma, w_chunk_tiles);
+            noc.async_write_zeros(g_buf, w_chunk_tiles * g_tile_bytes);
             noc.write_zeros_l1_barrier();
             const uint32_t l1 = get_write_ptr(cb_gamma);
             constexpr uint32_t face_row_bytes = FACE_DIM * es_g;
             constexpr uint32_t face1_offset = FACE_DIM * FACE_DIM * es_g;
-            for (uint32_t c = 0; c < w_valid; ++c) {
-                const uint32_t page = w_start + c;
+            for (uint32_t c = 0; c < cv; ++c) {
+                const uint32_t page = w_start + c0 + c;
                 noc_async_read(g_acc.get_noc_addr(page, 0), l1 + c * g_tile_bytes, face_row_bytes);
                 noc_async_read(
                     g_acc.get_noc_addr(page, face1_offset), l1 + c * g_tile_bytes + face1_offset, face_row_bytes);
             }
             noc_async_read_barrier();
-            cb_push_back(cb_gamma, core_w_tiles);
+            cb_push_back(cb_gamma, w_chunk_tiles);
         }
+    };
+    if constexpr (has_gamma && !gamma_streams) {
+        load_gamma_chunk(0);  // resident for the whole kernel
     }
 
     // ---------------- W_SPLIT plumbing ----------------
@@ -214,26 +236,46 @@ void kernel_main() {
             }
         }
 
+        // ---- γ stream for this block's normalize (wide sharded rows only) ----
+        if constexpr (gamma_streams) {
+            const uint32_t passes = is_rm ? rows : 1;  // RM normalizes tile-row by tile-row (in place)
+            for (uint32_t p = 0; p < passes; ++p) {
+                for (uint32_t j = 0; j < num_g_chunks; ++j) {
+                    load_gamma_chunk(j);
+                }
+            }
+        }
+
         // ---- store_y_block ----
         if constexpr (is_rm) {
-            constexpr uint32_t stick_stride = core_w_tiles * TILE_DIM * es;
-            const uint32_t valid_bytes = w_valid_elems * es;
+            // One pop per (tile-row, W-chunk), in the order untilize<w_chunk_tiles> emits them.
+            constexpr uint32_t chunk_elems = w_chunk_tiles * TILE_DIM;
+            constexpr uint32_t stick_stride = chunk_elems * es;
             for (uint32_t r = 0; r < rows; ++r) {
                 const uint32_t stick0 = stick_start + (row0 + r) * TILE_DIM;
-                cb_wait_front(cb_out_rm, core_w_tiles);
-                const uint32_t l1 = get_read_ptr(cb_out_rm);
-                for (uint32_t s = 0; s < TILE_DIM && stick0 + s < stick_end; ++s) {
-                    uint64_t dst;
-                    if constexpr (y_sharded) {
-                        // own output shard, core-local: stick pitch = shard page (y_page_bytes)
-                        dst = get_noc_addr(y_addr + (stick0 + s - stick_start) * y_page_bytes);
-                    } else {
-                        dst = y_acc.get_noc_addr(stick0 + s, y_col_offset);
+                for (uint32_t j = 0; j < num_w_chunks; ++j) {
+                    const uint32_t e0 = j * chunk_elems;
+                    const uint32_t valid = (w_valid_elems > e0) ? ((w_valid_elems - e0 < chunk_elems)
+                                                                       ? (w_valid_elems - e0)
+                                                                       : chunk_elems)
+                                                                : 0;
+                    cb_wait_front(cb_out_rm, w_chunk_tiles);
+                    const uint32_t l1 = get_read_ptr(cb_out_rm);
+                    if (valid > 0) {
+                        for (uint32_t s = 0; s < TILE_DIM && stick0 + s < stick_end; ++s) {
+                            uint64_t dst;
+                            if constexpr (y_sharded) {
+                                // own output shard, core-local: stick pitch = shard page (y_page_bytes)
+                                dst = get_noc_addr(y_addr + (stick0 + s - stick_start) * y_page_bytes + e0 * es);
+                            } else {
+                                dst = y_acc.get_noc_addr(stick0 + s, y_col_offset + e0 * es);
+                            }
+                            noc_async_write(l1 + s * stick_stride, dst, valid * es);
+                        }
+                        noc_async_write_barrier();
                     }
-                    noc_async_write(l1 + s * stick_stride, dst, valid_bytes);
+                    cb_pop_front(cb_out_rm, w_chunk_tiles);
                 }
-                noc_async_write_barrier();
-                cb_pop_front(cb_out_rm, core_w_tiles);
             }
         } else if constexpr (y_resident) {
             // compute packed y straight into the output shard (cb_y is backed on it): consume the block.
