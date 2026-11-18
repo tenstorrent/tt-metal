@@ -418,6 +418,17 @@ notes:
   text: 'The overseer stopped attempt 1 (overseer): owner 2026-11-15: hold; P.67 scope under review, change no code'
   closed: '2026-11-15T06:16:11'
   why_closed: 'owner decided: FIX.33 rewritten (model_bringup without expert replication)'
+- id: OV-42
+  tasks:
+  - P.72
+  status: open
+  t: '2026-11-17T22:49:11'
+  text: 'Attempt 1 was cut off by a node loss (2026-11-17 14:30 UTC), not by anything of yours. Its off-path fix (DS41-282,
+    tt/sparse_attention.py, in the tree) stands and both checks PASSED on it: generated/devjobs/p72_off_skip2 (test_decoder_skip_decode,
+    off, rc 0) and p72_off_det (test_determinism, off, rc 0). Do NOT rerun them and do NOT run orchestrator measure (the
+    orchestrator measures both sides itself). Its on-side measure hung at p256000 in test_skip_positions (dispatch timeout,
+    cores 15-2/15-3, on path untouched by your diff): not yours to debug in this task. Only: finish the BREADCRUMBS P.72
+    entry (what was broken, the fix, the two passing checks) and the known_issues entry, then stop.'
 fixes:
 - id: FIX.1
   title: 'Owner order: no padding to get around a kernel limit'
@@ -1065,30 +1076,58 @@ fixes:
   - models/demos/deepseek_v41_flash_d_p/bringup/ledgers/tt
   placed: '2026-11-15T09:13:35'
 - id: FIX.35
-  title: 'OWNER 2026-11-15: measured end-to-end prefill 0 -> 1M (DECODER_SKIP=decode), cumulative wall at 51k..1M, host vs
-    device per chunk'
+  title: 'OWNER 2026-11-15: measured end-to-end prefill 0 -> 1M (DECODER_SKIP=decode), cumulative wall at 51k..1M, host
+    vs device per chunk'
   gate:
   - FIX.34
   status: placed
   t: '2026-11-15T17:39:21'
-  text: 'OWNER 2026-11-15: MEASURE (not estimate) a whole prefill from position 0 to 1,024,000 in the realistic setting, to
-    prove host time does not interfere. Write models/demos/deepseek_v41_flash_d_p/tests/test_full_prefill.py; change no model
-    code. Setting: DS41_DECODER_SKIP=decode, shipped defaults otherwise; ONE request of 200 chunks of 5120 real tokens (no
-    repeated chunk: build ~1M tokens of real text, e.g. the canonical prompt plus further distinct real documents, tokenized;
-    say what), every chunk begin_chunk(.., last=False), driven exactly as the serving runtime drives it: chunks enqueued back
-    to back, NO host readback or sync between chunks except what the runtime itself does (if the runtime syncs per chunk,
-    do the same and say so). Warm: the programs compiled first (a short warm-up request), then the timed request. Record:
-    (a) cumulative wall from the first host call to the final sync, read at the chunk boundaries 51200, 128000, 256000, 512000,
-    768000, 1024000 (a sync at those 6 boundaries only is allowed if needed to read the clock; report its cost, or measure
-    separate runs ending at each point instead); tok/s = tokens / cumulative wall; (b) per chunk: host ms (first host call
-    of the chunk to its last enqueue returning), device ms (the device''s own busy time for the chunk: device profiler or
-    the timeline, whichever does not perturb the unprofiled run; a separate profiled pass is fine), and the device idle gap
-    between consecutive chunks; (c) a verdict: is the run device-bound (host ahead of the device on every chunk, gaps ~0)
-    or does host time show up in the wall; compare cumulative wall with the sum of device ms. Also compare with FIX.34''s
-    per-chunk numbers (results/FIX.34.json). Output a markdown table and metrics: e2e_wall_s_p<point>, e2e_tok_s_p<point>,
-    host_ms_mean/max, device_ms_mean, gap_ms_mean/max, host_bound_chunks. The same test must run unchanged on the replica
-    branch. One process, load once. Report plainly, short.'
+  text: 'OWNER 2026-11-15: MEASURE (not estimate) a whole prefill from position 0 to 1,024,000 in the realistic setting,
+    to prove host time does not interfere. Write models/demos/deepseek_v41_flash_d_p/tests/test_full_prefill.py; change
+    no model code. Setting: DS41_DECODER_SKIP=decode, shipped defaults otherwise; ONE request of 200 chunks of 5120 real
+    tokens (no repeated chunk: build ~1M tokens of real text, e.g. the canonical prompt plus further distinct real documents,
+    tokenized; say what), every chunk begin_chunk(.., last=False), driven exactly as the serving runtime drives it: chunks
+    enqueued back to back, NO host readback or sync between chunks except what the runtime itself does (if the runtime syncs
+    per chunk, do the same and say so). Warm: the programs compiled first (a short warm-up request), then the timed request.
+    Record: (a) cumulative wall from the first host call to the final sync, read at the chunk boundaries 51200, 128000,
+    256000, 512000, 768000, 1024000 (a sync at those 6 boundaries only is allowed if needed to read the clock; report its
+    cost, or measure separate runs ending at each point instead); tok/s = tokens / cumulative wall; (b) per chunk: host
+    ms (first host call of the chunk to its last enqueue returning), device ms (the device''s own busy time for the chunk:
+    device profiler or the timeline, whichever does not perturb the unprofiled run; a separate profiled pass is fine), and
+    the device idle gap between consecutive chunks; (c) a verdict: is the run device-bound (host ahead of the device on
+    every chunk, gaps ~0) or does host time show up in the wall; compare cumulative wall with the sum of device ms. Also
+    compare with FIX.34''s per-chunk numbers (results/FIX.34.json). Output a markdown table and metrics: e2e_wall_s_p<point>,
+    e2e_tok_s_p<point>, host_ms_mean/max, device_ms_mean, gap_ms_mean/max, host_bound_chunks. The same test must run unchanged
+    on the replica branch. One process, load once. Report plainly, short.'
   placed: '2026-11-15T17:39:21'
+- id: FIX.36
+  title: Intermittent device hang of the shipped tree under DECODER_SKIP=decode (test_skip_positions), and the test misreporting
+    it
+  gate:
+  - FIX.34
+  status: queued
+  t: '2026-11-18T01:42:20'
+  text: 'Shipped tree (STATIC_TABLES=on, DECODER_SKIP=decode) hung 2 of 4 runs of tests/test_skip_positions.py on the 8x4:
+    2026-11-17 14:26 at p256000 and 23:18 at p1024000 (TT_THROW ''TIMEOUT: device timeout, potential hang detected'', system_memory_manager.cpp:806;
+    teardown then times out on physical cores 15-2 and 15-3 of EVERY chip); FIX.34 (11-15) and 00:48 (11-18) passed all
+    6 points on the same code. Logs: runs/galaxy_8x4-full/run1/ab/P.72/new/batch1.hang2.log and the P.72 new/ dir of 14:26.
+    Off side (STATIC_TABLES=off, 1 run) did not hang. (1) Find which program hangs: cores 15-2/15-3 (which op places work
+    there: the window/snapshot/tail send programs, fabric, a CCL?), the op in flight at the timeout (the dispatcher''s last
+    program per chip), whether it is the steady or the resumed (replay) chunk, and what differs between a hanging and a
+    passing run (position, preceding point, memory). Use the cheapest reproduction that hangs reliably (a loop of the point
+    that hung), never single-card jobs. (2) Fix the cause; prove it with 20 consecutive clean runs of the reproduction,
+    bit-identical outputs (determinism) unchanged. (3) Fix the test: test_skip_positions records a device hang as fits_p<p>=0
+    ''DOES NOT FIT'' and exits 0; a hang (TIMEOUT / dispatch timeout) must fail the test, only an allocation failure is
+    ''does not fit''. Note: each hang has been followed by the node going down within ~5-10 min (cluster health handling);
+    stop device work at the first hang, report, and let the overseer handle the box.'
+  hold: 'owner: go for the hang hunt (each hang so far cost the node)'
+  paths:
+  - models/demos/deepseek_v41_flash_d_p/tt
+  - models/demos/deepseek_v41_flash_d_p/tests/
+  - models/demos/deepseek_v41_flash_d_p/bringup/BREADCRUMBS.md
+  - models/demos/deepseek_v41_flash_d_p/bringup/known_issues.md
+  - ttnn/ttnn/bringup
+  released: '2026-11-18T04:07:08'
 classified:
   L.smoke:
     kind: framework

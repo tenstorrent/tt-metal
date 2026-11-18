@@ -1,0 +1,51 @@
+{
+ "used": [
+  {
+   "id": "DS41-282",
+   "how": "the off-path bug and fix written in attempt 1; attempt 2 only documented it in BREADCRUMBS",
+   "traced": true,
+   "cited": true
+  }
+ ],
+ "contradicted": [],
+ "missing": [
+  "STATIC_TABLES=off had no run since P.38 changed WINDOW_KV_FORMAT to bf16_tiles; an off-default switch needs a periodic smoke run (now DS41-282)"
+ ],
+ "overseer": [
+  {
+   "id": "OV-3",
+   "answer": "n/a",
+   "evidence": "no padding or inflated work; off reads the existing region and the gathered history"
+  },
+  {
+   "id": "OV-23",
+   "answer": "n/a",
+   "evidence": "no Python-built op added or touched; off calls the existing ttnn.bringup.sparse_sdpa with a BF16 kv_window as _static does"
+  },
+  {
+   "id": "OV-25",
+   "answer": "done",
+   "evidence": "no fork regression or unit suites run; attempt 2 ran no device job at all"
+  },
+  {
+   "id": "OV-42",
+   "answer": "done",
+   "evidence": "no reruns, no orchestrator measure; BREADCRUMBS P.72 entry completed (break, fix, p72_off_skip2 / p72_off_det rc 0); known_issues DS41-282 already present"
+  }
+ ],
+ "cited_only": [],
+ "meta": {
+  "model": "deepseek_v41_flash_d_p",
+  "run": "run1",
+  "task": "P.72",
+  "role": "perf",
+  "attempt": 2,
+  "agent": "bringup-engineer",
+  "t": "2026-11-17T22:50:41",
+  "head": "ac1549442e6",
+  "touched": [
+   "models/demos/deepseek_v41_flash_d_p/bringup/BREADCRUMBS.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/knowledge_use/P.72.perf.2.json"
+  ]
+ }
+}

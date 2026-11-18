@@ -2787,3 +2787,9 @@ Selftests: 670 pass, 1 old failure (xing40 server_rules.py:393 fixed threshold).
   write merged, the ledger reading every chunk, timing, a gate commit staging chunks and the old file's deletion, the
   log roll byte for byte, the model's BREADCRUMBS rolled, the live ledger's migration and `ledger_files_over_limit`);
   test_core.py reads the stores instead of the old files.
+
+## F267: a fix job's default paths came from the ledger dir, wrong for a seeded run (DS41 FIX.36, 2026-11-18)
+
+`overseer fix` without --paths wrote `ledger_dir.parent / "tt"`: for a seeded run (ledger
+bringup/ledgers/<box>-<mode>) that is bringup/ledgers/tt, so the fix agent could not touch the model's code (FIX.13 and
+FIX.36 had it). Now `default_fix_paths(spec)`: spec.model_dir / "tt". Selftest: selftest/test_fix_default_paths.py.

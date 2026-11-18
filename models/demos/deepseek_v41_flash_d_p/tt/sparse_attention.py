@@ -260,6 +260,19 @@ class TtSparseAttention(TtWindowAttention):
         dealloc(src)
         return out
 
+    def _index_region(self, topk: ttnn.Tensor, ckv_cache, nb: int, cls: int) -> ttnn.Tensor:
+        """STATIC_TABLES=off with the per-chip bf16 window region (WINDOW_KV_FORMAT=bf16_tiles, P.72): the chip's
+        index list [1, 1, q_rows, 128 + K] uint32 ROW_MAJOR = [region window ids | top-k rows of the gathered history
+        (offset 0)], not compacted (the fork's BF16 kv_window takes the two sentinel tails apart)."""
+        assert topk.shape[-1] == self.sparse.topk, (topk.shape, self.sparse.topk)
+        mine = self._mine(topk)
+        rows = self._topk_rows(mine, ckv_cache, nb, 0)
+        if mine is not topk:
+            dealloc(mine)
+        out = ttnn.concat([self.tables.region_index[cls], rows], dim=-1, memory_config=DRAM, sub_core_grids=sub_cores())
+        dealloc(rows)
+        return out
+
     def _index_static(self, topk: ttnn.Tensor, table: AttnTable, start: int, cls: int | None = None) -> ttnn.Tensor:
         """STATIC_TABLES=on: the chip's index list [1, 1, q_rows, 128 + K] uint32 ROW_MAJOR = [window ids + base |
         the top-k group ids as they are] (group j is table row j; 0xFFFFFFFF stays the sentinel), compacted for
@@ -361,9 +374,16 @@ class TtSparseAttention(TtWindowAttention):
         if self.static:
             return self._static(q_resid, kv, start, end, cache, ckv_cache, topk, memo, sources)
         assert not self.win8, "WINDOW_KV_FORMAT=bfp8_blocks needs STATIC_TABLES=on"
-        assert self.region is None, "WINDOW_KV_FORMAT=bfp8_tiles needs STATIC_TABLES=on"
+        # WINDOW_KV_FORMAT=bf16_tiles (P.72: the P.38 default): the layer's per-chip bf16 region is the window, the
+        # gathered history the table, read by the sdpa fork's BF16 kv_window (as _static with a history-only table)
+        region = self.region is not None
+        assert not region or self.region.dtype == ttnn.bfloat16, "WINDOW_KV_FORMAT=bfp8_tiles needs STATIC_TABLES=on"
         cos, sin = self._rope_rows(start, s)
-        window = self._table(kv, start, end, cache)  # [1, 1, 128 + S, 512], interleaved tail (INTERLEAVED)
+        if region:
+            self._window_region(kv, start, end, cache)
+            window = self.region
+        else:
+            window = self._table(kv, start, end, cache)  # [1, 1, 128 + S, 512], interleaved tail (INTERLEAVED)
         shared = memo is not None and sources is not None
         ckey = (start, id(ckv_cache), ckv_cache.version)
         hit = memo.get(("comp", sources[0]), ckey) if shared else None
@@ -373,20 +393,28 @@ class TtSparseAttention(TtWindowAttention):
                 memo.put(("comp", sources[0]), ckey, (comp, nb))
         else:
             comp, nb = hit
-        table = ttnn.concat([window, comp], dim=2, memory_config=DRAM, sub_core_grids=sub_cores())
-        dealloc(window)
-        if not shared:
-            dealloc(comp)
+        if region:
+            table = comp
+        else:
+            table = ttnn.concat([window, comp], dim=2, memory_config=DRAM, sub_core_grids=sub_cores())
+            dealloc(window)
+            if not shared:
+                dealloc(comp)
         cls = cache.carry_class(start)  # (DECODER_SKIP=exact, P.30)
-        index = memo.get(("index", sources[1]), ckey + (cls,)) if shared else None
+        index = memo.get(("index", sources[1]), ckey + (cls, region)) if shared else None
         if index is None:
-            index = self._index(topk, ckv_cache, nb, start, cls)
+            index = (
+                self._index_region(topk, ckv_cache, nb, cls) if region else self._index(topk, ckv_cache, nb, start, cls)
+            )
             if shared:
-                memo.put(("index", sources[1]), ckey + (cls,), index)
+                memo.put(("index", sources[1]), ckey + (cls, region), index)
         q_rm = self._q(q_resid, cos, sin)
-        o = self._sdpa(q_rm, table, index)
-        for t in (q_rm, table) + (() if shared else (index,)):
-            dealloc(t)
+        o = self._sdpa(q_rm, table, index, window=window if region else None)
+        dealloc(q_rm)
+        if not (region and shared):
+            dealloc(table)
+        if not shared:
+            dealloc(index)
         out = self._out(o, cos, sin)
         dealloc(o)
         self.rope.free(cos, sin)  # INDEXER_GLUE=on: the chunk's memoized rows stay

@@ -2261,3 +2261,24 @@ Measured (8x4, `gate FIX.31 --check`, after the last edit)
 - Re-run: `PYTHONPATH=$PWD DS41_DECODER_SKIP=decode scripts/run_safe_pytest.sh --run-all --no-precompile
   models/demos/deepseek_v41_flash_d_p/tests/test_full_prefill.py` (via devjob, ~7 min with the load), or
   `gate FIX.35 --spec models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/spec.yaml --check`.
+
+## P.72 (perf, owner A/B): STATIC_TABLES=off still runs? (8x4)
+
+- Estimate (written before the change): the change touches only the off side, so on (the default) saves 0 device
+  and 0 host per chunk. Expected A/B (on vs off) on the 8x4 at realistic positions: off adds, per compressed KV source
+  a chunk, the history slice + tilize + mesh all-gather (TP then SP, 32 chips) + untilize, and the per-chunk fp32
+  top-k remap; device +5..+20 ms a chunk growing with position (the gathered history is max_seq / r rows), host
+  +3..+6 ms (~15 extra launches a source). 2x2 8-layer reference: 103.5 (on) vs 118.8 ms (off).
+- Broken (DS41-282): with STATIC_TABLES=off the first compressed layer asserted "WINDOW_KV_FORMAT=bfp8_tiles needs
+  STATIC_TABLES=on" (devjob p72_off_skip). Since P.38 the default WINDOW_KV_FORMAT=bf16_tiles gives every chip owning
+  >= 128 rows a per-chip bf16 window region; the P.19 off path only handled the replicated window table.
+- Fix (off path only, tt/sparse_attention.py): with a bf16 region, off writes the window into the region
+  (_window_region), uses the gathered compressed history alone as the table, and builds the index as
+  [region window ids | top-k rows at offset 0] (new TtSparseAttention._index_region); sparse_sdpa gets the region as
+  its BF16 kv_window, as _static does. The memo key gains the region flag. The on path (_static) is not touched.
+- Checks, STATIC_TABLES=off, both PASS on the fixed tree: devjob p72_off_skip2 (DS41_DECODER_SKIP=decode
+  test_decoder_skip_decode.py, rc 0, 343 s) and p72_off_det (common/bringup/tests/test_determinism.py, rc 0, 201 s).
+- Attempt 1 was cut off by a node loss; its on-side measure hung at p256000 in test_skip_positions (dispatch timeout,
+  cores 15-2/15-3), on the untouched on path: left to the orchestrator (OV-42). Attempt 2 ran nothing on the device.
+- Re-run: `DS41_STATIC_TABLES=off DS41_DECODER_SKIP=decode python -m models.demos.common.bringup.devjob start x --
+  scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/test_decoder_skip_decode.py`

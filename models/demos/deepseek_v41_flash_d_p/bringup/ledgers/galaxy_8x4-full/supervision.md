@@ -1741,3 +1741,64 @@ https://claude.ai/artifact/V6jTfy2imD5wQz6UQXPPbR.
 - 2026-11-15 18:10: FIX.35 PASS -> bf9e3fbbbe4: measured 0..1M in 21.87 s (46.8k tok/s), sum device 16.14 s; host enqueue mean 86 ms vs device 81 ms a chunk (host >= device on 159/200), wall/chunk 109 ms: host time IS in the wall (~26%). P.71 (same test, replica branch) launched.
 - 2026-11-15 18:24: P.71 PASS (replica b9d6fb8eab3): measured 0..1M 21.18 s (48.3k tok/s) vs model_bringup 21.87 s (46.8k): -3%; device mean 76.7 vs 80.7 ms, host enqueue 88.5 vs 86.1 ms, host >= device on 196/200 chunks: host-paced. Replicas ready 20/20 on 199/200 chunks.
 - 2026-11-15 19:09: owner done for now, releasing the reservation. Everything committed on both branches, bundles and the report copied to /data, git mirror and /data backup refreshed.
+
+## 2026-11-17 new phase: per-slot private state vs tt-d-gen (overseer session on bh-glx-110-c10u02, job 217991)
+- 13:44 node rebooted (tt-kmd leak). 13:53 RAM baseline: unaccounted 2.6 GiB (excl. hugetlb 34.8 GiB), available 516 GiB.
+- 13:57-13:59 link check: recover-hosts --skip-reset --skip-mpi-stress-test (validation only, no reset): all links healthy,
+  artifacts /data/dcamp/cluster-health-check/logs/recover/dnijemcevic-20261117T135735Z.6O8DWF.
+- INFRA: pre-commit hook envs and virtualenv's extracted wheel images had lost their .py files (a cleanup on 2026-11-16
+  03:58; only __pycache__ left): every commit failed. Fixed: pre-commit clean, removed ~/.cache/virtualenv/wheel/3.10/image,
+  pre-commit install-hooks.
+- Owner: step 1 (code reading) done by an overseer subagent; report /scratch/dnijemcevic/phase_1117/step1_report.md.
+- Owner: A/B STATIC_TABLES. Queued P.72 (ac1549442e6): switch-only pick (keep_default, flip), off vs on, gate = ladder last,
+  both determinism checks, test_decoder_skip_decode, and under DECODER_SKIP=decode test_skip_positions (6 points) and
+  test_full_prefill (0 -> 1M). Agent only checks that off still runs. 14:00 launched: tmux p72, resume --only P.72.
+- 14:00-14:26 P.72 attempt 1: STATIC_TABLES=off was broken since P.38 (bf16_tiles window region; assertion at the first
+  compressed layer): DS41-282, agent fixed the off path only (tt/sparse_attention.py _index_region; on path untouched);
+  its checks passed: test_decoder_skip_decode off (devjobs p72_off_skip2) and test_determinism off (p72_off_det).
+  The agent then ran `orchestrator measure` (on side): batch0 (ladder, both determinism, decoder skip) done 14:22;
+  batch1 test_skip_positions HUNG at p256000 (14:26:07, TT_THROW dispatch timeout, "waiting for physical cores 15-3, 15-2";
+  p51200 and p128000 measured). FIX.34 passed p256000 on the same on-path code (2026-11-15): an intermittent hang.
+- 14:29 INFRA: the safe runner started recover-hosts (reset) for the dirty mesh; during its sys-triage the node went down
+  hard at 14:30:38 (journal of that boot ends with recover-hosts' sudo lspci / dmesg / journalctl; no shutdown record).
+  Up again 14:32:37; re-reserved as job 218916; this session resumed 22:46. Unaccounted RAM 12.7 GiB excl. hugetlb at 22:47
+  (no device run since boot). 22:5x box test PASS (32 s, leak +0.8 GB).
+- 22:5x P.72 resumed (--only P.72) with note OV-42: attempt 2 only records attempt 1's result; no re-checks, no measure.
+  If p256000 hangs again on the on side, it is a reproducible hang of the shipped tree: stop and tell the owner.
+- 23:1x P.72 off side measured (old/): batch0 all rc 0 (determinism, test_determinism, ladder last, decoder_skip_decode);
+  test_skip_positions rc 0 (steady wall 109.1 / 111.6 / 118.3 / 125.9 / 141.4 / 155.8 ms at 51k..1M; device 83.2 .. 128.3).
+  test_full_prefill rc 1: device DRAM OOM at MODEL LOAD (attention.py:149 _upload), because F259's one-process batch ran it
+  after test_skip_positions and its reload ("needs another model ... releasing it and loading again in this process") does
+  not get the first model's DRAM back. FRAMEWORK bug (testing/batch.py release / reload path), not the model: FIX.35 ran the
+  same test alone. Cheap fix now: after the report, `decide --rerun` re-runs only the unfinished runs (F228), each side's
+  test_full_prefill alone in its own process. Framework fix (reload frees the DRAM, or a run needing another model gets a
+  fresh process) after P.72's decision, with a selftest (an edit now would change the A/B code key).
+- 23:18 P.72 on side (shipped tree, STATIC_TABLES=on, DECODER_SKIP=decode): test_skip_positions measured 51k..768k, then
+  HUNG at p1024000 (23:18:21 "TIMEOUT: device timeout, potential hang detected", dispatch cores 15-2/15-3 on every chip in
+  teardown). Second hang of the on side in two tries (14:26 at p256000). The test records a hang as fits_p<p> = 0 "DOES NOT
+  FIT" and exits rc 0: it misreports a hang as a memory miss (test bug, to fix). test_full_prefill then failed in 5 s (CQ reader
+  dead). Off side: every point ran, no hang (one try).
+- 23:21 OVERSEER STOP: killed the orchestrator's process group before the safe runner's automatic recover-hosts (the 14:29 one
+  ended in the node going down). All 32 cards are marked dirty; NO reset done: the owner decides the reset. P.72 stays RUNNING
+  (resumable). Partial A/B (steady wall ms on / off): 51k 104.9/109.1, 128k 107.5/111.6, 256k 113.6/118.3, 512k 111.5/125.9,
+  768k 117.1/141.4, 1M -/155.8; device 80.9/83.2 .. 93.2/116.3 (768k), off 128.3 at 1M.
+- 23:26 INFRA: node lost again ~5 min after the 23:18 on-side hang and my 23:21 stop (no reset was started; cards dirty).
+  Boot ended without a shutdown record (`last -x`: no shutdown line; our journal view has no system messages). Node up
+  23:26:52, re-reserved as job 219013. Pattern: both node losses today followed a device hang within ~5-10 min (14:26 hang ->
+  14:30 down during recover-hosts; 23:18 hang -> ~23:2x down with nothing running): likely the cluster's health handling
+  of a hung mesh, not our recover. To confirm with the cluster admins.
+- 23:31 box test PASS (7 s); unaccounted RAM 2.7 GiB excl. hugetlb (fresh boot). P.72 NOT resumed: the shipped tree hung
+  twice; waiting for the owner (proposal: reproduce the on side's test_skip_positions alone before finishing the A/B).
+- 00:42 (owner quiet, standing rule: start proposed runs) hang reproduction: `orchestrator measure --task P.72 --part
+  test_skip_positions` (on side, one process, records kept; the hung run's log kept as new/batch1.hang2.log). 00:48 rc 0, all
+  6 points, NO hang. Shipped tree: test_skip_positions hung 2 of 4 runs (FIX.34 ok, 14:26 hang p256000, 23:18 hang p1024000,
+  00:48 ok): intermittent. Unaccounted RAM after: 3.2 GiB (2.7 before: +0.5 GiB for this run).
+  On side complete (steady wall ms): 104.5 / 105.8 / 108.1 / 112.4 / 116.2 / 123.0 at 51k..1M; device 80.7 .. 98.4.
+  Off: 109.1 / 111.6 / 118.3 / 125.9 / 141.4 / 155.8; device 83.2 .. 128.3. test_full_prefill: no result on either side
+  (off: batch reload OOM, framework; on: after the hang). Not run further: waiting for the owner on the hang.
+- 01:4x queued FIX.36 (held for the owner's go): intermittent hang hunt + test_skip_positions misreporting a hang as 'does not fit'. Nothing running.
+- 04:0x OWNER: "if something needs to be fixed, fix it": FIX.36 released. Framework F267: `overseer fix` default paths came
+  from the ledger dir (bringup/ledgers/tt for a seeded run): now the model's tt/ from the spec; selftest
+  test_fix_default_paths.py (+ test_overseer.py: 23 passed). FIX.36's paths set to tt/, tests/, BREADCRUMBS, known_issues,
+  ttnn/ttnn/bringup. P.72's attempt-1 work (DS41-282 off-path fix, its reports, the partial A/B records) committed as
+  bookkeeping before FIX.36 so the fix agent starts on a clean tree; P.72 stays RUNNING and is re-measured after the hang fix.

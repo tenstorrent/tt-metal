@@ -404,6 +404,14 @@ def clear_status(run_dir: Path) -> None:
     (Path(run_dir) / STATUS_FILE).unlink(missing_ok=True)
 
 
+def default_fix_paths(spec_path: str) -> str:
+    """F267: where a fix may write by default: the model's tt/ dir, relative to the repo."""
+    from models.demos.common.bringup.core.spec import Spec
+
+    spec = Spec.load(spec_path)
+    return str((spec.model_dir / "tt").resolve().relative_to(spec.repo.resolve()))
+
+
 def _dirs(spec_path: str):
     from models.demos.common.bringup.core.gate import run_name
     from models.demos.common.bringup.core.ledger import Ledger
@@ -473,7 +481,9 @@ def main(argv=None) -> int:
     elif a.cmd == "fix":
         led_tasks = {t["id"]: t for t in (yaml.safe_load((bdir / "tasks.yaml").read_text()) or {}).get("tasks", [])}
         # F127: a fix changes the model's code even when its gate tasks own no paths (a scripted gate such as X.3)
-        paths = a.paths or [str((bdir.parent / "tt").resolve().relative_to(Path.cwd().resolve()))]
+        # F267: the model's tt/ from the spec (a seeded run's ledger dir is bringup/ledgers/<box>-<mode>, so the ledger
+        # dir's parent is not the model dir: FIX.36 got bringup/ledgers/tt)
+        paths = a.paths or [default_fix_paths(a.spec)]
         x = queue_fix(bdir, a.text, a.gate, a.title, led_tasks, a.hold, paths, a.unit, a.selftest)
         when = f"held until `release` ({a.hold})" if a.hold else "the orchestrator starts it at its next task boundary"
         print(f"queued {x['id']} (gate {x['gate']}): {when}")
