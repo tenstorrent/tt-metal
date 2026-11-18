@@ -105,14 +105,15 @@ sfpi_inline sfpi::vFloat _calculate_sqrt_body_(const sfpi::vFloat x) {
             sfpi::vFloat t = c - sfpi::vConstFloatPrgm2;
             sfpi::vFloat nan = std::numeric_limits<float>::quiet_NaN();  // nan for fp32, inf for bf16
             y = y * (c * t + sfpi::vConstFloatPrgm1);
+            sfpi::vFloat negative_half = sfpi::addexp(sfpi::vFloat(-1.0f), -1);
             xy = x * y;
             sfpi::vFloat xyy_minus_one = y * xy - 1.0f;
-            sfpi::vFloat half_one_minus_xyy = xyy_minus_one * -0.5f;
+            sfpi::vFloat negative_half_xy = xy * negative_half;
             // If x == inf, we need to skip to avoid y = inf - inf = nan; y will already be inf.
             // Keep this as `<`, not `!=`: it skips positive NaN, which would otherwise run the
             // step and come back sign-flipped (a bf16 pack then makes that -inf). Negative NaN
             // does run the step -- the compare wraps -- but the clamp below rewrites it.
-            v_if(sfpi::as<sfpi::vInt>(x) < infinity_bits) { y = half_one_minus_xyy * xy + xy; }
+            v_if(sfpi::as<sfpi::vInt>(x) < infinity_bits) { y = xyy_minus_one * negative_half_xy + xy; }
             v_endif;
             if constexpr (!FAST_APPROX) {
                 // `x < 0.0F` is a sign-bit test, so it claims -0.0 as well; zero magnitudes are
