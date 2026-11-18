@@ -42,7 +42,7 @@ def run_example(example, env_extra, profiler_dir):
     env.update(env_extra)
     t0 = time.monotonic()
     proc = subprocess.run(
-        [example], env=env, capture_output=True, text=True, timeout=900
+        [c.executable(example)], env=env, capture_output=True, text=True, timeout=900
     )
     return proc, time.monotonic() - t0
 
