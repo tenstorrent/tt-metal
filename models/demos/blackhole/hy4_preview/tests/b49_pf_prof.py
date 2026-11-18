@@ -44,6 +44,23 @@ def main():
         if mesh4:
             ch.build_head()
             ids4 = [torch.randint(1000, 100000, (4, HC.CHUNK), generator=rnd) for _ in range(K)]
+            if (
+                os.environ.get("REAL") == "1"
+            ):  # real text tokens (4 different slices of a long text) instead of random ids
+                from transformers import AutoTokenizer
+
+                tok = AutoTokenizer.from_pretrained(CKPT, trust_remote_code=True)
+                txt = (
+                    open("/home/container_app_user/tt-metal/README.md").read()
+                    + open("/home/container_app_user/tt-metal/METALIUM_GUIDE.md").read()
+                )
+                allids = tok(txt * 4, add_special_tokens=False)["input_ids"]
+                need = 4 * K * HC.CHUNK
+                assert len(allids) >= need, (len(allids), need)
+                for r_ in range(4):
+                    seg = torch.tensor(allids[r_ * 3000 : r_ * 3000 + K * HC.CHUNK]).reshape(K, HC.CHUNK)
+                    for c_ in range(K):
+                        ids4[c_][r_] = seg[c_]
             xs_dev = [ch.embed_ids(ids4[c]) for c in range(K)]
             xs = None
         else:
@@ -143,8 +160,13 @@ def main():
             os.environ.get("AB") == "1"
         ):  # eager chunk wall: stock iHC / collapse-only variant / fused iHC, same layers (HY4_B49_IHC=fused at build)
             saved = [(ly.ihcpf_a, ly.ihcpf_m) for ly in ch.layers]
-            for name, pf_on, coll in (("stock", False, "0"), ("collapse", False, "1"), ("fused", True, "1")):
+            for name, pf_on, coll, ropec in (
+                ("stock", False, "0", "0"),
+                ("fused", True, "1", "0"),
+                ("fused+ropecache", True, "1", "1"),
+            ):
                 os.environ["HY4_B49_COLLAPSE"] = coll
+                os.environ["HY4_B49_ROPE_CACHE"] = ropec
                 for ly, (a_, m_) in zip(ch.layers, saved):
                     ly.ihcpf_a, ly.ihcpf_m = (a_, m_) if pf_on else (None, None)
                 run_chunks(K)
@@ -163,6 +185,222 @@ def main():
             for ly, (a_, m_) in zip(ch.layers, saved):
                 ly.ihcpf_a, ly.ihcpf_m = a_, m_
             os.environ["HY4_B49_COLLAPSE"] = "1"
+        if os.environ.get("CPROF") == "1":  # cProfile of the last chunk (host python + pybind time by function)
+            import cProfile
+            import io
+            import pstats
+
+            run_chunks(K)
+            pr = cProfile.Profile()
+            for ly in ch.layers:
+                ly.attn.reset()
+            ibl = {}
+            for c in range(K - 1):
+                x4 = mk_x(c)
+                for ly in ch.layers:
+                    x4 = ly.prefill_chunk(x4, c * HC.CHUNK, ibl)
+                ttnn.deallocate(x4)
+            sync()
+            x4 = mk_x(K - 1)
+            pr.enable()
+            for ly in ch.layers:
+                x4 = ly.prefill_chunk(x4, (K - 1) * HC.CHUNK, ibl)
+            pr.disable()
+            sync()
+            sio = io.StringIO()
+            pstats.Stats(pr, stream=sio).sort_stats("tottime").print_stats(28)
+            for line in sio.getvalue().splitlines():
+                print("CPROF " + line[:200], flush=True)
+        if (
+            os.environ.get("OPLOG") == "1"
+        ):  # ordered ttnn call log of one layer-chunk of each type with the calling model line
+            import sys
+            import types
+
+            logs = {}
+            cur = {"layer": None}
+            wrapped = []
+
+            def wrapl(owner, nm, obj):
+                def w(*a, **k):
+                    f = sys._getframe(1)
+                    where = f"{os.path.basename(f.f_code.co_filename)}:{f.f_lineno}"
+                    t0 = time.perf_counter()
+                    try:
+                        return obj(*a, **k)
+                    finally:
+                        logs.setdefault(cur["layer"], []).append((nm, where, round((time.perf_counter() - t0) * 1e6)))
+
+                setattr(owner, nm, w)
+                wrapped.append((owner, nm, obj))
+
+            for owner in (ttnn, getattr(ttnn, "experimental", None), getattr(ttnn, "transformer", None)):
+                if owner is None:
+                    continue
+                for nm in dir(owner):
+                    if nm.startswith("_") or nm in (
+                        "synchronize_device",
+                        "get_device_tensors",
+                        "from_torch",
+                        "to_torch",
+                    ):
+                        continue
+                    try:
+                        obj = getattr(owner, nm)
+                    except Exception:
+                        continue
+                    if isinstance(obj, (type, types.ModuleType)) or not callable(obj):
+                        continue
+                    wrapl(owner, nm, obj)
+            orig = HC.Hy4ChainLayer.prefill_chunk
+
+            def counted(self, x4, start, ids_by_layer, taps=None):
+                cur["layer"] = f"L{self.L}"
+                logs[cur["layer"]] = []
+                return orig(self, x4, start, ids_by_layer, taps)
+
+            HC.Hy4ChainLayer.prefill_chunk = counted
+            run_chunks(K)
+            sync()
+            for lay in ("L1", "L2"):
+                for i, (nm, wh, us) in enumerate(logs.get(lay, [])):
+                    print(f"OPLOG {lay} {i:3d} {nm:34s} {wh:34s} {us}", flush=True)
+            for owner, nm, obj in wrapped:
+                setattr(owner, nm, obj)
+            HC.Hy4ChainLayer.prefill_chunk = orig
+        if (
+            os.environ.get("MOECMP") == "1"
+        ):  # MoE block with / without the fused rs-exact tail (HY4_B49_RSTAIL), all 32 devices
+            ly = ch.layers[1]
+            blkp = ly.blk_pf
+            assert blkp is not None and blkp.rowbase is not None, "needs HY4_B49_RSTAIL=1 and HY4_TP32PF_RS_EXACT=1"
+            x4 = mk_x(0)
+            pre, post = ly.ihc_m.pre_post(x4)
+            raw = HC.Hy4IHCGen.collapse(x4, pre)
+            h = ly._norm(raw, ly.w_post)
+            outs = {}
+            for mode in ("stock", "fused", "stock", "fused"):
+                saved = blkp.rowbase
+                if mode == "stock":
+                    blkp.rowbase = None
+                y = blkp.forward(h)
+                blkp.rowbase = saved
+                ttnn.synchronize_device(md)
+                outs.setdefault(mode, []).append([ttnn.to_torch(t) for t in ttnn.get_device_tensors(y)])
+                ttnn.deallocate(y)
+
+            def cmp(a, b):
+                ne = tot = mx = 0
+                for ta, tb in zip(a, b):
+                    d = (ta.view(torch.int16).int() - tb.view(torch.int16).int()).abs()
+                    ne += int((d != 0).sum())
+                    tot += d.numel()
+                    mx = max(mx, int(d.max()))
+                return ne, tot, mx
+
+            res(
+                event="moecmp",
+                stock_repeat=cmp(outs["stock"][0], outs["stock"][1]),
+                fused_repeat=cmp(outs["fused"][0], outs["fused"][1]),
+                fused_vs_stock=cmp(outs["fused"][0], outs["stock"][0]),
+            )
+        if os.environ.get(
+            "ENVAB"
+        ):  # ENVAB='[{"name":"a","env":{"K":"V"}}, ...]': eager chunk wall per env variant (flags are read at call time), 2 passes, REPS reps each
+            variants = json.loads(os.environ["ENVAB"])
+            keys = sorted({k for v in variants for k in v["env"]})
+            base = {k: os.environ.get(k) for k in keys}
+            for rnd_ in range(2):
+                for v in variants:
+                    for k in keys:
+                        if k in v["env"]:
+                            os.environ[k] = v["env"][k]
+                        elif base[k] is None:
+                            os.environ.pop(k, None)
+                        else:
+                            os.environ[k] = base[k]
+                    run_chunks(K)
+                    ws = []
+                    for r in range(REPS):
+                        d, w = run_chunks(K, True)
+                        ws.append(round(w * 1e3 / NL, 2))
+                    res(event="envab", round=rnd_, variant=v["name"], per_layer_ms=ws)
+            for k in keys:
+                if base[k] is None:
+                    os.environ.pop(k, None)
+                else:
+                    os.environ[k] = base[k]
+        if (
+            os.environ.get("OPCOUNT") == "1"
+        ):  # host op counts / host time per ttnn callable for one layer of each type (fused path as configured)
+            import types
+
+            counts = {}
+            cur = {"layer": None}
+            skip = {
+                "deallocate",
+                "synchronize_device",
+                "from_torch",
+                "to_torch",
+                "get_device_tensors",
+                "allocate_tensor_on_device",
+            }
+            wrapped = []
+
+            def wrap(owner, nm, obj):
+                def w(*a, **k):
+                    t0 = time.perf_counter()
+                    try:
+                        return obj(*a, **k)
+                    finally:
+                        e = counts.setdefault(cur["layer"], {}).setdefault(nm, [0, 0.0])
+                        e[0] += 1
+                        e[1] += time.perf_counter() - t0
+
+                w.__wrapped__ = obj
+                setattr(owner, nm, w)
+                wrapped.append((owner, nm, obj))
+
+            for owner in (ttnn, getattr(ttnn, "experimental", None), getattr(ttnn, "transformer", None)):
+                if owner is None:
+                    continue
+                for nm in dir(owner):
+                    if nm.startswith("_") or nm in skip:
+                        continue
+                    try:
+                        obj = getattr(owner, nm)
+                    except Exception:
+                        continue
+                    if isinstance(obj, (type, types.ModuleType)) or not callable(obj):
+                        continue
+                    if owner is not ttnn:
+                        nm_full = nm
+                    wrap(owner, nm, obj)
+            orig = HC.Hy4ChainLayer.prefill_chunk
+
+            def counted(self, x4, start, ids_by_layer, taps=None):
+                cur["layer"] = f"L{self.L}"
+                return orig(self, x4, start, ids_by_layer, taps)
+
+            HC.Hy4ChainLayer.prefill_chunk = counted
+            run_chunks(K)
+            counts.clear()
+            run_chunks(K)
+            sync()
+            for lay, d in counts.items():
+                tot = sum(v[0] for v in d.values())
+                tms = sum(v[1] for v in d.values()) * 1e3
+                top = sorted(d.items(), key=lambda kv: -kv[1][1])[:14]
+                res(
+                    event="opcount",
+                    layer=lay,
+                    total_calls=tot,
+                    total_host_ms=round(tms, 2),
+                    top=[(k, v[0], round(v[1] * 1e3, 2)) for k, v in top],
+                )
+            for owner, nm, obj in wrapped:
+                setattr(owner, nm, obj)
+            HC.Hy4ChainLayer.prefill_chunk = orig
         run_chunks(K)  # warm
         from models.demos.blackhole.hy4_preview.tt import hy4_ihc_pf as _pfm
 

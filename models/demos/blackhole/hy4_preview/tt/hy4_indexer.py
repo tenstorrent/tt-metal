@@ -16,6 +16,8 @@ import ttnn
 from models.demos.blackhole.hy4_preview.tt.hy4_common import SENTINEL, compute_cfg, upload  # noqa: F401
 from models.demos.blackhole.hy4_preview.tt.hy4_pf_opt import PfOpt, plinear
 
+_C128 = {}  # B49 (HY4_B49_ROPE_CACHE=1): (id(cos), idx_rope_first) -> (cos, sin, cos128, sin128) of the current chunk
+
 
 class Hy4Indexer:
     def __init__(self, md, cfg, host_w, rope, idx_rope_first=False, ln_eps=1e-6, wdtype=ttnn.bfloat16, wdtypes=None):
@@ -69,6 +71,23 @@ class Hy4Indexer:
                 upload(self.md, torch.zeros(1, 1, n, self.d - self.rd)),
             )
         ones, zeros = self._c128[n]
+        if os.environ.get("HY4_B49_ROPE_CACHE", "0") == "1":
+            # B49: the 128-wide tables of a chunk are built once (append_keys + select of every full-indexer layer share them; the rope-table cache hands every layer the same cos / sin objects)
+            key = (id(cos), self.idx_rope_first)
+            ent = _C128.get(key)
+            if ent is None:
+                c = ttnn.concat([cos, ones] if self.idx_rope_first else [ones, cos], dim=3)
+                s_ = ttnn.concat([sin, zeros] if self.idx_rope_first else [zeros, sin], dim=3)
+                _C128.clear()
+                ent = _C128[key] = (
+                    cos,
+                    sin,
+                    c,
+                    s_,
+                )  # (cos, sin) kept alive so that id(cos) cannot be reused while cached
+            return ttnn.experimental.rotary_embedding_llama(
+                x, ent[2], ent[3], self._tm, is_decode_mode=False, compute_kernel_config=self.ckc
+            )
         c = ttnn.concat([cos, ones] if self.idx_rope_first else [ones, cos], dim=3)
         s_ = ttnn.concat([sin, zeros] if self.idx_rope_first else [zeros, sin], dim=3)
         out = ttnn.experimental.rotary_embedding_llama(

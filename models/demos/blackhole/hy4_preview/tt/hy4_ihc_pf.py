@@ -19,6 +19,12 @@ f32, bf16 = ttnn.float32, ttnn.bfloat16
 CT = int(
     os.environ.get("HY4_B49_CT", "64")
 )  # column tiles per core (cores = n/32 * D/32 / CT; host launch cost ~0.45 ms at 96 cores x 32 chips)
+MERGE = (
+    os.environ.get("HY4_B49_MERGE", "1") == "1"
+)  # PRE as ONE program (one core per token tile-row, no cross-core exchange): 1 launch instead of 4
+CTE = int(
+    os.environ.get("HY4_B49_CTE", "192" if MERGE else "0")
+)  # column tiles per core of the expand program (0 = CT)
 _CACHE = {}
 HOST_T = {}  # name -> [calls, seconds] host time of pre / expand / each program launch (B49 profiling)
 
@@ -88,6 +94,9 @@ class Hy4IHCPF:
         self.TR, self.NTD = n // 32, dim // 32
         self.NCH = self.NTD // CT
         self.NC = self.TR * self.NCH
+        self.CTE = CTE or CT
+        self.NCHE = self.NTD // self.CTE
+        self.NCE = self.TR * self.NCHE
         self.hc_eps, self.norm_eps = hc_eps, norm_eps
         grid = md.compute_with_storage_grid_size()
         assert grid.x * grid.y >= self.NC, "not enough worker cores"
@@ -103,17 +112,21 @@ class Hy4IHCPF:
         c[4, :, :4] = hc_eps
         self.cst = upload(md, c.reshape(1, 1, 5 * 32, 32), f32)
         self.wn = upload(md, norm_w.float().reshape(1, 1, 1, dim).repeat(1, 1, 32, 1), bf16)
-        key = (id(md), n, dim)
-        sh = _CACHE.get(key)
-        if sh is None:
-            mk = lambda shape, dt: ttnn.allocate_tensor_on_device(
-                ttnn.Shape(shape), dt, ttnn.TILE_LAYOUT, md, ttnn.DRAM_MEMORY_CONFIG
-            )
-            sh = _CACHE[key] = dict(
-                part=mk([1, 1, self.NC * 2 * 32, 32], f32),
-                accp=mk([1, 1, self.NC * 32, 32], f32),
-                hbuf=mk([1, 1, n, dim], f32),
-            )
+        sh = None
+        if (
+            not MERGE
+        ):  # the 4-program variant needs shared scratch (partials, h row); the merged program keeps everything in L1
+            key = (id(md), n, dim)
+            sh = _CACHE.get(key)
+            if sh is None:
+                mk = lambda shape, dt: ttnn.allocate_tensor_on_device(
+                    ttnn.Shape(shape), dt, ttnn.TILE_LAYOUT, md, ttnn.DRAM_MEMORY_CONFIG
+                )
+                sh = _CACHE[key] = dict(
+                    part=mk([1, 1, self.NC * 2 * 32, 32], f32),
+                    accp=mk([1, 1, self.NC * 32, 32], f32),
+                    hbuf=mk([1, 1, n, dim], f32),
+                )
         self.sh = sh
 
     # ------------------------------------------------------------------ programs
@@ -149,6 +162,102 @@ class Hy4IHCPF:
         return cfg
 
     def pre(self, x4):
+        if MERGE:
+            return self.pre_merged(x4)
+        return self.pre4(x4)
+
+    def pre_merged(self, x4):
+        TR, NTD, D, n = self.TR, self.NTD, self.dim, self.n
+        assert tuple(x4.shape) == (1, 4, n, D)
+        st = self._alloc([1, 1, TR * 32, 32], f32)  # kept for the expand: the pp tiles are rebuilt there from this
+        hout = self._alloc([1, 1, n, D], bf16)
+        eps = _bits(self.norm_eps)
+        A = lambda *ts: [t.buffer_address() for t in ts]
+
+        def build():
+            cs, co = _cores(self.grid, TR)
+            cfg = self._cfg(3, 4, 7, 8, 9, 10, 12)
+            return (
+                [
+                    _kernel(
+                        "p_reader.cpp",
+                        cs,
+                        [0, 1, 2, 3, 6, 7, 13, 8, TR, NTD]
+                        + _acc(x4)
+                        + _acc(self.w_t)
+                        + _acc(self.cst)
+                        + _acc(self.wn)
+                        + _acc(st),
+                        _rt(co, lambda i: [i]),
+                        ttnn.ReaderConfigDescriptor(),
+                        [],
+                    ),
+                    _kernel(
+                        "w_generic.cpp",
+                        cs,
+                        [14, 2048, NTD, 1, 0, 4, 0xFFFF, 0, 0] + _acc(hout) + _acc(hout),
+                        _rt(co, lambda i: [i * NTD, 0]),
+                        ttnn.WriterConfigDescriptor(),
+                        [],
+                    ),
+                    _kernel(
+                        "p_compute.cpp",
+                        cs,
+                        [
+                            0,
+                            1,
+                            2,
+                            3,
+                            4,
+                            5,
+                            6,
+                            7,
+                            8,
+                            9,
+                            10,
+                            11,
+                            12,
+                            13,
+                            14,
+                            NTD,
+                            _bits(1.0 / (4 * D)),
+                            eps,
+                            _bits(1.0 / D),
+                        ],
+                        ttnn.RuntimeArgs(),
+                        cfg,
+                        [],
+                    ),
+                ],
+                [
+                    _cb(cs, 0, 16, 4096, f32),
+                    _cb(cs, 1, 16, 4096, f32),
+                    _cb(cs, 2, 1, 4096, f32),
+                    _cb(cs, 3, 4, 4096, f32),
+                    _cb(cs, 4, 1, 4096, f32),
+                    _cb(cs, 5, 1, 4096, f32),
+                    _cb(cs, 6, 1, 4096, f32),
+                    _cb(cs, 7, 4, 4096, f32),
+                    _cb(cs, 8, 16, 4096, f32),
+                    _cb(cs, 9, 1, 4096, f32),
+                    _cb(cs, 10, 1, 4096, f32),
+                    _cb(cs, 11, 1, 4096, f32),
+                    _cb(cs, 12, 1, 4096, f32),
+                    _cb(cs, 13, 4, 2048, bf16),
+                    _cb(cs, 14, 4, 2048, bf16),
+                ],
+            )
+
+        self._launch(
+            0x4B4E,
+            ("pm", TR, NTD, eps),
+            build,
+            [x4, self.w_t, self.cst, self.wn, st, hout],
+            [A(x4, self.w_t, self.cst, self.wn, st), A(hout, hout), []],
+        )
+        return hout, st
+
+    def pre4(self, x4):
         md, TR, NTD, NCH, NC = self.md, self.TR, self.NTD, self.NCH, self.NC
         n, D = self.n, self.dim
         assert tuple(x4.shape) == (1, 4, n, D)
@@ -312,7 +421,7 @@ class Hy4IHCPF:
 
     def expand(self, x4, y, st):
         """x4 [1,4,n,D] fp32, y [1,1,n,D] bf16 TILE, st (from pre) -> x4 + post * y (fp32 [1,4,n,D]). Does not free its inputs."""
-        TR, NTD, NCH, NC, n, D = self.TR, self.NTD, self.NCH, self.NC, self.n, self.dim
+        TR, NTD, NCH, NC, n, D, CTx = self.TR, self.NTD, self.NCHE, self.NCE, self.n, self.dim, self.CTE
         assert y.dtype == bf16
         out = self._alloc([1, 4, n, D], f32)
 
@@ -323,7 +432,7 @@ class Hy4IHCPF:
                     _kernel(
                         "k5_reader.cpp",
                         cs,
-                        [0, 1, 2, TR, NTD, CT, NCH, 4] + _acc(x4) + _acc(y) + _acc(st),
+                        [0, 1, 2, TR, NTD, CTx, NCH, 4] + _acc(x4) + _acc(y) + _acc(st),
                         _rt(co, lambda i: [i]),
                         ttnn.ReaderConfigDescriptor(),
                         [],
@@ -331,12 +440,12 @@ class Hy4IHCPF:
                     _kernel(
                         "w_generic.cpp",
                         cs,
-                        [3, 4096, CT, 4, TR * NTD, 2, 0xFFFF, 0, 0] + _acc(out) + _acc(out),
-                        _rt(co, lambda i: [(i // NCH) * NTD + (i % NCH) * CT, 0]),
+                        [3, 4096, CTx, 4, TR * NTD, 2, 0xFFFF, 0, 0] + _acc(out) + _acc(out),
+                        _rt(co, lambda i: [(i // NCH) * NTD + (i % NCH) * CTx, 0]),
                         ttnn.WriterConfigDescriptor(),
                         [],
                     ),
-                    _kernel("k5_compute.cpp", cs, [0, 1, 2, 3, CT], ttnn.RuntimeArgs(), self._cfg(0, 2), []),
+                    _kernel("k5_compute.cpp", cs, [0, 1, 2, 3, CTx], ttnn.RuntimeArgs(), self._cfg(0, 2), []),
                 ],
                 [
                     _cb(cs, 0, 16, 4096, f32),
@@ -348,5 +457,5 @@ class Hy4IHCPF:
             )
 
         A = lambda *ts: [t.buffer_address() for t in ts]
-        self._launch(0x4B4D, ("k5", TR, NTD, CT), build_k5, [x4, y, st, out], [A(x4, y, st), A(out, out), []])
+        self._launch(0x4B4D, ("k5", TR, NTD, CTx), build_k5, [x4, y, st, out], [A(x4, y, st), A(out, out), []])
         return out
