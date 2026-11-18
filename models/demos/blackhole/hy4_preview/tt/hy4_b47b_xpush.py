@@ -19,7 +19,7 @@ import torch
 
 import ttnn
 
-KDIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "hy4_xpush_kernels")
+KDIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "hy4_b47b_xpush_kernels")
 HID = 6144
 
 

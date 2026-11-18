@@ -6,7 +6,7 @@ import time
 import torch
 
 import ttnn
-from models.demos.blackhole.hy4_preview.tt import hy4_xpush
+from models.demos.blackhole.hy4_preview.tt import hy4_b47b_xpush
 
 T = int(os.environ.get("T", "4"))
 NCALL = int(os.environ.get("NCALL", "4"))
@@ -32,7 +32,7 @@ def main():
     try:
         g = torch.Generator().manual_seed(5)
         shd = ttnn.ShardTensorToMesh(md, dim=0)
-        xp = hy4_xpush.XPush(md, T)
+        xp = hy4_b47b_xpush.XPush(md, T)
         cat = lambda t: ttnn.to_torch(t, mesh_composer=ttnn.ConcatMeshToTensor(md, dim=0))
         ok = True
         for it in range(NCALL):

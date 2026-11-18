@@ -6,7 +6,7 @@ import os
 import torch
 
 import ttnn
-from models.demos.blackhole.hy4_preview.tt import hy4_xpush
+from models.demos.blackhole.hy4_preview.tt import hy4_b47b_xpush
 from models.demos.blackhole.hy4_preview.tt.hy4_moe_tp24 import Tp24Experts
 
 T = int(os.environ.get("T", "4"))
@@ -27,7 +27,7 @@ def main():
         g = torch.Generator().manual_seed(3)
         shd = ttnn.ShardTensorToMesh(md, dim=0)
         tpe = Tp24Experts(md, layer=LAYER)
-        xp = hy4_xpush.XPush(md, T)
+        xp = hy4_b47b_xpush.XPush(md, T)
         cat = lambda t: ttnn.to_torch(t, mesh_composer=ttnn.ConcatMeshToTensor(md, dim=0))
         ok = True
         for it in range(NCALL):

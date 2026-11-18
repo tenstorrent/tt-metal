@@ -168,9 +168,9 @@ class Hy4MoeTp32Block:
             ):  # B47b: push the x rows + route words over the 4-row group, the tp24 kernels wait for the flags (no row all-gathers, no tilize)
                 key = (id(self.md), self.T)
                 if key not in _XP:
-                    from models.demos.blackhole.hy4_preview.tt import hy4_xpush
+                    from models.demos.blackhole.hy4_preview.tt import hy4_b47b_xpush
 
-                    _XP[key] = hy4_xpush.XPush(self.md, self.T)
+                    _XP[key] = hy4_b47b_xpush.XPush(self.md, self.T)
                 xp = _XP[key]
                 xp(tt_x_tokens, route)
                 ttnn.deallocate(route)
