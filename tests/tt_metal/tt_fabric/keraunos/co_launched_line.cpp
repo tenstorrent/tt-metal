@@ -168,7 +168,6 @@ void add_line_workers(tt::tt_metal::IDevice* device, tt::tt_metal::Program& prog
     }
 }
 
-// A router whose link record the extension set to the NOC kind, and the record as the extension found it.
 // A fabric router as the extension prepared it: its record as found, whether its link is on the NOC, and whether it
 // sends the line's traffic on that link, toward the line's last chip.
 struct PreparedRouter {
