@@ -670,7 +670,10 @@ ALWI void matmul_block_llk(
     const std::uint32_t rt_dim,
     const std::uint32_t kt_dim,
     const std::uint32_t held_a = matmul_held_a_init) {
-    constexpr bool one_tile_key = block_rt == 1 && block_ct == 1;
+    // a constant 1x1 call, or a kernel whose every init and call is a constant one-tile block (marks 13 without 14)
+    using K = std::integral_constant<std::uint32_t, block_rt + kt_key>;
+    constexpr bool one_tile_key = (block_rt == 1 && block_ct == 1) ||
+                                  (matmul_fe_mark::is_used_d<13, K>(0) && !matmul_fe_mark::is_used_d<14, K>(0));
     UNPACK(
         (llk_unpack_AB_matmul < unpack_ttsync,
          kt_key,
