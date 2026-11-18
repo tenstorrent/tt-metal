@@ -625,7 +625,11 @@ class Hy4Chain:
         w = ttnn.add(ttnn.sigmoid(ttnn.add(ttnn.multiply(m, self.hh_scale), self.hh_base)), self.cfg.hc_eps)
         w = ttnn.permute(ttnn.to_layout(w, ttnn.ROW_MAJOR_LAYOUT), (0, 3, 2, 1))  # [1,4,n,1]
         w = ttnn.to_layout(w, ttnn.TILE_LAYOUT)
-        h = ttnn.sum(ttnn.multiply(x4, w), dim=1, keepdim=True)  # [1,1,n,D] fp32
+        if os.environ.get("HY4_B49_IHC", "0") != "0" and os.environ.get("HY4_B49_COLLAPSE", "1") != "0":
+            # B49 on the HEAD too: the stock ttnn.sum over the stream dim allocates the tile-padded 402 MB temporary (512x32x6144x4 B) that OOMed mega0's first request with 125 MB/bank free
+            h = Hy4IHCGen.collapse(x4, w)  # sum_i w_i x_i as 4 slice*mul + 3 adds, w [1,4,n,1]
+        else:
+            h = ttnn.sum(ttnn.multiply(x4, w), dim=1, keepdim=True)  # [1,1,n,D] fp32
         if os.environ.get("HY4_NORM", "exact") == "exact":
             hn = rms_exact(h, self.final_norm32, self.cfg.rms_norm_eps)
         else:
