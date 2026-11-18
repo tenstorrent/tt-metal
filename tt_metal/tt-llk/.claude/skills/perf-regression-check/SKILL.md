@@ -72,7 +72,11 @@ Show the verdict, the top regressions, and the improvements if any. Point at
 - Comparison is **per (marker, sweep-config)** on `mean(<run_type>)` cycles, median across
   iterations. A point exists on both sides or it is a "new point" (no baseline).
 - Treat match coverage as part of the verdict. A changed schema or
-  configuration column changes the point key. When no point matches, the
+  configuration column changes the point key. `perf/regression_compare.py`
+  reads `tests/python_tests/helpers/perf/test_schemas.py` and maps old test
+  names (`test_name_aliases`) and old column names (`aliases`) to the current
+  ones on both sides before keying points, so a rename recorded there still
+  matches an older baseline. An unrecorded rename does not. When no point matches, the
   compare exits with "No points compared" before writing a report: that is a
   key mismatch, not a crash. When only a few points match, a clean verdict
   covers just those points. In the multi-module CI gate, one module can lose

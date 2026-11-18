@@ -71,6 +71,10 @@ comparison.
   `helpers/perf/test_schemas.py`, not a CSV column. Bump it once per PR,
   relative to main, when the module's columns change. Rows from different
   versions are not comparable.
+- A renamed column or module stays comparable with older baselines only
+  through the catalog: `aliases` (old column -> new) and `test_name_aliases`
+  (old module -> current). `perf/regression_compare.py` reads both from
+  `helpers/perf/test_schemas.py` and stops if the file is missing.
 - A `tile_cnt` accounting change makes rows incomparable without a version
   bump. When `tile_cnt` counts both operand tiles of a two-operand kernel,
   per-tile `MATH_ISOLATE` is about half a result tile; that halving is not a
