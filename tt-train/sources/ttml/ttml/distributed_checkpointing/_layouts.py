@@ -40,9 +40,6 @@ class Side(IntEnum):
 
 _LENGTH = 2  # index of the length in a (device_start, canonical_start, length) triple
 
-# How a load fills padding rows that have no canonical source. Zeros is the only fill the loader implements.
-PAD_FILLS = ("zeros",)
-
 
 @dataclass(frozen=True)
 class Identity:
@@ -79,21 +76,18 @@ class Pad:
     logical ones and so sits in the last shards.
 
     Padding rows are written to the checkpoint, so a same-layout load (identical transform and global shape) restores
-    them bit for bit. On any other load the destination's padding rows are filled per ``fill``, even when its padded
-    extent equals the saved one: the planner copies device rows directly only when the whole layout is unchanged.
+    them bit for bit. On any other load the destination's padding rows are zeros, even when its padded extent equals
+    the saved one: the planner copies device rows directly only when the whole layout is unchanged.
     """
 
     kind: ClassVar[str] = "pad"
     dim: int
     logical: int
     padded: int
-    fill: str = "zeros"
 
     def __post_init__(self) -> None:
         if not 0 <= self.logical <= self.padded:
             raise LayoutError(f"pad: logical extent {self.logical} must be within [0, padded={self.padded}]")
-        if self.fill not in PAD_FILLS:
-            raise LayoutError(f"pad: fill {self.fill!r} is not one of {list(PAD_FILLS)}")
 
     def to_canonical(self, box: Box) -> list[Piece]:
         lo = box.offsets[self.dim]
@@ -125,7 +119,7 @@ class Pad:
         return [Box.whole(global_shape).with_dim(self.dim, self.logical, self.padded - self.logical)]
 
     def to_json(self) -> dict:
-        return {"kind": "pad", "dim": self.dim, "logical": self.logical, "padded": self.padded, "fill": self.fill}
+        return {"kind": "pad", "dim": self.dim, "logical": self.logical, "padded": self.padded}
 
 
 @dataclass(frozen=True)
@@ -198,7 +192,7 @@ def transform_from_json(value: dict) -> Transform:
     if kind == "identity":
         return Identity()
     if kind == "pad":
-        return Pad(int(value["dim"]), int(value["logical"]), int(value["padded"]), str(value["fill"]))
+        return Pad(int(value["dim"]), int(value["logical"]), int(value["padded"]))
     if kind == "segments":
         return Segments(int(value["dim"]), tuple(tuple(int(x) for x in t) for t in value["map"]))
     raise LayoutError(f"unknown transform kind {kind!r}")
@@ -250,11 +244,11 @@ def fused_segments(dim: int, sizes: Sequence[int], shards: int) -> Transform:
     return Segments(dim, tuple(triples))
 
 
-def padded_extent(dim: int, logical: int, padded: int, fill: str = "zeros") -> Transform:
+def padded_extent(dim: int, logical: int, padded: int) -> Transform:
     """``Pad`` when the extent is padded, the identity when it is not."""
     if padded == logical:
         return Identity()
-    return Pad(dim, logical, padded, fill)
+    return Pad(dim, logical, padded)
 
 
 def declared_transform(

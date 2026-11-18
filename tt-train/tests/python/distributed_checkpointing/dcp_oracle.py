@@ -132,7 +132,6 @@ class FakeCheckpoint:
                 chunk = np.frombuffer(bytes(raw), dtype=np.float32).reshape(record.box.sizes)
                 out[read.group][read.dst.slices()] = chunk[read.src.slices()]
             for fill in kplan.fills:
-                assert fill.fill == "zeros"
                 out[fill.group][fill.dst.slices()] = 0.0
             for group, arr in out.items():
                 assert not np.isnan(arr).any(), f"{key}: shard {group} not fully written"

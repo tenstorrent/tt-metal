@@ -90,18 +90,13 @@ def test_pad_clips_to_the_logical_extent_and_reports_padding(expect_error):
     with expect_error(LayoutError, "logical extent 200 must be within"):
         Pad(2, logical=200, padded=192)
     assert isinstance(padded_extent(2, 64, 64), Identity)
-    # Zeros is the only fill a load implements, so another is refused where the transform is built or read.
-    with expect_error(LayoutError, "pad: fill 'ones' is not one of"):
-        Pad(2, 130, 192, "ones")
-    with expect_error(LayoutError, "pad: fill 'ones' is not one of"):
-        transform_from_json({"kind": "pad", "dim": 2, "logical": 130, "padded": 192, "fill": "ones"})
 
 
 @pytest.mark.parametrize(
     "transform",
     [
         Identity(),
-        Pad(2, 130, 192, "zeros"),
+        Pad(2, 130, 192),
         fused_segments(2, (4, 2, 2), 2),
     ],
 )

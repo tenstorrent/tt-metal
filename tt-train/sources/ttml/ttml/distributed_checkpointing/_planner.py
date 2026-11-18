@@ -16,7 +16,7 @@ the checkpoint's device layout through the inverse of the saved transform, and i
 Each overlap is one read: a sub-box of a chunk copied into a sub-box of the destination shard. When the saved and
 destination layouts are the same (same transform and global shape) the boxes meet in device coordinates directly,
 so a same-topology resume reads every shard whole, padding rows included. Destination padding rows that no chunk
-covers are filled per the transform's ``fill``. The reads and fills must tile every destination shard exactly: the
+covers are fills, which load as zeros. The reads and fills must tile every destination shard exactly: the
 saved chunks are checked to tile their global shape once per key, after which a shard's reads cannot overlap and
 only their total volume is left to check.
 """
@@ -40,7 +40,7 @@ from ._errors import (
     TopologyError,
 )
 from ._index import FORMAT, VERSION, ChunkRecord, Entry, Index
-from ._layouts import Pad, Transform
+from ._layouts import Transform
 from ._safetensors import ITEMSIZE, build_header
 from ._topology import (
     Chunk,
@@ -261,10 +261,11 @@ class ReadItem:
 
 @dataclass
 class FillItem:
+    """Zeros for ``dst`` (a box local to the destination shard): padding rows no saved chunk covers."""
+
     key: str
     dst: Box
     group: tuple[int, ...]
-    fill: str
 
 
 @dataclass
@@ -287,12 +288,6 @@ class LoadPlan:
     @property
     def fast_path_keys(self) -> list[str]:
         return [k for k, p in self.keys.items() if p.fast_path]
-
-
-def _padding_fill(transform: Transform) -> str:
-    if isinstance(transform, Pad):
-        return transform.fill
-    return "zeros"
 
 
 class _ChunkLookup:
@@ -369,9 +364,7 @@ def plan_key(entry: Entry, info: TensorInfo, local_coords: set[tuple[int, ...]] 
             for pad_box in info.transform.padding_boxes(dest_global):
                 overlap = pad_box.intersect(dbox)
                 if overlap is not None:
-                    group_fills.append(
-                        FillItem(info.key, overlap.relative_to(dbox), group, _padding_fill(info.transform))
-                    )
+                    group_fills.append(FillItem(info.key, overlap.relative_to(dbox), group))
         if fast and saved_boxes.get(dbox) is None:
             fast = False
         for d_piece, s_piece in pieces:
