@@ -73,7 +73,6 @@ DB_SCHEMA = [
     Column("formats.sfpu_dst", "string", True, "formats"),
     # flags
     Column("dest_acc", "string", True, "flags"),
-    Column("scale_bf16", "int64", True, "configuration"),
     Column("sdpa_op", "string", True, "configuration"),
     Column("softplus_beta_bits", "int64", True, "configuration"),
     Column("softplus_beta_reciprocal_bits", "int64", True, "configuration"),
