@@ -543,13 +543,8 @@ def _legacy_config(memory_layout, buffer_type, cores, shard_shape):
     return ttnn.MemoryConfig(memory_layout, buffer_type, spec)
 
 
-def _nd_config(cores, shard_shape):
-    spec = ttnn.NdShardSpec(
-        ttnn.Shape(shard_shape),
-        _grid(cores),
-        ttnn.ShardOrientation.ROW_MAJOR,
-        ttnn.ShardDistributionStrategy.CONTIGUOUS_1D,
-    )
+def _nd_config(cores, shard_shape, strategy=ttnn.ShardDistributionStrategy.CONTIGUOUS_1D):
+    spec = ttnn.NdShardSpec(ttnn.Shape(shard_shape), _grid(cores), ttnn.ShardOrientation.ROW_MAJOR, strategy)
     return ttnn.MemoryConfig(ttnn.BufferType.L1, spec)
 
 
@@ -559,6 +554,7 @@ HEIGHT, WIDTH, BLOCK = (
     ttnn.TensorMemoryLayout.BLOCK_SHARDED,
 )
 L1, DRAM = ttnn.BufferType.L1, ttnn.BufferType.DRAM
+ROUND_ROBIN = ttnn.ShardDistributionStrategy.ROUND_ROBIN_1D
 TWO_CORES, SQUARE, ONE_CORE = ((0, 0), (1, 0)), ((0, 0), (1, 1)), ((0, 0), (0, 0))
 
 
@@ -575,9 +571,10 @@ TWO_CORES, SQUARE, ONE_CORE = ((0, 0), (1, 0)), ((0, 0), (1, 1)), ((0, 0), (0, 0
         ((1, 4, 8, 24), ttnn.float32, _legacy_config(WIDTH, L1, TWO_CORES, [32, 16])),
         ((1, 4, 8, 48), ttnn.bfloat16, _legacy_config(WIDTH, DRAM, TWO_CORES, [32, 32])),
         ((1, 4, 8, 24), ttnn.bfloat16, _legacy_config(BLOCK, L1, SQUARE, [16, 16])),
-        ((1, 4, 8, 3), ttnn.bfloat16, _nd_config(TWO_CORES, [1, 2, 8, 8])),
-        ((1, 4, 8, 24), ttnn.bfloat16, _nd_config(TWO_CORES, [1, 4, 8, 16])),
-        ((1, 12, 6, 1), ttnn.bfloat16, _nd_config(ONE_CORE, [1, 12, 12, 16])),
+        # Round-robin ND inputs keep these cases independent of the device grid, which decides whether fold stages them.
+        ((1, 4, 8, 3), ttnn.bfloat16, _nd_config(TWO_CORES, [1, 2, 8, 8], ROUND_ROBIN)),
+        ((1, 4, 8, 24), ttnn.bfloat16, _nd_config(TWO_CORES, [1, 4, 8, 16], ROUND_ROBIN)),
+        ((1, 12, 6, 1), ttnn.bfloat16, _nd_config(ONE_CORE, [1, 12, 12, 16], ROUND_ROBIN)),
     ],
     ids=[
         "height_l1_c3",
