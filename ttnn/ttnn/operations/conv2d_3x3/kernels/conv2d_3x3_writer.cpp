@@ -143,7 +143,9 @@ void kernel_main() {
     constexpr uint32_t slab_tile_rows = get_compile_time_arg_val(61);
     constexpr uint32_t untilize_batch_rows = get_compile_time_arg_val(62);
     constexpr uint32_t input_tile_depth_batches = get_compile_time_arg_val(63);
-    constexpr auto weight_args = TensorAccessorArgs<64>();
+    // Ring slab (see the reader): every M-block streams the input tile-rows [max(previous hi, lo), hi) of its window.
+    constexpr bool ring_slab = get_compile_time_arg_val(64) != 0;
+    constexpr auto weight_args = TensorAccessorArgs<65>();
     [[maybe_unused]] constexpr auto bias_args = TensorAccessorArgs<weight_args.next_compile_time_args_offset()>();
     [[maybe_unused]] constexpr auto output_args = TensorAccessorArgs<bias_args.next_compile_time_args_offset()>();
     [[maybe_unused]] constexpr auto input_args = TensorAccessorArgs<output_args.next_compile_time_args_offset()>();
@@ -210,10 +212,63 @@ void kernel_main() {
     [[maybe_unused]] uint32_t fill_plan_m = 0xFFFFFFFF;
     [[maybe_unused]] uint32_t fill_served = 0;
     [[maybe_unused]] conv2d_3x3::TileSlabPlan fill_plan;
+    // Ring slab: the cursor block's first streamed row, its row end and batch count, the kernel batches before it, and
+    // the previous block's window end.
+    [[maybe_unused]] uint32_t ring_push_lo = 0;
+    [[maybe_unused]] uint32_t ring_hi = 0;
+    [[maybe_unused]] uint32_t ring_batches = 0;
+    [[maybe_unused]] uint32_t ring_batch_base = 0;
+    [[maybe_unused]] int32_t ring_prev_hi = -1;
     conv2d_3x3::TaggedReads<false> fill_reads;
     constexpr uint32_t TRID_FILL = 6;
     // Moves the cursor to the next batch holding higher shards' rows; false past the last block.
     [[maybe_unused]] auto fill_next = [&]() -> bool {
+        if constexpr (ring_slab) {
+            while (fill_m < num_m_blocks_this_core) {
+                if (fill_plan_m != fill_m) {
+                    const uint32_t block_tiles_done = fill_m * block_m_tiles;
+                    const uint32_t block_valid_tiles = actual_m_tiles - block_tiles_done < block_m_tiles
+                                                           ? actual_m_tiles - block_tiles_done
+                                                           : block_m_tiles;
+                    const uint32_t first = (m_tile_start + block_tiles_done) * 32;
+                    const uint32_t end_tiles = first + block_valid_tiles * 32;
+                    const conv2d_3x3::RingWindow win =
+                        conv2d_3x3::ring_window<input_width, input_height * input_width, dilation>(
+                            conv2d_3x3::
+                                block_footprint<output_width, input_width, stride, padding, dilation, band_last_tap>(
+                                    first, end_tiles < num_out_px ? end_tiles : num_out_px));
+                    const int32_t keep_lo = conv2d_3x3::ring_keep_lo<
+                        output_width,
+                        input_width,
+                        stride,
+                        padding,
+                        dilation,
+                        band_last_tap,
+                        input_height * input_width,
+                        num_out_px,
+                        block_m_tiles>(m_tile_start, actual_m_tiles, fill_m, num_m_blocks_this_core);
+                    ring_batch_base += ring_batches;
+                    const int32_t push_lo = ring_prev_hi > keep_lo ? ring_prev_hi : keep_lo;
+                    ring_push_lo = static_cast<uint32_t>(push_lo);
+                    ring_hi = static_cast<uint32_t>(win.hi > push_lo ? win.hi : push_lo);
+                    ring_batches = (ring_hi - ring_push_lo + untilize_batch_rows - 1) / untilize_batch_rows;
+                    ring_prev_hi = win.hi > ring_prev_hi ? win.hi : ring_prev_hi;
+                    fill_plan_m = fill_m;
+                }
+                if (fill_b < ring_batches) {
+                    const uint32_t row_end = ring_push_lo + (fill_b + 1) * untilize_batch_rows;
+                    if ((row_end < ring_hi ? row_end : ring_hi) > fill_hi_row) {
+                        return true;
+                    }
+                    ++fill_b;
+                }
+                if (fill_b >= ring_batches) {
+                    fill_b = 0;
+                    ++fill_m;
+                }
+            }
+            return false;
+        }
         while (fill_m < num_m_blocks_this_core) {
             if (fill_plan_m != fill_m) {
                 const uint32_t block_tiles_done = fill_m * block_m_tiles;
@@ -243,6 +298,31 @@ void kernel_main() {
     [[maybe_unused]] auto fill_one = [&]() {
         MaybeDeviceZoneScope("writer_fill");
         const auto input = TensorAccessor(input_args, input_addr, input_page_bytes);
+        if constexpr (ring_slab) {
+            const uint32_t slot =
+                fill_ring_base + ((ring_batch_base + fill_b) % input_tile_depth_batches) * fill_batch_bytes;
+            const uint32_t row0 = ring_push_lo + fill_b * untilize_batch_rows;
+            const uint32_t row_end_b = row0 + untilize_batch_rows;
+            const uint32_t row_end = row_end_b < ring_hi ? row_end_b : ring_hi;
+            const uint32_t lo = row0 > fill_hi_row ? row0 : fill_hi_row;
+            fill_reads.begin(TRID_FILL);
+            uint32_t l1 = slot + (lo - row0) * fill_row_bytes;
+            for (uint32_t page = lo * fill_c_in_tiles, end_page = row_end * fill_c_in_tiles; page < end_page;) {
+                const uint32_t run = input.num_contiguous_pages(page, end_page);
+                fill_reads.read(input.get_noc_addr(page), l1, run * input_page_bytes);
+                page += run;
+                l1 += run * input_page_bytes;
+            }
+            fill_reads.wait(TRID_FILL);
+            dataflow_kernel_lib::set_read_trid(fill_reads.noc, 0);
+            Semaphore<>(slab_fwd_done_sem_id).up(1);
+            ++fill_served;
+            if (++fill_b >= ring_batches) {
+                fill_b = 0;
+                ++fill_m;
+            }
+            return;
+        }
         const uint32_t slot =
             fill_ring_base + ((fill_m * fill_batches_per_block + fill_b) % input_tile_depth_batches) * fill_batch_bytes;
         fill_reads.begin(TRID_FILL);

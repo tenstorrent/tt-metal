@@ -186,7 +186,11 @@ void kernel_main() {
     constexpr uint32_t center_mode = get_compile_time_arg_val(63);
     constexpr uint32_t cb_center_tiles = get_compile_time_arg_val(64);
     constexpr bool center_direct = center_mode != 0;
-    constexpr auto input_args = TensorAccessorArgs<65>();
+    // Ring slab (the descriptor's ring_capable): cb_halo_slab is a FIFO ring of
+    // slab_tile_rows consecutive input tile-rows across M-blocks. Each M-block streams only the rows past the previous
+    // block's window and pops only the rows below its own window; every band gathers at one base and wraps.
+    constexpr bool ring_slab = get_compile_time_arg_val(65) != 0;
+    constexpr auto input_args = TensorAccessorArgs<66>();
     static_assert(!alias_slab_combine || nslice_outer, "only the N-slice-outer walk aliases the slab");
 
     const uint32_t input_addr = get_arg_val<uint32_t>(0);
@@ -216,7 +220,11 @@ void kernel_main() {
     static_assert((c_in * ELEM_BYTES) % 16 == 0, "per-tap copies move whole 16 B L1 words");
     static_assert(!tile_input || (c_in_p % TILE_DIM) == 0, "TILE slab rows are whole tile columns");
     static_assert(tile_input || input_page_bytes == pixel_bytes, "ROW_MAJOR: one input page is one slab pixel");
-    static_assert(!tile_input || (slab_tile_rows % untilize_batch_rows) == 0, "slab is whole untilize batches");
+    static_assert(
+        !tile_input || ring_slab || (slab_tile_rows % untilize_batch_rows) == 0, "slab is whole untilize batches");
+    static_assert(
+        !ring_slab || (tile_input && tap_major && !face_direct && !channel_slice && !nslice_outer && !strided_window),
+        "ring slab: TILE input, the tap-major gather on the K-blocked walk");
     static_assert(!channel_slice || input_shard_rows > 0, "a channel slice is read in owner-shard runs");
     static_assert(
         !slab_split || (!tile_input && !channel_slice && input_shard_rows > 0),
@@ -269,7 +277,8 @@ void kernel_main() {
         dilation,
         c_in_p,
         block_k_tiles,
-        center_mode == 2 ? 1 : -1>;
+        center_mode == 2 ? 1 : -1,
+        ring_slab ? static_cast<int32_t>(slab_tile_rows * TILE_DIM) : 0>;
     using WindowT = conv2d_3x3::WindowGather<output_width, input_height, input_width, padding, c_in_p>;
     // The unit address word compute tilizes from: the last 16 B of the unit's cb_im2col_rm pages.
     constexpr uint32_t window_header_offset = block_k_tiles * TILE_DIM * TILE_DIM * ELEM_BYTES - 16;
@@ -403,6 +412,10 @@ void kernel_main() {
     };
 
     [[maybe_unused]] uint32_t fill_batches_handed = 0;  // split TILE fill: batches handed to the writer
+    // Ring slab: the input tile-row at the slab CB's front, its ring slot, and one past the last row pushed.
+    [[maybe_unused]] int32_t ring_front_row = 0;
+    [[maybe_unused]] uint32_t ring_front_slot = 0;
+    [[maybe_unused]] int32_t ring_pushed_hi = 0;
     for (uint32_t m_block_idx = 0; m_block_idx < num_m_blocks_this_core; ++m_block_idx) {
         const uint32_t block_tiles_done = m_block_idx * block_m_tiles;
         const uint32_t block_valid_tiles =
@@ -417,7 +430,79 @@ void kernel_main() {
         int32_t slab_x_base[3];
         [[maybe_unused]] uint32_t slab_ready_pages[3];  // TILE: slab pages that hold band kh once compute pushed them
 
-        if constexpr (tile_input) {
+        if constexpr (ring_slab) {
+            // ---- fill_halo_slab (ring): pop the rows below this block's window (the previous block's gather is done),
+            // then stream the window's rows past the last row pushed, in batches; a short last batch is pushed whole
+            // and compute pops its unread tail.
+            MaybeDeviceZoneScope("reader_fill");
+            const conv2d_3x3::RingWindow win = conv2d_3x3::ring_window<input_width, num_in_px, dilation>(footprint);
+            // The lowest row this and every later block reads: the ring keeps [keep_lo, ...).
+            const int32_t keep_lo = conv2d_3x3::ring_keep_lo<
+                output_width,
+                input_width,
+                stride,
+                padding,
+                dilation,
+                band_last_tap,
+                num_in_px,
+                num_out_px,
+                block_m_tiles>(m_tile_start, actual_m_tiles, m_block_idx, num_m_blocks_this_core);
+            if (m_block_idx == 0) {
+                ring_front_row = keep_lo;
+                ring_pushed_hi = keep_lo;
+            } else {
+                const int32_t keep = keep_lo < ring_pushed_hi ? keep_lo : ring_pushed_hi;
+                const uint32_t dead = static_cast<uint32_t>(keep - ring_front_row);
+                if (dead > 0) {
+                    cb_wait_front(cb_halo_slab, dead * c_in_tiles);
+                    cb_pop_front(cb_halo_slab, dead * c_in_tiles);
+                }
+                // dead <= the ring's rows <= slab_tile_rows: one wrap at most.
+                ring_front_slot += dead;
+                if (ring_front_slot >= slab_tile_rows) {
+                    ring_front_slot -= slab_tile_rows;
+                }
+                // Past a gap the ring is empty, and its next row lands at the front slot.
+                ring_front_row = keep_lo;
+            }
+            const int32_t push_lo = ring_pushed_hi > keep_lo ? ring_pushed_hi : keep_lo;
+            const uint32_t new_rows = win.hi > push_lo ? static_cast<uint32_t>(win.hi - push_lo) : 0;
+            constexpr uint32_t batch_pages = untilize_batch_rows * c_in_tiles;
+            for (uint32_t done = 0; done < new_rows; done += untilize_batch_rows) {
+                const uint32_t rows = new_rows - done < untilize_batch_rows ? new_rows - done : untilize_batch_rows;
+                const uint32_t row0 = static_cast<uint32_t>(push_lo) + done;
+                {
+                    MaybeDeviceZoneScope("reader_fill_reserve");
+                    cb_reserve_back(cb_input_tiles, batch_pages);
+                }
+                [[maybe_unused]] bool writer_rows = false;
+                if constexpr (tile_fill_split) {
+                    writer_rows = row0 + rows > (my_shard + 1) * input_shard_rows;
+                    if (writer_rows) {
+                        Semaphore<>(slab_free_sem_id).up(1);
+                    }
+                }
+                reads.begin(TRID_INPUT_TILES);
+                read_rows(row0, row0 + rows, get_write_ptr(cb_input_tiles));
+                reads.wait(TRID_INPUT_TILES);
+                if constexpr (tile_fill_split) {
+                    if (writer_rows) {
+                        MaybeDeviceZoneScope("reader_fill_fwd_wait");
+                        Semaphore<>(slab_fwd_done_sem_id).wait_min(++fill_batches_handed);
+                    }
+                }
+                cb_push_back(cb_input_tiles, batch_pages);
+            }
+            ring_pushed_hi = win.hi > ring_pushed_hi ? win.hi : ring_pushed_hi;
+            // Pixel v sits at ring pixel v + base, reduced into the ring by the gather (one wrap at most).
+            const int32_t base =
+                static_cast<int32_t>(TILE_DIM) * (static_cast<int32_t>(ring_front_slot) - ring_front_row);
+            for (int32_t kh = 0; kh < 3; ++kh) {
+                slab_x_base[kh] = base;
+                slab_ready_pages[kh] =
+                    win.band_hi[kh] > 0 ? static_cast<uint32_t>(win.band_hi[kh] - ring_front_row) * c_in_tiles : 0;
+            }
+        } else if constexpr (tile_input) {
             // ---- fill_halo_slab (TILE): plan the slab rows, then stream input tile-rows in slab order.
             MaybeDeviceZoneScope("reader_fill");
             conv2d_3x3::TileSlabPlan plan;
@@ -801,7 +886,7 @@ void kernel_main() {
             // Compute tilizes slab runs in place: the slab is dead only once compute popped every unit.
             cb_reserve_back(cb_im2col_rm, im2col_rm_depth_rows * block_k_tiles);
         }
-        if constexpr (tile_input) {
+        if constexpr (tile_input && !ring_slab) {
             constexpr uint32_t slab_pages = slab_tile_rows * c_in_tiles;
             cb_wait_front(cb_halo_slab, slab_pages);
             cb_pop_front(cb_halo_slab, slab_pages);

@@ -306,6 +306,8 @@ struct GatherUnits {
 // pixels of one output image row read consecutive slab pixels, so each in-image run is one read; out-of-image pixels
 // read a 32-pixel zero block at zero_src_noc, one read per run. skip_kw (>= 0): that tap's block is left unwritten
 // (center-tap direct: the reader writes its in0 tiles itself).
+// ring_px (> 0, ring slab): the slab is a ring of ring_px pixels and slab_x_base_kh places the band in [0, 2 *
+// ring_px), so a slab run past the ring end continues at its start (one wrap at most): it is read in two pieces.
 template <
     uint32_t output_width,
     int32_t input_height,
@@ -314,14 +316,67 @@ template <
     int32_t dilation,
     uint32_t c_in_p,
     uint32_t block_k_tiles,
-    int32_t skip_kw = -1>
+    int32_t skip_kw = -1,
+    int32_t ring_px = 0>
 struct TapMajorGather {
     static constexpr uint32_t TILE_DIM = 32;
     static constexpr uint32_t pixel_bytes = c_in_p * 2;
     static constexpr uint32_t tap_cols = 3 * c_in_p;
 
+    // Slab pixels [x, x + n) into dst; with wrap, x in [0, 2 * ring_px) and the run may cross the ring end.
+    template <bool wrap, typename Reads>
+    FORCE_INLINE static void slab_run(Reads& reads, uint64_t slab_noc, int32_t x, uint32_t dst, int32_t n) {
+        if constexpr (wrap && ring_px > 0) {
+            if (x >= ring_px) {
+                x -= ring_px;
+            }
+            if (x + n > ring_px) {
+                const int32_t first = ring_px - x;
+                reads.read(slab_noc + x * pixel_bytes, dst, first * pixel_bytes);
+                reads.read(slab_noc, dst + first * pixel_bytes, (n - first) * pixel_bytes);
+                return;
+            }
+        }
+        reads.read(slab_noc + x * pixel_bytes, dst, n * pixel_bytes);
+    }
+
+    // Ring: the tile-row's slab pixels of kernel row kh (any tap, padding included) lie in [x_lo, x_hi). Only a
+    // tile-row whose range crosses the ring end takes the per-read wrap; the others read at a base reduced into the
+    // ring once, exactly as without the ring.
     template <typename Reads>
     FORCE_INLINE static void tile_row(
+        Reads& reads,
+        uint64_t slab_noc,
+        uint64_t zero_src_noc,
+        uint32_t rows_l1,
+        uint32_t o,
+        uint32_t o_end,
+        int32_t kh,
+        uint32_t col_lo,
+        int32_t slab_x_base_kh) {
+        if constexpr (ring_px > 0) {
+            const uint32_t last = (o + TILE_DIM < o_end ? o + TILE_DIM : o_end) - 1;
+            const int32_t row_shift = kh * dilation - padding;
+            const int32_t x_lo = slab_x_base_kh + (static_cast<int32_t>(o / output_width) + row_shift) * input_width +
+                                 static_cast<int32_t>(o % output_width) - padding;
+            const int32_t x_hi = slab_x_base_kh +
+                                 (static_cast<int32_t>(last / output_width) + row_shift) * input_width +
+                                 static_cast<int32_t>(last % output_width) - padding + 2 * dilation + 1;
+            if (x_hi <= ring_px) {
+                tile_row_impl<false>(reads, slab_noc, zero_src_noc, rows_l1, o, o_end, kh, col_lo, slab_x_base_kh);
+            } else if (x_lo >= ring_px) {
+                tile_row_impl<false>(
+                    reads, slab_noc, zero_src_noc, rows_l1, o, o_end, kh, col_lo, slab_x_base_kh - ring_px);
+            } else {
+                tile_row_impl<true>(reads, slab_noc, zero_src_noc, rows_l1, o, o_end, kh, col_lo, slab_x_base_kh);
+            }
+        } else {
+            tile_row_impl<false>(reads, slab_noc, zero_src_noc, rows_l1, o, o_end, kh, col_lo, slab_x_base_kh);
+        }
+    }
+
+    template <bool wrap, typename Reads>
+    FORCE_INLINE static void tile_row_impl(
         Reads& reads,
         uint64_t slab_noc,
         uint64_t zero_src_noc,
@@ -357,10 +412,12 @@ struct TapMajorGather {
                     reads.read(zero_src_noc, dst, in_lo * pixel_bytes);
                 }
                 if (in_hi > in_lo) {
-                    reads.read(
-                        slab_noc + (slab_x_base_kh + h_in * input_width + w_lo + in_lo) * pixel_bytes,
+                    slab_run<wrap>(
+                        reads,
+                        slab_noc,
+                        slab_x_base_kh + h_in * input_width + w_lo + in_lo,
                         dst + in_lo * pixel_bytes,
-                        (in_hi - in_lo) * pixel_bytes);
+                        in_hi - in_lo);
                 }
                 if (run > in_hi) {
                     reads.read(zero_src_noc, dst + in_hi * pixel_bytes, (run - in_hi) * pixel_bytes);

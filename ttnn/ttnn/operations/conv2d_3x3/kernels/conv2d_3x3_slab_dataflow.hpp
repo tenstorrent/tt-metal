@@ -100,6 +100,68 @@ FORCE_INLINE void tile_slab_plan(const SlabFootprint& fp, int32_t (&slab_x_base)
     }
 }
 
+// Ring slab (TILE, the descriptor's ring_capable): the in-image input tile-rows [lo, hi) an M-block's three bands
+// touch, and each band's last row + 1 (band_hi, 0 for a band outside the image). The ring holds consecutive input
+// tile-rows across M-blocks; the descriptor's ring_plan mirrors this.
+struct RingWindow {
+    int32_t lo;
+    int32_t hi;
+    int32_t band_hi[3];
+};
+
+template <int32_t input_width, int32_t num_in_px, int32_t dilation>
+FORCE_INLINE RingWindow ring_window(const SlabFootprint& fp) {
+    constexpr int32_t TILE_DIM = 32;
+    RingWindow w{0x7FFFFFFF, 0, {0, 0, 0}};
+    for (int32_t kh = 0; kh < 3; ++kh) {
+        const int32_t v_lo = fp.f + kh * dilation * input_width;
+        const int32_t lo = v_lo > 0 ? v_lo : 0;
+        const int32_t hi = v_lo + fp.band_len < num_in_px ? v_lo + fp.band_len : num_in_px;
+        if (lo >= hi) {
+            continue;
+        }
+        const int32_t t_lo = lo / TILE_DIM;
+        const int32_t t_hi = (hi + TILE_DIM - 1) / TILE_DIM;
+        w.lo = t_lo < w.lo ? t_lo : w.lo;
+        w.hi = t_hi > w.hi ? t_hi : w.hi;
+        w.band_hi[kh] = t_hi;
+    }
+    return w;
+}
+
+// Ring slab: the lowest window row of M-blocks [m_first, num_blocks) of a core, i.e. the rows the ring must still hold
+// (a later block's window may start lower than an earlier one's, e.g. at the image top once band 0 enters the image).
+template <
+    uint32_t output_width,
+    int32_t input_width,
+    int32_t stride,
+    int32_t padding,
+    int32_t dilation,
+    int32_t band_last_tap,
+    int32_t num_in_px,
+    uint32_t num_out_px,
+    uint32_t block_m_tiles>
+FORCE_INLINE int32_t
+ring_keep_lo(uint32_t m_tile_start, uint32_t actual_m_tiles, uint32_t m_first, uint32_t num_blocks) {
+    // A block's window starts at or above its first tap's tile-row (clamped at 0), which never decreases from block to
+    // block: once that bound reaches lo, no later block can lower it.
+    int32_t lo = 0x7FFFFFFF;
+    for (uint32_t m = m_first; m < num_blocks; ++m) {
+        const uint32_t done = m * block_m_tiles;
+        const uint32_t valid = actual_m_tiles - done < block_m_tiles ? actual_m_tiles - done : block_m_tiles;
+        const uint32_t o_first = (m_tile_start + done) * 32;
+        const uint32_t o_end_tiles = o_first + valid * 32;
+        const SlabFootprint fp = block_footprint<output_width, input_width, stride, padding, dilation, band_last_tap>(
+            o_first, o_end_tiles < num_out_px ? o_end_tiles : num_out_px);
+        if ((fp.f > 0 ? fp.f : 0) / 32 >= lo) {
+            break;
+        }
+        const RingWindow w = ring_window<input_width, num_in_px, dilation>(fp);
+        lo = w.lo < lo ? w.lo : lo;
+    }
+    return lo;
+}
+
 // The input tile-rows of slab rows [batch * batch_rows, + batch_rows) in slab order: fn(row0, rows, batch_row) per
 // segment piece, input tile-rows [row0, row0 + rows) landing at row batch_row of the batch. Slab rows past the plan's
 // last segment are unread.

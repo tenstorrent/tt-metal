@@ -310,6 +310,8 @@ class Conv3x3Blocking:
     # holds (2 under CENTER_SLOTS on the K-blocked walk).
     center_mode: int = 0
     center_slot_blocks: int = 1
+    # Ring slab (see ring_capable): slab_tile_rows is then the ring capacity.
+    ring: bool = False
 
     @property
     def slab_px(self):
@@ -598,6 +600,73 @@ def _footprint(
     )
 
 
+def _ring_window(g: Conv3x3Geometry, o_first, o_last):
+    """In-image input tile-rows [lo, hi) the three bands of output pixels [o_first, o_last] touch (mirror of the
+    reader's ring_window), or None when every band is outside the image."""
+    band_len = _block_band_len(g, o_first, o_last)
+    f = _block_first_tap(g, o_first)
+    lo_hi = None
+    for kh in range(3):
+        v_lo = f + kh * g.dilation * g.input_width
+        lo, hi = max(v_lo, 0), min(v_lo + band_len, g.num_in_px)
+        if lo >= hi:
+            continue
+        t_lo, t_hi = lo // TILE, _div_up(hi, TILE)
+        lo_hi = (t_lo, t_hi) if lo_hi is None else (min(lo_hi[0], t_lo), max(lo_hi[1], t_hi))
+    return lo_hi
+
+
+@functools.lru_cache(maxsize=1024)
+def ring_plan(g: Conv3x3Geometry, core_m_tiles, block_m_tiles):
+    """Per core, per M-block: (lo, hi, new_rows) of the ring slab (mirror of the reader / writer). lo is the lowest
+    window row of this and every later block of the core (the rows the ring must still hold: a later block's window may
+    start lower, e.g. at the image top once band 0 enters the image), hi the highest window end so far (a block at the
+    image bottom may end lower), and new_rows = hi - max(previous hi, lo) the rows the block untilizes. None when a
+    block touches no in-image row."""
+    plans = []
+    for start, actual in _core_m_ranges(g.tensor_m_tiles, core_m_tiles):
+        windows = []
+        for block_start in range(0, actual, block_m_tiles):
+            tiles = min(block_m_tiles, actual - block_start)
+            o_first = (start + block_start) * TILE
+            o_last = min((start + block_start + tiles) * TILE, g.num_out_px) - 1
+            w = _ring_window(g, o_first, o_last)
+            if w is None:
+                return None
+            windows.append(w)
+        blocks = []
+        prev_hi = None
+        for m, (_, hi) in enumerate(windows):
+            lo = min(w[0] for w in windows[m:])
+            hi = hi if prev_hi is None else max(prev_hi, hi)
+            push_lo = lo if prev_hi is None else max(prev_hi, lo)
+            blocks.append((lo, hi, hi - push_lo))
+            prev_hi = hi
+        plans.append(tuple(blocks))
+    return tuple(plans)
+
+
+def ring_capable(g: Conv3x3Geometry, bm, bk):
+    """Ring slab: cb_halo_slab is a FIFO ring of consecutive input tile-rows across M-blocks. M-block m+1 untilizes only
+    the rows past M-block m's window, the reader pops only the rows below M-block m+1's window, and the gather wraps at
+    the ring end. Capacity = the largest M-block window (in-image tile-rows from its first band's first row to its last
+    band's last row), taken only from the L1 left at the solved blocking; otherwise one compacted slab per M-block.
+    Needs TILE input, the tap-major gather (the only gather with ring-wrapping reads here) and no K split."""
+    return (
+        g.tile_input
+        and not g.k_split
+        and _tap_major(g, bk)
+        and not face_direct_im2col(g, bk)
+        # The narrow (1-tile) untilize packs whole sections at one address: they would cross the ring end.
+        and g.c_in_tiles > 1
+    )
+
+
+def ring_rows(g: Conv3x3Geometry, core_m_tiles, bm):
+    """Ring capacity: the largest M-block window."""
+    return max(hi - lo for core in ring_plan(g, core_m_tiles, bm) for lo, hi, _ in core)
+
+
 @functools.lru_cache(maxsize=256)
 def select_blocking(g: Conv3x3Geometry, grid, l1_budget) -> Conv3x3Blocking:
     """The one place block extents are chosen. Order of the L1 solve (op_design Mechanism caps #1):
@@ -659,6 +728,15 @@ def select_blocking(g: Conv3x3Geometry, grid, l1_budget) -> Conv3x3Blocking:
                             center_slot_blocks=2 if mode == CENTER_SLOTS else 1,
                             footprint_bytes=fit["footprint_bytes"] + extra,
                         )
+                    # Ring slab: the ring replaces the compacted slab, only from the L1 left after everything else
+                    # (counting it in the solve shrinks blocks for it: measured +34% on a DRAM C_in 512 shape).
+                    if not nslice and ring_capable(g, bm, bk) and ring_plan(g, core_m_tiles, bm) is not None:
+                        ring = ring_rows(g, core_m_tiles, bm)
+                        delta = (ring - fit["slab_tile_rows"]) * g.c_in_tiles * TILE_BYTES_BF16
+                        if fit["footprint_bytes"] + delta <= l1_budget:
+                            fit = dict(
+                                fit, ring=True, slab_tile_rows=ring, footprint_bytes=fit["footprint_bytes"] + delta
+                            )
                     return Conv3x3Blocking(
                         grid_x=grid_x,
                         core_m_tiles=core_m_tiles,
@@ -1039,6 +1117,7 @@ def create_program_descriptor(
             int(window_direct),
             center_mode,
             CB_CENTER_TILES,
+            int(b.ring),
         ]
         args.extend(ttnn.TensorAccessorArgs(input_tensor).get_compile_time_args())
         return args
@@ -1081,6 +1160,7 @@ def create_program_descriptor(
         int(strided_window),
         center_mode,
         CB_CENTER_TILES,
+        int(b.ring),
     ]
 
     writer_ct_args = [
@@ -1146,6 +1226,7 @@ def create_program_descriptor(
         b.slab_tile_rows,
         b.untilize_batch_rows,
         INPUT_TILE_DEPTH_BATCHES,
+        int(b.ring),
     ]
 
     def writer_ct_args_for(slice_channels, split_core=None):
@@ -1220,7 +1301,13 @@ def create_program_descriptor(
             col,
             m_index,
         ] + row_peer_coords.get(m_index, [])
-        compute_rt[core.x][core.y] = [num_m_blocks_this_core, int(out_valid_tiles > 0), col]
+        compute_args = [num_m_blocks_this_core, int(out_valid_tiles > 0), col]
+        if b.ring:
+            # Per M-block: tile-rows to untilize, and the unread tail rows of its last cb_input_tiles batch.
+            ub = b.untilize_batch_rows
+            for _, _, new_rows in ring_plan(g, b.core_m_tiles, bm)[m_index]:
+                compute_args += [new_rows, -new_rows % ub]
+        compute_rt[core.x][core.y] = compute_args
         writer_cores, writer_rt = writer_groups.setdefault(
             (_slice_channels(g, col), split_of(core)), ([], ttnn.RuntimeArgs())
         )

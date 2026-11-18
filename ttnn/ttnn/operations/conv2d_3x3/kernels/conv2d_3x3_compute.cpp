@@ -259,6 +259,10 @@ void kernel_main() {
     constexpr bool strided_window = get_compile_time_arg_val(35) != 0;
     constexpr uint32_t center_mode = get_compile_time_arg_val(36);
     constexpr uint32_t cb_center_tiles = get_compile_time_arg_val(37);
+    // Ring slab (see the reader): M-block m untilizes runtime arg 3 + 2m tile-rows and pops runtime arg 4 + 2m unread
+    // tail rows of its last cb_input_tiles batch.
+    constexpr bool ring_slab = get_compile_time_arg_val(38) != 0;
+    static_assert(!ring_slab || (tile_input && !k_split && !face_direct && c_in_tiles > 1));
     static_assert(center_mode == 0 || (tile_input && !face_direct && !k_split));
 
     const uint32_t num_m_blocks_this_core = get_arg_val<uint32_t>(0);
@@ -405,7 +409,18 @@ void kernel_main() {
             // untilize_footprint: the reader streams slab_tile_rows input tile-rows in slab order.
             MaybeDeviceZoneScope("compute_untilize");
             pack_reconfig_l1_acc(0);
-            if constexpr (untilize_width_tiles == 1) {
+            if constexpr (ring_slab) {
+                const uint32_t rows = get_arg_val<uint32_t>(3 + 2 * m_block_idx);
+                const uint32_t tail_rows = get_arg_val<uint32_t>(4 + 2 * m_block_idx);
+                if (rows > 0) {
+                    ckl::untilize<untilize_width_tiles, cb_input_tiles, cb_halo_slab>(
+                        input_tiles_dfb, halo_slab_dfb, rows);
+                }
+                if (tail_rows > 0) {
+                    input_tiles_dfb.wait_front(tail_rows * c_in_tiles);
+                    input_tiles_dfb.pop_front(tail_rows * c_in_tiles);
+                }
+            } else if constexpr (untilize_width_tiles == 1) {
                 // Raw LLK on a measured win (see conv2d_3x3_narrow_untilize.hpp): the helper's 1-wide path is
                 // packer-bound at one DEST section and one CB sync per tile-row.
                 conv2d_3x3::narrow_untilize::untilize_1wide<cb_input_tiles, cb_halo_slab>(
