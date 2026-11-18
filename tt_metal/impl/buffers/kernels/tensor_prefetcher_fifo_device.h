@@ -40,7 +40,6 @@ using tt::tt_metal::TensorPrefetcherTensorLayout;
 // waits on its own transactions instead of every untagged transaction on the dispatch engine, which includes the
 // command queues' traffic.
 inline constexpr uint32_t kTrid = dispatch_noc_trids::tensor_prefetcher_trid(TENSOR_PREFETCHER_KERNEL_INDEX);
-static_assert(fifo::kMaxKernels == dispatch_noc_trids::kTensorPrefetcherMaxKernels, "One id per kernel");
 
 // Every word in the region is shared with the host, the other kernels or the NoC, none of which snoop
 // this core's data cache, so it is always accessed through the uncached L1 alias.
@@ -192,7 +191,8 @@ FORCE_INLINE bool wait_for_signal(
 // sends anything the requests after it name until the signal arrives.
 template <typename ServeRequest>
 FORCE_INLINE void serve_requests(ServeRequest&& serve_request) {
-    // Every read this kernel issues carries its id: the read command buffer keeps the id it is given.
+    // Every read this kernel issues carries its id: the read command buffer keeps the id it is given. The id goes
+    // back to 0 when the kernel stops serving, as a command buffer's id must be 0 at kernel exit.
     noc_async_read_set_trid(kTrid);
     FifoConsumer requests;
     while (volatile tt_l1_ptr fifo::SlotHeader* slot = requests.wait_for_slot()) {
@@ -206,6 +206,7 @@ FORCE_INLINE void serve_requests(ServeRequest&& serve_request) {
                                         ? wait_for_signal(requests, header)
                                         : serve_request(requests, slot);
                 if (!served) {
+                    noc_async_read_set_trid(0);
                     return;
                 }
                 break;
@@ -214,6 +215,7 @@ FORCE_INLINE void serve_requests(ServeRequest&& serve_request) {
         }
         requests.retire_slot();
     }
+    noc_async_read_set_trid(0);
 }
 
 // How one tensor of a PREFETCH slot streams: every receiver of every lane, numbered in lane order. The

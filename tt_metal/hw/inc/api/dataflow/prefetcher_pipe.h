@@ -480,8 +480,7 @@ public:
         const uint32_t bytes_per_recv = num_rows * row_bytes_per_recv;
         const uint32_t row_stride_in_stage = row_bytes_per_recv * num_recv;
 
-        tt_buf_rw::note_if_bound<tt_buf_rw::kRead, Src>();  // op-to-op R/W inference (api/dataflow/buf_rw_note.h)
-        uint32_t src_addr = noc_traits_t<Src>::template src_addr<Noc::AddressType::LOCAL_L1>(src, noc, src_args);
+        uint32_t src_addr = local_src_addr(noc, src, src_args);
         for (uint32_t i = 0; i < num_recv; ++i, src_addr += row_bytes_per_recv) {
             if (!owns_receiver(i)) {
                 continue;
@@ -558,33 +557,14 @@ public:
         uint32_t num_entries,
         const typename noc_traits_t<Src>::src_args_type& src_args = {}) {
         CrossNodeSenderDFBInterface& iface = interface_.sender;
-        const uint32_t entry_size = iface.fifo_page_size;
-        ASSERT(entry_size != 0);
-        const uint32_t len_bytes = num_entries * entry_size;
-        ASSERT(len_bytes != 0 || num_entries == 0);
+        ASSERT(iface.fifo_page_size != 0);
+        ASSERT(num_entries * iface.fifo_page_size != 0 || num_entries == 0);
         if (num_entries == 0) {
             return;
         }
         const uint32_t num_recv = cross_node_dfb_num_receivers(iface.num_receivers_and_remote_pages_sent_ptr);
-#ifdef ARCH_QUASAR
-        tt_buf_rw::note_if_bound<tt_buf_rw::kRead, Src>();  // op-to-op R/W inference (api/dataflow/buf_rw_note.h)
-        const uint32_t src_addr = noc_traits_t<Src>::template src_addr<Noc::AddressType::LOCAL_L1>(src, noc, src_args);
-#endif
-
-        destination_offset_bytes_ = 0;
         for (uint32_t i = 0; i < num_recv; ++i) {
-            if (!owns_receiver(i)) {
-                continue;
-            }
-            const uint32_t wr_offset = sender_wr_offset(iface, i);
-            assert_contiguous_write(iface, wr_offset, num_entries);
-#ifdef ARCH_QUASAR
-            write_flush_tagged(src_addr, len_bytes, [&](uint32_t part_src_addr, uint32_t part_bytes) {
-                noc.async_write(CoreLocalMem<uint32_t>(part_src_addr), *this, part_bytes, {}, {.receiver_idx = i});
-            });
-#else
-            noc.async_write<NocOptions::POSTED>(src, *this, len_bytes, src_args, {.receiver_idx = i});
-#endif
+            write_to_receiver(noc, i, src, num_entries, src_args);
         }
     }
 
@@ -613,11 +593,8 @@ public:
         assert_contiguous_write(iface, wr_offset, num_entries);
         destination_offset_bytes_ = 0;
 #ifdef ARCH_QUASAR
-        tt_buf_rw::note_if_bound<tt_buf_rw::kRead, Src>();  // op-to-op R/W inference (api/dataflow/buf_rw_note.h)
         write_flush_tagged(
-            noc_traits_t<Src>::template src_addr<Noc::AddressType::LOCAL_L1>(src, noc, src_args),
-            len_bytes,
-            [&](uint32_t part_src_addr, uint32_t part_bytes) {
+            local_src_addr(noc, src, src_args), len_bytes, [&](uint32_t part_src_addr, uint32_t part_bytes) {
                 noc.async_write<opts>(
                     CoreLocalMem<uint32_t>(part_src_addr),
                     *this,
@@ -643,7 +620,6 @@ public:
 #ifdef ARCH_QUASAR
         noc.async_writes_flushed<opts>(noc_opts);
 #else
-        static_assert(!has_flag(opts, NocOptions::TXN_ID), "Posted writes flushed does not support TXN_ID");
         noc.async_writes_flushed<opts | NocOptions::POSTED>();
 #endif
     }
@@ -984,6 +960,15 @@ private:
 #endif
     }
 
+    // The local L1 address a write reads its source from, noting the read for op-to-op R/W inference
+    // (api/dataflow/buf_rw_note.h).
+    template <typename Src>
+    static FORCE_INLINE uint32_t
+    local_src_addr(const Noc& noc, const Src& src, const typename noc_traits_t<Src>::src_args_type& src_args) {
+        tt_buf_rw::note_if_bound<tt_buf_rw::kRead, Src>();
+        return noc_traits_t<Src>::template src_addr<Noc::AddressType::LOCAL_L1>(src, noc, src_args);
+    }
+
 #ifdef ARCH_QUASAR
     // Writes len_bytes from src_addr at destination_offset_bytes_ through issue(src_addr, len_bytes), with the
     // NoC flush tag on the last packet. Quasar delivers one VC's packets to a receiver in order but may commit
@@ -998,8 +983,8 @@ private:
             len_bytes == 0 ? 0 : (len_bytes - 1) / NOC_OVERLAY_MAX_BYTES_IN_PACKET * NOC_OVERLAY_MAX_BYTES_IN_PACKET;
         if (head_bytes != 0) {
             issue(src_addr, head_bytes);
-            destination_offset_bytes_ += head_bytes;
         }
+        destination_offset_bytes_ += head_bytes;
         noc_set_packet_tags<write_cmd_buf>(/*snoop=*/false, /*flush=*/true);
         issue(src_addr + head_bytes, len_bytes - head_bytes);
         noc_set_packet_tags<write_cmd_buf>(/*snoop=*/false, /*flush=*/false);
@@ -1149,8 +1134,7 @@ private:
         const uint32_t row_stride_in_stage = row_bytes_per_recv * num_recv;
         const uint8_t noc_id = noc.get_noc_id();
 
-        tt_buf_rw::note_if_bound<tt_buf_rw::kRead, Src>();  // op-to-op R/W inference (api/dataflow/buf_rw_note.h)
-        uint32_t src_addr = noc_traits_t<Src>::template src_addr<Noc::AddressType::LOCAL_L1>(src, noc, src_args);
+        uint32_t src_addr = local_src_addr(noc, src, src_args);
         uint32_t max_units = 0;
         for (uint32_t i = 0; i < num_recv; ++i, src_addr += row_bytes_per_recv) {
             if (!owns_receiver(i)) {

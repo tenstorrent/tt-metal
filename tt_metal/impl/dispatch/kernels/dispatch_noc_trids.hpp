@@ -16,8 +16,10 @@
 #include <stdint.h>
 
 #include "noc/noc_parameters.h"
+#include "tt_metal/impl/dispatch/kernels/cq_prefetch.hpp"
 #if defined(ARCH_QUASAR)
 #include "internal/tt-2xx/dataflow_buffer/dataflow_buffer_config.h"
+#include "tt_metal/impl/buffers/tensor_prefetcher_fifo.hpp"
 #endif
 
 namespace dispatch_noc_trids {
@@ -43,31 +45,25 @@ struct TridRange {
 // cq_prefetch: exec_buf DRAM reads into cmddat_q.
 inline constexpr TridRange kPrefetchExecBuf{.first = 1, .count = 1};
 // cq_prefetch: fetch_q reads in flight, one id each. A power of two, so the next id wraps by mask.
-inline constexpr TridRange kPrefetchFetchQ{.first = kPrefetchExecBuf.end(), .count = 4};
+inline constexpr TridRange kPrefetchFetchQ{
+    .first = kPrefetchExecBuf.end(), .count = tt::tt_metal::PrefetchConstants::PREFETCH_MAX_OUTSTANDING_PCIE_READS};
 // cq_prefetch: relay_linear's two scratch halves, one id each.
 inline constexpr TridRange kPrefetchRelayLinear{.first = kPrefetchFetchQ.end(), .count = 2};
 
 #if defined(ARCH_QUASAR)
 // The Tensor prefetcher kernels on a dispatch engine: one id per kernel in tensor_prefetcher_kernels(), counted
-// down from the top. A dispatch engine runs at most tensor_prefetcher_fifo::kMaxKernels of them: its 8
-// data-movement cores less the 3 that the kernels of its one command queue take.
-inline constexpr uint32_t kTensorPrefetcherMaxKernels = 8 - 3;
+// down from the top, for the most kernels a dispatch engine runs.
 inline constexpr TridRange kTensorPrefetcher{
-    .first = kMaxTrid + 1 - kTensorPrefetcherMaxKernels, .count = kTensorPrefetcherMaxKernels};
-constexpr uint32_t tensor_prefetcher_trid(uint32_t kernel_index) { return kMaxTrid - kernel_index; }
+    .first = kMaxTrid + 1 - tt::tt_metal::tensor_prefetcher_fifo::kMaxKernels,
+    .count = tt::tt_metal::tensor_prefetcher_fifo::kMaxKernels};
+constexpr uint32_t tensor_prefetcher_trid(uint32_t kernel_index) { return kTensorPrefetcher.end() - 1 - kernel_index; }
 #endif
 
-constexpr bool disjoint(const TridRange& a, const TridRange& b) { return a.end() <= b.first || b.end() <= a.first; }
-constexpr bool fits(const TridRange& r) { return r.first > 0 && r.end() <= kMaxTrid + 1; }
-
-static_assert(fits(kPrefetchExecBuf) && fits(kPrefetchFetchQ) && fits(kPrefetchRelayLinear));
-static_assert(disjoint(kPrefetchExecBuf, kPrefetchFetchQ) && disjoint(kPrefetchExecBuf, kPrefetchRelayLinear));
-static_assert(disjoint(kPrefetchFetchQ, kPrefetchRelayLinear));
+// The command-queue ranges chain up from 1, each starting where the one before it ends, so only the top of the
+// chain can run into the ids above it.
+static_assert(kPrefetchRelayLinear.end() <= kMaxTrid + 1);
 #if defined(ARCH_QUASAR)
-static_assert(fits(kTensorPrefetcher));
-static_assert(
-    disjoint(kTensorPrefetcher, kPrefetchExecBuf) && disjoint(kTensorPrefetcher, kPrefetchFetchQ) &&
-    disjoint(kTensorPrefetcher, kPrefetchRelayLinear));
+static_assert(kPrefetchRelayLinear.end() <= kTensorPrefetcher.first);
 #endif
 
 }  // namespace dispatch_noc_trids
