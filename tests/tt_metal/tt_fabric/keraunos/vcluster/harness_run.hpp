@@ -54,8 +54,8 @@ struct HarnessResult {
 // check_harness_manifest() reports a finding, naming every one. Otherwise zeroes each region, launches the nodes,
 // waits up to `timeout` for every node to report kStatusWaitingForGo and writes go, waits up to `timeout` for every
 // node's delivered count, a halt, or the timeout, writes stop, waits for the program, and reads every node's counters.
-// If a node never reaches kStatusWaitingForGo, go is not written; stop is written and the program awaited all the
-// same, so a node that never launched leaves this call blocked in the wait for the program.
+// If a node halts or does not reach kStatusWaitingForGo in time, go is not written; stop is written and the program
+// awaited all the same, so a node that never launched leaves this call blocked in the wait for the program.
 HarnessResult run_harness(
     tt::tt_metal::distributed::MeshDevice& mesh,
     const Manifest& manifest,

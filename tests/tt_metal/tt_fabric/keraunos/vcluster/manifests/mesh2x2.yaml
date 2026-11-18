@@ -1,0 +1,34 @@
+# The 2x2 mesh of SPEC-0012 § Design: two harness nodes on each of tile 0's and tile 1's CCE0. Each device's local link
+# is its port 0 and its noc link its port 1; the predicted counts depend on that numbering.
+version: 1
+router: harness
+devices:
+  - name: D0
+    fabric_chip: 0
+    slots:
+      - {tile: 0, cce: 0, hart: 0, role: router, port: 0}
+    regions:
+      - {tile: 0, cce: 0, base: 0x100000, size: 0x10000}
+  - name: D1
+    fabric_chip: 1
+    slots:
+      - {tile: 0, cce: 0, hart: 1, role: router, port: 0}
+    regions:
+      - {tile: 0, cce: 0, base: 0x110000, size: 0x10000}
+  - name: D2
+    fabric_chip: 2
+    slots:
+      - {tile: 1, cce: 0, hart: 0, role: router, port: 0}
+    regions:
+      - {tile: 1, cce: 0, base: 0x100000, size: 0x10000}
+  - name: D3
+    fabric_chip: 3
+    slots:
+      - {tile: 1, cce: 0, hart: 1, role: router, port: 0}
+    regions:
+      - {tile: 1, cce: 0, base: 0x110000, size: 0x10000}
+links:
+  - {a: {device: D0, port: 0}, b: {device: D1, port: 0}, backend: local}
+  - {a: {device: D2, port: 0}, b: {device: D3, port: 0}, backend: local}
+  - {a: {device: D0, port: 1}, b: {device: D2, port: 1}, backend: noc}
+  - {a: {device: D1, port: 1}, b: {device: D3, port: 1}, backend: noc}

@@ -14,6 +14,7 @@ set(UNIT_TESTS_FABRIC_SRC
     keraunos/vcluster/manifest.cpp
     keraunos/vcluster/descriptors.cpp
     keraunos/vcluster/harness.cpp
+    keraunos/vcluster/harness_run.cpp
     keraunos/vcluster/test_vc_node.cpp
     fabric_router/test_pipeline_builder.cpp
     fabric_router/test_mesh_graph_descriptor.cpp
