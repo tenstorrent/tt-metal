@@ -91,12 +91,15 @@ const Device* device_named(const Manifest& manifest, const std::string& name) {
     return it == manifest.devices.end() ? nullptr : &*it;
 }
 
-// A device's router slots in port order.
+// A device's router slots in port order. Fatal when a router slot has no port, which parse_manifest() refuses.
 std::vector<Slot> routers_by_port(const Device& device) {
     std::vector<Slot> routers;
-    std::copy_if(device.slots.begin(), device.slots.end(), std::back_inserter(routers), [](const Slot& s) {
-        return s.role == SlotRole::Router;
-    });
+    for (const Slot& slot : device.slots) {
+        if (slot.role == SlotRole::Router) {
+            TT_FATAL(slot.port.has_value(), "Device {} has a router slot without a port", device.name);
+            routers.push_back(slot);
+        }
+    }
     std::sort(routers.begin(), routers.end(), [](const Slot& x, const Slot& y) { return *x.port < *y.port; });
     return routers;
 }
@@ -345,7 +348,9 @@ std::string mesh_graph_desc(uint32_t num_chips) {
 
 }  // namespace
 
-GeneratedDescriptors generate_descriptors(
+namespace {
+
+GeneratedDescriptors generate(
     const Manifest& manifest, const std::filesystem::path& package_soc_desc, const std::filesystem::path& out_dir) {
     TT_FATAL(!manifest.devices.empty(), "Manifest::devices is empty; parse_manifest() never returns one");
     const YAML::Node package = load_package(package_soc_desc);
@@ -362,8 +367,16 @@ GeneratedDescriptors generate_descriptors(
         throw DescriptorGenerationError(std::move(rows), std::move(findings));
     }
 
-    std::filesystem::create_directories(out_dir);
+    // TT_METAL_EMU_SOC_DESC lists the SoC descriptors comma-separated, and each env file holds one variable a line.
     const std::filesystem::path dir = std::filesystem::absolute(out_dir);
+    if (dir.string().find_first_of(",\n") != std::string::npos) {
+        TT_THROW(
+            "Output directory {} contains a comma or a newline, which would split TT_METAL_EMU_SOC_DESC", dir.string());
+    }
+    std::filesystem::create_directories(dir);
+    // A rerun that fails partway leaves no env file to point at a mix of new and old descriptors.
+    std::filesystem::remove(dir / kEnvEmuFile);
+    std::filesystem::remove(dir / kEnvMockFile);
     const auto num_devices = static_cast<uint32_t>(manifest.devices.size());
     GeneratedDescriptors generated;
     generated.soc_descs.resize(num_devices);
@@ -396,6 +409,32 @@ GeneratedDescriptors generate_descriptors(
     return generated;
 }
 
+PackageFacts read_package_facts(const std::filesystem::path& package_soc_desc) {
+    const YAML::Node package = load_package(package_soc_desc);
+    PackageFacts facts;
+    for (const auto& entry :
+         package_key(package_key(package, "keraunos", package_soc_desc), "cores", package_soc_desc)) {
+        facts.cores.push_back(CceId{entry["hsio"].as<uint32_t>(), entry["cce"].as<uint32_t>()});
+    }
+    facts.harts_per_cce = MEM_IERISC_LOCAL_HARTS;
+    facts.sram_bytes_per_cce = package_key(package, "eth_l1_size", package_soc_desc).as<uint64_t>();
+    facts.ethernet_tile_pairs = kWiredEthernetTilePairs;
+    return facts;
+}
+
+}  // namespace
+
+// A package value that is missing or of the wrong type surfaces as a YAML::Exception from a read of an entry; it is
+// rethrown naming the package file, with yaml-cpp's line and column of the value.
+GeneratedDescriptors generate_descriptors(
+    const Manifest& manifest, const std::filesystem::path& package_soc_desc, const std::filesystem::path& out_dir) {
+    try {
+        return generate(manifest, package_soc_desc, out_dir);
+    } catch (const YAML::Exception& e) {
+        TT_THROW("The package SoC descriptor {} has an unexpected value: {}", package_soc_desc.string(), e.what());
+    }
+}
+
 std::vector<std::pair<uint32_t, uint32_t>> noc_links(const Manifest& manifest) {
     std::vector<std::pair<uint32_t, uint32_t>> links;
     for (const Link& link : manifest.links) {
@@ -415,16 +454,11 @@ std::vector<std::pair<uint32_t, uint32_t>> noc_links(const Manifest& manifest) {
 }
 
 PackageFacts package_facts(const std::filesystem::path& package_soc_desc) {
-    const YAML::Node package = load_package(package_soc_desc);
-    PackageFacts facts;
-    for (const auto& entry :
-         package_key(package_key(package, "keraunos", package_soc_desc), "cores", package_soc_desc)) {
-        facts.cores.push_back(CceId{entry["hsio"].as<uint32_t>(), entry["cce"].as<uint32_t>()});
+    try {
+        return read_package_facts(package_soc_desc);
+    } catch (const YAML::Exception& e) {
+        TT_THROW("The package SoC descriptor {} has an unexpected value: {}", package_soc_desc.string(), e.what());
     }
-    facts.harts_per_cce = MEM_IERISC_LOCAL_HARTS;
-    facts.sram_bytes_per_cce = package_key(package, "eth_l1_size", package_soc_desc).as<uint64_t>();
-    facts.ethernet_tile_pairs = kWiredEthernetTilePairs;
-    return facts;
 }
 
 }  // namespace tt::tt_fabric::vcluster

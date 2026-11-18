@@ -168,7 +168,6 @@ void add_line_workers(tt::tt_metal::IDevice* device, tt::tt_metal::Program& prog
     }
 }
 
-// A router whose link record the extension set to the NOC kind, and the record as the extension found it.
 // A fabric router as the extension prepared it: its record as found, whether its link is on the NOC, and whether it
 // sends the line's traffic on that link, toward the line's last chip.
 struct PreparedRouter {
@@ -499,12 +498,9 @@ void KeraunosCoLaunchedWorkers::run_line_unicast(const NocLinks& noc_links, cons
         EXPECT_EQ(bytes_of(results), expected_bytes) << role;
     }
 
-    // The path each link took (PLAN-0008 § What 1c showed; SPEC-0011 § The line test, 6). The extension zeroed every
-    // staging word before launch. A router stages a word only in send_dword on a NOC link, whose one router caller is
-    // the packets-sent credit on the sender TX queue (SENDER_TXQ_ID, 0 by default and on this line), so word 0; the
-    // receiving side returns its credits by send_bytes, which stages nothing. The line's traffic runs one way, so the
-    // router that sends its packets on a NOC link holds the packet count in word 0 and every other word of every router
-    // is 0.
+    // The path each link took (SPEC-0011 § The line test, 6): a router stages a word only in send_dword on a NOC link,
+    // for the packets-sent credit on its sender TX queue (word 0); the receiver returns credits by send_bytes, which
+    // stages nothing. That holds for traffic one way along the line, as here: only the sender of a NOC link stages.
     for (const auto& router : routers) {
         const PreparedRouter& prep = prepared_router(router);
         const NocStage stage = read_noc_stage(router.chip, router.virtual_core);
