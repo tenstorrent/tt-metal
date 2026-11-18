@@ -280,14 +280,6 @@ public:
         uint32_t slot,
         const std::string& config) const;
 
-    // Same, in the default context.
-    [[deprecated("Use the overload that takes a MeshDevice instead.")]]
-    std::vector<uint8_t> read_device_chunk(
-        uint32_t layer, uint32_t position, uint32_t slot, uint32_t config_id = 0) const;
-    [[deprecated("Use the overload that takes a MeshDevice instead.")]]
-    std::vector<uint8_t> read_device_chunk(
-        uint32_t layer, uint32_t position, uint32_t slot, const std::string& config) const;
-
     // --- Config introspection ---
 
     // Number of configs ("groups") held by this table.

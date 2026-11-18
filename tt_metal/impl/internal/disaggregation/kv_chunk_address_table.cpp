@@ -24,40 +24,13 @@ namespace tt::tt_metal::internal::disaggregation {
 namespace {
 
 tt::tt_metal::IDevice* resolve_device(
-    const tt::tt_fabric::ControlPlane& cp,
-    const tt::tt_metal::DeviceManager& device_manager,
-    const tt::tt_fabric::FabricNodeId& node_id) {
+    const tt::tt_metal::distributed::MeshDevice& mesh_device, const tt::tt_fabric::FabricNodeId& node_id) {
+    const auto& cp = mesh_device.impl().metal_env().get_control_plane();
     auto chip_id = cp.get_physical_chip_id_from_fabric_node_id(node_id);
-    TT_FATAL(device_manager.is_device_active(chip_id), "Device {} for {} is not active", chip_id, node_id);
-    return device_manager.get_active_device(chip_id);
-}
-
-std::vector<uint8_t> read_device_chunk_impl(
-    const KvChunkAddressTable& table,
-    const tt::tt_fabric::ControlPlane& cp,
-    const tt::tt_metal::DeviceManager* device_manager,
-    uint32_t layer,
-    uint32_t position,
-    uint32_t slot,
-    uint32_t config_id) {
-    const auto loc = table.lookup(layer, position, slot, config_id);
-    const auto& dg = table.get_device_group(loc.device_group_index);
-    TT_FATAL(
-        !dg.fabric_node_ids.empty(),
-        "DeviceGroup for (layer={}, pos={}, slot={}, config={}) is empty",
-        layer,
-        position,
-        slot,
-        config_id);
+    const auto& device_manager = mesh_device.impl().metal_context().device_manager();
     TT_FATAL(device_manager != nullptr, "DeviceManager is not initialized");
-
-    std::vector<uint8_t> buf(loc.size_bytes);
-    tt::tt_metal::slow_dispatch::ReadFromDeviceDRAMChannel(
-        *resolve_device(cp, *device_manager, dg.fabric_node_ids.front()),
-        static_cast<int>(addr_channel(loc.noc_addr)),
-        addr_local(loc.noc_addr),
-        std::span<uint8_t>(buf));
-    return buf;
+    TT_FATAL(device_manager->is_device_active(chip_id), "Device {} for {} is not active", chip_id, node_id);
+    return device_manager->get_active_device(chip_id);
 }
 
 }  // namespace
@@ -428,14 +401,23 @@ std::vector<uint8_t> KvChunkAddressTable::read_device_chunk(
     uint32_t position,
     uint32_t slot,
     uint32_t config_id) const {
-    return read_device_chunk_impl(
-        *this,
-        mesh_device.impl().metal_env().get_control_plane(),
-        mesh_device.impl().metal_context().device_manager().get(),
+    const auto loc = lookup(layer, position, slot, config_id);
+    const auto& dg = get_device_group(loc.device_group_index);
+    TT_FATAL(
+        !dg.fabric_node_ids.empty(),
+        "DeviceGroup for (layer={}, pos={}, slot={}, config={}) is empty",
         layer,
         position,
         slot,
         config_id);
+
+    std::vector<uint8_t> buf(loc.size_bytes);
+    tt::tt_metal::slow_dispatch::ReadFromDeviceDRAMChannel(
+        *resolve_device(mesh_device, dg.fabric_node_ids.front()),
+        static_cast<int>(addr_channel(loc.noc_addr)),
+        addr_local(loc.noc_addr),
+        std::span<uint8_t>(buf));
+    return buf;
 }
 
 std::vector<uint8_t> KvChunkAddressTable::read_device_chunk(
@@ -445,19 +427,6 @@ std::vector<uint8_t> KvChunkAddressTable::read_device_chunk(
     uint32_t slot,
     const std::string& config) const {
     return read_device_chunk(mesh_device, layer, position, slot, resolve_config(config));
-}
-
-std::vector<uint8_t> KvChunkAddressTable::read_device_chunk(
-    uint32_t layer, uint32_t position, uint32_t slot, uint32_t config_id) const {
-    // TODO(#52020): resolves the default context; deprecated in favour of the MeshDevice form.
-    auto& ctx = tt::tt_metal::MetalContext::instance();
-    return read_device_chunk_impl(
-        *this, ctx.get_control_plane(), ctx.device_manager().get(), layer, position, slot, config_id);
-}
-
-std::vector<uint8_t> KvChunkAddressTable::read_device_chunk(
-    uint32_t layer, uint32_t position, uint32_t slot, const std::string& config) const {
-    return read_device_chunk(layer, position, slot, resolve_config(config));
 }
 
 const KvChunkAddressTableConfig& KvChunkAddressTable::config(uint32_t config_id) const {
