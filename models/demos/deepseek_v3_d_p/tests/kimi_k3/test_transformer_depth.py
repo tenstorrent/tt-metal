@@ -23,6 +23,7 @@ plane now picks its direction from the forwarding table rather than from rank or
 arms are green upstream and this is a choice rather than a constraint.
 """
 
+import math
 from pathlib import Path
 
 import pytest
@@ -528,7 +529,7 @@ def test_topk_recall_counts_each_trace_key_once():
 
 class PooledPcc:
     """comp_pcc's pooled Pearson correlation over every element added so far, from float64 sums, so one window can
-    span several chunks."""
+    span several chunks. Unlike comp_pcc it does not zero non-finite values: a window holding one fails `value()`."""
 
     def __init__(self):
         self._sums = [0.0] * 6  # n, sx, sy, sxx, syy, sxy
@@ -539,19 +540,23 @@ class PooledPcc:
             self._sums[i] += float(v)
 
     def value(self) -> float:
+        assert all(math.isfinite(v) for v in self._sums), "non-finite values in a pooled-PCC window"
         n, sx, sy, sxx, syy, sxy = self._sums
         return (sxy - sx * sy / n) / ((sxx - sx * sx / n) * (syy - sy * sy / n)) ** 0.5
 
 
-def test_pooled_pcc_spans_chunks():
+def test_pooled_pcc_spans_chunks(expect_error):
     """Hand-checked: x = 1 2 3 4, y = 1 3 2 4 has deviations (-1.5 -.5 .5 1.5) and (-1.5 .5 -.5 1.5), so
-    r = 4 / sqrt(5 * 5) = 0.8, whether the rows arrive in one chunk or two."""
+    r = 4 / sqrt(5 * 5) = 0.8, whether the rows arrive in one chunk or two. A NaN in a window fails closed."""
     x, y = torch.tensor([[1.0], [2.0], [3.0], [4.0]]), torch.tensor([[1.0], [3.0], [2.0], [4.0]])
     whole, split = PooledPcc(), PooledPcc()
     whole.add(x, y)
     split.add(x[:2], y[:2])
     split.add(x[2:], y[2:])
     assert whole.value() == pytest.approx(0.8) and split.value() == pytest.approx(0.8)
+    split.add(x[:1], torch.tensor([[float("nan")]]))
+    with expect_error(AssertionError, "non-finite"):
+        split.value()
 
 
 # rung -> golden; both run all of layers 0-23. "L24-128k" is K3's long-context check (test_chunked_prefill.py's L24:
