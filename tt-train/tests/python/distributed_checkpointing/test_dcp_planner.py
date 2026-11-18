@@ -6,8 +6,8 @@
 
 Every case saves global device-layout arrays through the save planner into in-memory files, loads them through the
 load planner for a destination label and transform, and compares each destination shard with what plain numpy
-slicing of the canonical array says it should hold. The cases are the design's worked examples, scaled down, in
-both directions.
+slicing of the canonical array says it should hold. The cases reshard between TP, DP and FSDP worlds, collapsed and
+N-D labels, fused and padded weights, each in both directions, and check what the planner refuses.
 """
 
 import zlib

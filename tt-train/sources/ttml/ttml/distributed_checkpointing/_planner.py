@@ -181,11 +181,11 @@ def _replica_layout(
 def _checked_groups(info: TensorInfo) -> Mapping[tuple[int, ...], tuple[Chunk, ...]]:
     """The replica groups of a live tensor, after checking that their boxes tile its global shape.
 
-    This is the save-time assertion of the design: every shard dim lies within the tensor's rank (a
-    ``TopologyError`` otherwise), and the unique boxes (one per replica group, duplicates kept) tile the global shape
-    exactly (a ``CoverageError``). A label whose shard dims are in range always tiles, so the second check only guards
-    against a malformed label. The boxes are cells of one grid, so the check is linear in the device count, and it
-    is cached per label and shape (``_replica_layout``).
+    Save checks two things: every shard dim lies within the tensor's rank (a ``TopologyError`` otherwise), and the
+    unique boxes (one per replica group, duplicates kept) tile the global shape exactly (a ``CoverageError``). A label
+    whose shard dims are in range always tiles, so the second check only guards against a malformed label. The boxes
+    are cells of one grid, so the check is linear in the device count, and it is cached per label and shape
+    (``_replica_layout``).
     """
     groups, problem = _replica_layout(info.label, tuple(info.local_shape))
     if problem is not None:
