@@ -287,7 +287,8 @@ def test_generic_ops_dtypes_layouts(device, op, dtype, layout):
     Validates numerical correctness against PyTorch, verifies output dtype matches
     input dtype, and verifies output layout is TILE as documented in nanobind.
 
-    Unset output_layout: dense RM sum/mean/max/min keep ROW_MAJOR (max/min not on Quasar); else TILE.
+    Unset output_layout: dense RM sum/mean/max/min keep ROW_MAJOR (on Quasar, not max along -1 or
+    FLOAT32 min); else TILE.
     """
     shape = (4, 2, 64, 64)
     dim = -1
@@ -315,9 +316,11 @@ def test_generic_ops_dtypes_layouts(device, op, dtype, layout):
     # Validate output dtype matches input dtype
     assert ttnn_result.dtype == dtype, f"Expected output dtype {dtype}, got {ttnn_result.dtype}"
 
-    # Dense RM sum/mean/max/min keep ROW_MAJOR; everything else returns TILE.
-    dense_rm_ops = ("sum", "mean") if device.arch() == ttnn.device.Arch.QUASAR else ("sum", "mean", "max", "min")
-    if op in dense_rm_ops and layout == ttnn.ROW_MAJOR_LAYOUT and dtype in (ttnn.float32, ttnn.bfloat16):
+    # On Quasar a max along -1 cannot take the RM path, and a FLOAT32 min lowers to -MAX(-x) on the tilize path.
+    dense_rm_op = op in ("sum", "mean", "max", "min")
+    if device.arch() == ttnn.device.Arch.QUASAR:
+        dense_rm_op = op in ("sum", "mean") or (op == "min" and dtype != ttnn.float32)
+    if dense_rm_op and layout == ttnn.ROW_MAJOR_LAYOUT and dtype in (ttnn.float32, ttnn.bfloat16):
         assert ttnn_result.layout == ttnn.ROW_MAJOR_LAYOUT
     else:
         assert ttnn_result.layout == ttnn.TILE_LAYOUT

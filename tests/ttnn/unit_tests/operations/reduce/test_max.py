@@ -160,7 +160,7 @@ def test_max_fp32_fast_and_approximate_mode(device, input_shape, dim, scalar, fa
     """FLOAT32 max with both values of fast_and_approximate_mode.
     - False (default): accurate SFPU path - result matches torch exactly.
     - True: faster FPU/TF32 path - result is approximate. A negative scalar computes scalar * min(x),
-      which runs on the SFPU regardless, so it stays exact.
+      which runs on the SFPU regardless (except on Quasar), so it stays exact.
     """
     torch.manual_seed(1)
 

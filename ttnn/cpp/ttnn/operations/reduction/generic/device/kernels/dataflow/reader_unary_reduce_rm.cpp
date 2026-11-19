@@ -140,7 +140,7 @@ void reduce_rm_reader() {
 
         // Each owned output tile is one work unit (wt_tiles_per_chunk == 1). Decompose its global id
         // into (nc, slice, wt_in_nc) and read only this slice's contiguous H slice. Tiles that run
-        // past H_logical (last slice's overhang) stage as all-identity (real_rows == 0) → no effect.
+        // past H_logical (last slice's overhang) stage as all-identity (real_rows == 0) → contribute 0.
         for (uint32_t out_idx = 0; out_idx < rt_count; ++out_idx) {
             const uint32_t global_tile_id = rt_start + out_idx;
             const uint32_t wt_in_nc = global_tile_id % Wt;

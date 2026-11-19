@@ -160,8 +160,8 @@ Tensor reduce(
         /*default_fp32_acc=*/true));
     ttnn::verify_numerical_configuration(arch, compute_kernel_config);
 
-    // Dense row-major reduce: ROW_MAJOR input, no host tilize, 4D BF16/FLOAT32, interleaved. SUM/AVG,
-    // and MAX/MIN off Quasar, whose reduce helper cannot reload a chunked MAX REDUCE_ROW accumulator.
+    // Dense row-major reduce: ROW_MAJOR input, no host tilize, 4D BF16/FLOAT32, interleaved. SUM/AVG/MAX/MIN,
+    // except a W MAX on Quasar, whose reduce helper cannot reload the FPU MAX REDUCE_ROW accumulator.
     // Anything else falls back to tilize + tile-reduce.
     const bool both_interleaved =
         input_tensor.memory_config().memory_layout() == tt::tt_metal::TensorMemoryLayout::INTERLEAVED &&
@@ -173,7 +173,9 @@ Tensor reduce(
          input_tensor.dtype() == tt::tt_metal::DataType::FLOAT32) &&
         (reduce_math == tt::tt_metal::ReduceOpMath::AVG || reduce_math == tt::tt_metal::ReduceOpMath::SUM ||
          ((reduce_math == tt::tt_metal::ReduceOpMath::MAX || reduce_math == tt::tt_metal::ReduceOpMath::MIN) &&
-          !negate && arch != tt::ARCH::QUASAR));
+          !negate &&
+          !(arch == tt::ARCH::QUASAR && reduce_math == tt::tt_metal::ReduceOpMath::MAX &&
+            reduce_dim == tt::tt_metal::ReduceOpDim::W)));
 
     // A padded ROW_MAJOR tensor keeps its dim-1 slices H_padded rows apart, but the dense RM readers
     // and the tilize into the tile path both step by H_logical, so every slice after the first lands

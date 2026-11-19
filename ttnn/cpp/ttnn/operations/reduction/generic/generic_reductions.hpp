@@ -65,7 +65,7 @@ Tensor max(
     float scalar = 1.0f,
     const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt,
     // When false (default), fp32 max runs on the accurate SFPU path; true selects the faster tf32 FPU path.
-    // A negative scalar computes scalar * min(x), which runs on the SFPU either way.
+    // A negative scalar computes scalar * min(x), which the flag does not affect.
     bool fast_and_approximate_mode = false,
     // See ttnn::sum above.
     const std::optional<Layout>& output_layout = std::nullopt);
