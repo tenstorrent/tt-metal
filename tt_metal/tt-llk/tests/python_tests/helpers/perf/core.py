@@ -1054,6 +1054,8 @@ class PerfConfig(TestConfig):
             elf_dir = (
                 TestConfig.ARTEFACTS_DIR / self.test_name / self.variant_id / "elf"
             )
+            if TestConfig.BUILD_MODE == BuildMode.CONSUME and not elf_dir.is_dir():
+                pytest.skip("no ELFs: the compile session did not reach this test")
             components = _CODE_SIZE_COMPONENTS.get(run_type)
             # 4-TRISC tests include SFPU_ISOLATE; L1_TO_L1 code size must count sfpu.elf too.
             if run_type == PerfRunType.L1_TO_L1 and any(
