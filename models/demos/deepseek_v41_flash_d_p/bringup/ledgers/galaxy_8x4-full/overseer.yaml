@@ -580,6 +580,20 @@ notes:
   text: 'Overseer: op-level tests ALSO go through the resident runner (resident submit; the runner has the mesh open: a
     mesh-only test there costs 0 device opens and 0 loads, e.g. tests/perf/test_ids_readback.py ran in 5 s). A direct scripts/run_safe_pytest.sh
     is a device open that leaks 10-27 GiB of host RAM: avoid it. A C++ / .so rebuild restarts the runner once (expected).'
+- id: OV-56
+  tasks:
+  - P.83
+  - P.81
+  status: open
+  t: '2026-11-19T16:26:18'
+  text: 'OWNER 16:26 2026-11-19: optimize mhc (P.83) and then attention (P.81): whatever can be fused or modified, do it;
+    fork stock ttnn ops as needed (bringup-fork-op skill) and change them. Do NOT introduce shortcuts that break tt-d-gen
+    compatibility (the served caches, their formats and addresses, the acks, the chunk header, the engine''s device input)
+    or that are infeasible in practice (no precomputing per prompt, no assuming the next chunk, no extra host round trips,
+    no per-request state the engine cannot provide). Measure through the resident runner (layers 0-20, one load); judge
+    by the device profile; keep a change at >= 1 ms device a chunk. If host RAM runs low, run with DS41_ENGRAM_DEVICE=on
+    and DS41_ENGRAM_DEVICE_TABLES=on and DS41_ENGRAM_TABLE=mmap (the tables on the mesh, the host copy not resident) for
+    the measurement; the owner may reset the device in about an hour: keep work committed / recoverable.'
 fixes:
 - id: FIX.1
   title: 'Owner order: no padding to get around a kernel limit'
