@@ -1246,7 +1246,7 @@ PERF_TEST_SCHEMAS = {
         "test_name_aliases": {"perf_topk_xl_split": "perf_topk_xl_split"},
     },
     "perf_transpose_dest": {
-        "version": 5,
+        "version": 6,
         "columns": [
             "dest_acc",
             "dest_sync",
@@ -1257,6 +1257,7 @@ PERF_TEST_SCHEMAS = {
             "formats.register_B",
             "formats.sfpu_src",
             "formats.sfpu_dst",
+            "loop_factor",
             "marker",
             "math_transpose_faces",
             "tile_cnt",
