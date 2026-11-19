@@ -26,7 +26,7 @@
 #include <tt-metalium/tt_backend_api_types.hpp>
 #include "impl/context/metal_context.hpp"
 #include "tt_metal/test_utils/stimulus.hpp"
-#include <umd/device/types/xy_pair.hpp>
+#include <tt-umd/types/xy_pair.hpp>
 
 using namespace tt::tt_metal;
 
@@ -301,10 +301,6 @@ TEST_F(MeshDeviceFixtureWithL1Small, TestWidthShardReadWrite) {
 }
 
 TEST_F(MeshDeviceFixture, TestUnorderedHeightShardReadWrite) {
-    if (tt::tt_metal::MetalContext::instance().rtoptions().get_simulator_enabled()) {
-        GTEST_SKIP() << fmt::format("Skipping {} because it is not supported in simulator", __func__);
-    }
-
     std::vector<CoreCoord> cores = {CoreCoord(1, 0), CoreCoord(1, 3), CoreCoord(1, 4), CoreCoord(6, 6),
                                     CoreCoord(6, 5), CoreCoord(6, 4), CoreCoord(6, 3), CoreCoord(6, 2),
                                     CoreCoord(6, 1), CoreCoord(6, 0), CoreCoord(5, 0), CoreCoord(5, 1),

@@ -5,7 +5,7 @@ dest_acc: false
 operands:
   - name: "input_A"
     dims: [64, 32]
-    format: [Float16_b, Float16]
+    format: [Float16_b]
     stimuli:
       include:
         - [-1000.0, -10.5]

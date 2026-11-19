@@ -11,6 +11,9 @@ Environment:
     TT_DS_CAPTURED_LAYER   an integer: use one recorded MoE layer's real routing instead of the
                            synthetic draw.
     TT_DS_CAPTURED_PATH    where that recording lives; defaults to the golden prefill cache.
+    TT_DS_EMB_DIM          token width; defaults to 7168 (DeepSeek / Kimi). GLM 5.3 is 6144.
+    TT_DS_FABRIC_PAYLOAD   the fabric max payload to open the mesh with, in bytes. Below a whole token plus
+                           its routing tail the op sends each token as two packets.
 
 These are read by this worker's own process, so a harness that launches it must pass them through
 its `env=` parameter, not as a prefix on the command.
@@ -25,11 +28,12 @@ from tracy import signpost
 
 import ttnn
 from models.demos.deepseek_v3_d_p.tests.op_unit_tests.test_dispatch_fabric2d import (
+    FWD_VC_PAGES,
     PRODUCTION_ROUTING,
     _draw_indices,
     _expert_dispatch_table,
 )
-from models.demos.deepseek_v3_d_p.tests.pcc.mesh_configs import ALL_MESH_CONFIGS
+from models.demos.deepseek_v3_d_p.tests.pcc.mesh_configs import ALL_MESH_CONFIGS, _mesh_param
 from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import compute_constants, extract_mesh_config, get_gate_outputs
 
 # Production prefill geometry: one 5120-token chunk over an 8-chip dispatch group.
@@ -37,7 +41,7 @@ CHUNK = 5 * 1024
 DISPATCH_GROUP_SIZE = 8
 SEQ_LEN_PER_CHIP = CHUNK // DISPATCH_GROUP_SIZE
 DISPATCH_BUFFER_CAPACITY_FACTOR = 8
-EMB_DIM = 7 * 1024
+EMB_DIM = int(os.environ.get("TT_DS_EMB_DIM", 7 * 1024))
 NUM_ROUTED_EXPERTS = 256
 NUM_EXPERTS_PER_TOK = 8
 
@@ -46,6 +50,19 @@ ITERATIONS = 10
 
 _MESH_CONFIGS = [param for param in ALL_MESH_CONFIGS if param.id == "fabric2d-torus-xy-8x4-2link"]
 assert len(_MESH_CONFIGS) == 1, "Galaxy TorusXY config missing from ALL_MESH_CONFIGS"
+if "TT_DS_FABRIC_PAYLOAD" in os.environ:
+    # Same id, so the harness's -k filter still selects it.
+    _MESH_CONFIGS = [
+        _mesh_param(
+            (8, 4),
+            ttnn.FabricConfig.FABRIC_2D_TORUS_XY,
+            int(os.environ["TT_DS_FABRIC_PAYLOAD"]),
+            2,
+            "mesh-8x4",
+            "fabric2d-torus-xy-8x4-2link",
+            reliability_mode=ttnn.FabricReliabilityMode.RELAXED_INIT,
+        )
+    ]
 
 
 @pytest.mark.parametrize(
@@ -132,7 +149,8 @@ def test_dispatch_fabric2d_perf_worker(mesh_device, device_params, num_links):
     logger.info(
         f"perf worker: mesh={tuple(mesh_device.shape)} seq={seq_len_per_chip} emb={EMB_DIM} "
         f"experts={NUM_ROUTED_EXPERTS} topk={NUM_EXPERTS_PER_TOK} epc={experts_per_chip} "
-        f"capacity={max_dispatch_buffer_token_size} links={num_links} iters={ITERATIONS}"
+        f"capacity={max_dispatch_buffer_token_size} links={num_links} iters={ITERATIONS} "
+        f"fabric_payload={ttnn.get_tt_fabric_max_payload_size_bytes()}"
     )
     logger.info(f"routing {routing}: picks landing in this dispatch group {100 * realized:.1f}%")
     logger.info(f"input layout: {layout}")
@@ -159,6 +177,7 @@ def test_dispatch_fabric2d_perf_worker(mesh_device, device_params, num_links):
             seq_len_per_chip=seq_len_per_chip,
             cluster_axis=sp_axis,
             num_links=num_links,
+            fwd_vc_pages=FWD_VC_PAGES,
             topology=ttnn.Topology.Ring,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )

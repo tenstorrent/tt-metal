@@ -36,7 +36,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, DmLoopback) {
         std::cerr << "WARNING: For example, export TT_METAL_DPRINT_CORES=0,0" << std::endl;
     }
 
-    const experimental::NodeCoord node{0, 0};
+    const NodeCoord node{0, 0};
 
     uint32_t l1_address = MetalContext::instance().hal().get_dev_addr(
         HalProgrammableCoreType::TENSIX, HalL1MemAddrType::DEFAULT_UNRESERVED);
@@ -50,59 +50,57 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, DmLoopback) {
     // Reduced from 4+4=8 to 3+3=6 loopback stages to fit within the limit.
     constexpr uint32_t num_loopback_stages = 3;
 
-    const experimental::KernelSpecName DRAM_TO_L1_0{"dram_to_l1_0"};
-    const experimental::KernelSpecName DRAM_TO_L1_1{"dram_to_l1_1"};
-    const experimental::KernelSpecName DRAM_TO_L1_2{"dram_to_l1_2"};
-    const experimental::KernelSpecName L1_TO_DRAM_0{"l1_to_dram_0"};
-    const experimental::KernelSpecName L1_TO_DRAM_1{"l1_to_dram_1"};
-    const experimental::KernelSpecName L1_TO_DRAM_2{"l1_to_dram_2"};
+    const KernelSpecName DRAM_TO_L1_0{"dram_to_l1_0"};
+    const KernelSpecName DRAM_TO_L1_1{"dram_to_l1_1"};
+    const KernelSpecName DRAM_TO_L1_2{"dram_to_l1_2"};
+    const KernelSpecName L1_TO_DRAM_0{"l1_to_dram_0"};
+    const KernelSpecName L1_TO_DRAM_1{"l1_to_dram_1"};
+    const KernelSpecName L1_TO_DRAM_2{"l1_to_dram_2"};
 
-    auto make_dram_to_l1_spec = [](const experimental::KernelSpecName& id) {
-        return experimental::KernelSpec{
+    auto make_dram_to_l1_spec = [](const KernelSpecName& id) {
+        return KernelSpec{
             .unique_id = id,
             .source =
 
                 OVERRIDE_KERNEL_PREFIX "tests/tt_metal/tt_metal/test_kernels/dataflow/dram_to_l1.cpp",
             .num_threads = 1,
-            .semaphore_bindings =
-                {{.semaphore_spec_name = experimental::SemaphoreSpecName{"sem"}, .accessor_name = "sem"}},
+            .semaphore_bindings = {{.semaphore_spec_name = SemaphoreSpecName{"sem"}, .accessor_name = "sem"}},
             .runtime_arg_schema =
                 {
                     .runtime_arg_names = {"dram_addr", "l1_addr", "dram_buffer_size", "dram_bank_id", "signal_value"},
                 },
-            .hw_config = experimental::DataMovementHardwareConfig{},
+            .hw_config = DataMovementHardwareConfig{},
         };
     };
 
-    auto make_l1_to_dram_spec = [](const experimental::KernelSpecName& id) {
-        return experimental::KernelSpec{
+    auto make_l1_to_dram_spec = [](const KernelSpecName& id) {
+        return KernelSpec{
             .unique_id = id,
             .source =
 
                 OVERRIDE_KERNEL_PREFIX "tests/tt_metal/tt_metal/test_kernels/dataflow/l1_to_dram.cpp",
             .num_threads = 1,
-            .semaphore_bindings =
-                {{.semaphore_spec_name = experimental::SemaphoreSpecName{"sem"}, .accessor_name = "sem"}},
+            .semaphore_bindings = {{.semaphore_spec_name = SemaphoreSpecName{"sem"}, .accessor_name = "sem"}},
             .runtime_arg_schema =
                 {
                     .runtime_arg_names = {"dram_addr", "l1_addr", "dram_buffer_size", "dram_bank_id", "signal_value"},
                 },
-            .hw_config = experimental::DataMovementHardwareConfig{},
+            .hw_config = DataMovementHardwareConfig{},
         };
     };
 
-    experimental::SemaphoreSpec sem{
-        .unique_id = experimental::SemaphoreSpecName{"sem"},
+    SemaphoreSpec sem{
+        .unique_id = SemaphoreSpecName{"sem"},
         .target_nodes = node,
     };
 
-    experimental::WorkUnitSpec main_wu{
+    WorkUnitSpec main_wu{
         .name = "main",
         .kernels = {DRAM_TO_L1_0, DRAM_TO_L1_1, DRAM_TO_L1_2, L1_TO_DRAM_0, L1_TO_DRAM_1, L1_TO_DRAM_2},
         .target_nodes = node,
     };
 
-    experimental::ProgramSpec spec{
+    ProgramSpec spec{
         .name = "dm_loopback",
         .kernels =
             {make_dram_to_l1_spec(DRAM_TO_L1_0),
@@ -114,17 +112,17 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, DmLoopback) {
         .semaphores = {sem},
         .work_units = {main_wu},
     };
-    Program program = experimental::MakeProgramFromSpec(this->device(), spec);
+    Program program = tt_metal::experimental::MakeProgramFromSpec(this->device(), spec);
 
-    const experimental::KernelSpecName dram_to_l1_names[] = {DRAM_TO_L1_0, DRAM_TO_L1_1, DRAM_TO_L1_2};
-    const experimental::KernelSpecName l1_to_dram_names[] = {L1_TO_DRAM_0, L1_TO_DRAM_1, L1_TO_DRAM_2};
+    const KernelSpecName dram_to_l1_names[] = {DRAM_TO_L1_0, DRAM_TO_L1_1, DRAM_TO_L1_2};
+    const KernelSpecName l1_to_dram_names[] = {L1_TO_DRAM_0, L1_TO_DRAM_1, L1_TO_DRAM_2};
 
-    experimental::ProgramRunArgs params;
+    ProgramRunArgs params;
     uint32_t signal_value = 0;
     for (uint32_t i = 0; i < num_loopback_stages; i++) {
-        params.kernel_run_args.push_back(experimental::ProgramRunArgs::KernelRunArgs{
+        params.kernel_run_args.push_back(ProgramRunArgs::KernelRunArgs{
             .kernel = dram_to_l1_names[i],
-            .runtime_arg_values = experimental::MakeRuntimeArgsForSingleNode(
+            .runtime_arg_values = MakeRuntimeArgsForSingleNode(
                 node,
                 {{"dram_addr", dram_address},
                  {"l1_addr", l1_address},
@@ -134,9 +132,9 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, DmLoopback) {
         dram_address += 1024;
         signal_value++;
 
-        params.kernel_run_args.push_back(experimental::ProgramRunArgs::KernelRunArgs{
+        params.kernel_run_args.push_back(ProgramRunArgs::KernelRunArgs{
             .kernel = l1_to_dram_names[i],
-            .runtime_arg_values = experimental::MakeRuntimeArgsForSingleNode(
+            .runtime_arg_values = MakeRuntimeArgsForSingleNode(
                 node,
                 {{"dram_addr", dram_address},
                  {"l1_addr", l1_address},
@@ -146,7 +144,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, DmLoopback) {
         l1_address += sizeof(uint32_t);
         signal_value++;
     }
-    experimental::SetProgramRunArgs(program, params);
+    tt_metal::experimental::SetProgramRunArgs(program, params);
 
     LaunchProgram(this->device(), std::move(program));
 
