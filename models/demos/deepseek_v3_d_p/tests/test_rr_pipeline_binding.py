@@ -4,9 +4,10 @@
 """Host-only checks of the [RING,RING] 4x4 prefill bindings: no devices, no ttnn.
 
 Covers the split-ring rank table (generate_rank_bindings.py), the binding templates and descriptors for the
-SC4 and two-Galaxy pipelines, and rr_pipeline_binding.py's descriptor model. Cases that read cabling
-descriptors skip without the tt-cluster-descriptors submodule.
+SC4 and two-Galaxy pipelines, and rr_pipeline_binding.py's torus search on a synthetic pod.
 """
+import collections
+import itertools
 import re
 from pathlib import Path
 
@@ -14,20 +15,10 @@ import pytest
 import yaml
 
 from models.demos.deepseek_v3_d_p.utils import rr_pipeline_binding as rr
-from models.demos.deepseek_v3_d_p.utils.assemble_pipeline_binding import Galaxy, load_mapping
 
 REPO = Path(__file__).resolve().parents[4]
 TOPO = REPO / "models/demos/common/prefill/runners/topology_configuration"
-DESCRIPTORS = REPO / "tt_metal/third_party/tt-cluster-descriptors/superclusters/blackhole"
-SC4_REVC_MAPPING = DESCRIPTORS / "SC20_32x4_revC_subtorus_aisleC/SC4_32x4_revC_subtorus_aisleC_mapping.yaml"
-SC4_REVAB_MAPPING = DESCRIPTORS / "SC36_32x4_revAB_subtorus_aisleC/SC4_32x4_revAB_subtorus_aisleC_mapping.yaml"
-SC4_REVAB_FLAT_MAPPING = DESCRIPTORS / "SC16_32x4_revAB_aisleD/SC4_32x4_revAB_aisleD_mapping.yaml"
 HOSTS = ["h0", "h1", "h2", "h3"]
-
-needs_descriptors = pytest.mark.skipif(
-    not SC4_REVC_MAPPING.exists(), reason="tt-cluster-descriptors submodule not checked out"
-)
-
 
 @pytest.fixture(autouse=True)
 def _repo_root(monkeypatch):
@@ -84,15 +75,6 @@ def test_every_stage_covers_16_distinct_chips_and_each_slice_is_used_once_per_ho
     assert set(per_stage.values()) == {16}
     # Each Galaxy contributes its torus (1, 2) and one slice-3 and one slice-0 half to two seams.
     assert all(sorted(s) == [0, 1, 2, 3] for s in per_host.values())
-
-
-def test_slice_positions_swap_trays_2_and_3_on_rev_c():
-    assert {t for t, _ in rr.grb.slice_positions(3, rev_c=False)} == {2, 4}
-    assert {t for t, _ in rr.grb.slice_positions(3, rev_c=True)} == {3, 4}
-    assert {t for t, _ in rr.grb.slice_positions(0, rev_c=False)} == {1, 3}
-    assert {t for t, _ in rr.grb.slice_positions(0, rev_c=True)} == {1, 2}
-    assert {a for _, a in rr.grb.slice_positions(1, rev_c=True)} == {3, 4, 7, 8}
-    assert {a for _, a in rr.grb.slice_positions(0, rev_c=True)} == {1, 2, 5, 6}
 
 
 # --- templates and descriptors --------------------------------------------------------------------
@@ -206,90 +188,54 @@ def test_find_torus_rejects_a_ring_of_16_and_a_missing_wrap():
     assert rr.best_torus(chips, line) == (None, 0)
 
 
-@needs_descriptors
-def test_revc_pod_has_eight_tori_at_two_links_and_eight_link_seams():
-    galaxies = [Galaxy(d) for d in load_mapping(SC4_REVC_MAPPING)]
-    assert all(g.rev_c for g in galaxies)
-    table, ranks = rr.predicted_rank_table(galaxies, 8)
-    rows, boundaries = rr.stage_report(galaxies, table)
-    assert [(kind, links) for _, kind, _, links in rows] == [("in-Galaxy torus", 2), ("seam torus", 2)] * 4
-    assert boundaries == [(i, i + 1, 8) for i in range(7)]
-    # The in-Galaxy torus is the slice 1+2 chips: ASICs 3,4,7,8 of trays 1..4 = logical ids 2,3,6,7,... on a Rev C host.
-    assert ranks[0]["devices"] == "2,3,6,7,10,11,14,15,18,19,22,23,26,27,30,31"
-    assert [r["host"] for r in ranks[:3]] == [galaxies[0].name, galaxies[0].name, galaxies[1].name]
+class FakeGalaxy:
+    """The parts of assemble_pipeline_binding.Galaxy that the torus search reads: 32 chips, logical id == chip id."""
+
+    def __init__(self, name, index):
+        self.name = name
+        self.logical = {c: c for c in range(32)}
+        self.unique = {c: 1000 * index + c for c in range(32)}
+        self.links = collections.Counter()
+        self.remote = collections.Counter()
 
 
-@needs_descriptors
-def test_revab_pod_uses_the_rev_ab_slice_trays():
-    galaxies = [Galaxy(d) for d in load_mapping(SC4_REVAB_MAPPING)]
-    assert not any(g.rev_c for g in galaxies)
-    table, _ = rr.predicted_rank_table(galaxies, 8)
-    rows, boundaries = rr.stage_report(galaxies, table)
-    assert all(links >= 2 for *_, links in rows)
-    assert [n for *_, n in boundaries] == [8] * 7
-    g = galaxies[0]
-    assert {chip_tray for chip_tray, _ in (rr.chip_position(g, c) for c in rr.slice_chips(g, 3))} == {2, 4}
+# slice id -> logical ids, in the shape the discovery gtest writes it
+FAKE_SLICES = {s: set(range(8 * s, 8 * s + 8)) for s in range(4)}
 
 
-@needs_descriptors
-def test_wrong_host_order_is_not_a_torus_ring():
-    galaxies = [Galaxy(d) for d in load_mapping(SC4_REVC_MAPPING)]
-    swapped = [galaxies[0], galaxies[2], galaxies[1], galaxies[3]]
-    table, _ = rr.predicted_rank_table(swapped, 8)
-    rows, _ = rr.stage_report(swapped, table)
-    assert any(links == 0 for *_, links in rows)
-    # Only the cabling ring itself fits, in the direction slice 3 -> slice 0.
-    found = rr.ring_orders(swapped, 8)
-    assert [[g.name for g in order] for _, order in found] == [[g.name for g in galaxies]]
+def fake_pod():
+    """Two Galaxies cabled h0 -> h1: each has an in-Galaxy torus on slices 1+2, and h0's slice 3 joins h1's slice 0
+    as a seam torus (rows 0-1 on h0, rows 2-3 on h1), 2 links on every torus edge."""
+    h0, h1 = FakeGalaxy("h0", 0), FakeGalaxy("h1", 1)
+    for g in (h0, h1):
+        for r, c in itertools.product(range(4), range(4)):
+            for dr, dc in ((0, 1), (1, 0)):
+                g.links[frozenset((8 + r * 4 + c, 8 + ((r + dr) % 4) * 4 + (c + dc) % 4))] = 2
+
+    def seam_chip(cell):
+        return (h0, 24 + cell) if cell < 8 else (h1, cell - 8)
+
+    for r, c in itertools.product(range(4), range(4)):
+        for dr, dc in ((0, 1), (1, 0)):
+            (ga, a), (gb, b) = seam_chip(r * 4 + c), seam_chip(((r + dr) % 4) * 4 + (c + dc) % 4)
+            if ga is gb:
+                ga.links[frozenset((a, b))] = 2
+            else:
+                ga.remote[(a, gb.unique[b])] = 2
+                gb.remote[(b, ga.unique[a])] = 2
+    return h0, h1
 
 
-@needs_descriptors
-def test_flat_aisle_pod_has_no_subtorus_tori():
-    # A non-subtorus cabling (revAB aisle D) has links but no C4xC4 on the carve's chips.
-    if not SC4_REVAB_FLAT_MAPPING.exists():
-        pytest.skip("flat aisle D mapping missing")
-    galaxies = [Galaxy(d) for d in load_mapping(SC4_REVAB_FLAT_MAPPING)]
-    assert rr.ring_orders(galaxies, 8) == []
+def test_check_finds_tori_on_every_stage_and_the_cabling_direction():
+    h0, h1 = fake_pod()
+    table = rr.grb.build_split_ring_rank_table(["h0", "h1"], 3)
+    rows, _ = rr.stage_report([h0, h1], table, FAKE_SLICES)
+    assert [(kind, links) for _, kind, _, links in rows] == [("in-Galaxy torus", 2), ("seam torus", 2), ("in-Galaxy torus", 2)]
+    found = rr.ring_orders([h1, h0], 3, FAKE_SLICES)
+    assert [[g.name for g in order] for _, order in found] == [["h0", "h1"]]
 
 
-@needs_descriptors
-def test_two_galaxy_pair_chain(tmp_path):
-    out = tmp_path / "pair.yaml"
-    rankfile = tmp_path / "pair.rf"
-    names = [Galaxy(d).name for d in load_mapping(SC4_REVC_MAPPING)]
-    rc = rr.main(
-        [
-            "predict",
-            "--mapping",
-            str(SC4_REVC_MAPPING),
-            "--host",
-            names[1],
-            "--host",
-            names[2],
-            "--stages",
-            "3",
-            "--out",
-            str(out),
-            "--rankfile-out",
-            str(rankfile),
-        ]
-    )
-    assert rc == 0
-    binding = yaml.safe_load(out.read_text())
-    assert [(b["mesh_id"], b["mesh_host_rank"]) for b in binding["rank_bindings"]] == [(0, 0), (1, 0), (1, 1), (2, 0)]
-    assert binding["mesh_graph_desc_path"].endswith("ci/sc2_4x4_rr_mgd.textproto")
-    assert all(b["env_overrides"]["TT_VISIBLE_DEVICES"] for b in binding["rank_bindings"])
-    assert rankfile.read_text().splitlines() == [
-        f"rank 0={names[1]} slot=0",
-        f"rank 1={names[1]} slot=1",
-        f"rank 2={names[2]} slot=0",
-        f"rank 3={names[2]} slot=1",
-    ]
-
-
-@needs_descriptors
-def test_pair_order_search_finds_the_direction_of_the_cabling():
-    galaxies = [Galaxy(d) for d in load_mapping(SC4_REVC_MAPPING)]
-    forward = [galaxies[1], galaxies[2]]
-    found = rr.ring_orders(forward, 3)
-    assert [[g.name for g in order] for _, order in found] == [[galaxies[1].name, galaxies[2].name]]
+def test_slice_map_is_read_from_the_discovery_output(tmp_path):
+    path = tmp_path / "slice_to_pcie_device_mapping.yaml"
+    path.write_text("device_mapping:\n  hostA:\n    0: [0, 1]\n    3: [6, 7]\n  hostB:\n    0: [9]\n")
+    assert rr.load_slices(path) == {0: {0, 1}, 3: {6, 7}}
