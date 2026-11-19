@@ -91,6 +91,24 @@ def test_scatter_add(device):
     logger.info(f"Scatter add operation result: {output}")
 
 
+def test_roll(device):
+    # Create a 2x4 tensor holding 0 to 7
+    input_tensor = ttnn.from_torch(torch.arange(8, dtype=torch.bfloat16).reshape(2, 4), device=device)
+
+    # Roll the last dimension by one place
+    output = ttnn.roll(input_tensor, 1, -1)
+    logger.debug(f"Rolled tensor: {ttnn.to_torch(output).tolist()}")  # [[3.0, 0.0, 1.0, 2.0], [7.0, 4.0, 5.0, 6.0]]
+
+    # Roll two dimensions at once
+    output = ttnn.roll(input_tensor, [1, -1], [0, 1])
+    logger.debug(f"Rolled tensor: {ttnn.to_torch(output).tolist()}")  # [[5.0, 6.0, 7.0, 4.0], [1.0, 2.0, 3.0, 0.0]]
+
+    # Without a dimension, roll the flattened tensor and keep the shape
+    output = ttnn.roll(input_tensor, 3)
+    logger.debug(f"Rolled tensor: {ttnn.to_torch(output).tolist()}")  # [[5.0, 6.0, 7.0, 0.0], [1.0, 2.0, 3.0, 4.0]]
+    logger.debug(f"Rolled tensor shape: {output.shape}")  # Shape([2, 4])
+
+
 def test_repeat(device):
     # Create a tensor to repeat
     input_tensor = torch.tensor([[1, 2], [3, 4]])
