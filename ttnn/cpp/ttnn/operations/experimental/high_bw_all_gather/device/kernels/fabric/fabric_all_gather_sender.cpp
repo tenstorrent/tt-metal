@@ -8,7 +8,8 @@
 //   2. send every fabric chunk of the outgoing shards one fabric hop into the same pages of the next chip's output (a
 //      chunk is one packet; only a single page larger than the payload takes several); the last packet of each
 //      outgoing shard (or a bare packet, if none of the shard's chunks is this worker's) increments the downstream
-//      shards-arrived counter;
+//      shards-arrived counter; with a non-interleaved input, the link workers of one direction also write each chunk of
+//      the own shard into this chip's output (there are no local copy cores then);
 //   3. wait until every shard expected from upstream has landed (the output is complete when the op ends) and reset
 //      the shards-arrived counter for the next call.
 
@@ -57,7 +58,7 @@ void kernel_main() {
     const uint32_t shards_arrived_addr = get_common_arg_val<uint32_t>(1);
     const uint32_t downstream_started_addr = get_common_arg_val<uint32_t>(2);
 
-    // Per-core args: [0] first owned chunk [1] owned chunk stride [2] signal started to downstream? [3, 4] the core
+    // Per-core args: [0] first owned chunk [1] owned chunk stride [2] flags (kernel below) [3, 4] the core
     // that gets that signal (downstream's link worker of the opposite direction) [5, 6] downstream link worker core
     // (same direction: gets our data and shards-arrived increments) [7] downstream mesh id [8] downstream chip id (2D
     // fabric) or hop count 1 (1D fabric) [9] shards expected from upstream [10] number of outgoing shards, then the
@@ -65,7 +66,10 @@ void kernel_main() {
     size_t arg = 0;
     const uint32_t first_owned_chunk = get_arg_val<uint32_t>(arg++);
     const uint32_t owned_chunk_stride = get_arg_val<uint32_t>(arg++);
-    const bool signal_started_to_downstream = get_arg_val<uint32_t>(arg++) != 0;
+    // bit 0: signal started to downstream; bit 1: also write the own shard's chunks into this chip's output
+    const uint32_t flags = get_arg_val<uint32_t>(arg++);
+    const bool signal_started_to_downstream = (flags & 1u) != 0;
+    const bool write_own_shard_locally = (flags & 2u) != 0;
     const uint32_t started_signal_x = get_arg_val<uint32_t>(arg++);
     const uint32_t started_signal_y = get_arg_val<uint32_t>(arg++);
     const uint32_t downstream_worker_x = get_arg_val<uint32_t>(arg++);
@@ -170,6 +174,16 @@ void kernel_main() {
                         connection.send_current_slot_non_blocking(
                             chunk_slot + offset, packet_bytes, reinterpret_cast<uint32_t>(header));
                     }
+                    if (write_own_shard_locally && outgoing_index == 0) {
+                        // a lane run of the interleaved output: one bank, physically contiguous, one write
+                        noc.async_write(
+                            CoreLocalMem<uint32_t>(chunk_slot),
+                            output,
+                            chunk_payload_bytes,
+                            {},
+                            {.page_id = output_page_index(
+                                 geometry, outgoing_shard_rank(outgoing_shard), outer_slice, page_in_slice)});
+                    }
                     if (++chunks_in_batch == cb_cursor.capacity()) {
                         pop_batch();
                     }
@@ -184,6 +198,9 @@ void kernel_main() {
             }
         }
         connection.close();
+        if (write_own_shard_locally) {
+            noc.async_write_barrier();  // the own shard has landed in the output before the op ends
+        }
     }
 
     // 3. everything from upstream has landed; reset the shards-arrived counter
