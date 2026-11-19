@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import socket
 import sys
 import time
@@ -167,6 +168,27 @@ def _guarded(phase: Phase, error_check: str, error_status: str, body: Callable[[
     except Exception as e:
         phase.error = repr(e)
         phase.add(Check(name=error_check, status=error_status, details=repr(e), ip="other"))
+
+
+_ANSI_RE = re.compile(r"\x1b\[[0-9;]*m")
+_TRACE_LINE_RE = re.compile(r"^(\d+\.\s|Location:)")
+
+
+def _short_error(e: Exception, lines: int = 2) -> str:
+    """An error's first message lines on one line, without colour codes or the stack trace under them."""
+    text = [ln.strip() for ln in _ANSI_RE.sub("", str(e)).splitlines()]
+    return "; ".join([ln for ln in text if ln and not _TRACE_LINE_RE.match(ln)][:lines])
+
+
+def recount_after_tests(snapshot: Callable[[], dict]) -> Check:
+    """The chip count from a fresh snapshot after the tests. A snapshot that
+    cannot be taken (tt-smi cannot read a chip, or is gone) is a FAIL with its reason."""
+    name = "pcie_enum_count_after_tests"
+    try:
+        snap = snapshot()
+    except Exception as e:
+        return Check(name=name, status=FAIL, details=f"no snapshot after the tests: {_short_error(e)}", ip="other")
+    return pcie_enum_check(snap.get("device_info") or [], name)
 
 
 def _finish(report: dict, phase: Phase, t0: float, *, summary: bool, all_skip_stays_skip: bool = False) -> None:
@@ -366,13 +388,8 @@ def run_diag(
         if live:
             _guarded(test_phase, "hsc_input_status", WARN, lambda: judge_hsc(hsc_before, read_hsc_status(), test_phase))
 
-            def _recount() -> None:
-                after_snap = take_snapshot(
-                    resolve_tt_smi(tt_smi_path), snapshot_out.with_name(f"{snapshot_out.stem}_after_tests.json")
-                )
-                test_phase.add(pcie_enum_check(after_snap.get("device_info") or [], "pcie_enum_count_after_tests"))
-
-            _guarded(test_phase, "pcie_enum_count_after_tests", FAIL, _recount)
+            after_out = snapshot_out.with_name(f"{snapshot_out.stem}_after_tests.json")
+            test_phase.add(recount_after_tests(lambda: take_snapshot(resolve_tt_smi(tt_smi_path), after_out)))
     # tests phase prints its own per-test lines as they run — no inline summary.
     _finish(report, test_phase, t0, summary=False)
 
