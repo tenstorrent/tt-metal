@@ -1436,6 +1436,14 @@ def test_tilize_uint8_tall_narrow_program_cache_addr_change(device, shape):
     device.disable_and_clear_program_cache()
 
 
+def test_tilize_host_tensor_raises(expect_error):
+    torch_input_tensor = torch.ones((2, 3, 4, 4), dtype=torch.bfloat16)
+    input_tensor = ttnn.from_torch(torch_input_tensor, layout=ttnn.ROW_MAJOR_LAYOUT)
+
+    with expect_error(RuntimeError, "tilize: input tensor must be on device"):
+        ttnn.tilize(input_tensor)
+
+
 _ARCH_RULE = re.compile(
     r"On (Blackhole|Quasar), an? ``(\w+)`` input (must be in DRAM and )?needs a tile height of (\d+)( or more)?\."
 )

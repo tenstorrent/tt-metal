@@ -3626,6 +3626,14 @@ def test_untilize_multi_core_width_or_dtype_change_misses(device):
     assert_program_cache_flat(device, run, variants, miss_indices=(3, 4, 5))
 
 
+def test_untilize_host_tensor_raises(expect_error):
+    torch_input_tensor = torch.ones((2, 3, 4, 4), dtype=torch.bfloat16)
+    input_tensor = ttnn.from_torch(torch_input_tensor, layout=ttnn.TILE_LAYOUT)
+
+    with expect_error(RuntimeError, "untilize: input tensor must be on device"):
+        ttnn.untilize(input_tensor)
+
+
 # ND-sharded DRAM input: the kernels run on the DRAM-bank worker cores, which are not the cores of the shard grid.
 # The per-core block count must follow the shards each worker processes, otherwise the device never finishes.
 @pytest.mark.parametrize("tensor_shape", [[1, 1, 64, 64], [2, 1, 96, 128]])

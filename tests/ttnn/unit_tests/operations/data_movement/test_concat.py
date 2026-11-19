@@ -1390,6 +1390,14 @@ def test_concat_dtype_uint8_sharded_s2s_tiled(device):
     assert torch.equal(got, torch.cat(torch_inputs, dim=3))
 
 
+def test_concat_host_tensor_raises(expect_error):
+    torch_input_tensor = torch.ones((2, 3, 4, 4), dtype=torch.bfloat16)
+    input_tensor = ttnn.from_torch(torch_input_tensor, layout=ttnn.ROW_MAJOR_LAYOUT)
+
+    with expect_error(RuntimeError, "Input tensor must be on device"):
+        ttnn.concat([input_tensor, input_tensor], dim=-1)
+
+
 @pytest.mark.parametrize("buffer_type", docstring_interleaved_buffer_type_params(ttnn.concat))
 @pytest.mark.parametrize("dtype, layout", docstring_dtype_layout_params(ttnn.concat))
 def test_concat_docstring_supported_inputs(dtype, layout, buffer_type, device):
