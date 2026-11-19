@@ -134,6 +134,18 @@ class TestParseCompactTs(unittest.TestCase):
     def test_rfc3339_passthrough(self):
         self.assertEqual(parse_compact_ts("2024-01-15T14:30:00Z"), "2024-01-15T14:30:00Z")
 
+    def test_rfc3339_positive_offset_to_utc(self):
+        self.assertEqual(parse_compact_ts("2024-01-15T14:30:00+02:00"), "2024-01-15T12:30:00Z")
+
+    def test_rfc3339_negative_offset_to_utc(self):
+        self.assertEqual(parse_compact_ts("2024-01-15T09:30:00-05:00"), "2024-01-15T14:30:00Z")
+
+    def test_rfc3339_utc_offset_with_fraction(self):
+        self.assertEqual(parse_compact_ts("2024-01-15T14:30:00.500+00:00"), "2024-01-15T14:30:00Z")
+
+    def test_naive_datetime_returns_none(self):
+        self.assertIsNone(parse_compact_ts("2024-01-15T14:30:00"))
+
     def test_no_ts_token_returns_none(self):
         self.assertIsNone(parse_compact_ts("not-a-date"))
 
