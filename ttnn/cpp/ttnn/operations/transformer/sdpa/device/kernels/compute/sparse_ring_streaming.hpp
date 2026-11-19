@@ -963,10 +963,10 @@ static __attribute__((noinline, noclone)) void sdpa_resident_piece_step_compact(
  * step per resident chunk of the head, each with its own bias row (pushed by the reader in Q-chunk order after the
  * pooled K/V entry).
  *
- * The Q chunks a core owns can span two heads (a contiguous flat split, or with load balancing its unit table, in
- * ascending order); the reader streams the heads' pieces interleaved per k, in head order, and this function mirrors
- * that order. On the last ring iteration the normalized output of every resident chunk is left in cb_out, in Q-chunk
- * order, for the writer, and the resident Q chunks are popped.
+ * The Q chunks a core owns can span two heads (a contiguous flat split); the reader streams the heads' pieces
+ * interleaved per k, in head order, and this function mirrors that order. On the last ring iteration the normalized
+ * output of every resident chunk is left in cb_out, in Q-chunk order, for the writer, and the resident Q chunks are
+ * popped.
  */
 template <
     uint32_t Sq_chunk_t,
@@ -1147,7 +1147,7 @@ void sdpa_ring_resident(
     // With load balancing, global_q_start and global_q_end are positions in the core's unit table.
     const auto res_head = [&](uint32_t i) -> uint32_t {
         if constexpr (unit_table_on) {
-            return ((unit_table[global_q_start + i] & sparse_balance::kUnitMask) / num_q_chunks) % NH;
+            return (sparse_balance::unit_of(unit_table[global_q_start + i]) / num_q_chunks) % NH;
         } else {
             return ((global_q_start + i) / num_q_chunks) % NH;
         }

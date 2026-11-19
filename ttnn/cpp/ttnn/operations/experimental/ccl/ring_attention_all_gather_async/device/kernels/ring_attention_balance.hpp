@@ -9,7 +9,8 @@
 // balance core:
 //   1  this device's cost page is in DRAM: link 0 multicasts it to the same page on every device in this writer's
 //      direction, then an increment of their tables_arrived;
-//   2  the partner page is: this writer's share of the swapped-out row blocks (every head's Q pages and mask row) goes
+//   2  the partner page is (so every cost page has been read): an increment of tables_read on the devices the cost
+//      page went to, then this writer's share of the swapped-out row blocks (every head's Q pages and mask row) goes
 //      to the partner slot's import buffers, each block followed by an increment of the partner's imports_arrived;
 //   3  the swapped-in blocks' outputs are in the export buffer: this writer's share goes to the home device's output,
 //      each block followed by an increment of the home's returns_arrived.
@@ -28,6 +29,7 @@
 #include "cpp/ttnn/operations/ccl/kernel_common/worker_routing_utils.hpp"
 #include "cpp/ttnn/operations/ccl/common/kernels/minimal_ccl_common.hpp"
 #include "ttnn/operations/transformer/sdpa/device/kernels/sparse_ring_balance_plan.hpp"
+#include "ring_attention_rank_mapping.hpp"
 
 namespace ring_attention_balance {
 
@@ -44,6 +46,7 @@ enum Arg : uint32_t {
     kTablesArrived,
     kImportsArrived,
     kReturnsArrived,
+    kTablesRead,
     kBalanceX,
     kBalanceY,
     kFlagSemaphore,
@@ -68,16 +71,22 @@ enum Arg : uint32_t {
     kListOffset,  // the scratch's partner-list region (after the data region)
     kNumArgs,
 };
+static_assert(kNumArgs == ttnn::ring_attention_all_gather::kBalanceWriterArgCount);
 
-template <
-    bool enabled,
-    bool minus_side,  // this writer sends toward tensor rank - 1
-    typename TableArgs,
-    typename PartnerArgs,
-    typename QArgs,
-    typename MaskArgs,
-    typename OutArgs>
+// The writer's balance accessors (cost table, partner page, Q, mask, output), from compile-time arg kOffset.
+template <uint32_t kOffset>
+struct Accessors {
+    static constexpr auto table() { return TensorAccessorArgs<kOffset>(); }
+    static constexpr auto partner() { return TensorAccessorArgs<table().next_compile_time_args_offset()>(); }
+    static constexpr auto q() { return TensorAccessorArgs<partner().next_compile_time_args_offset()>(); }
+    static constexpr auto mask() { return TensorAccessorArgs<q().next_compile_time_args_offset()>(); }
+    static constexpr auto out() { return TensorAccessorArgs<mask().next_compile_time_args_offset()>(); }
+};
+
+template <bool enabled, bool minus_side /* this writer sends toward tensor rank - 1 */, uint32_t kArgsOffset>
 class Exchange {
+    using Acc = Accessors<kArgsOffset>;
+
 public:
     Exchange(
         uint32_t base, uint32_t scratch, volatile PACKET_HEADER_TYPE* data_hdr, volatile PACKET_HEADER_TYPE* inc_hdr) :
@@ -105,7 +114,7 @@ public:
             flag.wait_min(3);
             for_each_block([&](uint32_t b, uint32_t pb, uint32_t hops) {
                 route(hops);
-                send_blocks(conn, OutArgs{}, arg(kExportOut), arg(kOut), b, pb, arg(kVdht), arg(kOutPageBytes));
+                send_blocks(conn, Acc::out(), arg(kExportOut), arg(kOut), b, pb, arg(kVdht), arg(kOutPageBytes));
                 increment(conn, arg(kReturnsArrived));
             });
         }
@@ -122,9 +131,15 @@ private:
                 send_table(conn, range);
             }
         } else {
+            const uint32_t range = arg(kTableRange);
+            if (range > 0) {
+                inc_hdr_->to_chip_multicast(
+                    tt::tt_fabric::MulticastRoutingCommandHeader{1, static_cast<uint8_t>(range)});
+                increment(conn, arg(kTablesRead));
+            }
             for_each_block([&](uint32_t b, uint32_t pb, uint32_t hops) {
                 route(hops);
-                send_blocks(conn, QArgs{}, arg(kQ), arg(kImportQ), b, pb, arg(kDht), arg(kQPageBytes));
+                send_blocks(conn, Acc::q(), arg(kQ), arg(kImportQ), b, pb, arg(kDht), arg(kQPageBytes));
                 send_mask_rows(conn, b, pb);
                 increment(conn, arg(kImportsArrived));
             });
@@ -152,7 +167,7 @@ private:
     // This device's cost page to the same page of the `range` devices in this direction, in payload-sized pieces.
     template <typename Sender>
     void send_table(Sender* conn, uint32_t range) {
-        const auto table = TensorAccessor(TableArgs{}, arg(kTable));
+        const auto table = TensorAccessor(Acc::table(), arg(kTable));
         const uint32_t page = arg(kRank);
         const uint32_t bytes = arg(kTablePageBytes);
         const uint32_t piece = arg(kMaxPayload);
@@ -177,7 +192,7 @@ private:
         const uint32_t me = arg(kRank);
         const uint32_t list = scratch_ + arg(kListOffset);
         noc_async_read(
-            TensorAccessor(PartnerArgs{}, arg(kPartner)).get_noc_addr(0),
+            TensorAccessor(Acc::partner(), arg(kPartner)).get_noc_addr(0),
             list,
             (q_blocks + 15) / 16 * 16 * sizeof(uint32_t));
         noc_async_read_barrier();
@@ -239,8 +254,8 @@ private:
     // Every head's mask row of local block b to block pb's row of the partner's import mask, in payload pieces.
     template <typename Sender>
     void send_mask_rows(Sender* conn, uint32_t b, uint32_t pb) {
-        const auto src = TensorAccessor(MaskArgs{}, arg(kMask));
-        const auto dst = TensorAccessor(MaskArgs{}, arg(kImportMask));
+        const auto src = TensorAccessor(Acc::mask(), arg(kMask));
+        const auto dst = TensorAccessor(Acc::mask(), arg(kImportMask));
         const uint32_t bytes = arg(kMaskRowBytes);
         const uint32_t piece = arg(kMaxPayload);
         for (uint32_t h = 0; h < arg(kHeads); ++h) {

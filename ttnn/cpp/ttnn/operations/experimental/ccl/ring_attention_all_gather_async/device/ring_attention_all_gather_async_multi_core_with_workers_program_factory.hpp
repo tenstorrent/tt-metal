@@ -156,6 +156,7 @@ struct RingAttentionBalance {
     uint32_t tables_arrived_addr = 0;
     uint32_t imports_arrived_addr = 0;
     uint32_t returns_arrived_addr = 0;
+    uint32_t tables_read_addr = 0;
     CoreCoord balance_core_noc;
     uint32_t heads = 0;
     uint32_t q_blocks = 0;     // Q blocks per head (row blocks)

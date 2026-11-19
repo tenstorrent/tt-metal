@@ -53,8 +53,6 @@ enum CompileTimeArg : uint32_t {
     kPartialReadinessEnabled,
     kOutputBankOwnedSchedule,
     kNumDramBanks,
-    // sparse_ring_sdpa's cross-device load balancing (ring_attention_balance.hpp).
-    kHasBalance,
     kNumFixedCompileTimeArgs,
 };
 
@@ -91,7 +89,12 @@ constexpr uint32_t mesh_cols = get_compile_time_arg_val(kMeshCols);
 constexpr bool partial_readiness_enabled = get_compile_time_arg_val(kPartialReadinessEnabled);
 constexpr bool output_bank_owned_schedule = get_compile_time_arg_val(kOutputBankOwnedSchedule);
 constexpr uint32_t num_dram_banks = get_compile_time_arg_val(kNumDramBanks);
-constexpr bool has_balance = get_compile_time_arg_val(kHasBalance);
+// sparse_ring_sdpa's cross-device load balancing (ring_attention_balance.hpp).
+#ifdef RING_ATTENTION_BALANCE
+constexpr bool has_balance = true;
+#else
+constexpr bool has_balance = false;
+#endif
 
 static_assert(!partial_readiness_enabled || num_inputs == 1, "partial readiness requires one gathered input");
 static_assert(
@@ -158,16 +161,10 @@ void kernel_main() {
                                              ? std::get<num_inputs - 1>(outputs_args).next_compile_time_args_offset()
                                              : (kNumFixedCompileTimeArgs + num_inputs);
     constexpr auto meta_args = TensorAccessorArgs<kMetaArgsOffset>();
-    // Load balancing: the cost table, the partner page, Q (and its import buffer), the mask (and its), the output (and
-    // the export buffer), each pair laid out alike.
-    constexpr uint32_t kBalanceArgsOffset =
+    // Load balancing: its accessors follow the gather's (ring_attention_balance::Accessors).
+    [[maybe_unused]] constexpr uint32_t kBalanceArgsOffset =
         has_metadata ? meta_args.next_compile_time_args_offset()
                      : std::get<num_inputs - 1>(outputs_args).next_compile_time_args_offset();
-    constexpr auto balance_table_args = TensorAccessorArgs<kBalanceArgsOffset>();
-    constexpr auto balance_partner_args = TensorAccessorArgs<balance_table_args.next_compile_time_args_offset()>();
-    constexpr auto balance_q_args = TensorAccessorArgs<balance_partner_args.next_compile_time_args_offset()>();
-    constexpr auto balance_mask_args = TensorAccessorArgs<balance_q_args.next_compile_time_args_offset()>();
-    constexpr auto balance_out_args = TensorAccessorArgs<balance_mask_args.next_compile_time_args_offset()>();
     ///////////////////////////////////////////////////
     // ARGS
     ///////////////////////////////////////////////////
@@ -327,15 +324,8 @@ void kernel_main() {
             get_local_cb_interface(get_arg_val<uint32_t>(balance_args + ring_attention_balance::kNumArgs));
         balance_scratch = scratch_cb.fifo_limit - scratch_cb.fifo_size;
     }
-    ring_attention_balance::Exchange<
-        has_balance,
-        direction == 1,
-        decltype(balance_table_args),
-        decltype(balance_partner_args),
-        decltype(balance_q_args),
-        decltype(balance_mask_args),
-        decltype(balance_out_args)>
-        balance(balance_args, balance_scratch, balance_data_hdr, balance_inc_hdr);
+    ring_attention_balance::Exchange<has_balance, direction == 1, kBalanceArgsOffset> balance(
+        balance_args, balance_scratch, balance_data_hdr, balance_inc_hdr);
     const auto balance_poll = [&]() { balance.poll(fabric_direction_connection); };
 
     uint32_t slice_writes = 0;

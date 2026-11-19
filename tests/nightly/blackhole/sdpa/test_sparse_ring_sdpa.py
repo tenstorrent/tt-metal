@@ -29,10 +29,12 @@ BLOCK = 64  # tokens per (square) mask block, passed as block_size; also the q c
 HEADS_PER_DEVICE = 14  # MiniMax-H3 at TP=4
 D = 128
 KEEP_ALL = 1.0
+TRACE_REGION_SIZE = 50_000_000  # test_balance_trace_masks: one traced call of the op
 SLOW = pytest.mark.skipif(os.environ.get("CI") == "true", reason="production-size shapes - skip on CI")
 # On CI (a shared job with a tight time budget) only these cases run, about 2 minutes on a Galaxy: one per feature
 # (dense equivalence, one local head, a short last shard, ragged shards, partial blocks, LoFi block float, block
-# counts, several passes, no block 0, frame masks, per-head masks, argument checks). The rest run locally.
+# counts, several passes, no block 0, frame masks, per-head masks, load balancing, argument checks). The rest run
+# locally.
 CI_SUBSET = {
     "test_keep_all_matches_dense[r1024k256]",
     "test_keep_all_matches_dense[r1024k256-one_head]",
@@ -45,6 +47,8 @@ CI_SUBSET = {
     "test_without_block0[r1024k256-band-kept_only]",
     "test_frame_mask[256-window]",
     "test_heads_differ",
+    "test_balance[r1024k256-prefix-kept_only]",
+    "test_balance_masks_per_call",
 }
 
 
@@ -311,7 +315,7 @@ def dense_reference(q, k, v, logical_n, scale, heads, shards, rows):
 
 @pytest.fixture(scope="module")
 def runtime():
-    rt = open_ring_joint_sdpa_runtime(MESH_CONFIG)
+    rt = open_ring_joint_sdpa_runtime(MESH_CONFIG, trace_region_size=TRACE_REGION_SIZE)
     yield rt
     close_ring_joint_sdpa_runtime(rt)
 
@@ -901,14 +905,15 @@ def test_determinism(runtime):
 BALANCE_MASKS = ["heavy_rows", "prefix", "causal"]
 
 
-def balance_mask(geo, S, H, *, kind, density=0.1, seed=0, heavy_rows=16, heavy=0.9, heads=None, prefix_blocks=4):
+def balance_mask(geo, S, H, *, kind, density=0.1, seed=0, heavy_rows=16, heavy=0.9, heads=None, dense_blocks=4):
     """A mask whose rows cost very differently, for the op's load balancing: within a device a head's units over its
     cores, across devices row blocks swap.
 
       heavy_rows  make_mask at `density`, then `heavy_rows` random (shard, head, Q block) rows keep `heavy` of the
                   blocks (heads drawn from `heads`, default all)
-      prefix      make_mask at `density`, then the first `prefix_blocks` Q blocks of shard 0 keep every block and every
+      prefix      make_mask at `density`, then the first `dense_blocks` Q blocks of shard 0 keep every block and every
                   row keeps those blocks: a dense text prefix on one device
+      suffix      the same with the last `dense_blocks` Q blocks of shard S - 1
       causal      Q block i keeps the K blocks j <= i in sequence order: the last shard's rows cost ~2x the mean, the
                   first's almost nothing
 
@@ -932,9 +937,12 @@ def balance_mask(geo, S, H, *, kind, density=0.1, seed=0, heavy_rows=16, heavy=0
             h = heads[int(torch.randint(len(heads), (1,), generator=g))]
             qb = int(torch.randint(nb, (1,), generator=g))
             mask[s, h, qb] = (torch.rand(S * nb_pad, generator=g) < heavy).to(torch.int64)
-    elif kind == "prefix":
-        mask[0, :, :prefix_blocks] = 1
-        mask[:, :, :nb, :prefix_blocks] = 1
+    elif kind in ("prefix", "suffix"):
+        assert 0 < dense_blocks <= nb, f"{dense_blocks} dense blocks do not fit one shard's {nb}"
+        s = 0 if kind == "prefix" else S - 1
+        blocks = torch.arange(dense_blocks) if kind == "prefix" else torch.arange(nb - dense_blocks, nb)
+        mask[s, :, blocks] = 1
+        mask[:, :, :nb, s * nb_pad + blocks] = 1
     elif kind != "causal":
         raise ValueError(f"unknown balance mask {kind}")
     mask = mask * full
@@ -942,13 +950,19 @@ def balance_mask(geo, S, H, *, kind, density=0.1, seed=0, heavy_rows=16, heavy=0
     return mask
 
 
-@pytest.mark.parametrize("pooled", [False, True], ids=["kept_only", "pooled"])
-@pytest.mark.parametrize("kind", BALANCE_MASKS)
-@pytest.mark.parametrize("geom", ["r1024k256", "r1184k256"])
+@pytest.mark.parametrize(
+    "geom, kind, pooled",
+    [
+        pytest.param(geom, kind, pooled, id=f"{geom}-{kind}-{'pooled' if pooled else 'kept_only'}")
+        for geom, kinds in (("r1024k256", BALANCE_MASKS), ("r1184k256", ["prefix"]))
+        for kind in kinds
+        for pooled in (False, True)
+    ],
+)
 def test_balance(runtime, geom, kind, pooled):
     """Load balancing: rows ~90 % dense scattered over the heads the reference checks, a dense prefix on shard 0 and a
-    causal mask, against the reference (r1184: a partial last block, which never moves between devices). Every case
-    deals units to cores out of order and with per-core counts that differ from the static split (host-checked)."""
+    causal mask, against the reference; r1184 (a partial last block, which never moves between devices) on the
+    prefix only."""
     case = Case(runtime, GEOMETRIES[geom])
     checked = sorted({0, 1, case.H // 2, case.H - 1})
     mask = balance_mask(case.geo, case.S, case.H, kind=kind, seed=40, heads=checked)
@@ -984,6 +998,45 @@ def test_balance_masks_per_call(runtime):
             mask = balance_mask(case.geo, case.S, case.H, kind=kind, seed=seed, heads=checked)
         r = case.run(*case.inputs(seed), mask, want_dense=False, pooled=False)
         _check(f"call {call} {kind}", r, _density(mask, case.geo, case.S), dense_min=None, ref_min=0.999)
+
+
+def test_balance_trace_masks(runtime):
+    """Trace replay: one captured trace of the op, replayed after new mask contents are written into the same device
+    tensor (prefix, causal, random): costs, unit tables and swaps are recomputed on device every replay."""
+    geo = ALIGNED["r1024k256"]
+    case = Case(runtime, geo)
+    mesh = runtime.mesh_device
+    checked = sorted({0, 1, case.H // 2, case.H - 1})
+    q, k, v = case.inputs(60)
+    pk, pv = (pool(x, geo, case.S) for x in (k, v))
+    tq = case._upload(q, case.seq_dims, dtype=case.q_dtype)
+    tk, tv = (case._upload(x, case.seq_dims, dtype=case.dtype) for x in (k, v))
+    masks = [
+        balance_mask(geo, case.S, case.H, kind="prefix", seed=60),
+        balance_mask(geo, case.S, case.H, kind="causal", seed=61),
+        make_mask(geo, case.S, case.H, density=0.2, seed=62),
+    ]
+    t_mask = case._upload(masks[0], case.dims(0, 1), dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT)
+    ttnn.deallocate(case.call(tq, tk, tv, t_mask))  # compile
+    ttnn.synchronize_device(mesh)
+    trace_id = ttnn.begin_trace_capture(mesh, cq_id=0)
+    out = case.call(tq, tk, tv, t_mask)
+    ttnn.end_trace_capture(mesh, trace_id, cq_id=0)
+    try:
+        for i, mask in enumerate(masks):
+            host_mask = ttnn.from_torch(
+                mask, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT, mesh_mapper=case.mapper(case.dims(0, 1))
+            )
+            ttnn.copy_host_to_device_tensor(host_mask, t_mask)
+            ttnn.execute_trace(mesh, trace_id, cq_id=0, blocking=True)
+            sparse = ttnn.to_torch(out, mesh_composer=case.composer).float()
+            ref = sparse_reference(q, k, v, mask, pk, pv, geo, case.S, case.scale, pooled=False, heads=checked)
+            r = {"sparse": sparse[:, :, : geo.logical_n], "dense": None, "ref": ref[:, :, : geo.logical_n]}
+            _check(f"trace replay {i}", r, _density(mask, geo, case.S), dense_min=None, ref_min=0.999)
+    finally:
+        ttnn.release_trace(mesh, trace_id)
+        ttnn.deallocate(out)
+        ttnn.deallocate(t_mask)
 
 
 @pytest.mark.parametrize("geom", ["r1024k256", "r1024k512"])

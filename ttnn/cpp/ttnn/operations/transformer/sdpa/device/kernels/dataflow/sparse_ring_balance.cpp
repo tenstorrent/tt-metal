@@ -11,18 +11,14 @@
 #include "api/core_local_mem.h"
 #include "ttnn/operations/transformer/sdpa/device/kernels/sparse_ring_balance_plan.hpp"
 
-// Load balancing of sparse_ring_sdpa, one core per device (next to the gather workers), every call:
-//   1. wait until every SDPA core has written its static units' costs into this device's table page (DRAM);
-//   2. cross-device (remote): add the device's row-block costs to the page, have the gather writers multicast it to
-//      every device (flag 1), wait for the other devices' pages, run the row-block swaps (every device computes all of
-//      them, the same way), write this device's partner page and have the writers send its swapped row blocks (flag 2);
-//   3. deal every head's units over its cores on the costs of the units the slots now hold
-//      (sparse_balance::plan_unit_tables), write each SDPA core's unit table into its cb_balance page, then release it;
-//   4. cross-device: once the swapped-in row blocks have arrived, tell every SDPA core; once their outputs are
-//      written, have the writers send them home (flag 3); wait until this device's own swapped-out outputs are back.
-// Fabric counters (GlobalSemaphores) are consumed by an atomic decrement, never reset: an increment of the next call
-// that lands early is kept. The hot loops work in this RISC's local memory (sparse_balance::LocalScratch): its L1 loads
-// are uncached and several times slower.
+// Load balancing of sparse_ring_sdpa, one core per device, every call:
+//   1. wait for every SDPA core's unit costs in this device's table page (DRAM);
+//   2. cross-device: share the pages through the gather writers and compute the row-block swaps (sparse_balance::
+//      place_swaps, identically on every device), then have the writers send the swapped row blocks;
+//   3. plan every core's unit table (sparse_balance::plan_unit_tables) and release it to the SDPA cores;
+//   4. cross-device: signal the SDPA cores once the imports arrive, have the writers send their outputs home, and wait
+//      for this device's own outputs to come back.
+// Fabric counters are consumed by an atomic decrement, never reset, so an early increment of the next call is kept.
 void kernel_main() {
     constexpr uint32_t units = get_named_compile_time_arg_val("balance_units");
     constexpr uint32_t cores = get_named_compile_time_arg_val("balance_cores");
@@ -67,6 +63,7 @@ void kernel_main() {
     const uint32_t tables_arrived = get_arg_val<uint32_t>(argidx++);
     const uint32_t imports_arrived = get_arg_val<uint32_t>(argidx++);
     const uint32_t returns_arrived = get_arg_val<uint32_t>(argidx++);
+    const uint32_t tables_read = get_arg_val<uint32_t>(argidx++);
     const uint32_t n_writers = get_arg_val<uint32_t>(argidx++);
     const uint32_t xs = argidx;  // NoC x of each SDPA grid column, NoC y of each row, then (x, y) of each gather writer
     const uint32_t ys = xs + grid_x;
@@ -79,23 +76,18 @@ void kernel_main() {
     const sparse_balance::Scratch layout(devices, cores, cost_words, q_blocks, swappable, units);
     CircularBuffer cb(cb_scratch);
     cb.reserve_back(1);
-    // The factory sizes the CB one 64-byte line above the layout, so the regions can start 64-byte aligned.
+    // The factory sizes the CB 64 bytes above the layout for this alignment.
     uint32_t* const base = reinterpret_cast<uint32_t*>((cb.get_write_ptr() + 63) & ~63u);
     ASSERT((layout.words + 16) * sizeof(uint32_t) <= get_local_cb_interface(cb_scratch).fifo_size);
     uint32_t* const tables = base + layout.tables;
 
-    // The gather writers' flag: 1 = this device's cost page is complete, 2 = its partner page is, 3 = the outputs of
-    // the row blocks it computes for other devices are written.
+    // The gather writers' flag: 1 = the cost page is ready, 2 = the partner page is, 3 = the imports' outputs are.
     const auto signal_writers = [&]() {
         for (uint32_t w = 0; w < n_writers; ++w) {
-            noc_semaphore_inc(
-                get_noc_addr(
-                    get_arg_val<uint32_t>(writers + 2 * w),
-                    get_arg_val<uint32_t>(writers + 2 * w + 1),
-                    get_semaphore(writer_flag_sem)),
-                1);
+            Semaphore<>(writer_flag_sem)
+                .up(noc, get_arg_val<uint32_t>(writers + 2 * w), get_arg_val<uint32_t>(writers + 2 * w + 1), 1);
         }
-        noc_async_atomic_barrier();
+        noc.async_atomic_barrier();
     };
     // Wait for a fabric counter on this core to reach n, then consume n of it.
     const auto take_global = [&](uint32_t addr, uint32_t n) {
@@ -107,11 +99,10 @@ void kernel_main() {
         noc_async_atomic_barrier();
     };
 
-    // 1. Every working SDPA core has written its slice of this device's table page (and barriered it).
+    // 1. Every working SDPA core has written its costs.
     Semaphore<>(sem_costs).wait_min(active);
 
-    // 2. This device's page: its unit costs and row-block costs in one sequential walk (the static split holds flat
-    // units in core order, core c's at its slice).
+    // 2. This device's unit costs (in flat unit order) and row-block costs.
     const uint32_t mine = remote ? me : 0u;
     const auto read_page = [&](uint32_t r) {
         noc.async_read(
@@ -147,8 +138,7 @@ void kernel_main() {
         }
     }
 
-    // Cross-device: the row-block costs into this device's page, every device's page, the swaps (on every device's
-    // row-block costs, each sorted heaviest first), and the swapped-in slots' unit costs.
+    // Cross-device: publish the row-block costs, read every device's page, place the swaps.
     uint32_t* const partners = base + layout.partners;
     uint32_t swaps_here = 0;
     if constexpr (remote) {
@@ -156,7 +146,7 @@ void kernel_main() {
         for (uint32_t b = 0; b < q_blocks_pad; ++b) {
             tail[b] = b < q_blocks ? local.swap.row[b] : 0u;
         }
-        (void)tail[q_blocks_pad - 1];  // the RISC stores land before the NoC reads them
+        sparse_balance::flush_stores(tail, q_blocks_pad - 1);
         noc.async_write(
             CoreLocalMem<uint32_t>(reinterpret_cast<uint32_t>(tail)),
             table,
@@ -214,7 +204,7 @@ void kernel_main() {
                 swaps_here += local.imported[b];
             }
         }
-        (void)partner_page[q_blocks_pad - 1];  // the RISC stores land before the NoC reads them
+        sparse_balance::flush_stores(partner_page, q_blocks_pad - 1);
         noc.async_write(
             CoreLocalMem<uint32_t>(reinterpret_cast<uint32_t>(partner_page)),
             TensorAccessor(partner_args, partner_addr),
@@ -224,7 +214,7 @@ void kernel_main() {
         noc.async_write_barrier();
         signal_writers();
 
-        // A swapped slot computes its partner's unit: that unit's cost, from the partner device's page.
+        // A swapped slot takes its partner unit's cost.
         for (uint32_t b = 0; b < q_blocks; ++b) {
             if (local.imported[b]) {
                 const uint32_t p = partners[me * q_blocks + b];
@@ -238,7 +228,7 @@ void kernel_main() {
         }
     }
 
-    // 3. Unit tables on the costs of the units the slots hold now.
+    // 3. Unit tables on the costs of the units the slots now hold.
     uint32_t* const unit_tables = base + layout.unit_tables;
     sparse_balance::plan_unit_tables(
         split,
@@ -250,37 +240,41 @@ void kernel_main() {
         base + layout.core_loads,
         base + layout.ranked,
         local.head());
-    // Each core's table into its cb_balance page, at the address the CB has on every core of the program (this one
-    // included), then the release each core waits on.
+    // Each core's table into its cb_balance page (the CB has the same address on every core), then its release.
     const uint32_t unit_table_addr = CircularBuffer(cb_table).get_write_ptr();
     for (uint32_t i = 0; i < cores; ++i) {
         volatile uint32_t* const unit_table = unit_tables + i * sparse_balance::kTableWords;
         const uint32_t n = unit_table[0];
-        (void)unit_table[n];  // the RISC stores land before the NoC reads them
-        noc_async_write(
-            reinterpret_cast<uint32_t>(unit_table),
-            get_noc_addr(core_x(i), core_y(i), unit_table_addr),
-            (n + 1) * sizeof(uint32_t));
+        sparse_balance::flush_stores(unit_table, n);
+        noc.async_write(
+            CoreLocalMem<uint32_t>(reinterpret_cast<uint32_t>(unit_table)),
+            UnicastEndpoint{},
+            (n + 1) * sizeof(uint32_t),
+            {},
+            {.noc_x = core_x(i), .noc_y = core_y(i), .addr = unit_table_addr});
     }
-    noc_async_write_barrier();
+    noc.async_write_barrier();
     for (uint32_t i = 0; i < cores; ++i) {
-        noc_inline_dw_write(get_noc_addr(core_x(i), core_y(i), get_semaphore(sem_table)), 1);
+        noc.inline_dw_write(
+            UnicastEndpoint{}, 1, {.noc_x = core_x(i), .noc_y = core_y(i), .addr = get_semaphore(sem_table)});
     }
-    noc_async_write_barrier();
+    noc.async_write_barrier();
 
     // 4. Imports in, outputs out, this device's outputs back.
     if constexpr (remote) {
         if (swaps_here > 0) {
             take_global(imports_arrived, swaps_here);
             for (uint32_t i = 0; i < cores; ++i) {
-                noc_semaphore_inc(get_noc_addr(core_x(i), core_y(i), get_semaphore(sem_import)), 1);
+                Semaphore<>(sem_import).up(noc, core_x(i), core_y(i), 1);
             }
-            noc_async_atomic_barrier();
+            noc.async_atomic_barrier();
             Semaphore<>(sem_outputs).wait_min(swaps_here * heads);
         }
         signal_writers();
         if (swaps_here > 0) {
             take_global(returns_arrived, swaps_here);
         }
+        // Every other device has read this device's page, so the next call may overwrite it.
+        take_global(tables_read, devices - 1);
     }
 }

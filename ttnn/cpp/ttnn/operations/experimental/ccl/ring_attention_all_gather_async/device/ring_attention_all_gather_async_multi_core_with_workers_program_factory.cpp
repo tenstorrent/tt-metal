@@ -257,8 +257,6 @@ constexpr uint32_t kPrefetchPackets = 4;
 // The halo writer scatters up to the fabric's scatter-write chunk limit (NOC_SCATTER_WRITE_MAX_CHUNKS).
 constexpr uint32_t kMaxHaloPagesPerPacket = 4;
 constexpr uint32_t kPacketHeaderSlots = 8;
-// The writer's load-balancing block: ring_attention_balance::kNumArgs (kernels/ring_attention_balance.hpp).
-constexpr uint32_t kBalanceWriterArgCount = 33;
 constexpr uint32_t kDoubleBufferingFactor = 2;
 constexpr uint32_t kMaxScatterPagesPerPacket = 2;
 
@@ -1160,7 +1158,6 @@ void ring_attention_all_gather_async_multi_core_with_workers_helper(
             static_cast<uint32_t>(partial_readiness_enabled),   // kPartialReadinessEnabled
             static_cast<uint32_t>(output_bank_owned_schedule),  // kOutputBankOwnedSchedule
             num_dram_banks,                                     // kNumDramBanks
-            static_cast<uint32_t>(has_balance),                 // kHasBalance
         };
         TT_FATAL(
             args.size() == ttnn::ring_attention_all_gather::kWriterFixedCompileTimeArgCount,
@@ -1173,14 +1170,11 @@ void ring_attention_all_gather_async_multi_core_with_workers_helper(
         if (has_metadata) {
             tt::tt_metal::TensorAccessorArgs(kv_actual_isl->buffer()).append_to(args);
         }
-        // The writer declares the balancing accessors in every build (one binary layout), so they are always appended.
-        for (tt::tt_metal::Buffer* const buf :
-             {has_balance ? balance->table : nullptr,
-              has_balance ? balance->partner : nullptr,
-              has_balance ? balance->q : nullptr,
-              has_balance ? balance->mask : nullptr,
-              has_balance ? balance->out : nullptr}) {
-            tt::tt_metal::TensorAccessorArgs(buf).append_to(args);
+        if (has_balance) {
+            for (tt::tt_metal::Buffer* const buf :
+                 {balance->table, balance->partner, balance->q, balance->mask, balance->out}) {
+                tt::tt_metal::TensorAccessorArgs(buf).append_to(args);
+            }
         }
         return args;
     };
@@ -1205,6 +1199,9 @@ void ring_attention_all_gather_async_multi_core_with_workers_helper(
     sender_writer_forward_kernel.config = ReaderConfigDescriptor{};
     sender_writer_forward_kernel.compile_time_args = make_writer_compile_time_args(
         sender_forward_cb_index, reserved_packet_header_forward_CB_index, kForwardDirection);
+    if (has_balance) {
+        sender_writer_forward_kernel.defines.emplace_back("RING_ATTENTION_BALANCE", "1");
+    }
     sender_writer_forward_kernel.common_runtime_args = {
         ring_index, num_targets_forward, num_targets_backward, unicast_backward_args[0], unicast_backward_args[1]};
     // Backward Direction
@@ -1226,6 +1223,9 @@ void ring_attention_all_gather_async_multi_core_with_workers_helper(
     sender_writer_backward_kernel.config = ReaderConfigDescriptor{};
     sender_writer_backward_kernel.compile_time_args = make_writer_compile_time_args(
         sender_backward_cb_index, reserved_packet_header_backward_CB_index, kBackwardDirection);
+    if (has_balance) {
+        sender_writer_backward_kernel.defines.emplace_back("RING_ATTENTION_BALANCE", "1");
+    }
     sender_writer_backward_kernel.common_runtime_args = {
         ring_index, num_targets_forward, num_targets_backward, unicast_forward_args[0], unicast_forward_args[1]};
 
@@ -1422,6 +1422,7 @@ void ring_attention_all_gather_async_multi_core_with_workers_helper(
             put(config.tables_arrived_addr);
             put(config.imports_arrived_addr);
             put(config.returns_arrived_addr);
+            put(config.tables_read_addr);
             put(static_cast<uint32_t>(config.balance_core_noc.x));
             put(static_cast<uint32_t>(config.balance_core_noc.y));
             put(config.writer_flag_semaphore);
@@ -1445,10 +1446,10 @@ void ring_attention_all_gather_async_multi_core_with_workers_helper(
             put(max_payload_size_bytes);
             put(balance_list_offset);
             TT_FATAL(
-                pushed == kBalanceWriterArgCount,
+                pushed == ttnn::ring_attention_all_gather::kBalanceWriterArgCount,
                 "Ring attention load-balancing args: {} words, the writer reads {}",
                 pushed,
-                kBalanceWriterArgCount);
+                ttnn::ring_attention_all_gather::kBalanceWriterArgCount);
             writer_args.push_back(balance_cb_index);
         }
 
