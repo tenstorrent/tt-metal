@@ -189,7 +189,7 @@ class TestTrayPower(unittest.TestCase):
         self.assertEqual(bmc.calls, [])
 
     def test_time_bounds(self):
-        # A bus that hangs costs one call timeout and hides no other tray's fault.
+        # A bus that hangs costs NO_ROUTE_TIMEOUTS call timeouts and hides no other tray's fault.
         clock, bmc = Clock(), FakeBmc(hsc={(3, 0x40): UV_WARN})
 
         def hang_tray_1(argv):

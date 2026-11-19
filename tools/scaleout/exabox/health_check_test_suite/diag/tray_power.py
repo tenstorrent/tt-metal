@@ -28,7 +28,7 @@ import re
 import subprocess
 import time
 
-from .common import emit_result, log, run
+from .common import log, run
 from .galaxy import TRAY_TO_UBB_NIBBLE
 from .model import FAIL, PASS, SKIP, WARN, Check, Phase
 
@@ -127,15 +127,12 @@ class TrayPowerReader:
         except subprocess.TimeoutExpired as e:
             self.bus_timeouts[bus] = self.bus_timeouts.get(bus, 0) + 1
             self._err(bus, f"ipmitool: no reply in {e.timeout:g} s")
-            hung = [b for b in TRAY_BUS.values() if self.bus_timeouts.get(b, 0) >= NO_ROUTE_TIMEOUTS]
-            if self.reads_ok == 0 and len(hung) == len(TRAY_BUS):
-                self.stopped = "no route: ipmitool timed out"
             return None
         except FileNotFoundError as e:
             self._err(bus, repr(e))
             self.stopped = "no route: ipmitool not found"
             return None
-        except (OSError, subprocess.SubprocessError) as e:
+        except OSError as e:
             self._err(bus, repr(e))
             return None
         if cp.returncode != 0:
@@ -250,4 +247,3 @@ def run_tray_power(phase: Phase, dry_run: bool, runner=None, clock=time.monotoni
         return
     for c in checks:
         phase.add(c)
-        emit_result(c.name, c.status)
