@@ -423,6 +423,10 @@ session's private memory (owner, said many times; 2026-10-30): memory stays on o
 next overseer never sees it.
 
 Standing owner decisions (moved here from private memory, 2026-10-30):
+- Procedural limits never stall progress (owner, 2026-11-19): an attempt cap, the abort cap (MAX_ABORTS), a retry or
+  escalation rule that trips on failures that are not the agent's (a framework false violation, an overseer abort, a
+  bogus check; anything but the hardware) is overridden at once (`orchestrator resume --attempts <n>`, a fresh
+  attempt, classify as framework) and the run continues; the misfire is a framework bug to fix the same hour.
 - Perf picks (owner, 2026-10-28/29, DeepSeek-V4.1; apply to every model unless its owner says otherwise): accept a pick
   yourself when its gate passes, every accuracy metric is within its limit, and it wins on speed (device or wall) or
   on memory; also one that only removes work by construction (fewer ops, cached programs, work off the main thread)
