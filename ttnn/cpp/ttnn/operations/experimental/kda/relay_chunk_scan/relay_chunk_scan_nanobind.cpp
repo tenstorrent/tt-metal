@@ -62,9 +62,9 @@ void bind_relay_chunk_scan(nb::module_& mod) {
             gate_workspace (ttnn.Tensor): L1 tensor height-sharded over the heads' cores and the helpers (``cores``
                 less the senders that are not helpers), the same bytes on each: the output gate's working buffers, for
                 the call only. The relay takes K blocks as large as it holds.
-            semaphores (list[ttnn.GlobalSemaphore]): Eight zeroed counters on every core of the program: the
-                entry-state, final-state and final-carry arrivals, then the output gate's x and W ready and valid
-                counts and its landed count.
+            semaphores (list[ttnn.GlobalSemaphore]): Six zeroed counters on every core of the program: the
+                entry-state, final-state and final-carry arrivals, then the output gate's x and W block counts and its
+                landed count.
 
         Keyword Args:
             local_rows (int): Positive, 32-aligned token rows per SP device.

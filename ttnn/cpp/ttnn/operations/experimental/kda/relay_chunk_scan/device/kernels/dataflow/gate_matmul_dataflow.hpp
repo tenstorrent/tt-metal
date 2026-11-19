@@ -9,15 +9,22 @@
 #include "ttnn/cpp/ttnn/operations/experimental/kda/device/kernels/persistent_counter.hpp"
 
 // The output gate's operands, shared in sets: a set's leader reads each K block of the operand from DRAM into its own
-// buffer and sends it into its receivers', at the same address on each, a multicast per rectangle of them. The sets
-// are a table in the common runtime args from `table`: per group of cores an offset to its record, then the records:
-// the sets, then per set its leader's NoC x | y << 16, its receivers and their rectangles, then per rectangle its
-// lowest and highest cores' NoC x | y << 16 and its cores. A core of the group leads a set or is in a rectangle of one.
+// buffer, or receives it as a member of another set, and sends it into its receivers', at the same address on each, a
+// multicast per rectangle of them. The sets are a table in the common runtime args from `table`: per group of cores an
+// offset to its record, then the records: the sets, then per set its leader's NoC x | y << 16, its receivers and their
+// rectangles, then per rectangle its lowest and highest cores' NoC x | y << 16 and its cores. A core of the group is in
+// a rectangle of one set, or leads one, or both.
 //
-// Counts go to two persistent counters (persistent_counter.hpp) from common arg `counters`: `ready` on the leader,
-// where its receivers count the slots they free, and `valid` on the receivers, where the leader counts the blocks.
-// A receiver announces every free slot, so blocks are in flight in every slot.
+// The leader counts the blocks it sends on the receivers, in the persistent counter (persistent_counter.hpp) at common
+// arg `valid`. Each receiver tells the leader how many of its slots it has taken, in its own word of the leader's
+// `progress` words, one per NoC node of the set's rectangles (a count per receiver: one shared count would let a
+// receiver that is ahead stand in for one behind, whose slot would then be overwritten). A slot is free until first
+// taken, so a receiver writes only once it takes a slot a second time, after the leader's first block: by then the
+// leader has cleared its words.
 namespace kda_gate {
+
+// The progress words in the gate cores' progress CB: x's from its start, W's from here.
+constexpr uint32_t w_progress = 128;
 
 FORCE_INLINE uint64_t noc_address(uint32_t xy, uint32_t address) {
     return get_noc_addr(xy & 0xFFFF, xy >> 16, address);
@@ -27,74 +34,90 @@ FORCE_INLINE uint64_t noc_address(uint32_t xy, uint32_t address) {
 // step() never blocks, so one RISC can move two operands; all() moves one.
 class Share {
 public:
-    Share(uint32_t table, uint32_t group, uint32_t cb, uint32_t block_tiles, uint32_t block_bytes, uint32_t counters) :
+    Share(
+        uint32_t table,
+        uint32_t group,
+        uint32_t cb,
+        uint32_t block_tiles,
+        uint32_t block_bytes,
+        uint32_t valid,
+        uint32_t progress) :
         cb_(cb),
         block_tiles_(block_tiles),
         block_bytes_(block_bytes),
         slots_(get_local_cb_interface(cb).fifo_size / block_bytes),
-        ready_(get_common_arg_val<uint32_t>(counters)),
-        valid_(get_common_arg_val<uint32_t>(counters + 1)) {
+        valid_(get_common_arg_val<uint32_t>(valid)),
+        progress_(progress) {
         const uint32_t me = uint32_t{my_x[noc_index]} | uint32_t{my_y[noc_index]} << 16;
         const uint32_t record = table + get_common_arg_val<uint32_t>(table + group);
         uint32_t set = record + 1;
         for (uint32_t s = 0; s < get_common_arg_val<uint32_t>(record); ++s) {
             const uint32_t rectangles = get_common_arg_val<uint32_t>(set + 2);
-            if (get_common_arg_val<uint32_t>(set) == me) {
-                leader_ = true;
-                set_ = set;
-            }
+            // A node's word: the nodes of the set's earlier rectangles, then its place in its own.
+            uint32_t nodes = 0;
             for (uint32_t r = 0; r < rectangles; ++r) {
                 const uint32_t low = get_common_arg_val<uint32_t>(set + 3 + 3 * r);
                 const uint32_t high = get_common_arg_val<uint32_t>(set + 4 + 3 * r);
+                const uint32_t width = (high & 0xFFFF) - (low & 0xFFFF) + 1;
                 if ((me & 0xFFFF) >= (low & 0xFFFF) && (me & 0xFFFF) <= (high & 0xFFFF) && (me >> 16) >= (low >> 16) &&
                     (me >> 16) <= (high >> 16)) {
-                    set_ = set;
+                    in_ = set;
+                    index_ = nodes + (me & 0xFFFF) - (low & 0xFFFF) + ((me >> 16) - (low >> 16)) * width;
+                }
+                nodes += width * ((high >> 16) - (low >> 16) + 1);
+            }
+            if (get_common_arg_val<uint32_t>(set) == me) {
+                out_ = set;
+                nodes_ = nodes;
+                for (uint32_t i = 0; i < nodes; ++i) {
+                    reinterpret_cast<volatile tt_l1_ptr uint32_t*>(progress_)[i] = 0;
                 }
             }
             set += 3 + 3 * rectangles;
         }
     }
 
-    // Take every free slot (the leader reads its block, a receiver announces the slot) and push each block to compute
-    // as it lands; the leader sends its blocks on as its receivers free their slots, and takes a slot again only once
-    // its block has been sent. True once `blocks` blocks have moved.
+    // Take every free slot (reading its block, or announcing the slot to the leader of the set it receives in), push
+    // each block to compute as it lands, and send it on as the receivers of the set it leads free their slots; a slot
+    // is taken again only once its block has been sent. True once `blocks` blocks have moved.
     template <typename Read>
     FORCE_INLINE bool step(uint32_t blocks, const Read& read) {
-        while (reserved_ < blocks && reserved_ - (leader_ ? sent_ : pushed_) < slots_ &&
+        while (reserved_ < blocks && reserved_ - (out_ ? sent_ : pushed_) < slots_ &&
                cb_pages_reservable_at_back(cb_, (reserved_ - pushed_ + 1) * block_tiles_)) {
             cb_reserve_back(cb_, (reserved_ - pushed_ + 1) * block_tiles_);
-            if (leader_) {
-                read(reserved_, slot(reserved_));
+            if (in_) {
+                if (reserved_ >= slots_) {
+                    noc_inline_dw_write(
+                        noc_address(get_common_arg_val<uint32_t>(in_), progress_ + index_ * sizeof(uint32_t)),
+                        reserved_ + 1);
+                }
             } else {
-                noc_semaphore_inc(noc_address(get_common_arg_val<uint32_t>(set_), ready_), 1);
+                read(reserved_, slot(reserved_));
             }
             ++reserved_;
         }
-        if (!leader_) {
+        if (in_) {
             while (pushed_ < reserved_ && counted(valid_, pushed_ + 1)) {
                 cb_push_back(cb_, block_tiles_);
                 ++pushed_;
             }
-            return pushed_ == blocks;
-        }
-        if (pushed_ < reserved_) {
+        } else if (pushed_ < reserved_) {
             noc_async_read_barrier();
             cb_push_back(cb_, (reserved_ - pushed_) * block_tiles_);
             pushed_ = reserved_;
         }
-        while (sent_ < pushed_ && counted(ready_, receivers() * (sent_ + 1))) {
+        while (out_ && sent_ < pushed_ && taken(sent_ + 1)) {
             send(slot(sent_));
             ++sent_;
         }
-        return sent_ == blocks;
+        return pushed_ == blocks && (!out_ || sent_ == blocks);
     }
 
-    // After the last of `blocks` blocks: retire the counts and take this call's off the counters.
+    // After the last of `blocks` blocks: retire the counts and take this call's off the counter.
     FORCE_INLINE void finish(uint32_t blocks) const {
         noc_async_atomic_barrier();
-        if (leader_) {
-            kda_counter::consume(ready_, receivers() * blocks);
-        } else {
+        noc_async_write_barrier();
+        if (in_) {
             kda_counter::consume(valid_, blocks);
         }
     }
@@ -107,12 +130,27 @@ public:
     }
 
 private:
-    FORCE_INLINE uint32_t receivers() const { return get_common_arg_val<uint32_t>(set_ + 1); }
+    FORCE_INLINE uint32_t receivers() const { return get_common_arg_val<uint32_t>(out_ + 1); }
 
     // Block b's slot: the CB holds whole blocks from its base, a block per push.
     FORCE_INLINE uint32_t slot(uint32_t b) const {
         const auto& fifo = get_local_cb_interface(cb_);
         return fifo.fifo_limit - fifo.fifo_size + b % slots_ * block_bytes_;
+    }
+
+    // Whether every receiver has taken `slots` slots (each holds its first ones from the start): the words of the
+    // nodes that are not receivers stay clear.
+    FORCE_INLINE bool taken(uint32_t slots) const {
+        if (slots <= slots_) {
+            return true;
+        }
+        invalidate_l1_cache();
+        const auto* progress = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(progress_);
+        uint32_t ready = 0;
+        for (uint32_t i = 0; i < nodes_; ++i) {
+            ready += progress[i] >= slots;
+        }
+        return ready == receivers();
     }
 
     static FORCE_INLINE bool counted(uint32_t counter, uint32_t count) {
@@ -130,10 +168,10 @@ private:
     // Each of the set's rectangles, as (lowest, highest, cores).
     template <typename F>
     FORCE_INLINE void for_each_rectangle(const F& f) const {
-        for (uint32_t r = 0; r < get_common_arg_val<uint32_t>(set_ + 2); ++r) {
-            f(get_common_arg_val<uint32_t>(set_ + 3 + 3 * r),
-              get_common_arg_val<uint32_t>(set_ + 4 + 3 * r),
-              get_common_arg_val<uint32_t>(set_ + 5 + 3 * r));
+        for (uint32_t r = 0; r < get_common_arg_val<uint32_t>(out_ + 2); ++r) {
+            f(get_common_arg_val<uint32_t>(out_ + 3 + 3 * r),
+              get_common_arg_val<uint32_t>(out_ + 4 + 3 * r),
+              get_common_arg_val<uint32_t>(out_ + 5 + 3 * r));
         }
     }
 
@@ -160,10 +198,14 @@ private:
     uint32_t block_tiles_;
     uint32_t block_bytes_;
     uint32_t slots_;
-    uint32_t ready_;
     uint32_t valid_;
-    bool leader_ = false;
-    uint32_t set_ = 0;
+    uint32_t progress_;
+    // The common arg indices of the set this core leads and of the one it receives in (0: none).
+    uint32_t out_ = 0;
+    uint32_t in_ = 0;
+    // This receiver's word, and the leader's count of words.
+    uint32_t index_ = 0;
+    uint32_t nodes_ = 0;
     uint32_t reserved_ = 0;
     uint32_t sent_ = 0;
     uint32_t pushed_ = 0;

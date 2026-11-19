@@ -42,7 +42,8 @@ constexpr uint32_t gate_k = get_compile_time_arg_val(gate_ct + 2);
 constexpr uint32_t gate_columns = get_compile_time_arg_val(gate_ct + 3);
 constexpr uint32_t gate_groups = get_compile_time_arg_val(gate_ct + 4);
 constexpr uint32_t gate_table = get_compile_time_arg_val(gate_ct + 5);
-constexpr auto gate_weight_args = TensorAccessorArgs<gate_ct + 6>();
+constexpr uint32_t cb_progress = get_compile_time_arg_val(gate_ct + 6);
+constexpr auto gate_weight_args = TensorAccessorArgs<gate_ct + 7>();
 constexpr uint32_t state_tiles = kt * kt;
 
 // Every core of a head writes its chunk outputs, and every other core of a head first shares the output gate's W. The
@@ -65,7 +66,14 @@ void kernel_main() {
         const auto weight = TensorAccessor(gate_weight_args, get_common_arg_val<uint32_t>(3 + 2 * num_links));
         const uint32_t tile = get_tile_size(cb_gin1);
         const uint32_t first_column = head % heads * kt;
-        kda_gate::Share(gate_table, gate_groups + head, cb_gin1, gate_kb * kt, gate_kb * kt * tile, 4 + 2 * num_links)
+        kda_gate::Share(
+            gate_table,
+            gate_groups + head,
+            cb_gin1,
+            gate_kb * kt,
+            gate_kb * kt * tile,
+            4 + 2 * num_links,
+            get_write_ptr(cb_progress) + kda_gate::w_progress)
             .all(gate_k / gate_kb, [&](uint32_t b, uint32_t slot) {
                 for (uint32_t i = 0; i < gate_kb; ++i) {
                     for (uint32_t j = 0; j < kt; ++j) {

@@ -81,7 +81,8 @@ constexpr uint32_t gate_kb = get_compile_time_arg_val(gate_ct + 1);
 constexpr uint32_t gate_k = get_compile_time_arg_val(gate_ct + 2);
 constexpr uint32_t local_k = get_compile_time_arg_val(gate_ct + 3);
 constexpr uint32_t gate_table = get_compile_time_arg_val(gate_ct + 4);
-constexpr auto gate_input_args = TensorAccessorArgs<gate_ct + 5>();
+constexpr uint32_t cb_progress = get_compile_time_arg_val(gate_ct + 5);
+constexpr auto gate_input_args = TensorAccessorArgs<gate_ct + 6>();
 constexpr auto gate_local_args = TensorAccessorArgs<gate_input_args.next_compile_time_args_offset()>();
 constexpr uint32_t num_chunks = local_rows / tt::constants::TILE_HEIGHT;
 
@@ -103,12 +104,12 @@ void kernel_main() {
     const uint32_t final_semaphore = get_common_arg_val<uint32_t>(12);
     const uint32_t sp_rank = get_common_arg_val<uint32_t>(13);
     const uint32_t tp_rank = get_common_arg_val<uint32_t>(15);
-    // Then x's counters (gate_matmul_dataflow.hpp), and on a head core its helper's count of the head's g landed in
-    // cb_gate.
-    constexpr uint32_t x_counters = 16;
-    const uint32_t gate_landed = get_common_arg_val<uint32_t>(x_counters + 2);
+    // Then x's count of blocks (gate_matmul_dataflow.hpp), and on a head core its helper's count of the head's g landed
+    // in cb_gate.
+    constexpr uint32_t x_valid = 16;
+    const uint32_t gate_landed = get_common_arg_val<uint32_t>(x_valid + 1);
     // Then every core's NoC x | y << 16, in order: this head's from head * cores_per_head.
-    const size_t head_core_args = x_counters + 3 + head * cores_per_head;
+    const size_t head_core_args = x_valid + 2 + head * cores_per_head;
 
     // The bounds, each into its own page (a DRAM read keeps its source's alignment).
     cb_reserve_back(cb_chron, 1);
@@ -225,7 +226,8 @@ void kernel_main() {
             cb_gin0,
             core_chunks * gate_kb,
             core_chunks * gate_kb * tile,
-            x_counters)
+            x_valid,
+            get_write_ptr(cb_progress))
             .all(gate_k / gate_kb, [&](uint32_t b, uint32_t slot) {
                 for (uint32_t m = 0; m < core_chunks; ++m) {
                     for (uint32_t i = 0; i < gate_kb; ++i) {

@@ -21,7 +21,11 @@ constexpr uint32_t num_chunks = get_compile_time_arg_val(10);
 constexpr uint32_t cores_per_head = get_compile_time_arg_val(11);
 constexpr uint32_t gate_groups = get_compile_time_arg_val(12);
 constexpr uint32_t gate_table = get_compile_time_arg_val(13);
-constexpr auto gate_input_args = TensorAccessorArgs<14>();
+// What this kernel moves: x (and it writes the head's g), W, or both, where a sender leaves the helper one RISC.
+constexpr bool moves_x = get_compile_time_arg_val(14);
+constexpr bool moves_w = get_compile_time_arg_val(15);
+constexpr uint32_t cb_progress = get_compile_time_arg_val(16);
+constexpr auto gate_input_args = TensorAccessorArgs<17>();
 constexpr auto gate_local_args = TensorAccessorArgs<gate_input_args.next_compile_time_args_offset()>();
 constexpr auto gate_weight_args = TensorAccessorArgs<gate_local_args.next_compile_time_args_offset()>();
 
@@ -64,24 +68,51 @@ void kernel_main() {
             }
         }
     };
-    kda_gate::Share x(
-        gate_table, head / heads * cores_per_head, cb_gin0, core_chunks * gate_kb, core_chunks * gate_kb * x_tile, 4);
-    kda_gate::Share w(gate_table, gate_groups + head, cb_gin1, gate_kb * kt, gate_kb * kt * w_tile, 6);
-    // Both operands on this one RISC, each as far as its group lets it.
-    bool x_done = false;
-    bool w_done = false;
-    while (!(x_done && w_done)) {
-        x_done = x.step(blocks, read_x);
-        w_done = w.step(blocks, read_w);
+    // Only the RISC that moves an operand takes its share: a leader clears its receivers' words as it starts.
+    const auto share_x = [&]() {
+        return kda_gate::Share(
+            gate_table,
+            head / heads * cores_per_head,
+            cb_gin0,
+            core_chunks * gate_kb,
+            core_chunks * gate_kb * x_tile,
+            4,
+            get_write_ptr(cb_progress));
+    };
+    const auto share_w = [&]() {
+        return kda_gate::Share(
+            gate_table,
+            gate_groups + head,
+            cb_gin1,
+            gate_kb * kt,
+            gate_kb * kt * w_tile,
+            5,
+            get_write_ptr(cb_progress) + kda_gate::w_progress);
+    };
+    if constexpr (moves_x && moves_w) {
+        // Each operand as far as its group lets it.
+        auto x = share_x();
+        auto w = share_w();
+        bool x_done = false;
+        bool w_done = false;
+        while (!(x_done && w_done)) {
+            x_done = x.step(blocks, read_x);
+            w_done = w.step(blocks, read_w);
+        }
+        x.finish(blocks);
+        w.finish(blocks);
+    } else if constexpr (moves_x) {
+        share_x().all(blocks, read_x);
+    } else {
+        share_w().all(blocks, read_w);
+        return;
     }
-    x.finish(blocks);
-    w.finish(blocks);
 
     cb_wait_front(cb_gate, core_chunks * kt);
     const uint32_t gate = get_read_ptr(cb_gate);
     noc_async_write(gate, kda_gate::noc_address(head_xy, gate), core_chunks * kt * get_tile_size(cb_gate));
     noc_async_write_barrier();
-    noc_semaphore_inc(kda_gate::noc_address(head_xy, get_common_arg_val<uint32_t>(8)), 1);
+    noc_semaphore_inc(kda_gate::noc_address(head_xy, get_common_arg_val<uint32_t>(6)), 1);
     cb_pop_front(cb_gate, core_chunks * kt);
     noc_async_atomic_barrier();
 }

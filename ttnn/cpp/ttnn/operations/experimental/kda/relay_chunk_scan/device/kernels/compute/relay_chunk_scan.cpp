@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <cstdint>
+#include "api/debug/kernel_profiler.hpp"
 
 #include "api/compute/bcast.h"
 #include "api/compute/cb_api.h"
@@ -366,13 +367,19 @@ void kernel_main() {
     cb_pop_front(cb_ctl, 1);
 
     if (relay_head) {
-        relay_hop();
+        {
+            DeviceZoneScopedN("HOP");
+            relay_hop();
+        }
         if (holder) {
+            DeviceZoneScopedN("CARRY");
             carry_pass(split);
         }
     } else {
+        DeviceZoneScopedN("GATE-MM");
         kda_gate::matmul<gate_fidelity>(cb_gin0, cb_gin1, cb_gate, core_chunks, kt, gate_kb, gate_blocks);
     }
+    DeviceZoneScopedN("NORM");
     // The norm's weight rows and, in place, every chunk's g.
     if (chunks != 0) {
         cb_wait_front(cb_scaler, 1);

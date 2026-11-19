@@ -216,7 +216,7 @@ class RelayChunkScan:
         self._gate_workspace_shape = ttnn.Shape([len(gate_cores) * workspace_rows, ttnn.TILE_SIZE])
         # A peer can bump the entry, final and carry arrival counters before this rank's call starts; the output gate's
         # handshakes count across the program's cores.
-        self.semaphores = persistent_semaphores(mesh_device, 8)
+        self.semaphores = persistent_semaphores(mesh_device, 6)
         # The hop's, the correction's and the norm's products run at math_fidelity, accumulating in an FP32 DST.
         self.compute_config = ttnn.init_device_compute_kernel_config(
             mesh_device.arch(), math_fidelity=math_fidelity, math_approx_mode=False, fp32_dest_acc_en=True
