@@ -829,3 +829,29 @@ inline void all_gather_tile_finish(const uint32_t sem_id) {
     noc_async_atomic_barrier();
     noc_semaphore_set(get_sem_ptr(sem_id), 0U);
 }
+
+// A row-slice core's place in its row-group: its slice, whether the group is one NOC column it can multicast to, and
+// the NOC coordinates of the group's cores in slice order.
+template <uint32_t num_slices>
+struct RowSlicePeers {
+    uint32_t slice = 0U;
+    bool in_one_column = false;
+    uint32_t noc_x[num_slices] = {};
+    uint32_t noc_y[num_slices] = {};
+};
+
+// Reads RowSlicePeers from the runtime args at arg_idx, in the order row_slice_exchange_args writes them, and advances
+// arg_idx. Without slicing there are no such args, and slice 0 is the whole row.
+template <uint32_t num_slices>
+inline RowSlicePeers<num_slices> read_row_slice_peers(uint32_t& arg_idx) {
+    RowSlicePeers<num_slices> peers;
+    if constexpr (num_slices > 1U) {
+        peers.slice = get_arg_val<uint32_t>(arg_idx++);
+        peers.in_one_column = get_arg_val<uint32_t>(arg_idx++) != 0U;
+        for (uint32_t peer = 0; peer < num_slices; ++peer) {
+            peers.noc_x[peer] = get_arg_val<uint32_t>(arg_idx++);
+            peers.noc_y[peer] = get_arg_val<uint32_t>(arg_idx++);
+        }
+    }
+    return peers;
+}

@@ -77,6 +77,11 @@ namespace ttml::metal::ops::rmsnorm_fw::device {
 
 namespace {
 
+// Block size for row_tiles tiles of a row, shared by the L1 fit check and the CBs so they can't disagree.
+uint32_t block_size_for(const uint32_t row_tiles) {
+    return get_block_size(row_tiles, 3U);
+}
+
 // L1 bytes when row_tiles tiles of each row and of gamma stay resident, with the partial exchange of num_slices cores
 // per row.
 uint64_t required_l1_bytes(
@@ -86,7 +91,7 @@ uint64_t required_l1_bytes(
     const bool gated) {
     const uint32_t bfloat16_single_tile_size_bytes = tt::tile_size(tt::DataFormat::Float16_b);
     const uint32_t float32_single_tile_size_bytes = tt::tile_size(tt::DataFormat::Float32);
-    const uint32_t twice_block_size = 2U * get_block_size(row_tiles, 3U);
+    const uint32_t twice_block_size = 2U * block_size_for(row_tiles);
     const uint64_t weight_memory = row_tiles * (input_single_tile_size_bytes + bfloat16_single_tile_size_bytes);
     const uint64_t mask_scaler_eps_memory =
         (kNumMaskTiles + kNumScalerTiles + kNumEpsTiles) * bfloat16_single_tile_size_bytes;
@@ -182,7 +187,7 @@ tt::tt_metal::ProgramDescriptor RMSNormForwardProgramFactory::create_descriptor(
     const auto& all_cores = cores.all_cores;
     const auto& core_group_1 = cores.core_group_1;
     const auto& core_group_2 = cores.core_group_2;
-    const uint32_t block_size = get_block_size(St, 3U);
+    const uint32_t block_size = block_size_for(St);
 
     // -------------------------------------------------------------------------
     // 2) Create and configure circular buffers
@@ -309,6 +314,8 @@ tt::tt_metal::ProgramDescriptor RMSNormForwardProgramFactory::create_descriptor(
     // 4) Create compute kernels for rmsnorm_fw
     // -------------------------------------------------------------------------
 
+    const auto unpack_to_dest_mode = rmsnorm::row_slice_unpack_to_dest_mode(kGatheredPartialsCbIndex);
+
     // Group 1 compile-time arguments
     std::vector<uint32_t> compute_group_1_args = {
         plan.rows_per_group_1,  // per_core_block_cnt
@@ -317,7 +324,12 @@ tt::tt_metal::ProgramDescriptor RMSNormForwardProgramFactory::create_descriptor(
         num_slices};
 
     desc.kernels.push_back(make_compute_kernel_descriptor(
-        core_group_1, compute_group_1_args, defines, kComputeKernelPath, /*fp32_dest_acc_en=*/true));
+        core_group_1,
+        compute_group_1_args,
+        defines,
+        kComputeKernelPath,
+        /*fp32_dest_acc_en=*/true,
+        unpack_to_dest_mode));
 
     // Group 2 (if present) compile-time arguments
     if (!core_group_2.ranges().empty()) {
@@ -328,7 +340,12 @@ tt::tt_metal::ProgramDescriptor RMSNormForwardProgramFactory::create_descriptor(
             num_slices};
 
         desc.kernels.push_back(make_compute_kernel_descriptor(
-            core_group_2, compute_group_2_args, defines, kComputeKernelPath, /*fp32_dest_acc_en=*/true));
+            core_group_2,
+            compute_group_2_args,
+            defines,
+            kComputeKernelPath,
+            /*fp32_dest_acc_en=*/true,
+            unpack_to_dest_mode));
     }
 
     // -------------------------------------------------------------------------

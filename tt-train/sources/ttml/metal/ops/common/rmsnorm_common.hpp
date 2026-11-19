@@ -279,4 +279,12 @@ inline void add_row_slice_exchange(
     desc.semaphores.push_back(make_semaphore_descriptor(sem_id, all_cores, 0U));
 }
 
+// The compute kernels' unpack modes: the gathered fp32 partials are copied straight into DEST, so their sum keeps fp32
+// rather than going through SrcA as TF32.
+inline std::vector<tt::tt_metal::UnpackToDestMode> row_slice_unpack_to_dest_mode(const uint32_t cb_gathered) {
+    std::vector<tt::tt_metal::UnpackToDestMode> modes(NUM_CIRCULAR_BUFFERS, tt::tt_metal::UnpackToDestMode::Default);
+    modes[cb_gathered] = tt::tt_metal::UnpackToDestMode::UnpackToDestFp32;
+    return modes;
+}
+
 }  // namespace ttml::metal::ops::rmsnorm

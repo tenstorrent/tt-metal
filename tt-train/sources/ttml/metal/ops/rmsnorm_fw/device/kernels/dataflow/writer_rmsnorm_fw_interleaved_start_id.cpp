@@ -28,20 +28,9 @@ void kernel_main() {
     constexpr uint32_t partials_sem_id = get_compile_time_arg_val(6);
     constexpr bool sliced = num_slices > 1U;
 
-    // With slicing: this core's slice, whether its row-group is one NOC column it can multicast to, then the NOC
-    // coordinates of the cores of its row-group in slice order.
-    uint32_t slice = 0U;
-    bool in_one_column = false;
-    uint32_t peer_noc_x[num_slices];
-    uint32_t peer_noc_y[num_slices];
-    if constexpr (sliced) {
-        slice = get_arg_val<uint32_t>(runtime_args_counter++);
-        in_one_column = get_arg_val<uint32_t>(runtime_args_counter++) != 0U;
-        for (uint32_t peer = 0; peer < num_slices; ++peer) {
-            peer_noc_x[peer] = get_arg_val<uint32_t>(runtime_args_counter++);
-            peer_noc_y[peer] = get_arg_val<uint32_t>(runtime_args_counter++);
-        }
-    }
+    // With slicing, this core's slice and the cores of its row-group follow.
+    const auto peers = read_row_slice_peers<num_slices>(runtime_args_counter);
+    const uint32_t slice = peers.slice;
     // A moved last slice doesn't write its overlap, which the slice before it owns.
     const auto [slice_start, num_overlap] = row_slice_tiles<Wt, St>(slice * St);
 
@@ -67,11 +56,11 @@ void kernel_main() {
                 cb_slice_partial_idx,
                 cb_gathered_partials_idx,
                 slice,
-                peer_noc_x,
-                peer_noc_y,
+                peers.noc_x,
+                peers.noc_y,
                 partials_sem_id,
                 r - start_row,
-                in_one_column);
+                peers.in_one_column);
         }
 
         if constexpr (return_rms) {

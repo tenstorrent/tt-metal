@@ -358,17 +358,8 @@ inline void reduce_scale() {
     pack_and_push(reduced_scale_register, cb_slice_partial_idx);
 
     cb_wait_front(cb_gathered_partials_idx, num_slices);
-    const uint32_t partial_register = reduced_scale_register + 1U;
     tile_regs_acquire();
-    reconfig_data_format_srca(cb_mat_mul_reduce, cb_gathered_partials_idx);
-    copy_init(cb_gathered_partials_idx);
-    copy_tile(cb_gathered_partials_idx, /* tile_idx */ 0, reduced_scale_register);
-    for (uint32_t partial = 1; partial < num_slices; ++partial) {
-        copy_init(cb_gathered_partials_idx);
-        copy_tile(cb_gathered_partials_idx, partial, partial_register);
-        add_binary_tile_init();
-        add_binary_tile(reduced_scale_register, partial_register, reduced_scale_register);
-    }
+    sum_tiles_to_dest(cb_gathered_partials_idx, num_slices, reduced_scale_register);
     // compute_dL_da expects srcA on a bf16 CB at the start of a row, as the matmul above leaves it.
     reconfig_data_format_srca(cb_gathered_partials_idx, cb_mat_mul_reduce);
     tile_regs_commit();

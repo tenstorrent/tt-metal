@@ -106,6 +106,12 @@ RMSNormBackwardBuffers get_buffers(const tensor_args_t& tensor_args, const tenso
     };
 }
 
+// Block size for row_tiles tiles of a row, shared by the L1 fit check and the CBs so they can't disagree. At most 2,
+// since the calculation needs two extra registers.
+uint32_t block_size_for(const uint32_t row_tiles) {
+    return get_block_size(row_tiles, 2U);
+}
+
 }  // namespace
 
 // L1 bytes when the Wt tiles of each row a core holds stay resident: its slice with num_slices > 1, which adds the
@@ -118,7 +124,7 @@ uint64_t required_l1_bytes(
     const uint32_t float32_single_tile_size_bytes,
     const bool compute_dgamma,
     const bool gated) {
-    const uint32_t twice_block_size = 2U * get_block_size(Wt, 2U);
+    const uint32_t twice_block_size = 2U * block_size_for(Wt);
 
     // Memory of input tensors
     const uint64_t input_memory = Wt * input_single_tile_size_bytes;
@@ -226,7 +232,7 @@ tt::tt_metal::ProgramDescriptor RMSNormBackwardProgramFactory::create_descriptor
     const auto& core_group_2 = cores.core_group_2;
 
     // Compile arguments
-    uint32_t block_size = get_block_size(St, 2U);  // We need two extra registers during calculation
+    const uint32_t block_size = block_size_for(St);
 
     uint32_t packed_scaler = pack_two_bfloat16_to_uint32(static_cast<float>(1.F / num_inner));
 
@@ -330,6 +336,8 @@ tt::tt_metal::ProgramDescriptor RMSNormBackwardProgramFactory::create_descriptor
     // 4) Create compute kernels for rmsnorm_bw
     // -------------------------------------------------------------------------
 
+    const auto unpack_to_dest_mode = rmsnorm::row_slice_unpack_to_dest_mode(kGatheredPartialsCbIndex);
+
     // Group 1 compile-time arguments
     std::vector<uint32_t> compute_group_1_args = {
         plan.rows_per_group_1,  // per_core_block_cnt
@@ -339,7 +347,12 @@ tt::tt_metal::ProgramDescriptor RMSNormBackwardProgramFactory::create_descriptor
         num_slices};
 
     desc.kernels.push_back(make_compute_kernel_descriptor(
-        core_group_1, compute_group_1_args, defines, kComputeKernelPath, /*fp32_dest_acc_en=*/true));
+        core_group_1,
+        compute_group_1_args,
+        defines,
+        kComputeKernelPath,
+        /*fp32_dest_acc_en=*/true,
+        unpack_to_dest_mode));
 
     // Group 2 (if present) compile-time arguments
     if (!core_group_2.ranges().empty()) {
@@ -351,7 +364,12 @@ tt::tt_metal::ProgramDescriptor RMSNormBackwardProgramFactory::create_descriptor
             num_slices};
 
         desc.kernels.push_back(make_compute_kernel_descriptor(
-            core_group_2, compute_group_2_args, defines, kComputeKernelPath, /*fp32_dest_acc_en=*/true));
+            core_group_2,
+            compute_group_2_args,
+            defines,
+            kComputeKernelPath,
+            /*fp32_dest_acc_en=*/true,
+            unpack_to_dest_mode));
     }
     // -------------------------------------------------------------------------
     // 5) Per-core runtime args

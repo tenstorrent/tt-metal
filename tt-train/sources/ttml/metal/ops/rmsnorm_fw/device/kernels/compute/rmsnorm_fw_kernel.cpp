@@ -16,6 +16,7 @@
 #include "api/compute/mask.h"
 #include "api/compute/reduce.h"
 #include "api/compute/tile_move_copy.h"
+#include "tt-train/sources/ttml/metal/common/compute_utils.hpp"
 
 constexpr uint32_t num_rows_per_core = get_compile_time_arg_val(0);
 constexpr uint32_t block_size = get_compile_time_arg_val(1);
@@ -46,7 +47,6 @@ constexpr auto cb_sum_x_squared = cb_rms_before_reduction_intermediate;
 constexpr auto cb_row_partials = sliced ? cb_gathered_partials : cb_rms_before_reduction_intermediate;
 constexpr uint32_t num_row_partials = sliced ? num_slices : 1U;
 
-constexpr uint32_t onetile = 1;
 #ifdef DO_MASK_W
 constexpr bool do_mask_w = true;
 #else
@@ -348,20 +348,6 @@ void reduce_slice_partial() {
     cb_pop_front(cb_sum_x_squared, onetile);
 }
 
-// DEST[reg] = the sum of the num_slices reduced partials gathered from the row-group, with DEST[reg + 1] as scratch.
-void sum_gathered_partials(const uint32_t reg) {
-    const uint32_t partial_register = reg + 1U;
-    reconfig_data_format_srca(cb_gathered_partials);
-    copy_init(cb_gathered_partials);
-    copy_tile(cb_gathered_partials, /* tile_idx */ 0, reg);
-    for (uint32_t partial = 1; partial < num_slices; ++partial) {
-        copy_init(cb_gathered_partials);
-        copy_tile(cb_gathered_partials, partial, partial_register);
-        add_binary_tile_init();
-        add_binary_tile(reg, partial_register, reg);
-    }
-}
-
 void kernel_main() {
     cb_wait_front(cb_scaler, onetile);
     cb_wait_front(cb_eps, onetile);
@@ -386,7 +372,8 @@ void kernel_main() {
 
             const uint32_t reduction_register = 0;
             if constexpr (sliced) {
-                sum_gathered_partials(reduction_register);
+                // The num_slices reduced partials gathered from the row-group.
+                sum_tiles_to_dest(cb_gathered_partials, num_slices, reduction_register);
             } else {
                 reduce_row_tile(cb_row_partials, cb_rms_after_reduction_intermediate, reduction_register);
             }
@@ -396,7 +383,8 @@ void kernel_main() {
             copy_init(cb_eps);
             copy_tile(cb_eps, /* tile_idx */ 0, /* register_idx */ eps_register);
 
-            reconfig_data_format(cb_row_partials, cb_eps);
+            // Not cb_row_partials: with slicing it unpacks straight to DEST, and SrcA next reads the fp32 rms CB.
+            reconfig_data_format(cb_rms_after_reduction_intermediate, cb_eps);
             add_binary_tile_init();
             add_binary_tile(reduction_register, eps_register, reduction_register);
 
