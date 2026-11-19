@@ -71,6 +71,11 @@ class L5Cfg:
     yc: int = 0
     yc_sink: int = 0
     yc_sink_mask: int = 0  # yc_sink for the collectors of rectangle r only (bit r; diagnostics)
+    # yc: every group's collectors in the east mux column (mux_cols[-1]), all row writes on NOC0 from the BRISC into the
+    # east DRAM column (banks 4-7, reached through the router-only column east of it): result row d at page oeast_row(d)
+    # of a twice-as-long buffer. Keeps the west groups' row writes off the NOC1 column their muxes send up, and every
+    # row write out of the rectangles' multicast NoC.
+    oeast: int = 0
     # yc: the east half's collectors (DRAM column x 9 east of them) write on NOC0 from the BRISC instead of NOC1 the
     # long way round; outside the NoC rule (the fence's acks return through the rectangles on NOC0), diagnostics
     yc_n0: int = 0
@@ -124,6 +129,11 @@ def row_load(flows):
             use[x] += 1
             x = (x - 1) % NOC_W
     return max(use), sum(use)
+
+
+def oeast_row(d):
+    """L5Cfg.oeast: the page of result row d (pages are interleaved over the 8 DRAM banks: d's in banks 4-7)."""
+    return (d >> 2) * 8 + 4 + (d & 3)
 
 
 PLACED = {}  # (the last build's placement: chip -> (lane -> rectangle, lane's ethernet core NoC x a direction))
@@ -231,7 +241,16 @@ def build_lane5(
     # the cores reach them west on NOC1); every collector transfer on NOC1 (the row writes, the destination reads, the
     # slot credits), except with yc_n0 (split: the east half's row writes on NOC0 from the BRISC)
     colls = []
-    for g in range(G if l5.yc else 0):
+    if l5.oeast and l5.yc:
+        xe = l5.mux_cols[-1]
+        free = [(xe, r) for r in range(2 * NR) if (xe, r) not in muxes]
+        for g in range(G):
+            y0 = l5.origins[g][1]
+            mine = [xy for xy in free if y0 <= xy[1] < y0 + NR][: l5.yc]
+            assert len(mine) == l5.yc, (g, free)
+            free = [xy for xy in free if xy not in mine]
+            colls.append(mine)
+    for g in range(G if l5.yc and not l5.oeast else 0):
         x0, y0 = l5.origins[g]
         free = [(l5.mux_cols[g], y0 + r) for r in range(NR) if (l5.mux_cols[g], y0 + r) not in muxes]
         assert len(free) >= l5.yc, (g, free)
@@ -512,7 +531,7 @@ def build_lane5(
                 y_rt = {k: ttnn.RuntimeArgs() for k in (0, 1)}
                 w_rt, split_cores = {k: ttnn.RuntimeArgs() for k in (0, 1)}, []
                 for g, cl in enumerate(cll):
-                    split = 1 if l5.yc_n0 and mux_at(g, 0)[0] != 0 else 0
+                    split = 1 if l5.oeast or (l5.yc_n0 and mux_at(g, 0)[0] != 0) else 0
                     for ci, (x, y) in enumerate(cl):
                         args = [g, ci, l5.yc, E, counts_t.buffer_address(), tab_t.buffer_address()]
                         args += [
@@ -532,11 +551,13 @@ def build_lane5(
                     if not yset:
                         continue
                     ct = y_ct[:12] + [l5.yc_sink or sink] + y_ct[13:]
+                    ydefs = [("YC_OEAST", "1")] if l5.oeast else []
                     kernels.append(
                         ttnn.KernelDescriptor(
                             kernel_source=kpath("l5_ycoll.cpp"),
                             core_ranges=crs(yset),
                             compile_time_args=ct,
+                            defines=ydefs,
                             runtime_args=y_rt[sink],
                             config=dm(1),
                         )
@@ -548,7 +569,7 @@ def build_lane5(
                                 kernel_source=kpath("l5_ycoll.cpp"),
                                 core_ranges=crs(wset),
                                 compile_time_args=ct,
-                                defines=[("YC_WRITER", "1")],
+                                defines=[("YC_WRITER", "1")] + ydefs,
                                 runtime_args=w_rt[sink],
                                 config=dm(0),
                             )

@@ -9,6 +9,7 @@
 // bytes zero, written once) and the gate weight as bf16 at element 0 of a CB 1 scalar tile (its other elements zero).
 // Up to NBUF rows in flight (transaction id 1 + slot), retired in order.
 // CT: 0 NBUF, 1 tab (L1), 2 tab flag (L1 word), 3 row bytes, 4 CB 1 bytes, then TensorAccessorArgs(runs), (O).
+// E4_OEAST (EP4Cfg.oeast): O row d at page (d >> 2) 8 + 4 + (d & 3) (ws_lane5.oeast_row).
 // RT: 0 runs addr, 1 O addr, 2 a, 3 nt, 4 stamps (5 reads wait cycles, 6 CB space wait cycles).
 #include "api/dataflow/dataflow_api.h"
 
@@ -77,7 +78,12 @@ void kernel_main() {
             t_res += wall() - s0;
             const uint32_t slot = issued % NBUF;
             noc_async_read_set_trid(1 + slot);
-            noc_async_read(os.get_noc_addr(tb[ii * 32] + ij), rows_base + slot * unit_bytes, row_bytes);
+#if defined(E4_OEAST)
+            const uint32_t d = tb[ii * 32] + ij, pg = (d >> 2) * 8 + 4 + (d & 3);
+#else
+            const uint32_t pg = tb[ii * 32] + ij;
+#endif
+            noc_async_read(os.get_noc_addr(pg), rows_base + slot * unit_bytes, row_bytes);
             noc_async_read_set_trid(0);
             ++issued;
             adv(ii, ij);

@@ -30,6 +30,9 @@ class EP4Cfg(LayerCfg):
 
     C: int = C_EP
     SP: int = int(os.environ.get("EP4_SP", "1184"))
+    # O rows in the east DRAM column only (ws_lane5 L5Cfg.oeast: the experts' row collectors write them there, the
+    # combine reads them there); O holds twice the pages
+    oeast: int = 0
 
     EPC = property(lambda s: s.nexp // s.C)
     KP = property(lambda s: -(-s.TX // s.SP))
@@ -332,6 +335,8 @@ def lane_cfgs(mesh, lc: EP4Cfg, G=2, l5kw=None, lkw=None):
     lkw = dict(CHT=20, slots="d0,d0,any,any" if ow else "d0,d1,d0d1,any", keep=2, sched_c=7, wpoll=1, **(lkw or {}))
     lane = LCfg(cycles=column_cycles(mesh), subcycles=True, oneway=ow, **lkw)
     l5 = L5Cfg(**{**dict(hmc=2, mux_noc=-1 if ow else 0, yrm=1, yc=3, yc_n0=1), **(l5kw or {})})
+    if lc.oeast:
+        l5.oeast, l5.yc = 1, (l5kw or {}).get("yc", 2)
     return cfg, lane, l5
 
 
@@ -364,7 +369,7 @@ def own_slices(cfg, lane, T, lc: EP4Cfg, wg, wu, wd, Cn):
 def o_tensor(mesh, lc: EP4Cfg):
     """O [o_rows + 16, H] bf16 row-major (the last 16 rows the lane's posted-write fence), zero."""
     return ttnn.zeros(
-        [o_rows(lc) + 16, lc.H],
+        [o_rows(lc) * (2 if lc.oeast else 1) + 16, lc.H],
         dtype=ttnn.bfloat16,
         layout=ttnn.ROW_MAJOR_LAYOUT,
         device=mesh,
@@ -391,7 +396,7 @@ def lane_program(mesh, lc: EP4Cfg, cfg, lane, l5, T, tab_t, xbuf, louts, ws_t, O
         T,
         0,
         dest_t=louts["dest"],
-        fence_row=o_rows(lc),
+        fence_row=o_rows(lc) * (2 if lc.oeast else 1),
     )
 
 
@@ -507,6 +512,7 @@ def build_combine(mesh, lc: EP4Cfg, res, louts, O, P, cnt_t, fence):
                     kernel_source=kpath("e4_comb_rd.cpp"),
                     core_ranges=aset,
                     compile_time_args=rd_ct,
+                    defines=[("E4_OEAST", "1")] if lc.oeast else [],
                     runtime_args=rd_rt,
                     config=dm(0),
                 ),

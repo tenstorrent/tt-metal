@@ -15,6 +15,8 @@
 // SENT (L1 words). At the end the row writes are fenced (an
 // acknowledged 4-B write into every DRAM bank's spare row, same NoC and VC) and the group's core 0 gets + 1 on word 3
 // of CRED. CT 12 (SINK, a diagnostic): no row writes (the cores' traffic and the protocol only).
+// YC_OEAST (L5Cfg.oeast): row d at page (d >> 2) 8 + 4 + (d & 3), every page in banks 4-7 (the east DRAM column); the
+// fence covers those 4 banks only (fence row: a multiple of 8). Stamp 21 counts row writes whose page is not at NoC x 9.
 // CT: 0 NSL, 1 ROWB, 2 STAGE, 3 YW (words: arrival 16 s, GO 64, NRW 80, SENT 96, FDONE 112, destinations 128, fence
 //     source 256), 4 CRED (on the group cores), 5 RMAX, 6 NEXP, 7 table page bytes, 8 counts L1, 9 table L1, 10 GCN,
 //     11 (unused), 12 SINK, then TensorAccessorArgs(counts), (table), (dest), (out).
@@ -49,12 +51,24 @@ void kernel_main() {
     volatile tt_l1_ptr uint32_t* st = W(get_arg_val<uint32_t>(9));
     const uint32_t t_start = wall();
 
+#if defined(YC_OEAST)
+    auto orow = [](uint32_t d) { return (d >> 2) * 8 + 4 + (d & 3); };
+    constexpr uint32_t FB0 = 4;
+#else
+    auto orow = [](uint32_t d) { return d; };
+    constexpr uint32_t FB0 = 0;
+#endif
+    uint32_t off_east = 0;
     // the rows of one row tile from staging slot s to their destinations (posted), then wait until they have left
     auto write_rows = [&](uint32_t s, uint32_t nr, uint32_t& t_issue, uint32_t& t_sent) {
         const uint32_t a = wall();
         volatile tt_l1_ptr uint32_t* dst = W(DBUF);
         for (uint32_t r = 0; r < nr; ++r) {
-            noc_async_write<NOC_MAX_BURST_SIZE + 1, true, true>(STAGE + s * SLOTB + r * ROWB, os.get_noc_addr(dst[r]), ROWB);
+            const uint64_t na = os.get_noc_addr(orow(dst[r]));
+#if defined(YC_OEAST)
+            off_east += ((na >> NOC_ADDR_LOCAL_BITS) & ((1 << NOC_ADDR_NODE_ID_BITS) - 1)) != 9;
+#endif
+            noc_async_write<NOC_MAX_BURST_SIZE + 1, true, true>(STAGE + s * SLOTB + r * ROWB, na, ROWB);
         }
         const uint32_t b = wall();
         while (!ncrisc_noc_posted_writes_sent(noc_index)) {
@@ -64,7 +78,7 @@ void kernel_main() {
     };
     auto fence = [&]() {
         noc_async_posted_writes_flushed();
-        for (uint32_t i = 0; i < NUM_DRAM_BANKS; ++i) {
+        for (uint32_t i = FB0; i < NUM_DRAM_BANKS; ++i) {
             noc_async_write(FSRC, os.get_noc_addr(fence_row + i), 4);
         }
         noc_async_write_barrier();
@@ -96,6 +110,7 @@ void kernel_main() {
     st[18] = t_sent;
     st[19] = wall() - f;
     st[20] = k;
+    st[21] = off_east;
     *W(FDONE) = 1;
 #else
     // ---- the control (NCRISC, NOC1)
