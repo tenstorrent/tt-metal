@@ -14,6 +14,7 @@
 #include "llrt/hal/tt-2xx/quasar/qa_emulator_models.hpp"
 #include <algorithm>
 #include <initializer_list>
+#include <iterator>
 #include <map>
 #include <set>
 #include <string_view>
@@ -148,14 +149,15 @@ bool yaml_equal(const YAML::Node& a, const YAML::Node& b) {
     }
 }
 
-// Whether `sequence` holds an entry yaml_equal() to `node`. An absent `sequence` holds none.
-bool yaml_contains(const YAML::Node& sequence, const YAML::Node& node) {
-    return std::any_of(
+// The index of the first entry of `sequence` that is yaml_equal() to `node`, or nullopt.
+std::optional<size_t> yaml_index(const YAML::Node& sequence, const YAML::Node& node) {
+    const auto it = std::find_if(
         sequence.begin(), sequence.end(), [&](const YAML::Node& entry) { return yaml_equal(entry, node); });
+    return it == sequence.end() ? std::nullopt : std::optional<size_t>(std::distance(sequence.begin(), it));
 }
 
 // Fatal unless maps `chip` and `package` hold the same keys with equal values. A key in `narrowed` may differ in
-// value, and is still in both or in neither.
+// value: it is in both or in neither, as the same kind of node (scalar, sequence or map).
 void check_keys_equal(
     const YAML::Node& chip,
     const YAML::Node& package,
@@ -164,12 +166,15 @@ void check_keys_equal(
     const std::string& chip_path,
     const std::string& package_path,
     const std::string& prefix) {
+    const auto same_kind = [](const YAML::Node& a, const YAML::Node& b) {
+        return a.IsDefined() == b.IsDefined() && (!a.IsDefined() || a.Type() == b.Type());
+    };
     for (const YAML::Node& keys_of : {chip, package}) {
         for (const auto& entry : keys_of) {
             const std::string& key = entry.first.Scalar();
             TT_FATAL(
                 std::find(narrowed.begin(), narrowed.end(), key) != narrowed.end()
-                    ? chip[key].IsDefined() == package[key].IsDefined()
+                    ? same_kind(chip[key], package[key])
                     : yaml_equal(chip[key], package[key]),
                 "Chip {} descriptor {} differs from the package descriptor {} in key {}",
                 id,
@@ -181,52 +186,79 @@ void check_keys_equal(
 }
 
 // Fatal unless every chip's descriptor (paths[id] for each of `chips`) is the package's with only `eth`,
-// `keraunos.cores` and `dram_views` narrowed to entries the package has, and no Ethernet core or programmable DRAM
-// view is in two chips' descriptors. With that, no chip resets or loads a core of another, and everything UMD builds
-// from the package descriptor holds for each chip.
+// `keraunos.cores` and `dram_views` narrowed to entries the package has, each listed once, and no Ethernet core or
+// programmable DRAM view is in two chips' descriptors. With that, no chip resets or loads a core of another, and
+// everything UMD builds from the package descriptor holds for each chip.
 void check_chip_soc_descs(
     const std::vector<std::string>& paths, const std::string& package_path, const std::set<tt::ChipId>& chips) {
+    // An entry is known by its kind and its index in the package's list, so key order in a file does not matter.
+    using Entry = std::pair<std::string_view, size_t>;
     const YAML::Node package = YAML::LoadFile(package_path);
-    std::map<std::string, tt::ChipId> owner;
-    const auto claim = [&](tt::ChipId id, std::string_view kind, const YAML::Node& node) {
-        const std::string name = yaml_flow(node);
-        const auto [it, added] = owner.emplace(fmt::format("{} {}", kind, name), id);
-        TT_FATAL(added, "Chips {} and {} both list {} {}", it->second, id, kind, name);
-    };
+    std::map<Entry, tt::ChipId> owner;
     for (const tt::ChipId id : chips) {
         const std::string& path = paths[id];
         const YAML::Node chip = YAML::LoadFile(path);
+        TT_FATAL(
+            chip.IsMap(),
+            "Chip {} descriptor {} differs from the package descriptor {} in key {}",
+            id,
+            path,
+            package_path,
+            "(the document is not a map)");
         check_keys_equal(chip, package, {"eth", "keraunos", "dram_views"}, id, path, package_path, "");
         check_keys_equal(chip["keraunos"], package["keraunos"], {"cores"}, id, path, package_path, "keraunos.");
-        const auto in_package = [&](std::string_view kind, const YAML::Node& node, const YAML::Node& package_list) {
+        std::set<Entry> listed;
+        // The package's index of `node`; fatal when the package lacks it or the chip lists it twice.
+        const auto package_entry = [&](std::string_view kind, const YAML::Node& node, const YAML::Node& package_list) {
+            const std::optional<size_t> index = yaml_index(package_list, node);
             TT_FATAL(
-                yaml_contains(package_list, node),
+                index.has_value(),
                 "Chip {} descriptor {}: {} {} is not the package descriptor's",
                 id,
                 path,
                 kind,
                 yaml_flow(node));
+            TT_FATAL(
+                listed.emplace(kind, *index).second,
+                "Chip {} descriptor {} lists {} {} twice",
+                id,
+                path,
+                kind,
+                yaml_flow(node));
+            return Entry{kind, *index};
+        };
+        const auto claim = [&](const Entry& entry, const YAML::Node& node) {
+            const auto [it, added] = owner.emplace(entry, id);
+            TT_FATAL(added, "Chips {} and {} both list {} {}", it->second, id, entry.first, yaml_flow(node));
         };
         for (const auto& core : chip["eth"]) {
-            in_package("Ethernet core", core, package["eth"]);
-            claim(id, "Ethernet core", core);
+            claim(package_entry("Ethernet core", core, package["eth"]), core);
         }
         const YAML::Node cores = chip["keraunos"] ? chip["keraunos"]["cores"] : YAML::Node();
         for (const auto& entry : cores) {
-            in_package("keraunos.cores entry", entry, package["keraunos"]["cores"]);
+            package_entry("keraunos.cores entry", entry, package["keraunos"]["cores"]);
             TT_FATAL(
-                yaml_contains(chip["eth"], entry["core"]),
+                yaml_index(chip["eth"], entry["core"]).has_value(),
                 "Chip {} descriptor {}: keraunos.cores entry {} names a core its eth list lacks",
                 id,
                 path,
                 yaml_flow(entry));
         }
+        size_t programmable_views = 0;
         for (const auto& view : chip["dram_views"]) {
-            in_package("DRAM view", view, package["dram_views"]);
+            const Entry entry = package_entry("DRAM view", view, package["dram_views"]);
             if (view["programmable"] && view["programmable"].as<bool>()) {
-                claim(id, "DRAM view", view);
+                claim(entry, view);
+                programmable_views++;
             }
         }
+        // metal_SocDescriptor keeps only the programmable views' cores when there is one, and every DRAM core
+        // otherwise.
+        TT_FATAL(
+            programmable_views > 0,
+            "Chip {} descriptor {} lists no programmable DRAM view; every DRAM core of the package would be its own",
+            id,
+            path);
     }
 }
 
@@ -756,6 +788,9 @@ void Cluster::open_driver(const bool& /*skip_driver_allocs*/) {
     } else if (this->target_type_ == TargetDevice::Mock) {
         // TT_METAL_EMU_SOC_DESC, when set, gives the mock chips the emulator's descriptors: UMD the package's, and
         // Metal its own of each chip (get_metal_desc_from_tt_desc).
+        TT_FATAL(
+            !rtoptions_.get_emu_soc_desc_paths().empty() || rtoptions_.get_emu_package_soc_desc_path().empty(),
+            "TT_METAL_EMU_PACKAGE_SOC_DESC is set and TT_METAL_EMU_SOC_DESC is not");
         const std::string sdesc_path = rtoptions_.get_emu_soc_desc_paths().empty()
                                            ? get_soc_description_file(this->arch_, this->target_type_, rtoptions_)
                                            : emu_package_soc_desc(rtoptions_);
