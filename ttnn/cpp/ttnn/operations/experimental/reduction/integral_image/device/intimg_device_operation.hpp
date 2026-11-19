@@ -6,6 +6,7 @@
 
 #include "intimg_device_operation_types.hpp"
 
+#include <algorithm>
 #include <cstdint>
 
 #include <optional>
@@ -28,6 +29,12 @@ using namespace ttsl;
 // expected parallelisation of the maximal input shape is calculated to be 4 rows and 2 columns
 inline constexpr uint32_t CORES_X = 2;
 inline constexpr uint32_t CORES_Y = 4;
+
+// Core grid actually used: the preferred CORES_X x CORES_Y grid clipped to the device's compute worker grid
+// (e.g. the 2x1 Quasar emulator). Each core then handles num_channel_slices / (x * y) channel slices in turn.
+inline CoreCoord get_intimg_core_grid(const CoreCoord& compute_grid) {
+    return CoreCoord{std::min<size_t>(CORES_X, compute_grid.x), std::min<size_t>(CORES_Y, compute_grid.y)};
+}
 
 struct IntImgDeviceOperation {
     using operation_attributes_t = IntImgParams;
