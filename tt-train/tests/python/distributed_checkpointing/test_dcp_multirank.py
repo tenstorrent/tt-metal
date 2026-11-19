@@ -26,7 +26,7 @@ import torch
 import ttnn
 from dcp_oracle import Loader
 from dcp_harness import ranks_in_step, two_rank_world
-from dcp_shards import assert_same, optimizer_state, param_shards
+from dcp_shards import assert_same_shards, model_shards, optimizer_shards
 from tp_block import TPBlock, fresh_tp, train_step
 
 import ttml
@@ -72,10 +72,11 @@ def test_ranks_write_their_coordinates(two_ranks):
         train_step(model, opt, DIM)
         sched.step()
         loader.advance()
-    before = param_shards(params, local)
-    assert len(before) == len(params) * len(local)
-    state_before, scalars_before = optimizer_state(opt, local)
-    assert len(state_before) == 2 * len(params) * len(local) and scalars_before["steps"] == 2
+    before = model_shards(params, local)
+    assert len(before) == len(params) and all(len(arrays) == len(local) for arrays in before.values())
+    state_before, scalars_before = optimizer_shards(opt, local)
+    assert len(state_before) == 2 * len(params) and all(len(arrays) == len(local) for arrays in state_before.values())
+    assert scalars_before["steps"] == 2
     path = os.path.join(root, dcp.step_dir_name(2))
 
     result = dcp.save(path, model=model, optimizer=opt, scheduler=sched, dataloader=loader, header={"step": 2})
@@ -110,9 +111,9 @@ def test_ranks_write_their_coordinates(two_ranks):
 
     assert loaded.missing == [] and loaded.unexpected == [] and loaded.header == {"step": 2}
     assert loaded.restored[:2] == ["scheduler", "dataloader"] and "rng.ttml" in loaded.restored
-    assert_same(param_shards(params2, local), before, "parameters")  # exactly the coordinates this rank holds
-    state_after, scalars_after = optimizer_state(opt2, local)
-    assert_same(state_after, state_before, "optimizer moments")
+    assert_same_shards(model_shards(params2, local), before, "parameters")  # exactly the coordinates this rank holds
+    state_after, scalars_after = optimizer_shards(opt2, local)
+    assert_same_shards(state_after, state_before, "optimizer moments")
     assert scalars_after["steps"] == 2 and scalars_after == scalars_before
     assert ctx.get_generator_state() == own_gen_after_save, "this rank's own ttml generator came back"
     sched2.step()
@@ -194,14 +195,12 @@ def test_truncated_file_on_one_rank_stops_all(two_ranks, expect_error):
         os.truncate(os.path.join(path, victim), 100)
     ttnn.distributed_context_barrier()
     fresh, fresh_params, _ = fresh_tp(DIM)
-    before = param_shards(fresh_params, local)
+    before = model_shards(fresh_params, local)
     with expect_error(
         dcp.IncompleteCheckpointError, r"planning the load failed on rank\(s\) \[(0, )?1\] of 2: .* is 100 bytes but"
     ):
         dcp.load(path, model=fresh)
-    after = param_shards(fresh_params, local)
-    assert after.keys() == before.keys() and before
-    assert all(np.array_equal(after[k], before[k]) for k in before), "no rank placed anything"
+    assert_same_shards(model_shards(fresh_params, local), before, "no rank placed anything")
     ttnn.distributed_context_barrier()
 
 
@@ -254,11 +253,16 @@ def test_a_checkpoint_for_the_one_process_load(two_ranks):
     model, params, opt = fresh_tp(DIM)
     train_step(model, opt, DIM)
     dcp.save(os.path.join(out, "ckpt"), model=model)
-    shards = param_shards(params, local)
-    assert len(shards) == len(params) * len(local)
+    coords = sorted(local)
+    shards = model_shards(params, coords)
+    assert len(shards) == len(params) and all(len(arrays) == len(coords) for arrays in shards.values())
     np.savez(
         os.path.join(out, f"shards_{rank}.npz"),
-        **{f"{name}@{'-'.join(map(str, coord))}": array for (name, coord), array in shards.items()},
+        **{
+            f"{name}@{'-'.join(map(str, coord))}": array
+            for name, arrays in shards.items()
+            for coord, array in zip(coords, arrays)
+        },
     )
     index = dcp.read_index(os.path.join(out, "ckpt"))
     assert {f.world_rank for f in index.files} == {0, 1}

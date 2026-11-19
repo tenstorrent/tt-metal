@@ -111,13 +111,8 @@ class ColumnParallelLinear(AbstractModuleBase):
         self.gather_output = gather_output
         self.axis_name = axis_name
         self.cluster_axis = ttml.mesh().axis_index(axis_name)
-        if fused_segments is not None:
-            # Imported here: ttml.distributed_checkpointing imports ttml.modules, so a module-level import would be
-            # circular.
-            from ttml.distributed_checkpointing._layouts import check_fused_segments
-
-            fused_segments = check_fused_segments(fused_segments, out_features, ttml.mesh().axis_size(axis_name))
-        self.fused_segments = fused_segments
+        # The declaration is only recorded here; ttml.distributed_checkpointing checks it when a checkpoint is planned.
+        fused_segments = tuple(int(s) for s in fused_segments) if fused_segments is not None else None
 
         if weight_init is None:
             k = math.sqrt(1.0 / in_features)

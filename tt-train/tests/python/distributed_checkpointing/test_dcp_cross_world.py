@@ -20,10 +20,11 @@ import pytest
 from dcp_driver import LOGITS_TOLERANCE, MESH_OPEN_FAILED, RESUME, compare
 from dcp_harness import DRIVER, TT_RUN, output_lines, run_world, tt_run_command
 
-# Each child is one process opening a mesh, training or loading a tiny Llama: about a minute warm, a few cold (the
-# whole module took 5 minutes warm and 13 cold on a loudbox). A hung child fails after 10 minutes, so one hang still
-# leaves a 25-minute CI leg the time to report the tests after it.
-CHILD_TIMEOUT_S = 600
+# Each child is one process opening a mesh, training or loading a tiny Llama: in CI the whole module takes about
+# 3.5 minutes and its slowest case (two children) 78 s, while on a host reading its files over NFS one child has taken
+# up to 135 s. A hung child fails after 3 minutes, so one hang still leaves the 30-minute QB2 python leg the time to
+# report the tests after it.
+CHILD_TIMEOUT_S = 180
 pytestmark = [pytest.mark.requires_device, pytest.mark.timeout(2 * CHILD_TIMEOUT_S + 60)]
 
 # Two MPI ranks on one host, each with its own [2, 2] mesh (mesh ids 0 and 1), eight chips in all. One [1, 4] mesh

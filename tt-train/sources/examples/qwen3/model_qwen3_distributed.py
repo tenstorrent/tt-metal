@@ -74,7 +74,6 @@ from ttml.models.qwen3 import (
 from model_qwen3 import linear
 from utils.memory import memory_snapshot
 from utils.checkpoint import checkpoint  # noqa: F401 — re-exported for callers
-from ttml.distributed_checkpointing._layouts import check_fused_segments
 from ttml.models.qwen3.weights import (
     unpermute_proj_rows,
     unpermute_norm_weights,
@@ -133,7 +132,6 @@ class ColumnParallelLinear(AbstractModuleBase):
         out_features,
         has_bias=False,
         shard_dim=None,
-        fused_segments=None,
     ):
         super().__init__()
         self.shard_dim = shard_dim
@@ -143,13 +141,6 @@ class ColumnParallelLinear(AbstractModuleBase):
             self.col_bias = Parameter(make_sharded_zeros((1, 1, 1, out_features), 3, shard_dim))
         else:
             self.col_bias = None
-        # A fused weight ([K | V]) is laid out per TP shard, so its global row order depends on the TP size; the
-        # global segment sizes let ttml.distributed_checkpointing reshard it across TP sizes.
-        if fused_segments is not None:
-            fused_segments = check_fused_segments(fused_segments, out_features, get_tp_size(shard_dim))
-            self.weight.checkpoint_layout = {"fused": (2, fused_segments)}
-            if self.col_bias is not None:
-                self.col_bias.checkpoint_layout = {"fused": (3, fused_segments)}
 
     def forward(self, x):
         x = ttml.ops.distributed.broadcast(x, self.shard_dim)
@@ -249,7 +240,6 @@ class DistributedQwen3Attention(AbstractModuleBase):
             2 * kv_out,
             has_bias=config.attention_bias,
             shard_dim=shard_dim,
-            fused_segments=(kv_out, kv_out),
         )
         self.o_proj = RowParallelLinear(
             q_out,
@@ -405,8 +395,6 @@ class DistributedQwen3Model(AbstractModuleBase):
                 weight_init=sharded_weight_init(3),
                 axis_name="tp",
             )
-            # Its rows are padded to a TP-dependent size; the logical row count lets checkpoints reshard across TP sizes.
-            self.embed_tokens.weight.checkpoint_layout = {"logical_extent": (2, config.vocab_size)}
         rope_params = build_rope_params_from_config(config, config.head_dim)
         self.layers = ModuleList(
             [DistributedQwen3DecoderLayer(config, i, rope_params, shard_dim) for i in range(config.num_hidden_layers)]
@@ -473,10 +461,6 @@ class DistributedQwen3ForCausalLM(AbstractModuleBase):
             has_bias=False,
             shard_dim=shard_dim,
         )
-        # Tied to the embedding, the head is padded to a multiple of 32 * tp_size rows, so its padded extent depends on
-        # the TP size and the logical row count lets checkpoints reshard across it. Untied it is not padded, and the
-        # declaration is a no-op.
-        self.lm_head.weight.checkpoint_layout = {"logical_extent": (2, config.vocab_size)}
 
         self.model = DistributedQwen3Model(
             config,

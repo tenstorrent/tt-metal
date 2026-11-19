@@ -593,7 +593,7 @@ def load_tp_block(directory: str) -> list[str]:
     sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
     from tp_block import TPBlock
 
-    from dcp_shards import param_shards
+    from dcp_shards import model_shards
 
     shards: dict[str, dict[tuple[int, ...], np.ndarray]] = {}
     for rank in (0, 1):
@@ -604,7 +604,7 @@ def load_tp_block(directory: str) -> list[str]:
     model = TPBlock(64)
     params = model.parameters()
     dcp.load(os.path.join(directory, "ckpt"), model=model)
-    loaded = param_shards(params, [(0, 0)])
+    loaded = model_shards(params, [(0, 0)])
     problems = []
     for name in params:
         by_coord = shards[name]
@@ -613,7 +613,7 @@ def load_tp_block(directory: str) -> list[str]:
             expected = by_coord[(0, 0)]
         else:
             expected = np.concatenate([by_coord[c] for c in sorted(by_coord)], axis=dim)
-        if not np.array_equal(loaded[(name, (0, 0))], expected):
+        if not np.array_equal(loaded[name][0], expected):
             problems.append(f"{name} differs from the two ranks' shards")
     return problems
 
