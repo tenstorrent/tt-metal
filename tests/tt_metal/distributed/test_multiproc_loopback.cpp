@@ -34,6 +34,7 @@
 #include <tt-metalium/experimental/sockets/d2h_socket.hpp>
 #include "tests/tt_metal/tt_metal/common/multi_device_fixture.hpp"
 #include "impl/context/metal_context.hpp"
+#include "impl/buffers/d2h_socket_internal.hpp"
 #include "impl/buffers/h2d_socket_internal.hpp"
 #include <tt-logger/tt-logger.hpp>
 
@@ -609,11 +610,35 @@ void run_connector_ordering_stress(
     std::mt19937 rng(64622);
     std::generate(patterns.begin(), patterns.end(), rng);
 
+    // A run takes seconds, so a socket that stops moving for this long has stalled. Rank 0's kernel would then wait
+    // for pages that never come, so a stall aborts both ranks instead of hanging them.
+    constexpr auto kStallTimeout = std::chrono::seconds(10);
+    auto retry_until_stalled = [&](auto&& operation, const char* stall_message, uint32_t page_index) {
+        if (operation()) {
+            return;
+        }
+        const auto deadline = std::chrono::steady_clock::now() + kStallTimeout;
+        while (!operation()) {
+            if (std::chrono::steady_clock::now() >= deadline) {
+                log_error(
+                    tt::LogTest, "{} at page {} of {}; aborting both ranks", stall_message, page_index, num_pages);
+                g_world_ctx->abort(1);
+            }
+            std::this_thread::yield();
+        }
+    };
+
     std::chrono::steady_clock::duration write_time{};
     std::thread write_thread([&]() {
         const auto start = std::chrono::steady_clock::now();
         for (uint32_t p = 0; p < num_pages; p++) {
-            h2d_socket->write(patterns.data() + (static_cast<size_t>(p % kNumPatterns) * page_words), 1);
+            retry_until_stalled(
+                [&]() {
+                    return experimental::detail::try_write(
+                        *h2d_socket, patterns.data() + (static_cast<size_t>(p % kNumPatterns) * page_words), 1);
+                },
+                "H2D socket stalled",
+                p);
         }
         write_time = std::chrono::steady_clock::now() - start;
     });
@@ -621,7 +646,8 @@ void run_connector_ordering_stress(
     uint32_t num_bad_pages = 0;
     std::optional<uint32_t> first_bad_page;
     for (uint32_t p = 0; p < num_pages; p++) {
-        d2h_socket->read(page.data(), 1);
+        retry_until_stalled(
+            [&]() { return experimental::detail::try_read(*d2h_socket, page.data(), 1); }, "D2H socket stalled", p);
         if (!std::equal(
                 page.begin(), page.end(), patterns.begin() + (static_cast<size_t>(p % kNumPatterns) * page_words))) {
             num_bad_pages++;
