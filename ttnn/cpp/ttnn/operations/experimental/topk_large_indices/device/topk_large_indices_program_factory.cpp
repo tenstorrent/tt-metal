@@ -12,7 +12,11 @@
 #include <tt-metalium/work_split.hpp>
 #include <tt-metalium/math.hpp>
 
+#include <algorithm>
+#include <map>
 #include <optional>
+#include <string>
+#include <unordered_map>
 #include <tuple>
 
 namespace ttnn::operations::experimental::topk_large_indices::program {
@@ -87,8 +91,11 @@ void set_runtime_args(
     reader_args[topk_common_args::input_row_bytes] = runtime_args.input_row_bytes;
     tt::tt_metal::GetCommonRuntimeArgs(program, shared.compute_kernel_id)[topk_common_args::compute_search_length] =
         runtime_args.search_len;
-    // The row assignment depends on the row count and, through the column split, on the searched chunk count.
-    const uint32_t num_chunks = tt::div_up(runtime_args.search_len, shared.llk_k);
+    // The row assignment depends on the row count and, through the column split, on the searched chunk count. A
+    // two-level program picks its mode on device, so both modes share an assignment cut from the physical width.
+    const uint32_t assignment_len =
+        shared.two_level ? runtime_args.input_row_bytes / input.element_size() : runtime_args.search_len;
+    const uint32_t num_chunks = tt::div_up(assignment_len, shared.llk_k);
     if (shared.num_rows == runtime_args.num_rows && shared.num_chunks == num_chunks) {
         return;
     }
@@ -144,7 +151,40 @@ void set_runtime_args(
     shared.num_chunks = num_chunks;
 }
 
+void set_two_level_common_args(
+    tt::tt_metal::Program& program,
+    const TopkLargeIndicesSharedVariables& shared,
+    const operation_attributes_t& attrs,
+    const tensor_args_t& tensor_args) {
+    if (!shared.two_level) {
+        return;
+    }
+    const auto address = [](const std::optional<Tensor>& t) { return t.has_value() ? t->mesh_buffer().address() : 0u; };
+    auto& reader_args = tt::tt_metal::GetCommonRuntimeArgs(program, shared.reader_kernel_id);
+    reader_args[topk_common_args::two_level_cutover] =
+        attrs.two_level_cutover.value_or(two_level_default_cutover(static_cast<uint32_t>(shared.cores.size())));
+    reader_args[topk_common_args::block_max_address] = address(tensor_args.block_max_tensor);
+    auto& writer_args = tt::tt_metal::GetCommonRuntimeArgs(program, shared.writer_kernel_id);
+    writer_args[topk_common_args::block_max_output_address] = address(tensor_args.block_max_output);
+    writer_args[topk_common_args::mode_output_address] = address(tensor_args.mode_output);
+}
+
 }  // namespace
+
+bool two_level_enabled(const operation_attributes_t& attrs, uint32_t input_last_dim) {
+    return attrs.block_select.has_value() && input_last_dim >= two_level_min_width &&
+           input_last_dim <= two_level_max_width;
+}
+
+uint32_t two_level_max_chunks(uint32_t input_last_dim) {
+    // At least two: the kernels pad stage 2 to two chunks so it always runs on the split body.
+    return std::max(2u, tt::div_up(tt::div_up(input_last_dim, two_level_block_keys), to_uint32(LlkTargetK::K2048)));
+}
+
+uint32_t two_level_default_cutover(uint32_t /*num_cores*/) {
+    // Provisional until the crossover is measured on both top-k grids.
+    return 131'072;
+}
 
 ComputeBodyMode compute_body_mode(uint32_t k, uint32_t input_last_dim) {
     const uint32_t llk_k = to_uint32(snap_to_llk_target_k(k));
@@ -304,9 +344,11 @@ TopkLargeIndicesProgramFactory::cached_program_t TopkLargeIndicesProgramFactory:
     const uint32_t survivor_bytes = survivor_tiles * survivor_tile_bytes;
 
     const uint32_t cb_depth = 2;
+    // A two-level program gathers its candidate chunks block by block; deeper buffering hides the read latency.
+    const uint32_t input_cb_depth = two_level_enabled(operation_attributes, input.logical_shape()[-1]) ? 4 : cb_depth;
     const auto input_cb_config =
         tt::tt_metal::CircularBufferConfig(
-            cb_depth * tiles_per_sequence * input_tile_bytes, {{cb_in, tt::DataFormat::Float16_b}})
+            input_cb_depth * tiles_per_sequence * input_tile_bytes, {{cb_in, tt::DataFormat::Float16_b}})
             .set_page_size(cb_in, input_tile_bytes);
     tt::tt_metal::CreateCircularBuffer(program, all_cores, input_cb_config);
 
@@ -326,7 +368,11 @@ TopkLargeIndicesProgramFactory::cached_program_t TopkLargeIndicesProgramFactory:
     }
 
     const bool has_meta = tensor_args.has_valid_length_metadata();
-    if (has_meta) {
+    const uint32_t input_width = input.logical_shape()[-1];
+    const bool two_level = two_level_enabled(operation_attributes, input_width);
+    // A two-level program's compute reads its bounds and mode from the reader's mailbox in scalar mode too.
+    const bool compute_mailbox = has_meta || two_level;
+    if (compute_mailbox) {
         auto meta_cb_config =
             tt::tt_metal::CircularBufferConfig(64, {{cb_meta, tt::DataFormat::UInt32}}).set_page_size(cb_meta, 64);
         tt::tt_metal::CreateCircularBuffer(program, all_cores, meta_cb_config);
@@ -357,18 +403,90 @@ TopkLargeIndicesProgramFactory::cached_program_t TopkLargeIndicesProgramFactory:
         data_semaphore_id = tt::tt_metal::CreateSemaphore(program, all_cores, 0);
     }
 
+    // Two-level CBs (see kernels/topk_large_indices_two_level.hpp).
+    constexpr uint32_t cb_stage1 = tt::CBIndex::c_7;
+    constexpr uint32_t cb_tiled = tt::CBIndex::c_8;
+    constexpr uint32_t cb_scaler = tt::CBIndex::c_9;
+    constexpr uint32_t cb_red = tt::CBIndex::c_10;
+    constexpr uint32_t cb_max = tt::CBIndex::c_11;
+    constexpr uint32_t cb_table = tt::CBIndex::c_12;
+    constexpr uint32_t cb_bitmap = tt::CBIndex::c_13;
+    constexpr uint32_t cb_own_table = tt::CBIndex::c_14;
+    constexpr uint32_t cb_writer_mailbox = tt::CBIndex::c_15;
+    constexpr uint32_t stage1_batch = 8;
+    const uint32_t block_max_row_bytes = tt::div_up(input_width, two_level_block_keys) * input.element_size();
+    if (two_level) {
+        const auto create_cb = [&](uint32_t cb, uint32_t pages, uint32_t page_bytes, tt::DataFormat format) {
+            const auto config =
+                tt::tt_metal::CircularBufferConfig(pages * page_bytes, {{cb, format}}).set_page_size(cb, page_bytes);
+            tt::tt_metal::CreateCircularBuffer(program, all_cores, config);
+        };
+        const uint32_t table_bytes = 2048 * sizeof(uint32_t);
+        create_cb(cb_stage1, 2 * stage1_batch, input_tile_bytes, tt::DataFormat::Float16_b);
+        create_cb(cb_tiled, stage1_batch, input_tile_bytes, tt::DataFormat::Float16_b);
+        create_cb(cb_scaler, 1, input_tile_bytes, tt::DataFormat::Float16_b);
+        create_cb(cb_red, 2 * stage1_batch, input_tile_bytes, tt::DataFormat::Float16_b);
+        // The writer fills a whole row of maxima before the compute reads the first chunk.
+        create_cb(
+            cb_max,
+            tiles_per_sequence * two_level_max_chunks(input_width),
+            input_tile_bytes,
+            tt::DataFormat::Float16_b);
+        create_cb(cb_table, 1, table_bytes, tt::DataFormat::UInt32);
+        const uint32_t bitmap_bytes =
+            tt::round_up(tt::div_up(tt::div_up(input_width, two_level_block_keys), 32) * sizeof(uint32_t), 64);
+        create_cb(cb_bitmap, 1, bitmap_bytes, tt::DataFormat::UInt32);
+        create_cb(cb_own_table, 1, table_bytes, tt::DataFormat::UInt32);
+        create_cb(cb_writer_mailbox, 1, 64, tt::DataFormat::UInt32);
+    }
+    // Counts the rows whose block maxima the writer has gathered for the reader.
+    const uint32_t max_ready_semaphore_id = two_level ? tt::tt_metal::CreateSemaphore(program, all_cores, 0) : 0;
+    const std::vector<std::pair<std::string, uint32_t>> two_level_named_args = {
+        {"tl_max_ready_sem", max_ready_semaphore_id},
+        {"tl_cb_stage1", cb_stage1},
+        {"tl_cb_tiled", cb_tiled},
+        {"tl_cb_scaler", cb_scaler},
+        {"tl_cb_red", cb_red},
+        {"tl_cb_max", cb_max},
+        {"tl_cb_table", cb_table},
+        {"tl_cb_bitmap", cb_bitmap},
+        {"tl_cb_own_table", cb_own_table},
+        {"tl_cb_writer_mailbox", cb_writer_mailbox},
+        {"tl_stage1_batch", stage1_batch},
+        {"tl_block_max_input", tensor_args.block_max_tensor.has_value() ? 1u : 0u},
+        {"tl_block_max_output", tensor_args.block_max_output.has_value() ? 1u : 0u},
+        {"tl_mode_output", tensor_args.mode_output.has_value() ? 1u : 0u},
+        {"tl_block_max_row_bytes", block_max_row_bytes},
+        {"tl_page_bytes", input_tile_bytes},
+        {"tl_chunk_keys", llk_k}};
+    // The kernels compile their two-level code only under this define, so single-level binaries are unchanged.
+    const std::map<std::string, std::string> two_level_defines =
+        two_level ? std::map<std::string, std::string>{{"TOPK_TWO_LEVEL", "1"}} : std::map<std::string, std::string>{};
+    const auto with_two_level = [&](std::unordered_map<std::string, uint32_t> named) {
+        if (two_level) {
+            for (const auto& [name, value] : two_level_named_args) {
+                named[name] = value;
+            }
+        }
+        return named;
+    };
+
     std::vector<uint32_t> reader_compile_args = {cb_in, input_chunk_bytes, input_tile_bytes, tiles_per_sequence};
     interleaved_accessor_args(input).append_to(reader_compile_args);
     // Keep this block fixed-width so the kernel can use direct compile-argument offsets. The scalar path's
     // placeholders and duplicate input accessor are compiled out.
     reader_compile_args.push_back(has_meta ? 1u : 0u);
-    reader_compile_args.push_back(has_meta ? cb_meta : 0u);
+    reader_compile_args.push_back(compute_mailbox ? cb_meta : 0u);
     reader_compile_args.push_back(has_meta ? operation_attributes.valid_length_offset : 0u);
     interleaved_accessor_args(has_meta ? *tensor_args.valid_length_tensor : input).append_to(reader_compile_args);
     // Real-token-end block: accessor only (placeholder when absent). No presence flag -- metadata mode is
     // one flag now, and the kernel reads presence from the common arg's VALUE (0 = uncapped).
     const bool has_vend = tensor_args.has_valid_end_metadata();
     interleaved_accessor_args(has_vend ? *tensor_args.valid_end_tensor : input).append_to(reader_compile_args);
+    if (two_level) {
+        // The caller's block maxima; the input is the placeholder when absent.
+        interleaved_accessor_args(tensor_args.block_max_tensor.value_or(input)).append_to(reader_compile_args);
+    }
 
     // The reader streams the input rows from DRAM, the heavy traffic; the writer emits k indices per row and
     // the row-split survivor hand-off, so it takes whichever NoC the reader leaves free.
@@ -383,15 +501,17 @@ TopkLargeIndicesProgramFactory::cached_program_t TopkLargeIndicesProgramFactory:
             .processor = tt::tt_metal::DataMovementProcessor::RISCV_1,
             .noc = reader_noc,
             .compile_args = reader_compile_args,
-            .named_compile_args = {{"row_split", row_split}}});
+            .defines = two_level_defines,
+            .named_compile_args = with_two_level({{"row_split", row_split}})});
 
     const auto body_mode = compute_body_mode(k, input.logical_shape()[-1]);
     const bool rows_are_multi_chunk = multi_chunk_rows(k, input.logical_shape()[-1]);
-    const bool whole_rows_split = split_whole_rows(
-        k,
-        flattened_rows_excluding_last_dim(input.logical_shape()),
-        input.logical_shape()[-1],
-        static_cast<uint32_t>(cores.size()));
+    // A two-level program runs its stages on the whole-row split body, so it always carries it.
+    const bool whole_rows_split = two_level || split_whole_rows(
+                                                   k,
+                                                   flattened_rows_excluding_last_dim(input.logical_shape()),
+                                                   input.logical_shape()[-1],
+                                                   static_cast<uint32_t>(cores.size()));
     // The K' 2048 segmented body holds its unfused accumulator in L1 while a later segment is split across the
     // threads: two sequences of raw 32-bit words, packed out of Dst and unpacked back. Whole rows and
     // block-aligned halves both take it, but only past one segment -- a shorter row never touches the CB.
@@ -406,8 +526,8 @@ TopkLargeIndicesProgramFactory::cached_program_t TopkLargeIndicesProgramFactory:
     }
 
     std::vector<uint32_t> compute_compile_args = {cb_in, cb_indices, llk_k, static_cast<uint32_t>(body_mode)};
-    compute_compile_args.push_back(has_meta ? 1u : 0u);
-    compute_compile_args.push_back(has_meta ? cb_meta : 0u);
+    compute_compile_args.push_back(compute_mailbox ? 1u : 0u);
+    compute_compile_args.push_back(compute_mailbox ? cb_meta : 0u);
     compute_compile_args.push_back(cb_landing);
     compute_compile_args.push_back(cb_send);
     compute_compile_args.push_back(rows_are_multi_chunk ? 1u : 0u);
@@ -424,10 +544,11 @@ TopkLargeIndicesProgramFactory::cached_program_t TopkLargeIndicesProgramFactory:
             // K=2048 multi-chunk merge uses DEST slots 0..7; FP32 half-sync mode exposes only 4 tiles.
             .dst_full_sync_en = true,
             .compile_args = compute_compile_args,
-            .named_compile_args = {
-                {"row_split", row_split},
-                {"split_whole_rows", whole_rows_split ? 1u : 0u},
-                {"long_rows", long_rows(k, input.logical_shape()[-1]) ? 1u : 0u}}});
+            .defines = two_level_defines,
+            .named_compile_args = with_two_level(
+                {{"row_split", row_split},
+                 {"split_whole_rows", whole_rows_split ? 1u : 0u},
+                 {"long_rows", long_rows(k, input.logical_shape()[-1]) ? 1u : 0u}})});
 
     std::vector<uint32_t> writer_compile_args = {
         cb_indices,
@@ -443,6 +564,14 @@ TopkLargeIndicesProgramFactory::cached_program_t TopkLargeIndicesProgramFactory:
     writer_compile_args.push_back(data_semaphore_id);
     writer_compile_args.push_back(survivor_tiles);
     writer_compile_args.push_back(survivor_bytes);
+    std::unordered_map<std::string, uint32_t> writer_named = {{"row_split", row_split}};
+    if (two_level) {
+        // Test outputs; the indices are the placeholder when absent.
+        writer_named["tl_max_out_args_offset"] = static_cast<uint32_t>(writer_compile_args.size());
+        interleaved_accessor_args(tensor_args.block_max_output.value_or(indices)).append_to(writer_compile_args);
+        writer_named["tl_mode_args_offset"] = static_cast<uint32_t>(writer_compile_args.size());
+        interleaved_accessor_args(tensor_args.mode_output.value_or(indices)).append_to(writer_compile_args);
+    }
 
     auto writer_kernel = tt::tt_metal::CreateKernel(
         program,
@@ -452,7 +581,8 @@ TopkLargeIndicesProgramFactory::cached_program_t TopkLargeIndicesProgramFactory:
             .processor = tt::tt_metal::DataMovementProcessor::RISCV_0,
             .noc = writer_noc,
             .compile_args = writer_compile_args,
-            .named_compile_args = {{"row_split", row_split}}});
+            .defines = two_level_defines,
+            .named_compile_args = with_two_level(writer_named)});
 
     TopkLargeIndicesSharedVariables shared{
         .reader_kernel_id = reader_kernel,
@@ -463,16 +593,23 @@ TopkLargeIndicesProgramFactory::cached_program_t TopkLargeIndicesProgramFactory:
         .input_shape = input.logical_shape(),
         .valid_length = operation_attributes.valid_length,
         .llk_k = llk_k,
-        .row_split = row_split != 0};
+        .row_split = row_split != 0,
+        .two_level = two_level};
     const uint32_t meta_addr =
         tensor_args.has_valid_length_metadata() ? tensor_args.valid_length_tensor->mesh_buffer().address() : 0u;
     const uint32_t valid_end_addr =
         tensor_args.has_valid_end_metadata() ? tensor_args.valid_end_tensor->mesh_buffer().address() : 0u;
-    tt::tt_metal::SetCommonRuntimeArgs(
-        program, reader_kernel, {input.mesh_buffer().address(), meta_addr, 0, 0, valid_end_addr});
+    std::vector<uint32_t> reader_common = {input.mesh_buffer().address(), meta_addr, 0, 0, valid_end_addr};
+    std::vector<uint32_t> writer_common = {indices.mesh_buffer().address()};
+    if (two_level) {
+        reader_common.resize(topk_common_args::block_max_address + 1, 0);
+        writer_common.resize(topk_common_args::mode_output_address + 1, 0);
+    }
+    tt::tt_metal::SetCommonRuntimeArgs(program, reader_kernel, reader_common);
     tt::tt_metal::SetCommonRuntimeArgs(program, compute_kernel, {0});
-    tt::tt_metal::SetCommonRuntimeArgs(program, writer_kernel, {indices.mesh_buffer().address()});
+    tt::tt_metal::SetCommonRuntimeArgs(program, writer_kernel, writer_common);
     set_runtime_args(program, shared, input, operation_attributes.valid_length);
+    set_two_level_common_args(program, shared, operation_attributes, tensor_args);
 
     return cached_program_t{std::move(program), std::move(shared)};
 }
@@ -499,6 +636,7 @@ void TopkLargeIndicesProgramFactory::override_runtime_arguments(
     reader_args[topk_common_args::valid_end_address] =
         tensor_args.has_valid_end_metadata() ? tensor_args.valid_end_tensor->mesh_buffer().address() : 0u;
     writer_args[topk_common_args::output_address] = tensor_return_value.mesh_buffer().address();
+    set_two_level_common_args(cached_program.program, shared, operation_attributes, tensor_args);
 
     // The cache key fixes k, dtype, grid and compute body mode. Shape and valid_length
     // are runtime controls: update their common arguments when either changes, and

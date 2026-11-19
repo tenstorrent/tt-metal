@@ -44,6 +44,12 @@ struct operation_attributes_t {
     // NoC the reader streams the input rows from DRAM on; the writer takes the other one. Resolved in invoke
     // (caller's choice, else the arch's preferred DRAM-read NoC) and included in the program hash.
     tt::tt_metal::NOC dram_read_noc{tt::tt_metal::NOC::NOC_0};
+    // Two-level selection (hashed): 32 selects from the maxima of 32-key blocks first, then from the keys of the
+    // 2048 selected blocks. nullopt = single-level only.
+    std::optional<uint32_t> block_select;
+    // Two-level programs run two-level for a search length at least this large (runtime, not hashed).
+    // nullopt = the measured default for the core count; 0 forces two-level, 0xFFFFFFFF single-level.
+    std::optional<uint32_t> two_level_cutover;
 };
 
 struct tensor_args_t {
@@ -58,6 +64,12 @@ struct tensor_args_t {
     // looser score with a tighter top-k drops real keys, the reverse ranks a stale tail.
     std::optional<Tensor> valid_end_tensor{std::nullopt};
     bool has_valid_end_metadata() const { return valid_end_tensor.has_value(); }
+    // Two-level only. block_max_tensor: the caller's [rows, ceil(n/32)] bf16 block maxima, so stage 1 is skipped
+    // (hashed by presence). block_max_output / mode_output: test outputs for the stage-1 maxima and the mode the
+    // program ran in (1 = two-level).
+    std::optional<Tensor> block_max_tensor{std::nullopt};
+    std::optional<Tensor> block_max_output{std::nullopt};
+    std::optional<Tensor> mode_output{std::nullopt};
 };
 
 using tensor_return_value_t = Tensor;

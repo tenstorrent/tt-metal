@@ -10,6 +10,9 @@
 #include "api/dataflow/noc.h"
 #include "api/dataflow/noc_semaphore.h"
 #include "api/tensor/noc_traits.h"
+#ifdef TOPK_TWO_LEVEL
+#include "topk_large_indices_two_level.hpp"
+#endif
 
 namespace {
 
@@ -103,6 +106,135 @@ FORCE_INLINE void write_row_indices(
     }
 }
 
+#ifdef TOPK_TWO_LEVEL
+// Two-level rows (see topk_large_indices_two_level.hpp): gather each row's block maxima into the stage-2 chunks,
+// turn the stage-2 selection into the ascending block table the reader gathers by, and map the stage-3 candidate
+// positions back to key indices.
+template <
+    uint32_t source_slices_per_row,
+    uint32_t output_slices_per_row,
+    uint32_t slice_bytes,
+    typename IndicesT,
+    typename MaxOutT>
+FORCE_INLINE void two_level_rows(
+    const Noc& noc,
+    CircularBuffer& indices_cb,
+    CircularBuffer& indices_scratch_cb,
+    const IndicesT& indices,
+    const MaxOutT& max_out,
+    uint32_t row_bytes,
+    uint32_t search_len,
+    uint32_t start_row,
+    uint32_t num_whole_rows,
+    bool takes_split_row,
+    uint32_t split_row) {
+    using namespace topk_two_level;
+    constexpr bool has_block_max = get_named_compile_time_arg_val("tl_block_max_input") != 0;
+    constexpr bool has_max_out = get_named_compile_time_arg_val("tl_block_max_output") != 0;
+    constexpr uint32_t page_bytes = get_named_compile_time_arg_val("tl_page_bytes");
+    constexpr uint32_t chunk_keys = get_named_compile_time_arg_val("tl_chunk_keys");
+    CircularBuffer red_cb(get_named_compile_time_arg_val("tl_cb_red"));
+    Semaphore<> max_ready_sem(get_named_compile_time_arg_val("tl_max_ready_sem"));
+    // The maxima scratch: never pushed, so its write pointer is its base on every RISC.
+    const uint32_t max_scratch = CircularBuffer(get_named_compile_time_arg_val("tl_cb_max")).get_write_ptr();
+    CircularBuffer table_cb(get_named_compile_time_arg_val("tl_cb_table"));
+    CircularBuffer bitmap_cb(get_named_compile_time_arg_val("tl_cb_bitmap"));
+    CircularBuffer own_table_cb(get_named_compile_time_arg_val("tl_cb_own_table"));
+
+    constexpr uint32_t stage1_batch = get_named_compile_time_arg_val("tl_stage1_batch");
+    const uint32_t num_blocks = div_up(search_len, block_keys);
+    const uint32_t stage1_tiles = div_up(div_up(search_len, tile_keys), stage1_batch) * stage1_batch;
+    const uint32_t bitmap_words = div_up(num_blocks, 32);
+    auto* bitmap = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(bitmap_cb.get_write_ptr());
+    auto* own_table = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(own_table_cb.get_write_ptr());
+    const uint32_t num_rows = num_whole_rows + (takes_split_row ? 1 : 0);
+
+    for (uint32_t local_row = 0; local_row < num_rows; ++local_row) {
+        const uint32_t row = local_row < num_whole_rows ? start_row + local_row : split_row;
+
+        if constexpr (!has_block_max) {
+            // Stage 1: the max reduce leaves each tile's 32 row maxima in column 0 (rows 0-15 in face 0, 16-31 in
+            // face 2). They go to the maxima scratch in block order; the reader streams them to the compute.
+            auto* dense = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(max_scratch);
+            for (uint32_t tile = 0; tile < stage1_tiles; ++tile) {
+                red_cb.wait_front(1);
+                const auto* reduced = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(red_cb.get_read_ptr());
+                const uint32_t first = tile * (tile_keys / block_keys);
+                if (first < num_blocks) {
+                    const uint32_t count = num_blocks - first < 32 ? num_blocks - first : 32;
+                    for (uint32_t r = 0; r < count; ++r) {
+                        dense[first + r] = reduced[r < 16 ? r * 16 : 512 + (r - 16) * 16];
+                    }
+                }
+                red_cb.pop_front(1);
+            }
+            if constexpr (has_max_out) {
+                noc.async_write(
+                    CoreLocalMem<uint16_t>(max_scratch), max_out, num_blocks * sizeof(uint16_t), {}, {.page_id = row});
+                noc.async_write_barrier();
+            }
+            // The reader copies the maxima out of the scratch before this row's stage 3, so the next row cannot
+            // overwrite them early.
+            max_ready_sem.up(noc, my_x[noc.get_noc_id()], my_y[noc.get_noc_id()], 1);
+            noc.async_atomic_barrier();
+        }
+
+        // Stage 2: the selected blocks, in any order, become an ascending table with sentinels last.
+        for (uint32_t word = 0; word < bitmap_words; ++word) {
+            bitmap[word] = 0;
+        }
+        indices_cb.wait_front(1);
+        const auto* selected = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(indices_cb.get_read_ptr());
+        for (uint32_t i = 0; i < selected_blocks; ++i) {
+            const uint32_t block = selected[i];
+            if (block < num_blocks) {
+                bitmap[block >> 5] |= 1u << (block & 31);
+            }
+        }
+        indices_cb.pop_front(1);
+        table_cb.reserve_back(1);
+        auto* table = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(table_cb.get_write_ptr());
+        uint32_t count = 0;
+        for (uint32_t word = 0; word < bitmap_words; ++word) {
+            uint32_t bits = bitmap[word];
+            while (bits != 0) {
+                const uint32_t bit = __builtin_ctz(bits);
+                bits &= bits - 1;
+                const uint32_t block = (word << 5) + bit;
+                table[count] = block;
+                own_table[count] = block;
+                ++count;
+            }
+        }
+        for (; count < selected_blocks; ++count) {
+            table[count] = sentinel;
+            own_table[count] = sentinel;
+        }
+        table_cb.push_back(1);
+
+        // Stage 3: candidate positions in rank order, mapped through the table to key indices.
+        indices_cb.wait_front(1);
+        indices_scratch_cb.reserve_back(1);
+        copy_row_to_scratch<source_slices_per_row, output_slices_per_row, slice_bytes>(
+            indices_cb, indices_scratch_cb, noc);
+        indices_cb.pop_front(1);
+        auto* ranked = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(indices_scratch_cb.get_write_ptr());
+        for (uint32_t i = 0; i < output_slices_per_row * slice_bytes / sizeof(uint32_t); ++i) {
+            const uint32_t position = ranked[i];
+            if (position != sentinel) {
+                ranked[i] = own_table[position / block_keys] * block_keys + position % block_keys;
+            }
+        }
+        indices_scratch_cb.push_back(1);
+        indices_scratch_cb.wait_front(1);
+        noc.async_write(
+            indices_scratch_cb, indices, row_bytes, {.offset_bytes = 0}, {.page_id = row, .offset_bytes = 0});
+        noc.async_writes_flushed();
+        indices_scratch_cb.pop_front(1);
+    }
+}
+#endif
+
 }  // namespace
 
 void kernel_main() {
@@ -148,6 +280,51 @@ void kernel_main() {
     const uint32_t landing_base = row_split ? landing_cb.get_write_ptr() : 0;
 
     const uint32_t num_whole_rows = has_split ? num_rows - 1 : num_rows;
+#ifdef TOPK_TWO_LEVEL
+    {
+        using namespace topk_two_level;
+        CircularBuffer mailbox_cb(get_named_compile_time_arg_val("tl_cb_writer_mailbox"));
+        mailbox_cb.wait_front(1);
+        const auto* words = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(mailbox_cb.get_read_ptr());
+        const bool two_level_mode = words[writer_mailbox_mode_word] != 0;
+        const uint32_t search_len = words[writer_mailbox_search_length_word];
+        mailbox_cb.pop_front(1);
+        // Test output: the mode this program ran in, written by the core that owns row 0.
+        if constexpr (get_named_compile_time_arg_val("tl_mode_output") != 0) {
+            const uint32_t mode_addr = get_common_arg_val<uint32_t>(topk_common_args::mode_output_address);
+            if (start_row == 0 && num_rows > 0) {
+                constexpr auto mode_args = TensorAccessorArgs<get_named_compile_time_arg_val("tl_mode_args_offset")>();
+                const auto mode_out = TensorAccessor(mode_args, mode_addr, sizeof(uint32_t));
+                CircularBuffer scratch(get_named_compile_time_arg_val("tl_cb_bitmap"));
+                const uint32_t word_addr = scratch.get_write_ptr();
+                *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(word_addr) = two_level_mode ? 1u : 0u;
+                noc.async_write(CoreLocalMem<uint32_t>(word_addr), mode_out, sizeof(uint32_t), {}, {.page_id = 0});
+                noc.async_write_barrier();
+            }
+        }
+        if (two_level_mode) {
+            constexpr auto max_out_args =
+                TensorAccessorArgs<get_named_compile_time_arg_val("tl_max_out_args_offset")>();
+            const uint32_t max_out_addr = get_common_arg_val<uint32_t>(topk_common_args::block_max_output_address);
+            const auto max_out =
+                TensorAccessor(max_out_args, max_out_addr, get_named_compile_time_arg_val("tl_block_max_row_bytes"));
+            two_level_rows<source_slices_per_row, output_slices_per_row, indices_slice_bytes>(
+                noc,
+                indices_cb,
+                indices_scratch_cb,
+                indices,
+                max_out,
+                indices_page_bytes,
+                search_len,
+                start_row,
+                num_whole_rows,
+                has_split && !second_half,
+                split_row);
+            noc.async_write_barrier();
+            return;
+        }
+    }
+#endif
     for (uint32_t local_row = 0; local_row < num_rows; ++local_row) {
         const bool is_split = has_split && local_row == num_whole_rows;
         const uint32_t row = is_split ? split_row : start_row + local_row;

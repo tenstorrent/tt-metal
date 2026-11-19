@@ -19,6 +19,11 @@
 #include "api/compute/reconfig_data_format.h"
 #include "api/compute/tile_move_copy.h"
 #include "api/compute/transpose_dest.h"
+#ifdef TOPK_TWO_LEVEL
+#include "ttnn/cpp/ttnn/kernel_lib/tilize_helpers.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.hpp"
+#include "topk_large_indices_two_level.hpp"
+#endif
 #include "api/dataflow/circular_buffer.h"
 #include "topk_large_indices_compute_body_mode.hpp"
 #include "topk_large_indices_metadata.hpp"
@@ -551,6 +556,30 @@ FORCE_INLINE void settle_next_program(uint32_t input_cb) {
     tile_regs_release();
 }
 
+#ifdef TOPK_TWO_LEVEL
+// Stage 1 of a two-level row (see topk_large_indices_two_level.hpp): tilize each 1024-key tile so a tile row holds 32
+// consecutive keys and reduce every row to its maximum; the writer gathers those into the row's maxima. With the
+// caller's maxima there is nothing to do here.
+template <uint32_t K>
+FORCE_INLINE void two_level_stage1(uint32_t search_len) {
+    using namespace topk_two_level;
+    if constexpr (get_named_compile_time_arg_val("tl_block_max_input") == 0) {
+        constexpr uint32_t cb_stage1 = get_named_compile_time_arg_val("tl_cb_stage1");
+        constexpr uint32_t cb_tiled = get_named_compile_time_arg_val("tl_cb_tiled");
+        constexpr uint32_t cb_scaler = get_named_compile_time_arg_val("tl_cb_scaler");
+        constexpr uint32_t cb_red = get_named_compile_time_arg_val("tl_cb_red");
+        constexpr uint32_t stage1_batch = get_named_compile_time_arg_val("tl_stage1_batch");
+        // Whole batches, as the reader sends them.
+        const uint32_t stage1_tiles = div_up(div_up(search_len, tile_keys), stage1_batch) * stage1_batch;
+        for (uint32_t tile = 0; tile < stage1_tiles; tile += stage1_batch) {
+            compute_kernel_lib::tilize<1, cb_stage1, cb_tiled>(stage1_batch);
+            compute_kernel_lib::reduce<PoolType::MAX, ReduceDim::REDUCE_ROW, cb_tiled, cb_scaler, cb_red>(
+                compute_kernel_lib::ReduceInputBlockShape::of(stage1_batch, 1));
+        }
+    }
+}
+#endif
+
 }  // namespace
 
 void kernel_main() {
@@ -593,6 +622,13 @@ void kernel_main() {
     uint32_t split_tail_elements;
     // Clipped like the reader's: an empty half would otherwise stamp chunk ids past the end of the row.
     uint32_t split_first_chunk;
+#ifdef TOPK_TWO_LEVEL
+    // A two-level program (see topk_large_indices_two_level.hpp) learns its mode and search length from the mailbox.
+    bool two_level_mode = false;
+    uint32_t two_level_search_length = 0;
+    static_assert(valid_length_from_metadata, "a two-level program reads its bounds from the mailbox");
+    static_assert(split_whole_rows, "a two-level program runs its stages on the whole-row split body");
+#endif
     if constexpr (valid_length_from_metadata) {
         // The reader already clipped the rows and the split half against the metadata length.
         CircularBuffer meta_cb_obj(meta_cb);
@@ -610,6 +646,10 @@ void kernel_main() {
         // A split core's mailbox whole-row count is the row's own, so half_bounds places the cut exactly as
         // the reader did. Deriving it with the same helper is what keeps the two from drifting apart.
         split_first_chunk = half_bounds({num_chunks, tail_elements}, K, second_half).first_chunk;
+#ifdef TOPK_TWO_LEVEL
+        two_level_mode = mailbox_word(meta_cb, topk_two_level::mailbox_mode_word) != 0;
+        two_level_search_length = mailbox_word(meta_cb, topk_two_level::mailbox_search_length_word);
+#endif
         meta_cb_obj.pop_front(1);
     } else if constexpr (!row_split) {
         const auto bounds = calculate_topk_bounds(search_len, K);
@@ -645,6 +685,39 @@ void kernel_main() {
     const uint32_t num_whole_rows = has_split ? num_rows - 1 : num_rows;
     uint32_t first_row = 0;
     if constexpr (split_whole_rows) {
+#ifdef TOPK_TWO_LEVEL
+        // A two-level row is two items on this loop's split body, both read from input_cb: its block maxima (stage
+        // 2), then its gathered candidates (stage 3). One call site keeps a single copy of the body in the binary.
+        const bool two_level_rows = two_level_mode;
+        const uint32_t whole_row_chunks = num_chunks;
+        const uint32_t whole_row_tail = tail_elements;
+        // A split row belongs whole to its first half; the second half skips it.
+        const uint32_t items = two_level_rows ? 2 * (sends_survivor ? num_rows - 1 : num_rows) : num_whole_rows;
+        const uint32_t maxima_chunks = topk_two_level::stage2_chunks(two_level_search_length);
+        if (items > 0 && (two_level_rows ||
+                          (num_chunks >= min_split_chunks && (num_chunks <= max_fused_chunks || segmented_split)))) {
+            if (!two_level_rows) {
+                begin_thread_split();
+            }
+            const bool prefetch = !two_level_rows && !segmented_split && num_chunks <= max_fused_chunks &&
+                                  topk_xl_split_can_prefetch<K>(num_chunks);
+            for (uint32_t row = 0; row < items; ++row) {
+                const bool maxima_item = two_level_rows && (row & 1) == 0;
+                if (maxima_item) {
+                    // Stage 1 runs on the ordinary single-thread schedule between the split items.
+                    if (row > 0) {
+                        topk_xl_split_end();
+                    }
+                    two_level_stage1<K>(two_level_search_length);
+                    begin_thread_split();
+                }
+                // Shadow the row bounds with this item's: the call below is the single-level loop's.
+                const uint32_t num_chunks = !two_level_rows
+                                                ? whole_row_chunks
+                                                : (maxima_item ? maxima_chunks : topk_two_level::candidate_keys / K);
+                const uint32_t tail_elements = two_level_rows ? K : whole_row_tail;
+                const bool prefetch_next = prefetch && row + 1 < items;
+#else
         if (num_whole_rows > 0 && num_chunks >= min_split_chunks &&
             (num_chunks <= max_fused_chunks || segmented_split)) {
             begin_thread_split();
@@ -652,6 +725,7 @@ void kernel_main() {
                 !segmented_split && num_chunks <= max_fused_chunks && topk_xl_split_can_prefetch<K>(num_chunks);
             for (uint32_t row = 0; row < num_whole_rows; ++row) {
                 const bool prefetch_next = prefetch && row + 1 < num_whole_rows;
+#endif
                 tile_regs_acquire();
                 if constexpr (segmented_split) {
                     reduce_split_segmented_row<K>(
@@ -691,12 +765,28 @@ void kernel_main() {
             if constexpr (segmented_split) {
                 settle_next_program(input_cb);
             }
+#ifdef TOPK_TWO_LEVEL
+            if constexpr (!segmented_split) {
+                if (two_level_rows) {
+                    settle_next_program(input_cb);
+                }
+            }
+            if (two_level_rows) {
+                return;
+            }
+#endif
             if (!has_split) {
                 return;
             }
             first_row = num_whole_rows;
         }
     }
+#ifdef TOPK_TWO_LEVEL
+    // A two-level program's cores without rows have nothing more to do.
+    if (two_level_mode) {
+        return;
+    }
+#endif
 
     for (uint32_t row = first_row; row < num_rows; ++row) {
         const bool split_row = has_split && row == num_whole_rows;

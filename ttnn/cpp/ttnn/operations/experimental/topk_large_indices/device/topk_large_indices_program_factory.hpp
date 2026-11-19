@@ -46,6 +46,7 @@ struct TopkLargeIndicesSharedVariables {
     bool row_split = false;
     uint32_t num_rows = 0;
     uint32_t num_chunks = 0;
+    bool two_level = false;
 };
 
 struct TopkLargeIndicesProgramFactory {
@@ -88,5 +89,16 @@ bool long_rows(uint32_t k, uint32_t input_last_dim);
 // Whether a core can hold a whole row of several chunks, which the compute kernel splits across MATH and PACK.
 // A program whose rows all go to core pairs has no whole rows, so it builds no split code.
 bool split_whole_rows(uint32_t k, uint32_t num_rows, uint32_t input_last_dim, uint32_t num_cores);
+
+// Two-level selection (see kernels/topk_large_indices_two_level.hpp). A program carries the two-level path only when
+// the caller asks for it and the physical width is in the supported range; the mode is chosen at run time.
+constexpr uint32_t two_level_block_keys = 32;
+constexpr uint32_t two_level_min_width = 65'536;
+constexpr uint32_t two_level_max_width = 2'097'152;
+bool two_level_enabled(const operation_attributes_t& attrs, uint32_t input_last_dim);
+// Stage-2 chunks of 2048 block maxima a row of this width can need: sizes the maxima CB, so it is hashed.
+uint32_t two_level_max_chunks(uint32_t input_last_dim);
+// The search length from which a two-level program runs two-level, measured per core count.
+uint32_t two_level_default_cutover(uint32_t num_cores);
 
 }  // namespace ttnn::operations::experimental::topk_large_indices::program

@@ -13,10 +13,16 @@ enum Reader {
     metadata_address = 1,
     search_length = 2,
     input_row_bytes = 3,
-    valid_end_address = 4
+    valid_end_address = 4,
+    // Two-level programs only. A row runs two-level when its search length is at least the cutover; 0 forces
+    // two-level, 0xFFFFFFFF forces single-level. block_max_address is the caller-supplied maxima tensor (0 = none).
+    two_level_cutover = 5,
+    block_max_address = 6
 };
 enum Compute { compute_search_length = 0 };
-enum Writer { output_address = 0 };
+// Two-level programs only: block_max_output_address receives each row's block maxima (0 = none) and
+// mode_output_address the mode the program ran in (0 = none). Both are test outputs.
+enum Writer { output_address = 0, block_max_output_address = 1, mode_output_address = 2 };
 }  // namespace topk_common_args
 
 // Per-core args. A core reduces num_rows rows: whole rows from start_row and, with has_split, last one half of

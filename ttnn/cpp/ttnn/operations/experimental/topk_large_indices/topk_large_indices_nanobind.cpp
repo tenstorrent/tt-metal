@@ -44,8 +44,9 @@ void bind_topk_large_indices(nb::module_& mod) {
         valid_length (optional):
             * restricts the search to the first ``valid_length`` columns of each row;
             * the remaining columns are ignored -- neither read nor ranked -- so an
-              over-allocated row whose tail is stale can be searched without slicing it;
-            * must be in [k, last dimension]; defaults to the full last dimension;
+              over-allocated row whose tail is stale can be searched without slicing it (a two-level
+              program reads whole 64-byte blocks, so stale keys next to the bound are read but never ranked);
+            * must be in [1, last dimension]; a bound below k returns sentinels for the missing indices; defaults to the full last dimension;
             * applied at runtime (no recompile), so a loop growing valid_length reuses one program.
 
         Core selection:
@@ -76,6 +77,19 @@ void bind_topk_large_indices(nb::module_& mod) {
                 ring_indexer_score_dsa's valid_end_tensor -- a looser score with a tighter top-k drops real
                 keys, the reverse ranks a stale tail.
             dram_read_noc: optional ``ttnn.NOC`` for the reader's DRAM reads (default: arch preferred).
+            block_select: optional block size for two-level selection (only 32). The program picks the top 2048 of
+                the maxima of 32-key blocks, then the exact top k among the keys of those blocks. The result has the
+                same values as single-level selection; which of several tied keys is returned may differ. Requires
+                k = 2048 and a last dimension in [65536, 2097152] that is a multiple of 32. The program decides at
+                run time, from the search length, whether to run two-level.
+            two_level_cutover: search length from which a two-level program runs two-level (default: measured per
+                core count). 0 forces two-level, 0xFFFFFFFF single-level.
+            block_max_tensor: optional [rows, ceil(n/32)] BFLOAT16 DRAM tensor of block maxima; skips the program's
+                own block-max stage. Only the first ceil(search_length/32) entries of each row are read.
+            block_max_output: optional [rows, ceil(n/32)] BFLOAT16 DRAM tensor that receives the computed block
+                maxima (testing).
+            mode_output: optional 1-element UINT32 DRAM tensor that receives 1 when the program ran two-level
+                (testing).
         )doc",
         &ttnn::experimental::topk_large_indices,
         nb::arg("input_tensor"),
@@ -87,7 +101,12 @@ void bind_topk_large_indices(nb::module_& mod) {
         nb::arg("subdevice_id") = nb::none(),
         nb::arg("sub_core_grids") = nb::none(),
         nb::arg("valid_end_tensor") = nb::none(),
-        nb::arg("dram_read_noc") = nb::none());
+        nb::arg("dram_read_noc") = nb::none(),
+        nb::arg("block_select") = nb::none(),
+        nb::arg("two_level_cutover") = nb::none(),
+        nb::arg("block_max_tensor") = nb::none(),
+        nb::arg("block_max_output") = nb::none(),
+        nb::arg("mode_output") = nb::none());
 }
 
 }  // namespace ttnn::operations::experimental::topk_large_indices::detail

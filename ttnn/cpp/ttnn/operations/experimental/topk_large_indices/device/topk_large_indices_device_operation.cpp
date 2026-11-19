@@ -32,6 +32,59 @@ void validate_static_args(const operation_attributes_t& attrs, const tensor_args
     TT_FATAL(input.layout() == Layout::ROW_MAJOR, "topk_large_indices input must be ROW_MAJOR");
     TT_FATAL(input.dtype() == DataType::BFLOAT16, "topk_large_indices input must be BFLOAT16");
     TT_FATAL(!input.is_sharded(), "topk_large_indices input must use interleaved memory");
+    if (attrs.block_select.has_value()) {
+        const uint32_t n = input.logical_shape()[-1];
+        TT_FATAL(
+            *attrs.block_select == program::two_level_block_keys,
+            "topk_large_indices block_select supports {} only, got {}",
+            program::two_level_block_keys,
+            *attrs.block_select);
+        TT_FATAL(attrs.k == max_supported_k, "topk_large_indices block_select requires k = {}", max_supported_k);
+        TT_FATAL(
+            n % program::two_level_block_keys == 0 && n >= program::two_level_min_width &&
+                n <= program::two_level_max_width,
+            "topk_large_indices block_select requires a last dimension in [{}, {}] that is a multiple of {}, got {}",
+            program::two_level_min_width,
+            program::two_level_max_width,
+            program::two_level_block_keys,
+            n);
+        TT_FATAL(input.buffer()->is_dram(), "topk_large_indices block_select requires the input in DRAM");
+    } else {
+        TT_FATAL(
+            !tensor_args.block_max_tensor.has_value() && !tensor_args.block_max_output.has_value() &&
+                !tensor_args.mode_output.has_value() && !attrs.two_level_cutover.has_value(),
+            "topk_large_indices block_max_tensor, block_max_output, mode_output and two_level_cutover require "
+            "block_select");
+    }
+}
+
+void validate_two_level_tensor(
+    const Tensor& input, const std::optional<Tensor>& tensor, DataType dtype, uint32_t width, const char* name) {
+    if (!tensor.has_value()) {
+        return;
+    }
+    const auto& t = *tensor;
+    TT_FATAL(
+        t.storage_type() == StorageType::DEVICE && t.is_allocated() && t.device() == input.device(),
+        "topk_large_indices {} must be allocated on the input's device",
+        name);
+    TT_FATAL(
+        t.dtype() == dtype && t.layout() == Layout::ROW_MAJOR,
+        "topk_large_indices {} has the wrong dtype or layout",
+        name);
+    TT_FATAL(
+        t.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED &&
+            t.memory_config().buffer_type() == BufferType::DRAM,
+        "topk_large_indices {} must be DRAM interleaved",
+        name);
+    const auto& shape = t.logical_shape();
+    TT_FATAL(
+        shape[-1] == width && flattened_rows_excluding_last_dim(shape) ==
+                                  (width == 1 ? 1u : flattened_rows_excluding_last_dim(input.logical_shape())),
+        "topk_large_indices {} has shape {}, expected last dimension {}",
+        name,
+        shape,
+        width);
 }
 
 void validate_runtime_args(const operation_attributes_t& attrs, const tensor_args_t& tensor_args) {
@@ -145,6 +198,13 @@ void validate_runtime_args(const operation_attributes_t& attrs, const tensor_arg
         TT_FATAL(
             m.memory_config().buffer_type() == BufferType::DRAM, "topk_large_indices valid_end_tensor must be in DRAM");
     }
+    if (attrs.block_select.has_value()) {
+        // One page per row: the reader and writer address these by row.
+        const uint32_t blocks = tt::div_up(n, program::two_level_block_keys);
+        validate_two_level_tensor(input, tensor_args.block_max_tensor, DataType::BFLOAT16, blocks, "block_max_tensor");
+        validate_two_level_tensor(input, tensor_args.block_max_output, DataType::BFLOAT16, blocks, "block_max_output");
+        validate_two_level_tensor(input, tensor_args.mode_output, DataType::UINT32, 1, "mode_output");
+    }
     if (attrs.valid_length.has_value()) {
         const uint32_t valid_length = attrs.valid_length.value();
         TT_FATAL(valid_length > 0, "topk_large_indices valid_length must be > 0");
@@ -175,7 +235,7 @@ ttsl::hash::hash_t TopkLargeIndicesDeviceOperation::compute_program_hash(
     const uint32_t num_rows = flattened_rows_excluding_last_dim(input.logical_shape());
     const uint32_t input_last_dim = input.logical_shape()[-1];
     const uint32_t num_cores = attrs.resolved_worker_core_grid.num_cores();
-    return tt::tt_metal::operation::hash_operation<TopkLargeIndicesDeviceOperation>(
+    const auto base = tt::tt_metal::operation::hash_operation<TopkLargeIndicesDeviceOperation>(
         // Metadata presence changes the reader/compute binaries (extra CBs + accessor args + the on-device
         // derivation) and the offset is baked in as a compile arg, so both must be hashed. The per-chunk
         // VALUE never enters the key -- that is what lets one captured program serve every chunk.
@@ -200,6 +260,17 @@ ttsl::hash::hash_t TopkLargeIndicesDeviceOperation::compute_program_hash(
         program::split_whole_rows(attrs.k, num_rows, input_last_dim, num_cores),
         program::row_split_enabled(attrs.k, num_rows, input_last_dim, num_cores),
         program::long_rows(attrs.k, input_last_dim));
+    if (!program::two_level_enabled(attrs, input_last_dim)) {
+        return base;
+    }
+    // Two-level programs add their own kernels' structure; single-level keys are unchanged.
+    return tt::tt_metal::operation::hash_operation<TopkLargeIndicesDeviceOperation>(
+        base,
+        *attrs.block_select,
+        program::two_level_max_chunks(input_last_dim),
+        tensor_args.block_max_tensor.has_value(),
+        tensor_args.block_max_output.has_value(),
+        tensor_args.mode_output.has_value());
 }
 
 spec_return_value_t TopkLargeIndicesDeviceOperation::compute_output_specs(
@@ -233,7 +304,12 @@ TopkLargeIndicesDeviceOperation::invoke(
     const std::optional<tt::tt_metal::SubDeviceId>& subdevice_id,
     const std::optional<CoreRangeSet>& sub_core_grid,
     const std::optional<Tensor>& valid_end_tensor,
-    std::optional<tt::tt_metal::NOC> dram_read_noc) {
+    std::optional<tt::tt_metal::NOC> dram_read_noc,
+    std::optional<uint32_t> block_select,
+    std::optional<uint32_t> two_level_cutover,
+    const std::optional<Tensor>& block_max_tensor,
+    const std::optional<Tensor>& block_max_output,
+    const std::optional<Tensor>& mode_output) {
     TT_FATAL(input_tensor.storage_type() == StorageType::DEVICE, "topk_large_indices input must be on device");
     auto* device = input_tensor.device();
     TT_FATAL(device != nullptr, "topk_large_indices input must have a device");
@@ -271,11 +347,16 @@ TopkLargeIndicesDeviceOperation::invoke(
             .resolved_worker_core_grid = resolved_worker_core_grid,
             .valid_length = valid_length,
             .valid_length_offset = valid_length_offset,
-            .dram_read_noc = resolved_dram_read_noc},
+            .dram_read_noc = resolved_dram_read_noc,
+            .block_select = block_select,
+            .two_level_cutover = two_level_cutover},
         tensor_args_t{
             .input_tensor = input_tensor,
             .valid_length_tensor = valid_length_tensor,
-            .valid_end_tensor = valid_end_tensor}};
+            .valid_end_tensor = valid_end_tensor,
+            .block_max_tensor = block_max_tensor,
+            .block_max_output = block_max_output,
+            .mode_output = mode_output}};
 }
 
 }  // namespace ttnn::operations::experimental::topk_large_indices
@@ -291,7 +372,12 @@ Tensor topk_large_indices(
     const std::optional<tt::tt_metal::SubDeviceId>& subdevice_id,
     const std::optional<CoreRangeSet>& sub_core_grid,
     const std::optional<Tensor>& valid_end_tensor,
-    std::optional<tt::tt_metal::NOC> dram_read_noc) {
+    std::optional<tt::tt_metal::NOC> dram_read_noc,
+    std::optional<uint32_t> block_select,
+    std::optional<uint32_t> two_level_cutover,
+    const std::optional<Tensor>& block_max_tensor,
+    const std::optional<Tensor>& block_max_output,
+    const std::optional<Tensor>& mode_output) {
     auto [operation_attributes, tensor_args] =
         operations::experimental::topk_large_indices::TopkLargeIndicesDeviceOperation::invoke(
             input_tensor,
@@ -302,7 +388,12 @@ Tensor topk_large_indices(
             subdevice_id,
             sub_core_grid,
             valid_end_tensor,
-            dram_read_noc);
+            dram_read_noc,
+            block_select,
+            two_level_cutover,
+            block_max_tensor,
+            block_max_output,
+            mode_output);
     return ttnn::device_operation::launch<
         operations::experimental::topk_large_indices::TopkLargeIndicesDeviceOperation>(
         operation_attributes, tensor_args);

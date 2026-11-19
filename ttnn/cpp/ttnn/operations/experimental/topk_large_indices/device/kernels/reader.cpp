@@ -11,6 +11,181 @@
 #include "ttnn/operations/transformer/sdpa/device/kernels/dataflow/metadata_scalar_read.hpp"
 #include "topk_large_indices_metadata.hpp"
 #include "topk_large_indices_runtime_args.hpp"
+#ifdef TOPK_TWO_LEVEL
+#include "api/dataflow/noc_semaphore.h"
+#include "topk_large_indices_two_level.hpp"
+
+namespace {
+
+constexpr uint16_t neginf_bf16 = 0xFF80;
+
+FORCE_INLINE void fill_neginf(uint32_t l1_addr, uint32_t num_elements) {
+    auto* p = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(l1_addr);
+    for (uint32_t i = 0; i < num_elements; ++i) {
+        p[i] = neginf_bf16;
+    }
+}
+
+// Two-level rows: stage 1 streams each row's valid prefix as 1024-key tiles (or the caller's block maxima), stage 3
+// gathers the 2048 blocks the writer selected into a 65,536-key candidate row in 2048-key chunks.
+template <bool has_block_max, typename InputAccessor, typename MaxAccessor>
+FORCE_INLINE void two_level_rows(
+    const Noc& noc,
+    const InputAccessor& input,
+    const MaxAccessor& block_max,
+    uint32_t search_len,
+    uint32_t start_row,
+    uint32_t num_whole_rows,
+    bool takes_split_row,
+    uint32_t split_row) {
+    using namespace topk_two_level;
+    constexpr uint32_t cb_in = get_compile_time_arg_val(0);
+    constexpr uint32_t chunk_bytes = get_compile_time_arg_val(1);
+    constexpr uint32_t tile_bytes = get_compile_time_arg_val(2);
+    constexpr uint32_t tiles_per_chunk = get_compile_time_arg_val(3);
+    constexpr uint32_t cb_stage1 = get_named_compile_time_arg_val("tl_cb_stage1");
+    constexpr uint32_t cb_table = get_named_compile_time_arg_val("tl_cb_table");
+    constexpr uint32_t cb_max = get_named_compile_time_arg_val("tl_cb_max");
+    constexpr uint32_t stage1_batch = get_named_compile_time_arg_val("tl_stage1_batch");
+    constexpr uint32_t blocks_per_chunk = chunk_bytes / block_bytes;
+    constexpr uint32_t candidate_chunks = selected_blocks / blocks_per_chunk;
+    static_assert(tile_bytes == tile_keys * sizeof(uint16_t));
+
+    CircularBuffer input_cb(cb_in);
+    CircularBuffer stage1_cb(cb_stage1);
+    CircularBuffer table_cb(cb_table);
+    Semaphore<> max_ready_sem(get_named_compile_time_arg_val("tl_max_ready_sem"));
+    // The writer's maxima scratch: never pushed, so its write pointer is its base on every RISC.
+    const uint32_t max_scratch = CircularBuffer(cb_max).get_write_ptr();
+
+    const uint32_t num_blocks = div_up(search_len, block_keys);
+    const uint32_t last_block = num_blocks - 1;
+    const uint32_t last_block_live = search_len - last_block * block_keys;
+    // Whole batches: every reserve of the stage-1 CB is a batch, so none wraps. Tiles past the row are all -inf.
+    const uint32_t stage1_tiles = div_up(div_up(search_len, tile_keys), stage1_batch) * stage1_batch;
+    const uint32_t max_chunks = stage2_chunks(search_len);
+    const uint32_t num_rows = num_whole_rows + (takes_split_row ? 1 : 0);
+
+    for (uint32_t local_row = 0; local_row < num_rows; ++local_row) {
+        const uint32_t row = local_row < num_whole_rows ? start_row + local_row : split_row;
+
+        if constexpr (!has_block_max) {
+            for (uint32_t tile = 0; tile < stage1_tiles; tile += stage1_batch) {
+                const uint32_t batch = stage1_tiles - tile < stage1_batch ? stage1_tiles - tile : stage1_batch;
+                stage1_cb.reserve_back(batch);
+                const uint32_t base = stage1_cb.get_write_ptr();
+                for (uint32_t t = 0; t < batch; ++t) {
+                    const uint32_t first_key = (tile + t) * tile_keys;
+                    if (first_key >= search_len) {
+                        continue;
+                    }
+                    const uint32_t live = search_len - first_key < tile_keys ? search_len - first_key : tile_keys;
+                    // Whole 64 B granules: the row is a multiple of 32 keys long, so this never leaves it.
+                    const uint32_t bytes = div_up(live, block_keys) * block_bytes;
+                    noc.async_read(
+                        input,
+                        stage1_cb,
+                        bytes,
+                        {.page_id = row, .offset_bytes = first_key * sizeof(uint16_t)},
+                        {.offset_bytes = t * tile_bytes});
+                }
+                noc.async_read_barrier();
+                for (uint32_t t = 0; t < batch; ++t) {
+                    const uint32_t first_key = (tile + t) * tile_keys;
+                    const uint32_t live =
+                        first_key >= search_len
+                            ? 0
+                            : (search_len - first_key < tile_keys ? search_len - first_key : tile_keys);
+                    if (live < tile_keys) {
+                        fill_neginf(base + t * tile_bytes + live * sizeof(uint16_t), tile_keys - live);
+                    }
+                }
+                clobber_all_memory();
+                stage1_cb.push_back(batch);
+            }
+            // The writer has gathered this row's maxima into its scratch.
+            max_ready_sem.wait_min(local_row + 1);
+        }
+
+        // Stage 2: the row's block maxima through the input CB, one chunk per reserve so a chunk never wraps. Past
+        // the row's blocks the chunk is -inf.
+        const uint32_t max_bytes = num_blocks * sizeof(uint16_t);
+        for (uint32_t chunk = 0; chunk < max_chunks; ++chunk) {
+            input_cb.reserve_back(tiles_per_chunk);
+            const uint32_t dst = input_cb.get_write_ptr();
+            const uint32_t first = chunk * chunk_bytes;
+            const uint32_t bytes =
+                max_bytes > first ? (max_bytes - first < chunk_bytes ? max_bytes - first : chunk_bytes) : 0;
+            if (bytes > 0) {
+                if constexpr (has_block_max) {
+                    for (uint32_t offset = 0; offset < bytes; offset += tile_bytes) {
+                        const uint32_t piece = bytes - offset < tile_bytes ? bytes - offset : tile_bytes;
+                        noc.async_read(
+                            block_max,
+                            input_cb,
+                            piece,
+                            {.page_id = row, .offset_bytes = first + offset},
+                            {.offset_bytes = offset});
+                    }
+                } else {
+                    noc_async_read(get_noc_addr(max_scratch + first, noc.get_noc_id()), dst, bytes, noc.get_noc_id());
+                }
+            }
+            fill_neginf(dst + bytes, (chunk_bytes - bytes) / sizeof(uint16_t));
+            noc.async_read_barrier();
+            clobber_all_memory();
+            input_cb.push_back(tiles_per_chunk);
+        }
+
+        // Stage 3: the writer's ascending table of selected blocks, sentinels last. A row is one page in one bank,
+        // so its NoC address is resolved once and each block read is an offset from it.
+        const uint64_t row_noc_addr = input.get_noc_addr(row, 0, noc.get_noc_id());
+        table_cb.wait_front(1);
+        const auto* table = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(table_cb.get_read_ptr());
+        for (uint32_t chunk = 0; chunk < candidate_chunks; ++chunk) {
+            input_cb.reserve_back(tiles_per_chunk);
+            const uint32_t chunk_base = input_cb.get_write_ptr();
+            ASSERT((chunk_base & (block_bytes - 1)) == 0);
+            uint32_t partial_slot = blocks_per_chunk;
+            uint32_t slot = 0;
+            while (slot < blocks_per_chunk) {
+                const uint32_t block = table[chunk * blocks_per_chunk + slot];
+                if (block == sentinel) {
+                    fill_neginf(chunk_base + slot * block_bytes, block_keys);
+                    ++slot;
+                    continue;
+                }
+                // One read for a run of consecutive blocks within this chunk.
+                uint32_t run = 1;
+                while (slot + run < blocks_per_chunk && table[chunk * blocks_per_chunk + slot + run] == block + run) {
+                    ++run;
+                }
+                if (block <= last_block && last_block < block + run) {
+                    partial_slot = slot + (last_block - block);
+                }
+                noc_async_read(
+                    row_noc_addr + block * block_bytes,
+                    chunk_base + slot * block_bytes,
+                    run * block_bytes,
+                    noc.get_noc_id());
+                slot += run;
+            }
+            noc.async_read_barrier();
+            if (partial_slot < blocks_per_chunk && last_block_live < block_keys) {
+                // The last block is read whole; its keys past the search length are stale.
+                fill_neginf(
+                    chunk_base + partial_slot * block_bytes + last_block_live * sizeof(uint16_t),
+                    block_keys - last_block_live);
+            }
+            clobber_all_memory();
+            input_cb.push_back(tiles_per_chunk);
+        }
+        table_cb.pop_front(1);
+    }
+}
+
+}  // namespace
+#endif
 
 void kernel_main() {
     const uint32_t src_addr = get_common_arg_val<uint32_t>(topk_common_args::input_address);
@@ -41,6 +216,9 @@ void kernel_main() {
     constexpr uint32_t vend_args_base = meta_args.next_compile_time_args_offset();
     constexpr auto vend_args = TensorAccessorArgs<vend_args_base>();
     constexpr uint32_t neginf_bf16_pair = 0xFF80FF80u;
+#ifdef TOPK_TWO_LEVEL
+    const uint32_t two_level_cutover = get_common_arg_val<uint32_t>(topk_common_args::two_level_cutover);
+#endif
 
     const auto input = TensorAccessor(input_args, src_addr, input_page_bytes);
     const uint32_t input_width = input_page_bytes / element_bytes;
@@ -81,6 +259,12 @@ void kernel_main() {
         bounds = calculate_topk_bounds(search_len, llk_k);
         whole = whole_row_bounds(bounds);
         CoreLocalMem<TopkMetadataBounds> mailbox(scratch);
+#ifdef TOPK_TWO_LEVEL
+        auto* words = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(scratch);
+        words[topk_two_level::mailbox_mode_word] =
+            topk_two_level::two_level_mode_for(search_len, two_level_cutover) ? 1u : 0u;
+        words[topk_two_level::mailbox_search_length_word] = search_len;
+#endif
         mailbox->num_chunks = whole.num_chunks;
         mailbox->tail_elements = whole.tail_elements;
         if constexpr (row_split) {
@@ -98,7 +282,66 @@ void kernel_main() {
         if constexpr (row_split) {
             split = half_bounds(bounds, llk_k, second_half);
         }
+#ifdef TOPK_TWO_LEVEL
+        // A two-level program's compute always reads its bounds and mode from the mailbox.
+        CircularBuffer meta_cb_obj(meta_cb);
+        meta_cb_obj.reserve_back(1);
+        auto* words = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(meta_cb_obj.get_write_ptr());
+        words[topk_metadata_num_chunks_word] = whole.num_chunks;
+        words[topk_metadata_tail_elements_word] = whole.tail_elements;
+        if constexpr (row_split) {
+            words[topk_metadata_split_word_offset + topk_metadata_num_chunks_word] = split.num_chunks;
+            words[topk_metadata_split_word_offset + topk_metadata_tail_elements_word] = split.tail_elements;
+        }
+        words[topk_two_level::mailbox_mode_word] =
+            topk_two_level::two_level_mode_for(search_len, two_level_cutover) ? 1u : 0u;
+        words[topk_two_level::mailbox_search_length_word] = search_len;
+        clobber_all_memory();
+        meta_cb_obj.push_back(1);
+#endif
     }
+
+#ifdef TOPK_TWO_LEVEL
+    const bool two_level_mode = topk_two_level::two_level_mode_for(search_len, two_level_cutover);
+    // The writer learns the mode and the search length here; it has no bound of its own.
+    CircularBuffer writer_mailbox(get_named_compile_time_arg_val("tl_cb_writer_mailbox"));
+    writer_mailbox.reserve_back(1);
+    auto* words = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(writer_mailbox.get_write_ptr());
+    words[topk_two_level::writer_mailbox_mode_word] = two_level_mode ? 1u : 0u;
+    words[topk_two_level::writer_mailbox_search_length_word] = search_len;
+    clobber_all_memory();
+    writer_mailbox.push_back(1);
+    if (two_level_mode) {
+        constexpr bool has_block_max = get_named_compile_time_arg_val("tl_block_max_input") != 0;
+        if constexpr (!has_block_max) {
+            // The max reduce multiplies by this scaler tile: 1.0 everywhere keeps every value exact.
+            CircularBuffer scaler_cb(get_named_compile_time_arg_val("tl_cb_scaler"));
+            scaler_cb.reserve_back(1);
+            auto* scaler = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(scaler_cb.get_write_ptr());
+            for (uint32_t word = 0; word < tile_bytes / sizeof(uint32_t); ++word) {
+                scaler[word] = 0x3F803F80u;
+            }
+            clobber_all_memory();
+            scaler_cb.push_back(1);
+        }
+        constexpr auto block_max_args = TensorAccessorArgs<vend_args.next_compile_time_args_offset()>();
+        const auto block_max = TensorAccessor(
+            block_max_args,
+            get_common_arg_val<uint32_t>(topk_common_args::block_max_address),
+            get_named_compile_time_arg_val("tl_block_max_row_bytes"));
+        // A split row belongs whole to its first half; the second half skips it.
+        two_level_rows<has_block_max>(
+            noc,
+            input,
+            block_max,
+            search_len,
+            start_row,
+            has_split ? num_rows - 1 : num_rows,
+            has_split && !second_half,
+            split_row);
+        return;
+    }
+#endif
 
     // One loop for both: without a split row, has_split is false and every row takes the whole-row bounds.
     const uint32_t num_whole_rows = has_split ? num_rows - 1 : num_rows;
