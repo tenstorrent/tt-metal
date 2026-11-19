@@ -54,6 +54,8 @@ void bind_chunk(nb::module_& mod) {
             ``BFLOAT16`` TILE input values must not be NaN when the input has rank 1, or when `dim` is one of the last
             two dimensions and the chunk size is not a multiple of 32.
 
+            On Blackhole, the input can also be an ``FP8_E4M3`` tensor in ROW_MAJOR layout.
+
         Memory Support:
             - Interleaved: DRAM and L1
         )doc";
