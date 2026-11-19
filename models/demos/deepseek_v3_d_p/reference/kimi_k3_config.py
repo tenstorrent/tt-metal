@@ -51,11 +51,12 @@ class KimiK3Config:
     # rounds up to 64 B/bank (the pool's allocator uses the 64 B DRAM alignment: bank_manager.cpp,
     # blackhole core_config.h), so each CCL semaphore takes 64 B/bank and each all_gather program
     # (two semaphores, created once per program-cache entry, not per call or layer) 128 B/bank.
-    # The KDA layer's two SP all-gathers of its sharded carry take 256 B/bank (measured on Galaxy SP8xTP4):
-    # the depth-2 model holds 1344 B/bank (21 slots) without them and needs 1600 (25) with them,
-    # measured exactly full at depth 2 and 24. 1600 leaves 0 B: whoever adds a CCL program to K3
-    # (128 B/bank each) must raise this and re-validate chunked L24 (ring_mla's L1, above).
-    L1_SMALL_SIZE = 1600
+    # The KDA layer's two SP all-gathers of its sharded carry take 256 B/bank, measured as the difference
+    # base -> sharded at one pool size: 8x4 depth-2 1344 -> 1600 B/bank; a 4x4 stage (L4, traced prefill, 4096 B
+    # pool) 3328 -> 3584. The replicated-slab pool was 1536, which a 4x4 stage left 128 B free and an 8x4 one 192 B;
+    # 1536 + 256 keeps that headroom on both. Whoever adds a CCL program to K3 (128 B/bank each) must raise this
+    # and re-validate chunked L24 (ring_mla's L1, above).
+    L1_SMALL_SIZE = 1792
     MOE_INTERMEDIATE_SIZE = 3072  # MoE FFN hidden dimension
     INTERMEDIATE_SIZE = 33792  # Dense FFN hidden dimension
 

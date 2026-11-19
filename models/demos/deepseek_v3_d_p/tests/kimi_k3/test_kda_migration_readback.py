@@ -17,6 +17,11 @@ holds the devices and a second, bare UMD cluster pins 1 GiB of host memory per c
     TT_KIMI_K3_PREFILL_TTNN_CACHE=/mnt/weka/model-cache/scratch/moonshotai/Kimi-K3-Cache/Kimi-K3-Cache-prefill \
     scripts/run_safe_pytest.sh \
       'models/demos/deepseek_v3_d_p/tests/kimi_k3/test_kda_migration_readback.py::test_published_kda_state_reads_back[blackhole-kimi_k3-torus-xy-8x4-L4]' -vv -s
+
+``test_published_kda_state_reads_back_4x4`` runs the same check on one 4x4 stage (a Galaxy tray half,
+run_4x4_stage_tests.sh: SP=4 on the axis-1 ring, TP=4 on axis 0, 2560-token chunks) for Kimi-K3 (22 chunks, the
+same 56320 tokens and golden row) and Kimi-K3.1 (3 chunks of its 8192-token prompt; K3.1 has no KDA state golden,
+so only the exact read-back runs). Each reads its weight cache from the adapter's default path.
 """
 
 from __future__ import annotations
@@ -31,9 +36,14 @@ from loguru import logger
 
 import ttnn
 from models.common.utility_functions import is_blackhole
-from models.demos.common.prefill.adapter import PrefillRunParams
+from models.demos.common.prefill.adapter import PrefillRunParams, get_adapter
+from models.demos.deepseek_v3_d_p.reference.kimi_k3_1_config import KimiK31Config
 from models.demos.deepseek_v3_d_p.reference.kimi_k3_config import KimiK3Config
-from models.demos.deepseek_v3_d_p.tests.fabric_profiles import moe_fabric_payload, torus_xy_device_params
+from models.demos.deepseek_v3_d_p.tests.fabric_profiles import (
+    moe_fabric_payload,
+    torus_x_device_params,
+    torus_xy_device_params,
+)
 from models.demos.deepseek_v3_d_p.tests.kda.kda_test_utils import decode_tail
 from models.demos.deepseek_v3_d_p.tests.kda.utils import read_slab_layer
 from models.demos.deepseek_v3_d_p.tt.kda.state_adapter import deallocate_state
@@ -53,11 +63,11 @@ SP_AXIS, TP_AXIS = 0, 1
 PCC_BAR = 0.9
 
 
-def _token_ids(trace_dir: Path) -> list[int]:
+def _token_ids(trace_dir: Path, real_len: int = REAL_LEN) -> list[int]:
     with open(trace_dir / "metadata.json") as handle:
         ids = json.load(handle)["token_ids"]
-    assert len(ids) >= REAL_LEN, f"{trace_dir} holds {len(ids)} tokens, need {REAL_LEN}"
-    return ids[:REAL_LEN]
+    assert len(ids) >= real_len, f"{trace_dir} holds {len(ids)} tokens, need {real_len}"
+    return ids[:real_len]
 
 
 def _packed_metadata_msg(mesh_device, slot_id: int, actual_start: int, actual_end: int) -> ttnn.Tensor:
@@ -71,18 +81,20 @@ def _packed_metadata_msg(mesh_device, slot_id: int, actual_start: int, actual_en
     )
 
 
-def _carry_as_global(mesh_device, geometry, carry):
+def _carry_as_global(mesh_device, geometry, carry, sp_axis: int = SP_AXIS):
     """The layer's imported native carry as the read-back's global forms: recurrent ``[H, D, D]`` ([k, v], as
     stored) and golden-order convolution ``[K-1, 3*H*D]``. The carry is TP-sharded and SP-replicated after the
     import's gather; SP row 0 of each TP column is taken."""
     rows, cols = tuple(mesh_device.shape)
     rec_shards = [ttnn.to_torch(s) for s in ttnn.get_device_tensors(carry.recurrent)]
     conv_shards = [ttnn.to_torch(s) for s in ttnn.get_device_tensors(carry.convolution)]
-    recurrent = torch.cat([rec_shards[col].reshape(-1, geometry.head_dim, geometry.head_dim) for col in range(cols)])
+    # Row-major device index of (SP row 0, TP column t).
+    first_sp_row = [t if sp_axis == 0 else t * cols for t in range(geometry.tensor_parallel_size)]
+    recurrent = torch.cat([rec_shards[i].reshape(-1, geometry.head_dim, geometry.head_dim) for i in first_sp_row])
     per_chip = geometry.local_heads * geometry.head_dim
     tails = [
-        decode_tail(conv_shards[col], KDA_CONVOLUTION_PAGE_CHANNELS).reshape(geometry.conv_history, -1)
-        for col in range(cols)
+        decode_tail(conv_shards[i], KDA_CONVOLUTION_PAGE_CHANNELS).reshape(geometry.conv_history, -1)
+        for i in first_sp_row
     ]
     convolution = torch.cat(
         [torch.cat([t[:, branch * per_chip : (branch + 1) * per_chip] for t in tails], dim=-1) for branch in range(3)],
@@ -151,18 +163,36 @@ def test_published_kda_state_reads_back(
         first_k_dense=KimiK3Config.NUM_DENSE_LAYERS,
         kv_only_last_layer=True,
     ), f"TTNN cache incomplete for {num_layers} layers at {params.weight_cache_path}"
-    runtime = variant.build_runtime(mesh_device=mesh_device, hf_config=hf_config, params=params)
-    kv_caches = variant.allocate_kv_cache(mesh_device=mesh_device, hf_config=hf_config, params=params)
+    _prefill_publish_and_read_back(
+        mesh_device, variant, hf_config, params, token_ids, golden_dir, sp_axis=SP_AXIS, tmp_path=tmp_path
+    )
+
+
+def _prefill_publish_and_read_back(
+    mesh_device, adapter, hf_config, params, token_ids, golden_dir, *, sp_axis: int, tmp_path
+) -> None:
+    """Prefill ``token_ids`` in chunks of ``params.chunk_size`` through the traced runtime, publish the table, read
+    every KDA layer back through it: bit for bit equal to the carry the layer imports, and (with ``golden_dir``)
+    PCC-scored against the head/tail golden."""
+    chunk = params.chunk_size
+    num_chunks = len(token_ids) // chunk
+    real_len = num_chunks * chunk
+    assert real_len == len(token_ids), f"{len(token_ids)} tokens is not a whole number of {chunk}-token chunks"
+    num_layers = params.num_layers
+    sp, tp = tuple(mesh_device.shape)[sp_axis], tuple(mesh_device.shape)[1 - sp_axis]
+    runtime = adapter.build_runtime(mesh_device=mesh_device, hf_config=hf_config, params=params)
+    kv_caches = adapter.allocate_kv_cache(mesh_device=mesh_device, hf_config=hf_config, params=params)
     slabs = kv_caches.kda_states
-    geometry = kimi_k3_kda_geometry((sp, tp), SP_AXIS, TP_AXIS)
+    geometry = kimi_k3_kda_geometry(tuple(mesh_device.shape), sp_axis, 1 - sp_axis)
     assert slabs is not None and slabs.geometry == geometry
     assert geometry.stored_heads == geometry.num_heads // (sp * tp), "the slabs must be SP-sharded"
+    kinds = {adapter.cache_kind(config_id): config_id for config_id in range(4)}
     try:
         runtime.compile(kv_caches)
         runtime.capture_trace(kv_caches)
-        logger.info(f"captured; prefilling {NUM_CHUNKS} chunks of {CHUNK} tokens, {num_layers} layers")
-        for c in range(NUM_CHUNKS):
-            start, end = c * CHUNK, (c + 1) * CHUNK
+        logger.info(f"captured; prefilling {num_chunks} chunks of {chunk} tokens, {num_layers} layers")
+        for c in range(num_chunks):
+            start, end = c * chunk, (c + 1) * chunk
             msg = _packed_metadata_msg(mesh_device, SLOT, start, end)
             runtime.prefill_chunk(
                 runtime.make_chunk_input(token_ids[start:end]),
@@ -181,29 +211,30 @@ def test_published_kda_state_reads_back(
         table = ttnn.experimental.disaggregation.import_from_protobuf_file(published)
         logger.info(f"table {published}: {table.num_configs()} configs, {table.num_device_groups()} device groups")
 
-        row = REAL_LEN // kda_state_readback.GOLDEN_PERIOD - 1
-        results, worst = kda_state_readback.score_layers(
-            table,
-            variant,
-            geometry,
-            num_layers=num_layers,
-            slot=SLOT,
-            row=row,
-            golden_dir=golden_dir,
-            read_chunk=kda_state_readback.table_chunk_reader(table),
-        )
+        results, worst = [], {}
+        if golden_dir is not None:
+            row = real_len // kda_state_readback.GOLDEN_PERIOD - 1
+            results, worst = kda_state_readback.score_layers(
+                table,
+                adapter,
+                geometry,
+                num_layers=num_layers,
+                slot=SLOT,
+                row=row,
+                golden_dir=golden_dir,
+                read_chunk=kda_state_readback.table_chunk_reader(table),
+            )
 
         # The read-back must be the bytes the layer itself resumes from, for every KDA layer, both kinds.
-        kda_layers = [layer for layer in KimiK3Config.kda_layer_ids() if layer < num_layers]
-        assert tuple(slabs.layer_ids) == tuple(kda_layers)
+        kda_layers = list(slabs.layer_ids)
+        assert kda_layers == sorted(adapter.cache_layer_rows(kinds["kda_recurrent"], num_layers))
         for layer in kda_layers:
             carry = read_slab_layer(mesh_device, slabs, SLOT, layer)
-            want_rec, want_conv = _carry_as_global(mesh_device, geometry, carry)
+            want_rec, want_conv = _carry_as_global(mesh_device, geometry, carry, sp_axis)
             deallocate_state(carry)
-            for config_id, kind, want in ((1, "kda_recurrent", want_rec), (2, "kda_convolution", want_conv)):
-                assert variant.cache_kind(config_id) == kind
+            for kind, want in (("kda_recurrent", want_rec), ("kda_convolution", want_conv)):
                 got, status = kda_state_readback.read_layer(
-                    table, config_id, kind, layer, SLOT, geometry, kda_state_readback.table_chunk_reader(table)
+                    table, kinds[kind], kind, layer, SLOT, geometry, kda_state_readback.table_chunk_reader(table)
                 )
                 assert status == "ok", f"{kind} layer {layer}: {status}"
                 assert torch.equal(got, want), f"{kind} layer {layer}: table read-back != the layer's imported carry"
@@ -213,9 +244,101 @@ def test_published_kda_state_reads_back(
         del runtime
         gc.collect()
 
+    if golden_dir is None:
+        logger.info(f"no KDA golden: exact read-back only, {len(kda_layers)} layers")
+        return
     checked = [r for r in results if r["status"] == "ok"]
     assert len(checked) == 2 * len(kda_layers), f"read back {len(checked)} layer states: {results}"
     for kind, score in worst.items():
         logger.info(f"min pcc {kind}: {score:.6f} over {len(kda_layers)} layers")
     failed = [(r["kind"], r["layer"], r["pcc"]) for r in checked if not r["pcc"] >= PCC_BAR]
     assert not failed, f"layer states below {PCC_BAR}: {failed}"
+
+
+# One 4x4 stage: SP on the tray half's axis-1 ring, 2560-token chunks (640 tokens per chip, as on 8x4). The KV cache
+# length is a multiple of the chunk, of 8192 and of the 16 TP-deduped stripes' 20480 (synthetic.py).
+CHUNK_4X4 = 2560
+MAX_SEQ_LEN_4X4 = 81920
+_MODELS_4X4 = {
+    # model: (config class, chunks of the model's prompt)
+    "kimi_k3": (KimiK3Config, REAL_LEN // CHUNK_4X4),
+    "kimi_k3_1": (KimiK31Config, 3),
+}
+
+
+@pytest.mark.parametrize("num_layers", [4], ids=["L4"])
+@pytest.mark.parametrize(
+    "mesh_device, device_params, model",
+    [
+        pytest.param(
+            (4, 4),
+            # Each model's own fabric payload and L1_SMALL pool, as its runner opens the mesh.
+            torus_x_device_params(
+                fabric_payload_size=moe_fabric_payload(config),
+                l1_small_size=get_adapter(model).l1_small_size,
+                trace_region_size=256 * 1024 * 1024,
+            ),
+            model,
+            marks=pytest.mark.requires_mesh_topology(mesh_shape=(4, 4), topology="mesh-4x4"),
+            id=f"4x4-sp1-{model}",
+        )
+        for model, (config, _) in _MODELS_4X4.items()
+    ],
+    indirect=["mesh_device", "device_params"],
+)
+@pytest.mark.skipif(not is_blackhole(), reason="Kimi-K3 requires Blackhole")
+@pytest.mark.timeout(0)
+def test_published_kda_state_reads_back_4x4(mesh_device, device_params, model, num_layers, tmp_path):
+    sp_axis, mesh_shape = 1, (4, 4)
+    adapter = get_adapter(model)
+    model_cfg, num_chunks = _MODELS_4X4[model]
+    weight_cache_path = adapter.weight_cache_path(mesh_shape, sp_axis)
+    if weight_cache_path is None or not any(weight_cache_path.resolve().glob(".layer_*.complete")):
+        pytest.skip(f"no {model} TTNN weight cache at {weight_cache_path}")
+    golden_dir = Path(adapter.kda_golden_default) if adapter.kda_golden_default else None
+    if golden_dir is not None and not (golden_dir / "kda").is_dir():
+        pytest.skip(f"needs the KDA head/tail golden {golden_dir}")
+    trace_dir = Path(adapter.prefill_trace_default)
+    if not (trace_dir / "metadata.json").is_file():
+        pytest.skip(f"needs the prompt {trace_dir}")
+    token_ids = _token_ids(trace_dir, num_chunks * CHUNK_4X4)
+
+    hf_config = adapter.load_hf_config()
+    hf_config.max_seq_len = MAX_SEQ_LEN_4X4
+    params = PrefillRunParams(
+        mesh_shape=mesh_shape,
+        num_layers=num_layers,
+        first_layer_idx=0,
+        is_first_rank=True,
+        is_last_rank=True,
+        max_seq_len=MAX_SEQ_LEN_4X4,
+        chunk_size=CHUNK_4X4,
+        num_users=1,
+        capacity_factor=8,
+        num_links=2,
+        gate_mode_name=adapter.default_gate_mode,
+        kv_only_last_layer=False,
+        weight_cache_path=weight_cache_path.resolve(),
+        sp_axis=sp_axis,
+        tp_axis=1 - sp_axis,
+        tp_shard_kv=True,
+        sparse_kv_cache_format=getattr(adapter, "default_sparse_kv_cache_format", None),
+        use_trace=True,
+    )
+    # A missing file would be converted and written into the (shared) weight cache; refuse instead.
+    assert adapter.transformer_cls.check_cache_complete(
+        params.weight_cache_path,
+        num_layers,
+        experts_per_chip=model_cfg.NUM_ROUTED_EXPERTS // (mesh_shape[0] * mesh_shape[1]),
+        first_k_dense=model_cfg.NUM_DENSE_LAYERS,
+        model_cfg=model_cfg,
+    ), f"TTNN cache incomplete for {num_layers} layers at {params.weight_cache_path}"
+    _prefill_publish_and_read_back(
+        mesh_device, adapter, hf_config, params, token_ids, golden_dir, sp_axis=sp_axis, tmp_path=tmp_path
+    )
+    # The KDA SP gathers' CCL semaphores live in L1_SMALL (KimiK3Config.L1_SMALL_SIZE): report the pool's use.
+    l1_small = ttnn.get_memory_view(mesh_device, ttnn.BufferType.L1_SMALL)
+    logger.info(
+        f"{model} 4x4 L1_SMALL per bank at test end: {l1_small.total_bytes_allocated_per_bank} B allocated of "
+        f"{l1_small.total_bytes_per_bank} B ({l1_small.total_bytes_free_per_bank} B free)"
+    )
