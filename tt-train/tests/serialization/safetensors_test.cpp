@@ -14,9 +14,11 @@
 #include <cstring>
 #include <filesystem>
 #include <fstream>
+#include <set>
 #include <span>
 #include <string>
 #include <unordered_map>
+#include <utility>
 #include <vector>
 
 #include "autograd/auto_context.hpp"
@@ -148,8 +150,8 @@ TEST(SafeTensorsTest, F16DecodeSubnormals) {
 }
 
 // The C++ safetensors loaders install each value in the dtype its parameter is stored in: fp32 parameters, converted
-// before the load as precision.master_dtype: float32 does, get the file's fp32 values exactly; bf16 parameters get the
-// same bits the loaders installed before they kept the stored dtype (the host rounding of core::from_vector()).
+// before the load as precision.master_dtype: float32 does, get the file's fp32 values exactly; bf16 parameters get
+// each value rounded to bf16 on the host, as core::from_vector() rounds it.
 class SafetensorsLoaderTest : public ttml::test_utils::DeviceSuiteTest {};
 
 namespace {
@@ -259,6 +261,51 @@ ttml::serialization::NamedParameters load_into_new_model(
     return parameters;
 }
 
+// The file's tensors of one load, each with what it should leave in the model.
+struct LoadCase {
+    std::vector<FileTensor> file;
+    std::vector<std::pair<std::string, std::vector<float>>> expected;
+    uint32_t seed = 1U;
+
+    // A tensor the loader installs in `parameter` as `installed`.
+    void add(
+        const std::string& file_name,
+        const std::vector<int64_t>& shape,
+        const std::vector<float>& values,
+        const std::string& parameter,
+        const std::vector<float>& installed) {
+        file.push_back({file_name, shape, values});
+        expected.emplace_back(parameter, installed);
+    }
+
+    // A tensor of random values that the loader copies as it is.
+    void copied(const std::string& file_name, const std::vector<int64_t>& shape, const std::string& parameter) {
+        size_t size = 1;
+        for (const auto dim : shape) {
+            size *= static_cast<size_t>(dim);
+        }
+        const auto values = random_values(size, seed++);
+        add(file_name, shape, values, parameter, values);
+    }
+};
+
+// Loads the case's file into a new model and checks every expected parameter. The model must have no parameter the
+// file leaves out, so each place the loader installs a tensor is checked.
+template <typename CreateModel>
+void expect_every_parameter_loaded(CreateModel create_model, ttnn::DataType dtype, const LoadCase& load_case) {
+    const auto parameters = load_into_new_model(create_model, dtype, load_case.file);
+    std::set<std::string> checked;
+    for (const auto& [name, values] : load_case.expected) {
+        ASSERT_TRUE(parameters.contains(name)) << name;
+        expect_loaded(parameters, name, values, dtype);
+        checked.insert(name);
+    }
+    for (const auto& [name, tensor] : parameters) {
+        EXPECT_TRUE(checked.contains(name)) << "the test's file has nothing for " << name;
+    }
+}
+
+// Weight tying on, as in configs/model_configs/gpt2s.yaml.
 ttml::models::gpt2::TransformerConfig tiny_gpt2_config() {
     ttml::models::gpt2::TransformerConfig config;
     config.num_heads = 2;
@@ -267,28 +314,50 @@ ttml::models::gpt2::TransformerConfig tiny_gpt2_config() {
     config.num_blocks = 1;
     config.vocab_size = 64;
     config.max_sequence_length = 32;
+    config.weight_tying = ttml::models::gpt2::WeightTyingType::Enabled;
     return config;
 }
 
-// GPT-2's three kinds of entries: one copied as is (ln_f), one transposed (c_attn, stored in x out in the file), and
-// the embedding, whose rows are padded with zeros to the model's vocabulary.
+// Every tensor the GPT-2 loader maps. The embedding's rows are padded with zeros to the model's vocabulary and land
+// in fc/weight, the one weight the output layer and the token embedding share; the four Conv1D weights are stored
+// in x out in the file and transposed on load; the rest is copied as it is.
 void check_gpt2_load(ttnn::DataType dtype) {
-    const auto ln_f = random_values(64, 1U);
-    const auto c_attn = random_values(64 * 192, 2U);
-    const auto wte = random_values(50 * 64, 3U);
-    const auto parameters = load_into_new_model(
-        [] { return ttml::models::gpt2::create(tiny_gpt2_config()); },
-        dtype,
-        {{"ln_f.weight", {64}, ln_f}, {"h.0.attn.c_attn.weight", {64, 192}, c_attn}, {"wte.weight", {50, 64}, wte}});
-
+    LoadCase load_case;
+    const auto wte = random_values(50 * 64, load_case.seed++);
     auto padded_wte = wte;
     padded_wte.resize(64 * 64, 0.0F);
-    expect_loaded(parameters, "transformer/ln_fc/gamma", ln_f, dtype);
-    expect_loaded(
-        parameters, "transformer/gpt_block_0/attention/qkv_linear/weight", transposed(c_attn, 64, 192), dtype);
-    expect_loaded(parameters, "transformer/fc/weight", padded_wte, dtype);
+    load_case.add("wte.weight", {50, 64}, wte, "transformer/fc/weight", padded_wte);
+    load_case.copied("wpe.weight", {32, 64}, "transformer/pos_emb/weight");
+    load_case.copied("ln_f.weight", {64}, "transformer/ln_fc/gamma");
+    load_case.copied("ln_f.bias", {64}, "transformer/ln_fc/beta");
+
+    const std::string block = "transformer/gpt_block_0/";
+    const auto conv1d = [&](const std::string& file_name, int64_t in, int64_t out, const std::string& parameter) {
+        const auto values = random_values(static_cast<size_t>(in * out), load_case.seed++);
+        load_case.add(
+            file_name,
+            {in, out},
+            values,
+            block + parameter,
+            transposed(values, static_cast<size_t>(in), static_cast<size_t>(out)));
+    };
+    load_case.copied("h.0.ln_1.weight", {64}, block + "ln1/gamma");
+    load_case.copied("h.0.ln_1.bias", {64}, block + "ln1/beta");
+    conv1d("h.0.attn.c_attn.weight", 64, 192, "attention/qkv_linear/weight");
+    load_case.copied("h.0.attn.c_attn.bias", {192}, block + "attention/qkv_linear/bias");
+    conv1d("h.0.attn.c_proj.weight", 64, 64, "attention/out_linear/weight");
+    load_case.copied("h.0.attn.c_proj.bias", {64}, block + "attention/out_linear/bias");
+    load_case.copied("h.0.ln_2.weight", {64}, block + "ln2/gamma");
+    load_case.copied("h.0.ln_2.bias", {64}, block + "ln2/beta");
+    conv1d("h.0.mlp.c_fc.weight", 64, 256, "mlp/fc1/weight");
+    load_case.copied("h.0.mlp.c_fc.bias", {256}, block + "mlp/fc1/bias");
+    conv1d("h.0.mlp.c_proj.weight", 256, 64, "mlp/fc2/weight");
+    load_case.copied("h.0.mlp.c_proj.bias", {64}, block + "mlp/fc2/bias");
+
+    expect_every_parameter_loaded([] { return ttml::models::gpt2::create(tiny_gpt2_config()); }, dtype, load_case);
 }
 
+// Weight tying off, as in configs/model_configs/llama8b.yaml: the embedding and the output layer load separately.
 ttml::models::llama::LlamaConfig tiny_llama_config() {
     ttml::models::llama::LlamaConfig config;
     config.num_heads = 2;
@@ -298,42 +367,56 @@ ttml::models::llama::LlamaConfig tiny_llama_config() {
     config.num_blocks = 1;
     config.vocab_size = 64;
     config.max_sequence_length = 32;
+    config.weight_tying = ttml::models::llama::WeightTyingType::Disabled;
     return config;
 }
 
-// Llama's paths: the final norm copied as is, the (tied) embedding, the down projection, and k_proj + v_proj
-// concatenated into kv_linear. k_proj's rows within a head are reordered on load; every row of the one key head is
-// the same here, so the expected kv_linear is plain k followed by v.
-void check_llama_load(ttnn::DataType dtype) {
-    const auto norm = random_values(64, 4U);
-    const auto embed = random_values(64 * 64, 5U);
-    const auto down = random_values(64 * 128, 6U);
-    const auto key_row = random_values(64, 7U);
-    std::vector<float> key;
-    for (int row = 0; row < 32; ++row) {
-        key.insert(key.end(), key_row.begin(), key_row.end());
+// `heads` x `rows_per_head` rows, the same row throughout a head. The Llama loader reorders the rows of q_proj and
+// k_proj within a head, which leaves such a matrix as it is.
+std::vector<float> one_row_per_head(size_t heads, size_t rows_per_head, size_t cols, uint32_t seed) {
+    std::vector<float> out;
+    for (size_t head = 0; head < heads; ++head) {
+        const auto row = random_values(cols, seed + static_cast<uint32_t>(head));
+        for (size_t repeat = 0; repeat < rows_per_head; ++repeat) {
+            out.insert(out.end(), row.begin(), row.end());
+        }
     }
-    const auto value = random_values(32 * 64, 8U);
-    const auto parameters = load_into_new_model(
-        [] { return ttml::models::llama::create(tiny_llama_config()); },
-        dtype,
-        {{"model.norm.weight", {64}, norm},
-         {"model.embed_tokens.weight", {64, 64}, embed},
-         {"model.layers.0.mlp.down_proj.weight", {64, 128}, down},
-         {"model.layers.0.self_attn.k_proj.weight", {32, 64}, key},
-         {"model.layers.0.self_attn.v_proj.weight", {32, 64}, value}});
+    return out;
+}
 
-    auto kv = key;
-    kv.insert(kv.end(), value.begin(), value.end());
-    expect_loaded(parameters, "llama/ln_fc/gamma", norm, dtype);
-    expect_loaded(parameters, "llama/fc/weight", embed, dtype);
-    expect_loaded(parameters, "llama/llama_block_0/mlp/w2/weight", down, dtype);
-    expect_loaded(parameters, "llama/llama_block_0/attention/kv_linear/weight", kv, dtype);
+// Every tensor the Llama loader maps: the embedding, the output layer, the three norms, q_proj, k_proj and v_proj
+// concatenated into kv_linear, o_proj, and the three MLP projections.
+void check_llama_load(ttnn::DataType dtype) {
+    LoadCase load_case;
+    load_case.copied("model.embed_tokens.weight", {64, 64}, "llama/tok_emb/weight");
+    load_case.copied("lm_head.weight", {64, 64}, "llama/fc/weight");
+    load_case.copied("model.norm.weight", {64}, "llama/ln_fc/gamma");
+
+    const std::string layer = "model.layers.0.";
+    const std::string block = "llama/llama_block_0/";
+    load_case.copied(layer + "input_layernorm.weight", {64}, block + "attention_norm/gamma");
+    load_case.copied(layer + "post_attention_layernorm.weight", {64}, block + "mlp_norm/gamma");
+
+    const auto query = one_row_per_head(2, 32, 64, 100U);
+    load_case.add(layer + "self_attn.q_proj.weight", {64, 64}, query, block + "attention/q_linear/weight", query);
+    const auto key = one_row_per_head(1, 32, 64, 200U);
+    const auto value = random_values(32 * 64, 300U);
+    auto key_value = key;
+    key_value.insert(key_value.end(), value.begin(), value.end());
+    load_case.file.push_back({layer + "self_attn.k_proj.weight", {32, 64}, key});
+    load_case.add(layer + "self_attn.v_proj.weight", {32, 64}, value, block + "attention/kv_linear/weight", key_value);
+    load_case.copied(layer + "self_attn.o_proj.weight", {64, 64}, block + "attention/out_linear/weight");
+
+    load_case.copied(layer + "mlp.gate_proj.weight", {128, 64}, block + "mlp/w1/weight");
+    load_case.copied(layer + "mlp.up_proj.weight", {128, 64}, block + "mlp/w3/weight");
+    load_case.copied(layer + "mlp.down_proj.weight", {64, 128}, block + "mlp/w2/weight");
+
+    expect_every_parameter_loaded([] { return ttml::models::llama::create(tiny_llama_config()); }, dtype, load_case);
 }
 
 }  // namespace
 
-// FLOAT32: the file's values exactly. BFLOAT16: the same bits as before the loaders kept the stored dtype.
+// FLOAT32: the file's values exactly. BFLOAT16: each value rounded to bf16 as core::from_vector() rounds it.
 class SafetensorsLoaderDtypeTest : public SafetensorsLoaderTest,
                                    public ::testing::WithParamInterface<ttnn::DataType> {};
 
