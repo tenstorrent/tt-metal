@@ -1094,6 +1094,27 @@ void kernel_main() {
     // Weight servers: the slot-reuse acks sent so far (rounds nslice_weight_depth .. + server_reuse_acks - 1), and the
     // rounds this receiver takes (kw-fold whole-K keeps its weights resident across M-blocks: one stream).
     [[maybe_unused]] uint32_t server_reuse_acks = 0;
+    // Reuse ack j (round nslice_weight_depth + j, slot j % depth). SERVER_SLOT_ACKS (descriptor: weight servers with
+    // more rounds than slots): one ack counter per slot on the server (slot 0's is the kernel-start counter, the others
+    // from SERVER_SLOT_ACKS on). On one total counter a core that runs ahead (a short ragged core, or one whose compute
+    // frees slots early) acks later slots before a slower core acked an earlier one, and those acks count toward the
+    // earlier slot's reuse: the server could overwrite a slot a core was still multiplying (found with kw-fold N
+    // planes, where it gave PCC 0.95; on HEAD the window is one ragged core two acks ahead).
+    [[maybe_unused]] auto server_reuse_ack = [&]() {
+#ifdef SERVER_SLOT_ACKS
+        const uint32_t slot = server_reuse_acks % nslice_weight_depth;
+        noc_semaphore_inc(
+            slot == 0 ? server_ack_noc
+                      : get_noc_addr(
+                            get_arg_val<uint32_t>(server_arg + 1),
+                            get_arg_val<uint32_t>(server_arg + 2),
+                            get_semaphore(SERVER_SLOT_ACKS + slot - 1)),
+            1);
+#else
+        noc_semaphore_inc(server_ack_noc, 1);
+#endif
+        ++server_reuse_acks;
+    };
 #if defined(CONV2D_3X3_KW_FOLD) && !KWF_KBLOCKED
     [[maybe_unused]] const uint32_t server_rounds = num_k_blocks;
 #else
@@ -1135,8 +1156,7 @@ void kernel_main() {
             // Weight server round (see the file comment); serves the fill hand-overs while it waits.
             if (k_blocks_issued >= nslice_weight_depth &&
                 server_reuse_acks < k_blocks_issued + 1 - nslice_weight_depth) {
-                noc_semaphore_inc(server_ack_noc, 1);
-                ++server_reuse_acks;
+                server_reuse_ack();
             }
             // Round k + 1's reuse ack, early: round k is reserved and not pushed, so two free rounds at the back mean
             // compute freed round k + 1's slot.
@@ -1162,8 +1182,7 @@ void kernel_main() {
                 }
                 if (early_ack && server_reuse_acks < k_blocks_issued + 2 - nslice_weight_depth &&
                     cb_pages_reservable_at_back(cb_weights, 2 * weight_k_block_tiles)) {
-                    noc_semaphore_inc(server_ack_noc, 1);
-                    ++server_reuse_acks;
+                    server_reuse_ack();
                 }
                 serve_fill();
                 if constexpr (kw_fold) {

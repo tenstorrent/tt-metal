@@ -1,0 +1,910 @@
+diff --git a/op_copy/__pycache__/__init__.cpython-310.pyc b/ttnn/ttnn/operations/conv2d_3x3/__pycache__/__init__.cpython-310.pyc
+new file mode 100644
+index 00000000000..0dfd1b8af38
+diff --git a/op_copy/__pycache__/conv2d_3x3.cpython-310.pyc b/ttnn/ttnn/operations/conv2d_3x3/__pycache__/conv2d_3x3.cpython-310.pyc
+new file mode 100644
+index 00000000000..c7158e4994e
+diff --git a/op_copy/__pycache__/conv2d_3x3_program_descriptor.cpython-310.pyc b/ttnn/ttnn/operations/conv2d_3x3/__pycache__/conv2d_3x3_program_descriptor.cpython-310.pyc
+new file mode 100644
+index 00000000000..64ac4200c54
+diff --git a/ttnn/ttnn/operations/conv2d_3x3/conv2d_3x3_program_descriptor.py b/ttnn/ttnn/operations/conv2d_3x3/conv2d_3x3_program_descriptor.py
+index 2b3c88f5a80..0e402a6fdc8 100644
+--- a/ttnn/ttnn/operations/conv2d_3x3/conv2d_3x3_program_descriptor.py
++++ b/ttnn/ttnn/operations/conv2d_3x3/conv2d_3x3_program_descriptor.py
+@@ -1796,6 +1796,187 @@ def _kw_fold_acc_bytes(g, bm):
+     return _div_up(_kw_fold_group(g.tensor_n_tiles) * _kw_fold_plane_bytes(g, bm), TILE_BYTES_FP32) * TILE_BYTES_FP32
+ 
+ 
++# kw-fold N planes (perf experiment kwf_n_planes): with every core on one M-block (halo exchange) and the input sharded
++# on fewer cores than the device, split C_out into KWF_N_PLANES planes of N / P output column tiles; each plane runs
++# the whole M range on its own cores (contiguous tile-row ranges, its own halo-exchange chain, its own weight servers
++# streaming only its columns), and the writer stores each core's [bm, N / P] block into the pinned output shards. 1:
++# off (HEAD's layout).
++KWF_N_PLANES = 2
++# Planes only where the plane's n-group keeps >= 2 tiles (1-tile n-groups measured +13.7%, Perf 10).
++KWF_PLANES_MIN_GW = 2
++# Plane core order over the device grid: "rows" = row-major runs (plane p = cores [p c, (p + 1) c) row-major).
++KWF_PLANES_LAYOUT = "cols"
++# "split": each plane is its own kw-fold problem (C_out = N / P), with its own weight servers per plane rectangle
++# streaming only its columns. "stream": every core runs kw-fold over all of C_out but computes only its plane's n-group
++# (plane = n-group, N / P = the n-group width); one weight stream (HEAD's sub-rounds, n-group-interleaved) reaches every
++# work core, which pops the other n-groups' rounds unused, so the planes may interleave freely on the grid ("pairs").
++KWF_PLANES_MODE = "stream"
++# Stream mode: weight slots up to this many (every sub-round resident at 3 NG) where L1 permits; 0: kw_fold_plan's.
++KWF_PLANES_WEIGHT_DEPTH = 0
++# Last plan's layout, for the bench's records.
++DEBUG_INFO = {}
++# Experiment ("table" layout): the placement file and the per-core split thresholds it holds.
++KWF_PLANES_TABLE = str(Path(__file__).parent.parent / "layout_annealed.json")
++KWF_PLANES_TABLE_SPLITS = {}
++
++
++@dataclass(frozen=True)
++class KwfPlanes:
++    planes: int
++    n_p: int  # output column tiles per plane
++    g: Conv3x3Geometry  # the plane's geometry (C_out = n_p tiles): kw-fold's planning geometry
++    walk: Conv3x3Blocking  # select_blocking at the plane's split (reader CT K-blocking)
++    kb: Conv3x3Blocking  # the plane's kw-fold blocking
++    cores: tuple  # per plane: its work cores, M order
++    ranges: tuple  # per plane, per core: (first tile-row, tile-rows)
++    stream: bool = False  # KWF_PLANES_MODE "stream"
++
++
++def _kwf_plane_core_order(grid, planes, per_plane):
++    """Per plane, its work cores in M order (each plane >= per_plane cores), or None.
++    "rows": plane p = cores [p c, (p + 1) c) of the device grid, row-major.
++    "cols" (two planes): plane 0 = the rectangle of the first ceil(x / 2) columns down to the rows it needs, plane 1 =
++    the other columns on every row plus, row-major, what it still needs from the rows below plane 0; each walked
++    row-major, so a plane core's tile-rows sit near the input shards that hold them (the shards are row-major on the
++    device grid and both planes advance down the rows at about the shards' rate)."""
++    cores = [ttnn.CoreCoord(x, y) for y in range(grid.y) for x in range(grid.x)]
++    if KWF_PLANES_LAYOUT == "table":
++        # Experiment: a precomputed placement (fill_model.py: plane p's core j at a row-major position, with its split
++        # fill's shard threshold), {"p,j": [position, split]}.
++        import json
++
++        tab = json.load(open(KWF_PLANES_TABLE))
++        counts = [sum(1 for k in tab if int(k.split(",")[0]) == p) for p in range(planes)]
++        if min(counts) < per_plane:
++            return None
++        KWF_PLANES_TABLE_SPLITS.clear()
++        out = []
++        for p in range(planes):
++            pc = []
++            for j in range(counts[p]):
++                c, q = tab[f"{p},{j}"]
++                pc.append(cores[c])
++                KWF_PLANES_TABLE_SPLITS[(cores[c].x, cores[c].y)] = max(q, 0)
++            out.append(pc)
++        return out
++    if KWF_PLANES_LAYOUT == "pairs":
++        # Plane p's core j at row-major position P j + p: the planes' cores for one tile-row range sit side by side,
++        # near the input shards that hold it (stream mode only: the planes are not multicast rectangles).
++        if planes * per_plane > len(cores):
++            return None
++        return [[cores[planes * j + p] for j in range(per_plane)] for p in range(planes)]
++    if KWF_PLANES_LAYOUT == "rows":
++        if planes * per_plane > len(cores):
++            return None
++        return [cores[p * per_plane : (p + 1) * per_plane] for p in range(planes)]
++    if planes != 2:
++        return None
++    w0 = _div_up(grid.x, 2)
++    h0 = _div_up(per_plane, w0)
++    if h0 > grid.y:
++        return None
++    p0 = [c for c in cores if c.x < w0 and c.y < h0]
++    p1 = [c for c in cores if c.x >= w0]
++    rest = [c for c in cores if c.x < w0 and c.y >= h0]
++    if len(p1) < per_plane:
++        need = per_plane - len(p1)
++        if need > len(rest):
++            return None
++        p1 += rest[:need]
++    return [p0, p1]
++
++
++def _kwf_balanced_ranges(m, k):
++    """M tile-rows over k cores, contiguous, at most ceil(m / k) each (the first ones take the extra row)."""
++    r = _div_up(m, k)
++    big = m - k * (r - 1)
++    out, t = [], 0
++    for i in range(k):
++        n = r if i < big else r - 1
++        out.append((t, n))
++        t += n
++    return out
++
++
++# The split fill's shard split point on a plane core (reader arg 7 / writer arg 12, HEAD: the core's own shard index):
++# "grid" = the core's row-major position on the device grid (the shard index it would hold), so shards at earlier grid
++# positions come in on the reader's NoC0 and later ones on the writer's NoC1, the short way as on HEAD; "rows" = the
++# shard of the core's last tile-row.
++KWF_PLANES_SPLIT = "grid"
++
++
++def _kwf_plane_split_shard(core, input_tensor, m_tile_start, actual_m_tiles, input_shard_rows):
++    if KWF_PLANES_LAYOUT == "table":
++        return KWF_PLANES_TABLE_SPLITS[(core.x, core.y)]
++    if KWF_PLANES_SPLIT == "rows":
++        return (m_tile_start + actual_m_tiles - 1) // max(1, input_shard_rows)
++    grid = input_tensor.device().compute_with_storage_grid_size()
++    return core.y * grid.x + core.x
++
++
++def kw_fold_planes(g, kb, input_tensor, has_bias, l1_budget, math_fidelity, out_tile_bytes):
++    """The N-plane layout (KwfPlanes) or None where it does not apply, fit or lower the busiest core's MACs."""
++    if KWF_N_PLANES < 2 or kb is None or g.k_split or not g.sharded_output or not kw_fold_halo_exchange(kb):
++        return None
++    P = KWF_N_PLANES
++    n = g.tensor_n_tiles
++    if n % P or g.c_out != n * TILE:
++        return None
++    n_p = n // P
++    stream = KWF_PLANES_MODE == "stream"
++    if stream:
++        # One plane per n-group of HEAD's kw-fold (K-blocked sub-rounds of gw >= 3 columns: 1 x gw subblocks).
++        if not kw_fold_kblocked(g) or _kw_fold_group(n) != n_p or n_p < 3:
++            return None
++    elif _kw_fold_group(n_p) < KWF_PLANES_MIN_GW:
++        return None
++    grid = input_tensor.device().compute_with_storage_grid_size()
++    total = grid.x * grid.y
++    shard_set = {(c.x, c.y) for c in shard_cores(input_tensor)}
++    if len(shard_set) >= total:
++        return None
++    m = g.tensor_m_tiles
++    for per_plane in range(total // P, 0, -1):
++        rows = _div_up(m, per_plane)
++        if rows * n_p >= kb.core_m_tiles * n:
++            return None  # no fewer row-equivalents on the busiest core
++        used = _div_up(m, rows)
++        plane_cores = _kwf_plane_core_order(grid, P, used)
++        if plane_cores is None:
++            continue
++        work = {(c.x, c.y) for pc in plane_cores for c in pc}
++        spare = [1 for y in range(grid.y) for x in range(grid.x) if (x, y) not in work and (x, y) not in shard_set]
++        if stream:
++            rects = len(_core_range_set([c for pc in plane_cores for c in pc]).ranges())
++        else:
++            rects = sum(len(_core_range_set(pc).ranges()) for pc in plane_cores)
++        if len(spare) < rects:
++            continue
++        if any(_div_up(m, len(pc)) != rows for pc in plane_cores):
++            continue
++        g_p = g if stream else replace(g, c_out=n_p * TILE)
++        try:
++            walk = select_blocking(g_p, (used, 1), l1_budget)
++        except ValueError:
++            return None
++        # The plane's [bm, N / P] output block is a local CB (the output shard stays the input's).
++        kb_p = kw_fold_plan(g_p, walk, has_bias, l1_budget - rows * n_p * out_tile_bytes, math_fidelity)
++        if kb_p is None or not kw_fold_halo_exchange(kb_p) or kb_p.core_m_tiles != rows:
++            return None
++        if stream and _kw_fold_group(g_p.tensor_n_tiles) != n_p:
++            return None
++        if stream and KWF_PLANES_WEIGHT_DEPTH > kb_p.weight_depth:
++            # Deeper weight slots (up to every sub-round resident): the planes consume the stream at different times.
++            for depth in range(min(KWF_PLANES_WEIGHT_DEPTH, kb_p.num_k_blocks), kb_p.weight_depth, -1):
++                deep = replace(kb_p, weight_depth=depth)
++                if _kw_fold_cb_bytes(g_p, deep) <= l1_budget - rows * n_p * out_tile_bytes:
++                    kb_p = deep
++                    break
++        ranges = tuple(tuple(_kwf_balanced_ranges(m, len(pc))) for pc in plane_cores)
++        return KwfPlanes(P, n_p, g_p, walk, kb_p, tuple(tuple(pc) for pc in plane_cores), ranges, stream)
++    return None
++
++
+ def create_program_descriptor(
+     input_tensor,
+     weight_tensor,
+@@ -1821,6 +2002,40 @@ def create_program_descriptor(
+     reader_bk, reader_nkb = b.block_k_tiles, b.num_k_blocks
+     if kwf:
+         b = kw_fold_plan(*kwf_args)
++    # kw-fold N planes (KWF_N_PLANES): gk is kw-fold's planning geometry (C_out = one plane's columns under planes);
++    # g keeps the whole C_out (weight and output page strides, the bias).
++    planes = (
++        kw_fold_planes(
++            g,
++            b,
++            input_tensor,
++            has_bias,
++            l1_cb_budget_bytes(resident),
++            compute_kernel_config.math_fidelity,
++            g.out_tile_bytes,
++        )
++        if kwf
++        else None
++    )
++    gk = g
++    if planes is not None:
++        gk = planes.g
++        reader_bk, reader_nkb = planes.walk.block_k_tiles, planes.walk.num_k_blocks
++        b = planes.kb
++    DEBUG_INFO.clear()
++    DEBUG_INFO.update(
++        planes=None
++        if planes is None
++        else dict(
++            P=planes.planes,
++            n_p=planes.n_p,
++            rows=planes.kb.core_m_tiles,
++            cores=[len(pc) for pc in planes.cores],
++            layout=KWF_PLANES_LAYOUT,
++            split=KWF_PLANES_SPLIT,
++            depth=planes.kb.weight_depth,
++        )
++    )
+     pixel_bytes = g.c_in_p * BF16_BYTES
+     input_page_bytes = g.in0_tile_bytes if g.tile_input else pixel_bytes
+     if input_tensor.buffer_aligned_page_size() != input_page_bytes:
+@@ -1829,7 +2044,14 @@ def create_program_descriptor(
+             f"{input_page_bytes} B"
+         )
+ 
+-    work = _work_items(input_tensor, g, b)
++    if planes is None:
++        work = _work_items(input_tensor, g, b)
++    else:
++        # Work index w = plane * cores_per_plane + j: plane p's core j owns its tile-row range j for columns
++        # [p n_p, (p + 1) n_p); the third field is the plane.
++        work = []
++        for p, pc in enumerate(planes.cores):
++            work += [(core, len(work) + j, p) for j, core in enumerate(pc)]
+     core_list = [core for core, _, _ in work]
+     cores = _core_range_set(core_list)
+     bm, bk, bn = b.block_m_tiles, b.block_k_tiles, b.block_n_tiles
+@@ -1940,9 +2162,13 @@ def create_program_descriptor(
+         # Unused by the N-slice ring: one page there keeps the face-direct startup's output format defined.
+         _cb(CB_MATMUL_PARTIALS, ttnn.float32, TILE_BYTES_FP32, 1 if b.nslice else bm * bn, cores),
+     ]
+-    if g.remote_output:
+-        # One [bm, out_n] block (tile-row major), drained by the writer to the output shards every M-block.
+-        cbs.append(_cb(CB_OUTPUT_TILES, output_tensor.dtype, g.out_tile_bytes, bm * ns, cores))
++    if g.remote_output or planes is not None:
++        # One [bm, out_n] block (tile-row major), drained by the writer to the output shards every M-block (kw-fold
++        # planes: the plane's [bm, n_p] block).
++        output_cb = _cb(
++            CB_OUTPUT_TILES, output_tensor.dtype, g.out_tile_bytes, bm * (ns if planes is None else planes.n_p), cores
++        )
++        cbs.append(output_cb)
+     elif g.sharded_output:
+         # Packs land in the output shard; its capacity is the core's whole M range, and the M-blocks
+         # (bm divides core_m_tiles) push exactly that many tiles, so compute never waits on a consumer.
+@@ -2023,10 +2249,11 @@ def create_program_descriptor(
+                 cores,
+             ),
+             _cb(CB_WEIGHTS, weight_tensor.dtype, g.weight_tile_bytes, b.weight_depth * bk * bn, cores),
+-            _cb(CB_MATMUL_PARTIALS, ttnn.float32, TILE_BYTES_FP32, _kw_fold_acc_bytes(g, bm) // TILE_BYTES_FP32, cores),
++            _cb(CB_MATMUL_PARTIALS, ttnn.float32, TILE_BYTES_FP32, _kw_fold_acc_bytes(gk, bm) // TILE_BYTES_FP32, cores),
+             output_cb,
++            # The bias: all of C_out (a weight server multicasts it whole); its fp32 rows: the core's columns.
+             _cb(CB_BIAS, bias_tensor.dtype, g.weight_tile_bytes, ns, cores),
+-            _cb(CB_COMBINED, ttnn.float32, KWF_BIAS_ROWS_BYTES, ns, cores),
++            _cb(CB_COMBINED, ttnn.float32, KWF_BIAS_ROWS_BYTES, gk.out_n_tiles, cores),
+             # ACC-ready token, compute pack -> compute unpack, once per M-block.
+             _cb(CB_SRC_TABLE, ttnn.float32, RING_TOKEN_BYTES, 1, cores),
+             # Halo exchange tokens (one per send / arrival, at most 3 each per n-group). Compute pops an n-group's
+@@ -2036,7 +2263,7 @@ def create_program_descriptor(
+                 CB_KWF_HALO_IN,
+                 ttnn.float32,
+                 RING_TOKEN_BYTES,
+-                3 * (g.tensor_n_tiles // _kw_fold_group(g.tensor_n_tiles)),
++                3 * (1 if planes is not None and planes.stream else gk.tensor_n_tiles // _kw_fold_group(gk.tensor_n_tiles)),
+                 cores,
+             ),
+         ]
+@@ -2060,13 +2287,35 @@ def create_program_descriptor(
+         row_page_stride, input_shard_rows = 0, int(input_tensor.memory_config().shard_spec.shape[0]) // TILE
+     else:
+         row_page_stride, input_shard_rows = 0, 0
+-    m_ranges = core_m_ranges(g, b.core_m_tiles)
++    m_ranges = core_m_ranges(g, b.core_m_tiles) if planes is None else [r for pr in planes.ranges for r in pr]
+     m_blocks_per_index = [_div_up(actual_m_tiles, bm) for _, actual_m_tiles in m_ranges]
+     # The weight multicast's cores (the channel below is built from the same set). The split TILE fill runs on its pure
+     # receivers: not the sender (work core 0), nor the own-stream cores outside the channel.
+     mcast_receivers = None if g.k_split else _weight_mcast_cores(core_list, [m_blocks_per_index[i] for _, i, _ in work])
+     weight_servers = None
+-    if WEIGHT_SERVERS and g.sharded_output and not g.k_split and mcast_receivers is not None:
++    # kw-fold planes: one server per rectangle of each plane, streaming that plane's columns (server reader arg 2).
++    server_n_off = {}
++    if planes is not None and planes.stream:
++        # One stream to every work core (HEAD's servers, over the work cores' rectangles).
++        mcast_receivers = _core_range_set(core_list)
++        weight_servers = _weight_servers(input_tensor, core_list, mcast_receivers)
++        if weight_servers is None:
++            raise ValueError("conv2d_3x3: kw-fold planes without a spare core per work rectangle")
++    elif planes is not None:
++        mcast_receivers = _core_range_set(core_list)
++        plane_rects = [(p, r) for p, pc in enumerate(planes.cores) for r in _core_range_set(list(pc)).ranges()]
++
++        class _Rects:
++            @staticmethod
++            def ranges():
++                return [r for _, r in plane_rects]
++
++        weight_servers = _weight_servers(input_tensor, core_list, _Rects)
++        if weight_servers is None:
++            raise ValueError("conv2d_3x3: kw-fold planes without a spare core per plane rectangle")
++        for (p, _), (_, server) in zip(plane_rects, weight_servers):
++            server_n_off[(server.x, server.y)] = p * planes.n_p
++    elif WEIGHT_SERVERS and g.sharded_output and not g.k_split and mcast_receivers is not None:
+         weight_servers = _weight_servers(input_tensor, core_list, mcast_receivers)
+     split_cores = set()
+     if tile_fill_split and mcast_receivers is not None:
+@@ -2144,6 +2393,11 @@ def create_program_descriptor(
+     kwf_xchg = kwf and kw_fold_halo_exchange(b)
+     kwf_xchg_sem_ids = (len(sem_ids), len(sem_ids) + 1) if kwf_xchg else (0, 0)
+     sem_ids += kwf_xchg_sem_ids if kwf_xchg else ()
++    # kw-fold planes, stream mode: one server ack counter per weight slot (slot 0 keeps the server's ack semaphore).
++    slot_ack_defines = []
++    if planes is not None and planes.stream and weight_servers is not None and 1 < b.weight_depth < b.num_k_blocks:
++        slot_ack_defines = [("SERVER_SLOT_ACKS", str(len(sem_ids)))]
++        sem_ids += tuple(range(len(sem_ids), len(sem_ids) + b.weight_depth - 1))
+     k_padded = g.tensor_kkh_tiles * TILE > 3 * g.c_in_p
+     # Work-balanced M split (g.m_ranges): the N-slice prelude, walk and forwarding sized by each M-block's valid
+     # tile-rows (the split row gather keeps its CT unit sequence), the fill / untilize by the block's own slab rows where
+@@ -2292,7 +2546,7 @@ def create_program_descriptor(
+         b.slab_tile_rows,
+         int(g.k_split),
+         g.k_cols,
+-        ns,
++        ns if planes is None or planes.stream else planes.n_p,  # kw-fold planes ("split"): the plane's columns
+         CB_COMBINE_SLOTS,
+         CB_COMBINED,
+         b.combine_subblock_h,
+@@ -2412,7 +2666,7 @@ def create_program_descriptor(
+     )
+     writer_ct_args.extend(
+         ttnn.TensorAccessorArgs().get_compile_time_args()
+-        if g.sharded_output and not g.remote_output
++        if g.sharded_output and not g.remote_output and planes is None
+         else ttnn.TensorAccessorArgs(output_tensor).get_compile_time_args()
+     )
+     writer_ct_args.extend(
+@@ -2451,6 +2705,14 @@ def create_program_descriptor(
+     for core, m_index, col in work:
+         m_tile_start, actual_m_tiles = m_ranges[m_index]
+         num_m_blocks_this_core = m_blocks_per_index[m_index]
++        # kw-fold planes: the work item's third field is its plane (reader arg 6: the bias rows it decodes; writer arg
++        # 10: the output columns it stores), there is one channel slice, and the split fill's shard split point is the
++        # input shard holding the core's last tile-row (HEAD: its own shard, m_index).
++        plane = col if planes is not None else 0
++        split_shard = m_index
++        if planes is not None:
++            col = 0
++            split_shard = _kwf_plane_split_shard(core, input_tensor, m_tile_start, actual_m_tiles, input_shard_rows)
+         # The core's output columns: all of C_out, or N-slice `col` under the K split (possibly short or
+         # empty past the last C_out tile); with spread ring owners, the owner's rank among them, or none.
+         out_slice = col if ring_owners is None else (ring_owners.index(col) if col in ring_owners else g.k_cols)
+@@ -2472,14 +2734,15 @@ def create_program_descriptor(
+                 num_m_blocks_this_core,
+                 m_index * SLAB_READ_STAGGER_PX_PER_CORE,
+                 col * pages_per_slice_row,
+-                col,
+-                m_index,
++                col if planes is None else plane,
++                split_shard,
+             ]
+             + row_peer_coords.get(m_index, [])
+             + [int(split_of(core))]
+             + slab_rows_per_block
+         )
+-        compute_args = [num_m_blocks_this_core, int(out_valid_tiles > 0), col]
++        # Arg 2: the channel slice, or under kw-fold planes the plane (stream mode: the n-group the core computes).
++        compute_args = [num_m_blocks_this_core, int(out_valid_tiles > 0), col if planes is None else plane]
+         if g.k_split and b.nslice and not kwf:
+             # The N-slice ring walk's kernel-row masks (args 3..: no ring slab under a K split).
+             assert not b.ring
+@@ -2516,9 +2779,9 @@ def create_program_descriptor(
+                 col * g.tensor_k_tiles,  # the column's weight K-slice (rows ordered (col, kh, kw, c))
+                 out_n_tile_start,
+                 out_valid_tiles,
+-                col,
++                col if planes is None else plane,
+                 input_addr,
+-                m_index,
++                split_shard,
+             ]
+             + row_peer_coords.get(m_index, [])
+             + [int(split_of(core))]
+@@ -2529,17 +2792,24 @@ def create_program_descriptor(
+     # kw-fold kernels: the mode flag and its compile-time shape (defines keep the regular kernels' CT args intact).
+     _kwf_dm_defines, _kwf_compute_defines = [], []
+     if kwf:
+-        _sbw, _sbh = _kw_fold_subblock(g.tensor_n_tiles)
++        _sbw, _sbh = _kw_fold_subblock(gk.tensor_n_tiles)
+         _tpr = g.input_width // TILE
+         _kwf_dm_defines = [
+             ("CONV2D_3X3_KW_FOLD", "1"),
+-            ("KWF_KBLOCKED", str(int(kw_fold_kblocked(g)))),
++            ("KWF_KBLOCKED", str(int(kw_fold_kblocked(gk)))),
+             ("KWF_CB_BIAS_ROWS", str(CB_COMBINED)),
+             ("KWF_CB_BIAS", str(CB_BIAS)),
+             ("KWF_N", str(g.tensor_n_tiles)),
+             ("KWF_BIAS_BFP8", str(int(bias_tensor.dtype == ttnn.bfloat8_b))),
+-            ("KWF_FUSED_GW", str(kw_fold_fused_gw(g.tensor_n_tiles))),
++            ("KWF_FUSED_GW", str(kw_fold_fused_gw(gk.tensor_n_tiles))),
+         ]
++        if planes is not None:
++            # kw-fold planes: the reader decodes the plane's n_p bias rows (from tile plane * n_p of cb_bias), the
++            # writer stores the plane's [bm, n_p] block (columns from plane * n_p) into the output shards.
++            _kwf_dm_defines += [("KWF_NP", str(planes.n_p)), ("KWF_PLANE_N", str(planes.n_p))]
++            if planes.stream:
++                # The weight sub-rounds n-group-interleaved: round s = (n-group s % NG, column (1, 0, 2)[s / NG]).
++                _kwf_dm_defines += [("KWF_INTERLEAVE_NG", str(g.tensor_n_tiles // planes.n_p))]
+         if kwf_xchg:
+             _kwf_dm_defines += [
+                 ("KWF_XCHG", "1"),
+@@ -2550,8 +2820,16 @@ def create_program_descriptor(
+                 # ACC: one n-group's planes, one output column tile wide each (conv2d_3x3_kw_fold.hpp).
+                 ("KWF_PITCH", str(TILE * 4)),
+                 ("KWF_PLANE_BYTES", str(_kw_fold_plane_bytes(g, bm))),
+-                ("KWF_PLANES", str(_kw_fold_group(g.tensor_n_tiles))),
+-                ("KWF_NG", str(g.tensor_n_tiles // _kw_fold_group(g.tensor_n_tiles))),
++                ("KWF_PLANES", str(_kw_fold_group(gk.tensor_n_tiles))),
++                # n-group passes this core runs (stream-mode planes: one, its plane's).
++                (
++                    "KWF_NG",
++                    str(
++                        1
++                        if planes is not None and planes.stream
++                        else gk.tensor_n_tiles // _kw_fold_group(gk.tensor_n_tiles)
++                    ),
++                ),
+                 ("KWF_SEM_FROM_UPPER", str(kwf_xchg_sem_ids[0])),
+                 ("KWF_SEM_FROM_LOWER", str(kwf_xchg_sem_ids[1])),
+             ]
+@@ -2561,18 +2839,21 @@ def create_program_descriptor(
+             ("KWF_TPR", str(_tpr)),
+             ("KWF_SBW", str(_sbw)),
+             ("KWF_SBH", str(_sbh)),
+-            ("KWF_GW", str(_kw_fold_group(g.tensor_n_tiles))),
++            ("KWF_GW", str(_kw_fold_group(gk.tensor_n_tiles))),
+             ("KWF_M_TILES", str(g.tensor_m_tiles)),
+-            ("KWF_KBLOCKED", str(int(kw_fold_kblocked(g)))),
++            ("KWF_KBLOCKED", str(int(kw_fold_kblocked(gk)))),
+             ("KWF_PLANE_BYTES", str(_kw_fold_plane_bytes(g, bm))),
+             # Out-of-line subblock (see conv2d_3x3_kw_fold.hpp): whole-K with multi-row subblocks.
+-            ("KWF_NOINLINE", str(int(not kw_fold_kblocked(g) and _sbh > 1))),
++            ("KWF_NOINLINE", str(int(not kw_fold_kblocked(gk) and _sbh > 1))),
+             ("KWF_CB_HALO_OUT", str(CB_KWF_HALO_OUT)),
+             ("KWF_CB_HALO_IN", str(CB_KWF_HALO_IN)),
+             # The halo exchange's code only where it runs (it costs RISC time on small subblocks even when idle).
+             ("KWF_XCHG", str(int(kwf_xchg))),
+-            ("KWF_FUSED", str(int(kw_fold_fused_gw(g.tensor_n_tiles) != 0))),
++            ("KWF_FUSED", str(int(kw_fold_fused_gw(gk.tensor_n_tiles) != 0))),
+         ]
++        if planes is not None and planes.stream:
++            # Stream-mode planes: the core computes only n-group `compute arg 2` and pops the others' rounds.
++            _kwf_compute_defines += [("KWF_PLANE_MODE", "1"), ("KWF_INTERLEAVE_NG", str(g.tensor_n_tiles // planes.n_p))]
+     _pad_dm_defines, _pad_compute_defines = [], []
+     if padded_slab:
+         _pad_dm_defines = [("CONV2D_3X3_PADDED_SLAB", "1"), ("PAD_SLAB_SLOTS_MAX", str(pad_slots_max))]
+@@ -2657,7 +2938,7 @@ def create_program_descriptor(
+             core_ranges=_core_range_set(writer_cores),
+             compile_time_args=writer_ct_args_for(*slice_channels),
+             runtime_args=writer_rt,
+-            defines=_kwf_dm_defines + _ring_owner_defines + _sd_dm_defines + _async_bias_defines,
++            defines=_kwf_dm_defines + _ring_owner_defines + _sd_dm_defines + _async_bias_defines + slot_ack_defines,
+             config=ttnn.WriterConfigDescriptor(),
+         )
+         for slice_channels, (writer_cores, writer_rt) in writer_groups.items()
+@@ -2696,7 +2977,7 @@ def create_program_descriptor(
+         # Whole-K kw-fold keeps its weights resident across M-blocks: one stream.
+         num_rounds = (
+             b.num_k_blocks
+-            if kwf and not kw_fold_kblocked(g)
++            if kwf and not kw_fold_kblocked(gk)
+             else max(m_blocks_per_index[i] for _, i, _ in work) * b.num_k_blocks
+         )
+         num_chunks = max(d for d in range(1, WEIGHT_SERVER_CHUNKS + 1) if (bk * bn) % d == 0)
+@@ -2705,7 +2986,8 @@ def create_program_descriptor(
+         for rect, server in weight_servers:
+             lo = device.worker_core_from_logical_core(rect.start)
+             hi = device.worker_core_from_logical_core(rect.end)
+-            server_reader_rt[server.x][server.y] = [weight_addr, num_rounds]
++            # Arg 2: the first output column tile the server streams (kw-fold planes: its plane's).
++            server_reader_rt[server.x][server.y] = [weight_addr, num_rounds, server_n_off.get((server.x, server.y), 0)]
+             # NoC1 multicast: from the rectangle's high corner to its low corner.
+             server_writer_rt[server.x][server.y] = [
+                 num_rounds,
+@@ -2727,12 +3009,15 @@ def create_program_descriptor(
+                     bn,
+                     b.num_k_blocks,
+                     num_chunks,
+-                    (1 + kw_fold_fused_gw(g.tensor_n_tiles)) if kwf else 0,
++                    (1 + kw_fold_fused_gw(gk.tensor_n_tiles)) if kwf else 0,
+                     g.tensor_n_tiles,
+                     *_weight_shard_tiles(weight_tensor, kwf or bn == g.tensor_n_tiles),
+                 ]
+                 + list(ttnn.TensorAccessorArgs(weight_tensor).get_compile_time_args()),
+                 runtime_args=server_reader_rt,
++                defines=[("KWF_INTERLEAVE_NG", str(g.tensor_n_tiles // planes.n_p))]
++                if planes is not None and planes.stream
++                else [],
+                 config=ttnn.ReaderConfigDescriptor(),
+             ),
+             ttnn.KernelDescriptor(
+@@ -2754,6 +3039,7 @@ def create_program_descriptor(
+                     else ttnn.TensorAccessorArgs().get_compile_time_args()
+                 ),
+                 runtime_args=server_writer_rt,
++                defines=slot_ack_defines,
+                 config=ttnn.WriterConfigDescriptor(),
+             ),
+         ]
+diff --git a/ttnn/ttnn/operations/conv2d_3x3/kernels/conv2d_3x3_compute.cpp b/ttnn/ttnn/operations/conv2d_3x3/kernels/conv2d_3x3_compute.cpp
+index a2de1b46ffc..d40bdebb32c 100644
+--- a/ttnn/ttnn/operations/conv2d_3x3/kernels/conv2d_3x3_compute.cpp
++++ b/ttnn/ttnn/operations/conv2d_3x3/kernels/conv2d_3x3_compute.cpp
+@@ -804,12 +804,18 @@ void kernel_main() {
+         KWF_PLANE_BYTES,
+         KWF_NOINLINE != 0,
+         KWF_XCHG != 0,
+-        KWF_FUSED != 0>(
++        KWF_FUSED != 0,
++#ifdef KWF_PLANE_MODE
++        true>(
++#else
++        false>(
++#endif
+         get_arg_val<uint32_t>(3),
+         get_arg_val<uint32_t>(4),
+         get_arg_val<uint32_t>(0),
+         get_arg_val<uint32_t>(5) != 0,
+-        get_arg_val<uint32_t>(6) != 0);
++        get_arg_val<uint32_t>(6) != 0,
++        get_arg_val<uint32_t>(2));  // kw-fold planes (stream mode): the n-group this core computes
+ #else
+     constexpr uint32_t cb_im2col_rm = get_compile_time_arg_val(0);
+     constexpr uint32_t cb_im2col_tiles = get_compile_time_arg_val(1);
+diff --git a/ttnn/ttnn/operations/conv2d_3x3/kernels/conv2d_3x3_kw_fold.hpp b/ttnn/ttnn/operations/conv2d_3x3/kernels/conv2d_3x3_kw_fold.hpp
+index 8ab04559bdc..49cd2dc070d 100644
+--- a/ttnn/ttnn/operations/conv2d_3x3/kernels/conv2d_3x3_kw_fold.hpp
++++ b/ttnn/ttnn/operations/conv2d_3x3/kernels/conv2d_3x3_kw_fold.hpp
+@@ -279,8 +279,15 @@ template <
+     uint32_t plane_bytes,
+     bool noinline,
+     bool xchg,
+-    bool fused>
+-ALWI void run(uint32_t m_tile_start, uint32_t actual_m_tiles, uint32_t num_blocks, bool xchg_top, bool xchg_bot) {
++    bool fused,
++    bool plane_mode = false>
++ALWI void run(
++    uint32_t m_tile_start,
++    uint32_t actual_m_tiles,
++    uint32_t num_blocks,
++    bool xchg_top,
++    bool xchg_bot,
++    [[maybe_unused]] uint32_t own_g = 0) {
+     constexpr uint32_t R = d * tpr;
+     // ACC is gw planes of [rows, 32] fp32, one per output column tile of the n-group. Subblocks are sbh x 1 (a column
+     // run: one stream per run of ACC-consecutive rows) or 1 x sbw (one 1-tile stream per column).
+@@ -299,6 +306,14 @@ ALWI void run(uint32_t m_tile_start, uint32_t actual_m_tiles, uint32_t num_block
+     static_assert(!fused || (gw == 2 && sbw == 1));
+     constexpr uint32_t FW = 2 * gw;
+     constexpr uint32_t FROW = 2 * RW;
++    // kw-fold planes, stream mode (descriptor KWF_PLANES_MODE "stream"): this core computes only n-group own_g; the
++    // weight stream is every n-group's sub-rounds, n-group-interleaved (round s = n-group s % NG, column s / NG), and
++    // the other n-groups' rounds are popped unused. Its output block is [bm, gw] (a local CB the writer stores into the
++    // output shards) and its fp32 bias rows are its n-group's gw columns.
++    static_assert(!plane_mode || (kblocked && !fused));
++    constexpr uint32_t OUT_N = plane_mode ? gw : N;
++    [[maybe_unused]] const uint32_t first_g = plane_mode ? own_g : 0;
++    [[maybe_unused]] const uint32_t last_g = plane_mode ? own_g : NG - 1;
+ 
+     CircularBuffer in(cb_in);
+     CircularBuffer w(cb_w);
+@@ -327,7 +342,7 @@ ALWI void run(uint32_t m_tile_start, uint32_t actual_m_tiles, uint32_t num_block
+         const bool halo_top = t0 % tpr != 0 && !xt;
+         const bool halo_bot = (t0 + valid) % tpr != 0 && t0 + valid < m_tiles && !xb;
+         uint32_t landed = 0;
+-        for (uint32_t g = 0; g < NG; ++g) {
++        for (uint32_t g = first_g; g <= last_g; ++g) {
+             {
+                 MaybeDeviceZoneScope("compute_kwf_matmul_shift");
+                 // n-group g's columns kw = 1, 0, 2, each as its weights land: Q_kw's rows each accumulate every
+@@ -543,6 +558,14 @@ ALWI void run(uint32_t m_tile_start, uint32_t actual_m_tiles, uint32_t num_block
+                         // K-blocked: this sub-round at the front (the previous one was popped), so its in1 tiles start
+                         // at index 0. Whole-K: rounds 0 .. step.
+                         MaybeDeviceZoneScope("compute_kwf_weight_wait");
++                        if constexpr (plane_mode) {
++                            // The other n-groups' rounds ahead of this one: the previous column's later n-groups and
++                            // this column's earlier ones.
++                            for (uint32_t k = 0, e = step == 0 ? own_g : NG - 1; k < e; ++k) {
++                                w.wait_front(ROUND_TILES);
++                                w.pop_front(ROUND_TILES);
++                            }
++                        }
+                         w.wait_front(kblocked ? ROUND_TILES : (step + 1) * ROUND_TILES);
+                     }
+                     const uint32_t w0 = kblocked ? 0 : step * ROUND_TILES + g * gw;
+@@ -610,8 +633,8 @@ ALWI void run(uint32_t m_tile_start, uint32_t actual_m_tiles, uint32_t num_block
+                 UNPACK((acc_rd = get_local_cb_interface(get_operand_id(cb_acc)).fifo_rd_ptr << 4));
+                 UNPACK((rows_rd = get_local_cb_interface(get_operand_id(cb_bias_rows)).fifo_rd_ptr << 4));
+                 // The reader's fp32 bias rows (one 512 B page per output column tile: 4 copies of [b_0 .. b_31]).
+-                if (blk == 0 && g == 0) {
+-                    bias_rows.wait_front(N);
++                if (blk == 0 && g == first_g) {
++                    bias_rows.wait_front(OUT_N);
+                 }
+                 reconfig_data_format(cb_acc, cb_bias_rows);
+                 pack_reconfig_data_format(cb_out);
+@@ -621,10 +644,11 @@ ALWI void run(uint32_t m_tile_start, uint32_t actual_m_tiles, uint32_t num_block
+                 tilize_init(cb_acc, 1, cb_out);
+                 UNPACK((tilize_bias_mop_config()));
+                 constexpr uint32_t ROWS_BYTES = 4 * 32 * 4;  // one column tile's 4 fp32 bias rows
+-                if (g == 0) {
+-                    out.reserve_back(bm * N);
++                if (g == first_g) {
++                    out.reserve_back(bm * OUT_N);
+                 }
+-                const uint32_t n_first = g * gw;
++                // Output and bias-row column of the n-group's first tile (plane mode: the core's own [bm, gw] block).
++                const uint32_t n_first = plane_mode ? 0 : g * gw;
+                 const uint32_t total = valid * gw;
+                 if constexpr (xchg) {
+                     if (xb) {
+@@ -654,13 +678,26 @@ ALWI void run(uint32_t m_tile_start, uint32_t actual_m_tiles, uint32_t num_block
+                     for (uint32_t j = 0; j < cnt; ++j) {
+                         const uint32_t u = (f0 + j) / gw;
+                         const uint32_t nn = (f0 + j) - u * gw;
+-                        PACK((llk_pack<DST_ACCUM_MODE, true, PackMode::Default>(j, cb_out, u * N + n_first + nn)));
++                        // Plane mode pushes each batch: its tiles sit at the write pointer (its first tile is f0).
++                        PACK((llk_pack<DST_ACCUM_MODE, true, PackMode::Default>(
++                            j, cb_out, plane_mode ? j : u * OUT_N + n_first + nn)));
+                     }
+                     MATH((llk_math_dest_section_done<DST_ACCUM_MODE>()));
+                     PACK((llk_pack_dest_section_done<DST_ACCUM_MODE>()));
++                    if constexpr (plane_mode) {
++                        // Plane mode: each DEST batch is pushed as packed, so the writer stores the block's rows into
++                        // the output shards while the rest of the final pass runs.
++                        out.push_back(cnt);
++                    }
+                 }
+-                if (g + 1 == NG) {
+-                    out.push_back(bm * N);
++                if (g == last_g) {
++                    if constexpr (plane_mode) {
++                        if (valid < bm) {
++                            out.push_back((bm - valid) * OUT_N);  // the ragged tail keeps the nominal count
++                        }
++                    } else {
++                        out.push_back(bm * OUT_N);
++                    }
+                 }
+                 acc_ready.pop_front(1);
+                 if constexpr (xchg) {
+@@ -675,13 +712,20 @@ ALWI void run(uint32_t m_tile_start, uint32_t actual_m_tiles, uint32_t num_block
+                 }
+             }
+         }
++        if constexpr (plane_mode) {
++            // The last column's later n-groups.
++            for (uint32_t k = own_g + 1; k < NG; ++k) {
++                w.wait_front(ROUND_TILES);
++                w.pop_front(ROUND_TILES);
++            }
++        }
+         in.wait_front(slab_pages);
+         in.pop_front(slab_pages);
+     }
+     if constexpr (!kblocked) {
+         w.pop_front(3 * ROUND_TILES);
+     }
+-    bias_rows.pop_front(N);
++    bias_rows.pop_front(OUT_N);
+ }
+ 
+ }  // namespace conv2d_3x3::kw_fold
+diff --git a/ttnn/ttnn/operations/conv2d_3x3/kernels/conv2d_3x3_reader.cpp b/ttnn/ttnn/operations/conv2d_3x3/kernels/conv2d_3x3_reader.cpp
+index 1562e81055d..32972c776f4 100644
+--- a/ttnn/ttnn/operations/conv2d_3x3/kernels/conv2d_3x3_reader.cpp
++++ b/ttnn/ttnn/operations/conv2d_3x3/kernels/conv2d_3x3_reader.cpp
+@@ -1059,13 +1059,22 @@ void kernel_main() {
+             // (KWF_BIAS_BFP8): 64 exponent bytes, one per face row (face f row 0 at byte 16 f), then sign-magnitude
+             // bytes m, value (-1)^s (m & 127) 2^(e - 133), from byte 64 (+ 256 for face 1).
+             MaybeDeviceZoneScope("reader_kwf_bias_rows");
++            // kw-fold planes (descriptor KWF_N_PLANES): cb_bias holds all KWF_N tiles; this core decodes its plane's
++            // KWF_NP columns, from tile my_col * KWF_NP (my_col: the plane).
++#ifdef KWF_NP
++            constexpr uint32_t kwf_rows_n = KWF_NP;
++            const uint32_t kwf_rows_n0 = my_col * KWF_NP;
++#else
++            constexpr uint32_t kwf_rows_n = KWF_N;
++            const uint32_t kwf_rows_n0 = 0;
++#endif
+             cb_wait_front(KWF_CB_BIAS, KWF_N);
+             invalidate_l1_cache();
+-            cb_reserve_back(KWF_CB_BIAS_ROWS, KWF_N);
+-            const uint32_t raw = get_read_ptr(KWF_CB_BIAS);
++            cb_reserve_back(KWF_CB_BIAS_ROWS, kwf_rows_n);
+             const uint32_t tile_bytes = get_tile_size(KWF_CB_BIAS);
++            const uint32_t raw = get_read_ptr(KWF_CB_BIAS) + kwf_rows_n0 * tile_bytes;
+             uint32_t* rows = reinterpret_cast<uint32_t*>(get_write_ptr(KWF_CB_BIAS_ROWS));
+-            for (uint32_t n = 0; n < KWF_N; ++n, rows += 128) {
++            for (uint32_t n = 0; n < kwf_rows_n; ++n, rows += 128) {
+                 const uint32_t t = raw + n * tile_bytes;
+                 for (uint32_t c = 0; c < 32; ++c) {
+ #if KWF_BIAS_BFP8
+@@ -1093,7 +1102,7 @@ void kernel_main() {
+                     rows[96 + c] = v;
+                 }
+             }
+-            cb_push_back(KWF_CB_BIAS_ROWS, KWF_N);
++            cb_push_back(KWF_CB_BIAS_ROWS, kwf_rows_n);
+             cb_pop_front(KWF_CB_BIAS, KWF_N);
+         }
+         continue;
+diff --git a/ttnn/ttnn/operations/conv2d_3x3/kernels/conv2d_3x3_weight_server_reader.cpp b/ttnn/ttnn/operations/conv2d_3x3/kernels/conv2d_3x3_weight_server_reader.cpp
+index 558934e4aef..8a4803b3d70 100644
+--- a/ttnn/ttnn/operations/conv2d_3x3/kernels/conv2d_3x3_weight_server_reader.cpp
++++ b/ttnn/ttnn/operations/conv2d_3x3/kernels/conv2d_3x3_weight_server_reader.cpp
+@@ -36,6 +36,9 @@ void kernel_main() {
+     // n-group's kw = 0 columns, then its kw = 2 columns.
+     constexpr bool kw_fold = get_compile_time_arg_val(5) != 0;
+     constexpr uint32_t kwf_fused_gw = kw_fold ? get_compile_time_arg_val(5) - 1 : 0;
++#ifdef KWF_INTERLEAVE_NG
++    static_assert(kw_fold && kwf_fused_gw == 0, "n-group-interleaved rounds: kw-fold without fused side rounds");
++#endif
+     constexpr uint32_t tensor_n_tiles = get_compile_time_arg_val(6);
+     // ND-sharded weights: the shard's [rows, columns] in tiles; 0 rows = interleaved (one read per tile).
+     constexpr uint32_t shard_rows = get_compile_time_arg_val(7);
+@@ -52,6 +55,8 @@ void kernel_main() {
+ 
+     const uint32_t weight_addr = get_arg_val<uint32_t>(0);
+     const uint32_t num_rounds = get_arg_val<uint32_t>(1);
++    // kw-fold planes (descriptor KWF_N_PLANES): the first output column tile this server's plane streams (0 otherwise).
++    const uint32_t n_off = get_arg_val<uint32_t>(2);
+     const uint32_t tile_bytes = get_tile_size(cb_weights);
+     const auto weights = TensorAccessor(weight_args, weight_addr, tile_bytes);
+     conv2d_3x3::TaggedReads<false> reads;
+@@ -80,15 +85,24 @@ void kernel_main() {
+                         const uint32_t kwf = jj < kwf_fused_gw ? 0 : 2;
+                         const uint32_t n = grp * kwf_fused_gw + (jj < kwf_fused_gw ? jj : jj - kwf_fused_gw);
+                         return ((kh * 3 + kwf) * block_k_tiles + (kc - kh * block_k_tiles)) * tensor_n_tiles +
+-                               (kb / 3) * rw + n;
++                               n_off + (kb / 3) * rw + n;
+                     }
+                 }
+                 const uint32_t n = t % rw;
+                 const uint32_t kc = t / rw;
+                 const uint32_t kh = kc / block_k_tiles;
++#ifdef KWF_INTERLEAVE_NG
++                // kw-fold planes, stream mode: the sub-rounds n-group-interleaved (round kb = n-group kb % NG, column
++                // kb / NG), so every plane's first round comes early.
++                const uint32_t col = kb / KWF_INTERLEAVE_NG;
++                const uint32_t grp = kb % KWF_INTERLEAVE_NG;
++#else
+                 const uint32_t col = kb % 3;
++                const uint32_t grp = kb / 3;
++#endif
+                 const uint32_t kw = col == 0 ? 1 : (col == 1 ? 0 : 2);  // kw_fold.hpp KW_ROUND_ORDER
+-                return ((kh * 3 + kw) * block_k_tiles + (kc - kh * block_k_tiles)) * tensor_n_tiles + (kb / 3) * rw + n;
++                return ((kh * 3 + kw) * block_k_tiles + (kc - kh * block_k_tiles)) * tensor_n_tiles + n_off +
++                       grp * rw + n;
+             } else {
+                 return page0 + t;
+             }
+diff --git a/ttnn/ttnn/operations/conv2d_3x3/kernels/conv2d_3x3_weight_server_writer.cpp b/ttnn/ttnn/operations/conv2d_3x3/kernels/conv2d_3x3_weight_server_writer.cpp
+index 9cee2da0859..7c4a8fbe7bf 100644
+--- a/ttnn/ttnn/operations/conv2d_3x3/kernels/conv2d_3x3_weight_server_writer.cpp
++++ b/ttnn/ttnn/operations/conv2d_3x3/kernels/conv2d_3x3_weight_server_writer.cpp
+@@ -72,8 +72,18 @@ void kernel_main() {
+     for (uint32_t r = 0; r < num_rounds; ++r) {
+         {
+             MaybeDeviceZoneScope("server_wait_ack");
++#ifdef SERVER_SLOT_ACKS
++            // One counter per slot (the receivers' SERVER_SLOT_ACKS): slot 0's also holds the kernel-start acks.
++            const uint32_t slot = r < weight_depth ? 0 : r % weight_depth;
++            const uint32_t uses = r < weight_depth ? 0 : r / weight_depth;
++            noc_semaphore_wait_min(
++                slot == 0 ? ack
++                          : reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(SERVER_SLOT_ACKS + slot - 1)),
++                (uses + (slot == 0 ? 1 : 0)) * num_receivers);
++#else
+             const uint32_t acks = 1 + (r + 1 > weight_depth ? r + 1 - weight_depth : 0);
+             noc_semaphore_wait_min(ack, acks * num_receivers);
++#endif
+         }
+         if constexpr (has_bias) {
+             if (r == bias_round) {
+diff --git a/ttnn/ttnn/operations/conv2d_3x3/kernels/conv2d_3x3_writer.cpp b/ttnn/ttnn/operations/conv2d_3x3/kernels/conv2d_3x3_writer.cpp
+index d27808a42ed..a884f1b4aaf 100644
+--- a/ttnn/ttnn/operations/conv2d_3x3/kernels/conv2d_3x3_writer.cpp
++++ b/ttnn/ttnn/operations/conv2d_3x3/kernels/conv2d_3x3_writer.cpp
+@@ -682,8 +682,14 @@ void kernel_main() {
+         constexpr uint32_t kw_round_order[3] = {1, 0, 2};
+         constexpr uint32_t kwf_rw = block_n_tiles / 3;
+         const uint32_t s = k_blocks_issued % num_k_blocks;
++#ifdef KWF_INTERLEAVE_NG
++        // kw-fold planes, stream mode: round s = n-group s % NG, column s / NG (the weight server's order).
++        const uint32_t kw = kw_round_order[s / KWF_INTERLEAVE_NG];
++        const uint32_t n0 = (s % KWF_INTERLEAVE_NG) * kwf_rw;
++#else
+         const uint32_t kw = kw_round_order[s % 3];
+         const uint32_t n0 = (s / 3) * kwf_rw;
++#endif
+ #if KWF_FUSED_GW
+         // Fused side rounds (kw_fold.hpp): rounds 1 and 2 hold the kw = 0 | 2 pair interleaved, per (kh, c) row of
+         // 2 rw tiles: each gw-wide n-group's kw = 0 columns, then its kw = 2 columns. Round 0 (kw = 1) is unchanged.
+@@ -1020,6 +1026,26 @@ void kernel_main() {
+     // Weight servers: the slot-reuse acks sent so far (rounds nslice_weight_depth .. + server_reuse_acks - 1), and the
+     // rounds this receiver takes (kw-fold whole-K keeps its weights resident across M-blocks: one stream).
+     [[maybe_unused]] uint32_t server_reuse_acks = 0;
++    // Reuse ack j (round nslice_weight_depth + j, slot j % depth). SERVER_SLOT_ACKS (kw-fold planes, stream mode): one
++    // ack counter per slot on the server (slot 0's is the kernel-start counter, the others from SERVER_SLOT_ACKS on): a
++    // core that skips the other n-groups' rounds acks slots ahead of the cores still multiplying, and on one total
++    // counter its acks for later slots would count toward an earlier slot's reuse (measured: the server overwrote round
++    // 0's slot under the slower plane, PCC 0.95).
++    [[maybe_unused]] auto server_reuse_ack = [&]() {
++#ifdef SERVER_SLOT_ACKS
++        const uint32_t slot = server_reuse_acks % nslice_weight_depth;
++        noc_semaphore_inc(
++            slot == 0 ? server_ack_noc
++                      : get_noc_addr(
++                            get_arg_val<uint32_t>(server_arg + 1),
++                            get_arg_val<uint32_t>(server_arg + 2),
++                            get_semaphore(SERVER_SLOT_ACKS + slot - 1)),
++            1);
++#else
++        noc_semaphore_inc(server_ack_noc, 1);
++#endif
++        ++server_reuse_acks;
++    };
+ #if defined(CONV2D_3X3_KW_FOLD) && !KWF_KBLOCKED
+     [[maybe_unused]] const uint32_t server_rounds = num_k_blocks;
+ #else
+@@ -1052,8 +1078,7 @@ void kernel_main() {
+             // Weight server round (see the file comment); serves the fill hand-overs while it waits.
+             if (k_blocks_issued >= nslice_weight_depth &&
+                 server_reuse_acks < k_blocks_issued + 1 - nslice_weight_depth) {
+-                noc_semaphore_inc(server_ack_noc, 1);
+-                ++server_reuse_acks;
++                server_reuse_ack();
+             }
+             // Round k + 1's reuse ack, early: round k is reserved and not pushed, so two free rounds at the back mean
+             // compute freed round k + 1's slot.
+@@ -1068,8 +1093,7 @@ void kernel_main() {
+                 }
+                 if (early_ack && server_reuse_acks < k_blocks_issued + 2 - nslice_weight_depth &&
+                     cb_pages_reservable_at_back(cb_weights, 2 * weight_k_block_tiles)) {
+-                    noc_semaphore_inc(server_ack_noc, 1);
+-                    ++server_reuse_acks;
++                    server_reuse_ack();
+                 }
+                 serve_fill();
+                 if constexpr (kw_fold) {
+@@ -1795,6 +1819,29 @@ void kernel_main() {
+             if constexpr (k_split) {
+                 combine_round(m_block_idx);
+             }
++#ifdef KWF_PLANE_N
++            {
++                // kw-fold planes (descriptor KWF_N_PLANES): compute packs this core's [bm, KWF_PLANE_N] block into the
++                // local cb_output_tiles; a tile-row's KWF_PLANE_N tiles (columns my_col * KWF_PLANE_N ..) are
++                // contiguous in the output shard that holds the row: one NoC write per valid tile-row.
++                MaybeDeviceZoneScope("writer_plane_store");
++                constexpr uint32_t pn = KWF_PLANE_N;
++                const uint32_t out_tile_bytes = get_tile_size(cb_output_tiles);
++                const auto output = TensorAccessor(output_args, output_addr, out_tile_bytes);
++                const uint32_t l1 = get_read_ptr(cb_output_tiles);
++                const uint32_t done = m_block_idx * block_m_tiles;
++                const uint32_t valid = actual_m_tiles - done < block_m_tiles ? actual_m_tiles - done : block_m_tiles;
++                // Compute pushes the final pass's DEST batches as they are packed: each row goes out once it is in.
++                for (uint32_t r = 0; r < valid; ++r) {
++                    wait_front_serving(cb_output_tiles, (r + 1) * pn);
++                    const uint32_t page = (m_tile_start + done + r) * tensor_n_tiles + my_col * pn;
++                    noc_async_write(l1 + r * pn * out_tile_bytes, output.get_noc_addr(page), pn * out_tile_bytes);
++                }
++                wait_front_serving(cb_output_tiles, block_m_tiles * pn);
++                noc_async_write_barrier();
++                cb_pop_front(cb_output_tiles, block_m_tiles * pn);
++            }
++#endif
+         }
+         if constexpr (remote_output) {
+             // ---- store_block (remote output shard): compute pushes the owner's [bm, out_n] block (per bias row

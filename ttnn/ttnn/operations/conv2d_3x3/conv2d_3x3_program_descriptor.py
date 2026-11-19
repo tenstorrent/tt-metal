@@ -354,6 +354,8 @@ MAX_MCAST_RECTANGLES = 3
 # +9%); one DRAM stream per spare row (same pages as the column sender's, same time: res5.1 / res5.2 +6% / +7%); the
 # spare members' fill split over both NoCs (flat); the last M ranges instead of the cheapest (res5.2 +1.4 us).
 SPARE_MGROUPS = True
+# Semaphore ids per program (the device's limit: ids 0..15).
+MAX_SEMAPHORES = 16
 WEIGHT_MCAST_SPARE_PREFIX = "weight_mcast2"
 
 
@@ -2341,6 +2343,23 @@ def create_program_descriptor(
     kwf_xchg = kwf and kw_fold_halo_exchange(b)
     kwf_xchg_sem_ids = (len(sem_ids), len(sem_ids) + 1) if kwf_xchg else (0, 0)
     sem_ids += kwf_xchg_sem_ids if kwf_xchg else ()
+    # Weight servers with more rounds than cb_weights slots: one server ack counter per slot (slot 0 keeps the server's
+    # ack semaphore, the others from SERVER_SLOT_ACKS on; conv2d_3x3_writer.cpp server_reuse_ack). With one total
+    # counter, a receiver that runs ahead (the ragged short core) acks later slots before a slower receiver acked an
+    # earlier one, and the server could overwrite that slot under the slower core's matmul.
+    server_rounds = (
+        b.num_k_blocks
+        if kwf and not kw_fold_kblocked(g)
+        else max(m_blocks_per_index[i] for _, i, _ in work) * b.num_k_blocks
+    )
+    slot_ack_defines = []
+    if (
+        weight_servers is not None
+        and 1 < b.weight_depth < server_rounds
+        and len(sem_ids) + b.weight_depth - 1 <= MAX_SEMAPHORES
+    ):
+        slot_ack_defines = [("SERVER_SLOT_ACKS", str(len(sem_ids)))]
+        sem_ids += tuple(range(len(sem_ids), len(sem_ids) + b.weight_depth - 1))
     k_padded = g.tensor_kkh_tiles * TILE > 3 * g.c_in_p
     # Work-balanced M split (g.m_ranges): the N-slice prelude, walk and forwarding sized by each M-block's valid
     # tile-rows (the split row gather keeps its CT unit sequence), the fill / untilize by the block's own slab rows where
@@ -2911,7 +2930,8 @@ def create_program_descriptor(
             + _sd_dm_defines
             + _async_bias_defines
             + _page_run_defines
-            + _round0_defines,
+            + _round0_defines
+            + slot_ack_defines,
             config=ttnn.WriterConfigDescriptor(),
         )
         for slice_channels, (writer_cores, writer_rt) in writer_groups.items()
@@ -2949,11 +2969,7 @@ def create_program_descriptor(
                 assert ns == g.tensor_n_tiles
                 cbs[i] = _cb(CB_BIAS, bias_tensor.dtype, g.weight_tile_bytes, ns, sem_cores)
         # Whole-K kw-fold keeps its weights resident across M-blocks: one stream.
-        num_rounds = (
-            b.num_k_blocks
-            if kwf and not kw_fold_kblocked(g)
-            else max(m_blocks_per_index[i] for _, i, _ in work) * b.num_k_blocks
-        )
+        num_rounds = server_rounds
         num_chunks = max(d for d in range(1, WEIGHT_SERVER_CHUNKS + 1) if (bk * bn) % d == 0)
         server_reader_rt = ttnn.RuntimeArgs()
         server_writer_rt = ttnn.RuntimeArgs()
@@ -3009,7 +3025,7 @@ def create_program_descriptor(
                     else ttnn.TensorAccessorArgs().get_compile_time_args()
                 ),
                 runtime_args=server_writer_rt,
-                defines=_round0_defines,
+                defines=_round0_defines + slot_ack_defines,
                 config=ttnn.WriterConfigDescriptor(),
             ),
         ]

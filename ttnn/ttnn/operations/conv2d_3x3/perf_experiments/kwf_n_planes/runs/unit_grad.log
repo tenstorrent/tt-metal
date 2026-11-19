@@ -1,0 +1,429 @@
+SAFE_PYTEST: Waiting for device lock...
+SAFE_PYTEST: Device lock acquired
+SAFE_PYTEST: dispatch_timeout=5s
+PRECOMPILE: on — collect + parallel compile (x64) inside the pytest session, local
+SAFE_PYTEST: env UP_FRONT_INLINE=1 UP_FRONT_COLLECT=1 UP_FRONT_REAL_ALLOC=1 UP_FRONT_COLLECT_WORKERS=64 PYTHONPATH=/localdev/pmilojevic/workspaces/opgen:/localdev/pmilojevic/workspaces/opgen pytest -p tests.plugins.up_front_collect tests/ttnn/unit_tests/operations/conv2d_3x3/test_conv2d_3x3_kw_fold.py tests/ttnn/unit_tests/operations/conv2d_3x3/test_conv2d_3x3_height_sharded.py -p ttnn.operations.conv2d_3x3.perf_experiments.kwf_n_planes.golden_redirect -q
+========================================
+2026-11-19 19:11:17.788 | DEBUG    | ttnn:<module>:45 - Initial ttnn.CONFIG:
+Config{cache_path=/home/pmilojevic/.cache/ttnn,model_cache_path=/home/pmilojevic/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,validate_program_args=false,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_graph_python_stack_traces=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,strict_ccl_topology=false,verify_replicated_shards_on_dump=true,std::nullopt}
+GOLDEN_REDIRECT: ttnn.operations.conv2d_3x3 -> ttnn.operations.conv2d_3x3.perf_experiments.kwf_n_planes.grad (kernels /localdev/pmilojevic/workspaces/opgen/ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_n_planes/grad/kernels)
+============================= test session starts ==============================
+platform linux -- Python 3.10.19, pytest-9.0.3, pluggy-1.7.0 -- /localdev/pmilojevic/workspaces/opgen/python_env/bin/python
+cachedir: .pytest_cache
+benchmark: 5.2.3 (defaults: timer=time.perf_counter disable_gc=False min_rounds=5 min_time=0.000005 max_time=1.0 calibration_precision=10 warmup=False warmup_iterations=100000)
+rootdir: /localdev/pmilojevic/workspaces/opgen
+configfile: pytest.ini
+plugins: split-0.11.0, repeat-0.9.4, anyio-4.16.0, benchmark-5.2.3, github-actions-annotate-failures-0.3.0, timeout-2.4.0, cov-7.0.0, dash-2.15.0
+timeout: 300.0s
+timeout method: signal
+timeout func_only: False
+collecting ... 2026-11-19 19:11:20.827 | WARNING  | tests.ttnn.conftest:pytest_collection_modifyitems:34 - Fast Runtime Mode is ON. Skipping tests tagged with @pytest.mark.requires_fast_runtime_mode_off
+2026-11-19 19:11:20.828 | DEBUG    | ttnn:manage_config:53 - Set ttnn.CONFIG.report_name to test_conv2d_3x3_kw_fold_test_conv2d_3x3_kw_fold_forced[_dd342f76
+2026-11-19 19:11:20.828 | info     |          Device | Opening user mode device driver (tt_cluster.cpp:252)
+2026-11-19 19:11:20.828 | info     |             UMD | Cluster constructor started. (cluster.cpp:434)
+2026-11-19 19:11:20.830 | info     |             UMD | Creating TopologyDiscovery for architecture: blackhole (topology_discovery.cpp:137)
+2026-11-19 19:11:20.831 | info     |             UMD | Starting topology discovery. (topology_discovery.cpp:156)
+2026-11-19 19:11:20.854 | info     |             UMD | Established firmware bundle version: 19.16.1 (topology_discovery.cpp:700)
+2026-11-19 19:11:20.855 | info     |             UMD | Completed topology discovery. (topology_discovery.cpp:161)
+2026-11-19 19:11:21.118 | info     |             UMD | Opening local chip ids/PCIe ids: {0, 1, 2, 3, 4, 5, 6, 7}/[2, 3, 1, 0, 6, 7, 5, 4] and remote chip ids {} (cluster.cpp:174)
+2026-11-19 19:11:21.118 | info     |             UMD | IOMMU: enabled (cluster.cpp:148)
+2026-11-19 19:11:21.118 | info     |             UMD | KMD version: 2.9.0 (cluster.cpp:151)
+2026-11-19 19:11:21.118 | info     |             UMD | Cluster constructor completed. (cluster.cpp:893)
+2026-11-19 19:11:21.126 | info     |             UMD | Starting devices in cluster (cluster.cpp:1482)
+2026-11-19 19:11:21.520 | info     |             UMD | Starting devices in cluster completed. (cluster.cpp:1491)
+2026-11-19 19:11:21.662 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:571)
+2026-11-19 19:11:21.662 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:624)
+2026-11-19 19:11:21.794 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using distributed::MeshDevice::create_unit_meshes(). (device_manager.cpp:265)
+2026-11-19 19:11:22.500 | DEBUG    | ttnn:manage_config:60 - Restored ttnn.CONFIG.report_name to None
+2026-11-19 19:11:22.501 | DEBUG    | ttnn:manage_config:53 - Set ttnn.CONFIG.report_name to test_conv2d_3x3_kw_fold_test_conv2d_3x3_kw_fold_forced[_22021728
+2026-11-19 19:11:22.511 | DEBUG    | ttnn:manage_config:60 - Restored ttnn.CONFIG.report_name to None
+2026-11-19 19:11:22.512 | DEBUG    | ttnn:manage_config:53 - Set ttnn.CONFIG.report_name to test_conv2d_3x3_kw_fold_test_conv2d_3x3_kw_fold_forced[_2ecef993
+2026-11-19 19:11:22.519 | DEBUG    | ttnn:manage_config:60 - Restored ttnn.CONFIG.report_name to None
+2026-11-19 19:11:22.520 | DEBUG    | ttnn:manage_config:53 - Set ttnn.CONFIG.report_name to test_conv2d_3x3_kw_fold_test_conv2d_3x3_kw_fold_forced[_774c1b89
+2026-11-19 19:11:22.529 | DEBUG    | ttnn:manage_config:60 - Restored ttnn.CONFIG.report_name to None
+2026-11-19 19:11:22.530 | DEBUG    | ttnn:manage_config:53 - Set ttnn.CONFIG.report_name to test_conv2d_3x3_kw_fold_test_conv2d_3x3_kw_fold_forced[_5dcb74e3
+2026-11-19 19:11:22.538 | DEBUG    | ttnn:manage_config:60 - Restored ttnn.CONFIG.report_name to None
+2026-11-19 19:11:22.539 | DEBUG    | ttnn:manage_config:53 - Set ttnn.CONFIG.report_name to test_conv2d_3x3_kw_fold_test_conv2d_3x3_kw_fold_forced[_c475df61
+2026-11-19 19:11:22.549 | DEBUG    | ttnn:manage_config:60 - Restored ttnn.CONFIG.report_name to None
+2026-11-19 19:11:22.550 | DEBUG    | ttnn:manage_config:53 - Set ttnn.CONFIG.report_name to test_conv2d_3x3_kw_fold_test_conv2d_3x3_kw_fold_forced[_d60c6a70
+2026-11-19 19:11:22.567 | DEBUG    | ttnn:manage_config:60 - Restored ttnn.CONFIG.report_name to None
+2026-11-19 19:11:22.568 | DEBUG    | ttnn:manage_config:53 - Set ttnn.CONFIG.report_name to test_conv2d_3x3_kw_fold_test_conv2d_3x3_kw_fold_forced[_8976cae0
+2026-11-19 19:11:22.579 | DEBUG    | ttnn:manage_config:60 - Restored ttnn.CONFIG.report_name to None
+2026-11-19 19:11:22.580 | DEBUG    | ttnn:manage_config:53 - Set ttnn.CONFIG.report_name to test_conv2d_3x3_kw_fold_test_conv2d_3x3_kw_fold_forced[_bbb341a3
+2026-11-19 19:11:22.605 | DEBUG    | ttnn:manage_config:60 - Restored ttnn.CONFIG.report_name to None
+2026-11-19 19:11:22.606 | DEBUG    | ttnn:manage_config:53 - Set ttnn.CONFIG.report_name to test_conv2d_3x3_kw_fold_test_conv2d_3x3_kw_fold_forced[_f5c2513a
+2026-11-19 19:11:22.621 | DEBUG    | ttnn:manage_config:60 - Restored ttnn.CONFIG.report_name to None
+2026-11-19 19:11:22.622 | DEBUG    | ttnn:manage_config:53 - Set ttnn.CONFIG.report_name to test_conv2d_3x3_kw_fold_test_conv2d_3x3_kw_fold_forced[_804d4812
+2026-11-19 19:11:22.632 | DEBUG    | ttnn:manage_config:60 - Restored ttnn.CONFIG.report_name to None
+2026-11-19 19:11:22.634 | DEBUG    | ttnn:manage_config:53 - Set ttnn.CONFIG.report_name to test_conv2d_3x3_kw_fold_test_conv2d_3x3_kw_fold_forced[_7344d3ea
+2026-11-19 19:11:22.653 | DEBUG    | ttnn:manage_config:60 - Restored ttnn.CONFIG.report_name to None
+2026-11-19 19:11:22.654 | DEBUG    | ttnn:manage_config:53 - Set ttnn.CONFIG.report_name to test_conv2d_3x3_kw_fold_test_conv2d_3x3_kw_fold_halo_ex_2933b55e
+2026-11-19 19:11:22.687 | DEBUG    | ttnn:manage_config:60 - Restored ttnn.CONFIG.report_name to None
+2026-11-19 19:11:22.688 | DEBUG    | ttnn:manage_config:53 - Set ttnn.CONFIG.report_name to test_conv2d_3x3_kw_fold_test_conv2d_3x3_kw_fold_halo_ex_dea2266f
+2026-11-19 19:11:22.717 | DEBUG    | ttnn:manage_config:60 - Restored ttnn.CONFIG.report_name to None
+2026-11-19 19:11:22.719 | DEBUG    | ttnn:manage_config:53 - Set ttnn.CONFIG.report_name to test_conv2d_3x3_kw_fold_test_conv2d_3x3_kw_fold_halo_ex_123cc960
+2026-11-19 19:11:22.769 | DEBUG    | ttnn:manage_config:60 - Restored ttnn.CONFIG.report_name to None
+2026-11-19 19:11:22.770 | DEBUG    | ttnn:manage_config:53 - Set ttnn.CONFIG.report_name to test_conv2d_3x3_kw_fold_test_conv2d_3x3_kw_fold_halo_ex_ea824193
+2026-11-19 19:11:22.805 | DEBUG    | ttnn:manage_config:60 - Restored ttnn.CONFIG.report_name to None
+2026-11-19 19:11:22.807 | DEBUG    | ttnn:manage_config:53 - Set ttnn.CONFIG.report_name to test_conv2d_3x3_kw_fold_test_conv2d_3x3_kw_fold_halo_ex_544c84d9
+2026-11-19 19:11:22.853 | DEBUG    | ttnn:manage_config:60 - Restored ttnn.CONFIG.report_name to None
+2026-11-19 19:11:22.855 | DEBUG    | ttnn:manage_config:53 - Set ttnn.CONFIG.report_name to test_conv2d_3x3_kw_fold_test_conv2d_3x3_kw_fold_halo_ex_110244c3
+2026-11-19 19:11:22.884 | DEBUG    | ttnn:manage_config:60 - Restored ttnn.CONFIG.report_name to None
+2026-11-19 19:11:22.885 | DEBUG    | ttnn:manage_config:53 - Set ttnn.CONFIG.report_name to test_conv2d_3x3_kw_fold_test_conv2d_3x3_kw_fold_halo_ex_343b68fd
+2026-11-19 19:11:22.901 | DEBUG    | ttnn:manage_config:60 - Restored ttnn.CONFIG.report_name to None
+2026-11-19 19:11:22.903 | DEBUG    | ttnn:manage_config:53 - Set ttnn.CONFIG.report_name to test_conv2d_3x3_kw_fold_test_conv2d_3x3_kw_fold_halo_ex_ab9dcd8b
+2026-11-19 19:11:22.923 | DEBUG    | ttnn:manage_config:60 - Restored ttnn.CONFIG.report_name to None
+2026-11-19 19:11:22.925 | DEBUG    | ttnn:manage_config:53 - Set ttnn.CONFIG.report_name to test_conv2d_3x3_kw_fold_test_conv2d_3x3_kw_fold_halo_ex_75b9f292
+2026-11-19 19:11:22.939 | DEBUG    | ttnn:manage_config:60 - Restored ttnn.CONFIG.report_name to None
+2026-11-19 19:11:22.940 | DEBUG    | ttnn:manage_config:53 - Set ttnn.CONFIG.report_name to test_conv2d_3x3_kw_fold_test_conv2d_3x3_kw_fold_halo_ex_8df66834
+2026-11-19 19:11:22.956 | DEBUG    | ttnn:manage_config:60 - Restored ttnn.CONFIG.report_name to None
+2026-11-19 19:11:22.957 | DEBUG    | ttnn:manage_config:53 - Set ttnn.CONFIG.report_name to test_conv2d_3x3_kw_fold_test_conv2d_3x3_kw_fold_halo_ex_f21b1d6e
+2026-11-19 19:11:22.984 | DEBUG    | ttnn:manage_config:60 - Restored ttnn.CONFIG.report_name to None
+2026-11-19 19:11:22.985 | DEBUG    | ttnn:manage_config:53 - Set ttnn.CONFIG.report_name to test_conv2d_3x3_kw_fold_test_conv2d_3x3_kw_fold_halo_ex_2ba9e9af
+2026-11-19 19:11:23.006 | DEBUG    | ttnn:manage_config:60 - Restored ttnn.CONFIG.report_name to None
+2026-11-19 19:11:23.007 | DEBUG    | ttnn:manage_config:53 - Set ttnn.CONFIG.report_name to test_conv2d_3x3_kw_fold_test_conv2d_3x3_kw_fold_halo_ex_5c7a5c40
+2026-11-19 19:11:23.023 | DEBUG    | ttnn:manage_config:60 - Restored ttnn.CONFIG.report_name to None
+2026-11-19 19:11:23.043 | DEBUG    | ttnn:manage_config:53 - Set ttnn.CONFIG.report_name to test_conv2d_3x3_height_sharded_test_conv2d_3x3_height_s_64eaab49
+2026-11-19 19:11:23.208 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using distributed::MeshDevice::create_unit_meshes(). (device_manager.cpp:265)
+2026-11-19 19:11:23.297 | DEBUG    | ttnn:manage_config:60 - Restored ttnn.CONFIG.report_name to None
+2026-11-19 19:11:23.298 | DEBUG    | ttnn:manage_config:53 - Set ttnn.CONFIG.report_name to test_conv2d_3x3_height_sharded_test_conv2d_3x3_height_s_5bd0e305
+2026-11-19 19:11:23.304 | DEBUG    | ttnn:manage_config:60 - Restored ttnn.CONFIG.report_name to None
+2026-11-19 19:11:23.305 | DEBUG    | ttnn:manage_config:53 - Set ttnn.CONFIG.report_name to test_conv2d_3x3_height_sharded_test_conv2d_3x3_height_s_3c692983
+2026-11-19 19:11:23.310 | DEBUG    | ttnn:manage_config:60 - Restored ttnn.CONFIG.report_name to None
+2026-11-19 19:11:23.311 | DEBUG    | ttnn:manage_config:53 - Set ttnn.CONFIG.report_name to test_conv2d_3x3_height_sharded_test_conv2d_3x3_height_s_34c0b156
+2026-11-19 19:11:23.316 | DEBUG    | ttnn:manage_config:60 - Restored ttnn.CONFIG.report_name to None
+2026-11-19 19:11:23.317 | DEBUG    | ttnn:manage_config:53 - Set ttnn.CONFIG.report_name to test_conv2d_3x3_height_sharded_test_conv2d_3x3_height_s_6f1494af
+2026-11-19 19:11:23.322 | DEBUG    | ttnn:manage_config:60 - Restored ttnn.CONFIG.report_name to None
+2026-11-19 19:11:23.323 | DEBUG    | ttnn:manage_config:53 - Set ttnn.CONFIG.report_name to test_conv2d_3x3_height_sharded_test_conv2d_3x3_height_s_716ef954
+2026-11-19 19:11:23.328 | DEBUG    | ttnn:manage_config:60 - Restored ttnn.CONFIG.report_name to None
+2026-11-19 19:11:23.329 | DEBUG    | ttnn:manage_config:53 - Set ttnn.CONFIG.report_name to test_conv2d_3x3_height_sharded_test_conv2d_3x3_height_s_1efc0f34
+2026-11-19 19:11:23.333 | DEBUG    | ttnn:manage_config:60 - Restored ttnn.CONFIG.report_name to None
+2026-11-19 19:11:23.334 | DEBUG    | ttnn:manage_config:53 - Set ttnn.CONFIG.report_name to test_conv2d_3x3_height_sharded_test_conv2d_3x3_height_s_94756088
+2026-11-19 19:11:23.339 | DEBUG    | ttnn:manage_config:60 - Restored ttnn.CONFIG.report_name to None
+2026-11-19 19:11:23.340 | DEBUG    | ttnn:manage_config:53 - Set ttnn.CONFIG.report_name to test_conv2d_3x3_height_sharded_test_conv2d_3x3_height_s_b9528196
+2026-11-19 19:11:23.344 | DEBUG    | ttnn:manage_config:60 - Restored ttnn.CONFIG.report_name to None
+2026-11-19 19:11:23.345 | DEBUG    | ttnn:manage_config:53 - Set ttnn.CONFIG.report_name to test_conv2d_3x3_height_sharded_test_conv2d_3x3_height_s_993ce9d2
+2026-11-19 19:11:23.350 | DEBUG    | ttnn:manage_config:60 - Restored ttnn.CONFIG.report_name to None
+2026-11-19 19:11:23.350 | DEBUG    | ttnn:manage_config:53 - Set ttnn.CONFIG.report_name to test_conv2d_3x3_height_sharded_test_conv2d_3x3_height_s_573877ba
+2026-11-19 19:11:23.355 | DEBUG    | ttnn:manage_config:60 - Restored ttnn.CONFIG.report_name to None
+2026-11-19 19:11:23.356 | DEBUG    | ttnn:manage_config:53 - Set ttnn.CONFIG.report_name to test_conv2d_3x3_height_sharded_test_conv2d_3x3_height_s_e337b0e5
+2026-11-19 19:11:23.360 | DEBUG    | ttnn:manage_config:60 - Restored ttnn.CONFIG.report_name to None
+2026-11-19 19:11:23.361 | DEBUG    | ttnn:manage_config:53 - Set ttnn.CONFIG.report_name to test_conv2d_3x3_height_sharded_test_conv2d_3x3_height_s_c0ee1215
+2026-11-19 19:11:23.367 | DEBUG    | ttnn:manage_config:60 - Restored ttnn.CONFIG.report_name to None
+2026-11-19 19:11:23.368 | DEBUG    | ttnn:manage_config:53 - Set ttnn.CONFIG.report_name to test_conv2d_3x3_height_sharded_test_conv2d_3x3_height_s_a52f87b6
+2026-11-19 19:11:23.374 | DEBUG    | ttnn:manage_config:60 - Restored ttnn.CONFIG.report_name to None
+2026-11-19 19:11:23.375 | DEBUG    | ttnn:manage_config:53 - Set ttnn.CONFIG.report_name to test_conv2d_3x3_height_sharded_test_conv2d_3x3_height_s_69db123e
+2026-11-19 19:11:23.382 | DEBUG    | ttnn:manage_config:60 - Restored ttnn.CONFIG.report_name to None
+2026-11-19 19:11:23.382 | DEBUG    | ttnn:manage_config:53 - Set ttnn.CONFIG.report_name to test_conv2d_3x3_height_sharded_test_conv2d_3x3_height_s_ccf9dd7f
+2026-11-19 19:11:23.388 | DEBUG    | ttnn:manage_config:60 - Restored ttnn.CONFIG.report_name to None
+2026-11-19 19:11:23.389 | DEBUG    | ttnn:manage_config:53 - Set ttnn.CONFIG.report_name to test_conv2d_3x3_height_sharded_test_conv2d_3x3_height_s_34bc290b
+2026-11-19 19:11:23.396 | DEBUG    | ttnn:manage_config:60 - Restored ttnn.CONFIG.report_name to None
+2026-11-19 19:11:23.397 | DEBUG    | ttnn:manage_config:53 - Set ttnn.CONFIG.report_name to test_conv2d_3x3_height_sharded_test_conv2d_3x3_height_s_2862ae8c
+2026-11-19 19:11:23.403 | DEBUG    | ttnn:manage_config:60 - Restored ttnn.CONFIG.report_name to None
+2026-11-19 19:11:23.404 | DEBUG    | ttnn:manage_config:53 - Set ttnn.CONFIG.report_name to test_conv2d_3x3_height_sharded_test_conv2d_3x3_height_s_b3a1a80f
+2026-11-19 19:11:23.409 | DEBUG    | ttnn:manage_config:60 - Restored ttnn.CONFIG.report_name to None
+2026-11-19 19:11:23.410 | DEBUG    | ttnn:manage_config:53 - Set ttnn.CONFIG.report_name to test_conv2d_3x3_height_sharded_test_conv2d_3x3_height_s_328e1866
+2026-11-19 19:11:23.415 | DEBUG    | ttnn:manage_config:60 - Restored ttnn.CONFIG.report_name to None
+2026-11-19 19:11:23.416 | DEBUG    | ttnn:manage_config:53 - Set ttnn.CONFIG.report_name to test_conv2d_3x3_height_sharded_test_conv2d_3x3_height_s_ca4ebb46
+2026-11-19 19:11:23.421 | DEBUG    | ttnn:manage_config:60 - Restored ttnn.CONFIG.report_name to None
+2026-11-19 19:11:23.422 | DEBUG    | ttnn:manage_config:53 - Set ttnn.CONFIG.report_name to test_conv2d_3x3_height_sharded_test_conv2d_3x3_height_s_79cff507
+2026-11-19 19:11:23.427 | DEBUG    | ttnn:manage_config:60 - Restored ttnn.CONFIG.report_name to None
+2026-11-19 19:11:23.427 | DEBUG    | ttnn:manage_config:53 - Set ttnn.CONFIG.report_name to test_conv2d_3x3_height_sharded_test_conv2d_3x3_height_s_9b220555
+2026-11-19 19:11:23.432 | DEBUG    | ttnn:manage_config:60 - Restored ttnn.CONFIG.report_name to None
+2026-11-19 19:11:23.433 | DEBUG    | ttnn:manage_config:53 - Set ttnn.CONFIG.report_name to test_conv2d_3x3_height_sharded_test_conv2d_3x3_height_s_0b6beb2c
+2026-11-19 19:11:23.438 | DEBUG    | ttnn:manage_config:60 - Restored ttnn.CONFIG.report_name to None
+2026-11-19 19:11:23.439 | DEBUG    | ttnn:manage_config:53 - Set ttnn.CONFIG.report_name to test_conv2d_3x3_height_sharded_test_conv2d_3x3_height_s_dc09c5e6
+2026-11-19 19:11:23.447 | DEBUG    | ttnn:manage_config:60 - Restored ttnn.CONFIG.report_name to None
+2026-11-19 19:11:23.448 | DEBUG    | ttnn:manage_config:53 - Set ttnn.CONFIG.report_name to test_conv2d_3x3_height_sharded_test_conv2d_3x3_height_s_887c5c26
+2026-11-19 19:11:23.457 | DEBUG    | ttnn:manage_config:60 - Restored ttnn.CONFIG.report_name to None
+2026-11-19 19:11:23.458 | DEBUG    | ttnn:manage_config:53 - Set ttnn.CONFIG.report_name to test_conv2d_3x3_height_sharded_test_conv2d_3x3_height_s_11db7a73
+2026-11-19 19:11:23.467 | DEBUG    | ttnn:manage_config:60 - Restored ttnn.CONFIG.report_name to None
+2026-11-19 19:11:23.468 | DEBUG    | ttnn:manage_config:53 - Set ttnn.CONFIG.report_name to test_conv2d_3x3_height_sharded_test_conv2d_3x3_height_s_979323ca
+2026-11-19 19:11:23.475 | DEBUG    | ttnn:manage_config:60 - Restored ttnn.CONFIG.report_name to None
+2026-11-19 19:11:23.476 | DEBUG    | ttnn:manage_config:53 - Set ttnn.CONFIG.report_name to test_conv2d_3x3_height_sharded_test_conv2d_3x3_height_s_d84f15e8
+2026-11-19 19:11:23.481 | DEBUG    | ttnn:manage_config:60 - Restored ttnn.CONFIG.report_name to None
+2026-11-19 19:11:23.482 | DEBUG    | ttnn:manage_config:53 - Set ttnn.CONFIG.report_name to test_conv2d_3x3_height_sharded_test_conv2d_3x3_height_s_eb697195
+2026-11-19 19:11:23.488 | DEBUG    | ttnn:manage_config:60 - Restored ttnn.CONFIG.report_name to None
+2026-11-19 19:11:23.489 | DEBUG    | ttnn:manage_config:53 - Set ttnn.CONFIG.report_name to test_conv2d_3x3_height_sharded_test_conv2d_3x3_height_s_12e67a8a
+2026-11-19 19:11:23.496 | DEBUG    | ttnn:manage_config:60 - Restored ttnn.CONFIG.report_name to None
+2026-11-19 19:11:23.497 | DEBUG    | ttnn:manage_config:53 - Set ttnn.CONFIG.report_name to test_conv2d_3x3_height_sharded_test_conv2d_3x3_height_s_3c16ca32
+2026-11-19 19:11:23.502 | DEBUG    | ttnn:manage_config:60 - Restored ttnn.CONFIG.report_name to None
+2026-11-19 19:11:23.503 | DEBUG    | ttnn:manage_config:53 - Set ttnn.CONFIG.report_name to test_conv2d_3x3_height_sharded_test_conv2d_3x3_height_s_c3f95d60
+2026-11-19 19:11:23.509 | DEBUG    | ttnn:manage_config:60 - Restored ttnn.CONFIG.report_name to None
+2026-11-19 19:11:23.510 | DEBUG    | ttnn:manage_config:53 - Set ttnn.CONFIG.report_name to test_conv2d_3x3_height_sharded_test_conv2d_3x3_height_s_41db9093
+2026-11-19 19:11:23.515 | DEBUG    | ttnn:manage_config:60 - Restored ttnn.CONFIG.report_name to None
+2026-11-19 19:11:23.516 | DEBUG    | ttnn:manage_config:53 - Set ttnn.CONFIG.report_name to test_conv2d_3x3_height_sharded_test_conv2d_3x3_height_s_ce4bd46b
+2026-11-19 19:11:23.521 | DEBUG    | ttnn:manage_config:60 - Restored ttnn.CONFIG.report_name to None
+2026-11-19 19:11:23.522 | DEBUG    | ttnn:manage_config:53 - Set ttnn.CONFIG.report_name to test_conv2d_3x3_height_sharded_test_conv2d_3x3_height_s_ae1614d7
+2026-11-19 19:11:23.527 | DEBUG    | ttnn:manage_config:60 - Restored ttnn.CONFIG.report_name to None
+2026-11-19 19:11:23.528 | DEBUG    | ttnn:manage_config:53 - Set ttnn.CONFIG.report_name to test_conv2d_3x3_height_sharded_test_conv2d_3x3_height_s_61f152c4
+2026-11-19 19:11:23.533 | DEBUG    | ttnn:manage_config:60 - Restored ttnn.CONFIG.report_name to None
+2026-11-19 19:11:23.534 | DEBUG    | ttnn:manage_config:53 - Set ttnn.CONFIG.report_name to test_conv2d_3x3_height_sharded_test_conv2d_3x3_height_s_4567c46c
+2026-11-19 19:11:23.539 | DEBUG    | ttnn:manage_config:60 - Restored ttnn.CONFIG.report_name to None
+2026-11-19 19:11:23.540 | DEBUG    | ttnn:manage_config:53 - Set ttnn.CONFIG.report_name to test_conv2d_3x3_height_sharded_test_conv2d_3x3_height_s_a368b424
+2026-11-19 19:11:23.545 | DEBUG    | ttnn:manage_config:60 - Restored ttnn.CONFIG.report_name to None
+2026-11-19 19:11:23.546 | DEBUG    | ttnn:manage_config:53 - Set ttnn.CONFIG.report_name to test_conv2d_3x3_height_sharded_test_conv2d_3x3_height_s_63d91109
+2026-11-19 19:11:23.551 | DEBUG    | ttnn:manage_config:60 - Restored ttnn.CONFIG.report_name to None
+2026-11-19 19:11:23.551 | DEBUG    | ttnn:manage_config:53 - Set ttnn.CONFIG.report_name to test_conv2d_3x3_height_sharded_test_conv2d_3x3_height_s_48406d79
+2026-11-19 19:11:23.557 | DEBUG    | ttnn:manage_config:60 - Restored ttnn.CONFIG.report_name to None
+collected 66 items
+
+UP_FRONT_INLINE: collect pass over 66 item(s) took 2.7s
+UP_FRONT_INLINE: compile route local (programs=78, farm_min=10)
+
+UP_FRONT_COLLECT: 98 ops stashed across 66 bodies -> 78 unique programs (swallowed 0, skipped-capture 0)
+UP_FRONT_COLLECT: fast-shallow from_torch — shape-only=272 fallback=0
+2026-11-19 19:11:23.740 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using distributed::MeshDevice::create_unit_meshes(). (device_manager.cpp:265)
+2026-11-19 19:11:23.821 | info     |           Metal | Enabling program cache on MeshDevice 5 (mesh_device.cpp:1322)
+UP_FRONT_COLLECT: 78 collected · 78 built · 0 already compiled in 10.4s (workers=64, errors=0) -> on-disk JIT cache warm
+UP_FRONT_COLLECT_RESULT: status=ok reason=ok unique=78 programs=78 errors=0 pytest_exit=0 xpass_strict=0 other_failures=0 built=78 compile_s=10.6 collect_s=2.7 route=local
+UP_FRONT_INLINE: compile step took 10.6s; starting the real pass
+
+tests/ttnn/unit_tests/operations/conv2d_3x3/test_conv2d_3x3_kw_fold.py::test_conv2d_3x3_kw_fold_forced[n1_bf8] 2026-11-19 19:11:34.223 | DEBUG    | ttnn:manage_config:53 - Set ttnn.CONFIG.report_name to test_conv2d_3x3_kw_fold_test_conv2d_3x3_kw_fold_forced[_dd342f76
+2026-11-19 19:11:34.391 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using distributed::MeshDevice::create_unit_meshes(). (device_manager.cpp:265)
+PASSED2026-11-19 19:11:34.487 | DEBUG    | ttnn:manage_config:60 - Restored ttnn.CONFIG.report_name to None
+
+tests/ttnn/unit_tests/operations/conv2d_3x3/test_conv2d_3x3_kw_fold.py::test_conv2d_3x3_kw_fold_forced[bf16_bias_kblocked] 2026-11-19 19:11:34.489 | DEBUG    | ttnn:manage_config:53 - Set ttnn.CONFIG.report_name to test_conv2d_3x3_kw_fold_test_conv2d_3x3_kw_fold_forced[_22021728
+PASSED2026-11-19 19:11:34.500 | DEBUG    | ttnn:manage_config:60 - Restored ttnn.CONFIG.report_name to None
+
+tests/ttnn/unit_tests/operations/conv2d_3x3/test_conv2d_3x3_kw_fold.py::test_conv2d_3x3_kw_fold_forced[bf16_act_bf8_w_hifi4] 2026-11-19 19:11:34.501 | DEBUG    | ttnn:manage_config:53 - Set ttnn.CONFIG.report_name to test_conv2d_3x3_kw_fold_test_conv2d_3x3_kw_fold_forced[_2ecef993
+PASSED2026-11-19 19:11:34.509 | DEBUG    | ttnn:manage_config:60 - Restored ttnn.CONFIG.report_name to None
+
+tests/ttnn/unit_tests/operations/conv2d_3x3/test_conv2d_3x3_kw_fold.py::test_conv2d_3x3_kw_fold_forced[d2_bf8] 2026-11-19 19:11:34.510 | DEBUG    | ttnn:manage_config:53 - Set ttnn.CONFIG.report_name to test_conv2d_3x3_kw_fold_test_conv2d_3x3_kw_fold_forced[_774c1b89
+PASSED2026-11-19 19:11:34.521 | DEBUG    | ttnn:manage_config:60 - Restored ttnn.CONFIG.report_name to None
+
+tests/ttnn/unit_tests/operations/conv2d_3x3/test_conv2d_3x3_kw_fold.py::test_conv2d_3x3_kw_fold_forced[cout48_bf8] 2026-11-19 19:11:34.522 | DEBUG    | ttnn:manage_config:53 - Set ttnn.CONFIG.report_name to test_conv2d_3x3_kw_fold_test_conv2d_3x3_kw_fold_forced[_5dcb74e3
+PASSED2026-11-19 19:11:34.532 | DEBUG    | ttnn:manage_config:60 - Restored ttnn.CONFIG.report_name to None
+
+tests/ttnn/unit_tests/operations/conv2d_3x3/test_conv2d_3x3_kw_fold.py::test_conv2d_3x3_kw_fold_forced[multiblock_bf8] 2026-11-19 19:11:34.533 | DEBUG    | ttnn:manage_config:53 - Set ttnn.CONFIG.report_name to test_conv2d_3x3_kw_fold_test_conv2d_3x3_kw_fold_forced[_c475df61
+PASSED2026-11-19 19:11:34.548 | DEBUG    | ttnn:manage_config:60 - Restored ttnn.CONFIG.report_name to None
+
+tests/ttnn/unit_tests/operations/conv2d_3x3/test_conv2d_3x3_kw_fold.py::test_conv2d_3x3_kw_fold_forced[kblocked_multiblock_hifi4] 2026-11-19 19:11:34.550 | DEBUG    | ttnn:manage_config:53 - Set ttnn.CONFIG.report_name to test_conv2d_3x3_kw_fold_test_conv2d_3x3_kw_fold_forced[_d60c6a70
+PASSED2026-11-19 19:11:34.584 | DEBUG    | ttnn:manage_config:60 - Restored ttnn.CONFIG.report_name to None
+
+tests/ttnn/unit_tests/operations/conv2d_3x3/test_conv2d_3x3_kw_fold.py::test_conv2d_3x3_kw_fold_forced[ragged_bf8] 2026-11-19 19:11:34.586 | DEBUG    | ttnn:manage_config:53 - Set ttnn.CONFIG.report_name to test_conv2d_3x3_kw_fold_test_conv2d_3x3_kw_fold_forced[_8976cae0
+PASSED2026-11-19 19:11:34.597 | DEBUG    | ttnn:manage_config:60 - Restored ttnn.CONFIG.report_name to None
+
+tests/ttnn/unit_tests/operations/conv2d_3x3/test_conv2d_3x3_kw_fold.py::test_conv2d_3x3_kw_fold_forced[many_blocks_whole_k] 2026-11-19 19:11:34.598 | DEBUG    | ttnn:manage_config:53 - Set ttnn.CONFIG.report_name to test_conv2d_3x3_kw_fold_test_conv2d_3x3_kw_fold_forced[_bbb341a3
+PASSED2026-11-19 19:11:34.621 | DEBUG    | ttnn:manage_config:60 - Restored ttnn.CONFIG.report_name to None
+
+tests/ttnn/unit_tests/operations/conv2d_3x3/test_conv2d_3x3_kw_fold.py::test_conv2d_3x3_kw_fold_forced[many_blocks_kblocked] 2026-11-19 19:11:34.623 | DEBUG    | ttnn:manage_config:53 - Set ttnn.CONFIG.report_name to test_conv2d_3x3_kw_fold_test_conv2d_3x3_kw_fold_forced[_f5c2513a
+PASSED2026-11-19 19:11:34.646 | DEBUG    | ttnn:manage_config:60 - Restored ttnn.CONFIG.report_name to None
+
+tests/ttnn/unit_tests/operations/conv2d_3x3/test_conv2d_3x3_kw_fold.py::test_conv2d_3x3_kw_fold_forced[kblocked_n2] 2026-11-19 19:11:34.648 | DEBUG    | ttnn:manage_config:53 - Set ttnn.CONFIG.report_name to test_conv2d_3x3_kw_fold_test_conv2d_3x3_kw_fold_forced[_804d4812
+PASSED2026-11-19 19:11:34.670 | DEBUG    | ttnn:manage_config:60 - Restored ttnn.CONFIG.report_name to None
+
+tests/ttnn/unit_tests/operations/conv2d_3x3/test_conv2d_3x3_kw_fold.py::test_conv2d_3x3_kw_fold_forced[kblocked_n10] 2026-11-19 19:11:34.671 | DEBUG    | ttnn:manage_config:53 - Set ttnn.CONFIG.report_name to test_conv2d_3x3_kw_fold_test_conv2d_3x3_kw_fold_forced[_7344d3ea
+PASSED2026-11-19 19:11:34.699 | DEBUG    | ttnn:manage_config:60 - Restored ttnn.CONFIG.report_name to None
+
+tests/ttnn/unit_tests/operations/conv2d_3x3/test_conv2d_3x3_kw_fold.py::test_conv2d_3x3_kw_fold_halo_exchange[kblocked_lofi] 2026-11-19 19:11:34.701 | DEBUG    | ttnn:manage_config:53 - Set ttnn.CONFIG.report_name to test_conv2d_3x3_kw_fold_test_conv2d_3x3_kw_fold_halo_ex_2933b55e
+PASSED2026-11-19 19:11:34.743 | DEBUG    | ttnn:manage_config:60 - Restored ttnn.CONFIG.report_name to None
+
+tests/ttnn/unit_tests/operations/conv2d_3x3/test_conv2d_3x3_kw_fold.py::test_conv2d_3x3_kw_fold_halo_exchange[kblocked_hifi4] 2026-11-19 19:11:34.745 | DEBUG    | ttnn:manage_config:53 - Set ttnn.CONFIG.report_name to test_conv2d_3x3_kw_fold_test_conv2d_3x3_kw_fold_halo_ex_dea2266f
+PASSED2026-11-19 19:11:34.797 | DEBUG    | ttnn:manage_config:60 - Restored ttnn.CONFIG.report_name to None
+
+tests/ttnn/unit_tests/operations/conv2d_3x3/test_conv2d_3x3_kw_fold.py::test_conv2d_3x3_kw_fold_halo_exchange[kblocked_two_planes] 2026-11-19 19:11:34.799 | DEBUG    | ttnn:manage_config:53 - Set ttnn.CONFIG.report_name to test_conv2d_3x3_kw_fold_test_conv2d_3x3_kw_fold_halo_ex_123cc960
+PASSED2026-11-19 19:11:34.869 | DEBUG    | ttnn:manage_config:60 - Restored ttnn.CONFIG.report_name to None
+
+tests/ttnn/unit_tests/operations/conv2d_3x3/test_conv2d_3x3_kw_fold.py::test_conv2d_3x3_kw_fold_halo_exchange[kblocked_few_cores] 2026-11-19 19:11:34.870 | DEBUG    | ttnn:manage_config:53 - Set ttnn.CONFIG.report_name to test_conv2d_3x3_kw_fold_test_conv2d_3x3_kw_fold_halo_ex_ea824193
+PASSED2026-11-19 19:11:34.903 | DEBUG    | ttnn:manage_config:60 - Restored ttnn.CONFIG.report_name to None
+
+tests/ttnn/unit_tests/operations/conv2d_3x3/test_conv2d_3x3_kw_fold.py::test_conv2d_3x3_kw_fold_halo_exchange[kblocked_no_server] 2026-11-19 19:11:34.905 | DEBUG    | ttnn:manage_config:53 - Set ttnn.CONFIG.report_name to test_conv2d_3x3_kw_fold_test_conv2d_3x3_kw_fold_halo_ex_544c84d9
+PASSED2026-11-19 19:11:34.964 | DEBUG    | ttnn:manage_config:60 - Restored ttnn.CONFIG.report_name to None
+
+tests/ttnn/unit_tests/operations/conv2d_3x3/test_conv2d_3x3_kw_fold.py::test_conv2d_3x3_kw_fold_halo_exchange[d2_bf8] 2026-11-19 19:11:34.966 | DEBUG    | ttnn:manage_config:53 - Set ttnn.CONFIG.report_name to test_conv2d_3x3_kw_fold_test_conv2d_3x3_kw_fold_halo_ex_110244c3
+PASSED2026-11-19 19:11:35.002 | DEBUG    | ttnn:manage_config:60 - Restored ttnn.CONFIG.report_name to None
+
+tests/ttnn/unit_tests/operations/conv2d_3x3/test_conv2d_3x3_kw_fold.py::test_conv2d_3x3_kw_fold_halo_exchange[n1_bf8] 2026-11-19 19:11:35.003 | DEBUG    | ttnn:manage_config:53 - Set ttnn.CONFIG.report_name to test_conv2d_3x3_kw_fold_test_conv2d_3x3_kw_fold_halo_ex_343b68fd
+PASSED2026-11-19 19:11:35.025 | DEBUG    | ttnn:manage_config:60 - Restored ttnn.CONFIG.report_name to None
+
+tests/ttnn/unit_tests/operations/conv2d_3x3/test_conv2d_3x3_kw_fold.py::test_conv2d_3x3_kw_fold_halo_exchange[n3_hifi2] 2026-11-19 19:11:35.027 | DEBUG    | ttnn:manage_config:53 - Set ttnn.CONFIG.report_name to test_conv2d_3x3_kw_fold_test_conv2d_3x3_kw_fold_halo_ex_ab9dcd8b
+PASSED2026-11-19 19:11:35.051 | DEBUG    | ttnn:manage_config:60 - Restored ttnn.CONFIG.report_name to None
+
+tests/ttnn/unit_tests/operations/conv2d_3x3/test_conv2d_3x3_kw_fold.py::test_conv2d_3x3_kw_fold_halo_exchange[ragged_one_row] 2026-11-19 19:11:35.053 | DEBUG    | ttnn:manage_config:53 - Set ttnn.CONFIG.report_name to test_conv2d_3x3_kw_fold_test_conv2d_3x3_kw_fold_halo_ex_75b9f292
+PASSED2026-11-19 19:11:35.068 | DEBUG    | ttnn:manage_config:60 - Restored ttnn.CONFIG.report_name to None
+
+tests/ttnn/unit_tests/operations/conv2d_3x3/test_conv2d_3x3_kw_fold.py::test_conv2d_3x3_kw_fold_halo_exchange[bf16] 2026-11-19 19:11:35.069 | DEBUG    | ttnn:manage_config:53 - Set ttnn.CONFIG.report_name to test_conv2d_3x3_kw_fold_test_conv2d_3x3_kw_fold_halo_ex_8df66834
+PASSED2026-11-19 19:11:35.085 | DEBUG    | ttnn:manage_config:60 - Restored ttnn.CONFIG.report_name to None
+
+tests/ttnn/unit_tests/operations/conv2d_3x3/test_conv2d_3x3_kw_fold.py::test_conv2d_3x3_kw_fold_halo_exchange[whole_k_n1] 2026-11-19 19:11:35.086 | DEBUG    | ttnn:manage_config:53 - Set ttnn.CONFIG.report_name to test_conv2d_3x3_kw_fold_test_conv2d_3x3_kw_fold_halo_ex_f21b1d6e
+PASSED2026-11-19 19:11:35.119 | DEBUG    | ttnn:manage_config:60 - Restored ttnn.CONFIG.report_name to None
+
+tests/ttnn/unit_tests/operations/conv2d_3x3/test_conv2d_3x3_kw_fold.py::test_conv2d_3x3_kw_fold_halo_exchange[kblocked_n2_hifi4] 2026-11-19 19:11:35.121 | DEBUG    | ttnn:manage_config:53 - Set ttnn.CONFIG.report_name to test_conv2d_3x3_kw_fold_test_conv2d_3x3_kw_fold_halo_ex_2ba9e9af
+PASSED2026-11-19 19:11:35.168 | DEBUG    | ttnn:manage_config:60 - Restored ttnn.CONFIG.report_name to None
+
+tests/ttnn/unit_tests/operations/conv2d_3x3/test_conv2d_3x3_kw_fold.py::test_conv2d_3x3_kw_fold_halo_exchange[whole_k_n2_one_row] 2026-11-19 19:11:35.170 | DEBUG    | ttnn:manage_config:53 - Set ttnn.CONFIG.report_name to test_conv2d_3x3_kw_fold_test_conv2d_3x3_kw_fold_halo_ex_5c7a5c40
+PASSED2026-11-19 19:11:35.186 | DEBUG    | ttnn:manage_config:60 - Restored ttnn.CONFIG.report_name to None
+
+tests/ttnn/unit_tests/operations/conv2d_3x3/test_conv2d_3x3_height_sharded.py::test_conv2d_3x3_height_sharded[H16_W16_Ci64_Co128_p1_s1_d1_shard64-rm_bf16-bias_relu] 2026-11-19 19:11:35.210 | DEBUG    | ttnn:manage_config:53 - Set ttnn.CONFIG.report_name to test_conv2d_3x3_height_sharded_test_conv2d_3x3_height_s_64eaab49
+2026-11-19 19:11:35.379 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using distributed::MeshDevice::create_unit_meshes(). (device_manager.cpp:265)
+PASSED2026-11-19 19:11:35.468 | DEBUG    | ttnn:manage_config:60 - Restored ttnn.CONFIG.report_name to None
+
+tests/ttnn/unit_tests/operations/conv2d_3x3/test_conv2d_3x3_height_sharded.py::test_conv2d_3x3_height_sharded[H16_W16_Ci64_Co128_p1_s1_d1_shard64-rm_bf16-plain] 2026-11-19 19:11:35.470 | DEBUG    | ttnn:manage_config:53 - Set ttnn.CONFIG.report_name to test_conv2d_3x3_height_sharded_test_conv2d_3x3_height_s_5bd0e305
+PASSED2026-11-19 19:11:35.475 | DEBUG    | ttnn:manage_config:60 - Restored ttnn.CONFIG.report_name to None
+
+tests/ttnn/unit_tests/operations/conv2d_3x3/test_conv2d_3x3_height_sharded.py::test_conv2d_3x3_height_sharded[H16_W16_Ci64_Co128_p1_s1_d1_shard64-tile_bf16-bias_relu] 2026-11-19 19:11:35.476 | DEBUG    | ttnn:manage_config:53 - Set ttnn.CONFIG.report_name to test_conv2d_3x3_height_sharded_test_conv2d_3x3_height_s_3c692983
+PASSED2026-11-19 19:11:35.481 | DEBUG    | ttnn:manage_config:60 - Restored ttnn.CONFIG.report_name to None
+
+tests/ttnn/unit_tests/operations/conv2d_3x3/test_conv2d_3x3_height_sharded.py::test_conv2d_3x3_height_sharded[H16_W16_Ci64_Co128_p1_s1_d1_shard64-tile_bf16-plain] 2026-11-19 19:11:35.482 | DEBUG    | ttnn:manage_config:53 - Set ttnn.CONFIG.report_name to test_conv2d_3x3_height_sharded_test_conv2d_3x3_height_s_34c0b156
+PASSED2026-11-19 19:11:35.488 | DEBUG    | ttnn:manage_config:60 - Restored ttnn.CONFIG.report_name to None
+
+tests/ttnn/unit_tests/operations/conv2d_3x3/test_conv2d_3x3_height_sharded.py::test_conv2d_3x3_height_sharded[H16_W16_Ci64_Co128_p1_s1_d1_shard64-tile_bf8b-bias_relu] 2026-11-19 19:11:35.489 | DEBUG    | ttnn:manage_config:53 - Set ttnn.CONFIG.report_name to test_conv2d_3x3_height_sharded_test_conv2d_3x3_height_s_6f1494af
+PASSED2026-11-19 19:11:35.493 | DEBUG    | ttnn:manage_config:60 - Restored ttnn.CONFIG.report_name to None
+
+tests/ttnn/unit_tests/operations/conv2d_3x3/test_conv2d_3x3_height_sharded.py::test_conv2d_3x3_height_sharded[H16_W16_Ci64_Co128_p1_s1_d1_shard64-tile_bf8b-plain] 2026-11-19 19:11:35.494 | DEBUG    | ttnn:manage_config:53 - Set ttnn.CONFIG.report_name to test_conv2d_3x3_height_sharded_test_conv2d_3x3_height_s_716ef954
+PASSED2026-11-19 19:11:35.500 | DEBUG    | ttnn:manage_config:60 - Restored ttnn.CONFIG.report_name to None
+
+tests/ttnn/unit_tests/operations/conv2d_3x3/test_conv2d_3x3_height_sharded.py::test_conv2d_3x3_height_sharded[H32_W32_Ci8_Co32_p1_s2_d1_shard96-rm_bf16-bias_relu] 2026-11-19 19:11:35.501 | DEBUG    | ttnn:manage_config:53 - Set ttnn.CONFIG.report_name to test_conv2d_3x3_height_sharded_test_conv2d_3x3_height_s_1efc0f34
+PASSED2026-11-19 19:11:35.505 | DEBUG    | ttnn:manage_config:60 - Restored ttnn.CONFIG.report_name to None
+
+tests/ttnn/unit_tests/operations/conv2d_3x3/test_conv2d_3x3_height_sharded.py::test_conv2d_3x3_height_sharded[H32_W32_Ci8_Co32_p1_s2_d1_shard96-rm_bf16-plain] 2026-11-19 19:11:35.506 | DEBUG    | ttnn:manage_config:53 - Set ttnn.CONFIG.report_name to test_conv2d_3x3_height_sharded_test_conv2d_3x3_height_s_94756088
+PASSED2026-11-19 19:11:35.509 | DEBUG    | ttnn:manage_config:60 - Restored ttnn.CONFIG.report_name to None
+
+tests/ttnn/unit_tests/operations/conv2d_3x3/test_conv2d_3x3_height_sharded.py::test_conv2d_3x3_height_sharded[H32_W32_Ci8_Co32_p1_s2_d1_shard96-tile_bf16-bias_relu] 2026-11-19 19:11:35.510 | DEBUG    | ttnn:manage_config:53 - Set ttnn.CONFIG.report_name to test_conv2d_3x3_height_sharded_test_conv2d_3x3_height_s_b9528196
+PASSED2026-11-19 19:11:35.513 | DEBUG    | ttnn:manage_config:60 - Restored ttnn.CONFIG.report_name to None
+
+tests/ttnn/unit_tests/operations/conv2d_3x3/test_conv2d_3x3_height_sharded.py::test_conv2d_3x3_height_sharded[H32_W32_Ci8_Co32_p1_s2_d1_shard96-tile_bf16-plain] 2026-11-19 19:11:35.514 | DEBUG    | ttnn:manage_config:53 - Set ttnn.CONFIG.report_name to test_conv2d_3x3_height_sharded_test_conv2d_3x3_height_s_993ce9d2
+PASSED2026-11-19 19:11:35.518 | DEBUG    | ttnn:manage_config:60 - Restored ttnn.CONFIG.report_name to None
+
+tests/ttnn/unit_tests/operations/conv2d_3x3/test_conv2d_3x3_height_sharded.py::test_conv2d_3x3_height_sharded[H32_W32_Ci8_Co32_p1_s2_d1_shard96-tile_bf8b-bias_relu] 2026-11-19 19:11:35.519 | DEBUG    | ttnn:manage_config:53 - Set ttnn.CONFIG.report_name to test_conv2d_3x3_height_sharded_test_conv2d_3x3_height_s_573877ba
+PASSED2026-11-19 19:11:35.522 | DEBUG    | ttnn:manage_config:60 - Restored ttnn.CONFIG.report_name to None
+
+tests/ttnn/unit_tests/operations/conv2d_3x3/test_conv2d_3x3_height_sharded.py::test_conv2d_3x3_height_sharded[H32_W32_Ci8_Co32_p1_s2_d1_shard96-tile_bf8b-plain] 2026-11-19 19:11:35.523 | DEBUG    | ttnn:manage_config:53 - Set ttnn.CONFIG.report_name to test_conv2d_3x3_height_sharded_test_conv2d_3x3_height_s_e337b0e5
+PASSED2026-11-19 19:11:35.527 | DEBUG    | ttnn:manage_config:60 - Restored ttnn.CONFIG.report_name to None
+
+tests/ttnn/unit_tests/operations/conv2d_3x3/test_conv2d_3x3_height_sharded.py::test_conv2d_3x3_height_sharded[H32_W64_Ci64_Co64_p8_s1_d8_shard64-rm_bf16-bias_relu] 2026-11-19 19:11:35.528 | DEBUG    | ttnn:manage_config:53 - Set ttnn.CONFIG.report_name to test_conv2d_3x3_height_sharded_test_conv2d_3x3_height_s_c0ee1215
+PASSED2026-11-19 19:11:35.535 | DEBUG    | ttnn:manage_config:60 - Restored ttnn.CONFIG.report_name to None
+
+tests/ttnn/unit_tests/operations/conv2d_3x3/test_conv2d_3x3_height_sharded.py::test_conv2d_3x3_height_sharded[H32_W64_Ci64_Co64_p8_s1_d8_shard64-rm_bf16-plain] 2026-11-19 19:11:35.537 | DEBUG    | ttnn:manage_config:53 - Set ttnn.CONFIG.report_name to test_conv2d_3x3_height_sharded_test_conv2d_3x3_height_s_a52f87b6
+PASSED2026-11-19 19:11:35.545 | DEBUG    | ttnn:manage_config:60 - Restored ttnn.CONFIG.report_name to None
+
+tests/ttnn/unit_tests/operations/conv2d_3x3/test_conv2d_3x3_height_sharded.py::test_conv2d_3x3_height_sharded[H32_W64_Ci64_Co64_p8_s1_d8_shard64-tile_bf16-bias_relu] 2026-11-19 19:11:35.546 | DEBUG    | ttnn:manage_config:53 - Set ttnn.CONFIG.report_name to test_conv2d_3x3_height_sharded_test_conv2d_3x3_height_s_69db123e
+PASSED2026-11-19 19:11:35.554 | DEBUG    | ttnn:manage_config:60 - Restored ttnn.CONFIG.report_name to None
+
+tests/ttnn/unit_tests/operations/conv2d_3x3/test_conv2d_3x3_height_sharded.py::test_conv2d_3x3_height_sharded[H32_W64_Ci64_Co64_p8_s1_d8_shard64-tile_bf16-plain] 2026-11-19 19:11:35.555 | DEBUG    | ttnn:manage_config:53 - Set ttnn.CONFIG.report_name to test_conv2d_3x3_height_sharded_test_conv2d_3x3_height_s_ccf9dd7f
+PASSED2026-11-19 19:11:35.563 | DEBUG    | ttnn:manage_config:60 - Restored ttnn.CONFIG.report_name to None
+
+tests/ttnn/unit_tests/operations/conv2d_3x3/test_conv2d_3x3_height_sharded.py::test_conv2d_3x3_height_sharded[H32_W64_Ci64_Co64_p8_s1_d8_shard64-tile_bf8b-bias_relu] 2026-11-19 19:11:35.564 | DEBUG    | ttnn:manage_config:53 - Set ttnn.CONFIG.report_name to test_conv2d_3x3_height_sharded_test_conv2d_3x3_height_s_34bc290b
+PASSED2026-11-19 19:11:35.573 | DEBUG    | ttnn:manage_config:60 - Restored ttnn.CONFIG.report_name to None
+
+tests/ttnn/unit_tests/operations/conv2d_3x3/test_conv2d_3x3_height_sharded.py::test_conv2d_3x3_height_sharded[H32_W64_Ci64_Co64_p8_s1_d8_shard64-tile_bf8b-plain] 2026-11-19 19:11:35.574 | DEBUG    | ttnn:manage_config:53 - Set ttnn.CONFIG.report_name to test_conv2d_3x3_height_sharded_test_conv2d_3x3_height_s_2862ae8c
+PASSED2026-11-19 19:11:35.582 | DEBUG    | ttnn:manage_config:60 - Restored ttnn.CONFIG.report_name to None
+
+tests/ttnn/unit_tests/operations/conv2d_3x3/test_conv2d_3x3_height_sharded.py::test_conv2d_3x3_height_sharded[H16_W34_Ci48_Co64_p0_s1_d1_shard160-rm_bf16-bias_relu] 2026-11-19 19:11:35.583 | DEBUG    | ttnn:manage_config:53 - Set ttnn.CONFIG.report_name to test_conv2d_3x3_height_sharded_test_conv2d_3x3_height_s_b3a1a80f
+PASSED2026-11-19 19:11:35.588 | DEBUG    | ttnn:manage_config:60 - Restored ttnn.CONFIG.report_name to None
+
+tests/ttnn/unit_tests/operations/conv2d_3x3/test_conv2d_3x3_height_sharded.py::test_conv2d_3x3_height_sharded[H16_W34_Ci48_Co64_p0_s1_d1_shard160-rm_bf16-plain] 2026-11-19 19:11:35.589 | DEBUG    | ttnn:manage_config:53 - Set ttnn.CONFIG.report_name to test_conv2d_3x3_height_sharded_test_conv2d_3x3_height_s_328e1866
+PASSED2026-11-19 19:11:35.594 | DEBUG    | ttnn:manage_config:60 - Restored ttnn.CONFIG.report_name to None
+
+tests/ttnn/unit_tests/operations/conv2d_3x3/test_conv2d_3x3_height_sharded.py::test_conv2d_3x3_height_sharded[H16_W34_Ci48_Co64_p0_s1_d1_shard160-tile_bf16-bias_relu] 2026-11-19 19:11:35.595 | DEBUG    | ttnn:manage_config:53 - Set ttnn.CONFIG.report_name to test_conv2d_3x3_height_sharded_test_conv2d_3x3_height_s_ca4ebb46
+PASSED2026-11-19 19:11:35.599 | DEBUG    | ttnn:manage_config:60 - Restored ttnn.CONFIG.report_name to None
+
+tests/ttnn/unit_tests/operations/conv2d_3x3/test_conv2d_3x3_height_sharded.py::test_conv2d_3x3_height_sharded[H16_W34_Ci48_Co64_p0_s1_d1_shard160-tile_bf16-plain] 2026-11-19 19:11:35.600 | DEBUG    | ttnn:manage_config:53 - Set ttnn.CONFIG.report_name to test_conv2d_3x3_height_sharded_test_conv2d_3x3_height_s_79cff507
+PASSED2026-11-19 19:11:35.605 | DEBUG    | ttnn:manage_config:60 - Restored ttnn.CONFIG.report_name to None
+
+tests/ttnn/unit_tests/operations/conv2d_3x3/test_conv2d_3x3_height_sharded.py::test_conv2d_3x3_height_sharded[H16_W34_Ci48_Co64_p0_s1_d1_shard160-tile_bf8b-bias_relu] 2026-11-19 19:11:35.606 | DEBUG    | ttnn:manage_config:53 - Set ttnn.CONFIG.report_name to test_conv2d_3x3_height_sharded_test_conv2d_3x3_height_s_9b220555
+PASSED2026-11-19 19:11:35.610 | DEBUG    | ttnn:manage_config:60 - Restored ttnn.CONFIG.report_name to None
+
+tests/ttnn/unit_tests/operations/conv2d_3x3/test_conv2d_3x3_height_sharded.py::test_conv2d_3x3_height_sharded[H16_W34_Ci48_Co64_p0_s1_d1_shard160-tile_bf8b-plain] 2026-11-19 19:11:35.611 | DEBUG    | ttnn:manage_config:53 - Set ttnn.CONFIG.report_name to test_conv2d_3x3_height_sharded_test_conv2d_3x3_height_s_0b6beb2c
+PASSED2026-11-19 19:11:35.616 | DEBUG    | ttnn:manage_config:60 - Restored ttnn.CONFIG.report_name to None
+
+tests/ttnn/unit_tests/operations/conv2d_3x3/test_conv2d_3x3_height_sharded.py::test_conv2d_3x3_height_sharded_col_major_offset_grid[rm_bf16] 2026-11-19 19:11:35.619 | DEBUG    | ttnn:manage_config:53 - Set ttnn.CONFIG.report_name to test_conv2d_3x3_height_sharded_test_conv2d_3x3_height_s_dc09c5e6
+PASSED2026-11-19 19:11:35.636 | DEBUG    | ttnn:manage_config:60 - Restored ttnn.CONFIG.report_name to None
+
+tests/ttnn/unit_tests/operations/conv2d_3x3/test_conv2d_3x3_height_sharded.py::test_conv2d_3x3_height_sharded_col_major_offset_grid[tile_bf16] 2026-11-19 19:11:35.638 | DEBUG    | ttnn:manage_config:53 - Set ttnn.CONFIG.report_name to test_conv2d_3x3_height_sharded_test_conv2d_3x3_height_s_887c5c26
+PASSED2026-11-19 19:11:35.652 | DEBUG    | ttnn:manage_config:60 - Restored ttnn.CONFIG.report_name to None
+
+tests/ttnn/unit_tests/operations/conv2d_3x3/test_conv2d_3x3_height_sharded.py::test_conv2d_3x3_height_sharded_col_major_offset_grid[tile_bf8b] 2026-11-19 19:11:35.654 | DEBUG    | ttnn:manage_config:53 - Set ttnn.CONFIG.report_name to test_conv2d_3x3_height_sharded_test_conv2d_3x3_height_s_11db7a73
+PASSED2026-11-19 19:11:35.668 | DEBUG    | ttnn:manage_config:60 - Restored ttnn.CONFIG.report_name to None
+
+tests/ttnn/unit_tests/operations/conv2d_3x3/test_conv2d_3x3_height_sharded.py::test_conv2d_3x3_height_sharded_multi_m_block[tile_bf8b_bias_relu] 2026-11-19 19:11:35.669 | DEBUG    | ttnn:manage_config:53 - Set ttnn.CONFIG.report_name to test_conv2d_3x3_height_sharded_test_conv2d_3x3_height_s_979323ca
+PASSED2026-11-19 19:11:35.677 | DEBUG    | ttnn:manage_config:60 - Restored ttnn.CONFIG.report_name to None
+
+tests/ttnn/unit_tests/operations/conv2d_3x3/test_conv2d_3x3_height_sharded.py::test_conv2d_3x3_height_sharded_multi_m_block[rm_bf16_relu] 2026-11-19 19:11:35.678 | DEBUG    | ttnn:manage_config:53 - Set ttnn.CONFIG.report_name to test_conv2d_3x3_height_sharded_test_conv2d_3x3_height_s_d84f15e8
+PASSED2026-11-19 19:11:35.684 | DEBUG    | ttnn:manage_config:60 - Restored ttnn.CONFIG.report_name to None
+
+tests/ttnn/unit_tests/operations/conv2d_3x3/test_conv2d_3x3_height_sharded.py::test_conv2d_3x3_height_sharded_weight_mcast_ragged_core[rm_bf16] 2026-11-19 19:11:35.685 | DEBUG    | ttnn:manage_config:53 - Set ttnn.CONFIG.report_name to test_conv2d_3x3_height_sharded_test_conv2d_3x3_height_s_eb697195
+PASSED2026-11-19 19:11:35.693 | DEBUG    | ttnn:manage_config:60 - Restored ttnn.CONFIG.report_name to None
+
+tests/ttnn/unit_tests/operations/conv2d_3x3/test_conv2d_3x3_height_sharded.py::test_conv2d_3x3_height_sharded_weight_mcast_ragged_core[tile_bf8b] 2026-11-19 19:11:35.694 | DEBUG    | ttnn:manage_config:53 - Set ttnn.CONFIG.report_name to test_conv2d_3x3_height_sharded_test_conv2d_3x3_height_s_12e67a8a
+PASSED2026-11-19 19:11:35.703 | DEBUG    | ttnn:manage_config:60 - Restored ttnn.CONFIG.report_name to None
+
+tests/ttnn/unit_tests/operations/conv2d_3x3/test_conv2d_3x3_height_sharded.py::test_conv2d_3x3_height_sharded_face_direct[H64_W128_Ci8_Co64_p1_s2_d1_shard1000-bias_relu] 2026-11-19 19:11:35.705 | DEBUG    | ttnn:manage_config:53 - Set ttnn.CONFIG.report_name to test_conv2d_3x3_height_sharded_test_conv2d_3x3_height_s_3c16ca32
+PASSED2026-11-19 19:11:35.712 | DEBUG    | ttnn:manage_config:60 - Restored ttnn.CONFIG.report_name to None
+
+tests/ttnn/unit_tests/operations/conv2d_3x3/test_conv2d_3x3_height_sharded.py::test_conv2d_3x3_height_sharded_face_direct[H64_W128_Ci8_Co64_p1_s2_d1_shard1000-relu] 2026-11-19 19:11:35.713 | DEBUG    | ttnn:manage_config:53 - Set ttnn.CONFIG.report_name to test_conv2d_3x3_height_sharded_test_conv2d_3x3_height_s_c3f95d60
+PASSED2026-11-19 19:11:35.719 | DEBUG    | ttnn:manage_config:60 - Restored ttnn.CONFIG.report_name to None
+
+tests/ttnn/unit_tests/operations/conv2d_3x3/test_conv2d_3x3_height_sharded.py::test_conv2d_3x3_height_sharded_face_direct[H64_W128_Ci8_Co64_p1_s2_d1_shard1000-bias] 2026-11-19 19:11:35.720 | DEBUG    | ttnn:manage_config:53 - Set ttnn.CONFIG.report_name to test_conv2d_3x3_height_sharded_test_conv2d_3x3_height_s_41db9093
+PASSED2026-11-19 19:11:35.726 | DEBUG    | ttnn:manage_config:60 - Restored ttnn.CONFIG.report_name to None
+
+tests/ttnn/unit_tests/operations/conv2d_3x3/test_conv2d_3x3_height_sharded.py::test_conv2d_3x3_height_sharded_face_direct[H32_W64_Ci16_Co32_p1_s1_d1_shard230-bias_relu] 2026-11-19 19:11:35.727 | DEBUG    | ttnn:manage_config:53 - Set ttnn.CONFIG.report_name to test_conv2d_3x3_height_sharded_test_conv2d_3x3_height_s_ce4bd46b
+PASSED2026-11-19 19:11:35.734 | DEBUG    | ttnn:manage_config:60 - Restored ttnn.CONFIG.report_name to None
+
+tests/ttnn/unit_tests/operations/conv2d_3x3/test_conv2d_3x3_height_sharded.py::test_conv2d_3x3_height_sharded_face_direct[H32_W64_Ci16_Co32_p1_s1_d1_shard230-relu] 2026-11-19 19:11:35.735 | DEBUG    | ttnn:manage_config:53 - Set ttnn.CONFIG.report_name to test_conv2d_3x3_height_sharded_test_conv2d_3x3_height_s_ae1614d7
+PASSED2026-11-19 19:11:35.741 | DEBUG    | ttnn:manage_config:60 - Restored ttnn.CONFIG.report_name to None
+
+tests/ttnn/unit_tests/operations/conv2d_3x3/test_conv2d_3x3_height_sharded.py::test_conv2d_3x3_height_sharded_face_direct[H32_W64_Ci16_Co32_p1_s1_d1_shard230-bias] 2026-11-19 19:11:35.742 | DEBUG    | ttnn:manage_config:53 - Set ttnn.CONFIG.report_name to test_conv2d_3x3_height_sharded_test_conv2d_3x3_height_s_61f152c4
+PASSED2026-11-19 19:11:35.747 | DEBUG    | ttnn:manage_config:60 - Restored ttnn.CONFIG.report_name to None
+
+tests/ttnn/unit_tests/operations/conv2d_3x3/test_conv2d_3x3_height_sharded.py::test_conv2d_3x3_height_sharded_face_direct[H48_W64_Ci8_Co64_p1_s2_d1_shard700-bias_relu] 2026-11-19 19:11:35.749 | DEBUG    | ttnn:manage_config:53 - Set ttnn.CONFIG.report_name to test_conv2d_3x3_height_sharded_test_conv2d_3x3_height_s_4567c46c
+PASSED2026-11-19 19:11:35.754 | DEBUG    | ttnn:manage_config:60 - Restored ttnn.CONFIG.report_name to None
+
+tests/ttnn/unit_tests/operations/conv2d_3x3/test_conv2d_3x3_height_sharded.py::test_conv2d_3x3_height_sharded_face_direct[H48_W64_Ci8_Co64_p1_s2_d1_shard700-relu] 2026-11-19 19:11:35.755 | DEBUG    | ttnn:manage_config:53 - Set ttnn.CONFIG.report_name to test_conv2d_3x3_height_sharded_test_conv2d_3x3_height_s_a368b424
+PASSED2026-11-19 19:11:35.761 | DEBUG    | ttnn:manage_config:60 - Restored ttnn.CONFIG.report_name to None
+
+tests/ttnn/unit_tests/operations/conv2d_3x3/test_conv2d_3x3_height_sharded.py::test_conv2d_3x3_height_sharded_face_direct[H48_W64_Ci8_Co64_p1_s2_d1_shard700-bias] 2026-11-19 19:11:35.762 | DEBUG    | ttnn:manage_config:53 - Set ttnn.CONFIG.report_name to test_conv2d_3x3_height_sharded_test_conv2d_3x3_height_s_63d91109
+PASSED2026-11-19 19:11:35.767 | DEBUG    | ttnn:manage_config:60 - Restored ttnn.CONFIG.report_name to None
+
+tests/ttnn/unit_tests/operations/conv2d_3x3/test_conv2d_3x3_height_sharded.py::test_conv2d_3x3_height_sharded_face_direct_multi_m_block 2026-11-19 19:11:35.768 | DEBUG    | ttnn:manage_config:53 - Set ttnn.CONFIG.report_name to test_conv2d_3x3_height_sharded_test_conv2d_3x3_height_s_48406d79
+PASSED2026-11-19 19:11:35.774 | DEBUG    | ttnn:manage_config:60 - Restored ttnn.CONFIG.report_name to None
+UP_FRONT_INLINE: real pass took 1.6s
+
+
+- generated xml file: /localdev/pmilojevic/workspaces/opgen/generated/test_reports/most_recent_tests.xml -
+============================= slowest 25 durations =============================
+0.25s setup    tests/ttnn/unit_tests/operations/conv2d_3x3/test_conv2d_3x3_height_sharded.py::test_conv2d_3x3_height_sharded[H16_W16_Ci64_Co128_p1_s1_d1_shard64-rm_bf16-bias_relu]
+0.25s setup    tests/ttnn/unit_tests/operations/conv2d_3x3/test_conv2d_3x3_kw_fold.py::test_conv2d_3x3_kw_fold_forced[n1_bf8]
+0.07s call     tests/ttnn/unit_tests/operations/conv2d_3x3/test_conv2d_3x3_kw_fold.py::test_conv2d_3x3_kw_fold_halo_exchange[kblocked_two_planes]
+0.06s call     tests/ttnn/unit_tests/operations/conv2d_3x3/test_conv2d_3x3_kw_fold.py::test_conv2d_3x3_kw_fold_halo_exchange[kblocked_no_server]
+0.05s call     tests/ttnn/unit_tests/operations/conv2d_3x3/test_conv2d_3x3_kw_fold.py::test_conv2d_3x3_kw_fold_halo_exchange[kblocked_hifi4]
+0.05s call     tests/ttnn/unit_tests/operations/conv2d_3x3/test_conv2d_3x3_kw_fold.py::test_conv2d_3x3_kw_fold_halo_exchange[kblocked_n2_hifi4]
+0.04s call     tests/ttnn/unit_tests/operations/conv2d_3x3/test_conv2d_3x3_kw_fold.py::test_conv2d_3x3_kw_fold_halo_exchange[kblocked_lofi]
+0.04s call     tests/ttnn/unit_tests/operations/conv2d_3x3/test_conv2d_3x3_kw_fold.py::test_conv2d_3x3_kw_fold_halo_exchange[d2_bf8]
+0.03s call     tests/ttnn/unit_tests/operations/conv2d_3x3/test_conv2d_3x3_kw_fold.py::test_conv2d_3x3_kw_fold_forced[kblocked_multiblock_hifi4]
+0.03s call     tests/ttnn/unit_tests/operations/conv2d_3x3/test_conv2d_3x3_kw_fold.py::test_conv2d_3x3_kw_fold_halo_exchange[whole_k_n1]
+0.03s call     tests/ttnn/unit_tests/operations/conv2d_3x3/test_conv2d_3x3_kw_fold.py::test_conv2d_3x3_kw_fold_halo_exchange[kblocked_few_cores]
+0.03s call     tests/ttnn/unit_tests/operations/conv2d_3x3/test_conv2d_3x3_kw_fold.py::test_conv2d_3x3_kw_fold_forced[kblocked_n10]
+0.02s call     tests/ttnn/unit_tests/operations/conv2d_3x3/test_conv2d_3x3_kw_fold.py::test_conv2d_3x3_kw_fold_halo_exchange[n3_hifi2]
+0.02s call     tests/ttnn/unit_tests/operations/conv2d_3x3/test_conv2d_3x3_kw_fold.py::test_conv2d_3x3_kw_fold_forced[many_blocks_whole_k]
+0.02s call     tests/ttnn/unit_tests/operations/conv2d_3x3/test_conv2d_3x3_kw_fold.py::test_conv2d_3x3_kw_fold_forced[many_blocks_kblocked]
+0.02s call     tests/ttnn/unit_tests/operations/conv2d_3x3/test_conv2d_3x3_kw_fold.py::test_conv2d_3x3_kw_fold_halo_exchange[n1_bf8]
+0.02s call     tests/ttnn/unit_tests/operations/conv2d_3x3/test_conv2d_3x3_kw_fold.py::test_conv2d_3x3_kw_fold_forced[kblocked_n2]
+0.02s teardown tests/ttnn/unit_tests/operations/conv2d_3x3/test_conv2d_3x3_height_sharded.py::test_conv2d_3x3_height_sharded_face_direct_multi_m_block
+0.02s teardown tests/ttnn/unit_tests/operations/conv2d_3x3/test_conv2d_3x3_kw_fold.py::test_conv2d_3x3_kw_fold_halo_exchange[whole_k_n2_one_row]
+0.02s call     tests/ttnn/unit_tests/operations/conv2d_3x3/test_conv2d_3x3_height_sharded.py::test_conv2d_3x3_height_sharded_col_major_offset_grid[rm_bf16]
+0.02s call     tests/ttnn/unit_tests/operations/conv2d_3x3/test_conv2d_3x3_kw_fold.py::test_conv2d_3x3_kw_fold_halo_exchange[whole_k_n2_one_row]
+0.01s call     tests/ttnn/unit_tests/operations/conv2d_3x3/test_conv2d_3x3_kw_fold.py::test_conv2d_3x3_kw_fold_halo_exchange[bf16]
+0.01s call     tests/ttnn/unit_tests/operations/conv2d_3x3/test_conv2d_3x3_kw_fold.py::test_conv2d_3x3_kw_fold_forced[multiblock_bf8]
+0.01s call     tests/ttnn/unit_tests/operations/conv2d_3x3/test_conv2d_3x3_kw_fold.py::test_conv2d_3x3_kw_fold_halo_exchange[ragged_one_row]
+0.01s call     tests/ttnn/unit_tests/operations/conv2d_3x3/test_conv2d_3x3_height_sharded.py::test_conv2d_3x3_height_sharded_col_major_offset_grid[tile_bf8b]
+============================= 66 passed in 15.04s ==============================
+2026-11-19 19:11:37.338 | info     |    BuildKernels | JIT cache stats: 58/439 hits (13.2%) [58 cached, 521 build-once dedup, 0 merged artifacts, 0 merged genfiles] (build_cache_telemetry.cpp:362)
+2026-11-19 19:11:37.338 | info     |    BuildKernels | JIT telemetry: 48 registered TelemetryTokens (build_cache_telemetry.cpp:510)
+2026-11-19 19:11:37.390 | info     |          Device | Closing user mode device drivers (tt_cluster.cpp:605)
+2026-11-19 19:11:37.391 | info     |             UMD | Closing devices in cluster (cluster.cpp:1496)
+2026-11-19 19:11:37.859 | info     |             UMD | Closing devices in cluster completed. (cluster.cpp:1506)
+2026-11-19 19:11:37.859 | info     |             UMD | Cluster destructor started. (cluster.cpp:1227)
+2026-11-19 19:11:37.859 | info     |             UMD | Cluster destructor completed. (cluster.cpp:1240)
+========================================
+PRECOMPILE: UP_FRONT_INLINE: collect pass over 66 item(s) took 2.7s
+PRECOMPILE: UP_FRONT_INLINE: compile route local (programs=78, farm_min=10)
+PRECOMPILE: UP_FRONT_COLLECT: 98 ops stashed across 66 bodies -> 78 unique programs (swallowed 0, skipped-capture 0)
+PRECOMPILE: UP_FRONT_COLLECT: fast-shallow from_torch — shape-only=272 fallback=0
+PRECOMPILE: UP_FRONT_COLLECT: 78 collected · 78 built · 0 already compiled in 10.4s (workers=64, errors=0) -> on-disk JIT cache warm
+PRECOMPILE: UP_FRONT_INLINE: compile step took 10.6s; starting the real pass
+PRECOMPILE: UP_FRONT_INLINE: real pass took 1.6s
+SAFE_PYTEST_RESULT: PASS
+========================================
+SAFE_PYTEST_TOTAL_RUNTIME: 0m23s (23s total, device-lock-acquired -> exit)

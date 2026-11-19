@@ -1,0 +1,143 @@
+diff --git a/ttnn/ttnn/operations/conv2d_3x3/conv2d_3x3_program_descriptor.py b/ttnn/ttnn/operations/conv2d_3x3/conv2d_3x3_program_descriptor.py
+index 2b3c88f5a80..67a3dab2b5f 100644
+--- a/ttnn/ttnn/operations/conv2d_3x3/conv2d_3x3_program_descriptor.py
++++ b/ttnn/ttnn/operations/conv2d_3x3/conv2d_3x3_program_descriptor.py
+@@ -340,6 +340,8 @@ MAX_MCAST_RECTANGLES = 3
+ # +9%); one DRAM stream per spare row (same pages as the column sender's, same time: res5.1 / res5.2 +6% / +7%); the
+ # spare members' fill split over both NoCs (flat); the last M ranges instead of the cheapest (res5.2 +1.4 us).
+ SPARE_MGROUPS = True
++# Semaphore ids per program (the device's limit: ids 0..15).
++MAX_SEMAPHORES = 16
+ WEIGHT_MCAST_SPARE_PREFIX = "weight_mcast2"
+ 
+ 
+@@ -2144,6 +2146,23 @@ def create_program_descriptor(
+     kwf_xchg = kwf and kw_fold_halo_exchange(b)
+     kwf_xchg_sem_ids = (len(sem_ids), len(sem_ids) + 1) if kwf_xchg else (0, 0)
+     sem_ids += kwf_xchg_sem_ids if kwf_xchg else ()
++    # Weight servers with more rounds than cb_weights slots: one server ack counter per slot (slot 0 keeps the server's
++    # ack semaphore, the others from SERVER_SLOT_ACKS on; conv2d_3x3_writer.cpp server_reuse_ack). With one total
++    # counter, a receiver that runs ahead (the ragged short core) acks later slots before a slower receiver acked an
++    # earlier one, and the server could overwrite that slot under the slower core's matmul.
++    server_rounds = (
++        b.num_k_blocks
++        if kwf and not kw_fold_kblocked(g)
++        else max(m_blocks_per_index[i] for _, i, _ in work) * b.num_k_blocks
++    )
++    slot_ack_defines = []
++    if (
++        weight_servers is not None
++        and 1 < b.weight_depth < server_rounds
++        and len(sem_ids) + b.weight_depth - 1 <= MAX_SEMAPHORES
++    ):
++        slot_ack_defines = [("SERVER_SLOT_ACKS", str(len(sem_ids)))]
++        sem_ids += tuple(range(len(sem_ids), len(sem_ids) + b.weight_depth - 1))
+     k_padded = g.tensor_kkh_tiles * TILE > 3 * g.c_in_p
+     # Work-balanced M split (g.m_ranges): the N-slice prelude, walk and forwarding sized by each M-block's valid
+     # tile-rows (the split row gather keeps its CT unit sequence), the fill / untilize by the block's own slab rows where
+@@ -2657,7 +2676,7 @@ def create_program_descriptor(
+             core_ranges=_core_range_set(writer_cores),
+             compile_time_args=writer_ct_args_for(*slice_channels),
+             runtime_args=writer_rt,
+-            defines=_kwf_dm_defines + _ring_owner_defines + _sd_dm_defines + _async_bias_defines,
++            defines=_kwf_dm_defines + _ring_owner_defines + _sd_dm_defines + _async_bias_defines + slot_ack_defines,
+             config=ttnn.WriterConfigDescriptor(),
+         )
+         for slice_channels, (writer_cores, writer_rt) in writer_groups.items()
+@@ -2694,11 +2713,7 @@ def create_program_descriptor(
+                 assert ns == g.tensor_n_tiles
+                 cbs[i] = _cb(CB_BIAS, bias_tensor.dtype, g.weight_tile_bytes, ns, sem_cores)
+         # Whole-K kw-fold keeps its weights resident across M-blocks: one stream.
+-        num_rounds = (
+-            b.num_k_blocks
+-            if kwf and not kw_fold_kblocked(g)
+-            else max(m_blocks_per_index[i] for _, i, _ in work) * b.num_k_blocks
+-        )
++        num_rounds = server_rounds
+         num_chunks = max(d for d in range(1, WEIGHT_SERVER_CHUNKS + 1) if (bk * bn) % d == 0)
+         server_reader_rt = ttnn.RuntimeArgs()
+         server_writer_rt = ttnn.RuntimeArgs()
+@@ -2754,6 +2769,7 @@ def create_program_descriptor(
+                     else ttnn.TensorAccessorArgs().get_compile_time_args()
+                 ),
+                 runtime_args=server_writer_rt,
++                defines=slot_ack_defines,
+                 config=ttnn.WriterConfigDescriptor(),
+             ),
+         ]
+diff --git a/ttnn/ttnn/operations/conv2d_3x3/kernels/conv2d_3x3_weight_server_writer.cpp b/ttnn/ttnn/operations/conv2d_3x3/kernels/conv2d_3x3_weight_server_writer.cpp
+index 9cee2da0859..7270837d121 100644
+--- a/ttnn/ttnn/operations/conv2d_3x3/kernels/conv2d_3x3_weight_server_writer.cpp
++++ b/ttnn/ttnn/operations/conv2d_3x3/kernels/conv2d_3x3_weight_server_writer.cpp
+@@ -72,8 +72,19 @@ void kernel_main() {
+     for (uint32_t r = 0; r < num_rounds; ++r) {
+         {
+             MaybeDeviceZoneScope("server_wait_ack");
++#ifdef SERVER_SLOT_ACKS
++            // One counter per slot (the receivers' SERVER_SLOT_ACKS): slot 0's also holds the kernel-start acks, so a
++            // receiver's acks for later slots never stand in for another receiver's ack of this one.
++            const uint32_t slot = r < weight_depth ? 0 : r % weight_depth;
++            const uint32_t uses = r < weight_depth ? 0 : r / weight_depth;
++            noc_semaphore_wait_min(
++                slot == 0 ? ack
++                          : reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(SERVER_SLOT_ACKS + slot - 1)),
++                (uses + (slot == 0 ? 1 : 0)) * num_receivers);
++#else
+             const uint32_t acks = 1 + (r + 1 > weight_depth ? r + 1 - weight_depth : 0);
+             noc_semaphore_wait_min(ack, acks * num_receivers);
++#endif
+         }
+         if constexpr (has_bias) {
+             if (r == bias_round) {
+diff --git a/ttnn/ttnn/operations/conv2d_3x3/kernels/conv2d_3x3_writer.cpp b/ttnn/ttnn/operations/conv2d_3x3/kernels/conv2d_3x3_writer.cpp
+index d27808a42ed..6bf3d1386ef 100644
+--- a/ttnn/ttnn/operations/conv2d_3x3/kernels/conv2d_3x3_writer.cpp
++++ b/ttnn/ttnn/operations/conv2d_3x3/kernels/conv2d_3x3_writer.cpp
+@@ -1020,6 +1020,27 @@ void kernel_main() {
+     // Weight servers: the slot-reuse acks sent so far (rounds nslice_weight_depth .. + server_reuse_acks - 1), and the
+     // rounds this receiver takes (kw-fold whole-K keeps its weights resident across M-blocks: one stream).
+     [[maybe_unused]] uint32_t server_reuse_acks = 0;
++    // Reuse ack j (round nslice_weight_depth + j, slot j % depth). SERVER_SLOT_ACKS (descriptor: weight servers with more
++    // rounds than slots): one ack counter per slot on the server (slot 0's is the kernel-start counter, the others from
++    // SERVER_SLOT_ACKS on). On one total counter a core that runs ahead (a short ragged core, or one whose compute frees
++    // slots early) acks later slots before a slower core acked an earlier one, and those acks count toward the earlier
++    // slot's reuse: the server could overwrite a slot a core was still multiplying (found with kw-fold N planes, where it
++    // gave PCC 0.95; on HEAD the window is one ragged core two acks ahead).
++    [[maybe_unused]] auto server_reuse_ack = [&]() {
++#ifdef SERVER_SLOT_ACKS
++        const uint32_t slot = server_reuse_acks % nslice_weight_depth;
++        noc_semaphore_inc(
++            slot == 0 ? server_ack_noc
++                      : get_noc_addr(
++                            get_arg_val<uint32_t>(server_arg + 1),
++                            get_arg_val<uint32_t>(server_arg + 2),
++                            get_semaphore(SERVER_SLOT_ACKS + slot - 1)),
++            1);
++#else
++        noc_semaphore_inc(server_ack_noc, 1);
++#endif
++        ++server_reuse_acks;
++    };
+ #if defined(CONV2D_3X3_KW_FOLD) && !KWF_KBLOCKED
+     [[maybe_unused]] const uint32_t server_rounds = num_k_blocks;
+ #else
+@@ -1052,8 +1073,7 @@ void kernel_main() {
+             // Weight server round (see the file comment); serves the fill hand-overs while it waits.
+             if (k_blocks_issued >= nslice_weight_depth &&
+                 server_reuse_acks < k_blocks_issued + 1 - nslice_weight_depth) {
+-                noc_semaphore_inc(server_ack_noc, 1);
+-                ++server_reuse_acks;
++                server_reuse_ack();
+             }
+             // Round k + 1's reuse ack, early: round k is reserved and not pushed, so two free rounds at the back mean
+             // compute freed round k + 1's slot.
+@@ -1068,8 +1088,7 @@ void kernel_main() {
+                 }
+                 if (early_ack && server_reuse_acks < k_blocks_issued + 2 - nslice_weight_depth &&
+                     cb_pages_reservable_at_back(cb_weights, 2 * weight_k_block_tiles)) {
+-                    noc_semaphore_inc(server_ack_noc, 1);
+-                    ++server_reuse_acks;
++                    server_reuse_ack();
+                 }
+                 serve_fill();
+                 if constexpr (kw_fold) {

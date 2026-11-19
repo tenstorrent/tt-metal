@@ -1,0 +1,189 @@
+SAFE_PYTEST: Waiting for device lock...
+SAFE_PYTEST: Device lock acquired
+SAFE_PYTEST: dispatch_timeout=5s
+PRECOMPILE: on — collect + parallel compile (x64) inside the pytest session, local
+SAFE_PYTEST: env UP_FRONT_INLINE=1 UP_FRONT_COLLECT=1 UP_FRONT_REAL_ALLOC=1 UP_FRONT_COLLECT_WORKERS=64 PYTHONPATH=/localdev/pmilojevic/workspaces/opgen:/localdev/pmilojevic/workspaces/opgen pytest -p tests.plugins.up_front_collect /localdev/pmilojevic/workspaces/opgen/ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_n_planes/test_kwp.py --import-mode=prepend -q
+========================================
+2026-11-19 18:16:33.713 | DEBUG    | ttnn:<module>:45 - Initial ttnn.CONFIG:
+Config{cache_path=/home/pmilojevic/.cache/ttnn,model_cache_path=/home/pmilojevic/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,validate_program_args=false,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_graph_python_stack_traces=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,strict_ccl_topology=false,verify_replicated_shards_on_dump=true,std::nullopt}
+============================= test session starts ==============================
+platform linux -- Python 3.10.19, pytest-9.0.3, pluggy-1.7.0 -- /localdev/pmilojevic/workspaces/opgen/python_env/bin/python
+cachedir: .pytest_cache
+benchmark: 5.2.3 (defaults: timer=time.perf_counter disable_gc=False min_rounds=5 min_time=0.000005 max_time=1.0 calibration_precision=10 warmup=False warmup_iterations=100000)
+rootdir: /localdev/pmilojevic/workspaces/opgen
+configfile: pytest.ini
+plugins: split-0.11.0, repeat-0.9.4, anyio-4.16.0, benchmark-5.2.3, github-actions-annotate-failures-0.3.0, timeout-2.4.0, cov-7.0.0, dash-2.15.0
+timeout: 300.0s
+timeout method: signal
+timeout func_only: False
+collecting ... 2026-11-19 18:16:33.930 | info     |          Device | Opening user mode device driver (tt_cluster.cpp:252)
+2026-11-19 18:16:33.930 | info     |             UMD | Cluster constructor started. (cluster.cpp:434)
+2026-11-19 18:16:33.932 | info     |             UMD | Creating TopologyDiscovery for architecture: blackhole (topology_discovery.cpp:137)
+2026-11-19 18:16:33.932 | info     |             UMD | Starting topology discovery. (topology_discovery.cpp:156)
+2026-11-19 18:16:33.955 | info     |             UMD | Established firmware bundle version: 19.16.1 (topology_discovery.cpp:700)
+2026-11-19 18:16:33.956 | info     |             UMD | Completed topology discovery. (topology_discovery.cpp:161)
+2026-11-19 18:16:34.218 | info     |             UMD | Opening local chip ids/PCIe ids: {0, 1, 2, 3, 4, 5, 6, 7}/[2, 3, 1, 0, 6, 7, 5, 4] and remote chip ids {} (cluster.cpp:174)
+2026-11-19 18:16:34.219 | info     |             UMD | IOMMU: enabled (cluster.cpp:148)
+2026-11-19 18:16:34.219 | info     |             UMD | KMD version: 2.9.0 (cluster.cpp:151)
+2026-11-19 18:16:34.219 | info     |             UMD | Cluster constructor completed. (cluster.cpp:893)
+2026-11-19 18:16:34.226 | info     |             UMD | Starting devices in cluster (cluster.cpp:1482)
+2026-11-19 18:16:34.503 | info     |             UMD | Starting devices in cluster completed. (cluster.cpp:1491)
+2026-11-19 18:16:34.640 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:571)
+2026-11-19 18:16:34.640 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:624)
+2026-11-19 18:16:34.771 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using distributed::MeshDevice::create_unit_meshes(). (device_manager.cpp:265)
+2026-11-19 18:16:35.463 | info     |           Metal | Disabling and clearing program cache on MeshDevice 1 (mesh_device.cpp:1332)
+2026-11-19 18:16:35.511 | info     |           Metal | Disabling and clearing program cache on MeshDevice 1 (mesh_device.cpp:1332)
+2026-11-19 18:16:35.547 | info     |           Metal | Disabling and clearing program cache on MeshDevice 1 (mesh_device.cpp:1332)
+2026-11-19 18:16:35.581 | info     |           Metal | Disabling and clearing program cache on MeshDevice 1 (mesh_device.cpp:1332)
+collected 4 items
+
+UP_FRONT_INLINE: collect pass over 4 item(s) took 1.7s
+UP_FRONT_INLINE: compile route local (programs=4, farm_min=10)
+
+UP_FRONT_COLLECT: 4 ops stashed across 4 bodies -> 4 unique programs (swallowed 0, skipped-capture 0)
+UP_FRONT_COLLECT: fast-shallow from_torch — shape-only=12 fallback=0
+2026-11-19 18:16:35.787 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using distributed::MeshDevice::create_unit_meshes(). (device_manager.cpp:265)
+2026-11-19 18:16:35.867 | info     |           Metal | Enabling program cache on MeshDevice 3 (mesh_device.cpp:1322)
+UP_FRONT_COLLECT: 4 collected · 4 built · 0 already compiled in 1.0s (workers=64, errors=0) -> on-disk JIT cache warm
+UP_FRONT_COLLECT_RESULT: status=ok reason=ok unique=4 programs=4 errors=0 pytest_exit=0 xpass_strict=0 other_failures=0 built=4 compile_s=1.3 collect_s=1.7 route=local
+UP_FRONT_INLINE: compile step took 1.3s; starting the real pass
+
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_n_planes/test_kwp.py::test_kwp[semdec3fc0-baseline] 2026-11-19 18:16:37.081 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using distributed::MeshDevice::create_unit_meshes(). (device_manager.cpp:265)
+2026-11-19 18:16:37.147 | info     |           Metal | Disabling and clearing program cache on MeshDevice 5 (mesh_device.cpp:1332)
+PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_n_planes/test_kwp.py::test_kwp[semdec3fc0-stream] 2026-11-19 18:16:37.214 | info     |           Metal | Disabling and clearing program cache on MeshDevice 5 (mesh_device.cpp:1332)
+FAILED2026-11-19 18:16:37.379 | INFO     | conftest:pytest_runtest_teardown:1227 - In custom teardown, open device ids: {0}
+
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_n_planes/test_kwp.py::test_kwp[semdec3fc0-stream_cols] 2026-11-19 18:16:37.381 | info     |           Metal | Disabling and clearing program cache on MeshDevice 5 (mesh_device.cpp:1332)
+FAILED2026-11-19 18:16:37.461 | INFO     | conftest:pytest_runtest_teardown:1227 - In custom teardown, open device ids: {0}
+
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_n_planes/test_kwp.py::test_kwp[semdec3fc0-stream_rows] 2026-11-19 18:16:37.463 | info     |           Metal | Disabling and clearing program cache on MeshDevice 5 (mesh_device.cpp:1332)
+PASSEDUP_FRONT_INLINE: real pass took 0.6s
+
+
+=================================== FAILURES ===================================
+_________________________ test_kwp[semdec3fc0-stream] __________________________
+
+case_id = 'semdec3fc0', variant = 'stream'
+device = MeshDevice(1x1 grid, 1 devices)
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x7323fb3d1810>
+
+    @pytest.mark.parametrize("case_id,variant", PARAMS, ids=[f"{c}-{v}" for c, v in PARAMS])
+    def test_kwp(case_id, variant, device, monkeypatch):
+        import torch
+
+        apply_variant(variant, monkeypatch)
+        device.disable_and_clear_program_cache()
+        info = dict(case=case_id, variant=variant)
+        if case_id.startswith("h:"):
+            tt_output, ref, pcc_threshold, in_mc = _run_height(case_id, device)
+        else:
+            tt_output, ref, pcc_threshold, in_mc = _run_focus(FOCUS[case_id], device)
+        info["plan"] = dict(getattr(pd, "DEBUG_INFO", {}))
+        out_mc = tt_output.memory_config()
+        # The output keeps exactly the input's shard grid, orientation and its HEAD shard shape.
+        assert out_mc.memory_layout == in_mc.memory_layout
+        assert str(out_mc.shard_spec.grid) == str(in_mc.shard_spec.grid)
+        assert out_mc.shard_spec.orientation == in_mc.shard_spec.orientation
+        assert int(out_mc.shard_spec.shape[0]) == int(in_mc.shard_spec.shape[0])
+        info["out_spec"] = [str(out_mc.shard_spec.grid), list(out_mc.shard_spec.shape), str(out_mc.shard_spec.orientation)]
+        out = ttnn.to_torch(tt_output).float().reshape(ref.shape)
+        passed, pcc = comp_pcc(ref.float(), out, pcc_threshold)
+        sha = hashlib.sha256(out.contiguous().numpy().tobytes()).hexdigest()[:16]
+        info.update(
+            pcc=float(pcc),
+            pcc_threshold=pcc_threshold,
+            mae=float((out - ref.float()).abs().mean()),
+            max_err=float((out - ref.float()).abs().max()),
+            out_sha=sha,
+        )
+        outs = HERE / "runs" / "outs"
+        outs.mkdir(parents=True, exist_ok=True)
+        torch.save(out.to(torch.bfloat16), outs / f"{case_id.replace(':', '_')}-{variant}.pt")
+        RUN_LOG.parent.mkdir(exist_ok=True)
+        with open(RUN_LOG, "a") as f:
+            f.write(json.dumps(info) + "\n")
+        if not NOCHECK:
+>           assert passed, f"{case_id} {variant}: pcc {pcc} < {pcc_threshold}"
+E           AssertionError: semdec3fc0 stream: pcc 0.948642605640787 < 0.996
+E           assert False
+
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_n_planes/test_kwp.py:302: AssertionError
+_______________________ test_kwp[semdec3fc0-stream_cols] _______________________
+
+case_id = 'semdec3fc0', variant = 'stream_cols'
+device = MeshDevice(1x1 grid, 1 devices)
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x7323fb455d80>
+
+    @pytest.mark.parametrize("case_id,variant", PARAMS, ids=[f"{c}-{v}" for c, v in PARAMS])
+    def test_kwp(case_id, variant, device, monkeypatch):
+        import torch
+
+        apply_variant(variant, monkeypatch)
+        device.disable_and_clear_program_cache()
+        info = dict(case=case_id, variant=variant)
+        if case_id.startswith("h:"):
+            tt_output, ref, pcc_threshold, in_mc = _run_height(case_id, device)
+        else:
+            tt_output, ref, pcc_threshold, in_mc = _run_focus(FOCUS[case_id], device)
+        info["plan"] = dict(getattr(pd, "DEBUG_INFO", {}))
+        out_mc = tt_output.memory_config()
+        # The output keeps exactly the input's shard grid, orientation and its HEAD shard shape.
+        assert out_mc.memory_layout == in_mc.memory_layout
+        assert str(out_mc.shard_spec.grid) == str(in_mc.shard_spec.grid)
+        assert out_mc.shard_spec.orientation == in_mc.shard_spec.orientation
+        assert int(out_mc.shard_spec.shape[0]) == int(in_mc.shard_spec.shape[0])
+        info["out_spec"] = [str(out_mc.shard_spec.grid), list(out_mc.shard_spec.shape), str(out_mc.shard_spec.orientation)]
+        out = ttnn.to_torch(tt_output).float().reshape(ref.shape)
+        passed, pcc = comp_pcc(ref.float(), out, pcc_threshold)
+        sha = hashlib.sha256(out.contiguous().numpy().tobytes()).hexdigest()[:16]
+        info.update(
+            pcc=float(pcc),
+            pcc_threshold=pcc_threshold,
+            mae=float((out - ref.float()).abs().mean()),
+            max_err=float((out - ref.float()).abs().max()),
+            out_sha=sha,
+        )
+        outs = HERE / "runs" / "outs"
+        outs.mkdir(parents=True, exist_ok=True)
+        torch.save(out.to(torch.bfloat16), outs / f"{case_id.replace(':', '_')}-{variant}.pt")
+        RUN_LOG.parent.mkdir(exist_ok=True)
+        with open(RUN_LOG, "a") as f:
+            f.write(json.dumps(info) + "\n")
+        if not NOCHECK:
+>           assert passed, f"{case_id} {variant}: pcc {pcc} < {pcc_threshold}"
+E           AssertionError: semdec3fc0 stream_cols: pcc 0.9946257057204881 < 0.996
+E           assert False
+
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_n_planes/test_kwp.py:302: AssertionError
+- generated xml file: /localdev/pmilojevic/workspaces/opgen/generated/test_reports/most_recent_tests.xml -
+============================= slowest 25 durations =============================
+0.24s setup    ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_n_planes/test_kwp.py::test_kwp[semdec3fc0-baseline]
+0.08s call     ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_n_planes/test_kwp.py::test_kwp[semdec3fc0-stream]
+0.07s call     ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_n_planes/test_kwp.py::test_kwp[semdec3fc0-stream_cols]
+0.06s call     ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_n_planes/test_kwp.py::test_kwp[semdec3fc0-stream_rows]
+0.06s call     ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_n_planes/test_kwp.py::test_kwp[semdec3fc0-baseline]
+0.02s teardown ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_n_planes/test_kwp.py::test_kwp[semdec3fc0-stream_rows]
+
+(6 durations < 0.005s hidden.  Use -vv to show these durations.)
+=========================== short test summary info ============================
+FAILED ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_n_planes/test_kwp.py::test_kwp[semdec3fc0-stream]
+FAILED ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_n_planes/test_kwp.py::test_kwp[semdec3fc0-stream_cols]
+========================= 2 failed, 2 passed in 3.72s ==========================
+2026-11-19 18:16:39.006 | info     |    BuildKernels | JIT cache stats: 8/22 hits (36.4%) [8 cached, 42 build-once dedup, 0 merged artifacts, 0 merged genfiles] (build_cache_telemetry.cpp:362)
+2026-11-19 18:16:39.006 | info     |    BuildKernels | JIT telemetry: 48 registered TelemetryTokens (build_cache_telemetry.cpp:510)
+2026-11-19 18:16:39.056 | info     |          Device | Closing user mode device drivers (tt_cluster.cpp:605)
+2026-11-19 18:16:39.056 | info     |             UMD | Closing devices in cluster (cluster.cpp:1496)
+2026-11-19 18:16:39.411 | info     |             UMD | Closing devices in cluster completed. (cluster.cpp:1506)
+2026-11-19 18:16:39.411 | info     |             UMD | Cluster destructor started. (cluster.cpp:1227)
+2026-11-19 18:16:39.411 | info     |             UMD | Cluster destructor completed. (cluster.cpp:1240)
+========================================
+PRECOMPILE: UP_FRONT_INLINE: collect pass over 4 item(s) took 1.7s
+PRECOMPILE: UP_FRONT_INLINE: compile route local (programs=4, farm_min=10)
+PRECOMPILE: UP_FRONT_COLLECT: 4 ops stashed across 4 bodies -> 4 unique programs (swallowed 0, skipped-capture 0)
+PRECOMPILE: UP_FRONT_COLLECT: fast-shallow from_torch — shape-only=12 fallback=0
+PRECOMPILE: UP_FRONT_COLLECT: 4 collected · 4 built · 0 already compiled in 1.0s (workers=64, errors=0) -> on-disk JIT cache warm
+PRECOMPILE: UP_FRONT_INLINE: compile step took 1.3s; starting the real pass
+SAFE_PYTEST_RESULT: FAIL (pytest exit code: 1; wrapper exit: 1)
+========================================
+SAFE_PYTEST_TOTAL_RUNTIME: 0m11s (11s total, device-lock-acquired -> exit)

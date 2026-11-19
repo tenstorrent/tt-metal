@@ -82,8 +82,19 @@ void kernel_main() {
     for (uint32_t r = 0; r < num_rounds; ++r) {
         {
             MaybeDeviceZoneScope("server_wait_ack");
+#ifdef SERVER_SLOT_ACKS
+            // One counter per slot (the receivers' SERVER_SLOT_ACKS): slot 0's also holds the kernel-start acks, so a
+            // receiver's acks for later slots never stand in for another receiver's ack of this one.
+            const uint32_t slot = r < weight_depth ? 0 : r % weight_depth;
+            const uint32_t uses = r < weight_depth ? 0 : r / weight_depth;
+            noc_semaphore_wait_min(
+                slot == 0 ? ack
+                          : reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(SERVER_SLOT_ACKS + slot - 1)),
+                (uses + (slot == 0 ? 1 : 0)) * num_receivers);
+#else
             const uint32_t acks = 1 + (r + 1 > weight_depth ? r + 1 - weight_depth : 0);
             noc_semaphore_wait_min(ack, acks * num_receivers);
+#endif
         }
         if constexpr (has_bias) {
             if (r == bias_round) {
