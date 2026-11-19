@@ -196,3 +196,29 @@ def test_passed_test_a_constant_golden_with_non_finite_lanes_is_judged_by_tolera
     assert passed_test(golden, result, DataFormat.Float16_b)
     result[2] = 1.0
     assert not passed_test(golden, result, DataFormat.Float16_b, print_errors=False)
+
+
+def test_passed_test_a_constant_golden_is_judged_on_a_broadcast_result():
+    """The tolerance check broadcasts a (1, N) result against an (N,) golden, so the
+    constant-golden shortcut has to accept the same shapes."""
+    golden = torch.ones(_PCC_NUM_ELEMENTS, dtype=torch.bfloat16)
+    assert passed_test(
+        golden, _bf16_steps_around_one().unsqueeze(0), DataFormat.Float16_b
+    )
+    assert not passed_test(
+        golden,
+        (_bf16_steps_around_one() * 2).unsqueeze(0),
+        DataFormat.Float16_b,
+        print_errors=False,
+    )
+
+
+def test_calculate_pcc_constant_with_matching_nan_lanes_is_uncorrelated():
+    """Zeroing the shared NaN lanes must not make a constant result look like it
+    tracks a varying golden."""
+    golden = _bf16_steps_around_one()
+    golden[::4] = float("nan")
+    result = torch.ones(_PCC_NUM_ELEMENTS, dtype=torch.bfloat16)
+    result[::4] = float("nan")
+    assert calculate_pcc(golden, result) == 0.0
+    assert not passed_test(golden, result, DataFormat.Float16_b, print_errors=False)

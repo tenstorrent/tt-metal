@@ -289,7 +289,9 @@ def calculate_pcc(golden, input):
     1.0 indicates perfect correlation, 0.0 indicates no correlation.
 
     NaN/Inf lanes are zeroed before the correlation is taken. A constant tensor (zero
-    standard deviation) has no defined correlation, so:
+    standard deviation) has no defined correlation; constancy is judged on each
+    tensor's own finite lanes, before that zeroing, so a constant output with NaN/Inf
+    lanes still counts as constant. Then:
 
     - one side constant, the other varying: 0.0, since a constant cannot follow the
       other side's variation;
@@ -334,6 +336,10 @@ def calculate_pcc(golden, input):
         x[mask] = 0
         return x
 
+    # Judged before masking: zeroed NaN/Inf lanes would make a constant side vary.
+    golden_constant = _is_constant(golden[torch.isfinite(golden)])
+    input_constant = _is_constant(input[torch.isfinite(input)])
+
     golden = mask_invalid(golden)
     input = mask_invalid(input)
 
@@ -347,8 +353,6 @@ def calculate_pcc(golden, input):
     # one side is constant it cannot follow the other side's variation at all, so
     # there is no correlation. When both are constant there is no variation to
     # disagree about; how far apart the two values are is the tolerance check's job.
-    golden_constant = _is_constant(golden)
-    input_constant = _is_constant(input)
     if golden_constant != input_constant:
         return 0.0
     if golden_constant:
@@ -793,7 +797,13 @@ def passed_test(
     refused without a budget. A ``Bfp8_b`` budget is counted in bfloat16 steps and
     charges for block quantization (``helpers.ulp._ULP_PROXY_DTYPES``).
 
-    ``max_ulp=None`` gives the previous verdict bit for bit. Under ``--ulp-report`` and
+    Without *max_ulp* the verdict is the tolerance check and, unless the golden is under
+    ``PCC_SIGNAL_FLOOR``, a PCC threshold. A golden that is constant on its finite
+    lanes gives PCC nothing to measure, so the tolerance check alone decides, except
+    that a result which is all zero on those lanes still goes to :func:`calculate_pcc`
+    and fails. A result constant on its finite lanes against a varying golden has PCC
+    0.0 and fails. Outside those constant-tensor cases ``max_ulp=None`` gives the
+    previous verdict bit for bit. Under ``--ulp-report`` and
     ``--ulp-measure`` the comparison is measured after the verdict, with subnormal
     outputs ranked flushed, and never read back. Every call spends the variant
     ``accuracy_contract`` last resolved.
@@ -1160,12 +1170,15 @@ def passed_test(
     # A constant golden has no variation for PCC to measure: calculate_pcc calls it
     # uncorrelated with any result that varies, even within tolerance. As with the
     # floor above, the per-element tolerance check is the verdict. Constancy is judged
-    # on the golden's finite lanes, since calculate_pcc zeroes NaN/Inf before it looks.
+    # on the golden's finite lanes, as calculate_pcc judges it.
     # An all-zero result on those lanes still goes to calculate_pcc, whose all-zero
     # check fails it: a stuck-at-zero output must not pass on a small constant golden.
-    finite_lanes = torch.isfinite(golden_tensor)
-    if _is_constant(golden_tensor[finite_lanes]) and torch.any(
-        res_tensor[finite_lanes].bool()
+    # Broadcast first: the tolerance check accepted broadcast-compatible shapes, and the
+    # golden's lane mask has to index the result.
+    golden_lanes, res_lanes = torch.broadcast_tensors(golden_tensor, res_tensor)
+    finite_lanes = torch.isfinite(golden_lanes)
+    if _is_constant(golden_lanes[finite_lanes]) and torch.any(
+        res_lanes[finite_lanes].bool()
     ):
         return bool(is_within_tolerance)
 
