@@ -16,6 +16,7 @@ static void validate_tensor(const Tensor& t, const std::string& name) {
     TT_FATAL(t.storage_type() == StorageType::DEVICE, "{} must be on device", name);
     TT_FATAL(t.is_allocated(), "{} must be allocated", name);
     TT_FATAL(t.memory_config().buffer_type() == BufferType::DRAM, "{} must be in DRAM", name);
+    TT_FATAL(!t.is_sharded(), "{} must be interleaved (unsharded)", name);
     TT_FATAL(t.layout() == Layout::TILE, "{} must be tiled", name);
     TT_FATAL(t.dtype() == DataType::FLOAT32, "{} must be float32, got {}", name, t.dtype());
 }
@@ -39,6 +40,9 @@ void GatedDeltaAttnSeqDeviceOperation::validate_on_program_cache_miss(
     const uint32_t C = attrs.chunk_size;
     const uint32_t Dk = attrs.key_dim;
     const uint32_t Dv = attrs.val_dim;
+
+    TT_FATAL(BH >= 1, "num_heads (BH) must be >= 1, got {}", BH);
+    TT_FATAL(NC >= 1, "num_chunks (NC) must be >= 1, got {}", NC);
 
     // The device kernels are hardwired to exactly four 32-wide block rows (Ct == Kt == Vt == 4):
     // the compute kernel calls fwd_sub_4rows unconditionally and the reader always fetches the 4
