@@ -56,7 +56,8 @@ enum class EnvVarID {
     TT_METAL_LOGS_PATH,                       // Path for generated logs and debug output
     TT_METAL_SIMULATOR,                       // Path to simulator executable
     TT_METAL_EMU_SERVER,                      // Chippy emu_axi endpoint (host:port)
-    TT_METAL_EMU_SOC_DESC,                    // SoC descriptor for the emulated package
+    TT_METAL_EMU_SOC_DESC,                    // SoC descriptor for the emulated package, or one a logical chip
+    TT_METAL_EMU_PACKAGE_SOC_DESC,            // Package SoC descriptor, when TT_METAL_EMU_SOC_DESC lists one a chip
     TT_METAL_EMU_CLUSTER_DESC,                // Test cluster descriptor for the emulated package
     TT_METAL_GRENDEL_JTAG_SERVER,             // OpenOCD TCL endpoint (host:port)
     TT_METAL_GRENDEL_JTAG_SOC_DESC,           // SoC descriptor for the attached package
@@ -565,6 +566,8 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
             }
             break;
         }
+
+        case EnvVarID::TT_METAL_EMU_PACKAGE_SOC_DESC: this->emu_package_soc_desc_path = value; break;
 
         case EnvVarID::TT_METAL_EMU_CLUSTER_DESC: this->emu_cluster_desc_path = value; break;
 
