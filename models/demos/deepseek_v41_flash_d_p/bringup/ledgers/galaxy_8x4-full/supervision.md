@@ -582,3 +582,4 @@
   exchange); both tables ~6.1-6.5 GB a chip (fits: ~9 GiB used at 1M of 32); net ~-4.5 ms (~+6 % tok/s).
 - Device: 2 loads (the profile run needed another model, F269, and failed; the idle map has the answer). RAM
   unaccounted 188.6 -> 193.1 GiB. STOPPED for the owner's engram decision.
+- 13:29 UTC X.10 follow-up (owner: the serving ids readback): tests/perf/test_ids_readback.py on the runner (1 request, 5 s, 0 opens, 0 loads): adapter._host_ids' 8 blocking reads = 1.53 ms a chunk idle (0.18 a read), 2.6 ms behind queued work; every chunk incl. the first; the harness never paid it. Serving estimate at 142k agentic: exposed ~16 ms (14.5 + 1.5), engram-related ~6.7 (5.2 + the readback). On-device engram: removes ~6.7, adds ~0.3-0.6 device, 6.1-6.5 GB a chip: net ~-6.1..-6.4 ms a chunk (~+8 % tok/s). Awaiting the owner's decision.
