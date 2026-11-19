@@ -43,6 +43,9 @@ void serialize_member(std::ostringstream& oss, const MemberT& member) {
         }
     } else if constexpr (ttsl::is_specialization_v<MemberT, std::reference_wrapper>) {
         serialize_member(oss, member.get());
+    } else if constexpr (ttsl::is_runtime_only_v<MemberT>) {
+        // Transparent: serialized exactly as the wrapped value, so graph output is unchanged.
+        serialize_member(oss, *member);
     } else if constexpr (ttsl::is_specialization_v<MemberT, std::pair>) {
         oss << "{";
         serialize_member(oss, member.first);

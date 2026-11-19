@@ -4,6 +4,7 @@
 
 #include <gtest/gtest.h>
 #include <tt_stl/reflection.hpp>
+#include <tt_stl/runtime_only.hpp>
 #include <tt_stl/span.hpp>
 
 #include <array>
@@ -127,8 +128,8 @@ TEST(HashCollisionTest, CPU_NoCollisionsOverScalarPairs) {
 TEST(HashCollisionTest, CPU_NoCollisionsOverHighBitAndPowerOfTwoShapes) {
     std::unordered_set<uint32_t> unique_vals;
     for (uint32_t shift = 0; shift < 32; ++shift) {
-        unique_vals.insert(1u << shift);          // powers of two
-        unique_vals.insert((1u << shift) - 1u);   // all-low-bits-set
+        unique_vals.insert(1u << shift);         // powers of two
+        unique_vals.insert((1u << shift) - 1u);  // all-low-bits-set
     }
     unique_vals.insert(0xFFFFFFFFu);
     // Dedupe first: (1<<1)-1 == 1<<0 etc. would otherwise produce identical shapes that are not
@@ -154,8 +155,7 @@ TEST(HashCollisionTest, CPU_DistinguishesHighWordOf64BitValues) {
     EXPECT_NE(
         hash_objects_with_default_seed(uint64_t{0x0000'0001'0000'0000ULL}),
         hash_objects_with_default_seed(uint64_t{0x0000'0002'0000'0000ULL}));
-    EXPECT_NE(
-        hash_objects_with_default_seed(uint64_t{1}), hash_objects_with_default_seed(uint64_t{1} << 32));
+    EXPECT_NE(hash_objects_with_default_seed(uint64_t{1}), hash_objects_with_default_seed(uint64_t{1} << 32));
 }
 
 // Avalanche: flipping a single input bit should flip ~half the 64 output bits. A weak mixer
@@ -402,7 +402,7 @@ TEST(ProgramCacheKeyTest, CPU_HashCollisionResolvedByCanonicalKey) {
     // Two DISTINCT shapes forced to the SAME 64-bit hash -- exactly the #45821 collision.
     Key a{42, canonical_shape({3, 17, 1, 1})};
     Key b{42, canonical_shape({1, 152, 1, 1})};
-    ASSERT_EQ(a.hash, b.hash);          // same bucket
+    ASSERT_EQ(a.hash, b.hash);  // same bucket
     ASSERT_NE(a.canonical, b.canonical);
 
     cache[a] = 1;  // "program" for shape A
@@ -453,10 +453,64 @@ TEST(CanonicalKeyTest, CPU_RelativeCostVsHash) {
     const double hash_ns = std::chrono::duration<double, std::nano>(t1 - t0).count() / N;
     const double canon_ns = std::chrono::duration<double, std::nano>(t2 - t1).count() / N;
     std::cout << "[ cost     ] hash_objects=" << hash_ns << " ns/op, canonical_key=" << canon_ns
-              << " ns/op, ratio=" << (canon_ns / hash_ns) << "x (key size=" << canonical_key(uint64_t{777}, attrs, shape).size()
-              << " bytes)\n";
+              << " ns/op, ratio=" << (canon_ns / hash_ns)
+              << "x (key size=" << canonical_key(uint64_t{777}, attrs, shape).size() << " bytes)\n";
     EXPECT_GT(hash_ns, 0.0);
     EXPECT_GT(canon_ns, 0.0);
+}
+
+// ttsl::runtime_only: a field that only reaches runtime args is skipped by both the hash and the
+// canonical key, so it never splits a program-cache entry, while every other field still does.
+struct AttrsWithRuntimeOnly {
+    uint32_t tile_rows = 0;                     // compiled in -> keyed
+    ttsl::runtime_only<uint32_t> position = 0;  // runtime arg only -> not keyed
+    ttsl::runtime_only<float> lr = 0.0f;        // runtime arg only -> not keyed
+    float beta = 0.0f;                          // compiled in -> keyed
+};
+
+TEST(RuntimeOnlyTest, CPU_RuntimeOnlyFieldsDoNotChangeHashOrKey) {
+    const AttrsWithRuntimeOnly a{.tile_rows = 4, .position = 0, .lr = 0.1f, .beta = 0.9f};
+    const AttrsWithRuntimeOnly b{.tile_rows = 4, .position = 4096, .lr = 0.0003f, .beta = 0.9f};
+    EXPECT_EQ(hash_objects_with_default_seed(a), hash_objects_with_default_seed(b));
+    EXPECT_EQ(canonical_key(a), canonical_key(b));
+}
+
+TEST(RuntimeOnlyTest, CPU_OtherFieldsStillChangeHashAndKey) {
+    const AttrsWithRuntimeOnly base{.tile_rows = 4, .position = 7, .lr = 0.1f, .beta = 0.9f};
+    AttrsWithRuntimeOnly other_rows = base;
+    other_rows.tile_rows = 8;
+    AttrsWithRuntimeOnly other_beta = base;
+    other_beta.beta = 0.99f;
+    for (const auto& changed : {other_rows, other_beta}) {
+        EXPECT_NE(hash_objects_with_default_seed(base), hash_objects_with_default_seed(changed));
+        EXPECT_NE(canonical_key(base), canonical_key(changed));
+    }
+}
+
+TEST(RuntimeOnlyTest, CPU_SkippedFieldKeepsNeighboursApart) {
+    // The skipped field still leaves its separator in the key, so the fields around it cannot run together.
+    struct Pair {
+        uint32_t first = 0;
+        ttsl::runtime_only<uint32_t> skipped = 0;
+        uint32_t second = 0;
+    };
+    const Pair x{.first = 1, .skipped = 0, .second = 2};
+    const Pair y{.first = 2, .skipped = 0, .second = 1};
+    EXPECT_NE(canonical_key(x), canonical_key(y));
+    EXPECT_NE(hash_objects_with_default_seed(x), hash_objects_with_default_seed(y));
+}
+
+TEST(RuntimeOnlyTest, CPU_TransparentToReadWriteAndPrint) {
+    AttrsWithRuntimeOnly attrs{.tile_rows = 1, .position = 33, .lr = 0.5f, .beta = 0.0f};
+    const uint32_t position = attrs.position;  // implicit read
+    EXPECT_EQ(position, 33u);
+    EXPECT_EQ(attrs.position % 32, 1u);  // arithmetic through the conversion
+    EXPECT_TRUE(attrs.position == 33u);
+    attrs.position = 64u;  // assignment from T
+    EXPECT_EQ(*attrs.position, 64u);
+    EXPECT_EQ(fmt::format("{}", attrs.lr), fmt::format("{}", 0.5f));
+    EXPECT_EQ(ttsl::json::to_json(attrs.position), ttsl::json::to_json(uint32_t{64}));
+    EXPECT_EQ(*ttsl::json::from_json<ttsl::runtime_only<uint32_t>>(ttsl::json::to_json(uint32_t{64})), 64u);
 }
 
 }  // namespace

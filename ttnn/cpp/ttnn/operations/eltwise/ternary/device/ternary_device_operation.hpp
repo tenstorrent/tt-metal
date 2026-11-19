@@ -4,7 +4,11 @@
 
 #pragma once
 
+#include <array>
+#include <cstdint>
 #include <optional>
+#include <tuple>
+#include <utility>
 #include <vector>
 
 #include "ttnn/device_operation.hpp"
@@ -13,6 +17,7 @@
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 #include "ttnn/operations/eltwise/ternary/common/ternary_op_types.hpp"
 #include <tt-metalium/workload/run_args/program_run_args.hpp>
+#include <tt_stl/runtime_only.hpp>
 
 namespace ttnn::operations::ternary {
 
@@ -31,13 +36,47 @@ struct TernaryDeviceOperation {
         std::optional<DeviceComputeKernelConfig> compute_kernel_config;
         std::optional<CoreRangeSet> sub_core_grids;
 
-        std::optional<ScalarVariant> scalar_input_a;
-        std::optional<ScalarVariant> scalar_input_b;
-
-        ttsl::hash::hash_t to_hash() const;
+        // Packed into runtime args and re-applied on every cache hit, so one program serves every
+        // scalar value. Every other attribute is part of the program key (compute_program_hash_inputs).
+        ttsl::runtime_only<std::optional<ScalarVariant>> scalar_input_a;
+        ttsl::runtime_only<std::optional<ScalarVariant>> scalar_input_b;
 
         DataType get_dtype() const;
     };
+
+    // Shape-blind program key of one tensor operand. Interleaved operands key on everything but the row
+    // count, so one program serves every height (per-core args are re-derived on a hit).
+    struct OperandKey {
+        DataType dtype;
+        tt::tt_metal::MemoryConfig memory_config;
+        // (logical H == 1, logical W): a single row is broadcast along H; any other H runs the same program.
+        std::pair<uint32_t, uint32_t> broadcast;
+        tt::tt_metal::Alignment alignment;
+        tt::tt_metal::Tile tile;
+        // Sharded only: common runtime args bake the shape in pages and are not rewritten on a hit.
+        std::optional<tt::tt_metal::Shape> shard_shape_in_pages;
+    };
+
+    struct OutputKey {
+        DataType dtype;
+        tt::tt_metal::Alignment alignment;
+        tt::tt_metal::Tile tile;
+        std::optional<tt::tt_metal::Shape> shard_shape_in_pages;
+    };
+
+    // Shard volume in tiles of (predicate, true, false, output) when native sharding applies.
+    using ShardVolumesKey = std::optional<std::array<std::optional<uint32_t>, 4>>;
+
+    // Everything the cached program depends on. The framework derives both the program hash and the exact
+    // canonical cache key from this tuple. All attributes are included (the runtime_only scalars are skipped),
+    // so a new attribute is keyed by default. An absent b / c operand (nullopt) distinguishes TTS/TST from TTT.
+    using program_hash_inputs_t = std::tuple<
+        const operation_attributes_t&,
+        OperandKey,
+        std::optional<OperandKey>,
+        std::optional<OperandKey>,
+        ShardVolumesKey,
+        OutputKey>;
 
     struct tensor_args_t {
         const Tensor& input_tensor_a;
@@ -67,7 +106,7 @@ struct TernaryDeviceOperation {
     static void validate_on_program_cache_miss(const operation_attributes_t&, const tensor_args_t&);
     static spec_return_value_t compute_output_specs(const operation_attributes_t&, const tensor_args_t&);
     static tensor_return_value_t create_output_tensors(const operation_attributes_t&, const tensor_args_t&);
-    static ttsl::hash::hash_t compute_program_hash(const operation_attributes_t&, const tensor_args_t&);
+    static program_hash_inputs_t compute_program_hash_inputs(const operation_attributes_t&, const tensor_args_t&);
     static bool skip_launch(const operation_attributes_t&, const tensor_args_t&, const tensor_return_value_t&);
 };
 

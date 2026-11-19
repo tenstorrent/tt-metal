@@ -74,7 +74,18 @@ template <typename device_operation_t>
 auto compute_program_hash(
     const typename device_operation_t::operation_attributes_t& operation_attributes,
     const typename device_operation_t::tensor_args_t& tensor_args) {
-    if constexpr (DeviceOperationWithCustomProgramCacheConcept<device_operation_t>) {
+    static_assert(
+        !(DeviceOperationWithCustomProgramCacheConcept<device_operation_t> &&
+          DeviceOperationWithProgramHashInputs<device_operation_t>),
+        "Define compute_program_hash_inputs or compute_program_hash, not both");
+    if constexpr (DeviceOperationWithProgramHashInputs<device_operation_t>) {
+        ZoneScopedN("Compute program hash from declared inputs");
+        return std::apply(
+            [](const auto&... inputs) {
+                return ttsl::hash::hash_objects_with_default_seed(ttsl::hash::type_hash<device_operation_t>, inputs...);
+            },
+            device_operation_t::compute_program_hash_inputs(operation_attributes, tensor_args));
+    } else if constexpr (DeviceOperationWithCustomProgramCacheConcept<device_operation_t>) {
         ZoneScopedN("Compute custom program hash");
         // Fold type_hash so distinct ops cannot alias on a custom-hash collision
         return ttsl::hash::hash_objects_with_default_seed(

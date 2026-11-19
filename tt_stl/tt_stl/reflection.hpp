@@ -25,6 +25,7 @@
 #include <filesystem>
 
 #include <tt_stl/concepts.hpp>
+#include <tt_stl/runtime_only.hpp>
 #include <tt_stl/small_vector.hpp>
 #include <nlohmann/json.hpp>
 #include <enchantum/scoped.hpp>
@@ -1364,7 +1365,14 @@ inline hash_t hash_object(const std::reference_wrapper<Ts...>& reference) noexce
 
 template <typename T>
 inline hash_t hash_object(const T& object) noexcept {
-    if constexpr (std::numeric_limits<T>::is_integer) {
+    if constexpr (is_runtime_only_v<T>) {
+        // Deliberately not part of the program identity: the value only reaches runtime args,
+        // which the program factory re-applies on every cache hit. See tt_stl/runtime_only.hpp.
+        if constexpr (DEBUG_HASH_OBJECT_FUNCTION) {
+            fmt::print("Skipping runtime_only field of type {}\n", get_type_name<T>());
+        }
+        return 0;
+    } else if constexpr (std::numeric_limits<T>::is_integer) {
         if constexpr (DEBUG_HASH_OBJECT_FUNCTION) {
             fmt::print("Hashing integer of type {}: {}\n", get_type_name<T>(), object);
         }
@@ -1546,7 +1554,11 @@ inline void append_canonical_all(std::string& out, const Types&... args) {
 template <typename T>
 inline void append_canonical(std::string& out, const T& object) {
     out.push_back('\x1f');  // unit separator: disambiguates adjacent leaves/fields
-    if constexpr (std::numeric_limits<T>::is_integer || std::is_floating_point_v<T>) {
+    if constexpr (is_runtime_only_v<T>) {
+        // Mirrors hash_object: a runtime_only field is not part of the key. The separator above
+        // still marks its position, so neighbouring fields cannot run together.
+        return;
+    } else if constexpr (std::numeric_limits<T>::is_integer || std::is_floating_point_v<T>) {
         append_bytes(out, &object, sizeof(object));
     } else if constexpr (std::is_enum_v<T>) {
         const auto v = static_cast<std::underlying_type_t<T>>(object);
@@ -1625,7 +1637,7 @@ inline void append_canonical(std::string& out, const T& object) {
     } else if constexpr (ttsl::concepts::Reflectable<T>) {
         reflect::for_each([&out, &object](auto I) { append_canonical(out, reflect::get<I>(object)); }, object);
     } else if constexpr (detail::is_std_hashable_v<T>) {  // order matters, is_std_hashable_v must be after Reflectable
-        const std::size_t h = std::hash<T>{}(object);  // lossy fallback
+        const std::size_t h = std::hash<T>{}(object);     // lossy fallback
         append_bytes(out, &h, sizeof(h));
     } else {
         static_assert(ttsl::concepts::always_false_v<T>, "Type doesn't support ttsl::hash::canonical_key");
@@ -1809,6 +1821,16 @@ struct to_json_t<std::shared_ptr<T>> {
         }
         return to_json(*pointer);
     }
+};
+
+template <typename T>
+struct to_json_t<runtime_only<T>> {
+    nlohmann::json operator()(const runtime_only<T>& value) noexcept { return to_json(*value); }
+};
+
+template <typename T>
+struct from_json_t<runtime_only<T>> {
+    runtime_only<T> operator()(const nlohmann::json& json_object) noexcept { return from_json<T>(json_object); }
 };
 
 template <typename T>

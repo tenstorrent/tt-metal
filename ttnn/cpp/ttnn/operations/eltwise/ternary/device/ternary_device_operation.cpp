@@ -269,18 +269,6 @@ static MemoryConfig resolve_mem_config_actual(
 
 DataType TernaryDeviceOperation::operation_attributes_t::get_dtype() const { return dtype.value_or(input_dtype); }
 
-ttsl::hash::hash_t TernaryDeviceOperation::operation_attributes_t::to_hash() const {
-    return ttsl::hash::hash_objects_with_default_seed(
-        ternary_op_type,
-        ternary_variant,
-        broadcast_type,
-        memory_config,
-        get_dtype(),
-        compute_kernel_config,
-        sub_core_grids,
-        worker_grid);
-}
-
 void TernaryDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     const auto& input_a = tensor_args.input_tensor_a;
@@ -360,7 +348,7 @@ void TernaryDeviceOperation::validate_on_program_cache_miss(
     } else if (args.ternary_variant == TernaryVariant::TTS) {
         TT_FATAL(input_b.has_value() && !input_c.has_value(), "TTS variant requires input_b tensor and input_c scalar");
         TT_FATAL(
-            args.scalar_input_b.has_value(),
+            args.scalar_input_b->has_value(),
             "Ternary TTS operation requires scalar_input_b to be set in operation attributes");
 
         TT_FATAL(
@@ -371,7 +359,7 @@ void TernaryDeviceOperation::validate_on_program_cache_miss(
     } else if (args.ternary_variant == TernaryVariant::TST) {
         TT_FATAL(!input_b.has_value() && input_c.has_value(), "TST variant requires input_b scalar and input_c tensor");
         TT_FATAL(
-            args.scalar_input_a.has_value(),
+            args.scalar_input_a->has_value(),
             "Ternary TST operation requires scalar_input_a to be set in operation attributes");
 
         TT_FATAL(
@@ -595,9 +583,8 @@ std::optional<tt::tt_metal::Shape> sharded_tensor_shape_in_pages(const Tensor& t
 }  // namespace
 
 // Shape-blind key: interleaved reuses one entry (per-core args re-derive on hit); sharded keys on accessor radix.
-// scalar_input_a/b are excluded here and re-applied via get_dynamic_runtime_args on cache hit.
-// One call, variant rides in `args`; std::nullopt for the absent operand distinguishes TTS/TST from TTT.
-ttsl::hash::hash_t TernaryDeviceOperation::compute_program_hash(
+// scalar_input_a/b are runtime_only (skipped by the key) and re-applied on every cache hit.
+TernaryDeviceOperation::program_hash_inputs_t TernaryDeviceOperation::compute_program_hash_inputs(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     const auto& input_a = tensor_args.input_tensor_a;
     const auto& input_b = tensor_args.input_tensor_b;
@@ -618,42 +605,41 @@ ttsl::hash::hash_t TernaryDeviceOperation::compute_program_hash(
         input_c.has_value() ? std::optional{input_c->tensor_spec()} : std::nullopt,
         output_spec);
 
-    // Broadcast key of an input: its logical W, and whether its logical H is 1. A single row is broadcast along H;
-    // any other H runs the same program, so the row count itself stays out of the hash.
-    const auto broadcast_key = [](const Tensor& t) {
+    const auto operand_key = [](const Tensor& t) {
         const auto& s = t.logical_shape();
         const uint32_t h = s.rank() >= 2 ? s[-2] : 1u;
-        return std::pair<uint32_t, uint32_t>{h == 1 ? 1u : 0u, s[-1]};
+        return OperandKey{
+            .dtype = t.dtype(),
+            .memory_config = t.memory_config(),
+            .broadcast = {h == 1 ? 1u : 0u, s[-1]},
+            .alignment = t.tensor_spec().tensor_layout().get_alignment(),
+            .tile = t.tensor_spec().tile(),
+            .shard_shape_in_pages = sharded_tensor_shape_in_pages(t)};
+    };
+    const auto optional_operand_key = [&](const std::optional<Tensor>& t) -> std::optional<OperandKey> {
+        return t.has_value() ? std::optional{operand_key(*t)} : std::nullopt;
     };
 
-    // Same broadcast key can still differ in alignment or tile.
-    const auto alignment = [](const Tensor& t) { return t.tensor_spec().tensor_layout().get_alignment(); };
+    ShardVolumesKey shard_volumes_key;
+    if (shard_volumes.has_value()) {
+        shard_volumes_key = std::array<std::optional<uint32_t>, 4>{
+            shard_volumes->predicate_shard_volume,
+            shard_volumes->true_shard_volume,
+            shard_volumes->false_shard_volume,
+            shard_volumes->output_shard_volume};
+    }
 
-    return tt::tt_metal::operation::hash_operation<TernaryDeviceOperation>(
+    return {
         args,
-        input_a.dtype(),
-        input_a.memory_config(),
-        broadcast_key(input_a),
-        alignment(input_a),
-        input_a.tensor_spec().tile(),
-        input_b.has_value() ? std::optional<DataType>{input_b->dtype()} : std::nullopt,
-        input_b.has_value() ? std::optional<MemoryConfig>{input_b->memory_config()} : std::nullopt,
-        input_b.has_value() ? std::optional{broadcast_key(*input_b)} : std::nullopt,
-        input_b.has_value() ? std::optional{alignment(*input_b)} : std::nullopt,
-        input_b.has_value() ? std::optional{input_b->tensor_spec().tile()} : std::nullopt,
-        input_c.has_value() ? std::optional<DataType>{input_c->dtype()} : std::nullopt,
-        input_c.has_value() ? std::optional<MemoryConfig>{input_c->memory_config()} : std::nullopt,
-        input_c.has_value() ? std::optional{broadcast_key(*input_c)} : std::nullopt,
-        input_c.has_value() ? std::optional{alignment(*input_c)} : std::nullopt,
-        input_c.has_value() ? std::optional{input_c->tensor_spec().tile()} : std::nullopt,
-        shard_volumes,
-        sharded_tensor_shape_in_pages(input_a),
-        input_b.has_value() ? sharded_tensor_shape_in_pages(*input_b) : std::nullopt,
-        input_c.has_value() ? sharded_tensor_shape_in_pages(*input_c) : std::nullopt,
-        sharded_tensor_shape_in_pages(output_spec),
-        output_spec.data_type(),
-        output_spec.tensor_layout().get_alignment(),
-        output_spec.tile());
+        operand_key(input_a),
+        optional_operand_key(input_b),
+        optional_operand_key(input_c),
+        shard_volumes_key,
+        OutputKey{
+            .dtype = output_spec.data_type(),
+            .alignment = output_spec.tensor_layout().get_alignment(),
+            .tile = output_spec.tile(),
+            .shard_shape_in_pages = sharded_tensor_shape_in_pages(output_spec)}};
 }
 
 bool TernaryDeviceOperation::skip_launch(

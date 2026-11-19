@@ -73,6 +73,7 @@ set(UNIT_TESTS_TTNN_BASIC_SOURCES
     test_unary_program_hash.cpp
     test_unary_dram_read_plan.cpp
     test_stale_program_hash.cpp
+    test_eltwise_program_hash_inputs.cpp
 )
 
 set(UNIT_TESTS_TTNN_KERNEL_LIB_SOURCES

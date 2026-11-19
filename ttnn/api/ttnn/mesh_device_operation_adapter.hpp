@@ -274,7 +274,15 @@ public:
 
     static ttsl::hash::hash_t compute_program_hash(
         const operation_attributes_t& attrs, const tensor_args_t& tensor_args) {
-        if constexpr (requires { DeviceOperation::compute_program_hash(attrs, tensor_args); }) {
+        if constexpr (DeviceOperationWithProgramHashInputs<DeviceOperation>) {
+            // Same inputs as the canonical key below (compute_mesh_workload_canonical_key).
+            return std::apply(
+                [](const auto&... inputs) {
+                    return ttsl::hash::hash_objects_with_default_seed(
+                        ttsl::hash::type_hash<DeviceOperation>, inputs...);
+                },
+                DeviceOperation::compute_program_hash_inputs(attrs, tensor_args));
+        } else if constexpr (requires { DeviceOperation::compute_program_hash(attrs, tensor_args); }) {
             // Fold type_hash so distinct ops cannot alias on a custom-hash collision
             return ttsl::hash::hash_objects_with_default_seed(
                 ttsl::hash::type_hash<DeviceOperation>, DeviceOperation::compute_program_hash(attrs, tensor_args));
@@ -1775,14 +1783,21 @@ public:
     // For ops with a custom compute_program_hash we can't infer which fields it keyed on (it may
     // deliberately exclude some, e.g. an RNG seed), so we return only the op-identity prefix --
     // opting that op out of attribute-level collision resolution. The default reflection-hash
-    // path is mirrored exactly.
+    // path and the compute_program_hash_inputs path are mirrored exactly. Fields marked
+    // ttsl::runtime_only are skipped by both the hash and this key.
     static std::string compute_mesh_workload_canonical_key(
         [[maybe_unused]] tt::tt_metal::distributed::MeshDevice* mesh_device,
         std::string_view op_type_name,
         const operation_attributes_t& attrs,
         const tensor_args_t& tensor_args) {
         std::string key{op_type_name};
-        if constexpr (requires { DeviceOperation::compute_program_hash(attrs, tensor_args); }) {
+        if constexpr (DeviceOperationWithProgramHashInputs<DeviceOperation>) {
+            key += ttsl::hash::canonical_key(DeviceOperation::compute_program_hash_inputs(attrs, tensor_args));
+            const auto coords = mesh_device_operation_utils::extract_tensor_coordinates(tensor_args, mesh_device);
+            std::for_each(
+                coords.begin(), coords.end(), [&](const auto& coord) { key += ttsl::hash::canonical_key(coord); });
+            return key;
+        } else if constexpr (requires { DeviceOperation::compute_program_hash(attrs, tensor_args); }) {
             return key;  // custom hash -> opt out beyond the op-identity prefix
         } else {
             key += ttsl::hash::canonical_key(attrs, tensor_args);

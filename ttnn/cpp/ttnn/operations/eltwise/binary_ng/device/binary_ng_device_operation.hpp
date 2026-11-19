@@ -5,6 +5,7 @@
 #pragma once
 
 #include <cstdint>
+#include <optional>
 #include <tuple>
 
 #include "ttnn/device_operation.hpp"
@@ -74,6 +75,11 @@ struct BinaryNgDeviceOperation {
         DataType get_dtype() const;
 
         // Program-cache attributes. Runtime scalar/tolerance values are excluded; they are patched as runtime args.
+        // Not keyed, on purpose: scalar, rtol, atol (runtime args), input_dtype (a's dtype is keyed through
+        // OperandKey), sub_device_id (worker_grid carries its effect). post_activations is keyed except for
+        // where/quant ops, which read their params (zero point, where scalar) as runtime args; equal_nan only
+        // matters to ISCLOSE and op_params only to BIAS_GELU. A field added to this struct must be listed here
+        // or in that note -- see the static_assert in binary_ng_device_operation.cpp.
         static constexpr auto attribute_names = std::make_tuple(
             "binary_op_type",
             "lhs_activations",
@@ -134,11 +140,27 @@ struct BinaryNgDeviceOperation {
         const Tensor& input_tensor_a;
         std::optional<Tensor> input_tensor_b;
         std::optional<Tensor> output_tensor;
-
-        // Operand dtypes, memory configs, Alignment, and Tile, plus each sharded operand's shape in
-        // pages. Omits logical shape by design, so differently-shaped interleaved calls share one cache entry.
-        ttsl::hash::hash_t to_hash() const;
     };
+
+    // Shape-blind program key of one tensor operand: omits the logical shape by design, so differently-shaped
+    // interleaved calls share one cache entry (per-core args are re-derived on a hit).
+    struct OperandKey {
+        DataType dtype;
+        tt::tt_metal::MemoryConfig memory_config;
+        tt::tt_metal::Alignment alignment;
+        tt::tt_metal::Tile tile;
+        // Sharded only: the accessor bakes the shape in pages, which is not rewritten on a hit.
+        std::optional<tt::tt_metal::Shape> shard_shape_in_pages;
+    };
+
+    // Everything the cached program depends on. The framework derives both the program hash and the exact
+    // canonical cache key from this tuple (the tensor part used to be a lossy 64-bit to_hash leaf in the key).
+    using program_hash_inputs_t = std::tuple<
+        const operation_attributes_t&,  // keyed through attribute_names / attribute_values
+        OperandKey,                     // a
+        std::optional<OperandKey>,      // b; nullopt on the scalar path
+        DataType>;                      // output dtype (fp32 DEST); a's dtype when there is no output tensor
+    static program_hash_inputs_t compute_program_hash_inputs(const operation_attributes_t&, const tensor_args_t&);
 
     struct ProgramFactory {
         static tt::tt_metal::ProgramDescriptor create_descriptor(

@@ -45,6 +45,7 @@
 #include <enchantum/scoped.hpp>
 #include <tt_stl/small_vector.hpp>
 #include <tt_stl/strong_type.hpp>
+#include <tt_stl/runtime_only.hpp>
 
 // ============================================================================
 // "Leaf" formatters – these must appear BEFORE the generic format_value helper
@@ -81,6 +82,17 @@ struct fmt::formatter<ttsl::StrongType<T, Tag>> {
     constexpr auto parse(format_parse_context& ctx) -> format_parse_context::iterator { return ctx.end(); }
 
     auto format(const ttsl::StrongType<T, Tag>& val, format_context& ctx) const -> format_context::iterator {
+        return fmt::format_to(ctx.out(), "{}", *val);
+    }
+};
+
+// ---- ttsl::runtime_only  (fully inline – formats as the inner T) ----
+
+template <typename T>
+struct fmt::formatter<ttsl::runtime_only<T>> {
+    constexpr auto parse(format_parse_context& ctx) -> format_parse_context::iterator { return ctx.end(); }
+
+    auto format(const ttsl::runtime_only<T>& val, format_context& ctx) const -> format_context::iterator {
         return fmt::format_to(ctx.out(), "{}", *val);
     }
 };

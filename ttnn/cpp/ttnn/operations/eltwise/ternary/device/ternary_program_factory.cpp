@@ -655,14 +655,14 @@ uint32_t pack_compute_scalar_arg(
         return round_scalar ? std::bit_cast<uint32_t>(static_cast<float>(bfloat16(std::bit_cast<float>(bits)))) : bits;
     };
     if (variant == TernaryVariant::TTS) {
-        return pack(operation_attributes.scalar_input_b.value());
+        return pack(operation_attributes.scalar_input_b->value());
     }
     if (variant == TernaryVariant::TST) {
-        return pack(operation_attributes.scalar_input_a.value());
+        return pack(operation_attributes.scalar_input_a->value());
     }
     if ((op_type == TernaryOpType::ADDCMUL || op_type == TernaryOpType::ADDCDIV) &&
-        operation_attributes.scalar_input_a.has_value()) {
-        return pack_scalar_runtime_arg(operation_attributes.scalar_input_a.value(), output_dtype);
+        operation_attributes.scalar_input_a->has_value()) {
+        return pack_scalar_runtime_arg(operation_attributes.scalar_input_a->value(), output_dtype);
     }
     return 0u;
 }

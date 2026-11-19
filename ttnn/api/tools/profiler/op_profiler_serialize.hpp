@@ -265,13 +265,20 @@ template <typename device_operation_t>
 inline auto compute_program_hash(
     const typename device_operation_t::operation_attributes_t& operation_attributes,
     const typename device_operation_t::tensor_args_t& tensor_args) {
-    if constexpr (requires(
-                      const typename device_operation_t::operation_attributes_t& operation_attributes,
-                      const typename device_operation_t::tensor_args_t& tensor_args) {
-                      {
-                          device_operation_t::compute_program_hash(operation_attributes, tensor_args)
-                      } -> std::convertible_to<ttsl::hash::hash_t>;
-                  }) {
+    if constexpr (requires { device_operation_t::compute_program_hash_inputs(operation_attributes, tensor_args); }) {
+        ZoneScopedN("Op profiler Compute program hash from declared inputs");
+        return std::apply(
+            [](const auto&... inputs) {
+                return ttsl::hash::hash_objects_with_default_seed(ttsl::hash::type_hash<device_operation_t>, inputs...);
+            },
+            device_operation_t::compute_program_hash_inputs(operation_attributes, tensor_args));
+    } else if constexpr (requires(
+                             const typename device_operation_t::operation_attributes_t& operation_attributes,
+                             const typename device_operation_t::tensor_args_t& tensor_args) {
+                             {
+                                 device_operation_t::compute_program_hash(operation_attributes, tensor_args)
+                             } -> std::convertible_to<ttsl::hash::hash_t>;
+                         }) {
         ZoneScopedN("Op profiler Compute custom program hash");
         return device_operation_t::compute_program_hash(operation_attributes, tensor_args);
     } else {

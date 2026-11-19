@@ -280,7 +280,7 @@ std::optional<tt::tt_metal::Shape> sharded_tensor_shape_in_pages(const tt::tt_me
 
 // Prefers the Buffer, which is the faithful record of what the accessor was built from: set_page_size
 // and set_shard_spec reset buffer_distribution_spec_ while the spec keeps it. Falls back to the spec
-// when the Buffer is unreadable -- to_hash() runs before validate_on_program_cache_miss, and buffer()
+// when the Buffer is unreadable -- the key is computed before validate_on_program_cache_miss, and buffer()
 // throws on host storage or a deallocated tensor -- so a sharded operand never contributes an empty
 // shape to the key, which would be indistinguishable from an interleaved one and would collide.
 std::optional<tt::tt_metal::Shape> sharded_tensor_shape_in_pages(const Tensor& tensor) {
@@ -298,21 +298,30 @@ std::optional<tt::tt_metal::Shape> sharded_tensor_shape_in_pages(const Tensor& t
 }
 }  // namespace
 
-ttsl::hash::hash_t BinaryNgDeviceOperation::tensor_args_t::to_hash() const {
-    return ttsl::hash::hash_objects_with_default_seed(
-        input_tensor_a.dtype(),
-        input_tensor_a.memory_config(),
-        input_tensor_a.tensor_spec().tensor_layout().get_alignment(),
-        input_tensor_a.tensor_spec().tile(),
-        input_tensor_b.has_value() ? std::optional<DataType>{input_tensor_b->dtype()} : std::nullopt,
-        input_tensor_b.has_value() ? std::optional<MemoryConfig>{input_tensor_b->memory_config()} : std::nullopt,
-        input_tensor_b.has_value() ? std::optional{input_tensor_b->tensor_spec().tensor_layout().get_alignment()}
-                                   : std::nullopt,
-        input_tensor_b.has_value() ? std::optional{input_tensor_b->tensor_spec().tile()} : std::nullopt,
-        sharded_tensor_shape_in_pages(input_tensor_a),
-        input_tensor_b.has_value() ? sharded_tensor_shape_in_pages(*input_tensor_b) : std::nullopt,
+// Every struct field is either in attribute_names or deliberately left out (see the note above
+// attribute_names). Adding a field fails here until it is classified, so it cannot silently go unkeyed.
+static_assert(
+    reflect::size<BinaryNgDeviceOperation::operation_attributes_t>() == 28,
+    "BinaryNg operation_attributes_t changed: key the new field in attribute_names, or document why not");
+
+BinaryNgDeviceOperation::program_hash_inputs_t BinaryNgDeviceOperation::compute_program_hash_inputs(
+    const operation_attributes_t& attributes, const tensor_args_t& tensor_args) {
+    const auto operand_key = [](const Tensor& t) {
+        return OperandKey{
+            .dtype = t.dtype(),
+            .memory_config = t.memory_config(),
+            .alignment = t.tensor_spec().tensor_layout().get_alignment(),
+            .tile = t.tensor_spec().tile(),
+            .shard_shape_in_pages = sharded_tensor_shape_in_pages(t)};
+    };
+    const auto& b = tensor_args.input_tensor_b;
+    return {
+        attributes,
+        operand_key(tensor_args.input_tensor_a),
+        b.has_value() ? std::optional{operand_key(*b)} : std::nullopt,
         // Output dtype can change the program (fp32 DEST). Falls back to a's dtype so in-place calls still share.
-        output_tensor.has_value() ? output_tensor->dtype() : input_tensor_a.dtype());
+        tensor_args.output_tensor.has_value() ? tensor_args.output_tensor->dtype()
+                                              : tensor_args.input_tensor_a.dtype()};
 }
 
 void BinaryNgDeviceOperation::validate_on_program_cache_miss(

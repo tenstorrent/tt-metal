@@ -257,6 +257,23 @@ concept DeviceOperationWithCustomProgramCacheConcept =
         } -> std::convertible_to<std::uint64_t>;
     };
 
+// An op that cannot key on its full attributes + tensor specs (e.g. an eltwise op whose program is
+// shape-agnostic) declares WHAT it keys on instead of hand-folding a hash:
+//
+//     static auto compute_program_hash_inputs(const operation_attributes_t&, const tensor_args_t&)
+//         -> std::tuple<...>;
+//
+// The framework derives both the 64-bit program hash and the exact canonical cache key from that one
+// tuple, so the two cannot drift apart and the op keeps collision protection (a hand-written
+// compute_program_hash opts out of it). Prefer putting the whole operation_attributes_t in the tuple
+// and marking runtime-arg-only fields ttsl::runtime_only, so a new attribute is keyed by default.
+template <typename device_operation_t>
+concept DeviceOperationWithProgramHashInputs = requires(
+    const typename device_operation_t::operation_attributes_t& operation_attributes,
+    const typename device_operation_t::tensor_args_t& tensor_args) {
+    device_operation_t::compute_program_hash_inputs(operation_attributes, tensor_args);
+};
+
 template <typename device_operation_t>
 concept HasSkipLaunch = requires(
     device_operation_t op,
