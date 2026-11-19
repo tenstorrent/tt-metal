@@ -17,6 +17,10 @@ namespace ckernel {
  * Copies all values from the tile in idst_in to the tile in idst_out in the DST register buffer.
  * This is a generalized version that takes a DataFormat template parameter.
  *
+ * On Wormhole and Blackhole the copy is bit-exact: it moves each DST word unchanged (denormals, NaN payloads and
+ * signed zeros included), 32 bits wide when the DST register is in 32-bit mode or DATA_FORMAT is a 32-bit format,
+ * 16 bits wide otherwise.
+ *
  * The DST register buffer must be in acquired state via *tile_regs_acquire* call. This call is blocking and is only
  * available on the compute engine.
  *
@@ -49,7 +53,7 @@ ALWI void copy_dest_values(uint32_t idst_in, uint32_t idst_out, VectorMode vecto
         DST_SYNC_MODE,
         DST_ACCUM_MODE,
         copy_dest_value,
-        (DATA_FORMAT, false /*APPROXIMATE*/, ITERATIONS),
+        (DATA_FORMAT, false /*APPROXIMATE*/, ITERATIONS, DST_ACCUM_MODE),
         idst_in,
         idst_out,
         0 /*unused*/,

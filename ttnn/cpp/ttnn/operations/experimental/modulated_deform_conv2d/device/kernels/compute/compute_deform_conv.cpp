@@ -161,7 +161,7 @@ inline void copy_values(uint32_t from, uint32_t to) {
         DST_SYNC_MODE,
         DST_ACCUM_MODE,
         copy_dest_value,
-        (DataFormat::Float32, false /* APPROXIMATE */),
+        (DataFormat::Float32, false /* APPROXIMATE */, 8 /* ITERATIONS */, DST_ACCUM_MODE),
         from,
         to,
         0 /* unused */,
