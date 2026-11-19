@@ -538,6 +538,19 @@ notes:
     pre-P.84 path (outputs and the served caches): prove it in one runner load (off vs the committed tree''s numbers / the
     determinism records). Report the replica DRAM per chip measured. All model-level checks through the resident runner;
     at most 2 device opens this attempt.'
+- id: OV-52
+  tasks:
+  - P.84
+  status: open
+  t: '2026-11-19T10:56:56'
+  text: 'Overseer 10:56, attempt 3, second item (as important as the call-time switch): MOE_REPLICA_SPLIT=best today splits
+    from each chip''s LOCAL picks x 32 (routing_planner.hpp remap_replicas): an estimate from 160 of 5120 tokens, not the
+    chunk''s routing. The offline -4.5 ms assumed the split from the chunk''s GLOBAL per-expert counts. Exchange the counts:
+    an all-gather of each chip''s per-expert pick counts (384 x int32 = 1.5 KB a chip; or the head''s own global routing
+    metadata if it already has it) before the planner, so every chip computes the same best split from the true counts (a
+    pure function of the chunk''s routing: deterministic, identical on every chip). Measure the split''s quality: the busiest
+    chip''s tiles a layer with replicas vs the offline best split on the same chunk (census numbers), and the walls. Also:
+    set MOE_REPLICAS default back to off until the owner''s accept (keep_default).'
 fixes:
 - id: FIX.1
   title: 'Owner order: no padding to get around a kernel limit'
