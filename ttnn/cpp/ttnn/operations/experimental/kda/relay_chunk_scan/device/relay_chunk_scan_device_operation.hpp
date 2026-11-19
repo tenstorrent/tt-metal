@@ -39,6 +39,7 @@ std::tuple<Tensor, Tensor> relay_chunk_scan(
     const Tensor& actual_start,
     const std::optional<Tensor>& actual_end,
     const Tensor& landing,
+    const Tensor& gate_workspace,
     uint32_t num_heads,
     tt::tt_metal::MathFidelity gate_math_fidelity,
     float norm_epsilon,

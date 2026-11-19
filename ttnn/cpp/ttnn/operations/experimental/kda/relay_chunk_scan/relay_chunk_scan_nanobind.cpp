@@ -59,6 +59,9 @@ void bind_relay_chunk_scan(nb::module_& mod) {
             landing (ttnn.Tensor): FLOAT32 TILE-layout ``[2*B*H*K, K]`` height-sharded in L1 over each head's
                 first core, two ``K x K`` states per core: the entry state the predecessor's sender writes and the
                 final state the last rank writes on the first rank.
+            gate_workspace (ttnn.Tensor): L1 tensor height-sharded over the heads' cores and the helpers (``cores``
+                less the senders that are not helpers), the same bytes on each: the output gate's working buffers, for
+                the call only. The relay takes K blocks as large as it holds.
             semaphores (list[ttnn.GlobalSemaphore]): Eight zeroed counters on every core of the program: the
                 entry-state, final-state and final-carry arrivals, then the output gate's x and W ready and valid
                 counts and its landed count.
@@ -109,6 +112,7 @@ void bind_relay_chunk_scan(nb::module_& mod) {
         nb::arg("norm_weight").noconvert(),
         nb::arg("actual_start").noconvert(),
         nb::arg("landing").noconvert(),
+        nb::arg("gate_workspace").noconvert(),
         nb::arg("semaphores"),
         nb::kw_only(),
         nb::arg("local_rows"),

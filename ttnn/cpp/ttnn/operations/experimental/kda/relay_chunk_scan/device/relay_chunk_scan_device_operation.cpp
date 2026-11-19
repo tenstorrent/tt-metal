@@ -32,6 +32,7 @@ void RelayChunkScanOperation::validate_on_program_cache_hit(const operation_attr
         {&in.initial_state, "initial_state"},
         {&in.actual_start, "actual_start"},
         {&in.landing, "landing"},
+        {&in.gate_workspace, "gate_workspace"},
         {&in.final_e, "final_e"},
         {&in.final_b, "final_b"},
         {&in.gate_input, "gate_input"},
@@ -193,12 +194,25 @@ void RelayChunkScanOperation::validate_on_program_cache_miss(
         relay_landing_slots,
         key_dim,
         key_dim);
+    // The output gate's workspace, on the heads' cores and the helpers.
+    std::vector<CoreCoord> gate_cores(attrs.cores.begin(), attrs.cores.begin() + heads * cores_per_head);
+    gate_cores.insert(gate_cores.end(), helper_cores.begin(), helper_cores.end());
+    kda_factory_detail::check_allocated_device_tensor(in.gate_workspace, operation_name, "gate_workspace");
+    kda_factory_detail::check_same_device(in.packed, in.gate_workspace, operation_name, "gate_workspace");
+    const auto& workspace = in.gate_workspace.memory_config();
+    TT_FATAL(
+        workspace.buffer_type() == tt::tt_metal::BufferType::L1 &&
+            workspace.memory_layout() == tt::tt_metal::TensorMemoryLayout::HEIGHT_SHARDED &&
+            kda_factory_detail::same_cores(workspace.shard_spec()->grid, gate_cores),
+        "{}: gate_workspace must be height-sharded in L1 over the heads' cores and the helpers",
+        operation_name);
     kda_factory_detail::check_distinct_buffers(
         {{&in.packed, "packed"},
          {&in.terms, "terms"},
          {&in.initial_state, "initial_state"},
          {&in.actual_start, "actual_start"},
          {&in.landing, "landing"},
+         {&in.gate_workspace, "gate_workspace"},
          {&in.final_e, "final_e"},
          {&in.final_b, "final_b"},
          {&in.gate_input, "gate_input"},
@@ -410,6 +424,7 @@ std::tuple<Tensor, Tensor> relay_chunk_scan(
     const Tensor& actual_start,
     const std::optional<Tensor>& actual_end,
     const Tensor& landing,
+    const Tensor& gate_workspace,
     uint32_t num_heads,
     tt::tt_metal::MathFidelity gate_math_fidelity,
     float norm_epsilon,
@@ -445,6 +460,7 @@ std::tuple<Tensor, Tensor> relay_chunk_scan(
             .initial_state = initial_state,
             .actual_start = actual_start,
             .landing = landing,
+            .gate_workspace = gate_workspace,
             .final_e = final_e,
             .final_b = final_b,
             .actual_end = actual_end,

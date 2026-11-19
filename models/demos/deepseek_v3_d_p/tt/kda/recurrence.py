@@ -496,7 +496,8 @@ class KDARecurrence:
         beta: ttnn.Tensor,
         initial_state: ttnn.Tensor | SlabEntry,
         beta_logits_column_offset: int,
-        release_gate: bool,
+        release_inputs: bool,
+        release_beta: bool,
     ) -> tuple[_PreparedChunks, ttnn.Tensor | SlabEntry, _RecurrenceGeometry]:
         geometry = self._geometry
         # Beta's logits are a column window of a wider projection.
@@ -533,9 +534,9 @@ class KDARecurrence:
             beta_logits_column_offset=beta_logits_column_offset,
             memory_config=self._preparation_memory,
         )
-        if release_gate:
-            # Only chunk preparation reads the gate; freeing it here lowers L1 use during the scans.
-            ttnn.deallocate(gate)
+        # Only chunk preparation reads them; freeing them here lowers L1 use during the scans.
+        for tensor in ((q, k, v, gate) if release_inputs else ()) + ((beta,) if release_beta else ()):
+            ttnn.deallocate(tensor)
         return prepared, state, geometry
 
     @staticmethod
@@ -559,15 +560,16 @@ class KDARecurrence:
         beta: ttnn.Tensor,
         initial_state: ttnn.Tensor | SlabEntry,
         beta_logits_column_offset: int,
-        release_gate: bool = False,
+        release_inputs: bool = False,
+        release_beta: bool = False,
         output_norm: OutputNorm | None = None,
     ) -> RecurrenceResult:
         """Execute the constructed graph using caller-owned state and chronology.
 
         ``beta`` is a token-major BF16 tensor whose ``heads`` columns from ``beta_logits_column_offset`` hold beta's
         pre-sigmoid logits, such as the fused input projection; chunk preparation applies the sigmoid.
-        With ``release_gate`` the recurrence takes ownership of ``gate`` and frees it once chunk preparation has
-        read it. A :class:`SlabEntry` ``initial_state`` (SP > 1 only) is read and replaced in place. With sequence
+        With ``release_inputs`` the recurrence takes ownership of ``q``, ``k``, ``v`` and ``gate``, and with
+        ``release_beta`` of ``beta``, and frees them once chunk preparation has read them. A :class:`SlabEntry` ``initial_state`` (SP > 1 only) is read and replaced in place. With sequence
         parallelism the relay applies ``output_norm``, and the output is its token-major result; otherwise the output
         is [B*H, T, V].
         """
@@ -585,7 +587,8 @@ class KDARecurrence:
             actual_start=actual_start,
             actual_end=actual_end,
             beta_logits_column_offset=beta_logits_column_offset,
-            release_gate=release_gate,
+            release_inputs=release_inputs,
+            release_beta=release_beta,
         )
         result = self._execute(prepared, state, actual_start, actual_end, output_norm=output_norm)
         # Release the chunk terms as soon as the scan consumed them, so every call sees the same free memory (the

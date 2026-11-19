@@ -65,13 +65,7 @@ void kernel_main() {
         const auto weight = TensorAccessor(gate_weight_args, get_common_arg_val<uint32_t>(3 + 2 * num_links));
         const uint32_t tile = get_tile_size(cb_gin1);
         const uint32_t first_column = head % heads * kt;
-        kda_gate::Share{
-            kda_gate::group(gate_table, gate_groups + head),
-            cb_gin1,
-            gate_kb * kt,
-            gate_kb * kt * tile,
-            get_common_arg_val<uint32_t>(4 + 2 * num_links),
-            get_common_arg_val<uint32_t>(5 + 2 * num_links)}
+        kda_gate::Share(gate_table, gate_groups + head, cb_gin1, gate_kb * kt, gate_kb * kt * tile, 4 + 2 * num_links)
             .all(gate_k / gate_kb, [&](uint32_t b, uint32_t slot) {
                 for (uint32_t i = 0; i < gate_kb; ++i) {
                     for (uint32_t j = 0; j < kt; ++j) {

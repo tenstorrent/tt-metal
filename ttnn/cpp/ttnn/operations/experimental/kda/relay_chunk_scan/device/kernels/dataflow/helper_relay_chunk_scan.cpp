@@ -64,24 +64,15 @@ void kernel_main() {
             }
         }
     };
-    const kda_gate::Share x{
-        kda_gate::group(gate_table, head / heads * cores_per_head),
-        cb_gin0,
-        core_chunks * gate_kb,
-        core_chunks * gate_kb * x_tile,
-        get_common_arg_val<uint32_t>(4),
-        get_common_arg_val<uint32_t>(5)};
-    const kda_gate::Share w{
-        kda_gate::group(gate_table, gate_groups + head),
-        cb_gin1,
-        gate_kb * kt,
-        gate_kb * kt * w_tile,
-        get_common_arg_val<uint32_t>(6),
-        get_common_arg_val<uint32_t>(7)};
-    // A K block of each in turn: both groups move at the pace of their slowest member.
-    for (uint32_t b = 0; b < blocks; ++b) {
-        x.block(b, read_x);
-        w.block(b, read_w);
+    kda_gate::Share x(
+        gate_table, head / heads * cores_per_head, cb_gin0, core_chunks * gate_kb, core_chunks * gate_kb * x_tile, 4);
+    kda_gate::Share w(gate_table, gate_groups + head, cb_gin1, gate_kb * kt, gate_kb * kt * w_tile, 6);
+    // Both operands on this one RISC, each as far as its group lets it.
+    bool x_done = false;
+    bool w_done = false;
+    while (!(x_done && w_done)) {
+        x_done = x.step(blocks, read_x);
+        w_done = w.step(blocks, read_w);
     }
     x.finish(blocks);
     w.finish(blocks);

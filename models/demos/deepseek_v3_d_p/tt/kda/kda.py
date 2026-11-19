@@ -728,14 +728,16 @@ class ttKDA:
             initial_state=state.recurrent,
             actual_start=actual_start,
             actual_end=actual_end,
-            release_gate=True,
+            release_inputs=True,
+            # With the relay forming the output gate, nothing reads the projection after chunk preparation.
+            release_beta=relay_norm,
             output_norm=output_norm if relay_norm else None,
         )
         output = result.output
         if not relay_norm:
             output = self._kda_rms_norm(output, inputs)
             ttnn.deallocate(result.output)
-        ttnn.deallocate(inputs.projected)
+            ttnn.deallocate(inputs.projected)
         if gathered:
             ttnn.deallocate(hidden_states)
         output = self._project_output(output)

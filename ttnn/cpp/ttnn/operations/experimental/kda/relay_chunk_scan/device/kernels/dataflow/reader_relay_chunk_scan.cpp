@@ -103,12 +103,12 @@ void kernel_main() {
     const uint32_t final_semaphore = get_common_arg_val<uint32_t>(12);
     const uint32_t sp_rank = get_common_arg_val<uint32_t>(13);
     const uint32_t tp_rank = get_common_arg_val<uint32_t>(15);
-    const uint32_t gate_ready = get_common_arg_val<uint32_t>(16);
-    const uint32_t gate_valid = get_common_arg_val<uint32_t>(17);
-    // On a head core, its helper's count of the head's g landed in cb_gate.
-    const uint32_t gate_landed = get_common_arg_val<uint32_t>(18);
+    // Then x's counters (gate_matmul_dataflow.hpp), and on a head core its helper's count of the head's g landed in
+    // cb_gate.
+    constexpr uint32_t x_counters = 16;
+    const uint32_t gate_landed = get_common_arg_val<uint32_t>(x_counters + 2);
     // Then every core's NoC x | y << 16, in order: this head's from head * cores_per_head.
-    const size_t head_core_args = 19 + head * cores_per_head;
+    const size_t head_core_args = x_counters + 3 + head * cores_per_head;
 
     // The bounds, each into its own page (a DRAM read keeps its source's alignment).
     cb_reserve_back(cb_chron, 1);
@@ -219,13 +219,13 @@ void kernel_main() {
         const uint32_t tile = get_tile_size(cb_gin0);
         const uint32_t first_row = (head / heads) * num_chunks + first_chunk;
         const uint32_t local_begin = tp_rank * local_k;
-        kda_gate::Share{
-            kda_gate::group(gate_table, (head / heads) * cores_per_head + place),
+        kda_gate::Share(
+            gate_table,
+            (head / heads) * cores_per_head + place,
             cb_gin0,
             core_chunks * gate_kb,
             core_chunks * gate_kb * tile,
-            gate_ready,
-            gate_valid}
+            x_counters)
             .all(gate_k / gate_kb, [&](uint32_t b, uint32_t slot) {
                 for (uint32_t m = 0; m < core_chunks; ++m) {
                     for (uint32_t i = 0; i < gate_kb; ++i) {

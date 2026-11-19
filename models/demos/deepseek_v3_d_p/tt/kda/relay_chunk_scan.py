@@ -71,6 +71,10 @@ class OutputNorm:
 # A sender core's count semaphores, one per head it serves (relay_chunk_scan_max_heads_per_link).
 _MAX_HEADS_PER_LINK = 14
 
+# The output gate's working L1 per core (the K blocks of x and W in flight): K blocks of 8 tiles at Kimi-K3's 5 chunk rows
+# per core. Allocated right before the relay, it takes L1 the layer has freed by then (its q, k, v and projection).
+KDA_GATE_WORKSPACE_BYTES_PER_CORE = 94 * 4096
+
 # A core's share of the emitted FP32 terms (F(0) and F(I) of its chunks) that stays in its L1; beyond it they stream
 # from DRAM (Kimi-K3: 320 KiB per core at 1280 rows per chip).
 KDA_RELAY_TERMS_L1_BYTES_PER_CORE = 320 * 1024
@@ -181,6 +185,7 @@ class RelayChunkScan:
         if len(helpers) < batch_heads:
             raise ValueError(f"relay prefix needs {batch_heads} helper cores, the grid leaves {len(helpers)}")
         self.cores = correction + cores[:senders] + helpers
+        gate_cores = correction + helpers
 
         def core_set(selected):
             # One range per row run, in the cores' order: a sharded tensor places shard i on the set's i-th core.
@@ -202,6 +207,13 @@ class RelayChunkScan:
         # Two K x K states per head (the entry state, the final state) while reserved.
         self._landing_shape = ttnn.Shape([2 * batch_heads * key_dim, key_dim])
         self._landing = None
+        workspace_rows = KDA_GATE_WORKSPACE_BYTES_PER_CORE // (ttnn.TILE_SIZE * 4)
+        self._gate_workspace_memory_config = ttnn.MemoryConfig(
+            ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+            ttnn.BufferType.L1,
+            ttnn.ShardSpec(core_set(gate_cores), (workspace_rows, ttnn.TILE_SIZE), ttnn.ShardOrientation.ROW_MAJOR),
+        )
+        self._gate_workspace_shape = ttnn.Shape([len(gate_cores) * workspace_rows, ttnn.TILE_SIZE])
         # A peer can bump the entry, final and carry arrival counters before this rank's call starts; the output gate's
         # handshakes count across the program's cores.
         self.semaphores = persistent_semaphores(mesh_device, 8)
@@ -251,6 +263,13 @@ class RelayChunkScan:
         if isinstance(initial_state, SlabEntry):
             slab_kwargs = initial_state.op_kwargs()
             initial_state = initial_state.slab
+        gate_workspace = ttnn.allocate_tensor_on_device(
+            self._gate_workspace_shape,
+            ttnn.float32,
+            ttnn.TILE_LAYOUT,
+            self.mesh_device,
+            self._gate_workspace_memory_config,
+        )
         result = ttnn.experimental.kda.relay_chunk_scan(
             packed,
             terms,
@@ -262,6 +281,7 @@ class RelayChunkScan:
             output_norm.weight,
             actual_start,
             self._landing,
+            gate_workspace,
             self.semaphores,
             local_rows=self.local_rows,
             num_links=self.num_links,
@@ -281,4 +301,5 @@ class RelayChunkScan:
         # the last rank's final state by the first rank.
         ttnn.deallocate(self._landing)
         self._landing = None
+        ttnn.deallocate(gate_workspace)
         return result

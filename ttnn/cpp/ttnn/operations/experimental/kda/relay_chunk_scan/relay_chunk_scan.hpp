@@ -27,6 +27,7 @@ std::tuple<ttnn::Tensor, ttnn::Tensor> relay_chunk_scan(
     const ttnn::Tensor& norm_weight,
     const ttnn::Tensor& actual_start,
     const ttnn::Tensor& landing,
+    const ttnn::Tensor& gate_workspace,
     const std::vector<tt::tt_metal::GlobalSemaphore>& semaphores,
     uint32_t local_rows,
     uint32_t num_links,

@@ -57,6 +57,10 @@ struct RelayChunkScanInputs {
     // need a barrier across the SP line between them: a rank's predecessor's next call overwrites them as soon as it
     // starts.
     Tensor landing;
+    // L1, height-sharded over the heads' cores and the helpers, the same bytes on each: the output gate's K blocks of x
+    // and W (and the head-only buffers they alias). Only used within the call: allocated right before it, it lands in
+    // whatever L1 the layer has freed by then.
+    Tensor gate_workspace;
     // The rank's final transition in complement form, which the first rank applies to the relayed final state when
     // the interval ends in a separated tail, and the optional exclusive valid end that decides it.
     Tensor final_e;
