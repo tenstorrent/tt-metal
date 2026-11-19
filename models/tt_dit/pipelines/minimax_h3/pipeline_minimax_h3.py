@@ -669,13 +669,15 @@ class MiniMaxH3Pipeline:
         encoder_dynamic_length: bool | None = None,
         agmm_mode: AgmmMode | str | None = None,
         precompute_adaln_modulation: bool = True,
+        ff1_output_dtype: ttnn.DataType | None = None,
     ) -> None:
         """`dynamic_length` serves every packed length up to `max_sequence_length` with one program set per
         length class (eager only). It is the 4x8 presets' default on both architectures; `_resolve_denoise_path` has
         the precedence (kwarg > MINIMAX_H3_DYNAMIC_LENGTH > preset) and how the bucketed kwargs keep that path.
         `agmm_mode` (`accurate` / `balanced`; kwarg > MINIMAX_H3_AGMM_MODE > `balanced`) picks that path's
         all-gather matmul pins. `precompute_adaln_modulation` projects every step's adaLN tables once at the start of a
-        denoise instead of once a step; `trace_denoise` configs always project once a step.
+        denoise instead of once a step; `trace_denoise` configs always project once a step. `ff1_output_dtype`
+        (e.g. `ttnn.bfloat8_b`, lossy) is the DiT feed-forward's ff1 -> ff2 intermediate dtype (None: bfloat16).
 
         `encoder_dynamic_length` does the same for the prompt encoder; None turns it on with `dynamic_length` where
         the mesh preset enables it (the Blackhole 4x8 and 4x32), for t2va/fl2va only."""
@@ -711,6 +713,7 @@ class MiniMaxH3Pipeline:
         self.dynamic_length = path.dynamic_length
         self.agmm_mode = resolve_agmm_mode(agmm_mode)
         self.precompute_adaln_modulation = precompute_adaln_modulation
+        self.ff1_output_dtype = ff1_output_dtype
         self.dit_fsdp, fsdp_source = _resolve_dit_fsdp(
             preset, dit_fsdp=dit_fsdp, task=task, dynamic_length=self.dynamic_length
         )
@@ -981,6 +984,7 @@ class MiniMaxH3Pipeline:
         encoder_dynamic_length: bool | None = None,
         agmm_mode: AgmmMode | str | None = None,
         precompute_adaln_modulation: bool = True,
+        ff1_output_dtype: ttnn.DataType | None = None,
         **subclass_kwargs,
     ) -> "MiniMaxH3Pipeline":
         """`task="t2va"` serves both t2va and fl2va; `task="ref2va"` loads `transformer_ref/`.
@@ -995,7 +999,8 @@ class MiniMaxH3Pipeline:
         (MINIMAX_H3_DIT_FSDP=0|1 > kwarg > preset) is on by default for dynamic-length ref2va, see `_resolve_dit_fsdp`.
         `agmm_mode` (`accurate` / `balanced`; kwarg > MINIMAX_H3_AGMM_MODE > `balanced`) picks the dynamic-length
         path's all-gather matmul pins. `precompute_adaln_modulation` (default on) projects the adaLN tables once a
-        denoise instead of once a step; `trace_denoise` configs always project once a step.
+        denoise instead of once a step; `trace_denoise` configs always project once a step. `ff1_output_dtype`: see
+        `__init__`.
         """
         transformer_subfolder = "transformer_ref" if task == "ref2va" else "transformer"
         weights_dir = resolve_weights_dir(
@@ -1033,6 +1038,7 @@ class MiniMaxH3Pipeline:
             encoder_dynamic_length=encoder_dynamic_length,
             agmm_mode=agmm_mode,
             precompute_adaln_modulation=precompute_adaln_modulation,
+            ff1_output_dtype=ff1_output_dtype,
             **subclass_kwargs,
         )
 
@@ -1615,6 +1621,7 @@ class MiniMaxH3Pipeline:
             kv_gather_capacity=self.kv_gather_capacity,
             dynamic_length=self.dynamic_length,
             agmm_mode=self.agmm_mode,
+            ff1_output_dtype=self.ff1_output_dtype,
         )
 
     @property

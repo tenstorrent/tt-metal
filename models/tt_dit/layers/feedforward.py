@@ -67,9 +67,11 @@ class ParallelFeedForward(Module):
         pin_output_bf16=False,
         ff1_compute_kernel_config=None,
         ff2_compute_kernel_config=None,
+        ff1_output_dtype=None,
     ):
         """`ff1_compute_kernel_config` / `ff2_compute_kernel_config` are each projection's compute config (None: the
-        linear's default); a `compute_kernel_config` passed to `forward` overrides both."""
+        linear's default); a `compute_kernel_config` passed to `forward` overrides both. `ff1_output_dtype` (e.g.
+        bfloat8_b) sets the dtype of the ff1 -> ff2 intermediate; ff2's output then stays bfloat16."""
         super().__init__()
 
         if inner_dim is None:
@@ -83,6 +85,8 @@ class ParallelFeedForward(Module):
         self.bias = bias
         self.mesh_axis = mesh_axis
         self.fsdp_mesh_axis = fsdp_mesh_axis
+        self.ff1_output_dtype = ff1_output_dtype
+        self.ff2_output_dtype = None if ff1_output_dtype is None else ttnn.bfloat16
 
         if self.fsdp_mesh_axis is not None:
             assert self.mesh_axis != self.fsdp_mesh_axis
@@ -151,9 +155,13 @@ class ParallelFeedForward(Module):
             num_workers_per_link=num_workers_per_link,
             transpose_core_grid=transpose_core_grid,
             persistent_buffer_rows=persistent_buffer_rows,
+            dtype=self.ff1_output_dtype,
         )
         return self.ff2(
-            ff1_out, compute_kernel_config=compute_kernel_config, use_persistent_buffer=use_persistent_buffer
+            ff1_out,
+            compute_kernel_config=compute_kernel_config,
+            use_persistent_buffer=use_persistent_buffer,
+            dtype=self.ff2_output_dtype,
         )
 
     def forward_fused_addcmul(
@@ -198,6 +206,7 @@ class ParallelFeedForward(Module):
             num_workers_per_link=num_workers_per_link,
             transpose_core_grid=transpose_core_grid,
             persistent_buffer_rows=persistent_buffer_rows,
+            dtype=self.ff1_output_dtype,
         )
         if ff2_use_persistent_buffer is None:
             ff2_use_persistent_buffer = use_persistent_buffer
@@ -209,4 +218,5 @@ class ParallelFeedForward(Module):
             compute_kernel_config=compute_kernel_config,
             use_persistent_buffer=ff2_use_persistent_buffer,
             mmrs_config=mmrs_config,
+            dtype=self.ff2_output_dtype,
         )

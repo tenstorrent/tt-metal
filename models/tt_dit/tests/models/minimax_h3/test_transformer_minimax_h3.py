@@ -1148,6 +1148,39 @@ def test_minimax_h3_transformer_block_dynamic_length(
     assert_program_cache_flat(mesh_device, run, [big, small])
 
 
+@GALAXY_RING
+@pytest.mark.parametrize("dynamic_length", [False, True], ids=["static", "dynamic"])
+def test_minimax_h3_transformer_block_ff1_bf8(
+    mesh_device: ttnn.MeshDevice,
+    sp_axis: int,
+    tp_axis: int,
+    num_links: int,
+    is_fsdp: bool,
+    topology: ttnn.Topology,
+    dynamic_length: bool,
+    reset_seeds,
+) -> None:
+    """A bfloat8_b ff1 -> ff2 intermediate (`ff1_output_dtype`) stays close to the reference and changes the output."""
+    MIN_PCC = 0.999
+
+    skip_if_unsupported_num_links(mesh_device, num_links)
+    fixture = _block_setup(mesh_device, sp_axis, tp_axis, num_links, topology, is_fsdp, 512, 256, 1280)
+    extra = {}
+    if dynamic_length:
+        capacity = padded_sequence_length(fixture.seq_len, fixture.sp_factor)
+        extra = dict(dynamic_length=True, kv_gather_capacity=capacity, norm_row_capacity=capacity // fixture.sp_factor)
+
+    def run(ff1_output_dtype) -> torch.Tensor:
+        tt_model = MiniMaxH3TransformerBlock(**fixture.block_kwargs, **extra, ff1_output_dtype=ff1_output_dtype)
+        tt_model.load_torch_state_dict(fixture.torch_model.state_dict())
+        return fixture.run(tt_model)
+
+    bf16_out = run(None)
+    bf8_out = run(ttnn.bfloat8_b)
+    assert_quality(fixture.torch_out, bf8_out, pcc=MIN_PCC)
+    assert not torch.equal(bf16_out, bf8_out)
+
+
 # ---- production-geometry block device-perf (Tracy signposts) ----
 #
 # Run under `scripts/run_safe_pytest.sh --profile`, one duration at a time with `-k`.
