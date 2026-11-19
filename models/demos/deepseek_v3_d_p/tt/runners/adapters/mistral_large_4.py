@@ -111,6 +111,7 @@ class MistralLarge4PrefillAdapter(PrefillModelAdapter):
         )
 
     def allocate_kv_cache(self, *, mesh_device, hf_config, params) -> MistralLarge4KvCaches:
+        from models.demos.deepseek_v3_d_p.tt.mistral_large_4 import kv_table as KT
         from models.demos.deepseek_v3_d_p.tt.mistral_large_4.model import alloc_caches
 
         geo = self._geometry(hf_config, params)
