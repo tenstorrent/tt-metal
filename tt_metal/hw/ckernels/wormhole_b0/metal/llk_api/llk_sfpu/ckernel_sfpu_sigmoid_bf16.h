@@ -5,7 +5,6 @@
 #include <cstdint>
 namespace ckernel::sfpu {
 struct SigmoidBf16Config {
-    // Fit: minimax degree-2 polynomial on [0, 1], 1 segment, max pure (continuous) ULP 0.788.
     static constexpr uint32_t kCoefficientBits[] = {0x3f803884u, 0x3f285adeu, 0x3eaca410u};
     static constexpr uint32_t kMultiplierBits = 0xbfb8aa3bu;
     static constexpr uint32_t kBias = 127u;
@@ -30,14 +29,10 @@ inline bool bf16_dest_sigmoid() {
     return false;
 #endif
 }
-// Each call records replay slots 0-31, overwriting what an init recorded there (matmul and reduce
-// record from replay_buf_offset = 16).
+// Each call records replay slots 0-31, overwriting what an init recorded there (from 16).
 template <int ITERATIONS = 32>
-inline void calculate_sigmoid_bf16() {
+__attribute__((noinline)) inline void calculate_sigmoid_bf16() {
     ckernel::sfpu::bf16::sigmoid::calculate_exp2_reciprocal<ckernel::sfpu::SigmoidBf16Config, ITERATIONS>();
-}
-inline void init_sigmoid_bf16() {
-    ckernel::sfpu::bf16::sigmoid::init_exp2_reciprocal<ckernel::sfpu::SigmoidBf16Config>();
 }
 
 }  // namespace ckernel::sfpu

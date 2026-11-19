@@ -245,7 +245,7 @@ void reduce_c(In0DFB& dfb_in0, ScaleDFB& dfb_scale, OutDFB& dfb_out, PrevDFB& df
         /**
          * For `dst_tiles` number of rows, compute the max into the even indices of the DST register.
          */
-        reduce_block_max_row_init<cols>(out_dfb);
+        reduce_block_max_row_init<cols>(in0_dfb, scale_dfb, out_dfb);
         for (uint32_t i = 0; i < dst_tiles; i++) {
             const uint32_t reduce_dst_idx = i;
             reduce_block_max_row<cols>(in0_dfb, scale_dfb, (row_start_idx + i) * cols, reduce_dst_idx);
@@ -1179,6 +1179,11 @@ void sigmoid_sub(In0DFB& dfb_in0, In1DFB& dfb_in1, OutDFB& dfb_out, uint32_t num
     // whose polynomial implementation loads the constants it consumes into LREGs in the tile body; it
     // does not depend on vConstFloatPrgm* state from exp_tile_init. Conversely, that exp body also
     // does not clobber the reciprocal constants, so one reciprocal init before the tile loop is enough.
+    // That holds for exp_tile_first_column only. The regular exp_tile (the commented-out call in the
+    // loop) takes its constants from the programmable registers exp_tile_init sets (vConstFloatPrgm0..1
+    // on a bf16 DEST, 0..2 on a Blackhole fp32 DEST; see the note on exp_tile), and exp_tile_init
+    // overwrites the reciprocal constant set here. Restoring that call needs exp_tile_init and
+    // sfpu_reciprocal_init re-run inside the loop, each directly before its tile call.
     MATH((ckernel::sfpu::sfpu_reciprocal_init<false>()));
 #endif
 
@@ -1188,6 +1193,8 @@ void sigmoid_sub(In0DFB& dfb_in0, In1DFB& dfb_in1, OutDFB& dfb_out, uint32_t num
 #ifdef ARCH_QUASAR
         sigmoid_tile(0);  // full-tile accurate sigmoid(in0-in1); only col 0 is consumed downstream
 #else
+        // Restoring this exp_tile call needs exp_tile_init and sfpu_reciprocal_init re-run per iteration;
+        // see the sfpu_reciprocal_init comment above the loop.
         // exp_tile<false, true /*SCALE_EN*/>(0, (int)VectorMode::C, (uint16_t)0xBF80 /*bf16(-1.0) scale*/);
         MATH((exp_tile_first_column<false /*APPROX_MODE*/, (uint16_t)0xBF80 /*bf16(-1.0) scale*/>(0)));
         // add_unary_tile(0 /*dst_index*/, 0x3F800000); // Call the macro directly to get access to VectorMode argument

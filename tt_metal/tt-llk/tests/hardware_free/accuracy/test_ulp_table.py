@@ -6,28 +6,34 @@ one serializer that writes it, and the measurement records."""
 
 import json
 import math
+import os
+import subprocess
+import sys
+from pathlib import Path
 
 import pytest
 import yaml
+from conftest import TANH_DOMAINS, problem_id, refused
 from helpers.chip_architecture import ChipArchitecture
 from helpers.format_config import DataFormat
 from helpers.llk_params import ApproximationMode, DestAccumulation, MathOperation
 from helpers.ulp_domains import Domain, Problem
 from helpers.ulp_table import (
-    TABLE_PATH,
+    TABLE_PATHS,
     AccuracyContract,
     BudgetKey,
     Measurement,
     Metric,
     Reading,
     Row,
+    arch_of_table,
     dump_table,
     from_plain,
     load_table,
     read_table,
+    table_arch,
     write_table_file,
 )
-from helpers.ulp_testing import TANH_DOMAINS, problem_id, refused
 
 INF = math.inf
 F16B, F16, F32 = DataFormat.Float16_b, DataFormat.Float16, DataFormat.Float32
@@ -44,19 +50,15 @@ F16B, F16, F32 = DataFormat.Float16_b, DataFormat.Float16, DataFormat.Float32
         (dict(measured=1, atol=0.1), Problem.MIXED_METRIC),
         (dict(metric=Metric.TOLERANCE, near_zero_atol=0.5), Problem.MIXED_METRIC),
         (dict(input=DataFormat.Bfp8_b, measured=1), Problem.NOT_A_COMPUTE_FORMAT),
-        (dict(output=DataFormat.Bfp4_b, measured=1), Problem.NOT_A_COMPUTE_FORMAT),
         (
             dict(input=F16B, output=F16B, measured=10, domains=TANH_DOMAINS),
             Problem.BESIDE_DOMAINS,
         ),
-        (
-            dict(
-                input=F16B, output=F16B, metric=Metric.TOLERANCE, domains=TANH_DOMAINS
-            ),
-            Problem.BESIDE_DOMAINS,
-        ),
         (dict(output=F16B, domains=TANH_DOMAINS), Problem.UNPINNED_DOMAINS),
-        (dict(input=F16B, output=F16B, domains=TANH_DOMAINS[:1]), Problem.NOT_COVERING),
+        (
+            dict(input=F16B, output=F16B, domains=TANH_DOMAINS[:1]),
+            Problem.NOT_COVERING,
+        ),
     ],
     ids=problem_id,
 )
@@ -102,6 +104,24 @@ def test_a_plain_value_that_does_not_fit_its_field_is_refused(plain, problem):
         from_plain(Row, plain)
 
 
+def test_a_record_missing_a_required_field_is_refused():
+    """A dataclass built without a required field raises ``TypeError``, which is not a
+    refusal; the reader names the fields instead."""
+    with refused(Problem.MISSING_FIELD):
+        from_plain(Measurement, {"op": "Abs", "key": {}})
+    with refused(Problem.MISSING_FIELD):
+        from_plain(Domain, {"low": 0})
+
+
+@pytest.mark.parametrize("entry", [[151, 128, 128], [151, 128, 128, 3, 0]])
+def test_a_bins_entry_of_the_wrong_length_is_refused(entry):
+    """`bins` is `(binade, present, ranked, worst)`: a fixed shape, so three or five
+    values are refused rather than read as a variadic tuple."""
+    record = {"op": "Abs", "key": {}, "worst": 1, "lanes": 1, "bins": [entry]}
+    with refused(Problem.WRONG_SHAPE):
+        from_plain(Measurement, record)
+
+
 @pytest.mark.parametrize(
     "data, problem",
     [
@@ -116,6 +136,13 @@ def test_a_table_the_registry_cannot_load_is_refused(data, problem):
         read_table(yaml.safe_dump(data))
 
 
+@pytest.mark.parametrize("text", ["Abs: [", "Abs:\n- &a {measured: 1}\n- {<<: *a}\n"])
+def test_text_that_is_not_the_tables_yaml_is_refused(text):
+    """A syntax error, and a merge key (the one writer never produces one)."""
+    with refused(Problem.BAD_YAML):
+        read_table(text)
+
+
 def test_a_repeated_yaml_key_is_refused_not_overwritten():
     """PyYAML keeps the last of two equal keys, which would drop a whole op."""
     text = yaml.safe_dump({"Abs": [{"measured": 1}]}) * 2
@@ -124,32 +151,16 @@ def test_a_repeated_yaml_key_is_refused_not_overwritten():
 
 
 @pytest.mark.parametrize(
-    "text, problem",
-    [
-        ("Abs:\n- {{measured: 1}}\n", Problem.WRONG_SHAPE),
-        ("<<<<<<< HEAD\nAbs: [\n", Problem.UNREADABLE),
-        ("Abs:\n- &a {measured: 1}\n- {<<: *a, output: Float16}\n", Problem.UNREADABLE),
-        ("Abs: &rows\n- *rows\n", Problem.WRONG_SHAPE),
-    ],
-    ids=["doubled-braces", "conflict-marker", "merge-key", "self-containing-anchor"],
+    "text",
+    ["Abs:\n- {{measured: 1}}\n", "Abs: &rows\n- *rows\n"],
+    ids=["doubled-braces", "self-containing-anchor"],
 )
-def test_text_no_reader_can_hold_is_refused_not_crashed(text, problem):
-    """A mapping used as a key (doubled braces pasted from an f-string) raised a bare
-    ``TypeError``, and text PyYAML cannot scan or construct escaped as its own error:
-    both past the guard's "cannot load" handling, as tracebacks."""
-    with refused(problem):
+def test_a_row_that_is_not_a_mapping_of_names_is_refused_not_a_type_error(text):
+    """A mapping used as a key (doubled braces pasted from an f-string), or a row that
+    is the op's own row list (an anchor that contains itself), raised a bare
+    ``TypeError`` from the loader, past the guard's "cannot load" handling."""
+    with refused(Problem.WRONG_SHAPE):
         read_table(text)
-
-
-def test_a_record_missing_a_required_field_is_refused():
-    """A dataclass built without a required field raises ``TypeError``, which is not a
-    refusal; the reader names the fields instead."""
-    with refused(Problem.MISSING_FIELD):
-        from_plain(Domain, {"low": 0})
-    with refused(Problem.MISSING_FIELD):
-        Measurement.from_json('{"op": "Abs"}')
-    with refused(Problem.UNREADABLE):
-        Measurement.from_json("{\n")
 
 
 def test_a_typed_table_round_trips_through_the_one_serializer():
@@ -211,9 +222,72 @@ def test_an_empty_document_is_an_empty_table(text):
     assert read_table(text) == {}
 
 
-def test_the_table_on_disk_is_exactly_what_the_serializer_writes():
-    """No hand formatting survives a re-emit, so none may be in the file."""
-    assert dump_table(load_table()) == TABLE_PATH.read_text(encoding="utf-8")
+@pytest.mark.parametrize(
+    "chip, table",
+    [
+        (ChipArchitecture.WORMHOLE, ChipArchitecture.WORMHOLE),
+        (ChipArchitecture.BLACKHOLE, ChipArchitecture.BLACKHOLE),
+        (ChipArchitecture.QUASAR, ChipArchitecture.WORMHOLE),
+    ],
+    ids=lambda a: a.value,
+)
+def test_each_chip_reads_the_table_it_is_meant_to(chip, table):
+    """Every accuracy test derives its expectation from `MEASURED_ARCH`, so nothing
+    else would notice a mapping that sent Blackhole to Wormhole's table."""
+    assert table_arch(chip) is table
+    assert arch_of_table(TABLE_PATHS[table]) is table
+
+
+@pytest.mark.parametrize(
+    "name, arch",
+    [
+        ("sfpu_accuracy_budget_wh.yaml", ChipArchitecture.WORMHOLE),
+        ("base_sfpu_accuracy_budget_bh.yaml", ChipArchitecture.BLACKHOLE),
+        ("budget.yaml", None),
+    ],
+)
+def test_a_table_file_names_its_architecture(name, arch):
+    """`ulp_budget_diff` judges a table under the architecture its name says, a CI
+    copy of it included, and refuses to guess for any other name."""
+    assert arch_of_table(Path("/tmp") / name) is arch
+
+
+def test_importing_the_table_tools_does_not_ask_the_chip():
+    """A host with no card and no `CHIP_ARCH` (the report's host tests, `python -m
+    helpers.ulp_budget_diff`) imports the table, the sweep and the guard; resolving the
+    session's architecture there would open the device. In a fresh interpreter, with
+    the chip query made to fail."""
+    code = (
+        "import helpers.chip_architecture as chip; "
+        "chip.get_chip_architecture = lambda: (_ for _ in ()).throw(SystemExit(3)); "
+        "import helpers.ulp_table, helpers.ulp_sweep, helpers.ulp_budget_diff"
+    )
+    env = {k: v for k, v in os.environ.items() if k != "CHIP_ARCH"}
+    python_tests = next(iter(TABLE_PATHS.values())).parent.parent
+    done = subprocess.run([sys.executable, "-c", code], cwd=python_tests, env=env)
+    assert done.returncode == 0
+
+
+@pytest.mark.parametrize("path", TABLE_PATHS.values(), ids=lambda p: p.stem[-2:])
+def test_writing_a_table_to_a_named_path_does_not_ask_the_chip(
+    path, tmp_path, monkeypatch
+):
+    """The normalise command in `SFPU_ULP.md` runs on a host with no card: checking a
+    table before writing it does not depend on which architecture it is for."""
+
+    def ask_the_chip():
+        raise AssertionError("asked the chip")
+
+    monkeypatch.setattr("helpers.ulp_table.measured_arch", ask_the_chip)
+    out = tmp_path / path.name
+    write_table_file(load_table(path), out)
+    assert out.read_text(encoding="utf-8") == path.read_text(encoding="utf-8")
+
+
+@pytest.mark.parametrize("path", TABLE_PATHS.values(), ids=lambda p: p.stem[-2:])
+def test_the_table_on_disk_is_exactly_what_the_serializer_writes(path):
+    """No hand formatting survives a re-emit, so none may be in either file."""
+    assert dump_table(load_table(path)) == path.read_text(encoding="utf-8")
 
 
 def test_a_measurement_round_trips_through_its_json_line():

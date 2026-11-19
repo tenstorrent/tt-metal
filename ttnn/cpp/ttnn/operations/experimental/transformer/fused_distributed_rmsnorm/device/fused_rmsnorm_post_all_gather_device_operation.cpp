@@ -27,7 +27,7 @@ void FusedRMSNormPostAllGatherDeviceOperation::validate_on_program_cache_miss(
         TT_FATAL(tensor.layout() == Layout::TILE, "{} tensor must have TILE layout, got: {}", name, tensor.layout());
         TT_FATAL(tensor.dtype() == DataType::BFLOAT16, "{} tensor must be BFLOAT16, got: {}", name, tensor.dtype());
         TT_FATAL(tensor.storage_type() == StorageType::DEVICE, "{} tensor must be on device!", name);
-        TT_FATAL(tensor.buffer() != nullptr, "{} tensor must be allocated in buffers on device!", name);
+        TT_FATAL(tensor.is_allocated(), "{} tensor must be allocated in buffers on device!", name);
     };
 
     // Helper lambda to assert tensor properties: tilized, bfloat16 or float32, on device, allocated
@@ -39,7 +39,7 @@ void FusedRMSNormPostAllGatherDeviceOperation::validate_on_program_cache_miss(
             name,
             tensor.dtype());
         TT_FATAL(tensor.storage_type() == StorageType::DEVICE, "{} tensor must be on device!", name);
-        TT_FATAL(tensor.buffer() != nullptr, "{} tensor must be allocated in buffers on device!", name);
+        TT_FATAL(tensor.is_allocated(), "{} tensor must be allocated in buffers on device!", name);
     };
 
     check_tile_bf16_device_alloc(a, "Input tensor 0");
@@ -64,8 +64,10 @@ void FusedRMSNormPostAllGatherDeviceOperation::validate_on_program_cache_miss(
 
     TT_FATAL(args.num_heads > 0, "Number of heads must be greater than 0, got: {}", args.num_heads);
     TT_FATAL(
-        a.padded_shape()[-1] % args.num_heads == 0,
-        "Input last dimension must be divisible by number of heads, got hidden_dim: {} vs num_heads: {}",
+        a.padded_shape()[-1] % TILE_WIDTH == 0 && (a.padded_shape()[-1] / TILE_WIDTH) % args.num_heads == 0,
+        "Input last dimension must be divisible by number of heads * TILE_WIDTH ({}), got hidden_dim: {} vs num_heads: "
+        "{}",
+        TILE_WIDTH,
         a.padded_shape()[-1],
         args.num_heads);
 
@@ -152,6 +154,7 @@ void FusedRMSNormPostAllGatherDeviceOperation::validate_on_program_cache_miss(
 tt::tt_metal::TensorSpec FusedRMSNormPostAllGatherDeviceOperation::compute_output_specs(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     const auto& input_tensor = tensor_args.input_tensor;
+    TT_FATAL(args.num_heads > 0, "Number of heads must be greater than 0, got: {}", args.num_heads);
     auto output_shape = input_tensor.logical_shape();
     output_shape[1] = args.num_heads;
     output_shape[3] /= args.num_heads;

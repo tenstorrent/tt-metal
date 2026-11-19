@@ -5,9 +5,11 @@
 #pragma once
 
 #include <core/ttnn_all_includes.hpp>
+#include <functional>
 #include <memory>
 #include <random>
 #include <string>
+#include <unordered_map>
 
 #include "core/distributed/ccl_resources.hpp"
 #include "core/distributed/socket_manager.hpp"
@@ -111,6 +113,8 @@ public:
 
     void initialize_distributed_context(int argc, char** argv);
 
+    [[nodiscard]] bool is_distributed_context_initialized() const;
+
     [[nodiscard]] std::shared_ptr<tt::tt_metal::distributed::multihost::DistributedContext> get_distributed_context()
         const;
 
@@ -119,6 +123,11 @@ public:
 
     [[nodiscard]] core::distributed::CCLResources& get_ccl_resources();
 
+    // A device tensor an op needs on every call but never changes (e.g. a constant index), made on first use with
+    // `make` and kept until close_device, so forwards do no host writes for it.
+    [[nodiscard]] const ttnn::Tensor& get_device_constant(
+        const std::string& key, const std::function<ttnn::Tensor()>& make);
+
     void initialize_socket_manager(ttnn::distributed::SocketType socket_type);
     [[nodiscard]] core::distributed::SocketManager& get_socket_manager();
 
@@ -126,7 +135,15 @@ public:
 
     [[nodiscard]] bool is_parallelism_context_initialized() const;
 
+    // Describes the open mesh's axes; close_device drops it, so each mesh initializes its own.
     void initialize_parallelism_context(const DistributedConfig& config);
+
+    // The dtype the gradient syncs (core::distributed::synchronize_gradients, ttml.sync_gradients, and FSDP's
+    // backward_post) sum in when a call passes none: BFLOAT16 or FLOAT32, or unset to sum in each gradient's own dtype.
+    // core::apply_precision_config stores it from every config it applies, an unset or null
+    // training_config.precision.reduce_dtype clearing it; close_device clears it with the rest of the run's state.
+    void set_gradient_reduce_dtype(std::optional<ttnn::DataType> dtype);
+    [[nodiscard]] std::optional<ttnn::DataType> get_gradient_reduce_dtype() const;
 
 private:
     AutoContext();
@@ -143,10 +160,13 @@ private:
     std::unique_ptr<core::TTProfiler> m_profiler;
 
     std::unique_ptr<core::distributed::CCLResources> m_ccl_resources;
+    std::unordered_map<std::string, ttnn::Tensor> m_device_constants;
 
     std::unique_ptr<core::distributed::SocketManager> m_socket_manager;
 
     std::unique_ptr<ParallelismContext> m_parallelism_context;
+
+    std::optional<ttnn::DataType> m_gradient_reduce_dtype;
 
     friend class ttsl::Indestructible<AutoContext>;
 };

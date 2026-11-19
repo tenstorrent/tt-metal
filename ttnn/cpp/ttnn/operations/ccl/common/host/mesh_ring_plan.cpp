@@ -144,7 +144,8 @@ std::optional<uint64_t> resolve_direct_neighbor_route_hash(
                               : (*cluster_axis == 0 ? ttnn::MeshCoordinate(destination_rank, group)
                                                     : ttnn::MeshCoordinate(group, destination_rank));
                 const auto destination = mesh_device->get_fabric_node_id(destination_coord);
-                const auto direction = tt::tt_fabric::pipeline_get_forwarding_direction(source, destination);
+                const auto direction =
+                    tt::tt_fabric::pipeline_get_forwarding_direction(*mesh_device, source, destination);
                 if (!direction.has_value()) {
                     if (log_rejection) {
                         log_warning(
@@ -156,7 +157,7 @@ std::optional<uint64_t> resolve_direct_neighbor_route_hash(
                     }
                     return std::nullopt;
                 }
-                const auto neighbors = tt::tt_fabric::pipeline_get_chip_neighbors(source, *direction);
+                const auto neighbors = tt::tt_fabric::pipeline_get_chip_neighbors(*mesh_device, source, *direction);
                 const auto mesh_it = neighbors.find(*destination.mesh_id);
                 if (mesh_it == neighbors.end() ||
                     std::find(mesh_it->second.begin(), mesh_it->second.end(), destination.chip_id) ==
@@ -171,7 +172,7 @@ std::optional<uint64_t> resolve_direct_neighbor_route_hash(
                     }
                     return std::nullopt;
                 }
-                const auto link_indices = tt::tt_fabric::get_forwarding_link_indices(source, destination);
+                const auto link_indices = tt::tt_fabric::get_forwarding_link_indices(*mesh_device, source, destination);
                 for (uint32_t link = 0; link < num_links; ++link) {
                     if (std::find(link_indices.begin(), link_indices.end(), link) == link_indices.end()) {
                         if (log_rejection) {
@@ -378,8 +379,8 @@ MeshRingPosition get_mesh_ring_position(
         }
         return MeshRingPosition{
             .transport_rank = transport_rank,
-            .tensor_rank = ttnn::ccl::snake_ring::row_major_index(
-                transport_rank, plan.mesh_rows, plan.mesh_cols, plan.orientation),
+            .tensor_rank = ttnn::ccl::snake_ring::tensor_index(
+                transport_rank, plan.mesh_rows, plan.mesh_cols, plan.orientation, plan.column_major_ranks),
             .forward_coord = forward_coord,
             .backward_coord = backward_coord};
     }

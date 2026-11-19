@@ -13,9 +13,10 @@ namespace ttnn::prim {
 // Delivers into worker-sender PrefetcherPipes (`prefetcher_pipes`). A Program binds a pipe only through a
 // ProgramSpec, so this path is a Metal 2.0 spec factory beside the GlobalCircularBuffer descriptor factory.
 //
-// A lone create_program_artifacts is what ProgramSpecFactoryConcept matches: the address tensor is the
-// one run argument that differs between dispatches sharing a program hash (the pipes are part of the
-// hash), so the framework rebinds it on a cache hit.
+// A lone create_program_artifacts is what ProgramSpecFactoryConcept matches: the address tensor and the
+// pipes are the run arguments that differ between dispatches sharing a program hash (a pipe keys the
+// hash by its geometry and addresses, so a hit may bring pipes re-carved in place of the program's), and
+// the framework rebinds both on a cache hit.
 struct DramPrefetcherPipeSpecFactory {
     static ttnn::device_operation::ProgramArtifacts create_program_artifacts(
         const DramPrefetcherParams& operation_attributes,

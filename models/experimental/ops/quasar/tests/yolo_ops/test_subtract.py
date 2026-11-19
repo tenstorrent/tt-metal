@@ -57,6 +57,7 @@ def test_subtract(ttnn_mesh_device, reset_seeds, shape):
 @pytest.mark.parametrize("shape", _SITES)
 def test_subtract_l1(ttnn_mesh_device, reset_seeds, shape):
     """anchor-lt / x2y2-x1y1 on L1 detect buffers (tt_yolov8l_utils.py:94,99; mem cfg ttnn_yolov8l.py:772-773)."""
+    U.skip_bfp_on_quasar()  # model's bf8 output dtype; no block-float formats on Quasar
     mesh = ttnn_mesh_device
 
     a_torch = U.torch_rand(shape)
@@ -65,6 +66,7 @@ def test_subtract_l1(ttnn_mesh_device, reset_seeds, shape):
     b = U.to_tile_l1(b_torch, mesh)
 
     out = U.op("subtract")(a, b, dtype=ttnn.bfloat8_b)
+    assert out.dtype == ttnn.bfloat8_b, f"expected bfloat8_b, got {out.dtype}"
 
     ref = a_torch.float() - b_torch.float()
     U.assert_pcc(ref, out, pcc=0.99, mesh_device=mesh)
