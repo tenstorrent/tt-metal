@@ -416,11 +416,13 @@ def load_reference_model(model_name, **kwargs):
     value = os.environ.get(NUM_LAYERS_ENV)
     if value:
         num_layers = int(value)
-        max_layers = BertConfig.from_pretrained(model_name).num_hidden_layers
+        config = BertConfig.from_pretrained(model_name)
+        max_layers = config.num_hidden_layers
         if not 1 <= num_layers <= max_layers:
             raise ValueError(f"{NUM_LAYERS_ENV} must be between 1 and {max_layers}, got {num_layers}")
         logger.info(f"Running {num_layers} of {max_layers} encoder layers ({NUM_LAYERS_ENV}={num_layers})")
-        kwargs["num_hidden_layers"] = num_layers
+        config.num_hidden_layers = num_layers
+        kwargs["config"] = config
     return BertForQuestionAnswering.from_pretrained(model_name, **kwargs)
 
 
