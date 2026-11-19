@@ -1,0 +1,609 @@
+diff --git a/ttnn/ttnn/operations/conv2d_3x3/conv2d_3x3_program_descriptor.py b/ttnn/ttnn/operations/conv2d_3x3/conv2d_3x3_program_descriptor.py
+index 3e064747445..010b1b5b3f3 100644
+--- a/ttnn/ttnn/operations/conv2d_3x3/conv2d_3x3_program_descriptor.py
++++ b/ttnn/ttnn/operations/conv2d_3x3/conv2d_3x3_program_descriptor.py
+@@ -2299,13 +2299,18 @@ def create_program_descriptor(
+             ("PAD_SLAB_SLOTS_MAX", str(pad_slots_max)),
+             ("PAD_SLAB_CB_ZERO", str(CB_ZERO_SRC)),
+         ]
++    import os as _os
++
++    _abl = [t for t in _os.environ.get("CONV2D_3X3_ABLATE", "").split(",") if t]
++    _abl_defines = [(f"CONV2D_3X3_ABLATE_{t.upper()}", "1") for t in _abl]
++    _compute_defines = _abl_defines + ([("SKIP_COMPUTE", "1")] if "matmul" in _abl else [])
+     readers = [
+         ttnn.KernelDescriptor(
+             kernel_source=str(KERNEL_DIR / "conv2d_3x3_reader.cpp"),
+             core_ranges=_core_range_set(reader_cores),
+             compile_time_args=reader_ct_args(*slice_channels),
+             runtime_args=reader_rt,
+-            defines=_kwf_dm_defines + _pad_dm_defines,
++            defines=_kwf_dm_defines + _pad_dm_defines + _abl_defines,
+             config=ttnn.ReaderConfigDescriptor(),
+         )
+         for slice_channels, (reader_cores, reader_rt) in reader_groups.items()
+@@ -2316,7 +2321,7 @@ def create_program_descriptor(
+             core_ranges=_core_range_set(writer_cores),
+             compile_time_args=writer_ct_args_for(*slice_channels),
+             runtime_args=writer_rt,
+-            defines=_kwf_dm_defines,
++            defines=_kwf_dm_defines + _abl_defines,
+             config=ttnn.WriterConfigDescriptor(),
+         )
+         for slice_channels, (writer_cores, writer_rt) in writer_groups.items()
+@@ -2326,7 +2331,7 @@ def create_program_descriptor(
+         core_ranges=cores,
+         compile_time_args=compute_ct_args,
+         runtime_args=compute_rt,
+-        defines=_kwf_compute_defines + _pad_compute_defines,
++        defines=_kwf_compute_defines + _pad_compute_defines + _compute_defines,
+         config=ttnn.ComputeConfigDescriptor(
+             math_fidelity=compute_kernel_config.math_fidelity,
+             math_approx_mode=compute_kernel_config.math_approx_mode,
+@@ -2379,6 +2384,7 @@ def create_program_descriptor(
+                 compile_time_args=[CB_WEIGHTS, bk, bn, b.num_k_blocks, num_chunks, int(kwf), g.tensor_n_tiles]
+                 + list(ttnn.TensorAccessorArgs(weight_tensor).get_compile_time_args()),
+                 runtime_args=server_reader_rt,
++                defines=_abl_defines,
+                 config=ttnn.ReaderConfigDescriptor(),
+             ),
+             ttnn.KernelDescriptor(
+@@ -2400,6 +2406,7 @@ def create_program_descriptor(
+                     else ttnn.TensorAccessorArgs().get_compile_time_args()
+                 ),
+                 runtime_args=server_writer_rt,
++                defines=_abl_defines,
+                 config=ttnn.WriterConfigDescriptor(),
+             ),
+         ]
+diff --git a/ttnn/ttnn/operations/conv2d_3x3/kernels/conv2d_3x3_combine_dataflow.hpp b/ttnn/ttnn/operations/conv2d_3x3/kernels/conv2d_3x3_combine_dataflow.hpp
+index 12d4ed75429..f87e7dfc19d 100644
+--- a/ttnn/ttnn/operations/conv2d_3x3/kernels/conv2d_3x3_combine_dataflow.hpp
++++ b/ttnn/ttnn/operations/conv2d_3x3/kernels/conv2d_3x3_combine_dataflow.hpp
+@@ -27,6 +27,9 @@ inline void scatter_partial_slices(
+     uint32_t col_begin,
+     uint32_t col_end,
+     uint32_t row_peer_coords_arg) {
++#ifdef CONV2D_3X3_ABLATE_SCATTER
++    return;
++#endif
+     constexpr uint32_t slot_tiles = block_m_tiles * out_n_tiles;
+     const uint32_t my_slot_l1 = combine_base_l1 + my_col * slot_tiles * tile_bytes;
+     for (uint32_t col = col_begin; col < col_end; ++col) {
+diff --git a/ttnn/ttnn/operations/conv2d_3x3/kernels/conv2d_3x3_compute.cpp b/ttnn/ttnn/operations/conv2d_3x3/kernels/conv2d_3x3_compute.cpp
+index 98ba852384c..0179b4cc3c9 100644
+--- a/ttnn/ttnn/operations/conv2d_3x3/kernels/conv2d_3x3_compute.cpp
++++ b/ttnn/ttnn/operations/conv2d_3x3/kernels/conv2d_3x3_compute.cpp
+@@ -110,6 +110,15 @@ template <uint32_t c_in_tiles, uint32_t cb_in, uint32_t cb_out>
+ ALWI void window_tilize(DataflowBuffer& in, DataflowBuffer& out, uint32_t units) {
+     constexpr uint32_t row_tiles = 2 * c_in_tiles;
+     constexpr uint32_t block_tiles = 3 * c_in_tiles;
++#ifdef CONV2D_3X3_ABLATE_TILIZE
++    for (uint32_t u = 0; u < units; ++u) {
++        in.wait_front(block_tiles);
++        out.reserve_back(block_tiles);
++        out.push_back(block_tiles);
++        in.pop_front(block_tiles);
++    }
++    return;
++#endif
+     reconfig_data_format_srca(cb_in);
+     pack_reconfig_data_format(cb_out);
+     fast_tilize_init(cb_in, row_tiles, cb_out);
+@@ -237,6 +246,20 @@ ALWI void direct_tilize(DataflowBuffer& in, DataflowBuffer& out, uint32_t units,
+     static_assert(tw != 0 && taps <= 4, "a source entry is 16 B: at most 4 taps per unit");
+     reconfig_data_format_srca(cb_in);
+     pack_reconfig_data_format(cb_out);
++#ifdef CONV2D_3X3_ABLATE_TILIZE
++    for (uint32_t u = 0; u < units; ++u, ++seq) {
++        in.wait_front(tw * taps);
++        for (uint32_t t = 0; t < taps; ++t) {
++            if (static_cast<int32_t>(t) == skip_t) {
++                continue;
++            }
++            out.reserve_back(tw);
++            out.push_back(tw);
++        }
++        in.pop_front(tw * taps);
++    }
++    return;
++#endif
+     fast_tilize_init(cb_in, tw, cb_out);
+     if constexpr (tw > 1) {
+         // The lean pack stream (conv2d_3x3_lean_tilize.hpp): one 1-tile MOP for every chunk width.
+@@ -322,6 +345,13 @@ ALWI void padded_tilize(
+     [[maybe_unused]] uint32_t zero_l1,
+     [[maybe_unused]] const uint8_t (&kh_lo)[num_groups],
+     [[maybe_unused]] const uint8_t (&kh_hi)[num_groups]) {
++#ifdef CONV2D_3X3_ABLATE_TILIZE
++    for (uint32_t u = 0; u < rows * 6; ++u) {
++        out.reserve_back(tw);
++        out.push_back(tw);
++    }
++    return;
++#endif
+     reconfig_data_format_srca(cb_in);
+     pack_reconfig_data_format(cb_out);
+     fast_tilize_init(cb_in, tw, cb_out);
+@@ -466,6 +496,17 @@ ALWI void fifo_tilize(DataflowBuffer& in, DataflowBuffer& out, DataflowBuffer& t
+         [[maybe_unused]] uint32_t src[taps];
+         uint32_t pages = 0;
+         UNPACK((pages = fifo_unit_sources<cb_table, taps>(src)));
++#ifdef CONV2D_3X3_ABLATE_TILIZE
++        UNPACK((pages &= 0x7fffffffu));
++        out.reserve_back(taps * tw);
++        out.push_back(taps * tw);
++        for (uint32_t p = 0; p < pages; p += tw) {
++            in.wait_front(tw);
++            in.pop_front(tw);
++        }
++        table.pop_front(1);
++        continue;
++#endif
+         if constexpr (windows) {
+             uint32_t window = 0;
+             UNPACK({
+@@ -554,6 +595,15 @@ template <uint32_t tw, uint32_t cb_rm, uint32_t cb_tiles>
+ ALWI void tilize_rows_skip_center(DataflowBuffer& rm, DataflowBuffer& tiles, uint32_t num_rows) {
+     namespace tc = ckl::tilize_config;
+     namespace lt = conv2d_3x3::lean_tilize;
++#ifdef CONV2D_3X3_ABLATE_TILIZE
++    for (uint32_t r = 0; r < 3 * num_rows; ++r) {
++        rm.wait_front(tw);
++        tiles.reserve_back(tw);
++        tiles.push_back(tw);
++        rm.pop_front(tw);
++    }
++    return;
++#endif
+     for (uint32_t r = 0; r < num_rows; ++r) {
+         if (r == 0) {
+             lt::tilize<tw, cb_rm, cb_tiles, tc::InitUninitMode::InitOnly>(rm, tiles, 1);
+@@ -639,8 +689,17 @@ struct TilizeIm2colKBlock {
+                 static_assert(block_k_tiles == 3 * c_in_tiles, "a window unit is one kernel row");
+                 window_tilize<c_in_tiles, cb_im2col_rm, cb_im2col_tiles>(*rm, *tiles, block_m_tiles);
+             } else {
++#ifdef CONV2D_3X3_ABLATE_TILIZE
++                for (uint32_t r = 0; r < block_m_tiles * (block_k_tiles / tilize_width_tiles); ++r) {
++                    rm->wait_front(tilize_width_tiles);
++                    tiles->reserve_back(tilize_width_tiles);
++                    tiles->push_back(tilize_width_tiles);
++                    rm->pop_front(tilize_width_tiles);
++                }
++#else
+                 conv2d_3x3::lean_tilize::tilize<tilize_width_tiles, cb_im2col_rm, cb_im2col_tiles>(
+                     *rm, *tiles, block_m_tiles * (block_k_tiles / tilize_width_tiles));
++#endif
+             }
+         }
+         if constexpr (relu_on_last_matmul_pack) {
+@@ -1000,6 +1059,38 @@ void kernel_main() {
+             // untilize_footprint: the reader streams slab_tile_rows input tile-rows in slab order.
+             MaybeDeviceZoneScope("compute_untilize");
+             pack_reconfig_l1_acc(0);
++#ifdef CONV2D_3X3_ABLATE_UNTILIZE
++            {
++                uint32_t rows = slab_rows;
++                uint32_t tail_rows = 0;
++                uint32_t pushed_tail = 0;
++                if constexpr (padded_slab) {
++                    rows = pad_plan.rows;
++                    pushed_tail = slab_rows - rows;
++                } else if constexpr (ring_slab) {
++                    rows = get_arg_val<uint32_t>(3 + 2 * m_block_idx);
++                    tail_rows = get_arg_val<uint32_t>(4 + 2 * m_block_idx);
++                }
++                for (uint32_t r = 0; r < rows; ++r) {
++                    input_tiles_dfb.wait_front(untilize_width_tiles);
++                    halo_slab_dfb.reserve_back(untilize_width_tiles);
++                    halo_slab_dfb.push_back(untilize_width_tiles);
++                    input_tiles_dfb.pop_front(untilize_width_tiles);
++                }
++                if (tail_rows > 0) {
++                    input_tiles_dfb.wait_front(tail_rows * c_in_tiles);
++                    input_tiles_dfb.pop_front(tail_rows * c_in_tiles);
++                }
++                if (pushed_tail > 0) {
++                    input_tiles_dfb.wait_front(pushed_tail * c_in_tiles);
++                    input_tiles_dfb.pop_front(pushed_tail * c_in_tiles);
++                    halo_slab_dfb.reserve_back(pushed_tail * c_in_tiles);
++                    halo_slab_dfb.push_back(pushed_tail * c_in_tiles);
++                }
++            }
++            if constexpr (true) {
++            } else
++#endif
+             if constexpr (padded_slab) {
+                 // Padded slab: each of the plan's tile-rows to its row slot (one M-block per core: the slab CB's
+                 // pointers stay at the base). Every thread builds the table: the wide untilize's section split depends
+@@ -1162,8 +1253,17 @@ void kernel_main() {
+                         nslice_center ? 1 : -1>(
+                         im2col_rm_dfb, im2col_tiles_dfb, prelude_rows * num_k_blocks, direct_seq);
+                 } else {
++#ifdef CONV2D_3X3_ABLATE_TILIZE
++                    for (uint32_t r = 0; r < prelude_rows * (k_tiles / im2col_tilize_width_tiles); ++r) {
++                        im2col_rm_dfb.wait_front(im2col_tilize_width_tiles);
++                        im2col_tiles_dfb.reserve_back(im2col_tilize_width_tiles);
++                        im2col_tiles_dfb.push_back(im2col_tilize_width_tiles);
++                        im2col_rm_dfb.pop_front(im2col_tilize_width_tiles);
++                    }
++#else
+                     conv2d_3x3::lean_tilize::tilize<im2col_tilize_width_tiles, cb_im2col_rm, cb_im2col_tiles>(
+                         im2col_rm_dfb, im2col_tiles_dfb, prelude_rows * (k_tiles / im2col_tilize_width_tiles));
++#endif
+                 }
+             }
+             CircularBuffer ring_token(cb_ring_token);
+@@ -1213,6 +1313,7 @@ void kernel_main() {
+                             for (uint32_t c0 = 0; c0 < out_n_tiles; c0 += slice_sb_w) {
+                                 tile_regs_acquire();
+                                 uint32_t in1_index = c0;
++#ifndef CONV2D_3X3_ABLATE_MATMUL
+                                 if constexpr (nslice_center) {
+                                     // K order unchanged (kh, kw, c). One loop per source, each with constant CB ids (a
+                                     // single loop choosing the CB per k measured res5.1 +5.6%).
+@@ -1288,6 +1389,7 @@ void kernel_main() {
+                                         in1_index += out_n_tiles;
+                                     }
+                                 }
++#endif
+                                 tile_regs_commit();
+                                 tile_regs_wait();
+                                 ckl::pack_subblock_row_strided(
+diff --git a/ttnn/ttnn/operations/conv2d_3x3/kernels/conv2d_3x3_gather_dataflow.hpp b/ttnn/ttnn/operations/conv2d_3x3/kernels/conv2d_3x3_gather_dataflow.hpp
+index 64d125fa998..9b3e59efdde 100644
+--- a/ttnn/ttnn/operations/conv2d_3x3/kernels/conv2d_3x3_gather_dataflow.hpp
++++ b/ttnn/ttnn/operations/conv2d_3x3/kernels/conv2d_3x3_gather_dataflow.hpp
+@@ -351,6 +351,14 @@ struct TapDirect {
+         const bool one_run = n > 0 && wo0 + n <= static_cast<int32_t>(output_width);
+         const int32_t h_in0 = ho0 + kh * dilation - padding;
+         const bool row_out = h_in0 < 0 || h_in0 >= input_height;
++#ifdef CONV2D_3X3_ABLATE_GATHER
++        for (int32_t kw = kw_first; kw <= kw_last; ++kw) {
++            srcs[kw - kw_first] = rows_l1 + (kw - kw_first) * TILE_DIM * pixel_bytes;
++        }
++        if (true) {
++            return 0;
++        }
++#endif
+         for (int32_t kw = kw_first; kw <= kw_last; ++kw) {
+             if (kw == skip_kw) {
+                 continue;  // N-slice center taps: compute reads this tap from cb_center_tiles
+@@ -870,6 +878,19 @@ struct TapDirectFifo {
+         const int32_t h_in0 = ho0 + kh * dilation - padding;
+         const bool one_run = wo0 + n <= static_cast<int32_t>(output_width);
+         uint32_t pages = 0;
++#ifdef CONV2D_3X3_ABLATE_GATHER
++        if (true) {
++            for (uint32_t t = 0; t < taps; ++t) {
++                e[t] = zero_l1;
++            }
++            e[3] = 0;
++            ++tbl_written;
++            if (tbl_written == tbl_reserved) {
++                flush(reads);
++            }
++            return;
++        }
++#endif
+         if (n <= 0 || (one_run && (h_in0 < 0 || h_in0 >= input_height))) {
+             for (uint32_t t = 0; t < taps; ++t) {
+                 e[t] = zero_l1;
+diff --git a/ttnn/ttnn/operations/conv2d_3x3/kernels/conv2d_3x3_kw_fold.hpp b/ttnn/ttnn/operations/conv2d_3x3/kernels/conv2d_3x3_kw_fold.hpp
+index 272cb46eb1d..1f5d1562bec 100644
+--- a/ttnn/ttnn/operations/conv2d_3x3/kernels/conv2d_3x3_kw_fold.hpp
++++ b/ttnn/ttnn/operations/conv2d_3x3/kernels/conv2d_3x3_kw_fold.hpp
+@@ -358,7 +358,11 @@ ALWI void run(uint32_t m_tile_start, uint32_t actual_m_tiles, uint32_t num_block
+                         const uint32_t in0 =
+                             static_cast<uint32_t>(static_cast<int32_t>(t_first + a + kh * R - R) + base[kh]) * Ct;
+                         const uint32_t in1 = w0 + kh * Ct * RW;
++#ifdef CONV2D_3X3_ABLATE_MATMUL
++                        for (uint32_t c = 0; c < 0; ++c) {
++#else
+                         for (uint32_t c = 0; c < Ct; ++c) {
++#endif
+                             matmul_block(cb_in, cb_w, in0 + c, in1 + c * RW, a * sbw, false, sbw, b - a, Ct);
+                         }
+                     }
+diff --git a/ttnn/ttnn/operations/conv2d_3x3/kernels/conv2d_3x3_reader.cpp b/ttnn/ttnn/operations/conv2d_3x3/kernels/conv2d_3x3_reader.cpp
+index 86b787ba7a2..afa553884de 100644
+--- a/ttnn/ttnn/operations/conv2d_3x3/kernels/conv2d_3x3_reader.cpp
++++ b/ttnn/ttnn/operations/conv2d_3x3/kernels/conv2d_3x3_reader.cpp
+@@ -120,6 +120,12 @@
+ // zero-fills.
+ 
+ #include <cstdint>
++#ifdef CONV2D_3X3_ABLATE_GATHER
++#define CENTER_READ(...) ((void)0)
++#else
++#define CENTER_READ(...) reads.read(__VA_ARGS__)
++#endif
++#pragma GCC diagnostic ignored "-Wunused-local-typedefs"
+ 
+ #include "api/dataflow/dataflow_api.h"
+ #include "api/dataflow/circular_buffer.h"
+@@ -635,7 +641,9 @@ void kernel_main() {
+                     }
+                 }
+                 reads.begin(TRID_INPUT_TILES);
++#ifndef CONV2D_3X3_ABLATE_FILL
+                 read_rows(row0, row0 + rows, get_write_ptr(cb_input_tiles));
++#endif
+                 reads.wait(TRID_INPUT_TILES);
+                 if constexpr (tile_fill_split) {
+                     if (writer_rows) {
+@@ -746,7 +754,9 @@ void kernel_main() {
+                         const uint32_t seg_left = seg_count[seg] - seg_row;
+                         const uint32_t rows = untilize_batch_rows - r < seg_left ? untilize_batch_rows - r : seg_left;
+                         const uint32_t row0 = seg_first[seg] + seg_row;
++#ifndef CONV2D_3X3_ABLATE_FILL
+                         read_rows(row0, row0 + rows, l1);
++#endif
+                         l1 += rows * row_bytes;
+                         r += rows;
+                         seg_row += rows;
+@@ -914,7 +924,15 @@ void kernel_main() {
+             const uint32_t col_lo = (k_tile0 - kh * tensor_kkh_tiles) * TILE_DIM;
+             const uint32_t o = o_first + tile_row * TILE_DIM;
+             reads.begin(TRID_GATHER);
++#ifdef CONV2D_3X3_ABLATE_GATHER
++            if constexpr (strided_window) {
++                *reinterpret_cast<volatile uint32_t*>(rows_l1 + window_header_offset) = rows_l1;
++            }
++            if constexpr (true) {
++            } else if constexpr (strided_window) {
++#else
+             if constexpr (strided_window) {
++#endif
+                 uint32_t src = 0;
+                 if constexpr (window_direct) {
+                     src = WindowT::direct_source(slab_l1, o, o_end, kh, slab_x_base[kh]);
+@@ -951,7 +969,7 @@ void kernel_main() {
+                 const uint32_t t = t_first + r;
+                 const int32_t h_in = static_cast<int32_t>(t / tile_rows_per_image_row) + kh * dilation - padding;
+                 if (r >= block_valid_tiles || h_in < 0 || h_in >= input_height) {
+-                    reads.read(zero_src_noc, l1, row_tile_bytes);
++                    CENTER_READ(zero_src_noc, l1, row_tile_bytes);
+                     l1 += l1_row_stride;
+                     ++r;
+                     continue;
+@@ -968,7 +986,7 @@ void kernel_main() {
+                 if (contig_rows == 0) {
+                     // A row split across pages that are not contiguous: one read per page.
+                     for (uint32_t c = 0; c < c_in_tiles; ++c) {
+-                        reads.read(input.get_noc_addr(page + c), l1 + c * input_page_bytes, input_page_bytes);
++                        CENTER_READ(input.get_noc_addr(page + c), l1 + c * input_page_bytes, input_page_bytes);
+                     }
+                     l1 += l1_row_stride;
+                     ++r;
+@@ -976,7 +994,7 @@ void kernel_main() {
+                 }
+                 uint64_t src = input.get_noc_addr(page);
+                 for (uint32_t i = 0; i < contig_rows; ++i) {
+-                    reads.read(src, l1, row_tile_bytes);
++                    CENTER_READ(src, l1, row_tile_bytes);
+                     src += row_tile_bytes;
+                     l1 += l1_row_stride;
+                 }
+@@ -1099,7 +1117,19 @@ void kernel_main() {
+                         const uint32_t col_lo = (k_tile0 - kh * tensor_kkh_tiles) * TILE_DIM;
+                         volatile tt_l1_ptr uint32_t* srcs =
+                             reinterpret_cast<volatile tt_l1_ptr uint32_t*>(src_table_l1 + slot * 16);
++#ifdef CONV2D_3X3_ABLATE_GATHER
++                        {
++                            const uint32_t kw_first = col_lo / c_in_p;
++                            const uint32_t unit_taps = block_k_tiles * TILE_DIM / c_in_p;
++                            const uint32_t ntaps = unit_taps < 3 - kw_first ? unit_taps : 3 - kw_first;
++                            for (uint32_t t = 0; t < ntaps; ++t) {
++                                srcs[t] = slot_l1 + t * TILE_DIM * c_in_p * 2;
++                            }
++                        }
++                        if (false) {
++#else
+                         if (planned) {
++#endif
+                             g_reads += TapPlannedT::unit(
+                                 reads,
+                                 plan,
+@@ -1170,7 +1200,7 @@ void kernel_main() {
+                         const int32_t h_in =
+                             static_cast<int32_t>(t / tile_rows_per_image_row) + kh * dilation - padding;
+                         if (r >= block_valid_tiles || h_in < 0 || h_in >= input_height) {
+-                            reads.read(zero_src_noc, l1, row_tile_bytes);
++                            CENTER_READ(zero_src_noc, l1, row_tile_bytes);
+                             l1 += row_tile_bytes;
+                             ++r;
+                             continue;
+@@ -1186,7 +1216,7 @@ void kernel_main() {
+                         while (page < end_page) {
+                             const uint32_t n =
+                                 input.contiguous_page_stride() == 1 ? input.num_contiguous_pages(page, end_page) : 1;
+-                            reads.read(input.get_noc_addr(page), l1, n * input_page_bytes);
++                            CENTER_READ(input.get_noc_addr(page), l1, n * input_page_bytes);
+                             page += n;
+                             l1 += n * input_page_bytes;
+                         }
+@@ -1455,8 +1485,10 @@ void kernel_main() {
+                         for (uint32_t off = 0; off < group_bytes; off += NOC_MAX_BURST_SIZE) {
+                             const uint32_t bytes =
+                                 group_bytes - off < NOC_MAX_BURST_SIZE ? group_bytes - off : NOC_MAX_BURST_SIZE;
++#ifndef CONV2D_3X3_ABLATE_SCATTER
+                             noc_async_write_one_packet_with_trid(
+                                 src + off, get_noc_addr(nx, ny, dst + off), bytes, trid);
++#endif
+                         }
+                         ++issued;
+                     }
+diff --git a/ttnn/ttnn/operations/conv2d_3x3/kernels/conv2d_3x3_weight_server_reader.cpp b/ttnn/ttnn/operations/conv2d_3x3/kernels/conv2d_3x3_weight_server_reader.cpp
+index 4cf0d41f1b0..42eccf0d26c 100644
+--- a/ttnn/ttnn/operations/conv2d_3x3/kernels/conv2d_3x3_weight_server_reader.cpp
++++ b/ttnn/ttnn/operations/conv2d_3x3/kernels/conv2d_3x3_weight_server_reader.cpp
+@@ -17,6 +17,9 @@
+ #include "conv2d_3x3_gather_dataflow.hpp"
+ 
+ void kernel_main() {
++#ifdef CONV2D_3X3_ABLATE_WEIGHTS
++    return;
++#endif
+     constexpr uint32_t cb_weights = get_compile_time_arg_val(0);
+     constexpr uint32_t block_k_tiles = get_compile_time_arg_val(1);
+     constexpr uint32_t block_n_tiles = get_compile_time_arg_val(2);
+diff --git a/ttnn/ttnn/operations/conv2d_3x3/kernels/conv2d_3x3_weight_server_writer.cpp b/ttnn/ttnn/operations/conv2d_3x3/kernels/conv2d_3x3_weight_server_writer.cpp
+index 993e228d4df..a16e1727d5a 100644
+--- a/ttnn/ttnn/operations/conv2d_3x3/kernels/conv2d_3x3_weight_server_writer.cpp
++++ b/ttnn/ttnn/operations/conv2d_3x3/kernels/conv2d_3x3_weight_server_writer.cpp
+@@ -23,6 +23,9 @@
+ #include "ttnn/cpp/ttnn/kernel_lib/perf_instrumentation.hpp"
+ 
+ void kernel_main() {
++#ifdef CONV2D_3X3_ABLATE_WEIGHTS
++    return;
++#endif
+     constexpr uint32_t cb_weights = get_compile_time_arg_val(0);
+     constexpr uint32_t round_tiles = get_compile_time_arg_val(1);
+     constexpr uint32_t ack_sem_id = get_compile_time_arg_val(2);
+diff --git a/ttnn/ttnn/operations/conv2d_3x3/kernels/conv2d_3x3_writer.cpp b/ttnn/ttnn/operations/conv2d_3x3/kernels/conv2d_3x3_writer.cpp
+index 934c52a2a58..3001811d518 100644
+--- a/ttnn/ttnn/operations/conv2d_3x3/kernels/conv2d_3x3_writer.cpp
++++ b/ttnn/ttnn/operations/conv2d_3x3/kernels/conv2d_3x3_writer.cpp
+@@ -79,6 +79,7 @@
+ // (j + 1) x the per-round count.
+ 
+ #include <cstdint>
++#pragma GCC diagnostic ignored "-Wunused-local-typedefs"
+ 
+ #include "api/dataflow/dataflow_api.h"
+ #include "api/dataflow/noc.h"
+@@ -378,6 +379,7 @@ void kernel_main() {
+                         const uint32_t run_end = end_row < shard_end ? end_row : shard_end;
+                         const uint64_t src = input.get_noc_addr(row * fill_row_page_stride + slice_page_offset);
+                         if constexpr (fill_zero_lanes) {
++#ifndef CONV2D_3X3_ABLATE_FILL
+                             for (uint32_t i = 0; i < run_end - row; ++i) {
+                                 fill_reads.read(src + i * fill_row_bytes, l1 + i * fill_row_bytes, real_row_bytes);
+                                 fill_reads.read(
+@@ -385,8 +387,11 @@ void kernel_main() {
+                                     l1 + i * fill_row_bytes + real_row_bytes,
+                                     fill_row_bytes - real_row_bytes);
+                             }
++#endif
+                         } else {
++#ifndef CONV2D_3X3_ABLATE_FILL
+                             fill_reads.read(src, l1, (run_end - row) * fill_row_bytes);
++#endif
+                         }
+                         l1 += (run_end - row) * fill_row_bytes;
+                         row = run_end;
+@@ -396,7 +401,9 @@ void kernel_main() {
+                 for (uint32_t page = lo * fill_c_in_tiles, end_page = (row0 + rows) * fill_c_in_tiles;
+                      page < end_page;) {
+                     const uint32_t run = input.num_contiguous_pages(page, end_page);
++#ifndef CONV2D_3X3_ABLATE_FILL
+                     fill_reads.read(input.get_noc_addr(page), l1, run * input_page_bytes);
++#endif
+                     page += run;
+                     l1 += run * input_page_bytes;
+                 }
+@@ -422,7 +429,9 @@ void kernel_main() {
+             uint32_t l1 = slot + (lo - row0) * fill_row_bytes;
+             for (uint32_t page = lo * fill_c_in_tiles, end_page = row_end * fill_c_in_tiles; page < end_page;) {
+                 const uint32_t run = input.num_contiguous_pages(page, end_page);
++#ifndef CONV2D_3X3_ABLATE_FILL
+                 fill_reads.read(input.get_noc_addr(page), l1, run * input_page_bytes);
++#endif
+                 page += run;
+                 l1 += run * input_page_bytes;
+             }
+@@ -733,6 +742,11 @@ void kernel_main() {
+     [[maybe_unused]] volatile tt_l1_ptr uint32_t* server_bias_flag = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(
+         weight_servers ? get_semaphore(server_flag_sem_id + nslice_weight_depth) : 0);
+     [[maybe_unused]] auto late_bias_landed = [&]() -> bool {
++#ifdef CONV2D_3X3_ABLATE_WEIGHTS
++        if (server_receiver) {
++            return true;
++        }
++#endif
+         if (server_receiver) {
+             invalidate_l1_cache();
+             return *server_bias_flag == VALID;
+@@ -806,6 +820,10 @@ void kernel_main() {
+         const uint32_t l1 = get_write_ptr(cb_weights);
+         // DRAM read (+ multicast) on a sender or own-stream core; the multicast wait on a receiver.
+         MaybeDeviceZoneScope("writer_weight_fetch");
++#ifdef CONV2D_3X3_ABLATE_WEIGHTS
++        if (false) {
++        } else if (false) {
++#else
+         if (server_receiver) {
+             // Weight server round (see the file comment); serves the fill hand-overs while it waits.
+             if (k_blocks_issued >= nslice_weight_depth &&
+@@ -840,16 +858,21 @@ void kernel_main() {
+             }
+             *flag = INVALID;
+         } else if (weight_sender && weight_mcast.should_send(k_blocks_issued)) {
++#endif
+             read_weight_k_block(l1);
+             weight_sender->send(l1, l1, weight_k_block_tiles * weight_tile_bytes);
+         } else if (weight_receiver) {
++#ifndef CONV2D_3X3_ABLATE_WEIGHTS
+             if constexpr (tile_fill_split) {
+                 receive_serving(weight_mcast, k_blocks_issued);
+             } else {
+                 weight_receiver->receive(k_blocks_issued);
+             }
++#endif
+         } else {
++#ifndef CONV2D_3X3_ABLATE_WEIGHTS
+             read_weight_k_block(l1);
++#endif
+         }
+         cb_push_back(cb_weights, weight_k_block_tiles);
+         ++k_blocks_issued;
+@@ -958,6 +981,9 @@ void kernel_main() {
+         for (uint32_t k = 0; k < nslice_k_tiles; ++k) {
+             const uint32_t row_page = (weight_k_tile_start + k) * tensor_n_tiles + n0;
+             for (uint32_t n = 0; n < valid; ++n) {
++#ifdef CONV2D_3X3_ABLATE_WEIGHTS
++                continue;
++#endif
+                 weight_reads.read(weights.get_noc_addr(row_page + n), l1 + n * weight_tile_bytes, weight_tile_bytes);
+             }
+             l1 += out_n_tiles * weight_tile_bytes;
+@@ -1053,7 +1079,11 @@ void kernel_main() {
+                 poll_credit();
+             }
+             weight_reads.wait(TRID_WEIGHTS + (round & 1));
++#ifdef CONV2D_3X3_ABLATE_WEIGHTS
++            if (false) {
++#else
+             if (weight_sender && weight_mcast.should_send(round)) {
++#endif
+                 const uint32_t l1 =
+                     weights_base + (round % nslice_weight_depth) * slice_weight_tiles * weight_tile_bytes;
+                 weight_sender->send(l1, l1, slice_weight_tiles * weight_tile_bytes);
+@@ -1061,7 +1091,9 @@ void kernel_main() {
+             poll_credit();
+         } else {
+             reserve_polling(slice_weight_tiles);
++#ifndef CONV2D_3X3_ABLATE_WEIGHTS
+             receive_polling(weight_mcast, round);
++#endif
+         }
+         cb_push_back(cb_weights, slice_weight_tiles);
+         ++k_blocks_issued;
+@@ -1236,6 +1268,7 @@ void kernel_main() {
+                 const uint32_t k_tile0 = Units::k_block(s) * block_k_tiles;
+                 const int32_t kh = k_tile0 / tensor_kkh_tiles;
+                 row_reads.begin(1);
++#ifndef CONV2D_3X3_ABLATE_GATHER
+                 RowGatherT::tile_row(
+                     row_reads,
+                     row_slab_noc,
+@@ -1245,6 +1278,7 @@ void kernel_main() {
+                     kh,
+                     (k_tile0 - kh * tensor_kkh_tiles) * 32,
+                     slab_x_base[kh]);
++#endif
+                 row_reads.wait(1);
+                 Semaphore<>(row_done_sem_id).up(1);
+                 ++grants_served;

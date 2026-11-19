@@ -458,6 +458,22 @@ def _ring_subblock(block_m_tiles, out_n_tiles):
     return _out_subblock(block_m_tiles, out_n_tiles)
 
 
+def ring_owner_cols(g: Conv3x3Geometry, b: Conv3x3Blocking):
+    """N-slice ring: the columns that sum and store an N-slice (in N-slice order), or None for columns 0 ..
+    num_owning - 1. Where C_out has fewer N-slices than the row has columns and the output goes through the remote
+    store, the non-owning columns are spread round the ring, one per gap, the last column among them (it carries the
+    short channel slice when C_in does not divide): kernels/conv2d_3x3_nslice_order.hpp (RING_OWNER_MASK). A local
+    output shard pins each N-slice to the column that holds it."""
+    if not (g.k_split and b.nslice and g.remote_output):
+        return None
+    num_owning = _div_up(g.tensor_n_tiles, g.out_n_tiles)
+    idle_n = g.k_cols - num_owning
+    if idle_n <= 0:
+        return None
+    idle = {g.k_cols - 1 - (i * g.k_cols) // idle_n for i in range(idle_n)}
+    return [c for c in range(g.k_cols) if c not in idle]
+
+
 def _nslice_kh_masks(g: Conv3x3Geometry, bm, sb_h, m_tile_start, actual_m_tiles, num_m_blocks):
     """N-slice kernel-row skip (compute runtime args 3..): per M-block, ceil(groups / 10) words of 3-bit masks, ring row
     group gi at bits 3 * (gi % 10) of word gi // 10. Bit kh: kernel row kh is in the image for some output pixel of the
@@ -2164,12 +2180,14 @@ def create_program_descriptor(
                 return [1, virtual.x, virtual.y]
         return [0, 0, 0]
 
+    ring_owners = None if kwf else ring_owner_cols(g, b)
     for core, m_index, col in work:
         m_tile_start, actual_m_tiles = m_ranges[m_index]
         num_m_blocks_this_core = m_blocks_per_index[m_index]
         # The core's output columns: all of C_out, or N-slice `col` under the K split (possibly short or
-        # empty past the last C_out tile).
-        out_n_tile_start = col * ns
+        # empty past the last C_out tile); with spread ring owners, the owner's rank among them, or none.
+        out_slice = col if ring_owners is None else (ring_owners.index(col) if col in ring_owners else g.k_cols)
+        out_n_tile_start = out_slice * ns
         out_valid_tiles = max(0, min(ns, g.tensor_n_tiles - out_n_tile_start))
         # The split is a runtime flag: a per-core kernel split fragments the core ranges (a staggered sender per
         # column), and the launch of many-range kernels measured up to ~10 us of start skew.
@@ -2299,13 +2317,17 @@ def create_program_descriptor(
             ("PAD_SLAB_SLOTS_MAX", str(pad_slots_max)),
             ("PAD_SLAB_CB_ZERO", str(CB_ZERO_SRC)),
         ]
+    # Spread N-slice ring owners (ring_owner_cols): the owning columns' mask, for the ring order of all three kernels.
+    _ring_owner_defines = (
+        [("RING_OWNER_MASK", f"{sum(1 << c for c in ring_owners)}u")] if ring_owners is not None else []
+    )
     readers = [
         ttnn.KernelDescriptor(
             kernel_source=str(KERNEL_DIR / "conv2d_3x3_reader.cpp"),
             core_ranges=_core_range_set(reader_cores),
             compile_time_args=reader_ct_args(*slice_channels),
             runtime_args=reader_rt,
-            defines=_kwf_dm_defines + _pad_dm_defines,
+            defines=_kwf_dm_defines + _pad_dm_defines + _ring_owner_defines,
             config=ttnn.ReaderConfigDescriptor(),
         )
         for slice_channels, (reader_cores, reader_rt) in reader_groups.items()
@@ -2316,7 +2338,7 @@ def create_program_descriptor(
             core_ranges=_core_range_set(writer_cores),
             compile_time_args=writer_ct_args_for(*slice_channels),
             runtime_args=writer_rt,
-            defines=_kwf_dm_defines,
+            defines=_kwf_dm_defines + _ring_owner_defines,
             config=ttnn.WriterConfigDescriptor(),
         )
         for slice_channels, (writer_cores, writer_rt) in writer_groups.items()
@@ -2326,7 +2348,7 @@ def create_program_descriptor(
         core_ranges=cores,
         compile_time_args=compute_ct_args,
         runtime_args=compute_rt,
-        defines=_kwf_compute_defines + _pad_compute_defines,
+        defines=_kwf_compute_defines + _pad_compute_defines + _ring_owner_defines,
         config=ttnn.ComputeConfigDescriptor(
             math_fidelity=compute_kernel_config.math_fidelity,
             math_approx_mode=compute_kernel_config.math_approx_mode,

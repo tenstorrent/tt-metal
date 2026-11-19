@@ -1071,9 +1071,9 @@ void kernel_main() {
         uint32_t order[k_cols];
         uint32_t num_slices = 0;
         for (uint32_t j = 0; j < k_cols; ++j) {
-            const uint32_t y = conv2d_3x3::nslice_owner<k_cols>(my_col, j);
-            if (y < num_owning_cols) {
-                order[num_slices++] = y;
+            const uint32_t owner = conv2d_3x3::nslice_owner<k_cols>(my_col, j);
+            if (conv2d_3x3::ring_is_owner<num_owning_cols>(owner)) {
+                order[num_slices++] = conv2d_3x3::ring_slice_of(owner);
             }
         }
         uint32_t weights_issued = 0;
