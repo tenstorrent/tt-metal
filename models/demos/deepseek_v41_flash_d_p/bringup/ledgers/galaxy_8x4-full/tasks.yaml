@@ -5450,7 +5450,7 @@ tasks:
     metrics:
       device_ms_total_p145408_nonlast_tagentic: '> 0'
 - id: P.86
-  title: 'OWNER 2026-11-19 perf: hide the remaining host time (wall - device ~14 ms a chunk at 142k on real text): engram overlap with the previous chunk + metal trace'
+  title: 'OWNER 2026-11-19 perf: hide the remaining host time (wall - device ~14 ms a chunk at 142k on real text): engram work overlapped inside the chunk + metal trace'
   step: perf
   role: perf
   device: true
@@ -5464,7 +5464,7 @@ tasks:
   - ttnn/ttnn/bringup
   brief:
     prior_work: 'P.78 HOST_HIDE (idle map, engram wait + layers 2-4 contention: 108.1 -> 93.4 ms), P.6 ENGRAM_ASYNC, P.61 on the replica branch (trace the MoE half of every layer: host launches replayed), P.57 / P.62 there (host-bound walls), X.10 (this task''s input: the exposed host split on agentic at 142k).'
-    details: 'OWNER 2026-11-19: the biggest lever left. On real text the steady wall is 79-86 ms against 65-74 ms of device time at 142k: ~14 ms a chunk of device idle waiting for the host (15-18 % of throughput). Read X.10''s split first (results/X.10*, BREADCRUMBS X.10). Then remove it: (1) the engram work of chunk k+1 (hash, row gather, upload) overlapped with chunk k on the device (the ids of the next chunk are known to the caller; the runtime takes them with the chunk header, tt-d-gen ask 2), so layer 1 / 14 never wait; (2) metal trace of the device-only stretches (the layers between the engram uploads, or the whole chunk with the engram rows written into a persistent buffer before the replay): the 800+ op launches a chunk replayed, no Python on the critical path; (3) whatever X.10 names next. Target: steady wall within 2 ms of device time at 142k on agentic and prose (~79 -> ~67 ms agentic). Bit-identical. Keep a change only at >= 2 ms wall a chunk. Kernel / runtime work is the job (agent rule), not a reason to stop.'
+    details: 'OWNER 2026-11-19: the biggest lever left. On real text the steady wall is 79-86 ms against 65-74 ms of device time at 142k: ~14 ms a chunk of device idle waiting for the host (15-18 % of throughput). Read X.10''s split first (results/X.10*, BREADCRUMBS X.10). Then remove it: (1) the CURRENT chunk''s engram work (hash, row gather, upload) started the moment the chunk arrives and overlapped with the device''s own work before layers 1 / 14 need it (the model does NOT know the next chunk: tt-d-gen sends one chunk at a time, possibly another request / slot; a next-chunk prefetch would need a new tt-d-gen ask: the request''s upcoming prompt ids, which the engine holds; do not assume it); (2) metal trace of the device-only stretches (the layers between the engram uploads, or the whole chunk with the engram rows written into a persistent buffer before the replay): the 800+ op launches a chunk replayed, no Python on the critical path; (3) whatever X.10 names next. Target: steady wall within 2 ms of device time at 142k on agentic and prose (~79 -> ~67 ms agentic). Bit-identical. Keep a change only at >= 2 ms wall a chunk. Kernel / runtime work is the job (agent rule), not a reason to stop.'
   ab:
     env:
       HOST_TRACE: 'off'
