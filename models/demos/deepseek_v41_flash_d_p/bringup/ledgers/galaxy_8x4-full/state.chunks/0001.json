@@ -6209,6 +6209,40 @@
   "units": null,
   "waiting": null
  },
+ "P.80": {
+  "ab_pending": null,
+  "agent": {
+   "defs": {
+    "models/demos/common/bringup/agents/bringup-engineer.md": {
+     "blob": "592203d1364e20d30b11e752804d818787b5365a",
+     "dirty": false
+    },
+    "models/demos/common/bringup/briefs/brief.md": {
+     "blob": "3a81858569143578c4beac9c613747508e11748f",
+     "dirty": false
+    },
+    "models/demos/common/bringup/briefs/roles.yaml": {
+     "blob": "e6413c1d49e3d144b0349ea968e1ea4d7d941470",
+     "dirty": false
+    }
+   },
+   "model": "claude-opus-5-5",
+   "session_id": "c9cfd8d8-e06f-42d3-be3e-323bc26d22ea"
+  },
+  "attempt": 1,
+  "history": [
+   {
+    "status": "REJECTED",
+    "t": "2026-11-19T04:47:09"
+   }
+  ],
+  "reason": [
+   "rejected by the owner on the A/B report /scratch/dnijemcevic/bringup/deepseek_v41_flash_d_p/runs/galaxy_8x4-full/run1/ab/P.80/table.md; reverted 28 files (old path)"
+  ],
+  "role": "perf",
+  "status": "REJECTED",
+  "waiting": null
+ },
  "P.9": {
   "agent": {
    "defs": {
