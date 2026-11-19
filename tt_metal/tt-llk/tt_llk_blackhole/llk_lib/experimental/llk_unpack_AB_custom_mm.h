@@ -29,32 +29,21 @@ using namespace ckernel::unpacker;
 
 inline void _llk_unpack_AB_custom_mm_iter_insns(const bool post1)
 {
-    if (post1)
-    {
-        // This nop is not actually used, it just ensures both tunings are of the same length when recording
-        // When playing back the replay it is omitted
-        TTI_NOP;
-    }
-
     // Unpack SrcA (in1, full tile, uses CFGSHIFTMASK to manipulate L1 addr and keeps SrcA addr fixed at 0)
     TTI_UNPACR_COMMON(SrcA, 0b00000000, 1); // Also set dvalid
 
     // Unpack SrcB (in0, one instruction per face, uses counters to manipulate addresses for both L1 and SrcB)
     // Counters of interest are CH0 Y and Z (both with a stride of a single face in L1
-    // (datum_size * 16 * face_r_dim) and CH1 Y with a stride of a face in SrcB (16 rows)
+    // (datum_size * 16 * face_r_dim) and CH1 Z with a stride of a face in SrcB (16 rows)
     // Each unpack instruction moves to the next face in L1, split among the Y and Z counters.
     // The L1 face index is (Y & 0xff) + (Z & 0xff), so one base address covers CUSTOM_MM_MAX_KT_PER_WALK k-tiles.
-    // For SrcB first unpack has to land at index 0 and second one at index 16,
-    // increment from first to second is straightforward, but moving back to 0 after second requires us to exploit
-    // counter overflow as CH1 counters only use low 6 bits and wrap at the number of rows in a Src reg (64)
-    // thus an increment of 48 rows or 3 CH1 Y increments wraps us back to 0
-    // (which is conveniently the max we can increment in a single instruction)
-
+    // For SrcB the first unpack lands at row 0 and the second at row 16; CH1 Z is then reset to 0
+    // explicitly (SETADCZW below) so no SrcB row past 63 is ever addressed.
     TTI_UNPACR_COMMON(SrcB, 0b00010001, 0);
     if (!post1)
     {
         // Unpack second face of SrcB before CFGSHIFTMASK in post0 tuning
-        TTI_UNPACR_COMMON(SrcB, 0b00110100, 1); // Also set dvalid
+        TTI_UNPACR_COMMON(SrcB, 0b00000100, 1); // Also set dvalid
     }
 
     // Increment UnpA L1 address
@@ -62,14 +51,11 @@ inline void _llk_unpack_AB_custom_mm_iter_insns(const bool post1)
     if (post1)
     {
         // Unpack second face of SrcB after CFGSHIFTMASK in post1 tuning
-        TTI_UNPACR_COMMON(SrcB, 0b00110100, 1); // Also set dvalid;
+        TTI_UNPACR_COMMON(SrcB, 0b00000100, 1); // Also set dvalid;
     }
-    else
-    {
-        // This nop is required in post0 as CFGSHIFTMASK is a 2 cycle instruction
-        // And first instruction in next iteration is unpack into SrcA which uses this value
-        TTI_NOP;
-    }
+    // Rewind the SrcB row counter (CH1 Z) to row 0 for the next k-tile. In post0 this also fills the slot after
+    // CFGSHIFTMASK (a 2 cycle instruction) before the next SrcA unpack, which reads the address it updates.
+    TTI_SETADCZW(p_setadc::UNP_B, 0, 0, 0, 0, 0b0100);
 }
 
 // TT_MOP has a 7-bit loop count.
@@ -108,8 +94,8 @@ inline void _llk_unpack_AB_custom_mm_mop_config_(const std::uint32_t ct_dim, con
     // (not using SKIP_A/B instructions) since iterations beyond 32 always use 0s for zmask
     //
     // Replay buffer layout (always 32 instructions):
-    // post0: [0-4]: full unpack, [5-28]: 8 reuse blocks (3 insns each), [29-31]: final reuse w/ inner_increment
-    // post1: [0]: NOP (skipped), [1-4]: full unpack, [5-28]: 8 reuses, [29-31]: final reuse w/ inner_increment
+    // post0: [0-4]: full unpack (ends in the SrcB row reset), [5-28]: 8 reuse blocks (3 insns each), [29-31]: final reuse w/ inner_increment
+    // post1: same layout; its full unpack only orders CFGSHIFTMASK before the second SrcB unpack
     // Where:
     //   - full unpack = SrcA + SrcB + address increment (new k-tile)
     //   - reuse = SrcA only + address increment (same k-tile, next c-tile)
@@ -130,7 +116,7 @@ inline void _llk_unpack_AB_custom_mm_mop_config_(const std::uint32_t ct_dim, con
     // The reuses split evenly; the remainder goes to A3, A2 and A1 before A0, which already holds the full unpack,
     // so A1..A3 get a reuse each from ct_dim 4 on.
     const std::uint32_t reuses          = ct_dim - 1;
-    const auto full_and                 = [post1](const std::uint32_t n) { return lltt::replay_insn(post1 ? 1 : 0, (post1 ? 1 : 2) + (1 + n) * 3); };
+    const auto full_and                 = [](const std::uint32_t n) { return lltt::replay_insn(0, 2 + (1 + n) * 3); };
     const auto final_reuses             = [](const std::uint32_t n) { return lltt::replay_insn(32 - n * 3, n * 3); };
     constexpr std::uint32_t reuse_start = 5;
 
