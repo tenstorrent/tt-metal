@@ -236,7 +236,8 @@ def cluster_type_name():
         import ttnn
 
         cluster = ttnn.cluster.get_cluster_type()
-    except Exception:  # noqa: BLE001 - no ttnn / no cluster: unknown, so no Galaxy-only default
+    except Exception as e:  # noqa: BLE001 - no ttnn / no cluster: unknown, so no Galaxy-only default
+        logger.warning(f"cluster type unreadable ({e!r}): the Galaxy-only defaults stay off")
         return None
     name = getattr(cluster, "name", None)
     return str(name) if name is not None else str(cluster).rsplit(".", 1)[-1]

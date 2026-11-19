@@ -158,9 +158,15 @@ void kernel_main() {
                 cb_qk_im_obj.push_back(qk_chunk_tiles);
             }
 
+#ifdef SDPA_EXACT_FP32_ROW_MAX
+            // fp32 scores and max CBs (fp32 dest): the SFPU row max keeps each row's peak exactly (stock, #65746)
+            reduce_max_row_fp32<cb_qk_im, Sq_chunk_t>(
+                alias_cur_max, alias_prev_max, Sk_chunk_t, processed_k_chunks > 0);
+#else
             reconfig_data_format(cb_qk_im, cb_identity_scale_in);
             reduce_c<PoolType::MAX, ReduceDim::REDUCE_ROW, cb_qk_im, cb_identity_scale_in, Sq_chunk_t>(
                 alias_cur_max, alias_prev_max, Sk_chunk_t, processed_k_chunks > 0);
+#endif
 
             sub_exp_block_bcast_cols_inplace<cb_qk_im, Sq_chunk_t, scale_fp32, true>(
                 alias_cur_max, alias_cur_sum, Sk_chunk_t);

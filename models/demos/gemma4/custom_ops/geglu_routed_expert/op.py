@@ -220,6 +220,8 @@ class GegluRoutedExpert:
         assert all(d == 1 for d in gu_shape[:-3] + d_shape[:-3]), f"leading dims must be 1: {gu_shape} {d_shape}"
         E = gu_shape[-3]
         assert E > 0 and d_shape[-3] == E, f"gate_up holds {E} experts, down {d_shape[-3]}"
+        idx_n = int(idx_table.shape[-1])
+        assert idx_n >= E, f"the index table holds {idx_n} entries, the stacked weights {E} experts"
         for name, w, shape in (("gate_up", gate_up, gu_shape), ("down", down, d_shape)):
             assert w.layout == ttnn.TILE_LAYOUT, f"{name} must be TILE"
             assert [int(d) for d in w.shape] == shape, f"{name} must be tile-aligned (no padding): {list(w.shape)}"

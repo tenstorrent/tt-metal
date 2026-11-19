@@ -3453,6 +3453,9 @@ class SpeculativeDecoder:
             if shard:
                 raise ValueError(f"{KV_PAIR_SHARD_ENV}: shape {shape} has no prefix + fresh verify geometry")
             return None
+        if shard and not geometry.pair:
+            # the pair-sharded verify reads only through the pair view; fail here, not at the first capture
+            raise ValueError(f"{KV_PAIR_SHARD_ENV}: shape {shape}: the prefix + fresh verify geometry has no pair view")
         from models.demos.gemma4.custom_ops.grid import sdpa_decode_cb_budget_bytes
         from models.demos.gemma4.custom_ops.sdpa_decode_lse import planner as lse_planner
 

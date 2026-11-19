@@ -329,10 +329,8 @@ def _kv_grids_disjoint(tt_k, tt_v) -> bool:
     """Whether K's and V's shard grids share no core (the fused write's placement rule)."""
     if not (tt_k.is_sharded() and tt_v.is_sharded()):
         return False  # an interleaved tensor has no shard grid
-    from models.demos.gemma4.custom_ops.qkv_heads_norm_rope.op import shard_cores
-
-    k_cores = {(c.x, c.y) for c in shard_cores(tt_k.memory_config().shard_spec.grid)}
-    v_cores = {(c.x, c.y) for c in shard_cores(tt_v.memory_config().shard_spec.grid)}
+    k_cores = {(c.x, c.y) for c in ttnn.corerange_to_cores(tt_k.memory_config().shard_spec.grid)}
+    v_cores = {(c.x, c.y) for c in ttnn.corerange_to_cores(tt_v.memory_config().shard_spec.grid)}
     return bool(k_cores) and bool(v_cores) and not (k_cores & v_cores)
 
 
@@ -924,6 +922,8 @@ def decode_forward(
                     )
                     KV_FUSED_STATS["fused"] += 1
                 else:
+                    if kv_fused:
+                        log_once("fused K+V cache write: K and V share shard cores on a call, two programs write them")
                     ttnn.experimental.paged_update_cache(
                         k_cache,
                         tt_k,
@@ -1011,6 +1011,11 @@ def decode_forward(
             group=group,
         )
         pair_merged = tt_sdpa is not None
+    if split and splitfree_sdpa_enabled(config):
+        log_once(
+            "the pair / group split serves the global layers over GEMMA4_SDPA_DECODE_SPLITFREE: their rows' bits "
+            "follow the decode batch"
+        )
     if not split and page_table is not None and sdpa_scratch is not None and splitfree_sdpa_enabled(config):
         # GEMMA4_SDPA_DECODE_SPLITFREE: the custom op (custom_ops/sdpa_decode_splitfree): fixed KV units per
         # (row, group) on a static core mapping, fp32 partials in the model's scratch, a fixed-order combine --

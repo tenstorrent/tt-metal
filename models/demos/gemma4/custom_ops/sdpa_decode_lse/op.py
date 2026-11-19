@@ -277,6 +277,8 @@ class SdpaDecodeLse:
             # the half-block kernels derive each device's position from the row's over an unbounded logical table;
             # a bounded ring's wrap (the reader's capacity_t) is not part of that derivation
             return f"half_block takes no cache_position_modulo (got {cache_position_modulo}): no bounded ring"
+        if half_block and half is not None and int(half) not in (0, 1):
+            return f"half_block's explicit half must be 0 or 1, got {half}"
         if pair_split or (half_block and half is None):
             parts, axis = (int(split_parts), int(split_axis)) if pair_split else (2, 1)
             reason = P.split_reason(_mesh_shape(q.device()), parts, axis)

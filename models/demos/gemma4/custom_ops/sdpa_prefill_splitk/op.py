@@ -12,8 +12,8 @@ that the planner spreads over all cores (longest piece first), each a fraction o
 
 One ``ttnn.generic_op`` program (``kernels/``): per core a list of pieces (head, Q chunk, K chunks [k_lo, k_hi),
 output slot); the compute body per K chunk is the stock ``sdpa_inner_loop`` STANDARD body (compute_common.hpp) with
-absolute tile coordinates for the causal diagonal. Outputs per slot ``j`` (``out`` / ``stats`` planes
-``j * NQH + h``):
+absolute tile coordinates for the causal diagonal (with fp32 dest, the stock's exact fp32 row max: fp32 max CBs and
+``SDPA_EXACT_FP32_ROW_MAX``). Outputs per slot ``j`` (``out`` / ``stats`` planes ``j * NQH + h``):
 
 * ``out [1, splits * NQH, Sq, D]`` (q dtype, TILE): the softmax-normalised attention over the piece's keys;
 * ``stats [1, splits * NQH, Sq, 64]`` fp32 TILE: column 0 = ``m`` (row max of the raw scores), column 32 = ``l``
@@ -134,8 +134,9 @@ def _cb_plan(q_dtype_name, kv, Sq_chunk_t, Sk_chunk_t, DHt, fp32_dest, pt_stick)
         ("qk_im", Sq_chunk_t * Sk_chunk_t, im),
         ("out_im_A", Sq_chunk_t * DHt, "bfloat16"),
         ("out_im_B", Sq_chunk_t * DHt, "bfloat16"),
-        ("max_A", Sq_chunk_t, "bfloat16"),
-        ("max_B", Sq_chunk_t, "bfloat16"),
+        # the row max in the scores' format: fp32 with fp32 dest (the exact SFPU row max, SDPA_EXACT_FP32_ROW_MAX)
+        ("max_A", Sq_chunk_t, im),
+        ("max_B", Sq_chunk_t, im),
         ("sum_A", Sq_chunk_t, im),
         ("sum_B", Sq_chunk_t, im),
         ("exp_max_diff", Sq_chunk_t, "bfloat16"),
@@ -255,6 +256,19 @@ class SdpaPrefillSplitK:
         device = out.device()
         S, H = int(splits), int(num_heads)
         _, _, sq, d = (int(v) for v in out.shape)
+        # the kernels read out as S * H planes of [Sq, D] tiles and stats as fp32 [Sq, 64] tile pages (op's outputs)
+        assert out.layout == ttnn.TILE_LAYOUT and [int(v) for v in out.shape] == [
+            1,
+            S * H,
+            sq,
+            d,
+        ], f"merge: out must be TILE [1, {S * H}, Sq, D], got {list(out.shape)} {out.layout}"
+        assert sq % TILE == 0 and d % TILE == 0, f"merge: Sq {sq} and D {d} must be tile multiples"
+        assert (
+            stats.dtype == ttnn.float32
+            and stats.layout == ttnn.TILE_LAYOUT
+            and [int(v) for v in stats.shape] == [1, S * H, sq, 2 * TILE]
+        ), f"merge: stats must be fp32 TILE [1, {S * H}, {sq}, {2 * TILE}], got {list(stats.shape)} {stats.dtype}"
         Sqt, DHt = sq // TILE, d // TILE
         gx, gy = grid if grid is not None else compute_grid(device)
         T = H * Sqt
@@ -551,6 +565,9 @@ class SdpaPrefillSplitK:
             ("REDUCE_GRANULARITY", str(_granularity(Sq_chunk_t, dst_size // 2))),
             ("EXP_APPROX_MODE", str(int(bool(exp_approx_mode)))),
         ]
+        if fp32_dest:
+            # fp32 scores: the row max keeps each row's peak exactly, as the stock sdpa_program_factory sets it
+            defines.append(("SDPA_EXACT_FP32_ROW_MAX", "1"))
 
         # generic_op caches a program by its compile-time args and then requires the same runtime-arg count per
         # core, so every core's piece list is padded to ``slots`` (the busiest core's count rounded up to 4), which

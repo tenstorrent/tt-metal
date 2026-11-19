@@ -52,9 +52,10 @@ _T_SLAB_NS = 15000.0
 _OUT_BYTES_PER_NS = 320.0
 _MAX_KB = 17
 _MAX_SLABS = 4
-# hidden sizes of the models the plan was measured on (12B: 3840, 26B-A4B: 2816); the 31B (5376) and the rest keep
-# their own configs unless GEMMA4_PREFILL_MM_PLAN=1
-PREFILL_MM_PLAN_DEFAULT_HIDDEN = (3840, 2816)
+# hidden sizes where the plan is on by default: the 12B (3840). The 26B's (2816) dense projections are interleaved
+# DecodeLinear weights, which plan only in the free mode (GEMMA4_PREFILL_MM_PLAN_KB=free), so 2816 is no default; the
+# 31B (5376) and the rest keep their own configs unless GEMMA4_PREFILL_MM_PLAN=1
+PREFILL_MM_PLAN_DEFAULT_HIDDEN = (3840,)
 PREFILL_MM_PLAN_MIN_ROWS = int(os.environ.get("GEMMA4_PREFILL_MM_PLAN_MIN_ROWS", "1024"))
 
 

@@ -53,17 +53,6 @@ def heads_sharded_memory_config(device, batch: int, head_dim: int):
     )
 
 
-def shard_cores(core_range_set):
-    """The cores of a height-sharded grid in shard order: row-major inside each range, the ranges in order (the
-    ROW_MAJOR shard orientation), so shard ``u`` of a one-user-per-core tensor sits on ``shard_cores(grid)[u]``."""
-    cores = []
-    for rng in core_range_set.ranges():
-        for y in range(rng.start.y, rng.end.y + 1):
-            for x in range(rng.start.x, rng.end.x + 1):
-                cores.append(ttnn.CoreCoord(x, y))
-    return cores
-
-
 def heads_v_disjoint_memory_config(device, batch: int, head_dim: int):
     """The L1 height-sharded config of a decode V head tensor on the ``batch`` cores AFTER the first ``batch`` of the
     grid (row-major), disjoint from ``heads_sharded_memory_config``'s cores (``paged_fused_update_cache`` places one
@@ -158,7 +147,10 @@ class QkvHeadsNormRope:
         v_noc = (
             shard_noc
             if v_memory_config is None
-            else [device.worker_core_from_logical_core(c) for c in shard_cores(v_mem.shard_spec.grid)[:B]]
+            else [
+                device.worker_core_from_logical_core(c)
+                for c in ttnn.corerange_to_cores(v_mem.shard_spec.grid, row_wise=True)[:B]
+            ]
         )
         tile_bytes = TILE * TILE * 2
         f32_tile = TILE * TILE * 4

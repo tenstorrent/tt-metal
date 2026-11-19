@@ -146,15 +146,15 @@ def _check_splitk_served_shape(mesh_device, case, row, length, Hq, ckc):
     _, tt_row = case.tensors(torch.tensor([length - 1]), case.table[row : row + 1].contiguous())
     kw = dict(num_kv_heads=1, block_size=BLOCK, compute_kernel_config=ckc)
 
-    def reference(start):
+    def reference(start, query):
         k, v = keys[: start + sq], values[: start + sq]
-        s = (q[0].float() @ k.T) * SCALE
+        s = (query[0].float() @ k.T) * SCALE
         visible = torch.arange(start + sq)[None, :] <= (torch.arange(sq)[:, None] + start)
         s = s.masked_fill(~visible, float("-inf"))
         return torch.softmax(s, dim=-1) @ v, torch.logsumexp(s, dim=-1)
 
     out, stats = SdpaPrefillSplitK.op(tt_q, case.k_cache, case.v_cache, tt_row, cs, merge_stats=True, **kw)
-    ref, lse_ref = reference(cs)
+    ref, lse_ref = reference(cs, q)
     got = case.host(out)[0].float()
     st = case.host(stats)[0].float()
     lse = SCALE * st[..., 0] + torch.log(st[..., P.TILE])
@@ -185,17 +185,46 @@ def _check_splitk_served_shape(mesh_device, case, row, length, Hq, ckc):
     for t in (out, stats, stock):
         t.deallocate(True)
 
-    # a fixed split count at two chunk starts with the same rows: one program, the second call a cache hit
+    # a fixed split count at two chunk starts with the same rows: one program, the second call a cache hit. The second
+    # call's scores span 2^+-12 scales (as the stock's test_sdpa_fp32_dest_wide_score_rows): a bf16-rounded row max sits
+    # far enough from a row's peak to overflow exp or zero the row; with fp32 dest the op keeps the exact row max
+    q_wide = (torch.randn(1, Hq, sq, D) * torch.exp2(torch.randint(-12, 13, (1, Hq, sq, D)).float())).to(torch.bfloat16)
+    tt_q_wide = ttnn.from_torch(q_wide, device=mesh_device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16, **case.rep)
     entries = None
-    for start in (cs, cs - 512):
-        res = SdpaPrefillSplitK.op(tt_q, case.k_cache, case.v_cache, tt_row, start, splits=4, **kw)
-        pcc_s = _pcc(case.host(res)[0].float(), reference(start)[0])
-        res.deallocate(True)
-        assert pcc_s >= PCC_MIN, f"split-K splits=4 at {start}: pcc {pcc_s:.6f}"
+    for start, query, tt_query in ((cs, q, tt_q), (cs - 512, q_wide, tt_q_wide)):
+        res = SdpaPrefillSplitK.op(tt_query, case.k_cache, case.v_cache, tt_row, start, splits=4, **kw)
         n = mesh_device.num_program_cache_entries()
         assert entries is None or n == entries, f"chunk start {start}: {n - entries} new program(s), expected a hit"
         entries = n
+        got_s = case.host(res)[0].double()
+        res.deallocate(True)
+        ref_s = reference(start, query)[0].double()
+        bad = (~torch.isfinite(got_s)).any(-1) | (got_s == 0).all(-1)
+        pcc_s = _pcc(got_s.float(), ref_s.float())
+        floor = PCC_MIN
+        if query is q_wide:  # near one-hot rows: graded against the stock op's accuracy on the same call
+            stock_w = ttnn.transformer.chunked_scaled_dot_product_attention(
+                tt_q_wide,
+                case.k_cache,
+                case.v_cache,
+                tt_row,
+                chunk_start_idx=start,
+                scale=SCALE,
+                program_config=ttnn.SDPAProgramConfig(
+                    compute_with_storage_grid_size=mesh_device.compute_with_storage_grid_size(),
+                    q_chunk_size=chunk,
+                    k_chunk_size=chunk,
+                    exp_approx_mode=False,
+                ),
+                compute_kernel_config=ckc,
+            )
+            floor = min(PCC_MIN, _pcc(case.host(stock_w)[0].float(), ref_s.float()) - 1e-4)
+            stock_w.deallocate(True)
+        logger.info(f"split-K splits=4 at {start}: pcc {pcc_s:.6f} (floor {floor:.6f}), bad rows {int(bad.sum())}")
+        assert not bad.any(), f"split-K splits=4 at {start}: {int(bad.sum())} non-finite or all-zero rows"
+        assert pcc_s >= floor, f"split-K splits=4 at {start}: pcc {pcc_s:.6f} < {floor:.6f}"
     tt_q.deallocate(True)
+    tt_q_wide.deallocate(True)
     tt_row.deallocate(True)
 
 

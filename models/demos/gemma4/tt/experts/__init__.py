@@ -105,11 +105,10 @@ class Gemma4Experts:
                 # One copy of the routed experts where the decode copy is already the dispatch layout (the whole-expert
                 # tp-only line, GEMMA4_MOE_DISPATCH_SHARED_WEIGHTS): the GeGLU experts read self.weights and no
                 # per-expert copy (nor its host list) is made.
-                shared = (
-                    self.weights
-                    if shared_weights_reason_for(mesh_device, mesh_config, self.weights, config.num_experts) is None
-                    else None
-                )
+                shared_reason = shared_weights_reason_for(mesh_device, mesh_config, self.weights, config.num_experts)
+                shared = self.weights if shared_reason is None else None
+                if shared_reason is not None:
+                    _warn_once("dispatch_shared", f"dispatch prefill keeps a per-expert copy: {shared_reason}")
                 hf_list = (
                     None
                     if placeholder or shared is not None

@@ -360,15 +360,10 @@ def test_prefill_fp32_acc_fits_l1(mesh_device, device_params, K, N, M):
 # both is printed (RESULT lines) for the perf verdict.
 _WIDE_12B_TP4 = [(3840, 2048), (1024, 3840), (3840, 7680), (3840, 3840)]
 _WIDE_12B_IDS = ["wqkv12b_tp4", "oproj12b_tp4", "gateup12b_tp4", "down12b_tp4"]
-# the 26B's sliding-layer QKV and o_proj at TP4 (hidden 2816 = 88 N tiles, an 11-column split on the wide grid)
-_WIDE_26B_TP4 = [(2816, 2048), (1024, 2816)]
-_WIDE_26B_IDS = ["wqkv26b_tp4", "oproj26b_tp4"]
 _WIDE_CASES = [
     pytest.param(k, n, m, id=f"{name}-m{m}")
     for (k, n), name in zip(_WIDE_12B_TP4, _WIDE_12B_IDS)
     for m in (128, 256, 1024, 2560, 4096)
-] + [
-    pytest.param(k, n, m, id=f"{name}-m{m}") for (k, n), name in zip(_WIDE_26B_TP4, _WIDE_26B_IDS) for m in (128, 4096)
 ]
 
 
@@ -460,7 +455,7 @@ def test_prefill_wide_progcfg_host(monkeypatch):
 
     mesh = type("M", (), {"shape": (1, 4)})()
     monkeypatch.delenv(PREFILL_WIDE_GRID_ENV, raising=False)
-    assert ds.PREFILL_WIDE_GRID_DEFAULT == {(1, 4): (3840, 2816), (1, 8): (3840,)}  # the shipped table
+    assert ds.PREFILL_WIDE_GRID_DEFAULT == {(1, 4): (3840,), (1, 8): (3840,)}  # the shipped table
     monkeypatch.setattr(ds, "PREFILL_WIDE_GRID_DEFAULT", {(1, 4): (3840,), (1, 8): (3840, 5376)})
     monkeypatch.setattr(ds, "is_blackhole", lambda: True)
     from models.demos.gemma4.tt import mesh_orientation as mo

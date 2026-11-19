@@ -20,7 +20,7 @@ import ttnn
 from models.common.sampling.generator import SamplingGenerator, SamplingParams, format_sampling_params
 from models.common.utility_functions import is_blackhole
 from models.demos.gemma4.tt.generator import Gemma4Generator
-from models.demos.gemma4.tt.model import SAMPLING_TRACE_ENV, _compute_per_device_vocab, sampling_trace_default
+from models.demos.gemma4.tt.model import SAMPLING_TRACE_ENV, _compute_per_device_vocab
 from models.tt_transformers.tt.ccl import TT_CCL
 
 from ...config import MeshConfig, ModeConfig
@@ -258,24 +258,3 @@ def test_sampling_trace_buckets_through_generator(mesh_device, device_params, re
     assert not generator._g4_sampling_trace_replay_ok(sampling, object())  # a grammar mask
     assert generator._g4_sampling_trace_replay_ok(sampling, None)
     generator._g4_release_decode_traces("test: done")
-
-
-def test_sampling_trace_default_policy(monkeypatch):
-    """Host: the env var overrides, else the measured-shape policy; never on lanes / fractured meshes."""
-    mesh = SimpleNamespace(shape=(1, 4))
-    monkeypatch.setenv(SAMPLING_TRACE_ENV, "1")
-    assert sampling_trace_default(mesh) is True
-    assert sampling_trace_default(mesh, SimpleNamespace(lane_sharded=True, weight_fracture=False)) is False
-    assert sampling_trace_default(mesh, SimpleNamespace(lane_sharded=False, weight_fracture=True)) is False
-    assert sampling_trace_default(mesh, SimpleNamespace(lane_sharded=False, weight_fracture=False)) is True
-    monkeypatch.setenv(SAMPLING_TRACE_ENV, "0")
-    assert sampling_trace_default(mesh) is False
-    monkeypatch.delenv(SAMPLING_TRACE_ENV)
-    from models.demos.gemma4.tt import model as model_module
-
-    monkeypatch.setattr(model_module, "SAMPLING_TRACE_DEFAULT_SHAPES", ((1, 4),))
-    monkeypatch.setattr(model_module, "is_blackhole", lambda: True)
-    assert sampling_trace_default(mesh) is True
-    assert sampling_trace_default(SimpleNamespace(shape=(1, 8))) is False
-    monkeypatch.setattr(model_module, "is_blackhole", lambda: False)  # Wormhole: never by default
-    assert sampling_trace_default(mesh) is False

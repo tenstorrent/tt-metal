@@ -1058,3 +1058,27 @@ def test_galaxy_line_pair_profile():
     assert mo.decode_fusion_defaults((1, 4), blackhole=True, moe=False, kv_pairs=True) == mo.DENSE_DECODE_FUSION_ON
     assert mo.decode_fusion_defaults((1, 8), blackhole=True, moe=True, kv_pairs=True) == mo.DECODE_FUSION_OFF
     assert mo.decode_fusion_defaults((1, 8), blackhole=False, moe=False, kv_pairs=True) == mo.DECODE_FUSION_OFF
+
+
+def test_device_sampling_trace_default_policy(monkeypatch):
+    """GEMMA4_SAMPLING_TRACE: the env var overrides, else the measured-shape policy; never on lanes / fractured
+    meshes (moved from test_sampling_trace.py, which the unit legs deselect)."""
+    from models.demos.gemma4.tt.model import SAMPLING_TRACE_ENV, sampling_trace_default
+
+    mesh = SimpleNamespace(shape=(1, 4))
+    monkeypatch.setenv(SAMPLING_TRACE_ENV, "1")
+    assert sampling_trace_default(mesh) is True
+    assert sampling_trace_default(mesh, SimpleNamespace(lane_sharded=True, weight_fracture=False)) is False
+    assert sampling_trace_default(mesh, SimpleNamespace(lane_sharded=False, weight_fracture=True)) is False
+    assert sampling_trace_default(mesh, SimpleNamespace(lane_sharded=False, weight_fracture=False)) is True
+    monkeypatch.setenv(SAMPLING_TRACE_ENV, "0")
+    assert sampling_trace_default(mesh) is False
+    monkeypatch.delenv(SAMPLING_TRACE_ENV)
+    from models.demos.gemma4.tt import model as model_module
+
+    monkeypatch.setattr(model_module, "SAMPLING_TRACE_DEFAULT_SHAPES", ((1, 4),))
+    monkeypatch.setattr(model_module, "is_blackhole", lambda: True)
+    assert sampling_trace_default(mesh) is True
+    assert sampling_trace_default(SimpleNamespace(shape=(1, 8))) is False
+    monkeypatch.setattr(model_module, "is_blackhole", lambda: False)  # Wormhole: never by default
+    assert sampling_trace_default(mesh) is False
