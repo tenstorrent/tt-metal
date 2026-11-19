@@ -219,6 +219,9 @@ class Ledger:
                     errs.append(f"{tid}: bad threshold {glob}: {cond!r}")
                 else:
                     errs += [f"{tid}: {e}" for e in fixed_accuracy(t, {glob: cond})]
+            from models.demos.common.bringup.core.prior_work import needs_prior_work  # F278
+
+            errs += [f"{tid}: {e}" for e in needs_prior_work(t, (done.get(tid) or {}).get("status"))]
             if (done.get(tid) or {}).get("status") not in ("PASS", "REJECTED"):  # a finished gate's cmd is history
                 errs += [f"{tid}: {e}" for e in wall_only_device_metrics(t) + position_role_metrics(t)]
         try:

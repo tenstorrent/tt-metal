@@ -145,6 +145,17 @@ def cmd_validate(a):
     return 1 if errs else 0
 
 
+@command(
+    "prior-work", "F278: what the ledgers (this run, other branches) and known issues already hold on a task's subject"
+)
+def cmd_prior_work(a):
+    from models.demos.common.bringup.core.prior_work import search
+
+    spec, led = load(a)
+    print("\n".join(search(spec, led, a.task, a.terms.split(",") if a.terms else None)))
+    return 0
+
+
 @command("freeze", "validate a task's tests (reference passes, zero stub fails) and freeze their hashes")
 def cmd_freeze(a):
     from models.demos.common.bringup.core.runs import FreezeError, freeze_task
@@ -481,6 +492,7 @@ def build_parser(extra=None) -> argparse.ArgumentParser:
     ap.add_argument("--no-run", action="store_true", help="rerun: only reset the verdicts")
     ap.add_argument("--other", help="compare: the other run's spec")
     ap.add_argument("--note", help="approve: note stored with the approval")
+    ap.add_argument("--terms", help="prior-work: comma-separated search terms (default: the task title's words)")
     ap.add_argument("--model", help="new: model slug (package name under models/demos)")
     ap.add_argument("--hf-id", help="new: Hugging Face id")
     ap.add_argument("--prior", help="new: slug of an earlier bring-up of the same checkpoint to start from")
