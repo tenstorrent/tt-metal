@@ -1,0 +1,168 @@
+# SPDX-FileCopyrightText: (c) 2026 Tenstorrent AI ULC
+#
+# SPDX-License-Identifier: Apache-2.0
+"""The prefill runner's adapter for mistral_large4_1t (tt-metal models/demos/common/prefill/adapter.py; serving
+contract, "Adapter and table"). Import-light: the device model is imported in build_runtime.
+
+The served stage is a contiguous run of layers, one rank (the runner's first_layer_idx .. + num_layers; all 72 by
+default). The caches (MistralLarge4KvCaches: config "00" kvpe, "01" index) are the device model's served state,
+allocated here for params.num_users slots (tt/runners/kv_table.py has the layout and the table); the runtime
+(tt/runners/runtime.py) runs the all-device model on them.
+"""
+
+from __future__ import annotations
+
+import os
+from types import SimpleNamespace
+
+from models.demos.common.prefill.adapter import KvCaches, PrefillModelAdapter
+
+from models.demos.deepseek_v3_d_p.tt.mistral_large_4 import fabric
+
+CHECKPOINT_DIR = "/mnt/models/mistralai/Mistral-Large-4-1T-A52B"
+# the most cache tokens (slots x max_seq) one Galaxy holds next to the weights: one slot of 1044480 (204 chunks; long
+# ISL 3 / long context: SEQ_BUFFERS=shared, SSMAX_TABLE=shared_log; model/serve.py SERVE_CONTEXT=long)
+MAX_CACHE_TOKENS = 1044480
+
+
+def hf_model_dir(adapter: PrefillModelAdapter) -> str:
+    """The checkpoint / config dir the runner serves: PREFILL_HF_MODEL, else the adapter's ``hf_model_default`` (the
+    pinned common adapter has no such helper)."""
+    return os.environ.get("PREFILL_HF_MODEL") or adapter.hf_model_default
+
+
+class MistralLarge4Config:
+    """Static model constants the runner reads off ``model_config``."""
+
+    NUM_LAYERS = 72
+    # the runner opens the mesh with this packet: 12288 B as the Galaxy tests (tt/fabric.py ML4_FABRIC_PAYLOAD, perf 15:
+    # three 4096 B CCL pages per packet, bit-identical, -4.6% per chunk); 0 = the fabric's default 4352 B
+    FABRIC_PAYLOAD_SIZE = fabric.payload() or fabric.RUNNER_DEFAULT_PAYLOAD
+
+
+class MistralLarge4KvCaches(KvCaches):
+    """The served caches {"00": kvpe, "01": index} (tt/runners/kv_table.py)."""
+
+    def __init__(self, kvpe, index):
+        self._caches = {"00": kvpe, "01": index}
+
+    def tensor(self, name: str):
+        return self._caches[name]
+
+    def tensors(self) -> dict:
+        return dict(self._caches)
+
+
+class _ServeSpec:
+    """The spec fields the device model's builder reads (bringup/hooks.py), from the runner's params."""
+
+    def __init__(self, hf_dir: str, max_seq: int, chunk: int):
+        from pathlib import Path
+
+        self.hf_dir = Path(hf_dir)
+        self._v = {"target.seq": max_seq, "target.chunk": chunk, "reference.weight_dtype": "bfloat16"}
+
+    def get(self, key: str, default=None):
+        return self._v.get(key, default)
+
+
+class MistralLarge4PrefillAdapter(PrefillModelAdapter):
+    name = "mistral_large_4"
+    model_config = MistralLarge4Config
+    hf_model_default = CHECKPOINT_DIR
+    ttnn_cache_default = ""  # weights load from the checkpoint each run (no TTNN weight cache)
+    prefill_trace_default = ""
+    default_gate_mode = "DEVICE_FP32"
+    # the model's residual stream [1, 1, S / 8, H / 4] per chip is TP-sharded on the hidden dim
+    pipeline_activation_emb_tp_sharded = True
+    hf_repo_id = "mistralai/Mistral-Large-4-1T-A52B"
+
+    def hf_model_dir(self) -> str:
+        return hf_model_dir(self)
+
+    def load_hf_config(self):
+        from models.demos.deepseek_v3_d_p.reference.mistral_large_4.model import Config
+
+        hf_dir = hf_model_dir(self)
+        cfg = Config(hf_dir)
+        return SimpleNamespace(
+            hf_dir=hf_dir, cfg=cfg, hidden_size=cfg.hidden, num_hidden_layers=cfg.n_layers, vocab_size=cfg.vocab
+        )
+
+    def weight_cache_path(self, mesh_shape: tuple):
+        return None
+
+    def layer_split_boundaries(self, num_layers: int):
+        """A rank must start on a full-indexer layer (the shared-index layers reuse the previous full layer's top-k)."""
+        from models.demos.deepseek_v3_d_p.reference.mistral_large_4.model import Config
+
+        cfg = Config(hf_model_dir(self))
+        return {i for i in range(num_layers) if cfg.is_full(i)}
+
+    def _geometry(self, hf_config, params):
+        from models.demos.deepseek_v3_d_p.tt.mistral_large_4 import kv_table as KT
+
+        _check_params(params)
+        layers = range(params.first_layer_idx, params.first_layer_idx + params.num_layers)
+        return KT.Geometry.of(
+            hf_config.cfg,
+            layers,
+            sp=params.sp_factor,
+            chunk=params.chunk_size,
+            max_seq=params.max_seq_len,
+            slots=params.num_users,
+        )
+
+    def allocate_kv_cache(self, *, mesh_device, hf_config, params) -> MistralLarge4KvCaches:
+        from models.demos.deepseek_v3_d_p.tt.mistral_large_4.model import alloc_caches
+
+        geo = self._geometry(hf_config, params)
+        kvpe, index = alloc_caches(
+            mesh_device, hf_config.cfg, geo.max_seq, geo.regions("00"), geo.regions("01"), geo.slots
+        )
+        return MistralLarge4KvCaches(kvpe, index)
+
+    def build_runtime(self, *, mesh_device, hf_config, params):
+        """The runtime over the served layers. The runner allocates the caches after this (allocate_kv_cache) and hands
+        them to compile(); the device model is built without caches of its own, and the runtime binds the engine's
+        before any module is built (modules write the caches they are built on)."""
+        from models.demos.deepseek_v3_d_p.tt.mistral_large_4.hooks import device_model
+        from models.demos.deepseek_v3_d_p.tt.mistral_large_4.runtime import MistralLarge4PrefillRuntime
+
+        geo = self._geometry(hf_config, params)
+        spec = _ServeSpec(hf_config.hf_dir, geo.max_seq, geo.chunk)
+        model = device_model(
+            mesh_device,
+            spec,
+            list(geo.layers),
+            lm_head=False,
+            num_users=geo.slots,
+            caches={"kvpe": None, "index": None},
+        )
+        return MistralLarge4PrefillRuntime(mesh_device, model, params, geo)
+
+    def read_slot_kv_and_check_pcc(self, table, device_map, slot_id, real_len, trace_dir, num_layers=None):
+        """The producer's read-back of this layout (kv_table.read_slot_kv_and_check_pcc) over the served layers."""
+        from models.demos.deepseek_v3_d_p.reference.mistral_large_4.model import Config
+        from models.demos.deepseek_v3_d_p.tt.mistral_large_4 import kv_table as KT
+
+        cfg = Config(hf_model_dir(self))
+        n = table.config(table.config_id_of("00")).num_layers if num_layers is None else int(num_layers)
+        return KT.read_slot_kv_and_check_pcc(
+            table, device_map, slot_id, real_len, trace_dir, list(range(n)), cfg.kv_lora + cfg.qk_rope
+        )
+
+
+def _check_params(params):
+    if not (params.is_first_rank and params.is_last_rank):
+        raise ValueError("mistral_large4_1t serves its layers on one rank (no pipeline split)")
+    if params.mtp_levels or params.dflash_enabled:
+        raise ValueError("mistral_large4_1t runs without MTP or DFlash")
+    # params.use_trace (PREFILL_USE_TRACE=1): the traced runtime (runtime.py), one capture replayed per chunk
+    if int(params.max_seq_len) * int(params.num_users) > MAX_CACHE_TOKENS:
+        raise ValueError(
+            f"{params.num_users} slots x {params.max_seq_len} tokens: one Galaxy holds {MAX_CACHE_TOKENS} cache tokens "
+            "(MISTRAL_LARGE4_1T_SERVE_CONTEXT=long serves one slot of that)"
+        )
+    if tuple(params.mesh_shape) != (8, 4) or (params.sp_axis, params.tp_axis) != (0, 1):
+        raise ValueError(f"mistral_large4_1t runs on an [8, 4] mesh (SP axis 0, TP axis 1), got {params.mesh_shape}")
