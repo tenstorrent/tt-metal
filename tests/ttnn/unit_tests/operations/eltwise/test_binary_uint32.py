@@ -554,7 +554,7 @@ def test_bitwise_uint32_rejects_negative_scalar(device, expect_error, ttnn_funct
     x_tt = ttnn.from_torch(
         torch.ones(32, 32, dtype=torch.int32), dtype=ttnn.uint32, layout=ttnn.TILE_LAYOUT, device=device
     )
-    with expect_error(RuntimeError, f"To apply the same bit pattern, pass {same_bits}."):
+    with expect_error(RuntimeError, f"To apply the same bit pattern, pass {same_bits};"):
         ttnn_function(x_tt, scalar)
 
 

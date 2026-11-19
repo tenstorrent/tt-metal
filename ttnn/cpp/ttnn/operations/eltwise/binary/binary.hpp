@@ -185,7 +185,8 @@
 
 // Scalars must be in the range of the input dtype.
 // The public overload only accepts exactly uint32_t so that other integer types (int64_t, long, ...) still resolve
-// unambiguously to the int32_t overload.
+// unambiguously to the int32_t overload. Those are narrowed to int32_t before the range check, so a wider scalar above
+// INT32_MAX (including the literal 3000000000, which is a long) must be passed as a uint32_t to reach this overload.
 #define TTNN_BINARY_OP_TENSOR_UINT32_BITWISE(NAME, OP_TYPE)                               \
     namespace detail {                                                                    \
     Tensor NAME##_uint32_scalar(                                                          \

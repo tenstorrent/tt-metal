@@ -234,10 +234,12 @@ TEST_P(BitwiseScalarRangeFixture, RejectsScalarsOutsideInputDtypeRange) {
         const auto uint32_t_tensor = make_tensor(device_, std::vector<uint32_t>(32 * 64, 7u), DataType::UINT32);
         EXPECT_THAT(
             [&] { run_op(op, uint32_t_tensor, int32_t{-1}); },
-            ThrowsMessage<std::runtime_error>(HasSubstr("To apply the same bit pattern, pass 4294967295.")));
+            ThrowsMessage<std::runtime_error>(
+                HasSubstr("To apply the same bit pattern, pass 4294967295; C++ callers must pass it as a uint32_t.")));
         EXPECT_THAT(
             [&] { run_op(op, uint32_t_tensor, int32_t{-32}); },
-            ThrowsMessage<std::runtime_error>(HasSubstr("To apply the same bit pattern, pass 4294967264.")));
+            ThrowsMessage<std::runtime_error>(
+                HasSubstr("To apply the same bit pattern, pass 4294967264; C++ callers must pass it as a uint32_t.")));
     }
 }
 

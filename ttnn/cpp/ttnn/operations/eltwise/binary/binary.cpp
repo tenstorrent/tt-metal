@@ -1184,7 +1184,7 @@ static void validate_bitwise_scalar(operations::unary::UnaryOpType op_type, cons
         TT_FATAL(
             rhs >= 0 && rhs <= std::numeric_limits<uint32_t>::max(),
             "{} on a UINT32 tensor requires a scalar in [0, 4294967295], got {}. "
-            "To apply the same bit pattern, pass {}.",
+            "To apply the same bit pattern, pass {}; C++ callers must pass it as a uint32_t.",
             enchantum::to_string(op_type),
             rhs,
             static_cast<uint32_t>(rhs));
