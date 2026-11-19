@@ -56,6 +56,8 @@ def torch_ema(x, alpha):
     ids=["cumsum", "cumprod"],
 )
 def test_update_args_moves_accumulation_to_the_new_input(device, builder, command_lists, op, keyword, torch_op):
+    if device.arch() == ttnn.device.Arch.QUASAR and op is ttnn.cumprod:
+        pytest.skip("Quasar cumprod permutes this input, which cannot be rebound as a command-list parameter")
     # Values near 1 keep the running product in range.
     torch_a = torch.rand(ACCUMULATION_SHAPE, dtype=torch.bfloat16) + 0.5
     torch_b = torch.rand(ACCUMULATION_SHAPE, dtype=torch.bfloat16) + 0.5

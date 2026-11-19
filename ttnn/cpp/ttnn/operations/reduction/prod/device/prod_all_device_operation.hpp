@@ -7,7 +7,6 @@
 
 #include "ttnn/device_operation.hpp"
 #include "ttnn/metal_v2_artifacts.hpp"
-#include "ttnn/command_list_params.hpp"
 
 #include <variant>
 
@@ -24,11 +23,6 @@ struct ProdAllDeviceOperation {
             const operation_attributes_t& operation_attributes,
             const tensor_args_t& tensor_args,
             tensor_return_value_t& tensor_return_value);
-        static ttnn::command_list::CmdListBindings map_cmd_list_parameters(
-            const operation_attributes_t&,
-            const tensor_args_t&,
-            const tt::tt_metal::ProgramSpec&,
-            const tt::tt_metal::ProgramRunArgs&);
     };
 
     using program_factory_t = std::variant<ProdAllProgramFactory>;

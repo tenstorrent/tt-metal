@@ -159,14 +159,4 @@ ProgramArtifacts ProdAllDeviceOperation::ProdAllProgramFactory::create_program_a
     return ProgramArtifacts{.spec = std::move(spec), .run_params = std::move(run_args)};
 }
 
-ttnn::command_list::CmdListBindings ProdAllDeviceOperation::ProdAllProgramFactory::map_cmd_list_parameters(
-    const ProdAllDeviceOperation::operation_attributes_t&,
-    const ProdAllDeviceOperation::tensor_args_t&,
-    const tt::tt_metal::ProgramSpec& spec,
-    const tt::tt_metal::ProgramRunArgs& run_params) {
-    ttnn::command_list::CmdListBinder binder{spec, run_params};
-    binder.tensor(/*invoke_name=*/"input_tensor", /*program_spec_param_name=*/tt::tt_metal::TensorParamName{"input"});
-    return binder.finish();
-}
-
 }  // namespace ttnn::prim

@@ -548,7 +548,6 @@ ttnn::command_list::CmdListBindings AccumulationProgramFactory::map_cmd_list_par
     // cumsum and cumprod share this factory but name their input keyword differently.
     const char* input_keyword = attributes.op == AccumulationOp::CUMSUM ? "input" : "input_tensor";
     binder.tensor(/*invoke_name=*/input_keyword, /*program_spec_param_name=*/tt::tt_metal::TensorParamName{"input"});
-    binder.tensor(/*invoke_name=*/"out", /*program_spec_param_name=*/tt::tt_metal::TensorParamName{"output"});
     return binder.finish();
 }
 
