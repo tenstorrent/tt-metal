@@ -235,9 +235,11 @@ def test_scheduler_segment_name():
 
 def test_a_failed_chunk_is_recorded_and_its_layers_still_complete_it():
     completed = []
-    ring = FakeRing([msg(0, 0, flags=CHUNK_FAILED)] + per_layer())
-    d = LayerCompletionRingReader(ring, num_layers=NUM_LAYERS, on_chunk_complete=lambda key, cov: completed.append(key))
+    ring = FakeRing([msg(0, 0, flags=CHUNK_FAILED)] + per_layer() + per_layer())
+    d = LayerCompletionRingReader(
+        ring, num_layers=NUM_LAYERS, on_chunk_complete=lambda key, cov: completed.append((key, cov.failed))
+    )
     while d.step():
         pass
-    assert d.failed_chunks == {(0, 0, 128)}
-    assert completed == [(0, 0, 128)] and d.total_layers == NUM_LAYERS
+    assert completed == [((0, 0, 128), True), ((0, 0, 128), False)]  # the key's next use starts clean
+    assert d.total_layers == 2 * NUM_LAYERS

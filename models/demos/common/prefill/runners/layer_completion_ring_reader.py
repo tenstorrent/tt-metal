@@ -39,15 +39,16 @@ def chunk_key(c: Completion) -> tuple:
 
 
 class ChunkCoverage:
-    """One in-flight chunk: its disjoint layer spans so far and its side queue."""
+    """One in-flight chunk: its disjoint layer spans so far, its side queue and whether it failed."""
 
-    __slots__ = ("key", "intervals", "layers_accounted", "side_queue")
+    __slots__ = ("key", "intervals", "layers_accounted", "side_queue", "failed")
 
     def __init__(self, key: tuple):
         self.key = key
         self.intervals = []  # sorted, disjoint [start, end)
         self.layers_accounted = 0
         self.side_queue = deque()
+        self.failed = False
 
     def add_span(self, c: Completion, num_layers: int) -> None:
         """Raises on overlap or out-of-bounds: both are producer bugs."""
@@ -113,7 +114,6 @@ class LayerCompletionRingReader:
         self.processed = 0
         self.side_queued = 0
         self.completed_chunks = 0
-        self.failed_chunks = set()  # chunk_key of every chunk a CHUNK_FAILED record named
 
     @property
     def chunks(self):
@@ -161,7 +161,7 @@ class LayerCompletionRingReader:
         if flags == CHUNK_FAILED:
             # The request failed; its layers still arrive as usual and complete the chunk.
             logger.warning(f"[ring-reader] chunk {chunk_key(c)} failed")
-            self.failed_chunks.add(chunk_key(c))
+            self._coverage(c).failed = True
             return True
         if self._can_process(c):
             self._process(c)

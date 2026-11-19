@@ -85,12 +85,15 @@ void bind_layer_completion_api(nb::module_& mod) {
                 if (!self.try_pop(m)) {
                     return std::nullopt;
                 }
+                if (m.flags != 0u) {
+                    throw std::runtime_error(
+                        "try_pop got a record with flags " + std::to_string(m.flags) + "; use try_pop_with_flags");
+                }
                 return std::make_tuple(
                     m.slot_id, m.pos_start, m.pos_end, m.layer_start, m.layer_end, m.host_timestamp_ns);
             },
             "Consumer pop. Returns (slot_id, pos_start, pos_end, layer_start, layer_end, host_timestamp_ns) or None "
-            "when "
-            "empty.")
+            "when empty. Raises on a flagged record, which only try_pop_with_flags returns.")
         .def(
             "try_pop_with_flags",
             [](LayerCompletionQueue& self)

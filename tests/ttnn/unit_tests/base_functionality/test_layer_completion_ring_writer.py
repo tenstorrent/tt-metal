@@ -61,6 +61,9 @@ def test_a_flagged_record_round_trips_and_bad_flags_are_refused(expect_error):
         writer_mod.LayerCompletionRingWriter(ring).chunk_failed(slot_id=5, pos_start=5120, pos_end=10213)
         slot_id, pos_start, pos_end, layer_start, layer_end, _, flags = ring.try_pop_with_flags()
         assert (slot_id, pos_start, pos_end, layer_start, layer_end, flags) == (5, 5120, 10213, 0, 0, CHUNK_FAILED)
+        writer_mod.LayerCompletionRingWriter(ring).chunk_failed(slot_id=5, pos_start=5120, pos_end=10213)
+        with expect_error(RuntimeError, "use try_pop_with_flags"):
+            ring.try_pop()
         with expect_error(ValueError, "flags must be 0 or CHUNK_FAILED"):
             ring.try_push(slot_id=5, pos_start=0, pos_end=1, layer_start=0, layer_end=0, flags=0xFFFFFFFF)
     finally:
