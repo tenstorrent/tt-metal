@@ -34,6 +34,8 @@
 #include <tt-metalium/experimental/trace_allocation_tracker.hpp>
 
 #include <tt-metalium/experimental/prefetcher_pipe.hpp>
+#include "sub_device_test_utils.hpp"
+#include "unit_tests_dispatch_utils.hpp"
 
 namespace tt::tt_metal {
 
@@ -52,13 +54,18 @@ experimental::PrefetcherPipeSpaceConfig make_pipe_space_config() {
 }  // namespace
 
 TEST_F(UnitMeshCQSingleCardFixture, TensixTestSubDeviceAllocations) {
-    uint32_t local_l1_size = 3200;
-    SubDevice sub_device_1(std::array{CoreRangeSet(CoreRange({0, 0}, {2, 2}))});
-    SubDevice sub_device_2(std::array{CoreRangeSet(std::vector{CoreRange({3, 3}, {3, 3}), CoreRange({4, 4}, {4, 4})})});
-    CoreRangeSet sharded_cores_1 = CoreRange({0, 0}, {2, 2});
-    CoreRangeSet sharded_cores_2 = CoreRangeSet(std::vector{CoreRange({3, 3}, {3, 3}), CoreRange({4, 4}, {4, 4})});
-
     auto mesh_device = devices_[0];
+    if (!has_at_least_worker_cores(*mesh_device, 2)) {
+        GTEST_SKIP();
+    }
+    uint32_t local_l1_size = 3200;
+    const auto [sharded_cores_1, sharded_cores_2] = two_disjoint_core_sets(
+        *mesh_device,
+        CoreRange({0, 0}, {2, 2}),
+        CoreRangeSet(std::vector{CoreRange({3, 3}, {3, 3}), CoreRange({4, 4}, {4, 4})}));
+    SubDevice sub_device_1(std::array{sharded_cores_1});
+    SubDevice sub_device_2(std::array{sharded_cores_2});
+
     const auto device_id = mesh_device->get_device_ids()[0];
     auto sub_device_manager_1 = mesh_device->create_sub_device_manager({sub_device_1}, local_l1_size);
     auto sub_device_manager_2 = mesh_device->create_sub_device_manager({sub_device_1, sub_device_2}, local_l1_size);
@@ -176,6 +183,9 @@ TEST_F(UnitMeshCQSingleCardFixture, TensixTestSubDeviceAllocationsStartAbovePers
     constexpr uint32_t page_size = 32;
     const CoreRangeSet cores(CoreRange({0, 0}, {1, 0}));
     auto mesh_device = devices_[0];
+    if (!has_at_least_worker_cores(*mesh_device, 2)) {
+        GTEST_SKIP();
+    }
 
     // Persistent pipe L1 on (0,0)-(1,0): the space reserves it, the pipe claims it.
     auto space = experimental::CreatePrefetcherPipeSpace(mesh_device->mesh_command_queue(0), make_pipe_space_config());
@@ -223,6 +233,9 @@ TEST_F(UnitMeshCQSingleCardFixture, TensixTestSubDeviceAllocationsStartAbovePers
 TEST_F(UnitMeshCQSingleCardFixture, TensixTestSubDeviceManagerSealsPersistentL1UntilRemoved) {
     constexpr DeviceAddr local_l1_size = 3200;
     auto mesh_device = devices_[0];
+    if (!has_at_least_worker_cores(*mesh_device, 2)) {
+        GTEST_SKIP();
+    }
 
     const CoreRangeSet cores(CoreRange({0, 0}, {1, 0}));
     SubDevice sub_device(std::array{cores});
@@ -239,10 +252,12 @@ TEST_F(UnitMeshCQSingleCardFixture, TensixTestSubDeviceManagerSealsPersistentL1U
 
 TEST_F(UnitMeshCQSingleCardFixture, TensixTestSubDeviceBankIds) {
     uint32_t local_l1_size = 3200;
-    SubDevice sub_device(std::array{
-        CoreRangeSet(std::array{CoreRange({5, 4}, {5, 4}), CoreRange({3, 2}, {3, 3}), CoreRange({0, 0}, {2, 2})})});
-
     auto mesh_device = devices_[0];
+    const CoreRangeSet desired_cores(
+        std::array{CoreRange({5, 4}, {5, 4}), CoreRange({3, 2}, {3, 3}), CoreRange({0, 0}, {2, 2})});
+    const CoreRange workers = worker_grid(*mesh_device);
+    SubDevice sub_device(std::array{workers.contains(desired_cores) ? desired_cores : CoreRangeSet(workers)});
+
     auto sub_device_manager = mesh_device->create_sub_device_manager({sub_device}, local_l1_size);
     mesh_device->load_sub_device_manager(sub_device_manager);
 
@@ -523,12 +538,12 @@ TEST_F(UnitMeshCQSingleCardFixture, TraceAllocationTrackerTagsLazyProgramBuffers
     distributed::trace_allocation_tracker::register_active_trace(mesh_device.get(), trace_id);
 
     distributed::MeshWorkload workload;
-    Program program = CreateProgram(*mesh_device);
-    CreateKernel(
-        program,
+    Program program = make_single_kernel_program(
+        *mesh_device,
+        "blank",
         "tests/tt_metal/tt_metal/test_kernels/dataflow/blank.cpp",
-        CoreCoord{0, 0},
-        DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default});
+        CoreRangeSet(CoreRange({0, 0})),
+        {HalProgrammableCoreType::TENSIX, HalProcessorClassType::DM, 0});
     workload.add_program(distributed::MeshCoordinateRange(mesh_device->shape()), std::move(program));
     distributed::EnqueueMeshWorkload(mesh_device->mesh_command_queue(), workload, true);
 

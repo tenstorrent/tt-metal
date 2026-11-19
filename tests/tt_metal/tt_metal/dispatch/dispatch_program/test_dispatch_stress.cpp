@@ -25,6 +25,8 @@
 #include <tt-metalium/program.hpp>
 #include <tt_stl/span.hpp>
 #include <tt-metalium/distributed.hpp>
+#include <tt-metalium/workload/run_args/program_run_args.hpp>
+#include <tt-metalium/workload/specification/program_spec.hpp>
 #include "tt_metal/impl/dispatch/slow_dispatch.hpp"
 
 namespace tt::tt_metal {
@@ -34,28 +36,11 @@ using namespace tt;
 
 void RunTest(const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
     // Set up program
-    Program program = CreateProgram(*mesh_device);
-    CoreRange core_range({0, 0}, {5, 5});
+    const CoreCoord worker_grid_size = mesh_device->compute_with_storage_grid_size();
+    CoreRange core_range(
+        {0, 0}, {std::min<std::size_t>(worker_grid_size.x, 6) - 1, std::min<std::size_t>(worker_grid_size.y, 6) - 1});
 
     auto l1_unreserved_base = mesh_device->allocator()->get_base_allocator_addr(tt_metal::HalMemType::L1);
-
-    // Kernels on brisc + ncrisc that just add two numbers
-    KernelHandle brisc_kid = CreateKernel(
-        program,
-        "tests/tt_metal/tt_metal/test_kernels/misc/add_two_ints.cpp",
-        core_range,
-        tt_metal::DataMovementConfig{
-            .processor = DataMovementProcessor::RISCV_0,
-            .noc = NOC::RISCV_0_default,
-            .compile_args = {l1_unreserved_base}});
-    KernelHandle ncrisc_kid = CreateKernel(
-        program,
-        "tests/tt_metal/tt_metal/test_kernels/misc/add_two_ints.cpp",
-        core_range,
-        tt_metal::DataMovementConfig{
-            .processor = DataMovementProcessor::RISCV_1,
-            .noc = NOC::RISCV_1_default,
-            .compile_args = {l1_unreserved_base + 4}});
 
     // Write runtime args
     const auto device_id = mesh_device->get_device_ids()[0];
@@ -68,14 +53,48 @@ void RunTest(const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
                              CoreCoord& core,
                              uint32_t multiplier) { return (uint32_t)core.y * 100 * multiplier; };
 
+    const KernelSpecName first_kernel_name{"first_adder"};
+    const KernelSpecName second_kernel_name{"second_adder"};
+    auto make_adder_kernel =
+        [](const KernelSpecName& kernel_name, uint32_t l1_address, DataMovementProcessor processor, NOC noc) {
+            return KernelSpec{
+                .unique_id = kernel_name,
+                .source = "tests/tt_metal/tt_metal/test_kernels/misc/add_two_ints_2_0.cpp",
+                .compile_time_args = {{"l1_address", l1_address}},
+                .runtime_arg_schema = {.runtime_arg_names = {"a", "b"}},
+                .hw_config =
+                    DataMovementHardwareConfig{
+                        .config_1xx =
+                            DataMovementHardwareConfig::DataMovement1XXConfig{.processor = processor, .noc = noc}},
+            };
+        };
+    const ProgramSpec spec{
+        .name = "add_two_ints",
+        .kernels =
+            {make_adder_kernel(
+                 first_kernel_name, l1_unreserved_base, DataMovementProcessor::RISCV_0, NOC::RISCV_0_default),
+             make_adder_kernel(
+                 second_kernel_name, l1_unreserved_base + 4, DataMovementProcessor::RISCV_1, NOC::RISCV_1_default)},
+        .work_units = {WorkUnitSpec{
+            .name = "work_unit", .kernels = {first_kernel_name, second_kernel_name}, .target_nodes = core_range}},
+    };
+    Program program = Program(*mesh_device, spec);
+
+    ProgramRunArgs::KernelRunArgs first_kernel_run_args{.kernel = first_kernel_name};
+    ProgramRunArgs::KernelRunArgs second_kernel_run_args{.kernel = second_kernel_name};
     for (CoreCoord core : core_range) {
-        std::vector<uint32_t> brisc_rt_args = {
-            get_first_arg(mesh_device, core, 1), get_second_arg(mesh_device, core, 1)};
-        std::vector<uint32_t> ncrisc_rt_args = {
-            get_first_arg(mesh_device, core, 2), get_second_arg(mesh_device, core, 2)};
-        SetRuntimeArgs(program, brisc_kid, core, brisc_rt_args);
-        SetRuntimeArgs(program, ncrisc_kid, core, ncrisc_rt_args);
+        AddRuntimeArgsForNode(
+            first_kernel_run_args.runtime_arg_values,
+            core,
+            {{"a", get_first_arg(mesh_device, core, 1)}, {"b", get_second_arg(mesh_device, core, 1)}});
+        AddRuntimeArgsForNode(
+            second_kernel_run_args.runtime_arg_values,
+            core,
+            {{"a", get_first_arg(mesh_device, core, 2)}, {"b", get_second_arg(mesh_device, core, 2)}});
     }
+    ProgramRunArgs run_args;
+    run_args.kernel_run_args = {first_kernel_run_args, second_kernel_run_args};
+    program.set_program_run_args(run_args);
 
     distributed::MeshWorkload workload;
     workload.add_program(tt::tt_metal::distributed::MeshCoordinateRange({0, 0}, {0, 0}), std::move(program));

@@ -19,13 +19,21 @@
 #include "sub_device_test_utils.hpp"
 #include <tt-metalium/sub_device_types.hpp>
 #include <tt-metalium/tt_metal.hpp>
+#include "unit_tests_dispatch_utils.hpp"
 
 namespace tt::tt_metal {
 
 TEST_F(UnitMeshCQSingleCardTraceFixture, TensixTestSubDeviceTraceBasicPrograms) {
     auto mesh_device = devices_[0];
-    SubDevice sub_device_1(std::array{CoreRangeSet(CoreRange({0, 0}, {2, 2}))});
-    SubDevice sub_device_2(std::array{CoreRangeSet(std::vector{CoreRange({3, 3}, {3, 3}), CoreRange({4, 4}, {4, 4})})});
+    if (!has_at_least_worker_cores(*mesh_device, 2)) {
+        GTEST_SKIP();
+    }
+    const auto [sub_device_1_cores, sub_device_2_cores] = two_disjoint_core_sets(
+        *mesh_device,
+        CoreRange({0, 0}, {2, 2}),
+        CoreRangeSet(std::vector{CoreRange({3, 3}, {3, 3}), CoreRange({4, 4}, {4, 4})}));
+    SubDevice sub_device_1(std::array{sub_device_1_cores});
+    SubDevice sub_device_2(std::array{sub_device_2_cores});
     uint32_t num_iters = 5;
     auto sub_device_manager = mesh_device->create_sub_device_manager({sub_device_1, sub_device_2}, 3200);
     mesh_device->load_sub_device_manager(sub_device_manager);
@@ -96,8 +104,15 @@ TEST_F(UnitMeshCQSingleCardTraceFixture, TensixTestSubDeviceTraceBasicPrograms) 
 
 TEST_F(UnitMeshCQSingleCardTraceFixture, TensixTestSubDeviceIllegalOperations) {
     auto mesh_device = devices_[0];
-    SubDevice sub_device_1(std::array{CoreRangeSet(CoreRange({0, 0}, {2, 2}))});
-    SubDevice sub_device_2(std::array{CoreRangeSet(std::vector{CoreRange({3, 3}, {3, 3}), CoreRange({4, 4}, {4, 4})})});
+    if (!has_at_least_worker_cores(*mesh_device, 2)) {
+        GTEST_SKIP();
+    }
+    const auto [sub_device_1_cores, sub_device_2_cores] = two_disjoint_core_sets(
+        *mesh_device,
+        CoreRange({0, 0}, {2, 2}),
+        CoreRangeSet(std::vector{CoreRange({3, 3}, {3, 3}), CoreRange({4, 4}, {4, 4})}));
+    SubDevice sub_device_1(std::array{sub_device_1_cores});
+    SubDevice sub_device_2(std::array{sub_device_2_cores});
 
     // Assert no idle eth cores specified
     EXPECT_THROW(

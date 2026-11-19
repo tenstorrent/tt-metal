@@ -147,6 +147,70 @@ void clear_buffer(distributed::MeshCommandQueue& cq, const std::shared_ptr<distr
     distributed::WriteShard(cq, buffer, zeroes, distributed::MeshCoordinate(0, 0));
 }
 
+// Pages of page_size that fit in the largest free block of one bank of buffer_type.
+uint32_t max_pages_per_bank(const distributed::MeshDevice& mesh_device, BufferType buffer_type, uint32_t page_size) {
+    const std::unique_ptr<Allocator>& allocator = mesh_device.allocator();
+    const DeviceAddr aligned_page_size = tt::align(page_size, allocator->get_alignment(buffer_type));
+    return static_cast<uint32_t>(allocator->get_statistics(buffer_type).largest_free_block_bytes / aligned_page_size);
+}
+
+// Pages of page_size that fit in an interleaved buffer of buffer_type.
+uint32_t max_interleaved_pages(const distributed::MeshDevice& mesh_device, BufferType buffer_type, uint32_t page_size) {
+    return max_pages_per_bank(mesh_device, buffer_type, page_size) *
+           mesh_device.allocator()->get_num_banks(buffer_type);
+}
+
+// Sharding args with tile-sized shards over cores (0,0)..end_core. When end_core lies outside grid_size, the cores are
+// clamped to the grid and the shards grow so the fewer shards still cover every page of the tensor: the legacy shard
+// spec places one shard per core and leaves pages beyond the last shard unmapped.
+BufferShardingArgs sharding_args_within_grid(
+    const CoreCoord& end_core,
+    const CoreCoord& grid_size,
+    ShardOrientation orientation,
+    const std::array<uint32_t, 2>& page_shape,
+    const std::array<uint32_t, 2>& tensor2d_shape_in_pages,
+    TensorMemoryLayout layout) {
+    const std::array<uint32_t, 2> tile_shape = {tt::constants::TILE_HEIGHT, tt::constants::TILE_WIDTH};
+    if (end_core.x < grid_size.x && end_core.y < grid_size.y) {
+        return BufferShardingArgs(
+            ShardSpecBuffer(
+                CoreRangeSet(CoreRange(CoreCoord(0, 0), end_core)),
+                tile_shape,
+                orientation,
+                page_shape,
+                tensor2d_shape_in_pages),
+            layout);
+    }
+    const CoreRange cores(
+        CoreCoord(0, 0), CoreCoord(std::min(end_core.x, grid_size.x - 1), std::min(end_core.y, grid_size.y - 1)));
+    const uint32_t num_cores = cores.size();
+    const uint32_t tensor_height_in_pages = tensor2d_shape_in_pages[0];
+    const uint32_t tensor_width_in_pages = tensor2d_shape_in_pages[1];
+    const uint32_t tile_width_in_pages = tile_shape[1] / page_shape[1];
+    std::array<uint32_t, 2> shard_shape_in_pages{};
+    if (layout == TensorMemoryLayout::HEIGHT_SHARDED) {
+        shard_shape_in_pages = {
+            tt::div_up(tt::div_up(tensor_height_in_pages * tensor_width_in_pages, num_cores), tile_width_in_pages),
+            tile_width_in_pages};
+    } else {
+        const uint32_t num_shard_columns = tt::div_up(tensor_width_in_pages, tile_width_in_pages);
+        if (num_shard_columns <= num_cores) {
+            shard_shape_in_pages = {
+                tt::div_up(tensor_height_in_pages, num_cores / num_shard_columns), tile_width_in_pages};
+        } else {
+            shard_shape_in_pages = {tensor_height_in_pages, tt::div_up(tensor_width_in_pages, num_cores)};
+        }
+    }
+    return BufferShardingArgs(
+        ShardSpecBuffer(
+            CoreRangeSet(cores),
+            {shard_shape_in_pages[0] * page_shape[0], shard_shape_in_pages[1] * page_shape[1]},
+            orientation,
+            page_shape,
+            tensor2d_shape_in_pages),
+        layout);
+}
+
 vector<ShardedSubBufferStressTestConfig> generate_sharded_sub_buffer_test_configs(uint32_t max_buffer_size) {
     vector<ShardedSubBufferStressTestConfig> configs;
 
@@ -284,6 +348,8 @@ void test_EnqueueWriteBuffer_and_EnqueueReadBuffer(
         MetalContext::instance().dispatch_mem_map().get_host_command_queue_addr(CommandQueueHostAddrType::UNRESERVED);
     auto device_coord = distributed::MeshCoordinate(0, 0);
     std::vector<uint32_t> cq_zeros((cq_size - cq_start) / sizeof(uint32_t), 0);
+    // Work queued earlier (e.g. at device open) may not have been fetched yet; zeroing would erase its commands.
+    distributed::Finish(cq);
     if (device->sysmem_manager().is_dram_backed()) {
         const uint32_t dram_channel =
             device->allocator_impl()->get_dram_channel_from_bank_id(device->sysmem_manager().get_dram_region_bank_id());
@@ -292,8 +358,7 @@ void test_EnqueueWriteBuffer_and_EnqueueReadBuffer(
             (cq_size - cq_start),
             device->id(),
             dram_channel,
-            device->sysmem_manager().get_dram_region_base_addr() + get_absolute_cq_offset(channel, 0, cq_size) +
-                cq_start);
+            device->sysmem_manager().get_dram_region_base_addr() + get_relative_cq_offset(0, cq_size) + cq_start);
     } else {
         tt::tt_metal::MetalContext::instance().get_cluster().write_sysmem(
             cq_zeros.data(),
@@ -783,8 +848,10 @@ TEST_F(UnitMeshCQSingleCardSharedBufferFixture, TestMultiplePagesLargerThanMaxPr
     for (const auto& mesh_device : devices_) {
         const uint32_t max_prefetch_command_size =
             MetalContext::instance().dispatch_mem_map().max_prefetch_command_size();
-        TestBufferConfig config = {
-            .num_pages = 1024, .page_size = max_prefetch_command_size + 2048, .buftype = BufferType::DRAM};
+        const uint32_t page_size = max_prefetch_command_size + 2048;
+        const uint32_t num_pages =
+            std::min(1024u, local_test_functions::max_interleaved_pages(*mesh_device, BufferType::DRAM, page_size));
+        TestBufferConfig config = {.num_pages = num_pages, .page_size = page_size, .buftype = BufferType::DRAM};
         local_test_functions::test_EnqueueWriteBuffer_and_EnqueueReadBuffer(
             mesh_device, mesh_device->mesh_command_queue(), config);
     }
@@ -862,20 +929,17 @@ TEST_F(UnitMeshCQSingleCardSharedBufferFixture, TestSinglePageLargerThanMaxPrefe
 TEST_F(UnitMeshCQSingleCardSharedBufferFixture, TestMultiplePagesLargerThanMaxPrefetchCommandSizeShardedBuffer) {
     const uint32_t page_size = MetalContext::instance().dispatch_mem_map().max_prefetch_command_size() + 2048;
     for (const auto& mesh_device : devices_) {
-        CoreCoord start(0, 0);
-        CoreCoord end(3, 0);
-        CoreRange cores(start, end);
-        ShardSpecBuffer shard_spec = ShardSpecBuffer(
-            CoreRangeSet(cores),
-            {tt::constants::TILE_HEIGHT, tt::constants::TILE_WIDTH},
-            ShardOrientation::ROW_MAJOR,
-            {tt::constants::TILE_HEIGHT / 4, tt::constants::TILE_WIDTH / 2},
-            {4, 8});
         TestBufferConfig config = {
             .num_pages = 32,
             .page_size = page_size,
             .buftype = BufferType::DRAM,
-            .sharding_args = BufferShardingArgs(shard_spec, TensorMemoryLayout::BLOCK_SHARDED)};
+            .sharding_args = local_test_functions::sharding_args_within_grid(
+                CoreCoord(3, 0),
+                mesh_device->dram_grid_size(),
+                ShardOrientation::ROW_MAJOR,
+                {tt::constants::TILE_HEIGHT / 4, tt::constants::TILE_WIDTH / 2},
+                {4, 8},
+                TensorMemoryLayout::BLOCK_SHARDED)};
         local_test_functions::test_EnqueueWriteBuffer_and_EnqueueReadBuffer(
             mesh_device, mesh_device->mesh_command_queue(), config);
     }
@@ -885,20 +949,17 @@ TEST_F(
     UnitMeshCQSingleCardSharedBufferFixture, TestMultipleUnalignedPagesLargerThanMaxPrefetchCommandSizeShardedBuffer) {
     const uint32_t page_size = MetalContext::instance().dispatch_mem_map().max_prefetch_command_size() + 4;
     for (const auto& mesh_device : devices_) {
-        CoreCoord start(0, 0);
-        CoreCoord end(3, 0);
-        CoreRange cores(start, end);
-        ShardSpecBuffer shard_spec = ShardSpecBuffer(
-            CoreRangeSet(cores),
-            {tt::constants::TILE_HEIGHT, tt::constants::TILE_WIDTH},
-            ShardOrientation::COL_MAJOR,
-            {tt::constants::TILE_HEIGHT / 4, tt::constants::TILE_WIDTH / 2},
-            {4, 8});
         TestBufferConfig config = {
             .num_pages = 32,
             .page_size = page_size,
             .buftype = BufferType::DRAM,
-            .sharding_args = BufferShardingArgs(shard_spec, TensorMemoryLayout::WIDTH_SHARDED)};
+            .sharding_args = local_test_functions::sharding_args_within_grid(
+                CoreCoord(3, 0),
+                mesh_device->dram_grid_size(),
+                ShardOrientation::COL_MAJOR,
+                {tt::constants::TILE_HEIGHT / 4, tt::constants::TILE_WIDTH / 2},
+                {4, 8},
+                TensorMemoryLayout::WIDTH_SHARDED)};
         local_test_functions::test_EnqueueWriteBuffer_and_EnqueueReadBuffer(
             mesh_device, mesh_device->mesh_command_queue(), config);
     }
@@ -942,8 +1003,10 @@ TEST_F(UnitMeshCQSingleCardSharedBufferFixture, TestMultipleUnalignedPagesLarger
     for (const auto& mesh_device : devices_) {
         const uint32_t max_prefetch_command_size =
             MetalContext::instance().dispatch_mem_map().max_prefetch_command_size();
-        TestBufferConfig config = {
-            .num_pages = 1024, .page_size = max_prefetch_command_size + 4, .buftype = BufferType::DRAM};
+        const uint32_t page_size = max_prefetch_command_size + 4;
+        const uint32_t num_pages =
+            std::min(1024u, local_test_functions::max_interleaved_pages(*mesh_device, BufferType::DRAM, page_size));
+        TestBufferConfig config = {.num_pages = num_pages, .page_size = page_size, .buftype = BufferType::DRAM};
         local_test_functions::test_EnqueueWriteBuffer_and_EnqueueReadBuffer(
             mesh_device, mesh_device->mesh_command_queue(), config);
     }
@@ -978,22 +1041,17 @@ TEST_F(UnitMeshCQSingleCardSharedBufferFixture, TestMultiplePagesLargerThanMaxPr
     const uint32_t region_size = 5 * page_size;
     const uint32_t region_offset = 9 * page_size;
     for (const auto& mesh_device : devices_) {
-        CoreCoord start(0, 0);
-        CoreCoord end(4, 0);
-        CoreRange cores(start, end);
-        ShardSpecBuffer shard_spec = ShardSpecBuffer(
-            CoreRangeSet(cores),
-            {tt::constants::TILE_HEIGHT, tt::constants::TILE_WIDTH},
-            ShardOrientation::ROW_MAJOR,
-            {tt::constants::TILE_HEIGHT / 2, tt::constants::TILE_WIDTH / 2},
-            {5, 4});
-
         distributed::DeviceLocalBufferConfig dram_config{
             .page_size = page_size,
             .buffer_type = BufferType::DRAM,
-            .sharding_args = BufferShardingArgs(shard_spec, TensorMemoryLayout::WIDTH_SHARDED),
-            .bottom_up = false
-            };
+            .sharding_args = local_test_functions::sharding_args_within_grid(
+                CoreCoord(4, 0),
+                mesh_device->dram_grid_size(),
+                ShardOrientation::ROW_MAJOR,
+                {tt::constants::TILE_HEIGHT / 2, tt::constants::TILE_WIDTH / 2},
+                {5, 4},
+                TensorMemoryLayout::WIDTH_SHARDED),
+            .bottom_up = false};
 
         const distributed::ReplicatedBufferConfig buffer_config{.size = buffer_size};
 
@@ -1021,20 +1079,16 @@ TEST_F(
     const uint32_t region_size = 5 * page_size;
     const uint32_t region_offset = 9 * page_size;
     for (const auto& mesh_device : devices_) {
-        CoreCoord start(0, 0);
-        CoreCoord end(4, 0);
-        CoreRange cores(start, end);
-        ShardSpecBuffer shard_spec = ShardSpecBuffer(
-            CoreRangeSet(cores),
-            {tt::constants::TILE_HEIGHT, tt::constants::TILE_WIDTH},
-            ShardOrientation::COL_MAJOR,
-            {tt::constants::TILE_HEIGHT / 4, tt::constants::TILE_WIDTH},
-            {4, 5});
-
         distributed::DeviceLocalBufferConfig dram_config{
             .page_size = page_size,
             .buffer_type = BufferType::DRAM,
-            .sharding_args = BufferShardingArgs(shard_spec, TensorMemoryLayout::WIDTH_SHARDED),
+            .sharding_args = local_test_functions::sharding_args_within_grid(
+                CoreCoord(4, 0),
+                mesh_device->dram_grid_size(),
+                ShardOrientation::COL_MAJOR,
+                {tt::constants::TILE_HEIGHT / 4, tt::constants::TILE_WIDTH},
+                {4, 5},
+                TensorMemoryLayout::WIDTH_SHARDED),
             .bottom_up = false};
 
         const distributed::ReplicatedBufferConfig buffer_config{.size = buffer_size};
@@ -1172,20 +1226,16 @@ TEST_F(UnitMeshCQSingleCardSharedBufferFixture, TestReadWriteShardedSubBuffer) {
     const uint32_t buffer_size = 64 * page_size;
     const BufferRegion region(256, 512);
     for (const auto& mesh_device : devices_) {
-        CoreCoord start(0, 0);
-        CoreCoord end(5, 0);
-        CoreRange cores(start, end);
-        ShardSpecBuffer shard_spec = ShardSpecBuffer(
-            CoreRangeSet(cores),
-            {tt::constants::TILE_HEIGHT, tt::constants::TILE_WIDTH},
-            ShardOrientation::ROW_MAJOR,
-            {tt::constants::TILE_HEIGHT, tt::constants::TILE_WIDTH},
-            {8, 8});
-
         distributed::DeviceLocalBufferConfig dram_config{
             .page_size = page_size,
             .buffer_type = BufferType::DRAM,
-            .sharding_args = BufferShardingArgs(shard_spec, TensorMemoryLayout::BLOCK_SHARDED),
+            .sharding_args = local_test_functions::sharding_args_within_grid(
+                CoreCoord(5, 0),
+                mesh_device->dram_grid_size(),
+                ShardOrientation::ROW_MAJOR,
+                {tt::constants::TILE_HEIGHT, tt::constants::TILE_WIDTH},
+                {8, 8},
+                TensorMemoryLayout::BLOCK_SHARDED),
             .bottom_up = false};
 
         const distributed::ReplicatedBufferConfig buffer_config{.size = buffer_size};
@@ -1633,8 +1683,11 @@ TEST_F(UnitMeshMultiCQSingleDeviceBufferFixture, TestIssueMultipleReadWriteComma
     uint32_t page_size = 2048;
     const auto device_id = mesh_device->get_device_ids()[0];
     uint16_t channel = tt::tt_metal::MetalContext::instance().get_cluster().get_assigned_channel_for_device(device_id);
+    const SystemMemoryManager& sysmem_manager = mesh_device->impl().get_devices()[0]->sysmem_manager();
     uint32_t command_queue_size =
-        tt::tt_metal::MetalContext::instance().get_cluster().get_host_channel_size(device_id, channel);
+        sysmem_manager.is_dram_backed()
+            ? sysmem_manager.get_cq_size()
+            : tt::tt_metal::MetalContext::instance().get_cluster().get_host_channel_size(device_id, channel);
     uint32_t num_pages = command_queue_size / page_size;
 
     TestBufferConfig config = {.num_pages = num_pages, .page_size = page_size, .buftype = BufferType::DRAM};
@@ -1766,20 +1819,16 @@ TEST_F(UnitMeshCQSingleCardSharedBufferFixture, TestMultipleNonOverlappingWrites
     const uint32_t buffer_size = 16 * page_size;
     const uint32_t buffer_region_size = 4 * page_size;
     for (const auto& mesh_device : devices_) {
-        CoreCoord start_coord = {0, 0};
-        CoreCoord end_coord = {5, 5};
-        CoreRange cores(start_coord, end_coord);
-        ShardSpecBuffer shard_spec = ShardSpecBuffer(
-            CoreRangeSet(cores),
-            {tt::constants::TILE_HEIGHT, tt::constants::TILE_WIDTH},
-            ShardOrientation::ROW_MAJOR,
-            {tt::constants::TILE_HEIGHT, tt::constants::TILE_WIDTH},
-            {16, 1});
-
         distributed::DeviceLocalBufferConfig l1_config{
             .page_size = page_size,
             .buffer_type = BufferType::L1,
-            .sharding_args = BufferShardingArgs(shard_spec, TensorMemoryLayout::WIDTH_SHARDED),
+            .sharding_args = local_test_functions::sharding_args_within_grid(
+                CoreCoord(5, 5),
+                mesh_device->compute_with_storage_grid_size(),
+                ShardOrientation::ROW_MAJOR,
+                {tt::constants::TILE_HEIGHT, tt::constants::TILE_WIDTH},
+                {16, 1},
+                TensorMemoryLayout::WIDTH_SHARDED),
             .bottom_up = false};
         const distributed::ReplicatedBufferConfig buffer_config{.size = buffer_size};
         auto buffer = distributed::MeshBuffer::create(buffer_config, l1_config, mesh_device.get());
@@ -1824,8 +1873,10 @@ TEST_F(UnitMeshCQSingleCardSharedBufferFixture, TestMultiplePagesLargerThanMaxPr
     for (const auto& mesh_device : devices_) {
         const uint32_t max_prefetch_command_size =
             MetalContext::instance().dispatch_mem_map().max_prefetch_command_size();
-        TestBufferConfig config = {
-            .num_pages = 30, .page_size = max_prefetch_command_size + 2048, .buftype = BufferType::L1};
+        const uint32_t page_size = max_prefetch_command_size + 2048;
+        const uint32_t num_pages =
+            std::min(30u, local_test_functions::max_interleaved_pages(*mesh_device, BufferType::L1, page_size));
+        TestBufferConfig config = {.num_pages = num_pages, .page_size = page_size, .buftype = BufferType::L1};
         local_test_functions::test_EnqueueWriteBuffer_and_EnqueueReadBuffer(
             mesh_device, mesh_device->mesh_command_queue(), config);
     }
@@ -1834,20 +1885,19 @@ TEST_F(UnitMeshCQSingleCardSharedBufferFixture, TestMultiplePagesLargerThanMaxPr
 TEST_F(UnitMeshCQSingleCardSharedBufferFixture, TestMultiplePagesLargerThanMaxPrefetchCommandSizeForL1ShardedBuffer) {
     const uint32_t page_size = MetalContext::instance().dispatch_mem_map().max_prefetch_command_size() + 2048;
     for (const auto& mesh_device : devices_) {
-        CoreCoord start(0, 0);
-        CoreCoord end(4, 4);
-        CoreRange cores(start, end);
-        ShardSpecBuffer shard_spec = ShardSpecBuffer(
-            CoreRangeSet(cores),
-            {tt::constants::TILE_HEIGHT, tt::constants::TILE_WIDTH},
+        const BufferShardingArgs sharding_args = local_test_functions::sharding_args_within_grid(
+            CoreCoord(4, 4),
+            mesh_device->compute_with_storage_grid_size(),
             ShardOrientation::COL_MAJOR,
             {tt::constants::TILE_HEIGHT, tt::constants::TILE_WIDTH},
-            {5, 5});
+            {5, 5},
+            TensorMemoryLayout::BLOCK_SHARDED);
+        if (sharding_args.shard_spec()->num_pages() >
+            local_test_functions::max_pages_per_bank(*mesh_device, BufferType::L1, page_size)) {
+            GTEST_SKIP() << "a shard does not fit in one L1 bank";
+        }
         TestBufferConfig config = {
-            .num_pages = 25,
-            .page_size = page_size,
-            .buftype = BufferType::L1,
-            .sharding_args = BufferShardingArgs(shard_spec, TensorMemoryLayout::BLOCK_SHARDED)};
+            .num_pages = 25, .page_size = page_size, .buftype = BufferType::L1, .sharding_args = sharding_args};
         local_test_functions::test_EnqueueWriteBuffer_and_EnqueueReadBuffer(
             mesh_device, mesh_device->mesh_command_queue(), config);
     }
@@ -1868,8 +1918,10 @@ TEST_F(UnitMeshCQSingleCardSharedBufferFixture, TestMultipleUnalignedPagesLarger
     for (const auto& mesh_device : devices_) {
         const uint32_t max_prefetch_command_size =
             MetalContext::instance().dispatch_mem_map().max_prefetch_command_size();
-        TestBufferConfig config = {
-            .num_pages = 30, .page_size = max_prefetch_command_size + 4, .buftype = BufferType::L1};
+        const uint32_t page_size = max_prefetch_command_size + 4;
+        const uint32_t num_pages =
+            std::min(30u, local_test_functions::max_interleaved_pages(*mesh_device, BufferType::L1, page_size));
+        TestBufferConfig config = {.num_pages = num_pages, .page_size = page_size, .buftype = BufferType::L1};
         local_test_functions::test_EnqueueWriteBuffer_and_EnqueueReadBuffer(
             mesh_device, mesh_device->mesh_command_queue(), config);
     }
@@ -1880,20 +1932,19 @@ TEST_F(
     TestMultipleUnalignedPagesLargerThanMaxPrefetchCommandSizeForL1ShardedBuffer) {
     const uint32_t page_size = MetalContext::instance().dispatch_mem_map().max_prefetch_command_size() + 4;
     for (const auto& mesh_device : devices_) {
-        CoreCoord start(0, 0);
-        CoreCoord end(3, 3);
-        CoreRange cores(start, end);
-        ShardSpecBuffer shard_spec = ShardSpecBuffer(
-            CoreRangeSet(cores),
-            {tt::constants::TILE_HEIGHT, tt::constants::TILE_WIDTH},
+        const BufferShardingArgs sharding_args = local_test_functions::sharding_args_within_grid(
+            CoreCoord(3, 3),
+            mesh_device->compute_with_storage_grid_size(),
             ShardOrientation::ROW_MAJOR,
             {tt::constants::TILE_HEIGHT, tt::constants::TILE_WIDTH / 2},
-            {8, 4});
+            {8, 4},
+            TensorMemoryLayout::WIDTH_SHARDED);
+        if (sharding_args.shard_spec()->num_pages() >
+            local_test_functions::max_pages_per_bank(*mesh_device, BufferType::L1, page_size)) {
+            GTEST_SKIP() << "a shard does not fit in one L1 bank";
+        }
         TestBufferConfig config = {
-            .num_pages = 32,
-            .page_size = page_size,
-            .buftype = BufferType::L1,
-            .sharding_args = BufferShardingArgs(shard_spec, TensorMemoryLayout::WIDTH_SHARDED)};
+            .num_pages = 32, .page_size = page_size, .buftype = BufferType::L1, .sharding_args = sharding_args};
         local_test_functions::test_EnqueueWriteBuffer_and_EnqueueReadBuffer(
             mesh_device, mesh_device->mesh_command_queue(), config);
     }
@@ -1907,21 +1958,20 @@ TEST_F(
     const uint32_t region_offset = 16 * page_size;
     const uint32_t region_size = 16 * page_size;
     for (const auto& mesh_device : devices_) {
-        CoreCoord start(0, 0);
-        CoreCoord end(3, 3);
-        CoreRange cores(start, end);
-        ShardSpecBuffer shard_spec = ShardSpecBuffer(
-            CoreRangeSet(cores),
-            {tt::constants::TILE_HEIGHT, tt::constants::TILE_WIDTH},
+        const BufferShardingArgs sharding_args = local_test_functions::sharding_args_within_grid(
+            CoreCoord(3, 3),
+            mesh_device->compute_with_storage_grid_size(),
             ShardOrientation::ROW_MAJOR,
             {tt::constants::TILE_HEIGHT / 2, tt::constants::TILE_WIDTH},
-            {16, 2});
+            {16, 2},
+            TensorMemoryLayout::HEIGHT_SHARDED);
+        if (sharding_args.shard_spec()->num_pages() >
+            local_test_functions::max_pages_per_bank(*mesh_device, BufferType::L1, page_size)) {
+            GTEST_SKIP() << "a shard does not fit in one L1 bank";
+        }
 
         distributed::DeviceLocalBufferConfig l1_config{
-            .page_size = page_size,
-            .buffer_type = BufferType::L1,
-            .sharding_args = BufferShardingArgs(shard_spec, TensorMemoryLayout::HEIGHT_SHARDED),
-            .bottom_up = false};
+            .page_size = page_size, .buffer_type = BufferType::L1, .sharding_args = sharding_args, .bottom_up = false};
         const distributed::ReplicatedBufferConfig buffer_config{.size = buffer_size};
         auto buffer = distributed::MeshBuffer::create(buffer_config, l1_config, mesh_device.get());
 
@@ -1943,20 +1993,16 @@ TEST_F(UnitMeshCQSingleCardSharedBufferFixture, TestMultipleNonOverlappingReadsS
     const uint32_t buffer_size = 16 * page_size;
     const uint32_t buffer_region_size = buffer_size / 4;
     for (const auto& mesh_device : devices_) {
-        CoreCoord start_coord = {0, 0};
-        CoreCoord end_coord = {5, 5};
-        CoreRange cores(start_coord, end_coord);
-        ShardSpecBuffer shard_spec = ShardSpecBuffer(
-            CoreRangeSet(cores),
-            {tt::constants::TILE_HEIGHT, tt::constants::TILE_WIDTH},
-            ShardOrientation::ROW_MAJOR,
-            {tt::constants::TILE_HEIGHT, tt::constants::TILE_WIDTH},
-            {8, 2});
-
         distributed::DeviceLocalBufferConfig l1_config{
             .page_size = page_size,
             .buffer_type = BufferType::L1,
-            .sharding_args = BufferShardingArgs(shard_spec, TensorMemoryLayout::BLOCK_SHARDED),
+            .sharding_args = local_test_functions::sharding_args_within_grid(
+                CoreCoord(5, 5),
+                mesh_device->compute_with_storage_grid_size(),
+                ShardOrientation::ROW_MAJOR,
+                {tt::constants::TILE_HEIGHT, tt::constants::TILE_WIDTH},
+                {8, 2},
+                TensorMemoryLayout::BLOCK_SHARDED),
             .bottom_up = false};
         const distributed::ReplicatedBufferConfig buffer_config{.size = buffer_size};
         auto buffer = distributed::MeshBuffer::create(buffer_config, l1_config, mesh_device.get());
@@ -2006,20 +2052,16 @@ TEST_F(UnitMeshCQSingleCardSharedBufferFixture, TestReadWriteShardedSubBufferMul
     const uint32_t buffer_region_size = page_size * 7;
     vector<uint32_t> src = local_test_functions::generate_arange_vector(buffer_region_size);
     for (const auto& mesh_device : devices_) {
-        CoreCoord start_coord = {0, 0};
-        CoreCoord end_coord = {3, 3};
-        CoreRange cores(start_coord, end_coord);
-        ShardSpecBuffer shard_spec = ShardSpecBuffer(
-            CoreRangeSet(cores),
-            {tt::constants::TILE_HEIGHT, tt::constants::TILE_WIDTH},
-            ShardOrientation::COL_MAJOR,
-            {tt::constants::TILE_HEIGHT / 4, tt::constants::TILE_WIDTH / 2},
-            {8, 2});
-
         distributed::DeviceLocalBufferConfig l1_config{
             .page_size = page_size,
             .buffer_type = BufferType::L1,
-            .sharding_args = BufferShardingArgs(shard_spec, TensorMemoryLayout::BLOCK_SHARDED),
+            .sharding_args = local_test_functions::sharding_args_within_grid(
+                CoreCoord(3, 3),
+                mesh_device->compute_with_storage_grid_size(),
+                ShardOrientation::COL_MAJOR,
+                {tt::constants::TILE_HEIGHT / 4, tt::constants::TILE_WIDTH / 2},
+                {8, 2},
+                TensorMemoryLayout::BLOCK_SHARDED),
             .bottom_up = false};
         const distributed::ReplicatedBufferConfig buffer_config{.size = buffer_size};
         auto buffer = distributed::MeshBuffer::create(buffer_config, l1_config, mesh_device.get());
@@ -2379,7 +2421,11 @@ TEST_F(UnitMeshCQSingleCardSharedBufferFixture, ShardedBufferL1ReadWrites) {
                static_cast<uint32_t>(mesh_device->compute_with_storage_grid_size().y)}}},
             {"num_pages", {{1, 1}, {2, 1}, {1, 2}, {2, 2}, {7, 11}, {3, 65}, {67, 4}, {3, 137}}},
             {"page_shape", {{32, 32}, {1, 4}, {1, 120}, {1, 1024}, {1, 2048}}}};
+        const CoreCoord compute_grid_size = mesh_device->compute_with_storage_grid_size();
         for (const std::array<uint32_t, 2> cores : test_params.at("cores")) {
+            if (cores[0] > compute_grid_size.x || cores[1] > compute_grid_size.y) {
+                continue;
+            }
             for (const std::array<uint32_t, 2> num_pages : test_params.at("num_pages")) {
                 for (const std::array<uint32_t, 2> page_shape : test_params.at("page_shape")) {
                     for (const TensorMemoryLayout shard_strategy :
@@ -2394,6 +2440,10 @@ TEST_F(UnitMeshCQSingleCardSharedBufferFixture, ShardedBufferL1ReadWrites) {
                             config.num_iterations = num_iterations;
                             config.mem_config = shard_strategy;
                             config.page_shape = page_shape;
+                            if (config.num_pages() > local_test_functions::max_interleaved_pages(
+                                                         *mesh_device, BufferType::L1, config.page_size())) {
+                                continue;
+                            }
                             log_info(
                                 tt::LogTest,
                                 "Device: {} cores: [{},{}] num_pages: [{},{}] page_shape: [{},{}], shard_strategy: {}, "
@@ -2506,6 +2556,10 @@ TEST_F(UnitMeshCQSingleCardSharedBufferFixture, ShardedBufferLargeL1ReadWrites) 
                             config.num_iterations = num_iterations;
                             config.mem_config = shard_strategy;
                             config.page_shape = page_shape;
+                            if (config.num_pages() > local_test_functions::max_interleaved_pages(
+                                                         *mesh_device, BufferType::L1, config.page_size())) {
+                                continue;
+                            }
                             log_info(
                                 tt::LogTest,
                                 "Device: {} cores: [{},{}] num_pages: [{},{}] page_shape: [{},{}], shard_strategy: {}, "

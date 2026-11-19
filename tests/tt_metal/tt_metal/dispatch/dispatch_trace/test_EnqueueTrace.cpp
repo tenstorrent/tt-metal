@@ -22,12 +22,13 @@
 #include <tt-metalium/allocator.hpp>
 #include <tt-metalium/buffer.hpp>
 #include <tt-metalium/buffer_types.hpp>
-#include <tt-metalium/circular_buffer_config.hpp>
 #include "command_queue_fixture.hpp"
 #include <tt-metalium/core_coord.hpp>
-#include <tt-metalium/kernel_types.hpp>
-#include "impl/dataflow_buffer/dataflow_buffer.hpp"
-#include "impl/dataflow_buffer/dataflow_buffer_impl.hpp"
+#include <tt-metalium/math.hpp>
+#include <tt-metalium/workload/run_args/program_run_args.hpp>
+#include <tt-metalium/workload/specification/compute_hardware_config.hpp>
+#include <tt-metalium/workload/specification/data_movement_hardware_config.hpp>
+#include <tt-metalium/workload/specification/program_spec.hpp>
 #include "dispatch_test_utils.hpp"
 #include "env_lib.hpp"
 #include "gtest/gtest.h"
@@ -51,45 +52,120 @@ using std::vector;
 using namespace tt;
 
 Program create_simple_unary_program(distributed::MeshDevice& mesh_device, Buffer& input, Buffer& output) {
-    Program program = CreateProgram(mesh_device);
-    CoreCoord worker = {0, 0};
-    auto reader_kernel = CreateKernel(
-        program,
-        "tests/tt_metal/tt_metal/test_kernels/dataflow/reader_unary.cpp",
-        worker,
-        DataMovementConfig{.processor = DataMovementProcessor::RISCV_1, .noc = NOC::RISCV_1_default});
+    const NodeCoord node{0, 0};
+    const DFBSpecName input_dfb{"input_dfb"};
+    const DFBSpecName output_dfb{"output_dfb"};
+    const KernelSpecName reader{"reader"};
+    const KernelSpecName writer{"writer"};
+    const KernelSpecName compute{"compute"};
+    const uint32_t tile_size = tt::tile_size(tt::DataFormat::Float16_b);
+    const uint32_t num_tiles = input.num_pages();
+    const DataMovementHardwareConfig::DataMovement2XXConfig explicit_sync_config{
+        .disable_dfb_implicit_sync_for_all = true,
+    };
 
-    auto writer_kernel = CreateKernel(
-        program,
-        "tests/tt_metal/tt_metal/test_kernels/dataflow/writer_unary.cpp",
-        worker,
-        DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default});
+    const KernelSpec reader_spec{
+        .unique_id = reader,
+        .source = "tests/tt_metal/tt_metal/test_kernels/dataflow/reader_unary_2_0.cpp",
+        .num_threads = 1,
+        .dfb_bindings = {{
+            .dfb_spec_name = input_dfb,
+            .accessor_name = "out",
+            .endpoint_type = DFBEndpointType::PRODUCER,
+            .access_pattern = DFBAccessPattern::STRIDED,
+        }},
+        .runtime_arg_schema = {.runtime_arg_names = {"src_addr", "bank_id", "num_tiles"}},
+        .hw_config =
+            DataMovementHardwareConfig{
+                .config_1xx =
+                    DataMovementHardwareConfig::DataMovement1XXConfig{
+                        .processor = DataMovementProcessor::RISCV_1,
+                        .noc = NOC::RISCV_1_default,
+                    },
+                .config_2xx = explicit_sync_config,
+            },
+    };
+    const KernelSpec writer_spec{
+        .unique_id = writer,
+        .source = "tests/tt_metal/tt_metal/test_kernels/dataflow/writer_unary_2_0.cpp",
+        .num_threads = 1,
+        .dfb_bindings = {{
+            .dfb_spec_name = output_dfb,
+            .accessor_name = "in",
+            .endpoint_type = DFBEndpointType::CONSUMER,
+            .access_pattern = DFBAccessPattern::STRIDED,
+        }},
+        .runtime_arg_schema = {.runtime_arg_names = {"dst_addr", "bank_id", "num_tiles"}},
+        .hw_config =
+            DataMovementHardwareConfig{
+                .config_1xx =
+                    DataMovementHardwareConfig::DataMovement1XXConfig{
+                        .processor = DataMovementProcessor::RISCV_0,
+                        .noc = NOC::RISCV_0_default,
+                    },
+                .config_2xx = explicit_sync_config,
+            },
+    };
+    const KernelSpec compute_spec{
+        .unique_id = compute,
+        .source = "tests/tt_metal/tt_metal/test_kernels/compute/eltwise_sfpu_2_0.cpp",
+        .num_threads = 1,
+        .compiler_options =
+            {.defines = {{"SFPU_OP_EXP_INCLUDE", "1"}, {"SFPU_OP_CHAIN_0", "exp_tile_init(); exp_tile(0);"}}},
+        .dfb_bindings =
+            {{
+                 .dfb_spec_name = input_dfb,
+                 .accessor_name = "in",
+                 .endpoint_type = DFBEndpointType::CONSUMER,
+                 .access_pattern = DFBAccessPattern::STRIDED,
+             },
+             {
+                 .dfb_spec_name = output_dfb,
+                 .accessor_name = "out",
+                 .endpoint_type = DFBEndpointType::PRODUCER,
+                 .access_pattern = DFBAccessPattern::STRIDED,
+             }},
+        .compile_time_args = {{"per_core_block_cnt", num_tiles}, {"per_core_block_size", 1u}},
+        .hw_config = ComputeHardwareConfig{.sfpu_precision_mode = Precision::Approximate},
+    };
+    const ProgramSpec spec{
+        .name = "simple_unary",
+        .kernels = {reader_spec, writer_spec, compute_spec},
+        .dataflow_buffers =
+            {DataflowBufferSpec{
+                 .unique_id = input_dfb,
+                 .entry_size = tile_size,
+                 .num_entries = num_tiles,
+                 .data_format_metadata = tt::DataFormat::Float16_b,
+             },
+             DataflowBufferSpec{
+                 .unique_id = output_dfb,
+                 .entry_size = tile_size,
+                 .num_entries = num_tiles,
+                 .data_format_metadata = tt::DataFormat::Float16_b,
+             }},
+        .work_units = {WorkUnitSpec{.name = "main", .kernels = {reader, writer, compute}, .target_nodes = node}},
+    };
+    Program program = Program(mesh_device, spec);
 
-    CreateKernel(
-        program,
-        "tests/tt_metal/tt_metal/test_kernels/compute/eltwise_sfpu.cpp",
-        worker,
-        ComputeConfig{
-            .math_approx_mode = true,
-            .compile_args = {1, 1},
-            .defines = {{"SFPU_OP_EXP_INCLUDE", "1"}, {"SFPU_OP_CHAIN_0", "exp_tile_init(); exp_tile(0);"}}});
-
-    CircularBufferConfig input_cb_config = CircularBufferConfig(2048, {{tt::CBIndex::c_0, tt::DataFormat::Float16_b}})
-                                               .set_page_size(tt::CBIndex::c_0, 2048);
-
-    CoreRange core_range({0, 0});
-    CreateCircularBuffer(program, core_range, input_cb_config);
-
-    auto writer_runtime_args = {output.address(), uint32_t(0), output.num_pages()};
-    auto reader_runtime_args = {input.address(), uint32_t(0), input.num_pages()};
-
-    SetRuntimeArgs(program, writer_kernel, worker, writer_runtime_args);
-    SetRuntimeArgs(program, reader_kernel, worker, reader_runtime_args);
-
-    CircularBufferConfig output_cb_config = CircularBufferConfig(2048, {{tt::CBIndex::c_16, tt::DataFormat::Float16_b}})
-                                                .set_page_size(tt::CBIndex::c_16, 2048);
-
-    CreateCircularBuffer(program, core_range, output_cb_config);
+    ProgramRunArgs run_args;
+    run_args.kernel_run_args = {
+        ProgramRunArgs::KernelRunArgs{
+            .kernel = reader,
+            .runtime_arg_values = MakeRuntimeArgsForSingleNode(
+                node,
+                {{"src_addr", static_cast<uint32_t>(input.address())}, {"bank_id", 0u}, {"num_tiles", num_tiles}}),
+        },
+        ProgramRunArgs::KernelRunArgs{
+            .kernel = writer,
+            .runtime_arg_values = MakeRuntimeArgsForSingleNode(
+                node,
+                {{"dst_addr", static_cast<uint32_t>(output.address())},
+                 {"bank_id", 0u},
+                 {"num_tiles", output.num_pages()}}),
+        },
+    };
+    program.set_program_run_args(run_args);
     return program;
 }
 
@@ -549,7 +625,10 @@ TEST_F(UnitMeshCQTraceFixture, TensixEnqueueTwoProgramTrace) {
 }
 
 TEST_F(UnitMeshCQTraceFixture, TensixEnqueueMultiProgramTraceBenchmark) {
-    CreateDevices(6144);
+    uint32_t num_loops = parse_env<int>("TT_METAL_TRACE_LOOPS", 4);
+    uint32_t num_programs = parse_env<int>("TT_METAL_TRACE_PROGRAMS", 4);
+    constexpr uint32_t trace_bytes_per_program = 2048;
+    CreateDevices(num_programs * trace_bytes_per_program + kMaxTraceBufPageSize);
     auto mesh_device = this->devices_[0];
     auto& mesh_command_queue = mesh_device->mesh_command_queue();
 
@@ -558,8 +637,6 @@ TEST_F(UnitMeshCQTraceFixture, TensixEnqueueMultiProgramTraceBenchmark) {
     auto input = distributed::MeshBuffer::create(replicated_config, device_config, mesh_device.get());
     auto output = distributed::MeshBuffer::create(replicated_config, device_config, mesh_device.get());
 
-    uint32_t num_loops = parse_env<int>("TT_METAL_TRACE_LOOPS", 4);
-    uint32_t num_programs = parse_env<int>("TT_METAL_TRACE_PROGRAMS", 4);
     vector<std::shared_ptr<distributed::MeshBuffer>> interm_buffers;
 
     vector<uint32_t> input_data(input->get_device_buffer(zero_coord_)->size() / sizeof(uint32_t), 0);
@@ -651,9 +728,7 @@ TEST_F(UnitMeshRandomProgramTraceFixture, TensixTestSimpleProgramsTrace) {
         if (i % 10 == 0) {
             log_info(tt::LogTest, "Creating Program {}", i);
         }
-        Program program = CreateProgram(*this->device_);
-        this->create_kernel(program, CoreType::WORKER, true);
-        this->workloads[i].add_program(device_range_, std::move(program));
+        this->workloads[i].add_program(device_range_, this->create_program_with_kernel(CoreType::WORKER, true));
         distributed::EnqueueMeshWorkload(mesh_command_queue, this->workloads[i], false);
     }
 
@@ -731,9 +806,7 @@ TEST_F(UnitMeshRandomProgramTraceFixture, NIGHTLY_TensixTestProgramsTrace) {
         if (i % 10 == 0) {
             log_info(tt::LogTest, "Creating Program {}", i);
         }
-        Program program = CreateProgram(*this->device_);
-        this->create_kernel(program, CoreType::WORKER);
-        this->workloads[i].add_program(device_range_, std::move(program));
+        this->workloads[i].add_program(device_range_, this->create_program_with_kernel(CoreType::WORKER));
         distributed::EnqueueMeshWorkload(mesh_command_queue, this->workloads[i], false);
     }
 
@@ -825,8 +898,6 @@ TEST_F(UnitMeshRandomProgramTraceFixture, NIGHTLY_TensixTestAlternatingLargeAndS
         if (i % 10 == 0) {
             log_info(tt::LogTest, "Creating Program {}", i);
         }
-        Program program = CreateProgram(*this->device_);
-
         KernelProperties kernel_properties;
         if (i % 2 == 0) {
             kernel_properties = this->get_large_kernel_properties();
@@ -834,8 +905,8 @@ TEST_F(UnitMeshRandomProgramTraceFixture, NIGHTLY_TensixTestAlternatingLargeAndS
             kernel_properties = this->get_small_kernel_properties();
         }
 
-        this->create_kernel(program, CoreType::WORKER, false, kernel_properties);
-        this->workloads[i].add_program(device_range_, std::move(program));
+        this->workloads[i].add_program(
+            device_range_, this->create_program_with_kernel(CoreType::WORKER, false, kernel_properties));
         distributed::EnqueueMeshWorkload(mesh_command_queue, this->workloads[i], false);
     }
 
@@ -852,8 +923,6 @@ TEST_F(UnitMeshRandomProgramTraceFixture, NIGHTLY_TensixTestLargeProgramFollowed
         if (i % 10 == 0) {
             log_info(tt::LogTest, "Creating Program {}", i);
         }
-        Program program = CreateProgram(*this->device_);
-
         KernelProperties kernel_properties;
         if (i == 0) {
             kernel_properties = this->get_large_kernel_properties();
@@ -861,8 +930,8 @@ TEST_F(UnitMeshRandomProgramTraceFixture, NIGHTLY_TensixTestLargeProgramFollowed
             kernel_properties = this->get_small_kernel_properties();
         }
 
-        this->create_kernel(program, CoreType::WORKER, false, kernel_properties);
-        this->workloads[i].add_program(device_range_, std::move(program));
+        this->workloads[i].add_program(
+            device_range_, this->create_program_with_kernel(CoreType::WORKER, false, kernel_properties));
         distributed::EnqueueMeshWorkload(mesh_command_queue, this->workloads[i], false);
     }
 
@@ -879,8 +948,6 @@ TEST_F(UnitMeshRandomProgramTraceFixture, TensixTestLargeProgramInBetweenFiveSma
         if (i % 10 == 0) {
             log_info(tt::LogTest, "Creating Program {}", i);
         }
-        Program program = CreateProgram(*this->device_);
-
         KernelProperties kernel_properties;
         if (i % 6 == 0) {
             kernel_properties = this->get_large_kernel_properties();
@@ -888,8 +955,8 @@ TEST_F(UnitMeshRandomProgramTraceFixture, TensixTestLargeProgramInBetweenFiveSma
             kernel_properties = this->get_small_kernel_properties();
         }
 
-        this->create_kernel(program, CoreType::WORKER, false, kernel_properties);
-        this->workloads[i].add_program(device_range_, std::move(program));
+        this->workloads[i].add_program(
+            device_range_, this->create_program_with_kernel(CoreType::WORKER, false, kernel_properties));
         distributed::EnqueueMeshWorkload(mesh_command_queue, this->workloads[i], false);
     }
 
@@ -909,9 +976,7 @@ TEST_F(UnitMeshRandomProgramTraceFixture, TensixTestProgramsTraceAndNoTrace) {
         if (i % 10 == 0) {
             log_info(tt::LogTest, "Creating Program {}", i);
         }
-        Program program = CreateProgram(*this->device_);
-        this->create_kernel(program, CoreType::WORKER);
-        this->workloads[i].add_program(device_range_, std::move(program));
+        this->workloads[i].add_program(device_range_, this->create_program_with_kernel(CoreType::WORKER));
         tt::tt_metal::distributed::MeshWorkload& workload = this->workloads[i];
         const bool use_trace = (rand() % 2) == 0;
         if (use_trace) {
@@ -1065,57 +1130,11 @@ TEST_F(UnitMeshRandomProgramTraceFixture, TensixActiveEthTestProgramsTraceAndNoT
     }
 }
 
-// Creates a program whose kernels read DFB config properties from L1 and write
-// them to an output address (passed as an RTA).  No actual DFB data movement
-// happens — the test only checks that the dispatched config values are correct.
-//
-// Returns {program, producer_kernel_handle, consumer_kernel_handle, dfb_id}.
-struct DFBConfigReaderProgram {
-    Program program;
-    KernelHandle producer;
-    KernelHandle consumer;
-    uint32_t dfb_id;
-};
-
-DFBConfigReaderProgram create_dfb_config_reader_program(
-    distributed::MeshDevice& mesh_device, uint32_t entry_size, uint32_t num_entries) {
-    Program program = CreateProgram(mesh_device);
-    CoreCoord worker = {0, 0};
-    CoreRange core_range({0, 0});
-
-    const std::string kernel_path = "tests/tt_metal/tt_metal/test_kernels/dataflow/dfb_config_reader.cpp";
-
-    auto producer_kernel =
-        CreateKernel(program, kernel_path, worker, DataMovementConfig{.processor = DataMovementProcessor::RISCV_0});
-
-    auto consumer_kernel =
-        CreateKernel(program, kernel_path, worker, DataMovementConfig{.processor = DataMovementProcessor::RISCV_1});
-
-    experimental::dfb::DataflowBufferConfig dfb_config{
-        .entry_size = entry_size,
-        .num_entries = num_entries,
-        .num_producers = 1,
-        .pap = dfb::AccessPattern::STRIDED,
-        .num_consumers = 1,
-        .cap = dfb::AccessPattern::STRIDED,
-        .enable_producer_implicit_sync = false,
-        .enable_consumer_implicit_sync = false};
-
-    auto dfb_id = experimental::dfb::CreateDataflowBuffer(program, core_range, dfb_config);
-    experimental::dfb::BindDataflowBufferToProducerConsumerKernels(program, dfb_id, producer_kernel, consumer_kernel);
-
-    return {std::move(program), producer_kernel, consumer_kernel, dfb_id};
-}
-
 // Enqueues the same DFB program twice inside a single trace with different DFB
 // configs between the two uses.  After replay, reads the config values each
 // execution wrote to L1 and verifies they match the configs that were active at
 // capture time.
 TEST_F(UnitMeshMultiCQSingleDeviceTraceFixture, TensixEnqueueDFBProgramTrace) {
-    if (this->arch_ == tt::ARCH::QUASAR) {
-        GTEST_SKIP() << "DFBs not yet supported through Fast Dispatch on Quasar";
-    }
-
     constexpr uint32_t entry_size_a = 1024;
     constexpr uint32_t num_entries_a = 16;
     constexpr uint32_t entry_size_b = 512;
@@ -1125,78 +1144,130 @@ TEST_F(UnitMeshMultiCQSingleDeviceTraceFixture, TensixEnqueueDFBProgramTrace) {
 
     CreateDevice(dfb_total_size * 4);
 
-    CoreCoord worker = {0, 0};
+    const NodeCoord node{0, 0};
+    constexpr uint32_t extent_record_bytes = 8 * sizeof(uint32_t);
+    constexpr uint32_t extent_record_words = extent_record_bytes / sizeof(uint32_t);
+    const uint32_t l1_alignment = this->device_->allocator()->get_alignment(BufferType::L1);
+    const uint32_t records_bytes = tt::align(4 * extent_record_bytes, l1_alignment);
+    const uint32_t producer_record_address_a = static_cast<uint32_t>(this->device_->l1_size_per_core()) - records_bytes;
+    const uint32_t consumer_record_address_a = producer_record_address_a + extent_record_bytes;
+    const uint32_t producer_record_address_b = consumer_record_address_a + extent_record_bytes;
+    const uint32_t consumer_record_address_b = producer_record_address_b + extent_record_bytes;
 
-    // Each execution writes 1 uint32 (entry_size).  Pick addresses after the
-    // DFB's L1 region to avoid overlap.
-    const uint32_t l1_base = static_cast<uint32_t>(this->device_->allocator()->get_base_allocator_addr(HalMemType::L1));
-    const uint32_t output_addr_a = l1_base + dfb_total_size;
-    const uint32_t output_addr_b = output_addr_a + 64;
-
-    // Create the program with config A.
-    auto [program, producer_kernel, consumer_kernel, dfb_id] =
-        create_dfb_config_reader_program(*this->device_, entry_size_a, num_entries_a);
-    auto dfb = program.impl().get_dataflow_buffer(dfb_id);
-
-    // Set RTAs so the first execution writes to output_addr_a.
-    SetRuntimeArgs(program, producer_kernel, worker, {output_addr_a, dfb_id});
-    SetRuntimeArgs(program, consumer_kernel, worker, {output_addr_a, dfb_id});
+    const DFBSpecName dfb{"dfb"};
+    const KernelSpecName producer{"producer"};
+    const KernelSpecName consumer{"consumer"};
+    const ProgramSpec spec{
+        .name = "dfb_run_overrides_in_trace",
+        .kernels =
+            {KernelSpec{
+                 .unique_id = producer,
+                 .source = "tests/tt_metal/tt_metal/test_kernels/dataflow/dfb_extent_probe_dm.cpp",
+                 .num_threads = 1,
+                 .dfb_bindings =
+                     {{.dfb_spec_name = dfb,
+                       .accessor_name = "out",
+                       .endpoint_type = DFBEndpointType::PRODUCER,
+                       .access_pattern = DFBAccessPattern::STRIDED}},
+                 .compile_time_args = {{"num_tc_snapshots", 1u}, {"rotate_tc", 0u}, {"credits_to_post", 0u}},
+                 .runtime_arg_schema = {.runtime_arg_names = {"result_l1_addr"}},
+                 .hw_config =
+                     DataMovementHardwareConfig{
+                         .config_1xx =
+                             DataMovementHardwareConfig::DataMovement1XXConfig{
+                                 .processor = DataMovementProcessor::RISCV_0,
+                                 .noc = NOC::RISCV_0_default,
+                             },
+                         .config_2xx =
+                             DataMovementHardwareConfig::DataMovement2XXConfig{
+                                 .disable_dfb_implicit_sync_for = {dfb},
+                             },
+                     },
+             },
+             KernelSpec{
+                 .unique_id = consumer,
+                 .source = "tests/tt_metal/tt_metal/test_kernels/compute/dfb_extent_probe_compute.cpp",
+                 .num_threads = 1,
+                 .dfb_bindings =
+                     {{.dfb_spec_name = dfb,
+                       .accessor_name = "in",
+                       .endpoint_type = DFBEndpointType::CONSUMER,
+                       .access_pattern = DFBAccessPattern::STRIDED}},
+                 .compile_time_args =
+                     {{"num_tc_snapshots", 1u},
+                      {"rotate_tc", 0u},
+                      {"drain_producer_rotate_credits", 0u},
+                      {"drain_last_tc_credit", 0u},
+                      {"num_producers", 1u}},
+                 .runtime_arg_schema = {.runtime_arg_names = {"result_l1_addr"}},
+                 .hw_config = ComputeHardwareConfig{},
+             }},
+        .dataflow_buffers = {DataflowBufferSpec{
+            .unique_id = dfb,
+            .entry_size = entry_size_a,
+            .num_entries = num_entries_a,
+            .data_format_metadata = tt::DataFormat::Float16_b,
+        }},
+        .work_units = {WorkUnitSpec{.name = "main", .kernels = {producer, consumer}, .target_nodes = node}},
+    };
 
     distributed::MeshWorkload workload;
-    workload.add_program(device_range_, std::move(program));
+    workload.add_program(device_range_, Program(*this->device_, spec));
+    Program& program = workload.get_programs().at(device_range_);
 
-    auto& mesh_command_queue = this->device_->mesh_command_queue(0);
+    ProgramRunArgs run_args;
+    run_args.kernel_run_args = {
+        ProgramRunArgs::KernelRunArgs{
+            .kernel = producer,
+            .runtime_arg_values = MakeRuntimeArgsForSingleNode(node, {{"result_l1_addr", producer_record_address_a}}),
+        },
+        ProgramRunArgs::KernelRunArgs{
+            .kernel = consumer,
+            .runtime_arg_values = MakeRuntimeArgsForSingleNode(node, {{"result_l1_addr", consumer_record_address_a}}),
+        },
+    };
+    program.set_program_run_args(run_args);
 
-    // Run eager with config A so the program gets compiled and cached.
+    distributed::MeshCommandQueue& mesh_command_queue = this->device_->mesh_command_queue(0);
     distributed::EnqueueMeshWorkload(mesh_command_queue, workload, true);
-
-    // Verify config A was dispatched correctly in eager mode.
     {
-        vector<uint32_t> l1_data;
-        slow_dispatch::ReadFromL1(*this->device_, worker, output_addr_a, sizeof(uint32_t), l1_data);
-        EXPECT_EQ(l1_data[0], entry_size_a) << "eager: entry_size mismatch";
+        vector<uint32_t> records;
+        slow_dispatch::ReadFromL1(*this->device_, node, producer_record_address_a, 2 * extent_record_bytes, records);
+        EXPECT_EQ(records[0], entry_size_a) << "eager: producer entry_size mismatch";
+        EXPECT_EQ(records[extent_record_words], entry_size_a) << "eager: consumer entry_size mismatch";
     }
 
-    // --- Trace capture: enqueue twice with different DFB configs ---
-
-    auto tid = this->device_->begin_mesh_trace(mesh_command_queue);
-
-    // First enqueue: config A, output to output_addr_a.
+    const distributed::MeshTraceId trace_id = this->device_->begin_mesh_trace(mesh_command_queue);
     distributed::EnqueueMeshWorkload(mesh_command_queue, workload, false);
-
-    // Modify the DFB config to B between enqueues.
-    dfb->config.entry_size = entry_size_b;
-    dfb->config.num_entries = num_entries_b;
-
-    // Update RTAs so the second execution writes to output_addr_b.
-    auto& program_ref = workload.get_programs().at(device_range_);
-    SetRuntimeArgs(program_ref, producer_kernel, worker, {output_addr_b, dfb_id});
-    SetRuntimeArgs(program_ref, consumer_kernel, worker, {output_addr_b, dfb_id});
-
-    // Second enqueue: config B, output to output_addr_b.
+    run_args.kernel_run_args = {
+        ProgramRunArgs::KernelRunArgs{
+            .kernel = producer,
+            .runtime_arg_values = MakeRuntimeArgsForSingleNode(node, {{"result_l1_addr", producer_record_address_b}}),
+        },
+        ProgramRunArgs::KernelRunArgs{
+            .kernel = consumer,
+            .runtime_arg_values = MakeRuntimeArgsForSingleNode(node, {{"result_l1_addr", consumer_record_address_b}}),
+        },
+    };
+    run_args.dfb_run_overrides = {{.dfb = dfb, .entry_size = entry_size_b, .num_entries = num_entries_b}};
+    program.set_program_run_args(run_args);
     distributed::EnqueueMeshWorkload(mesh_command_queue, workload, false);
+    this->device_->end_mesh_trace(mesh_command_queue, trace_id);
 
-    this->device_->end_mesh_trace(mesh_command_queue, tid);
+    vector<uint32_t> zeros(records_bytes / sizeof(uint32_t), 0);
+    slow_dispatch::WriteToL1(*this->device_, node, producer_record_address_a, zeros);
 
-    // --- Replay and verify ---
+    this->device_->replay_mesh_trace(mesh_command_queue, trace_id, true);
 
-    // Clear L1 output locations before replay.
-    vector<uint32_t> zeros(16, 0);
-    slow_dispatch::WriteToL1(*this->device_, worker, output_addr_a, zeros);
-    slow_dispatch::WriteToL1(*this->device_, worker, output_addr_b, zeros);
-
-    this->device_->replay_mesh_trace(mesh_command_queue, tid, true);
-
-    // Read back entry_size written by each execution.
-    vector<uint32_t> result_a, result_b;
-    slow_dispatch::ReadFromL1(*this->device_, worker, output_addr_a, sizeof(uint32_t), result_a);
-    slow_dispatch::ReadFromL1(*this->device_, worker, output_addr_b, sizeof(uint32_t), result_b);
-
-    EXPECT_EQ(result_a[0], entry_size_a) << "trace execution 1: entry_size mismatch";
-    EXPECT_EQ(result_b[0], entry_size_b) << "trace execution 2: entry_size mismatch";
+    vector<uint32_t> records;
+    slow_dispatch::ReadFromL1(*this->device_, node, producer_record_address_a, 4 * extent_record_bytes, records);
+    EXPECT_EQ(records[0], entry_size_a) << "trace execution 1: producer entry_size mismatch";
+    EXPECT_EQ(records[extent_record_words], entry_size_a) << "trace execution 1: consumer entry_size mismatch";
+    EXPECT_EQ(records[2 * extent_record_words], entry_size_b) << "trace execution 2: producer entry_size mismatch";
+    EXPECT_EQ(records[3 * extent_record_words], entry_size_b) << "trace execution 2: consumer entry_size mismatch";
 
     distributed::Finish(mesh_command_queue);
-    this->device_->release_mesh_trace(tid);
+    this->device_->release_mesh_trace(trace_id);
 }
 
 }  // namespace tt::tt_metal

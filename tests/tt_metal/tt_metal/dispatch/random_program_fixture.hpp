@@ -95,12 +95,12 @@ protected:
         const CoreType kernel_core_type,
         const bool simple_kernel = false,
         KernelProperties kernel_properties = KernelProperties()) {
-        if (device_->arch() != ARCH::QUASAR) {
-            Program program = CreateProgram(*device_);
-            this->create_kernel(program, kernel_core_type, simple_kernel, kernel_properties);
-            return program;
+        if (simple_kernel || device_->arch() == ARCH::QUASAR) {
+            return this->create_program_from_spec(kernel_core_type, simple_kernel, kernel_properties);
         }
-        return this->create_gen2_program(kernel_core_type, simple_kernel, kernel_properties);
+        Program program = CreateProgram(*device_);
+        this->create_kernel(program, kernel_core_type, simple_kernel, kernel_properties);
+        return program;
     }
 
     void create_kernel(
@@ -242,7 +242,7 @@ protected:
 
 private:
     // Semaphores are not value checked: Gen2 only allows a zero initial value.
-    Program create_gen2_program(
+    Program create_program_from_spec(
         const CoreType kernel_core_type, const bool simple_kernel, KernelProperties kernel_properties) {
         using namespace tt::tt_metal::experimental;
 
@@ -352,6 +352,11 @@ private:
             // Implicit sync takes a transaction id per DFB from a pool of 24.
             .hw_config =
                 DataMovementHardwareConfig{
+                    .config_1xx =
+                        DataMovementHardwareConfig::DataMovement1XXConfig{
+                            .processor = this->get_processor(false),
+                            .noc = NOC::RISCV_0_default,
+                        },
                     .config_2xx =
                         DataMovementHardwareConfig::DataMovement2XXConfig{
                             .disable_dfb_implicit_sync_for_all = true,

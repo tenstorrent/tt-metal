@@ -32,6 +32,7 @@
 #include "impl/dispatch/dispatch_query_manager.hpp"
 #include "impl/dispatch/dispatch_engine_cores.hpp"
 #include <tt-metalium/mesh_workload.hpp>
+#include <tt-metalium/workload/run_args/program_run_args.hpp>
 #include <tt-metalium/workload/specification/program_spec.hpp>
 #include <tt-metalium/tt_backend_api_types.hpp>
 #include <tt-metalium/tt_metal.hpp>
@@ -46,6 +47,7 @@
 #include "impl/buffers/semaphore.hpp"
 #include "tt_metal/impl/dispatch/slow_dispatch.hpp"
 #include "distributed/mesh_device_impl.hpp"
+#include "unit_tests_dispatch_utils.hpp"
 
 namespace tt::tt_metal {
 
@@ -159,7 +161,74 @@ static void test_sems_across_core_types(
     }
 }
 
+namespace {
+
+Program make_local_memory_program(distributed::MeshDevice& mesh_device, const NodeCoord& node) {
+    const std::string kernel_path = "tests/tt_metal/tt_metal/test_kernels/misc/local_mem.cpp";
+    const KernelSpecName first_data_movement_kernel{"first_data_movement"};
+    const KernelSpecName second_data_movement_kernel{"second_data_movement"};
+    const KernelSpecName compute_kernel{"compute"};
+    const ProgramSpec spec{
+        .name = "init_local_memory",
+        .kernels =
+            {KernelSpec{
+                 .unique_id = first_data_movement_kernel,
+                 .source = kernel_path,
+                 .hw_config =
+                     DataMovementHardwareConfig{
+                         .config_1xx =
+                             DataMovementHardwareConfig::DataMovement1XXConfig{
+                                 .processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default}}},
+             KernelSpec{
+                 .unique_id = second_data_movement_kernel,
+                 .source = kernel_path,
+                 .hw_config =
+                     DataMovementHardwareConfig{
+                         .config_1xx =
+                             DataMovementHardwareConfig::DataMovement1XXConfig{
+                                 .processor = DataMovementProcessor::RISCV_1, .noc = NOC::RISCV_1_default}}},
+             KernelSpec{.unique_id = compute_kernel, .source = kernel_path, .hw_config = ComputeHardwareConfig{}}},
+        .work_units = {WorkUnitSpec{
+            .name = "work_unit",
+            .kernels = {first_data_movement_kernel, second_data_movement_kernel, compute_kernel},
+            .target_nodes = node}},
+    };
+    return Program(mesh_device, spec);
+}
+
+Program make_blank_program_with_runtime_args(
+    distributed::MeshDevice& mesh_device, const NodeCoord& node, const std::vector<uint32_t>& runtime_args) {
+    const KernelSpecName kernel_name{"blank"};
+    KernelSpec kernel{
+        .unique_id = kernel_name,
+        .source = "tests/tt_metal/tt_metal/test_kernels/dataflow/blank.cpp",
+        .hw_config = DataMovementHardwareConfig{
+            .config_1xx = DataMovementHardwareConfig::DataMovement1XXConfig{
+                .processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default}}};
+    ProgramRunArgs::KernelRunArgs kernel_run_args{.kernel = kernel_name};
+    for (std::size_t arg_index = 0; arg_index < runtime_args.size(); arg_index++) {
+        const std::string arg_name = fmt::format("arg_{}", arg_index);
+        kernel.runtime_arg_schema.runtime_arg_names.push_back(arg_name);
+        AddRuntimeArgsForNode(kernel_run_args.runtime_arg_values, node, {{arg_name, runtime_args[arg_index]}});
+    }
+    const ProgramSpec spec{
+        .name = "host_transfer_stats",
+        .kernels = {kernel},
+        .work_units = {WorkUnitSpec{.name = "work_unit", .kernels = {kernel_name}, .target_nodes = node}},
+    };
+    Program program = Program(mesh_device, spec);
+    ProgramRunArgs run_args;
+    run_args.kernel_run_args = {kernel_run_args};
+    program.set_program_run_args(run_args);
+    return program;
+}
+
+}  // namespace
+
 TEST_F(MeshDispatchFixture, EthTestBlank) {
+    if (devices_[0]->ethernet_cores().empty()) {
+        GTEST_SKIP() << "the device has no ethernet cores";
+    }
     if (not this->slow_dispatch_) {
         GTEST_SKIP() << "fast dispatch to active ethernet has been removed";
     }
@@ -209,23 +278,7 @@ TEST_F(MeshDispatchFixture, TensixTestInitLocalMemory) {
     auto zero_coord = distributed::MeshCoordinate(0, 0);
     auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
     CoreCoord core = {0, 0};
-    Program program = CreateProgram(*mesh_device);
-
-    CreateKernel(
-        program,
-        "tests/tt_metal/tt_metal/test_kernels/misc/local_mem.cpp",
-        core,
-        DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default});
-
-    CreateKernel(
-        program,
-        "tests/tt_metal/tt_metal/test_kernels/misc/local_mem.cpp",
-        core,
-        DataMovementConfig{.processor = DataMovementProcessor::RISCV_1, .noc = NOC::RISCV_1_default});
-
-    CreateKernel(program, "tests/tt_metal/tt_metal/test_kernels/misc/local_mem.cpp", core, ComputeConfig{});
-
-    workload.add_program(device_range, std::move(program));
+    workload.add_program(device_range, make_local_memory_program(*mesh_device, core));
     this->RunProgram(mesh_device, workload);
 }
 
@@ -237,16 +290,9 @@ TEST_F(MeshDispatchFixture, TensixTestHostTransferStatsCountProgramLoads) {
     auto zero_coord = distributed::MeshCoordinate(0, 0);
     auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
     const CoreCoord core = {0, 0};
-    Program program = CreateProgram();
-    const KernelHandle kernel = CreateKernel(
-        program,
-        "tests/tt_metal/tt_metal/test_kernels/dataflow/blank.cpp",
-        core,
-        DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default});
     const std::vector<uint32_t> runtime_args = {1, 2, 3, 4};
-    SetRuntimeArgs(program, kernel, core, runtime_args);
     distributed::MeshWorkload workload;
-    workload.add_program(device_range, std::move(program));
+    workload.add_program(device_range, make_blank_program_with_runtime_args(*mesh_device, core, runtime_args));
 
     tt::tt_metal::test::HostTransferStatsScope transfer_stats;
     constexpr uint32_t num_launches = 2;
@@ -281,6 +327,9 @@ TEST_F(MeshDispatchFixture, TensixTestHostTransferStatsCountProgramLoads) {
 }
 
 TEST_F(MeshDispatchFixture, EthTestInitLocalMemory) {
+    if (devices_[0]->ethernet_cores().empty()) {
+        GTEST_SKIP() << "the device has no ethernet cores";
+    }
     // This test will hang/assert if there is a failure
 
     if (not this->slow_dispatch_) {
@@ -339,6 +388,9 @@ TEST_F(MeshDispatchFixture, EthTestInitLocalMemory) {
 }
 
 TEST_F(MeshDispatchFixture, TensixActiveEthTestSemaphores) {
+    if (devices_[0]->ethernet_cores().empty()) {
+        GTEST_SKIP() << "the device has no ethernet cores";
+    }
     if (not this->slow_dispatch_) {
         GTEST_SKIP() << "fast dispatch to active ethernet has been removed";
     }
@@ -346,6 +398,9 @@ TEST_F(MeshDispatchFixture, TensixActiveEthTestSemaphores) {
 }
 
 TEST_F(MeshDispatchFixture, TensixIdleEthTestSemaphores) {
+    if (devices_[0]->ethernet_cores().empty()) {
+        GTEST_SKIP() << "the device has no ethernet cores";
+    }
     if (not this->slow_dispatch_) {
         GTEST_SKIP();
     }
@@ -356,6 +411,9 @@ TEST_F(MeshDispatchFixture, TensixIdleEthTestSemaphores) {
 // This test was written to cover issue #12738 (CBs for workers showing up on
 // active eth cores)
 TEST_F(MeshDispatchFixture, TensixActiveEthTestCBsAcrossDifferentCoreTypes) {
+    if (devices_[0]->ethernet_cores().empty()) {
+        GTEST_SKIP() << "the device has no ethernet cores";
+    }
     if (not this->slow_dispatch_) {
         GTEST_SKIP() << "fast dispatch to active ethernet has been removed";
     }
@@ -482,20 +540,24 @@ TEST_F(EarlyReturnFixture, TensixKernelEarlyReturn) {
         distributed::MeshWorkload workload;
         auto zero_coord = distributed::MeshCoordinate(0, 0);
         auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
-        Program program = CreateProgram(*mesh_device);
         // Kernel will block if it doesn't early return.
-        CreateKernel(
-            program,
-            "tests/tt_metal/tt_metal/test_kernels/dataflow/writer_unary.cpp",
-            worker,
-            DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default});
-
-        workload.add_program(device_range, std::move(program));
+        workload.add_program(
+            device_range,
+            make_single_kernel_program(
+                *mesh_device,
+                "early_return",
+                "tests/tt_metal/tt_metal/test_kernels/misc/spin_forever_2_0.cpp",
+                CoreRangeSet(CoreRange(worker)),
+                {HalProgrammableCoreType::TENSIX, HalProcessorClassType::DM, 0}));
         this->RunProgram(mesh_device, workload);
     }
 }
 
 TEST_F(MeshDispatchFixture, TensixCircularBufferInitFunction) {
+    if (this->arch_ == tt::ARCH::QUASAR) {
+        GTEST_SKIP() << "legacy circular buffers are not usable on Quasar: legacy kernels are rejected and Metal 2.0 "
+                        "programs take DFBs";
+    }
     for (const auto& mesh_device : devices_) {
         for (bool use_assembly : {true, false}) {
             // mask_high only applies to architectures supporting more than 32 circular buffers
@@ -531,6 +593,10 @@ TEST_F(MeshDispatchFixture, TensixCircularBufferInitFunction) {
 }
 
 TEST_F(MeshDispatchFixture, TensixTestCreateCircularBufferOnOutOfRangeCores) {
+    if (this->arch_ == tt::ARCH::QUASAR) {
+        GTEST_SKIP() << "legacy circular buffers are not usable on Quasar: legacy kernels are rejected and Metal 2.0 "
+                        "programs take DFBs";
+    }
     for (auto& device : devices_) {
         auto& cq = device->mesh_command_queue();
         distributed::MeshWorkload workload;
