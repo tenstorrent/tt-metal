@@ -27,7 +27,7 @@
  * @brief Configure the unpack thread for a custom_mm block matmul.
  *
  * @tparam transpose: Transpose the SrcA read, values = <true/false>
- * @tparam clear_src: Zero both SrcB banks once here, values = <true/false>
+ * @tparam clear_src: Zero both SrcB banks once here (power only), values = <true/false>, default false
  * @param operand0: CB of the activations, whose face_r_dim this reads. Its data goes to SrcB.
  * @param operand1: CB of the weights (SrcA). Its unpack format selects the instruction tuning and its face count (4,
  *                  or 2 for [32, 16] tiles) the unpack size.
@@ -36,7 +36,7 @@
  *       that writes SrcB.
  * @note On the math thread, pair with @ref llk_math_custom_mm_init.
  */
-template <bool transpose = false, bool clear_src = true>
+template <bool transpose = false, bool clear_src = false>
 inline void llk_unpack_AB_custom_mm_init(
     const std::uint32_t operand0, const std::uint32_t operand1, const std::uint32_t ct_dim = 1) {
     SAN_HOOK(unsupported());

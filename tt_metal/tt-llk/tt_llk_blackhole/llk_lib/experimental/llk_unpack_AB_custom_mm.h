@@ -181,8 +181,9 @@ inline void _llk_unpack_AB_custom_mm_mop_config_(const std::uint32_t ct_dim, con
  * Sets the unpacker X ends, records the MOP and replay buffer the execute runs, and resets the counters.
  *
  * @tparam transpose: Transpose the SrcA read, values = <true/false>
- * @tparam clear_src: Zero both SrcB banks once here, values = <true/false>. Only unpB_face_r_dim rows of each
- *                    SrcB face are unpacked, so zeroing the rest saves FPU power.
+ * @tparam clear_src: Zero both SrcB banks once here, values = <true/false>, default false. Only unpB_face_r_dim
+ *                    rows of each SrcB face are unpacked, so zeroing the rest only saves FPU power: the other
+ *                    rows feed only DEST rows at or beyond unpB_face_r_dim of each face, which are never packed.
  * @param unpB_face_r_dim: Activation rows per face, 1, 2, 4 or 8. Sets unpacker 1's X end.
  * @param unpA_dst_format: Unpack destination format of the weights (SrcA); Bfp4_b selects a tuned sequence.
  * @param ct_dim: Output width in tiles, 1 to 34.
@@ -192,7 +193,7 @@ inline void _llk_unpack_AB_custom_mm_mop_config_(const std::uint32_t ct_dim, con
  *       that writes SrcB: the execute does not reprogram the MOP, and the SrcB clear happens only here.
  * @note On the math thread, pair with @ref _llk_math_custom_mm_init_, giving it the same face count.
  */
-template <bool transpose = false, bool clear_src = true>
+template <bool transpose = false, bool clear_src = false>
 inline void _llk_unpack_AB_custom_mm_init_(
     const std::uint32_t unpB_face_r_dim,
     const std::uint32_t unpA_dst_format,

@@ -37,7 +37,7 @@ template <
     bool transpose = false,
     CustomMmDestLayout layout = CustomMmDestLayout::Default,
     bool fp32_dest_acc_en = DST_ACCUM_MODE,
-    bool clear_src = true,
+    bool clear_src = false,
     DataFormat F0,
     TensorShape S0,
     DataFormat F1,
@@ -83,7 +83,7 @@ template <
     bool transpose = false,
     CustomMmDestLayout layout = CustomMmDestLayout::Default,
     bool fp32_dest_acc_en = DST_ACCUM_MODE,
-    bool clear_src = true,
+    bool clear_src = false,
     DataFormat F1,
     TensorShape S1>
 ALWI void custom_mm_block_init(
@@ -134,7 +134,7 @@ ALWI void custom_mm_block_init(
 template <
     bool transpose = false,
     CustomMmDestLayout layout = CustomMmDestLayout::Default,
-    bool clear_src = true,
+    bool clear_src = false,
     DataFormat F0,
     TensorShape S0,
     DataFormat F1,
@@ -166,7 +166,7 @@ ALWI void custom_mm_block_init_short(
 template <
     bool transpose = false,
     CustomMmDestLayout layout = CustomMmDestLayout::Default,
-    bool clear_src = true,
+    bool clear_src = false,
     DataFormat F1,
     TensorShape S1>
 ALWI void custom_mm_block_init_short(
@@ -198,7 +198,7 @@ ALWI void custom_mm_block_init_short(
 template <
     bool transpose = false,
     CustomMmDestLayout layout = CustomMmDestLayout::Default,
-    bool clear_src = true,
+    bool clear_src = false,
     bool fp32_dest_acc_en = DST_ACCUM_MODE,
     DataFormat F1,
     TensorShape S1,

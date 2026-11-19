@@ -27,7 +27,7 @@ namespace ckernel {
 template <
     bool transpose = false,
     CustomMmDestLayout layout = CustomMmDestLayout::Default,
-    bool clear_src = true,
+    bool clear_src = false,
     DataFormat F0,
     TensorShape S0,
     DataFormat F1,
@@ -52,7 +52,7 @@ ALWI void compressed_custom_mm_block_init_short(
 template <
     bool transpose = false,
     CustomMmDestLayout layout = CustomMmDestLayout::Default,
-    bool clear_src = true,
+    bool clear_src = false,
     DataFormat F1,
     TensorShape S1>
 ALWI void compressed_custom_mm_block_init_short(

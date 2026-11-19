@@ -132,7 +132,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
             TTI_UNPACR_NOP(SrcA, 0, 0, 0, 0, 0, 0, p_unpacr_nop::CLR_SRC_1, p_unpacr_nop::CLR_SRC);
         }
 
-        _llk_unpack_AB_custom_mm_init_<transpose, true /* clear_src */>(in0_face_r_dim, formats.unpack_B_dst, CT_DIM, num_faces_B);
+        _llk_unpack_AB_custom_mm_init_<transpose, false /* clear_src */>(in0_face_r_dim, formats.unpack_B_dst, CT_DIM, num_faces_B);
         PROFILER_SYNC();
     }
     {

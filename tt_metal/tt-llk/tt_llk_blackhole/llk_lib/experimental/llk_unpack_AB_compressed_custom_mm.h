@@ -74,15 +74,16 @@ inline void _llk_unpack_AB_compressed_custom_mm_mop_config_()
  * SrcA tile-size increments (SCRATCH_SEC0-2) and tile descriptors (GPRs PERF_UNPACK_NUM_TILES_1-3) the execute uses.
  *
  * @tparam transpose: Transpose the SrcA read, values = <true/false>
- * @tparam clear_src: Zero both SrcB banks once here, values = <true/false>. Only unpB_face_r_dim rows of each
- *                    SrcB face are unpacked, so zeroing the rest saves FPU power.
+ * @tparam clear_src: Zero both SrcB banks once here, values = <true/false>, default false. Only unpB_face_r_dim
+ *                    rows of each SrcB face are unpacked, so zeroing the rest only saves FPU power: the other
+ *                    rows feed only DEST rows at or beyond unpB_face_r_dim of each face, which are never packed.
  * @param unpB_face_r_dim: Activation rows per face, 1, 2, 4 or 8. Sets unpacker 1's X end.
  * @note Call this before @ref _llk_unpack_AB_compressed_custom_mm_, and again after any other op has run, in
  *       particular one that writes SrcB, SCRATCH_SEC0-2 or those GPRs (a custom_mm execute rewrites SCRATCH_SEC0/1):
  *       the execute relies on all of them and sets none.
  * @note On the math thread, pair with @ref _llk_math_compressed_custom_mm_init_.
  */
-template <bool transpose = false, bool clear_src = true>
+template <bool transpose = false, bool clear_src = false>
 inline void _llk_unpack_AB_compressed_custom_mm_init_(const std::uint32_t unpB_face_r_dim)
 {
     volatile std::uint32_t* cfg = get_cfg_pointer();

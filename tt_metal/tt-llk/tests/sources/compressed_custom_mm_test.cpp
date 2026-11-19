@@ -121,7 +121,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
             TILE_SIZE_UNPACK_A); // SrcB tile size (in0)
 
         // compressed_custom_mm unpack init takes only unpB_face_r_dim (no CT_DIM, unlike custom_mm).
-        _llk_unpack_AB_compressed_custom_mm_init_<false /* transpose */, true /* clear_src */>(in0_face_r_dim);
+        _llk_unpack_AB_compressed_custom_mm_init_<false /* transpose */, false /* clear_src */>(in0_face_r_dim);
         PROFILER_SYNC();
     }
     {

@@ -45,7 +45,7 @@ namespace ckernel {
  * | transpose        | The transpose flag for performing transpose operation on in1                              | bool               | true/false                                              | False (default false)   |
  * | layout           | Where the output tiles sit in DEST, see CustomMmDestLayout; execute and uninit must match | CustomMmDestLayout | Default, Dense, Compact                                 | False (default Default) |
  * | fp32_dest_acc_en | Whether dest accumulates in fp32; defaults to the kernel's DST_ACCUM_MODE                 | bool               | true/false                                              | False                   |
- * | clear_src        | Whether to clear SrcB at init (saves power as only 1/8 FPU rows are used)                 | bool               | true/false                                              | False (default true)    |
+ * | clear_src        | Whether to clear SrcB at init (saves power as only 1/8 FPU rows are used)                 | bool               | true/false                                              | False (default false)   |
  * | in0_cb_id        | The identifier of the first input circular buffer (CB)                                    | uint32_t           | 0 to 31                                                 | True                    |
  * | in1_cb_id        | The identifier of the second input circular buffer (CB)                                   | uint32_t           | 0 to 31                                                 | True                    |
  * | out_cb_id        | The identifier of the output circular buffer (CB)                                         | uint32_t           | 0 to 31                                                 | True                    |
@@ -55,7 +55,7 @@ template <
     bool transpose = false,
     CustomMmDestLayout layout = CustomMmDestLayout::Default,
     bool fp32_dest_acc_en = DST_ACCUM_MODE,
-    bool clear_src = true>
+    bool clear_src = false>
 ALWI void compressed_custom_mm_block_init(
     const std::uint32_t in0_cb_id, const std::uint32_t in1_cb_id, const std::uint32_t out_cb_id) {
     // Intentionally swap in0 and in1 as operation specific hw_configures are deprecated
@@ -92,13 +92,13 @@ ALWI void compressed_custom_mm_block_init(
  * |-----------|-------------------------------------------------------------------------------------------|--------------------|---------------------------------------------------------|-------------------------|
  * | transpose | The transpose flag for performing transpose operation on in1                              | bool               | true/false                                              | False (default false)   |
  * | layout    | Where the output tiles sit in DEST, see CustomMmDestLayout; execute and uninit must match | CustomMmDestLayout | Default, Dense, Compact                                 | False (default Default) |
- * | clear_src | Whether to clear SrcB at init (saves power as only 1/8 FPU rows are used)                 | bool               | true/false                                              | False (default true)    |
+ * | clear_src | Whether to clear SrcB at init (saves power as only 1/8 FPU rows are used)                 | bool               | true/false                                              | False (default false)   |
  * | in0_cb_id | The identifier of the first input circular buffer (CB)                                    | uint32_t           | 0 to 31                                                 | True                    |
  * | in1_cb_id | The identifier of the second input circular buffer (CB)                                   | uint32_t           | 0 to 31                                                 | True                    |
  * | out_cb_id | The identifier of the output circular buffer (CB)                                         | uint32_t           | 0 to 31                                                 | True                    |
  */
 // clang-format on
-template <bool transpose = false, CustomMmDestLayout layout = CustomMmDestLayout::Default, bool clear_src = true>
+template <bool transpose = false, CustomMmDestLayout layout = CustomMmDestLayout::Default, bool clear_src = false>
 ALWI void compressed_custom_mm_block_init_short(
     const std::uint32_t in0_cb_id, const std::uint32_t in1_cb_id, const std::uint32_t out_cb_id) {
     UNPACK((llk_unpack_AB_compressed_custom_mm_init<transpose, clear_src>(in0_cb_id, in1_cb_id)));
