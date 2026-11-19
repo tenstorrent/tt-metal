@@ -26,7 +26,6 @@
 // RUN: not %{blackhole_tensix_diagnose} %{blackhole_math_thread} %t/operation-count-zero.cpp 2>&1 | FileCheck %s --check-prefix=OPERATION_COUNT
 // RUN: not %{blackhole_tensix_diagnose} %{blackhole_math_thread} %t/operation-long-count.cpp 2>&1 | FileCheck %s --check-prefix=OPERATION_MASK_HIGH
 // RUN: not %{blackhole_tensix_diagnose} %{blackhole_math_thread} %t/operation-wide-mask.cpp 2>&1 | FileCheck %s --check-prefix=OPERATION_MASK_HIGH
-// clang-format on
 
 // IF_CLEAR_SHAPE: error: static assertion failed: Template 0 MOP if_clear takes {a0}, {a0, b}, {a0, a1, a2, a3} or {a0, a1, a2, a3, b}
 // B_PAIR: error: static assertion failed: Template 0 MOP issues InsnB and SkipB under one flag
@@ -35,32 +34,33 @@
 // UPDATE_UNIQUE: error: static assertion failed: Template 1 MOP update takes each word at most once
 // RUNNER_COUNT: error: static assertion failed: MOP encoded count must fit in 7 bits
 
-// Checks evaluated in a constexpr configuration trap instead of reporting their
-// message; the expansion notes name the public call and the check that failed.
+// Checks evaluated in a constexpr configuration trap; the expansion notes name the
+// public call and the failed requirement's message.
 // ANOMALY: in 'constexpr' expansion of 'hal::mop::loop(
-// ANOMALY: in 'constexpr' expansion of '{{.*}}check<assert_no_count_anomaly>
+// ANOMALY: in 'constexpr' expansion of 'hal::detail::require({{.*}}"Template 1 MOP configuration triggers the no-start/zero-inner/end-op outer count anomaly
 // ANOMALY: error: '__builtin_trap()' is not a constant expression
 // UNSUPPORTED_END_OP1: in 'constexpr' expansion of 'hal::mop::loop(
-// UNSUPPORTED_END_OP1: in 'constexpr' expansion of '{{.*}}check<assert_no_unsupported_end_op1_read>
+// UNSUPPORTED_END_OP1: in 'constexpr' expansion of 'hal::detail::require({{.*}}"Template 1 MOP configuration with no start op, an empty inner loop and no end op is unsupported
 // UNSUPPORTED_END_OP1: error: '__builtin_trap()' is not a constant expression
 // ISSUES_NOTHING: in 'constexpr' expansion of 'hal::mop::loop(
-// ISSUES_NOTHING: in 'constexpr' expansion of '{{.*}}check<assert_issues_something>
+// ISSUES_NOTHING: in 'constexpr' expansion of 'hal::detail::require({{.*}}"Template 1 MOP configuration issues nothing
 // ISSUES_NOTHING: error: '__builtin_trap()' is not a constant expression
 // COUNT_WIDTH: in 'constexpr' expansion of 'hal::mop::loop(
-// COUNT_WIDTH: in 'constexpr' expansion of '{{.*}}check<assert_valid_count>
+// COUNT_WIDTH: in 'constexpr' expansion of 'hal::detail::require({{.*}}"Template 1 MOP loop count must fit in 10 bits
 // COUNT_WIDTH: error: '__builtin_trap()' is not a constant expression
 // PATCH_EMPTY: in 'constexpr' expansion of '{{.*}}::patch<7>
-// PATCH_EMPTY: in 'constexpr' expansion of '{{.*}}check<assert_patch_reachable>
+// PATCH_EMPTY: in 'constexpr' expansion of 'hal::detail::require({{.*}}"Template 1 MOP last-iteration ops are never issued with an empty inner loop
 // PATCH_EMPTY: error: '__builtin_trap()' is not a constant expression
 // PATCH_LAST_INNER: in 'constexpr' expansion of '{{.*}}::patch<8>
-// PATCH_LAST_INNER: in 'constexpr' expansion of '{{.*}}check<{{.*}}assert_last_inner_reachable>
+// PATCH_LAST_INNER: in 'constexpr' expansion of 'hal::detail::require({{.*}}"Template 1 MOP last_inner op is never issued with an outer count of 1
 // PATCH_LAST_INNER: error: '__builtin_trap()' is not a constant expression
 // OPERATION_COUNT: in 'constexpr' expansion of '{{.*}}Runner<hal::mop::MopTemplate::Template0>::operation()
-// OPERATION_COUNT: in 'constexpr' expansion of '{{.*}}check<assert_valid_run_count>
+// OPERATION_COUNT: in 'constexpr' expansion of 'hal::detail::require({{.*}}"MOP encoded count must fit in 7 bits
 // OPERATION_COUNT: error: '__builtin_trap()' is not a constant expression
 // OPERATION_MASK_HIGH: in 'constexpr' expansion of '{{.*}}Runner<hal::mop::MopTemplate::Template0>::operation()
-// OPERATION_MASK_HIGH: in 'constexpr' expansion of '{{.*}}check<assert_mask_high_unused>
+// OPERATION_MASK_HIGH: in 'constexpr' expansion of 'hal::detail::require({{.*}}"Template 0 MOP operation cannot write the high mask bits
 // OPERATION_MASK_HIGH: error: '__builtin_trap()' is not a constant expression
+// clang-format on
 
 //--- configs.h
 #pragma once

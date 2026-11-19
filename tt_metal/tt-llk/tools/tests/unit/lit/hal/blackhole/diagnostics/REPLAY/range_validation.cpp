@@ -16,7 +16,8 @@
 // clang-format on
 
 // CHECK: error: static assertion failed: Replay range requires count >= 1 and start + count <= 32
-// CONSTANT_EVALUATION: error: call to non-'constexpr' function 'void hal::replay::detail::invalid_range_in_constant_expression()'
+// CONSTANT_EVALUATION: in 'constexpr' expansion of 'hal::detail::require({{.*}}"Replay range requires count >= 1 and start + count <= 32"))'
+// CONSTANT_EVALUATION: error: '__builtin_trap()' is not a constant expression
 // NEGATIVE_COUNT: error: narrowing conversion of '-1' from 'int' to 'uint32_t'
 
 //--- record-start-outside.cpp
