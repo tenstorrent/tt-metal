@@ -40,7 +40,7 @@ from loguru import logger
 import ttnn
 from models.demos.deepseek_v3_d_p.reference.deepseek_v4.modeling_deepseek_v4 import DeepseekV4RotaryEmbedding
 from models.demos.deepseek_v3_d_p.tt.tt_distributed_rms_norm import TtDistributedRmsNorm
-from models.demos.deepseek_v3_d_p.tt.v4.trace_island import TraceIsland
+from models.demos.deepseek_v3_d_p.tt.v4.trace_island import TraceIsland, copy_into
 
 from . import hostprof as HP
 from .attention import V41CSA, v41_hf_config
