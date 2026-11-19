@@ -54,7 +54,7 @@ void bind_entry_correction(nb::module_& mod) {
                 the products accumulate in DST. Defaults to HiFi2 with FP32 destination accumulation.
 
         Returns:
-            tuple[ttnn.Tensor, ttnn.Tensor]: BFLOAT16 TILE-layout ``[B*H, chunks, 32, K]`` chunk outputs and
+            tuple[ttnn.Tensor, ttnn.Tensor]: BFLOAT16 TILE-layout ``[B*H, local_rows, K]`` chunk outputs and
                 the FLOAT32 TILE-layout ``[B*H, K, K]`` final state in DRAM.
 
         Note:

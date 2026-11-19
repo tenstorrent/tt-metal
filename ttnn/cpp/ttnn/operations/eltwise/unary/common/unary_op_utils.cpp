@@ -12,6 +12,7 @@
 #include <variant>
 #include <tt_stl/assert.hpp>
 #include "ttnn/tensor/types.hpp"
+#include <tt-metalium/bfloat16.hpp>
 #include "ttnn/operations/eltwise/binary/common/binary_op_utils.hpp"
 
 using namespace tt::tt_metal;
@@ -20,11 +21,16 @@ namespace ttnn::operations::unary::utils {
 
 namespace {
 
+uint32_t float_scalar_bits(float value, std::optional<DataType> input_dtype) {
+    return std::bit_cast<uint32_t>(input_dtype == DataType::BFLOAT16 ? static_cast<float>(bfloat16(value)) : value);
+}
+
 std::string get_macro_definition(UnaryOpType op_type) {
     switch (op_type) {
         case UnaryOpType::EXP: return "SFPU_OP_EXP_INCLUDE";
         case UnaryOpType::GELU:
         case UnaryOpType::GELU_TANH: return "SFPU_OP_GELU_INCLUDE";
+        case UnaryOpType::QUICK_GELU: return "SFPU_OP_QUICK_GELU_INCLUDE";
         case UnaryOpType::RECIP: return "SFPU_OP_RECIP_INCLUDE";
         case UnaryOpType::SQRT: return "SFPU_OP_SQRT_INCLUDE";
         case UnaryOpType::RSQRT: return "SFPU_OP_RSQRT_INCLUDE";
@@ -264,7 +270,7 @@ std::pair<std::string, std::string> get_op_init_and_func_parameterized(
             }
             return {
                 "relu_max_tile_init();",
-                fmt::format("relu_max_tile({}, {:#x}u);", idst, std::bit_cast<uint32_t>(param0))};
+                fmt::format("relu_max_tile({}, {:#x}u);", idst, float_scalar_bits(param0, input_dtype))};
 
         case UnaryOpType::RELU_MIN:
             TT_FATAL(
@@ -301,7 +307,7 @@ std::pair<std::string, std::string> get_op_init_and_func_parameterized(
             }
             return {
                 "relu_min_tile_init();",
-                fmt::format("relu_min_tile({}, {:#x}u);", idst, std::bit_cast<uint32_t>(param0))};
+                fmt::format("relu_min_tile({}, {:#x}u);", idst, float_scalar_bits(param0, input_dtype))};
 
         case UnaryOpType::POWER:
             return {
@@ -357,7 +363,7 @@ std::pair<std::string, std::string> get_op_init_and_func_parameterized(
         case UnaryOpType::HEAVISIDE:
             return {
                 "heaviside_tile_init();",
-                fmt::format("heaviside_tile({}, {:#x}u);", idst, std::bit_cast<uint32_t>(param0))};
+                fmt::format("heaviside_tile({}, {:#x}u);", idst, float_scalar_bits(param0, input_dtype))};
         case UnaryOpType::BITWISE_XOR:
             return {
                 "bitwise_xor_tile_init();",
@@ -691,7 +697,7 @@ std::pair<std::string, std::string> get_op_init_and_func_parameterized(
             }
             return {
                 "unary_max_tile_init();",
-                fmt::format("unary_max_tile({}, {:#x}u);", idst, std::bit_cast<uint32_t>(param0))};
+                fmt::format("unary_max_tile({}, {:#x}u);", idst, float_scalar_bits(param0, input_dtype))};
 
         case UnaryOpType::MINIMUM:
             TT_FATAL(
@@ -711,7 +717,7 @@ std::pair<std::string, std::string> get_op_init_and_func_parameterized(
             }
             return {
                 "unary_min_tile_init();",
-                fmt::format("unary_min_tile({}, {:#x}u);", idst, std::bit_cast<uint32_t>(param0))};
+                fmt::format("unary_min_tile({}, {:#x}u);", idst, float_scalar_bits(param0, input_dtype))};
 
         case UnaryOpType::CELU:
             return {
@@ -790,7 +796,10 @@ std::pair<std::string, std::string> get_op_init_and_func_parameterized(
             return {
                 "clamp_tile_init();",
                 fmt::format(
-                    "clamp_tile({}, {}, {});", idst, std::bit_cast<uint32_t>(param0), std::bit_cast<uint32_t>(param1))};
+                    "clamp_tile({}, {}, {});",
+                    idst,
+                    float_scalar_bits(param0, input_dtype),
+                    float_scalar_bits(param1, input_dtype))};
         }
         case UnaryOpType::HARDTANH: {
             float param1 = params[1];
@@ -799,8 +808,8 @@ std::pair<std::string, std::string> get_op_init_and_func_parameterized(
                 fmt::format(
                     "hardtanh_tile({}, {:#x}u, {:#x}u);",
                     idst,
-                    std::bit_cast<uint32_t>(param0),
-                    std::bit_cast<uint32_t>(param1))};
+                    float_scalar_bits(param0, input_dtype),
+                    float_scalar_bits(param1, input_dtype))};
         }
         case UnaryOpType::THRESHOLD: {
             float param1 = params[1];
@@ -810,7 +819,7 @@ std::pair<std::string, std::string> get_op_init_and_func_parameterized(
                     "threshold_tile({}, {:#x}u, {:#x}u);",
                     idst,
                     std::bit_cast<uint32_t>(param0),
-                    std::bit_cast<uint32_t>(param1))};
+                    float_scalar_bits(param1, input_dtype))};
         }
         case UnaryOpType::SELU: {
             TT_FATAL(params.size() == 2, "Expected selu to take 2 parameters");
@@ -968,6 +977,10 @@ std::pair<std::string, std::string> get_op_init_and_func_default(
             if (input_dtype == DataType::INT32) {
                 return {"ltz_tile_init();", fmt::format("ltz_tile_int32({});", idst)};
             }
+            if (input_dtype == DataType::UINT32) {
+                // No unsigned value is below zero, so the result is always 0.
+                return {"fill_tile_init();", fmt::format("fill_tile_int<DataFormat::UInt32>({}, 0u);", idst)};
+            }
             return {"ltz_tile_init();", fmt::format("        ltz_tile({});", idst)};
 
         case UnaryOpType::GTZ:
@@ -975,6 +988,10 @@ std::pair<std::string, std::string> get_op_init_and_func_default(
                 input_dtype.has_value(), "Missing input dtype: Expected a valid input dtype, but none was provided.");
             if (input_dtype == DataType::INT32) {
                 return {"gtz_tile_init();", fmt::format("gtz_tile_int32({});", idst)};
+            }
+            if (input_dtype == DataType::UINT32) {
+                // For unsigned x, x > 0 is x != 0.
+                return {"nez_tile_init();", fmt::format("nez_tile_uint32({});", idst)};
             }
             return {"gtz_tile_init();", fmt::format("        gtz_tile({});", idst)};
 
@@ -984,6 +1001,10 @@ std::pair<std::string, std::string> get_op_init_and_func_default(
             if (input_dtype == DataType::INT32) {
                 return {"gez_tile_init();", fmt::format("gez_tile_int32({});", idst)};
             }
+            if (input_dtype == DataType::UINT32) {
+                // Every unsigned value is at least zero, so the result is always 1.
+                return {"fill_tile_init();", fmt::format("fill_tile_int<DataFormat::UInt32>({}, 1u);", idst)};
+            }
             return {"gez_tile_init();", fmt::format("        gez_tile({});", idst)};
 
         case UnaryOpType::LEZ:
@@ -991,6 +1012,10 @@ std::pair<std::string, std::string> get_op_init_and_func_default(
                 input_dtype.has_value(), "Missing input dtype: Expected a valid input dtype, but none was provided.");
             if (input_dtype == DataType::INT32) {
                 return {"lez_tile_init();", fmt::format("lez_tile_int32({});", idst)};
+            }
+            if (input_dtype == DataType::UINT32) {
+                // For unsigned x, x <= 0 is x == 0.
+                return {"eqz_tile_init();", fmt::format("eqz_tile_uint32({});", idst)};
             }
             return {"lez_tile_init();", fmt::format("        lez_tile({});", idst)};
 
@@ -1023,6 +1048,7 @@ std::pair<std::string, std::string> get_op_init_and_func_default(
             TT_FATAL(
                 input_dtype.has_value(), "Missing input dtype: Expected a valid input dtype, but none was provided.");
             return {"rounding_op_tile_init();", fmt::format("frac_tile({});", idst)};
+        case UnaryOpType::QUICK_GELU: return {"quick_gelu_tile_init();", fmt::format("quick_gelu_tile({});", idst)};
         case UnaryOpType::RELU6:
             if (input_dtype == DataType::UINT16) {
                 return {"relu_max_tile_init();", fmt::format("relu_max_tile_uint16({}, 6u);", idst)};
@@ -1261,6 +1287,37 @@ std::optional<DataType> typecast_target_dtype(const EltwiseUnaryWithParam& op) {
         op.get_params());
 }
 
+std::optional<std::map<std::string, std::string>> get_bf16_kernel_defines(
+    const std::vector<EltwiseUnaryWithParam>& op_chain,
+    DataType input_dtype,
+    DataType output_dtype,
+    bool fp32_dest_acc_en,
+    tt::ARCH arch) {
+    // The generated kernels are fitted for BF16 data in a 16-bit DEST and exist for Blackhole and
+    // Wormhole only.
+    if (op_chain.size() != 1 || input_dtype != DataType::BFLOAT16 || output_dtype != DataType::BFLOAT16 ||
+        fp32_dest_acc_en || (arch != tt::ARCH::BLACKHOLE && arch != tt::ARCH::WORMHOLE_B0)) {
+        return std::nullopt;
+    }
+    const auto& op = op_chain[0];
+    // Each case names its op where its kernel serves the call: on the boards it installs on, with the
+    // parameters it is fitted for.
+    std::string op_name;
+    switch (op.type()) {
+        case UnaryOpType::QUICK_GELU: op_name = arch == tt::ARCH::BLACKHOLE ? "quick_gelu" : ""; break;
+        default: return std::nullopt;
+    }
+    if (op_name.empty()) {
+        return std::nullopt;
+    }
+    return std::map<std::string, std::string>{
+        {"SFPU_OP_CHAIN_0", "SFPU_OP_CHAIN_0_INIT_0 SFPU_OP_CHAIN_0_FUNC_0"},
+        {"SFPU_OP_CHAIN_0_INIT_0", fmt::format("{}_tile_init();", op_name)},
+        {"SFPU_OP_CHAIN_0_FUNC_0", fmt::format("{}_tile(0);", op_name)},
+        {get_macro_definition(op.type()), "1"},
+    };
+}
+
 std::map<std::string, std::string> get_block_defines(
     const std::vector<EltwiseUnaryWithParam>& op_chain,
     const std::string& block_id,
@@ -1294,6 +1351,10 @@ std::map<std::string, std::string> get_block_defines(
 // update split eltwise ops include macros
 void update_macro_defines(UnaryOpType op_type, std::map<std::string, std::string>& defines) {
     defines[get_macro_definition(op_type)] = "1";
+    // UInt32 GEZ / LTZ are emitted as fill_tile_int; the include does not depend on the dtype, so add it always.
+    if (op_type == UnaryOpType::GEZ || op_type == UnaryOpType::LTZ) {
+        defines["SFPU_OP_FILL_INCLUDE"] = "1";
+    }
 }
 
 void add_input_dtype_defines(DataType dtype, std::map<std::string, std::string>& defines) {
@@ -1410,5 +1471,28 @@ uint32_t pack_scalar_runtime_arg(const EltwiseUnaryWithParam& op, size_t index, 
             TT_THROW("Unsupported parameter type for index {}", index);
         },
         op.base);
+}
+
+bool is_non_finite_at_zero(const EltwiseUnaryWithParam& op) {
+    switch (op.type()) {
+        case UnaryOpType::RECIP:
+        case UnaryOpType::RSQRT:
+        case UnaryOpType::LOG:
+        case UnaryOpType::LOG2:
+        case UnaryOpType::LOG10:
+        case UnaryOpType::ACOSH:
+        case UnaryOpType::LGAMMA:
+        case UnaryOpType::DIGAMMA:
+        case UnaryOpType::POLYGAMMA:
+        case UnaryOpType::RDIV: return true;
+        case UnaryOpType::POWER:
+            return op.get_param_if<float>(0).value_or(0.0f) < 0.0f || op.get_param_if<std::int32_t>(0).value_or(0) < 0;
+        case UnaryOpType::LOGIT: {
+            // eps < 0 (None) skips the clamp, and a clamp range reaching 0 keeps it: log(0 / (1 - 0)) is -inf.
+            const float eps = op.get_param_if<float>(0).value_or(-1.0f);
+            return std::min(eps, 1.0f - eps) <= 0.0f;
+        }
+        default: return false;
+    }
 }
 }  // namespace ttnn::operations::unary::utils

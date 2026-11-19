@@ -40,8 +40,9 @@ struct PertinentFields {
     bool whole_spec = false;
 
     // The TensorLayout alignment, the one component of tensor_layout a relaxation can free. It reaches
-    // the TensorAccessor only through the padded shape and the ROW-MAJOR page size, so freeing it opens
-    // no CTA to staleness that freeing the shape had not already opened -- and page_size and
+    // the TensorAccessor only through the padded shape and the ROW-MAJOR page size. Under padded-shape
+    // matching both stay pinned, so freeing it moves nothing a CTA bakes. Under dynamic_tensor_shape it
+    // opens no CTA to staleness that freeing the shape had not already opened, and page_size and
     // shard_distribution below still pin what those CTAs bake.
     bool alignment = false;
 
@@ -106,7 +107,9 @@ PertinentFields pertinent_fields(const TensorSpecRelaxations& relaxation) {
         };
     }
     if (relaxation.match_padded_shape_only) {
-        return PertinentFields{.alignment = true, .padded_shape = true};
+        // The padded shape is pinned. The alignment is too, unless relaxed: the tensor argument may then
+        // reach the same padded shape from a different logical shape and alignment.
+        return PertinentFields{.alignment = !relaxation.relax_tensor_layout_alignment, .padded_shape = true};
     }
     // relax_logical_rank is inert on its own, as its doc states: neither the strict comparison nor
     // padded-shape matching carries a separable rank term that dropping it could loosen. Note what
@@ -115,10 +118,10 @@ PertinentFields pertinent_fields(const TensorSpecRelaxations& relaxation) {
     // ordinary case -- while already tolerating, with nobody opting in, the rank changes the padding
     // absorbs below it (with TILE's rank-2 default alignment, rank 1 against rank 2).
     //
-    // relax_tensor_layout_alignment is inert on its own too, by choice. Under strict matching, a freed alignment
+    // relax_tensor_layout_alignment is inert under strict matching, by choice. There a freed alignment
     // could change the padded shape, and with it the page count, which a strict-mode op is entitled
-    // to bake. Padded-shape matching could tolerate two alignments that pad to the same shape, but no
-    // op has asked for that.
+    // to bake. An op that wants the alignment free at a fixed padded shape says so with
+    // match_padded_shape_only.
     return PertinentFields{.whole_spec = true};
 }
 

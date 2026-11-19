@@ -60,6 +60,10 @@ struct AllGatherMinimalMatmulAsyncParams {
     // so a pinned and an unpinned call that resolve alike share one program.
     std::optional<bool> transpose_core_grid;
 
+    // Input blocks reach their whole row or column of the matmul grid in one NoC multicast instead of a core-to-core
+    // relay. Independent of the fabric config.
+    bool use_mcast = false;
+
     AllGatherMinimalMatmulAsyncParams(
         std::optional<const MinimalMatmulConfig> config,
         std::optional<ttnn::operations::unary::UnaryWithParam> fused_activation,
@@ -86,7 +90,8 @@ struct AllGatherMinimalMatmulAsyncParams {
         ttnn::ccl::Topology fsdp_topology,
         bool fuse_swiglu = false,
         std::vector<uint32_t> chunk_sizes = {},
-        std::optional<bool> transpose_core_grid = std::nullopt) :
+        std::optional<bool> transpose_core_grid = std::nullopt,
+        bool use_mcast = false) :
         config(config),
         fused_activation(std::move(fused_activation)),
         output_mem_config(std::move(output_mem_config)),
@@ -112,7 +117,8 @@ struct AllGatherMinimalMatmulAsyncParams {
         using_persistent_weight_buffer(using_persistent_weight_buffer),
         fsdp_topology(fsdp_topology),
         fuse_swiglu(fuse_swiglu),
-        transpose_core_grid(transpose_core_grid) {}
+        transpose_core_grid(transpose_core_grid),
+        use_mcast(use_mcast) {}
 
     // Structural fields that affect program-cache key.
     static constexpr auto attribute_names = std::make_tuple(
@@ -131,6 +137,7 @@ struct AllGatherMinimalMatmulAsyncParams {
         "fsdp_ring_size",
         "using_persistent_weight_buffer",
         "fuse_swiglu",
+        "use_mcast",
         "fused_activation",
         "output_dtype",
         // Selects DST_SYNC_MODE and the other compile-time compute settings.
@@ -153,6 +160,7 @@ struct AllGatherMinimalMatmulAsyncParams {
             this->fsdp_ring_size,
             this->using_persistent_weight_buffer,
             this->fuse_swiglu,
+            this->use_mcast,
             this->fused_activation,
             this->output_dtype,
             this->compute_kernel_config);
