@@ -235,6 +235,7 @@ def run_model(
             num_layers,
             experts_per_chip,
             first_k_dense=variant.model_config.NUM_DENSE_LAYERS,
+            model_cfg=variant.model_config,
         )
         if effective_cache_path
         else False
@@ -1299,6 +1300,7 @@ def test_glm_build_ttnn_cache(
             num_layers,
             experts_per_chip,
             first_k_dense=variant.model_config.NUM_DENSE_LAYERS,
+            model_cfg=variant.model_config,
         )
 
     if _cache_complete():

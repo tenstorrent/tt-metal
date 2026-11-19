@@ -789,6 +789,7 @@ def run_chunked_transformer_padded(
         num_layers,
         experts_per_chip=experts_per_chip,
         first_k_dense=variant.model_config.NUM_DENSE_LAYERS,
+        model_cfg=variant.model_config,
     ), f"TTNN cache incomplete for {num_layers} layers at {effective_cache_path}"
 
     profiler.start("tt_transformer_creation")
@@ -994,6 +995,7 @@ def run_chunked_transformer(
         num_layers,
         experts_per_chip=experts_per_chip,
         first_k_dense=variant.model_config.NUM_DENSE_LAYERS,
+        model_cfg=variant.model_config,
     ), f"TTNN cache incomplete for {num_layers} layers at {effective_cache_path}"
 
     profiler.start("tt_transformer_creation")
@@ -2033,6 +2035,7 @@ def run_chunked_transformer_updated(
         num_layers,
         experts_per_chip=experts_per_chip,
         first_k_dense=variant.model_config.NUM_DENSE_LAYERS,
+        model_cfg=variant.model_config,
     ), f"TTNN cache incomplete for {num_layers} layers at {effective_cache_path}"
 
     profiler.start("tt_transformer_creation")
@@ -3333,6 +3336,7 @@ def run_chunked_transformer_padded_trace(
         num_layers,
         experts_per_chip=experts_per_chip,
         first_k_dense=variant.model_config.NUM_DENSE_LAYERS,
+        model_cfg=variant.model_config,
     ), f"TTNN cache incomplete for {num_layers} layers at {effective_cache_path}"
 
     transformer = acquire_transformer(
