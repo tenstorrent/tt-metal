@@ -826,6 +826,21 @@
   team: models
   budget_type: unit
 
+# The prefill runner's media embedding store (models/common/multimedia_store), not tied to any model. Host-only:
+# a fake Mooncake client and a local Mooncake master, so the card goes unused.
+- name: Media embedding store unit tests
+  cmd: |
+    uv pip install -r models/common/multimedia_store/requirements.txt
+    pytest --timeout 120 models/common/multimedia_store/tests
+  model: multimedia-store
+  skus:
+    bh_p150:
+      timeout: 5
+      tier: 1
+  owner_id: U0BTJN1M5AM # Sumant Hanumante
+  team: models
+  budget_type: unit
+
 # MiniMax-M3 unit tests — random-weight module PCC only (no HF_MODEL / M3_CKPT).
 # test_msa_layer_vs_ref is real-weights and opt-in locally; excluded from CI so Tier-1
 # does not silently skip. Synthetic MSA prefill coverage: test_msa_prefill_vs_ref.
@@ -835,9 +850,6 @@
     # Host-only tests have no mesh id; run them here: chunk layout, model variants / config checks, checkpoint
     # dequant, router precision, compute configs and the shared-expert 2D blocking.
     pytest --timeout 300 models/demos/minimax_m3/tests/unit/ -k "(1x1 and not msa_layer) or rotated_chunk_layout or packed_forward_layout or test_model_variants or test_checkpoint_dequant or test_router_precision or test_precision_configs or test_shared_overlap_config or adapter_packed_forward"
-    # The prefill runner's media embedding store, against a fake client and a local Mooncake master.
-    uv pip install -r models/common/multimedia_store/requirements.txt
-    pytest --timeout 120 models/common/multimedia_store/tests
   model: minimax-m3
   skus:
     bh_p150:
