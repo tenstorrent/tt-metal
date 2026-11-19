@@ -83,6 +83,12 @@ def build_v41_moe(
     OUTPUT channels of ``W.T`` whose e8m0 scales differ, so BFP4's 3 mantissa bits cannot hold the FP4 values (tt-blaze
     DS41F-0019: the decode ring's BFP4 experts cost 0.009-0.016 MoE PCC); at 384 x 2304 BFP8 is ~9 GB per chip for the 20
     encoder layers on 8 x 4."""
+    # WS2 (prefill TTFT plan 3.2): V41_MOE_ROW_RING=1 runs the SP-axis (axis 0) dispatch and combine as Ring -- pure data
+    # movement, so the same values land in the same slots -- and keeps every TP-axis collective (gate all-reduce, shared
+    # expert reduce-scatter, post-combine reduce) Linear, i.e. the same summation order. Needs a fabric that wraps axis 0
+    # (PREFILL_FABRIC_MODE=2d_torus_y or 2d_torus_xy on an 8 x 4 Galaxy).
+    if os.environ.get("V41_MOE_ROW_RING", "0") == "1" and not isinstance(topology, tuple):
+        topology = (ttnn.Topology.Ring, topology)
     if routed_expert_weights_dtype is None:
         routed_expert_weights_dtype = (
             ttnn.bfloat4_b if os.environ.get("V41_PREFILL_EXPERT_DTYPE", "bfp8") == "bfp4" else ttnn.bfloat8_b
