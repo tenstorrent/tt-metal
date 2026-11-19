@@ -324,6 +324,19 @@ class SFPU_CLOBBER_LREGS(TemplateParameter):
 
 
 @dataclass
+class LERP_FAST_INTERPOLATE(TemplateParameter):
+    """Select lerp's FAST_INTERPOLATE kernel (weight in [0, 1] only, Blackhole; ignored elsewhere).
+
+    Honoured by ``sfpu_ternary_test.cpp`` only; False emits nothing.
+    """
+
+    fast_interpolate: bool = True
+
+    def convert_to_cpp(self) -> str:
+        return "#define LERP_FAST_INTERPOLATE" if self.fast_interpolate else ""
+
+
+@dataclass
 class QUASAR_VARIANT(TemplateParameter):
     """The Quasar part variant this build targets, recorded as a perf CSV column.
 

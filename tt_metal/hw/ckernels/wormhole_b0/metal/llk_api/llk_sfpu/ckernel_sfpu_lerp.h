@@ -11,7 +11,8 @@
 
 namespace ckernel::sfpu {
 
-template <bool APPROXIMATION_MODE>
+// FAST_INTERPOLATE is a Blackhole-only kernel selector, accepted here and ignored.
+template <bool APPROXIMATION_MODE, bool FAST_INTERPOLATE = false>
 inline void lerp_init() {
     // calculate_lerp's second store walks dest through physical addr_mod slot 6, advancing by
     // the two rows the iteration just wrote (one sfpi row is two dest counter steps), so the
@@ -20,7 +21,13 @@ inline void lerp_init() {
     addr_mod_t{.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = 4}}.set(ADDR_MOD_6);
 }
 
-template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en, DataFormat data_format, int ITERATIONS>
+// FAST_INTERPOLATE is ignored, see lerp_init.
+template <
+    bool APPROXIMATION_MODE,
+    bool is_fp32_dest_acc_en,
+    DataFormat data_format,
+    int ITERATIONS,
+    bool FAST_INTERPOLATE = false>
 inline void calculate_lerp(
     const uint dst_index_in0,  // input (start)
     const uint dst_index_in1,  // end

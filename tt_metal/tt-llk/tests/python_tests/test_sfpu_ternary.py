@@ -46,6 +46,7 @@ from helpers.test_variant_parameters import (
     APPROX_MODE,
     DEST_SYNC,
     ITERATIONS,
+    LERP_FAST_INTERPOLATE,
     LOOP_FACTOR,
     NUM_BLOCKS,
     NUM_FACES,
@@ -132,6 +133,7 @@ def _run_sfpu_ternary(
     loop_factor=1,
     explicit_inputs=None,
     check_result=None,
+    fast_interpolate=False,
 ):
     """Drive sources/sfpu_ternary_test.cpp for one functional check or one perf row."""
     if run_types is None:
@@ -229,6 +231,8 @@ def _run_sfpu_ternary(
         ]
         if clobber_lregs:
             templates.append(SFPU_CLOBBER_LREGS())
+        if fast_interpolate:
+            templates.append(LERP_FAST_INTERPOLATE())
         # Not named runtimes: that assignment would add block columns to the perf schema.
         functional_runtime_params = [
             NUM_BLOCKS(tile_cnt_A),
@@ -456,6 +460,76 @@ def test_sfpu_lerp_large_opposite_sign(formats, dest_acc, mathop, input_dimensio
         input_dimensions=input_dimensions,
         explicit_inputs=(src_A, src_B, src_C, golden),
         check_result=check_result,
+    )
+
+
+def _ulp_of(magnitude, torch_format):
+    """Spacing of *torch_format* at *magnitude* (float64), clamped to the normal range."""
+    finfo = torch.finfo(torch_format)
+    clamped = magnitude.abs().clamp(min=finfo.tiny, max=finfo.max)
+    return torch.ldexp(
+        torch.full_like(clamped, finfo.eps), torch.frexp(clamped).exponent - 1
+    )
+
+
+# FAST_INTERPOLATE lerp: weight in [0, 1] only.
+@blackhole_only
+@parametrize(
+    formats=input_output_formats([DataFormat.Float16_b, DataFormat.Float32], same=True),
+    dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
+    mathop=MathOperation.SfpuLerp,
+    input_dimensions=_INPUT_DIMENSIONS,
+)
+def test_sfpu_lerp_fast_interpolate(formats, dest_acc, mathop, input_dimensions):
+    """c == 0 -> a and c == 1 -> b bit-exact, finite for opposite-sign operands up to
+    the format max, and within 1 ULP of max(|a|, |b|) everywhere."""
+    skip_if_32bit_input_without_dest_acc(formats, dest_acc)
+
+    torch_format = format_dict[formats.input_format]
+    count = input_dimensions[0] * input_dimensions[1]
+    idx = torch.arange(count)
+    generator = torch.Generator().manual_seed(0)
+    # First half random in [-1, 1], second half +-m / -+m near the format max.
+    random_a = torch.rand(count, generator=generator, dtype=torch.float64) * 2 - 1
+    random_b = torch.rand(count, generator=generator, dtype=torch.float64) * 2 - 1
+    magnitude = torch.tensor([2.0**127, 3.0e38], dtype=torch.float64)[(idx // 2) % 2]
+    sign = 1.0 - 2.0 * (idx % 2).to(torch.float64)
+    large = idx >= count // 2
+    src_A = torch.where(large, sign * magnitude, random_a).to(torch_format)
+    src_B = torch.where(large, -sign * magnitude, random_b).to(torch_format)
+    # Every fourth lane has weight 0, the next one weight 1.
+    weights = torch.rand(count, generator=generator, dtype=torch.float64)
+    weights = torch.where(idx % 4 == 0, 0.0, torch.where(idx % 4 == 1, 1.0, weights))
+    src_C = weights.to(torch_format)
+
+    a64, b64, c64 = (t.to(torch.float64) for t in (src_A, src_B, src_C))
+    output_format = format_dict[formats.output_format]
+    golden = ((1.0 - c64) * a64 + c64 * b64).to(output_format)
+
+    def check_result(golden_tensor, res_tensor):
+        assert torch.isfinite(res_tensor).all(), "lerp produced inf or nan"
+        assert torch.equal(
+            res_tensor[c64 == 0], src_A[c64 == 0].to(output_format)
+        ), "c == 0 must return a"
+        assert torch.equal(
+            res_tensor[c64 == 1], src_B[c64 == 1].to(output_format)
+        ), "c == 1 must return b"
+        exact = (1.0 - c64) * a64 + c64 * b64
+        error = (res_tensor.to(torch.float64) - exact).abs() / _ulp_of(
+            torch.maximum(a64.abs(), b64.abs()), output_format
+        )
+        assert (
+            error.max() <= 1.0
+        ), f"error {error.max():.3f} ULP of max(|a|, |b|) exceeds 1"
+
+    _run_sfpu_ternary(
+        formats,
+        dest_acc,
+        mathop,
+        input_dimensions=input_dimensions,
+        explicit_inputs=(src_A, src_B, src_C, golden),
+        check_result=check_result,
+        fast_interpolate=True,
     )
 
 
