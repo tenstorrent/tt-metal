@@ -122,6 +122,11 @@ def test_shard_and_gather(mesh_device: ttnn.MeshDevice, expect_error) -> None:  
             assert tuple(p._data.shape) == p.local_shape, name  # noqa: SLF001
             assert torch.equal(to_torch(p._data, mesh_axes=p.mesh_axes), state[name]), name  # noqa: SLF001
 
+    # Axis 0 is in `tensor_parallel`'s durable layout: the call refuses and changes nothing.
+    with expect_error(ValueError, "durable layout"):
+        model.shard(0)
+    assert model.is_loaded() and not model.is_transiently_sharded()
+
     model.shard(1)
     assert not model.is_loaded() and model.is_transiently_sharded()
     assert params["replicated"].mesh_axes == (1, None)
@@ -134,11 +139,10 @@ def test_shard_and_gather(mesh_device: ttnn.MeshDevice, expect_error) -> None:  
     with expect_error(RuntimeError, "ShardableModule has weights with a transient split"):
         model()
 
-    # Axis 0 is in `tensor_parallel`'s durable layout, axis 1 already transient: both refuse, and change nothing.
-    with expect_error(ValueError, "durable layout"):
-        model.shard(0)
-    with expect_error(ValueError, "already has a transient split"):
-        model.shard(1)
+    # While sharded, sharding again refuses over any axis and changes nothing.
+    for axis in (0, 1):
+        with expect_error(ValueError, "already has a transient split"):
+            model.shard(axis)
     assert params["replicated"].mesh_axes == (1, None)
 
     model.gather(ccl_manager)
@@ -151,19 +155,23 @@ def test_shard_and_gather(mesh_device: ttnn.MeshDevice, expect_error) -> None:  
             assert torch.equal(ttnn.to_torch(device_tensor), state[name]), name
     assert_layout_matches_data()
 
-    # A parameter with no durable split can be split transiently over both axes and gathered back in one call.
+    # A parameter is sharded over one mesh axis at a time, even one with no durable split.
     replicated = params["replicated"]
-    replicated.shard(1)
-    replicated.shard(0)
-    assert replicated.mesh_axes == (1, 0)
+    defer_free: list[ttnn.Tensor] = []
+    replicated.shard(1, defer_free=defer_free)
+    with expect_error(ValueError, "already has a transient split"):
+        replicated.shard(0, defer_free=defer_free)
+    assert replicated.mesh_axes == (1, None) and len(defer_free) == 1
     assert_layout_matches_data()
     with expect_error(RuntimeError, "ShardableModule has weights with a transient split"):
         model()  # Parameter.shard alone, without Module.shard, is enough for the call to refuse
-    replicated.gather(ccl_manager)
-    assert replicated.mesh_axes == (None, None)
+    replicated.gather(ccl_manager, defer_free=defer_free)
+    assert replicated.mesh_axes == (None, None) and len(defer_free) == 2
+    for t in defer_free:
+        ttnn.deallocate(t)
     assert_layout_matches_data()
 
-    replicated.shard(1)
+    replicated.shard(1, defer_free=[])
     replicated.deallocate()
     assert replicated.mesh_axes == (None, None) and not replicated.is_transiently_sharded()
 
