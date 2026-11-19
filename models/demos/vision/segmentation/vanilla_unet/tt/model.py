@@ -3,6 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import ttnn
+from models.demos.vision.segmentation.vanilla_unet.tt.common import num_levels_from_env
 from models.demos.vision.segmentation.vanilla_unet.tt.config import (
     TtUNetLayerConfigs,
     UpconvConfiguration,
@@ -185,6 +186,14 @@ class TtUNet:
         self.decoder1_conv2 = TtConv2d(configs.decoder1_conv2, device)
 
         self.final_conv = TtConv2d(configs.final_conv, device)
+        self.depth = num_levels_from_env()
+        # The dtype each upconv takes in the full model, from the layer that feeds it there.
+        self.upconv_input_dtypes = [
+            configs.decoder2_conv2.output_dtype,
+            configs.decoder3_conv2.output_dtype,
+            configs.decoder4_conv2.output_dtype,
+            configs.bottleneck_conv2.output_dtype,
+        ]
         self.reduced_grid = reduced_grid(device)
         if self.reduced_grid:
             # conv2d runs a 1x1 conv as a matmul with its output in L1, which a reduced grid cannot
@@ -216,35 +225,43 @@ class TtUNet:
     def __call__(self, input_tensor: ttnn.Tensor, deallocate_input_activation: bool = True) -> ttnn.Tensor:
         input_tensor = self.preprocess_input_tensor(input_tensor, deallocate_input_activation)
 
-        enc1, skip1 = self.downblock1(input_tensor)
-        enc2, skip2 = self.downblock2(enc1)
-        enc3, skip3 = self.downblock3(enc2)
-        enc4, skip4 = self.downblock4(enc3)
+        encoders = [self.downblock1, self.downblock2, self.downblock3, self.downblock4]
+        x = input_tensor
+        skips = []
+        for encoder in encoders[: self.depth]:
+            x, skip = encoder(x)
+            skips.append(skip)
 
-        bottleneck = self.bottleneck_conv1(enc4)
-        bottleneck = self.bottleneck_conv2(bottleneck)
+        # Below the full depth the next encoder's convs stand in for the bottleneck, as in the reference.
+        if self.depth == len(encoders):
+            bottleneck_convs = (self.bottleneck_conv1, self.bottleneck_conv2)
+        else:
+            bottleneck_convs = (encoders[self.depth].conv1, encoders[self.depth].conv2)
+        for conv in bottleneck_convs:
+            x = conv(x)
+        # The stand-in's output dtype can differ from what the upconv's L1 plan is sized for.
+        if x.dtype != self.upconv_input_dtypes[self.depth - 1]:
+            x = ttnn.typecast(x, self.upconv_input_dtypes[self.depth - 1])
 
-        dec4 = transpose_conv2d(bottleneck, self.upconv4_config, act_block_h_override=3 * 32)
-        dec4 = concatenate_skip_connection(dec4, skip4)
-        dec4 = self.decoder4_conv1(dec4)
-        dec4 = self.decoder4_conv2(dec4)
-
-        dec3 = transpose_conv2d(dec4, self.upconv3_config, act_block_h_override=5 * 32)
-        dec3 = concatenate_skip_connection(dec3, skip3)
-        dec3 = self.decoder3_conv1(dec3)
-        dec3 = self.decoder3_conv2(dec3)
-
-        dec2 = transpose_conv2d(dec3, self.upconv2_config, act_block_h_override=2 * 32)
-        dec2 = concatenate_skip_connection(dec2, skip2)
-        dec2 = self.decoder2_conv1(dec2)
-        dec2 = self.decoder2_conv2(dec2)
-
-        dec1 = transpose_conv2d(
-            dec2, self.upconv1_config, fp32_dest_acc_en=False, packer_l1_acc=False, act_block_h_override=5 * 32
-        )
-        dec1 = concatenate_skip_connection(dec1, skip1, use_row_major_layout_for_inputs=False)
-        dec1 = self.decoder1_conv1(dec1)
-        dec1 = self.decoder1_conv2(dec1)
+        decoders = [
+            (self.upconv1_config, self.decoder1_conv1, self.decoder1_conv2),
+            (self.upconv2_config, self.decoder2_conv1, self.decoder2_conv2),
+            (self.upconv3_config, self.decoder3_conv1, self.decoder3_conv2),
+            (self.upconv4_config, self.decoder4_conv1, self.decoder4_conv2),
+        ]
+        upconv_kwargs = [
+            dict(fp32_dest_acc_en=False, packer_l1_acc=False, act_block_h_override=5 * 32),
+            dict(act_block_h_override=2 * 32),
+            dict(act_block_h_override=5 * 32),
+            dict(act_block_h_override=3 * 32),
+        ]
+        for level in range(self.depth - 1, -1, -1):
+            upconv_config, conv1, conv2 = decoders[level]
+            x = transpose_conv2d(x, upconv_config, **upconv_kwargs[level])
+            x = concatenate_skip_connection(x, skips[level], use_row_major_layout_for_inputs=level > 0)
+            x = conv1(x)
+            x = conv2(x)
+        dec1 = x
 
         if self.reduced_grid:
             # With one output channel, HWC is CHW; convert_to_chw works only on L1 shards.
