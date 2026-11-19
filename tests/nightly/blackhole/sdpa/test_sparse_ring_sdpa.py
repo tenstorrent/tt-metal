@@ -511,7 +511,7 @@ class Case:
             if dense_floor:
                 dense_ref = dense_reference(q, k, v, geo.logical_n, self.scale, rows=geo.rows, **sl)
         else:
-            sl = dict(heads=sorted({0, 1, self.H // 2, self.H - 1}))
+            sl = dict(heads=sorted({0, min(1, self.H - 1), self.H // 2, self.H - 1}))
         ref = (
             sparse_reference(
                 q, k, v, mask, pooled_k, pooled_v, geo, self.S, self.scale, pooled=pooled, counts=counts, **sl
