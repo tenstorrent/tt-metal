@@ -496,6 +496,79 @@ class V41PrefillBlock(LightweightModule):
     # Rules (v4/trace_island.py): inputs are block-owned persistent buffers fed by ttnn.copy; outputs are persistent; no
     # eager tensor may live across a replay (the CSA source's selection mask goes through persistent buffers, attention.py);
     # every lazily cached constant must exist before the capture (the runtime captures after its warm-all).
+    # the islands' bodies (A, B), shared by the per-layer islands and the WS4 super-islands (V41_PREFILL_SUPER_ISLANDS): the
+    # same ops in the same order either way
+    def _ops_a(self, s: list, pre):
+        """(attn_pre, attn_post, attn_comb, h, Xa): Xa = the site's fp32 stack kept for island B's hc_post only with
+        V41_MHC_REUSE_X5 (else None). WS2's levers (REUSE_STACK, MM_CFG, L1, FUSED_TAIL) act inside mixes / collapse."""
+        Xa = self._site_stack(self.attn_hc, s)
+        attn_pre, attn_post, attn_comb = self.attn_hc.mixes(s, Xf=Xa)
+        h = self.attn_norm(self.attn_hc.collapse(s, pre, Xf=Xa))
+        Xa = self._drop_unless_x5(Xa)
+        return attn_pre, attn_post, attn_comb, h, Xa
+
+    def _ops_b(self, s: list, y, attn_pre, attn_post, attn_comb, chunk_tokens: int, Xa_in=None, free_xa: bool = False):
+        """``Xa_in``: island A's X5 stack (V41_MHC_REUSE_X5); an island's persistent input is read, never freed
+        (free_xa False); inside one super-island capture it is a temporary (free_xa True)."""
+        S_l, D_l = int(s[0].shape[2]), int(s[0].shape[3])
+        streams2 = self.attn_hc.mix(s, y, attn_post, attn_comb, Xf=Xa_in)
+        if free_xa and Xa_in is not None:
+            ttnn.deallocate(Xa_in)
+        Xb = self._site_stack(self.ffn_hc, streams2)
+        ffn_pre, ffn_post, ffn_comb = self.ffn_hc.mixes(streams2, Xf=Xb)
+        hh = self.ffn_norm(self.ffn_hc.collapse(streams2, attn_pre, Xf=Xb))
+        Xb = self._drop_unless_x5(Xb)
+        moe_out, _ = self.moe(ttnn.reshape(hh, [1, S_l, D_l]), actual_isl=chunk_tokens, actual_start=0)
+        moe_out = ttnn.reshape(moe_out, [1, 1, S_l, D_l])
+        out = self.ffn_hc.mix(streams2, moe_out, ffn_post, ffn_comb, Xf=Xb)
+        if Xb is not None:
+            ttnn.deallocate(Xb)
+        ttnn.deallocate(moe_out)
+        for t in streams2:
+            ttnn.deallocate(t)
+        return tuple(out) + (ffn_pre,)
+
+    def super_consumer_ops(self, s: list, pre, chunk_tokens: int):
+        """WS4 super-island body of a CSA consumer block on a FULL traced chunk: island A, then the consumer's A1c / glue / A2c
+        / carry exactly as ``_attn_traced`` replays them (the consumer's glue writes the source's slab at FIXED rows: [0, S)
+        and S + cap), the attention output cast as ``forward_islands`` casts it into y_buf, then island B -- with the
+        previous block's outputs read in place (no copy-in). Host-side counters stay with the caller (``super_after``).
+        """
+        attn, state = self.attn, self.state
+        slot = int(getattr(state, "slot", 0))
+        _A1, _A2, kw = self._attn_islands[slot]
+        attn_pre, attn_post, attn_comb, h, Xa = self._ops_a(s, pre)
+        outs = attn.forward_pre(h, state, chunk_tokens)
+        attn.glue_chunk(state, outs, chunk_tokens, None, src_state=kw["src_state"])
+        (y,) = attn.forward_attn(h, outs, state, chunk_tokens, **kw)
+        ttnn.copy(outs[2], state.sliding_carry)  # _a3_carry on a full chunk (A1's next carry)
+        y_buf = self._islands[4]
+        if y.dtype != y_buf.dtype:
+            y = ttnn.typecast(y, y_buf.dtype)
+        return self._ops_b(s, y, attn_pre, attn_post, attn_comb, int(chunk_tokens), Xa_in=Xa, free_xa=True)
+
+    def super_eligible(self, real_len: int) -> bool:
+        """This consumer block can run inside a super-island this chunk: a full chunk on its attention islands (not chunk 0),
+        the MoE padding config at the full chunk, and its source on its A3 islands this chunk."""
+        if not isinstance(self.attn, V41CSAConsumer) or not self._attn_islands_enabled() or self._islands is None:
+            return False
+        if int(real_len) != self._island_chunk or self._moe_pc_len != self._island_chunk:
+            return False
+        if int(self.state.kv_actual) == 0 or not self.attn.trace_ready(self.state):
+            return False
+        return self.attn.source.shared.get("path") == "A3"
+
+    def super_before(self, real_len: int) -> None:
+        """Host-side, before the super-island replays: this block's position scalar (``prepare_chunk``)."""
+        self.attn.prepare_chunk(self.state, real_len)
+
+    def super_after(self, real_len: int) -> None:
+        """Host-side, after the super-island replays: ``epilogue_chunk``'s counters (its carry copy is in the island)."""
+        sh = self.attn.source.shared
+        assert sh.get("path") == "A3", "a traced consumer chunk needs its source's traced chunk first"
+        self.state.kv_actual += int(real_len)
+        self.state.entry_count = sh["entry_count"]
+
     def enable_trace_islands(self, streams: list, pre_row, chunk_tokens: int):
         """Capture A and B with ``streams`` / ``pre_row`` as shape templates (their contents do not matter) ->
         (out_streams, ffn_pre): B's persistent outputs, which serve as the next block's templates."""
@@ -518,12 +591,8 @@ class V41PrefillBlock(LightweightModule):
         S_l, D_l = int(streams[0].shape[2]), int(streams[0].shape[3])
 
         def island_a(*args):
-            s = list(args[:HC])
-            Xa = self._site_stack(self.attn_hc, s)
-            attn_pre, attn_post, attn_comb = self.attn_hc.mixes(s, Xf=Xa)
-            h = self.attn_norm(self.attn_hc.collapse(s, args[HC], Xf=Xa))
-            Xa = self._drop_unless_x5(Xa)  # V41_MHC_REUSE_X5: a 5th persistent output, island B's hc_post reads it
-            return (attn_pre, attn_post, attn_comb, h) + ((Xa,) if Xa is not None else ())
+            o = self._ops_a(list(args[:HC]), args[HC])  # WS2 mHC levers inside (shared with the WS4 super-islands)
+            return o[:4] + ((o[4],) if o[4] is not None else ())  # V41_MHC_REUSE_X5: a 5th persistent output for B
 
         A = TraceIsland(self.mesh_device, island_a, S_in + [pre_in], name=f"v41.L{self.layer}.A")
         outs_a = A.capture()
@@ -533,22 +602,10 @@ class V41PrefillBlock(LightweightModule):
         y_buf = ttnn.clone(h)  # the attention output has the stream shape (o-proj back to D_l)
 
         def island_b(*args):
-            s = list(args[:HC])
             Xa_in = args[HC + 1] if len(args) > HC + 1 else None  # island A's persistent stack: read, never freed
-            streams2 = self.attn_hc.mix(s, args[HC], attn_post, attn_comb, Xf=Xa_in)
-            Xb = self._site_stack(self.ffn_hc, streams2)
-            ffn_pre, ffn_post, ffn_comb = self.ffn_hc.mixes(streams2, Xf=Xb)
-            hh = self.ffn_norm(self.ffn_hc.collapse(streams2, attn_pre, Xf=Xb))
-            Xb = self._drop_unless_x5(Xb)
-            moe_out, _ = self.moe(ttnn.reshape(hh, [1, S_l, D_l]), actual_isl=chunk_tokens, actual_start=0)
-            moe_out = ttnn.reshape(moe_out, [1, 1, S_l, D_l])
-            out = self.ffn_hc.mix(streams2, moe_out, ffn_post, ffn_comb, Xf=Xb)
-            if Xb is not None:
-                ttnn.deallocate(Xb)
-            ttnn.deallocate(moe_out)
-            for t in streams2:
-                ttnn.deallocate(t)
-            return tuple(out) + (ffn_pre,)
+            return self._ops_b(
+                list(args[:HC]), args[HC], attn_pre, attn_post, attn_comb, int(chunk_tokens), Xa_in=Xa_in
+            )
 
         b_in = S_in + [y_buf] + ([Xa_out] if Xa_out is not None else [])
         B = TraceIsland(self.mesh_device, island_b, b_in, moe=self.moe, name=f"v41.L{self.layer}.B")

@@ -40,6 +40,7 @@ from loguru import logger
 import ttnn
 from models.demos.deepseek_v3_d_p.reference.deepseek_v4.modeling_deepseek_v4 import DeepseekV4RotaryEmbedding
 from models.demos.deepseek_v3_d_p.tt.tt_distributed_rms_norm import TtDistributedRmsNorm
+from models.demos.deepseek_v3_d_p.tt.v4.trace_island import TraceIsland
 
 from . import hostprof as HP
 from .attention import V41CSA, v41_hf_config
@@ -53,6 +54,10 @@ def _first_device(t) -> torch.Tensor:
 
 
 PROFILE = os.environ.get("V41_PREFILL_PROFILE", "0") == "1"
+# WS4 (tt-blaze prefill TTFT plan, Phase 2): each run of consecutive CSA consumer blocks (encoder 3-7, 9-13, 15-19) replays as ONE
+# trace on a full traced chunk -- A, A1c, the fixed-row glue, A2c, the carry and B of every block, the blocks chained in place
+# (no copy-in). The sources, the SWA layers, Engram and chunk 0 / ragged / decoder chunks keep the per-layer islands. Default off.
+SUPER = os.environ.get("V41_PREFILL_SUPER_ISLANDS", "0") == "1"
 # DS41F-0068: the chunk embedding uploaded S-sharded / TP-replicated and split on device (0 = the D-over-TP mapper)
 EMBED_PARTITION = os.environ.get("V41_PREFILL_EMBED_PARTITION", "1") == "1"
 ENGRAM_EARLY = (
@@ -552,6 +557,55 @@ class V41Prefill:
             streams, pre = blk.enable_trace_islands(streams, pre, self.chunk)
         self.islands = True
         logger.info(f"[v41 prefill] trace islands captured for {len(self.blocks)} blocks in {time.time() - t0:.1f} s")
+        if SUPER:
+            self._enable_super_islands()
+
+    def _enable_super_islands(self) -> None:
+        """WS4: one super-island per maximal run of consecutive CSA consumer blocks, captured AFTER every per-layer island (its
+        inputs are the previous block's island-B persistent outputs, read in place; its intermediates may reuse the per-layer
+        islands' freed ranges, which is safe because nothing eager lives across a replay). The capture runs the consumer's
+        full-chunk traced path at a valid position just past chunk 0, as the per-layer capture does."""
+        from .attention import V41CSAConsumer
+
+        assert all(int(getattr(b.state, "slot", 0)) == 0 for b in self.blocks), "super-islands assume one physical slot"
+        t0 = time.time()
+        runs, cur = [], []
+        for i, blk in enumerate(self.blocks):
+            ok = isinstance(blk.attn, V41CSAConsumer) and blk._attn_islands_enabled() and blk.layer not in self.engrams
+            if ok and i > 0:
+                cur.append(i)
+            elif cur:
+                runs.append(cur)
+                cur = []
+        if cur:
+            runs.append(cur)
+        self._super = {}
+        for idx in runs:
+            prev = self.blocks[idx[0] - 1]
+            B_prev = prev._islands[1]
+            ins = list(B_prev.outputs)  # the previous block's island-B persistent outputs: HC streams + ffn_pre
+            group = [self.blocks[i] for i in idx]
+            saved = [(b.state.kv_actual, b.state.entry_count) for b in group]
+            for b in group:  # a valid position just past chunk 0 (as _capture_attn_islands): the rope scalar reads it
+                b.state.kv_actual = self.chunk
+                b.attn.prepare_chunk(b.state, self.chunk)
+
+            def body(*args, _group=group):
+                s, p = list(args[:HC]), args[HC]
+                for b in _group:
+                    out = b.super_consumer_ops(s, p, self.chunk)
+                    s, p = list(out[:HC]), out[HC]
+                return tuple(s) + (p,)
+
+            isl = TraceIsland(
+                self.mesh, body, ins, moes=[b.moe for b in group], name=f"v41.super.L{group[0].layer}-{group[-1].layer}"
+            )
+            isl.capture()
+            for b, (ka, ec) in zip(group, saved):
+                b.state.kv_actual, b.state.entry_count = ka, ec
+            self._super[idx[0]] = (idx, isl)
+            logger.info(f"[v41 super] blocks {[b.layer for b in group]}: one island, {isl.num_segments} segment(s)")
+        logger.info(f"[v41 super] {len(self._super)} super-island(s) captured in {time.time() - t0:.1f} s")
 
     def _run_decoder(self, decoder, start: int) -> bool:
         """``_chunk``'s ``decoder`` -> run layers 20..39 on this chunk? None = every built layer (the default prefill: the
@@ -648,8 +702,35 @@ class V41Prefill:
             rows = _fetch()
             mark("engram.host")
         owned = True
-        for blk in self.blocks:
+        sup = getattr(self, "_super", None) or {}
+        skip_until = -1
+        for bi, blk in enumerate(self.blocks):
             L = blk.layer
+            if bi < skip_until:
+                continue
+            if bi in sup:
+                idx, isl = sup[bi]
+                group = [self.blocks[i] for i in idx]
+                prev_out = list(self.blocks[bi - 1]._islands[1].outputs)
+                if (
+                    not owned
+                    and all(a is b for a, b in zip(list(streams) + [pre], prev_out))
+                    and all(b.super_eligible(real_len) for b in group)
+                ):
+                    for b in group:
+                        b.super_before(real_len)
+                    if HP.ON:
+                        HP.mark("super.prepare")
+                    outs = isl.replay()
+                    if HP.ON:
+                        HP.mark("super.replay")
+                    for b in group:
+                        b.super_after(real_len)
+                    streams, pre = list(outs[:HC]), outs[HC]
+                    owned = False
+                    skip_until = idx[-1] + 1
+                    mark(f"super.L{group[0].layer}-{group[-1].layer}")
+                    continue
             if L in self.engrams:
                 if HP.ON:
                     HP.mark("other")
