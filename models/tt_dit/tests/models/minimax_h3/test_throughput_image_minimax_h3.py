@@ -160,6 +160,7 @@ _DP_LINE = {**line_params_8k_req_exact_devices, "l1_small_size": _L1_SMALL_DP}
         pytest.param((4, 4), _DP_RING, id="replica_4x4_ring"),
         pytest.param((4, 4), _DP_LINE, id="replica_4x4_line"),
         pytest.param((4, 2), _DP_RING, id="replica_4x2_ring"),
+        pytest.param((4, 1), _DP_RING, id="replica_4x1_ring"),
     ],
     indirect=["mesh_device", "device_params"],
 )
