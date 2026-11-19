@@ -491,8 +491,8 @@ constexpr std::uint32_t matmul_fe_named_arg(const std::string_view name) {
 constexpr std::uint32_t matmul_fe_named_arg(const char*) { return 0; }
 #endif
 
-// HiFi2 row forms need M block 4 (M block 2 lands the compute's L1 bursts under the reader's NoC writes) and no fused
-// addcmul or swiglu epilogue on the math thread (minimal_matmul +0.8 to +1.2 %)
+// HiFi2 row forms need M block 4 (M block 2 lands the compute's L1 bursts under the
+// reader's NoC writes) and no fused addcmul or swiglu epilogue on the math thread (minimal_matmul +0.8 to +1.2 %)
 constexpr std::uint32_t matmul_fe_named_m_block() { return matmul_fe_named_arg("M_block_tiles"); }
 constexpr bool matmul_fe_hifi2_rowform_kernel() {
 #if defined(FUSE_TERNARY)
@@ -502,6 +502,18 @@ constexpr bool matmul_fe_hifi2_rowform_kernel() {
 #else
     return matmul_fe_named_m_block() >= 4;
 #endif
+}
+
+// HiFi3 with a 32-bit DEST below M block 4: the tile MOP for a one-tile-wide subblock of two or more rows and for a
+// wider one of 16-bit operands (minimal 224 2x1 bfp8 +0.18 %, 244 1x4 bf16 +0.12 % in the row form); a wider bfp8 one
+// keeps the row form (244 1x4 bfp8 -1.7 %), and so does a one-tile subblock
+constexpr bool matmul_fe_hifi3_short_m_tile_mop() {
+    if constexpr (MATH_FIDELITY != MathFidelity::HiFi3 || !DST_ACCUM_MODE) {
+        return false;
+    } else {
+        constexpr std::uint32_t w = matmul_fe_named_block_arg("subblock_w"), h = matmul_fe_named_block_arg("subblock_h");
+        return w != 0 && !(w == 1 && h == 1) && (w == 1 || !llk_matmul_kernel_has_bfp_cb());
+    }
 }
 
 // llk_math_matmul_tile_mop, and the row form at HiFi2 half sync with a 32-bit DEST in a kernel with a constant block
@@ -526,7 +538,8 @@ constexpr bool matmul_fe_tile_mop() {
         // the 2D-mcast bmm of Float32 x Float16_b blocks of two or more rows)
         return false;
     } else if constexpr (
-        !row_mop_on && kt_key == 0 && MATH_FIDELITY == MathFidelity::HiFi2 && matmul_fe_named_m_block() != 0 &&
+        !row_mop_on && kt_key == 0 &&
+        (MATH_FIDELITY == MathFidelity::HiFi2 || matmul_fe_hifi3_short_m_tile_mop()) && matmul_fe_named_m_block() != 0 &&
         matmul_fe_named_m_block() < 4) {
         return true;
     } else {
