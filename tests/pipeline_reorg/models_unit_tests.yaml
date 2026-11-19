@@ -1773,7 +1773,7 @@
     export TT_MESH_GRAPH_DESC_PATH="${TT_METAL_HOME}/models/tt_dit/tests/models/ltx/scaleout_configs/single_galaxy/mesh_graph_descriptor.textproto"
     # The MiniMax-H3 torch reference is only in this diffusers commit (models/tt_dit/models/MiniMaxH3.md).
     H3_DIFFUSERS="${PIPELINE_DIR:?CI staging directory required}/.h3_diffusers"
-    uv pip install --no-deps --target "$H3_DIFFUSERS" \
+    UV_CACHE_DIR="$PIPELINE_DIR/.uv-cache" uv pip install --no-deps --target "$H3_DIFFUSERS" \
       "diffusers @ git+https://github.com/huggingface/diffusers@abc5e9bf71fd38f53cd471bc3acaa84bc5ecbfdc" || exit 1
     export PYTHONPATH="$H3_DIFFUSERS${PYTHONPATH:+:$PYTHONPATH}"
     # Stop at the first failed command: the devices are not reset between commands (#57706).
