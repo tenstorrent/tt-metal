@@ -55,9 +55,8 @@ inline void llk_unpack_AB_matmul_impl(
 }
 
 // Kept for the experimental/2_0 callers; remove when they move to TensorShape.
-// Per source, the LLK reads only face_r_dim, total_num_faces() and total_row_dim() < TILE_R_DIM (unpack face by
-// face). The face grid below gives back all three exactly: 4 faces -> 2x2, 1 face -> 1x1, and 2 faces -> 1x2
-// when partial (16x32, 8x32, ...) or 2x1 when not (32x16). unpA (SrcA) is in1, unpB (SrcB) is in0.
+// Face grid: 4 faces -> 2x2, 1 -> 1x1, 2 -> 1x2 if partial (16x32, 8x32, ...) else 2x1 (32x16).
+// unpA (SrcA) is in1, unpB (SrcB) is in0.
 inline void llk_unpack_AB_matmul_init_impl(
     const std::uint32_t transpose,
     const std::uint32_t ct_dim,
@@ -71,8 +70,11 @@ inline void llk_unpack_AB_matmul_init_impl(
     const bool partial_face_b) {
     const auto shape_from_legacy =
         [](const std::uint32_t face_r_dim, const std::uint32_t num_faces, const bool partial_face) {
-            const std::uint8_t num_faces_r_dim = (num_faces == 4 || (num_faces == 2 && !partial_face)) ? 2 : 1;
-            const std::uint8_t num_faces_c_dim = (num_faces == 4 || (num_faces == 2 && partial_face)) ? 2 : 1;
+            const bool full = num_faces == ckernel::MAX_NUM_FACES;
+            const std::uint8_t num_faces_r_dim =
+                (full || (num_faces == 2 && !partial_face)) ? ckernel::MAX_NUM_FACES_R_DIM : 1;
+            const std::uint8_t num_faces_c_dim =
+                (full || (num_faces == 2 && partial_face)) ? ckernel::MAX_NUM_FACES_C_DIM : 1;
             return ckernel::make_tensor_shape(
                 static_cast<std::uint8_t>(face_r_dim),
                 static_cast<std::uint8_t>(FACE_C_DIM),
@@ -90,7 +92,7 @@ inline void llk_unpack_AB_matmul_init_impl(
 
 // Kept for the experimental/2_0 callers; remove when they move to TensorShape.
 // The execute reads only total_row_dim() < TILE_R_DIM from each shape, so 16x32 (partial) or 32x32 (not partial)
-// gives back the passed flag exactly. partial_face_a is SrcA (in1), partial_face_b is SrcB (in0), as on main.
+// gives back the passed flag exactly. partial_face_a is SrcA (in1), partial_face_b is SrcB (in0).
 inline void llk_unpack_AB_matmul_impl(
     const std::uint32_t base_address_a,
     const std::uint32_t base_address_b,
@@ -103,7 +105,8 @@ inline void llk_unpack_AB_matmul_impl(
     const std::uint32_t ct_dim,
     const std::uint32_t rt_dim,
     const std::uint32_t kt_dim) {
-    constexpr ckernel::TensorShape partial_shape = ckernel::make_tensor_shape(FACE_R_DIM, FACE_C_DIM, 1, 2);  // 16x32
+    constexpr ckernel::TensorShape partial_shape =
+        ckernel::make_tensor_shape(FACE_R_DIM, FACE_C_DIM, 1, ckernel::MAX_NUM_FACES_C_DIM);  // 16x32
     llk_unpack_AB_matmul_impl(
         base_address_a,
         base_address_b,
