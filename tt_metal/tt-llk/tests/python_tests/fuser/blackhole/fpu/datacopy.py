@@ -12,6 +12,7 @@ from fuser.golden.fpu.datacopy import datacopy_golden
 from fuser.indexing import InvocationGranularity
 from fuser.l1_operation import L1Operation
 from helpers.llk_params import DataFormat
+from helpers.tile_shape import cpp_tensor_shape
 
 
 class DatacopyFpu(Fpu):
@@ -36,7 +37,7 @@ class DatacopyFpu(Fpu):
         pack_mode = operation.bh_tilize.pack_mode_value
         broadcast_type = compute_unit.broadcast_type.cpp_enum_value
         data_copy_type = compute_unit.data_copy_type.cpp_enum_value
-        num_faces = operation.tile_shape.total_num_faces()
+        tensor_shape = cpp_tensor_shape(operation.tile_shape)
         _int_fpu_formats = {DataFormat.Int8, DataFormat.UInt8, DataFormat.Int32}
         is_int_fpu_en = (
             "true"
@@ -56,7 +57,7 @@ class DatacopyFpu(Fpu):
         return (
             f"    // Operation {stage}: Datacopy FPU\n"
             f"    _llk_math_eltwise_unary_datacopy_init_<{data_copy_type}, {dest_acc}, {broadcast_type}, {is_int_fpu_en}, {pack_mode}>(\n"
-            f"        {num_faces}, {config.sentinel.math_format}\n"
+            f"        {tensor_shape}, {config.sentinel.math_format}\n"
             f"    );\n"
         )
 
@@ -72,11 +73,11 @@ class DatacopyFpu(Fpu):
         broadcast_type = compute_unit.broadcast_type.cpp_enum_value
         unpack_to_dest = compute_unit.unpack_to_dest.cpp_enum_value
         data_copy_type = f"DataCopyType::{compute_unit.data_copy_type.name}"
-        num_faces = operation.tile_shape.total_num_faces()
+        tensor_shape = cpp_tensor_shape(operation.tile_shape)
 
         return (
             f"    _llk_math_eltwise_unary_datacopy_<{data_copy_type}, {dest_sync}, {dest_acc}, {broadcast_type}, {unpack_to_dest}>(\n"
-            f"        {block.tile_id_dest}, {config.sentinel.math_format}, {config.sentinel.math_format}, {num_faces}\n"
+            f"        {block.tile_id_dest}, {config.sentinel.math_format}, {config.sentinel.math_format}, {tensor_shape}\n"
             f"    );\n"
         )
 

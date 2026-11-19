@@ -11,7 +11,7 @@ import pytest
 import torch
 
 import ttnn
-from models.common.utility_functions import skip_for_slow_dispatch, skip_with_llk_assert
+from tt_py_test_utils_common.utility_functions import skip_for_slow_dispatch, skip_with_llk_assert
 from ttnn._experimental.layer_completion import LayerCompletionQueue
 
 pytestmark = [

@@ -363,12 +363,18 @@ FORCE_INLINE void dfb_publish_producer_ready(
 
 #ifndef COMPILE_FOR_TRISC
 
-FORCE_INLINE void setup_dfb_implicit_sync(uint32_t tt_l1_ptr* dfb_config_base, uint32_t num_dfbs) {
+// Txn ids this launch's implicit-sync DFBs use, by side. DM0 keeps them to finish those DFBs at kernel exit.
+struct DfbImplicitSyncTxnMasks {
+    uint32_t producer = 0;
+    uint32_t consumer = 0;
+};
+
+FORCE_INLINE DfbImplicitSyncTxnMasks setup_dfb_implicit_sync(uint32_t tt_l1_ptr* dfb_config_base, uint32_t num_dfbs) {
     // No DFB config was serialized; host will not read timing slots. Still disarm ISR
     // so a prior launch cannot leak into this one.
     if (num_dfbs == 0) {
         disable_dfb_tile_isr();
-        return;
+        return {};
     }
 
     uint32_t start_time = rdcycle();
@@ -398,7 +404,7 @@ FORCE_INLINE void setup_dfb_implicit_sync(uint32_t tt_l1_ptr* dfb_config_base, u
             0,
             0,
             0);
-        return;
+        return {};
     }
 
     // uncached bootstrap of offset/masks, one invalidate over threshold+desc pools, then cached walks (non-volatile
@@ -537,6 +543,7 @@ FORCE_INLINE void setup_dfb_implicit_sync(uint32_t tt_l1_ptr* dfb_config_base, u
         isr_enable,
         0,  // METRIC_I unused (was hw_reg_writes count)
         subpassB_hw);
+    return {.producer = producer_txn_id_mask, .consumer = consumer_txn_id_mask};
 }
 
 FORCE_INLINE void setup_dfb_remapper(uint32_t tt_l1_ptr* dfb_config_base, uint32_t num_dfbs) {
@@ -676,6 +683,7 @@ FORCE_INLINE void dfb_program_intra_tensix_alias(
 FORCE_INLINE DfbPackerRemapperRange setup_local_dfb_interfaces(uint32_t tt_l1_ptr* dfb_config_base, uint32_t num_dfbs) {
     DfbPackerRemapperRange packer_rmp{};
     if (num_dfbs == 0) {
+        g_dfb_config_base_addr = 0;
         return packer_rmp;
     }
 
