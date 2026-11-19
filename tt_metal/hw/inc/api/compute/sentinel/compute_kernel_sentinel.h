@@ -64,6 +64,7 @@ public:
 #ifdef TT_METAL_COMPUTE_KERNEL_SENTINEL_TESTING_ENABLED
     void record_reconfig_call(uint8_t call_bit);
     bool verify_calls(uint8_t expected_calls);
+    uint8_t recorded_calls() const { return m_state_spy.recorded_calls(); }
 #endif
 
 private:
@@ -313,20 +314,14 @@ ALWI bool ComputeKernelSentinelImpl<false>::verify_calls(uint8_t expected_calls)
 
 template <Operand operand = Operand::SRCA>
 ALWI void state_configure(uint32_t cb, uint32_t call_line) {
-#ifndef ARCH_QUASAR
     ComputeKernelSentinel::instance().reconfigure_single_operand<operand>(cb, call_line);
-#endif
 }
 
 template <Operand operand_a = Operand::SRCA, Operand operand_b = Operand::SRCB>
 ALWI void state_configure(uint32_t cb_a, uint32_t cb_b, uint32_t call_line) {
-#ifndef ARCH_QUASAR
     ComputeKernelSentinel::instance().reconfigure_dual_operand<operand_a, operand_b>(cb_a, cb_b, call_line);
-#endif
 }
 
 ALWI void state_configure(uint32_t cb_a, uint32_t cb_b, uint32_t cb_out, uint32_t call_line) {
-#ifndef ARCH_QUASAR
     ComputeKernelSentinel::instance().reconfig_all_operands(cb_a, cb_b, cb_out, call_line);
-#endif
 }

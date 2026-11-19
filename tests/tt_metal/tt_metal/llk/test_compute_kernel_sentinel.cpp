@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <cstdint>
+#include <cstdlib>
 #include <map>
 #include <memory>
 #include <string>
@@ -17,6 +18,9 @@
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/program.hpp>
 #include <tt-metalium/tt_metal.hpp>
+#include <tt-metalium/tt_backend_api_types.hpp>
+#include <tt-metalium/workload/specification/program_spec.hpp>
+#include <tt-logger/tt-logger.hpp>
 
 #include "llk_device_fixture.hpp"
 
@@ -127,6 +131,136 @@ bool single_core_compute_kernel_sentinel(
     // assert info and callstack.
     return true;
 }
+/// Quasar version over the 2.0 host API (compute_kernel_sentinel_2_0.cpp). The kernel only passes DFB ids to the
+/// inits, so the data DFBs have no reader/writer; compute is both their producer and consumer. Instead of trapping
+/// on the first failed check, the kernel reports every check through the `status` DFB.
+bool single_core_compute_kernel_sentinel_quasar(
+    const std::shared_ptr<distributed::MeshDevice>& mesh_device, std::uint32_t max_checks) {
+    // PROBE: SENTINEL_PROBE_FMT=f16 swaps MxFp8P for Float16; SENTINEL_PROBE_INJECT=0 disables injection.
+    const char* probe_fmt = std::getenv("SENTINEL_PROBE_FMT");
+    const char* probe_inject = std::getenv("SENTINEL_PROBE_INJECT");
+    const bool probe_f16 = probe_fmt != nullptr && std::string(probe_fmt) == "f16";
+    const bool inject = probe_inject == nullptr || std::string(probe_inject) != "0";
+    const tt::DataFormat mx_format = probe_f16 ? tt::DataFormat::Float32 : tt::DataFormat::MxFp8P;
+    log_info(tt::LogTest, "PROBE fmt={} inject={}", mx_format, inject);
+    const std::uint32_t status_tile_size = tt::tile_size(tt::DataFormat::Float32);
+    const CoreCoord core = {0, 0};
+    auto& cq = mesh_device->mesh_command_queue();
+    auto zero_coord = distributed::MeshCoordinate(0, 0);
+    const NodeCoord node{static_cast<std::uint32_t>(core.x), static_cast<std::uint32_t>(core.y)};
+
+    auto status_dram = distributed::MeshBuffer::create(
+        distributed::ReplicatedBufferConfig{.size = status_tile_size},
+        distributed::DeviceLocalBufferConfig{
+            .page_size = status_tile_size, .buffer_type = tt::tt_metal::BufferType::DRAM, .bottom_up = false},
+        mesh_device.get());
+
+    const KernelSpecName WRITER{"writer"};
+    const KernelSpecName COMPUTE{"compute"};
+    const std::vector<std::pair<std::string, tt::DataFormat>> data_dfbs = {
+        {"in0", mx_format},
+        {"in1", tt::DataFormat::Float16_b},
+        {"in2", tt::DataFormat::Float16_b},
+        {"out0", tt::DataFormat::Float16_b},
+        {"out1", mx_format},
+    };
+    const DFBSpecName STATUS_DFB{"status"};
+
+    std::vector<DataflowBufferSpec> dfb_specs;
+    decltype(KernelSpec::dfb_bindings) compute_bindings;
+    for (const auto& [name, format] : data_dfbs) {
+        dfb_specs.push_back(DataflowBufferSpec{
+            .unique_id = DFBSpecName{name},
+            .entry_size = tt::tile_size(format),
+            .num_entries = 1,
+            .data_format_metadata = format,
+        });
+        for (auto endpoint : {DFBEndpointType::PRODUCER, DFBEndpointType::CONSUMER}) {
+            compute_bindings.push_back(DFBBinding{
+                .dfb_spec_name = DFBSpecName{name},
+                .accessor_name = name,
+                .endpoint_type = endpoint,
+                .access_pattern = DFBAccessPattern::STRIDED,
+            });
+        }
+    }
+    dfb_specs.push_back(DataflowBufferSpec{
+        .unique_id = STATUS_DFB,
+        .entry_size = status_tile_size,
+        .num_entries = 1,
+        .data_format_metadata = tt::DataFormat::Float32,
+    });
+    compute_bindings.push_back(ProducerOf(STATUS_DFB, "status"));
+
+    KernelSpec writer_spec{
+        .unique_id = WRITER,
+        .source = "tests/tt_metal/tt_metal/test_kernels/dataflow/writer_unary_2_0.cpp",
+        .num_threads = 1,
+        .dfb_bindings = {ConsumerOf(STATUS_DFB, "in")},
+        .runtime_arg_schema = {.runtime_arg_names = {"dst_addr", "bank_id", "num_tiles"}},
+        .hw_config =
+            DataMovementHardwareConfig{
+                .config_2xx =
+                    DataMovementHardwareConfig::DataMovement2XXConfig{
+                        .disable_dfb_implicit_sync_for_all = true,
+                    },
+            },
+    };
+    KernelSpec::CompilerOptions::Defines compute_defines{
+        {"TT_METAL_COMPUTE_KERNEL_SENTINEL_TESTING_ENABLED", "1"},
+        {"TT_METAL_COMPUTE_KERNEL_SENTINEL_ENABLED", "1"},
+        {"REDUCE_OP", "PoolType::SUM"},
+        {"REDUCE_DIM", "ReduceDim::REDUCE_ROW"}};
+    if (inject) {
+        compute_defines["TT_METAL_COMPUTE_KERNEL_SENTINEL_DEFAULT_INJECTION"] = "1";
+    }
+    KernelSpec compute_spec{
+        .unique_id = COMPUTE,
+        .source = "tests/tt_metal/tt_metal/test_kernels/compute/compute_kernel_sentinel_2_0.cpp",
+        .num_threads = 1,
+        .compiler_options = {.defines = compute_defines},
+        .dfb_bindings = compute_bindings,
+        .compile_time_args = {{"max_checks", max_checks}},
+        .hw_config = ComputeHardwareConfig{},
+    };
+    ProgramSpec spec{
+        .name = "compute_kernel_sentinel_quasar",
+        .kernels = {writer_spec, compute_spec},
+        .dataflow_buffers = dfb_specs,
+        .work_units = {WorkUnitSpec{.name = "main", .kernels = {WRITER, COMPUTE}, .target_nodes = node}},
+    };
+    Program program(*mesh_device, spec);
+
+    ProgramRunArgs params;
+    params.kernel_run_args = {
+        ProgramRunArgs::KernelRunArgs{
+            .kernel = WRITER,
+            .runtime_arg_values = MakeRuntimeArgsForSingleNode(
+                node,
+                {{"dst_addr", static_cast<std::uint32_t>(status_dram->address())}, {"bank_id", 0u}, {"num_tiles", 1u}}),
+        },
+        ProgramRunArgs::KernelRunArgs{.kernel = COMPUTE},
+    };
+    program.set_program_run_args(params);
+    LaunchProgram(*mesh_device, std::move(program));
+
+    std::vector<std::uint32_t> status;
+    distributed::ReadShard(cq, status, status_dram, zero_coord, false);
+    distributed::Finish(cq);
+
+    const std::uint32_t num_checks = status.at(0);
+    bool pass = num_checks > 0;
+    for (std::uint32_t i = 0; i < num_checks && 1 + i < status.size(); ++i) {
+        const std::uint32_t expected = (status[1 + i] >> 8) & 0xFF;
+        const std::uint32_t recorded = status[1 + i] & 0xFF;
+        if (expected != recorded) {
+            pass = false;
+            log_error(tt::LogTest, "check {}: expected reconfig bits {:#x}, recorded {:#x}", i, expected, recorded);
+        }
+    }
+    log_info(tt::LogTest, "{} sentinel checks, {}", num_checks, pass ? "all match" : "mismatches above");
+    return pass;
+}
 }  // namespace unit_tests::compute::compute_kernel_sentinel
 
 ////////////////////////////////////////////////////////////////////////////
@@ -137,7 +271,14 @@ bool single_core_compute_kernel_sentinel(
 
 TEST_F(LLKMeshDeviceFixture, TensixComputeKernelSentinel) {
     if (this->arch_ == ARCH::QUASAR) {
-        GTEST_SKIP() << "disabled due to hang on Quasar (tenstorrent/tt-metal#59923)";
+        for (const auto& device : devices_) {
+            for (std::uint32_t max_checks : {3u, 64u}) {
+                log_info(tt::LogTest, "PROBE max_checks={}", max_checks);
+                EXPECT_TRUE(unit_tests::compute::compute_kernel_sentinel::single_core_compute_kernel_sentinel_quasar(
+                    device, max_checks));
+            }
+        }
+        return;
     }
     unit_tests::compute::compute_kernel_sentinel::ComputeKernelSentinelTestConfig test_config = {
         .num_tiles = 1, .fp32_dest_acc_en = false, .dst_full_sync_en = false};

@@ -29,8 +29,8 @@ template <
     bool dense,
     bool configure_remap, bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void pack_untilize_dest_init_impl(uint32_t ocb, uint32_t call_line = __builtin_LINE()) {
-#ifndef ARCH_QUASAR
     state_configure<Operand::PACK>(ocb, call_line);
+#ifndef ARCH_QUASAR
 #ifdef ARCH_BLACKHOLE
     // Needed for setting swizzle_32b on Blackhole; llk_math_reconfig_remap is a no-op on Wormhole.
     // TODO NC: A workaround for tt-metal#17132. Should be addressed more systematically in tt-llk#989
@@ -52,8 +52,8 @@ ALWI void pack_untilize_dest_init_impl(uint32_t ocb, uint32_t call_line = __buil
 
 template <uint32_t block_ct_dim, uint32_t full_ct_dim, bool configure_remap, bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void pack_untilize_init_impl(uint32_t icb, uint32_t ocb, uint32_t call_line = __builtin_LINE()) {
-#ifndef ARCH_QUASAR
     state_configure<Operand::SRCA, Operand::PACK>(icb, ocb, call_line);
+#ifndef ARCH_QUASAR
     UNPACK((
         llk_unpack_A_init<BroadcastType::NONE, false /*acc_to_dest*/, EltwiseBinaryReuseDestType::NONE, UnpackToDestEn>(
             false /*transpose_of_faces*/,

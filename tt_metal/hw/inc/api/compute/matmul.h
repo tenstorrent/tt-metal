@@ -116,8 +116,8 @@ ALWI void matmul_init(
     const std::uint32_t transpose = 0,
     std::uint32_t call_line = __builtin_LINE()) {
     LLK_SAN_FUNCTION();
-#ifndef ARCH_QUASAR
     state_configure(in1_cb_id, in0_cb_id, call_line);
+#ifndef ARCH_QUASAR
     MATH((llk_math_matmul_init<MATH_FIDELITY, MM_THROTTLE>(in0_cb_id, in1_cb_id, transpose)));
     UNPACK((llk_unpack_AB_matmul_init(in0_cb_id, in1_cb_id, transpose)));
 #else
@@ -226,8 +226,8 @@ ALWI void matmul_block_init(
     std::uint32_t kt_dim = 1,
     std::uint32_t call_line = __builtin_LINE()) {
     LLK_SAN_FUNCTION();
-#ifndef ARCH_QUASAR
     state_configure(in1_cb_id, in0_cb_id, call_line);
+#ifndef ARCH_QUASAR
     UNPACK((llk_unpack_AB_matmul_init(in0_cb_id, in1_cb_id, transpose, ct_dim, rt_dim, kt_dim)));
     MATH((llk_math_matmul_init<MATH_FIDELITY, MM_THROTTLE, row_mop>(in0_cb_id, in1_cb_id, transpose, ct_dim, rt_dim)));
 #ifdef ARCH_BLACKHOLE
@@ -283,8 +283,8 @@ ALWI void matmul_block(
     std::uint32_t kt_dim,
     std::uint32_t call_line = __builtin_LINE()) {
     LLK_SAN_FUNCTION();
-#ifndef ARCH_QUASAR
     state_configure(in1_cb_id, in0_cb_id, call_line);
+#ifndef ARCH_QUASAR
     UNPACK((llk_unpack_AB_matmul(in0_cb_id, in1_cb_id, in0_tile_index, in1_tile_index, ct_dim, rt_dim, kt_dim)));
 #ifdef ARCH_BLACKHOLE
     // Dynamic throttling is only available on Blackhole architecture

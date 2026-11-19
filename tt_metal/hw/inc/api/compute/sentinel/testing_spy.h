@@ -54,6 +54,11 @@ public:
      */
     void reset();
 
+    /**
+     * @brief Recorded call bits since the last verify/reset (RECONFIG_CHANGED_*).
+     */
+    uint8_t recorded_calls() const { return m_reconfig_calls; }
+
 private:
     uint8_t m_reconfig_calls = RECONFIG_NOTHING_CHANGED;
 };

@@ -50,8 +50,8 @@ ALWI void copy_init(
     std::uint32_t transpose_within_16x16_face = false,
     std::uint32_t call_line = __builtin_LINE()) {
     LLK_SAN_FUNCTION();
-#ifndef ARCH_QUASAR
     state_configure(cbid, call_line);
+#ifndef ARCH_QUASAR
 #else
     LLK_ASSERT(transpose_within_16x16_face == false, "Transpose within face not supported on Quasar");
     LLK_ASSERT(transpose == 0, "Transpose not supported on Quasar");

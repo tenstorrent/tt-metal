@@ -77,8 +77,6 @@ ALWI void compute_kernel_hw_startup(uint32_t icb0, uint32_t icb1, uint32_t ocb) 
     PACK((llk_pack_hw_configure<DST_ACCUM_MODE>(ocb)));
     PACK((llk_pack_init<PackMode::Default>(ocb)));
     PACK((llk_pack_dest_init<DST_ACCUM_MODE, PackMode::Default>(ocb)));
-
-    ComputeKernelSentinel::instance().set_srca(src_a_cb).set_srcb(src_b_cb).set_pack(ocb);
 #else
     UNPACK((llk_unpack_hw_configure(src_a_cb, src_b_cb)));
 
@@ -96,6 +94,7 @@ ALWI void compute_kernel_hw_startup(uint32_t icb0, uint32_t icb1, uint32_t ocb) 
     PACK((ckernel::trisc::t6_semaphore_init(ckernel::trisc::semaphore::PACK_UNPACK, 0, COMPUTE_SEMAPHORE_MAX)));
 #endif
 #endif
+    ComputeKernelSentinel::instance().set_srca(src_a_cb).set_srcb(src_b_cb).set_pack(ocb);
 }
 
 // clang-format off

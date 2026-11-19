@@ -49,8 +49,8 @@ namespace ckernel {
 // clang-format on
 template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void tilize_init(uint32_t icb, uint32_t block, uint32_t ocb, uint32_t call_line = __builtin_LINE()) {
-#ifndef ARCH_QUASAR
     state_configure<Operand::SRCA, Operand::PACK>(icb, ocb, call_line);
+#ifndef ARCH_QUASAR
     UNPACK((llk_unpack_tilize_init(icb, block)));
     MATH((llk_math_eltwise_unary_datacopy_init<
           DataCopyType::A2D,
