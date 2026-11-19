@@ -44,7 +44,13 @@ from ttml.distributed_checkpointing._errors import (
 )
 from ttml.distributed_checkpointing._index import ChunkRecord, Index, data_file_name
 from ttml.distributed_checkpointing._layouts import Identity, Pad, fused_segments
-from ttml.distributed_checkpointing._planner import TensorInfo, _ChunkLookup, create_load_plan, create_save_plan
+from ttml.distributed_checkpointing._planner import (
+    TensorInfo,
+    _ChunkLookup,
+    _replica_layout,
+    create_load_plan,
+    create_save_plan,
+)
 from ttml.distributed_checkpointing._topology import Label, Placement, dist_coords
 
 TP8_DP4 = world([R(), S(2)], (4, 8))
@@ -311,8 +317,6 @@ def test_mismatches_are_refused_before_any_read(expect_error):
         ckpt.load({"w": (SINGLE, Identity(), (1, 1, 64, 64))})
     with expect_error(DtypeMismatchError, "checkpoint holds"):
         dests = [info("w", SINGLE, (1, 1, 64, 32), Identity(), dtype="BF16")]
-        from ttml.distributed_checkpointing._planner import create_load_plan
-
         create_load_plan(ckpt.index, dests)
     # The plan lists what is missing and unexpected; load judges them under strict.
     plan, _ = ckpt.load({"other": (SINGLE, Identity(), (1, 1, 64, 32))})
@@ -607,8 +611,6 @@ def test_keys_that_differ_in_one_part_of_their_layout_do_not_share_it(monkeypatc
 
 
 def test_save_planning_is_cached_per_label_and_shape(expect_error):
-    from ttml.distributed_checkpointing._planner import _replica_layout
-
     infos = [info(f"model/blocks/{i}/w", TP8_DP4, (1, 1, 256, 64), Identity(), dtype="BF16") for i in range(16)]
     _replica_layout.cache_clear()
     first = create_save_plan(infos, lambda c: data_file_name(0, 0, c), one_process_owner)
