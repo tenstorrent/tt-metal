@@ -71,9 +71,8 @@ struct NewInfraProgramFactory {
     using tensor_args_t = Tensor;
     using tensor_return_value_t = Tensor;
 
-    static cached_program_t create(
-        const tensor_args_t& /*tensor_args*/, tensor_return_value_t& /*tensor_return_value*/) {
-        return cached_program_t(tt::tt_metal::Program(), SharedVariables{});
+    static cached_program_t create(const tensor_args_t& tensor_args, tensor_return_value_t& /*tensor_return_value*/) {
+        return cached_program_t(tt::tt_metal::CreateProgram(*tensor_args.device()), SharedVariables{});
     }
 
     static void override_runtime_arguments(
@@ -132,7 +131,7 @@ struct ProgramSpecFactory {
 
 // Same, but additionally provides override_runtime_arguments -> classified as the
 // custom variant, whose cache-hit path applies the returned ProgramRunArgs via
-// UpdateProgramRunArgs.
+// Program::update_program_run_args.
 struct CustomProgramSpecFactory {
     static ttnn::device_operation::ProgramArtifacts create_program_artifacts(
         const OperationAttributes& /*attrs*/, const Tensor& /*tensor_args*/, Tensor& /*tensor_return_value*/) {
@@ -468,7 +467,7 @@ TEST_F(LaunchOperation2x4Test, MeshWorkloadSpecAdapterMapsProgramsPerCoordinate)
 }
 
 // Same per-coordinate mapping, but with an override so the cache-hit path takes the
-// UpdateProgramRunArgs branch instead of the tensor-only refresh.
+// Program::update_program_run_args branch instead of the tensor-only refresh.
 struct PerCoordProdAllFactoryWithOverride : PerCoordProdAllFactory {
     static std::atomic<int> override_calls;
 
