@@ -37,8 +37,6 @@ using HostName = std::string;
 
 namespace tt::tt_fabric {
 
-struct LocalMeshBinding;
-
 // Use ASICPosition from tt::tt_metal namespace
 using AsicPosition = tt::tt_metal::ASICPosition;
 
@@ -97,14 +95,16 @@ public:
      *
      * @param mesh_graph Reference to the mesh graph object containing fabric topology
      * @param physical_system_descriptor Reference to the physical system descriptor containing ASIC topology
-     * @param local_mesh_binding Reference to the local mesh binding object containing mesh binding information
+     * @param local_mesh_id The mesh this process owns
+     * @param local_host_rank This process's host rank within local_mesh_id
      */
     TopologyMapper(
         const tt::Cluster& cluster,
         const tt_metal::distributed::multihost::DistributedContext& distributed_context,
         const MeshGraph& mesh_graph,
         const tt::tt_metal::PhysicalSystemDescriptor& physical_system_descriptor,
-        const LocalMeshBinding& local_mesh_binding,
+        MeshId local_mesh_id,
+        MeshHostRankId local_host_rank,
         std::chrono::duration<float> timeout = std::chrono::duration<float>(60.0f),
         const tt::tt_metal::PhysicalSystemDescriptor* live_descriptor = nullptr);
 
@@ -116,7 +116,8 @@ public:
         const tt_metal::distributed::multihost::DistributedContext& distributed_context,
         const MeshGraph& mesh_graph,
         const tt::tt_metal::PhysicalSystemDescriptor& physical_system_descriptor,
-        const LocalMeshBinding& local_mesh_binding,
+        MeshId local_mesh_id,
+        MeshHostRankId local_host_rank,
         const std::vector<::tt::tt_metal::experimental::tt_fabric::PinningConstraint>& pinning_groups,
         std::chrono::duration<float> timeout = std::chrono::duration<float>(60.0f),
         const tt::tt_metal::PhysicalSystemDescriptor* live_descriptor = nullptr);
@@ -128,7 +129,8 @@ public:
         const tt_metal::distributed::multihost::DistributedContext& distributed_context,
         const MeshGraph& mesh_graph,
         const tt::tt_metal::PhysicalSystemDescriptor& physical_system_descriptor,
-        const LocalMeshBinding& local_mesh_binding,
+        MeshId local_mesh_id,
+        MeshHostRankId local_host_rank,
         const std::map<FabricNodeId, ChipId>& logical_mesh_chip_id_to_physical_chip_id_mapping,
         std::chrono::duration<float> timeout = std::chrono::duration<float>(60.0f),
         const tt::tt_metal::PhysicalSystemDescriptor* live_descriptor = nullptr);
@@ -149,12 +151,9 @@ public:
         return physical_system_descriptor_;
     }
 
-    /**
-     * @brief Get local mesh ID to rank binding
-     *
-     * @return const LocalMeshBinding&
-     */
-    const LocalMeshBinding& get_local_mesh_binding() const { return local_mesh_binding_; }
+    // The mesh this process owns and its host rank within it.
+    MeshId get_local_mesh_id() const { return local_mesh_id_; }
+    MeshHostRankId get_local_mesh_host_rank() const { return local_host_rank_; }
 
     /**
      * @brief Get fabric node ID from a physical node ID mapped by the topology mapper
@@ -489,7 +488,8 @@ private:
     // Aliases `physical_system_descriptor_` unless a caller passes a separate live descriptor, which makes
     // the resolution an identity on the discovered path and leaves it byte-for-byte as it was.
     const tt::tt_metal::PhysicalSystemDescriptor& live_descriptor_;
-    const LocalMeshBinding& local_mesh_binding_;
+    const MeshId local_mesh_id_;
+    const MeshHostRankId local_host_rank_;
     const std::vector<::tt::tt_metal::experimental::tt_fabric::PinningConstraint> pinning_groups_;
     bool generate_mapping_locally_ = false;
     std::chrono::duration<float> topology_mapping_timeout_;

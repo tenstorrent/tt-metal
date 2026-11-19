@@ -37,8 +37,6 @@ _TIMING_BASES = (
     "UNPACK_ISOLATE",
     "MATH_ISOLATE",
     "PACK_ISOLATE",
-    "L1_CONGESTION[UNPACK]",
-    "L1_CONGESTION[PACK]",
     "SFPU_ISOLATE",
 )
 _TIMING_COLUMNS = [
@@ -84,6 +82,7 @@ DB_SCHEMA = [
     Column("face_r_dim", "int64", True, "configuration"),
     Column("full_ct_dim", "int64", True, "configuration"),
     Column("full_rt_dim", "int64", True, "configuration"),
+    Column("group_kt_dim", "int64", True, "configuration"),
     Column("in0_face_c_dim", "int64", True, "configuration"),
     Column("in0_face_r_dim", "int64", True, "configuration"),
     Column("in1_face_c_dim", "int64", True, "configuration"),

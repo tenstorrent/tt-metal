@@ -23,7 +23,7 @@ except ModuleNotFoundError:  # pragma: no cover - handled in load_config
     yaml = None
 
 
-SIGNATURE_VERSION = "runner-failure-signatures-2026-10-05-v3"
+SIGNATURE_VERSION = "runner-failure-signatures-2026-10-28-v1"
 UNKNOWN_RUNNER = "(unknown runner)"
 ACTIVE_JOB_STATUSES = {"queued", "in_progress", "waiting", "pending", "requested"}
 NON_FAILED_CONCLUSIONS = {"success", "skipped", "cancelled"}
@@ -52,6 +52,7 @@ class ErrorSignature:
     needle: str | None = None
     pattern: str | None = None
     case_sensitive: bool = True
+    failed_jobs_only: bool = False
 
 
 @dataclass(frozen=True)
@@ -158,6 +159,17 @@ ERROR_SIGNATURES = (
         label="Failed reset",
         needle="Unable to reset board successfully",
         case_sensitive=False,
+    ),
+    ErrorSignature(
+        key="LEFTOVER_PROCESS_FOUND",
+        label="Leftover process",
+        pattern=(
+            r"\bWaiting\s+for\s+KMD\s+lock\s+\d+\s+on\s+/dev/tenstorrent/\d+,\s+"
+            r"which\s+is\s+currently\s+held\s+by\s+another\s+handle\b"
+        ),
+        case_sensitive=False,
+        # UMD also emits this warning for temporary lock contention that later clears.
+        failed_jobs_only=True,
     ),
     ErrorSignature(
         key="PHYSICAL_DISCOVERY_FAILURE_FOUND",
@@ -779,7 +791,12 @@ def scan_job(job: RecentJob, timeout: int) -> JobScanResult:
             log_unavailable=log_result.unavailable,
         )
 
-    signature_labels = combine_signature_labels(metadata_signature_labels, log_signature_labels)
+    matched_labels = combine_signature_labels(metadata_signature_labels, log_signature_labels)
+    signature_labels = [
+        signature.label
+        for signature in ERROR_SIGNATURES
+        if signature.label in matched_labels and (not signature.failed_jobs_only or is_failed_job(job))
+    ]
 
     return JobScanResult(
         job=job,

@@ -36,6 +36,7 @@ class _DeepSeekV4Adapter(MLAPrefillAdapter):
     ttnn_cache_default = ""
     config_builder_overrides_checkpoint = True
     prefill_trace_layout = "chunked_group_a_v1"
+    builds_missing_weight_cache = False  # TtV4Transformer reads its own checkpoint layout; no TTNN trunk cache
 
     @property
     def config_builder(self) -> Callable:
@@ -53,7 +54,9 @@ class _DeepSeekV4Adapter(MLAPrefillAdapter):
         """The full-depth config from the model constants; the runner overwrites ``max_seq_len``."""
         return self.config_builder()
 
-    def weight_cache_path(self, mesh_shape: tuple) -> Optional[Path]:
+    def weight_cache_path(self, mesh_shape: tuple, sp_axis: int = 0) -> Optional[Path]:
+        if sp_axis != 0:
+            raise ValueError("DeepSeek-V4 prefill runs SP on mesh axis 0 only")
         return None
 
     def checkpoint_path(self) -> Path:
@@ -105,7 +108,8 @@ class _DeepSeekV4Adapter(MLAPrefillAdapter):
             first_layer_idx=params.first_layer_idx,
             is_first_rank=params.is_first_rank,
             is_last_rank=params.is_last_rank,
-            kv_only_last_layer=params.kv_only_last_layer,
+            # The runner asks the last rank for a KV-only last layer; V4 has none, so it runs that layer whole.
+            kv_only_last_layer=False,
             dflash_enabled=params.dflash_enabled,
             mtp_levels=params.mtp_levels,
             routing_use_l1_small_for_semaphores=self.routing_use_l1_small_for_semaphores,
