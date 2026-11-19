@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // Metal 2.0 variant of dispatcher_kernel_size_and_runtime.cpp. KERNEL_RUNTIME_MICROSECONDS is a cycle
-// count here, and since Gen2 requires a zero semaphore initial value, the semaphore check reads back
+// count on Quasar, and since Gen2 requires a zero semaphore initial value, the semaphore check reads back
 // zero and then leaves it non-zero.
 
 #include <cstdint>
@@ -13,6 +13,11 @@
 #include "api/dataflow/noc_semaphore.h"
 #include "api/debug/dprint.h"
 #include "experimental/kernel_args.h"
+
+#ifndef ARCH_QUASAR
+#include "c_tensix_core.h"
+#include "core_config.h"
+#endif
 
 constexpr uint32_t num_unique_rt_args = get_arg(args::num_unique_rt_args);
 constexpr uint32_t num_common_rt_args = get_arg(args::num_common_rt_args);
@@ -26,11 +31,13 @@ constexpr uint32_t empty_kernel_bytes = 16;
 static uint8_t lorem_ipsum[KERNEL_SIZE_BYTES - empty_kernel_bytes];
 #endif
 
+#ifdef ARCH_QUASAR
 static inline uint32_t read_cycle_count() {
     uint32_t cycles;
     asm volatile("rdcycle %0" : "=r"(cycles));
     return cycles;
 }
+#endif
 
 // DFB accessor names are compile-time tokens, so each index needs its own statement.
 #define VERIFY_DFB(idx)                                                                   \
@@ -60,9 +67,14 @@ static inline uint32_t read_cycle_count() {
     }
 
 void kernel_main() {
+#ifdef ARCH_QUASAR
     // Unsigned subtraction so the comparison stays correct across a counter wrap.
     const uint32_t start_time = read_cycle_count();
     while (read_cycle_count() - start_time < KERNEL_RUNTIME_MICROSECONDS);
+#else
+    const uint64_t end_time = c_tensix_core::read_wall_clock() + KERNEL_RUNTIME_MICROSECONDS;
+    while (c_tensix_core::read_wall_clock() < end_time);
+#endif
 
     for (uint32_t i = 0; i < num_unique_rt_args; i++) {
         const uint32_t rt_arg = get_vararg(i);

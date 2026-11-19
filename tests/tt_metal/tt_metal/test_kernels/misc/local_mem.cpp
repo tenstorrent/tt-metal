@@ -15,7 +15,7 @@ volatile uint32_t nonzero[4] = {
 volatile uint32_t zero[4] = {0, 0, 0, 0};
 
 #if !defined(COMPILE_FOR_BRISC) && !defined(COMPILE_FOR_NCRISC) && !defined(COMPILE_FOR_ERISC) && \
-    !defined(COMPILE_FOR_IDLE_ERISC) && !defined(COMPILE_FOR_AERISC)
+    !defined(COMPILE_FOR_IDLE_ERISC) && !defined(COMPILE_FOR_AERISC) && !defined(COMPILE_FOR_DM)
 #include "api/compute/common.h"
 #endif
 
