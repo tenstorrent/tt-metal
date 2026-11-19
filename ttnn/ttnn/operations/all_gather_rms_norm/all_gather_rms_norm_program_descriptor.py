@@ -360,8 +360,40 @@ def cb_plan(sz: Sizes, k: int, pitch: int, rows: int, n_affine_slots: int, dense
     return plan
 
 
-def plan_bytes(plan: dict) -> int:
-    return sum(p * b for p, b in plan.values())
+def cb_alias_groups(sz: Sizes) -> list:
+    """CBs with disjoint lifetimes sharing one L1 region (one CBDescriptor, several buffer indices). All are
+    compute -> compute (never written over the NoC, so no peer can land in them early):
+      * ln moments scratch (popped by the end of member_moments) with the owner combine's cb_dev: SFPU path
+        cb_moment_a (pass A, popped by its row reduce before pass B packs) + cb_moment_b; FPU path cb_cent (cb_moment_b
+        is live together with cb_cent there);
+      * ln cb_mstat (popped by the member finalize) with cb_mu (combine)."""
+    if not sz.is_ln:
+        return []
+    moments = (CB_CENT, CB_DEV) if sz.ln_fpu else (CB_MOMENT_A, CB_MOMENT_B, CB_DEV)
+    return [moments, (CB_MSTAT, CB_MU)]
+
+
+def alias_regions(plan: dict, sz: Sizes) -> list:
+    """[(indices present, region bytes)] for every alias group with >= 1 member in `plan`. The region is rounded to a
+    whole number of cb_dev / cb_mu blocks (they cycle per owned row: a block must never straddle the region end)."""
+    regions = []
+    for grp in cb_alias_groups(sz):
+        idx = [c for c in grp if c in plan]
+        if not idx:
+            continue
+        nbytes = max(plan[c][0] * plan[c][1] for c in idx)
+        for c in (CB_DEV, CB_MU):
+            if c in idx:
+                q = plan[c][0] * plan[c][1]
+                nbytes = _div_up(nbytes, q) * q
+        regions.append((idx, nbytes))
+    return regions
+
+
+def plan_bytes(plan: dict, sz: Sizes = None) -> int:
+    regions = alias_regions(plan, sz) if sz is not None else []
+    aliased = {c for idx, _ in regions for c in idx}
+    return sum(p * b for c, (p, b) in plan.items() if c not in aliased) + sum(n for _, n in regions)
 
 
 def n_affine_slots(mm: MemberMap, geo: Geometry) -> int:
@@ -654,9 +686,12 @@ def create_mesh_program_descriptor(input_tensor, gamma, beta, output_tensor, cfg
     fp32_dest = bool(cfg.compute_kernel_config.fp32_dest_acc_en)
     mask = cfg.is_ln and geo.v < TILE
     dense = geo.v < TILE  # slices land at non-tile-aligned output offsets: dense assembly regime
-    # LN FPU fast path: x and the bf16 pivots are exact FPU operands (bf16 / bfloat8_b) and no slice tail is masked
-    ln_fpu = cfg.is_ln and x_dtype != ttnn.float32 and geo.v == TILE
-    sz = replace(make_sizes(x_dtype, g_dtype, fp32_dest, cfg.is_ln, has_gamma, has_beta, mask), ln_fpu=ln_fpu)
+    # LN FPU fast path: x and the bf16 pivots are exact FPU operands (bf16 / bfloat8_b) and no slice tail is masked.
+    # It holds the centered block (cb_cent, accumulator format) beside cb_x: when no split fits with it and DEST is
+    # fp32, the SFPU path (no block-sized scratch; precision-equivalent at fp32 DEST) is solved instead. 16-bit DEST
+    # keeps the FPU path (the SFPU path was measured worse there).
+    ln_fpu_ok = cfg.is_ln and x_dtype != ttnn.float32 and geo.v == TILE
+    sz = replace(make_sizes(x_dtype, g_dtype, fp32_dest, cfg.is_ln, has_gamma, has_beta, mask), ln_fpu=ln_fpu_ok)
 
     chips, ring, ports_union = fabric
     grid = mesh.compute_with_storage_grid_size()
@@ -686,7 +721,7 @@ def create_mesh_program_descriptor(input_tensor, gamma, beta, output_tensor, cfg
             fit_log.append((k, rows, None, port_bytes))
             return False
         for u in out_unit_candidates(mm.pitch):
-            cbytes = plan_bytes(cb_plan(sz, k, mm.pitch, rows, n_affine_slots(mm, geo), dpk, u))
+            cbytes = plan_bytes(cb_plan(sz, k, mm.pitch, rows, n_affine_slots(mm, geo), dpk, u), sz)
             if cbytes <= budget:
                 fit_unit[k] = u
                 fit_batch[k] = pb
@@ -696,7 +731,14 @@ def create_mesh_program_descriptor(input_tensor, gamma, beta, output_tensor, cfg
 
     fits.report = lambda: f"budget {budget} B, (k, rows, compute B, port B): {fit_log}"
 
-    split = select_split(geo, N, fits)
+    try:
+        split = select_split(geo, N, fits)
+    except RuntimeError:
+        if not (sz.ln_fpu and fp32_dest):
+            raise
+        sz = replace(sz, ln_fpu=False)
+        split = select_split(geo, N, fits)
+    ln_fpu = sz.ln_fpu
     k, mm, pitch, rows_max = split.k, split.mm, split.mm.pitch, split.rows_max
     compute_used = compute_all[: split.num_groups * k]
     vxy_cache = {}
@@ -854,6 +896,7 @@ def create_mesh_program_descriptor(input_tensor, gamma, beta, output_tensor, cfg
             wave_rg,
             unit,
             port_batch,
+            ln_fpu,
             ckc.math_fidelity,
             fp32_dest,
             ckc.math_approx_mode,
@@ -878,11 +921,24 @@ def create_mesh_program_descriptor(input_tensor, gamma, beta, output_tensor, cfg
         # CBs: cb_x FIRST over compute_used + ports_union (identical on every chip -> one landing address)
         cbs = [_cb(CB_X, cplan[CB_X][0], cplan[CB_X][1], x_dtype, crs_x)]
         cbs.append(_cb(CB_STAGE, stage_pages(port_batch, chunk_pages), tile_bytes, x_dtype, crs_ports))
+        regions = alias_regions(cplan, sz)
+        aliased = {c for idx, _ in regions for c in idx}
         for idx in sorted(cplan):
-            if idx == CB_X:
+            if idx == CB_X or idx in aliased:
                 continue
             pages, pb = cplan[idx]
             cbs.append(_cb(idx, pages, pb, cb_dtype[idx], crs_compute))
+        for idx, nbytes in regions:  # one L1 region, several buffer indices (disjoint lifetimes)
+            cbs.append(
+                ttnn.CBDescriptor(
+                    total_size=nbytes,
+                    core_ranges=crs_compute,
+                    format_descriptors=[
+                        ttnn.CBFormatDescriptor(buffer_index=c, data_format=cb_dtype[c], page_size=cplan[c][1])
+                        for c in idx
+                    ],
+                )
+            )
         program.cbs = cbs
 
         # ---- expected landings / own-loaded signalling on this chip ----

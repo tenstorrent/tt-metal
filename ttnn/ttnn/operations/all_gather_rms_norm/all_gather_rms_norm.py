@@ -233,17 +233,54 @@ def _check_caller(input_tensor, *, cluster_axis, gamma, beta, norm_type, epsilon
 # ---------------------------------------------------------------------------
 
 _SEM_CACHE = {}
+_L1_BASE = {}  # id(mesh) -> absolute L1 address of the allocator's relative address 0 (memory-view offset)
+
+
+def _l1_blocks(mesh):
+    """[(relative address, size, allocated)] of the L1 allocator's blocks (identical on every bank: lockstep)."""
+    view = ttnn.get_memory_view(mesh, ttnn.BufferType.L1)
+    return [(int(b["address"]), int(b["size"]), b["allocated"] == "yes") for b in view.block_table]
+
+
+def _new_sems(mesh, ports_union):
+    cores = ttnn.CoreRangeSet(
+        [ttnn.CoreRange(ttnn.CoreCoord(x, y), ttnn.CoreCoord(x, y)) for x, y in sorted(ports_union)]
+    )
+    before = {a for a, _, used in _l1_blocks(mesh) if used}
+    sems = tuple(ttnn.create_global_semaphore(mesh, cores, 0) for _ in range(2))  # (arrival, ready)
+    ttnn.synchronize_device(mesh)  # every chip's counters are 0 before any chip's first call
+    new_rel = sorted({a for a, _, used in _l1_blocks(mesh) if used} - before)
+    if new_rel and id(mesh) not in _L1_BASE:
+        _L1_BASE[id(mesh)] = min(int(ttnn.get_global_semaphore_address(s)) for s in sems) - new_rel[0]
+    return sems
+
+
+def _relocate_pinning_sems(mesh):
+    """The semaphores live for the whole session, the L1 tensors of the call that created them do not. L1 buffers are
+    placed top-down, so semaphores created while a call's L1 shards were allocated sit BELOW them and, once those
+    shards are freed, pin the CB region (the CB budget is the distance to the lowest L1 buffer) for every later call
+    of every op. When free L1 has opened above a cached pair, re-create it (the allocator places the new pair at the
+    highest free address) and keep whichever pair sits higher. Steady state (nothing free above): no-op."""
+    base = _L1_BASE.get(id(mesh))
+    if base is None:
+        return
+    free_above = [a + n for a, n, used in _l1_blocks(mesh) if not used and n >= 128]
+    for key, (m, sems) in list(_SEM_CACHE.items()):
+        if m is not mesh:
+            continue
+        top = max(int(ttnn.get_global_semaphore_address(s)) for s in sems) - base
+        if not any(end > top + 64 for end in free_above):
+            continue
+        fresh = _new_sems(mesh, key[1])
+        if min(int(ttnn.get_global_semaphore_address(s)) for s in fresh) - base > top:
+            _SEM_CACHE[key] = (mesh, fresh)  # the old pair is freed with its last reference (device synchronized)
 
 
 def _global_sems(mesh, ports_union):
     key = (id(mesh), tuple(ports_union))
+    _relocate_pinning_sems(mesh)
     if key not in _SEM_CACHE:
-        cores = ttnn.CoreRangeSet(
-            [ttnn.CoreRange(ttnn.CoreCoord(x, y), ttnn.CoreCoord(x, y)) for x, y in sorted(ports_union)]
-        )
-        sems = tuple(ttnn.create_global_semaphore(mesh, cores, 0) for _ in range(2))  # (arrival, ready)
-        ttnn.synchronize_device(mesh)  # every chip's counters are 0 before any chip's first call
-        _SEM_CACHE[key] = (mesh, sems)
+        _SEM_CACHE[key] = (mesh, _new_sems(mesh, ports_union))
     return _SEM_CACHE[key][1]
 
 
