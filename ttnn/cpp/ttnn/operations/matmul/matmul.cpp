@@ -232,7 +232,7 @@ static bool auto_config_reads_nd_dram_b(
     const ttnn::prim::MatmulParams& parameters,
     const std::optional<ttnn::Tensor>& optional_output_tensor) {
     if (input_tensor_b.memory_config().buffer_type() != BufferType::DRAM || input_tensor_a.is_sharded() ||
-        detail::is_input_batched(input_tensor_b.logical_shape())) {
+        (detail::is_input_batched(input_tensor_b.logical_shape()) && parameters.user_core_coord.has_value())) {
         return false;
     }
     auto matmul_struct =
