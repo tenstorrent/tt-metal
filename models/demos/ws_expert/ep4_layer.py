@@ -36,7 +36,7 @@ class EP4Cfg(LayerCfg):
     # G 4: the experts' muxes and row collectors placed by the NoC flow model (lane_cfgs)
     muxtop: int = 0
     # O rows in the producing group's side's DRAM column (ws_lane5 L5Cfg.oside, no row collectors); O holds twice the
-    # pages, the combine reads each pair's row by its local expert's side (expert_side_masks)
+    # pages, the combine reads each pair's row by its local expert's side (expert_side_masks); 2: three banks a side
     oside: int = 0
 
     EPC = property(lambda s: s.nexp // s.C)
@@ -185,6 +185,13 @@ O_SLACK = 1.25  # O rows allocated: O_SLACK x 12 n (the busiest zipf chip measur
 def o_rows(lc: EP4Cfg):
     """O's allocated rows (the last one the lists' pad row)."""
     return -(-int(O_SLACK * lc.K * lc.T) // 32) * 32 + 32
+
+
+def o_pages(lc: EP4Cfg):
+    """O's pages before the fence: o_rows, twice that with oeast / oside, 8 a 3 rows with oside 2."""
+    if lc.oside == 2:
+        return (o_rows(lc) + 2) // 3 * 8
+    return o_rows(lc) * (2 if lc.oeast or lc.oside else 1)
 
 
 def list_width(lc: EP4Cfg):
@@ -343,7 +350,7 @@ def lane_cfgs(mesh, lc: EP4Cfg, G=2, l5kw=None, lkw=None):
     if lc.oeast:
         l5.oeast, l5.yc = 1, (l5kw or {}).get("yc", 2)
     if lc.oside:
-        l5.oside, l5.yc = 1, 0
+        l5.oside, l5.yc = lc.oside, 0
     if G == 4 and lc.muxtop:
         # muxes in the top rows of their columns, collectors below them, every row write on NOC1 (the NoC flow model's
         # layout: the muxes' NOC1 path to the ethernet row shares the fewest links with the row writes)
@@ -383,7 +390,7 @@ def own_slices(cfg, lane, T, lc: EP4Cfg, wg, wu, wd, Cn):
 def o_tensor(mesh, lc: EP4Cfg):
     """O [o_rows + 16, H] bf16 row-major (the last 16 rows the lane's posted-write fence), zero."""
     return ttnn.zeros(
-        [o_rows(lc) * (2 if lc.oeast or lc.oside else 1) + 16, lc.H],
+        [o_pages(lc) + 16, lc.H],
         dtype=ttnn.bfloat16,
         layout=ttnn.ROW_MAJOR_LAYOUT,
         device=mesh,
@@ -410,7 +417,7 @@ def lane_program(mesh, lc: EP4Cfg, cfg, lane, l5, T, tab_t, xbuf, louts, ws_t, O
         T,
         0,
         dest_t=louts["dest"],
-        fence_row=o_rows(lc) * (2 if lc.oeast or lc.oside else 1),
+        fence_row=o_pages(lc),
     )
 
 
@@ -547,7 +554,7 @@ def build_combine(mesh, lc: EP4Cfg, res, louts, O, P, cnt_t, fence, sides=None):
                     kernel_source=kpath("e4_comb_rd.cpp"),
                     core_ranges=aset,
                     compile_time_args=rd_ct,
-                    defines=[("E4_OEAST", "1")] if lc.oeast else [("E4_OSIDE", "1")] if lc.oside else [],
+                    defines=[("E4_OEAST", "1")] if lc.oeast else [("E4_OSIDE", str(lc.oside))] if lc.oside else [],
                     runtime_args=rd_rt,
                     config=dm(0),
                 ),

@@ -10,7 +10,8 @@
 // Up to NBUF rows in flight (transaction id 1 + slot), retired in order.
 // CT: 0 NBUF, 1 tab (L1), 2 tab flag (L1 word), 3 row bytes, 4 CB 1 bytes, then TensorAccessorArgs(runs), (O).
 // E4_OEAST (EP4Cfg.oeast): O row d at page (d >> 2) 8 + 4 + (d & 3) (ws_lane5.oeast_row). E4_OSIDE (EP4Cfg.oside): at
-// (d >> 2) 8 + 4 side + (d & 3), side the bit of the pair's local expert (run record word 16 + j) in RT 5-9.
+// (d >> 2) 8 + 4 side + (d & 3), side the bit of the pair's local expert (run record word 16 + j) in RT 5-9; E4_OSIDE 2
+// at (d / 3) 8 + 4 side + 1 + d % 3.
 // RT: 0 runs addr, 1 O addr, 2 a, 3 nt, 4 stamps (5 reads wait cycles, 6 CB space wait cycles).
 #include "api/dataflow/dataflow_api.h"
 
@@ -89,7 +90,11 @@ void kernel_main() {
             const uint32_t d = tb[ii * 32] + ij, pg = (d >> 2) * 8 + 4 + (d & 3);
 #elif defined(E4_OSIDE)
             const uint32_t d = tb[ii * 32] + ij, le = tb[ii * 32 + 16 + ij];
+#if E4_OSIDE == 2
+            const uint32_t pg = (d / 3) * 8 + ((smask[le >> 5] >> (le & 31)) & 1) * 4 + 1 + d % 3;
+#else
             const uint32_t pg = (d >> 2) * 8 + ((smask[le >> 5] >> (le & 31)) & 1) * 4 + (d & 3);
+#endif
 #else
             const uint32_t pg = tb[ii * 32] + ij;
 #endif

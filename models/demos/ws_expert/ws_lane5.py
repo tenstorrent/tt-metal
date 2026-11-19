@@ -81,7 +81,9 @@ class L5Cfg:
     yc_rows: tuple = ()
     # yrm without collectors: each group's result rows in its own side's DRAM column - row d of a group on rectangle 0 / 1
     # (west) at page (d >> 2) 8 + (d & 3) (banks 0-3), on rectangle 2 / 3 (east) at (d >> 2) 8 + 4 + (d & 3) (banks
-    # 4-7); every core's row writes go west on NOC1 a short way; the buffer holds twice the rows
+    # 4-7); every core's row writes go west on NOC1 a short way; the buffer holds twice the rows. 2: three banks a side
+    # (1-3 west, 5-7 east: row d at page (d / 3) 8 + 4 side + 1 + d % 3), clear of channels 0 / 4, whose NOC1 endpoints
+    # sit in the ethernet row the muxes send along
     oside: int = 0
     # oside: the rectangles on side bit 0 (west) / 1 (east) write no result rows (diagnostics: the rows' NoC traffic)
     odrop: int = 0
@@ -508,7 +510,7 @@ def build_lane5(
                             defines=FAB_DEFS
                             + ([("WL5_OAFF", str(l5.oaff))] if l5.oaff else [])
                             + ([("WL5_Y_RM", "1")] if l5.yrm else [])
-                            + ([("WL5_OSIDE", "1")] if l5.oside else [])
+                            + ([("WL5_OSIDE", str(l5.oside))] if l5.oside else [])
                             + ([("WL5_ODROP", str(l5.odrop))] if l5.oside and l5.odrop else [])
                             + ([("WL5_YSTATE", "1")] if l5.yrm and l5.ystate else [])
                             + ([("WL5_YT", str(ysh.buffer_address()))] if l5.yrm and l5.yt else [])

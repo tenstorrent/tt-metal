@@ -30,6 +30,7 @@
 // scratch words 12 / 13) instead of CB 17. WL5_YC: the rows go to the group's row collectors instead (QY below); RT
 // 62 .. 62 + WL5_YC - 1 their NoC coordinates (x | y << 8). WL5_OSIDE (no WL5_YC): RT 62 this group's side (0 west,
 // 1 east): result row d at page (d >> 2) 8 + 4 side + (d & 3), the side's DRAM column.
+// WL5_OSIDE 2: three banks a side, row d at page (d / 3) 8 + 4 side + 1 + d % 3.
 // WL5_ODROP (with WL5_OSIDE; bit side): no row writes on that side (diagnostics: the rows' NoC traffic).
 #include "api/dataflow/dataflow_api.h"
 #include "tt_metal/fabric/hw/inc/tt_fabric_mux_interface.hpp"
@@ -644,7 +645,11 @@ void kernel_main() {
     uint32_t drained = 0, d_n = 0, d_r = 0, y_state = 0;
 #if defined(WL5_OSIDE)
     const uint32_t oside = get_arg_val<uint32_t>(RX + 8) * 4;
+#if WL5_OSIDE == 2
+    auto orow = [oside](uint32_t d) { return (d / 3) * 8 + oside + 1 + d % 3; };
+#else
     auto orow = [oside](uint32_t d) { return (d >> 2) * 8 + oside + (d & 3); };
+#endif
 #else
     auto orow = [](uint32_t d) { return d; };
 #endif

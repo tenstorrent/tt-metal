@@ -624,7 +624,8 @@ def test_ep4_experts(mesh_device, routing):
             if lc.oeast:
                 drow = (drow >> 2) * 8 + 4 + (drow & 3)
             elif lc.oside:
-                drow = (drow >> 2) * 8 + 4 * (sides[ch][le >> 5] >> (le & 31) & 1) + (drow & 3)
+                sd = 4 * (sides[ch][le >> 5] >> (le & 31) & 1)
+                drow = drow // 3 * 8 + sd + 1 + drow % 3 if lc.oside == 2 else (drow >> 2) * 8 + sd + (drow & 3)
             got = Ox[ch][drow].float()
             from models.demos.ws_expert.bench_util import pcc
 
