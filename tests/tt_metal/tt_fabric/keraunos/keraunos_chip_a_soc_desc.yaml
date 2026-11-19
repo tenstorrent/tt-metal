@@ -1,6 +1,6 @@
 # Keraunos test chip A: the emulated mmk package (UMD tests/soc_descs/mmk.yaml) seen as one chip of a
-# two-chip line. It lists only this chip's Keraunos CCE0 Ethernet cores (4-0, 4-2); the other chip
-# lists the rest. The rest of the package is as in mmk.yaml. In production the package stays one device.
+# two-chip line. It lists only this chip's Keraunos CCE0 Ethernet cores (4-0, 4-2) and channel-0 DRAM views;
+# the other chip lists the rest. The rest of the package is as in mmk.yaml. In production the package stays one device.
 
 grid:
   x_size: 6
@@ -30,20 +30,6 @@ dram_views:
     },
     {
       channel: 0,
-      eth_endpoint: [1, 1],
-      worker_endpoint: [1, 1],
-      address_offset: 4294967296,
-      programmable: true
-    },
-    {
-      channel: 1,
-      eth_endpoint: [0, 0],
-      worker_endpoint: [0, 0],
-      address_offset: 0,
-      programmable: true
-    },
-    {
-      channel: 1,
       eth_endpoint: [1, 1],
       worker_endpoint: [1, 1],
       address_offset: 4294967296,
