@@ -216,10 +216,12 @@ TEST_P(BitwiseScalarRangeFixture, RejectsScalarsOutsideInputDtypeRange) {
 
     EXPECT_THAT(
         [&] { run_op(op, int32_t_tensor, kTwoPow31); },
-        ThrowsMessage<std::runtime_error>(HasSubstr("To apply the same bit pattern, pass -2147483648.")));
+        ThrowsMessage<std::runtime_error>(
+            HasSubstr("requires a scalar in [-2147483648, 2147483647], got 2147483648.")));
     EXPECT_THAT(
         [&] { run_op(op, int32_t_tensor, kUint32Max); },
-        ThrowsMessage<std::runtime_error>(HasSubstr("To apply the same bit pattern, pass -1.")));
+        ThrowsMessage<std::runtime_error>(
+            HasSubstr("requires a scalar in [-2147483648, 2147483647], got 4294967295.")));
     EXPECT_THAT(
         [&] { run_op(op, uint16_t_tensor, int32_t{65536}); },
         ThrowsMessage<std::runtime_error>(HasSubstr("requires a scalar in [0, 65535], got 65536.")));
@@ -234,12 +236,10 @@ TEST_P(BitwiseScalarRangeFixture, RejectsScalarsOutsideInputDtypeRange) {
         const auto uint32_t_tensor = make_tensor(device_, std::vector<uint32_t>(32 * 64, 7u), DataType::UINT32);
         EXPECT_THAT(
             [&] { run_op(op, uint32_t_tensor, int32_t{-1}); },
-            ThrowsMessage<std::runtime_error>(
-                HasSubstr("To apply the same bit pattern, pass 4294967295; C++ callers must pass it as a uint32_t.")));
+            ThrowsMessage<std::runtime_error>(HasSubstr("requires a scalar in [0, 4294967295], got -1.")));
         EXPECT_THAT(
             [&] { run_op(op, uint32_t_tensor, int32_t{-32}); },
-            ThrowsMessage<std::runtime_error>(
-                HasSubstr("To apply the same bit pattern, pass 4294967264; C++ callers must pass it as a uint32_t.")));
+            ThrowsMessage<std::runtime_error>(HasSubstr("requires a scalar in [0, 4294967295], got -32.")));
     }
 }
 

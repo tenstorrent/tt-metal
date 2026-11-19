@@ -539,23 +539,25 @@ def test_bitwise_uint16_rejects_scalar_out_of_range(device, expect_error, ttnn_f
 
 
 @pytest.mark.parametrize("ttnn_function", [ttnn.bitwise_and, ttnn.bitwise_or, ttnn.bitwise_xor])
-@pytest.mark.parametrize("scalar, same_bits", [(2147483648, -2147483648), (3000000000, -1294967296), (4294967295, -1)])
-def test_bitwise_int32_rejects_scalar_out_of_range(device, expect_error, ttnn_function, scalar, same_bits):
+@pytest.mark.parametrize("scalar", [2147483648, 3000000000, 4294967295])
+def test_bitwise_int32_rejects_scalar_out_of_range(device, expect_error, ttnn_function, scalar):
     x_tt = ttnn.from_torch(
         torch.ones(32, 32, dtype=torch.int32), dtype=ttnn.int32, layout=ttnn.TILE_LAYOUT, device=device
     )
-    with expect_error(RuntimeError, f"To apply the same bit pattern, pass {same_bits}."):
+    with expect_error(RuntimeError, "on an INT32 tensor requires a scalar in") as exc_info:
         ttnn_function(x_tt, scalar)
+    assert f"2147483647], got {scalar}." in str(exc_info.value)
 
 
 @pytest.mark.parametrize("ttnn_function", [ttnn.bitwise_and, ttnn.bitwise_or, ttnn.bitwise_xor])
-@pytest.mark.parametrize("scalar, same_bits", [(-1, 4294967295), (-32, 4294967264), (-2147483648, 2147483648)])
-def test_bitwise_uint32_rejects_negative_scalar(device, expect_error, ttnn_function, scalar, same_bits):
+@pytest.mark.parametrize("scalar", [-1, -32, -2147483648])
+def test_bitwise_uint32_rejects_negative_scalar(device, expect_error, ttnn_function, scalar):
     x_tt = ttnn.from_torch(
         torch.ones(32, 32, dtype=torch.int32), dtype=ttnn.uint32, layout=ttnn.TILE_LAYOUT, device=device
     )
-    with expect_error(RuntimeError, f"To apply the same bit pattern, pass {same_bits};"):
+    with expect_error(RuntimeError, "on a UINT32 tensor requires a scalar in") as exc_info:
         ttnn_function(x_tt, scalar)
+    assert f"4294967295], got {scalar}." in str(exc_info.value)
 
 
 @pytest.mark.parametrize(

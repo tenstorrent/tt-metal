@@ -1175,19 +1175,15 @@ static void validate_bitwise_scalar(operations::unary::UnaryOpType op_type, cons
     if (lhs.dtype() == DataType::INT32) {
         TT_FATAL(
             rhs >= std::numeric_limits<int32_t>::min() && rhs <= std::numeric_limits<int32_t>::max(),
-            "{} on an INT32 tensor requires a scalar in [-2147483648, 2147483647], got {}. "
-            "To apply the same bit pattern, pass {}.",
+            "{} on an INT32 tensor requires a scalar in [-2147483648, 2147483647], got {}.",
             enchantum::to_string(op_type),
-            rhs,
-            std::bit_cast<int32_t>(static_cast<uint32_t>(rhs)));
+            rhs);
     } else if (lhs.dtype() == DataType::UINT32) {
         TT_FATAL(
             rhs >= 0 && rhs <= std::numeric_limits<uint32_t>::max(),
-            "{} on a UINT32 tensor requires a scalar in [0, 4294967295], got {}. "
-            "To apply the same bit pattern, pass {}; C++ callers must pass it as a uint32_t.",
+            "{} on a UINT32 tensor requires a scalar in [0, 4294967295], got {}.",
             enchantum::to_string(op_type),
-            rhs,
-            static_cast<uint32_t>(rhs));
+            rhs);
     } else if (lhs.dtype() == DataType::UINT16) {
         TT_FATAL(
             rhs >= 0 && rhs <= std::numeric_limits<uint16_t>::max(),
