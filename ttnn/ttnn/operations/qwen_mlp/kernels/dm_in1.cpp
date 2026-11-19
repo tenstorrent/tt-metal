@@ -2,9 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "api/dataflow/dataflow_api.h"
-#include "group_barrier.hpp"
 #include "in1_matmul.hpp"
-#include "rmsnorm_dm.hpp"
 
 void kernel_main() {
     Noc noc;
@@ -13,47 +11,51 @@ void kernel_main() {
     constexpr uint32_t tile_bytes_bf16 = CT_ARG("tile_bytes_bf16");
     constexpr uint32_t tile_bytes_bfp4 = CT_ARG("tile_bytes_bfp4");
     Chain chain = CHAIN("in1");
-    Semaphore<> norm_written(CT_ARG("sem_barrier_norm"));
-    Semaphore<> gate_up_written(CT_ARG("sem_barrier_gate_up"));
+    CircularBuffer cb_y(down.cb_out);
 
-    const auto n = TensorAccessor(TensorAccessorArgs<CT_ARG("ta_n")>(), RT_ARG("n_addr"), tile_bytes_bf16);
-    const auto a = TensorAccessor(TensorAccessorArgs<CT_ARG("ta_a")>(), RT_ARG("a_addr"), tile_bytes_bf16);
     const auto y = TensorAccessor(TensorAccessorArgs<CT_ARG("ta_y")>(), RT_ARG("y_addr"), tile_bytes_bf16);
 
     chain.valid.set(VALID);
 
-    write_norm_rows(
-        noc,
-        n,
-        CT_ARG("cb_norm_out"),
-        gate_up.in0_row_tiles,
-        CT_ARG("norm_group"),
-        tile_bytes_bf16,
-        RT_ARG("norm_first_row"),
-        CT_ARG("norm_row_stride"),
-        RT_ARG("norm_rows"));
-    signal_group_written(noc, norm_written);
-
-    in1_matmul_phase(
-        noc,
-        gate_up,
-        MATMUL_RANGE("mm1"),
-        chain,
-        RT_ARG("w_gate_up_addr"),
-        a,
-        tile_bytes_bfp4,
-        tile_bytes_bf16,
-        RT_ARG("defer_k_block"));
-    signal_group_written(noc, gate_up_written);
-
-    in1_matmul_phase(
-        noc,
-        down,
-        MATMUL_RANGE("mm2"),
-        chain,
-        RT_ARG("w_down_addr"),
-        y,
-        tile_bytes_bfp4,
-        tile_bytes_bf16,
-        RT_ARG("defer_k_block"));
+    bool write_pending = false;
+    bool write_in_flight = false;
+    uint32_t pending_m = 0;
+    const uint32_t defer_k_block = RT_ARG("defer_k_block");
+    for (uint32_t m_block = 0; m_block < CT_ARG("M_blocks"); m_block++) {
+        const uint32_t m_tile = RT_ARG("M_start") + m_block * gate_up.M_block;
+        bool k_forward = true;
+        for (uint32_t n_block = 0; n_block < gate_up.N_blocks; n_block++) {
+            for (uint32_t k_iter = 0; k_iter < gate_up.K_blocks; k_iter++) {
+                if (write_in_flight) {
+                    retire_out_block(noc, down, cb_y);
+                    write_in_flight = false;
+                }
+                if (write_pending && k_iter == defer_k_block) {
+                    issue_out_block_writes(noc, down, y, tile_bytes_bf16, cb_y, pending_m, RT_ARG("mm2_N_start"));
+                    write_pending = false;
+                    write_in_flight = true;
+                }
+                stream_in1_block(
+                    noc,
+                    gate_up,
+                    chain,
+                    RT_ARG("w_gate_up_addr"),
+                    tile_bytes_bfp4,
+                    k_forward ? k_iter : gate_up.K_blocks - 1 - k_iter,
+                    RT_ARG("mm1_N_start") + n_block * gate_up.N_block);
+            }
+            k_forward = !k_forward;
+        }
+        for (uint32_t k_block = 0; k_block < down.K_blocks; k_block++) {
+            stream_in1_block(noc, down, chain, RT_ARG("w_down_addr"), tile_bytes_bfp4, k_block, RT_ARG("mm2_N_start"));
+        }
+        write_pending = true;
+        pending_m = m_tile;
+    }
+    if (write_in_flight) {
+        retire_out_block(noc, down, cb_y);
+    }
+    issue_out_block_writes(noc, down, y, tile_bytes_bf16, cb_y, pending_m, RT_ARG("mm2_N_start"));
+    retire_out_block(noc, down, cb_y);
+    noc.async_write_barrier();
 }

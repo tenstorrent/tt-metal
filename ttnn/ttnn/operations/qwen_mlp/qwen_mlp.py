@@ -21,11 +21,7 @@ def _program_descriptor(tensors):
 
 
 def qwen_mlp_partial(h, w_norm, w_gate_up, w_down):
-    rows, hidden = h.shape
-    device = h.device()
-    normalized = _allocate_dram(device, rows, hidden)
-    activated = _allocate_dram(device, rows, w_down.shape[0])
-    partial_y = _allocate_dram(device, rows, hidden)
-    tensors = [h, w_norm, w_gate_up, w_down, normalized, activated, partial_y]
+    partial_y = _allocate_dram(h.device(), *h.shape)
+    tensors = [h, w_norm, w_gate_up, w_down, partial_y]
     ttnn.generic_op(tensors, _program_descriptor(tensors))
     return partial_y

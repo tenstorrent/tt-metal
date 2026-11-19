@@ -61,63 +61,24 @@ inline void retire_out_block(const Noc& noc, const MatmulShape& s, CircularBuffe
     cb_out.pop_front(s.M_block * (s.swiglu ? s.N_block / 2 : s.N_block));
 }
 
-template <typename OutAccessor>
-void in1_matmul_phase(
+inline void stream_in1_block(
     const Noc& noc,
     const MatmulShape& s,
-    const MatmulRange& range,
     Chain& chain,
     uint32_t in1_address,
-    const OutAccessor& out,
     uint32_t tile_bytes,
-    uint32_t out_tile_bytes,
-    uint32_t defer_k_block) {
+    uint32_t k_block,
+    uint32_t n_tile) {
     CircularBuffer cb_in1(s.cb_in1);
-    CircularBuffer cb_out(s.cb_out);
-    const uint32_t block_tiles = s.K_block * s.N_block;
-
-    bool write_pending = false;
-    bool write_in_flight = false;
-    uint32_t pending_m = 0;
-    uint32_t pending_n = 0;
-    for (uint32_t m_block = 0; m_block < s.M_blocks; m_block++) {
-        const uint32_t m_tile = range.M_start + m_block * s.M_block;
-        bool k_forward = true;
-        for (uint32_t n_block = 0; n_block < s.N_blocks; n_block++) {
-            const uint32_t n_tile = range.N_start + n_block * s.N_block;
-            for (uint32_t k_iter = 0; k_iter < s.K_blocks; k_iter++) {
-                if (write_in_flight) {
-                    retire_out_block(noc, s, cb_out);
-                    write_in_flight = false;
-                }
-                if (write_pending && k_iter == defer_k_block) {
-                    issue_out_block_writes(noc, s, out, out_tile_bytes, cb_out, pending_m, pending_n);
-                    write_pending = false;
-                    write_in_flight = true;
-                }
-                const uint32_t k_block = k_forward ? k_iter : s.K_blocks - 1 - k_iter;
-                cb_in1.reserve_back(block_tiles);
-                const uint32_t addr = cb_in1.get_write_ptr();
-                if (chain.is_injector) {
-                    read_in1_block(s, in1_address, tile_bytes, addr, k_block * s.K_block, n_tile);
-                } else {
-                    chain.receive(noc);
-                }
-                cb_in1.push_back(block_tiles);
-                if (!chain.is_sink) {
-                    chain.forward(noc, addr, block_tiles * tile_bytes);
-                }
-            }
-            k_forward = !k_forward;
-            write_pending = true;
-            pending_m = m_tile;
-            pending_n = n_tile;
-        }
+    cb_in1.reserve_back(s.in1_slot_tiles);
+    const uint32_t addr = cb_in1.get_write_ptr();
+    if (chain.is_injector) {
+        read_in1_block(s, in1_address, tile_bytes, addr, k_block * s.K_block, n_tile);
+    } else {
+        chain.receive(noc);
     }
-    if (write_in_flight) {
-        retire_out_block(noc, s, cb_out);
+    cb_in1.push_back(s.in1_slot_tiles);
+    if (!chain.is_sink) {
+        chain.forward(noc, addr, s.K_block * s.N_block * tile_bytes);
     }
-    issue_out_block_writes(noc, s, out, out_tile_bytes, cb_out, pending_m, pending_n);
-    retire_out_block(noc, s, cb_out);
-    noc.async_write_barrier();
 }

@@ -101,9 +101,9 @@ ALWI void matmul_phase(const MatmulShape& s) {
     CircularBuffer out(s.cb_out);
     CircularBuffer partial(s.cb_partial);
     const uint32_t in0_block_tiles = s.M_block * s.K_block;
-    const uint32_t in1_block_tiles = s.K_block * s.N_block;
-    const uint32_t partial_tiles = s.M_block * s.N_block;
-    const uint32_t out_tiles = s.swiglu ? partial_tiles / 2 : partial_tiles;
+    const uint32_t in1_block_tiles = s.in1_slot_tiles;
+    const uint32_t partial_tiles = s.partial_slot_tiles;
+    const uint32_t out_tiles = s.M_block * s.N_block / (s.swiglu ? 2 : 1);
 
     if (s.swiglu) {
         PACK((swiglu_tile_init()));

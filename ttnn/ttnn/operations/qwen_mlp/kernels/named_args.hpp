@@ -23,6 +23,8 @@ struct MatmulShape {
     uint32_t M_blocks;
     uint32_t N_blocks;
     uint32_t K_blocks;
+    uint32_t in1_slot_tiles;
+    uint32_t partial_slot_tiles;
     uint32_t in0_row_tiles;
     uint32_t in1_row_tiles;
     uint32_t out_row_tiles;
@@ -32,32 +34,26 @@ struct MatmulShape {
     bool swiglu;
 };
 
-#define MATMUL_SHAPE(phase)             \
-    MatmulShape{                        \
-        CT_ARG("cb_in0"),               \
-        CT_ARG(phase "_cb_in1"),        \
-        CT_ARG(phase "_cb_out"),        \
-        CT_ARG(phase "_cb_partial"),    \
-        CT_ARG(phase "_M_block"),       \
-        CT_ARG(phase "_K_block"),       \
-        CT_ARG(phase "_N_block"),       \
-        CT_ARG(phase "_sub_h"),         \
-        CT_ARG(phase "_sub_w"),         \
-        CT_ARG(phase "_M_blocks"),      \
-        CT_ARG(phase "_N_blocks"),      \
-        CT_ARG(phase "_K_blocks"),      \
-        CT_ARG(phase "_in0_row_tiles"), \
-        CT_ARG(phase "_in1_row_tiles"), \
-        CT_ARG(phase "_out_row_tiles"), \
-        CT_ARG(phase "_M_logical"),     \
-        CT_ARG(phase "_N_logical"),     \
-        CT_ARG(phase "_out_N_logical"), \
+#define MATMUL_SHAPE(phase)                  \
+    MatmulShape{                             \
+        CT_ARG("cb_in0"),                    \
+        CT_ARG(phase "_cb_in1"),             \
+        CT_ARG(phase "_cb_out"),             \
+        CT_ARG(phase "_cb_partial"),         \
+        CT_ARG(phase "_M_block"),            \
+        CT_ARG(phase "_K_block"),            \
+        CT_ARG(phase "_N_block"),            \
+        CT_ARG(phase "_sub_h"),              \
+        CT_ARG(phase "_sub_w"),              \
+        CT_ARG(phase "_M_blocks"),           \
+        CT_ARG(phase "_N_blocks"),           \
+        CT_ARG(phase "_K_blocks"),           \
+        CT_ARG(phase "_in1_slot_tiles"),     \
+        CT_ARG(phase "_partial_slot_tiles"), \
+        CT_ARG(phase "_in0_row_tiles"),      \
+        CT_ARG(phase "_in1_row_tiles"),      \
+        CT_ARG(phase "_out_row_tiles"),      \
+        CT_ARG(phase "_M_logical"),          \
+        CT_ARG(phase "_N_logical"),          \
+        CT_ARG(phase "_out_N_logical"),      \
         CT_ARG(phase "_swiglu") == 1}
-
-struct MatmulRange {
-    uint32_t M_start;
-    uint32_t N_start;
-};
-
-#define MATMUL_RANGE(phase) \
-    MatmulRange { RT_ARG(phase "_M_start"), RT_ARG(phase "_N_start") }

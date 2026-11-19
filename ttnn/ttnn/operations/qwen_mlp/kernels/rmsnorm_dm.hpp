@@ -47,84 +47,53 @@ void load_norm_weights(const Noc& noc, const WeightAccessor& weight, uint32_t ca
 }
 
 inline void push_norm_weights(
-    uint32_t cache_cb_id, uint32_t cb_weight_id, uint32_t row_tiles, uint32_t group, uint32_t tile_bytes) {
+    uint32_t cache_cb_id, uint32_t cb_weight_id, uint32_t first_tile, uint32_t tiles, uint32_t tile_bytes) {
     CircularBuffer cb_weight(cb_weight_id);
     const uint32_t cache = CircularBuffer(cache_cb_id).get_write_ptr();
-    for (uint32_t first = 0; first < row_tiles; first += group) {
-        cb_weight.reserve_back(group);
-        const uint32_t base = cb_weight.get_write_ptr();
-        for (uint32_t t = 0; t < group; t++) {
-            for (uint32_t face = 0; face < 2; face++) {
-                volatile tt_l1_ptr uint32_t* dst =
-                    reinterpret_cast<volatile tt_l1_ptr uint32_t*>(base + t * tile_bytes + face * FACE_BYTES);
-                volatile tt_l1_ptr uint32_t* src = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(
-                    cache + (first + t) * WEIGHT_TILE_BYTES + face * CACHED_FACE_ROW_STRIDE);
-                for (uint32_t i = 0; i < FACE_ROW_BYTES / sizeof(uint32_t); i++) {
-                    dst[i] = src[i];
-                }
+    cb_weight.reserve_back(tiles);
+    const uint32_t base = cb_weight.get_write_ptr();
+    for (uint32_t t = 0; t < tiles; t++) {
+        for (uint32_t face = 0; face < 2; face++) {
+            volatile tt_l1_ptr uint32_t* dst =
+                reinterpret_cast<volatile tt_l1_ptr uint32_t*>(base + t * tile_bytes + face * FACE_BYTES);
+            volatile tt_l1_ptr uint32_t* src = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(
+                cache + (first_tile + t) * WEIGHT_TILE_BYTES + face * CACHED_FACE_ROW_STRIDE);
+            for (uint32_t i = 0; i < FACE_ROW_BYTES / sizeof(uint32_t); i++) {
+                dst[i] = src[i];
             }
         }
-        cb_weight.push_back(group);
     }
+    cb_weight.push_back(tiles);
 }
 
+// One tile row of a K block per push.
 template <typename HAccessor>
-void read_norm_rows(
+void read_h_block_rows(
     const Noc& noc,
     const HAccessor& h,
-    uint32_t cb_in_id,
-    uint32_t row_tiles,
-    uint32_t chunk,
-    uint32_t tile_bytes,
-    uint32_t first_row,
-    uint32_t row_stride,
+    uint32_t cb_id,
+    uint32_t m_tile,
     uint32_t rows,
-    uint32_t cache_cb_id,
-    uint32_t cb_weight_id,
-    uint32_t group) {
-    CircularBuffer cb_in(cb_in_id);
-    for (uint32_t r = 0; r < rows; r++) {
-        const uint32_t row_first_tile = (first_row + r * row_stride) * row_tiles;
-        cb_in.reserve_back(row_tiles);
-        const uint32_t base = cb_in.get_write_ptr();
-        for (uint32_t first = 0; first < row_tiles; first += chunk) {
-            for (uint32_t t = first; t < first + chunk; t++) {
+    uint32_t M_logical,
+    uint32_t row_tiles,
+    uint32_t k_tile,
+    uint32_t block_tiles,
+    uint32_t tile_bytes) {
+    CircularBuffer cb(cb_id);
+    for (uint32_t row = 0; row < rows; row++) {
+        cb.reserve_back(block_tiles);
+        const uint32_t base = cb.get_write_ptr();
+        if (m_tile + row < M_logical) {
+            for (uint32_t t = 0; t < block_tiles; t++) {
                 noc.async_read(
-                    h, CoreLocalMem<uint32_t>(base + t * tile_bytes), tile_bytes, {.page_id = row_first_tile + t}, {});
+                    h,
+                    CoreLocalMem<uint32_t>(base + t * tile_bytes),
+                    tile_bytes,
+                    {.page_id = (m_tile + row) * row_tiles + k_tile + t},
+                    {});
             }
             noc.async_read_barrier();
-            cb_in.push_back(chunk);
         }
-        push_norm_weights(cache_cb_id, cb_weight_id, row_tiles, group, tile_bytes);
-    }
-}
-
-template <typename Accessor>
-void write_norm_rows(
-    const Noc& noc,
-    const Accessor& n,
-    uint32_t cb_id,
-    uint32_t row_tiles,
-    uint32_t group,
-    uint32_t tile_bytes,
-    uint32_t first_row,
-    uint32_t row_stride,
-    uint32_t rows) {
-    CircularBuffer cb(cb_id);
-    for (uint32_t r = 0; r < rows; r++) {
-        for (uint32_t first = 0; first < row_tiles; first += group) {
-            cb.wait_front(group);
-            const uint32_t base = cb.get_read_ptr();
-            for (uint32_t t = 0; t < group; t++) {
-                noc.async_write(
-                    CoreLocalMem<uint32_t>(base + t * tile_bytes),
-                    n,
-                    tile_bytes,
-                    {},
-                    {.page_id = (first_row + r * row_stride) * row_tiles + first + t});
-            }
-            noc.async_writes_flushed();
-            cb.pop_front(group);
-        }
+        cb.push_back(block_tiles);
     }
 }
