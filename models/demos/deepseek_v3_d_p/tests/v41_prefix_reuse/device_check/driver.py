@@ -96,9 +96,18 @@ def set_ctl(words: str) -> None:
     os.replace(CTL + ".tmp", CTL)
 
 
+# WS3 (11-19): PREFIX_CHECK_DECODER_MARK=1 also sets tt-d-gen's pd_decoder_cone bit (28) on every chunk that overlaps the
+# prompt's last V41_PREFILL_DECODER_CONE tokens, so a V41_PREFILL_DECODER_MARKED runner runs its decoder layers there, as served
+DECODER_MARK = os.environ.get("PREFIX_CHECK_DECODER_MARK", "0") == "1"
+DECODER_CONE = int(os.environ.get("V41_PREFILL_DECODER_CONE", "2541"))
+DECODER_BIT = 1 << 28
+
+
 def push(toks: list, start: int, end: int, last: bool, mark: bool = True) -> None:
     body = toks[start:end] + [1] * (CHUNK - (end - start))
     word = (MARKED | (LAST if last else 0)) if mark else 0
+    if mark and DECODER_MARK and end > len(toks) - DECODER_CONE and end > start:
+        word |= DECODER_BIT
     header = struct.pack("<3i", word, start, end)
     pp._push(service, PAYLOAD, pp._h2d_rows(body, start if end > start else 0), None, header)
 
