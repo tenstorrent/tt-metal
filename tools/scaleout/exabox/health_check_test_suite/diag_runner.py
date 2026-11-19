@@ -119,7 +119,7 @@ def build_diag_arg_parser() -> argparse.ArgumentParser:
     ap.add_argument(
         "--skip-tray-power",
         action="store_true",
-        help="Skip the tray 12 V feed latch reads (hot-swap controllers and tray CPLDs, pre_bmc_reboot and post_bmc_reboot only).",
+        help="Skip the tray 12 V feed latch reads (pre_bmc_reboot and post_bmc_reboot).",
     )
     ap.add_argument(
         "--skip-sys-triage",
@@ -325,12 +325,7 @@ def run_diag(
         if skip_tray_power:
             tray_power_phase.add(Check(name="tray_12v_feed", status=SKIP, details="--skip-tray-power", ip="board"))
         else:
-            _guarded(
-                tray_power_phase,
-                "tray_12v_feed",
-                SKIP,
-                lambda: run_tray_power(tray_power_phase, dry_run),
-            )
+            _guarded(tray_power_phase, "tray_12v_feed", SKIP, lambda: run_tray_power(tray_power_phase, dry_run))
         _finish(report, tray_power_phase, t0, summary=True, all_skip_stays_skip=True)
 
     # Where every phase drops its raw tool output. Derived once: the reset

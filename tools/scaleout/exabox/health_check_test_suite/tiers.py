@@ -83,9 +83,7 @@ class Tier:
     # worth most on a unit that has not been reset since it misbehaved.
     sys_triage: bool = False
 
-    # Read each tray's hot-swap controller 12 V latches and CPLD tray-alive register (diag/tray_power.py).
-    # It sits right after the snapshot and before any reset: a tray re-power
-    # clears the latches. Reads only; it opens no device, and does not gate.
+    # Read the trays' 12 V feed latches (diag/tray_power.py) before any reset clears them.
     tray_power: bool = False
 
 

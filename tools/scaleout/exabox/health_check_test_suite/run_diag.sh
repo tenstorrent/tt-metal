@@ -71,11 +71,8 @@ step of full, pre_bmc_reboot and post_bmc_reboot only. It runs when \`sys-triage
 PATH (same .deb) and the BMC credentials are set; otherwise the phase reports SKIP with
 the reason. It never gates the run.
 
-The tray 12 V feed check (pre_bmc_reboot and post_bmc_reboot, right after the snapshot) reads each tray's two
-hot-swap controllers (STATUS_WORD, STATUS_INPUT, STATUS_IOUT) and its CPLD tray-alive register
-in-band through ipmitool. A latched VIN_UV_WARN, VIN_UV_FAULT, OFF or IOUT_OC FAILs that tray,
-naming its BDF range and HSC address: check the bus bar / tray 12 V feed. A tray that is down
-with clean latches is a WARN pointing at the chips or board. Reads only. It never gates the run.
+The tray 12 V feed check reads each tray's hot-swap controller latches and CPLD tray-alive
+register through ipmitool (reads only); see HEALTH_CHECK.md. It never gates the run.
 
 Forwarded options (see diag_runner.py --help for details):
   --dry-run              Print intended subprocess calls without executing destructive steps

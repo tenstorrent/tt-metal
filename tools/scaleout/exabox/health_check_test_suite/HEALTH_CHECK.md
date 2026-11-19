@@ -88,10 +88,6 @@ BMC_IP=... BMC_USER=... BMC_PASSWORD=... \
 | `pre_bmc_reboot` | none | — | host_side + device_side | — | yes, if installed | yes, if installed and BMC credentials set | snapshot + triage + ~7 min + sys-triage | Collect data before a BMC reboot |
 | `post_bmc_reboot` | none | — | host_side + device_side | — | yes, if installed | yes, if installed and BMC credentials set | snapshot + triage + ~7 min + sys-triage | Collect data after a BMC reboot; for now the same as `pre_bmc_reboot` |
 
-`pre_bmc_reboot` and `post_bmc_reboot` read the
-[tray 12 V feed latches](#tray-12-v-feed-phase) right after the snapshot,
-before anything else touches the unit.
-
 The [sys-triage phase](#sys-triage-phase) runs last on `full`, `pre_bmc_reboot`
 and `post_bmc_reboot` only; it collects a bundle for the ticket and never gates
 the run.
@@ -556,38 +552,21 @@ any tier on a host that has the package.
 
 ## tray 12 V feed phase
 
-A failing bus bar or tray 12 V feed sags a tray's input under load, and the
-tray drops off PCIe as 8 missing chips with nothing pointing at the feed. Each
-tray's two MP5990 hot-swap controllers (HSCs, 8-bit addresses 0x40 and 0x42)
-latch what they saw, and the tray CPLD shows whether the tray is up. The
-latches hold until the tray is re-powered (a power cycle or a glx_reset), so
-this phase runs on `pre_bmc_reboot` and `post_bmc_reboot` only, right after
-the snapshot.
-
-Per tray, in-band with `ipmitool raw 0x06 0x52` on the tray's bus (tray 1
-0x11, tray 2 0x13, tray 3 0x0d, tray 4 0x0f), it reads each HSC's STATUS_WORD
-(79h), STATUS_INPUT (7Ch) and STATUS_IOUT (7Bh), and CPLD reg 0x1E (ff while
-the tray is up).
+On `pre_bmc_reboot` and `post_bmc_reboot`, right after the snapshot and before
+any reset (a re-power clears the latches), each tray's two hot-swap controllers
+(HSCs 0x40 and 0x42) and its CPLD are read in-band with `ipmitool raw 0x06 0x52`:
+STATUS_WORD, STATUS_INPUT and STATUS_IOUT per HSC, and CPLD reg 0x1E (ff while
+the tray is up). Only these seven reads are allowed; nothing is written. The
+phase never gates the run.
 
 | Status | Meaning |
 |---|---|
-| **PASS** | Both HSCs clean (CML alone is not a fault) and the tray is up. |
-| **FAIL** | Cause POWER: an HSC latched OFF, IOUT_OC, VIN_UV_FAULT or VIN_UV_WARN. `details` names the tray, its BDF range, the HSC address and the raw status bytes, with the hint "bus bar / tray 12 V feed". |
-| **WARN** | Cause CHIP/BOARD: the tray is down (reg 0x1E not ff) with clean HSC latches, so the feed is not the suspect. |
-| **WARN** | Some reads got no reply or were cut by the phase's time limit ("not read"). |
-| **SKIP** | No route at all (no ipmitool, no sudo, no successful read on any tray), dry run, or `--skip-tray-power`. |
+| **PASS** | HSC latches clean and the tray is up. |
+| **FAIL** | Cause POWER: an HSC latched OFF, IOUT_OC, VIN_UV_FAULT or VIN_UV_WARN. `details` names the tray, its BDF range, the HSC and the raw bytes: check the bus bar / tray 12 V feed. |
+| **WARN** | Cause CHIP/BOARD: the tray is down with clean latches; or some reads got no reply ("not read"). |
+| **SKIP** | No route (no ipmitool, no sudo, no read succeeded), dry run, or `--skip-tray-power`. |
 
-The phase is bounded at 120 s in all, and each ipmitool call at 15 s (less
-when the phase has less left). Every tray is tried: a tray whose reads all
-fail is WARN "not read" and the other trays are still judged. Two timeouts on a
-tray's bus before any read of it succeeded skip the rest of that tray; only
-when every tray's bus does so is it no route. A missing ipmitool or a sudo
-refusal is no route at once, after one call.
-
-Reads only: every transaction is checked against a fixed list of these seven
-status reads before ipmitool runs, and nothing is written to an HSC or the
-CPLD. The phase does not gate: VIN_UV_WARN also latches on feeds that sag
-without dropping the tray.
+Each ipmitool call is bounded at 15 s and the phase at 120 s.
 
 ## sys-triage phase
 
