@@ -224,18 +224,23 @@ def _ffmpeg():
     return imageio_ffmpeg.get_ffmpeg_exe()
 
 
-def write_artifacts(frames, audio, sampling_rate, directory: Path, stem: str = "t2va"):
+def write_wav(audio, sampling_rate: int, path: Path) -> None:
+    """`audio` ((batch, channels, samples) or (channels, samples), in [-1, 1]) as 16-bit PCM; batch 0 only."""
     import wave
 
-    paths = {}
-    wav_path = directory / f"{stem}.wav"
     interleaved = np.ascontiguousarray(audio[0].T if audio.ndim == 3 else audio.T)
     pcm = np.clip(interleaved, -1.0, 1.0)
-    with wave.open(str(wav_path), "wb") as handle:
+    with wave.open(str(path), "wb") as handle:
         handle.setnchannels(pcm.shape[1])
         handle.setsampwidth(2)
         handle.setframerate(sampling_rate)
         handle.writeframes((pcm * 32767.0).astype("<i2").tobytes())
+
+
+def write_artifacts(frames, audio, sampling_rate, directory: Path, stem: str = "t2va"):
+    paths = {}
+    wav_path = directory / f"{stem}.wav"
+    write_wav(audio, sampling_rate, wav_path)
     paths["wav"] = wav_path
     if is_host():
         logger.info(f"wrote {wav_path}")
@@ -487,15 +492,41 @@ def artifact_dir(name: str) -> Path:
     return directory
 
 
-def run_warm_generation(pipeline, prompt: str, *, seed: int, profiler=None, profiler_iteration: int = 0, **gen_kwargs):
-    """The timed generation; `profiler` (a `BenchmarkProfiler`), when given, wraps only this call in `"run"`."""
-    warmup_kwargs = {**gen_kwargs, "num_inference_steps": 3}
+def warm_quietly(pipeline, prompt: str, *, warmup_steps: int | None = 3, **gen_kwargs) -> None:
+    """One quiet generation at the request's shape, so a following call at that shape compiles nothing.
 
+    `warmup_steps=None` warms at the step count in `gen_kwargs`.
+    """
+    if warmup_steps is not None:
+        gen_kwargs = {**gen_kwargs, "num_inference_steps": warmup_steps}
+    with pipeline.quiet():
+        pipeline(prompt, **gen_kwargs)
+
+
+def assert_warm(pipeline, what: str) -> None:
+    """Fail when the last pipeline call compiled any program, so `what` was not measured warm."""
+    missed = {name: count for name, count in pipeline.last_program_cache_misses.items() if count}
+    assert not missed, f"{what} compiled programs after warmup, so it is not warm: {missed}"
+
+
+def run_warm_generation(
+    pipeline,
+    prompt: str,
+    *,
+    seed: int,
+    profiler=None,
+    profiler_iteration: int = 0,
+    warmup_steps: int | None = 3,
+    **gen_kwargs,
+):
+    """The timed generation; `profiler` (a `BenchmarkProfiler`), when given, wraps only this call in `"run"`.
+
+    `warmup_steps=None` warms at the measured step count, for pipelines with fixed steps.
+    """
     # # The pipeline warms its whole bucket ladder at construction, so `last_seq_len` does not yet
     # # reflect this request's rung. The quiet compile pass runs the *real* request, so it establishes
     # # the rung the measured call will run at -- take the reference from there.
-    with pipeline.quiet():
-        pipeline(prompt, seed=seed, **warmup_kwargs)
+    warm_quietly(pipeline, prompt, warmup_steps=warmup_steps, seed=seed, **gen_kwargs)
     # warm_padded_len = pipeline.last_seq_len.padded
 
     # ttnn.synchronize_device(pipeline.mesh_device)
@@ -510,8 +541,7 @@ def run_warm_generation(pipeline, prompt: str, *, seed: int, profiler=None, prof
     else:
         output = pipeline(prompt, seed=seed, on_event=on_event, **gen_kwargs)
 
-    missed = {name: count for name, count in pipeline.last_program_cache_misses.items() if count}
-    assert not missed, f"the measured call compiled programs after warmup, so this number is not warm: {missed}"
+    assert_warm(pipeline, "the measured call")
     return output
 
 

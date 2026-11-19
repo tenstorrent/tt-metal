@@ -58,7 +58,9 @@ void bind_experimental_high_bw_all_gather_operation(nb::module_& mod) {
                     discovered across both axes in full-mesh mode. An explicit value
                     must be greater than zero and cannot exceed that discovered count;
                     use ``2`` to keep the same link count across QuietBox, LoudBox, and
-                    Galaxy.
+                    Galaxy. It counts links per neighbour hop: on a 4x4 cylinder, where
+                    two Hamiltonian cycles share a hop, each gets half of them, and
+                    fewer than two selects the snake.
                 subdevice_id: Subdevice containing the worker cores.
                 sub_core_grids: Optional worker-core restriction.
                 input_batch_index: Optional batch slot selected from a persistent input cache.
@@ -101,6 +103,10 @@ void bind_experimental_high_bw_all_gather_operation(nb::module_& mod) {
                 data_valid_semaphore: Optional caller-owned persistent relay/completion semaphore.
                     Supplying both semaphore handles selects the allocation-free, no-internal-sync
                     dispatch path intended for sub-device overlap.
+                full_mesh_outer_axis: Full-mesh mode (``cluster_axis=None``) only. The mesh axis that is
+                    outermost in the gathered order: ``0`` (default) gathers rank ``r * cols + c``
+                    row-major, ``1`` gathers rank ``c * rows + r`` column-major. Pass the SP axis when the
+                    shards are SP-major, e.g. a TP-deduplicated cache with SP on mesh axis 1.
         )doc",
         &high_bw_all_gather,
         nb::arg("input_tensor").noconvert(),
@@ -119,7 +125,8 @@ void bind_experimental_high_bw_all_gather_operation(nb::module_& mod) {
         nb::arg("gathered_prefix_tensor") = nb::none(),
         nb::arg("gathered_slab_global") = 0,
         nb::arg("ready_semaphore") = nb::none(),
-        nb::arg("data_valid_semaphore") = nb::none());
+        nb::arg("data_valid_semaphore") = nb::none(),
+        nb::arg("full_mesh_outer_axis") = 0);
 }
 
 }  // namespace ttnn::operations::experimental::high_bw_all_gather::detail
