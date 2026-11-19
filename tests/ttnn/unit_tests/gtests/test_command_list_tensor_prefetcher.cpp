@@ -21,6 +21,7 @@
 
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/command_list.hpp>
+#include <tt-metalium/experimental/command_list.hpp>
 #include <tt-metalium/experimental/prefetcher_pipe.hpp>
 #include <tt-metalium/experimental/tensor_prefetcher.hpp>
 
@@ -34,13 +35,13 @@ namespace ttnn::test::command_list_tensor_prefetcher {
 namespace {
 
 namespace metal_exp = ::tt::tt_metal::experimental;
+using metal_exp::CmdListPrefetcherPipeArgInfo;
+using metal_exp::CmdListPrefetcherPipeArgName;
 using ::tt::constants::TILE_HEIGHT;
 using ::tt::constants::TILE_WIDTH;
 using ::tt::tt_metal::BufferType;
 using ::tt::tt_metal::CmdListArgPatch;
 using ::tt::tt_metal::CmdListParameters;
-using ::tt::tt_metal::CmdListPrefetcherPipeArgInfo;
-using ::tt::tt_metal::CmdListPrefetcherPipeArgName;
 using ::tt::tt_metal::CommandListBuilder;
 using ::tt::tt_metal::CoreCoord;
 using ::tt::tt_metal::CoreRange;
@@ -244,7 +245,7 @@ TEST_F(CommandListTensorPrefetcherFixture, PatchedPipesCarryTheRecordedRequest) 
         const auto& program = validator.get_programs().begin()->second;
         CmdListParameters parameters;
         for (size_t i = 0; i < prefetch.pipes.size(); ++i) {
-            parameters.prefetcher_pipe_parameters.emplace(
+            parameters.advanced_options.prefetcher_pipe_parameters.emplace(
                 CmdListPrefetcherPipeArgName{validator_pipe_name(i)},
                 std::vector<CmdListPrefetcherPipeArgInfo>{
                     {.program = program, .param_name = metal_exp::PrefetcherPipeParamName{validator_pipe_name(i)}}});
@@ -256,15 +257,15 @@ TEST_F(CommandListTensorPrefetcherFixture, PatchedPipesCarryTheRecordedRequest) 
         EnqueueCommandList(cq, patched, /*blocking=*/true);
 
         // The pipes share their space's addresses, and the request targets all of them, so moving one is rejected.
-        EXPECT_ANY_THROW(patched.update_args(CmdListArgPatch{
-            .prefetcher_pipe_args = {
-                {CmdListPrefetcherPipeArgName{validator_pipe_name(0)},
-                 metal_exp::PrefetcherPipeArgument{*moved.pipes[0]}}}}));
+        CmdListArgPatch partial;
+        partial.advanced_options.prefetcher_pipe_args.emplace(
+            CmdListPrefetcherPipeArgName{validator_pipe_name(0)}, metal_exp::PrefetcherPipeArgument{*moved.pipes[0]});
+        EXPECT_ANY_THROW(patched.update_args(partial));
 
         // The validator reads the pipes it was patched to, so a replay only finishes if the request followed them.
         CmdListArgPatch patch;
         for (size_t i = 0; i < moved.pipes.size(); ++i) {
-            patch.prefetcher_pipe_args.emplace(
+            patch.advanced_options.prefetcher_pipe_args.emplace(
                 CmdListPrefetcherPipeArgName{validator_pipe_name(i)},
                 metal_exp::PrefetcherPipeArgument{*moved.pipes[i]});
         }

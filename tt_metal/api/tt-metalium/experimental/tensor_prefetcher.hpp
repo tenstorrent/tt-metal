@@ -25,7 +25,6 @@
 
 namespace tt::tt_metal {
 
-class CommandListBuilder;
 class MeshTensor;
 
 namespace distributed {
@@ -182,7 +181,7 @@ void StartTensorPrefetcher(distributed::MeshDevice& mesh_device, const TensorPre
 //     non-capturing queue, or null (the default) — the request is sent immediately,
 //     whatever any command queue is doing. Pass `&mesh_device.mesh_command_queue()`
 //     to opt into capture on the calling thread's current queue. To record a request
-//     into a CommandList, use AddTensorPrefetcherRequest.
+//     into a CommandList, use AddTensorPrefetcherRequest (experimental/command_list.hpp).
 //
 // Further preconditions, all TT_FATAL with the offending values:
 //   - every pipe has a DRAM sender, comes from the same factory call, and shares one ring size;
@@ -207,24 +206,6 @@ void QueueTensorPrefetcherRequest(
     ttsl::optional_reference<const distributed::MeshCoordinateRangeSet> device_subset,
     const std::vector<TensorPrefetcherInput>& input_tensors,
     distributed::MeshCommandQueue* trace_capture_cq = nullptr);
-
-// Record one prefetch request into `builder` without sending it. Takes the same arguments and has the same
-// preconditions as QueueTensorPrefetcherRequest, and serializes the request now. Every EnqueueCommandList of a
-// built list re-queues the recorded requests, in the order they were recorded, before it enqueues the list's
-// workloads.
-//
-// A list replays only these requests. WaitForCqOnTensorPrefetcher cannot be recorded: it takes effect when
-// called, so data the requests read, including a group selector's mask, must be written and fenced before the
-// replay.
-//
-// Built lists can be replayed only while the prefetcher that was active here is still running. Keep the
-// tensors alive until it stops, and the pipes alive until it stops or until CommandList::update_args() replaces
-// them through a PrefetcherPipe parameter.
-void AddTensorPrefetcherRequest(
-    CommandListBuilder& builder,
-    const std::vector<std::reference_wrapper<const PrefetcherPipe>>& prefetcher_pipes,
-    ttsl::optional_reference<const distributed::MeshCoordinateRangeSet> device_subset,
-    const std::vector<TensorPrefetcherInput>& input_tensors);
 
 // Fence the prefetcher against command queue `cq`: every prefetch request queued
 // after this call waits until all work previously enqueued on `cq` has completed

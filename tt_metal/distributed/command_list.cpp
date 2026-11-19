@@ -16,6 +16,7 @@
 
 #include <tt-metalium/mesh_command_queue.hpp>
 #include <tt-metalium/experimental/allocation_context.hpp>
+#include <tt-metalium/experimental/command_list.hpp>
 #include <tt-metalium/experimental/tensor_prefetcher.hpp>
 #include <tt-metalium/math.hpp>
 #include <tt-metalium/workload/specification/tensor_spec_relaxations.hpp>
@@ -69,6 +70,7 @@ using distributed::ReplicatedBufferConfig;
 using distributed::resolve_per_device_runtime_args;
 using distributed::ResolvedPerDeviceRuntimeArgsField;
 using distributed::snapshot_per_device_runtime_args;
+using experimental::CmdListPrefetcherPipeArgName;
 
 namespace detail {
 
@@ -834,7 +836,7 @@ void CommandList::Impl::update_args(const CmdListArgPatch& patch, bool blocking)
     std::map<size_t, const experimental::PrefetcherPipeImpl*> staged_pipes;
     // The new pipe of each replaced pipe, or null if two parameters bound to it get different ones.
     std::map<experimental::PrefetcherPipeIdentity, const experimental::PrefetcherPipe*> replacements;
-    for (const auto& [name, argument] : patch.prefetcher_pipe_args) {
+    for (const auto& [name, argument] : patch.advanced_options.prefetcher_pipe_args) {
         const auto it = registry.prefetcher_pipe_binding_slots.find(name);
         TT_FATAL(
             it != registry.prefetcher_pipe_binding_slots.end(),
@@ -1402,7 +1404,7 @@ void CommandListBuilderImpl::resolve_parameters(
 
     std::map<CapturedProgram*, std::vector<size_t>> pipe_bindings_of;
     std::set<std::pair<const ::tt::tt_metal::detail::ProgramImpl*, std::string>> listed_pipe_parameters;
-    for (const auto& [name, infos] : parameters.prefetcher_pipe_parameters) {
+    for (const auto& [name, infos] : parameters.advanced_options.prefetcher_pipe_parameters) {
         for (const auto& info : infos) {
             auto& captured = find_captured_program(info.program.get());
             const auto& program = *captured.trace_node.program;

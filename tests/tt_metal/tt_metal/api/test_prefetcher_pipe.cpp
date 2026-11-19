@@ -36,6 +36,7 @@
 #include <tt-metalium/sub_device.hpp>
 
 #include <tt-metalium/command_list.hpp>
+#include <tt-metalium/experimental/command_list.hpp>
 #include <tt-metalium/experimental/dispatch_context.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program.hpp>
 #include <tt-metalium/workload/run_args/program_run_args.hpp>
@@ -3492,15 +3493,16 @@ TEST_F(PrefetcherPipeFixture, PrefetcherPipe_CommandList_PatchesPipeAndRelayAddr
     workload.add_program(persistent_unit_mesh_device_range(), std::move(program));
     const Program& recorded = workload.get_programs().begin()->second;
 
-    const CmdListPrefetcherPipeArgName arg_a{"a"};
-    const CmdListPrefetcherPipeArgName arg_b{"b"};
+    const experimental::CmdListPrefetcherPipeArgName arg_a{"a"};
+    const experimental::CmdListPrefetcherPipeArgName arg_b{"b"};
     const auto pipe_info = [&](const experimental::PrefetcherPipeParamName& name) {
-        return std::vector<CmdListPrefetcherPipeArgInfo>{{.program = recorded, .param_name = name}};
+        return std::vector<experimental::CmdListPrefetcherPipeArgInfo>{{.program = recorded, .param_name = name}};
     };
     const auto patch_args = [&](experimental::PrefetcherPipe& a, experimental::PrefetcherPipe* b) {
-        CmdListArgPatch patch{.prefetcher_pipe_args = {{arg_a, experimental::PrefetcherPipeArgument{a}}}};
+        CmdListArgPatch patch;
+        patch.advanced_options.prefetcher_pipe_args.emplace(arg_a, experimental::PrefetcherPipeArgument{a});
         if (b != nullptr) {
-            patch.prefetcher_pipe_args.emplace(arg_b, experimental::PrefetcherPipeArgument{*b});
+            patch.advanced_options.prefetcher_pipe_args.emplace(arg_b, experimental::PrefetcherPipeArgument{*b});
         }
         return patch;
     };
@@ -3509,7 +3511,9 @@ TEST_F(PrefetcherPipeFixture, PrefetcherPipe_CommandList_PatchesPipeAndRelayAddr
     {
         CommandListBuilder builder(device);
         builder.add(
-            cq, workload, CmdListParameters{.prefetcher_pipe_parameters = {{arg_a, pipe_info(name_a)}}});
+            cq,
+            workload,
+            CmdListParameters{.advanced_options = {.prefetcher_pipe_parameters = {{arg_a, pipe_info(name_a)}}}});
         auto list = builder.build(cq);
         builder.deallocate();
         EXPECT_THAT(
@@ -3560,17 +3564,18 @@ TEST_F(PrefetcherPipeFixture, PrefetcherPipe_CommandList_PatchesPipeAndRelayAddr
         cq,
         workload,
         CmdListParameters{
-            .prefetcher_pipe_parameters = {{arg_a, pipe_info(name_a)}, {arg_b, pipe_info(name_b)}}});
+            .advanced_options = {
+                .prefetcher_pipe_parameters = {{arg_a, pipe_info(name_a)}, {arg_b, pipe_info(name_b)}}}});
     auto list = builder.build(cq);
     auto unpatched = builder.build(cq);
     builder.deallocate();
 
     EXPECT_THAT(
         [&] {
-            list.update_args(CmdListArgPatch{
-                .prefetcher_pipe_args = {
-                    {CmdListPrefetcherPipeArgName{"unknown"},
-                     experimental::PrefetcherPipeArgument{moved[0]}}}});
+            CmdListArgPatch patch;
+            patch.advanced_options.prefetcher_pipe_args.emplace(
+                experimental::CmdListPrefetcherPipeArgName{"unknown"}, experimental::PrefetcherPipeArgument{moved[0]});
+            list.update_args(patch);
         },
         ::testing::ThrowsMessage<std::runtime_error>(
             ::testing::HasSubstr("Unknown command-list PrefetcherPipe parameter")));

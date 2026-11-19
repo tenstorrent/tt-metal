@@ -10,6 +10,7 @@
 #include <string>
 #include <vector>
 
+#include <tt-metalium/experimental/command_list.hpp>
 #include <tt-metalium/workload/utils/arg_value.hpp>
 #include <tt-metalium/workload/specification/kernel_spec.hpp>
 #include <tt-metalium/vocabulary/node_coord.hpp>
@@ -32,7 +33,6 @@ class CommandListBuilderImpl;
 using CmdListTensorArgName = ttsl::StrongType<std::string, struct CmdListTensorArgNameTag>;
 using CmdListRuntimeArgName = ttsl::StrongType<std::string, struct CmdListRuntimeArgNameTag>;
 using CmdListCommonRuntimeArgName = ttsl::StrongType<std::string, struct CmdListCommonRuntimeArgNameTag>;
-using CmdListPrefetcherPipeArgName = ttsl::StrongType<std::string, struct CmdListPrefetcherPipeArgNameTag>;
 
 /**
  * @brief Links a command list tensor parameter to a TensorParameter of a recorded program.
@@ -67,17 +67,6 @@ struct CmdListCommonRuntimeArgInfo {
 };
 
 /**
- * @brief Links a command list PrefetcherPipe parameter to a PrefetcherPipeParameter of a recorded program.
- * The parameter must be bound by SetProgramRunArgs() before the workload is recorded.
- */
-struct CmdListPrefetcherPipeArgInfo {
-    // Program in the workload passed to CommandListBuilder::add(). Only needs to outlive that call.
-    std::reference_wrapper<const Program> program;
-    // PrefetcherPipeParameter of program whose pipe addresses are patched.
-    experimental::PrefetcherPipeParamName param_name;
-};
-
-/**
  * @brief Maps command list parameter names to fields of the programs in one recorded workload.
  * A name may map to several fields, which are all patched with the same value.
  */
@@ -85,7 +74,8 @@ struct CmdListParameters {
     Table<CmdListTensorArgName, std::vector<CmdListTensorArgInfo>> tensor_parameters;
     Table<CmdListRuntimeArgName, std::vector<CmdListRuntimeArgInfo>> runtime_parameters;
     Table<CmdListCommonRuntimeArgName, std::vector<CmdListCommonRuntimeArgInfo>> common_runtime_parameters;
-    Table<CmdListPrefetcherPipeArgName, std::vector<CmdListPrefetcherPipeArgInfo>> prefetcher_pipe_parameters;
+    // Advanced options (see experimental/command_list.hpp).
+    experimental::CmdListAdvancedParameters advanced_options;
 };
 
 /**
@@ -95,7 +85,8 @@ struct CmdListArgPatch {
     Table<CmdListTensorArgName, ProgramRunArgs::TensorArgument> tensor_args;
     Table<CmdListRuntimeArgName, ArgValue> runtime_args;
     Table<CmdListCommonRuntimeArgName, ArgValue> common_runtime_args;
-    Table<CmdListPrefetcherPipeArgName, experimental::PrefetcherPipeArgument> prefetcher_pipe_args;
+    // Advanced options (see experimental/command_list.hpp).
+    experimental::CmdListAdvancedArgPatch advanced_options;
 };
 
 /**
@@ -195,12 +186,6 @@ public:
      * The patch is ordered on the bound command queue: replays enqueued before this call use the old values,
      * and replays enqueued after this call use the new ones. Every name and tensor is validated before anything
      * is written. Tensor arguments record raw device addresses; the tensors are not retained.
-     *
-     * A PrefetcherPipe argument repoints the list, and its recorded Tensor prefetcher requests, at a new pipe with the
-     * same MeshDevice, sender, receivers, entry size, ring size and credit lanes. The pipe is not retained; keep it and
-     * its space alive while the list replays with it. Pipes from one space or one relay DFB share addresses: patch them
-     * in one call to pipes that also share them. Patch all pipes of a recorded request in one call. A pipe sharing an
-     * address with a pipe that is not a command-list parameter cannot be patched.
      *
      * @param patch     New parameter values.
      * @param blocking  If true, waits until the patch has been written.
