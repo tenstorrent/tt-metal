@@ -66,6 +66,14 @@ RESET_TRIES = 3
 _SETUP = re.compile(r"\[pp rank (\d+)\] setup complete, entering request loop")
 _KMD_LOCK = re.compile(r"Waiting for KMD lock .* held by another handle")
 KMD_LOCK_S = 300
+# tt-run tags every line [job,rank]; a TT_FATAL logs one critical line with the cause. The other ranks then block
+# on the dead one until the setup timeout, so a fatal line ends bring-up, after a short wait for the other ranks' lines.
+_ANSI = re.compile(r"\x1b\[[0-9;]*m")
+_FATAL = re.compile(
+    r"^\[\d+,(\d+)\]<std(?:out|err)>:.*\|\s*critical\s*\|.*?TT_FATAL:\s*(.*?)(?:\s*\([\w.]+:\d+\))?\s*$"
+)
+FATAL_GRACE_S = 20
+FATAL_MAX_CHARS = 400
 # A run that never reached the hardware question; its fallback would meet the same wall.
 ENV_FAULT = "environment: "
 
@@ -208,8 +216,19 @@ class BringupWatch:
 
     def __init__(self, n_ranks: int, now: float):
         self.n_ranks, self.ready, self.last_ready, self.recent = n_ranks, set(), now, ""
+        # rank -> its first TT_FATAL, in log order: the first one is the cause, later ones usually its echo.
+        self.fatal: dict[int, str] = {}
+        self.fatal_at: float | None = None
+        self._partial = ""
 
     def feed(self, text: str, now: float) -> None:
+        lines = (self._partial + text).split("\n")
+        self._partial = lines.pop()
+        for line in lines:
+            m = _FATAL.match(_ANSI.sub("", line))
+            if m and int(m.group(1)) not in self.fatal:
+                self.fatal[int(m.group(1))] = m.group(2)[:FATAL_MAX_CHARS]
+                self.fatal_at = self.fatal_at or now
         got = setup_ranks(text)
         if got - self.ready:
             self.ready |= got
@@ -220,6 +239,9 @@ class BringupWatch:
 
     def blocker(self, now: float) -> str | None:
         return bringup_blocker(self.recent) if now - self.last_ready > KMD_LOCK_S else None
+
+    def crashed(self, now: float) -> bool:
+        return self.fatal_at is not None and now - self.fatal_at >= FATAL_GRACE_S
 
 
 def bringup_rows(ready: set[int], hosts_by_rank: list[str], hung: bool, errors: dict | None = None):
@@ -282,7 +304,10 @@ def reset_hosts(repo: Path, hosts: list[str], d: Path) -> Result:
             log = d / f"reset_{_short(host)}{'' if n == 1 else f'.retry{n}'}.log"
             with open(log, "w") as f:
                 try:
-                    if subprocess.run(_host_cmd(host, cmd), stdout=f, stderr=subprocess.STDOUT, timeout=900).returncode == 0:
+                    if (
+                        subprocess.run(_host_cmd(host, cmd), stdout=f, stderr=subprocess.STDOUT, timeout=900).returncode
+                        == 0
+                    ):
                         return
                 except subprocess.TimeoutExpired:
                     f.write("\nreset timed out after 900s\n")
@@ -372,6 +397,9 @@ def run_once(
             if runner.poll() is not None:
                 notes.append(f"runner exited rc={runner.returncode} during bring-up, log {runner_log}")
                 break
+            if watch.crashed(time.time()):
+                notes.append(f"log {runner_log}")
+                break
             if time.time() - start > SETUP_TIMEOUT_S:
                 hung = True
                 notes.append(f"bring-up not done after {SETUP_TIMEOUT_S}s, log {runner_log}")
@@ -410,8 +438,13 @@ def run_once(
     by_rank = rank_hosts(ttrun_cwd, hosts)
     if producer is None:
         errors = {k: r["error"] for k, r in ranks.items() if r and r["error"]}
+        errors |= {k: f"crashed in bring-up: {m}" for k, m in watch.fatal.items()}
         rows = bringup_rows(ready, by_rank, hung, errors)
         r = overall(rows, hung)
+        if watch.fatal:
+            # The ranks waiting on the crashed one did not finish either; the verdict names the crash.
+            k = next(iter(watch.fatal))
+            r = Result(rows[k][1].status, f"stage {k}: {rows[k][1].reason}")
         if r.status == Status.PASS:
             r = Result(Status.FAIL, "bring-up did not finish")
         r.reason = f"{r.reason}; {'; '.join(notes)}" if notes else r.reason

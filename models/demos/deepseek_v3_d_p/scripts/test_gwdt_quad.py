@@ -58,7 +58,9 @@ def test_mgd_by_host_count_and_fabric():
     assert mgd_path(4, "2d_torus_xy") == f"{base}/ci/sc4_mgd.textproto"
     assert mgd_path(4, "2d") == f"{base}/pipeline_prefill_4galaxy_connected_fabric2d_mesh_graph_descriptor.textproto"
     assert mgd_path(1, "2d_torus_xy") == f"{base}/ci/sc1_mgd.textproto"
-    assert mgd_path(1, "2d") == "tt_metal/fabric/mesh_graph_descriptors/single_bh_galaxy_mesh_graph_descriptor.textproto"
+    assert (
+        mgd_path(1, "2d") == "tt_metal/fabric/mesh_graph_descriptors/single_bh_galaxy_mesh_graph_descriptor.textproto"
+    )
     with pytest.raises(ValueError):
         mgd_path(2, "2d")
 
@@ -276,3 +278,34 @@ def test_runner_has_no_device_op_timeout():
 def test_runner_waits_for_slow_inter_galaxy_handshake():
     run = _inner(runner_cmd(REPO, HOSTS, "passthrough", "2d_torus_xy", Path("/r")))
     assert "export TT_METAL_FABRIC_ROUTER_SYNC_TIMEOUT_MS=300000;" in run
+
+
+def test_tt_fatal_ends_bring_up_and_names_the_first_crashed_rank():
+    w = gwdt_quad.BringupWatch(n_ranks=4, now=0)
+    cause = (
+        "[1,2]<stdout>: \x1b[90m2026-11-19 15:07:09.433\x1b[0m | critical | \x1b[35m         Always\x1b[0m | "
+        "\x1b[37mTT_FATAL: D2DStreamService: the sender at coord MeshCoordinate([2, 0]) has no free fabric router "
+        "toward its peer\x1b[0m \x1b[90m(assert.hpp:104)\x1b[0m\n"
+    )
+    echo = (
+        "[1,3]<stdout>: 2026-11-19 15:07:09.442 | critical |          Always | TT_FATAL: D2DStreamService: the "
+        "sender (rank 2) failed to build its service at coord MeshCoordinate([0, 0]); see its log (assert.hpp:104)\n"
+    )
+    # The follower hands over whatever is on disk, so a line can arrive in two reads.
+    w.feed(cause[:80], now=100)
+    assert w.fatal == {}
+    w.feed(cause[80:] + echo, now=101)
+    assert list(w.fatal) == [2, 3]
+    assert (
+        w.fatal[2]
+        == "D2DStreamService: the sender at coord MeshCoordinate([2, 0]) has no free fabric router toward its peer"
+    )
+    assert not w.crashed(now=101 + gwdt_quad.FATAL_GRACE_S - 2)
+    assert w.crashed(now=101 + gwdt_quad.FATAL_GRACE_S)
+
+
+def test_runner_banner_mentioning_tt_fatal_is_not_a_crash():
+    w = gwdt_quad.BringupWatch(n_ranks=2, now=0)
+    w.feed("[1,0]<stderr>: comparison_mode_should_raise_exception=false TT_FATAL handling on\n", now=1)
+    w.feed("[1,0]<stdout>: 15:02:11.221 | warning | Metal | Failed to create shared memory: Permission denied\n", now=2)
+    assert w.fatal == {} and not w.crashed(now=10**6)
