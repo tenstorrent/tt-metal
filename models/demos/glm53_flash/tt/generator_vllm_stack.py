@@ -837,11 +837,16 @@ def row_params(sampling_params, r: int) -> SamplingParams:
     seed), so a missing field or a short list is a contract break and raises (AttributeError / IndexError)."""
     t = float(sampling_params.temperature[r])
     k = int(sampling_params.top_k[r])
+    p = float(sampling_params.top_p[r])
     seed = sampling_params.seed[r]
+    # top_p <= 0 keeps only the most likely token (the plugin's sampling suite sends 0.0): a greedy row, never an
+    # exception -- a ValueError here is raised inside the EngineCore and kills the engine for every request
+    if p <= 0.0:
+        t, p = 0.0, 1.0
     return SamplingParams(
         temperature=t,
         top_k=None if k <= 0 else k,
-        top_p=float(sampling_params.top_p[r]),
+        top_p=min(p, 1.0),
         seed=None if seed is None or int(seed) < 0 else int(seed),
     )
 

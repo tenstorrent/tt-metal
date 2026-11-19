@@ -407,9 +407,13 @@ def test_page_rows_trim():
 
 
 def test_row_params_conversion():
-    """The plugin's per-row lists -> SamplingParams: greedy rows, vLLM's unset top-k (0 / -1), None seeds."""
+    """The plugin's per-row lists -> SamplingParams: greedy rows, vLLM's unset top-k (0 / -1), None seeds; top_p 0.0
+    (the plugin's sampling suite) is a greedy row and top_p > 1 is 1.0 -- never an exception inside the engine."""
     sp = SimpleNamespace(
-        temperature=[0.0, 0.7, 0.9, 1.0], top_k=[1, 1, 0, 40], top_p=[1.0, 0.9, 0.95, 1.0], seed=[None, 3, -1, None]
+        temperature=[0.0, 0.7, 0.9, 1.0, 1.0, 0.8],
+        top_k=[1, 1, 0, 40, 0, 0],
+        top_p=[1.0, 0.9, 0.95, 1.0, 0.0, 1.5],
+        seed=[None, 3, -1, None, 7, None],
     )
     assert row_params(sp, 0) == SamplingParams(top_k=1) and row_params(sp, 0).is_greedy
     assert (
@@ -417,10 +421,15 @@ def test_row_params_conversion():
     )
     assert row_params(sp, 2) == SamplingParams(temperature=0.9, top_k=None, top_p=0.95, seed=None)
     assert row_params(sp, 3) == SamplingParams(temperature=1.0, top_k=40, top_p=1.0, seed=None)
+    assert (
+        row_params(sp, 4) == SamplingParams(temperature=0.0, top_k=None, top_p=1.0, seed=7)
+        and row_params(sp, 4).is_greedy
+    )
+    assert row_params(sp, 5) == SamplingParams(temperature=0.8, top_k=None, top_p=1.0, seed=None)
     with expect_error(AttributeError, "temperature"):  # a missing field is a contract break, not a greedy row
         row_params(SimpleNamespace(), 0)
     with expect_error(IndexError, "out of range"):  # a short list likewise
-        row_params(sp, 5)
+        row_params(sp, 6)
 
 
 def test_kv_cache_spec_and_budget(monkeypatch):
