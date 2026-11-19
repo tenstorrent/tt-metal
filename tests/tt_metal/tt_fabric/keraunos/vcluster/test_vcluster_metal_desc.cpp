@@ -178,7 +178,11 @@ void export_mock(const Files& files) {
         socs += (socs.empty() ? "" : ",") + soc.string();
     }
     ::setenv("TT_METAL_MOCK_CLUSTER_DESC_PATH", files.cluster.c_str(), 1);
-    ::setenv("TT_METAL_EMU_SOC_DESC", socs.c_str(), 1);
+    if (socs.empty()) {
+        ::unsetenv("TT_METAL_EMU_SOC_DESC");
+    } else {
+        ::setenv("TT_METAL_EMU_SOC_DESC", socs.c_str(), 1);
+    }
     ::setenv("TT_MESH_GRAPH_DESC_PATH", files.mesh_graph.c_str(), 1);
     if (!files.package.empty()) {
         ::setenv("TT_METAL_EMU_PACKAGE_SOC_DESC", files.package.c_str(), 1);
