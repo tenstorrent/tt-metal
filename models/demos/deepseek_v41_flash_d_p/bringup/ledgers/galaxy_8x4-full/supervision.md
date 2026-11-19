@@ -497,3 +497,7 @@
   of its only test exited 1).
 - Every gate summary and A/B table now leads with "device opens of <task> so far" (safe-runner processes from
   logs/hostmem.jsonl + runner restarts) and the runner's model loads.
+- 09:52 UTC DEVICE OPENS (justified): P.84 A/B rerun on the runner after 604d3c3e4fa. Expected: the runner
+  restarted once for the off side (MOE_REPLICAS=off, layers 0-20) and once for the on side (MOE_REPLICAS=on is a
+  load-time switch: the 13th slot is filled at load), i.e. 2 opens / 2 loads of 0-20; the accept gate's fresh full
+  process later if accepted. RAM unaccounted before: 167.7 GiB.
