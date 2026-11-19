@@ -4,6 +4,8 @@
 
 from __future__ import annotations
 
+import contextlib
+import functools
 import inspect
 import weakref
 from typing import TYPE_CHECKING, Any
@@ -12,9 +14,24 @@ from loguru import logger
 
 import ttnn
 
+from ..utils import tracing
+
 if TYPE_CHECKING:
+    from collections.abc import Callable, Iterator
+
     from ..layers.module import Module
     from .events import PipelineEventCallback
+
+
+def owns_captures(method: Callable[..., Any]) -> Callable[..., Any]:
+    """For a pipeline method that captures traces outside a call, such as a warm-up: the pipeline owns them."""
+
+    @functools.wraps(method)
+    def wrapper(self: Pipeline, *args: Any, **kwargs: Any) -> Any:  # noqa: ANN401
+        with self._owning_captures():  # noqa: SLF001
+            return method(self, *args, **kwargs)
+
+    return wrapper
 
 
 class Pipeline:
@@ -77,6 +94,63 @@ class Pipeline:
         if not hasattr(self, "_evictable"):
             self._evictable = weakref.WeakSet()
         self._evictable.update(present)
+        # Weak: a module must not keep its pipeline alive.
+        module._exclusion_evictor = weakref.WeakMethod(self._evict)  # noqa: SLF001
+
+    def _evict(self, module: Module) -> None:
+        """Free the weights of ``module``, an exclusion of a module that is being loaded.
+
+        A captured trace replays the weight addresses it saw. So on a pipeline that traces, the
+        pipeline's traces are released before the weights go, with a warning; each one is captured
+        again on its next traced call. A module that holds no weights frees nothing, and no trace is
+        released for it.
+        """
+        # `is_loaded` can be false on a module that holds weights (a load that raised part way). Then
+        # nothing is released here, and the trace that read those weights refuses to replay instead.
+        # An untraced pipeline evicts exactly as before; a traced one does the release work only when
+        # this eviction frees weights and the pipeline holds a trace.
+        if (
+            getattr(self, "trace", False)
+            and module.is_loaded()
+            and any(tracer.trace_captured for tracer in self._owned_traces())
+        ):
+            before = tracing.captured_trace_count()
+            self.release_traces()
+            # A subclass releases the traces it knows of; this takes the rest of what the pipeline owns.
+            self._release_owned_traces()
+            logger.warning(
+                f"{type(self).__name__}: module {type(module).__name__} is evicting. "
+                f"Releasing traces ({before - tracing.captured_trace_count()} released)."
+            )
+        module.deallocate_weights()
+
+    def release_traces(self) -> None:
+        """Release the traces this pipeline captured. A subclass that keeps state beside its traces resets it too."""
+        self._release_owned_traces()
+
+    def _owned_traces(self) -> weakref.WeakSet[tracing.Tracer]:
+        # setdefault: an instance built without __init__ has no set yet.
+        return self.__dict__.setdefault("_owned_tracers", weakref.WeakSet())
+
+    def _release_owned_traces(self) -> None:
+        for tracer in tuple(self._owned_traces()):
+            tracer.release_trace()
+
+    @contextlib.contextmanager
+    def _owning_captures(self) -> Iterator[None]:
+        """Every trace captured inside the block is this pipeline's, whichever component holds its tracer."""
+        owned = self._owned_traces()
+        previous = tracing.current_capture_owner()
+        # One owner at a time on a thread, for a whole call: a second pipeline starting inside it is
+        # refused, not given the slot. A warm-up of the same pipeline may call it again.
+        if previous is not None and previous is not owned:
+            msg = f"{type(self).__name__} cannot run inside another pipeline's call: captures have one owner"
+            raise RuntimeError(msg)
+        tracing._capture_owner.traces = owned  # noqa: SLF001
+        try:
+            yield
+        finally:
+            tracing._capture_owner.traces = previous  # noqa: SLF001
 
     @staticmethod
     def _trace_rule_error() -> ValueError:
@@ -167,7 +241,8 @@ class Pipeline:
         self._drop_legacy_traced(kwargs)
         self._check_trace_rule()
         self._check_component_flags(kwargs)
-        return self._run(*args, **kwargs)
+        with self._owning_captures():
+            return self._run(*args, **kwargs)
 
     def _run(self, *args: Any, **kwargs: Any) -> Any:  # noqa: ANN401
         """One generation. Runs traced when ``self.trace``, unless given ``traced=False``."""
@@ -182,7 +257,8 @@ class Pipeline:
         overrides this to raise.
         """
         self._check_component_flags(kwargs)
-        return self._run(*args, traced=False, **kwargs)
+        with self._owning_captures():
+            return self._run(*args, traced=False, **kwargs)
 
     def run_single_prompt(
         self,

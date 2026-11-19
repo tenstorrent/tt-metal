@@ -94,6 +94,8 @@ class Module(ABC):
         self._is_loaded = False
         self.coresident_exclusions = None  # modules that cannot be resident in memory at the same time as this module. They should be deallocated before this module is loaded.
         self._coresident_peers: list[Module] = []
+        # Set by the pipeline that registered the exclusions: how it wants them evicted.
+        self._exclusion_evictor: Callable[[], Callable[[Module], None] | None] | None = None
         self._eviction_hooks: list[Callable[[], None]] = []
 
     def named_children(self) -> Iterator[tuple[str, Module]]:
@@ -403,8 +405,13 @@ class Module(ABC):
 
     def evict_coresident_exclusions(self) -> None:
         """Evict the modules that cannot be resident in memory at the same time as this module."""
-        if self.coresident_exclusions is not None:
-            for module in self.coresident_exclusions:
+        if self.coresident_exclusions is None:
+            return
+        evict = self._exclusion_evictor() if self._exclusion_evictor is not None else None
+        for module in self.coresident_exclusions:
+            if evict is not None:
+                evict(module)
+            else:
                 module.deallocate_weights()
 
     @abstractmethod

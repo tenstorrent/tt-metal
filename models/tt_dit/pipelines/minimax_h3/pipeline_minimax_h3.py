@@ -95,7 +95,7 @@ from ...utils.conv3d import conv3d_blocking_hash
 from ...utils.tensor import bf16_tensor, from_torch, local_device_to_torch, pad_single
 from ...utils.tracing import StateTensor
 from ..events import DenoiseStep, PipelineEventCallback, event_section, null_callback
-from ..pipeline_api import Pipeline
+from ..pipeline_api import Pipeline, owns_captures
 from .conditioning import MINIMAX_H3_PIXEL_MEAN as _MINIMAX_H3_PIXEL_MEAN
 from .conditioning import MINIMAX_H3_PIXEL_STD as _MINIMAX_H3_PIXEL_STD
 from .conditioning import encode_keyframes, keyframe_condition_noise
@@ -2580,6 +2580,7 @@ class MiniMaxH3Pipeline(Pipeline):
             rung_requests=rung_requests,
         )
 
+    @owns_captures
     def warmup(
         self,
         *,

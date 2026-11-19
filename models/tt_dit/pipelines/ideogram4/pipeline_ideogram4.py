@@ -133,7 +133,7 @@ from ...reference.ideogram4.constants import IMAGE_POSITION_OFFSET, QWEN3_VL_ACT
 from ...reference.ideogram4.dequant import dequant_fp8_state_dict
 from ..cfg import create_submeshes
 from ..events import DenoiseStep, PipelineEventCallback, SectionEnd, SectionStart, null_callback
-from ..pipeline_api import Pipeline
+from ..pipeline_api import Pipeline, owns_captures
 from . import policy
 
 # Opt-out switch for the bf16 dequant cache (default on). Dequantizing the fp8
@@ -845,6 +845,7 @@ class Ideogram4Pipeline(Pipeline):
         return tuple(self._sizes)
 
     @torch.no_grad()
+    @owns_captures
     def warmup(self, sizes: Sequence[tuple[int, int]] | None = None) -> None:
         """Prepare the pipeline to serve ``sizes`` ((width, height) pairs; default the configured size).
 

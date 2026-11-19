@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import functools
 import inspect
+import threading
 import weakref
 from types import NoneType
 from typing import TYPE_CHECKING, Any, overload
@@ -90,6 +91,8 @@ class Tracer:
     """
 
     _traces_live: ClassVar[dict[int, int]] = {}
+    # Every tracer in the process that holds a captured trace. Counted, never released from here.
+    _captured: ClassVar[weakref.WeakSet[Tracer]] = weakref.WeakSet()
 
     @overload
     def __init__(
@@ -320,6 +323,10 @@ class Tracer:
             Tracer._traces_live[d.id()] += 1
         self._trace_ids = trace_ids
         self._outputs = outputs
+        Tracer._captured.add(self)
+        owner = current_capture_owner()
+        if owner is not None:
+            owner.add(self)
 
         if execute:
             # Trace capture records commands but does not execute them. Execute the trace to
@@ -383,6 +390,7 @@ class Tracer:
         self._kwargs = {}
         self._outputs = None
         self._unwatch()
+        Tracer._captured.discard(self)
         for d, trace_id in zip(self._devices, trace_ids, strict=True):
             Tracer._traces_live[d.id()] -= 1
             ttnn.release_trace(d, trace_id)
@@ -450,6 +458,21 @@ class Tracer:
         elif new != prev:
             msg = f"input '{path_label}' does not match the initial value"
             raise ValueError(msg)
+
+
+# The traces captured while a pipeline call runs belong to that pipeline: it puts the set it keeps
+# them in here for the length of the call. One slot per thread, so calls on other threads do not meet.
+_capture_owner = threading.local()
+
+
+def current_capture_owner() -> weakref.WeakSet[Tracer] | None:
+    """The set that takes the traces captured on this thread right now, if a pipeline call is running."""
+    return getattr(_capture_owner, "traces", None)
+
+
+def captured_trace_count() -> int:
+    """How many tracers hold a captured trace, across every pipeline in the process."""
+    return len(Tracer._captured)  # noqa: SLF001
 
 
 _TRACER_VALID_INPUT_TYPES = (ttnn.Tensor, int, float, str, bool, NoneType)
