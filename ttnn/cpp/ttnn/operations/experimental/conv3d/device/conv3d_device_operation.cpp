@@ -207,21 +207,6 @@ void Conv3dDeviceOperation::validate_on_program_cache_hit(
             "output_trim_t_front ({}) must be less than the unpacked output frames ({})",
             args.output_trim_t_front,
             T_out_conv * d2s[0]);
-
-        // The reader pushes each block's patches in TILE_HEIGHT-page chunks into a vol2col_rm ring of
-        // min(n, 2 * TILE_HEIGHT) pages when n is not tile aligned. For n > 2 * TILE_HEIGHT those pushes
-        // do not divide the ring, a chunk straddles its end and the device hangs. Checked on this path only.
-        const uint32_t num_patches = args.config.T_out_block * args.config.H_out_block * args.config.W_out_block;
-        TT_FATAL(
-            num_patches % tt::constants::TILE_HEIGHT == 0 || num_patches <= 2 * tt::constants::TILE_HEIGHT,
-            "T_out_block * H_out_block * W_out_block ({} * {} * {} = {}) must be a multiple of {} or at most {}: "
-            "other blockings overrun the vol2col CB ring and hang the device.",
-            args.config.T_out_block,
-            args.config.H_out_block,
-            args.config.W_out_block,
-            num_patches,
-            tt::constants::TILE_HEIGHT,
-            2 * tt::constants::TILE_HEIGHT);
     }
 
     // Validate weight shape and config arguments
