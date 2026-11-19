@@ -236,7 +236,7 @@ inline constexpr std::uint32_t encode(const std::uint32_t destination, const std
     }
 }
 
-inline __attribute__((always_inline)) void assert_valid(const bool valid, const char* message)
+inline __attribute__((always_inline)) void assert_valid(const bool valid, [[maybe_unused]] const char* message)
 {
     LLK_ASSERT(valid, message);
 }
