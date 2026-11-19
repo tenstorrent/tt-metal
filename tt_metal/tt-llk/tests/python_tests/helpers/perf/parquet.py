@@ -115,12 +115,26 @@ def legacy_column_aliases(arch: ChipArchitecture, test_name: str) -> dict:
 
 
 def apply_column_aliases(df, aliases):
-    """Rename legacy columns to their current names; a column is never dropped or overwritten."""
+    """Rename legacy columns to their current names.
+
+    A report that carries both names has the legacy column folded into the current one
+    when the two never disagree. When they disagree, both columns stay, so the legacy one
+    is reported as unknown instead of losing a value."""
+    df = df.copy()
     renames = {}
     for old, new in aliases.items():
-        if old in df.columns and new not in df.columns and new not in renames.values():
-            renames[old] = new
-    return df.rename(columns=renames), renames
+        if old not in df.columns or new in renames.values():
+            continue
+        if new not in df.columns:
+            df = df.rename(columns={old: new})
+        else:
+            both = df[old].notna() & df[new].notna()
+            if (df.loc[both, old] != df.loc[both, new]).any():
+                continue
+            df[new] = df[new].where(df[new].notna(), df[old])
+            df = df.drop(columns=[old])
+        renames[old] = new
+    return df, renames
 
 
 _BOOL_MAP = {

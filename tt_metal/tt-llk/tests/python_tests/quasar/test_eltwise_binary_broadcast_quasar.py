@@ -38,7 +38,6 @@ from helpers.test_variant_parameters import (
     ACC_TO_DEST,
     BROADCAST_TYPE,
     DEST_SYNC,
-    INPUT_TILE_CNT,
     LOOP_FACTOR,
     MATH_FIDELITY,
     MATH_OP,
@@ -258,7 +257,6 @@ def test_eltwise_binary_broadcast_quasar(
                 tile_dimensions=tile_dimensions,
             ),
             TILE_COUNT(tile_cnt_A),
-            INPUT_TILE_CNT(tile_cnt_A),
             OUTPUT_TILE_CNT(tile_cnt_res),
             NUM_BLOCKS(num_blocks),
             NUM_TILES_IN_BLOCK(

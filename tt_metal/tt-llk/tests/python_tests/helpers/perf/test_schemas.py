@@ -2243,7 +2243,7 @@ PERF_TEST_SCHEMAS = {
 
 PERF_TEST_SCHEMAS_QSR = {
     "perf_eltwise_binary_broadcast_quasar": {
-        "version": 8,
+        "version": 9,
         "columns": [
             "acc_to_dest",
             "block_ct_dim",
@@ -2264,7 +2264,6 @@ PERF_TEST_SCHEMAS_QSR = {
             "full_rt_dim",
             "input_num_blocks",
             "input_num_tiles_in_block",
-            "input_tile_cnt",
             "loop_factor",
             "marker",
             "math_fidelity",
@@ -2285,13 +2284,16 @@ PERF_TEST_SCHEMAS_QSR = {
             "tile_cnt",
             "unpack_to_dest",
         ],
-        "aliases": {"formats.sfpu_math": "formats.sfpu_src"},
+        "aliases": {
+            "formats.sfpu_math": "formats.sfpu_src",
+            "input_tile_cnt": "tile_cnt",
+        },
         "test_name_aliases": {
             "perf_eltwise_binary_broadcast_quasar": "perf_eltwise_binary_broadcast_quasar"
         },
     },
     "perf_eltwise_binary_quasar": {
-        "version": 9,
+        "version": 10,
         "columns": [
             "acc_to_dest",
             "block_ct_dim",
@@ -2313,7 +2315,6 @@ PERF_TEST_SCHEMAS_QSR = {
             "full_rt_dim",
             "input_num_blocks",
             "input_num_tiles_in_block",
-            "input_tile_cnt",
             "loop_factor",
             "marker",
             "math_fidelity",
@@ -2336,13 +2337,16 @@ PERF_TEST_SCHEMAS_QSR = {
             "unpack_transpose_faces",
             "unpack_transpose_within_face",
         ],
-        "aliases": {"formats.sfpu_math": "formats.sfpu_src"},
+        "aliases": {
+            "formats.sfpu_math": "formats.sfpu_src",
+            "input_tile_cnt": "tile_cnt",
+        },
         "test_name_aliases": {
             "perf_eltwise_binary_quasar": "perf_eltwise_binary_quasar"
         },
     },
     "perf_eltwise_binary_reuse_dest_quasar": {
-        "version": 6,
+        "version": 7,
         "columns": [
             "block_ct_dim",
             "block_rt_dim",
@@ -2361,7 +2365,6 @@ PERF_TEST_SCHEMAS_QSR = {
             "full_rt_dim",
             "input_num_blocks",
             "input_num_tiles_in_block",
-            "input_tile_cnt",
             "loop_factor",
             "marker",
             "math_fidelity",
@@ -2378,7 +2381,10 @@ PERF_TEST_SCHEMAS_QSR = {
             "tile_cnt",
             "unpack_to_dest",
         ],
-        "aliases": {"formats.sfpu_math": "formats.sfpu_src"},
+        "aliases": {
+            "formats.sfpu_math": "formats.sfpu_src",
+            "input_tile_cnt": "tile_cnt",
+        },
         "test_name_aliases": {
             "perf_eltwise_binary_reuse_dest_quasar": "perf_eltwise_binary_reuse_dest_quasar"
         },
