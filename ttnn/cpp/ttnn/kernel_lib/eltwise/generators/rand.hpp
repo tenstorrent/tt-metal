@@ -12,7 +12,7 @@
 
 namespace compute_kernel_lib {
 
-template <Dst DstSlot>
+template <Dst DstSlot, bool WholeTile = false>
 struct RandTile;
 
 }  // namespace compute_kernel_lib
