@@ -88,7 +88,7 @@ from loguru import logger
 import ttnn
 from models.demos.common.prefill.prefix_reuse import ChunkStore, PrefixRetention
 
-from .kv_export import export_entry_rows, export_windows, export_zero_blocks, zero_export_rows
+from .kv_export import _write_entry_rows, export_entry_rows, export_windows, export_zero_blocks, zero_export_rows
 
 ENV_FLAG = "V41_PREFILL_PREFIX_REUSE"
 ENV_CKPTS = "V41_PREFILL_PREFIX_CKPTS"
@@ -584,6 +584,10 @@ class V41PrefixReuse:
         # device-complete time per phase (model rows / export rows / Engram), not dispatch time. Off = the path as before.
         timing = os.environ.get("V41_PREFILL_RESTORE_TIMING", "0") == "1"
         sync = (lambda: ttnn.synchronize_device(self.rt.mesh_device)) if timing else (lambda: None)
+        # V41_PREFILL_RESTORE_FAST=1 (tt-blaze DS41F-0163, TTFT): the same writes with fewer ops -- the export's entry / key rows
+        # from the rows this restore just uploaded (no slice back out of the states), and the Engram history written straight
+        # into the slot's NgramHashState cache (hash_ids' only lasting effect; its hashes are discarded here). Off = as before.
+        fast = os.environ.get("V41_PREFILL_RESTORE_FAST", "0") == "1"
         sync()
         t0 = time.perf_counter()
         if start == 0:  # what a cold chunk 0 does first: the export holds another prompt
@@ -602,18 +606,40 @@ class V41PrefixReuse:
                 # path A's slab [chunk S | entries | carry]: entry w at row S + w (TtCSA.forward / glue_chunk); layer 20's
                 # kv_only writes no slab
                 attn._slab_write(st, rows, self.chunk + e0)
+            if fast:
+                # export_entry_rows' _export_entries for this source, fed the uploaded rows: a full chunk's n = C / ratio rows
+                # at e0 (MAXSEQ % C == 0, so the capacity clip never applies), keys typecast to bfp8 as a computed chunk's are
+                k8 = ttnn.typecast(keys, ttnn.bfloat8_b)
+                ent, idx = (self.exp.ent2, self.exp.idx2) if ratio == 2 else (self.exp.ent1, self.exp.idx1)
+                _write_entry_rows(
+                    self.exp,
+                    attn,
+                    self.exp.ent_batch(slot, _L),
+                    e0,
+                    self.chunk // ratio,
+                    rows,
+                    k8,
+                    ratio=ratio,
+                    ent=ent,
+                    idx=idx,
+                )
+                ttnn.deallocate(k8)
             ttnn.deallocate(rows)
             ttnn.deallocate(keys)
         sync()
         t1 = time.perf_counter()
-        export_entry_rows(self.exp, self.pf, slot, start, start + self.chunk)
+        if not fast:
+            export_entry_rows(self.exp, self.pf, slot, start, start + self.chunk)
         self.note_export(slot, start)
         sync()
         t2 = time.perf_counter()
         if getattr(self.pf, "engrams", None) and self.rt.engram is not None:
-            self.rt.engram.hash_ids(
-                slot, [int(v) for v in ids.tolist()], start
-            )  # the n-gram history (host, per position)
+            if fast and self._history_only(slot, ids, start):
+                pass
+            else:
+                self.rt.engram.hash_ids(
+                    slot, [int(v) for v in ids.tolist()], start
+                )  # the n-gram history (host, per position)
         if timing:
             logger.info(
                 f"[{TAG}] slot {slot} restored [{start}, {start + self.chunk}) from the host store (synced): model rows "
@@ -624,6 +650,24 @@ class V41PrefixReuse:
             f"[{TAG}] slot {slot} restored [{start}, {start + self.chunk}) from the host store: model rows {t1 - t0:.3f} s, "
             f"export rows + Engram {time.perf_counter() - t1:.3f} s (dispatch)"
         )
+
+    def _history_only(self, slot: int, ids: torch.Tensor, start: int) -> bool:
+        """V41_PREFILL_RESTORE_FAST: the Engram n-gram history of a restored chunk without hashing it -- exactly what
+        ``NgramHashState.forward`` (the checkpoint's engram.py) leaves behind: ``cache[0, start:start + L] = token_map[ids]``,
+        DEAD where an id is not a vocab token (an image span). False = this EngramHost has no such state (hash it instead).
+        """
+        eng = self.rt.engram
+        hs = getattr(eng, "_hash", None)
+        vocab = getattr(eng, "vocab_size", None)
+        if not hs or vocab is None or slot >= len(hs):
+            return False
+        st = hs[slot]
+        t = torch.as_tensor(ids, dtype=torch.long).flatten()
+        live = t < int(vocab)
+        comp = st.token_map[torch.where(live, t, torch.zeros_like(t))]
+        comp = torch.where(live, comp, torch.full_like(comp, int(st.DEAD)))
+        st.cache[0, int(start) : int(start) + int(t.numel())] = comp
+        return True
 
     def _spill(self, slot: int, k: int) -> list:
         """Checkpoint ``k`` -> host: the window carries of every attention state (``carry_states`` order), chip 0."""
