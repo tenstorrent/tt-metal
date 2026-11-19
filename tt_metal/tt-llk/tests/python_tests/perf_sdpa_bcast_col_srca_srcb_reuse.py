@@ -2,38 +2,38 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import pytest
+from conftest import blackhole_only
+from helpers.llk_params import MathFidelity
 from helpers.param_config import parametrize
 from helpers.perf.core import ALL_PERF_RUN_TYPES
-from test_pack_dest_bank import PACK_DEST_BANK_SWEEP, _run_pack_dest_bank_test
+from test_sdpa_bcast_col_srca_srcb_reuse import (
+    SDPA_FORMATS,
+    _run_sdpa_bcast_col_srca_srcb_reuse,
+)
 
 
 @pytest.mark.perf
+@blackhole_only
 @parametrize(
-    **PACK_DEST_BANK_SWEEP,
+    formats=SDPA_FORMATS,
+    math_fidelity=list(MathFidelity),
     run_types=[ALL_PERF_RUN_TYPES],
     loop_factor=[32],
+    is_perf=[True],
 )
-def test_perf_pack_dest_bank(
+def test_perf_sdpa_bcast_col_srca_srcb_reuse(
     perf_report,
     formats,
-    dest_acc,
-    l1_acc,
-    tile_dimensions,
-    tilize,
-    dest_index,
-    input_dimensions,
+    math_fidelity,
     run_types,
     loop_factor,
+    is_perf,
 ):
-    _run_pack_dest_bank_test(
+    _run_sdpa_bcast_col_srca_srcb_reuse(
         formats,
-        dest_acc,
-        l1_acc,
-        tile_dimensions,
-        tilize,
-        dest_index,
-        input_dimensions,
-        is_perf=True,
+        math_fidelity,
+        False,
+        is_perf=is_perf,
         perf_report=perf_report,
         run_types=run_types,
         loop_factor=loop_factor,

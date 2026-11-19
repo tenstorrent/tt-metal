@@ -81,6 +81,7 @@ class Attention(Module):
             # ring-joint kernel used when factor > 1 always runs the approximate exponential. False is more
             # accurate, but on Wormhole the bf16-dest accurate exponential costs ~10x per QK tile (#57180).
             exp_approx_mode=exp_approx_mode,
+            min_blocked_pack_tiles=2,
         )
         self.sdpa_compute_kernel_config = ttnn.WormholeComputeKernelConfig(
             math_fidelity=ttnn.MathFidelity.HiFi2,

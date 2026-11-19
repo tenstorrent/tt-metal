@@ -11,7 +11,7 @@
 #include <vector>
 
 #include <tt-metalium/workload/specification/program_spec.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program.hpp>
+#include <tt-metalium/mesh_workload.hpp>
 
 #include "metal2_host_api/test_helpers/test_helpers.hpp"
 #include "metal2_host_api/test_helpers/mock_device_fixtures.hpp"
@@ -42,7 +42,7 @@ TEST_F(ProgramSpecTestQuasar, CPU_KernelReferencesUnknownDFBFails) {
     spec.work_units = std::vector<WorkUnitSpec>{MakeMinimalWorkUnit("work_unit", node, {"kernel"})};
 
     EXPECT_THAT(
-        [&] { MakeProgramFromSpec(*mesh_device_, spec); },
+        [&] { Program(*mesh_device_, spec); },
         ::testing::ThrowsMessage<std::runtime_error>(
             ::testing::HasSubstr("Kernel 'kernel' references unknown DFB 'nonexistent_dfb'")));
 }
@@ -56,7 +56,7 @@ TEST_F(ProgramSpecTestQuasar, CPU_KernelSemaphoreBindingUnknownSemaphoreFails) {
     spec.kernels[0].semaphore_bindings = {binding};
 
     EXPECT_THAT(
-        [&] { MakeProgramFromSpec(*mesh_device_, spec); },
+        [&] { Program(*mesh_device_, spec); },
         ::testing::ThrowsMessage<std::runtime_error>(
             ::testing::HasSubstr("references unknown semaphore 'missing_sem'")));
 }
@@ -70,7 +70,7 @@ TEST_F(ProgramSpecTestQuasar, CPU_UnknownScratchpadReferenceFails) {
         .scratchpad_spec_name = ScratchpadSpecName{"missing_scratch"}, .accessor_name = "s"}};
 
     EXPECT_THAT(
-        [&] { MakeProgramFromSpec(*mesh_device_, spec); },
+        [&] { Program(*mesh_device_, spec); },
         ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("references unknown scratchpad")));
 }
 
@@ -81,7 +81,7 @@ TEST_F(ProgramSpecTestGen1, CPU_KernelReferencesUnknownTensorParameterFails) {
     BindTensorParameterToKernel(spec.kernels[0], "nonexistent_tensor", "input_ta");
 
     EXPECT_THAT(
-        [&] { MakeProgramFromSpec(*mesh_device_, spec); },
+        [&] { Program(*mesh_device_, spec); },
         ::testing::ThrowsMessage<std::runtime_error>(
             ::testing::HasSubstr("references unknown TensorParameter 'nonexistent_tensor'")));
 }
@@ -99,7 +99,7 @@ TEST_F(ProgramSpecTestQuasar, CPU_WorkUnitSpecReferencesUnknownKernelFails) {
     spec.work_units = std::vector<WorkUnitSpec>{MakeMinimalWorkUnit("work_unit", node, {"nonexistent_kernel"})};
 
     EXPECT_THAT(
-        [&] { MakeProgramFromSpec(*mesh_device_, spec); },
+        [&] { Program(*mesh_device_, spec); },
         ::testing::ThrowsMessage<std::runtime_error>(
             ::testing::HasSubstr("WorkUnitSpec 'work_unit' references unknown kernel 'nonexistent_kernel'")));
 }
@@ -110,7 +110,7 @@ TEST_F(ProgramSpecTestQuasar, CPU_BorrowedMemoryDFBUnknownTensorParameterFails) 
     spec.dataflow_buffers[0].borrowed_from = TensorParamName{"nonexistent_tensor"};
 
     EXPECT_THAT(
-        [&] { MakeProgramFromSpec(*mesh_device_, spec); },
+        [&] { Program(*mesh_device_, spec); },
         ::testing::ThrowsMessage<std::runtime_error>(
             ::testing::HasSubstr("borrows memory from TensorParameter 'nonexistent_tensor'")));
 }

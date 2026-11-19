@@ -1731,6 +1731,9 @@ ProgramDescriptor SDPAOperation::SDPAProgramFactory::create_descriptor(
         // bf16 max CBs, and ring-joint kernels have no kernel-config-buffer room for the SFPU row max.
         defines_map["SDPA_EXACT_FP32_ROW_MAX"] = "1";
     }
+    if (program_config.has_value() && program_config->min_blocked_pack_tiles.has_value()) {
+        defines_map["SDPA_MIN_BLOCKED_PACK_TILES"] = std::to_string(*program_config->min_blocked_pack_tiles);
+    }
     log_debug(tt::LogOp, "use_zigzag_balancing: {}", use_zigzag_balancing);
 
     KernelDescriptor::Defines defines(defines_map.begin(), defines_map.end());
