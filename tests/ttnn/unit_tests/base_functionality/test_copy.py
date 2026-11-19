@@ -21,6 +21,7 @@ from tests.ttnn.utils_for_testing import (
 )
 from tests.ttnn.unit_tests.operations.data_movement.docstring_support import (
     check_readable,
+    docstring_blackhole_dtype_layout_params,
     docstring_dtype_layout_params,
     docstring_interleaved_buffer_type_params,
     interleaved_memory_config,
@@ -2761,32 +2762,9 @@ def test_copy_docstring_supported_inputs(dtype, layout, input_buffer_type, outpu
     assert_exact(expected, ttnn.to_torch(input_b))
 
 
-def _docstring_blackhole_dtype_layouts(op):
-    """One ``pytest.param(dtype, layout)`` per "On Blackhole, ... ``<DTYPE>`` tensors in <LAYOUT> layout" sentence of the
-    op's docstring."""
-    import re
-
-    from tests.ttnn.unit_tests.operations.data_movement.docstring_support import UnreadableDocstring
-
-    try:
-        text = " ".join(op.__doc__.split())
-        found = re.findall(r"On Blackhole, [^.]*?``(\w+)`` tensors in (\w+) layout", text)
-        assert found, "no 'On Blackhole, ... ``<DTYPE>`` tensors in <LAYOUT> layout' sentence"
-        params = []
-        for dtype_name, layout_name in found:
-            dtype, layout = getattr(ttnn.DataType, dtype_name, None), getattr(ttnn.Layout, layout_name, None)
-            assert isinstance(dtype, ttnn.DataType), f"not a ttnn.DataType: {dtype_name}"
-            assert isinstance(layout, ttnn.Layout), f"not a ttnn.Layout: {layout_name}"
-            params.append(pytest.param(dtype, layout, id=f"{dtype_name}-{layout_name}"))
-        return params
-    except Exception as error:
-        reason = UnreadableDocstring(f"could not read the Blackhole dtypes from the {op} docstring: {error}")
-        return [pytest.param(reason, reason, id="docstring-unreadable")]
-
-
 @pytest.mark.parametrize("output_buffer_type", docstring_interleaved_buffer_type_params(ttnn.copy))
 @pytest.mark.parametrize("input_buffer_type", docstring_interleaved_buffer_type_params(ttnn.copy))
-@pytest.mark.parametrize("dtype, layout", _docstring_blackhole_dtype_layouts(ttnn.copy))
+@pytest.mark.parametrize("dtype, layout", docstring_blackhole_dtype_layout_params(ttnn.copy))
 def test_copy_docstring_blackhole_inputs(dtype, layout, input_buffer_type, output_buffer_type, device):
     """Runs the dtypes the ttnn.copy docstring lists for Blackhole, for ``input_a`` and ``input_b`` in every
     interleaved buffer type. The tensors are made by a typecast from BFLOAT16 and compared after a typecast back,
