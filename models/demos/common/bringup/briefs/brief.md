@@ -34,7 +34,9 @@ $gate_units
 Thresholds (the runner compares the recorded metrics; you cannot change them):
 $thresholds
 
-Run it from the repo root with `PYTHONPATH=$repo`. Device code only through `scripts/run_safe_pytest.sh` or
+Run it from the repo root with `PYTHONPATH=$repo`. Model-level device runs through the resident runner (`python -m
+models.demos.common.bringup.resident submit --spec $$BRINGUP_SPEC --cmd "<command>"`: one device open and one model
+load per task, owner rule 2026-11-19); op-level device code through `scripts/run_safe_pytest.sh` or
 `scripts/tt-probe.sh`, in the foreground.
 
 $previous
