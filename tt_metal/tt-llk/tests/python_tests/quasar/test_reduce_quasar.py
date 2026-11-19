@@ -364,7 +364,7 @@ REDUCE_TO_ONE_TILE_COUNTS = [8, 16]
     reduce_dim=[ReduceDimension.Row, ReduceDimension.Column, ReduceDimension.Scalar],
     pool_type=POOL_TYPES,
     dest_sync=lambda: quasar_dest_sync_modes(is_perf=False),
-    tile_count=runtime(REDUCE_TO_ONE_TILE_COUNTS),
+    tile_cnt=runtime(REDUCE_TO_ONE_TILE_COUNTS),
 )
 def test_reduce_quasar_multi_tile_to_one(
     formats,
@@ -372,7 +372,7 @@ def test_reduce_quasar_multi_tile_to_one(
     reduce_dim,
     pool_type,
     dest_sync,
-    tile_count,
+    tile_cnt,
 ):
     """Reduce N > 1 tiles into one DEST tile for every pool type and reduce dimension."""
     test_reduce_quasar(
@@ -386,7 +386,7 @@ def test_reduce_quasar_multi_tile_to_one(
         dest_sync,
         [PerfRunType.L1_TO_L1],
         1,
-        input_dimensions=[32 * tile_count, 32],
+        input_dimensions=[32 * tile_cnt, 32],
     )
 
 
