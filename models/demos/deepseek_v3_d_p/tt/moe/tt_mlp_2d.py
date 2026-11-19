@@ -26,6 +26,14 @@ Forward, per chip, x ``[..., T, H/nh]`` (hidden sharded over hidden_axis):
   6. tokens_sharded: reduce_scatter(y, dim=-2, inter_axis)  -> [..., T, H/nh]   (back to the input layout)
      else (decode: tokens replicated over inter_axis): all_reduce(y, inter_axis) -> [..., S, H/nh]
 
+Prefill runs steps 1-6 on the prefill's persistent collectives (``prefill_ccl="persistent"``, the default):
+step 1 is a ``high_bw_all_gather`` into a TT_CCL buffer with the shared gather semaphores, step 3 is a fused
+``matmul_reduce_scatter_prefill`` over hidden_axis (fp32 accumulation) followed by the same gather, and steps 5-6 are
+one fused ``matmul_reduce_scatter_prefill`` over inter_axis. ``ttnn.all_gather`` / ``all_reduce`` /
+``reduce_scatter`` allocate global semaphores per program in L1_SMALL; the prefill opens the mesh with 1536 B of it,
+which sparse MLA's collectives fill, so next to ttMLA2DTP they fail ("Not enough space to allocate 1920 B L1_SMALL",
+``tests/test_hy4_attn_mlp_2d_coexist.py``). ``prefill_ccl="generic"`` keeps those ops; decode always uses them.
+
 The output has the input's layout, so it adds straight onto the residual (and onto the routed experts' output,
 which ``TtMoe`` reduce-scatters to the same ``[T, H/nh]``). Steps 1/6 are the prefill form; with
 ``tokens_sharded=False`` the same weights serve decode (a few tokens replicated over the mesh), where steps 3 and 6
@@ -61,6 +69,11 @@ import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.demos.deepseek_v3_d_p.utils.sharded_cache import LayoutCacheGuard, layout_descriptor, layout_tag
 from models.demos.deepseek_v3_d_p.utils.weight_cache_dump import weight_cache_dump_mode
+
+# Prefill collectives: "persistent" (default) runs on the prefill's persistent TT_CCL buffers / semaphores and fp32
+# matmul+reduce-scatter; "generic" is ttnn.all_gather / all_reduce / reduce_scatter (per-program L1_SMALL semaphores).
+PREFILL_CCL_PERSISTENT = "persistent"
+PREFILL_CCL_GENERIC = "generic"
 
 ACTIVATION_SILU = "silu"
 ACTIVATION_CLAMPED_SILU_GLU = "clamped_silu_glu"
@@ -294,6 +307,7 @@ class TtMlp2D(LightweightModule):
         weight_cache_path: Optional[Path] = None,
         cache_name_prefix: Optional[str] = None,
         compute_kernel_config=COMPUTE_KERNEL_CONFIG,
+        prefill_ccl: str = PREFILL_CCL_PERSISTENT,
     ):
         """``num_links`` / ``topology``: scalars, or per-mesh-axis pairs (indexed by mesh axis, as the prefill block
         and ``TtMoe`` carry them). Weights come from ``torch_weights`` (HF ``gate_proj`` / ``up_proj`` /
@@ -320,6 +334,9 @@ class TtMlp2D(LightweightModule):
         self.activation = activation
         self.clamped_silu_glu_limit = clamped_silu_glu_limit
         self.compute_kernel_config = compute_kernel_config
+        if prefill_ccl not in (PREFILL_CCL_PERSISTENT, PREFILL_CCL_GENERIC):
+            raise ValueError(f"prefill_ccl must be {PREFILL_CCL_PERSISTENT!r} or {PREFILL_CCL_GENERIC!r}")
+        self.prefill_ccl = prefill_ccl
         self.num_links = num_links
         self.topology = topology
         # TtMoe reads these on its (sub-device) overlap path; TtMlp2D never runs confined to a sub-device.
@@ -349,6 +366,95 @@ class TtMlp2D(LightweightModule):
             topology=_per_axis(self.topology, axis),
         )
 
+    def _act(self, gu: ttnn.Tensor, free_input: bool = True) -> ttnn.Tensor:
+        """[..., 2I/ni] = [gate_i | up_i] -> SwiGLU (optionally clamped): [..., I/ni]. Frees ``gu`` unless it is a
+        persistent buffer (``free_input=False``)."""
+        rank = len(gu.shape)
+        mid = list(gu.shape)
+        mid[-1] = self.inter_per_chip
+        gate = ttnn.slice(gu, [0] * rank, mid)
+        up_start = [0] * rank
+        up_start[-1] = self.inter_per_chip
+        up = ttnn.slice(gu, up_start, list(gu.shape))
+        if free_input:
+            ttnn.deallocate(gu)
+        if self.activation == ACTIVATION_CLAMPED_SILU_GLU:
+            act = ttnn.clamped_silu_glu(gate, up, self.clamped_silu_glu_limit)
+        else:
+            act = ttnn.mul(gate, up, input_tensor_a_activations=[ttnn.UnaryOpType.SILU])
+        ttnn.deallocate(gate)
+        ttnn.deallocate(up)
+        return act
+
+    def _gather(self, x: ttnn.Tensor, axis: int, dim: int, name: str) -> ttnn.Tensor:
+        """All-gather ``dim`` over mesh ``axis`` into a persistent TT_CCL buffer with the prefill's shared gather
+        semaphores (no per-program L1_SMALL semaphores). The result aliases the buffer: do not free it."""
+        from models.demos.deepseek_v3_d_p.tt.tt_ccl import get_tt_ccl
+
+        tt_ccl = get_tt_ccl(self.mesh_device)
+        shape = [1, 1, x.shape[-2], x.shape[-1]]
+        shape[dim] *= self.mesh_device.shape[axis]
+        out = tt_ccl.get_mla_high_bw_all_gather_buffer(
+            name=f"mlp2d_{name}", shape=shape, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT
+        )
+        ready, data_valid = tt_ccl.get_mla_high_bw_gather_semaphores()
+        return ttnn.experimental.high_bw_all_gather(
+            x,
+            dim=dim,
+            output_tensor=out,
+            cluster_axis=axis,
+            num_links=_per_axis(self.num_links, axis),
+            ready_semaphore=ready,
+            data_valid_semaphore=data_valid,
+        )
+
+    def _mm_rs(self, x: ttnn.Tensor, w: ttnn.Tensor, axis: int, scatter_dim: int) -> ttnn.Tensor:
+        """``x @ w`` with the partials summed in fp32 over mesh ``axis`` and scattered on ``scatter_dim``."""
+        return ttnn.experimental.matmul_reduce_scatter_prefill(
+            x,
+            w,
+            cluster_axis=axis,
+            scatter_dim=scatter_dim,
+            topology=_per_axis(self.topology, axis),
+            num_links=_per_axis(self.num_links, axis),
+        )
+
+    def _prefill_forward(self, x: ttnn.Tensor) -> ttnn.Tensor:
+        """Prefill (tokens split over ``inter_axis``) on the prefill's persistent CCLs only. Same math as the generic
+        path, with the hidden all-reduce as fp32 matmul+reduce-scatter (N) then a gather, and the output
+        reduce-scatter fused into the down matmul. ``ttnn.all_gather`` / ``all_reduce`` / ``reduce_scatter``
+        allocate global semaphores per program in L1_SMALL, which the prefill (1536 B) cannot spare next to sparse
+        MLA's collectives."""
+        shape = list(x.shape)
+        x4 = ttnn.reshape(x, [1, 1, shape[-2], shape[-1]])
+        xg = self._gather(x4, self.inter_axis, 2, "x") if self.n_inter > 1 else x4  # [S, H/nh]
+        if self.n_hidden > 1:
+            gu = self._mm_rs(xg, self.gate_up_proj, self.hidden_axis, -1)  # [S, 2I/(ni*nh)], fp32-reduced
+            gu_full = self._gather(gu, self.hidden_axis, 3, "gu")  # [S, 2I/ni] = [gate_i | up_i], persistent
+            ttnn.deallocate(gu)
+            act = self._act(gu_full, free_input=False)
+        else:
+            gu = ttnn.matmul(
+                xg,
+                self.gate_up_proj,
+                compute_kernel_config=self.compute_kernel_config,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                dtype=ttnn.bfloat16,
+            )
+            act = self._act(gu)
+        if self.n_inter > 1:
+            y = self._mm_rs(act, self.down_proj, self.inter_axis, -2)  # [T, H/nh], fp32-reduced
+        else:
+            y = ttnn.matmul(
+                act,
+                self.down_proj,
+                compute_kernel_config=self.compute_kernel_config,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                dtype=ttnn.bfloat16,
+            )
+        ttnn.deallocate(act)
+        return ttnn.reshape(y, shape[:-2] + list(y.shape)[-2:])
+
     def forward(self, x: ttnn.Tensor, *, tokens_sharded: bool = True) -> ttnn.Tensor:
         """``x`` ``[..., T, H / nh]`` -> same shape and layout (module docstring). ``tokens_sharded``: the tokens are
         split over ``inter_axis`` (prefill); False when every chip of that axis holds the same tokens (decode)."""
@@ -358,6 +464,8 @@ class TtMlp2D(LightweightModule):
         )
         if x.dtype != self.activations_dtype:
             x = ttnn.typecast(x, self.activations_dtype)
+        if tokens_sharded and self.prefill_ccl == PREFILL_CCL_PERSISTENT:
+            return self._prefill_forward(x)
         gathered = tokens_sharded and self.n_inter > 1
         if gathered:
             x = ttnn.all_gather(x, dim=-2, **self._ccl_kwargs(self.inter_axis))
@@ -376,21 +484,7 @@ class TtMlp2D(LightweightModule):
             ttnn.deallocate(gu)
             gu = reduced
 
-        rank = len(gu.shape)
-        starts = [0] * rank
-        mid = list(gu.shape)
-        mid[-1] = self.inter_per_chip
-        gate = ttnn.slice(gu, starts, mid)
-        up_start = [0] * rank
-        up_start[-1] = self.inter_per_chip
-        up = ttnn.slice(gu, up_start, list(gu.shape))
-        ttnn.deallocate(gu)
-        if self.activation == ACTIVATION_CLAMPED_SILU_GLU:
-            act = ttnn.clamped_silu_glu(gate, up, self.clamped_silu_glu_limit)
-        else:
-            act = ttnn.mul(gate, up, input_tensor_a_activations=[ttnn.UnaryOpType.SILU])
-        ttnn.deallocate(gate)
-        ttnn.deallocate(up)
+        act = self._act(gu)
 
         y = ttnn.matmul(
             act,
