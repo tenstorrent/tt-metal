@@ -300,9 +300,9 @@ Tensor reduce(
 
     if (decomposes_hw) {
         // Multi-core HW reduction: first reduce W, then reduce H on the result.
-        // Keep the W intermediate in FP32 (only H packs to BF16) to preserve accumulation
+        // Keep the W intermediate in FP32 (only H packs the final dtype) to preserve accumulation
         // precision. Applies to SUM and AVG (mean), which both accumulate:
-        // - FP32 input after an earlier NC-stage reduction with a BF16 final pack (chain path), or
+        // - FP32 input after an earlier NC-stage reduction with a BF16 or BF8_B final pack (chain path), or
         // - BF16 input on a pure H+W reduction (e.g. dim=[-2,-1] on 8D tensors).
         // MAX/MIN must not use this path: the MIN still lowered to -MAX(-x) (bfloat8_b, fast-mode
         // fp32) produces wrong results with an FP32 intermediate on the fused-negate W step (issue
@@ -311,7 +311,9 @@ Tensor reduce(
         const auto out_final_dtype = output_dtype.value_or(input_tensor.dtype());
         const bool keep_w_fp32 =
             (reduce_math == tt::tt_metal::ReduceOpMath::SUM || reduce_math == tt::tt_metal::ReduceOpMath::AVG) &&
-            ((output_dtype.has_value() && out_final_dtype == tt::tt_metal::DataType::BFLOAT16 &&
+            ((output_dtype.has_value() &&
+              (out_final_dtype == tt::tt_metal::DataType::BFLOAT16 ||
+               out_final_dtype == tt::tt_metal::DataType::BFLOAT8_B) &&
               prepared_input.dtype() == tt::tt_metal::DataType::FLOAT32) ||
              (prepared_input.dtype() == tt::tt_metal::DataType::BFLOAT16 && config.fp32_dest_acc_en));
         const auto out_w_dtype = keep_w_fp32 ? tt::tt_metal::DataType::FLOAT32 : out_final_dtype;
