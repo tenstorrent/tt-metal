@@ -184,13 +184,17 @@ class TT_CCL:
         # Full-indexer layers execute serially, so they reuse the same resources. The pair belongs
         # exclusively to the SP KV-prefix gather branch and is never shared with the TP index gather.
         self.sparse_mla_overlap_resources: SparseMlaOverlapResources | None = None
+        # The pair itself, per profile, for the life of this TT_CCL (the mesh): releasing the overlap removes only its
+        # sub-device manager. Cached gather programs keep their own references to the pair, so a pair created anew for
+        # each model built on the mesh would leave the previous one pinned in L1_SMALL beside it.
+        self.sparse_mla_overlap_semaphores: dict[str, tuple] = {}
 
         self.sparse_kv_push_planner = None  # SparseKvPushPlanner, created on first use
 
         # The routed expert / combine_fabric2d overlap's fwd_arrived, final_arrived and expert_go, shared by every
         # MoE layer. Created on first use; see get_combine_overlap_semaphores.
         self.combine_overlap_semaphores = None
-        # The same overlap's DRAM forwarding buffer, one per shape; see get_combine_forwarding_buffer.
+        # combine_fabric2d's DRAM forwarding buffer, one per shape; see get_combine_forwarding_buffer.
         self.combine_forwarding_buffers = {}
         # dispatch_fabric2d's forwarding and staging buffers, one pair per shape; see get_dispatch_fabric2d_buffers.
         self.dispatch_fabric2d_buffers = {}
@@ -261,11 +265,12 @@ class TT_CCL:
     def get_combine_forwarding_buffer(
         self, emb_dim, experts_per_chip, num_experts_per_tok, seq_len_per_chip, num_links, fwd_vc_pages, combine_axis=0
     ):
-        """combine_fabric2d's DRAM forwarding buffer for hybrid_routed_expert_moe overlapped with combine.
+        """combine_fabric2d's DRAM forwarding buffer, for hybrid_routed_expert_moe overlapped with combine and for
+        the standalone combine_fabric2d alike: both size it from emb_dim, num_links, fwd_vc_pages and the ring.
 
-        One per shape, shared by every MoE layer, which run one after another. Call it before the first overlapped
-        forward: left to the op, it is allocated while that forward's dispatch buffer and outputs are live and stays
-        pinned there, splitting the DRAM each later layer's dispatch buffer needs in one piece.
+        One per shape, shared by every MoE layer, which run one after another. Call it before the first forward:
+        left to the op, it is allocated while that forward's dispatch buffer and outputs are live and stays pinned
+        there, splitting the DRAM each later layer's dispatch buffer needs in one piece.
         """
         key = (emb_dim, experts_per_chip, num_experts_per_tok, seq_len_per_chip, num_links, fwd_vc_pages, combine_axis)
         buffer = self.combine_forwarding_buffers.get(key)
@@ -311,7 +316,8 @@ class TT_CCL:
 
         Resource creation happens outside the hot forward path. Semaphore allocation is followed by a
         mesh-wide synchronization so every participating device observes the zero initialization before
-        the first Fabric atomic increment.
+        the first Fabric atomic increment. After a release, the next call registers a new manager over the
+        same semaphore pair (see sparse_mla_overlap_semaphores).
         """
         profile = profile.lower()
         profile = _SPARSE_MLA_OVERLAP_PROFILE_ALIASES.get(profile, profile)
@@ -356,23 +362,25 @@ class TT_CCL:
             [ttnn.CoreRange(ttnn.CoreCoord(0, rows), ttnn.CoreCoord(grid.x - 1, grid.y - 1))]
         )
 
-        manager_id = self.mesh_device.create_sub_device_manager(
-            [ttnn.SubDevice([topk_core_grid]), ttnn.SubDevice([gather_core_grid])],
-            0,
-        )
-        try:
+        semaphores = self.sparse_mla_overlap_semaphores.get(profile)
+        if semaphores is None:
             l1_small_view = ttnn.get_memory_view(self.mesh_device, ttnn.BufferType.L1_SMALL)
             semaphore_buffer_type = (
                 ttnn.BufferType.L1_SMALL if l1_small_view.total_bytes_per_bank > 0 else ttnn.BufferType.L1
             )
-            ready_semaphore = ttnn.create_global_semaphore(self.mesh_device, gather_core_grid, 0, semaphore_buffer_type)
-            data_valid_semaphore = ttnn.create_global_semaphore(
-                self.mesh_device, gather_core_grid, 0, semaphore_buffer_type
+            semaphores = tuple(
+                ttnn.create_global_semaphore(self.mesh_device, gather_core_grid, 0, semaphore_buffer_type)
+                for _ in range(2)
             )
             ttnn.synchronize_device(self.mesh_device)
-        except Exception:
-            self.mesh_device.remove_sub_device_manager(manager_id)
-            raise
+            self.sparse_mla_overlap_semaphores[profile] = semaphores
+        # A reused pair is at zero: release resets it after draining.
+        ready_semaphore, data_valid_semaphore = semaphores
+
+        manager_id = self.mesh_device.create_sub_device_manager(
+            [ttnn.SubDevice([topk_core_grid]), ttnn.SubDevice([gather_core_grid])],
+            0,
+        )
 
         resources = SparseMlaOverlapResources(
             profile=profile,
@@ -402,7 +410,9 @@ class TT_CCL:
         ttnn.synchronize_device(self.mesh_device)
 
     def release_sparse_mla_overlap_manager(self) -> None:
-        """Idempotently drain, reset, and unregister sparse-MLA overlap resources before mesh close."""
+        """Idempotently drain, reset the semaphores, and unregister the overlap's sub-device manager before mesh close.
+
+        The semaphore pair stays with this TT_CCL for the next model built on the mesh."""
         resources = self.sparse_mla_overlap_resources
         if resources is None:
             return

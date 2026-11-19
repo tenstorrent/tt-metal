@@ -11,7 +11,7 @@
 #include "cunpack_common.h"
 #include "llk_assert.h"
 #include "api/debug/waypoint.h"
-#include "llk_bfd_alloc.h"
+#include "ckernel_buf_desc.h"
 #include "llk_defs.h"
 #include "llk_io.h"
 #include "llk_operands.h"
@@ -25,23 +25,22 @@
  *************************************************************************/
 
 /**
- * @brief Allocate a BFD id from the unpack partition, program its table entry from the operand's
- * DFB info (shape, L1 base, formats), and record the id in the engine's current slot. The DFB id is
+ * @brief Program the engine's fixed BFD table entry from the operand's
+ * DFB info (shape, L1 base, formats). The DFB id is
  * used only to fetch buffer info — it never doubles as the BFD id.
  *
- * @tparam E: physical UNPACR engine that will consume the descriptor (Unp0 or Unp1)
+ * @tparam E: fixed BFD id of the UNPACR engine that will consume the descriptor (BFD_ID_UNP0 or BFD_ID_UNP1)
  * @tparam MODE: L1 access mode for the descriptor; Strided collapses y/z dims to 1 for the
  * UNPACR_STRIDE tilize sequences.
  * @param operand_id: Input DFB used to look up the descriptor parameters
- * @return Allocated BFD id for the unpack init
  */
-template <ckernel::trisc::BfdResource E, ckernel::trisc::L1AccessMode MODE = ckernel::trisc::L1AccessMode::Continuous>
-inline std::uint8_t llk_unpack_program_bfd(const std::uint32_t operand_id) {
+template <std::uint8_t E, ckernel::trisc::L1AccessMode MODE = ckernel::trisc::L1AccessMode::Continuous>
+inline void llk_unpack_program_bfd(const std::uint32_t operand_id) {
     LLK_REINIT_GUARD_NOTE_PROGRAMMED(E, operand_id);
     // TODO: multi-TC not handled — only tc_slots[0]'s L1 base is programmed. When a DFB is mapped
     // across multiple TCs this must program one descriptor per active tc_slot (same gap in
     // llk_pack_program_bfd). Tied to the DFB<->buffer-descriptor decouple work.
-    return ckernel::trisc::bfd_alloc_and_program<E, MODE>(
+    ckernel::trisc::program_bfd<E, MODE>(
         get_operand_tensor_shape(operand_id),
         get_local_dfb_interface(operand_id).tc_slots[0].base_addr,
         static_cast<std::uint32_t>(unpack_src_format[operand_id]));
@@ -51,7 +50,7 @@ inline std::uint8_t llk_unpack_program_bfd(const std::uint32_t operand_id) {
  * @brief Programs source register format for both UNP_A and UNP_B
  *
  * Buffer descriptors are no longer programmed here: BFD ids are an LLK-internal resource
- * allocated from the per-TRISC partition (see llk_bfd_alloc.h) and each op's llk_unpack_*_init
+ * fixed per engine (see ckernel_buf_desc.h) and each op's llk_unpack_*_init
  * programs its own table entry. DFB ids never double as BFD ids.
  *
  * Also the unpack thread's once-per-program unpack-to-dest init: its DEST bank reset and the seeds of the semaphores

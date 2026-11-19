@@ -10,7 +10,8 @@
 #include "context/metal_context.hpp"
 
 #include <tt-metalium/distributed.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program.hpp>
+#include <tt-metalium/mesh_workload.hpp>
+#include <tt-metalium/workload/specification/program_spec.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/mesh_buffer.hpp>
 #include <tt-umd/tt_device/tt_device.hpp>
@@ -123,7 +124,7 @@ void expect_flat_write_2dev_with_checker(
         }},
         .work_units = {WorkUnitSpec{.name = "main", .kernels = {SENDER}, .target_nodes = src_node}},
     };
-    Program sender_prog = experimental::MakeProgramFromSpec(src_device, sender_spec);
+    Program sender_prog(src_device, sender_spec);
     ProgramRunArgs sender_run_args;
     sender_run_args.kernel_run_args = {ProgramRunArgs::KernelRunArgs{
         .kernel = SENDER,
@@ -135,7 +136,7 @@ void expect_flat_write_2dev_with_checker(
              {"size", FLAT_WRITE_2DEV_BYTES},
              {"posted", posted ? 1u : 0u}}),
     }};
-    experimental::SetProgramRunArgs(sender_prog, sender_run_args);
+    sender_prog.set_program_run_args(sender_run_args);
     distributed::MeshWorkload sender_workload;
     sender_workload.add_program(distributed::MeshCoordinateRange(src_device.shape()), std::move(sender_prog));
     distributed::EnqueueMeshWorkload(src_cq, sender_workload, true);
@@ -155,7 +156,7 @@ void expect_flat_write_2dev_with_checker(
         }},
         .work_units = {WorkUnitSpec{.name = "main", .kernels = {CHECKER}, .target_nodes = tgt_node}},
     };
-    Program checker_prog = experimental::MakeProgramFromSpec(tgt_device, checker_spec);
+    Program checker_prog(tgt_device, checker_spec);
     ProgramRunArgs checker_run_args;
     checker_run_args.kernel_run_args = {ProgramRunArgs::KernelRunArgs{
         .kernel = CHECKER,
@@ -166,7 +167,7 @@ void expect_flat_write_2dev_with_checker(
              {"base_value", base_value},
              {"result_l1_addr", result_buf->address()}}),
     }};
-    experimental::SetProgramRunArgs(checker_prog, checker_run_args);
+    checker_prog.set_program_run_args(checker_run_args);
     distributed::MeshWorkload checker_workload;
     checker_workload.add_program(distributed::MeshCoordinateRange(tgt_device.shape()), std::move(checker_prog));
     distributed::EnqueueMeshWorkload(tgt_cq, checker_workload, true);

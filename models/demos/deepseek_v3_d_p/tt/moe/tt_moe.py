@@ -39,7 +39,12 @@ from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import (
 from models.demos.deepseek_v3_d_p.tt.moe.tt_combine import TtCombine2dModule, TtCombineModule
 from models.demos.deepseek_v3_d_p.tt.moe.tt_dispatch import TtDispatch2dModule, TtDispatchModule
 from models.demos.deepseek_v3_d_p.tt.moe.tt_latent_proj import TtLatentMoeProjections
-from models.demos.deepseek_v3_d_p.tt.moe.tt_moe_gate_prefill import GateComputeMode, TtMoEGateConfig, TtMoEGatePrefill
+from models.demos.deepseek_v3_d_p.tt.moe.tt_moe_gate_prefill import (
+    GateComputeMode,
+    PackedPadding,
+    TtMoEGateConfig,
+    TtMoEGatePrefill,
+)
 from models.demos.deepseek_v3_d_p.tt.moe.tt_moe_intermediates import TtMoEIntermediates
 from models.demos.deepseek_v3_d_p.tt.moe.tt_moe_routing_setup import TtMoERoutingSetup
 from models.demos.deepseek_v3_d_p.tt.moe.tt_reduce import TtReduceModule
@@ -635,6 +640,17 @@ class TtMoe(LightweightModule):
                 cluster_axis=self.sp_axis,
                 num_links=self.sp_num_links,
                 fwd_vc_pages=self.combine_fwd_vc_pages,
+                # Fetched here, at init, so the buffer is placed before any forward's tensors. The same buffer the
+                # overlap below takes: the two combines size it alike, and only one of them runs in a forward.
+                forwarding_buffer=self.tt_ccl.get_combine_forwarding_buffer(
+                    self.routed_emb_dim,
+                    experts_per_chip,
+                    num_experts_per_tok,
+                    self.seq_len_per_chip,
+                    self.sp_num_links,
+                    fwd_vc_pages=self.combine_fwd_vc_pages,
+                    combine_axis=self.sp_axis,
+                ),
             )
         else:
             self.combine_module = TtCombineModule(
@@ -829,6 +845,7 @@ class TtMoe(LightweightModule):
             self.sd_manager_id = None
 
     _dump_traced_warned = False  # see the traced-path branch below; warn once per process
+    _dump_packed_warned = False  # see the packed-forward branch below; warn once per process
     _overlap_forward_logged = False  # the first overlapped forward logs once per process
 
     def _dump_routing(
@@ -838,6 +855,7 @@ class TtMoe(LightweightModule):
         actual_start: int,
         cache_user_id: int,
         traced: bool,
+        packed: bool = False,
     ) -> None:
         """Env-gated (PREFILL_DUMP_ROUTING_DIR) host dump of the gate's per-token top-k selection.
 
@@ -870,6 +888,16 @@ class TtMoe(LightweightModule):
                 logger.warning(
                     "[TtMoe] PREFILL_DUMP_ROUTING_DIR is set but this is the traced path; "
                     "routing dump skipped for all layers (run with use_trace=False to collect it)"
+                )
+            return
+        if packed:
+            # A packed forward's rows belong to several slots at several starts, so no single
+            # (slot, start) file name describes them and the analysis script would un-rotate them wrongly.
+            if not TtMoe._dump_packed_warned:
+                TtMoe._dump_packed_warned = True
+                logger.warning(
+                    "[TtMoe] PREFILL_DUMP_ROUTING_DIR is set but this is a packed forward; "
+                    "routing dump skipped (run one chunk per forward to collect it)"
                 )
             return
         try:
@@ -938,6 +966,8 @@ class TtMoe(LightweightModule):
         metadata: Optional[tuple] = None,
         input_ids: Optional[torch.Tensor] = None,
         cache_user_id: int = 0,
+        packed: bool = False,
+        packed_padding_config: Optional[PackedPadding] = None,
         residual: Optional[ttnn.Tensor] = None,
     ) -> tuple[ttnn.Tensor, Optional[TtMoEIntermediates]]:
         """
@@ -968,6 +998,12 @@ class TtMoe(LightweightModule):
                 the HASH_HOST / HASH_DEVICE gate modes, which select experts by tid2eid[input_ids].
                 HASH_DEVICE ships them per forward, so it is illegal inside a trace capture and
                 assumes sequential SP placement (not is_balanced).
+            packed: a packed forward (several chunks' rows back to back), whose padding comes from
+                ``packed_padding_config`` instead of actual_isl / actual_start, which describe one chunk.
+            packed_padding_config: a packed forward's PackedPadding (tt_moe_gate_prefill), caller-owned and built
+                once for every MoE layer of the forward (eager) or refreshed before every replay (traced); None when
+                every row is real. Its ``config`` masks the pad rows after each chip's last real row, its
+                ``real_rows`` the pad rows of a partial chunk ahead of a non-empty one. Used as is.
             residual: optional block residual, added to the output inside the MoE. Not allowed with
                 return_intermediates.
 
@@ -1025,8 +1061,18 @@ class TtMoe(LightweightModule):
         #     on-device. A caller that wanted padding awareness OFF under trace would pass
         #     actual_isl=None and get a capture with no padding-aware path at all.
         padding_config = None
+        real_rows = None
         gate_marks_padding = self.gate.fallback_mode in (GateComputeMode.DEVICE_FP32, GateComputeMode.GPT_DEVICE)
-        if actual_isl is not None and gate_marks_padding:
+        if packed:
+            assert actual_isl is None and metadata is None, "a packed forward's padding is packed_padding_config"
+            assert padding_side == "right", "a packed forward is right-padded per chunk"
+            if gate_marks_padding and packed_padding_config is not None:
+                padding = packed_padding_config
+                padding_config = padding.config
+                if padding.real_rows is None and padding.row_mask is not None:
+                    padding.real_rows = self.gate.real_rows_tensor(padding.row_mask)  # once per forward, then shared
+                real_rows = padding.real_rows
+        elif actual_isl is not None and gate_marks_padding:
             if metadata is not None:
                 # Traced path: the per-chunk scalars live on-device in the metadata tensors, so build
                 # the config with the device op. The host builder's from_torch cannot run inside a
@@ -1046,8 +1092,19 @@ class TtMoe(LightweightModule):
             actual_start=actual_start or 0,
             input_ids=input_ids,
         )
+        if real_rows is not None:
+            # A packed forward's pad rows ahead of a later chunk's real rows: the padding config's one leading count per
+            # chip covers them, so the top-k left them real ids. Sentinel them like the config's trailing pad rows.
+            indices = self.gate.mask_pad_rows(indices, real_rows)
 
-        self._dump_routing(indices, scores, actual_start or 0, cache_user_id, metadata is not None)
+        self._dump_routing(
+            indices,
+            scores,
+            actual_start or 0,
+            cache_user_id,
+            metadata is not None,
+            packed=packed,
+        )
 
         (
             tt_expert_offsets,

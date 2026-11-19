@@ -382,7 +382,7 @@ void kernel_main() {
                     // block-group's tail (last-block pack to mm_out, or the bias / untilize pack to out) left
                     // the pack BFD on a non-partials DFB; re-init pack for the partials DFB so this group's
                     // accumulation packs reference the correct BFD. Unconditional (covers non-bias, bias, and
-                    // untilize tails); a redundant re-init is tolerated by the BFD bump-and-wrap contract.
+                    // untilize tails); a redundant re-init is harmless (it re-programs the fixed Pack0 BFD).
                     // (reconfig_data_format.h ARCH_QUASAR note: call pack_init on pack-output switch.)
                     pack_init(mm_partials_dfb_id);
 #endif
