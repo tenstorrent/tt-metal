@@ -624,9 +624,11 @@ void kernel_main() {
     // Ring slab: the input tile-row at the slab CB's front, its ring slot, and one past the last row pushed.
     [[maybe_unused]] int32_t ring_front_row = 0;
     [[maybe_unused]] uint32_t ring_front_slot = 0;
-    // rt_valid: incoming ring row groups counted over the previous M-blocks (their group counts may differ, and the
-    // per-block count is what the left column forwards).
-    [[maybe_unused]] uint32_t ring_need = 0;
+    // N-slice ring: row groups forwarded to column my_col + 1 so far, over all M-blocks (the absolute arrival count
+    // each forward writes there), and the four 16 B source words of those count writes: the first ring token pages
+    // (no kernel writes a token page's bytes; the token CB only counts).
+    [[maybe_unused]] uint32_t ring_sent = 0;
+    [[maybe_unused]] const uint32_t ring_count_words = nslice_outer ? get_read_ptr(cb_ring_token) : 0;
     [[maybe_unused]] int32_t ring_pushed_hi = 0;
     for (uint32_t m_block_idx = 0; m_block_idx < num_m_blocks_this_core; ++m_block_idx) {
         const uint32_t block_tiles_done = m_block_idx * block_m_tiles;
@@ -1589,81 +1591,44 @@ void kernel_main() {
 
         if constexpr (nslice_outer) {
             // Ring reduce-scatter forwarding (conv2d_3x3_nslice_order.hpp). Compute packs step j's partial into slot
-            // k_cols - 1 - j one row group at a time and pushes a ring token after each. The reader writes each group
-            // one column on (NoC0, +x) into slot k_cols - 2 - j of column my_col + 1 (that core's step j + 1 partial)
-            // and bumps that core's arrival count once the write landed, in issue order, with up to ring_inflight
-            // writes in flight (one transaction id each). It frees each token, and with it the packer's next group,
-            // once that group's incoming partial has landed here. Every wait polls the in-flight writes, so no wait
-            // delays an arrival.
+            // k_cols - 1 - j one row group at a time, each onto the incoming partial it waited for itself (the arrival
+            // count, see the compute kernel), and pushes a ring token after each. The reader writes each group one
+            // column on (NoC0, +x) into slot k_cols - 2 - j of column my_col + 1 (that core's step j + 1 partial) and
+            // pops the token. Right behind the group it writes that core's arrival count (the absolute number of
+            // groups sent there): same command buffer, same static VC, same destination, so the count lands after the
+            // data with no wait for the data's ack, and the arrival is not delayed by this reader's next wait.
+            // The previous protocol freed the packer's next group from this reader once its incoming partial landed,
+            // and signalled each arrival after the write's ack: two RISC hand-overs and a NoC round trip per hop.
+            // Measured (Blackhole p150b, unzoned, medians of 3): a 5-owner 11-column ring (6 non-owning columns) at
+            // LoFi 13905 -> 11036 ns, a 2-slice ring 5339 -> 5151 ns. res4.x: the everything-stubbed skeleton 5990 ->
+            // 4964 ns (one run), weights stubbed 10653 -> 10436 ns, real 11532 -> 11595 ns (flat: the walk waits on the
+            // weight stream, and with it stubbed on the matmul).
             MaybeDeviceZoneScope("reader_combine_send");
             constexpr uint32_t num_owning_cols = (tensor_n_tiles + out_n_tiles - 1) / out_n_tiles;
             constexpr uint32_t slot_tiles = block_m_tiles * out_n_tiles;
             // rt_valid: only the block's valid tile-rows are multiplied and forwarded (every core of the grid row has
             // the same M range, so the row's columns agree on the groups).
             const uint32_t groups = (walk_rows + ring_group_rows - 1) / ring_group_rows;
-            constexpr uint32_t ring_inflight = 2;
+            // Transaction ids (one per count word, in rotation): a count word is rewritten only once the writes issued
+            // under its id have left L1.
+            constexpr uint32_t ring_trids = 4;
             constexpr uint32_t ring_trid_base = 12;
             Semaphore<> credit(combine_credit_sem_id);
-            Semaphore<> arrival(combine_arrival_sem_id);
-            Noc noc;
             const uint32_t slot_bytes = slot_tiles * get_tile_size(cb_combine_slots);
             const uint32_t row_bytes = slot_bytes / block_m_tiles;
             const uint32_t combine_base = get_write_ptr(cb_combine_slots);
             const uint32_t next_col = my_col + 1 == k_cols ? 0 : my_col + 1;
             const uint32_t nx = get_arg_val<uint32_t>(row_peer_coords_arg + 2 * next_col);
             const uint32_t ny = get_arg_val<uint32_t>(row_peer_coords_arg + 2 * next_col + 1);
-            volatile tt_l1_ptr uint32_t* arrived =
-                reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(combine_arrival_sem_id));
-            // Incoming row groups counted so far; the count only grows (every real step j >= 1 takes `groups`).
-            uint32_t need = rt_valid
-                                ? ring_need
-                                : m_block_idx * groups * conv2d_3x3::ring_incoming<k_cols, num_owning_cols>(my_col);
+            const uint64_t next_arrival = get_noc_addr(nx, ny, get_semaphore(combine_arrival_sem_id));
             bool credited = false;
-            uint32_t issued = 0;
-            uint32_t retired = 0;
-            // Signals the oldest in-flight write once it landed (its counter is valid once the command left).
-            auto try_retire = [&]() {
-                if (retired == issued || !noc_cmd_buf_ready(noc_index, write_cmd_buf)) {
-                    return;
-                }
-                if (ncrisc_noc_nonposted_write_with_transaction_id_flushed(
-                        noc_index, ring_trid_base + retired % ring_inflight)) {
-                    arrival.up(noc, nx, ny, 1);
-                    ++retired;
-                }
-            };
-            // Frees the outstanding token once the group the packer packs next (of step `next`; it has an incoming
-            // partial when next >= 1) has landed.
-            auto release_token = [&](uint32_t next) {
-                if (next >= 1 && next < k_cols) {
-                    ++need;
-                    while (true) {
-                        invalidate_l1_cache();
-                        if (*arrived >= need) {
-                            break;
-                        }
-                        try_retire();
-                    }
-                }
-                cb_pop_front(cb_ring_token, 1);
-            };
-            auto wait_token = [&]() {
-                while (!cb_pages_available_at_front(cb_ring_token, 1)) {
-                    try_retire();
-                }
-            };
             const uint32_t first = conv2d_3x3::ring_next_real<k_cols, num_owning_cols>(my_col, 0);
-            if (first >= 1 && first < k_cols) {
-                wait_token();
-                release_token(first);
-            }
             for (uint32_t j = first; j < k_cols;
                  j = conv2d_3x3::ring_next_real<k_cols, num_owning_cols>(my_col, j + 1)) {
-                const uint32_t next_step = conv2d_3x3::ring_next_real<k_cols, num_owning_cols>(my_col, j + 1);
                 for (uint32_t g = 0; g < groups; ++g) {
                     {
                         MaybeDeviceZoneScope("reader_ring_wait_step");
-                        wait_token();
+                        cb_wait_front(cb_ring_token, 1);
                     }
                     MaybeDeviceZoneScope("reader_ring_send");
                     if (j + 1 < k_cols) {
@@ -1672,10 +1637,10 @@ void kernel_main() {
                             credit.wait_min(m_block_idx + 1);
                             credited = true;
                         }
-                        while (issued - retired >= ring_inflight) {
-                            try_retire();
+                        const uint32_t w = ring_sent % ring_trids;
+                        const uint32_t trid = ring_trid_base + w;
+                        while (!ncrisc_noc_nonposted_write_with_transaction_id_sent(noc_index, trid)) {
                         }
-                        const uint32_t trid = ring_trid_base + issued % ring_inflight;
                         const uint32_t owner = conv2d_3x3::nslice_owner<k_cols>(my_col, j);
                         const uint32_t r0 = rt_valid
                                                 ? conv2d_3x3::ring_group_row0_rt<ring_group_rows>(walk_rows, owner, g)
@@ -1690,15 +1655,20 @@ void kernel_main() {
                             noc_async_write_one_packet_with_trid(
                                 src + off, get_noc_addr(nx, ny, dst + off), bytes, trid);
                         }
-                        ++issued;
+                        ++ring_sent;
+                        const uint32_t word = ring_count_words + w * 16;
+                        *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(word) = ring_sent;
+                        // The store reaches L1 before the NoC reads it (Blackhole stores can land out of order).
+                        asm volatile("fence" ::: "memory");
+                        noc_async_write_one_packet_with_trid(word, next_arrival, 4, trid);
                     }
-                    release_token(g + 1 < groups ? j : next_step);
+                    cb_pop_front(cb_ring_token, 1);
                 }
             }
-            while (retired < issued) {
-                try_retire();
+            for (uint32_t t = 0; t < ring_trids; ++t) {
+                while (!ncrisc_noc_nonposted_write_with_transaction_id_flushed(noc_index, ring_trid_base + t)) {
+                }
             }
-            ring_need = need;
             // The firmware requires every NoC packet tag cleared at kernel end.
             noc_async_write_set_trid(0);
         } else if constexpr (combine_send) {

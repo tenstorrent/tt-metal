@@ -1,0 +1,324 @@
+diff --git a/ttnn/ttnn/operations/conv2d_3x3/conv2d_3x3_program_descriptor.py b/ttnn/ttnn/operations/conv2d_3x3/conv2d_3x3_program_descriptor.py
+--- a/ttnn/ttnn/operations/conv2d_3x3/conv2d_3x3_program_descriptor.py
++++ b/ttnn/ttnn/operations/conv2d_3x3/conv2d_3x3_program_descriptor.py
+@@ -68,8 +68,11 @@
+ CB_COMBINE_SLOTS = 8
+ CB_COMBINED = 9
+ # N-slice-outer ring: one 16 B page per packed row group, compute (packer) -> reader (see conv2d_3x3_nslice_order.hpp).
++# Four pages: the packer runs up to four groups ahead of the reader's forwards, and the reader keeps the arrival count
++# it writes behind each forward in one of the first four pages (one per transaction id in rotation).
+ CB_RING_TOKEN = 10
+ RING_TOKEN_BYTES = 16
++RING_TOKEN_PAGES = 4
+ # Tap-major only: 32 zero pixels, so an out-of-image tap run is one read instead of one per 512 B MEM_ZEROS chunk.
+ CB_ZERO_SRC = 11
+ # Center-tap direct in0 (see CENTER_TAP_DIRECT): the kw = 1 K-blocks' input tiles, copied by the reader.
+@@ -973,7 +976,7 @@
+         + bm * (g.tensor_k_tiles if nslice else bk) * g.in0_tile_bytes
+         + weight_depth * (g.tensor_k_tiles * ns if nslice else bk * bn) * g.weight_tile_bytes
+         + (ns * g.weight_tile_bytes if g.has_bias else 0)
+-        + (RING_TOKEN_BYTES + TILE_BYTES_FP32 if nslice else bm * bn * TILE_BYTES_FP32)
++        + (RING_TOKEN_PAGES * RING_TOKEN_BYTES + TILE_BYTES_FP32 if nslice else bm * bn * TILE_BYTES_FP32)
+         + combine_bytes
+         + (
+             bm * ns * g.out_tile_bytes
+@@ -1982,7 +1985,7 @@
+         input_tile_pages = input_ring_batches * b.untilize_batch_rows * g.c_in_tiles
+         cbs.append(_cb(CB_INPUT_TILES, input_tensor.dtype, g.in0_tile_bytes, input_tile_pages, cores))
+     if b.nslice:
+-        cbs.append(_cb(CB_RING_TOKEN, ttnn.float32, RING_TOKEN_BYTES, 1, cores))
++        cbs.append(_cb(CB_RING_TOKEN, ttnn.float32, RING_TOKEN_BYTES, RING_TOKEN_PAGES, cores))
+     if tap_major_im2col(g, b):
+         cbs.append(_cb(CB_ZERO_SRC, ttnn.bfloat16, pixel_bytes, TILE, cores))
+     # kw-fold has no gather (its reader only fills the slab) and owns CB_SRC_TABLE as its ACC-ready token.
+@@ -2636,6 +2639,9 @@
+         [("RING_OWNER_MASK", f"{sum(1 << c for c in ring_owners)}u")] if ring_owners is not None else []
+     )
+     _wide_short_defines = [("RING_WIDE_SHORT_GROUP", "1")] if ct_group_rows else []
++    # N-slice ring: the packer waits for its incoming partials on the arrival count itself (see the reader's
++    # nslice_outer forwarding). Only a semaphore id: harmless where the walk is not compiled.
++    _ring_arrival_defines = [("RING_ARRIVAL_SEM_ID", str(SEM_COMBINE_ARRIVAL))]
+     # N-slice walk: the writer reads the bias without a wait once the first weight round is issued and pushes it when it
+     # lands, so the column weight stream starts at kernel start (with the spare groups that stream paces the walk:
+     # res4.x 12022 -> 11607 ns; without them flat to -1.7%).
+@@ -2671,7 +2677,8 @@
+         + _pad_compute_defines
+         + _ring_owner_defines
+         + _sd_compute_defines
+-        + _wide_short_defines,
++        + _wide_short_defines
++        + _ring_arrival_defines,
+         config=ttnn.ComputeConfigDescriptor(
+             math_fidelity=compute_kernel_config.math_fidelity,
+             math_approx_mode=compute_kernel_config.math_approx_mode,
+diff --git a/ttnn/ttnn/operations/conv2d_3x3/kernels/conv2d_3x3_compute.cpp b/ttnn/ttnn/operations/conv2d_3x3/kernels/conv2d_3x3_compute.cpp
+--- a/ttnn/ttnn/operations/conv2d_3x3/kernels/conv2d_3x3_compute.cpp
++++ b/ttnn/ttnn/operations/conv2d_3x3/kernels/conv2d_3x3_compute.cpp
+@@ -774,6 +774,18 @@
+ #endif
+ 
+ }  // namespace
++
++// N-slice ring: this core's arrival count (semaphore RING_ARRIVAL_SEM_ID; column my_col - 1's reader writes it behind
++// each row group it forwards here). Dataflow firmware exposes the semaphore base as sem_l1_base; TRISC firmware does
++// not, so the packer reads it from the launch message (BRISC advances launch_msg_rd_ptr only after every RISC of the
++// core finished, so the pointer names this launch throughout).
++inline volatile tt_l1_ptr uint32_t* ring_arrival_count() {
++    const uint32_t rd = *GET_MAILBOX_ADDRESS_DEV(launch_msg_rd_ptr);
++    const volatile tt_l1_ptr kernel_config_msg_t* cfg = &GET_MAILBOX_ADDRESS_DEV(launch[rd])->kernel_config;
++    return reinterpret_cast<volatile tt_l1_ptr uint32_t*>(
++        cfg->kernel_config_base[ProgrammableCoreType::TENSIX] + cfg->sem_offset[ProgrammableCoreType::TENSIX] +
++        RING_ARRIVAL_SEM_ID * L1_ALIGNMENT);
++}
+ 
+ void kernel_main() {
+ #ifdef CONV2D_3X3_KW_FOLD
+@@ -1097,6 +1109,8 @@
+     // rt_valid: the per-M-block args follow the kernel-row masks (ceil(ring groups / 10) words per M-block).
+     constexpr uint32_t rt_ring_groups = (block_m_tiles + slice_sb_h - 1) / slice_sb_h;
+     [[maybe_unused]] const uint32_t rt_arg_base = 3 + ((rt_ring_groups + 9) / 10) * num_m_blocks_this_core;
++    // N-slice ring: incoming row groups packed onto so far, over all M-blocks (the arrival count each waits for).
++    [[maybe_unused]] uint32_t ring_need = 0;
+     for (uint32_t m_block_idx = 0; m_block_idx < num_m_blocks_this_core; ++m_block_idx) {
+         [[maybe_unused]] const uint32_t valid_rows =
+             rt_valid ? get_arg_val<uint32_t>(rt_arg_base + 2 * m_block_idx) : block_m_tiles;
+@@ -1174,18 +1188,19 @@
+             // multiplies owner my_col - 1 - j's slice over the whole K (DEST accumulates over K) and packs it into
+             // slot k_cols - 1 - j of cb_combine_slots with packer L1 accumulation onto the partial column my_col - 1
+             // sent for that owner (step 0 starts the chain: plain pack). The slots are reserved whole, so every pack
+-            // is at an absolute offset. Each row group (one matmul subblock row) of a step is gated by the token CB:
+-            // the packer reserves a page before packing the group, which the reader frees only once that group's
+-            // incoming partial has landed, and pushes it after the pack, which tells the reader the group is ready
+-            // to forward to my_col + 1. The last step (own slice) leaves the row's fp32 sum in slot 0, the front of
+-            // cb_combine_slots: only the bias add (or a copy) and ReLU remain, packed into the output shard.
++            // is at an absolute offset. Each row group (one matmul subblock row) of a step with an incoming partial
++            // (j >= 1) waits for this core's arrival count, which the reader of column my_col - 1 writes right
++            // behind the group's data, and is pushed as a ring token (4 pages) after its pack, which tells the reader
++            // the group is ready to forward to my_col + 1. The last step (own slice) leaves the row's fp32 sum in
++            // slot 0, the front of cb_combine_slots: only the bias add (or a copy) and ReLU remain, packed into the
++            // output shard.
+             // Raw LLK (matmul_block / pack_tile): compute_kernel_lib::matmul_block cannot pack its only K-block
+             // with L1 accumulation onto a partial already in L1 (its L1-accumulating pack is "K-block > 0"), nor
+-            // gate each subblock row's pack on a CB of another RISC, nor run a shorter last subblock: it takes one
+-            // subblock shape per call, which must divide the block. A bm 7 x out_n 2 slice (res5.x) then only gets
+-            // 1 x 2 subblocks, and the BH matmul unpacker reads rt + rt * ct tiles per k-step (ct + ct * rt when
+-            // rt > ct): 1.5 unpacks per tile-MAC, 19.5 cycles per tile-MAC. 4 x 1 subblocks with a 3-row last group
+-            // cost 1.25 / 1.33: 17.5 cycles per tile-MAC, res5.x @ LoFi 45.4 -> 42.2 us (Blackhole p150b).
++            // gate each subblock row's pack on another core's arrival count, nor run a shorter last subblock: it
++            // takes one subblock shape per call, which must divide the block. A bm 7 x out_n 2 slice (res5.x) then
++            // only gets 1 x 2 subblocks, and the BH matmul unpacker reads rt + rt * ct tiles per k-step (ct + ct * rt
++            // when rt > ct): 1.5 unpacks per tile-MAC, 19.5 cycles per tile-MAC. 4 x 1 subblocks with a 3-row last
++            // group cost 1.25 / 1.33: 17.5 cycles per tile-MAC, res5.x @ LoFi 45.4 -> 42.2 us (Blackhole p150b).
+             constexpr uint32_t k_tiles = block_k_tiles * num_k_blocks;
+             // in0's K: all of it, or (N-slice center taps) taps 0 and 2 of every kernel row.
+             constexpr uint32_t in0_k_tiles = k_tiles - (nslice_center ? 3 * c_in_tiles : 0);
+@@ -1327,11 +1342,6 @@
+                 MaybeDeviceZoneScope("compute_matmul_walk");
+                 slots.reserve_back(k_cols * slot_tiles);
+                 const uint32_t first = conv2d_3x3::ring_next_real<k_cols, num_owning_cols>(my_col, 0);
+-                if (first >= 1 && first < k_cols) {
+-                    // The first real step needs an incoming partial: a token the reader holds until it lands.
+-                    ring_token.reserve_back(1);
+-                    ring_token.push_back(1);
+-                }
+                 reconfig_data_format(cb_weights, cb_im2col_tiles);
+                 pack_reconfig_data_format(cb_combine_slots);
+                 ckernel::matmul_block_init(cb_im2col_tiles, cb_weights, false, slice_sb_w, slice_sb_h, k_tiles);
+@@ -1373,6 +1383,17 @@
+                             init_w = group_w;
+                         }
+                         ring_token.reserve_back(1);
++                        if (j >= 1) {
++                            // The group's incoming partial landed: column my_col - 1 wrote this core's arrival count
++                            // right behind it. The packer waits for it itself; the matmul runs ahead regardless.
++                            ++ring_need;
++                            PACK(({
++                                volatile tt_l1_ptr uint32_t* arrived = ring_arrival_count();
++                                do {
++                                    invalidate_l1_cache();
++                                } while (*arrived < ring_need);
++                            }));
++                        }
+                         // The group's matmuls and packs. ct_group_rows: the group height is a template constant (one
+                         // instance per height 1..slice_sb_h), so the r x 1 subblock's unpack / math loops are
+                         // specialized (on the balanced split's ranges; with runtime dims a 1-row group costs nearly a
+diff --git a/ttnn/ttnn/operations/conv2d_3x3/kernels/conv2d_3x3_nslice_order.hpp b/ttnn/ttnn/operations/conv2d_3x3/kernels/conv2d_3x3_nslice_order.hpp
+--- a/ttnn/ttnn/operations/conv2d_3x3/kernels/conv2d_3x3_nslice_order.hpp
++++ b/ttnn/ttnn/operations/conv2d_3x3/kernels/conv2d_3x3_nslice_order.hpp
+@@ -85,14 +85,4 @@
+     return g * R;
+ }
+ 
+-// Real steps j >= 1 of one M-block: each receives one partial from column my_col - 1.
+-template <uint32_t k_cols, uint32_t num_owning_cols>
+-inline uint32_t ring_incoming(uint32_t my_col) {
+-    uint32_t n = 0;
+-    for (uint32_t j = 1; j < k_cols; ++j) {
+-        n += ring_is_owner<num_owning_cols>(nslice_owner<k_cols>(my_col, j)) ? 1 : 0;
+-    }
+-    return n;
+-}
+-
+ }  // namespace conv2d_3x3
+diff --git a/ttnn/ttnn/operations/conv2d_3x3/kernels/conv2d_3x3_reader.cpp b/ttnn/ttnn/operations/conv2d_3x3/kernels/conv2d_3x3_reader.cpp
+--- a/ttnn/ttnn/operations/conv2d_3x3/kernels/conv2d_3x3_reader.cpp
++++ b/ttnn/ttnn/operations/conv2d_3x3/kernels/conv2d_3x3_reader.cpp
+@@ -610,9 +610,11 @@
+     // Ring slab: the input tile-row at the slab CB's front, its ring slot, and one past the last row pushed.
+     [[maybe_unused]] int32_t ring_front_row = 0;
+     [[maybe_unused]] uint32_t ring_front_slot = 0;
+-    // rt_valid: incoming ring row groups counted over the previous M-blocks (their group counts may differ, and the
+-    // per-block count is what the left column forwards).
+-    [[maybe_unused]] uint32_t ring_need = 0;
++    // N-slice ring: row groups forwarded to column my_col + 1 so far, over all M-blocks (the absolute arrival count
++    // each forward writes there), and the four 16 B source words of those count writes: the first ring token pages
++    // (no kernel writes a token page's bytes; the token CB only counts).
++    [[maybe_unused]] uint32_t ring_sent = 0;
++    [[maybe_unused]] const uint32_t ring_count_words = nslice_outer ? get_read_ptr(cb_ring_token) : 0;
+     [[maybe_unused]] int32_t ring_pushed_hi = 0;
+     for (uint32_t m_block_idx = 0; m_block_idx < num_m_blocks_this_core; ++m_block_idx) {
+         const uint32_t block_tiles_done = m_block_idx * block_m_tiles;
+@@ -1549,81 +1551,44 @@
+ 
+         if constexpr (nslice_outer) {
+             // Ring reduce-scatter forwarding (conv2d_3x3_nslice_order.hpp). Compute packs step j's partial into slot
+-            // k_cols - 1 - j one row group at a time and pushes a ring token after each. The reader writes each group
+-            // one column on (NoC0, +x) into slot k_cols - 2 - j of column my_col + 1 (that core's step j + 1 partial)
+-            // and bumps that core's arrival count once the write landed, in issue order, with up to ring_inflight
+-            // writes in flight (one transaction id each). It frees each token, and with it the packer's next group,
+-            // once that group's incoming partial has landed here. Every wait polls the in-flight writes, so no wait
+-            // delays an arrival.
++            // k_cols - 1 - j one row group at a time, each onto the incoming partial it waited for itself (the arrival
++            // count, see the compute kernel), and pushes a ring token after each. The reader writes each group one
++            // column on (NoC0, +x) into slot k_cols - 2 - j of column my_col + 1 (that core's step j + 1 partial) and
++            // pops the token. Right behind the group it writes that core's arrival count (the absolute number of
++            // groups sent there): same command buffer, same static VC, same destination, so the count lands after the
++            // data with no wait for the data's ack, and the arrival is not delayed by this reader's next wait.
++            // The previous protocol freed the packer's next group from this reader once its incoming partial landed,
++            // and signalled each arrival after the write's ack: two RISC hand-overs and a NoC round trip per hop.
++            // Measured (Blackhole p150b, unzoned, medians of 3): a 5-owner 11-column ring (6 non-owning columns) at
++            // LoFi 13905 -> 11036 ns, a 2-slice ring 5339 -> 5151 ns. res4.x: the everything-stubbed skeleton 5990 ->
++            // 4964 ns (one run), weights stubbed 10653 -> 10436 ns, real 11532 -> 11595 ns (flat: the walk waits on the
++            // weight stream, and with it stubbed on the matmul).
+             MaybeDeviceZoneScope("reader_combine_send");
+             constexpr uint32_t num_owning_cols = (tensor_n_tiles + out_n_tiles - 1) / out_n_tiles;
+             constexpr uint32_t slot_tiles = block_m_tiles * out_n_tiles;
+             // rt_valid: only the block's valid tile-rows are multiplied and forwarded (every core of the grid row has
+             // the same M range, so the row's columns agree on the groups).
+             const uint32_t groups = (walk_rows + ring_group_rows - 1) / ring_group_rows;
+-            constexpr uint32_t ring_inflight = 2;
++            // Transaction ids (one per count word, in rotation): a count word is rewritten only once the writes issued
++            // under its id have left L1.
++            constexpr uint32_t ring_trids = 4;
+             constexpr uint32_t ring_trid_base = 12;
+             Semaphore<> credit(combine_credit_sem_id);
+-            Semaphore<> arrival(combine_arrival_sem_id);
+-            Noc noc;
+             const uint32_t slot_bytes = slot_tiles * get_tile_size(cb_combine_slots);
+             const uint32_t row_bytes = slot_bytes / block_m_tiles;
+             const uint32_t combine_base = get_write_ptr(cb_combine_slots);
+             const uint32_t next_col = my_col + 1 == k_cols ? 0 : my_col + 1;
+             const uint32_t nx = get_arg_val<uint32_t>(row_peer_coords_arg + 2 * next_col);
+             const uint32_t ny = get_arg_val<uint32_t>(row_peer_coords_arg + 2 * next_col + 1);
+-            volatile tt_l1_ptr uint32_t* arrived =
+-                reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(combine_arrival_sem_id));
+-            // Incoming row groups counted so far; the count only grows (every real step j >= 1 takes `groups`).
+-            uint32_t need = rt_valid
+-                                ? ring_need
+-                                : m_block_idx * groups * conv2d_3x3::ring_incoming<k_cols, num_owning_cols>(my_col);
++            const uint64_t next_arrival = get_noc_addr(nx, ny, get_semaphore(combine_arrival_sem_id));
+             bool credited = false;
+-            uint32_t issued = 0;
+-            uint32_t retired = 0;
+-            // Signals the oldest in-flight write once it landed (its counter is valid once the command left).
+-            auto try_retire = [&]() {
+-                if (retired == issued || !noc_cmd_buf_ready(noc_index, write_cmd_buf)) {
+-                    return;
+-                }
+-                if (ncrisc_noc_nonposted_write_with_transaction_id_flushed(
+-                        noc_index, ring_trid_base + retired % ring_inflight)) {
+-                    arrival.up(noc, nx, ny, 1);
+-                    ++retired;
+-                }
+-            };
+-            // Frees the outstanding token once the group the packer packs next (of step `next`; it has an incoming
+-            // partial when next >= 1) has landed.
+-            auto release_token = [&](uint32_t next) {
+-                if (next >= 1 && next < k_cols) {
+-                    ++need;
+-                    while (true) {
+-                        invalidate_l1_cache();
+-                        if (*arrived >= need) {
+-                            break;
+-                        }
+-                        try_retire();
+-                    }
+-                }
+-                cb_pop_front(cb_ring_token, 1);
+-            };
+-            auto wait_token = [&]() {
+-                while (!cb_pages_available_at_front(cb_ring_token, 1)) {
+-                    try_retire();
+-                }
+-            };
+             const uint32_t first = conv2d_3x3::ring_next_real<k_cols, num_owning_cols>(my_col, 0);
+-            if (first >= 1 && first < k_cols) {
+-                wait_token();
+-                release_token(first);
+-            }
+             for (uint32_t j = first; j < k_cols;
+                  j = conv2d_3x3::ring_next_real<k_cols, num_owning_cols>(my_col, j + 1)) {
+-                const uint32_t next_step = conv2d_3x3::ring_next_real<k_cols, num_owning_cols>(my_col, j + 1);
+                 for (uint32_t g = 0; g < groups; ++g) {
+                     {
+                         MaybeDeviceZoneScope("reader_ring_wait_step");
+-                        wait_token();
++                        cb_wait_front(cb_ring_token, 1);
+                     }
+                     MaybeDeviceZoneScope("reader_ring_send");
+                     if (j + 1 < k_cols) {
+@@ -1632,10 +1597,10 @@
+                             credit.wait_min(m_block_idx + 1);
+                             credited = true;
+                         }
+-                        while (issued - retired >= ring_inflight) {
+-                            try_retire();
+-                        }
+-                        const uint32_t trid = ring_trid_base + issued % ring_inflight;
++                        const uint32_t w = ring_sent % ring_trids;
++                        const uint32_t trid = ring_trid_base + w;
++                        while (!ncrisc_noc_nonposted_write_with_transaction_id_sent(noc_index, trid)) {
++                        }
+                         const uint32_t owner = conv2d_3x3::nslice_owner<k_cols>(my_col, j);
+                         const uint32_t r0 = rt_valid
+                                                 ? conv2d_3x3::ring_group_row0_rt<ring_group_rows>(walk_rows, owner, g)
+@@ -1650,15 +1615,20 @@
+                             noc_async_write_one_packet_with_trid(
+                                 src + off, get_noc_addr(nx, ny, dst + off), bytes, trid);
+                         }
+-                        ++issued;
+-                    }
+-                    release_token(g + 1 < groups ? j : next_step);
+-                }
+-            }
+-            while (retired < issued) {
+-                try_retire();
+-            }
+-            ring_need = need;
++                        ++ring_sent;
++                        const uint32_t word = ring_count_words + w * 16;
++                        *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(word) = ring_sent;
++                        // The store reaches L1 before the NoC reads it (Blackhole stores can land out of order).
++                        asm volatile("fence" ::: "memory");
++                        noc_async_write_one_packet_with_trid(word, next_arrival, 4, trid);
++                    }
++                    cb_pop_front(cb_ring_token, 1);
++                }
++            }
++            for (uint32_t t = 0; t < ring_trids; ++t) {
++                while (!ncrisc_noc_nonposted_write_with_transaction_id_flushed(noc_index, ring_trid_base + t)) {
++                }
++            }
+             // The firmware requires every NoC packet tag cleared at kernel end.
+             noc_async_write_set_trid(0);
+         } else if constexpr (combine_send) {

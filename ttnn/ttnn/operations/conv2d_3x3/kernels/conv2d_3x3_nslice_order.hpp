@@ -85,14 +85,4 @@ inline uint32_t ring_group_row0_rt(uint32_t rows, uint32_t owner, uint32_t g) {
     return g * R;
 }
 
-// Real steps j >= 1 of one M-block: each receives one partial from column my_col - 1.
-template <uint32_t k_cols, uint32_t num_owning_cols>
-inline uint32_t ring_incoming(uint32_t my_col) {
-    uint32_t n = 0;
-    for (uint32_t j = 1; j < k_cols; ++j) {
-        n += ring_is_owner<num_owning_cols>(nslice_owner<k_cols>(my_col, j)) ? 1 : 0;
-    }
-    return n;
-}
-
 }  // namespace conv2d_3x3

@@ -1,0 +1,143 @@
+SAFE_PYTEST: precompile off for a -k selection (its size is unknown from the command line); pass --precompile when the slice covers more than a few tests
+SAFE_PYTEST: Waiting for device lock...
+[2026-11-19 18:46:21] SAFE_PYTEST: waiting for device (20s) — holder pid=2230985 cmd="/bin/bash scripts/run_safe_pytest.sh --profile --run-all /localdev/pmilojevic/workspaces/opgen/ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_wstream_rate/test_bwr.py --import-mode=prepend -q " parent pid=2230967 cmd="bash ./run.sh dom2 "
+[2026-11-19 18:46:42] SAFE_PYTEST: waiting for device (40s) — holder pid=2230985 cmd="/bin/bash scripts/run_safe_pytest.sh --profile --run-all /localdev/pmilojevic/workspaces/opgen/ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_wstream_rate/test_bwr.py --import-mode=prepend -q " parent pid=2230967 cmd="bash ./run.sh dom2 "
+[2026-11-19 18:47:03] SAFE_PYTEST: waiting for device (60s) — holder pid=2241794 cmd="/bin/bash scripts/run_safe_pytest.sh --run-all --precompile --import-mode=prepend ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_first_subblock/test_kfs_unit.py " parent pid=2241793 cmd="timeout 2400 scripts/run_safe_pytest.sh --run-all --precompile --import-mode=prepend ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_first_subblo"
+[2026-11-19 18:47:24] SAFE_PYTEST: waiting for device (80s) — holder pid=2221463 cmd="/bin/bash scripts/run_safe_pytest.sh --profile --run-all /localdev/pmilojevic/workspaces/opgen/ttnn/ttnn/operations/conv2d_3x3/perf_experiments/stride2_dest_taps/test_s2.py --import-mode=prepend -q " parent pid=2221462 cmd="timeout 2400 scripts/run_safe_pytest.sh --profile --run-all /localdev/pmilojevic/workspaces/opgen/ttnn/ttnn/operations/conv2d_3x3/perf_experiments/str"
+[2026-11-19 18:47:45] SAFE_PYTEST: waiting for device (100s) — holder pid=2245788 cmd="/bin/bash scripts/run_safe_pytest.sh --profile --run-all /localdev/pmilojevic/workspaces/opgen/ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_n_planes/test_kwp.py --import-mode=prepend -q " parent pid=2245787 cmd="timeout 3000 scripts/run_safe_pytest.sh --profile --run-all /localdev/pmilojevic/workspaces/opgen/ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf"
+[2026-11-19 18:48:05] SAFE_PYTEST: waiting for device (120s) — holder pid=2258964 cmd="/bin/bash scripts/run_safe_pytest.sh --profile --run-all /localdev/pmilojevic/workspaces/opgen/ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_wstream_rate/test_bwr.py --import-mode=prepend -q " parent pid=2258843 cmd="bash ./run.sh a3 "
+SAFE_PYTEST: Device lock acquired
+SAFE_PYTEST: [dev] asserts=ebreak llk_asserts=ON watcher=polling triage=ON timeout=5s
+PRECOMPILE: off (narrow) — kernels compile on demand
+SAFE_PYTEST: pytest /localdev/pmilojevic/workspaces/opgen/ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_ring_chain/test_block_sharded_grad.py --import-mode=prepend -q -k HiFi4
+========================================
+2026-11-19 18:48:29.219 | DEBUG    | ttnn:<module>:45 - Initial ttnn.CONFIG:
+Config{cache_path=/home/pmilojevic/.cache/ttnn,model_cache_path=/home/pmilojevic/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,validate_program_args=false,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_graph_python_stack_traces=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,strict_ccl_topology=false,verify_replicated_shards_on_dump=true,std::nullopt}
+============================= test session starts ==============================
+platform linux -- Python 3.10.19, pytest-9.0.3, pluggy-1.7.0 -- /localdev/pmilojevic/workspaces/opgen/python_env/bin/python
+cachedir: .pytest_cache
+benchmark: 5.2.3 (defaults: timer=time.perf_counter disable_gc=False min_rounds=5 min_time=0.000005 max_time=1.0 calibration_precision=10 warmup=False warmup_iterations=100000)
+rootdir: /localdev/pmilojevic/workspaces/opgen
+configfile: pytest.ini
+plugins: split-0.11.0, repeat-0.9.4, anyio-4.16.0, benchmark-5.2.3, github-actions-annotate-failures-0.3.0, timeout-2.4.0, cov-7.0.0, dash-2.15.0
+timeout: 300.0s
+timeout method: signal
+timeout func_only: False
+collecting ... collected 116 items / 58 deselected / 58 selected
+
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_ring_chain/test_block_sharded_grad.py::test_conv2d_3x3_block_sharded[HiFi4-H16_W16_Ci64_Co128_p1_s1_d1-rm_bf16-bias_relu] 2026-11-19 18:48:29.420 | info     |          Device | Opening user mode device driver (tt_cluster.cpp:252)
+2026-11-19 18:48:29.420 | info     |             UMD | Cluster constructor started. (cluster.cpp:434)
+2026-11-19 18:48:29.422 | info     |             UMD | Creating TopologyDiscovery for architecture: blackhole (topology_discovery.cpp:137)
+2026-11-19 18:48:29.422 | info     |             UMD | Starting topology discovery. (topology_discovery.cpp:156)
+2026-11-19 18:48:29.446 | info     |             UMD | Established firmware bundle version: 19.16.1 (topology_discovery.cpp:700)
+2026-11-19 18:48:29.447 | info     |             UMD | Completed topology discovery. (topology_discovery.cpp:161)
+2026-11-19 18:48:29.714 | info     |             UMD | Opening local chip ids/PCIe ids: {0, 1, 2, 3, 4, 5, 6, 7}/[2, 3, 1, 0, 6, 7, 5, 4] and remote chip ids {} (cluster.cpp:174)
+2026-11-19 18:48:29.714 | info     |             UMD | IOMMU: enabled (cluster.cpp:148)
+2026-11-19 18:48:29.714 | info     |             UMD | KMD version: 2.9.0 (cluster.cpp:151)
+2026-11-19 18:48:29.714 | info     |             UMD | Cluster constructor completed. (cluster.cpp:893)
+2026-11-19 18:48:29.721 | info     |             UMD | Starting devices in cluster (cluster.cpp:1482)
+2026-11-19 18:48:30.083 | info     |             UMD | Starting devices in cluster completed. (cluster.cpp:1491)
+2026-11-19 18:48:30.234 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:571)
+2026-11-19 18:48:30.234 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:624)
+2026-11-19 18:48:30.456 | info     |       LLRuntime | Watcher log file: /localdev/pmilojevic/workspaces/opgen/generated/watcher/watcher.log (watcher_server.cpp:306)
+2026-11-19 18:48:30.457 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using distributed::MeshDevice::create_unit_meshes(). (device_manager.cpp:265)
+PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_ring_chain/test_block_sharded_grad.py::test_conv2d_3x3_block_sharded[HiFi4-H16_W16_Ci64_Co128_p1_s1_d1-rm_bf16-plain] PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_ring_chain/test_block_sharded_grad.py::test_conv2d_3x3_block_sharded[HiFi4-H16_W16_Ci64_Co128_p1_s1_d1-tile_bf16-bias_relu] PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_ring_chain/test_block_sharded_grad.py::test_conv2d_3x3_block_sharded[HiFi4-H16_W16_Ci64_Co128_p1_s1_d1-tile_bf16-plain] PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_ring_chain/test_block_sharded_grad.py::test_conv2d_3x3_block_sharded[HiFi4-H16_W16_Ci64_Co128_p1_s1_d1-tile_bf8b-bias_relu] PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_ring_chain/test_block_sharded_grad.py::test_conv2d_3x3_block_sharded[HiFi4-H16_W16_Ci64_Co128_p1_s1_d1-tile_bf8b-plain] PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_ring_chain/test_block_sharded_grad.py::test_conv2d_3x3_block_sharded[HiFi4-H32_W32_Ci8_Co32_p1_s2_d1-rm_bf16-bias_relu] PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_ring_chain/test_block_sharded_grad.py::test_conv2d_3x3_block_sharded[HiFi4-H32_W32_Ci8_Co32_p1_s2_d1-rm_bf16-plain] PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_ring_chain/test_block_sharded_grad.py::test_conv2d_3x3_block_sharded[HiFi4-H32_W32_Ci8_Co32_p1_s2_d1-tile_bf16-bias_relu] PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_ring_chain/test_block_sharded_grad.py::test_conv2d_3x3_block_sharded[HiFi4-H32_W32_Ci8_Co32_p1_s2_d1-tile_bf16-plain] PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_ring_chain/test_block_sharded_grad.py::test_conv2d_3x3_block_sharded[HiFi4-H32_W32_Ci8_Co32_p1_s2_d1-tile_bf8b-bias_relu] PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_ring_chain/test_block_sharded_grad.py::test_conv2d_3x3_block_sharded[HiFi4-H32_W32_Ci8_Co32_p1_s2_d1-tile_bf8b-plain] PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_ring_chain/test_block_sharded_grad.py::test_conv2d_3x3_block_sharded[HiFi4-H32_W64_Ci64_Co32_p8_s1_d8-rm_bf16-bias_relu] PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_ring_chain/test_block_sharded_grad.py::test_conv2d_3x3_block_sharded[HiFi4-H32_W64_Ci64_Co32_p8_s1_d8-rm_bf16-plain] PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_ring_chain/test_block_sharded_grad.py::test_conv2d_3x3_block_sharded[HiFi4-H32_W64_Ci64_Co32_p8_s1_d8-tile_bf16-bias_relu] PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_ring_chain/test_block_sharded_grad.py::test_conv2d_3x3_block_sharded[HiFi4-H32_W64_Ci64_Co32_p8_s1_d8-tile_bf16-plain] PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_ring_chain/test_block_sharded_grad.py::test_conv2d_3x3_block_sharded[HiFi4-H32_W64_Ci64_Co32_p8_s1_d8-tile_bf8b-bias_relu] PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_ring_chain/test_block_sharded_grad.py::test_conv2d_3x3_block_sharded[HiFi4-H32_W64_Ci64_Co32_p8_s1_d8-tile_bf8b-plain] PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_ring_chain/test_block_sharded_grad.py::test_conv2d_3x3_block_sharded[HiFi4-H16_W34_Ci48_Co96_p0_s1_d1-rm_bf16-bias_relu] PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_ring_chain/test_block_sharded_grad.py::test_conv2d_3x3_block_sharded[HiFi4-H16_W34_Ci48_Co96_p0_s1_d1-rm_bf16-plain] PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_ring_chain/test_block_sharded_grad.py::test_conv2d_3x3_block_sharded[HiFi4-H16_W34_Ci48_Co96_p0_s1_d1-tile_bf16-bias_relu] PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_ring_chain/test_block_sharded_grad.py::test_conv2d_3x3_block_sharded[HiFi4-H16_W34_Ci48_Co96_p0_s1_d1-tile_bf16-plain] PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_ring_chain/test_block_sharded_grad.py::test_conv2d_3x3_block_sharded[HiFi4-H16_W34_Ci48_Co96_p0_s1_d1-tile_bf8b-bias_relu] PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_ring_chain/test_block_sharded_grad.py::test_conv2d_3x3_block_sharded[HiFi4-H16_W34_Ci48_Co96_p0_s1_d1-tile_bf8b-plain] PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_ring_chain/test_block_sharded_grad.py::test_conv2d_3x3_block_sharded[HiFi4-H8_W16_Ci256_Co256_p1_s1_d1-rm_bf16-bias_relu] PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_ring_chain/test_block_sharded_grad.py::test_conv2d_3x3_block_sharded[HiFi4-H8_W16_Ci256_Co256_p1_s1_d1-rm_bf16-plain] PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_ring_chain/test_block_sharded_grad.py::test_conv2d_3x3_block_sharded[HiFi4-H8_W16_Ci256_Co256_p1_s1_d1-tile_bf16-bias_relu] PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_ring_chain/test_block_sharded_grad.py::test_conv2d_3x3_block_sharded[HiFi4-H8_W16_Ci256_Co256_p1_s1_d1-tile_bf16-plain] PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_ring_chain/test_block_sharded_grad.py::test_conv2d_3x3_block_sharded[HiFi4-H8_W16_Ci256_Co256_p1_s1_d1-tile_bf8b-bias_relu] PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_ring_chain/test_block_sharded_grad.py::test_conv2d_3x3_block_sharded[HiFi4-H8_W16_Ci256_Co256_p1_s1_d1-tile_bf8b-plain] PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_ring_chain/test_block_sharded_grad.py::test_conv2d_3x3_block_sharded_relu_after_combine[HiFi4-rm_bf16-bias] PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_ring_chain/test_block_sharded_grad.py::test_conv2d_3x3_block_sharded_relu_after_combine[HiFi4-rm_bf16-no_bias] PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_ring_chain/test_block_sharded_grad.py::test_conv2d_3x3_block_sharded_relu_after_combine[HiFi4-tile_bf16-bias] PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_ring_chain/test_block_sharded_grad.py::test_conv2d_3x3_block_sharded_relu_after_combine[HiFi4-tile_bf16-no_bias] PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_ring_chain/test_block_sharded_grad.py::test_conv2d_3x3_block_sharded_col_major_offset_grid[HiFi4-rm_bf16] PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_ring_chain/test_block_sharded_grad.py::test_conv2d_3x3_block_sharded_col_major_offset_grid[HiFi4-tile_bf16] PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_ring_chain/test_block_sharded_grad.py::test_conv2d_3x3_block_sharded_col_major_offset_grid[HiFi4-tile_bf8b] PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_ring_chain/test_block_sharded_grad.py::test_conv2d_3x3_block_sharded_multi_m_block[HiFi4-tile_bf8b_bias_relu] PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_ring_chain/test_block_sharded_grad.py::test_conv2d_3x3_block_sharded_multi_m_block[HiFi4-rm_bf16_relu] PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_ring_chain/test_block_sharded_grad.py::test_conv2d_3x3_block_sharded_column_weight_mcast_ragged_row[HiFi4-rm_bf16] PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_ring_chain/test_block_sharded_grad.py::test_conv2d_3x3_block_sharded_column_weight_mcast_ragged_row[HiFi4-tile_bf16] PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_ring_chain/test_block_sharded_grad.py::test_conv2d_3x3_block_sharded_column_weight_mcast_ragged_row[HiFi4-tile_bf8b] PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_ring_chain/test_block_sharded_grad.py::test_conv2d_3x3_block_sharded_multi_m_block_extended_rows[HiFi4-tile_bf8b_bias_relu] PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_ring_chain/test_block_sharded_grad.py::test_conv2d_3x3_block_sharded_multi_m_block_extended_rows[HiFi4-rm_bf16_relu] PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_ring_chain/test_block_sharded_grad.py::test_conv2d_3x3_block_sharded_column_weight_mcast_ragged_extended_row[HiFi4-rm_bf16] PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_ring_chain/test_block_sharded_grad.py::test_conv2d_3x3_block_sharded_column_weight_mcast_ragged_extended_row[HiFi4-tile_bf16] PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_ring_chain/test_block_sharded_grad.py::test_conv2d_3x3_block_sharded_column_weight_mcast_ragged_extended_row[HiFi4-tile_bf8b] PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_ring_chain/test_block_sharded_grad.py::test_conv2d_3x3_block_sharded_grid_column_mismatch[HiFi4] 2026-11-19 18:49:20.096 | INFO     | conftest:expect_error_:960 - [EXPECTED_ERROR BEGIN] ValueError message="columns"
+2026-11-19 18:49:20.096 | INFO     | conftest:expect_error_:965 - [EXPECTED_ERROR END] ValueError message="columns"
+PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_ring_chain/test_block_sharded_grad.py::test_conv2d_3x3_block_sharded_writer_only_scatter[HiFi4-rm_bf16] PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_ring_chain/test_block_sharded_grad.py::test_conv2d_3x3_block_sharded_writer_only_scatter[HiFi4-tile_bf8b] PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_ring_chain/test_block_sharded_grad.py::test_conv2d_3x3_block_sharded_spare_groups[HiFi4-res4_8x8-tile_bf16] PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_ring_chain/test_block_sharded_grad.py::test_conv2d_3x3_block_sharded_spare_groups[HiFi4-res4_8x8-tile_bf8b] PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_ring_chain/test_block_sharded_grad.py::test_conv2d_3x3_block_sharded_spare_groups[HiFi4-res5_0_8x10-tile_bf16] PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_ring_chain/test_block_sharded_grad.py::test_conv2d_3x3_block_sharded_spare_groups[HiFi4-res5_0_8x10-tile_bf8b] PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_ring_chain/test_block_sharded_grad.py::test_conv2d_3x3_block_sharded_spare_groups[HiFi4-k2_d8_co96-tile_bf16] PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_ring_chain/test_block_sharded_grad.py::test_conv2d_3x3_block_sharded_spare_groups[HiFi4-k2_d8_co96-tile_bf8b] PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_ring_chain/test_block_sharded_grad.py::test_conv2d_3x3_block_sharded_spare_groups[HiFi4-k2_col_major-tile_bf16] PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_ring_chain/test_block_sharded_grad.py::test_conv2d_3x3_block_sharded_spare_groups[HiFi4-k2_col_major-tile_bf8b] PASSED
+
+- generated xml file: /localdev/pmilojevic/workspaces/opgen/generated/test_reports/most_recent_tests.xml -
+============================= slowest 25 durations =============================
+1.76s setup    ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_ring_chain/test_block_sharded_grad.py::test_conv2d_3x3_block_sharded[HiFi4-H16_W16_Ci64_Co128_p1_s1_d1-rm_bf16-bias_relu]
+1.40s call     ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_ring_chain/test_block_sharded_grad.py::test_conv2d_3x3_block_sharded_spare_groups[HiFi4-res5_0_8x10-tile_bf8b]
+1.38s call     ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_ring_chain/test_block_sharded_grad.py::test_conv2d_3x3_block_sharded_spare_groups[HiFi4-res5_0_8x10-tile_bf16]
+1.30s call     ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_ring_chain/test_block_sharded_grad.py::test_conv2d_3x3_block_sharded_spare_groups[HiFi4-res4_8x8-tile_bf8b]
+1.29s call     ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_ring_chain/test_block_sharded_grad.py::test_conv2d_3x3_block_sharded_spare_groups[HiFi4-res4_8x8-tile_bf16]
+1.17s call     ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_ring_chain/test_block_sharded_grad.py::test_conv2d_3x3_block_sharded_spare_groups[HiFi4-k2_d8_co96-tile_bf16]
+1.16s call     ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_ring_chain/test_block_sharded_grad.py::test_conv2d_3x3_block_sharded_spare_groups[HiFi4-k2_col_major-tile_bf16]
+1.14s call     ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_ring_chain/test_block_sharded_grad.py::test_conv2d_3x3_block_sharded_spare_groups[HiFi4-k2_col_major-tile_bf8b]
+1.14s call     ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_ring_chain/test_block_sharded_grad.py::test_conv2d_3x3_block_sharded[HiFi4-H16_W34_Ci48_Co96_p0_s1_d1-tile_bf16-plain]
+1.13s call     ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_ring_chain/test_block_sharded_grad.py::test_conv2d_3x3_block_sharded_spare_groups[HiFi4-k2_d8_co96-tile_bf8b]
+1.13s call     ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_ring_chain/test_block_sharded_grad.py::test_conv2d_3x3_block_sharded[HiFi4-H16_W34_Ci48_Co96_p0_s1_d1-rm_bf16-plain]
+1.13s call     ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_ring_chain/test_block_sharded_grad.py::test_conv2d_3x3_block_sharded[HiFi4-H32_W64_Ci64_Co32_p8_s1_d8-tile_bf16-bias_relu]
+1.13s call     ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_ring_chain/test_block_sharded_grad.py::test_conv2d_3x3_block_sharded_col_major_offset_grid[HiFi4-tile_bf16]
+1.13s call     ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_ring_chain/test_block_sharded_grad.py::test_conv2d_3x3_block_sharded[HiFi4-H16_W34_Ci48_Co96_p0_s1_d1-tile_bf8b-plain]
+1.13s call     ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_ring_chain/test_block_sharded_grad.py::test_conv2d_3x3_block_sharded[HiFi4-H32_W64_Ci64_Co32_p8_s1_d8-tile_bf8b-bias_relu]
+1.12s call     ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_ring_chain/test_block_sharded_grad.py::test_conv2d_3x3_block_sharded_col_major_offset_grid[HiFi4-tile_bf8b]
+1.12s call     ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_ring_chain/test_block_sharded_grad.py::test_conv2d_3x3_block_sharded[HiFi4-H16_W34_Ci48_Co96_p0_s1_d1-tile_bf16-bias_relu]
+1.12s call     ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_ring_chain/test_block_sharded_grad.py::test_conv2d_3x3_block_sharded[HiFi4-H16_W34_Ci48_Co96_p0_s1_d1-rm_bf16-bias_relu]
+1.11s call     ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_ring_chain/test_block_sharded_grad.py::test_conv2d_3x3_block_sharded[HiFi4-H32_W64_Ci64_Co32_p8_s1_d8-tile_bf16-plain]
+1.10s call     ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_ring_chain/test_block_sharded_grad.py::test_conv2d_3x3_block_sharded[HiFi4-H16_W34_Ci48_Co96_p0_s1_d1-tile_bf8b-bias_relu]
+1.10s call     ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_ring_chain/test_block_sharded_grad.py::test_conv2d_3x3_block_sharded[HiFi4-H32_W64_Ci64_Co32_p8_s1_d8-rm_bf16-plain]
+1.09s call     ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_ring_chain/test_block_sharded_grad.py::test_conv2d_3x3_block_sharded_column_weight_mcast_ragged_extended_row[HiFi4-rm_bf16]
+1.08s call     ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_ring_chain/test_block_sharded_grad.py::test_conv2d_3x3_block_sharded[HiFi4-H32_W64_Ci64_Co32_p8_s1_d8-tile_bf8b-plain]
+1.08s call     ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_ring_chain/test_block_sharded_grad.py::test_conv2d_3x3_block_sharded_multi_m_block_extended_rows[HiFi4-tile_bf8b_bias_relu]
+1.07s call     ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_ring_chain/test_block_sharded_grad.py::test_conv2d_3x3_block_sharded[HiFi4-H32_W64_Ci64_Co32_p8_s1_d8-rm_bf16-bias_relu]
+================= 58 passed, 58 deselected in 62.63s (0:01:02) =================
+2026-11-19 18:49:32.956 | info     |    BuildKernels | JIT cache stats: 19/310 hits (6.1%) [19 cached, 80 build-once dedup, 0 merged artifacts, 0 merged genfiles] (build_cache_telemetry.cpp:362)
+2026-11-19 18:49:32.956 | info     |    BuildKernels | JIT telemetry: 48 registered TelemetryTokens (build_cache_telemetry.cpp:510)
+2026-11-19 18:49:33.017 | info     |          Device | Closing user mode device drivers (tt_cluster.cpp:605)
+2026-11-19 18:49:33.017 | info     |             UMD | Closing devices in cluster (cluster.cpp:1496)
+2026-11-19 18:49:33.440 | info     |             UMD | Closing devices in cluster completed. (cluster.cpp:1506)
+2026-11-19 18:49:33.440 | info     |             UMD | Cluster destructor started. (cluster.cpp:1227)
+2026-11-19 18:49:33.440 | info     |             UMD | Cluster destructor completed. (cluster.cpp:1240)
+========================================
+SAFE_PYTEST_RESULT: PASS
+========================================
+SAFE_PYTEST_TOTAL_RUNTIME: 1m09s (69s total, device-lock-acquired -> exit)

@@ -1,0 +1,132 @@
+SAFE_PYTEST: precompile off for a -k selection (its size is unknown from the command line); pass --precompile when the slice covers more than a few tests
+SAFE_PYTEST: Waiting for device lock...
+SAFE_PYTEST: Device lock acquired
+SAFE_PYTEST: dispatch_timeout=5s
+PRECOMPILE: off (narrow) — kernels compile on demand
+SAFE_PYTEST: pytest /localdev/pmilojevic/workspaces/opgen/ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_ring_chain/test_block_sharded_grad.py --import-mode=prepend -q -k LoFi\ and\ not\ relu_after_combine
+========================================
+2026-11-19 18:55:31.136 | DEBUG    | ttnn:<module>:45 - Initial ttnn.CONFIG:
+Config{cache_path=/home/pmilojevic/.cache/ttnn,model_cache_path=/home/pmilojevic/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,validate_program_args=false,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_graph_python_stack_traces=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,strict_ccl_topology=false,verify_replicated_shards_on_dump=true,std::nullopt}
+============================= test session starts ==============================
+platform linux -- Python 3.10.19, pytest-9.0.3, pluggy-1.7.0 -- /localdev/pmilojevic/workspaces/opgen/python_env/bin/python
+cachedir: .pytest_cache
+benchmark: 5.2.3 (defaults: timer=time.perf_counter disable_gc=False min_rounds=5 min_time=0.000005 max_time=1.0 calibration_precision=10 warmup=False warmup_iterations=100000)
+rootdir: /localdev/pmilojevic/workspaces/opgen
+configfile: pytest.ini
+plugins: split-0.11.0, repeat-0.9.4, anyio-4.16.0, benchmark-5.2.3, github-actions-annotate-failures-0.3.0, timeout-2.4.0, cov-7.0.0, dash-2.15.0
+timeout: 300.0s
+timeout method: signal
+timeout func_only: False
+collecting ... collected 116 items / 62 deselected / 54 selected
+
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_ring_chain/test_block_sharded_grad.py::test_conv2d_3x3_block_sharded[LoFi-H16_W16_Ci64_Co128_p1_s1_d1-rm_bf16-bias_relu] 2026-11-19 18:55:31.339 | info     |          Device | Opening user mode device driver (tt_cluster.cpp:252)
+2026-11-19 18:55:31.339 | info     |             UMD | Cluster constructor started. (cluster.cpp:434)
+2026-11-19 18:55:31.341 | info     |             UMD | Creating TopologyDiscovery for architecture: blackhole (topology_discovery.cpp:137)
+2026-11-19 18:55:31.341 | info     |             UMD | Starting topology discovery. (topology_discovery.cpp:156)
+2026-11-19 18:55:31.365 | info     |             UMD | Established firmware bundle version: 19.16.1 (topology_discovery.cpp:700)
+2026-11-19 18:55:31.366 | info     |             UMD | Completed topology discovery. (topology_discovery.cpp:161)
+2026-11-19 18:55:31.629 | info     |             UMD | Opening local chip ids/PCIe ids: {0, 1, 2, 3, 4, 5, 6, 7}/[2, 3, 1, 0, 6, 7, 5, 4] and remote chip ids {} (cluster.cpp:174)
+2026-11-19 18:55:31.629 | info     |             UMD | IOMMU: enabled (cluster.cpp:148)
+2026-11-19 18:55:31.629 | info     |             UMD | KMD version: 2.9.0 (cluster.cpp:151)
+2026-11-19 18:55:31.629 | info     |             UMD | Cluster constructor completed. (cluster.cpp:893)
+2026-11-19 18:55:31.637 | info     |             UMD | Starting devices in cluster (cluster.cpp:1482)
+2026-11-19 18:55:31.923 | info     |             UMD | Starting devices in cluster completed. (cluster.cpp:1491)
+2026-11-19 18:55:32.067 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:571)
+2026-11-19 18:55:32.067 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:624)
+2026-11-19 18:55:32.200 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using distributed::MeshDevice::create_unit_meshes(). (device_manager.cpp:265)
+PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_ring_chain/test_block_sharded_grad.py::test_conv2d_3x3_block_sharded[LoFi-H16_W16_Ci64_Co128_p1_s1_d1-rm_bf16-plain] PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_ring_chain/test_block_sharded_grad.py::test_conv2d_3x3_block_sharded[LoFi-H16_W16_Ci64_Co128_p1_s1_d1-tile_bf16-bias_relu] PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_ring_chain/test_block_sharded_grad.py::test_conv2d_3x3_block_sharded[LoFi-H16_W16_Ci64_Co128_p1_s1_d1-tile_bf16-plain] PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_ring_chain/test_block_sharded_grad.py::test_conv2d_3x3_block_sharded[LoFi-H16_W16_Ci64_Co128_p1_s1_d1-tile_bf8b-bias_relu] PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_ring_chain/test_block_sharded_grad.py::test_conv2d_3x3_block_sharded[LoFi-H16_W16_Ci64_Co128_p1_s1_d1-tile_bf8b-plain] PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_ring_chain/test_block_sharded_grad.py::test_conv2d_3x3_block_sharded[LoFi-H32_W32_Ci8_Co32_p1_s2_d1-rm_bf16-bias_relu] PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_ring_chain/test_block_sharded_grad.py::test_conv2d_3x3_block_sharded[LoFi-H32_W32_Ci8_Co32_p1_s2_d1-rm_bf16-plain] PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_ring_chain/test_block_sharded_grad.py::test_conv2d_3x3_block_sharded[LoFi-H32_W32_Ci8_Co32_p1_s2_d1-tile_bf16-bias_relu] PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_ring_chain/test_block_sharded_grad.py::test_conv2d_3x3_block_sharded[LoFi-H32_W32_Ci8_Co32_p1_s2_d1-tile_bf16-plain] PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_ring_chain/test_block_sharded_grad.py::test_conv2d_3x3_block_sharded[LoFi-H32_W32_Ci8_Co32_p1_s2_d1-tile_bf8b-bias_relu] PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_ring_chain/test_block_sharded_grad.py::test_conv2d_3x3_block_sharded[LoFi-H32_W32_Ci8_Co32_p1_s2_d1-tile_bf8b-plain] PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_ring_chain/test_block_sharded_grad.py::test_conv2d_3x3_block_sharded[LoFi-H32_W64_Ci64_Co32_p8_s1_d8-rm_bf16-bias_relu] PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_ring_chain/test_block_sharded_grad.py::test_conv2d_3x3_block_sharded[LoFi-H32_W64_Ci64_Co32_p8_s1_d8-rm_bf16-plain] PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_ring_chain/test_block_sharded_grad.py::test_conv2d_3x3_block_sharded[LoFi-H32_W64_Ci64_Co32_p8_s1_d8-tile_bf16-bias_relu] PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_ring_chain/test_block_sharded_grad.py::test_conv2d_3x3_block_sharded[LoFi-H32_W64_Ci64_Co32_p8_s1_d8-tile_bf16-plain] PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_ring_chain/test_block_sharded_grad.py::test_conv2d_3x3_block_sharded[LoFi-H32_W64_Ci64_Co32_p8_s1_d8-tile_bf8b-bias_relu] PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_ring_chain/test_block_sharded_grad.py::test_conv2d_3x3_block_sharded[LoFi-H32_W64_Ci64_Co32_p8_s1_d8-tile_bf8b-plain] PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_ring_chain/test_block_sharded_grad.py::test_conv2d_3x3_block_sharded[LoFi-H16_W34_Ci48_Co96_p0_s1_d1-rm_bf16-bias_relu] PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_ring_chain/test_block_sharded_grad.py::test_conv2d_3x3_block_sharded[LoFi-H16_W34_Ci48_Co96_p0_s1_d1-rm_bf16-plain] PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_ring_chain/test_block_sharded_grad.py::test_conv2d_3x3_block_sharded[LoFi-H16_W34_Ci48_Co96_p0_s1_d1-tile_bf16-bias_relu] PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_ring_chain/test_block_sharded_grad.py::test_conv2d_3x3_block_sharded[LoFi-H16_W34_Ci48_Co96_p0_s1_d1-tile_bf16-plain] PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_ring_chain/test_block_sharded_grad.py::test_conv2d_3x3_block_sharded[LoFi-H16_W34_Ci48_Co96_p0_s1_d1-tile_bf8b-bias_relu] PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_ring_chain/test_block_sharded_grad.py::test_conv2d_3x3_block_sharded[LoFi-H16_W34_Ci48_Co96_p0_s1_d1-tile_bf8b-plain] PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_ring_chain/test_block_sharded_grad.py::test_conv2d_3x3_block_sharded[LoFi-H8_W16_Ci256_Co256_p1_s1_d1-rm_bf16-bias_relu] PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_ring_chain/test_block_sharded_grad.py::test_conv2d_3x3_block_sharded[LoFi-H8_W16_Ci256_Co256_p1_s1_d1-rm_bf16-plain] PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_ring_chain/test_block_sharded_grad.py::test_conv2d_3x3_block_sharded[LoFi-H8_W16_Ci256_Co256_p1_s1_d1-tile_bf16-bias_relu] PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_ring_chain/test_block_sharded_grad.py::test_conv2d_3x3_block_sharded[LoFi-H8_W16_Ci256_Co256_p1_s1_d1-tile_bf16-plain] PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_ring_chain/test_block_sharded_grad.py::test_conv2d_3x3_block_sharded[LoFi-H8_W16_Ci256_Co256_p1_s1_d1-tile_bf8b-bias_relu] PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_ring_chain/test_block_sharded_grad.py::test_conv2d_3x3_block_sharded[LoFi-H8_W16_Ci256_Co256_p1_s1_d1-tile_bf8b-plain] PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_ring_chain/test_block_sharded_grad.py::test_conv2d_3x3_block_sharded_col_major_offset_grid[LoFi-rm_bf16] PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_ring_chain/test_block_sharded_grad.py::test_conv2d_3x3_block_sharded_col_major_offset_grid[LoFi-tile_bf16] PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_ring_chain/test_block_sharded_grad.py::test_conv2d_3x3_block_sharded_col_major_offset_grid[LoFi-tile_bf8b] PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_ring_chain/test_block_sharded_grad.py::test_conv2d_3x3_block_sharded_multi_m_block[LoFi-tile_bf8b_bias_relu] PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_ring_chain/test_block_sharded_grad.py::test_conv2d_3x3_block_sharded_multi_m_block[LoFi-rm_bf16_relu] PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_ring_chain/test_block_sharded_grad.py::test_conv2d_3x3_block_sharded_column_weight_mcast_ragged_row[LoFi-rm_bf16] PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_ring_chain/test_block_sharded_grad.py::test_conv2d_3x3_block_sharded_column_weight_mcast_ragged_row[LoFi-tile_bf16] PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_ring_chain/test_block_sharded_grad.py::test_conv2d_3x3_block_sharded_column_weight_mcast_ragged_row[LoFi-tile_bf8b] PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_ring_chain/test_block_sharded_grad.py::test_conv2d_3x3_block_sharded_multi_m_block_extended_rows[LoFi-tile_bf8b_bias_relu] PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_ring_chain/test_block_sharded_grad.py::test_conv2d_3x3_block_sharded_multi_m_block_extended_rows[LoFi-rm_bf16_relu] PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_ring_chain/test_block_sharded_grad.py::test_conv2d_3x3_block_sharded_column_weight_mcast_ragged_extended_row[LoFi-rm_bf16] PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_ring_chain/test_block_sharded_grad.py::test_conv2d_3x3_block_sharded_column_weight_mcast_ragged_extended_row[LoFi-tile_bf16] PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_ring_chain/test_block_sharded_grad.py::test_conv2d_3x3_block_sharded_column_weight_mcast_ragged_extended_row[LoFi-tile_bf8b] PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_ring_chain/test_block_sharded_grad.py::test_conv2d_3x3_block_sharded_grid_column_mismatch[LoFi] 2026-11-19 18:56:11.739 | INFO     | conftest:expect_error_:960 - [EXPECTED_ERROR BEGIN] ValueError message="columns"
+2026-11-19 18:56:11.739 | INFO     | conftest:expect_error_:965 - [EXPECTED_ERROR END] ValueError message="columns"
+PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_ring_chain/test_block_sharded_grad.py::test_conv2d_3x3_block_sharded_writer_only_scatter[LoFi-rm_bf16] PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_ring_chain/test_block_sharded_grad.py::test_conv2d_3x3_block_sharded_writer_only_scatter[LoFi-tile_bf8b] PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_ring_chain/test_block_sharded_grad.py::test_conv2d_3x3_block_sharded_spare_groups[LoFi-res4_8x8-tile_bf16] PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_ring_chain/test_block_sharded_grad.py::test_conv2d_3x3_block_sharded_spare_groups[LoFi-res4_8x8-tile_bf8b] PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_ring_chain/test_block_sharded_grad.py::test_conv2d_3x3_block_sharded_spare_groups[LoFi-res5_0_8x10-tile_bf16] PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_ring_chain/test_block_sharded_grad.py::test_conv2d_3x3_block_sharded_spare_groups[LoFi-res5_0_8x10-tile_bf8b] PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_ring_chain/test_block_sharded_grad.py::test_conv2d_3x3_block_sharded_spare_groups[LoFi-k2_d8_co96-tile_bf16] PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_ring_chain/test_block_sharded_grad.py::test_conv2d_3x3_block_sharded_spare_groups[LoFi-k2_d8_co96-tile_bf8b] PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_ring_chain/test_block_sharded_grad.py::test_conv2d_3x3_block_sharded_spare_groups[LoFi-k2_col_major-tile_bf16] PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_ring_chain/test_block_sharded_grad.py::test_conv2d_3x3_block_sharded_spare_groups[LoFi-k2_col_major-tile_bf8b] PASSED
+
+- generated xml file: /localdev/pmilojevic/workspaces/opgen/generated/test_reports/most_recent_tests.xml -
+============================= slowest 25 durations =============================
+1.54s setup    ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_ring_chain/test_block_sharded_grad.py::test_conv2d_3x3_block_sharded[LoFi-H16_W16_Ci64_Co128_p1_s1_d1-rm_bf16-bias_relu]
+1.33s call     ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_ring_chain/test_block_sharded_grad.py::test_conv2d_3x3_block_sharded_spare_groups[LoFi-res5_0_8x10-tile_bf16]
+1.29s call     ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_ring_chain/test_block_sharded_grad.py::test_conv2d_3x3_block_sharded_spare_groups[LoFi-res5_0_8x10-tile_bf8b]
+1.14s call     ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_ring_chain/test_block_sharded_grad.py::test_conv2d_3x3_block_sharded_spare_groups[LoFi-res4_8x8-tile_bf16]
+1.12s call     ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_ring_chain/test_block_sharded_grad.py::test_conv2d_3x3_block_sharded_spare_groups[LoFi-res4_8x8-tile_bf8b]
+1.03s call     ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_ring_chain/test_block_sharded_grad.py::test_conv2d_3x3_block_sharded[LoFi-H32_W64_Ci64_Co32_p8_s1_d8-tile_bf16-plain]
+1.03s call     ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_ring_chain/test_block_sharded_grad.py::test_conv2d_3x3_block_sharded_col_major_offset_grid[LoFi-tile_bf8b]
+1.03s call     ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_ring_chain/test_block_sharded_grad.py::test_conv2d_3x3_block_sharded_spare_groups[LoFi-k2_d8_co96-tile_bf8b]
+1.03s call     ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_ring_chain/test_block_sharded_grad.py::test_conv2d_3x3_block_sharded_spare_groups[LoFi-k2_col_major-tile_bf8b]
+1.02s call     ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_ring_chain/test_block_sharded_grad.py::test_conv2d_3x3_block_sharded_spare_groups[LoFi-k2_col_major-tile_bf16]
+1.02s call     ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_ring_chain/test_block_sharded_grad.py::test_conv2d_3x3_block_sharded_col_major_offset_grid[LoFi-tile_bf16]
+1.02s call     ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_ring_chain/test_block_sharded_grad.py::test_conv2d_3x3_block_sharded[LoFi-H32_W64_Ci64_Co32_p8_s1_d8-tile_bf16-bias_relu]
+1.02s call     ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_ring_chain/test_block_sharded_grad.py::test_conv2d_3x3_block_sharded[LoFi-H32_W64_Ci64_Co32_p8_s1_d8-tile_bf8b-bias_relu]
+1.02s call     ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_ring_chain/test_block_sharded_grad.py::test_conv2d_3x3_block_sharded_spare_groups[LoFi-k2_d8_co96-tile_bf16]
+0.99s call     ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_ring_chain/test_block_sharded_grad.py::test_conv2d_3x3_block_sharded[LoFi-H32_W64_Ci64_Co32_p8_s1_d8-tile_bf8b-plain]
+0.95s call     ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_ring_chain/test_block_sharded_grad.py::test_conv2d_3x3_block_sharded_multi_m_block_extended_rows[LoFi-tile_bf8b_bias_relu]
+0.93s call     ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_ring_chain/test_block_sharded_grad.py::test_conv2d_3x3_block_sharded[LoFi-H16_W16_Ci64_Co128_p1_s1_d1-tile_bf16-bias_relu]
+0.92s call     ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_ring_chain/test_block_sharded_grad.py::test_conv2d_3x3_block_sharded[LoFi-H16_W34_Ci48_Co96_p0_s1_d1-tile_bf8b-bias_relu]
+0.92s call     ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_ring_chain/test_block_sharded_grad.py::test_conv2d_3x3_block_sharded[LoFi-H32_W32_Ci8_Co32_p1_s2_d1-tile_bf8b-plain]
+0.92s call     ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_ring_chain/test_block_sharded_grad.py::test_conv2d_3x3_block_sharded[LoFi-H32_W32_Ci8_Co32_p1_s2_d1-tile_bf16-bias_relu]
+0.91s call     ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_ring_chain/test_block_sharded_grad.py::test_conv2d_3x3_block_sharded[LoFi-H8_W16_Ci256_Co256_p1_s1_d1-tile_bf16-bias_relu]
+0.91s call     ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_ring_chain/test_block_sharded_grad.py::test_conv2d_3x3_block_sharded[LoFi-H16_W34_Ci48_Co96_p0_s1_d1-rm_bf16-plain]
+0.91s call     ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_ring_chain/test_block_sharded_grad.py::test_conv2d_3x3_block_sharded[LoFi-H16_W34_Ci48_Co96_p0_s1_d1-rm_bf16-bias_relu]
+0.91s call     ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_ring_chain/test_block_sharded_grad.py::test_conv2d_3x3_block_sharded[LoFi-H16_W34_Ci48_Co96_p0_s1_d1-tile_bf8b-plain]
+0.91s call     ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_ring_chain/test_block_sharded_grad.py::test_conv2d_3x3_block_sharded_column_weight_mcast_ragged_row[LoFi-tile_bf8b]
+====================== 54 passed, 62 deselected in 51.03s ======================
+2026-11-19 18:56:23.713 | info     |    BuildKernels | JIT cache stats: 14/279 hits (5.0%) [14 cached, 10 build-once dedup, 0 merged artifacts, 0 merged genfiles] (build_cache_telemetry.cpp:362)
+2026-11-19 18:56:23.713 | info     |    BuildKernels | JIT telemetry: 48 registered TelemetryTokens (build_cache_telemetry.cpp:510)
+2026-11-19 18:56:23.763 | info     |          Device | Closing user mode device drivers (tt_cluster.cpp:605)
+2026-11-19 18:56:23.763 | info     |             UMD | Closing devices in cluster (cluster.cpp:1496)
+2026-11-19 18:56:24.208 | info     |             UMD | Closing devices in cluster completed. (cluster.cpp:1506)
+2026-11-19 18:56:24.208 | info     |             UMD | Cluster destructor started. (cluster.cpp:1227)
+2026-11-19 18:56:24.209 | info     |             UMD | Cluster destructor completed. (cluster.cpp:1240)
+========================================
+SAFE_PYTEST_RESULT: PASS
+========================================
+SAFE_PYTEST_TOTAL_RUNTIME: 0m58s (58s total, device-lock-acquired -> exit)

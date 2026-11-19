@@ -1,0 +1,1471 @@
+SAFE_PYTEST: Waiting for device lock...
+SAFE_PYTEST: Device lock acquired
+SAFE_PYTEST: dispatch_timeout=5s
+PRECOMPILE: on — collect + parallel compile (x64) inside the pytest session, local
+SAFE_PYTEST: env UP_FRONT_INLINE=1 UP_FRONT_COLLECT=1 UP_FRONT_REAL_ALLOC=1 UP_FRONT_COLLECT_WORKERS=64 PYTHONPATH=/localdev/pmilojevic/workspaces/opgen:/localdev/pmilojevic/workspaces/opgen pytest -p tests.plugins.up_front_collect /localdev/pmilojevic/workspaces/opgen/ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_ring_chain/test_block_sharded_grad.py --import-mode=prepend -q
+========================================
+2026-11-19 18:42:02.185 | DEBUG    | ttnn:<module>:45 - Initial ttnn.CONFIG:
+Config{cache_path=/home/pmilojevic/.cache/ttnn,model_cache_path=/home/pmilojevic/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,validate_program_args=false,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_graph_python_stack_traces=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,strict_ccl_topology=false,verify_replicated_shards_on_dump=true,std::nullopt}
+============================= test session starts ==============================
+platform linux -- Python 3.10.19, pytest-9.0.3, pluggy-1.7.0 -- /localdev/pmilojevic/workspaces/opgen/python_env/bin/python
+cachedir: .pytest_cache
+benchmark: 5.2.3 (defaults: timer=time.perf_counter disable_gc=False min_rounds=5 min_time=0.000005 max_time=1.0 calibration_precision=10 warmup=False warmup_iterations=100000)
+rootdir: /localdev/pmilojevic/workspaces/opgen
+configfile: pytest.ini
+plugins: split-0.11.0, repeat-0.9.4, anyio-4.16.0, benchmark-5.2.3, github-actions-annotate-failures-0.3.0, timeout-2.4.0, cov-7.0.0, dash-2.15.0
+timeout: 300.0s
+timeout method: signal
+timeout func_only: False
+collecting ... 2026-11-19 18:42:02.414 | info     |          Device | Opening user mode device driver (tt_cluster.cpp:252)
+2026-11-19 18:42:02.414 | info     |             UMD | Cluster constructor started. (cluster.cpp:434)
+2026-11-19 18:42:02.416 | info     |             UMD | Creating TopologyDiscovery for architecture: blackhole (topology_discovery.cpp:137)
+2026-11-19 18:42:02.416 | info     |             UMD | Starting topology discovery. (topology_discovery.cpp:156)
+2026-11-19 18:42:02.440 | info     |             UMD | Established firmware bundle version: 19.16.1 (topology_discovery.cpp:700)
+2026-11-19 18:42:02.441 | info     |             UMD | Completed topology discovery. (topology_discovery.cpp:161)
+2026-11-19 18:42:02.709 | info     |             UMD | Opening local chip ids/PCIe ids: {0, 1, 2, 3, 4, 5, 6, 7}/[2, 3, 1, 0, 6, 7, 5, 4] and remote chip ids {} (cluster.cpp:174)
+2026-11-19 18:42:02.709 | info     |             UMD | IOMMU: enabled (cluster.cpp:148)
+2026-11-19 18:42:02.709 | info     |             UMD | KMD version: 2.9.0 (cluster.cpp:151)
+2026-11-19 18:42:02.709 | info     |             UMD | Cluster constructor completed. (cluster.cpp:893)
+2026-11-19 18:42:02.716 | info     |             UMD | Starting devices in cluster (cluster.cpp:1482)
+2026-11-19 18:42:03.147 | info     |             UMD | Starting devices in cluster completed. (cluster.cpp:1491)
+2026-11-19 18:42:03.290 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:571)
+2026-11-19 18:42:03.290 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:624)
+2026-11-19 18:42:03.423 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using distributed::MeshDevice::create_unit_meshes(). (device_manager.cpp:265)
+2026-11-19 18:42:05.028 | INFO     | conftest:expect_error_:960 - [EXPECTED_ERROR BEGIN] ValueError message="columns"
+2026-11-19 18:42:05.029 | INFO     | conftest:expect_error_:965 - [EXPECTED_ERROR END] ValueError message="columns"
+2026-11-19 18:42:05.033 | INFO     | conftest:expect_error_:960 - [EXPECTED_ERROR BEGIN] ValueError message="columns"
+2026-11-19 18:42:05.033 | INFO     | conftest:expect_error_:965 - [EXPECTED_ERROR END] ValueError message="columns"
+collected 116 items
+
+UP_FRONT_INLINE: collect pass over 116 item(s) took 3.0s
+UP_FRONT_INLINE: compile route local (programs=57, farm_min=10)
+
+UP_FRONT_COLLECT: 126 ops stashed across 116 bodies -> 57 unique programs (swallowed 28, skipped-capture 0)
+UP_FRONT_COLLECT: fast-shallow from_torch — shape-only=332 fallback=0
+2026-11-19 18:42:05.544 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using distributed::MeshDevice::create_unit_meshes(). (device_manager.cpp:265)
+2026-11-19 18:42:05.625 | info     |           Metal | Enabling program cache on MeshDevice 3 (mesh_device.cpp:1322)
+UP_FRONT_COLLECT: 57 collected · 57 built · 0 already compiled in 7.9s (workers=64, errors=0) -> on-disk JIT cache warm
+UP_FRONT_COLLECT_RESULT: status=ok reason=ok unique=57 programs=57 errors=0 pytest_exit=0 xpass_strict=0 other_failures=0 built=57 compile_s=8.1 collect_s=3.0 route=local
+UP_FRONT_INLINE: compile step took 8.1s; starting the real pass
+
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_ring_chain/test_block_sharded_grad.py::test_conv2d_3x3_block_sharded[HiFi4-H16_W16_Ci64_Co128_p1_s1_d1-rm_bf16-bias_relu] 2026-11-19 18:42:13.696 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using distributed::MeshDevice::create_unit_meshes(). (device_manager.cpp:265)
+PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_ring_chain/test_block_sharded_grad.py::test_conv2d_3x3_block_sharded[HiFi4-H16_W16_Ci64_Co128_p1_s1_d1-rm_bf16-plain] PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_ring_chain/test_block_sharded_grad.py::test_conv2d_3x3_block_sharded[HiFi4-H16_W16_Ci64_Co128_p1_s1_d1-tile_bf16-bias_relu] PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_ring_chain/test_block_sharded_grad.py::test_conv2d_3x3_block_sharded[HiFi4-H16_W16_Ci64_Co128_p1_s1_d1-tile_bf16-plain] PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_ring_chain/test_block_sharded_grad.py::test_conv2d_3x3_block_sharded[HiFi4-H16_W16_Ci64_Co128_p1_s1_d1-tile_bf8b-bias_relu] PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_ring_chain/test_block_sharded_grad.py::test_conv2d_3x3_block_sharded[HiFi4-H16_W16_Ci64_Co128_p1_s1_d1-tile_bf8b-plain] PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_ring_chain/test_block_sharded_grad.py::test_conv2d_3x3_block_sharded[HiFi4-H32_W32_Ci8_Co32_p1_s2_d1-rm_bf16-bias_relu] PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_ring_chain/test_block_sharded_grad.py::test_conv2d_3x3_block_sharded[HiFi4-H32_W32_Ci8_Co32_p1_s2_d1-rm_bf16-plain] PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_ring_chain/test_block_sharded_grad.py::test_conv2d_3x3_block_sharded[HiFi4-H32_W32_Ci8_Co32_p1_s2_d1-tile_bf16-bias_relu] PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_ring_chain/test_block_sharded_grad.py::test_conv2d_3x3_block_sharded[HiFi4-H32_W32_Ci8_Co32_p1_s2_d1-tile_bf16-plain] PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_ring_chain/test_block_sharded_grad.py::test_conv2d_3x3_block_sharded[HiFi4-H32_W32_Ci8_Co32_p1_s2_d1-tile_bf8b-bias_relu] PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_ring_chain/test_block_sharded_grad.py::test_conv2d_3x3_block_sharded[HiFi4-H32_W32_Ci8_Co32_p1_s2_d1-tile_bf8b-plain] PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_ring_chain/test_block_sharded_grad.py::test_conv2d_3x3_block_sharded[HiFi4-H32_W64_Ci64_Co32_p8_s1_d8-rm_bf16-bias_relu] PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_ring_chain/test_block_sharded_grad.py::test_conv2d_3x3_block_sharded[HiFi4-H32_W64_Ci64_Co32_p8_s1_d8-rm_bf16-plain] PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_ring_chain/test_block_sharded_grad.py::test_conv2d_3x3_block_sharded[HiFi4-H32_W64_Ci64_Co32_p8_s1_d8-tile_bf16-bias_relu] PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_ring_chain/test_block_sharded_grad.py::test_conv2d_3x3_block_sharded[HiFi4-H32_W64_Ci64_Co32_p8_s1_d8-tile_bf16-plain] PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_ring_chain/test_block_sharded_grad.py::test_conv2d_3x3_block_sharded[HiFi4-H32_W64_Ci64_Co32_p8_s1_d8-tile_bf8b-bias_relu] PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_ring_chain/test_block_sharded_grad.py::test_conv2d_3x3_block_sharded[HiFi4-H32_W64_Ci64_Co32_p8_s1_d8-tile_bf8b-plain] PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_ring_chain/test_block_sharded_grad.py::test_conv2d_3x3_block_sharded[HiFi4-H16_W34_Ci48_Co96_p0_s1_d1-rm_bf16-bias_relu] PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_ring_chain/test_block_sharded_grad.py::test_conv2d_3x3_block_sharded[HiFi4-H16_W34_Ci48_Co96_p0_s1_d1-rm_bf16-plain] PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_ring_chain/test_block_sharded_grad.py::test_conv2d_3x3_block_sharded[HiFi4-H16_W34_Ci48_Co96_p0_s1_d1-tile_bf16-bias_relu] PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_ring_chain/test_block_sharded_grad.py::test_conv2d_3x3_block_sharded[HiFi4-H16_W34_Ci48_Co96_p0_s1_d1-tile_bf16-plain] PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_ring_chain/test_block_sharded_grad.py::test_conv2d_3x3_block_sharded[HiFi4-H16_W34_Ci48_Co96_p0_s1_d1-tile_bf8b-bias_relu] PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_ring_chain/test_block_sharded_grad.py::test_conv2d_3x3_block_sharded[HiFi4-H16_W34_Ci48_Co96_p0_s1_d1-tile_bf8b-plain] PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_ring_chain/test_block_sharded_grad.py::test_conv2d_3x3_block_sharded[HiFi4-H8_W16_Ci256_Co256_p1_s1_d1-rm_bf16-bias_relu] PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_ring_chain/test_block_sharded_grad.py::test_conv2d_3x3_block_sharded[HiFi4-H8_W16_Ci256_Co256_p1_s1_d1-rm_bf16-plain] PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_ring_chain/test_block_sharded_grad.py::test_conv2d_3x3_block_sharded[HiFi4-H8_W16_Ci256_Co256_p1_s1_d1-tile_bf16-bias_relu] PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_ring_chain/test_block_sharded_grad.py::test_conv2d_3x3_block_sharded[HiFi4-H8_W16_Ci256_Co256_p1_s1_d1-tile_bf16-plain] PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_ring_chain/test_block_sharded_grad.py::test_conv2d_3x3_block_sharded[HiFi4-H8_W16_Ci256_Co256_p1_s1_d1-tile_bf8b-bias_relu] PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_ring_chain/test_block_sharded_grad.py::test_conv2d_3x3_block_sharded[HiFi4-H8_W16_Ci256_Co256_p1_s1_d1-tile_bf8b-plain] PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_ring_chain/test_block_sharded_grad.py::test_conv2d_3x3_block_sharded[LoFi-H16_W16_Ci64_Co128_p1_s1_d1-rm_bf16-bias_relu] PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_ring_chain/test_block_sharded_grad.py::test_conv2d_3x3_block_sharded[LoFi-H16_W16_Ci64_Co128_p1_s1_d1-rm_bf16-plain] PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_ring_chain/test_block_sharded_grad.py::test_conv2d_3x3_block_sharded[LoFi-H16_W16_Ci64_Co128_p1_s1_d1-tile_bf16-bias_relu] PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_ring_chain/test_block_sharded_grad.py::test_conv2d_3x3_block_sharded[LoFi-H16_W16_Ci64_Co128_p1_s1_d1-tile_bf16-plain] PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_ring_chain/test_block_sharded_grad.py::test_conv2d_3x3_block_sharded[LoFi-H16_W16_Ci64_Co128_p1_s1_d1-tile_bf8b-bias_relu] PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_ring_chain/test_block_sharded_grad.py::test_conv2d_3x3_block_sharded[LoFi-H16_W16_Ci64_Co128_p1_s1_d1-tile_bf8b-plain] PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_ring_chain/test_block_sharded_grad.py::test_conv2d_3x3_block_sharded[LoFi-H32_W32_Ci8_Co32_p1_s2_d1-rm_bf16-bias_relu] PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_ring_chain/test_block_sharded_grad.py::test_conv2d_3x3_block_sharded[LoFi-H32_W32_Ci8_Co32_p1_s2_d1-rm_bf16-plain] PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_ring_chain/test_block_sharded_grad.py::test_conv2d_3x3_block_sharded[LoFi-H32_W32_Ci8_Co32_p1_s2_d1-tile_bf16-bias_relu] PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_ring_chain/test_block_sharded_grad.py::test_conv2d_3x3_block_sharded[LoFi-H32_W32_Ci8_Co32_p1_s2_d1-tile_bf16-plain] PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_ring_chain/test_block_sharded_grad.py::test_conv2d_3x3_block_sharded[LoFi-H32_W32_Ci8_Co32_p1_s2_d1-tile_bf8b-bias_relu] PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_ring_chain/test_block_sharded_grad.py::test_conv2d_3x3_block_sharded[LoFi-H32_W32_Ci8_Co32_p1_s2_d1-tile_bf8b-plain] PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_ring_chain/test_block_sharded_grad.py::test_conv2d_3x3_block_sharded[LoFi-H32_W64_Ci64_Co32_p8_s1_d8-rm_bf16-bias_relu] PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_ring_chain/test_block_sharded_grad.py::test_conv2d_3x3_block_sharded[LoFi-H32_W64_Ci64_Co32_p8_s1_d8-rm_bf16-plain] PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_ring_chain/test_block_sharded_grad.py::test_conv2d_3x3_block_sharded[LoFi-H32_W64_Ci64_Co32_p8_s1_d8-tile_bf16-bias_relu] PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_ring_chain/test_block_sharded_grad.py::test_conv2d_3x3_block_sharded[LoFi-H32_W64_Ci64_Co32_p8_s1_d8-tile_bf16-plain] PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_ring_chain/test_block_sharded_grad.py::test_conv2d_3x3_block_sharded[LoFi-H32_W64_Ci64_Co32_p8_s1_d8-tile_bf8b-bias_relu] PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_ring_chain/test_block_sharded_grad.py::test_conv2d_3x3_block_sharded[LoFi-H32_W64_Ci64_Co32_p8_s1_d8-tile_bf8b-plain] PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_ring_chain/test_block_sharded_grad.py::test_conv2d_3x3_block_sharded[LoFi-H16_W34_Ci48_Co96_p0_s1_d1-rm_bf16-bias_relu] PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_ring_chain/test_block_sharded_grad.py::test_conv2d_3x3_block_sharded[LoFi-H16_W34_Ci48_Co96_p0_s1_d1-rm_bf16-plain] PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_ring_chain/test_block_sharded_grad.py::test_conv2d_3x3_block_sharded[LoFi-H16_W34_Ci48_Co96_p0_s1_d1-tile_bf16-bias_relu] PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_ring_chain/test_block_sharded_grad.py::test_conv2d_3x3_block_sharded[LoFi-H16_W34_Ci48_Co96_p0_s1_d1-tile_bf16-plain] PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_ring_chain/test_block_sharded_grad.py::test_conv2d_3x3_block_sharded[LoFi-H16_W34_Ci48_Co96_p0_s1_d1-tile_bf8b-bias_relu] PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_ring_chain/test_block_sharded_grad.py::test_conv2d_3x3_block_sharded[LoFi-H16_W34_Ci48_Co96_p0_s1_d1-tile_bf8b-plain] PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_ring_chain/test_block_sharded_grad.py::test_conv2d_3x3_block_sharded[LoFi-H8_W16_Ci256_Co256_p1_s1_d1-rm_bf16-bias_relu] PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_ring_chain/test_block_sharded_grad.py::test_conv2d_3x3_block_sharded[LoFi-H8_W16_Ci256_Co256_p1_s1_d1-rm_bf16-plain] PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_ring_chain/test_block_sharded_grad.py::test_conv2d_3x3_block_sharded[LoFi-H8_W16_Ci256_Co256_p1_s1_d1-tile_bf16-bias_relu] PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_ring_chain/test_block_sharded_grad.py::test_conv2d_3x3_block_sharded[LoFi-H8_W16_Ci256_Co256_p1_s1_d1-tile_bf16-plain] PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_ring_chain/test_block_sharded_grad.py::test_conv2d_3x3_block_sharded[LoFi-H8_W16_Ci256_Co256_p1_s1_d1-tile_bf8b-bias_relu] PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_ring_chain/test_block_sharded_grad.py::test_conv2d_3x3_block_sharded[LoFi-H8_W16_Ci256_Co256_p1_s1_d1-tile_bf8b-plain] PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_ring_chain/test_block_sharded_grad.py::test_conv2d_3x3_block_sharded_relu_after_combine[HiFi4-rm_bf16-bias] PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_ring_chain/test_block_sharded_grad.py::test_conv2d_3x3_block_sharded_relu_after_combine[HiFi4-rm_bf16-no_bias] PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_ring_chain/test_block_sharded_grad.py::test_conv2d_3x3_block_sharded_relu_after_combine[HiFi4-tile_bf16-bias] PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_ring_chain/test_block_sharded_grad.py::test_conv2d_3x3_block_sharded_relu_after_combine[HiFi4-tile_bf16-no_bias] PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_ring_chain/test_block_sharded_grad.py::test_conv2d_3x3_block_sharded_relu_after_combine[LoFi-rm_bf16-bias] PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_ring_chain/test_block_sharded_grad.py::test_conv2d_3x3_block_sharded_relu_after_combine[LoFi-rm_bf16-no_bias] PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_ring_chain/test_block_sharded_grad.py::test_conv2d_3x3_block_sharded_relu_after_combine[LoFi-tile_bf16-bias] PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_ring_chain/test_block_sharded_grad.py::test_conv2d_3x3_block_sharded_relu_after_combine[LoFi-tile_bf16-no_bias] PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_ring_chain/test_block_sharded_grad.py::test_conv2d_3x3_block_sharded_col_major_offset_grid[HiFi4-rm_bf16] PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_ring_chain/test_block_sharded_grad.py::test_conv2d_3x3_block_sharded_col_major_offset_grid[HiFi4-tile_bf16] PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_ring_chain/test_block_sharded_grad.py::test_conv2d_3x3_block_sharded_col_major_offset_grid[HiFi4-tile_bf8b] PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_ring_chain/test_block_sharded_grad.py::test_conv2d_3x3_block_sharded_col_major_offset_grid[LoFi-rm_bf16] PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_ring_chain/test_block_sharded_grad.py::test_conv2d_3x3_block_sharded_col_major_offset_grid[LoFi-tile_bf16] PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_ring_chain/test_block_sharded_grad.py::test_conv2d_3x3_block_sharded_col_major_offset_grid[LoFi-tile_bf8b] PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_ring_chain/test_block_sharded_grad.py::test_conv2d_3x3_block_sharded_multi_m_block[HiFi4-tile_bf8b_bias_relu] PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_ring_chain/test_block_sharded_grad.py::test_conv2d_3x3_block_sharded_multi_m_block[HiFi4-rm_bf16_relu] PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_ring_chain/test_block_sharded_grad.py::test_conv2d_3x3_block_sharded_multi_m_block[LoFi-tile_bf8b_bias_relu] PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_ring_chain/test_block_sharded_grad.py::test_conv2d_3x3_block_sharded_multi_m_block[LoFi-rm_bf16_relu] PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_ring_chain/test_block_sharded_grad.py::test_conv2d_3x3_block_sharded_column_weight_mcast_ragged_row[HiFi4-rm_bf16] FAILED2026-11-19 18:42:14.464 | INFO     | conftest:pytest_runtest_teardown:1227 - In custom teardown, open device ids: {0}
+
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_ring_chain/test_block_sharded_grad.py::test_conv2d_3x3_block_sharded_column_weight_mcast_ragged_row[HiFi4-tile_bf16] FAILED2026-11-19 18:42:14.481 | INFO     | conftest:pytest_runtest_teardown:1227 - In custom teardown, open device ids: {0}
+
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_ring_chain/test_block_sharded_grad.py::test_conv2d_3x3_block_sharded_column_weight_mcast_ragged_row[HiFi4-tile_bf8b] FAILED2026-11-19 18:42:14.496 | INFO     | conftest:pytest_runtest_teardown:1227 - In custom teardown, open device ids: {0}
+
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_ring_chain/test_block_sharded_grad.py::test_conv2d_3x3_block_sharded_column_weight_mcast_ragged_row[LoFi-rm_bf16] FAILED2026-11-19 18:42:14.512 | INFO     | conftest:pytest_runtest_teardown:1227 - In custom teardown, open device ids: {0}
+
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_ring_chain/test_block_sharded_grad.py::test_conv2d_3x3_block_sharded_column_weight_mcast_ragged_row[LoFi-tile_bf16] FAILED2026-11-19 18:42:14.527 | INFO     | conftest:pytest_runtest_teardown:1227 - In custom teardown, open device ids: {0}
+
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_ring_chain/test_block_sharded_grad.py::test_conv2d_3x3_block_sharded_column_weight_mcast_ragged_row[LoFi-tile_bf8b] FAILED2026-11-19 18:42:14.541 | INFO     | conftest:pytest_runtest_teardown:1227 - In custom teardown, open device ids: {0}
+
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_ring_chain/test_block_sharded_grad.py::test_conv2d_3x3_block_sharded_multi_m_block_extended_rows[HiFi4-tile_bf8b_bias_relu] PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_ring_chain/test_block_sharded_grad.py::test_conv2d_3x3_block_sharded_multi_m_block_extended_rows[HiFi4-rm_bf16_relu] PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_ring_chain/test_block_sharded_grad.py::test_conv2d_3x3_block_sharded_multi_m_block_extended_rows[LoFi-tile_bf8b_bias_relu] PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_ring_chain/test_block_sharded_grad.py::test_conv2d_3x3_block_sharded_multi_m_block_extended_rows[LoFi-rm_bf16_relu] PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_ring_chain/test_block_sharded_grad.py::test_conv2d_3x3_block_sharded_column_weight_mcast_ragged_extended_row[HiFi4-rm_bf16] FAILED2026-11-19 18:42:14.590 | INFO     | conftest:pytest_runtest_teardown:1227 - In custom teardown, open device ids: {0}
+
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_ring_chain/test_block_sharded_grad.py::test_conv2d_3x3_block_sharded_column_weight_mcast_ragged_extended_row[HiFi4-tile_bf16] FAILED2026-11-19 18:42:14.609 | INFO     | conftest:pytest_runtest_teardown:1227 - In custom teardown, open device ids: {0}
+
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_ring_chain/test_block_sharded_grad.py::test_conv2d_3x3_block_sharded_column_weight_mcast_ragged_extended_row[HiFi4-tile_bf8b] FAILED2026-11-19 18:42:14.627 | INFO     | conftest:pytest_runtest_teardown:1227 - In custom teardown, open device ids: {0}
+
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_ring_chain/test_block_sharded_grad.py::test_conv2d_3x3_block_sharded_column_weight_mcast_ragged_extended_row[LoFi-rm_bf16] FAILED2026-11-19 18:42:14.643 | INFO     | conftest:pytest_runtest_teardown:1227 - In custom teardown, open device ids: {0}
+
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_ring_chain/test_block_sharded_grad.py::test_conv2d_3x3_block_sharded_column_weight_mcast_ragged_extended_row[LoFi-tile_bf16] FAILED2026-11-19 18:42:14.658 | INFO     | conftest:pytest_runtest_teardown:1227 - In custom teardown, open device ids: {0}
+
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_ring_chain/test_block_sharded_grad.py::test_conv2d_3x3_block_sharded_column_weight_mcast_ragged_extended_row[LoFi-tile_bf8b] FAILED2026-11-19 18:42:14.673 | INFO     | conftest:pytest_runtest_teardown:1227 - In custom teardown, open device ids: {0}
+
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_ring_chain/test_block_sharded_grad.py::test_conv2d_3x3_block_sharded_grid_column_mismatch[HiFi4] 2026-11-19 18:42:14.675 | INFO     | conftest:expect_error_:960 - [EXPECTED_ERROR BEGIN] ValueError message="columns"
+2026-11-19 18:42:14.675 | INFO     | conftest:expect_error_:965 - [EXPECTED_ERROR END] ValueError message="columns"
+PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_ring_chain/test_block_sharded_grad.py::test_conv2d_3x3_block_sharded_grid_column_mismatch[LoFi] 2026-11-19 18:42:14.676 | INFO     | conftest:expect_error_:960 - [EXPECTED_ERROR BEGIN] ValueError message="columns"
+2026-11-19 18:42:14.677 | INFO     | conftest:expect_error_:965 - [EXPECTED_ERROR END] ValueError message="columns"
+PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_ring_chain/test_block_sharded_grad.py::test_conv2d_3x3_block_sharded_writer_only_scatter[HiFi4-rm_bf16] PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_ring_chain/test_block_sharded_grad.py::test_conv2d_3x3_block_sharded_writer_only_scatter[HiFi4-tile_bf8b] PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_ring_chain/test_block_sharded_grad.py::test_conv2d_3x3_block_sharded_writer_only_scatter[LoFi-rm_bf16] PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_ring_chain/test_block_sharded_grad.py::test_conv2d_3x3_block_sharded_writer_only_scatter[LoFi-tile_bf8b] PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_ring_chain/test_block_sharded_grad.py::test_conv2d_3x3_block_sharded_spare_groups[HiFi4-res4_8x8-tile_bf16] FAILED2026-11-19 18:42:14.765 | INFO     | conftest:pytest_runtest_teardown:1227 - In custom teardown, open device ids: {0}
+
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_ring_chain/test_block_sharded_grad.py::test_conv2d_3x3_block_sharded_spare_groups[HiFi4-res4_8x8-tile_bf8b] FAILED2026-11-19 18:42:14.803 | INFO     | conftest:pytest_runtest_teardown:1227 - In custom teardown, open device ids: {0}
+
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_ring_chain/test_block_sharded_grad.py::test_conv2d_3x3_block_sharded_spare_groups[HiFi4-res5_0_8x10-tile_bf16] FAILED2026-11-19 18:42:14.858 | INFO     | conftest:pytest_runtest_teardown:1227 - In custom teardown, open device ids: {0}
+
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_ring_chain/test_block_sharded_grad.py::test_conv2d_3x3_block_sharded_spare_groups[HiFi4-res5_0_8x10-tile_bf8b] FAILED2026-11-19 18:42:14.912 | INFO     | conftest:pytest_runtest_teardown:1227 - In custom teardown, open device ids: {0}
+
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_ring_chain/test_block_sharded_grad.py::test_conv2d_3x3_block_sharded_spare_groups[HiFi4-k2_d8_co96-tile_bf16] FAILED2026-11-19 18:42:14.932 | INFO     | conftest:pytest_runtest_teardown:1227 - In custom teardown, open device ids: {0}
+
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_ring_chain/test_block_sharded_grad.py::test_conv2d_3x3_block_sharded_spare_groups[HiFi4-k2_d8_co96-tile_bf8b] FAILED2026-11-19 18:42:14.952 | INFO     | conftest:pytest_runtest_teardown:1227 - In custom teardown, open device ids: {0}
+
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_ring_chain/test_block_sharded_grad.py::test_conv2d_3x3_block_sharded_spare_groups[HiFi4-k2_col_major-tile_bf16] FAILED2026-11-19 18:42:14.972 | INFO     | conftest:pytest_runtest_teardown:1227 - In custom teardown, open device ids: {0}
+
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_ring_chain/test_block_sharded_grad.py::test_conv2d_3x3_block_sharded_spare_groups[HiFi4-k2_col_major-tile_bf8b] FAILED2026-11-19 18:42:14.991 | INFO     | conftest:pytest_runtest_teardown:1227 - In custom teardown, open device ids: {0}
+
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_ring_chain/test_block_sharded_grad.py::test_conv2d_3x3_block_sharded_spare_groups[LoFi-res4_8x8-tile_bf16] FAILED2026-11-19 18:42:15.024 | INFO     | conftest:pytest_runtest_teardown:1227 - In custom teardown, open device ids: {0}
+
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_ring_chain/test_block_sharded_grad.py::test_conv2d_3x3_block_sharded_spare_groups[LoFi-res4_8x8-tile_bf8b] FAILED2026-11-19 18:42:15.058 | INFO     | conftest:pytest_runtest_teardown:1227 - In custom teardown, open device ids: {0}
+
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_ring_chain/test_block_sharded_grad.py::test_conv2d_3x3_block_sharded_spare_groups[LoFi-res5_0_8x10-tile_bf16] FAILED2026-11-19 18:42:15.115 | INFO     | conftest:pytest_runtest_teardown:1227 - In custom teardown, open device ids: {0}
+
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_ring_chain/test_block_sharded_grad.py::test_conv2d_3x3_block_sharded_spare_groups[LoFi-res5_0_8x10-tile_bf8b] FAILED2026-11-19 18:42:15.165 | INFO     | conftest:pytest_runtest_teardown:1227 - In custom teardown, open device ids: {0}
+
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_ring_chain/test_block_sharded_grad.py::test_conv2d_3x3_block_sharded_spare_groups[LoFi-k2_d8_co96-tile_bf16] FAILED2026-11-19 18:42:15.189 | INFO     | conftest:pytest_runtest_teardown:1227 - In custom teardown, open device ids: {0}
+
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_ring_chain/test_block_sharded_grad.py::test_conv2d_3x3_block_sharded_spare_groups[LoFi-k2_d8_co96-tile_bf8b] FAILED2026-11-19 18:42:15.208 | INFO     | conftest:pytest_runtest_teardown:1227 - In custom teardown, open device ids: {0}
+
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_ring_chain/test_block_sharded_grad.py::test_conv2d_3x3_block_sharded_spare_groups[LoFi-k2_col_major-tile_bf16] FAILED2026-11-19 18:42:15.226 | INFO     | conftest:pytest_runtest_teardown:1227 - In custom teardown, open device ids: {0}
+
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_ring_chain/test_block_sharded_grad.py::test_conv2d_3x3_block_sharded_spare_groups[LoFi-k2_col_major-tile_bf8b] FAILED2026-11-19 18:42:15.264 | INFO     | conftest:pytest_runtest_teardown:1227 - In custom teardown, open device ids: {0}
+UP_FRONT_INLINE: real pass took 1.7s
+
+
+=================================== FAILURES ===================================
+_ test_conv2d_3x3_block_sharded_column_weight_mcast_ragged_row[HiFi4-rm_bf16] __
+
+dtype = DataType.BFLOAT16, layout = Layout.ROW_MAJOR
+device = MeshDevice(1x1 grid, 1 devices)
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x7cdb12750340>
+
+    @pytest.mark.parametrize("dtype,layout", LAYOUTS)
+    def test_conv2d_3x3_block_sharded_column_weight_mcast_ragged_row(dtype, layout, device, monkeypatch):
+        """One-tile-row M-blocks over 20 output tile-rows on 3 grid rows of 7-tile-row shards: rows 0 and 1 run 7
+        M-blocks (21 weight multicast rounds per column, interleaved with 7 combine rounds), the last row runs 6 and
+        must stream its own weight slice. W_out = 40, so a tile-row's taps span two image rows. The grid sits on the
+        device's last 3 rows, so the M split stays on them (block_compute_rows), and it keeps the uniform split's ragged
+        last row (no work-balanced ranges, which may move the short row off the grid's edge)."""
+        # The test pins the grid-row groups' structure (rows, ragged row, M-blocks): no spare-column groups.
+        monkeypatch.setattr(_pd, "SPARE_MGROUPS", False)
+        torch.manual_seed(5)
+        (H, W, c_in), c_out = (16, 40, 64), 64
+        shard = (224, 32) if layout == ttnn.TILE_LAYOUT else (224, 16)
+        config = _block_config(H * W, c_in, layout, shard, start=(0, device.compute_with_storage_grid_size().y - 3))
+        real_select = _pd.select_blocking
+        real_column_mcast = _pd._column_weight_mcast
+        channels = []
+
+        def one_tile_row_blocks(g, grid, l1_budget):
+            b = real_select(g, grid, l1_budget)
+            assert g.k_split and b.core_m_tiles == 7 and b.num_m_groups == 3
+            fit = _pd._footprint(g, b.core_m_tiles, 1, b.block_k_tiles, b.block_n_tiles, nslice=b.nslice)
+            return _pd.Conv3x3Blocking(
+                grid_x=b.grid_x,
+                core_m_tiles=b.core_m_tiles,
+                num_m_groups=b.num_m_groups,
+                block_m_tiles=1,
+                block_k_tiles=b.block_k_tiles,
+                block_n_tiles=b.block_n_tiles,
+                out_depth_row_groups=b.out_depth_row_groups,
+                **fit,
+            )
+
+        def recording_column_mcast(input_tensor, work, m_blocks_per_index):
+            channel = real_column_mcast(input_tensor, work, m_blocks_per_index)
+            channels.append((channel, list(work)))
+            return channel
+
+        monkeypatch.setattr(_op_module, "select_blocking", one_tile_row_blocks)
+        monkeypatch.setattr(_op_module, "balanced_block_ranges", lambda *args: None)
+        monkeypatch.setattr(_pd, "_column_weight_mcast", recording_column_mcast)
+        _run(((H, W, c_in), c_out, 1, 1, 1), dtype, layout, config, device, with_bias=True, relu=True)
+
+        ((channel, work),) = channels
+        assert channel is not None, "the column weight multicast channel was not built"
+        receivers, group_size, _ = channel
+        k_cols = _pd.block_grid_shape(config.shard_spec)[1]
+>       assert group_size == 2 and receivers.num_cores() == 2 * k_cols
+E       assert (3 == 2)
+
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_ring_chain/test_block_sharded_grad.py:330: AssertionError
+_ test_conv2d_3x3_block_sharded_column_weight_mcast_ragged_row[HiFi4-tile_bf16] _
+
+dtype = DataType.BFLOAT16, layout = Layout.TILE
+device = MeshDevice(1x1 grid, 1 devices)
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x7cdb11db0c10>
+
+    @pytest.mark.parametrize("dtype,layout", LAYOUTS)
+    def test_conv2d_3x3_block_sharded_column_weight_mcast_ragged_row(dtype, layout, device, monkeypatch):
+        """One-tile-row M-blocks over 20 output tile-rows on 3 grid rows of 7-tile-row shards: rows 0 and 1 run 7
+        M-blocks (21 weight multicast rounds per column, interleaved with 7 combine rounds), the last row runs 6 and
+        must stream its own weight slice. W_out = 40, so a tile-row's taps span two image rows. The grid sits on the
+        device's last 3 rows, so the M split stays on them (block_compute_rows), and it keeps the uniform split's ragged
+        last row (no work-balanced ranges, which may move the short row off the grid's edge)."""
+        # The test pins the grid-row groups' structure (rows, ragged row, M-blocks): no spare-column groups.
+        monkeypatch.setattr(_pd, "SPARE_MGROUPS", False)
+        torch.manual_seed(5)
+        (H, W, c_in), c_out = (16, 40, 64), 64
+        shard = (224, 32) if layout == ttnn.TILE_LAYOUT else (224, 16)
+        config = _block_config(H * W, c_in, layout, shard, start=(0, device.compute_with_storage_grid_size().y - 3))
+        real_select = _pd.select_blocking
+        real_column_mcast = _pd._column_weight_mcast
+        channels = []
+
+        def one_tile_row_blocks(g, grid, l1_budget):
+            b = real_select(g, grid, l1_budget)
+            assert g.k_split and b.core_m_tiles == 7 and b.num_m_groups == 3
+            fit = _pd._footprint(g, b.core_m_tiles, 1, b.block_k_tiles, b.block_n_tiles, nslice=b.nslice)
+            return _pd.Conv3x3Blocking(
+                grid_x=b.grid_x,
+                core_m_tiles=b.core_m_tiles,
+                num_m_groups=b.num_m_groups,
+                block_m_tiles=1,
+                block_k_tiles=b.block_k_tiles,
+                block_n_tiles=b.block_n_tiles,
+                out_depth_row_groups=b.out_depth_row_groups,
+                **fit,
+            )
+
+        def recording_column_mcast(input_tensor, work, m_blocks_per_index):
+            channel = real_column_mcast(input_tensor, work, m_blocks_per_index)
+            channels.append((channel, list(work)))
+            return channel
+
+        monkeypatch.setattr(_op_module, "select_blocking", one_tile_row_blocks)
+        monkeypatch.setattr(_op_module, "balanced_block_ranges", lambda *args: None)
+        monkeypatch.setattr(_pd, "_column_weight_mcast", recording_column_mcast)
+        _run(((H, W, c_in), c_out, 1, 1, 1), dtype, layout, config, device, with_bias=True, relu=True)
+
+        ((channel, work),) = channels
+        assert channel is not None, "the column weight multicast channel was not built"
+        receivers, group_size, _ = channel
+        k_cols = _pd.block_grid_shape(config.shard_spec)[1]
+>       assert group_size == 2 and receivers.num_cores() == 2 * k_cols
+E       assert (3 == 2)
+
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_ring_chain/test_block_sharded_grad.py:330: AssertionError
+_ test_conv2d_3x3_block_sharded_column_weight_mcast_ragged_row[HiFi4-tile_bf8b] _
+
+dtype = DataType.BFLOAT8_B, layout = Layout.TILE
+device = MeshDevice(1x1 grid, 1 devices)
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x7cdb130de0b0>
+
+    @pytest.mark.parametrize("dtype,layout", LAYOUTS)
+    def test_conv2d_3x3_block_sharded_column_weight_mcast_ragged_row(dtype, layout, device, monkeypatch):
+        """One-tile-row M-blocks over 20 output tile-rows on 3 grid rows of 7-tile-row shards: rows 0 and 1 run 7
+        M-blocks (21 weight multicast rounds per column, interleaved with 7 combine rounds), the last row runs 6 and
+        must stream its own weight slice. W_out = 40, so a tile-row's taps span two image rows. The grid sits on the
+        device's last 3 rows, so the M split stays on them (block_compute_rows), and it keeps the uniform split's ragged
+        last row (no work-balanced ranges, which may move the short row off the grid's edge)."""
+        # The test pins the grid-row groups' structure (rows, ragged row, M-blocks): no spare-column groups.
+        monkeypatch.setattr(_pd, "SPARE_MGROUPS", False)
+        torch.manual_seed(5)
+        (H, W, c_in), c_out = (16, 40, 64), 64
+        shard = (224, 32) if layout == ttnn.TILE_LAYOUT else (224, 16)
+        config = _block_config(H * W, c_in, layout, shard, start=(0, device.compute_with_storage_grid_size().y - 3))
+        real_select = _pd.select_blocking
+        real_column_mcast = _pd._column_weight_mcast
+        channels = []
+
+        def one_tile_row_blocks(g, grid, l1_budget):
+            b = real_select(g, grid, l1_budget)
+            assert g.k_split and b.core_m_tiles == 7 and b.num_m_groups == 3
+            fit = _pd._footprint(g, b.core_m_tiles, 1, b.block_k_tiles, b.block_n_tiles, nslice=b.nslice)
+            return _pd.Conv3x3Blocking(
+                grid_x=b.grid_x,
+                core_m_tiles=b.core_m_tiles,
+                num_m_groups=b.num_m_groups,
+                block_m_tiles=1,
+                block_k_tiles=b.block_k_tiles,
+                block_n_tiles=b.block_n_tiles,
+                out_depth_row_groups=b.out_depth_row_groups,
+                **fit,
+            )
+
+        def recording_column_mcast(input_tensor, work, m_blocks_per_index):
+            channel = real_column_mcast(input_tensor, work, m_blocks_per_index)
+            channels.append((channel, list(work)))
+            return channel
+
+        monkeypatch.setattr(_op_module, "select_blocking", one_tile_row_blocks)
+        monkeypatch.setattr(_op_module, "balanced_block_ranges", lambda *args: None)
+        monkeypatch.setattr(_pd, "_column_weight_mcast", recording_column_mcast)
+        _run(((H, W, c_in), c_out, 1, 1, 1), dtype, layout, config, device, with_bias=True, relu=True)
+
+        ((channel, work),) = channels
+        assert channel is not None, "the column weight multicast channel was not built"
+        receivers, group_size, _ = channel
+        k_cols = _pd.block_grid_shape(config.shard_spec)[1]
+>       assert group_size == 2 and receivers.num_cores() == 2 * k_cols
+E       assert (3 == 2)
+
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_ring_chain/test_block_sharded_grad.py:330: AssertionError
+__ test_conv2d_3x3_block_sharded_column_weight_mcast_ragged_row[LoFi-rm_bf16] __
+
+dtype = DataType.BFLOAT16, layout = Layout.ROW_MAJOR
+device = MeshDevice(1x1 grid, 1 devices)
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x7cdb12735db0>
+
+    @pytest.mark.parametrize("dtype,layout", LAYOUTS)
+    def test_conv2d_3x3_block_sharded_column_weight_mcast_ragged_row(dtype, layout, device, monkeypatch):
+        """One-tile-row M-blocks over 20 output tile-rows on 3 grid rows of 7-tile-row shards: rows 0 and 1 run 7
+        M-blocks (21 weight multicast rounds per column, interleaved with 7 combine rounds), the last row runs 6 and
+        must stream its own weight slice. W_out = 40, so a tile-row's taps span two image rows. The grid sits on the
+        device's last 3 rows, so the M split stays on them (block_compute_rows), and it keeps the uniform split's ragged
+        last row (no work-balanced ranges, which may move the short row off the grid's edge)."""
+        # The test pins the grid-row groups' structure (rows, ragged row, M-blocks): no spare-column groups.
+        monkeypatch.setattr(_pd, "SPARE_MGROUPS", False)
+        torch.manual_seed(5)
+        (H, W, c_in), c_out = (16, 40, 64), 64
+        shard = (224, 32) if layout == ttnn.TILE_LAYOUT else (224, 16)
+        config = _block_config(H * W, c_in, layout, shard, start=(0, device.compute_with_storage_grid_size().y - 3))
+        real_select = _pd.select_blocking
+        real_column_mcast = _pd._column_weight_mcast
+        channels = []
+
+        def one_tile_row_blocks(g, grid, l1_budget):
+            b = real_select(g, grid, l1_budget)
+            assert g.k_split and b.core_m_tiles == 7 and b.num_m_groups == 3
+            fit = _pd._footprint(g, b.core_m_tiles, 1, b.block_k_tiles, b.block_n_tiles, nslice=b.nslice)
+            return _pd.Conv3x3Blocking(
+                grid_x=b.grid_x,
+                core_m_tiles=b.core_m_tiles,
+                num_m_groups=b.num_m_groups,
+                block_m_tiles=1,
+                block_k_tiles=b.block_k_tiles,
+                block_n_tiles=b.block_n_tiles,
+                out_depth_row_groups=b.out_depth_row_groups,
+                **fit,
+            )
+
+        def recording_column_mcast(input_tensor, work, m_blocks_per_index):
+            channel = real_column_mcast(input_tensor, work, m_blocks_per_index)
+            channels.append((channel, list(work)))
+            return channel
+
+        monkeypatch.setattr(_op_module, "select_blocking", one_tile_row_blocks)
+        monkeypatch.setattr(_op_module, "balanced_block_ranges", lambda *args: None)
+        monkeypatch.setattr(_pd, "_column_weight_mcast", recording_column_mcast)
+        _run(((H, W, c_in), c_out, 1, 1, 1), dtype, layout, config, device, with_bias=True, relu=True)
+
+        ((channel, work),) = channels
+        assert channel is not None, "the column weight multicast channel was not built"
+        receivers, group_size, _ = channel
+        k_cols = _pd.block_grid_shape(config.shard_spec)[1]
+>       assert group_size == 2 and receivers.num_cores() == 2 * k_cols
+E       assert (3 == 2)
+
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_ring_chain/test_block_sharded_grad.py:330: AssertionError
+_ test_conv2d_3x3_block_sharded_column_weight_mcast_ragged_row[LoFi-tile_bf16] _
+
+dtype = DataType.BFLOAT16, layout = Layout.TILE
+device = MeshDevice(1x1 grid, 1 devices)
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x7cdb130ded40>
+
+    @pytest.mark.parametrize("dtype,layout", LAYOUTS)
+    def test_conv2d_3x3_block_sharded_column_weight_mcast_ragged_row(dtype, layout, device, monkeypatch):
+        """One-tile-row M-blocks over 20 output tile-rows on 3 grid rows of 7-tile-row shards: rows 0 and 1 run 7
+        M-blocks (21 weight multicast rounds per column, interleaved with 7 combine rounds), the last row runs 6 and
+        must stream its own weight slice. W_out = 40, so a tile-row's taps span two image rows. The grid sits on the
+        device's last 3 rows, so the M split stays on them (block_compute_rows), and it keeps the uniform split's ragged
+        last row (no work-balanced ranges, which may move the short row off the grid's edge)."""
+        # The test pins the grid-row groups' structure (rows, ragged row, M-blocks): no spare-column groups.
+        monkeypatch.setattr(_pd, "SPARE_MGROUPS", False)
+        torch.manual_seed(5)
+        (H, W, c_in), c_out = (16, 40, 64), 64
+        shard = (224, 32) if layout == ttnn.TILE_LAYOUT else (224, 16)
+        config = _block_config(H * W, c_in, layout, shard, start=(0, device.compute_with_storage_grid_size().y - 3))
+        real_select = _pd.select_blocking
+        real_column_mcast = _pd._column_weight_mcast
+        channels = []
+
+        def one_tile_row_blocks(g, grid, l1_budget):
+            b = real_select(g, grid, l1_budget)
+            assert g.k_split and b.core_m_tiles == 7 and b.num_m_groups == 3
+            fit = _pd._footprint(g, b.core_m_tiles, 1, b.block_k_tiles, b.block_n_tiles, nslice=b.nslice)
+            return _pd.Conv3x3Blocking(
+                grid_x=b.grid_x,
+                core_m_tiles=b.core_m_tiles,
+                num_m_groups=b.num_m_groups,
+                block_m_tiles=1,
+                block_k_tiles=b.block_k_tiles,
+                block_n_tiles=b.block_n_tiles,
+                out_depth_row_groups=b.out_depth_row_groups,
+                **fit,
+            )
+
+        def recording_column_mcast(input_tensor, work, m_blocks_per_index):
+            channel = real_column_mcast(input_tensor, work, m_blocks_per_index)
+            channels.append((channel, list(work)))
+            return channel
+
+        monkeypatch.setattr(_op_module, "select_blocking", one_tile_row_blocks)
+        monkeypatch.setattr(_op_module, "balanced_block_ranges", lambda *args: None)
+        monkeypatch.setattr(_pd, "_column_weight_mcast", recording_column_mcast)
+        _run(((H, W, c_in), c_out, 1, 1, 1), dtype, layout, config, device, with_bias=True, relu=True)
+
+        ((channel, work),) = channels
+        assert channel is not None, "the column weight multicast channel was not built"
+        receivers, group_size, _ = channel
+        k_cols = _pd.block_grid_shape(config.shard_spec)[1]
+>       assert group_size == 2 and receivers.num_cores() == 2 * k_cols
+E       assert (3 == 2)
+
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_ring_chain/test_block_sharded_grad.py:330: AssertionError
+_ test_conv2d_3x3_block_sharded_column_weight_mcast_ragged_row[LoFi-tile_bf8b] _
+
+dtype = DataType.BFLOAT8_B, layout = Layout.TILE
+device = MeshDevice(1x1 grid, 1 devices)
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x7cdb12734580>
+
+    @pytest.mark.parametrize("dtype,layout", LAYOUTS)
+    def test_conv2d_3x3_block_sharded_column_weight_mcast_ragged_row(dtype, layout, device, monkeypatch):
+        """One-tile-row M-blocks over 20 output tile-rows on 3 grid rows of 7-tile-row shards: rows 0 and 1 run 7
+        M-blocks (21 weight multicast rounds per column, interleaved with 7 combine rounds), the last row runs 6 and
+        must stream its own weight slice. W_out = 40, so a tile-row's taps span two image rows. The grid sits on the
+        device's last 3 rows, so the M split stays on them (block_compute_rows), and it keeps the uniform split's ragged
+        last row (no work-balanced ranges, which may move the short row off the grid's edge)."""
+        # The test pins the grid-row groups' structure (rows, ragged row, M-blocks): no spare-column groups.
+        monkeypatch.setattr(_pd, "SPARE_MGROUPS", False)
+        torch.manual_seed(5)
+        (H, W, c_in), c_out = (16, 40, 64), 64
+        shard = (224, 32) if layout == ttnn.TILE_LAYOUT else (224, 16)
+        config = _block_config(H * W, c_in, layout, shard, start=(0, device.compute_with_storage_grid_size().y - 3))
+        real_select = _pd.select_blocking
+        real_column_mcast = _pd._column_weight_mcast
+        channels = []
+
+        def one_tile_row_blocks(g, grid, l1_budget):
+            b = real_select(g, grid, l1_budget)
+            assert g.k_split and b.core_m_tiles == 7 and b.num_m_groups == 3
+            fit = _pd._footprint(g, b.core_m_tiles, 1, b.block_k_tiles, b.block_n_tiles, nslice=b.nslice)
+            return _pd.Conv3x3Blocking(
+                grid_x=b.grid_x,
+                core_m_tiles=b.core_m_tiles,
+                num_m_groups=b.num_m_groups,
+                block_m_tiles=1,
+                block_k_tiles=b.block_k_tiles,
+                block_n_tiles=b.block_n_tiles,
+                out_depth_row_groups=b.out_depth_row_groups,
+                **fit,
+            )
+
+        def recording_column_mcast(input_tensor, work, m_blocks_per_index):
+            channel = real_column_mcast(input_tensor, work, m_blocks_per_index)
+            channels.append((channel, list(work)))
+            return channel
+
+        monkeypatch.setattr(_op_module, "select_blocking", one_tile_row_blocks)
+        monkeypatch.setattr(_op_module, "balanced_block_ranges", lambda *args: None)
+        monkeypatch.setattr(_pd, "_column_weight_mcast", recording_column_mcast)
+        _run(((H, W, c_in), c_out, 1, 1, 1), dtype, layout, config, device, with_bias=True, relu=True)
+
+        ((channel, work),) = channels
+        assert channel is not None, "the column weight multicast channel was not built"
+        receivers, group_size, _ = channel
+        k_cols = _pd.block_grid_shape(config.shard_spec)[1]
+>       assert group_size == 2 and receivers.num_cores() == 2 * k_cols
+E       assert (3 == 2)
+
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_ring_chain/test_block_sharded_grad.py:330: AssertionError
+_ test_conv2d_3x3_block_sharded_column_weight_mcast_ragged_extended_row[HiFi4-rm_bf16] _
+
+dtype = DataType.BFLOAT16, layout = Layout.ROW_MAJOR
+device = MeshDevice(1x1 grid, 1 devices)
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x7cdb11db03a0>
+
+    @pytest.mark.parametrize("dtype,layout", LAYOUTS)
+    def test_conv2d_3x3_block_sharded_column_weight_mcast_ragged_extended_row(dtype, layout, device, monkeypatch):
+        """The ragged-row case on extended rows: the 3-row shard grid starts at y = 3, so 7 grid rows reach a 10-row
+        device's edge; 20 output tile-rows split 3 per row, the last row runs 2 one-tile-row M-blocks (6 x 3 + 2) and
+        streams its own weights while the 6 full rows share each column's multicast."""
+        # The test pins the grid-row groups' structure (rows, ragged row, M-blocks): no spare-column groups.
+        monkeypatch.setattr(_pd, "SPARE_MGROUPS", False)
+        torch.manual_seed(5)
+        (H, W, c_in), c_out = (16, 40, 64), 64
+        shard = (224, 32) if layout == ttnn.TILE_LAYOUT else (224, 16)
+        if device.compute_with_storage_grid_size().y != 10:
+            pytest.skip("pinned to a 10-row grid")
+        config = _block_config(H * W, c_in, layout, shard, start=(0, 3))
+        real_select = _pd.select_blocking
+        real_column_mcast = _pd._column_weight_mcast
+        channels = []
+
+        def one_tile_row_blocks(g, grid, l1_budget):
+            b = real_select(g, grid, l1_budget)
+            assert g.k_split and g.remote_output and grid[0] == 7 and b.core_m_tiles == 3 and b.num_m_groups == 7
+            fit = _pd._footprint(g, b.core_m_tiles, 1, b.block_k_tiles, b.block_n_tiles, nslice=b.nslice)
+            return _pd.Conv3x3Blocking(
+                grid_x=b.grid_x,
+                core_m_tiles=b.core_m_tiles,
+                num_m_groups=b.num_m_groups,
+                block_m_tiles=1,
+                block_k_tiles=b.block_k_tiles,
+                block_n_tiles=b.block_n_tiles,
+                out_depth_row_groups=b.out_depth_row_groups,
+                **fit,
+            )
+
+        def recording_column_mcast(input_tensor, work, m_blocks_per_index):
+            channel = real_column_mcast(input_tensor, work, m_blocks_per_index)
+            channels.append((channel, list(work)))
+            return channel
+
+        monkeypatch.setattr(_op_module, "select_blocking", one_tile_row_blocks)
+        monkeypatch.setattr(_pd, "_column_weight_mcast", recording_column_mcast)
+        _run(((H, W, c_in), c_out, 1, 1, 1), dtype, layout, config, device, with_bias=True, relu=True)
+
+        ((channel, work),) = channels
+        assert channel is not None, "the column weight multicast channel was not built"
+        receivers, group_size, _ = channel
+        k_cols = _pd.block_grid_shape(config.shard_spec)[1]
+>       assert group_size == 6 and receivers.num_cores() == 6 * k_cols
+E       assert (7 == 6)
+
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_ring_chain/test_block_sharded_grad.py:410: AssertionError
+_ test_conv2d_3x3_block_sharded_column_weight_mcast_ragged_extended_row[HiFi4-tile_bf16] _
+
+dtype = DataType.BFLOAT16, layout = Layout.TILE
+device = MeshDevice(1x1 grid, 1 devices)
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x7cdb127ae620>
+
+    @pytest.mark.parametrize("dtype,layout", LAYOUTS)
+    def test_conv2d_3x3_block_sharded_column_weight_mcast_ragged_extended_row(dtype, layout, device, monkeypatch):
+        """The ragged-row case on extended rows: the 3-row shard grid starts at y = 3, so 7 grid rows reach a 10-row
+        device's edge; 20 output tile-rows split 3 per row, the last row runs 2 one-tile-row M-blocks (6 x 3 + 2) and
+        streams its own weights while the 6 full rows share each column's multicast."""
+        # The test pins the grid-row groups' structure (rows, ragged row, M-blocks): no spare-column groups.
+        monkeypatch.setattr(_pd, "SPARE_MGROUPS", False)
+        torch.manual_seed(5)
+        (H, W, c_in), c_out = (16, 40, 64), 64
+        shard = (224, 32) if layout == ttnn.TILE_LAYOUT else (224, 16)
+        if device.compute_with_storage_grid_size().y != 10:
+            pytest.skip("pinned to a 10-row grid")
+        config = _block_config(H * W, c_in, layout, shard, start=(0, 3))
+        real_select = _pd.select_blocking
+        real_column_mcast = _pd._column_weight_mcast
+        channels = []
+
+        def one_tile_row_blocks(g, grid, l1_budget):
+            b = real_select(g, grid, l1_budget)
+            assert g.k_split and g.remote_output and grid[0] == 7 and b.core_m_tiles == 3 and b.num_m_groups == 7
+            fit = _pd._footprint(g, b.core_m_tiles, 1, b.block_k_tiles, b.block_n_tiles, nslice=b.nslice)
+            return _pd.Conv3x3Blocking(
+                grid_x=b.grid_x,
+                core_m_tiles=b.core_m_tiles,
+                num_m_groups=b.num_m_groups,
+                block_m_tiles=1,
+                block_k_tiles=b.block_k_tiles,
+                block_n_tiles=b.block_n_tiles,
+                out_depth_row_groups=b.out_depth_row_groups,
+                **fit,
+            )
+
+        def recording_column_mcast(input_tensor, work, m_blocks_per_index):
+            channel = real_column_mcast(input_tensor, work, m_blocks_per_index)
+            channels.append((channel, list(work)))
+            return channel
+
+        monkeypatch.setattr(_op_module, "select_blocking", one_tile_row_blocks)
+        monkeypatch.setattr(_pd, "_column_weight_mcast", recording_column_mcast)
+        _run(((H, W, c_in), c_out, 1, 1, 1), dtype, layout, config, device, with_bias=True, relu=True)
+
+        ((channel, work),) = channels
+        assert channel is not None, "the column weight multicast channel was not built"
+        receivers, group_size, _ = channel
+        k_cols = _pd.block_grid_shape(config.shard_spec)[1]
+>       assert group_size == 6 and receivers.num_cores() == 6 * k_cols
+E       assert (7 == 6)
+
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_ring_chain/test_block_sharded_grad.py:410: AssertionError
+_ test_conv2d_3x3_block_sharded_column_weight_mcast_ragged_extended_row[HiFi4-tile_bf8b] _
+
+dtype = DataType.BFLOAT8_B, layout = Layout.TILE
+device = MeshDevice(1x1 grid, 1 devices)
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x7cdb1272f130>
+
+    @pytest.mark.parametrize("dtype,layout", LAYOUTS)
+    def test_conv2d_3x3_block_sharded_column_weight_mcast_ragged_extended_row(dtype, layout, device, monkeypatch):
+        """The ragged-row case on extended rows: the 3-row shard grid starts at y = 3, so 7 grid rows reach a 10-row
+        device's edge; 20 output tile-rows split 3 per row, the last row runs 2 one-tile-row M-blocks (6 x 3 + 2) and
+        streams its own weights while the 6 full rows share each column's multicast."""
+        # The test pins the grid-row groups' structure (rows, ragged row, M-blocks): no spare-column groups.
+        monkeypatch.setattr(_pd, "SPARE_MGROUPS", False)
+        torch.manual_seed(5)
+        (H, W, c_in), c_out = (16, 40, 64), 64
+        shard = (224, 32) if layout == ttnn.TILE_LAYOUT else (224, 16)
+        if device.compute_with_storage_grid_size().y != 10:
+            pytest.skip("pinned to a 10-row grid")
+        config = _block_config(H * W, c_in, layout, shard, start=(0, 3))
+        real_select = _pd.select_blocking
+        real_column_mcast = _pd._column_weight_mcast
+        channels = []
+
+        def one_tile_row_blocks(g, grid, l1_budget):
+            b = real_select(g, grid, l1_budget)
+            assert g.k_split and g.remote_output and grid[0] == 7 and b.core_m_tiles == 3 and b.num_m_groups == 7
+            fit = _pd._footprint(g, b.core_m_tiles, 1, b.block_k_tiles, b.block_n_tiles, nslice=b.nslice)
+            return _pd.Conv3x3Blocking(
+                grid_x=b.grid_x,
+                core_m_tiles=b.core_m_tiles,
+                num_m_groups=b.num_m_groups,
+                block_m_tiles=1,
+                block_k_tiles=b.block_k_tiles,
+                block_n_tiles=b.block_n_tiles,
+                out_depth_row_groups=b.out_depth_row_groups,
+                **fit,
+            )
+
+        def recording_column_mcast(input_tensor, work, m_blocks_per_index):
+            channel = real_column_mcast(input_tensor, work, m_blocks_per_index)
+            channels.append((channel, list(work)))
+            return channel
+
+        monkeypatch.setattr(_op_module, "select_blocking", one_tile_row_blocks)
+        monkeypatch.setattr(_pd, "_column_weight_mcast", recording_column_mcast)
+        _run(((H, W, c_in), c_out, 1, 1, 1), dtype, layout, config, device, with_bias=True, relu=True)
+
+        ((channel, work),) = channels
+        assert channel is not None, "the column weight multicast channel was not built"
+        receivers, group_size, _ = channel
+        k_cols = _pd.block_grid_shape(config.shard_spec)[1]
+>       assert group_size == 6 and receivers.num_cores() == 6 * k_cols
+E       assert (7 == 6)
+
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_ring_chain/test_block_sharded_grad.py:410: AssertionError
+_ test_conv2d_3x3_block_sharded_column_weight_mcast_ragged_extended_row[LoFi-rm_bf16] _
+
+dtype = DataType.BFLOAT16, layout = Layout.ROW_MAJOR
+device = MeshDevice(1x1 grid, 1 devices)
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x7cdb0d5e1d80>
+
+    @pytest.mark.parametrize("dtype,layout", LAYOUTS)
+    def test_conv2d_3x3_block_sharded_column_weight_mcast_ragged_extended_row(dtype, layout, device, monkeypatch):
+        """The ragged-row case on extended rows: the 3-row shard grid starts at y = 3, so 7 grid rows reach a 10-row
+        device's edge; 20 output tile-rows split 3 per row, the last row runs 2 one-tile-row M-blocks (6 x 3 + 2) and
+        streams its own weights while the 6 full rows share each column's multicast."""
+        # The test pins the grid-row groups' structure (rows, ragged row, M-blocks): no spare-column groups.
+        monkeypatch.setattr(_pd, "SPARE_MGROUPS", False)
+        torch.manual_seed(5)
+        (H, W, c_in), c_out = (16, 40, 64), 64
+        shard = (224, 32) if layout == ttnn.TILE_LAYOUT else (224, 16)
+        if device.compute_with_storage_grid_size().y != 10:
+            pytest.skip("pinned to a 10-row grid")
+        config = _block_config(H * W, c_in, layout, shard, start=(0, 3))
+        real_select = _pd.select_blocking
+        real_column_mcast = _pd._column_weight_mcast
+        channels = []
+
+        def one_tile_row_blocks(g, grid, l1_budget):
+            b = real_select(g, grid, l1_budget)
+            assert g.k_split and g.remote_output and grid[0] == 7 and b.core_m_tiles == 3 and b.num_m_groups == 7
+            fit = _pd._footprint(g, b.core_m_tiles, 1, b.block_k_tiles, b.block_n_tiles, nslice=b.nslice)
+            return _pd.Conv3x3Blocking(
+                grid_x=b.grid_x,
+                core_m_tiles=b.core_m_tiles,
+                num_m_groups=b.num_m_groups,
+                block_m_tiles=1,
+                block_k_tiles=b.block_k_tiles,
+                block_n_tiles=b.block_n_tiles,
+                out_depth_row_groups=b.out_depth_row_groups,
+                **fit,
+            )
+
+        def recording_column_mcast(input_tensor, work, m_blocks_per_index):
+            channel = real_column_mcast(input_tensor, work, m_blocks_per_index)
+            channels.append((channel, list(work)))
+            return channel
+
+        monkeypatch.setattr(_op_module, "select_blocking", one_tile_row_blocks)
+        monkeypatch.setattr(_pd, "_column_weight_mcast", recording_column_mcast)
+        _run(((H, W, c_in), c_out, 1, 1, 1), dtype, layout, config, device, with_bias=True, relu=True)
+
+        ((channel, work),) = channels
+        assert channel is not None, "the column weight multicast channel was not built"
+        receivers, group_size, _ = channel
+        k_cols = _pd.block_grid_shape(config.shard_spec)[1]
+>       assert group_size == 6 and receivers.num_cores() == 6 * k_cols
+E       assert (7 == 6)
+
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_ring_chain/test_block_sharded_grad.py:410: AssertionError
+_ test_conv2d_3x3_block_sharded_column_weight_mcast_ragged_extended_row[LoFi-tile_bf16] _
+
+dtype = DataType.BFLOAT16, layout = Layout.TILE
+device = MeshDevice(1x1 grid, 1 devices)
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x7cdb1272e920>
+
+    @pytest.mark.parametrize("dtype,layout", LAYOUTS)
+    def test_conv2d_3x3_block_sharded_column_weight_mcast_ragged_extended_row(dtype, layout, device, monkeypatch):
+        """The ragged-row case on extended rows: the 3-row shard grid starts at y = 3, so 7 grid rows reach a 10-row
+        device's edge; 20 output tile-rows split 3 per row, the last row runs 2 one-tile-row M-blocks (6 x 3 + 2) and
+        streams its own weights while the 6 full rows share each column's multicast."""
+        # The test pins the grid-row groups' structure (rows, ragged row, M-blocks): no spare-column groups.
+        monkeypatch.setattr(_pd, "SPARE_MGROUPS", False)
+        torch.manual_seed(5)
+        (H, W, c_in), c_out = (16, 40, 64), 64
+        shard = (224, 32) if layout == ttnn.TILE_LAYOUT else (224, 16)
+        if device.compute_with_storage_grid_size().y != 10:
+            pytest.skip("pinned to a 10-row grid")
+        config = _block_config(H * W, c_in, layout, shard, start=(0, 3))
+        real_select = _pd.select_blocking
+        real_column_mcast = _pd._column_weight_mcast
+        channels = []
+
+        def one_tile_row_blocks(g, grid, l1_budget):
+            b = real_select(g, grid, l1_budget)
+            assert g.k_split and g.remote_output and grid[0] == 7 and b.core_m_tiles == 3 and b.num_m_groups == 7
+            fit = _pd._footprint(g, b.core_m_tiles, 1, b.block_k_tiles, b.block_n_tiles, nslice=b.nslice)
+            return _pd.Conv3x3Blocking(
+                grid_x=b.grid_x,
+                core_m_tiles=b.core_m_tiles,
+                num_m_groups=b.num_m_groups,
+                block_m_tiles=1,
+                block_k_tiles=b.block_k_tiles,
+                block_n_tiles=b.block_n_tiles,
+                out_depth_row_groups=b.out_depth_row_groups,
+                **fit,
+            )
+
+        def recording_column_mcast(input_tensor, work, m_blocks_per_index):
+            channel = real_column_mcast(input_tensor, work, m_blocks_per_index)
+            channels.append((channel, list(work)))
+            return channel
+
+        monkeypatch.setattr(_op_module, "select_blocking", one_tile_row_blocks)
+        monkeypatch.setattr(_pd, "_column_weight_mcast", recording_column_mcast)
+        _run(((H, W, c_in), c_out, 1, 1, 1), dtype, layout, config, device, with_bias=True, relu=True)
+
+        ((channel, work),) = channels
+        assert channel is not None, "the column weight multicast channel was not built"
+        receivers, group_size, _ = channel
+        k_cols = _pd.block_grid_shape(config.shard_spec)[1]
+>       assert group_size == 6 and receivers.num_cores() == 6 * k_cols
+E       assert (7 == 6)
+
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_ring_chain/test_block_sharded_grad.py:410: AssertionError
+_ test_conv2d_3x3_block_sharded_column_weight_mcast_ragged_extended_row[LoFi-tile_bf8b] _
+
+dtype = DataType.BFLOAT8_B, layout = Layout.TILE
+device = MeshDevice(1x1 grid, 1 devices)
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x7cdb00128460>
+
+    @pytest.mark.parametrize("dtype,layout", LAYOUTS)
+    def test_conv2d_3x3_block_sharded_column_weight_mcast_ragged_extended_row(dtype, layout, device, monkeypatch):
+        """The ragged-row case on extended rows: the 3-row shard grid starts at y = 3, so 7 grid rows reach a 10-row
+        device's edge; 20 output tile-rows split 3 per row, the last row runs 2 one-tile-row M-blocks (6 x 3 + 2) and
+        streams its own weights while the 6 full rows share each column's multicast."""
+        # The test pins the grid-row groups' structure (rows, ragged row, M-blocks): no spare-column groups.
+        monkeypatch.setattr(_pd, "SPARE_MGROUPS", False)
+        torch.manual_seed(5)
+        (H, W, c_in), c_out = (16, 40, 64), 64
+        shard = (224, 32) if layout == ttnn.TILE_LAYOUT else (224, 16)
+        if device.compute_with_storage_grid_size().y != 10:
+            pytest.skip("pinned to a 10-row grid")
+        config = _block_config(H * W, c_in, layout, shard, start=(0, 3))
+        real_select = _pd.select_blocking
+        real_column_mcast = _pd._column_weight_mcast
+        channels = []
+
+        def one_tile_row_blocks(g, grid, l1_budget):
+            b = real_select(g, grid, l1_budget)
+            assert g.k_split and g.remote_output and grid[0] == 7 and b.core_m_tiles == 3 and b.num_m_groups == 7
+            fit = _pd._footprint(g, b.core_m_tiles, 1, b.block_k_tiles, b.block_n_tiles, nslice=b.nslice)
+            return _pd.Conv3x3Blocking(
+                grid_x=b.grid_x,
+                core_m_tiles=b.core_m_tiles,
+                num_m_groups=b.num_m_groups,
+                block_m_tiles=1,
+                block_k_tiles=b.block_k_tiles,
+                block_n_tiles=b.block_n_tiles,
+                out_depth_row_groups=b.out_depth_row_groups,
+                **fit,
+            )
+
+        def recording_column_mcast(input_tensor, work, m_blocks_per_index):
+            channel = real_column_mcast(input_tensor, work, m_blocks_per_index)
+            channels.append((channel, list(work)))
+            return channel
+
+        monkeypatch.setattr(_op_module, "select_blocking", one_tile_row_blocks)
+        monkeypatch.setattr(_pd, "_column_weight_mcast", recording_column_mcast)
+        _run(((H, W, c_in), c_out, 1, 1, 1), dtype, layout, config, device, with_bias=True, relu=True)
+
+        ((channel, work),) = channels
+        assert channel is not None, "the column weight multicast channel was not built"
+        receivers, group_size, _ = channel
+        k_cols = _pd.block_grid_shape(config.shard_spec)[1]
+>       assert group_size == 6 and receivers.num_cores() == 6 * k_cols
+E       assert (7 == 6)
+
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_ring_chain/test_block_sharded_grad.py:410: AssertionError
+_____ test_conv2d_3x3_block_sharded_spare_groups[HiFi4-res4_8x8-tile_bf16] _____
+
+case_hw = ((32, 64, 256), 256, 1, 1, 1), shard = (256, 32)
+orientation = ShardOrientation.ROW_MAJOR, dtype = DataType.BFLOAT16
+layout = Layout.TILE, device = MeshDevice(1x1 grid, 1 devices)
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x7cdb130dfe20>
+
+    @pytest.mark.parametrize("dtype,layout", [LAYOUTS[1], LAYOUTS[2]])
+    @pytest.mark.parametrize("case_hw,shard,orientation", SPARE_CASES)
+    def test_conv2d_3x3_block_sharded_spare_groups(case_hw, shard, orientation, dtype, layout, device, monkeypatch):
+        """Spare-column M-groups: more M-groups than grid rows, transposed into the device columns past the shard grid
+        (rows below it on COL_MAJOR), their weights forwarded from the column streams; owners store remotely. The output
+        keeps its shard spec; the second dispatch on fresh shards must hit the program cache."""
+        torch.manual_seed(3)
+        grid = device.compute_with_storage_grid_size()
+        if (grid.x, grid.y) != (11, 10):
+            pytest.skip("pinned to the 11 x 10 grid")
+        (H, W, c_in), c_out, p, s, d = case_hw
+        config = _block_config(H * W, c_in, layout, shard, orientation=orientation)
+        real_select = _op_module.select_blocking
+        seen = []
+
+        def recording(g, work_grid, l1_budget):
+            b = real_select(g, work_grid, l1_budget)
+            seen.append((g.block_rows, b.num_m_groups, b.nslice, b.max_m_blocks_per_core))
+            return b
+
+        monkeypatch.setattr(_op_module, "select_blocking", recording)
+        _run(case_hw, dtype, layout, config, device, with_bias=True, relu=True)
+>       block_rows, groups, nslice, m_blocks = seen[-1]
+E       IndexError: list index out of range
+
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_ring_chain/test_block_sharded_grad.py:489: IndexError
+_____ test_conv2d_3x3_block_sharded_spare_groups[HiFi4-res4_8x8-tile_bf8b] _____
+
+case_hw = ((32, 64, 256), 256, 1, 1, 1), shard = (256, 32)
+orientation = ShardOrientation.ROW_MAJOR, dtype = DataType.BFLOAT8_B
+layout = Layout.TILE, device = MeshDevice(1x1 grid, 1 devices)
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x7cdb130ddc90>
+
+    @pytest.mark.parametrize("dtype,layout", [LAYOUTS[1], LAYOUTS[2]])
+    @pytest.mark.parametrize("case_hw,shard,orientation", SPARE_CASES)
+    def test_conv2d_3x3_block_sharded_spare_groups(case_hw, shard, orientation, dtype, layout, device, monkeypatch):
+        """Spare-column M-groups: more M-groups than grid rows, transposed into the device columns past the shard grid
+        (rows below it on COL_MAJOR), their weights forwarded from the column streams; owners store remotely. The output
+        keeps its shard spec; the second dispatch on fresh shards must hit the program cache."""
+        torch.manual_seed(3)
+        grid = device.compute_with_storage_grid_size()
+        if (grid.x, grid.y) != (11, 10):
+            pytest.skip("pinned to the 11 x 10 grid")
+        (H, W, c_in), c_out, p, s, d = case_hw
+        config = _block_config(H * W, c_in, layout, shard, orientation=orientation)
+        real_select = _op_module.select_blocking
+        seen = []
+
+        def recording(g, work_grid, l1_budget):
+            b = real_select(g, work_grid, l1_budget)
+            seen.append((g.block_rows, b.num_m_groups, b.nslice, b.max_m_blocks_per_core))
+            return b
+
+        monkeypatch.setattr(_op_module, "select_blocking", recording)
+        _run(case_hw, dtype, layout, config, device, with_bias=True, relu=True)
+>       block_rows, groups, nslice, m_blocks = seen[-1]
+E       IndexError: list index out of range
+
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_ring_chain/test_block_sharded_grad.py:489: IndexError
+___ test_conv2d_3x3_block_sharded_spare_groups[HiFi4-res5_0_8x10-tile_bf16] ____
+
+case_hw = ((32, 64, 512), 512, 2, 1, 2), shard = (224, 64)
+orientation = ShardOrientation.ROW_MAJOR, dtype = DataType.BFLOAT16
+layout = Layout.TILE, device = MeshDevice(1x1 grid, 1 devices)
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x7cdb130dda20>
+
+    @pytest.mark.parametrize("dtype,layout", [LAYOUTS[1], LAYOUTS[2]])
+    @pytest.mark.parametrize("case_hw,shard,orientation", SPARE_CASES)
+    def test_conv2d_3x3_block_sharded_spare_groups(case_hw, shard, orientation, dtype, layout, device, monkeypatch):
+        """Spare-column M-groups: more M-groups than grid rows, transposed into the device columns past the shard grid
+        (rows below it on COL_MAJOR), their weights forwarded from the column streams; owners store remotely. The output
+        keeps its shard spec; the second dispatch on fresh shards must hit the program cache."""
+        torch.manual_seed(3)
+        grid = device.compute_with_storage_grid_size()
+        if (grid.x, grid.y) != (11, 10):
+            pytest.skip("pinned to the 11 x 10 grid")
+        (H, W, c_in), c_out, p, s, d = case_hw
+        config = _block_config(H * W, c_in, layout, shard, orientation=orientation)
+        real_select = _op_module.select_blocking
+        seen = []
+
+        def recording(g, work_grid, l1_budget):
+            b = real_select(g, work_grid, l1_budget)
+            seen.append((g.block_rows, b.num_m_groups, b.nslice, b.max_m_blocks_per_core))
+            return b
+
+        monkeypatch.setattr(_op_module, "select_blocking", recording)
+        _run(case_hw, dtype, layout, config, device, with_bias=True, relu=True)
+>       block_rows, groups, nslice, m_blocks = seen[-1]
+E       IndexError: list index out of range
+
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_ring_chain/test_block_sharded_grad.py:489: IndexError
+___ test_conv2d_3x3_block_sharded_spare_groups[HiFi4-res5_0_8x10-tile_bf8b] ____
+
+case_hw = ((32, 64, 512), 512, 2, 1, 2), shard = (224, 64)
+orientation = ShardOrientation.ROW_MAJOR, dtype = DataType.BFLOAT8_B
+layout = Layout.TILE, device = MeshDevice(1x1 grid, 1 devices)
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x7cdb127acc70>
+
+    @pytest.mark.parametrize("dtype,layout", [LAYOUTS[1], LAYOUTS[2]])
+    @pytest.mark.parametrize("case_hw,shard,orientation", SPARE_CASES)
+    def test_conv2d_3x3_block_sharded_spare_groups(case_hw, shard, orientation, dtype, layout, device, monkeypatch):
+        """Spare-column M-groups: more M-groups than grid rows, transposed into the device columns past the shard grid
+        (rows below it on COL_MAJOR), their weights forwarded from the column streams; owners store remotely. The output
+        keeps its shard spec; the second dispatch on fresh shards must hit the program cache."""
+        torch.manual_seed(3)
+        grid = device.compute_with_storage_grid_size()
+        if (grid.x, grid.y) != (11, 10):
+            pytest.skip("pinned to the 11 x 10 grid")
+        (H, W, c_in), c_out, p, s, d = case_hw
+        config = _block_config(H * W, c_in, layout, shard, orientation=orientation)
+        real_select = _op_module.select_blocking
+        seen = []
+
+        def recording(g, work_grid, l1_budget):
+            b = real_select(g, work_grid, l1_budget)
+            seen.append((g.block_rows, b.num_m_groups, b.nslice, b.max_m_blocks_per_core))
+            return b
+
+        monkeypatch.setattr(_op_module, "select_blocking", recording)
+        _run(case_hw, dtype, layout, config, device, with_bias=True, relu=True)
+>       block_rows, groups, nslice, m_blocks = seen[-1]
+E       IndexError: list index out of range
+
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_ring_chain/test_block_sharded_grad.py:489: IndexError
+____ test_conv2d_3x3_block_sharded_spare_groups[HiFi4-k2_d8_co96-tile_bf16] ____
+
+case_hw = ((32, 64, 64), 96, 8, 1, 8), shard = (256, 32)
+orientation = ShardOrientation.ROW_MAJOR, dtype = DataType.BFLOAT16
+layout = Layout.TILE, device = MeshDevice(1x1 grid, 1 devices)
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x7cdb127152a0>
+
+    @pytest.mark.parametrize("dtype,layout", [LAYOUTS[1], LAYOUTS[2]])
+    @pytest.mark.parametrize("case_hw,shard,orientation", SPARE_CASES)
+    def test_conv2d_3x3_block_sharded_spare_groups(case_hw, shard, orientation, dtype, layout, device, monkeypatch):
+        """Spare-column M-groups: more M-groups than grid rows, transposed into the device columns past the shard grid
+        (rows below it on COL_MAJOR), their weights forwarded from the column streams; owners store remotely. The output
+        keeps its shard spec; the second dispatch on fresh shards must hit the program cache."""
+        torch.manual_seed(3)
+        grid = device.compute_with_storage_grid_size()
+        if (grid.x, grid.y) != (11, 10):
+            pytest.skip("pinned to the 11 x 10 grid")
+        (H, W, c_in), c_out, p, s, d = case_hw
+        config = _block_config(H * W, c_in, layout, shard, orientation=orientation)
+        real_select = _op_module.select_blocking
+        seen = []
+
+        def recording(g, work_grid, l1_budget):
+            b = real_select(g, work_grid, l1_budget)
+            seen.append((g.block_rows, b.num_m_groups, b.nslice, b.max_m_blocks_per_core))
+            return b
+
+        monkeypatch.setattr(_op_module, "select_blocking", recording)
+        _run(case_hw, dtype, layout, config, device, with_bias=True, relu=True)
+>       block_rows, groups, nslice, m_blocks = seen[-1]
+E       IndexError: list index out of range
+
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_ring_chain/test_block_sharded_grad.py:489: IndexError
+____ test_conv2d_3x3_block_sharded_spare_groups[HiFi4-k2_d8_co96-tile_bf8b] ____
+
+case_hw = ((32, 64, 64), 96, 8, 1, 8), shard = (256, 32)
+orientation = ShardOrientation.ROW_MAJOR, dtype = DataType.BFLOAT8_B
+layout = Layout.TILE, device = MeshDevice(1x1 grid, 1 devices)
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x7cdb12736740>
+
+    @pytest.mark.parametrize("dtype,layout", [LAYOUTS[1], LAYOUTS[2]])
+    @pytest.mark.parametrize("case_hw,shard,orientation", SPARE_CASES)
+    def test_conv2d_3x3_block_sharded_spare_groups(case_hw, shard, orientation, dtype, layout, device, monkeypatch):
+        """Spare-column M-groups: more M-groups than grid rows, transposed into the device columns past the shard grid
+        (rows below it on COL_MAJOR), their weights forwarded from the column streams; owners store remotely. The output
+        keeps its shard spec; the second dispatch on fresh shards must hit the program cache."""
+        torch.manual_seed(3)
+        grid = device.compute_with_storage_grid_size()
+        if (grid.x, grid.y) != (11, 10):
+            pytest.skip("pinned to the 11 x 10 grid")
+        (H, W, c_in), c_out, p, s, d = case_hw
+        config = _block_config(H * W, c_in, layout, shard, orientation=orientation)
+        real_select = _op_module.select_blocking
+        seen = []
+
+        def recording(g, work_grid, l1_budget):
+            b = real_select(g, work_grid, l1_budget)
+            seen.append((g.block_rows, b.num_m_groups, b.nslice, b.max_m_blocks_per_core))
+            return b
+
+        monkeypatch.setattr(_op_module, "select_blocking", recording)
+        _run(case_hw, dtype, layout, config, device, with_bias=True, relu=True)
+>       block_rows, groups, nslice, m_blocks = seen[-1]
+E       IndexError: list index out of range
+
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_ring_chain/test_block_sharded_grad.py:489: IndexError
+___ test_conv2d_3x3_block_sharded_spare_groups[HiFi4-k2_col_major-tile_bf16] ___
+
+case_hw = ((32, 64, 64), 64, 1, 1, 1), shard = (256, 32)
+orientation = ShardOrientation.COL_MAJOR, dtype = DataType.BFLOAT16
+layout = Layout.TILE, device = MeshDevice(1x1 grid, 1 devices)
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x7cdb127144f0>
+
+    @pytest.mark.parametrize("dtype,layout", [LAYOUTS[1], LAYOUTS[2]])
+    @pytest.mark.parametrize("case_hw,shard,orientation", SPARE_CASES)
+    def test_conv2d_3x3_block_sharded_spare_groups(case_hw, shard, orientation, dtype, layout, device, monkeypatch):
+        """Spare-column M-groups: more M-groups than grid rows, transposed into the device columns past the shard grid
+        (rows below it on COL_MAJOR), their weights forwarded from the column streams; owners store remotely. The output
+        keeps its shard spec; the second dispatch on fresh shards must hit the program cache."""
+        torch.manual_seed(3)
+        grid = device.compute_with_storage_grid_size()
+        if (grid.x, grid.y) != (11, 10):
+            pytest.skip("pinned to the 11 x 10 grid")
+        (H, W, c_in), c_out, p, s, d = case_hw
+        config = _block_config(H * W, c_in, layout, shard, orientation=orientation)
+        real_select = _op_module.select_blocking
+        seen = []
+
+        def recording(g, work_grid, l1_budget):
+            b = real_select(g, work_grid, l1_budget)
+            seen.append((g.block_rows, b.num_m_groups, b.nslice, b.max_m_blocks_per_core))
+            return b
+
+        monkeypatch.setattr(_op_module, "select_blocking", recording)
+        _run(case_hw, dtype, layout, config, device, with_bias=True, relu=True)
+>       block_rows, groups, nslice, m_blocks = seen[-1]
+E       IndexError: list index out of range
+
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_ring_chain/test_block_sharded_grad.py:489: IndexError
+___ test_conv2d_3x3_block_sharded_spare_groups[HiFi4-k2_col_major-tile_bf8b] ___
+
+case_hw = ((32, 64, 64), 64, 1, 1, 1), shard = (256, 32)
+orientation = ShardOrientation.COL_MAJOR, dtype = DataType.BFLOAT8_B
+layout = Layout.TILE, device = MeshDevice(1x1 grid, 1 devices)
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x7cdb12737130>
+
+    @pytest.mark.parametrize("dtype,layout", [LAYOUTS[1], LAYOUTS[2]])
+    @pytest.mark.parametrize("case_hw,shard,orientation", SPARE_CASES)
+    def test_conv2d_3x3_block_sharded_spare_groups(case_hw, shard, orientation, dtype, layout, device, monkeypatch):
+        """Spare-column M-groups: more M-groups than grid rows, transposed into the device columns past the shard grid
+        (rows below it on COL_MAJOR), their weights forwarded from the column streams; owners store remotely. The output
+        keeps its shard spec; the second dispatch on fresh shards must hit the program cache."""
+        torch.manual_seed(3)
+        grid = device.compute_with_storage_grid_size()
+        if (grid.x, grid.y) != (11, 10):
+            pytest.skip("pinned to the 11 x 10 grid")
+        (H, W, c_in), c_out, p, s, d = case_hw
+        config = _block_config(H * W, c_in, layout, shard, orientation=orientation)
+        real_select = _op_module.select_blocking
+        seen = []
+
+        def recording(g, work_grid, l1_budget):
+            b = real_select(g, work_grid, l1_budget)
+            seen.append((g.block_rows, b.num_m_groups, b.nslice, b.max_m_blocks_per_core))
+            return b
+
+        monkeypatch.setattr(_op_module, "select_blocking", recording)
+        _run(case_hw, dtype, layout, config, device, with_bias=True, relu=True)
+>       block_rows, groups, nslice, m_blocks = seen[-1]
+E       IndexError: list index out of range
+
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_ring_chain/test_block_sharded_grad.py:489: IndexError
+_____ test_conv2d_3x3_block_sharded_spare_groups[LoFi-res4_8x8-tile_bf16] ______
+
+case_hw = ((32, 64, 256), 256, 1, 1, 1), shard = (256, 32)
+orientation = ShardOrientation.ROW_MAJOR, dtype = DataType.BFLOAT16
+layout = Layout.TILE, device = MeshDevice(1x1 grid, 1 devices)
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x7cdb0d5e3550>
+
+    @pytest.mark.parametrize("dtype,layout", [LAYOUTS[1], LAYOUTS[2]])
+    @pytest.mark.parametrize("case_hw,shard,orientation", SPARE_CASES)
+    def test_conv2d_3x3_block_sharded_spare_groups(case_hw, shard, orientation, dtype, layout, device, monkeypatch):
+        """Spare-column M-groups: more M-groups than grid rows, transposed into the device columns past the shard grid
+        (rows below it on COL_MAJOR), their weights forwarded from the column streams; owners store remotely. The output
+        keeps its shard spec; the second dispatch on fresh shards must hit the program cache."""
+        torch.manual_seed(3)
+        grid = device.compute_with_storage_grid_size()
+        if (grid.x, grid.y) != (11, 10):
+            pytest.skip("pinned to the 11 x 10 grid")
+        (H, W, c_in), c_out, p, s, d = case_hw
+        config = _block_config(H * W, c_in, layout, shard, orientation=orientation)
+        real_select = _op_module.select_blocking
+        seen = []
+
+        def recording(g, work_grid, l1_budget):
+            b = real_select(g, work_grid, l1_budget)
+            seen.append((g.block_rows, b.num_m_groups, b.nslice, b.max_m_blocks_per_core))
+            return b
+
+        monkeypatch.setattr(_op_module, "select_blocking", recording)
+        _run(case_hw, dtype, layout, config, device, with_bias=True, relu=True)
+>       block_rows, groups, nslice, m_blocks = seen[-1]
+E       IndexError: list index out of range
+
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_ring_chain/test_block_sharded_grad.py:489: IndexError
+_____ test_conv2d_3x3_block_sharded_spare_groups[LoFi-res4_8x8-tile_bf8b] ______
+
+case_hw = ((32, 64, 256), 256, 1, 1, 1), shard = (256, 32)
+orientation = ShardOrientation.ROW_MAJOR, dtype = DataType.BFLOAT8_B
+layout = Layout.TILE, device = MeshDevice(1x1 grid, 1 devices)
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x7cdb1272cd60>
+
+    @pytest.mark.parametrize("dtype,layout", [LAYOUTS[1], LAYOUTS[2]])
+    @pytest.mark.parametrize("case_hw,shard,orientation", SPARE_CASES)
+    def test_conv2d_3x3_block_sharded_spare_groups(case_hw, shard, orientation, dtype, layout, device, monkeypatch):
+        """Spare-column M-groups: more M-groups than grid rows, transposed into the device columns past the shard grid
+        (rows below it on COL_MAJOR), their weights forwarded from the column streams; owners store remotely. The output
+        keeps its shard spec; the second dispatch on fresh shards must hit the program cache."""
+        torch.manual_seed(3)
+        grid = device.compute_with_storage_grid_size()
+        if (grid.x, grid.y) != (11, 10):
+            pytest.skip("pinned to the 11 x 10 grid")
+        (H, W, c_in), c_out, p, s, d = case_hw
+        config = _block_config(H * W, c_in, layout, shard, orientation=orientation)
+        real_select = _op_module.select_blocking
+        seen = []
+
+        def recording(g, work_grid, l1_budget):
+            b = real_select(g, work_grid, l1_budget)
+            seen.append((g.block_rows, b.num_m_groups, b.nslice, b.max_m_blocks_per_core))
+            return b
+
+        monkeypatch.setattr(_op_module, "select_blocking", recording)
+        _run(case_hw, dtype, layout, config, device, with_bias=True, relu=True)
+>       block_rows, groups, nslice, m_blocks = seen[-1]
+E       IndexError: list index out of range
+
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_ring_chain/test_block_sharded_grad.py:489: IndexError
+____ test_conv2d_3x3_block_sharded_spare_groups[LoFi-res5_0_8x10-tile_bf16] ____
+
+case_hw = ((32, 64, 512), 512, 2, 1, 2), shard = (224, 64)
+orientation = ShardOrientation.ROW_MAJOR, dtype = DataType.BFLOAT16
+layout = Layout.TILE, device = MeshDevice(1x1 grid, 1 devices)
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x7cdb0d5ef670>
+
+    @pytest.mark.parametrize("dtype,layout", [LAYOUTS[1], LAYOUTS[2]])
+    @pytest.mark.parametrize("case_hw,shard,orientation", SPARE_CASES)
+    def test_conv2d_3x3_block_sharded_spare_groups(case_hw, shard, orientation, dtype, layout, device, monkeypatch):
+        """Spare-column M-groups: more M-groups than grid rows, transposed into the device columns past the shard grid
+        (rows below it on COL_MAJOR), their weights forwarded from the column streams; owners store remotely. The output
+        keeps its shard spec; the second dispatch on fresh shards must hit the program cache."""
+        torch.manual_seed(3)
+        grid = device.compute_with_storage_grid_size()
+        if (grid.x, grid.y) != (11, 10):
+            pytest.skip("pinned to the 11 x 10 grid")
+        (H, W, c_in), c_out, p, s, d = case_hw
+        config = _block_config(H * W, c_in, layout, shard, orientation=orientation)
+        real_select = _op_module.select_blocking
+        seen = []
+
+        def recording(g, work_grid, l1_budget):
+            b = real_select(g, work_grid, l1_budget)
+            seen.append((g.block_rows, b.num_m_groups, b.nslice, b.max_m_blocks_per_core))
+            return b
+
+        monkeypatch.setattr(_op_module, "select_blocking", recording)
+        _run(case_hw, dtype, layout, config, device, with_bias=True, relu=True)
+>       block_rows, groups, nslice, m_blocks = seen[-1]
+E       IndexError: list index out of range
+
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_ring_chain/test_block_sharded_grad.py:489: IndexError
+____ test_conv2d_3x3_block_sharded_spare_groups[LoFi-res5_0_8x10-tile_bf8b] ____
+
+case_hw = ((32, 64, 512), 512, 2, 1, 2), shard = (224, 64)
+orientation = ShardOrientation.ROW_MAJOR, dtype = DataType.BFLOAT8_B
+layout = Layout.TILE, device = MeshDevice(1x1 grid, 1 devices)
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x7cdb001285b0>
+
+    @pytest.mark.parametrize("dtype,layout", [LAYOUTS[1], LAYOUTS[2]])
+    @pytest.mark.parametrize("case_hw,shard,orientation", SPARE_CASES)
+    def test_conv2d_3x3_block_sharded_spare_groups(case_hw, shard, orientation, dtype, layout, device, monkeypatch):
+        """Spare-column M-groups: more M-groups than grid rows, transposed into the device columns past the shard grid
+        (rows below it on COL_MAJOR), their weights forwarded from the column streams; owners store remotely. The output
+        keeps its shard spec; the second dispatch on fresh shards must hit the program cache."""
+        torch.manual_seed(3)
+        grid = device.compute_with_storage_grid_size()
+        if (grid.x, grid.y) != (11, 10):
+            pytest.skip("pinned to the 11 x 10 grid")
+        (H, W, c_in), c_out, p, s, d = case_hw
+        config = _block_config(H * W, c_in, layout, shard, orientation=orientation)
+        real_select = _op_module.select_blocking
+        seen = []
+
+        def recording(g, work_grid, l1_budget):
+            b = real_select(g, work_grid, l1_budget)
+            seen.append((g.block_rows, b.num_m_groups, b.nslice, b.max_m_blocks_per_core))
+            return b
+
+        monkeypatch.setattr(_op_module, "select_blocking", recording)
+        _run(case_hw, dtype, layout, config, device, with_bias=True, relu=True)
+>       block_rows, groups, nslice, m_blocks = seen[-1]
+E       IndexError: list index out of range
+
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_ring_chain/test_block_sharded_grad.py:489: IndexError
+____ test_conv2d_3x3_block_sharded_spare_groups[LoFi-k2_d8_co96-tile_bf16] _____
+
+case_hw = ((32, 64, 64), 96, 8, 1, 8), shard = (256, 32)
+orientation = ShardOrientation.ROW_MAJOR, dtype = DataType.BFLOAT16
+layout = Layout.TILE, device = MeshDevice(1x1 grid, 1 devices)
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x7cdb127ad990>
+
+    @pytest.mark.parametrize("dtype,layout", [LAYOUTS[1], LAYOUTS[2]])
+    @pytest.mark.parametrize("case_hw,shard,orientation", SPARE_CASES)
+    def test_conv2d_3x3_block_sharded_spare_groups(case_hw, shard, orientation, dtype, layout, device, monkeypatch):
+        """Spare-column M-groups: more M-groups than grid rows, transposed into the device columns past the shard grid
+        (rows below it on COL_MAJOR), their weights forwarded from the column streams; owners store remotely. The output
+        keeps its shard spec; the second dispatch on fresh shards must hit the program cache."""
+        torch.manual_seed(3)
+        grid = device.compute_with_storage_grid_size()
+        if (grid.x, grid.y) != (11, 10):
+            pytest.skip("pinned to the 11 x 10 grid")
+        (H, W, c_in), c_out, p, s, d = case_hw
+        config = _block_config(H * W, c_in, layout, shard, orientation=orientation)
+        real_select = _op_module.select_blocking
+        seen = []
+
+        def recording(g, work_grid, l1_budget):
+            b = real_select(g, work_grid, l1_budget)
+            seen.append((g.block_rows, b.num_m_groups, b.nslice, b.max_m_blocks_per_core))
+            return b
+
+        monkeypatch.setattr(_op_module, "select_blocking", recording)
+        _run(case_hw, dtype, layout, config, device, with_bias=True, relu=True)
+>       block_rows, groups, nslice, m_blocks = seen[-1]
+E       IndexError: list index out of range
+
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_ring_chain/test_block_sharded_grad.py:489: IndexError
+____ test_conv2d_3x3_block_sharded_spare_groups[LoFi-k2_d8_co96-tile_bf8b] _____
+
+case_hw = ((32, 64, 64), 96, 8, 1, 8), shard = (256, 32)
+orientation = ShardOrientation.ROW_MAJOR, dtype = DataType.BFLOAT8_B
+layout = Layout.TILE, device = MeshDevice(1x1 grid, 1 devices)
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x7cdb0d5e19f0>
+
+    @pytest.mark.parametrize("dtype,layout", [LAYOUTS[1], LAYOUTS[2]])
+    @pytest.mark.parametrize("case_hw,shard,orientation", SPARE_CASES)
+    def test_conv2d_3x3_block_sharded_spare_groups(case_hw, shard, orientation, dtype, layout, device, monkeypatch):
+        """Spare-column M-groups: more M-groups than grid rows, transposed into the device columns past the shard grid
+        (rows below it on COL_MAJOR), their weights forwarded from the column streams; owners store remotely. The output
+        keeps its shard spec; the second dispatch on fresh shards must hit the program cache."""
+        torch.manual_seed(3)
+        grid = device.compute_with_storage_grid_size()
+        if (grid.x, grid.y) != (11, 10):
+            pytest.skip("pinned to the 11 x 10 grid")
+        (H, W, c_in), c_out, p, s, d = case_hw
+        config = _block_config(H * W, c_in, layout, shard, orientation=orientation)
+        real_select = _op_module.select_blocking
+        seen = []
+
+        def recording(g, work_grid, l1_budget):
+            b = real_select(g, work_grid, l1_budget)
+            seen.append((g.block_rows, b.num_m_groups, b.nslice, b.max_m_blocks_per_core))
+            return b
+
+        monkeypatch.setattr(_op_module, "select_blocking", recording)
+        _run(case_hw, dtype, layout, config, device, with_bias=True, relu=True)
+>       block_rows, groups, nslice, m_blocks = seen[-1]
+E       IndexError: list index out of range
+
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_ring_chain/test_block_sharded_grad.py:489: IndexError
+___ test_conv2d_3x3_block_sharded_spare_groups[LoFi-k2_col_major-tile_bf16] ____
+
+case_hw = ((32, 64, 64), 64, 1, 1, 1), shard = (256, 32)
+orientation = ShardOrientation.COL_MAJOR, dtype = DataType.BFLOAT16
+layout = Layout.TILE, device = MeshDevice(1x1 grid, 1 devices)
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x7cdb127218d0>
+
+    @pytest.mark.parametrize("dtype,layout", [LAYOUTS[1], LAYOUTS[2]])
+    @pytest.mark.parametrize("case_hw,shard,orientation", SPARE_CASES)
+    def test_conv2d_3x3_block_sharded_spare_groups(case_hw, shard, orientation, dtype, layout, device, monkeypatch):
+        """Spare-column M-groups: more M-groups than grid rows, transposed into the device columns past the shard grid
+        (rows below it on COL_MAJOR), their weights forwarded from the column streams; owners store remotely. The output
+        keeps its shard spec; the second dispatch on fresh shards must hit the program cache."""
+        torch.manual_seed(3)
+        grid = device.compute_with_storage_grid_size()
+        if (grid.x, grid.y) != (11, 10):
+            pytest.skip("pinned to the 11 x 10 grid")
+        (H, W, c_in), c_out, p, s, d = case_hw
+        config = _block_config(H * W, c_in, layout, shard, orientation=orientation)
+        real_select = _op_module.select_blocking
+        seen = []
+
+        def recording(g, work_grid, l1_budget):
+            b = real_select(g, work_grid, l1_budget)
+            seen.append((g.block_rows, b.num_m_groups, b.nslice, b.max_m_blocks_per_core))
+            return b
+
+        monkeypatch.setattr(_op_module, "select_blocking", recording)
+        _run(case_hw, dtype, layout, config, device, with_bias=True, relu=True)
+>       block_rows, groups, nslice, m_blocks = seen[-1]
+E       IndexError: list index out of range
+
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_ring_chain/test_block_sharded_grad.py:489: IndexError
+___ test_conv2d_3x3_block_sharded_spare_groups[LoFi-k2_col_major-tile_bf8b] ____
+
+case_hw = ((32, 64, 64), 64, 1, 1, 1), shard = (256, 32)
+orientation = ShardOrientation.COL_MAJOR, dtype = DataType.BFLOAT8_B
+layout = Layout.TILE, device = MeshDevice(1x1 grid, 1 devices)
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x7cdb0d5eccd0>
+
+    @pytest.mark.parametrize("dtype,layout", [LAYOUTS[1], LAYOUTS[2]])
+    @pytest.mark.parametrize("case_hw,shard,orientation", SPARE_CASES)
+    def test_conv2d_3x3_block_sharded_spare_groups(case_hw, shard, orientation, dtype, layout, device, monkeypatch):
+        """Spare-column M-groups: more M-groups than grid rows, transposed into the device columns past the shard grid
+        (rows below it on COL_MAJOR), their weights forwarded from the column streams; owners store remotely. The output
+        keeps its shard spec; the second dispatch on fresh shards must hit the program cache."""
+        torch.manual_seed(3)
+        grid = device.compute_with_storage_grid_size()
+        if (grid.x, grid.y) != (11, 10):
+            pytest.skip("pinned to the 11 x 10 grid")
+        (H, W, c_in), c_out, p, s, d = case_hw
+        config = _block_config(H * W, c_in, layout, shard, orientation=orientation)
+        real_select = _op_module.select_blocking
+        seen = []
+
+        def recording(g, work_grid, l1_budget):
+            b = real_select(g, work_grid, l1_budget)
+            seen.append((g.block_rows, b.num_m_groups, b.nslice, b.max_m_blocks_per_core))
+            return b
+
+        monkeypatch.setattr(_op_module, "select_blocking", recording)
+        _run(case_hw, dtype, layout, config, device, with_bias=True, relu=True)
+>       block_rows, groups, nslice, m_blocks = seen[-1]
+E       IndexError: list index out of range
+
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_ring_chain/test_block_sharded_grad.py:489: IndexError
+- generated xml file: /localdev/pmilojevic/workspaces/opgen/generated/test_reports/most_recent_tests.xml -
+============================= slowest 25 durations =============================
+0.24s setup    ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_ring_chain/test_block_sharded_grad.py::test_conv2d_3x3_block_sharded[HiFi4-H16_W16_Ci64_Co128_p1_s1_d1-rm_bf16-bias_relu]
+0.05s call     ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_ring_chain/test_block_sharded_grad.py::test_conv2d_3x3_block_sharded_spare_groups[LoFi-res5_0_8x10-tile_bf16]
+0.04s call     ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_ring_chain/test_block_sharded_grad.py::test_conv2d_3x3_block_sharded_spare_groups[HiFi4-res5_0_8x10-tile_bf16]
+0.04s call     ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_ring_chain/test_block_sharded_grad.py::test_conv2d_3x3_block_sharded_spare_groups[LoFi-res5_0_8x10-tile_bf8b]
+0.04s call     ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_ring_chain/test_block_sharded_grad.py::test_conv2d_3x3_block_sharded_spare_groups[HiFi4-res5_0_8x10-tile_bf8b]
+0.03s call     ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_ring_chain/test_block_sharded_grad.py::test_conv2d_3x3_block_sharded_spare_groups[HiFi4-res4_8x8-tile_bf8b]
+0.03s call     ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_ring_chain/test_block_sharded_grad.py::test_conv2d_3x3_block_sharded_spare_groups[HiFi4-res4_8x8-tile_bf16]
+0.02s call     ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_ring_chain/test_block_sharded_grad.py::test_conv2d_3x3_block_sharded_spare_groups[LoFi-res4_8x8-tile_bf16]
+0.02s call     ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_ring_chain/test_block_sharded_grad.py::test_conv2d_3x3_block_sharded_spare_groups[LoFi-res4_8x8-tile_bf8b]
+0.02s teardown ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_ring_chain/test_block_sharded_grad.py::test_conv2d_3x3_block_sharded_spare_groups[LoFi-k2_col_major-tile_bf8b]
+0.02s call     ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_ring_chain/test_block_sharded_grad.py::test_conv2d_3x3_block_sharded[HiFi4-H8_W16_Ci256_Co256_p1_s1_d1-tile_bf16-plain]
+0.01s call     ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_ring_chain/test_block_sharded_grad.py::test_conv2d_3x3_block_sharded_col_major_offset_grid[HiFi4-rm_bf16]
+0.01s call     ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_ring_chain/test_block_sharded_grad.py::test_conv2d_3x3_block_sharded_writer_only_scatter[LoFi-tile_bf8b]
+0.01s call     ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_ring_chain/test_block_sharded_grad.py::test_conv2d_3x3_block_sharded_writer_only_scatter[HiFi4-tile_bf8b]
+0.01s call     ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_ring_chain/test_block_sharded_grad.py::test_conv2d_3x3_block_sharded[LoFi-H8_W16_Ci256_Co256_p1_s1_d1-tile_bf8b-bias_relu]
+0.01s call     ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_ring_chain/test_block_sharded_grad.py::test_conv2d_3x3_block_sharded[LoFi-H8_W16_Ci256_Co256_p1_s1_d1-tile_bf16-bias_relu]
+0.01s call     ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_ring_chain/test_block_sharded_grad.py::test_conv2d_3x3_block_sharded[LoFi-H8_W16_Ci256_Co256_p1_s1_d1-tile_bf16-plain]
+0.01s call     ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_ring_chain/test_block_sharded_grad.py::test_conv2d_3x3_block_sharded_col_major_offset_grid[HiFi4-tile_bf16]
+0.01s call     ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_ring_chain/test_block_sharded_grad.py::test_conv2d_3x3_block_sharded[LoFi-H8_W16_Ci256_Co256_p1_s1_d1-tile_bf8b-plain]
+0.01s call     ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_ring_chain/test_block_sharded_grad.py::test_conv2d_3x3_block_sharded_col_major_offset_grid[HiFi4-tile_bf8b]
+0.01s call     ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_ring_chain/test_block_sharded_grad.py::test_conv2d_3x3_block_sharded_writer_only_scatter[LoFi-rm_bf16]
+0.01s call     ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_ring_chain/test_block_sharded_grad.py::test_conv2d_3x3_block_sharded_col_major_offset_grid[LoFi-rm_bf16]
+0.01s call     ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_ring_chain/test_block_sharded_grad.py::test_conv2d_3x3_block_sharded_col_major_offset_grid[LoFi-tile_bf8b]
+0.01s call     ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_ring_chain/test_block_sharded_grad.py::test_conv2d_3x3_block_sharded_col_major_offset_grid[LoFi-tile_bf16]
+0.01s call     ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_ring_chain/test_block_sharded_grad.py::test_conv2d_3x3_block_sharded[HiFi4-H8_W16_Ci256_Co256_p1_s1_d1-tile_bf8b-bias_relu]
+=========================== short test summary info ============================
+FAILED ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_ring_chain/test_block_sharded_grad.py::test_conv2d_3x3_block_sharded_column_weight_mcast_ragged_row[HiFi4-rm_bf16]
+FAILED ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_ring_chain/test_block_sharded_grad.py::test_conv2d_3x3_block_sharded_column_weight_mcast_ragged_row[HiFi4-tile_bf16]
+FAILED ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_ring_chain/test_block_sharded_grad.py::test_conv2d_3x3_block_sharded_column_weight_mcast_ragged_row[HiFi4-tile_bf8b]
+FAILED ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_ring_chain/test_block_sharded_grad.py::test_conv2d_3x3_block_sharded_column_weight_mcast_ragged_row[LoFi-rm_bf16]
+FAILED ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_ring_chain/test_block_sharded_grad.py::test_conv2d_3x3_block_sharded_column_weight_mcast_ragged_row[LoFi-tile_bf16]
+FAILED ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_ring_chain/test_block_sharded_grad.py::test_conv2d_3x3_block_sharded_column_weight_mcast_ragged_row[LoFi-tile_bf8b]
+FAILED ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_ring_chain/test_block_sharded_grad.py::test_conv2d_3x3_block_sharded_column_weight_mcast_ragged_extended_row[HiFi4-rm_bf16]
+FAILED ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_ring_chain/test_block_sharded_grad.py::test_conv2d_3x3_block_sharded_column_weight_mcast_ragged_extended_row[HiFi4-tile_bf16]
+FAILED ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_ring_chain/test_block_sharded_grad.py::test_conv2d_3x3_block_sharded_column_weight_mcast_ragged_extended_row[HiFi4-tile_bf8b]
+FAILED ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_ring_chain/test_block_sharded_grad.py::test_conv2d_3x3_block_sharded_column_weight_mcast_ragged_extended_row[LoFi-rm_bf16]
+FAILED ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_ring_chain/test_block_sharded_grad.py::test_conv2d_3x3_block_sharded_column_weight_mcast_ragged_extended_row[LoFi-tile_bf16]
+FAILED ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_ring_chain/test_block_sharded_grad.py::test_conv2d_3x3_block_sharded_column_weight_mcast_ragged_extended_row[LoFi-tile_bf8b]
+FAILED ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_ring_chain/test_block_sharded_grad.py::test_conv2d_3x3_block_sharded_spare_groups[HiFi4-res4_8x8-tile_bf16]
+FAILED ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_ring_chain/test_block_sharded_grad.py::test_conv2d_3x3_block_sharded_spare_groups[HiFi4-res4_8x8-tile_bf8b]
+FAILED ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_ring_chain/test_block_sharded_grad.py::test_conv2d_3x3_block_sharded_spare_groups[HiFi4-res5_0_8x10-tile_bf16]
+FAILED ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_ring_chain/test_block_sharded_grad.py::test_conv2d_3x3_block_sharded_spare_groups[HiFi4-res5_0_8x10-tile_bf8b]
+FAILED ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_ring_chain/test_block_sharded_grad.py::test_conv2d_3x3_block_sharded_spare_groups[HiFi4-k2_d8_co96-tile_bf16]
+FAILED ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_ring_chain/test_block_sharded_grad.py::test_conv2d_3x3_block_sharded_spare_groups[HiFi4-k2_d8_co96-tile_bf8b]
+FAILED ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_ring_chain/test_block_sharded_grad.py::test_conv2d_3x3_block_sharded_spare_groups[HiFi4-k2_col_major-tile_bf16]
+FAILED ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_ring_chain/test_block_sharded_grad.py::test_conv2d_3x3_block_sharded_spare_groups[HiFi4-k2_col_major-tile_bf8b]
+FAILED ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_ring_chain/test_block_sharded_grad.py::test_conv2d_3x3_block_sharded_spare_groups[LoFi-res4_8x8-tile_bf16]
+FAILED ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_ring_chain/test_block_sharded_grad.py::test_conv2d_3x3_block_sharded_spare_groups[LoFi-res4_8x8-tile_bf8b]
+FAILED ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_ring_chain/test_block_sharded_grad.py::test_conv2d_3x3_block_sharded_spare_groups[LoFi-res5_0_8x10-tile_bf16]
+FAILED ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_ring_chain/test_block_sharded_grad.py::test_conv2d_3x3_block_sharded_spare_groups[LoFi-res5_0_8x10-tile_bf8b]
+FAILED ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_ring_chain/test_block_sharded_grad.py::test_conv2d_3x3_block_sharded_spare_groups[LoFi-k2_d8_co96-tile_bf16]
+FAILED ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_ring_chain/test_block_sharded_grad.py::test_conv2d_3x3_block_sharded_spare_groups[LoFi-k2_d8_co96-tile_bf8b]
+FAILED ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_ring_chain/test_block_sharded_grad.py::test_conv2d_3x3_block_sharded_spare_groups[LoFi-k2_col_major-tile_bf16]
+FAILED ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_ring_chain/test_block_sharded_grad.py::test_conv2d_3x3_block_sharded_spare_groups[LoFi-k2_col_major-tile_bf8b]
+======================== 28 failed, 88 passed in 12.97s ========================
+2026-11-19 18:42:16.564 | info     |    BuildKernels | JIT cache stats: 8/305 hits (2.6%) [8 cached, 215 build-once dedup, 0 merged artifacts, 0 merged genfiles] (build_cache_telemetry.cpp:362)
+2026-11-19 18:42:16.564 | info     |    BuildKernels | JIT telemetry: 48 registered TelemetryTokens (build_cache_telemetry.cpp:510)
+2026-11-19 18:42:16.615 | info     |          Device | Closing user mode device drivers (tt_cluster.cpp:605)
+2026-11-19 18:42:16.615 | info     |             UMD | Closing devices in cluster (cluster.cpp:1496)
+2026-11-19 18:42:16.969 | info     |             UMD | Closing devices in cluster completed. (cluster.cpp:1506)
+2026-11-19 18:42:16.969 | info     |             UMD | Cluster destructor started. (cluster.cpp:1227)
+2026-11-19 18:42:16.969 | info     |             UMD | Cluster destructor completed. (cluster.cpp:1240)
+========================================
+PRECOMPILE: UP_FRONT_INLINE: collect pass over 116 item(s) took 3.0s
+PRECOMPILE: UP_FRONT_INLINE: compile route local (programs=57, farm_min=10)
+PRECOMPILE: UP_FRONT_COLLECT: 126 ops stashed across 116 bodies -> 57 unique programs (swallowed 28, skipped-capture 0)
+PRECOMPILE: UP_FRONT_COLLECT: fast-shallow from_torch — shape-only=332 fallback=0
+PRECOMPILE: UP_FRONT_COLLECT: 57 collected · 57 built · 0 already compiled in 7.9s (workers=64, errors=0) -> on-disk JIT cache warm
+PRECOMPILE: UP_FRONT_INLINE: compile step took 8.1s; starting the real pass
+PRECOMPILE: UP_FRONT_INLINE: real pass took 1.7s
+SAFE_PYTEST_RESULT: FAIL (pytest exit code: 1; wrapper exit: 1)
+========================================
+SAFE_PYTEST_TOTAL_RUNTIME: 0m21s (21s total, device-lock-acquired -> exit)

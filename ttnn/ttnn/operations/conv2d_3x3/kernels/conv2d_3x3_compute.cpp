@@ -786,6 +786,18 @@ inline void math_k_step(uint32_t idst) {
 
 }  // namespace
 
+// N-slice ring: this core's arrival count (semaphore RING_ARRIVAL_SEM_ID; column my_col - 1's reader writes it behind
+// each row group it forwards here). Dataflow firmware exposes the semaphore base as sem_l1_base; TRISC firmware does
+// not, so the packer reads it from the launch message (BRISC advances launch_msg_rd_ptr only after every RISC of the
+// core finished, so the pointer names this launch throughout).
+inline volatile tt_l1_ptr uint32_t* ring_arrival_count() {
+    const uint32_t rd = *GET_MAILBOX_ADDRESS_DEV(launch_msg_rd_ptr);
+    const volatile tt_l1_ptr kernel_config_msg_t* cfg = &GET_MAILBOX_ADDRESS_DEV(launch[rd])->kernel_config;
+    return reinterpret_cast<volatile tt_l1_ptr uint32_t*>(
+        cfg->kernel_config_base[ProgrammableCoreType::TENSIX] + cfg->sem_offset[ProgrammableCoreType::TENSIX] +
+        RING_ARRIVAL_SEM_ID * L1_ALIGNMENT);
+}
+
 void kernel_main() {
 #ifdef CONV2D_3X3_KW_FOLD
     // kw-fold + output-shift path (conv2d_3x3_kw_fold.hpp); runtime args 3, 4: the core's first output tile-row and
@@ -1132,6 +1144,8 @@ void kernel_main() {
     // rt_valid: the per-M-block args follow the kernel-row masks (ceil(ring groups / 10) words per M-block).
     constexpr uint32_t rt_ring_groups = (block_m_tiles + slice_sb_h - 1) / slice_sb_h;
     [[maybe_unused]] const uint32_t rt_arg_base = 3 + ((rt_ring_groups + 9) / 10) * num_m_blocks_this_core;
+    // N-slice ring: incoming row groups packed onto so far, over all M-blocks (the arrival count each waits for).
+    [[maybe_unused]] uint32_t ring_need = 0;
     for (uint32_t m_block_idx = 0; m_block_idx < num_m_blocks_this_core; ++m_block_idx) {
         [[maybe_unused]] const uint32_t valid_rows =
             rt_valid ? get_arg_val<uint32_t>(rt_arg_base + 2 * m_block_idx) : block_m_tiles;
@@ -1222,18 +1236,19 @@ void kernel_main() {
             // multiplies owner my_col - 1 - j's slice over the whole K (DEST accumulates over K) and packs it into
             // slot k_cols - 1 - j of cb_combine_slots with packer L1 accumulation onto the partial column my_col - 1
             // sent for that owner (step 0 starts the chain: plain pack). The slots are reserved whole, so every pack
-            // is at an absolute offset. Each row group (one matmul subblock row) of a step is gated by the token CB:
-            // the packer reserves a page before packing the group, which the reader frees only once that group's
-            // incoming partial has landed, and pushes it after the pack, which tells the reader the group is ready
-            // to forward to my_col + 1. The last step (own slice) leaves the row's fp32 sum in slot 0, the front of
-            // cb_combine_slots: only the bias add (or a copy) and ReLU remain, packed into the output shard.
+            // is at an absolute offset. Each row group (one matmul subblock row) of a step with an incoming partial
+            // (j >= 1) waits for this core's arrival count, which the reader of column my_col - 1 writes right
+            // behind the group's data, and is pushed as a ring token (4 pages) after its pack, which tells the reader
+            // the group is ready to forward to my_col + 1. The last step (own slice) leaves the row's fp32 sum in
+            // slot 0, the front of cb_combine_slots: only the bias add (or a copy) and ReLU remain, packed into the
+            // output shard.
             // Raw LLK (matmul_block / pack_tile): compute_kernel_lib::matmul_block cannot pack its only K-block
             // with L1 accumulation onto a partial already in L1 (its L1-accumulating pack is "K-block > 0"), nor
-            // gate each subblock row's pack on a CB of another RISC, nor run a shorter last subblock: it takes one
-            // subblock shape per call, which must divide the block. A bm 7 x out_n 2 slice (res5.x) then only gets
-            // 1 x 2 subblocks, and the BH matmul unpacker reads rt + rt * ct tiles per k-step (ct + ct * rt when
-            // rt > ct): 1.5 unpacks per tile-MAC, 19.5 cycles per tile-MAC. 4 x 1 subblocks with a 3-row last group
-            // cost 1.25 / 1.33: 17.5 cycles per tile-MAC, res5.x @ LoFi 45.4 -> 42.2 us (Blackhole p150b).
+            // gate each subblock row's pack on another core's arrival count, nor run a shorter last subblock: it
+            // takes one subblock shape per call, which must divide the block. A bm 7 x out_n 2 slice (res5.x) then
+            // only gets 1 x 2 subblocks, and the BH matmul unpacker reads rt + rt * ct tiles per k-step (ct + ct * rt
+            // when rt > ct): 1.5 unpacks per tile-MAC, 19.5 cycles per tile-MAC. 4 x 1 subblocks with a 3-row last
+            // group cost 1.25 / 1.33: 17.5 cycles per tile-MAC, res5.x @ LoFi 45.4 -> 42.2 us (Blackhole p150b).
             constexpr uint32_t k_tiles = block_k_tiles * num_k_blocks;
             // in0's K: all of it, or (N-slice center taps) taps 0 and 2 of every kernel row.
             constexpr uint32_t in0_k_tiles = k_tiles - (nslice_center ? 3 * c_in_tiles : 0);
@@ -1397,11 +1412,6 @@ void kernel_main() {
                 MaybeDeviceZoneScope("compute_matmul_walk");
                 slots.reserve_back(k_cols * slot_tiles);
                 const uint32_t first = conv2d_3x3::ring_next_real<k_cols, num_owning_cols>(my_col, 0);
-                if (first >= 1 && first < k_cols) {
-                    // The first real step needs an incoming partial: a token the reader holds until it lands.
-                    ring_token.reserve_back(1);
-                    ring_token.push_back(1);
-                }
                 reconfig_data_format(cb_weights, cb_im2col_tiles);
                 pack_reconfig_data_format(cb_combine_slots);
                 ckernel::matmul_block_init(cb_im2col_tiles, cb_weights, false, slice_sb_w, slice_sb_h, k_tiles);
@@ -1443,6 +1453,17 @@ void kernel_main() {
                             init_w = group_w;
                         }
                         ring_token.reserve_back(1);
+                        if (j >= 1) {
+                            // The group's incoming partial landed: column my_col - 1 wrote this core's arrival count
+                            // right behind it. The packer waits for it itself; the matmul runs ahead regardless.
+                            ++ring_need;
+                            PACK(({
+                                volatile tt_l1_ptr uint32_t* arrived = ring_arrival_count();
+                                do {
+                                    invalidate_l1_cache();
+                                } while (*arrived < ring_need);
+                            }));
+                        }
                         // The group's matmuls and packs. ct_group_rows: the group height is a template constant (one
                         // instance per height 1..slice_sb_h), so the r x 1 subblock's unpack / math loops are
                         // specialized (on the balanced split's ranges; with runtime dims a 1-row group costs nearly a

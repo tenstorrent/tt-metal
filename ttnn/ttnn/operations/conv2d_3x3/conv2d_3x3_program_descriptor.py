@@ -68,8 +68,11 @@ CB_INPUT_TILES = 7
 CB_COMBINE_SLOTS = 8
 CB_COMBINED = 9
 # N-slice-outer ring: one 16 B page per packed row group, compute (packer) -> reader (see conv2d_3x3_nslice_order.hpp).
+# Four pages: the packer runs up to four groups ahead of the reader's forwards, and the reader keeps the arrival count
+# it writes behind each forward in one of the first four pages (one per transaction id in rotation).
 CB_RING_TOKEN = 10
 RING_TOKEN_BYTES = 16
+RING_TOKEN_PAGES = 4
 # Tap-major only: 32 zero pixels, so an out-of-image tap run is one read instead of one per 512 B MEM_ZEROS chunk.
 CB_ZERO_SRC = 11
 # Center-tap direct in0 (see CENTER_TAP_DIRECT): the kw = 1 K-blocks' input tiles, copied by the reader.
@@ -1002,7 +1005,7 @@ def _footprint(
         + bm * (g.tensor_k_tiles if nslice else bk) * g.in0_tile_bytes
         + weight_depth * (g.tensor_k_tiles * ns if nslice else bk * bn) * g.weight_tile_bytes
         + (ns * g.weight_tile_bytes if g.has_bias else 0)
-        + (RING_TOKEN_BYTES + TILE_BYTES_FP32 if nslice else bm * bn * TILE_BYTES_FP32)
+        + (RING_TOKEN_PAGES * RING_TOKEN_BYTES + TILE_BYTES_FP32 if nslice else bm * bn * TILE_BYTES_FP32)
         + combine_bytes
         + (
             bm * ns * g.out_tile_bytes
@@ -2171,7 +2174,7 @@ def create_program_descriptor(
         input_tile_pages = input_ring_batches * b.untilize_batch_rows * g.c_in_tiles
         cbs.append(_cb(CB_INPUT_TILES, input_tensor.dtype, g.in0_tile_bytes, input_tile_pages, cores))
     if b.nslice:
-        cbs.append(_cb(CB_RING_TOKEN, ttnn.float32, RING_TOKEN_BYTES, 1, cores))
+        cbs.append(_cb(CB_RING_TOKEN, ttnn.float32, RING_TOKEN_BYTES, RING_TOKEN_PAGES, cores))
     if tap_major_im2col(g, b):
         cbs.append(_cb(CB_ZERO_SRC, ttnn.bfloat16, pixel_bytes, TILE, cores))
     # kw-fold has no gather (its reader only fills the slab) and owns CB_SRC_TABLE as its ACC-ready token.
@@ -2878,6 +2881,9 @@ def create_program_descriptor(
         [("RING_OWNER_MASK", f"{sum(1 << c for c in ring_owners)}u")] if ring_owners is not None else []
     )
     _wide_short_defines = [("RING_WIDE_SHORT_GROUP", "1")] if ct_group_rows else []
+    # N-slice ring: the packer waits for its incoming partials on the arrival count itself (see the reader's
+    # nslice_outer forwarding). Only a semaphore id: harmless where the walk is not compiled.
+    _ring_arrival_defines = [("RING_ARRIVAL_SEM_ID", str(SEM_COMBINE_ARRIVAL))]
     _s2_dm_defines = [("CONV2D_3X3_S2_TAPS", "1")] if s2_taps else []
     _s2_compute_defines = (
         [
@@ -2946,7 +2952,8 @@ def create_program_descriptor(
         + _ring_owner_defines
         + _sd_compute_defines
         + _wide_short_defines
-        + _s2_compute_defines,
+        + _s2_compute_defines
+        + _ring_arrival_defines,
         config=ttnn.ComputeConfigDescriptor(
             math_fidelity=compute_kernel_config.math_fidelity,
             math_approx_mode=compute_kernel_config.math_approx_mode,
