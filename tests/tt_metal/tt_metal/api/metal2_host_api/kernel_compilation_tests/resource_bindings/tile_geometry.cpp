@@ -290,6 +290,7 @@ TEST_P(BindingTokenCustomFaceWidth, CPU_ScratchpadGeometry) {
     const GeometryCase geometry = GetParam();
     const std::string source = MakeNonPublicCustomFaceQuerySource(geometry, "scratch::pad");
     ProgramSpec spec = MakeNonPublicGeometryProgramSpec(geometry, source);
+    // TODO(#66336): Divergent behavior between metal 1.0 vs metal 2.0
     spec.dataflow_buffers[0].tile_format_metadata.reset();
     EXPECT_NO_THROW(MakeProgramFromSpec(fixture_device(), spec));
 }
@@ -299,6 +300,7 @@ TEST_P(BindingTokenCustomFaceWidth, CPU_TensorGeometry) {
     const GeometryCase geometry = GetParam();
     const std::string source = MakeNonPublicCustomFaceQuerySource(geometry, "tensor::local");
     ProgramSpec spec = MakeNonPublicGeometryProgramSpec(geometry, source);
+    // TODO(#66336): Divergent behavior between metal 1.0 vs metal 2.0
     spec.dataflow_buffers[0].tile_format_metadata.reset();
     EXPECT_NO_THROW(MakeProgramFromSpec(fixture_device(), spec));
 }
@@ -307,6 +309,7 @@ TEST_P(BindingTokenCustomFaceWidth, CPU_TensorGeometry) {
 TEST_P(BindingTokenCustomFaceWidth, CPU_ScratchpadTileShape) {
     const GeometryCase geometry = GetParam();
     ProgramSpec spec = MakeNonPublicGeometryProgramSpec(geometry, "void kernel_main() {}");
+    // TODO(#66336): Divergent behavior between metal 1.0 vs metal 2.0
     spec.dataflow_buffers[0].tile_format_metadata.reset();
     spec.kernels[1].source =
         KernelSpec::SourceCode{MakeNonPublicTileShapeQuerySource(geometry, "::get_tile_shape(scratch::pad)")};
@@ -317,6 +320,7 @@ TEST_P(BindingTokenCustomFaceWidth, CPU_ScratchpadTileShape) {
 TEST_P(BindingTokenCustomFaceWidth, CPU_TensorBindingTileShape) {
     const GeometryCase geometry = GetParam();
     ProgramSpec spec = MakeNonPublicGeometryProgramSpec(geometry, "void kernel_main() {}");
+    // TODO(#66336): Divergent behavior between metal 1.0 vs metal 2.0
     spec.dataflow_buffers[0].tile_format_metadata.reset();
     spec.kernels[1].source = KernelSpec::SourceCode{
         MakeNonPublicTileShapeQuerySource(geometry, "tensor_accessor::get_tile_shape(tensor::local)")};
