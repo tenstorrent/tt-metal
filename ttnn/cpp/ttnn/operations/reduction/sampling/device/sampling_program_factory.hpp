@@ -6,6 +6,7 @@
 
 #include "ttnn/device_operation.hpp"
 #include "ttnn/metal_v2_artifacts.hpp"
+#include "ttnn/command_list_params.hpp"
 #include "ttnn/operations/reduction/sampling/device/sampling_device_operation_types.hpp"
 
 namespace ttnn::prim {
@@ -13,6 +14,11 @@ namespace ttnn::prim {
 struct SamplingProgramFactory {
     static ttnn::device_operation::ProgramArtifacts create_program_artifacts(
         const SamplingParams& operation_attributes, const SamplingInputs& tensor_args, Tensor& output_tensor);
+    static ttnn::command_list::CmdListBindings map_cmd_list_parameters(
+        const SamplingParams&,
+        const SamplingInputs&,
+        const tt::tt_metal::ProgramSpec&,
+        const tt::tt_metal::ProgramRunArgs&);
 };
 
 }  // namespace ttnn::prim
