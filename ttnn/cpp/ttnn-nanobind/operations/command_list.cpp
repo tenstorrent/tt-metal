@@ -13,8 +13,11 @@
 
 #include <nanobind/nanobind.h>
 #include <nanobind/stl/optional.h>
+#include <nanobind/stl/shared_ptr.h>
 #include <nanobind/stl/string.h>
+#include <nanobind/stl/vector.h>
 
+#include <tt-metalium/experimental/prefetcher_pipe.hpp>
 #include <tt-metalium/mesh_device.hpp>
 
 #include "ttnn/command_list.hpp"
@@ -36,7 +39,7 @@ CmdListValue to_value(nb::handle value) {
         return nb::cast<ttnn::Tensor>(value);
     }
     if (PyBool_Check(value.ptr())) {
-        throw nb::type_error("Command-list values must be ttnn.Tensor, float, or int, not bool");
+        throw nb::type_error("Command-list values must be ttnn.Tensor, float, int, or a PrefetcherPipe list, not bool");
     }
     if (PyFloat_Check(value.ptr())) {
         return CmdListScalar{nb::cast<double>(value)};
@@ -44,7 +47,10 @@ CmdListValue to_value(nb::handle value) {
     if (PyLong_Check(value.ptr())) {
         return CmdListScalar{nb::cast<int64_t>(value)};
     }
-    throw nb::type_error("Command-list values must be ttnn.Tensor, float, or int");
+    if (nb::isinstance<nb::list>(value)) {
+        return nb::cast<ttnn::PrefetcherPipeList>(value);
+    }
+    throw nb::type_error("Command-list values must be ttnn.Tensor, float, int, or a PrefetcherPipe list");
 }
 
 // A str, or a ttnn.CmdListParam (read through its name, so the class can stay Python).
@@ -62,8 +68,9 @@ void py_module_types(nb::module_& mod) {
         Outputs are allocated but hold stale data until a built list replays. Host reads and writes, and other calls
         that are not device operations, such as global semaphore resets, still run immediately and are not recorded.
         Calls whose meaning depends on recorded work raise: ``ttnn.record_event``, ``ttnn.wait_for_event``,
-        ``CommandList.enqueue()``, ``ttnn.experimental.queue_tensor_prefetcher_request`` and
-        ``ttnn.experimental.queue_tensor_prefetcher_wait_for_signal``. Ops on other threads run normally.
+        ``CommandList.enqueue()`` and ``ttnn.experimental.queue_tensor_prefetcher_wait_for_signal``.
+        ``ttnn.experimental.queue_tensor_prefetcher_request`` is recorded, and every replay re-sends it. Ops on other
+        threads run normally.
 
         Only Metal 2.0 (ProgramSpec) operations can be recorded; any other operation raises, naming the operation.
         No warm-up run is needed: recording compiles each workload and uploads its kernel binaries.
@@ -174,13 +181,15 @@ void py_module_types(nb::module_& mod) {
             R"doc(
                 Sets the values later replays use for TTNN command-list parameters.
 
-                Raises before writing anything if a name is unknown, a value has the wrong kind (tensor or scalar),
-                or a value cannot be encoded for its kernel argument. A replacement tensor must match the recorded
-                tensor's spec.
+                Raises before writing anything if a name is unknown, a value has the wrong kind (tensor, scalar, or
+                PrefetcherPipe list), or a value cannot be encoded for its kernel argument. A replacement tensor must
+                match the recorded tensor's spec. A replacement PrefetcherPipe list must be as long as the recorded
+                one, and each pipe must have its recorded pipe's geometry. The recorded Tensor prefetcher requests on
+                the old pipes move with them. Pipes are not retained.
 
                 Args:
                     values (dict): New values keyed by ``ttnn.CmdListParam`` or its name. Each value is
-                        a ``ttnn.Tensor``, ``float``, or ``int``.
+                        a ``ttnn.Tensor``, ``float``, ``int``, or list of ``ttnn.experimental.PrefetcherPipe``.
 
                 Keyword Args:
                     blocking (bool): Whether to wait for the update to reach the device. Defaults to ``False``.

@@ -17,7 +17,8 @@ class CmdListParam:
     parameter is recorded with ``default`` and logs a warning.
 
     Args:
-        default (ttnn.Tensor | float | int): Value the op is called and recorded with.
+        default (ttnn.Tensor | float | int | list[ttnn.experimental.PrefetcherPipe]): Value the op is called and
+            recorded with.
         name (str): Key for ``ttnn.CommandList.update_args``. Ops passed the same name share one
             parameter.
     """
@@ -29,8 +30,16 @@ class CmdListParam:
     def __init__(self, default, name):
         if not isinstance(name, str) or not name:
             raise ValueError("CmdListParam name must be a non-empty string")
-        if isinstance(default, bool) or not isinstance(default, (ttnn.Tensor, float, int)):
-            raise TypeError("CmdListParam default must be a ttnn.Tensor, float, or int")
+        is_pipe_list = (
+            isinstance(default, list)
+            and len(default) > 0
+            and all(isinstance(pipe, ttnn.experimental.PrefetcherPipe) for pipe in default)
+        )
+        if isinstance(default, bool) or not (is_pipe_list or isinstance(default, (ttnn.Tensor, float, int))):
+            raise TypeError(
+                "CmdListParam default must be a ttnn.Tensor, float, int, or non-empty list of "
+                "ttnn.experimental.PrefetcherPipe"
+            )
         self.default = default
         self.name = name
         CmdListParam.any_created = True

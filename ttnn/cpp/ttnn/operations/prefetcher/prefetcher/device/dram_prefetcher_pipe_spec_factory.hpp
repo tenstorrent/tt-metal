@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include "ttnn/command_list_params.hpp"
 #include "ttnn/metal_v2_artifacts.hpp"
 
 #include "dram_prefetcher_device_operation_types.hpp"
@@ -22,6 +23,13 @@ struct DramPrefetcherPipeSpecFactory {
         const DramPrefetcherParams& operation_attributes,
         const DramPrefetcherInputs& tensor_args,
         Tensor& tensor_return_value);
+
+    // Binds keyword prefetcher_pipes, so a command list can move the prefetcher to other pipes.
+    static ttnn::command_list::CmdListBindings map_cmd_list_parameters(
+        const DramPrefetcherParams& operation_attributes,
+        const DramPrefetcherInputs& tensor_args,
+        const tt::tt_metal::ProgramSpec& spec,
+        const tt::tt_metal::ProgramRunArgs& run_params);
 };
 
 }  // namespace ttnn::prim

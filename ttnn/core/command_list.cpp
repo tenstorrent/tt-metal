@@ -4,6 +4,8 @@
 
 #include "ttnn/command_list.hpp"
 
+#include <algorithm>
+#include <array>
 #include <bit>
 #include <cmath>
 #include <exception>
@@ -16,6 +18,8 @@
 #include <tt_stl/assert.hpp>
 #include <tt_stl/fmt.hpp>
 #include <tt-metalium/bfloat16.hpp>
+#include <tt-metalium/experimental/command_list.hpp>
+#include <tt-metalium/experimental/prefetcher_pipe.hpp>
 #include <tt-metalium/float8.hpp>
 #include <tt-metalium/mesh_command_queue.hpp>
 
@@ -82,12 +86,25 @@ struct RecordedScalar {
     std::variant<metal::CmdListRuntimeArgInfo, metal::CmdListCommonRuntimeArgInfo> info;
 };
 
+struct RecordedPipe {
+    std::string name;       // TTNN param
+    std::size_t index;      // into the TTNN param's PrefetcherPipeList
+    std::size_t list_size;  // of that PrefetcherPipeList
+    metal::experimental::CmdListPrefetcherPipeArgInfo info;
+};
+
 struct RecordedParameters {
     std::vector<RecordedTensor> tensors;
     std::vector<RecordedScalar> scalars;
+    std::vector<RecordedPipe> pipes;
 };
 
 namespace {
+
+// The Metal param fed by element `index` of TTNN param `name`.
+std::string metal_pipe_param_name(const std::string& name, std::size_t index) {
+    return fmt::format("{}/{}", name, index);
+}
 
 bool binds_keyword(const auto& bindings, const std::string& invoke_name) {
     return std::any_of(
@@ -183,6 +200,57 @@ bool match_scalar_bind(
     return matched;
 }
 
+// Returns whether the program binds the keyword.
+bool match_pipe_bind(
+    const device_operation::detail::CmdListProgramBindings& program,
+    const CmdListBind& bind,
+    const PrefetcherPipeList& pipes,
+    RecordedParameters& recorded) {
+    bool matched = false;
+    for (const auto& binding : program.bindings->prefetcher_pipes) {
+        if (binding.invoke_name != bind.invoke_name) {
+            continue;
+        }
+        const auto& names = binding.program_spec_param_names;
+        TT_FATAL(
+            names.size() <= pipes.size(),
+            "CmdListParam '{}' passed as '{}' holds {} pipes, but {} binds {}",
+            bind.name,
+            bind.invoke_name,
+            pipes.size(),
+            program.bindings->factory_name,
+            names.size());
+        for (std::size_t i = 0; i < names.size(); ++i) {
+            const auto bound = std::find_if(program.bound_pipes.begin(), program.bound_pipes.end(), [&](const auto& b) {
+                return b.first == names[i];
+            });
+            TT_FATAL(
+                bound != program.bound_pipes.end(),
+                "{} binds keyword '{}' to PrefetcherPipeParameter '{}', which the program does not bind",
+                program.bindings->factory_name,
+                bind.invoke_name,
+                names[i]);
+            // update_args moves element i, so the program must read element i itself.
+            TT_FATAL(
+                bound->second == pipes[i].get(),
+                "CmdListParam '{}' passed as '{}' is not the pipe list the device operation reads: "
+                "PrefetcherPipeParameter '{}' of {} is not bound to element {}",
+                bind.name,
+                bind.invoke_name,
+                names[i],
+                program.bindings->factory_name,
+                i);
+            recorded.pipes.push_back(
+                {.name = bind.name,
+                 .index = i,
+                 .list_size = pipes.size(),
+                 .info = {.program = *program.program, .param_name = names[i]}});
+        }
+        matched = true;
+    }
+    return matched;
+}
+
 // Matches one bind against one program's bindings and appends what matches. Returns whether the program binds the
 // bind's keyword.
 bool match_cmd_list_bind(
@@ -191,21 +259,30 @@ bool match_cmd_list_bind(
     const CmdListBind& bind,
     RecordedParameters& recorded) {
     const CmdListBindings& bindings = *program.bindings;
-    if (const auto* tensor = std::get_if<Tensor>(&bind.value)) {
+    // Indexed like CmdListValue.
+    constexpr std::array<std::string_view, 3> value_kinds = {"a tensor", "a scalar", "a PrefetcherPipe list"};
+    constexpr std::array<std::string_view, 3> binding_kinds = {"tensors", "scalars", "PrefetcherPipes"};
+    const std::array<bool, 3> bound = {
+        binds_keyword(bindings.tensors, bind.invoke_name),
+        binds_keyword(bindings.scalars, bind.invoke_name),
+        binds_keyword(bindings.prefetcher_pipes, bind.invoke_name)};
+    const std::size_t kind = bind.value.index();
+    for (std::size_t other = 0; other < bound.size(); ++other) {
         TT_FATAL(
-            !binds_keyword(bindings.scalars, bind.invoke_name),
-            "CmdListParam '{}' is a tensor, but {} binds keyword '{}' to scalars",
+            other == kind || !bound[other],
+            "CmdListParam '{}' is {}, but {} binds keyword '{}' to {}",
             bind.name,
+            value_kinds[kind],
             bindings.factory_name,
-            bind.invoke_name);
+            bind.invoke_name,
+            binding_kinds[other]);
+    }
+    if (const auto* tensor = std::get_if<Tensor>(&bind.value)) {
         return match_tensor_bind(program, bind, *tensor, recorded);
     }
-    TT_FATAL(
-        !binds_keyword(bindings.tensors, bind.invoke_name),
-        "CmdListParam '{}' is a scalar, but {} binds keyword '{}' to tensors",
-        bind.name,
-        bindings.factory_name,
-        bind.invoke_name);
+    if (const auto* pipes = std::get_if<PrefetcherPipeList>(&bind.value)) {
+        return match_pipe_bind(program, bind, *pipes, recorded);
+    }
     return match_scalar_bind(program, program_number, bind, recorded);
 }
 
@@ -425,6 +502,29 @@ CmdListBinder::Param& CmdListBinder::Param::common_runtime(
     return *this;
 }
 
+void CmdListBinder::prefetcher_pipes(
+    std::string_view invoke_name,
+    std::vector<tt::tt_metal::experimental::PrefetcherPipeParamName> program_spec_param_names) {
+    TT_FATAL(!invoke_name.empty(), "CmdListBinder::prefetcher_pipes: invoke_name must not be empty");
+    TT_FATAL(!program_spec_param_names.empty(), "CmdListBinder::prefetcher_pipes: '{}' binds no pipe", invoke_name);
+    const auto& parameters = spec_.advanced_options.prefetcher_pipe_parameters;
+    for (const auto& name : program_spec_param_names) {
+        TT_FATAL(
+            std::any_of(
+                parameters.begin(),
+                parameters.end(),
+                [&](const auto& parameter) { return parameter.unique_id == name; }),
+            "CmdListBinder: the ProgramSpec has no PrefetcherPipeParameter '{}'",
+            name);
+        TT_FATAL(
+            bound_pipes_.insert(name.get()).second,
+            "CmdListBinder: PrefetcherPipeParameter '{}' is already bound",
+            name);
+    }
+    bindings_.prefetcher_pipes.push_back(
+        {.invoke_name = std::string(invoke_name), .program_spec_param_names = std::move(program_spec_param_names)});
+}
+
 CmdListBindings CmdListBinder::finish() {
     for (const auto& scalar : bindings_.scalars) {
         TT_FATAL(
@@ -521,15 +621,39 @@ void CommandListBuilder::record(
     }
     auto layout = layout_;
     metal::CmdListParameters metal_parameters;
+    const auto check_one_kind = [](const detail::CmdListParamLayout& entry, const std::string& name) {
+        const int kinds = int{entry.is_tensor} + int{!entry.metal_scalars.empty()} + int{!entry.pipe_bound.empty()};
+        TT_FATAL(
+            kinds <= 1,
+            "CmdListParam '{}' is used as more than one of a tensor, a scalar, and a PrefetcherPipe list",
+            name);
+    };
     for (const auto& tensor : parameters.tensors) {
         auto& entry = layout[tensor.name];
-        TT_FATAL(entry.metal_scalars.empty(), "CmdListParam '{}' is used as both a tensor and a scalar", tensor.name);
         entry.is_tensor = true;
+        check_one_kind(entry, tensor.name);
         metal_parameters.tensor_parameters[metal::CmdListTensorArgName(tensor.name)].push_back(tensor.info);
+    }
+    for (const auto& pipe : parameters.pipes) {
+        auto& entry = layout[pipe.name];
+        if (entry.pipe_bound.empty()) {
+            entry.pipe_bound.resize(pipe.list_size, false);
+        }
+        check_one_kind(entry, pipe.name);
+        TT_FATAL(
+            entry.pipe_bound.size() == pipe.list_size,
+            "CmdListParam '{}' was recorded with {} pipes and now with {}",
+            pipe.name,
+            entry.pipe_bound.size(),
+            pipe.list_size);
+        entry.pipe_bound[pipe.index] = true;
+        metal_parameters.advanced_options
+            .prefetcher_pipe_parameters[metal::experimental::CmdListPrefetcherPipeArgName(
+                detail::metal_pipe_param_name(pipe.name, pipe.index))]
+            .push_back(pipe.info);
     }
     for (const auto& scalar : parameters.scalars) {
         auto& entry = layout[scalar.name];
-        TT_FATAL(!entry.is_tensor, "CmdListParam '{}' is used as both a tensor and a scalar", scalar.name);
         auto metal_scalar =
             std::find_if(entry.metal_scalars.begin(), entry.metal_scalars.end(), [&](const auto& candidate) {
                 return candidate.metal_cmd_list_param_name == scalar.metal_cmd_list_param_name;
@@ -539,6 +663,7 @@ void CommandListBuilder::record(
                 {.metal_cmd_list_param_name = scalar.metal_cmd_list_param_name, .encode = scalar.encode});
             metal_scalar = std::prev(entry.metal_scalars.end());
         }
+        check_one_kind(entry, scalar.name);
         if (const auto* info = std::get_if<metal::CmdListRuntimeArgInfo>(&scalar.info)) {
             metal_scalar->has_runtime = true;
             metal_parameters.runtime_parameters[metal::CmdListRuntimeArgName(scalar.metal_cmd_list_param_name)]
@@ -557,6 +682,13 @@ void CommandListBuilder::record(
     }
 }
 
+void CommandListBuilder::add_tensor_prefetcher_request(
+    const PrefetcherPipeRefList& prefetcher_pipes,
+    ttsl::optional_reference<const tt::tt_metal::distributed::MeshCoordinateRangeSet> device_subset,
+    const std::vector<tt::tt_metal::experimental::TensorPrefetcherInput>& input_tensors) {
+    metal::experimental::AddTensorPrefetcherRequest(metal_builder_, prefetcher_pipes, device_subset, input_tensors);
+}
+
 void CommandListBuilder::push_binds(std::string op_name, std::vector<CmdListBind> binds) {
     TT_FATAL(recording_, "{}: CmdListParams need a recording TTNN CommandListBuilder", op_name);
     for (const auto& bind : binds) {
@@ -566,6 +698,13 @@ void CommandListBuilder::push_binds(std::string op_name, std::vector<CmdListBind
             TT_FATAL(
                 is_device_tensor(*tensor) && tensor->is_allocated(),
                 "{}: CmdListParam '{}' must be an allocated device tensor",
+                op_name,
+                bind.name);
+        }
+        if (const auto* pipes = std::get_if<PrefetcherPipeList>(&bind.value)) {
+            TT_FATAL(
+                !pipes->empty() && std::all_of(pipes->begin(), pipes->end(), [](const auto& pipe) { return pipe; }),
+                "{}: CmdListParam '{}' must be a non-empty list of PrefetcherPipes",
                 op_name,
                 bind.name);
         }
@@ -592,7 +731,8 @@ void CommandListBuilder::pop_binds(bool warn) {
             tt::LogOp,
             "{}: CmdListParam(s) {} did not reach any recorded program field, so the op was recorded with their "
             "defaults and update_args cannot change them. To support them, the op's program factory must map the "
-            "keyword in map_cmd_list_parameters: binder.tensor for tensors, binder.param for scalars.",
+            "keyword in map_cmd_list_parameters: binder.tensor for tensors, binder.param for scalars, "
+            "binder.prefetcher_pipes for PrefetcherPipe lists.",
             scope.op_name,
             unclaimed);
     }
@@ -622,6 +762,25 @@ void CommandList::update_args(const std::unordered_map<std::string, CmdListValue
             patch.tensor_args.emplace(metal::CmdListTensorArgName(name), std::cref(tensor->mesh_tensor()));
             continue;
         }
+        if (const auto& pipe_bound = it->second.pipe_bound; !pipe_bound.empty()) {
+            const auto* pipes = std::get_if<PrefetcherPipeList>(&value);
+            TT_FATAL(pipes != nullptr, "TTNN command-list parameter '{}' is a PrefetcherPipe list", name);
+            TT_FATAL(
+                pipes->size() == pipe_bound.size(),
+                "TTNN command-list parameter '{}' was recorded with {} pipes, got {}",
+                name,
+                pipe_bound.size(),
+                pipes->size());
+            for (std::size_t i = 0; i < pipes->size(); ++i) {
+                TT_FATAL((*pipes)[i] != nullptr, "TTNN command-list parameter '{}' has a null pipe", name);
+                if (pipe_bound[i]) {
+                    patch.advanced_options.prefetcher_pipe_args.emplace(
+                        metal::experimental::CmdListPrefetcherPipeArgName(detail::metal_pipe_param_name(name, i)),
+                        metal::experimental::PrefetcherPipeArgument{*(*pipes)[i]});
+                }
+            }
+            continue;
+        }
         const auto* scalar = std::get_if<CmdListScalar>(&value);
         TT_FATAL(scalar != nullptr, "TTNN command-list parameter '{}' is a scalar", name);
         for (const auto& metal_scalar : it->second.metal_scalars) {
@@ -643,5 +802,18 @@ void CommandList::deallocate() { metal_list_.deallocate(); }
 tt::tt_metal::distributed::MeshDevice& CommandList::device() const { return metal_list_.device(); }
 
 QueueId CommandList::cq_id() const { return QueueId(metal_list_.cq_id()); }
+
+void record_tensor_prefetcher_request(
+    tt::tt_metal::distributed::MeshDevice& mesh_device,
+    const PrefetcherPipeRefList& prefetcher_pipes,
+    ttsl::optional_reference<const tt::tt_metal::distributed::MeshCoordinateRangeSet> device_subset,
+    const std::vector<tt::tt_metal::experimental::TensorPrefetcherInput>& input_tensors) {
+    auto* builder = t_recording;
+    TT_FATAL(builder != nullptr, "record_tensor_prefetcher_request: no CommandListBuilder is recording on this thread");
+    TT_FATAL(
+        &builder->device() == &mesh_device,
+        "queue_tensor_prefetcher_request runs on a different MeshDevice than the recording CommandListBuilder");
+    builder->add_tensor_prefetcher_request(prefetcher_pipes, device_subset, input_tensors);
+}
 
 }  // namespace ttnn::command_list

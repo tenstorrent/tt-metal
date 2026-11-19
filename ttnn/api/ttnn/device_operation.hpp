@@ -205,7 +205,7 @@ inline void log_operation(
 #endif
 
 // Records `workload` into the calling thread's TTNN CommandListBuilder. With binds pushed and a spec-adapter
-// workload, first collects each program's stored CmdListBindings and the tensors this call binds.
+// workload, first collects each program's stored CmdListBindings and the tensors and pipes this call binds.
 template <DeviceOperationWithMeshDeviceAdapter mesh_device_operation_t>
 [[gnu::noinline]] void record_mesh_workload(
     const typename mesh_device_operation_t::operation_attributes_t& operation_attributes,
@@ -227,13 +227,19 @@ template <DeviceOperationWithMeshDeviceAdapter mesh_device_operation_t>
         if (!sv.cmd_list_bindings) {
             continue;
         }
-        CmdListProgramBindings& entry = programs.emplace_back(
-            CmdListProgramBindings{.program = &program, .bindings = sv.cmd_list_bindings.get(), .bound_tensors = {}});
+        CmdListProgramBindings& entry = programs.emplace_back(CmdListProgramBindings{
+            .program = &program, .bindings = sv.cmd_list_bindings.get(), .bound_tensors = {}, .bound_pipes = {}});
         for (const auto& binding : sv.bindings) {
             entry.bound_tensors.emplace_back(
                 binding.tensor_parameter_name,
                 &mesh_device_operation_t::SpecBindingSupport::bound_mesh_tensor(
                     sv, io_mesh_tensors, binding.tensor_idx));
+        }
+        if constexpr (mesh_device_operation_t::SpecBindingSupport::attrs_hold_prefetcher_pipes) {
+            for (const auto& binding : sv.pipe_bindings) {
+                entry.bound_pipes.emplace_back(
+                    binding.pipe_parameter_name, operation_attributes.prefetcher_pipes.at(binding.pipe_idx).get());
+            }
         }
     }
     record_to_command_list(operation_name, mesh_device, workload, programs);

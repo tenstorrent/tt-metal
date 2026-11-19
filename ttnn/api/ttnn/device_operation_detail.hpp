@@ -12,6 +12,7 @@
 #include <vector>
 
 #include <tt-metalium/workload/specification/tensor_parameter.hpp>
+#include <tt-metalium/experimental/metal2_host_api/prefetcher_pipe_parameter.hpp>
 #include <tt-metalium/mesh_coord.hpp>
 #include <tt_stl/small_vector.hpp>
 #include <ttnn/distributed/distributed_configs.hpp>
@@ -29,6 +30,10 @@ class MeshTensor;
 class Program;
 class TensorTopology;
 }  // namespace tt::tt_metal
+
+namespace tt::tt_metal::experimental {
+class PrefetcherPipe;
+}  // namespace tt::tt_metal::experimental
 
 namespace tt::tt_metal::distributed {
 class MeshDevice;
@@ -103,12 +108,16 @@ void throw_if_recording_command_list(std::string_view call_name);
 // True while TTNN command-list parameter binds are pushed on the calling thread (ttnn/command_list_params.hpp).
 bool has_active_cmd_list_binds();
 
-// A program of a workload being recorded, with the bindings its factory stored on the cache miss and the tensor this
-// call binds to each of its TensorParameters.
+// A program of a workload being recorded, with the bindings its factory stored on the cache miss and the tensor or
+// pipe this call binds to each of its TensorParameters and PrefetcherPipeParameters.
 struct CmdListProgramBindings {
     const tt::tt_metal::Program* program;
     const ttnn::command_list::CmdListBindings* bindings;
     std::vector<std::pair<tt::tt_metal::TensorParamName, const tt::tt_metal::MeshTensor*>> bound_tensors;
+    std::vector<std::pair<
+        tt::tt_metal::experimental::PrefetcherPipeParamName,
+        const tt::tt_metal::experimental::PrefetcherPipe*>>
+        bound_pipes;
 };
 
 // Adds `workload` to the CommandListBuilder recording on the calling thread instead of enqueueing it, recording as

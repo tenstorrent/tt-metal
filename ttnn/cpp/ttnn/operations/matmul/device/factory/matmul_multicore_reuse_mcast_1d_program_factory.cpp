@@ -3144,6 +3144,11 @@ struct In1PrefetcherPipeRelay {
     DataflowBufferSpec relay_dfb;
 };
 
+// The PrefetcherPipeParameter fed by prefetcher_pipes[p].
+static PrefetcherPipeParamName in1_prefetcher_pipe_name(size_t p) {
+    return PrefetcherPipeParamName{fmt::format("in1_prefetcher_pipe_{}", p)};
+}
+
 // workers[i] computes output column block i. Each body orders its workers differently, so
 // `worker_order` is the caller's sentence telling a user which core computes block i. Validation has
 // checked that the ring holds at least two K-blocks, the reader's one block of lookahead.
@@ -3177,7 +3182,7 @@ static In1PrefetcherPipeRelay make_in1_prefetcher_pipe_relay(
     const uint32_t relay_size = ring_size - ring_size % entry_size;
     In1PrefetcherPipeRelay relay;
     for (size_t p = 0; p < prefetcher_pipes.size(); ++p) {
-        const PrefetcherPipeParamName name{fmt::format("in1_prefetcher_pipe_{}", p)};
+        const PrefetcherPipeParamName name = in1_prefetcher_pipe_name(p);
         relay.names.push_back(name);
         relay.parameters.push_back(PrefetcherPipeParameter{
             .unique_id = name,
@@ -6808,6 +6813,22 @@ ttnn::device_operation::ProgramArtifacts MatmulMultiCoreReuseMcast1DProgramFacto
         untilize_out,
         fused_matmul_bias_row_broadcastable(bias),
         sub_device_start_core);
+}
+
+ttnn::command_list::CmdListBindings MatmulMultiCoreReuseMcast1DProgramFactory::map_cmd_list_parameters(
+    const ttnn::prim::MatmulParams& operation_attributes,
+    const ttnn::prim::MatmulInputs& /*tensor_args*/,
+    const ProgramSpec& spec,
+    const ProgramRunArgs& run_params) {
+    ttnn::command_list::CmdListBinder binder{spec, run_params};
+    std::vector<PrefetcherPipeParamName> pipe_names;
+    for (size_t p = 0; p < operation_attributes.prefetcher_pipes.size(); ++p) {
+        pipe_names.push_back(reuse_mcast_1d_optimized_helpers::in1_prefetcher_pipe_name(p));
+    }
+    if (!pipe_names.empty()) {
+        binder.prefetcher_pipes(/*invoke_name=*/"prefetcher_pipes", std::move(pipe_names));
+    }
+    return binder.finish();
 }
 
 MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t matmul_multi_core_reuse_mcast_1d_optimized_helper(

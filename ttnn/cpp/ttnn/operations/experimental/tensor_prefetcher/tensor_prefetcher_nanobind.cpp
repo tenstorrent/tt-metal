@@ -118,8 +118,9 @@ void bind_tensor_prefetcher(nb::module_& mod) {
         R"doc(
             Queue one prefetch request. Non-blocking. Each pipe's write cursors are
             preserved across requests, so successive Queue calls against the same pipes
-            resume where the previous call left off. Successive Queue calls can target
-            different pipe sets.
+            resume where the previous call left off.             Successive Queue calls can target
+            different pipe sets. Inside ``with ttnn.CommandListBuilder(...)`` the request is recorded
+            instead, and every replay of a built list re-sends it.
 
             Args:
                 mesh_device (ttnn.MeshDevice): the mesh device whose prefetcher to queue on.

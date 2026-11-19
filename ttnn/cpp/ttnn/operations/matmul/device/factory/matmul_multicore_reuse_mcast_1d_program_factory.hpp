@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include "ttnn/command_list_params.hpp"
 #include "ttnn/device_operation.hpp"
 #include "ttnn/operations/matmul/device/matmul_device_operation_types.hpp"
 #include "ttnn/operations/ccl/ccl_op_fusion.hpp"
@@ -38,6 +39,13 @@ struct MatmulMultiCoreReuseMcast1DProgramFactory {
         const ttnn::prim::MatmulParams& operation_attributes,
         const ttnn::prim::MatmulInputs& tensor_args,
         std::vector<ttnn::Tensor>& tensor_return_value);
+
+    // Binds keyword prefetcher_pipes, so a command list can move the matmul to other pipes.
+    static ttnn::command_list::CmdListBindings map_cmd_list_parameters(
+        const ttnn::prim::MatmulParams& operation_attributes,
+        const ttnn::prim::MatmulInputs& tensor_args,
+        const tt::tt_metal::ProgramSpec& spec,
+        const tt::tt_metal::ProgramRunArgs& run_params);
 };
 
 struct MatmulMeshWorkloadMultiCoreReuseMcast1DProgramFactory {

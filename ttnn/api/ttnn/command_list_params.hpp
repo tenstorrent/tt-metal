@@ -22,7 +22,9 @@
 #include <tt-metalium/workload/run_args/program_run_args.hpp>
 #include <tt-metalium/workload/specification/program_spec.hpp>
 #include <tt-metalium/workload/specification/tensor_parameter.hpp>
+#include <tt-metalium/experimental/metal2_host_api/prefetcher_pipe_parameter.hpp>
 
+#include "ttnn/prefetcher_pipe.hpp"
 #include "ttnn/tensor/tensor.hpp"
 
 // Command-list parameters: what callers bind and what program factories map.
@@ -34,7 +36,7 @@ struct CmdListScalar {
     std::variant<double, int64_t> value;
 };
 
-using CmdListValue = std::variant<Tensor, CmdListScalar>;
+using CmdListValue = std::variant<Tensor, CmdListScalar, PrefetcherPipeList>;
 
 // Encodes a scalar as the word written to the kernel arguments it is bound to.
 using CmdListEncodeFn = std::function<tt::tt_metal::ArgValue(const CmdListScalar&)>;
@@ -108,10 +110,17 @@ struct CmdListScalarBinding {
     std::vector<CmdListCommonRuntimeArgBinding> common_runtime_args;
 };
 
+// Element i of the keyword's PrefetcherPipeList feeds program_spec_param_names[i].
+struct CmdListPrefetcherPipeBinding {
+    std::string invoke_name;
+    std::vector<tt::tt_metal::experimental::PrefetcherPipeParamName> program_spec_param_names;
+};
+
 struct CmdListBindings {
     std::string factory_name;  // set by the adapter; qualifies Metal param names
     std::vector<CmdListTensorBinding> tensors;
     std::vector<CmdListScalarBinding> scalars;
+    std::vector<CmdListPrefetcherPipeBinding> prefetcher_pipes;
 };
 
 // Builds a program factory's CmdListBindings in map_cmd_list_parameters, checking each binding against the program:
@@ -119,6 +128,7 @@ struct CmdListBindings {
 //   binder.tensor(/*invoke_name=*/"input_tensor", /*program_spec_param_name=*/TensorParamName{"src"});
 //   binder.param(/*invoke_name=*/"scale", /*encode=*/encode_float32_bits)
 //       .runtime(/*kernel_name=*/KernelSpecName{"reader"}, /*arg_name=*/"pre_scale");
+//   binder.prefetcher_pipes(/*invoke_name=*/"prefetcher_pipes", {PrefetcherPipeParamName{"in"}});
 //   return binder.finish();
 class CmdListBinder {
 public:
@@ -153,6 +163,12 @@ public:
         CmdListEncodeFn encode = encode_uint32,
         std::optional<std::string> metal_cmd_list_param_name = std::nullopt);
 
+    // Binds element i of op keyword `invoke_name`, a PrefetcherPipeList, to PrefetcherPipeParameter
+    // `program_spec_param_names[i]`.
+    void prefetcher_pipes(
+        std::string_view invoke_name,
+        std::vector<tt::tt_metal::experimental::PrefetcherPipeParamName> program_spec_param_names);
+
     // Returns the bindings. Call it last: it moves them out of the binder.
     CmdListBindings finish();
 
@@ -164,6 +180,7 @@ private:
     const tt::tt_metal::ProgramRunArgs& run_params_;
     CmdListBindings bindings_;
     std::unordered_set<std::string> bound_tensors_;
+    std::unordered_set<std::string> bound_pipes_;
     std::unordered_set<std::string> declared_params_;
     std::set<std::tuple<bool, std::string, std::string>> bound_args_;  // (common, kernel, argument)
 };

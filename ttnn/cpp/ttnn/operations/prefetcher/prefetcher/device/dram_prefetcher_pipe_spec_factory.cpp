@@ -261,4 +261,19 @@ ttnn::device_operation::ProgramArtifacts DramPrefetcherPipeSpecFactory::create_p
     };
 }
 
+// The spec declares out_pipe_i for the i-th pipe, in pipe order.
+ttnn::command_list::CmdListBindings DramPrefetcherPipeSpecFactory::map_cmd_list_parameters(
+    const DramPrefetcherParams& /*operation_attributes*/,
+    const DramPrefetcherInputs& /*tensor_args*/,
+    const ProgramSpec& spec,
+    const ProgramRunArgs& run_params) {
+    ttnn::command_list::CmdListBinder binder{spec, run_params};
+    std::vector<PrefetcherPipeParamName> pipe_names;
+    for (const auto& parameter : spec.advanced_options.prefetcher_pipe_parameters) {
+        pipe_names.push_back(parameter.unique_id);
+    }
+    binder.prefetcher_pipes(/*invoke_name=*/"prefetcher_pipes", std::move(pipe_names));
+    return binder.finish();
+}
+
 }  // namespace ttnn::prim

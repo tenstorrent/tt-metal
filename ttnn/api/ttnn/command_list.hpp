@@ -12,6 +12,8 @@
 #include <vector>
 
 #include <tt-metalium/command_list.hpp>
+#include <tt-metalium/experimental/tensor_prefetcher.hpp>
+#include <tt_stl/optional_reference.hpp>
 
 #include "ttnn/command_list_params.hpp"
 #include "ttnn/common/guard.hpp"
@@ -35,10 +37,12 @@ struct CmdListMetalScalar {
     bool has_common_runtime = false;
 };
 
-// What TTNN update_args writes for one TTNN param: its tensor, or each of its encodings.
+// What TTNN update_args writes for one TTNN param: its tensor, each of its encodings, or its pipes.
 struct CmdListParamLayout {
     bool is_tensor = false;
     std::vector<CmdListMetalScalar> metal_scalars;
+    // For a PrefetcherPipeList param, one entry per element: whether it feeds a Metal param, "<TTNN param>/<index>".
+    std::vector<bool> pipe_bound;
 };
 
 using CmdListLayout = std::unordered_map<std::string, CmdListParamLayout>;
@@ -88,6 +92,12 @@ public:
         QueueId binary_upload_cq_id,
         tt::tt_metal::distributed::MeshWorkload& workload,
         std::span<const device_operation::detail::CmdListProgramBindings> programs);
+
+    // Adds one Tensor prefetcher request to the recording; see tt::tt_metal::experimental::AddTensorPrefetcherRequest.
+    void add_tensor_prefetcher_request(
+        const PrefetcherPipeRefList& prefetcher_pipes,
+        ttsl::optional_reference<const tt::tt_metal::distributed::MeshCoordinateRangeSet> device_subset,
+        const std::vector<tt::tt_metal::experimental::TensorPrefetcherInput>& input_tensors);
 
     // The TTNN command-list parameter binds of the op calls in progress while recording, for push_cmd_list_binds and
     // pop_cmd_list_binds. Scopes nest; pop_binds(true) warns if a bind of the popped scope reached no recorded
@@ -144,5 +154,13 @@ private:
     tt::tt_metal::CommandList metal_list_;
     detail::CmdListLayout layout_;
 };
+
+// Adds a Tensor prefetcher request to the TTNN CommandListBuilder recording on the calling thread instead of sending
+// it. Every replay re-sends it.
+void record_tensor_prefetcher_request(
+    tt::tt_metal::distributed::MeshDevice& mesh_device,
+    const PrefetcherPipeRefList& prefetcher_pipes,
+    ttsl::optional_reference<const tt::tt_metal::distributed::MeshCoordinateRangeSet> device_subset,
+    const std::vector<tt::tt_metal::experimental::TensorPrefetcherInput>& input_tensors);
 
 }  // namespace ttnn::command_list

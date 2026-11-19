@@ -6,6 +6,7 @@
 
 #include "device/signal_tensor_prefetcher_device_operation.hpp"
 
+#include "ttnn/command_list.hpp"
 #include "ttnn/device_operation.hpp"
 #include "ttnn/prefetcher_pipe.hpp"
 #include <tt_stl/assert.hpp>
@@ -50,7 +51,6 @@ void queue_tensor_prefetcher_request(
     const std::vector<std::shared_ptr<metal_exp::PrefetcherPipe>>& prefetcher_pipes,
     const std::optional<tt::tt_metal::distributed::MeshCoordinateRangeSet>& device_subset,
     bool capture_into_trace) {
-    ttnn::device_operation::detail::throw_if_recording_command_list("queue_tensor_prefetcher_request");
     TT_FATAL(!prefetcher_pipes.empty(), "queue_tensor_prefetcher_request needs at least one PrefetcherPipe");
 
     std::vector<tt::tt_metal::experimental::TensorPrefetcherInput> inputs;
@@ -73,6 +73,12 @@ void queue_tensor_prefetcher_request(
                  rotation,
                  tt::tt_metal::experimental::TensorPrefetcherGroupSelector{selector.mesh_tensor()}});
         }
+    }
+    // No trace can be captured while a CommandListBuilder exists, so capture_into_trace does not apply.
+    if (ttnn::device_operation::detail::is_recording_command_list()) {
+        ttnn::command_list::record_tensor_prefetcher_request(
+            *mesh_device, ttnn::prefetcher_pipe_refs(prefetcher_pipes), device_subset, inputs);
+        return;
     }
     // There is no cq_id parameter to consult: a `cq_id`/`queue_id` keyword is consumed by
     // ttnn's operation wrapper before this function runs, and applied by making that queue
