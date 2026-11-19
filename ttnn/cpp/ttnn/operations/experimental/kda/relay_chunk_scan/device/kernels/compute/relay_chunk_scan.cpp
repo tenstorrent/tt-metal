@@ -13,9 +13,14 @@
 #include "api/compute/eltwise_unary/rsqrt.h"
 #include "api/compute/matmul.h"
 #include "api/compute/reconfig_data_format.h"
-#include "api/compute/reduce.h"
 #include "api/compute/tile_move_copy.h"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise/api/chain.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise/api/convenience.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise/broadcast/bcast.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.hpp"
 #include "ttnn/cpp/ttnn/operations/experimental/kda/device/kernels/compute/matmul_subblock.hpp"
+
+namespace ckl = compute_kernel_lib;
 
 constexpr uint32_t cb_e = get_compile_time_arg_val(0);
 constexpr uint32_t cb_b = get_compile_time_arg_val(1);
@@ -179,40 +184,30 @@ void carry_pass(bool split) {
 
 // FI - F0 for tile rows [first, first + tiles) of the terms buffer, packed to the same rows of the differences.
 void subtract(uint32_t first, uint32_t tiles) {
-    pack_reconfig_data_format(cb_diff);
-    reconfig_data_format(cb_terms, cb_terms);
-    sub_init(cb_terms, cb_terms);
-    for (uint32_t t = first; t < first + tiles; t += kt) {
-        tile_regs_acquire();
-        for (uint32_t i = 0; i < kt; ++i) {
-            sub_tiles(cb_terms, cb_terms, fi_offset + t + i, t + i, i);
-        }
-        tile_regs_commit();
-        tile_regs_wait();
-        for (uint32_t i = 0; i < kt; ++i) {
-            pack_tile(i, cb_diff);
-        }
-        tile_regs_release();
-    }
+    DataflowBuffer terms(cb_terms);
+    DataflowBuffer diff(cb_diff);
+    constexpr auto term_rows = ckl::input(
+        cb_terms,
+        ckl::WaitPolicy::None,
+        ckl::PopPolicy::None,
+        ckl::InputTileMapping::Block,
+        ckl::DataFormatReconfig::Enabled,
+        ckl::TileAddressing::Offset);
+    ckl::eltwise_chain(
+        ckl::IterationShape::tiles(tiles).block_size(kt),
+        ckl::BinaryFpu<ckl::BinaryFpuOp::Sub, term_rows, term_rows>{terms, terms, fi_offset + first, first},
+        ckl::PackTile<ckl::output(cb_diff, ckl::ReservePolicy::None, ckl::PushPolicy::None)>{diff});
 }
 
 // The norm weight's row 0 broadcast down every row, for the elementwise product with each output row.
 void broadcast_weight() {
-    cb_wait_front(cb_weight, kt);
-    cb_reserve_back(cb_weight_rows, kt);
-    pack_reconfig_data_format(cb_weight_rows);
-    reconfig_data_format(cb_weight, cb_weight);
-    unary_bcast_init<BroadcastType::ROW>(cb_weight);
-    for (uint32_t j = 0; j < kt; ++j) {
-        tile_regs_acquire();
-        unary_bcast<BroadcastType::ROW>(cb_weight, j, 0);
-        tile_regs_commit();
-        tile_regs_wait();
-        pack_tile(0, cb_weight_rows);
-        tile_regs_release();
-    }
-    cb_push_back(cb_weight_rows, kt);
-    cb_pop_front(cb_weight, kt);
+    DataflowBuffer weight(cb_weight);
+    DataflowBuffer weight_rows(cb_weight_rows);
+    ckl::unary_bcast<
+        ckl::BroadcastDim::Row,
+        ckl::input(cb_weight, ckl::WaitPolicy::Upfront, ckl::PopPolicy::AtEnd, ckl::InputTileMapping::Block),
+        ckl::output(cb_weight_rows, ckl::ReservePolicy::Upfront, ckl::PushPolicy::AtEnd)>(
+        ckl::IterationShape::tiles(kt), weight, weight_rows);
     cb_wait_front(cb_weight_rows, kt);
 }
 
@@ -250,42 +245,34 @@ void gate_factors(uint32_t chunks) {
 
 // The gated norm of the chunk row in cb_out, with the front g of cb_gate_factor, into cb_norm.
 void normalize() {
-    cb_reserve_back(cb_square, kt);
-    pack_reconfig_data_format(cb_square);
-    reconfig_data_format(cb_out, cb_out);
-    mul_init(cb_out, cb_out);
-    tile_regs_acquire();
-    for (uint32_t j = 0; j < kt; ++j) {
-        mul_tiles(cb_out, cb_out, j, j, j);
-    }
-    tile_regs_commit();
-    tile_regs_wait();
-    for (uint32_t j = 0; j < kt; ++j) {
-        pack_tile(j, cb_square);
-    }
-    tile_regs_release();
-    cb_push_back(cb_square, kt);
+    DataflowBuffer out(cb_out);
+    DataflowBuffer square(cb_square);
+    DataflowBuffer scaler(cb_scaler);
+    DataflowBuffer inv_rms(cb_inv_rms);
+    ckl::square<
+        ckl::input(cb_out, ckl::WaitPolicy::None, ckl::PopPolicy::None, ckl::InputTileMapping::Block),
+        ckl::output(cb_square, ckl::ReservePolicy::Upfront, ckl::PushPolicy::AtEnd)>(
+        ckl::IterationShape::tiles(kt).block_size(kt), out, square);
     // The row means land in column 0, all the column broadcast reads: epsilon and rsqrt on that column only.
-    cb_wait_front(cb_square, kt);
-    cb_reserve_back(cb_inv_rms, 1);
-    pack_reconfig_data_format(cb_inv_rms);
-    reconfig_data_format(cb_scaler, cb_square);
-    reduce_init<PoolType::AVG, ReduceDim::REDUCE_ROW>(cb_square, cb_scaler, cb_inv_rms);
-    tile_regs_acquire();
-    for (uint32_t j = 0; j < kt; ++j) {
-        reduce_tile<PoolType::AVG, ReduceDim::REDUCE_ROW>(cb_square, cb_scaler, j, 0, 0);
-    }
-    reduce_uninit();
-    binop_with_scalar_tile_init();
-    add_unary_tile(0, epsilon_bits, VectorMode::C);
-    rsqrt_tile_init();
-    rsqrt_tile(0, VectorMode::C);
-    tile_regs_commit();
-    tile_regs_wait();
-    pack_tile(0, cb_inv_rms);
-    tile_regs_release();
-    cb_push_back(cb_inv_rms, 1);
-    cb_pop_front(cb_square, kt);
+    ckl::reduce<
+        PoolType::AVG,
+        ReduceDim::REDUCE_ROW,
+        cb_square,
+        cb_scaler,
+        cb_inv_rms,
+        ckl::ReduceInputPolicy::BulkWaitBulkPop>(
+        square,
+        scaler,
+        inv_rms,
+        ckl::ReduceInputBlockShape::row(kt),
+        ckl::ReduceInputMemoryLayout::contiguous(),
+        ckl::NoAccumulation{},
+        [](uint32_t dst) {
+            binop_with_scalar_tile_init();
+            add_unary_tile(dst, epsilon_bits, VectorMode::C);
+            rsqrt_tile_init();
+            rsqrt_tile(dst, VectorMode::C);
+        });
     // Per pass: x / rms on the FPU, then times g beside it on the SFPU, in FP32.
     cb_wait_front(cb_inv_rms, 1);
     cb_wait_front(cb_gate_factor, kt);
