@@ -651,3 +651,13 @@ New overseer session after the owner's reboot (node bh-glx-110-c10u02, job 22373
   impossible -> owner decision). PB.4 bulk MoE after PB.3H. PB.5 accept gate holds the targets (>= 67000 / >= 64000
   serving tok/s, DRAM headroom > 0 at 4 x 1M). The one-call attention task is queued before PB.5 only if the targets
   are missed. Validated.
+- 21:05 UTC OWNER: fully autonomous all night; every OWNER DECISION item is now the overseer's (pick the most promising,
+  one line why here, keep going); failing oracle checks are to fix or work around on this branch, never a stop; still
+  no push, no tt-smi -r, no scancel, no memory files, work through ledger tasks. Note to every PB task (PB.1 attempt 2
+  started 21:13 on the rewritten brief; it reads the note from attempt 3 on, its current brief still says "stop" in
+  places: I answer any such stop myself).
+- 21:18 UTC heartbeat: PB.1 attempt 2 progressing (transcript live; tt/packed.py, reference/packed_ref.py, tests/packed/ appearing). Time correction: the task rewrite and the PB.1 attempt 2 start were ~20:49-20:50 UTC, not 21:10 / 21:13 as written above.
+- 21:32 UTC PB.1 attempt 2 failed on the settings lint: FRAMEWORK false violation (hooks.py:1397 is committed code,
+  the agent only added PACKED to batch_call_settings). Every PB task touches hooks.py, so it would recur. 21:36 paused,
+  attempt 3 aborted (note OV-59: its work in the tree stands), lint fixed (F289: committed reads in hooks.py exempt as
+  for forks, tt/ strict), selftest 9/9; the agent's current changes lint clean. Resumed --until PB.1.

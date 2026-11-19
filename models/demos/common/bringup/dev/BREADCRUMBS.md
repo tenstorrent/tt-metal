@@ -2839,3 +2839,11 @@ Residual: a variable neither measuring, nor named by the test files, nor on the 
 launcher's shell) is not seen. Selftests: test_reuse_env_key.py (a: SKIP_POS exported / on the command line / FOO on a
 hand run's command line; b: a settings default; c: a model file; d: the same tree and env reused, the source named);
 test_count_runs_once.py (a hand run keyed with its command line).
+
+## F289 (DeepSeek-V4.1 PB.1, 2026-11-19): the settings lint charged hooks.py's committed env read to an agent
+PB.1 attempt 2 added PACKED to batch_call_settings' returned tuple in bringup/hooks.py; the orchestrator's settings lint
+flagged that function's committed `env = os.environ if env is None else env` (hooks.py:1397) and the attempt failed, a
+third started. F106 exempted only forks' committed reads; model code stayed strict. hooks.py is the framework's interface
+(its reads of a run's environment are plumbing every call-time switch must touch), so its committed reads are now
+exempt as for forks; a read a change adds still counts; tt/ stays strict. Selftest:
+test_model_settings.py::test_lint_skips_committed_env_reads_in_hooks_but_not_in_tt.

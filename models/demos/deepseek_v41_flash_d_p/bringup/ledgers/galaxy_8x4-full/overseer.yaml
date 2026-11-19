@@ -602,6 +602,26 @@ notes:
   text: 'The overseer stopped attempt 1 (perf): OWNER 20:45 clarifications (perf targets, no shortcuts: per-chunk history
     from each slot''s served cache, all segments'' buffers in the 1M DRAM budget, tt-d-gen-like inputs, real texts/positions,
     padded/empty lanes). The task brief and the notes now carry them; start from them. Your edits so far stay in the tree.'
+- id: OV-58
+  tasks:
+  - PB.*
+  status: open
+  t: '2026-11-19T20:51:03'
+  text: 'OWNER 2026-11-19 21:05 (overrides every ''STOP / OWNER DECISION'' in the PB briefs): work fully autonomously; the
+    owner is asleep and nobody answers. This is a throwaway experimental branch: try things, fix and optimize later. Wherever
+    a brief says stop and ask / owner decision (a shortcut, a check that cannot be bit-identical, gather hiding proven impossible,
+    a geometry change): pick the most promising option yourself, write one line why in BREADCRUMBS (marked DECIDED), and
+    keep going. Never idle: if blocked, take the next best path. Keep measuring the correctness oracle (lane equivalence,
+    determinism, slot digests) and report it; a failing check is a thing to fix or work around, not a reason to stop. Still
+    binding: no push, no tt-smi -r, all device work through the resident runner.'
+- id: OV-59
+  tasks:
+  - PB.1
+  status: open
+  t: '2026-11-19T21:33:10'
+  text: 'The overseer stopped attempt 3 (perf): Framework false violation: the settings lint charged the pre-existing env
+    read at bringup/hooks.py:1397 (batch_call_settings, not yours) to attempt 2. Fixed in the framework (F288). Your PB.1
+    work in the tree stands: check it against the brief, finish what is missing, run the gate''s CPU test, and exit.'
 fixes:
 - id: FIX.1
   title: 'Owner order: no padding to get around a kernel limit'
