@@ -6258,6 +6258,52 @@
   "status": "REJECTED",
   "waiting": null
  },
+ "P.84": {
+  "ab_pending": null,
+  "agent": {
+   "defs": {
+    "models/demos/common/bringup/agents/bringup-engineer.md": {
+     "blob": "959f10ef0b6f543f38a1b9a54f3780c6e751db28",
+     "dirty": false
+    },
+    "models/demos/common/bringup/briefs/brief.md": {
+     "blob": "a72ff1beb2fa0ffd78ba8438f67599c498d8554b",
+     "dirty": false
+    },
+    "models/demos/common/bringup/briefs/roles.yaml": {
+     "blob": "e6413c1d49e3d144b0349ea968e1ea4d7d941470",
+     "dirty": false
+    }
+   },
+   "model": "claude-opus-5-5",
+   "session_id": "40f6d044-bf77-46e9-aae2-ef9e5733e925"
+  },
+  "attempt": 3,
+  "history": [
+   {
+    "by": "overseer: another attempt",
+    "status": "TODO",
+    "t": "2026-11-19T09:56:49"
+   },
+   {
+    "by": "overseer: attempt 3",
+    "status": "TODO",
+    "t": "2026-11-19T10:53:53"
+   },
+   {
+    "by": "overseer",
+    "status": "REJECTED",
+    "t": "2026-11-19T12:02:19"
+   }
+  ],
+  "last_run": "2026-11-19T12:02:19",
+  "reason": [
+   "Static replicas cannot reach the target: rows reach the 13th slots (~68k a chunk) and the busiest chip tiles fall 39 %, but routed_experts_combine sits at its ~780-850 us a layer floor below ~100 tiles (DS41-303; the DS41-299 linear fit overstated the gain); off, the least-loaded chip already takes 16.0 of 18.4 ms: perfect balance <= ~2.3 ms; the head adds ~1 ms. Measured (one load, runner): agentic p145408 78.6 off / 80.6 on, p770048 86.3 / 86.8, prose 86.2 / 86.4 ms. Diff kept at /data/dnijemcevic/bringup/handoff_20261118/rejected_p84."
+  ],
+  "role": "perf",
+  "status": "REJECTED",
+  "waiting": null
+ },
  "P.9": {
   "agent": {
    "defs": {

@@ -5437,7 +5437,7 @@ tasks:
   role: perf
   device: true
   deps:
-  - P.84
+  - P.81
   paths:
   - models/demos/deepseek_v41_flash_d_p/tests/
   - models/demos/deepseek_v41_flash_d_p/bringup/BREADCRUMBS.md
@@ -5494,7 +5494,7 @@ tasks:
   role: perf
   device: true
   deps:
-  - P.81
+  - P.83
   paths:
   - models/demos/deepseek_v41_flash_d_p/tt
   - models/demos/deepseek_v41_flash_d_p/tests/
@@ -5533,7 +5533,7 @@ tasks:
   role: perf
   device: true
   deps:
-  - P.82
+  - X.10
   paths:
   - models/demos/deepseek_v41_flash_d_p/tt
   - models/demos/deepseek_v41_flash_d_p/tests/

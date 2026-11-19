@@ -1642,3 +1642,26 @@ pitch: tiles 0..31 the mantissas, 32..33 the exponents) instead of a 1024 B + a 
 The owner-side pack (ttnn.bringup.pack_bfp8_rows) had the same trap twice: 32 rows read and tilized by each of 4
 cores (4x the DRAM reads) - splitting a unit by 8-tile column parts (own reads, 16 B aligned row-piece writes) took it
 0.73 -> 0.49 ms a chunk; its RISC copies -> NoC writes alone moved it 0.742 -> 0.729.
+
+## On real text the routed experts + combine has a ~820 us floor a layer: static replicas cut its tail, not its body
+P.84 (MOE_REPLICAS=on: 13 slots a chip, the owner's offline agentic table, the planner's best split from each chip's
+own picks). tests/perf/test_expert_load_census.py, p145408, agentic, 4 chunks, DECODER_SKIP=decode, one load each
+side (off = X.9's run of the same off path; on = 2026-11-19 09:16):
+
+| side | routed_experts_combine ms a chunk (slowest chip a program) | min chip summed | tiles max summed | DS41-299 fit |
+|---|---|---|---|---|
+| off | 18.38 | 16.04 | 1749 | 15.94 |
+| on | 16.52 | 15.18 | 1073 | 11.36 |
+
+Per layer by the busiest chip's tiles (mean program us, max chip / min chip): off 50-70 tiles 839 / 735 (21 layer
+chunks), 70-100 886 / 765 (40), 100-400 1078 / 952 (19); on < 50 822 / 756 (31), 50-70 829 / 761 (45), 70-100 825 /
+757 (4). So below ~100 tiles a layer costs ~820 us on every chip whatever its tiles (a regression over chips: on
+788 + 0.29 us a tile, off 873 + 0.19); DS41-299's 205 + 6.77 us a tile was fitted on random ids at 101-321 tiles and
+does not extrapolate down. The replicas removed the outlier layers (100-400 tiles: ~-250 us each) and nothing below;
+the offline estimate (-4.5 ms) used the fit everywhere. The 13th slot also streams one more expert's weights on a chip
+whose replica has rows.
+Whole chunk (test_skip_positions, steady, DECODER_SKIP=decode): agentic p145408 off (X.9) wall 81.9 ms (spread 7.8),
+device 65.61, experts section 29.72; on wall 80.7 (spread 15.8), device 65.40, experts 29.51 - so the MoE section
+outside the combine grew ~1.6 ms (the head's planner remap and route-word ordering, more dispatch destinations: a moved
+pick adds the replica chip to a token's route unless it is already there). Prose p145408 off 86.3 / 73.20 / 37.33, on
+85.7 / 73.33 / 37.13 (noise); prose p1024000 on 98.5 ms wall, device 91.60 (no off run on this tree).

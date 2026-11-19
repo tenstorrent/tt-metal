@@ -883,3 +883,156 @@
 - Gate state at exit: both of my full `gate X.9 --check` runs PASSED (every unit). The overseer's F279 commit
   (92e0db9d955: BATCH_ITEM_VARS in this test and test_skip_positions, batch.py) landed afterwards and changed the code
   key, so every unit shows stale; the orchestrator's gate (one process for the ten text runs, F279) runs them again.
+
+## P.84 perf (attempt 1): STATIC expert replicas for agentic workloads (MOE_REPLICAS off | on)
+- Expected per chunk (written before any device run; perf_guide 1-2, 4 "moved time"; p145408 steady chunk, decoder
+  skip, X.9's 142k walls 80.7-86.3 ms): device, routed_experts_combine (the busiest chip's tiles, DS41-299): agentic
+  held-out -4.5 ms by the offline fit with the best split (-3.0 even split), code -5.3, prose -1.3, multilingual -1.8;
+  my split is each chip's own estimate (its picks x 32, not the global counts: a count exchange would need a second
+  fabric round a layer), so between even and best: agentic ~ -3.5 ms, prose ~ -1 ms. Costs: the head's planner remap
+  (2 passes over the chip's 960 picks, ~5-10 us a layer on its RISC, on the routing chain) + the router cores' route
+  words written before the planners start (the compute's words for its 32 tokens, ~+5-10 us a layer) + instance 0's
+  route-word patch (hidden under the exchange's flight) = ~+0.2-0.4 ms device a chunk; the dispatch sends a moved
+  token's row to the replica chip instead of (or besides) its home: +0..+0.3 ms. Net device ~ -3 ms agentic, ~ -0.5 ms
+  prose. Host: 0 (no new launch; the head weights carry the slot map; the 13-slot weights are built at load).
+  Load: +~5-10 s a layer the first build (12-slot file bytes -> 13-slot), DRAM +17.9 MiB a layer a chip.
+- Design (fork moe_block_ttnn, RouterSpec.candidates; model tt/expert_replicas.py, MOE_REPLICAS / MOE_REPLICA_TABLE /
+  MOE_REPLICA_SPLIT): the router still ranks the 384 experts (candidates); num_experts = 416 slots (13 a chip, the
+  13th the replica); the layer's slot map rides in one more tile of the router bias; the head's planner turns its
+  copy of the chip's routing rows into slot ids before counting (remap_replicas: the same pure function of the chip's
+  rows on every planner instance) and instance 0 rewrites the route words of the moved tokens (the router cores now
+  write their route words before telling the planners their rows are in). Dispatch, flat experts and combine are the
+  stock ops on 416 slots. The interpretation of "Marko's moe_block_main block" in the brief: the block the model
+  ships (MOE_BLOCK_SRC=block = his merged block on ttnn.bringup.moe_block); the replica branch's old-block code
+  (P.46 router slot map, expert_slots.py's slot geometry) was read and only the slot geometry was ported.
+- Built: fork moe_block_ttnn (RouterSpec.candidates / even_split, prepare_moe_head_weights slot_map, HeadShape
+  slots_per_chip, routing_planner.hpp remap_replicas + patch_route_words, router_output_writer route-word order; off
+  compiles none of it and appends no arg), model tt/expert_replicas.py (table, slot map, 13-slot weights from the
+  12-slot cache file's bytes: flatbuffer shards -> slot runs -> ROW_MAJOR int32 bank shards the flat expert reads by
+  bank + offset; checked on the host against flat_weight_regions with tagged tensors), tt/replicas/agentic.json (the
+  owner's results/P.84_replicas.json, keyed by layer), adapter `replicas_on` / `_routed13` (resident registry through a
+  marker file per weight). Cores (rule 18): none added (the planner's RISCs). OV-3: no padding; layers without a table
+  entry (20-39) carry a zero 13th slot because every layer shares the one 13-slot block. OV-23: no Python-built op.
+- Load: 13-slot build 10.4 s a layer (vs 1-3 s cache hit), +19.69 MiB a chip a layer measured (the down regions pad
+  to 59 blocks: more than the 17.9 MiB estimate): 0.38 GiB a chip for layers 0-19, 0.77 GiB for 40.
+- Correctness: ladder rung last (gate --check --unit P.84#test_ladder, pre-format code) PASS, all 104 err metrics equal
+  to P.78's to the last digit (err_final_hidden 0.134632, top5 1.0): on is bit-identical to off on the golden chunk
+  (DS41-235's order-free combine, the replica's tiles are its home's bytes). The census shows the split active (slot ids
+  >= 384 among each layer's hot 8).
+- Measured (the decision data; DS41-303): census agentic p145408 k4: routed_experts_combine 18.38 -> 16.52 ms a chunk,
+  tiles max 1749 -> 1073 (fit 15.94 -> 11.36: the fit does not hold below ~100 tiles, every chip ~820 us a layer).
+  test_skip_positions on (DS41_DECODER_SKIP=decode exported - DS41-304), vs X.9 off: agentic p145408 wall 81.9 ->
+  80.7 ms (spreads 7.8 / 15.8), device 65.61 -> 65.40, experts section 29.72 -> 29.51; prose p145408 86.3 -> 85.7
+  (3.5 / 7.9), device 73.20 -> 73.33; prose p1024000 on 98.5 ms (device 91.60; no off on this tree). The agentic
+  p770048 point ran (rc 0) but its log and metrics were overwritten by the prose command's (one file a test stem).
+- STOP (brief's stop rule): the agentic held-out wall at 142k gains < 3 ms (1.2 ms, inside the spread; device -0.2 ms).
+  The bound is the ~820 us floor a layer, not the split: even with the head / dispatch overhead removed the replicas
+  are worth at most the combine's -1.8 ms. Not tuned further, not profiled per op. MOE_REPLICAS stays the default
+  (brief: the owner decides from the A/B). If kept: the extra ~1.6 ms in the MoE section (head ordering, the remap's
+  two passes, the replica chip added to moved tokens' routes) is the first thing to cut; a split that moves picks of
+  tokens already routed to the replica chip would cost no dispatch rows.
+- Gate state: P.84#test_ladder passed on the pre-format code (formatting then changed the code key); determinism,
+  decoder_skip_decode, contract, outside_history not run by me; the two test_skip_positions units cannot pass as
+  written (DS41-304: their commands lack DS41_DECODER_SKIP=decode). Census side files restored (the off agentic record
+  is back at census_p145408_k4_tagentic.json; mine is census_p145408_k4_tagentic.P84on.json).
+- Re-run: `DS41_DECODER_SKIP=decode BRINGUP_POS_TOKENS=agentic CENSUS_CHUNKS=4 CENSUS_OUT=/tmp/c.json` +
+  tests/perf/test_expert_load_census.py through `resident submit` (back up the side record first);
+  `DS41_DECODER_SKIP=decode python -m models.demos.common.bringup.orchestrator measure --spec <spec> --task P.84 --part
+  test_skip_positions`; rebuild `cmake --build build_Release --target install -j 48` (re-run `cmake -S . -B
+  build_Release` first if install names a missing kernel file: a stale glob from an unaccepted pick).
+
+## P.84 perf (attempt 2): MOE_REPLICAS=off compiles again; both sides through the resident runner
+- Expected saving: unchanged from attempt 1 (above): ~ -3 ms device a chunk agentic, ~ -0.5 ms prose, host 0;
+  attempt 1 measured -0.2 ms device / -1.2 ms wall agentic p145408 (DS41-303: the stop rule fired).
+- OV-50 (1): with replicas off the planner's replica code (remap_replicas, a template instantiated from a non-template
+  plan_instance, so `if constexpr` does not discard it) divided by the compile-time candidates_per_chip = 0:
+  -Werror=div-by-zero in the JIT build of router_output_writer.cpp. Fix: routing_planner.hpp `candidates_divisor`
+  (candidates_per_chip with replica slots, else 1) in the three divisions / the modulo; the off code is never run, the
+  on values are unchanged. Rebuilt (`cmake --build build_Release --target install -j 48`, rc 0).
+- Off (resident submit, DS41_MOE_REPLICAS=off, ladder rung last, one open / one load): rc 0, all 105 err / top5
+  metrics equal to P.78's to the last digit (err_final_hidden 0.134632, top5 1.0): off = today, bit-identical. Also
+  equal to attempt 1's on side (DS41-235: the replicas do not change a byte).
+- DS41-304 (attempt 1) dropped: tasks.yaml's P.84 gate commands now carry DS41_DECODER_SKIP=decode.
+- On (`measure --task P.84 --part test`): with the resident runner serving, an A/B side runs only the timing tests
+  (F285), and both test_skip_positions commands collapsed into one item (DS41-304): only prose ran. The agentic
+  command on and both texts off then ran through `resident submit` (ab env, DECODER_SKIP=decode), same tree:
+
+  | steady chunk | wall off | wall on | device off | device on | experts off | experts on |
+  |---|---|---|---|---|---|---|
+  | agentic p145408 | 80.0 (spread 5.3) | 80.0 (13.8) | 65.51 | 64.76 | 29.70 | 29.15 |
+  | agentic p770048 | 86.8 (1.4) | 86.9 (3.6) | 79.14 | 79.55 | 29.69 | 29.76 |
+  | prose p145408 | 85.3 (3.6) | 87.6 (45.5; median 87.4) | 72.93 | 72.75 | 37.42 | 37.11 |
+  | prose p1024000 | 97.8 (3.0) | 98.1 (38.7) | 91.65 | 91.46 | 37.45 | 37.19 |
+
+- STOP (brief's stop rule, second time): the agentic held-out wall at 142k gains 0.0 ms (< 3 ms); device -0.75 ms,
+  inside the noise of the other three points (+0.41 / -0.18 / -0.19). Prose 142k wall is +2.1 ms on (median), device
+  not slower, so it reads as host / run noise, not a regression the change explains. As in attempt 1 (DS41-303): the
+  experts section moves < 0.6 ms because real-text layers sit at the ~820 us floor. Not profiled, not tuned.
+  MOE_REPLICAS stays the default (on), off = today bit-identical; the owner decides from the A/B.
+- Gate state: no `gate --check` unit run in this attempt (accuracy is judged by the accept gate's fresh process,
+  F285); the on side's ladder passed in attempt 1 on kernels that differ from these only in the off path's divisor.
+- Re-run: off ladder: `resident submit --cmd "DS41_MOE_REPLICAS=off BRINGUP_RUNG=last scripts/run_safe_pytest.sh
+  --run-all --no-precompile models/demos/common/bringup/tests/test_ladder.py"`; walls: the two gate test_skip_positions
+  commands with DS41_MOE_REPLICAS=on|off prefixed, through `resident submit` (under devjob).
+
+## P.84 perf (attempt 3): MOE_REPLICAS a call-time switch, table agentic_traces, the split's quality (OV-51..54)
+- Expected per chunk (before any device run; perf_guide "moved time"): with the agentic_traces table (OV-53) at the
+  gate's agentic points the offline best split reaches busiest-chip tiles 1395 / 1445 a chunk (p145408 / p770048;
+  off 1749 / 1788; agentic.json 1007 / 1030), so the routed_experts_combine gain is below attempt 1's -1.86 ms (at
+  the ~820 us floor a layer, DS41-303): device ~ -0.5..-1 ms, minus the head's +~1 ms (remap, route-word ordering):
+  ~0 net; host 0 (no launch added; the call picks one of two prepared router biases). Prose: ~0.
+- OV-54 (why no gain), answered from attempt 1's census records on the same chunks (host analysis, no device run;
+  /scratch/.../census/census_p145408_k4_tagentic{,.P84on}.json, table agentic.json): busiest-chip tiles a chunk off
+  1749, on (measured, the device's local-estimate split) 1073, offline best split from the chunk's global counts
+  1007, even split 1261. Rows do reach the replicas and the busiest chip's tiles fall 39 %; the programs do not: on
+  layers sit at 45-63 tiles and take 779-852 us whatever their tiles (layer 9: 144 -> 62 tiles, 1154 -> 794 us; layer
+  0: 55 -> 46 tiles, 802 -> 798 us). Off the least-loaded chip already takes 16.04 ms a chunk summed vs the slowest
+  18.38: perfect balance can save at most ~2.3 ms in routed_experts_combine, and the 13th slot's weights add ~39 us a
+  layer on a chip whose replica has rows. So >= 3 ms in the experts section is out of reach of static replicas.
+- OV-52 (global counts): not built. Measured on the same chunks the local estimate is within 66 tiles a chunk (3 a
+  layer) of the offline best split from global counts: by DS41-299's fit 11.36 vs 10.92 ms (0.44 ms), by the
+  measured slope below 100 tiles (~0.3 us a tile, DS41-303) ~0.02 ms; a count all-gather would add a fabric round to
+  the head's routing chain every layer (DS41-301: the dispatch waits for the slowest head).
+- Built (Python only; no kernel or fork change this attempt): OV-51 call-time switch - MOE_REPLICA_TABLE (load time:
+  agentic_traces default, agentic, none = the 12-slot pre-P.84 block) loads the 13th slot whatever MOE_REPLICAS says;
+  MOE_REPLICAS (default off, OV-52) picks per MoE call between the head weights with the slot map and the same weights
+  with a second router bias whose slot-map tile is zero (n = 0: no pick moves) - tt/moe_block_v2_adapter.py
+  replicas_loaded / replicas_active / _head_weights_off, built once at load, no host work per call. OV-53:
+  tt/expert_replicas.table reads P.85's list format (no mesh / experts fields: the 8x4 census numbering,
+  TABLE_DEFAULTS). Cores: none added (rule 18). OV-23: no Python-built op.
+- hooks.batch_call_settings is outside this step's paths: MOE_REPLICAS is still a load-time key for the runner (a
+  value change restarts it). Patch for the overseer (bringup/hooks.py batch_call_settings):
+  `return ("PREFILL_END", "MOE_REPLICAS") + (() if skip == "replay128" else ("DECODER_SKIP",))`. Until then the
+  one-load on/off comparison is tests/perf/test_moe_replicas_ab.py (flips the environment + settings.refresh()).
+- Measured (resident submit 20261119-112746, ONE device open / one load, DS41_MOE_REPLICAS=on in the load key,
+  DECODER_SKIP=decode, 2 chunks a point after the real previous chunk; walls = median of 7 of the first chunk):
+
+  | point | side | wall ms (spread) | device | moe_head | dispatch | experts+combine | tiles_max | rows on 13th |
+  |---|---|---|---|---|---|---|---|---|
+  | agentic p145408 | off | 78.6 (7.5) | 66.36 | 6.41 | 5.97 | 17.92 | 1626 | 0 |
+  | agentic p145408 | on | 80.6 (15.1) | 66.24 | 7.53 | 5.80 | 17.36 | 1359 | 68052 |
+  | agentic p770048 | off | 86.3 (4.3) | 79.65 | 6.78 | 6.36 | 17.90 | 1727 | 0 |
+  | agentic p770048 | on | 86.8 (9.1) | 80.34 | 7.71 | 6.26 | 17.69 | 1448 | 65752 |
+  | prose p145408 | off | 86.2 (2.1) | 73.83 | 8.52 | 9.54 | 22.34 | 2572 | 0 |
+  | prose p145408 | on | 86.4 (18.5) | 74.13 | 9.17 | 9.56 | 21.86 | 2534 | 14874 |
+
+  Every layer output of every chunk on vs off bit-identical (3 points x 2 chunks x 21 layers). Replica DRAM measured:
+  +19.69 MiB a chip a layer (load log, every layer 0-20: 0.40 GiB a chip for the 21 loaded layers; 0.77 GiB for 40).
+- STOP (stop rule, third time): agentic p145408 wall +2.0 ms on (inside the spread), device -0.12 ms; p770048 device
+  +0.69, prose +0.30. The head's remap / split / route-word patch costs +0.65..+1.12 ms a chunk (DS41-305), more
+  than the combine saves at its floor (-0.2..-0.56, DS41-303); agentic_traces balances the gate's chunks less than
+  agentic.json did (tiles 1359 vs attempt 1's 1073). Not profiled further, not tuned. Even a free head leaves
+  <= ~0.6 ms device at these points.
+- Off = the pre-P.84 bytes: on = off bit-identical here; attempt 1 / 2 showed the ladder's 105 err metrics equal to
+  P.78's with on (agentic table) and with the 12-slot off. The off-side ladder on THIS code was not run (a different
+  MOE_REPLICAS value restarts the runner until the hooks patch above; OV-51's open budget).
+- Re-run: `python -m models.demos.common.bringup.resident submit --spec $BRINGUP_SPEC --cmd "DS41_MOE_REPLICAS=on
+  DS41_DECODER_SKIP=decode scripts/run_safe_pytest.sh --run-all --no-precompile
+  models/demos/deepseek_v41_flash_d_p/tests/perf/test_moe_replicas_ab.py"` (P84_POINTS=text:p,..., P84_CHUNKS).
+  Host analysis of a census record against a table: the best / even split of P.84_offline.py over the record's
+  per-chip counts (attempt 3 used /tmp scripts; numbers above).
+- `orchestrator measure --task P.84` (on side, the same runner process: still 1 device open this attempt): agentic
+  p145408 wall 81.8 ms (spread 30.4), device 66.52, experts section 30.55; agentic p770048 88.3 / 80.20 / 30.92;
+  prose p145408 87.8 / 74.16 / 38.07; prose p1024000 98.9 / 92.65 / 38.46 (attempt 2's off on the 12-slot block:
+  80.0 / 65.51 / 29.70 at agentic p145408). `--part test_ladder` found no run (the runner's A/B side carries only
+  the timing tests, F285); accuracy is the accept gate's. No `gate --check` run (stop rule; the orchestrator gates).

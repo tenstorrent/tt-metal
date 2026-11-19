@@ -554,3 +554,15 @@
 - New table: tt/replicas/agentic_traces.json; it becomes the default table in P.84 attempt 3 (with the global-count
   split), measured by the A/B on the runner.
 - 11:18 UTC P.84 direct A/B of attempt 2's code (runner, 2 opens/loads, both units both sides): NO gain (agentic 145408 steady 79.2 off / 79.3 on; experts section 29.45 / 29.26 ms) although replicas load. Attempt 3 launched: first find why (census with replicas on), then global-count split, call-time switch, P.85 table. RAM unaccounted 178.6 GiB.
+
+## 12:02 UTC P.84 REJECTED (static replicas cannot reach the target); queue by size of gap
+- Attempt 3 (one runner load for both sides): rows reach the replicas and the busiest chip's tiles fall 39 %, but
+  routed_experts_combine sits at a ~780-850 us a layer floor below ~100 tiles (DS41-303: the DS41-299 linear fit
+  that promised 4.5 ms is wrong there); off, the least-loaded chip already takes 16.0 of 18.4 ms (perfect balance
+  <= ~2.3 ms) and the head adds ~1 ms. Measured: agentic 145408 78.6 off / 80.6 on, 770048 86.3 / 86.8, prose
+  86.2 / 86.4 ms. The local-estimate split was within 0.4 ms of a global-count split. Stopped before its redundant
+  orchestrator A/B (2 opens saved). Diff + notes kept: /data/dnijemcevic/bringup/handoff_20261118/rejected_p84;
+  code reverted, ttnn rebuilt. P.84 device opens in all: ~13 (attempts 1-3 + my direct A/B).
+- Owner: biggest opportunities first; the expert weight stream is not a target (highly optimized). Order: P.81
+  attention (~13.6 ms) -> X.10 host profile (decides the ~14 ms host lever; minutes) -> P.83 mHC (~6) -> P.82 MoE
+  head (~4.8 on real text).
