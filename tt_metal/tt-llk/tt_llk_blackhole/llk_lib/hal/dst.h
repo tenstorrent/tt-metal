@@ -7,7 +7,7 @@
 #include <cstdint>
 
 #include "ckernel.h"
-#include "llk_assert.h"
+#include "utils/validate.h"
 
 namespace hal::dst
 {
@@ -104,22 +104,16 @@ constexpr std::uint32_t encode(const Zero operation)
         operation.index);
 }
 
-constexpr void reject_invalid_constant(const bool valid)
+inline constexpr __attribute__((always_inline)) void validate(const Zero operation)
 {
-    if (__builtin_is_constant_evaluated() && !valid)
-    {
-        __builtin_trap();
-    }
+    hal::detail::require(is_valid(operation.scope), "ZEROACC scope must be SingleRow, Face, Half, or All");
+    hal::detail::require(operation.index < index_limit(operation.scope), "ZEROACC index exceeds the selected scope's range");
+    hal::detail::require(operation.address_mode < ADDRESS_MODE_COUNT, "Blackhole ZEROACC address mode must be in [0, 7]");
+    hal::detail::require(
+        operation.flags == ZeroFlagAction::MarkUndefined || operation.flags == ZeroFlagAction::ClearFlags,
+        "ZEROACC flag action must be MarkUndefined or ClearFlags");
+    hal::detail::require(operation.width == DestWidth::Bits16 || operation.width == DestWidth::Bits32, "ZEROACC Dst width must be Bits16 or Bits32");
 }
-
-#ifdef ENABLE_LLK_ASSERT
-inline __attribute__((always_inline)) void assert_valid(const Zero operation)
-{
-    LLK_ASSERT(is_valid(operation.scope), "ZEROACC scope must be SingleRow, Face, Half, or All");
-    LLK_ASSERT(operation.index < index_limit(operation.scope), "ZEROACC index exceeds the selected scope's range");
-    LLK_ASSERT(operation.address_mode < ADDRESS_MODE_COUNT, "Blackhole ZEROACC address mode must be in [0, 7]");
-}
-#endif
 
 } // namespace detail
 
@@ -131,13 +125,7 @@ constexpr bool is_valid(const Zero operation)
 
 inline constexpr __attribute__((always_inline)) std::uint32_t Zero::get_operation() const
 {
-    detail::reject_invalid_constant(detail::is_valid(*this));
-#ifdef ENABLE_LLK_ASSERT
-    if (!__builtin_is_constant_evaluated())
-    {
-        detail::assert_valid(*this);
-    }
-#endif
+    detail::validate(*this);
     return detail::encode(*this);
 }
 
