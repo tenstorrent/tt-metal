@@ -919,7 +919,6 @@ static tt::tt_metal::ProgramDescriptor pool2d_multi_core_sharded_with_halo_v2_im
         (params.is_avg_pool && params.is_large_kernel && device_arch == tt::ARCH::WORMHOLE_B0)
             ? tt::tt_metal::MathFidelity::HiFi3
             : tt::tt_metal::MathFidelity::HiFi4;
-    ttnn::verify_numerical_configuration(device_arch, compute_kernel_config);
 
     // Initialize device compute kernel config with user-provided config or defaults
     auto device_compute_kernel_config = init_device_compute_kernel_config(
