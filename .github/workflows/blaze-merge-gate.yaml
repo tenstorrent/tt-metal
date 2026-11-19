@@ -274,7 +274,7 @@ jobs:
           }
           # Set before anything can exit, so every exit revokes what is left.
           # On cancel the runner sends a signal: exit, so the EXIT trap runs.
-          trap 'revoke_github_token BLAZE_READ_TOKEN read; revoke_github_token BLAZE_WRITE_TOKEN write' EXIT
+          trap 'revoke_github_token BLAZE_READ_TOKEN read || true; revoke_github_token BLAZE_WRITE_TOKEN write || true' EXIT
           trap 'exit 143' TERM INT
           # <<< tt-blaze read token
           BLAZE_OUT=$(mktemp)
