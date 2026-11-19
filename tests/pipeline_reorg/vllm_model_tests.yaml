@@ -782,7 +782,9 @@
   additional-server-args: "--max-model-len 131072 --max_num_seqs 16 --block_size 64 --max-num-batched-tokens 8208 --no-enable-prefix-caching --reasoning-parser glm45"
   # The serving class by the plugin's generic override (tt-inference-server's catalog does the same): the test runs on
   # the plugin's main, whose built-in model map registers GLM-5.3-Flash only once the stack registration PR lands.
-  extra-env: "TT_MODEL_CLASS_OVERRIDES=Glm5NextForConditionalGeneration=models.demos.glm53_flash.tt.generator_vllm_stack:GLM53StackForCausalLM,TTGlm5NextForConditionalGeneration=models.demos.glm53_flash.tt.generator_vllm_stack:GLM53StackForCausalLM,Glm5NextForCausalLM=models.demos.glm53_flash.tt.generator_vllm_stack:GLM53StackForCausalLM,TTGlm5NextForCausalLM=models.demos.glm53_flash.tt.generator_vllm_stack:GLM53StackForCausalLM"
+  # TT_METAL_RUNTIME_ROOT: the JIT kernel include root (the e2e jobs set it to /work; without it the root is the installed
+  # wheel, which has no models/ tree, so the stack kernels' #include "models/autoports/..." fail to build)
+  extra-env: "TT_METAL_RUNTIME_ROOT=/work TT_MODEL_CLASS_OVERRIDES=Glm5NextForConditionalGeneration=models.demos.glm53_flash.tt.generator_vllm_stack:GLM53StackForCausalLM,TTGlm5NextForConditionalGeneration=models.demos.glm53_flash.tt.generator_vllm_stack:GLM53StackForCausalLM,Glm5NextForCausalLM=models.demos.glm53_flash.tt.generator_vllm_stack:GLM53StackForCausalLM,TTGlm5NextForCausalLM=models.demos.glm53_flash.tt.generator_vllm_stack:GLM53StackForCausalLM"
   coherence-test: true
   # the plugin's sampling suite: greedy rows on the stack's device argmax, sampled rows through the host sampler
   sampling-tests: true
