@@ -564,6 +564,70 @@ inline void write_full_row_tiles(
     }
 }
 
+// A core's slice of St tiles in a row of Wt tiles, from its nominal first tile slice * St. When St doesn't divide Wt,
+// the last slice moves left to end at Wt, and its first num_overlap tiles belong to the slice before it.
+struct RowSliceTiles {
+    uint32_t start;
+    uint32_t num_overlap;
+};
+template <uint32_t Wt, uint32_t St>
+inline RowSliceTiles row_slice_tiles(const uint32_t nominal_start) {
+    static_assert(St <= Wt, "A slice can't be wider than its row.");
+    const uint32_t start = nominal_start + St > Wt ? Wt - St : nominal_start;
+    return {start, nominal_start - start};
+}
+
+// read_tiles_by_row whose first num_zero_tiles slots are zero-filled instead of read.
+template <bool UseBarrier = true, typename AddrGen>
+inline void read_tiles_by_row_after_zeros(
+    const uint32_t cb_idx,
+    const AddrGen& addr_gen,
+    const uint32_t start_idx,
+    const uint32_t num_tiles,
+    const uint32_t tile_bytes,
+    const uint32_t num_zero_tiles) {
+    cb_reserve_back(cb_idx, num_tiles);
+    uint32_t l1_addr = get_write_ptr(cb_idx);
+    for (uint32_t t = 0; t < num_tiles; ++t) {
+        if (t < num_zero_tiles) {
+            fill_tile_zeros(l1_addr, tile_bytes);
+        } else {
+            noc_async_read_page(start_idx + t, addr_gen, l1_addr);
+        }
+        l1_addr += tile_bytes;
+    }
+    if constexpr (UseBarrier) {
+        noc_async_read_barrier();
+        cb_push_back(cb_idx, num_tiles);
+    }
+}
+
+// write_tiles_by_row that pops all num_tiles but writes none of the first num_skipped.
+template <bool UseBarrier = true, typename AddrGen>
+inline void write_tiles_by_row_skipping(
+    const uint32_t cb_idx,
+    const AddrGen& addr_gen,
+    const uint32_t start_idx,
+    const uint32_t num_tiles,
+    const uint32_t tile_bytes,
+    const uint32_t num_skipped) {
+    cb_wait_front(cb_idx, num_tiles);
+    uint32_t l1_read_addr = get_read_ptr(cb_idx) + num_skipped * tile_bytes;
+    for (uint32_t t = num_skipped; t < num_tiles; ++t) {
+        noc_async_write_page(start_idx + t, addr_gen, l1_read_addr);
+        l1_read_addr += tile_bytes;
+    }
+    if constexpr (UseBarrier) {
+        noc_async_write_barrier();
+        cb_pop_front(cb_idx, num_tiles);
+    }
+}
+
+// How many of the block_size tiles at column c of a slice fall in its first num_overlap tiles.
+inline uint32_t overlap_in_block(const uint32_t num_overlap, const uint32_t c, const uint32_t block_size) {
+    return num_overlap > c ? std::min(num_overlap - c, block_size) : 0U;
+}
+
 // Advance (sb, tile_base) to the next (b, sb) block of a Q tensor.
 // Packed layout is flat across blocks; head-major gives each (b, h) a contiguous page of Ts*Th
 // tiles, so head h at seq tile sb sits at (b*H + h)*Ts*Th + sb*Th. Wrapping sb therefore has to

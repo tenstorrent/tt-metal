@@ -794,17 +794,18 @@ std::vector<RMSNormCase> rmsnorm_cases() {
     const std::vector<Shape> plain_shapes = {
         // C % 32 != 0 masks the last tile.
         Shape{1, 32, 1, 1000},
-        // The Qwen3.8 hidden norm: 32 tile-rows of 160 tiles are split into column slices over several cores each.
+        // The Qwen3.8 hidden norm: 32 tile-rows of 160 tiles are split into column slices over several cores each; on
+        // 11x10, 6 slices of 27 whose last moves back over 2 tiles of the one before it.
         Shape{1, 1024, 1, 5120},
         // Only the last slice masks the partial last tile.
         Shape{1, 1024, 1, 5119},
-        // 37 tile-rows of 77 tiles: 7 slices of 11 tiles (block size 1), row-groups of 3 and of 2 rows in two core
-        // groups, and only the last slice masks.
+        // 37 tile-rows of 77 tiles: on 11x10, 5 slices of 16 (block size 2) whose last overlaps 3 tiles across two
+        // blocks, row-groups of 2 and of 1 rows in two core groups, and only the last slice masks.
         Shape{1, 1184, 1, 2463},
-        // One tile-row of 27 tiles: 9 slices of 3 tiles, block size 3 in the forward and 1 in the backward.
+        // One tile-row of 27 tiles: 7 slices of 4 tiles, the last overlapping 1 tile and masked.
         Shape{1, 32, 1, 863},
-        // 131 tile-rows of 74 = 2 * 37 tiles: 2 slices is the only split, with row-groups of 3 and of 2 rows in two
-        // core groups.
+        // 131 tile-rows of 74 tiles: 3 slices of 25 whose last overlaps 1 tile (block size 1), with row-groups of 4
+        // and of 3 rows in two core groups.
         Shape{1, 4192, 1, 2368},
     };
     // These widths would be sliced, so they keep whole rows to cover the whole-row paths.

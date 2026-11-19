@@ -15,8 +15,8 @@ void kernel_main() {
     uint32_t gate_address = get_arg_val<uint32_t>(runtime_args_counter++);
     uint32_t num_rows_to_process = get_arg_val<uint32_t>(runtime_args_counter++);
     uint32_t start_row = get_arg_val<uint32_t>(runtime_args_counter++);
-    // First tile of this core's slice within each row; 0 without slicing.
-    uint32_t slice_start = get_arg_val<uint32_t>(runtime_args_counter++);
+    // slice * St for this core's slice; 0 without slicing.
+    uint32_t nominal_slice_start = get_arg_val<uint32_t>(runtime_args_counter++);
 
     constexpr uint32_t cb_input_idx = tt::CBIndex::c_0;
     constexpr uint32_t cb_mask_w_idx = tt::CBIndex::c_1;
@@ -53,6 +53,8 @@ void kernel_main() {
 #if defined(GATED) || !defined(EVERYTHING_FITS_IN_L1)
     static_assert(St == Wt, "Only ungated rows resident in L1 are split into slices.");
 #endif
+    // The overlap of a moved last slice reads as zeros, so it adds nothing to sum(x^2), and the writer skips it.
+    const auto [slice_start, num_overlap] = row_slice_tiles<Wt, St>(nominal_slice_start);
 
     // generate mask tile
     if constexpr (do_mask_w) {
@@ -77,7 +79,7 @@ void kernel_main() {
         uint32_t idx = (start_row + i) * Wt + slice_start;
 
 #ifdef EVERYTHING_FITS_IN_L1
-        read_tiles_by_row(cb_input_idx, input_address_generator, idx, St, tile_bytes, St);
+        read_tiles_by_row_after_zeros(cb_input_idx, input_address_generator, idx, St, tile_bytes, num_overlap);
 
         if (i == 0) {
             read_tiles_by_row(cb_gamma_idx, gamma_address_generator, slice_start, St, gamma_tile_bytes, St);

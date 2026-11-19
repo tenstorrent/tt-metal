@@ -5,7 +5,8 @@
 // Host-side tests for plan_row_slices, the split of RMSNorm tile-rows over the cores. It is plain arithmetic, so these
 // run without a device and pin its answers on several grids, whatever grid the test machine has. Each pinned answer
 // follows from the cost the planner minimizes:
-//   cost(S) = ceil(rows / min(rows, cores / S)) * (Wt / S + (S > 1 ? S + kRowSliceExchangeCostTiles : 0)).
+//   cost(S) = ceil(rows / min(rows, cores / S)) * (St + (S > 1 ? S + kRowSliceExchangeCostTiles : 0)) + St,
+// with St = ceil(Wt / S).
 
 #include <gtest/gtest.h>
 
@@ -78,24 +79,50 @@ TEST(RMSNormPlannerTest, ZeroRowsGetNoCores) {
     }
 }
 
-// 37 is prime and above kMaxRowSlices, so no slice count divides it. A single row would otherwise be sliced.
-TEST(RMSNormPlannerTest, PrimeWtKeepsWholeRows) {
+// No slice count divides 37, so the last slice is shorter: 8 slices of St = ceil(37 / 8) = 5 cost 5 + 12 + 5 = 22,
+// tied with 10 slices of 4 (4 + 14 + 4), against 74 for the whole row.
+TEST(RMSNormPlannerTest, SliceCountsNeedNotDivideWt) {
     for (const auto& grid : kGrids) {
         SCOPED_TRACE(describe(grid, 1U, 37U));
-        uint32_t fit_checks = 0U;
-        const auto p = plan_row_slices(grid, 1U, 37U, kMaxRowSlices, [&](uint32_t, uint32_t) {
-            ++fit_checks;
+        const auto p = plan(grid, 1U, 37U);
+        EXPECT_EQ(p.num_slices, 8U);
+        EXPECT_EQ(p.slice_tiles, 5U);
+        EXPECT_EQ(p.num_cores, 8U);
+    }
+}
+
+// A count whose ceil(Wt / S)-tile slices cover Wt before the last one is skipped: with Wt = 10, S = 6 to 9 give slices
+// of 2, and 5 of them already cover the row.
+TEST(RMSNormPlannerTest, SliceCountsWithAnEmptyLastSliceAreSkipped) {
+    for (const auto& grid : kGrids) {
+        SCOPED_TRACE(describe(grid, 1U, 10U));
+        std::vector<std::pair<uint32_t, uint32_t>> fit_checks;
+        plan_row_slices(grid, 1U, 10U, kMaxRowSlices, [&](const uint32_t slice_tiles, const uint32_t num_slices) {
+            fit_checks.emplace_back(slice_tiles, num_slices);
             return true;
         });
-        EXPECT_EQ(p.num_slices, 1U);
-        EXPECT_EQ(p.slice_tiles, 37U);
-        EXPECT_EQ(p.num_cores, 1U);
-        EXPECT_EQ(fit_checks, 0U);
+        const std::vector<std::pair<uint32_t, uint32_t>> expected_checks = {
+            {5U, 2U}, {4U, 3U}, {3U, 4U}, {2U, 5U}, {1U, 10U}};
+        EXPECT_EQ(fit_checks, expected_checks);
+    }
+}
+
+// Every plan covers its row, and its last slice, which the kernels move back to end at Wt, keeps a tile of its own.
+TEST(RMSNormPlannerTest, SlicesCoverTheRowAndTheLastKeepsATile) {
+    for (const auto& grid : kGrids) {
+        for (const uint32_t total_rows : {1U, 32U, 128U}) {
+            for (uint32_t Wt = 1U; Wt <= 300U; ++Wt) {
+                SCOPED_TRACE(describe(grid, total_rows, Wt));
+                const auto p = plan(grid, total_rows, Wt);
+                EXPECT_GE(p.num_slices * p.slice_tiles, Wt);
+                EXPECT_LT((p.num_slices - 1U) * p.slice_tiles, Wt);
+            }
+        }
     }
 }
 
 // One row of 512 tiles takes 16 slices when they fit (cost 32 + 16 + 4 + 32 = 84 against 1024 for whole rows). The
-// predicate sees every dividing count with its slice width, and rejecting them all falls back to whole rows.
+// predicate sees every count with its slice width, and rejecting them all falls back to whole rows.
 TEST(RMSNormPlannerTest, SlicesThatDontFitFallBackToWholeRows) {
     for (const auto& grid : kGrids) {
         SCOPED_TRACE(describe(grid, 1U, 512U));
@@ -118,7 +145,21 @@ TEST(RMSNormPlannerTest, SlicesThatDontFitFallBackToWholeRows) {
                 .num_cores = 1U,
                 .num_cores_y = static_cast<uint32_t>(grid.y)});
         const std::vector<std::pair<uint32_t, uint32_t>> expected_checks = {
-            {256U, 2U}, {128U, 4U}, {64U, 8U}, {32U, 16U}};
+            {256U, 2U},
+            {171U, 3U},
+            {128U, 4U},
+            {103U, 5U},
+            {86U, 6U},
+            {74U, 7U},
+            {64U, 8U},
+            {57U, 9U},
+            {52U, 10U},
+            {47U, 11U},
+            {43U, 12U},
+            {40U, 13U},
+            {37U, 14U},
+            {35U, 15U},
+            {32U, 16U}};
         EXPECT_EQ(fit_checks, expected_checks);
     }
 }
@@ -131,30 +172,31 @@ TEST(RMSNormPlannerTest, FewRowsSliceAndManyRowsKeepWholeRows) {
         uint32_t total_rows;
         uint32_t Wt;
         uint32_t num_slices;
+        uint32_t slice_tiles;
     };
     const std::vector<Case> cases = {
-        // 110 cores, Wt = 160 (C = 5120). 32 rows: S = 10 makes 11 groups, 3 * (16 + 14) + 16 = 106; S = 5 costs
-        // 2 * (32 + 9) + 32 = 114, S = 8 116 and whole rows 160 + 160 = 320.
-        {kGrid11x10, 32U, 160U, 10U},
+        // 110 cores, Wt = 160 (C = 5120). 32 rows: S = 6 slices of 27 make 18 groups, 2 * (27 + 10) + 27 = 101;
+        // S = 10 costs 3 * (16 + 14) + 16 = 106, S = 5 114 and whole rows 160 + 160 = 320.
+        {kGrid11x10, 32U, 160U, 6U, 27U},
         // 128 rows: S = 5 makes 22 groups, 6 * 41 + 32 = 278; S = 4 costs 5 * (40 + 8) + 40 = 280 and whole rows
         // 2 * 160 + 160 = 480.
-        {kGrid11x10, 128U, 160U, 5U},
+        {kGrid11x10, 128U, 160U, 5U, 32U},
         // 2048 rows: whole rows take 19 rounds, 19 * 160 + 160 = 3200; S = 2 costs 38 * 86 + 80 = 3348.
-        {kGrid11x10, 2048U, 160U, 1U},
-        // Wt = 224 (C = 7168), 32 rows: S = 8 makes 13 groups, 3 * (28 + 12) + 28 = 148; S = 2 costs
-        // 118 + 112 = 230, so the gamma read is what moves it off S = 2.
-        {kGrid11x10, 32U, 224U, 8U},
+        {kGrid11x10, 2048U, 160U, 1U, 160U},
+        // Wt = 224 (C = 7168), 32 rows: S = 6 slices of 38 make 18 groups, 2 * (38 + 10) + 38 = 134, tied with S = 10;
+        // S = 8 costs 3 * (28 + 12) + 28 = 148 and S = 2 112 + 6 + 112 = 230.
+        {kGrid11x10, 32U, 224U, 6U, 38U},
         // 130 cores, Wt = 16, 128 rows: whole rows take one round, 16 + 16 = 32; S = 2 costs 2 * (8 + 6) + 8 = 36.
-        {kGrid13x10, 128U, 16U, 1U},
-        // 64 cores, 37 rows of 77 tiles: S = 7 makes 9 groups, 5 * (11 + 11) + 11 = 121 against 77 + 77 = 154 for
-        // whole rows, and S = 11 makes 5 groups, 8 * (7 + 15) + 7 = 183.
-        {kGrid8x8, 37U, 77U, 7U},
+        {kGrid13x10, 128U, 16U, 1U, 16U},
+        // 64 cores, 37 rows of 77 tiles: S = 3 slices of 26 make 21 groups, 2 * (26 + 7) + 26 = 92; S = 4 costs
+        // 3 * (20 + 8) + 20 = 104 and whole rows 77 + 77 = 154.
+        {kGrid8x8, 37U, 77U, 3U, 26U},
     };
     for (const auto& c : cases) {
         SCOPED_TRACE(describe(c.grid, c.total_rows, c.Wt));
         const auto p = plan(c.grid, c.total_rows, c.Wt);
         EXPECT_EQ(p.num_slices, c.num_slices);
-        EXPECT_EQ(p.slice_tiles, c.Wt / c.num_slices);
+        EXPECT_EQ(p.slice_tiles, c.slice_tiles);
     }
 }
 
@@ -166,7 +208,7 @@ TEST(RMSNormPlannerTest, TiesKeepTheSmallerSliceCount) {
             SCOPED_TRACE(describe(grid, 1U, 12U));
             EXPECT_EQ(plan(grid, 1U, 12U).num_slices, 4U);
         }
-        // One row of 24 tiles: S = 6 and S = 8 both cost 18 (4 + 10 + 4 and 3 + 12 + 3); S = 4 and S = 12 cost 20.
+        // One row of 24 tiles: S = 6 and S = 8 both cost 18 (4 + 10 + 4 and 3 + 12 + 3); S = 5 costs 19.
         {
             SCOPED_TRACE(describe(grid, 1U, 24U));
             EXPECT_EQ(plan(grid, 1U, 24U).num_slices, 6U);
@@ -177,61 +219,51 @@ TEST(RMSNormPlannerTest, TiesKeepTheSmallerSliceCount) {
 // Rows that don't divide over the row-groups: the first num_groups_1 groups take one row more.
 TEST(RMSNormPlannerTest, UnevenSplitsGiveTwoGroupSizes) {
     const std::vector<PlanCase> cases = {
-        // The Plain_1x1184x1x2463 device test: 37 rows of 77 tiles, 7 slices. 130 / 7 = 18 groups, 37 = 1 * 3 + 17 * 2.
-        {kGrid13x10,
-         37U,
-         77U,
-         {.num_slices = 7U,
-          .slice_tiles = 11U,
-          .num_groups_1 = 1U,
-          .rows_per_group_1 = 3U,
-          .rows_per_group_2 = 2U,
-          .num_cores = 126U,
-          .num_cores_y = 10U}},
-        // 110 / 7 = 15 groups, 37 = 7 * 3 + 8 * 2.
+        // The Plain_1x1184x1x2463 device test: 37 rows of 77 tiles in 5 slices of 16, the last 13 tiles of its own.
+        // 110 / 5 = 22 groups, 37 = 15 * 2 + 7 * 1.
         {kGrid11x10,
          37U,
          77U,
-         {.num_slices = 7U,
-          .slice_tiles = 11U,
-          .num_groups_1 = 7U,
-          .rows_per_group_1 = 3U,
-          .rows_per_group_2 = 2U,
-          .num_cores = 105U,
-          .num_cores_y = 10U}},
-        // The Plain_1x4192x1x2368 device test: 131 rows of 74 = 2 * 37 tiles, so 2 slices is the only split. It costs
-        // 3 * (37 + 6) + 37 = 166 against 2 * 74 + 74 = 222. 65 groups, 131 = 1 * 3 + 64 * 2.
-        {kGrid13x10,
-         131U,
-         74U,
-         {.num_slices = 2U,
-          .slice_tiles = 37U,
-          .num_groups_1 = 1U,
-          .rows_per_group_1 = 3U,
-          .rows_per_group_2 = 2U,
-          .num_cores = 130U,
-          .num_cores_y = 10U}},
-        // 55 groups, 131 = 21 * 3 + 34 * 2.
-        {kGrid11x10,
-         131U,
-         74U,
-         {.num_slices = 2U,
-          .slice_tiles = 37U,
-          .num_groups_1 = 21U,
-          .rows_per_group_1 = 3U,
-          .rows_per_group_2 = 2U,
+         {.num_slices = 5U,
+          .slice_tiles = 16U,
+          .num_groups_1 = 15U,
+          .rows_per_group_1 = 2U,
+          .rows_per_group_2 = 1U,
           .num_cores = 110U,
           .num_cores_y = 10U}},
-        // 5 * (37 + 6) + 37 = 252 against 3 * 74 + 74 = 296. 32 groups, 131 = 3 * 5 + 29 * 4.
+        // The Plain_1x4192x1x2368 device test: 131 rows of 74 tiles in 3 slices of 25, the last 24 of its own.
+        // 43 groups, 131 = 2 * 4 + 41 * 3.
+        {kGrid13x10,
+         131U,
+         74U,
+         {.num_slices = 3U,
+          .slice_tiles = 25U,
+          .num_groups_1 = 2U,
+          .rows_per_group_1 = 4U,
+          .rows_per_group_2 = 3U,
+          .num_cores = 129U,
+          .num_cores_y = 10U}},
+        // 36 groups, 131 = 23 * 4 + 13 * 3.
+        {kGrid11x10,
+         131U,
+         74U,
+         {.num_slices = 3U,
+          .slice_tiles = 25U,
+          .num_groups_1 = 23U,
+          .rows_per_group_1 = 4U,
+          .rows_per_group_2 = 3U,
+          .num_cores = 108U,
+          .num_cores_y = 10U}},
+        // 21 groups, 131 = 5 * 7 + 16 * 6.
         {kGrid8x8,
          131U,
          74U,
-         {.num_slices = 2U,
-          .slice_tiles = 37U,
-          .num_groups_1 = 3U,
-          .rows_per_group_1 = 5U,
-          .rows_per_group_2 = 4U,
-          .num_cores = 64U,
+         {.num_slices = 3U,
+          .slice_tiles = 25U,
+          .num_groups_1 = 5U,
+          .rows_per_group_1 = 7U,
+          .rows_per_group_2 = 6U,
+          .num_cores = 63U,
           .num_cores_y = 8U}},
         // Wt = 128: 110 / 4 = 27 groups, 128 = 20 * 5 + 7 * 4, so two cores of the last column stay idle.
         {kGrid11x10,

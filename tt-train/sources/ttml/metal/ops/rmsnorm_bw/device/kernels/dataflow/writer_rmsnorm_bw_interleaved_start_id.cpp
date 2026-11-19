@@ -68,7 +68,8 @@ void kernel_main() {
             peer_noc_y[peer] = get_arg_val<uint32_t>(runtime_args_counter++);
         }
     }
-    const uint32_t slice_start = slice * St;
+    // A moved last slice doesn't write its overlap, which the slice before it owns.
+    const auto [slice_start, num_overlap] = row_slice_tiles<Wt, St>(slice * St);
 
     const uint32_t tile_bytes = get_tile_size(cb_dL_da_idx);
     constexpr auto da_args = TensorAccessorArgs<7>();
@@ -109,19 +110,20 @@ void kernel_main() {
         }
         for (uint32_t c = 0; c < St; c += block_size) {
             uint32_t start_idx = (r * Wt) + slice_start + c;
+            const uint32_t num_skipped = overlap_in_block(num_overlap, c, block_size);
 
             // Write dL_da block
-            write_tiles_by_row</* UseBarrier = */ false>(
-                cb_dL_da_idx, da_output_addr_generator, start_idx, block_size, tile_bytes, block_size);
+            write_tiles_by_row_skipping</* UseBarrier = */ false>(
+                cb_dL_da_idx, da_output_addr_generator, start_idx, block_size, tile_bytes, num_skipped);
             if constexpr (compute_dgamma) {
                 // Write dL_dgamma_components block
-                write_tiles_by_row</* UseBarrier = */ false>(
+                write_tiles_by_row_skipping</* UseBarrier = */ false>(
                     cb_dL_dgamma_components,
                     dgamma_output_addr_generator,
                     start_idx,
                     block_size,
                     tile_bytes,
-                    block_size);
+                    num_skipped);
             }
             noc_async_write_barrier();
             cb_pop_front(cb_dL_da_idx, block_size);

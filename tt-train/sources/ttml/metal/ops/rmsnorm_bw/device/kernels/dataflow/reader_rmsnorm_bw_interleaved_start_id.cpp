@@ -60,8 +60,11 @@ void kernel_main() {
     uint32_t gate_address = get_arg_val<uint32_t>(runtime_args_counter++);
     uint32_t num_rows_to_process = get_arg_val<uint32_t>(runtime_args_counter++);
     uint32_t start_row = get_arg_val<uint32_t>(runtime_args_counter++);
-    // First tile of this core's slice within each row; 0 without slicing.
-    uint32_t slice_start = get_arg_val<uint32_t>(runtime_args_counter++);
+    // slice * St for this core's slice; 0 without slicing.
+    uint32_t nominal_slice_start = get_arg_val<uint32_t>(runtime_args_counter++);
+    // The input in the overlap of a moved last slice reads as zeros, so the overlap adds nothing to the scale, and the
+    // writer skips it. dL_dout and gamma there are real and only ever multiplied by the input.
+    const auto [slice_start, num_overlap] = row_slice_tiles<Wt, St>(nominal_slice_start);
 
     constexpr uint16_t one = 0x00003F80;  // (bfloat16)1.0 -> uint16_t
     constexpr uint16_t zero = 0x0;
@@ -103,8 +106,13 @@ void kernel_main() {
         // Issues the reads of the input, dL_dout and gate blocks at column c of the slice; the caller barriers and
         // pushes them.
         auto read_row_blocks = [&](const uint32_t c) {
-            read_tiles_by_row</* UseBarrier = */ false>(
-                cb_input_idx, input_address_generator, row_start + c, block_size, input_tile_bytes, block_size);
+            read_tiles_by_row_after_zeros</* UseBarrier = */ false>(
+                cb_input_idx,
+                input_address_generator,
+                row_start + c,
+                block_size,
+                input_tile_bytes,
+                overlap_in_block(num_overlap, c, block_size));
             read_tiles_by_row</* UseBarrier = */ false>(
                 cb_dL_out_idx, dL_out_address_generator, merged_row_start + c, block_size, tile_bytes, block_size);
             if constexpr (gated) {

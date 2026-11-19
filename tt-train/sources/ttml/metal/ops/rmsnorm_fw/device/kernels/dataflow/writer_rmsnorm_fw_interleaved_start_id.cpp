@@ -42,7 +42,8 @@ void kernel_main() {
             peer_noc_y[peer] = get_arg_val<uint32_t>(runtime_args_counter++);
         }
     }
-    const uint32_t slice_start = slice * St;
+    // A moved last slice doesn't write its overlap, which the slice before it owns.
+    const auto [slice_start, num_overlap] = row_slice_tiles<Wt, St>(slice * St);
 
 #ifdef RETURN_RMS
     constexpr bool return_rms = true;
@@ -83,9 +84,16 @@ void kernel_main() {
             }
         }
 
-        const uint32_t output_row = head_merged_row<layout_Ht, layout_num_heads>(r);
-        write_full_row_tiles(
-            cb_output_idx, output_addr_generator, St, block_size, tile_bytes, output_row * Wt + slice_start);
+        const uint32_t output_start = head_merged_row<layout_Ht, layout_num_heads>(r) * Wt + slice_start;
+        for (uint32_t c = 0; c < St; c += block_size) {
+            write_tiles_by_row_skipping(
+                cb_output_idx,
+                output_addr_generator,
+                output_start + c,
+                block_size,
+                tile_bytes,
+                overlap_in_block(num_overlap, c, block_size));
+        }
     }
 
     if constexpr (sliced) {

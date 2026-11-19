@@ -49,9 +49,10 @@ constexpr uint32_t kMaxRowSlices = 16U;
 constexpr uint32_t kRowSliceExchangeCostTiles = 4U;
 
 // How rmsnorm_fw and rmsnorm_bw split tile-rows over the cores: each row is cut into num_slices column slices of
-// slice_tiles tiles, and num_slices = 1 keeps whole rows. Core i of the walk {i / num_cores_y, i % num_cores_y} handles
-// slice i % num_slices of row-group i / num_slices. Row-groups [0, num_groups_1) take rows_per_group_1 rows, the rest
-// rows_per_group_2. The core ranges come from row_slice_cores().
+// slice_tiles = ceil(Wt / num_slices) tiles, and num_slices = 1 keeps whole rows. When slice_tiles doesn't divide Wt,
+// the last slice ends at Wt and overlaps the one before it, which the kernels skip (row_slice_tiles). Core i of the
+// walk {i / num_cores_y, i % num_cores_y} handles slice i % num_slices of row-group i / num_slices. Row-groups
+// [0, num_groups_1) take rows_per_group_1 rows, the rest rows_per_group_2. The core ranges come from row_slice_cores().
 struct RowSlicePlan {
     uint32_t num_slices = 1U;
     uint32_t slice_tiles = 0U;
@@ -81,8 +82,8 @@ struct RowSliceCores {
 
 // Picks num_slices by the work of the busiest core: rounds of rows times the tiles per row and the exchange, plus its
 // one read of slice_tiles gamma tiles.
-// Only slice counts up to max_slices that divide Wt and whose slice `slice_fits_in_l1(slice_tiles, num_slices)`
-// are considered; ties keep the smaller count.
+// Only slice counts up to max_slices whose last slice keeps a tile of its own and whose slice
+// `slice_fits_in_l1(slice_tiles, num_slices)` are considered; ties keep the smaller count.
 template <typename SliceFitsInL1>
 RowSlicePlan plan_row_slices(
     const tt::tt_metal::CoreCoord grid,
@@ -98,19 +99,21 @@ RowSlicePlan plan_row_slices(
     }
 
     const uint32_t max_cores = grid.x * grid.y;
+    const auto slice_tiles_for = [&](const uint32_t num_slices) { return (Wt + num_slices - 1U) / num_slices; };
     const auto num_groups_for = [&](const uint32_t num_slices) { return std::min(total_rows, max_cores / num_slices); };
     const auto cost = [&](const uint32_t num_slices) -> uint64_t {
         const uint32_t num_groups = num_groups_for(num_slices);
         const uint64_t rounds = (total_rows + num_groups - 1U) / num_groups;
         const uint64_t exchange = num_slices > 1U ? num_slices + kRowSliceExchangeCostTiles : 0U;
-        const uint64_t slice_tiles = Wt / num_slices;
+        const uint64_t slice_tiles = slice_tiles_for(num_slices);
         return rounds * (slice_tiles + exchange) + slice_tiles;
     };
 
     uint32_t num_slices = 1U;
     uint64_t best_cost = cost(1U);
     for (uint32_t candidate = 2U; candidate <= std::min({Wt, max_cores, max_slices, kMaxRowSlices}); ++candidate) {
-        if (Wt % candidate != 0U || !slice_fits_in_l1(Wt / candidate, candidate)) {
+        const uint32_t slice_tiles = slice_tiles_for(candidate);
+        if ((candidate - 1U) * slice_tiles >= Wt || !slice_fits_in_l1(slice_tiles, candidate)) {
             continue;
         }
         if (const uint64_t candidate_cost = cost(candidate); candidate_cost < best_cost) {
@@ -120,7 +123,7 @@ RowSlicePlan plan_row_slices(
     }
 
     plan.num_slices = num_slices;
-    plan.slice_tiles = Wt / num_slices;
+    plan.slice_tiles = slice_tiles_for(num_slices);
     const uint32_t num_groups = num_groups_for(num_slices);
     plan.num_cores = num_groups * num_slices;
     const uint32_t extra_rows = total_rows % num_groups;
