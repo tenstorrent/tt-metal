@@ -661,5 +661,4 @@ def test_softmax_backward_c_bfloat8_b(shape, dim, strategy, device):
     rounded_dy = ttnn.to_torch(ttnn_dy).float()
     expected = rounded_y * (rounded_dy - (rounded_dy * rounded_y).sum(dim, keepdim=True))
     passing, out = comp_pcc(expected, ttnn.to_torch(ttnn_dx).float(), 0.999)
-    logger.debug(out)
     assert passing, out
