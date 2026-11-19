@@ -583,9 +583,6 @@ class LTXResnetBlock3D(Module):
 
         h = self.norm2(h, compute_kernel_config=self.norm_compute_kernel_config)
         h = ttnn.to_layout(h, ttnn.ROW_MAJOR_LAYOUT)
-        conv2_kwargs = dict(causal=causal, logical_h=logical_h, logical_w=logical_w, cf_input_padded=True)
-        if not self.fuse_residual:
-            h = self.conv2(h, **conv2_kwargs)
 
         if self.has_shortcut:
             residual = ttnn.layer_norm(residual, weight=self.norm3_weight.data, bias=self.norm3_bias.data)
@@ -593,11 +590,16 @@ class LTXResnetBlock3D(Module):
                 residual = ttnn.to_layout(residual, ttnn.ROW_MAJOR_LAYOUT)
             residual = self.conv_shortcut(residual, causal=causal, logical_h=logical_h, logical_w=logical_w)
 
-        if self.fuse_residual:
-            if self.conv2.can_fuse_residual(residual):
-                return self.conv2(h, **conv2_kwargs, residual=residual)
-            h = self.conv2(h, **conv2_kwargs)
-        return ttnn.add(residual, h)
+        fuse = self.fuse_residual and self.conv2.can_fuse_residual(residual)
+        h = self.conv2(
+            h,
+            causal=causal,
+            logical_h=logical_h,
+            logical_w=logical_w,
+            cf_input_padded=True,
+            residual=residual if fuse else None,
+        )
+        return h if fuse else ttnn.add(residual, h)
 
 
 class LTXUNetMidBlock3D(Module):

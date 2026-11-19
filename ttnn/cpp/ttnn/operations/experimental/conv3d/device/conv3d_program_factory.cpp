@@ -265,9 +265,6 @@ Conv3dL1Plan select_l1_plan(const Conv3dParams& operation_attributes, const Conv
 }
 
 bool residual_epilogue_fits(const Conv3dParams& operation_attributes, const Conv3dInputs& tensor_args) {
-    if (!tensor_args.residual_tensor.has_value()) {
-        return true;
-    }
     // The residual_rm and untilized_rm CBs take L1 from the prefetch shard and the L1 tensor headroom. Fuse only
     // when they cost neither: the static CBs still fit (the planning budget, where the plain plan fits it), and
     // a plain plan that prefetches still prefetches. Otherwise halo mode would refuse the blocking and the

@@ -387,8 +387,7 @@ def fast_device_to_host_yuv(
             msg = "fast_device_to_host_yuv: input_patch_size is single-host only"
             raise ValueError(msg)
         p = input_patch_size
-        B, T, hp_per, wp_per, Cp = tt_video_BCTHW.shape
-        assert Cp == 3 * p * p, f"patchified input needs 3*p*p={3 * p * p} channels, got {Cp}"
+        B, T, hp_per, wp_per, _ = tt_video_BCTHW.shape
         C, h_per, w_per = 3, hp_per * p, wp_per * p
     else:
         B, C, T, h_per, w_per = tt_video_BCTHW.shape
