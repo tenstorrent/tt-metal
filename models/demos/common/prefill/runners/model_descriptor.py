@@ -3,12 +3,14 @@
 
 """The model descriptor tt-d-gen's prefill worker reads at ``device.descriptor_path``.
 
-The contract is tt-d-gen's ``docs/schemas/model_descriptor.schema.json``. The runner's master rank writes it once the
-runner is set up, at ``PREFILL_MODEL_DESCRIPTOR_PATH``, replacing the previous run's file through a rename.
+The contract is tt-d-gen's ``docs/schemas/model_descriptor.schema.json``. The runner's master rank removes the previous
+run's file at start-up and writes this one once the runner is set up, at ``PREFILL_MODEL_DESCRIPTOR_PATH``, through a
+rename.
 """
 
 from __future__ import annotations
 
+import contextlib
 import json
 import os
 import socket
@@ -68,3 +70,9 @@ def write(path: str, doc: dict) -> None:
     with open(tmp, "w") as fh:
         json.dump(doc, fh, indent=1)
     os.replace(tmp, path)
+
+
+def remove(path: str) -> None:
+    """Drop a previous run's descriptor, so nothing reads it while this run sets up."""
+    with contextlib.suppress(FileNotFoundError):
+        os.remove(path)

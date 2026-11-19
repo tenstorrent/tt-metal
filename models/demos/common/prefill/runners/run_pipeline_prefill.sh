@@ -109,6 +109,7 @@ fi
 FWD_ENV=""
 [ -n "${PREFILL_MANIFEST:-}" ] && FWD_ENV="${FWD_ENV} -x PREFILL_MANIFEST"
 [ -n "${PREFILL_MODEL:-}" ] && FWD_ENV="${FWD_ENV} -x PREFILL_MODEL"
+[ -n "${PREFILL_MODEL_DESCRIPTOR_PATH:-}" ] && FWD_ENV="${FWD_ENV} -x PREFILL_MODEL_DESCRIPTOR_PATH"
 
 exec python3 ttnn/ttnn/distributed/ttrun.py \
   --tcp-interface "$TCP_IFACE" \

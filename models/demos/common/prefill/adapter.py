@@ -31,6 +31,7 @@ properties that import lazily.
 from __future__ import annotations
 
 import importlib
+import os
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from pathlib import Path
@@ -215,6 +216,12 @@ class PrefillModelAdapter(ABC):
     def load_hf_config(self) -> "PretrainedConfig":
         """Load (and normalize) the HF config from PREFILL_HF_MODEL (falling back
         to ``hf_model_default``). The runner sets ``max_seq_len`` on the result."""
+
+    @property
+    def hf_model_path(self) -> str:
+        """The checkpoint this model serves from: PREFILL_HF_MODEL, else ``hf_model_default``. An adapter that
+        resolves its checkpoint another way overrides this with that precedence."""
+        return os.environ.get("PREFILL_HF_MODEL") or self.hf_model_default
 
     @property
     def default_sparse_kv_cache_format(self) -> Optional[object]:

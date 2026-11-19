@@ -78,6 +78,11 @@ class MLAPrefillAdapter(PrefillModelAdapter):
         cfg = AutoConfig.from_pretrained(model_path, trust_remote_code=True)
         return unwrap_multimodal_config(cfg)
 
+    @property
+    def hf_model_path(self) -> str:
+        """The checkpoint missing weight-cache pieces are built from: PREFILL_HF_MODEL > ``env_var`` > the default."""
+        return os.environ.get("PREFILL_HF_MODEL") or os.environ.get(self.env_var, "") or self.hf_model_default
+
     # ------------------------------------------------------------------
     # Weight cache
     # ------------------------------------------------------------------
@@ -169,9 +174,7 @@ class MLAPrefillAdapter(PrefillModelAdapter):
             overlap_shared_expert_with_dispatch=params.overlap_shared_expert_with_dispatch,
             tp_shard_kv=True if self._dense_tp_shard_kv(params) else None,
             build_missing_cache=self.builds_missing_weight_cache,
-            hf_model_path=os.environ.get("PREFILL_HF_MODEL")
-            or os.environ.get(self.env_var, "")
-            or self.hf_model_default,
+            hf_model_path=self.hf_model_path,
         )
         return TtPrefillRuntime(
             mesh_device=mesh_device,
