@@ -3740,5 +3740,22 @@
   "device_ms_total_p147456_nonlast": 118.3,
   "steady_wall_ms_p145408": 108.3,
   "steady_wall_ms_p147456": 149.3
+ },
+ "X.9": {
+  "census_experts_ms_tagentic": 18.35,
+  "census_experts_ms_tcode": 19.1,
+  "census_experts_ms_tmath": 18.99,
+  "census_experts_ms_tmultilingual": 20.97,
+  "census_experts_ms_tprose": 22.52,
+  "census_tiles_max_sum_tagentic": 1749.2,
+  "census_tiles_max_sum_tcode": 1851.2,
+  "census_tiles_max_sum_tmath": 1930.0,
+  "census_tiles_max_sum_tmultilingual": 2399.8,
+  "census_tiles_max_sum_tprose": 2608.2,
+  "steady_wall_ms_p145408_tagentic": 81.9,
+  "steady_wall_ms_p145408_tcode": 80.7,
+  "steady_wall_ms_p145408_tmath": 83.2,
+  "steady_wall_ms_p145408_tmultilingual": 85.1,
+  "steady_wall_ms_p145408_tprose": 86.3
  }
 }

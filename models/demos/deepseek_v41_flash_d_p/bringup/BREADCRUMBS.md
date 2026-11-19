@@ -832,3 +832,54 @@
   measure --task P.80: determinism max_abs_diff 0.0 (state 0.0); rung last rc 0, err_final_hidden 0.13463 (limit
   0.2422; P.78's 0.1346: bit-identical path), final hidden PCC 0.991, top1 / top5 1.0. The off side and the wall
   A/B are the orchestrator's.
+
+## X.9 perf (attempt 1): hot-expert census over texts and the 142k steady wall per text (a measurement)
+- Expected saving per chunk: device 0, host 0. The model is unchanged; no Setting is added (no switch has anything
+  behind it; the gate runs the shipped defaults). Purpose: P.84's input (DS41-299: the busiest chip's tiles set
+  routed_experts_combine; is the hot set stable enough for static replicas?).
+- tests/perf/test_expert_load_census.py extended: CENSUS_CHUNKS=k consecutive chunks from CENSUS_POS (real previous
+  chunk first), per layer and chunk the rows per expert and per chip, tiles_max / tiles_balanced, the program us and
+  DS41-299's fit, hot8. Each chunk profiled on its own (profile_realtime_program per chunk, state carried). Side record
+  per text: <art>/census/census_p<p>_k<k>_t<text>.json (+ results/X.9_census.json); the cross-text overlap is
+  computed by any run that finds the others' records, and offline by tests/perf/census_texts.py (also the static
+  replica coverage).
+- Measured (gate X.9 --check, every unit PASS; p145408, CENSUS_CHUNKS=4, DECODER_SKIP=decode, shipped defaults;
+  determinism max_abs_diff 0.0). Experts = routed_experts_combine ms a chunk (slowest chip a program, summed over the
+  20 MoE layers, mean of 4 chunks); fit = DS41-299's; balanced fit = rows spread evenly (ceil(rows / 32 chips / 32)
+  = 30 tiles a layer: a lower bound, the per-expert tile padding makes the real mean ~36); wall = steady chunk:
+
+  | text | role | experts ms | fit | balanced fit | tiles max sum | hot-8 overlap chunk->chunk (min layer) | steady wall ms (spread) | device ms | experts section ms | host ms |
+  |---|---|---|---|---|---|---|---|---|---|---|
+  | prose | pick | 22.52 | 21.76 | 8.16 | 2608 | 0.825 (0.667) | 86.3 (3.5) / 89.5 | 73.2 | 37.3 | 13.1 |
+  | code | pick | 19.10 | 16.63 | 8.16 | 1851 | 0.754 (0.625) | 80.7 (2.9) / 83.3 | 67.6 | 31.7 | 13.1 |
+  | math | pick | 18.99 | 17.17 | 8.16 | 1930 | 0.719 (0.542) | 83.2 (73.8) / 82.0 | 68.1 | 32.2 | 15.1 |
+  | agentic | held-out | 18.35 | 15.94 | 8.16 | 1749 | 0.548 (0.333) | 81.9 (7.8) / 79.7 | 65.6 | 29.7 | 16.3 |
+  | multilingual | held-out | 20.97 | 20.35 | 8.16 | 2400 | 0.848 (0.667) | 85.1 (9.3) / 84.3 | 72.0 | 36.2 | 13.1 |
+
+  Columns from the final gate run (x9gate2, the committed code); "/ x" = the first run's steady wall (same routing,
+  same tiles: census ms within 0.03). Steady wall at 142k over texts: 80.7-86.3 ms (median 83.2; first run 79.7-89.5).
+  The device time follows the busiest chip's expert tiles (agentic 65.6 .. prose 73.2 ms); the wall only loosely:
+  the same text's wall moved up to 3.2 ms between the two runs (prose 89.5 -> 86.3, code 83.3 -> 80.7), and a single
+  outlier run (math's spread 73.8) is common. P.84's ">= 3 ms" bar is at the run-to-run wall noise: judge it on
+  device time / the fit, or on several runs.
+- Hot-set stability: within a text the top-8 a layer is fairly stable chunk to chunk (0.55 agentic .. 0.85
+  multilingual); across texts it is not: hot-8 overlap of the texts' summed counts 0.05-0.16, except agentic/code
+  0.66 (the agent sessions are mostly code).
+- Static replica set chosen on the picking texts (per layer the R experts with the largest summed row share of prose,
+  code, math) on the held-out texts (per chunk): R = 8: chunk hot-8 in the set 0.26 agentic / 0.16 multilingual,
+  hottest expert in the set 0.49 / 0.14, rows on the set 10 % / 9 %; R = 16: 0.46 / 0.24, 0.78 / 0.19; R = 32: 0.68 /
+  0.36, 0.94 / 0.28 (the picking texts themselves: R = 8 hottest 0.70-0.98). So a static set does NOT cover the
+  held-out hot experts (multilingual above all): P.84 should balance per chunk (dynamic), the prize being measured -
+  balanced fit = 10-14 ms a chunk (less the padding, ~1.5 ms). DS41-302.
+- Side records: /scratch/dnijemcevic/bringup/deepseek_v41_flash_d_p/census/census_p145408_k4_t<text>.json (per layer,
+  chunk, chip: experts, rows, tiles, us; hot8). Re-run the analysis (host only): `PYTHONPATH=$PWD python -m
+  models.demos.deepseek_v41_flash_d_p.tests.perf.census_texts --spec $BRINGUP_SPEC`. Re-run the gate:
+  `PYTHONPATH=$PWD python -m models.demos.common.bringup gate X.9 --spec
+  models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/spec.yaml --check`.
+- Gotcha: the first version wrote the whole census (per chip counts) as results/X.9_census.json, 1.6 MB: the repo's
+  check-large-files hook (500 KB) would refuse the gate's commit. The results copy is now the per-layer summary
+  (results/X.9_census_t<text>.json); the full record stays in <art>/census/. The gate was re-run on that code (the
+  census numbers are identical in both runs: the routing is deterministic).
+- Gate state at exit: both of my full `gate X.9 --check` runs PASSED (every unit). The overseer's F279 commit
+  (92e0db9d955: BATCH_ITEM_VARS in this test and test_skip_positions, batch.py) landed afterwards and changed the code
+  key, so every unit shows stale; the orchestrator's gate (one process for the ten text runs, F279) runs them again.

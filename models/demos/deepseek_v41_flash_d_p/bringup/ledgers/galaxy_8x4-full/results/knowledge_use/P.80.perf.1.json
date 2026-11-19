@@ -1,0 +1,104 @@
+{
+ "used": [
+  {
+   "id": "DS41-299",
+   "how": "the busiest chip's FPU pace (6.77 us a 32-row tile) set the relays' per-tile budget (~115 cycles a helper) that explained the first version's +20 ms and judged each fix",
+   "traced": true,
+   "cited": false
+  },
+  {
+   "id": "DS41-263",
+   "how": "pack_bfp8_rows built as 32 per-chip programs (its own row0) in one prepared MeshProgramDescriptor: a prepared launch costs ~90-100 us either way",
+   "traced": true,
+   "cited": false
+  },
+  {
+   "id": "DS41-145",
+   "how": "pack_bfp8_rows takes only common runtime args (row0, items, addresses), no per-core args",
+   "traced": false,
+   "cited": false
+  },
+  {
+   "id": "DS41-298",
+   "how": "the host has slack after layer ~5, so the one extra prepared launch a MoE layer was accepted instead of folding the pack into the dispatch",
+   "traced": null,
+   "cited": false
+  },
+  {
+   "id": "K-79",
+   "how": "kept the 6208 B fabric payload (MOE_BLOCK_SPLIT_ROWS); the 5440 B bfp8 row fits one packet",
+   "traced": false,
+   "cited": false
+  }
+ ],
+ "contradicted": [],
+ "missing": [
+  "the MoE block's L1 arena is allocated between moe_head and routed_experts_combine: any op launched there must put its CBs in the arena (static CBs clash)",
+  "RISC loads of L1 data written by the packer miss the cache line by line after invalidate_l1_cache (~200 cycles for 16 words): move small pieces with local NoC writes"
+ ],
+ "overseer": [
+  {
+   "id": "OV-3",
+   "answer": "done",
+   "evidence": "no padding or duplicated work: the bfp8 row carries exactly the packer's bytes (5440 B), the pack reads each bf16 row piece once (8-tile column parts, not 4 cores re-reading a unit)"
+  },
+  {
+   "id": "OV-23",
+   "answer": "done",
+   "evidence": "pack_bfp8_rows (the only Python-built op added) runs through ttnn.bringup.prepare_program / run_prepared (fp8_rows_ttnn/bfp8_rows.py _prepared); the flat expert / combine are C++ ops"
+  },
+  {
+   "id": "OV-25",
+   "answer": "done",
+   "evidence": "no fork regression suites run; only the new model-level tests (tests/test_dispatch_fp8.py, tests/perf/test_dispatch_width.py) and the measure parts"
+  }
+ ],
+ "cited_only": [
+  "DS41-300",
+  "DS41-301"
+ ],
+ "meta": {
+  "model": "deepseek_v41_flash_d_p",
+  "run": "run1",
+  "task": "P.80",
+  "role": "perf",
+  "attempt": 1,
+  "agent": "bringup-engineer",
+  "t": "2026-11-19T04:33:03",
+  "head": "fef65dd6318",
+  "touched": [
+   "models/demos/deepseek_v41_flash_d_p/bringup/BREADCRUMBS.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/known_issues.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/known_issues_detail.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/knowledge_use/P.80.perf.1.json",
+   "models/demos/deepseek_v41_flash_d_p/bringup/repo_map.md",
+   "models/demos/deepseek_v41_flash_d_p/tests/perf/test_dispatch_fp8_diag.py",
+   "models/demos/deepseek_v41_flash_d_p/tests/perf/test_dispatch_width.py",
+   "models/demos/deepseek_v41_flash_d_p/tests/test_dispatch_fp8.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/moe_block_v2_adapter.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/settings.py",
+   "ttnn/ttnn/bringup/INDEX.md",
+   "ttnn/ttnn/bringup/__init__.py",
+   "ttnn/ttnn/bringup/fp8_rows_ttnn/CHANGELOG.md",
+   "ttnn/ttnn/bringup/fp8_rows_ttnn/README.md",
+   "ttnn/ttnn/bringup/fp8_rows_ttnn/__init__.py",
+   "ttnn/ttnn/bringup/fp8_rows_ttnn/bfp8_rows.py",
+   "ttnn/ttnn/bringup/fp8_rows_ttnn/kernels/pack_bfp8_rows_compute.cpp",
+   "ttnn/ttnn/bringup/fp8_rows_ttnn/kernels/pack_bfp8_rows_reader.cpp",
+   "ttnn/ttnn/bringup/fp8_rows_ttnn/kernels/pack_bfp8_rows_writer.cpp",
+   "ttnn/ttnn/bringup/moe_block_ttnn/CHANGELOG.md",
+   "ttnn/ttnn/bringup/moe_block_ttnn/README.md",
+   "ttnn/ttnn/bringup/moe_block_ttnn/flat_routed_expert/device/flat_routed_expert_device_operation.cpp",
+   "ttnn/ttnn/bringup/moe_block_ttnn/flat_routed_expert/device/flat_routed_expert_device_operation_types.hpp",
+   "ttnn/ttnn/bringup/moe_block_ttnn/flat_routed_expert/device/flat_routed_expert_options.cpp",
+   "ttnn/ttnn/bringup/moe_block_ttnn/flat_routed_expert/device/flat_routed_expert_program_factory.cpp",
+   "ttnn/ttnn/bringup/moe_block_ttnn/flat_routed_expert/device/kernels/x_injector_bfp8_rows_compute.cpp",
+   "ttnn/ttnn/bringup/moe_block_ttnn/flat_routed_expert/device/kernels/x_injector_helper_writer.cpp",
+   "ttnn/ttnn/bringup/moe_block_ttnn/flat_routed_expert/device/kernels/x_injector_reader.cpp",
+   "ttnn/ttnn/bringup/moe_block_ttnn/flat_routed_expert/flat_routed_expert.cpp",
+   "ttnn/ttnn/bringup/moe_block_ttnn/flat_routed_expert/flat_routed_expert_nanobind.cpp",
+   "ttnn/ttnn/bringup/moe_block_ttnn/flat_routed_expert/flat_routed_expert_weights.py",
+   "ttnn/ttnn/bringup/moe_block_ttnn/routed_experts_combine/routed_experts_combine.cpp"
+  ]
+ }
+}

@@ -1,0 +1,69 @@
+{
+ "used": [
+  {
+   "id": "DS41-249",
+   "how": "took its per-chip model (C0 + max(A x experts, B x row tiles)) as the hypothesis and refit it on the current block at 142k instead of building for the weight stream",
+   "traced": null,
+   "cited": false
+  },
+  {
+   "id": "DS41-228",
+   "how": "measured the routing of the real 142k workload (random ids seed 0) rather than a golden rung, since the experts' time is routing-dependent",
+   "traced": true,
+   "cited": false
+  },
+  {
+   "id": "DS41-278",
+   "how": "ruled out expert replication (the only lever that reaches the target) as off this branch",
+   "traced": null,
+   "cited": true
+  },
+  {
+   "id": "DS41-257",
+   "how": "ruled out TP experts as the alternative way to balance rows",
+   "traced": null,
+   "cited": false
+  }
+ ],
+ "contradicted": [],
+ "missing": [
+  "the X.7 roofline's experts floor (11 ms, '170 GB/s = 33 % of peak') assumes uniform routing; at 142k with random ids the time is the busiest chip's FPU time (DS41-299): the roofline should state the routing it assumes"
+ ],
+ "overseer": [
+  {
+   "id": "OV-3",
+   "answer": "n/a",
+   "evidence": "no kernel or layout change; nothing padded"
+  },
+  {
+   "id": "OV-23",
+   "answer": "n/a",
+   "evidence": "no Python-built op added or touched; the only new file is a diagnostic test (tests/perf/test_expert_load_census.py)"
+  },
+  {
+   "id": "OV-25",
+   "answer": "done",
+   "evidence": "no fork regression suite run; one model-level diagnostic run (test_expert_load_census, 4.5 min)"
+  }
+ ],
+ "cited_only": [
+  "DS41-299"
+ ],
+ "meta": {
+  "model": "deepseek_v41_flash_d_p",
+  "run": "run1",
+  "task": "P.79",
+  "role": "perf",
+  "attempt": 1,
+  "agent": "bringup-engineer",
+  "t": "2026-11-19T02:34:22",
+  "head": "7d378385d9f",
+  "touched": [
+   "models/demos/deepseek_v41_flash_d_p/bringup/BREADCRUMBS.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/known_issues.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/known_issues_detail.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/knowledge_use/P.79.perf.1.json",
+   "models/demos/deepseek_v41_flash_d_p/tests/perf/test_expert_load_census.py"
+  ]
+ }
+}
