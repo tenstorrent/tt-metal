@@ -19,7 +19,9 @@ file (testing/e2e_limits: calib x the official reference's drift on that rung, F
           diagnostic (no drift entry covers them).
   last    the golden state at 51200 (the only fixed-size snapshot), then ONE 8192 chunk [51200, 59392) with actual_end
           56320 (5120 real rows, 3072 pad) vs golden chunk_10 (all 5120 rows). Limits: drift-last.json (rung last).
-max_seq: 57344 (from0) / 59392 (last) > target.seq 56320, raised in memory before the load (DS41-279), within deploy.seq.
+max_seq: 57344 (from0) / 59392 (last) > target.seq 56320: the model's tables reach 64512 at 8192 (runners/adapter.table_seq:
+target.seq is not a whole number of 8192 chunks), so both cases run on the model the gate loads for target.seq (one load
+a gate); target.seq is raised in memory before the load (DS41-279) only when those tables would not reach the end.
 Every layer runs on every chunk (begin_chunk without ``last``: the decoder too, whose windows the last chunk reads).
 
 Metrics (suffix _c8192_<case>): err_layer_L<i>, err_final_hidden, top5_overlap (gated, each with <metric>_limit);
@@ -55,10 +57,14 @@ CASES = {"from0": "s56320", "last": "last"}  # case -> the drift rung whose limi
 
 def _raise_max_seq(monkeypatch, need: int) -> None:
     """DS41-279: the model's position tables reach target.seq; an 8192 chunk past 56320 needs more (capped at
-    deploy.seq)."""
+    deploy.seq). PB.2: a target.seq that is not a whole number of chunks loads tables one chunk further
+    (runners/adapter.table_seq: 56320 -> 64512 at 8192), so both cases run on the model the gate's batch loads for
+    target.seq (one load a gate, F283); target.seq is raised only when those tables do not reach ``need``."""
+    from models.demos.deepseek_v41_flash_d_p.tt.runners.adapter import table_seq
+
     deploy = int((S.data.get("deploy") or {}).get("seq") or need)
-    assert need <= deploy, (need, deploy)
-    if int(S.data["target"]["seq"]) < need:
+    assert need <= deploy + CHUNK, (need, deploy)
+    if table_seq(int(S.data["target"]["seq"]), CHUNK) < need:
         monkeypatch.setitem(S.data["target"], "seq", need)
 
 
@@ -86,8 +92,10 @@ def test_chunk8192_reference(mesh_device, case, monkeypatch):
     else:
         starts = [g0]
     max_seq = starts[-1] + CHUNK
-    _raise_max_seq(monkeypatch, max_seq)
-    model = S.hooks().device_model(mesh_device, S, layers, lm_head=True)
+    _raise_max_seq(monkeypatch, max(max_seq, g0 + CHUNK))  # (one model for both cases: the larger end, 59392)
+    # (no LM head asked: the gate's batch loads the model for the determinism check first, without it; the head is the
+    # host fp32 linear TtDS41Model.logits applies, taken here from the model's checkpoint when the model has none)
+    model = S.hooks().device_model(mesh_device, S, layers, lm_head=False)
     metrics.record("model_load_s" + sfx, round(getattr(model, "load_seconds", 0.0), 1))
     assert getattr(model, "chunk", CHUNK) == CHUNK, f"the held model's chunk is {model.chunk}, not {CHUNK}"
     tokens = g.tokens()
@@ -139,7 +147,11 @@ def test_chunk8192_reference(mesh_device, case, monkeypatch):
     metrics.record("err_final_hidden" + sfx + "_limit", E.err_limit(drift, "final_hidden"))
     E.check(drift, "final_hidden", "err_final_hidden" + sfx, e, failed)
     rows = sampled_rows(gchunk)
-    lg = model.logits(hidden, rows + a).float()
+    head_w = getattr(model, "head_w", None)
+    if head_w is None:
+        head_w = model.ck.weight("head.weight", torch.float32)
+    lg = torch.nn.functional.linear(final[rows + a], head_w).float()  # (= model.logits: the same host linear)
+    del head_w
     tt5 = lg.topk(5, dim=-1).indices
     gtop = gm["top32_ids"][rows].long()
     top1 = (tt5[:, 0] == gtop[:, 0]).float().mean().item()

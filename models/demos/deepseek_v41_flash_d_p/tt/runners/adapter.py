@@ -121,6 +121,16 @@ def served_layer_ids(first_layer_idx: int, num_layers: int) -> list[int]:
     return ids
 
 
+def table_seq(max_seq: int, chunk: int) -> int:
+    """PB.2: the positions the model's load-time tables (RoPE) cover for prompts up to ``max_seq``. A prompt's last chunk
+    starts below ``max_seq`` and runs a whole chunk (pad rows past actual_end take positions too), so when ``max_seq``
+    is not a whole number of chunks (8192-row chunks: 56320, the deployment's 1,044,480) the tables reach one chunk
+    further, as the decoder tail's do (TtDS41Model.build_tail). A whole number of chunks (5120: 56320, 1,044,480) is
+    unchanged."""
+    max_seq, chunk = int(max_seq), int(chunk)
+    return max_seq if max_seq % chunk == 0 else max_seq + chunk
+
+
 def load_model(
     mesh_device, layers, *, max_seq: int, chunk: int, lm_head: bool = False, weight_cache=None, checkpoint=None
 ):
@@ -131,6 +141,7 @@ def load_model(
     from models.demos.common.bringup.testing import batch
 
     ck = str(checkpoint or model_path())
+    max_seq = table_seq(max_seq, chunk)
 
     def load(seq, head):
         from models.demos.deepseek_v41_flash_d_p.tt.model import TtDS41Model

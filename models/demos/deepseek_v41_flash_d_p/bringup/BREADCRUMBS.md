@@ -1332,3 +1332,39 @@
   (CPU only, no device opened). The first run hit pytest's default 300 s timeout in test_reference_packed_vs_alone
   (65 s load + 235 s), so that test now has `@pytest.mark.timeout(1200)`. Second run: 7 passed (312 s), SAFE_PYTEST_RESULT PASS.
 - Metrics (generated/bringup_adhoc/PB.1.json): packed_cpu_cases 28, packed_cpu_failures 0; lane_equiv 0, alone_vs_today 0, determinism 0, slot_digest_mismatches 0, vs_forward_chunk_rel 5.8e-7.
+
+## PPB.2 (PB.2 perf, attempt 1): 8192-row single-request chunks on the current tree
+
+- Expected (written before any run, perf_guide section 2): no code change expected for 5120 (bit-identical: nothing
+  here touches the 5120 path). At 8192 vs 5120 a chunk (X.8 scaled to today's tree, packed8k_projection.md): device
+  ~+30-35 ms a chunk (5120 today ~65 ms at 142k agentic -> ~95-100 ms), host ~+5-7 ms (X.8: host grows with the chunk);
+  steady wall ~102-112 ms at 139k, ~110-123 ms at 512k, i.e. ~+15 % new tok/s over 5120 a full chunk (~-10 % device
+  a token). Saving a token, not a chunk: device ~-1.5 us a token, host ~-1 us a token.
+- Risks to probe first (PACKED_DESIGN.md s8): P.83 mhc_post fast at 256 rows a chip, P.81 grouped_matmul (wo_a) at
+  M = 256 (plans or falls back to stock), the engram host path sized from the ids.
+- Load reasons (owner rule): (1) runner start at BRINGUP_CHUNK=8192 + tests/packed/test_chunk8192_ops.py: mesh only,
+  no model ("needs only the mesh: the two fork paths at 256 rows a chip"). (2) ONE 40-layer load at 8192: "needs the
+  full 40 layers because test_chunk8192_reference compares the final norm and top-5 against the s56320 golden, and the
+  same load serves determinism, the walls (DECODER_SKIP=decode per call) and the profile".
+- What broke at 8192 and the fix (attempt 1, kept): the model's load-time position tables (RoPE) covered only
+  target.seq = 56320, which is not a whole number of 8192 chunks, so the last chunk's pad rows ran past the tables.
+  `tt/runners/adapter.table_seq(max_seq, chunk)` loads them one chunk further when max_seq % chunk != 0 (56320 ->
+  64512 at 8192; the deployment's 1,044,480 -> 1,052,672), as the decoder tail already did (TtDS41Model.build_tail).
+  5120: 56320 and 1,044,480 are whole numbers of chunks, so the load is unchanged (bit-identical by construction).
+  No fork change: no new op, no core count change.
+- test_chunk8192_reference (frozen-test review, attempt 1): both cases now run on the one model the gate loads (F283 /
+  OV-61): target.seq is raised only when table_seq does not reach the case's end; no LM head is loaded (the
+  determinism unit loads without one), and top-5 comes from the same host fp32 linear `model.logits` applies, with
+  the checkpoint's head.weight.
+- Results (resident request 20261119-224337-16f4d8, one 40-layer load at 8192, rc 0): test_chunk8192_reference 2/2
+  passed. from0: err_final_hidden 0.141 (limit 0.259), top5 1.0 (>= 0.994), worst layer L39 0.664 (limit 1.49).
+  last: err_final_hidden 0.135 (limit 0.242), top5 1.0. Determinism 0.0 (3 runs x 4 chunks). Walls (gate, attempt 1,
+  layers 0-20 + DECODER_SKIP=decode): steady 101.0 ms at 139264 (device 85.8, host 15.2; one 141 ms outlier in the
+  runs, spread 43.1) and 109.2 ms at 524288 (device 98.3, host 10.9). Both are inside the projection (102-112 /
+  110-123 ms). 139k: experts 37.6 ms, attention 27.9, indexer 5.2. 512k: indexer 17.0.
+- Attempt 2 (after OV-60 / OV-61): no code change. The passed units were not run again (rule 8 / F116). Ran pre-commit
+  and `gate PB.2 --check`: PASS PB.2. test_chunk8192_reference was reused (same code, F150); walls as the gate reported them:
+  100.4 / 108.7 ms; determinism 0.0.
+- Risk for serving: at 8192 the deployment's tables (and anything sized from the model's max_seq) are one chunk longer
+  (1,052,672 positions). The served-cache layout tt-d-gen reads should be checked before 8192 serves (PB.3+).
+- Re-run: `BRINGUP_CHUNK=8192 PYTHONPATH=$PWD python -m models.demos.common.bringup gate PB.2 --spec $BRINGUP_SPEC --check`.

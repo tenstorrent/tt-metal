@@ -701,3 +701,11 @@ New overseer session after the owner's reboot (node bh-glx-110-c10u02, job 22373
   error. Paused, aborted (OV-60), PB.2's gate cut to test_chunk8192_reference + test_skip_positions (the passed walls unit
   is kept); test_determinism removed from PB.3 / PB.5 too (same conflict; the oracle's packed repeat determinism covers
   it); note OV-61 to every PB task: one model configuration per gate class. RAM leaked 7.4 GiB after these loads.
+- 23:00 UTC PB.2 done (attempt 2, no code change; attempt 1's fix kept). What broke at 8192: the RoPE tables covered
+  only 56320 (not a whole number of 8192 chunks); tt/runners/adapter.table_seq loads one chunk further then (5120
+  unchanged by construction). Accuracy at 8192 vs goldens: from0 err_final_hidden 0.141 (limit 0.259), last 0.135
+  (0.242), top-5 1.0, worst layer L39 0.664 (1.49); determinism 0.0. Walls (layers 0-20, decoder skip, agentic_cc,
+  harness): 101.0 ms at 139264 (device 85.8, host 15.2; experts 37.6, attention 27.9, indexer 5.2) = 81.1k tok/s; 109.2
+  at 524288 (device 98.3, host 10.9; indexer 17.0) = 75.0k. Projection (a) 102-112 / 110-123: confirmed (low end).
+  Serving risk noted by the agent: at 8192 the deployment's tables are one chunk longer (1,052,672). DECIDED: accept.
+  PB.2 device: 2 runner process starts with loads 21 / 40 / 21 / 40 / 40 layers (5 loads), RAM leaked 7.4 GiB.
