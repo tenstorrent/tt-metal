@@ -14,6 +14,15 @@
 #include "api/compute/eltwise_unary/binop_with_scalar.h"
 #include "api/compute/eltwise_binary_sfpu.h"
 #include "api/dataflow/circular_buffer.h"
+#include "ttnn/operations/common/shared_with_host/runtime_length.hpp"
+#include <type_traits>
+
+// The multicast path (program factory): Blackhole row MOP (one math MOP per reuse row of a subblock), in1 in column
+// chunks of in1_chunk_w columns (0: whole blocks), the last K block packed straight to the output.
+constexpr bool mcast = get_named_compile_time_arg_val("mcast");
+constexpr bool row_mop = get_named_compile_time_arg_val("row_mop");
+constexpr uint32_t in1_chunk_w = get_named_compile_time_arg_val("in1_chunk_w");
+constexpr bool direct_out = get_named_compile_time_arg_val("direct_out");
 
 #ifdef FUSE_SWIGLU
 // Fused SwiGLU output stage. The matmul produced an interleaved gate/up block in `in_cb`:
@@ -338,6 +347,100 @@ void add_bias_and_addcmul_block(
     intermediate_cb.pop_front(out_block_num_tiles);
 }
 
+// One K block of an output block (adapted from compute_common.hpp). DIRECT_OUT (last K block) reloads the partials,
+// adds this block and packs to out_cb a subblock at a time. With in1 chunks, accumulating blocks go chunk-major.
+template <bool DIRECT_OUT>
+void matmul_blocks_k(
+    CircularBuffer& in0_cb,
+    CircularBuffer& in1_cb,
+    CircularBuffer& partials_cb,
+    CircularBuffer& out_cb,
+    const uint32_t M_block_tiles,
+    const uint32_t N_block_tiles,
+    const uint32_t full_M_block_tiles,
+    const uint32_t full_N_block_tiles,
+    const uint32_t K_block_tiles,
+    const uint32_t subblock_h,
+    const uint32_t subblock_w) {
+    if constexpr (DIRECT_OUT) {
+        partials_cb.wait_front(full_M_block_tiles * full_N_block_tiles);
+    }
+    const uint32_t num_m = ((DIRECT_OUT ? full_M_block_tiles : M_block_tiles) + subblock_h - 1) / subblock_h;
+    const uint32_t num_n = ((DIRECT_OUT ? full_N_block_tiles : N_block_tiles) + subblock_w - 1) / subblock_w;
+    constexpr bool chunk_major = !DIRECT_OUT && in1_chunk_w > 0;
+    const uint32_t num_outer = chunk_major ? num_n : num_m;
+    const uint32_t num_inner = chunk_major ? num_m : num_n;
+    for (uint32_t outer = 0; outer < num_outer; outer++) {
+        for (uint32_t inner = 0; inner < num_inner; inner++) {
+            const uint32_t M_start = (chunk_major ? inner : outer) * subblock_h;
+            const uint32_t N_start = (chunk_major ? outer : inner) * subblock_w;
+            if constexpr (DIRECT_OUT) {
+                out_cb.reserve_back(subblock_w);
+                if (M_start >= M_block_tiles || N_start >= N_block_tiles) {
+                    out_cb.push_back(subblock_w);
+                    continue;
+                }
+            }
+            uint32_t in1_index = N_start;
+            uint32_t in1_k_stride = full_N_block_tiles;
+            if constexpr (in1_chunk_w > 0) {
+                constexpr uint32_t chunk_w = in1_chunk_w > 0 ? in1_chunk_w : 1;  // never 0: no division by zero
+                const uint32_t in1_chunk_tiles = chunk_w * K_block_tiles;
+                const uint32_t in1_chunk = N_start / chunk_w;
+                if (M_start == 0 && N_start % chunk_w == 0) {
+                    in1_cb.wait_front((in1_chunk + 1) * in1_chunk_tiles);
+                }
+                in1_index = in1_chunk * in1_chunk_tiles + (N_start % chunk_w);
+                in1_k_stride = chunk_w;
+            }
+            tile_regs_acquire();
+            if constexpr (DIRECT_OUT) {
+                // The earlier K blocks' FP32 partials into DEST, then srcA's format and the matmul init back.
+                reconfig_data_format_srca(in1_cb.get_cb_id(), partials_cb.get_cb_id());
+                copy_init(partials_cb.get_cb_id());
+                copy_block(partials_cb.get_cb_id(), M_start * full_N_block_tiles + N_start, 0, subblock_w);
+                reconfig_data_format_srca(partials_cb.get_cb_id(), in1_cb.get_cb_id());
+                matmul_block_init<row_mop>(
+                    in0_cb.get_cb_id(), in1_cb.get_cb_id(), false /*transpose*/, subblock_w, subblock_h, K_block_tiles);
+            }
+            matmul_block_k<row_mop>(
+                in0_cb.get_cb_id(),
+                in1_cb.get_cb_id(),
+                M_start * K_block_tiles /*in0_index*/,
+                in1_index,
+                0 /*dst_index*/,
+                false /*transpose*/,
+                subblock_w,
+                subblock_h,
+                K_block_tiles /*kt_dim*/,
+                K_block_tiles /*k_steps*/,
+                in1_k_stride);
+            tile_regs_commit();
+            tile_regs_wait();
+            if constexpr (DIRECT_OUT) {
+                for (uint32_t w = 0; w < subblock_w; w++) {
+                    pack_tile<true>(w, out_cb.get_cb_id(), w);
+                }
+            } else {
+                uint32_t dst = 0;
+                for (uint32_t h = 0; h < subblock_h; h++) {
+                    for (uint32_t w = 0; w < subblock_w; w++) {
+                        pack_tile<true>(
+                            dst++, partials_cb.get_cb_id(), (M_start + h) * full_N_block_tiles + N_start + w);
+                    }
+                }
+            }
+            tile_regs_release();
+            if constexpr (DIRECT_OUT) {
+                out_cb.push_back(subblock_w);
+            }
+        }
+    }
+    if constexpr (DIRECT_OUT) {
+        partials_cb.pop_front(full_M_block_tiles * full_N_block_tiles);
+    }
+}
+
 // Slightly modified from compute_common.hpp
 void matmul_blocks(
     CircularBuffer& in0_cb,
@@ -400,20 +503,29 @@ void kernel_main() {
     constexpr uint32_t M_block_tiles = get_compile_time_arg_val(1);
     constexpr uint32_t K_block_tiles = get_compile_time_arg_val(2);
     constexpr uint32_t N_block_tiles = get_compile_time_arg_val(3);
-    constexpr uint32_t M_blocks_per_core = get_compile_time_arg_val(4);
-    constexpr uint32_t N_blocks_per_core = get_compile_time_arg_val(5);
-    constexpr uint32_t subblock_h = get_compile_time_arg_val(6);
-    constexpr uint32_t subblock_w = get_compile_time_arg_val(7);
+    constexpr uint32_t N_blocks_per_core = get_compile_time_arg_val(4);
+    constexpr uint32_t subblock_h = get_compile_time_arg_val(5);
+    constexpr uint32_t subblock_w = get_compile_time_arg_val(6);
+    static_assert(
+        !direct_out || get_named_compile_time_arg_val("out_piece_w") == subblock_w,
+        "the writers take the output in the pieces the compute packs");
+    constexpr uint32_t in0_parallel_axis_cores = get_compile_time_arg_val(7);
 
-    uint32_t argidx = 0;
-    const uint32_t M_start_tile = get_arg_val<uint32_t>(argidx++);
-    const uint32_t M_end_tile = get_arg_val<uint32_t>(argidx++);
-    const uint32_t N_start_tile = get_arg_val<uint32_t>(argidx++);
-    const uint32_t N_end_tile = get_arg_val<uint32_t>(argidx++);
+    // Same uniform M split as the data-movement kernels (see dm_in0_sender.cpp).
+    const uint32_t M_tiles = get_common_arg_val<uint32_t>(0);
+    // This core's M and N ranges, from its logical coordinates (see AgmmCore in matmul_dataflow_common.hpp)
+    constexpr bool transpose_grid = get_named_compile_time_arg_val("transpose_grid");
+    constexpr uint32_t N_tiles_per_core = get_named_compile_time_arg_val("N_tiles_per_core");
+    const uint32_t in0_idx = transpose_grid ? get_absolute_logical_x() : get_absolute_logical_y();
+    const uint32_t in1_idx = transpose_grid ? get_absolute_logical_y() : get_absolute_logical_x();
+    const uint32_t N_start_tile = N_tiles_per_core * in1_idx;
+    const uint32_t N_end_tile = N_start_tile + N_tiles_per_core;
+    [[maybe_unused]] const auto [M_tiles_per_core, M_blocks_per_core, padded_M_tiles, M_start_tile, M_end_tile] =
+        ttnn::runtime_length::uniform_split(M_tiles, in0_parallel_axis_cores, in0_idx, M_block_tiles);
 
 #ifdef FUSE_TERNARY
-    const uint32_t fused_ternary_scalar_uint = get_common_arg_val<uint32_t>(0);
-    const uint32_t broadcast_ternary_b = get_common_arg_val<uint32_t>(1);
+    const uint32_t fused_ternary_scalar_uint = get_common_arg_val<uint32_t>(1);
+    const uint32_t broadcast_ternary_b = get_common_arg_val<uint32_t>(2);
 #else
     // Default value when ternary is not fused (not used, helps compiler optimize)
     constexpr uint32_t fused_ternary_scalar_uint = 0;
@@ -469,7 +581,7 @@ void kernel_main() {
             current_N_block_tiles = n_tile_end - n_tile;
             current_subblock_w = std::min(current_N_block_tiles, subblock_w);
 
-            matmul_block_init(
+            matmul_block_init<row_mop>(
                 in0_cb_id,
                 in1_cb_id,
                 false /*transpose*/,
@@ -482,18 +594,50 @@ void kernel_main() {
             intermediate_cb.reserve_back(out_block_num_tiles);
             for (uint32_t k_block = 0; k_block < K_num_blocks; k_block++) {
                 in0_cb.wait_front(in0_block_num_tiles);
-                in1_cb.wait_front(in1_block_num_tiles);
+                if constexpr (in1_chunk_w == 0) {  // chunked: matmul_blocks_k waits for each chunk
+                    in1_cb.wait_front(in1_block_num_tiles);
+                }
 
-                matmul_blocks(
-                    in0_cb,
-                    in1_cb,
-                    intermediate_cb,
-                    current_M_block_tiles,
-                    current_N_block_tiles,
-                    N_block_tiles,
-                    K_block_tiles,
-                    current_subblock_h,
-                    current_subblock_w);
+                if constexpr (mcast) {
+                    // The last K block reloads the earlier blocks' partials and packs straight to the output.
+                    const bool last_direct = direct_out && k_block == K_num_blocks - 1;
+                    if (last_direct) {
+                        intermediate_cb.push_back(out_block_num_tiles);
+                        PACK((llk_pack_reconfig_l1_acc(0)));
+                        pack_reconfig_data_format(out_cb.get_cb_id());
+                    }
+                    auto run = [&](auto direct) {
+                        matmul_blocks_k<decltype(direct)::value>(
+                            in0_cb,
+                            in1_cb,
+                            intermediate_cb,
+                            out_cb,
+                            current_M_block_tiles,
+                            current_N_block_tiles,
+                            M_block_tiles,
+                            N_block_tiles,
+                            K_block_tiles,
+                            current_subblock_h,
+                            current_subblock_w);
+                    };
+                    if (last_direct) {
+                        run(std::true_type{});
+                        pack_reconfig_data_format(intermediate_cb.get_cb_id());
+                    } else {
+                        run(std::false_type{});
+                    }
+                } else {
+                    matmul_blocks(
+                        in0_cb,
+                        in1_cb,
+                        intermediate_cb,
+                        current_M_block_tiles,
+                        current_N_block_tiles,
+                        N_block_tiles,
+                        K_block_tiles,
+                        current_subblock_h,
+                        current_subblock_w);
+                }
 
                 if (k_block == K_num_blocks - 1) {
                     /**
@@ -520,8 +664,13 @@ void kernel_main() {
                 }
             }
 
-            intermediate_cb.push_back(out_block_num_tiles);
+            if constexpr (!direct_out) {  // direct output: pushed before the last K block
+                intermediate_cb.push_back(out_block_num_tiles);
+            }
             PACK((llk_pack_reconfig_l1_acc(0)));
+            if constexpr (direct_out) {
+                continue;  // the last K block already wrote out_cb
+            }
 
 #ifdef FUSE_SWIGLU
             // SwiGLU collapses the interleaved gate/up block to half its N width.

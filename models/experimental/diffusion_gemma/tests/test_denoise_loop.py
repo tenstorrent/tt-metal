@@ -14,7 +14,7 @@ from models.experimental.diffusion_gemma.reference import sampling as S
 from models.experimental.diffusion_gemma.reference.denoise_loop import denoise_block as ref_denoise_block
 from models.experimental.diffusion_gemma.tests.trajectory_pcc import compare_trajectories
 from models.experimental.diffusion_gemma.tt.denoise_loop import denoise_block, denoise_step, temperature_at_step
-from tests.ttnn.utils_for_testing import assert_with_pcc
+from tt_py_test_utils_common.utils_for_testing import assert_with_pcc
 
 
 def _gen(seed=0):

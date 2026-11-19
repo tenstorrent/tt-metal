@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "ttnn/operations/ccl/shared_with_host/ccl_runtime_args.hpp"
+#include "ttnn/operations/common/shared_with_host/runtime_length.hpp"
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
 #include "api/dataflow/circular_buffer.h"
@@ -28,11 +29,11 @@ constexpr uint32_t cb_intermediate_id = get_compile_time_arg_val(3);
 constexpr uint32_t cb_reader_output_id = get_compile_time_arg_val(4);
 constexpr uint32_t tile_granularity = get_compile_time_arg_val(5);
 constexpr uint32_t page_size = get_compile_time_arg_val(6);
-constexpr uint32_t input_num_pages = get_compile_time_arg_val(7);
-constexpr uint32_t input_batch_num_pages = get_compile_time_arg_val(8);
-constexpr uint32_t input_channel_num_pages = get_compile_time_arg_val(9);
-constexpr uint32_t output_batch_num_pages = get_compile_time_arg_val(10);
-constexpr uint32_t output_channel_num_pages = get_compile_time_arg_val(11);
+constexpr uint32_t ct_input_num_pages = get_compile_time_arg_val(7);
+constexpr uint32_t ct_input_batch_num_pages = get_compile_time_arg_val(8);
+constexpr uint32_t ct_input_channel_num_pages = get_compile_time_arg_val(9);
+constexpr uint32_t ct_output_batch_num_pages = get_compile_time_arg_val(10);
+constexpr uint32_t ct_output_channel_num_pages = get_compile_time_arg_val(11);
 constexpr uint32_t input_tensor_B = get_compile_time_arg_val(12);
 constexpr uint32_t input_tensor_Wt = get_compile_time_arg_val(13);
 constexpr uint32_t slice_C = get_compile_time_arg_val(14);
@@ -41,6 +42,7 @@ constexpr uint32_t slice_Wt = get_compile_time_arg_val(16);
 constexpr uint32_t fuse_op = get_compile_time_arg_val(17);
 constexpr bool sync_with_other_direction = get_compile_time_arg_val(18);
 constexpr uint32_t dim = get_compile_time_arg_val(19);
+constexpr bool runtime_rows = get_compile_time_arg_val(20);
 
 void kernel_main() {
     ///////////////////////////////////////////////////
@@ -64,8 +66,10 @@ void kernel_main() {
     const uint32_t start_tiles_to_read = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t start_pages_read_in_row = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t start_row_offset = get_arg_val<uint32_t>(arg_idx++);
+    const uint32_t worker_id = get_arg_val<uint32_t>(arg_idx++);
+    const uint32_t num_workers = get_arg_val<uint32_t>(arg_idx++);
 
-    constexpr uint32_t ct_idx = 20;
+    constexpr uint32_t ct_idx = 21;
 
 #ifdef INPUT_IS_SHARDED
     constexpr uint32_t ct_offset_one = 7;
@@ -156,7 +160,31 @@ void kernel_main() {
      * Intermediate buffer is double-sized (shape [2, *input_shape]) to accommodate forward and backward.
      * BWD indexes into second half of intermediate buffer.
      */
-    const uint32_t intermediate_full_offset = is_forward ? 0 : input_num_pages;
+    uint32_t input_num_pages = ct_input_num_pages;
+    uint32_t input_batch_num_pages = ct_input_batch_num_pages;
+    uint32_t input_channel_num_pages = ct_input_channel_num_pages;
+    uint32_t output_batch_num_pages = ct_output_batch_num_pages;
+    uint32_t output_channel_num_pages = ct_output_channel_num_pages;
+    uint32_t tiles_read_begin = start_tiles_read;
+    uint32_t tiles_read_end = start_tiles_to_read;
+    uint32_t pages_in_row_begin = start_pages_read_in_row;
+    uint32_t row_offset_begin = start_row_offset;
+    uint32_t intermediate_full_offset = is_forward ? 0 : input_num_pages;
+    if constexpr (runtime_rows) {
+        const uint32_t input_Ht = get_common_arg_val<uint32_t>(ttnn::ccl::ReduceScatterCommonArgs::input_Ht);
+        const uint32_t intermediate_half_pages =
+            get_common_arg_val<uint32_t>(ttnn::ccl::ReduceScatterCommonArgs::intermediate_half_pages);
+        input_num_pages = input_Ht * input_tensor_Wt;
+        input_batch_num_pages = input_num_pages;
+        input_channel_num_pages = input_num_pages;
+        output_channel_num_pages = input_Ht * slice_Wt;
+        output_batch_num_pages = output_channel_num_pages;
+        tiles_read_begin = ttnn::runtime_length::balanced_start(worker_id, output_channel_num_pages, num_workers);
+        tiles_read_end = ttnn::runtime_length::balanced_end(worker_id, output_channel_num_pages, num_workers);
+        pages_in_row_begin = tiles_read_begin % slice_Wt;
+        row_offset_begin = tiles_read_begin / slice_Wt * input_tensor_Wt;
+        intermediate_full_offset = is_forward ? 0 : intermediate_half_pages;
+    }
 
     uint32_t chunk_count = 0;
     uint32_t fwd_sync_cnt = 0;
@@ -195,11 +223,11 @@ void kernel_main() {
                 // We have no incoming slices, so forward directly to writer
                 CircularBuffer& cb_in0 = cb_reader_output;
                 for (uint32_t c = 0; c < slice_C; ++c) {
-                    uint32_t input_pages_read_in_row = start_pages_read_in_row;
-                    uint32_t input_row_offset = start_row_offset;
+                    uint32_t input_pages_read_in_row = pages_in_row_begin;
+                    uint32_t input_row_offset = row_offset_begin;
 
-                    uint32_t tiles_read = start_tiles_read;
-                    uint32_t tiles_to_read = start_tiles_to_read;
+                    uint32_t tiles_read = tiles_read_begin;
+                    uint32_t tiles_to_read = tiles_read_end;
 
                     while (tiles_read < tiles_to_read) {
                         uint32_t tiles_remaining_to_read = tiles_to_read - tiles_read;
@@ -230,14 +258,14 @@ void kernel_main() {
                 // I have incoming slices, so write my output to compute kernel and read intermediate input
                 CircularBuffer& cb_in0 = cb_input;
                 for (uint32_t c = 0; c < slice_C; ++c) {
-                    uint32_t input_pages_read_in_row = start_pages_read_in_row;
-                    uint32_t input_row_offset = start_row_offset;
+                    uint32_t input_pages_read_in_row = pages_in_row_begin;
+                    uint32_t input_row_offset = row_offset_begin;
 
                     uint32_t intermediate_pages_read_in_row = input_pages_read_in_row;
                     uint32_t intermediate_row_offset = input_row_offset;
 
-                    uint32_t tiles_read = start_tiles_read;
-                    uint32_t tiles_to_read = start_tiles_to_read;
+                    uint32_t tiles_read = tiles_read_begin;
+                    uint32_t tiles_to_read = tiles_read_end;
 
                     while (tiles_read < tiles_to_read) {
                         uint32_t tiles_remaining_to_read = tiles_to_read - tiles_read;
@@ -313,8 +341,8 @@ void kernel_main() {
             } else {
                 ASSERT(false);
             }
-            uint32_t input_pages_read_in_row = start_pages_read_in_row;
-            uint32_t input_row_offset = start_row_offset;
+            uint32_t input_pages_read_in_row = pages_in_row_begin;
+            uint32_t input_row_offset = row_offset_begin;
             uint32_t input_stride_Wt = input_tensor_Wt;
 
             uint32_t intermediate_tile_id_start = input_tile_id_start + intermediate_full_offset;
@@ -361,8 +389,8 @@ void kernel_main() {
                 uint32_t intermediate_pages_read_in_row = intermediate_pages_read_in_row_per_channel;
                 uint32_t intermediate_row_offset = intermediate_row_offset_per_channel;
 
-                uint32_t tiles_read = start_tiles_read;
-                uint32_t tiles_to_read = start_tiles_to_read;
+                uint32_t tiles_read = tiles_read_begin;
+                uint32_t tiles_to_read = tiles_read_end;
 
                 while (tiles_read < tiles_to_read) {
                     // Wait for FWD writer to signal that it has done its final reduction

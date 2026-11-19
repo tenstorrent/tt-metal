@@ -27,6 +27,8 @@
 #include "dispatch/topology.hpp"
 #include "impl/dispatch/dispatch_engine_cores.hpp"
 #include "impl/buffers/dram_sender_topology.hpp"
+#include "impl/dispatch/kernel_config/tensor_prefetcher.hpp"
+#include "impl/dispatch/host_transfer_stats.hpp"
 #include "jit_build/build.hpp"
 #include "jit_build/build_env_manager.hpp"
 #include "jit_build/jit_device_config.hpp"
@@ -179,11 +181,14 @@ void RiscFirmwareInitializer::run_async_build_phase(const std::set<tt::ChipId>& 
                 *refs.l1_bank_offset_map,
                 *refs.dram_bank_to_noc_xy,
                 *refs.l1_bank_to_noc_xy);
-            // Quasar FW never loads the logical→virtual scratch table or the Tensor prefetcher signal table
-            // (WH/BH brisc/ncrisc only).
+            // Quasar FW never loads the logical→virtual scratch table (WH/BH brisc/ncrisc only).
             if (cluster_.arch() != ARCH::QUASAR) {
                 generate_worker_logical_to_virtual_map(
                     device_id, *refs.worker_logical_col_to_virtual_col, *refs.worker_logical_row_to_virtual_row);
+            }
+            // Only BH brisc/ncrisc and Quasar DM FW load the Tensor prefetcher signal table; elsewhere it stays
+            // empty and nothing is written.
+            if (cluster_.arch() == ARCH::BLACKHOLE || cluster_.arch() == ARCH::QUASAR) {
                 generate_tensor_prefetcher_signal_table(
                     device_id, refs.dram_bank_offset_map->size(), *refs.tensor_prefetcher_signal_noc_xy);
             }
@@ -708,7 +713,15 @@ void RiscFirmwareInitializer::generate_worker_logical_to_virtual_map(
 void RiscFirmwareInitializer::generate_tensor_prefetcher_signal_table(
     tt::ChipId device_id, size_t num_dram_banks, std::vector<uint32_t>& tensor_prefetcher_signal_noc_xy) const {
     tensor_prefetcher_signal_noc_xy.assign(num_dram_banks, 0);
-    if (!hal_.has_programmable_core_type(HalProgrammableCoreType::DRAM)) {
+    const auto placement = dram_sender_placement(descriptor_->metal_context(), num_hw_cqs_);
+    if (!placement.has_value()) {
+        return;
+    }
+    if (*placement == DramSenderPlacement::DispatchEngine) {
+        // The engine keeps one table of counters for every bank, so every bank names it.
+        const CoreCoord xy = cluster_.get_virtual_coordinate_from_logical_coordinates(
+            device_id, tensor_prefetcher_dispatch_engine(dispatch_core_manager_, device_id), CoreType::DISPATCH);
+        tensor_prefetcher_signal_noc_xy.assign(num_dram_banks, pack_bank_noc_xy(xy.x, xy.y));
         return;
     }
     const auto& soc_desc = cluster_.get_soc_desc(device_id);
@@ -761,8 +774,8 @@ void RiscFirmwareInitializer::initialize_device_bank_to_noc_tables(
     const uint64_t mem_bank_to_noc_addr = hal_.get_dev_noc_addr(core_type, HalL1MemAddrType::BANK_TO_NOC_SCRATCH);
     const uint32_t mem_bank_to_noc_size = hal_.get_dev_size(core_type, HalL1MemAddrType::BANK_TO_NOC_SCRATCH);
 
-    // Only Tensix firmware loads the Tensor prefetcher signal table (none on Quasar, which leaves it empty), and
-    // Tensix always takes the multicast path below.
+    // Only Tensix firmware loads the Tensor prefetcher signal table (Blackhole only; empty elsewhere), and Tensix
+    // always takes the multicast path below.
     const uint32_t tensor_prefetcher_sz_in_bytes =
         core_type == HalProgrammableCoreType::TENSIX
             ? tensor_prefetcher_signal_noc_xy_[device_id].size() * sizeof(uint32_t)
@@ -1164,6 +1177,7 @@ void RiscFirmwareInitializer::initialize_firmware(
     ZoneScoped;
 
     BuildEnvManager& build_env_manager = descriptor_->metal_context().build_env_manager();
+    auto* transfer_stats = &descriptor_->metal_context().host_transfer_stats();
 
     TT_FATAL(
         core_type != HalProgrammableCoreType::TENSIX or end_core.has_value(),
@@ -1258,6 +1272,8 @@ void RiscFirmwareInitializer::initialize_firmware(
                         launch_msg, core_type, static_cast<HalProcessorClassType>(processor_class), riscv_id, fw_size);
 
                     if (not rtoptions_.get_skip_loading_fw()) {
+                        ScopedHostTransfer firmware_upload(
+                            transfer_stats, HostTransferCategory::Firmware, binary_mem.get_packed_size());
                         llrt::test_load_multicast_write_risc_binary(
                             descriptor_->env_impl(),
                             binary_mem,
@@ -1325,6 +1341,8 @@ void RiscFirmwareInitializer::initialize_firmware(
                         auto fw_path = build_env_manager.get_firmware_binary_path(
                             device_id, core_type_idx, processor_class, eriscv_id);
                         const ll_api::memory& binary_mem = llrt::get_risc_binary(fw_path);
+                        ScopedHostTransfer firmware_upload(
+                            transfer_stats, HostTransferCategory::Firmware, binary_mem.get_packed_size());
                         llrt::test_load_write_read_risc_binary(
                             descriptor_->env_impl(),
                             binary_mem,
@@ -1400,6 +1418,8 @@ void RiscFirmwareInitializer::initialize_firmware(
                         auto fw_path = build_env_manager.get_firmware_binary_path(
                             device_id, core_type_idx, processor_class, drisc_id);
                         const ll_api::memory& binary_mem = llrt::get_risc_binary(fw_path);
+                        ScopedHostTransfer firmware_upload(
+                            transfer_stats, HostTransferCategory::Firmware, binary_mem.get_packed_size());
                         llrt::test_load_write_read_risc_binary(
                             descriptor_->env_impl(),
                             binary_mem,
@@ -1453,6 +1473,8 @@ void RiscFirmwareInitializer::initialize_firmware(
                             static_cast<HalProcessorClassType>(processor_class),
                             dm_id,
                             fw_size);
+                        ScopedHostTransfer firmware_upload(
+                            transfer_stats, HostTransferCategory::Firmware, binary_mem.get_packed_size());
                         llrt::test_load_write_read_risc_binary(
                             descriptor_->env_impl(),
                             binary_mem,
