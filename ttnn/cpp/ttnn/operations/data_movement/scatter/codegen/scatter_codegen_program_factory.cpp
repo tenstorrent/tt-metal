@@ -27,7 +27,10 @@
 namespace ttnn::prim {
 using namespace tt::tt_metal;
 
+// Unity-build target: gather's factory defines helpers of the same names in its own unnamed
+// namespace, which collide in a shared batch unless each file's are also uniquely scoped.
 namespace {
+namespace CMAKE_UNIQUE_NAMESPACE {
 
 // Deliberately not gather's map (input on c_0, output on c_2): the kernels are written against this
 // one, and a watcher dump of a scatter program reads with these ids.
@@ -166,9 +169,10 @@ CBDescriptor make_tile_cb(uint32_t cb_id, const Tensor& tensor, uint32_t depth, 
     };
 }
 
-// CB sizes reach the device in 16 B words, so a page that is not a multiple of 16 B would leave the
-// kernel's view of the buffer short of what the host wrote into it. The budgets round each CB
-// further, to scatter_cb_alignment(), which is where the program allocator seats it.
+// CB page sizes are set in 16 B words (CIRCULAR_BUFFER_COMPUTE_WORD_SIZE), so a page that is not a
+// multiple of 16 B would leave the kernel's view of the buffer short of what the host wrote into it.
+// The budgets round each CB further, to scatter_cb_alignment(), which is where the program allocator
+// seats it.
 constexpr uint32_t kCbWordBytes = 16;
 
 CBDescriptor make_rm_cb(
@@ -192,7 +196,10 @@ CBDescriptor make_rm_cb(
 
 std::vector<uint32_t> to_vector(const ScatterPageMap& page_map) { return {page_map.begin(), page_map.end()}; }
 
+}  // namespace CMAKE_UNIQUE_NAMESPACE
 }  // namespace
+
+using namespace CMAKE_UNIQUE_NAMESPACE;
 
 uint32_t scatter_page_rank(const ttnn::Shape& shape) {
     const auto rank = shape.rank();

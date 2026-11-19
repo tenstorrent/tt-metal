@@ -103,18 +103,24 @@ def test_pc_scatter_codegen(device, shape, index_shape, layout, kwargs, index_ma
 
 
 @pytest.mark.parametrize(
-    "layout, kwargs, index_max",
+    "shape, index_shape, layout, kwargs, index_max",
     [
-        pytest.param(ttnn.TILE_LAYOUT, {}, None, id="tile"),
-        pytest.param(ttnn.ROW_MAJOR_LAYOUT, {}, None, id="row_major"),
-        pytest.param(ttnn.ROW_MAJOR_LAYOUT, {"reduce": "add"}, 8, id="row_major_bf16_reduce"),
+        # 40 tile rows over the 35 cores: the row split reaches into the second range.
+        pytest.param([1, 1, 1280, 200], [1, 1, 1280, 32], ttnn.TILE_LAYOUT, {}, None, id="tile_row_split"),
+        # One tile row with 36 output columns: the column split reaches into the second range.
+        pytest.param([1, 1, 32, 1152], [1, 1, 32, 32], ttnn.TILE_LAYOUT, {}, None, id="tile_column_split"),
+        pytest.param([1, 1, 64, 200], [1, 1, 64, 100], ttnn.ROW_MAJOR_LAYOUT, {}, None, id="row_major"),
+        pytest.param(
+            [1, 1, 64, 200], [1, 1, 64, 100], ttnn.ROW_MAJOR_LAYOUT, {"reduce": "add"}, 8, id="row_major_bf16_reduce"
+        ),
     ],
 )
-def test_scatter_codegen_two_range_grid(device, layout, kwargs, index_max):
+def test_scatter_codegen_two_range_grid(device, shape, index_shape, layout, kwargs, index_max):
     # The factories number cores by their ordinal in the grid and stride by the core count, which
-    # only holds if the work split and the kernels walk a two-range grid in the same order.
+    # only holds if the work split and the kernels walk a two-range grid in the same order; a wrong
+    # order writes wrong rows with no error, so every factory gets more work than one range holds.
     torch.manual_seed(42)
-    xt, it, st = _case(device, [1, 1, 64, 200], [1, 1, 64, 100], layout, index_max)
+    xt, it, st = _case(device, shape, index_shape, layout, index_max)
 
     golden = _force_native(xt, -1, it, st, sub_core_grids=_TWO_RANGES, **kwargs)
     output = _force_codegen(xt, -1, it, st, sub_core_grids=_TWO_RANGES, **kwargs)

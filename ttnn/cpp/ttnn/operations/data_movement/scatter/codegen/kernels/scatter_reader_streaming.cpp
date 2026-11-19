@@ -4,7 +4,8 @@
 
 // Scatter reader – streaming mode (NCRISC).
 // Chosen by the host's select_program_factory() when the full output row does
-// not fit L1, or when the tile-row count would leave most of the grid idle.
+// not fit L1, or when scatter_prefers_column_split() finds the column split
+// cheaper on the busiest core than the row split.
 //
 // Work is split by Wt_output across cores (each core handles a subset of output
 // columns). For each assigned output column, ALL Wt_index src tiles are scanned
@@ -40,7 +41,6 @@ void kernel_main() {
     constexpr uint32_t cb_index = get_named_compile_time_arg_val("cb_index");
     constexpr uint32_t cb_src = get_named_compile_time_arg_val("cb_src");
     constexpr uint32_t Ht = get_named_compile_time_arg_val("Ht");
-    constexpr uint32_t Wt_output = get_named_compile_time_arg_val("Wt_output");
     // Index and src share this geometry: validate requires src to carry index's shape.
     constexpr uint32_t Wt_index = get_named_compile_time_arg_val("Wt_index");
     constexpr uint32_t num_cores = get_named_compile_time_arg_val("num_cores");

@@ -138,7 +138,7 @@ TEST_F(ScatterCodegenPrimFixture, AcceptsADestinationThatAliasesTheInput) {
     EXPECT_TRUE(out.to_vector<::bfloat16>() == expected);
 }
 
-TEST_F(ScatterCodegenPrimFixture, SelectsTheFactoryEachMergeGateCaseIsNamedFor) {
+TEST_F(ScatterCodegenPrimFixture, SelectsTheFactoryByTheColumnSplitCost) {
     // The merge-gate unit cases carry their factory in the id, but a forced call cannot observe which
     // one ran. One tile row with seven output columns and one index tile: on the default grid the
     // column split gives a core one tile and one index scan against the row split's seven tiles and
@@ -270,6 +270,23 @@ TEST_F(ScatterCodegenPrimFixture, DeclinesADeallocatedOperandBeforeTouchingItsBu
     EXPECT_TRUE(supported_by_codegen(ops.input, -1, ops.index, ops.src, kReductionNone));
     ops.index.deallocate();
     EXPECT_FALSE(supported_by_codegen(ops.input, -1, ops.index, ops.src, kReductionNone));
+}
+
+TEST_F(ScatterCodegenPrimFixture, DemotesAWideRowWhoseColumnSplitWouldRescan) {
+    // 400 output tile columns do not fit the row split in L1, 64 tile rows are past the detour, and
+    // the column split would rescan the eight index tiles per output tile: measured 38x slower than
+    // native, so the call stays native. The same width over 8 tile rows takes the detour and stays
+    // on codegen.
+    const auto demoted = [&](const Operands& o) {
+        return is_demoted(o.input, -1, o.index, o.src, o.input.memory_config());
+    };
+    EXPECT_TRUE(
+        demoted(make_operands_of(device_, ttnn::Shape({1, 1, 2048, 12800}), ttnn::Shape({1, 1, 2048, 256}), 12800)));
+    EXPECT_FALSE(
+        demoted(make_operands_of(device_, ttnn::Shape({1, 1, 256, 12800}), ttnn::Shape({1, 1, 256, 256}), 12800)));
+    // A row that fits the row split is never demoted by this rule, however many tile rows it has.
+    EXPECT_FALSE(
+        demoted(make_operands_of(device_, ttnn::Shape({1, 1, 2048, 3200}), ttnn::Shape({1, 1, 2048, 256}), 3200)));
 }
 
 TEST_F(ScatterCodegenPrimFixture, RejectsRankZeroRowMajorOperands) {
