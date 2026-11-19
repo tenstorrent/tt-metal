@@ -710,7 +710,7 @@ inline void _llk_math_matmul_block_(std::uint8_t ct_dim, std::uint8_t rt_dim)
     const std::uint32_t t_dim             = reuse_a ? rt_dim : ct_dim;
     const std::uint32_t rut_dim           = reuse_a ? ct_dim : rt_dim; // reuse-dim
     const bool strided_dest               = !reuse_a && ct_dim >= 2;
-    const std::uint32_t dst_rows_per_tile = strided_dest ? 1U << ckernel::regfile[p_gpr_math::TILE_SHAPE_IDX] : 0;
+    const std::uint32_t dst_rows_per_tile = strided_dest ? 1U << ckernel::trisc::dest_tile_shape_idx : 0;
 
     for (std::uint32_t t = 0; t < t_dim; t++)
     {
