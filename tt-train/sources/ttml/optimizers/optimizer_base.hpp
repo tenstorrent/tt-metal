@@ -125,8 +125,8 @@ protected:
 
     // For optimizers that update a parameter that got no gradient (momentum, weight decay): their zero_grad() calls
     // clear_gradients_to_restore(), which also remembers which parameters had a gradient, and their step() calls
-    // restore_cleared_gradients_as_zeros(), which gives a zero gradient to each of those that got none since. The
-    // names are kept until that step, so zero_grad() may run more than once between two steps.
+    // restore_cleared_gradients_as_zeros(), which gives a zero gradient to each of those that got none since and is
+    // still trainable. The names are kept until that step, so zero_grad() may run more than once between two steps.
     void clear_gradients_to_restore();
     void restore_cleared_gradients_as_zeros();
 

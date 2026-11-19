@@ -57,7 +57,9 @@ void OptimizerBase::clear_gradients_to_restore() {
 void OptimizerBase::restore_cleared_gradients_as_zeros() {
     for (const auto& name : m_cleared_gradients) {
         const auto& tensor_ptr = m_parameters.at(name);
-        if (!tensor_ptr->is_grad_initialized()) {
+        // A parameter frozen since its gradient was dropped is not trained any more: a zero gradient would keep
+        // moving it, since zero_grad() leaves a frozen parameter's gradient alone.
+        if (tensor_ptr->get_requires_grad() && !tensor_ptr->is_grad_initialized()) {
             tensor_ptr->set_grad(core::zeros_like(tensor_ptr->get_value()));
         }
     }

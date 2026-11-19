@@ -191,7 +191,8 @@ a tied embedding and LM head.
   to fp32 and added as two fp32 tensors, which gives the IEEE fp32 sum.
 - **zero_grad.** Every optimizer's `zero_grad()` drops the gradients, so the first gradient of a step is stored as it
   comes. `SGD`, `SGDComposite` and `MuonComposite`, which used to install zeros there, install bf16 zeros in `step()`
-  instead, for a parameter that had a gradient before `zero_grad()` and got none since, so their updates don't change.
+  instead, for a parameter that had a gradient before `zero_grad()`, got none since and is still trainable, so their
+  updates don't change.
   `NoOp`, which updates nothing, only drops them.
 - **FSDP.** `backward_post` keeps the mean shard in fp32 under an fp32 reduce. The next micro-batch's `backward_pre`
   gathers it back to full size, an fp32 all-gather, twice the bytes of a bf16 one, and the new gradient is added at
