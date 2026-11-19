@@ -318,13 +318,44 @@ def test_mooncake_raising_is_unavailable(setup, expect_error):
     assert reader.stats.snapshot()["errors"] == 2  # the two fetches; size() is a lookup, not a fetch
 
 
-def test_failed_setup_closes_the_client(monkeypatch, expect_error):
-    """Setup can fail partway, after starting threads or binding a port, so open() closes the client it made."""
-    client = FakeClient(setup_rc=-1)
+def _raise(*args):
+    raise RuntimeError("binding failed")
+
+
+@pytest.mark.parametrize(
+    "fail, message",
+    [
+        ("setup returns an error", "Mooncake setup failed"),
+        ("setup raises", "starting the Mooncake client .* raised RuntimeError"),
+        ("master unreachable", "is unreachable"),
+        ("health_check raises", "starting the Mooncake client .* raised RuntimeError"),
+        ("get_hostname raises", "starting the Mooncake client .* raised RuntimeError"),
+    ],
+)
+def test_failed_start_closes_the_client(monkeypatch, expect_error, fail, message):
+    """Starting can fail partway, after Mooncake starts threads or binds a port, whether it returns an error or
+    raises; open() closes the client it made either way, and raises StoreUnavailable."""
+    client = FakeClient()
+    if fail == "setup returns an error":
+        client.setup_rc = -1
+    elif fail == "setup raises":
+        client.setup = _raise
+    elif fail == "master unreachable":
+        client.master_up = False
+    elif fail == "health_check raises":
+        client.health_check = _raise
+    else:
+        client.get_hostname = _raise
     monkeypatch.setattr(mooncake_store, "MooncakeDistributedStore", lambda: client)
-    with expect_error(StoreUnavailable, "Mooncake setup failed"):
+    with expect_error(StoreUnavailable, message):
         MooncakeEmbeddingReader.open(CONFIG)
     assert client.closed
+
+
+def test_failing_to_create_a_client_is_unavailable(monkeypatch, expect_error):
+    monkeypatch.setattr(mooncake_store, "MooncakeDistributedStore", _raise)
+    with expect_error(StoreUnavailable, "creating a Mooncake client raised RuntimeError"):
+        MooncakeEmbeddingReader.open(CONFIG)
 
 
 def test_closed_reader_is_freed(monkeypatch):

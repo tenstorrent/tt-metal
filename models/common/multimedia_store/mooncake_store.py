@@ -144,24 +144,35 @@ class MooncakeEmbeddingReader:
 
     @classmethod
     def open(cls, config: MediaEmbeddingStoreConfig) -> "MooncakeEmbeddingReader":
-        """Start this host's store: join the master and mount config.segment_bytes of host memory as its segment."""
-        client = MooncakeDistributedStore()
+        """Start this host's store: join the master and mount config.segment_bytes of host memory as its segment.
+        Raises StoreUnavailable if it can't, having closed the client: setup can fail partway, after starting threads
+        or binding the segment's port."""
         t0 = time.perf_counter()
-        # local_buffer_size 0: reads from other hosts land in this reader's own registered read buffer.
-        rc = client.setup(
-            config.segment, config.metadata, config.segment_bytes, 0, config.protocol, config.device, config.master
-        )
-        if rc != 0:
-            _close_client(client)  # setup can fail partway, after starting threads or binding the segment's port
-            raise StoreUnavailable(
-                f"Mooncake setup failed ({rc}): segment {config.segment}, master {config.master}, "
-                f"metadata {config.metadata}, {config.segment_bytes} B over {config.protocol}. RDMA registration locks "
-                "the whole segment, so it must fit under `ulimit -l`."
+        try:
+            client = MooncakeDistributedStore()
+        except Exception as e:
+            raise StoreUnavailable(f"creating a Mooncake client raised {e!r}") from e
+        try:
+            # local_buffer_size 0: reads from other hosts land in this reader's own registered read buffer.
+            rc = client.setup(
+                config.segment, config.metadata, config.segment_bytes, 0, config.protocol, config.device, config.master
             )
-        if client.health_check() != 0:
+            if rc != 0:
+                raise StoreUnavailable(
+                    f"Mooncake setup failed ({rc}): segment {config.segment}, master {config.master}, "
+                    f"metadata {config.metadata}, {config.segment_bytes} B over {config.protocol}. RDMA registration "
+                    "locks the whole segment, so it must fit under `ulimit -l`."
+                )
+            if client.health_check() != 0:
+                raise StoreUnavailable(f"Mooncake master {config.master} is unreachable")
+            segment = client.get_hostname()
+        except Exception as e:
             _close_client(client)
-            raise StoreUnavailable(f"Mooncake master {config.master} is unreachable")
-        segment = client.get_hostname()
+            if isinstance(e, StoreUnavailable):
+                raise
+            raise StoreUnavailable(
+                f"starting the Mooncake client (segment {config.segment}, master {config.master}) raised {e!r}"
+            ) from e
         reader = cls(client, segment, config.key_transform)
         atexit.register(reader.close)  # close() unregisters it, so a closed reader isn't kept alive until exit
         mode = "push" if config.segment_bytes else "pull"
