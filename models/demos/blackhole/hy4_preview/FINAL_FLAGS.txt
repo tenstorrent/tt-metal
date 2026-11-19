@@ -1,0 +1,7 @@
+# Hy4 product17 FINAL FLAGS (decision D176-1, 2026-11-19). Branch hy4-preview-product17.
+# Final stack 'final2' = FLAGS_DEFAULT of run17_server.sh + the BUNDLE_FLAGS below. NOT included (optional arms for the Nov 20 gate): ropetab, blocks64; never: maskshare (only matters with ihc, off), pftrace, ropellama, ropeD.
+# Groups (product17/mega.sh): derive mtp24 ccl chainguard reserve48 muxl1 xrow hook xpushA xpushB qfold pushmc rms ihc
+# Evidence (state/integ17.status.md): DRAM free 278 MB/bank after eager bodies, chain guard reserve 48 -> cap 9728, E_tok 2.83, prefill -30..-36 pct (coordinator D176-1).
+# Needs: b46 libs_v2 (LIBDIR; sha256 in product17/MUXL1_LIBS.sha256) and the worktree gpt_oss/tt/ccl.py (auto-mounted by run17_server.sh with HY4_B51_CCL_FULL_GRID=1).
+# Launch: product17/final_launch.sh <tag>
+BUNDLE_FLAGS="HY4_B40_DERIVE=1 HY4_B40_TAIL=1 HY4_B42_MTP_TP24=1 HY4_B51_CCL_FULL_GRID=1 HY4_B51_SELFTEST_PF=1 HY4_B50_CHAIN_GUARD=1 HY4_B50_DRAMLOG_S=300 HY4_B50_CHAIN_RESERVE_MB=48 TT_MOE_MUX_L1_FIT_Q=32768 HY4_XROW=1 HY4_APC_HOOK=1 HY4_PFX_LOSS_LOG=1 DSV41_HOME_ROW_HOLD_S=60 DSV41_HOME_ROW_HOLD_MIN=32768 DSV41_HOME_ROW_HOLD_RATE=192 DSV41_HOME_ROW_HOLD_FILE=/out17/hold_file DSV41_ROW_MATCH_K=8 DSV41_ROW_MATCH_FILE=/out17/rowmatch_file HY4_B47A_XPUSH=1 HY4_B47B_XPUSH=1 HY4_B47B_QFOLD=1 HY4_B47B_PUSH_MC=1 HY4_B47C_RMS=1 HY4_B49_IHC=fused HY4_B49_ROPE_CACHE=1 HY4_B49_RSTAIL=1"
