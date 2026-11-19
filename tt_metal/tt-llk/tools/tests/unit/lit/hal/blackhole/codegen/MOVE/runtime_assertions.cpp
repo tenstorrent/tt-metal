@@ -67,10 +67,10 @@ extern "C" __attribute__((noinline, used)) void srcb_runtime_address_mode(const 
 
 // ASSERT-LABEL: <srcb_runtime_address_mode>:
 // ASSERT-NEXT: li [[LIMIT:a[0-7]]],7{{$}}
-// ASSERT-NEXT: bltu [[LIMIT]],a0,
-// ASSERT: <.L{{[0-9]+}}>:
+// ASSERT-NEXT: bltu [[LIMIT]],a0,{{[0-9a-f]+}} <[[COLD:\.L[0-9]+]]>
+// ASSERT: <[[COLD]]>:
 // ASSERT-NEXT: ebreak
-// ASSERT: ret
+// ASSERT-NEXT: j {{[0-9a-f]+}} <.L{{[0-9]+}}>
 
 extern "C" __attribute__((noinline, used)) void srcb_address_mode_past_limit()
 {
