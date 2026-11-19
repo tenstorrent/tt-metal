@@ -422,9 +422,23 @@ constexpr bool matmul_fe_hifi3_wide() {
 #endif
 }
 
+// Half sync, no named block args: a kernel whose every call is a constant one-tile block of kt 1 polls; matmul_decode
+// makes 32 of them per DEST section and read +2.2 % under the ttsync unpack. D defers the read to the end of the unit.
+template <typename D>
+constexpr bool matmul_fe_one_tile_kt1_cut() {
+#if defined(UCK_CHLKC_UNPACK)
+    return DST_SYNC_MODE == DstSync::SyncHalf && !llk_unpack_AB_matmul_named_1x1_long_k() &&
+           matmul_fe_mark::is_used_d<17, D>(0) && !matmul_fe_mark::is_used_d<18, D>(0);
+#else
+    return false;
+#endif
+}
+
 }  // namespace ckernel
 // the TRISC wrapper's reading of the cut (matmul.h defines it, so a kernel without the matmul API skips the wrapper's ttsync)
-#define MATMUL_FE_TTSYNC_CUT() (::ckernel::matmul_fe_hifi3_wide() && !::ckernel::matmul_fe_mark::is_used<8>(0))
+#define MATMUL_FE_TTSYNC_CUT()                                                           \
+    ((::ckernel::matmul_fe_hifi3_wide() && !::ckernel::matmul_fe_mark::is_used<8>(0)) || \
+     ::ckernel::matmul_fe_one_tile_kt1_cut<::std::integral_constant<int, 0>>())
 namespace ckernel {
 
 #ifdef TRISC_MATH
@@ -1276,7 +1290,11 @@ constexpr std::uint32_t matmul_fe_unpack_ttsync() {
 #if defined(UCK_CHLKC_UNPACK)
     constexpr bool runtime_cut =
         matmul_fe_hifi3_wide() && !matmul_fe_mark::is_used_d<8, std::integral_constant<std::size_t, mark>>(0);
-    return mark == 3 ? 3 : ((mark == 1 && llk_unpack_AB_matmul_kernel_ttsync() && !runtime_cut) ? 1 : 0);
+    return mark == 3 ? 3
+                     : ((mark == 1 && llk_unpack_AB_matmul_kernel_ttsync() && !runtime_cut &&
+                         !matmul_fe_one_tile_kt1_cut<std::integral_constant<std::size_t, mark>>())
+                            ? 1
+                            : 0);
 #else
     return 0;
 #endif
@@ -1536,14 +1554,15 @@ ALWI void matmul_block_fe(
 #define MATMUL_FE_UINIT_6(a, b, tr, ct, rt, kt) MATMUL_FE_UCELL(a, b, ct, rt, kt)(__builtin_LINE(), a, b, tr, ct, rt, kt)
 #define MATMUL_FE_UINIT_7(a, b, tr, ct, rt, kt, line) MATMUL_FE_UCELL(a, b, ct, rt, kt)(line, a, b, tr, ct, rt, kt)
 #define matmul_block(...) MATMUL_FE_CAT(MATMUL_FE_UBLOCK_, MATMUL_FE_NARG(__VA_ARGS__))(__VA_ARGS__)
-#define MATMUL_FE_UBCELL(a, b, ct, rt, kt)                                                        \
-    matmul_block_fe<                                                                              \
-        MATMUL_FE_C(a),                                                                           \
-        MATMUL_FE_C(b),                                                                           \
-        0xFFu,                                                                                    \
-        0xFFu,                                                                                    \
-        MATMUL_FE_CELL_MARK(a, b, ct, rt, kt) + MATMUL_FE_SHAPE(ct, rt) + MATMUL_FE_PACK_KT1(kt), \
-        MATMUL_FE_KDEC(a, false),                                                                 \
+#define MATMUL_FE_UBCELL(a, b, ct, rt, kt)                                                         \
+    matmul_block_fe<                                                                               \
+        MATMUL_FE_C(a),                                                                            \
+        MATMUL_FE_C(b),                                                                            \
+        0xFFu,                                                                                     \
+        0xFFu,                                                                                     \
+        MATMUL_FE_CELL_MARK(a, b, ct, rt, kt) + MATMUL_FE_SHAPE(ct, rt) + MATMUL_FE_PACK_KT1(kt) + \
+            MATMUL_FE_ONE_TILE_KT1(ct, rt, kt),                                                    \
+        MATMUL_FE_KDEC(a, false),                                                                  \
         MATMUL_FE_CK(kt)>
 // the experimental 2_0 call (no transpose argument)
 #define MATMUL_FE_UBLOCK_8(a, b, i0, i1, d, ct, rt, kt)                      \
