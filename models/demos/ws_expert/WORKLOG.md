@@ -1722,3 +1722,30 @@ speed-of-light ep4_targets.py.
   machine.
 - Open: at M 586 the rectangles at x 11-15 (groups 2 / 3) finish later than x 1-7 (snake 11.4 vs 7.9 ms, rings
   10.3 vs 7.5 fixed) - not the weights; not looked at yet.
+
+### Stage 8b: G 4 one-way lanes on the Galaxy (ep4-lb merged; lane_cfgs G 4 = LCfg.oneway, muxes NOC1, placed)
+- 302K uniform, experts (max over chips) / layer sum; y min PCC 0.99987-0.99988, two layers bit-identical:
+| node | G 2 | G 4 |
+|---|---|---|
+| 110-a10u02 (75 W, AICLK 1350 held) | 11.93 | 12.26 / 24.38 |
+| 120-b08u02 (130 W) | 12.29 / 24.45 | 12.75 |
+- Weights only: G 4 7.3 ms on every group (19.7 GB/s a link direction, 35 experts each), G 2 7.0 ms. G 2 is compute
+  bound (11.4 ms with or without its row writes); G 4's link 1 lanes finish 40 experts in 7.7 ms.
+- Placement on this Galaxy: every chip's link 0 ethernet cores at NoC x 2 / 3, link 1 at x 14 / 15 (rows 0-3 of the
+  mesh one way, 4-7 the other); placed lanes -> rectangles [2, 3, 0, 1] on all 32 chips. Fixed placement (lane g on
+  rectangle g): weights only 8.4-8.9 ms, experts 13.0 ms.
+- Stamps rows are per rectangle. At M > 0 rectangles 0 / 1 (muxes and row collectors in logical column 0, NoC x 1)
+  end at 9.2 / 12.4 ms, 2 / 3 at 7.9; their group NCRISCs wait 3.8-5.3 ms on mux space. Rectangle 0 / 1's collectors
+  write the result rows on NOC1, north up x 1, the column their muxes send up to the ethernet row:
+| b08u02, G 4 | experts |
+|---|---|
+| baseline | 12.75 |
+| rectangles 0 / 1's collectors without row writes (yc_sink_mask 3) | 8.63 |
+| rectangles 2 / 3's collectors without row writes (yc_sink_mask 12) | 12.53 |
+- The G 4 layout breaks the multicast rule: rectangles 2 / 3's collectors (x 7, yc_n0 split) write on NOC0, east along
+  their row; O pages in banks 0-3 (x 0) are reached through rectangles 2 / 3 (x 10-14) on their multicast NoC.
+- Tried (EP4_OEAST=1, off by default): every collector in column 6 (2 a group), all row writes on NOC0 into banks 4-7
+  (page (d >> 2) 8 + 4 + (d & 3), the combine reads the same). Experts 12.51 ms (now rectangles 0 / 2 slow, waiting on
+  credits: rectangle 0's slices cross the chip west on rows 0 / 2), combine 6.24 ms (4 banks) vs 4.93, layer 25.88.
+- Next: a NoC flow model of the whole chip (muxes, ethernet, slices to the collectors, collectors to the DRAM
+  endpoints, both NoCs) to pick the G 4 layout before running it.
