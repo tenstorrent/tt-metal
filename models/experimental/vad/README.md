@@ -1,7 +1,7 @@
 # VAD
 
 ## Platforms:
-    Blackhole (P100)
+    Blackhole (P100), Wormhole (N150)
 
 ## Introduction
 This directory runs VAD-Tiny end to end on device: six camera images through the ResNet50 backbone
@@ -93,7 +93,8 @@ width sharded with the full grid's channel blocks, since the block width decides
 partial sums are rounded. The fused multi-scale deformable attention takes the per-query counts from
 a device tensor rather than its runtime arguments.
 
-Three grids are supported: the full grid, 8x8 (Wormhole N150's full grid, `7,7` on Blackhole) and 2x1.
+Four grids are supported: the full grid, 8x8 (Wormhole N150's full grid, `7,7` on Blackhole), 2x2
+and 2x1.
 With a cold kernel cache the end-to-end test on 2x1 takes about 20 minutes on a Blackhole P100, with
 stretches of several minutes without output:
 
@@ -106,10 +107,9 @@ Other grids fail before the first frame:
 | Grid | Failure |
 |---|---|
 | 3x1, 4x3 | The device does not open: the L1 allocator needs a power-of-two bank count. |
-| 1x1 | A layer4 conv run from DRAM finds no height slice that fits one core's L1. |
-| 2x2 | An FPN conv's circular buffers clash with live L1 buffers. |
-| 4x2, 4x4 | Layer4's strided 3x3 conv fits the activation budget, but its circular buffers outgrow L1. |
-| 8x4 | A backbone 1x1 conv's circular buffers clash with live L1 buffers. |
+| 1x1 | Layer4's first strided 3x3 conv, run from DRAM, finds no height slice that fits one core's L1. |
+| 4x2 | The ego-agent decoder's attention runs out of L1, which tensors kept from earlier modules fill. |
+| 4x4, 8x4 | Layer2's block-sharded strided 1x1 downsample does not fit L1; it can neither run in bands, since 16 and 32 cores do not divide the channel blocks, nor from DRAM. |
 
 The memory plan counts a conv's input, output and own circular buffers, but not the tensors other
 modules keep in L1.
