@@ -273,6 +273,13 @@ protected:
     // This function is not thread-safe.
     static DistributedContextId generate_unique_id();
     DistributedContextId id_{0};  // Unique identifier for the context
+
+    // This process's world, written by whichever backend's create() runs.
+    inline static ContextPtr current_world_;
+    // The unsplit job this context belongs to (see get_world_context()); MPI overrides this after a split.
+    virtual ContextPtr job_world() const { return current_world_; }
+    // Whether the runtime behind this context is up; MPI overrides this with MPI_Initialized().
+    virtual bool is_runtime_initialized() const { return true; }
 };
 
 }  // namespace tt::tt_metal::distributed::multihost

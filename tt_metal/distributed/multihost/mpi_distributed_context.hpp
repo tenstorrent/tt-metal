@@ -57,11 +57,10 @@ class MPIContext : public DistributedContext {
 public:
     // factory (initialises MPI environment once per process)
     static void create(int argc, char** argv);
-    static const ContextPtr& get_current_world();
+    bool is_runtime_initialized() const override;
     /// MPI communicator spanning the full job (`MPI_COMM_WORLD`). Rank/size are global even when
     /// `get_current_world()` was split via `TT_RUN_SUBCONTEXT_ID`. Safe to use for cross-subcontext p2p.
-    static ContextPtr get_world_context();
-    static bool is_initialized();
+    ContextPtr job_world() const override;
 
     [[nodiscard]] std::optional<SubcontextId> subcontext_id() const override;
     [[nodiscard]] int subcontext_count() const override;
@@ -126,17 +125,13 @@ public:
     const MPI_Comm& comm() const { return comm_; }
     const MPI_Group& group() const { return group_; }
 
-    static void set_current_world(const ContextPtr& ctx);
-
 private:
     MPI_Comm comm_{MPI_COMM_NULL};
     MPI_Group group_{MPI_GROUP_NULL};
     int rank_{0};
     int size_{0};
 
-    // Subcommunicator for this process after optional TT_RUN_SUBCONTEXT_ID split (or duplicate of world).
-    inline static ContextPtr current_world_;
-    // Lazily-created view of MPI_COMM_WORLD (not freed in destructor).
+    // View of MPI_COMM_WORLD, created by create() (not freed in destructor).
     inline static ContextPtr mpi_job_world_;
 };
 

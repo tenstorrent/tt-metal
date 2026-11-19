@@ -8,6 +8,7 @@
 #include <array>
 #include <cstdlib>
 #include <string_view>
+#include <typeinfo>
 
 #include <tt-logger/tt-logger.hpp>
 #include <tt_stl/assert.hpp>
@@ -70,31 +71,23 @@ void DistributedContext::create(int argc, char** argv) {
 }
 
 const ContextPtr& DistributedContext::get_current_world() {
-#if defined(OPEN_MPI)
-    if (use_mpi()) {
-        return MPIContext::get_current_world();
+    if (!current_world_) {
+        create(0, nullptr);
     }
-#endif
-    return SingleHostContext::get_current_world();
+    return current_world_;
 }
 
-ContextPtr DistributedContext::get_world_context() {
-#if defined(OPEN_MPI)
-    if (use_mpi()) {
-        return MPIContext::get_world_context();
-    }
-#endif
-    return SingleHostContext::get_current_world();
-}
+ContextPtr DistributedContext::get_world_context() { return get_current_world()->job_world(); }
 
 void DistributedContext::set_current_world(const ContextPtr& ctx) {
-#if defined(OPEN_MPI)
-    if (use_mpi()) {
-        MPIContext::set_current_world(ctx);
-        return;
+    TT_FATAL(ctx != nullptr, "set_current_world: context is nullptr");
+    if (current_world_) {
+        const DistributedContext& incoming = *ctx;
+        const DistributedContext& active = *current_world_;
+        TT_FATAL(
+            typeid(incoming) == typeid(active), "set_current_world: context type does not match the active backend");
     }
-#endif
-    SingleHostContext::set_current_world(ctx);
+    current_world_ = ctx;
 }
 
 Size DistributedContext::subcontext_size(SubcontextId subcontext_id) const {
@@ -119,12 +112,10 @@ Rank DistributedContext::local_to_world_rank(SubcontextId subcontext_id, Rank lo
 }
 
 bool DistributedContext::is_initialized() {
-#if defined(OPEN_MPI)
-    if (use_mpi()) {
-        return MPIContext::is_initialized();
+    if (current_world_) {
+        return current_world_->is_runtime_initialized();
     }
-#endif
-    return SingleHostContext::is_initialized();
+    return false;
 }
 
 DistributedContextId DistributedContext::id() const { return id_; }

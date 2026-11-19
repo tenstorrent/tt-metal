@@ -17,9 +17,6 @@ public:
 
     // factory
     static void create(int argc, char** argv);
-    static const ContextPtr& get_current_world();
-    static void set_current_world(const ContextPtr&);
-    static bool is_initialized();
 
     // destructor – no-op
     ~SingleHostContext() override = default;
@@ -76,9 +73,6 @@ public:
 private:
     int rank_{0};
     int size_{1};
-
-    // caching our own world communicator
-    inline static ContextPtr current_world_;
 };
 
 }  // namespace tt::tt_metal::distributed::multihost

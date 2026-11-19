@@ -44,22 +44,6 @@ void SingleHostContext::create(int argc [[maybe_unused]], char** argv [[maybe_un
     }
 }
 
-const ContextPtr& SingleHostContext::get_current_world() {
-    if (!current_world_) {
-        current_world_ = std::make_shared<SingleHostContext>();
-    }
-    return current_world_;
-}
-
-void SingleHostContext::set_current_world(const ContextPtr& ctx) {
-    TT_FATAL(
-        ctx != nullptr && std::dynamic_pointer_cast<SingleHostContext>(ctx) != nullptr,
-        "SingleHostContext::set_current_world: context is not a SingleHostContext or a nullptr");
-    SingleHostContext::current_world_ = ctx;
-}
-
-bool SingleHostContext::is_initialized() { return current_world_ != nullptr; }
-
 // basic info
 Rank SingleHostContext::rank() const { return Rank(rank_); }
 Size SingleHostContext::size() const { return Size(size_); }
@@ -175,7 +159,7 @@ ContextPtr SingleHostContext::duplicate() const { return std::make_shared<Single
 
 ContextPtr SingleHostContext::split(Color color [[maybe_unused]], Key key [[maybe_unused]]) const {
     // nop on single-host context
-    return get_current_world();
+    return duplicate();
 }
 
 ContextPtr SingleHostContext::create_sub_context(ttsl::Span<int> ranks) const {
