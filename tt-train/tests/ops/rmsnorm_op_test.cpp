@@ -526,7 +526,7 @@ TEST_F(RMSNormOpTest, RMSNorm_Compare_FrozenGamma) {
     auto* device = &ttml::autograd::ctx().get_device();
     device->clear_program_cache();
     for (const auto& shape :
-         {std::vector<uint32_t>{1U, 1U, 4096U, 1024U}, std::vector<uint32_t>{1U, 1U, 1U, 16384U}}) {
+         {std::vector<uint32_t>{1U, 1U, 4096U, 512U}, std::vector<uint32_t>{1U, 1U, 1U, 16384U}}) {
         CompareKernelVsComposite(shape, /* train_gamma */ true);
         const auto num_programs = device->num_program_cache_entries();
         CompareKernelVsComposite(shape, /* train_gamma */ false);
@@ -801,7 +801,7 @@ std::vector<RMSNormCase> rmsnorm_cases() {
         // 37 tile-rows of 77 tiles: 7 slices of 11 tiles (block size 1), row-groups of 3 and of 2 rows in two core
         // groups, and only the last slice masks.
         Shape{1, 1184, 1, 2463},
-        // One tile-row of 27 tiles: 3 slices of 9 tiles, block size 3 in the forward and 1 in the backward.
+        // One tile-row of 27 tiles: 9 slices of 3 tiles, block size 3 in the forward and 1 in the backward.
         Shape{1, 32, 1, 863},
         // 131 tile-rows of 74 = 2 * 37 tiles: 2 slices is the only split, with row-groups of 3 and of 2 rows in two
         // core groups.
@@ -1103,7 +1103,7 @@ const std::vector<RowSplitExpectation>& row_split_expectations() {
         {"Plain_1x32x1x5120_WholeRows, RMSNorm_Compare_Aligned_Qwen3_32B_Hidden", {1U, 1U, 32U, 5120U}, true},
         {"Plain_1x32x1x8191_WholeRows", {1U, 1U, 32U, 8191U}, true},
         {"Plain_1x32x1x16384_WholeRows", {1U, 1U, 32U, 16384U}, true},
-        {"RMSNorm_Compare_FrozenGamma, whole rows", {1U, 1U, 4096U, 1024U}, false},
+        {"RMSNorm_Compare_FrozenGamma, whole rows", {1U, 1U, 4096U, 512U}, false},
         {"RMSNorm_Compare_FrozenGamma, sliced row", {1U, 1U, 1U, 16384U}, true},
         {"DistinctKeys, sliced tile row", {1U, 1U, 32U, 1024U}, true},
     };

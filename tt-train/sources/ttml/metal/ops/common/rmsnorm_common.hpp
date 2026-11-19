@@ -79,7 +79,8 @@ struct RowSliceCores {
     tt::tt_metal::CoreRangeSet core_group_2;
 };
 
-// Picks num_slices by the work of the busiest core: rounds of rows times the tiles per row, plus the exchange.
+// Picks num_slices by the work of the busiest core: rounds of rows times the tiles per row and the exchange, plus its
+// one read of slice_tiles gamma tiles.
 // Only slice counts up to max_slices that divide Wt and whose slice `slice_fits_in_l1(slice_tiles, num_slices)`
 // are considered; ties keep the smaller count.
 template <typename SliceFitsInL1>
@@ -102,7 +103,8 @@ RowSlicePlan plan_row_slices(
         const uint32_t num_groups = num_groups_for(num_slices);
         const uint64_t rounds = (total_rows + num_groups - 1U) / num_groups;
         const uint64_t exchange = num_slices > 1U ? num_slices + kRowSliceExchangeCostTiles : 0U;
-        return rounds * (Wt / num_slices + exchange);
+        const uint64_t slice_tiles = Wt / num_slices;
+        return rounds * (slice_tiles + exchange) + slice_tiles;
     };
 
     uint32_t num_slices = 1U;
