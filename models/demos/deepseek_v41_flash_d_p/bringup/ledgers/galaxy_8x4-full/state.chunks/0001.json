@@ -6265,10 +6265,20 @@
     "by": "overseer: attempt 2",
     "status": "TODO",
     "t": "2026-11-19T12:33:54"
+   },
+   {
+    "by": "overseer",
+    "status": "TODO",
+    "t": "2026-11-19T12:37:17"
+   },
+   {
+    "by": "overseer",
+    "status": "TODO",
+    "t": "2026-11-19T12:37:48"
    }
   ],
   "reason": [
-   "attempt 2: build the kernels"
+   "parked behind the host-time work (owner: bigger fish first)"
   ],
   "role": "perf",
   "status": "TODO",
