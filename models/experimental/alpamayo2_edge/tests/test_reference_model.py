@@ -4,6 +4,7 @@
 
 import math
 import os
+import urllib.error
 import urllib.request
 from dataclasses import replace
 from pathlib import Path
@@ -303,12 +304,14 @@ def _nvlabs_fixture() -> Path:
         try:
             with urllib.request.urlopen(NVLABS_FIXTURE_URL, timeout=60) as response:
                 data = response.read()
-            path.parent.mkdir(parents=True, exist_ok=True)
-            tmp = path.with_suffix(f".{os.getpid()}.tmp")
-            tmp.write_bytes(data)
-            os.replace(tmp, path)
-        except OSError as e:
-            pytest.skip(f"NVlabs action-space fixture unavailable ({e}); fetch {NVLABS_FIXTURE_URL} into {path.parent}")
+        except (urllib.error.URLError, ConnectionError, TimeoutError) as e:
+            pytest.skip(
+                f"no network for the NVlabs action-space fixture ({e}); fetch {NVLABS_FIXTURE_URL} into {path.parent}"
+            )
+        path.parent.mkdir(parents=True, exist_ok=True)
+        tmp = path.with_suffix(f".{os.getpid()}.tmp")
+        tmp.write_bytes(data)
+        os.replace(tmp, path)
     return path
 
 
@@ -598,18 +601,27 @@ def test_infer_pipeline(cfg, model, inputs, prefilled):
     assert torch.equal(xyz, pred.xyz) and torch.equal(rot, pred.rot)
 
 
+def _function_in(path: Path, source: str):
+    """`compute` from `source`, compiled as if defined in the file `path`, which is written first."""
+    path.write_text(source)
+    namespace = {}
+    exec(compile(source, str(path), "exec"), namespace)
+    return namespace["compute"]
+
+
 def test_golden_cache(cfg, tmp_path, monkeypatch, expect_error):
-    monkeypatch.setenv("ALPAMAYO_CACHE_DIR", str(tmp_path))
+    monkeypatch.setenv("ALPAMAYO_CACHE_DIR", str(tmp_path / "cache"))
     calls = []
 
     def compute():
         calls.append(None)
         return {"value": torch.arange(3)}
 
-    def run(key, run_cfg=cfg):
-        before = len(calls)
-        golden_cache.cached("probe", key, compute, cfg=run_cfg)
-        return len(calls) > before
+    def run(key, run_cfg=cfg, fn=compute):
+        """True when the call computed and stored a new entry."""
+        before = len(list((tmp_path / "cache").glob("probe-*.pt")))
+        golden_cache.cached("probe", key, fn, cfg=run_cfg)
+        return len(list((tmp_path / "cache").glob("probe-*.pt"))) > before
 
     noise = torch.zeros(2000)
     assert run({"seed": 0, "noise": noise})
@@ -617,6 +629,7 @@ def test_golden_cache(cfg, tmp_path, monkeypatch, expect_error):
     assert torch.equal(
         golden_cache.cached("probe", {"seed": 0, "noise": noise}, compute, cfg=cfg)["value"], torch.arange(3)
     )
+    assert len(calls) == 1
 
     # Every input that changes the result must change the key.
     assert run({"seed": 1, "noise": noise})
@@ -625,11 +638,34 @@ def test_golden_cache(cfg, tmp_path, monkeypatch, expect_error):
     assert run({"seed": 0, "noise": nudged})
     assert run({"seed": 0, "noise": noise.double()})
     assert run({"seed": 0, "noise": noise.reshape(2, 1000)})
-    assert run({"seed": 0, "noise": noise}, replace(cfg, model_dir=cfg.model_dir.parent / "other-snapshot"))
     for part in ("vision", "text", "expert"):
         deeper = replace(cfg, **{part: replace(getattr(cfg, part), layers=getattr(cfg, part).layers + 1)})
         assert run({"seed": 0, "noise": noise}, deeper), part
-    assert len(list(tmp_path.glob("probe-*.pt"))) == len(calls)
+
+    # The checkpoint is keyed by content: a copy elsewhere hits, an edited config misses.
+    copy = tmp_path / "checkpoint-copy"
+    copy.mkdir()
+    for name in ("config.json", "model.safetensors.index.json"):
+        (copy / name).write_bytes((cfg.model_dir / name).read_bytes())
+    assert not run({"seed": 0, "noise": noise}, replace(cfg, model_dir=copy))
+    (copy / "config.json").write_bytes((cfg.model_dir / "config.json").read_bytes() + b"\n")
+    assert run({"seed": 0, "noise": noise}, replace(cfg, model_dir=copy))
+
+    # An edit to the reference sources or to the file that defines the golden function misses.
+    sources = tmp_path / "reference"
+    sources.mkdir()
+    (sources / "model.py").write_text("A = 1\n")
+    monkeypatch.setattr(golden_cache, "_REFERENCE_DIR", sources)
+    assert run({"seed": 0, "noise": noise})
+    assert not run({"seed": 0, "noise": noise})
+    (sources / "model.py").write_text("A = 2\n")
+    assert run({"seed": 0, "noise": noise})
+
+    body = "import torch\n\n\ndef compute():\n    return {'value': torch.arange(3)}\n"
+    test_file = tmp_path / "golden_fn.py"
+    assert run({"seed": 0, "noise": noise}, fn=_function_in(test_file, body))
+    assert not run({"seed": 0, "noise": noise}, fn=_function_in(test_file, body))
+    assert run({"seed": 0, "noise": noise}, fn=_function_in(test_file, body + "# edited\n"))
 
     with expect_error(TypeError, "cannot key"):
         golden_cache.cached("probe", {"path": object()}, compute, cfg=cfg)

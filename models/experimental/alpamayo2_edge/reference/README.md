@@ -7,10 +7,10 @@ the NVlabs `alpamayo2_edge` package. The check runs once, or again after a refer
 ## Official venv
 
 The official stack needs Python 3.12 and transformers 5.17. The repo stays on transformers 5.12.1, so
-the official stack gets its own venv outside the repo.
+the official stack gets its own venv outside the repo, at `$VENV_DIR/alpamayo-official`.
 
 ```bash
-cd /proj_sw/user_dev/ctr-mdukic/venvs
+cd $VENV_DIR
 uv python install 3.12
 uv venv --python 3.12 alpamayo-official
 uv pip install --python alpamayo-official/bin/python --index-url https://download.pytorch.org/whl/cpu \
@@ -25,18 +25,18 @@ snapshot `b92b6aa326bd3e2235db28f248ad5a30b5890e64`.
 
 ## Running
 
-Both steps are CPU-only. They import torch, so they run through the device MCP job runner and take about
-5 minutes each. The dump goes to `/localdev/ctr-mdukic/alpamayo_cache/official/` and is never committed.
+Both steps are CPU-only and take about 5 minutes each. The dump goes to
+`$ALPAMAYO_CACHE_DIR/official/` and is never committed. `ALPAMAYO_CACHE_DIR` is the golden cache directory
+(default `${XDG_CACHE_HOME:-~/.cache}/alpamayo2_edge`, see `golden_cache.py`).
 
 ```bash
 # official venv: synthetic_sample(0) through the NVlabs helper and sample_trajectories_from_data, fp32 / SDPA
-HF_HOME=/localdev/ctr-mdukic/hf_data HF_HUB_OFFLINE=1 \
-  /proj_sw/user_dev/ctr-mdukic/venvs/alpamayo-official/bin/python \
-  models/experimental/alpamayo2_edge/reference/validate_official.py dump --out /localdev/ctr-mdukic/alpamayo_cache/official
+HF_HOME=$HF_HOME HF_HUB_OFFLINE=1 $VENV_DIR/alpamayo-official/bin/python \
+  models/experimental/alpamayo2_edge/reference/validate_official.py dump --out $ALPAMAYO_CACHE_DIR/official
 
 # repo venv: rebuild the inputs, run ReferenceModel on the official CoTs and noise, compare
-HF_HOME=/localdev/ctr-mdukic/hf_data HF_HUB_OFFLINE=1 python_env/bin/python \
-  models/experimental/alpamayo2_edge/reference/validate_official.py compare --dump /localdev/ctr-mdukic/alpamayo_cache/official
+HF_HOME=$HF_HOME HF_HUB_OFFLINE=1 python_env/bin/python \
+  models/experimental/alpamayo2_edge/reference/validate_official.py compare --dump $ALPAMAYO_CACHE_DIR/official
 ```
 
 `dump` runs the official model twice and records each run with hooks:
@@ -62,7 +62,7 @@ order ops differently: the reference uses eager matmul attention and the officia
 
 Inputs are bitwise equal, ints exact and pixel values exact: `input_ids`, `attention_mask`,
 `mm_token_type_ids`, `patches` vs `pixel_values`, `image_grid_thw`, `position_ids` and `rope_deltas`,
-plus the ego history. S = 3256 tokens and N = 11568 patches, as recorded in Task 4.
+plus the ego history. S = 3256 tokens and N = 11568 patches, the sizes `tests/test_inputs.py` pins.
 
 | tensor | case | 1 − PCC | max abs | max rel |
 |---|---|---|---|---|

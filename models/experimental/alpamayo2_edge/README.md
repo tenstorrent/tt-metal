@@ -68,10 +68,11 @@ meaningless text.
 
 ## Tests
 
-The CPU reference goldens are cached on disk in `ALPAMAYO_CACHE_DIR`. The default path is in
-`reference/golden_cache.py`; set the variable on other machines. Entries are keyed on
-the inputs, the snapshot, the depths and the hash of `reference/*.py`. The first full-depth run of a
-golden takes a few minutes of CPU time.
+The CPU reference goldens are cached on disk in `$ALPAMAYO_CACHE_DIR`, by default
+`${XDG_CACHE_HOME:-~/.cache}/alpamayo2_edge`. Keep it private to your user. Entries are keyed on the
+inputs, the checkpoint's `config.json` and weight index, the depths, the torch version, and the
+sources of `reference/*.py` and of the test file that computes the golden. The first full-depth run
+of a golden takes a few minutes of CPU time.
 
 | File | Device | What |
 |---|---|---|

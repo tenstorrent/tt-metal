@@ -51,6 +51,7 @@ def test_grids_16x9(sample, inputs):
     n = inputs.patches.shape[0]
     print(f"N = {n} patches, {n // 4} vision tokens, S = {inputs.input_ids.shape[1]}")
     assert inputs.patches.shape == (11568, 768)
+    assert inputs.input_ids.shape == (1, 3256)
     assert inputs.patches.dtype == torch.float32
     assert n // 4 == 2892
 
