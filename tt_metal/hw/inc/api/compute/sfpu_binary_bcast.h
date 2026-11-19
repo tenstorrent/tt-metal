@@ -6,14 +6,12 @@
 
 #include "api/compute/common_globals.h"
 
-#if defined(TRISC_MATH) && (defined(ARCH_WORMHOLE) || defined(ARCH_BLACKHOLE))
+#ifdef TRISC_MATH
 #include "ckernel_sfpu_binary_bcast.h"
 #include "llk_math_eltwise_binary_sfpu_macros.h"
 #endif
 
 namespace ckernel {
-
-#if defined(ARCH_WORMHOLE) || defined(ARCH_BLACKHOLE)
 
 // ============================================================================
 // BCAST_COL: broadcast column 0 of the bcast tile across all 32 tile columns
@@ -27,6 +25,10 @@ namespace ckernel {
  * helper. A single init is shared across ADD / SUB / MUL because only the
  * broadcast state (which depends on BCAST_DIM) is persisted; the binop
  * opcode is selected per call.
+ *
+ * On Quasar the init only checks the broadcast dim: each sfpu_*_bcast_*
+ * call records its binop and lane mask before it runs, so nothing persists
+ * between calls.
  *
  * Return value: None
  */
@@ -121,6 +123,8 @@ ALWI void sfpu_mul_bcast_col(uint32_t dst_data_idx, uint32_t dst_col_vec_idx) {
  * output are FP32. DST must be acquired, and `sfpu_bcast_col_init()` must have
  * been called since any scalar-broadcast normalisation.
  *
+ * Not supported on Quasar: a kernel that calls it fails to build.
+ *
  * Return value: None
  *
  * | Argument            | Description                                              | Type     | Valid Range                                           | Required |
@@ -150,6 +154,8 @@ ALWI void sfpu_normalize_bcast_col(uint32_t dst_data_idx, uint32_t dst_mean_col_
  * Apply `(data - mean) * inv_std` to two in-place data tiles while reusing
  * each column-vector statistics broadcast. All operands and outputs are FP32.
  * DST must be acquired, and `sfpu_bcast_col_init()` must have been called.
+ *
+ * Not supported on Quasar: a kernel that calls it fails to build.
  *
  * Return value: None
  *
@@ -187,6 +193,8 @@ ALWI void sfpu_normalize_bcast_col_two_tiles(
  * output are FP32. DST must be acquired, and `sfpu_bcast_col_init()` must have
  * been called since any scalar-broadcast normalisation.
  *
+ * Not supported on Quasar: a kernel that calls it fails to build.
+ *
  * Return value: None
  *
  * | Argument            | Description                                              | Type     | Valid Range                                           | Required |
@@ -220,6 +228,9 @@ ALWI void sfpu_residual_normalize_bcast_col(
  * `sfpu_normalize_bcast_scalar()` and again if an intervening operation changes
  * the shared SFPU configuration or zero-stride address modifier.
  *
+ * On Quasar `sfpu_normalize_bcast_scalar()` is not supported, so this init
+ * has nothing to set up.
+ *
  * Return value: None
  */
 // clang-format on
@@ -239,6 +250,8 @@ ALWI void sfpu_normalize_bcast_scalar_init() {
  * This operation invalidates the persistent column-broadcast mask and clobbers
  * programmable constant register 2. A later column-broadcast or SFPU operation
  * that consumes that constant must run its corresponding init first.
+ *
+ * Not supported on Quasar: a kernel that calls it fails to build.
  *
  * Return value: None
  *
@@ -275,6 +288,10 @@ ALWI void sfpu_normalize_bcast_scalar(
  * once (before any acquire_dst / sfpu_*_bcast_row pair). As with the column
  * variant a single init is shared across ADD / SUB / MUL.
  *
+ * On Quasar the init only checks the broadcast dim: each sfpu_*_bcast_*
+ * call records its binop and lane mask before it runs, so nothing persists
+ * between calls.
+ *
  * Return value: None
  */
 // clang-format on
@@ -308,6 +325,15 @@ ALWI void sfpu_mul_bcast_row_init() { sfpu_bcast_row_init(); }
  * The DST register buffer must be in acquired state via *acquire_dst* call.
  * Requires a prior call to the matching `sfpu_*_bcast_row_init` (or the
  * shared `sfpu_bcast_row_init`).
+ *
+ * This operation clobbers LREG4..7, which invalidates the persistent
+ * column-broadcast mask. On Wormhole it also records its body into the SFPU
+ * half of the replay buffer (slots 0..15) on every call and, unless the
+ * kernel is built with MM_THROTTLE, reprograms ADDR_MOD_6. A later
+ * column-broadcast operation, or any SFPU operation that sets either in its
+ * init and relies on it per tile (e.g. `sfpu_reduce`, fast-approximation
+ * `exp`, `where`, `binary_max_min`, `cumsum`, `abs`, `i0`), must run its
+ * init again after this call.
  *
  * Return value: None
  *
@@ -366,6 +392,7 @@ ALWI void sfpu_mul_bcast_row(uint32_t dst_data_idx, uint32_t dst_row_vec_idx) {
  * Compile-time-dispatched init for SFPU binary broadcast. Picks the column or
  * row variant based on the `Dim` template parameter; the binop opcode is
  * selected per call in `sfpu_bcast`, so a single init covers ADD / SUB / MUL.
+ * On Quasar it only checks `Dim` (see `sfpu_bcast_col_init`).
  *
  * Only `BroadcastType::COL` and `BroadcastType::ROW` are supported.
  */
@@ -418,7 +445,5 @@ ALWI void sfpu_bcast(uint32_t dst_data_idx, uint32_t dst_bcast_idx) {
         }
     }
 }
-
-#endif  // ARCH_WORMHOLE || ARCH_BLACKHOLE
 
 }  // namespace ckernel

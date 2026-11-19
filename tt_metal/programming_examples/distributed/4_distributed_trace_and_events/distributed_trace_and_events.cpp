@@ -29,6 +29,7 @@ using namespace tt::tt_metal::distributed;
 // synchronization
 
 std::shared_ptr<Program> EltwiseBinaryProgramGenerator(
+    MeshDevice& mesh_device,
     const std::shared_ptr<MeshBuffer>& src0_buf,
     const std::shared_ptr<MeshBuffer>& src1_buf,
     const std::shared_ptr<MeshBuffer>& output_buf,
@@ -48,7 +49,7 @@ std::shared_ptr<Program> EltwiseBinaryProgramGenerator(
     const std::vector<std::string> op_id_to_op_type_define = {
         "EltwiseBinaryType::ELWADD", "EltwiseBinaryType::ELWMUL", "EltwiseBinaryType::ELWSUB"};
 
-    std::shared_ptr<Program> program = std::make_shared<Program>();
+    std::shared_ptr<Program> program = std::make_shared<Program>(CreateProgram(mesh_device));
 
     uint32_t src0_cb_index = tt::CBIndex::c_0;
     uint32_t num_input_tiles = 2;
@@ -185,6 +186,7 @@ int main() {
         MeshCoordinate{mesh_device->num_rows() - 1, mesh_device->num_cols() - 1});
     // Create three eltwise binary ops using a simple program generation function
     auto add_program = EltwiseBinaryProgramGenerator(
+        *mesh_device,
         add_src0_buf,
         add_src1_buf,
         add_output_buf,
@@ -193,6 +195,7 @@ int main() {
         single_tile_size,
         ADD_OP_ID);
     auto multiply_program = EltwiseBinaryProgramGenerator(
+        *mesh_device,
         mul_sub_src0_buf,
         mul_sub_src1_buf,
         mul_sub_output_buf,
@@ -201,6 +204,7 @@ int main() {
         single_tile_size,
         MULTIPLY_OP_ID);
     auto subtract_program = EltwiseBinaryProgramGenerator(
+        *mesh_device,
         mul_sub_src0_buf,
         mul_sub_src1_buf,
         mul_sub_output_buf,

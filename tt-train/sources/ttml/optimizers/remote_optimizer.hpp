@@ -45,10 +45,6 @@ public:
 
     void receive_weights();
 
-    void set_lr(float lr) override;
-
-    [[nodiscard]] float get_lr() const override;
-
 private:
     size_t m_steps{0};
     SortedParameters m_sorted_parameters;

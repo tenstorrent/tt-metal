@@ -3,6 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import itertools
+import re
 import math
 
 import pytest
@@ -11,6 +12,13 @@ import torch
 import ttnn
 from tt_py_test_utils_common.utility_functions import is_blackhole
 from tests.ttnn.utils_for_testing import assert_equal, assert_with_pcc
+from tests.ttnn.unit_tests.operations.data_movement.docstring_support import (
+    check_readable,
+    docstring_dtype_layout_params,
+    docstring_interleaved_buffer_type_params,
+    interleaved_memory_config,
+)
+from tests.ttnn.unit_tests.operations.data_movement.data_movement_test_utils import assert_exact, full_range_input
 
 
 def random_torch_tensor(dtype, shape):
@@ -821,3 +829,101 @@ def test_permute_cache_miss_different_factory_row_major(device, isolate_program_
     assert_with_pcc(ref2, out2, 0.9999)
 
     assert device.cache_entries_counter.total == 2
+
+
+def _height_sharded_l1(shard_shape):
+    grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))})
+    return ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+        ttnn.BufferType.L1,
+        ttnn.ShardSpec(grid, shard_shape, ttnn.ShardOrientation.ROW_MAJOR),
+    )
+
+
+# A zero-height height-sharded input took `% 0` while choosing the transpose factory and `Hts / Ht` in it.
+def test_transpose_empty_height_sharded(device, expect_error):
+    x = ttnn.from_torch(
+        torch.zeros(1, 1, 0, 32).bfloat16(),
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=_height_sharded_l1((32, 32)),
+    )
+    with expect_error(RuntimeError, "Sharded WH transpose requires non-zero H and W"):
+        ttnn.transpose(x, -2, -1)
+
+
+# A sharded output config on an interleaved input reaches the same sharded-transpose shape math.
+def test_transpose_empty_to_sharded_output(device, expect_error):
+    x = ttnn.from_torch(torch.zeros(1, 1, 0, 32).bfloat16(), layout=ttnn.TILE_LAYOUT, device=device)
+    grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))})
+    mem = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+        ttnn.BufferType.L1,
+        ttnn.ShardSpec(grid, (32, 32), ttnn.ShardOrientation.ROW_MAJOR),
+    )
+    with expect_error(RuntimeError, "Sharded WH transpose requires non-zero H and W"):
+        ttnn.transpose(x, -2, -1, memory_config=mem)
+
+
+_BLOCK_FLOATS = (ttnn.bfloat8_b, ttnn.bfloat4_b)
+
+
+def _one_exponent_input(shape, seed=0):
+    """Values in +-[1, 2) for a block float. They share one exponent, so values an op moves into another block of the
+    tile come back exactly."""
+    torch.manual_seed(seed)
+    magnitude = 1 + torch.rand(shape)
+    return torch.where(torch.rand(shape) < 0.5, -magnitude, magnitude)
+
+
+def _docstring_pad_value_dtypes():
+    """Dtypes the ``pad_value`` line of the ttnn.permute docstring says it fills."""
+    line = next(line for line in ttnn.permute.__doc__.splitlines() if line.strip().startswith("pad_value ("))
+    return {getattr(ttnn.DataType, name) for name in re.findall(r"``(\w+)``", line)}
+
+
+@pytest.mark.parametrize("buffer_type", docstring_interleaved_buffer_type_params(ttnn.permute))
+@pytest.mark.parametrize("dtype, layout", docstring_dtype_layout_params(ttnn.permute))
+def test_permute_docstring_supported_inputs(dtype, layout, buffer_type, device):
+    """Runs every dtype, layout and interleaved buffer type the ttnn.permute docstring lists.
+
+    Each one also permutes with negative dims and with a permutation that moves the last dimension, and checks
+    ``pad_value``: a TILE output fills the tile padding the permute exposes for the dtypes the docstring's
+    ``pad_value`` line names, and a ROW_MAJOR output has no padding.
+    """
+    check_readable(dtype, layout, buffer_type)
+    memory_config = interleaved_memory_config(buffer_type)
+    input_tensor = ttnn.from_torch(
+        full_range_input((2, 3, 32, 64), dtype), dtype=dtype, layout=layout, device=device, memory_config=memory_config
+    )
+    # (0, 2, 1, 3) keeps the last dimension in place, so block-float values come back unchanged.
+    expected = ttnn.to_torch(input_tensor).permute(0, 2, 1, 3)
+    output = ttnn.permute(input_tensor, (0, 2, 1, 3), memory_config=memory_config)
+
+    assert output.dtype == dtype
+    assert output.layout == layout
+    assert output.memory_config().buffer_type == buffer_type
+    assert_exact(expected, ttnn.to_torch(output))
+
+    assert_exact(expected, ttnn.to_torch(ttnn.permute(input_tensor, (0, -2, 1, -1), memory_config=memory_config)))
+
+    # The output's second-to-last dim is 3, so a TILE output has 29 rows of tile padding to fill.
+    output = ttnn.permute(input_tensor, (0, 2, 1, 3), memory_config=memory_config, pad_value=7.0)
+    assert_exact(expected, ttnn.to_torch(output))
+    if layout == ttnn.ROW_MAJOR_LAYOUT:
+        assert list(output.padded_shape) == list(output.shape)
+    elif dtype in _docstring_pad_value_dtypes():
+        padded = ttnn.from_device(output).to_torch_with_padded_shape()
+        assert torch.all(padded[..., 3:, :] == 7)
+
+    # (0, 1, 3, 2) moves the last dimension, which runs a compute kernel that holds BFLOAT16 zeros by value: a
+    # BFLOAT16 input leaves out NaN, as the docstring requires, and its zeros are compared by value. Values also move
+    # into new blocks, so block floats get values with one exponent.
+    if dtype in _BLOCK_FLOATS:
+        x = _one_exponent_input((2, 3, 32, 64))
+    else:
+        x = full_range_input((2, 3, 32, 64), dtype, nan=dtype != ttnn.bfloat16)
+    input_tensor = ttnn.from_torch(x, dtype=dtype, layout=layout, device=device, memory_config=memory_config)
+    output = ttnn.permute(input_tensor, (0, 1, 3, 2), memory_config=memory_config)
+    expected = ttnn.to_torch(input_tensor).permute(0, 1, 3, 2)
+    assert_exact(expected, ttnn.to_torch(output), signed_zeros=dtype != ttnn.bfloat16)

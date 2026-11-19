@@ -8,7 +8,7 @@ the 8-row block [last token, 7 drafts] in one pass and keeps the drafts up to th
 token (tt/dflash/runner.py). Every round (draft, verify and context passes) runs on device as one trace; the host reads
 one small result per round.
 
-Prompt: a chat-template user turn with the book of models/tt_transformers/demo/sample_prompts/input_data_long_128k.json
+Prompt: a chat-template user turn with the book of models/ttt_compat/demo/sample_prompts/input_data_long_128k.json
 (Frankenstein, Gutenberg #84) and that file's question about it, the book cut to the requested prompt length; past its
 end (130,752 tokens) a second book follows (Pride and Prejudice, Gutenberg #1342). Both are downloaded on first use
 (without network access the demo skips; under CI it fails). The chat template's "Current date" line is pinned (PROMPT_DATE): the
@@ -31,11 +31,11 @@ from models.common.utility_functions import is_blackhole
 from models.demos.gpt_oss.config import MeshConfig, ModeConfig
 from models.demos.gpt_oss.tests.test_factory import L1_SMALL_SIZE
 from models.demos.utils.trace_region_sizes import TRACE_MODEL_KEY_PARAM
-from models.tt_transformers.demo.simple_text_demo import load_and_cache_context, load_inputs
+from models.ttt_compat.demo.simple_text_demo import load_and_cache_context, load_inputs
 
-PROMPT_FILE = Path(__file__).parents[3] / "tt_transformers" / "demo" / "sample_prompts" / "input_data_long_128k.json"
+PROMPT_FILE = Path(__file__).parents[3] / "ttt_compat" / "demo" / "sample_prompts" / "input_data_long_128k.json"
 SECOND_BOOK = "https://www.gutenberg.org/cache/epub/1342/pg1342.txt"
-PROMPT_CACHE = Path("models/tt_transformers/demo/context_cache")  # load_inputs' download cache
+PROMPT_CACHE = Path("models/ttt_compat/demo/context_cache")  # load_inputs' download cache
 DRAFT_WINDOW = 1024  # the drafter attends to the last 1024 positions (SGLang's --speculative-dflash-draft-window-size)
 PROMPT_DATE = datetime.date(2026, 10, 17)  # the chat template's "Current date" (it is part of the prompt)
 NEW_TOKENS = 256
@@ -76,7 +76,7 @@ def build_dflash(mesh_device, max_seq_len):
     import models.demos.gpt_oss.demo.text_demo as text_demo
     from models.demos.gpt_oss.tt.dflash.draft import DFlashDraft
     from models.demos.gpt_oss.tt.dflash.runner import DFlashRunner
-    from models.tt_transformers.tt.generator import Generator
+    from models.ttt_compat.tt.generator import Generator
 
     mesh_config = MeshConfig(mesh_device.shape, decode=ModeConfig(tp=mesh_device.shape[1], ep=1))
     model_args, model, page_table, kv_cache, tokenizer, processor, _ = text_demo.prepare_gpt_oss_generator_args(

@@ -4,6 +4,8 @@
 
 #include "inbound_socket_service_sync_device_operation.hpp"
 
+#include <type_traits>
+
 #include <tt-metalium/mesh_coord.hpp>
 #include <tt-metalium/mesh_device.hpp>
 
@@ -25,13 +27,29 @@ void InboundSocketServiceSyncOperation::validate_on_program_cache_miss(
     const auto& backing = tensor_args.backing;
     TT_FATAL(
         backing.storage_type() == StorageType::DEVICE, "inbound_socket_service_sync: backing tensor must be on device");
-    TT_FATAL(backing.buffer() != nullptr, "inbound_socket_service_sync: backing tensor must be allocated");
+    TT_FATAL(backing.is_allocated(), "inbound_socket_service_sync: backing tensor must be allocated");
     TT_FATAL(args.page_size > 0 && args.num_pages > 0, "inbound_socket_service_sync: backing tensor has no pages");
     TT_FATAL(
         !args.consumed_addrs.empty() && args.service_core_x.size() == args.consumed_addrs.size() &&
             args.service_core_y.size() == args.consumed_addrs.size(),
         "inbound_socket_service_sync: per-coord service state is missing or inconsistent (was the service built with "
         "worker_cores?)");
+    TT_FATAL(
+        args.extra_page_sizes.size() == tensor_args.extra_backings.size() &&
+            args.extra_num_pages.size() == tensor_args.extra_backings.size(),
+        "inbound_socket_service_sync: extra backing counts are inconsistent");
+    for (size_t i = 0; i < tensor_args.extra_backings.size(); ++i) {
+        TT_FATAL(
+            tensor_args.extra_backings[i].is_allocated() && args.extra_page_sizes[i] > 0 &&
+                args.extra_num_pages[i] > 0,
+            "inbound_socket_service_sync: backing tensor {} must be allocated and have pages",
+            i + 1);
+        const auto* extra_buffer = tensor_args.extra_backings[i].buffer();
+        TT_FATAL(
+            extra_buffer->is_dram() && extra_buffer->buffer_layout() == tt::tt_metal::TensorMemoryLayout::INTERLEAVED,
+            "inbound_socket_service_sync: backing tensor {} must be DRAM interleaved",
+            i + 1);
+    }
     if (args.metadata_size_bytes > 0) {
         TT_FATAL(
             args.metadata_size_bytes % 4 == 0,
@@ -39,6 +57,10 @@ void InboundSocketServiceSyncOperation::validate_on_program_cache_miss(
             args.metadata_size_bytes);
     }
     if (args.overhang_size_bytes > 0) {
+        TT_FATAL(
+            tensor_args.extra_backings.empty(),
+            "inbound_socket_service_sync: the overhang split is single-tensor only; carry the tail as its own "
+            "tensor instead");
         TT_FATAL(
             args.overhang_size_bytes < args.page_size,
             "inbound_socket_service_sync: overhang_size_bytes ({}) must be smaller than the page size ({}); the "
@@ -74,7 +96,7 @@ void InboundSocketServiceSyncOperation::validate_on_program_cache_miss(
     }
 
     if (tensor_args.tokens_out.has_value() || tensor_args.overhang_out.has_value() ||
-        tensor_args.metadata_out.has_value()) {
+        tensor_args.metadata_out.has_value() || !tensor_args.extras_out.empty()) {
         const auto specs = compute_output_specs(args, tensor_args);
         // The factory hands the kernel each destination's address and the service's own chips write it, so a
         // same-shaped tensor on another mesh would be left untouched while this mesh scribbled over whatever
@@ -116,6 +138,21 @@ void InboundSocketServiceSyncOperation::validate_on_program_cache_miss(
                 "inbound_socket_service_sync: metadata_out spec must be [1, 1, 1, metadata_size_bytes / 4] uint32 "
                 "ROW_MAJOR interleaved DRAM");
         }
+        if (!tensor_args.extras_out.empty()) {
+            TT_FATAL(
+                tensor_args.extras_out.size() == tensor_args.extra_backings.size(),
+                "inbound_socket_service_sync: extras_out needs one destination per extra segment, got {} for {}",
+                tensor_args.extras_out.size(),
+                tensor_args.extra_backings.size());
+            const size_t first_extra_output = args.overhang_size_bytes > 0 ? 2 : 1;
+            for (size_t s = 0; s < tensor_args.extras_out.size(); ++s) {
+                validate_destination_device(tensor_args.extras_out[s]);
+                TT_FATAL(
+                    tensor_args.extras_out[s].tensor_spec() == specs[first_extra_output + s],
+                    "inbound_socket_service_sync: extras_out[{}] spec must match that extra segment's backing spec",
+                    s);
+            }
+        }
     }
 }
 
@@ -134,6 +171,9 @@ InboundSocketServiceSyncOperation::spec_return_value_t InboundSocketServiceSyncO
         specs.emplace_back(trunk_shape, backing_spec.tensor_layout());
         specs.emplace_back(overhang_shape, backing_spec.tensor_layout());
     }
+    for (const auto& extra_backing : tensor_args.extra_backings) {
+        specs.push_back(extra_backing.tensor_spec());
+    }
     // metadata: [1,1,1, metadata_size_bytes/4] uint32 ROW_MAJOR DRAM, replicated.
     if (args.metadata_size_bytes > 0) {
         const ttnn::Shape meta_shape({1u, 1u, 1u, args.metadata_size_bytes / 4u});
@@ -145,17 +185,39 @@ InboundSocketServiceSyncOperation::spec_return_value_t InboundSocketServiceSyncO
     return specs;
 }
 
+InboundSocketServiceSyncOperation::topology_return_value_t InboundSocketServiceSyncOperation::compute_output_topologies(
+    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
+    // Empty keeps the default (the backing's topology on every output). Extra segments can
+    // carry a different mapper, so each extra output keeps its own backing's topology.
+    if (tensor_args.extra_backings.empty()) {
+        return {};
+    }
+    const auto& backing_topology = tensor_args.backing.tensor_topology();
+    topology_return_value_t topologies(args.overhang_size_bytes > 0 ? 2 : 1, backing_topology);
+    for (const auto& extra_backing : tensor_args.extra_backings) {
+        topologies.push_back(extra_backing.tensor_topology());
+    }
+    if (args.metadata_size_bytes > 0) {
+        topologies.push_back(backing_topology);
+    }
+    return topologies;
+}
+
 InboundSocketServiceSyncOperation::tensor_return_value_t InboundSocketServiceSyncOperation::create_output_tensors(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     auto specs = compute_output_specs(args, tensor_args);
     auto* device = tensor_args.backing.device();
+    const size_t first_extra_output = args.overhang_size_bytes > 0 ? 2 : 1;
     std::vector<Tensor> outputs;
     outputs.reserve(specs.size());
     for (size_t i = 0; i < specs.size(); ++i) {
         const bool is_tokens = i == 0;
         const bool is_overhang = args.overhang_size_bytes > 0 && i == 1;
         const bool is_metadata = args.metadata_size_bytes > 0 && i + 1 == specs.size();
-        if (is_tokens && tensor_args.tokens_out.has_value()) {
+        const bool is_extra = i >= first_extra_output && i < first_extra_output + tensor_args.extra_backings.size();
+        if (is_extra && !tensor_args.extras_out.empty()) {
+            outputs.push_back(tensor_args.extras_out[i - first_extra_output]);
+        } else if (is_tokens && tensor_args.tokens_out.has_value()) {
             outputs.push_back(*tensor_args.tokens_out);
         } else if (is_overhang && tensor_args.overhang_out.has_value()) {
             outputs.push_back(*tensor_args.overhang_out);
@@ -187,7 +249,8 @@ std::vector<ttnn::Tensor> inbound_socket_service_sync_impl(
     uint32_t overhang_size_bytes,
     const std::optional<ttnn::Tensor>& tokens_out,
     const std::optional<ttnn::Tensor>& overhang_out,
-    const std::optional<ttnn::Tensor>& metadata_out) {
+    const std::optional<ttnn::Tensor>& metadata_out,
+    const std::vector<ttnn::Tensor>& extras_out) {
     using OperationType = ttnn::experimental::prim::InboundSocketServiceSyncOperation;
 
     const auto& backing = service.get_backing_tensor();
@@ -199,8 +262,23 @@ std::vector<ttnn::Tensor> inbound_socket_service_sync_impl(
 
     OperationType::operation_attributes_t attrs;
     attrs.data_ready_sem_addr = static_cast<uint32_t>(service.get_data_ready_sem_addr());
-    attrs.page_size = static_cast<uint32_t>(backing.buffer()->page_size());
-    attrs.num_pages = static_cast<uint32_t>(backing.buffer()->num_pages());
+    attrs.page_size = static_cast<uint32_t>(backing.mesh_buffer().page_size());
+    attrs.num_pages = static_cast<uint32_t>(backing.mesh_buffer().num_pages());
+    std::vector<ttnn::Tensor> extra_backings;
+    if constexpr (std::is_same_v<ServiceT, ttnn::D2DStreamServiceReceiver>) {
+        const auto& backings = service.get_backing_tensors();
+        extra_backings.assign(backings.begin() + 1, backings.end());
+        for (const auto& extra_backing : extra_backings) {
+            attrs.extra_page_sizes.push_back(static_cast<uint32_t>(extra_backing.mesh_buffer().page_size()));
+            attrs.extra_num_pages.push_back(static_cast<uint32_t>(extra_backing.mesh_buffer().num_pages()));
+        }
+    }
+    // launch() builds the outputs before it validates, and create_output_tensors indexes extras_out.
+    TT_FATAL(
+        extras_out.empty() || extras_out.size() == extra_backings.size(),
+        "inbound_socket_service_sync: extras_out needs one destination per extra segment, got {} for {}",
+        extras_out.size(),
+        extra_backings.size());
     attrs.scratch_cb_index = 0;
     attrs.metadata_size_bytes = metadata_size_bytes;
     attrs.metadata_l1_addr = metadata_size_bytes > 0 ? static_cast<uint32_t>(service.get_metadata_addr()) : 0;
@@ -222,7 +300,9 @@ std::vector<ttnn::Tensor> inbound_socket_service_sync_impl(
     }
 
     return ttnn::device_operation::launch<OperationType>(
-        attrs, OperationType::tensor_args_t{backing, tokens_out, overhang_out, metadata_out});
+        attrs,
+        OperationType::tensor_args_t{
+            backing, std::move(extra_backings), tokens_out, overhang_out, metadata_out, extras_out});
 }
 
 }  // namespace
@@ -235,7 +315,7 @@ std::vector<ttnn::Tensor> inbound_socket_service_sync(
     const std::optional<ttnn::Tensor>& overhang_out,
     const std::optional<ttnn::Tensor>& metadata_out) {
     return inbound_socket_service_sync_impl(
-        service, metadata_size_bytes, overhang_size_bytes, tokens_out, overhang_out, metadata_out);
+        service, metadata_size_bytes, overhang_size_bytes, tokens_out, overhang_out, metadata_out, {});
 }
 
 std::vector<ttnn::Tensor> inbound_socket_service_sync(
@@ -244,9 +324,10 @@ std::vector<ttnn::Tensor> inbound_socket_service_sync(
     uint32_t overhang_size_bytes,
     const std::optional<ttnn::Tensor>& tokens_out,
     const std::optional<ttnn::Tensor>& overhang_out,
-    const std::optional<ttnn::Tensor>& metadata_out) {
+    const std::optional<ttnn::Tensor>& metadata_out,
+    const std::vector<ttnn::Tensor>& extras_out) {
     return inbound_socket_service_sync_impl(
-        service, metadata_size_bytes, overhang_size_bytes, tokens_out, overhang_out, metadata_out);
+        service, metadata_size_bytes, overhang_size_bytes, tokens_out, overhang_out, metadata_out, extras_out);
 }
 
 }  // namespace ttnn::prim

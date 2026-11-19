@@ -14,6 +14,7 @@
 #include <vector>
 
 #include <tt-metalium/experimental/dispatch_context.hpp>
+#include <tt-metalium/allocator.hpp>
 #include <tt-metalium/hal_types.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tt_metal.hpp>
@@ -48,7 +49,7 @@ TEST_F(MeshDeviceFixture, TensixConfigureProgramWithoutLaunchInstallsButDoesNotR
         std::vector<uint32_t> zero{0};
         detail::WriteToDeviceL1(device, core, addr, zero);
 
-        Program program = CreateProgram();
+        Program program = CreateProgram(*mesh);
         KernelHandle kernel = CreateKernel(
             program,
             MARKER_KERNEL,

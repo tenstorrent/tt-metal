@@ -17,7 +17,6 @@ residual block-tilize state that uninit fails to clear corrupts the run-1
 datacopy and diverges from the golden.
 """
 
-import torch
 from helpers.format_config import DataFormat
 from helpers.golden_generators import TilizeGolden, get_golden_generator
 from helpers.llk_params import DestAccumulation, format_dict
@@ -31,7 +30,7 @@ from helpers.test_variant_parameters import (
     TILE_COUNT,
     generate_input_dim,
 )
-from helpers.utils import passed_test
+from helpers.utils import passed_test, result_tensor
 
 
 @parametrize(
@@ -110,11 +109,7 @@ def test_unpack_tilize_uninit_restore_block(
 
     res_from_L1 = configuration.run().result
 
-    assert len(res_from_L1) == len(
-        golden_tensor
-    ), "Result tensor and golden tensor are not of the same length"
-
-    res_tensor = torch.tensor(res_from_L1, dtype=torch_format)
+    res_tensor = result_tensor(res_from_L1, formats.output_format, golden_tensor)
 
     assert passed_test(
         golden_tensor,

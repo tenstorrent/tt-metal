@@ -16,7 +16,8 @@ import transformers
 from loguru import logger
 
 import ttnn
-from models.tt_dit.encoders.qwen3vl.model_qwen3vl_v2 import Qwen3VlEncoder, mrope_position_ids
+from models.tt_dit.encoders.mrope import mrope_position_ids
+from models.tt_dit.encoders.qwen3vl.model_qwen3vl_v2 import Qwen3VlEncoder
 from models.tt_dit.parallel.config import EncoderParallelConfig
 from models.tt_dit.parallel.manager import CCLManager
 from models.tt_dit.utils import tensor
