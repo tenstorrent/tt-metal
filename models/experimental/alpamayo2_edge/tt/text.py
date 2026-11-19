@@ -207,3 +207,22 @@ class TtLanguageModel(TransformerEncoder):
             skip_final_linear=True,
         )
         return self._last_token_logits(hidden, index=seq_len - 1)
+
+    @property
+    def device(self) -> ttnn.MeshDevice:
+        return self._device
+
+    def decode_step(self, tokens: ttnn.Tensor, *, cache: AlpamayoCache, rope_offset: ttnn.Tensor) -> ttnn.Tensor:
+        """Appends one token per sequence at the cache position, advances it and returns the next logits `[B, vocab]`.
+
+        A decoded text token sits at cache position + `rope_offset` on every M-RoPE axis, so the 1D rope table is
+        exact. That table has `cache.size` rows: the caller keeps the position plus offset below it.
+
+        Args:
+            tokens: `[B]` uint32 ids.
+            rope_offset: `[B]` int32 row-major, the prompt's `rope_deltas`.
+        """
+        pos_embeds = self._get_pos_embeds(start=0, sequence_length=cache.size, layout=ttnn.ROW_MAJOR_LAYOUT)
+        logits = self._decode_step(tokens, pos_embeds=pos_embeds, cache=cache, rope_offset=rope_offset)
+        cache.advance(1)
+        return logits
