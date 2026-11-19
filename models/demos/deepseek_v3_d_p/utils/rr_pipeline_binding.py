@@ -30,8 +30,6 @@ import os
 import sys
 from pathlib import Path
 
-import yaml
-
 REPO = Path(__file__).resolve().parents[4]
 sys.path.insert(0, os.environ.get("TT_METAL_HOME", str(REPO)))
 from models.demos.deepseek_v3_d_p.utils.assemble_pipeline_binding import SC4_MAPPING, Galaxy, load_mapping  # noqa: E402
@@ -349,11 +347,13 @@ def cmd_predict(args):
     template = args.template or default_template(num_stages)
     mgd = args.mgd
     if not mgd:
-        mgd = next(l.split(": ", 1)[1] for l in Path(template).read_text().splitlines() if l.startswith("mesh_graph_desc_path"))
+        mgd = next(
+            l.split(": ", 1)[1] for l in Path(template).read_text().splitlines() if l.startswith("mesh_graph_desc_path")
+        )
         if min(m for *_, m in rows) < 2:
             mgd = single_link_mgd(mgd)
     print(f"\ndescriptor: {mgd}")
-    print(f"launch: --mpi-args \"--map-by rankfile:file=<rankfile>\"")
+    print(f'launch: --mpi-args "--map-by rankfile:file=<rankfile>"')
     write_outputs(args, render(template, rank_table, f"predicted from {args.mapping}", hosts, mgd), rank_table)
     if args.mock_mapping_out:
         Path(args.mock_mapping_out).write_text(mock_mapping(rank_table, descriptor_of))
@@ -371,9 +371,15 @@ def main(argv=None):
     g.add_argument("--work-dir", type=Path)
     p = sub.add_parser("predict", help="fill the binding from cabling descriptors and report tori and seams")
     p.add_argument("--mapping", default=str(SC4_MAPPING), help="mock mapping yaml listing one descriptor per host")
-    p.add_argument("--host", action="append", help="host to use, repeated in cabling ring order (default: the mapping's)")
+    p.add_argument(
+        "--host", action="append", help="host to use, repeated in cabling ring order (default: the mapping's)"
+    )
     p.add_argument("--auto-order", action="store_true", help="search the host orders for the ring order")
-    p.add_argument("--print-order", action="store_true", help="print RR_CROSS_LINKS and RR_ORDER lines for scripts; exit 3 if no order")
+    p.add_argument(
+        "--print-order",
+        action="store_true",
+        help="print RR_CROSS_LINKS and RR_ORDER lines for scripts; exit 3 if no order",
+    )
     p.add_argument("--mock-mapping-out", help="also write a per-rank mock cluster mapping here")
     for s in (g, p):
         s.add_argument("--stages", type=int, default=None, help="pipeline stages (default 2 per host)")

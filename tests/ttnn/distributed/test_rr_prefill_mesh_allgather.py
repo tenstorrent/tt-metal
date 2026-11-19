@@ -70,10 +70,7 @@ def test_ring_all_gather_on_every_chip(rr_mesh, axis, num_links):
     rank = rank_of_process()
 
     full = torch.cat(
-        [
-            torch.cat([torch.full((BLOCK, BLOCK), block_value(r, c)) for c in range(SIDE)], dim=1)
-            for r in range(SIDE)
-        ],
+        [torch.cat([torch.full((BLOCK, BLOCK), block_value(r, c)) for c in range(SIDE)], dim=1) for r in range(SIDE)],
         dim=0,
     ).reshape(1, 1, SIDE * BLOCK, SIDE * BLOCK)
     mapper = ttnn.create_mesh_mapper(

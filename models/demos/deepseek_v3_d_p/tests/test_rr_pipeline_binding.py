@@ -69,8 +69,8 @@ def test_quad_split_table_is_the_eight_stage_split_ring_table():
 
 
 @pytest.mark.parametrize("hosts, stages", [(HOSTS, 9), (["h0"], 2), (["h0", "h1"], 5)])
-def test_rank_table_rejects_stages_that_do_not_fit(hosts, stages):
-    with pytest.raises(SystemExit):
+def test_rank_table_rejects_stages_that_do_not_fit(hosts, stages, expect_error):
+    with expect_error(SystemExit, "1"):
         rr.grb.build_split_ring_rank_table(hosts, stages)
 
 
@@ -117,7 +117,7 @@ def test_template_ranks_follow_the_rank_table(name):
     assert binding["global_env"]["PREFILL_SP_AXIS"] == "1"
 
 
-def test_fill_rank_bindings_addresses_ranks_by_mesh_and_host_rank():
+def test_fill_rank_bindings_addresses_ranks_by_mesh_and_host_rank(expect_error):
     text = (TOPO / "pipeline_prefill_request_sc2_rr_4rank_4x4_sp1.yaml").read_text()
     table = rr.grb.build_split_ring_rank_table(["a", "b"], 3)
     filled = rr.fill_rank_bindings(
@@ -125,14 +125,17 @@ def test_fill_rank_bindings_addresses_ranks_by_mesh_and_host_rank():
     )
     got = {b["rank"]: b["env_overrides"]["TT_VISIBLE_DEVICES"] for b in yaml.safe_load(filled)["rank_bindings"]}
     assert got == {0: "1,2", 1: "3", 2: "4,5", 3: "6"}
-    with pytest.raises(SystemExit):
+    with expect_error(SystemExit, "does not have exactly one rank"):
         rr.fill_rank_bindings(text, [["1"]] * 4, "t", mesh_ranks=[(0, 0), (1, 0), (1, 0), (2, 0)])
 
 
 def mesh_graph(path):
     text = Path(path).read_text()
     hosts = dict(
-        re.findall(r'name: "(M\d)"\s+arch: BLACKHOLE\s+device_topology \{[^}]*\}\s+host_topology\s+\{ dims: \[ (\d), 1 \]', text)
+        re.findall(
+            r'name: "(M\d)"\s+arch: BLACKHOLE\s+device_topology \{[^}]*\}\s+host_topology\s+\{ dims: \[ (\d), 1 \]',
+            text,
+        )
     )
     return {
         "meshes": re.findall(r'instances \{ mesh \{ mesh_descriptor: "(M\d)" mesh_id: (\d+)', text),
