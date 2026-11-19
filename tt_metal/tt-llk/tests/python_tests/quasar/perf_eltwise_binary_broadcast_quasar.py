@@ -10,12 +10,11 @@ from helpers.llk_params import (
     PERF_LOOP_FACTOR_QUASAR,
     PERF_RUN_TYPES_QUASAR,
 )
-from helpers.param_config import parametrize
+from helpers.param_config import parametrize, quasar_dest_sync_modes
 from quasar.test_eltwise_binary_broadcast_quasar import (
     BINARY_BROADCAST_PERF_FORMATS,
     BROADCAST_TYPES,
     binary_broadcast_acc_to_dest_modes,
-    binary_broadcast_dest_sync_modes,
     binary_broadcast_input_dimensions,
     binary_broadcast_math_fidelities,
     binary_broadcast_tile_dimensions,
@@ -35,7 +34,7 @@ from quasar.test_eltwise_binary_broadcast_quasar import (
     math_fidelity=lambda formats, math_op: binary_broadcast_math_fidelities(
         formats, math_op
     ),
-    dest_sync=lambda: binary_broadcast_dest_sync_modes(is_perf=True),
+    dest_sync=lambda: quasar_dest_sync_modes(is_perf=True),
     unpack_to_dest=[False],
     tile_dimensions=lambda formats, broadcast_type: binary_broadcast_tile_dimensions(
         formats, broadcast_type, is_perf=True

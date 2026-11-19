@@ -24,6 +24,9 @@ struct DispatchFabric2dParams {
     uint32_t seq_len_per_chip = 640;
     uint32_t axis = 0;
     uint32_t num_links = 2;
+    // Pages one forwarding channel holds. Any depth is correct -- the channel split makes the movement graph
+    // acyclic, see dispatch_fabric2d_assignments.hpp -- so this trades DRAM against throughput.
+    uint32_t fwd_vc_pages;
     // The kernel reads padding_config under a compile-time branch, so this must be in the cache key.
     bool has_padding_config = false;
     tt::tt_fabric::Topology topology = tt::tt_fabric::Topology::Mesh;
@@ -44,6 +47,12 @@ struct DispatchFabric2dInputs {
     // [real_token_count, pad_side]. With right padding (pad_side 0) only the first real_token_count tokens
     // are routed; other sides are ignored.
     std::optional<ttnn::Tensor> padding_config;
+    // The DRAM the op stages tokens in, of forwarding_buffer_spec and staging_buffer_spec or larger. Absent, the
+    // op allocates its own at cache miss and the cached workload keeps them: hundreds of MB that land wherever
+    // DRAM is free mid-forward, once per cached program. Tensor args rather than attributes so a cache hit
+    // rebinds their addresses. A row-major input never reads the staging buffer.
+    std::optional<ttnn::Tensor> forwarding_buffer;
+    std::optional<ttnn::Tensor> staging_buffer;
 };
 
 }  // namespace ttnn::operations::experimental::deepseek_prefill::dispatch_fabric2d

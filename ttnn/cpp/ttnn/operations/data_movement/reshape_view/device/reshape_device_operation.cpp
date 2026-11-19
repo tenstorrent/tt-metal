@@ -6,6 +6,7 @@
 #include "ttnn/device_operation.hpp"
 #include "ttnn/operations/data_movement/common/common.hpp"
 #include "ttnn/tensor/tensor_ops.hpp"
+#include <tt-metalium/experimental/tensor_layout_apis_with_custom_alignment.hpp>
 
 namespace ttnn::prim {
 
@@ -21,7 +22,7 @@ void ReshapeViewDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& /*operation_attributes*/, const tensor_args_t& tensor_args) {
     const Tensor& input_tensor_a = tensor_args.input;
     TT_FATAL(input_tensor_a.storage_type() == StorageType::DEVICE, "Operands to reshape need to be on device!");
-    TT_FATAL(input_tensor_a.buffer() != nullptr, "Operands need to be allocated in buffers on device!");
+    TT_FATAL(input_tensor_a.is_allocated(), "Operands need to be allocated in buffers on device!");
     TT_FATAL(
         input_tensor_a.dtype() == DataType::BFLOAT16 or input_tensor_a.dtype() == DataType::UINT32 or
             input_tensor_a.dtype() == DataType::FLOAT32 or input_tensor_a.dtype() == DataType::INT32,
@@ -32,7 +33,7 @@ ReshapeViewDeviceOperation::spec_return_value_t ReshapeViewDeviceOperation::comp
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     return tt::tt_metal::TensorSpec(
         operation_attributes.logical_output_shape,
-        tt::tt_metal::TensorLayout::fromPaddedShape(
+        tt::tt_metal::experimental::tensor_layout_from_padded_shape(
             tensor_args.input.dtype(),
             tt::tt_metal::PageConfig(tensor_args.input.layout()),
             operation_attributes.output_mem_config,
