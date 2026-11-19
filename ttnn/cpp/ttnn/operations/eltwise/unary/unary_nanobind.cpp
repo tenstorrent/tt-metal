@@ -878,9 +878,11 @@ Tensor sigmoid_accurate_with_deprecation_warning(
 void bind_sigmoid_accurate(nb::module_& mod) {
     auto doc = fmt::format(
         R"doc(
-        Deprecated in favor of ttnn.sigmoid.
-
         Applies {0} to :attr:`input_tensor` element-wise.
+
+        .. deprecated:: 0.83
+           Use ``ttnn.sigmoid`` instead. Callers that passed ``fast_and_approximate_mode=True``
+           use ``ttnn.sigmoid`` with ``mode=ttnn.SigmoidMode.AccurateWithFastExp``.
 
         .. math::
             \mathrm{{output\_tensor}}_i = \verb|{0}|(\mathrm{{input\_tensor}}_i)
