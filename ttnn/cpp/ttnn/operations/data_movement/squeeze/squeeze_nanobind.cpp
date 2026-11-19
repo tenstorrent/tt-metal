@@ -70,6 +70,8 @@ void bind_squeeze(nb::module_& mod) {
 
             Removing the last dimension of a ``BFLOAT8_B`` or ``BFLOAT4_B`` tensor regroups its values into new blocks of 16 that share one exponent.
 
+            On Blackhole, the input can also be an ``FP8_E4M3`` tensor in ROW_MAJOR layout, when every removed dimension comes before the last two.
+
         Memory Support:
             - Interleaved: DRAM and L1
             - Sharded: HEIGHT_SHARDED, WIDTH_SHARDED and BLOCK_SHARDED in L1, when every removed dimension comes before the last two
