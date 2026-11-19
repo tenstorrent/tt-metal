@@ -1927,7 +1927,19 @@ void kernel_main() {
                 input_tiles_dfb.pop_front(slab_rows * c_in_tiles);
             }
 #endif
+            // With a bias the last K-block packs into the partials too (Interm), so the partials block is caller-owned:
+            // one reserve before the walk and one push after it, as on the K-split walk. With the helper's own
+            // per-row-group reserve / push, the unpacker drained (waited for and popped) every row group of each
+            // non-last K-block, so at every K-block boundary it waited for the pack of the K-block's last subblock
+            // before unpacking the next K-block. Without a bias the last K-block reloads the partials (Out target),
+            // which needs the helper's pushes: unchanged. Same matmuls, packs and order: bit-identical. Measured
+            // (Blackhole p150b, unzoned, medians of 3): res3.0 @ LoFi 13442 -> 12975 ns; changelog Perf 13
+            // (s2_build_walk_overlap).
+            constexpr bool caller_owns_partials = has_bias;
             MaybeDeviceZoneScope("compute_matmul_walk");
+            if constexpr (caller_owns_partials) {
+                partials.reserve_back(partials_tiles);
+            }
             ckl::matmul_block<
                 /*transpose=*/false,
                 /*packer_l1_acc=*/true,
@@ -1941,7 +1953,9 @@ void kernel_main() {
                 ckl::NoPostKBlock,
                 /*untilize_block_ct_dim=*/0,
                 ckl::NoKBlockInnerDimFn,
-                CenterTapIn0<center_mode, cb_center_tiles>>(
+                CenterTapIn0<center_mode, cb_center_tiles>,
+                ckl::NoIn1BaseOffset,
+                caller_owns_partials>(
                 im2col_tiles,
                 weights,
                 output_tiles,
@@ -1954,6 +1968,9 @@ void kernel_main() {
                 {},
                 {},
                 CenterTapIn0<center_mode, cb_center_tiles>{});
+            if constexpr (caller_owns_partials) {
+                partials.push_back(partials_tiles);
+            }
         }
 
         if constexpr (has_bias && !k_split && in0_groups == 1 && !slab_direct) {
