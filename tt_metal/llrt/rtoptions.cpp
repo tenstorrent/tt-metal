@@ -111,6 +111,7 @@ enum class EnvVarID {
     TT_METAL_ENABLE_FABRIC_VC2,                         // Enable fabric VC2 (neighbour exchange)
     TT_METAL_ENABLE_FABRIC_MESH_PASS_THROUGH,           // Enable experimental VC1 inter-mesh pass-through
     TT_METAL_FABRIC_GRAPH_BUILDER,                      // Build fabric routers from the fabric graph
+    TT_METAL_FABRIC_INTER_DOMAIN,                       // Inter-domain routers on unused links leaving the domain
     TT_METAL_FORCE_REINIT,                              // Force context reinitialization
     TT_METAL_DISABLE_FABRIC_TWO_ERISC,                  // Disable fabric 2-ERISC mode
     TT_METAL_LOG_KERNELS_COMPILE_COMMANDS,              // Log kernel compilation commands
@@ -863,6 +864,13 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
         // Default: false
         // Usage: export TT_METAL_FABRIC_GRAPH_BUILDER=1
         case EnvVarID::TT_METAL_FABRIC_GRAPH_BUILDER: this->fabric_graph_builder = true; break;
+
+        // TT_METAL_FABRIC_INTER_DOMAIN
+        // EXPERIMENTAL: Inter-domain fabric. Unused live eth links that leave the domain become perimeter
+        // ports. Needs TT_METAL_FABRIC_GRAPH_BUILDER=1 and a 2D fabric.
+        // Default: false
+        // Usage: export TT_METAL_FABRIC_INTER_DOMAIN=1
+        case EnvVarID::TT_METAL_FABRIC_INTER_DOMAIN: this->fabric_inter_domain = is_env_enabled(value); break;
 
         // RELIABILITY_MODE
         // Sets the fabric reliability mode (STRICT, RELAXED, or DYNAMIC).

@@ -30,6 +30,7 @@
 #include "tt_metal/fabric/hw/inc/tt_fabric_utils.h"
 
 #include "router_common.hpp"
+#include "router_init.hpp"
 #include "router_round.hpp"
 #include "router_telemetry.hpp"
 
@@ -148,10 +149,11 @@ struct SenderChannels {
         "a static upstream connection is a forwarding channel's");
 };
 
-// The remote router's receiver channel of VC: its slots and its packets-received register.
+// The remote router's receiver channel of VC: its slots and its packets-received register. An inter-domain router
+// sends into its peer's VC2 receiver on every VC (it only sends on VC0).
 template <size_t VC>
 struct RemoteReceiverChannel {
-    static constexpr size_t rx = receiver_channel_by_vc[VC];  // the host's index of the channel
+    static constexpr size_t rx = receiver_channel_by_vc[is_inter_domain_router ? 2 : VC];  // the host's index
     static constexpr uint32_t num_slots = REMOTE_RECEIVER_NUM_BUFFERS_ARRAY[rx];
     static constexpr uint32_t first_slot_addr =
         eth_remote_channel_allocs::Entry<REMOTE_RECEIVER_TO_ENTRY_IDX[rx]>::base_address;
@@ -279,24 +281,25 @@ struct SenderChannelInterfaces {
     __attribute__((noinline)) static void start(
         const std::array<size_t, MAX_NUM_SENDER_CHANNELS>& connection_semaphores) {
         new (storage) All{};
-        for_each_index<NUM_SENDER_CHANNELS>([&](auto i) {
-            constexpr size_t CH = decltype(i)::value;
-            constexpr bool worker = is_sender_channel_worker[CH];  // the host's role, serviced or not
-            auto* info = reinterpret_cast<volatile tt::tt_fabric::EDMChannelWorkerLocationInfo*>(
-                sender_connection_info_addrs[CH]);
-            info->edm_read_counter = 0;
-            ASSERT(
-                !worker || connection_semaphores[CH] == worker_connection_semaphore_addrs[vc_of_sender_channel(CH)]);
-            new (&of<CH>()) tt::tt_fabric::StaticSizedSenderChannelWorkerInterface<
-                tt::tt_fabric::worker_handshake_noc,
-                SENDER_NUM_BUFFERS_ARRAY[CH]>(
+        for_each_index<NUM_SENDER_CHANNELS>([&](auto i) { start_one<decltype(i)::value>(connection_semaphores); });
+    }
+
+    // Channel CH's interface, from its start: no producer, no credits returned.
+    template <size_t CH>
+    static FORCE_INLINE void start_one(const std::array<size_t, MAX_NUM_SENDER_CHANNELS>& connection_semaphores) {
+        constexpr bool worker = is_sender_channel_worker[CH];  // the host's role, serviced or not
+        auto* info =
+            reinterpret_cast<volatile tt::tt_fabric::EDMChannelWorkerLocationInfo*>(sender_connection_info_addrs[CH]);
+        info->edm_read_counter = 0;
+        ASSERT(!worker || connection_semaphores[CH] == worker_connection_semaphore_addrs[vc_of_sender_channel(CH)]);
+        new (&of<CH>()) tt::tt_fabric::
+            StaticSizedSenderChannelWorkerInterface<tt::tt_fabric::worker_handshake_noc, SENDER_NUM_BUFFERS_ARRAY[CH]>(
                 info,
                 /*remote_producer_write_counter (unused)=*/0,
                 reinterpret_cast<volatile tt_l1_ptr uint32_t* const>(connection_semaphores[CH]),
                 CommandBuffers::worker_credits[CH],
                 worker ? 0 : SENDER_NUM_BUFFERS_ARRAY[CH],
                 worker ? read_counter_addr(CH) : notify_worker_of_read_counter_update_src_address);
-        });
     }
 
     // Channel CH's interface (after start).
@@ -989,16 +992,24 @@ FORCE_INLINE void start_forwarding_channels(SenderChannelStates& states) {
     }
 }
 
+// Inter-domain: the forwarding channels' state between connects. Each connect's loop starts the link-facing state over
+// (the remote receiver's progress, the worker channels); the forwarding channels face this chip and carry over.
+decltype(SenderChannelStates::forwarding) carried_forwarding;
+
 // The sender loop: rounds of passes over the sender channels, with router commands between runs of rounds. A function
 // of its own: its code depends only on this body, and once-per-round work is out of line (router_round.hpp).
+// An inter-domain router runs it once per connect.
 __attribute__((noinline)) void run() {
     SenderChannelStates states;
+    if constexpr (is_inter_domain_router) {
+        states.forwarding = carried_forwarding;
+    }
     start_forwarding_channels(states);
     auto loop_copy = states.loop_local_progress();  // carried through the loop (SenderChannelStates)
     uint32_t channels_in_flight = 0;  // the channels kept in memory with packets not yet completed (or acked)
 
     SenderRound round;
-    while (!terminating()) {
+    while (!terminating() && !disconnect_requested()) {
         if (!start_running()) {
             continue;
         }
@@ -1010,6 +1021,9 @@ __attribute__((noinline)) void run() {
             }
             after_round<false>(round, loop_copy, states, [] { return false; });
         }
+    }
+    if constexpr (is_inter_domain_router) {
+        carried_forwarding = states.forwarding;
     }
 }
 
@@ -1032,19 +1046,42 @@ __attribute__((noinline)) void init_channel_streams() {
     });
 }
 
-// At init, first: each serviced channel's connection semaphore (its runtime arg's address) at 0, and its
-// producer-cursor block zeroed (the producer reads the whole block when it connects).
+// Channel CH's connection semaphore (its runtime arg's address) at 0, and its producer-cursor block zeroed (the
+// producer reads the whole block when it connects).
+template <size_t CH>
+FORCE_INLINE void reset_connection(
+    const std::array<size_t, MAX_NUM_SENDER_CHANNELS>& connection_semaphores,
+    const std::array<size_t, MAX_NUM_SENDER_CHANNELS>& producer_cursors) {
+    *reinterpret_cast<volatile uint32_t*>(connection_semaphores[CH]) = 0;
+    auto* cursor = reinterpret_cast<volatile uint32_t*>(producer_cursors[CH]);
+    for (size_t w = 0; w < sizeof(tt::tt_fabric::SenderChannelProducerCursor) / sizeof(uint32_t); ++w) {
+        cursor[w] = 0;
+    }
+}
+
+// At init, first: each serviced channel's connection.
 FORCE_INLINE void reset_connections(
     const std::array<size_t, MAX_NUM_SENDER_CHANNELS>& connection_semaphores,
     const std::array<size_t, MAX_NUM_SENDER_CHANNELS>& producer_cursors) {
     for_each_index<NUM_SENDER_CHANNELS>([&](auto i) {
         constexpr size_t CH = decltype(i)::value;
         if constexpr (is_sender_channel_serviced[CH]) {
-            *reinterpret_cast<volatile uint32_t*>(connection_semaphores[CH]) = 0;
-            auto* cursor = reinterpret_cast<volatile uint32_t*>(producer_cursors[CH]);
-            for (size_t w = 0; w < sizeof(tt::tt_fabric::SenderChannelProducerCursor) / sizeof(uint32_t); ++w) {
-                cursor[w] = 0;
-            }
+            reset_connection<CH>(connection_semaphores, producer_cursors);
+        }
+    });
+}
+
+// Inter-domain disconnect: the worker channels back to their start (connection, producer cursor, free slots,
+// interface) for the next peer's traffic. Forwarding channels face this chip and keep theirs.
+__attribute__((noinline)) void restart_worker_channels(
+    const std::array<size_t, MAX_NUM_SENDER_CHANNELS>& connection_semaphores,
+    const std::array<size_t, MAX_NUM_SENDER_CHANNELS>& producer_cursors) {
+    for_each_index<NUM_SENDER_CHANNELS>([&](auto i) {
+        constexpr size_t CH = decltype(i)::value;
+        if constexpr (is_sender_channel_serviced[CH] && is_sender_channel_worker[CH]) {
+            reset_connection<CH>(connection_semaphores, producer_cursors);
+            init_ptr_val<SenderChannel<CH>::free_slots_stream>(SENDER_NUM_BUFFERS_ARRAY[CH]);
+            SenderChannelInterfaces::start_one<CH>(connection_semaphores);
         }
     });
 }
@@ -1093,6 +1130,132 @@ __attribute__((noinline)) void wait_for_upstream_routers() {
                 wait_for_connect_request(interface.connection_live_semaphore);
                 interface.template cache_producer_noc_addr<ENABLE_RISC_CPU_DATA_CACHE, USE_DYNAMIC_CREDIT_ADDR>();
             }
+        }
+    });
+}
+
+// ---------------------------------------------------------------------------------------------------------------------
+// Inter-domain: the sender ERISC (ERISC 0) drives the host's control block
+// ---------------------------------------------------------------------------------------------------------------------
+
+// The base firmware's routing every POLLS_PER_ROUTING_RUN polls while a step waits, as init's waits do.
+FORCE_INLINE void run_routing_now_and_then(uint32_t& polls) {
+    if (polls++ == POLLS_PER_ROUTING_RUN) {
+        polls = 0;
+        run_routing();
+    }
+}
+
+// DRAIN until the host's CONNECT (true) or termination (the receiver ERISC drops stray packets meanwhile).
+FORCE_INLINE bool drain() {
+    set_inter_domain_state(InterDomainState::DRAIN);
+    uint32_t polls = 0;
+    while (!terminating()) {
+        if (inter_domain_command() == InterDomainCommand::CONNECT) {
+            set_inter_domain_state(InterDomainState::CONNECT);
+            return true;
+        }
+        run_routing_now_and_then(polls);
+    }
+    return false;
+}
+
+// CONNECT: the peer's metadata, then the Ethernet handshake with it (the lower domain id sends). The peer's VC2
+// receiver must be where this router's senders send, with the same packet size; domain ids must differ. False (then
+// DRAIN) on a mismatch, the host's ABORT or termination.
+__attribute__((noinline, cold)) bool connect() {
+    using namespace erisc::datamover::handshake;
+    using Remote = RemoteReceiverChannel<0>;
+    auto* c = inter_domain_control();
+    c->peer_marker = 0;
+    bool connected = c->peer_domain_id != c->local_domain_id && c->peer_vc2_receiver_addr == Remote::first_slot_addr &&
+                     c->peer_vc2_receiver_slots == Remote::num_slots &&
+                     c->peer_max_packet_size_bytes == channel_buffer_size;
+    if (connected) {
+        const auto& rt = l1_routing_table();
+        const auto aborted = [] { return terminating() || inter_domain_command() == InterDomainCommand::ABORT; };
+        if (c->local_domain_id < c->peer_domain_id) {
+            fabric_sender_side_handshake<ENABLE_RISC_CPU_DATA_CACHE>(
+                handshake_addr,
+                rt.my_mesh_id,
+                rt.my_device_id,
+                termination_signal(),
+                DEFAULT_HANDSHAKE_CONTEXT_SWITCH_TIMEOUT,
+                aborted);
+        } else {
+            fabric_receiver_side_handshake<ENABLE_RISC_CPU_DATA_CACHE>(
+                handshake_addr,
+                rt.my_mesh_id,
+                rt.my_device_id,
+                termination_signal(),
+                DEFAULT_HANDSHAKE_CONTEXT_SWITCH_TIMEOUT,
+                aborted);
+        }
+        auto* info = reinterpret_cast<volatile tt_l1_ptr handshake_info_t*>(handshake_addr);
+        connected = info->local_value == MAGIC_HANDSHAKE_VALUE;
+        if (connected) {
+            telemetry_block()->static_info.neighbor_mesh_id = info->neighbor_mesh_id;
+            telemetry_block()->static_info.neighbor_device_id = info->neighbor_device_id;
+        }
+    }
+    if (connected) {
+        c->connects++;
+    } else {
+        c->connect_failures++;
+    }
+    // the state first: the host reads it once the command clears
+    set_inter_domain_state(connected ? InterDomainState::SERVICE_TRAFFIC : InterDomainState::DRAIN);
+    c->command = InterDomainCommand::NONE;
+    return connected;
+}
+
+// After the loop: true (DISCONNECT) unless terminating.
+FORCE_INLINE bool start_disconnect() {
+    if (terminating()) {
+        return false;
+    }
+    set_inter_domain_state(InterDomainState::DISCONNECT);
+    return true;
+}
+
+// DISCONNECT, healthy: this router's marker to the peer, then the peer's (the host may force it on). Forced: none.
+__attribute__((noinline, cold)) void exchange_markers() {
+    auto* c = inter_domain_control();
+    if (inter_domain_command() == InterDomainCommand::DISCONNECT) {
+        c->marker[0] = c->connects;  // nonzero after a connect
+        SenderLinkTransport::send_with_context_switch(
+            reinterpret_cast<uint32_t>(&c->marker[0]),
+            reinterpret_cast<uint32_t>(&c->peer_marker),
+            PACKET_WORD_SIZE_BYTES);
+        set_inter_domain_state(InterDomainState::WAIT_PEER_MARKER);
+        uint32_t polls = 0;
+        while (c->peer_marker == 0 && inter_domain_command() != InterDomainCommand::FORCE_DISCONNECT &&
+               !terminating()) {
+            run_routing_now_and_then(polls);
+        }
+    }
+    c->peer_marker = 0;
+    c->command = InterDomainCommand::NONE;
+}
+
+// After the markers: the sender's link-facing state back to its start (the remote receiver's credits, the worker
+// channels). The forwarding channels keep their slots, but their counts start over with the new peer's credits: slots
+// the old peer never credited go back to the upstream router.
+__attribute__((noinline, cold)) void reset_link(const RuntimeArgs& args) {
+    zero_credit_counters(to_sender_remote_ack_counters_base_address);
+    zero_credit_counters(to_sender_remote_completion_counters_base_address);
+    restart_worker_channels(args.connection_semaphores, args.producer_cursors);
+    for_each_index<NUM_SENDER_CHANNELS>([](auto i) {
+        constexpr size_t CH = decltype(i)::value;
+        if constexpr (((SenderChannels::forwarding_channels >> CH) & 1u) != 0) {
+            auto& state = carried_forwarding.template get<CH>();
+            auto& progress = state.progress;
+            const uint32_t returned =
+                SenderChannel<CH>::first_level_ack ? progress.first_level_acked : progress.completed;
+            if (progress.sent != returned) {
+                ForwardingChannel<CH>::credit(state.upstream_free_slots_addr, progress.sent - returned);
+            }
+            progress.sent = progress.completed = progress.first_level_acked = 0;
         }
     });
 }

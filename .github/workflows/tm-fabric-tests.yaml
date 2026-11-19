@@ -75,7 +75,7 @@ on:
           BH fabric channel trimming tests ,
           BH ttnn UDM unit tests , BH fabric system health tests ,
           BH fabric stability nightly tests , BH ccl nightly tests ,
-          BH fabric infra unit tests , BH fabric graph builder tests
+          BH fabric infra unit tests , BH fabric graph builder tests, BH fabric inter-domain sanity
         required: false
         default: ""
         type: string

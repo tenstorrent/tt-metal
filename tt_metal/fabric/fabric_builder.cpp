@@ -126,6 +126,9 @@ void FabricBuilder::create_routers() {
             routers_.insert({eth_chan, make_router(location)});
         }
     }
+    for (const auto& location : perimeter_router_locations()) {
+        routers_.insert({location.eth_chan, make_router(location)});
+    }
 
     // Configure dispatch links
     if (device_has_dispatch_tunnel_) {
@@ -319,6 +322,9 @@ std::unique_ptr<FabricBuildSession> create_fabric_build_session(FabricContext& f
     if (fabric_context.get_rtoptions().get_fabric_graph_builder()) {
         return std::make_unique<graph::GraphFabricBuildSession>(fabric_context);
     }
+    TT_FATAL(
+        !fabric_context.get_rtoptions().get_fabric_inter_domain(),
+        "inter-domain fabric needs the graph builder (TT_METAL_FABRIC_GRAPH_BUILDER=1)");
     return std::make_unique<FabricBuildSession>();
 }
 

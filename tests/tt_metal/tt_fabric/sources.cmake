@@ -55,6 +55,7 @@ set(UNIT_TESTS_FABRIC_SRC
     fabric_router/test_link_health.cpp
     graph/test_logical_graph_lowering.cpp
     graph/test_graph_fabric_mock_compile.cpp
+    inter_domain/test_inter_domain.cpp
 )
 
 set(UNIT_TESTS_PHYSICAL_DISCOVERY_SRC physical_discovery/test_physical_system_descriptor.cpp)

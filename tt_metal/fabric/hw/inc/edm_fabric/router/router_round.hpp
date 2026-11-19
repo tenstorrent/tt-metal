@@ -53,10 +53,33 @@ FORCE_INLINE bool terminating() {
     return got_immediate_termination_signal<ENABLE_RISC_CPU_DATA_CACHE>(termination_signal());
 }
 
-// Wait until the context-switch register reads `s`, or termination.
+// Inter-domain routers: the host's control block (InterDomainRouterControl), and whether the host asked this router to
+// leave its peer. Always false elsewhere.
+FORCE_INLINE volatile tt_l1_ptr InterDomainRouterControl* inter_domain_control() {
+    return reinterpret_cast<volatile tt_l1_ptr InterDomainRouterControl*>(inter_domain_ctrl_addr);
+}
+FORCE_INLINE bool disconnect_requested() {
+    if constexpr (is_inter_domain_router) {
+        const auto command = inter_domain_control()->command;
+        return command == InterDomainCommand::DISCONNECT || command == InterDomainCommand::FORCE_DISCONNECT;
+    } else {
+        return false;
+    }
+}
+
+// Whether a loop keeps running: no termination, no disconnect.
+FORCE_INLINE bool keep_running() { return !terminating() && !disconnect_requested(); }
+
+FORCE_INLINE InterDomainCommand inter_domain_command() {
+    router_invalidate_l1_cache<ENABLE_RISC_CPU_DATA_CACHE>();
+    return inter_domain_control()->command;
+}
+FORCE_INLINE void set_inter_domain_state(InterDomainState s) { inter_domain_control()->state = s; }
+
+// Wait until the context-switch register reads `s`, or termination or disconnect.
 FORCE_INLINE void wait_for_context_switch_state(ContextSwitchState s) {
     while (context_switch_state() != static_cast<uint32_t>(s)) {
-        if (terminating()) {
+        if (!keep_running()) {
             return;
         }
     }
@@ -86,7 +109,7 @@ FORCE_INLINE void follow_context_switch() {
         wait_for_context_switch_state(ContextSwitchState::RETRAIN_COMPLETE);
         set_context_switch_state(ContextSwitchState::COMPLETE_ACK);
         while (context_switch_state() == static_cast<uint32_t>(ContextSwitchState::COMPLETE_ACK)) {
-            if (terminating()) {
+            if (!keep_running()) {
                 return;
             }
         }
@@ -97,12 +120,12 @@ FORCE_INLINE void follow_context_switch() {
 // Rounds
 // ---------------------------------------------------------------------------------------------------------------------
 
-// Whether to run another round: no termination, and (master) no router command pending.
+// Whether to run another round: no termination or disconnect, and (master) no router command pending.
 __attribute__((noinline)) bool next_round() {
     if constexpr (is_context_switch_master || NUM_ACTIVE_ERISCS == 1) {
-        return !terminating() && !router_state()->is_non_run_command_pending();
+        return keep_running() && !router_state()->is_non_run_command_pending();
     } else {
-        return !terminating();
+        return keep_running();
     }
 }
 
@@ -201,7 +224,7 @@ __attribute__((noinline)) bool start_running() {
 // master), the heartbeat, the context switch and termination.
 __attribute__((noinline)) void run_idle() {
     RoundCounters round;
-    while (!terminating()) {
+    while (keep_running()) {
         if constexpr (is_context_switch_master) {
             if (!start_running()) {
                 continue;

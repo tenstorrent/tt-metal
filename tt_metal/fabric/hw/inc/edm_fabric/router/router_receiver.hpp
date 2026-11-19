@@ -291,8 +291,8 @@ template <size_t VC>
 FORCE_INLINE void record_forwarded(uint32_t forward_to) {
     if constexpr (ENABLE_CHANNEL_TRIMMING_RESOURCE_USAGE_CAPTURE) {
         if constexpr (is_2d) {
-            constexpr std::array<uint32_t, 2> packed_by_vc = {
-                PACKED_DOWNSTREAM_VC0_SENDER_CHANNEL_IDS, PACKED_DOWNSTREAM_VC1_SENDER_CHANNEL_IDS};
+            constexpr std::array<uint32_t, 3> packed_by_vc = {
+                PACKED_DOWNSTREAM_VC0_SENDER_CHANNEL_IDS, PACKED_DOWNSTREAM_VC1_SENDER_CHANNEL_IDS, 0};
             constexpr uint32_t packed = packed_by_vc[ReceiverChannel<VC>::forwards_on_vc];
             uint32_t entries = 0;
             for (uint32_t names = forward_to; names != 0; names &= names - 1) {
@@ -735,6 +735,9 @@ FORCE_INLINE Connections set_up_channels(const RuntimeArgs& args) {
         if constexpr (any_forwards_on_vc(1)) {
             init_downstreams(downstreams.vc1, args.vc1());
         }
+        if constexpr (any_forwards_on_vc(2)) {
+            init_downstreams(downstreams.vc2, args.vc2());
+        }
         if constexpr (udm_mode) {
             init_relay(downstreams.relay, args.relay);
         }
@@ -765,6 +768,9 @@ FORCE_INLINE void open_connections(const RuntimeArgs& args) {
     if constexpr (has_vc1 && open_downstream_vc1_connections) {
         open_downstreams<1>(args.vc1());
     }
+    if constexpr (any_forwards_on_vc(2) && open_downstream_vc2_connections) {
+        open_downstreams<2>(args.vc2());
+    }
     if constexpr (udm_mode) {
         open_relay(args.relay);
     }
@@ -774,7 +780,7 @@ FORCE_INLINE void open_connections(const RuntimeArgs& args) {
 template <size_t VC>
 FORCE_INLINE void preset_forward_pair(const RuntimeArgs& args) {
     if constexpr (CommandBuffers::presets_forward_pair(VC)) {
-        ForwardCommands<VC>::preset(VC == 0 ? args.vc0() : args.vc1());
+        ForwardCommands<VC>::preset(args.template of_vc<VC>());
     }
 }
 
@@ -783,7 +789,8 @@ FORCE_INLINE void preset_forward_pair(const RuntimeArgs& args) {
 FORCE_INLINE void preset_forward_commands(const RuntimeArgs& args) {
     preset_forward_pair<0>(args);
     preset_forward_pair<1>(args);
-    static_assert(!any_forwards_on_vc(2), "the runtime args list downstream routers for VC0 and VC1");
+    preset_forward_pair<2>(args);
+    static_assert(!any_forwards_on_vc(2) || vc2_forwards, "the runtime args list VC2's downstreams where it forwards");
 }
 
 // The receiver loop: rounds of passes until termination. A function of its own so its code depends only on this body;
@@ -813,6 +820,32 @@ __attribute__((noinline)) void run(DownstreamConnections& downstreams) {
                 [] { return false; }, [] { return vc0_register_empty(); });
         }
     }
+}
+
+// ---------------------------------------------------------------------------------------------------------------------
+// Inter-domain: the receiver's part of each step
+// ---------------------------------------------------------------------------------------------------------------------
+
+// DRAIN, until ERISC 0 ends it: packets that land with no peer connected are counted and dropped.
+FORCE_INLINE void drain() {
+    while (!sync_requested(Phase::DRAINED)) {
+        for_each_index<NUM_RECEIVER_CHANNELS>([](auto rx) {
+            constexpr uint32_t stream = to_receiver_packets_sent_streams[decltype(rx)::value];
+            const uint32_t n = read_stream_count<stream>();
+            if (n != 0) {
+                inter_domain_control()->drained_packets += n;
+                increment_local_update_ptr_val<stream>(-static_cast<int32_t>(n));
+            }
+        });
+    }
+}
+
+// After the markers: the receiver's link-facing state back to its start (its credit counts, packets-received
+// registers).
+__attribute__((noinline, cold)) void reset_link() {
+    zero_credit_counters(local_receiver_ack_counters_base_address);
+    zero_credit_counters(local_receiver_completion_counters_base_address);
+    init_channel_streams();
 }
 
 }  // namespace fabric_router::receiver

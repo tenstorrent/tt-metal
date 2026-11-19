@@ -107,10 +107,15 @@ void validate_router_config(tt::ARCH arch, const std::unordered_map<std::string,
     TT_FATAL(!(tensix_mux_mode && has_vc1), "VC1 with the Tensix mux extension is not supported");
     // VC2 as FabricBuilderConfig builds it (Blackhole 2D, not UDM or the mux), with or without VC1: one worker channel
     // into a receiver channel of its own that only delivers (neighbour exchange), counter credits.
+    // Inter-domain fabrics forward on VC2 (VC2_DOWNSTREAM_EDM_SIZE): a worker channel plus forwarding channels, its
+    // receiver forwarding.
+    const bool vc2_forwards = named_args.contains("VC2_DOWNSTREAM_EDM_SIZE");
     TT_FATAL(
-        vc2_sender_channels == 0 || (is_2d && vc2_sender_channels == 1 && arg("DISABLE_RX_CH2_FORWARDING") != 0 &&
-                                     arg("VC2_USES_COUNTER_CREDITS") != 0),
-        "VC2 is supported as neighbour exchange on 2D routers");
+        vc2_sender_channels == 0 ||
+            (is_2d && arg("VC2_USES_COUNTER_CREDITS") != 0 &&
+             (vc2_forwards || (vc2_sender_channels == 1 && arg("DISABLE_RX_CH2_FORWARDING") != 0))),
+        "VC2 is supported as neighbour exchange on 2D routers, or forwarding on inter-domain fabrics");
+    TT_FATAL(!vc2_forwards || (!has_vc1 && !udm_mode && !tensix_mux_mode), "VC2 forwards on single-mesh fabrics only");
     TT_FATAL(
         arg("ENABLE_FIRST_LEVEL_ACK_VC1") == 0 && arg("ENABLE_FIRST_LEVEL_ACK_VC2") == 0,
         "first-level acks on VC1 / VC2 are not supported");
@@ -313,6 +318,14 @@ FabricEriscDatamoverConfig::FabricEriscDatamoverConfig(const FabricContext& fabr
 
     this->handshake_addr = next_l1_addr;
     next_l1_addr += 2 * eth_channel_sync_size;
+
+    if (rtoptions.get_fabric_inter_domain()) {
+        TT_FATAL(
+            is_fabric_two_erisc_enabled(fabric_context),
+            "inter-domain fabric needs two-ERISC routers (Blackhole, 2-ERISC mode on)");
+        this->inter_domain_ctrl_address = next_l1_addr;
+        next_l1_addr += tt::align(sizeof(tt::tt_fabric::InterDomainRouterControl), eth_word_l1_alignment);
+    }
 
     // issue: https://github.com/tenstorrent/tt-metal/issues/29073. TODO: Re-enable after hang is resolved.
     // Ethernet txq IDs on WH are 0,1 and on BH are 0,1,2.
@@ -846,7 +859,12 @@ FabricEriscDatamoverBuilder::FabricEriscDatamoverBuilder(
     // disable a channel this router genuinely uses.
     const bool express_routing_enabled =
         fabric_context.get_control_plane().express_routing_enabled(local_fabric_node_id.mesh_id);
-    if (channel_trimming_overrides.has_value() && !express_routing_enabled) {
+    // Skipped too where VC2 forwards (inter-domain): the capture doesn't see VC2 forwarding, so it would turn it off.
+    const bool vc2_forwards = fabric_context.get_builder_context().get_intermesh_vc_config().vc2_forwards;
+    if (channel_trimming_overrides.has_value() && vc2_forwards) {
+        log_warning(tt::LogFabric, "Channel trimming overrides ignored: VC2 forwards (inter-domain fabric)");
+    }
+    if (channel_trimming_overrides.has_value() && !express_routing_enabled && !vc2_forwards) {
         apply_channel_trimming_overrides(channel_trimming_overrides.value());
     }
 
@@ -854,6 +872,10 @@ FabricEriscDatamoverBuilder::FabricEriscDatamoverBuilder(
         sender_channel_connection_liveness_check_disable_array.begin(),
         sender_channel_connection_liveness_check_disable_array.end(),
         false);
+    if (graph_inputs != nullptr) {
+        inter_domain_ = graph_inputs->inter_domain;
+        on_domain_edge_ = graph_inputs->on_domain_edge;
+    }
 
     TT_FATAL(
         config.channel_allocator.get() != nullptr,
@@ -971,7 +993,8 @@ void FabricEriscDatamoverBuilder::get_telemetry_compile_time_args(
 
 FabricEriscDatamoverBuilder::CompileTimeArgs FabricEriscDatamoverBuilder::get_compile_time_args(
     uint32_t risc_id) const {
-    TT_ASSERT(this->local_fabric_node_id != this->peer_fabric_node_id);
+    // a perimeter router stands in for its unbound peer with its own node
+    TT_ASSERT(inter_domain_ || this->local_fabric_node_id != this->peer_fabric_node_id);
 
     // Tie break policy for selecting the handshake master:
     // 1. If both nodes are on the same mesh, compare chip_ids
@@ -1047,10 +1070,15 @@ FabricEriscDatamoverBuilder::CompileTimeArgs FabricEriscDatamoverBuilder::get_co
     TT_FATAL(receiver_channel_num_buffers > 0, "Receiver channel num buffers must be greater than 0");
 
     // The router across the link published its receivers before any kernel is emitted (FabricBuilderContext).
-    const auto [link_peer_node, link_peer_chan] =
-        control_plane.get_connected_mesh_chip_chan_ids(this->local_fabric_node_id, this->my_eth_channel);
-    const RouterChannelLayout& peer_layout =
-        fabric_context.get_builder_context().get_router_channel_layout(link_peer_node, link_peer_chan);
+    // A perimeter router has no peer until connect, so it's built against its own layout.
+    RouterChannelLayout peer_layout;
+    if (inter_domain_) {
+        peer_layout = static_channel_allocator->get_layout();
+    } else {
+        const auto [link_peer_node, link_peer_chan] =
+            control_plane.get_connected_mesh_chip_chan_ids(this->local_fabric_node_id, this->my_eth_channel);
+        peer_layout = fabric_context.get_builder_context().get_router_channel_layout(link_peer_node, link_peer_chan);
+    }
 
     constexpr bool enable_risc_cpu_data_cache = false;
 
@@ -1088,6 +1116,13 @@ FabricEriscDatamoverBuilder::CompileTimeArgs FabricEriscDatamoverBuilder::get_co
     if (vc0_downstream_edm_size == 0) {
         vc0_downstream_edm_size = 1;
     }
+    // inter-domain: VC2 forwards, with downstreams of its own
+    const bool vc2_forwards = fabric_context.get_builder_context().get_intermesh_vc_config().vc2_forwards &&
+                              config.num_used_receiver_channels_per_vc[2] > 0;
+    const uint32_t num_vc2_downstream_edms =
+        vc2_forwards ? this->receiver_channel_to_downstream_adapter->get_downstream_edm_count_for_vc(2) : 0;
+    const uint32_t vc2_downstream_edm_size = std::max<uint32_t>(
+        1, calc_array_size_from_mask(this->receiver_channel_to_downstream_adapter->get_downstream_edm_mask_for_vc(2)));
     if (needs_vc1 && vc1_downstream_edm_size == 0) {
         vc1_downstream_edm_size = 1;
     }
@@ -1259,6 +1294,11 @@ FabricEriscDatamoverBuilder::CompileTimeArgs FabricEriscDatamoverBuilder::get_co
     named_args["NUM_DOWNSTREAM_CHANNELS"] = static_cast<uint32_t>(config.num_fwd_paths);
     named_args["NUM_DOWNSTREAM_SENDERS_VC0"] = num_vc0_downstream_edms;
     named_args["NUM_DOWNSTREAM_SENDERS_VC1"] = num_vc1_downstream_edms;
+    if (vc2_forwards) {
+        named_args["NUM_DOWNSTREAM_SENDERS_VC2"] = num_vc2_downstream_edms;
+        named_args["VC2_DOWNSTREAM_EDM_SIZE"] = vc2_downstream_edm_size;
+        named_args["OPEN_DOWNSTREAM_VC2_CONNECTIONS"] = 1;
+    }
     named_args["WAIT_FOR_HOST_SIGNAL"] = static_cast<uint32_t>(this->wait_for_host_signal ? 1 : 0);
     named_args["SWITCH_INTERVAL"] = static_cast<uint32_t>(this->firmware_context_switch_interval);
     named_args["ETH_TXQ_SEQ_UPDATE_TIMEOUT"] = this->eth_txq_seq_update_timeout;
@@ -1278,6 +1318,10 @@ FabricEriscDatamoverBuilder::CompileTimeArgs FabricEriscDatamoverBuilder::get_co
     named_args["IS_INTERMESH_ROUTER"] = this->is_inter_mesh;
     named_args["IS_HANDSHAKE_SENDER"] = is_handshake_master;
     named_args["HANDSHAKE_ADDR"] = static_cast<uint32_t>(this->handshake_address);
+    if (inter_domain_) {
+        named_args["INTER_DOMAIN_ROUTER"] = 1;
+        named_args["INTER_DOMAIN_CTRL_ADDR"] = static_cast<uint32_t>(config.inter_domain_ctrl_address);
+    }
     named_args["CHANNEL_BUFFER_SIZE"] = static_cast<uint32_t>(this->channel_buffer_size);
     named_args["FABRIC_TENSIX_EXTENSION_MUX_MODE"] = this->has_tensix_extension;
     named_args["ENABLE_FIRST_LEVEL_ACK_VC0"] = final_enable_first_level_ack_vc0 ? 1 : 0;
@@ -1392,7 +1436,7 @@ FabricEriscDatamoverBuilder::CompileTimeArgs FabricEriscDatamoverBuilder::get_co
     named_args["NUM_ACTIVE_ERISCS"] = static_cast<uint32_t>(this->get_configured_risc_count());
     named_args["FORCE_ALL_PATHS_TO_USE_SAME_NOC"] = config.requires_forced_assignment_to_noc1();
     named_args["IS_INTERMESH_ROUTER_ON_EDGE"] = is_intermesh_router_on_edge;
-    named_args["IS_INTRAMESH_ROUTER_ON_EDGE"] = is_intramesh_router_on_edge;
+    named_args["IS_INTRAMESH_ROUTER_ON_EDGE"] = is_intramesh_router_on_edge || on_domain_edge_;
 
     // --- 2D action-map args (every 2D router; the kernel reads them under FABRIC_2D) ---
     // No longer keyed on express_routing_enabled: every 2D mesh runs the action-map decode, so every 2D
@@ -1408,7 +1452,11 @@ FabricEriscDatamoverBuilder::CompileTimeArgs FabricEriscDatamoverBuilder::get_co
         // Both carrier VCs accept intermesh landings: neighboring workers inject on VC0, so landings
         // are not confined to VC1. VC2 is excluded by builder policy.
         for (size_t i = 0; i < builder_config::num_max_receiver_channels; i++) {
-            named_args[fmt::format("IS_RECEIVER_CHANNEL_{}_INTERMESH_INGRESS", i)] = (is_inter_mesh && i < 2) ? 1 : 0;
+            // an inter-domain router's VC2 receiver lands packets from the peer domain (VC2 sits on channel 1 without
+            // VC1)
+            const bool lands_vc2 = inter_domain_ && i == (num_receiver_channels == 2 ? 1u : 2u);
+            named_args[fmt::format("IS_RECEIVER_CHANNEL_{}_INTERMESH_INGRESS", i)] =
+                ((is_inter_mesh && i < 2) || lands_vc2) ? 1 : 0;
         }
     }
 
@@ -1540,7 +1588,9 @@ FabricEriscDatamoverBuilder::CompileTimeArgs FabricEriscDatamoverBuilder::get_co
     };
     named_args["DISABLE_RX_CH0_FORWARDING"] = compute_disable_rx_forwarding(0);
     named_args["DISABLE_RX_CH1_FORWARDING"] = compute_disable_rx_forwarding(1);
-    named_args["DISABLE_RX_CH2_FORWARDING"] = 1;  // VC2 receiver never forwards (always disabled)
+    // VC2's receiver only delivers (neighbour exchange), except where VC2 forwards (inter-domain)
+    named_args["DISABLE_RX_CH2_FORWARDING"] =
+        fabric_context_.get_builder_context().get_intermesh_vc_config().vc2_forwards ? 0 : 1;
     // A receiver channel left serviced (the capture saw it consume packets) while its VC shows neither forwards nor
     // local writes contradicts itself: every packet a receiver consumes is forwarded or written here. The router takes
     // the two flags as agreeing (forwarding is off on a serviced channel only where the channel delivers every packet:
@@ -1730,6 +1780,10 @@ std::vector<uint32_t> FabricEriscDatamoverBuilder::get_runtime_args() const {
     bool needs_vc1 = config.num_used_receiver_channels_per_vc[1] > 0;
     if (needs_vc1) {
         receiver_channel_to_downstream_adapter->pack_inbound_channel_rt_args(1, rt_args);
+    }
+    if (fabric_context_.get_builder_context().get_intermesh_vc_config().vc2_forwards &&
+        config.num_used_receiver_channels_per_vc[2] > 0) {
+        receiver_channel_to_downstream_adapter->pack_inbound_channel_rt_args(2, rt_args);
     }
 
     // Pack runtime args - device side reads fixed MAX_NUM_SENDER_CHANNELS values

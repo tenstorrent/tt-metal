@@ -227,6 +227,18 @@ constexpr bool any_forwards_on_vc(size_t vc) {
     return false;
 }
 
+// A receiver-channel table read by VC: VC0's and VC1's are their channels; VC2's is wherever its channel is (channel 1
+// without VC1). Only VCs that forward are read.
+template <typename T, size_t N>
+constexpr std::array<T, MAX_NUM_VCS> by_vc(const std::array<T, N>& by_channel) {
+    std::array<T, MAX_NUM_VCS> out{};
+    for (size_t vc = 0; vc < MAX_NUM_VCS; vc++) {
+        const size_t rx = vc == 2 ? receiver_channel_of(2) : vc;
+        out[vc] = rx < N ? by_channel[rx] : T{};
+    }
+    return out;
+}
+
 // Which NoC command buffer each kind of command uses on this ERISC (the host's ids), and which kinds keep their buffer
 // preset between commands (stateful NoC API). A preset buffer carries its kind only: any other command on it rewrites
 // the preset. The atomics buffer keeps no preset and takes no write from L1 (atomics need the return address the
@@ -237,8 +249,8 @@ struct CommandBuffers {
     static constexpr uint8_t atomics = write_at_cmd_buf;
     static constexpr uint8_t local_writes = tt::tt_fabric::local_chip_data_cmd_buf;               // receiver
     static constexpr const auto& worker_credits = sender_channel_ack_cmd_buf_ids;                 // sender, by channel
-    static constexpr const auto& forward_data = receiver_channel_forwarding_data_cmd_buf_ids;     // receiver, by VC
-    static constexpr const auto& forward_credits = receiver_channel_forwarding_sync_cmd_buf_ids;  // receiver, by VC
+    static constexpr auto forward_data = by_vc(receiver_channel_forwarding_data_cmd_buf_ids);     // receiver, by VC
+    static constexpr auto forward_credits = by_vc(receiver_channel_forwarding_sync_cmd_buf_ids);  // receiver, by VC
 
     // Which kinds keep presets:
     //   - two ERISCs: every kind but atomics (`presets`);

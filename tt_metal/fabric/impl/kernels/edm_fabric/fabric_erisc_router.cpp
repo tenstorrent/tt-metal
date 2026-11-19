@@ -196,6 +196,48 @@ FORCE_INLINE void run_loop(Downstreams& downstreams) {
     }
 }
 
+// An inter-domain router after init: DRAIN, then per host CONNECT the loop until the host's DISCONNECT. As in
+// kernel_main, each role does its part of a step and the ERISCs meet at its end; ERISC 0 drives the host's control
+// block and passes its outcome on (finish_step).
+template <typename Downstreams>
+FORCE_INLINE void run_inter_domain(const RuntimeArgs& args, Downstreams& downstreams) {
+    for (;;) {
+        bool on = false;
+        if constexpr (is_teardown_master) {
+            on = sender::drain();
+        } else {
+            receiver::drain();
+        }
+        if (!finish_step<Phase::DRAINED>(on, InterDomainState::CONNECT)) {
+            break;
+        }
+        if constexpr (is_teardown_master) {
+            on = sender::connect();
+        }
+        if (!finish_step<Phase::PEER_CONNECTED>(on, InterDomainState::SERVICE_TRAFFIC)) {
+            continue;
+        }
+        run_loop(downstreams);
+        if constexpr (is_teardown_master) {
+            on = sender::start_disconnect();
+        }
+        if (!finish_step<Phase::SERVICE_DONE>(on, InterDomainState::DISCONNECT)) {
+            break;
+        }
+        init_context_switch_state();  // a switch the disconnect cut short
+        if constexpr (is_teardown_master) {
+            sender::exchange_markers();
+        }
+        sync_erisc(Phase::MARKERS_EXCHANGED);
+        if constexpr (is_receiver_role) {
+            receiver::reset_link();
+        }
+        if constexpr (is_sender_role) {
+            sender::reset_link(args);
+        }
+    }
+}
+
 }  // namespace fabric_router
 
 void kernel_main() {
@@ -223,6 +265,9 @@ void kernel_main() {
     finish_phase<Phase::SETUP_DONE>();
 
     // Phase: handshakes.
+    if constexpr (is_inter_domain_router && is_teardown_master) {
+        set_inter_domain_state(InterDomainState::LOCAL_HANDSHAKE);
+    }
     run_handshakes();
     finish_phase<Phase::HANDSHAKE_DONE>();
 
@@ -248,7 +293,11 @@ void kernel_main() {
         router_state()->state = RouterState::INITIALIZING;
     }
 
-    run_loop(downstreams);
+    if constexpr (is_inter_domain_router) {
+        run_inter_domain(args, downstreams);
+    } else {
+        run_loop(downstreams);
+    }
     WAYPOINT("LPDN");
     teardown();
     WAYPOINT("TEDN");
