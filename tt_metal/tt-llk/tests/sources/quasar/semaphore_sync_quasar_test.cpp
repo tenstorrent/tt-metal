@@ -15,7 +15,7 @@
 
 #ifdef LLK_TRISC_UNPACK
 
-#include "llk_bfd_alloc.h"
+#include "ckernel_buf_desc.h"
 #include "llk_sync.h"
 #include "llk_unpack_common.h"
 #include "llk_unpack_reduce.h"
@@ -38,11 +38,13 @@ void run_kernel(RUNTIME_PARAMETERS params)
     // One DEST section per block of NUM_TILES_IN_BLOCK tiles.
     const std::uint32_t num_blocks = dest_section_count(TILE_CNT, NUM_TILES_IN_BLOCK);
     // allocate srcA (order matters: A before B)
-    const auto bfd_a = ckernel::trisc::bfd_alloc_and_program<ckernel::trisc::BfdResource::Unp0>(
+    ckernel::trisc::program_bfd<ckernel::trisc::BFD_ID_UNP0>(
         ckernel::tensor_shape_from_num_faces(TEST_FACE_R_DIM, num_faces), L1_ADDRESS(buffer_A[0]), formats.unpack_A_src);
+    constexpr std::uint8_t bfd_a = ckernel::trisc::BFD_ID_UNP0;
     // allocate srcB
-    const auto bfd_b = ckernel::trisc::bfd_alloc_and_program<ckernel::trisc::BfdResource::Unp1>(
+    ckernel::trisc::program_bfd<ckernel::trisc::BFD_ID_UNP1>(
         ckernel::tensor_shape_from_num_faces(TEST_FACE_R_DIM, num_faces), L1_ADDRESS(buffer_B[0]), formats.unpack_B_src);
+    constexpr std::uint8_t bfd_b = ckernel::trisc::BFD_ID_UNP1;
 
     if constexpr (unpack_to_dest)
     {
@@ -154,7 +156,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
 #ifdef LLK_TRISC_PACK
 
-#include "llk_bfd_alloc.h"
+#include "ckernel_buf_desc.h"
 #include "llk_pack.h"
 #include "llk_pack_common.h"
 #include "llk_sync.h"
@@ -173,8 +175,9 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const std::uint32_t NUM_TILES_IN_BLOCK = params.NUM_TILES_IN_BLOCK;
 #endif
     const std::uint32_t num_blocks = dest_section_count(TILE_CNT, NUM_TILES_IN_BLOCK);
-    const auto bfd_pack            = ckernel::trisc::bfd_alloc_and_program<ckernel::trisc::BfdResource::Pack0>(
+    ckernel::trisc::program_bfd<ckernel::trisc::BFD_ID_PACK0>(
         ckernel::tensor_shape_from_num_faces(TEST_FACE_R_DIM, num_faces), L1_ADDRESS(buffer_Res[0]), formats.pack_dst);
+    constexpr std::uint8_t bfd_pack = ckernel::trisc::BFD_ID_PACK0;
 
     _llk_pack_hw_configure_<p_pacr::PACK0, is_fp32_dest_acc_en>(static_cast<DataFormat>(formats.pack_src), ckernel::ReluConfig::none());
     _llk_pack_init_(bfd_pack, ckernel::DEFAULT_TENSOR_SHAPE, 1 /*num_tiles_per_pack*/);

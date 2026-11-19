@@ -390,7 +390,7 @@ models:
     wh_n300: 6
     bh_p150: 35
     bh_p300: 42
-    bh_quietbox_2: 186
+    bh_quietbox_2: 191
   e2e_tier3:
     wh_llmbox_perf: 200
     wh_galaxy_perf: 55
