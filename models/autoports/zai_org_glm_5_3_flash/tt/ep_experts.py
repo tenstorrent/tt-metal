@@ -1,0 +1,209 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+# SPDX-License-Identifier: Apache-2.0
+"""Stage 14b (PRODUCTION_PATH.md M5, the 45-layer image): EP-SHARDED routed-expert weights for the TP mesh.
+
+Stage 14's TP sparse_kda layer (tt/tp8_sparse.py) routes EP8 — chip r runs experts [E_loc r, E_loc (r + 1)), E_loc =
+288 / 8 = 36 — but builds its MoE with the decoder's REPLICATED expert tensors (all 288 on every chip: ~4.1 GB per
+layer, so a handful of sparse layers fit, not 42). Here every chip holds only its own 36:
+
+  slot i (0 <= i < E_loc) = ONE mesh tensor whose chip-r shard is expert E_loc r + i (`ttnn.from_host_shards`, the
+  fused_experts bfloat4_b ND-sharded DRAM layout, the same bytes as the replicated load), allocated lock-step -> the
+  same address on every chip.
+
+The returned gate_up / down lists are indexed by the GLOBAL expert id (entry e = slot e mod E_loc), so the code that
+builds chip r's expert address table from entries [E_loc r, E_loc (r + 1)) — TPSparseKDALayer — gets the slot addresses
+for every chip unchanged, and ReaderExperts' e_lo (compile time, per chip) maps a routed id to its slot. 42 sparse layers
+x 4.1 GB / 8 = ~21.4 GB per chip instead of 172 GB."""
+
+from __future__ import annotations
+
+import os
+
+import ttnn
+
+
+def xsl_group(ndev: int) -> int:
+    """GLM53_TP_XSL_GROUP (the hybrid expert sharding: EP over the ndev / g chip groups x batched expert TP inside a
+    group of g chips): default 8 on a mesh of 8 k chips, k > 1 (the 32-chip replica 2026-11-05: B = 4 distinct
+    prompts 22.0 -> 17.9 ms per step, identical 19.5 -> 17.5); 0 = plain EP (the A/B, and every other mesh)."""
+    v = os.environ.get("GLM53_TP_XSL_GROUP")
+    if v is not None and v != "":
+        return int(v)
+    return 8 if ndev > 8 and ndev % 8 == 0 else 0
+
+
+class EpList:
+    """global expert id -> the slot tensor holding it on its owning chip (slot = id mod E_loc)"""
+
+    def __init__(self, slots: list, num_experts: int):
+        self.slots, self.n = list(slots), int(num_experts)
+
+    def __len__(self):
+        return self.n
+
+    def __getitem__(self, k):
+        if isinstance(k, slice):
+            return [self.slots[e % len(self.slots)] for e in range(*k.indices(self.n))]
+        if not -self.n <= k < self.n:
+            raise IndexError(k)
+        return self.slots[k % self.n % len(self.slots)]
+
+    def __iter__(self):
+        return (self[e] for e in range(self.n))
+
+
+def load_ep_experts(source, layer: int, num_experts: int, mesh, cache_dir: str, keep: bool | None = None):
+    """(gate_up, down) EpLists of `layer`'s routed experts, EP-sharded over `mesh` (see the module docstring).
+    The fused_experts gate_up permutation is read from the shared derived cache (`cache_dir`) when it is there; a
+    missing one is permuted into a temporary file and removed after the load unless keep (GLM53_EP_KEEP_PERMUTED=1):
+    the 42-layer image is ~114 GB of derived files, more than the box's root disk holds (2026-10-20 06:20Z: a
+    full-model load filled it)."""
+    if keep is None:
+        keep = os.environ.get("GLM53_EP_KEEP_PERMUTED", "0") == "1"
+    from models.autoports.zai_org_glm_5_3_flash.tt.fused_decoder import FE_CORES, _nd_dram, _permuted_gate_up_file
+
+    ndev = int(mesh.get_num_devices())
+    # GLM53_TP_XSL_GROUP = g (2026-11-05, the 32-chip replica): EP over the ndev / g groups of g chips x batched expert
+    # TP (Stage 7a MKX_XSL, 8-tile slices) inside a group -- slot i on chip k = slice k % g of expert e_loc (k // g) + i,
+    # e_loc = E / (ndev / g). Every chip of the busiest group streams 1 / g of each of its experts: the EP imbalance
+    # at distinct prompts (3-4 of 32 selections on one chip: +2.5 ms per step at B = 4) becomes ~12 / 8 expert-
+    # equivalents, balanced. Same bytes per chip as EP.
+    group = xsl_group(ndev)
+    ngroups = ndev // group if group else ndev
+    assert ndev % max(group, 1) == 0 and num_experts % ngroups == 0, (num_experts, ndev, group)
+    e_loc = num_experts // ngroups
+    if not hasattr(source, "_entry"):  # a HOST source (state dict / raw HF): permuted and packed in torch, as
+        # fused_decoder.load_fused_experts does for one chip, then EP-sharded with from_host_shards
+        import torch
+
+        from models.autoports.zai_org_glm_5_3_flash.tt.fused_decoder import gate_up_column_perm
+        from models.autoports.zai_org_glm_5_3_flash.tt.weights import WEIGHT_DTYPES
+
+        pack = lambda w: ttnn.from_torch(  # noqa: E731
+            w.to(torch.bfloat16), dtype=WEIGHT_DTYPES["routed_expert"], layout=ttnn.TILE_LAYOUT
+        )
+        cols = None
+        gu_slots, dn_slots = [], []
+        for i in range(e_loc):
+            gus, dns = [], []
+            for r in range(ndev):
+                g, c = divmod(r, group) if group else (r, 0)
+                e = e_loc * g + i
+                gu = source.host(layer, f"mlp.experts.{e}.gate_up_proj")  # [H, 2I] = [gate | up]
+                dn = source.host(layer, f"mlp.experts.{e}.down_proj")  # [I, H]
+                if cols is None:
+                    cols = gate_up_column_perm(gu.shape[-1])
+                    w2 = gu.shape[-1] // max(group, 1)  # a slice: the permuted [gate_c | up_c] tile columns of its
+                    w1 = dn.shape[-2] // max(group, 1)  # intermediate range, the down rows of the same range
+                    gu_cfg = _nd_dram(gu.shape[-2], w2 // FE_CORES if not group else 64)
+                    dn_cfg = _nd_dram(w1, dn.shape[-1] // FE_CORES if not group else 64)
+                gup = gu[:, cols]
+                gus.append(pack(gup[:, w2 * c : w2 * (c + 1)] if group else gup))
+                dns.append(pack(dn[w1 * c : w1 * (c + 1)] if group else dn))
+            gu_slots.append(ttnn.to_device(ttnn.from_host_shards(gus, mesh.shape), mesh, memory_config=gu_cfg))
+            dn_slots.append(ttnn.to_device(ttnn.from_host_shards(dns, mesh.shape), mesh, memory_config=dn_cfg))
+        return EpList(gu_slots, num_experts), EpList(dn_slots, num_experts)
+    if group:  # the tile cache + GLM53_TP_XSL_GROUP (2026-11-06): byte-exact slices of the expert files, as Stage 7a's
+        # load_xsl_experts cuts them (tile columns of the PERMUTED gate_up / tile rows of down, tp = group), no host
+        # packing: slot i on chip r = slice r % group of expert e_loc (r // group) + i, the host path's layout
+        from models.autoports.zai_org_glm_5_3_flash.tt.fused_decoder import _xsl_host_tensor, _xsl_slices_bytes
+
+        cs = list(range(group))
+        gu_cfg = dn_cfg = None
+        gu_slots, dn_slots = [], []
+        for i in range(e_loc):
+            gus, dns = [], []
+            for g in range(ngroups):  # ranks r = g * group + c in row-major order
+                e = e_loc * g + i
+                ge = source._entry(layer, f"mlp.experts.{e}.gate_up_proj")
+                de = source._entry(layer, f"mlp.experts.{e}.down_proj")
+                assert ge["dtype"] == "bfloat4_b" and de["dtype"] == "bfloat4_b", (ge["dtype"], de["dtype"])
+                src = os.path.join(source.cache_dir, ge["path"])
+                dst = os.path.join(cache_dir, f"L{layer:02d}", f"{e:03d}.gate_up_proj.{ge['sha256'][:16]}.tensorbin")
+                if not os.path.exists(dst):  # the permuted copy is kept (the 32-chip replica reads it every run)
+                    _permuted_gate_up_file(src, dst, ge["shape"], 576)
+                gshape = (ge["shape"][0], ge["shape"][1] // group)
+                dshape = (de["shape"][0] // group, de["shape"][1])
+                if gu_cfg is None:
+                    gu_cfg, dn_cfg = _nd_dram(gshape[0], 64), _nd_dram(dshape[0], 64)
+                gb = _xsl_slices_bytes(dst, ge["shape"], group, cs, "gate_up")
+                db = _xsl_slices_bytes(os.path.join(source.cache_dir, de["path"]), de["shape"], group, cs, "down")
+                for c in cs:
+                    gus.append(_xsl_host_tensor(gb[c], gshape, f"L{layer}e{e}g{c}"))
+                    dns.append(_xsl_host_tensor(db[c], dshape, f"L{layer}e{e}d{c}"))
+            gu_slots.append(ttnn.to_device(ttnn.from_host_shards(gus, mesh.shape), mesh, memory_config=gu_cfg))
+            dn_slots.append(ttnn.to_device(ttnn.from_host_shards(dns, mesh.shape), mesh, memory_config=dn_cfg))
+        return EpList(gu_slots, num_experts), EpList(dn_slots, num_experts)
+    gu_cfg = dn_cfg = None
+    gu_slots, dn_slots = [], []
+    for i in range(e_loc):
+        gus, dns = [], []
+        for r in range(ndev):
+            e = e_loc * r + i
+            ge = source._entry(layer, f"mlp.experts.{e}.gate_up_proj")
+            de = source._entry(layer, f"mlp.experts.{e}.down_proj")
+            assert ge["dtype"] == "bfloat4_b" and de["dtype"] == "bfloat4_b", (ge["dtype"], de["dtype"])
+            src = os.path.join(source.cache_dir, ge["path"])
+            dst = os.path.join(cache_dir, f"L{layer:02d}", f"{e:03d}.gate_up_proj.{ge['sha256'][:16]}.tensorbin")
+            transient = not os.path.exists(dst) and not keep
+            if transient:  # permuted into a temporary file, loaded, removed (one expert's ~9 MB at a time; under the
+                # coordinator's scratch area for generated caches, 06:31Z rule)
+                tmp = os.environ.get("GLM53_EP_SCRATCH", "/home/alex/glm53/scratch-big/14b")
+                os.makedirs(tmp, exist_ok=True)
+                dst = os.path.join(tmp, f"ep_gate_up.{os.getpid()}.L{layer:02d}.{e:03d}.tensorbin")
+            if not os.path.exists(dst):
+                _permuted_gate_up_file(src, dst, ge["shape"], 576)
+            if gu_cfg is None:
+                gu_cfg = _nd_dram(ge["shape"][0], ge["shape"][1] // FE_CORES)
+                dn_cfg = _nd_dram(de["shape"][0], de["shape"][1] // FE_CORES)
+            gus.append(ttnn.load_tensor(dst))
+            if transient:
+                os.remove(dst)
+            dns.append(ttnn.load_tensor(os.path.join(source.cache_dir, de["path"])))
+        gu_slots.append(ttnn.to_device(ttnn.from_host_shards(gus, mesh.shape), mesh, memory_config=gu_cfg))
+        dn_slots.append(ttnn.to_device(ttnn.from_host_shards(dns, mesh.shape), mesh, memory_config=dn_cfg))
+    return EpList(gu_slots, num_experts), EpList(dn_slots, num_experts)
+
+
+def build_moe_ep(mesh, cfg, source, layer: int, ocfg, routed: bool = True):
+    """tt/tp8_sparse.build_moe with EP-sharded routed experts (router, router tail and shared expert replicated as
+    there). routed=False: no routed-expert weights (the layer brings its own: Stage 7a's sliced XSL layout,
+    GLM53_TP_XSL_SLICED — the EP copy would double the expert bytes per chip)."""
+    from models.autoports.zai_org_glm_5_3_flash.tt.fused_decoder import FusedMoE, FusedRouter, FusedSwiGLU
+    from models.autoports.zai_org_glm_5_3_flash.tt.optimized_decoder import (
+        OptimizedMoE,
+        OptimizedRouter,
+        OptimizedSwiGLU,
+        _check_expert_weights,
+        _upgrade,
+    )
+
+    dev = lambda name: source.device(layer, name, mesh)  # noqa: E731
+    host = lambda name: source.host(layer, name)  # noqa: E731
+    shared = FusedSwiGLU(mesh, dev("mlp.shared_experts.gate_proj.weight"), dev("mlp.shared_experts.up_proj.weight"),
+                         dev("mlp.shared_experts.down_proj.weight"), limit=cfg.swiglu_limit)  # fmt: skip
+    shared.fcfg = ocfg
+    router = FusedRouter(mesh, dev("mlp.gate.weight"), host("mlp.gate.e_score_correction_bias"),
+                         num_experts=cfg.n_routed_experts, top_k=cfg.num_experts_per_tok, fcfg=ocfg)  # fmt: skip
+    if routed:
+        gate_up, down = load_ep_experts(source, layer, cfg.n_routed_experts, mesh, ocfg.fused_experts_cache_dir)
+    else:
+        gate_up, down = [None] * cfg.n_routed_experts, [None] * cfg.n_routed_experts
+    moe = FusedMoE(mesh, router, gate_up, down, shared, intermediate=cfg.moe_intermediate_size, hidden=cfg.hidden_size,
+                   limit=cfg.swiglu_limit, scaling=cfg.routed_scaling_factor, cfg=ocfg)  # fmt: skip
+    if routed and not xsl_group(int(mesh.get_num_devices())):
+        _check_expert_weights(source, layer, moe.gate_up, moe.down)  # shape / dtype per expert id (its slot's spec)
+    elif routed and hasattr(source, "_entry"):  # the group layout's slots hold 1 / group slices (checked here)
+        g = xsl_group(int(mesh.get_num_devices()))
+        for e in range(cfg.n_routed_experts):
+            ge = source._entry(layer, f"mlp.experts.{e}.gate_up_proj")
+            de = source._entry(layer, f"mlp.experts.{e}.down_proj")
+            want = ([ge["shape"][0], ge["shape"][1] // g], [de["shape"][0] // g, de["shape"][1]])
+            got = (list(moe.gate_up[e].shape), list(moe.down[e].shape))
+            if got != want:
+                raise ValueError(f"layer {layer} expert {e}: slot shapes {got} != group slices {want}")
+    _upgrade(moe.shared, OptimizedSwiGLU, ocfg, "shared")
+    _upgrade(moe.router, OptimizedRouter, ocfg)
+    moe.__class__ = OptimizedMoE
+    moe.ep_sharded = True
+    return moe
