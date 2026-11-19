@@ -33,12 +33,13 @@ def _docstring_shard_layouts(op):
         return [pytest.param(reason, id="docstring-unreadable")]
 
 
-def _assert_unsqueeze_to_4D_view(input_tensor):
+def _assert_unsqueeze_to_4D_view(input_tensor, read=ttnn.to_torch):
     """Checks that ttnn.unsqueeze_to_4D gives a view of ``input_tensor`` with its dtype, layout and memory
-    configuration, holding its values with 1s added in front of its shape up to rank 4."""
-    output = ttnn.unsqueeze_to_4D(input_tensor)
-    expected = ttnn.to_torch(input_tensor)
+    configuration, holding its values, read before the call, with 1s added in front of its shape up to rank 4.
+    ``read`` brings a tensor's values to host."""
+    expected = read(input_tensor)
     expected = expected.reshape((1,) * (4 - expected.dim()) + tuple(expected.shape))
+    output = ttnn.unsqueeze_to_4D(input_tensor)
 
     assert output.dtype == input_tensor.dtype
     assert output.layout == input_tensor.layout
@@ -46,7 +47,7 @@ def _assert_unsqueeze_to_4D_view(input_tensor):
     assert output.memory_config().buffer_type == input_tensor.memory_config().buffer_type
     assert output.memory_config().shard_spec == input_tensor.memory_config().shard_spec
     assert output.buffer_address() == input_tensor.buffer_address()
-    assert_exact(expected, ttnn.to_torch(output))
+    assert_exact(expected, read(output))
 
 
 @pytest.mark.parametrize("buffer_type", docstring_interleaved_buffer_type_params(ttnn.unsqueeze_to_4D))
