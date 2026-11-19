@@ -45,6 +45,17 @@ def _compute_config(mesh):
     )
 
 
+def _unified_compute_config(mesh):
+    """unified_routed_expert_moe runs LoFi with a bf16 DEST whatever it is given, and rejects any other config."""
+    return ttnn.init_device_compute_kernel_config(
+        mesh.arch(),
+        math_fidelity=ttnn.MathFidelity.LoFi,
+        math_approx_mode=False,
+        fp32_dest_acc_en=False,
+        packer_l1_acc=False,
+    )
+
+
 class TtExperts:
     # read when they run, not when built: a sweep can change them between runs of one loaded model (PERF.md)
     @property
@@ -253,7 +264,7 @@ class TtExperts:
             self.ups,
             self.downs,
             max_dispatched_tokens_per_expert=self.max_per_expert,
-            compute_kernel_config=self.cfg,
+            compute_kernel_config=_unified_compute_config(self.mesh),
             activation=ttnn.RoutedExpertActivation.Silu,
         )
         ttnn.deallocate(buf)
