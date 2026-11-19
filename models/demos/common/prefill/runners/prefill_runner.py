@@ -1410,9 +1410,10 @@ def _serve_request(
         if stage == master_stage:
             _unlink_stale_shm(ack_shm_name)
         router = LayerCompletionRouter(
-            rank=stage,
-            world_size=num_stages,
-            master_rank=master_stage,
+            rank=rank,
+            world_size=layout.num_ranks,
+            master_rank=master_rank,
+            participant_ranks=layout.leader_ranks(),
             ring_shm_name=ring_shm_name,
             scheduler_shm_name=ack_shm_name if stage == master_stage else "",
             completions_per_chunk=ack_layout.completions_per_chunk,
