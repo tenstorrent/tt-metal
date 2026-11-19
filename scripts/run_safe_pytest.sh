@@ -33,10 +33,9 @@
 #   --profile        Run under the Tracy device profiler (python -m tracy -r). Emits
 #                    a per-op CSV (generated/profiler/reports/<ts>/ops_perf_results*.csv)
 #                    and prints its path as "SAFE_PYTEST: PROFILER CSV: <path>" next to
-#                    the result line. Requires a Tracy-enabled build. NOTE: the tracy
-#                    wrapper masks pytest's exit code, so a profiled run is reported
-#                    PASS as long as profiling completed, regardless of the underlying
-#                    test result. Hangs are still detected and still reset the device.
+#                    the result line, on PASS and on FAIL. Requires a Tracy-enabled build.
+#                    The result is pytest's own (tracy --propagate-exit-code): a failing or
+#                    erroring test is reported FAIL even though profiling completed.
 #   --sim-workers N  Sim only: pytest-xdist worker count. Each worker dlopens
 #                    its own libttsim (no shared device state). Default is 16.
 #                    Pass 1 to serialize (e.g. when DPRINT ordering matters or
@@ -644,9 +643,10 @@ emit_missing_ttexalens_warning() {
 #
 # --profile: wrap pytest in the Tracy profiler. `python -m tracy -r` runs pytest
 #   as a child and post-processes results into ops_perf_results*.csv on pass or
-#   fail. Its exit-code masking is handled at the result check below.
+#   fail. Without --propagate-exit-code tracy exits 0 whatever pytest returned, and a
+#   failed or erroring test would be reported PASS.
 if [[ "$PROFILE_MODE" == true ]]; then
-    PYTEST_CMD=(python -m tracy -r -m pytest)
+    PYTEST_CMD=(python -m tracy -r --propagate-exit-code -m pytest)
 else
     PYTEST_CMD=(pytest)
 fi
@@ -756,9 +756,9 @@ CHILD_PID=
 echo "========================================"
 
 # --- Handle result ---
-# The triage-log guard matters in profile mode: the tracy wrapper exits 0 even
-# when the underlying test failed OR hung, so without it a hang would be reported
-# PASS and skip the device reset. An empty triage log means no hang fired.
+# The triage-log guard keeps a hang from being reported PASS (and skipping the device
+# reset) whenever the exit code alone says 0 -- e.g. a tracy run without
+# --propagate-exit-code. An empty triage log means no hang fired.
 # Precompile attribution: the plugin's RESULT line (one line of key=value fields) lives in the
 # session's stdout. Best-effort, for the device-timing record only; a missing line degrades the
 # reason, never the run.
@@ -895,6 +895,8 @@ fi
 _clear_dirty_flag
 rm -f "$TRIAGE_LOG"
 rm -f "$PYTEST_STDOUT_LOG"
+# A failed profiled run still has its trace and report; say where, and that it is from a failing run.
+emit_profiler_csv
 # Note: $EXIT_CODE here is pytest's internal exit code (e.g. 1 = test failure,
 # 2 = collection error / user interrupt). The wrapper's own exit code is
 # always 1 for this branch — exit 2 is reserved for real dispatch-timeout

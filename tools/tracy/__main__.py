@@ -168,6 +168,14 @@ def main():
         default=False,
     )
     parser.add_option(
+        "--propagate-exit-code",
+        dest="propagate_exit_code",
+        action="store_true",
+        help="Post-process as usual, then exit with the test command's exit code (128+N if it died on "
+        "signal N) instead of 0. Unlike --check-exit-code, a failing test still produces its trace and report.",
+        default=False,
+    )
+    parser.add_option(
         "-a",
         "--device-analysis-types",
         dest="device_analysis_types",
@@ -399,6 +407,8 @@ def main():
             # its own group mask) and merges the per-pass device logs. Single pass runs once as before.
             pass_bitfields = getattr(options, "perf_counter_pass_bitfields", None)
             proc_holder = {"p": None}
+            # First nonzero workload exit code across passes, for --propagate-exit-code.
+            workload_rc = {"rc": 0}
 
             def signal_handler(sig, frame):
                 if proc_holder["p"] is not None:
@@ -425,6 +435,10 @@ def main():
                     except ProcessLookupError:
                         pass
                     raise
+                if proc.returncode != 0 and workload_rc["rc"] == 0:
+                    # shell=True: a signal death of the workload is already 128+N; a negative code
+                    # means the shell itself was killed by signal -rc.
+                    workload_rc["rc"] = proc.returncode if proc.returncode > 0 else 128 - proc.returncode
                 if options.check_exit_code and proc.returncode != 0:
                     logger.error(f"{testCommand} exited with a non-zero return code")
                     sys.exit(4)
@@ -523,6 +537,9 @@ def main():
                     "Run with -v to see capture output."
                 )
                 sys.exit(1)
+            if options.propagate_exit_code and workload_rc["rc"] != 0:
+                logger.error(f"{testCommand} exited with code {workload_rc['rc']}; propagating it")
+                sys.exit(workload_rc["rc"])
 
     else:
         parser.print_usage()
