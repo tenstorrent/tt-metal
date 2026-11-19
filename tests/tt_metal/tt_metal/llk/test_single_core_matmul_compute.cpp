@@ -958,12 +958,9 @@ bool blocked_matmul(const std::shared_ptr<distributed::MeshDevice>& mesh_device,
 
     // For BF16 output: per-element close (tight tolerances are realistic).
     // For FP8 output: per-element checks are not meaningful — FP8 quantization compounds
-    // across blocks, and PACKER_L1_ACC re-quantizes every block-output through Fp8 storage.
-    // PCC is the structural-correctness backstop; thresholds reflect realistic FP8 fidelity loss
-    // (lower for L1Acc, which round-trips through Fp8 L1 every block instead of through Float32 DEST).
+    // across blocks. PCC is the structural-correctness backstop.
     if (out_fmt == tt::DataFormat::Fp8_e4m3) {
-        const double min_pcc = cfg.packer_l1_acc ? 0.85 : 0.95;
-        pass &= check_pcc(dest_floats, golden_floats, min_pcc);
+        pass &= check_pcc(dest_floats, golden_floats, /*min_pcc=*/0.95);
     } else {
         const float rtol = 0.05f;
         const float atol = 0.05f + 0.05f * static_cast<float>(K * num_blocks);
@@ -1305,7 +1302,9 @@ TEST_F(LLKQuasarMeshDeviceSingleCardFixture, TensixTestSingleCoreSingleBlockComp
 
 // FP8 variants of the multi-block matmul. Blackhole-gated because Fp8_e4m3 only exists on BH
 // and the JIT-time assert in ComputeKernel::set_build_options requires fp32_dest_acc_en=true
-// for any FP8 path. Mirrors the BF16 SpillReload / L1Acc tests at M=K=N=2, num_blocks=4.
+// for any FP8 path. Mirrors the BF16 SpillReload test at M=K=N=2, num_blocks=4.
+// No FP8 L1Acc variant: packer L1 accumulation does not add FP8 datums (only Float32/Float16/
+// Float16_b/Int32, plus Int8/UInt8 on BH); other formats are added as packed 4-byte FP32 words.
 TEST_F(LLKBlackholeSingleCardFixture, TensixTestSingleCoreMultiBlockSpillReloadComputeMatmulFp8e4m3) {
     unit_tests::compute::matmul::BlockedMatmulConfig config{
         .M = 2,
@@ -1313,19 +1312,6 @@ TEST_F(LLKBlackholeSingleCardFixture, TensixTestSingleCoreMultiBlockSpillReloadC
         .N = 2,
         .num_blocks = 4,
         .packer_l1_acc = false,
-        .in0_fmt = tt::DataFormat::Fp8_e4m3,
-        .in1_fmt = tt::DataFormat::Fp8_e4m3,
-        .out_fmt = tt::DataFormat::Fp8_e4m3,
-        .fp32_dest_acc_en = true};
-    ASSERT_TRUE(unit_tests::compute::matmul::blocked_matmul(this->devices_.at(0), config));
-}
-TEST_F(LLKBlackholeSingleCardFixture, TensixTestSingleCoreMultiBlockL1AccComputeMatmulFp8e4m3) {
-    unit_tests::compute::matmul::BlockedMatmulConfig config{
-        .M = 2,
-        .K = 2,
-        .N = 2,
-        .num_blocks = 4,
-        .packer_l1_acc = true,
         .in0_fmt = tt::DataFormat::Fp8_e4m3,
         .in1_fmt = tt::DataFormat::Fp8_e4m3,
         .out_fmt = tt::DataFormat::Fp8_e4m3,
