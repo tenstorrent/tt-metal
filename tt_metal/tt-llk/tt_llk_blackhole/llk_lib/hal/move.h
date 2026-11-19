@@ -10,9 +10,9 @@
 #include "cfg.h"
 #include "ckernel.h"
 #include "dev_mem_map.h"
-#include "llk_assert.h"
 #include "sync.h"
 #include "utils/gpr.h"
+#include "utils/validate.h"
 
 namespace hal::move
 {
@@ -779,181 +779,155 @@ constexpr std::uint32_t encode_xmov_launch()
     return encode_instruction(XmovOpcode, 0u);
 }
 
-constexpr void reject_invalid_constant(const bool valid)
+inline constexpr __attribute__((always_inline)) void validate(const Transfer<SrcA, Dst> transfer)
 {
-    if (__builtin_is_constant_evaluated() && !valid)
-    {
-        __builtin_trap();
-    }
-}
-
-#ifdef ENABLE_LLK_ASSERT
-inline __attribute__((always_inline)) void assert_valid_relative_row(const std::int32_t offset)
-{
-    LLK_ASSERT(offset >= -512 && offset < 512, "counter-relative row offset must fit ten signed bits");
-}
-
-inline __attribute__((always_inline)) void assert_valid(const Transfer<SrcA, Dst> transfer)
-{
-    LLK_ASSERT(transfer.source_row < MatrixSourceRows, "MOVA2D source row must be in [0, 63]");
-    LLK_ASSERT(is_valid(transfer.destination_addressing), "MOVA2D destination addressing must be Absolute or CounterRelative");
-    LLK_ASSERT(transfer.destination_row < MatrixDestinationRows, "MOVA2D destination row field must fit ten bits");
-    LLK_ASSERT(is_canonical(transfer.number_of_rows), "MOVA2D row count must be 1, 4, 8, or a positive whole number of faces");
-    LLK_ASSERT(transfer.source_row + transfer.number_of_rows.value <= MatrixSourceRows, "MOVA2D source span must fit SrcA");
-    LLK_ASSERT(
+    hal::detail::require(transfer.source_row < MatrixSourceRows, "MOVA2D source row must be in [0, 63]");
+    hal::detail::require(is_valid(transfer.destination_addressing), "MOVA2D destination addressing must be Absolute or CounterRelative");
+    hal::detail::require(transfer.destination_row < MatrixDestinationRows, "MOVA2D destination row field must fit ten bits");
+    hal::detail::require(is_canonical(transfer.number_of_rows), "MOVA2D row count must be 1, 4, 8, or a positive whole number of faces");
+    hal::detail::require(transfer.source_row + transfer.number_of_rows.value <= MatrixSourceRows, "MOVA2D source span must fit SrcA");
+    hal::detail::require(
         transfer.destination_addressing == RowAddressing::CounterRelative || transfer.destination_row + transfer.number_of_rows.value <= MatrixDestinationRows,
         "MOVA2D absolute destination span must fit Dst");
-    LLK_ASSERT(operation_count(transfer) <= MaxMatrixTransferInstructions, "MOVA2D transfers may expand to at most 8 native TT instructions");
-    LLK_ASSERT(transfer.address_mode < AddressModeCount, "Blackhole MOVA2D address mode must be in [0, 7]");
-    LLK_ASSERT(
+    hal::detail::require(operation_count(transfer) <= MaxMatrixTransferInstructions, "MOVA2D transfers may expand to at most 8 native TT instructions");
+    hal::detail::require(transfer.address_mode < AddressModeCount, "Blackhole MOVA2D address mode must be in [0, 7]");
+    hal::detail::require(
         transfer.final_address_mode == SameAddressMode || (transfer.final_address_mode < AddressModeCount && operation_count(transfer) > 1u),
         "MOVA2D final address mode must be reused or select [0, 7] for a multi-instruction transfer");
-    LLK_ASSERT(is_valid(transfer.source_validity), "MOVA2D source validity must be Wait or Ignore");
+    hal::detail::require(is_valid(transfer.source_validity), "MOVA2D source validity must be Wait or Ignore");
 }
 
-inline __attribute__((always_inline)) void assert_valid(const Transfer<SrcB, Dst> transfer)
+inline constexpr __attribute__((always_inline)) void validate(const Transfer<SrcB, Dst> transfer)
 {
     const std::uint32_t source_span = broadcasts_rows(transfer.broadcast) ? 1u : transfer.number_of_rows.value;
-    LLK_ASSERT(transfer.source_row < MatrixSourceRows, "MOVB2D source row must be in [0, 63]");
-    LLK_ASSERT(is_valid(transfer.destination_addressing), "MOVB2D destination addressing must be Absolute or CounterRelative");
-    LLK_ASSERT(transfer.destination_row < MatrixDestinationRows, "MOVB2D destination row field must fit ten bits");
-    LLK_ASSERT(is_canonical(transfer.number_of_rows), "MOVB2D row count must be 1, 4, 8, or a positive whole number of faces");
-    LLK_ASSERT(transfer.source_row + source_span <= MatrixSourceRows, "MOVB2D source span must fit SrcB");
-    LLK_ASSERT(
+    hal::detail::require(transfer.source_row < MatrixSourceRows, "MOVB2D source row must be in [0, 63]");
+    hal::detail::require(is_valid(transfer.destination_addressing), "MOVB2D destination addressing must be Absolute or CounterRelative");
+    hal::detail::require(transfer.destination_row < MatrixDestinationRows, "MOVB2D destination row field must fit ten bits");
+    hal::detail::require(is_canonical(transfer.number_of_rows), "MOVB2D row count must be 1, 4, 8, or a positive whole number of faces");
+    hal::detail::require(transfer.source_row + source_span <= MatrixSourceRows, "MOVB2D source span must fit SrcB");
+    hal::detail::require(
         transfer.destination_addressing == RowAddressing::CounterRelative || transfer.destination_row + transfer.number_of_rows.value <= MatrixDestinationRows,
         "MOVB2D absolute destination span must fit Dst");
-    LLK_ASSERT(is_valid(transfer.broadcast), "MOVB2D broadcast must be None, Column0, Row, or Scalar");
-    LLK_ASSERT(transfer.number_of_rows.value != 1u || transfer.broadcast != Broadcast::Row, "one-row MOVB2D cannot request a no-op row broadcast");
-    LLK_ASSERT(operation_count(transfer) <= MaxMatrixTransferInstructions, "MOVB2D transfers may expand to at most 8 native TT instructions");
-    LLK_ASSERT(transfer.address_mode < AddressModeCount, "Blackhole MOVB2D address mode must be in [0, 7]");
-    LLK_ASSERT(
+    hal::detail::require(is_valid(transfer.broadcast), "MOVB2D broadcast must be None, Column0, Row, or Scalar");
+    hal::detail::require(transfer.number_of_rows.value != 1u || transfer.broadcast != Broadcast::Row, "one-row MOVB2D cannot request a no-op row broadcast");
+    hal::detail::require(operation_count(transfer) <= MaxMatrixTransferInstructions, "MOVB2D transfers may expand to at most 8 native TT instructions");
+    hal::detail::require(transfer.address_mode < AddressModeCount, "Blackhole MOVB2D address mode must be in [0, 7]");
+    hal::detail::require(
         transfer.final_address_mode == SameAddressMode || (transfer.final_address_mode < AddressModeCount && operation_count(transfer) > 1u),
         "MOVB2D final address mode must be reused or select [0, 7] for a multi-instruction transfer");
-    LLK_ASSERT(is_valid(transfer.source_validity), "MOVB2D source validity must be Wait or Ignore");
+    hal::detail::require(is_valid(transfer.source_validity), "MOVB2D source validity must be Wait or Ignore");
 }
 
-inline __attribute__((always_inline)) void assert_valid(const Transfer<Dst, SrcB> transfer)
+inline constexpr __attribute__((always_inline)) void validate(const Transfer<Dst, SrcB> transfer)
 {
-    LLK_ASSERT(is_valid(transfer.source_addressing), "MOVD2B source addressing must be Absolute or CounterRelative");
-    LLK_ASSERT(transfer.source_row < MatrixDestinationRows, "MOVD2B source row field must fit ten bits");
-    LLK_ASSERT(transfer.destination_row < MatrixSourceRows, "MOVD2B destination row must be in [0, 63]");
-    LLK_ASSERT(is_canonical(transfer.number_of_rows), "MOVD2B row count must be 1, 4, 8, or a positive whole number of faces");
-    LLK_ASSERT(
+    hal::detail::require(is_valid(transfer.source_addressing), "MOVD2B source addressing must be Absolute or CounterRelative");
+    hal::detail::require(transfer.source_row < MatrixDestinationRows, "MOVD2B source row field must fit ten bits");
+    hal::detail::require(transfer.destination_row < MatrixSourceRows, "MOVD2B destination row must be in [0, 63]");
+    hal::detail::require(is_canonical(transfer.number_of_rows), "MOVD2B row count must be 1, 4, 8, or a positive whole number of faces");
+    hal::detail::require(
         transfer.source_addressing == RowAddressing::CounterRelative || transfer.source_row + transfer.number_of_rows.value <= MatrixDestinationRows,
         "MOVD2B absolute source span must fit Dst");
-    LLK_ASSERT(transfer.destination_row + transfer.number_of_rows.value <= MatrixSourceRows, "MOVD2B destination span must fit SrcB");
-    LLK_ASSERT(operation_count(transfer) <= MaxMatrixTransferInstructions, "MOVD2B transfers may expand to at most 8 native TT instructions");
-    LLK_ASSERT(transfer.address_mode < AddressModeCount, "Blackhole MOVD2B address mode must be in [0, 7]");
-    LLK_ASSERT(
+    hal::detail::require(transfer.destination_row + transfer.number_of_rows.value <= MatrixSourceRows, "MOVD2B destination span must fit SrcB");
+    hal::detail::require(operation_count(transfer) <= MaxMatrixTransferInstructions, "MOVD2B transfers may expand to at most 8 native TT instructions");
+    hal::detail::require(transfer.address_mode < AddressModeCount, "Blackhole MOVD2B address mode must be in [0, 7]");
+    hal::detail::require(
         transfer.final_address_mode == SameAddressMode || (transfer.final_address_mode < AddressModeCount && operation_count(transfer) > 1u),
         "MOVD2B final address mode must be reused or select [0, 7] for a multi-instruction transfer");
 }
 
-inline __attribute__((always_inline)) void assert_valid_gpr(const GprRef gpr, [[maybe_unused]] const char* message)
+inline constexpr __attribute__((always_inline)) void validate_address(const IndirectL1Address address)
 {
-    LLK_ASSERT(is_valid(gpr), message);
+    hal::detail::require(is_valid(address.base), "indirect L1 base GPR must be in [0, 63]");
+    hal::detail::require(is_valid(address.offset.gpr), "indirect L1 offset GPR must be in [0, 63]");
+    hal::detail::require(is_valid(address.offset.half), "indirect L1 offset half must be Low or High");
+    hal::detail::require(is_valid(address.offset_increment), "indirect L1 offset increment must be None, Bytes2, Bytes4, or Bytes16");
 }
 
-inline __attribute__((always_inline)) void assert_valid_address(const IndirectL1Address address)
+inline constexpr __attribute__((always_inline)) void validate_address(const IndirectSrcAddress address)
 {
-    assert_valid_gpr(address.base, "indirect L1 base GPR must be in [0, 63]");
-    assert_valid_gpr(address.offset.gpr, "indirect L1 offset GPR must be in [0, 63]");
-    LLK_ASSERT(is_valid(address.offset.half), "indirect L1 offset half must be Low or High");
-    LLK_ASSERT(is_valid(address.offset_increment), "indirect L1 offset increment must be None, Bytes2, Bytes4, or Bytes16");
+    hal::detail::require(is_valid(address.base), "indirect Src base GPR must be in [0, 63]");
+    hal::detail::require(is_valid(address.offset.gpr), "indirect Src offset GPR must be in [0, 63]");
+    hal::detail::require(is_valid(address.offset.half), "indirect Src offset half must be Low or High");
+    hal::detail::require(is_valid(address.offset_increment), "indirect Src offset increment must be None, Bytes2, Bytes4, or Bytes16");
 }
 
-inline __attribute__((always_inline)) void assert_valid_address(const IndirectSrcAddress address)
+inline constexpr __attribute__((always_inline)) void validate_scalar_common(const ScalarSize size, const Completion completion)
 {
-    assert_valid_gpr(address.base, "indirect Src base GPR must be in [0, 63]");
-    assert_valid_gpr(address.offset.gpr, "indirect Src offset GPR must be in [0, 63]");
-    LLK_ASSERT(is_valid(address.offset.half), "indirect Src offset half must be Low or High");
-    LLK_ASSERT(is_valid(address.offset_increment), "indirect Src offset increment must be None, Bytes2, Bytes4, or Bytes16");
+    hal::detail::require(is_valid(size), "scalar transfer size must be Bytes16, Bytes4, Bytes2, or Bytes1");
+    hal::detail::require(is_valid(completion), "scalar transfer completion must be IssueOnly or Wait");
 }
 
-inline __attribute__((always_inline)) void assert_valid_scalar_common(const ScalarSize size, const Completion completion)
+inline constexpr __attribute__((always_inline)) void validate(const Transfer<L1, Gpr> transfer)
 {
-    LLK_ASSERT(is_valid(size), "scalar transfer size must be Bytes16, Bytes4, Bytes2, or Bytes1");
-    LLK_ASSERT(is_valid(completion), "scalar transfer completion must be IssueOnly or Wait");
+    validate_address(transfer.source);
+    hal::detail::require(is_valid(transfer.destination), "LOADIND destination GPR must be in [0, 63]");
+    validate_scalar_common(transfer.size, transfer.completion);
+    hal::detail::require(transfer.size != ScalarSize::Bytes16 || transfer.destination.index % 4u == 0u, "16-byte LOADIND destination GPR must be four-aligned");
 }
 
-inline __attribute__((always_inline)) void assert_valid(const Transfer<L1, Gpr> transfer)
+inline constexpr __attribute__((always_inline)) void validate(const Transfer<Gpr, L1> transfer)
 {
-    assert_valid_address(transfer.source);
-    assert_valid_gpr(transfer.destination, "LOADIND destination GPR must be in [0, 63]");
-    assert_valid_scalar_common(transfer.size, transfer.completion);
-    LLK_ASSERT(transfer.size != ScalarSize::Bytes16 || transfer.destination.index % 4u == 0u, "16-byte LOADIND destination GPR must be four-aligned");
+    hal::detail::require(is_valid(transfer.source), "STOREIND source GPR must be in [0, 63]");
+    validate_address(transfer.destination);
+    validate_scalar_common(transfer.size, transfer.completion);
+    hal::detail::require(transfer.size != ScalarSize::Bytes16 || transfer.source.index % 4u == 0u, "16-byte STOREIND source GPR must be four-aligned");
 }
 
-inline __attribute__((always_inline)) void assert_valid(const Transfer<Gpr, L1> transfer)
+inline constexpr __attribute__((always_inline)) void validate(const Transfer<Gpr, SrcA> transfer)
 {
-    assert_valid_gpr(transfer.source, "STOREIND source GPR must be in [0, 63]");
-    assert_valid_address(transfer.destination);
-    assert_valid_scalar_common(transfer.size, transfer.completion);
-    LLK_ASSERT(transfer.size != ScalarSize::Bytes16 || transfer.source.index % 4u == 0u, "16-byte STOREIND source GPR must be four-aligned");
+    hal::detail::require(is_valid(transfer.source), "STOREIND-to-SrcA source GPR must be in [0, 63]");
+    hal::detail::require(transfer.source.index % 4u == 0u, "STOREIND-to-SrcA source GPR must be four-aligned");
+    validate_address(transfer.destination);
 }
 
-inline __attribute__((always_inline)) void assert_valid(const Transfer<Gpr, SrcA> transfer)
+inline constexpr __attribute__((always_inline)) void validate(const Transfer<Gpr, SrcB> transfer)
 {
-    assert_valid_gpr(transfer.source, "STOREIND-to-SrcA source GPR must be in [0, 63]");
-    LLK_ASSERT(transfer.source.index % 4u == 0u, "STOREIND-to-SrcA source GPR must be four-aligned");
-    assert_valid_address(transfer.destination);
+    hal::detail::require(is_valid(transfer.source), "STOREIND-to-SrcB source GPR must be in [0, 63]");
+    hal::detail::require(transfer.source.index % 4u == 0u, "STOREIND-to-SrcB source GPR must be four-aligned");
+    validate_address(transfer.destination);
 }
 
-inline __attribute__((always_inline)) void assert_valid(const Transfer<Gpr, SrcB> transfer)
+inline constexpr __attribute__((always_inline)) void validate_mmio_address(const MmioAddress address)
 {
-    assert_valid_gpr(transfer.source, "STOREIND-to-SrcB source GPR must be in [0, 63]");
-    LLK_ASSERT(transfer.source.index % 4u == 0u, "STOREIND-to-SrcB source GPR must be four-aligned");
-    assert_valid_address(transfer.destination);
-}
-
-inline __attribute__((always_inline)) void assert_valid_mmio_address(const MmioAddress address)
-{
-    LLK_ASSERT(is_valid(address.addressing), "MMIO addressing must be Immediate or Indirect");
+    hal::detail::require(is_valid(address.addressing), "MMIO addressing must be Immediate or Indirect");
     if (address.addressing == MmioAddressing::Immediate)
     {
-        LLK_ASSERT(is_valid_immediate_mmio_address(address.byte_address), "immediate MMIO address must be aligned and in [0xffb11000, 0xffbffffc]");
+        hal::detail::require(is_valid_immediate_mmio_address(address.byte_address), "immediate MMIO address must be aligned and in [0xffb11000, 0xffbffffc]");
     }
     else
     {
-        assert_valid_gpr(address.base, "indirect MMIO base GPR must be in [0, 63]");
-        assert_valid_gpr(address.offset.gpr, "indirect MMIO offset GPR must be in [0, 63]");
-        LLK_ASSERT(is_valid(address.offset.half), "indirect MMIO offset half must be Low or High");
-        LLK_ASSERT(is_valid(address.offset_increment), "indirect MMIO offset increment must be None, Bytes2, Bytes4, or Bytes16");
+        hal::detail::require(is_valid(address.base), "indirect MMIO base GPR must be in [0, 63]");
+        hal::detail::require(is_valid(address.offset.gpr), "indirect MMIO offset GPR must be in [0, 63]");
+        hal::detail::require(is_valid(address.offset.half), "indirect MMIO offset half must be Low or High");
+        hal::detail::require(is_valid(address.offset_increment), "indirect MMIO offset increment must be None, Bytes2, Bytes4, or Bytes16");
     }
 }
 
-inline __attribute__((always_inline)) void assert_valid(const Transfer<Gpr, Mmio> transfer)
+inline constexpr __attribute__((always_inline)) void validate(const Transfer<Gpr, Mmio> transfer)
 {
-    assert_valid_gpr(transfer.source, "MMIO-write source GPR must be in [0, 63]");
-    assert_valid_mmio_address(transfer.destination);
-    LLK_ASSERT(is_valid(transfer.completion), "MMIO-write completion must be IssueOnly or Wait");
+    hal::detail::require(is_valid(transfer.source), "MMIO-write source GPR must be in [0, 63]");
+    validate_mmio_address(transfer.destination);
+    hal::detail::require(is_valid(transfer.completion), "MMIO-write completion must be IssueOnly or Wait");
 }
 
-inline __attribute__((always_inline)) void assert_valid(const Transfer<Mmio, Gpr> transfer)
+inline constexpr __attribute__((always_inline)) void validate(const Transfer<Mmio, Gpr> transfer)
 {
-    LLK_ASSERT(transfer.source.addressing == MmioAddressing::Immediate, "LOADREG supports immediate MMIO addressing only");
-    LLK_ASSERT(is_valid_immediate_mmio_address(transfer.source.byte_address), "LOADREG address must be aligned and in [0xffb11000, 0xffbffffc]");
-    assert_valid_gpr(transfer.destination, "LOADREG destination GPR must be in [0, 63]");
-    LLK_ASSERT(is_valid(transfer.completion), "LOADREG completion must be IssueOnly or Wait");
+    hal::detail::require(transfer.source.addressing == MmioAddressing::Immediate, "LOADREG supports immediate MMIO addressing only");
+    hal::detail::require(is_valid_immediate_mmio_address(transfer.source.byte_address), "LOADREG address must be aligned and in [0xffb11000, 0xffbffffc]");
+    hal::detail::require(is_valid(transfer.destination), "LOADREG destination GPR must be in [0, 63]");
+    hal::detail::require(is_valid(transfer.completion), "LOADREG completion must be IssueOnly or Wait");
 }
 
-inline __attribute__((always_inline)) void assert_valid(const Transfer<L1, L1> transfer)
+inline constexpr __attribute__((always_inline)) void validate(const Transfer<L1, L1> transfer)
 {
-    LLK_ASSERT(is_valid(transfer.completion), "XMOV completion must be IssueOnly or Wait");
-    LLK_ASSERT(transfer.size.value >= 1u && transfer.size.value <= 0xffffu, "XMOV size must be in [1, 65535] 16-byte blocks");
-    LLK_ASSERT(span_fits_l1(transfer.source, transfer.size), "XMOV source span must fit Blackhole L1");
-    LLK_ASSERT(span_fits_l1(transfer.destination, transfer.size), "XMOV destination span must fit Blackhole L1");
-    LLK_ASSERT(
+    hal::detail::require(is_valid(transfer.completion), "XMOV completion must be IssueOnly or Wait");
+    hal::detail::require(transfer.size.value >= 1u && transfer.size.value <= 0xffffu, "XMOV size must be in [1, 65535] 16-byte blocks");
+    hal::detail::require(span_fits_l1(transfer.source, transfer.size), "XMOV source span must fit Blackhole L1");
+    hal::detail::require(span_fits_l1(transfer.destination, transfer.size), "XMOV destination span must fit Blackhole L1");
+    hal::detail::require(
         transfer.source.block + transfer.size.value <= transfer.destination.block || transfer.destination.block + transfer.size.value <= transfer.source.block,
         "overlapping L1-to-L1 XMOV spans are not supported");
 }
-
-template <typename Operation>
-inline __attribute__((always_inline)) void assert_single_operation(const Operation transfer, [[maybe_unused]] const char* message)
-{
-    LLK_ASSERT(operation_count(transfer) == 1u, message);
-}
-#endif
 
 } // namespace detail
 
@@ -1038,128 +1012,68 @@ constexpr std::uint32_t relative_row()
 // Runtime path
 inline constexpr __attribute__((always_inline)) std::uint32_t relative_row(const std::int32_t offset)
 {
-    detail::reject_invalid_constant(offset >= -512 && offset < 512);
-#ifdef ENABLE_LLK_ASSERT
-    if (!__builtin_is_constant_evaluated())
-    {
-        detail::assert_valid_relative_row(offset);
-    }
-#endif
+    hal::detail::require(offset >= -512 && offset < 512, "counter-relative row offset must fit ten signed bits");
     return static_cast<std::uint32_t>(offset) & 0x3ffu;
 }
 
 inline constexpr __attribute__((always_inline)) std::uint32_t Transfer<SrcA, Dst>::get_operation() const
 {
-    detail::reject_invalid_constant(detail::is_valid(*this) && detail::operation_count(*this) == 1u);
-#ifdef ENABLE_LLK_ASSERT
-    if (!__builtin_is_constant_evaluated())
-    {
-        detail::assert_valid(*this);
-        detail::assert_single_operation(*this, "multi-instruction MOVA2D descriptors must use run()");
-    }
-#endif
+    detail::validate(*this);
+    hal::detail::require(detail::operation_count(*this) == 1u, "multi-instruction MOVA2D descriptors must use run()");
     return detail::encode(*this, 0u);
 }
 
 inline constexpr __attribute__((always_inline)) std::uint32_t Transfer<SrcB, Dst>::get_operation() const
 {
-    detail::reject_invalid_constant(detail::is_valid(*this) && detail::operation_count(*this) == 1u);
-#ifdef ENABLE_LLK_ASSERT
-    if (!__builtin_is_constant_evaluated())
-    {
-        detail::assert_valid(*this);
-        detail::assert_single_operation(*this, "multi-instruction MOVB2D descriptors must use run()");
-    }
-#endif
+    detail::validate(*this);
+    hal::detail::require(detail::operation_count(*this) == 1u, "multi-instruction MOVB2D descriptors must use run()");
     return detail::encode(*this, 0u);
 }
 
 inline constexpr __attribute__((always_inline)) std::uint32_t Transfer<Dst, SrcB>::get_operation() const
 {
-    detail::reject_invalid_constant(detail::is_valid(*this) && detail::operation_count(*this) == 1u);
-#ifdef ENABLE_LLK_ASSERT
-    if (!__builtin_is_constant_evaluated())
-    {
-        detail::assert_valid(*this);
-        detail::assert_single_operation(*this, "multi-instruction MOVD2B descriptors must use run()");
-    }
-#endif
+    detail::validate(*this);
+    hal::detail::require(detail::operation_count(*this) == 1u, "multi-instruction MOVD2B descriptors must use run()");
     return detail::encode(*this, 0u);
 }
 
 inline constexpr __attribute__((always_inline)) std::uint32_t Transfer<L1, Gpr>::get_operation() const
 {
-    detail::reject_invalid_constant(detail::is_valid(*this) && completion == Completion::IssueOnly);
-#ifdef ENABLE_LLK_ASSERT
-    if (!__builtin_is_constant_evaluated())
-    {
-        detail::assert_valid(*this);
-        detail::assert_single_operation(*this, "completed LOADIND descriptors must use run()");
-    }
-#endif
+    detail::validate(*this);
+    hal::detail::require(detail::operation_count(*this) == 1u, "completed LOADIND descriptors must use run()");
     return detail::encode(*this);
 }
 
 inline constexpr __attribute__((always_inline)) std::uint32_t Transfer<Gpr, L1>::get_operation() const
 {
-    detail::reject_invalid_constant(detail::is_valid(*this) && completion == Completion::IssueOnly);
-#ifdef ENABLE_LLK_ASSERT
-    if (!__builtin_is_constant_evaluated())
-    {
-        detail::assert_valid(*this);
-        detail::assert_single_operation(*this, "completed STOREIND descriptors must use run()");
-    }
-#endif
+    detail::validate(*this);
+    hal::detail::require(detail::operation_count(*this) == 1u, "completed STOREIND descriptors must use run()");
     return detail::encode(*this);
 }
 
 inline constexpr __attribute__((always_inline)) std::uint32_t Transfer<Gpr, SrcA>::get_operation() const
 {
-    detail::reject_invalid_constant(detail::is_valid(*this));
-#ifdef ENABLE_LLK_ASSERT
-    if (!__builtin_is_constant_evaluated())
-    {
-        detail::assert_valid(*this);
-    }
-#endif
+    detail::validate(*this);
     return detail::encode(*this);
 }
 
 inline constexpr __attribute__((always_inline)) std::uint32_t Transfer<Gpr, SrcB>::get_operation() const
 {
-    detail::reject_invalid_constant(detail::is_valid(*this));
-#ifdef ENABLE_LLK_ASSERT
-    if (!__builtin_is_constant_evaluated())
-    {
-        detail::assert_valid(*this);
-    }
-#endif
+    detail::validate(*this);
     return detail::encode(*this);
 }
 
 inline constexpr __attribute__((always_inline)) std::uint32_t Transfer<Gpr, Mmio>::get_operation() const
 {
-    detail::reject_invalid_constant(detail::is_valid(*this) && completion == Completion::IssueOnly);
-#ifdef ENABLE_LLK_ASSERT
-    if (!__builtin_is_constant_evaluated())
-    {
-        detail::assert_valid(*this);
-        detail::assert_single_operation(*this, "completed MMIO-write descriptors must use run()");
-    }
-#endif
+    detail::validate(*this);
+    hal::detail::require(detail::operation_count(*this) == 1u, "completed MMIO-write descriptors must use run()");
     return detail::encode(*this);
 }
 
 inline constexpr __attribute__((always_inline)) std::uint32_t Transfer<Mmio, Gpr>::get_operation() const
 {
-    detail::reject_invalid_constant(detail::is_valid(*this) && completion == Completion::IssueOnly);
-#ifdef ENABLE_LLK_ASSERT
-    if (!__builtin_is_constant_evaluated())
-    {
-        detail::assert_valid(*this);
-        detail::assert_single_operation(*this, "completed LOADREG descriptors must use run()");
-    }
-#endif
+    detail::validate(*this);
+    hal::detail::require(detail::operation_count(*this) == 1u, "completed LOADREG descriptors must use run()");
     return detail::encode(*this);
 }
 
@@ -1310,34 +1224,26 @@ inline __attribute__((always_inline)) void run_runtime_matrix(const Transfer<Sou
 
 inline __attribute__((always_inline)) void run_runtime(const Transfer<SrcA, Dst> transfer)
 {
-#ifdef ENABLE_LLK_ASSERT
-    assert_valid(transfer);
-#endif
+    validate(transfer);
     run_runtime_matrix(transfer);
 }
 
 inline __attribute__((always_inline)) void run_runtime(const Transfer<SrcB, Dst> transfer)
 {
-#ifdef ENABLE_LLK_ASSERT
-    assert_valid(transfer);
-#endif
+    validate(transfer);
     run_runtime_matrix(transfer);
 }
 
 inline __attribute__((always_inline)) void run_runtime(const Transfer<Dst, SrcB> transfer)
 {
-#ifdef ENABLE_LLK_ASSERT
-    assert_valid(transfer);
-#endif
+    validate(transfer);
     run_runtime_matrix(transfer);
 }
 
 template <typename Operation>
 inline __attribute__((always_inline)) void run_runtime_scalar(const Operation transfer)
 {
-#ifdef ENABLE_LLK_ASSERT
-    assert_valid(transfer);
-#endif
+    validate(transfer);
     TT_INSN(encode(transfer));
     if (transfer.completion == Completion::Wait)
     {
@@ -1357,17 +1263,13 @@ inline __attribute__((always_inline)) void run_runtime(const Transfer<Gpr, L1> t
 
 inline __attribute__((always_inline)) void run_runtime(const Transfer<Gpr, SrcA> transfer)
 {
-#ifdef ENABLE_LLK_ASSERT
-    assert_valid(transfer);
-#endif
+    validate(transfer);
     TT_INSN(encode(transfer));
 }
 
 inline __attribute__((always_inline)) void run_runtime(const Transfer<Gpr, SrcB> transfer)
 {
-#ifdef ENABLE_LLK_ASSERT
-    assert_valid(transfer);
-#endif
+    validate(transfer);
     TT_INSN(encode(transfer));
 }
 
@@ -1383,9 +1285,7 @@ inline __attribute__((always_inline)) void run_runtime(const Transfer<Mmio, Gpr>
 
 inline __attribute__((always_inline)) void run_runtime(const Transfer<L1, L1> transfer)
 {
-#ifdef ENABLE_LLK_ASSERT
-    assert_valid(transfer);
-#endif
+    validate(transfer);
     hal::cfg::write<hal::cfg::Access::TensixCfgUnit>(
         hal::cfg::set<hal::cfg::Thcon[hal::cfg::Reg6].Source_address, hal::cfg::Sec::S0>(transfer.source.block),
         hal::cfg::set<hal::cfg::Thcon[hal::cfg::Reg6].Destination_address, hal::cfg::Sec::S0>(transfer.destination.block),
