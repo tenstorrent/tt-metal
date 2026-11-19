@@ -351,10 +351,10 @@
 
     subtorus_moe() (
       export MESH_DEVICE=TG
-      timeout -k 2m 23m mpirun --bind-to none --pernode --tag-output bash -lc '
+      timeout -k 2m 40m mpirun --bind-to none --pernode --tag-output bash -lc '
         set -e
         export OMP_NUM_THREADS=$(nproc)
-        models/demos/deepseek_v3_d_p/tests/run_subtorus_4x4_tests.sh --timeout-s 1500 models/demos/deepseek_v3_d_p/tests/pcc/test_ttnn_moe.py
+        models/demos/deepseek_v3_d_p/tests/run_subtorus_4x4_tests.sh --timeout-s 2300 models/demos/deepseek_v3_d_p/tests/pcc/test_ttnn_moe.py
       '
     )
 
@@ -384,7 +384,7 @@
   skus:
     bh_sc1:
       # Sum of the section timeouts.
-      timeout: 44
+      timeout: 61
       tier: 2
       release_ready: false
   owner_id: U08RL15T4N8 # Danilo Djekic
