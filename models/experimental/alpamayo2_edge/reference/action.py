@@ -38,6 +38,9 @@ from models.experimental.alpamayo2_edge.reference.config import ActionConfig
 
 
 class _RMSNorm(nn.Module):
+    """Upstream `ActionInProj`'s RMSNorm: `text.RMSNorm` takes its weight at construction, this one is filled by
+    `load_state_dict` from the checkpoint's `encoder.trunk.*` keys."""
+
     def __init__(self, dim: int, eps: float = 1e-5):
         super().__init__()
         self.eps = eps

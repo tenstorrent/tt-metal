@@ -5,8 +5,9 @@
 """Alpamayo 2 Edge on one Blackhole P100: camera frames and a navigation instruction -> reasoning and 64 waypoints.
 
 Frames are `DIR/cam{id}_{t_ms}.png` files, any size, RGB. The driving profile takes 3 frames from cameras 0, 2, 3
-and 5 and 5 frames from cameras 1 and 6 (22 in all); only the capture times relative to the latest frame enter the
-prompt, so `t_ms` may use any epoch. The ego history defaults to driving straight at `--speed`; `--ego-history`
+and 5 and 5 frames from cameras 1 and 6 (22 in all); `reference/chat.py` `CAMERA_DISPLAY_NAMES` names each camera's
+position on the car. Only the capture times relative to the latest frame enter the prompt, so `t_ms` may use any
+epoch. The ego history defaults to driving straight at `--speed`; `--ego-history`
 takes an `.npz` with `xyz` [20, 3] and `rot` [20, 3, 3], 0.1 s apart (the action space's `dt`), in the ego frame
 at the latest time.
 
@@ -17,6 +18,8 @@ from __future__ import annotations
 
 import argparse
 import re
+import sys
+from collections import Counter
 from pathlib import Path
 
 import numpy as np
@@ -26,25 +29,33 @@ from tokenizers import Tokenizer
 
 import ttnn
 from models.experimental.alpamayo2_edge.reference.config import load_config, resolve_model_dir
-from models.experimental.alpamayo2_edge.reference.inputs import HISTORY_STEPS, prepare_inputs
+from models.experimental.alpamayo2_edge.reference.inputs import CAMERA_FRAME_COUNTS, HISTORY_STEPS, prepare_inputs
 from models.experimental.alpamayo2_edge.tt.model import Alpamayo2EdgeTT
 
 _FRAME_NAME = re.compile(r"cam(\d+)_(-?\d+)\.png")
 
 
 def load_frames(directory: Path) -> tuple[list[np.ndarray], list[int], list[int]]:
-    """HxWx3 uint8 frames, camera ids and capture times in microseconds of every `cam{id}_{t_ms}.png` in `directory`."""
-    frames, cameras, timestamps_us = [], [], []
+    """HxWx3 uint8 frames, camera ids and capture times in microseconds of every `cam{id}_{t_ms}.png` in `directory`.
+
+    Other files are skipped with a warning. The per-camera frame counts are checked before any image is decoded.
+    """
+    paths, cameras, timestamps_us = [], [], []
     for path in sorted(directory.iterdir()):
         match = _FRAME_NAME.fullmatch(path.name)
         if match is None:
+            print(f"warning: skipping {path.name}, not a cam{{id}}_{{t_ms}}.png frame", file=sys.stderr)
             continue
-        with Image.open(path) as image:
-            frames.append(np.asarray(image.convert("RGB")))
+        paths.append(path)
         cameras.append(int(match[1]))
         timestamps_us.append(int(match[2]) * 1000)
-    if not frames:
-        raise SystemExit(f"no cam{{id}}_{{t_ms}}.png frames in {directory}")
+    counts = dict(sorted(Counter(cameras).items()))
+    if counts != CAMERA_FRAME_COUNTS:
+        raise SystemExit(f"{directory} must hold frames per camera {CAMERA_FRAME_COUNTS}, found {counts}")
+    frames = []
+    for path in paths:
+        with Image.open(path) as image:
+            frames.append(np.asarray(image.convert("RGB")))
     return frames, cameras, timestamps_us
 
 

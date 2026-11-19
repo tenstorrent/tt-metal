@@ -37,10 +37,19 @@ demo/        demo.py
 
 ## Demo
 
-Put 22 RGB frames in a directory, named `cam{id}_{t_ms}.png`: 3 frames each from cameras 0, 2, 3
-and 5, and 5 frames each from cameras 1 and 6. `t_ms` is the capture time in milliseconds. Only the
-times relative to the latest frame enter the prompt. Use images you are allowed to use. No images
-ship with this package.
+Put 22 RGB frames in a directory, named `cam{id}_{t_ms}.png`. `t_ms` is the capture time in
+milliseconds; only the times relative to the latest frame enter the prompt. The demo checks the
+per-camera counts before it loads any image and warns about files it skips. Use images you are
+allowed to use. No images ship with this package.
+
+| Camera id | Position (`reference/chat.py`) | Frames |
+|---|---|---|
+| 0 | front left | 3 |
+| 1 | front | 5 |
+| 2 | front right | 3 |
+| 3 | rear left | 3 |
+| 5 | rear right | 3 |
+| 6 | front telephoto | 5 |
 
 ```bash
 cd $TT_METAL_HOME
@@ -56,15 +65,12 @@ On 22 uniform-noise frames, with `--seed 0` and "Continue straight.", the demo p
 `<NOMINAL>\n<|traj_future_start|>`. That is the same CoT the official stack samples on the same kind
 of input. The predicted path runs nearly straight for 62.4 m.
 
-> On the shared lab machines, every device run, including the demo and every pytest, goes through
-> the `tt-device-mcp` job runner instead of a shell.
-
 ## Reduced depth
 
 `ALPAMAYO_NUM_LAYERS=N` builds the vision tower, the LM and the expert with N layers each. The LM and
-the expert always have the same depth. Use it for fast iteration; at N=2 the e2e file runs in about
-3 minutes. Results are only claimed at full depth (27/28/28). The CoT at reduced depth is
-meaningless text.
+the expert always have the same depth. Use it for fast iteration. Results are only claimed at full
+depth (27/28/28). The CoT at reduced depth is meaningless text, so the tests that pin a full-depth
+result skip themselves.
 
 ## Tests
 
@@ -77,14 +83,14 @@ of a golden takes a few minutes of CPU time.
 | File | Device | What |
 |---|---|---|
 | `tests/test_config.py`, `test_inputs.py`, `test_forced_cot.py` | no | config, input preparation, forced CoT |
-| `tests/test_reference_vision.py`, `test_reference_text.py`, `test_reference_model.py` | no | the reference against upstream code and fixtures |
+| `tests/test_reference_vision.py`, `test_reference_text.py`, `test_reference_model.py` | no | the reference against upstream code and fixtures; the NVlabs action-space fixture is downloaded once into the golden cache, and its test skips without network |
 | `tests/test_generate_host.py` | no | CoT loop stop logic and host sampling |
 | `tests/pcc/test_vision.py` | P100 | block 0, projector, tower at 16:9 and 4:3 |
-| `tests/pcc/test_text.py` | P100 | ReLU² FFN, layer 0, prefill logits and K/V, cache sizing |
+| `tests/pcc/test_text.py` | P100 | ReLU² FFN, layer 0, prefill logits and K/V, cache sizing, lm_head dtype |
 | `tests/pcc/test_decode.py` | P100 | 128-step teacher-forced decode |
 | `tests/pcc/test_expert.py` | P100 | expert layer 0 and the 28-layer stack over the reference prefix |
 | `tests/pcc/test_action.py` | P100 | in-proj, one-step velocity, 10-step flow |
-| `tests/e2e/test_e2e.py` | P100 | full pipeline: teacher-forced, lm_head dtype measurement, free-running, two samples |
+| `tests/e2e/test_e2e.py` | P100 | full pipeline: teacher-forced, free-running, two samples; the lm_head dtype measurement runs only with `ALPAMAYO_MEASURE=1` |
 
 ```bash
 HF_HOME=/path/to/hf_data HF_HUB_OFFLINE=1 pytest -s models/experimental/alpamayo2_edge/tests/pcc/test_decode.py
@@ -103,7 +109,9 @@ prompt tokens and a 3384-row prefix for the expert. NVIDIA PhysicalAI-AV data is
 
 ## Measured accuracy (full depth, PCC against the fp32 reference)
 
-Thresholds: PCC ≥ 0.99 on every block and on the trajectory.
+Thresholds: PCC ≥ 0.99 on every block and end-to-end stage; the action-path gates also require a
+concordance correlation (CCC) ≥ 0.99, which catches the offset and scale errors PCC cannot see. The
+trajectory gate is the position error below.
 
 | Block | Test | PCC |
 |---|---|---|
@@ -120,47 +128,48 @@ Thresholds: PCC ≥ 0.99 on every block and on the trajectory.
 | Action in-proj / velocity at step 0 | reference prefix cache | 99.9996 % / 99.9992 % |
 | Actions after 10 Euler steps | reference prefix cache | 99.9848 % (xyz error ≤ 4.92 cm) |
 | **End to end**, vision embeddings | TT path throughout | 99.9153 % |
-| End to end, prefill last-token logits | | 99.9702 % |
-| End to end, decode logits, 128 steps | | min 99.7546 %, mean 99.9484 % |
-| End to end, actions | | 99.9681 % |
-| **End to end, xyz** | | 99.999974 % |
-| Two samples (B = 2), xyz per sample | own noise per sample | 99.999970 % / 99.999997 % |
+| End to end, prefill last-token logits | | 99.9769 % |
+| End to end, decode logits, 128 steps | | min 99.7574 %, mean 99.9484 % |
+| End to end, actions | | 99.9628 % |
+| **End to end, xyz** | | 99.999979 % |
+| Two samples (B = 2), xyz per sample | own noise per sample | 99.999976 % / 99.999997 % |
 
 Forward motion dominates the xyz PCC, so it barely separates trajectories; the position error
 below is the meaningful trajectory metric.
 
-**Vision (Decision 1):** the tower stays at or above 0.99 at both camera aspect ratios: 99.915 % at
-16:9 and 99.881 % at 4:3. The fallback to the HunyuanImage-3 SigLIP2 block was not needed.
+**Vision:** the tower stays at or above 0.99 at both camera aspect ratios: 99.915 % at 16:9 and
+99.881 % at 4:3.
 
 **Trajectory position error.** The max Euclidean error over the 64 waypoints, against the reference
 with the same CoT and noise, always occurs at the last waypoint:
 
 | Run | Max error |
 |---|---|
-| End to end, B = 1 | 6.11 cm |
-| End to end, B = 2, samples 0 / 1 | 6.41 cm / 2.25 cm |
+| End to end, B = 1 | 5.49 cm |
+| End to end, B = 2, samples 0 / 1 | 5.85 cm / 2.21 cm |
 | Expert + flow only, over the reference prefix | 4.92 cm |
 
-The proposed bound is **0.13 m**, about twice the worst measured error (6.4 cm), rounded. Until the
-bound is recorded, the tests log the error and do not assert it.
+The end-to-end tests assert a max error below **0.13 m**, about twice the worst error measured
+when the bound was set (6.4 cm), rounded.
 
 **Decode quality and the lm_head dtype.** These numbers are from the 128-step teacher-forced run, end
 to end. KL is KL(softmax(ref / 0.6) ‖ softmax(tt / 0.6)), averaged over the steps. CoT time is warm
-and untraced: prefill plus 128 decode steps.
+and untraced: prefill plus 128 decode steps, measured on an idle host (the decode loop is host-bound).
 
 | lm_head weights | argmax agreement | decode logits PCC min / mean | KL mean / max (nats) | CoT time |
 |---|---|---|---|---|
-| bf8 (default) | 96.9 % (4 of 128 steps differ) | 99.7546 % / 99.9484 % | 3.10e-3 / 4.53e-2 | 7.66 s |
-| bf16 | 96.9 % (4 of 128 steps differ) | 99.9825 % / 99.9930 % | 2.18e-3 / 2.92e-2 | 7.79 s (+1.7 %), +0.26 GB DRAM |
+| bf8 (default) | 96.9 % (4 of 128 steps differ) | 99.7574 % / 99.9484 % | 2.76e-3 / 2.42e-2 | 7.66 s |
+| bf16 | 96.9 % (4 of 128 steps differ) | 99.9861 % / 99.9931 % | 2.04e-3 / 1.55e-2 | 7.79 s (+1.7 %), +0.26 GB DRAM |
 
-The steps that differ are near-ties in the reference: its top-1 and top-2 logits are 0.04 to 0.05
-apart (0.27 at one bf8 step). The logits come back from the device in bf16, and at these logit
-magnitudes a bf16 step (0.03 to 0.06) is as large as those margins.
+The steps that differ are near-ties in the reference: its top-1 and top-2 logits are 0.02 to 0.05
+apart. The logits come back from the device in bf16, and at these logit magnitudes a bf16 step
+(0.03 to 0.06) is as large as those margins.
 
-- With the bf16 head, three of the four differences are exact ties in the bf16 logits, which the argmax
-  tie-break settles against the reference.
-- With the bf8 head, all four are real wrong picks: the TT logit of the reference's token is 0.03 to
-  0.19 below the TT argmax.
+- With the bf16 head, two of the four differences are exact ties in the bf16 logits, which the argmax
+  tie-break settles against the reference; at the other two the TT logit of the reference's token is
+  0.06 and 0.13 below the TT argmax.
+- With the bf8 head, one difference is an exact tie and three are real wrong picks: the TT logit of the
+  reference's token is 0.03 to 0.13 below the TT argmax.
 
 The bf16 head therefore improves the logits but not the agreement. Keeping bf8 is a cost/benefit call:
 bf16 costs 1.7 % CoT time and 0.26 GB of DRAM. Free-running CoTs can drift from the reference's at
@@ -182,3 +191,19 @@ logits readback and host sampling.
   is not measured. Which permissively licensed driving dataset to use for it is still open.
 - **Weights:** the vision tower and projector linears are bf16 (the tt_dit `Linear` default). The LM
   linears are bf8 (the tt_dit encoder default). The expert and the action projections are bf16.
+
+## tt_dit internals this package relies on
+
+The package reuses tt_dit by import and subclassing. These private members are the coupling points
+to re-check when tt_dit changes:
+
+- `Cache._k_cache`, `_v_cache`, `_device` and `_position` (`tt/text.py` `AlpamayoCache`: per-layer
+  access, `repeat_to`, `from_reference`, `deallocate`).
+- `TransformerEncoder._get_pos_embeds`, `_decode_step`, `_last_token_logits` and `_device`
+  (`tt/text.py` `TtLanguageModel.prefill` and `decode_step`).
+- `Module._prepare_torch_state`, the load hook every module here overrides.
+
+## Shared machines
+
+On the shared lab machines, every device run, including the demo and every pytest, goes through the
+`tt-device-mcp` job runner instead of a shell.
