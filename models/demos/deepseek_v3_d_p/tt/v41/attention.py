@@ -628,6 +628,9 @@ def _source_prepare_chunk(self, state, real_len: int) -> None:
 # scores, masks and ranks its 128 rows only and publishes the partitioned top-k, which its own and its consumers' sparse
 # cores take as is. Every op is per row, so the selections are the same bits (checked by the device-check digests).
 INDEX_QTP = os.environ.get("V41_PREFILL_INDEX_QTP", "0") == "1"
+# V41_PREFILL_INDEX_DEC_QTP=1: the same for the EAGER fused scorer of the ratio-1 (decoder) index sources -- layer 20 and the
+# Reindex layers 24 / 28 / 32 / 36 on the last-chunk decoder (select_indices_fused below)
+INDEX_DEC_QTP = os.environ.get("V41_PREFILL_INDEX_DEC_QTP", "0") == "1"
 
 
 def _select_static_qtp(ix, q_latent, hidden_states, cos, sin, index_k, score_mask, kv_bucket=None):
@@ -794,7 +797,7 @@ def _window_indices_v41(self, seq_local: int):
     """TtCSA's window indices; under INDEX_QTP also their TP-partitioned copy, built with them (an eager warm-up, before
     any capture: a persistent tensor allocated after a capture can sit on its intermediates, DS4F-0262)."""
     dev = _tt_csa_window_indices(self, seq_local)
-    if INDEX_QTP and self.tp_factor > 1:
+    if (INDEX_QTP or INDEX_DEC_QTP) and self.tp_factor > 1:
         part = self.__dict__.setdefault("_window_idx_part", {})
         if seq_local not in part:
             part[seq_local] = ttnn.mesh_partition(dev, dim=2, cluster_axis=self.tp_axis)
@@ -806,7 +809,9 @@ def _sparse_core_v41(self, q, topk_idx, cos, sin, slab_rm, *, seq_len: int, chun
     indices' matching quarter is concatenated and the TP partition of the index rows is skipped; the rest is unchanged.
     """
     batch, seq_local = q.shape[0], q.shape[2]
-    if not (INDEX_QTP and self.tp_factor > 1 and int(topk_idx.shape[2]) * self.tp_factor == seq_local):
+    if not (
+        (INDEX_QTP or INDEX_DEC_QTP) and self.tp_factor > 1 and int(topk_idx.shape[2]) * self.tp_factor == seq_local
+    ):
         return _tt_csa_sparse_core(self, q, topk_idx, cos, sin, slab_rm, seq_len=seq_len, chunk0=chunk0)
     assert not chunk0, "INDEX_QTP: chunk 0 stays on the full-row path"
     heads_local = self.num_heads // self.tp_factor
@@ -1362,7 +1367,7 @@ V41CSA.kv_only = _kv_only
 
 
 # WS3 INDEX_QTP: the sources' and their consumers' sparse cores take a TP-partitioned top-k (identity when the flag is off)
-for _cls in (V41CSA, V41CSAConsumer):
+for _cls in (V41CSA, V41CSAConsumer, V41CSAReindex):
     _cls._sparse_core = _sparse_core_v41
     _cls._window_indices = _window_indices_v41
 V41CSA._score_mask = _score_mask_v41
@@ -1395,4 +1400,88 @@ def _select_indices_fused_bounded(
     return idx
 
 
-TtCSAIndexer.select_indices_fused = _select_indices_fused_bounded
+_tt_chunk_cut_mask = TtCSAIndexer._chunk_cut_mask
+
+
+def _chunk_cut_mask_v41(self, seq_local: int, n_cols: int):
+    """TtCSAIndexer._chunk_cut_mask; under INDEX_DEC_QTP its TP quarter (this chip's rows) is built with it, so a constant
+    precreated before the captures has its partition precreated too (DS4F-0262 class)."""
+    dev = _tt_chunk_cut_mask(self, seq_local, n_cols)
+    if INDEX_DEC_QTP and self.tp_factor > 1:
+        key = ("rm_qtp", int(seq_local), int(n_cols))
+        if key not in self._cut_masks:
+            self._cut_masks[key] = ttnn.mesh_partition(dev, dim=2, cluster_axis=self.tp_axis)
+    return dev
+
+
+def _select_indices_fused_qtp(
+    self, q_latent, hidden_states, cos, sin, index_k, entry_count: int, n_new: int, n_new_max: int
+):
+    """TtCSAIndexer.select_indices_fused on this chip's TP quarter of the query rows (q / w computed on all rows first, as
+    INDEX_QTP): -> [1, 1, S_l / tp, topk], taken as is by the V4.1 sparse cores."""
+    S_l = q_latent.shape[2]
+    if self._wq_b_all is None:
+        self._wq_b_all = self._to_tt_linear_weight(self._host_q_b_proj_weight, tp_shard_dim=None, cache_name="wq_b_all")
+    q = ttnn.linear(q_latent, self._wq_b_all, memory_config=self.memory_config)
+    q, _, _ = ttnn.experimental.nlp_create_qkv_heads(
+        q, num_heads=self.n_heads, num_kv_heads=0, transpose_k_heads=False, memory_config=self.memory_config
+    )
+    nope_dim = self.head_dim - self.rope_head_dim
+    nope = ttnn.slice(q, [0, 0, 0, 0], [1, self.n_heads, S_l, nope_dim])
+    rope = ttnn.slice(q, [0, 0, 0, nope_dim], [1, self.n_heads, S_l, self.head_dim])
+    rope = ttnn.experimental.rotary_embedding_llama(rope, cos, sin, self.trans_mat, is_decode_mode=False)
+    q = ttnn.concat([nope, rope], dim=-1)
+    if getattr(self, "q_act_quant", None) is not None:  # V4.1 (DS41F-0048)
+        q = self.q_act_quant(q)
+    w = self.compressor._tp_all_reduce(ttnn.linear(hidden_states, self.w_proj, memory_config=self.memory_config))
+    w = ttnn.multiply(w, self.scale)
+    q = ttnn.mesh_partition(q, dim=2, cluster_axis=self.tp_axis)
+    w = ttnn.mesh_partition(w, dim=2, cluster_axis=self.tp_axis)
+    rows = S_l // self.tp_factor
+    E = int(entry_count) + int(n_new)
+    E_tiles = -(-E // ttnn.TILE_SIZE) * ttnn.TILE_SIZE
+    kv_len = -(-(E_tiles + self.sp_factor * S_l) // 64) * 64
+    assert kv_len <= int(index_k.shape[2]), (kv_len, index_k.shape)
+    # flat device rank x S_l / tp = the unpartitioned call's SP offset + this chip's TP quarter: every real entry visible
+    logits = ttnn.experimental.indexer_score_dsa(
+        q,
+        index_k,
+        w,
+        chunk_start_idx=E_tiles,
+        kv_len=kv_len,
+        program_config=ttnn.IndexerScoreProgramConfig(q_chunk_size=64, k_chunk_size=64, head_group_size=0),
+        seq_shard_axes=[],
+    )
+    if n_new > 0:
+        self._chunk_cut_mask(S_l, n_new_max)
+        mask = self._cut_masks[("rm_qtp", int(S_l), int(n_new_max))]
+        if n_new < n_new_max:
+            mask = ttnn.slice(mask, [0, 0, 0, 0], [1, 1, rows, n_new])
+        seg = ttnn.slice(logits, [0, 0, 0, entry_count], [1, 1, rows, E])
+        seg = ttnn.add(seg, mask)
+        ttnn.experimental.slice_write(seg, logits, start=[0, 0, 0, entry_count], end=[1, 1, rows, E], step=[1, 1, 1, 1])
+    return ttnn.experimental.topk_large_indices(logits, k=self.topk, valid_length=E)
+
+
+def _select_indices_fused_v41(
+    self, q_latent, hidden_states, cos, sin, index_k, entry_count: int, n_new: int, n_new_max: int
+):
+    """INDEX_FUSED_BOUND (the key operand sliced to the ladder step) and, for a ratio-1 (decoder) source, INDEX_DEC_QTP."""
+    ratio1 = int(n_new_max) == self.sp_factor * int(q_latent.shape[2])  # rate 1: the chunk's every token is an entry
+    if not (INDEX_DEC_QTP and ratio1 and self.tp_factor > 1):
+        return _select_indices_fused_bounded(
+            self, q_latent, hidden_states, cos, sin, index_k, entry_count, n_new, n_new_max
+        )
+    E_tiles = -(-(int(entry_count) + int(n_new)) // ttnn.TILE_SIZE) * ttnn.TILE_SIZE
+    kv_len = -(-(E_tiles + self.sp_factor * int(q_latent.shape[2])) // 64) * 64
+    cap = int(index_k.shape[2])
+    width = min(cap, -(-kv_len // FUSED_LADDER) * FUSED_LADDER) if INDEX_FUSED_BOUND else cap
+    keys = index_k if width >= cap else ttnn.slice(index_k, [0, 0, 0, 0], [1, 1, width, int(index_k.shape[3])])
+    idx = _select_indices_fused_qtp(self, q_latent, hidden_states, cos, sin, keys, entry_count, n_new, n_new_max)
+    if keys is not index_k:
+        ttnn.deallocate(keys)
+    return idx
+
+
+TtCSAIndexer._chunk_cut_mask = _chunk_cut_mask_v41
+TtCSAIndexer.select_indices_fused = _select_indices_fused_v41
