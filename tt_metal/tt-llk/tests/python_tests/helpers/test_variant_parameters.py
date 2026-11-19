@@ -1573,6 +1573,16 @@ class MOE_GATE_TOPK(TemplateParameter):
 
 
 @dataclass
+class MOE_GATE_TOPK_STIMULUS(TemplateParameter):
+    """Record stimulus-only MoE-gate settings in perf reports."""
+
+    spread_biased_scores: bool = False
+
+    def convert_to_cpp(self) -> str:
+        return ""
+
+
+@dataclass
 class MOE_GATE_NORMALIZE_PARAMS(TemplateParameter):
     """``eps`` / ``scale`` for the MoE-gate normalize step, as raw fp32 bit patterns.
 

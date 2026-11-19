@@ -98,11 +98,18 @@ from helpers.golden_generators import (
     MoeGateTopkGolden,
     get_golden_generator,
 )
-from helpers.llk_params import DestAccumulation, format_dict
+from helpers.llk_params import DestAccumulation, DestSync, format_dict
 from helpers.param_config import parametrize
+from helpers.perf.blaze import execute_llk
 from helpers.stimuli_config import StimuliConfig
-from helpers.test_config import TestConfig
-from helpers.test_variant_parameters import MOE_GATE_NORMALIZE_PARAMS, MOE_GATE_TOPK
+from helpers.test_variant_parameters import (
+    DEST_SYNC,
+    LOOP_FACTOR,
+    MOE_GATE_NORMALIZE_PARAMS,
+    MOE_GATE_TOPK,
+    MOE_GATE_TOPK_STIMULUS,
+    TILE_COUNT,
+)
 from helpers.tilize_untilize import tilize_block, untilize_block
 from helpers.utils import passed_test, result_tensor
 
@@ -317,6 +324,11 @@ def _check_moe_gate(
     generate_indices=True,
     spread_biased_scores=False,
     negative_keys=False,
+    *,
+    is_perf=False,
+    perf_report=None,
+    run_types=None,
+    loop_factor=1,
 ):
     torch.manual_seed(0)
 
@@ -383,39 +395,48 @@ def _check_moe_gate(
     )
     src_B = torch.zeros(ELEMENTS_PER_TILE, dtype=torch_format)
 
-    configuration = TestConfig(
-        "sources/sfpu_generic_moe_gate_topk_test.cpp",
-        formats,
-        templates=[
-            MOE_GATE_TOPK(
-                num_selected_experts=num_selected_experts,
-                num_total_experts=num_total_experts,
-                normalize=normalize,
-                zero_tail=zero_tail,
-                full_sort=full_sort,
-                generate_indices=generate_indices,
-                scores_include_bias=scores_include_bias,
+    outcome = execute_llk(
+        is_perf=is_perf,
+        perf_report=perf_report,
+        run_types=run_types,
+        loop_factor=loop_factor,
+        test_config_kwargs=dict(
+            test_name="sources/sfpu_generic_moe_gate_topk_test.cpp",
+            formats=formats,
+            templates=[
+                DEST_SYNC(DestSync.Half),
+                MOE_GATE_TOPK(
+                    num_selected_experts=num_selected_experts,
+                    num_total_experts=num_total_experts,
+                    normalize=normalize,
+                    zero_tail=zero_tail,
+                    full_sort=full_sort,
+                    generate_indices=generate_indices,
+                    scores_include_bias=scores_include_bias,
+                ),
+                MOE_GATE_TOPK_STIMULUS(spread_biased_scores=spread_biased_scores),
+                MOE_GATE_NORMALIZE_PARAMS(eps_bits=EPS_BITS, scale_bits=SCALE_BITS),
+            ],
+            runtimes=[LOOP_FACTOR(1), TILE_COUNT(1)],
+            variant_stimuli=StimuliConfig(
+                src_A,
+                formats.input_format,
+                src_B,
+                formats.input_format,
+                formats.output_format,
+                tile_count_A=2,
+                tile_count_B=1,
+                tile_count_res=NUM_RESULT_TILES,
             ),
-            MOE_GATE_NORMALIZE_PARAMS(eps_bits=EPS_BITS, scale_bits=SCALE_BITS),
-        ],
-        runtimes=[],
-        variant_stimuli=StimuliConfig(
-            src_A,
-            formats.input_format,
-            src_B,
-            formats.input_format,
-            formats.output_format,
-            tile_count_A=2,
-            tile_count_B=1,
-            tile_count_res=NUM_RESULT_TILES,
+            # Pinned, not swept: the kernel packs the expert id and the score into the LO16
+            # and HI16 of one DEST word, which only exists for a 16-bit DEST.
+            dest_acc=DestAccumulation.No,
+            unpack_to_dest=False,
         ),
-        # Pinned, not swept: the kernel packs the expert id and the score into the LO16
-        # and HI16 of one DEST word, which only exists for a 16-bit DEST.
-        dest_acc=DestAccumulation.No,
-        unpack_to_dest=False,
     )
-
-    res_from_L1 = configuration.run().result
+    if is_perf:
+        return
+    res_from_L1 = outcome.result
     res_tensor = result_tensor(res_from_L1, formats.output_format)
 
     score_words = res_tensor[:ELEMENTS_PER_TILE]
@@ -514,3 +535,14 @@ def _check_moe_gate(
         assert_odd_columns_untouched(
             result_indices, result_scores, payload, emitted_rows, generate_indices
         )
+
+
+@blackhole_only
+def test_sfpu_generic_moe_gate_topk_pack_formats_repeat():
+    _check_moe_gate(
+        4,
+        full_sort=True,
+        normalize=False,
+        zero_tail=True,
+        loop_factor=2,
+    )

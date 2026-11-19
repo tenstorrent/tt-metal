@@ -243,6 +243,17 @@ DB_SCHEMA = [
     Column("dest_tiles", "int64", True, "configuration"),
     Column("h16_tile_index", "int64", True, "configuration"),
     Column("hadamard_normalize", "bool", True, "configuration"),
+    Column("eps_bits", "int64", True, "configuration"),
+    Column("extra_scale_bits", "int64", True, "configuration"),
+    Column("full_sort", "bool", True, "configuration"),
+    Column("generate_indices", "bool", True, "configuration"),
+    Column("normalize", "bool", True, "configuration"),
+    Column("num_selected_experts", "int64", True, "configuration"),
+    Column("num_total_experts", "int64", True, "configuration"),
+    Column("scale_bits", "int64", True, "configuration"),
+    Column("scores_include_bias", "bool", True, "configuration"),
+    Column("spread_biased_scores", "bool", True, "configuration"),
+    Column("zero_tail", "bool", True, "configuration"),
     # timing (complete {mean, std} x base grid — see _TIMING_COLUMNS above)
     *_TIMING_COLUMNS,
     # ── provenance: stamped by the publish layer, never emitted by a test ──

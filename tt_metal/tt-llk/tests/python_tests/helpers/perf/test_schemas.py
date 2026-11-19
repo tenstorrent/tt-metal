@@ -2073,6 +2073,39 @@ PERF_TEST_SCHEMAS = {
         "aliases": {},
         "test_name_aliases": {"perf_unpack_A_custom": "perf_unpack_A_custom"},
     },
+    "perf_sfpu_generic_moe_gate_topk": {
+        "version": 2,
+        "columns": [
+            "dest_acc",
+            "dest_sync",
+            "eps_bits",
+            "extra_scale_bits",
+            "formats.input_A",
+            "formats.input_B",
+            "formats.output",
+            "formats.register_A",
+            "formats.register_B",
+            "formats.sfpu_dst",
+            "formats.sfpu_src",
+            "full_sort",
+            "generate_indices",
+            "loop_factor",
+            "marker",
+            "normalize",
+            "num_selected_experts",
+            "num_total_experts",
+            "scale_bits",
+            "scores_include_bias",
+            "spread_biased_scores",
+            "tile_cnt",
+            "unpack_to_dest",
+            "zero_tail",
+        ],
+        "aliases": {},
+        "test_name_aliases": {
+            "perf_sfpu_generic_moe_gate_topk": "perf_sfpu_generic_moe_gate_topk"
+        },
+    },
 }
 
 
