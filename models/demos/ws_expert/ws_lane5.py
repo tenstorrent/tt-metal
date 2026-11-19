@@ -76,6 +76,9 @@ class L5Cfg:
     # of a twice-as-long buffer. Keeps the west groups' row writes off the NOC1 column their muxes send up, and every
     # row write out of the rectangles' multicast NoC.
     oeast: int = 0
+    # yc: the logical rows of group g's collectors in its muxes' column (any rows of the column), instead of the first
+    # yc spare cores within the group's rows
+    yc_rows: tuple = ()
     # yc: the east half's collectors (DRAM column x 9 east of them) write on NOC0 from the BRISC instead of NOC1 the
     # long way round; outside the NoC rule (the fence's acks return through the rectangles on NOC0), diagnostics
     yc_n0: int = 0
@@ -253,6 +256,9 @@ def build_lane5(
     for g in range(G if l5.yc and not l5.oeast else 0):
         x0, y0 = l5.origins[g]
         free = [(l5.mux_cols[g], y0 + r) for r in range(NR) if (l5.mux_cols[g], y0 + r) not in muxes]
+        if l5.yc_rows:
+            free = [(l5.mux_cols[g], r) for r in l5.yc_rows[g]]
+            assert not set(free) & set(muxes) and not any(set(free) & set(c) for c in colls), (g, free)
         assert len(free) >= l5.yc, (g, free)
         colls.append(free[: l5.yc])
     ycores = [xy for cl in colls for xy in cl]

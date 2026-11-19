@@ -512,6 +512,7 @@ def test_ep4_experts(mesh_device, routing):
     TX, EPC = lc.TX, lc.EPC
     G = int(os.environ.get("EP4_G", "2"))
     lc.oeast = int(os.environ.get("EP4_OEAST", "0"))
+    lc.muxtop = int(os.environ.get("EP4_MUXTOP", "0"))
     cfg, lane, l5 = lane_cfgs(mesh, lc, G, l5kw=dict(why=int(os.environ.get("EP4_WHY", "0")), **l5_env()))
     T, pos = lane_tables(mesh, cfg, lane)
     tab_t = tables_tensor(mesh, T["tabs"])
@@ -659,6 +660,7 @@ def test_ep4_layer(mesh_device, routing):
     TX, EPC, K, H = lc.TX, lc.EPC, lc.K, lc.H
     G = int(os.environ.get("EP4_G", "2"))
     lc.oeast = int(os.environ.get("EP4_OEAST", "0"))
+    lc.muxtop = int(os.environ.get("EP4_MUXTOP", "0"))
     reps = int(os.environ.get("EP4_REPS", "3"))
     cfg, lane, l5 = lane_cfgs(mesh, lc, G, l5kw=l5_env())
     T, pos = lane_tables(mesh, cfg, lane)

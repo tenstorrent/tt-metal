@@ -33,6 +33,8 @@ class EP4Cfg(LayerCfg):
     # O rows in the east DRAM column only (ws_lane5 L5Cfg.oeast: the experts' row collectors write them there, the
     # combine reads them there); O holds twice the pages
     oeast: int = 0
+    # G 4: the experts' muxes and row collectors placed by the NoC flow model (lane_cfgs)
+    muxtop: int = 0
 
     EPC = property(lambda s: s.nexp // s.C)
     KP = property(lambda s: -(-s.TX // s.SP))
@@ -337,6 +339,13 @@ def lane_cfgs(mesh, lc: EP4Cfg, G=2, l5kw=None, lkw=None):
     l5 = L5Cfg(**{**dict(hmc=2, mux_noc=-1 if ow else 0, yrm=1, yc=3, yc_n0=1), **(l5kw or {})})
     if lc.oeast:
         l5.oeast, l5.yc = 1, (l5kw or {}).get("yc", 2)
+    if G == 4 and lc.muxtop:
+        # muxes in the top rows of their columns, collectors below them, every row write on NOC1 (the NoC flow model's
+        # layout: the muxes' NOC1 path to the ethernet row shares the fewest links with the row writes)
+        l5.mux_rows = ((0, 3), (1, 3), (0, 3), (1, 3))
+        l5.yc_rows = ((4, 5, 6), (7, 8, 9), (4, 5, 6), (7, 8, 9)) if l5.yc == 3 else ((5, 6), (8, 9), (5, 6), (8, 9))
+        l5.yc_rows = tuple(r[: l5.yc] for r in l5.yc_rows)
+        l5.yc_n0 = 0
     return cfg, lane, l5
 
 
