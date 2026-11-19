@@ -16,9 +16,7 @@ namespace ckernel {
 namespace sfpu {
 
 inline void heaviside_init() {
-    // The row's last store steps Dest by one SFPU pass (SFP_ROWS = 2 counter rows, the step sfpi's
-    // dst_reg++ takes), so the body needs no TTINCRWC. Same ADDR_MOD_6 value as init_typecast. The
-    // SFPU load/store addr_mod field is 3 bits wide on Quasar, so the body names slot 6 directly.
+    // calculate_heaviside's last store steps Dest by one SFPU pass through ADDR_MOD_6.
     addr_mod_t{.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = ckernel::math::SFP_ROWS}}.set(ADDR_MOD_6);
     math::_reset_counters_<p_setrwc::SET_ABD_F>();
 }
@@ -26,17 +24,8 @@ inline void heaviside_init() {
 /**
  * @brief heaviside(v) = `value` at v == 0 (either zero), 0.0 for a set sign bit, 1.0 otherwise.
  *
- * 7 SFPU instructions per row, written as three stores that narrow the enabled lanes: 1.0 to every
- * lane; 0.0 to the lanes whose bits, read as a two's-complement integer, are <= 0 (a set sign bit, or
- * +0); then `value` to those of them that compare >= -0.0 as floats, which leaves the two zeros
- * (v_and only narrows the lanes the v_if enabled). The previous form (copysgn + add, then an
- * sfpi::abs(v) == 0 arm) cost 11: an SFPLOADI, SFPMOV + SFPSETSGN + SFPADDI for the sign arm,
- * SFPABS + SFPSETCC for the zero test, an SFPMOV merge, a TTINCRWC and a rolled RISC loop.
- *
- * The sign comes from the integer compare, not a float one, so NaN lands where it did before: a NaN
- * with a clear sign bit is 1.0, with a set one 0.0. A float compare cannot do that; it is false for a
- * NaN of either sign. The -0.0 bound keeps -0.0 in the `value` lanes whether the float compare orders
- * -0.0 below +0.0 or treats them as equal.
+ * The sign is read from the raw bits, so infinities, denormals and NaN dispatch on their sign bit
+ * like any other non-zero input.
  *
  * @tparam APPROXIMATION_MODE: Unused; the kernel is exact in both modes.
  * @tparam ITERATIONS: Number of SFPU passes (two Dest rows each) to process.
@@ -54,9 +43,9 @@ inline void calculate_heaviside(const std::uint32_t value) {
         sfpi::vFloat v = sfpi::dst_reg[0];
 
         sfpi::dst_reg[0] = sfpi::vFloat(1.0f);
-        v_if(sfpi::as<sfpi::vInt>(v) <= 0) {
+        v_if(sfpi::as<sfpi::vInt>(v) <= 0) {  // sign bit set, or +0
             sfpi::dst_reg[0] = sfpi::vFloat(0.0f);
-            v_and(v >= neg_zero);
+            v_and(v >= neg_zero);  // the two zeros
             sfpi::dst_reg[0].mode(ADDR_MOD_6) = s;
         }
         v_endif;

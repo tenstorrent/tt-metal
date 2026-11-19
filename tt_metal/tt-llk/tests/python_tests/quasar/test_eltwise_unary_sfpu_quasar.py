@@ -835,8 +835,9 @@ def prepare_heaviside_inputs(
     """
     Comp stimuli (finite values of both signs) with the edge patterns planted in every face.
 
-    The run of patterns starts one lane later in each face, so across a tile every pattern lands in
-    different lanes and in both rows of an SFPU pass.
+    The run of patterns starts one row and one lane later in each face of a tile, so across a tile
+    every pattern lands in different lanes and in both rows of an SFPU pass. The offset repeats every
+    four faces, which keeps the run inside its face for any tile count.
     """
     values = prepare_comp_inputs(src_A, src_B, input_format, output_format)
     int_dtype, width, patterns = _HEAVISIDE_EDGE_BITS[input_format]
@@ -846,7 +847,7 @@ def prepare_heaviside_inputs(
         for i, pattern in enumerate(patterns):
             # Two's-complement spelling, so the write goes through the signed integer view.
             signed = pattern - (1 << width) if pattern >> (width - 1) else pattern
-            bits[base + 8 + 17 * face + i] = signed
+            bits[base + 8 + 17 * (face % 4) + i] = signed
     return flat.reshape(values.shape)
 
 
