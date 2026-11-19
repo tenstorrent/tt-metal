@@ -19,6 +19,14 @@
 // in pass order; whole-K, the three column rounds stay resident. Each Q_kw tile-row accumulates all its in-image
 // kernel rows in DEST and is packed once.
 //
+// Fused side rounds (fused: 2-tile n-groups, gw == 2, where Q_kw runs as 4 x 1 column runs): Q_0 and Q_2 of a tile-row
+// read the same in0 tiles, so after the Q_1 round they run as ONE pass of 1 x 4 subblocks [Q_0 n0, n1 | Q_2 n0, n1],
+// each in0 tile (srcB) unpacked once for four tile-MACs while in1 (srcA) streams, instead of two 4 x 1 rounds (in1
+// once, in0 four times). Weight rounds 1 and 2 keep their sizes and hold the pair interleaved: per (kh, c) row of
+// 2 RW tiles, each n-group's gw kw = 0 columns, then its gw kw = 2 columns (the writer and the weight server read that
+// order); the pass waits for both rounds (K-blocked: three weight slots, so the pair never wraps the ring). Rows ascend
+// and each subblock packs Q_0 before Q_2, so every ACC row still sums Q_1, Q_0, Q_2 in that order (bit-identical).
+//
 // The shift: each Q_kw tile-row of the pass's n-group is pack-untilized (fp32 rows) into the fp32 accumulator ACC
 // (cb_acc: gw planes [rows, 32], one per output column tile of the n-group) at row rowbase(t) + (1 - kw) d, so the kw
 // shift sums in fp32 in the packer (K in fp32 DEST). ACC leaves a d-row gap after every image row: the wrapped rows
@@ -76,6 +84,13 @@
 // stem.conv2) 83 against 144 cycles per tile. That lets N = 2 run 4 x 1 subblocks (one unpack context per call; 2 x 2
 // needs two): stem.conv2 34.3 -> 32.2 us, where 4 x 1 on the old 1-wide stream MOP was pack-bound (40.4 us). N = 4
 // keeps 1 x 4 (as 4 x 1, with four srcB unpacks per 4 tile-MACs instead of one: +2% to +22%).
+// Fused side rounds (capability, on the same raw walk): compute_kernel_lib::matmul_block has one in1 block per call
+// and one pack destination per output tile; the fused pass's 1 x 4 takes two weight columns' in1 tiles from one
+// interleaved row and packs them at two different ACC row offsets (Q_0 at +d, Q_2 at -d, a packer drain between).
+// Measured (Blackhole p150b, LoFi bf8_b, unzoned, bit-identical): stem.conv2 31.13 -> 28.21 us (the Q_0 | Q_2 walk at
+// ~18.8 cycles per tile-MAC instead of ~23.4), res2 11.28 -> 10.55 us. A 1-tile n-group keeps the three rounds: its
+// pair is a 1 x 2 subblock, two tile-MACs per matmul call (~40 cycles of per-call unpack cost each) instead of four:
+// center_head.1 10.68 -> 12.14 us (zoned).
 
 #pragma once
 
@@ -263,7 +278,8 @@ template <
     bool kblocked,
     uint32_t plane_bytes,
     bool noinline,
-    bool xchg>
+    bool xchg,
+    bool fused>
 ALWI void run(uint32_t m_tile_start, uint32_t actual_m_tiles, uint32_t num_blocks, bool xchg_top, bool xchg_bot) {
     constexpr uint32_t R = d * tpr;
     // ACC is gw planes of [rows, 32] fp32, one per output column tile of the n-group. Subblocks are sbh x 1 (a column
@@ -278,6 +294,11 @@ ALWI void run(uint32_t m_tile_start, uint32_t actual_m_tiles, uint32_t num_block
     constexpr uint32_t NG = N / gw;
     constexpr uint32_t RW = kblocked ? gw : N;  // output column tiles of one weight round
     constexpr uint32_t ROUND_TILES = 3 * Ct * RW;
+    // Fused side rounds (file comment): one 1 x FW pass for Q_0 | Q_2 of each tile-row; in rounds 1 and 2, per (kh, c)
+    // row of FROW tiles, each n-group's gw kw = 0 columns, then its gw kw = 2 columns.
+    static_assert(!fused || (gw == 2 && sbw == 1));
+    constexpr uint32_t FW = 2 * gw;
+    constexpr uint32_t FROW = 2 * RW;
 
     CircularBuffer in(cb_in);
     CircularBuffer w(cb_w);
@@ -393,7 +414,122 @@ ALWI void run(uint32_t m_tile_start, uint32_t actual_m_tiles, uint32_t num_block
                         subblock_body(i0, h, kw, w0, p0);
                     }
                 };
-                for (uint32_t step = 0; step < 3; ++step) {
+                // Fused side rounds: row i (tile-row t0 - 1 + i), Q_0 (sides & 1) and / or Q_2 (sides & 2) of n-group
+                // g, one 1 x ct subblock: each in0 tile feeds ct tile-MACs (in1 streams the pair's columns). DEST holds
+                // [Q_0 cols | Q_2 cols]; each tile is its own 1-tile stream into its plane, Q_0 at +d rows, Q_2 at -d.
+                [[maybe_unused]] auto side_row_body = [&](uint32_t i, uint32_t sides) {
+                    const uint32_t t = t0 - 1 + i;
+                    {
+                        const uint32_t last_kh = t + R < m_tiles ? 2 : 1;
+                        uint32_t last = t + last_kh * R - R;
+                        last = last < m_tiles ? last : m_tiles - 1;
+                        uint32_t pages = (static_cast<uint32_t>(static_cast<int32_t>(last) + base[last_kh]) + 1) * Ct;
+                        pages = pages < slab_pages ? pages : slab_pages;
+                        if (pages > landed) {
+                            in.wait_front(pages);
+                            landed = pages;
+                        }
+                    }
+                    const uint32_t ct = sides == 3 ? FW : gw;
+                    const uint32_t j0 = (kblocked ? 0 : g * FW) + (sides == 2 ? gw : 0);
+                    const uint32_t wf = kblocked ? 0 : ROUND_TILES;  // round 1's first tile
+                    tile_regs_acquire();
+                    for (uint32_t kh = 0; kh < 3; ++kh) {
+                        if (t + kh * R < R || t + kh * R >= m_tiles + R) {
+                            continue;
+                        }
+                        const uint32_t in0 =
+                            static_cast<uint32_t>(static_cast<int32_t>(t + kh * R - R) + base[kh]) * Ct;
+                        const uint32_t in1 = wf + kh * Ct * FROW + j0;
+                        for (uint32_t c = 0; c < Ct; ++c) {
+                            matmul_block(cb_in, cb_w, in0 + c, in1 + c * FROW, 0, false, ct, 1, Ct);
+                        }
+                    }
+                    tile_regs_commit();
+                    tile_regs_wait();
+                    [[maybe_unused]] const uint32_t rb = rowbase<d, tpr>(t0, i);
+                    for (uint32_t jj = 0; jj < ct; ++jj) {
+                        const bool q2 = sides == 2 || jj >= gw;
+                        if (q2 && (jj == 0 || jj == gw)) {
+                            // Q_2 accumulates onto rows a Q_0 stream may have just written (this row's, or the row
+                            // above's spill): its L1-acc reads must follow those writes, so drain the packer first.
+                            PACK((TTI_STALLWAIT(p_stall::STALL_PACK, p_stall::PACK)));
+                        }
+                        [[maybe_unused]] const uint32_t row = acc_base + (q2 ? rb - d : rb + d) * PITCH;
+                        PACK((pack_zst(row + (jj < gw ? jj : jj - gw) * PLANE, jj, 1)));
+                    }
+                    tile_regs_release();
+                };
+                auto side_row_out_of_line = [&](uint32_t i, uint32_t sides)
+                                                __attribute__((noinline)) { side_row_body(i, sides); };
+                [[maybe_unused]] auto side_row = [&](uint32_t i, uint32_t sides) {
+                    if constexpr (noinline) {
+                        side_row_out_of_line(i, sides);
+                    } else {
+                        side_row_body(i, sides);
+                    }
+                };
+                // Rows ascend, so every row still sums Q_1, then Q_0, then Q_2 (bit-identical to the three rounds):
+                // Q_2[i] follows Q_0[i - 1] (its spill into tile-row i) and Q_0[i]. Exchange (file comment): the upper
+                // core runs Q_0 of its last row first (A in, B out) and its Q_2 in place; the lower core runs Q_2 of
+                // its first row at mid-round (B in, C out), so B and C each get half a round to travel. The token
+                // orders are the three rounds' (sends A, B, C; arrivals A, B, C).
+                [[maybe_unused]] auto side_rounds = [&]() {
+                    MaybeDeviceZoneScope("compute_kwf_side_rounds");
+                    pack_reconfig_l1_acc(1);
+                    {
+                        MaybeDeviceZoneScope("compute_kwf_weight_wait");
+                        w.wait_front(kblocked ? 2 * ROUND_TILES : 3 * ROUND_TILES);
+                    }
+                    matmul_block_init(cb_in, cb_w, false, FW, 1, Ct);
+                    const uint32_t q0_lo = halo_top ? 0 : 1;
+                    const uint32_t q2_end = valid + (halo_bot ? 2 : 1);
+                    if constexpr (xchg) {
+                        if (xb) {
+                            {
+                                MaybeDeviceZoneScope("compute_kwf_halo_wait");
+                                halo_in.wait_front(++halo_seen);
+                            }
+                            side_row(valid, 1);
+                            halo_out.reserve_back(1);
+                            halo_out.push_back(1);
+                        }
+                    }
+                    [[maybe_unused]] const uint32_t mid = (valid + 1) / 2;
+                    for (uint32_t i = q0_lo; i < q2_end; ++i) {
+                        uint32_t sides = 0;
+                        if (i <= valid && !(xchg && xb && i == valid)) {
+                            sides |= 1;
+                        }
+                        if (i >= 1 && !(xchg && xt && i == 1)) {
+                            sides |= 2;
+                        }
+                        if (sides != 0) {
+                            side_row(i, sides);
+                        }
+                        if constexpr (xchg) {
+                            if (xt && i == mid) {
+                                {
+                                    MaybeDeviceZoneScope("compute_kwf_halo_wait");
+                                    halo_in.wait_front(++halo_seen);
+                                }
+                                side_row(1, 2);
+                                halo_out.reserve_back(1);
+                                halo_out.push_back(1);
+                            }
+                        }
+                    }
+                    if constexpr (kblocked) {
+                        w.pop_front(2 * ROUND_TILES);
+                    }
+                };
+                for (uint32_t step = 0; step < (fused ? 2u : 3u); ++step) {
+                    if constexpr (fused) {
+                        if (step == 1) {
+                            side_rounds();
+                            continue;
+                        }
+                    }
                     const uint32_t kw = KW_ROUND_ORDER[step];
                     // Q_1 (step 0) overwrites; Q_0 and Q_2 accumulate onto it.
                     if (step < 2) {

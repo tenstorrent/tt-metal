@@ -1,0 +1,86 @@
+SAFE_PYTEST: precompile off for a -k selection (its size is unknown from the command line); pass --precompile when the slice covers more than a few tests
+SAFE_PYTEST: Waiting for device lock...
+SAFE_PYTEST: Device lock acquired
+SAFE_PYTEST: dispatch_timeout=5s
+PRECOMPILE: off (narrow) — kernels compile on demand
+SAFE_PYTEST: pytest --import-mode=prepend ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_fused_side_rounds/test_fsr_exact.py::test_fsr_exact_unit -k extra
+========================================
+2026-11-19 09:49:08.053 | DEBUG    | ttnn:<module>:45 - Initial ttnn.CONFIG:
+Config{cache_path=/home/pmilojevic/.cache/ttnn,model_cache_path=/home/pmilojevic/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,validate_program_args=false,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_graph_python_stack_traces=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,strict_ccl_topology=false,verify_replicated_shards_on_dump=true,std::nullopt}
+============================= test session starts ==============================
+platform linux -- Python 3.10.19, pytest-9.0.3, pluggy-1.7.0 -- /localdev/pmilojevic/workspaces/opgen/python_env/bin/python
+cachedir: .pytest_cache
+benchmark: 5.2.3 (defaults: timer=time.perf_counter disable_gc=False min_rounds=5 min_time=0.000005 max_time=1.0 calibration_precision=10 warmup=False warmup_iterations=100000)
+rootdir: /localdev/pmilojevic/workspaces/opgen
+configfile: pytest.ini
+plugins: split-0.11.0, repeat-0.9.4, anyio-4.16.0, benchmark-5.2.3, github-actions-annotate-failures-0.3.0, timeout-2.4.0, cov-7.0.0, dash-2.15.0
+timeout: 300.0s
+timeout method: signal
+timeout func_only: False
+collecting ... collected 28 items / 21 deselected / 7 selected
+
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_fused_side_rounds/test_fsr_exact.py::test_fsr_exact_unit[extra-kblocked_n2] 2026-11-19 09:49:08.260 | info     |          Device | Opening user mode device driver (tt_cluster.cpp:252)
+2026-11-19 09:49:08.260 | info     |             UMD | Cluster constructor started. (cluster.cpp:434)
+2026-11-19 09:49:08.262 | info     |             UMD | Creating TopologyDiscovery for architecture: blackhole (topology_discovery.cpp:137)
+2026-11-19 09:49:08.262 | info     |             UMD | Starting topology discovery. (topology_discovery.cpp:156)
+2026-11-19 09:49:08.286 | info     |             UMD | Established firmware bundle version: 19.16.1 (topology_discovery.cpp:700)
+2026-11-19 09:49:08.287 | info     |             UMD | Completed topology discovery. (topology_discovery.cpp:161)
+2026-11-19 09:49:08.562 | info     |             UMD | Opening local chip ids/PCIe ids: {0, 1, 2, 3, 4, 5, 6, 7}/[2, 3, 1, 0, 6, 7, 5, 4] and remote chip ids {} (cluster.cpp:174)
+2026-11-19 09:49:08.562 | info     |             UMD | IOMMU: enabled (cluster.cpp:148)
+2026-11-19 09:49:08.562 | info     |             UMD | KMD version: 2.9.0 (cluster.cpp:151)
+2026-11-19 09:49:08.562 | info     |             UMD | Cluster constructor completed. (cluster.cpp:893)
+2026-11-19 09:49:08.569 | info     |             UMD | Starting devices in cluster (cluster.cpp:1482)
+2026-11-19 09:49:09.038 | info     |             UMD | Starting devices in cluster completed. (cluster.cpp:1491)
+2026-11-19 09:49:09.183 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:571)
+2026-11-19 09:49:09.183 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:624)
+2026-11-19 09:49:09.316 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using distributed::MeshDevice::create_unit_meshes(). (device_manager.cpp:265)
+{"case": "extra-kblocked_n2", "kw_fold": {"base": true, "copy": true}, "base": {"pcc": 0.999746, "mae": 0.00865}, "copy": {"pcc": 0.999746, "mae": 0.00865}, "identical_frac": 1.0, "max_base_copy_diff": 0.0}
+PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_fused_side_rounds/test_fsr_exact.py::test_fsr_exact_unit[extra-kblocked_n2_hifi4] {"case": "extra-kblocked_n2_hifi4", "kw_fold": {"base": true, "copy": true}, "base": {"pcc": 0.999923, "mae": 0.01415}, "copy": {"pcc": 0.999923, "mae": 0.01415}, "identical_frac": 1.0, "max_base_copy_diff": 0.0}
+PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_fused_side_rounds/test_fsr_exact.py::test_fsr_exact_unit[extra-n10_whole_k] {"case": "extra-n10_whole_k", "kw_fold": {"base": true, "copy": true}, "base": {"pcc": 1.0, "mae": 0.00944}, "copy": {"pcc": 1.0, "mae": 0.00944}, "identical_frac": 1.0, "max_base_copy_diff": 0.0}
+PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_fused_side_rounds/test_fsr_exact.py::test_fsr_exact_unit[extra-n10_kblocked] {"case": "extra-n10_kblocked", "kw_fold": {"base": true, "copy": true}, "base": {"pcc": 0.999866, "mae": 0.0092}, "copy": {"pcc": 0.999866, "mae": 0.0092}, "identical_frac": 1.0, "max_base_copy_diff": 0.0}
+PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_fused_side_rounds/test_fsr_exact.py::test_fsr_exact_unit[extra-n2_one_row_cores] {"case": "extra-n2_one_row_cores", "kw_fold": {"base": true, "copy": true}, "base": {"pcc": 0.999814, "mae": 0.00821}, "copy": {"pcc": 0.999814, "mae": 0.00821}, "identical_frac": 1.0, "max_base_copy_diff": 0.0}
+PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_fused_side_rounds/test_fsr_exact.py::test_fsr_exact_unit[extra-n2_d3] {"case": "extra-n2_d3", "kw_fold": {"base": true, "copy": true}, "base": {"pcc": 0.999728, "mae": 0.00883}, "copy": {"pcc": 0.999728, "mae": 0.00883}, "identical_frac": 1.0, "max_base_copy_diff": 0.0}
+PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_fused_side_rounds/test_fsr_exact.py::test_fsr_exact_unit[extra-kblocked_n2_multiblock] {"case": "extra-kblocked_n2_multiblock", "kw_fold": {"base": true, "copy": true}, "base": {"pcc": 0.999858, "mae": 0.00909}, "copy": {"pcc": 0.999858, "mae": 0.00909}, "identical_frac": 1.0, "max_base_copy_diff": 0.0}
+PASSED
+
+- generated xml file: /localdev/pmilojevic/workspaces/opgen/generated/test_reports/most_recent_tests.xml -
+============================= slowest 25 durations =============================
+1.90s call     ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_fused_side_rounds/test_fsr_exact.py::test_fsr_exact_unit[extra-kblocked_n2_multiblock]
+1.74s setup    ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_fused_side_rounds/test_fsr_exact.py::test_fsr_exact_unit[extra-kblocked_n2]
+0.94s call     ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_fused_side_rounds/test_fsr_exact.py::test_fsr_exact_unit[extra-kblocked_n2_hifi4]
+0.93s call     ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_fused_side_rounds/test_fsr_exact.py::test_fsr_exact_unit[extra-kblocked_n2]
+0.93s call     ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_fused_side_rounds/test_fsr_exact.py::test_fsr_exact_unit[extra-n10_kblocked]
+0.03s call     ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_fused_side_rounds/test_fsr_exact.py::test_fsr_exact_unit[extra-n10_whole_k]
+0.03s call     ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_fused_side_rounds/test_fsr_exact.py::test_fsr_exact_unit[extra-n2_d3]
+0.03s call     ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_fused_side_rounds/test_fsr_exact.py::test_fsr_exact_unit[extra-n2_one_row_cores]
+0.02s teardown ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_fused_side_rounds/test_fsr_exact.py::test_fsr_exact_unit[extra-kblocked_n2_multiblock]
+0.00s setup    ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_fused_side_rounds/test_fsr_exact.py::test_fsr_exact_unit[extra-n10_kblocked]
+0.00s setup    ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_fused_side_rounds/test_fsr_exact.py::test_fsr_exact_unit[extra-kblocked_n2_multiblock]
+0.00s setup    ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_fused_side_rounds/test_fsr_exact.py::test_fsr_exact_unit[extra-n10_whole_k]
+0.00s setup    ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_fused_side_rounds/test_fsr_exact.py::test_fsr_exact_unit[extra-n2_one_row_cores]
+0.00s setup    ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_fused_side_rounds/test_fsr_exact.py::test_fsr_exact_unit[extra-n2_d3]
+0.00s setup    ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_fused_side_rounds/test_fsr_exact.py::test_fsr_exact_unit[extra-kblocked_n2_hifi4]
+0.00s teardown ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_fused_side_rounds/test_fsr_exact.py::test_fsr_exact_unit[extra-n10_kblocked]
+0.00s teardown ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_fused_side_rounds/test_fsr_exact.py::test_fsr_exact_unit[extra-n2_d3]
+0.00s teardown ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_fused_side_rounds/test_fsr_exact.py::test_fsr_exact_unit[extra-kblocked_n2]
+0.00s teardown ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_fused_side_rounds/test_fsr_exact.py::test_fsr_exact_unit[extra-n10_whole_k]
+0.00s teardown ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_fused_side_rounds/test_fsr_exact.py::test_fsr_exact_unit[extra-kblocked_n2_hifi4]
+0.00s teardown ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_fused_side_rounds/test_fsr_exact.py::test_fsr_exact_unit[extra-n2_one_row_cores]
+======================= 7 passed, 21 deselected in 6.62s =======================
+2026-11-19 09:49:15.897 | info     |    BuildKernels | JIT cache stats: 76/94 hits (80.9%) [76 cached, 12 build-once dedup, 0 merged artifacts, 0 merged genfiles] (build_cache_telemetry.cpp:362)
+2026-11-19 09:49:15.897 | info     |    BuildKernels | JIT telemetry: 48 registered TelemetryTokens (build_cache_telemetry.cpp:510)
+2026-11-19 09:49:15.946 | info     |          Device | Closing user mode device drivers (tt_cluster.cpp:605)
+2026-11-19 09:49:15.946 | info     |             UMD | Closing devices in cluster (cluster.cpp:1496)
+2026-11-19 09:49:16.471 | info     |             UMD | Closing devices in cluster completed. (cluster.cpp:1506)
+2026-11-19 09:49:16.471 | info     |             UMD | Cluster destructor started. (cluster.cpp:1227)
+2026-11-19 09:49:16.472 | info     |             UMD | Cluster destructor completed. (cluster.cpp:1240)
+========================================
+SAFE_PYTEST_RESULT: PASS
+========================================
+SAFE_PYTEST_TOTAL_RUNTIME: 0m14s (14s total, device-lock-acquired -> exit)

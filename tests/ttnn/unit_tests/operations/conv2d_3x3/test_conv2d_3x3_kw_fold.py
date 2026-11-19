@@ -9,7 +9,8 @@ reach, so this file forces it to cover the path itself:
   M-block), with weight servers and without;
 - Q_1 packed as the overwrite the Q_0 / Q_2 rounds accumulate onto, across several M-blocks per core;
 - the final pass's bias add from the reader's decoded bias rows: bf8_b and bf16 bias tiles;
-- dilation 2, C_out off a multiple of the plane width, a ragged last core, HiFi4.
+- dilation 2, C_out off a multiple of the plane width, a ragged last core, HiFi4;
+- the fused side rounds (2-tile n-groups: Q_0 | Q_2 as one 1 x 4 pass) on K-blocked weights, one and several n-groups.
 """
 
 import importlib
@@ -35,6 +36,9 @@ CASES = [
     ("ragged_bf8", 48, 64, 64, 64, 1, "bf8", "bf8", "LoFi", True, 20),
     ("many_blocks_whole_k", 128, 256, 32, 32, 1, "bf8", "bf8", "LoFi", True, 4),
     ("many_blocks_kblocked", 64, 128, 128, 128, 1, "bf8", "bf8", "LoFi", True, 8),
+    # Fused side rounds (2-tile n-groups) on K-blocked weights: one n-group (N = 2) and five (N = 10).
+    ("kblocked_n2", 32, 64, 256, 64, 1, "bf8", "bf8", "LoFi", True, 16),
+    ("kblocked_n10", 32, 128, 64, 320, 1, "bf8", "bf8", "LoFi", True, 32),
 ]
 DTYPES = {"bf8": ttnn.bfloat8_b, "bf16": ttnn.bfloat16}
 
@@ -122,6 +126,8 @@ XCHG_CASES = [
     ("ragged_one_row", 48, 64, 64, 64, 1, "bf8", "bf8", "LoFi", True, 20),
     ("bf16", 32, 128, 64, 64, 1, "bf16", "bf16", "LoFi", True, 43),
     ("whole_k_n1", 128, 256, 32, 32, 1, "bf8", "bf8", "LoFi", True, 103),
+    ("kblocked_n2_hifi4", 64, 128, 256, 64, 1, "bf8", "bf8", "HiFi4", False, 86),
+    ("whole_k_n2_one_row", 32, 64, 64, 64, 1, "bf8", "bf8", "LoFi", True, 64),
 ]
 
 

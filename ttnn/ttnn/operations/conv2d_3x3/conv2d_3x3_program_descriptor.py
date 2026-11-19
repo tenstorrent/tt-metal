@@ -1561,6 +1561,18 @@ def _kw_fold_subblock(n_tiles):
     return (gw, 1) if gw >= 3 else (1, DEST_TILES_FP32_HALF_SYNC)
 
 
+# Fused side rounds (conv2d_3x3_kw_fold.hpp): at a 2-tile n-group (4 x 1 subblocks, each in0 tile feeding one
+# tile-MAC per K step), Q_0 and Q_2 of a tile-row run as one 1 x 4 subblock that unpacks each in0 tile once for both
+# columns' weights; Q_1 keeps its 4 x 1 round. Weight rounds 1 and 2 then hold the pair interleaved (the writer, the
+# weight server and compute share that order). Measured (Blackhole p150b, LoFi bf8_b, unzoned, bit-identical):
+# stem.conv2 31.13 -> 28.21, res2 11.28 -> 10.55 us; forced K-blocked N = 2 HiFi4 -4.4%, N = 10 K-blocked -4.2%. A
+# 1-tile n-group keeps the three rounds: there the pair is a 1 x 2 subblock (two tile-MACs per matmul call instead of
+# four) and center_head.1 went 10.68 -> 12.14 us (zoned).
+def kw_fold_fused_gw(n_tiles):
+    """The fused side rounds' n-group width (2), or 0 where kw-fold keeps its three column rounds."""
+    return 2 if _kw_fold_group(n_tiles) == 2 else 0
+
+
 def _kw_fold_blocking(g, b, bm):
     """kw-fold at bm tile-rows per M-block (a divisor of core_m_tiles): the walk's blocking re-solved at bm (its
     per-block extents), then kw-fold's weight rounds and slab."""
@@ -1578,7 +1590,9 @@ def _kw_fold_blocking(g, b, bm):
         block_k_tiles=ct,
         block_n_tiles=3 * rw,
         num_k_blocks=3 * (n // rw),
-        weight_depth=2 if kw_fold_kblocked(g) else 3,
+        # K-blocked: double-buffered sub-rounds; with the fused side rounds three, so an n-group's rounds 1 and 2 (the
+        # fused pair, waited for together) always sit in consecutive slots (2 slots wrap them every other n-group).
+        weight_depth=2 if kw_fold_kblocked(g) and not kw_fold_fused_gw(n) else 3,
         center_mode=CENTER_NONE,
         center_slot_blocks=1,
         ring=False,
@@ -2290,6 +2304,7 @@ def create_program_descriptor(
             ("KWF_CB_BIAS", str(CB_BIAS)),
             ("KWF_N", str(g.tensor_n_tiles)),
             ("KWF_BIAS_BFP8", str(int(bias_tensor.dtype == ttnn.bfloat8_b))),
+            ("KWF_FUSED_GW", str(kw_fold_fused_gw(g.tensor_n_tiles))),
         ]
         if kwf_xchg:
             _kwf_dm_defines += [
@@ -2322,6 +2337,7 @@ def create_program_descriptor(
             ("KWF_CB_HALO_IN", str(CB_KWF_HALO_IN)),
             # The halo exchange's code only where it runs (it costs RISC time on small subblocks even when idle).
             ("KWF_XCHG", str(int(kwf_xchg))),
+            ("KWF_FUSED", str(int(kw_fold_fused_gw(g.tensor_n_tiles) != 0))),
         ]
     _pad_dm_defines, _pad_compute_defines = [], []
     if padded_slab:
@@ -2425,7 +2441,7 @@ def create_program_descriptor(
                     bn,
                     b.num_k_blocks,
                     num_chunks,
-                    int(kwf),
+                    (1 + kw_fold_fused_gw(g.tensor_n_tiles)) if kwf else 0,
                     g.tensor_n_tiles,
                     *_weight_shard_tiles(weight_tensor, kwf or bn == g.tensor_n_tiles),
                 ]

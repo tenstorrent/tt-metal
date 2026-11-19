@@ -545,11 +545,36 @@ void kernel_main() {
         const uint32_t s = k_blocks_issued % num_k_blocks;
         const uint32_t kw = kw_round_order[s % 3];
         const uint32_t n0 = (s / 3) * kwf_rw;
-        for (uint32_t kh = 0; kh < 3; ++kh) {
-            for (uint32_t c = 0; c < block_k_tiles; ++c) {
-                const uint32_t row_page = ((kh * 3 + kw) * block_k_tiles + c) * tensor_n_tiles + n0;
-                for (uint32_t n = 0; n < kwf_rw; ++n, l1 += weight_tile_bytes) {
-                    noc_async_read_page(row_page + n, weights, l1);
+#if KWF_FUSED_GW
+        // Fused side rounds (kw_fold.hpp): rounds 1 and 2 hold the kw = 0 | 2 pair interleaved, per (kh, c) row of
+        // 2 rw tiles: each gw-wide n-group's kw = 0 columns, then its kw = 2 columns. Round 0 (kw = 1) is unchanged.
+        if (s % 3 != 0) {
+            constexpr uint32_t gwf = KWF_FUSED_GW;
+            constexpr uint32_t frow = 2 * kwf_rw;
+            constexpr uint32_t round = 3 * block_k_tiles * kwf_rw;
+            const uint32_t f0 = (s % 3 - 1) * round;
+            for (uint32_t f = f0; f < f0 + round; ++f, l1 += weight_tile_bytes) {
+                const uint32_t kc = f / frow;  // kh * Ct + c
+                const uint32_t j = f - kc * frow;
+                const uint32_t grp = j / (2 * gwf);
+                const uint32_t jj = j - grp * 2 * gwf;
+                const uint32_t kh = kc / block_k_tiles;
+                const uint32_t kwf = jj < gwf ? 0 : 2;
+                const uint32_t n = grp * gwf + (jj < gwf ? jj : jj - gwf);
+                noc_async_read_page(
+                    ((kh * 3 + kwf) * block_k_tiles + (kc - kh * block_k_tiles)) * tensor_n_tiles + n0 + n,
+                    weights,
+                    l1);
+            }
+        } else
+#endif
+        {
+            for (uint32_t kh = 0; kh < 3; ++kh) {
+                for (uint32_t c = 0; c < block_k_tiles; ++c) {
+                    const uint32_t row_page = ((kh * 3 + kw) * block_k_tiles + c) * tensor_n_tiles + n0;
+                    for (uint32_t n = 0; n < kwf_rw; ++n, l1 += weight_tile_bytes) {
+                        noc_async_read_page(row_page + n, weights, l1);
+                    }
                 }
             }
         }

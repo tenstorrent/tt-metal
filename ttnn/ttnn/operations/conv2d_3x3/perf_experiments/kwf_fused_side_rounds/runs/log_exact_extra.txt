@@ -1,0 +1,503 @@
+SAFE_PYTEST: precompile off for a -k selection (its size is unknown from the command line); pass --precompile when the slice covers more than a few tests
+SAFE_PYTEST: Waiting for device lock...
+SAFE_PYTEST: Device lock acquired
+SAFE_PYTEST: dispatch_timeout=5s
+PRECOMPILE: off (narrow) — kernels compile on demand
+SAFE_PYTEST: pytest --import-mode=prepend ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_fused_side_rounds/test_fsr_exact.py::test_fsr_exact_unit -k extra
+========================================
+2026-11-19 09:47:19.584 | DEBUG    | ttnn:<module>:45 - Initial ttnn.CONFIG:
+Config{cache_path=/home/pmilojevic/.cache/ttnn,model_cache_path=/home/pmilojevic/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,validate_program_args=false,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_graph_python_stack_traces=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,strict_ccl_topology=false,verify_replicated_shards_on_dump=true,std::nullopt}
+============================= test session starts ==============================
+platform linux -- Python 3.10.19, pytest-9.0.3, pluggy-1.7.0 -- /localdev/pmilojevic/workspaces/opgen/python_env/bin/python
+cachedir: .pytest_cache
+benchmark: 5.2.3 (defaults: timer=time.perf_counter disable_gc=False min_rounds=5 min_time=0.000005 max_time=1.0 calibration_precision=10 warmup=False warmup_iterations=100000)
+rootdir: /localdev/pmilojevic/workspaces/opgen
+configfile: pytest.ini
+plugins: split-0.11.0, repeat-0.9.4, anyio-4.16.0, benchmark-5.2.3, github-actions-annotate-failures-0.3.0, timeout-2.4.0, cov-7.0.0, dash-2.15.0
+timeout: 300.0s
+timeout method: signal
+timeout func_only: False
+collecting ... collected 28 items / 21 deselected / 7 selected
+
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_fused_side_rounds/test_fsr_exact.py::test_fsr_exact_unit[extra-kblocked_n2] 2026-11-19 09:47:19.765 | info     |          Device | Opening user mode device driver (tt_cluster.cpp:252)
+2026-11-19 09:47:19.765 | info     |             UMD | Cluster constructor started. (cluster.cpp:434)
+2026-11-19 09:47:19.767 | info     |             UMD | Creating TopologyDiscovery for architecture: blackhole (topology_discovery.cpp:137)
+2026-11-19 09:47:19.767 | info     |             UMD | Starting topology discovery. (topology_discovery.cpp:156)
+2026-11-19 09:47:19.790 | info     |             UMD | Established firmware bundle version: 19.16.1 (topology_discovery.cpp:700)
+2026-11-19 09:47:19.791 | info     |             UMD | Completed topology discovery. (topology_discovery.cpp:161)
+2026-11-19 09:47:20.054 | info     |             UMD | Opening local chip ids/PCIe ids: {0, 1, 2, 3, 4, 5, 6, 7}/[2, 3, 1, 0, 6, 7, 5, 4] and remote chip ids {} (cluster.cpp:174)
+2026-11-19 09:47:20.054 | info     |             UMD | IOMMU: enabled (cluster.cpp:148)
+2026-11-19 09:47:20.054 | info     |             UMD | KMD version: 2.9.0 (cluster.cpp:151)
+2026-11-19 09:47:20.054 | info     |             UMD | Cluster constructor completed. (cluster.cpp:893)
+2026-11-19 09:47:20.061 | info     |             UMD | Starting devices in cluster (cluster.cpp:1482)
+2026-11-19 09:47:20.527 | info     |             UMD | Starting devices in cluster completed. (cluster.cpp:1491)
+2026-11-19 09:47:20.668 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:571)
+2026-11-19 09:47:20.668 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:624)
+2026-11-19 09:47:20.800 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using distributed::MeshDevice::create_unit_meshes(). (device_manager.cpp:265)
+{"case": "extra-kblocked_n2", "kw_fold": {"base": true, "copy": true}, "base": {"pcc": 0.999746, "mae": 0.00865}, "copy": {"pcc": NaN, "mae": Infinity}, "identical_frac": 0.218437, "max_base_copy_diff": Infinity, "first_bad": [[0, 1], [0, 2], [0, 4], [0, 6], [0, 7], [0, 8]]}
+FAILED2026-11-19 09:47:23.488 | INFO     | conftest:pytest_runtest_teardown:1227 - In custom teardown, open device ids: {0}
+
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_fused_side_rounds/test_fsr_exact.py::test_fsr_exact_unit[extra-kblocked_n2_hifi4] {"case": "extra-kblocked_n2_hifi4", "kw_fold": {"base": true, "copy": true}, "base": {"pcc": 0.999923, "mae": 0.01415}, "copy": {"pcc": NaN, "mae": Infinity}, "identical_frac": 6.7e-05, "max_base_copy_diff": Infinity, "first_bad": [[0, 0], [0, 1], [0, 2], [0, 3], [0, 4], [0, 5]]}
+FAILED2026-11-19 09:47:25.396 | INFO     | conftest:pytest_runtest_teardown:1227 - In custom teardown, open device ids: {0}
+
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_fused_side_rounds/test_fsr_exact.py::test_fsr_exact_unit[extra-n10_whole_k] {"case": "extra-n10_whole_k", "kw_fold": {"base": true, "copy": true}, "base": {"pcc": 1.0, "mae": 0.00944}, "copy": {"pcc": 1.0, "mae": 0.00944}, "identical_frac": 1.0, "max_base_copy_diff": 0.0}
+PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_fused_side_rounds/test_fsr_exact.py::test_fsr_exact_unit[extra-n10_kblocked] {"case": "extra-n10_kblocked", "kw_fold": {"base": true, "copy": true}, "base": {"pcc": 0.999866, "mae": 0.0092}, "copy": {"pcc": NaN, "mae": Infinity}, "identical_frac": 0.535484, "max_base_copy_diff": Infinity, "first_bad": [[0, 0], [0, 2], [0, 3], [0, 4], [0, 5], [0, 6]]}
+FAILED2026-11-19 09:47:29.180 | INFO     | conftest:pytest_runtest_teardown:1227 - In custom teardown, open device ids: {0}
+
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_fused_side_rounds/test_fsr_exact.py::test_fsr_exact_unit[extra-n2_one_row_cores] {"case": "extra-n2_one_row_cores", "kw_fold": {"base": true, "copy": true}, "base": {"pcc": 0.999814, "mae": 0.00821}, "copy": {"pcc": 0.999814, "mae": 0.00821}, "identical_frac": 1.0, "max_base_copy_diff": 0.0}
+PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_fused_side_rounds/test_fsr_exact.py::test_fsr_exact_unit[extra-n2_d3] {"case": "extra-n2_d3", "kw_fold": {"base": true, "copy": true}, "base": {"pcc": 0.999728, "mae": 0.00883}, "copy": {"pcc": 0.999728, "mae": 0.00883}, "identical_frac": 1.0, "max_base_copy_diff": 0.0}
+PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_fused_side_rounds/test_fsr_exact.py::test_fsr_exact_unit[extra-kblocked_n2_multiblock] FAILED2026-11-19 09:47:33.183 | INFO     | conftest:pytest_runtest_teardown:1227 - In custom teardown, open device ids: {0}
+
+
+=================================== FAILURES ===================================
+____________________ test_fsr_exact_unit[extra-kblocked_n2] ____________________
+
+kind = 'extra', case = ('kblocked_n2', 32, 64, 256, 64, 1, ...)
+device = MeshDevice(1x1 grid, 1 devices)
+
+    @pytest.mark.parametrize("kind,case", _UNIT, ids=_UNIT_IDS)
+    def test_fsr_exact_unit(kind, case, device):
+        import torch
+        import ttnn
+
+        _, H, W, c_in, c_out, d, act, wdt, fidelity, relu, cores = case
+        DT = {"bf8": ttnn.bfloat8_b, "bf16": ttnn.bfloat16}
+        dtype, weight_dtype = DT[act], DT[wdt]
+        grid = device.compute_with_storage_grid_size()
+        m_tiles = H * W // 32
+        per_core = -(-m_tiles // cores)
+        cores = -(-m_tiles // per_core)
+        if cores > grid.x * grid.y:
+            pytest.skip("grid")
+        mc = ttnn.MemoryConfig(
+            ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+            ttnn.BufferType.L1,
+            ttnn.ShardSpec(
+                ttnn.num_cores_to_corerangeset(cores, grid, row_wise=True),
+                [per_core * 32, c_in],
+                ttnn.ShardOrientation.ROW_MAJOR,
+            ),
+        )
+        torch.manual_seed(0)
+        tx = torch.randn(1, 1, H * W, c_in).to(torch.bfloat16)
+        tw = (torch.randn(c_out, c_in, 3, 3) / (3 * c_in**0.5)).to(torch.bfloat16)
+        tb = torch.randn(c_out).to(torch.bfloat16)
+        prep = dict(
+            stride=1,
+            padding=d,
+            dilation=d,
+            input_dtype=dtype,
+            input_layout=ttnn.TILE_LAYOUT,
+            weight_dtype=weight_dtype,
+            input_memory_config=mc,
+            device=device,
+        )
+        conv = dict(
+            input_height=H,
+            input_width=W,
+            padding=d,
+            stride=1,
+            dilation=d,
+            activation="relu" if relu else None,
+            compute_kernel_config=ttnn.init_device_compute_kernel_config(
+                device.arch(), math_fidelity=getattr(ttnn.MathFidelity, fidelity), fp32_dest_acc_en=True
+            ),
+        )
+        x = tx.float().reshape(1, H, W, c_in).permute(0, 3, 1, 2)
+        ref = torch.nn.functional.conv2d(x, tw.float(), tb.float(), padding=d, dilation=d)
+        if relu:
+            ref = torch.relu(ref)
+        ref = ref.permute(0, 2, 3, 1).reshape(1, 1, -1, c_out)
+        outs, kwf = _run_both(
+            lambda: ttnn.from_torch(tx, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device, memory_config=mc),
+            conv,
+            prep,
+            tw,
+            tb,
+            force=True,
+        )
+        outs = {k: v.reshape(ref.shape) for k, v in outs.items()}
+        rec = {"case": f"{kind}-{case[0]}", "kw_fold": kwf}
+        _record(rec, outs, ref, c_out)
+        assert kwf["base"] and kwf["copy"], rec
+>       assert rec["identical_frac"] == 1.0, rec
+E       AssertionError: {'base': {'mae': 0.00865, 'pcc': 0.999746}, 'case': 'extra-kblocked_n2', 'copy': {'mae': inf, 'pcc': nan}, 'first_bad': [[0, 1], [0, 2], [0, 4], [0, 6], [0, 7], [0, 8]], ...}
+E       assert 0.218437 == 1.0
+
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_fused_side_rounds/test_fsr_exact.py:253: AssertionError
+_________________ test_fsr_exact_unit[extra-kblocked_n2_hifi4] _________________
+
+kind = 'extra', case = ('kblocked_n2_hifi4', 64, 128, 256, 64, 1, ...)
+device = MeshDevice(1x1 grid, 1 devices)
+
+    @pytest.mark.parametrize("kind,case", _UNIT, ids=_UNIT_IDS)
+    def test_fsr_exact_unit(kind, case, device):
+        import torch
+        import ttnn
+
+        _, H, W, c_in, c_out, d, act, wdt, fidelity, relu, cores = case
+        DT = {"bf8": ttnn.bfloat8_b, "bf16": ttnn.bfloat16}
+        dtype, weight_dtype = DT[act], DT[wdt]
+        grid = device.compute_with_storage_grid_size()
+        m_tiles = H * W // 32
+        per_core = -(-m_tiles // cores)
+        cores = -(-m_tiles // per_core)
+        if cores > grid.x * grid.y:
+            pytest.skip("grid")
+        mc = ttnn.MemoryConfig(
+            ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+            ttnn.BufferType.L1,
+            ttnn.ShardSpec(
+                ttnn.num_cores_to_corerangeset(cores, grid, row_wise=True),
+                [per_core * 32, c_in],
+                ttnn.ShardOrientation.ROW_MAJOR,
+            ),
+        )
+        torch.manual_seed(0)
+        tx = torch.randn(1, 1, H * W, c_in).to(torch.bfloat16)
+        tw = (torch.randn(c_out, c_in, 3, 3) / (3 * c_in**0.5)).to(torch.bfloat16)
+        tb = torch.randn(c_out).to(torch.bfloat16)
+        prep = dict(
+            stride=1,
+            padding=d,
+            dilation=d,
+            input_dtype=dtype,
+            input_layout=ttnn.TILE_LAYOUT,
+            weight_dtype=weight_dtype,
+            input_memory_config=mc,
+            device=device,
+        )
+        conv = dict(
+            input_height=H,
+            input_width=W,
+            padding=d,
+            stride=1,
+            dilation=d,
+            activation="relu" if relu else None,
+            compute_kernel_config=ttnn.init_device_compute_kernel_config(
+                device.arch(), math_fidelity=getattr(ttnn.MathFidelity, fidelity), fp32_dest_acc_en=True
+            ),
+        )
+        x = tx.float().reshape(1, H, W, c_in).permute(0, 3, 1, 2)
+        ref = torch.nn.functional.conv2d(x, tw.float(), tb.float(), padding=d, dilation=d)
+        if relu:
+            ref = torch.relu(ref)
+        ref = ref.permute(0, 2, 3, 1).reshape(1, 1, -1, c_out)
+        outs, kwf = _run_both(
+            lambda: ttnn.from_torch(tx, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device, memory_config=mc),
+            conv,
+            prep,
+            tw,
+            tb,
+            force=True,
+        )
+        outs = {k: v.reshape(ref.shape) for k, v in outs.items()}
+        rec = {"case": f"{kind}-{case[0]}", "kw_fold": kwf}
+        _record(rec, outs, ref, c_out)
+        assert kwf["base"] and kwf["copy"], rec
+>       assert rec["identical_frac"] == 1.0, rec
+E       AssertionError: {'base': {'mae': 0.01415, 'pcc': 0.999923}, 'case': 'extra-kblocked_n2_hifi4', 'copy': {'mae': inf, 'pcc': nan}, 'first_bad': [[0, 0], [0, 1], [0, 2], [0, 3], [0, 4], [0, 5]], ...}
+E       assert 6.7e-05 == 1.0
+
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_fused_side_rounds/test_fsr_exact.py:253: AssertionError
+___________________ test_fsr_exact_unit[extra-n10_kblocked] ____________________
+
+kind = 'extra', case = ('n10_kblocked', 32, 128, 64, 320, 1, ...)
+device = MeshDevice(1x1 grid, 1 devices)
+
+    @pytest.mark.parametrize("kind,case", _UNIT, ids=_UNIT_IDS)
+    def test_fsr_exact_unit(kind, case, device):
+        import torch
+        import ttnn
+
+        _, H, W, c_in, c_out, d, act, wdt, fidelity, relu, cores = case
+        DT = {"bf8": ttnn.bfloat8_b, "bf16": ttnn.bfloat16}
+        dtype, weight_dtype = DT[act], DT[wdt]
+        grid = device.compute_with_storage_grid_size()
+        m_tiles = H * W // 32
+        per_core = -(-m_tiles // cores)
+        cores = -(-m_tiles // per_core)
+        if cores > grid.x * grid.y:
+            pytest.skip("grid")
+        mc = ttnn.MemoryConfig(
+            ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+            ttnn.BufferType.L1,
+            ttnn.ShardSpec(
+                ttnn.num_cores_to_corerangeset(cores, grid, row_wise=True),
+                [per_core * 32, c_in],
+                ttnn.ShardOrientation.ROW_MAJOR,
+            ),
+        )
+        torch.manual_seed(0)
+        tx = torch.randn(1, 1, H * W, c_in).to(torch.bfloat16)
+        tw = (torch.randn(c_out, c_in, 3, 3) / (3 * c_in**0.5)).to(torch.bfloat16)
+        tb = torch.randn(c_out).to(torch.bfloat16)
+        prep = dict(
+            stride=1,
+            padding=d,
+            dilation=d,
+            input_dtype=dtype,
+            input_layout=ttnn.TILE_LAYOUT,
+            weight_dtype=weight_dtype,
+            input_memory_config=mc,
+            device=device,
+        )
+        conv = dict(
+            input_height=H,
+            input_width=W,
+            padding=d,
+            stride=1,
+            dilation=d,
+            activation="relu" if relu else None,
+            compute_kernel_config=ttnn.init_device_compute_kernel_config(
+                device.arch(), math_fidelity=getattr(ttnn.MathFidelity, fidelity), fp32_dest_acc_en=True
+            ),
+        )
+        x = tx.float().reshape(1, H, W, c_in).permute(0, 3, 1, 2)
+        ref = torch.nn.functional.conv2d(x, tw.float(), tb.float(), padding=d, dilation=d)
+        if relu:
+            ref = torch.relu(ref)
+        ref = ref.permute(0, 2, 3, 1).reshape(1, 1, -1, c_out)
+        outs, kwf = _run_both(
+            lambda: ttnn.from_torch(tx, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device, memory_config=mc),
+            conv,
+            prep,
+            tw,
+            tb,
+            force=True,
+        )
+        outs = {k: v.reshape(ref.shape) for k, v in outs.items()}
+        rec = {"case": f"{kind}-{case[0]}", "kw_fold": kwf}
+        _record(rec, outs, ref, c_out)
+        assert kwf["base"] and kwf["copy"], rec
+>       assert rec["identical_frac"] == 1.0, rec
+E       AssertionError: {'base': {'mae': 0.0092, 'pcc': 0.999866}, 'case': 'extra-n10_kblocked', 'copy': {'mae': inf, 'pcc': nan}, 'first_bad': [[0, 0], [0, 2], [0, 3], [0, 4], [0, 5], [0, 6]], ...}
+E       assert 0.535484 == 1.0
+
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_fused_side_rounds/test_fsr_exact.py:253: AssertionError
+______________ test_fsr_exact_unit[extra-kblocked_n2_multiblock] _______________
+
+kind = 'extra', case = ('kblocked_n2_multiblock', 64, 128, 256, 64, 1, ...)
+device = MeshDevice(1x1 grid, 1 devices)
+
+    @pytest.mark.parametrize("kind,case", _UNIT, ids=_UNIT_IDS)
+    def test_fsr_exact_unit(kind, case, device):
+        import torch
+        import ttnn
+
+        _, H, W, c_in, c_out, d, act, wdt, fidelity, relu, cores = case
+        DT = {"bf8": ttnn.bfloat8_b, "bf16": ttnn.bfloat16}
+        dtype, weight_dtype = DT[act], DT[wdt]
+        grid = device.compute_with_storage_grid_size()
+        m_tiles = H * W // 32
+        per_core = -(-m_tiles // cores)
+        cores = -(-m_tiles // per_core)
+        if cores > grid.x * grid.y:
+            pytest.skip("grid")
+        mc = ttnn.MemoryConfig(
+            ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+            ttnn.BufferType.L1,
+            ttnn.ShardSpec(
+                ttnn.num_cores_to_corerangeset(cores, grid, row_wise=True),
+                [per_core * 32, c_in],
+                ttnn.ShardOrientation.ROW_MAJOR,
+            ),
+        )
+        torch.manual_seed(0)
+        tx = torch.randn(1, 1, H * W, c_in).to(torch.bfloat16)
+        tw = (torch.randn(c_out, c_in, 3, 3) / (3 * c_in**0.5)).to(torch.bfloat16)
+        tb = torch.randn(c_out).to(torch.bfloat16)
+        prep = dict(
+            stride=1,
+            padding=d,
+            dilation=d,
+            input_dtype=dtype,
+            input_layout=ttnn.TILE_LAYOUT,
+            weight_dtype=weight_dtype,
+            input_memory_config=mc,
+            device=device,
+        )
+        conv = dict(
+            input_height=H,
+            input_width=W,
+            padding=d,
+            stride=1,
+            dilation=d,
+            activation="relu" if relu else None,
+            compute_kernel_config=ttnn.init_device_compute_kernel_config(
+                device.arch(), math_fidelity=getattr(ttnn.MathFidelity, fidelity), fp32_dest_acc_en=True
+            ),
+        )
+        x = tx.float().reshape(1, H, W, c_in).permute(0, 3, 1, 2)
+        ref = torch.nn.functional.conv2d(x, tw.float(), tb.float(), padding=d, dilation=d)
+        if relu:
+            ref = torch.relu(ref)
+        ref = ref.permute(0, 2, 3, 1).reshape(1, 1, -1, c_out)
+>       outs, kwf = _run_both(
+            lambda: ttnn.from_torch(tx, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device, memory_config=mc),
+            conv,
+            prep,
+            tw,
+            tb,
+            force=True,
+        )
+
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_fused_side_rounds/test_fsr_exact.py:241:
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_fused_side_rounds/test_fsr_exact.py:79: in _run_both
+    y = mod.conv2d_3x3(
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_fused_side_rounds/op_base/conv2d_3x3.py:568: in conv2d_3x3
+    blocking = select_blocking(geometry, work_grid, l1_cb_budget_bytes(resident_shard_bytes))
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+g = Conv3x3Geometry(input_height=64, input_width=128, c_in_p=256, c_out=64, padding=1, stride=1, dilation=1, output_height...t_tile_bytes=1088, out_tile_bytes=1088, has_bias=True, sharded_output=True, k_cols=1, remote_output=False, m_ranges=())
+grid = (4, 1), l1_budget = 7264
+
+    @functools.lru_cache(maxsize=256)
+    def select_blocking(g: Conv3x3Geometry, grid, l1_budget) -> Conv3x3Blocking:
+        """The one place block extents are chosen. Order of the L1 solve (op_design Mechanism caps #1):
+        shrink bk to divisors of the kh block down to one pixel's channels (costs no bytes), then shrink bm
+        (re-streams weights and halo) and take the coarsest bk that fits it, then bk below the tap floor. bn
+        is never shrunk. On a TILE input the untilize batch shrinks before any of them.
+
+        `grid` is the (x, y) extent the work is split over; a HEIGHT-sharded input passes (shard cores, 1),
+        and the descriptor maps work index i to shard core i. A BLOCK-sharded input passes (grid rows, 1):
+        the M split runs down the rows, and every core of a row shares that row's M range."""
+        grid_x, grid_y = grid
+        core_m_tiles, num_m_groups = m_split(g, grid_x * grid_y)
+        bn = g.tensor_n_tiles
+        kkh = g.tensor_kkh_tiles
+
+        divisors = [d for d in range(kkh, 0, -1) if kkh % d == 0]
+        tap_floor = g.c_in_p // TILE if g.c_in_p % TILE == 0 else kkh
+        bk_above_floor = [d for d in divisors if d >= tap_floor]
+        if g.face_direct_capable and FACE_DIRECT_WHOLE_K_BLOCK:
+            bk_above_floor = [g.tensor_k_tiles] + bk_above_floor
+        bk_below_floor = [d for d in divisors if d < tap_floor]
+        if tap_major_capable(g):
+            # Tap-major needs whole taps per K-block. Above the tap floor the only tap-splitting divisor of the kernel
+            # row (3 taps) is 1.5 taps; the row gather it would fall back to costs far more than the extra K-blocks.
+            bk_above_floor = [d for d in bk_above_floor if d % g.c_in_tiles == 0]
+        if g.sharded_output:
+            bm_candidates = [d for d in range(core_m_tiles, 0, -1) if core_m_tiles % d == 0]
+        else:
+            bm_candidates = sorted({_div_up(core_m_tiles, n) for n in range(1, core_m_tiles + 1)}, reverse=True)
+
+        # A smaller bm frees L1, so each bm retries the coarsest bk again: at a fixed bm, bk costs no bytes.
+        search = [(bm, bk) for bm in bm_candidates for bk in bk_above_floor]
+        search += [(bm_candidates[-1], bk) for bk in bk_below_floor]
+
+        def solve(candidates, nslice, shared=False):
+            for bm, bk in candidates:
+                # The untilize batch shrinks first: a smaller batch costs one more read fence per tile-row,
+                # a smaller bk costs a whole K-block (tilize, matmul init, L1-acc pass).
+                band_len, raw_slab_rows = _block_extents(g, core_m_tiles, bm)
+                ub_default = _default_untilize_batch_rows(g, band_len, raw_slab_rows)
+                for ub_cap in range(ub_default, 0, -1):
+                    fit = _footprint(g, core_m_tiles, bm, bk, bn, ub_cap, nslice, shared=shared)
+                    if fit["footprint_bytes"] <= l1_budget:
+                        # The deeper im2col ring only takes L1 left at this (bm, bk, ub): it never costs a coarser block.
+                        for depth in range(_im2col_ring_target(g, bm, bk, nslice), IM2COL_RM_DEPTH_ROWS, -1):
+                            deep = _footprint(
+                                g, core_m_tiles, bm, bk, bn, ub_cap, nslice, im2col_depth=depth, shared=shared
+                            )
+                            if deep["footprint_bytes"] <= l1_budget:
+                                fit = deep
+                                break
+                        # Center-tap direct: bm * bk more in0 tiles, from the L1 left after everything else.
+                        mode = center_tap_mode(g, bm, bk)
+                        extra = bm * bk * g.in0_tile_bytes
+                        if mode != CENTER_NONE and fit["footprint_bytes"] + extra <= l1_budget:
+                            fit = dict(
+                                fit,
+                                center_mode=mode,
+                                center_slot_blocks=2 if mode == CENTER_SLOTS else 1,
+                                footprint_bytes=fit["footprint_bytes"] + extra,
+                            )
+                        # Ring slab: the ring replaces the compacted slab, only from the L1 left after everything else
+                        # (counting it in the solve shrinks blocks for it: measured +34% on a DRAM C_in 512 shape).
+                        if not nslice and ring_capable(g, bm, bk) and ring_plan(g, core_m_tiles, bm) is not None:
+                            ring = ring_rows(g, core_m_tiles, bm)
+                            delta = (ring - fit["slab_tile_rows"]) * g.c_in_tiles * TILE_BYTES_BF16
+                            if fit["footprint_bytes"] + delta <= l1_budget:
+                                fit = dict(
+                                    fit, ring=True, slab_tile_rows=ring, footprint_bytes=fit["footprint_bytes"] + delta
+                                )
+                        return Conv3x3Blocking(
+                            grid_x=grid_x,
+                            core_m_tiles=core_m_tiles,
+                            num_m_groups=num_m_groups,
+                            block_m_tiles=bm,
+                            block_k_tiles=bk,
+                            block_n_tiles=bn,
+                            out_depth_row_groups=OUT_DEPTH_ROW_GROUPS,
+                            **fit,
+                        )
+            return None
+
+        blocking = solve(search, nslice=False)
+        if blocking is not None and g.k_split:
+            # N-slice-outer at the K-blocked solve's bm, unless its resident [bm, K] in0 does not fit. There bk only sets
+            # the gather / tilize granularity and costs almost no L1, so the coarsest that fits wins.
+            # The slab and the combine slots share L1 wherever every core runs one M-block. With more, the slab is refilled
+            # for the next block while the row's peers may still write this block's slots.
+            shared = blocking.max_m_blocks_per_core == 1
+            nslice = solve(
+                [(blocking.block_m_tiles, bk) for bk in bk_above_floor + bk_below_floor], nslice=True, shared=shared
+            )
+            blocking = nslice or blocking
+        if blocking is not None:
+            return blocking
+>       raise ValueError(
+            f"conv2d_3x3: no blocking of {g.input_height}x{g.input_width}x{g.c_in_p}->{g.c_out} "
+            f"fits the {l1_budget} B L1 CB budget"
+        )
+E       ValueError: conv2d_3x3: no blocking of 64x128x256->64 fits the 7264 B L1 CB budget
+
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_fused_side_rounds/op_base/conv2d_3x3_program_descriptor.py:1061: ValueError
+- generated xml file: /localdev/pmilojevic/workspaces/opgen/generated/test_reports/most_recent_tests.xml -
+============================= slowest 25 durations =============================
+1.91s call     ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_fused_side_rounds/test_fsr_exact.py::test_fsr_exact_unit[extra-kblocked_n2]
+1.90s call     ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_fused_side_rounds/test_fsr_exact.py::test_fsr_exact_unit[extra-n10_kblocked]
+1.90s call     ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_fused_side_rounds/test_fsr_exact.py::test_fsr_exact_unit[extra-kblocked_n2_hifi4]
+1.87s call     ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_fused_side_rounds/test_fsr_exact.py::test_fsr_exact_unit[extra-n10_whole_k]
+1.87s call     ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_fused_side_rounds/test_fsr_exact.py::test_fsr_exact_unit[extra-n2_d3]
+1.87s call     ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_fused_side_rounds/test_fsr_exact.py::test_fsr_exact_unit[extra-n2_one_row_cores]
+1.72s setup    ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_fused_side_rounds/test_fsr_exact.py::test_fsr_exact_unit[extra-kblocked_n2]
+0.02s teardown ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_fused_side_rounds/test_fsr_exact.py::test_fsr_exact_unit[extra-kblocked_n2_multiblock]
+0.02s call     ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_fused_side_rounds/test_fsr_exact.py::test_fsr_exact_unit[extra-kblocked_n2_multiblock]
+0.00s setup    ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_fused_side_rounds/test_fsr_exact.py::test_fsr_exact_unit[extra-kblocked_n2_multiblock]
+0.00s setup    ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_fused_side_rounds/test_fsr_exact.py::test_fsr_exact_unit[extra-n10_kblocked]
+0.00s setup    ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_fused_side_rounds/test_fsr_exact.py::test_fsr_exact_unit[extra-kblocked_n2_hifi4]
+0.00s setup    ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_fused_side_rounds/test_fsr_exact.py::test_fsr_exact_unit[extra-n2_d3]
+0.00s setup    ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_fused_side_rounds/test_fsr_exact.py::test_fsr_exact_unit[extra-n10_whole_k]
+0.00s setup    ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_fused_side_rounds/test_fsr_exact.py::test_fsr_exact_unit[extra-n2_one_row_cores]
+0.00s teardown ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_fused_side_rounds/test_fsr_exact.py::test_fsr_exact_unit[extra-kblocked_n2]
+0.00s teardown ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_fused_side_rounds/test_fsr_exact.py::test_fsr_exact_unit[extra-n10_kblocked]
+0.00s teardown ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_fused_side_rounds/test_fsr_exact.py::test_fsr_exact_unit[extra-kblocked_n2_hifi4]
+0.00s teardown ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_fused_side_rounds/test_fsr_exact.py::test_fsr_exact_unit[extra-n10_whole_k]
+0.00s teardown ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_fused_side_rounds/test_fsr_exact.py::test_fsr_exact_unit[extra-n2_d3]
+0.00s teardown ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_fused_side_rounds/test_fsr_exact.py::test_fsr_exact_unit[extra-n2_one_row_cores]
+=========================== short test summary info ============================
+FAILED ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_fused_side_rounds/test_fsr_exact.py::test_fsr_exact_unit[extra-kblocked_n2] - AssertionError: {'base': {'mae': 0.00865, 'pcc': 0.999746}, 'case': 'extra-kblocked_n2', 'copy': {'mae': inf, 'pcc': nan}, 'first_bad': [[0, 1], [0, 2], [0, 4], [0, 6], [0, 7], [0, 8]], ...}
+assert 0.218437 == 1.0
+FAILED ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_fused_side_rounds/test_fsr_exact.py::test_fsr_exact_unit[extra-kblocked_n2_hifi4] - AssertionError: {'base': {'mae': 0.01415, 'pcc': 0.999923}, 'case': 'extra-kblocked_n2_hifi4', 'copy': {'mae': inf, 'pcc': nan}, 'first_bad': [[0, 0], [0, 1], [0, 2], [0, 3], [0, 4], [0, 5]], ...}
+assert 6.7e-05 == 1.0
+FAILED ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_fused_side_rounds/test_fsr_exact.py::test_fsr_exact_unit[extra-n10_kblocked] - AssertionError: {'base': {'mae': 0.0092, 'pcc': 0.999866}, 'case': 'extra-n10_kblocked', 'copy': {'mae': inf, 'pcc': nan}, 'first_bad': [[0, 0], [0, 2], [0, 3], [0, 4], [0, 5], [0, 6]], ...}
+assert 0.535484 == 1.0
+FAILED ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_fused_side_rounds/test_fsr_exact.py::test_fsr_exact_unit[extra-kblocked_n2_multiblock] - ValueError: conv2d_3x3: no blocking of 64x128x256->64 fits the 7264 B L1 CB budget
+================= 4 failed, 3 passed, 21 deselected in 13.49s ==================
+2026-11-19 09:47:34.694 | info     |    BuildKernels | JIT cache stats: 12/84 hits (14.3%) [12 cached, 8 build-once dedup, 0 merged artifacts, 0 merged genfiles] (build_cache_telemetry.cpp:362)
+2026-11-19 09:47:34.694 | info     |    BuildKernels | JIT telemetry: 48 registered TelemetryTokens (build_cache_telemetry.cpp:510)
+2026-11-19 09:47:34.744 | info     |          Device | Closing user mode device drivers (tt_cluster.cpp:605)
+2026-11-19 09:47:34.744 | info     |             UMD | Closing devices in cluster (cluster.cpp:1496)
+2026-11-19 09:47:35.254 | info     |             UMD | Closing devices in cluster completed. (cluster.cpp:1506)
+2026-11-19 09:47:35.255 | info     |             UMD | Cluster destructor started. (cluster.cpp:1227)
+2026-11-19 09:47:35.255 | info     |             UMD | Cluster destructor completed. (cluster.cpp:1240)
+========================================
+SAFE_PYTEST_RESULT: FAIL (pytest exit code: 1; wrapper exit: 1)
+========================================
+SAFE_PYTEST_TOTAL_RUNTIME: 0m21s (21s total, device-lock-acquired -> exit)

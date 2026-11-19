@@ -31,7 +31,11 @@ void kernel_main() {
     constexpr uint32_t num_chunks = get_compile_time_arg_val(4);
     // kw-fold (conv2d_3x3_kw_fold.hpp): round kb is n-group kb / 3 of rw output column tiles, weight column kw = (1, 0,
     // 2)[kb % 3], [3 C_in, rw] in (kh, c, n) order (block_k_tiles = C_in, block_n_tiles = 3 rw: the same round size).
+    // Arg 5: 0 off kw-fold, else 1 + the fused side rounds' n-group width (0: not fused; kw_fold.hpp): rounds 1 and 2
+    // of an n-group set then hold the kw = 0 | 2 pair interleaved per (kh, c) row of 2 rw tiles, each gw-wide
+    // n-group's kw = 0 columns, then its kw = 2 columns.
     constexpr bool kw_fold = get_compile_time_arg_val(5) != 0;
+    constexpr uint32_t kwf_fused_gw = kw_fold ? get_compile_time_arg_val(5) - 1 : 0;
     constexpr uint32_t tensor_n_tiles = get_compile_time_arg_val(6);
     // ND-sharded weights: the shard's [rows, columns] in tiles; 0 rows = interleaved (one read per tile).
     constexpr uint32_t shard_rows = get_compile_time_arg_val(7);
@@ -63,6 +67,22 @@ void kernel_main() {
         const uint32_t page0 = kb * round_tiles;
         auto page_of = [&](uint32_t t) -> uint32_t {
             if constexpr (kw_fold) {
+                if constexpr (kwf_fused_gw != 0) {
+                    const uint32_t col = kb % 3;
+                    if (col != 0) {
+                        constexpr uint32_t frow = 2 * rw;
+                        const uint32_t f = (col - 1) * round_tiles + t;
+                        const uint32_t kc = f / frow;  // kh * C_in + c
+                        const uint32_t j = f - kc * frow;
+                        const uint32_t grp = j / (2 * kwf_fused_gw);
+                        const uint32_t jj = j - grp * 2 * kwf_fused_gw;
+                        const uint32_t kh = kc / block_k_tiles;
+                        const uint32_t kwf = jj < kwf_fused_gw ? 0 : 2;
+                        const uint32_t n = grp * kwf_fused_gw + (jj < kwf_fused_gw ? jj : jj - kwf_fused_gw);
+                        return ((kh * 3 + kwf) * block_k_tiles + (kc - kh * block_k_tiles)) * tensor_n_tiles +
+                               (kb / 3) * rw + n;
+                    }
+                }
                 const uint32_t n = t % rw;
                 const uint32_t kc = t / rw;
                 const uint32_t kh = kc / block_k_tiles;
@@ -80,6 +100,21 @@ void kernel_main() {
             while (t < end) {
                 const uint32_t page = page_of(t);
                 uint32_t len = 1;
+                if constexpr (shard_rows > 0 && kwf_fused_gw != 0) {
+                    if (kb % 3 != 0) {
+                        // Fused side round: a run is one n-group's kw = 0 (or kw = 2) columns of one (kh, c) row.
+                        // kernel_main is not a template: the discarded branch is still checked, so no / 0.
+                        constexpr uint32_t gw = kwf_fused_gw != 0 ? kwf_fused_gw : 1;
+                        static_assert(shard_cols % gw == 0);
+                        len = gw - ((kb % 3 - 1) * round_tiles + t) % gw;
+                        if (len > end - t) {
+                            len = end - t;
+                        }
+                        reads.read(weights.get_noc_addr(page), l1 + t * tile_bytes, len * tile_bytes);
+                        t += len;
+                        continue;
+                    }
+                }
                 if constexpr (shard_rows > 0) {
                     const uint32_t i = t / row_tiles;
                     const uint32_t n = t - i * row_tiles;

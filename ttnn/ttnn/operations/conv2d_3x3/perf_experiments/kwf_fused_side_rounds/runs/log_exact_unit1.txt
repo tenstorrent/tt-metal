@@ -1,0 +1,117 @@
+SAFE_PYTEST: Waiting for device lock...
+SAFE_PYTEST: Device lock acquired
+SAFE_PYTEST: dispatch_timeout=5s
+PRECOMPILE: off (narrow) — kernels compile on demand
+SAFE_PYTEST: pytest --import-mode=prepend ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_fused_side_rounds/test_fsr_exact.py::test_fsr_exact_unit
+========================================
+2026-11-19 09:25:59.910 | DEBUG    | ttnn:<module>:45 - Initial ttnn.CONFIG:
+Config{cache_path=/home/pmilojevic/.cache/ttnn,model_cache_path=/home/pmilojevic/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,validate_program_args=false,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_graph_python_stack_traces=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,strict_ccl_topology=false,verify_replicated_shards_on_dump=true,std::nullopt}
+============================= test session starts ==============================
+platform linux -- Python 3.10.19, pytest-9.0.3, pluggy-1.7.0 -- /localdev/pmilojevic/workspaces/opgen/python_env/bin/python
+cachedir: .pytest_cache
+benchmark: 5.2.3 (defaults: timer=time.perf_counter disable_gc=False min_rounds=5 min_time=0.000005 max_time=1.0 calibration_precision=10 warmup=False warmup_iterations=100000)
+rootdir: /localdev/pmilojevic/workspaces/opgen
+configfile: pytest.ini
+plugins: split-0.11.0, repeat-0.9.4, anyio-4.16.0, benchmark-5.2.3, github-actions-annotate-failures-0.3.0, timeout-2.4.0, cov-7.0.0, dash-2.15.0
+timeout: 300.0s
+timeout method: signal
+timeout func_only: False
+collecting ... collected 21 items
+
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_fused_side_rounds/test_fsr_exact.py::test_fsr_exact_unit[forced-n1_bf8] 2026-11-19 09:26:00.115 | info     |          Device | Opening user mode device driver (tt_cluster.cpp:252)
+2026-11-19 09:26:00.115 | info     |             UMD | Cluster constructor started. (cluster.cpp:434)
+2026-11-19 09:26:00.118 | info     |             UMD | Creating TopologyDiscovery for architecture: blackhole (topology_discovery.cpp:137)
+2026-11-19 09:26:00.118 | info     |             UMD | Starting topology discovery. (topology_discovery.cpp:156)
+2026-11-19 09:26:00.140 | info     |             UMD | Established firmware bundle version: 19.16.1 (topology_discovery.cpp:700)
+2026-11-19 09:26:00.141 | info     |             UMD | Completed topology discovery. (topology_discovery.cpp:161)
+2026-11-19 09:26:00.416 | info     |             UMD | Opening local chip ids/PCIe ids: {0, 1, 2, 3, 4, 5, 6, 7}/[2, 3, 1, 0, 6, 7, 5, 4] and remote chip ids {} (cluster.cpp:174)
+2026-11-19 09:26:00.416 | info     |             UMD | IOMMU: enabled (cluster.cpp:148)
+2026-11-19 09:26:00.416 | info     |             UMD | KMD version: 2.9.0 (cluster.cpp:151)
+2026-11-19 09:26:00.416 | info     |             UMD | Cluster constructor completed. (cluster.cpp:893)
+2026-11-19 09:26:00.423 | info     |             UMD | Starting devices in cluster (cluster.cpp:1482)
+2026-11-19 09:26:00.907 | info     |             UMD | Starting devices in cluster completed. (cluster.cpp:1491)
+2026-11-19 09:26:01.050 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:571)
+2026-11-19 09:26:01.050 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:624)
+2026-11-19 09:26:01.184 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using distributed::MeshDevice::create_unit_meshes(). (device_manager.cpp:265)
+{"case": "forced-n1_bf8", "kw_fold": {"base": true, "copy": true}, "base": {"pcc": 0.99983, "mae": 0.00869}, "copy": {"pcc": 0.99983, "mae": 0.00869}, "identical_frac": 1.0, "max_base_copy_diff": 0.0}
+PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_fused_side_rounds/test_fsr_exact.py::test_fsr_exact_unit[forced-bf16_bias_kblocked] {"case": "forced-bf16_bias_kblocked", "kw_fold": {"base": true, "copy": true}, "base": {"pcc": 0.999792, "mae": 0.00982}, "copy": {"pcc": 0.999792, "mae": 0.00982}, "identical_frac": 1.0, "max_base_copy_diff": 0.0}
+PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_fused_side_rounds/test_fsr_exact.py::test_fsr_exact_unit[forced-bf16_act_bf8_w_hifi4] {"case": "forced-bf16_act_bf8_w_hifi4", "kw_fold": {"base": true, "copy": true}, "base": {"pcc": 0.999978, "mae": 0.00707}, "copy": {"pcc": 0.999978, "mae": 0.00707}, "identical_frac": 1.0, "max_base_copy_diff": 0.0}
+PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_fused_side_rounds/test_fsr_exact.py::test_fsr_exact_unit[forced-d2_bf8] {"case": "forced-d2_bf8", "kw_fold": {"base": true, "copy": true}, "base": {"pcc": 0.999884, "mae": 0.0084}, "copy": {"pcc": 0.999884, "mae": 0.0084}, "identical_frac": 1.0, "max_base_copy_diff": 0.0}
+PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_fused_side_rounds/test_fsr_exact.py::test_fsr_exact_unit[forced-cout48_bf8] {"case": "forced-cout48_bf8", "kw_fold": {"base": true, "copy": true}, "base": {"pcc": 0.999844, "mae": 0.00876}, "copy": {"pcc": 0.999844, "mae": 0.00876}, "identical_frac": 1.0, "max_base_copy_diff": 0.0}
+PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_fused_side_rounds/test_fsr_exact.py::test_fsr_exact_unit[forced-multiblock_bf8] {"case": "forced-multiblock_bf8", "kw_fold": {"base": true, "copy": true}, "base": {"pcc": 1.0, "mae": 0.00758}, "copy": {"pcc": 1.0, "mae": 0.00758}, "identical_frac": 1.0, "max_base_copy_diff": 0.0}
+PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_fused_side_rounds/test_fsr_exact.py::test_fsr_exact_unit[forced-kblocked_multiblock_hifi4] {"case": "forced-kblocked_multiblock_hifi4", "kw_fold": {"base": true, "copy": true}, "base": {"pcc": 1.0, "mae": 0.00626}, "copy": {"pcc": 1.0, "mae": 0.00626}, "identical_frac": 1.0, "max_base_copy_diff": 0.0}
+PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_fused_side_rounds/test_fsr_exact.py::test_fsr_exact_unit[forced-ragged_bf8] {"case": "forced-ragged_bf8", "kw_fold": {"base": true, "copy": true}, "base": {"pcc": 0.99995, "mae": 0.00866}, "copy": {"pcc": 0.99995, "mae": 0.00866}, "identical_frac": 1.0, "max_base_copy_diff": 0.0}
+PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_fused_side_rounds/test_fsr_exact.py::test_fsr_exact_unit[forced-many_blocks_whole_k] {"case": "forced-many_blocks_whole_k", "kw_fold": {"base": true, "copy": true}, "base": {"pcc": 0.999875, "mae": 0.01062}, "copy": {"pcc": 0.999875, "mae": 0.01062}, "identical_frac": 1.0, "max_base_copy_diff": 0.0}
+PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_fused_side_rounds/test_fsr_exact.py::test_fsr_exact_unit[forced-many_blocks_kblocked] {"case": "forced-many_blocks_kblocked", "kw_fold": {"base": true, "copy": true}, "base": {"pcc": 0.999685, "mae": 0.00838}, "copy": {"pcc": 0.999685, "mae": 0.00838}, "identical_frac": 1.0, "max_base_copy_diff": 0.0}
+PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_fused_side_rounds/test_fsr_exact.py::test_fsr_exact_unit[xchg-kblocked_lofi] {"case": "xchg-kblocked_lofi", "kw_fold": {"base": true, "copy": true}, "base": {"pcc": 0.999685, "mae": 0.00838}, "copy": {"pcc": 0.999685, "mae": 0.00838}, "identical_frac": 1.0, "max_base_copy_diff": 0.0}
+PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_fused_side_rounds/test_fsr_exact.py::test_fsr_exact_unit[xchg-kblocked_hifi4] {"case": "xchg-kblocked_hifi4", "kw_fold": {"base": true, "copy": true}, "base": {"pcc": 1.0, "mae": 0.00626}, "copy": {"pcc": 1.0, "mae": 0.00626}, "identical_frac": 1.0, "max_base_copy_diff": 0.0}
+PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_fused_side_rounds/test_fsr_exact.py::test_fsr_exact_unit[xchg-kblocked_two_planes] {"case": "xchg-kblocked_two_planes", "kw_fold": {"base": true, "copy": true}, "base": {"pcc": 1.0, "mae": 0.00839}, "copy": {"pcc": 1.0, "mae": 0.00839}, "identical_frac": 1.0, "max_base_copy_diff": 0.0}
+PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_fused_side_rounds/test_fsr_exact.py::test_fsr_exact_unit[xchg-kblocked_few_cores] {"case": "xchg-kblocked_few_cores", "kw_fold": {"base": true, "copy": true}, "base": {"pcc": 0.999897, "mae": 0.01805}, "copy": {"pcc": 0.999897, "mae": 0.01805}, "identical_frac": 1.0, "max_base_copy_diff": 0.0}
+PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_fused_side_rounds/test_fsr_exact.py::test_fsr_exact_unit[xchg-kblocked_no_server] {"case": "xchg-kblocked_no_server", "kw_fold": {"base": true, "copy": true}, "base": {"pcc": 0.999937, "mae": 0.01007}, "copy": {"pcc": 0.999937, "mae": 0.01007}, "identical_frac": 1.0, "max_base_copy_diff": 0.0}
+PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_fused_side_rounds/test_fsr_exact.py::test_fsr_exact_unit[xchg-d2_bf8] {"case": "xchg-d2_bf8", "kw_fold": {"base": true, "copy": true}, "base": {"pcc": 1.0, "mae": 0.00753}, "copy": {"pcc": 1.0, "mae": 0.00753}, "identical_frac": 1.0, "max_base_copy_diff": 0.0}
+PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_fused_side_rounds/test_fsr_exact.py::test_fsr_exact_unit[xchg-n1_bf8] {"case": "xchg-n1_bf8", "kw_fold": {"base": true, "copy": true}, "base": {"pcc": 0.999663, "mae": 0.00809}, "copy": {"pcc": 0.999663, "mae": 0.00809}, "identical_frac": 1.0, "max_base_copy_diff": 0.0}
+PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_fused_side_rounds/test_fsr_exact.py::test_fsr_exact_unit[xchg-n3_hifi2] {"case": "xchg-n3_hifi2", "kw_fold": {"base": true, "copy": true}, "base": {"pcc": 1.0, "mae": 0.00711}, "copy": {"pcc": 1.0, "mae": 0.00711}, "identical_frac": 1.0, "max_base_copy_diff": 0.0}
+PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_fused_side_rounds/test_fsr_exact.py::test_fsr_exact_unit[xchg-ragged_one_row] {"case": "xchg-ragged_one_row", "kw_fold": {"base": true, "copy": true}, "base": {"pcc": 0.99995, "mae": 0.00866}, "copy": {"pcc": 0.99995, "mae": 0.00866}, "identical_frac": 1.0, "max_base_copy_diff": 0.0}
+PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_fused_side_rounds/test_fsr_exact.py::test_fsr_exact_unit[xchg-bf16] {"case": "xchg-bf16", "kw_fold": {"base": true, "copy": true}, "base": {"pcc": 0.999773, "mae": 0.01013}, "copy": {"pcc": 0.999773, "mae": 0.01013}, "identical_frac": 1.0, "max_base_copy_diff": 0.0}
+PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_fused_side_rounds/test_fsr_exact.py::test_fsr_exact_unit[xchg-whole_k_n1] {"case": "xchg-whole_k_n1", "kw_fold": {"base": true, "copy": true}, "base": {"pcc": 0.999875, "mae": 0.01062}, "copy": {"pcc": 0.999875, "mae": 0.01062}, "identical_frac": 1.0, "max_base_copy_diff": 0.0}
+PASSED
+
+- generated xml file: /localdev/pmilojevic/workspaces/opgen/generated/test_reports/most_recent_tests.xml -
+============================= slowest 25 durations =============================
+1.91s call     ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_fused_side_rounds/test_fsr_exact.py::test_fsr_exact_unit[forced-ragged_bf8]
+1.90s call     ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_fused_side_rounds/test_fsr_exact.py::test_fsr_exact_unit[xchg-kblocked_no_server]
+1.88s call     ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_fused_side_rounds/test_fsr_exact.py::test_fsr_exact_unit[forced-n1_bf8]
+1.88s call     ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_fused_side_rounds/test_fsr_exact.py::test_fsr_exact_unit[forced-many_blocks_whole_k]
+1.88s call     ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_fused_side_rounds/test_fsr_exact.py::test_fsr_exact_unit[forced-d2_bf8]
+1.87s call     ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_fused_side_rounds/test_fsr_exact.py::test_fsr_exact_unit[xchg-d2_bf8]
+1.86s call     ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_fused_side_rounds/test_fsr_exact.py::test_fsr_exact_unit[forced-cout48_bf8]
+1.86s call     ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_fused_side_rounds/test_fsr_exact.py::test_fsr_exact_unit[forced-bf16_act_bf8_w_hifi4]
+1.86s call     ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_fused_side_rounds/test_fsr_exact.py::test_fsr_exact_unit[forced-multiblock_bf8]
+1.84s call     ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_fused_side_rounds/test_fsr_exact.py::test_fsr_exact_unit[xchg-bf16]
+1.84s call     ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_fused_side_rounds/test_fsr_exact.py::test_fsr_exact_unit[xchg-whole_k_n1]
+1.84s call     ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_fused_side_rounds/test_fsr_exact.py::test_fsr_exact_unit[xchg-n1_bf8]
+1.82s call     ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_fused_side_rounds/test_fsr_exact.py::test_fsr_exact_unit[xchg-kblocked_two_planes]
+1.78s call     ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_fused_side_rounds/test_fsr_exact.py::test_fsr_exact_unit[xchg-kblocked_lofi]
+1.76s call     ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_fused_side_rounds/test_fsr_exact.py::test_fsr_exact_unit[xchg-kblocked_few_cores]
+1.75s setup    ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_fused_side_rounds/test_fsr_exact.py::test_fsr_exact_unit[forced-n1_bf8]
+1.75s call     ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_fused_side_rounds/test_fsr_exact.py::test_fsr_exact_unit[forced-bf16_bias_kblocked]
+1.74s call     ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_fused_side_rounds/test_fsr_exact.py::test_fsr_exact_unit[xchg-kblocked_hifi4]
+1.73s call     ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_fused_side_rounds/test_fsr_exact.py::test_fsr_exact_unit[xchg-n3_hifi2]
+1.71s call     ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_fused_side_rounds/test_fsr_exact.py::test_fsr_exact_unit[forced-many_blocks_kblocked]
+1.70s call     ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_fused_side_rounds/test_fsr_exact.py::test_fsr_exact_unit[forced-kblocked_multiblock_hifi4]
+0.02s teardown ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_fused_side_rounds/test_fsr_exact.py::test_fsr_exact_unit[xchg-whole_k_n1]
+0.01s call     ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_fused_side_rounds/test_fsr_exact.py::test_fsr_exact_unit[xchg-ragged_one_row]
+0.00s setup    ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_fused_side_rounds/test_fsr_exact.py::test_fsr_exact_unit[xchg-kblocked_lofi]
+0.00s setup    ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_fused_side_rounds/test_fsr_exact.py::test_fsr_exact_unit[forced-many_blocks_kblocked]
+============================= 21 passed in 38.29s ==============================
+2026-11-19 09:26:39.344 | info     |    BuildKernels | JIT cache stats: 8/232 hits (3.4%) [8 cached, 52 build-once dedup, 0 merged artifacts, 0 merged genfiles] (build_cache_telemetry.cpp:362)
+2026-11-19 09:26:39.344 | info     |    BuildKernels | JIT telemetry: 48 registered TelemetryTokens (build_cache_telemetry.cpp:510)
+2026-11-19 09:26:39.393 | info     |          Device | Closing user mode device drivers (tt_cluster.cpp:605)
+2026-11-19 09:26:39.393 | info     |             UMD | Closing devices in cluster (cluster.cpp:1496)
+2026-11-19 09:26:39.859 | info     |             UMD | Closing devices in cluster completed. (cluster.cpp:1506)
+2026-11-19 09:26:39.860 | info     |             UMD | Cluster destructor started. (cluster.cpp:1227)
+2026-11-19 09:26:39.860 | info     |             UMD | Cluster destructor completed. (cluster.cpp:1240)
+========================================
+SAFE_PYTEST_RESULT: PASS
+========================================
+SAFE_PYTEST_TOTAL_RUNTIME: 0m46s (46s total, device-lock-acquired -> exit)

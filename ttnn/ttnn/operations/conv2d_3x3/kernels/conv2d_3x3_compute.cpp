@@ -694,7 +694,8 @@ void kernel_main() {
         KWF_KBLOCKED != 0,
         KWF_PLANE_BYTES,
         KWF_NOINLINE != 0,
-        KWF_XCHG != 0>(
+        KWF_XCHG != 0,
+        KWF_FUSED != 0>(
         get_arg_val<uint32_t>(3),
         get_arg_val<uint32_t>(4),
         get_arg_val<uint32_t>(0),

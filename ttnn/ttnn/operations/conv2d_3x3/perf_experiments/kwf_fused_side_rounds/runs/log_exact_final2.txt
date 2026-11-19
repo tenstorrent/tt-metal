@@ -1,0 +1,262 @@
+SAFE_PYTEST: Waiting for device lock...
+[2026-11-19 10:05:19] SAFE_PYTEST: waiting for device (20s) — holder pid=2757622 cmd="/bin/bash scripts/run_safe_pytest.sh --profile --run-all /localdev/pmilojevic/workspaces/opgen/ttnn/ttnn/operations/conv2d_3x3/perf_experiments/stem1_slab_tilize/test_sd.py --import-mode=prepend -q " parent pid=2757617 cmd="bash ttnn/ttnn/operations/conv2d_3x3/perf_experiments/stem1_slab_tilize/run.sh fb3b "
+[2026-11-19 10:05:41] SAFE_PYTEST: waiting for device (40s) — holder pid=2757622 cmd="/bin/bash scripts/run_safe_pytest.sh --profile --run-all /localdev/pmilojevic/workspaces/opgen/ttnn/ttnn/operations/conv2d_3x3/perf_experiments/stem1_slab_tilize/test_sd.py --import-mode=prepend -q " parent pid=2757617 cmd="bash ttnn/ttnn/operations/conv2d_3x3/perf_experiments/stem1_slab_tilize/run.sh fb3b "
+[2026-11-19 10:06:03] SAFE_PYTEST: waiting for device (60s) — holder pid=2757622 cmd="/bin/bash scripts/run_safe_pytest.sh --profile --run-all /localdev/pmilojevic/workspaces/opgen/ttnn/ttnn/operations/conv2d_3x3/perf_experiments/stem1_slab_tilize/test_sd.py --import-mode=prepend -q " parent pid=2757617 cmd="bash ttnn/ttnn/operations/conv2d_3x3/perf_experiments/stem1_slab_tilize/run.sh fb3b "
+[2026-11-19 10:06:25] SAFE_PYTEST: waiting for device (80s) — holder pid=2757622 cmd="/bin/bash scripts/run_safe_pytest.sh --profile --run-all /localdev/pmilojevic/workspaces/opgen/ttnn/ttnn/operations/conv2d_3x3/perf_experiments/stem1_slab_tilize/test_sd.py --import-mode=prepend -q " parent pid=2757617 cmd="bash ttnn/ttnn/operations/conv2d_3x3/perf_experiments/stem1_slab_tilize/run.sh fb3b "
+[2026-11-19 10:06:47] SAFE_PYTEST: waiting for device (100s) — holder pid=2813253 cmd="/bin/bash scripts/run_safe_pytest.sh --profile --run-all /localdev/pmilojevic/workspaces/opgen/ttnn/ttnn/operations/conv2d_3x3/perf_experiments/nslice_ring_nonowners/test_nrn.py --import-mode=prepend " parent pid=2813241 cmd="bash ./run.sh nzsweep "
+[2026-11-19 10:07:09] SAFE_PYTEST: waiting for device (120s) — holder pid=2803987 cmd="/bin/bash scripts/run_safe_pytest.sh --profile --run-all --import-mode=prepend ttnn/ttnn/operations/conv2d_3x3/perf_experiments/height_weight_rate/test_hwr_op.py::test_conv2d_3x3_perf_focus[res3_{1,2," parent pid=2803983 cmd="timeout 2400 scripts/run_safe_pytest.sh --profile --run-all --import-mode=prepend ttnn/ttnn/operations/conv2d_3x3/perf_experiments/height_weight_rate/"
+[2026-11-19 10:07:31] SAFE_PYTEST: waiting for device (140s) — holder pid=2834656 cmd="/bin/bash scripts/run_safe_pytest.sh --profile --run-all /localdev/pmilojevic/workspaces/opgen/ttnn/ttnn/operations/conv2d_3x3/perf_experiments/nslice_ring_nonowners/test_nrn.py --import-mode=prepend " parent pid=2834645 cmd="bash ./run.sh nzfocus "
+[2026-11-19 10:07:53] SAFE_PYTEST: waiting for device (160s) — holder pid=2843789 cmd="/bin/bash scripts/run_safe_pytest.sh --profile --run-all /localdev/pmilojevic/workspaces/opgen/ttnn/ttnn/operations/conv2d_3x3/perf_experiments/nslice_ring_nonowners/test_nrn.py --import-mode=prepend " parent pid=2843777 cmd="bash ./run.sh nzaspp2 "
+[2026-11-19 10:08:15] SAFE_PYTEST: waiting for device (180s) — holder pid=2777403 cmd="/bin/bash scripts/run_safe_pytest.sh --run-all ttnn/ttnn/operations/conv2d_3x3/perf_experiments/fpu_tap_shift/test_bench.py --import-mode=prepend -s " parent pid=2777402 cmd="timeout 900 scripts/run_safe_pytest.sh --run-all ttnn/ttnn/operations/conv2d_3x3/perf_experiments/fpu_tap_shift/test_bench.py --import-mode=prepend -s"
+[2026-11-19 10:08:37] SAFE_PYTEST: waiting for device (200s) — holder pid=2849486 cmd="/bin/bash scripts/run_safe_pytest.sh --profile --run-all --import-mode=prepend ttnn/ttnn/operations/conv2d_3x3/perf_experiments/height_weight_rate/test_hwr_op.py::test_conv2d_3x3_perf_focus[res3_{1,2," parent pid=2849485 cmd="timeout 2400 scripts/run_safe_pytest.sh --profile --run-all --import-mode=prepend ttnn/ttnn/operations/conv2d_3x3/perf_experiments/height_weight_rate/"
+[2026-11-19 10:08:59] SAFE_PYTEST: waiting for device (220s) — holder pid=2840599 cmd="/bin/bash scripts/run_safe_pytest.sh --profile --run-all /localdev/pmilojevic/workspaces/opgen/ttnn/ttnn/operations/conv2d_3x3/perf_experiments/stem1_slab_tilize/test_sd.py --import-mode=prepend -q " parent pid=2840575 cmd="bash ttnn/ttnn/operations/conv2d_3x3/perf_experiments/stem1_slab_tilize/run.sh fb4 "
+[2026-11-19 10:09:21] SAFE_PYTEST: waiting for device (240s) — holder pid=2857518 cmd="/bin/bash scripts/run_safe_pytest.sh --dev --run-all ttnn/ttnn/operations/conv2d_3x3/perf_experiments/nslice_ring_nonowners/test_block_sharded_spread.py --import-mode=prepend -q " parent pid=2857512 cmd="timeout 3000 scripts/run_safe_pytest.sh --dev --run-all ttnn/ttnn/operations/conv2d_3x3/perf_experiments/nslice_ring_nonowners/test_block_sharded_spre"
+SAFE_PYTEST: Device lock acquired
+SAFE_PYTEST: dispatch_timeout=5s
+PRECOMPILE: on — collect + parallel compile (x64) inside the pytest session, local
+SAFE_PYTEST: env UP_FRONT_INLINE=1 UP_FRONT_COLLECT=1 UP_FRONT_REAL_ALLOC=1 UP_FRONT_COLLECT_WORKERS=64 PYTHONPATH=/localdev/pmilojevic/workspaces/opgen:/localdev/pmilojevic/workspaces/opgen pytest -p tests.plugins.up_front_collect --import-mode=prepend ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_fused_side_rounds/test_fsr_exact.py
+========================================
+2026-11-19 10:09:47.705 | DEBUG    | ttnn:<module>:45 - Initial ttnn.CONFIG:
+Config{cache_path=/home/pmilojevic/.cache/ttnn,model_cache_path=/home/pmilojevic/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,validate_program_args=false,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_graph_python_stack_traces=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,strict_ccl_topology=false,verify_replicated_shards_on_dump=true,std::nullopt}
+============================= test session starts ==============================
+platform linux -- Python 3.10.19, pytest-9.0.3, pluggy-1.7.0 -- /localdev/pmilojevic/workspaces/opgen/python_env/bin/python
+cachedir: .pytest_cache
+benchmark: 5.2.3 (defaults: timer=time.perf_counter disable_gc=False min_rounds=5 min_time=0.000005 max_time=1.0 calibration_precision=10 warmup=False warmup_iterations=100000)
+rootdir: /localdev/pmilojevic/workspaces/opgen
+configfile: pytest.ini
+plugins: split-0.11.0, repeat-0.9.4, anyio-4.16.0, benchmark-5.2.3, github-actions-annotate-failures-0.3.0, timeout-2.4.0, cov-7.0.0, dash-2.15.0
+timeout: 300.0s
+timeout method: signal
+timeout func_only: False
+collecting ... 2026-11-19 10:09:47.883 | info     |          Device | Opening user mode device driver (tt_cluster.cpp:252)
+2026-11-19 10:09:47.883 | info     |             UMD | Cluster constructor started. (cluster.cpp:434)
+2026-11-19 10:09:47.885 | info     |             UMD | Creating TopologyDiscovery for architecture: blackhole (topology_discovery.cpp:137)
+2026-11-19 10:09:47.885 | info     |             UMD | Starting topology discovery. (topology_discovery.cpp:156)
+2026-11-19 10:09:47.909 | info     |             UMD | Established firmware bundle version: 19.16.1 (topology_discovery.cpp:700)
+2026-11-19 10:09:47.910 | info     |             UMD | Completed topology discovery. (topology_discovery.cpp:161)
+2026-11-19 10:09:48.180 | info     |             UMD | Opening local chip ids/PCIe ids: {0, 1, 2, 3, 4, 5, 6, 7}/[2, 3, 1, 0, 6, 7, 5, 4] and remote chip ids {} (cluster.cpp:174)
+2026-11-19 10:09:48.181 | info     |             UMD | IOMMU: enabled (cluster.cpp:148)
+2026-11-19 10:09:48.181 | info     |             UMD | KMD version: 2.9.0 (cluster.cpp:151)
+2026-11-19 10:09:48.181 | info     |             UMD | Cluster constructor completed. (cluster.cpp:893)
+2026-11-19 10:09:48.188 | info     |             UMD | Starting devices in cluster (cluster.cpp:1482)
+2026-11-19 10:09:48.671 | info     |             UMD | Starting devices in cluster completed. (cluster.cpp:1491)
+2026-11-19 10:09:48.817 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:571)
+2026-11-19 10:09:48.817 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:624)
+2026-11-19 10:09:48.949 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using distributed::MeshDevice::create_unit_meshes(). (device_manager.cpp:265)
+collected 52 items
+{"case": "stem.conv2 @ LoFi [perf]", "relu": true, "kw_fold": {"base": true, "copy": true}, "base": {"pcc": NaN, "mae": 0.0}, "copy": {"pcc": NaN, "mae": 0.0}, "identical_frac": 1.0, "max_base_copy_diff": 0.0}
+{"case": "stem.conv2 @ LoFi [perf]", "relu": false, "kw_fold": {"base": true, "copy": true}, "base": {"pcc": NaN, "mae": 0.0}, "copy": {"pcc": NaN, "mae": 0.0}, "identical_frac": 1.0, "max_base_copy_diff": 0.0}
+{"case": "stem.conv3 @ LoFi [perf]", "relu": true, "kw_fold": {"base": true, "copy": true}, "base": {"pcc": NaN, "mae": 0.0}, "copy": {"pcc": NaN, "mae": 0.0}, "identical_frac": 1.0, "max_base_copy_diff": 0.0}
+{"case": "stem.conv3 @ LoFi [perf]", "relu": false, "kw_fold": {"base": true, "copy": true}, "base": {"pcc": NaN, "mae": 0.0}, "copy": {"pcc": NaN, "mae": 0.0}, "identical_frac": 1.0, "max_base_copy_diff": 0.0}
+{"case": "res2.{0,1,2}.conv2 @ LoFi [perf]", "relu": true, "kw_fold": {"base": true, "copy": true}, "base": {"pcc": NaN, "mae": 0.0}, "copy": {"pcc": NaN, "mae": 0.0}, "identical_frac": 1.0, "max_base_copy_diff": 0.0}
+{"case": "res2.{0,1,2}.conv2 @ LoFi [perf]", "relu": false, "kw_fold": {"base": true, "copy": true}, "base": {"pcc": NaN, "mae": 0.0}, "copy": {"pcc": NaN, "mae": 0.0}, "identical_frac": 1.0, "max_base_copy_diff": 0.0}
+{"case": "res3.{1,2,3}.conv2 + instance res3.fuse_conv.1 @ LoFi [perf]", "relu": true, "kw_fold": {"base": true, "copy": true}, "base": {"pcc": NaN, "mae": 0.0}, "copy": {"pcc": NaN, "mae": 0.0}, "identical_frac": 1.0, "max_base_copy_diff": 0.0}
+{"case": "res3.{1,2,3}.conv2 + instance res3.fuse_conv.1 @ LoFi [perf]", "relu": false, "kw_fold": {"base": true, "copy": true}, "base": {"pcc": NaN, "mae": 0.0}, "copy": {"pcc": NaN, "mae": 0.0}, "identical_frac": 1.0, "max_base_copy_diff": 0.0}
+{"case": "semantic decoder.res3.fuse_conv.0 @ LoFi [perf]", "relu": true, "kw_fold": {"base": true, "copy": true}, "base": {"pcc": NaN, "mae": 0.0}, "copy": {"pcc": NaN, "mae": 0.0}, "identical_frac": 1.0, "max_base_copy_diff": 0.0}
+{"case": "semantic decoder.res3.fuse_conv.0 @ LoFi [perf]", "relu": false, "kw_fold": {"base": true, "copy": true}, "base": {"pcc": NaN, "mae": 0.0}, "copy": {"pcc": NaN, "mae": 0.0}, "identical_frac": 1.0, "max_base_copy_diff": 0.0}
+{"case": "instance decoder.res3.fuse_conv.0 @ LoFi [perf]", "relu": true, "kw_fold": {"base": true, "copy": true}, "base": {"pcc": NaN, "mae": 0.0}, "copy": {"pcc": NaN, "mae": 0.0}, "identical_frac": 1.0, "max_base_copy_diff": 0.0}
+{"case": "instance decoder.res3.fuse_conv.0 @ LoFi [perf]", "relu": false, "kw_fold": {"base": true, "copy": true}, "base": {"pcc": NaN, "mae": 0.0}, "copy": {"pcc": NaN, "mae": 0.0}, "identical_frac": 1.0, "max_base_copy_diff": 0.0}
+{"case": "semantic decoder.res3.fuse_conv.1 @ LoFi [perf]", "relu": true, "kw_fold": {"base": true, "copy": true}, "base": {"pcc": NaN, "mae": 0.0}, "copy": {"pcc": NaN, "mae": 0.0}, "identical_frac": 1.0, "max_base_copy_diff": 0.0}
+{"case": "semantic decoder.res3.fuse_conv.1 @ LoFi [perf]", "relu": false, "kw_fold": {"base": true, "copy": true}, "base": {"pcc": NaN, "mae": 0.0}, "copy": {"pcc": NaN, "mae": 0.0}, "identical_frac": 1.0, "max_base_copy_diff": 0.0}
+{"case": "semantic decoder.res2.fuse_conv.0 @ LoFi [perf]", "relu": true, "kw_fold": {"base": true, "copy": true}, "base": {"pcc": NaN, "mae": 0.0}, "copy": {"pcc": NaN, "mae": 0.0}, "identical_frac": 1.0, "max_base_copy_diff": 0.0}
+{"case": "semantic decoder.res2.fuse_conv.0 @ LoFi [perf]", "relu": false, "kw_fold": {"base": true, "copy": true}, "base": {"pcc": NaN, "mae": 0.0}, "copy": {"pcc": NaN, "mae": 0.0}, "identical_frac": 1.0, "max_base_copy_diff": 0.0}
+{"case": "instance decoder.res2.fuse_conv.0 @ LoFi [perf]", "relu": true, "kw_fold": {"base": true, "copy": true}, "base": {"pcc": NaN, "mae": 0.0}, "copy": {"pcc": NaN, "mae": 0.0}, "identical_frac": 1.0, "max_base_copy_diff": 0.0}
+{"case": "instance decoder.res2.fuse_conv.0 @ LoFi [perf]", "relu": false, "kw_fold": {"base": true, "copy": true}, "base": {"pcc": NaN, "mae": 0.0}, "copy": {"pcc": NaN, "mae": 0.0}, "identical_frac": 1.0, "max_base_copy_diff": 0.0}
+{"case": "semantic res2.fuse_conv.1 + semantic_head.head.{0,1} @ LoFi [perf]", "relu": true, "kw_fold": {"base": true, "copy": true}, "base": {"pcc": NaN, "mae": 0.0}, "copy": {"pcc": NaN, "mae": 0.0}, "identical_frac": 1.0, "max_base_copy_diff": 0.0}
+{"case": "semantic res2.fuse_conv.1 + semantic_head.head.{0,1} @ LoFi [perf]", "relu": false, "kw_fold": {"base": true, "copy": true}, "base": {"pcc": NaN, "mae": 0.0}, "copy": {"pcc": NaN, "mae": 0.0}, "identical_frac": 1.0, "max_base_copy_diff": 0.0}
+{"case": "instance res2.fuse_conv.1 + center_head.0 + offset_head.0 @ LoFi [perf]", "relu": true, "kw_fold": {"base": true, "copy": true}, "base": {"pcc": NaN, "mae": 0.0}, "copy": {"pcc": NaN, "mae": 0.0}, "identical_frac": 1.0, "max_base_copy_diff": 0.0}
+{"case": "instance res2.fuse_conv.1 + center_head.0 + offset_head.0 @ LoFi [perf]", "relu": false, "kw_fold": {"base": true, "copy": true}, "base": {"pcc": NaN, "mae": 0.0}, "copy": {"pcc": NaN, "mae": 0.0}, "identical_frac": 1.0, "max_base_copy_diff": 0.0}
+{"case": "center_head.1 + offset_head.1 @ LoFi [perf]", "relu": true, "kw_fold": {"base": true, "copy": true}, "base": {"pcc": NaN, "mae": 0.0}, "copy": {"pcc": NaN, "mae": 0.0}, "identical_frac": 1.0, "max_base_copy_diff": 0.0}
+{"case": "center_head.1 + offset_head.1 @ LoFi [perf]", "relu": false, "kw_fold": {"base": true, "copy": true}, "base": {"pcc": NaN, "mae": 0.0}, "copy": {"pcc": NaN, "mae": 0.0}, "identical_frac": 1.0, "max_base_copy_diff": 0.0}
+{"case": "forced-n1_bf8", "kw_fold": {"base": true, "copy": true}, "base": {"pcc": NaN, "mae": 0.0}, "copy": {"pcc": NaN, "mae": 0.0}, "identical_frac": 1.0, "max_base_copy_diff": 0.0}
+{"case": "forced-bf16_bias_kblocked", "kw_fold": {"base": true, "copy": true}, "base": {"pcc": NaN, "mae": 0.0}, "copy": {"pcc": NaN, "mae": 0.0}, "identical_frac": 1.0, "max_base_copy_diff": 0.0}
+{"case": "forced-bf16_act_bf8_w_hifi4", "kw_fold": {"base": true, "copy": true}, "base": {"pcc": NaN, "mae": 0.0}, "copy": {"pcc": NaN, "mae": 0.0}, "identical_frac": 1.0, "max_base_copy_diff": 0.0}
+{"case": "forced-d2_bf8", "kw_fold": {"base": true, "copy": true}, "base": {"pcc": NaN, "mae": 0.0}, "copy": {"pcc": NaN, "mae": 0.0}, "identical_frac": 1.0, "max_base_copy_diff": 0.0}
+{"case": "forced-cout48_bf8", "kw_fold": {"base": true, "copy": true}, "base": {"pcc": NaN, "mae": 0.0}, "copy": {"pcc": NaN, "mae": 0.0}, "identical_frac": 1.0, "max_base_copy_diff": 0.0}
+{"case": "forced-multiblock_bf8", "kw_fold": {"base": true, "copy": true}, "base": {"pcc": NaN, "mae": 0.0}, "copy": {"pcc": NaN, "mae": 0.0}, "identical_frac": 1.0, "max_base_copy_diff": 0.0}
+{"case": "forced-kblocked_multiblock_hifi4", "kw_fold": {"base": true, "copy": true}, "base": {"pcc": NaN, "mae": 0.0}, "copy": {"pcc": NaN, "mae": 0.0}, "identical_frac": 1.0, "max_base_copy_diff": 0.0}
+{"case": "forced-ragged_bf8", "kw_fold": {"base": true, "copy": true}, "base": {"pcc": NaN, "mae": 0.0}, "copy": {"pcc": NaN, "mae": 0.0}, "identical_frac": 1.0, "max_base_copy_diff": 0.0}
+{"case": "forced-many_blocks_whole_k", "kw_fold": {"base": true, "copy": true}, "base": {"pcc": NaN, "mae": 0.0}, "copy": {"pcc": NaN, "mae": 0.0}, "identical_frac": 1.0, "max_base_copy_diff": 0.0}
+{"case": "forced-many_blocks_kblocked", "kw_fold": {"base": true, "copy": true}, "base": {"pcc": NaN, "mae": 0.0}, "copy": {"pcc": NaN, "mae": 0.0}, "identical_frac": 1.0, "max_base_copy_diff": 0.0}
+{"case": "xchg-kblocked_lofi", "kw_fold": {"base": true, "copy": true}, "base": {"pcc": NaN, "mae": 0.0}, "copy": {"pcc": NaN, "mae": 0.0}, "identical_frac": 1.0, "max_base_copy_diff": 0.0}
+{"case": "xchg-kblocked_hifi4", "kw_fold": {"base": true, "copy": true}, "base": {"pcc": NaN, "mae": 0.0}, "copy": {"pcc": NaN, "mae": 0.0}, "identical_frac": 1.0, "max_base_copy_diff": 0.0}
+{"case": "xchg-kblocked_two_planes", "kw_fold": {"base": true, "copy": true}, "base": {"pcc": NaN, "mae": 0.0}, "copy": {"pcc": NaN, "mae": 0.0}, "identical_frac": 1.0, "max_base_copy_diff": 0.0}
+{"case": "xchg-kblocked_few_cores", "kw_fold": {"base": true, "copy": true}, "base": {"pcc": NaN, "mae": 0.0}, "copy": {"pcc": NaN, "mae": 0.0}, "identical_frac": 1.0, "max_base_copy_diff": 0.0}
+{"case": "xchg-kblocked_no_server", "kw_fold": {"base": true, "copy": true}, "base": {"pcc": NaN, "mae": 0.0}, "copy": {"pcc": NaN, "mae": 0.0}, "identical_frac": 1.0, "max_base_copy_diff": 0.0}
+{"case": "xchg-d2_bf8", "kw_fold": {"base": true, "copy": true}, "base": {"pcc": NaN, "mae": 0.0}, "copy": {"pcc": NaN, "mae": 0.0}, "identical_frac": 1.0, "max_base_copy_diff": 0.0}
+{"case": "xchg-n1_bf8", "kw_fold": {"base": true, "copy": true}, "base": {"pcc": NaN, "mae": 0.0}, "copy": {"pcc": NaN, "mae": 0.0}, "identical_frac": 1.0, "max_base_copy_diff": 0.0}
+{"case": "xchg-n3_hifi2", "kw_fold": {"base": true, "copy": true}, "base": {"pcc": NaN, "mae": 0.0}, "copy": {"pcc": NaN, "mae": 0.0}, "identical_frac": 1.0, "max_base_copy_diff": 0.0}
+{"case": "xchg-ragged_one_row", "kw_fold": {"base": true, "copy": true}, "base": {"pcc": NaN, "mae": 0.0}, "copy": {"pcc": NaN, "mae": 0.0}, "identical_frac": 1.0, "max_base_copy_diff": 0.0}
+{"case": "xchg-bf16", "kw_fold": {"base": true, "copy": true}, "base": {"pcc": NaN, "mae": 0.0}, "copy": {"pcc": NaN, "mae": 0.0}, "identical_frac": 1.0, "max_base_copy_diff": 0.0}
+{"case": "xchg-whole_k_n1", "kw_fold": {"base": true, "copy": true}, "base": {"pcc": NaN, "mae": 0.0}, "copy": {"pcc": NaN, "mae": 0.0}, "identical_frac": 1.0, "max_base_copy_diff": 0.0}
+{"case": "extra-kblocked_n2", "kw_fold": {"base": true, "copy": true}, "base": {"pcc": NaN, "mae": 0.0}, "copy": {"pcc": NaN, "mae": 0.0}, "identical_frac": 1.0, "max_base_copy_diff": 0.0}
+{"case": "extra-kblocked_n2_hifi4", "kw_fold": {"base": true, "copy": true}, "base": {"pcc": NaN, "mae": 0.0}, "copy": {"pcc": NaN, "mae": 0.0}, "identical_frac": 1.0, "max_base_copy_diff": 0.0}
+{"case": "extra-n10_whole_k", "kw_fold": {"base": true, "copy": true}, "base": {"pcc": NaN, "mae": 0.0}, "copy": {"pcc": NaN, "mae": 0.0}, "identical_frac": 1.0, "max_base_copy_diff": 0.0}
+{"case": "extra-n10_kblocked", "kw_fold": {"base": true, "copy": true}, "base": {"pcc": NaN, "mae": 0.0}, "copy": {"pcc": NaN, "mae": 0.0}, "identical_frac": 1.0, "max_base_copy_diff": 0.0}
+{"case": "extra-n2_one_row_cores", "kw_fold": {"base": true, "copy": true}, "base": {"pcc": NaN, "mae": 0.0}, "copy": {"pcc": NaN, "mae": 0.0}, "identical_frac": 1.0, "max_base_copy_diff": 0.0}
+{"case": "extra-n2_d3", "kw_fold": {"base": true, "copy": true}, "base": {"pcc": NaN, "mae": 0.0}, "copy": {"pcc": NaN, "mae": 0.0}, "identical_frac": 1.0, "max_base_copy_diff": 0.0}
+{"case": "extra-kblocked_n2_multiblock", "kw_fold": {"base": true, "copy": true}, "base": {"pcc": NaN, "mae": 0.0}, "copy": {"pcc": NaN, "mae": 0.0}, "identical_frac": 1.0, "max_base_copy_diff": 0.0}
+
+UP_FRONT_INLINE: collect pass over 52 item(s) took 13.2s
+UP_FRONT_INLINE: compile route local (programs=102, farm_min=10)
+
+UP_FRONT_COLLECT: 104 ops stashed across 52 bodies -> 102 unique programs (swallowed 0, skipped-capture 0)
+UP_FRONT_COLLECT: fast-shallow from_torch — shape-only=312 fallback=0
+2026-11-19 10:10:01.239 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using distributed::MeshDevice::create_unit_meshes(). (device_manager.cpp:265)
+2026-11-19 10:10:01.320 | info     |           Metal | Enabling program cache on MeshDevice 3 (mesh_device.cpp:1322)
+UP_FRONT_COLLECT: 102 collected · 102 built · 0 already compiled in 4.5s (workers=64, errors=0) -> on-disk JIT cache warm
+UP_FRONT_COLLECT_RESULT: status=ok reason=ok unique=102 programs=102 errors=0 pytest_exit=0 xpass_strict=0 other_failures=0 built=102 compile_s=4.8 collect_s=13.2 route=local
+UP_FRONT_INLINE: compile step took 4.8s; starting the real pass
+
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_fused_side_rounds/test_fsr_exact.py::test_fsr_exact_focus[stem_conv2-relu] 2026-11-19 10:10:06.003 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using distributed::MeshDevice::create_unit_meshes(). (device_manager.cpp:265)
+{"case": "stem.conv2 @ LoFi [perf]", "relu": true, "kw_fold": {"base": true, "copy": true}, "base": {"pcc": 1.0, "mae": 0.17522}, "copy": {"pcc": 1.0, "mae": 0.17522}, "identical_frac": 1.0, "max_base_copy_diff": 0.0}
+PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_fused_side_rounds/test_fsr_exact.py::test_fsr_exact_focus[stem_conv2-norelu] {"case": "stem.conv2 @ LoFi [perf]", "relu": false, "kw_fold": {"base": true, "copy": true}, "base": {"pcc": 0.999922, "mae": 0.35012}, "copy": {"pcc": 0.999922, "mae": 0.35012}, "identical_frac": 1.0, "max_base_copy_diff": 0.0}
+PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_fused_side_rounds/test_fsr_exact.py::test_fsr_exact_focus[stem_conv3-relu] {"case": "stem.conv3 @ LoFi [perf]", "relu": true, "kw_fold": {"base": true, "copy": true}, "base": {"pcc": 0.999876, "mae": 0.17316}, "copy": {"pcc": 0.999876, "mae": 0.17316}, "identical_frac": 1.0, "max_base_copy_diff": 0.0}
+PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_fused_side_rounds/test_fsr_exact.py::test_fsr_exact_focus[stem_conv3-norelu] {"case": "stem.conv3 @ LoFi [perf]", "relu": false, "kw_fold": {"base": true, "copy": true}, "base": {"pcc": 0.999183, "mae": 0.34802}, "copy": {"pcc": 0.999183, "mae": 0.34802}, "identical_frac": 1.0, "max_base_copy_diff": 0.0}
+PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_fused_side_rounds/test_fsr_exact.py::test_fsr_exact_focus[res2-relu] {"case": "res2.{0,1,2}.conv2 @ LoFi [perf]", "relu": true, "kw_fold": {"base": true, "copy": true}, "base": {"pcc": 1.0, "mae": 0.1749}, "copy": {"pcc": 1.0, "mae": 0.1749}, "identical_frac": 1.0, "max_base_copy_diff": 0.0}
+PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_fused_side_rounds/test_fsr_exact.py::test_fsr_exact_focus[res2-norelu] {"case": "res2.{0,1,2}.conv2 @ LoFi [perf]", "relu": false, "kw_fold": {"base": true, "copy": true}, "base": {"pcc": 0.999836, "mae": 0.34951}, "copy": {"pcc": 0.999836, "mae": 0.34951}, "identical_frac": 1.0, "max_base_copy_diff": 0.0}
+PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_fused_side_rounds/test_fsr_exact.py::test_fsr_exact_focus[res3_x-relu] {"case": "res3.{1,2,3}.conv2 + instance res3.fuse_conv.1 @ LoFi [perf]", "relu": true, "kw_fold": {"base": true, "copy": true}, "base": {"pcc": 0.99993, "mae": 0.24493}, "copy": {"pcc": 0.99993, "mae": 0.24493}, "identical_frac": 1.0, "max_base_copy_diff": 0.0}
+PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_fused_side_rounds/test_fsr_exact.py::test_fsr_exact_focus[res3_x-norelu] {"case": "res3.{1,2,3}.conv2 + instance res3.fuse_conv.1 @ LoFi [perf]", "relu": false, "kw_fold": {"base": true, "copy": true}, "base": {"pcc": 0.999864, "mae": 0.49008}, "copy": {"pcc": 0.999864, "mae": 0.49008}, "identical_frac": 1.0, "max_base_copy_diff": 0.0}
+PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_fused_side_rounds/test_fsr_exact.py::test_fsr_exact_focus[sem_dec_res3_fc0-relu] {"case": "semantic decoder.res3.fuse_conv.0 @ LoFi [perf]", "relu": true, "kw_fold": {"base": true, "copy": true}, "base": {"pcc": 0.999818, "mae": 0.38534}, "copy": {"pcc": 0.999818, "mae": 0.38534}, "identical_frac": 1.0, "max_base_copy_diff": 0.0}
+PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_fused_side_rounds/test_fsr_exact.py::test_fsr_exact_focus[sem_dec_res3_fc0-norelu] {"case": "semantic decoder.res3.fuse_conv.0 @ LoFi [perf]", "relu": false, "kw_fold": {"base": true, "copy": true}, "base": {"pcc": 0.999875, "mae": 0.77486}, "copy": {"pcc": 0.999875, "mae": 0.77486}, "identical_frac": 1.0, "max_base_copy_diff": 0.0}
+PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_fused_side_rounds/test_fsr_exact.py::test_fsr_exact_focus[inst_dec_res3_fc0-relu] {"case": "instance decoder.res3.fuse_conv.0 @ LoFi [perf]", "relu": true, "kw_fold": {"base": true, "copy": true}, "base": {"pcc": 1.0, "mae": 0.3849}, "copy": {"pcc": 1.0, "mae": 0.3849}, "identical_frac": 1.0, "max_base_copy_diff": 0.0}
+PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_fused_side_rounds/test_fsr_exact.py::test_fsr_exact_focus[inst_dec_res3_fc0-norelu] {"case": "instance decoder.res3.fuse_conv.0 @ LoFi [perf]", "relu": false, "kw_fold": {"base": true, "copy": true}, "base": {"pcc": 0.999965, "mae": 0.77402}, "copy": {"pcc": 0.999965, "mae": 0.77402}, "identical_frac": 1.0, "max_base_copy_diff": 0.0}
+PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_fused_side_rounds/test_fsr_exact.py::test_fsr_exact_focus[sem_dec_res3_fc1-relu] {"case": "semantic decoder.res3.fuse_conv.1 @ LoFi [perf]", "relu": true, "kw_fold": {"base": true, "copy": true}, "base": {"pcc": 1.0, "mae": 0.34396}, "copy": {"pcc": 1.0, "mae": 0.34396}, "identical_frac": 1.0, "max_base_copy_diff": 0.0}
+PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_fused_side_rounds/test_fsr_exact.py::test_fsr_exact_focus[sem_dec_res3_fc1-norelu] {"case": "semantic decoder.res3.fuse_conv.1 @ LoFi [perf]", "relu": false, "kw_fold": {"base": true, "copy": true}, "base": {"pcc": 0.999941, "mae": 0.69172}, "copy": {"pcc": 0.999941, "mae": 0.69172}, "identical_frac": 1.0, "max_base_copy_diff": 0.0}
+PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_fused_side_rounds/test_fsr_exact.py::test_fsr_exact_focus[sem_dec_res2_fc0-relu] {"case": "semantic decoder.res2.fuse_conv.0 @ LoFi [perf]", "relu": true, "kw_fold": {"base": true, "copy": true}, "base": {"pcc": 0.999206, "mae": 0.36661}, "copy": {"pcc": 0.999206, "mae": 0.36661}, "identical_frac": 1.0, "max_base_copy_diff": 0.0}
+PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_fused_side_rounds/test_fsr_exact.py::test_fsr_exact_focus[sem_dec_res2_fc0-norelu] {"case": "semantic decoder.res2.fuse_conv.0 @ LoFi [perf]", "relu": false, "kw_fold": {"base": true, "copy": true}, "base": {"pcc": 0.999722, "mae": 0.73758}, "copy": {"pcc": 0.999722, "mae": 0.73758}, "identical_frac": 1.0, "max_base_copy_diff": 0.0}
+PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_fused_side_rounds/test_fsr_exact.py::test_fsr_exact_focus[inst_dec_res2_fc0-relu] {"case": "instance decoder.res2.fuse_conv.0 @ LoFi [perf]", "relu": true, "kw_fold": {"base": true, "copy": true}, "base": {"pcc": 0.999611, "mae": 0.27338}, "copy": {"pcc": 0.999611, "mae": 0.27338}, "identical_frac": 1.0, "max_base_copy_diff": 0.0}
+PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_fused_side_rounds/test_fsr_exact.py::test_fsr_exact_focus[inst_dec_res2_fc0-norelu] {"case": "instance decoder.res2.fuse_conv.0 @ LoFi [perf]", "relu": false, "kw_fold": {"base": true, "copy": true}, "base": {"pcc": 0.999671, "mae": 0.54826}, "copy": {"pcc": 0.999671, "mae": 0.54826}, "identical_frac": 1.0, "max_base_copy_diff": 0.0}
+PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_fused_side_rounds/test_fsr_exact.py::test_fsr_exact_focus[sem_res2_fc1-relu] {"case": "semantic res2.fuse_conv.1 + semantic_head.head.{0,1} @ LoFi [perf]", "relu": true, "kw_fold": {"base": true, "copy": true}, "base": {"pcc": 0.99929, "mae": 0.34497}, "copy": {"pcc": 0.99929, "mae": 0.34497}, "identical_frac": 1.0, "max_base_copy_diff": 0.0}
+PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_fused_side_rounds/test_fsr_exact.py::test_fsr_exact_focus[sem_res2_fc1-norelu] {"case": "semantic res2.fuse_conv.1 + semantic_head.head.{0,1} @ LoFi [perf]", "relu": false, "kw_fold": {"base": true, "copy": true}, "base": {"pcc": 0.999861, "mae": 0.69452}, "copy": {"pcc": 0.999861, "mae": 0.69452}, "identical_frac": 1.0, "max_base_copy_diff": 0.0}
+PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_fused_side_rounds/test_fsr_exact.py::test_fsr_exact_focus[inst_res2_fc1-relu] {"case": "instance res2.fuse_conv.1 + center_head.0 + offset_head.0 @ LoFi [perf]", "relu": true, "kw_fold": {"base": true, "copy": true}, "base": {"pcc": 0.999486, "mae": 0.24569}, "copy": {"pcc": 0.999486, "mae": 0.24569}, "identical_frac": 1.0, "max_base_copy_diff": 0.0}
+PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_fused_side_rounds/test_fsr_exact.py::test_fsr_exact_focus[inst_res2_fc1-norelu] {"case": "instance res2.fuse_conv.1 + center_head.0 + offset_head.0 @ LoFi [perf]", "relu": false, "kw_fold": {"base": true, "copy": true}, "base": {"pcc": 0.999917, "mae": 0.4924}, "copy": {"pcc": 0.999917, "mae": 0.4924}, "identical_frac": 1.0, "max_base_copy_diff": 0.0}
+PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_fused_side_rounds/test_fsr_exact.py::test_fsr_exact_focus[center_head_1-relu] {"case": "center_head.1 + offset_head.1 @ LoFi [perf]", "relu": true, "kw_fold": {"base": true, "copy": true}, "base": {"pcc": 1.0, "mae": 0.24705}, "copy": {"pcc": 1.0, "mae": 0.24705}, "identical_frac": 1.0, "max_base_copy_diff": 0.0}
+PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_fused_side_rounds/test_fsr_exact.py::test_fsr_exact_focus[center_head_1-norelu] {"case": "center_head.1 + offset_head.1 @ LoFi [perf]", "relu": false, "kw_fold": {"base": true, "copy": true}, "base": {"pcc": 0.999856, "mae": 0.49417}, "copy": {"pcc": 0.999856, "mae": 0.49417}, "identical_frac": 1.0, "max_base_copy_diff": 0.0}
+PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_fused_side_rounds/test_fsr_exact.py::test_fsr_exact_unit[forced-n1_bf8] {"case": "forced-n1_bf8", "kw_fold": {"base": true, "copy": true}, "base": {"pcc": 0.99983, "mae": 0.00869}, "copy": {"pcc": 0.99983, "mae": 0.00869}, "identical_frac": 1.0, "max_base_copy_diff": 0.0}
+PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_fused_side_rounds/test_fsr_exact.py::test_fsr_exact_unit[forced-bf16_bias_kblocked] {"case": "forced-bf16_bias_kblocked", "kw_fold": {"base": true, "copy": true}, "base": {"pcc": 0.999792, "mae": 0.00982}, "copy": {"pcc": 0.999792, "mae": 0.00982}, "identical_frac": 1.0, "max_base_copy_diff": 0.0}
+PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_fused_side_rounds/test_fsr_exact.py::test_fsr_exact_unit[forced-bf16_act_bf8_w_hifi4] {"case": "forced-bf16_act_bf8_w_hifi4", "kw_fold": {"base": true, "copy": true}, "base": {"pcc": 0.999978, "mae": 0.00707}, "copy": {"pcc": 0.999978, "mae": 0.00707}, "identical_frac": 1.0, "max_base_copy_diff": 0.0}
+PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_fused_side_rounds/test_fsr_exact.py::test_fsr_exact_unit[forced-d2_bf8] {"case": "forced-d2_bf8", "kw_fold": {"base": true, "copy": true}, "base": {"pcc": 0.999884, "mae": 0.0084}, "copy": {"pcc": 0.999884, "mae": 0.0084}, "identical_frac": 1.0, "max_base_copy_diff": 0.0}
+PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_fused_side_rounds/test_fsr_exact.py::test_fsr_exact_unit[forced-cout48_bf8] {"case": "forced-cout48_bf8", "kw_fold": {"base": true, "copy": true}, "base": {"pcc": 0.999844, "mae": 0.00876}, "copy": {"pcc": 0.999844, "mae": 0.00876}, "identical_frac": 1.0, "max_base_copy_diff": 0.0}
+PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_fused_side_rounds/test_fsr_exact.py::test_fsr_exact_unit[forced-multiblock_bf8] {"case": "forced-multiblock_bf8", "kw_fold": {"base": true, "copy": true}, "base": {"pcc": 1.0, "mae": 0.00758}, "copy": {"pcc": 1.0, "mae": 0.00758}, "identical_frac": 1.0, "max_base_copy_diff": 0.0}
+PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_fused_side_rounds/test_fsr_exact.py::test_fsr_exact_unit[forced-kblocked_multiblock_hifi4] {"case": "forced-kblocked_multiblock_hifi4", "kw_fold": {"base": true, "copy": true}, "base": {"pcc": 1.0, "mae": 0.00626}, "copy": {"pcc": 1.0, "mae": 0.00626}, "identical_frac": 1.0, "max_base_copy_diff": 0.0}
+PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_fused_side_rounds/test_fsr_exact.py::test_fsr_exact_unit[forced-ragged_bf8] {"case": "forced-ragged_bf8", "kw_fold": {"base": true, "copy": true}, "base": {"pcc": 0.99995, "mae": 0.00866}, "copy": {"pcc": 0.99995, "mae": 0.00866}, "identical_frac": 1.0, "max_base_copy_diff": 0.0}
+PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_fused_side_rounds/test_fsr_exact.py::test_fsr_exact_unit[forced-many_blocks_whole_k] {"case": "forced-many_blocks_whole_k", "kw_fold": {"base": true, "copy": true}, "base": {"pcc": 0.999875, "mae": 0.01062}, "copy": {"pcc": 0.999875, "mae": 0.01062}, "identical_frac": 1.0, "max_base_copy_diff": 0.0}
+PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_fused_side_rounds/test_fsr_exact.py::test_fsr_exact_unit[forced-many_blocks_kblocked] {"case": "forced-many_blocks_kblocked", "kw_fold": {"base": true, "copy": true}, "base": {"pcc": 0.999685, "mae": 0.00838}, "copy": {"pcc": 0.999685, "mae": 0.00838}, "identical_frac": 1.0, "max_base_copy_diff": 0.0}
+PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_fused_side_rounds/test_fsr_exact.py::test_fsr_exact_unit[xchg-kblocked_lofi] {"case": "xchg-kblocked_lofi", "kw_fold": {"base": true, "copy": true}, "base": {"pcc": 0.999685, "mae": 0.00838}, "copy": {"pcc": 0.999685, "mae": 0.00838}, "identical_frac": 1.0, "max_base_copy_diff": 0.0}
+PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_fused_side_rounds/test_fsr_exact.py::test_fsr_exact_unit[xchg-kblocked_hifi4] {"case": "xchg-kblocked_hifi4", "kw_fold": {"base": true, "copy": true}, "base": {"pcc": 1.0, "mae": 0.00626}, "copy": {"pcc": 1.0, "mae": 0.00626}, "identical_frac": 1.0, "max_base_copy_diff": 0.0}
+PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_fused_side_rounds/test_fsr_exact.py::test_fsr_exact_unit[xchg-kblocked_two_planes] {"case": "xchg-kblocked_two_planes", "kw_fold": {"base": true, "copy": true}, "base": {"pcc": 1.0, "mae": 0.00839}, "copy": {"pcc": 1.0, "mae": 0.00839}, "identical_frac": 1.0, "max_base_copy_diff": 0.0}
+PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_fused_side_rounds/test_fsr_exact.py::test_fsr_exact_unit[xchg-kblocked_few_cores] {"case": "xchg-kblocked_few_cores", "kw_fold": {"base": true, "copy": true}, "base": {"pcc": 0.999897, "mae": 0.01805}, "copy": {"pcc": 0.999897, "mae": 0.01805}, "identical_frac": 1.0, "max_base_copy_diff": 0.0}
+PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_fused_side_rounds/test_fsr_exact.py::test_fsr_exact_unit[xchg-kblocked_no_server] {"case": "xchg-kblocked_no_server", "kw_fold": {"base": true, "copy": true}, "base": {"pcc": 0.999937, "mae": 0.01007}, "copy": {"pcc": 0.999937, "mae": 0.01007}, "identical_frac": 1.0, "max_base_copy_diff": 0.0}
+PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_fused_side_rounds/test_fsr_exact.py::test_fsr_exact_unit[xchg-d2_bf8] {"case": "xchg-d2_bf8", "kw_fold": {"base": true, "copy": true}, "base": {"pcc": 1.0, "mae": 0.00753}, "copy": {"pcc": 1.0, "mae": 0.00753}, "identical_frac": 1.0, "max_base_copy_diff": 0.0}
+PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_fused_side_rounds/test_fsr_exact.py::test_fsr_exact_unit[xchg-n1_bf8] {"case": "xchg-n1_bf8", "kw_fold": {"base": true, "copy": true}, "base": {"pcc": 0.999663, "mae": 0.00809}, "copy": {"pcc": 0.999663, "mae": 0.00809}, "identical_frac": 1.0, "max_base_copy_diff": 0.0}
+PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_fused_side_rounds/test_fsr_exact.py::test_fsr_exact_unit[xchg-n3_hifi2] {"case": "xchg-n3_hifi2", "kw_fold": {"base": true, "copy": true}, "base": {"pcc": 1.0, "mae": 0.00711}, "copy": {"pcc": 1.0, "mae": 0.00711}, "identical_frac": 1.0, "max_base_copy_diff": 0.0}
+PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_fused_side_rounds/test_fsr_exact.py::test_fsr_exact_unit[xchg-ragged_one_row] {"case": "xchg-ragged_one_row", "kw_fold": {"base": true, "copy": true}, "base": {"pcc": 0.99995, "mae": 0.00866}, "copy": {"pcc": 0.99995, "mae": 0.00866}, "identical_frac": 1.0, "max_base_copy_diff": 0.0}
+PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_fused_side_rounds/test_fsr_exact.py::test_fsr_exact_unit[xchg-bf16] {"case": "xchg-bf16", "kw_fold": {"base": true, "copy": true}, "base": {"pcc": 0.999773, "mae": 0.01013}, "copy": {"pcc": 0.999773, "mae": 0.01013}, "identical_frac": 1.0, "max_base_copy_diff": 0.0}
+PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_fused_side_rounds/test_fsr_exact.py::test_fsr_exact_unit[xchg-whole_k_n1] {"case": "xchg-whole_k_n1", "kw_fold": {"base": true, "copy": true}, "base": {"pcc": 0.999875, "mae": 0.01062}, "copy": {"pcc": 0.999875, "mae": 0.01062}, "identical_frac": 1.0, "max_base_copy_diff": 0.0}
+PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_fused_side_rounds/test_fsr_exact.py::test_fsr_exact_unit[extra-kblocked_n2] {"case": "extra-kblocked_n2", "kw_fold": {"base": true, "copy": true}, "base": {"pcc": 0.999746, "mae": 0.00865}, "copy": {"pcc": 0.999746, "mae": 0.00865}, "identical_frac": 1.0, "max_base_copy_diff": 0.0}
+PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_fused_side_rounds/test_fsr_exact.py::test_fsr_exact_unit[extra-kblocked_n2_hifi4] {"case": "extra-kblocked_n2_hifi4", "kw_fold": {"base": true, "copy": true}, "base": {"pcc": 0.999923, "mae": 0.01415}, "copy": {"pcc": 0.999923, "mae": 0.01415}, "identical_frac": 1.0, "max_base_copy_diff": 0.0}
+PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_fused_side_rounds/test_fsr_exact.py::test_fsr_exact_unit[extra-n10_whole_k] {"case": "extra-n10_whole_k", "kw_fold": {"base": true, "copy": true}, "base": {"pcc": 1.0, "mae": 0.00944}, "copy": {"pcc": 1.0, "mae": 0.00944}, "identical_frac": 1.0, "max_base_copy_diff": 0.0}
+PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_fused_side_rounds/test_fsr_exact.py::test_fsr_exact_unit[extra-n10_kblocked] {"case": "extra-n10_kblocked", "kw_fold": {"base": true, "copy": true}, "base": {"pcc": 0.999866, "mae": 0.0092}, "copy": {"pcc": 0.999866, "mae": 0.0092}, "identical_frac": 1.0, "max_base_copy_diff": 0.0}
+PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_fused_side_rounds/test_fsr_exact.py::test_fsr_exact_unit[extra-n2_one_row_cores] {"case": "extra-n2_one_row_cores", "kw_fold": {"base": true, "copy": true}, "base": {"pcc": 0.999814, "mae": 0.00821}, "copy": {"pcc": 0.999814, "mae": 0.00821}, "identical_frac": 1.0, "max_base_copy_diff": 0.0}
+PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_fused_side_rounds/test_fsr_exact.py::test_fsr_exact_unit[extra-n2_d3] {"case": "extra-n2_d3", "kw_fold": {"base": true, "copy": true}, "base": {"pcc": 0.999728, "mae": 0.00883}, "copy": {"pcc": 0.999728, "mae": 0.00883}, "identical_frac": 1.0, "max_base_copy_diff": 0.0}
+PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_fused_side_rounds/test_fsr_exact.py::test_fsr_exact_unit[extra-kblocked_n2_multiblock] {"case": "extra-kblocked_n2_multiblock", "kw_fold": {"base": true, "copy": true}, "base": {"pcc": 0.999858, "mae": 0.00909}, "copy": {"pcc": 0.999858, "mae": 0.00909}, "identical_frac": 1.0, "max_base_copy_diff": 0.0}
+PASSEDUP_FRONT_INLINE: real pass took 12.3s
+
+
+- generated xml file: /localdev/pmilojevic/workspaces/opgen/generated/test_reports/most_recent_tests.xml -
+============================= slowest 25 durations =============================
+0.97s call     ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_fused_side_rounds/test_fsr_exact.py::test_fsr_exact_focus[sem_dec_res2_fc0-relu]
+0.96s call     ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_fused_side_rounds/test_fsr_exact.py::test_fsr_exact_focus[sem_dec_res2_fc0-norelu]
+0.91s call     ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_fused_side_rounds/test_fsr_exact.py::test_fsr_exact_focus[sem_res2_fc1-norelu]
+0.88s call     ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_fused_side_rounds/test_fsr_exact.py::test_fsr_exact_focus[sem_res2_fc1-relu]
+0.83s call     ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_fused_side_rounds/test_fsr_exact.py::test_fsr_exact_focus[sem_dec_res3_fc0-relu]
+0.81s call     ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_fused_side_rounds/test_fsr_exact.py::test_fsr_exact_focus[sem_dec_res3_fc0-norelu]
+0.66s call     ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_fused_side_rounds/test_fsr_exact.py::test_fsr_exact_focus[sem_dec_res3_fc1-norelu]
+0.66s call     ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_fused_side_rounds/test_fsr_exact.py::test_fsr_exact_focus[sem_dec_res3_fc1-relu]
+0.62s call     ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_fused_side_rounds/test_fsr_exact.py::test_fsr_exact_focus[stem_conv3-relu]
+0.58s call     ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_fused_side_rounds/test_fsr_exact.py::test_fsr_exact_focus[stem_conv3-norelu]
+0.45s call     ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_fused_side_rounds/test_fsr_exact.py::test_fsr_exact_focus[inst_dec_res3_fc0-relu]
+0.44s call     ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_fused_side_rounds/test_fsr_exact.py::test_fsr_exact_focus[inst_dec_res3_fc0-norelu]
+0.37s call     ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_fused_side_rounds/test_fsr_exact.py::test_fsr_exact_focus[stem_conv2-norelu]
+0.31s call     ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_fused_side_rounds/test_fsr_exact.py::test_fsr_exact_focus[inst_dec_res2_fc0-norelu]
+0.31s call     ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_fused_side_rounds/test_fsr_exact.py::test_fsr_exact_focus[inst_dec_res2_fc0-relu]
+0.30s call     ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_fused_side_rounds/test_fsr_exact.py::test_fsr_exact_focus[stem_conv2-relu]
+0.26s call     ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_fused_side_rounds/test_fsr_exact.py::test_fsr_exact_focus[inst_res2_fc1-relu]
+0.24s setup    ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_fused_side_rounds/test_fsr_exact.py::test_fsr_exact_focus[stem_conv2-relu]
+0.23s call     ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_fused_side_rounds/test_fsr_exact.py::test_fsr_exact_focus[inst_res2_fc1-norelu]
+0.20s call     ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_fused_side_rounds/test_fsr_exact.py::test_fsr_exact_focus[res3_x-relu]
+0.18s call     ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_fused_side_rounds/test_fsr_exact.py::test_fsr_exact_focus[res3_x-norelu]
+0.09s call     ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_fused_side_rounds/test_fsr_exact.py::test_fsr_exact_focus[res2-norelu]
+0.09s call     ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_fused_side_rounds/test_fsr_exact.py::test_fsr_exact_focus[center_head_1-relu]
+0.08s call     ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_fused_side_rounds/test_fsr_exact.py::test_fsr_exact_focus[res2-relu]
+0.08s call     ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_fused_side_rounds/test_fsr_exact.py::test_fsr_exact_focus[center_head_1-norelu]
+============================= 52 passed in 30.33s ==============================
+2026-11-19 10:10:19.038 | info     |    BuildKernels | JIT cache stats: 373/526 hits (70.9%) [373 cached, 678 build-once dedup, 0 merged artifacts, 0 merged genfiles] (build_cache_telemetry.cpp:362)
+2026-11-19 10:10:19.038 | info     |    BuildKernels | JIT telemetry: 44 registered TelemetryTokens (build_cache_telemetry.cpp:510)
+2026-11-19 10:10:19.087 | info     |          Device | Closing user mode device drivers (tt_cluster.cpp:605)
+2026-11-19 10:10:19.087 | info     |             UMD | Closing devices in cluster (cluster.cpp:1496)
+2026-11-19 10:10:19.582 | info     |             UMD | Closing devices in cluster completed. (cluster.cpp:1506)
+2026-11-19 10:10:19.582 | info     |             UMD | Cluster destructor started. (cluster.cpp:1227)
+2026-11-19 10:10:19.582 | info     |             UMD | Cluster destructor completed. (cluster.cpp:1240)
+========================================
+PRECOMPILE: UP_FRONT_INLINE: collect pass over 52 item(s) took 13.2s
+PRECOMPILE: UP_FRONT_INLINE: compile route local (programs=102, farm_min=10)
+PRECOMPILE: UP_FRONT_COLLECT: 104 ops stashed across 52 bodies -> 102 unique programs (swallowed 0, skipped-capture 0)
+PRECOMPILE: UP_FRONT_COLLECT: fast-shallow from_torch — shape-only=312 fallback=0
+PRECOMPILE: UP_FRONT_COLLECT: 102 collected · 102 built · 0 already compiled in 4.5s (workers=64, errors=0) -> on-disk JIT cache warm
+PRECOMPILE: UP_FRONT_INLINE: compile step took 4.8s; starting the real pass
+SAFE_PYTEST_RESULT: PASS
+========================================
+SAFE_PYTEST_TOTAL_RUNTIME: 0m37s (37s total, device-lock-acquired -> exit)
