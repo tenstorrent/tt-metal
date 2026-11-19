@@ -6,6 +6,7 @@
 // RUN: %{blackhole_objdump} -d %t.o | FileCheck %s
 
 #include <cstdint>
+#include <utility>
 
 #include "hal/atomic.h"
 
@@ -65,6 +66,37 @@ extern "C" __attribute__((noinline, used)) void fifo_pop_push()
 // CHECK-NEXT: ttatincgetptr 0,0,2,4,1,6,3{{$}}
 // CHECK-NEXT: ttatincgetptr 0,0,14,15,0,0,5{{$}}
 // CHECK-NEXT: ttatincgetptr 0,0,14,15,1,0,5{{$}}
+// CHECK-NEXT: ret
+
+// WrapVal must be capacity_log2 + 1 for every capacity that accepts updates. Even
+// capacities guard against masking the field with a capacity limit instead of its width.
+template <std::uint8_t... CapacityLog2>
+inline __attribute__((always_inline)) void pop_each_capacity(std::integer_sequence<std::uint8_t, CapacityLog2...>)
+{
+    (atomic::fifo<CapacityLog2>(hal::gpr<3>()).pop(hal::gpr<4>()), ...);
+}
+
+extern "C" __attribute__((noinline, used)) void fifo_wrap_val_per_capacity()
+{
+    pop_each_capacity(std::make_integer_sequence<std::uint8_t, 15> {});
+}
+
+// CHECK-LABEL: <fifo_wrap_val_per_capacity>:
+// CHECK-NEXT: ttatincgetptr 0,0,0,1,0,4,3{{$}}
+// CHECK-NEXT: ttatincgetptr 0,0,0,2,0,4,3{{$}}
+// CHECK-NEXT: ttatincgetptr 0,0,0,3,0,4,3{{$}}
+// CHECK-NEXT: ttatincgetptr 0,0,0,4,0,4,3{{$}}
+// CHECK-NEXT: ttatincgetptr 0,0,0,5,0,4,3{{$}}
+// CHECK-NEXT: ttatincgetptr 0,0,0,6,0,4,3{{$}}
+// CHECK-NEXT: ttatincgetptr 0,0,0,7,0,4,3{{$}}
+// CHECK-NEXT: ttatincgetptr 0,0,0,8,0,4,3{{$}}
+// CHECK-NEXT: ttatincgetptr 0,0,0,9,0,4,3{{$}}
+// CHECK-NEXT: ttatincgetptr 0,0,0,10,0,4,3{{$}}
+// CHECK-NEXT: ttatincgetptr 0,0,0,11,0,4,3{{$}}
+// CHECK-NEXT: ttatincgetptr 0,0,0,12,0,4,3{{$}}
+// CHECK-NEXT: ttatincgetptr 0,0,0,13,0,4,3{{$}}
+// CHECK-NEXT: ttatincgetptr 0,0,0,14,0,4,3{{$}}
+// CHECK-NEXT: ttatincgetptr 0,0,0,15,0,4,3{{$}}
 // CHECK-NEXT: ret
 
 // Waits set NoIncr and select the read pointer for Empty and the write pointer for Full.
