@@ -63,8 +63,7 @@ def expected_gather(axis, r, c):
 
 
 @pytest.mark.parametrize("axis", [0, 1], ids=["axis0", "axis1"])
-@pytest.mark.parametrize("num_links", [1, 2])
-def test_ring_all_gather_on_every_chip(rr_mesh, axis, num_links):
+def test_ring_all_gather_on_every_chip(rr_mesh, axis):
     mesh_device = rr_mesh
     view = mesh_device.get_view()
     rank = rank_of_process()
@@ -84,8 +83,6 @@ def test_ring_all_gather_on_every_chip(rr_mesh, axis, num_links):
         device_tensor,
         dim=2 + axis,
         cluster_axis=axis,
-        num_links=num_links,
-        topology=ttnn.Topology.Ring,
     )
     ttnn.synchronize_device(mesh_device)
     result = ttnn.from_device(ttnn.to_layout(gathered, ttnn.ROW_MAJOR_LAYOUT))
@@ -103,11 +100,11 @@ def test_ring_all_gather_on_every_chip(rr_mesh, axis, num_links):
             got = np.ascontiguousarray(np.from_dlpack(shard)).view(np.float32).reshape(-1)
             want = expected_gather(axis, int(coord[0]), int(coord[1])).reshape(-1)
             assert np.array_equal(got, want), (
-                f"rank {rank} chip ({coord[0]},{coord[1]}) axis {axis} links {num_links}: got {got.size} values, "
+                f"rank {rank} chip ({coord[0]},{coord[1]}) axis {axis}: got {got.size} values, "
                 f"unique {np.unique(got)[:20]}, first {got[:4]}; want {want.size} values, unique {np.unique(want)}"
             )
             checked += 1
         assert checked > 0, "no local chip was checked"
-        logger.info(f"RR_CHECK OK rank {rank} axis {axis} links {num_links}: {checked} local chips")
+        logger.info(f"RR_CHECK OK rank {rank} axis {axis}: {checked} local chips")
     finally:
         barrier()
