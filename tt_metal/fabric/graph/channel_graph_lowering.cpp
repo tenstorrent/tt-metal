@@ -27,12 +27,6 @@ std::map<FabricNodeId, PerDirectionCapabilities> chip_capabilities(const Logical
     return chips;
 }
 
-std::array<uint32_t, builder_config::MAX_NUM_VCS> counts_of(const ChannelGraph& cg, RouterIndex r) {
-    std::array<uint32_t, builder_config::MAX_NUM_VCS> counts{};
-    std::copy(cg.sender_counts[r].begin(), cg.sender_counts[r].end(), counts.begin());
-    return counts;
-}
-
 }  // namespace
 
 uint32_t stock_channel_index(const LogicalGraph& g, ChannelIndex c, Topology topology) {
@@ -88,39 +82,8 @@ ChannelGraph lower_to_channels(LogicalGraph logical, Topology topology) {
     return cg;
 }
 
-void legacy_stock_sender_counts(ChannelGraph& cg, const WiringOptions& options) {
-    const auto& g = cg.logical;
-    for (RouterIndex r = 0; r < g.routers.size(); ++r) {
-        const auto& port = g.routers[r].port;
-        const auto axis = options.express_axis.find(port.node.mesh_id);
-        const auto shape = router_vc_shape(
-            options.topology,
-            *port.direction,
-            cg.chips.at(port.node),
-            axis == options.express_axis.end() ? ExpressAxis::NONE : axis->second,
-            &options.vc_config);
-        auto& counts = cg.sender_counts[r];
-        std::set<std::pair<uint32_t, uint32_t>> used;  // (vc, index)
-        for (ChannelIndex c : g.channels_of(r, ChannelKind::Sender)) {
-            used.emplace(g.channels[c].vc, cg.index_in_vc[c]);
-        }
-        for (uint32_t vc = 0; vc < counts.size(); ++vc) {
-            counts[vc] = std::max(counts[vc], shape.sender_counts[vc]);
-            for (uint32_t i = 0; i < counts[vc]; ++i) {
-                if (!used.contains({vc, i})) {
-                    cg.legacy_slots.push_back(LegacySlot{.router = r, .vc = vc, .index = i});
-                }
-            }
-        }
-    }
-}
-
 void mark_ring_entries(ChannelGraph& cg, const WiringOptions& options, const RingQueries& ring_queries) {
     const auto& g = cg.logical;
-    std::map<RouterIndex, std::vector<LegacySlot*>> legacy;
-    for (auto& slot : cg.legacy_slots) {
-        legacy[slot.router].push_back(&slot);
-    }
     for (RouterIndex r = 0; r < g.routers.size(); ++r) {
         const auto& port = g.routers[r].port;
         const auto& caps = cg.chips.at(port.node);
@@ -143,13 +106,6 @@ void mark_ring_entries(ChannelGraph& cg, const WiringOptions& options, const Rin
             cg.enters_ring[c] = enters_ring(
                 ch.vc,
                 ch.injection ? std::nullopt : std::optional{builder::routing_direction_to_eth_direction(**ch.from)});
-        }
-        // a legacy slot takes the producer stock names for it
-        const builder::RouterProducerSlots stock_slots(facing, counts_of(cg, r));
-        for (LegacySlot* slot : legacy[r]) {
-            const auto producer = stock_slots.producer_at(slot->vc, slot->index);
-            slot->enters_ring = (producer || stock_slots.worker_channel(slot->vc) == slot->index) &&
-                                enters_ring(slot->vc, producer);
         }
     }
 }

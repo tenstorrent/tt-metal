@@ -100,7 +100,6 @@ GraphFabricBuildSession::GraphFabricBuildSession(FabricContext& fabric_context) 
 
     // channel graph: each router's slots, and which senders enter a protected ring
     auto channels = lower_to_channels(std::move(logical), topology);
-    legacy_stock_sender_counts(channels, options);  // stock-sized routers until #65720
     mark_ring_entries(channels, options, [&control_plane](const FabricNodeId& node) {
         return make_protected_ring_queries(control_plane, node);
     });

@@ -37,7 +37,7 @@ struct LinkPairing {
 // Where every channel lives in L1, which eth channel each router runs on, and the NoC settings of each link
 // pairing. Noc command buffers stay auto.
 struct PhysicalGraph : ChannelGraph {
-    std::vector<RouterChannelLayout> layouts;  // [router] every slot, legacy ones included; empty if not local
+    std::vector<RouterChannelLayout> layouts;  // [router] every slot; empty if not local
     std::vector<ChannelAddress> addresses;     // [channel] zero if not local
     std::vector<chan_id_t> eth_chans;          // [router]
     std::vector<LinkPairing> links;
