@@ -1021,7 +1021,7 @@ struct ExpectedPin {
     std::uint32_t tray_id;
     std::uint32_t asic_location;
 };
-static constexpr std::array<ExpectedPin, 16> even_mesh_pins_rev_c = {{
+constexpr std::array<ExpectedPin, 16> even_mesh_pins_rev_c = {{
     {0, 1, 3},
     {1, 1, 7},
     {2, 2, 7},
@@ -1039,7 +1039,7 @@ static constexpr std::array<ExpectedPin, 16> even_mesh_pins_rev_c = {{
     {14, 4, 7},
     {15, 4, 3},
 }};
-static constexpr std::array<ExpectedPin, 16> odd_mesh_pins_rev_c = {{
+constexpr std::array<ExpectedPin, 16> odd_mesh_pins_rev_c = {{
     {0, 3, 2},
     {1, 3, 6},
     {2, 4, 6},
@@ -1057,7 +1057,7 @@ static constexpr std::array<ExpectedPin, 16> odd_mesh_pins_rev_c = {{
     {14, 2, 6},
     {15, 2, 2},
 }};
-static constexpr std::array<ExpectedPin, 16> even_mesh_pins_rev_ab = {{
+constexpr std::array<ExpectedPin, 16> even_mesh_pins_rev_ab = {{
     {0, 1, 3},
     {1, 1, 7},
     {2, 3, 7},
@@ -1075,7 +1075,7 @@ static constexpr std::array<ExpectedPin, 16> even_mesh_pins_rev_ab = {{
     {14, 4, 7},
     {15, 4, 3},
 }};
-static constexpr std::array<ExpectedPin, 16> odd_mesh_pins_rev_ab = {{
+constexpr std::array<ExpectedPin, 16> odd_mesh_pins_rev_ab = {{
     {0, 2, 2},
     {1, 2, 6},
     {2, 4, 6},
