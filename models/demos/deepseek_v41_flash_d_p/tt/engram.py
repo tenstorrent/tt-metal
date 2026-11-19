@@ -53,6 +53,16 @@ _COPY_TO_DEVICE = ttnn.copy_host_to_device_tensor
 _FROM_TORCH = ttnn.from_torch
 
 
+def _host_impl():
+    """ENGRAM_HOST_IMPL: the module that does the engram host work, numba (tt/engram_bfp8.py) or C++
+    (tt/engram_host_cpp.py); same functions, same bytes (tests/test_engram_host_cpp.py)."""
+    if settings.get("ENGRAM_HOST_IMPL") == "cpp":
+        from . import engram_host_cpp as impl
+    else:
+        from . import engram_bfp8 as impl
+    return impl
+
+
 def _build_in_background(fn):
     """fn() on the builder thread (FIX.10: the resident tables build while the weights load) -> its Future."""
     with _BUILDER_LOCK:
@@ -100,7 +110,7 @@ def resident_bfp8(ck, layer: int, threads: int = 16, block: int = 1 << 20, huge:
 
     import numpy as np
 
-    from .engram_bfp8 import pack_into
+    pack_into = _host_impl().pack_into
 
     key = (str(ck.path), "bfp8", layer)
     with _RESIDENT_LOCK:
@@ -147,8 +157,9 @@ def resident_bfp8(ck, layer: int, threads: int = 16, block: int = 1 << 20, huge:
 
 
 def _warm_tiles(packed, threads: int):
-    """One tiny tile_rows call: numba loads the gather kernel (~0.5 s on the first call) off the first chunk."""
-    from .engram_bfp8 import tile_rows
+    """One tiny tile_rows call: numba loads the gather kernel (~0.5 s on the first call; ENGRAM_HOST_IMPL=cpp: the
+    extension is built / loaded) off the first chunk."""
+    tile_rows = _host_impl().tile_rows
 
     tile_rows(packed, torch.zeros(32, 24, dtype=torch.int64), 32, threads)
 
@@ -286,9 +297,7 @@ class TtEngramRows:
         """The table rows of ids [valid] with the carried tail -> (rows [valid, slots] int64, new tail). ``fast``
         (HOST_HIDE=on, P.78): the numba form (tt/engram_bfp8.ngram_hashes, bit-equal; tests/test_engram_hash.py)."""
         if fast:
-            from .engram_bfp8 import ngram_hashes
-
-            return ngram_hashes(self.hasher, ids, self.layer, tail.long(), threads or self.threads)
+            return _host_impl().ngram_hashes(self.hasher, ids, self.layer, tail.long(), threads or self.threads)
         return self.hasher.hashes(ids, self.layer, tail.long())
 
     def _valid(self, ids: torch.Tensor, valid: int | None) -> int:
@@ -337,7 +346,7 @@ class TtEngramRows:
         as bfloat8_b (tt/engram_bfp8.py), from the table's bytes by integer operations only; pad rows are 0.
         ``times``: ms of hash / lookup / pack added (ENGRAM_ASYNC's report). ``threads`` / ``fast``: HOST_HIDE (P.78),
         the pack's thread count (default ENGRAM_GATHER_THREADS) and the numba hash."""
-        from .engram_bfp8 import pack_rows
+        pack_rows = _host_impl().pack_rows
 
         t0 = time.perf_counter()
         ids = tokens.reshape(-1).long()
@@ -389,7 +398,7 @@ class TtEngramRows:
         lookup + pack (one numba pass: the resident rows are already bfloat8_b) added; ``outs``: per mesh row the
         uint8 tensor to write the bytes into (ENGRAM_ASYNC's staging). ``threads`` / ``fast``: HOST_HIDE (P.78), the
         gather's thread count (default ENGRAM_GATHER_THREADS) and the numba hash."""
-        from .engram_bfp8 import tile_rows
+        tile_rows = _host_impl().tile_rows
 
         t0 = time.perf_counter()
         packed = self.packed  # (ENGRAM_BUILD=background: the first chunk waits for the build here, not in "hash")
@@ -562,10 +571,29 @@ class TtEngramRows:
         gather + tiling call for every chip's share (resident table; mmap: host_bfp8 then the tile bytes per share)
         and one upload of 1 / TP of ``fill``'s bytes (each chip its own share; ``fill`` sends every mesh row's rows to
         all TP chips of the row). The bytes of chip (r, c) are ``fill``'s rows [c q, (c+1) q) of mesh row r."""
-        from .engram_bfp8 import tile_bytes, tile_rows_chips
+        from .engram_bfp8 import tile_bytes
 
+        tile_rows_chips = _host_impl().tile_rows_chips
         times = {}
         t0 = time.perf_counter()
+        if self._packed is not None and settings.get("ENGRAM_HOST_IMPL") == "cpp":
+            # ENGRAM_HOST_IMPL=cpp: the whole host job in ONE C++ call (valid prefix, tail check, hash, range check,
+            # gather into every chip's share), no torch operation around it: the GIL is taken back once after it and
+            # once after the upload (tt/engram_host_cpp.fill_job; the bytes the numba branch below writes)
+            from .engram_host_cpp import fill_job
+
+            q = tokens.numel() // int(self.mesh.get_num_devices())
+            host, views, outs = self._staging_tp(q)
+            packed = self.packed
+            t0b = time.perf_counter()
+            _, t = fill_job(
+                self.hasher, self.layer, tokens, tail, packed, outs, q, threads or self.threads, valid, want_tail
+            )
+            times.update(build_wait=(t0b - t0) * 1e3, **t)
+            t0 = time.perf_counter()
+            _COPY_TO_DEVICE(host, dev)  # (GIL released for the copy)
+            times["upload"] = (time.perf_counter() - t0) * 1e3
+            return times
         ids = tokens.reshape(-1).long()
         s = ids.shape[0]
         valid = self._valid(ids, valid)

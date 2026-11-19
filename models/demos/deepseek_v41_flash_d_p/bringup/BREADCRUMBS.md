@@ -1036,3 +1036,157 @@
   prose p145408 87.8 / 74.16 / 38.07; prose p1024000 98.9 / 92.65 / 38.46 (attempt 2's off on the 12-slot block:
   80.0 / 65.51 / 29.70 at agentic p145408). `--part test_ladder` found no run (the runner's A/B side carries only
   the timing tests, F285); accuracy is the accept gate's. No `gate --check` run (stop rule; the orchestrator gates).
+
+## P.81 (perf, attempt 1): attention at its roofline — projections, sdpa, RoPE / glue measured; wq_b out blocks shipped
+
+- Read: X.7_roofline.md + X.7_ops.json.gz (attention 21.86 ms a chunk at 142k: sparse_sdpa 6.20 (compressed) + 0.28
+  (window), wq_b 3.96, wo_a 3.50, wo_b 2.83, q rope 1.25, output rope 1.13, window_send "(other)" 1.21, glue < 1).
+- Expected saving (written before the A/B): device -0.3 ms a chunk (wq_b only, 20 calls x -0.016 ms), host 0 (same
+  launches). Far from the brief's <= 13 ms target; the reasons per sub-step below.
+- Projections (op probe tests/perf/test_attn_proj_probe.py on the 8x4, every chip, rt profiler, 20 iters):
+  | site | shipped | best stock alternative | floor (weights at 410 GB/s) |
+  |---|---|---|---|
+  | wq_b 160x1280x32768 | 0.1976 | 1D ob 5x2 bw20 0.1818 (bit-identical) | 0.109 (+ 10.5 MB output: 0.134) |
+  | wo_b 160x8192x5120 | 0.1423 | none (bw16 0.168, ob5x1 0.237) | 0.109 -> within 30 %: stop |
+  | wo_a 8x160x4096x1024 | 0.1750 | none (2D bw64 0.188, bw128 0.226) | 0.087 |
+  DRAM-sharded weights (stock MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig, use_multicore_pipeline, 8 / 12 /
+  13 cores a bank = 64-104 cores): wq_b matmul 0.153-0.174 ms but its output is L1 width-sharded only: + 0.037 ms to
+  DRAM = no gain; rel vs float64 7.6e-3 vs 1.7e-3 shipped (not the HiFi2 / fp32-DEST numbers): rejected. wo_b
+  0.28-0.65 ms. wo_a has per-group weights (the DRAM-sharded program refuses them; the batched one is one core a bank:
+  compute-bound). Stop rule: the DRAM-sharded design gains < 1 ms (DS41-306). Floor reached: wq_b 0.182 / 0.134
+  (1.36x), wo_b 1.30x, wo_a 2.0x (the 2D program's 11 weight readers; no stock program spreads per-batch weights).
+- sparse_sdpa (tests/perf/test_sdpa_probe.py, random keys, ROW_BFP4 + bf16 window, the model's call): 0.292 ms at
+  H64 S160 top512 (model 0.336-0.361). S 110 / 220 = 0.171 / 0.342: 50 of 110 cores take 2 of the 160 queries;
+  top-k 128..1024: +0.039-0.040 ms a 128-key chunk (2 queries) = ~20 us a query-chunk vs 6 us of HiFi2 matmul.
+  Stubbing the 64-tile bfp4 row -> tile copy (diagnostic edit, reverted): 0.292 -> 0.248. Not a config: a kernel
+  redesign (k-split balancing with a combine, the matmul unpacking the records directly). Not attempted (DS41-307).
+  H 32 hits an sfpi internal compiler error (gimple-rvtt-synth.cc:470) building the ROW_BFP4 compute kernel; the
+  model's H 64 builds.
+- q RoPE (rope_chain, 0.062 ms): 21 MB (TILE read + ROW_MAJOR write) = 340 GB/s, at its floor as a separate pass;
+  removing it needs sparse_sdpa to read wq_b's TILE rows (2048 small NoC reads a query) or a matmul epilogue rope.
+  Output RoPE 0.056 ms: 16 MB, likewise. "(other)" = window_send (fabric, waits on neighbours).
+- Shipped: ATTN_ROOFLINE (tt/settings.py, bool, default True; tasks.yaml's on / off are YAML booleans):
+  tt/mm_configs.ROOFLINE replaces the GALAXY wq_b entry (MATMUL_CONFIG=galaxy, 11 x 10 grid; any other box / grid unchanged). Bit-identical (same kernels, K order); 110
+  cores (1D on 11 x 10, 103 used). False = the GALAXY config.
+- Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all --no-precompile
+  models/demos/deepseek_v41_flash_d_p/tests/perf/test_attn_proj_probe.py` (P81_SITES=wq_b,wo_b,wo_a, P81_CPB=8,12
+  for the DRAM-sharded rows); same for tests/perf/test_sdpa_probe.py.
+- `orchestrator measure --task P.81` (change on, the timing tests; F285: the A/B side carries no ladder run, accuracy
+  is the accept gate's; the change is bit-identical at the op level): steady resumed wall p145408 prose 88.4 ms
+  (spread 16.8), agentic 80.6 (16.4), multilingual 87.2 (17.8); p1024000 98.9 / 93.8 / 94.4. Each spread is one
+  outlier run; the -0.3 ms expected is below this noise: the device section of the orchestrator's profile decides.
+  The ATTN_ROOFLINE A/B values: YAML on / off load as booleans, so the setting is a bool (a string setting refused
+  "False"). No `gate --check` run (perf role: the orchestrator gates both sides).
+
+## X.10 perf (attempt 1): host profile at 142k on the agentic text: engram vs launch vs other, and an on-device engram table estimate (a measurement)
+
+- Expected (written before any run): device 0, host 0 a chunk (no model change, no Setting: nothing to switch).
+  Expected split of the exposed host time (wall - device, X.9 agentic 16.3 ms): start + end latency ~3 ms (DS41-298's
+  3.2), engram ~2-5 ms (HOST_HIDE=on removed layer 1's 11 ms wait; left: its upload 2.5 ms when the device has less
+  than the job's ~5 ms of layer 0, and layer 14's job contending with the main thread), launch-bound layers 0-4 the
+  rest (~8-10 ms: P.78's "host needs ~22 ms to launch embed + layers 0-2 for ~14 ms of device"). On-device engram
+  table: removes at most the engram share; adds ~0.2-0.5 ms device a chunk; ~6.5 GB a chip for both tables in bfp8
+  (the brief's 98 GB / 3.1 GB is ONE table: 384M rows x 256 B per layer, two layers).
+
+## P.87 perf (attempt 1): engram tables on the Galaxy, hash + row gather + exchange on the device (ENGRAM_DEVICE off | on)
+
+- Expected saving (written before any device run): host -1.5 ms a chunk (adapter._host_ids' 8 blocking reads) and the
+  exposed engram host time (DS41-308: ~1.6 ms at 142k agentic) -> wall ~ -3 ms; device: + the lookup program
+  (~0.3-0.6 ms a chunk for both layers: 2 x 3840 rows a chip read and sent, hash on 16 cores) and, unless overlapped,
+  + the history prefetch that today hides in the engram wait (~1.1 ms at 142k, 5-6 ms at 1M, DS41-295 / P.75): net
+  wall ~ -2 ms at 142k if the gather stays hidden, ~0 if it lands on the critical path. 1M: the gather (5-6 ms) is
+  the risk. Device tables: 6.6 GB a chip (layer 1 3.26 GB + layer 14 3.26 GB, packed 272 B rows, no padding).
+- Design: tt/engram_device.py (module docstring): tables by row ranges (chip q rows [q Nc, (q+1) Nc)); one prepared
+  mesh program (hub, 16 hash cores, <= 5 senders: one a first fabric hop + local, 24 convert cores = 46 cores) at
+  begin_chunk for both layers; the destination is HOST_HIDE's TP-sharded [Q, 6144] bfp8 layout, then the existing TP
+  gather. Every wait bounded (status words, no hang).
+- Why a model load now (owner rule): the lookup is proven bit-identical op-level (tests/test_engram_device.py, both
+  texts, 32 chips, both layers: history tail, explicit tail, padded tail, DEAD tail), but the chunk's wall and device
+  time with the lookup in place (prefetches no longer hidden behind the host wait, the TP gather, the embedding from
+  device ids) only exist in the full layer sequence: no op test and no fewer-layer run gives the 142k steady wall the
+  owner decides on. One load in the resident runner (layers 0-20, DECODER_SKIP=decode), both switch values in it.
+- Built (tt/engram_device.py, tt/model.py, tt/runners/adapter.py, tt/settings.py ENGRAM_DEVICE on|off (call-time,
+  default on), ENGRAM_DEVICE_MAX_GB 8, ENGRAM_DEVICE_LINKS 2):
+  * tables: packed bfp8 rows by row ranges, 3.26 GB a chip a layer; upload from the checkpoint 185-190 s a table
+    (pread + pack + 23 blocks of 2^19 rows a chip + a DRAM copy program), once a process: the resident runner's
+    device-weight registry keeps them over model rebuilds (sparse marker files of the table's size under the expert
+    cache dir: engram_device/L<layer>_*.marker). 4x4 / 2x4 / 2x2 do not fit (13-53 GB a chip): host path there.
+  * one prepared program a chunk (both layers, 66 cores a chip: hub 1, hash 32, convert 24, senders 9 = 4 directions
+    x 2 links + local; no core cap: not a matmul, overseer 2026-11-19): ids gathered over the column, hash on
+    device (Barrett mod, torch.remainder semantics), rows read on the owning chip, sent per (source, destination)
+    inbox in packets of 16 x 320 B windows + one meta packet with the counted increment, pointer table by the hub
+    (DRAM), tiled to bfp8 [Q, 6144] by the convert cores; embedding reads the program's natural ids; slot id history
+    and an explicit-tail input on the device (DS41DeviceState.device_engram / host_engram / engram_where).
+  * adapter: ENGRAM_DEVICE=on -> no _host_ids, no note_tokens; begin_chunk(None, .., device_ids=inp,
+    valid=run_end - start); embed(None).
+- Op-level (tests/test_engram_device.py, resident runner): bit-identical vs TtEngramRows.host_bfp8 on agentic and
+  prose (32 chips, both layers; history tail, explicit tail, valid 3000, DEAD tail), embedding ids, id history.
+  Lookup a call (synced loop): v1 one packet a row 4.8 ms (DS41-312) -> inbox 1.23 ms -> 2 links + 32 hash cores
+  0.95 ms (split: ids+hash+convert 0.30, row reads +0.09, sends +0.56; double-buffered reads: no change).
+- Hang 14:08 (my request, DS41-313): convert cores read the pointer table at an assumed L1 address; fixed (DRAM
+  table, range checks, whole-line meta writes, 2^22-poll waits). Device opens this task: 2 (a TT_METAL_HOME process
+  variable restart at the first submit; the restart after the hang's reset).
+- Model A/B (tests/perf/test_engram_device_ab.py, one load, layers 0-20, DECODER_SKIP=decode, agentic p145408, sides
+  alternated 2 rounds): every layer output on == off (21 layers). Steady wall off 80.1 / 79.4, on 78.2 / 78.9 ms
+  (-1.2); resumed off 81.4 / 80.4, on 80.3 / 80.2 (-0.65); device off 65.41 / 65.59, on 66.21 / 66.61 (+0.9:
+  chunk_input 0.09 -> 1.17 ms = the lookup; engram_rows (prefetches + TP gather) 1.04 both); host 14.5 -> 12.3 ms.
+  This harness path has no adapter readback: serving also drops _host_ids' 1.53 ms (X.10) -> estimated ~-2.7 ms.
+  1M not measured (the runner's model has seq 150528): the lookup is position-free (~1.2 ms device), the host
+  engram exposure at 1M is smaller (P.78: host 5.7 ms) -> estimated ~0 to -1 ms there.
+- NOT done (owner item 5): the fused lookup + history all-gather kernel. The history prefetch still runs as before
+  (engram_rows section 1.04 ms device at 142k), now no longer hidden behind a host wait; fusing can save at most the
+  overlap min(lookup 1.17, gather ~0.8) ms. The next step: the prefetch's record all-gather as extra fabric cores in
+  EngramLookup's program (the senders' links are idle during the hash phase, 0.3 ms) and the lookup's sends faster
+  (1.4 GB/s a link now: per-packet latency bound, not bandwidth).
+- hooks.batch_call_settings (outside this step's paths) should list ENGRAM_DEVICE (read per chunk): patch for the
+  overseer: `return ("PREFILL_END", "ENGRAM_DEVICE") + (...)`.
+- Re-run: op `resident submit --cmd "P87_TEXTS=agentic,prose scripts/run_safe_pytest.sh --run-all --no-precompile
+  models/demos/deepseek_v41_flash_d_p/tests/test_engram_device.py"` (DS41_P87_DIAG=1|2 + P87_SKIP_CHECK=1: the time
+  split, diagnostic); A/B `resident submit --cmd "DS41_DECODER_SKIP=decode DS41_ENGRAM_TABLE=resident
+  BRINGUP_POS_TOKENS=agentic P87_POS=145408 P87_ROUNDS=2 scripts/run_safe_pytest.sh --run-all --no-precompile
+  models/demos/deepseek_v41_flash_d_p/tests/perf/test_engram_device_ab.py"`.
+
+## P.87 perf (attempt 2): the attempt-1 refusals fixed; the fused lookup + history gather not built (why, with numbers)
+
+- Fixed what refused attempt 1: tt/engram_device._defines read DS41_P87_DIAG from the environment -> the `P87_DIAG`
+  Setting (tt/settings.py, diagnostic, choices 0 / 1 / 2, default 0: the same env name DS41_P87_DIAG, the same kernel
+  text at 0); DS41-311 / DS41-313 shortened under 600 chars, their full text under known_issues_detail.md (and the
+  missing detail section of X.10's DS41-308). No kernel or path change: the measured attempt-1 code is what ships.
+- The orchestrator's `measure --task P.87` of attempt 1 (change on, agentic): steady wall p145408 78.4 ms (spread 3.3:
+  one 81.3 run), p1024000 92.0; prose p145408 85.4. Sections on: chunk_input 1.20 / 1.21 ms (the lookup; was 0.09),
+  engram_rows 1.06 / 5.21 ms (142k / 1M: the history prefetch + TP gather, now on the critical path).
+- Item 5 (ONE fused kernel: lookup + the 3 sources' history all-gather) NOT built in this attempt. Reasons, measured:
+  (a) the history buffers are ROW_MAJOR interleaved with a 320 B page a row (tt/history_gather.HistoryBuffer, read
+  by the sdpa fork's ROW_BFP4): a Python-built fabric all-gather moves one page a packet, DS41-312's ~1.25 us a
+  packet x 31 destinations x every owner's rows (142k: ~1.1k rows a ratio-4 source a chip) is tens of ms against the
+  stock high_bw_all_gather's ~0.8 ms; a competitive fused gather needs per-owner contiguous history pages first (a
+  change to the sdpa reader's addressing) plus fabric multicast in the program; (b) the task's device-open budget
+  (2) is spent (attempt 1: a TT_METAL_HOME restart and the 14:08 hang's reset, DS41-313): a fabric-kernel hang now is
+  a third open and a box reset. Ceiling of the fusion: min(lookup 1.2, gather) = ~0.8 ms at 142k, ~1.2 ms at 1M.
+- Re-run: `python -m models.demos.common.bringup.orchestrator measure --task P.87` (resident runner, layers 0-20).
+- Attempt 2 `measure --task P.87` (change on; code with the P87_DIAG Setting): agentic steady wall p145408 78.3 ms,
+  p1024000 92.3; prose p145408 84.6; device 66.46 / 87.17 / 73.79; chunk_input 1.20 / 1.20 / 1.16, engram_rows
+  1.07 / 5.17 / 1.01 (same as attempt 1's 78.4 / 92.0 / 85.4). Rc 0 both texts. Cost: the runner restarted its process
+  for the request (the released model's DRAM did not come back, as for attempt 1's measure): 1 device open + 1 load
+  (444 s), the task's third. The off side and the A/B are the orchestrator's.
+- Overseer (owner decision, mid-attempt): build the fused kernel. First measured its ceiling (why a model run: the
+  history sources' real sizes and the lookup's fabric contention exist only with the model's state at p145408; the
+  runner held it). tests/perf/test_engram_split_probe.py (held model, rt profiler, slowest chip, p145408 agentic):
+  lookup 0.967 ms; history packs 3 x 0.071; record gathers 0.357 + 0.181 + 0.173 = 0.711 ms (3 sources (76800, L 2 /
+  8 / 14), 32 owners x 2240 rows x 320 B = 22.9 MB into each chip in ~0.18 ms: ~127 GB/s); all back to back 1.654.
+  Synced walls: lookup 0.971, prefetch_all 1.114, lookup + prefetch_all 1.697 ms. DS41-315.
+  => a fused kernel hides at most min(lookup, gathers) = 0.71 ms device at 142k (~1 ms at 1M, where the lookup is
+  the shorter), below the 2 ms keep line, and only if its in-program gather matched the stock op's ~127 GB/s; the
+  lookup's own exchange runs at ~4.4 GB/s a chip (2.5 MB in 0.56 ms).
+- Cheaper lookup: tried more fabric links (EngramLookup(links=), P87_LINKS in tests/test_engram_device.py): the 8x4
+  has 2 links a direction (mesh_plan: "(0, 0) -> (0, 1) has 2 links"); ENGRAM_DEVICE_LINKS=2 is already the max.
+- STOPPED on the device-open limit: the probe's first request (target.seq of its own) and the op test (mesh only)
+  each made the runner release the held model, whose DRAM did not come back -> a new process each (DS41-316). Device
+  opens this attempt: 3 (measure, probe, op test; the overseer's limit 2); the task: 5. No further device runs.
+  Fused kernel NOT built. The next step, if the owner wants it: (1) the lookup's sends (header ring instead of a
+  flush per packet, rows read straight into packet slots, more senders a link) toward the fabric's rate: up to
+  ~-0.5 ms device; (2) then the history records multicast (fabric 2D mcast, 4 branches a row page) by the same
+  senders in the hash phase, kept only if it measures below the stock gather. Op tests only in a request that shares
+  the held model (DS41-316).
+- Re-run the probe: `resident submit --cmd "DS41_DECODER_SKIP=decode BRINGUP_POS_TOKENS=agentic
+  scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/perf/test_engram_split_probe.py"`.

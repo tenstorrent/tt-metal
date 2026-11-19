@@ -51,6 +51,7 @@ What the assembled model shares between steps (no host work per chunk; agent rul
 
 from __future__ import annotations
 
+import importlib
 import time
 
 import torch
@@ -320,6 +321,11 @@ class DS41DeviceState:
         self.tail = {i: model.engram[i].new_tail() for i in model.engram}
         self.tokens = None
         self.history = None  # this slot's real token ids by position (host; the engram tail of any start)
+        # P.87 (ENGRAM_DEVICE=on): the slot's id history on the device (made at its first device-path chunk), and
+        # where the engram tails are current: "host" (st.tail / history; a device chunk first takes them over as an
+        # explicit tail), "device" (the device history; a host-path chunk first reads it back), "both"
+        self.ids_dev = None
+        self.engram_where = "host"
         # DEEP_LAYERS=tail (FIX.17): {chunk start: (layer 20's output DevH, the chunk's end)} of the last two chunks,
         # the deep layers' input for TtDS41Model.tail_pass
         self.deep_in = {}
@@ -357,9 +363,48 @@ class DS41DeviceState:
         """Host, before ``begin_chunk``: the chunk's real ids [start, end) into this slot's id history, and every
         engram layer's tail = the compressed ids of the 3 positions before ``start`` (a follow-up turn starts inside
         the slot's earlier prompt, so the tail its last chunk left is not this chunk's)."""
+        self.host_engram(start)
         if self.history is None:
             self.history = torch.zeros(self.max_seq, dtype=torch.int64)
         self.history[start:end] = tokens.reshape(-1)[: end - start].long()
+        self.engram_where = "host"
+        for i, rows in self.model.engram.items():
+            t = rows.new_tail()
+            last = self.history[max(0, start - t.shape[0]) : start]
+            if last.numel():
+                t[-last.numel() :] = rows.hasher.token_map[last]
+            self.tail[i] = t
+
+    def device_engram(self, start: int):
+        """P.87: (the device id history, the explicit tail tensor or None) for a device-path chunk at ``start``; a slot
+        whose tails are current on the host only hands them over (its host history uploaded, the tail explicit)."""
+        ed = importlib.import_module(__package__ + ".engram_device")  # (not the package attribute: DS41-311)
+
+        if self.ids_dev is None:
+            self.ids_dev = ed.new_history(self.mesh, self.max_seq)
+        if self.engram_where != "host" or start == 0:
+            return self.ids_dev, None
+        if self.history is not None:  # (a follow-up may start anywhere inside it)
+            pages = self.ids_dev.shape[-2]
+            h = torch.zeros(pages * ed.HIST_PAGE, dtype=torch.int64)
+            h[: self.history.numel()] = self.history
+            host = ttnn.from_torch(h.to(torch.uint32).view(1, 1, pages, ed.HIST_PAGE), dtype=ttnn.uint32)
+            ttnn.copy_host_to_device_tensor(host, self.ids_dev)
+        first = next(iter(self.model.engram))
+        return self.ids_dev, ed.new_tail(self.mesh, self.tail[first])
+
+    def _pull_history(self) -> None:
+        """P.87: the device id history into the host's (one chip's copy; a switch to the host path, a state read)."""
+        t = ttnn.to_torch(ttnn.get_device_tensors(self.ids_dev)[0]).reshape(-1).to(torch.int64) & 0xFFFFFFFF
+        self.history = t[: self.max_seq].clone()
+        self.engram_where = "both"
+
+    def host_engram(self, start: int) -> None:
+        """P.87: before a host-path chunk at ``start``: device-path chunks before it (engine ids only) leave the
+        tails on the device: the history read back and every engram tail recomputed for ``start``."""
+        if self.engram_where != "device" or self.ids_dev is None:
+            return
+        self._pull_history()
         for i, rows in self.model.engram.items():
             t = rows.new_tail()
             last = self.history[max(0, start - t.shape[0]) : start]
@@ -386,6 +431,7 @@ class DS41DeviceState:
             self.cands_prefix[layer] = tensors["candidates"][:length].to(torch.int32).clone()
         if layer in self.tail:
             self.tail[layer] = tensors["engram_tail"].long().clone()
+            self.engram_where = "host"
         assert cfg.ratio(layer) < 2 or not length % cfg.ratio(layer), (layer, length)
 
     def _index_rows(self, layer: int, length: int, store: dict, prefix: dict, width: int, per_chip: bool):
@@ -426,7 +472,15 @@ class DS41DeviceState:
             elif n == "candidates":
                 out[n] = self._index_rows(layer, length, self.cands, self.cands_prefix, cfg.cand_topk_blocks, True)
             elif n == "engram_tail":
-                out[n] = self.tail[layer].clone()
+                if self.engram_where == "device":  # (P.87: the engine's device-path chunks: from the device history)
+                    self._pull_history()
+                    t = self.model.engram[layer].new_tail()
+                    last = self.history[max(0, length - t.shape[0]) : length]
+                    if last.numel():
+                        t[-last.numel() :] = self.model.engram[layer].hasher.token_map[last]
+                    out[n] = t
+                else:
+                    out[n] = self.tail[layer].clone()
         return out
 
     def served(self, layer: int, length: int) -> dict:
@@ -449,6 +503,7 @@ class DS41DeviceState:
         if self.history is None:
             self.history = torch.zeros(self.max_seq, dtype=torch.int64)
         self.history[: self.tokens.numel()] = self.tokens
+        self.engram_where = "host"
         for i, rows in self.model.engram.items():
             t = rows.new_tail()
             last = self.tokens[-t.shape[0] :]
@@ -1121,7 +1176,8 @@ class TtDS41Model:
         if self._host_hide:
             import sys
 
-            sys.setswitchinterval(float(settings.get("HOST_HIDE_SWITCH_MS")) / 1e3)
+            if settings.get("ENGRAM_HOST_IMPL") == "numba":  # (cpp: one GIL release a job, the default interval)
+                sys.setswitchinterval(float(settings.get("HOST_HIDE_SWITCH_MS")) / 1e3)
             if self.mesh.shape[TP_AXIS] > 1 and all(r.format == "bfp8" for r in self.engram.values()):
                 for i, r in self.engram.items():
                     t = ttnn.allocate_tensor_on_device(
@@ -1133,6 +1189,38 @@ class TtDS41Model:
                     )
                     ccl.pin(mesh, t)  # (persistent: the block's freeing skips it)
                     self._engram_full[i] = t
+        # ENGRAM_DEVICE (P.87): the device tables (uploaded once a process when wanted at load and they fit: the
+        # switch is read per chunk) and the lookup program; its outputs are load-time buffers (pinned), gathered over TP into the
+        # same per-layer buffers as HOST_HIDE's rows
+        self.engram_dev = None
+        self._emb_ids = None
+        self.engram_dev_load_s = None
+        if self.engram and tail_of is None and self.sp * self.tp > 1:
+            ed = importlib.import_module(__package__ + ".engram_device")  # (not the package attribute: DS41-311)
+
+            # owner 2026-11-19: the tables (6.6 GB a chip, ~6 min) only when the device path is wanted at load:
+            # ENGRAM_DEVICE=on, or ENGRAM_DEVICE_TABLES=on (load them and flip ENGRAM_DEVICE per chunk, e.g. an A/B)
+            want = settings.get("ENGRAM_DEVICE") == "on" or settings.get("ENGRAM_DEVICE_TABLES") == "on"
+            if want and ed.fits(mesh, cfg):
+                t_ed = time.time()
+                nums = dict(zip(cfg.raw["engram_layer_ids"], cfg.raw["engram_num_embeddings"]))
+                tabs = {i: ed.load_table(mesh, ck, i, nums[i], weight_cache) for i in self.engram}
+                self.engram_dev = ed.EngramLookup(mesh, hasher, tabs, self.chunk)
+                for t in list(self.engram_dev.out.values()) + [self.engram_dev.emb_ids]:
+                    ccl.pin(mesh, t)
+                if self.tp > 1:
+                    for i, r in self.engram.items():
+                        if i not in self._engram_full:
+                            t = ttnn.allocate_tensor_on_device(
+                                ttnn.Shape([1, 1, self.chunk // self.sp, r.width]),
+                                ttnn.bfloat8_b,
+                                ttnn.TILE_LAYOUT,
+                                mesh,
+                                DRAM,
+                            )
+                            ccl.pin(mesh, t)
+                            self._engram_full[i] = t
+                self.engram_dev_load_s = time.time() - t_ed
         # HISTORY_GATHER_HIDE=on (P.75): the chunk's start until prefetch_history ran (begin_chunk -> take_engram_rows)
         self._hide = (
             settings.get("HISTORY_GATHER_HIDE") == "on"
@@ -1381,8 +1469,12 @@ class TtDS41Model:
         last: bool | None = None,
         replay: bool = False,
         write_start: int | None = None,
+        device_ids=None,
+        valid: int | None = None,
     ) -> None:
-        """The host input of every engram layer: hash the chunk's ids (pad past actual_end skipped, DS41-26) with the
+        """``device_ids`` / ``valid`` (P.87, ENGRAM_DEVICE=on): the engine's device input (uint32 [SP, 1, W], server
+        order) and the chunk's real positions; ``tokens`` may then be None (no host ids: the lookup and the embedding
+        read the device ids). The host input of every engram layer: hash the chunk's ids (pad past actual_end skipped, DS41-26) with the
         active slot's tail, look the rows up (memory-mapped) and send them to the device once. Also empties the
         active slot's ChunkMemo (INDEXER_GLUE=on, P.16; FIX.5): every run of a chunk builds its shared tensors
         itself, even when a slot's last reader layer is not loaded or not run (a re-run of the same start would hit
@@ -1441,9 +1533,15 @@ class TtDS41Model:
         # is decoded at the first engram wait (prefetch_index_keys)
         index_keys.new_chunk()
         self._kpf_start = int(start)
+        self._emb_ids = None
         if not self.engram:
             return
         self.wait_engram()  # a job of the last chunk whose layer did not run: done before its tensor is freed
+        if self.engram_on():
+            return self._begin_engram_device(tokens, start, device_ids, valid)
+        assert tokens is not None, "ENGRAM_DEVICE=off needs the chunk's host ids"
+        if st is not None:
+            st.host_engram(start)  # (P.87: a device-path chunk before: its history and tail to the host first)
         if self._engram_pool is not None:
             return self._begin_engram_async(tokens, start)
         for i, rows in self.engram.items():
@@ -1627,6 +1725,48 @@ class TtDS41Model:
         self.last_rows = 0 if self.replay else -(-(len(self.decoder) * (w - 1) + w) // 32) * 32
         self.hold_history()  # (P.74: the active state's gather buffers for this mode)
 
+    def engram_on(self) -> bool:
+        """ENGRAM_DEVICE=on (P.87, read per chunk) and the device tables loaded."""
+        return self.engram_dev is not None and settings.get("ENGRAM_DEVICE") == "on"
+
+    def _begin_engram_device(self, tokens, start: int, device_ids, valid) -> None:
+        """P.87: the fused device lookup of every engram layer (tt/engram_device.py) from the device ids; the rows
+        stay in the lookup's load-time buffers (take_engram_rows gathers them over TP), the natural-order ids feed
+        the embedding. Host tokens (the bring-up harness): uploaded once as the engine's input, the host tails
+        advanced too (3 ids); none (the engine): the slot's tails live on the device until a host-path chunk."""
+        ed = importlib.import_module(__package__ + ".engram_device")  # (not the package attribute: DS41-311)
+
+        st = self.state
+        assert st is not None, "ENGRAM_DEVICE=on: a slot state (its device id history) first"
+        first = next(iter(self.engram.values()))
+        own = None
+        if device_ids is None:
+            assert tokens is not None, "ENGRAM_DEVICE=on: the chunk's ids (host or device)"
+            ids = tokens.reshape(-1).long()
+            v = first._valid(ids, valid)
+            own = device_ids = ed.engine_ids(self.mesh, ids, int(start), self.chunk)
+        else:
+            v = int(valid) if valid is not None else self.chunk
+        hist, tail = st.device_engram(start)
+        for i in self.engram:
+            self._drop_engram_dev(i)
+        outs, emb = self.engram_dev(device_ids, hist, int(start), v, tail)
+        if own is not None:
+            dealloc(own)
+            for i, rows in self.engram.items():  # (host ids known: the host tails stay current, 3 ids)
+                t = rows.new_tail() if start == 0 else st.tail[i]
+                st.tail[i] = rows.next_tail(ids, t.long(), v)
+            st.engram_where = "both"
+        else:
+            st.engram_where = "device"
+        self._engram_dev.update(outs)
+        self._emb_ids = emb
+
+    def _drop_engram_dev(self, i: int) -> None:
+        t = self._engram_dev.pop(i, None)
+        if t is not None and id(t) not in ccl._KEEP:
+            _free(t)
+
     def _begin_engram_async(self, tokens: torch.Tensor, start: int) -> None:
         """ENGRAM_ASYNC=on: on this thread only the new tails (3 ids a layer) and the device rows' allocation (the
         order the off path allocates in); the hash, lookup, pack and upload go to the worker, layer order."""
@@ -1645,7 +1785,7 @@ class TtDS41Model:
                 self._engram_dev[i] = dev
                 self._engram_jobs[i] = self._engram_pool.submit(rows.fill, dev, ids, tail, None, new_tail)
                 continue
-            # HOST_HIDE=on (P.78): the first engram layer's job now (numba hash, HOST_HIDE_THREADS), the later ones
+            # HOST_HIDE=on (P.78): the first engram layer's job now (numba / C++ hash, HOST_HIDE_THREADS), the later ones
             # (likewise) once the main thread leads the device (_submit_pending)
             th = self._hide_threads
             if i in self._engram_full:  # (the TP-sharded rows, gathered in take_engram_rows)
@@ -1744,9 +1884,20 @@ class TtDS41Model:
     def embed(self, tokens: torch.Tensor, start: int = 0) -> DevH:
         """Natural-order ids of one chunk (PAD_ID past actual_end clamped into the vocabulary, K-72: those rows are pad
         and never reach a cache) -> layer 0's input: the embedding on all 4 streams, the pending pre one-hot."""
+        if self._emb_ids is not None:  # P.87 (ENGRAM_DEVICE=on): the lookup's natural-order device ids (pinned)
+            dev_ids = self._emb_ids
+        else:
+            dev_ids = self._host_emb_ids(tokens)
+        e = ttnn.bringup.embedding(
+            dev_ids, self.embed_w, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16, memory_config=DRAM, max_grid=max_grid()
+        )
+        dealloc(dev_ids)
+        return self._embed_rest(e)
+
+    def _host_emb_ids(self, tokens: torch.Tensor):
         ids = tokens.reshape(-1).long().clamp(0, self.vocab - 1).to(torch.int32)
         assert ids.numel() == self.chunk, (ids.numel(), self.chunk)
-        dev_ids = from_torch(
+        return from_torch(
             ids.reshape(self.sp, self.chunk // self.sp).contiguous(),
             dtype=ttnn.uint32,
             layout=ttnn.ROW_MAJOR_LAYOUT,
@@ -1754,10 +1905,8 @@ class TtDS41Model:
             memory_config=DRAM,
             mesh_mapper=ttnn.ShardTensor2dMesh(self.mesh, mesh_shape=tuple(self.mesh.shape), dims=(0, None)),
         )
-        e = ttnn.bringup.embedding(
-            dev_ids, self.embed_w, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16, memory_config=DRAM, max_grid=max_grid()
-        )
-        dealloc(dev_ids)
+
+    def _embed_rest(self, e) -> DevH:
         rows, w = self.chunk // self.sp, self.cfg.dim // self.tp
         e4 = ttnn.reshape(e, [1, 1, rows, w], sub_core_grids=sub_cores(e))
         if self.own:  # OWN_ROWS=on (P.23): the chip's own rows, whole hidden (one all_to_all over TP a chunk)

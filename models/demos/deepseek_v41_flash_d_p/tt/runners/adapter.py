@@ -283,12 +283,16 @@ class DS41PrefillRuntime:
         if run_end <= start:  # nothing below cap in this chunk: only every layer's snapshot at cap, then the acks
             self._acks_only(st, slot, start, end, run_end, sink, d2h, metadata_msg)
             return
-        ids = self._host_ids(inp, start, run_end)
-        st.note_tokens(ids, start, run_end)
         if model.skip_mode == "decode":  # P.51: the decoder never runs in prefill (decode runs [P, N) itself)
             last = False
-        # (P.30 / P.31: False skips the decoder; None = not told, every layer. P.51: write_start = global_write_start)
-        model.begin_chunk(ids, start, last=last, write_start=write_start)
+        if model.engram_on():  # P.87 (ENGRAM_DEVICE=on): the lookup and the embedding read the device ids: no readback
+            ids = None
+            model.begin_chunk(None, start, last=last, write_start=write_start, device_ids=inp, valid=run_end - start)
+        else:
+            ids = self._host_ids(inp, start, run_end)
+            st.note_tokens(ids, start, run_end)
+            # (P.30 / P.31: False skips the decoder; None = not told, every layer. P.51: write_start = global_write_start)
+            model.begin_chunk(ids, start, last=last, write_start=write_start)
         h = None
         for k, i in enumerate(self.layer_ids):
             if k == 0 or (self.gap_feed is not None and i in self.gap_feed.starts):

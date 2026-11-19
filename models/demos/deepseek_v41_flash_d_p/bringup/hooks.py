@@ -1396,7 +1396,8 @@ def batch_call_settings(env=None) -> tuple:
 
     env = os.environ if env is None else env
     skip = env.get(_settings.env_name("DECODER_SKIP"), str(_settings.table["DECODER_SKIP"].default))
-    return ("PREFILL_END",) + (() if skip == "replay128" else ("DECODER_SKIP",))
+    # ENGRAM_DEVICE (P.87) and ENGRAM_HOST_IMPL (C++ host path) are read per chunk: one load serves both values
+    return ("PREFILL_END", "ENGRAM_DEVICE", "ENGRAM_HOST_IMPL") + (() if skip == "replay128" else ("DECODER_SKIP",))
 
 
 def batch_call_apply(model) -> None:

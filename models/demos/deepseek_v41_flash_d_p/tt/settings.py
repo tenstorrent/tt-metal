@@ -290,7 +290,24 @@ TABLE = {
         "P.78, HOST_HIDE=on: the interpreter's GIL switch interval (sys.setswitchinterval, process-wide, set at the "
         "model's load; Python's default 5 ms). The engram worker re-takes the GIL after each GIL-free step (hash, "
         "gather, upload) while the main thread dispatches; at 5 ms each re-take waited up to 5 ms (layer 1's 4.6 ms "
-        "'hash' while the main thread launched layer 0)",
+        "'hash' while the main thread launched layer 0). ENGRAM_HOST_IMPL=cpp: not set (the job takes the GIL back "
+        "once after its one C++ call, and once after the upload)",
+    ),
+    "ENGRAM_HOST_IMPL": Setting(
+        "cpp",  # owner 2026-11-19: shipped (bit-identical; no numba, no process-wide GIL tweak)
+        ("numba", "cpp"),
+        "what does the engram host work of a chunk (the n-gram hash, the gather of the resident bfp8 rows into TILE "
+        "bytes, the bfp8 pack of ENGRAM_TABLE=mmap rows and of the resident build). numba = tt/engram_bfp8.py's "
+        "kernels (the process needs numba; HOST_HIDE sets the GIL switch interval HOST_HIDE_SWITCH_MS, since the "
+        "worker's job between its GIL-free steps runs torch operations that each release the GIL and wait up to a "
+        "switch interval to take it back while the main thread dispatches). cpp = tt/engram_host_cpp.py "
+        "(tt/csrc/engram_host.cpp, built on first use by torch.utils.cpp_extension: no ttnn build), bit-identical "
+        "(tests/test_engram_host_cpp.py: real prompt ids and hasher, both layers' real rows): HOST_HIDE's fill_tp "
+        "job is ONE C++ call (valid prefix, tail, hash, range check, gather into every chip's share; GIL released "
+        "once, a pool of std::threads), so the GIL switch interval is left at Python's default. CPU bench "
+        "(tests/perf/bench_engram_host_cpp.py, 5120 tokens, 32 chips, 24 threads, another Python thread spinning): "
+        "job 7.9 ms (cpp, 5 ms interval) / 3.1 ms (cpp, 0.5 ms) vs 168 / 17 ms (numba); alone 2.1 vs 2.1 ms. "
+        "Default numba until measured on the device",
     ),
     "HOST_HIDE_DEFER": Setting(
         3,
@@ -861,6 +878,43 @@ TABLE = {
         "Python threads the engram row gather is split over (torch indexing releases the GIL). QB: cold random 1 / 8 "
         "/ 32 threads 1265 / 424 / 484 ms; mmap hot 1 / 8 threads 10 / 19 ms; resident 1 / 8 threads 11-15 / 9-13 ms "
         "(torch intra-op 16 / 8 threads). Default 8: the cold gather (owner 2026-10-28); also the bfp8 pack's threads",
+    ),
+    "ENGRAM_DEVICE_TABLES": Setting(
+        "off",
+        ("off", "on"),
+        "P.87 (owner 2026-11-19): load time. on = upload the engram tables to the mesh (6.6 GB a chip on 8x4, ~6 min) even "
+        "when ENGRAM_DEVICE is off, so ENGRAM_DEVICE can be flipped per chunk in one load (an A/B). off = the tables "
+        "are uploaded only when ENGRAM_DEVICE=on at load",
+    ),
+    "ENGRAM_DEVICE": Setting(
+        "off",  # owner 2026-11-19: kept behind the switch (device path -2.7 ms serving, 6.6 GB a chip, ~6 min upload)
+        ("on", "off"),
+        "P.87 (OWNER 2026-11-19): where the engram lookup runs; read per chunk (a call-time switch: both paths exist "
+        "in one load, the device tables are uploaded at load whenever they fit, ENGRAM_DEVICE_MAX_GB). on = the "
+        "tables sharded over the chips by row ranges (packed bfloat8_b rows, tt/engram_device.py), the n-gram hash "
+        "from the engine's device ids and the slot's device id history, the rows gathered on their chips and sent "
+        "over the fabric to the chips that own the tokens, tiled there: one prepared program at begin_chunk; the "
+        "embedding reads the program's natural-order device ids (no id readback, no host table, no row upload). "
+        "Rows bit-identical to off. off = the host path (adapter._host_ids readback, host hash and gather, upload; "
+        "ENGRAM_ASYNC / HOST_HIDE). A mesh whose tables do not fit runs off",
+    ),
+    "ENGRAM_DEVICE_LINKS": Setting(
+        2,
+        None,
+        "P.87: fabric links a direction the device engram exchange sends on (a sender core each; the direction's "
+        "destinations taken in turn). 8x4: 1 link 1.23 ms a lookup",
+    ),
+    "P87_DIAG": Setting(
+        0,
+        (0, 1, 2),
+        "diagnostic (P.87 timing split of the device engram lookup, never a shipped path; tt/engram_device._defines): "
+        "0 = the lookup, 1 = no row reads / sends, 2 = row reads, no sends. Default 0",
+    ),
+    "ENGRAM_DEVICE_MAX_GB": Setting(
+        8.0,
+        None,
+        "P.87: the most DRAM a chip may give the device engram tables (GB, both layers); 8x4: 6.6 GB (fits); 4x4 13.3, "
+        "2x4 26.5, 2x2 53 GB (do not fit: ENGRAM_DEVICE=on runs the host path there)",
     ),
     "CKV_FORMAT": Setting(
         "bf16",

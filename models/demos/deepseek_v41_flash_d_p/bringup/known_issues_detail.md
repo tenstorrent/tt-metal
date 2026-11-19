@@ -1665,3 +1665,23 @@ device 65.61, experts section 29.72; on wall 80.7 (spread 15.8), device 65.40, e
 outside the combine grew ~1.6 ms (the head's planner remap and route-word ordering, more dispatch destinations: a moved
 pick adds the replica chip to a token's route unless it is already there). Prose p145408 off 86.3 / 73.20 / 37.33, on
 85.7 / 73.33 / 37.13 (noise); prose p1024000 on 98.5 ms wall, device 91.60 (no off run on this tree).
+
+## After a model-python reload in the resident runner, `from pkg import mod` returns the old module.
+
+Original entry: **[DS41-311] After a model-python reload in the resident runner, `from pkg import mod` returns the old module.** Symptom: P.87 test after editing tt/engram_device.py: "__call__() takes 5 positional arguments but 6 were given" (the pre-edit signature). Cause: testing/resident.purge drops leaf modules but never packages; the package attribute still holds the old module, and `from . import x` reads it. Fix: `importlib.import_module(pkg + ".x")` for a module edited while the runner lives (tt/model.py, tests/test_engram_device.py); framework: drop the package attribute too. Found: deepseek_v41_flash_d_p P.87.
+Framework fix to propose: testing/resident.purge should also delete the package attribute (`delattr(sys.modules[pkg], leaf)`)
+so `from . import x` re-imports.
+
+## A pointer table read at an assumed L1 address hung the 8x4
+
+Original entry: **[DS41-313] A pointer table read at an assumed L1 address hung the 8x4 (DRAM reads past the buffer).** Symptom: P.87 inbox v1: first lookup every chip's rows wrong, status clean; the second call: dispatch timeout, box reset. Cause: convert cores read the hub's pointer table at their own CB 1 address + offset (CB addresses are not uniform across differently-sized CBs): (most likely) garbage pointers -> inbox page indices far past the buffer, plus meta writes of partial 64 B lines. Fix: the table through a DRAM buffer, every pointer range-checked, meta writes whole 64 B lines. Found: deepseek_v41_flash_d_p P.87.
+The meta writes were partial 64 B lines; partial NoC writes into a line another core reads can tear. Every wait in the
+lookup is bounded (2^22 polls, status word) so a wrong table now reports instead of hanging.
+
+## At 142k (agentic) the engram host path exposes ~1.6 ms of the chunk's ~14 ms; the rest is launch cost
+
+(Section added by P.87 attempt 2: X.10 left the entry's pointer without a section.) X.10 idle map, agentic p145408:
+clean wall 79.5 ms vs device busy 65.3 ms. With HOST_HIDE the engram worker's hash (0.5-0.9 ms), gather (3.3-3.7 ms)
+and upload (1.0-2.5 ms) a layer mostly hide behind layer 0 / layers 2-13; running the jobs before the clock gave
+78.4 vs 80.0 ms (alternating, median of 7), so ~1.6 ms is exposed. Tool: `tests/perf/test_host_idle_map.py`
+(`_clean_replay`, DS41-309). P.87 measured the on-device table: steady wall -1.2 ms on the harness path.
