@@ -19,7 +19,7 @@ from helpers.llk_params import (
     Transpose,
     format_dict,
 )
-from helpers.param_config import DEST_SYNC_TILE_LIMITS, parametrize
+from helpers.param_config import DEST_SYNC_TILE_LIMITS, flat_axes, parametrize
 from helpers.perf.core import create_test_or_perf_config
 from helpers.stimuli_config import StimuliConfig
 from helpers.stimuli_generator import integer_format_bounds
@@ -117,15 +117,21 @@ def _pad_to_tiles(values):
     return torch.cat([values, torch.zeros(pad, dtype=values.dtype)])
 
 
+MATMUL_GROUP_DIM_NAMES = ("ct_dim", "rt_dim", "kt_dim", "group_kt_dim")
+
+
 @pytest.mark.quasar
 @parametrize(
     weight_format=WEIGHT_FORMATS,
-    matmul_dims=matmul_group_dims(),
+    **flat_axes(MATMUL_GROUP_DIM_NAMES, matmul_group_dims()),
     register_format_hint=dequant_register_format_hints(),
 )
 def test_matmul_int4_dequant_quasar(
     weight_format,
-    matmul_dims,
+    ct_dim,
+    rt_dim,
+    kt_dim,
+    group_kt_dim,
     register_format_hint,
     run_types=(PerfRunType.L1_TO_L1,),
     loop_factor=1,
@@ -134,7 +140,6 @@ def test_matmul_int4_dequant_quasar(
     perf_report=None,
 ):
     format = dequant_format(weight_format, register_format_hint)
-    ct_dim, rt_dim, kt_dim, group_kt_dim = matmul_dims
     dest_acc = DestAccumulation.Yes
     tile_dimensions = [TILE_DIM, TILE_DIM]
     tile_shape = construct_tile_shape(tile_dimensions)
@@ -299,18 +304,21 @@ def test_matmul_int4_dequant_quasar(
 
 @pytest.mark.quasar
 @parametrize(
-    matmul_dims=[(1, 1, 8, 4), (2, 2, 8, 2)],
+    **flat_axes(MATMUL_GROUP_DIM_NAMES, [(1, 1, 8, 4), (2, 2, 8, 2)]),
     register_format_hint=dequant_register_format_hints(),
     loop_factor=[2, 3],
 )
 def test_matmul_int4_dequant_loops_quasar(
-    matmul_dims, register_format_hint, loop_factor
+    ct_dim, rt_dim, kt_dim, group_kt_dim, register_format_hint, loop_factor
 ):
     # Repeated passes exercise the TRISC2 <-> TRISC3 semaphore handshake around the s_a
     # epilogue, which a single pass never re-arms. Each pass rewrites the same result.
     test_matmul_int4_dequant_quasar(
         DataFormat.Int4,
-        matmul_dims,
+        ct_dim,
+        rt_dim,
+        kt_dim,
+        group_kt_dim,
         register_format_hint,
         loop_factor=loop_factor,
     )
