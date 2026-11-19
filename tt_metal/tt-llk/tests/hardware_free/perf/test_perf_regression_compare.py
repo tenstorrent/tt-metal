@@ -243,11 +243,15 @@ def test_require_full_coverage_exits_two_on_a_short_run(tmp_path):
         "--require-full-coverage",
     ]
 
-    with pytest.raises(SystemExit) as exc:
+    with pytest.raises(
+        SystemExit
+    ) as exc:  # allow-pytest.raises: no expect_error in LLK suite
         main(argv)
     assert exc.value.code == 2
 
-    with pytest.raises(SystemExit) as exc:
+    with pytest.raises(
+        SystemExit
+    ) as exc:  # allow-pytest.raises: no expect_error in LLK suite
         main(argv[:-1])
     assert exc.value.code == 0
 
