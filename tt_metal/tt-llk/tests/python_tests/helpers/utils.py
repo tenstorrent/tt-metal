@@ -800,9 +800,9 @@ def passed_test(
     Without *max_ulp* the verdict is the tolerance check and, unless the golden is under
     ``PCC_SIGNAL_FLOOR``, a PCC threshold. A golden that is constant on its finite
     lanes gives PCC nothing to measure, so the tolerance check alone decides, except
-    that a result which is all zero on those lanes still goes to :func:`calculate_pcc`
-    and fails. A result constant on its finite lanes against a varying golden has PCC
-    0.0 and fails. Outside those constant-tensor cases ``max_ulp=None`` gives the
+    that a result which is all zero on those lanes fails against a nonzero constant
+    golden (against an all-zero golden it goes to :func:`calculate_pcc`). A result
+    constant on its finite lanes against a varying golden has PCC 0.0 and fails. Outside those constant-tensor cases ``max_ulp=None`` gives the
     previous verdict bit for bit. Under ``--ulp-report`` and
     ``--ulp-measure`` the comparison is measured after the verdict, with subnormal
     outputs ranked flushed, and never read back. Every call spends the variant
@@ -1171,16 +1171,23 @@ def passed_test(
     # uncorrelated with any result that varies, even within tolerance. As with the
     # floor above, the per-element tolerance check is the verdict. Constancy is judged
     # on the golden's finite lanes, as calculate_pcc judges it.
-    # An all-zero result on those lanes still goes to calculate_pcc, whose all-zero
-    # check fails it: a stuck-at-zero output must not pass on a small constant golden.
-    # Broadcast first: the tolerance check accepted broadcast-compatible shapes, and the
-    # golden's lane mask has to index the result.
-    golden_lanes, res_lanes = torch.broadcast_tensors(golden_tensor, res_tensor)
+    # A result that is all zero on those lanes against a nonzero constant is a
+    # stuck-at-zero output and fails here, even within tolerance: calculate_pcc cannot
+    # be relied on for it, since NaN/Inf lanes on both sides defeat its all-zero check.
+    # Pair the lanes as the tolerance check did: the Bfp compares flatten both sides
+    # (equal numel suffices), torch.isclose broadcasts them.
+    if golden_tensor.numel() == res_tensor.numel():
+        golden_lanes, res_lanes = golden_tensor.flatten(), res_tensor.flatten()
+    else:
+        golden_lanes, res_lanes = torch.broadcast_tensors(golden_tensor, res_tensor)
     finite_lanes = torch.isfinite(golden_lanes)
-    if _is_constant(golden_lanes[finite_lanes]) and torch.any(
-        res_lanes[finite_lanes].bool()
-    ):
-        return bool(is_within_tolerance)
+    golden_finite = golden_lanes[finite_lanes]
+    if _is_constant(golden_finite):
+        result_nonzero = bool(torch.any(res_lanes[finite_lanes].bool()))
+        if not result_nonzero and bool(torch.any(golden_finite.bool())):
+            return False
+        if result_nonzero:
+            return bool(is_within_tolerance)
 
     pcc = calculate_pcc(res_tensor, golden_tensor)
 

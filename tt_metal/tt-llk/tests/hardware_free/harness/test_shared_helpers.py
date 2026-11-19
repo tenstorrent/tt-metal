@@ -139,7 +139,8 @@ def test_calculate_pcc_both_constant_is_degenerate_match():
     assert (
         calculate_pcc(
             torch.full((_PCC_NUM_ELEMENTS,), 1.0),
-            torch.full((_PCC_NUM_ELEMENTS,), 1.0078125),
+            # One bf16 step above 1.0: a different constant, within tolerance.
+            torch.full((_PCC_NUM_ELEMENTS,), 1.0 + 2.0**-7),
         )
         == 1.0
     )
@@ -181,6 +182,31 @@ def test_passed_test_a_zero_result_fails_a_small_constant_golden():
     golden = torch.full((_PCC_NUM_ELEMENTS,), 0.03, dtype=torch.bfloat16)
     result = torch.zeros(_PCC_NUM_ELEMENTS, dtype=torch.bfloat16)
     assert not passed_test(golden, result, DataFormat.Float16_b, print_errors=False)
+
+
+@pytest.mark.parametrize("non_finite", [float("-inf"), float("nan")], ids=str)
+def test_passed_test_a_zero_result_fails_a_small_constant_golden_with_non_finite_lanes(
+    non_finite,
+):
+    """Matching -Inf/NaN lanes on both sides defeat calculate_pcc's all-zero check, and
+    both sides are constant on their finite lanes; the stuck-at-zero result must still
+    fail."""
+    golden = torch.full((_PCC_NUM_ELEMENTS,), 0.03, dtype=torch.bfloat16)
+    result = torch.zeros(_PCC_NUM_ELEMENTS, dtype=torch.bfloat16)
+    golden[::4] = non_finite
+    result[::4] = non_finite
+    assert not passed_test(golden, result, DataFormat.Float16_b, print_errors=False)
+
+
+@pytest.mark.parametrize("data_format", [DataFormat.Bfp4_b, DataFormat.Bfp2_b], ids=str)
+def test_passed_test_a_constant_golden_bfp_accepts_a_reshaped_result(data_format):
+    """The Bfp block compares flatten both sides, so equal numel is enough; the
+    constant-golden shortcut has to pair lanes the same way."""
+    golden = torch.ones((32, 32), dtype=torch.bfloat16)
+    result = torch.ones(32 * 32, dtype=torch.bfloat16)
+    result[::2] = -1.0
+    assert not passed_test(golden, result, data_format, print_errors=False)
+    assert passed_test(golden, torch.ones(32 * 32, dtype=torch.bfloat16), data_format)
 
 
 def test_passed_test_a_constant_golden_with_non_finite_lanes_is_judged_by_tolerance():
