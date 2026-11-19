@@ -277,18 +277,28 @@ constexpr uint32_t dfb_hart_init_entry_byte_size(uint32_t num_tcs) {
 }
 
 // The counts are 16 bits, like the tile counters and the hardware's tiles-to-process threshold registers.
+// A pad keeps those counts at an even offset. The struct is packed, so without it they start at byte 5
+// and a host formatter that binds const uint16_t& (the implicit-sync log in finalize_single_dfb_config)
+// is a misaligned reference. UBSan builds halt on that. aligned(2) keeps a host member off an odd address.
+// The device does not read this struct: DM scalars go out through dfb_write_dm_scalar_pack_to_blob.
 struct dfb_txn_id_descriptor_t {
     uint8_t txn_ids[dfb::NUM_TXN_IDS];
     uint8_t num_txn_ids;
+    uint8_t _pad;
     uint16_t num_entries_to_process_threshold;  // transactions each txn ID tracks before posting/acking
     uint16_t num_entries_per_txn_id;
     uint16_t num_entries_per_txn_id_per_tc;
-} __attribute__((packed));
+} __attribute__((packed, aligned(2)));
+static_assert(sizeof(dfb_txn_id_descriptor_t) == 12, "dfb_txn_id_descriptor_t must be 12 bytes");
+static_assert(alignof(dfb_txn_id_descriptor_t) == 2, "dfb_txn_id_descriptor_t must be 2-byte aligned");
+static_assert(
+    offsetof(dfb_txn_id_descriptor_t, num_entries_to_process_threshold) == 6,
+    "implicit-sync counts must start at an even offset");
 
 // Every field is naturally aligned at its current offset:
 // entry_size/stride_in_entries (u32) at 0/4, capacity/num_entries (u16) at 8/10,
-// risc_mask_bits (u16 bitfield) at 12, producer/consumer txn descriptors (packed, alignment 1) at 14/25,
-// trailing u8 fields at 36-39 (struct size 40).
+// risc_mask_bits (u16 bitfield) at 12, producer/consumer txn descriptors (packed, align 2) at 14/26,
+// num_producers at 38, one reserved byte at 39 (struct size 40).
 struct dfb_initializer_t {
     uint32_t entry_size;
     uint32_t stride_in_entries;
@@ -305,9 +315,13 @@ struct dfb_initializer_t {
     dfb_txn_id_descriptor_t producer_txn_descriptor;
     dfb_txn_id_descriptor_t consumer_txn_descriptor;
     uint8_t num_producers;
-    uint8_t _pad[3];  // reserved (was dm0_blob_size; DM0 blob is now a separate global region)
+    uint8_t _pad[1];  // reserved (was [3]; two bytes now pad the txn descriptors so their counts are aligned)
 };
 static_assert(sizeof(dfb_initializer_t) == 40, "dfb_initializer_t size changed — check field alignment");
+static_assert(
+    offsetof(dfb_initializer_t, producer_txn_descriptor) % 2 == 0 &&
+        offsetof(dfb_initializer_t, consumer_txn_descriptor) % 2 == 0,
+    "txn descriptors must not start on an odd address");
 
 // Core-wide header for the DM1 remapper blob.
 // Followed by dfb_dm1_remapper_slot_t[num_slots] aggregated in ascending DFB id order.
