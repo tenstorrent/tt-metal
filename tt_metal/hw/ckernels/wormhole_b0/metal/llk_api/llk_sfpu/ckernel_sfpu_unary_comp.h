@@ -21,16 +21,23 @@ inline void calculate_unary_ne(std::uint32_t value) {
     // SFPU microcode
     sfpi::vFloat s = Converter::as_float(value);
 
+    static_assert(ITERATIONS % 2 == 0, "calculate_unary_ne processes two rows per iteration");
 #pragma GCC unroll 8
-    for (int d = 0; d < ITERATIONS; d++) {
-        sfpi::vFloat v = sfpi::dst_reg[0];
-        sfpi::vFloat r = 1.0f;
-        v_if(v == s) { r = 0.0f; }
+    for (int d = 0; d < ITERATIONS; d += 2) {
+        sfpi::vFloat v0 = sfpi::dst_reg[0];
+        sfpi::vFloat v1 = sfpi::dst_reg[1];
+        // Store the default, then overwrite the taken lanes under the predicate: two
+        // SFPSTOREs of the constant registers instead of two SFPMOVs and a store. `s == v`
+        // (not `v == s`) makes v the subtract's destination, so the compiler does not copy
+        // s first; EQ0 of the difference is the same either way. Left inside v_if (not
+        // hoisted like gt below) so a literal non-zero s can still lower to SFPIADD.
+        sfpi::dst_reg[0] = 1.0f;
+        sfpi::dst_reg[1] = 1.0f;
+        v_if(s == v0) { sfpi::dst_reg[0] = 0.0f; }
         v_endif;
-
-        sfpi::dst_reg[0] = r;
-
-        sfpi::dst_reg++;
+        v_if(s == v1) { sfpi::dst_reg[1] = 0.0f; }
+        v_endif;
+        sfpi::dst_reg += 2;
     }
 }
 
@@ -41,16 +48,19 @@ inline void calculate_unary_eq(std::uint32_t value) {
     // SFPU microcode
     sfpi::vFloat s = Converter::as_float(value);
 
+    static_assert(ITERATIONS % 2 == 0, "calculate_unary_eq processes two rows per iteration");
 #pragma GCC unroll 8
-    for (int d = 0; d < ITERATIONS; d++) {
-        sfpi::vFloat v = sfpi::dst_reg[0];
-        sfpi::vFloat r = 0.0f;
-        v_if(v == s) { r = 1.0f; }
+    for (int d = 0; d < ITERATIONS; d += 2) {
+        sfpi::vFloat v0 = sfpi::dst_reg[0];
+        sfpi::vFloat v1 = sfpi::dst_reg[1];
+        // Same two-store form and operand order as unary_ne above.
+        sfpi::dst_reg[0] = 0.0f;
+        sfpi::dst_reg[1] = 0.0f;
+        v_if(s == v0) { sfpi::dst_reg[0] = 1.0f; }
         v_endif;
-
-        sfpi::dst_reg[0] = r;
-
-        sfpi::dst_reg++;
+        v_if(s == v1) { sfpi::dst_reg[1] = 1.0f; }
+        v_endif;
+        sfpi::dst_reg += 2;
     }
 }
 
@@ -61,16 +71,24 @@ inline void calculate_unary_gt(std::uint32_t value) {
     // SFPU microcode
     sfpi::vFloat s = Converter::as_float(value);
 
+    static_assert(ITERATIONS % 2 == 0, "calculate_unary_gt processes two rows per iteration");
 #pragma GCC unroll 8
-    for (int d = 0; d < ITERATIONS; d++) {
-        sfpi::vFloat v = sfpi::dst_reg[0];
-        sfpi::vFloat r = 0.0f;
-        v_if(v > s) { r = 1.0f; }
+    for (int d = 0; d < ITERATIONS; d += 2) {
+        sfpi::vFloat v0 = sfpi::dst_reg[0];
+        sfpi::vFloat v1 = sfpi::dst_reg[1];
+        // Both differences up front: row 1's subtract fills row 0's MAD latency slot,
+        // which an in-condition compare would pad with an SFPNOP. Same operands and
+        // order as sfpi's own lowering of `v > s`.
+        sfpi::vFloat d0 = s - v0;
+        sfpi::vFloat d1 = s - v1;
+        // Default stored first, taken arm stored under the predicate (see unary_ne).
+        sfpi::dst_reg[0] = 0.0f;
+        sfpi::dst_reg[1] = 0.0f;
+        v_if(d0 < 0.0f) { sfpi::dst_reg[0] = 1.0f; }
         v_endif;
-
-        sfpi::dst_reg[0] = r;
-
-        sfpi::dst_reg++;
+        v_if(d1 < 0.0f) { sfpi::dst_reg[1] = 1.0f; }
+        v_endif;
+        sfpi::dst_reg += 2;
     }
 }
 
@@ -81,16 +99,21 @@ inline void calculate_unary_lt(std::uint32_t value) {
     // SFPU microcode
     sfpi::vFloat s = Converter::as_float(value);
 
+    static_assert(ITERATIONS % 2 == 0, "calculate_unary_lt processes two rows per iteration");
 #pragma GCC unroll 8
-    for (int d = 0; d < ITERATIONS; d++) {
-        sfpi::vFloat v = sfpi::dst_reg[0];
-        sfpi::vFloat r = 0.0f;
-        v_if(v < s) { r = 1.0f; }
+    for (int d = 0; d < ITERATIONS; d += 2) {
+        sfpi::vFloat v0 = sfpi::dst_reg[0];
+        sfpi::vFloat v1 = sfpi::dst_reg[1];
+        sfpi::vFloat d0 = v0 - s;
+        sfpi::vFloat d1 = v1 - s;
+        // Default stored first, taken arm stored under the predicate (see unary_ne).
+        sfpi::dst_reg[0] = 0.0f;
+        sfpi::dst_reg[1] = 0.0f;
+        v_if(d0 < 0.0f) { sfpi::dst_reg[0] = 1.0f; }
         v_endif;
-
-        sfpi::dst_reg[0] = r;
-
-        sfpi::dst_reg++;
+        v_if(d1 < 0.0f) { sfpi::dst_reg[1] = 1.0f; }
+        v_endif;
+        sfpi::dst_reg += 2;
     }
 }
 
@@ -101,20 +124,24 @@ inline void calculate_unary_ge(std::uint32_t value) {
     // SFPU microcode
     sfpi::vFloat s = Converter::as_float(value);
 
+    static_assert(ITERATIONS % 2 == 0, "calculate_unary_ge processes two rows per iteration");
 #pragma GCC unroll 8
-    for (int d = 0; d < ITERATIONS; d++) {
-        sfpi::vFloat v = sfpi::dst_reg[0];
+    for (int d = 0; d < ITERATIONS; d += 2) {
+        sfpi::vFloat v0 = sfpi::dst_reg[0];
+        sfpi::vFloat v1 = sfpi::dst_reg[1];
+        sfpi::vFloat d0 = v0 - s;
+        sfpi::vFloat d1 = v1 - s;
         // Safe to recast onto GTE0 here, unlike le below: ge is the exact complement of
         // the baseline's `v < s` on the *same* difference v - s, so LT0 and GTE0 partition
         // every operand pair including the zeros and the inf - inf NaN. Only le would have
         // had to flip the operand order to reach GTE0, which is why it keeps its compare.
-        sfpi::vFloat r = 0.0f;
-        v_if(v - s >= 0.0f) { r = 1.0f; }
+        sfpi::dst_reg[0] = 0.0f;
+        sfpi::dst_reg[1] = 0.0f;
+        v_if(d0 >= 0.0f) { sfpi::dst_reg[0] = 1.0f; }
         v_endif;
-
-        sfpi::dst_reg[0] = r;
-
-        sfpi::dst_reg++;
+        v_if(d1 >= 0.0f) { sfpi::dst_reg[1] = 1.0f; }
+        v_endif;
+        sfpi::dst_reg += 2;
     }
 }
 
@@ -125,9 +152,13 @@ inline void calculate_unary_le(std::uint32_t value) {
     // SFPU microcode
     sfpi::vFloat s = Converter::as_float(value);
 
+    static_assert(ITERATIONS % 2 == 0, "calculate_unary_le processes two rows per iteration");
 #pragma GCC unroll 8
-    for (int d = 0; d < ITERATIONS; d++) {
-        sfpi::vFloat v = sfpi::dst_reg[0];
+    for (int d = 0; d < ITERATIONS; d += 2) {
+        sfpi::vFloat v0 = sfpi::dst_reg[0];
+        sfpi::vFloat v1 = sfpi::dst_reg[1];
+        sfpi::vFloat d0 = s - v0;
+        sfpi::vFloat d1 = s - v1;
         // Deliberately NOT recast onto GTE0 as `s - v >= 0.0f`, the way ge is above:
         // s - v is the exact negation of v - s only for finite unequal operands. With
         // v = +0.0, s = -0.0 the baseline's v - s is +0.0 (not greater, so le returns 1,
@@ -137,13 +168,13 @@ inline void calculate_unary_le(std::uint32_t value) {
         // unvalidated user scalar from ttnn.le, so -0.0 and +/-inf are reachable.
         // Keeping the baseline compare and dropping only the v_else saves the same
         // SFPCOMPC and is exact by construction.
-        sfpi::vFloat r = 1.0f;
-        v_if(v > s) { r = 0.0f; }
+        sfpi::dst_reg[0] = 1.0f;
+        sfpi::dst_reg[1] = 1.0f;
+        v_if(d0 < 0.0f) { sfpi::dst_reg[0] = 0.0f; }
         v_endif;
-
-        sfpi::dst_reg[0] = r;
-
-        sfpi::dst_reg++;
+        v_if(d1 < 0.0f) { sfpi::dst_reg[1] = 0.0f; }
+        v_endif;
+        sfpi::dst_reg += 2;
     }
 }
 

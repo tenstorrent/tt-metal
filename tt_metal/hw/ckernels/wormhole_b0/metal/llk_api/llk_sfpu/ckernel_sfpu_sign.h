@@ -33,15 +33,14 @@ inline void calculate_sign(const std::uint32_t /*exponent_size_8*/) {
         sfpi::vFloat a1 = sfpi::abs(v1);
         // copysgn stamps v's sign bit onto 1.0, which is exactly the v < 0 arm. Only the
         // zero case is left for a branch, so the v_elseif and its predicate-complement
-        // disappear.
-        sfpi::vFloat res0 = sfpi::copysgn(sfpi::vFloat(1.0f), v0);
-        sfpi::vFloat res1 = sfpi::copysgn(sfpi::vFloat(1.0f), v1);
-        v_if(a0 == 0.0F) { res0 = 0.0f; }
+        // disappear. That result is stored straight away and the zero arm overwrites it
+        // under the predicate: two SFPSTOREs instead of a store plus two SFPMOVs.
+        sfpi::dst_reg[0] = sfpi::copysgn(sfpi::vFloat(1.0f), v0);
+        sfpi::dst_reg[1] = sfpi::copysgn(sfpi::vFloat(1.0f), v1);
+        v_if(a0 == 0.0F) { sfpi::dst_reg[0] = 0.0f; }
         v_endif;
-        v_if(a1 == 0.0F) { res1 = 0.0f; }
+        v_if(a1 == 0.0F) { sfpi::dst_reg[1] = 0.0f; }
         v_endif;
-        sfpi::dst_reg[0] = res0;
-        sfpi::dst_reg[1] = res1;
         sfpi::dst_reg += 2;
     }
 }

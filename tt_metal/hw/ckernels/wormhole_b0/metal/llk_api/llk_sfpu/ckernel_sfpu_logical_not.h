@@ -32,18 +32,30 @@ inline void calculate_logical_not() {
         sfpi::vUInt,
         std::conditional_t<INSTRUCTION_MODE == InstrModLoadStore::INT32, sfpi::vInt, sfpi::vFloat>>;
 
-#pragma GCC unroll 8
-    for (int d = 0; d < ITERATIONS; d++) {
-        vType v = sfpi::dst_reg[0].mode<layout>();
+    // Integer layouts: lz(v) >> 5 is exactly 1 for 0 and 0 otherwise (SFPLZ returns 32 only
+    // for 0), with no lane predication. Float: the default is stored first and the taken arm
+    // stored under the predicate, two SFPSTOREs instead of two SFPMOVs and a store.
+    auto row = [&](const int r) __attribute__((always_inline)) {
+        vType v = sfpi::dst_reg[r].mode<layout>();
         if constexpr (std::is_same_v<vType, sfpi::vFloat>) {
             // v == 0 tests all 32 bits, so -0.0 (0x80000000) needs its sign cleared to count as zero.
             v = sfpi::setsgn(v, 0 /* sgn */);
+            sfpi::dst_reg[r] = 0.0f;
+            v_if(v == 0) { sfpi::dst_reg[r] = 1.0f; }
+            v_endif;
+        } else {
+            sfpi::vUInt z = sfpi::lz(v);
+            sfpi::dst_reg[r].mode<layout>() = sfpi::as<vType>(z >> 5);
         }
-        vType r = 0;
-        v_if(v == 0) { r = 1; }
-        v_endif;
-        sfpi::dst_reg[0].mode<layout>() = r;
-        sfpi::dst_reg++;
+    };
+
+    // Two rows share one TTINCRWC.
+    static_assert(ITERATIONS % 2 == 0, "calculate_logical_not processes two rows per iteration");
+#pragma GCC unroll 4
+    for (int d = 0; d < ITERATIONS; d += 2) {
+        row(0);
+        row(1);
+        sfpi::dst_reg += 2;
     }
 }
 }  // namespace ckernel::sfpu
