@@ -164,12 +164,13 @@ class AgmmLayout(NamedTuple):
 # device (short: 544, 1056, 2112, 2560, 2976, 4608 -- 2K/4K text to image and edits; long: 7168, 9216, 14336 --
 # many-reference edits) and adopted only where no row count got more than 3% slower than the video pin (one
 # program serves every length in a class). Swept vs the video pin, weighted: ff1 short -20.5% (faster at every
-# row count), ff1 long -9.3%, to_out long -12.3%. to_qkv and the short to_out keep the video pin: their best
-# weighted candidates were slower at some served row count.
+# row count), to_out long -12.3%. to_qkv and the short to_out keep the video pin: their best weighted candidates
+# were slower at some served row count. The ff1 long candidate ((6, 6, 14), transposed 12x9, -9.3%) is not adopted:
+# with main's minimal_matmul circular buffers (Nov 18) its static CBs overrun an L1 buffer by 1.4 KB on the
+# many-reference warm-up, so the long class keeps the video pin until it is re-swept.
 IMAGE_AGMM_PINS: dict[tuple[int, int], dict[str, tuple[tuple[int, int, int], AgmmLayout]]] = {
     (5376, 7168): {
         "short": ((4, 7, 10), AgmmLayout(transposed=False, grid=(12, 9), workers_per_link=6)),
-        "long": ((6, 6, 14), AgmmLayout(transposed=True, grid=(12, 9), workers_per_link=7)),
     },
     (7168, 1344): {
         "long": ((2, 28, 4), AgmmLayout(transposed=False, grid=(12, 9), workers_per_link=5)),
