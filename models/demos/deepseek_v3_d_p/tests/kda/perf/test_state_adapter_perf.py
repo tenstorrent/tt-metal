@@ -169,7 +169,7 @@ def test_kimi_k3_state_path_perf(mesh_device: ttnn.MeshDevice, sp_axis: int, sto
     )
     layout = f"SP{geometry.sequence_parallel_size}xTP{geometry.tensor_parallel_size}"
     assert geometry.stored_heads == stored_heads, f"{layout} stores {stored_heads} heads per chip"
-    slabs = KdaStates.allocate(mesh_device, geometry, sp_axis=sp_axis, layer_ids=(_LAYER_IDX,), num_slots=1)
+    slabs = KdaStates.allocate(mesh_device, geometry, layer_ids=(_LAYER_IDX,), num_slots=1)
     slot = device_scalar(mesh_device, 0)
     chunk_start = device_scalar(mesh_device, _STATE_PATH_CHUNK_START)
     request_head = device_scalar(mesh_device, 0)

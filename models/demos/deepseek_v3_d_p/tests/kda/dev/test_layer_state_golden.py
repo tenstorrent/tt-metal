@@ -144,7 +144,7 @@ def test_layer_outputs_and_carries_match_golden(mesh_device, device_params, sp_a
     )
     stage_line("layer built")
     geometry = kimi_k3_kda_geometry(tuple(mesh_device.shape), sp_axis, tp_axis)
-    slabs = KdaStates.allocate(mesh_device, geometry, sp_axis=sp_axis, layer_ids=(_LAYER,), num_slots=_NUM_SLOTS)
+    slabs = KdaStates.allocate(mesh_device, geometry, layer_ids=(_LAYER,), num_slots=_NUM_SLOTS)
     # Every slot starts as noise, the same native carries whatever the storage, so a stale read shows.
     generator = torch.Generator().manual_seed(23)
     for slot in range(_NUM_SLOTS):

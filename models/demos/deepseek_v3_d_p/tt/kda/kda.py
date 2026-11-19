@@ -736,10 +736,11 @@ class ttKDA:
         slab and all-gathers them over SP into ``states.scratch``; the layer's ops read the scratch and replace it in
         place with the new (SP-replicated) carry; the export stores each chip's heads of it. ``slot`` is a replicated
         one-element UINT32 device scalar, read on device by the copies, so a captured trace follows the slot of the
-        replay. ``actual_start`` also marks a request head: where it reads 0 the layer starts from zeros instead of
-        the slot. Returns the layer output.
+        replay. ``actual_start`` also marks a request head: where it reads 0 the layer's ops start from zeros instead
+        of the imported carry (the slab-entry contract), so the import itself needs no zero fill. Returns the layer
+        output.
         """
-        states.import_layer(states.scratch, slot, layer_idx, zero_fill_at_zero=actual_start)
+        states.import_layer(states.scratch, slot, layer_idx)
         output, _ = self.forward(hidden_states, states.scratch_entry(), actual_start, actual_end)
         states.export_layer(states.scratch, slot, layer_idx)
         return output

@@ -106,9 +106,7 @@ class _Slots:
             sp_axis=1 - tensor_parallel_axis,
             tp_axis=tensor_parallel_axis,
         )
-        states = KdaStates.allocate(
-            mesh_device, geometry, sp_axis=1 - tensor_parallel_axis, layer_ids=(_SLAB_LAYER_IDX,), num_slots=1
-        )
+        states = KdaStates.allocate(mesh_device, geometry, layer_ids=(_SLAB_LAYER_IDX,), num_slots=1)
         slot = device_scalar(mesh_device, 0)
         # The slabs come uninitialized and the gated chunk starts mid-request, so it reads the slot: zero it first.
         for slab in (states.recurrent, states.convolution):

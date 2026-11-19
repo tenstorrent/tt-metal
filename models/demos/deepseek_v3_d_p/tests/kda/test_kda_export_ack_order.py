@@ -460,7 +460,7 @@ def test_layer_ack_orders_after_every_chip_export(mesh_device, device_params, tr
         writes[chunk % NUM_SLOTS].append(chunk)
     _assert_writes_differ(geometry, writes)
 
-    slabs = KdaStates.allocate(mesh_device, geometry, sp_axis=SP_AXIS, layer_ids=LAYER_IDS, num_slots=NUM_SLOTS)
+    slabs = KdaStates.allocate(mesh_device, geometry, layer_ids=LAYER_IDS, num_slots=NUM_SLOTS)
     reader = _TableReader(mesh_device, geometry, slabs)
     slow = _SlowChip(mesh_device)
     for slot, chunk in seeds.items():
@@ -609,7 +609,7 @@ def test_each_chip_record_follows_its_own_export(mesh_device, device_params):
     for chunk in range(NUM_CHUNKS):
         writes[chunk % NUM_SLOTS].append(chunk)
     _assert_writes_differ(geometry, writes)
-    slabs = KdaStates.allocate(mesh_device, geometry, sp_axis=SP_AXIS, layer_ids=LAYER_IDS, num_slots=NUM_SLOTS)
+    slabs = KdaStates.allocate(mesh_device, geometry, layer_ids=LAYER_IDS, num_slots=NUM_SLOTS)
     reader = _TableReader(mesh_device, geometry, slabs)
     slow = _SlowChip(mesh_device)
     for slot, chunk in seeds.items():

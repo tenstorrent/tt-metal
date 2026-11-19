@@ -240,7 +240,12 @@ SHARDED_IDS = ["galaxy-SP8xTP4", "loudbox-SP8xTP1", "quietbox-SP4xTP1", "quietbo
 
 def _geometry(sp, tp, heads):
     return KdaContractGeometry(
-        num_heads=heads, head_dim=128, conv_history=3, sequence_parallel_size=sp, tensor_parallel_size=tp
+        num_heads=heads,
+        head_dim=128,
+        conv_history=3,
+        sequence_parallel_size=sp,
+        tensor_parallel_size=tp,
+        sequence_parallel_axis=0,
     )
 
 

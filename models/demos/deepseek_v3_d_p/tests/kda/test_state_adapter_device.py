@@ -126,7 +126,7 @@ def test_slabs_round_trip_replay_and_table(mesh_device, device_params, sp_axis, 
     """The one-layer, one-slot case matters: a slice over a whole slab can hand back the slab itself."""
     tp_axis = 1 - sp_axis
     geometry = _geometry(mesh_device, sp_axis)
-    slabs = KdaStates.allocate(mesh_device, geometry, sp_axis=sp_axis, layer_ids=layer_ids, num_slots=num_slots)
+    slabs = KdaStates.allocate(mesh_device, geometry, layer_ids=layer_ids, num_slots=num_slots)
     rows, cols = tuple(mesh_device.shape)
 
     def stored_by(row, col):

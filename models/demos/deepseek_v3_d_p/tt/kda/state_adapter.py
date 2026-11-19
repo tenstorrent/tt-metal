@@ -88,19 +88,23 @@ _FACE = 16
 
 @dataclass(frozen=True)
 class KdaContractGeometry:
-    """Segment geometry of one model's KDA state on one mesh."""
+    """Segment geometry of one model's KDA state on one mesh. ``sequence_parallel_axis`` is the mesh axis the SP rows
+    lie on (TP on the other): where each stored head lives, and the axis of the import's all-gather."""
 
     num_heads: int
     head_dim: int
     conv_history: int
     sequence_parallel_size: int
     tensor_parallel_size: int
+    sequence_parallel_axis: int
 
     def __post_init__(self) -> None:
         if self.num_heads <= 0 or self.head_dim <= 0 or self.conv_history <= 0:
             raise ValueError("KDA contract geometry needs positive heads, head_dim and conv_history")
         if self.sequence_parallel_size <= 0 or self.tensor_parallel_size <= 0:
             raise ValueError("KDA contract geometry needs positive SP and TP sizes")
+        if self.sequence_parallel_axis not in (0, 1):
+            raise ValueError(f"sequence_parallel_axis must be mesh axis 0 or 1, got {self.sequence_parallel_axis}")
         if self.num_heads % self.tensor_parallel_size != 0:
             raise ValueError(f"{self.num_heads} heads cannot be divided over TP{self.tensor_parallel_size}")
         if self.local_heads % self.sequence_parallel_size != 0:
@@ -131,6 +135,7 @@ class KdaContractGeometry:
             conv_history=config.conv_kernel_size - 1,
             sequence_parallel_size=mesh_shape[sp_axis],
             tensor_parallel_size=mesh_shape[tp_axis],
+            sequence_parallel_axis=sp_axis,
         )
 
     # --- native shapes ---
@@ -380,12 +385,15 @@ class KdaStates:
     ``recurrent`` and ``convolution`` are the two slabs described in the module docstring; both are
     single allocations so a ``KvCacheStage`` can name each by one base address. Each chip's slabs hold its
     ``H_store`` heads. ``layer_ids`` are this rank's GLOBAL KDA layer indices in ascending order and fix the
-    layer axis of both slabs. ``sp_axis`` is the mesh axis the SP rows lie on: the axis of the import's
-    all-gather. ``staging`` holds one layer of one chip's stored heads, the gather's input at a fixed address so a
-    captured import replays. ``sp_rank`` holds each chip's SP coordinate as a one-element UINT32 device tensor at a
-    fixed address; the export's copy reads it on device to select the chip's heads. ``scratch`` is the one native
+    layer axis of both slabs. ``staging`` holds one layer of one chip's stored heads, the gather's input at a fixed
+    address so a captured import replays. ``sp_rank`` holds each chip's SP coordinate as a one-element UINT32 device
+    tensor at a fixed address; the export's copy reads it on device to select the chip's heads. ``scratch`` is the one
+    native
     carry (``[1, H_local, D, D]`` / ``[1, SEG, (K-1)*64]``) every layer of the mesh runs on, read and replaced in
-    place by the layer's ops as a one-entry slab at ``scratch_index`` (a device zero).
+    place by the layer's ops as a one-entry slab at ``scratch_index`` (a device zero). Consecutive layers share it
+    without a handshake: a peer's next import gathers into this chip's scratch only after it has received this
+    layer's final-carry multicast, which every chip sends after its own reads of the scratch and its in-place writes
+    to it (the convolution tail before its relay send), so the order holds by causality.
 
     The slabs are never cleared; at a request's head (``actual_start == 0``) the layer's ops start from zeros
     instead of the slot's carry.
@@ -398,7 +406,6 @@ class KdaStates:
     scratch: KdaState
     scratch_index: ttnn.Tensor
     geometry: KdaContractGeometry
-    sp_axis: int
     layer_ids: tuple[int, ...]
     num_slots: int
 
@@ -426,11 +433,6 @@ class KdaStates:
             raise ValueError(
                 f"convolution scratch shape {tuple(self.scratch.convolution.shape)} is not one native layer"
             )
-        mesh_shape = tuple(self.recurrent.device().shape)
-        if mesh_shape[self.sp_axis] != self.geometry.sequence_parallel_size:
-            raise ValueError(
-                f"mesh axis {self.sp_axis} of {mesh_shape} is not the geometry's SP{self.geometry.sequence_parallel_size}"
-            )
 
     @property
     def num_layers(self) -> int:
@@ -456,12 +458,11 @@ class KdaStates:
         mesh_device: ttnn.MeshDevice,
         geometry: KdaContractGeometry,
         *,
-        sp_axis: int,
         layer_ids: tuple[int, ...],
         num_slots: int,
     ) -> "KdaStates":
-        """Allocate both slabs, uninitialized, the staging layer and the scratch carry. The recurrent slab keeps the ND contract
-        form; the convolution slab is the interleaved row form (see the module docstring). None is ever
+        """Allocate both slabs, uninitialized, the staging layer and the scratch carry. The recurrent slab keeps the ND
+        contract form; the convolution slab is the interleaved row form (see the module docstring). None is ever
         reallocated: a trace capture bakes their addresses in."""
         batches = num_slots * len(layer_ids)
         recurrent = ttnn.allocate_tensor_on_device(
@@ -496,6 +497,7 @@ class KdaStates:
         )
         scratch = allocate_native_state(mesh_device, geometry)
         mesh_shape = tuple(mesh_device.shape)
+        sp_axis = geometry.sequence_parallel_axis
         sp_rank = ttnn.from_torch(
             torch.arange(mesh_shape[sp_axis], dtype=torch.int64),
             dtype=ttnn.uint32,
@@ -514,7 +516,6 @@ class KdaStates:
             scratch=scratch,
             scratch_index=device_scalar(mesh_device, 0),
             geometry=geometry,
-            sp_axis=sp_axis,
             layer_ids=tuple(layer_ids),
             num_slots=num_slots,
         )
@@ -571,7 +572,8 @@ class KdaStates:
     ) -> None:
         """Read one layer's state at ``slot`` into a native carry; ``slot`` is read on device (see ``device_scalar``).
 
-        ``zero_fill_at_zero``: device scalar; 0 loads zeros instead of the slot (K3 passes the chunk start).
+        ``zero_fill_at_zero``: device scalar; 0 loads zeros instead of the slot. The layer path does not pass it (its
+        ops start from zeros at a request head); a test clears a carry with it.
         """
         position = self.layer_position(layer_idx)
         if self.geometry.sequence_parallel_size == 1:
@@ -582,11 +584,16 @@ class KdaStates:
         staging = self.staging
         _copy_entry(self.recurrent, staging.recurrent, slot, self.num_layers, position, zero_fill_at_zero)
         _copy_entry(self.convolution, staging.convolution, slot, self.num_layers, position, zero_fill_at_zero)
-        ttnn.all_gather(staging.recurrent, dim=1, cluster_axis=self.sp_axis, output_tensor=destination.recurrent)
+        ttnn.all_gather(
+            staging.recurrent,
+            dim=1,
+            cluster_axis=self.geometry.sequence_parallel_axis,
+            output_tensor=destination.recurrent,
+        )
         ttnn.all_gather(
             _convolution_branches(staging.convolution),
             dim=2,
-            cluster_axis=self.sp_axis,
+            cluster_axis=self.geometry.sequence_parallel_axis,
             output_tensor=_convolution_branches(destination.convolution),
         )
 

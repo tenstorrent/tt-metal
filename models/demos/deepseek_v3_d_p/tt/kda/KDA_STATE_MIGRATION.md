@@ -111,7 +111,7 @@ the `[1, SEG, 192]` tail: `indexed_entry_copy` with `source_part` (the chip's SP
 `source_part_groups=3`, no view and no partition.
 
 Per layer and chunk the K3 layer imports its slot's carry (`KdaStates.import_layer`: one `indexed_entry_copy` per
-state kind of this chip's shard into a fixed staging buffer, zero-filled at a request head, then a native
+state kind of this chip's shard into a fixed staging buffer, then a native
 `ttnn.all_gather` over SP into the slabs' one 24-head scratch carry, `KdaStates.scratch`), runs its forward on the
 scratch (`ttKDA.forward_slot`: the convolution, the SP relay and the final carry read the scratch and replace it in
 place, addressing it as a one-entry slab), and exports (one `indexed_entry_copy` per
@@ -135,8 +135,8 @@ load or store follows the slot in the traced metadata. The slabs are the KDA car
 every K3 KDA layer loads its slot's carry from them and stores the replacement back inside the
 captured region (the layer's ops never address the slabs themselves), so the state a reader sees is the one after the last committed chunk, and it lands
 before any later MLA layer acks that chunk, and before the KDA layer's own ack. Nothing clears a
-slot: a request's head chunk (`actual_start == 0`, evaluated on device) loads zeros instead of the
-slot's carry, so from the head until a layer's first store its regions still hold the previous
+slot: on a request's head chunk (`actual_start == 0`, evaluated on device) the layer's ops start from zeros
+instead of the slot's carry, so from the head until a layer's first store its regions still hold the previous
 request's state, and the slabs start uninitialized.
 
 ## Reading it back

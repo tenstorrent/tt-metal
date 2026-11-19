@@ -1038,6 +1038,9 @@ def populate_kv_chunk_address_table_kda(
         config.chunk_size_bytes == segment_bytes
     ), f"KDA {kind} config chunk is {config.chunk_size_bytes} bytes but a segment is {segment_bytes}"
     assert sp_axis != tp_axis, f"sp_axis and tp_axis must differ; both are {sp_axis}"
+    assert (
+        sp_axis == geometry.sequence_parallel_axis
+    ), f"table walk sp_axis {sp_axis} != the slabs' geometry SP axis {geometry.sequence_parallel_axis}"
     sp, tp = mesh_shape[sp_axis], mesh_shape[tp_axis]
     assert (sp, tp) == (
         geometry.sequence_parallel_size,

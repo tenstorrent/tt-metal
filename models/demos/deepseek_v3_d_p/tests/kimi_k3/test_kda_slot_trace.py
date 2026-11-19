@@ -103,9 +103,7 @@ def test_one_capture_serves_every_slot(mesh_device, sp_axis, tp_axis, device_par
         convolution_page_channels=KDA_CONVOLUTION_PAGE_CHANNELS,
     )
     geometry = KdaContractGeometry.from_kda_config(config, mesh_shape=mesh_shape, sp_axis=sp_axis, tp_axis=tp_axis)
-    slabs = KdaStates.allocate(
-        mesh_device, geometry, sp_axis=sp_axis, layer_ids=(OTHER_LAYER, LAYER), num_slots=NUM_SLOTS
-    )
+    slabs = KdaStates.allocate(mesh_device, geometry, layer_ids=(OTHER_LAYER, LAYER), num_slots=NUM_SLOTS)
     attention = TtK3KdaAttention(layer, LAYER, tp_axis, 1, ttnn.Topology.Linear)
     dims = [None, None]
     dims[sp_axis], dims[tp_axis] = 2, 3
