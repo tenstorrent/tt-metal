@@ -18,8 +18,8 @@ pytestmark = pytest.mark.use_module_device
 #
 # Alternating columns of +v and -v give a mean of exactly zero and a population standard deviation
 # of exactly v at every magnitude, so the reference is analytic: normalize_hw must return the +/-1
-# pattern, std_hw must return v and var_hw must return v^2. 1e36 has a scale of 2^119, where the
-# FLOAT32 reciprocal of the scale is not exact in ttsim's Blackhole model.
+# pattern, std_hw must return v and var_hw must return v^2. 1e36 has a scale of 2^119, where the FLOAT32 reciprocal
+# op is not exact in ttsim's Blackhole model, which is why 1 / scale is formed from the bits of the scale.
 DEVIATIONS = (1e-25, 1e-20, 1e-19, 1e-10, 1.0, 1e10, 1e18, 1e20, 1e25, 1e36)
 DEVIATION_IDS = ["1e-25", "1e-20", "1e-19", "1e-10", "1.0", "1e10", "1e18", "1e20", "1e25", "1e36"]
 
@@ -30,21 +30,19 @@ VAR_DEVIATION_IDS = ["1e-18", "1e-10", "1.0", "1e10", "1e18", "1e19"]
 DTYPES = ((torch.float32, ttnn.float32), (torch.bfloat16, ttnn.bfloat16))
 DTYPE_IDS = ("float32", "bfloat16")
 
-# The references are exact, so the error is measured in ULP of the result's dtype. The worst seen is 2 ULP in
-# float32 and 0.5 ULP in bfloat16, except var_hw in float32 at 3.3 ULP: it has no square root to halve the rounding
-# of the float32 mean of squares.
+# The references are exact, so the error is measured in ULP of the result's dtype: 2 in float32 and 1 in bfloat16.
+# std_hw and var_hw also carry the rounding of the float32 mean of the squares, which depends on the shape and on the
+# order of the reduction: on Blackhole (ttsim) up to 2 ULP for std_hw and 3.3 for var_hw on the shapes below, and up
+# to 6.2 on other planes above 256 tiles. So in float32 they get 8, as test_mean_nc does for a float32 mean.
 ULP_THRESHOLD = {torch.float32: 2, torch.bfloat16: 1}
-VAR_ULP_THRESHOLD = {torch.float32: 4, torch.bfloat16: 1}
+STATISTIC_ULP_THRESHOLD = {torch.float32: 8, torch.bfloat16: 1}
 
 NORMALIZE_SHAPE = torch.Size([1, 1, 32, 32])
 UNALIGNED_NORMALIZE_SHAPE = torch.Size([1, 1, 30, 40])
 
 # std_hw and var_hw send planes of at most 256 tiles, and 4 or more planes, to ttnn.std / ttnn.var, which run as one
 # program and do not rescale the deviation yet (#55159). The statistic tests use planes of 17 x 16 tiles, which take
-# the composite: 544x512, and 520x512, which is not tile-aligned, one at a time or three in one tensor. They stay at
-# those two shapes: on the other shapes above 256 tiles that were tried, wider, taller or narrower (512x544, 1024x512,
-# 544x500, 600x600, 1024x1024 and others), the float32 mean of the squares rounds more (up to 6 ULP for std_hw and
-# 6.2 for var_hw).
+# the composite: 544x512, and 520x512, which is not tile-aligned, one at a time or three in one tensor.
 STATISTIC_SHAPE = torch.Size([1, 1, 544, 512])
 UNALIGNED_STATISTIC_SHAPE = torch.Size([1, 1, 520, 512])
 PLANES_STATISTIC_SHAPE = torch.Size([1, 3, 544, 512])
@@ -94,14 +92,14 @@ def _check_std(deviations, torch_dtype, ttnn_dtype, shape, device):
     _, data = _planes(deviations, torch_dtype, shape)
     got = _run(ttnn.std_hw, data, ttnn_dtype, device)
     expected = _expected([_spread(v, torch_dtype) for v in deviations], shape)
-    assert_with_ulp(expected_result=expected, actual_result=got, ulp_threshold=ULP_THRESHOLD[torch_dtype])
+    assert_with_ulp(expected_result=expected, actual_result=got, ulp_threshold=STATISTIC_ULP_THRESHOLD[torch_dtype])
 
 
 def _check_var(deviations, torch_dtype, ttnn_dtype, shape, device):
     _, data = _planes(deviations, torch_dtype, shape)
     got = _run(ttnn.var_hw, data, ttnn_dtype, device)
     expected = _expected([_spread(v, torch_dtype) ** 2 for v in deviations], shape)
-    assert_with_ulp(expected_result=expected, actual_result=got, ulp_threshold=VAR_ULP_THRESHOLD[torch_dtype])
+    assert_with_ulp(expected_result=expected, actual_result=got, ulp_threshold=STATISTIC_ULP_THRESHOLD[torch_dtype])
 
 
 def _runs_one_program(op, tt_x):
@@ -191,8 +189,8 @@ def test_var_std_hw_single_outlier(torch_dtype, ttnn_dtype, device):
     variance = data.double().var(dim=(-2, -1), keepdim=True, correction=0)
 
     for op, expected, threshold in (
-        (ttnn.var_hw, variance, VAR_ULP_THRESHOLD),
-        (ttnn.std_hw, variance.sqrt(), ULP_THRESHOLD),
+        (ttnn.var_hw, variance, STATISTIC_ULP_THRESHOLD),
+        (ttnn.std_hw, variance.sqrt(), STATISTIC_ULP_THRESHOLD),
     ):
         got = _run(op, data, ttnn_dtype, device)
         assert_with_ulp(expected_result=expected, actual_result=got, ulp_threshold=threshold[torch_dtype])
