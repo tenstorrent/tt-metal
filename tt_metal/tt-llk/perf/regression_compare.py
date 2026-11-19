@@ -150,6 +150,40 @@ def _read_frames(paths):
     return frames
 
 
+def _one_sided_constants(mine, theirs):
+    """Config columns only I have, holding one value, so they cannot tell my points apart."""
+    # A column that is present but empty is a column they do not have: _medians
+    # drops all-null columns from the key.
+    theirs_cols = {
+        c for f in theirs for c in f.columns if c in f and f[c].notna().any()
+    }
+    drop = set()
+    for frame in mine:
+        for col in _config_cols(frame.columns):
+            if col in theirs_cols or col in drop:
+                continue
+            if frame[col].dropna().nunique() <= 1:
+                drop.add(col)
+    return {
+        c
+        for c in drop
+        if not any(c in f.columns and f[c].dropna().nunique() > 1 for f in mine)
+    }
+
+
+def _drop_one_sided_constants(cur_frames, base_frames):
+    """A column one side added with a single value keeps the other points comparable.
+
+    Without this a new parameter rewrites the identity of every row of its test,
+    so nothing matches and a whole module reads as new and missing at once.
+    """
+    for mine, theirs in ((cur_frames, base_frames), (base_frames, cur_frames)):
+        for col in _one_sided_constants(mine, theirs):
+            for frame in mine:
+                if col in frame.columns:
+                    frame.drop(columns=[col], inplace=True)
+
+
 def compare_runs(
     current_csvs,
     baseline_csvs,
@@ -173,8 +207,10 @@ def compare_runs(
     If ``run_types`` is specified (comma-separated, e.g. "L1_TO_L1,MATH_ISOLATE"),
     only compare metrics for those run types.
     """
-    cur = _medians(_read_frames(current_csvs))
-    base = _medians(_read_frames(baseline_csvs))
+    cur_frames, base_frames = _read_frames(current_csvs), _read_frames(baseline_csvs)
+    _drop_one_sided_constants(cur_frames, base_frames)
+    cur = _medians(cur_frames)
+    base = _medians(base_frames)
 
     if run_types:
         allowed = set()
@@ -599,11 +635,16 @@ def main(argv=None):
             f"Suite changed: {len(added)} module(s) added {added}, "
             f"{len(removed)} removed {removed}. Their points are reported, not compared."
         )
-    if a.require_full_coverage and (gap_new or gap_missing):
+    if gap_new:
         print(
-            f"\u274c {len(gap_new)} point(s) have no baseline and "
-            f"{len(gap_missing)} baseline point(s) were not measured, in modules both "
-            f"sides ran. {len(result['records'])} point(s) compared."
+            f"{len(gap_new)} point(s) have no baseline, so they are reported and not "
+            "compared. A point measured for the first time cannot be a regression, and "
+            "the next merge baseline holds it."
+        )
+    if a.require_full_coverage and gap_missing:
+        print(
+            f"\u274c {len(gap_missing)} baseline point(s) were not measured, in modules "
+            f"both sides ran. {len(result['records'])} point(s) compared."
         )
         raise SystemExit(2)
     # exit non-zero if regressions, so the skill/CI can gate on it
