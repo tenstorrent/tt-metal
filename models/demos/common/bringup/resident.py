@@ -288,10 +288,12 @@ def submit_plan(d: Path, plan: Path, env: dict, fresh: bool = False, timeout: fl
         time.sleep(poll)
 
 
-def for_env(env: dict | None = None, echo=print) -> Path | None:
-    """core/batch.drive: the state dir of a runner that serves this environment's spec (BRINGUP_SPEC), or None (the
-    old path). A runner that stepped aside for another device run (yielded) is started again; a stopped or dead one
-    is not."""
+WANTED = ("ready", "busy", "starting", "restarting", "yielded")  # a runner that serves the spec (or will again)
+
+
+def wanted_dir(env: dict | None = None) -> Path | None:
+    """F286: the state dir of a runner that is meant to serve this environment's spec (BRINGUP_SPEC): up, starting,
+    or stepped aside for another device run; None when there is none (stopped, dead, never started, or off)."""
     env = env if env is not None else os.environ
     if env.get(OFF_ENV) == "off" or env.get(DIR_ENV) or not env.get("BRINGUP_SPEC"):
         return None
@@ -299,13 +301,64 @@ def for_env(env: dict | None = None, echo=print) -> Path | None:
         d = state_dir(env["BRINGUP_SPEC"])
     except Exception:  # noqa: BLE001 -- no spec, no runner
         return None
+    return d if supervisor_pid(d) or info(d)["phase"] in WANTED and info(d)["phase"] != "starting" else None
+
+
+class Refused(RuntimeError):
+    """F286 (owner 2026-11-19, one open): the runner is meant to serve this run but cannot; never a process of its own."""
+
+
+def for_env(env: dict | None = None, echo=print) -> Path | None:
+    """core/batch.drive: the state dir of a runner that serves this environment's spec (BRINGUP_SPEC), or None (no
+    runner is meant to: the old path). A runner that stepped aside for another device run (yielded) is started again
+    (one device open). F286: a runner meant to serve that cannot (it did not come back) raises ``Refused``: the run
+    never falls back to a fresh process of its own."""
+    env = env if env is not None else os.environ
+    d = wanted_dir(env)
+    if d is None:
+        return None
     if healthy(d):
         return d
-    if info(d)["phase"] == "yielded":
-        echo("resident (F281): the runner stepped aside for another device run; starting it again")
+    if info(d)["phase"] == "yielded" and not supervisor_pid(d):
+        echo("resident (F281): the runner stepped aside for another device run; starting it again (one device open)")
         start(d, env["BRINGUP_SPEC"], echo=echo)
-        return d if healthy(d) else None
-    return None
+    if healthy(d):
+        return d
+    st = info(d)
+    raise Refused(
+        f"the resident runner ({d}) is meant to serve this run but is {st['phase']} "
+        f"({(st.get('status') or {}).get('why', 'see its server.log')}); refused instead of a process of its own "
+        "(owner rule 2026-11-19: one device open)"
+    )
+
+
+def task_accounting(d: Path, hostmem_jsonl: Path, tid: str) -> dict:
+    """F286 (owner 2026-11-19): a task's device opens and loads: the safe-runner processes recorded for it (core/
+    hostmem's records, one a device process; the runner's own processes carry the runner's task, not this one), the
+    runner's new processes and model loads for its requests (requests.jsonl ``task``)."""
+    procs = 0
+    try:
+        for line in Path(hostmem_jsonl).read_text().splitlines():
+            try:
+                procs += json.loads(line).get("task") == tid
+            except ValueError:
+                pass
+    except OSError:
+        pass
+    r_opens = r_loads = 0
+    try:
+        for line in (Path(d) / "requests.jsonl").read_text().splitlines():
+            try:
+                r = json.loads(line)
+            except ValueError:
+                continue
+            if r.get("task") == tid:
+                a = r.get("accounting") or {}
+                r_opens += int(a.get("device_opens") or 0)
+                r_loads += int(a.get("model_loads") or 0)
+    except OSError:
+        pass
+    return {"opens": procs + r_opens, "process_opens": procs, "runner_opens": r_opens, "runner_loads": r_loads}
 
 
 def describe(reply: dict) -> str:

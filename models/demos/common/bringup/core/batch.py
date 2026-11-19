@@ -566,7 +566,12 @@ def drive(plan: Path, run, env: dict | None = None, echo=None) -> int:
     from models.demos.common.bringup import resident
 
     say = echo or (lambda t: print(t, end="", flush=True))
-    d = resident.for_env(full, echo=lambda t: say(t + "\n"))
+    try:
+        d = resident.for_env(full, echo=lambda t: say(t + "\n"))
+    except resident.Refused as e:  # F286: never a fresh process while the runner is meant to serve
+        say(f"# F286: {e}\n")
+        results_path(Path(plan)).write_text(json.dumps({"running": None, "runs": {}, "error": str(e)}) + "\n")
+        return 1
     if d is not None:
         return _drive_resident(d, Path(plan), full, say)
     rcs = [run(f"{DRIVEN_ENV}=1 {command(plan)}", 0)]

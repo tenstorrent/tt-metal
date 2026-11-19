@@ -80,7 +80,8 @@ def test_for_env_serves_a_healthy_runner_restarts_a_yielded_one_and_never_a_stop
     resident._write(d / "status.json", {"phase": "yielded"})
     started = []
     monkeypatch.setattr(resident, "start", lambda dd, spec, echo=None: started.append(spec))
-    resident.for_env(env, echo=lambda t: None)
+    with pytest.raises(resident.Refused, match="meant to serve this run but is yielded"):  # F286: never a fresh one
+        resident.for_env(env, echo=lambda t: None)
     assert started == ["s.yaml"]
     resident._write(d / "status.json", {"phase": "stopped"})
     assert resident.for_env(env) is None and started == ["s.yaml"]
@@ -197,3 +198,79 @@ def test_an_accept_gate_runs_its_performance_units_first_then_one_full_process(s
     res = run_gate(sandbox.spec, led, "A.1")
     lines = calls.read_text().splitlines()
     assert len(lines) == 2 and "test_profile" in lines[0] and "test_determinism" in lines[1], (lines, res.summary())
+
+
+# ---------------------------------------------------------------- F286: P.84 (2026-11-19): ~10 device opens in one task
+def test_a_single_run_unit_goes_to_a_yielded_runner_never_a_process_of_its_own(sandbox, monkeypatch, tmp_path):
+    """P.84: after the runner stepped aside, each test_skip_positions unit (one run: no batch plan) started a safe-
+    runner process of its own. Now it goes to the runner as a plan; a runner that cannot come back refuses it."""
+    from models.demos.common.bringup.core.gate import run_gate
+    from models.demos.common.bringup.selftest import test_gate_one_process as TG
+
+    calls = TG._setup(sandbox, monkeypatch, tmp_path)
+    sandbox.write_spec(tests={"one_process": True})
+    task = TG._gate(f"BRINGUP_PROFILE_WALL=1 {R} {T}test_profile.py")
+    task["gate"]["metrics"] = {}
+    led = sandbox.tasks(task)
+    d = tmp_path / "res"
+    monkeypatch.setattr(resident, "wanted_dir", lambda env=None: d)
+    sent = []
+
+    def submit(dd, plan, env, fresh=False):
+        data = json.loads(Path(plan).read_text())
+        sent.append((fresh, [e["args"][0].rsplit("/", 1)[-1] for e in data["entries"]]))
+        runs = {e["name"]: {"rc": 0, "metrics": {}, "files": [], "s": 1.0} for e in data["entries"]}
+        B.results_path(Path(plan)).write_text(json.dumps({"running": None, "runs": runs}))
+        return {"rc": 0, "runs": runs, "timing": {}}
+
+    monkeypatch.setattr(resident, "for_env", lambda env, echo=None: d)
+    monkeypatch.setattr(resident, "submit_plan", submit)
+    run_gate(sandbox.spec, led, "A.1")
+    spawned = [c for c in calls.read_text().splitlines()] if calls.exists() else []
+    assert spawned == [] and any("test_profile.py" in names for _, names in sent), (spawned, sent)
+
+    def refuse(env, echo=None):
+        raise resident.Refused("the resident runner is dead")
+
+    monkeypatch.setattr(resident, "for_env", refuse)
+    res = run_gate(sandbox.spec, led, "A.1", fresh=True)
+    assert res.verdict == "FAIL" and not calls.exists() and "the resident runner is dead" in res.log.read_text()
+
+
+def test_the_ab_says_fail_when_a_side_of_its_test_failed(monkeypatch):
+    """P.84: the table said the gate with the change on would PASS while both sides of its only test exited 1."""
+    from types import SimpleNamespace
+
+    from models.demos.common.bringup.orchestrator import Orchestrator
+
+    items = [("test_skip_positions", "test", "cmd", {}), ("p145408", "position", "cmd", {})]
+    o = SimpleNamespace(
+        ab_items=lambda task: items,
+        resident_serves=lambda: True,
+        led=SimpleNamespace(tasks=lambda: {}),
+        ab_determinism_failing=lambda *a: [],
+    )
+    o.ab_failed_runs = lambda task, rec: Orchestrator.ab_failed_runs(o, task, rec)
+    rec = {"tests": {"test_skip_positions": {"old": {"rc": 1}, "new": {"rc": 1}}}, "positions": {}}
+    monkeypatch.setattr("models.demos.common.bringup.orchestrator.gate_limits", lambda task, tasks: {})
+    got = Orchestrator.gate_on(o, {"id": "P.84"}, rec, Path("/nonexistent"))
+    assert (
+        not got["ok"] and "test_skip_positions: exit code 1" in got["failing"] and "p145408: not run" in got["failing"]
+    )
+    rec["tests"]["test_skip_positions"]["new"]["rc"] = 0
+    rec["positions"]["p145408"] = {"new": {"rc": 0}}
+    assert Orchestrator.gate_on(o, {"id": "P.84"}, rec, Path("/nonexistent"))["ok"]
+
+
+def test_task_accounting_counts_safe_runner_processes_and_runner_restarts(tmp_path):
+    hm = tmp_path / "hostmem.jsonl"
+    hm.write_text('{"task": "P.84"}\n{"task": "P.84"}\n{"task": "X.9"}\n')
+    (tmp_path / "res").mkdir()
+    (tmp_path / "res" / "requests.jsonl").write_text(
+        json.dumps({"task": "P.84", "accounting": {"device_opens": 1, "model_loads": 1}})
+        + "\n"
+        + json.dumps({"task": "P.84", "accounting": {"device_opens": 0, "model_loads": 0}})
+        + "\n"
+    )
+    a = resident.task_accounting(tmp_path / "res", hm, "P.84")
+    assert a == {"opens": 3, "process_opens": 2, "runner_opens": 1, "runner_loads": 1}

@@ -2081,7 +2081,7 @@ class Orchestrator:
         where = "on" if side == "new" else "off"
         cands = {n: (B.parse_all(c), x, c, lab) for n, _, c, x, _, lab in todo}
         cands = {n: v for n, v in cands.items() if v[0]}
-        if sum(len(v[0]) for v in cands.values()) < 2:
+        if sum(len(v[0]) for v in cands.values()) < 2 and not self.resident_serves():  # F286: else the runner
             return {}
         names = {k for runs, x, _, _ in cands.values() for r in runs for k in list(r["env"]) + list(x)}
         batches: dict[str, list[dict]] = {}
@@ -2174,6 +2174,7 @@ class Orchestrator:
                 got.update(M.load(task["id"], d / "new" / n))
             ok, lines = check_metrics(measured_only(limits, got), got)
             failing = [x.strip() for x in lines if "FAIL" in x]
+            failing += self.ab_failed_runs(task, rec)  # F286: a failed or missing side is a FAIL, whatever it measured
             return {"ok": ok and not failing, "failing": failing, "partial": True}
         det = self.ab_determinism_failing(task, rec, d)
         if rec.get("quick"):  # F122: the thresholds the quick run measured; the full gate runs before the final task
@@ -2184,6 +2185,7 @@ class Orchestrator:
             ok, lines = check_metrics(measured_only(limits, got), got)
             failing = ["quick: not run" if r is None else f"quick: exit code {r['rc']}"] if not r or r["rc"] else []
             failing += [x.strip() for x in lines if "FAIL" in x or "MISSING" in x] + det
+            failing += [x for x in self.ab_failed_runs(task, rec) if not x.startswith("quick:")]  # F286
             return {"ok": ok and not failing, "failing": failing, "partial": True}
         m = re.search(r"BRINGUP_RUNG=(\S+)", task["gate"]["cmd"])
         runs = {n: r.get("new") for n, r in rec["tests"].items()}  # what the gate itself runs, with the change on
@@ -2199,7 +2201,25 @@ class Orchestrator:
             f"{n}: not run" if r is None else f"{n}: exit code {r['rc']}" for n, r in runs.items() if not r or r["rc"]
         ]
         failing += [x.strip() for x in lines if "FAIL" in x or "MISSING" in x] + det
+        pos = {n for n, k, _, _ in self.ab_items(task) if k == "position"}  # F286: the position items too
+        failing += [x for x in self.ab_failed_runs(task, rec) if x.split(":")[0] in pos]
         return {"ok": ok and bool(runs) and not failing, "failing": failing}
+
+    def ab_failed_runs(self, task: dict, rec: dict) -> list[str]:
+        """F286 (P.84, 2026-11-19: the table said the gate would PASS while both sides of its only test failed): every
+        A/B item of the change-on side that did not run or exited non-zero, as a failing line."""
+        out = []
+        for n, kind, _, _ in self.ab_items(task):
+            if kind == "determinism":
+                continue
+            store = {"position": rec.get("positions") or {}, "test": rec.get("tests") or {},
+                     "ladder": rec.get("ladder") or {}}.get(kind)  # fmt: skip
+            r = (store.get(n) or {}).get("new") if store is not None else (rec.get(kind) or {}).get("new")
+            if not r:
+                out.append(f"{n}: not run")
+            elif r.get("rc"):
+                out.append(f"{n}: exit code {r['rc']}")
+        return out
 
     def ab_determinism_failing(self, task: dict, rec: dict, d: Path) -> list[str]:
         """FIX.25: the A/B's model determinism check on the 'on' side: why the accept gate would fail, or []."""
@@ -2270,6 +2290,9 @@ class Orchestrator:
         ]
         if rec["note"]:
             out += ["", f"Note: {rec['note']}"]
+        from models.demos.common.bringup.core.gate import log_dir, task_accounting_line
+
+        out += ["", task_accounting_line(self.spec, log_dir(self.spec, self.led), task["id"]).strip()]  # F286
         if self.resident_serves():  # F285
             out += [
                 "",

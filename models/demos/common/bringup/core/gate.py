@@ -209,6 +209,28 @@ def gate_env(spec: Spec, ledger: Ledger, tid: str) -> dict:
     return env
 
 
+def task_accounting_line(spec: Spec, logs: Path, tid: str) -> str:
+    """F286 (owner): the task's device opens and model loads so far (safe-runner processes: logs/hostmem.jsonl; the
+    resident runner's new processes and loads: its requests.jsonl)."""
+    from models.demos.common.bringup import resident
+
+    try:
+        a = resident.task_accounting(resident.state_dir(spec), hostmem_file(logs / "x.log"), tid)
+    except Exception as e:  # noqa: BLE001 -- bookkeeping never fails a gate
+        return f"  device opens / loads of {tid}: unknown ({e})"
+    return (
+        f"  device opens of {tid} so far: {a['opens']} ({a['process_opens']} safe-runner processes, "
+        f"{a['runner_opens']} resident-runner restarts); runner model loads {a['runner_loads']}"
+    )
+
+
+def resident_route(env: dict, cmd: str) -> bool:
+    """F286: a resident runner is meant to serve ``env``'s spec and ``cmd``'s runs may share its process."""
+    from models.demos.common.bringup import resident
+
+    return bool(batch.parse_all(cmd)) and resident.wanted_dir(dict(os.environ, **env)) is not None
+
+
 def one_load(spec: Spec) -> bool:
     """F283 (OWNER 2026-11-19): one model load per gate, when the gate's units share processes (tests.one_process)."""
     return bool(spec.get("tests.one_process")) and bool(spec.get("tests.one_load"))
@@ -1045,14 +1067,18 @@ def run_units(
                     loads["seen"] = True
             else:
                 run = batch.unit_command(cmd, spec) if spec.get("tests.one_process") else None
-                if spec.get("tests.one_process"):  # FIX.31: why this unit has a process of its own, in the log
+                # F286: while a resident runner is meant to serve the spec, a unit of one shared-model run goes to it
+                # too (as a plan), never a process of its own
+                if run is None and resident_route(dict(uenv), batch.launch_form(cmd)[0]):
+                    run = batch.launch_form(cmd)[0]
+                if spec.get("tests.one_process") and run is None:  # FIX.31: why this unit has a process of its own
                     why = batch.why_not(cmd) or "no other unit of this gate left to run at its model configuration"
                     f.write(f"# {u}: a process of its own: {why}\n")
                 plan_f = None
                 if run:  # F259: the unit's runs (a clean wall and its profiled run) in one process, the model once
                     # F269: as a plan file, so a run needing another model can go to a fresh process (batch.drive)
                     plan_f = log.parent / f"{log.stem}.{re.sub(r'[^A-Za-z0-9_.-]', '_', u)}.plan.json"
-                    batch.unit_plan(cmd, plan_f, spec, one_load=one_load(spec))  # F283
+                    batch.unit_plan(batch.launch_form(cmd)[0], plan_f, spec, one_load=one_load(spec))  # F283
                     f.write(f"# {u}: its runs in one process (F259, tests.one_process)\n$ {batch.command(plan_f)}\n")
                     f.flush()
                 # FIX.30; F270: the unit's command, so the safe runner files its runs under their command-line prefix
@@ -1444,6 +1470,7 @@ def run_gate(
         head.append(f"  hang dump (triage + inspector, F204): {kept[-1]}")
     if record and reuse is None and verdict != "PASS":  # F169: where the gate stopped, for --continue and the overseer
         head += progress_lines(spec, ledger, tid)
+    head = head + [task_accounting_line(spec, log.parent, tid)]  # F286
     res = GateResult(tid, verdict, rc, head + lines + [f"  MISSING artifact {a}" for a in missing], log, None, dur)
     res.reused = reused
     if record or check:  # FIX.31: the supervisor's watch wakes on a gate's result, whoever ran it

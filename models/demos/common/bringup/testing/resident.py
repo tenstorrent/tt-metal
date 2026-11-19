@@ -484,7 +484,8 @@ class Server:
         (self.d / "active" / f"{req['id']}.json").unlink(missing_ok=True)
         with open(self.d / "requests.jsonl", "a") as f:
             keep = ("id", "rc", "timing", "restarts", "reloaded", "accounting")
-            f.write(json.dumps({k: reply.get(k) for k in keep}, default=str))
+            rec = dict({k: reply.get(k) for k in keep}, task=(req.get("env") or {}).get("BRINGUP_TASK"))  # F286
+            f.write(json.dumps(rec, default=str))
             f.write("\n")
         self.served += 1
         self.set_status("ready", request=None, last=req["id"])
