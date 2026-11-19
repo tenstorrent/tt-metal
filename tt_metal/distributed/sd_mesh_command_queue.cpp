@@ -14,7 +14,6 @@
 #include "tt_metal/impl/threading/thread_pool.hpp"
 #include "tt_metal/impl/program/program_impl.hpp"
 #include "tt_metal/impl/program/slow_dispatch.hpp"
-#include "tt_metal/impl/tensor/pinned_upload.hpp"
 #include <mesh_device.hpp>
 #include <mesh_event.hpp>
 #include <tt-metalium/experimental/core_subset_write/buffer_write.hpp>
@@ -35,6 +34,10 @@
 #endif
 
 namespace {
+
+// Slow dispatch DMAs each device's shards straight out of the pinned buffer, so its pin pays off per device rather than
+// per upload. Below this many bytes for one device, the bounce-buffer copy was as fast or faster on Blackhole.
+constexpr size_t k_pin_write_min_bytes_per_device = 8 * 1024 * 1024;  // 8 MB
 
 bool logical_cores_intersect(
     const std::vector<std::vector<tt::tt_metal::CoreCoord>>& previous_cores,
@@ -123,7 +126,7 @@ std::optional<MeshTraceId> SDMeshCommandQueue::trace_id() const {
 
 bool SDMeshCommandQueue::should_pin_write(size_t /*local_bytes*/, size_t max_shard_bytes) const {
     // Each device's write threads DMA their own shard, so the pin is worth it when one shard is big enough.
-    return max_shard_bytes >= pinned_upload::k_sd_pin_write_min_bytes_per_device;
+    return max_shard_bytes >= k_pin_write_min_bytes_per_device;
 }
 
 bool SDMeshCommandQueue::write_shard_to_device(
