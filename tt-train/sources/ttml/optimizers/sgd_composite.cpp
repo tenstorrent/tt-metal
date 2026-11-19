@@ -34,7 +34,7 @@ SGDComposite::SGDComposite(
 }
 
 void SGDComposite::zero_grad() {
-    clear_gradients();
+    clear_gradients_to_restore();
 }
 
 void SGDComposite::step() {

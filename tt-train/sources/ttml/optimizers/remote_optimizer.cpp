@@ -32,12 +32,7 @@ RemoteOptimizer::RemoteOptimizer(serialization::NamedParameters parameters, int 
 }
 
 void RemoteOptimizer::zero_grad() {
-    for (auto& [name, tensor_ptr] : m_parameters) {
-        if (tensor_ptr->get_requires_grad() && tensor_ptr->is_grad_initialized()) {
-            // Set gradient to empty tensor
-            tensor_ptr->set_grad(ttnn::Tensor());
-        }
-    }
+    clear_gradients();
 }
 
 void RemoteOptimizer::step() {
