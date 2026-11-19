@@ -7,9 +7,9 @@ S + (E S + B) and forwards the result, and the last rank hands the final state t
 is one hop; on a line it crosses the SP axis (2D routing, or sp_size - 1 hops back on a 1D fabric).
 
 The relay's landing buffer is an L1 tensor sharded one head per head core, at the same address on every device. A
-rank's predecessor writes into it before the rank's own call starts, so a layer reserves it before its first program
-(reserve) and the call frees it once the relay has consumed it: between layers that L1 is free for the other
-attention layers (ring_mla's circular buffers span nearly all of L1 on the relay's head columns).
+rank's predecessor writes into it before the rank's own call starts, so a layer reserves it before the SP barrier that
+precedes the recurrence (reserve) and the call frees it once the relay has consumed it: between layers that L1 is free
+for the other attention layers (ring_mla's circular buffers span nearly all of L1 on the relay's head columns).
 
 Load-bearing: the entry barrier of the layer's qkv convolution history exchange runs after the reservation and before
 the relay, so no rank relays until every rank has reserved its landing buffer and finished the programs before it,
@@ -137,7 +137,8 @@ class RelayAffinePrefix:
         self.entry_memory_config = ttnn.L1_MEMORY_CONFIG
 
     def reserve(self):
-        """Allocate the landing buffer for the next call, before any program of its layer (a no-op while reserved)."""
+        """Allocate the landing buffer for the next call, before the SP barrier that precedes the recurrence (a no-op
+        while reserved)."""
         if self._landing is None:
             self._landing = ttnn.allocate_tensor_on_device(
                 self._landing_shape, ttnn.float32, ttnn.TILE_LAYOUT, self.mesh_device, self._landing_memory_config

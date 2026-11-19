@@ -68,6 +68,7 @@ from typing import Any
 import torch
 
 import ttnn
+from models.common.hf_layer_type_attention import layer_type_attention
 
 
 @dataclass(frozen=True)
@@ -140,10 +141,10 @@ class Gemma4VllmLayout:
         """Build the layout for a Gemma4 (or Gemma4-like) HF config.
 
         Args:
-            hf_config: HF config with ``layer_types``, ``num_key_value_heads``,
-                ``head_dim``, and the Gemma4-specific ``num_global_key_value_heads``
-                / ``global_head_dim`` (falls back to the sliding values when
-                unset, matching :class:`Gemma4ForCausalLM.get_kv_cache_spec`).
+            hf_config: HF text config with ``layer_types``. KV heads and head
+                dim per layer type come from ``layer_type_attention``
+                (full attention falls back to the sliding values when unset,
+                matching :class:`Gemma4ForCausalLM.get_kv_cache_spec`).
             num_blocks: blocks per physical buffer (= vLLM's per-tensor
                 ``num_blocks`` after memory budget partitioning).
             max_model_len: drives ``max_num_blocks_per_req`` exactly like
@@ -168,10 +169,7 @@ class Gemma4VllmLayout:
         n = num_layers if num_layers is not None else text_config.num_hidden_layers
         layer_types = full_layer_types[:n]
 
-        sliding_kv = int(text_config.num_key_value_heads)
-        sliding_hd = int(text_config.head_dim)
-        full_kv = int(getattr(text_config, "num_global_key_value_heads", None) or sliding_kv)
-        full_hd = int(getattr(text_config, "global_head_dim", None) or sliding_hd)
+        sliding_kv, sliding_hd, full_kv, full_hd = (int(v) for v in layer_type_attention(text_config))
 
         def kv_per_dev(num_kv_heads: int) -> int:
             return 1 if num_kv_heads < num_devices else num_kv_heads // min(num_devices, num_kv_heads)

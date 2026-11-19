@@ -674,7 +674,7 @@ void pytensor_module(nb::module_& mod) {
                     std::nullopt,
                     pad_value));
             },
-            nb::keep_alive<1, 7>(),  // 1,6?
+            nb::keep_alive<1, 6>(),  // self keeps `device` alive
             nb::arg("data"),
             nb::arg("shape"),
             nb::arg("data_type"),
@@ -1887,7 +1887,8 @@ void pytensor_module(nb::module_& mod) {
             transfer.host_data(host_buffer->view_bytes().data());
             transfer.region(BufferRegion(0, host_buffer->view_bytes().size()));
 
-            mesh_device->mesh_command_queue().enqueue_write_shards(mesh_buffer, {transfer}, /*blocking=*/true);
+            ttnn::core::current_mesh_command_queue(*mesh_device)
+                .enqueue_write_shards(mesh_buffer, {transfer}, /*blocking=*/true);
 
             tt::tt_metal::TensorTopology topology(
                 tt::tt_metal::distributed::MeshShape(1, 1),
