@@ -50,6 +50,7 @@ print(*(f'export {k}={v}' for k, v in SUBTORUS_4X4_ENV.items()), sep=chr(10))") 
 eval "$env_exports"
 
 log=$(mktemp /tmp/subtorus_4x4.XXXXXX.log)
+trap 'rm -f "$log"' EXIT
 timeout -k 1m "${timeout_s}s" python3 -m pytest "${args[@]}" -k "$selector" -vvv --tb=short -rs --timeout=$((timeout_s - 60)) 2>&1 | tee "$log"
 rc=${PIPESTATUS[0]}
 if [[ $rc -ne 0 ]]; then
