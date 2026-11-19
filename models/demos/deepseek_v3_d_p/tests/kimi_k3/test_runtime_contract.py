@@ -275,8 +275,9 @@ def _mocked_layer(monkeypatch, tensor_parallel_size: int):
     layer = object.__new__(ttKDA)
     layer.tensor_parallel_size = tensor_parallel_size
     layer.tensor_parallel_axis = 1
-    layer.config = SimpleNamespace(hidden_size=256, q_dim=1, k_dim=1, v_dim=1)
-    layer.weights = SimpleNamespace(convolution_taps=())
+    layer.config = SimpleNamespace(hidden_size=256, q_dim=1, k_dim=1, v_dim=1, num_heads=2, norm_eps=1e-6)
+    layer.weights = SimpleNamespace(convolution_taps=(), norm=object())
+    layer.gated_rms_output_dtype = layer.norm_output_memory_config = None
     layer.convolution_page_channels = KDA_CONVOLUTION_PAGE_CHANNELS
     layer.kda_compute_config = object()
     for name in ("qkv_convolution_program_config", "qkv_memory_config", "sequence_parallel_axis"):
@@ -315,9 +316,6 @@ def test_kda_layer_functional_path_skips_the_gather_on_a_full_width_input(monkey
 def test_kda_layer_with_sequence_parallelism_leaves_the_norm_to_the_relay(monkeypatch):
     layer, calls = _mocked_layer(monkeypatch, tensor_parallel_size=4)
     calls.recurrence.applies_output_norm = True
-    layer.weights.norm = object()
-    layer.config.num_heads, layer.config.norm_eps = 2, 1e-6
-    layer.gated_rms_output_dtype = layer.norm_output_memory_config = None
     output, _ = layer.forward(SimpleNamespace(shape=(1, 64, 256)), Mock(), object())
     calls.norm.assert_not_called()
     output_norm = calls.recurrence.call_args.kwargs["output_norm"]

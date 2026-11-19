@@ -16,7 +16,6 @@ from models.demos.deepseek_v3_d_p.reference.kimi_k3_config import KimiK3Config
 from models.demos.deepseek_v3_d_p.tests.fabric_profiles import fabric2d_device_params
 from models.demos.deepseek_v3_d_p.tests.kda.kda_test_utils import assert_accurate, make_actual_start
 from models.demos.deepseek_v3_d_p.tests.kda.utils import (
-    DeviceMismatch,
     assert_device_time,
     closed_form_tensor,
     distributed_prefix,
@@ -24,6 +23,8 @@ from models.demos.deepseek_v3_d_p.tests.kda.utils import (
     median_device_us,
     pack_complement,
 )
+from models.demos.deepseek_v3_d_p.tests.measure.determinism import check_determinism
+from models.demos.deepseek_v3_d_p.tests.measure.trace import TracedStep
 from models.demos.deepseek_v3_d_p.tt.kda.config import kimi_k3_program_config
 from models.demos.deepseek_v3_d_p.tt.kda.recurrence import _sp_links
 from models.demos.deepseek_v3_d_p.tt.kda.relay_chunk_scan import OutputNorm, RelayChunkScan, reset_persistent_semaphores
@@ -40,11 +41,12 @@ _PROGRAM_CONFIG = kimi_k3_program_config(active_seq_len_local=_ROWS, tp_ccl_topo
 _MATH_FIDELITY = _PROGRAM_CONFIG.affine_prefix_math_fidelity
 
 
-# SP takes mesh axis 0.
+# SP takes mesh axis 0, except on a 4x4 stage, whose SP ring is its X-wrapped axis 1 (run_4x4_stage_tests.sh).
 _MESH = pytest.mark.parametrize(
     "mesh_device,device_params",
     [
         kda_mesh_param((8, 4), "mesh-8x4", "SP8xTP4"),
+        kda_mesh_param((4, 4), "mesh-4x4", "galaxy4x4-SP4xTP4"),
         kda_mesh_param(
             (8, 4),
             "mesh-8x4",
@@ -58,6 +60,23 @@ _MESH = pytest.mark.parametrize(
     ],
     indirect=True,
 )
+
+
+def _sp_axis(mesh_device) -> int:
+    return 1 if tuple(mesh_device.shape) == (4, 4) else 0
+
+
+def _sp_tp(mesh_device) -> tuple[int, int]:
+    """The SP and TP sizes."""
+    shape = tuple(mesh_device.shape)
+    axis = _sp_axis(mesh_device)
+    return shape[axis], shape[1 - axis]
+
+
+def _rank_tp(mesh_device, index: int) -> tuple[int, int]:
+    """The SP rank and TP rank of the index-th device tensor (row-major over the mesh)."""
+    row, column = divmod(index, tuple(mesh_device.shape)[1])
+    return (row, column) if _sp_axis(mesh_device) == 0 else (column, row)
 
 
 def _rank_chunks(sp_size: int, start: int, end: int | None) -> dict[int, tuple[int, int]]:
@@ -88,7 +107,8 @@ class _Transforms:
     def __init__(self, mesh_device, relay, seed: int | None, batch: int = 1, output_dtype=ttnn.bfloat16):
         """Random transforms from ``seed``, or closed-form ones (for the determinism check) without one; the heads are
         ``batch`` batches in the norm's gate and output."""
-        self.sp_size, self.tp_size = tuple(mesh_device.shape)
+        self.mesh_device = mesh_device
+        self.sp_size, self.tp_size = _sp_tp(mesh_device)
         self.batch, gate_width = batch, _GATE_OFFSET + _HEADS // batch * _KEY
         if seed is None:
             shape = (self.sp_size, _HEADS, _KEY, _KEY)
@@ -170,7 +190,7 @@ class _Transforms:
             _, chained = distributed_prefix(
                 self.packed,
                 self.initial_tt,
-                sequence_parallel_axis=0,
+                sequence_parallel_axis=_sp_axis(self.mesh_device),
                 compute_config=self.compute_config,
                 actual_start=actual_start,
                 local_rows=_ROWS,
@@ -179,7 +199,7 @@ class _Transforms:
         for index, (local_output, local_carry) in enumerate(
             zip(ttnn.get_device_tensors(output), ttnn.get_device_tensors(carry), strict=True)
         ):
-            rank, tp = divmod(index, self.tp_size)
+            rank, tp = _rank_tp(self.mesh_device, index)
             name = f"start={start} end={end} rank={rank} tp={tp}"
             valid, reset = chunks[rank]
             expected = zero + (identity - zero) @ entries[rank].unsqueeze(1)
@@ -229,22 +249,21 @@ def _inputs(mesh_device, relay, zero, identity, final_e, final_b) -> tuple[ttnn.
 
 def _pack(mesh_device, a: torch.Tensor, b: torch.Tensor) -> ttnn.Tensor:
     """Each rank's [sp_size, heads, K, K] A and B as its BF16 [1, heads, K, 2K] rows of [E | B], replicated over TP."""
-    sp_size, tp_size = tuple(mesh_device.shape)
+    dims = (0, None) if _sp_axis(mesh_device) == 0 else (None, 0)
     return pack_complement(
-        a, b, mesh_device, ttnn.ShardTensor2dMesh(mesh_device, dims=(0, None), mesh_shape=(sp_size, tp_size))
+        a, b, mesh_device, ttnn.ShardTensor2dMesh(mesh_device, dims=dims, mesh_shape=tuple(mesh_device.shape))
     )
 
 
-def _relay(
-    mesh_device, math_fidelity=_MATH_FIDELITY, max_cores=_PROGRAM_CONFIG.entry_correction_max_cores
-) -> RelayChunkScan:
+def _relay(mesh_device, math_fidelity=_MATH_FIDELITY, max_cores=_PROGRAM_CONFIG.relay_max_cores) -> RelayChunkScan:
+    axis = _sp_axis(mesh_device)
     return RelayChunkScan(
         mesh_device,
-        sequence_parallel_axis=0,
+        sequence_parallel_axis=axis,
         batch_heads=_HEADS,
         key_dim=_KEY,
         value_dim=_KEY,
-        num_links=_sp_links(mesh_device, 0),
+        num_links=_sp_links(mesh_device, axis),
         local_rows=_ROWS,
         max_cores=max_cores,
         math_fidelity=math_fidelity,
@@ -275,7 +294,7 @@ _INTERVALS = {
 def _bounds(mesh_device, name: str):
     """The interval's start and optional exclusive end, and their device scalars."""
     start, length_delta = _INTERVALS[name]
-    end = None if length_delta is None else start + tuple(mesh_device.shape)[0] * _ROWS + length_delta
+    end = None if length_delta is None else start + _sp_tp(mesh_device)[0] * _ROWS + length_delta
     return (
         start,
         end,
@@ -333,7 +352,7 @@ def test_relay_chunk_scan_applies_the_complement_form(mesh_device):
     rank 3, which carries the identity map, (0, 0) as an empty rank's summary publishes it. From S = 10 I every entry
     state is a small dyadic multiple of I, exact in FP32 and in the matmuls' source registers, so every rank's carry must
     match the hand value bit for bit. A relay that read E as A would send -4 I from rank 0, and 0 from rank 3."""
-    sp_size, tp_size = tuple(mesh_device.shape)
+    sp_size, _ = _sp_tp(mesh_device)
     eye = torch.eye(_KEY)
     scales = [(0.0, 0.0) if rank == 3 else (-0.5, rank + 1.0) for rank in range(sp_size)]
     relay = _relay(mesh_device)
@@ -353,7 +372,7 @@ def test_relay_chunk_scan_applies_the_complement_form(mesh_device):
         assert entries == [10.0, 6.0, 5.0, 5.5, 5.5, 7.75, 9.875, 11.9375] and carry == 13.96875
     _, final = _run(relay, transforms, make_actual_start(mesh_device, 0))
     for index, local_final in enumerate(ttnn.get_device_tensors(final)):
-        rank = index // tp_size
+        rank, _ = _rank_tp(mesh_device, index)
         torch.testing.assert_close(
             ttnn.to_torch(local_final),
             carry * eye.expand(_HEADS, _KEY, _KEY),
@@ -382,7 +401,7 @@ def test_relay_chunk_scan_applies_the_final_transition_of_a_separated_tail(mesh_
     interval ends in a separated tail. Every rank holds a distinct, non-zero final transition, so a carry formed
     from the wrong rank's transition, or one applied (or skipped) on the wrong side of the tail's start, cannot
     match."""
-    sp_size, tp_size = tuple(mesh_device.shape)
+    sp_size, _ = _sp_tp(mesh_device)
     start, end = bounds(sp_size * _ROWS)
     relay = _relay(mesh_device)
     transforms = _Transforms(mesh_device, relay, seed=start)
@@ -395,7 +414,11 @@ def test_relay_chunk_scan_applies_the_final_transition_of_a_separated_tail(mesh_
             dtype=ttnn.float32,
             layout=ttnn.TILE_LAYOUT,
             device=mesh_device,
-            mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=(0, None), mesh_shape=(sp_size, tp_size)),
+            mesh_mapper=ttnn.ShardTensor2dMesh(
+                mesh_device,
+                dims=(0, None) if _sp_axis(mesh_device) == 0 else (None, 0),
+                mesh_shape=tuple(mesh_device.shape),
+            ),
         )
         for t in (final_e, final_b)
     )
@@ -420,7 +443,7 @@ def test_relay_chunk_scan_applies_the_final_transition_of_a_separated_tail(mesh_
     if separated:
         expected = expected + final_e[first_rank].double() @ expected + final_b[first_rank].double()
     for index, local_carry in enumerate(ttnn.get_device_tensors(carry)):
-        rank, tp = divmod(index, tp_size)
+        rank, tp = _rank_tp(mesh_device, index)
         assert_accurate(
             expected.float(),
             ttnn.to_torch(local_carry),
@@ -437,7 +460,7 @@ def test_relay_chunk_scan_adds_the_entry_state_and_b_in_fp32(mesh_device):
     """With E = 0 each hop is S + B: a random FP32 initial state and BF16 B with full mantissas must reach the carry as
     their FP32 sum over every hop, to FP32 rounding. A source register would truncate the entry state to TF32, and B
     in srcB to 6 mantissa bits at HiFi2: either is an error of order 1e-4 here, against the 1e-6 allowed."""
-    sp_size, _ = tuple(mesh_device.shape)
+    sp_size, _ = _sp_tp(mesh_device)
     relay = _relay(mesh_device)
     transforms = _Transforms(mesh_device, relay, seed=17)
     generator = torch.Generator().manual_seed(17)
@@ -453,11 +476,9 @@ def test_relay_chunk_scan_adds_the_entry_state_and_b_in_fp32(mesh_device):
 
 @_MESH
 def test_relay_chunk_scan_rejects_low_fidelity(mesh_device, expect_error):
-    """Below HiFi3 the norm's FPU products truncate 1 / rms and the squares: HiFi2 is refused."""
-    relay = _relay(mesh_device, math_fidelity=ttnn.MathFidelity.HiFi2)
-    transforms = _Transforms(mesh_device, relay, seed=0)
-    with expect_error(RuntimeError, "needs HiFi3 or above"):
-        _run(relay, transforms, make_actual_start(mesh_device, 0))
+    """Below HiFi3 the norm's FPU products truncate 1 / rms and the squares: HiFi2 is refused when the relay is built."""
+    with expect_error(ValueError, "needs math_fidelity HiFi3 or HiFi4"):
+        _relay(mesh_device, math_fidelity=ttnn.MathFidelity.HiFi2)
 
 
 @_MESH
@@ -491,33 +512,32 @@ def test_relay_chunk_scan_after_counter_reset(mesh_device):
     transforms.assert_matches_reference(output, carry, actual_start, start)
 
 
-_DETERMINISM_CALLS = 3
+# The model's layout (terms in each core's L1), terms streamed from DRAM (one core per head) and FP32 output.
+_DETERMINISM_CASES = {
+    "in-place": {},
+    "streamed": {"max_cores": _HEADS},
+    "float32-output": {"output_dtype": ttnn.float32},
+}
 
 
 @_MESH
-def test_relay_chunk_scan_determinism(mesh_device):
-    """Every full interval's calls return bit-identical outputs and carries (a bounded interval leaves its invalid
-    chunks unwritten)."""
-    relay = _relay(mesh_device)
-    transforms = _Transforms(mesh_device, relay, seed=None)
-    mismatch = DeviceMismatch(mesh_device)
-    for name, (start, length_delta) in _INTERVALS.items():
-        if length_delta is not None:
-            continue
-        actual_start = make_actual_start(mesh_device, start)
-        first = None
-        for _ in range(_DETERMINISM_CALLS):
-            outputs = _run(relay, transforms, actual_start)
-            if first is None:
-                first = outputs
-                continue
-            mismatch.compare(first[0], outputs[0], f"{name} output")
-            mismatch.compare(first[1], outputs[1], f"{name} carry")
-            for tensor in outputs:
-                ttnn.deallocate(tensor)
-        for tensor in (*first, actual_start):
-            ttnn.deallocate(tensor)
-    mismatch.assert_none()
+@pytest.mark.parametrize("case", list(_DETERMINISM_CASES))
+def test_relay_chunk_scan_determinism(mesh_device, case):
+    """Eager calls, trace replays and the first replay against the first eager call return bit-identical outputs and
+    carries: the relay keeps its arrival and final counters, landing buffers and per-core seed counts across calls, and
+    a replay must not see what a previous call left. A split start exercises the separated tail and its final
+    transition."""
+    options = dict(_DETERMINISM_CASES[case])
+    output_dtype = options.pop("output_dtype", ttnn.bfloat16)
+    relay = _relay(mesh_device, **options)
+    transforms = _Transforms(mesh_device, relay, seed=None, output_dtype=output_dtype)
+    actual_start = make_actual_start(mesh_device, _INTERVALS["split"][0])
+
+    def step():
+        return _run(relay, transforms, actual_start)
+
+    failure = check_determinism(mesh_device, step, lambda: TracedStep(mesh_device, step))
+    assert failure is None, failure
 
 
 # Device time of one relay call: its program's slowest chip under the realtime profiler, the median over single calls,
@@ -529,17 +549,19 @@ _PERF_START = _ROWS + 320
 _PERF_KERNEL = "relay_chunk_scan"
 
 
-def _perf_case(shape: tuple[int, int], topology: str, case_id: str, reference_us: float, margin: float):
-    """A mesh case with its device-time reference and margin."""
+def _perf_case(shape: tuple[int, int], topology: str, case_id: str, reference_us: float | None, margin: float):
+    """A mesh case with its device-time reference (None: report only) and margin."""
     case = kda_mesh_param(shape, topology, case_id)
     return pytest.param(*case.values, reference_us, margin, marks=case.marks, id=case_id)
 
 
-# Device-time references in us, with K3's payload: Galaxy on TorusXY, LoudBox and QuietBox on TorusY.
+# Device-time references in us, with K3's payload, two-sided (faster fails too: re-centre it): Galaxy on TorusXY and a
+# 4x4 stage on its X ring. LoudBox and QuietBox (TorusY) report until a CI run gives their references.
 _PERF_CASES = [
-    _perf_case((8, 4), "mesh-8x4", "SP8xTP4", 176.1, 0.10),
-    _perf_case((8, 1), "ring", "loudbox-SP8xTP1-ring", 388.0, 0.12),
-    _perf_case((4, 1), "ring", "quietbox-SP4xTP1-ring", 75.5, 0.05),
+    _perf_case((8, 4), "mesh-8x4", "SP8xTP4", 174.2, 0.05),
+    _perf_case((4, 4), "mesh-4x4", "galaxy4x4-SP4xTP4", 148.3, 0.05),
+    _perf_case((8, 1), "ring", "loudbox-SP8xTP1-ring", None, 0.05),
+    _perf_case((4, 1), "ring", "quietbox-SP4xTP1-ring", None, 0.05),
 ]
 
 
@@ -549,7 +571,7 @@ _PERF_CASES = [
 def test_relay_chunk_scan_kimi_k3_perf(mesh_device, reference_us, margin):
     """The model's relay: 24 heads per chip, the model's fidelity and cores, the terms in L1."""
     require_realtime_profiler("the relay_chunk_scan device-time gate")
-    layout = "SP{}xTP{}".format(*tuple(mesh_device.shape))
+    layout = "SP{}xTP{}".format(*_sp_tp(mesh_device))
     relay = _relay(mesh_device)
     transforms = _Transforms(mesh_device, relay, seed=_PERF_START)
     actual_start = make_actual_start(mesh_device, _PERF_START)
@@ -565,4 +587,10 @@ def test_relay_chunk_scan_kimi_k3_perf(mesh_device, reference_us, margin):
         ttnn.deallocate(tensor)
 
     median_us = median_device_us(mesh_device, call, _PERF_KERNEL, _PERF_SAMPLES)
-    assert_device_time(median_us, reference_us, margin, f"relay_chunk_scan Kimi-K3 {layout}")
+    label = f"relay_chunk_scan Kimi-K3 {layout}"
+    # print, not logger: CI runs perf jobs at LOGURU_LEVEL=ERROR.
+    print(
+        f"{label}: {median_us:.1f} us; " + ("report only" if reference_us is None else f"reference {reference_us} us")
+    )
+    if reference_us is not None:
+        assert_device_time(median_us, reference_us, margin, label)

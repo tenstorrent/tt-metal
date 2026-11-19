@@ -4,6 +4,7 @@
 #include <cstdint>
 
 #include "api/dataflow/dataflow_api.h"
+#include "ttnn/cpp/ttnn/kernel_lib/l1_helpers.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_dataflow.hpp"
 #include "ttnn/cpp/ttnn/operations/experimental/kda/device/kernels/chronology.hpp"
 #include "ttnn/cpp/ttnn/operations/experimental/kda/device/kernels/dataflow/packed_summary.hpp"
@@ -125,12 +126,10 @@ void kernel_main() {
             }
         }
         // The BF16 identity tile while the reads are in flight.
-        cb_reserve_back(cb_identity, 1);
-        auto* identity = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(get_write_ptr(cb_identity));
-        for (uint32_t i = 0; i < tt::constants::TILE_HW; ++i) {
-            identity[i] = 0;
-        }
-        kda::write_identity_diagonal(identity);
+        DataflowBuffer identity_tile(cb_identity);
+        identity_tile.reserve_back(1);
+        dataflow_kernel_lib::zero_tile(identity_tile);
+        kda::write_identity_diagonal(reinterpret_cast<volatile tt_l1_ptr uint16_t*>(get_write_ptr(cb_identity)));
         cb_push_back(cb_identity, 1);
     }
     noc_async_read_barrier();

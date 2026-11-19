@@ -191,6 +191,7 @@ tt::tt_metal::ProgramDescriptor build_program(
     const std::vector<CoreCoord> correction_cores(
         attrs.cores.begin(), attrs.cores.begin() + batch_heads * cores_per_head);
     std::vector<CoreCoord> head_cores;
+    head_cores.reserve(batch_heads);
     for (uint32_t h = 0; h < batch_heads; ++h) {
         head_cores.push_back(correction_cores[h * cores_per_head]);
     }

@@ -11,7 +11,7 @@ The same program forms the chunk outputs from the summary's emitted terms (the e
 spread over `cores_per_head` cores, the first of which runs the head's hop and copies the landed entry state (and, for a
 separated tail, the final state) to the head's other cores. The summary writes the terms sharded so each core's chunk
 rows, F(0) then F(I), are in its own L1 (terms_memory_config); when a core's share is over
-KDA_ENTRY_CORRECTION_TERMS_L1_BYTES_PER_CORE they stay in DRAM and each core streams its chunk rows.
+KDA_RELAY_TERMS_L1_BYTES_PER_CORE they stay in DRAM and each core streams its chunk rows.
 
 The relay's landing buffer is an L1 tensor sharded one head per head's first core, at the same address on every device. A
 rank's predecessor writes into it before the rank's own call starts, so a layer reserves it before the SP barrier that
@@ -68,7 +68,7 @@ _MAX_HEADS_PER_LINK = 14
 
 # A core's share of the emitted FP32 terms (F(0) and F(I) of its chunks) that stays in its L1; beyond it they stream
 # from DRAM (Kimi-K3: 320 KiB per core at 1280 rows per chip).
-KDA_ENTRY_CORRECTION_TERMS_L1_BYTES_PER_CORE = 320 * 1024
+KDA_RELAY_TERMS_L1_BYTES_PER_CORE = 320 * 1024
 
 
 # Every persistent counter per mesh id, for reset_persistent_semaphores.
@@ -131,6 +131,9 @@ class RelayChunkScan:
     ):
         if key_dim != value_dim:
             raise ValueError("relay prefix requires K == V")
+        # The gated norm's FPU products lose too much below HiFi3; the op also refuses it at its first call.
+        if math_fidelity not in (ttnn.MathFidelity.HiFi3, ttnn.MathFidelity.HiFi4):
+            raise ValueError(f"relay_chunk_scan needs math_fidelity HiFi3 or HiFi4, got {math_fidelity}")
         heads_per_link = -(-batch_heads // num_links)
         if heads_per_link > _MAX_HEADS_PER_LINK:
             raise ValueError(
@@ -197,7 +200,7 @@ class RelayChunkScan:
         # The emitted terms land in the L1 of the core that consumes them: each core takes whole chunks, so a core's
         # shard is its chunk rows of F(0) and F(I), and nothing is read over the NoC for them.
         core_rows = num_chunks // cores_per_head * ttnn.TILE_SIZE
-        streamed = 2 * core_rows * key_dim * 4 > KDA_ENTRY_CORRECTION_TERMS_L1_BYTES_PER_CORE
+        streamed = 2 * core_rows * key_dim * 4 > KDA_RELAY_TERMS_L1_BYTES_PER_CORE
         self.terms_memory_config = (
             ttnn.DRAM_MEMORY_CONFIG
             if streamed

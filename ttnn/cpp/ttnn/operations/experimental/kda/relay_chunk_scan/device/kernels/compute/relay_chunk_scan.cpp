@@ -217,27 +217,58 @@ void gate_factors(uint32_t chunks) {
     for (uint32_t c = 0; c < chunks; ++c) {
         cb_wait_front(cb_gate, kt);
         cb_reserve_back(cb_gate_factor, kt);
-        tile_regs_acquire();
-        reconfig_data_format_srca(cb_gate);
-        copy_init(cb_gate);
-        for (uint32_t j = 0; j < kt; ++j) {
-            copy_tile(cb_gate, j, j);
+        if constexpr (fp32_output) {
+            // The product on the SFPU, in FP32: the FPU's DEST reuse would round sigmoid(gate) to srcA's format.
+            for (uint32_t first = 0; first < kt; first += half_dst) {
+                tile_regs_acquire();
+                reconfig_data_format_srca(cb_gate);
+                copy_init(cb_gate);
+                for (uint32_t i = 0; i < half_dst; ++i) {
+                    copy_tile(cb_gate, first + i, i);
+                }
+                sigmoid_tile_init();
+                for (uint32_t i = 0; i < half_dst; ++i) {
+                    sigmoid_tile<VectorMode::RC, false, true>(i);
+                }
+                reconfig_data_format_srca(cb_weight_rows);
+                copy_init(cb_weight_rows);
+                for (uint32_t i = 0; i < half_dst; ++i) {
+                    copy_tile(cb_weight_rows, first + i, half_dst + i);
+                }
+                mul_binary_tile_init();
+                for (uint32_t i = 0; i < half_dst; ++i) {
+                    mul_binary_tile(i, half_dst + i, i);
+                }
+                tile_regs_commit();
+                tile_regs_wait();
+                for (uint32_t i = 0; i < half_dst; ++i) {
+                    pack_tile(i, cb_gate_factor);
+                }
+                tile_regs_release();
+            }
+        } else {
+            tile_regs_acquire();
+            reconfig_data_format_srca(cb_gate);
+            copy_init(cb_gate);
+            for (uint32_t j = 0; j < kt; ++j) {
+                copy_tile(cb_gate, j, j);
+            }
+            sigmoid_tile_init();
+            for (uint32_t j = 0; j < kt; ++j) {
+                sigmoid_tile<VectorMode::RC, false, false>(j);
+            }
+            reconfig_data_format(cb_weight_rows, cb_weight_rows);
+            mul_reuse_dest_init<EltwiseBinaryReuseDestType::DEST_TO_SRCA>(cb_weight_rows);
+            for (uint32_t j = 0; j < kt; ++j) {
+                mul_reuse_dest_tiles<EltwiseBinaryReuseDestType::DEST_TO_SRCA>(cb_weight_rows, j, j);
+            }
+            tile_regs_commit();
+            tile_regs_wait();
+            for (uint32_t j = 0; j < kt; ++j) {
+                pack_tile(j, cb_gate_factor);
+            }
+            tile_regs_release();
         }
-        sigmoid_tile_init();
-        for (uint32_t j = 0; j < kt; ++j) {
-            sigmoid_tile<VectorMode::RC, false, fp32_output>(j);
-        }
-        reconfig_data_format(cb_weight_rows, cb_weight_rows);
-        mul_reuse_dest_init<EltwiseBinaryReuseDestType::DEST_TO_SRCA>(cb_weight_rows);
-        for (uint32_t j = 0; j < kt; ++j) {
-            mul_reuse_dest_tiles<EltwiseBinaryReuseDestType::DEST_TO_SRCA>(cb_weight_rows, j, j);
-        }
-        tile_regs_commit();
-        tile_regs_wait();
-        for (uint32_t j = 0; j < kt; ++j) {
-            pack_tile(j, cb_gate_factor);
-        }
-        tile_regs_release();
         cb_push_back(cb_gate_factor, kt);
         cb_pop_front(cb_gate, kt);
     }
@@ -307,9 +338,10 @@ void normalize() {
 }
 
 // Chunk outputs x = F0_c + (FI_c - F0_c) @ seed for this core's chunks [begin, end), a row at a time once the whole
-// seed has landed: F0's row is copied into the FP32 DST and the K-sum of each column accumulates on top of it, then the
-// row is normalized. In place the differences are already formed; streamed, each chunk's is formed just before its
-// products, and its g with it.
+// seed has landed: F0's row is copied into the FP32 DST (through srcA, so at TF32: cb_terms also feeds the FPU's
+// differences, and TF32 is finer than the BF16 the model writes) and the K-sum of each column accumulates on top of it,
+// then the row is normalized. In place the differences are already formed; streamed, each chunk's is formed just before
+// its products, and its g with it.
 void correct(uint32_t begin, uint32_t end, uint32_t seed) {
     if (begin != end) {
         cb_wait_front(seed, state_tiles);

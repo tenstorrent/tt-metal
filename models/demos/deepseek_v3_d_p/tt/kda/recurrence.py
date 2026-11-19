@@ -19,7 +19,7 @@ from models.demos.deepseek_v3_d_p.tt.kda.config import (
     KDA_OUTPUT_MEMORY_CONFIG,
     KDA_PREP_OUTPUT_BF16_MASK,
     KDA_PREPARATION_L1_BYTES_PER_CORE,
-    KDA_PREPARATION_WITH_ENTRY_CORRECTION_L1_BYTES_PER_CORE,
+    KDA_RELAY_PREPARATION_L1_BYTES_PER_CORE,
     KDARecurrenceProgramConfig,
     l1_when_it_fits,
     preparation_bytes,
@@ -391,7 +391,7 @@ class KDARecurrence:
         )
         affine_prefix = ttnn.init_device_compute_kernel_config(
             device.arch(),
-            math_fidelity=program_config.affine_prefix_math_fidelity,
+            math_fidelity=program_config.affine_prefix_math_fidelity or ttnn.MathFidelity.HiFi2,
             fp32_dest_acc_en=True,
             packer_l1_acc=False,
         )
@@ -460,16 +460,14 @@ class KDARecurrence:
                 value_dim=value_dim,
                 num_links=links,
                 local_rows=local_rows,
-                max_cores=program_config.entry_correction_max_cores,
-                math_fidelity=program_config.affine_prefix_math_fidelity,
+                max_cores=program_config.relay_max_cores,
+                math_fidelity=program_config.affine_prefix_math_fidelity or ttnn.MathFidelity.HiFi3,
             )
         # Both scans read the chunk terms chunk by chunk; keeping them in L1 when they fit spares those DRAM reads
         # and chunk preparation's DRAM writes.
         preparation_size = preparation_bytes(batch * heads, local_rows // KDA_CHUNK_SIZE, key_dim, value_dim)
         preparation_budget = (
-            KDA_PREPARATION_L1_BYTES_PER_CORE
-            if self._affine_relay is None
-            else KDA_PREPARATION_WITH_ENTRY_CORRECTION_L1_BYTES_PER_CORE
+            KDA_PREPARATION_L1_BYTES_PER_CORE if self._affine_relay is None else KDA_RELAY_PREPARATION_L1_BYTES_PER_CORE
         )
         self._preparation_memory = l1_when_it_fits(device, preparation_size, preparation_budget)
         if self._preparation_memory.buffer_type != ttnn.BufferType.L1:
@@ -589,8 +587,7 @@ class KDARecurrence:
             beta_logits_column_offset=beta_logits_column_offset,
             release_gate=release_gate,
         )
-        norm = () if output_norm is None else (output_norm,)
-        result = self._execute(prepared, state, actual_start, actual_end, *norm)
+        result = self._execute(prepared, state, actual_start, actual_end, output_norm=output_norm)
         # Release the chunk terms as soon as the scan consumed them, so every call sees the same free memory (the
         # summary already released them when the relay runs).
         for tensor in prepared.as_kernel_args():
@@ -604,6 +601,7 @@ class KDARecurrence:
         state: ttnn.Tensor,
         actual_start: ttnn.Tensor,
         actual_end: ttnn.Tensor | None,
+        output_norm: None,
     ) -> RecurrenceResult:
         return _scan_chunks(
             prepared,
@@ -621,6 +619,7 @@ class KDARecurrence:
         state: ttnn.Tensor,
         actual_start: ttnn.Tensor,
         actual_end: ttnn.Tensor | None,
+        output_norm: None,
     ) -> RecurrenceResult:
         return _scan_local_grouped_chunks(
             prepared,

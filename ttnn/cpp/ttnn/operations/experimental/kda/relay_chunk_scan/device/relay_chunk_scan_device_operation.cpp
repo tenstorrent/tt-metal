@@ -155,6 +155,7 @@ void RelayChunkScanOperation::validate_on_program_cache_miss(
         fabric_packet_headers_per_risc(mesh->arch()));
 
     std::vector<CoreCoord> head_cores;
+    head_cores.reserve(heads);
     for (uint32_t h = 0; h < heads; ++h) {
         head_cores.push_back(attrs.cores[h * cores_per_head]);
     }
