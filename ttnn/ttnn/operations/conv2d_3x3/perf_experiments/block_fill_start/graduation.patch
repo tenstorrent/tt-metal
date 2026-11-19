@@ -1,0 +1,472 @@
+diff -ruN a/ttnn/ttnn/operations/conv2d_3x3/conv2d_3x3_program_descriptor.py b/ttnn/ttnn/operations/conv2d_3x3/conv2d_3x3_program_descriptor.py
+--- a/ttnn/ttnn/operations/conv2d_3x3/conv2d_3x3_program_descriptor.py	2026-11-19 22:49:33.343885063 +0000
++++ b/ttnn/ttnn/operations/conv2d_3x3/conv2d_3x3_program_descriptor.py	2026-11-19 22:49:33.348885134 +0000
+@@ -360,6 +360,28 @@
+ # Semaphore ids per program (the device's limit: ids 0..15).
+ MAX_SEMAPHORES = 16
+ WEIGHT_MCAST_SPARE_PREFIX = "weight_mcast2"
++# Host-planned BLOCK fill (K split on the N-slice walk, one M-block per core, the whole slab in the input ring): the
++# host passes each data-movement RISC its slab reads, per untilize batch, as (owner core, offset in the owner's shard,
++# slab row, rows) pieces (_host_fill_args). The reader issues them at its fill start and plans the device-side slab
++# state (center taps, band pages) under the reads; the writer of a split core issues its part at kernel start (the
++# ring is empty then) and counts each batch in slab_fwd_done as it lands, with no hand-over. A short last slice reads
++# its real tiles only and zeroes the padding tiles, as before. On the device the writer's split fill cost ~0.4 us of
++# planning before its first read and ~0.27 us of RISC time per 4-row batch (identical on every core: control, not
++# NoC). Spare-column members split their fill too (SPARE_SPLIT_FILL): all 8 members of a group take their slab from
++# the same owner rows, so on NoC0 every response funnels down the spare column (res4.0: idx 11 reads owner rows 8 / 9
++# and wraps down column 14; fills ended 4.1-4.8 us vs ~1.6-2.5 on grid cores, and the backed-up reads slowed the grid
++# cores of columns 2-4 to ~4.5 us); the writer reads the slab's upper half on NoC1, the column's other links. Measured
++# (Blackhole p150b, unzoned, bit-identical; changelog Perf 13, block_fill_start): res4.0 @ LoFi 12.55 -> 11.27 us
++# (-10%, five sessions), HiFi4 res4.0 -6%, res5.1 / res5.2 -1% to -3%, the rest of the BLOCK set flat. Options: the
++# host plan alone (spare reads still on NoC0) +1% on res4.0; the spare split with the device-planned writer -2% to -5%;
++# the writer reading the whole spare slab -9%. The writer stops serving the fill in its waits once the fill is counted
++# (serving an empty fill in every poll iteration measured +1.6% on res4.x).
++BLOCK_HOST_FILL = True
++SPARE_SPLIT_FILL = True
++# Writer batches in flight under the host-planned fill (transaction ids 8..15).
++HOST_FILL_WRITER_WINDOW = 8
++# Host-planned words per core at most (a core's runtime args stay under the device's 341).
++HOST_FILL_MAX_WORDS = 256
+ 
+ 
+ def l1_cb_budget_bytes(resident_shard_bytes=0):
+@@ -1943,6 +1965,95 @@
+     return _div_up(_kw_fold_group(g.tensor_n_tiles) * _kw_fold_plane_bytes(g, bm), TILE_BYTES_FP32) * TILE_BYTES_FP32
+ 
+ 
++def _tile_slab_segments(g: Conv3x3Geometry, f, band_len):
++    """The reader's TILE slab plan (mirror of conv2d_3x3::tile_slab_plan): [(first input tile-row, rows)] in slab
++    order; slab row r of the plan is row r of the concatenated segments."""
++    segs = []
++    next_free = 0
++    prev = None  # (t_lo, t_hi, slab_row) of the last non-empty band
++    for kh in range(3):
++        v_lo = f + kh * g.dilation * g.input_width
++        lo, hi = max(v_lo, 0), min(v_lo + band_len, g.num_in_px)
++        if lo >= hi:
++            continue
++        t_lo, t_hi = lo // TILE, _div_up(hi, TILE)
++        shares = prev is not None and t_lo < prev[1]
++        row = prev[2] + (t_lo - prev[0]) if shares else next_free
++        first_new = prev[1] if shares else t_lo
++        if t_hi > first_new:
++            segs.append((first_new, t_hi - first_new))
++        next_free = row + (t_hi - t_lo)
++        prev = (t_lo, t_hi, row)
++    return segs
++
++
++def _host_fill_segments(g: Conv3x3Geometry, m_tile_start, actual_m_tiles):
++    o_first = m_tile_start * TILE
++    o_last = min((m_tile_start + actual_m_tiles) * TILE, g.num_out_px) - 1
++    return _tile_slab_segments(g, _block_first_tap(g, o_first), _block_band_len(g, o_first, o_last))
++
++
++def _spare_split_row(g: Conv3x3Geometry, m_tile_start, actual_m_tiles):
++    """A spare member's split fill (SPARE_SPLIT_FILL): the input tile-row from which the writer reads (half the slab's
++    rows on each NoC)."""
++    rows = [
++        r for first, count in _host_fill_segments(g, m_tile_start, actual_m_tiles) for r in range(first, first + count)
++    ]
++    return rows[len(rows) // 2]
++
++
++def _host_fill_args(
++    g: Conv3x3Geometry, m_tile_start, actual_m_tiles, ub, num_batches, shard_rows, owners, row_bytes, writer_row
++):
++    """Host-planned fill of a one-M-block core (BLOCK_HOST_FILL). Input tile-rows at or past writer_row are the
++    writer's (None: no split). Reader args: per batch of ub slab rows, (writer flag << 31 | reader pieces) and 3 words
++    per piece; writer args: (batches with writer pieces), then per such batch (pieces) and 3 words per piece. A piece is
++    (owner x << 16 | y, byte offset in the owner's shard, slab row << 16 | rows); pieces stop at owner-shard edges and
++    at batch ends."""
++    segs = _host_fill_segments(g, m_tile_start, actual_m_tiles)
++    # The reader pushes num_batches batches (its slab rows); those past the plan's rows are pushed unread.
++    assert sum(n for _, n in segs) <= num_batches * ub, (segs, num_batches, ub)
++    batches = [([], []) for _ in range(num_batches)]
++    slab_row = 0
++    for first, count in segs:
++        row = first
++        while row < first + count:
++            b = slab_row // ub
++            end = min(first + count, (row // shard_rows + 1) * shard_rows, row + (b + 1) * ub - slab_row)
++            if writer_row is not None and row < writer_row < end:
++                end = writer_row
++            shard = row // shard_rows
++            piece = [owners[shard], (row - shard * shard_rows) * row_bytes, (slab_row << 16) | (end - row)]
++            batches[b][1 if writer_row is not None and row >= writer_row else 0].append(piece)
++            slab_row += end - row
++            row = end
++    reader, writer = [], []
++    writer_batches = 0
++    for rp, wp in batches:
++        reader.append((int(bool(wp)) << 31) | len(rp))
++        for p in rp:
++            reader += p
++        if wp:
++            writer_batches += 1
++            writer.append(len(wp))
++            for p in wp:
++                writer += p
++    return reader, [writer_batches] + writer
++
++
++def _host_fill_fits(g: Conv3x3Geometry, b: Conv3x3Blocking, shard_rows):
++    """Every M work index's host-planned fill within HOST_FILL_MAX_WORDS per RISC: the plan without a split, at the
++    reader's largest batch count, plus a split's at most one more piece per core and one count per writer batch."""
++    ub = b.untilize_batch_rows
++    num_batches = b.slab_tile_rows // ub
++    for start, actual in core_m_ranges(g, b.core_m_tiles)[: b.num_m_groups]:
++        owners = [0] * (_div_up(_div_up(g.num_in_px, TILE), shard_rows) + 1)
++        reader, _ = _host_fill_args(g, start, actual, ub, num_batches, shard_rows, owners, 0, None)
++        if len(reader) + 3 + num_batches > HOST_FILL_MAX_WORDS:
++            return False
++    return True
++
++
+ def create_program_descriptor(
+     input_tensor,
+     weight_tensor,
+@@ -2240,7 +2351,21 @@
+     # Split TILE fill. Under a K split (N-slice-outer walk) only with the whole slab in the ring, where the reader hands
+     # the writer every batch up front; a per-batch hand-over on the 2-batch ring measured slower than no split there
+     # (aspp.convs.1 @ LoFi 75.8 vs 71.0 us).
+-    tile_fill_split = g.sharded_output and g.tile_input and (not g.k_split or (b.nslice and alias_ring))
++    # Host-planned BLOCK fill (BLOCK_HOST_FILL): one M-block per core, the whole slab in the input ring (the stride-2
++    # prelude's own ring included), every core's plan within the runtime-arg budget.
++    host_fill = (
++        BLOCK_HOST_FILL
++        and g.k_split
++        and g.tile_input
++        and not kwf
++        and b.nslice
++        and not b.ring
++        and b.max_m_blocks_per_core == 1
++        and (alias_ring or s2_taps)
++        and input_tensor.memory_config().is_sharded()
++        and _host_fill_fits(g, b, int(input_tensor.memory_config().shard_spec.shape[0]) // TILE)
++    )
++    tile_fill_split = g.sharded_output and g.tile_input and (not g.k_split or (b.nslice and (alias_ring or host_fill)))
+     if g.k_split:
+         in_spec = input_tensor.memory_config().shard_spec
+         page_cols = TILE if g.tile_input else g.c_in_p
+@@ -2290,7 +2415,13 @@
+             if row in part_rows and row != part_rows[col % len(part_rows)] and hi_bytes[row] >= SPLIT_FILL_MIN_BYTES:
+                 split_cores.add((core.x, core.y))
+ 
+-    # Under a K split, the split kernel only where some core splits (no idle semaphores or accessor args otherwise).
++    # Spare-column members: the writer reads the upper half of the slab rows on NoC1 (see SPARE_SPLIT_FILL).
++    split_row_of = {}
++    if host_fill and SPARE_SPLIT_FILL and tile_fill_split and spare_groups:
++        for core, row, _ in work:
++            if row in spare_groups:
++                split_row_of[(core.x, core.y)] = _spare_split_row(g, *m_ranges[row])
++                split_cores.add((core.x, core.y))
+     tile_fill_split = tile_fill_split and (not g.k_split or bool(split_cores))
+     pages_per_slice_row = g.c_in_tiles if g.tile_input else 1
+     combine_split_nocs = g.k_split and COMBINE_SPLIT_NOCS
+@@ -2607,7 +2738,7 @@
+         row_page_stride,
+         0,  # fill_zero_lanes, set per writer kernel
+         CB_ZERO_SRC,
+-        FILL_WRITER_WINDOW_BATCHES if not b.ring else 1,
++        HOST_FILL_WRITER_WINDOW if host_fill else (FILL_WRITER_WINDOW_BATCHES if not b.ring else 1),
+         int(weight_servers is not None),
+         *server_sem_ids,
+         int(g.remote_output),
+@@ -2658,6 +2789,37 @@
+     def split_of(core):
+         return (core.x, core.y) in split_cores
+ 
++    # Host-planned fill: each column's owner cores (one per input shard row), and per core the reader / writer words.
++    owner_xy = {}
++    host_fill_words = {}
++    if host_fill:
++        in_spec = input_tensor.memory_config().shard_spec
++        shard_grid_rows, _ = block_grid_shape(in_spec)
++        for col in range(g.k_cols):
++            owner_xy[col] = []
++            for shard in range(shard_grid_rows):
++                v = device.worker_core_from_logical_core(block_core(in_spec, shard, col))
++                owner_xy[col].append((v.x << 16) | v.y)
++        owner_row_bytes = (int(in_spec.shape[1]) // TILE) * input_page_bytes
++        for core, m_index, col in work:
++            if (core.x, core.y) in split_row_of:
++                writer_row = split_row_of[(core.x, core.y)]
++            elif split_of(core):
++                writer_row = (m_index + 1) * input_shard_rows
++            else:
++                writer_row = None
++            host_fill_words[(core.x, core.y)] = _host_fill_args(
++                g,
++                *m_ranges[m_index],
++                b.untilize_batch_rows,
++                (rt_slab_rows(*m_ranges[m_index], 1)[0] if rt_valid else b.slab_tile_rows) // b.untilize_batch_rows,
++                input_shard_rows,
++                owner_xy[col],
++                owner_row_bytes,
++                writer_row,
++            )
++            assert max(len(w) for w in host_fill_words[(core.x, core.y)]) <= HOST_FILL_MAX_WORDS
++
+     def server_rt_args(core):
+         """Weight servers: [1, server x, server y] on a receiver, else zeros."""
+         for rect, server in weight_servers or []:
+@@ -2721,6 +2883,7 @@
+             + [int(split_of(core))]
+             + slab_rows_per_block
+             + kwf_reader_fill
++            + (host_fill_words[(core.x, core.y)][0] if host_fill else [])
+         )
+         compute_args = [num_m_blocks_this_core, int(out_valid_tiles > 0), col]
+         if g.k_split and b.nslice and not kwf:
+@@ -2768,6 +2931,7 @@
+             + server_rt_args(core)
+             + (_kwf_xchg_writer_args(g, work, m_index, m_ranges, device) if kwf_xchg else [])
+             + kwf_writer_fill
++            + (host_fill_words[(core.x, core.y)][1] if host_fill else [])
+         )
+ 
+     # kw-fold kernels: the mode flag and its compile-time shape (defines keep the regular kernels' CT args intact).
+@@ -2914,13 +3078,19 @@
+         and list(_wspec.shard_shape)[-2:] == [b.block_k_tiles * b.num_k_blocks * TILE, g.out_n_tiles * TILE]
+         else []
+     )
++    _host_fill_defines = [("CONV2D_3X3_HOST_FILL", "1")] if host_fill else []
+     readers = [
+         ttnn.KernelDescriptor(
+             kernel_source=str(KERNEL_DIR / "conv2d_3x3_reader.cpp"),
+             core_ranges=_core_range_set(reader_cores),
+             compile_time_args=reader_ct_args(*slice_channels),
+             runtime_args=reader_rt,
+-            defines=_kwf_dm_defines + _pad_dm_defines + _ring_owner_defines + _sd_dm_defines + _s2_dm_defines,
++            defines=_kwf_dm_defines
++            + _pad_dm_defines
++            + _ring_owner_defines
++            + _sd_dm_defines
++            + _s2_dm_defines
++            + _host_fill_defines,
+             config=ttnn.ReaderConfigDescriptor(),
+         )
+         for slice_channels, (reader_cores, reader_rt) in reader_groups.items()
+@@ -2937,7 +3107,8 @@
+             + _async_bias_defines
+             + _page_run_defines
+             + _round0_defines
+-            + slot_ack_defines,
++            + slot_ack_defines
++            + _host_fill_defines,
+             config=ttnn.WriterConfigDescriptor(),
+         )
+         for slice_channels, (writer_cores, writer_rt) in writer_groups.items()
+diff -ruN a/ttnn/ttnn/operations/conv2d_3x3/kernels/conv2d_3x3_reader.cpp b/ttnn/ttnn/operations/conv2d_3x3/kernels/conv2d_3x3_reader.cpp
+--- a/ttnn/ttnn/operations/conv2d_3x3/kernels/conv2d_3x3_reader.cpp	2026-11-19 22:49:33.344885077 +0000
++++ b/ttnn/ttnn/operations/conv2d_3x3/kernels/conv2d_3x3_reader.cpp	2026-11-19 22:49:33.350885162 +0000
+@@ -290,6 +290,10 @@
+     [[maybe_unused]] const bool split_here = tile_fill_split && get_arg_val<uint32_t>(split_flag_arg) != 0;
+     // rt_valid: M-block m's slab rows (a whole number of untilize batches) at slab_rows_arg + m.
+     constexpr uint32_t slab_rows_arg = split_flag_arg + 1;
++#ifdef CONV2D_3X3_HOST_FILL
++    // Host-planned fill (descriptor _host_fill_args): its words follow the slab rows.
++    [[maybe_unused]] uint32_t host_fill_arg = slab_rows_arg + (rt_valid ? get_arg_val<uint32_t>(3) : 0);
++#endif
+ 
+     constexpr uint32_t pixel_bytes = c_in_p * ELEM_BYTES;
+     constexpr int32_t num_in_px = input_height * input_width;
+@@ -794,6 +798,82 @@
+                     retire();
+                 }
+             }
++#elif defined(CONV2D_3X3_HOST_FILL)
++            // Host-planned fill (the descriptor's BLOCK_HOST_FILL, _host_fill_args; one M-block per core, the whole
++            // slab in the ring). Per batch: (writer flag << 31 | this RISC's pieces), then (owner x << 16 | y, offset
++            // in the owner's shard, slab row << 16 | rows) per piece. The reads go out first; the device plan (center
++            // taps, band pages) is computed under them. A split core's writer issued its pieces at kernel start and
++            // counts each batch in slab_fwd_done as it lands. Raw reads instead of a TensorAccessor lookup per run: the
++            // accessor has no precomputed-run form, and the device-side plan cost the writer ~0.4 us before its first
++            // read and ~0.27 us per 4-row batch (res4.0, identical on every core: control-bound).
++            {
++                constexpr uint32_t batch_pages = untilize_batch_rows * c_in_tiles;
++                constexpr uint32_t max_batches = slab_tile_rows / untilize_batch_rows;
++                constexpr uint32_t TRID_FILL_BASE = 8;
++                const uint32_t num_batches = slab_rows_m / untilize_batch_rows;
++                ASSERT(num_batches <= max_batches && m_block_idx == 0);
++                {
++                    MaybeDeviceZoneScope("reader_fill_reserve");
++                    cb_reserve_back(cb_input_tiles, num_batches * batch_pages);
++                }
++                const uint32_t hf_slab = get_write_ptr(cb_input_tiles);
++                bool hf_writer_of[max_batches];
++                uint32_t pushed = 0;
++                auto retire = [&]() {
++                    reads.wait(TRID_FILL_BASE + pushed % fill_window);
++                    if constexpr (tile_fill_split) {
++                        if (hf_writer_of[pushed]) {
++                            MaybeDeviceZoneScope("reader_fill_fwd_wait");
++                            Semaphore<>(slab_fwd_done_sem_id).wait_min(++fill_batches_handed);
++                        }
++                    }
++                    cb_push_back(cb_input_tiles, batch_pages);
++                    ++pushed;
++                };
++                uint32_t batch = 0;
++                auto issue_through = [&](uint32_t end) {
++                    for (; batch < end; ++batch) {
++                        if (batch - pushed == fill_window) {
++                            retire();
++                        }
++                        const uint32_t word = get_arg_val<uint32_t>(host_fill_arg++);
++                        hf_writer_of[batch] = (word >> 31) != 0;
++                        const uint32_t pieces = word & 0x7FFFFFFFu;
++                        reads.begin(TRID_FILL_BASE + batch % fill_window);
++                        for (uint32_t i = 0; i < pieces; ++i, host_fill_arg += 3) {
++                            const uint32_t xy = get_arg_val<uint32_t>(host_fill_arg);
++                            const uint32_t dst = get_arg_val<uint32_t>(host_fill_arg + 2);
++                            const uint64_t src = get_noc_addr(
++                                xy >> 16, xy & 0xFFFF, input_addr + get_arg_val<uint32_t>(host_fill_arg + 1));
++                            const uint32_t l1 = hf_slab + (dst >> 16) * row_bytes;
++                            if constexpr (zero_slab_lanes) {
++                                // Short last slice: each row's real tiles, its padding tiles from the zero block.
++                                for (uint32_t r = 0; r < (dst & 0xFFFF); ++r) {
++                                    reads.read(src + r * row_bytes, l1 + r * row_bytes, real_row_bytes);
++                                    reads.read(
++                                        zero_src_noc, l1 + r * row_bytes + real_row_bytes, row_bytes - real_row_bytes);
++                                }
++                            } else {
++                                reads.read(src, l1, (dst & 0xFFFF) * row_bytes);
++                            }
++                        }
++                    }
++                };
++                issue_through(num_batches < fill_window ? num_batches : fill_window);
++                conv2d_3x3::TileSlabPlan plan;
++                conv2d_3x3::tile_slab_plan<input_width, num_in_px, dilation, c_in_tiles>(footprint, slab_x_base, plan);
++                if constexpr (nslice_center) {
++                    center_plan = plan;
++                }
++                for (int32_t kh = 0; kh < 3; ++kh) {
++                    slab_ready_pages[kh] = plan.ready_pages[kh];
++                }
++                issue_through(num_batches);
++                dataflow_kernel_lib::set_read_trid(reads.noc, 0);
++                while (pushed < num_batches) {
++                    retire();
++                }
++            }
+ #else
+             conv2d_3x3::TileSlabPlan plan;
+             conv2d_3x3::tile_slab_plan<input_width, num_in_px, dilation, c_in_tiles>(footprint, slab_x_base, plan);
+diff -ruN a/ttnn/ttnn/operations/conv2d_3x3/kernels/conv2d_3x3_writer.cpp b/ttnn/ttnn/operations/conv2d_3x3/kernels/conv2d_3x3_writer.cpp
+--- a/ttnn/ttnn/operations/conv2d_3x3/kernels/conv2d_3x3_writer.cpp	2026-11-19 22:49:33.345885091 +0000
++++ b/ttnn/ttnn/operations/conv2d_3x3/kernels/conv2d_3x3_writer.cpp	2026-11-19 22:49:33.351885176 +0000
+@@ -96,6 +96,7 @@
+ #include <cstdint>
+ 
+ #include "api/dataflow/dataflow_api.h"
++#include "api/dataflow/circular_buffer.h"
+ #include "api/dataflow/noc.h"
+ #include "api/semaphore.h"
+ #include "ttnn/cpp/ttnn/kernel_lib/perf_instrumentation.hpp"
+@@ -598,8 +599,68 @@
+         return kwf_fill_m >= num_m_blocks_this_core && kwf_fill_landed == kwf_fill_issued;
+     };
+ #endif
++#ifdef CONV2D_3X3_HOST_FILL
++    // Host-planned writer fill (descriptor _host_fill_args, after the server args): [batches],
++    // then per batch [pieces] and (owner x << 16 | y, offset, slab row << 16 | rows) per piece. One M-block per core
++    // and the whole slab in the ring (empty at kernel start), so every batch is issued from kernel start (up to the
++    // window in flight) without the reader's hand-over, and counted in slab_fwd_done in order as it lands.
++    uint32_t hf_arg = server_arg + 3;
++    const uint32_t hf_batches = split_here ? get_arg_val<uint32_t>(hf_arg) : 0;
++    ++hf_arg;
++    uint32_t hf_issued = 0;
++    uint32_t hf_served = 0;
++    // Batches still to issue or count: the waits that serve the fill stop calling it once it is done (a call in every
++    // poll iteration of the walk's waits measured +1.6% on res4.x even with nothing to read).
++    bool hf_live = hf_batches > 0;
++    auto hf_serve = [&]() {
++        while (hf_served < hf_issued &&
++               ncrisc_noc_read_with_transaction_id_flushed(
++                   fill_reads.noc.get_noc_id(), TRID_WFILL_BASE + hf_served % fill_writer_window)) {
++            Semaphore<>(slab_fwd_done_sem_id).up(1);
++            ++hf_served;
++        }
++        hf_live = hf_served < hf_batches;
++        if (hf_issued < hf_batches && hf_issued - hf_served < fill_writer_window) {
++            MaybeDeviceZoneScope("writer_fill");
++            do {
++                const uint32_t pieces = get_arg_val<uint32_t>(hf_arg++);
++                fill_reads.begin(TRID_WFILL_BASE + hf_issued % fill_writer_window);
++                for (uint32_t i = 0; i < pieces; ++i, hf_arg += 3) {
++                    const uint32_t xy = get_arg_val<uint32_t>(hf_arg);
++                    const uint32_t dst = get_arg_val<uint32_t>(hf_arg + 2);
++                    const uint64_t src =
++                        get_noc_addr(xy >> 16, xy & 0xFFFF, input_addr + get_arg_val<uint32_t>(hf_arg + 1));
++                    const uint32_t l1 = fill_ring_base + (dst >> 16) * fill_row_bytes;
++                    if constexpr (fill_zero_lanes) {
++                        // Short last slice: each row's real tiles, its padding tiles from the zero block.
++                        constexpr uint32_t real_row_bytes = (c_in / 32) * input_page_bytes;
++                        for (uint32_t r = 0; r < (dst & 0xFFFF); ++r) {
++                            fill_reads.read(src + r * fill_row_bytes, l1 + r * fill_row_bytes, real_row_bytes);
++                            fill_reads.read(
++                                fill_zero_noc,
++                                l1 + r * fill_row_bytes + real_row_bytes,
++                                fill_row_bytes - real_row_bytes);
++                        }
++                    } else {
++                        fill_reads.read(src, l1, (dst & 0xFFFF) * fill_row_bytes);
++                    }
++                }
++                ++hf_issued;
++            } while (hf_issued < hf_batches && hf_issued - hf_served < fill_writer_window);
++            dataflow_kernel_lib::set_read_trid(fill_reads.noc, 0);
++        }
++    };
++#endif
+     // Every batch the reader has handed over so far (windowed: retire the landed ones, issue up to the window).
+     [[maybe_unused]] auto serve_fill = [&]() {
++#ifdef CONV2D_3X3_HOST_FILL
++        if constexpr (tile_fill_split) {
++            if (hf_live) {
++                hf_serve();
++            }
++            return;
++        }
++#endif
+         if constexpr (slab_direct) {
+ #ifdef SD_STREAM
+             if (sd_slab_pending) {
+@@ -673,6 +734,12 @@
+             if (!split_here) {
+                 return;
+             }
++#ifdef CONV2D_3X3_HOST_FILL
++            while (hf_live) {
++                hf_serve();
++            }
++            return;
++#endif
+ #ifdef CONV2D_3X3_KW_FOLD
+             while (!kwf_fill_done()) {
+                 kwf_serve_fill(false);
+@@ -724,6 +791,21 @@
+         }
+     }
+ 
++#ifdef CONV2D_3X3_HOST_FILL
++    // Host-planned fill: this writer's part goes out now (the slab ring is empty at kernel start).
++    if constexpr (tile_fill_split) {
++        if (hf_live) {
++            MaybeDeviceZoneScope("writer_fill_early");
++            if constexpr (fill_zero_lanes) {
++                // The padding lanes' zero block: the reader zeroes it at its start too, but this writer reads it now.
++                fill_reads.noc.async_write_zeros(
++                    CircularBuffer(cb_zero_src), fill_row_bytes - (c_in / 32) * input_page_bytes);
++                fill_reads.noc.write_zeros_l1_barrier();
++            }
++            hf_serve();
++        }
++    }
++#endif
+     // ---- stream_weight_blocks: K-block tiles k-major, n-fastest (matmul in1 layout).
+     const uint32_t total_k_blocks = num_m_blocks_this_core * num_k_blocks;
+     uint32_t k_blocks_issued = 0;

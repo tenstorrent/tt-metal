@@ -1,0 +1,9 @@
+res2 base 0
+res2 early 0
+res2 early_sf 0
+ch1 base 0
+ch1 early 0
+ch1 early_sf 0
+res3x base 0
+res3x early 0
+res3x early_sf 0

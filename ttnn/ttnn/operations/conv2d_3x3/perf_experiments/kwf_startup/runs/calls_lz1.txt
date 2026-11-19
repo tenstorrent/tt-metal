@@ -1,0 +1,12 @@
+res2 base_lz 0
+res2 grad_lz 0
+res3x base_lz 0
+res3x grad_lz 0
+ch1 base_lz 0
+ch1 grad_lz 0
+res2 grad_lz 1
+res2 base_lz 1
+res3x grad_lz 1
+res3x base_lz 1
+ch1 grad_lz 1
+ch1 base_lz 1

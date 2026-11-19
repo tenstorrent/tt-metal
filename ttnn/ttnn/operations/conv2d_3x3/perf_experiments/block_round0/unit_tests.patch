@@ -1,0 +1,90 @@
+--- a/tests/ttnn/unit_tests/operations/conv2d_3x3/test_conv2d_3x3_block_sharded.py	2026-11-19 19:34:09.043170680 +0000
++++ b/tests/ttnn/unit_tests/operations/conv2d_3x3/test_conv2d_3x3_block_sharded.py	2026-11-19 22:43:25.890665302 +0000
+@@ -544,3 +544,87 @@
+     assert torch.equal(out_placed, out_interleaved)
+     expected = _reference(torch_input, torch_weight, torch_bias, H, W, p, s, d, True)
+     assert_with_pcc(expected, out_placed, PCC[ttnn.bfloat8_b])
++
++
++ROUND0_CASES = [
++    # res5.0: 36-tile rounds: the round-0 readers sit on the rows the NoC1 model picks (Blackhole).
++    pytest.param(((32, 64, 512), 512, 2, 1, 2), (224, 64), id="res5_0_8x10"),
++    # res4.x: 9-tile rounds: the column senders read round 0.
++    pytest.param(((32, 64, 256), 256, 1, 1, 1), (256, 32), id="res4_8x8"),
++]
++
++
++@pytest.mark.parametrize("case_hw,shard", ROUND0_CASES)
++def test_conv2d_3x3_block_sharded_round0_reader(case_hw, shard, device, monkeypatch):
++    """N-slice round 0 (NSLICE_ROUND0): one round-0 reader per column multicasts round 0 without a handshake, the
++    column sender relays it to the spare members. The readers on the model's rows and on the sender rows must give a
++    bit-identical output."""
++    torch.manual_seed(13)
++    grid = device.compute_with_storage_grid_size()
++    if (grid.x, grid.y) != (11, 10):
++        pytest.skip("pinned to the 11 x 10 grid")
++    (H, W, c_in), c_out, p, s, d = case_hw
++    dtype, layout = ttnn.bfloat8_b, ttnn.TILE_LAYOUT
++    config = _block_config(H * W, c_in, layout, shard)
++    torch_weight = torch.randn(c_out, c_in, 3, 3).to(torch.bfloat16)
++    torch_bias = torch.randn(c_out).to(torch.bfloat16)
++    torch_input = torch.randn(1, 1, H * W, c_in).to(torch.bfloat16)
++    kwargs = dict(
++        stride=s,
++        padding=p,
++        dilation=d,
++        input_dtype=dtype,
++        input_layout=layout,
++        weight_dtype=ttnn.bfloat8_b,
++        input_memory_config=config,
++        device=device,
++    )
++    tt_weight = prepare_conv2d_weights(torch_weight, **kwargs)
++    tt_bias = prepare_conv2d_bias(torch_bias, **kwargs)
++    real_args = _pd._round0_args
++    readers = []
++
++    def recording(*args):
++        out = real_args(*args)
++        readers.append(sorted(xy for xy, a in out.items() if a[0]))
++        return out
++
++    monkeypatch.setattr(_pd, "_round0_args", recording)
++
++    def run():
++        device.disable_and_clear_program_cache()
++        tt_input = ttnn.from_torch(torch_input, dtype=dtype, layout=layout, device=device, memory_config=config)
++        tt_output = conv2d_3x3(
++            tt_input,
++            tt_weight,
++            input_height=H,
++            input_width=W,
++            bias=tt_bias,
++            padding=p,
++            stride=s,
++            dilation=d,
++            activation="relu",
++            compute_kernel_config=ttnn.ComputeConfigDescriptor(
++                math_fidelity=ttnn.MathFidelity.LoFi, fp32_dest_acc_en=True, math_approx_mode=False
++            ),
++        )
++        return ttnn.to_torch(tt_output).float()
++
++    out_model = run()
++    monkeypatch.setattr(_pd, "NSLICE_ROUND0_MODEL", False)
++    out_senders = run()
++    device.enable_program_cache()
++    assert len(readers) == 2 and len(readers[0]) == len(readers[1]) > 0, readers
++    # One reader per column; the column senders sit on the staggered diagonal (column c on grid row c).
++    assert readers[1] == sorted((c, c) for c in range(len(readers[1]))), readers[1]
++    model = (
++        ttnn.device.is_blackhole(device)
++        and device.dram_core_from_logical_core(ttnn.CoreCoord(0, 0)).y in (12, 14)
++        and c_out * 9 * shard[1] // (c_in // shard[1]) // 1024 >= _pd.NSLICE_ROUND0_MODEL_MIN_BYTES // 1024
++    )
++    if model:
++        # The model moves the readers whose DRAM read paths the senders' rows share (res5.0: five of eight).
++        assert readers[0] != readers[1], readers
++    assert torch.equal(out_model, out_senders)
++    expected = _reference(torch_input, torch_weight, torch_bias, H, W, p, s, d, True)
++    assert_with_pcc(expected, out_model, PCC[ttnn.bfloat8_b])

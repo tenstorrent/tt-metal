@@ -1,0 +1,102 @@
+{
+ "defaults": {
+  "SPARE_FILL": "reader",
+  "KSPLIT_WRITER_WINDOW": null,
+  "FILL_FAST_ADDR": false,
+  "SPARE_FILL_EARLY": false,
+  "HOST_FILL": false,
+  "FORCE_TILE_FILL_SPLIT": false
+ },
+ "variants": {
+  "writer": {
+   "SPARE_FILL": "writer"
+  },
+  "writer8": {
+   "SPARE_FILL": "writer",
+   "KSPLIT_WRITER_WINDOW": 8
+  },
+  "half": {
+   "SPARE_FILL": "half"
+  },
+  "half8": {
+   "SPARE_FILL": "half",
+   "KSPLIT_WRITER_WINDOW": 8
+  },
+  "fa": {
+   "FILL_FAST_ADDR": true
+  },
+  "fa_half": {
+   "FILL_FAST_ADDR": true,
+   "SPARE_FILL": "half"
+  },
+  "fa_writer": {
+   "FILL_FAST_ADDR": true,
+   "SPARE_FILL": "writer"
+  },
+  "fa_writer8": {
+   "FILL_FAST_ADDR": true,
+   "SPARE_FILL": "writer",
+   "KSPLIT_WRITER_WINDOW": 8
+  },
+  "half_e": {
+   "SPARE_FILL": "half",
+   "SPARE_FILL_EARLY": true
+  },
+  "half_e8": {
+   "SPARE_FILL": "half",
+   "SPARE_FILL_EARLY": true,
+   "KSPLIT_WRITER_WINDOW": 8
+  },
+  "writer_e8": {
+   "SPARE_FILL": "writer",
+   "SPARE_FILL_EARLY": true,
+   "KSPLIT_WRITER_WINDOW": 8
+  },
+  "fa_half_e8": {
+   "FILL_FAST_ADDR": true,
+   "SPARE_FILL": "half",
+   "SPARE_FILL_EARLY": true,
+   "KSPLIT_WRITER_WINDOW": 8
+  },
+  "hf": {
+   "HOST_FILL": true
+  },
+  "hf_half": {
+   "HOST_FILL": true,
+   "SPARE_FILL": "half",
+   "KSPLIT_WRITER_WINDOW": 8
+  },
+  "hf_writer": {
+   "HOST_FILL": true,
+   "SPARE_FILL": "writer",
+   "KSPLIT_WRITER_WINDOW": 8
+  },
+  "hf_ct": {
+   "HOST_FILL": true,
+   "FORCE_TILE_FILL_SPLIT": true
+  },
+  "base_ct": {
+   "FORCE_TILE_FILL_SPLIT": true
+  }
+ },
+ "grad_variants": {
+  "grad_nosplit": {
+   "SPARE_SPLIT_FILL": false
+  },
+  "grad_off": {
+   "BLOCK_HOST_FILL": false
+  },
+  "grad_emptysplit": {},
+  "grad_quarter": {},
+  "grad_w4": {
+   "HOST_FILL_WRITER_WINDOW": 4
+  },
+  "grad_nogrid": {
+   "SPLIT_FILL_MIN_BYTES": 1073741824
+  },
+  "grad_off_nogrid": {
+   "BLOCK_HOST_FILL": false,
+   "SPLIT_FILL_MIN_BYTES": 1073741824
+  }
+ }
+}

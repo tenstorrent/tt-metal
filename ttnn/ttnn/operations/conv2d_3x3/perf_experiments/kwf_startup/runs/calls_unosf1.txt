@@ -1,0 +1,12 @@
+res2 base 0
+res2 cand_nosf 0
+res3x base 0
+res3x cand_nosf 0
+res2 cand_nosf 1
+res2 base 1
+res3x cand_nosf 1
+res3x base 1
+res2 base 2
+res2 cand_nosf 2
+res3x base 2
+res3x cand_nosf 2

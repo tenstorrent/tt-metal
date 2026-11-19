@@ -1,0 +1,9 @@
+res2 all5 0
+res2 all5_noearly 0
+res2 cand 0
+ch1 all5 0
+ch1 all5_noearly 0
+ch1 cand 0
+res3x all5 0
+res3x all5_noearly 0
+res3x cand 0

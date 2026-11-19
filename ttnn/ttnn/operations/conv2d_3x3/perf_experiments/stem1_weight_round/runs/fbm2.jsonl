@@ -1,0 +1,2 @@
+{"case": "g:height:128x256x8x64:s2:p1:d1:b:relu", "variant": "base", "blocking": {"bm": 1, "forced": true}, "servers": false, "pcc": 0.9998241251041721, "pcc_threshold": 0.996, "mae": 0.06617167592048645, "max_abs": 0.9559288024902344, "finite": true, "out_sha": "1529b20432186451"}
+{"case": "g:height:128x256x8x64:s2:p1:d1:b:relu", "variant": "grad", "blocking": {"bm": 1, "forced": true}, "servers": false, "pcc": 0.9998241251041721, "pcc_threshold": 0.996, "mae": 0.06617167592048645, "max_abs": 0.9559288024902344, "finite": true, "out_sha": "1529b20432186451"}

@@ -1,0 +1,98 @@
+diff -ruN a/tests/ttnn/unit_tests/operations/conv2d_3x3/test_conv2d_3x3_block_sharded.py b/tests/ttnn/unit_tests/operations/conv2d_3x3/test_conv2d_3x3_block_sharded.py
+--- a/tests/ttnn/unit_tests/operations/conv2d_3x3/test_conv2d_3x3_block_sharded.py	2026-11-19 22:45:59.037840399 +0000
++++ b/tests/ttnn/unit_tests/operations/conv2d_3x3/test_conv2d_3x3_block_sharded.py	2026-11-19 22:48:41.514148751 +0000
+@@ -16,6 +16,8 @@
+   owners store their finished tiles to output shards on other cores.
+ - spare-column groups: more M-groups than grid rows, transposed into the device columns past the shard grid, their
+   weight rounds forwarded from the column streams.
++- host-planned fill: each core's slab reads planned on the host (split cores' writer part issued at kernel start, the
++  spare members' upper half on NoC1, a short last slice's padding tiles zeroed), bit-identical to the device plan.
+ """
+ 
+ import importlib
+@@ -544,3 +546,85 @@
+     assert torch.equal(out_placed, out_interleaved)
+     expected = _reference(torch_input, torch_weight, torch_bias, H, W, p, s, d, True)
+     assert_with_pcc(expected, out_placed, PCC[ttnn.bfloat8_b])
++
++
++HOST_FILL_CASES = [
++    # res4.0: stride 2 (the S2_TAPS prelude's own ring), 13 groups of 5 (3 spare columns): spare members split on NoC1.
++    pytest.param(((64, 128, 256), 256, 1, 2, 1), (1024, 32), ttnn.ShardOrientation.ROW_MAJOR, id="res4_0_s2"),
++    # res5.1: grid rows that read >= 8 KB from higher shards split as before, and the spare members split too.
++    pytest.param(((32, 64, 512), 512, 4, 1, 4), (224, 64), ttnn.ShardOrientation.ROW_MAJOR, id="res5_1"),
++    # 2 slices, d = 8: 6 spare columns of 2 members, C_out 96 (a short last N-slice).
++    pytest.param(((32, 64, 64), 96, 8, 1, 8), (256, 32), ttnn.ShardOrientation.ROW_MAJOR, id="k2_d8_co96"),
++    # COL_MAJOR: the owner shards run down x, the spare groups along the rows below the shard grid.
++    pytest.param(((32, 64, 64), 64, 1, 1, 1), (256, 32), ttnn.ShardOrientation.COL_MAJOR, id="k2_col_major"),
++    # aspp.convs.3: 11 slices, the last one short (2 of 3 tiles): both RISCs read its real tiles and zero the rest.
++    pytest.param(((32, 64, 1024), 256, 18, 1, 18), (256, 96), ttnn.ShardOrientation.ROW_MAJOR, id="aspp3_short_slice"),
++]
++
++
++@pytest.mark.parametrize("case_hw,shard,orientation", HOST_FILL_CASES)
++def test_conv2d_3x3_block_sharded_host_fill(case_hw, shard, orientation, device, monkeypatch):
++    """BLOCK_HOST_FILL: the host plans every core's slab reads (owner core, shard offset, slab row, rows); a split
++    core's writer (grid rows reading >= 8 KB from higher shards, spare-column members: the upper half of their slab)
++    reads its part on NoC1 from kernel start. Bit-identical to the device-planned fill (BLOCK_HOST_FILL = False), and
++    the plan is taken, with writer reads on some core."""
++    torch.manual_seed(13)
++    grid = device.compute_with_storage_grid_size()
++    if (grid.x, grid.y) != (11, 10):
++        pytest.skip("pinned to the 11 x 10 grid")
++    (H, W, c_in), c_out, p, s, d = case_hw
++    dtype, layout = ttnn.bfloat8_b, ttnn.TILE_LAYOUT
++    config = _block_config(H * W, c_in, layout, shard, orientation=orientation)
++    torch_weight = torch.randn(c_out, c_in, 3, 3).to(torch.bfloat16)
++    torch_bias = torch.randn(c_out).to(torch.bfloat16)
++    torch_input = torch.randn(1, 1, H * W, c_in).to(torch.bfloat16)
++    real_args = _pd._host_fill_args
++    writer_batches = []
++
++    def recording(*args, **kwargs):
++        reader, writer = real_args(*args, **kwargs)
++        writer_batches.append(writer[0])
++        return reader, writer
++
++    monkeypatch.setattr(_pd, "_host_fill_args", recording)
++    outputs = {}
++    for host_fill in (True, False):
++        monkeypatch.setattr(_pd, "BLOCK_HOST_FILL", host_fill)
++        device.disable_and_clear_program_cache()
++        writer_batches.clear()
++        kwargs = dict(
++            stride=s,
++            padding=p,
++            dilation=d,
++            input_dtype=dtype,
++            input_layout=layout,
++            weight_dtype=ttnn.bfloat8_b,
++            input_memory_config=config,
++            device=device,
++        )
++        tt_weight = prepare_conv2d_weights(torch_weight, **kwargs)
++        tt_bias = prepare_conv2d_bias(torch_bias, **kwargs)
++        tt_input = ttnn.from_torch(torch_input, dtype=dtype, layout=layout, device=device, memory_config=config)
++        tt_output = conv2d_3x3(
++            tt_input,
++            tt_weight,
++            input_height=H,
++            input_width=W,
++            bias=tt_bias,
++            padding=p,
++            stride=s,
++            dilation=d,
++            activation="relu",
++            compute_kernel_config=ttnn.ComputeConfigDescriptor(
++                math_fidelity=ttnn.MathFidelity.LoFi, fp32_dest_acc_en=True, math_approx_mode=False
++            ),
++        )
++        assert tt_output.memory_config().shard_spec.grid == config.shard_spec.grid
++        outputs[host_fill] = ttnn.to_torch(tt_output).float()
++        if host_fill:
++            assert writer_batches and max(writer_batches) > 0, "host-planned fill not taken, or no core split"
++        else:
++            assert not writer_batches
++    assert torch.equal(outputs[True], outputs[False]), "the host-planned fill differs from the device-planned one"
++    expected = _reference(torch_input, torch_weight, torch_bias, H, W, p, s, d, True)
++    assert_with_pcc(expected, outputs[True], PCC[ttnn.bfloat8_b])

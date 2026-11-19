@@ -1,0 +1,6 @@
+res2 all5 0
+res2 all5_nosf 0
+res2 all5_nora 0
+ch1 all5 0
+ch1 all5_nosf 0
+ch1 all5_nora 0

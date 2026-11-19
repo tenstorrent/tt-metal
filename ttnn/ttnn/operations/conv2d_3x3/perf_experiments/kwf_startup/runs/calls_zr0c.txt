@@ -1,0 +1,15 @@
+res2 base 0
+res2 r0_early_sf_noack 0
+res2 all5 0
+res2 readall 0
+res2 noack_readall 0
+ch1 base 0
+ch1 r0_early_sf_noack 0
+ch1 all5 0
+ch1 readall 0
+ch1 noack_readall 0
+res3x base 0
+res3x r0_early_sf_noack 0
+res3x all5 0
+res3x readall 0
+res3x noack_readall 0

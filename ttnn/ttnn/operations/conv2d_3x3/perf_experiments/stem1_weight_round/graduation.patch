@@ -1,0 +1,660 @@
+diff --git a/ttnn/ttnn/operations/conv2d_3x3/conv2d_3x3_program_descriptor.py b/ttnn/ttnn/operations/conv2d_3x3/conv2d_3x3_program_descriptor.py
+--- a/ttnn/ttnn/operations/conv2d_3x3/conv2d_3x3_program_descriptor.py
++++ b/ttnn/ttnn/operations/conv2d_3x3/conv2d_3x3_program_descriptor.py
+@@ -260,6 +260,11 @@
+ # whole slab, so there is no fill to hide and the chunked fill costs time (bm 1, 32x34x16 -> 64: +6%; 64x64x8 -> 32:
+ # +28%; bm 2 at 2-row subblocks, 64x64x16 -> 64: +3.5%; bm 3 at 1-row subblocks, 128x256x8 -> 64: +0.3%).
+ SD_STREAM_MIN_SUBBLOCK_ROWS = 3
++# Slab-direct round 0 over NoC0: with a fixed-sender weight multicast (no weight servers), the sender core's reader
++# multicasts the first weight round on NoC0 (kernels/conv2d_3x3_reader.cpp, SD_R0_NOC0), which the forward fill of the
++# critical cores (the writers' NoC1 reads of higher shards) does not use; its writer reads the round from DRAM first
++# thing at kernel entry. stem.conv1 @ LoFi, unzoned, 3 alternating pairs: 10.27 -> 9.83 us (the NoC1 multicast slowed
++# the last grid row's forward fill by ~0.4 us; a diagnostic with no multicast at all: 9.80 us).
+ 
+ 
+ # N-slice-outer K split (R4, the default when its resident in0 fits L1): the core tilizes its whole K of in0 once,
+@@ -2363,6 +2368,13 @@
+     ):
+         slot_ack_defines = [("SERVER_SLOT_ACKS", str(len(sem_ids)))]
+         sem_ids += tuple(range(len(sem_ids), len(sem_ids) + b.weight_depth - 1))
++    # Slab-direct round 0 over NoC0 (SD_R0_NOC0): the sender's ack count, every participant's ready flag, the sender's
++    # local go / source-read state.
++    sd_r0_noc0 = slab_direct and weight_servers is None and mcast_receivers is not None
++    if sd_r0_noc0:
++        assert len(sem_ids) + 3 <= MAX_SEMAPHORES, sem_ids
++    sd_r0_sems = tuple(range(len(sem_ids), len(sem_ids) + 3)) if sd_r0_noc0 else ()
++    sem_ids += sd_r0_sems
+     k_padded = g.tensor_kkh_tiles * TILE > 3 * g.c_in_p
+     # Work-balanced M split (g.m_ranges): the N-slice prelude, walk and forwarding sized by each M-block's valid
+     # tile-rows (the split row gather keeps its CT unit sequence), the fill / untilize by the block's own slab rows where
+@@ -2673,6 +2685,21 @@
+         for c in shard_cores(input_tensor):
+             v = device.worker_core_from_logical_core(c)
+             kwf_shard_xy.append((v.x, v.y))
++    # SD_R0_NOC0: the sender's reader args (the reader's SD_R0_ARG; 0 on every other core): role, the receivers' ack
++    # count, the round's bytes, the rectangles, and per rectangle its NoC0 multicast start (low corner), end (high
++    # corner) and destination count (the sender excluded).
++    sd_r0_arg = None
++    sd_r0_args = []
++    if sd_r0_noc0:
++        sender = core_list[0]
++        rects = list(mcast_receivers.ranges())
++        inside = [r.start.x <= sender.x <= r.end.x and r.start.y <= sender.y <= r.end.y for r in rects]
++        sd_r0_args = [1, mcast_receivers.num_cores() - sum(inside)]
++        sd_r0_args += [(bk + int(sd_bias_in_weights)) * bn * g.weight_tile_bytes, len(rects)]
++        for rect, ins in zip(rects, inside):
++            lo = device.worker_core_from_logical_core(rect.start)
++            hi = device.worker_core_from_logical_core(rect.end)
++            sd_r0_args += [lo.x, lo.y, hi.x, hi.y, rect.grid_size().x * rect.grid_size().y - int(ins)]
+     for core, m_index, col in work:
+         m_tile_start, actual_m_tiles = m_ranges[m_index]
+         num_m_blocks_this_core = m_blocks_per_index[m_index]
+@@ -2706,7 +2733,7 @@
+         reader_cores.append(core)
+         # rt_valid: each M-block's slab rows (reader args after the split flag, compute args after the masks).
+         slab_rows_per_block = rt_slab_rows(m_tile_start, actual_m_tiles, num_m_blocks_this_core) if rt_valid else []
+-        reader_rt[core.x][core.y] = (
++        reader_args = (
+             [
+                 input_addr,
+                 m_tile_start,
+@@ -2722,6 +2749,11 @@
+             + slab_rows_per_block
+             + kwf_reader_fill
+         )
++        if sd_r0_noc0:
++            assert sd_r0_arg in (None, len(reader_args))
++            sd_r0_arg = len(reader_args)
++            reader_args += sd_r0_args if (core.x, core.y) == (core_list[0].x, core_list[0].y) else [0]
++        reader_rt[core.x][core.y] = reader_args
+         compute_args = [num_m_blocks_this_core, int(out_valid_tiles > 0), col]
+         if g.k_split and b.nslice and not kwf:
+             # The N-slice ring walk's kernel-row masks (args 3..: no ring slab under a K split).
+@@ -2849,6 +2881,15 @@
+         ]
+         if sd_bias_in_weights:
+             _sd_dm_defines += [("SD_BIAS_IN_WEIGHTS", "1")]
++        if sd_r0_noc0:
++            _sd_dm_defines += [
++                ("SD_R0_NOC0", "1"),
++                ("SD_R0_ACK_SEM", str(sd_r0_sems[0])),
++                ("SD_R0_READY_SEM", str(sd_r0_sems[1])),
++                ("SD_R0_LOCAL_SEM", str(sd_r0_sems[2])),
++                ("SD_R0_ARG", str(sd_r0_arg)),
++                ("SD_R0_CB_WEIGHTS", str(CB_WEIGHTS)),
++            ]
+         if SD_STREAM_CHUNK_PX > 0 and bm // b.out_subblock_h >= SD_STREAM_MIN_SUBBLOCK_ROWS:
+             _sd_dm_defines += [
+                 ("SD_STREAM", "1"),
+diff --git a/ttnn/ttnn/operations/conv2d_3x3/kernels/conv2d_3x3_reader.cpp b/ttnn/ttnn/operations/conv2d_3x3/kernels/conv2d_3x3_reader.cpp
+--- a/ttnn/ttnn/operations/conv2d_3x3/kernels/conv2d_3x3_reader.cpp
++++ b/ttnn/ttnn/operations/conv2d_3x3/kernels/conv2d_3x3_reader.cpp
+@@ -118,6 +118,15 @@
+ // that push: its packs overwrite the input ring the copy reads, and it reads the gaps) and waits for compute's one-page
+ // token on cb_src_table before it pops the slab.
+ //
++// Slab-direct round 0 on NoC0 (the descriptor's SD_R0_NOC0: slab-direct with a fixed-sender weight multicast and no
++// weight servers): on the channel's sender this reader multicasts the first weight round, which its writer read from
++// DRAM at kernel entry and bias-split, to the channel's rectangles on NoC0, polled from the fill loops (r0_try). The
++// writers' NoC1 multicast of it ran beside, and slowed, the forward fill of the cores whose slab lies mostly in higher
++// shards (stem.conv1's last grid row: the 108-core split drifts past the 110 input shards), and those cores bound the
++// op. Its own handshake (receivers ack at their kernel start, a ready flag per receiver), so the channel's later rounds
++// keep theirs. Measured (Blackhole p150b, stem.conv1 512x1024x8 -> 64 s2, LoFi, bias + ReLU, unzoned, 3 alternating
++// pairs): 10.27 -> 9.83 us; the same round with no multicast at all (a diagnostic, stale weights) 9.80 us.
++//
+ // Lanes C_in..C_in_p of a slab pixel are not data (DRAM page padding or tile padding) and may hold
+ // NaN. The gather copies only the C_in real channels of each tap; the lanes of an im2col row are
+ // zero either from a one-time zeroing of cb_im2col_rm (when every K-block has the same column
+@@ -290,6 +299,54 @@
+     [[maybe_unused]] const bool split_here = tile_fill_split && get_arg_val<uint32_t>(split_flag_arg) != 0;
+     // rt_valid: M-block m's slab rows (a whole number of untilize batches) at slab_rows_arg + m.
+     constexpr uint32_t slab_rows_arg = split_flag_arg + 1;
++#ifdef SD_R0_NOC0
++    // Slab-direct round 0 on NoC0 (see the file comment). Args at SD_R0_ARG: 1 on the weight multicast's sender (0
++    // elsewhere), then the receivers' ack count, the round's bytes, the rectangles, and per rectangle its NoC0
++    // multicast start x, y, end x, y and destination count (the sender excluded). r0_try: go (this core's writer set
++    // SD_R0_LOCAL_SEM to 1: the round landed and its bias is split) and every receiver's ack in SD_R0_ACK_SEM, then the
++    // round and, linked behind it, SD_R0_READY_SEM = 1 to every rectangle; SD_R0_LOCAL_SEM = 2 once the source was
++    // read.
++    const bool r0_sender = get_arg_val<uint32_t>(SD_R0_ARG) != 0;
++    uint32_t r0_state = r0_sender ? 0 : 2;
++    auto r0_try = [&]() {
++        if (r0_state == 2) {
++            return;
++        }
++        volatile tt_l1_ptr uint32_t* r0_local =
++            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(SD_R0_LOCAL_SEM));
++        if (r0_state == 0) {
++            invalidate_l1_cache();
++            if (*r0_local != 1 || *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(SD_R0_ACK_SEM)) <
++                                      get_arg_val<uint32_t>(SD_R0_ARG + 1)) {
++                return;
++            }
++            MaybeDeviceZoneScope("reader_r0_mcast");
++            const uint32_t src = get_write_ptr(SD_R0_CB_WEIGHTS);
++            const uint32_t bytes = get_arg_val<uint32_t>(SD_R0_ARG + 2);
++            const uint32_t ready = get_semaphore(SD_R0_READY_SEM);
++            *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(ready) = 1;
++            for (uint32_t r = 0, a = SD_R0_ARG + 4; r < get_arg_val<uint32_t>(SD_R0_ARG + 3); ++r, a += 5) {
++                const uint32_t cnt = get_arg_val<uint32_t>(a + 4);
++                if (cnt == 0) {
++                    continue;
++                }
++                const uint32_t x0 = get_arg_val<uint32_t>(a);
++                const uint32_t y0 = get_arg_val<uint32_t>(a + 1);
++                const uint32_t x1 = get_arg_val<uint32_t>(a + 2);
++                const uint32_t y1 = get_arg_val<uint32_t>(a + 3);
++                noc_async_write_multicast(src, get_noc_multicast_addr(x0, y0, x1, y1, src), bytes, cnt, true);
++                noc_semaphore_set_multicast(ready, get_noc_multicast_addr(x0, y0, x1, y1, ready), cnt, false);
++            }
++            r0_state = 1;
++        }
++        if (r0_state == 1 && ncrisc_noc_nonposted_writes_sent(noc_index)) {
++            *r0_local = 2;
++            r0_state = 2;
++        }
++    };
++#else
++    auto r0_try = [&]() {};
++#endif
+ 
+     constexpr uint32_t pixel_bytes = c_in_p * ELEM_BYTES;
+     constexpr int32_t num_in_px = input_height * input_width;
+@@ -938,6 +995,7 @@
+                     uint32_t pushed = 0;
+                     bool gaps_landed = false;
+                     auto advance = [&]() {
++                        r0_try();
+                         sd_stream.poll(reads.noc.get_noc_id());
+                         uint32_t target = sd_stream.landed;
+                         if (sd_stream.done()) {
+@@ -964,6 +1022,7 @@
+                         read_rows(lo, hi, slab_l1 + px * pixel_bytes);
+                     };
+                     while (!sd_stream.issued()) {
++                        r0_try();
+                         if (!sd_stream.issue_one(read_chunk)) {
+                             advance();
+                         }
+@@ -981,11 +1040,16 @@
+                 reads.begin(1);
+                 SdGeom::fill_pieces<band_last_tap>(
+                     o_first, o_end, [&](uint32_t lo, uint32_t hi, uint32_t off) { read_rows(lo, hi, slab_l1 + off); });
++                while (!ncrisc_noc_read_with_transaction_id_flushed(reads.noc.get_noc_id(), 1)) {
++                    r0_try();
++                }
+                 reads.wait(1);
+                 reads.wait(2);  // the slot gaps (kernel start)
+                 if constexpr (slab_split) {
+                     MaybeDeviceZoneScope("reader_fill_fwd_wait");
+-                    Semaphore<>(slab_fwd_done_sem_id).wait_min(m_block_idx + 1);
++                    while (Semaphore<>(slab_fwd_done_sem_id).value() < m_block_idx + 1) {
++                        r0_try();
++                    }
+                 }
+                 cb_push_back(cb_halo_slab, SD_SLAB_PX);
+                 continue;
+@@ -1695,6 +1759,12 @@
+         }
+     }
+     dataflow_kernel_lib::set_read_trid(reads.noc, 0);
++#ifdef SD_R0_NOC0
++    while (r0_state != 2) {
++        r0_try();
++    }
++    noc_async_write_barrier();
++#endif
+     if constexpr (nslice_outer) {
+         noc_async_atomic_barrier();
+     }
+diff --git a/ttnn/ttnn/operations/conv2d_3x3/kernels/conv2d_3x3_writer.cpp b/ttnn/ttnn/operations/conv2d_3x3/kernels/conv2d_3x3_writer.cpp
+--- a/ttnn/ttnn/operations/conv2d_3x3/kernels/conv2d_3x3_writer.cpp
++++ b/ttnn/ttnn/operations/conv2d_3x3/kernels/conv2d_3x3_writer.cpp
+@@ -254,6 +254,119 @@
+     const uint32_t weight_tile_bytes = get_tile_size(cb_weights);
+     const auto weights = TensorAccessor(weight_args, weight_addr, weight_tile_bytes);
+ 
++    // ---- stream_weight_blocks: K-block tiles k-major, n-fastest (matmul in1 layout).
++    const uint32_t total_k_blocks = num_m_blocks_this_core * num_k_blocks;
++    uint32_t k_blocks_issued = 0;
++    // Slab-direct round 0 (sd_w0): its DRAM reader (the multicast sender, or a core outside the channel) issues it
++    // under transaction id 8 at kernel entry (below), a receiver acks it before the fill; it completes (sd_w0_try) the
++    // moment it is in.
++    constexpr uint32_t TRID_SD_WEIGHTS = 8;
++    [[maybe_unused]] bool sd_w_issued_early = false;
++    [[maybe_unused]] bool sd_acked_early = false;
++    [[maybe_unused]] uint32_t sd_w0 = 0;  // 0: round 0 not taken early, 1: pending, 2: pushed
++    auto finish_weight_k_block = [&](uint32_t l1) {
++#if defined(SD_BIAS_IN_WEIGHTS) && defined(SD_BIAS_SPLIT)
++        const uint32_t sd_bias_l1 = l1 + block_k_tiles * block_n_tiles * weight_tile_bytes;
++        invalidate_l1_cache();
++        for (uint32_t n = 0; n < out_valid_tiles; ++n) {
++#if SD_BIAS_BF16
++            conv2d_3x3::slab_direct::split_bias_tile_bf16(sd_bias_l1 + n * weight_tile_bytes);
++#else
++            conv2d_3x3::slab_direct::split_bias_tile_bf8(sd_bias_l1 + n * weight_tile_bytes);
++#endif
++        }
++#endif
++    };
++    auto read_weight_k_block = [&](uint32_t l1, bool issue_only = false) {
++        [[maybe_unused]] const uint32_t l1_start = l1;
++#ifdef CONV2D_3X3_KW_FOLD
++        // kw-fold: round s holds column kw of the output columns [n0, n0 + rw): W'[kh Ct + c, kw N + n0 + n] =
++        // prepared tile ((kh * 3 + kw) Ct + c, n0 + n), (kh, c)-major, n-fastest (block_k_tiles = Ct, block_n_tiles =
++        // 3 rw: the same round size). rw is one n-group (K-blocked sub-rounds) or all of C_out (whole-K, one n-group
++        // of rounds); round s is n-group s / 3, kw = (1, 0, 2)[s % 3] (kw_fold.hpp KW_ROUND_ORDER: Q_1 is the
++        // overwrite the other two accumulate onto).
++        constexpr uint32_t kw_round_order[3] = {1, 0, 2};
++        constexpr uint32_t kwf_rw = block_n_tiles / 3;
++        const uint32_t s = k_blocks_issued % num_k_blocks;
++        const uint32_t kw = kw_round_order[s % 3];
++        const uint32_t n0 = (s / 3) * kwf_rw;
++#if KWF_FUSED_GW
++        // Fused side rounds (kw_fold.hpp): rounds 1 and 2 hold the kw = 0 | 2 pair interleaved, per (kh, c) row of
++        // 2 rw tiles: each gw-wide n-group's kw = 0 columns, then its kw = 2 columns. Round 0 (kw = 1) is unchanged.
++        if (s % 3 != 0) {
++            constexpr uint32_t gwf = KWF_FUSED_GW;
++            constexpr uint32_t frow = 2 * kwf_rw;
++            constexpr uint32_t round = 3 * block_k_tiles * kwf_rw;
++            const uint32_t f0 = (s % 3 - 1) * round;
++            for (uint32_t f = f0; f < f0 + round; ++f, l1 += weight_tile_bytes) {
++                const uint32_t kc = f / frow;  // kh * Ct + c
++                const uint32_t j = f - kc * frow;
++                const uint32_t grp = j / (2 * gwf);
++                const uint32_t jj = j - grp * 2 * gwf;
++                const uint32_t kh = kc / block_k_tiles;
++                const uint32_t kwf = jj < gwf ? 0 : 2;
++                const uint32_t n = grp * gwf + (jj < gwf ? jj : jj - gwf);
++                noc_async_read_page(
++                    ((kh * 3 + kwf) * block_k_tiles + (kc - kh * block_k_tiles)) * tensor_n_tiles + n0 + n,
++                    weights,
++                    l1);
++            }
++        } else
++#endif
++        {
++            for (uint32_t kh = 0; kh < 3; ++kh) {
++                for (uint32_t c = 0; c < block_k_tiles; ++c) {
++                    const uint32_t row_page = ((kh * 3 + kw) * block_k_tiles + c) * tensor_n_tiles + n0;
++                    for (uint32_t n = 0; n < kwf_rw; ++n, l1 += weight_tile_bytes) {
++                        noc_async_read_page(row_page + n, weights, l1);
++                    }
++                }
++            }
++        }
++#else
++        const uint32_t k_tile0 = (k_blocks_issued % num_k_blocks) * block_k_tiles;
++        for (uint32_t k = 0; k < block_k_tiles; ++k) {
++            const uint32_t row_page = (weight_k_tile_start + k_tile0 + k) * tensor_n_tiles + n_tile_start;
++            for (uint32_t n = 0; n < block_n_tiles; ++n, l1 += weight_tile_bytes) {
++                noc_async_read_page(row_page + n, weights, l1);
++            }
++        }
++#endif
++#ifdef SD_BIAS_IN_WEIGHTS
++        // The round's tail: the bias tiles (same format and page size as the weights), rewritten after they landed.
++        {
++            const auto bias = TensorAccessor(bias_args, bias_addr, weight_tile_bytes);
++            for (uint32_t n = 0; n < sd_bias_round_tiles; ++n, l1 += weight_tile_bytes) {
++                if (n < out_valid_tiles) {
++                    noc_async_read_page(out_n_tile_start + n, bias, l1);
++                }
++            }
++        }
++#endif
++        if (issue_only) {
++            return;
++        }
++        noc_async_read_barrier();
++        finish_weight_k_block(l1_start);
++    };
++
++#ifdef CONV2D_3X3_SLAB_DIRECT
++    // Slab-direct round 0, DRAM half, first thing at kernel entry (the rest of the writer's set-up took ~0.5 us before
++    // the old issue point): the round's DRAM reader reserves its slot and issues the reads under TRID_SD_WEIGHTS; a
++    // multicast receiver acks before its fill (below). The role is read off the channel's runtime metadata, before the
++    // pipes exist.
++    if (num_m_blocks_this_core > 0 && !server_receiver &&
++        (!weight_mcast.can_receive() || (weight_mcast.can_send() && weight_mcast.should_send(0)))) {
++        MaybeDeviceZoneScope("writer_sd_weight_issue");
++        Noc w0_noc;
++        cb_reserve_back(cb_weights, weight_k_block_tiles);
++        dataflow_kernel_lib::set_read_trid(w0_noc, TRID_SD_WEIGHTS);
++        read_weight_k_block(get_write_ptr(cb_weights), true);
++        dataflow_kernel_lib::set_read_trid(w0_noc, 0);
++        sd_w_issued_early = true;
++    }
++#endif
++
+     // ---- prefetch_bias: the core's output columns; stays fronted in cb_bias for the whole kernel. Slots
+     // past the last C_out tile (a short last N-slice) only feed output padding columns. With the split slab fill
+     // it follows the first block's slab reads, which the reader waits on before it can gather.
+@@ -724,100 +837,6 @@
+         }
+     }
+ 
+-    // ---- stream_weight_blocks: K-block tiles k-major, n-fastest (matmul in1 layout).
+-    const uint32_t total_k_blocks = num_m_blocks_this_core * num_k_blocks;
+-    uint32_t k_blocks_issued = 0;
+-    // Slab-direct early round 0: the DRAM reader issues round 0 under transaction id 8 before the
+-    // fill, and completes it (finish_weight_k_block) in its issue_weight_k_block.
+-    constexpr uint32_t TRID_SD_WEIGHTS = 8;
+-    [[maybe_unused]] bool sd_w_issued_early = false;
+-    [[maybe_unused]] bool sd_acked_early = false;
+-    auto finish_weight_k_block = [&](uint32_t l1) {
+-#if defined(SD_BIAS_IN_WEIGHTS) && defined(SD_BIAS_SPLIT)
+-        const uint32_t sd_bias_l1 = l1 + block_k_tiles * block_n_tiles * weight_tile_bytes;
+-        invalidate_l1_cache();
+-        for (uint32_t n = 0; n < out_valid_tiles; ++n) {
+-#if SD_BIAS_BF16
+-            conv2d_3x3::slab_direct::split_bias_tile_bf16(sd_bias_l1 + n * weight_tile_bytes);
+-#else
+-            conv2d_3x3::slab_direct::split_bias_tile_bf8(sd_bias_l1 + n * weight_tile_bytes);
+-#endif
+-        }
+-#endif
+-    };
+-    auto read_weight_k_block = [&](uint32_t l1, bool issue_only = false) {
+-        [[maybe_unused]] const uint32_t l1_start = l1;
+-#ifdef CONV2D_3X3_KW_FOLD
+-        // kw-fold: round s holds column kw of the output columns [n0, n0 + rw): W'[kh Ct + c, kw N + n0 + n] =
+-        // prepared tile ((kh * 3 + kw) Ct + c, n0 + n), (kh, c)-major, n-fastest (block_k_tiles = Ct, block_n_tiles =
+-        // 3 rw: the same round size). rw is one n-group (K-blocked sub-rounds) or all of C_out (whole-K, one n-group
+-        // of rounds); round s is n-group s / 3, kw = (1, 0, 2)[s % 3] (kw_fold.hpp KW_ROUND_ORDER: Q_1 is the
+-        // overwrite the other two accumulate onto).
+-        constexpr uint32_t kw_round_order[3] = {1, 0, 2};
+-        constexpr uint32_t kwf_rw = block_n_tiles / 3;
+-        const uint32_t s = k_blocks_issued % num_k_blocks;
+-        const uint32_t kw = kw_round_order[s % 3];
+-        const uint32_t n0 = (s / 3) * kwf_rw;
+-#if KWF_FUSED_GW
+-        // Fused side rounds (kw_fold.hpp): rounds 1 and 2 hold the kw = 0 | 2 pair interleaved, per (kh, c) row of
+-        // 2 rw tiles: each gw-wide n-group's kw = 0 columns, then its kw = 2 columns. Round 0 (kw = 1) is unchanged.
+-        if (s % 3 != 0) {
+-            constexpr uint32_t gwf = KWF_FUSED_GW;
+-            constexpr uint32_t frow = 2 * kwf_rw;
+-            constexpr uint32_t round = 3 * block_k_tiles * kwf_rw;
+-            const uint32_t f0 = (s % 3 - 1) * round;
+-            for (uint32_t f = f0; f < f0 + round; ++f, l1 += weight_tile_bytes) {
+-                const uint32_t kc = f / frow;  // kh * Ct + c
+-                const uint32_t j = f - kc * frow;
+-                const uint32_t grp = j / (2 * gwf);
+-                const uint32_t jj = j - grp * 2 * gwf;
+-                const uint32_t kh = kc / block_k_tiles;
+-                const uint32_t kwf = jj < gwf ? 0 : 2;
+-                const uint32_t n = grp * gwf + (jj < gwf ? jj : jj - gwf);
+-                noc_async_read_page(
+-                    ((kh * 3 + kwf) * block_k_tiles + (kc - kh * block_k_tiles)) * tensor_n_tiles + n0 + n,
+-                    weights,
+-                    l1);
+-            }
+-        } else
+-#endif
+-        {
+-            for (uint32_t kh = 0; kh < 3; ++kh) {
+-                for (uint32_t c = 0; c < block_k_tiles; ++c) {
+-                    const uint32_t row_page = ((kh * 3 + kw) * block_k_tiles + c) * tensor_n_tiles + n0;
+-                    for (uint32_t n = 0; n < kwf_rw; ++n, l1 += weight_tile_bytes) {
+-                        noc_async_read_page(row_page + n, weights, l1);
+-                    }
+-                }
+-            }
+-        }
+-#else
+-        const uint32_t k_tile0 = (k_blocks_issued % num_k_blocks) * block_k_tiles;
+-        for (uint32_t k = 0; k < block_k_tiles; ++k) {
+-            const uint32_t row_page = (weight_k_tile_start + k_tile0 + k) * tensor_n_tiles + n_tile_start;
+-            for (uint32_t n = 0; n < block_n_tiles; ++n, l1 += weight_tile_bytes) {
+-                noc_async_read_page(row_page + n, weights, l1);
+-            }
+-        }
+-#endif
+-#ifdef SD_BIAS_IN_WEIGHTS
+-        // The round's tail: the bias tiles (same format and page size as the weights), rewritten after they landed.
+-        {
+-            const auto bias = TensorAccessor(bias_args, bias_addr, weight_tile_bytes);
+-            for (uint32_t n = 0; n < sd_bias_round_tiles; ++n, l1 += weight_tile_bytes) {
+-                if (n < out_valid_tiles) {
+-                    noc_async_read_page(out_n_tile_start + n, bias, l1);
+-                }
+-            }
+-        }
+-#endif
+-        if (issue_only) {
+-            return;
+-        }
+-        noc_async_read_barrier();
+-        finish_weight_k_block(l1_start);
+-    };
+-
+     Noc noc;
+     auto weight_sender = weight_mcast.optional_sender(noc);
+     auto weight_receiver = weight_mcast.optional_receiver(noc);
+@@ -828,7 +847,7 @@
+     // for the round's data-ready signal), serving the reader's fill hand-overs while it waits, so one slow core's
+     // weight round does not hold this core's untilize. Measured on sem res2.fuse_conv.1 @ LoFi: 138.6 us with the
+     // blocking receive vs 129.8 us polled (split TILE fill on both).
+-    [[maybe_unused]] auto receive_serving = [&](auto& wm, uint32_t round, bool acked = false) {
++    [[maybe_unused]] auto receive_serving = [&](auto& wm, uint32_t round) {
+         using WM = std::decay_t<decltype(wm)>;
+         // Dependent on WM, so a kernel without the split never instantiates the sender-coordinate reads.
+         if constexpr (WM::active && (tile_fill_split || slab_direct)) {
+@@ -838,12 +857,9 @@
+                 dataflow_kernel_lib::detail::
+                     positional_mcast_semaphore<ct_base, dataflow_kernel_lib::mcast_wire::DATA_READY>());
+             if constexpr (WM::pre_handshake) {
+-                if (!acked) {
+-                    Semaphore<>(
+-                        dataflow_kernel_lib::detail::
+-                            positional_mcast_semaphore<ct_base, dataflow_kernel_lib::mcast_wire::CONSUMER_READY>())
+-                        .up(noc, wm.sender_x(), wm.sender_y(), 1);
+-                }
++                Semaphore<>(dataflow_kernel_lib::detail::
++                                positional_mcast_semaphore<ct_base, dataflow_kernel_lib::mcast_wire::CONSUMER_READY>())
++                    .up(noc, wm.sender_x(), wm.sender_y(), 1);
+             }
+             if constexpr (WM::signal == dataflow_kernel_lib::DataReadySignal::Counter) {
+                 while (data_ready.value() < round + 1) {
+@@ -857,21 +873,6 @@
+             }
+         }
+     };
+-    // The receive's pre-handshake ack alone (slab-direct: round 0's slot is free at kernel start).
+-    [[maybe_unused]] auto ack_round = [&](auto& wm) {
+-        using WM = std::decay_t<decltype(wm)>;
+-        // Nested: an absent channel's type has no handshake members.
+-        if constexpr (WM::active && slab_direct) {
+-            if constexpr (WM::pre_handshake) {
+-                constexpr uint32_t ct_base = get_named_compile_time_arg_val("weight_mcast_ct_offset");
+-                Semaphore<>(dataflow_kernel_lib::detail::
+-                                positional_mcast_semaphore<ct_base, dataflow_kernel_lib::mcast_wire::CONSUMER_READY>())
+-                    .up(noc, wm.sender_x(), wm.sender_y(), 1);
+-                return true;
+-            }
+-        }
+-        return false;
+-    };
+     // prefetch_bias with the reads tagged and their completion polled while serving hand-overs: the bias is one DRAM
+     // page per output tile column that every core reads at kernel start, so it can take microseconds.
+     [[maybe_unused]] auto prefetch_bias_serving = [&]() {
+@@ -1120,13 +1121,38 @@
+ #else
+     [[maybe_unused]] const uint32_t server_rounds = total_k_blocks;
+ #endif
+-    // Round 0 issued early (slab-direct): its reads landed (serving the fill while they fly), then the bias split.
+-    [[maybe_unused]] auto finish_early_weights = [&](uint32_t l1) {
+-        MaybeDeviceZoneScope("writer_sd_weight_land");
+-        while (!ncrisc_noc_read_with_transaction_id_flushed(noc_index, TRID_SD_WEIGHTS)) {
+-            serve_fill();
++    // Slab-direct round 0, completed the moment it is in (polled from the forward-slab issue and the round-0 wait),
++    // into the slot reserved at kernel start; true once pushed. The DRAM reader: its reads landed, then the bias split,
++    // and on the multicast sender the go to this core's reader, which multicasts the round on NoC0 (SD_R0_NOC0, the
++    // reader's file comment). A receiver: the reader-multicast's ready flag.
++    [[maybe_unused]] auto sd_w0_try = [&]() -> bool {
++        if (sd_w0 != 1) {
++            return sd_w0 == 2;
+         }
+-        finish_weight_k_block(l1);
++        if (sd_w_issued_early) {
++            if (!ncrisc_noc_read_with_transaction_id_flushed(noc_index, TRID_SD_WEIGHTS)) {
++                return false;
++            }
++            finish_weight_k_block(get_write_ptr(cb_weights));
++#ifdef SD_R0_NOC0
++            if (weight_sender && weight_mcast.should_send(0)) {
++                *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(SD_R0_LOCAL_SEM)) = 1;
++            }
++#else
++            ASSERT(!(weight_sender && weight_mcast.should_send(0)));
++#endif
++        } else {
++#ifdef SD_R0_NOC0
++            invalidate_l1_cache();
++            if (*reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(SD_R0_READY_SEM)) != 1) {
++                return false;
++            }
++#endif
++        }
++        cb_push_back(cb_weights, weight_k_block_tiles);
++        ++k_blocks_issued;
++        sd_w0 = 2;
++        return true;
+     };
+     // Round 0 streamed (kw-fold under weight servers, KWF_ROUND0_STREAM = the server's chunks per round): its chunks
+     // pushed so far. Semaphore server_flag_sem_id + depth + j (after the bias flag), j >= 1, is the server's early flag
+@@ -1138,6 +1164,24 @@
+ #endif
+     [[maybe_unused]] uint32_t round0_pushed = 0;
+     auto issue_weight_k_block = [&]() {
++        if (sd_w0 == 1) {
++            // Slab-direct round 0 (taken early): wait for it, serving the fill.
++            MaybeDeviceZoneScope("writer_weight_fetch");
++            if (sd_w_issued_early) {
++                MaybeDeviceZoneScope("writer_sd_weight_land");
++                while (!sd_w0_try()) {
++                    serve_fill();
++                }
++            } else {
++                while (!sd_w0_try()) {
++                    serve_fill();
++                }
++            }
++            if constexpr (weight_servers) {
++                finish_late_bias();  // a core outside the servers' channel reads its own round and bias
++            }
++            return;
++        }
+         {
+             // Back-pressure from compute's matmul.
+             MaybeDeviceZoneScope("writer_weight_reserve");
+@@ -1195,25 +1239,25 @@
+             }
+             *flag = INVALID;
+         } else if (weight_sender && weight_mcast.should_send(k_blocks_issued)) {
+-            if (sd_w_issued_early && k_blocks_issued == 0) {
+-                finish_early_weights(l1);
+-            } else {
+-                read_weight_k_block(l1);
++#ifdef SD_R0_NOC0
++            // Round 0's slot is the reader's NoC0 multicast source until the reader has sent it (SD_R0_LOCAL_SEM 2).
++            while (*reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(SD_R0_LOCAL_SEM)) != 2) {
++                invalidate_l1_cache();
++                serve_fill();
+             }
++#endif
++            read_weight_k_block(l1);
+             MaybeDeviceZoneScope("writer_weight_send");
+             weight_sender->send(l1, l1, weight_k_block_tiles * weight_tile_bytes);
+         } else if (weight_receiver) {
+             if constexpr (tile_fill_split || slab_direct) {
+-                receive_serving(weight_mcast, k_blocks_issued, sd_acked_early && k_blocks_issued == 0);
++                // Round 0 of a slab-direct receiver came over the reader multicast, not this channel.
++                receive_serving(weight_mcast, k_blocks_issued - (sd_acked_early ? 1 : 0));
+             } else {
+                 weight_receiver->receive(k_blocks_issued);
+             }
+         } else {
+-            if (sd_w_issued_early && k_blocks_issued == 0) {
+-                finish_early_weights(l1);
+-            } else {
+-                read_weight_k_block(l1);
+-            }
++            read_weight_k_block(l1);
+         }
+         cb_push_back(cb_weights, weight_k_block_tiles - round0_pushed * (weight_k_block_tiles / round0_chunks));
+         round0_pushed = 0;
+@@ -1659,6 +1703,13 @@
+             const uint32_t B = (my_shard + 1) * shard_rows;
+             sd_wstream.reset(SD_SLAB_PX);
+             sd_w_base = m_block_idx * (SD_SLAB_PX + 1);
++            // The round-0 DRAM reader completes round 0 (bias split, multicast go) as soon as it landed, from inside
++            // the planning and the issue (a receiver only waits for it later: its fill issue is the critical path).
++            // Under weight servers it completes in issue_weight_k_block, with its late bias.
++            const bool w0_poll = !weight_servers && sd_w_issued_early && sd_w0 == 1;
++            if (w0_poll) {
++                sd_w0_try();
++            }
+             conv2d_3x3::slab_direct::Geom<
+                 input_height,
+                 input_width,
+@@ -1674,8 +1725,14 @@
+                 if (hi > B) {
+                     sd_wstream.add(lo > B ? lo : B, hi, lo > B ? px : px + (B - lo));
+                 }
++                if (w0_poll) {
++                    sd_w0_try();
++                }
+             });
+             while (sd_wstream.issue_one(sd_wread)) {
++                if (w0_poll) {
++                    sd_w0_try();
++                }
+             }
+             return;
+         }
+@@ -1850,25 +1907,28 @@
+     };
+ 
+ #if defined(CONV2D_3X3_SLAB_DIRECT)
+-    // Slab-direct round 0 ahead of the fill: a receiver acks the sender now (its slot is free), so the sender's
+-    // multicast waits on no receiver's fill issue; the round's DRAM reader (the sender, or an own-stream core) issues
+-    // its reads now under TRID_SD_WEIGHTS and completes them in issue_weight_k_block.
++    // Slab-direct round 0 ahead of the fill: a receiver reserves its slot (free at kernel start) and acks the sender's
++    // reader-multicast now (SD_R0_NOC0), so the multicast waits on no receiver's fill issue. Its DRAM reader issued it
++    // at kernel entry; either completes it the moment it is in (sd_w0_try).
+     if (num_m_blocks_this_core > 0 && !server_receiver) {
+         MaybeDeviceZoneScope("writer_sd_weight_early");
+-        if (weight_sender && weight_mcast.should_send(0)) {
++#ifdef SD_R0_NOC0
++        if (!sd_w_issued_early && weight_receiver) {
+             cb_reserve_back(cb_weights, weight_k_block_tiles);
+-            dataflow_kernel_lib::set_read_trid(noc, TRID_SD_WEIGHTS);
+-            read_weight_k_block(get_write_ptr(cb_weights), true);
+-            dataflow_kernel_lib::set_read_trid(noc, 0);
+-            sd_w_issued_early = true;
+-        } else if (weight_receiver) {
+-            sd_acked_early = ack_round(weight_mcast);
+-        } else {
+-            cb_reserve_back(cb_weights, weight_k_block_tiles);
+-            dataflow_kernel_lib::set_read_trid(noc, TRID_SD_WEIGHTS);
+-            read_weight_k_block(get_write_ptr(cb_weights), true);
+-            dataflow_kernel_lib::set_read_trid(noc, 0);
+-            sd_w_issued_early = true;
++            // Generic (a template): an absent channel's type has no sender coordinates.
++            sd_acked_early = [&](auto& wm) {
++                using WM = std::decay_t<decltype(wm)>;
++                if constexpr (WM::active) {
++                    noc_semaphore_inc(get_noc_addr(wm.sender_x(), wm.sender_y(), get_semaphore(SD_R0_ACK_SEM)), 1);
++                    return true;
++                }
++                return false;
++            }(weight_mcast);
++        }
++#endif
++        sd_w0 = (sd_w_issued_early || sd_acked_early) ? 1 : 0;
++        if constexpr (!weight_servers) {
++            sd_w0_try();
+         }
+     }
+ #endif

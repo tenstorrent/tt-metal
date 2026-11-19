@@ -1,0 +1,132 @@
+{"case": "stem.conv1 @ LoFi [perf]", "other": "grad", "differ": 0, "numel": 8388608}
+{"case": "stem.conv2 @ LoFi [perf]", "other": "grad", "differ": 0, "numel": 8388608}
+{"case": "stem.conv3 @ LoFi [perf]", "other": "grad", "differ": 0, "numel": 16777216}
+{"case": "res2.{0,1,2}.conv2 @ LoFi [perf]", "other": "grad", "differ": 0, "numel": 2097152}
+{"case": "res3.0.conv2 @ LoFi [perf]", "other": "grad", "differ": 0, "numel": 1048576}
+{"case": "res3.{1,2,3}.conv2 + instance res3.fuse_conv.1 @ LoFi [perf]", "other": "grad", "differ": 0, "numel": 1048576}
+{"case": "res4.0.conv2 @ LoFi [perf]", "other": "grad", "differ": 0, "numel": 524288}
+{"case": "res4.{1..5}.conv2 @ LoFi [perf]", "other": "grad", "differ": 0, "numel": 524288}
+{"case": "res5.0.conv2 @ LoFi [perf]", "other": "grad", "differ": 0, "numel": 1048576}
+{"case": "res5.1.conv2 @ LoFi [perf]", "other": "grad", "differ": 0, "numel": 1048576}
+{"case": "res5.2.conv2 @ LoFi [perf]", "other": "grad", "differ": 0, "numel": 1048576}
+{"case": "aspp.convs.1 (x2 heads) @ LoFi [perf]", "other": "grad", "differ": 0, "numel": 524288}
+{"case": "aspp.convs.2 (x2 heads) @ LoFi [perf]", "other": "grad", "differ": 0, "numel": 524288}
+{"case": "aspp.convs.3 (x2 heads, 1024-ch slice) @ LoFi [perf]", "other": "grad", "differ": 0, "numel": 524288}
+{"case": "semantic decoder.res3.fuse_conv.0 @ LoFi [perf]", "other": "grad", "differ": 0, "numel": 2097152}
+{"case": "instance decoder.res3.fuse_conv.0 @ LoFi [perf]", "other": "grad", "differ": 0, "numel": 1048576}
+{"case": "semantic decoder.res3.fuse_conv.1 @ LoFi [perf]", "other": "grad", "differ": 0, "numel": 2097152}
+{"case": "semantic decoder.res2.fuse_conv.0 @ LoFi [perf]", "other": "grad", "differ": 0, "numel": 8388608}
+{"case": "instance decoder.res2.fuse_conv.0 @ LoFi [perf]", "other": "grad", "differ": 0, "numel": 4194304}
+{"case": "semantic res2.fuse_conv.1 + semantic_head.head.{0,1} @ LoFi [perf]", "other": "grad", "differ": 0, "numel": 8388608}
+{"case": "instance res2.fuse_conv.1 + center_head.0 + offset_head.0 @ LoFi [perf]", "other": "grad", "differ": 0, "numel": 4194304}
+{"case": "center_head.1 + offset_head.1 @ LoFi [perf]", "other": "grad", "differ": 0, "numel": 1048576}
+{"case": "stem.conv1 @ LoFi [perf]", "other": "grad", "differ": 0, "numel": 8388608}
+{"case": "stem.conv2 @ LoFi [perf]", "other": "grad", "differ": 0, "numel": 8388608}
+{"case": "stem.conv3 @ LoFi [perf]", "other": "grad", "differ": 0, "numel": 16777216}
+{"case": "res2.{0,1,2}.conv2 @ LoFi [perf]", "other": "grad", "differ": 0, "numel": 2097152}
+{"case": "res3.0.conv2 @ LoFi [perf]", "other": "grad", "differ": 0, "numel": 1048576}
+{"case": "res3.{1,2,3}.conv2 + instance res3.fuse_conv.1 @ LoFi [perf]", "other": "grad", "differ": 0, "numel": 1048576}
+{"case": "res4.0.conv2 @ LoFi [perf]", "other": "grad", "differ": 0, "numel": 524288}
+{"case": "res4.{1..5}.conv2 @ LoFi [perf]", "other": "grad", "differ": 0, "numel": 524288}
+{"case": "res5.0.conv2 @ LoFi [perf]", "other": "grad", "differ": 0, "numel": 1048576}
+{"case": "res5.1.conv2 @ LoFi [perf]", "other": "grad", "differ": 0, "numel": 1048576}
+{"case": "res5.2.conv2 @ LoFi [perf]", "other": "grad", "differ": 0, "numel": 1048576}
+{"case": "aspp.convs.1 (x2 heads) @ LoFi [perf]", "other": "grad", "differ": 0, "numel": 524288}
+{"case": "aspp.convs.2 (x2 heads) @ LoFi [perf]", "other": "grad", "differ": 0, "numel": 524288}
+{"case": "aspp.convs.3 (x2 heads, 1024-ch slice) @ LoFi [perf]", "other": "grad", "differ": 0, "numel": 524288}
+{"case": "semantic decoder.res3.fuse_conv.0 @ LoFi [perf]", "other": "grad", "differ": 0, "numel": 2097152}
+{"case": "instance decoder.res3.fuse_conv.0 @ LoFi [perf]", "other": "grad", "differ": 0, "numel": 1048576}
+{"case": "semantic decoder.res3.fuse_conv.1 @ LoFi [perf]", "other": "grad", "differ": 0, "numel": 2097152}
+{"case": "semantic decoder.res2.fuse_conv.0 @ LoFi [perf]", "other": "grad", "differ": 0, "numel": 8388608}
+{"case": "instance decoder.res2.fuse_conv.0 @ LoFi [perf]", "other": "grad", "differ": 0, "numel": 4194304}
+{"case": "semantic res2.fuse_conv.1 + semantic_head.head.{0,1} @ LoFi [perf]", "other": "grad", "differ": 0, "numel": 8388608}
+{"case": "instance res2.fuse_conv.1 + center_head.0 + offset_head.0 @ LoFi [perf]", "other": "grad", "differ": 0, "numel": 4194304}
+{"case": "center_head.1 + offset_head.1 @ LoFi [perf]", "other": "grad", "differ": 0, "numel": 1048576}
+{"case": "stem.conv1 @ LoFi [perf]", "other": "grad", "differ": 0, "numel": 8388608}
+{"case": "stem.conv2 @ LoFi [perf]", "other": "grad", "differ": 0, "numel": 8388608}
+{"case": "stem.conv3 @ LoFi [perf]", "other": "grad", "differ": 0, "numel": 16777216}
+{"case": "res2.{0,1,2}.conv2 @ LoFi [perf]", "other": "grad", "differ": 0, "numel": 2097152}
+{"case": "res3.0.conv2 @ LoFi [perf]", "other": "grad", "differ": 0, "numel": 1048576}
+{"case": "res3.{1,2,3}.conv2 + instance res3.fuse_conv.1 @ LoFi [perf]", "other": "grad", "differ": 0, "numel": 1048576}
+{"case": "res4.0.conv2 @ LoFi [perf]", "other": "grad", "differ": 0, "numel": 524288}
+{"case": "res4.{1..5}.conv2 @ LoFi [perf]", "other": "grad", "differ": 0, "numel": 524288}
+{"case": "res5.0.conv2 @ LoFi [perf]", "other": "grad", "differ": 0, "numel": 1048576}
+{"case": "res5.1.conv2 @ LoFi [perf]", "other": "grad", "differ": 0, "numel": 1048576}
+{"case": "res5.2.conv2 @ LoFi [perf]", "other": "grad", "differ": 0, "numel": 1048576}
+{"case": "aspp.convs.1 (x2 heads) @ LoFi [perf]", "other": "grad", "differ": 0, "numel": 524288}
+{"case": "aspp.convs.2 (x2 heads) @ LoFi [perf]", "other": "grad", "differ": 0, "numel": 524288}
+{"case": "aspp.convs.3 (x2 heads, 1024-ch slice) @ LoFi [perf]", "other": "grad", "differ": 0, "numel": 524288}
+{"case": "semantic decoder.res3.fuse_conv.0 @ LoFi [perf]", "other": "grad", "differ": 0, "numel": 2097152}
+{"case": "instance decoder.res3.fuse_conv.0 @ LoFi [perf]", "other": "grad", "differ": 0, "numel": 1048576}
+{"case": "semantic decoder.res3.fuse_conv.1 @ LoFi [perf]", "other": "grad", "differ": 0, "numel": 2097152}
+{"case": "semantic decoder.res2.fuse_conv.0 @ LoFi [perf]", "other": "grad", "differ": 0, "numel": 8388608}
+{"case": "instance decoder.res2.fuse_conv.0 @ LoFi [perf]", "other": "grad", "differ": 0, "numel": 4194304}
+{"case": "semantic res2.fuse_conv.1 + semantic_head.head.{0,1} @ LoFi [perf]", "other": "grad", "differ": 0, "numel": 8388608}
+{"case": "instance res2.fuse_conv.1 + center_head.0 + offset_head.0 @ LoFi [perf]", "other": "grad", "differ": 0, "numel": 4194304}
+{"case": "center_head.1 + offset_head.1 @ LoFi [perf]", "other": "grad", "differ": 0, "numel": 1048576}
+{"case": "stem.conv1 @ LoFi [perf]", "other": "grad", "differ": 0, "numel": 8388608}
+{"case": "stem.conv2 @ LoFi [perf]", "other": "grad", "differ": 0, "numel": 8388608}
+{"case": "stem.conv3 @ LoFi [perf]", "other": "grad", "differ": 0, "numel": 16777216}
+{"case": "res2.{0,1,2}.conv2 @ LoFi [perf]", "other": "grad", "differ": 0, "numel": 2097152}
+{"case": "res3.0.conv2 @ LoFi [perf]", "other": "grad", "differ": 0, "numel": 1048576}
+{"case": "res3.{1,2,3}.conv2 + instance res3.fuse_conv.1 @ LoFi [perf]", "other": "grad", "differ": 0, "numel": 1048576}
+{"case": "res4.0.conv2 @ LoFi [perf]", "other": "grad", "differ": 0, "numel": 524288}
+{"case": "res4.{1..5}.conv2 @ LoFi [perf]", "other": "grad", "differ": 0, "numel": 524288}
+{"case": "res5.0.conv2 @ LoFi [perf]", "other": "grad", "differ": 0, "numel": 1048576}
+{"case": "res5.1.conv2 @ LoFi [perf]", "other": "grad", "differ": 0, "numel": 1048576}
+{"case": "res5.2.conv2 @ LoFi [perf]", "other": "grad", "differ": 0, "numel": 1048576}
+{"case": "aspp.convs.1 (x2 heads) @ LoFi [perf]", "other": "grad", "differ": 0, "numel": 524288}
+{"case": "aspp.convs.2 (x2 heads) @ LoFi [perf]", "other": "grad", "differ": 0, "numel": 524288}
+{"case": "aspp.convs.3 (x2 heads, 1024-ch slice) @ LoFi [perf]", "other": "grad", "differ": 0, "numel": 524288}
+{"case": "semantic decoder.res3.fuse_conv.0 @ LoFi [perf]", "other": "grad", "differ": 0, "numel": 2097152}
+{"case": "instance decoder.res3.fuse_conv.0 @ LoFi [perf]", "other": "grad", "differ": 0, "numel": 1048576}
+{"case": "semantic decoder.res3.fuse_conv.1 @ LoFi [perf]", "other": "grad", "differ": 0, "numel": 2097152}
+{"case": "semantic decoder.res2.fuse_conv.0 @ LoFi [perf]", "other": "grad", "differ": 0, "numel": 8388608}
+{"case": "instance decoder.res2.fuse_conv.0 @ LoFi [perf]", "other": "grad", "differ": 0, "numel": 4194304}
+{"case": "semantic res2.fuse_conv.1 + semantic_head.head.{0,1} @ LoFi [perf]", "other": "grad", "differ": 0, "numel": 8388608}
+{"case": "instance res2.fuse_conv.1 + center_head.0 + offset_head.0 @ LoFi [perf]", "other": "grad", "differ": 0, "numel": 4194304}
+{"case": "center_head.1 + offset_head.1 @ LoFi [perf]", "other": "grad", "differ": 0, "numel": 1048576}
+{"case": "stem.conv1 @ LoFi [perf]", "other": "grad", "differ": 0, "numel": 8388608}
+{"case": "stem.conv2 @ LoFi [perf]", "other": "grad", "differ": 0, "numel": 8388608}
+{"case": "stem.conv3 @ LoFi [perf]", "other": "grad", "differ": 0, "numel": 16777216}
+{"case": "res2.{0,1,2}.conv2 @ LoFi [perf]", "other": "grad", "differ": 0, "numel": 2097152}
+{"case": "res3.0.conv2 @ LoFi [perf]", "other": "grad", "differ": 0, "numel": 1048576}
+{"case": "res3.{1,2,3}.conv2 + instance res3.fuse_conv.1 @ LoFi [perf]", "other": "grad", "differ": 0, "numel": 1048576}
+{"case": "res4.0.conv2 @ LoFi [perf]", "other": "grad", "differ": 0, "numel": 524288}
+{"case": "res4.{1..5}.conv2 @ LoFi [perf]", "other": "grad", "differ": 0, "numel": 524288}
+{"case": "res5.0.conv2 @ LoFi [perf]", "other": "grad", "differ": 0, "numel": 1048576}
+{"case": "res5.1.conv2 @ LoFi [perf]", "other": "grad", "differ": 0, "numel": 1048576}
+{"case": "res5.2.conv2 @ LoFi [perf]", "other": "grad", "differ": 0, "numel": 1048576}
+{"case": "aspp.convs.1 (x2 heads) @ LoFi [perf]", "other": "grad", "differ": 0, "numel": 524288}
+{"case": "aspp.convs.2 (x2 heads) @ LoFi [perf]", "other": "grad", "differ": 0, "numel": 524288}
+{"case": "aspp.convs.3 (x2 heads, 1024-ch slice) @ LoFi [perf]", "other": "grad", "differ": 0, "numel": 524288}
+{"case": "semantic decoder.res3.fuse_conv.0 @ LoFi [perf]", "other": "grad", "differ": 0, "numel": 2097152}
+{"case": "instance decoder.res3.fuse_conv.0 @ LoFi [perf]", "other": "grad", "differ": 0, "numel": 1048576}
+{"case": "semantic decoder.res3.fuse_conv.1 @ LoFi [perf]", "other": "grad", "differ": 0, "numel": 2097152}
+{"case": "semantic decoder.res2.fuse_conv.0 @ LoFi [perf]", "other": "grad", "differ": 0, "numel": 8388608}
+{"case": "instance decoder.res2.fuse_conv.0 @ LoFi [perf]", "other": "grad", "differ": 0, "numel": 4194304}
+{"case": "semantic res2.fuse_conv.1 + semantic_head.head.{0,1} @ LoFi [perf]", "other": "grad", "differ": 0, "numel": 8388608}
+{"case": "instance res2.fuse_conv.1 + center_head.0 + offset_head.0 @ LoFi [perf]", "other": "grad", "differ": 0, "numel": 4194304}
+{"case": "center_head.1 + offset_head.1 @ LoFi [perf]", "other": "grad", "differ": 0, "numel": 1048576}
+{"case": "stem.conv1 @ LoFi [perf]", "other": "grad", "differ": 0, "numel": 8388608}
+{"case": "stem.conv2 @ LoFi [perf]", "other": "grad", "differ": 0, "numel": 8388608}
+{"case": "stem.conv3 @ LoFi [perf]", "other": "grad", "differ": 0, "numel": 16777216}
+{"case": "res2.{0,1,2}.conv2 @ LoFi [perf]", "other": "grad", "differ": 0, "numel": 2097152}
+{"case": "res3.0.conv2 @ LoFi [perf]", "other": "grad", "differ": 0, "numel": 1048576}
+{"case": "res3.{1,2,3}.conv2 + instance res3.fuse_conv.1 @ LoFi [perf]", "other": "grad", "differ": 0, "numel": 1048576}
+{"case": "res4.0.conv2 @ LoFi [perf]", "other": "grad", "differ": 0, "numel": 524288}
+{"case": "res4.{1..5}.conv2 @ LoFi [perf]", "other": "grad", "differ": 0, "numel": 524288}
+{"case": "res5.0.conv2 @ LoFi [perf]", "other": "grad", "differ": 0, "numel": 1048576}
+{"case": "res5.1.conv2 @ LoFi [perf]", "other": "grad", "differ": 0, "numel": 1048576}
+{"case": "res5.2.conv2 @ LoFi [perf]", "other": "grad", "differ": 0, "numel": 1048576}
+{"case": "aspp.convs.1 (x2 heads) @ LoFi [perf]", "other": "grad", "differ": 0, "numel": 524288}
+{"case": "aspp.convs.2 (x2 heads) @ LoFi [perf]", "other": "grad", "differ": 0, "numel": 524288}
+{"case": "aspp.convs.3 (x2 heads, 1024-ch slice) @ LoFi [perf]", "other": "grad", "differ": 0, "numel": 524288}
+{"case": "semantic decoder.res3.fuse_conv.0 @ LoFi [perf]", "other": "grad", "differ": 0, "numel": 2097152}
+{"case": "instance decoder.res3.fuse_conv.0 @ LoFi [perf]", "other": "grad", "differ": 0, "numel": 1048576}
+{"case": "semantic decoder.res3.fuse_conv.1 @ LoFi [perf]", "other": "grad", "differ": 0, "numel": 2097152}
+{"case": "semantic decoder.res2.fuse_conv.0 @ LoFi [perf]", "other": "grad", "differ": 0, "numel": 8388608}
+{"case": "instance decoder.res2.fuse_conv.0 @ LoFi [perf]", "other": "grad", "differ": 0, "numel": 4194304}
+{"case": "semantic res2.fuse_conv.1 + semantic_head.head.{0,1} @ LoFi [perf]", "other": "grad", "differ": 0, "numel": 8388608}
+{"case": "instance res2.fuse_conv.1 + center_head.0 + offset_head.0 @ LoFi [perf]", "other": "grad", "differ": 0, "numel": 4194304}
+{"case": "center_head.1 + offset_head.1 @ LoFi [perf]", "other": "grad", "differ": 0, "numel": 1048576}

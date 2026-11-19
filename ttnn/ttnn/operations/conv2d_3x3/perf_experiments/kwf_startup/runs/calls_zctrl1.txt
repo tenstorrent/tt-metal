@@ -1,0 +1,2 @@
+res2 ctrl 0
+res2 early_ctrl 0

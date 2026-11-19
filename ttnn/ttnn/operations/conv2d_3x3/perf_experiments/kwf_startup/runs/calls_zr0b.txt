@@ -1,0 +1,15 @@
+res2 base 0
+res2 r0_early 0
+res2 r0_early_sf 0
+res2 r0_early_noack 0
+res2 r0_early_sf_noack 0
+ch1 base 0
+ch1 r0_early 0
+ch1 r0_early_sf 0
+ch1 r0_early_noack 0
+ch1 r0_early_sf_noack 0
+res3x base 0
+res3x r0_early 0
+res3x r0_early_sf 0
+res3x r0_early_noack 0
+res3x r0_early_sf_noack 0

@@ -1,0 +1,9 @@
+res2 base 0
+res2 copy:KWS_RECT_ROWS=3 0
+res2 copy:KWS_RECT_ROWS=5 0
+ch1 base 0
+ch1 copy:KWS_RECT_ROWS=3 0
+ch1 copy:KWS_RECT_ROWS=5 0
+res3x base 0
+res3x copy:KWS_RECT_ROWS=3 0
+res3x copy:KWS_RECT_ROWS=5 0

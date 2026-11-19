@@ -1,0 +1,16 @@
+res3_0_conv2 base 0
+res3_0_conv2 cand 0
+res3_0_conv2 cand_nosf 0
+res3_0_conv2 cand_ack 0
+center_head_1 cand_ack 0
+center_head_1 cand_nosf 0
+center_head_1 cand 0
+center_head_1 base 0
+res3_0_conv2 base 0
+res3_0_conv2 cand 0
+res3_0_conv2 cand_nosf 0
+res3_0_conv2 cand_ack 0
+center_head_1 cand_ack 0
+center_head_1 cand_nosf 0
+center_head_1 cand 0
+center_head_1 base 0

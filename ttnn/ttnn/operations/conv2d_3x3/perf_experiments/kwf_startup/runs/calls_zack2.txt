@@ -1,0 +1,12 @@
+res2 ackp 0
+res2 ack0p 0
+res2 ack0p_sf 0
+res2 ack0p_pf 0
+ch1 ackp 0
+ch1 ack0p 0
+ch1 ack0p_sf 0
+ch1 ack0p_pf 0
+res3x ackp 0
+res3x ack0p 0
+res3x ack0p_sf 0
+res3x ack0p_pf 0

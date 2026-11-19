@@ -1,0 +1,12 @@
+res2 base 0
+res2 copy:KWS_SERVERS_FIRST=True 0
+res2 copy:KWS_SERVER_PICK="first" 0
+res2 copy:KWS_SERVERS_FIRST=True+KWS_SERVER_PICK="first" 0
+ch1 base 0
+ch1 copy:KWS_SERVERS_FIRST=True 0
+ch1 copy:KWS_SERVER_PICK="first" 0
+ch1 copy:KWS_SERVERS_FIRST=True+KWS_SERVER_PICK="first" 0
+res3x base 0
+res3x copy:KWS_SERVERS_FIRST=True 0
+res3x copy:KWS_SERVER_PICK="first" 0
+res3x copy:KWS_SERVERS_FIRST=True+KWS_SERVER_PICK="first" 0

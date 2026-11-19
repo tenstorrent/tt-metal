@@ -1,0 +1,164 @@
+SAFE_PYTEST: Waiting for device lock...
+[2026-11-19 22:08:59] SAFE_PYTEST: waiting for device (20s) — holder pid=4138119 cmd="/bin/bash scripts/run_safe_pytest.sh --profile --run-all /localdev/pmilojevic/workspaces/opgen/ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_round0/test_br0.py --import-mode=prepend -q " parent pid=4138037 cmd="bash ./run.sh gfocus1 "
+[2026-11-19 22:09:20] SAFE_PYTEST: waiting for device (40s) — holder pid=4138119 cmd="/bin/bash scripts/run_safe_pytest.sh --profile --run-all /localdev/pmilojevic/workspaces/opgen/ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_round0/test_br0.py --import-mode=prepend -q " parent pid=4138037 cmd="bash ./run.sh gfocus1 "
+[2026-11-19 22:09:41] SAFE_PYTEST: waiting for device (60s) — holder pid=4138119 cmd="/bin/bash scripts/run_safe_pytest.sh --profile --run-all /localdev/pmilojevic/workspaces/opgen/ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_round0/test_br0.py --import-mode=prepend -q " parent pid=4138037 cmd="bash ./run.sh gfocus1 "
+[2026-11-19 22:10:03] SAFE_PYTEST: waiting for device (80s) — holder pid=4138119 cmd="/bin/bash scripts/run_safe_pytest.sh --profile --run-all /localdev/pmilojevic/workspaces/opgen/ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_round0/test_br0.py --import-mode=prepend -q " parent pid=4138037 cmd="bash ./run.sh gfocus1 "
+[2026-11-19 22:10:24] SAFE_PYTEST: waiting for device (100s) — holder pid=4138119 cmd="/bin/bash scripts/run_safe_pytest.sh --profile --run-all /localdev/pmilojevic/workspaces/opgen/ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_round0/test_br0.py --import-mode=prepend -q " parent pid=4138037 cmd="bash ./run.sh gfocus1 "
+[2026-11-19 22:10:46] SAFE_PYTEST: waiting for device (120s) — holder pid=4138119 cmd="/bin/bash scripts/run_safe_pytest.sh --profile --run-all /localdev/pmilojevic/workspaces/opgen/ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_round0/test_br0.py --import-mode=prepend -q " parent pid=4138037 cmd="bash ./run.sh gfocus1 "
+[2026-11-19 22:11:07] SAFE_PYTEST: waiting for device (140s) — holder pid=4151075 cmd="/bin/bash scripts/run_safe_pytest.sh --dev --run-all ttnn/ttnn/operations/conv2d_3x3/perf_experiments/stem1_weight_round/test_wr.py --import-mode=prepend -q -k test_wr[ " parent pid=4151074 cmd="timeout 590 scripts/run_safe_pytest.sh --dev --run-all ttnn/ttnn/operations/conv2d_3x3/perf_experiments/stem1_weight_round/test_wr.py --import-mode=pr"
+[2026-11-19 22:11:28] SAFE_PYTEST: waiting for device (160s) — holder pid=4151075 cmd="/bin/bash scripts/run_safe_pytest.sh --dev --run-all ttnn/ttnn/operations/conv2d_3x3/perf_experiments/stem1_weight_round/test_wr.py --import-mode=prepend -q -k test_wr[ " parent pid=4151074 cmd="timeout 590 scripts/run_safe_pytest.sh --dev --run-all ttnn/ttnn/operations/conv2d_3x3/perf_experiments/stem1_weight_round/test_wr.py --import-mode=pr"
+[2026-11-19 22:11:50] SAFE_PYTEST: waiting for device (180s) — holder pid=11760 cmd="sh -c python3 /localdev/pmilojevic/workspaces/opgen/tools/tt-triage.py --disable-progress --skip-version-check --llm-output --llm-output-path=/localdev/pmilojevic/workspaces/opgen/generated/tt-triage/" parent pid=5550 cmd="/localdev/pmilojevic/workspaces/opgen/python_env/bin/python /localdev/pmilojevic/workspaces/opgen/python_env/bin/pytest ttnn/ttnn/operations/conv2d_3x"
+[2026-11-19 22:12:10] SAFE_PYTEST: waiting for device (200s) — holder pid=4151075 cmd="/bin/bash scripts/run_safe_pytest.sh --dev --run-all ttnn/ttnn/operations/conv2d_3x3/perf_experiments/stem1_weight_round/test_wr.py --import-mode=prepend -q -k test_wr[ " parent pid=4151074 cmd="timeout 590 scripts/run_safe_pytest.sh --dev --run-all ttnn/ttnn/operations/conv2d_3x3/perf_experiments/stem1_weight_round/test_wr.py --import-mode=pr"
+[2026-11-19 22:12:31] SAFE_PYTEST: waiting for device (220s) — holder pid=15838 cmd="/usr/bin/python3 /home/pmilojevic/.local/bin/tt-smi -r " parent pid=4151075 cmd="/bin/bash scripts/run_safe_pytest.sh --dev --run-all ttnn/ttnn/operations/conv2d_3x3/perf_experiments/stem1_weight_round/test_wr.py --import-mode=prep"
+[2026-11-19 22:12:52] SAFE_PYTEST: waiting for device (240s) — holder pid=15838 cmd="/usr/bin/python3 /home/pmilojevic/.local/bin/tt-smi -r " parent pid=4151075 cmd="/bin/bash scripts/run_safe_pytest.sh --dev --run-all ttnn/ttnn/operations/conv2d_3x3/perf_experiments/stem1_weight_round/test_wr.py --import-mode=prep"
+[2026-11-19 22:13:12] SAFE_PYTEST: waiting for device (260s) — holder pid=18959 cmd="python -m tracy -r -m pytest -p tests.plugins.up_front_collect /localdev/pmilojevic/workspaces/opgen/ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_round0/test_br0.py --import-mode=prepend -q " parent pid=9166 cmd="/bin/bash scripts/run_safe_pytest.sh --profile --run-all /localdev/pmilojevic/workspaces/opgen/ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_"
+[2026-11-19 22:13:32] SAFE_PYTEST: waiting for device (280s) — holder pid=18959 cmd="python -m tracy -r -m pytest -p tests.plugins.up_front_collect /localdev/pmilojevic/workspaces/opgen/ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_round0/test_br0.py --import-mode=prepend -q " parent pid=9166 cmd="/bin/bash scripts/run_safe_pytest.sh --profile --run-all /localdev/pmilojevic/workspaces/opgen/ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_"
+[2026-11-19 22:13:53] SAFE_PYTEST: waiting for device (300s) — holder pid=18959 cmd="python -m tracy -r -m pytest -p tests.plugins.up_front_collect /localdev/pmilojevic/workspaces/opgen/ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_round0/test_br0.py --import-mode=prepend -q " parent pid=9166 cmd="/bin/bash scripts/run_safe_pytest.sh --profile --run-all /localdev/pmilojevic/workspaces/opgen/ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_"
+[2026-11-19 22:14:13] SAFE_PYTEST: waiting for device (320s) — holder pid=18959 cmd="python -m tracy -r -m pytest -p tests.plugins.up_front_collect /localdev/pmilojevic/workspaces/opgen/ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_round0/test_br0.py --import-mode=prepend -q " parent pid=9166 cmd="/bin/bash scripts/run_safe_pytest.sh --profile --run-all /localdev/pmilojevic/workspaces/opgen/ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_"
+[2026-11-19 22:14:34] SAFE_PYTEST: waiting for device (340s) — holder pid=18959 cmd="python -m tracy -r -m pytest -p tests.plugins.up_front_collect /localdev/pmilojevic/workspaces/opgen/ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_round0/test_br0.py --import-mode=prepend -q " parent pid=9166 cmd="/bin/bash scripts/run_safe_pytest.sh --profile --run-all /localdev/pmilojevic/workspaces/opgen/ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_"
+[2026-11-19 22:14:54] SAFE_PYTEST: waiting for device (360s) — holder pid=18959 cmd="python -m tracy -r -m pytest -p tests.plugins.up_front_collect /localdev/pmilojevic/workspaces/opgen/ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_round0/test_br0.py --import-mode=prepend -q " parent pid=9166 cmd="/bin/bash scripts/run_safe_pytest.sh --profile --run-all /localdev/pmilojevic/workspaces/opgen/ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_"
+[2026-11-19 22:15:15] SAFE_PYTEST: waiting for device (380s) — holder pid=18959 cmd="python -m tracy -r -m pytest -p tests.plugins.up_front_collect /localdev/pmilojevic/workspaces/opgen/ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_round0/test_br0.py --import-mode=prepend -q " parent pid=9166 cmd="/bin/bash scripts/run_safe_pytest.sh --profile --run-all /localdev/pmilojevic/workspaces/opgen/ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_"
+SAFE_PYTEST: Device lock acquired
+SAFE_PYTEST: dispatch_timeout=5s
+PRECOMPILE: off (disabled) — kernels compile on demand
+SAFE_PYTEST: python -m tracy -r -m pytest --import-mode=prepend ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_startup/test_kws_dom.py
+========================================
+2026-11-19 22:15:33.124 | INFO     | __main__:main:381 - Using port 8086
+2026-11-19 22:15:33.124 | INFO     | tracy:run_report_setup:91 - Verifying tracy profiling tools
+2026-11-19 22:15:33.245 | INFO     | __main__:run_workload:416 - Test process started
+2026-11-19 22:15:35.923 | DEBUG    | ttnn:<module>:45 - Initial ttnn.CONFIG:
+Config{cache_path=/home/pmilojevic/.cache/ttnn,model_cache_path=/home/pmilojevic/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,validate_program_args=false,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_graph_python_stack_traces=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,strict_ccl_topology=false,verify_replicated_shards_on_dump=true,std::nullopt}
+============================= test session starts ==============================
+platform linux -- Python 3.10.19, pytest-9.0.3, pluggy-1.7.0 -- /localdev/pmilojevic/workspaces/opgen/python_env/bin/python
+cachedir: .pytest_cache
+benchmark: 5.2.3 (defaults: timer=time.perf_counter disable_gc=False min_rounds=5 min_time=0.000005 max_time=1.0 calibration_precision=10 warmup=False warmup_iterations=100000)
+rootdir: /localdev/pmilojevic/workspaces/opgen
+configfile: pytest.ini
+plugins: split-0.11.0, repeat-0.9.4, anyio-4.16.0, benchmark-5.2.3, github-actions-annotate-failures-0.3.0, timeout-2.4.0, cov-7.0.0, dash-2.15.0
+timeout: 300.0s
+timeout method: signal
+timeout func_only: False
+collecting ... collected 18 items
+
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_startup/test_kws_dom.py::test_kws_dom[stem_conv1-base-0] 2026-11-19 22:15:40.914 | info     |          Device | Opening user mode device driver (tt_cluster.cpp:252)
+2026-11-19 22:15:40.914 | info     |             UMD | Cluster constructor started. (cluster.cpp:434)
+2026-11-19 22:15:40.916 | info     |             UMD | Creating TopologyDiscovery for architecture: blackhole (topology_discovery.cpp:137)
+2026-11-19 22:15:40.916 | info     |             UMD | Starting topology discovery. (topology_discovery.cpp:156)
+2026-11-19 22:15:40.941 | info     |             UMD | Established firmware bundle version: 19.16.1 (topology_discovery.cpp:700)
+2026-11-19 22:15:40.942 | info     |             UMD | Completed topology discovery. (topology_discovery.cpp:161)
+2026-11-19 22:15:41.205 | info     |             UMD | Opening local chip ids/PCIe ids: {0, 1, 2, 3, 4, 5, 6, 7}/[2, 3, 1, 0, 6, 7, 5, 4] and remote chip ids {} (cluster.cpp:174)
+2026-11-19 22:15:41.206 | info     |             UMD | IOMMU: enabled (cluster.cpp:148)
+2026-11-19 22:15:41.206 | info     |             UMD | KMD version: 2.9.0 (cluster.cpp:151)
+2026-11-19 22:15:41.206 | info     |             UMD | Cluster constructor completed. (cluster.cpp:893)
+2026-11-19 22:15:41.213 | info     |             UMD | Starting devices in cluster (cluster.cpp:1482)
+2026-11-19 22:15:41.477 | info     |             UMD | Starting devices in cluster completed. (cluster.cpp:1491)
+2026-11-19 22:15:41.625 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:571)
+2026-11-19 22:15:41.625 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:624)
+2026-11-19 22:15:41.811 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using distributed::MeshDevice::create_unit_meshes(). (device_manager.cpp:265)
+2026-11-19 22:15:41.830 | info     |           Metal | Profiler started on device 0 (profiler_initializer.cpp:49)
+2026-11-19 22:15:42.545 | info     |           Metal | Clearing program cache on MeshDevice 1 (mesh_device.cpp:1327)
+PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_startup/test_kws_dom.py::test_kws_dom[stem_conv1-grad-1] 2026-11-19 22:15:42.845 | info     |           Metal | Clearing program cache on MeshDevice 1 (mesh_device.cpp:1327)
+PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_startup/test_kws_dom.py::test_kws_dom[res3_0_conv2-grad-2] 2026-11-19 22:15:43.082 | info     |           Metal | Clearing program cache on MeshDevice 1 (mesh_device.cpp:1327)
+PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_startup/test_kws_dom.py::test_kws_dom[res3_0_conv2-base-3] 2026-11-19 22:15:43.187 | info     |           Metal | Clearing program cache on MeshDevice 1 (mesh_device.cpp:1327)
+PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_startup/test_kws_dom.py::test_kws_dom[center_head_1-base-4] 2026-11-19 22:15:43.305 | info     |           Metal | Clearing program cache on MeshDevice 1 (mesh_device.cpp:1327)
+PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_startup/test_kws_dom.py::test_kws_dom[center_head_1-grad-5] 2026-11-19 22:15:43.464 | info     |           Metal | Clearing program cache on MeshDevice 1 (mesh_device.cpp:1327)
+PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_startup/test_kws_dom.py::test_kws_dom[stem_conv1-grad-6] 2026-11-19 22:15:43.619 | info     |           Metal | Clearing program cache on MeshDevice 1 (mesh_device.cpp:1327)
+PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_startup/test_kws_dom.py::test_kws_dom[stem_conv1-base-7] 2026-11-19 22:15:43.834 | info     |           Metal | Clearing program cache on MeshDevice 1 (mesh_device.cpp:1327)
+PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_startup/test_kws_dom.py::test_kws_dom[res3_0_conv2-base-8] 2026-11-19 22:15:44.025 | info     |           Metal | Clearing program cache on MeshDevice 1 (mesh_device.cpp:1327)
+PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_startup/test_kws_dom.py::test_kws_dom[res3_0_conv2-grad-9] 2026-11-19 22:15:44.099 | info     |           Metal | Clearing program cache on MeshDevice 1 (mesh_device.cpp:1327)
+PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_startup/test_kws_dom.py::test_kws_dom[center_head_1-grad-10] 2026-11-19 22:15:44.184 | info     |           Metal | Clearing program cache on MeshDevice 1 (mesh_device.cpp:1327)
+PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_startup/test_kws_dom.py::test_kws_dom[center_head_1-base-11] 2026-11-19 22:15:44.293 | info     |           Metal | Clearing program cache on MeshDevice 1 (mesh_device.cpp:1327)
+PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_startup/test_kws_dom.py::test_kws_dom[stem_conv1-base-12] 2026-11-19 22:15:44.410 | info     |           Metal | Clearing program cache on MeshDevice 1 (mesh_device.cpp:1327)
+PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_startup/test_kws_dom.py::test_kws_dom[stem_conv1-grad-13] 2026-11-19 22:15:44.621 | info     |           Metal | Clearing program cache on MeshDevice 1 (mesh_device.cpp:1327)
+PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_startup/test_kws_dom.py::test_kws_dom[res3_0_conv2-grad-14] 2026-11-19 22:15:44.823 | info     |           Metal | Clearing program cache on MeshDevice 1 (mesh_device.cpp:1327)
+PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_startup/test_kws_dom.py::test_kws_dom[res3_0_conv2-base-15] 2026-11-19 22:15:44.891 | info     |           Metal | Clearing program cache on MeshDevice 1 (mesh_device.cpp:1327)
+PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_startup/test_kws_dom.py::test_kws_dom[center_head_1-base-16] 2026-11-19 22:15:44.976 | info     |           Metal | Clearing program cache on MeshDevice 1 (mesh_device.cpp:1327)
+PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_startup/test_kws_dom.py::test_kws_dom[center_head_1-grad-17] 2026-11-19 22:15:45.098 | info     |           Metal | Clearing program cache on MeshDevice 1 (mesh_device.cpp:1327)
+PASSED2026-11-19 22:15:45.268 | info     |           Metal | Device kernel duration perf summary (device=0): count=18, min=9091ns, avg=11061.9ns, max=13972ns (profiler_analysis.cpp:729)
+2026-11-19 22:15:45.268 | info     |           Metal | Device kernel duration perf histogram (device=0): (buckets=10, bucket_size=500ns, range=[9000..14000), underflow(<9000ns)=0, overflow(>=14000ns)=0) (profiler_analysis.cpp:772)
+2026-11-19 22:15:45.268 | info     |           Metal |   [        9000 ..         9500) |########################################|        6 (profiler_analysis.cpp:777)
+2026-11-19 22:15:45.268 | info     |           Metal |   [        9500 ..        10000) |                                        |        0 (profiler_analysis.cpp:777)
+2026-11-19 22:15:45.268 | info     |           Metal |   [       10000 ..        10500) |#################################       |        5 (profiler_analysis.cpp:777)
+2026-11-19 22:15:45.268 | info     |           Metal |   [       10500 ..        11000) |#######                                 |        1 (profiler_analysis.cpp:777)
+2026-11-19 22:15:45.268 | info     |           Metal |   [       11000 ..        11500) |                                        |        0 (profiler_analysis.cpp:777)
+2026-11-19 22:15:45.268 | info     |           Metal |   [       11500 ..        12000) |                                        |        0 (profiler_analysis.cpp:777)
+2026-11-19 22:15:45.268 | info     |           Metal |   [       12000 ..        12500) |                                        |        0 (profiler_analysis.cpp:777)
+2026-11-19 22:15:45.268 | info     |           Metal |   [       12500 ..        13000) |                                        |        0 (profiler_analysis.cpp:777)
+2026-11-19 22:15:45.268 | info     |           Metal |   [       13000 ..        13500) |#############                           |        2 (profiler_analysis.cpp:777)
+2026-11-19 22:15:45.268 | info     |           Metal |   [       13500 ..        14000) |###########################             |        4 (profiler_analysis.cpp:777)
+
+
+- generated xml file: /localdev/pmilojevic/workspaces/opgen/generated/test_reports/most_recent_tests.xml -
+============================= slowest 25 durations =============================
+1.64s setup    ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_startup/test_kws_dom.py::test_kws_dom[stem_conv1-base-0]
+0.28s call     ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_startup/test_kws_dom.py::test_kws_dom[stem_conv1-base-0]
+0.23s call     ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_startup/test_kws_dom.py::test_kws_dom[stem_conv1-grad-1]
+0.21s call     ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_startup/test_kws_dom.py::test_kws_dom[stem_conv1-grad-6]
+0.20s call     ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_startup/test_kws_dom.py::test_kws_dom[stem_conv1-base-12]
+0.19s call     ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_startup/test_kws_dom.py::test_kws_dom[stem_conv1-grad-13]
+0.18s call     ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_startup/test_kws_dom.py::test_kws_dom[stem_conv1-base-7]
+0.15s call     ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_startup/test_kws_dom.py::test_kws_dom[center_head_1-base-4]
+0.14s call     ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_startup/test_kws_dom.py::test_kws_dom[center_head_1-grad-5]
+0.11s call     ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_startup/test_kws_dom.py::test_kws_dom[center_head_1-base-16]
+0.11s call     ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_startup/test_kws_dom.py::test_kws_dom[res3_0_conv2-base-3]
+0.11s call     ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_startup/test_kws_dom.py::test_kws_dom[center_head_1-base-11]
+0.10s call     ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_startup/test_kws_dom.py::test_kws_dom[center_head_1-grad-17]
+0.10s teardown ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_startup/test_kws_dom.py::test_kws_dom[center_head_1-grad-17]
+0.10s call     ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_startup/test_kws_dom.py::test_kws_dom[center_head_1-grad-10]
+0.09s call     ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_startup/test_kws_dom.py::test_kws_dom[res3_0_conv2-grad-2]
+0.07s call     ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_startup/test_kws_dom.py::test_kws_dom[res3_0_conv2-base-15]
+0.07s call     ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_startup/test_kws_dom.py::test_kws_dom[res3_0_conv2-grad-9]
+0.06s call     ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_startup/test_kws_dom.py::test_kws_dom[res3_0_conv2-base-8]
+0.06s call     ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_startup/test_kws_dom.py::test_kws_dom[res3_0_conv2-grad-14]
+0.01s setup    ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_startup/test_kws_dom.py::test_kws_dom[stem_conv1-base-12]
+0.01s setup    ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_startup/test_kws_dom.py::test_kws_dom[center_head_1-grad-10]
+0.01s setup    ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_startup/test_kws_dom.py::test_kws_dom[res3_0_conv2-base-15]
+0.01s setup    ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_startup/test_kws_dom.py::test_kws_dom[stem_conv1-base-7]
+0.01s setup    ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_startup/test_kws_dom.py::test_kws_dom[res3_0_conv2-grad-9]
+============================== 18 passed in 5.30s ==============================
+2026-11-19 22:15:46.963 | info     |    BuildKernels | JIT cache stats: 57/57 hits (100.0%) [57 cached, 122 build-once dedup, 0 merged artifacts, 0 merged genfiles] (build_cache_telemetry.cpp:362)
+2026-11-19 22:15:46.963 | info     |    BuildKernels | JIT telemetry: 38 registered TelemetryTokens (build_cache_telemetry.cpp:510)
+2026-11-19 22:15:47.012 | info     |          Device | Closing user mode device drivers (tt_cluster.cpp:605)
+2026-11-19 22:15:47.012 | info     |             UMD | Closing devices in cluster (cluster.cpp:1496)
+2026-11-19 22:15:47.384 | info     |             UMD | Closing devices in cluster completed. (cluster.cpp:1506)
+2026-11-19 22:15:47.385 | info     |             UMD | Cluster destructor started. (cluster.cpp:1227)
+2026-11-19 22:15:47.385 | info     |             UMD | Cluster destructor completed. (cluster.cpp:1240)
+2026-11-19 22:15:47.696 | INFO     | __main__:main:490 - Copying /localdev/pmilojevic/workspaces/opgen/generated/profiler/.logs/tracy_profile_log_host.tracy to /localdev/pmilojevic/workspaces/opgen/build/profiler/build_wasm/traces/test_kws_dom_2026_11_19_22_15_47.tracy
+2026-11-19 22:15:47.699 | INFO     | __main__:main:493 - Copied /localdev/pmilojevic/workspaces/opgen/generated/profiler/.logs/tracy_profile_log_host.tracy to /localdev/pmilojevic/workspaces/opgen/build/profiler/build_wasm/traces/test_kws_dom_2026_11_19_22_15_47.tracy
+2026-11-19 22:15:47.700 | INFO     | __main__:main:502 - embed.tracy -> traces/test_kws_dom_2026_11_19_22_15_47.tracy
+2026-11-19 22:15:47.700 | INFO     | tracy.serve_wasm:launch_server_subprocess:310 - Launching tracy web app GUI server subprocess...
+2026-11-19 22:15:47.700 | INFO     | tracy.serve_wasm:launch_server_subprocess:313 - Tracy WASM web UI (open in browser): http://localhost:8080/ (WebSocket for live reload: ws://localhost:8081/)
+2026-11-19 22:15:47.700 | INFO     | tracy.serve_wasm:launch_server_subprocess:320 - Tracy WASM server already serving port 8080; reusing it (live-reload refreshes the browser).
+2026-11-19 22:15:48.928 | INFO     | tracy:generate_report:162 - Host side ops time report generated at /localdev/pmilojevic/workspaces/opgen/generated/profiler/.logs/tracy_ops_times.csv
+2026-11-19 22:15:48.989 | INFO     | tracy:generate_report:173 - Host side ops data report generated at /localdev/pmilojevic/workspaces/opgen/generated/profiler/.logs/tracy_ops_data.csv
+2026-11-19 22:15:48.990 | INFO     | tracy.process_ops_logs:import_tracy_op_logs:430 - Importing ops logs
+/localdev/pmilojevic/workspaces/opgen/tools/tracy/process_ops_logs.py:535: DtypeWarning: Columns (3,4,8) have mixed types. Specify dtype option on import or set low_memory=False.
+  df = pd.read_csv(tracyOpTimesLog)
+2026-11-19 22:15:51.283 | INFO     | tracy.perf_counter_analysis:get_device_op_data:420 - Getting device ops
+2026-11-19 22:15:51.283 | INFO     | tracy.process_ops_logs:append_device_data:995 - Appending device data
+2026-11-19 22:15:51.375 | INFO     | tracy.process_ops_logs:generate_reports:1323 - OPs' perf analysis is finished! Generating reports ...
+2026-11-19 22:15:51.375 | INFO     | tracy.process_ops_logs:generate_reports:1343 - Copying runtime artifacts
+2026-11-19 22:15:51.402 | INFO     | tracy.process_ops_logs:generate_reports:1352 - Generating OPs CSV
+2026-11-19 22:15:51.421 | INFO     | tracy.process_ops_logs:generate_reports:1814 - OPs csv generated at: /localdev/pmilojevic/workspaces/opgen/generated/profiler/reports/2026_11_19_22_15_51/ops_perf_results_2026_11_19_22_15_51.csv
+========================================
+SAFE_PYTEST: PROFILER CSV: /localdev/pmilojevic/workspaces/opgen/generated/profiler/reports/2026_11_19_22_15_51/ops_perf_results_2026_11_19_22_15_51.csv
+SAFE_PYTEST_RESULT: PASS
+========================================
+SAFE_PYTEST_TOTAL_RUNTIME: 0m20s (20s total, device-lock-acquired -> exit)

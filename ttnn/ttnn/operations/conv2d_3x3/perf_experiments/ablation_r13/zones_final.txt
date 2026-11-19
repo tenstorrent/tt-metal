@@ -1,0 +1,854 @@
+=== run 1024: 108 cores, 1350 MHz
+  BRISC-KERNEL                     max     4.83 us  p50     3.22 us  cores 108
+  NCRISC-KERNEL                    max     5.05 us  p50     3.42 us  cores 108
+  TRISC-KERNEL                     max     9.51 us  p50     8.89 us  cores 108
+  TRISC-KERNEL                     max     9.51 us  p50     8.74 us  cores 108
+  TRISC-KERNEL                     max     9.53 us  p50     8.93 us  cores 108
+  zone                              risc       p50 us   max us   min us exec/core cores
+  writer_sd_weight_early            BRISC        0.15     0.15     0.05         1   108
+  writer_sd_weight_issue            BRISC        0.46     0.46     0.46         1     1
+  writer_slab_bias_wait             BRISC        0.32     1.81     0.03         1   108
+  writer_slab_fwd                   BRISC        1.48     1.64     0.49         1   108
+  writer_weight_fetch               BRISC        0.58     1.40     0.11         1   107
+  reader_fill                       NCRISC       2.63     4.27     1.66         1   108
+  reader_fill_fwd_wait              NCRISC       1.62     3.74     0.31         1   108
+  reader_fill_reserve               NCRISC       0.05     0.06     0.05         1   108
+  reader_r0_mcast                   NCRISC       0.71     0.71     0.71         1     1
+                                    TRISC_0      0.03     1.55     0.03         1   108
+  compute_matmul_stream             TRISC_0      8.71     9.33     8.30         1   108
+  compute_sd_weight_wait            TRISC_0      2.63     3.09     1.45         1   108
+  compute_matmul_stream             TRISC_1      8.62     9.39     8.23         1   108
+  compute_sd_weight_wait            TRISC_1      0.01     0.02     0.01         1   108
+  compute_matmul_stream             TRISC_2      8.72     9.33     8.32         1   108
+  compute_sd_weight_wait            TRISC_2      0.01     0.02     0.01         1   108
+  busiest marker count: 12 on ((6, 4), 'BRISC') (cap ~250 user markers per RISC)
+=== run 2048: 108 cores, 1350 MHz
+  BRISC-KERNEL                     max    18.71 us  p50    18.29 us  cores 108
+  NCRISC-KERNEL                    max    12.40 us  p50    11.16 us  cores 108
+  TRISC-KERNEL                     max    26.92 us  p50    26.66 us  cores 108
+  TRISC-KERNEL                     max    26.77 us  p50    26.37 us  cores 108
+  TRISC-KERNEL                     max    26.99 us  p50    26.77 us  cores 108
+  zone                              risc       p50 us   max us   min us exec/core cores
+  writer_bias                       BRISC        1.70     2.74     0.48         1   108
+  writer_fill                       BRISC        0.83     0.85     0.82         5   106
+  writer_khx_drain                  BRISC       10.08    11.42     5.49         1   108
+  writer_khx_send                   BRISC        0.81     1.43     0.28         3   108
+  writer_weight_fetch               BRISC        5.58     5.78     5.46         3   108
+  writer_weight_reserve             BRISC        0.14     0.15     0.14         3   108
+  writer_weight_send                BRISC        2.91     2.91     2.91         3     1
+  reader_fill                       NCRISC       2.13     2.71     1.79         1   108
+  reader_fill_fwd_wait              NCRISC       0.43     0.57     0.20         5   106
+  reader_fill_reserve               NCRISC       0.04     0.04     0.04         1   108
+  reader_kwf_bias_rows              NCRISC       8.82    10.26     7.29         1   108
+  compute_kwf_chunk_wait            TRISC_0      0.78     1.07     0.12         3   108
+  compute_kwf_final                 TRISC_0      3.17     3.22     2.80         1   108
+  compute_kwf_halo_wait             TRISC_0      0.09     0.11     0.03         3   108
+  compute_kwf_matmul_shift          TRISC_0     23.08    23.35    17.19         1   108
+  compute_kwf_side_rounds           TRISC_0     12.72    12.83     8.94         1   108
+  compute_kwf_weight_wait           TRISC_0      0.03     0.04     0.03         1   108
+  compute_kwf_chunk_wait            TRISC_1      0.05     0.06     0.03         3   108
+  compute_kwf_final                 TRISC_1      3.00     3.05     2.53         1   108
+  compute_kwf_halo_wait             TRISC_1      0.04     0.04     0.01         3   108
+  compute_kwf_matmul_shift          TRISC_1     23.12    23.53    17.56         1   108
+  compute_kwf_side_rounds           TRISC_1     12.63    12.72     8.80         1   108
+  compute_kwf_weight_wait           TRISC_1      0.01     0.02     0.01         1   108
+  compute_kwf_chunk_wait            TRISC_2      0.05     0.06     0.03         3   108
+  compute_kwf_final                 TRISC_2      3.04     3.05     2.41         1   108
+  compute_kwf_halo_wait             TRISC_2      0.04     0.04     0.01         3   108
+  compute_kwf_matmul_shift          TRISC_2     23.38    23.59    17.69         1   108
+  compute_kwf_side_rounds           TRISC_2     13.01    13.11     9.30         1   108
+  compute_kwf_weight_wait           TRISC_2      0.02     0.03     0.02         1   108
+  busiest marker count: 36 on ((6, 4), 'BRISC') (cap ~250 user markers per RISC)
+=== run 3072: 108 cores, 1350 MHz
+  BRISC-KERNEL                     max    20.19 us  p50    19.20 us  cores 108
+  NCRISC-KERNEL                    max    20.32 us  p50    19.37 us  cores 108
+  TRISC-KERNEL                     max    47.40 us  p50    47.00 us  cores 108
+  TRISC-KERNEL                     max    47.26 us  p50    46.74 us  cores 108
+  TRISC-KERNEL                     max    47.43 us  p50    47.14 us  cores 108
+  zone                              risc       p50 us   max us   min us exec/core cores
+  writer_bias                       BRISC        3.44     4.30     0.68         1   108
+  writer_fill                       BRISC        0.77     0.96     0.73         4   106
+  writer_weight_fetch               BRISC        7.18     7.55     7.00         3   108
+  writer_weight_reserve             BRISC        0.15     0.16     0.14         3   108
+  writer_weight_send                BRISC        3.79     3.79     3.79         3     1
+  reader_fill                       NCRISC       3.56     4.23     3.10         2   108
+  reader_fill_fwd_wait              NCRISC       0.17     0.59     0.16         4   106
+  reader_fill_reserve               NCRISC       0.08     0.08     0.07         2   108
+  reader_kwf_bias_rows              NCRISC      15.54    16.47    12.43         1   108
+  compute_kwf_chunk_wait            TRISC_0      1.13     1.52     0.30         3   108
+  compute_kwf_final                 TRISC_0      6.47     6.47     5.52         2   108
+  compute_kwf_matmul_shift          TRISC_0     40.05    40.45    28.69         2   108
+  compute_kwf_weight_wait           TRISC_0      0.16     0.17     0.15         5   108
+  compute_kwf_chunk_wait            TRISC_1      0.05     0.05     0.03         3   108
+  compute_kwf_final                 TRISC_1      6.05     6.07     4.99         2   108
+  compute_kwf_matmul_shift          TRISC_1     40.44    40.97    29.36         2   108
+  compute_kwf_weight_wait           TRISC_1      0.07     0.07     0.07         5   108
+  compute_kwf_chunk_wait            TRISC_2      0.05     0.05     0.03         3   108
+  compute_kwf_final                 TRISC_2      5.91     5.92     4.77         2   108
+  compute_kwf_matmul_shift          TRISC_2     40.92    41.21    29.62         2   108
+  compute_kwf_weight_wait           TRISC_2      0.07     0.07     0.07         5   108
+  busiest marker count: 28 on ((6, 3), 'TRISC_0') (cap ~250 user markers per RISC)
+=== run 4096: 105 cores, 1350 MHz
+  BRISC-KERNEL                     max     7.73 us  p50     7.53 us  cores 105
+  NCRISC-KERNEL                    max     6.24 us  p50     6.09 us  cores 105
+  TRISC-KERNEL                     max     9.87 us  p50     9.61 us  cores 103
+  TRISC-KERNEL                     max     9.48 us  p50     9.24 us  cores 103
+  TRISC-KERNEL                     max     9.88 us  p50     9.63 us  cores 103
+  zone                              risc       p50 us   max us   min us exec/core cores
+  server_flush                      BRISC        0.62     1.03     0.20         3     2
+  server_send                       BRISC        0.86     1.03     0.68         7     2
+  server_send_bias                  BRISC        0.09     0.11     0.08         1     2
+  server_wait_ack                   BRISC        0.09     0.10     0.09         3     2
+  server_wait_read                  BRISC        0.99     1.38     0.61         7     2
+  writer_fill                       BRISC        0.38     0.45     0.37         2   102
+  writer_fill_early                 BRISC        0.08     0.08     0.07         1   103
+  writer_khx_drain                  BRISC        3.32     3.45     2.45         1   103
+  writer_khx_send                   BRISC        0.82     1.02     0.29         2   103
+  writer_round0                     BRISC        1.26     1.37     0.53         1   103
+  writer_weight_fetch               BRISC        1.29     1.47     1.23         2   103
+  writer_weight_reserve             BRISC        0.11     0.12     0.10         2   103
+  reader_fill                       NCRISC       1.13     1.31     0.79         1   103
+  reader_fill_fwd_wait              NCRISC       0.15     0.29     0.08         2   102
+  reader_fill_reserve               NCRISC       0.04     0.04     0.04         1   103
+  reader_kwf_bias_rows              NCRISC       4.74     4.88     3.85         1   103
+  server_read                       NCRISC       2.92     2.93     2.92         3     2
+  compute_kwf_chunk_wait            TRISC_0      0.60     0.76     0.12         3   103
+  compute_kwf_final                 TRISC_0      1.32     1.42     0.94         1   103
+  compute_kwf_halo_wait             TRISC_0      0.10     0.97     0.03         2   103
+  compute_kwf_matmul_shift          TRISC_0      7.78     8.08     5.57         1   103
+  compute_kwf_side_rounds           TRISC_0      3.72     4.05     3.14         1   103
+  compute_kwf_weight_wait           TRISC_0      0.04     1.67     0.03         1   103
+  compute_kwf_chunk_wait            TRISC_1      0.05     0.06     0.04         3   103
+  compute_kwf_final                 TRISC_1      1.09     1.19     0.73         1   103
+  compute_kwf_halo_wait             TRISC_1      0.04     0.05     0.01         2   103
+  compute_kwf_matmul_shift          TRISC_1      7.82     8.08     5.57         1   103
+  compute_kwf_side_rounds           TRISC_1      3.78     4.08     3.26         1   103
+  compute_kwf_weight_wait           TRISC_1      0.01     0.02     0.01         1   103
+  compute_kwf_chunk_wait            TRISC_2      0.06     0.07     0.04         3   103
+  compute_kwf_final                 TRISC_2      1.08     1.10     0.58         1   103
+  compute_kwf_halo_wait             TRISC_2      0.03     0.05     0.01         2   103
+  compute_kwf_matmul_shift          TRISC_2      8.22     8.41     6.02         1   103
+  compute_kwf_side_rounds           TRISC_2      4.21     4.33     3.54         1   103
+  compute_kwf_weight_wait           TRISC_2      0.01     0.01     0.01         1   103
+  busiest marker count: 50 on ((5, 11), 'BRISC') (cap ~250 user markers per RISC)
+=== run 5120: 88 cores, 1350 MHz
+  BRISC-KERNEL                     max    10.45 us  p50    10.30 us  cores 88
+  NCRISC-KERNEL                    max     4.51 us  p50     3.03 us  cores 88
+  TRISC-KERNEL                     max    13.08 us  p50    12.75 us  cores 86
+  TRISC-KERNEL                     max    12.87 us  p50    12.53 us  cores 86
+  TRISC-KERNEL                     max    13.19 us  p50    12.85 us  cores 86
+  zone                              risc       p50 us   max us   min us exec/core cores
+  server_flush                      BRISC        0.78     0.87     0.68         3     2
+  server_send                       BRISC        2.96     3.41     2.52         6     2
+  server_send_bias                  BRISC        0.31     0.32     0.31         1     2
+  server_wait_ack                   BRISC        4.54     4.62     4.45         3     2
+  server_wait_read                  BRISC        0.31     0.44     0.19         6     2
+  writer_bias                       BRISC        0.12     0.13     0.10         1    86
+  writer_fill                       BRISC        0.47     0.49     0.13         2    86
+  writer_fill_early                 BRISC        1.10     1.16     0.61         1    86
+  writer_weight_fetch               BRISC        4.85     7.63     3.89         3    86
+  writer_weight_reserve             BRISC        3.69     4.30     0.84         3    86
+  reader_fill                       NCRISC       2.79     3.48     1.76         1    86
+  reader_fill_fwd_wait              NCRISC       0.08     0.09     0.04         2    86
+  reader_fill_reserve               NCRISC       0.05     0.05     0.04         1    86
+  server_read                       NCRISC       4.26     4.30     4.21         3     2
+  compute_bias_add                  TRISC_0      0.67     0.69     0.65         1    86
+  compute_bias_wait                 TRISC_0      0.03     0.03     0.03         1    86
+  compute_matmul_walk               TRISC_0      6.59     8.74     6.19         1    86
+  compute_tilize                    TRISC_0      5.13     5.85     2.43         4    86
+  compute_untilize                  TRISC_0      0.01     0.02     0.01         1    86
+  compute_bias_add                  TRISC_1      0.51     0.52     0.49         1    86
+  compute_bias_wait                 TRISC_1      0.02     0.02     0.01         1    86
+  compute_matmul_walk               TRISC_1      6.10     8.63     5.76         1    86
+  compute_tilize                    TRISC_1      5.66     6.38     2.60         4    86
+  compute_untilize                  TRISC_1      0.01     0.01     0.01         1    86
+  compute_bias_add                  TRISC_2      0.58     0.60     0.56         1    86
+  compute_bias_wait                 TRISC_2      0.01     0.01     0.01         1    86
+  compute_matmul_walk               TRISC_2      6.17     8.69     5.83         1    86
+  compute_tilize                    TRISC_2      5.75     6.45     2.69         4    86
+  compute_untilize                  TRISC_2      0.02     0.03     0.02         1    86
+  busiest marker count: 42 on ((14, 9), 'BRISC') (cap ~250 user markers per RISC)
+=== run 6144: 88 cores, 1350 MHz
+  BRISC-KERNEL                     max     8.71 us  p50     8.30 us  cores 88
+  NCRISC-KERNEL                    max     7.69 us  p50     7.55 us  cores 88
+  TRISC-KERNEL                     max    10.07 us  p50     9.67 us  cores 86
+  TRISC-KERNEL                     max     9.77 us  p50     9.37 us  cores 86
+  TRISC-KERNEL                     max    10.13 us  p50     9.74 us  cores 86
+  zone                              risc       p50 us   max us   min us exec/core cores
+  server_flush                      BRISC        0.89     0.91     0.87         3     2
+  server_send                       BRISC        2.40     2.52     2.28         8     2
+  server_send_bias                  BRISC        0.29     0.30     0.29         1     2
+  server_wait_ack                   BRISC        0.09     0.09     0.09         3     2
+  server_wait_read                  BRISC        0.50     0.55     0.45         8     2
+  writer_fill                       BRISC        0.32     0.34     0.27         2    84
+  writer_fill_early                 BRISC        0.07     0.10     0.07         1    86
+  writer_khx_drain                  BRISC        2.71     3.07     2.04         1    86
+  writer_khx_send                   BRISC        0.84     1.16     0.34         2    86
+  writer_round0                     BRISC        2.07     2.23     1.85         1    86
+  writer_weight_fetch               BRISC        1.80     1.95     1.71         2    86
+  writer_weight_reserve             BRISC        0.11     0.14     0.10         2    86
+  reader_fill                       NCRISC       1.08     1.20     0.57         1    86
+  reader_fill_fwd_wait              NCRISC       0.18     0.45     0.08         2    84
+  reader_fill_reserve               NCRISC       0.04     0.04     0.04         1    86
+  reader_kwf_bias_rows              NCRISC       6.30     6.40     6.24         1    86
+  server_read                       NCRISC       4.20     4.29     4.10         3     2
+  compute_kwf_chunk_wait            TRISC_0      1.34     1.61     0.93         3    86
+  compute_kwf_final                 TRISC_0      1.14     1.17     0.97         1    86
+  compute_kwf_halo_wait             TRISC_0      0.10     0.69     0.03         2    86
+  compute_kwf_matmul_shift          TRISC_0      8.14     8.52     6.11         1    86
+  compute_kwf_weight_wait           TRISC_0      0.11     1.91     0.06         2    86
+  compute_kwf_chunk_wait            TRISC_1      0.04     0.05     0.03         3    86
+  compute_kwf_final                 TRISC_1      0.86     0.89     0.15         1    86
+  compute_kwf_halo_wait             TRISC_1      0.05     0.06     0.02         2    86
+  compute_kwf_matmul_shift          TRISC_1      8.26     8.65     6.16         1    86
+  compute_kwf_weight_wait           TRISC_1      0.04     0.05     0.03         2    86
+  compute_kwf_chunk_wait            TRISC_2      0.05     0.05     0.03         3    86
+  compute_kwf_final                 TRISC_2      0.76     0.78     0.63         1    86
+  compute_kwf_halo_wait             TRISC_2      0.04     0.06     0.02         2    86
+  compute_kwf_matmul_shift          TRISC_2      8.72     9.09     6.64         1    86
+  compute_kwf_weight_wait           TRISC_2      0.03     0.03     0.03         2    86
+  busiest marker count: 50 on ((14, 9), 'BRISC') (cap ~250 user markers per RISC)
+=== run 7168: 104 cores, 1350 MHz
+  BRISC-KERNEL                     max    11.19 us  p50    10.46 us  cores 104
+  NCRISC-KERNEL                    max    10.40 us  p50     9.96 us  cores 104
+  TRISC-KERNEL                     max    10.61 us  p50    10.10 us  cores 104
+  TRISC-KERNEL                     max    10.48 us  p50     9.98 us  cores 104
+  TRISC-KERNEL                     max    10.65 us  p50    10.22 us  cores 104
+  zone                              risc       p50 us   max us   min us exec/core cores
+  writer_fill                       BRISC        0.51     0.52     0.49         1    24
+  writer_fill_early                 BRISC        0.62     0.64     0.60         1    24
+  writer_ring_credit                BRISC        0.08     0.09     0.08         1   104
+  writer_round0_issue               BRISC        0.18     0.21     0.17         1     8
+  writer_round0_relay               BRISC        0.11     0.13     0.10         1     8
+  writer_round0_send                BRISC        0.09     0.09     0.08         1     8
+  writer_spare_forward              BRISC        1.44     1.91     1.31         7     8
+  writer_store                      BRISC        1.83     2.19     1.08         1   104
+  writer_weight_fetch               BRISC        7.38     7.92     6.75         8   104
+  reader_combine_send               NCRISC       8.17     8.55     7.51         1   104
+  reader_fill                       NCRISC       1.52     2.27     1.45         1   104
+  reader_fill_fwd_wait              NCRISC       0.16     0.39     0.15         4    24
+  reader_fill_reserve               NCRISC       0.04     0.04     0.04         1   104
+  reader_ring_send                  NCRISC       1.87     1.95     1.73        16   104
+  reader_ring_wait_step             NCRISC       5.28     5.78     4.71        16   104
+  compute_combine                   TRISC_0      0.44     0.50     0.38         1   104
+  compute_combine_bias_wait         TRISC_0      0.03     0.04     0.03         1   104
+  compute_matmul_walk               TRISC_0      6.77     7.89     6.71         1   104
+  compute_tilize                    TRISC_0      2.49     2.88     1.95         1   104
+  compute_untilize                  TRISC_0      0.01     0.02     0.01         1   104
+  compute_combine                   TRISC_1      0.35     0.44     0.24         1   104
+  compute_combine_bias_wait         TRISC_1      0.02     0.02     0.01         1   104
+  compute_matmul_walk               TRISC_1      6.36     7.51     6.24         1   104
+  compute_tilize                    TRISC_1      2.97     3.32     2.27         1   104
+  compute_untilize                  TRISC_1      0.01     0.02     0.01         1   104
+  compute_combine                   TRISC_2      0.49     0.51     0.48         1   104
+  compute_combine_bias_wait         TRISC_2      0.02     0.03     0.01         1   104
+  compute_matmul_walk               TRISC_2      6.29     7.42     6.14         1   104
+  compute_tilize                    TRISC_2      3.07     3.41     2.34         1   104
+  compute_untilize                  TRISC_2      0.02     0.02     0.02         1   104
+  busiest marker count: 82 on ((13, 4), 'NCRISC') (cap ~250 user markers per RISC)
+=== run 8192: 104 cores, 1350 MHz
+  BRISC-KERNEL                     max    10.63 us  p50     9.73 us  cores 104
+  NCRISC-KERNEL                    max     9.90 us  p50     9.21 us  cores 104
+  TRISC-KERNEL                     max    10.01 us  p50     9.35 us  cores 104
+  TRISC-KERNEL                     max     9.87 us  p50     9.22 us  cores 104
+  TRISC-KERNEL                     max    10.19 us  p50     9.48 us  cores 104
+  zone                              risc       p50 us   max us   min us exec/core cores
+  writer_fill                       BRISC        0.30     0.35     0.21         1    24
+  writer_fill_early                 BRISC        0.44     0.50     0.34         1    24
+  writer_ring_credit                BRISC        0.08     0.09     0.08         1   104
+  writer_round0_issue               BRISC        0.19     0.19     0.18         1     8
+  writer_round0_relay               BRISC        0.12     0.17     0.09         1     8
+  writer_round0_send                BRISC        0.08     0.09     0.08         1     8
+  writer_spare_forward              BRISC        1.61     2.77     1.29         7     8
+  writer_store                      BRISC        1.93     2.40     1.11         1   104
+  writer_weight_fetch               BRISC        6.62     7.34     5.84         8   104
+  reader_center                     NCRISC       0.57     0.65     0.55         1   104
+  reader_center_wait                NCRISC       0.06     0.07     0.05         1   104
+  reader_combine_send               NCRISC       6.45     7.50     6.37         1   104
+  reader_fill                       NCRISC       1.00     1.21     0.86         1   104
+  reader_fill_fwd_wait              NCRISC       0.09     0.19     0.04         2    24
+  reader_fill_reserve               NCRISC       0.04     0.05     0.04         1   104
+  reader_gather                     NCRISC       0.10     0.11     0.09         1   104
+  reader_ring_send                  NCRISC       1.86     2.04     1.75        16   104
+  reader_ring_wait_step             NCRISC       3.45     4.63     3.26        16   104
+  reader_slab_dead_wait             NCRISC       0.53     0.61     0.18         1   104
+  compute_combine                   TRISC_0      0.42     0.47     0.37         1   104
+  compute_combine_bias_wait         TRISC_0      0.03     0.04     0.03         1   104
+  compute_matmul_walk               TRISC_0      6.47     7.40     6.33         1   104
+  compute_tilize                    TRISC_0      1.93     2.01     1.45         1   104
+  compute_untilize                  TRISC_0      0.01     0.03     0.01         1   104
+  compute_combine                   TRISC_1      0.34     0.43     0.24         1   104
+  compute_combine_bias_wait         TRISC_1      0.01     0.02     0.01         1   104
+  compute_matmul_walk               TRISC_1      6.58     7.43     6.37         1   104
+  compute_tilize                    TRISC_1      2.01     2.28     1.63         1   104
+  compute_untilize                  TRISC_1      0.01     0.02     0.01         1   104
+  compute_combine                   TRISC_2      0.51     0.53     0.50         1   104
+  compute_combine_bias_wait         TRISC_2      0.02     0.02     0.01         1   104
+  compute_matmul_walk               TRISC_2      6.31     7.35     6.19         1   104
+  compute_tilize                    TRISC_2      2.21     2.32     1.86         1   104
+  compute_untilize                  TRISC_2      0.02     0.02     0.02         1   104
+  busiest marker count: 86 on ((14, 5), 'NCRISC') (cap ~250 user markers per RISC)
+=== run 9216: 104 cores, 1350 MHz
+  BRISC-KERNEL                     max    25.88 us  p50    24.70 us  cores 104
+  NCRISC-KERNEL                    max    24.93 us  p50    23.86 us  cores 104
+  TRISC-KERNEL                     max    25.31 us  p50    24.21 us  cores 104
+  TRISC-KERNEL                     max    25.10 us  p50    24.02 us  cores 104
+  TRISC-KERNEL                     max    25.30 us  p50    24.25 us  cores 104
+  zone                              risc       p50 us   max us   min us exec/core cores
+  writer_fill                       BRISC        0.36     0.46     0.31         1    24
+  writer_fill_early                 BRISC        0.51     0.61     0.46         1    24
+  writer_ring_credit                BRISC        0.09     0.11     0.08         1   104
+  writer_round0_issue               BRISC        0.26     0.27     0.25         1     8
+  writer_round0_relay               BRISC        0.48     0.59     0.41         1     8
+  writer_round0_send                BRISC        0.54     0.61     0.49         1     8
+  writer_spare_forward              BRISC        3.98     4.71     3.58         7     8
+  writer_store                      BRISC        7.79     9.30     2.42         1   104
+  writer_weight_fetch               BRISC       15.44    17.06    14.20         8   104
+  reader_center                     NCRISC       0.51     0.63     0.49         1   104
+  reader_center_wait                NCRISC       0.10     0.48     0.05         1   104
+  reader_combine_send               NCRISC      20.16    21.01    15.17         1   104
+  reader_fill                       NCRISC       1.65     2.40     1.04         1   104
+  reader_fill_fwd_wait              NCRISC       0.09     0.18     0.09         2    24
+  reader_fill_reserve               NCRISC       0.04     0.05     0.04         1   104
+  reader_gather                     NCRISC       0.13     0.51     0.09         1   104
+  reader_ring_send                  NCRISC       3.36     3.87     3.28        16   104
+  reader_ring_wait_step             NCRISC      15.78    16.69    10.41        16   104
+  reader_slab_dead_wait             NCRISC       0.77     1.35     0.30         1   104
+  compute_combine                   TRISC_0      0.62     0.83     0.56         1   104
+  compute_combine_bias_wait         TRISC_0      0.04     0.05     0.03         1   104
+  compute_matmul_walk               TRISC_0     20.15    21.01    15.32         1   104
+  compute_tilize                    TRISC_0      2.90     3.96     1.67         1   104
+  compute_untilize                  TRISC_0      0.01     0.02     0.01         1   104
+  compute_combine                   TRISC_1      0.51     0.76     0.40         1   104
+  compute_combine_bias_wait         TRISC_1      0.02     0.03     0.01         1   104
+  compute_matmul_walk               TRISC_1     20.07    20.89    15.33         1   104
+  compute_tilize                    TRISC_1      3.02     4.11     1.82         1   104
+  compute_untilize                  TRISC_1      0.02     0.03     0.01         1   104
+  compute_combine                   TRISC_2      0.59     0.64     0.56         1   104
+  compute_combine_bias_wait         TRISC_2      0.02     0.02     0.01         1   104
+  compute_matmul_walk               TRISC_2     20.02    20.89    15.02         1   104
+  compute_tilize                    TRISC_2      3.16     4.25     2.05         1   104
+  compute_untilize                  TRISC_2      0.02     0.03     0.02         1   104
+  busiest marker count: 88 on ((14, 3), 'NCRISC') (cap ~250 user markers per RISC)
+=== run 10240: 104 cores, 1350 MHz
+  BRISC-KERNEL                     max    25.79 us  p50    25.01 us  cores 104
+  NCRISC-KERNEL                    max    24.94 us  p50    24.18 us  cores 104
+  TRISC-KERNEL                     max    25.31 us  p50    24.52 us  cores 104
+  TRISC-KERNEL                     max    25.14 us  p50    24.35 us  cores 104
+  TRISC-KERNEL                     max    25.36 us  p50    24.58 us  cores 104
+  zone                              risc       p50 us   max us   min us exec/core cores
+  writer_fill                       BRISC        0.37     0.42     0.25         1    31
+  writer_fill_early                 BRISC        0.48     0.54     0.35         1    31
+  writer_ring_credit                BRISC        0.08     0.10     0.08         1   104
+  writer_round0_issue               BRISC        0.25     0.26     0.24         1     8
+  writer_round0_relay               BRISC        0.49     0.55     0.39         1     8
+  writer_round0_send                BRISC        0.55     0.59     0.49         1     8
+  writer_spare_forward              BRISC        3.99     5.91     3.63         7     8
+  writer_store                      BRISC        7.89     9.38     2.46         1   104
+  writer_weight_fetch               BRISC       15.78    16.79    14.60         8   104
+  reader_center                     NCRISC       0.41     0.55     0.39         1   104
+  reader_center_wait                NCRISC       0.21     0.88     0.07         1   104
+  reader_combine_send               NCRISC      20.19    20.27    15.30         1   104
+  reader_fill                       NCRISC       2.41     2.96     1.37         1   104
+  reader_fill_fwd_wait              NCRISC       0.09     0.12     0.08         2    31
+  reader_fill_reserve               NCRISC       0.04     0.06     0.03         1   104
+  reader_gather                     NCRISC       0.24     0.91     0.10         1   104
+  reader_ring_send                  NCRISC       3.40     4.12     3.28        16   104
+  reader_ring_wait_step             NCRISC      15.80    15.99    10.40        16   104
+  reader_slab_dead_wait             NCRISC       0.28     0.90     0.05         1   104
+  compute_combine                   TRISC_0      0.63     0.68     0.57         1   104
+  compute_combine_bias_wait         TRISC_0      0.03     0.04     0.03         1   104
+  compute_matmul_walk               TRISC_0     20.06    20.34    15.30         1   104
+  compute_tilize                    TRISC_0      3.30     4.09     1.90         1   104
+  compute_untilize                  TRISC_0      0.01     0.02     0.01         1   104
+  compute_combine                   TRISC_1      0.50     0.60     0.40         1   104
+  compute_combine_bias_wait         TRISC_1      0.02     0.03     0.01         1   104
+  compute_matmul_walk               TRISC_1     20.06    20.43    15.29         1   104
+  compute_tilize                    TRISC_1      3.36     4.15     1.96         1   104
+  compute_untilize                  TRISC_1      0.02     0.03     0.01         1   104
+  compute_combine                   TRISC_2      0.60     0.64     0.58         1   104
+  compute_combine_bias_wait         TRISC_2      0.02     0.02     0.01         1   104
+  compute_matmul_walk               TRISC_2     20.06    20.26    15.18         1   104
+  compute_tilize                    TRISC_2      3.50     4.24     2.23         1   104
+  compute_untilize                  TRISC_2      0.02     0.02     0.02         1   104
+  busiest marker count: 88 on ((13, 4), 'NCRISC') (cap ~250 user markers per RISC)
+=== run 11264: 104 cores, 1350 MHz
+  BRISC-KERNEL                     max    23.92 us  p50    20.65 us  cores 104
+  NCRISC-KERNEL                    max    23.03 us  p50    19.83 us  cores 104
+  TRISC-KERNEL                     max    23.55 us  p50    20.33 us  cores 104
+  TRISC-KERNEL                     max    23.48 us  p50    20.13 us  cores 104
+  TRISC-KERNEL                     max    23.48 us  p50    20.30 us  cores 104
+  zone                              risc       p50 us   max us   min us exec/core cores
+  writer_fill                       BRISC        0.36     0.46     0.25         1    59
+  writer_fill_early                 BRISC        0.47     0.58     0.36         1    59
+  writer_ring_credit                BRISC        0.08     0.09     0.07         1   104
+  writer_round0_issue               BRISC        0.22     0.23     0.22         1     8
+  writer_round0_relay               BRISC        0.48     0.56     0.43         1     8
+  writer_round0_send                BRISC        0.48     0.59     0.43         1     8
+  writer_spare_forward              BRISC        4.25     5.29     3.55         7     8
+  writer_store                      BRISC        4.49     8.95     2.25         1   104
+  writer_weight_fetch               BRISC       14.48    16.21    13.41         8   104
+  reader_center                     NCRISC       0.38     0.66     0.35         1   104
+  reader_center_wait                NCRISC       0.13     0.49     0.05         1   104
+  reader_combine_send               NCRISC      15.95    19.34    15.22         1   104
+  reader_fill                       NCRISC       2.13     2.79     1.27         1   104
+  reader_fill_fwd_wait              NCRISC       0.12     0.26     0.08         3    59
+  reader_fill_reserve               NCRISC       0.04     0.04     0.03         1   104
+  reader_gather                     NCRISC       0.16     0.53     0.09         1   104
+  reader_ring_send                  NCRISC       2.43     5.22     2.35         8   104
+  reader_ring_wait_step             NCRISC      12.32    14.53    12.02         8   104
+  reader_slab_dead_wait             NCRISC       0.42     0.92     0.06         1   104
+  compute_combine                   TRISC_0      0.86     0.91     0.79         1   104
+  compute_combine_bias_wait         TRISC_0      0.04     0.05     0.03         1   104
+  compute_matmul_walk               TRISC_0     15.88    19.13    15.11         1   104
+  compute_tilize                    TRISC_0      2.92     4.04     2.03         1   104
+  compute_untilize                  TRISC_0      0.01     0.02     0.01         1   104
+  compute_combine                   TRISC_1      0.74     0.77     0.70         1   104
+  compute_combine_bias_wait         TRISC_1      0.02     0.02     0.01         1   104
+  compute_matmul_walk               TRISC_1     15.86    19.13    15.08         1   104
+  compute_tilize                    TRISC_1      2.96     4.18     2.07         1   104
+  compute_untilize                  TRISC_1      0.02     0.03     0.02         1   104
+  compute_combine                   TRISC_2      0.70     0.73     0.69         1   104
+  compute_combine_bias_wait         TRISC_2      0.02     0.02     0.01         1   104
+  compute_matmul_walk               TRISC_2     15.82    19.19    15.11         1   104
+  compute_tilize                    TRISC_2      3.18     4.16     2.24         1   104
+  compute_untilize                  TRISC_2      0.02     0.03     0.02         1   104
+  busiest marker count: 90 on ((11, 2), 'NCRISC') (cap ~250 user markers per RISC)
+=== run 12288: 110 cores, 1350 MHz
+  BRISC-KERNEL                     max    47.69 us  p50    44.34 us  cores 110
+  NCRISC-KERNEL                    max    46.99 us  p50    45.28 us  cores 110
+  TRISC-KERNEL                     max    47.29 us  p50    45.18 us  cores 110
+  TRISC-KERNEL                     max    47.16 us  p50    45.20 us  cores 110
+  TRISC-KERNEL                     max    47.37 us  p50    45.05 us  cores 110
+  zone                              risc       p50 us   max us   min us exec/core cores
+  writer_fill                       BRISC        0.36     0.74     0.18         1    59
+  writer_fill_early                 BRISC        0.49     1.06     0.28         1    59
+  writer_ring_credit                BRISC        0.08     0.10     0.08         1   110
+  writer_round0_issue               BRISC        0.27     0.29     0.26         1    11
+  writer_round0_send                BRISC        0.87     0.93     0.68         1    11
+  writer_slab_dead_wait             BRISC        1.17     1.27     0.29         1     5
+  writer_store                      BRISC       15.23    17.47     4.29         1    80
+  writer_weight_fetch               BRISC       28.68    30.23    26.41         8   110
+  reader_center                     NCRISC       0.79     2.45     0.69         1   110
+  reader_center_wait                NCRISC       0.96     1.36     0.45         1   110
+  reader_combine_send               NCRISC      35.34    37.08    26.70         1   110
+  reader_fill                       NCRISC       4.40     6.30     1.68         1   110
+  reader_fill_fwd_wait              NCRISC       0.08     0.13     0.04         2    59
+  reader_fill_reserve               NCRISC       0.04     0.05     0.04         1   110
+  reader_gather                     NCRISC       1.00     1.39     0.49         1   110
+  reader_ring_send                  NCRISC       1.70     3.58     1.68        16   110
+  reader_ring_wait_step             NCRISC      32.27    34.16    23.55        16   110
+  reader_slab_dead_wait             NCRISC       2.45     3.73     0.21         1   110
+  compute_combine                   TRISC_0      0.59     2.28     0.13         1   110
+  compute_combine_bias_wait         TRISC_0      0.03     0.04     0.03         1    80
+  compute_matmul_walk               TRISC_0     35.84    36.33    26.92         1   110
+  compute_tilize                    TRISC_0      8.41    10.19     5.93         1   110
+  compute_untilize                  TRISC_0      0.02     0.03     0.01         1   110
+  compute_combine                   TRISC_1      0.58     2.27     0.02         1   110
+  compute_combine_bias_wait         TRISC_1      0.02     0.02     0.01         1    80
+  compute_matmul_walk               TRISC_1     35.40    35.94    26.59         1   110
+  compute_tilize                    TRISC_1      9.02    10.76     6.31         1   110
+  compute_untilize                  TRISC_1      0.02     0.02     0.01         1   110
+  compute_combine                   TRISC_2      0.60     0.62     0.02         1   110
+  compute_combine_bias_wait         TRISC_2      0.02     0.02     0.01         1    80
+  compute_matmul_walk               TRISC_2     35.11    37.03    26.57         1   110
+  compute_tilize                    TRISC_2      9.23    10.96     6.44         1   110
+  compute_untilize                  TRISC_2      0.02     0.03     0.02         1   110
+  busiest marker count: 88 on ((6, 3), 'NCRISC') (cap ~250 user markers per RISC)
+=== run 13312: 110 cores, 1350 MHz
+  BRISC-KERNEL                     max    41.71 us  p50    36.34 us  cores 110
+  NCRISC-KERNEL                    max    40.95 us  p50    37.96 us  cores 110
+  TRISC-KERNEL                     max    41.26 us  p50    38.06 us  cores 110
+  TRISC-KERNEL                     max    41.05 us  p50    37.81 us  cores 110
+  TRISC-KERNEL                     max    41.34 us  p50    38.14 us  cores 110
+  zone                              risc       p50 us   max us   min us exec/core cores
+  writer_fill                       BRISC        0.39     0.87     0.29         1    69
+  writer_fill_early                 BRISC        0.53     1.19     0.39         1    69
+  writer_ring_credit                BRISC        0.08     0.10     0.08         1   110
+  writer_round0_issue               BRISC        0.29     0.29     0.28         1    11
+  writer_round0_send                BRISC        0.88     1.49     0.70         1    11
+  writer_store                      BRISC       10.54    14.39     3.67         1    80
+  writer_weight_fetch               BRISC       25.88    28.19    24.18         8   110
+  reader_center                     NCRISC       1.48     4.07     0.47         1   110
+  reader_center_wait                NCRISC       0.81     1.16     0.43         1   110
+  reader_combine_send               NCRISC      29.93    32.41    22.49         1   110
+  reader_fill                       NCRISC       5.53     6.61     1.92         1   110
+  reader_fill_fwd_wait              NCRISC       0.12     0.74     0.08         3    69
+  reader_fill_reserve               NCRISC       0.04     0.05     0.04         1   110
+  reader_gather                     NCRISC       0.85     1.20     0.47         1   110
+  reader_ring_send                  NCRISC       1.68     4.64     0.86        16   110
+  reader_ring_wait_step             NCRISC      26.95    29.46    20.76        16   110
+  reader_slab_dead_wait             NCRISC       0.80     2.85     0.06         1   110
+  compute_combine                   TRISC_0      0.54     2.16     0.07         1   110
+  compute_combine_bias_wait         TRISC_0      0.03     0.04     0.03         1    80
+  compute_matmul_walk               TRISC_0     30.33    31.40    22.91         1   110
+  compute_tilize                    TRISC_0      7.72     8.91     5.26         1   110
+  compute_untilize                  TRISC_0      0.01     0.03     0.01         1   110
+  compute_combine                   TRISC_1      0.37     1.98     0.02         1   110
+  compute_combine_bias_wait         TRISC_1      0.02     0.02     0.01         1    80
+  compute_matmul_walk               TRISC_1     29.82    30.86    22.37         1   110
+  compute_tilize                    TRISC_1      8.37     9.54     6.15         1   110
+  compute_untilize                  TRISC_1      0.01     0.02     0.01         1   110
+  compute_combine                   TRISC_2      0.50     1.28     0.02         1   110
+  compute_combine_bias_wait         TRISC_2      0.02     0.02     0.01         1    80
+  compute_matmul_walk               TRISC_2     29.80    32.33    22.37         1   110
+  compute_tilize                    TRISC_2      8.49     9.69     6.06         1   110
+  compute_untilize                  TRISC_2      0.02     0.03     0.02         1   110
+  busiest marker count: 90 on ((6, 4), 'NCRISC') (cap ~250 user markers per RISC)
+=== run 14336: 110 cores, 1350 MHz
+  BRISC-KERNEL                     max    19.78 us  p50    18.46 us  cores 110
+  NCRISC-KERNEL                    max    18.75 us  p50    17.85 us  cores 110
+  TRISC-KERNEL                     max    19.02 us  p50    17.99 us  cores 110
+  TRISC-KERNEL                     max    18.96 us  p50    17.95 us  cores 110
+  TRISC-KERNEL                     max    19.12 us  p50    17.99 us  cores 110
+  zone                              risc       p50 us   max us   min us exec/core cores
+  writer_fill                       BRISC        0.31     0.60     0.26         1    49
+  writer_fill_early                 BRISC        0.45     0.88     0.40         1    49
+  writer_ring_credit                BRISC        0.08     0.10     0.07         1   110
+  writer_round0_issue               BRISC        0.23     0.24     0.22         1    11
+  writer_round0_send                BRISC        0.14     0.15     0.13         1    11
+  writer_store                      BRISC        4.59     5.83     2.76         1    80
+  writer_weight_fetch               BRISC       12.59    14.35    11.23         8   110
+  reader_center                     NCRISC       0.72     1.48     0.51         1   110
+  reader_center_wait                NCRISC       0.28     0.60     0.20         1   110
+  reader_combine_send               NCRISC      13.20    14.71    11.49         1   110
+  reader_fill                       NCRISC       2.44     3.03     1.26         1   110
+  reader_fill_fwd_wait              NCRISC       0.08     0.22     0.08         2    49
+  reader_fill_reserve               NCRISC       0.04     0.05     0.04         1   110
+  reader_gather                     NCRISC       0.33     0.66     0.23         1   110
+  reader_ring_send                  NCRISC       1.72     2.45     1.64        16   110
+  reader_ring_wait_step             NCRISC      10.13    11.77     8.59        16   110
+  reader_slab_dead_wait             NCRISC       0.70     1.08     0.06         1   110
+  compute_combine                   TRISC_0      0.54     1.11     0.11         1   110
+  compute_matmul_walk               TRISC_0     13.48    14.83    11.74         1   110
+  compute_tilize                    TRISC_0      3.60     4.21     2.46         1   110
+  compute_untilize                  TRISC_0      0.01     0.02     0.01         1   110
+  compute_combine                   TRISC_1      0.46     1.09     0.02         1   110
+  compute_matmul_walk               TRISC_1     13.20    14.47    11.39         1   110
+  compute_tilize                    TRISC_1      4.03     4.59     2.87         1   110
+  compute_untilize                  TRISC_1      0.02     0.04     0.01         1   110
+  compute_combine                   TRISC_2      0.50     0.53     0.02         1   110
+  compute_matmul_walk               TRISC_2     12.94    14.65    11.37         1   110
+  compute_tilize                    TRISC_2      4.21     4.81     3.08         1   110
+  compute_untilize                  TRISC_2      0.02     0.03     0.02         1   110
+  busiest marker count: 88 on ((6, 2), 'NCRISC') (cap ~250 user markers per RISC)
+=== run 15360: 88 cores, 1350 MHz
+  BRISC-KERNEL                     max    31.22 us  p50    30.76 us  cores 88
+  NCRISC-KERNEL                    max    14.34 us  p50    13.99 us  cores 88
+  TRISC-KERNEL                     max    34.32 us  p50    33.96 us  cores 86
+  TRISC-KERNEL                     max    33.98 us  p50    33.62 us  cores 86
+  TRISC-KERNEL                     max    34.37 us  p50    34.01 us  cores 86
+  zone                              risc       p50 us   max us   min us exec/core cores
+  server_flush                      BRISC        2.37     2.76     1.99         6     2
+  server_send                       BRISC       11.71    12.02    11.40        10     2
+  server_send_bias                  BRISC        0.34     0.37     0.32         1     2
+  server_wait_ack                   BRISC        3.98     4.48     3.48         6     2
+  server_wait_read                  BRISC        0.87     0.89     0.85        10     2
+  writer_fill                       BRISC        0.37     0.38     0.30         2    84
+  writer_fill_early                 BRISC        0.08     0.12     0.07         1    86
+  writer_khx_drain                  BRISC        9.98    10.55     1.96         1    86
+  writer_khx_send                   BRISC        1.59     2.29     0.64         4    86
+  writer_round0                     BRISC        3.32     3.95     3.26         1    86
+  writer_weight_fetch               BRISC       13.09    15.58    12.75         5    86
+  writer_weight_reserve             BRISC        2.48     2.84     0.26         5    86
+  reader_fill                       NCRISC       1.71     2.01     0.74         1    86
+  reader_fill_fwd_wait              NCRISC       0.09     0.57     0.09         2    84
+  reader_fill_reserve               NCRISC       0.04     0.05     0.04         1    86
+  reader_kwf_bias_rows              NCRISC      12.10    12.33    12.03         1    86
+  server_read                       NCRISC      13.64    13.68    13.61         6     2
+  compute_kwf_chunk_wait            TRISC_0      1.52     2.32     1.15         3    86
+  compute_kwf_final                 TRISC_0      2.24     4.03     2.11         2    86
+  compute_kwf_halo_wait             TRISC_0      0.14     3.50     0.05         4    86
+  compute_kwf_matmul_shift          TRISC_0     31.28    31.65    19.36         2    86
+  compute_kwf_weight_wait           TRISC_0      0.14     9.61     0.13         5    86
+  compute_kwf_chunk_wait            TRISC_1      0.04     0.04     0.03         3    86
+  compute_kwf_final                 TRISC_1      1.71     3.51     0.22         2    86
+  compute_kwf_halo_wait             TRISC_1      0.06     0.09     0.03         4    86
+  compute_kwf_matmul_shift          TRISC_1     31.66    32.01    21.82         2    86
+  compute_kwf_weight_wait           TRISC_1      0.07     0.08     0.07         5    86
+  compute_kwf_chunk_wait            TRISC_2      0.05     0.05     0.03         3    86
+  compute_kwf_final                 TRISC_2      1.56     3.37     1.43         2    86
+  compute_kwf_halo_wait             TRISC_2      0.06     0.08     0.03         4    86
+  compute_kwf_matmul_shift          TRISC_2     32.10    32.45    20.18         2    86
+  compute_kwf_weight_wait           TRISC_2      0.07     0.07     0.07         5    86
+  busiest marker count: 74 on ((15, 9), 'BRISC') (cap ~250 user markers per RISC)
+=== run 16384: 88 cores, 1350 MHz
+  BRISC-KERNEL                     max    15.66 us  p50    15.34 us  cores 88
+  NCRISC-KERNEL                    max     8.30 us  p50     7.94 us  cores 88
+  TRISC-KERNEL                     max    18.71 us  p50    18.56 us  cores 86
+  TRISC-KERNEL                     max    18.41 us  p50    18.24 us  cores 86
+  TRISC-KERNEL                     max    18.79 us  p50    18.63 us  cores 86
+  zone                              risc       p50 us   max us   min us exec/core cores
+  server_flush                      BRISC        1.07     1.29     0.85         3     2
+  server_send                       BRISC        5.88     5.94     5.83         7     2
+  server_send_bias                  BRISC        0.36     0.37     0.34         1     2
+  server_wait_ack                   BRISC        0.09     0.09     0.09         3     2
+  server_wait_read                  BRISC        0.82     0.83     0.80         7     2
+  writer_fill                       BRISC        0.36     0.39     0.30         2    84
+  writer_fill_early                 BRISC        0.08     0.11     0.07         1    86
+  writer_khx_drain                  BRISC        6.11     6.40     1.95         1    86
+  writer_khx_send                   BRISC        0.82     1.14     0.32         2    86
+  writer_round0                     BRISC        3.47     3.88     3.40         1    86
+  writer_weight_fetch               BRISC        4.12     4.72     3.99         2    86
+  writer_weight_reserve             BRISC        0.11     0.14     0.10         2    86
+  reader_fill                       NCRISC       1.71     2.06     0.75         1    86
+  reader_fill_fwd_wait              NCRISC       0.09     0.34     0.08         2    84
+  reader_fill_reserve               NCRISC       0.04     0.05     0.04         1    86
+  reader_kwf_bias_rows              NCRISC       6.04     6.12     5.97         1    86
+  server_read                       NCRISC       6.93     6.97     6.90         3     2
+  compute_kwf_chunk_wait            TRISC_0      1.57     2.65     1.12         3    86
+  compute_kwf_final                 TRISC_0      1.15     1.36     0.83         1    86
+  compute_kwf_halo_wait             TRISC_0      0.07     0.26     0.03         2    86
+  compute_kwf_matmul_shift          TRISC_0     17.06    17.21    10.33         1    86
+  compute_kwf_weight_wait           TRISC_0      0.06     4.15     0.05         2    86
+  compute_kwf_chunk_wait            TRISC_1      0.04     0.05     0.03         3    86
+  compute_kwf_final                 TRISC_1      0.88     1.10     0.12         1    86
+  compute_kwf_halo_wait             TRISC_1      0.04     0.05     0.01         2    86
+  compute_kwf_matmul_shift          TRISC_1     17.18    17.34    10.47         1    86
+  compute_kwf_weight_wait           TRISC_1      0.03     0.04     0.03         2    86
+  compute_kwf_chunk_wait            TRISC_2      0.05     0.05     0.03         3    86
+  compute_kwf_final                 TRISC_2      0.78     0.99     0.45         1    86
+  compute_kwf_halo_wait             TRISC_2      0.03     0.04     0.01         2    86
+  compute_kwf_matmul_shift          TRISC_2     17.56    17.70    10.85         1    86
+  compute_kwf_weight_wait           TRISC_2      0.03     0.04     0.03         2    86
+  busiest marker count: 46 on ((14, 9), 'BRISC') (cap ~250 user markers per RISC)
+=== run 17408: 88 cores, 1350 MHz
+  BRISC-KERNEL                     max    25.99 us  p50    25.33 us  cores 88
+  NCRISC-KERNEL                    max    14.26 us  p50    13.87 us  cores 88
+  TRISC-KERNEL                     max    28.45 us  p50    27.90 us  cores 86
+  TRISC-KERNEL                     max    28.11 us  p50    27.56 us  cores 86
+  TRISC-KERNEL                     max    28.50 us  p50    27.95 us  cores 86
+  zone                              risc       p50 us   max us   min us exec/core cores
+  server_flush                      BRISC        1.70     1.92     1.48         6     2
+  server_send                       BRISC       10.01    10.59     9.42        11     2
+  server_send_bias                  BRISC        0.35     0.37     0.34         1     2
+  server_wait_ack                   BRISC        2.85     3.34     2.35         6     2
+  server_wait_read                  BRISC        0.73     0.74     0.71        11     2
+  writer_fill                       BRISC        0.35     0.36     0.31         2    84
+  writer_fill_early                 BRISC        0.08     0.09     0.07         1    86
+  writer_khx_drain                  BRISC        8.23     8.92     3.43         1    86
+  writer_khx_send                   BRISC        1.57     2.21     0.64         4    86
+  writer_round0                     BRISC        2.63     3.54     2.56         1    86
+  writer_weight_fetch               BRISC       11.43    12.47    11.22         5    86
+  writer_weight_reserve             BRISC        1.36     1.53     0.25         5    86
+  reader_fill                       NCRISC       1.50     1.93     0.70         1    86
+  reader_fill_fwd_wait              NCRISC       0.10     0.47     0.09         2    84
+  reader_fill_reserve               NCRISC       0.04     0.05     0.04         1    86
+  reader_kwf_bias_rows              NCRISC      12.16    12.25    12.01         1    86
+  server_read                       NCRISC      11.69    11.74    11.64         6     2
+  compute_kwf_chunk_wait            TRISC_0      1.14     1.94     0.80         3    86
+  compute_kwf_final                 TRISC_0      2.26     5.11     2.10         2    86
+  compute_kwf_halo_wait             TRISC_0      0.16     1.75     0.05         4    86
+  compute_kwf_matmul_shift          TRISC_0     25.19    25.71    15.72         2    86
+  compute_kwf_weight_wait           TRISC_0      0.15     5.69     0.13         5    86
+  compute_kwf_chunk_wait            TRISC_1      0.04     0.04     0.03         3    86
+  compute_kwf_final                 TRISC_1      1.75     4.60     0.25         2    86
+  compute_kwf_halo_wait             TRISC_1      0.06     0.09     0.03         4    86
+  compute_kwf_matmul_shift          TRISC_1     25.55    26.08    18.65         2    86
+  compute_kwf_weight_wait           TRISC_1      0.07     0.07     0.07         5    86
+  compute_kwf_chunk_wait            TRISC_2      0.06     0.07     0.03         3    86
+  compute_kwf_final                 TRISC_2      1.60     4.44     1.45         2    86
+  compute_kwf_halo_wait             TRISC_2      0.06     0.09     0.03         4    86
+  compute_kwf_matmul_shift          TRISC_2     26.02    26.54    16.51         2    86
+  compute_kwf_weight_wait           TRISC_2      0.07     0.07     0.07         5    86
+  busiest marker count: 82 on ((15, 9), 'BRISC') (cap ~250 user markers per RISC)
+=== run 18432: 105 cores, 1350 MHz
+  BRISC-KERNEL                     max    79.36 us  p50    79.03 us  cores 105
+  NCRISC-KERNEL                    max    16.60 us  p50    15.13 us  cores 105
+  TRISC-KERNEL                     max    92.91 us  p50    92.71 us  cores 103
+  TRISC-KERNEL                     max    92.57 us  p50    92.39 us  cores 103
+  TRISC-KERNEL                     max    92.97 us  p50    92.77 us  cores 103
+  zone                              risc       p50 us   max us   min us exec/core cores
+  server_flush                      BRISC        1.83     2.06     1.60         6     2
+  server_send                       BRISC       11.30    11.99    10.60        10     2
+  server_send_bias                  BRISC        0.27     0.28     0.25         1     2
+  server_wait_ack                   BRISC       33.00    33.38    32.61         6     2
+  server_wait_read                  BRISC        1.47     2.23     0.70        10     2
+  writer_fill                       BRISC        0.49     1.01     0.47         2   102
+  writer_fill_early                 BRISC        0.08     0.10     0.07         1   103
+  writer_khx_drain                  BRISC       29.23    29.83    10.02         1   103
+  writer_khx_send                   BRISC        1.65     2.23     0.63         4   103
+  writer_round0                     BRISC        4.21     4.71     3.66         1   103
+  writer_weight_fetch               BRISC       14.00    42.76    11.53         5   103
+  writer_weight_reserve             BRISC       29.76    31.41     0.24         5   103
+  reader_fill                       NCRISC       2.74     4.21     1.56         1   103
+  reader_fill_fwd_wait              NCRISC       0.08     0.59     0.08         2   102
+  reader_fill_reserve               NCRISC       0.04     0.04     0.04         1   103
+  reader_kwf_bias_rows              NCRISC      12.19    12.26    12.11         1   103
+  server_read                       NCRISC      13.32    14.03    12.61         6     2
+  compute_kwf_chunk_wait            TRISC_0      1.52     2.27     0.54         3   103
+  compute_kwf_final                 TRISC_0      4.39    11.30     2.45         2   103
+  compute_kwf_halo_wait             TRISC_0      0.16    14.87     0.05         4   103
+  compute_kwf_matmul_shift          TRISC_0     87.91    88.09    59.23         2   103
+  compute_kwf_weight_wait           TRISC_0      0.13    18.33     0.13         5   103
+  compute_kwf_chunk_wait            TRISC_1      0.04     0.04     0.03         3   103
+  compute_kwf_final                 TRISC_1      3.84    10.75     1.86         2   103
+  compute_kwf_halo_wait             TRISC_1      0.06     0.09     0.03         4   103
+  compute_kwf_matmul_shift          TRISC_1     88.27    88.45    59.62         2   103
+  compute_kwf_weight_wait           TRISC_1      0.07     0.08     0.07         5   103
+  compute_kwf_chunk_wait            TRISC_2      0.05     0.05     0.03         3   103
+  compute_kwf_final                 TRISC_2      3.71    10.61     1.76         2   103
+  compute_kwf_halo_wait             TRISC_2      0.06     0.08     0.03         4   103
+  compute_kwf_matmul_shift          TRISC_2     88.71    88.90    60.03         2   103
+  compute_kwf_weight_wait           TRISC_2      0.07     0.07     0.07         5   103
+  busiest marker count: 74 on ((15, 11), 'BRISC') (cap ~250 user markers per RISC)
+=== run 19456: 105 cores, 1350 MHz
+  BRISC-KERNEL                     max    20.82 us  p50    20.29 us  cores 105
+  NCRISC-KERNEL                    max     8.97 us  p50     8.14 us  cores 105
+  TRISC-KERNEL                     max    28.62 us  p50    28.36 us  cores 103
+  TRISC-KERNEL                     max    28.34 us  p50    28.06 us  cores 103
+  TRISC-KERNEL                     max    28.74 us  p50    28.46 us  cores 103
+  zone                              risc       p50 us   max us   min us exec/core cores
+  server_flush                      BRISC        1.34     1.82     0.85         3     2
+  server_send                       BRISC        3.17     3.21     3.13         6     2
+  server_send_bias                  BRISC        0.29     0.32     0.27         1     2
+  server_wait_ack                   BRISC        0.09     0.09     0.09         3     2
+  server_wait_read                  BRISC        0.53     0.58     0.49         6     2
+  writer_fill                       BRISC        0.42     0.48     0.39         2   102
+  writer_fill_early                 BRISC        0.08     0.10     0.07         1   103
+  writer_khx_drain                  BRISC       13.95    14.46     6.03         1   103
+  writer_khx_send                   BRISC        0.84     1.15     0.33         2   103
+  writer_round0                     BRISC        2.25     3.03     2.19         1   103
+  writer_weight_fetch               BRISC        2.34     2.49     2.18         2   103
+  writer_weight_reserve             BRISC        0.12     0.15     0.10         2   103
+  reader_fill                       NCRISC       1.76     2.59     1.09         1   103
+  reader_fill_fwd_wait              NCRISC       0.10     0.70     0.08         2   102
+  reader_fill_reserve               NCRISC       0.04     0.05     0.04         1   103
+  reader_kwf_bias_rows              NCRISC       6.20     6.25     6.14         1   103
+  server_read                       NCRISC       4.52     4.55     4.49         3     2
+  compute_kwf_chunk_wait            TRISC_0      0.90     1.52     0.41         3   103
+  compute_kwf_final                 TRISC_0      2.06     2.09     1.16         1   103
+  compute_kwf_halo_wait             TRISC_0      0.08     3.96     0.03         2   103
+  compute_kwf_matmul_shift          TRISC_0     25.92    26.26    13.19         1   103
+  compute_kwf_weight_wait           TRISC_0      0.07     0.47     0.05         2   103
+  compute_kwf_chunk_wait            TRISC_1      0.04     0.05     0.03         3   103
+  compute_kwf_final                 TRISC_1      1.82     1.84     0.91         1   103
+  compute_kwf_halo_wait             TRISC_1      0.04     0.06     0.01         2   103
+  compute_kwf_matmul_shift          TRISC_1     26.04    26.36    13.31         1   103
+  compute_kwf_weight_wait           TRISC_1      0.03     0.03     0.03         2   103
+  compute_kwf_chunk_wait            TRISC_2      0.05     0.06     0.03         3   103
+  compute_kwf_final                 TRISC_2      1.76     1.77     0.84         1   103
+  compute_kwf_halo_wait             TRISC_2      0.03     0.05     0.01         2   103
+  compute_kwf_matmul_shift          TRISC_2     26.41    26.74    13.65         1   103
+  compute_kwf_weight_wait           TRISC_2      0.03     0.03     0.03         2   103
+  busiest marker count: 46 on ((15, 11), 'BRISC') (cap ~250 user markers per RISC)
+=== run 20480: 105 cores, 1350 MHz
+  BRISC-KERNEL                     max    71.24 us  p50    70.92 us  cores 105
+  NCRISC-KERNEL                    max    16.16 us  p50    14.66 us  cores 105
+  TRISC-KERNEL                     max    83.44 us  p50    83.21 us  cores 103
+  TRISC-KERNEL                     max    83.12 us  p50    82.87 us  cores 103
+  TRISC-KERNEL                     max    83.50 us  p50    83.26 us  cores 103
+  zone                              risc       p50 us   max us   min us exec/core cores
+  server_flush                      BRISC        1.80     2.13     1.48         6     2
+  server_send                       BRISC       10.49    11.14     9.84         8     2
+  server_send_bias                  BRISC        0.28     0.28     0.28         1     2
+  server_wait_ack                   BRISC       29.76    30.06    29.45         6     2
+  server_wait_read                  BRISC        0.99     1.44     0.54         8     2
+  writer_fill                       BRISC        0.50     0.53     0.47         2   102
+  writer_fill_early                 BRISC        0.08     0.10     0.07         1   103
+  writer_khx_drain                  BRISC       26.18    26.50     8.68         1   103
+  writer_khx_send                   BRISC        1.72     2.50     0.63         4   103
+  writer_round0                     BRISC        3.38     4.28     3.31         1   103
+  writer_weight_fetch               BRISC       12.96    39.15    12.25         5   103
+  writer_weight_reserve             BRISC       26.51    27.11     0.24         5   103
+  reader_fill                       NCRISC       2.49     4.04     1.51         1   103
+  reader_fill_fwd_wait              NCRISC       0.09     0.56     0.08         2   102
+  reader_fill_reserve               NCRISC       0.04     0.04     0.04         1   103
+  reader_kwf_bias_rows              NCRISC      12.00    12.06    11.91         1   103
+  server_read                       NCRISC      11.90    12.23    11.57         6     2
+  compute_kwf_chunk_wait            TRISC_0      1.44     2.79     0.71         3   103
+  compute_kwf_final                 TRISC_0      4.37    10.46     2.46         2   103
+  compute_kwf_halo_wait             TRISC_0      0.16    13.66     0.05         4   103
+  compute_kwf_matmul_shift          TRISC_0     78.37    78.69    53.55         2   103
+  compute_kwf_weight_wait           TRISC_0      0.14    15.74     0.13         5   103
+  compute_kwf_chunk_wait            TRISC_1      0.04     0.05     0.03         3   103
+  compute_kwf_final                 TRISC_1      3.81     9.92     1.92         2   103
+  compute_kwf_halo_wait             TRISC_1      0.06     0.09     0.03         4   103
+  compute_kwf_matmul_shift          TRISC_1     78.77    79.06    53.95         2   103
+  compute_kwf_weight_wait           TRISC_1      0.07     0.08     0.07         5   103
+  compute_kwf_chunk_wait            TRISC_2      0.05     0.05     0.03         3   103
+  compute_kwf_final                 TRISC_2      3.63     9.73     1.75         2   103
+  compute_kwf_halo_wait             TRISC_2      0.06     0.09     0.03         4   103
+  compute_kwf_matmul_shift          TRISC_2     79.26    79.56    54.41         2   103
+  compute_kwf_weight_wait           TRISC_2      0.07     0.07     0.07         5   103
+  busiest marker count: 66 on ((15, 11), 'BRISC') (cap ~250 user markers per RISC)
+=== run 21504: 105 cores, 1350 MHz
+  BRISC-KERNEL                     max    17.08 us  p50    16.83 us  cores 105
+  NCRISC-KERNEL                    max     8.72 us  p50     7.96 us  cores 105
+  TRISC-KERNEL                     max    23.78 us  p50    23.53 us  cores 103
+  TRISC-KERNEL                     max    23.44 us  p50    23.23 us  cores 103
+  TRISC-KERNEL                     max    23.82 us  p50    23.62 us  cores 103
+  zone                              risc       p50 us   max us   min us exec/core cores
+  server_flush                      BRISC        0.79     0.96     0.62         3     2
+  server_send                       BRISC        2.75     2.86     2.63         7     2
+  server_send_bias                  BRISC        0.26     0.26     0.25         1     2
+  server_wait_ack                   BRISC        0.09     0.10     0.09         3     2
+  server_wait_read                  BRISC        0.46     0.52     0.41         7     2
+  writer_fill                       BRISC        0.41     0.46     0.37         2   102
+  writer_fill_early                 BRISC        0.08     0.09     0.07         1   103
+  writer_khx_drain                  BRISC       11.27    11.53     5.36         1   103
+  writer_khx_send                   BRISC        0.86     1.12     0.32         2   103
+  writer_round0                     BRISC        1.92     2.55     1.88         1   103
+  writer_weight_fetch               BRISC        1.95     2.08     1.78         2   103
+  writer_weight_reserve             BRISC        0.11     0.14     0.10         2   103
+  reader_fill                       NCRISC       1.48     2.21     1.03         1   103
+  reader_fill_fwd_wait              NCRISC       0.09     0.57     0.08         2   102
+  reader_fill_reserve               NCRISC       0.04     0.05     0.04         1   103
+  reader_kwf_bias_rows              NCRISC       6.28     6.35     6.21         1   103
+  server_read                       NCRISC       4.29     4.35     4.22         3     2
+  compute_kwf_chunk_wait            TRISC_0      0.89     1.38     0.49         3   103
+  compute_kwf_final                 TRISC_0      2.08     2.20     1.21         1   103
+  compute_kwf_halo_wait             TRISC_0      0.09     3.28     0.03         2   103
+  compute_kwf_matmul_shift          TRISC_0     21.07    21.22    10.90         1   103
+  compute_kwf_weight_wait           TRISC_0      0.07     0.48     0.06         2   103
+  compute_kwf_chunk_wait            TRISC_1      0.04     0.05     0.03         3   103
+  compute_kwf_final                 TRISC_1      1.83     1.92     0.94         1   103
+  compute_kwf_halo_wait             TRISC_1      0.04     0.05     0.01         2   103
+  compute_kwf_matmul_shift          TRISC_1     21.18    21.34    11.04         1   103
+  compute_kwf_weight_wait           TRISC_1      0.03     0.03     0.03         2   103
+  compute_kwf_chunk_wait            TRISC_2      0.05     0.05     0.03         3   103
+  compute_kwf_final                 TRISC_2      1.77     1.82     0.86         1   103
+  compute_kwf_halo_wait             TRISC_2      0.03     0.04     0.01         2   103
+  compute_kwf_matmul_shift          TRISC_2     21.57    21.73    11.43         1   103
+  compute_kwf_weight_wait           TRISC_2      0.03     0.03     0.03         2   103
+  busiest marker count: 46 on ((5, 11), 'BRISC') (cap ~250 user markers per RISC)
+=== run 22528: 105 cores, 1350 MHz
+  BRISC-KERNEL                     max     8.20 us  p50     7.78 us  cores 105
+  NCRISC-KERNEL                    max     4.94 us  p50     4.80 us  cores 105
+  TRISC-KERNEL                     max     9.22 us  p50     8.99 us  cores 103
+  TRISC-KERNEL                     max     8.90 us  p50     8.68 us  cores 103
+  TRISC-KERNEL                     max     9.29 us  p50     9.05 us  cores 103
+  zone                              risc       p50 us   max us   min us exec/core cores
+  server_flush                      BRISC        0.73     1.08     0.38         3     2
+  server_send                       BRISC        1.02     1.15     0.89         6     2
+  server_send_bias                  BRISC        0.10     0.11     0.09         1     2
+  server_wait_ack                   BRISC        0.09     0.09     0.09         3     2
+  server_wait_read                  BRISC        0.89     1.16     0.61         6     2
+  writer_fill                       BRISC        0.40     0.45     0.38         2   102
+  writer_fill_early                 BRISC        0.07     0.11     0.07         1   103
+  writer_khx_drain                  BRISC        3.54     3.99     2.73         1   103
+  writer_khx_send                   BRISC        0.68     0.92     0.26         2   103
+  writer_round0                     BRISC        1.50     1.61     0.94         1   103
+  writer_weight_fetch               BRISC        1.11     1.34     0.96         2   103
+  writer_weight_reserve             BRISC        0.10     0.12     0.10         2   103
+  reader_fill                       NCRISC       1.48     2.01     1.06         1   103
+  reader_fill_fwd_wait              NCRISC       0.10     0.49     0.08         2   102
+  reader_fill_reserve               NCRISC       0.04     0.04     0.04         1   103
+  reader_kwf_bias_rows              NCRISC       3.16     3.36     2.13         1   103
+  server_read                       NCRISC       3.01     3.02     3.00         3     2
+  compute_kwf_chunk_wait            TRISC_0      0.33     0.66     0.12         3   103
+  compute_kwf_final                 TRISC_0      0.79     0.87     0.69         1   103
+  compute_kwf_halo_wait             TRISC_0      0.09     1.39     0.03         2   103
+  compute_kwf_matmul_shift          TRISC_0      7.77     8.00     5.34         1   103
+  compute_kwf_weight_wait           TRISC_0      0.07     1.16     0.07         2   103
+  compute_kwf_chunk_wait            TRISC_1      0.06     0.06     0.03         3   103
+  compute_kwf_final                 TRISC_1      0.51     0.62     0.16         1   103
+  compute_kwf_halo_wait             TRISC_1      0.04     0.05     0.02         2   103
+  compute_kwf_matmul_shift          TRISC_1      7.92     8.20     5.38         1   103
+  compute_kwf_weight_wait           TRISC_1      0.03     0.03     0.03         2   103
+  compute_kwf_chunk_wait            TRISC_2      0.05     0.06     0.03         3   103
+  compute_kwf_final                 TRISC_2      0.70     0.76     0.43         1   103
+  compute_kwf_halo_wait             TRISC_2      0.04     0.06     0.01         2   103
+  compute_kwf_matmul_shift          TRISC_2      8.01     8.30     5.69         1   103
+  compute_kwf_weight_wait           TRISC_2      0.03     0.04     0.03         2   103
+  busiest marker count: 50 on ((5, 11), 'BRISC') (cap ~250 user markers per RISC)

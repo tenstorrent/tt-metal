@@ -1,0 +1,492 @@
+diff -ru op_base/conv2d_3x3.py op_copy/conv2d_3x3.py
+--- op_base/conv2d_3x3.py	2026-11-19 20:33:19.887886228 +0000
++++ op_copy/conv2d_3x3.py	2026-11-19 20:56:21.148409109 +0000
+@@ -27,6 +27,7 @@
+
+ from ttnn.operations._op_contract import ExcludedCell, UnsupportedAxisValue
+
++from . import conv2d_3x3_program_descriptor as _pd
+ from .conv2d_3x3_program_descriptor import (
+     Conv3x3Geometry,
+     _core_m_ranges,
+@@ -38,6 +39,7 @@
+     create_program_descriptor,
+     l1_cb_budget_bytes,
+     m_split,
++    ring_slice_tiles,
+     select_blocking,
+ )
+
+@@ -322,7 +324,7 @@
+     reads vs 20437 ns with page runs (HEAD 20493 ns)."""
+     slices = channel_slices(c_in, input_layout, input_memory_config)
+     n_tiles = -(-c_out // TILE)
+-    out_n = -(-n_tiles // slices)
++    out_n = -(-n_tiles // slices) if _pd.NSS_COL_ROUNDS else ring_slice_tiles(n_tiles, slices)
+     if slices < 2 or n_tiles % out_n != 0:
+         return ttnn.DRAM_MEMORY_CONFIG
+     c_in_p = per_pixel_channels(c_in, input_layout, input_memory_config)
+@@ -596,6 +598,10 @@
+             + core_m_tiles * n_tiles * geometry.out_tile_bytes
+         )
+         if block_sharded and geometry.k_split:
++            # nslice_step_shape: a wider ring slice than one column's share (the owners then store remotely).
++            nss = ring_slice_tiles(geometry.tensor_n_tiles, geometry.k_cols)
++            if nss != geometry.out_n_tiles:
++                geometry = dataclasses.replace(geometry, nslice_tiles=nss, remote_output=True)
+             # The K split's M split may run down more grid rows than the shard grid has; the output keeps the input's
+             # shard grid and the shard rows' split.
+             device_grid = device.compute_with_storage_grid_size()
+@@ -627,7 +633,9 @@
+             )
+             if balanced is not None:
+                 ranges, remote = balanced
+-                geometry = dataclasses.replace(geometry, m_ranges=ranges, remote_output=remote)
++                geometry = dataclasses.replace(
++                    geometry, m_ranges=ranges, remote_output=remote or bool(geometry.nslice_tiles)
++                )
+                 work_grid = (len(ranges), 1)
+         output_memory_config = ttnn.MemoryConfig(
+             input_memory_config.memory_layout,
+diff -ru op_base/conv2d_3x3_program_descriptor.py op_copy/conv2d_3x3_program_descriptor.py
+--- op_base/conv2d_3x3_program_descriptor.py	2026-11-19 20:33:19.895886341 +0000
++++ op_copy/conv2d_3x3_program_descriptor.py	2026-11-19 20:56:26.778489063 +0000
+@@ -357,6 +357,21 @@
+ # +9%); one DRAM stream per spare row (same pages as the column sender's, same time: res5.1 / res5.2 +6% / +7%); the
+ # spare members' fill split over both NoCs (flat); the last M ranges instead of the cheapest (res5.2 +1.4 us).
+ SPARE_MGROUPS = True
++# nslice_step_shape experiment: the N-slice ring's minimum slice width in tiles (0: one column's share of C_out, HEAD),
++# and extra defines for the ring's three kernels (compute, reader, writer).
++NSS_SLICE_TILES = 0
++NSS_DEFINES = {}
++# Wide slices with one-tile weight shards read column-major (see _page_run_defines).
++NSS_COL_ROUNDS = False
++
++
++def ring_slice_tiles(n_tiles, k_cols):
++    """N-slice ring slice width: one column's share of C_out, widened to NSS_SLICE_TILES where that divides C_out."""
++    share = _div_up(n_tiles, k_cols)
++    w = NSS_SLICE_TILES
++    if k_cols >= 2 and w > share and n_tiles % w == 0:
++        return w
++    return share
+ # Semaphore ids per program (the device's limit: ids 0..15).
+ MAX_SEMAPHORES = 16
+ WEIGHT_MCAST_SPARE_PREFIX = "weight_mcast2"
+@@ -404,6 +419,8 @@
+     # Spare-column M-groups (SPARE_MGROUPS): M-groups on grid rows, the others transposed in the spare columns
+     # (spare_m_indices, block_spare_core). 0: every group is a grid row.
+     block_rows: int = 0
++    # N-slice ring slice width override (ring_slice_tiles; 0: one column's share). Needs the remote output store.
++    nslice_tiles: int = 0
+
+     @property
+     def k_split(self):
+@@ -412,6 +429,8 @@
+     @property
+     def out_n_tiles(self):
+         """Output tile columns per core: all of C_out, or one column's N-slice under a K split."""
++        if self.nslice_tiles:
++            return self.nslice_tiles
+         return _div_up(self.tensor_n_tiles, self.k_cols)
+
+     @property
+@@ -2914,6 +2933,28 @@
+         and list(_wspec.shard_shape)[-2:] == [b.block_k_tiles * b.num_k_blocks * TILE, g.out_n_tiles * TILE]
+         else []
+     )
++    # nslice_step_shape: a wide slice whose weights stay one-tile ND shards (NSS_COL_ROUNDS): the round lands
++    # column-major (one run per tile column, the columns' shards in different banks), and compute reads in1 at a
++    # column stride of K tiles.
++    if (
++        NSS_COL_ROUNDS
++        and g.nslice_tiles
++        and g.k_split
++        and b.nslice
++        and not kwf
++        and _wspec is not None
++        and list(_wspec.shard_shape)[-2:] == [b.block_k_tiles * b.num_k_blocks * TILE, TILE]
++    ):
++        _page_run_defines = [("NSLICE_WEIGHT_PAGE_RUNS", "1"), ("NSLICE_WEIGHT_COL_RUNS", "1")]
++    _nss_defines = [(k, str(v)) for k, v in NSS_DEFINES.items()]
++    if ("NSLICE_WEIGHT_COL_RUNS", "1") in _page_run_defines:
++        _nss_defines += [("NSLICE_WEIGHT_COL_RUNS", "1")]
++    if "RING_SB_UNITS" in NSS_DEFINES and b.nslice and g.k_split and not kwf:
++        # Ring units per matmul subblock (nslice_step_shape): the reader's unit widths, as compute's group_w.
++        _sbh, _sbw = _ring_subblock(bm, ns)
++        _short_w = ns if (ct_group_rows and 2 <= ns <= 4) else _sbw
++        _nss_defines += [("RING_UNIT_SBW", str(_sbw)), ("RING_UNIT_SHORT_W", str(_short_w))]
++    _ring_owner_defines = _ring_owner_defines + _nss_defines
+     import os as _os
+
+     _abl = [t for t in _os.environ.get("CONV2D_3X3_ABLATE", "").split(",") if t]
+diff -ru op_base/kernels/conv2d_3x3_compute.cpp op_copy/kernels/conv2d_3x3_compute.cpp
+--- op_base/kernels/conv2d_3x3_compute.cpp	2026-11-19 20:33:19.896886355 +0000
++++ op_copy/kernels/conv2d_3x3_compute.cpp	2026-11-19 21:00:35.929026944 +0000
+@@ -1528,6 +1528,17 @@
+                 constexpr bool wide_short = false;
+ #endif
+                 uint32_t init_w = slice_sb_w;
++#ifdef NSLICE_WEIGHT_COL_RUNS
++                // nslice_step_shape: column-major weight rounds (the writer's NSLICE_WEIGHT_COL_RUNS): in1 tile (k, c) at
++                // c * k_tiles + k; a wide subblock steps its in1 columns by k_tiles tiles (the unpacker's SrcA address
++                // step, restored after the walk). Raw LLK (capability): no compute API sets the in1 column stride.
++                constexpr uint32_t in1_kstep = 1;
++                constexpr uint32_t in1_cstride = k_tiles;
++                UNPACK((llk_unpack_AB_matmul_set_in1_column_stride(cb_weights, k_tiles)));
++#else
++                constexpr uint32_t in1_kstep = out_n_tiles;
++                constexpr uint32_t in1_cstride = 1;
++#endif
+                 // rt_valid: the ring row groups over the block's valid tile-rows (the reader forwards the same ones).
+                 const uint32_t walk_groups = (valid_rows + slice_sb_h - 1) / slice_sb_h;
+                 im2col_tiles.wait_front(prelude_rows * in0_k_tiles);
+@@ -1538,7 +1549,14 @@
+                      j = conv2d_3x3::ring_next_real<k_cols, num_owning_cols>(my_col, j + 1)) {
+                     const uint32_t owner = conv2d_3x3::nslice_owner<k_cols>(my_col, j);
+                     weights.wait_front(k_tiles * out_n_tiles);
++#ifdef NSS_PROBE_NO_ACC_TOGGLE
++                    // Measurement only: L1 accumulation set once (wrong sums on the first step).
++                    if (j == first) {
++                        pack_reconfig_l1_acc(1);
++                    }
++#else
+                     pack_reconfig_l1_acc(j >= 1 ? 1 : 0);
++#endif
+                     const uint32_t slot_base = (k_cols - 1 - j) * slot_tiles;
+                     for (uint32_t g = 0; g < walk_groups; ++g) {
+                         const uint32_t r0 = rt_valid ? conv2d_3x3::ring_group_row0_rt<slice_sb_h>(valid_rows, owner, g)
+@@ -1552,17 +1570,35 @@
+                             init_rows = rows;
+                             init_w = group_w;
+                         }
+-                        ring_token.reserve_back(1);
+-                        if (j >= 1) {
+-                            // The group's incoming partial landed: column my_col - 1 wrote this core's arrival count
+-                            // right behind it. The packer waits for it itself; the matmul runs ahead regardless.
+-                            ++ring_need;
+-                            PACK(({
+-                                volatile tt_l1_ptr uint32_t* arrived = ring_arrival_count();
+-                                do {
+-                                    invalidate_l1_cache();
+-                                } while (*arrived < ring_need);
+-                            }));
++#ifdef NSS_PROBE_EXTRA_INIT
++                        // Measurement only: one redundant init per group (same shape).
++                        ckernel::matmul_block_init(cb_im2col_tiles, cb_weights, false, init_w, init_rows, k_tiles);
++#endif
++#ifdef RING_SB_UNITS
++                        // nslice_step_shape: one ring unit (token, forward, arrival count) per matmul subblock of the
++                        // group instead of per group, so a wide slice's hop stays one subblock's bytes.
++                        constexpr bool sb_units = true;
++#else
++                        constexpr bool sb_units = false;
++#endif
++                        auto ring_unit_wait = [&]() {
++                            ring_token.reserve_back(1);
++                            if (j >= 1) {
++                                // The unit's incoming partial landed: column my_col - 1 wrote this core's arrival
++                                // count right behind it. The packer waits for it itself; the matmul runs ahead.
++                                ++ring_need;
++#ifndef NSS_PROBE_NO_ARRIVAL_WAIT
++                                PACK(({
++                                    volatile tt_l1_ptr uint32_t* arrived = ring_arrival_count();
++                                    do {
++                                        invalidate_l1_cache();
++                                    } while (*arrived < ring_need);
++                                }));
++#endif
++                            }
++                        };
++                        if constexpr (!sb_units) {
++                            ring_unit_wait();
+                         }
+                         // The group's matmuls and packs. ct_group_rows: the group height is a template constant (one
+                         // instance per height 1..slice_sb_h), so the r x 1 subblock's unpack / math loops are
+@@ -1573,7 +1609,7 @@
+                             constexpr uint32_t sb_w = decltype(w_c)::value;
+                             for (uint32_t c0 = 0; c0 < out_n_tiles; c0 += sb_w) {
+                                 tile_regs_acquire();
+-                                uint32_t in1_index = c0;
++                                uint32_t in1_index = c0 * in1_cstride;
+ #ifndef CONV2D_3X3_ABLATE_MATMUL
+                                 if constexpr (nslice_center) {
+                                     // K order unchanged (kh, kw, c). One loop per source, each with constant CB ids (a
+@@ -1581,7 +1617,7 @@
+                                     constexpr uint32_t ct = c_in_tiles;
+                                     uint32_t in0_index = r0 * in0_k_tiles + lo * 2 * ct;
+                                     uint32_t ctr_index = r0 * ct + lo * block_m_tiles * ct;
+-                                    in1_index += lo * 3 * ct * out_n_tiles;
++                                    in1_index += lo * 3 * ct * in1_kstep;
+                                     UNPACK((set_matmul_in0_row_stride(in0_k_tiles)));
+                                     for (uint32_t kh = lo; kh < hi; ++kh) {
+                                         for (uint32_t c = 0; c < ct; ++c) {
+@@ -1595,7 +1631,7 @@
+                                                 sb_w,
+                                                 group_rows,
+                                                 in0_k_tiles);
+-                                            in1_index += out_n_tiles;
++                                            in1_index += in1_kstep;
+                                         }
+                                         UNPACK((set_matmul_in0_row_stride(ct)));
+                                         for (uint32_t c = 0; c < ct; ++c) {
+@@ -1609,7 +1645,7 @@
+                                                 sb_w,
+                                                 group_rows,
+                                                 ct);
+-                                            in1_index += out_n_tiles;
++                                            in1_index += in1_kstep;
+                                         }
+                                         ctr_index += (block_m_tiles - 1) * ct;
+                                         UNPACK((set_matmul_in0_row_stride(in0_k_tiles)));
+@@ -1624,7 +1660,7 @@
+                                                 sb_w,
+                                                 group_rows,
+                                                 in0_k_tiles);
+-                                            in1_index += out_n_tiles;
++                                            in1_index += in1_kstep;
+                                         }
+                                     }
+                                 } else {
+@@ -1634,7 +1670,7 @@
+                                     const uint32_t k_lo = lo * kkh;
+                                     const uint32_t k_hi = hi * kkh;
+                                     uint32_t in0_index = r0 * k_tiles + k_lo;
+-                                    in1_index += k_lo * out_n_tiles;
++                                    in1_index += k_lo * in1_kstep;
+                                     for (uint32_t k = k_lo; k < k_hi; ++k) {
+                                         ckernel::matmul_block(
+                                             cb_im2col_tiles,
+@@ -1647,12 +1683,15 @@
+                                             group_rows,
+                                             k_tiles);
+                                         ++in0_index;
+-                                        in1_index += out_n_tiles;
++                                        in1_index += in1_kstep;
+                                     }
+                                 }
+ #endif
+                                 tile_regs_commit();
+                                 tile_regs_wait();
++                                if constexpr (sb_units) {
++                                    ring_unit_wait();
++                                }
+                                 ckl::pack_subblock_row_strided(
+                                     0,
+                                     cb_combine_slots,
+@@ -1661,12 +1700,37 @@
+                                     group_rows,
+                                     sb_w);
+                                 tile_regs_release();
++                                if constexpr (sb_units) {
++                                    ring_token.push_back(1);
++                                }
+                             }
+                         };
+                         using SbW = std::integral_constant<uint32_t, slice_sb_w>;
+                         if constexpr (ct_group_rows) {
+                             switch (rows) {
+                                 case 1:
++#ifdef NSS_PROBE_NO_SHORT
++                                    // Measurement only (wrong sums): the 1-row short group's matmul is skipped; its
++                                    // DEST tiles are still packed (whatever DEST holds) and its ring unit still runs.
++                                    if (true) {
++                                        constexpr uint32_t w1 = wide_short ? out_n_tiles : slice_sb_w;
++                                        for (uint32_t c0 = 0; c0 < out_n_tiles; c0 += w1) {
++                                            tile_regs_acquire();
++                                            tile_regs_commit();
++                                            tile_regs_wait();
++                                            if constexpr (sb_units) {
++                                                ring_unit_wait();
++                                            }
++                                            ckl::pack_subblock_row_strided(
++                                                0, cb_combine_slots, slot_base + r0 * out_n_tiles + c0, out_n_tiles, 1, w1);
++                                            tile_regs_release();
++                                            if constexpr (sb_units) {
++                                                ring_token.push_back(1);
++                                            }
++                                        }
++                                        break;
++                                    }
++#endif
+                                     if constexpr (wide_short) {
+                                         group_mm(
+                                             std::integral_constant<uint32_t, 1>{},
+@@ -1682,7 +1746,9 @@
+                         } else {
+                             group_mm(RuntimeRows{rows}, SbW{});
+                         }
+-                        ring_token.push_back(1);
++                        if constexpr (!sb_units) {
++                            ring_token.push_back(1);
++                        }
+                     }
+                     weights.pop_front(k_tiles * out_n_tiles);
+                 }
+@@ -1690,6 +1756,9 @@
+                 if constexpr (nslice_center) {
+                     center.pop_front(3 * block_m_tiles * c_in_tiles);
+                 }
++#ifdef NSLICE_WEIGHT_COL_RUNS
++                UNPACK((llk_unpack_AB_matmul_set_in1_column_stride(cb_weights, 1)));
++#endif
+                 pack_reconfig_l1_acc(0);
+                 slots.push_back(k_cols * slot_tiles);
+             }
+diff -ru op_base/kernels/conv2d_3x3_nslice_order.hpp op_copy/kernels/conv2d_3x3_nslice_order.hpp
+--- op_base/kernels/conv2d_3x3_nslice_order.hpp	2026-11-19 20:33:19.890886270 +0000
++++ op_copy/kernels/conv2d_3x3_nslice_order.hpp	2026-11-19 20:35:22.988623443 +0000
+@@ -65,10 +65,21 @@
+ // does not divide bm. Odd owners take the short group first: a core's consecutive steps alternate owner parity (except
+ // at the wrap when k_cols is odd), so each step starts at the matmul subblock height the previous one ended on. The
+ // order is a function of the owner only, so the two columns a partial moves between walk its groups alike.
++// RING_RANK_PARITY (nslice_step_shape): the short group first on odd owner ranks (ring_slice_of) instead of odd owner
++// columns: with spread owners (RING_OWNER_MASK) a core's consecutive real steps alternate rank parity, not column
++// parity (owners {0, 2, 4, 6} are all even).
++inline uint32_t ring_parity_of(uint32_t owner) {
++#ifdef RING_RANK_PARITY
++    return ring_slice_of(owner) & 1;
++#else
++    return owner & 1;
++#endif
++}
++
+ template <uint32_t bm, uint32_t R>
+ inline uint32_t ring_group_row0(uint32_t owner, uint32_t g) {
+     if constexpr (bm % R != 0) {
+-        if (owner & 1) {
++        if (ring_parity_of(owner)) {
+             return g == 0 ? (bm / R) * R : (g - 1) * R;
+         }
+     }
+@@ -79,7 +90,7 @@
+ // rows different tile-row counts under one CT block height): the same order, with the short group of `rows`.
+ template <uint32_t R>
+ inline uint32_t ring_group_row0_rt(uint32_t rows, uint32_t owner, uint32_t g) {
+-    if (rows % R != 0 && (owner & 1)) {
++    if (rows % R != 0 && ring_parity_of(owner)) {
+         return g == 0 ? (rows / R) * R : (g - 1) * R;
+     }
+     return g * R;
+diff -ru op_base/kernels/conv2d_3x3_reader.cpp op_copy/kernels/conv2d_3x3_reader.cpp
+--- op_base/kernels/conv2d_3x3_reader.cpp	2026-11-19 20:33:19.897886369 +0000
++++ op_copy/kernels/conv2d_3x3_reader.cpp	2026-11-19 20:39:47.759383132 +0000
+@@ -1660,45 +1660,62 @@
+             for (uint32_t j = first; j < k_cols;
+                  j = conv2d_3x3::ring_next_real<k_cols, num_owning_cols>(my_col, j + 1)) {
+                 for (uint32_t g = 0; g < groups; ++g) {
+-                    {
+-                        MaybeDeviceZoneScope("reader_ring_wait_step");
+-                        cb_wait_front(cb_ring_token, 1);
+-                    }
+-                    MaybeDeviceZoneScope("reader_ring_send");
+-                    if (j + 1 < k_cols) {
+-                        if (!credited) {
+-                            // Column my_col + 1's slots are free (its slab is dead, its previous M-block combined).
+-                            credit.wait_min(m_block_idx + 1);
+-                            credited = true;
+-                        }
+-                        const uint32_t w = ring_sent % ring_trids;
+-                        const uint32_t trid = ring_trid_base + w;
+-                        while (!ncrisc_noc_nonposted_write_with_transaction_id_sent(noc_index, trid)) {
++                    const uint32_t owner = conv2d_3x3::nslice_owner<k_cols>(my_col, j);
++                    const uint32_t r0 = rt_valid ? conv2d_3x3::ring_group_row0_rt<ring_group_rows>(walk_rows, owner, g)
++                                                 : conv2d_3x3::ring_group_row0<block_m_tiles, ring_group_rows>(owner, g);
++                    const uint32_t rows = walk_rows - r0 < ring_group_rows ? walk_rows - r0 : ring_group_rows;
++#ifdef RING_SB_UNITS
++                    // nslice_step_shape: one unit per matmul subblock of the group (compute's group_w columns).
++                    const uint32_t unit_w = rows == 1 ? RING_UNIT_SHORT_W : RING_UNIT_SBW;
++#else
++                    const uint32_t unit_w = out_n_tiles;
++#endif
++                    const uint32_t tile_bytes_fp32 = row_bytes / out_n_tiles;
++                    const uint32_t unit_bytes = unit_w * tile_bytes_fp32;
++                    for (uint32_t c0 = 0; c0 < out_n_tiles; c0 += unit_w) {
++                        {
++                            MaybeDeviceZoneScope("reader_ring_wait_step");
++                            cb_wait_front(cb_ring_token, 1);
+                         }
+-                        const uint32_t owner = conv2d_3x3::nslice_owner<k_cols>(my_col, j);
+-                        const uint32_t r0 = rt_valid
+-                                                ? conv2d_3x3::ring_group_row0_rt<ring_group_rows>(walk_rows, owner, g)
+-                                                : conv2d_3x3::ring_group_row0<block_m_tiles, ring_group_rows>(owner, g);
+-                        const uint32_t rows = walk_rows - r0 < ring_group_rows ? walk_rows - r0 : ring_group_rows;
+-                        const uint32_t group_bytes = rows * row_bytes;
+-                        const uint32_t src = combine_base + (k_cols - 1 - j) * slot_bytes + r0 * row_bytes;
+-                        const uint32_t dst = combine_base + (k_cols - 2 - j) * slot_bytes + r0 * row_bytes;
+-                        for (uint32_t off = 0; off < group_bytes; off += NOC_MAX_BURST_SIZE) {
+-                            const uint32_t bytes =
+-                                group_bytes - off < NOC_MAX_BURST_SIZE ? group_bytes - off : NOC_MAX_BURST_SIZE;
++                        MaybeDeviceZoneScope("reader_ring_send");
++                        if (j + 1 < k_cols) {
++                            if (!credited) {
++                                // Column my_col + 1's slots are free (its slab is dead, its previous M-block combined).
++                                credit.wait_min(m_block_idx + 1);
++                                credited = true;
++                            }
++                            const uint32_t w = ring_sent % ring_trids;
++                            const uint32_t trid = ring_trid_base + w;
++                            while (!ncrisc_noc_nonposted_write_with_transaction_id_sent(noc_index, trid)) {
++                            }
++                            const uint32_t col_off = c0 * tile_bytes_fp32;
++                            const uint32_t src =
++                                combine_base + (k_cols - 1 - j) * slot_bytes + r0 * row_bytes + col_off;
++                            const uint32_t dst =
++                                combine_base + (k_cols - 2 - j) * slot_bytes + r0 * row_bytes + col_off;
++                            // Whole rows: one contiguous run; else one run of unit_w tiles per row.
++                            const uint32_t runs = unit_w == out_n_tiles ? 1 : rows;
++                            const uint32_t run_bytes = unit_w == out_n_tiles ? rows * row_bytes : unit_bytes;
++                            for (uint32_t r = 0; r < runs; ++r) {
++                                const uint32_t ro = r * row_bytes;
++                                for (uint32_t off = 0; off < run_bytes; off += NOC_MAX_BURST_SIZE) {
++                                    const uint32_t bytes =
++                                        run_bytes - off < NOC_MAX_BURST_SIZE ? run_bytes - off : NOC_MAX_BURST_SIZE;
+ #ifndef CONV2D_3X3_ABLATE_SCATTER
+-                            noc_async_write_one_packet_with_trid(
+-                                src + off, get_noc_addr(nx, ny, dst + off), bytes, trid);
++                                    noc_async_write_one_packet_with_trid(
++                                        src + ro + off, get_noc_addr(nx, ny, dst + ro + off), bytes, trid);
+ #endif
++                                }
++                            }
++                            ++ring_sent;
++                            const uint32_t word = ring_count_words + w * 16;
++                            *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(word) = ring_sent;
++                            // The store reaches L1 before the NoC reads it (Blackhole stores can land out of order).
++                            asm volatile("fence" ::: "memory");
++                            noc_async_write_one_packet_with_trid(word, next_arrival, 4, trid);
+                         }
+-                        ++ring_sent;
+-                        const uint32_t word = ring_count_words + w * 16;
+-                        *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(word) = ring_sent;
+-                        // The store reaches L1 before the NoC reads it (Blackhole stores can land out of order).
+-                        asm volatile("fence" ::: "memory");
+-                        noc_async_write_one_packet_with_trid(word, next_arrival, 4, trid);
++                        cb_pop_front(cb_ring_token, 1);
+                     }
+-                    cb_pop_front(cb_ring_token, 1);
+                 }
+             }
+             for (uint32_t t = 0; t < ring_trids; ++t) {
+diff -ru op_base/kernels/conv2d_3x3_writer.cpp op_copy/kernels/conv2d_3x3_writer.cpp
+--- op_base/kernels/conv2d_3x3_writer.cpp	2026-11-19 20:33:19.898886383 +0000
++++ op_copy/kernels/conv2d_3x3_writer.cpp	2026-11-19 20:56:44.157735869 +0000
+@@ -1358,6 +1358,18 @@
+         if (true) {
+         } else
+ #endif
++#ifdef NSLICE_WEIGHT_COL_RUNS
++        // nslice_step_shape: one-tile column shards, one run each (column-major round: compute reads in1 at a
++        // column stride of nslice_k_tiles tiles). The columns' shards sit in different banks.
++        if (true) {
++            for (uint32_t n = 0; n < valid; ++n) {
++                weight_reads.read(
++                    weights.get_noc_addr(weight_k_tile_start * tensor_n_tiles + n0 + n),
++                    l1 + n * nslice_k_tiles * weight_tile_bytes,
++                    nslice_k_tiles * weight_tile_bytes);
++            }
++        } else
++#endif
+         if (valid == out_n_tiles) {
+             weight_reads.read(
+                 weights.get_noc_addr(weight_k_tile_start * tensor_n_tiles + n0),

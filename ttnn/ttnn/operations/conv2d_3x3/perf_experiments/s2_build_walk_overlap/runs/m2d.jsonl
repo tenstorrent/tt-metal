@@ -1,0 +1,1 @@
+{"case": "res3_0_conv2", "variant": "cand5", "blocking": {"bm": 3, "bk": 12, "nkb": 3, "nslice": false, "k_cols": 1, "slab_rows": 32, "ub": 16, "mblocks": 1, "wdepth": 2, "core_m": 3}, "pcc": 0.999999, "pcc_threshold": 0.996, "mae": 0.0, "max_err": 0.0, "out_sha": "bb9f8df61474d25e"}
