@@ -40,11 +40,12 @@ namespace CMAKE_UNIQUE_NAMESPACE {
 bool should_use_pinned_write_path(
     distributed::MeshDevice& mesh_device,
     distributed::MeshCommandQueue& cq,
+    const distributed::MeshBuffer& buffer,
     size_t local_bytes,
     size_t max_shard_bytes) {
     const auto* queue = dynamic_cast<const distributed::MeshCommandQueueBase*>(&cq);
     TT_FATAL(queue != nullptr, "MeshCommandQueue is not a MeshCommandQueueBase");
-    if (!queue->should_pin_write(local_bytes, max_shard_bytes)) {
+    if (!queue->should_pin_write(buffer, local_bytes, max_shard_bytes)) {
         return false;
     }
     const auto params = experimental::GetMemoryPinningParameters(mesh_device);
@@ -175,7 +176,7 @@ void distributed::MeshCommandQueue::enqueue_write_tensor(const HostTensor& host_
     auto local_shards = tensor_impl::select_local_host_shards(distributed_host_buffer, *mesh_device);
 
     const bool use_pinned = CMAKE_UNIQUE_NAMESPACE::should_use_pinned_write_path(
-        *device(), *this, local_shards.size_bytes, local_shards.max_shard_bytes);
+        *device(), *this, *mesh_buffer, local_shards.size_bytes, local_shards.max_shard_bytes);
 
     if (use_pinned) {
         std::vector<distributed::ShardDataTransfer> transfers;
