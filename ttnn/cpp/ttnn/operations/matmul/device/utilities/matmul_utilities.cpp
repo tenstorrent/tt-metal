@@ -218,7 +218,7 @@ ttsl::SmallVector<uint32_t> get_output_batch_dims(const ttnn::Shape& a_shape, co
             "Batch dims of {} and {} are not broadcastable",
             a_shape,
             b_shape);
-        dims[index] = std::max(a_dim, b_dim);
+        dims[index] = a_dim == 1 ? b_dim : a_dim;
     }
     return dims;
 }
