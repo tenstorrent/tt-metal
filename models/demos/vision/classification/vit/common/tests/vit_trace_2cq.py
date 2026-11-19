@@ -68,7 +68,13 @@ class VitTrace2CQ:
         self.write_event = ttnn.record_event(self.device, 1)
 
         ttnn.wait_for_event(0, self.write_event)
-        self.input_tensor = ttnn.reshard(self.tt_image_res, self.input_mem_config, self.input_tensor)
+        if self.input_mem_config.is_sharded():
+            self.input_tensor = ttnn.reshard(self.tt_image_res, self.input_mem_config, self.input_tensor)
+        else:
+            # A model that runs from DRAM takes its pixels interleaved, which reshard cannot write.
+            self.input_tensor = ttnn.to_memory_config(
+                self.tt_image_res, self.input_mem_config, output_tensor=self.input_tensor
+            )
         self.first_op_event = ttnn.record_event(self.device, 0)
         ttnn.execute_trace(self.device, self.trace_id, cq_id=0, blocking=False)
         ttnn.wait_for_event(0, self.read_event)
