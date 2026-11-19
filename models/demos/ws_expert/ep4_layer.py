@@ -326,9 +326,12 @@ def lane_cfgs(mesh, lc: EP4Cfg, G=2, l5kw=None, lkw=None):
 
     RS = list_width(lc)
     cfg = GCfg(nexp=lc.EPC, G=G, T=RS, MMAX=RS, GC=25, h_dt=ttnn.bfloat8_b, XRM=2, NS=5, dn_lag=3)
-    lkw = dict(CHT=20, slots="d0,d1,d0d1,any", keep=2, sched_c=7, wpoll=1, **(lkw or {}))
-    lane = LCfg(cycles=column_cycles(mesh), subcycles=True, **lkw)
-    l5 = L5Cfg(**{**dict(hmc=2, mux_noc=0, yrm=1, yc=3, yc_n0=1), **(l5kw or {})})
+    # G 4: one-way lanes, two a (column ring, link), one a direction; their muxes on NOC1 (on NOC0 the partner lane's
+    # credits would cross a rectangle on its multicast NoC)
+    ow = G == 4
+    lkw = dict(CHT=20, slots="d0,d0,any,any" if ow else "d0,d1,d0d1,any", keep=2, sched_c=7, wpoll=1, **(lkw or {}))
+    lane = LCfg(cycles=column_cycles(mesh), subcycles=True, oneway=ow, **lkw)
+    l5 = L5Cfg(**{**dict(hmc=2, mux_noc=-1 if ow else 0, yrm=1, yc=3, yc_n0=1), **(l5kw or {})})
     return cfg, lane, l5
 
 
