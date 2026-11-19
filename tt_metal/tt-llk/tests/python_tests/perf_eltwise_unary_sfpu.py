@@ -288,12 +288,13 @@ def _extra_slice_run(
     input_dimensions=_EXTRA_SLICE_DIMS,
 )
 def test_perf_eltwise_unary_sfpu_int32(perf_report, formats, mathop, input_dimensions):
+    dest_acc = _integer_slice_dest_acc(formats)
     _extra_slice_run(
         perf_report,
         formats,
         mathop,
-        DestAccumulation.No,
-        formats.input_format.is_32_bit(),
+        dest_acc,
+        unpacks_to_dest(formats.input_format, dest_acc),
         input_dimensions,
     )
 
@@ -325,11 +326,9 @@ def test_perf_eltwise_unary_sfpu_int_shift(
     )
 
 
-def _comp_dest_acc(formats):
-    # 32-bit inputs (UInt32) are unpacked straight into DEST and the uint32 kernels do
-    # full-word DataLayout::U32 accesses, so they require a 32-bit DEST. Mirror the
-    # correctness test (test_eltwise_unary_sfpu_int) and constraints.py, which force
-    # dest_acc=Yes for 32-bit formats; hardcoding No here would measure an unsupported config.
+def _integer_slice_dest_acc(formats):
+    # 32-bit integer inputs unpack straight into DEST and need a 32-bit DEST, as constraints.py
+    # forces dest_acc=Yes for 32-bit formats.
     if formats.input_format.is_32_bit():
         return DestAccumulation.Yes
     return DestAccumulation.No
@@ -343,13 +342,13 @@ def _comp_dest_acc(formats):
     input_dimensions=_EXTRA_SLICE_DIMS,
 )
 def test_perf_eltwise_unary_sfpu_comp(perf_report, formats, mathop, input_dimensions):
-    dest_acc = _comp_dest_acc(formats)
+    dest_acc = _integer_slice_dest_acc(formats)
     _extra_slice_run(
         perf_report,
         formats,
         mathop,
         dest_acc,
-        formats.input_format.is_32_bit(),
+        unpacks_to_dest(formats.input_format, dest_acc),
         input_dimensions,
     )
 
