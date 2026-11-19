@@ -264,3 +264,12 @@ def test_narrow(device):
     input_tensor = ttnn.rand((32, 16, 16, 4), dtype=ttnn.bfloat16, device=device)
     narrowed_tensor = ttnn.narrow(input_tensor, 0, 0, 12)
     logger.info("Narrowed Tensor Shape:", narrowed_tensor.shape)
+
+
+def test_unsqueeze(device):
+    # Create a tensor of shape [32, 64]
+    input_tensor = ttnn.rand((32, 64), dtype=ttnn.bfloat16, device=device)
+
+    # Insert a new dimension of size 1 at position 0
+    unsqueezed_tensor = ttnn.unsqueeze(input_tensor, 0)
+    logger.debug(f"Unsqueezed Tensor Shape: {unsqueezed_tensor.shape}")  # Shape([1, 32, 64])
