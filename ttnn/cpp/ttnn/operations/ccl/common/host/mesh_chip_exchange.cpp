@@ -88,10 +88,7 @@ ChipRecords exchange_chip_records(
         const std::size_t index = coord.to_linear_index(shape);
         const std::size_t base = index * stride;
         TT_FATAL(
-            all[base] == 1,
-            "mesh chip exchange: {} ranks own coordinate {}, expected exactly one",
-            all[base],
-            coord);
+            all[base] == 1, "mesh chip exchange: {} ranks own coordinate {}, expected exactly one", all[base], coord);
         records[index].assign(all.begin() + base + OWNER_WORDS, all.begin() + base + stride);
     }
 

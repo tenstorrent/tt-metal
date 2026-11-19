@@ -209,8 +209,7 @@ StreamPlacements decide_device_placement(
 // Words per stream: id, logical core (2), virtual core (2), downstream coordinate (mesh rank), link index.
 constexpr uint32_t stream_words(std::size_t mesh_rank) { return 1 + 2 + 2 + static_cast<uint32_t>(mesh_rank) + 1; }
 
-std::vector<uint32_t> encode_placement(
-    const StreamPlacements& streams, uint32_t num_streams, std::size_t mesh_rank) {
+std::vector<uint32_t> encode_placement(const StreamPlacements& streams, uint32_t num_streams, std::size_t mesh_rank) {
     ttnn::operations::ccl::common::RecordWriter writer(num_streams * stream_words(mesh_rank));
     for (const auto& [stream, placement] : streams) {
         writer.put(stream);
@@ -222,8 +221,7 @@ std::vector<uint32_t> encode_placement(
     return writer.finish();
 }
 
-StreamPlacements decode_placement(
-    ttnn::MeshDevice* mesh, const std::vector<uint32_t>& words, uint32_t num_streams) {
+StreamPlacements decode_placement(ttnn::MeshDevice* mesh, const std::vector<uint32_t>& words, uint32_t num_streams) {
     ttnn::operations::ccl::common::RecordReader reader(words);
     StreamPlacements streams;
     for (uint32_t i = 0; i < num_streams; i++) {

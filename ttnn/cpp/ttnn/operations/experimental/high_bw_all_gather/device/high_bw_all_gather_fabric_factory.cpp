@@ -87,12 +87,12 @@ struct GatherPlan {
     uint32_t num_links = 0;      // per (ring, direction)
     uint32_t links_per_hop = 0;  // num_links * the most (ring, direction)s sharing a hop
     uint32_t mesh_cols = 0;
-    std::vector<uint32_t> rank_of_chip;                                  // [linear chip index]
-    std::vector<std::vector<ChipOnRing>> chip_on_ring;                   // [linear chip index][ring]
-    std::vector<std::vector<FabricLinkWorker>> fabric_link_workers;      // [linear chip index][link_worker_index(...)]
+    std::vector<uint32_t> rank_of_chip;                              // [linear chip index]
+    std::vector<std::vector<ChipOnRing>> chip_on_ring;               // [linear chip index][ring]
+    std::vector<std::vector<FabricLinkWorker>> fabric_link_workers;  // [linear chip index][link_worker_index(...)]
     // What a sender on another chip addresses: fabric_link_workers' cores in the owning chip's translated coordinates.
     std::vector<std::vector<tt::tt_metal::CoreCoord>> fabric_link_worker_translated_cores;  // same indexing
-    std::vector<std::vector<tt::tt_metal::CoreCoord>> local_copy_cores;  // [linear chip index][link]
+    std::vector<std::vector<tt::tt_metal::CoreCoord>> local_copy_cores;                     // [linear chip index][link]
     // One program per coordinate range (every chip's link workers are where its own Ethernet cores want them, and
     // the local copy cores are the same on every chip), else one per chip (the grid is too small for that).
     bool one_program_per_range = false;
@@ -575,89 +575,88 @@ GatherPlan build_gather_plan(
     // Words per link worker: logical core (2), translated core (2), has_fabric_connection, fabric_link_index.
     const uint32_t num_link_workers = plan.num_rings * 2 * L;
     const auto place_link_workers_of_chip =
-        [&plan, &forwarding_links, &allowed_cores, &allowed_core_ranges, mesh_device, mesh_cols, L](
-            const Coord& chip) {
-        const uint32_t chip_index = chip[0] * mesh_cols + chip[1];
-        auto* device = tt::tt_metal::internal::get_device(*mesh_device, chip);
-        std::vector<FabricLinkWorker> fabric_link_workers(plan.num_rings * 2 * L);
-        std::set<std::pair<size_t, size_t>> taken;
-        auto take = [&](const tt::tt_metal::CoreCoord& core) { taken.insert({core.x, core.y}); };
-        auto is_free = [&](const tt::tt_metal::CoreCoord& core) { return !taken.contains({core.x, core.y}); };
-        for (uint32_t ring = 0; ring < plan.num_rings; ++ring) {
-            for (uint32_t direction = 0; direction < 2; ++direction) {
-                const auto& on_ring = plan.chip_on_ring[chip_index][ring];
-                const auto downstream = on_ring.neighbour(direction);
-                const bool has_fabric_connection =
-                    downstream.has_value() && (!on_ring.outgoing_shards(direction).empty() ||
-                                               signals_started_to_downstream(plan, chip_index, ring, direction));
-                if (!has_fabric_connection) {
+        [&plan, &forwarding_links, &allowed_cores, &allowed_core_ranges, mesh_device, mesh_cols, L](const Coord& chip) {
+            const uint32_t chip_index = chip[0] * mesh_cols + chip[1];
+            auto* device = tt::tt_metal::internal::get_device(*mesh_device, chip);
+            std::vector<FabricLinkWorker> fabric_link_workers(plan.num_rings * 2 * L);
+            std::set<std::pair<size_t, size_t>> taken;
+            auto take = [&](const tt::tt_metal::CoreCoord& core) { taken.insert({core.x, core.y}); };
+            auto is_free = [&](const tt::tt_metal::CoreCoord& core) { return !taken.contains({core.x, core.y}); };
+            for (uint32_t ring = 0; ring < plan.num_rings; ++ring) {
+                for (uint32_t direction = 0; direction < 2; ++direction) {
+                    const auto& on_ring = plan.chip_on_ring[chip_index][ring];
+                    const auto downstream = on_ring.neighbour(direction);
+                    const bool has_fabric_connection =
+                        downstream.has_value() && (!on_ring.outgoing_shards(direction).empty() ||
+                                                   signals_started_to_downstream(plan, chip_index, ring, direction));
+                    if (!has_fabric_connection) {
+                        continue;
+                    }
+                    const auto& links = forwarding_links[chip_index][ring * 2 + direction];
+                    for (uint32_t link = 0; link < L; ++link) {
+                        const auto eth_core = tt::tt_fabric::get_forwarding_eth_core(
+                            *mesh_device,
+                            mesh_device->get_fabric_node_id(chip),
+                            mesh_device->get_fabric_node_id(*downstream),
+                            links[link]);
+                        const auto closest = tt::tt_metal::experimental::Device::get_closest_worker_to_eth_core(
+                                                 *device, eth_core, tt::tt_metal::NOC::NOC_1)
+                                                 .logical_coord;
+                        std::optional<tt::tt_metal::CoreCoord> best;
+                        uint32_t best_hops = UINT32_MAX;
+                        for (const auto& candidate : allowed_cores) {
+                            if (!is_free(candidate)) {
+                                continue;
+                            }
+                            const uint32_t hops = candidate == closest
+                                                      ? 0
+                                                      : tt::tt_metal::experimental::Device::get_worker_noc_hop_distance(
+                                                            device, candidate, closest, tt::tt_metal::NOC::NOC_1);
+                            if (hops < best_hops) {
+                                best_hops = hops;
+                                best = candidate;
+                            }
+                        }
+                        TT_FATAL(
+                            best.has_value(),
+                            "high_bw_all_gather: the core grid {} has too few cores",
+                            allowed_core_ranges);
+                        take(*best);
+                        fabric_link_workers[fabric_link_worker_index(ring, direction, link, L)] =
+                            FabricLinkWorker{*best, true, links[link]};
+                        log_debug(
+                            tt::LogOp,
+                            "high_bw_all_gather: chip {} ring {} direction {} link {} worker {} eth {}",
+                            chip,
+                            ring,
+                            direction,
+                            links[link],
+                            *best,
+                            eth_core);
+                    }
+                }
+            }
+            for (auto& fabric_link_worker : fabric_link_workers) {
+                if (fabric_link_worker.has_fabric_connection) {
                     continue;
                 }
-                const auto& links = forwarding_links[chip_index][ring * 2 + direction];
-                for (uint32_t link = 0; link < L; ++link) {
-                    const auto eth_core = tt::tt_fabric::get_forwarding_eth_core(
-                        *mesh_device,
-                        mesh_device->get_fabric_node_id(chip),
-                        mesh_device->get_fabric_node_id(*downstream),
-                        links[link]);
-                    const auto closest = tt::tt_metal::experimental::Device::get_closest_worker_to_eth_core(
-                                             *device, eth_core, tt::tt_metal::NOC::NOC_1)
-                                             .logical_coord;
-                    std::optional<tt::tt_metal::CoreCoord> best;
-                    uint32_t best_hops = UINT32_MAX;
-                    for (const auto& candidate : allowed_cores) {
-                        if (!is_free(candidate)) {
-                            continue;
-                        }
-                        const uint32_t hops = candidate == closest
-                                                  ? 0
-                                                  : tt::tt_metal::experimental::Device::get_worker_noc_hop_distance(
-                                                        device, candidate, closest, tt::tt_metal::NOC::NOC_1);
-                        if (hops < best_hops) {
-                            best_hops = hops;
-                            best = candidate;
-                        }
-                    }
-                    TT_FATAL(
-                        best.has_value(),
-                        "high_bw_all_gather: the core grid {} has too few cores",
-                        allowed_core_ranges);
-                    take(*best);
-                    fabric_link_workers[fabric_link_worker_index(ring, direction, link, L)] =
-                        FabricLinkWorker{*best, true, links[link]};
-                    log_debug(
-                        tt::LogOp,
-                        "high_bw_all_gather: chip {} ring {} direction {} link {} worker {} eth {}",
-                        chip,
-                        ring,
-                        direction,
-                        links[link],
-                        *best,
-                        eth_core);
-                }
+                auto it = std::find_if(allowed_cores.begin(), allowed_cores.end(), is_free);
+                TT_FATAL(
+                    it != allowed_cores.end(),
+                    "high_bw_all_gather: the core grid {} has too few cores",
+                    allowed_core_ranges);
+                take(*it);
+                fabric_link_worker.core = *it;
             }
-        }
-        for (auto& fabric_link_worker : fabric_link_workers) {
-            if (fabric_link_worker.has_fabric_connection) {
-                continue;
+            ttnn::operations::ccl::common::RecordWriter writer(num_link_workers * 6);
+            for (const auto& fabric_link_worker : fabric_link_workers) {
+                writer.put_core(fabric_link_worker.core);
+                writer.put_core(device->worker_core_from_logical_core(fabric_link_worker.core));
+                writer.put(fabric_link_worker.has_fabric_connection ? 1u : 0u);
+                writer.put(fabric_link_worker.fabric_link_index);
             }
-            auto it = std::find_if(allowed_cores.begin(), allowed_cores.end(), is_free);
-            TT_FATAL(
-                it != allowed_cores.end(),
-                "high_bw_all_gather: the core grid {} has too few cores",
-                allowed_core_ranges);
-            take(*it);
-            fabric_link_worker.core = *it;
-        }
-        ttnn::operations::ccl::common::RecordWriter writer(num_link_workers * 6);
-        for (const auto& fabric_link_worker : fabric_link_workers) {
-            writer.put_core(fabric_link_worker.core);
-            writer.put_core(device->worker_core_from_logical_core(fabric_link_worker.core));
-            writer.put(fabric_link_worker.has_fabric_connection ? 1u : 0u);
-            writer.put(fabric_link_worker.fabric_link_index);
-        }
-        return writer.finish();
-    };
+            return writer.finish();
+        };
     const auto link_worker_records = ttnn::operations::ccl::common::exchange_chip_records(
         *mesh_device,
         ttnn::operations::ccl::common::mesh_distributed_context(*mesh_device),
@@ -675,7 +674,8 @@ GatherPlan build_gather_plan(
             translated_cores[i] = reader.get_core();
             fabric_link_workers[i].has_fabric_connection = reader.get() != 0;
             fabric_link_workers[i].fabric_link_index = reader.get();
-            link_worker_cores_of_chip[chip_index].insert({fabric_link_workers[i].core.x, fabric_link_workers[i].core.y});
+            link_worker_cores_of_chip[chip_index].insert(
+                {fabric_link_workers[i].core.x, fabric_link_workers[i].core.y});
         }
     }
     // Local copy cores: the first free ones in local_copy_core_order. Free on every chip, past the link workers of any

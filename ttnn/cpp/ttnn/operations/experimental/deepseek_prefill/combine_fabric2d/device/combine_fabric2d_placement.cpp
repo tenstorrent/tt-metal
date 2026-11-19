@@ -261,8 +261,7 @@ std::vector<uint32_t> encode_placement(const DevicePlacement& placement, uint32_
     return writer.finish();
 }
 
-DevicePlacement decode_placement(
-    ttnn::MeshDevice* mesh, const std::vector<uint32_t>& words, uint32_t num_links) {
+DevicePlacement decode_placement(ttnn::MeshDevice* mesh, const std::vector<uint32_t>& words, uint32_t num_links) {
     ccl_common::RecordReader reader(words);
     DevicePlacement placement;
     for (uint32_t i = 0; i < stream_count(num_links); i++) {
