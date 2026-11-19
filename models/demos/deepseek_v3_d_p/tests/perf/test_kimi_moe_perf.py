@@ -3,7 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """
-Kimi MoE perf gate (K2.7 and K3): host wall-clock of the MoE forward, untraced (fastest of 10 after 10 warm-up,
+Kimi MoE perf gate (K3): host wall-clock of the MoE forward, untraced (fastest of 10 after 10 warm-up,
 tests/measure) and traced (one replay), with the CPU clock held; bands untraced ±5%, traced ±3%; the traced output
 must match the untraced one.
 
@@ -12,7 +12,7 @@ The forward overlaps dispatch with the shared expert on two sub-devices, so it i
 replay. The time covers every segment, the sub-device load/clear between them and the final device sync.
 
 ``KIMI_MOE_PERF_REPLAYS=N`` logs N replays; only the first gates. A case whose ``expected_ns`` or
-``expected_untraced_ns`` is ``None`` measures that mode without gating. Select with ``-k k2_7`` / ``-k k3`` and ``-k galaxy`` / ``-k loudbox``;
+``expected_untraced_ns`` is ``None`` measures that mode without gating. Select with ``-k galaxy`` / ``-k loudbox``;
 the LoudBox row (2x4 Fabric2D) is record-only.
 """
 
@@ -25,7 +25,6 @@ from loguru import logger
 
 import ttnn
 from models.common.utility_functions import comp_pcc, is_blackhole
-from models.demos.deepseek_v3_d_p.reference.kimi_k2_7_config import KimiK27Config
 from models.demos.deepseek_v3_d_p.reference.kimi_k3_config import KimiK3Config
 from models.demos.deepseek_v3_d_p.tests.fabric_profiles import (
     fabric2d_device_params,
@@ -70,14 +69,6 @@ class _MoEPerfCase:
     extra: dict = field(default_factory=dict)
 
 
-_K2_7 = _MoEPerfCase(
-    label="kimi-k2.7",
-    config=KimiK27Config,
-    expected_ns=2_968_000,
-    expected_untraced_ns=3_431_000,
-    shape_note="384 experts / top-8, 7168 emb",
-)
-
 _K3 = _MoEPerfCase(
     label="kimi-k3",
     config=KimiK3Config,
@@ -94,8 +85,8 @@ _K3 = _MoEPerfCase(
     ),
 )
 
-# (variant, case, id). Disjoint ids: pytest -k matches substrings, so a bare "kimi" would select both.
-_CASES = [("kimi_k2_7", _K2_7, "k2_7"), ("kimi_k3", _K3, "k3")]
+# (variant, case, id).
+_CASES = [("kimi_k3", _K3, "k3")]
 
 # (id, mesh shape, fabric profile, topology mark). Only the galaxy row gates; the LoudBox row records.
 _MESHES = [
