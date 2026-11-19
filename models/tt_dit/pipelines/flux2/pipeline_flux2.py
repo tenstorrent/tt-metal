@@ -156,8 +156,9 @@ class Flux2Pipeline:
     ) -> None:
         """Build the pipeline.
 
-        ``resolutions`` are the image sizes (width, height) that ``__call__`` accepts, all warmed
-        up here; ``width`` and ``height`` give the default one.
+        ``resolutions`` are the image sizes (width, height) that ``__call__`` accepts; ``width`` and
+        ``height`` give the default one. The default size is warmed up here, and with
+        ``trace_warmup`` every size, untraced and traced.
         """
         self._resolutions = tuple(resolutions)
         if (width, height) not in self._resolutions:
@@ -178,8 +179,7 @@ class Flux2Pipeline:
         self.dynamic_load = dynamic_load
 
         # The denoising states by image size and whether there is a reference image, and the VAE
-        # traces by image size. A pipeline without trace warmup keeps them only for traced calls;
-        # its untraced calls keep nothing on the device once they return.
+        # traces by image size. A pipeline without trace warmup keeps them only for traced calls.
         self._trace_warmup = trace_warmup
         self._denoise_states: dict[tuple[int, int, bool], _DenoiseState] = {}
         self._vae_decoder_tracers: dict[tuple[int, int], Tracer] = {}
@@ -327,11 +327,14 @@ class Flux2Pipeline:
             prompt_rope_sin.unsqueeze(0).unsqueeze(0), False, mesh_axes=prompt_rope_mesh_axes, device=self._mesh_device
         )
 
-        # Every size runs untraced before the first capture. The buffers that the first run at a size
-        # allocates and keeps, such as conv weights and CCL buffers, would otherwise be allocated
-        # after an earlier trace was captured, and that trace's replay would overwrite them.
+        # Untraced, a size needs no warmup of its own, so warming the default size is enough. With
+        # trace warmup every size runs untraced before the first capture, since each size is captured
+        # on its own and the buffers its first run allocates and keeps, such as its denoising state,
+        # would otherwise be allocated after an earlier trace was captured, and that trace's replay
+        # would overwrite them.
         edits = (False, True) if self._vae_encoder is not None else (False,)
-        for width, height in self._resolutions:
+        warm_sizes = self._resolutions if trace_warmup else ((self._width, self._height),)
+        for width, height in warm_sizes:
             for edit in edits:
                 self.warmup(width=width, height=height, edit=edit, warmup_info="e2e warmup")
         if trace_warmup:
