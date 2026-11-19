@@ -9,6 +9,8 @@ Contract side (contract role): contract_independent_pcc (optional).
 See models/demos/common/bringup/reference/interface.py and testing/harness.py for the contracts.
 """
 
+import os
+
 import torch
 
 ORACLE_MAX_SEQ = 65536  # positions the oracle's caches hold (parity and sanity prompts are far shorter)
@@ -1356,6 +1358,20 @@ def device_model(mesh, spec, layers, lm_head=True):
     )
 
 
+def run_layers(spec, layers, last_chunk: bool):
+    """F282 (owner 2026-11-19, testing/batch.run_layers): the layers a measurement executes, when fewer than its list.
+    Under DECODER_SKIP=decode a chunk that is not a request's last runs layers 0-19 in full and the candidate source
+    (layer 20) only its KV / index head; layers 21-39 never run (tt/model.py _layer: a Skipped marker, no device work).
+    A measurement with no last chunk then needs layers 0..20 only: the same device work, the same outputs for the
+    layers executed. A last chunk runs the decoder: every layer (None)."""
+    from models.demos.deepseek_v41_flash_d_p.tt.settings import settings as _settings
+
+    if last_chunk or _settings.get("DECODER_SKIP") != "decode":
+        return None
+    cand = int(_config(spec).cand_source)
+    return [i for i in layers if i <= cand] if cand >= 0 else None
+
+
 # FIX.29: device_model goes through testing/batch.shared_model itself (tt/runners/adapter.load_model), so the framework's
 # batch.device_model asks it directly: the hook's and the serving runtime's loads share one cache entry
 SHARED_LOADER = True
@@ -1369,12 +1385,31 @@ def batch_settings() -> dict:
     return {name: _settings._read(name) for name in _settings.table}
 
 
-def batch_call_settings() -> tuple:
+def batch_call_settings(env=None) -> tuple:
     """FIX.29: switches the model reads per call, never at load (a test may change them on the batch's model):
-    PREFILL_END (tt/attention.prefill_end, read on every chunk). DECODER_SKIP is read at load (the decoder lists,
-    replay128's tail model); the tests run decode on a model loaded with off through use_decoder_skip (host lists
-    only, FIX.28), so the shipped value stays the load's."""
-    return ("PREFILL_END",)
+    PREFILL_END (tt/attention.prefill_end, read on every chunk). F283 (owner 2026-11-19, one model load a gate):
+    DECODER_SKIP off / exact / decode too: its one load-time read (tt/model.py) builds host lists only, and a held
+    model takes the run's value through use_decoder_skip (FIX.28; ``batch_call_apply``), so a run setting it shares
+    the gate's model. replay128 builds the decoder tail model at load: a load-time value (``env``: the run's
+    environment, default this process's)."""
+    from models.demos.deepseek_v41_flash_d_p.tt.settings import settings as _settings
+
+    env = os.environ if env is None else env
+    skip = env.get(_settings.env_name("DECODER_SKIP"), str(_settings.table["DECODER_SKIP"].default))
+    return ("PREFILL_END",) + (() if skip == "replay128" else ("DECODER_SKIP",))
+
+
+def batch_call_apply(model) -> None:
+    """F283: a held model put to this run's DECODER_SKIP (off / exact / decode: use_decoder_skip, host lists only,
+    FIX.28), as a load with that value would have built it; replay128 is never a per-run value (batch_call_settings).
+    A test that switches it itself (use_decoder_skip) still does, from the value it finds."""
+    from models.demos.deepseek_v41_flash_d_p.tt.settings import settings as _settings
+
+    want = _settings.get("DECODER_SKIP")
+    have = getattr(model, "skip_mode", None)
+    if have is None or want == have or "replay128" in (want, have) or getattr(model, "tail_of", None) is not None:
+        return
+    model.use_decoder_skip(want)
 
 
 def settings():

@@ -105,7 +105,8 @@ def test_expert_load_census(mesh_device, monkeypatch):
     assert k >= 1 and p >= chunk, (p, k)
     end = p + k * chunk
     monkeypatch.setitem(S.data["target"], "seq", max(end, int(S.data["target"]["seq"])))
-    layers = list(S.layers())
+    # F282: every chunk here is last=False: under decode only layers 0-20 run, so only they are loaded
+    layers = batch.run_layers(S, list(S.layers()), last_chunk=False)
     model = batch.device_model(S, mesh_device, layers, lm_head=False)
     loaded = model.skip_mode
     if loaded != "decode":

@@ -322,7 +322,11 @@ class TtMoEBlockV2Layer:
             for label, cand in (("", paths), (" (the main block's files)", self._main_cache_paths(blk, lay))):
                 if cand is not None and all(p.exists() for p in cand.values()):
                     t0 = time.time()
-                    w = {k: ttnn.load_tensor(str(p), device=self.mesh) for k, p in cand.items()}
+                    from models.demos.common.bringup.testing import weights as device_weights
+
+                    # F281: through the resident runner's device-weight registry (a rebuilt model keeps these files' copies;
+                    # outside the runner: ttnn.load_tensor as before)
+                    w = {k: device_weights.load_tensor(p, self.mesh) for k, p in cand.items()}
                     logger.info(
                         f"MOE_BLOCK_V2 layer={self.layer} routed weights cache hit{label} {time.time() - t0:.1f} s"
                     )

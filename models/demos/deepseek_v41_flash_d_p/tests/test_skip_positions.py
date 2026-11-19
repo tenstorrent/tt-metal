@@ -153,8 +153,11 @@ def test_skip_positions(mesh_device, monkeypatch):
     print(f"ENGRAM_TABLE={settings.get('ENGRAM_TABLE')}")
     chunk = int(S.get("target.chunk"))
     points = _points()
-    layers = list(S.layers())
-    assert layers == list(range(S.num_layers)), layers
+    full = list(S.layers())
+    assert full == list(range(S.num_layers)), full
+    # F282: no chunk here is a request's last, so under decode layers 21-39 never run: only 0-20 are loaded and looped
+    # (testing/batch.run_layers; the same device work as the full list; BRINGUP_RUN_LAYERS=all loads every layer)
+    layers = batch.run_layers(S, full, last_chunk=False)
 
     # The positions the load's tables cover (RoPE, window / sparse tables: load time, max_seq): the longest point, as
     # test_profile sizes them for BRINGUP_POS (target.seq, in memory), never past the deployment's context deploy.seq
