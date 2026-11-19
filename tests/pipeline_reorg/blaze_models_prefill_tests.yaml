@@ -794,7 +794,8 @@
         export OMP_NUM_THREADS=$(nproc)
         python3 -m pytest models/demos/deepseek_v3_d_p/tests/op_unit_tests/test_sparse_push_plan.py -vvv --tb=short &&
         python3 -m pytest tests/ttnn/unit_tests/operations/experimental/test_sparse_kv_push.py -vvv --tb=short &&
-        python3 -m pytest tests/nightly/blackhole/sdpa/test_sparse_sdpa_kv_push.py::test_sparse_kv_push_real_topk_matches_gather -vvv --tb=short
+        python3 -m pytest tests/nightly/blackhole/sdpa/test_sparse_sdpa_kv_push.py::test_sparse_kv_push_real_topk_matches_gather -vvv --tb=short &&
+        python3 -m pytest tests/nightly/blackhole/sdpa/test_sparse_sdpa_kv_push.py::test_dense_mode_matches_gather -vvv --tb=short
       '
     )
 
@@ -2559,6 +2560,7 @@
       python3 -m pytest tests/ttnn/unit_tests/operations/experimental/test_high_bw_all_gather.py::test_high_bw_all_gather_galaxy_cylinder_4x4_perf -q || rc=1
       python3 -m pytest tests/ttnn/unit_tests/operations/experimental/test_high_bw_all_gather_fabric.py -q -s -k "test_cylinder_4x4 and interleaved and tile" || rc=1
       python3 -m pytest tests/nightly/blackhole/sdpa/test_sparse_sdpa_kv_push.py::test_sparse_kv_push_glm_perf -q -s || rc=1
+      python3 -m pytest tests/nightly/blackhole/sdpa/test_sparse_sdpa_kv_push.py::test_sparse_kv_push_dense_mode_perf -q -s || rc=1
       exit $rc
     '
   test_type: high_bw_all_gather_sparse_kv_push_perf

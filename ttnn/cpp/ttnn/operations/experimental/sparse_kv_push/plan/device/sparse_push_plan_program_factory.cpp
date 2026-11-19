@@ -22,9 +22,9 @@ constexpr uint32_t kCbAlignBytes = 64;  // CB sizes are rounded up to whole 64 B
 // Kernel handles: create_descriptor pushes the kernels in this order.
 constexpr tt::tt_metal::KernelHandle kPlanKernel = 0;    // BRISC
 constexpr tt::tt_metal::KernelHandle kHelperKernel = 1;  // NCRISC, the same kernel and runtime args
-// Per-core runtime args of the data movement kernels.
 // The compile-time arg that tells the two data movement kernels apart.
 constexpr uint32_t kCtRole = 11;
+// Per-core runtime args of the data movement kernels.
 constexpr uint32_t kArgIndices = 0, kArgTable = 1, kArgCompact = 2, kArgSplit = 6;
 
 ::sparse_push_plan::SplitSource split_source(const SparsePushPlanParams& attrs, const SparsePushPlanInputs& args) {
@@ -135,7 +135,9 @@ tt::tt_metal::ProgramDescriptor SparsePushPlanProgramFactory::create_descriptor(
         bucket_cap,
         range_blocks,
         topk,
-        0u,  // role: the driver (BRISC); the helper (NCRISC) gets 1
+        0u,  // kCtRole: the driver (BRISC); the helper (NCRISC) gets 1
+        attrs.dense_below,
+        attrs.dense_below > 0 ? dense_slot_rows(attrs, num_devices) : 0u,
     };
     tt::tt_metal::TensorAccessorArgs(idx_buf).append_to(ct);
     tt::tt_metal::TensorAccessorArgs(table_buf).append_to(ct);

@@ -88,6 +88,17 @@ void SparsePushPlanDeviceOperation::validate_on_program_cache_miss(
     TT_FATAL(
         !(attrs.chunk_start.has_value() && args.chunk_start_tensor.has_value()),
         "sparse push plan takes chunk_start or chunk_start_tensor, not both");
+    if (attrs.dense_below > 0) {
+        TT_FATAL(
+            attrs.chunk_start.has_value() || args.chunk_start_tensor.has_value(),
+            "sparse push plan dense_below needs chunk_start or chunk_start_tensor");
+        TT_FATAL(
+            uint64_t{dense_slot_rows(attrs, num_devices)} * num_devices <= attrs.max_rows,
+            "sparse push plan: dense_below {} needs {} rows per chip, more than the cache's {}",
+            attrs.dense_below,
+            dense_slot_rows(attrs, num_devices),
+            attrs.max_rows / num_devices);
+    }
     if (args.chunk_start_tensor.has_value()) {
         const auto& start = *args.chunk_start_tensor;
         TT_FATAL(
@@ -106,7 +117,7 @@ ttsl::hash::hash_t SparsePushPlanDeviceOperation::compute_program_hash(
     const operation_attributes_t& attrs, const tensor_args_t& args) {
     // A host chunk start is a runtime arg: only whether there is one, and in which form, shapes the program.
     return tt::tt_metal::operation::hash_operation<SparsePushPlanDeviceOperation>(
-        attrs.stripe_chunk, attrs.max_rows, attrs.page_bytes, attrs.chunk_start.has_value(), args);
+        attrs.stripe_chunk, attrs.max_rows, attrs.page_bytes, attrs.chunk_start.has_value(), attrs.dense_below, args);
 }
 
 SparsePushPlanDeviceOperation::spec_return_value_t SparsePushPlanDeviceOperation::compute_output_specs(
@@ -144,11 +155,16 @@ std::vector<Tensor> sparse_push_plan(
     uint32_t max_rows,
     uint32_t page_bytes,
     std::optional<uint32_t> chunk_start,
-    const std::optional<Tensor>& chunk_start_tensor) {
+    const std::optional<Tensor>& chunk_start_tensor,
+    uint32_t dense_below) {
     using Op = ttnn::operations::experimental::sparse_kv_push::SparsePushPlanDeviceOperation;
     return ttnn::device_operation::launch<Op>(
         Op::operation_attributes_t{
-            .stripe_chunk = stripe_chunk, .max_rows = max_rows, .page_bytes = page_bytes, .chunk_start = chunk_start},
+            .stripe_chunk = stripe_chunk,
+            .max_rows = max_rows,
+            .page_bytes = page_bytes,
+            .chunk_start = chunk_start,
+            .dense_below = dense_below},
         Op::tensor_args_t{.indices = indices, .chunk_start_tensor = chunk_start_tensor});
 }
 
