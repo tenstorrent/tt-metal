@@ -41,11 +41,7 @@ from models.demos.deepseek_v3_d_p.tests.mtp_prefill.predictor_reference import (
     stored_reference_path,
 )
 from models.demos.deepseek_v3_d_p.tests.sparse_mla.sparse_mla_reference import build_weights
-from models.demos.deepseek_v3_d_p.tt.mla.indexer import (
-    full_indexer_rank,
-    normalized_hadamard_matrix,
-    num_full_indexer_layers,
-)
+from models.demos.deepseek_v3_d_p.tt.mla.indexer import full_indexer_rank, num_full_indexer_layers, rotate_index_keys
 from models.demos.deepseek_v3_d_p.tt.mla.rope import RotarySetup
 from models.demos.deepseek_v3_d_p.tt.mla.utils import blockcyclic_positions, rotated_chip_positions
 from models.demos.deepseek_v3_d_p.tt.moe.tt_moe_gate_prefill import GateComputeMode
@@ -75,7 +71,7 @@ from models.demos.deepseek_v3_d_p.utils.fast_cache_checker import init_checker, 
 from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import MlaKvCacheFormat, init_kvpe_cache, init_mla_kv_cache
 from models.demos.deepseek_v3_d_p.utils.test_utils import gather_cache_natural, unrotate_cache_layer
 from models.demos.deepseek_v3_d_p.utils.transformer_helpers import load_host_tail_weights
-from tests.ttnn.utils_for_testing import assert_with_pcc, comp_pcc
+from tt_py_test_utils_common.utils_for_testing import assert_with_pcc, comp_pcc
 
 FUSED_MTP_PCC = 0.999
 # Keyed by use_pretrained.
@@ -1064,7 +1060,7 @@ def test_mtp_multiturn_pcc(
             blockcyclic_positions(stripes, CHUNK, index.shape[1]),
             index.shape[1],
         )
-        index_k = raw @ normalized_hadamard_matrix(raw.shape[-1]).float()
+        index_k = rotate_index_keys(config, raw)
         _, msg = assert_with_pcc(ref["index_k"][:total], index_k[:total], INDEX_K_PCC)
         logger.info(f"[mtp multiturn] L1 index-K PCC: {msg}")
         assert torch.count_nonzero(raw[tail:]) == 0, f"the index cache has rows written at or past {tail}"

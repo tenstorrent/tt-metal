@@ -22,6 +22,7 @@ import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.demos.deepseek_v3_d_p.tt.moe.debug_logging import DEBUG_LOGGING_ENABLED
 from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import ExpertMapping, get_ep_mesh_mapper
+from models.demos.deepseek_v3_d_p.utils.weight_cache_dump import resolve_cache_dump_mode, weight_cache_dump_mode
 
 
 def _fused_compute_config(config):
@@ -192,7 +193,7 @@ class TtRoutedExpert(LightweightModule):
         emb_dim: int | None = None,
         hidden_dim: int | None = None,
         weights_dram_nd_sharded: bool = False,
-        cache_dump_mode: ttnn.DumpTensorMode = ttnn.DumpTensorMode.DISTRIBUTED_GATHER,
+        cache_dump_mode: Optional[ttnn.DumpTensorMode] = None,
         sp_axis: int = 0,
     ):
         """
@@ -279,7 +280,7 @@ class TtRoutedExpert(LightweightModule):
                 layout=ttnn.TILE_LAYOUT,
                 dtype=weights_dtype,
                 cache_file_name=_cache_name(f"local_{local_expert_idx}_gate"),
-                cache_dump_mode=cache_dump_mode,
+                cache_dump_mode=resolve_cache_dump_mode(cache_dump_mode),
             )
             up_tt = ttnn.as_tensor(
                 stacked_up,
@@ -287,7 +288,7 @@ class TtRoutedExpert(LightweightModule):
                 layout=ttnn.TILE_LAYOUT,
                 dtype=weights_dtype,
                 cache_file_name=_cache_name(f"local_{local_expert_idx}_up"),
-                cache_dump_mode=cache_dump_mode,
+                cache_dump_mode=resolve_cache_dump_mode(cache_dump_mode),
             )
             down_tt = ttnn.as_tensor(
                 stacked_down,
@@ -295,7 +296,7 @@ class TtRoutedExpert(LightweightModule):
                 layout=ttnn.TILE_LAYOUT,
                 dtype=weights_dtype,
                 cache_file_name=_cache_name(f"local_{local_expert_idx}_down"),
-                cache_dump_mode=cache_dump_mode,
+                cache_dump_mode=resolve_cache_dump_mode(cache_dump_mode),
             )
 
             if device is None:
@@ -346,6 +347,7 @@ class TtRoutedExpert(LightweightModule):
                 device=mesh_device,
                 dtype=bias_dtype,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                cache_dump_mode=weight_cache_dump_mode(),
             )
             return ttnn.squeeze(ttnn.squeeze(tt, dim=0), dim=0)  # per device: (1, N)
 
@@ -367,7 +369,7 @@ class TtRoutedExpert(LightweightModule):
         weights_dtype: ttnn.DataType,
         cache_path: Path,
         cache_name_prefix: str,
-        cache_dump_mode: ttnn.DumpTensorMode = ttnn.DumpTensorMode.DISTRIBUTED_GATHER,
+        cache_dump_mode: Optional[ttnn.DumpTensorMode] = None,
         sp_axis: int = 0,
     ):
         """Build TTNN cache for routed experts without device copy."""
@@ -379,7 +381,7 @@ class TtRoutedExpert(LightweightModule):
             cache_path,
             cache_name_prefix,
             device=None,
-            cache_dump_mode=cache_dump_mode,
+            cache_dump_mode=resolve_cache_dump_mode(cache_dump_mode),
             sp_axis=sp_axis,
         )
 
@@ -424,7 +426,7 @@ class TtRoutedExpert(LightweightModule):
         activation: "ttnn.RoutedExpertActivation",
         hybrid_token_threshold: Optional[int] = None,
         weights_dram_nd_sharded: Optional[bool] = None,
-        cache_dump_mode: ttnn.DumpTensorMode = ttnn.DumpTensorMode.DISTRIBUTED_GATHER,
+        cache_dump_mode: Optional[ttnn.DumpTensorMode] = None,
         sp_axis: int = 0,
     ):
         """
@@ -461,9 +463,9 @@ class TtRoutedExpert(LightweightModule):
                           the arch default: ND-sharded on Blackhole, interleaved elsewhere. True
                           forces ND-sharded (Blackhole only), False forces interleaved. See
                           routed_expert_weight_memory_config for the placement itself.
-            cache_dump_mode: How a weight-cache miss is written (see ttnn.as_tensor). Pass
-                          ttnn.DumpTensorMode.LOCAL when each rank builds different layers
-                          (pipeline parallel).
+            cache_dump_mode: How a weight-cache miss is written (see ttnn.as_tensor). None (default)
+                          follows utils/weight_cache_dump.py, which TtPrefillRuntime sets to LOCAL for a
+                          pipeline-parallel build, where each rank builds different layers.
             sp_axis: Mesh axis the dispatch groups run along (0 or 1). Decides which global
                           expert each mesh position holds; must match the dispatch table and
                           global_expert_idx_table sharding.
@@ -579,7 +581,7 @@ class TtRoutedExpert(LightweightModule):
                 self.cache_name_prefix,
                 device=self.mesh_device,
                 weights_dram_nd_sharded=self.weights_dram_nd_sharded,
-                cache_dump_mode=self.cache_dump_mode,
+                cache_dump_mode=resolve_cache_dump_mode(self.cache_dump_mode),
                 sp_axis=self.sp_axis,
             )
         elif weight_cache_path is not None:
@@ -593,7 +595,7 @@ class TtRoutedExpert(LightweightModule):
                 self.cache_name_prefix,
                 device=self.mesh_device,
                 weights_dram_nd_sharded=self.weights_dram_nd_sharded,
-                cache_dump_mode=self.cache_dump_mode,
+                cache_dump_mode=resolve_cache_dump_mode(self.cache_dump_mode),
                 sp_axis=self.sp_axis,
                 emb_dim=emb_dim,
                 hidden_dim=hidden_dim,
@@ -618,7 +620,7 @@ class TtRoutedExpert(LightweightModule):
                 None,
                 device=self.mesh_device,
                 weights_dram_nd_sharded=self.weights_dram_nd_sharded,
-                cache_dump_mode=self.cache_dump_mode,
+                cache_dump_mode=resolve_cache_dump_mode(self.cache_dump_mode),
                 sp_axis=self.sp_axis,
             )
 

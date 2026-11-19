@@ -8,9 +8,9 @@
 #include <fmt/ranges.h>
 #include <gmock/gmock.h>
 
-#include <tt-metalium/experimental/metal2_host_api/program.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
+#include <tt-metalium/mesh_workload.hpp>
+#include <tt-metalium/workload/run_args/program_run_args.hpp>
+#include <tt-metalium/workload/specification/program_spec.hpp>
 
 #include "impl/program/slow_dispatch.hpp"
 #include "tests/tt_metal/tt_metal/eth/eth_test_common.hpp"
@@ -59,7 +59,7 @@ QuasarNodeTopology GetQuasarNodeTopology() {
 
 // The node these tests place kernels on. Any Tensix worker will do -- what is being tested is that
 // every RISC *within one node* prints concurrently without interleaving.
-constexpr experimental::NodeCoord kDefaultPrintNode{0, 0};
+constexpr NodeCoord kDefaultPrintNode{0, 0};
 
 // A Quasar print-storm program: `dm_threads` user DM threads and `compute_engines` Tensix engines on
 // `node`, all running `kernel_path`. Pass 0 for either count to omit that kernel.
@@ -68,69 +68,69 @@ constexpr experimental::NodeCoord kDefaultPrintNode{0, 0};
 // get_arg_val<uint32_t>(0). Neither KernelSpec declares a named runtime-arg schema, so the vararg
 // section starts at index 0 -- which is what lets the same kernel source also run unchanged on the
 // classic Wormhole/Blackhole path.
-experimental::ProgramSpec MakeQuasarPrintSpec(
+ProgramSpec MakeQuasarPrintSpec(
     std::string_view kernel_path,
     uint32_t dm_threads,
     uint32_t compute_engines,
-    const experimental::NodeCoord& node = kDefaultPrintNode) {
-    experimental::ProgramSpec spec{.name = "dprint_concurrent"};
-    experimental::Group<experimental::KernelSpecName> placed;
+    const NodeCoord& node = kDefaultPrintNode) {
+    ProgramSpec spec{.name = "dprint_concurrent"};
+    Group<KernelSpecName> placed;
 
     if (dm_threads > 0) {
-        spec.kernels.push_back(experimental::KernelSpec{
-            .unique_id = experimental::KernelSpecName{"dm_print"},
+        spec.kernels.push_back(KernelSpec{
+            .unique_id = KernelSpecName{"dm_print"},
             .source = std::filesystem::path{kernel_path},
             .num_threads = dm_threads,
-            .hw_config = experimental::DataMovementHardwareConfig{},
-            .advanced_options = experimental::KernelAdvancedOptions{.num_runtime_varargs = 1},
+            .hw_config = DataMovementHardwareConfig{},
+            .advanced_options = tt_metal::experimental::KernelAdvancedOptions{.num_runtime_varargs = 1},
         });
-        placed.push_back(experimental::KernelSpecName{"dm_print"});
+        placed.push_back(KernelSpecName{"dm_print"});
     }
     if (compute_engines > 0) {
-        spec.kernels.push_back(experimental::KernelSpec{
-            .unique_id = experimental::KernelSpecName{"compute_print"},
+        spec.kernels.push_back(KernelSpec{
+            .unique_id = KernelSpecName{"compute_print"},
             .source = std::filesystem::path{kernel_path},
             .num_threads = compute_engines,
-            .hw_config = experimental::ComputeHardwareConfig{},
-            .advanced_options = experimental::KernelAdvancedOptions{.num_runtime_varargs = 1},
+            .hw_config = ComputeHardwareConfig{},
+            .advanced_options = tt_metal::experimental::KernelAdvancedOptions{.num_runtime_varargs = 1},
         });
-        placed.push_back(experimental::KernelSpecName{"compute_print"});
+        placed.push_back(KernelSpecName{"compute_print"});
     }
 
-    spec.work_units = {experimental::WorkUnitSpec{.name = "main", .kernels = placed, .target_nodes = node}};
+    spec.work_units = {WorkUnitSpec{.name = "main", .kernels = placed, .target_nodes = node}};
     return spec;
 }
 
 // A single compute kernel on `node`, portable across generations. Gen1 runs it on TRISC0/1/2; Gen2
 // runs it on one Tensix engine's TRISCs. Both satisfy the tests that only assert on printed strings.
-experimental::ProgramSpec MakeComputePrintSpec(
-    std::string_view kernel_path, const experimental::NodeCoord& node = kDefaultPrintNode) {
-    experimental::ComputeHardwareConfig hw_config;
-    hw_config = experimental::ComputeHardwareConfig{};
+ProgramSpec MakeComputePrintSpec(std::string_view kernel_path, const NodeCoord& node = kDefaultPrintNode) {
+    ComputeHardwareConfig hw_config;
+    hw_config = ComputeHardwareConfig{};
 
-    const experimental::KernelSpecName name{"compute_print"};
-    return experimental::ProgramSpec{
+    const KernelSpecName name{"compute_print"};
+    return ProgramSpec{
         .name = "dprint_compute",
-        .kernels = {experimental::KernelSpec{
+        .kernels = {KernelSpec{
             .unique_id = name,
             .source = std::filesystem::path{kernel_path},
             .num_threads = 1,
             .hw_config = hw_config,
         }},
-        .work_units = {experimental::WorkUnitSpec{.name = "main", .kernels = {name}, .target_nodes = node}},
+        .work_units = {WorkUnitSpec{.name = "main", .kernels = {name}, .target_nodes = node}},
     };
 }
 
 // Gives every kernel in the spec its iteration count as vararg 0. The node is read back out of the
 // spec so it cannot drift from the one the kernels were placed on.
-experimental::ProgramRunArgs MakeIterationArgs(const experimental::ProgramSpec& spec, uint32_t iterations) {
-    const auto& node = std::get<experimental::NodeCoord>(spec.work_units.front().target_nodes);
+ProgramRunArgs MakeIterationArgs(const ProgramSpec& spec, uint32_t iterations) {
+    const auto& node = std::get<NodeCoord>(spec.work_units.front().target_nodes);
 
-    experimental::ProgramRunArgs args;
+    ProgramRunArgs args;
     for (const auto& kernel : spec.kernels) {
-        args.kernel_run_args.push_back(experimental::ProgramRunArgs::KernelRunArgs{
+        args.kernel_run_args.push_back(ProgramRunArgs::KernelRunArgs{
             .kernel = kernel.unique_id,
-            .advanced_options = experimental::AdvancedKernelRunArgs{.runtime_varargs = {{node, {iterations}}}},
+            .advanced_options =
+                tt_metal::experimental::AdvancedKernelRunArgs{.runtime_varargs = {{node, {iterations}}}},
         });
     }
     return args;
@@ -280,9 +280,7 @@ private:
 
         if (quasar) {
             riscs.push_back(
-                {.name = "DM",
-                 .core = kDefaultPrintNode,
-                 .run = RunOnTensix(experimental::DataMovementHardwareConfig{})});
+                {.name = "DM", .core = kDefaultPrintNode, .run = RunOnTensix(DataMovementHardwareConfig{})});
         } else {
             for (const auto& [processor, noc, name, prefix] :
                  {std::tuple{DataMovementProcessor::RISCV_0, NOC::NOC_0, "BRISC", "BR"},
@@ -291,9 +289,9 @@ private:
                     {.name = name,
                      .core = kDefaultPrintNode,
                      .prefix_names = {prefix},
-                     .run = RunOnTensix(experimental::DataMovementHardwareConfig{
-                         .config_1xx = experimental::DataMovementHardwareConfig::DataMovement1XXConfig{
-                             .processor = processor, .noc = noc}})});
+                     .run = RunOnTensix(DataMovementHardwareConfig{
+                         .config_1xx =
+                             DataMovementHardwareConfig::DataMovement1XXConfig{.processor = processor, .noc = noc}})});
             }
         }
 
@@ -306,7 +304,7 @@ private:
              .core = kDefaultPrintNode,
              .prefix_names = quasar ? std::vector<std::string>{} : std::vector<std::string>{"TR0", "TR1", "TR2"},
              .num_riscs = num_triscs,
-             .run = RunOnTensix(experimental::ComputeHardwareConfig{})});
+             .run = RunOnTensix(ComputeHardwareConfig{})});
 
         // Ethernet kernels run only in slow dispatch, and this file places them on Wormhole and Blackhole only.
         auto* device = mesh_device->impl().get_devices()[0];
@@ -346,35 +344,33 @@ private:
     }
 
     // A kernel on kDefaultPrintNode, placed through the Metal 2.0 host API (Tensix only).
-    RunKernel RunOnTensix(
-        const std::variant<experimental::DataMovementHardwareConfig, experimental::ComputeHardwareConfig>& hw_config) {
+    RunKernel RunOnTensix(const std::variant<DataMovementHardwareConfig, ComputeHardwareConfig>& hw_config) {
         return [this, hw_config](
                    const std::shared_ptr<distributed::MeshDevice>& mesh_device,
                    const std::string& kernel_path,
                    ttsl::Span<const uint32_t> runtime_args) {
-            const experimental::KernelSpecName name{"print"};
-            experimental::KernelSpec kernel{
+            const KernelSpecName name{"print"};
+            KernelSpec kernel{
                 .unique_id = name,
                 .source = std::filesystem::path{kernel_path},
                 .num_threads = 1,
                 .hw_config = hw_config,
             };
             kernel.advanced_options.num_runtime_varargs = static_cast<uint32_t>(runtime_args.size());
-            experimental::ProgramSpec spec{
+            ProgramSpec spec{
                 .name = "dprint_every_risc",
                 .kernels = {kernel},
-                .work_units = {experimental::WorkUnitSpec{
-                    .name = "main", .kernels = {name}, .target_nodes = kDefaultPrintNode}},
+                .work_units = {WorkUnitSpec{.name = "main", .kernels = {name}, .target_nodes = kDefaultPrintNode}},
             };
-            Program program = experimental::MakeProgramFromSpec(*mesh_device, spec);
-            // SetProgramRunArgs rejects run args for a kernel that declares none.
+            Program program(*mesh_device, spec);
+            // set_program_run_args() rejects run args for a kernel that declares none.
             if (!runtime_args.empty()) {
-                experimental::ProgramRunArgs::KernelRunArgs kernel_run_args{.kernel = name};
+                ProgramRunArgs::KernelRunArgs kernel_run_args{.kernel = name};
                 kernel_run_args.advanced_options.runtime_varargs[kDefaultPrintNode] =
                     std::vector<uint32_t>(runtime_args.begin(), runtime_args.end());
-                experimental::ProgramRunArgs run_args;
+                ProgramRunArgs run_args;
                 run_args.kernel_run_args.push_back(std::move(kernel_run_args));
-                experimental::SetProgramRunArgs(program, run_args);
+                program.set_program_run_args(run_args);
             }
             distributed::MeshWorkload workload;
             workload.add_program(FirstDevice(), std::move(program));
@@ -557,8 +553,8 @@ TEST_F(DevicePrintOutputFixture, PrintConcurrentAllRiscs) {
             // compute kernel covering all 4 Tensix engines × 4 TRISCs = 16 baby-RISCs.
             const auto topology = GetQuasarNodeTopology();
             auto spec = MakeQuasarPrintSpec(kPrintIterationsKernel, topology.user_dm_threads, topology.compute_engines);
-            Program program = experimental::MakeProgramFromSpec(*mesh_device, spec);
-            experimental::SetProgramRunArgs(program, MakeIterationArgs(spec, iterations_count));
+            Program program(*mesh_device, spec);
+            program.set_program_run_args(MakeIterationArgs(spec, iterations_count));
             workload.add_program(device_range, std::move(program));
 
             risc_count_per_iter = static_cast<int>(topology.user_dm_threads + topology.compute_processors());
@@ -725,8 +721,8 @@ TEST_F(DevicePrintOutputFixture, PrintConcurrentRocketRiscs) {
 
         const auto topology = GetQuasarNodeTopology();
         auto spec = MakeQuasarPrintSpec(kPrintIterationsKernel, topology.user_dm_threads, /*compute_engines=*/0);
-        Program program = experimental::MakeProgramFromSpec(*mesh_device, spec);
-        experimental::SetProgramRunArgs(program, MakeIterationArgs(spec, iterations_count));
+        Program program(*mesh_device, spec);
+        program.set_program_run_args(MakeIterationArgs(spec, iterations_count));
         workload.add_program(device_range, std::move(program));
 
         DebugToolsMeshFixture::RunProgram(mesh_device, workload);
@@ -772,8 +768,8 @@ TEST_F(DevicePrintOutputFixture, PrintConcurrentBabyRiscs) {
 
         const auto topology = GetQuasarNodeTopology();
         auto spec = MakeQuasarPrintSpec(kPrintIterationsKernel, /*dm_threads=*/0, topology.compute_engines);
-        Program program = experimental::MakeProgramFromSpec(*mesh_device, spec);
-        experimental::SetProgramRunArgs(program, MakeIterationArgs(spec, iterations_count));
+        Program program(*mesh_device, spec);
+        program.set_program_run_args(MakeIterationArgs(spec, iterations_count));
         workload.add_program(device_range, std::move(program));
 
         DebugToolsMeshFixture::RunProgram(mesh_device, workload);
@@ -963,7 +959,7 @@ TEST_F(DevicePrintOutputFixture, PrintInlineFunction) {
         auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
 
         auto spec = MakeComputePrintSpec("tests/tt_metal/tt_metal/test_kernels/device_print/print_inline_function.cpp");
-        workload.add_program(device_range, experimental::MakeProgramFromSpec(*mesh_device, spec));
+        workload.add_program(device_range, tt_metal::Program(*mesh_device, spec));
 
         RunProgram(mesh_device, workload);
 

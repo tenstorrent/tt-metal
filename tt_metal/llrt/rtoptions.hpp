@@ -392,6 +392,9 @@ class RunTimeOptions {
     // EXPERIMENTAL: Enable VC1 inter-mesh pass-through routing (A->B->C). Not deadlock-safe.
     bool enable_fabric_mesh_pass_through = false;
 
+    // EXPERIMENTAL: Build fabric routers from the fabric graph instead of the stock builder
+    bool fabric_graph_builder = false;
+
     // Enable fabric telemetry
     bool enable_fabric_telemetry = false;
     FabricTelemetrySettings fabric_telemetry_settings;
@@ -705,7 +708,7 @@ public:
     }
     std::string get_compile_hash_string() const {
         std::string compile_hash_str = fmt::format(
-            "{}_{}_{}_{}_{}_{}_{}_{}",
+            "{}_{}_{}_{}_{}_{}_{}_{}_{}",
             get_watcher_hash(),
             get_sanitizer_hash(),
             get_kernels_early_return(),
@@ -713,7 +716,8 @@ public:
             get_erisc_iram_enabled(),
             get_enable_2_erisc_mode(),
             get_disable_fabric_2_erisc_mode(),
-            get_eth_ptp_trace());
+            get_eth_ptp_trace(),
+            get_simulator_enabled());
         for (int i = 0; i < RunTimeDebugFeatureCount; i++) {
             compile_hash_str += "_";
             compile_hash_str += get_feature_hash_string((llrt::RunTimeDebugFeatures)i);
@@ -975,6 +979,10 @@ public:
     bool get_enable_fabric_mesh_pass_through() const { return enable_fabric_mesh_pass_through; }
     void set_enable_fabric_mesh_pass_through(bool enable) { enable_fabric_mesh_pass_through = enable; }
 
+    // EXPERIMENTAL: graph-based fabric builder
+    bool get_fabric_graph_builder() const { return fabric_graph_builder; }
+    void set_fabric_graph_builder(bool enable) { fabric_graph_builder = enable; }
+
     // Reliability mode override accessor
     std::optional<tt::tt_fabric::FabricReliabilityMode> get_reliability_mode() const { return reliability_mode; }
 
@@ -1024,7 +1032,7 @@ public:
         mock_cluster_desc_path =
             !resolved.empty()
                 ? resolved.string()
-                : (root / "tt_metal/third_party/umd/tests/cluster_descriptor_examples" / filename).string();
+                : (root / "tt_metal/third_party/umd/descriptors/cluster_descriptor_examples" / filename).string();
         // Mock mode always overrides the simulator: configure_mock_mode() is an explicit
         // request for a fully mocked environment, so libttsim must not be used even if
         // TT_METAL_SIMULATOR is set in the environment.

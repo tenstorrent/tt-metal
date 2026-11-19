@@ -32,6 +32,12 @@ bool pack_first_op_scalars(
         case UnaryOpType::MAC_TSS:
             packed_scalar1 = pack_scalar_runtime_arg(op, 0, input_dtype);
             packed_scalar2 = pack_scalar_runtime_arg(op, 1, input_dtype);
+            if (input_dtype == DataType::BFLOAT16) {
+                packed_scalar1 =
+                    std::bit_cast<uint32_t>(static_cast<float>(bfloat16(std::bit_cast<float>(packed_scalar1))));
+                packed_scalar2 =
+                    std::bit_cast<uint32_t>(static_cast<float>(bfloat16(std::bit_cast<float>(packed_scalar2))));
+            }
             break;
         case UnaryOpType::LOGIT: {
             const auto eps = *op.get_param_if<float>(0);
@@ -73,20 +79,20 @@ bool pack_first_op_scalars(
 bool needs_tmp0_dfb(UnaryOpType t) { return t == UnaryOpType::LOGIT; }
 
 // ---- Resource names ----
-const tt::tt_metal::experimental::KernelSpecName READER{"reader"};
-const tt::tt_metal::experimental::KernelSpecName WRITER{"writer"};
-const tt::tt_metal::experimental::KernelSpecName COMPUTE{"compute"};
-const tt::tt_metal::experimental::DFBSpecName IN_DFB{"in"};      // legacy index c_0
-const tt::tt_metal::experimental::DFBSpecName TMP0_DFB{"tmp0"};  // legacy index c_1 (LOGIT only)
-const tt::tt_metal::experimental::DFBSpecName OUT_DFB{"out"};    // legacy index c_2
+const KernelSpecName READER{"reader"};
+const KernelSpecName WRITER{"writer"};
+const KernelSpecName COMPUTE{"compute"};
+const DFBSpecName IN_DFB{"in"};      // legacy index c_0
+const DFBSpecName TMP0_DFB{"tmp0"};  // legacy index c_1 (LOGIT only)
+const DFBSpecName OUT_DFB{"out"};    // legacy index c_2
 // DRAM read work queue (see kernels/dataflow/dram_read.hpp).
-const tt::tt_metal::experimental::DFBSpecName CHUNK_COUNT_DFB{"chunk_count"};  // reader to compute
-const tt::tt_metal::experimental::DFBSpecName CHUNK_RANGE_DFB{"chunk_range"};  // reader to writer
-const tt::tt_metal::experimental::DFBSpecName REQUESTS_DFB{"requests"};        // the scheduler's request table
-const tt::tt_metal::experimental::SemaphoreSpecName REPLY_SEM{"reply"};
-const tt::tt_metal::experimental::SemaphoreSpecName CLEARED_SEM{"cleared"};
-const tt::tt_metal::experimental::TensorParamName INPUT{"input"};
-const tt::tt_metal::experimental::TensorParamName OUTPUT{"output"};
+const DFBSpecName CHUNK_COUNT_DFB{"chunk_count"};  // reader to compute
+const DFBSpecName CHUNK_RANGE_DFB{"chunk_range"};  // reader to writer
+const DFBSpecName REQUESTS_DFB{"requests"};        // the scheduler's request table
+const SemaphoreSpecName REPLY_SEM{"reply"};
+const SemaphoreSpecName CLEARED_SEM{"cleared"};
+const TensorParamName INPUT{"input"};
+const TensorParamName OUTPUT{"output"};
 
 uint32_t get_shards_per_width(const ShardSpec& shard_spec, TensorMemoryLayout memory_layout) {
     auto num_cores = shard_spec.grid.num_cores();
@@ -390,12 +396,11 @@ void enumerate_core_rt_args(
 // The per-dispatch run args: every runtime arg on every core, plus both tensor bindings.
 // create_program_artifacts and override_runtime_arguments both return this. The legacy cache-hit
 // override re-applied every slot the miss path wrote, so both paths share one builder and cannot drift.
-tt::tt_metal::experimental::ProgramRunArgs make_run_args(
+tt::tt_metal::ProgramRunArgs make_run_args(
     const UnaryDeviceOperation::operation_attributes_t& operation_attributes,
     const UnaryDeviceOperation::tensor_args_t& tensor_args,
     const Tensor& output) {
     using namespace tt::tt_metal;
-    using namespace tt::tt_metal::experimental;
     using namespace CMAKE_UNIQUE_NAMESPACE;
 
     const auto& input = tensor_args.input;
@@ -464,7 +469,6 @@ ttnn::device_operation::ProgramArtifacts UnaryDeviceOperation::ProgramFactory::c
     tensor_return_value_t& output) {
     using namespace tt;
     using namespace tt::tt_metal;
-    using namespace tt::tt_metal::experimental;
     using namespace CMAKE_UNIQUE_NAMESPACE;
 
     const auto& input = tensor_args.input;
@@ -522,13 +526,20 @@ ttnn::device_operation::ProgramArtifacts UnaryDeviceOperation::ProgramFactory::c
                     : std::nullopt;
 
     const auto& all_device_cores = operation_attributes.worker_grid;
-    const bool needs_tmp0 = needs_tmp0_dfb(ops_chain[0].type());
+    // A generated kernel computes the op in one SFPU pass of the plain SFPU program, reading only the input: the
+    // op's own temporary buffer is not allocated.
+    const auto bf16_kernel_defines = get_bf16_kernel_defines(
+        ops_chain, input.dtype(), output.dtype(), operation_attributes.fp32_dest_acc_en, input.device()->arch());
+    const bool needs_tmp0 = !bf16_kernel_defines && needs_tmp0_dfb(ops_chain[0].type());
     const auto plan = get_dram_read_plan(ops_chain, input, output.tensor_spec(), all_device_cores);
     const bool dram_flow = plan.flow != DramReadFlow::None;
     const bool work_queue = plan.flow == DramReadFlow::WorkQueue;
 
     const bool math_approx_mode = false;
     std::map<std::string, std::string> unary_defines = get_block_defines(ops_chain, "0", "0", input.dtype());
+    if (bf16_kernel_defines) {
+        unary_defines = *bf16_kernel_defines;
+    }
     add_input_dtype_defines(input.dtype(), unary_defines);
     if (const auto relu_config = get_pack_relu_config(
             ops_chain,
@@ -544,7 +555,8 @@ ttnn::device_operation::ProgramArtifacts UnaryDeviceOperation::ProgramFactory::c
 
     const std::string compute_path = fmt::format(
         "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/compute/{}",
-        get_compute_kernel_path(ops_chain[0].type(), input.dtype()));
+        bf16_kernel_defines ? std::string_view{"eltwise_sfpu_metal2.cpp"}
+                            : get_compute_kernel_path(ops_chain[0].type(), input.dtype()));
 
     DataFormat dfb_data_format_for_input =
         (ops_chain[0].type() == unary::UnaryOpType::BITCAST) ? dfb_data_format_output : dfb_data_format;
@@ -816,7 +828,7 @@ ttnn::device_operation::ProgramArtifacts UnaryDeviceOperation::ProgramFactory::c
     };
 }
 
-tt::tt_metal::experimental::ProgramRunArgs UnaryDeviceOperation::ProgramFactory::override_runtime_arguments(
+tt::tt_metal::ProgramRunArgs UnaryDeviceOperation::ProgramFactory::override_runtime_arguments(
     const operation_attributes_t& operation_attributes,
     const tensor_args_t& tensor_args,
     tensor_return_value_t& output,

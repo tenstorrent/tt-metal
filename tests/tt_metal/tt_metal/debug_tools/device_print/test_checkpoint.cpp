@@ -45,7 +45,7 @@ protected:
         DevicePrintFixture::SetUp();
         if (this->arch_ == tt::ARCH::QUASAR) {
             GTEST_SKIP() << "Quasar: this test builds its kernels with CreateKernel(), which Quasar rejects; it needs "
-                            "porting to experimental::ProgramSpec";
+                            "porting to ProgramSpec";
         }
     }
     void ExtraSetUp() override {

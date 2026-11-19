@@ -31,7 +31,7 @@ import torch
 from loguru import logger
 
 import ttnn
-from tests.ttnn.utils_for_testing import assert_allclose
+from tt_py_test_utils_common.utils_for_testing import assert_allclose
 
 # [M, K, N] in tiles * 32. A 2x1 grid: M (2 tiles) on the single row, N (2 tiles) split across the 2 columns.
 M, K, N = 64, 64, 64  # 2 x 2 x 2 tiles

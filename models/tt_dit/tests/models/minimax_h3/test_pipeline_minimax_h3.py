@@ -30,18 +30,20 @@ from ....pipelines.minimax_h3.pipeline_minimax_h3 import (
     _PRESETS_BH,
     _PRESETS_WH,
     MiniMaxH3Pipeline,
+    MiniMaxH3Residency,
     _DenoisePath,
     _requested_audio_t_factor,
     _requested_dynamic_length,
     _resolve_audio_t_shard,
     _resolve_denoise_path,
     _resolve_dit_fsdp,
+    _resolve_encoder_dynamic_length,
     _resolve_max_sequence_length,
     validate_bucket_ladder,
 )
 from ....pipelines.minimax_h3.policy import align_num_frames, get_num_frames
 from ..wan2_2.common import check_output_sanity
-from .common import GALAXY_MESHES, MESH_4X8_LINE, MESH_4X8_RING
+from .common import GALAXY_MESHES, MESH_4X8_LINE, MESH_4X8_RING, MESH_4X32_RING
 from .common_av import (
     CALIBRATED_FOX_PROMPT,
     artifact_dir,
@@ -153,7 +155,8 @@ def test_requested_dynamic_length_precedence(monkeypatch, expect_error):
 def _denoise_path(preset, *, coresident=None, **kwargs):
     """(trace_denoise, bucket_denoise, dynamic_length) for the kwargs given; the rest default to None."""
     kwargs = dict(trace_denoise=None, bucket_denoise=None, bucket_ladder=None, dynamic_length=None) | kwargs
-    coresident = preset.get("coresident", True) if coresident is None else coresident
+    if coresident is None:
+        coresident = "t2va" in preset.get("residency", MiniMaxH3Residency()).coresident_tasks
     path = _resolve_denoise_path(preset, coresident=coresident, **kwargs)
     return path.trace_denoise, path.bucket_denoise, path.dynamic_length
 
@@ -215,23 +218,30 @@ def test_resolve_denoise_path_quad_and_wormhole(monkeypatch, expect_error):
     monkeypatch.setenv(_DYNAMIC_LENGTH_ENV, "0")
     assert _denoise_path(quad) == (True, True, False)
     assert _denoise_path(wormhole) == (False, True, False)
-    # the switch cannot make the quad dynamic
-    monkeypatch.setenv(_DYNAMIC_LENGTH_ENV, "1")
+    # a dynamic request takes the quad off its trace; only an explicit trace beside it contradicts
+    dynamic = (False, False, True)
+    assert _denoise_path(quad, dynamic_length=True) == dynamic
     with expect_error(ValueError, "eager-only"):
-        _denoise_path(quad)
-    assert _denoise_path(wormhole) == (False, False, True)
+        _denoise_path(quad, dynamic_length=True, trace_denoise=True)
+    monkeypatch.setenv(_DYNAMIC_LENGTH_ENV, "1")
+    assert _denoise_path(quad) == dynamic
+    assert _denoise_path(quad, dynamic_length=False) == (True, True, False)
+    with expect_error(ValueError, "eager-only"):
+        _denoise_path(quad, trace_denoise=True)
+    assert _denoise_path(wormhole) == dynamic
 
 
 def test_resolve_dit_fsdp(monkeypatch, expect_error):
     monkeypatch.delenv(_DIT_FSDP_ENV, raising=False)
     bh, quad, wormhole = _PRESETS_BH[(4, 8)], _PRESETS_BH[(4, 32)], _PRESETS_WH[(4, 8)]
-    assert "dit_fsdp" not in bh and "dit_fsdp" not in quad
+    assert "dit_fsdp" not in bh and quad["dit_fsdp"] is False  # the quad pins it off on both paths
     env = f"from {_DIT_FSDP_ENV}"
     # dynamic ref2va shards the DiT; bucketed ref2va and dynamic t2va stay unsharded
     assert _resolve_dit_fsdp(bh, dit_fsdp=None, task="ref2va", dynamic_length=True) == (True, "dynamic ref2va")
     assert _resolve_dit_fsdp(bh, dit_fsdp=None, task="ref2va", dynamic_length=False) == (False, "default")
     assert _resolve_dit_fsdp(bh, dit_fsdp=None, task="t2va", dynamic_length=True) == (False, "default")
-    assert _resolve_dit_fsdp(quad, dit_fsdp=None, task="ref2va", dynamic_length=False) == (False, "default")
+    assert _resolve_dit_fsdp(quad, dit_fsdp=None, task="ref2va", dynamic_length=False) == (False, "preset")
+    assert _resolve_dit_fsdp(quad, dit_fsdp=None, task="ref2va", dynamic_length=True) == (False, "preset")
     # the kwarg and a preset key both win over the rule
     assert _resolve_dit_fsdp(bh, dit_fsdp=False, task="ref2va", dynamic_length=True) == (False, "kwarg")
     assert _resolve_dit_fsdp(bh, dit_fsdp=True, task="t2va", dynamic_length=False) == (True, "kwarg")
@@ -245,6 +255,21 @@ def test_resolve_dit_fsdp(monkeypatch, expect_error):
     monkeypatch.setenv(_DIT_FSDP_ENV, "yes")
     with expect_error(ValueError, _DIT_FSDP_ENV):
         _resolve_dit_fsdp(bh, dit_fsdp=None, task="t2va", dynamic_length=False)
+
+
+def test_resolve_encoder_dynamic_length():
+    bh, quad, wormhole = _PRESETS_BH[(4, 8)], _PRESETS_BH[(4, 32)], _PRESETS_WH[(4, 8)]
+    # on with `dynamic_length` on both Blackhole presets, for the t2va task (which serves fl2va too) only
+    for preset in (bh, quad):
+        assert _resolve_encoder_dynamic_length(None, preset, dynamic_length=True, task="t2va")
+        assert not _resolve_encoder_dynamic_length(None, preset, dynamic_length=False, task="t2va")
+        assert not _resolve_encoder_dynamic_length(None, preset, dynamic_length=True, task="ref2va")
+    # off where the preset does not enable it
+    for preset in (wormhole, {}):
+        assert not _resolve_encoder_dynamic_length(None, preset, dynamic_length=True, task="t2va")
+    # an explicit value always wins
+    assert _resolve_encoder_dynamic_length(True, wormhole, dynamic_length=False, task="ref2va")
+    assert not _resolve_encoder_dynamic_length(False, bh, dynamic_length=True, task="t2va")
 
 
 # Pure (no-device) coverage for the per-mesh bucket ladders.
@@ -265,7 +290,7 @@ def test_presets_never_trace_a_dynamic_length():
     for presets in (_PRESETS_BH, _PRESETS_WH):
         for shape, preset in presets.items():
             assert not (preset.get("dynamic_length") and preset.get("trace_denoise")), shape
-    # both 4x8 presets are dynamic by default; the quad traces its denoise, so it stays bucketed
+    # both 4x8 presets are dynamic by default; on the quad the eager step is slower than the trace, so it is opt-in
     assert not _PRESETS_BH[(4, 32)].get("dynamic_length") and _PRESETS_WH[(4, 8)]["dynamic_length"]
 
 
@@ -300,6 +325,12 @@ DYNAMIC_GATE_ENV = "MINIMAX_H3_DYNAMIC_GATE"
 DYNAMIC_GATE_CLASS_POINTS_S = [(4, 5), (10, 15)]
 
 
+def _ccl_pairs(pipeline) -> set:
+    """The DiT CCL manager's cached ping-pong pairs (all-gather and reduce-scatter), by key: a request that
+    allocated none leaves the set as it was."""
+    return set(pipeline.ccl_manager._ping_pong_buffer_cache)
+
+
 def _assert_no_denoise_misses(pipeline, warm_s: int, measured_s: int) -> None:
     misses = pipeline.last_program_cache_misses
     assert (
@@ -307,10 +338,41 @@ def _assert_no_denoise_misses(pipeline, warm_s: int, measured_s: int) -> None:
     ), f"the {measured_s} s request compiled {misses['denoising']} denoise programs after the {warm_s} s warm: {misses}"
 
 
+@pytest.mark.skipif(os.environ.get(DYNAMIC_GATE_ENV) != "1", reason=f"set {DYNAMIC_GATE_ENV}=1 to run")
+@pytest.mark.timeout(5400)
+@pytest.mark.parametrize(
+    ("mesh_device", "device_params"),
+    [MESH_4X8_RING, MESH_4X8_LINE, MESH_4X32_RING],
+    indirect=["mesh_device", "device_params"],
+)
+@pytest.mark.parametrize("encoder_dynamic_length", [None, False], ids=["encoder_default", "encoder_per_length"])
+def test_prompt_encoder_warm_walk_leaves_no_program(mesh_device, reset_seeds, encoder_dynamic_length):
+    """The reduced prompt-encoder warm-up compiles everything the full layout x length product does, with the
+    `dynamic_length` encoder and with one program set per length."""
+    pipeline = MiniMaxH3Pipeline.create_pipeline(
+        mesh_device=mesh_device,
+        weights_dir=weights_dir("transformer", "text_encoder", "vae", "audio_vae"),
+        vae_output_type="yuv420",
+        dynamic_length=True,
+        encoder_dynamic_length=encoder_dynamic_length,
+        warmup=False,
+        trace_audio=False,
+    )
+    assert pipeline._reduced_prompt_warm
+    pipeline._warm_prompt_encoder_envelope()
+    warmed = mesh_device.num_program_cache_entries()
+    pipeline._reduced_prompt_warm = False
+    pipeline._warm_prompt_encoder_envelope()
+    left = mesh_device.num_program_cache_entries() - warmed
+    assert left == 0, f"the reduced warm-up left {left} programs for the full envelope to compile"
+
+
 @pytest.mark.skipif(os.environ.get(DYNAMIC_GATE_ENV) == "0", reason=f"{DYNAMIC_GATE_ENV}=0 opts out of the gate")
 @pytest.mark.timeout(5400)
 @pytest.mark.parametrize(
-    ("mesh_device", "device_params"), [MESH_4X8_RING, MESH_4X8_LINE], indirect=["mesh_device", "device_params"]
+    ("mesh_device", "device_params"),
+    [MESH_4X8_RING, MESH_4X8_LINE, MESH_4X32_RING],
+    indirect=["mesh_device", "device_params"],
 )
 def test_t2va_dynamic_length_zero_misses(mesh_device, reset_seeds):
     """Per length class: one quiet request, then a measured one at a new padded length in the same class, which
@@ -333,6 +395,7 @@ def test_t2va_dynamic_length_zero_misses(mesh_device, reset_seeds):
                 PROMPT, num_frames=get_num_frames(warm_s), height=height, width=width, num_inference_steps=3, seed=SEED
             )
         warm_rows = pipeline.last_seq_len.padded // pipeline.sp_factor
+        pairs_after_warm = _ccl_pairs(pipeline)
         output = pipeline(
             PROMPT, num_frames=get_num_frames(measured_s), height=height, width=width, num_inference_steps=3, seed=SEED
         )
@@ -341,6 +404,9 @@ def test_t2va_dynamic_length_zero_misses(mesh_device, reset_seeds):
         assert length_class(warm_rows) == length_class(measured_rows), f"{warm_s} s and {measured_s} s span two classes"
         assert_generation_ok(output, align_num_frames(get_num_frames(measured_s)))
         _assert_no_denoise_misses(pipeline, warm_s, measured_s)
+        # Persistent pairs (the quad) are sized at the row capacity, so a new length allocates none; the 4x8's
+        # transient pairs are freed with each request.
+        assert _ccl_pairs(pipeline) == pairs_after_warm, "the measured request allocated new CCL pairs"
     pipeline.release_traces()
 
 
