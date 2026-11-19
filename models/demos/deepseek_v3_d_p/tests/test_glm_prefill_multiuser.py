@@ -70,6 +70,7 @@ from models.demos.deepseek_v3_d_p.tt.mla.indexer import full_indexer_rank
 from models.demos.deepseek_v3_d_p.tt.mla.utils import blockcyclic_positions
 from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import mesh_shard_dims
 from models.demos.deepseek_v3_d_p.tt.moe.tt_moe_gate_prefill import GateComputeMode, assert_gate_mode_matches_adapter
+from models.demos.deepseek_v3_d_p.tt.moe_block.moe_block import to_mesh_order
 from models.demos.deepseek_v3_d_p.tt.moe_impl import BLOCK, moe_block_fabric_payload_size
 from models.demos.deepseek_v3_d_p.tt.runners.adapters.glm_5_3 import GLM53Adapter
 from models.demos.deepseek_v3_d_p.tt.runners.kv_caches import MlaKvCaches
@@ -178,9 +179,10 @@ MESH_PARAMS = [
 @pytest.fixture(autouse=True)
 def _release_moe_blocks(request):
     """Free the MoE blocks a test built (their L1_SMALL words, arena and DRAM) before its mesh closes."""
+    mesh = request.getfixturevalue("mesh_device") if "mesh_device" in request.fixturenames else None
     yield
-    if "mesh_device" in request.fixturenames:
-        release_blocks(request.getfixturevalue("mesh_device"))
+    if mesh is not None:
+        release_blocks(mesh)
 
 
 def _sp_axis(mesh_device):
@@ -637,9 +639,12 @@ def _capture_packed_counts(monkeypatch):
         R = tuple(self.mesh.shape)[self.options.sp_axis]
         block = self._block(int(x.shape[-2]) * R, forward_chunks if forward_chunks is not None else len(chunks))
         epc = self.dims.num_experts // self.mesh.get_num_devices()
+        # (device i holds the block's chip chips[i]: the identity with SP on axis 0, transposed on a 4x4 sp1 stage)
+        chips = to_mesh_order(list(range(self.mesh.get_num_devices())), self.mesh.shape, self.options.sp_axis)
         total = 0
         for i, d in enumerate(ttnn.get_device_tensors(block.last_head.counts)):
-            total += int(ttnn.to_torch(d).reshape(-1)[i * epc : (i + 1) * epc].to(torch.int64).sum())
+            n = chips[i]
+            total += int(ttnn.to_torch(d).reshape(-1)[n * epc : (n + 1) * epc].to(torch.int64).sum())
         calls.append(total)
         return y
 

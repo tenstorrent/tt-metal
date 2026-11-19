@@ -1560,8 +1560,9 @@ class TtPrefillRuntime:
             # (not the socket record a pipeline rank forwards), which _write_packed_padding fills for every replay.
             from models.demos.deepseek_v3_d_p.tt.kimi_k3.moe_block_ffn import MoEBlockPacking
 
-            words = self._meta_words_dev((0,) * (metadata_size_bytes(n) // 4))
-            self._packed_padding = MoEBlockPacking(forward_metadata=words)
+            # (its own name: `words` stays the socket record's host words, which the warm pass below stages)
+            block_record = self._meta_words_dev((0,) * (metadata_size_bytes(n) // 4))
+            self._packed_padding = MoEBlockPacking(forward_metadata=block_record)
         else:
             self._packed_padding = self._packed_padding_tensors(rows_per_chip)
         controller = SubDeviceTraceController(self.mesh_device)
