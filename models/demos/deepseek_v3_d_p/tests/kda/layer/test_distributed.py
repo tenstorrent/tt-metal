@@ -217,7 +217,7 @@ def test_sp_segmented_prefill_matches_one_shot(
     hidden = torch.randn(1, sequence, config.hidden_size, generator=torch.Generator().manual_seed(421)).to(
         torch.bfloat16
     )
-    reference, _ = kda_forward_reference(hidden, weights, config)
+    reference, reference_state = kda_forward_reference(hidden, weights, config)
     sp_axis = 1 - tensor_parallel_axis
     layer = ttKDA(
         mesh_device,
@@ -329,7 +329,25 @@ def test_sp_segmented_prefill_matches_one_shot(
         f"{label} chunked output NRMSE {chunked_error:.3e} vs the fp32 reference exceeds the one-shot "
         f"{one_shot_error:.3e} by more than {_CHUNKED_ERROR_MARGIN:.0e}"
     )
-    assert_bit_identical(one_shot_recurrent, chunked_recurrent, name=f"{label} chunked recurrent")
+    # The carried recurrent state takes the same BF16 entry-state roundings, so it is held to the same bound.
+    for name, state in (("one-shot", one_shot_recurrent), ("chunked", chunked_recurrent)):
+        assert_accurate(
+            reference_state.recurrent,
+            state,
+            name=f"{label} {name} recurrent vs fp32 reference",
+            pcc_threshold=0.999,
+            nrmse_threshold=0.03,
+        )
+    one_shot_state_error = float(nrmse(reference_state.recurrent, one_shot_recurrent))
+    chunked_state_error = float(nrmse(reference_state.recurrent, chunked_recurrent))
+    logger.info(
+        f"{label}: recurrent NRMSE vs fp32 reference, one-shot {one_shot_state_error:.3e}, "
+        f"chunked {chunked_state_error:.3e}"
+    )
+    assert chunked_state_error <= one_shot_state_error + _CHUNKED_ERROR_MARGIN, (
+        f"{label} chunked recurrent NRMSE {chunked_state_error:.3e} vs the fp32 reference exceeds the one-shot "
+        f"{one_shot_state_error:.3e} by more than {_CHUNKED_ERROR_MARGIN:.0e}"
+    )
     assert_bit_identical(one_shot_convolution, chunked_convolution, name=f"{label} chunked convolution")
 
 
