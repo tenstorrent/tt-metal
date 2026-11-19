@@ -180,6 +180,12 @@ class Alpamayo2EdgeTT:
             max_new_tokens=max_new_tokens,
             return_logits=keep_intermediates,
         )
+        if cot.cache is not cache:
+            # The samples continue in a repeated copy; the single-sequence prefill cache is no longer read.
+            for layer in range(self.cfg.text.layers):
+                for kv in cache.layer_kv(layer):
+                    ttnn.deallocate(kv)
+        del cache
         timings["cot"] = time.perf_counter() - mark
 
         mark = time.perf_counter()

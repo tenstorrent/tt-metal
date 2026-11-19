@@ -26,6 +26,8 @@ from models.tt_dit.utils.check import assert_quality
 PCC = 0.99
 SEED = 0
 LM_HEAD_DTYPES = {"bf8": ttnn.bfloat8_b, "bf16": ttnn.bfloat16}
+# What seed 0 samples on `synthetic_sample(0)`, the same CoT as the official stack: "<NOMINAL>\n" and the anchor.
+FREE_RUNNING_COT = [124549, 11135, 3174, 4286, 1561, 135084]
 
 
 def _pcc(golden: torch.Tensor, actual: torch.Tensor) -> float:
@@ -239,7 +241,10 @@ def test_e2e_lm_head_decode_quality(mesh_device, cfg, sample_inputs, golden, lm_
 @P100_MESH
 @pytest.mark.timeout(1500)
 def test_e2e_free_running_smoke(mesh_device, cfg, sample_inputs):
-    """Seeded sampling to the anchor: either a trajectory with the anchor in its CoT, or no anchor in 256 tokens."""
+    """Seeded sampling to the anchor gives a trajectory and the documented short CoT.
+
+    Running out of tokens without an anchor is the other possible outcome of `infer`; it fails this test.
+    """
     inputs = sample_inputs
     anchor = cfg.tokens.future_start
     model = Alpamayo2EdgeTT.from_pretrained(mesh_device, cfg)
@@ -247,16 +252,14 @@ def test_e2e_free_running_smoke(mesh_device, cfg, sample_inputs):
     try:
         pred = model.infer(inputs, seed=SEED, max_new_tokens=256)
     except ValueError as error:
-        assert "No <traj_future_start>" in str(error), f"unexpected error: {error}"
-        logger.info(f"outcome: no anchor in 256 sampled tokens ({error})")
-        return
+        pytest.fail(f"expected a trajectory with the CoT {FREE_RUNNING_COT}, got no anchor in 256 tokens: {error}")
 
     tokenizer = Tokenizer.from_file(str(cfg.model_dir / "tokenizer.json"))
     text = tokenizer.decode(pred.cot_tokens[0].tolist(), skip_special_tokens=False)
     logger.info(f"outcome: trajectory; sampled CoT ({pred.cot_tokens.shape[1]} tokens): {text!r}")
     logger.info(f"xyz waypoints 0, 31, 63: {pred.xyz[0, [0, 31, 63]].tolist()}")
     assert pred.xyz.shape == (1, cfg.action.n_waypoints, 3)
-    assert bool((pred.cot_tokens == anchor).any())
+    assert pred.cot_tokens[0].tolist() == FREE_RUNNING_COT
     assert int(pred.cot_tokens[0, -1]) == anchor
     _assert_finite(actions=pred.actions, xyz=pred.xyz, rot=pred.rot)
 

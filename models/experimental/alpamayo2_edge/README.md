@@ -154,11 +154,17 @@ and untraced: prefill plus 128 decode steps.
 
 The steps that differ are near-ties in the reference: its top-1 and top-2 logits are 0.04 to 0.05
 apart (0.27 at one bf8 step). The logits come back from the device in bf16, and at these logit
-magnitudes a bf16 step (0.03 to 0.06) is as large as those margins. With the bf16 head, three of the
-four differing steps are exact bf16 ties. A bf16 head therefore does not change argmax agreement, and the default stays
-bf8. Free-running CoTs can drift from the reference's at near-tie steps. Sampling at temperature 0.6
-makes the CoT stochastic anyway. Reading the logits back in fp32, or taking the argmax on the device, is the next
-lever to measure.
+magnitudes a bf16 step (0.03 to 0.06) is as large as those margins.
+
+- With the bf16 head, three of the four differences are exact ties in the bf16 logits, which the argmax
+  tie-break settles against the reference.
+- With the bf8 head, all four are real wrong picks: the TT logit of the reference's token is 0.03 to
+  0.19 below the TT argmax.
+
+The bf16 head therefore improves the logits but not the agreement. Keeping bf8 is a cost/benefit call:
+bf16 costs 1.7 % CoT time and 0.26 GB of DRAM. Free-running CoTs can drift from the reference's at
+near-tie steps, and sampling at temperature 0.6 makes the CoT stochastic anyway. Reading the logits back
+in fp32, or taking the argmax on the device, is the next lever to measure.
 
 **Timing (not optimized).** Full depth, warm, one sample, teacher-forced 128-token CoT: vision 0.43 s,
 CoT 7.66 s, flow 0.66 s, 8.7 s in total. Decode runs untraced, at about 60 ms per step including the
@@ -173,5 +179,5 @@ logits readback and host sampling.
 - **Decode is untraced.** No performance work has been done yet.
 - **Inputs are synthetic only:** uniform-noise frames and a straight history. Driving quality (minADE)
   is not measured. Which permissively licensed driving dataset to use for it is still open.
-- **Weights:** tt_dit's bf8 default for the vision and LM linears; the expert and action projections
-  are bf16.
+- **Weights:** the vision tower and projector linears are bf16 (the tt_dit `Linear` default). The LM
+  linears are bf8 (the tt_dit encoder default). The expert and the action projections are bf16.
