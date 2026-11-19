@@ -151,12 +151,15 @@ jobs:
           - platform: "Ubuntu 22.04"
             toolchain: "cmake/x86_64-linux-clang-20-libstdcpp-toolchain.cmake"
             build-type: "Debug"
+            skip-package: true
           - platform: "Ubuntu 22.04"
             toolchain: "cmake/x86_64-linux-clang-20-libcpp-toolchain.cmake"
             build-type: "Release"
+            skip-package: true
           - platform: "Ubuntu 22.04"
             toolchain: "cmake/x86_64-linux-gcc-12-toolchain.cmake"
             build-type: "Release"
+            skip-package: true
           - platform: "Ubuntu 24.04"
             toolchain: "cmake/x86_64-linux-clang-20-libstdcpp-toolchain.cmake"
             build-type: "Release"
@@ -164,6 +167,7 @@ jobs:
           - platform: "Ubuntu 24.04"
             toolchain: "cmake/x86_64-linux-gcc-14-toolchain.cmake"
             build-type: "Release"
+            skip-package: true
     with:
       harbor-prefix: ${{ inputs.harbor-prefix || needs.check-harbor.outputs.harbor-prefix }}
       platform: ${{ matrix.config.platform }}
@@ -173,6 +177,9 @@ jobs:
       enable-lto: ${{ matrix.config.enable-lto || false }}
       publish-artifact: false
       publish-package: false
+      # Only the Ubuntu 24.04 clang-20 libstdcpp config (nearest to the release build)
+      # runs CPack. The others run `cmake --install` to keep install-rule coverage.
+      skip-package: ${{ matrix.config.skip-package || false }}
       skip-tt-train: false
       tracy: false
       runs-on: ${{ inputs['runs-on'] }}
