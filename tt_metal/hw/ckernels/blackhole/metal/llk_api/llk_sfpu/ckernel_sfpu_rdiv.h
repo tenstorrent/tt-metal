@@ -47,6 +47,8 @@ inline void calculate_rdiv(const uint value) {
                 // Fix one-integer errors from the reciprocal product landing just below an integer.
                 // Avoid the Newton residual step here; the discrete remainder invariant is enough
                 // for the exact-divisible floor/trunc bug and keeps the rounded path smaller.
+                // Note: +-1 residual correction guarantees exact integer quotients on the FP32-dest path.
+                // On non-FP32 paths, recip is rounded to bf16 (~2^-9 relative error) and can exceed +-1 for large quotients.
                 sfpi::vFloat r = val - q * in;
                 sfpi::vFloat rq = r * recip;  // sign only
 

@@ -898,4 +898,38 @@ def test_rdiv_fp32_full_range(device, round_mode, scalar_val):
         output_tt = ttnn.rdiv(input_tt, value=scalar_val, round_mode="trunc")
 
     output_torch = ttnn.to_torch(output_tt)
-    assert_with_ulp(output_torch, torch_golden, ulp_threshold=1, allow_nonfinite=True)
+    @pytest.mark.parametrize("round_mode", [None, "floor", "trunc"])
+@pytest.mark.parametrize("k", [-5, -2, -1, 1, 2, 5, 10])
+def test_rdiv_exact_integer_multiples(device, round_mode, k):
+    torch.manual_seed(42)
+    torch_input = torch.tensor(
+        [1.0, 2.0, -3.0, 4.5, -0.5, 16.0],
+        dtype=torch.float32,
+    ).repeat(1, 2, 1, 128 // 6 + 1)[:, :, :32, :128]
+    torch_value = k * torch_input
+
+    input_tt = ttnn.from_torch(
+        torch_input,
+        dtype=ttnn.DataType.FLOAT32,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+
+    if round_mode is None:
+        torch_golden = torch_value / torch_input
+        output_tt = ttnn.rdiv(input_tt, value=torch_value)
+    elif round_mode == "floor":
+        torch_golden = torch.floor(torch_value / torch_input)
+        output_tt = ttnn.rdiv(input_tt, value=torch_value, round_mode="floor")
+    else:
+        torch_golden = torch.trunc(torch_value / torch_input)
+        output_tt = ttnn.rdiv(input_tt, value=torch_value, round_mode="trunc")
+
+    output_torch = ttnn.to_torch(output_tt)
+    assert_with_ulp(
+        expected_result=torch_golden,
+        actual_result=output_torch,
+        ulp_threshold=1,
+        allow_nonfinite=True,
+    )
