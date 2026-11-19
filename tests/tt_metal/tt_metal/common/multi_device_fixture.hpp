@@ -188,11 +188,13 @@ protected:
     }
 
     void TearDown() override {
-        if (!mesh_device_) {
+        if (!mesh_device_ && !parent_mesh_device_) {
             return;
         }
-        mesh_device_->close();
-        mesh_device_.reset();
+        if (mesh_device_) {
+            mesh_device_->close();
+            mesh_device_.reset();
+        }
         if (parent_mesh_device_) {
             parent_mesh_device_->close();
             parent_mesh_device_.reset();

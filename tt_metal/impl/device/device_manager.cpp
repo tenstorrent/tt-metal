@@ -422,8 +422,8 @@ void DeviceManager::add_devices_to_pool(const std::vector<ChipId>& device_ids) {
                     "submeshes accordingly.\n"
                     "For example, on a 6u system (8x4), if you wanted to run a 2x4 workload you could do:\n"
                     "ttnn.set_fabric_config(ttnn.FabricConfig.FABRIC_1D)\n"
-                    "mesh_device = ttnn.open_mesh_device(mesh_shape=ttnn.MeshShape(4, 8))\n"
-                    "submeshes = mesh_device.create_submeshes(ttnn.MeshShape(2,8))",
+                    "mesh_device = ttnn.open_mesh_device(mesh_shape=ttnn.MeshShape(8, 4))\n"
+                    "submesh = mesh_device.create_submesh(ttnn.MeshShape(2, 4))",
                     device_id);
             }
         }

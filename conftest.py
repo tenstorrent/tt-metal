@@ -592,7 +592,8 @@ def mesh_device(request, silicon_arch_name, device_params):
     # CI with no device path exercised. The confirmed capacity-mismatch case is handled below via
     # pytest.skip, once the system mesh size is known.
     try:
-        system_mesh_size = ttnn._ttnn.multi_device.SystemMeshDescriptor().shape().mesh_size()
+        system_mesh_shape = ttnn._ttnn.multi_device.SystemMeshDescriptor().shape()
+        system_mesh_size = system_mesh_shape.mesh_size()
     except Exception as e:
         raise RuntimeError(
             f"Could not query the system mesh descriptor (control-plane/mesh discovery failed): {e}"
@@ -659,7 +660,24 @@ def mesh_device(request, silicon_arch_name, device_params):
     fabric_manager = updated_device_params.pop("fabric_manager", None)
     fabric_router_config = updated_device_params.pop("fabric_router_config", None)
     set_fabric(fabric_config, reliability_mode, fabric_tensix_config, fabric_manager, fabric_router_config)
-    mesh_device = ttnn.open_mesh_device(mesh_shape=mesh_shape, **updated_device_params)
+    # Fabric requires every device in the system to be active, so on all-PCIe systems a smaller fabric mesh is opened
+    # as a submesh of the full system mesh. On clusters with remote chips, fast dispatch already opens every chip once a
+    # remote chip is requested.
+    open_as_submesh = (
+        fabric_config
+        and not ttnn.using_distributed_env()
+        and ttnn.get_num_pcie_devices() == ttnn.get_num_devices()
+        and "offset" not in updated_device_params
+        and "physical_device_ids" not in updated_device_params
+        and mesh_shape.mesh_size() < system_mesh_shape.mesh_size()
+        and mesh_shape.dims() == system_mesh_shape.dims()
+        and all(mesh_shape[i] <= system_mesh_shape[i] for i in range(mesh_shape.dims()))
+    )
+    if open_as_submesh:
+        parent_mesh_device = ttnn.open_mesh_device(mesh_shape=system_mesh_shape, **updated_device_params)
+        mesh_device = parent_mesh_device.create_submesh(mesh_shape)
+    else:
+        parent_mesh_device = mesh_device = ttnn.open_mesh_device(mesh_shape=mesh_shape, **updated_device_params)
 
     from tests.tests_common.cache_entries_counter import CacheEntriesCounter
 
@@ -671,9 +689,11 @@ def mesh_device(request, silicon_arch_name, device_params):
     for submesh in mesh_device.get_submeshes():
         ttnn.close_mesh_device(submesh)
 
-    ttnn.close_mesh_device(mesh_device)
+    if parent_mesh_device is not mesh_device:
+        ttnn.close_mesh_device(mesh_device)
+    ttnn.close_mesh_device(parent_mesh_device)
     reset_fabric(fabric_config)
-    del mesh_device
+    del mesh_device, parent_mesh_device
 
 
 @pytest.fixture(scope="function")
