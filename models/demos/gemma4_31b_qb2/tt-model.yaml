@@ -1,5 +1,5 @@
 # tt-model.yaml — google/gemma-4-31B-it on a QuietBox 2 (P300x2: 2x P300 boards = 4 Blackhole chips, (1, 4) mesh, TP4)
-# via vLLM + the stock vllm-tt-plugin. Rendered from bench/packaging/update4/{tt-model_u4.yaml,card_v6_x.md} by
+# via vLLM + the stock vllm-tt-plugin. Rendered from bench/packaging/update4/{tt-model_u4.yaml,card_v6_final_v3.md} by
 # render_manifest_u4.py.
 #
 #   single-user          DEFAULT: one user on the resident persistent-kernel decode engine (resident_m3_2) with
@@ -219,19 +219,28 @@ card:
     ### Update 4: programs built at the first start; more long-context users on `batch`
     - **Continuation programs are pre-built.** Both profiles build every prefill program a long prompt's continuation
       can need on the first start after installation or a kernel change (`single-user` 64, `batch` 640). Later starts
-      skip it: a marker in the kernel cache records that it was done. Measured before packaging, on the same code with a
-      fresh kernel cache:
-      - first start, time spent pre-building: 90.8 s (`single-user`), 494.9 s (`batch`);
+      skip it: a marker in the kernel cache records that it was done. Measured in this release's proof, on the packaged
+      image with a fresh kernel cache:
+      - first start, time spent pre-building: 90.6 s (`single-user`); 495.0 s and 535.8 s (`batch`, on a host
+        where `single-user` had already started, and on a fresh host);
       - device memory the pre-built programs use: 3.5 MiB per chip (`single-user`), 8.3 MiB per chip (`batch`);
-      - later starts, the marker check: 0.003 s.
-      After that, a prompt longer than one 8,192-token chunk compiled no kernels at its first continuation. Set
+      - later starts, the marker check: 0.003 s (every later start in the proof).
+      After that, a prompt longer than one 8,192-token chunk compiled no kernels at its first continuation (12 first
+      continuations on the fresh host, and 10 pairs of users sharing a prefill step: 0 kernel files each). Set
       `GEMMA4_CONT_PREWARM=off` to skip the pre-build (continuation programs are then built on first use, as in update 3).
     - **`batch` KV layout.** The full-attention layers use vLLM's block pool; the sliding-window layers use a fixed
       per-user ring. vLLM's start-up line reads "TT KV cache size: 699,136 tokens", "Maximum concurrency for 262,144
-      tokens per request: 2.67x". Users vLLM ran at once, measured on the same code before packaging (2026-11-18):
-      32 at 16,384 tokens, 21 at 32,768, 10 at 65,536, 5 at 131,072, 2 at 262,016. This release's proof re-measures them
-      on the packaged image.
-    - `batch`'s result tables below are re-measured on this release's image in its proof and published with it.
+      tokens per request: 2.67x". Users vLLM ran at once, measured in this release's proof on the packaged image:
+      32 at 16,384 tokens, 21 at 32,768, 10 at 65,536, 5 at 131,072, 2 at 262,016 (the last table under Results). The
+      lowest free DRAM per chip during those points, on a fresh host with the pre-built programs resident:
+      5.36 GB.
+    - **Starting `batch`.** On a fresh host that starts `batch` first (no compiled kernels, no converted weights): ready
+      after 1,224 s. That includes converting `batch`'s copy of the engine weights (58 s, 966 files, 22.8 GB, and
+      7 s for its manifest), compiling kernels (62,699 files in the kernel cache at ready) and the 640-program
+      pre-build (535.8 s). Measured with two log-cadence variables set (`GEMMA4_PB_LOG_EVERY=1`,
+      `GEMMA4_RESIDENT_DRAM_LOG_EVERY=1024`); the shipped profile does not set them. Later starts of `batch`: ready after
+      121–151 s.
+    - `batch`'s result tables below were measured on this release's image in its proof.
     - The `update-3` revision on the Hub keeps update 3's `batch` (without the ring layout and the pre-build).
 
     ### Update 2: paged-bucket prefill
@@ -247,44 +256,46 @@ card:
 
     ### Update 3: the resident batch engine (`batch`)
     `--profile batch` now selects the resident batch engine. The previous `batch-b32` profile was removed; the `update-2` revision keeps it.
-    - Start-up, measured in update 3.1's proof (in the package container, the same code): 120 s to ready on a warm
-      start. The first `batch` start on a host that had already run `single-user` once took 241 s, including the
-      one-time conversion of `batch`'s own copy of the engine weights (converted in 55 s; 22.8 GB more disk). A fresh
-      host that starts `batch` first also compiles the shared kernels: that start is not measured. `single-user`'s
-      weight copy is untouched.
+    - Start-up, measured in this release's proof (update 4, in the package container): the first `batch` start on a
+      host that had already run `single-user` once took 721 s, including the one-time conversion of `batch`'s own copy
+      of the engine weights (converted in 59 s; 22.8 GB more disk) and the 495.0 s pre-build. Later `batch`
+      starts took 121–151 s. A fresh host that starts `batch` first is in the update 4 section. `single-user`'s weight
+      copy is untouched.
     - `batch` serves logprobs, repetition / presence / frequency penalties and logit_bias on its host-sampled step, each
       alone and alongside 31 greedy users (checked in this release's proof); see Known limitations.
     - One long request among short ones: 32 users with 1K-token prompts (512 output tokens) had a TPOT of 35.6 ms; with
       one of them replaced by a 259,000-token request, its prefill already done, the 31 short users' TPOT was 42.5 ms
-      (2026-11-15, the same engine before the paged-bucket prefill was added; chip clocks were below 1,323 MHz for 4–19%
-      of the 32-user windows).
-    - Reliability: 0 hangs in 491,520 long-context launches (≤ 6.1e-6 per launch, 95%), in a 6.5 h soak of `batch`'s
-      engine at 262K context.
+      (2026-11-15, update 3's adapter (before the ring layout, and before the paged-bucket prefill was added); the
+      engine is the same; chip clocks were below 1,323 MHz for 4–19% of the 32-user windows).
+    - Reliability: 0 hangs in 491,520 long-context launches (≤ 6.1e-6 per launch, 95%), in a 6.5 h soak at 262K
+      context on update 3's adapter (before the ring layout); the engine is the same.
 
     **Real prompts.** `vllm bench serve` (tt-inference-server's client) with the real-prompt builder's chat prompts: a
     coding, writing or math task after a real context, cut so the chat template renders it to exactly the stated length;
-    thinking on (the server default), greedy, 256 output tokens, warm-ups = concurrency. Times are as measured; points
-    where chip clocks dropped during decode carry a footnote with the per-chip share of decode time below 1,323 MHz.
+    thinking on (the server default), greedy, 256 output tokens, warm-ups = concurrency. Times are as measured; a point
+    where a chip's clock was below 1,323 MHz during decode carries a footnote with each chip's share of decode time below
+    1,323 MHz: time-weighted over the 1 s telemetry samples, across the measured requests' decode windows (each from its
+    first token to its last).
 
     | ISL | Concurrency | TPOT (ms) | TTFT (ms) |
     |---|---|---|---|
-    | 128 | 1 | 10.2 | 64 |
-    | 128 | 8 | 14.3 | 392 |
-    | 128 | 32 | 26.8 | 1,465 |
-    | 1,024 | 1 | 11.4 | 145 |
-    | 1,024 | 8 | 16.7[1] | 1,054 |
-    | 1,024 | 32 | 38.0[2] | 2,905 |
-    | 8,192 | 1 | 11.7[3] | 1,181 |
-    | 32,768 | 1 | 12.4[4] | 5,635 |
+    | 128 | 1 | 10.2 | 55 |
+    | 128 | 8 | 14.3 | 365 |
+    | 128 | 32 | 26.8 | 1,420 |
+    | 1,024 | 1 | 11.4 | 136 |
+    | 1,024 | 8 | 16.7[1] | 1,034 |
+    | 1,024 | 32 | 38.0[2] | 2,864 |
+    | 8,192 | 1 | 11.7[3] | 1,161 |
+    | 32,768 | 1 | 12.4[4] | 5,564 |
 
-    - [1] Chip clocks dipped during this point's decode. Share of decode time below 1,323 MHz, chips 0 / 1 / 2 / 3 (%): 10.48 / 10.48 / 0.04 / 10.48. Times as measured, not corrected.
-    - [2] Chip clocks dipped during this point's decode. Share of decode time below 1,323 MHz, chips 0 / 1 / 2 / 3 (%): 14.17 / 17.48 / 0 / 17.48. Times as measured, not corrected.
-    - [3] Chip clocks dipped during this point's decode. Share of decode time below 1,323 MHz, chips 0 / 1 / 2 / 3 (%): 0 / 17.64 / 26.46 / 17.64. Times as measured, not corrected.
-    - [4] Chip clocks dipped during this point's decode. Share of decode time below 1,323 MHz, chips 0 / 1 / 2 / 3 (%): 14.95 / 34.24 / 28.94 / 24.11. Times as measured, not corrected.
+    - [1] Chip clocks dipped during this point's decode. Share of decode time below 1,323 MHz, chips 0 / 1 / 2 / 3 (%): 0 / 0 / 4.24 / 4.24. Times as measured, not corrected.
+    - [2] Chip clocks dipped during this point's decode. Share of decode time below 1,323 MHz, chips 0 / 1 / 2 / 3 (%): 6.11 / 14.87 / 14.87 / 8.76. Times as measured, not corrected.
+    - [3] Chip clocks dipped during this point's decode. Share of decode time below 1,323 MHz, chips 0 / 1 / 2 / 3 (%): 0.89 / 0.71 / 1.6 / 0.89. Times as measured, not corrected.
+    - [4] Chip clocks dipped during this point's decode. Share of decode time below 1,323 MHz, chips 0 / 1 / 2 / 3 (%): 0 / 0.77 / 4.63 / 3.86. Times as measured, not corrected.
     - The clock footnotes cover the decode windows (TPOT) only.
 
-    Measured 2026-11-16 09:28–09:31 (KST), outside the package container on the same files (byte-identical engine and adapter
-    code); this release's proof measures the packaged image at the same points.
+    Measured 2026-11-19 04:19–04:23 (KST) in this release's proof, in the package container (`tt-model serve --profile
+    batch`, the shipped profile), on `749f95f1d482`, the image this release's proof ran; `d356ff9f3095`, the image users pull, has the same platform manifest and the same 22 layers.
 
     ### Which profile
     - One user: `single-user`.
@@ -301,14 +312,15 @@ card:
     tt-model serve changh95/gemma4-31b-it-dflash --profile batch
     tt-model profiles changh95/gemma4-31b-it-dflash
     ```
-    - First start on a host (`single-user`): about 12.5 min to ready. It converts the resident engine's weights once
-      (about 70 s: 22 GB from the 59 GB checkpoint) and compiles kernels once (about 9.5 min).
-    - Later starts: about 2.5 min, including a sha256 check of the converted weights (seconds when they are in the page cache).
-    - These start times were measured on update 1. Update 2 adds its prefill warm-up (see above); `batch`'s start-up is
-      in the update 3 section.
-    - Disk: about 31 GB under `~/.cache/tt-model/gemma4-31b-it-dflash` (22 GB converted weights, 9 GB compiled kernels),
-      plus 22 GB for `batch`'s own weight copy once it has started. A package update that changes an engine converts that
-      engine's copy again; `single-user`'s copy is unchanged by update 3.
+    - First start on a host with an empty package cache (`single-user`): ready after 871 s. That includes
+      converting the resident engine's weights once (61 s, 22.8 GB), compiling kernels once and the 90.6 s
+      pre-build.
+    - Later starts: 151 s, including a sha256 check of the converted weights (seconds when they are in the page cache).
+    - These start times were measured in this release's proof; `batch`'s start-up is in the update 4 section.
+    - Disk, measured in this release's proof after both profiles had started, under
+      `~/.cache/tt-model/gemma4-31b-it-dflash`: 11.1 GB of compiled kernels (75,087 files) and 22.8 GB of converted
+      weights per profile copy (45.5 GB for both). A package update that changes an engine converts that
+      engine's copy again.
 
     ### How to query
     ```bash
@@ -332,8 +344,8 @@ card:
     - **Host-sampled requests in `batch`.** A request that needs CPU sampling (repetition, presence or frequency penalties,
       logprobs, or top_k above the device limit of 32) moves sampling for every concurrent request to the CPU while it is
       active.
-      - At 32 users a decode step takes 277.5 ms while one of them carries a repetition penalty (the other 31
-        default-sampled), against 26.9 ms when all 32 are greedy (update 3.1's proof, same code, with
+      - At 32 users a decode step takes 279.8 ms while one of them carries a repetition penalty (the other 31
+        default-sampled), against 26.9 ms when all 32 are greedy (this release's proof, with
         `OMP_NUM_THREADS=8`, which this package sets).
       - Greedy requests and the default device sampling are unaffected.
       - The full fix belongs in the vLLM TT plugin.
@@ -342,16 +354,18 @@ card:
       At a fixed width, greedy text was bitwise stable under co-tenant churn for prompts that prefill in one step. A prompt
       that is chunked alongside others can see small differences.
     - **`batch`: prefix caching is off** (as on every profile): repeated prefixes are recomputed.
-    - **Device memory.** Lowest free DRAM per chip measured on `batch`: 2.85 GB, briefly, right after a burst of 1K-prompt
-      prefills at up to 32 users with a 200K-token request live (a 6.5 h, 491K-launch soak). At steady state about 6.3 GB,
-      flat over the soak.
+    - **Device memory.** Lowest free DRAM per chip measured on `batch` in this release's proof: 5.36 GB, during
+      its long-context points (16K–262K tokens, up to 32 users) on a fresh host with the pre-built programs resident.
+      A 6.5 h, 491K-launch soak on update 3's adapter (before the ring layout; the engine is the same) measured 2.85 GB
+      at its lowest, briefly, right after a burst of 1K-prompt prefills at up to 32 users with a 200K-token request live,
+      and about 6.3 GB at steady state.
     - **Thermal clock dips.** On a QuietBox 2 chip 1 can lower its clock after about 20 s of sustained fast decode, raising
       per-token time by up to about 1.3–1.45× while it lasts (measured on earlier builds). Every table on this card
       notes the clock dips during its run.
     - **`batch`: host decode guard.** The engine refuses a decode mix whose conservative attention bound exceeds 40 units
       per core. It would matter only with a full-attention pool above 19,648 blocks; update 4's pool is 5,462 blocks.
-    - **First use of host sampling.** The first request that needs host sampling (logprobs, penalties) may spend about
-      1 s compiling a few kernels, once per host; it is outside the start-up pre-build.
+    - **First use of host sampling.** The first request that needs host sampling (logprobs, penalties) compiles one
+      more kernel (13 files measured; about 1 s (est.)), once per host; it is outside the start-up pre-build.
     - **Boot topology fault.** A boot can occasionally fail at mesh open with `TT_FATAL … could not fit in the discovered
       physical topology`, an intermittent host link-training fault. Reset the chips (`tt-smi -r 0,1,2,3`) and start again.
     - **No default physical grouping descriptor.** The image boots without tt-metal's default physical grouping descriptor
@@ -361,7 +375,7 @@ card:
       cache) time is not measured.
 
     ### Results (tt-inference-server `--workflow benchmarks`)
-    The `single-user` tables were measured in one session on 2026-11-17 on update 3.1's image (`7b6dd89c97bd`); update 4 changes `single-user` only by the start-up pre-build, whose outputs were checked bitwise against the same code without it. Each profile in its own `tt-model serve --profile …` container on port 8000, with the same tt-inference-server invocations, specs and points as update 1's tables of 2026-11-11, which remain in the `update-2` revision on the Hub. `batch`'s tables are re-measured on this release's image in its proof.
+    The `single-user` tables were measured in one session on 2026-11-17 on update 3.1's image (`7b6dd89c97bd`); update 4 changes `single-user` only by the start-up pre-build, whose outputs were checked bitwise against the same code without it. Each profile in its own `tt-model serve --profile …` container on port 8000, with the same tt-inference-server invocations, specs and points as update 1's tables of 2026-11-11, which remain in the `update-2` revision on the Hub. `batch`'s tables were measured on 2026-11-19 in this release's proof, against the shipped `batch` profile, on `749f95f1d482`, the image this release's proof ran; `d356ff9f3095`, the image users pull, has the same platform manifest and the same 22 layers. Update 3's `batch` tables remain in the `update-3` revision on the Hub.
 
     #### `single-user`
     | ISL | OSL | Concurrency | Num Requests | TTFT (ms) | TPOT (ms) | Tput User (t/s/u = 1000/TPOT) | Tput Output (t/s) |
@@ -393,8 +407,59 @@ card:
 
     Run 2026-11-17 15:58–16:28 (KST), tt-inference-server 0.26.1 `--workflow benchmarks --spec-decode` against `tt-model serve --profile single-user`: SPEED-Bench prompts (AIPerf; the requests carry no sampling fields, so the server's defaults apply: temperature 1.0, top_p 0.95, top_k 20, thinking on). Each answer runs to its natural end (throughput sets capped at 8,192 tokens). One of the QuietBox's two fans was dead during the run (not yet replaced); a chip's clock was below 1,323 MHz for coding 0.1% of decode time; throughput_32k 0.5% of decode time (76% of prefill).
 
-    #### `batch`
-    Re-measured on this release's image in its proof and published with it.
+    #### `batch` (the resident batch engine)
+    | ISL | OSL | Concurrency | Num Requests | TTFT (ms) | TPOT (ms) | Tput User (t/s/u = 1000/TPOT) | Decode t/s/u (1000/median ITL)¹ | Tput Output (t/s) |
+    |---|---|---|---|---|---|---|---|---|
+    | 128 | 128 | 1 | 8 | 55.6 | 10.1 | 99.3 | 99.2 | 95.9 |
+    | 128 | 128 | 32 | 256 | 1419.4 | 26.8 | 37.3 | 37.2 | 848.5 |
+    | 128 | 1024 | 1 | 4 | 55.4 | 10.8 | 92.6 | 93.4 | 92.2 |
+    | 128 | 1024 | 32 | 128 | 1419.2 | 29.3 | 34.1 | 34.5 | 1044.1 |
+    | 1024 | 128 | 1 | 4 | 138.2 | 11.4 | 88.0 | 88.0 | 80.9 |
+    | 1024 | 128 | 32 | 128 | 2981.6 | 41.6 | 24.0 | 30.6 | 495.2 |
+    | 2048 | 128 | 1 | 4 | 280.6 | 11.4 | 87.9 | 87.8 | 74.1 |
+    | 2048 | 128 | 32 | 128 | 4454.5 | 66.4 | 15.1 | 29.7 | 317.5 |
+    | 4096 | 128 | 1 | 4 | 562.5 | 11.5 | 87.2 | 87.0 | 63.4 |
+    | 4096 | 128 | 32 | 128 | 6113.2 | 126.1 | 7.9 | 27.8 | 184.9 |
+    | 8192 | 128 | 1 | 2 | 1161.5 | 11.7 | 85.4 | 85.2 | 48.3 |
+    | 8192 | 128 | 31 | 62 | 12279.8 | 222.6 | 4.5 | 25.7 | 97.6 |
+    | 8192 | 1024 | 1 | 2 | 1162.4 | 11.8 | 84.9 | 85.0 | 77.5 |
+    | 8192 | 1024 | 28 | 56 | 11414.1 | 57.4 | 17.4 | 27.0 | 408.2 |
+    | 10000 | 1024 | 1 | 2 | 1487.3 | 11.9 | 83.7 | 83.7 | 74.7 |
+    | 10000 | 1024 | 23 | 46 | 12536.8 | 57.1 | 17.5 | 28.1 | 331.6 |
+    | 16384 | 128 | 1 | 2 | 2496.0 | 12.2 | 82.2 | 81.7 | 31.7 |
+    | 16384 | 128 | 15 | 30 | 12899.6 | 223.3 | 4.5 | 29.4 | 46.4 |
+    | 32768 | 128 | 1 | 1 | 5585.1 | 12.2 | 81.7 | 80.6 | 17.9 |
+    | 32768 | 128 | 7 | 7 | 22281.0 | 152.3 | 6.6 | 45.4 | 21.5 |
+    | 65536 | 128 | 1 | 1 | 13574.4 | 12.9 | 77.5 | 75.7 | 8.4 |
+    | 65536 | 128 | 3 | 3 | 27115.3 | 124.9 | 8.0 | 51.4 | 8.9 |
+    | 131072 | 128 | 1 | 1 | 36752.3 | 14.3 | 70.1 | 67.1 | 3.3 |
+    | 196608 | 128 | 1 | 1 | 69291.0 | 15.6 | 64.0 | 60.7 | 1.8 |
+    | 262016 | 128 | 1 | 1 | 111046.1 | 16.9 | 59.1 | 55.3 | 1.1 |
+
+    Run 2026-11-19 04:26–04:52 (KST), tt-inference-server 0.26.1 `--workflow benchmarks` against `tt-model serve --profile batch`; random prompts, greedy (temperature 0), thinking on (server default). One of the QuietBox's two fans was dead during the run (not yet replaced); a chip's clock was below 1,323 MHz during decode at 16 of 25 points (chips 0, 1, 2, 3; up to 86% of decode time: 1024/128 c1, 1024/128 c32, 2048/128 c1, 2048/128 c32, 4096/128 c32, 8192/128 c1, 8192/128 c31, 8192/1024 c1, 8192/1024 c28, 10000/1024 c1, 10000/1024 c23, 16384/128 c1, 16384/128 c15, 32768/128 c1, 32768/128 c7, 65536/128 c3).
+
+    ¹ Decode t/s/u is 1000 / the median gap between consecutive streamed tokens (the point file's `median_itl_ms`): the
+    decode rate without the pauses that other users' prefills add to TPOT. At concurrency 1 there are no such pauses;
+    there the two columns differ by at most 6.9% (262,016/128: 55.3 vs 59.1). `single-user`'s tables have no such column,
+    because speculative decoding streams several tokens at a time.
+
+    #### `batch`: most concurrent users admitted at once per context length
+    | ISL | OSL | Concurrency (target)² | Achieved concurrency² | Num Requests | TTFT (ms)² | TPOT (ms) | Tput User (t/s/u = 1000/TPOT) | Decode t/s/u (1000/median ITL)¹ | Tput Output (t/s) |
+    |---|---|---|---|---|---|---|---|---|---|
+    | 16384 | 128 | 32 | 32 | 64 | 23570.5 | 481.2 | 2.1 | 21.7 | 48.2 |
+    | 32768 | 128 | 21 | 21 | 21 | 61412.2 | 480.5 | 2.1 | 21.2 | 21.8 |
+    | 65536 | 128 | 10 | 10 | 10 | 74482.6 | 517.7 | 1.9 | 22.6 | 9.1 |
+    | 131072 | 128 | 5 | 5 | 5 | 109933.9 | 603.9 | 1.7 | 30.5 | 3.4 |
+    | 262016 | 128 | 2 | 2 | 2 | 166778.1 | 463.2 | 2.2 | 35.5 | 1.1 |
+
+    Run 2026-11-19 03:59–04:11 (KST, start of each point), the `vllm bench serve` invocation tt-inference-server 0.26.1 issues for its points, against `tt-model serve --profile batch` (the shipped profile); random prompts, greedy (temperature 0), thinking on (server default). One of the QuietBox's two fans was dead during the run (not yet replaced); a chip's clock was below 1,323 MHz during decode at 5 of 5 points (chips 0, 1, 2, 3; up to 83% of decode time: 16384/128 c32, 32768/128 c21, 65536/128 c10, 131072/128 c5, 262016/128 c2).
+
+    ² tt-inference-server's own points cap concurrency at 262,144 / (ISL + OSL), one maximum context in total. These points
+    ask instead for the most users vLLM admits at once. vLLM's start-up line reads "TT KV cache size: 699,136 tokens",
+    "Maximum concurrency for 262,144 tokens per request: 2.67x": it counts the full-attention pool and the per-user
+    sliding-window rings. "Achieved concurrency" is the most requests running together (vLLM's 10 s stats), and every
+    point ran at its target. The users' prefills run one after another, so later users' TTFT includes the earlier prefills.
+    ¹ As in the table above.
 
 verify:
   - "from models.demos.gemma4_31b_qb2.tt.package_boot import ensure_resident_cache; assert ensure_resident_cache"
