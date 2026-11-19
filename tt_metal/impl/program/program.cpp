@@ -3838,7 +3838,6 @@ std::vector<detail::ProgramOffsetsState> detail::ProgramImpl::compute_program_of
 
     states.reserve(hal.get_programmable_core_type_count());
     for (uint32_t index = 0; index < hal.get_programmable_core_type_count(); index++) {
-        // Each core type lays out its own block; `config_base_offset` is 0 for every one of them.
         ProgramOffsetsState& state = states.emplace_back();
         state.offset = program_dispatch::finalize_rt_args(
             metal_ctx,
@@ -3949,7 +3948,7 @@ uint32_t detail::ProgramImpl::finalize_program_offsets(
             record_size("program_config_size.kernel_text", state.kernel_text_size);
             record_size("program_config_size.total", state.offset);
             // Bytes left in the kernel config buffer; its min is how close any program came to failing
-            // check_kernel_config_fits_window. Core types the program doesn't use (offset 0) are skipped:
+            // check_kernel_config_fits. Core types the program doesn't use (offset 0) are skipped:
             // their headroom is the whole buffer, which would only inflate the metric's mean and max. So is
             // a block that outgrows the window, as one that runs from a kernel config buffer may: it has no
             // headroom there.
@@ -3991,7 +3990,20 @@ bool detail::ProgramImpl::kernel_config_fits_window(IDevice* device, HalProgramm
            get_ringbuffer_size(device, core_type);
 }
 
-void detail::ProgramImpl::check_kernel_config_fits_window(IDevice* device, bool tensix_from_buffer) {
+void detail::ProgramImpl::check_no_tensix_semaphores() const {
+    for (const Semaphore& semaphore : semaphores()) {
+        TT_FATAL(
+            semaphore.core_type() != CoreType::WORKER,
+            "A program run from a kernel config buffer cannot have Tensix program semaphores (semaphore {} on {}): "
+            "each core's block, and so each semaphore, sits at a different address, but a kernel signals a peer's "
+            "semaphore at its own address. Use a global semaphore instead.",
+            semaphore.id(),
+            semaphore.core_range_set());
+    }
+}
+
+void detail::ProgramImpl::check_kernel_config_fits(
+    IDevice* device, const experimental::KernelConfigBufferImpl* kernel_config_buffer) {
     if (!is_finalized()) {
         return;
     }
@@ -4001,53 +4013,76 @@ void detail::ProgramImpl::check_kernel_config_fits_window(IDevice* device, bool 
     };
     detail::KernelGroupsGetter kernel_groups_getter =
         [this](uint32_t index) -> std::vector<std::shared_ptr<KernelGroup>>& { return this->get_kernel_groups(index); };
-    check_kernel_config_fits_window(
-        extract_context_id(device), device, kernels_getter, kernel_groups_getter, *this, tensix_from_buffer);
+    check_kernel_config_fits(
+        extract_context_id(device), device, kernels_getter, kernel_groups_getter, *this, kernel_config_buffer);
 }
 
-void detail::ProgramImpl::check_kernel_config_fits_window(
+void detail::ProgramImpl::check_kernel_config_fits(
     ContextId context_id,
     IDevice* device,
     const KernelsGetter& kernels_getter,
     const KernelGroupsGetter& kernel_groups_getter,
     const ProgramImpl& program,
-    bool tensix_from_buffer) {
+    const experimental::KernelConfigBufferImpl* kernel_config_buffer) {
     const MetalContext& metal_ctx = MetalContext::instance(context_id);
     const auto& hal = metal_ctx.hal();
     for (uint32_t index = 0; index < hal.get_programmable_core_type_count(); index++) {
         const HalProgrammableCoreType programmable_core_type = hal.get_programmable_core_type(index);
-        if (tensix_from_buffer && programmable_core_type == HalProgrammableCoreType::TENSIX) {
-            continue;
+        if (kernel_config_buffer != nullptr && programmable_core_type == HalProgrammableCoreType::TENSIX) {
+            // Each core holds only its kernel group's part of the block, in a shard sized for it.
+            const ChipId device_id = device->id();
+            const ProgramConfig& program_config = program.get_program_config(index);
+            for (const auto& kernel_group : kernel_groups_getter(index)) {
+                const uint32_t footprint = kernel_config_footprint(*kernel_group, program_config);
+                for (const CoreCoord& core : corerange_to_cores(kernel_group->core_ranges)) {
+                    const experimental::KernelConfigBufferImpl::Shards* shards =
+                        kernel_config_buffer->find(device_id, core);
+                    TT_FATAL(
+                        shards != nullptr,
+                        "Allocated kernel config buffer has no shard on device {} core {}, "
+                        "where the program runs a kernel",
+                        device_id,
+                        core);
+                    TT_FATAL(
+                        footprint <= shards->size,
+                        "Program size ({}) too large for allocated kernel config buffer ({}) on device {} "
+                        "core {}, {} B over",
+                        footprint,
+                        shards->size,
+                        device_id,
+                        core,
+                        footprint - shards->size);
+                }
+            }
+        } else {
+            const uint32_t size = program.program_config_sizes_[index];
+            const size_t max_size = get_ringbuffer_size(device, programmable_core_type);
+            // The layout finalize stored on the program, for the breakdown.
+            const ProgramConfig& config = program.get_program_config(index);
+            ProgramOffsetsState state;
+            state.offset = size;
+            state.rta_offset = config.rta_offset;
+            state.sem_offset = config.sem_offset;
+            state.sem_size = config.sem_size;
+            state.cb_offset = config.cb_offset;
+            state.cb_size = config.cb_size;
+            state.local_cb_size = config.local_cb_size;
+            state.dfb_offset = config.dfb_offset;
+            state.dfb_size = config.dfb_size;
+            state.cross_node_dfb_offset = config.cross_node_dfb_offset;
+            state.prefetcher_pipe_offset = config.prefetcher_pipe_offset;
+            state.kernel_text_offset = config.kernel_text_offset;
+            state.kernel_text_size = config.kernel_text_size;
+            TT_FATAL(
+                program.kernel_config_fits_window(device, programmable_core_type),
+                "Program size ({}) too large for kernel config buffer ({}) on {}, {} B over:{}",
+                size,
+                max_size,
+                enchantum::to_string(programmable_core_type),
+                size - max_size,
+                format_rows(program_config_breakdown(
+                    metal_ctx, programmable_core_type, state, kernel_groups_getter(index), kernels_getter(index))));
         }
-        if (program.kernel_config_fits_window(device, programmable_core_type)) {
-            continue;
-        }
-        const uint32_t size = program.program_config_sizes_[index];
-        const size_t max_size = get_ringbuffer_size(device, programmable_core_type);
-        // The layout finalize stored on the program, for the breakdown.
-        const ProgramConfig& config = program.get_program_config(index);
-        ProgramOffsetsState state;
-        state.offset = size;
-        state.rta_offset = config.rta_offset;
-        state.sem_offset = config.sem_offset;
-        state.sem_size = config.sem_size;
-        state.cb_offset = config.cb_offset;
-        state.cb_size = config.cb_size;
-        state.local_cb_size = config.local_cb_size;
-        state.dfb_offset = config.dfb_offset;
-        state.dfb_size = config.dfb_size;
-        state.cross_node_dfb_offset = config.cross_node_dfb_offset;
-        state.prefetcher_pipe_offset = config.prefetcher_pipe_offset;
-        state.kernel_text_offset = config.kernel_text_offset;
-        state.kernel_text_size = config.kernel_text_size;
-        TT_THROW(
-            "Program size ({}) too large for kernel config buffer ({}) on {}, {} B over:{}",
-            size,
-            max_size,
-            enchantum::to_string(programmable_core_type),
-            size - max_size,
-            format_rows(program_config_breakdown(
-                metal_ctx, programmable_core_type, state, kernel_groups_getter(index), kernels_getter(index))));
     }
 }
 

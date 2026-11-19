@@ -149,7 +149,7 @@ TEST_F(KernelSizeTestBigBuffer, LargeKernelWorks) {
 
 // Test 2: Verify that kernels exceeding kernel config buffer size are rejected
 // This test intentionally creates an oversized kernel (100 KB) and expects
-// the dispatch system to throw in ProgramImpl::check_kernel_config_fits_window()
+// the dispatch system to throw in ProgramImpl::check_kernel_config_fits()
 TEST_F(KernelSizeTestDefaultBuffer, LargeKernelFails) {
     ScopedNullifyKernels nullify_kernels;
 

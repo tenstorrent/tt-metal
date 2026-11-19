@@ -372,8 +372,7 @@ public:
     void populate_dispatch_data(IDevice* device);
 
     // Lays out the program's kernel-config block. Checks no size limit: where the block runs is only
-    // known at launch, which checks it with check_kernel_config_fits_window or against a kernel config
-    // buffer.
+    // known at launch, which checks it with check_kernel_config_fits.
     void finalize_offsets(IDevice* device);
 
     // Lays out the kernel-config block of `programs` for each programmable core type, in core-type
@@ -400,10 +399,15 @@ public:
         const SemaphoresGetter& semaphores_getter,
         ttsl::Span<ProgramImpl*> programs);
 
-    // Throws if this program's kernel-config block does not fit the KERNEL_CONFIG window of a core type
-    // it runs on. Skips Tensix when `tensix_from_buffer`: that block runs from a kernel config buffer,
-    // which ValidateKernelConfigBuffer checks. Does nothing for a program that is not finalized.
-    void check_kernel_config_fits_window(IDevice* device, bool tensix_from_buffer = false);
+    // Throws if this program's kernel-config block does not fit where it runs on `device`: the Tensix
+    // blocks in `kernel_config_buffer` when one is given, every other block in its core type's
+    // KERNEL_CONFIG window. Does nothing for a program that is not finalized.
+    void check_kernel_config_fits(
+        IDevice* device, const experimental::KernelConfigBufferImpl* kernel_config_buffer = nullptr);
+
+    // Throws if the program has Tensix program semaphores, which a kernel config buffer without a lockstep address
+    // cannot run: each core's block, and so each semaphore, sits at a different address.
+    void check_no_tensix_semaphores() const;
 
     // Whether this program's kernel config fits the KERNEL_CONFIG window of `core_type` on `device`. The program
     // must be finalized.
@@ -412,13 +416,13 @@ public:
     // The same check for programs laid out together, as a MeshWorkload's are: `program` is any of them,
     // since they share one layout, and the getters name the kernels of all of them, for the error's
     // breakdown.
-    static void check_kernel_config_fits_window(
+    static void check_kernel_config_fits(
         ContextId context_id,
         IDevice* device,
         const KernelsGetter& kernels_getter,
         const KernelGroupsGetter& kernel_groups_getter,
         const ProgramImpl& program,
-        bool tensix_from_buffer);
+        const experimental::KernelConfigBufferImpl* kernel_config_buffer);
 
     std::vector<uint32_t>& get_program_config_sizes() noexcept { return program_config_sizes_; }
 

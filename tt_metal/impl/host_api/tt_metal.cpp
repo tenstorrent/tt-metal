@@ -330,7 +330,8 @@ void ConfigureProgramWithoutLaunch(
             local_launch_msg.view().kernel_config().host_assigned_id() = program.get_runtime_id();
             if (kernel_config_buffer != nullptr) {
                 local_launch_msg.view().kernel_config().kernel_config_base()[programmable_core_type_index] =
-                    KernelConfigBase(hal, programmable_core_type_index, device_id, logical_core, kernel_config_buffer);
+                    GetKernelConfigBase(
+                        hal, programmable_core_type_index, device_id, logical_core, kernel_config_buffer);
             }
             auto physical_core = device->virtual_core_from_logical_core(logical_core, core_type);
             slow_dispatch::WriteLaunchMsgToCore(
@@ -401,7 +402,8 @@ void DispatchCompiledProgram(
             local_launch_msg.view().kernel_config().host_assigned_id() = program.get_runtime_id();
             if (kernel_config_buffer != nullptr) {
                 local_launch_msg.view().kernel_config().kernel_config_base()[programmable_core_type_index] =
-                    KernelConfigBase(hal, programmable_core_type_index, device_id, logical_core, kernel_config_buffer);
+                    GetKernelConfigBase(
+                        hal, programmable_core_type_index, device_id, logical_core, kernel_config_buffer);
             }
 
             auto physical_core = device->virtual_core_from_logical_core(logical_core, core_type);
