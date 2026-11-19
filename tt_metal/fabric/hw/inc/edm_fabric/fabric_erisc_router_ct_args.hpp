@@ -127,6 +127,34 @@ constexpr size_t compact_sender_for_fabric_position(size_t position) {
     return ACTUAL_VC0_SENDER_CHANNELS + ACTUAL_VC1_SENDER_CHANNELS + (position - VC2_FABRIC_POSITION_START);
 }
 
+// The free-slots stream register of each sender channel, by fabric position (the host's
+// SENDER_CHANNEL_<p>_FREE_SLOTS_STREAM_ID: the table is the same on every router, so a router can name a downstream
+// router's register).
+constexpr std::array<uint32_t, MAX_NUM_SENDER_CHANNELS> sender_free_slots_streams = {
+    sender_channel_0_free_slots_stream_id,
+    sender_channel_1_free_slots_stream_id,
+    sender_channel_2_free_slots_stream_id,
+    sender_channel_3_free_slots_stream_id,
+    sender_channel_4_free_slots_stream_id,
+    sender_channel_5_free_slots_stream_id,
+    sender_channel_6_free_slots_stream_id,
+    sender_channel_7_free_slots_stream_id,
+    sender_channel_8_free_slots_stream_id,
+    sender_channel_9_free_slots_stream_id};
+
+// This router's local copy of each downstream router's free slots, by VC that forwards to routers (VC0, VC1) and by
+// downstream entry (the host's compact order: VC<n>_FREE_SLOTS_FROM_DOWNSTREAM_EDGE_<entry + 1>_STREAM_ID).
+constexpr std::array<std::array<uint32_t, NUM_ROUTER_CARDINAL_DIRECTIONS>, 2> local_downstream_credit_streams = {{
+    {vc_0_free_slots_from_downstream_edge_1_stream_id,
+     vc_0_free_slots_from_downstream_edge_2_stream_id,
+     vc_0_free_slots_from_downstream_edge_3_stream_id,
+     vc_0_free_slots_from_downstream_edge_4_stream_id},
+    {vc_1_free_slots_from_downstream_edge_1_stream_id,
+     vc_1_free_slots_from_downstream_edge_2_stream_id,
+     vc_1_free_slots_from_downstream_edge_3_stream_id,
+     vc_1_free_slots_from_downstream_edge_4_stream_id},
+}};
+
 // Does this router service a channel at this fabric position?
 constexpr bool services_fabric_position(size_t position) {
     if (position < VC1_FABRIC_POSITION_START) {
@@ -199,6 +227,43 @@ constexpr bool skip_src_ch_id_update = fabric_tensix_extension_mux_mode;
 
 constexpr bool ENABLE_FIRST_LEVEL_ACK_VC0 = NAMED_CT_ARG("ENABLE_FIRST_LEVEL_ACK_VC0");
 constexpr bool ENABLE_FIRST_LEVEL_ACK_VC1 = NAMED_CT_ARG("ENABLE_FIRST_LEVEL_ACK_VC1");
+constexpr bool ENABLE_FIRST_LEVEL_ACK_VC2 = NAMED_CT_ARG("ENABLE_FIRST_LEVEL_ACK_VC2");
+
+// Per-VC features, indexed by VC, as the host sets them (one arg or define per VC: MAX_NUM_VCS entries each).
+static_assert(MAX_NUM_VCS == 3, "the per-VC features below list one host arg per VC");
+// Whether this router is configured for the VC: VC0 always; VC1 and VC2 where the host's mode gives it the VC
+// (FABRIC_2D_VC1_SERVICED / FABRIC_2D_VC2_SERVICED). Configuration only: channel trimming is per channel ("serviced").
+// runs_vc (router_common.hpp) combines both and is this array's only reader.
+constexpr std::array<bool, MAX_NUM_VCS> is_vc_configured = {
+    true,
+#if defined(FABRIC_2D_VC1_SERVICED)
+    true,
+#else
+    false,
+#endif
+#if defined(FABRIC_2D_VC2_SERVICED)
+    true,
+#else
+    false,
+#endif
+};
+// Whether the VC's packets are first-level acked: the sender credits a slot to its producer when the remote receiver
+// acks the packet's arrival, rather than at its completion (ENABLE_FIRST_LEVEL_ACK_VC<n>).
+constexpr std::array<bool, MAX_NUM_VCS> is_vc_first_level_ack_enabled = {
+    ENABLE_FIRST_LEVEL_ACK_VC0, ENABLE_FIRST_LEVEL_ACK_VC1, ENABLE_FIRST_LEVEL_ACK_VC2};
+// The VC's receiver channel's index in the host's per-receiver-channel arrays (on both routers of a link).
+constexpr std::array<size_t, MAX_NUM_VCS> receiver_channel_by_vc = {
+    VC0_RECEIVER_CHANNEL, VC1_RECEIVER_CHANNEL, VC2_RECEIVER_CHANNEL};
+// Whether the VC's receiver channel forwards onto VC1's downstream routers here (crossover, on an intermesh router:
+// FABRIC_2D_VC0_CROSSOVER_TO_VC1, VC2_CROSSOVER_TO_VC1); VC1's forwards on VC1.
+constexpr std::array<bool, MAX_NUM_VCS> is_vc_crossover_to_vc1 = {
+#if defined(FABRIC_2D_VC0_CROSSOVER_TO_VC1)
+    true,
+#else
+    false,
+#endif
+    false,
+    NAMED_CT_ARG("VC2_CROSSOVER_TO_VC1") != 0};
 constexpr bool ENABLE_RISC_CPU_DATA_CACHE = NAMED_CT_ARG("ENABLE_RISC_CPU_DATA_CACHE");
 constexpr size_t VC0_DOWNSTREAM_EDM_SIZE = NAMED_CT_ARG("VC0_DOWNSTREAM_EDM_SIZE");
 constexpr size_t VC1_DOWNSTREAM_EDM_SIZE = NAMED_CT_ARG("VC1_DOWNSTREAM_EDM_SIZE");
@@ -270,6 +335,23 @@ constexpr size_t local_sender_channel_6_connection_info_addr = NAMED_CT_ARG("LOC
 constexpr size_t local_sender_channel_7_connection_info_addr = NAMED_CT_ARG("LOCAL_SENDER_CH_7_CONN_INFO_ADDR");
 constexpr size_t local_sender_channel_8_connection_info_addr = NAMED_CT_ARG("LOCAL_SENDER_CH_8_CONN_INFO_ADDR");
 constexpr size_t local_sender_channel_9_connection_info_addr = NAMED_CT_ARG("LOCAL_SENDER_CH_9_CONN_INFO_ADDR");
+// The same, by channel: each sender channel's connection info (its worker's location, the read counter a disconnected
+// worker's credits go to), in L1 at compile-time addresses.
+constexpr std::array<size_t, MAX_NUM_SENDER_CHANNELS> sender_connection_info_addrs = {
+    local_sender_channel_0_connection_info_addr,
+    local_sender_channel_1_connection_info_addr,
+    local_sender_channel_2_connection_info_addr,
+    local_sender_channel_3_connection_info_addr,
+    local_sender_channel_4_connection_info_addr,
+    local_sender_channel_5_connection_info_addr,
+    local_sender_channel_6_connection_info_addr,
+    local_sender_channel_7_connection_info_addr,
+    local_sender_channel_8_connection_info_addr,
+    local_sender_channel_9_connection_info_addr};
+// Each VC's worker channel's connection semaphore (0 where the VC has no worker: VC1 never does), at a compile-time
+// address: the router reads it every pass. A forwarding channel's semaphore is used only at init, from its runtime arg.
+constexpr std::array<size_t, MAX_NUM_VCS> worker_connection_semaphore_addrs = {
+    NAMED_CT_ARG("VC0_WORKER_CONNECTION_SEMAPHORE_ADDR"), 0, NAMED_CT_ARG("VC2_WORKER_CONNECTION_SEMAPHORE_ADDR")};
 
 // ============================================================================
 // Status pointers
@@ -289,6 +371,20 @@ constexpr uint32_t notify_worker_of_read_counter_update_src_address =
 // ============================================================================
 // Channel servicing flags
 // ============================================================================
+// Whether a sender channel position takes a worker: the first sender channel of each VC whose routing mode has a worker
+// (SENDER_CH_<i>_IS_WORKER_CHANNEL; erisc_datamover_builder.cpp), whether or not trimming services it.
+constexpr std::array<bool, MAX_NUM_SENDER_CHANNELS> is_sender_channel_worker = {
+    static_cast<bool>(NAMED_CT_ARG("SENDER_CH_0_IS_WORKER_CHANNEL")),
+    static_cast<bool>(NAMED_CT_ARG("SENDER_CH_1_IS_WORKER_CHANNEL")),
+    static_cast<bool>(NAMED_CT_ARG("SENDER_CH_2_IS_WORKER_CHANNEL")),
+    static_cast<bool>(NAMED_CT_ARG("SENDER_CH_3_IS_WORKER_CHANNEL")),
+    static_cast<bool>(NAMED_CT_ARG("SENDER_CH_4_IS_WORKER_CHANNEL")),
+    static_cast<bool>(NAMED_CT_ARG("SENDER_CH_5_IS_WORKER_CHANNEL")),
+    static_cast<bool>(NAMED_CT_ARG("SENDER_CH_6_IS_WORKER_CHANNEL")),
+    static_cast<bool>(NAMED_CT_ARG("SENDER_CH_7_IS_WORKER_CHANNEL")),
+    static_cast<bool>(NAMED_CT_ARG("SENDER_CH_8_IS_WORKER_CHANNEL")),
+    static_cast<bool>(NAMED_CT_ARG("SENDER_CH_9_IS_WORKER_CHANNEL")),
+};
 constexpr std::array<bool, MAX_NUM_SENDER_CHANNELS> is_sender_channel_serviced = {
     static_cast<bool>(NAMED_CT_ARG("IS_SENDER_CHANNEL_0_SERVICED")),
     static_cast<bool>(NAMED_CT_ARG("IS_SENDER_CHANNEL_1_SERVICED")),
@@ -341,6 +437,8 @@ constexpr bool enable_context_switch = NAMED_CT_ARG("ENABLE_CONTEXT_SWITCH") != 
 constexpr bool enable_interrupts = NAMED_CT_ARG("ENABLE_INTERRUPTS") != 0;
 constexpr size_t sender_txq_id = NAMED_CT_ARG("SENDER_TXQ_ID");
 constexpr size_t receiver_txq_id = NAMED_CT_ARG("RECEIVER_TXQ_ID");
+// The TX queues' keepalive (ETH_TXQ_LOCAL_SEQ_UPDATE_TIMEOUT) while the router runs, in cycles; 0 keeps the firmware's.
+constexpr uint32_t eth_txq_seq_update_timeout = NAMED_CT_ARG("ETH_TXQ_SEQ_UPDATE_TIMEOUT");
 constexpr bool multi_txq_enabled = sender_txq_id != receiver_txq_id;
 
 // Whether a VC's receiver-to-sender ack and completion credits travel through L1 counters instead of
@@ -521,7 +619,11 @@ static constexpr std::array<bool, MAX_NUM_SENDER_CHANNELS> sender_channel_is_tra
 constexpr std::array<bool, NUM_SENDER_CHANNELS> sender_channel_is_traffic_injection_channel =
     take_first_n_elements<NUM_SENDER_CHANNELS, MAX_NUM_SENDER_CHANNELS, bool>(
         sender_channel_is_traffic_injection_channel_all_);
-constexpr size_t BUBBLE_FLOW_CONTROL_INJECTION_SENDER_CHANNEL_MIN_FREE_SLOTS = 2;
+// Bubble flow control (deadlock avoidance on a ring or torus): the free slots an injection channel needs in the remote
+// router's VC0 receiver channel before it sends. The host's, from that receiver's slot count; passed only with deadlock
+// avoidance, where it is at least 2 (the bubble) and at most the receiver's slots (router_sender.hpp).
+constexpr size_t BUBBLE_FLOW_CONTROL_INJECTION_SENDER_CHANNEL_MIN_FREE_SLOTS =
+    enable_deadlock_avoidance ? NAMED_CT_ARG("BUBBLE_FLOW_CONTROL_INJECTION_SENDER_CHANNEL_MIN_FREE_SLOTS") : 0;
 
 static constexpr std::array<size_t, MAX_NUM_SENDER_CHANNELS> sender_channel_ack_noc_ids_all_ = {
     static_cast<size_t>(NAMED_CT_ARG("SENDER_CH_0_ACK_NOC_ID")),
@@ -706,11 +808,42 @@ constexpr size_t sender_channel_base_id = 0;
 constexpr size_t receiver_channel_base_id = NUM_SENDER_CHANNELS;
 
 // TRANSACTION IDS
-// TODO: Pass this value from host
-constexpr uint8_t NUM_TRANSACTION_IDS = enable_deadlock_avoidance ? 8 : 4;
-
-constexpr std::array<uint8_t, MAX_NUM_RECEIVER_CHANNELS> RX_CH_TRID_STARTS =
-    initialize_receiver_channel_trid_starts<MAX_NUM_RECEIVER_CHANNELS, NUM_TRANSACTION_IDS>();
+// Per receiver channel, from the host, which sizes each channel's range from its final slot count: the slots per
+// completion group, the number of transaction IDs and the first ID. All receiver channels of a router run on one ERISC
+// and share that NoC's IDs. A channel with fewer IDs than completion groups shares them by mask.
+constexpr std::array<uint8_t, MAX_NUM_RECEIVER_CHANNELS> RX_CH_COMPLETION_GROUP_SIZE = {
+    static_cast<uint8_t>(NAMED_CT_ARG("RX_CH_0_COMPLETION_GROUP_SIZE")),
+    static_cast<uint8_t>(NAMED_CT_ARG("RX_CH_1_COMPLETION_GROUP_SIZE")),
+    static_cast<uint8_t>(NAMED_CT_ARG("RX_CH_2_COMPLETION_GROUP_SIZE")),
+};
+constexpr std::array<uint8_t, MAX_NUM_RECEIVER_CHANNELS> RX_CH_NUM_TRIDS = {
+    static_cast<uint8_t>(NAMED_CT_ARG("RX_CH_0_NUM_TRIDS")),
+    static_cast<uint8_t>(NAMED_CT_ARG("RX_CH_1_NUM_TRIDS")),
+    static_cast<uint8_t>(NAMED_CT_ARG("RX_CH_2_NUM_TRIDS")),
+};
+constexpr std::array<uint8_t, MAX_NUM_RECEIVER_CHANNELS> RX_CH_TRID_STARTS = {
+    static_cast<uint8_t>(NAMED_CT_ARG("RX_CH_0_TRID_START")),
+    static_cast<uint8_t>(NAMED_CT_ARG("RX_CH_1_TRID_START")),
+    static_cast<uint8_t>(NAMED_CT_ARG("RX_CH_2_TRID_START")),
+};
+static_assert(MAX_NUM_RECEIVER_CHANNELS == 3, "the host emits RX_CH_<c> transaction-ID args for three channels");
+// Every channel the router runs: a group size of 1, 2 or 4, at least one ID, and the ranges one after another within
+// the NoC's IDs.
+constexpr bool receiver_trid_ranges_valid = [] {
+    uint32_t next = 0;
+    for (size_t c = 0; c < NUM_RECEIVER_CHANNELS; c++) {
+        const uint32_t group_size = RX_CH_COMPLETION_GROUP_SIZE[c];
+        if ((group_size != 1 && group_size != 2 && group_size != 4) || RX_CH_NUM_TRIDS[c] == 0 ||
+            RX_CH_TRID_STARTS[c] != next) {
+            return false;
+        }
+        next += RX_CH_NUM_TRIDS[c];
+    }
+    return next <= NOC_MAX_TRANSACTION_ID + 1;
+}();
+static_assert(
+    receiver_trid_ranges_valid,
+    "receiver transaction IDs: group sizes 1/2/4, at least one ID per channel, consecutive ranges, 16 at most");
 
 constexpr std::array<uint32_t, MAX_NUM_RECEIVER_CHANNELS> to_receiver_packets_sent_streams =
     take_first_n_elements<MAX_NUM_RECEIVER_CHANNELS, MAX_NUM_RECEIVER_CHANNELS, uint32_t>(
@@ -831,11 +964,14 @@ constexpr std::array<size_t, NUM_RECEIVER_CHANNELS> REMOTE_RECEIVER_NUM_BUFFERS_
 // channel trimming is a feature that allows the router to trim channels that are not used.
 // this is useful for reducing the amount of compute needed by the router.
 
-// RX channel forwarding disable flags (from imported trimming profile)
+// Whether the VC's receiver channel forwards nothing: it only delivers to this chip (VC0's on a speedy-path router,
+// VC2's in neighbour exchange), or a channel-trimming capture saw nothing on the VC. The host computes
+// DISABLE_RX_CH<n>_FORWARDING per VC (n is the VC), so the array is indexed by VC, not by receiver channel: VC2's
+// receiver channel is channel 1 on routers without VC1 (vc_of_receiver_channel).
 constexpr bool disable_rx_ch0_forwarding = get_named_compile_time_arg_val("DISABLE_RX_CH0_FORWARDING") != 0;
 constexpr bool disable_rx_ch1_forwarding = get_named_compile_time_arg_val("DISABLE_RX_CH1_FORWARDING") != 0;
 constexpr bool disable_rx_ch2_forwarding = get_named_compile_time_arg_val("DISABLE_RX_CH2_FORWARDING") != 0;
-constexpr std::array<bool, MAX_NUM_RECEIVER_CHANNELS> is_receiver_channel_forwarding_disabled = {
+constexpr std::array<bool, MAX_NUM_VCS> is_vc_forwarding_disabled = {
     disable_rx_ch0_forwarding, disable_rx_ch1_forwarding, disable_rx_ch2_forwarding};
 
 constexpr bool ENABLE_CHANNEL_TRIMMING_RESOURCE_USAGE_CAPTURE =

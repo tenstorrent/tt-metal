@@ -35,10 +35,9 @@ class CheckpointShapeError(ValueError):
     """A tensor would be saved or restored at a shape that contradicts the shape it must have.
 
     Invariant guarded: every optimizer state tensor keyed by a parameter name (AdamW ``exp_avg`` /
-    ``exp_avg_sq`` / ``max_exp_avg_sq``, SGD ``theta``, Muon's momentum buffer, the fp32 master copy, ...)
-    is created as ``zeros_like(param)`` or ``typecast(param)`` and therefore gathers to the same full shape as
-    its parameter. Only shapes are compared -- never dtype (``AdamWFullPrecision`` keeps a float32 master of a
-    bf16 parameter).
+    ``exp_avg_sq`` / ``max_exp_avg_sq``, SGD ``theta``, Muon's momentum buffer, ...)
+    is created as ``zeros_like(param)`` and therefore gathers to the same full shape as
+    its parameter. Only shapes are compared -- never dtype.
 
     ``save_checkpoint`` gathers each tensor by its own topology label, so a label that does not describe the
     data (a moment reporting ``Replicate`` on a mesh axis its parameter is sharded on, say) gathers to one
@@ -119,7 +118,7 @@ def _walk(value, path: tuple = ()) -> tuple:
             skeleton[key], sub_tensors = _walk(sub, path + (key,))
             tensors.extend(sub_tensors)
         return skeleton, tensors
-    if isinstance(value, (bool, int, float)):
+    if isinstance(value, (bool, int, float, str)):
         return value, []
     raise ValueError(f"checkpointing: unsupported state value of type {type(value).__name__}")
 

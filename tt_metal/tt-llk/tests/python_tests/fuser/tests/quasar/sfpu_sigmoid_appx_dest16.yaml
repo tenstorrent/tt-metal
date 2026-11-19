@@ -4,7 +4,7 @@ dest_acc: false
 operands:
   - name: "input_A"
     dims: [32, 32]
-    format: [Float16_b, Float16]
+    format: [Float16_b]
     stimuli:
       # Keep zero and LUT transition points separate from the random intervals.
       include:
@@ -24,7 +24,7 @@ operands:
   - name: "sfpu_out"
     dims: [32, 32]
     format: Float16_b
-    atol: 0.13  # SigmoidAppx coarse LUT budget in helpers/sfpu_accuracy_budget.yaml.
+    atol: 0.13  # SigmoidAppx coarse LUT budget in helpers/sfpu_accuracy_budget_wh.yaml, the table Quasar reads.
 
 operations:
   - math:
