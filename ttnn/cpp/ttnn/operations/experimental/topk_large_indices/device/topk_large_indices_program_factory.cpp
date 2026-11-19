@@ -165,10 +165,11 @@ void set_two_level_common_args(
     const uint32_t num_rows = flattened_rows_excluding_last_dim(input.logical_shape());
     const uint32_t blocks = tt::div_up(input.logical_shape()[-1], two_level_block_keys);
     const uint32_t num_cores = static_cast<uint32_t>(shared.cores.size());
-    // The maxima stage 2 reads: the caller's, else the caller's maxima output, else the program's own.
+    // The maxima stage 2 reads: the caller's, else the caller's maxima output, else the program's own. The row count
+    // and width are in the program hash, so the program's own is allocated once and keeps its address (a captured
+    // trace holds it).
     const bool own_maxima = !tensor_args.block_max_tensor.has_value() && !tensor_args.block_max_output.has_value();
-    if (own_maxima && (!shared.two_level_maxima.has_value() ||
-                       flattened_rows_excluding_last_dim(shared.two_level_maxima->logical_shape()) < num_rows)) {
+    if (own_maxima && !shared.two_level_maxima.has_value()) {
         shared.two_level_maxima = create_device_tensor(
             tt::tt_metal::TensorSpec(
                 ttnn::Shape({num_rows, blocks}),
@@ -472,8 +473,8 @@ TopkLargeIndicesProgramFactory::cached_program_t TopkLargeIndicesProgramFactory:
         create_cb(cb_scaler, 1, input_tile_bytes, tt::DataFormat::Float16_b);
         // The compute packs eight reduced tiles per DEST acquire; the writer drains them one at a time.
         create_cb(cb_red, 16, input_tile_bytes, tt::DataFormat::Float16_b);
-        // The writer's phase-1 staging: two units of block maxima.
-        create_cb(cb_max, 2, stage1_batch * 32 * input.element_size(), tt::DataFormat::Float16_b);
+        // The writer's phase-1 staging: one unit of block maxima.
+        create_cb(cb_max, 1, stage1_batch * 32 * input.element_size(), tt::DataFormat::Float16_b);
         create_cb(cb_table, 1, table_bytes, tt::DataFormat::UInt32);
         const uint32_t bitmap_bytes =
             tt::round_up(tt::div_up(tt::div_up(input_width, two_level_block_keys), 32) * sizeof(uint32_t), 64);

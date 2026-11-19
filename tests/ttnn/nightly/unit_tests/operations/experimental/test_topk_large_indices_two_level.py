@@ -172,8 +172,10 @@ def test_two_level_tied_blocks(device):
     _check_rows(torch_input, _indices(out, rows), n, range(rows))
 
 
-def test_two_level_supplied_block_maxima(device):
-    rows, width, n = 4, 1_049_600, 700_000
+@pytest.mark.parametrize("rows", [4, 160])
+def test_two_level_supplied_block_maxima(device, rows):
+    """The caller's maxima, with one row per core and with several."""
+    width, n = 1_049_600, 700_000
     torch_input = generate("sinks", rows, width, 9, n=n)
     blocks = width // BLOCK
     maxima = torch.full((rows, blocks), float("-inf"))
@@ -348,6 +350,36 @@ def test_two_level_rejects_other_block_sizes(device, expect_error):
         ttnn.experimental.topk_large_indices(narrow, k=K, block_select=16)
 
 
+def test_two_level_row_count_changes(device):
+    """The program's own maxima tensor is sized by the row count, which keys the program: more rows at the same
+    width get a program of their own."""
+    width, n = 131_072, 131_072
+    entries = None
+    for rows in (2, 3, 2):
+        torch_input = generate("iid", rows, width, 18 + rows, n=n)
+        out = ttnn.experimental.topk_large_indices(
+            _dev(torch_input.reshape(1, 1, rows, width), device),
+            k=K,
+            valid_length=n,
+            block_select=32,
+            two_level_cutover=FORCE_TWO_LEVEL,
+        )
+        _check_rows(torch_input, _indices(out, rows), n, range(rows))
+        if entries is None:
+            entries = device.num_program_cache_entries()
+    assert device.num_program_cache_entries() == entries + 1
+
+
+def test_two_level_rejects_maxima_input_with_maxima_output(device, expect_error):
+    rows, width = 2, 131_072
+    tt_input = _dev(torch.zeros(1, 1, rows, width, dtype=torch.bfloat16), device)
+    maxima = lambda: _dev(torch.zeros(1, 1, rows, width // 32, dtype=torch.bfloat16), device)
+    with expect_error(RuntimeError, "with block_max_tensor none are computed"):
+        ttnn.experimental.topk_large_indices(
+            tt_input, k=K, block_select=32, block_max_tensor=maxima(), block_max_output=maxima()
+        )
+
+
 def test_two_level_cores_with_several_rows(device):
     """Up to four rows per core, each tracked by its own byte of the owner's readiness count."""
     rows, width, n = 100, 131_072, 120_000
@@ -481,16 +513,19 @@ DEFAULT_CUTOVER = {12: 196_608, 11: 147_456}
 
 @pytest.mark.parametrize("columns", [12, 11])
 @pytest.mark.parametrize("offset", [-1, 0, 1])
-def test_two_level_default_cutover(device, columns, offset):
-    """The default cutover on both top-k grids: rows run two-level from exactly the cutover."""
+@pytest.mark.parametrize("bound", ["scalar", "metadata"])
+def test_two_level_default_cutover(device, columns, offset, bound):
+    """The default cutover on both top-k grids, with either bound form: rows run two-level from exactly the
+    cutover."""
     rows, width = 160, 262_144
     n = DEFAULT_CUTOVER[columns] + offset
     torch_input = generate("iid", rows, width, 14, n=n)
     mode = _scalar(device, 7)
+    length = {"valid_length": n} if bound == "scalar" else {"valid_length_tensor": _scalar(device, n)}
     out = ttnn.experimental.topk_large_indices(
         _dev(torch_input.reshape(1, 1, rows, width), device),
         k=K,
-        valid_length_tensor=_scalar(device, n),
+        **length,
         block_select=32,
         sub_core_grids=_grid(device, columns),
         dram_read_noc=ttnn.NOC.NOC_0,
@@ -545,10 +580,14 @@ def test_single_level_load_order_zero_class(device):
     control = words.clone()
     for position in zero_class:
         control[position] = 0x0000
+    results = []
     for row_words in (words, control):
         row = (row_words << 16).view(torch.float32).to(torch.bfloat16)
         out = ttnn.experimental.topk_large_indices(_dev(row.reshape(1, 1, 1, n), device), k=16)
-        indices = ttnn.to_torch(out, dtype=torch.uint32).reshape(-1).to(torch.int64).tolist()
-        assert indices[0] == 70
-        assert set(indices[1:7]) == set(zero_class)
-        assert indices[7] == 80
+        results.append(ttnn.to_torch(out, dtype=torch.uint32).reshape(-1).to(torch.int64).tolist())
+    indices, control_indices = results
+    assert indices[0] == 70
+    assert set(indices[1:7]) == set(zero_class)
+    assert indices[7] == 80
+    # Equal values, so the same tie order as the control: not ranked by magnitude.
+    assert indices[:8] == control_indices[:8]

@@ -48,7 +48,7 @@ struct TopkLargeIndicesSharedVariables {
     uint32_t num_chunks = 0;
     bool two_level = false;
     // A two-level program's own maxima tensor, written by phase 1 and read by phase 2 (unless the caller supplies
-    // the maxima or a maxima output). Grown when a cache hit brings more rows.
+    // the maxima or a maxima output).
     std::optional<Tensor> two_level_maxima;
 };
 

@@ -213,13 +213,18 @@ void validate_runtime_args(const operation_attributes_t& attrs, const tensor_arg
             "topk_large_indices two-level selection needs one packed input row per page ({} B), got pages of {} B",
             input_row_bytes,
             input.buffer()->page_size());
+        // Readiness is counted only for rows whose maxima phase 1 computes.
         const uint32_t num_cores = attrs.resolved_worker_core_grid.num_cores();
         TT_FATAL(
-            num_rows <= uint64_t{program::two_level_max_rows_per_core} * num_cores,
+            tensor_args.block_max_tensor.has_value() ||
+                num_rows <= uint64_t{program::two_level_max_rows_per_core} * num_cores,
             "topk_large_indices two-level selection gives each core at most {} rows: {} rows over {} cores",
             program::two_level_max_rows_per_core,
             num_rows,
             num_cores);
+        TT_FATAL(
+            !(tensor_args.block_max_tensor.has_value() && tensor_args.block_max_output.has_value()),
+            "topk_large_indices block_max_output receives computed maxima; with block_max_tensor none are computed");
         // One page per row: the reader and writer address these by row.
         const uint32_t blocks = tt::div_up(n, program::two_level_block_keys);
         validate_two_level_tensor(input, tensor_args.block_max_tensor, DataType::BFLOAT16, blocks, "block_max_tensor");
@@ -298,8 +303,10 @@ ttsl::hash::hash_t TopkLargeIndicesDeviceOperation::compute_program_hash(
     return tt::tt_metal::operation::hash_operation<TopkLargeIndicesDeviceOperation>(
         base,
         *attrs.block_select,
-        // The bitmap, the maxima scratch and the maxima row pitch are sized from the width.
+        // The bitmap and the maxima row pitch are sized from the width, the program's own maxima tensor from the
+        // width and the row count.
         input_last_dim,
+        num_rows,
         tensor_args.block_max_tensor.has_value(),
         tensor_args.block_max_output.has_value(),
         tensor_args.mode_output.has_value());

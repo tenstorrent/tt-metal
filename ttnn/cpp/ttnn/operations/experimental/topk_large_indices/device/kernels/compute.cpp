@@ -605,6 +605,8 @@ FORCE_INLINE uint32_t two_level_next_row(uint32_t input_cb, uint32_t total_units
     CircularBuffer stage1(cb_stage1);
     while (true) {
         stage1.wait_front(1);
+        // The two header slots are reused: drop any cached copy of this one before reading it.
+        UNPACK(invalidate_l1_cache());
         const uint32_t code = read_tile_value(cb_stage1, 0, 0);
         stage1.pop_front(1);
         if (code >= total_units) {
