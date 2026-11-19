@@ -52,6 +52,26 @@ _OPS_WITH_FAST_MODE = {
     MathOperation.Sqrt,
 }
 
+# The swept ops whose WH/BH kernel changes with approx_mode (sfpu_operations.h); every other
+# op builds the same kernel for Yes and No, so it is swept at No only.
+_OPS_WITH_APPROX_MODE = {
+    MathOperation.Erf,
+    MathOperation.Exp,
+    MathOperation.ExpWithBase,
+    MathOperation.Gelu,
+    MathOperation.GeluDerivative,
+    MathOperation.I1,
+    MathOperation.Mish,
+    MathOperation.Polygamma,
+    MathOperation.Rdiv,
+    MathOperation.Reciprocal,
+    MathOperation.Rsqrt,
+    MathOperation.Sigmoid,
+    MathOperation.Softsign,
+    MathOperation.Sqrt,
+    MathOperation.Tanh,
+}
+
 _OPS_WITH_STABLE_SORT = {
     MathOperation.TopKLocalSort,
     MathOperation.TopKMerge,
@@ -161,13 +181,16 @@ def _get_formats(mathop):
     return _REPRESENTATIVE_FORMAT_PAIRS
 
 
+def _get_approx_modes(mathop):
+    if mathop in _OPS_WITH_APPROX_MODE:
+        return [ApproximationMode.Yes, ApproximationMode.No]
+    return [ApproximationMode.No]
+
+
 @pytest.mark.perf
 @parametrize(
     formats=lambda mathop: _get_formats(mathop),
-    approx_mode=[
-        ApproximationMode.Yes,
-        ApproximationMode.No,
-    ],
+    approx_mode=lambda mathop: _get_approx_modes(mathop),
     mathop=PERF_SWEEP_OPS,
     dest_acc=lambda mathop, formats: _get_dest_acc_modes(mathop, formats),
     loop_factor=[
