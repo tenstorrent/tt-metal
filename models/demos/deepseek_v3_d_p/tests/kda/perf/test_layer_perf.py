@@ -41,14 +41,11 @@ pytestmark = [
 
 _TIMING_SAMPLES = 5
 # Host-time targets (ms) per (layout, mode), as tests/measure measures them: untraced fastest of 10 after 10 warm-up,
-# traced one replay, both with the CPU clock held.
+# traced one replay, both with the CPU clock held. LoudBox SP8xTP1 and QuietBox SP4xTP1 report until a CI run gives
+# their targets with the fused relay.
 _TARGETS_MS = {
-    ("SP8xTP4", "untraced"): 1.276,
-    ("SP8xTP4", "traced"): 1.175,
-    ("SP8xTP1", "untraced"): 1.20,
-    ("SP8xTP1", "traced"): 1.142,
-    ("SP4xTP1", "untraced"): 1.216,
-    ("SP4xTP1", "traced"): 1.150,
+    ("SP8xTP4", "untraced"): 1.233,
+    ("SP8xTP4", "traced"): 1.14,
 }
 # Galaxy-equivalent layouts outside CI: they report wall time but are not gated.
 _REPORT_ONLY_LAYOUTS = ("SP4xTP2", "SP2xTP2")
