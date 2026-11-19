@@ -130,7 +130,7 @@ def parse_args() -> argparse.Namespace:
         default="",
         help="tt-metal repo root (defaults to $TT_METAL_HOME / the diag suite's own default).",
     )
-    p.add_argument("--timeout-minutes", type=int, default=30, help="Timeout for the diag run")
+    p.add_argument("--timeout-minutes", type=int, default=60, help="Timeout for the diag run")
     p.add_argument(
         "--telemetry-port",
         type=int,

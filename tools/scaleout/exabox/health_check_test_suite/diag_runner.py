@@ -40,6 +40,7 @@ from diag.common import default_tt_metal_path, log, print_phase_line, print_phas
 from diag.device_tests import run_tests  # noqa: E402
 from diag.eth_status import run_eth_status  # noqa: E402
 from diag.eth_summary import SUMMARY_FILE, render_eth_summary  # noqa: E402
+from diag.hsc import judge_hsc, read_hsc_status  # noqa: E402
 from diag.model import FAIL, PASS, SKIP, WARN, Check, Phase  # noqa: E402
 from diag.qsfp import QSFP_TOOL_BIN, run_qsfp_tests  # noqa: E402
 from diag.resets import fold_post_reset_snapshots, reset_loop, run_post_test_reset  # noqa: E402
@@ -50,7 +51,7 @@ from diag.snapshot import (  # noqa: E402
     resolve_tt_smi,
     take_snapshot,
 )
-from diag.snapshot_checks import validate_snapshot  # noqa: E402
+from diag.snapshot_checks import pcie_enum_check, validate_snapshot  # noqa: E402
 from diag.sys_triage import SYS_TRIAGE_BIN, run_sys_triage  # noqa: E402
 from diag.triage import TRIAGE_DIR_ENV, TRIAGE_SUBDIR, default_triage_dir, run_triage  # noqa: E402
 from tiers import DEPRECATED_TIER_ALIASES, TIERS  # noqa: E402
@@ -354,7 +355,24 @@ def run_diag(
     elif not plan.tests:
         test_phase.add(Check(name="tests", status=SKIP, details=f"no tests for tier '{tier}'", ip="other"))
     else:
+        # Around the load: the tray HSCs' input-voltage flags are read before and
+        # after, and the chips are recounted after, with a fresh snapshot that
+        # runs even under --skip-reset (a weak bus bar often drops a chip or
+        # latches a flag without failing the test that sagged it). Not on an
+        # input snapshot or a dry run: no live hardware to read.
+        live = not (input_snapshot or dry_run)
+        hsc_before = read_hsc_status() if live else None
         _guarded(test_phase, "tests", FAIL, lambda: run_tests(tt_metal_path, plan.tests, test_phase, dry_run, logs_dir))
+        if live:
+            _guarded(test_phase, "hsc_input_status", WARN, lambda: judge_hsc(hsc_before, read_hsc_status(), test_phase))
+
+            def _recount() -> None:
+                after_snap = take_snapshot(
+                    resolve_tt_smi(tt_smi_path), snapshot_out.with_name(f"{snapshot_out.stem}_after_tests.json")
+                )
+                test_phase.add(pcie_enum_check(after_snap.get("device_info") or [], "pcie_enum_count_after_tests"))
+
+            _guarded(test_phase, "pcie_enum_count_after_tests", FAIL, _recount)
     # tests phase prints its own per-test lines as they run — no inline summary.
     _finish(report, test_phase, t0, summary=False)
 

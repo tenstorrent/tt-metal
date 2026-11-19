@@ -83,7 +83,7 @@ BMC_IP=... BMC_USER=... BMC_PASSWORD=... \
 |---|---|---|---|---|---|---|---|---|
 | `flash` | none | — | — | 2 reads, 30 s apart | — | — | snapshot + 2 triage reads + 30 s | Quick ETH link health, the unit read as found |
 | `daily` | `tt-smi -r`, `tt-smi -glx_reset`, then `-glx_reset` after the tests | eth_link_up + eth_bandwidth + gddr_fast (DRAM_TEST_FAST=1)                | host_side + device_side | — | yes, if installed | — | ~5 min + triage + ~7 min | The scheduled fleet run |
-| `weekly` | `tt-smi -r`, `tt-smi -glx_reset` × 2, then `-glx_reset` after the tests | eth_link_up + eth_bandwidth + full gddr matrix (3 DramDeployment tests) + didt_matmul_galaxy (pytest, ~9 min) + didt_duty_cycle_galaxy (pytest, ~1.5 min) | host_side + device_side | — | yes, if installed | — | ~20 min + triage + ~7 min | Every test, less often |
+| `weekly` | `tt-smi -r`, `tt-smi -glx_reset` × 2, then `-glx_reset` after the tests | eth_link_up + eth_bandwidth + full gddr matrix (3 DramDeployment tests) + didt_matmul_galaxy (pytest, bf16 and bf8 variants, ~18 min) + fabric_all_gather_matmul_galaxy (pytest, ~3 min) + HSC input-voltage and chip recount around the tests | host_side + device_side | — | yes, if installed | — | ~30 min + triage + ~7 min | Every test, less often |
 | `full` | as `weekly` | as `weekly` | host_side + device_side | — | yes, if installed | yes, if installed and BMC credentials set | `weekly` + sys-triage | A unit with an issue: everything, for the logs on its DIIM ticket |
 | `pre_bmc_reboot` | none | — | host_side + device_side | — | yes, if installed | yes, if installed and BMC credentials set | snapshot + triage + ~7 min + sys-triage | Collect data before a BMC reboot |
 | `post_bmc_reboot` | none | — | host_side + device_side | — | yes, if installed | yes, if installed and BMC credentials set | snapshot + triage + ~7 min + sys-triage | Collect data after a BMC reboot; for now the same as `pre_bmc_reboot` |
@@ -148,8 +148,10 @@ recorded as FAIL with the `passed` / `failed` / `skipped` counts.
 
 `weekly` and `full` also run `didt_matmul_galaxy`, a pytest-based dI/dt stress
 test: 1000 matmul iterations on the full (8, 4) mesh with a determinism
-re-check every 50, via the repo venv's pytest. Measured ~9 min on a BH galaxy
-(mostly cold bring-up + the 20 output readbacks); bump
+re-check every 50, via the repo venv's pytest, in two variants (`bf16_HiFi2` and
+`bf8b_LoFi`, the lighter-math one that draws the larger current swings). Measured
+~9 min per variant on a BH galaxy (mostly cold bring-up + the 20 output
+readbacks); bump
 `--didt-workload-iterations` when triaging a suspect unit — a marginal chip
 that passed 1000 iterations failed under a 5000-iteration soak. `--timeout
 1200` overrides the repo-wide 300 s pytest-timeout (too short for this run)
@@ -159,12 +161,21 @@ filters above. Needs the venv (`./create_venv.sh`) and standard mesh cabling —
 on torus-cabled units set `TT_MESH_GRAPH_DESC_PATH` to the matching descriptor
 or fabric mesh mapping fails.
 
-They then run `didt_duty_cycle_galaxy`: all 32 chips alternate a LoFi matmul
-with a light eltwise op, 100 pairs per iteration, 200 iterations with a
-determinism re-check every 20. Board power steps up and down with each pair,
-which loads the bus bars and power stages the way bursty real workloads do; a
-weak one shows up as a chip that drops off PCIe, hangs, or returns a
-non-deterministic result.
+They then run `fabric_all_gather_matmul_galaxy`, the repo's existing fused
+all-gather + matmul test (`test_all_gather_minimal_matmul_fabric2d`, fabric 2D
+torus, (8, 4) mesh, the `kda_input_projection` and `sp_ring_8` cases): the
+Ethernet links carry all-gather traffic while the Tensix cores run matmuls, so a
+link that only fails with the chips drawing power shows up here, not in the
+link-only tests.
+
+**Around the tests** (any tier with tests, live runs only, `--skip-reset`
+included): the eight tray HSCs' `STATUS_WORD` and `STATUS_INPUT` are read before
+and after, and the chips are recounted from a fresh `tt-smi` snapshot. The reads
+are `ipmitool raw 0x06 0x52` reads of those two registers only; nothing is
+written and the latches are not cleared. A weak bus bar often does not fail the
+test that sags it: the chip survives and the input under-voltage flag stays
+latched, or a chip drops off PCIe after the load. See `hsc_input_status` and
+`pcie_enum_count_after_tests` in the checks below.
 
 The reset cadence and test set per tier are in `tiers.py`; the gtest filters and
 pytest invocations themselves are `TESTS` / `PYTESTS` in `diag/device_tests.py`.
@@ -553,7 +564,7 @@ wiring.
 **Budget.** The cage sweep is the dominant cost and the tool self-bounds it at
 its own 600 s `--qsfp-budget`; a full run measures ~7 min. The phase's own
 timeout is 1200 s as a backstop. That has to stay well inside
-`run_health_check.py`'s whole-run `--timeout-minutes` (30 by default), which
+`run_health_check.py`'s whole-run `--timeout-minutes` (60 by default), which
 kills the process group and takes the report with it — so raise it when running
 any tier on a host that has the package.
 
@@ -670,6 +681,12 @@ The detected rev is also recorded at the top of the JSON report as `detected_boa
 | `pcie_enum_count` | All 32 chips enumerated | **FAIL** |
 | `pcie_lane_width` | x8 on host-PCIe chips (`ASIC_LOCATION==0x6`); x1 elsewhere | **FAIL** |
 | `pcie_gen` | Host-PCIe (U6) chips trained to at least the rev's expected gen (Gen4 on RevA/B, Gen5 on RevC). Above-spec is rendered with `(^)` but doesn't degrade status; under-spec is rendered with `(!)` and WARNs. | **WARN** (known: occasional Gen1 fallback). **SKIP** when `board_rev` is indeterminate. |
+
+### Around the tests
+| Check | Rule | On fail |
+|---|---|---|
+| `hsc_input_status` | The 8 tray HSCs' `VIN_UV_WARN`, `VIN_UV_FAULT` and OFF flags, read before and after the tests (via `ipmitool raw`, as root or `sudo -n`). | **FAIL** on a flag newly set during the tests. **WARN** on a flag already set before them (cannot be told apart) or an HSC that did not answer. **SKIP** when none answered. |
+| `pcie_enum_count_after_tests` | All 32 chips enumerated in a fresh snapshot taken after the tests. | **FAIL** |
 
 ### GDDR
 | Check | Rule | On fail |

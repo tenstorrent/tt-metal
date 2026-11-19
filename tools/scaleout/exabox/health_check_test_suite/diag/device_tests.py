@@ -62,10 +62,12 @@ GTEST_ENV_KEYS = tuple(dict.fromkeys(k for spec in TESTS.values() for k in spec.
 # didt_matmul_galaxy: dI/dt worst-case matmul across the full galaxy mesh (8x4),
 # 1000 workload iterations with a determinism check every 50 (20 checks) —
 # catches droop-induced non-determinism the short deployment gtests don't.
-# Measured 545 s in-suite on a BH galaxy (bh-glx6u-28, 2026-09-01):
+# Both bf16_HiFi2 and bf8b_LoFi run: the LoFi variant draws the most power per
+# core, and a weak power stage can pass the HiFi2 one. Measured 545 s for the
+# bf16_HiFi2 variant alone in-suite on a BH galaxy (bh-glx6u-28, 2026-09-01):
 # iterations ~69 ms each, each determinism check ~13 s (reads the full
 # 16k x 16k output back from all 32 chips), plus ~3.5 min cold 32-chip
-# bring-up/compile. Check density is the dominant cost: the same test at 5000 iterations
+# bring-up/compile; the two variants take about 2x that. Check density is the dominant cost: the same test at 5000 iterations
 # across all four dtype variants (-k galaxy) measures ~2 h. Note a longer
 # soak catches more: a marginal chip on the bench unit failed 2/10 checks at
 # 5000 iterations but passed shorter runs — bump iterations for deep triage.
@@ -74,14 +76,14 @@ PYTESTS = {
         "target": "tests/didt/test_minimal_matmul.py::test_minimal_matmul",
         "args": [
             "-k",
-            "galaxy and bf16_HiFi2",
+            "galaxy and (bf16_HiFi2 or bf8b_LoFi)",
             "--didt-workload-iterations",
             "1000",
             "--determinism-check-interval",
             "50",
             "-s",
-            # pytest.ini sets a repo-wide 300s pytest-timeout; this run always
-            # exceeds it (~545s measured). 1200s keeps >2x headroom while still
+            # pytest.ini sets a repo-wide 300s pytest-timeout; each variant always
+            # exceeds it (~545s measured), and the timeout is per test. 1200s keeps >2x headroom while still
             # bounding a standalone deploy run if a device test wedges (the
             # test-infrastructure wrapper adds its own wall-clock timeout, but
             # run_diag.sh / container entrypoints invoke this script directly).
@@ -89,19 +91,15 @@ PYTESTS = {
             "1200",
         ],
     },
-    # didt_duty_cycle_galaxy: steps board power up and down on all 32 chips; ~85 s
-    # measured, inside pytest.ini's 300 s timeout.
-    "didt_duty_cycle_galaxy": {
-        "target": "tests/didt/test_duty_cycle.py::test_duty_cycle",
-        "args": [
-            "-k",
-            "galaxy and rep-100x and duty-1",
-            "--didt-workload-iterations",
-            "200",
-            "--determinism-check-interval",
-            "20",
-            "-s",
-        ],
+    # fabric_all_gather_matmul_galaxy: all-gather fused with a matmul over the 2D
+    # torus fabric on the full (8, 4) mesh, back to back on one gathered buffer,
+    # every call checked on every device. The traffic is the fabric under compute
+    # load, which the gtest link tests (slow dispatch, idle compute) do not give.
+    # One TP-ring (4) and one SP-ring (8) case.
+    "fabric_all_gather_matmul_galaxy": {
+        "target": "tests/ttnn/unit_tests/operations/ccl/blackhole_CI/galaxy/galaxy_nightly/"
+        "test_all_gather_minimal_matmul_fabric2d_bh.py::test_all_gather_minimal_matmul_fabric2d",
+        "args": ["-k", "kda_input_projection or sp_ring_8", "-s", "--timeout", "1200"],
     },
 }
 
