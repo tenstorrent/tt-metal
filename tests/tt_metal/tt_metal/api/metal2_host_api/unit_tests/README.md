@@ -13,9 +13,9 @@ Put a test elsewhere when:
 | Directory | Test Category |
 |---|---|
 | `arg_value/` | The `ArgValue` type, and the argument-value idioms it must keep compiling |
-| `invariant_tests/` | Which specs `MakeProgramFromSpec` accepts or rejects |
+| `invariant_tests/` | Which specs the `Program` constructor accepts or rejects |
 | `kernel_hash/` | Which spec fields feed a kernel's JIT cache key |
-| `program/` | What `MakeProgramFromSpec` produces from a valid spec |
+| `program/` | What the `Program` constructor produces from a valid spec |
 | `program_run_args/` | How a program behaves when runtime arguments are supplied or patched |
 | `tensor_spec_relaxations/` | The `TensorSpecRelaxations` match and hash relation |
 | `utility/` | Utilities used by Metal 2.0 |
