@@ -91,6 +91,17 @@ FORCE_INLINE void two_level_unit(
 // Stage 3's gather: the selected blocks table[0 .. 64 * num_chunks) of `row` into num_chunks 2048-key candidate
 // chunks. A row is one page in one bank, so its NoC address is resolved once and each block read is an offset from
 // it. Sentinel slots and keys past the search length are -inf.
+//
+// The gather is bound by the number of DRAM reads more than their size, so reads are coalesced: a run of consecutive
+// blocks is one read into its slots, and other selected blocks sharing an aligned 1-2 KB span are one read of their
+// range into a staging area, then copied to their slots by local L1 reads.
+// The staging area is the stage-1 CB, idle while a row gathers: reserving all of it waits until the compute has
+// consumed every page there, and nothing is pushed.
+// One read of the gather, out of line: each inlined NoC read is a few hundred bytes of a tight kernel config buffer.
+__attribute__((noinline)) void gather_read(uint64_t src, uint32_t dst, uint32_t bytes, uint8_t noc_id) {
+    noc_async_read(src, dst, bytes, noc_id);
+}
+
 // Out of line: two call sites, and the kernel config buffer is tight.
 template <typename InputAccessor>
 __attribute__((noinline)) void two_level_gather(
@@ -105,40 +116,95 @@ __attribute__((noinline)) void two_level_gather(
     constexpr uint32_t chunk_bytes = get_compile_time_arg_val(1);
     constexpr uint32_t tiles_per_chunk = get_compile_time_arg_val(3);
     constexpr uint32_t blocks_per_chunk = chunk_bytes / block_bytes;
+    constexpr uint32_t stage1_batch = get_named_compile_time_arg_val("tl_stage1_batch");
+    constexpr uint32_t span_blocks = 32;  // the largest span, 2 KB
     CircularBuffer input_cb(cb_in);
+    CircularBuffer stage1_cb(get_named_compile_time_arg_val("tl_cb_stage1"));
+    // A staged range holds at least two of the chunk's 64 slots, so a chunk stages at most 32 spans: 64 KB, within the
+    // CB's contiguous half from its write pointer.
+    static_assert(blocks_per_chunk / 2 * span_blocks * block_bytes <= (1 + stage1_batch) * get_compile_time_arg_val(2));
+    stage1_cb.reserve_back(2 * (1 + stage1_batch));
+    const uint32_t staging = stage1_cb.get_write_ptr();
     const uint32_t num_blocks = div_up(search_len, block_keys);
     const uint32_t last_block = num_blocks - 1;
     const uint32_t last_block_live = search_len - last_block * block_keys;
-    const uint64_t row_noc_addr = input.get_noc_addr(row, 0, noc.get_noc_id());
+    // 2 KB spans while at most one block in 8 is selected (about 512K keys), 1 KB on sparser rows: past that a 2 KB
+    // span rarely holds two selected blocks, and the wider range reads cost more than the reads they save.
+    const uint32_t span_shift = num_blocks > 8 * selected_blocks ? 4 : 5;
+    const uint8_t noc_id = noc.get_noc_id();
+    const uint64_t row_noc_addr = input.get_noc_addr(row, 0, noc_id);
+    // This core's own L1, for the staged copies.
+    const uint64_t local_noc_base = get_noc_addr(0, noc_id);
+    // A slot's staged source address, with bit 31 set; 0 for a slot read in place. Zeroed by a loop, not an
+    // initialiser, which would pull in memset.
+    uint32_t copy_from[blocks_per_chunk];
+    for (uint32_t slot = 0; slot < blocks_per_chunk; ++slot) {
+        copy_from[slot] = 0;
+    }
     for (uint32_t chunk = 0; chunk < num_chunks; ++chunk) {
         input_cb.reserve_back(tiles_per_chunk);
         const uint32_t chunk_base = input_cb.get_write_ptr();
         ASSERT((chunk_base & (block_bytes - 1)) == 0);
+        const auto* chunk_table = table + chunk * blocks_per_chunk;
         uint32_t partial_slot = blocks_per_chunk;
+        uint32_t staged = staging;
+        uint32_t copies = 0;
         uint32_t slot = 0;
         while (slot < blocks_per_chunk) {
-            const uint32_t block = table[chunk * blocks_per_chunk + slot];
+            const uint32_t block = chunk_table[slot];
             if (block == sentinel) {
                 fill_neginf(chunk_base + slot * block_bytes, block_keys);
                 ++slot;
                 continue;
             }
-            // One read for a run of consecutive blocks within this chunk.
             uint32_t run = 1;
-            while (slot + run < blocks_per_chunk && table[chunk * blocks_per_chunk + slot + run] == block + run) {
+            while (slot + run < blocks_per_chunk && chunk_table[slot + run] == block + run) {
                 ++run;
             }
-            if (block <= last_block && last_block < block + run) {
-                partial_slot = slot + (last_block - block);
+            // A lone block: the other selected blocks of its span, if any, join it in one staged read.
+            uint32_t group = 1;
+            if (run == 1) {
+                while (slot + group < blocks_per_chunk && chunk_table[slot + group] != sentinel &&
+                       chunk_table[slot + group] >> span_shift == block >> span_shift) {
+                    ++group;
+                }
             }
-            noc_async_read(
-                row_noc_addr + block * block_bytes,
-                chunk_base + slot * block_bytes,
-                run * block_bytes,
-                noc.get_noc_id());
-            slot += run;
+            if (group == 1) {
+                if (block <= last_block && last_block < block + run) {
+                    partial_slot = slot + (last_block - block);
+                }
+                gather_read(
+                    row_noc_addr + block * block_bytes, chunk_base + slot * block_bytes, run * block_bytes, noc_id);
+                slot += run;
+                continue;
+            }
+            const uint32_t span_bytes = (chunk_table[slot + group - 1] - block + 1) * block_bytes;
+            gather_read(row_noc_addr + block * block_bytes, staged, span_bytes, noc_id);
+            for (uint32_t i = 0; i < group; ++i) {
+                const uint32_t member = chunk_table[slot + i];
+                if (member == last_block) {
+                    partial_slot = slot + i;
+                }
+                copy_from[slot + i] = (staged + (member - block) * block_bytes) | (1u << 31);
+            }
+            copies = 1;
+            staged += span_bytes;
+            slot += group;
         }
         noc.async_read_barrier();
+        if (copies) {
+            for (slot = 0; slot < blocks_per_chunk; ++slot) {
+                if (copy_from[slot] >> 31) {
+                    gather_read(
+                        local_noc_base | (copy_from[slot] & 0x7FFFFFFFu),
+                        chunk_base + slot * block_bytes,
+                        block_bytes,
+                        noc_id);
+                    copy_from[slot] = 0;
+                }
+            }
+            noc.async_read_barrier();
+        }
         if (partial_slot < blocks_per_chunk && last_block_live < block_keys) {
             // The last block is read whole; its keys past the search length are stale.
             fill_neginf(
