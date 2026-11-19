@@ -9,8 +9,8 @@ import json
 import os
 
 import numpy as np
-import pytest
 import torch
+from safetensors import safe_open
 
 from ttml.distributed_checkpointing._safetensors import (
     ALIGNMENT,
@@ -75,9 +75,6 @@ def test_short_and_truncated_files_are_refused(tmp_path, expect_error):
 
 def test_file_opens_with_safetensors(tmp_path):
     """A file written at fixed offsets, out of order, opens with the safetensors package."""
-    pytest.importorskip("safetensors")
-    from safetensors import safe_open
-
     a = torch.randn(1, 1, 32, 64).to(torch.bfloat16)
     b = torch.randn(1, 1, 8, 8)
     header, offsets, data_bytes = build_header(
