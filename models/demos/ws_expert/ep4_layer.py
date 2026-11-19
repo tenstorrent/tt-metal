@@ -461,9 +461,10 @@ def comb_ports(mesh, res):
 
 
 def expert_side_masks(mesh, T, G):
-    """EP4Cfg.oside: per chip (row-major index) 5 words, bit le set when local expert le's lane sits on rectangle 2 / 3
-    (the east DRAM column's rows), from the last lane build's placement (ws_lane5.PLACED; identity without it)."""
-    from models.demos.ws_expert.ws_lane5 import PLACED
+    """EP4Cfg.oside: per chip (row-major index) 5 words, bit le set when local expert le's lane sits on an east-half
+    rectangle (the east DRAM column's rows), from the last lane build's placement and rectangles (ws_lane5.PLACED,
+    RECT_EAST; identity placement without it)."""
+    from models.demos.ws_expert.ws_lane5 import PLACED, RECT_EAST
 
     R, Cn = tuple(mesh.shape)
     out = []
@@ -471,7 +472,7 @@ def expert_side_masks(mesh, T, G):
         pm = PLACED.get((X // Cn, X % Cn), (tuple(range(G)), None))[0]
         w = [0] * 5
         for g in range(G):
-            if pm[g] >= 2:
+            if RECT_EAST[pm[g]]:
                 for le in T["meta"][(X, g)]["order"]:
                     w[le >> 5] |= 1 << (le & 31)
         out.append(w)

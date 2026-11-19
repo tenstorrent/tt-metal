@@ -83,6 +83,8 @@ class L5Cfg:
     # (west) at page (d >> 2) 8 + (d & 3) (banks 0-3), on rectangle 2 / 3 (east) at (d >> 2) 8 + 4 + (d & 3) (banks
     # 4-7); every core's row writes go west on NOC1 a short way; the buffer holds twice the rows
     oside: int = 0
+    # oside: the rectangles on side bit 0 (west) / 1 (east) write no result rows (diagnostics: the rows' NoC traffic)
+    odrop: int = 0
     # yc: the east half's collectors (DRAM column x 9 east of them) write on NOC0 from the BRISC instead of NOC1 the
     # long way round; outside the NoC rule (the fence's acks return through the rectangles on NOC0), diagnostics
     yc_n0: int = 0
@@ -144,6 +146,11 @@ def oeast_row(d):
 
 
 PLACED = {}  # (the last build's placement: chip -> (lane -> rectangle, lane's ethernet core NoC x a direction))
+RECT_EAST = [False, False, True, True]  # (the last build's rectangles: origin in the east half, logical column 7 on)
+
+
+def rect_east(l5, q):
+    return l5.origins[q][0] >= 7
 
 
 def place_lanes(mx, ex):
@@ -358,6 +365,7 @@ def build_lane5(
     # the same lane on the next / previous chip, wherever that chip put the lane
     chips = [(r, c) for r in range(R) for c in range(Cn)]
     perm = {rc: tuple(range(G)) for rc in chips}
+    RECT_EAST[:] = [rect_east(l5, q) for q in range(len(l5.origins))]
     if l5.place and l5.hmc:  # (l5h_reader.cpp takes the remote cores' coordinates; l5_reader.cpp its own)
         mx = [[noc(mesh, l5.mux_cols[q], l5.mux_rows[q][d])[0] for d in range(nmux)] for q in range(G)]
         for rc in chips:
@@ -430,7 +438,7 @@ def build_lane5(
                             hmc_rt[(x, y)] += (
                                 [(lambda q: q[0] | q[1] << 8)(noc(mesh, *xy)) for xy in cll[g]] if l5.yc else []
                             )
-                            hmc_rt[(x, y)] += [int(pm[g] >= 2)] if l5.oside else []
+                            hmc_rt[(x, y)] += [int(rect_east(l5, pm[g]))] if l5.oside else []
                     if l5.hmc == 2:
                         for j, (x, y) in sub:
                             (hx0, hy0), (hx1, hy1) = noc(mesh, *gr[0]), noc(mesh, *gr[-1])
@@ -501,6 +509,7 @@ def build_lane5(
                             + ([("WL5_OAFF", str(l5.oaff))] if l5.oaff else [])
                             + ([("WL5_Y_RM", "1")] if l5.yrm else [])
                             + ([("WL5_OSIDE", "1")] if l5.oside else [])
+                            + ([("WL5_ODROP", str(l5.odrop))] if l5.oside and l5.odrop else [])
                             + ([("WL5_YSTATE", "1")] if l5.yrm and l5.ystate else [])
                             + ([("WL5_YT", str(ysh.buffer_address()))] if l5.yrm and l5.yt else [])
                             + ([("WL5_Y_FENCE", str(fence_row))] if l5.yrm and fence_row is not None else [])

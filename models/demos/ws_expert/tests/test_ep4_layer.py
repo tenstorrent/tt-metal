@@ -446,11 +446,13 @@ def lane_times(cfg, T, counts, st, chips, clk):
 
 
 def l5_env():
-    """EP4_L5 "key=int;...": L5Cfg overrides of the experts' lane (experiments)."""
+    """EP4_L5 "key=value;...": L5Cfg overrides of the experts' lane (experiments; values Python literals)."""
+    import ast
+
     out = {}
     for item in filter(None, os.environ.get("EP4_L5", "").split(";")):
-        k, v = item.split("=")
-        out[k] = int(v)
+        k, v = item.split("=", 1)
+        out[k] = ast.literal_eval(v)
     return out
 
 
