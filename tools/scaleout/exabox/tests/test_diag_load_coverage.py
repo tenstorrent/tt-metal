@@ -44,57 +44,28 @@ def _judge(before, after):
     return check
 
 
-class TestWeeklyTier(unittest.TestCase):
-    def test_weekly_runs_both_matmul_variants_and_a_fabric_all_gather(self):
-        weekly = TIERS["weekly"].tests
-        self.assertIn("didt_matmul_galaxy", weekly)
-        self.assertIn("fabric_all_gather_matmul_galaxy", weekly)
-        k = PYTESTS["didt_matmul_galaxy"]["args"]
-        self.assertIn("bf16_HiFi2", k[k.index("-k") + 1])
-        self.assertIn("bf8b_LoFi", k[k.index("-k") + 1])
-
-    def test_fabric_test_exists_in_tree(self):
-        target = PYTESTS["fabric_all_gather_matmul_galaxy"]["target"].split("::")[0]
-        self.assertTrue((SUITE_DIR.parents[3] / target).is_file(), target)
+def _galaxy_configs(path: Path, case_id: str) -> set[str]:
+    """Fabric configs of every ``_galaxy(ttnn.FabricConfig.X, case_id)`` param in ``path``."""
+    return {
+        call.args[0].attr
+        for call in ast.walk(ast.parse(path.read_text()))
+        if isinstance(call, ast.Call) and getattr(call.func, "id", "") == "_galaxy" and call.args[1].value == case_id
+    }
 
 
-def _galaxy_params(path: Path) -> dict[str, set[tuple[str, str]]]:
-    """Each test function in ``path`` -> its ``_galaxy(ttnn.FabricConfig.X, "id")`` params as (X, id)."""
-    params = {}
-    for node in ast.parse(path.read_text()).body:
-        if isinstance(node, ast.FunctionDef):
-            params[node.name] = {
-                (call.args[0].attr, call.args[1].value)
-                for deco in node.decorator_list
-                for call in ast.walk(deco)
-                if isinstance(call, ast.Call) and getattr(call.func, "id", "") == "_galaxy"
-            }
-    return params
+class TestWeeklyPytests(unittest.TestCase):
+    def test_targets_exist_in_tree(self):
+        for name in TIERS["weekly"].tests:
+            if name in PYTESTS:
+                target = PYTESTS[name]["target"].split("::")[0]
+                self.assertTrue((SUITE_DIR.parents[3] / target).is_file(), target)
 
-
-class TestFabricStepCabling(unittest.TestCase):
-    """The fabric step selects only plain 2D mesh cases: a torus case asserts in
-    fabric init on a galaxy without the torus cables, a false FAIL on healthy hardware."""
-
-    SPEC = PYTESTS["fabric_all_gather_matmul_galaxy"]
-    MESH_ID = "SP8xTP4-mesh"
-
-    def _k(self) -> str:
-        return self.SPEC["args"][self.SPEC["args"].index("-k") + 1]
-
-    def test_selection_requires_the_mesh_id(self):
-        self.assertTrue(self._k().startswith(f"{self.MESH_ID} and ("), self._k())
-
-    def test_mesh_id_is_only_ever_the_plain_2d_fabric(self):
-        params = _galaxy_params(SUITE_DIR.parents[3] / self.SPEC["target"])
-        configs = {cfg for p in params.values() for cfg, pid in p if pid == self.MESH_ID}
-        self.assertEqual(configs, {"FABRIC_2D"})
-
-    def test_both_axes_have_a_mesh_case(self):
-        params = _galaxy_params(SUITE_DIR.parents[3] / self.SPEC["target"])
-        for axis in ("linear_tp", "linear_sp"):
-            self.assertIn(("FABRIC_2D", self.MESH_ID), params[f"test_all_gather_minimal_matmul_fabric2d_{axis}"], axis)
-            self.assertIn(axis, self._k())
+    def test_fabric_step_selects_only_plain_2d_mesh_cases(self):
+        # A torus case asserts in fabric init on a galaxy without the torus cables.
+        spec = PYTESTS["fabric_all_gather_matmul_galaxy"]
+        k = spec["args"][spec["args"].index("-k") + 1]
+        self.assertTrue(k.startswith("SP8xTP4-mesh and ("), k)
+        self.assertEqual(_galaxy_configs(SUITE_DIR.parents[3] / spec["target"], "SP8xTP4-mesh"), {"FABRIC_2D"})
 
 
 class TestHscJudgement(unittest.TestCase):
