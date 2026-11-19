@@ -215,6 +215,20 @@ case "${MODEL}" in
     # sc1 opens sc4's slots.
     SC1_NUM_USERS=${PREFILL_NUM_USERS:-$(manifest_env PREFILL_NUM_USERS)}
     ;;
+  kimi_k3_1)
+    # Kimi-K3 with its 24 MLA layers changed to DSA: kimi_k3's depths and gate, on one 8x4 stage per galaxy
+    # (kimi_k3's *_8x4 layout: SP=8 on axis 0, 5120-token chunks) with kimi_k3_1.json's slots.
+    # The adapter's defaults already name the K3.1 weights, cache and golden, so no path is exported.
+    export PIPELINE_DIR="${PREFILL_SUMMARIES/prefill_summaries/kimi_k3_1_prefill_runner_kv}"
+    MANIFEST="${MANIFEST_DIR}/kimi_k3_1.json"
+    SC1_NUM_LAYERS=24
+    SC1_NUM_USERS=$(manifest_env PREFILL_NUM_USERS)
+    RUNNER_ENV="export TT_METAL_SHM_TRACKING_DISABLED=1; export LOGURU_LEVEL=ERROR;"
+    # The golden is the 8192-token prompt of a vLLM capture, and its span bounds the compare, so no
+    # length cap is needed: as for kimi_k3, the span is PCC'd and the tail is timed. Two chunks, so the
+    # gate reads one chunk's KV from the next.
+    REQUEST_LEN=$((2 * CHUNK_SIZE))
+    ;;
   mistral4)
     export PIPELINE_DIR="${PREFILL_SUMMARIES/prefill_summaries/mistral4_pp4_kv}"
     MANIFEST="${MANIFEST_DIR}/mistral4.json"

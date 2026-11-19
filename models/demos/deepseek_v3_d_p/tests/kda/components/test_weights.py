@@ -11,6 +11,7 @@ import ttnn
 from models.common.utility_functions import run_for_blackhole
 from models.demos.deepseek_v3_d_p.reference.kda import kda_forward_reference
 from models.demos.deepseek_v3_d_p.reference.kda.config import KDAConfig
+from models.demos.deepseek_v3_d_p.reference.kimi_k3_config import KimiK3Config
 from models.demos.deepseek_v3_d_p.tests.fabric_profiles import fabric2d_device_params
 from models.demos.deepseek_v3_d_p.tests.kda.kda_test_utils import (
     assert_accurate,
@@ -35,19 +36,20 @@ def _tp_rank(physical_index: int, mesh_columns: int, tensor_parallel_axis: int) 
     return (row, column)[tensor_parallel_axis]
 
 
-_FABRIC_1D = {"fabric_config": ttnn.FabricConfig.FABRIC_1D}
+def _fabric_2d() -> dict:
+    return fabric2d_device_params(fabric_payload_size=KimiK3Config.FABRIC_PAYLOAD_SIZE)
 
 
 @pytest.mark.parametrize(
     "mesh_device,tensor_parallel_axis,device_params",
     [
-        pytest.param((1, 8), 1, _FABRIC_1D, id="tp8-1d"),
-        pytest.param((2, 4), 0, _FABRIC_1D, id="tp2-axis0"),
-        pytest.param((2, 4), 1, _FABRIC_1D, id="tp4-axis1"),
+        pytest.param((1, 8), 1, _fabric_2d(), id="tp8-fabric2d"),
+        pytest.param((2, 4), 0, _fabric_2d(), id="tp2-axis0"),
+        pytest.param((2, 4), 1, _fabric_2d(), id="tp4-axis1"),
         pytest.param(
             (8, 4),
             1,
-            fabric2d_device_params(),
+            _fabric_2d(),
             marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
             id="tp4-8x4-fabric2d",
         ),
@@ -158,7 +160,7 @@ def test_device_weight_placement(
 
 
 @pytest.mark.parametrize("mesh_device", [(1, 8)], indirect=True)
-@pytest.mark.parametrize("device_params", [_FABRIC_1D], indirect=True)
+@pytest.mark.parametrize("device_params", [_fabric_2d()], indirect=True)
 def test_tp_layer_with_nonsquare_state_matches_reference(mesh_device: ttnn.MeshDevice) -> None:
     config = KDAConfig(
         hidden_size=256,

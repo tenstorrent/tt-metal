@@ -21,6 +21,7 @@ set(FABRIC_SOURCES
     control_plane.cpp
     mesh_graph_descriptor.cpp
     routing_table_generator.cpp
+    fabric_flat_address_routing_table_generator.cpp
     axis_route_topology.cpp
     mcast_reverse_tree.cpp
     mesh_graph.cpp
@@ -39,10 +40,10 @@ set(FABRIC_SOURCES
     builder/fabric_static_sized_channels_allocator.cpp
     builder/fabric_slot_allocator.cpp
     builder/fabric_trid_allocator.cpp
-    builder/fabric_remote_channels_allocator.cpp
     builder/static_sized_channel_connection_writer_adapter.cpp
     builder/connection_registry.cpp
     builder/router_wiring_rules.cpp
+    builder/router_channel_layouts.cpp
     channel_trimming_export.cpp
     channel_trimming_import.cpp
     channel_trimming_io.cpp

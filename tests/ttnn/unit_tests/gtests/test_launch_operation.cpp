@@ -71,9 +71,8 @@ struct NewInfraProgramFactory {
     using tensor_args_t = Tensor;
     using tensor_return_value_t = Tensor;
 
-    static cached_program_t create(
-        const tensor_args_t& /*tensor_args*/, tensor_return_value_t& /*tensor_return_value*/) {
-        return cached_program_t(tt::tt_metal::Program(), SharedVariables{});
+    static cached_program_t create(const tensor_args_t& tensor_args, tensor_return_value_t& /*tensor_return_value*/) {
+        return cached_program_t(tt::tt_metal::CreateProgram(*tensor_args.device()), SharedVariables{});
     }
 
     static void override_runtime_arguments(

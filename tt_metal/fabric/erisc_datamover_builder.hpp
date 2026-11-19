@@ -41,7 +41,6 @@ struct FabricRiscConfig;
 class FabricContext;
 class FabricRouterBuilder;
 class ComputeMeshRouterBuilder;
-class FabricRemoteChannelsAllocator;
 
 class FabricEriscDatamoverBuilder;
 class FabricTensixDatamoverBuilder;
@@ -208,6 +207,9 @@ struct FabricEriscDatamoverConfig {
     size_t receiver_channel_remote_ack_counters_base_addr = 0;
     size_t receiver_channel_remote_completion_counters_base_addr = 0;
     size_t router_buffer_clear_size_words = 1;
+    // Every sender channel's connection info and semaphores, [start, end): zeroed at fabric init.
+    size_t sender_channels_bookkeeping_start = 0;
+    size_t sender_channels_bookkeeping_end = 0;
 
     // ----------- Local Tensix Relay Connection (UDM mode only)
     // Connection buffer index for the local tensix relay interface
@@ -272,10 +274,8 @@ struct FabricEriscDatamoverConfig {
 
     // Fabric channel allocator for L1 memory management
     // Points to the primary allocator (typically static allocator for single-pool configs)
+    // The fabric-wide allocation here; each router's builder replaces it with one laid out for its own channels.
     std::shared_ptr<FabricChannelAllocator> channel_allocator;
-
-    // Remote channels allocator - tracks remote receiver channel info for the remote ethernet core
-    std::shared_ptr<FabricRemoteChannelsAllocator> remote_channels_allocator;
 
 private:
     FabricEriscDatamoverConfig(const FabricContext& fabric_context, Topology topology);
@@ -466,6 +466,9 @@ public:
     // One past the last byte the router places below config.max_l1_loading_size.
     size_t get_allocated_l1_end_address() const { return config.allocated_l1_end_address; }
 
+    // This router's channel buffers, as its link peer and the routers feeding it address them.
+    RouterChannelLayout get_channel_layout() const;
+
     // Returns the resolved kernel build optimization level for this router.
     // This opt-level is per-builder/router, and should not be shared across builders.
     [[nodiscard]] tt::tt_metal::KernelBuildOptLevel get_kernel_opt_level() const;
@@ -511,9 +514,7 @@ public:
         downstream_allocators = {};
 
     std::array<size_t, builder_config::num_max_receiver_channels> receiver_channels_num_buffers = {};
-    std::array<size_t, builder_config::num_max_receiver_channels> remote_receiver_channels_num_buffers = {};
     std::array<size_t, builder_config::num_max_receiver_channels> local_receiver_channels_buffer_address = {};
-    std::array<size_t, builder_config::num_max_receiver_channels> remote_receiver_channels_base_address = {};
 
     std::array<size_t, builder_config::num_max_sender_channels> local_sender_channels_connection_info_addr = {};
 

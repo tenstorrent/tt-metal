@@ -7,10 +7,13 @@
 #include "fabric_channel_allocator.hpp"
 
 #include "tt_metal/fabric/builder/fabric_builder_config.hpp"
+#include "tt_metal/fabric/builder/router_channel_layouts.hpp"
 #include <tt-metalium/experimental/fabric/fabric_edm_types.hpp>
 
-#include <vector>
+#include <array>
+#include <cstdint>
 #include <ostream>
+#include <vector>
 
 namespace tt::tt_fabric {
 
@@ -36,18 +39,24 @@ public:
         size_t available_channel_buffering_space,
         const std::vector<MemoryRegion>& memory_regions);
 
+    // One router's allocation: the sender channels it has, laid out from the start of the buffer region, with the
+    // reference's slot counts and receivers. Slot counts stay the fabric's: an upstream router keeps one downstream
+    // buffer count per VC (router_downstream.hpp), so the forwarding channels it feeds must agree across routers.
+    FabricStaticSizedChannelsAllocator(
+        const FabricStaticSizedChannelsAllocator& reference,
+        const std::array<size_t, builder_config::MAX_NUM_VCS>& num_sender_channels_per_vc);
+
+    RouterChannelLayout get_layout() const;
+
     void emit_ct_args(std::vector<uint32_t>& ct_args) const override;
 
     /**
      * Emit the complete ChannelAllocations CT arg block including tag, num_entries,
-     * per-channel data, and channel-to-entry index mappings.
+     * per-channel data, and channel-to-entry index mappings. num_sender_channels is the kernel's sender channel
+     * count; positions past this allocator's channels map to an empty entry.
      */
     void emit_channel_allocations_ct_args(
-        std::vector<uint32_t>& ct_args,
-        size_t num_used_vc0_sender_channels,
-        size_t num_used_vc1_sender_channels,
-        size_t num_used_vc2_sender_channels,
-        size_t num_used_receiver_channels) const;
+        std::vector<uint32_t>& ct_args, size_t num_sender_channels, size_t num_used_receiver_channels) const;
 
     /**
      * Get the number of slots for a specific sender channel in a VC.
@@ -72,19 +81,6 @@ public:
      * @return Number of slots
      */
     size_t get_receiver_channel_number_of_slots(size_t vc_id, size_t channel_id) const;
-
-    /**
-     * Get the number of slots for a receiver channel on the far end of the link.
-     *
-     * This, not the local count, is what a sender's flow control gates on: bubble flow control
-     * requires the immediate downstream receiver to hold at least two slots. The two counts are
-     * tracked separately, so the distinction matters.
-     *
-     * @param vc_id Virtual Channel ID (0 or 1)
-     * @param channel_id Channel ID within the VC
-     * @return Number of slots on the remote receiver
-     */
-    size_t get_remote_receiver_channel_number_of_slots(size_t vc_id, size_t channel_id) const;
 
     /**
      * Get the base address for a specific receiver channel in a VC.
@@ -141,7 +137,7 @@ public:
     void print(std::ostream& os) const override;
 
 private:
-    friend class FabricRemoteChannelsAllocator;
+    void assign_base_addresses();
     /*
      * Helper function that decides the number of buffer slots for each channel per VC.
      */
@@ -152,26 +148,16 @@ private:
             std::array<size_t, tt::tt_fabric::builder_config::num_max_sender_channels>,
             builder_config::MAX_NUM_VCS>& num_sender_buffer_slots_per_vc,
         std::array<
-            std::array<size_t, tt::tt_fabric::builder_config::num_max_sender_channels>,
-            builder_config::MAX_NUM_VCS>& num_remote_sender_buffer_slots_per_vc,
-        std::array<
             std::array<size_t, tt::tt_fabric::builder_config::num_max_receiver_channels>,
-            builder_config::MAX_NUM_VCS>& num_receiver_buffer_slots_per_vc,
-        std::array<
-            std::array<size_t, tt::tt_fabric::builder_config::num_max_receiver_channels>,
-            builder_config::MAX_NUM_VCS>& num_remote_receiver_buffer_slots_per_vc);
+            builder_config::MAX_NUM_VCS>& num_receiver_buffer_slots_per_vc);
 
     // Blackhole: the staged slot allocator's counts (fabric_slot_allocator.hpp), for the channels this router builds.
     void configure_staged_buffer_slots(
         Topology topology,
         std::array<std::array<size_t, builder_config::num_max_sender_channels>, builder_config::MAX_NUM_VCS>&
             num_sender_buffer_slots_per_vc,
-        std::array<std::array<size_t, builder_config::num_max_sender_channels>, builder_config::MAX_NUM_VCS>&
-            num_remote_sender_buffer_slots_per_vc,
         std::array<std::array<size_t, builder_config::num_max_receiver_channels>, builder_config::MAX_NUM_VCS>&
-            num_receiver_buffer_slots_per_vc,
-        std::array<std::array<size_t, builder_config::num_max_receiver_channels>, builder_config::MAX_NUM_VCS>&
-            num_remote_receiver_buffer_slots_per_vc);
+            num_receiver_buffer_slots_per_vc);
 
     // Configuration parameters
     std::array<size_t, builder_config::MAX_NUM_VCS> num_used_sender_channels_per_vc = {};
@@ -197,28 +183,19 @@ private:
     std::array<std::array<size_t, builder_config::num_max_receiver_channels>, builder_config::MAX_NUM_VCS>
         receiver_channels_num_buffers = {};
 
-    // Remote channels sizes, used to calculate the remote buffer addresses.
-    std::array<std::array<std::size_t, builder_config::num_max_sender_channels>, builder_config::MAX_NUM_VCS>
-        remote_sender_channels_size_bytes = {};
-    std::array<std::array<std::size_t, builder_config::num_max_receiver_channels>, builder_config::MAX_NUM_VCS>
-        remote_receiver_channels_size_bytes = {};
-    // Remote recv channels number of buffers, use by the local sender channel to check free slots.
-    std::array<std::array<std::size_t, builder_config::num_max_sender_channels>, builder_config::MAX_NUM_VCS>
-        remote_sender_channels_num_buffers = {};
-    std::array<std::array<size_t, builder_config::num_max_receiver_channels>, builder_config::MAX_NUM_VCS>
-        remote_receiver_channels_num_buffers = {};
-
     // Base addresses per VC
     std::array<std::array<size_t, builder_config::num_max_sender_channels>, builder_config::MAX_NUM_VCS>
         sender_channels_base_address = {};
     std::array<std::array<size_t, builder_config::num_max_receiver_channels>, builder_config::MAX_NUM_VCS>
         receiver_channels_base_address = {};
-    // the base addr per remote channel, used by local channels.
-    std::array<std::array<size_t, builder_config::num_max_sender_channels>, builder_config::MAX_NUM_VCS>
-        remote_sender_channels_base_address = {};
-    std::array<std::array<size_t, builder_config::num_max_receiver_channels>, builder_config::MAX_NUM_VCS>
-        remote_receiver_channels_base_address = {};
 };
+
+// The link peer's receivers as a ChannelAllocations CT arg block (no sender entries).
+void emit_peer_receiver_allocations_ct_args(
+    std::vector<uint32_t>& ct_args,
+    const RouterChannelLayout& peer_layout,
+    const FabricStaticSizedChannelsAllocator& local_allocator,
+    size_t num_receiver_channels);
 
 // Implementation of virtual print method
 inline void FabricStaticSizedChannelsAllocator::print(std::ostream& os) const {
@@ -259,12 +236,6 @@ inline void FabricStaticSizedChannelsAllocator::print(std::ostream& os) const {
                 os << "        base_address: 0x" << std::hex << sender_channels_base_address[vc][i] << std::dec << "\n";
                 os << "        num_buffers: " << sender_channels_num_buffers[vc][i] << "\n";
                 os << "        size_bytes: " << sender_channels_size_bytes[vc][i] << " B\n";
-                if (remote_sender_channels_num_buffers[vc][i] > 0) {
-                    os << "        remote_base_address: 0x" << std::hex << remote_sender_channels_base_address[vc][i]
-                       << std::dec << "\n";
-                    os << "        remote_num_buffers: " << remote_sender_channels_num_buffers[vc][i] << "\n";
-                    os << "        remote_size_bytes: " << remote_sender_channels_size_bytes[vc][i] << " B\n";
-                }
             }
         }
 
@@ -276,12 +247,6 @@ inline void FabricStaticSizedChannelsAllocator::print(std::ostream& os) const {
                 os << "        base_address: 0x" << std::hex << receiver_channels_base_address[vc][i] << std::dec << "\n";
                 os << "        num_buffers: " << receiver_channels_num_buffers[vc][i] << "\n";
                 os << "        size_bytes: " << receiver_channels_size_bytes[vc][i] << " B\n";
-                if (remote_receiver_channels_num_buffers[vc][i] > 0) {
-                    os << "        remote_base_address: 0x" << std::hex << remote_receiver_channels_base_address[vc][i]
-                       << std::dec << "\n";
-                    os << "        remote_num_buffers: " << remote_receiver_channels_num_buffers[vc][i] << "\n";
-                    os << "        remote_size_bytes: " << remote_receiver_channels_size_bytes[vc][i] << " B\n";
-                }
             }
         }
     }
