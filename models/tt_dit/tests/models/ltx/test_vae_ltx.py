@@ -710,6 +710,20 @@ def test_ltx_video_decoder(
     _run_ltx_decoder_parity(mesh_device, h_axis, w_axis, num_links, num_frames, height, width, mean=mean, std=std)
 
 
+@pytest.mark.parametrize("num_frames, height, width", _LTX_DECODER_SHAPE_PARAMS)
+@pytest.mark.parametrize(
+    ("mesh_device", "h_axis", "w_axis", "num_links", "device_params", "topology"),
+    LTX_VAE_DECODER_MULTI_ONLY_MESH_PARAMS[:1],
+    indirect=["mesh_device", "device_params"],
+)
+def test_ltx_video_decoder_fold_time_pad(
+    mesh_device, num_frames, height, width, h_axis, w_axis, num_links, topology, monkeypatch
+):
+    """LTX_VAE_FOLD_TIME_PAD=1 on a mesh sharding both H and W, where the fold applies."""
+    monkeypatch.setenv("LTX_VAE_FOLD_TIME_PAD", "1")
+    _run_ltx_decoder_parity(mesh_device, h_axis, w_axis, num_links, num_frames, height, width)
+
+
 _NUM_FRAMES = 145
 _HEIGHT = 1088
 _WIDTH = 1920

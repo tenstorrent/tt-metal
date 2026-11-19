@@ -163,10 +163,9 @@ class LTXCausalConv3d(Module):
         self.external_padding = tuple(external_padding)
         self.internal_padding = tuple(internal_padding)
 
-        # Opt-in (LTX_VAE_FOLD_TIME_PAD=1, default off): conv3d repeats the edge frames itself
-        # ("replicate" T pad), replacing the slice+concat copy of the whole activation. Replicate clamps
-        # every dim, so this is exact only with no internal H/W pad (both sharded: the halo exchange pads
-        # them). Symmetric T pad only, so causal calls keep the concat. See _folds_time_pad.
+        # Opt-in (LTX_VAE_FOLD_TIME_PAD=1): conv3d repeats the edge frames itself ("replicate" T pad),
+        # replacing the slice+concat copy of the whole activation. Replicate clamps every dim, so this is
+        # exact only with no internal H/W pad (both sharded: the halo exchange pads them).
         self.fold_time_pad = (
             os.environ.get("LTX_VAE_FOLD_TIME_PAD", "0") == "1"
             and self.time_pad > 0
@@ -758,10 +757,8 @@ def _compute_ltx_decoder_dims(
     if num_frames is None or height is None or width is None:
         return None
 
-    # Per-device shard is ceil(full/factor) at every stage. That is the runtime shape with
-    # LTX_VAE_EXACT_SHARD=1. Without it the latent's mesh padding doubles at each upsample
-    # (1080p on 4x8: 18x16 per chip from s1 on, not 17x15), so the runtime shard is larger than
-    # these keys.
+    # H/W that don't divide the mesh factor are zero-padded up to the next multiple at
+    # runtime (conv_pad_height/width), per stage, so the per-device shard is ceil(full/factor).
     spatial_compression = 32
     full_H = height // spatial_compression
     full_W = width // spatial_compression
@@ -791,11 +788,6 @@ def _compute_ltx_decoder_dims(
 
     dims.append(k3_dims())  # conv_out
     return dims
-
-
-def _exact_shard_enabled() -> bool:
-    # Opt-in (default off): LTX_VAE_EXACT_SHARD=1 drops the doubled mesh padding after each upsample.
-    return os.environ.get("LTX_VAE_EXACT_SHARD", "0") == "1"
 
 
 def _reshard_exact_hw(
@@ -858,7 +850,6 @@ class LTXVideoDecoder(Module):
         self.ccl_manager = ccl_manager
         # Set True by the pipeline after warmup so the first real decode captures a ttnn trace of decode_device
         self._vae_traced = False
-        self.exact_shard = _exact_shard_enabled()
         out_channels_with_patch = out_channels * patch_size**2  # 3 * 16 = 48
 
         feature_channels = base_channels * 8  # 1024
@@ -1010,11 +1001,7 @@ class LTXVideoDecoder(Module):
                 sample_tt, logical_h, logical_w = up_block(
                     sample_tt, causal=self.causal, logical_h=logical_h, logical_w=logical_w
                 )
-                if self.exact_shard:
-                    # Exact shards make the convs' logical-pad masks no-ops from here on.
-                    sample_tt = _reshard_exact_hw(
-                        sample_tt, logical_h, logical_w, self.parallel_config, self.ccl_manager
-                    )
+                sample_tt = _reshard_exact_hw(sample_tt, logical_h, logical_w, self.parallel_config, self.ccl_manager)
             else:
                 sample_tt = up_block(sample_tt, causal=self.causal, logical_h=logical_h, logical_w=logical_w)
 
