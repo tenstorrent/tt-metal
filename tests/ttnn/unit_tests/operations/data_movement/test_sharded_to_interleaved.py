@@ -8,9 +8,11 @@ import pytest
 import torch
 import ttnn
 
+from tt_py_test_utils_common.utility_functions import is_blackhole
 from tests.ttnn.unit_tests.operations.data_movement.docstring_support import (
     UnreadableDocstring,
     check_readable,
+    docstring_blackhole_dtype_layout_params,
     docstring_dtype_layout_params,
     docstring_interleaved_buffer_type_params,
     interleaved_memory_config,
@@ -132,6 +134,45 @@ def test_sharded_to_interleaved_docstring_supported_inputs(
         assert output.layout == layout
         assert output.memory_config() == memory_config
         assert_exact(expected, ttnn.to_torch(output))
+
+
+@pytest.mark.parametrize(
+    "output_buffer_type", docstring_interleaved_buffer_type_params(ttnn.sharded_to_interleaved, label="Output")
+)
+@pytest.mark.parametrize("memory_layout, buffer_type", _docstring_sharded_input_params(ttnn.sharded_to_interleaved))
+@pytest.mark.parametrize("dtype, layout", docstring_blackhole_dtype_layout_params(ttnn.sharded_to_interleaved))
+def test_sharded_to_interleaved_docstring_blackhole_inputs(
+    dtype, layout, memory_layout, buffer_type, output_buffer_type, device
+):
+    """Copies a sharded input of each dtype the ttnn.sharded_to_interleaved docstring lists for Blackhole, in every
+    shard layout it lists, into every interleaved output it lists and into the default DRAM output. The sharded input
+    is made from an interleaved L1 tensor. Values are compared after a conversion to FLOAT32 on host, which holds every
+    FP8_E4M3 value."""
+    check_readable(dtype, layout, memory_layout, buffer_type, output_buffer_type)
+    if not is_blackhole():
+        pytest.skip("the docstring lists these dtypes for Blackhole")
+
+    def read(tensor):
+        return ttnn.to_torch(ttnn.to_dtype(tensor.cpu(), ttnn.float32))
+
+    torch.manual_seed(0)
+    interleaved = ttnn.from_torch(
+        torch.randn(_S2I_SHAPE) * 8, dtype=dtype, layout=layout, device=device, memory_config=ttnn.L1_MEMORY_CONFIG
+    )
+    input_tensor = ttnn.to_memory_config(interleaved, _s2i_sharded_memory_config(memory_layout, buffer_type))
+    expected = read(interleaved)
+    ttnn.deallocate(interleaved)
+    memory_config = interleaved_memory_config(output_buffer_type)
+    outputs = [ttnn.sharded_to_interleaved(input_tensor, memory_config)]
+    if output_buffer_type == ttnn.BufferType.DRAM:
+        outputs.append(ttnn.sharded_to_interleaved(input_tensor))
+
+    assert_exact(expected, read(input_tensor))
+    for output in outputs:
+        assert output.dtype == dtype
+        assert output.layout == layout
+        assert output.memory_config() == memory_config
+        assert_exact(expected, read(output))
 
 
 @pytest.mark.parametrize(
