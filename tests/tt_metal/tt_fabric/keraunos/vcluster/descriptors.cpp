@@ -406,11 +406,12 @@ GeneratedDescriptors generate(
     }
     const auto env = [&](const char* cluster_desc_variable) {
         return fmt::format(
-            "{}={}\nTT_METAL_EMU_SOC_DESC={}\nTT_MESH_GRAPH_DESC_PATH={}\n",
+            "{}={}\nTT_METAL_EMU_SOC_DESC={}\nTT_MESH_GRAPH_DESC_PATH={}\nTT_METAL_EMU_PACKAGE_SOC_DESC={}\n",
             cluster_desc_variable,
             generated.cluster_desc.string(),
             fmt::join(soc_paths, ","),
-            generated.mesh_graph_desc.string());
+            generated.mesh_graph_desc.string(),
+            std::filesystem::absolute(package_soc_desc).string());
     };
     // Metal refuses TT_METAL_EMU_CLUSTER_DESC without an emulator server; Mock takes TT_METAL_MOCK_CLUSTER_DESC_PATH.
     generated.env_emu = dir / kEnvEmuFile;
