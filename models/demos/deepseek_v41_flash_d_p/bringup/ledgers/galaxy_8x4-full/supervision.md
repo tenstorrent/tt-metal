@@ -511,7 +511,7 @@
   values, then the A/B: expected <= 4 opens / loads of 0-20 (one per configuration change), + the fresh full process
   if accepted. RAM unaccounted before: 168.4 GiB.
 
-## 2026-11-19 10:25 UTC: OWNER: replica pick on representative agentic text (queued after P.84)
+## 2026-11-19 10:00 UTC: OWNER: replica pick on representative agentic text (queued after P.84)
 - Data: /data/dnijemcevic/bringup/agent_texts_20261119 (nvidia/Open-SWE-Traces, CC-BY-4.0; owner-provided, no
   download): Claude Code harness (Qwen-written, python), OpenHands DeepSeek-V4-Flash (python), OpenHands
   DeepSeek-V4-Flash (go / python / ts / js).
@@ -523,3 +523,4 @@
   sessions); offline pick of 32 / layer; compare held-out vs no replicas and vs P.84's table; ship if better (A/B of
   the two tables on the runner, timing only). Note: the census's history is zeros apart from the real previous chunk,
   so a position deep in a session changes only the tables' sizes, not the routing inputs much.
+- 10:10 UTC F287 texts built (agentic_cc 3 slices 118 sessions, agentic_ds 3 slices 57, agentic_ds_ml 2 slices 48; 384447e2bc9); census plan 288 runs (pick 45 repos / held 93, no overlap) and the offline script ready in /scratch/dnijemcevic/bringup/p85.
