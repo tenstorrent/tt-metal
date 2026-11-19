@@ -7,8 +7,8 @@
 // RUN: %{blackhole_compare_codegen} %t.dump
 
 // Compare each HAL function with its adjacent reference_ function with
-// LLK_ASSERT enabled; references state each check as an LLK_ASSERT before the
-// operation. Disable identical-code folding so both bodies are emitted
+// LLK_ASSERT enabled; references state each check as the HAL does, with
+// hal::detail::require or LLK_ASSERT, before the operation. Disable identical-code folding so both bodies are emitted
 // independently, and block reordering so the layout of the assert branches does
 // not depend on GCC's placement heuristics.
 
@@ -53,9 +53,9 @@ extern "C" __attribute__((noinline, used)) void template1_runtime_counts(const s
 
 extern "C" __attribute__((noinline, used)) void reference_template1_runtime_counts(const std::uint32_t outer, const std::uint32_t inner)
 {
-    LLK_ASSERT(outer < 1024, "Template 1 MOP loop count must fit in 10 bits");
-    LLK_ASSERT(inner < 1024, "Template 1 MOP loop count must fit in 10 bits");
-    LLK_ASSERT(outer != 0, "Template 1 MOP configuration issues nothing");
+    hal::detail::require(outer < 1024, "Template 1 MOP loop count must fit in 10 bits");
+    hal::detail::require(inner < 1024, "Template 1 MOP loop count must fit in 10 bits");
+    hal::detail::require(outer != 0, "Template 1 MOP configuration issues nothing");
     volatile std::uint32_t *mop_cfg = reference_mop_cfg();
     ckernel::mop_sync();
     mop_cfg[0] = outer;
@@ -80,8 +80,8 @@ extern "C" __attribute__((noinline, used)) void template1_runtime_inner_count(co
 
 extern "C" __attribute__((noinline, used)) void reference_template1_runtime_inner_count(const std::uint32_t inner)
 {
-    LLK_ASSERT(inner < 1024, "Template 1 MOP loop count must fit in 10 bits");
-    LLK_ASSERT(inner != 0, "Template 1 MOP configuration triggers the no-start/zero-inner/end-op outer count anomaly");
+    hal::detail::require(inner < 1024, "Template 1 MOP loop count must fit in 10 bits");
+    hal::detail::require(inner != 0, "Template 1 MOP configuration triggers the no-start/zero-inner/end-op outer count anomaly");
     volatile std::uint32_t *mop_cfg = reference_mop_cfg();
     ckernel::mop_sync();
     mop_cfg[0] = 4;
@@ -106,9 +106,9 @@ extern "C" __attribute__((noinline, used)) void template1_runtime_second_end(con
 
 extern "C" __attribute__((noinline, used)) void reference_template1_runtime_second_end(const std::uint32_t outer)
 {
-    LLK_ASSERT(outer < 1024, "Template 1 MOP loop count must fit in 10 bits");
-    LLK_ASSERT(outer != 1, "Template 1 MOP configuration triggers the no-start/zero-inner/end-op outer count anomaly");
-    LLK_ASSERT(outer != 0, "Template 1 MOP configuration issues nothing");
+    hal::detail::require(outer < 1024, "Template 1 MOP loop count must fit in 10 bits");
+    hal::detail::require(outer != 1, "Template 1 MOP configuration triggers the no-start/zero-inner/end-op outer count anomaly");
+    hal::detail::require(outer != 0, "Template 1 MOP configuration issues nothing");
     volatile std::uint32_t *mop_cfg = reference_mop_cfg();
     ckernel::mop_sync();
     mop_cfg[0] = outer;
@@ -126,8 +126,8 @@ extern "C" __attribute__((noinline, used)) void template1_runtime_patch(const st
 
 extern "C" __attribute__((noinline, used)) void reference_template1_runtime_patch(const std::uint32_t inner, const std::uint32_t operation)
 {
-    LLK_ASSERT(inner < 1024, "Template 1 MOP loop count must fit in 10 bits");
-    LLK_ASSERT(inner != 0, "Template 1 MOP last-iteration ops are never issued with an empty inner loop");
+    hal::detail::require(inner < 1024, "Template 1 MOP loop count must fit in 10 bits");
+    hal::detail::require(inner != 0, "Template 1 MOP last-iteration ops are never issued with an empty inner loop");
     volatile std::uint32_t *mop_cfg = reference_mop_cfg();
     ckernel::mop_sync();
     mop_cfg[0] = 2;
@@ -151,9 +151,9 @@ extern "C" __attribute__((noinline, used)) void template1_runtime_unsupported_en
 
 extern "C" __attribute__((noinline, used)) void reference_template1_runtime_unsupported_end_op1(const std::uint32_t inner)
 {
-    LLK_ASSERT(inner < 1024, "Template 1 MOP loop count must fit in 10 bits");
-    LLK_ASSERT(inner != 0, "Template 1 MOP configuration with no start op, an empty inner loop and no end op is unsupported");
-    LLK_ASSERT(inner != 0, "Template 1 MOP configuration issues nothing");
+    hal::detail::require(inner < 1024, "Template 1 MOP loop count must fit in 10 bits");
+    hal::detail::require(inner != 0, "Template 1 MOP configuration with no start op, an empty inner loop and no end op is unsupported");
+    hal::detail::require(inner != 0, "Template 1 MOP configuration issues nothing");
     volatile std::uint32_t *mop_cfg = reference_mop_cfg();
     ckernel::mop_sync();
     mop_cfg[0] = 4;
@@ -177,9 +177,9 @@ extern "C" __attribute__((noinline, used)) void template1_runtime_patch_last_inn
 
 extern "C" __attribute__((noinline, used)) void reference_template1_runtime_patch_last_inner(const std::uint32_t outer, const std::uint32_t operation)
 {
-    LLK_ASSERT(outer < 1024, "Template 1 MOP loop count must fit in 10 bits");
-    LLK_ASSERT(outer != 0, "Template 1 MOP configuration issues nothing");
-    LLK_ASSERT(outer != 1, "Template 1 MOP last_inner op is never issued with an outer count of 1");
+    hal::detail::require(outer < 1024, "Template 1 MOP loop count must fit in 10 bits");
+    hal::detail::require(outer != 0, "Template 1 MOP configuration issues nothing");
+    hal::detail::require(outer != 1, "Template 1 MOP last_inner op is never issued with an outer count of 1");
     volatile std::uint32_t *mop_cfg = reference_mop_cfg();
     ckernel::mop_sync();
     mop_cfg[0] = outer;
@@ -199,7 +199,7 @@ extern "C" __attribute__((noinline, used)) void update_count(const std::uint32_t
 
 extern "C" __attribute__((noinline, used)) void reference_update_count(const std::uint32_t count)
 {
-    LLK_ASSERT(count < 1024, "Template 1 MOP loop count must fit in 10 bits");
+    hal::detail::require(count < 1024, "Template 1 MOP loop count must fit in 10 bits");
     volatile std::uint32_t *mop_cfg = reference_mop_cfg();
     ckernel::mop_sync();
     mop_cfg[1] = count;
@@ -226,8 +226,8 @@ extern "C" __attribute__((noinline, used)) void update_count_and_operation(const
 
 extern "C" __attribute__((noinline, used)) void reference_update_count_and_operation(const std::uint32_t outer, const std::uint32_t operation)
 {
-    LLK_ASSERT(outer < 1024, "Template 1 MOP loop count must fit in 10 bits");
-    LLK_ASSERT(outer != 0, "Template 1 MOP configuration issues nothing");
+    hal::detail::require(outer < 1024, "Template 1 MOP loop count must fit in 10 bits");
+    hal::detail::require(outer != 0, "Template 1 MOP configuration issues nothing");
     volatile std::uint32_t *mop_cfg = reference_mop_cfg();
     ckernel::mop_sync();
     mop_cfg[7] = operation;
@@ -267,6 +267,6 @@ extern "C" __attribute__((noinline, used)) std::uint32_t template0_runtime_prese
 extern "C" __attribute__((noinline, used)) std::uint32_t reference_template0_runtime_preset_operation(const std::uint32_t count, const std::uint32_t mask)
 {
     const std::uint32_t loop_count = count - 1;
-    LLK_ASSERT(loop_count < 128, "MOP encoded count must fit in 7 bits");
+    hal::detail::require(loop_count < 128, "MOP encoded count must fit in 7 bits");
     return TT_OP_MOP(0 /*mop_type*/, loop_count, mask & 0xffff);
 }
