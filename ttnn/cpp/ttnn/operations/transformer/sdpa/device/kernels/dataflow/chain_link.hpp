@@ -194,29 +194,34 @@ public:
      * Forward data to downstream link(s) using default chunk size.
      * In mcast mode: wait for all receivers, then broadcast.
      * In unicast mode: wait for next receiver, then point-to-point transfer.
+     * The data is the block reserved at cb's write pointer, sent to the same place downstream.
      */
-    void forward(Noc noc, uint32_t cb_addr) const { forward(noc, cb_addr, chunk_tiles_, tile_bytes_); }
+    template <typename CB>
+    void forward(Noc noc, const CB& cb) const {
+        forward(noc, cb, chunk_tiles_, tile_bytes_);
+    }
 
     /**
      * Forward data to downstream link(s) with explicit size.
      * Use this when the data size differs from the default (e.g., K using head chain).
      */
-    void forward(Noc noc, uint32_t cb_addr, uint32_t num_tiles, uint32_t tile_bytes) const {
+    template <typename CB>
+    void forward(Noc noc, const CB& cb, uint32_t num_tiles, uint32_t tile_bytes) const {
+        const uint32_t cb_addr = cb.get_write_ptr();
         Semaphore<> sender_sem(sender_sem_id_);
         if constexpr (mcast_enabled) {
             sender_sem.wait(sender_wait_count_);
             sender_sem.set(0);
             noc.async_write_multicast(
                 CoreLocalMem<uint32_t>(cb_addr),
-                MulticastEndpoint{},
+                cb,
                 num_tiles * tile_bytes,
                 mcast_num_dests_,
                 {},
                 {.noc_x_start = mcast_start_x_,
                  .noc_y_start = mcast_start_y_,
                  .noc_x_end = mcast_end_x_,
-                 .noc_y_end = mcast_end_y_,
-                 .addr = cb_addr},
+                 .noc_y_end = mcast_end_y_},
                 /*linked=*/true);
             // Must be back-to-back after the linked data write — any flush/barrier between them
             // deadlocks the linked transaction.

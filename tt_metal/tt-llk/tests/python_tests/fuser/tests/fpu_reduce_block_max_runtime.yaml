@@ -7,13 +7,16 @@ dest_acc: false
 
 operands:
   - name: "input_A"
+    tile_dims: all
     dims: [256, 256]
     format: "Float16_b"
   - name: "input_B"
+    tile_dims: all
     dims: [256, 256]
     format: "Float16_b"
     stimuli: 1.0
   - name: "reduce_block_max_runtime_out"
+    tile_dims: all
     dims: [256, 256]
     format: "Float16_b"
   - name: "tiny_input_A"
@@ -33,7 +36,7 @@ operands:
 operations:
   - math:
       - type: "Fpu"
-        block_size: [64, 64]
+        block_tiles: [2, 2]
         in0: "input_A"
         in1: "input_B"
         operation: "ReduceBlockMaxRuntime"
@@ -41,7 +44,7 @@ operations:
         math_fidelity: "HiFi2"
     pack:
       - output: "reduce_block_max_runtime_out"
-        block_size: [64, 64]
+        block_tiles: [2, 2]
         packer: "Packer"
   - math:
       - type: "Fpu"

@@ -14,14 +14,14 @@
 
 #include <gtest/gtest.h>
 #include <tt-metalium/experimental/metal2_host_api/program.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
+#include <tt-metalium/workload/run_args/program_run_args.hpp>
+#include <tt-metalium/workload/specification/program_spec.hpp>
 #include "impl/kernels/kernel.hpp"
 #include "impl/program/program_impl.hpp"
 
 #include "metal2_host_api/test_helpers/test_helpers.hpp"
 
-namespace tt::tt_metal::experimental::test_helpers {
+namespace tt::tt_metal::test_helpers {
 
 // Create a ProgramSpec with specified RTA schema for the DM kernel
 // (The compute kernel has no RTAs)
@@ -29,8 +29,8 @@ inline ProgramSpec MakeSpecWithRTAs(const NodeCoord& /*node*/, size_t num_per_no
     ProgramSpec spec = MakeMinimalValidProgramSpec();
 
     // Set the RTA schema on the dm_kernel (first kernel)
-    spec.kernels[0].advanced_options =
-        KernelAdvancedOptions{.num_runtime_varargs = num_per_node_rtas, .num_common_runtime_varargs = num_common_rtas};
+    spec.kernels[0].advanced_options = experimental::KernelAdvancedOptions{
+        .num_runtime_varargs = num_per_node_rtas, .num_common_runtime_varargs = num_common_rtas};
 
     // compute_kernel has no RTAs (defaults: 0 / 0)
 
@@ -42,10 +42,10 @@ inline ProgramSpec MakeSpecWithAliasedDfbs(uint32_t es_a, uint32_t ne_a, uint32_
 
     DataflowBufferSpec dfb_a = MakeMinimalDFB("dfb_a", es_a, ne_a);
     dfb_a.data_format_metadata = tt::DataFormat::Float16_b;
-    dfb_a.advanced_options = DFBAdvancedOptions{.alias_with = {DFBSpecName{"dfb_b"}}};
+    dfb_a.advanced_options = experimental::DFBAdvancedOptions{.alias_with = {DFBSpecName{"dfb_b"}}};
     DataflowBufferSpec dfb_b = MakeMinimalDFB("dfb_b", es_b, ne_b);
     dfb_b.data_format_metadata = tt::DataFormat::Float16_b;
-    dfb_b.advanced_options = DFBAdvancedOptions{.alias_with = {DFBSpecName{"dfb_a"}}};
+    dfb_b.advanced_options = experimental::DFBAdvancedOptions{.alias_with = {DFBSpecName{"dfb_a"}}};
     spec.dataflow_buffers = {dfb_a, dfb_b};
 
     // Replace the single dfb_0 bindings: each kernel binds both aliased DFBs.
@@ -69,7 +69,7 @@ inline ProgramRunArgs::KernelRunArgs MakeKernelRunArgs(
     return ProgramRunArgs::KernelRunArgs{
         .kernel = std::move(kernel),
         .advanced_options =
-            AdvancedKernelRunArgs{
+            experimental::AdvancedKernelRunArgs{
                 .runtime_varargs = {{node, per_node_args}},
                 .common_runtime_varargs = common_args,
             },
@@ -121,7 +121,7 @@ inline ProgramSpec MakeBorrowedDFBProgramSpecForRunArgs(
     producer.dfb_bindings.push_back(ProducerOf(DFBSpecName{"dfb"}, "out"));
     consumer.dfb_bindings.push_back(ConsumerOf(DFBSpecName{"dfb"}, "in"));
 
-    auto tensor_param = MakeMinimalTensorParameter(tensor_param_name, tt::tt_metal::BufferType::L1);
+    auto tensor_param = MakeMinimalTensorParameter(tensor_param_name, BufferType::L1);
     BindTensorParameterToKernel(producer, tensor_param_name, "borrowed_t");
 
     spec.kernels = {producer, consumer};
@@ -147,4 +147,4 @@ inline uint32_t ReadBindingAddressFromCRTA(
     return 0;
 }
 
-}  // namespace tt::tt_metal::experimental::test_helpers
+}  // namespace tt::tt_metal::test_helpers
