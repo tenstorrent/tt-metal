@@ -16,6 +16,7 @@ set(DISTRIBUTED_UNIT_TEST_SOURCES
     test_mesh_device_reshape.cpp
     test_mesh_device_view.cpp
     test_mesh_workload.cpp
+    test_mesh_per_device_runtime_args.cpp
     test_mesh_socket.cpp
     test_hd_sockets.cpp
     test_host_region.cpp

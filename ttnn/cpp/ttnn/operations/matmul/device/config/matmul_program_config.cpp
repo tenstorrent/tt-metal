@@ -436,7 +436,8 @@ MatmulProgramConfig create_matmul_program_config(
     const std::optional<unary::UnaryWithParam>& fused_activation,
     const std::optional<const ttnn::DeviceComputeKernelConfig> compute_kernel_config,
     const MemoryConfig& mem_config,
-    const tt::tt_metal::DataType output_dtype) {
+    const tt::tt_metal::DataType output_dtype,
+    const bool split_by_batch = false) {
     using namespace tt;
     const auto a_shape = utilities::get_matmul_tensor_logical_shape(input_tensor_a, transpose_a);
     const auto b_shape = utilities::get_matmul_tensor_logical_shape(input_tensor_b, transpose_b);
@@ -483,6 +484,29 @@ MatmulProgramConfig create_matmul_program_config(
             n_tiles_per_core = div_up(n_size, ttnn::TILE_SIZE);
             k_tiles_per_core = 1;  // TODO(arakhmati): Can it be more than 1 without
                                    // running out of memory?
+            // Preserve the simple config's K block to avoid extra partial-sum rounding.
+            if (split_by_batch) {
+                auto simple_config = create_simple_matmul_program_config(
+                    input_tensor_a,
+                    input_tensor_b,
+                    transpose_a,
+                    transpose_b,
+                    bias_single_tile_size,
+                    compute_kernel_config,
+                    core_coord,
+                    mem_config,
+                    output_dtype);
+                if (const auto* mcast_config =
+                        std::get_if<MatmulMultiCoreReuseMultiCastProgramConfig>(&simple_config)) {
+                    k_tiles_per_core = mcast_config->in0_block_w;
+                } else if (
+                    const auto* mcast_1d_config =
+                        std::get_if<MatmulMultiCoreReuseMultiCast1DProgramConfig>(&simple_config)) {
+                    k_tiles_per_core = mcast_1d_config->in0_block_w;
+                } else {
+                    return simple_config;
+                }
+            }
             if (!can_cbs_fit_in_l1(
                     input_tensor_a,
                     input_tensor_b,
@@ -912,6 +936,61 @@ MatmulProgramConfig get_matmul_program_config(
         output_dtype);
 }
 
+// Tile equality ignores the transpose flags, so check them separately.
+inline bool is_plain_tile(const tt::tt_metal::Tile& tile) {
+    return tile == tt::tt_metal::Tile() && !tile.get_transpose_within_face() && !tile.get_transpose_of_faces();
+}
+
+// The simple config splits one batch's output over the cores and loops over the batches, so a small output leaves
+// most cores idle. The batched branch of create_matmul_program_config gives each core whole batches instead.
+inline bool should_split_by_batch(
+    const Tensor& input_tensor_a,
+    const Tensor& input_tensor_b,
+    const bool transpose_a,
+    const bool transpose_b,
+    const uint32_t bias_single_tile_size,
+    const MemoryConfig& mem_config,
+    const std::optional<unary::UnaryWithParam>& fused_activation,
+    const bool untilize_out,
+    const CoreCoord& compute_with_storage_grid_size) {
+    // Measured only for plain matmuls on interleaved DRAM; with L1 inputs the simple config already uses every core.
+    const auto is_dram_interleaved = [](const MemoryConfig& config) {
+        return config.is_dram() && !config.is_sharded();
+    };
+    const bool all_dram_interleaved = is_dram_interleaved(input_tensor_a.memory_config()) &&
+                                      is_dram_interleaved(input_tensor_b.memory_config()) &&
+                                      is_dram_interleaved(mem_config);
+    // untilize_out is only supported by the 1D mcast config.
+    const bool plain_matmul = bias_single_tile_size == 0 && !fused_activation.has_value() && !untilize_out &&
+                              is_plain_tile(input_tensor_a.tensor_spec().tile()) &&
+                              is_plain_tile(input_tensor_b.tensor_spec().tile());
+    // The batched factory places work on the full grid, outside a loaded sub-device's cores.
+    const auto* device = input_tensor_a.device();
+    const bool default_sub_devices =
+        device->get_active_sub_device_manager_id() == device->get_default_sub_device_manager_id();
+    if (!all_dram_interleaved || !plain_matmul || !default_sub_devices) {
+        return false;
+    }
+
+    const auto& a_shape = utilities::get_matmul_tensor_padded_shape(input_tensor_a, transpose_a);
+    const auto& b_shape = utilities::get_matmul_tensor_padded_shape(input_tensor_b, transpose_b);
+    const uint32_t num_batches = get_batch_size(a_shape);
+    const uint32_t n_tiles = b_shape[-1] / ttnn::TILE_SIZE;
+    const uint32_t tiles_per_batch = (a_shape[-2] / ttnn::TILE_SIZE) * n_tiles;
+    const uint32_t num_cores = compute_with_storage_grid_size.x * compute_with_storage_grid_size.y;
+
+    // The batched branch needs a batched B.
+    const bool both_batched = num_batches > 1 && get_batch_size(b_shape) > 1;
+    // The simple config keeps at most tiles_per_batch cores busy; splitting by batch keeps min(num_batches, num_cores).
+    const bool small_output_many_batches = tiles_per_batch < num_cores && num_batches >= tiles_per_batch;
+    // Wormhole sweep: with K > 1024 and more than 8 tiles per batch, splitting by batch was up to 31% slower.
+    const bool long_k_slowdown = a_shape[-1] > 1024 && tiles_per_batch > 8;
+    // Wormhole sweep: with more than 16 output tiles per row, splitting by batch was up to 2.3x slower than the
+    // 1D mcast config.
+    const bool wide_output_slowdown = n_tiles > 16;
+    return both_batched && small_output_many_batches && !long_k_slowdown && !wide_output_slowdown;
+}
+
 inline MatmulProgramConfig generate_matmul_program_config(
     const Tensor& input_tensor_a,
     const Tensor& input_tensor_b,
@@ -923,6 +1002,7 @@ inline MatmulProgramConfig generate_matmul_program_config(
     const std::optional<const CoreCoord> user_core_coord,
     const std::optional<unary::UnaryWithParam>& user_fused_activation,
     const bool user_run_batched,
+    const bool untilize_out,
     const tt::tt_metal::DataType output_dtype) {
     // For sharded A, derive config from the tensor's shard_spec (not user core_grid).
     if (input_tensor_a.is_sharded()) {
@@ -956,6 +1036,29 @@ inline MatmulProgramConfig generate_matmul_program_config(
     }
     tt::tt_metal::distributed::MeshDevice* device = input_tensor_a.device();
     auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
+    if (should_split_by_batch(
+            input_tensor_a,
+            input_tensor_b,
+            transpose_a,
+            transpose_b,
+            bias_single_tile_size,
+            mem_config,
+            user_fused_activation,
+            untilize_out,
+            compute_with_storage_grid_size)) {
+        return create_matmul_program_config(
+            input_tensor_a,
+            input_tensor_b,
+            transpose_a,
+            transpose_b,
+            bias_single_tile_size,
+            /*user_core_coord=*/std::nullopt,
+            /*fused_activation=*/std::nullopt,
+            compute_kernel_config,
+            mem_config,
+            output_dtype,
+            /*split_by_batch=*/true);
+    }
     return create_simple_matmul_program_config(
         input_tensor_a,
         input_tensor_b,
@@ -1033,6 +1136,7 @@ MatmulProgramConfig get_program_config(
         attributes.user_core_coord,
         attributes.user_fused_activation,
         attributes.user_run_batched,
+        attributes.untilize_out,
         attributes.output_dtype.value_or(input_tensor_a.dtype()));
     log_debug(tt::LogOp, "Auto generated program config: {}", config);
 

@@ -28,10 +28,13 @@ from unittest.mock import Mock, create_autospec
 import pytest
 
 import ttnn
+from models.demos.deepseek_v3_d_p.tt.kda.config import KDAProgramConfig
 from models.demos.deepseek_v3_d_p.tt.kda.kda import ttKDA
+from models.demos.deepseek_v3_d_p.tt.kda.state_contract import KDA_CONVOLUTION_PAGE_CHANNELS
 from models.demos.deepseek_v3_d_p.tt.kimi_k3 import attention as attention_module
 from models.demos.deepseek_v3_d_p.tt.kimi_k3.attention import (
     K3AttnContext,
+    KdaChunkScalars,
     TtK3KdaAttention,
     build_attention,
     build_kda_scalars,
@@ -86,8 +89,8 @@ def test_the_cache_check_call_binds_to_the_transformer():
 
 
 def test_every_forward_call_binds_to_the_transformer():
-    """The eager and traced chunk paths both call `self.model.forward`; neither is reached by an eager test."""
-    for call in _call_sites("self.model.forward", expected=2):
+    """The eager and traced chunk paths and the packed `prefill_forward` call `self.model.forward`; none is reached by an eager test."""
+    for call in _call_sites("self.model.forward", expected=3):
         _bind(TtKimiK3Transformer.forward, call, None)
 
 
@@ -105,6 +108,34 @@ def test_forward_rejects_mtp_arguments_before_device_work(expect_error, mtp_kwar
     model = object.__new__(TtKimiK3Transformer)
     with expect_error(ValueError, "no MTP predictor"):
         model.forward(object(), **mtp_kwargs)
+
+
+def test_forward_checks_the_index_cache_against_the_config(expect_error):
+    """K3 has no DSA indexer, so an index cache is a wiring mistake; K3.1's DSA layers cannot run without one."""
+    model = object.__new__(TtKimiK3Transformer)
+    model.has_indexer = False
+    with expect_error(ValueError, "no DSA indexer"):
+        model.forward(object(), index_kv_cache=object())
+    model.has_indexer, model.schedule = True, SimpleNamespace(num_mla_layers=1)
+    with expect_error(ValueError, "pass index_kv_cache"):
+        model.forward(object())
+
+
+def test_only_a_dsa_config_takes_a_sparse_kv_cache_format(expect_error):
+    """K3's dense MLA cache cannot take a sparse format; refused before any device work."""
+    from models.demos.deepseek_v3_d_p.reference.kimi_k3_config import KimiK3Config, kimi_k3_hf_config
+    from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import MlaKvCacheFormat
+
+    with expect_error(ValueError, "dense MLA KV cache"):
+        TtKimiK3Transformer(
+            None,
+            kimi_k3_hf_config(),
+            KimiK3Config,
+            {},
+            num_layers=1,
+            seq_len=5120,
+            sparse_kv_cache_format=MlaKvCacheFormat.SCALED_FP8,
+        )
 
 
 def test_runtime_rejects_mtp_before_the_shared_build(monkeypatch, expect_error):
@@ -146,6 +177,7 @@ def test_the_block_kwargs_that_are_swept_through_are_genuinely_block_level():
 @pytest.mark.parametrize("sp_axis,tp_axis", [(0, 1), (1, 0)])
 def test_kda_construction_passes_global_and_local_geometry(monkeypatch, sp_axis, tp_axis):
     constructor = create_autospec(ttKDA)
+    constructor.return_value.convolution_page_channels = KDA_CONVOLUTION_PAGE_CHANNELS
     monkeypatch.setattr("models.demos.deepseek_v3_d_p.tt.kda.kda.ttKDA", constructor)
     monkeypatch.setattr("models.demos.deepseek_v3_d_p.tt.tt_ccl.get_tt_ccl", lambda device: None)
     build_attention(
@@ -159,10 +191,10 @@ def test_kda_construction_passes_global_and_local_geometry(monkeypatch, sp_axis,
         sp_axis=sp_axis,
         tp_axis=tp_axis,
         topology=(ttnn.Topology.Linear, ttnn.Topology.Linear),
-        kda_scratch=object(),
     )
     kwargs = constructor.call_args.kwargs
     assert kwargs["active_seq_len"] == 2560
+    assert kwargs["program_config"].convolution_page_channels == KDA_CONVOLUTION_PAGE_CHANNELS
     # SP8 owns 320 rows (10 chunks); SP4 owns 640 rows (20 chunks).
     assert kwargs["program_config"].recurrence.summary_group_chunks == (10 if sp_axis == 0 else 20)
 
@@ -177,7 +209,8 @@ def test_build_kda_scalars_uploads_eager_slot_and_bounds_once(monkeypatch, host_
     # Slot first, then the start; an absent end uploads nothing and stays `None` (full capacity).
     start = (device, 0 if host_start is None else host_start)
     end = None if host_end is None else (device, host_end)
-    assert scalars == ((device, 2), start, end)
+    assert isinstance(scalars, KdaChunkScalars)
+    assert scalars == KdaChunkScalars((device, 2), start, end)
     assert owned == tuple(scalar for scalar in scalars if scalar is not None)
 
 
@@ -185,9 +218,9 @@ def test_build_kda_scalars_borrows_traced_metadata(monkeypatch):
     upload = Mock()
     monkeypatch.setattr(attention_module, "device_scalar", upload)
     slot, start, end = object(), object(), object()
-    # The host ints are placeholders under trace; the metadata tensors are what replay rewrites.
+    # The host ints are placeholders under trace; the metadata tensors are what replay rewrites, borrowed.
     scalars, owned = build_kda_scalars(object(), (slot, start, end, object()), 7, 999, 999)
-    assert scalars == (slot, start, end)
+    assert scalars == KdaChunkScalars(slot, start, end)
     assert owned == ()
     upload.assert_not_called()
 
@@ -201,67 +234,122 @@ def test_build_kda_scalars_rejects_invalid_host_bounds_before_upload(monkeypatch
     upload.assert_not_called()
 
 
-def test_kda_forward_loads_and_stores_its_slot_through_the_shared_scratch(monkeypatch):
+def test_kda_forward_runs_the_whole_layer_on_its_slot_in_the_slabs(monkeypatch):
     kdas = [create_autospec(ttKDA, instance=True) for _ in range(2)]
     for kda in kdas:
-        kda.forward.return_value = object(), SimpleNamespace(recurrent=object(), convolution=object())
+        kda.convolution_page_channels = KDA_CONVOLUTION_PAGE_CHANNELS
+        kda.forward.return_value = (object(), None)
     slot, start, end = object(), object(), object()
-    from_torch, deallocate = Mock(), Mock()
+    from_torch, deallocate, gather = Mock(), Mock(), Mock()
     monkeypatch.setattr(ttnn, "from_torch", from_torch)
     monkeypatch.setattr(ttnn, "deallocate", deallocate)
-    monkeypatch.setattr(ttnn, "all_gather", lambda tensor, **kwargs: tensor)
+    monkeypatch.setattr(ttnn, "all_gather", gather)
     monkeypatch.setattr(ttnn, "squeeze", lambda tensor, **kwargs: tensor)
     monkeypatch.setattr(ttnn, "unsqueeze", lambda tensor, **kwargs: tensor)
-    slabs, scratch = Mock(), object()
+    slabs = Mock()
     # The host ints are MLA's; a KDA layer reads only the scalars and the slabs, the same objects on every layer.
     ctx = K3AttnContext(
-        actual_start=5120, actual_end=10240, cache_user_id=3, kda_scalars=(slot, start, end), kda_states=slabs
+        actual_start=5120,
+        actual_end=10240,
+        cache_user_id=3,
+        kda_scalars=KdaChunkScalars(slot, start, end),
+        kda_states=slabs,
     )
     hidden = object()
     for layer_idx, kda in enumerate(kdas):
-        output, new_state = kda.forward.return_value
-        slabs.reset_mock()
-        assert TtK3KdaAttention(kda, layer_idx, 1, 1, ttnn.Topology.Linear, scratch).forward(hidden, ctx) is output
-        # The carry is selected by the device slot, so a capture never pins the slot it was recorded on:
-        # load slot -> scratch, run on the scratch, store the replacement at the slot, free it.
-        slabs.import_layer.assert_called_once_with(scratch, slot, layer_idx)
-        kda.forward.assert_called_once_with(hidden, scratch, actual_start=start, actual_end=end)
-        slabs.export_layer.assert_called_once_with(new_state, slot, layer_idx)
-        assert [c.args for c in deallocate.call_args_list][-2:] == [(new_state.recurrent,), (new_state.convolution,)]
+        output = kda.forward.return_value[0]
+        assert TtK3KdaAttention(kda, layer_idx, 1, 1, ttnn.Topology.Linear).forward(hidden, ctx) is output
+        # The whole per-chunk layer is ttKDA.forward on the slot's slab entry, selected by the device slot, so a
+        # capture never pins the slot it was recorded on.
+        kda.forward.assert_called_once_with(hidden, slabs.entry.return_value, start, end)
+        slabs.entry.assert_called_with(slot, layer_idx)
+    # The wrapper itself moves nothing: no gather, no slab copy, no free of the block's input.
+    gather.assert_not_called()
+    deallocate.assert_not_called()
     from_torch.assert_not_called()
-    # The caller owns the scalars and frees them once per chunk, after its last KDA layer.
-    assert all(call.args not in ((slot,), (start,), (end,)) for call in deallocate.call_args_list)
+
+
+def _mocked_layer(monkeypatch, tensor_parallel_size: int):
+    """A ttKDA whose device work is mocks recording one call order."""
+    calls = Mock()
+    layer = object.__new__(ttKDA)
+    layer.tensor_parallel_size = tensor_parallel_size
+    layer.tensor_parallel_axis = 1
+    layer.config = SimpleNamespace(hidden_size=256, q_dim=1, k_dim=1, v_dim=1)
+    layer.weights = SimpleNamespace(convolution_taps=())
+    layer.convolution_page_channels = KDA_CONVOLUTION_PAGE_CHANNELS
+    layer.kda_compute_config = object()
+    for name in ("qkv_convolution_program_config", "qkv_memory_config", "sequence_parallel_axis"):
+        setattr(layer, name, None)
+    layer._history_exchange = SimpleNamespace(buffer=None, semaphores=None)
+    layer._tp_gather_kwargs = None
+    layer._validate_forward = Mock()
+    layer._validate_runtime_bound = Mock()
+    projected = SimpleNamespace(projected=object(), decay_rank_offset=0, output_gate_offset=0, beta_offset=0)
+    layer._project_inputs = calls.project_inputs
+    calls.project_inputs.return_value = projected
+    layer._compute_decay = calls.compute_decay
+    layer.recurrence = calls.recurrence
+    calls.recurrence.return_value = SimpleNamespace(output=object(), final_state="final_recurrent")
+    layer._kda_rms_norm = calls.norm
+    layer._project_output = calls.project_output
+    calls.project_output.return_value = "output"
+    monkeypatch.setattr(ttnn, "all_gather", calls.all_gather)
+    calls.all_gather.return_value = "gathered"
+    monkeypatch.setattr(ttnn, "deallocate", calls.deallocate)
+    monkeypatch.setattr(ttnn.experimental.kda, "qkv_causal_conv1d_silu_with_carry", calls.conv)
+    calls.conv.return_value = (object(), object(), object(), "new_convolution")
+    return layer, calls
+
+
+def test_kda_layer_functional_path_skips_the_gather_on_a_full_width_input(monkeypatch):
+    layer, calls = _mocked_layer(monkeypatch, tensor_parallel_size=4)
+    full = SimpleNamespace(shape=(1, 64, 256))
+    output, state = layer.forward(full, Mock(), object())
+    calls.all_gather.assert_not_called()
+    calls.project_inputs.assert_called_once_with(full)
+    assert output == "output" and (state.recurrent, state.convolution) == ("final_recurrent", "new_convolution")
+
+
+def test_kda_attention_rejects_a_layer_without_the_contract_convolution_pages(expect_error):
+    # A default-config layer keeps its convolution tail token-paged.
+    kda = Mock(convolution_page_channels=KDAProgramConfig().convolution_page_channels)
+    with expect_error(ValueError, f"convolution_page_channels={KDA_CONVOLUTION_PAGE_CHANNELS}"):
+        TtK3KdaAttention(kda, 1, 1, 1, ttnn.Topology.Linear)
 
 
 @pytest.mark.parametrize(
     "ctx,message",
     [
         (K3AttnContext(actual_start=0, actual_end=64, kda_states=Mock()), "kda_scalars"),
-        (K3AttnContext(actual_start=0, actual_end=64, kda_scalars=(object(), object(), None)), "state slabs"),
+        (
+            K3AttnContext(actual_start=0, actual_end=64, kda_scalars=KdaChunkScalars(object(), object(), None)),
+            "state slabs",
+        ),
     ],
     ids=["no-scalars", "no-slabs"],
 )
 def test_kda_forward_requires_scalars_and_slabs_before_device_work(monkeypatch, expect_error, ctx, message):
     gather = Mock()
     monkeypatch.setattr(ttnn, "all_gather", gather)
-    attention = TtK3KdaAttention(Mock(), 1, 1, 1, ttnn.Topology.Linear, object())
+    attention = TtK3KdaAttention(
+        Mock(convolution_page_channels=KDA_CONVOLUTION_PAGE_CHANNELS), 1, 1, 1, ttnn.Topology.Linear
+    )
     with expect_error(ValueError, message):
         attention.forward(object(), ctx)
     gather.assert_not_called()
 
 
-def test_runtime_rejects_unaligned_start_before_reset_or_replay(monkeypatch, expect_error):
+def test_runtime_rejects_unaligned_start_before_replay(monkeypatch, expect_error):
     from models.demos.deepseek_v3_d_p.tt.kimi_k3.runtime import TtKimiK3Runtime
     from models.demos.deepseek_v3_d_p.tt.tt_prefill_runtime import TtPrefillRuntime
 
     runtime = object.__new__(TtKimiK3Runtime)
-    runtime.model = Mock()
     parent_forward = create_autospec(TtPrefillRuntime.prefill_chunk)
     monkeypatch.setattr(TtPrefillRuntime, "prefill_chunk", parent_forward)
     # Positional arguments exercise the same binding used by the runner.
     with expect_error(ValueError, "32-token aligned"):
         runtime.prefill_chunk(object(), object(), 0, 33, 64)
-    runtime.model.reset_streams.assert_not_called()
     parent_forward.assert_not_called()
 
 
@@ -271,40 +359,38 @@ def test_runtime_accepts_unaligned_end(monkeypatch):
     from models.demos.deepseek_v3_d_p.tt.tt_prefill_runtime import TtPrefillRuntime
 
     runtime = object.__new__(TtKimiK3Runtime)
-    runtime.model = Mock()
     parent_forward = create_autospec(TtPrefillRuntime.prefill_chunk)
     monkeypatch.setattr(TtPrefillRuntime, "prefill_chunk", parent_forward)
     runtime.prefill_chunk(object(), object(), 0, 0, 33)
-    runtime.model.reset_streams.assert_called_once_with(0)
     parent_forward.assert_called_once()
 
 
-def _runtime_serving(*, num_users: int, kda_layer_ids: tuple[int, ...], scratch):
+def _runtime_serving(*, num_users: int, kda_layer_ids: tuple[int, ...], has_kda_layers: bool):
     from models.demos.deepseek_v3_d_p.tt.kimi_k3.runtime import TtKimiK3Runtime
 
     runtime = object.__new__(TtKimiK3Runtime)
     runtime.config = SimpleNamespace(num_users=num_users)
     schedule = SimpleNamespace(rank_kda_layer_ids=lambda: kda_layer_ids)
-    runtime.model = SimpleNamespace(kda_scratch=scratch, kda_states=None, schedule=schedule)
+    runtime.model = SimpleNamespace(has_kda_layers=has_kda_layers, kda_states=None, schedule=schedule)
     return runtime
 
 
 @pytest.mark.parametrize(
-    "has_slabs,scratch",
-    [(False, None), (True, object()), (False, object()), (True, None)],
+    "has_slabs,has_kda_layers",
+    [(False, False), (True, True), (False, True), (True, False)],
     ids=["no-kda-rank", "kda-rank", "slabs-missing", "slabs-without-kda-layers"],
 )
 def test_compile_hands_the_slabs_to_the_model_only_when_the_rank_has_kda_layers(
-    monkeypatch, expect_error, has_slabs, scratch
+    monkeypatch, expect_error, has_slabs, has_kda_layers
 ):
     from models.demos.deepseek_v3_d_p.tt.tt_prefill_runtime import TtPrefillRuntime
 
     slabs = SimpleNamespace(num_slots=2, layer_ids=(0, 3)) if has_slabs else None
-    runtime = _runtime_serving(num_users=2, kda_layer_ids=(0, 3), scratch=scratch)
+    runtime = _runtime_serving(num_users=2, kda_layer_ids=(0, 3), has_kda_layers=has_kda_layers)
     parent_compile = Mock()
     monkeypatch.setattr(TtPrefillRuntime, "compile", parent_compile)
     kv_caches = SimpleNamespace(kda_states=slabs)
-    if has_slabs == (scratch is not None):
+    if has_slabs == has_kda_layers:
         runtime.compile(kv_caches)
         assert runtime.model.kda_states is slabs
         parent_compile.assert_called_once_with(kv_caches)
@@ -322,7 +408,7 @@ def test_compile_rejects_slabs_that_do_not_match_the_runtime(monkeypatch, expect
 
     # An out-of-range slot is a silent no-op on device, so a slot count or layer set that disagrees
     # with the runtime must fail here, before the first forward.
-    runtime = _runtime_serving(num_users=2, kda_layer_ids=(0, 3), scratch=object())
+    runtime = _runtime_serving(num_users=2, kda_layer_ids=(0, 3), has_kda_layers=True)
     parent_compile = Mock()
     monkeypatch.setattr(TtPrefillRuntime, "compile", parent_compile)
     with expect_error(RuntimeError, "KDA slabs"):
@@ -331,16 +417,16 @@ def test_compile_rejects_slabs_that_do_not_match_the_runtime(monkeypatch, expect
     parent_compile.assert_not_called()
 
 
-def test_reset_streams_zeroes_the_requested_slot_through_the_slabs(expect_error):
-    model = object.__new__(TtKimiK3Transformer)
-    # A rank without KDA layers has nothing to zero, whatever it was handed.
-    model.kda_scratch, model.kda_states = None, Mock()
-    model.reset_streams(3)
-    model.kda_states.zero_slot.assert_not_called()
-    # A rank with KDA layers cannot reset before the runtime hands the slabs over.
-    model.kda_scratch, model.kda_states = object(), None
-    with expect_error(RuntimeError, "no KDA state slabs"):
-        model.reset_streams(3)
-    model.kda_states = Mock()
-    model.reset_streams(3)
-    model.kda_states.zero_slot.assert_called_once_with(3)
+def test_only_k3_1_moves_the_indexer_score_off_the_op_default():
+    """K3.1 scores at HiFi2; the other DSA configs keep the op's default (None passed,
+    as before), so their indexer is unchanged."""
+    from models.demos.deepseek_v3_d_p.reference.deepseek_v3_2_config import deepseek_v32_hf_config
+    from models.demos.deepseek_v3_d_p.reference.glm_5_3_config import glm_5_3_hf_config
+    from models.demos.deepseek_v3_d_p.reference.kimi_k3_1_config import kimi_k3_1_hf_config
+    from models.demos.deepseek_v3_d_p.tt.mla.indexer import score_compute_kernel_config
+
+    k31 = score_compute_kernel_config(kimi_k3_1_hf_config(), ttnn.Arch.BLACKHOLE)
+    assert k31.math_fidelity == ttnn.MathFidelity.HiFi2
+    assert not (k31.fp32_dest_acc_en or k31.packer_l1_acc or k31.dst_full_sync_en)
+    for other in (glm_5_3_hf_config(), deepseek_v32_hf_config()):
+        assert score_compute_kernel_config(other, ttnn.Arch.BLACKHOLE) is None

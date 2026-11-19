@@ -7,7 +7,7 @@
 #include "program_types_generated.h"
 #include <variant>
 #include "kernels/kernel.hpp"
-#include <core_coord.hpp>
+#include <tt-metalium/core_coord.hpp>
 #include <kernel_types.hpp>
 #include <sub_device_types.hpp>
 #include <tt_stl/assert.hpp>

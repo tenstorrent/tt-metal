@@ -54,6 +54,61 @@ def runtime(value):
     return _RuntimeMarker(value)
 
 
+def flat_axes(names: Tuple[str, ...], combinations: List[tuple]) -> dict:
+    """Split a list of combination tuples into flat, dependent ``parametrize`` axes.
+
+    ``names[i]`` names column ``i`` of every tuple. The returned dict is meant to be
+    splatted into ``parametrize(**flat_axes(...))``: every axis is a callable that
+    depends on all earlier axes and returns the values the combinations allow for
+    them, so the cross product equals ``combinations`` as a set of cases (the order
+    can differ: cases are grouped by first-seen value) while each parameter keeps its harness name. Columns wrapped in
+    ``runtime()`` stay runtime-only axes.
+    """
+    runtime_columns = {
+        i
+        for i in range(len(names))
+        if any(isinstance(combo[i], _RuntimeMarker) for combo in combinations)
+    }
+
+    def plain(value):
+        return value.value if isinstance(value, _RuntimeMarker) else value
+
+    def _same_value(a, b):
+        # Same type too, so 0/False and 1/1.0 stay separate cases.
+        return type(a) is type(b) and a == b
+
+    # Prefix tree: node = [(value, child_node), ...] in first-seen order.
+    root: list = []
+    for combo in combinations:
+        node = root
+        for value in (plain(item) for item in combo):
+            for seen, child in node:
+                if _same_value(seen, value):
+                    node = child
+                    break
+            else:
+                child = []
+                node.append((value, child))
+                node = child
+
+    def make_axis(index: int):
+        def axis(*prefix):
+            node = root
+            for value in prefix:
+                node = next(child for seen, child in node if _same_value(seen, value))
+            return [value for value, _ in node]
+
+        axis.__signature__ = inspect.Signature(
+            [
+                inspect.Parameter(name, inspect.Parameter.POSITIONAL_OR_KEYWORD)
+                for name in names[:index]
+            ]
+        )
+        return runtime(axis) if index in runtime_columns else axis
+
+    return {name: make_axis(i) for i, name in enumerate(names)}
+
+
 checked_formats_and_dest_acc = {}
 
 DEST_SYNC_TILE_LIMITS = {
@@ -667,6 +722,17 @@ def _resolve_quasar_fpu_sfpu_variant(
     )
 
 
+def _quasar_dest_candidates(
+    formats: InputOutputFormat, dest_acc: DestAccumulation
+) -> Tuple[DataFormat, ...]:
+    if dest_acc == DestAccumulation.No:
+        return _quasar_narrow_dest_candidates(
+            formats.input_format, formats.output_format
+        )
+    wide = DataFormat.Int32 if formats.input_format.is_integer() else DataFormat.Float32
+    return (wide,)
+
+
 def resolve_quasar_sfpu_variant(
     op: Optional[MathOperation],
     formats: InputOutputFormat,
@@ -680,12 +746,7 @@ def resolve_quasar_sfpu_variant(
     if formats.input_format.is_integer() != formats.output_format.is_integer():
         return None
 
-    dest_candidates = (
-        (DataFormat.Int32 if formats.input_format.is_integer() else DataFormat.Float32,)
-        if dest_acc == DestAccumulation.Yes
-        else _quasar_narrow_dest_candidates(formats.input_format, formats.output_format)
-    )
-    for dest_format in dest_candidates:
+    for dest_format in _quasar_dest_candidates(formats, dest_acc):
         variant = _resolve_quasar_direct_sfpu_variant(formats, dest_acc, dest_format)
         if variant is not None:
             return variant
@@ -940,6 +1001,74 @@ def generate_reduced_input_dimensions(
     return [
         [rows * num_tile_rows, columns * num_tile_cols] for rows, columns in tile_counts
     ]
+
+
+# Dest sections a dest-depth sweep refills: 4 and 8 blocks walk both Half-sync banks several times.
+DEST_DEPTH_BLOCK_COUNTS = (4, 8)
+
+
+def generate_dest_depth_input_dimensions(
+    dest_acc,
+    dest_sync=DestSync.Half,
+    tile_shape=None,
+    block_counts=DEST_DEPTH_BLOCK_COUNTS,
+):
+    """Tall matrices that fill one Dest section per block, ``block_counts`` blocks each.
+
+    Args:
+        dest_acc: Dest 16/32 bit mode
+        dest_sync: DestSync mode. Defaults to DestSync.Half
+        tile_shape: Tile shape the dimensions are expressed in. Defaults to 32x32.
+        block_counts: Number of full Dest sections each matrix spans.
+
+    Returns:
+        List of input dimensions, one per block count
+    """
+    if tile_shape is None:
+        tile_shape = construct_tile_shape()
+
+    max_tiles_in_dest = max_dest_tiles(dest_acc, dest_sync)
+    return [
+        [
+            blocks * max_tiles_in_dest * tile_shape.total_row_dim(),
+            tile_shape.total_col_dim(),
+        ]
+        for blocks in block_counts
+    ]
+
+
+def generate_parallel_matmul_dest_depth_profiles(dest_acc, dest_sync=DestSync.Half):
+    """(SFPU operand, matmul A, matmul B) dims for the SFPU-parallel-matmul dest-depth sweeps.
+
+    The matmul output (ct=2, kt=1) spans 4 and 8 full Dest sections beside an 8-tile SFPU operand.
+    """
+    rt_per_block = max_dest_tiles(dest_acc, dest_sync) // 2
+    return [
+        ([32, 256], [32 * blocks * rt_per_block, 32], [32, 64])
+        for blocks in DEST_DEPTH_BLOCK_COUNTS
+    ]
+
+
+def quasar_sfpu_fpu_route_variants(
+    formats_list: List[InputOutputFormat],
+) -> List[QuasarSfpuVariant]:
+    """FPU-datacopy routes into a 16-bit and a 32-bit Dest for the formats SrcA holds unconverted.
+
+    The resolver prefers Unpack-to-Dest wherever it is valid, so it never picks these routes itself.
+    """
+    variants = []
+    for formats in formats_list:
+        if _quasar_fpu_source_format(formats.input_format) != formats.input_format:
+            continue
+        for dest_acc in (DestAccumulation.No, DestAccumulation.Yes):
+            for dest_format in _quasar_dest_candidates(formats, dest_acc):
+                variant = _resolve_quasar_fpu_sfpu_variant(
+                    formats, dest_acc, dest_format
+                )
+                if variant is not None:
+                    variants.append(variant)
+                    break
+    return variants
 
 
 PERF_INPUT_DIMENSIONS = (

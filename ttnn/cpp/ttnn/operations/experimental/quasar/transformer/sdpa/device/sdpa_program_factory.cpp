@@ -21,7 +21,6 @@
 
 using namespace tt::constants;
 using namespace tt::tt_metal;
-using namespace tt::tt_metal::experimental;
 
 namespace ttnn::prim::qsr {
 
@@ -163,7 +162,7 @@ ChunkedParams compute_chunked_params(
         TT_FATAL(p.page_table_stick_size % 32 == 0, "page table stick size must be a multiple of 32");
     } else {
         p.max_blocks_per_seq = page_table_tensor.padded_shape()[1];
-        p.page_table_stick_size = page_table_tensor.buffer()->aligned_page_size();
+        p.page_table_stick_size = page_table_tensor.mesh_buffer().aligned_page_size();
         TT_FATAL(
             p.page_table_stick_size % 32 == 0,
             "page table page size in bytes must be a multiple of 32 due to address alignment");
