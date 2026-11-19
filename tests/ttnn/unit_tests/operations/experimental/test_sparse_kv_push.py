@@ -8,7 +8,10 @@ must return exactly the rows the top-k names. Index patterns are synthetic edge 
 packet packing, masking, and the prefix/remainder split; real GLM-5.3 top-k runs in the nightly sparse SDPA push test.
 """
 
+import os
+import statistics
 import zlib
+from pathlib import Path
 
 import numpy as np
 import pytest
@@ -16,6 +19,7 @@ import torch
 
 import ttnn
 from models.demos.deepseek_v3_d_p.tt.mla.sparse_kv_push import SparseKvPushPart as Part
+from tt_py_test_utils_common.realtime_profiler_utils import profile_realtime_program_merged
 
 # The ops' compact layout (pages_per_packet, banks), exported for tests to lay out reference buffers.
 packet_shape = ttnn._ttnn.operations.experimental._sparse_kv_push_packet_shape
@@ -400,6 +404,104 @@ def test_sparse_kv_push_xy4(mesh_device, monkeypatch, sp_axis, pattern):
     cache = _cache(mesh_device, 2, max_rows, sc, page_bytes // 4)
     push = Push(mesh_device, cache, idx, max_rows=max_rows, sc=sc, page_bytes=page_bytes, chunk_start=start)
     _run_parts(mesh_device, push, slot=1, chunk_start=start, tag=f"xy4 sp{sp_axis} {pattern}", batch_index=1)
+
+
+# The GLM-5.3 1M-token cache of a 4x4 stage: 2560-token chunks, 160 rows per stripe, 704 B scaled-FP8 rows.
+_STAGE_CACHE_ROWS = 1_041_920
+_STAGE_CHUNK_START = 1_039_360
+_GLM_1M_TRACE = Path(
+    os.environ.get(
+        "GLM53_1M_TRACE", "/mnt/weka/model-cache/scratch/zai-org/GLM-5.3-Cache/golden_traces/glm53-1020k-last5120"
+    )
+)
+_PERF_STEPS = {
+    "plan": "/sparse_kv_push/plan/",
+    "table gather": "/high_bw_all_gather/",
+    "push": "/sparse_kv_push/push/",
+}
+_PERF_SAMPLES = 7
+
+_SUBTORUS_4X4_PERF_FABRICS = [
+    pytest.param(
+        {**_device_params(), "require_exact_physical_num_devices": True},
+        id="ring_ring",
+    ),
+    pytest.param(
+        {
+            **_device_params(),
+            "fabric_config": ttnn.FabricConfig.FABRIC_2D_TORUS_X,
+            "require_exact_physical_num_devices": True,
+        },
+        id="line_ring",
+    ),
+]
+
+
+def _stage_topk(source):
+    """[16, 160, TOPK] indices into the stage cache: the synthetic "random" pattern, or one layer of the staged GLM-5.3
+    1M top-k (the first 2560 of the trace's 5120 query rows, whose rows all lie below the chunk's end)."""
+    sc = 160
+    if source == "random":
+        rng = np.random.default_rng(7)
+        return _lay_out(_pattern("random", rng, sc=sc, end=_STAGE_CACHE_ROWS, start=_STAGE_CHUNK_START), sc, rng)
+    from safetensors.numpy import load_file
+
+    f = _GLM_1M_TRACE / "dsa" / f"dsa_topk_indices_layer_{source}" / "rows_00000000_00005120.safetensors"
+    if not f.exists():
+        pytest.skip(f"1M GLM-5.3 top-k not staged: {f}")
+    rows = next(iter(load_file(str(f)).values())).astype(np.int64)
+    return rows.reshape(-1, TOPK)[: N_DEV * sc].reshape(N_DEV, sc, TOPK)
+
+
+def _device_ns_by_step(mesh_device, run):
+    """Critical-path device time of each step's programs (max over chips per program, summed per step), for one `run`."""
+    _, per_program = profile_realtime_program_merged(mesh_device, run)
+    totals = {step: 0.0 for step in _PERF_STEPS}
+    for entry in per_program.values():
+        sources = [source.replace("\\", "/") for source in entry["kernel_sources"]]
+        for step, marker in _PERF_STEPS.items():
+            if any(marker in source for source in sources):
+                totals[step] += entry["duration_ns"]
+    return totals
+
+
+@pytest.mark.parametrize("device_params", _SUBTORUS_4X4_PERF_FABRICS, indirect=True)
+@pytest.mark.parametrize("mesh_device", [(4, 4)], ids=["4x4"], indirect=True)
+@pytest.mark.parametrize("sp_axis", [1], ids=["sp1"])
+@pytest.mark.parametrize("source", ["random", "14", "62"], ids=["random", "glm_l14", "glm_l62"])
+def test_sparse_kv_push_subtorus_4x4_perf(mesh_device, monkeypatch, sp_axis, source):
+    """Device time of the plan, its table all-gather and the push (all rows, prefix, rest) at the stage's 1M cache, on
+    the 16-chip [RING, RING] carve and on one [LINE, RING] tray half. Record-only: prints the median and the samples."""
+    monkeypatch.setitem(globals(), "N_DEV", 16)
+    monkeypatch.setitem(globals(), "SP_AXIS", sp_axis)
+    sc, page_bytes = 160, 704
+    idx = _stage_topk(source)
+    cache = _cache(mesh_device, 2, _STAGE_CACHE_ROWS, sc, page_bytes // 4)
+    push = Push(
+        mesh_device, cache, idx, max_rows=_STAGE_CACHE_ROWS, sc=sc, page_bytes=page_bytes, chunk_start=_STAGE_CHUNK_START
+    )
+    out = _filled_buffer(mesh_device, push.rows, push.width)
+    parts = {"push all rows": Part.ALL, "push prefix": Part.PREFIX, "push rest": Part.REST}
+
+    push.plan()
+    for part in parts.values():
+        push.push(out, part, batch_index=1)
+    ttnn.synchronize_device(mesh_device)
+
+    samples = {name: [] for name in ["plan", "table gather", *parts]}
+    for _ in range(_PERF_SAMPLES):
+        planned = _device_ns_by_step(mesh_device, push.plan)
+        samples["plan"].append(planned["plan"])
+        samples["table gather"].append(planned["table gather"])
+        for name, part in parts.items():
+            samples[name].append(_device_ns_by_step(mesh_device, lambda: push.push(out, part, batch_index=1))["push"])
+    for name, values in samples.items():
+        print(
+            f"SPARSE_KV_PUSH_PERF fabric={ttnn.get_fabric_config()} sp_axis={sp_axis} topk={source} step={name} "
+            f"median={statistics.median(values) / 1e3:.1f}us min={min(values) / 1e3:.1f}us max={max(values) / 1e3:.1f}us "
+            f"samples_us={[round(v / 1e3, 1) for v in values]}"
+        )
+    assert all(statistics.median(v) > 0 for v in samples.values()), "a step recorded no device program"
 
 
 @galaxy

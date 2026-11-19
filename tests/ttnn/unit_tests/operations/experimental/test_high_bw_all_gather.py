@@ -1284,6 +1284,34 @@ def test_high_bw_all_gather_galaxy_cylinder_4x4_perf(mesh_device):
     )
 
 
+# The 16-chip stage meshes of one Galaxy, each a 4x4 mesh whose axis 1 rings: the [RING, RING] sub-torus carve
+# (SUBTORUS_4X4_ENV, TorusXY) and one tray half, [LINE, RING] (TorusX). Same payload matrix and floors machinery as
+# the 8x4 cylinder gate; the floors are per fabric because the carve's closed axis 0 adds a Hamiltonian cycle.
+_SUBTORUS_4X4_PERF_FABRICS = [
+    pytest.param(_device_params(ttnn.FabricConfig.FABRIC_2D_TORUS_XY), id="ring_ring"),
+    pytest.param(_device_params(ttnn.FabricConfig.FABRIC_2D_TORUS_X), id="line_ring"),
+]
+
+
+@run_for_blackhole("Blackhole Galaxy 4x4 stage perf requires Blackhole")
+@pytest.mark.skipif(
+    ttnn.get_num_devices() != 16,
+    reason="needs a 16-chip stage mesh (TT_VISIBLE_DEVICES + a 4x4 descriptor: SUBTORUS_4X4_ENV or run_4x4_stage_tests.sh)",
+)
+@pytest.mark.parametrize("device_params", _SUBTORUS_4X4_PERF_FABRICS, indirect=True)
+@pytest.mark.parametrize("mesh_device", [(4, 4)], indirect=True)
+def test_high_bw_all_gather_subtorus_4x4_perf(mesh_device):
+    """Bandwidth of the 16-rank full-mesh gather on a 4x4 stage mesh, each measurement paired with a correctness run."""
+    assert tuple(mesh_device.shape) == (4, 4)
+    _run_high_bw_all_gather_ci_perf(
+        mesh_device,
+        cluster_axis=None,
+        min_bandwidth_gbps=float(os.getenv("TT_METAL_HIGH_BW_ALL_GATHER_SUBTORUS_MIN_GBPS", "0")),
+        global_rows_cases=_GALAXY_CYLINDER_CI_PERF_GLOBAL_ROWS,
+        num_links=2,
+    )
+
+
 @run_for_blackhole("32-rank whole-mesh ring coverage requires Blackhole")
 @pytest.mark.skipif(
     not os.getenv("TT_METAL_SIMULATOR") and os.getenv("TT_METAL_HIGH_BW_ALL_GATHER_RUN_32_RANK_ACCURACY") != "1",
