@@ -1325,6 +1325,17 @@ def _weight_mcast_cores(core_list, m_blocks_per_core):
     return receivers
 
 
+def _weight_shard_tiles(weight_tensor, slot_rows_whole):
+    """The server reader's page runs: (shard rows, shard columns) in tiles of ND-sharded weights
+    (conv2d_3x3.weight_memory_config), or (0, 0), one read per tile, when the weights are DRAM interleaved or a slot row
+    is not a whole prepared tile-row (K-blocked rounds of fewer than all C_out columns)."""
+    spec = weight_tensor.memory_config().nd_shard_spec
+    if spec is None or not slot_rows_whole:
+        return (0, 0)
+    shape = list(spec.shard_shape)
+    return (shape[-2] // TILE, shape[-1] // TILE)
+
+
 def _weight_servers(input_tensor, core_list, receivers):
     """One spare core per rectangle of the weight channel (closest to the rectangle's NoC1 multicast start, its high
     corner), as [(rectangle, server core)], or None when the device grid has too few spare cores. A spare core holds
@@ -1443,6 +1454,10 @@ def kw_fold_plan(g, b, has_bias, l1_budget, math_fidelity):
     for bm in (d for d in range(b.core_m_tiles, 0, -1) if b.core_m_tiles % d == 0):
         kb = _kw_fold_blocking(g, b, bm)
         if _kw_fold_cb_bytes(g, kb) <= l1_budget:
+            # K-blocked rounds: a third weight slot where it fits at this bm (never at the cost of a smaller bm).
+            deep = replace(kb, weight_depth=KW_FOLD_KBLOCK_WEIGHT_DEPTH)
+            if kb.weight_depth < deep.weight_depth and _kw_fold_cb_bytes(g, deep) <= l1_budget:
+                kb = deep
             return kb if _kw_fold_pays(g, b, kb, math_fidelity) else None
     return None
 
@@ -1520,6 +1535,12 @@ def _kw_fold_cb_bytes(g, kb):
 KW_FOLD_KBLOCK_MIN_WEIGHT_TILES = 128
 # kw-fold's slab fill batch: tile-rows per reader push (compute waits for the rows each subblock reads).
 KW_FOLD_FILL_BATCH_ROWS = 4
+# K-blocked kw-fold's weight slots where L1 permits at the chosen bm (2 otherwise). With two, a weight server sends round
+# r + 2 only once every receiver of its rectangle freed round r's slot, then multicasts it: on res3.x (3 rounds, ~2 us
+# of matmul each) round 2 landed ~0.5 us after compute reached it. Measured with the ND-sharded weights' faster server
+# reads (LoFi bf8_b, unzoned, medians of 3): res3.x 10.88 -> 10.42 us, inst res2 fc1 -0.4%, the rest flat (their
+# matmul per round outlasts the stream: the extra slot only fills earlier).
+KW_FOLD_KBLOCK_WEIGHT_DEPTH = 3
 
 
 def kw_fold_kblocked(g):
@@ -2398,7 +2419,16 @@ def create_program_descriptor(
             ttnn.KernelDescriptor(
                 kernel_source=str(KERNEL_DIR / "conv2d_3x3_weight_server_reader.cpp"),
                 core_ranges=server_cores,
-                compile_time_args=[CB_WEIGHTS, bk, bn, b.num_k_blocks, num_chunks, int(kwf), g.tensor_n_tiles]
+                compile_time_args=[
+                    CB_WEIGHTS,
+                    bk,
+                    bn,
+                    b.num_k_blocks,
+                    num_chunks,
+                    int(kwf),
+                    g.tensor_n_tiles,
+                    *_weight_shard_tiles(weight_tensor, kwf or bn == g.tensor_n_tiles),
+                ]
                 + list(ttnn.TensorAccessorArgs(weight_tensor).get_compile_time_args()),
                 runtime_args=server_reader_rt,
                 config=ttnn.ReaderConfigDescriptor(),

@@ -1,0 +1,209 @@
+--- a/ttnn/ttnn/operations/conv2d_3x3/conv2d_3x3.py
++++ b/ttnn/ttnn/operations/conv2d_3x3/conv2d_3x3.py
+@@ -30,6 +30,7 @@
+ from .conv2d_3x3_program_descriptor import (
+     Conv3x3Geometry,
+     _core_m_ranges,
++    _kw_fold_group,
+     balanced_block_ranges,
+     block_compute_rows,
+     block_grid_shape,
+@@ -240,7 +241,7 @@
+ ):
+     """[C_out, C_in, 3, 3] -> TILE [1, 1, K_p, C_out]; rows (slice, kh, kw, c), c fastest, each kh block
+     of 3*C_in_p rows zero-padded to a multiple of 32. A BLOCK-sharded input has one slice per shard
+-    column (C_in_p = shard width); every other placement has one."""
++    column (C_in_p = shard width); every other placement has one. DRAM placement: weight_memory_config."""
+     if torch_weight.dim() != 4 or tuple(torch_weight.shape[2:]) != (3, 3):
+         raise ValueError(f"conv2d_3x3: weight must be [C_out, C_in, 3, 3], got {list(torch_weight.shape)}")
+     c_out, c_in = int(torch_weight.shape[0]), int(torch_weight.shape[1])
+@@ -273,10 +274,40 @@
+         dtype=weight_dtype,
+         layout=ttnn.TILE_LAYOUT,
+         device=device,
+-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
++        memory_config=weight_memory_config(c_out, input_memory_config, device),
+     )
+ 
+ 
++def weight_memory_config(c_out, input_memory_config, device):
++    """Where the prepared weights live. HEIGHT-sharded input on fewer cores than the device grid (where the weight
++    servers can run: conv2d_3x3_program_descriptor._weight_servers): ND-sharded over the DRAM banks, round-robin, one
++    shard per tile-row of one kw-fold n-group (the largest divisor of the C_out tiles up to 4), so the server reads each
++    run of round tiles that sits contiguously in one shard as one NoC read (its page runs) instead of one read per tile.
++    Page order is unchanged: every TensorAccessor reads the same tile at the same page id. Measured (LoFi bf8_b, perf
++    focus, unzoned, server reads 2.1 -> 1.3-1.5 us per 52 KB round on res3.x, 4.7 -> 2.2 us per 130 KB on sem dec res3
++    fc0): res3.x 11.16 -> 10.88 us, sem dec res3 fc0 -2.7%, inst dec res3 fc0 -3.1%, inst dec res2 fc0 -2.1%, inst res2
++    fc1 -1.4%, sem dec res3 fc1 -1.1%, sem res2 fc1 -0.8%, the rest flat. HEIGHT input on the whole grid leaves no
++    spare core for a server (stem.conv1/2/3: their cores read the weights one tile at a time), a one-tile-wide n-group
++    has no run longer than a tile, and the other placements have no servers: those stay DRAM interleaved."""
++    if input_memory_config.memory_layout != _ML.HEIGHT_SHARDED:
++        return ttnn.DRAM_MEMORY_CONFIG
++    grid = device.compute_with_storage_grid_size()
++    if input_memory_config.shard_spec.grid.num_cores() >= grid.x * grid.y:
++        return ttnn.DRAM_MEMORY_CONFIG
++    cols = _kw_fold_group(-(-c_out // TILE))
++    if cols == 1:
++        # One-tile shards round-robin are the interleaved page-to-bank map: nothing to read as runs.
++        return ttnn.DRAM_MEMORY_CONFIG
++    banks = device.dram_grid_size().x
++    spec = ttnn.NdShardSpec(
++        shard_shape=[1, 1, TILE, cols * TILE],
++        grid=ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(b, 0), ttnn.CoreCoord(b, 0)) for b in range(banks)]),
++        orientation=ttnn.ShardOrientation.ROW_MAJOR,
++        shard_distribution_strategy=ttnn.ShardDistributionStrategy.ROUND_ROBIN_1D,
++    )
++    return ttnn.MemoryConfig(buffer_type=ttnn.BufferType.DRAM, nd_shard_spec=spec)
++
++
+ def prepare_conv2d_bias(
+     torch_bias,
+     *,
+--- a/ttnn/ttnn/operations/conv2d_3x3/conv2d_3x3_program_descriptor.py
++++ b/ttnn/ttnn/operations/conv2d_3x3/conv2d_3x3_program_descriptor.py
+@@ -1309,6 +1309,17 @@
+     return receivers
+ 
+ 
++def _weight_shard_tiles(weight_tensor, slot_rows_whole):
++    """The server reader's page runs: (shard rows, shard columns) in tiles of ND-sharded weights
++    (conv2d_3x3.weight_memory_config), or (0, 0), one read per tile, when the weights are DRAM interleaved or a slot row
++    is not a whole prepared tile-row (K-blocked rounds of fewer than all C_out columns)."""
++    spec = weight_tensor.memory_config().nd_shard_spec
++    if spec is None or not slot_rows_whole:
++        return (0, 0)
++    shape = list(spec.shard_shape)
++    return (shape[-2] // TILE, shape[-1] // TILE)
++
++
+ def _weight_servers(input_tensor, core_list, receivers):
+     """One spare core per rectangle of the weight channel (closest to the rectangle's NoC1 multicast start, its high
+     corner), as [(rectangle, server core)], or None when the device grid has too few spare cores. A spare core holds
+@@ -1427,6 +1438,10 @@
+     for bm in (d for d in range(b.core_m_tiles, 0, -1) if b.core_m_tiles % d == 0):
+         kb = _kw_fold_blocking(g, b, bm)
+         if _kw_fold_cb_bytes(g, kb) <= l1_budget:
++            # K-blocked rounds: a third weight slot where it fits at this bm (never at the cost of a smaller bm).
++            deep = replace(kb, weight_depth=KW_FOLD_KBLOCK_WEIGHT_DEPTH)
++            if kb.weight_depth < deep.weight_depth and _kw_fold_cb_bytes(g, deep) <= l1_budget:
++                kb = deep
+             return kb if _kw_fold_pays(g, b, kb, math_fidelity) else None
+     return None
+ 
+@@ -1504,6 +1519,12 @@
+ KW_FOLD_KBLOCK_MIN_WEIGHT_TILES = 128
+ # kw-fold's slab fill batch: tile-rows per reader push (compute waits for the rows each subblock reads).
+ KW_FOLD_FILL_BATCH_ROWS = 4
++# K-blocked kw-fold's weight slots where L1 permits at the chosen bm (2 otherwise). With two, a weight server sends round
++# r + 2 only once every receiver of its rectangle freed round r's slot, then multicasts it: on res3.x (3 rounds, ~2 us
++# of matmul each) round 2 landed ~0.5 us after compute reached it. Measured with the ND-sharded weights' faster server
++# reads (LoFi bf8_b, unzoned, medians of 3): res3.x 10.88 -> 10.42 us, inst res2 fc1 -0.4%, the rest flat (their
++# matmul per round outlasts the stream: the extra slot only fills earlier).
++KW_FOLD_KBLOCK_WEIGHT_DEPTH = 3
+ 
+ 
+ def kw_fold_kblocked(g):
+@@ -2376,7 +2397,16 @@
+             ttnn.KernelDescriptor(
+                 kernel_source=str(KERNEL_DIR / "conv2d_3x3_weight_server_reader.cpp"),
+                 core_ranges=server_cores,
+-                compile_time_args=[CB_WEIGHTS, bk, bn, b.num_k_blocks, num_chunks, int(kwf), g.tensor_n_tiles]
++                compile_time_args=[
++                    CB_WEIGHTS,
++                    bk,
++                    bn,
++                    b.num_k_blocks,
++                    num_chunks,
++                    int(kwf),
++                    g.tensor_n_tiles,
++                    *_weight_shard_tiles(weight_tensor, kwf or bn == g.tensor_n_tiles),
++                ]
+                 + list(ttnn.TensorAccessorArgs(weight_tensor).get_compile_time_args()),
+                 runtime_args=server_reader_rt,
+                 config=ttnn.ReaderConfigDescriptor(),
+--- a/ttnn/ttnn/operations/conv2d_3x3/kernels/conv2d_3x3_weight_server_reader.cpp
++++ b/ttnn/ttnn/operations/conv2d_3x3/kernels/conv2d_3x3_weight_server_reader.cpp
+@@ -8,7 +8,10 @@
+ // multicast of round r. Each round is read in num_chunks chunks, each under its own transaction id and pushed as soon
+ // as it landed while the next chunk's reads are in flight, so the multicast of a round starts before its last read.
+ // One reader issuing one-tile reads is bound by the NIU's outstanding reads (~34 GB/s at 1088 B tiles), not by
+-// the issue loop.
++// the issue loop. With ND-sharded weights (conv2d_3x3.weight_memory_config: shards of shard_rows tile-rows x
++// shard_cols columns, round-robin over the DRAM banks) every run of slot tiles that is contiguous both in the slot and in
++// one shard is one read (page runs): a shard's tiles sit at consecutive aligned-page addresses in its bank. On res3.x a
++// 52 KB round is 12 reads of 4 tiles instead of 48 one-tile reads (2.1 -> 1.3-1.5 us).
+ 
+ #include <cstdint>
+ 
+@@ -26,10 +29,17 @@
+     // 2)[kb % 3], [3 C_in, rw] in (kh, c, n) order (block_k_tiles = C_in, block_n_tiles = 3 rw: the same round size).
+     constexpr bool kw_fold = get_compile_time_arg_val(5) != 0;
+     constexpr uint32_t tensor_n_tiles = get_compile_time_arg_val(6);
+-    constexpr auto weight_args = TensorAccessorArgs<7>();
++    // ND-sharded weights: the shard's [rows, columns] in tiles; 0 rows = interleaved (one read per tile).
++    constexpr uint32_t shard_rows = get_compile_time_arg_val(7);
++    constexpr uint32_t shard_cols = get_compile_time_arg_val(8);
++    constexpr auto weight_args = TensorAccessorArgs<9>();
+     constexpr uint32_t round_tiles = block_k_tiles * block_n_tiles;
+     static_assert(num_chunks >= 1 && num_chunks <= 8 && round_tiles % num_chunks == 0);
+     constexpr uint32_t chunk_tiles = round_tiles / num_chunks;
++    // Guarded: this branch is compiled on every shape (block_n_tiles may be < 3 off kw-fold).
++    constexpr uint32_t rw = block_n_tiles >= 3 ? block_n_tiles / 3 : 1;
++    // A slot holds rows of row_tiles tiles: (kh, c) rows of one n-group on kw-fold, K-block rows of all C_out otherwise.
++    constexpr uint32_t row_tiles = kw_fold ? rw : block_n_tiles;
+ 
+     const uint32_t weight_addr = get_arg_val<uint32_t>(0);
+     const uint32_t num_rounds = get_arg_val<uint32_t>(1);
+@@ -47,8 +57,6 @@
+         const uint32_t page0 = kb * round_tiles;
+         auto page_of = [&](uint32_t t) -> uint32_t {
+             if constexpr (kw_fold) {
+-                // Guarded: this branch is compiled on every shape (block_n_tiles may be < 3 off kw-fold).
+-                constexpr uint32_t rw = block_n_tiles >= 3 ? block_n_tiles / 3 : 1;
+                 const uint32_t n = t % rw;
+                 const uint32_t kc = t / rw;
+                 const uint32_t kh = kc / block_k_tiles;
+@@ -59,13 +67,40 @@
+                 return page0 + t;
+             }
+         };
++        // Slot tiles [t, end) of this chunk, as runs. From slot tile t the run goes to the edge of its page's shard row
++        // (within the slot row); while a slot row is exactly one shard row, on through the shard's next rows, which the
++        // next slot rows hold (kw-fold: up to the end of the kh block; K-block: of the round).
++        auto read_tiles = [&](uint32_t t, uint32_t end) {
++            while (t < end) {
++                const uint32_t page = page_of(t);
++                uint32_t len = 1;
++                if constexpr (shard_rows > 0) {
++                    const uint32_t i = t / row_tiles;
++                    const uint32_t n = t - i * row_tiles;
++                    const uint32_t row = page / tensor_n_tiles;
++                    const uint32_t c = page - row * tensor_n_tiles;
++                    len = shard_cols - c % shard_cols;
++                    if (len > row_tiles - n) {
++                        len = row_tiles - n;
++                    }
++                    if (row_tiles == shard_cols && (c - n) % shard_cols == 0 && n + len == row_tiles) {
++                        const uint32_t in_shard = shard_rows - 1 - row % shard_rows;
++                        const uint32_t follow = block_k_tiles - 1 - (kw_fold ? i % block_k_tiles : i);
++                        len += (in_shard < follow ? in_shard : follow) * row_tiles;
++                    }
++                    if (len > end - t) {
++                        len = end - t;
++                    }
++                }
++                reads.read(weights.get_noc_addr(page), l1 + t * tile_bytes, len * tile_bytes);
++                t += len;
++            }
++        };
+         // Issue chunk c, then hand over chunk c - 1.
+         for (uint32_t c = 0; c <= num_chunks; ++c) {
+             if (c < num_chunks) {
+                 reads.begin(1 + c);
+-                for (uint32_t t = c * chunk_tiles; t < (c + 1) * chunk_tiles; ++t) {
+-                    reads.read(weights.get_noc_addr(page_of(t)), l1 + t * tile_bytes, tile_bytes);
+-                }
++                read_tiles(c * chunk_tiles, (c + 1) * chunk_tiles);
+                 dataflow_kernel_lib::set_read_trid(reads.noc, 0);
+             }
+             if (c > 0) {

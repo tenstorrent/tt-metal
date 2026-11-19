@@ -30,6 +30,7 @@ from ttnn.operations._op_contract import ExcludedCell, UnsupportedAxisValue
 from .conv2d_3x3_program_descriptor import (
     Conv3x3Geometry,
     _core_m_ranges,
+    _kw_fold_group,
     balanced_block_ranges,
     block_compute_rows,
     block_grid_shape,
@@ -240,7 +241,7 @@ def prepare_conv2d_weights(
 ):
     """[C_out, C_in, 3, 3] -> TILE [1, 1, K_p, C_out]; rows (slice, kh, kw, c), c fastest, each kh block
     of 3*C_in_p rows zero-padded to a multiple of 32. A BLOCK-sharded input has one slice per shard
-    column (C_in_p = shard width); every other placement has one."""
+    column (C_in_p = shard width); every other placement has one. DRAM placement: weight_memory_config."""
     if torch_weight.dim() != 4 or tuple(torch_weight.shape[2:]) != (3, 3):
         raise ValueError(f"conv2d_3x3: weight must be [C_out, C_in, 3, 3], got {list(torch_weight.shape)}")
     c_out, c_in = int(torch_weight.shape[0]), int(torch_weight.shape[1])
@@ -273,8 +274,38 @@ def prepare_conv2d_weights(
         dtype=weight_dtype,
         layout=ttnn.TILE_LAYOUT,
         device=device,
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        memory_config=weight_memory_config(c_out, input_memory_config, device),
     )
+
+
+def weight_memory_config(c_out, input_memory_config, device):
+    """Where the prepared weights live. HEIGHT-sharded input on fewer cores than the device grid (where the weight
+    servers can run: conv2d_3x3_program_descriptor._weight_servers): ND-sharded over the DRAM banks, round-robin, one
+    shard per tile-row of one kw-fold n-group (the largest divisor of the C_out tiles up to 4), so the server reads each
+    run of round tiles that sits contiguously in one shard as one NoC read (its page runs) instead of one read per tile.
+    Page order is unchanged: every TensorAccessor reads the same tile at the same page id. Measured (LoFi bf8_b, perf
+    focus, unzoned, server reads 2.1 -> 1.3-1.5 us per 52 KB round on res3.x, 4.7 -> 2.2 us per 130 KB on sem dec res3
+    fc0): res3.x 11.16 -> 10.88 us, sem dec res3 fc0 -2.7%, inst dec res3 fc0 -3.1%, inst dec res2 fc0 -2.1%, inst res2
+    fc1 -1.4%, sem dec res3 fc1 -1.1%, sem res2 fc1 -0.8%, the rest flat. HEIGHT input on the whole grid leaves no
+    spare core for a server (stem.conv1/2/3: their cores read the weights one tile at a time), a one-tile-wide n-group
+    has no run longer than a tile, and the other placements have no servers: those stay DRAM interleaved."""
+    if input_memory_config.memory_layout != _ML.HEIGHT_SHARDED:
+        return ttnn.DRAM_MEMORY_CONFIG
+    grid = device.compute_with_storage_grid_size()
+    if input_memory_config.shard_spec.grid.num_cores() >= grid.x * grid.y:
+        return ttnn.DRAM_MEMORY_CONFIG
+    cols = _kw_fold_group(-(-c_out // TILE))
+    if cols == 1:
+        # One-tile shards round-robin are the interleaved page-to-bank map: nothing to read as runs.
+        return ttnn.DRAM_MEMORY_CONFIG
+    banks = device.dram_grid_size().x
+    spec = ttnn.NdShardSpec(
+        shard_shape=[1, 1, TILE, cols * TILE],
+        grid=ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(b, 0), ttnn.CoreCoord(b, 0)) for b in range(banks)]),
+        orientation=ttnn.ShardOrientation.ROW_MAJOR,
+        shard_distribution_strategy=ttnn.ShardDistributionStrategy.ROUND_ROBIN_1D,
+    )
+    return ttnn.MemoryConfig(buffer_type=ttnn.BufferType.DRAM, nd_shard_spec=spec)
 
 
 def prepare_conv2d_bias(

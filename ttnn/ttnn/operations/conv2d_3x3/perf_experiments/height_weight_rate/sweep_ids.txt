@@ -1,0 +1,1 @@
+res3_{1,2,3}_conv2 semantic0 instance0 semantic1 semantic3 instance2 res2_{0,1,2}_conv2 center_head_1 semantic2 instance1 res3_0_conv2 stem_conv1 stem_conv2 stem_conv3 res4_{1__5}_conv2 I:H64_W128_Ci128_Co128_p1-tile_bf8b I:H128_W256_Ci64_Co64_p1-tile_bf8b

@@ -1,0 +1,90 @@
+SAFE_PYTEST: Waiting for device lock...
+[2026-11-19 10:17:10] SAFE_PYTEST: waiting for device (20s) — holder pid=2931665 cmd="/bin/bash scripts/run_safe_pytest.sh --profile --run-all /localdev/pmilojevic/workspaces/opgen/ttnn/ttnn/operations/conv2d_3x3/perf_experiments/stem1_slab_tilize/test_sd.py --import-mode=prepend -q " parent pid=2931655 cmd="bash ttnn/ttnn/operations/conv2d_3x3/perf_experiments/stem1_slab_tilize/run.sh sw1 "
+[2026-11-19 10:17:32] SAFE_PYTEST: waiting for device (40s) — holder pid=2931665 cmd="/bin/bash scripts/run_safe_pytest.sh --profile --run-all /localdev/pmilojevic/workspaces/opgen/ttnn/ttnn/operations/conv2d_3x3/perf_experiments/stem1_slab_tilize/test_sd.py --import-mode=prepend -q " parent pid=2931655 cmd="bash ttnn/ttnn/operations/conv2d_3x3/perf_experiments/stem1_slab_tilize/run.sh sw1 "
+SAFE_PYTEST: Device lock acquired
+SAFE_PYTEST: dispatch_timeout=5s
+PRECOMPILE: off (narrow) — kernels compile on demand
+SAFE_PYTEST: python -m tracy -r -m pytest --import-mode=prepend ttnn/ttnn/operations/conv2d_3x3/perf_experiments/height_weight_rate/test_hwr_op.py::test_conv2d_3x3_perf_focus\[res2_\{0\,1\,2\}_conv2\]
+========================================
+2026-11-19 10:17:43.525 | INFO     | __main__:main:381 - Using port 8086
+2026-11-19 10:17:43.526 | INFO     | tracy:run_report_setup:91 - Verifying tracy profiling tools
+2026-11-19 10:17:43.574 | INFO     | __main__:run_workload:416 - Test process started
+2026-11-19 10:17:46.083 | DEBUG    | ttnn:<module>:45 - Initial ttnn.CONFIG:
+Config{cache_path=/home/pmilojevic/.cache/ttnn,model_cache_path=/home/pmilojevic/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,validate_program_args=false,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_graph_python_stack_traces=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,strict_ccl_topology=false,verify_replicated_shards_on_dump=true,std::nullopt}
+============================= test session starts ==============================
+platform linux -- Python 3.10.19, pytest-9.0.3, pluggy-1.7.0 -- /localdev/pmilojevic/workspaces/opgen/python_env/bin/python
+cachedir: .pytest_cache
+benchmark: 5.2.3 (defaults: timer=time.perf_counter disable_gc=False min_rounds=5 min_time=0.000005 max_time=1.0 calibration_precision=10 warmup=False warmup_iterations=100000)
+rootdir: /localdev/pmilojevic/workspaces/opgen
+configfile: pytest.ini
+plugins: split-0.11.0, repeat-0.9.4, anyio-4.16.0, benchmark-5.2.3, github-actions-annotate-failures-0.3.0, timeout-2.4.0, cov-7.0.0, dash-2.15.0
+timeout: 300.0s
+timeout method: signal
+timeout func_only: False
+collecting ... collected 1 item
+
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/height_weight_rate/test_hwr_op.py::test_conv2d_3x3_perf_focus[res2_{0,1,2}_conv2] <- tests/ttnn/unit_tests/operations/conv2d_3x3/test_conv2d_3x3_perf.py 2026-11-19 10:17:51.084 | info     |          Device | Opening user mode device driver (tt_cluster.cpp:252)
+2026-11-19 10:17:51.084 | info     |             UMD | Cluster constructor started. (cluster.cpp:434)
+2026-11-19 10:17:51.086 | info     |             UMD | Creating TopologyDiscovery for architecture: blackhole (topology_discovery.cpp:137)
+2026-11-19 10:17:51.086 | info     |             UMD | Starting topology discovery. (topology_discovery.cpp:156)
+2026-11-19 10:17:51.109 | info     |             UMD | Established firmware bundle version: 19.16.1 (topology_discovery.cpp:700)
+2026-11-19 10:17:51.110 | info     |             UMD | Completed topology discovery. (topology_discovery.cpp:161)
+2026-11-19 10:17:51.374 | info     |             UMD | Opening local chip ids/PCIe ids: {0, 1, 2, 3, 4, 5, 6, 7}/[2, 3, 1, 0, 6, 7, 5, 4] and remote chip ids {} (cluster.cpp:174)
+2026-11-19 10:17:51.374 | info     |             UMD | IOMMU: enabled (cluster.cpp:148)
+2026-11-19 10:17:51.374 | info     |             UMD | KMD version: 2.9.0 (cluster.cpp:151)
+2026-11-19 10:17:51.374 | info     |             UMD | Cluster constructor completed. (cluster.cpp:893)
+2026-11-19 10:17:51.382 | info     |             UMD | Starting devices in cluster (cluster.cpp:1482)
+2026-11-19 10:17:51.691 | info     |             UMD | Starting devices in cluster completed. (cluster.cpp:1491)
+2026-11-19 10:17:51.842 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:571)
+2026-11-19 10:17:51.842 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:624)
+2026-11-19 10:17:52.031 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using distributed::MeshDevice::create_unit_meshes(). (device_manager.cpp:265)
+2026-11-19 10:17:52.050 | info     |           Metal | Profiler started on device 0 (profiler_initializer.cpp:49)
+PASSED2026-11-19 10:17:52.956 | info     |           Metal | Device kernel duration perf summary (device=0): count=1, min=11184ns, avg=11184.0ns, max=11184ns (profiler_analysis.cpp:729)
+2026-11-19 10:17:52.956 | info     |           Metal | Device kernel duration perf histogram (device=0): (buckets=10, bucket_size=100ns, range=[11100..12100), underflow(<11100ns)=0, overflow(>=12100ns)=0) (profiler_analysis.cpp:772)
+2026-11-19 10:17:52.956 | info     |           Metal |   [       11100 ..        11200) |########################################|        1 (profiler_analysis.cpp:777)
+2026-11-19 10:17:52.956 | info     |           Metal |   [       11200 ..        11300) |                                        |        0 (profiler_analysis.cpp:777)
+2026-11-19 10:17:52.956 | info     |           Metal |   [       11300 ..        11400) |                                        |        0 (profiler_analysis.cpp:777)
+2026-11-19 10:17:52.956 | info     |           Metal |   [       11400 ..        11500) |                                        |        0 (profiler_analysis.cpp:777)
+2026-11-19 10:17:52.956 | info     |           Metal |   [       11500 ..        11600) |                                        |        0 (profiler_analysis.cpp:777)
+2026-11-19 10:17:52.956 | info     |           Metal |   [       11600 ..        11700) |                                        |        0 (profiler_analysis.cpp:777)
+2026-11-19 10:17:52.956 | info     |           Metal |   [       11700 ..        11800) |                                        |        0 (profiler_analysis.cpp:777)
+2026-11-19 10:17:52.956 | info     |           Metal |   [       11800 ..        11900) |                                        |        0 (profiler_analysis.cpp:777)
+2026-11-19 10:17:52.956 | info     |           Metal |   [       11900 ..        12000) |                                        |        0 (profiler_analysis.cpp:777)
+2026-11-19 10:17:52.956 | info     |           Metal |   [       12000 ..        12100) |                                        |        0 (profiler_analysis.cpp:777)
+
+
+- generated xml file: /localdev/pmilojevic/workspaces/opgen/generated/test_reports/most_recent_tests.xml -
+============================= slowest 25 durations =============================
+1.67s setup    ttnn/ttnn/operations/conv2d_3x3/perf_experiments/height_weight_rate/test_hwr_op.py::test_conv2d_3x3_perf_focus[res2_{0,1,2}_conv2]
+0.15s call     ttnn/ttnn/operations/conv2d_3x3/perf_experiments/height_weight_rate/test_hwr_op.py::test_conv2d_3x3_perf_focus[res2_{0,1,2}_conv2]
+0.06s teardown ttnn/ttnn/operations/conv2d_3x3/perf_experiments/height_weight_rate/test_hwr_op.py::test_conv2d_3x3_perf_focus[res2_{0,1,2}_conv2]
+============================== 1 passed in 2.59s ===============================
+2026-11-19 10:17:55.019 | info     |    BuildKernels | JIT cache stats: 26/26 hits (100.0%) [26 cached, 70 build-once dedup, 0 merged artifacts, 0 merged genfiles] (build_cache_telemetry.cpp:362)
+2026-11-19 10:17:55.019 | info     |    BuildKernels | JIT telemetry: 38 registered TelemetryTokens (build_cache_telemetry.cpp:510)
+2026-11-19 10:17:55.070 | info     |          Device | Closing user mode device drivers (tt_cluster.cpp:605)
+2026-11-19 10:17:55.070 | info     |             UMD | Closing devices in cluster (cluster.cpp:1496)
+2026-11-19 10:17:55.525 | info     |             UMD | Closing devices in cluster completed. (cluster.cpp:1506)
+2026-11-19 10:17:55.525 | info     |             UMD | Cluster destructor started. (cluster.cpp:1227)
+2026-11-19 10:17:55.525 | info     |             UMD | Cluster destructor completed. (cluster.cpp:1240)
+2026-11-19 10:17:55.783 | INFO     | __main__:main:490 - Copying /tmp/hwr/prof/.logs/tracy_profile_log_host.tracy to /localdev/pmilojevic/workspaces/opgen/build/profiler/build_wasm/traces/test_hwr_op_2026_11_19_10_17_55.tracy
+2026-11-19 10:17:55.786 | INFO     | __main__:main:493 - Copied /tmp/hwr/prof/.logs/tracy_profile_log_host.tracy to /localdev/pmilojevic/workspaces/opgen/build/profiler/build_wasm/traces/test_hwr_op_2026_11_19_10_17_55.tracy
+2026-11-19 10:17:55.786 | INFO     | __main__:main:502 - embed.tracy -> traces/test_hwr_op_2026_11_19_10_17_55.tracy
+2026-11-19 10:17:55.786 | INFO     | tracy.serve_wasm:launch_server_subprocess:310 - Launching tracy web app GUI server subprocess...
+2026-11-19 10:17:55.786 | INFO     | tracy.serve_wasm:launch_server_subprocess:313 - Tracy WASM web UI (open in browser): http://localhost:8080/ (WebSocket for live reload: ws://localhost:8081/)
+2026-11-19 10:17:55.787 | INFO     | tracy.serve_wasm:launch_server_subprocess:320 - Tracy WASM server already serving port 8080; reusing it (live-reload refreshes the browser).
+2026-11-19 10:17:56.666 | INFO     | tracy:generate_report:162 - Host side ops time report generated at /tmp/hwr/prof/.logs/tracy_ops_times.csv
+2026-11-19 10:17:56.713 | INFO     | tracy:generate_report:173 - Host side ops data report generated at /tmp/hwr/prof/.logs/tracy_ops_data.csv
+2026-11-19 10:17:56.713 | INFO     | tracy.process_ops_logs:import_tracy_op_logs:430 - Importing ops logs
+/localdev/pmilojevic/workspaces/opgen/tools/tracy/process_ops_logs.py:535: DtypeWarning: Columns (3,4,8) have mixed types. Specify dtype option on import or set low_memory=False.
+  df = pd.read_csv(tracyOpTimesLog)
+2026-11-19 10:17:58.216 | INFO     | tracy.perf_counter_analysis:get_device_op_data:420 - Getting device ops
+2026-11-19 10:17:58.216 | INFO     | tracy.process_ops_logs:append_device_data:995 - Appending device data
+2026-11-19 10:17:58.223 | INFO     | tracy.process_ops_logs:generate_reports:1323 - OPs' perf analysis is finished! Generating reports ...
+2026-11-19 10:17:58.223 | INFO     | tracy.process_ops_logs:generate_reports:1343 - Copying runtime artifacts
+2026-11-19 10:17:58.248 | INFO     | tracy.process_ops_logs:generate_reports:1352 - Generating OPs CSV
+2026-11-19 10:17:58.249 | INFO     | tracy.process_ops_logs:generate_reports:1814 - OPs csv generated at: /tmp/hwr/prof/reports/2026_11_19_10_17_58/ops_perf_results_2026_11_19_10_17_58.csv
+========================================
+SAFE_PYTEST: WARNING: --profile set but this run produced no ops_perf_results CSV
+SAFE_PYTEST_RESULT: PASS
+========================================
+SAFE_PYTEST_TOTAL_RUNTIME: 0m17s (17s total, device-lock-acquired -> exit)
