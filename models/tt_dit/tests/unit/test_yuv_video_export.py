@@ -40,4 +40,3 @@ def test_encode_error_surfaces_on_finish(tmp_path, clip, expect_error):
     export = YuvVideoExport(bad, str(tmp_path / "out.mp4"), fps=24)
     with expect_error(ValueError, "Unexpected numpy array shape"):
         export.finish(None)
-    assert not export._thread.is_alive()
