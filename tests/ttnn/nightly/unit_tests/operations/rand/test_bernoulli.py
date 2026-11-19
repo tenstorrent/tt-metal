@@ -221,3 +221,18 @@ def test_bernoulli_seed_distinguishes_cache_entries(device):
     assert not torch.equal(out_a, out_c), "a different seed must change the sampled mask (seed re-patched on cache hit)"
 
     device.disable_and_clear_program_cache()
+
+
+@pytest.mark.parametrize(
+    "in_shape, out_shape",
+    [
+        ([1, 1, 32, 64], [1, 1, 1, 2048]),
+        ([1, 1, 32, 64], [1, 1, 64, 32]),
+        ([2, 1, 32, 32], [1, 2, 32, 32]),
+    ],
+)
+def test_bernoulli_rejects_output_with_different_shape(in_shape, out_shape, device, expect_error):
+    npu_input = ttnn.from_torch(torch.zeros(in_shape, dtype=torch.bfloat16), device=device, layout=ttnn.TILE_LAYOUT)
+    npu_output = ttnn.from_torch(torch.zeros(out_shape, dtype=torch.bfloat16), device=device, layout=ttnn.TILE_LAYOUT)
+    with expect_error(RuntimeError, "Output and input tensor shape must be equal"):
+        ttnn.bernoulli(npu_input, 42, output=npu_output)

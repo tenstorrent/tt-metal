@@ -21,7 +21,6 @@
 #include "impl/context/metal_context.hpp"
 #include "impl/context/metal_env_impl.hpp"
 #include "impl/program/slow_dispatch.hpp"
-#include <tt-metalium/tt_metal.hpp>
 #include "llrt/tt_cluster.hpp"
 #ifdef TT_METAL_USE_EMULE
 #include "emule_mesh_command_queue.hpp"
@@ -92,6 +91,9 @@ void EnqueueMeshWorkload(MeshCommandQueue& mesh_cq, MeshWorkload& mesh_workload,
         }
 
         if (is_service_workload.value()) {
+            TT_FATAL(
+                !mesh_workload.impl().has_per_device_runtime_args(),
+                "Per-device runtime args are not supported for service workloads");
             // Service workload: dispatch each program via SD, bypassing FD. Re-confirm each core is still
             // a claimed service core (this loop runs every enqueue, unlike the cached scan): guards the
             // cached classification against a core released between enqueues, failing loudly instead of

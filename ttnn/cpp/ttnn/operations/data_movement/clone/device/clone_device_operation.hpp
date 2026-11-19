@@ -23,6 +23,7 @@ struct CloneOperation {
         const tt::tt_metal::DataType dtype;
         const MemoryConfig memory_config;
         const DeviceComputeKernelConfig compute_kernel_config;
+        const std::optional<CoreRangeSet> sub_core_grids;
     };
 
     struct tensor_args_t {
@@ -56,5 +57,6 @@ ttnn::Tensor clone(
     const Tensor& input,
     const std::optional<DataType>& dtype,
     const std::optional<MemoryConfig>& memory_config,
-    const std::optional<DeviceComputeKernelConfig>& compute_kernel_config);
+    const std::optional<DeviceComputeKernelConfig>& compute_kernel_config,
+    const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt);
 }  // namespace ttnn::prim

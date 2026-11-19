@@ -164,8 +164,8 @@ inline void _llk_math_eltwise_unary_datacopy_(
 
         const std::uint32_t dst_format_masked = masked_data_format(dst_format);
         const int clear_fp32                  = static_cast<int>(
-            dst_format_masked == (std::uint32_t)DataFormat::Float32 || dst_format_masked == (std::uint32_t)DataFormat::Int32 ||
-            dst_format_masked == (std::uint32_t)DataFormat::UInt32);
+            dst_format_masked == static_cast<std::uint32_t>(DataFormat::Float32) || dst_format_masked == static_cast<std::uint32_t>(DataFormat::Int32) ||
+            dst_format_masked == static_cast<std::uint32_t>(DataFormat::UInt32));
         const std::uint32_t tiles_per_bank = clear_fp32 ? 4 : 8;
         const std::uint32_t local_tile     = dst_index & (tiles_per_bank - 1);
 #pragma GCC unroll 0
@@ -545,8 +545,8 @@ inline void eltwise_unary_configure_mop(
  * @param tensor_shape: Tile geometry (face_r_dim, face grid). Total face count must be 1, 2, or 4.
  * @param dst_format: Destination data format (DataFormat enum underlying value); 255 means unset.
  * @note COL broadcast supports only a full 32x32 tile (16-row faces, 2x2 face grid).
- * @note On the unpack thread, pair with @ref _llk_unpack_A_init_ (copy/transpose), @ref _llk_unpack_tilize_init_ (tilize) or @ref _llk_unpack_untilize_init_
- * (untilize) which feed the tile.
+ * @note On the unpack thread, pair with @ref _llk_unpack_A_init_ (copy/transpose) or @ref _llk_unpack_tilize_init_ (tilize),
+ * which feed the tile.
  * @note @ref _llk_math_eltwise_unary_datacopy_ runs the configured op with matching template args.
  */
 template <
