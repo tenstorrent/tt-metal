@@ -232,6 +232,23 @@ if(NOT EXISTS "${EMSCRIPTEN_TOOLCHAIN_FILE}")
     message(FATAL_ERROR "Emscripten toolchain file not found at ${EMSCRIPTEN_TOOLCHAIN_FILE} after install/activate.")
 endif()
 
+# Share the parent CPM source cache with the wasm sub-build. Without it, Tracy's CPM.cmake
+# downloads its deps again into <build>/profiler/build_wasm/.cpm-cache for each build dir.
+# The sub-build has a different source dir, so make a relative path absolute first.
+# CMAKE_CACHE_ARGS keeps paths with spaces or special characters intact.
+set(_tt_tracy_wasm_cache_args "")
+if(CPM_SOURCE_CACHE)
+    cmake_path(
+        ABSOLUTE_PATH
+        CPM_SOURCE_CACHE
+        BASE_DIRECTORY "${CMAKE_SOURCE_DIR}"
+        NORMALIZE
+        OUTPUT_VARIABLE _tt_tracy_wasm_cpm_cache
+    )
+    list(APPEND _tt_tracy_wasm_cache_args "-DCPM_SOURCE_CACHE:PATH=${_tt_tracy_wasm_cpm_cache}")
+    unset(_tt_tracy_wasm_cpm_cache)
+endif()
+
 # Keep output path aligned with Python tooling and CI packaging/tests.
 # No EXCLUDE_FROM_ALL: Ninja's install target depends on all, so cmake --build --target install
 # builds this automatically when Tracy is enabled.
@@ -241,10 +258,12 @@ ExternalProject_Add(
     BINARY_DIR ${CMAKE_BINARY_DIR}/profiler/build_wasm
     CMAKE_ARGS
         -DCMAKE_TOOLCHAIN_FILE=${EMSCRIPTEN_TOOLCHAIN_FILE} -DCMAKE_BUILD_TYPE=MinSizeRel
-        -DCPM_SOURCE_CACHE=${CPM_SOURCE_CACHE}
+    CMAKE_CACHE_ARGS
+        ${_tt_tracy_wasm_cache_args}
     INSTALL_COMMAND
         "" # Suppress default cmake --install: artifacts stay in BINARY_DIR for CI packaging to pick up.
 )
+unset(_tt_tracy_wasm_cache_args)
 
 set(_tt_tracy_categories_file "${CMAKE_CURRENT_SOURCE_DIR}/../tools/profiler/tracy_debug_categories.txt")
 set_property(
