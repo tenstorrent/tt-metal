@@ -82,6 +82,17 @@ def _timing_result(run_type: PerfRunType) -> pd.DataFrame:
     )
 
 
+def test_perf_config_forwards_variant_include_dirs(tmp_path):
+    cfg = PerfConfig(
+        test_name="perf_include_dirs",
+        formats=None,
+        run_types=[PerfRunType.L1_TO_L1],
+        include_dirs=[tmp_path],
+    )
+
+    assert cfg.include_dirs == [tmp_path.resolve()]
+
+
 def _build(formats_config):
     results = [
         _timing_result(PerfRunType.L1_TO_L1),
