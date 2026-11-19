@@ -15,17 +15,14 @@ using namespace tt::tt_fabric::linear::experimental;
 
 constexpr uint32_t cb_stage = get_compile_time_arg_val(0);
 constexpr uint32_t cb_eout = get_compile_time_arg_val(1);  // at the same address on the head cores
-constexpr uint32_t sp_rank = get_compile_time_arg_val(2);
-constexpr uint32_t sp_size = get_compile_time_arg_val(3);
-constexpr uint32_t local_rows = get_compile_time_arg_val(4);
-constexpr uint32_t unit_bytes = get_compile_time_arg_val(5);        // one tile column of a head's state
-constexpr uint32_t chunk_bytes = get_compile_time_arg_val(6);       // one fabric packet
-constexpr uint32_t kt = get_compile_time_arg_val(7);                // tile columns per state
-constexpr uint32_t slots = get_compile_time_arg_val(8);             // unit buffers
-constexpr uint32_t ack_semaphore_id = get_compile_time_arg_val(9);  // on the head cores
-// 1D routing: hops to the successor, 1 forward, or sp_size - 1 backward from the last rank of a line.
-constexpr uint32_t successor_hops = get_compile_time_arg_val(10);
-constexpr auto start_args = TensorAccessorArgs<11>();
+constexpr uint32_t sp_size = get_compile_time_arg_val(2);
+constexpr uint32_t local_rows = get_compile_time_arg_val(3);
+constexpr uint32_t unit_bytes = get_compile_time_arg_val(4);        // one tile column of a head's state
+constexpr uint32_t chunk_bytes = get_compile_time_arg_val(5);       // one fabric packet
+constexpr uint32_t kt = get_compile_time_arg_val(6);                // tile columns per state
+constexpr uint32_t slots = get_compile_time_arg_val(7);             // unit buffers
+constexpr uint32_t ack_semaphore_id = get_compile_time_arg_val(8);  // on the head cores
+constexpr auto start_args = TensorAccessorArgs<9>();
 constexpr uint32_t chunks = (unit_bytes + chunk_bytes - 1) / chunk_bytes;
 // One packet header per packet of each slot, out of this RISC's share of the pool.
 static_assert(
@@ -45,6 +42,9 @@ void kernel_main() {
     const uint16_t dst_chip_id = static_cast<uint16_t>(get_arg_val<uint32_t>(arg++));
     const uint32_t arrival_semaphore = get_arg_val<uint32_t>(arg++);
     const uint32_t final_semaphore = get_arg_val<uint32_t>(arg++);
+    const uint32_t sp_rank = get_arg_val<uint32_t>(arg++);
+    // 1D routing: hops to the successor, 1 forward, or sp_size - 1 backward from the last rank of a line.
+    const uint32_t successor_hops = get_arg_val<uint32_t>(arg++);
     const uint32_t num_heads = get_arg_val<uint32_t>(arg++);  // entries: head core NoC x | y << 16
     const size_t head_args = arg;
     arg += num_heads;
