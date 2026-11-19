@@ -866,7 +866,7 @@
       # MoE. ~26 min on galaxy 8x4 before the pad-row test.
       timeout -k 2m 40m mpirun --bind-to none --pernode --tag-output bash -lc '
         export OMP_NUM_THREADS=$(nproc)
-        python3 -m pytest models/demos/deepseek_v3_d_p/tests/test_glm_prefill_multiuser.py -k "torus-xy-8x4" -vvv --tb=short
+        python3 -m pytest models/demos/deepseek_v3_d_p/tests/test_glm_prefill_multiuser.py -k "torus-xy-8x4 and not mtp" -vvv --tb=short
       '
     )
 
@@ -2323,7 +2323,7 @@
     cd "${TT_METAL_HOME}"
     exec bash models/demos/common/prefill/runners/ci/run_multirank_pcc.sh glm53 sc4 --variant mtp_kv_share
   test_type: prefill_runner_kv_pcc
-  test_tags: [glm_5_3, runner, kv_cache, mtp, glm_mtp_kv_share, glm53_trace]
+  test_tags: [glm_5_3, runner, kv_cache, mtp, glm_mtp_kv_share, glm53_trace, glm_packed]
   test_group: disagg_prefill
   skus:
     bh_sc4:
@@ -2393,6 +2393,10 @@
 # Single-galaxy (SC1) GLM-5.3 MTP KV share prefill KV accuracy and throughput, same launcher as the SC4 entry
 # above and the control for it: one rank skips the D2D union-id transport, so a failure here is MTP prefill
 # itself. Runs the same 1M request as SC4, so the scaling summary has an SC1 baseline at every probe.
+# [3/4] runs it packed: two 5,120-token chunks per forward (glm53_mtp_kv_share_packed.json), traced with D2H acks, the
+# trunk and MTP KV against the same golden tail; [4/4] runs the packed-MTP unit tests at 1 and 4 MTP levels (random
+# weights: packed vs one chunk per forward, traced vs eager). [1/4]-[2/4] measured 18-19 min in nightly CI, [3/4] and
+# [4/4] 991 s and 960 s on galaxy 8x4: ~52 min, inside the 120 min bound.
 - name: "(GLM-5.3-744B) MTP KV share prefill KV accuracy 1M tail@5k + perf 1M@5k, SC1"
   cmd: |
     set -euo pipefail
@@ -2401,9 +2405,9 @@
       cp -rn /ci/tt-metal/. "${TT_METAL_HOME}/"
     fi
     cd "${TT_METAL_HOME}"
-    echo "===== [1/2] (GLM-5.3-744B) MTP KV share prefill KV accuracy 1M tail@5k + perf 1M@5k, runner ====="
+    echo "===== [1/4] (GLM-5.3-744B) MTP KV share prefill KV accuracy 1M tail@5k + perf 1M@5k, runner ====="
     bash models/demos/common/prefill/runners/ci/run_multirank_pcc.sh glm53 sc1 --variant mtp_kv_share || exit $?
-    echo "===== [2/2] (GLM-5.3-744B) MTP1 predictor multi-turn accuracy, 8 turn schedules ====="
+    echo "===== [2/4] (GLM-5.3-744B) MTP1 predictor multi-turn accuracy, 8 turn schedules ====="
     (
       export GLM53_HF_MODEL=/mnt/weka/model-weights/llm/zai-org/GLM-5.3-fp8-aca966e4/
       export TT_GLM53_MTP_TTNN_CACHE=/mnt/weka/model-cache/scratch/zai-org/GLM-5.3-Cache/glm53_mtp_ttnn_cache
@@ -2418,7 +2422,18 @@
         python3 -m pytest models/demos/deepseek_v3_d_p/tests/mtp_prefill/test_mtp.py::test_mtp_multiturn_pcc -k "torus-xy-8x4 and pretrained and levels1" -vvv --tb=short
       '
     ) || exit $?
-    echo "===== both sections passed ====="
+    echo "===== [3/4] (GLM-5.3-744B) packed MTP KV share prefill KV accuracy 1M tail@5k + perf 1M@5k, runner ====="
+    bash models/demos/common/prefill/runners/ci/run_multirank_pcc.sh glm53 sc1 --variant mtp_kv_share_packed || exit $?
+    echo "===== [4/4] (GLM-5.3-744B) packed MTP at 1 and 4 levels: vs one chunk per forward, traced vs eager ====="
+    (
+      export MESH_DEVICE=TG
+      export GLM53_HF_MODEL=/mnt/weka/model-weights/llm/zai-org/GLM-5.3-fp8-aca966e4/
+      timeout -k 2m 25m mpirun --bind-to none --pernode --tag-output bash -lc '
+        export OMP_NUM_THREADS=$(nproc)
+        python3 -m pytest models/demos/deepseek_v3_d_p/tests/test_glm_prefill_multiuser.py -k "torus-xy-8x4 and mtp" -vvv --tb=short
+      '
+    ) || exit $?
+    echo "===== all 4 sections passed ====="
   test_type: prefill_runner_kv_pcc
   test_tags: [glm_5_3, runner, kv_cache, mtp, glm_mtp_kv_share, glm53_trace]
   test_group: disagg_prefill
