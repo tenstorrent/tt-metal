@@ -218,6 +218,16 @@ Differences that matter when comparing architectures:
   that matches: `num_blocks * input_num_tiles_in_block == tile_cnt`.
 - `input_tile_cnt` is only a retired alias of `tile_cnt`; the columns that
   exist are `tile_cnt` and, on a few modules, `output_tile_cnt`.
+- `_llk_pack_` covers a different amount of work per call on each
+  architecture. WH/BH `pack_test.cpp` calls it once per tile inside the
+  `NUM_TILES_IN_BLOCK` loop, so it packs one tile per call. Quasar
+  `pack_quasar_test.cpp` programs the pack MOP for `tiles_in_block` tiles in
+  `_llk_pack_init_` and calls `_llk_pack_` once per block. `tile_cnt` is the
+  total tile count on both sides, so the per-tile normalization is
+  consistent, but the instruction-level work and call overhead per
+  `_llk_pack_` call are not: read pack deltas across architectures per tile,
+  not per call. On Quasar the `num_tiles_in_block` column of `perf_pack_quasar`
+  records the tiles per `_llk_pack_` call.
 
 ## Where reports land
 

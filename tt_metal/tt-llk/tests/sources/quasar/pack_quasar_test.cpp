@@ -293,6 +293,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
             {
                 for (std::uint32_t block = 0; block < num_blocks; block++)
                 {
+                    // One call packs all tiles_in_block tiles (MOP programmed in _llk_pack_init_); WH/BH call _llk_pack_ per tile.
                     _llk_pack_(0 /*start_math_dest_tile_idx*/, block * tiles_in_block /*start_l1_tile_idx*/, tensor_shape_A);
                 }
             }
