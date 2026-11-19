@@ -92,7 +92,7 @@ def run(
         partial(torch_random, low=-100, high=100, dtype=torch.float32), input_b_dtype
     )(input_shape)
 
-    golden_function = ttnn.get_golden_function(ttnn.minimum)
+    golden_function = ttnn.get_golden_function(ttnn.maximum)
     torch_output_tensor = golden_function(torch_input_tensor_a, torch_input_tensor_b)
 
     sharded_config = ttnn.create_sharded_memory_config_(
@@ -120,7 +120,7 @@ def run(
     )
 
     start_time = start_measuring_time()
-    output_tensor = ttnn.minimum(input_tensor_a, input_tensor_b, memory_config=sharded_config)
+    output_tensor = ttnn.maximum(input_tensor_a, input_tensor_b, memory_config=sharded_config)
     e2e_perf = stop_measuring_time(start_time)
     output_tensor = ttnn.to_torch(output_tensor)
 
