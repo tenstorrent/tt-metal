@@ -62,7 +62,7 @@ from helpers.stimuli_generator import (
     calculate_tile_and_face_counts,
     generate_stimuli,
 )
-from helpers.test_config import TestConfig
+from helpers.test_config import BuildMode, TestConfig
 from helpers.test_variant_parameters import (
     APPROX_MODE,
     CLAMP_NEGATIVE,
@@ -1668,20 +1668,25 @@ def eltwise_unary_sfpu(
     if return_golden and not check_golden:
         raise ValueError("return_golden needs check_golden=True")
 
-    need_stimuli = src_A is not None or not is_perf or collect_result or check_golden
-    if src_A is None and need_stimuli:
+    if src_A is None:
         # The op's own signed domain, not generate_stimuli's positive-only format default,
         # which would leave the x<0 branch, the knees and the saturation tails unreached.
         if spec_A is None:
-            spec_A = exclude_undefined(
-                mathop,
-                for_op_pipeline(
+            try:
+                spec_A = exclude_undefined(
                     mathop,
-                    formats.input_format,
-                    formats.output_format,
-                    approx_mode=approx_mode,
-                ).spec_A,
-            )
+                    for_op_pipeline(
+                        mathop,
+                        formats.input_format,
+                        formats.output_format,
+                        approx_mode=approx_mode,
+                    ).spec_A,
+                )
+            except KeyError:
+                # An op with no domain entry can only run un-gated; its perf run
+                # measures generate_stimuli's default stimuli.
+                if check_golden:
+                    raise
         src_A, tile_cnt_A, src_B, tile_cnt_B = generate_stimuli(
             stimuli_format_A=formats.input_format,
             input_dimensions_A=input_dimensions,
@@ -1689,7 +1694,7 @@ def eltwise_unary_sfpu(
             input_dimensions_B=input_dimensions,
             spec_A=spec_A,
         )
-    elif src_A is not None:
+    else:
         computed_A, computed_B, _ = calculate_tile_and_face_counts(
             input_dimensions,
             input_dimensions,
@@ -1702,13 +1707,6 @@ def eltwise_unary_sfpu(
             tile_cnt_B = computed_B
         if src_B is None:
             src_B = torch.zeros_like(src_A)
-    else:
-        tile_cnt_A, tile_cnt_B, _ = calculate_tile_and_face_counts(
-            input_dimensions,
-            input_dimensions,
-            face_r_dim=MAX_FACE_R_DIM,
-            num_faces=MAX_NUM_FACES,
-        )
 
     golden_tensor = None
     if check_golden:
@@ -1748,8 +1746,8 @@ def eltwise_unary_sfpu(
         approx_mode,
         mathop,
         input_dimensions,
-        src_A if need_stimuli else None,
-        src_B if need_stimuli else None,
+        src_A,
+        src_B,
         tile_cnt_A,
         tile_cnt_B,
         test_name=test_name,
@@ -1773,6 +1771,9 @@ def eltwise_unary_sfpu(
     )
 
     if is_perf and not collect_result:
+        # PerfConfig.run writes no stimuli; a compile-only run has no device to write to.
+        if TestConfig.BUILD_MODE != BuildMode.PRODUCE:
+            configuration.variant_stimuli.write(TestConfig.TENSIX_LOCATION)
         configuration.run(perf_report)
         return None
 
@@ -1853,7 +1854,7 @@ def build_eltwise_unary_sfpu_config(
 
     For callers that need the configuration itself (build-only, or asserting on how it
     was built); everything else goes through eltwise_unary_sfpu. *src_A* / *src_B* may
-    be None for a perf run that writes no stimuli."""
+    be None for a caller that only inspects the config and never runs it."""
     if run_types is None:
         run_types = ALL_PERF_RUN_TYPES if is_perf else [PerfRunType.L1_TO_L1]
     _, _, faces_to_generate = calculate_tile_and_face_counts(
