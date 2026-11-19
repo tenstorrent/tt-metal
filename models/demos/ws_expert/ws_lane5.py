@@ -125,6 +125,9 @@ def row_load(flows):
     return max(use), sum(use)
 
 
+PLACED = {}  # (the last build's placement: chip -> (lane -> rectangle, lane's ethernet core NoC x a direction))
+
+
 def place_lanes(mx, ex):
     """A chip's lane -> rectangle assignment: mx[r][d] the NoC x of rectangle r's direction-d mux, ex[g][d] the NoC x
     of the ethernet core lane g's direction d sends on (None: no mux). Every mux writes its packets on NOC1, north to
@@ -329,6 +332,7 @@ def build_lane5(
         for rc in chips:
             ex = [[eth_x(mesh, mcfg, rc, nbrs(g, rc)[d], ln[g][1]) for d in range(nmux)] for g in range(G)]
             perm[rc] = place_lanes(mx, ex)
+            PLACED[rc] = (perm[rc], ex)
     mpd = ttnn.MeshProgramDescriptor()
     for r in range(R):
         for c in range(Cn):

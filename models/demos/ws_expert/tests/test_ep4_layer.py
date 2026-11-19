@@ -444,6 +444,15 @@ def lane_times(cfg, T, counts, st, chips, clk):
     return out
 
 
+def l5_env():
+    """EP4_L5 "key=int;...": L5Cfg overrides of the experts' lane (experiments)."""
+    out = {}
+    for item in filter(None, os.environ.get("EP4_L5", "").split(";")):
+        k, v = item.split("=")
+        out[k] = int(v)
+    return out
+
+
 def group_report(cfg, st, chips, clk, R, why):
     """Per group, over chips: compute end and NCRISC end (us from the chip's first loop start; median / max), and with
     why the group NCRISCs' idle time by blocker (us, mean over the group's cores; median over chips) - one line a
@@ -475,6 +484,10 @@ def group_report(cfg, st, chips, clk, R, why):
                 f"{[round(v) for v in m[7:12]]}, first / last forward {m[12]:.0f} / {m[13]:.0f} us"
             )
         logger.info(line)
+    from models.demos.ws_expert.ws_lane5 import PLACED
+
+    for rc, (pm, ex) in sorted(PLACED.items()):
+        logger.info(f"EP4 placement chip {rc}: lane -> rectangle {list(pm)}, ethernet core x (next, previous) {ex}")
     for ci in [ci for ci in chips if ci % 4 == 0]:
         logger.info(
             f"EP4 chip {ci}: compute end per group {[round(ce[(ci, g)]) for g in range(cfg.G)]} us, NCRISC end "
@@ -498,7 +511,7 @@ def test_ep4_experts(mesh_device, routing):
     lc = EP4Cfg(T=n)
     TX, EPC = lc.TX, lc.EPC
     G = int(os.environ.get("EP4_G", "2"))
-    cfg, lane, l5 = lane_cfgs(mesh, lc, G, l5kw=dict(why=int(os.environ.get("EP4_WHY", "0"))))
+    cfg, lane, l5 = lane_cfgs(mesh, lc, G, l5kw=dict(why=int(os.environ.get("EP4_WHY", "0")), **l5_env()))
     T, pos = lane_tables(mesh, cfg, lane)
     tab_t = tables_tensor(mesh, T["tabs"])
     s = front(mesh, lc, routing, pos)
@@ -637,7 +650,7 @@ def test_ep4_layer(mesh_device, routing):
     TX, EPC, K, H = lc.TX, lc.EPC, lc.K, lc.H
     G = int(os.environ.get("EP4_G", "2"))
     reps = int(os.environ.get("EP4_REPS", "3"))
-    cfg, lane, l5 = lane_cfgs(mesh, lc, G)
+    cfg, lane, l5 = lane_cfgs(mesh, lc, G, l5kw=l5_env())
     T, pos = lane_tables(mesh, cfg, lane)
     tab_t = tables_tensor(mesh, T["tabs"])
     clk = aiclk_mhz(0)
