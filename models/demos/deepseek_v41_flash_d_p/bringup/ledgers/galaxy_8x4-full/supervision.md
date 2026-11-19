@@ -530,3 +530,9 @@
   tests/ right now). 233 sessions / ~1880 chunks in one runner load: 223 trace sessions (pick 79 / held 144 by repo),
   the 7 bring-up sessions, and 142k prefixes of code / prose / multilingual. The same records re-pick P.84's table on
   real history (code + bring-up sessions 1/3/5/7) to answer whether the zero-history pick changes.
+- 10:51 UTC P.84 attempt 2: A/B gate PASS but NOT comparable: each side measured one of the two
+  test_skip_positions units (on: agentic 80.3 ms at 145408, 87.4 at 770048; off: prose 86.8 at 145408, 98.0 at 1M):
+  A/B items keyed by test name collapse same-test units (framework bug, to the runner agent). Device opens of P.84 so
+  far: 8 (1 fresh process, 7 runner restarts: MOE_REPLICAS is a load-time switch, every flip reloads); loads 8.
+  RAM unaccounted 175.5 GiB (163.3 at the first open). Hint only: agentic 145408 on 80.3 vs off 81.1-81.9 measured
+  earlier (runner demo / X.9): ~1 ms, not the fit's 4.5. Decision waits for a correct A/B.
