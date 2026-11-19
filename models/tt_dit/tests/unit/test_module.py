@@ -104,7 +104,7 @@ class ShardableModule(Module):
     "mesh_device, device_params",
     [
         (shape, {"fabric_config": ttnn.FabricConfig.FABRIC_1D, "require_exact_physical_num_devices": True})
-        for shape in [(2, 4), (4, 8)]
+        for shape in [(2, 2), (2, 4), (4, 8)]
     ],
     ids=mesh_device_config_to_string,
     indirect=True,
