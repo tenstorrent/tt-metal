@@ -2,19 +2,29 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""This process's shards of a mesh tensor as numpy arrays, by mesh coordinate.
+"""This process's shards of model and optimizer tensors as numpy arrays, for the round-trip tests to compare.
 
-On a mesh spread over several ranks the per-device tensors ``ttnn.get_device_tensors`` hands out still carry the
-mesh distribution, so ``ttnn.to_torch`` refuses them. The host buffer of the tensor brought to the host holds one
-shard per coordinate this process owns, which is what the tests and the driver compare, on one rank or many.
+A tensor's shards come from the host buffer of the tensor brought to the host, one per mesh coordinate asked for (by
+default every coordinate of the device ``AutoContext`` holds, all of which belong to a single process). That works on
+one device, on a mesh, and on a mesh spread over several ranks, where the per-device tensors
+``ttnn.get_device_tensors`` hands out still carry the mesh distribution and ``ttnn.to_torch`` refuses them.
 """
+
+import itertools
 
 import numpy as np
 import ttnn
 
 import ttml
 
+NATIVE = ttml.autograd.PreferredPrecision.NATIVE
 CARRIER = {ttnn.DataType.BFLOAT16: np.uint16, ttnn.DataType.FLOAT32: np.float32}
+
+
+def every_coord() -> list[tuple[int, ...]]:
+    """Every coordinate of the device ``AutoContext`` holds, in row-major order."""
+    device = ttml.autograd.AutoContext.get_instance().get_device()
+    return list(itertools.product(*(range(int(n)) for n in device.shape)))
 
 
 def shard_arrays(value, coords) -> dict[tuple[int, ...], np.ndarray]:
@@ -41,26 +51,27 @@ def shard_arrays(value, coords) -> dict[tuple[int, ...], np.ndarray]:
     return out
 
 
-def param_shards(params, coords) -> dict[tuple[str, tuple[int, ...]], np.ndarray]:
-    """Every parameter's shards at ``coords``, keyed by (name, coordinate)."""
-    out = {}
-    for name, tensor in params.items():
-        for coord, array in shard_arrays(tensor.get_value(ttml.autograd.PreferredPrecision.NATIVE), coords).items():
-            out[(name, coord)] = array
-    return out
+def tensor_shards(tensor, coords=None) -> list[np.ndarray]:
+    """An autograd tensor's shards at ``coords`` (``every_coord()`` by default), in that order."""
+    coords = every_coord() if coords is None else list(coords)
+    arrays = shard_arrays(tensor.get_value(NATIVE), coords)
+    return [arrays[tuple(c)] for c in coords]
 
 
-def optimizer_state(optimizer, coords) -> tuple[dict[tuple[str, tuple[int, ...]], np.ndarray], dict]:
-    """``(shards, scalars)`` of an optimizer's state: every state tensor's shards at ``coords`` keyed by (state path,
-    coordinate), and every scalar (steps, learning rates, ...) by its path."""
+def model_shards(params, coords=None) -> dict[str, list[np.ndarray]]:
+    """``{name: tensor_shards}`` of a ``{name: autograd tensor}`` mapping, such as ``model.parameters()``."""
+    return {name: tensor_shards(tensor, coords) for name, tensor in params.items()}
+
+
+def optimizer_shards(optimizer, coords=None) -> tuple[dict[str, list[np.ndarray]], dict]:
+    """``(shards, scalars)`` of an optimizer's state dict: every state tensor's ``tensor_shards`` keyed by its state
+    path and parameter name, and every scalar (steps, learning rates, ...) by its path."""
     shards, scalars = {}, {}
 
     def walk(node, path):
         if isinstance(node, ttml.NamedParameters):
             for name, tensor in node.items():
-                value = tensor.get_value(ttml.autograd.PreferredPrecision.NATIVE)
-                for coord, array in shard_arrays(value, coords).items():
-                    shards[("/".join(path) + ":" + name, coord)] = array
+                shards["/".join(path) + ":" + name] = tensor_shards(tensor, coords)
         elif isinstance(node, dict):
             for key, child in node.items():
                 walk(child, path + (str(key),))
@@ -71,9 +82,18 @@ def optimizer_state(optimizer, coords) -> tuple[dict[tuple[str, tuple[int, ...]]
     return shards, scalars
 
 
-def assert_same(actual: dict, expected: dict, what: str) -> None:
-    """Exactly the same arrays under exactly the same keys, and at least one of them."""
+def assert_same_shards(actual: dict, expected: dict, what: str = "shards") -> None:
+    """The same keys, at least one, and under each the same number of shards with exactly the same values."""
     assert expected, f"{what}: nothing to compare"
     assert actual.keys() == expected.keys(), f"{what}: {sorted(set(actual) ^ set(expected))[:4]}"
-    for key, array in expected.items():
-        assert np.array_equal(actual[key], array), f"{what}: {key} differs from the saved shard"
+    for key in expected:
+        assert len(actual[key]) == len(expected[key]), f"{what}: {key} has {len(actual[key])} shards"
+        for device, (a, e) in enumerate(zip(actual[key], expected[key])):
+            assert np.array_equal(a, e), f"{what}: {key} differs on device {device}"
+
+
+def assert_some_differ(actual: dict, expected: dict) -> None:
+    """A precondition: the fresh state is not already the saved one."""
+    assert any(
+        not np.array_equal(a, e) for key in expected for a, e in zip(actual[key], expected[key])
+    ), "precondition: fresh state differs"

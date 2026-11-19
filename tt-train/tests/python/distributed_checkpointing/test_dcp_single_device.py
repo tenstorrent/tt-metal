@@ -7,8 +7,8 @@
 The device is the one ``AutoContext`` opens on first use, so ``ttml.maybe_mesh()`` is None and the index records the
 device's own shape. The cases: a FLOAT32 parameter (every other test is BF16), the optimizers beyond plain AdamW
 (AdamW with amsgrad, SGD with momentum, Muon), optimizer state not keyed by a parameter of the model passed, the byte
-budget that bounds the host buffers in flight, ``threads``, a missing data file and a restored tensor whose spec does
-not match the live one.
+budget that bounds the host buffers in flight, a missing data file and a restored tensor whose spec does not match the
+live one.
 """
 
 import os
@@ -16,7 +16,8 @@ import os
 import numpy as np
 import pytest
 import ttnn
-from tp_block import device_slices, make_adamw, train_step
+from dcp_shards import assert_same_shards, assert_some_differ, model_shards, optimizer_shards
+from tp_block import make_adamw, train_step
 
 import ttml
 import ttml.distributed_checkpointing as dcp
@@ -58,31 +59,6 @@ class _F32(AbstractModuleBase):
         self.w = Parameter(ttml.autograd.Tensor.from_numpy(values, ttnn.Layout.TILE, ttnn.DataType.FLOAT32))
 
 
-def _slices(params) -> dict:
-    return {name: device_slices(t.get_value(NATIVE)) for name, t in params.items()}
-
-
-def _state_slices(optimizer) -> dict:
-    out = {}
-
-    def walk(node, path):
-        if isinstance(node, ttml.NamedParameters):
-            for name, tensor in node.items():
-                out["/".join(path) + ":" + name] = device_slices(tensor.get_value(NATIVE))
-        elif isinstance(node, dict):
-            for key, child in node.items():
-                walk(child, path + (str(key),))
-
-    walk(optimizer.get_state_dict(), ())
-    return out
-
-
-def _same(actual: dict, expected: dict) -> bool:
-    return actual.keys() == expected.keys() and all(
-        np.array_equal(a, e) for k in expected for a, e in zip(actual[k], expected[k])
-    )
-
-
 def test_float32_round_trip_records_the_device(tmp_path):
     """A float32 parameter round trips, and the index records the device."""
     assert ttml.maybe_mesh() is None
@@ -96,9 +72,9 @@ def test_float32_round_trip_records_the_device(tmp_path):
     assert rank["shape"] == [1, 1] and rank["axis_names"] == ["_0", "_1"]
 
     fresh = _F32(seed=2)
-    assert not _same(_slices(fresh.parameters()), _slices(model.parameters())), "precondition"
+    assert_some_differ(model_shards(fresh.parameters()), model_shards(model.parameters()))
     dcp.load(path, model=fresh)
-    assert _same(_slices(fresh.parameters()), _slices(model.parameters()))
+    assert_same_shards(model_shards(fresh.parameters()), model_shards(model.parameters()))
 
 
 def _adamw_amsgrad(params):
@@ -125,17 +101,19 @@ def test_optimizer_state_round_trips_and_the_next_step_matches(tmp_path, make_op
     train_step(model, opt, DIM, input_scale=0.5)
     path = str(tmp_path / "step_0000002")
     dcp.save(path, model=model, optimizer=opt)
-    state = _state_slices(opt)
+    state = optimizer_shards(opt)[0]
     assert state, "the optimizer keeps per-parameter state"
 
     fresh = _Pair(DIM)
     fresh_opt = make_optimizer(fresh.parameters())
     dcp.load(path, model=fresh, optimizer=fresh_opt)
-    assert _same(_slices(fresh.parameters()), _slices(model.parameters()))
-    assert _same(_state_slices(fresh_opt), state)
+    assert_same_shards(model_shards(fresh.parameters()), model_shards(model.parameters()))
+    assert_same_shards(optimizer_shards(fresh_opt)[0], state)
     train_step(model, opt, DIM, input_scale=0.25)
     train_step(fresh, fresh_opt, DIM, input_scale=0.25)
-    assert _same(_slices(fresh.parameters()), _slices(model.parameters())), "the restored state steps alike"
+    assert_same_shards(
+        model_shards(fresh.parameters()), model_shards(model.parameters()), "the restored state steps alike"
+    )
 
 
 def test_state_of_other_parameters_is_saved_as_is(tmp_path):
@@ -153,11 +131,11 @@ def test_state_of_other_parameters_is_saved_as_is(tmp_path):
     train_step(fresh, fresh_opt, DIM, input_scale=0.5)
     with pytest.warns(UserWarning, match="is not keyed by a parameter of the model"):
         dcp.load(path, model=fresh.a, optimizer=fresh_opt)
-    assert _same(_state_slices(fresh_opt), _state_slices(opt))
+    assert_same_shards(optimizer_shards(fresh_opt)[0], optimizer_shards(opt)[0])
 
 
-def test_one_byte_budget_and_threads(tmp_path, monkeypatch):
-    """A one-byte in-flight budget writes one key at a time, and the thread count is honoured."""
+def test_one_byte_budget(tmp_path, monkeypatch):
+    """A one-byte in-flight budget writes one key at a time."""
     model = _Pair(DIM)
     opt = make_adamw(model.parameters())
     train_step(model, opt, DIM)
@@ -170,14 +148,14 @@ def test_one_byte_budget_and_threads(tmp_path, monkeypatch):
 
     monkeypatch.setattr(_save, "_ByteBudget", _Recording)
     path = str(tmp_path / "step_0000001")
-    dcp.save(path, model=model, optimizer=opt, max_inflight_bytes=1, threads=1)
+    dcp.save(path, model=model, optimizer=opt, max_inflight_bytes=1)
     assert len(in_flight) > 1 and all(used == n for used, n in in_flight), "each key waited for the one before"
 
     fresh = _Pair(DIM)
     fresh_opt = make_adamw(fresh.parameters())
-    dcp.load(path, model=fresh, optimizer=fresh_opt, threads=1)
-    assert _same(_slices(fresh.parameters()), _slices(model.parameters()))
-    assert _same(_state_slices(fresh_opt), _state_slices(opt))
+    dcp.load(path, model=fresh, optimizer=fresh_opt)
+    assert_same_shards(model_shards(fresh.parameters()), model_shards(model.parameters()))
+    assert_same_shards(optimizer_shards(fresh_opt)[0], optimizer_shards(opt)[0])
 
 
 def test_missing_file_or_bad_spec_is_refused_first(tmp_path, monkeypatch, expect_error):
@@ -186,7 +164,7 @@ def test_missing_file_or_bad_spec_is_refused_first(tmp_path, monkeypatch, expect
     path = str(tmp_path / "step_0000001")
     dcp.save(path, model=model)
     fresh = _Pair(DIM)
-    before = _slices(fresh.parameters())
+    before = model_shards(fresh.parameters())
 
     monkeypatch.setattr(_load, "_same_spec", lambda restored, live: False)
     with expect_error(dcp.CheckpointError, r"model/_Pair/\w/weight: the restored tensor .* does not match the live"):
@@ -197,4 +175,4 @@ def test_missing_file_or_bad_spec_is_refused_first(tmp_path, monkeypatch, expect
     os.remove(os.path.join(path, "data", data))
     with expect_error(dcp.CheckpointError, f"data file .*{data} listed in the index is missing"):
         dcp.load(path, model=fresh)
-    assert _same(_slices(fresh.parameters()), before), "nothing was placed"
+    assert_same_shards(model_shards(fresh.parameters()), before, "nothing was placed")

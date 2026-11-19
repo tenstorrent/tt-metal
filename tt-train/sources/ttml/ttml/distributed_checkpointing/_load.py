@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import json
 import os
+import struct
 import time
 import zlib
 from concurrent.futures import ThreadPoolExecutor
@@ -28,7 +29,7 @@ from ._coordinator import checked_payload, current_group
 from ._errors import CheckpointError, IncompleteCheckpointError, MissingKeyError, UnexpectedKeyError
 from ._index import Index, is_complete, read_checked_header, read_index
 from ._planner import KeyPlan, LoadPlan, ReadItem, create_load_plan, unexpected_keys
-from ._safetensors import pread_all, read_file_header
+from ._safetensors import pread_all
 from ._state_dict import (
     NATIVE,
     NUMPY_CARRIERS,
@@ -40,9 +41,9 @@ from ._state_dict import (
     check_undeclared_fusion,
     collect_model,
     collect_optimizer,
-    fsdp_gate,
     local_coords,
     mesh_device,
+    reshard_fsdp_modules,
     restore_scalars,
 )
 from ._topology import chunk_boxes, crc31
@@ -65,7 +66,8 @@ class LoadResult:
 def _read_into(
     fd: int, data_start: int, plan: KeyPlan, item: ReadItem, itemsize: int, carrier, dest: np.ndarray
 ) -> int:
-    """Copy ``item.src`` of the chunk into ``item.dst`` of ``dest`` with the fewest contiguous reads; returns bytes read."""
+    """Copy ``item.src`` of the chunk into ``item.dst`` of ``dest`` with the fewest contiguous reads; returns bytes read.
+    ``_read_chunk`` calls it only for items that need under half of the chunk, so some dim is read in part."""
     record = plan.entry.chunks[item.chunk]
     chunk = record.box.sizes
     src, dst = item.src, item.dst
@@ -78,10 +80,6 @@ def _read_into(
     for d in range(ndim - 2, -1, -1):
         strides[d] = strides[d + 1] * chunk[d + 1]
     base = data_start + record.data_offset
-    if k == 0:
-        raw = pread_all(fd, record.nbytes, base)
-        dest[dst.slices()] = np.frombuffer(raw, dtype=carrier).reshape(chunk)
-        return record.nbytes
     run_rows = src.sizes[k - 1]
     inner = prod(chunk[k:])
     run_bytes = run_rows * inner * itemsize
@@ -100,23 +98,44 @@ def _read_into(
     return total
 
 
+def _pread_into(fd: int, buffer: memoryview, offset: int) -> None:
+    """Fill ``buffer`` from ``fd`` at ``offset`` (``os.preadv`` may return short reads on some filesystems)."""
+    done = 0
+    while done < len(buffer):
+        n = os.preadv(fd, [buffer[done:]], offset + done)
+        if not n:
+            raise EOFError(f"safetensors: read past the end of the file at offset {offset + done}")
+        done += n
+
+
+def _check_crc(plan: KeyPlan, chunk_index: int, crc: int, path: str) -> None:
+    record = plan.entry.chunks[chunk_index]
+    if crc != record.crc32:
+        raise CheckpointError(
+            f"{plan.key}: chunk {chunk_index} ({record.box}) in {path} fails its CRC32 check (recorded "
+            f"{record.crc32:08x}, read {crc:08x}); the checkpoint is corrupt"
+        )
+
+
 def _read_chunk(
     fd: int, data_start: int, plan: KeyPlan, items: list[ReadItem], itemsize: int, carrier, arrays: dict, path: str
 ) -> int:
     """The reads of one chunk: one ``pread`` of the whole chunk, sliced in memory, when the items need at least half
-    of it (on a single host the destination shards together cover every chunk), else one read per contiguous run.
-    A whole chunk is checked against the CRC32 that save recorded for it; a partial read cannot be, since the checksum
-    covers the whole chunk. Returns bytes read."""
+    of it (on a single host the destination shards together cover every chunk), else one read per contiguous run. A
+    chunk that is its one destination shard, as in a same-world load, is read into the shard's array itself. A whole
+    chunk is checked against the CRC32 that save recorded for it; a partial read cannot be, since the checksum covers
+    the whole chunk. Returns bytes read."""
     record = plan.entry.chunks[items[0].chunk]
+    sizes = tuple(record.box.sizes)
+    dest = arrays[items[0].group]
+    if len(items) == 1 and tuple(items[0].src.sizes) == sizes and dest.shape == sizes and dest.flags.c_contiguous:
+        _pread_into(fd, memoryview(dest).cast("B"), data_start + record.data_offset)
+        _check_crc(plan, items[0].chunk, zlib.crc32(dest), path)
+        return record.nbytes
     needed = sum(it.src.volume for it in items) * itemsize
     if 2 * needed >= record.nbytes:
         raw = pread_all(fd, record.nbytes, data_start + record.data_offset)
-        crc = zlib.crc32(raw)
-        if crc != record.crc32:
-            raise CheckpointError(
-                f"{plan.key}: chunk {items[0].chunk} ({record.box}) in {path} fails its CRC32 check (recorded "
-                f"{record.crc32:08x}, read {crc:08x}); the checkpoint is corrupt"
-            )
+        _check_crc(plan, items[0].chunk, zlib.crc32(raw), path)
         chunk = np.frombuffer(raw, dtype=carrier).reshape(record.box.sizes)
         for it in items:
             arrays[it.group][it.dst.slices()] = chunk[it.src.slices()]
@@ -132,11 +151,14 @@ def _host_shard(array: np.ndarray, dtype_name: str):
 
 
 def _same_spec(a, b) -> bool:
+    """Whether two tensors have the same ``TensorSpec``: dtype, layout, shape, tile, memory config and alignment."""
+    return a.spec == b.spec
+
+
+def _describe_spec(t) -> str:
     return (
-        a.dtype == b.dtype
-        and a.layout == b.layout
-        and list(a.shape) == list(b.shape)
-        and str(a.memory_config()) == str(b.memory_config())
+        f"{t.dtype}, {t.layout}, shape {list(t.shape)} padded to {list(t.padded_shape)}, {t.spec.tile}, "
+        f"{t.memory_config()}"
     )
 
 
@@ -158,8 +180,8 @@ def _place(live: LiveTensor, arrays: dict[tuple, np.ndarray], device, local: set
         on_device = ttnn.to_memory_config(on_device, value.memory_config())
     if not _same_spec(on_device, value):
         raise CheckpointError(
-            f"{live.key}: the restored tensor ({on_device.dtype}, {on_device.layout}, {list(on_device.shape)}) does not match "
-            f"the live tensor ({value.dtype}, {value.layout}, {list(value.shape)})"
+            f"{live.key}: the restored tensor ({_describe_spec(on_device)}) does not match the live tensor "
+            f"({_describe_spec(value)})"
         )
     live.tensor.set_value(on_device)
     check_label_unchanged(live, "after set_value")
@@ -187,7 +209,13 @@ class _DataFiles:
                     f"data file {path} is {size} bytes but the index records {record.nbytes}; the checkpoint is "
                     "truncated or corrupt"
                 )
-            _, self.data_start[file_index] = read_file_header(path)
+            # The data section starts after the 8-byte header length and the header, which load does not parse.
+            (length,) = struct.unpack("<Q", pread_all(self.fds[file_index], 8, 0))
+            if 8 + length > size:
+                raise IncompleteCheckpointError(
+                    f"data file {path} declares a {length}-byte header but is {size} bytes; the checkpoint is corrupt"
+                )
+            self.data_start[file_index] = 8 + length
 
     def close(self) -> None:
         for fd in self.fds.values():
@@ -281,7 +309,6 @@ def load(
     rng: bool = False,
     strict: bool = True,
     threads: int | None = None,
-    reshard_fsdp: bool = True,
 ) -> LoadResult:
     """Restore ``model`` and ``optimizer`` in place from the checkpoint directory ``ckpt_dir``.
 
@@ -294,8 +321,8 @@ def load(
     asked for that the checkpoint lacks entirely is an error under ``strict`` and listed in ``missing`` otherwise;
     within the RNG block, a generator or a world rank the checkpoint holds no state for (torch imported only now, a
     world with more hosts than the save) keeps its current state with a warning, and ``restored`` lists exactly what was
-    restored. ``threads`` caps the reader threads (default 32; a read is one contiguous byte range of one file).
-    Returns the header passed to ``save``, the train state stored and the names restored.
+    restored. ``threads`` caps the reader threads (default 32; a read is one contiguous byte range of one file). FSDP
+    modules are resharded first. Returns the header passed to ``save``, the train state stored and the names restored.
 
     Everything that can be checked without reading tensor data is checked before the first tensor is placed: keys,
     shapes, dtypes, layouts, param groups, the sizes of the data files and the stored RNG state. A failure after that
@@ -350,7 +377,7 @@ def load(
         if strict and missing_state:
             raise MissingKeyError(f"the checkpoint holds no state for {missing_state}")
         check_train_state(train_state, scheduler=scheduler, dataloader=dataloader, rng=rng, world_rank=world_rank)
-        fsdp_states = fsdp_gate(model, reshard_fsdp)
+        fsdp_states = reshard_fsdp_modules(model)
         # A sharded FSDP module's cached shards are its current values: drop them now, so every value the load
         # replaces is freed as it is replaced instead of at the end (the next forward rebuilds the cache).
         for state in fsdp_states:

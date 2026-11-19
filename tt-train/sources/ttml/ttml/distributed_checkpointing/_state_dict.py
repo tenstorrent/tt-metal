@@ -27,9 +27,10 @@ import numpy as np
 import ttnn
 
 import ttml
+from ttml.fsdp import fsdp_axis_of
 from ttml.modules.parameter import Parameter
 
-from ._errors import CheckpointError, FSDPStateError, LayoutError, LazyParameterError, MissingKeyError, TopologyError
+from ._errors import CheckpointError, LayoutError, LazyParameterError, MissingKeyError, TopologyError
 from ._index import Entry
 from ._layouts import DECLARATIONS, Identity, Segments, Transform, declared_transform
 from ._planner import TensorInfo
@@ -77,8 +78,8 @@ class LiveTensor:
 def label_of(value) -> Label:
     """The topology label of a ttnn tensor as a ``Label``, shard dims normalized against the tensor's rank."""
     topology = value.tensor_topology()
-    # TODO: #62347 - map a partial-sum placement to a "partial" Placement once tensor placements carry one; until then
-    # every placement that is not a shard is read as a replicate.
+    # TODO(awliu-TT): #62347 - map a partial-sum placement to a "partial" Placement once tensor placements carry one;
+    # until then every placement that is not a shard is read as a replicate.
     placements = [
         Placement.shard(p.dim) if isinstance(p, ttnn.PlacementShard) else Placement.replicate()
         for p in topology.placements()
@@ -150,12 +151,10 @@ def _python_parameters(model, params) -> tuple[dict[int, list[str]], dict[int, d
         for attr, value in getattr(module, "__dict__", {}).items():
             if not isinstance(value, Parameter):
                 continue
-            if value.is_lazy:
-                raise LazyParameterError(
-                    f"{root}/{path}/{attr} has not been materialized; call ttml.materialize_module first"
-                )
-            tensor = value.tensor
             fqn = "/".join([root] + ([path.replace(".", "/")] if path else []) + [attr])
+            if value.is_lazy:
+                raise LazyParameterError(f"{fqn} has not been materialized; call ttml.materialize_module first")
+            tensor = value.tensor
             names.setdefault(id(tensor), []).append(fqn)
             declaration = getattr(value, "checkpoint_layout", None)
             if declaration:
@@ -173,11 +172,6 @@ def _module_name(key: str) -> str:
     return key.rsplit("/", 2)[-2] if key.count("/") >= 2 else key
 
 
-def _fsdp_axis(tensor: Any) -> int | None:
-    """The mesh axis FSDP shards ``tensor`` over (an autograd tensor of a ``fully_shard``-ed module), or None."""
-    return getattr(tensor, "_fsdp_axis", None) if getattr(tensor, "_fsdp_managed", False) else None
-
-
 def _lint_fusion(key: str, label: Label, declaration: dict, tensor: Any = None) -> None:
     """A TP-sharded weight that looks fused by name but declares no segments loads silently wrong across TP sizes.
 
@@ -185,7 +179,7 @@ def _lint_fusion(key: str, label: Label, declaration: dict, tensor: Any = None) 
     so an FSDP-only model's fused-looking weights are fine."""
     if "fused" in declaration:
         return
-    fsdp_axis = _fsdp_axis(tensor)
+    fsdp_axis = fsdp_axis_of(tensor)
     axes = [a for a in label.shard_axes(2) if a != fsdp_axis]
     shards = int(np.prod([label.dist_shape[a] for a in axes])) if axes else 1
     if shards <= 1:
@@ -236,7 +230,7 @@ def collect_model(model) -> list[LiveTensor]:
             local_shape,
             transform,
             live_keys,
-            tp_split=tp_split(label, _fsdp_axis(tensor), len(local_shape)),
+            tp_split=tp_split(label, fsdp_axis_of(tensor), len(local_shape)),
         )
         fused_name = bool(_FUSION_HINT.search(_module_name(key)))
         live.append(LiveTensor(key, tensor, info, fused_name=fused_name))
@@ -277,9 +271,10 @@ def _collect_buffers(model, root: str) -> list[LiveTensor]:
 def collect_optimizer(optimizer, params: list[LiveTensor]) -> tuple[list[LiveTensor], dict[str, Any]]:
     """Every tensor of the optimizer's state dict as a ``LiveTensor``, and its scalars.
 
-    A state tensor keyed by a parameter name inherits that parameter's transform and live names; its per-device
-    shape must match the parameter's, the one invariant every optimizer keeps (state is created as zeros of its
-    parameter), so a mismatch means the optimizer was created before the model was sharded.
+    A state tensor keyed by a parameter name inherits that parameter's transform and live names; its per-device and
+    global shapes must match the parameter's, the invariant every optimizer keeps (state is created as zeros of its
+    parameter): a per-device mismatch means the optimizer was created before the model was sharded, a global one that
+    the state is laid out over the mesh unlike its parameter.
     """
     by_fqn = {lt.key[len("model/") :]: lt for lt in params if lt.info.role == "param"}
     live: list[LiveTensor] = []
@@ -304,11 +299,18 @@ def collect_optimizer(optimizer, params: list[LiveTensor]) -> tuple[list[LiveTen
                             f"{key} is {list(local_shape)} per device but its parameter {param.key} is "
                             f"{list(param.info.local_shape)}; was the optimizer created before the model was sharded?"
                         )
+                    # Equal per-device shapes still allow a moment labelled Replicate on the parameter's TP axis: save
+                    # would write one device's piece as the whole moment and load would put it on every device.
+                    if global_shape(label, local_shape) != param.info.global_shape:
+                        raise CheckpointError(
+                            f"{key} is {list(global_shape(label, local_shape))} over the mesh but its parameter "
+                            f"{param.key} is {list(param.info.global_shape)}: it is not sharded as its parameter is"
+                        )
                     transform = param.info.transform
                     prefix = "optimizer/" + "/".join(path) + "/"
                     live_keys = tuple(sorted(prefix + n[len("model/") :] for n in param.info.live_keys))
                     ref = param.key
-                    fsdp_axis = _fsdp_axis(param.tensor)  # the moments are sharded like their parameter
+                    fsdp_axis = fsdp_axis_of(param.tensor)  # the moments are sharded like their parameter
                     fused_name = param.fused_name
                 info = TensorInfo(
                     key,
@@ -351,7 +353,7 @@ def check_undeclared_fusion(live: LiveTensor, entry: Entry) -> None:
     (the same TP size, both undeclared), scrambled otherwise. So for a weight whose name suggests a fused projection,
     the TP split left undescribed must be the same at save (recorded in the index) and at load. A declared side and a
     TP split of one leave nothing undescribed; FSDP's split never counts, since it splits rows already in canonical
-    order. Python layers declare ``fused_segments``; C++-bound modules cannot yet (#65584)."""
+    order. Python layers declare ``fused_segments``; C++-bound modules cannot yet."""
     if not live.fused_name:
         return
     before = _undescribed_split(entry.transform, entry.tp_split)
@@ -451,22 +453,18 @@ def restore_scalars(optimizer, scalars: dict[str, Any]) -> list[str]:
     return applied
 
 
-def fsdp_gate(model, reshard: bool) -> list[Any]:
-    """Every FSDP state on ``model`` must be sharded: a module left gathered by a forward with
+def reshard_fsdp_modules(model) -> list[Any]:
+    """Reshard every FSDP module of ``model`` and return their states. A module left gathered by a forward with
     ``reshard_after_forward=False`` holds the full weight while its moments are shards, and its cached shard would
-    overwrite whatever is loaded into it at the next backward. Reshards when allowed, raises otherwise."""
-    from ttml.fsdp import _ShardedState
-
+    overwrite whatever is loaded into it at the next backward. Resharding is always safe: ``reshard()`` does nothing to
+    a sharded module, and the next forward or backward gathers it again as it does under
+    ``reshard_after_forward=True``."""
     states = []
-    for path, module in _named_modules(model):
+    for _, module in _named_modules(model):
         state = getattr(module, "_fsdp_state", None)
         if state is None:
             continue
         states.append(state)
-        if state.sharded_state == _ShardedState.SHARDED:
-            continue
-        if not reshard:
-            raise FSDPStateError(f"FSDP module {path or '<root>'} is not in its sharded state; pass reshard_fsdp=True")
         module.reshard()  # installed by fully_shard
     return states
 
