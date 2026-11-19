@@ -603,3 +603,4 @@
 - 17:51 UTC P.83 gate PASS -> bdbd25c2e83 (mhc_post fast: device -1.1..-1.5 ms a chunk). RAM unaccounted 212.5 GiB. Next: P.81 attention.
 - 17:51 UTC DEVICE (justified): P.81 attention launched (fork / fuse per the owner, OV-56); op probes and A/B through the runner.
 - 18:29 UTC P.81 accepted (wo_a grouped matmul fork, bit-identical, device ~-1.0 ms a chunk; 2 runner restarts). sdpa / RoPE not built: each < 1 ms by the agent's measured estimates. DEVICE OPEN (justified): the accept gate's fresh full-model accuracy process.
+- 18:45 UTC P.81 gate PASS -> 04c14a09d00 (wo_a grouped matmul; err_final_hidden 0.1362, top5 1.0, determinism 0.0, contract 0, outside history 0.0). RAM unaccounted 216.1 GiB. Owner queue done (mHC, attention); nothing else queued.
