@@ -8,6 +8,8 @@ The teacher-forced tests force the same CoT and flow noise through both sides, s
 the device numerics of the vision tower, LM, expert and action projections.
 """
 
+import os
+
 import pytest
 import torch
 from loguru import logger
@@ -17,22 +19,19 @@ import ttnn
 from models.experimental.alpamayo2_edge.reference import golden_cache
 from models.experimental.alpamayo2_edge.reference.action import action_to_traj
 from models.experimental.alpamayo2_edge.reference.forced_cot import driving_text_cot
-from models.experimental.alpamayo2_edge.reference.inputs import prepare_sample_inputs, synthetic_sample
 from models.experimental.alpamayo2_edge.reference.model import TEMPERATURE, ReferenceModel
+from models.experimental.alpamayo2_edge.tests._util import PCC, full_depth_only, pcc
 from models.experimental.alpamayo2_edge.tests.conftest import P100_MESH
 from models.experimental.alpamayo2_edge.tt.model import Alpamayo2EdgeTT
 from models.tt_dit.utils.check import assert_quality
 
-PCC = 0.99
 SEED = 0
+# Max Euclidean waypoint error against the reference with the same CoT and noise: about twice the worst measured
+# error (6.4 cm, at the last waypoint), rounded. Its fit on real driving data is checked in #66402.
+POSITION_BOUND_M = 0.13
 LM_HEAD_DTYPES = {"bf8": ttnn.bfloat8_b, "bf16": ttnn.bfloat16}
 # What seed 0 samples on `synthetic_sample(0)`, the same CoT as the official stack: "<NOMINAL>\n" and the anchor.
 FREE_RUNNING_COT = [124549, 11135, 3174, 4286, 1561, 135084]
-
-
-def _pcc(golden: torch.Tensor, actual: torch.Tensor) -> float:
-    stacked = torch.stack([golden.flatten().double(), actual.flatten().double()])
-    return torch.corrcoef(stacked)[0, 1].item()
 
 
 def _noise(cfg, batch: int) -> torch.Tensor:
@@ -100,11 +99,6 @@ def _reference_e2e(cfg, inputs, forced: torch.Tensor, noise: torch.Tensor) -> di
         "xyz": torch.cat([first.xyz, xyz]),
         "rot": torch.cat([first.rot, rot]),
     }
-
-
-@pytest.fixture(scope="module")
-def sample_inputs(cfg):
-    return prepare_sample_inputs(cfg, synthetic_sample(0))
 
 
 @pytest.fixture(scope="module")
@@ -188,31 +182,39 @@ def test_e2e_teacher_forced(mesh_device, cfg, sample_inputs, golden):
     assert pred.rot.shape == (1, n, 3, 3)
     assert pred.actions.shape == (1, n, cfg.action.action_dim)
 
-    step_pccs = torch.tensor([_pcc(golden["cot_logits"][:, t], run.cot.logits[:, t]) for t in range(steps)])
+    step_pccs = torch.tensor([pcc(golden["cot_logits"][:, t], run.cot.logits[:, t]) for t in range(steps)])
     error = _position_error(golden["xyz"][:1], pred.xyz)[0]
     logger.info(
         f"S={seq}, {steps} forced CoT tokens, layers vision/LM/expert "
         f"{cfg.vision.layers}/{cfg.text.layers}/{cfg.expert.layers}; timings "
         + ", ".join(f"{k} {v:.1f} s" for k, v in run.timings.items())
     )
-    logger.info(f"vision embeds PCC {_pcc(golden['vision'], run.vision_embeds) * 100:.4f} %")
-    logger.info(f"prefill last logits PCC {_pcc(golden['prefill_logits'], run.cot.logits[:, 0]) * 100:.4f} %")
+    logger.info(f"vision embeds PCC {pcc(golden['vision'], run.vision_embeds) * 100:.4f} %")
+    logger.info(f"prefill last logits PCC {pcc(golden['prefill_logits'], run.cot.logits[:, 0]) * 100:.4f} %")
     logger.info(
         f"decode logits PCC min {step_pccs.min() * 100:.4f} % (step {int(step_pccs.argmin())}), "
         f"mean {step_pccs.mean() * 100:.4f} %"
     )
-    logger.info(f"actions PCC {_pcc(golden['actions'][:1], pred.actions) * 100:.4f} %")
+    logger.info(f"actions PCC {pcc(golden['actions'][:1], pred.actions) * 100:.4f} %")
     logger.info(
-        f"xyz PCC {_pcc(golden['xyz'][:1], pred.xyz) * 100:.6f} %, max position error {error.max():.4f} m "
+        f"xyz PCC {pcc(golden['xyz'][:1], pred.xyz) * 100:.6f} %, max position error {error.max():.4f} m "
         f"at waypoint {int(error.argmax())}, final waypoint {error[-1]:.4f} m"
     )
     _log_decode_quality("bf8 lm_head", _decode_quality(golden["cot_logits"], run.cot.logits))
 
-    assert_quality(golden["xyz"][:1], pred.xyz, pcc=PCC)
+    assert_quality(golden["vision"], run.vision_embeds, pcc=PCC)
+    assert_quality(golden["prefill_logits"], run.cot.logits[:, 0], pcc=PCC)
+    # Written so that a NaN PCC fails too.
+    failing = (~(step_pccs >= PCC)).nonzero().flatten().tolist()
+    assert not failing, f"decode steps {failing} have logits PCC below {PCC}: {step_pccs[failing].tolist()}"
+    assert_quality(golden["actions"][:1], pred.actions, pcc=PCC, ccc=PCC)
+    # Forward motion dominates the xyz PCC, so the trajectory gate is the position error.
+    assert error.max() < POSITION_BOUND_M, f"max position error {error.max():.4f} m >= {POSITION_BOUND_M} m"
 
 
 @P100_MESH
 @pytest.mark.timeout(1500)
+@pytest.mark.skipif(os.environ.get("ALPAMAYO_MEASURE") != "1", reason="a measurement; set ALPAMAYO_MEASURE=1 to run")
 @pytest.mark.parametrize("lm_head", list(LM_HEAD_DTYPES))
 def test_e2e_lm_head_decode_quality(mesh_device, cfg, sample_inputs, golden, lm_head):
     """A measurement, not a gate: teacher-forced decode agreement and CoT time with the lm_head in bf8 or bf16.
@@ -229,7 +231,7 @@ def test_e2e_lm_head_decode_quality(mesh_device, cfg, sample_inputs, golden, lm_
 
     _assert_finite(logits=run.cot.logits, xyz=run.prediction.xyz)
     assert torch.equal(run.prediction.cot_tokens, forced[None])
-    step_pccs = torch.tensor([_pcc(golden["cot_logits"][:, t], run.cot.logits[:, t]) for t in range(forced.shape[0])])
+    step_pccs = torch.tensor([pcc(golden["cot_logits"][:, t], run.cot.logits[:, t]) for t in range(forced.shape[0])])
     logger.info(
         f"{lm_head} lm_head: warm timings "
         + ", ".join(f"{k} {v:.2f} s" for k, v in run.timings.items())
@@ -240,6 +242,7 @@ def test_e2e_lm_head_decode_quality(mesh_device, cfg, sample_inputs, golden, lm_
 
 @P100_MESH
 @pytest.mark.timeout(1500)
+@full_depth_only
 def test_e2e_free_running_smoke(mesh_device, cfg, sample_inputs):
     """Seeded sampling to the anchor gives a trajectory and the documented short CoT.
 
@@ -284,9 +287,9 @@ def test_e2e_two_samples_smoke(mesh_device, cfg, sample_inputs, golden):
         own = _position_error(golden["xyz"][row], pred.xyz[row]).max()
         other = _position_error(golden["xyz"][1 - row], pred.xyz[row]).max()
         logger.info(
-            f"sample {row}: xyz PCC {_pcc(golden['xyz'][row], pred.xyz[row]) * 100:.6f} %, "
+            f"sample {row}: xyz PCC {pcc(golden['xyz'][row], pred.xyz[row]) * 100:.6f} %, "
             f"max position error {own:.4f} m (vs the other sample's reference {other:.4f} m)"
         )
         # Forward motion dominates the xyz PCC, so it barely separates the two noise draws; the error does.
         assert own < other, f"sample {row} is closer to the other sample's reference"
-        assert_quality(golden["xyz"][row], pred.xyz[row], pcc=PCC)
+        assert own < POSITION_BOUND_M, f"sample {row}: max position error {own:.4f} m >= {POSITION_BOUND_M} m"

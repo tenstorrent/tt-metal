@@ -16,25 +16,26 @@ import torch
 import ttnn
 from models.experimental.alpamayo2_edge.reference.config import ProjectorConfig, VisionConfig
 from models.experimental.alpamayo2_edge.reference.vision import vision_position_embeddings
-from models.tt_dit.encoders.qwen3vl.vision_qwen3vl import Qwen3VlVisionBlock
+from models.experimental.alpamayo2_edge.tt.common import drop_unbuilt_layers, round_up
+from models.tt_dit.encoders.qwen3vl.vision_qwen3vl import Qwen3VlVisionBlock, Qwen3VlVisionPatchMerger
 from models.tt_dit.encoders.vision import VisionPatchEmbed
 from models.tt_dit.layers.linear import Linear
 from models.tt_dit.layers.module import Module, ModuleList
 from models.tt_dit.layers.normalization import LayerNorm
 from models.tt_dit.utils.tensor import bf16_tensor
 
-_TILE = 32
 _HIDDEN_ACT = "gelu_pytorch_tanh"
 # Hard-coded in the upstream patch merger rather than read from the config.
 _PROJECTOR_NORM_EPS = 1e-6
-_POS_EMBED_KEY = "embeddings.position_embedding.weight"
+# Checkpoint key of the learned position grid, which `PosEmbedCache` takes on the host.
+POS_EMBED_KEY = "embeddings.position_embedding.weight"
 
 
 def identity_rope(
     n: int, *, mesh_device: ttnn.MeshDevice, head_dim: int = VisionConfig.hidden // VisionConfig.heads
 ) -> tuple[ttnn.Tensor, ttnn.Tensor]:
     """`(cos, sin)` = (ones, zeros), shaped like `vision_rope_tensors` for `n` rows: `(n, padded_head_dim)`."""
-    padded_head_dim = _TILE * -(-head_dim // _TILE)
+    padded_head_dim = round_up(head_dim, ttnn.TILE_SIZE)
     cos = bf16_tensor(torch.ones(n, padded_head_dim), device=mesh_device)
     sin = bf16_tensor(torch.zeros(n, padded_head_dim), device=mesh_device)
     return cos, sin
@@ -60,33 +61,32 @@ class PosEmbedCache:
         return self._cache[key]
 
 
-def _merge_rows(x: ttnn.Tensor, width: int) -> ttnn.Tensor:
-    """Fold consecutive rows into `width`-wide rows through row-major, so tile padding never enters a group."""
-    rm = ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT)
-    out = ttnn.to_layout(ttnn.reshape(rm, (-1, width)), ttnn.TILE_LAYOUT)
-    ttnn.deallocate(rm)
-    return out
+class TtProjector(Qwen3VlVisionPatchMerger):
+    """tt_dit's pre-shuffle patch merger with the checkpoint's widths.
 
-
-class TtProjector(Module):
-    """Pre-shuffle LayerNorm, then each `merge**2` consecutive rows -> one token through fc1, exact GELU, fc2."""
+    Each `merge**2` consecutive rows become one token through LayerNorm, fc1, exact GELU and fc2. Unlike Qwen3-VL's
+    merger, fc1 widens the merged row to `pcfg.hidden` instead of keeping its width.
+    """
 
     def __init__(self, vcfg: VisionConfig, pcfg: ProjectorConfig, *, mesh_device: ttnn.MeshDevice) -> None:
-        super().__init__()
-        self.group = vcfg.merge**2
-        self.merged_size = vcfg.hidden * self.group
-        self.norm = LayerNorm(vcfg.hidden, norm_eps=_PROJECTOR_NORM_EPS, mesh_device=mesh_device)
-        self.linear_fc1 = Linear(
-            self.merged_size, pcfg.hidden, bias=True, activation_fn="gelu", mesh_device=mesh_device
+        super().__init__(
+            hidden_size=vcfg.hidden,
+            out_hidden_size=pcfg.out,
+            spatial_merge_size=vcfg.merge,
+            norm_eps=_PROJECTOR_NORM_EPS,
+            use_postshuffle_norm=False,
+            mesh_device=mesh_device,
         )
+        # Parameters are allocated when loaded, so the replaced linears cost nothing.
+        self.linear_fc1 = Linear(self.merged_size, pcfg.hidden, bias=True, mesh_device=mesh_device)
         self.linear_fc2 = Linear(pcfg.hidden, pcfg.out, bias=True, mesh_device=mesh_device)
 
     def forward(self, x: ttnn.Tensor) -> ttnn.Tensor:
         """`[N, hidden]` -> `[N // merge**2, out]`."""
-        if x.shape[-2] % self.group != 0:
-            raise ValueError(f"{x.shape[-2]} rows are not a whole number of {self.group}-row merge groups")
-        x = _merge_rows(self.norm.forward(x), self.merged_size)
-        return self.linear_fc2.forward(self.linear_fc1.forward(x))
+        group = self.spatial_merge_size**2
+        if x.shape[-2] % group != 0:
+            raise ValueError(f"{x.shape[-2]} rows are not a whole number of {group}-row merge groups")
+        return super().forward(x)
 
 
 class TtVisionTower(Module):
@@ -134,7 +134,7 @@ class TtVisionTower(Module):
             "mlp.fc2.": "mlp.linear_fc2.",
         }
         for key, value in visual.items():
-            if key == _POS_EMBED_KEY:
+            if key == POS_EMBED_KEY:
                 continue
             if key.startswith("embeddings.patch_embedding."):
                 out["patch_embed.proj." + key.removeprefix("embeddings.patch_embedding.")] = value
@@ -163,10 +163,8 @@ class TtVisionTower(Module):
         return out
 
     def _prepare_torch_state(self, state: dict[str, torch.Tensor]) -> None:
-        # A depth override builds fewer blocks than the checkpoint holds; the deeper blocks are not loaded.
-        for key in [k for k in state if k.startswith("blocks.")]:
-            if int(key.split(".")[1]) >= len(self.blocks):
-                del state[key]
+        super()._prepare_torch_state(state)
+        drop_unbuilt_layers(state, "blocks.", len(self.blocks))
 
     def identity_rope(self, n: int) -> tuple[ttnn.Tensor, ttnn.Tensor]:
         if n not in self._identity_rope:

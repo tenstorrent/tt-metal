@@ -17,9 +17,10 @@ import torch
 import ttnn
 from models.experimental.alpamayo2_edge.reference.action import FourierEncoder, euler_sample
 from models.experimental.alpamayo2_edge.reference.config import ActionConfig
+from models.experimental.alpamayo2_edge.tt.common import accurate_compute_config, single_device_ctx
 from models.experimental.alpamayo2_edge.tt.expert import ExpertFrame, TtExpert
 from models.experimental.alpamayo2_edge.tt.text import AlpamayoCache
-from models.tt_dit.encoders.transformer import TransformerContext, TransformerRmsNorm
+from models.tt_dit.encoders.transformer import TransformerRmsNorm
 from models.tt_dit.layers.linear import Linear
 from models.tt_dit.layers.module import Module, ModuleList
 from models.tt_dit.layers.normalization import LayerNorm
@@ -27,16 +28,6 @@ from models.tt_dit.utils import tensor
 
 # The trunk's RMSNorm epsilon, as in the reference and upstream `ActionInProj`.
 _RMS_EPS = 1e-5
-
-
-def _hifi4(mesh_device: ttnn.MeshDevice) -> ttnn.DeviceComputeKernelConfig:
-    return ttnn.init_device_compute_kernel_config(
-        mesh_device.arch(),
-        math_fidelity=ttnn.MathFidelity.HiFi4,
-        math_approx_mode=False,
-        fp32_dest_acc_en=True,
-        packer_l1_acc=True,
-    )
 
 
 def action_features(x: torch.Tensor, t: torch.Tensor, acfg: ActionConfig) -> torch.Tensor:
@@ -65,10 +56,10 @@ class TtActionInProj(Module):
 
     def __init__(self, acfg: ActionConfig, out_dim: int, *, mesh_device: ttnn.MeshDevice) -> None:
         super().__init__()
-        ctx = TransformerContext(device=mesh_device, tp_axis=None, ccl_manager=None, sp_axis=None, fsdp_axis=None)
+        ctx = single_device_ctx(mesh_device)
         hidden = acfg.in_proj_hidden
         layers = acfg.in_proj_layers
-        compute = _hifi4(mesh_device)
+        compute = accurate_compute_config(mesh_device)
         self.mesh_device = mesh_device
         self.in_features = acfg.fourier_feats * (acfg.action_dim + 1)
         self.trunk_in = Linear(
@@ -88,6 +79,7 @@ class TtActionInProj(Module):
         self.norm = LayerNorm(out_dim, mesh_device=mesh_device)
 
     def _prepare_torch_state(self, state: dict[str, torch.Tensor]) -> None:
+        super()._prepare_torch_state(state)
         # Checkpoint `encoder.trunk` indices count the SiLUs: Linear 0, SiLU 1, then block i at RMSNorm 2 + 3i,
         # Linear 3 + 3i and (but the last) SiLU 4 + 3i.
         renames = {"encoder.trunk.0.": "trunk_in."}
@@ -114,7 +106,9 @@ class TtActionOutProj(Linear):
     """Expert output [B, N, hidden] -> flow velocity [B, N, action_dim]; checkpoint `expert.action_out_proj.*`."""
 
     def __init__(self, hidden: int, action_dim: int, *, mesh_device: ttnn.MeshDevice) -> None:
-        super().__init__(hidden, action_dim, mesh_device=mesh_device, compute_kernel_config=_hifi4(mesh_device))
+        super().__init__(
+            hidden, action_dim, mesh_device=mesh_device, compute_kernel_config=accurate_compute_config(mesh_device)
+        )
 
 
 def action_velocity_tt(
@@ -130,7 +124,8 @@ def action_velocity_tt(
 ) -> torch.Tensor:
     """fp32 flow velocity [B, N, action_dim] at actions x [B, N, action_dim] and time t [B, 1, 1].
 
-    The expert rewrites cache rows `[frame.p_pad, frame.p_pad + N)` of every layer; the prefix is left as it was.
+    Destructive: the expert overwrites cache rows `[frame.p_pad, frame.p_pad + N)` of every layer; the prefix is left
+    as it was.
     """
     batch, n, _ = x.shape
     if (frame.mask.shape[0], frame.mask.shape[2]) != (batch, n):

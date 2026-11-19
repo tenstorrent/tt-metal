@@ -15,6 +15,7 @@ import torch
 import ttnn
 from models.experimental.alpamayo2_edge.reference.config import TextConfig
 from models.experimental.alpamayo2_edge.reference.text import KVCache
+from models.experimental.alpamayo2_edge.tt.common import drop_unbuilt_layers, round_up
 from models.tt_dit.blocks.rope import RopeConfig
 from models.tt_dit.encoders.transformer import (
     LINEAR_DTYPE,
@@ -29,10 +30,6 @@ from models.tt_dit.layers.linear import ColParallelLinear, RowParallelLinear
 from models.tt_dit.layers.module import Module
 from models.tt_dit.utils import tensor
 
-# Rows past the prompt: up to 256 generated CoT tokens, then the expert's 64 action rows.
-_MAX_NEW_TOKENS = 256
-_EXPERT_ROWS = 64
-
 STATE_CONVERSION = StateConversion(
     rename=[
         (r"^embed_tokens\.", r"token_embedding."),
@@ -44,10 +41,6 @@ STATE_CONVERSION = StateConversion(
         (r"^norm\.", r"final_norm."),
     ],
 )
-
-
-def _ceil(x: int, multiple: int) -> int:
-    return -(-x // multiple) * multiple
 
 
 class ReluSquaredFeedForward(Module):
@@ -83,18 +76,31 @@ class AlpamayoCache(Cache):
         super().__init__(device=device, size=size, batch_size=batch_size)
 
     @staticmethod
-    def size_for(max_prompt: int) -> int:
-        """Rows for a prompt of up to `max_prompt` tokens, the CoT and the expert's action rows.
+    def size_for(max_prompt: int, *, max_new_tokens: int, action_rows: int) -> int:
+        """Rows for a prompt of up to `max_prompt` tokens, `max_new_tokens` CoT tokens and the expert's action rows.
 
-        It also covers the prefill padding to a multiple of 128 rows, which `Cache.prefill` writes in full.
+        `Cache.prefill` writes the prompt padded to a multiple of 128 rows, and the action rows start at the CoT
+        prefix rounded up to a tile.
         """
-        return _ceil(max_prompt + _MAX_NEW_TOKENS + _EXPERT_ROWS, WORKAROUND_MIN_DECODE_CHUNK_SIZE)
+        rows = max(
+            round_up(max_prompt, MAX_CHUNK_SIZE),
+            round_up(max_prompt + max_new_tokens, ttnn.TILE_SIZE) + action_rows,
+        )
+        return round_up(rows, WORKAROUND_MIN_DECODE_CHUNK_SIZE)
 
     def layer_kv(self, layer: int) -> tuple[ttnn.Tensor, ttnn.Tensor]:
         if layer not in self._k_cache:
-            msg = f"layer {layer} of the cache has not been filled"
+            msg = f"layer {layer} of the cache holds no K/V: it was not filled, or it was deallocated"
             raise KeyError(msg)
         return self._k_cache[layer], self._v_cache[layer]
+
+    def deallocate(self) -> None:
+        """Frees the K/V of every layer and the position; the cache cannot be used afterwards."""
+        for kv in (*self._k_cache.values(), *self._v_cache.values()):
+            ttnn.deallocate(kv)
+        self._k_cache.clear()
+        self._v_cache.clear()
+        ttnn.deallocate(self._position)
 
     def repeat_to(self, batch: int) -> AlpamayoCache:
         """A copy of this single-sequence cache for `batch` samples, at the same position."""
@@ -132,11 +138,30 @@ class AlpamayoCache(Cache):
 class TtLanguageModel(TransformerEncoder):
     """The Cosmos3 Edge LM: tt_dit's encoder with each layer's gated-SiLU feed-forward replaced by ReLU²."""
 
-    def __init__(self, config: TransformerEncoderConfig, *, device: ttnn.MeshDevice) -> None:
+    def __init__(
+        self,
+        config: TransformerEncoderConfig,
+        *,
+        device: ttnn.MeshDevice,
+        lm_head_dtype: ttnn.DataType = LINEAR_DTYPE,
+    ) -> None:
+        """
+        Args:
+            lm_head_dtype: Weight dtype of the vocabulary projection; tt_dit's linear default is bf8.
+        """
         super().__init__(config, device=device)
-        # Parameters are allocated when loaded, so the replaced feed-forwards cost nothing.
+        # Parameters are allocated when loaded, so the replaced modules cost nothing.
         for layer in self.layers:
             layer.ff = ReluSquaredFeedForward(config.embed_size, config.ff_size, mesh_device=device)
+        if self.final_linear is not None and lm_head_dtype != LINEAR_DTYPE:
+            self.final_linear = ColParallelLinear(
+                config.embed_size,
+                config.vocab_size,
+                bias=False,
+                mesh_device=device,
+                mesh_axis=None,
+                dtype=lm_head_dtype,
+            )
 
     @staticmethod
     def config_from(tcfg: TextConfig) -> TransformerEncoderConfig:
@@ -163,14 +188,13 @@ class TtLanguageModel(TransformerEncoder):
         return {**STATE_CONVERSION.convert(lm), **{f"final_linear.{k}": v for k, v in head.items()}}
 
     def _prepare_torch_state(self, state: dict[str, torch.Tensor]) -> None:
-        # A depth override builds fewer layers than the checkpoint holds, and a config may leave out the final
-        # norm or head; their tensors are not loaded.
+        super()._prepare_torch_state(state)
+        drop_unbuilt_layers(state, "layers.", len(self.layers))
+        # A config may leave out the final norm or head; their tensors are not loaded.
         for key in list(state):
-            if key.startswith("layers.") and int(key.split(".")[1]) >= len(self.layers):
-                del state[key]
-            elif key.startswith("final_norm.") and self.final_norm is None:
-                del state[key]
-            elif key.startswith("final_linear.") and self.final_linear is None:
+            if (key.startswith("final_norm.") and self.final_norm is None) or (
+                key.startswith("final_linear.") and self.final_linear is None
+            ):
                 del state[key]
 
     def prefill(
@@ -189,13 +213,15 @@ class TtLanguageModel(TransformerEncoder):
             positions: `[3, 1, S]` float32 M-RoPE positions.
             vision_embeds: `[V, hidden]` embeddings that replace the `V` rows `vision_mask` marks, in order.
             vision_mask: `[1, S]`, 1 on the image-token rows.
-            cache: A single-sequence cache; the prefill writes rows up to S padded to a multiple of 128.
+            cache: A single-sequence cache. The prefill writes rows up to S padded to a multiple of 128; the padding
+                rows hold finite K/V of pad tokens, which the decode overwrites and the expert masks. They must stay
+                finite: a masked inf or NaN still turns the attention output into NaN.
         """
         batch_size, seq_len = tokens.shape
         if batch_size != 1 or cache.batch_size != 1:
             msg = "the prefill runs a single sequence"
             raise ValueError(msg)
-        if cache.size < _ceil(seq_len, MAX_CHUNK_SIZE):
+        if cache.size < round_up(seq_len, MAX_CHUNK_SIZE):
             msg = f"a {cache.size}-row cache cannot hold the prefill of {seq_len} tokens padded to {MAX_CHUNK_SIZE}"
             raise ValueError(msg)
         hidden = self.forward(

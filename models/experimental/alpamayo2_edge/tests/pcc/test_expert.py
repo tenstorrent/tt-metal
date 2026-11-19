@@ -14,95 +14,13 @@ import pytest
 import torch
 from loguru import logger
 
-from models.experimental.alpamayo2_edge.reference import golden_cache
 from models.experimental.alpamayo2_edge.reference.action import expert_mask, expert_position_ids
-from models.experimental.alpamayo2_edge.reference.forced_cot import driving_text_cot
-from models.experimental.alpamayo2_edge.reference.inputs import prepare_sample_inputs, synthetic_sample
-from models.experimental.alpamayo2_edge.reference.model import ReferenceModel
-from models.experimental.alpamayo2_edge.reference.text import (
-    DecoderLayer,
-    KVCache,
-    TextModel,
-    attention_bias,
-    mrope_cos_sin,
-)
-from models.experimental.alpamayo2_edge.reference.weights import load_weights
+from models.experimental.alpamayo2_edge.reference.text import DecoderLayer, TextModel, attention_bias, mrope_cos_sin
+from models.experimental.alpamayo2_edge.tests._util import PCC, pcc, reference_cache
 from models.experimental.alpamayo2_edge.tests.conftest import P100_MESH
-from models.experimental.alpamayo2_edge.tt.expert import MASKED, TtExpert, TtExpertLayer, make_expert_frame
-from models.experimental.alpamayo2_edge.tt.generate import CotResult
-from models.experimental.alpamayo2_edge.tt.text import AlpamayoCache
+from models.experimental.alpamayo2_edge.tt.expert import TtExpert, TtExpertLayer
 from models.tt_dit.utils import tensor
 from models.tt_dit.utils.check import assert_quality
-
-PCC = 0.99
-# Fills the cache rows between the prefix and p_pad: any attention weight that leaks onto them breaks the PCC.
-POISON = 1000.0
-
-
-def _ceil(x: int, multiple: int) -> int:
-    return -(-x // multiple) * multiple
-
-
-def _pcc(golden: torch.Tensor, actual: torch.Tensor) -> float:
-    stacked = torch.stack([golden.flatten().double(), actual.flatten().double()])
-    return torch.corrcoef(stacked)[0, 1].item()
-
-
-def _reference_prefix(cfg, inputs, forced: torch.Tensor) -> dict:
-    """The teacher-forced CoT and its prefix cache, K and V of every layer in bf16 as the TT cache holds them."""
-    model = ReferenceModel.from_pretrained(cfg)
-    steps = []
-
-    def progress(_m, _a, _out):
-        steps.append(None)
-        print(f"reference LM forward {len(steps)}", flush=True)
-
-    model.lm.text.register_forward_hook(progress)
-    _, cache = model.prefill(inputs)
-    cot = model.decode(inputs, cache, forced=forced)
-    return {
-        "tokens": cot.tokens,
-        "offsets": cot.offsets,
-        "k": [k.to(torch.bfloat16) for k in cache.k],
-        "v": [v.to(torch.bfloat16) for v in cache.v],
-    }
-
-
-@pytest.fixture(scope="module")
-def sample_inputs(cfg):
-    return prepare_sample_inputs(cfg, synthetic_sample(0))
-
-
-@pytest.fixture(scope="module")
-def prefix(cfg, sample_inputs):
-    inputs = sample_inputs
-    forced = driving_text_cot(cfg)[None]
-    golden = golden_cache.cached(
-        "expert_prefix_cache",
-        {
-            "input_ids": inputs.input_ids,
-            "position_ids": inputs.position_ids,
-            "patches": inputs.patches,
-            "grid": inputs.image_grid_thw,
-            "forced": forced,
-        },
-        lambda: _reference_prefix(cfg, inputs, forced),
-        cfg=cfg,
-    )
-    assert torch.equal(golden["tokens"], forced)
-    return golden
-
-
-@pytest.fixture(scope="module")
-def expert_weights(model_dir):
-    return load_weights(model_dir, "expert.expert.")
-
-
-def _reference_cache(prefix: dict) -> KVCache:
-    kv = KVCache(len(prefix["k"]))
-    kv.k = [k.float() for k in prefix["k"]]
-    kv.v = [v.float() for v in prefix["v"]]
-    return kv
 
 
 def _reference_conditioning(cfg, inputs, offsets: torch.Tensor, prefix_len: int):
@@ -111,35 +29,6 @@ def _reference_conditioning(cfg, inputs, offsets: torch.Tensor, prefix_len: int)
     positions = expert_position_ids(offsets, inputs.rope_deltas, n)
     mask = expert_mask(offsets, inputs.attention_mask, prefix_len, n)
     return positions, mask
-
-
-def _tt_setup(mesh_device, cfg, inputs, prefix):
-    """The prefix in a TT cache with rows [prefix_len, p_pad) poisoned, and the frame built over it."""
-    seq = inputs.input_ids.shape[1]
-    n = cfg.action.n_waypoints
-    offsets = prefix["offsets"]
-    prefix_len = int(offsets.max())
-    p_pad = _ceil(prefix_len, 32)
-    assert p_pad > prefix_len, "the sample must leave rows between the prefix and p_pad to poison"
-    size = AlpamayoCache.size_for(seq)
-    assert size >= p_pad + n
-
-    kv = _reference_cache(prefix)
-    pad = (0, 0, 0, p_pad - prefix_len)
-    kv.k = [torch.nn.functional.pad(k, pad, value=POISON) for k in kv.k]
-    kv.v = [torch.nn.functional.pad(v, pad, value=POISON) for v in kv.v]
-    cache = AlpamayoCache.from_reference(kv, size=size, mesh_device=mesh_device)
-    cot = CotResult(tokens=prefix["tokens"], offsets=offsets, prefix_length=prefix_len, logits=None, cache=cache)
-    frame = make_expert_frame(cot, inputs, ecfg=cfg.expert, n_waypoints=n, mesh_device=mesh_device)
-
-    assert frame.p_pad == p_pad
-    mask = tensor.to_torch(frame.mask).bfloat16()
-    expected = expert_mask(offsets, inputs.attention_mask, p_pad, n).clamp(min=MASKED).bfloat16()
-    assert mask.shape == (1, 1, n, p_pad + n)
-    assert torch.equal(mask, expected)
-    assert bool((mask[..., prefix_len:p_pad] < -1e8).all())
-    assert bool((mask[..., p_pad:] == 0).all())
-    return cache, frame, prefix_len
 
 
 def _layer0_rows(cache, rows: int) -> tuple[torch.Tensor, torch.Tensor]:
@@ -154,18 +43,18 @@ def test_expert_depth_mismatch_raises(mesh_device, cfg, expect_error):
 
 @P100_MESH
 @pytest.mark.timeout(1500)
-def test_expert_layer(mesh_device, cfg, sample_inputs, prefix, expert_weights):
+def test_expert_layer(mesh_device, cfg, sample_inputs, prefix, expert_weights, expert_setup):
     inputs = sample_inputs
     ecfg = cfg.expert
     n = cfg.action.n_waypoints
-    cache, frame, prefix_len = _tt_setup(mesh_device, cfg, inputs, prefix)
+    cache, frame, prefix_len = expert_setup
     logger.info(f"prefix {prefix_len} rows, p_pad {frame.p_pad}, cache {cache.size} rows")
 
     torch.manual_seed(0)
     # bf16-exact, so both sides start from the same input and `out - x` is the layer's update alone.
     x = torch.randn(1, n, ecfg.hidden).bfloat16().float()
 
-    kv = _reference_cache(prefix)
+    kv = reference_cache(prefix)
     positions, mask = _reference_conditioning(cfg, inputs, prefix["offsets"], prefix_len)
     cos, sin = mrope_cos_sin(positions, ecfg.head_dim, ecfg.rope_theta, ecfg.mrope_section)
     bias = attention_bias(n, prefix_len, mask, False, torch.float32)
@@ -187,8 +76,8 @@ def test_expert_layer(mesh_device, cfg, sample_inputs, prefix, expert_weights):
     rows = slice(frame.p_pad, frame.p_pad + n)
     own_k, own_v = k_after[:, :, rows], v_after[:, :, rows]
     logger.info(
-        f"layer 0 PCC {_pcc(golden, first) * 100:.4f} %, update PCC {_pcc(golden - x, first - x) * 100:.4f} %, "
-        f"own K PCC {_pcc(golden_own_k, own_k) * 100:.4f} %, own V PCC {_pcc(golden_own_v, own_v) * 100:.4f} %"
+        f"layer 0 PCC {pcc(golden, first) * 100:.4f} %, update PCC {pcc(golden - x, first - x) * 100:.4f} %, "
+        f"own K PCC {pcc(golden_own_k, own_k) * 100:.4f} %, own V PCC {pcc(golden_own_v, own_v) * 100:.4f} %"
     )
     assert first.shape == golden.shape
     # The second call overwrites the rows the first one appended, so it sees the same keys.
@@ -205,18 +94,18 @@ def test_expert_layer(mesh_device, cfg, sample_inputs, prefix, expert_weights):
 
 @P100_MESH
 @pytest.mark.timeout(1500)
-def test_expert_stack(mesh_device, cfg, sample_inputs, prefix, expert_weights):
+def test_expert_stack(mesh_device, cfg, sample_inputs, prefix, expert_weights, expert_setup):
     inputs = sample_inputs
     ecfg = cfg.expert
     n = cfg.action.n_waypoints
-    cache, frame, prefix_len = _tt_setup(mesh_device, cfg, inputs, prefix)
+    cache, frame, prefix_len = expert_setup
     logger.info(f"prefix {prefix_len} rows, p_pad {frame.p_pad}, {ecfg.layers} expert layers")
 
     torch.manual_seed(0)
     # bf16-exact, so both sides start from the same input and `out - x` is the layer's update alone.
     x = torch.randn(1, n, ecfg.hidden).bfloat16().float()
 
-    kv = _reference_cache(prefix)
+    kv = reference_cache(prefix)
     positions, mask = _reference_conditioning(cfg, inputs, prefix["offsets"], prefix_len)
     reference = TextModel(ecfg, expert_weights, has_embedding=False)
     with torch.no_grad():
@@ -230,9 +119,9 @@ def test_expert_stack(mesh_device, cfg, sample_inputs, prefix, expert_weights):
     second = tensor.to_torch(expert.forward(tt_x, cache=cache, frame=frame))
     k_after, v_after = _layer0_rows(cache, frame.p_pad)
 
-    logger.info(f"expert stack PCC {_pcc(golden, first) * 100:.4f} %")
+    logger.info(f"expert stack PCC {pcc(golden, first) * 100:.4f} %")
     assert first.shape == golden.shape
     assert torch.equal(first, second)
     assert torch.equal(k_after, k_before)
     assert torch.equal(v_after, v_before)
-    assert_quality(golden, first, pcc=PCC)
+    assert_quality(golden, first, pcc=PCC, ccc=PCC)

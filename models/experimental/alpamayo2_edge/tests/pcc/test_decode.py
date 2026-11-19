@@ -10,20 +10,13 @@ from loguru import logger
 
 from models.experimental.alpamayo2_edge.reference import golden_cache
 from models.experimental.alpamayo2_edge.reference.forced_cot import driving_text_cot
-from models.experimental.alpamayo2_edge.reference.inputs import prepare_sample_inputs, synthetic_sample
 from models.experimental.alpamayo2_edge.reference.model import ReferenceModel
 from models.experimental.alpamayo2_edge.reference.weights import load_weights
+from models.experimental.alpamayo2_edge.tests._util import PCC, pcc
 from models.experimental.alpamayo2_edge.tests.conftest import P100_MESH
 from models.experimental.alpamayo2_edge.tt.generate import generate_cot
 from models.experimental.alpamayo2_edge.tt.text import AlpamayoCache, TtLanguageModel
 from models.tt_dit.utils import tensor
-
-PCC = 0.99
-
-
-def _pcc(golden: torch.Tensor, actual: torch.Tensor) -> float:
-    stacked = torch.stack([golden.flatten().double(), actual.flatten().double()])
-    return torch.corrcoef(stacked)[0, 1].item()
 
 
 def _reference_forced_decode(cfg, inputs, forced: torch.Tensor) -> dict:
@@ -45,8 +38,8 @@ def _reference_forced_decode(cfg, inputs, forced: torch.Tensor) -> dict:
 
 @P100_MESH
 @pytest.mark.timeout(1500)
-def test_decode_teacher_forced(mesh_device, cfg):
-    inputs = prepare_sample_inputs(cfg, synthetic_sample(0))
+def test_decode_teacher_forced(mesh_device, cfg, sample_inputs):
+    inputs = sample_inputs
     forced = driving_text_cot(cfg)[None]
     golden = golden_cache.cached(
         "lm_forced_decode",
@@ -71,7 +64,8 @@ def test_decode_teacher_forced(mesh_device, cfg):
             load_weights(cfg.model_dir, "vlm.model.language_model."), load_weights(cfg.model_dir, "vlm.lm_head.")
         )
     )
-    cache = AlpamayoCache(device=mesh_device, size=AlpamayoCache.size_for(seq), batch_size=1)
+    size = AlpamayoCache.size_for(seq, max_new_tokens=256, action_rows=cfg.action.n_waypoints)
+    cache = AlpamayoCache(device=mesh_device, size=size, batch_size=1)
 
     cot = generate_cot(
         model,
@@ -85,7 +79,8 @@ def test_decode_teacher_forced(mesh_device, cfg):
 
     assert torch.equal(cot.tokens, forced)
     assert cot.logits.shape == golden["logits"].shape == (1, steps, cfg.text.vocab)
-    pccs = torch.tensor([_pcc(golden["logits"][:, t], cot.logits[:, t]) for t in range(steps)])
+    assert bool(torch.isfinite(cot.logits).all()), "the decode logits have NaN or Inf"
+    pccs = torch.tensor([pcc(golden["logits"][:, t], cot.logits[:, t]) for t in range(steps)])
     argmax_equal = (golden["logits"].argmax(-1) == cot.logits.argmax(-1)).float().mean().item()
     logger.info(
         f"per-step logits PCC min {pccs.min() * 100:.4f} % (step {int(pccs.argmin())}), "
@@ -97,5 +92,6 @@ def test_decode_teacher_forced(mesh_device, cfg):
     assert cot.prefix_length == seq + steps
     assert cot.cache is cache
     assert int(tensor.to_torch(cache.position)[0]) == cot.prefix_length
-    failing = (pccs < PCC).nonzero().flatten().tolist()
+    # Written so that a NaN PCC fails too.
+    failing = (~(pccs >= PCC)).nonzero().flatten().tolist()
     assert not failing, f"steps {failing} have logits PCC below {PCC}: {pccs[failing].tolist()}"

@@ -17,11 +17,8 @@ from models.experimental.alpamayo2_edge.reference.action import ActionInProj, ac
 from models.experimental.alpamayo2_edge.reference.model import CotOut, ReferenceModel
 from models.experimental.alpamayo2_edge.reference.text import TextModel
 from models.experimental.alpamayo2_edge.reference.weights import load_weights
+from models.experimental.alpamayo2_edge.tests._util import PCC, pcc, reference_cache
 from models.experimental.alpamayo2_edge.tests.conftest import P100_MESH
-
-# Fixtures: pytest picks them up from this module's namespace.
-from models.experimental.alpamayo2_edge.tests.pcc.test_expert import expert_weights, prefix, sample_inputs  # noqa: F401
-from models.experimental.alpamayo2_edge.tests.pcc.test_expert import _pcc, _reference_cache, _tt_setup
 from models.experimental.alpamayo2_edge.tt.action import (
     TtActionInProj,
     TtActionOutProj,
@@ -33,7 +30,6 @@ from models.experimental.alpamayo2_edge.tt.expert import TtExpert
 from models.tt_dit.utils import tensor
 from models.tt_dit.utils.check import assert_quality
 
-PCC = 0.99
 SEED = 0
 
 
@@ -107,45 +103,49 @@ def test_in_proj(mesh_device, cfg, in_proj_weights):
     out = tensor.to_torch(in_proj.forward(tt_features))
 
     logger.info(
-        f"bf16 features PCC {_pcc(features, tensor.to_torch(tt_features)) * 100:.4f} %, "
-        f"in-proj PCC {_pcc(golden, out) * 100:.4f} %"
+        f"bf16 features PCC {pcc(features, tensor.to_torch(tt_features)) * 100:.4f} %, "
+        f"in-proj PCC {pcc(golden, out) * 100:.4f} %"
     )
     assert out.shape == golden.shape
-    assert_quality(golden, out, pcc=PCC)
+    assert_quality(golden, out, pcc=PCC, ccc=PCC)
 
 
 @P100_MESH
 @pytest.mark.timeout(1500)
-def test_velocity_one_step(mesh_device, cfg, sample_inputs, prefix, expert_weights, in_proj_weights, out_proj_weights):
+def test_velocity_one_step(
+    mesh_device, cfg, sample_inputs, prefix, expert_setup, expert_weights, in_proj_weights, out_proj_weights
+):
     inputs = sample_inputs
-    cache, frame, prefix_len = _tt_setup(mesh_device, cfg, inputs, prefix)
+    cache, frame, prefix_len = expert_setup
     noise = _noise(cfg, 1)
     t = _timestep(cfg, 0, 1)
 
     reference = _reference_model(cfg, expert_weights, in_proj_weights, out_proj_weights)
     cot = CotOut(tokens=prefix["tokens"], offsets=prefix["offsets"], logits=None)
-    golden = reference.expert_velocity(_reference_cache(prefix), cot, inputs, noise, t)
+    golden = reference.expert_velocity(reference_cache(prefix), cot, inputs, noise, t)
 
     expert, in_proj, out_proj = _tt_action(mesh_device, cfg, expert_weights, in_proj_weights, out_proj_weights)
     v = action_velocity_tt(expert, in_proj, out_proj, cache=cache, frame=frame, x=noise, t=t, acfg=cfg.action)
 
-    logger.info(f"{cfg.expert.layers} layers, prefix {prefix_len}: velocity PCC {_pcc(golden, v) * 100:.4f} %")
+    logger.info(f"{cfg.expert.layers} layers, prefix {prefix_len}: velocity PCC {pcc(golden, v) * 100:.4f} %")
     assert v.dtype == torch.float32
     assert v.shape == golden.shape
-    assert_quality(golden, v, pcc=PCC)
+    assert_quality(golden, v, pcc=PCC, ccc=PCC)
 
 
 @P100_MESH
 @pytest.mark.timeout(1500)
-def test_actions_10_steps(mesh_device, cfg, sample_inputs, prefix, expert_weights, in_proj_weights, out_proj_weights):
+def test_actions_10_steps(
+    mesh_device, cfg, sample_inputs, prefix, expert_setup, expert_weights, in_proj_weights, out_proj_weights
+):
     inputs = sample_inputs
     acfg = cfg.action
-    cache, frame, prefix_len = _tt_setup(mesh_device, cfg, inputs, prefix)
+    cache, frame, prefix_len = expert_setup
     noise = _noise(cfg, 1)
 
     reference = _reference_model(cfg, expert_weights, in_proj_weights, out_proj_weights)
     cot = CotOut(tokens=prefix["tokens"], offsets=prefix["offsets"], logits=None)
-    golden = reference.sample_actions(_reference_cache(prefix), cot, inputs, noise)
+    golden = reference.sample_actions(reference_cache(prefix), cot, inputs, noise)
 
     expert, in_proj, out_proj = _tt_action(mesh_device, cfg, expert_weights, in_proj_weights, out_proj_weights)
     actions = sample_actions_tt(expert, in_proj, out_proj, cache=cache, frame=frame, noise=noise, acfg=acfg)
@@ -156,10 +156,10 @@ def test_actions_10_steps(mesh_device, cfg, sample_inputs, prefix, expert_weight
     position_error = torch.linalg.vector_norm(xyz - golden_xyz, dim=-1)
     logger.info(
         f"{cfg.expert.layers} layers, prefix {prefix_len}, {acfg.steps} steps: actions PCC "
-        f"{_pcc(golden, actions) * 100:.4f} %, max |delta| accel {delta[0]:.4f}, curvature {delta[1]:.4f} "
+        f"{pcc(golden, actions) * 100:.4f} %, max |delta| accel {delta[0]:.4f}, curvature {delta[1]:.4f} "
         f"(normalized); xyz max error {position_error.max():.4f} m at waypoint {int(position_error.argmax(-1)[0])}, "
         f"final-waypoint error {position_error[..., -1].max():.4f} m"
     )
     assert actions.dtype == torch.float32
     assert actions.shape == golden.shape
-    assert_quality(golden, actions, pcc=PCC)
+    assert_quality(golden, actions, pcc=PCC, ccc=PCC)

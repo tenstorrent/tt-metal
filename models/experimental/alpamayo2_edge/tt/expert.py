@@ -19,14 +19,16 @@ import ttnn
 from models.experimental.alpamayo2_edge.reference.action import expert_mask, expert_position_ids
 from models.experimental.alpamayo2_edge.reference.config import TextConfig
 from models.experimental.alpamayo2_edge.reference.inputs import ModelInputs
+from models.experimental.alpamayo2_edge.tt.common import (
+    accurate_compute_config,
+    drop_unbuilt_layers,
+    round_up,
+    single_device_ctx,
+)
 from models.experimental.alpamayo2_edge.tt.generate import CotResult
 from models.experimental.alpamayo2_edge.tt.text import STATE_CONVERSION, AlpamayoCache, ReluSquaredFeedForward
 from models.tt_dit.blocks.rope import RopeConfig, RotaryEmbedding
-from models.tt_dit.encoders.transformer import (
-    TransformerContext,
-    TransformerRmsNorm,
-    _apply_rope,
-)
+from models.tt_dit.encoders.transformer import MAX_CHUNK_SIZE, TransformerRmsNorm
 from models.tt_dit.layers.linear import Linear
 from models.tt_dit.layers.module import Module, ModuleList
 from models.tt_dit.utils import tensor
@@ -35,11 +37,12 @@ from models.tt_dit.utils import tensor
 # scores gives the same zero weight without risking inf - inf in the softmax.
 MASKED = -1e9
 
-_MAX_CHUNK = 128
 
-
-def _ceil(x: int, multiple: int) -> int:
-    return -(-x // multiple) * multiple
+def _apply_rope(x: ttnn.Tensor, cos: ttnn.Tensor, sin: ttnn.Tensor) -> ttnn.Tensor:
+    """Rotate-half RoPE of `x` `[B, heads, N, head_dim]` with `cos`/`sin` `[B, N, head_dim]`."""
+    half = x.shape[-1] // 2
+    rotated = ttnn.concat([ttnn.neg(x[..., half:]), x[..., :half]], dim=-1)
+    return x * ttnn.unsqueeze(cos, 1) + rotated * ttnn.unsqueeze(sin, 1)
 
 
 @dataclass
@@ -68,7 +71,10 @@ def make_expert_frame(
     if n_waypoints % ttnn.TILE_SIZE != 0:
         msg = f"fill_cache writes whole tiles, so the action token count must be a multiple of 32, got {n_waypoints}"
         raise ValueError(msg)
-    p_pad = _ceil(cot.prefix_length, ttnn.TILE_SIZE)
+    if cot.cache is None:
+        msg = "the CoT's cache has been released"
+        raise ValueError(msg)
+    p_pad = round_up(cot.prefix_length, ttnn.TILE_SIZE)
     if p_pad + n_waypoints > cot.cache.size:
         msg = f"a {cot.cache.size}-row cache cannot hold the {n_waypoints} action rows after row {p_pad}"
         raise ValueError(msg)
@@ -87,7 +93,7 @@ def make_expert_frame(
 
 
 def _sdpa_program_config(device: ttnn.MeshDevice, q_len: int, kv_len: int) -> ttnn.SDPAProgramConfig:
-    k_chunk = next(c for c in (_MAX_CHUNK, 64, ttnn.TILE_SIZE) if kv_len % c == 0)
+    k_chunk = next(c for c in (MAX_CHUNK_SIZE, 64, ttnn.TILE_SIZE) if kv_len % c == 0)
     return ttnn.SDPAProgramConfig(
         compute_with_storage_grid_size=device.compute_with_storage_grid_size(),
         q_chunk_size=ttnn.TILE_SIZE if q_len % ttnn.TILE_SIZE == 0 else q_len,
@@ -115,20 +121,16 @@ class TtExpertAttention(Module):
             ecfg.heads * ecfg.head_dim, ecfg.hidden, bias=False, dtype=ttnn.bfloat16, mesh_device=mesh_device
         )
         self._device = mesh_device
-        self._compute_kernel_config = ttnn.init_device_compute_kernel_config(
-            mesh_device.arch(),
-            math_fidelity=ttnn.MathFidelity.HiFi4,
-            math_approx_mode=False,
-            fp32_dest_acc_en=True,
-        )
+        self._compute_kernel_config = accurate_compute_config(mesh_device)
 
     def _prepare_torch_state(self, state: dict[str, torch.Tensor]) -> None:
+        super()._prepare_torch_state(state)
         if all(f"{p}_proj.weight" in state for p in "qkv"):
             # nlp_create_qkv_heads splits the fused width as [Q heads | K heads | V heads].
             state["qkv.weight"] = torch.cat([state.pop(f"{p}_proj.weight") for p in "qkv"], dim=0)
 
     def forward(self, x: ttnn.Tensor, *, layer_kv: tuple[ttnn.Tensor, ttnn.Tensor], frame: ExpertFrame) -> ttnn.Tensor:
-        """`x` `[B, N, hidden]` -> `[B, N, hidden]`; writes this call's K/V into `layer_kv` at `frame.p_pad`."""
+        """`x` `[B, N, hidden]` -> `[B, N, hidden]`; overwrites rows `[frame.p_pad, frame.p_pad + N)` of `layer_kv`."""
         batch, seq, _ = x.shape
         k_cache, v_cache = layer_kv
         kv_len = frame.p_pad + seq
@@ -182,7 +184,7 @@ class TtExpertAttention(Module):
 class TtExpertLayer(Module):
     def __init__(self, ecfg: TextConfig, *, mesh_device: ttnn.MeshDevice) -> None:
         super().__init__()
-        ctx = TransformerContext(device=mesh_device, tp_axis=None, ccl_manager=None, sp_axis=None, fsdp_axis=None)
+        ctx = single_device_ctx(mesh_device)
         self.attn_norm = TransformerRmsNorm(ecfg.hidden, eps=ecfg.eps, ctx=ctx)
         self.attn = TtExpertAttention(ecfg, mesh_device=mesh_device)
         self.ff_norm = TransformerRmsNorm(ecfg.hidden, eps=ecfg.eps, ctx=ctx)
@@ -202,7 +204,7 @@ class TtExpert(Module):
                 f"expert has {ecfg.layers} layers but the LM has {lm_num_layers}; each expert layer needs its LM cache"
             )
             raise ValueError(msg)
-        ctx = TransformerContext(device=mesh_device, tp_axis=None, ccl_manager=None, sp_axis=None, fsdp_axis=None)
+        ctx = single_device_ctx(mesh_device)
         self.layers = ModuleList(TtExpertLayer(ecfg, mesh_device=mesh_device) for _ in range(ecfg.layers))
         self.final_norm = TransformerRmsNorm(ecfg.hidden, eps=ecfg.eps, ctx=ctx)
 
@@ -212,13 +214,15 @@ class TtExpert(Module):
         return STATE_CONVERSION.convert(expert)
 
     def _prepare_torch_state(self, state: dict[str, torch.Tensor]) -> None:
-        # A depth override builds fewer layers than the checkpoint holds; their tensors are not loaded.
-        for key in list(state):
-            if key.startswith("layers.") and int(key.split(".")[1]) >= len(self.layers):
-                del state[key]
+        super()._prepare_torch_state(state)
+        drop_unbuilt_layers(state, "layers.", len(self.layers))
 
     def forward(self, x: ttnn.Tensor, *, cache: AlpamayoCache, frame: ExpertFrame) -> ttnn.Tensor:
-        """`x` `[B, N, hidden]` action embeddings -> `[B, N, hidden]` after the final norm."""
+        """`x` `[B, N, hidden]` action embeddings -> `[B, N, hidden]` after the final norm.
+
+        Destructive: each layer overwrites rows `[frame.p_pad, frame.p_pad + N)` of the LM cache with its action
+        K/V, so the LM cannot decode from `cache` after an expert call.
+        """
         for i, layer in enumerate(self.layers):
             x = layer.forward(x, layer_kv=cache.layer_kv(i), frame=frame)
         return self.final_norm.forward(x)

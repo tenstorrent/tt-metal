@@ -29,25 +29,28 @@ from models.experimental.alpamayo2_edge.reference.vision import vision_cu_seqlen
 from models.experimental.alpamayo2_edge.reference.weights import load_weights
 from models.experimental.alpamayo2_edge.tt.action import TtActionInProj, TtActionOutProj, sample_actions_tt
 from models.experimental.alpamayo2_edge.tt.expert import TtExpert, make_expert_frame
-from models.experimental.alpamayo2_edge.tt.generate import CotResult, generate_cot
+from models.experimental.alpamayo2_edge.tt.generate import CotResult, check_generation_args, generate_cot
 from models.experimental.alpamayo2_edge.tt.text import AlpamayoCache, TtLanguageModel
-from models.experimental.alpamayo2_edge.tt.vision import PosEmbedCache, TtVisionTower
+from models.experimental.alpamayo2_edge.tt.vision import POS_EMBED_KEY, PosEmbedCache, TtVisionTower
 from models.tt_dit.encoders.transformer import LINEAR_DTYPE
-from models.tt_dit.layers.linear import ColParallelLinear
 from models.tt_dit.utils import tensor
-
-_POS_EMBED_KEY = "embeddings.position_embedding.weight"
 
 
 @dataclass
 class TtRun:
     prediction: Prediction
-    cot: CotResult  # logits kept only with `keep_intermediates`
+    cot: CotResult  # logits kept only with `keep_intermediates`; its cache is already released
     vision_embeds: torch.Tensor | None  # [V, hidden] read back from the device with `keep_intermediates`
     timings: dict[str, float]  # wall seconds per stage: vision, cot (prefill + decode), flow, total
 
 
 class Alpamayo2EdgeTT:
+    """The Alpamayo 2 Edge driving model on one device.
+
+    Build it with `from_pretrained(mesh_device)` and call `infer` on `prepare_inputs` output once per frame. Every
+    call allocates its KV cache and frees it before returning.
+    """
+
     def __init__(
         self,
         cfg: Alpamayo2EdgeConfig,
@@ -90,20 +93,10 @@ class Alpamayo2EdgeTT:
         visual = load_weights(md, "vlm.model.visual.")
         vision = TtVisionTower(cfg.vision, cfg.projector, mesh_device=mesh_device)
         vision.load_torch_state_dict(TtVisionTower.convert_state(visual, load_weights(md, "vlm.model.projector.")))
-        pos_embeds = PosEmbedCache(visual[_POS_EMBED_KEY], merge=cfg.vision.merge, mesh_device=mesh_device)
+        pos_embeds = PosEmbedCache(visual[POS_EMBED_KEY], merge=cfg.vision.merge, mesh_device=mesh_device)
         del visual
 
-        lm = TtLanguageModel(TtLanguageModel.config_from(cfg.text), device=mesh_device)
-        if lm_head_dtype != LINEAR_DTYPE:
-            # Parameters are allocated at load, so replacing the head before loading costs nothing.
-            lm.final_linear = ColParallelLinear(
-                cfg.text.hidden,
-                cfg.text.vocab,
-                bias=False,
-                mesh_device=mesh_device,
-                mesh_axis=None,
-                dtype=lm_head_dtype,
-            )
+        lm = TtLanguageModel(TtLanguageModel.config_from(cfg.text), device=mesh_device, lm_head_dtype=lm_head_dtype)
         lm.load_torch_state_dict(
             TtLanguageModel.convert_state(
                 load_weights(md, "vlm.model.language_model."), load_weights(md, "vlm.lm_head.")
@@ -150,12 +143,14 @@ class Alpamayo2EdgeTT:
         With `keep_intermediates`, the vision embeddings and every step's logits are also read back to the host.
         """
         acfg = self.cfg.action
-        if forced_cot is not None:
-            if forced_cot.ndim == 1:
-                forced_cot = forced_cot.expand(num_samples, -1)
-            if forced_cot.shape[0] != num_samples:
-                msg = f"forced_cot has {forced_cot.shape[0]} rows for {num_samples} samples"
-                raise ValueError(msg)
+        if forced_cot is not None and forced_cot.ndim == 1:
+            forced_cot = forced_cot.expand(num_samples, -1)
+        check_generation_args(inp, num_samples=num_samples, max_new_tokens=max_new_tokens, forced=forced_cot)
+        vision_rows = int(inp.image_grid_thw.prod(-1).sum()) // self.cfg.vision.merge**2
+        image_tokens = int((inp.input_ids == self.cfg.tokens.image).sum())
+        if image_tokens != vision_rows:
+            msg = f"{image_tokens} image tokens for the {vision_rows} vision embeddings of the image grids"
+            raise ValueError(msg)
         noise_shape = (num_samples, acfg.n_waypoints, acfg.action_dim)
         if noise is None:
             noise = torch.randn(*noise_shape, generator=torch.Generator().manual_seed(seed))
@@ -171,27 +166,21 @@ class Alpamayo2EdgeTT:
         timings["vision"] = time.perf_counter() - start
 
         mark = time.perf_counter()
-        cache = AlpamayoCache(
-            device=self.mesh_device, size=AlpamayoCache.size_for(inp.input_ids.shape[1]), batch_size=1
+        size = AlpamayoCache.size_for(
+            inp.input_ids.shape[1], max_new_tokens=max_new_tokens, action_rows=acfg.n_waypoints
         )
         cot = generate_cot(
             self.lm,
             inp,
             vision_embeds,
             tokens=self.cfg.tokens,
-            cache=cache,
+            cache=AlpamayoCache(device=self.mesh_device, size=size, batch_size=1),
             num_samples=num_samples,
             forced=forced_cot,
             seed=seed,
             max_new_tokens=max_new_tokens,
             return_logits=keep_intermediates,
         )
-        if cot.cache is not cache:
-            # The samples continue in a repeated copy; the single-sequence prefill cache is no longer read.
-            for layer in range(self.cfg.text.layers):
-                for kv in cache.layer_kv(layer):
-                    ttnn.deallocate(kv)
-        del cache
         timings["cot"] = time.perf_counter() - mark
 
         mark = time.perf_counter()
@@ -207,6 +196,8 @@ class Alpamayo2EdgeTT:
             noise=noise,
             acfg=acfg,
         )
+        cot.cache.deallocate()
+        cot.cache = None
         timings["flow"] = time.perf_counter() - mark
 
         xyz, rot = action_to_traj(
@@ -239,7 +230,8 @@ class Alpamayo2EdgeTT:
             seed: Seeds the CoT sampling and the default noise.
 
         Raises:
-            ValueError: A sample has no `<traj_future_start>` anchor after `max_new_tokens` tokens.
+            ValueError: Arguments that do not fit the prompt (checked before any device work), or a sample has no
+                `<traj_future_start>` anchor after `max_new_tokens` tokens.
         """
         return self.run(
             inp,

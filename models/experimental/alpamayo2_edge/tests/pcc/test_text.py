@@ -12,7 +12,6 @@ from loguru import logger
 
 import ttnn
 from models.experimental.alpamayo2_edge.reference import golden_cache
-from models.experimental.alpamayo2_edge.reference.inputs import prepare_sample_inputs, synthetic_sample
 from models.experimental.alpamayo2_edge.reference.model import ReferenceModel
 from models.experimental.alpamayo2_edge.reference.text import (
     MLP,
@@ -22,21 +21,12 @@ from models.experimental.alpamayo2_edge.reference.text import (
     mrope_cos_sin,
 )
 from models.experimental.alpamayo2_edge.reference.weights import load_weights
+from models.experimental.alpamayo2_edge.tests._util import PCC, pcc
 from models.experimental.alpamayo2_edge.tests.conftest import P100_MESH
+from models.experimental.alpamayo2_edge.tt.common import round_up
 from models.experimental.alpamayo2_edge.tt.text import AlpamayoCache, ReluSquaredFeedForward, TtLanguageModel
 from models.tt_dit.utils import tensor
 from models.tt_dit.utils.check import assert_quality
-
-PCC = 0.99
-
-
-def _ceil(x: int, multiple: int) -> int:
-    return -(-x // multiple) * multiple
-
-
-def _pcc(golden: torch.Tensor, actual: torch.Tensor) -> float:
-    stacked = torch.stack([golden.flatten().double(), actual.flatten().double()])
-    return torch.corrcoef(stacked)[0, 1].item()
 
 
 @pytest.fixture(scope="module")
@@ -49,19 +39,26 @@ def head_weights(model_dir):
     return load_weights(model_dir, "vlm.lm_head.")
 
 
-@pytest.fixture(scope="module")
-def sample_inputs(cfg):
-    return prepare_sample_inputs(cfg, synthetic_sample(0))
-
-
 @pytest.mark.parametrize("prompt", [3236, 3200, 3256, 3329])
-def test_cache_size_covers_prefill_padding(prompt):
-    size = AlpamayoCache.size_for(prompt)
+@pytest.mark.parametrize("max_new_tokens, action_rows", [(256, 64), (1, 64), (1000, 32)])
+def test_cache_size_covers_prefill_padding(prompt, max_new_tokens, action_rows):
+    size = AlpamayoCache.size_for(prompt, max_new_tokens=max_new_tokens, action_rows=action_rows)
     assert size % 64 == 0
-    # The prefill writes every padded row; the expert then needs 64 rows after the 32-aligned prefix
-    # plus up to 256 generated tokens.
-    assert size >= _ceil(prompt, 128)
-    assert size >= _ceil(prompt + 256, 32) + 64
+    # The prefill writes every padded row; the expert then needs its action rows after the 32-aligned prefix
+    # of up to `max_new_tokens` generated tokens.
+    assert size >= round_up(prompt, 128)
+    assert size >= round_up(prompt + max_new_tokens, 32) + action_rows
+    assert size < max(round_up(prompt, 128), round_up(prompt + max_new_tokens, 32) + action_rows) + 64
+
+
+@P100_MESH
+def test_lm_head_dtype(mesh_device, cfg):
+    config = TtLanguageModel.config_from(replace(cfg.text, layers=1))
+    default = TtLanguageModel(config, device=mesh_device)
+    bf16 = TtLanguageModel(config, device=mesh_device, lm_head_dtype=ttnn.bfloat16)
+    assert default.final_linear.weight.dtype == ttnn.bfloat8_b
+    assert bf16.final_linear.weight.dtype == ttnn.bfloat16
+    assert bf16.final_linear.weight.total_shape == default.final_linear.weight.total_shape
 
 
 @P100_MESH
@@ -111,7 +108,7 @@ def test_text_layer(mesh_device, cfg, lm_weights, head_weights, sample_inputs):
     )
     out = tensor.to_torch(out)
     assert out.shape == golden.shape
-    logger.info(f"layer 0 PCC {_pcc(golden, out) * 100:.4f} %")
+    logger.info(f"layer 0 PCC {pcc(golden, out) * 100:.4f} %")
     assert_quality(golden, out, pcc=PCC)
 
 
@@ -158,7 +155,9 @@ def test_prefill(mesh_device, cfg, lm_weights, head_weights, sample_inputs):
 
     model = TtLanguageModel(TtLanguageModel.config_from(cfg.text), device=mesh_device)
     model.load_torch_state_dict(TtLanguageModel.convert_state(lm_weights, head_weights))
-    cache = AlpamayoCache(device=mesh_device, size=AlpamayoCache.size_for(seq), batch_size=1)
+    cache = AlpamayoCache(
+        device=mesh_device, size=AlpamayoCache.size_for(seq, max_new_tokens=256, action_rows=64), batch_size=1
+    )
 
     logits = model.prefill(
         tensor.from_torch(inputs.input_ids, device=mesh_device, dtype=ttnn.uint32),
@@ -170,7 +169,7 @@ def test_prefill(mesh_device, cfg, lm_weights, head_weights, sample_inputs):
     logits = tensor.to_torch(logits).float()
     assert logits.shape == (1, cfg.text.vocab)
     logger.info(
-        f"last-token logits PCC {_pcc(golden['logits'], logits) * 100:.4f} %, "
+        f"last-token logits PCC {pcc(golden['logits'], logits) * 100:.4f} %, "
         f"argmax tt {int(logits.argmax())} ref {int(golden['logits'].argmax())}"
     )
 
@@ -181,7 +180,7 @@ def test_prefill(mesh_device, cfg, lm_weights, head_weights, sample_inputs):
         assert k.shape == v.shape == (1, cfg.text.kv_heads, cache.size, cfg.text.head_dim)
         for name, actual, expected in (("K", k, golden["k"][layer]), ("V", v, golden["v"][layer])):
             results[f"{name}{layer}"] = (expected, actual[:, :, :seq])
-            logger.info(f"layer {layer} {name} PCC {_pcc(expected, actual[:, :, :seq]) * 100:.4f} %")
+            logger.info(f"layer {layer} {name} PCC {pcc(expected, actual[:, :, :seq]) * 100:.4f} %")
 
     # A cache rebuilt from the reference must look exactly like the one the prefill filled.
     kv = KVCache(cfg.text.layers)
@@ -211,7 +210,7 @@ def test_cache_from_reference(mesh_device, cfg):
             torch.randn(1, tcfg.kv_heads, rows, tcfg.head_dim),
             torch.randn(1, tcfg.kv_heads, rows, tcfg.head_dim),
         )
-    size = AlpamayoCache.size_for(rows)
+    size = AlpamayoCache.size_for(rows, max_new_tokens=256, action_rows=64)
     cache = AlpamayoCache.from_reference(kv, size=size, mesh_device=mesh_device)
     assert cache.size == size and cache.batch_size == 1
     assert int(tensor.to_torch(cache.position)[0]) == rows

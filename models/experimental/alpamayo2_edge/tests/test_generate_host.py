@@ -10,12 +10,14 @@ import torch
 import ttnn
 from models.experimental.alpamayo2_edge.reference.inputs import ModelInputs, prepare_sample_inputs, synthetic_sample
 from models.experimental.alpamayo2_edge.reference.model import process_logits
-from models.experimental.alpamayo2_edge.tt.generate import CotResult, generate_cot, mask_logits, sample
+from models.experimental.alpamayo2_edge.tt.generate import CotResult, generate_cot, sample
 
 PROMPT = 10
 ROPE_DELTA = -3
 # Plain text token ids; none of them is a trajectory, EOS or anchor token.
 TEXT = [1000, 2001, 3002, 4003, 5004, 6005, 7006, 8007]
+# The prompt has no image tokens; the fake LM never reads the embeddings.
+NO_IMAGES = torch.zeros(0, 2048)
 
 
 def _inputs(prompt: int = PROMPT, rope_delta: int = ROPE_DELTA) -> ModelInputs:
@@ -38,11 +40,15 @@ class FakeCache:
         self.size = size
         self.batch_size = batch_size
         self.position = 0
+        self.deallocated = False
 
     def repeat_to(self, batch: int) -> "FakeCache":
         out = FakeCache(size=self.size, batch_size=batch)
         out.position = self.position
         return out
+
+    def deallocate(self) -> None:
+        self.deallocated = True
 
 
 class FakeLM:
@@ -81,7 +87,7 @@ class FakeLM:
 
 
 def _generate(cfg, lm, **kwargs) -> CotResult:
-    return generate_cot(lm, _inputs(), None, tokens=cfg.tokens, cache=FakeCache(), **kwargs)
+    return generate_cot(lm, _inputs(), NO_IMAGES, tokens=cfg.tokens, cache=FakeCache(), **kwargs)
 
 
 def test_stop_one_step_after_anchor(cfg):
@@ -117,9 +123,11 @@ def test_rows_wait_for_the_latest_anchor(cfg):
     anchor = cfg.tokens.future_start
     forced = torch.tensor([[TEXT[0], anchor, TEXT[2], TEXT[3]], [TEXT[4], TEXT[5], TEXT[6], anchor]])
     lm = FakeLM(cfg.text.vocab, [[TEXT[7]]])
+    prefill_cache = FakeCache()
     cot = generate_cot(
-        lm, _inputs(), None, tokens=cfg.tokens, cache=FakeCache(), num_samples=2, forced=forced, max_new_tokens=4
+        lm, _inputs(), NO_IMAGES, tokens=cfg.tokens, cache=prefill_cache, num_samples=2, forced=forced, max_new_tokens=4
     )
+    assert prefill_cache.deallocated and not cot.cache.deallocated
 
     assert torch.equal(cot.tokens, forced)
     assert cot.offsets.tolist() == [PROMPT + 2, PROMPT + 4] and cot.prefix_length == PROMPT + 4
@@ -150,14 +158,23 @@ def test_unsupported_sample_counts_raise(cfg, num_samples, expect_error):
 def test_cache_too_small_raises(cfg, expect_error):
     lm = FakeLM(cfg.text.vocab, [[TEXT[0]]])
     with expect_error(ValueError, "cannot hold"):
-        generate_cot(lm, _inputs(), None, tokens=cfg.tokens, cache=FakeCache(size=PROMPT + 100), max_new_tokens=256)
+        generate_cot(
+            lm, _inputs(), NO_IMAGES, tokens=cfg.tokens, cache=FakeCache(size=PROMPT + 100), max_new_tokens=256
+        )
 
 
-def test_mask_logits(cfg):
+def test_image_token_mismatch_raises(cfg, expect_error):
+    lm = FakeLM(cfg.text.vocab, [[TEXT[0]]])
+    with expect_error(ValueError, "0 image tokens for 4 vision embeddings"):
+        generate_cot(lm, _inputs(), torch.zeros(4, 2048), tokens=cfg.tokens, cache=FakeCache())
+    assert not lm.returned, "the check runs before the prefill"
+
+
+def test_process_logits_bans_without_warping(cfg):
     tok = cfg.tokens
     logits = torch.randn(2, cfg.text.vocab, generator=torch.Generator().manual_seed(0))
     raw = logits.clone()
-    masked = mask_logits(logits, tok)
+    masked = process_logits(logits, tok, temperature=1.0, top_p=1.0)
 
     assert torch.equal(logits, raw), "the raw logits must not be modified"
     banned = torch.zeros(cfg.text.vocab, dtype=torch.bool)

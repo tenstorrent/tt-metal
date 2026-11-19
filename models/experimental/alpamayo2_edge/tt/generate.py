@@ -34,12 +34,9 @@ class CotResult:
     offsets: torch.Tensor  # [B] prompt length + index of each row's first anchor + 1
     prefix_length: int  # rows of `cache` that hold the prompt and the CoT: the largest offset
     logits: torch.Tensor | None  # [B, T, V] fp32 raw logits that tokens[:, t] was drawn from
-    cache: AlpamayoCache  # the B-sample cache, positioned at `prefix_length`
-
-
-def mask_logits(logits: torch.Tensor, tokens: TokenIds) -> torch.Tensor:
-    """[B, V] logits with the trajectory codes and every EOS other than the anchor set to -inf, on a copy."""
-    return process_logits(logits, tokens, temperature=1.0, top_p=1.0)
+    # The B-sample cache, positioned at `prefix_length`; owned by the caller, who deallocates it. The expert writes
+    # its action rows past the prefix, so the LM cannot decode from it after the flow. None once released.
+    cache: AlpamayoCache | None
 
 
 def sample(
@@ -58,6 +55,24 @@ def sample(
 def _supported_batch(batch: int) -> bool:
     # tt_dit's decode attention lays the batch out on a core range of fewer than 8 or a multiple of 8 cores.
     return batch > 0 and (batch < 8 or batch % 8 == 0)
+
+
+def check_generation_args(
+    inp: ModelInputs, *, num_samples: int, max_new_tokens: int, forced: torch.Tensor | None
+) -> None:
+    """Raises `ValueError` on arguments `generate_cot` cannot run, before any device work."""
+    if inp.input_ids.shape[0] != 1 or not bool(inp.attention_mask.all()):
+        msg = "generation takes a single unpadded prompt"
+        raise ValueError(msg)
+    if not _supported_batch(num_samples):
+        msg = f"num_samples must be in [1, 8) or a multiple of 8, got {num_samples}"
+        raise ValueError(msg)
+    if max_new_tokens < 1:
+        msg = f"max_new_tokens must be positive, got {max_new_tokens}"
+        raise ValueError(msg)
+    if forced is not None and forced.shape[0] != num_samples:
+        msg = f"forced CoT has {forced.shape[0]} rows for {num_samples} samples"
+        raise ValueError(msg)
 
 
 def generate_cot(
@@ -80,27 +95,23 @@ def generate_cot(
         inp: A single unpadded prompt.
         vision_embeds: `[V, hidden]` embeddings of the prompt's image tokens, in order.
         tokens: The checkpoint's special token ids.
-        cache: An empty single-sequence cache; the samples continue in a repeated copy when `num_samples` > 1.
+        cache: An empty single-sequence cache. With `num_samples` > 1 the samples continue in a repeated copy and
+            `cache` is deallocated after the prefill; `CotResult.cache` is the one to use and free.
         forced: `[num_samples, T]` ids taken in place of sampling.
         seed: Seeds the sampling generator.
         max_new_tokens: Most tokens generated per row; an anchor drawn on the last one is still cached.
         return_logits: Keeps the raw logits of every step.
 
     Raises:
-        ValueError: A row has no anchor after `max_new_tokens` tokens or at the end of `forced`.
+        ValueError: The prompt's image-token count differs from the rows of `vision_embeds`, or a row has no anchor
+            after `max_new_tokens` tokens or at the end of `forced`.
     """
-    prompts, prompt_len = inp.input_ids.shape
-    if prompts != 1 or not bool(inp.attention_mask.all()):
-        msg = "generation takes a single unpadded prompt"
-        raise ValueError(msg)
-    if not _supported_batch(num_samples):
-        msg = f"num_samples must be in [1, 8) or a multiple of 8, got {num_samples}"
-        raise ValueError(msg)
-    if max_new_tokens < 1:
-        msg = f"max_new_tokens must be positive, got {max_new_tokens}"
-        raise ValueError(msg)
-    if forced is not None and forced.shape[0] != num_samples:
-        msg = f"forced CoT has {forced.shape[0]} rows for {num_samples} samples"
+    check_generation_args(inp, num_samples=num_samples, max_new_tokens=max_new_tokens, forced=forced)
+    prompt_len = inp.input_ids.shape[1]
+    # The device embedding scatters the vision rows into the image tokens without a bounds check.
+    image_tokens = int((inp.input_ids == tokens.image).sum())
+    if image_tokens != vision_embeds.shape[0]:
+        msg = f"{image_tokens} image tokens for {vision_embeds.shape[0]} vision embeddings"
         raise ValueError(msg)
     rope_deltas = inp.rope_deltas[:, 0].repeat_interleave(num_samples)
     # The last decoded row and its rope index, position + delta, must both fit the cache and its rope table.
@@ -120,7 +131,8 @@ def generate_cot(
     )
     step_logits = tensor.to_torch(logits).float().expand(num_samples, -1)
     if num_samples > 1:
-        cache = cache.repeat_to(num_samples)
+        prefill_cache, cache = cache, cache.repeat_to(num_samples)
+        prefill_cache.deallocate()
 
     tt_rope_offset = tensor.from_torch(
         rope_deltas.to(torch.int32), device=device, dtype=ttnn.int32, layout=ttnn.ROW_MAJOR_LAYOUT
@@ -135,7 +147,8 @@ def generate_cot(
     generator = torch.Generator().manual_seed(seed)
     generated, kept_logits = [], []
     found = torch.zeros(num_samples, dtype=torch.bool)
-    cached = prompt_len
+    # Rows of the cache written so far; a drawn token is cached by the decode step that consumes it.
+    rows_cached = prompt_len
     while True:
         if forced is None:
             next_ids = sample(step_logits, tokens=tokens, generator=generator)
@@ -153,19 +166,21 @@ def generate_cot(
             kept_logits.append(step_logits)
         found |= next_ids == anchor
         if len(generated) >= max_new_tokens:
+            # Out of budget: the token just drawn is not cached yet.
             break
         step_logits = decode(next_ids)
-        cached += 1
+        rows_cached += 1
         if found.all():
+            # The latest anchor is cached; the logits of this step are not used.
             break
 
     generated = torch.stack(generated, dim=1)
     offsets = find_anchor_offsets(generated, anchor) + prompt_len
     prefix_length = int(offsets.max())
     # Stopping at `max_new_tokens` leaves the last drawn token, the latest anchor, out of the cache.
-    for column in range(cached - prompt_len, prefix_length - prompt_len):
+    for column in range(rows_cached - prompt_len, prefix_length - prompt_len):
         decode(generated[:, column])
-        cached += 1
+        rows_cached += 1
 
     return CotResult(
         tokens=generated,
