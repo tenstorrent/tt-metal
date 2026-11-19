@@ -29,6 +29,7 @@ lookup and the Engram hash / gather run on the host.
 
 from __future__ import annotations
 
+import json
 import os
 import time
 from pathlib import Path
@@ -62,6 +63,78 @@ ENGRAM_EARLY = (
 # path. Same bf16 rows by construction; V41_PREFILL_DEVICE_EMBED_CHECK=N compares both paths on the first N chunks.
 DEVICE_EMBED = os.environ.get("V41_PREFILL_DEVICE_EMBED", "0") == "1"
 DEVICE_EMBED_CHECK = int(os.environ.get("V41_PREFILL_DEVICE_EMBED_CHECK", "0"))
+
+
+# tt-blaze DS41F-0163 (11-19, the Kernelize review's step 0): V41_PREFILL_DEVPROF=<jsonl> with V41_PREFILL_DEVPROF_STARTS=<chunk
+# start positions, comma list>: on the EAGER path (V41_PREFILL_ISLANDS=0) and the device profiler (TT_METAL_DEVICE_PROFILER=1
+# TT_METAL_PROFILER_MID_RUN_DUMP=1 TT_METAL_PROFILER_CPP_POST_PROCESS=1), each listed chunk reads the device profiler at every
+# phase mark (the PhaseProfile marks: embed / engram / block phases / kv_only) and writes, per phase, every program's device
+# kernel and FW duration (slowest chip), core count and chip 0's FW start / end: the chunk's device work vs its wall time.
+DEVPROF = os.environ.get("V41_PREFILL_DEVPROF", "")
+DEVPROF_STARTS = {int(v) for v in os.environ.get("V41_PREFILL_DEVPROF_STARTS", "").split(",") if v.strip()}
+
+
+class DevProf:
+    KERNEL = "DEVICE KERNEL DURATION [ns]"
+    FW = "DEVICE FW DURATION [ns]"
+
+    def __init__(self, mesh, path: str, meta: dict):
+        self.mesh, self.meta = mesh, meta
+        self.f = open(path, "a")
+        ttnn.synchronize_device(mesh)
+        try:  # drain: the programs before this chunk are not its work
+            ttnn.ReadDeviceProfiler(mesh)
+            ttnn.get_latest_programs_perf_data()
+        except Exception as e:  # noqa: BLE001
+            logger.warning(f"[v41 devprof] drain failed: {e!r}")
+        self.t0 = time.perf_counter()
+
+    def __call__(self, name: str) -> None:
+        t = time.perf_counter()
+        try:
+            ttnn.ReadDeviceProfiler(self.mesh)
+            data = ttnn.get_latest_programs_perf_data()
+        except Exception as e:  # noqa: BLE001 -- one lost phase, not the run
+            self.f.write(json.dumps(dict(kind="devprof_fail", tag=name, error=repr(e)[:300], **self.meta)) + "\n")
+            self.f.flush()
+            return
+        progs = {}
+        chip0 = min(data) if data else None
+        for chip, plist in data.items():
+            for pr in plist:
+                res = pr.program_analyses_results
+                k, fw = res.get(self.KERNEL), res.get(self.FW)
+                if k is None and fw is None:
+                    continue
+                e = progs.setdefault(
+                    int(pr.program_execution_uid.runtime_id), [0, 0, None, None, 0, int(pr.core_count)]
+                )
+                if k is not None:
+                    e[0] = max(e[0], int(k.duration))
+                if fw is not None:
+                    e[1] = max(e[1], int(fw.duration))
+                    if chip == chip0:
+                        e[2], e[3] = int(fw.start_timestamp), int(fw.end_timestamp)
+                e[4] += 1
+        row = dict(
+            kind="devprof",
+            tag=name,
+            read_s=round(time.perf_counter() - t, 3),
+            chips=len(data),
+            progs=[[rid, *v] for rid, v in sorted(progs.items())],
+            **self.meta,
+        )
+        self.f.write(json.dumps(row) + "\n")
+        self.f.flush()
+
+    def report(self, what: str):
+        self.f.write(
+            json.dumps(dict(kind="devprof_end", what=what, wall_s=round(time.perf_counter() - self.t0, 3), **self.meta))
+            + "\n"
+        )
+        self.f.close()
+        logger.info(f"[v41 devprof] {what}: profiled ({DEVPROF})")
+        return None
 
 
 class PhaseProfile:
@@ -499,7 +572,12 @@ class V41Prefill:
         if self.islands:
             return self._chunk_islands(part, start, engram_host, kv_only20=kv_only20)
         real_len = len(part)
-        prof = PhaseProfile(self.mesh) if PROFILE else None
+        if DEVPROF and int(start) in DEVPROF_STARTS and len(set(part[:256])) > 1:  # not a warm-up chunk (constant ids)
+            prof = DevProf(
+                self.mesh, DEVPROF, dict(start=int(start), real_len=real_len, decoder=not kv_only20, slot=self.slot)
+            )
+        else:
+            prof = PhaseProfile(self.mesh) if PROFILE else None
         mark = prof if prof is not None else (lambda name: None)
         streams = self._streams(part)
         self._route_bias(part)

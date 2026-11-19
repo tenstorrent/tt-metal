@@ -69,6 +69,14 @@ EXPECT_S2 = s2_plan.expected_patterns(
 )
 assert all(len(v) % 128 == 0 for v in PROMPTS.values()), {k: len(v) for k, v in PROMPTS.items()}
 assert len(A2) <= int(os.environ.get("PREFILL_MAX_SEQ_LEN", 1 << 20)), "prompts exceed PREFILL_MAX_SEQ_LEN"
+# phase P (tt-blaze DS41F-0163 device profile): PREFIX_CHECK_PROFILE_IDS="name=ids_file,..." -- long prompts pushed cold (arm off);
+# the runner's V41_PREFILL_DEVPROF_STARTS picks the chunks it profiles
+PROFILE_NAMES = []
+for _spec in filter(None, os.environ.get("PREFIX_CHECK_PROFILE_IDS", "").split(",")):
+    _name, _path = _spec.split("=", 1)
+    PROMPTS[_name] = [int(t) for t in open(_path).read().replace("\n", " ").replace(",", " ").split()]
+    assert len(PROMPTS[_name]) <= int(os.environ.get("PREFILL_MAX_SEQ_LEN", 1 << 20)), (_name, len(PROMPTS[_name]))
+    PROFILE_NAMES.append(_name)
 
 
 def log(msg: str) -> None:
@@ -231,6 +239,9 @@ def main() -> None:
         for name in ("A", "A", "U", "A2", "AP", "B"):
             res.append(run_prompt("R2", "X", "off"))
             res.append(run_prompt("R2", name, "off", digest=True))
+    if "P" in PHASES:
+        for name in PROFILE_NAMES:
+            res.append(run_prompt("P", name, "off", timeout_s=7200.0))
     if "S2" in PHASES:
         log(f"S2 expected per-chunk patterns at chunk {CHUNK} (s2_plan dry run): {list(zip(S2, EXPECT_S2))}")
         res.append(run_prompt("S2", "X", "clear"))  # the store emptied, X computed (and stored)
