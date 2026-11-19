@@ -30,16 +30,20 @@ std::tuple<bool, bool> get_inner_hw_overpadded(
     return {true, true};
 }
 
-// A sharded ROW_MAJOR tensor is padded to its shard width, its default width alignment. Validation requires a 2D
-// shard width to be a multiple of the width alignment, and any other width alignment is combined with the shard width
-// by lcm, which for an unrelated padded width can be many times either.
+// A sharded ROW_MAJOR tensor is padded to a multiple of its shard width, its default width alignment. Validation
+// requires a 2D shard width to be a multiple of the width alignment, so a 2D-sharded tensor is padded to the shard
+// width. An ND-sharded tensor keeps the given padded width, rounded up to a multiple of the shard width: an unrelated
+// width alignment would be combined with the shard width by lcm, which can be many times either.
 void pad_row_major_width_to_shard(
     ttsl::SmallVector<uint32_t>& values, const PageConfig& page_config, const MemoryConfig& memory_config) {
     if (page_config.get_layout() != Layout::ROW_MAJOR || !memory_config.is_sharded() || values.empty()) {
         return;
     }
-    values.back() = memory_config.shard_spec().has_value() ? memory_config.shard_spec()->shape[1]
-                                                           : memory_config.nd_shard_spec()->shard_shape[-1];
+    if (memory_config.shard_spec().has_value()) {
+        values.back() = memory_config.shard_spec()->shape[1];
+    } else {
+        values.back() = tt::round_up(values.back(), memory_config.nd_shard_spec()->shard_shape[-1]);
+    }
 }
 
 Alignment legacyShapeToAlignment(

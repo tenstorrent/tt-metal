@@ -506,7 +506,7 @@ TEST(TensorLayoutTests, CustomAlignmentCombinesWithDefaultByLcm) {
 }
 
 // A padded width unrelated to the shard width is not combined with it by lcm: an ND-sharded ROW_MAJOR tensor is padded
-// to its shard width.
+// to the next multiple of its shard width, which keeps a given width that already is one.
 TEST(TensorLayoutTests, FromPaddedShapePadsShardedRowMajorWidthToShard) {
     const MemoryConfig memory_config(
         BufferType::L1,
@@ -515,6 +515,11 @@ TEST(TensorLayoutTests, FromPaddedShapePadsShardedRowMajorWidthToShard) {
         DataType::UINT32, PageConfig(Layout::ROW_MAJOR), memory_config, Shape{2, 30}, Shape{2, 31});
 
     EXPECT_EQ(layout.impl().compute_padded_shape(Shape{2, 30}), Shape({2, 48}));
+
+    // A padded width that is already a multiple of the shard width is kept.
+    const TensorLayout wide_layout = tt::tt_metal::experimental::tensor_layout_from_padded_shape(
+        DataType::UINT32, PageConfig(Layout::ROW_MAJOR), memory_config, Shape{2, 30}, Shape{2, 96});
+    EXPECT_EQ(wide_layout.impl().compute_padded_shape(Shape{2, 30}), Shape({2, 96}));
 }
 
 struct ConsumedMemoryBytesPerBankTestParams {
