@@ -31,6 +31,10 @@
 namespace tt::tt_metal {
 
 TEST_F(MeshDispatchFixture, TensixProgramGlobalCircularBuffers) {
+    if (this->arch_ == tt::ARCH::QUASAR) {
+        GTEST_SKIP() << "legacy circular buffers are not usable on Quasar: legacy kernels are rejected and Metal 2.0 "
+                        "programs take DFBs";
+    }
     CoreCoord sender_core = CoreCoord(0, 0);
     CoreRangeSet sender_cores = CoreRangeSet(CoreRange(sender_core));
     CoreRangeSet receiver_cores(CoreRange({1, 1}, {2, 2}));
@@ -144,6 +148,10 @@ TEST_F(MeshDispatchFixture, TensixProgramGlobalCircularBuffers) {
 }
 
 TEST_F(MeshDispatchFixture, TensixProgramClearsStaleRemoteCircularBufferConfig) {
+    if (this->arch_ == tt::ARCH::QUASAR) {
+        GTEST_SKIP() << "legacy circular buffers are not usable on Quasar: legacy kernels are rejected and Metal 2.0 "
+                        "programs take DFBs";
+    }
     const CoreCoord sender_core(0, 0);
     const CoreCoord receiver_core(1, 0);
     const CoreCoord idle_core(1, 1);
