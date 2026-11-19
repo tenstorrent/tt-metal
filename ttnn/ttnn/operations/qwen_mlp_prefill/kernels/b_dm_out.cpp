@@ -69,14 +69,19 @@ void kernel_main() {
         ports[route.relay].push(noc, kind, route.hops, payload, payload_bytes, self_x, self_y, dst_address, semaphore);
     };
 
-    for (uint32_t step = 0; step < rows + reduce_lag + lag; step++) {
-        if (step < rows) {
-            slabs.wait_front((k_groups - 1) * b_tiles);
+    // Three independent in-order task streams share this thread: K-slab sends to the peers of the
+    // reduction column, reduce-scatter sends of non-owned rows, and the owner/non-owner all-gather work.
+    // They are polled so that a late all-gather of one row never delays the K-slab sends of later rows.
+    uint32_t slab_step = 0;
+    uint32_t rs_m = 0;
+    uint32_t ag_m = 0;
+    while (slab_step < rows || rs_m < rows || ag_m < rows) {
+        if (slab_step < rows && slabs.pages_available_at_front((k_groups - 1) * b_tiles)) {
             for (uint32_t outgoing = 0; outgoing < k_groups - 1; outgoing++) {
                 const uint32_t group = outgoing < k_group ? outgoing : outgoing + 1;
                 const uint32_t peer_x = CT_ARG("b_grid_x_start") + group;
                 const uint32_t peer_y = CT_ARG("b_grid_y_start") + n_group;
-                flags.wait_min(FlagBoard::credit + peer_index(group, k_group), step + 1);
+                flags.wait_min(FlagBoard::credit + peer_index(group, k_group), slab_step + 1);
                 noc.async_write(
                     CoreLocalMem<uint32_t>(slabs.get_read_ptr() + outgoing * segment_bytes),
                     UnicastEndpoint{},
@@ -84,18 +89,21 @@ void kernel_main() {
                     {},
                     {.noc_x = peer_x,
                      .noc_y = peer_y,
-                     .addr = kred_landing[peer_index(k_group, group)] + (step % kred_depth) * segment_bytes});
-                flags.post(noc, peer_x, peer_y, FlagBoard::ready + peer_index(k_group, group), step + 1);
+                     .addr = kred_landing[peer_index(k_group, group)] + (slab_step % kred_depth) * segment_bytes});
+                flags.post(noc, peer_x, peer_y, FlagBoard::ready + peer_index(k_group, group), slab_step + 1);
             }
             noc.async_writes_flushed();
             slabs.pop_front((k_groups - 1) * b_tiles);
+            slab_step++;
         }
-        if (chips > 1 && step >= reduce_lag && step - reduce_lag < rows && (step - reduce_lag) % chips != chip) {
-            const uint32_t m = step - reduce_lag;
+        while (rs_m < rows && (chips == 1 || rs_m % chips == chip)) {
+            rs_m++;
+        }
+        if (rs_m < rows && send.pages_available_at_front(b_tiles)) {
+            const uint32_t m = rs_m;
             const uint32_t owner = m % chips;
             const uint32_t q = m / chips;
             const uint32_t me = peer_index(chip, owner);
-            send.wait_front(b_tiles);
             if (q + 1 > depth) {
                 Semaphore<>(CT_ARG("sem_credit_rs") + peer_index(owner, chip)).wait_min(q + 1 - depth);
             }
@@ -108,55 +116,60 @@ void kernel_main() {
                 rs_landing[me] + (q % depth) * segment_bytes,
                 semaphore_address(CT_ARG("sem_rs_ready"), me));
             send.pop_front(b_tiles);
+            rs_m++;
         }
-        if (step >= reduce_lag + lag) {
-            const uint32_t m = step - reduce_lag - lag;
+        if (ag_m < rows) {
+            const uint32_t m = ag_m;
             const uint32_t owner = m % chips;
             const uint32_t q = m / chips;
             if (owner == chip) {
-                y_segment.wait_front(b_tiles);
-                write_segment(m, y_segment.get_read_ptr());
-                for (uint32_t offset = 1; chips > 1 && offset < chips; offset++) {
-                    const uint32_t receiver = (chip + offset) % chips;
-                    const uint32_t me = peer_index(chip, receiver);
-                    if (q + 1 > depth) {
-                        Semaphore<>(CT_ARG("sem_credit_ag") + peer_index(receiver, chip)).wait_min(q + 1 - depth);
+                if (y_segment.pages_available_at_front(b_tiles)) {
+                    write_segment(m, y_segment.get_read_ptr());
+                    for (uint32_t offset = 1; chips > 1 && offset < chips; offset++) {
+                        const uint32_t receiver = (chip + offset) % chips;
+                        const uint32_t me = peer_index(chip, receiver);
+                        if (q + 1 > depth) {
+                            Semaphore<>(CT_ARG("sem_credit_ag") + peer_index(receiver, chip)).wait_min(q + 1 - depth);
+                        }
+                        send_to(
+                            receiver,
+                            q,
+                            MessageKind::Data,
+                            y_segment.get_read_ptr(),
+                            segment_bytes,
+                            ag_landing + (me * depth + q % depth) * segment_bytes,
+                            semaphore_address(CT_ARG("sem_ag_ready"), me));
                     }
-                    send_to(
-                        receiver,
-                        q,
-                        MessageKind::Data,
-                        y_segment.get_read_ptr(),
-                        segment_bytes,
-                        ag_landing + (me * depth + q % depth) * segment_bytes,
-                        semaphore_address(CT_ARG("sem_ag_ready"), me));
+                    noc.async_write_barrier();
+                    y_segment.pop_front(b_tiles);
+                    for (uint32_t offset = 1; chips > 1 && offset < chips; offset++) {
+                        const uint32_t sender = (chip + offset) % chips;
+                        send_to(
+                            sender,
+                            q,
+                            MessageKind::Increment,
+                            0,
+                            0,
+                            0,
+                            semaphore_address(CT_ARG("sem_credit_rs"), peer_index(chip, sender)));
+                    }
+                    ag_m++;
                 }
-                noc.async_write_barrier();
-                y_segment.pop_front(b_tiles);
-                for (uint32_t offset = 1; chips > 1 && offset < chips; offset++) {
-                    const uint32_t sender = (chip + offset) % chips;
+            } else {
+                const uint32_t me = peer_index(owner, chip);
+                if (Semaphore<>(CT_ARG("sem_ag_ready") + me).value() >= q + 1) {
+                    write_segment(m, ag_landing + (me * depth + q % depth) * segment_bytes);
+                    noc.async_write_barrier();
                     send_to(
-                        sender,
+                        owner,
                         q,
                         MessageKind::Increment,
                         0,
                         0,
                         0,
-                        semaphore_address(CT_ARG("sem_credit_rs"), peer_index(chip, sender)));
+                        semaphore_address(CT_ARG("sem_credit_ag"), peer_index(chip, owner)));
+                    ag_m++;
                 }
-            } else {
-                const uint32_t me = peer_index(owner, chip);
-                Semaphore<>(CT_ARG("sem_ag_ready") + me).wait_min(q + 1);
-                write_segment(m, ag_landing + (me * depth + q % depth) * segment_bytes);
-                noc.async_write_barrier();
-                send_to(
-                    owner,
-                    q,
-                    MessageKind::Increment,
-                    0,
-                    0,
-                    0,
-                    semaphore_address(CT_ARG("sem_credit_ag"), peer_index(chip, owner)));
             }
         }
     }
