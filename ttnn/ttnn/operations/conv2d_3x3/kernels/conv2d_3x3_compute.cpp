@@ -1588,10 +1588,17 @@ void kernel_main() {
             const uint32_t valid_m = sd_actual - done < block_m_tiles ? sd_actual - done : block_m_tiles;
             const uint32_t o_first = (sd_m_tile_start + done) * 32;
             [[maybe_unused]] const int32_t ih_lo = SdGeom::row_lo(o_first);
+#ifdef SD_STREAM
+            // Streamed fill (conv2d_3x3_slab_stream.hpp): the weights first, then each subblock row waits for the slab
+            // pages its in0 runs read (the first wait is the startup one).
+            constexpr bool sd_stream = true;
+#else
+            constexpr bool sd_stream = false;
             {
                 MaybeDeviceZoneScope("compute_slab_wait");
                 slab.wait_front(SD_SLAB_PX);
             }
+#endif
 #ifdef SD_BIAS_IN_WEIGHTS
             // The bias tiles ride at the tail of the weight round (the writer's SD_BIAS_IN_WEIGHTS).
             constexpr uint32_t round_tiles = (block_k_tiles + 1) * block_n_tiles;
@@ -1600,7 +1607,13 @@ void kernel_main() {
             constexpr uint32_t round_tiles = block_k_tiles * block_n_tiles;
             constexpr bool bias_in_weights = false;
 #endif
-            weights.wait_front(round_tiles);
+            if constexpr (sd_stream) {
+                MaybeDeviceZoneScope("compute_sd_weight_wait");
+                weights.wait_front(round_tiles);
+            } else {
+                weights.wait_front(round_tiles);
+            }
+            [[maybe_unused]] uint32_t sd_waited = 0;
             [[maybe_unused]] uint32_t slab_l1 = 0, zero_l1 = 0, w_base = 0, w_tile = 0;
             UNPACK((slab_l1 = get_local_cb_interface(get_operand_id(cb_halo_slab)).fifo_rd_ptr << 4));
             UNPACK((zero_l1 = get_local_cb_interface(get_operand_id(cb_im2col_tiles)).fifo_rd_ptr << 4));
@@ -1640,6 +1653,22 @@ void kernel_main() {
                     need_init = false;
                 }
                 for (uint32_t r = row0; r < group_end; r += sb_h) {
+                    if constexpr (sd_stream) {
+                        // The subblock row's last valid tile-row reads furthest into the slab.
+                        UNPACK(({
+                            const uint32_t last = r + sb_h - 1 < valid_m ? r + sb_h - 1 : valid_m - 1;
+                            const uint32_t need = r < valid_m ? SdGeom::need_px<kkh>(ih_lo, o_first + last * 32) : 0;
+                            if (need > sd_waited) {
+                                if (sd_waited == 0) {
+                                    MaybeDeviceZoneScope("compute_slab_wait");
+                                    slab.wait_front(need);
+                                } else {
+                                    slab.wait_front(need);
+                                }
+                                sd_waited = need;
+                            }
+                        }));
+                    }
                     target.reserve_back(sb_h * block_n_tiles);
                     // in0 tile of row r + t, K-tile k: its first run's L1 address (16 B units, minus 1).
                     [[maybe_unused]] uint32_t a[block_k_tiles][sb_h];
@@ -1705,6 +1734,10 @@ void kernel_main() {
                 UNPACK((slab_direct::unpack_uninit()));
             }
             weights.pop_front(round_tiles);
+            if constexpr (sd_stream) {
+                // Every page pushed before the pop (the reader pushes the whole slab per block).
+                slab.wait_front(SD_SLAB_PX);
+            }
             slab.pop_front(SD_SLAB_PX);
 #endif
         } else if constexpr (in0_groups > 1) {

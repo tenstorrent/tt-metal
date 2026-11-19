@@ -94,6 +94,26 @@ struct Geom {
         return slab + static_cast<uint32_t>(((ih - ih_lo) * pitch + gap + stride * ow0 - padding) * pixel_bytes) +
                j * 2 * half_bytes;
     }
+
+    // Streamed fill (conv2d_3x3_slab_stream.hpp): slab pixels [0, need_px) hold everything the in0 tiles of the
+    // tile-row whose first output pixel is o read (its lowest in-image kernel row's last K-tile's second 1 KB run ends
+    // last); 0 if every kernel row is outside the image.
+    template <uint32_t kkh>
+    static inline __attribute__((always_inline)) uint32_t need_px(int32_t ih_lo, uint32_t o) {
+        const int32_t oh = o / out_w;
+        const int32_t ow0 = o % out_w;
+        for (int32_t kh = 2; kh >= 0; --kh) {
+            const int32_t ih = stride * oh + kh * dilation - padding;
+            if (ih >= 0 && ih < in_h) {
+                const uint32_t end =
+                    static_cast<uint32_t>(
+                        ((ih - ih_lo) * pitch + gap + stride * ow0 - padding) * static_cast<int32_t>(pixel_bytes)) +
+                    (kkh - 1) * 2 * half_bytes + half_bytes + 1024;
+                return (end + pixel_bytes - 1) / pixel_bytes;
+            }
+        }
+        return 0;
+    }
 };
 
 // Fused bias (SD_FUSED_BIAS): compute adds the bias as one more K-step, in0 = the ones block (1.0 in K columns 0 and 1

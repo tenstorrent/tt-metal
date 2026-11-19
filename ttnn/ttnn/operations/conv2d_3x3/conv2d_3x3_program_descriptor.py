@@ -229,6 +229,20 @@ SLAB_DIRECT = True
 # 5 significant bits, exact under LoFi), so the matmul packs the final values and no bias pass runs. False keeps the
 # fp32 partials + bias-add pass.
 SD_FUSED_BIAS = True
+# Slab-direct streamed fill (kernels/conv2d_3x3_slab_stream.hpp): each data-movement RISC reads its part of the slab
+# in chunks (the reader SD_STREAM_CHUNK_PX pixels, at most SD_STREAM_NTRID_R in flight under transaction ids 3..15; the
+# writer SD_STREAM_CHUNK_PX_W pixels, at most SD_STREAM_NTRID under ids 9..15), the reader pushes the slab CB as the
+# landed prefix grows, and compute multiplies each subblock row once the slab pages it reads are in. 0 keeps one push
+# per block. stem.conv1, unzoned: 512-px chunks with 6 ids each 10376 ns, 1024 px with 13 / 7 ids 10066-10316 ns, 2048
+# px 10307 ns (a small chunk window throttles the reader's fill).
+SD_STREAM_CHUNK_PX = 1024
+SD_STREAM_NTRID_R = 13
+SD_STREAM_CHUNK_PX_W = 1024
+SD_STREAM_NTRID = 7
+# Stream only blocks of at least this many subblock rows: with fewer, the first matmul call already needs (nearly) the
+# whole slab, so there is no fill to hide and the chunked fill costs time (bm 1, 32x34x16 -> 64: +6%; 64x64x8 -> 32:
+# +28%; bm 2 at 2-row subblocks, 64x64x16 -> 64: +3.5%; bm 3 at 1-row subblocks, 128x256x8 -> 64: +0.3%).
+SD_STREAM_MIN_SUBBLOCK_ROWS = 3
 
 
 # N-slice-outer K split (R4, the default when its resident in0 fits L1): the core tilizes its whole K of in0 once,
@@ -2469,6 +2483,14 @@ def create_program_descriptor(
         ]
         if sd_bias_in_weights:
             _sd_dm_defines += [("SD_BIAS_IN_WEIGHTS", "1")]
+        if SD_STREAM_CHUNK_PX > 0 and bm // b.out_subblock_h >= SD_STREAM_MIN_SUBBLOCK_ROWS:
+            _sd_dm_defines += [
+                ("SD_STREAM", "1"),
+                ("SD_STREAM_CHUNK_PX", str(SD_STREAM_CHUNK_PX)),
+                ("SD_STREAM_NTRID", str(SD_STREAM_NTRID)),
+                ("SD_STREAM_CHUNK_PX_W", str(SD_STREAM_CHUNK_PX_W)),
+                ("SD_STREAM_NTRID_R", str(SD_STREAM_NTRID_R)),
+            ]
         if SD_FUSED_BIAS and has_bias:
             _sd_dm_defines += [("SD_FUSED_BIAS", "1")]
             if compute_kernel_config.math_fidelity == ttnn.MathFidelity.LoFi:

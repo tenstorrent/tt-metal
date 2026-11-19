@@ -1,0 +1,670 @@
+--- a/ttnn/ttnn/operations/conv2d_3x3/conv2d_3x3_program_descriptor.py
++++ b/ttnn/ttnn/operations/conv2d_3x3/conv2d_3x3_program_descriptor.py
+@@ -233,6 +233,23 @@
+ # 5 significant bits, exact under LoFi), so the matmul packs the final values and no bias pass runs. False keeps the
+ # fp32 partials + bias-add pass.
+ SD_FUSED_BIAS = True
++# Slab-direct round 0 ahead of the fill: every weight-multicast receiver acks the sender at kernel start (its slot is
++# free), and the round's DRAM reader issues it before its fill reads, so the multicast waits on no core's fill issue.
++SD_EARLY_WEIGHTS = True
++# Slab-direct streamed fill (kernels/conv2d_3x3_slab_stream.hpp): each data-movement RISC reads its part of the slab
++# in chunks (the reader SD_STREAM_CHUNK_PX pixels, at most SD_STREAM_NTRID_R in flight under transaction ids 3..15; the
++# writer SD_STREAM_CHUNK_PX_W pixels, at most SD_STREAM_NTRID under ids 9..15), the reader pushes the slab CB as the
++# landed prefix grows, and compute multiplies each subblock row once the slab pages it reads are in. 0 keeps one push
++# per block. stem.conv1, unzoned: 512-px chunks with 6 ids each 10376 ns, 1024 px with 13 / 7 ids 10066-10316 ns, 2048
++# px 10307 ns (a small chunk window throttles the reader's fill).
++SD_STREAM_CHUNK_PX = 1024
++SD_STREAM_NTRID_R = 13
++SD_STREAM_CHUNK_PX_W = 1024
++SD_STREAM_NTRID = 7
++# Stream only blocks of at least this many subblock rows: with fewer, the first matmul call already needs (nearly) the
++# whole slab, so there is no fill to hide and the chunked fill costs time (bm 1, 32x34x16 -> 64: +6%; 64x64x8 -> 32:
++# +28%; bm 2 at 2-row subblocks, 64x64x16 -> 64: +3.5%; bm 3 at 1-row subblocks, 128x256x8 -> 64: +0.3%).
++SD_STREAM_MIN_SUBBLOCK_ROWS = 3
+ 
+ 
+ # N-slice-outer K split (R4, the default when its resident in0 fits L1): the core tilizes its whole K of in0 once,
+@@ -2475,6 +2492,16 @@
+         ]
+         if sd_bias_in_weights:
+             _sd_dm_defines += [("SD_BIAS_IN_WEIGHTS", "1")]
++        if SD_EARLY_WEIGHTS:
++            _sd_dm_defines += [("SD_EARLY_WEIGHTS", "1")]
++        if SD_STREAM_CHUNK_PX > 0 and bm // b.out_subblock_h >= SD_STREAM_MIN_SUBBLOCK_ROWS:
++            _sd_dm_defines += [
++                ("SD_STREAM", "1"),
++                ("SD_STREAM_CHUNK_PX", str(SD_STREAM_CHUNK_PX)),
++                ("SD_STREAM_NTRID", str(SD_STREAM_NTRID)),
++                ("SD_STREAM_CHUNK_PX_W", str(SD_STREAM_CHUNK_PX_W)),
++                ("SD_STREAM_NTRID_R", str(SD_STREAM_NTRID_R)),
++            ]
+         if SD_FUSED_BIAS and has_bias:
+             _sd_dm_defines += [("SD_FUSED_BIAS", "1")]
+             if compute_kernel_config.math_fidelity == ttnn.MathFidelity.LoFi:
+--- a/ttnn/ttnn/operations/conv2d_3x3/kernels/conv2d_3x3_reader.cpp
++++ b/ttnn/ttnn/operations/conv2d_3x3/kernels/conv2d_3x3_reader.cpp
+@@ -131,6 +131,7 @@
+ #include "conv2d_3x3_gather_dataflow.hpp"
+ #include "conv2d_3x3_nslice_order.hpp"
+ #include "conv2d_3x3_slab_direct.hpp"
++#include "conv2d_3x3_slab_stream.hpp"
+ 
+ namespace {
+ 
+@@ -254,7 +255,8 @@
+     constexpr uint32_t pad_slots_max = 0;
+ #endif
+     // Slab-direct (the descriptor's SLAB_DIRECT, conv2d_3x3_slab_direct.hpp): the fill writes the padded slab and
+-    // pushes it to compute, which unpacks in0 straight from it; no gather.
++    // pushes it to compute, which unpacks in0 straight from it; no gather. Streamed (SD_STREAM,
++    // conv2d_3x3_slab_stream.hpp): pushed as its landed prefix grows.
+ #ifdef CONV2D_3X3_SLAB_DIRECT
+     constexpr bool slab_direct = true;
+ #else
+@@ -496,6 +498,11 @@
+         SD_PITCH,
+         pixel_bytes,
+         SD_HALF_BYTES>;
++#ifdef SD_STREAM
++    // Pieces: the union of the three bands, split at image rows (at most one per slot, plus the band splits).
++    conv2d_3x3::slab_stream::Stream<SD_SLOTS + 4, SD_STREAM_NTRID_R, 3, SD_STREAM_CHUNK_PX, input_width, SD_GAP>
++        sd_stream;
++#endif
+     {
+         // The zero block (cb_im2col_tiles page 0) and every slot's leading zero zone, once: the fill never writes
+         // them. Compute reads them only after the first slab push.
+@@ -832,6 +839,66 @@
+                         Semaphore<>(slab_free_sem_id).up(1);
+                     }
+                 }
++#ifdef SD_STREAM
++                // Streamed (conv2d_3x3_slab_stream.hpp): this RISC's part (flat pixels below B: own and lower shards)
++                // in chunks, the slab CB pushed as the combined landed count grows (the writer's count from
++                // slab_fwd_done = block * (SD_SLAB_PX + 1) + count, once this part is done).
++                {
++                    const uint32_t B = slab_split ? (my_shard + 1) * input_shard_rows : 0xFFFFFFFFu;
++                    uint32_t s_b = SD_SLAB_PX;
++                    sd_stream.reset(0);
++                    SdGeom::fill_pieces<band_last_tap>(o_first, o_end, [&](uint32_t lo, uint32_t hi, uint32_t off) {
++                        const uint32_t px = off / pixel_bytes;
++                        if (s_b == SD_SLAB_PX && hi > B) {
++                            s_b = lo >= B ? px : px + (B - lo);
++                        }
++                        sd_stream.add(lo, hi < B ? hi : B, px);
++                    });
++                    sd_stream.region_end = s_b;
++                    const uint32_t w_base = m_block_idx * (SD_SLAB_PX + 1);
++                    uint32_t pushed = 0;
++                    bool gaps_landed = false;
++                    auto advance = [&]() {
++                        sd_stream.poll(reads.noc.get_noc_id());
++                        uint32_t target = sd_stream.landed;
++                        if (sd_stream.done()) {
++                            target = s_b;
++                            if constexpr (slab_split) {
++                                const uint32_t v = Semaphore<>(slab_fwd_done_sem_id).value();
++                                const uint32_t w = v > w_base ? v - w_base : 0;
++                                target = w > target ? w : target;
++                            } else {
++                                target = SD_SLAB_PX;
++                            }
++                        }
++                        if (target > pushed) {
++                            if (!gaps_landed) {
++                                reads.wait(2);  // the slot gaps (kernel start)
++                                gaps_landed = true;
++                            }
++                            cb_push_back(cb_halo_slab, target - pushed);
++                            pushed = target;
++                        }
++                    };
++                    auto read_chunk = [&](uint32_t trid, uint32_t lo, uint32_t hi, uint32_t px) {
++                        reads.begin(trid);
++                        read_rows(lo, hi, slab_l1 + px * pixel_bytes);
++                    };
++                    while (!sd_stream.issued()) {
++                        if (!sd_stream.issue_one(read_chunk)) {
++                            advance();
++                        }
++                    }
++                    dataflow_kernel_lib::set_read_trid(reads.noc, 0);
++                    {
++                        MaybeDeviceZoneScope("reader_fill_fwd_wait");
++                        while (pushed < SD_SLAB_PX) {
++                            advance();
++                        }
++                    }
++                }
++                continue;
++#else
+                 reads.begin(1);
+                 SdGeom::fill_pieces<band_last_tap>(
+                     o_first, o_end, [&](uint32_t lo, uint32_t hi, uint32_t off) { read_rows(lo, hi, slab_l1 + off); });
+@@ -843,6 +910,7 @@
+                 }
+                 cb_push_back(cb_halo_slab, SD_SLAB_PX);
+                 continue;
++#endif
+             }
+ #endif
+             if constexpr (slab_split) {
+--- a/ttnn/ttnn/operations/conv2d_3x3/kernels/conv2d_3x3_writer.cpp
++++ b/ttnn/ttnn/operations/conv2d_3x3/kernels/conv2d_3x3_writer.cpp
+@@ -90,6 +90,7 @@
+ #include "conv2d_3x3_gather_dataflow.hpp"
+ #include "conv2d_3x3_nslice_order.hpp"
+ #include "conv2d_3x3_slab_direct.hpp"
++#include "conv2d_3x3_slab_stream.hpp"
+ 
+ void kernel_main() {
+     constexpr uint32_t cb_weights = get_compile_time_arg_val(0);
+@@ -464,13 +465,52 @@
+     // Slab-direct: this block's forward slab reads (transaction id 9) are in flight; slab_fwd_done goes up as soon as
+     // they landed, from every wait that serves the fill (the weight-round waits included).
+     [[maybe_unused]] bool sd_slab_pending = false;
++#ifdef SD_STREAM
++    // Streamed fill (conv2d_3x3_slab_stream.hpp): this block's forward part in chunks under transaction ids 9..;
++    // serve_fill retires the landed ones, issues more and publishes slab_fwd_done = block * (SD_SLAB_PX + 1) + the
++    // landed count (SD_SLAB_PX once every forward piece landed).
++    conv2d_3x3::slab_stream::Stream<SD_SLOTS + 4, SD_STREAM_NTRID, 9, SD_STREAM_CHUNK_PX_W, input_width, SD_GAP>
++        sd_wstream;
++    uint32_t sd_w_base = 0;
++    Noc sd_wnoc;
++    const uint32_t sd_slab_l1 = get_write_ptr(cb_halo_slab);
++    auto sd_wread = [&](uint32_t trid, uint32_t lo, uint32_t hi, uint32_t px) {
++        const auto sd_input = TensorAccessor(input_args, input_addr, input_page_bytes);
++        dataflow_kernel_lib::set_read_trid(sd_wnoc, trid);
++        uint32_t l1 = sd_slab_l1 + px * input_page_bytes;
++        for (uint32_t page = lo; page < hi;) {
++            const uint32_t run = sd_input.num_contiguous_pages(page, hi);
++            noc_async_read(sd_input.get_noc_addr(page), l1, run * input_page_bytes);
++            page += run;
++            l1 += run * input_page_bytes;
++        }
++        dataflow_kernel_lib::set_read_trid(sd_wnoc, 0);
++    };
++    auto sd_stream_serve = [&]() {
++        const bool moved = sd_wstream.poll(noc_index);
++        while (sd_wstream.issue_one(sd_wread)) {
++        }
++        if (moved) {
++            Semaphore<>(slab_fwd_done_sem_id).set(sd_w_base + sd_wstream.landed);
++        }
++        if (sd_wstream.done()) {
++            sd_slab_pending = false;
++        }
++    };
++#endif
+     // Every batch the reader has handed over so far (windowed: retire the landed ones, issue up to the window).
+     [[maybe_unused]] auto serve_fill = [&]() {
+         if constexpr (slab_direct) {
++#ifdef SD_STREAM
++            if (sd_slab_pending) {
++                sd_stream_serve();
++            }
++#else
+             if (sd_slab_pending && ncrisc_noc_read_with_transaction_id_flushed(noc_index, 9)) {
+                 Semaphore<>(slab_fwd_done_sem_id).up(1);
+                 sd_slab_pending = false;
+             }
++#endif
+         }
+         if constexpr (tile_fill_split) {
+             if constexpr (!ring_slab) {
+@@ -565,7 +605,26 @@
+     // ---- stream_weight_blocks: K-block tiles k-major, n-fastest (matmul in1 layout).
+     const uint32_t total_k_blocks = num_m_blocks_this_core * num_k_blocks;
+     uint32_t k_blocks_issued = 0;
+-    auto read_weight_k_block = [&](uint32_t l1) {
++    // Slab-direct early round 0 (SD_EARLY_WEIGHTS): the DRAM reader issues round 0 under transaction id 8 before the
++    // fill, and completes it (finish_weight_k_block) in its issue_weight_k_block.
++    constexpr uint32_t TRID_SD_WEIGHTS = 8;
++    [[maybe_unused]] bool sd_w_issued_early = false;
++    [[maybe_unused]] bool sd_acked_early = false;
++    auto finish_weight_k_block = [&](uint32_t l1) {
++#if defined(SD_BIAS_IN_WEIGHTS) && defined(SD_BIAS_SPLIT)
++        const uint32_t sd_bias_l1 = l1 + block_k_tiles * block_n_tiles * weight_tile_bytes;
++        invalidate_l1_cache();
++        for (uint32_t n = 0; n < out_valid_tiles; ++n) {
++#if SD_BIAS_BF16
++            conv2d_3x3::slab_direct::split_bias_tile_bf16(sd_bias_l1 + n * weight_tile_bytes);
++#else
++            conv2d_3x3::slab_direct::split_bias_tile_bf8(sd_bias_l1 + n * weight_tile_bytes);
++#endif
++        }
++#endif
++    };
++    auto read_weight_k_block = [&](uint32_t l1, bool issue_only = false) {
++        [[maybe_unused]] const uint32_t l1_start = l1;
+ #ifdef CONV2D_3X3_KW_FOLD
+         // kw-fold: round s holds column kw of the output columns [n0, n0 + rw): W'[kh Ct + c, kw N + n0 + n] =
+         // prepared tile ((kh * 3 + kw) Ct + c, n0 + n), (kh, c)-major, n-fastest (block_k_tiles = Ct, block_n_tiles =
+@@ -621,7 +680,6 @@
+ #endif
+ #ifdef SD_BIAS_IN_WEIGHTS
+         // The round's tail: the bias tiles (same format and page size as the weights), rewritten after they landed.
+-        const uint32_t sd_bias_l1 = l1;
+         {
+             const auto bias = TensorAccessor(bias_args, bias_addr, weight_tile_bytes);
+             for (uint32_t n = 0; n < sd_bias_round_tiles; ++n, l1 += weight_tile_bytes) {
+@@ -631,17 +689,11 @@
+             }
+         }
+ #endif
+-        noc_async_read_barrier();
+-#if defined(SD_BIAS_IN_WEIGHTS) && defined(SD_BIAS_SPLIT)
+-        invalidate_l1_cache();
+-        for (uint32_t n = 0; n < out_valid_tiles; ++n) {
+-#if SD_BIAS_BF16
+-            conv2d_3x3::slab_direct::split_bias_tile_bf16(sd_bias_l1 + n * weight_tile_bytes);
+-#else
+-            conv2d_3x3::slab_direct::split_bias_tile_bf8(sd_bias_l1 + n * weight_tile_bytes);
+-#endif
++        if (issue_only) {
++            return;
+         }
+-#endif
++        noc_async_read_barrier();
++        finish_weight_k_block(l1_start);
+     };
+ 
+     Noc noc;
+@@ -652,7 +704,7 @@
+     // for the round's data-ready signal), serving the reader's fill hand-overs while it waits, so one slow core's
+     // weight round does not hold this core's untilize. Measured on sem res2.fuse_conv.1 @ LoFi: 138.6 us with the
+     // blocking receive vs 129.8 us polled (split TILE fill on both).
+-    [[maybe_unused]] auto receive_serving = [&](auto& wm, uint32_t round) {
++    [[maybe_unused]] auto receive_serving = [&](auto& wm, uint32_t round, bool acked = false) {
+         using WM = std::decay_t<decltype(wm)>;
+         // Dependent on WM, so a kernel without the split never instantiates the sender-coordinate reads.
+         if constexpr (WM::active && (tile_fill_split || slab_direct)) {
+@@ -662,9 +714,12 @@
+                 dataflow_kernel_lib::detail::
+                     positional_mcast_semaphore<ct_base, dataflow_kernel_lib::mcast_wire::DATA_READY>());
+             if constexpr (WM::pre_handshake) {
+-                Semaphore<>(dataflow_kernel_lib::detail::
+-                                positional_mcast_semaphore<ct_base, dataflow_kernel_lib::mcast_wire::CONSUMER_READY>())
+-                    .up(noc, wm.sender_x(), wm.sender_y(), 1);
++                if (!acked) {
++                    Semaphore<>(dataflow_kernel_lib::detail::positional_mcast_semaphore<
++                                    ct_base,
++                                    dataflow_kernel_lib::mcast_wire::CONSUMER_READY>())
++                        .up(noc, wm.sender_x(), wm.sender_y(), 1);
++                }
+             }
+             if constexpr (WM::signal == dataflow_kernel_lib::DataReadySignal::Counter) {
+                 while (data_ready.value() < round + 1) {
+@@ -678,6 +733,21 @@
+             }
+         }
+     };
++    // The receive's pre-handshake ack alone (SD_EARLY_WEIGHTS: round 0's slot is free at kernel start).
++    [[maybe_unused]] auto ack_round = [&](auto& wm) {
++        using WM = std::decay_t<decltype(wm)>;
++        // Nested: an absent channel's type has no handshake members.
++        if constexpr (WM::active && slab_direct) {
++            if constexpr (WM::pre_handshake) {
++                constexpr uint32_t ct_base = get_named_compile_time_arg_val("weight_mcast_ct_offset");
++                Semaphore<>(dataflow_kernel_lib::detail::
++                                positional_mcast_semaphore<ct_base, dataflow_kernel_lib::mcast_wire::CONSUMER_READY>())
++                    .up(noc, wm.sender_x(), wm.sender_y(), 1);
++                return true;
++            }
++        }
++        return false;
++    };
+     // prefetch_bias with the reads tagged and their completion polled while serving hand-overs: the bias is one DRAM
+     // page per output tile column that every core reads at kernel start, so it can take microseconds.
+     [[maybe_unused]] auto prefetch_bias_serving = [&]() {
+@@ -905,6 +975,14 @@
+ #else
+     [[maybe_unused]] const uint32_t server_rounds = total_k_blocks;
+ #endif
++    // Round 0 issued early (SD_EARLY_WEIGHTS): its reads landed (serving the fill while they fly), then the bias split.
++    [[maybe_unused]] auto finish_early_weights = [&](uint32_t l1) {
++        MaybeDeviceZoneScope("writer_sd_weight_land");
++        while (!ncrisc_noc_read_with_transaction_id_flushed(noc_index, TRID_SD_WEIGHTS)) {
++            serve_fill();
++        }
++        finish_weight_k_block(l1);
++    };
+     auto issue_weight_k_block = [&]() {
+         {
+             // Back-pressure from compute's matmul.
+@@ -954,16 +1032,25 @@
+             }
+             *flag = INVALID;
+         } else if (weight_sender && weight_mcast.should_send(k_blocks_issued)) {
+-            read_weight_k_block(l1);
++            if (sd_w_issued_early && k_blocks_issued == 0) {
++                finish_early_weights(l1);
++            } else {
++                read_weight_k_block(l1);
++            }
++            MaybeDeviceZoneScope("writer_weight_send");
+             weight_sender->send(l1, l1, weight_k_block_tiles * weight_tile_bytes);
+         } else if (weight_receiver) {
+             if constexpr (tile_fill_split || slab_direct) {
+-                receive_serving(weight_mcast, k_blocks_issued);
++                receive_serving(weight_mcast, k_blocks_issued, sd_acked_early && k_blocks_issued == 0);
+             } else {
+                 weight_receiver->receive(k_blocks_issued);
+             }
+         } else {
+-            read_weight_k_block(l1);
++            if (sd_w_issued_early && k_blocks_issued == 0) {
++                finish_early_weights(l1);
++            } else {
++                read_weight_k_block(l1);
++            }
+         }
+         cb_push_back(cb_weights, weight_k_block_tiles);
+         ++k_blocks_issued;
+@@ -1238,6 +1325,33 @@
+         o_first = (m_tile_start + block_tiles_done) * 32;
+         const uint32_t o_end_tiles = o_first + block_valid_tiles * 32;
+         o_end = o_end_tiles < num_out_px ? o_end_tiles : num_out_px;
++#if defined(CONV2D_3X3_SLAB_DIRECT) && defined(SD_STREAM)
++        {
++            // Streamed: the pieces at and above flat pixel B (the higher shards), the first window of chunks issued.
++            const uint32_t B = (my_shard + 1) * shard_rows;
++            sd_wstream.reset(SD_SLAB_PX);
++            sd_w_base = m_block_idx * (SD_SLAB_PX + 1);
++            conv2d_3x3::slab_direct::Geom<
++                input_height,
++                input_width,
++                output_width,
++                stride,
++                padding,
++                dilation,
++                SD_GAP,
++                SD_PITCH,
++                input_page_bytes,
++                SD_HALF_BYTES>::fill_pieces<band_last_tap>(o_first, o_end, [&](uint32_t lo, uint32_t hi, uint32_t off) {
++                const uint32_t px = off / input_page_bytes;
++                if (hi > B) {
++                    sd_wstream.add(lo > B ? lo : B, hi, lo > B ? px : px + (B - lo));
++                }
++            });
++            while (sd_wstream.issue_one(sd_wread)) {
++            }
++            return;
++        }
++#endif
+ #ifdef CONV2D_3X3_SLAB_DIRECT
+         // Slab-direct: the padded slab layout (conv2d_3x3_slab_direct.hpp), the higher shards' pieces, under their
+         // own transaction id (see the M-block loop).
+@@ -1407,12 +1521,36 @@
+         dataflow_kernel_lib::set_read_trid(row_reads.noc, 0);
+     };
+ 
++#if defined(CONV2D_3X3_SLAB_DIRECT) && defined(SD_EARLY_WEIGHTS)
++    // Slab-direct round 0 ahead of the fill: a receiver acks the sender now (its slot is free), so the sender's
++    // multicast waits on no receiver's fill issue; the round's DRAM reader (the sender, or an own-stream core) issues
++    // its reads now under TRID_SD_WEIGHTS and completes them in issue_weight_k_block.
++    if (num_m_blocks_this_core > 0 && !server_receiver) {
++        MaybeDeviceZoneScope("writer_sd_weight_early");
++        if (weight_sender && weight_mcast.should_send(0)) {
++            cb_reserve_back(cb_weights, weight_k_block_tiles);
++            dataflow_kernel_lib::set_read_trid(noc, TRID_SD_WEIGHTS);
++            read_weight_k_block(get_write_ptr(cb_weights), true);
++            dataflow_kernel_lib::set_read_trid(noc, 0);
++            sd_w_issued_early = true;
++        } else if (weight_receiver) {
++            sd_acked_early = ack_round(weight_mcast);
++        } else {
++            cb_reserve_back(cb_weights, weight_k_block_tiles);
++            dataflow_kernel_lib::set_read_trid(noc, TRID_SD_WEIGHTS);
++            read_weight_k_block(get_write_ptr(cb_weights), true);
++            dataflow_kernel_lib::set_read_trid(noc, 0);
++            sd_w_issued_early = true;
++        }
++    }
++#endif
+     for (uint32_t m_block_idx = 0; m_block_idx < num_m_blocks_this_core; ++m_block_idx) {
+         if constexpr (slab_split) {
+ #ifdef CONV2D_3X3_SLAB_DIRECT
+             // Slab-direct: compute multiplies as soon as the slab and the weights are in. The forward slab reads go
+-            // out first (transaction id 9), then the block's weight round (a DRAM read + multicast, or the multicast
+-            // wait, which polls the slab reads); slab_fwd_done goes up as soon as they landed. The fused bias comes
++            // out first (transaction id 9, or streamed: the first window of chunks), then the block's weight round (a
++            // DRAM read + multicast, or the multicast wait, which polls the slab reads); slab_fwd_done goes up as soon
++            // as they landed (streamed: as each chunk lands, sd_stream_serve). The fused bias comes
+             // with the weight rounds (SD_BIAS_IN_WEIGHTS) or from the weight server; otherwise (the bias-add pass) the
+             // bias reads (block 0, id 7) go out only once this core's slab landed: issued with the fill, ~100 cores
+             // reading the same bias pages slowed the high-index cores' forward fill erratically (256x512x8 s2, 103
+@@ -1450,11 +1588,18 @@
+                 bool bias_issued = !bias_block;
+                 uint32_t bias_left = bias_block ? out_valid_tiles : 0;
+                 while (!slab_done || !bias_issued || bias_left > 0) {
++#ifdef SD_STREAM
++                    if (!slab_done) {
++                        serve_fill();
++                        slab_done = !sd_slab_pending;
++                    }
++#else
+                     if (!slab_done && ncrisc_noc_read_with_transaction_id_flushed(noc_index, 9)) {
+                         Semaphore<>(slab_fwd_done_sem_id).up(1);
+                         slab_done = true;
+                         sd_slab_pending = false;
+                     }
++#endif
+                     if (slab_done && !bias_issued) {
+                         sd_issue_bias();
+                         bias_issued = true;
+--- a/ttnn/ttnn/operations/conv2d_3x3/kernels/conv2d_3x3_compute.cpp
++++ b/ttnn/ttnn/operations/conv2d_3x3/kernels/conv2d_3x3_compute.cpp
+@@ -1588,10 +1588,17 @@
+             const uint32_t valid_m = sd_actual - done < block_m_tiles ? sd_actual - done : block_m_tiles;
+             const uint32_t o_first = (sd_m_tile_start + done) * 32;
+             [[maybe_unused]] const int32_t ih_lo = SdGeom::row_lo(o_first);
++#ifdef SD_STREAM
++            // Streamed fill (conv2d_3x3_slab_stream.hpp): the weights first, then each subblock row waits for the slab
++            // pages its in0 runs read (the first wait is the startup one).
++            constexpr bool sd_stream = true;
++#else
++            constexpr bool sd_stream = false;
+             {
+                 MaybeDeviceZoneScope("compute_slab_wait");
+                 slab.wait_front(SD_SLAB_PX);
+             }
++#endif
+ #ifdef SD_BIAS_IN_WEIGHTS
+             // The bias tiles ride at the tail of the weight round (the writer's SD_BIAS_IN_WEIGHTS).
+             constexpr uint32_t round_tiles = (block_k_tiles + 1) * block_n_tiles;
+@@ -1600,7 +1607,13 @@
+             constexpr uint32_t round_tiles = block_k_tiles * block_n_tiles;
+             constexpr bool bias_in_weights = false;
+ #endif
+-            weights.wait_front(round_tiles);
++            if constexpr (sd_stream) {
++                MaybeDeviceZoneScope("compute_sd_weight_wait");
++                weights.wait_front(round_tiles);
++            } else {
++                weights.wait_front(round_tiles);
++            }
++            [[maybe_unused]] uint32_t sd_waited = 0;
+             [[maybe_unused]] uint32_t slab_l1 = 0, zero_l1 = 0, w_base = 0, w_tile = 0;
+             UNPACK((slab_l1 = get_local_cb_interface(get_operand_id(cb_halo_slab)).fifo_rd_ptr << 4));
+             UNPACK((zero_l1 = get_local_cb_interface(get_operand_id(cb_im2col_tiles)).fifo_rd_ptr << 4));
+@@ -1640,6 +1653,23 @@
+                     need_init = false;
+                 }
+                 for (uint32_t r = row0; r < group_end; r += sb_h) {
++                    if constexpr (sd_stream) {
++                        // The subblock row's last valid tile-row reads furthest into the slab.
++                        UNPACK(({
++                            const uint32_t last = r + sb_h - 1 < valid_m ? r + sb_h - 1 : valid_m - 1;
++                            const uint32_t need =
++                                r < valid_m ? SdGeom::need_px<kkh>(ih_lo, o_first + last * 32) : 0;
++                            if (need > sd_waited) {
++                                if (sd_waited == 0) {
++                                    MaybeDeviceZoneScope("compute_slab_wait");
++                                    slab.wait_front(need);
++                                } else {
++                                    slab.wait_front(need);
++                                }
++                                sd_waited = need;
++                            }
++                        }));
++                    }
+                     target.reserve_back(sb_h * block_n_tiles);
+                     // in0 tile of row r + t, K-tile k: its first run's L1 address (16 B units, minus 1).
+                     [[maybe_unused]] uint32_t a[block_k_tiles][sb_h];
+@@ -1705,6 +1735,10 @@
+                 UNPACK((slab_direct::unpack_uninit()));
+             }
+             weights.pop_front(round_tiles);
++            if constexpr (sd_stream) {
++                // Every page pushed before the pop (the reader pushes the whole slab per block).
++                slab.wait_front(SD_SLAB_PX);
++            }
+             slab.pop_front(SD_SLAB_PX);
+ #endif
+         } else if constexpr (in0_groups > 1) {
+--- a/ttnn/ttnn/operations/conv2d_3x3/kernels/conv2d_3x3_slab_direct.hpp
++++ b/ttnn/ttnn/operations/conv2d_3x3/kernels/conv2d_3x3_slab_direct.hpp
+@@ -94,6 +94,25 @@
+         return slab + static_cast<uint32_t>(((ih - ih_lo) * pitch + gap + stride * ow0 - padding) * pixel_bytes) +
+                j * 2 * half_bytes;
+     }
++
++    // Streamed fill (conv2d_3x3_slab_stream.hpp): slab pixels [0, need_px) hold everything the in0 tiles of the
++    // tile-row whose first output pixel is o read (its lowest in-image kernel row's last K-tile's second 1 KB run ends
++    // last); 0 if every kernel row is outside the image.
++    template <uint32_t kkh>
++    static inline __attribute__((always_inline)) uint32_t need_px(int32_t ih_lo, uint32_t o) {
++        const int32_t oh = o / out_w;
++        const int32_t ow0 = o % out_w;
++        for (int32_t kh = 2; kh >= 0; --kh) {
++            const int32_t ih = stride * oh + kh * dilation - padding;
++            if (ih >= 0 && ih < in_h) {
++                const uint32_t end = static_cast<uint32_t>(((ih - ih_lo) * pitch + gap + stride * ow0 - padding) *
++                                                           static_cast<int32_t>(pixel_bytes)) +
++                                     (kkh - 1) * 2 * half_bytes + half_bytes + 1024;
++                return (end + pixel_bytes - 1) / pixel_bytes;
++            }
++        }
++        return 0;
++    }
+ };
+ 
+ // Fused bias (SD_FUSED_BIAS): compute adds the bias as one more K-step, in0 = the ones block (1.0 in K columns 0 and 1
+--- /dev/null
++++ b/ttnn/ttnn/operations/conv2d_3x3/kernels/conv2d_3x3_slab_stream.hpp
+@@ -0,0 +1,115 @@
++// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
++// SPDX-License-Identifier: Apache-2.0
++
++// Streamed slab-direct fill (the descriptor's SD_STREAM_CHUNK_PX, kernels conv2d_3x3_slab_direct.hpp): compute
++// multiplies each tile-row as soon as the slab pixels it reads have landed, instead of after the whole slab.
++//
++// A block's fill is a few pieces of input pixels in increasing flat order (Geom::fill_pieces), and the slab offset
++// grows with the flat index, so "every piece pixel below slab pixel S has landed" is one monotone count: the slab CB's
++// pushed pages. Each data-movement RISC streams its pieces (the reader: own and lower input shards, flat < B; the
++// writer: the higher shards, flat >= B) in chunks of chunk_px pixels, chunk c under transaction id trid0 + c % ntrid
++// with at most ntrid chunks in flight, and retires the landed chunks in issue order: `landed` is the slab pixel up to
++// which its pieces landed (a chunk that ends an image row also covers the next slot's leading gap, zeroed at kernel
++// start). The writer publishes its count in a semaphore; the reader, the slab CB's one producer, pushes the combined
++// count (its own until its part is done, then the writer's). Compute waits, per subblock row, for the slab pages its
++// in0 runs read (Geom::need_px). The descriptor streams only blocks of at least SD_STREAM_MIN_SUBBLOCK_ROWS subblock
++// rows (a one- or two-row block needs nearly the whole slab for its first matmul call).
++//
++// Measured (Blackhole p150b, stem.conv1 512x1024x8 -> 64 s2, LoFi, bf8_b weights, bias + ReLU, unzoned, medians of 3
++// alternating pairs): 11076 ns -> 10196 ns with SD_EARLY_WEIGHTS (11036 ns with the early round 0 alone, 11056 ns with
++// the stream alone, one run each). The critical cores (the last grid row, whose fill comes almost all from higher
++// shards through the writer) start multiplying ~0.9 us earlier; the weight round (~3.5 us) is the bound now.
++
++#pragma once
++
++#include <cstdint>
++
++#include "api/dataflow/dataflow_api.h"
++
++namespace conv2d_3x3::slab_stream {
++
++// Up to max_pieces pieces of one RISC's part of a block's fill, issued in chunks. No division in the issue / retire
++// path (the data-movement RISCs divide in software): chunk c's transaction-id slot advances by one and wraps.
++template <uint32_t max_pieces, uint32_t ntrid, uint32_t trid0, uint32_t chunk_px, uint32_t in_w, uint32_t gap>
++struct Stream {
++    static_assert(ntrid >= 1 && trid0 >= 1 && trid0 + ntrid - 1 <= NOC_MAX_TRANSACTION_ID);
++    uint32_t lo[max_pieces];
++    uint32_t hi[max_pieces];
++    uint32_t px[max_pieces];      // slab pixel of lo
++    uint32_t hi_gap[max_pieces];  // gap if hi ends an image row (the next slot's zeroed leading gap), else 0
++    uint32_t n = 0;
++    uint32_t cur = 0;              // next piece to issue from
++    uint32_t pos = 0;              // its next flat pixel
++    uint32_t chunk_end[ntrid];     // landed count once the chunk in that slot retires
++    uint32_t in_flight = 0;        // chunks issued and not retired
++    uint32_t head_slot = 0;        // the oldest one's slot
++    uint32_t tail_slot = 0;        // the next one's slot
++    uint32_t landed = 0;           // slab pixels landed
++    uint32_t region_end = 0;       // the count once every piece landed
++
++    // A new block: no pieces, `region_end` = this part's end in slab pixels.
++    FORCE_INLINE void reset(uint32_t end) {
++        n = cur = pos = in_flight = head_slot = tail_slot = landed = 0;
++        region_end = end;
++    }
++
++    FORCE_INLINE void add(uint32_t piece_lo, uint32_t piece_hi, uint32_t slab_px) {
++        if (piece_lo >= piece_hi) {
++            return;
++        }
++        ASSERT(n < max_pieces);
++        if (n == 0) {
++            pos = piece_lo;
++        }
++        lo[n] = piece_lo;
++        hi[n] = piece_hi;
++        px[n] = slab_px;
++        hi_gap[n] = piece_hi % in_w == 0 ? gap : 0;
++        ++n;
++    }
++
++    // No piece left to issue.
++    FORCE_INLINE bool issued() const { return cur >= n; }
++    FORCE_INLINE bool done() const { return cur >= n && in_flight == 0; }
++
++    // Issue the next chunk if a transaction id is free: read(trid, flat_lo, flat_hi, slab_px_of_flat_lo) issues its
++    // reads under trid.
++    template <typename ReadFn>
++    FORCE_INLINE bool issue_one(ReadFn&& read) {
++        if (cur >= n || in_flight >= ntrid) {
++            return false;
++        }
++        const uint32_t h = hi[cur];
++        const uint32_t e = h - pos > chunk_px ? pos + chunk_px : h;
++        read(trid0 + tail_slot, pos, e, px[cur] + (pos - lo[cur]));
++        chunk_end[tail_slot] = px[cur] + (e - lo[cur]) + (e == h ? hi_gap[cur] : 0);
++        tail_slot = tail_slot + 1 == ntrid ? 0 : tail_slot + 1;
++        ++in_flight;
++        pos = e;
++        if (pos >= h) {
++            ++cur;
++            if (cur < n) {
++                pos = lo[cur];
++            }
++        }
++        return true;
++    }
++
++    // Retire the landed chunks in issue order; true if `landed` moved.
++    FORCE_INLINE bool poll(uint32_t noc_id) {
++        bool moved = false;
++        while (in_flight != 0 && ncrisc_noc_read_with_transaction_id_flushed(noc_id, trid0 + head_slot)) {
++            landed = chunk_end[head_slot];
++            head_slot = head_slot + 1 == ntrid ? 0 : head_slot + 1;
++            --in_flight;
++            moved = true;
++        }
++        if (cur >= n && in_flight == 0 && landed != region_end) {
++            landed = region_end;
++            moved = true;
++        }
++        return moved;
++    }
++};
++
++}  // namespace conv2d_3x3::slab_stream

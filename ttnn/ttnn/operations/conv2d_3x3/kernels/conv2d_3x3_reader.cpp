@@ -131,6 +131,7 @@
 #include "conv2d_3x3_gather_dataflow.hpp"
 #include "conv2d_3x3_nslice_order.hpp"
 #include "conv2d_3x3_slab_direct.hpp"
+#include "conv2d_3x3_slab_stream.hpp"
 
 namespace {
 
@@ -254,7 +255,8 @@ void kernel_main() {
     constexpr uint32_t pad_slots_max = 0;
 #endif
     // Slab-direct (the descriptor's SLAB_DIRECT, conv2d_3x3_slab_direct.hpp): the fill writes the padded slab and
-    // pushes it to compute, which unpacks in0 straight from it; no gather.
+    // pushes it to compute, which unpacks in0 straight from it; no gather. Streamed (SD_STREAM,
+    // conv2d_3x3_slab_stream.hpp): pushed as its landed prefix grows.
 #ifdef CONV2D_3X3_SLAB_DIRECT
     constexpr bool slab_direct = true;
 #else
@@ -496,6 +498,11 @@ void kernel_main() {
         SD_PITCH,
         pixel_bytes,
         SD_HALF_BYTES>;
+#ifdef SD_STREAM
+    // Pieces: the union of the three bands, split at image rows (at most one per slot, plus the band splits).
+    conv2d_3x3::slab_stream::Stream<SD_SLOTS + 4, SD_STREAM_NTRID_R, 3, SD_STREAM_CHUNK_PX, input_width, SD_GAP>
+        sd_stream;
+#endif
     {
         // The zero block (cb_im2col_tiles page 0) and every slot's leading zero zone, once: the fill never writes
         // them. Compute reads them only after the first slab push.
@@ -868,6 +875,66 @@ void kernel_main() {
                         Semaphore<>(slab_free_sem_id).up(1);
                     }
                 }
+#ifdef SD_STREAM
+                // Streamed (conv2d_3x3_slab_stream.hpp): this RISC's part (flat pixels below B: own and lower shards)
+                // in chunks, the slab CB pushed as the combined landed count grows (the writer's count from
+                // slab_fwd_done = block * (SD_SLAB_PX + 1) + count, once this part is done).
+                {
+                    const uint32_t B = slab_split ? (my_shard + 1) * input_shard_rows : 0xFFFFFFFFu;
+                    uint32_t s_b = SD_SLAB_PX;
+                    sd_stream.reset(0);
+                    SdGeom::fill_pieces<band_last_tap>(o_first, o_end, [&](uint32_t lo, uint32_t hi, uint32_t off) {
+                        const uint32_t px = off / pixel_bytes;
+                        if (s_b == SD_SLAB_PX && hi > B) {
+                            s_b = lo >= B ? px : px + (B - lo);
+                        }
+                        sd_stream.add(lo, hi < B ? hi : B, px);
+                    });
+                    sd_stream.region_end = s_b;
+                    const uint32_t w_base = m_block_idx * (SD_SLAB_PX + 1);
+                    uint32_t pushed = 0;
+                    bool gaps_landed = false;
+                    auto advance = [&]() {
+                        sd_stream.poll(reads.noc.get_noc_id());
+                        uint32_t target = sd_stream.landed;
+                        if (sd_stream.done()) {
+                            target = s_b;
+                            if constexpr (slab_split) {
+                                const uint32_t v = Semaphore<>(slab_fwd_done_sem_id).value();
+                                const uint32_t w = v > w_base ? v - w_base : 0;
+                                target = w > target ? w : target;
+                            } else {
+                                target = SD_SLAB_PX;
+                            }
+                        }
+                        if (target > pushed) {
+                            if (!gaps_landed) {
+                                reads.wait(2);  // the slot gaps (kernel start)
+                                gaps_landed = true;
+                            }
+                            cb_push_back(cb_halo_slab, target - pushed);
+                            pushed = target;
+                        }
+                    };
+                    auto read_chunk = [&](uint32_t trid, uint32_t lo, uint32_t hi, uint32_t px) {
+                        reads.begin(trid);
+                        read_rows(lo, hi, slab_l1 + px * pixel_bytes);
+                    };
+                    while (!sd_stream.issued()) {
+                        if (!sd_stream.issue_one(read_chunk)) {
+                            advance();
+                        }
+                    }
+                    dataflow_kernel_lib::set_read_trid(reads.noc, 0);
+                    {
+                        MaybeDeviceZoneScope("reader_fill_fwd_wait");
+                        while (pushed < SD_SLAB_PX) {
+                            advance();
+                        }
+                    }
+                }
+                continue;
+#else
                 reads.begin(1);
                 SdGeom::fill_pieces<band_last_tap>(
                     o_first, o_end, [&](uint32_t lo, uint32_t hi, uint32_t off) { read_rows(lo, hi, slab_l1 + off); });
@@ -879,6 +946,7 @@ void kernel_main() {
                 }
                 cb_push_back(cb_halo_slab, SD_SLAB_PX);
                 continue;
+#endif
             }
 #endif
             if constexpr (slab_split) {
