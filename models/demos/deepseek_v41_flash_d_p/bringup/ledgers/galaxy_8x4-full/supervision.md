@@ -539,3 +539,17 @@
 - 10:53 UTC overseer decision (iteration time): P.84 attempt 3: MOE_REPLICAS call-time, slot always filled when a table is set, both A/B sides in one load; off bit-identical to pre-P.84. Starts when the runner agent's A/B-per-unit fix lands.
 - 10:55 UTC DEVICE (justified, owner worried about time; device idle while P.84 attempt 3 is coded): P.85 session census now on the runner (one request, DS41_MOE_REPLICAS=off: counts per home chip; at most 1 runner restart if it holds the on model). RAM unaccounted 175.7 GiB (163.3 before P.84's 8 opens).
 - 10:56 UTC P.84 shortcut found: the best split used each chip's local picks x 32 (an estimate from 160 of 5120 tokens), not the chunk's global counts: attempt 3 exchanges the counts (OV-52). Meanwhile a direct runner A/B of attempt 2's code (both units, both sides) is queued behind the P.85 census.
+
+## 11:08 UTC P.85: replica pick on real-history session census (public agentic traces)
+- Census: 231 sessions / 1877 chunks, each a REAL prefill from 0 (test_session_census.py), ONE runner request
+  (678 s measuring); 1 device open (runner restart: runner + kernel source changes), 1 load of 0-20; RAM unaccounted
+  175.6 -> 176.5 GiB.
+- Offline (DS41-299 fit, best split, ms a chunk; results/P.85_offline.*): held-out Claude Code traces 16.3 none /
+  13.9 P.84 table / 11.9 new; DeepSeek python 16.8 / 14.5 / 12.2; DeepSeek multi-language 17.5 / 15.3 / 13.2;
+  our bring-up sessions 16.5 / 12.5 / 13.9 (P.84's own training data); code 17.9 / 12.8 / 15.5; prose 22.7 / 22.7 /
+  22.3; multilingual 20.9 / 18.2 / 17.8. No text slower than no replicas. New table better than P.84's by ~2 ms on
+  every held-out public trace group (the AgentX-like ones); worse only on our own sessions.
+- Owner's question: re-picking P.84's inputs on real history overlaps 63 % with the zero-history table and gains
+  0.4-0.9 ms more on the traces: the zero-history pick was usable but not the best.
+- New table: tt/replicas/agentic_traces.json; it becomes the default table in P.84 attempt 3 (with the global-count
+  split), measured by the A/B on the runner.
