@@ -55,6 +55,8 @@ void bind_interleaved_to_sharded(nb::module_& mod) {
                * - BFLOAT8_B, BFLOAT4_B
                  - TILE
 
+            On Blackhole, the input can also be an ``FP8_E4M3`` tensor in ROW_MAJOR layout.
+
         Memory Support:
             - Input: interleaved DRAM and L1
             - Output: HEIGHT_SHARDED, WIDTH_SHARDED and BLOCK_SHARDED in L1; HEIGHT_SHARDED and WIDTH_SHARDED in DRAM
