@@ -151,7 +151,7 @@ def test_interleaved_to_sharded_partial(device):
         )
         # Write the slice back into the same rows of output_tensor
         ttnn.sharded_to_interleaved_partial(sharded_slice, output_tensor, 2, slice_index)
-    logger.info(f"Sharded Slice Shape: {sharded_slice.shape}")  # Shape([1, 1, 64, 64])
+    logger.debug(f"Sharded Slice Shape: {sharded_slice.shape}")  # Shape([1, 1, 64, 64])
 
 
 def test_tilize_with_val_padding(device):
