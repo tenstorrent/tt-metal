@@ -16,6 +16,7 @@ enum EccCtrl : uint32_t {
     ECC_CTRL_VIEW_MASK = 0xFu,         // [3:0]: ECC_STATUS view select
     ECC_CTRL_COUNTS_CLR = 1u << 4,     // [4]: also clears the last error's valid bit
     ECC_CTRL_IRQ_CLR = 1u << 5,        // [5]
+    ECC_CTRL_L1_SBE_IRQ_EN = 1u << 8,  // [8]
     ECC_CTRL_L1_DBE_IRQ_EN = 1u << 9,  // [9]
 };
 

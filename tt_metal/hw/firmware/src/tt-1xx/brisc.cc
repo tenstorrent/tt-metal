@@ -213,7 +213,9 @@ void set_deassert_addresses() {
 constexpr uint32_t l1_ecc_populated_rows = MEM_L1_SIZE / (l1_ecc_banks * l1_ecc_word_bytes);
 
 // ECC_CTRL's interrupt enables while armed, and the ECC_STATUS view selected after arming and after a false error.
-constexpr uint32_t ecc_ctrl_armed = ECC_CTRL_L1_DBE_IRQ_EN;
+// The hardware interrupts only on an error in a word other than the last error's, so the SBE interrupt is enabled and
+// every SBE clears the last error: a later DBE in the same word is then new and interrupts.
+constexpr uint32_t ecc_ctrl_armed = ECC_CTRL_L1_SBE_IRQ_EN | ECC_CTRL_L1_DBE_IRQ_EN;
 constexpr uint32_t ecc_ctrl_host_view = static_cast<uint32_t>(EccView::L1_COUNTS);
 
 inline __attribute__((always_inline)) uint32_t read_ecc_view(EccView view) {
@@ -224,8 +226,15 @@ inline __attribute__((always_inline)) uint32_t read_ecc_view(EccView view) {
     return *reinterpret_cast<volatile tt_reg_ptr uint32_t*>(RISCV_DEBUG_REG_ECC_STATUS);
 }
 
+// Clears the interrupt, the counts and the last error before returning to the kernel.
+inline __attribute__((always_inline)) void l1_ecc_resume() {
+    volatile tt_reg_ptr uint32_t* ecc_ctrl = reinterpret_cast<volatile tt_reg_ptr uint32_t*>(RISCV_DEBUG_REG_ECC_CTRL);
+    *ecc_ctrl = ecc_ctrl_armed | ecc_ctrl_host_view | ECC_CTRL_COUNTS_CLR | ECC_CTRL_IRQ_CLR;
+    *ecc_ctrl = ecc_ctrl_armed | ecc_ctrl_host_view;
+}
+
 // Records the ECC state for the host and halts the core until the next device open releases it.
-inline __attribute__((always_inline, noreturn)) void halt_on_ecc_error(uint32_t last_l1_error_banks_0_15) {
+inline __attribute__((always_inline, noreturn)) void halt_on_ecc_error(uint32_t last_l1_error_banks_0_15, bool l1_dbe) {
     tt_l1_ptr l1_ecc_halt_slot_t* const slot = reinterpret_cast<tt_l1_ptr l1_ecc_halt_slot_t*>(MEM_L1_ECC_HALT_BASE);
     slot->record.ecc_ctrl = *reinterpret_cast<volatile tt_reg_ptr uint32_t*>(RISCV_DEBUG_REG_ECC_CTRL);
     slot->record.l1_counts = read_ecc_view(EccView::L1_COUNTS);
@@ -233,8 +242,6 @@ inline __attribute__((always_inline, noreturn)) void halt_on_ecc_error(uint32_t 
     slot->record.last_l1_error_banks_16_31 = read_ecc_view(EccView::LAST_L1_ERROR_BANKS_16_31);
     slot->record.program_id = mailboxes->launch[mailboxes->launch_msg_rd_ptr].kernel_config.host_assigned_id;
     asm volatile("fence" ::: "memory");
-    // A valid last error here is in a populated row; without one, IRQ 3 came from another source (the watchdog).
-    bool l1_dbe = last_l1_error_banks_0_15 & ECC_LAST_ERR_VALID_MASK;
     slot->record.reason = l1_dbe ? L1_ECC_HALT_REASON_DBE : L1_ECC_HALT_REASON_UNEXPECTED;
     WAYPOINT("ECCH");
     while (true) {
@@ -245,18 +252,23 @@ inline __attribute__((always_inline, noreturn)) void halt_on_ecc_error(uint32_t 
 // anything else halts the core. PIC handlers do not nest, so nothing can change the ECC_CTRL view between a select
 // and its read.
 extern "C" __attribute__((noinline, used)) void l1_ecc_check() {
-    volatile tt_reg_ptr uint32_t* ecc_ctrl = reinterpret_cast<volatile tt_reg_ptr uint32_t*>(RISCV_DEBUG_REG_ECC_CTRL);
     // The valid bit and row cover an error in any of the 32 banks.
     uint32_t last_l1_error_banks_0_15 = read_ecc_view(EccView::LAST_L1_ERROR_BANKS_0_15);
     if ((last_l1_error_banks_0_15 & ECC_LAST_ERR_VALID_MASK) &&
         (last_l1_error_banks_0_15 & ECC_LAST_ERR_ROW_MASK) >= l1_ecc_populated_rows) {
         // Without the IRQ clear, mret re-enters the handler. Without the last error clear, a later IRQ 3 from another
         // source (the watchdog) would find this error still valid and return here forever.
-        *ecc_ctrl = ecc_ctrl_armed | ecc_ctrl_host_view | ECC_CTRL_COUNTS_CLR | ECC_CTRL_IRQ_CLR;
-        *ecc_ctrl = ecc_ctrl_armed | ecc_ctrl_host_view;
+        l1_ecc_resume();
         return;
     }
-    halt_on_ecc_error(last_l1_error_banks_0_15);
+    // Every handled error clears the counts, so a nonzero DBE count is a DBE since the last return.
+    const uint32_t counts = read_ecc_view(EccView::L1_COUNTS);
+    if ((counts & ECC_DBE_COUNT_MASK) == 0 && (counts & ECC_SBE_COUNT_MASK) != 0) {
+        // Correctable. Clearing the last error makes a later DBE in this word new, so it interrupts.
+        l1_ecc_resume();
+        return;
+    }
+    halt_on_ecc_error(last_l1_error_banks_0_15, (counts & ECC_DBE_COUNT_MASK) != 0);
 }
 
 // IRQ 3 handler. Saves the caller-saved registers around l1_ecc_check.
