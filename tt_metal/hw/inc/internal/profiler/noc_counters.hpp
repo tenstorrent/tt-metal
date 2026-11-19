@@ -6,7 +6,8 @@
 // perf_counters/noc_counters_*.h; this header adds the profiler marker format and emission.
 //
 // Enable with TT_METAL_PROFILE_NOC_COUNTERS=<group mask>. The counters belong to the tile, so one core captures:
-// BRISC on Wormhole and Blackhole Tensix, DM0 on Quasar. The mask is a compile-time constant of the firmware build.
+// the BRISC kernel entry on Wormhole and Blackhole Tensix (brisck, so the BRISC firmware region keeps its size), the
+// DM0 firmware on Quasar. The mask is a compile-time constant of the build.
 
 #pragma once
 
@@ -17,16 +18,16 @@ constexpr uint16_t NOC_COUNTERS_HEADER_PROFILER_ID = 9100;     // (noc count << 
 constexpr uint16_t NOC_COUNTERS_PAIR_PROFILER_ID_BASE = 9101;  // base + k: (counter[2k + 1] << 32) | counter[2k]
 constexpr uint16_t NOC_COUNTERS_MAX_PAIRS = 16;
 
-#if defined(ARCH_BLACKHOLE) && defined(COMPILE_FOR_BRISC)
+#if (defined(ARCH_BLACKHOLE) || defined(ARCH_WORMHOLE)) && defined(COMPILE_FOR_BRISC) && !defined(FW_BUILD) && \
+    !defined(DISPATCH_KERNEL)
 #define NOC_COUNTERS_CORE 1
-#elif defined(ARCH_WORMHOLE) && defined(COMPILE_FOR_BRISC)
-#define NOC_COUNTERS_CORE 1
-#elif defined(ARCH_QUASAR) && defined(COMPILE_FOR_DM)
+#elif defined(ARCH_QUASAR) && defined(COMPILE_FOR_DM) && defined(FW_BUILD)
 #define NOC_COUNTERS_CORE 1
 #endif
 
-// Included directly by the firmware TUs, like riscv_pmc.hpp. The streaming profiler has no TS_DATA path.
-#if defined(PROFILE_NOC_COUNTERS) && defined(PROFILE_KERNEL) && !defined(PROFILE_STREAMING) && defined(FW_BUILD) && \
+// Included directly by the firmware and kernel entry TUs, like riscv_pmc.hpp. The streaming profiler has no TS_DATA
+// path.
+#if defined(PROFILE_NOC_COUNTERS) && defined(PROFILE_KERNEL) && !defined(PROFILE_STREAMING) && \
     defined(NOC_COUNTERS_CORE)
 
 #include <array>
@@ -69,6 +70,16 @@ __attribute__((noinline)) void begin() {
 // One header marker and kTotal / 2 pair markers behind one buffer-room check and one timestamp; the counters are read
 // as the pairs are written. A full buffer drops the whole capture.
 __attribute__((noinline)) void end() {
+#if !defined(ARCH_QUASAR)
+    // The window spans the launch, so the BRISC kernel waits for NCRISC and the TRISCs as the firmware does after it.
+    auto* sync = reinterpret_cast<volatile tt_l1_ptr subordinate_map_t*>(GET_MAILBOX_ADDRESS_DEV(subordinate_sync.map));
+    while (sync->all != RUN_SYNC_MSG_ALL_SUBORDINATES_DONE) {
+#if defined(ARCH_WORMHOLE)
+        asm volatile("nop; nop; nop; nop; nop");
+#endif
+        invalidate_l1_cache();
+    }
+#endif
     // Every worker gets a go signal; a launch without a kernel publishes nothing.
     if (get_profiler_zone_invalid()) {
         return;
