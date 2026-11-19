@@ -101,6 +101,11 @@ class TtConv2D:
         output_height, output_width = self.output_hw
         self.band_rows = None
         self.run_in_dram = False
+        grid = device.compute_with_storage_grid_size()
+        cores = grid.x * grid.y
+        # Banded block-sharded convs keep the full grid's channel blocks (see below), which needs the core
+        # count to divide them. Other grids, such as Wormhole's 8x8, run such a conv whole in L1.
+        bandable = shard_layout != ttnn.TensorMemoryLayout.BLOCK_SHARDED or FULL_GRID_CHANNEL_BLOCKS % cores == 0
         if exceeds_l1_budget(
             device,
             conv.batch_size * conv.input_height * conv.input_width * conv.in_channels
@@ -115,7 +120,7 @@ class TtConv2D:
                 # channel, or for a 1x1 as a matmul from interleaved DRAM. ttnn cannot slice a strided
                 # 1x1 conv, which stays in bands.
                 self.run_in_dram = True
-            else:
+            elif bandable:
                 fitting = [
                     rows
                     for rows in range(1, output_height + 1)
@@ -146,12 +151,6 @@ class TtConv2D:
             # partial sum to the output format between blocks. On a few cores the blocks are larger and
             # the sum rounds less often, which changes the result the rest of the model was matched to.
             # Width sharding takes the block width explicitly, so the bands keep the full grid's blocks.
-            grid = device.compute_with_storage_grid_size()
-            cores = grid.x * grid.y
-            assert FULL_GRID_CHANNEL_BLOCKS % cores == 0, (
-                f"a banded block-sharded conv needs a core count dividing {FULL_GRID_CHANNEL_BLOCKS}, got {cores}; "
-                "the supported grids are the full grid and 2x1"
-            )
             assert conv.in_channels % (32 * FULL_GRID_CHANNEL_BLOCKS) == 0
             self.conv_config.shard_layout = ttnn.TensorMemoryLayout.WIDTH_SHARDED
             self.conv_config.act_block_w_div = FULL_GRID_CHANNEL_BLOCKS // cores
