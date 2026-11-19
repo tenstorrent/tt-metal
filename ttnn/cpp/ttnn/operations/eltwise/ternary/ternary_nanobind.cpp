@@ -117,8 +117,8 @@ void bind_ternary_lerp(nb::module_& mod, const std::string& description) {
                 checked, and the result is undefined for a weight outside [0, 1]. On Blackhole it selects a
                 faster kernel, (input - weight * input) + weight * end: no intermediate overflows, weight 0
                 returns input and weight 1 returns end bit-exact. Other architectures, and the composite
-                fallback (INT32, or block float inputs with a sub-tile broadcast), ignore it and use the
-                default kernel, with a warning on other architectures. Defaults to `False`.
+                fallback (INT32, an unsupported broadcast, or block float inputs with a sub-tile broadcast),
+                ignore it with a warning and compute the default result. Defaults to `False`.
 
 
         Note:

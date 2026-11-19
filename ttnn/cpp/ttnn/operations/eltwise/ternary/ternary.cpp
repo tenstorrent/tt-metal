@@ -422,6 +422,16 @@ Tensor addcdiv(
 }
 
 namespace {
+// The composite fallback has no fast_interpolate kernel; it ignores the flag with a warning.
+void warn_lerp_fast_interpolate_fallback(const bool fast_interpolate) {
+    if (fast_interpolate) {
+        log_warning(
+            tt::LogOp,
+            "lerp: fast_interpolate is not supported by the composite fallback (INT32, invalid broadcast, or block "
+            "float with a sub-tile broadcast); ignored, using the default computation");
+    }
+}
+
 // fast_interpolate has a kernel on Blackhole only; elsewhere it is ignored with a warning.
 bool resolve_lerp_fast_interpolate(const Tensor& input, const bool fast_interpolate) {
     if (fast_interpolate && input.device()->arch() != tt::ARCH::BLACKHOLE) {
@@ -456,6 +466,7 @@ Tensor lerp(
 
     if (is_invalid_bcast(broadcast_type) || (is_any_input_block_format && is_subtile_bcast) || is_input_int32) {
         log_debug(tt::LogOp, "Lerp Fallback - TTS (scalar weight)");
+        warn_lerp_fast_interpolate_fallback(fast_interpolate);
         return _lerp_overload(input, end, weight, memory_config, output);
     }
 
@@ -498,6 +509,7 @@ Tensor lerp(
 
     if (is_invalid_bcast(broadcast_type) || (is_any_input_block_format && is_subtile_bcast) || is_input_int32) {
         log_debug(tt::LogOp, "Lerp Fallback - TTT (tensor weight)");
+        warn_lerp_fast_interpolate_fallback(fast_interpolate);
         return _lerp(input, end, weight, memory_config, output);
     }
 

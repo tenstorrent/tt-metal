@@ -246,7 +246,7 @@ def test_lerp_fast_interpolate_program_cache(device, use_scalar_weight, input_dt
 
 
 @pytest.mark.parametrize("input_dtype", ["bfloat16", "float32"])
-def test_lerp_fast_interpolate_ignored_off_blackhole(device, input_dtype):
+def test_lerp_fast_interpolate_ignored_off_blackhole(device, capfd, input_dtype):
     """Off Blackhole the flag is ignored (with a warning): the result is the default kernel's."""
     if ttnn.device.is_blackhole(device):
         pytest.skip("Blackhole runs the fast_interpolate kernel")
@@ -257,7 +257,53 @@ def test_lerp_fast_interpolate_ignored_off_blackhole(device, input_dtype):
     torch_end = torch.randn(shape, generator=generator).to(torch_dtype)
     weight = torch.rand(shape, generator=generator).to(torch_dtype)
 
+    capfd.readouterr()
     fast = _lerp(device, torch_input, torch_end, weight, fast_interpolate=True)
+    fast_log = "".join(capfd.readouterr())
     default = _lerp(device, torch_input, torch_end, weight, fast_interpolate=False)
 
+    assert "fast_interpolate is implemented on Blackhole only" in fast_log, "expected the off-Blackhole warning"
     assert torch.equal(_bits(fast), _bits(default))
+
+
+FALLBACK_WARNING = "fast_interpolate is not supported by the composite fallback"
+
+
+def _fallback_inputs(device, fallback, use_scalar_weight):
+    """Inputs that send ttnn.lerp to its composite fallback: INT32, or block float with a sub-tile
+    (column) broadcast of end, or of the weight."""
+    generator = torch.Generator().manual_seed(3)
+    shape = (32, 64)
+    if fallback == "int32":
+        torch_input = torch.randint(-100, 100, shape, generator=generator, dtype=torch.int32)
+        torch_end = torch.randint(-100, 100, shape, generator=generator, dtype=torch.int32)
+        weight = torch.ones(shape, dtype=torch.int32)
+        dtype = ttnn.int32
+    else:
+        torch_input = torch.randn(shape, generator=generator)
+        # Scalar weight: end carries the column broadcast; tensor weight: the weight does.
+        torch_end = torch.randn((shape[0], 1) if use_scalar_weight else shape, generator=generator)
+        weight = 0.5 if use_scalar_weight else torch.rand((shape[0], 1), generator=generator)
+        dtype = ttnn.bfloat8_b
+    to_device = lambda t: ttnn.from_torch(t, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device)
+    return to_device(torch_input), to_device(torch_end), weight if use_scalar_weight else to_device(weight)
+
+
+# INT32 with a scalar weight is left out: its composite fails on its own (INT32 + FLOAT32 add).
+@pytest.mark.parametrize(
+    "fallback, use_scalar_weight",
+    [("int32", False), ("block_float_subtile_bcast", True), ("block_float_subtile_bcast", False)],
+)
+def test_lerp_fast_interpolate_fallback_warns(device, capfd, fallback, use_scalar_weight):
+    """The composite fallback ignores fast_interpolate with a warning and returns the default result."""
+    input_tensor, end_tensor, weight = _fallback_inputs(device, fallback, use_scalar_weight)
+
+    capfd.readouterr()
+    fast = ttnn.to_torch(ttnn.lerp(input_tensor, end_tensor, weight, fast_interpolate=True))
+    fast_log = "".join(capfd.readouterr())
+    default = ttnn.to_torch(ttnn.lerp(input_tensor, end_tensor, weight))
+    default_log = "".join(capfd.readouterr())
+
+    assert FALLBACK_WARNING in fast_log, "fast_interpolate=True on the fallback must log a warning"
+    assert FALLBACK_WARNING not in default_log, "fast_interpolate=False must not warn"
+    assert torch.equal(fast, default)
