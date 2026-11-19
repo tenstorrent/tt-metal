@@ -44,30 +44,33 @@ class TextConfig:
 
 @dataclass(frozen=True)
 class ActionConfig:
-    n_waypoints: int = 64
+    # Fields without defaults come from config.json; only values the checkpoint does not carry have defaults.
+    n_waypoints: int
+    fourier_feats: int
+    max_freq: float
+    in_proj_hidden: int
+    in_proj_layers: int
+    int_method: str
+    inference_guidance_weight: float
+    use_classifier_free_guidance: bool
+    dt: float
+    accel_mean: float
+    accel_std: float
+    accel_bounds: tuple
+    curvature_mean: float
+    curvature_std: float
+    curvature_bounds: tuple
+    a_lambda: float
+    a_ridge: float
+    kappa_lambda: float
+    kappa_ridge: float
+    theta_lambda: float
+    theta_ridge: float
+    v_lambda: float
+    v_ridge: float
+    slip_gradient: float
     action_dim: int = 2
-    fourier_feats: int = 20
-    max_freq: float = 100.0
-    in_proj_hidden: int = 512
-    in_proj_layers: int = 2
     steps: int = 10
-    int_method: str = "euler"
-    dt: float = 0.1
-    accel_mean: float = 0.0
-    accel_std: float = 1.0
-    accel_bounds: tuple = (-9.8, 9.8)
-    curvature_mean: float = 0.0
-    curvature_std: float = 1.0
-    curvature_bounds: tuple = (-0.33, 0.33)
-    a_lambda: float = 0.0
-    a_ridge: float = 0.0
-    kappa_lambda: float = 0.0
-    kappa_ridge: float = 0.0
-    theta_lambda: float = 0.0
-    theta_ridge: float = 0.0
-    v_lambda: float = 0.0
-    v_ridge: float = 0.0
-    slip_gradient: float = 0.0
 
 
 @dataclass(frozen=True)
@@ -104,7 +107,12 @@ class Alpamayo2EdgeConfig:
 def num_layers_override():
     """Depth limit shared by vision, LM and expert (LM == expert), for fast bring-up runs."""
     value = os.environ.get("ALPAMAYO_NUM_LAYERS")
-    return int(value) if value else None
+    if value is None or value == "":
+        return None
+    layers = int(value)
+    if layers < 1:
+        raise ValueError(f"ALPAMAYO_NUM_LAYERS must be >= 1, got {layers}")
+    return layers
 
 
 def resolve_model_dir() -> Path:
@@ -143,6 +151,8 @@ def _action_config(raw: dict) -> ActionConfig:
         in_proj_hidden=in_proj["hidden_size"],
         in_proj_layers=in_proj["num_enc_layers"],
         int_method=expert["diffusion_cfg"]["int_method"],
+        inference_guidance_weight=expert["diffusion_cfg"]["inference_guidance_weight"],
+        use_classifier_free_guidance=expert["diffusion_cfg"]["use_classifier_free_guidance"],
         **space,
     )
 
@@ -160,9 +170,10 @@ def load_config(model_dir: Path) -> Alpamayo2EdgeConfig:
     ids = raw["traj_ids"]
 
     override = num_layers_override()
-    vision_layers = override or vis["num_hidden_layers"]
-    text_layers = override or llm["num_hidden_layers"]
-    expert_layers = override or expert_dims["num_hidden_layers"]
+    pick = lambda full: full if override is None else override
+    vision_layers = pick(vis["num_hidden_layers"])
+    text_layers = pick(llm["num_hidden_layers"])
+    expert_layers = pick(expert_dims["num_hidden_layers"])
 
     # The expert's llm_config is overridden by expert_update_cfg for the fields it lists.
     expert_raw = {**expert["llm_config"], **{k: v for k, v in expert_dims.items() if k != "num_hidden_layers"}}

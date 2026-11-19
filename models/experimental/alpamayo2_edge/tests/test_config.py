@@ -26,3 +26,29 @@ def test_num_layers_override(monkeypatch, model_dir):
     monkeypatch.setenv("ALPAMAYO_NUM_LAYERS", "2")
     c = load_config(model_dir)
     assert c.vision.layers == c.text.layers == c.expert.layers == 2
+
+
+def test_action_config_matches_checkpoint(cfg, model_dir):
+    import json
+
+    with open(model_dir / "config.json") as f:
+        expert = json.load(f)["expert_config"]
+    expected = {k: v for k, v in expert["action_space_cfg"].items() if k != "_target_"}
+    expected.update(
+        {
+            k: v
+            for k, v in expert["diffusion_cfg"].items()
+            if k in ("int_method", "inference_guidance_weight", "use_classifier_free_guidance")
+        }
+    )
+    in_proj = expert["action_in_proj_cfg"]
+    expected.update(
+        fourier_feats=in_proj["num_fourier_feats"],
+        max_freq=in_proj["max_freq"],
+        in_proj_hidden=in_proj["hidden_size"],
+        in_proj_layers=in_proj["num_enc_layers"],
+    )
+    for name, value in expected.items():
+        got = getattr(cfg.action, name)
+        assert got == (tuple(value) if isinstance(value, list) else value), name
+    assert cfg.action.steps == 10
