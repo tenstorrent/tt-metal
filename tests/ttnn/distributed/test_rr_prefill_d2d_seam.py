@@ -58,9 +58,13 @@ def _chunk() -> torch.Tensor:
     return (torch.arange(tokens * HIDDEN, dtype=torch.int32) * 7 + 3).reshape(1, 1, tokens, HIDDEN)
 
 
-def _submesh(mesh, rows):
-    lo, hi = rows
-    return mesh.create_submesh(ttnn.MeshShape(hi - lo, SIDE), offset=ttnn.MeshCoordinate(lo, 0))
+def _submesh(mesh, rows, cache):
+    """One submesh object per row block: a rank forwarding a drained tensor sends it on the same submesh it
+    received it on (the send op requires the input on the sender backing's own mesh object)."""
+    if rows not in cache:
+        lo, hi = rows
+        cache[rows] = mesh.create_submesh(ttnn.MeshShape(hi - lo, SIDE), offset=ttnn.MeshCoordinate(lo, 0))
+    return cache[rows]
 
 
 def _shard_mapper(sub):
@@ -129,9 +133,10 @@ def test_d2d_across_one_host_to_two_host_seams(mesh):
     inbound = LAYOUT.inbound_pairs(rank, SIDE)
     outbound = LAYOUT.outbound_pairs(rank, SIDE)
 
+    submeshes = {}
     receivers = []
     for pair in inbound:
-        sub = _submesh(mesh, pair.rows)
+        sub = _submesh(mesh, pair.rows, submeshes)
         service = ttnn.D2DStreamService.create_receiver(
             receiver_mesh=sub,
             sender_rank=pair.sender_rank,
@@ -142,7 +147,7 @@ def test_d2d_across_one_host_to_two_host_seams(mesh):
         receivers.append((pair, sub, service))
     senders = []
     for pair in outbound:
-        sub = _submesh(mesh, pair.rows)
+        sub = _submesh(mesh, pair.rows, submeshes)
         service = ttnn.D2DStreamService.create_sender(
             sender_mesh=sub,
             sender_rank=rank,
