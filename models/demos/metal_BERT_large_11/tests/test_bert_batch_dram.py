@@ -382,13 +382,13 @@ def test_bert_batch_dram_with_program_cache(
     )
 
     if "OP1_FUSED_QKV_MM_INPUT_SHARDED_MEMCFG" in model_config:
-        assert device.num_program_cache_entries() == 19
-    elif model_config_str == "BFLOAT8_B-SHARDED":
-        # A grid without 8 x batch cores runs the interleaved DRAM plan, whose ops follow the grid.
-        assert device.num_program_cache_entries() > 0
-    elif batch == 8 and model_config_str == "MIXED_PRECISION_BATCH8":
-        assert device.num_program_cache_entries() == 17
-    elif batch == 9 and model_config_str in {"BFLOAT8_B-L1", "BFLOAT8_B-DRAM"}:
-        assert device.num_program_cache_entries() == 17
+        expected_programs = 19
+    elif model_config_str == "MIXED_PRECISION_BATCH8" or model_config_str.startswith("BFLOAT8_B"):
+        # BFLOAT8_B-SHARDED lands here on a grid without 8 x batch cores, which runs BFLOAT8_B-DRAM.
+        expected_programs = 17
     else:
-        assert device.num_program_cache_entries() == 16
+        expected_programs = 16
+    if batch > device.compute_with_storage_grid_size().y:
+        # Without a core row per image, FF1 applies its GELU as a separate op.
+        expected_programs += 1
+    assert device.num_program_cache_entries() == expected_programs
