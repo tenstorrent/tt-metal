@@ -91,15 +91,23 @@ PYTESTS = {
             "1200",
         ],
     },
-    # fabric_all_gather_matmul_galaxy: all-gather fused with a matmul over the 2D
-    # torus fabric on the full (8, 4) mesh, back to back on one gathered buffer,
-    # every call checked on every device. The traffic is the fabric under compute
-    # load, which the gtest link tests (slow dispatch, idle compute) do not give.
-    # One TP-ring (4) and one SP-ring (8) case.
+    # fabric_all_gather_matmul_galaxy: all-gather fused with a matmul on the full
+    # (8, 4) mesh, each call checked on every device, along each axis in turn:
+    # the TP line of 4 and the SP line of 8. The traffic is the fabric under
+    # compute load, which the gtest link tests (slow dispatch, idle compute) do
+    # not give. Only the plain 2D mesh fabric cases run: they need no wrap-around
+    # cables, so a healthy galaxy passes whatever its cabling (a torus case fails
+    # fabric init on a box without the torus cables).
     "fabric_all_gather_matmul_galaxy": {
         "target": "tests/ttnn/unit_tests/operations/ccl/blackhole_CI/galaxy/galaxy_nightly/"
-        "test_all_gather_minimal_matmul_fabric2d_bh.py::test_all_gather_minimal_matmul_fabric2d",
-        "args": ["-k", "kda_input_projection or sp_ring_8", "-s", "--timeout", "1200"],
+        "test_all_gather_minimal_matmul_fabric2d_bh.py",
+        "args": [
+            "-k",
+            "SP8xTP4-mesh and ((linear_tp and kda_input_projection) or linear_sp)",
+            "-s",
+            "--timeout",
+            "1200",
+        ],
     },
 }
 

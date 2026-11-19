@@ -245,8 +245,14 @@ def test_all_gather_minimal_matmul_fabric2d_linear_tp(mesh_device, case):
 
 
 @pytest.mark.parametrize(
-    "mesh_device, device_params", [_galaxy(ttnn.FabricConfig.FABRIC_2D_TORUS_X, "SP8xTP4-torus-x")], indirect=True
+    "mesh_device, device_params",
+    [
+        # The SP axis (0) is not wrapped on Torus X, nor on a plain 2D mesh.
+        _galaxy(ttnn.FabricConfig.FABRIC_2D_TORUS_X, "SP8xTP4-torus-x"),
+        _galaxy(ttnn.FabricConfig.FABRIC_2D, "SP8xTP4-mesh"),
+    ],
+    indirect=True,
 )
 def test_all_gather_minimal_matmul_fabric2d_linear_sp(mesh_device):
-    # The SP axis (0) of 8 as a line: Torus X does not wrap it.
+    # The SP axis (0) of 8 as a line.
     _run(mesh_device, **dict(_LINEAR, gather_axis=0, rows_per_device=320, n_per_device=11 * 20 * 32, N_block=20))

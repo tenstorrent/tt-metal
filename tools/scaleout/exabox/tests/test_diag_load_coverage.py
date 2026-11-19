@@ -9,6 +9,7 @@ after them."""
 
 from __future__ import annotations
 
+import ast
 import sys
 import unittest
 from pathlib import Path
@@ -55,6 +56,45 @@ class TestWeeklyTier(unittest.TestCase):
     def test_fabric_test_exists_in_tree(self):
         target = PYTESTS["fabric_all_gather_matmul_galaxy"]["target"].split("::")[0]
         self.assertTrue((SUITE_DIR.parents[3] / target).is_file(), target)
+
+
+def _galaxy_params(path: Path) -> dict[str, set[tuple[str, str]]]:
+    """Each test function in ``path`` -> its ``_galaxy(ttnn.FabricConfig.X, "id")`` params as (X, id)."""
+    params = {}
+    for node in ast.parse(path.read_text()).body:
+        if isinstance(node, ast.FunctionDef):
+            params[node.name] = {
+                (call.args[0].attr, call.args[1].value)
+                for deco in node.decorator_list
+                for call in ast.walk(deco)
+                if isinstance(call, ast.Call) and getattr(call.func, "id", "") == "_galaxy"
+            }
+    return params
+
+
+class TestFabricStepCabling(unittest.TestCase):
+    """The fabric step selects only plain 2D mesh cases: a torus case asserts in
+    fabric init on a galaxy without the torus cables, a false FAIL on healthy hardware."""
+
+    SPEC = PYTESTS["fabric_all_gather_matmul_galaxy"]
+    MESH_ID = "SP8xTP4-mesh"
+
+    def _k(self) -> str:
+        return self.SPEC["args"][self.SPEC["args"].index("-k") + 1]
+
+    def test_selection_requires_the_mesh_id(self):
+        self.assertTrue(self._k().startswith(f"{self.MESH_ID} and ("), self._k())
+
+    def test_mesh_id_is_only_ever_the_plain_2d_fabric(self):
+        params = _galaxy_params(SUITE_DIR.parents[3] / self.SPEC["target"])
+        configs = {cfg for p in params.values() for cfg, pid in p if pid == self.MESH_ID}
+        self.assertEqual(configs, {"FABRIC_2D"})
+
+    def test_both_axes_have_a_mesh_case(self):
+        params = _galaxy_params(SUITE_DIR.parents[3] / self.SPEC["target"])
+        for axis in ("linear_tp", "linear_sp"):
+            self.assertIn(("FABRIC_2D", self.MESH_ID), params[f"test_all_gather_minimal_matmul_fabric2d_{axis}"], axis)
+            self.assertIn(axis, self._k())
 
 
 class TestHscJudgement(unittest.TestCase):
@@ -120,6 +160,43 @@ class TestPcieRecount(unittest.TestCase):
         self.assertEqual(check.status, FAIL)
         self.assertEqual(check.name, "pcie_enum_count_after_tests")
         self.assertEqual(len(check.data["missing_bdfs"]), 1)
+
+    def test_recount_uses_the_fresh_snapshot(self):
+        from diag_runner import recount_after_tests
+
+        check = recount_after_tests(lambda: {"device_info": self._devs(24)})
+        self.assertEqual((check.name, check.status), ("pcie_enum_count_after_tests", FAIL))
+        self.assertEqual(len(check.data["missing_bdfs"]), 8)
+
+    def test_unreadable_chip_fails_with_one_line_reason(self):
+        from diag_runner import recount_after_tests
+
+        err = (
+            "tt-smi -f failed (rc=1): \x1b[91m Error in detecting devices!\n"
+            "Read 0xffffffff over PCIe ID 24: the board should be reset.\n"
+            "Location: /project/device/tt_device/tt_device.cpp:272\n"
+            " 1. /opt/tt-smi/.venv/lib/python3.10/site-packages/tt_umd/tt_umd.so(+0x101343) [0x7d38b3301343]\n"
+            " 2. tt::umd::TTDevice::init_tt_device()\n\x1b[0m"
+        )
+
+        def snapshot():
+            raise RuntimeError(err)
+
+        check = recount_after_tests(snapshot)
+        self.assertEqual((check.name, check.status), ("pcie_enum_count_after_tests", FAIL))
+        self.assertEqual(
+            check.details,
+            "no snapshot after the tests: tt-smi -f failed (rc=1):  Error in detecting devices!; "
+            "Read 0xffffffff over PCIe ID 24: the board should be reset.",
+        )
+
+    def test_missing_tt_smi_fails_instead_of_raising(self):
+        from diag_runner import recount_after_tests
+
+        def snapshot():
+            raise FileNotFoundError("tt-smi not found")
+
+        self.assertEqual(recount_after_tests(snapshot).status, FAIL)
 
 
 if __name__ == "__main__":
