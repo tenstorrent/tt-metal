@@ -76,8 +76,8 @@ Reading read_all(MetalContext& ctx, ChipId chip, const DeviceState& st) {
     reading.values.reserve(plan.reading_size());
     reading.time = std::chrono::steady_clock::now();
     std::vector<uint32_t> block(plan.l1_bytes / sizeof(uint32_t));
-    for (size_t c = 0; c < st.cores.size(); c++) {
-        const tt_cxy_pair core(chip, st.cores[c].first, st.cores[c].second);
+    for (const auto& [x, y] : st.cores) {
+        const tt_cxy_pair core(chip, x, y);
         if (!block.empty()) {
             ctx.get_cluster().read_core(block.data(), plan.l1_bytes, core, plan.l1_base);
         }
