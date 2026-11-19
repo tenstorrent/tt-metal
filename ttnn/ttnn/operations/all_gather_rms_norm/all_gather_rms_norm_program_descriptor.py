@@ -221,7 +221,17 @@ def out_unit(pitch: int) -> int:
     return min(pitch, OUT_UNIT_CAP)
 
 
-def cb_plan(sz: Sizes, k: int, pitch: int, rows: int, n_affine_slots: int, dense=None) -> dict:
+def out_unit_candidates(pitch: int):
+    """Writer batch (cb_out unit) from the cap down: the largest that fits L1 is used."""
+    u = out_unit(pitch)
+    while True:
+        yield u
+        if u == 1:
+            return
+        u = max(1, u // 2)
+
+
+def cb_plan(sz: Sizes, k: int, pitch: int, rows: int, n_affine_slots: int, dense=None, unit=None) -> dict:
     """{cb: (pages, page_bytes)} of the compute cores (cb_x included)."""
     n_stat = 2 if sz.is_ln else 1
     plan = {
@@ -230,7 +240,7 @@ def cb_plan(sz: Sizes, k: int, pitch: int, rows: int, n_affine_slots: int, dense
         CB_MOMENT_A: (rows, sz.T_acc),
         CB_PARTIAL: (n_stat * rows, sz.T_acc),
         CB_ROWSTAT: (rows, sz.T_acc),
-        CB_OUT: (OUT_DEPTH * out_unit(pitch), sz.T_out),
+        CB_OUT: (OUT_DEPTH * (unit or out_unit(pitch)), sz.T_out),
     }
     if k > 1:
         plan[CB_GATHERED] = (n_stat * k * rows, sz.T_acc)
@@ -308,7 +318,10 @@ def select_split(geo: Geometry, N: int, fits_fn) -> Split:
 
     fitting = [k for k in cands if groups(k) >= 1 and fits_fn(k, rows(k))]
     if not fitting:
-        raise RuntimeError("all_gather_rms_norm: no member split fits L1 (credited streaming regime is deferred)")
+        raise RuntimeError(
+            f"all_gather_rms_norm: no member split fits L1 (credited streaming regime is deferred): candidates "
+            f"{cands}, {getattr(fits_fn, 'report', lambda: '')()}"
+        )
     if geo.G * geo.sw < 2 * OCC_TILES_PER_MEMBER:
         k = min(fitting)
     else:
@@ -556,11 +569,22 @@ def create_mesh_program_descriptor(input_tensor, gamma, beta, output_tensor, cfg
     stage_pages = 2 * PORT_BATCH_CHUNKS * chunk_pages
     budget = cb_l1_budget(mesh)
 
+    fit_log = []
+    fit_unit = {}
+
     def fits(k, rows):
         mm = member_map(k, geo)
-        cplan = cb_plan(sz, k, mm.pitch, rows, n_affine_slots(mm, geo), dense_plan(geo, mm) if dense else None)
+        dpk = dense_plan(geo, mm) if dense else None
         port_bytes = rows * mm.pitch * sz.T_in + stage_pages * tile_bytes
-        return plan_bytes(cplan) <= budget and port_bytes <= budget
+        for u in out_unit_candidates(mm.pitch):
+            cbytes = plan_bytes(cb_plan(sz, k, mm.pitch, rows, n_affine_slots(mm, geo), dpk, u))
+            if cbytes <= budget and port_bytes <= budget:
+                fit_unit[k] = u
+                return True
+        fit_log.append((k, rows, cbytes, port_bytes))
+        return False
+
+    fits.report = lambda: f"budget {budget} B, (k, rows, compute B, port B): {fit_log}"
 
     split = select_split(geo, N, fits)
     k, mm, pitch, rows_max = split.k, split.mm, split.mm.pitch, split.rows_max
@@ -578,7 +602,8 @@ def create_mesh_program_descriptor(input_tensor, gamma, beta, output_tensor, cfg
 
     # ---- per-chip expected landings + own signalling ----
     dp = dense_plan(geo, mm) if dense else None
-    cplan = cb_plan(sz, k, pitch, rows_max, n_affine_slots(mm, geo), dp)
+    unit = fit_unit[k]
+    cplan = cb_plan(sz, k, pitch, rows_max, n_affine_slots(mm, geo), dp, unit)
     n_stat = 2 if cfg.is_ln else 1
     t_acc = acc_dtype(fp32_dest)
     cb_dtype = {
@@ -647,7 +672,6 @@ def create_mesh_program_descriptor(input_tensor, gamma, beta, output_tensor, cfg
     g_elem = _datum_bytes(g_dtype)
     g_is_tile = 1 if (has_gamma and gamma.layout == ttnn.TILE_LAYOUT) else 0
     g_page = gamma.buffer_aligned_page_size() if has_gamma else 0
-    unit = out_unit(pitch)
 
     reader_ct = [tile_bytes, pitch, geo.sw, geo.v, x_elem, SEM_LANDED, SEM_OWN_LOADED] + list(x_acc)
 
