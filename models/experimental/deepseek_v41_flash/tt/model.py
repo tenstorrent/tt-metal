@@ -214,6 +214,15 @@ class SessionSnapshot:
     entries: dict[int, tuple[torch.Tensor, torch.Tensor]]
     engram: Optional[torch.Tensor]
 
+    @property
+    def nbytes(self) -> int:
+        """Host RAM the snapshot holds (the server's host tier counts it against ``--host-cache-gb``)."""
+        tensors = [*self.rings.values()]
+        tensors += [t for pair in (*self.windows.values(), *self.entries.values()) for t in pair]
+        if self.engram is not None:
+            tensors.append(self.engram)
+        return sum(t.numel() * t.element_size() for t in tensors)
+
 
 @dataclass(eq=False)
 class DeviceParkedSnapshot:
@@ -227,8 +236,9 @@ class DeviceParkedSnapshot:
 
     @property
     def nbytes(self) -> int:
+        """Host RAM the snapshot holds: its slot-local state (its KV blocks stay in device RAM)."""
         tensors = [*self.rings.values()]
-        tensors += [t for pair in (*self.windows.values(), *self.entries.values()) for t in pair]
+        tensors += [t for pair in self.windows.values() for t in pair]
         if self.engram is not None:
             tensors.append(self.engram)
         return sum(t.numel() * t.element_size() for t in tensors)
@@ -844,7 +854,9 @@ class DeepSeekV41Model(DeepSeekV4Model):
             for r in sorted(ratios)
         }
         groups = {g.layer_type: g for g in self._paged_ratios.values()}
-        self._pool_blocks = plan_pool_blocks(groups, num_sessions, total_tokens)
+        # Uncapped: a conversation parked in device RAM (export_device_park) keeps its blocks with no page-table
+        # row, so the pool can usefully hold more than the open sessions can address.
+        self._pool_blocks = plan_pool_blocks(groups, num_sessions, total_tokens, cap_to_sessions=False)
         self._paged = PagedKVManager(groups, self._pool_blocks)
         self._slot_of = {}
         self._session_pos = {}
