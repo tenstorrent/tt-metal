@@ -111,6 +111,13 @@ void resolve_dense_recipe(SDPAParams& attrs, const SDPAInputs& tensors) {
     const auto& qs = q.padded_shape();
     const uint32_t out_head_dim = call.options.head_dim_v ? call.options.head_dim_v : qs[3];
     const Tensor& v = call.segments.front()[2];
+    if (attrs.program_config &&
+        (attrs.program_config->q_chunk_size > 1024 || attrs.program_config->q_chunk_size % 32 != 0 ||
+         attrs.program_config->k_chunk_size % 32 != 0)) {
+        // Chunk sizes the recipe kernels cannot run (tuned for the legacy kernels) are left to the op.
+        attrs.program_config->q_chunk_size = 0;
+        attrs.program_config->k_chunk_size = 0;
+    }
     attrs.program_config = resolve_dense_recipe_blocking(
         policy,
         q,

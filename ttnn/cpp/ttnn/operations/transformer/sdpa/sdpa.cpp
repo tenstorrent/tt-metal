@@ -9,6 +9,7 @@
 #include "ttnn/operations/transformer/sdpa/sdpa.hpp"
 
 #include "ttnn/operations/eltwise/binary/binary.hpp"
+#include "ttnn/operations/copy/typecast/typecast.hpp"
 #include "ttnn/operations/ccl/ccl_common.hpp"
 #include "ttnn/operations/transformer/sdpa/device/sdpa_device_operation.hpp"
 #include "ttnn/operations/transformer/sdpa/device/joint_sdpa_device_operation.hpp"
@@ -101,7 +102,16 @@ ttnn::Tensor scaled_dot_product_attention(
         const float effective_scale =
             scale.value_or(1.0f / std::sqrt(static_cast<float>(input_tensor_q.padded_shape()[-1])));
         if (effective_scale != 1.0f) {
-            effective_mask = ttnn::multiply(attn_mask.value(), 1.0f / effective_scale);
+            // The FP32-state recipes (BALANCED, ACCURATE) add the mask to FP32 scores: unless 1/scale is a power of
+            // two (exact in the mask's own format), pre-scale in FP32.
+            int exponent = 0;
+            const bool exact = std::frexp(1.0f / effective_scale, &exponent) == 0.5f;
+            const bool fp32_state =
+                precision == SDPAPrecision::BALANCED || precision == SDPAPrecision::ACCURATE;
+            const auto& source = (fp32_state && !exact && attn_mask->dtype() != DataType::FLOAT32)
+                                     ? ttnn::typecast(attn_mask.value(), DataType::FLOAT32)
+                                     : attn_mask.value();
+            effective_mask = ttnn::multiply(source, 1.0f / effective_scale);
         }
     }
 
