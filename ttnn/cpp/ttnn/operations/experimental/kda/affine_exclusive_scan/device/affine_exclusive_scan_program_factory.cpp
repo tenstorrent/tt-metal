@@ -57,6 +57,7 @@ ttnn::device_operation::MeshWorkloadArtifacts AffineExclusiveScanProgramFactory:
     const tt::tt_metal::DFBSpecName tail_affine_dfb_name{"tail_affine"};
     const tt::tt_metal::DFBSpecName tail_entry_states_dfb_name{"tail_entry_states"};
     const tt::tt_metal::DFBSpecName reset_b_dfb_name{"reset_b"};
+    const tt::tt_metal::DFBSpecName identity_dfb_name{"identity"};
 
     const tt::tt_metal::SemaphoreSpecName ready_semaphore_name{"ready"};
     const tt::tt_metal::SemaphoreSpecName arrival_semaphore_name{"arrival"};
@@ -90,6 +91,8 @@ ttnn::device_operation::MeshWorkloadArtifacts AffineExclusiveScanProgramFactory:
         make_dfb(tail_affine_dfb_name, segmented_affine_tiles, summary_format),
         make_dfb(tail_entry_states_dfb_name, state_matrix_tiles, tt::DataFormat::Float32),
         make_dfb(reset_b_dfb_name, state_matrix_tiles, tt::DataFormat::Float32),
+        // The FP32 identity tile compute adds on diagonal tiles to form A = E + I, seeded by the dataflow kernel.
+        make_dfb(identity_dfb_name, 1, tt::DataFormat::Float32),
     };
     // Initial inputs/state and final output are one-shot transfers. TO_REMOTE stays single-slot because dataflow
     // releases the current block before the remote input that makes compute runnable.
@@ -126,6 +129,7 @@ ttnn::device_operation::MeshWorkloadArtifacts AffineExclusiveScanProgramFactory:
                 tt::tt_metal::DFBBinding{final_dfb_name, "final", tt::tt_metal::DFBEndpointType::CONSUMER},
                 tt::tt_metal::ProducerOf(tail_affine_dfb_name, "tail_affine"),
                 tt::tt_metal::ProducerOf(tail_entry_states_dfb_name, "tail_entry_states"),
+                tt::tt_metal::ProducerOf(identity_dfb_name, "identity"),
             },
         .semaphore_bindings =
             {
@@ -161,6 +165,8 @@ ttnn::device_operation::MeshWorkloadArtifacts AffineExclusiveScanProgramFactory:
           reset_b_dfb_name}) {
         unpack_modes[name] = tt::tt_metal::UnpackMode::UnpackToSrc;
     }
+    // The identity enters DST losslessly for the FP32 addition.
+    unpack_modes[identity_dfb_name] = tt::tt_metal::UnpackMode::UnpackToDest;
     if (summary_format == tt::DataFormat::Float32) {
         unpack_modes[initial_a_dfb_name] = tt::tt_metal::UnpackMode::UnpackToSrc;
         unpack_modes[initial_b_dfb_name] = tt::tt_metal::UnpackMode::UnpackToSrc;
@@ -190,6 +196,7 @@ ttnn::device_operation::MeshWorkloadArtifacts AffineExclusiveScanProgramFactory:
                 tt::tt_metal::ConsumerOf(tail_entry_states_dfb_name, "tail_entry_states"),
                 tt::tt_metal::ProducerOf(reset_b_dfb_name, "reset_b"),
                 tt::tt_metal::ConsumerOf(reset_b_dfb_name, "reset_b"),
+                tt::tt_metal::ConsumerOf(identity_dfb_name, "identity"),
             },
         .compile_time_args = {{"Kt", key_tiles}, {"Vt", value_tiles}, {"G", groups_per_head}},
         .runtime_arg_schema = {.runtime_arg_names = {"group"}},

@@ -379,27 +379,26 @@ void kernel_main() {
         has_logical_length_tensor ? logical_l_args.next_compile_time_args_offset() : post_meta_args_offset;
 
     const ring_joint::LocalNGeometry local_n =
-        dynamic_local_n
-            ? ring_joint::derive_local_n_geometry(
-                  get_common_arg_val<uint32_t>(ring_joint::dynamic_local_n_reader_common_arg(
-                      has_joint_inputs,
-                      has_gathered_joint_k,
-                      slot_from_metadata,
-                      has_logical_length_tensor,
-                      has_kv_valid_end)),
-                  Sq_chunk_t,
-                  Sk_chunk_t,
-                  kv_stripe_split,
-                  ring_size,
-                  num_joint_q_chunks)
-            : ring_joint::LocalNGeometry{
-                  q_local_padded_Nt_ct,
-                  kv_local_padded_Nt_ct,
-                  num_local_q_chunks_ct,
-                  num_local_k_chunks_ct,
-                  num_q_chunks_ct,
-                  kv_region_Nt_ct,
-                  chunk_size_t_ct};
+        dynamic_local_n ? ring_joint::derive_local_n_geometry(
+                              get_common_arg_val<uint32_t>(ring_joint::dynamic_local_n_reader_common_arg(
+                                  has_joint_inputs,
+                                  has_gathered_joint_k,
+                                  slot_from_metadata,
+                                  has_logical_length_tensor,
+                                  has_kv_valid_end)),
+                              Sq_chunk_t,
+                              Sk_chunk_t,
+                              kv_stripe_split,
+                              ring_size,
+                              num_joint_q_chunks)
+                        : ring_joint::LocalNGeometry{
+                              q_local_padded_Nt_ct,
+                              kv_local_padded_Nt_ct,
+                              num_local_q_chunks_ct,
+                              num_local_k_chunks_ct,
+                              num_q_chunks_ct,
+                              kv_region_Nt_ct,
+                              chunk_size_t_ct};
     const uint32_t q_local_padded_Nt = local_n.q_local_padded_Nt;
     const uint32_t kv_local_padded_Nt = local_n.kv_local_padded_Nt;
     const uint32_t num_local_q_chunks = local_n.num_local_q_chunks;
@@ -1373,7 +1372,7 @@ void kernel_main() {
                 // Forward K chunk via chain (uses K's data size explicitly)
                 if constexpr (!has_sliding_window) {
                     if (k_chain.should_forward(k_chain_head, q_iter_local)) {
-                        k_chain.forward(noc, cb_k_start_address, k_chunk_tiles, k_tile_bytes);
+                        k_chain.forward(noc, cb_k, k_chunk_tiles, k_tile_bytes);
                     }
                 }
 
@@ -1521,7 +1520,7 @@ void kernel_main() {
                     // popping the buffer while the mcast is still reading from it.
                     if constexpr (!has_sliding_window) {
                         if (v_chain.should_forward(nv, q_iter_local)) {
-                            v_chain.forward(noc, cb_v_start_address);
+                            v_chain.forward(noc, cb_v);
                         }
                     }
 
