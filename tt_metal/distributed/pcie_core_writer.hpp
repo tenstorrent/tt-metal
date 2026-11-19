@@ -12,9 +12,19 @@
 namespace tt::umd {
 class Cluster;
 class IoWindow;
+struct CoreCoord;
 }  // namespace tt::umd
 
 namespace tt::tt_metal::distributed {
+
+// A write-only window into core's address space from addr, or null when no TLB is free or the window ends before
+// addr + size. It posts its writes on a static write VC. A Strict window would wait for each write's ack, one write
+// per round trip (about 0.4 us per 128 B page into a DRAM core; the strict MMIO rate into Tensix L1, #64622). Posted
+// writes are ordered only by the VC: a packet on a dynamic VC may switch VCs at each router (and a DRAM core gives
+// each VC its own AXI ID), so a later write could overtake an earlier one; on one static VC, writes to the core arrive
+// in issue order.
+std::unique_ptr<tt::umd::IoWindow> create_posted_window(
+    tt::umd::Cluster& cluster, int chip_id, const tt::umd::CoreCoord& core, uint64_t addr, uint64_t size);
 
 /**
  * Lightweight UMD-only device access for cross-process socket connectors.
@@ -47,15 +57,16 @@ public:
     bool writes_through_window() const { return window_ != nullptr; }
 
 private:
-    static tt::umd::Cluster* get_or_create_cluster();
+    static std::shared_ptr<tt::umd::Cluster> get_or_create_cluster();
 
     static std::mutex cluster_mutex_;
-    static std::unique_ptr<tt::umd::Cluster> shared_cluster_;
+    static std::shared_ptr<tt::umd::Cluster> shared_cluster_;
 
+    // Shared so the cluster outlives window_, even past static destruction.
+    std::shared_ptr<tt::umd::Cluster> cluster_;
     uint32_t device_id_ = 0;
     uint32_t virtual_core_x_ = 0;
     uint32_t virtual_core_y_ = 0;
-    // Must not outlive shared_cluster_, which lives until the process exits.
     std::unique_ptr<tt::umd::IoWindow> window_;
 };
 
