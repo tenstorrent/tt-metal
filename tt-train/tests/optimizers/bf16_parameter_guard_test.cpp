@@ -243,6 +243,31 @@ TEST_F(Fp32GradientIntoBf16OptimizerTest, ZeroGradTwiceBetweenStepsStillUpdatesT
     }
 }
 
+// A parameter frozen after zero_grad() is not trained any more. Freezing drops its gradient, and step() must not give
+// it a zero one: momentum and weight decay would keep moving it, since zero_grad() leaves a frozen parameter alone.
+TEST_F(Fp32GradientIntoBf16OptimizerTest, AParameterFrozenAfterZeroGradIsLeftAlone) {
+    auto *device = &autograd::ctx().get_device();
+    const auto grad = core::from_xtensor(test_utils::make_uniform_xarray<float>(kShape, -1.0F, 1.0F, 15U), device);
+    for (const auto &[name, make_optimizer] : optimizers_updating_without_a_gradient()) {
+        SCOPED_TRACE(name);
+        const auto parameters = parameter_with_grad(grad);
+        const auto &theta = parameters.at("theta");
+        auto optimizer = make_optimizer(parameters);
+        optimizer->step();  // builds the state that would move the parameter without a gradient
+
+        optimizer->zero_grad();
+        theta->set_requires_grad(false);
+        const auto frozen = core::to_xtensor(theta->get_value());
+        for (int step = 0; step < 2; ++step) {
+            SCOPED_TRACE(fmt::format("step {} after freezing", step));
+            optimizer->step();
+            EXPECT_FALSE(theta->is_grad_initialized());
+            EXPECT_EQ(test_utils::count_bit_mismatches(frozen, core::to_xtensor(theta->get_value())), 0U);
+            optimizer->zero_grad();
+        }
+    }
+}
+
 // The AdamW family's zero_grad drops the gradients too, through the same loop, and its step leaves a parameter without
 // a gradient alone: no zero gradient is put back for it.
 TEST_F(Fp32GradientIntoBf16OptimizerTest, TheAdamWFamilyDropsGradientsAndSkipsAParameterWithoutOne) {
