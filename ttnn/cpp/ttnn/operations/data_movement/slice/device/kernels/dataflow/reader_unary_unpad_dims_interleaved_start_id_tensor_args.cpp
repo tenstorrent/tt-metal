@@ -27,7 +27,6 @@ void kernel_main() {
 
     // Create objects for Device 2.0 API
     DataflowBuffer dfb_in0(dfb::in);
-    DataflowBuffer dfb_tensor(dfb::tensor);
     Noc noc;
 
     // Get tile size from the DFB entry size
@@ -41,39 +40,29 @@ void kernel_main() {
     uint32_t start_indices[num_dims];
     [[maybe_unused]] uint32_t end_indices[num_dims];
 
-    // Read start tensor data using a separate staging dataflow buffer
-    dfb_tensor.reserve_back(1);
-    uint32_t start_buffer_l1_addr = dfb_tensor.get_write_ptr();
-    noc.async_read(start_tensor_accessor, dfb_tensor, tile_size, {.page_id = 0}, {.offset_bytes = 0});
+    // Staging region the start and end tensors are read into, one after the other.
+    Scratchpad<volatile uint32_t> staging(scratch::tensor);
+
+    // Read start tensor data into the staging region
+    noc.async_read(start_tensor_accessor, staging, tile_size, {.page_id = 0}, {.offset_bytes = 0});
     noc.async_read_barrier();
-    // Complete the producer/consumer handshake (reserve -> push -> wait -> pop) so the scratch buffer
-    // is left balanced after this single-tile staging read.
-    dfb_tensor.push_back(1);
-    dfb_tensor.wait_front(1);
-
-    volatile tt_l1_ptr uint32_t* start_data = (volatile tt_l1_ptr uint32_t*)start_buffer_l1_addr;
-
-    for (uint32_t i = 0; i < num_dims; i++) {
-        start_indices[i] = start_data[i];
+    {
+        // Read the indices under a lock, which discards any cached copy, so the reads see what the NoC just wrote.
+        auto staging_lock = staging.scoped_lock(0, num_dims);
+        for (uint32_t i = 0; i < num_dims; i++) {
+            start_indices[i] = staging[i];
+        }
     }
-    dfb_tensor.pop_front(1);
 
-    // Read end tensor data using a separate staging dataflow buffer
-    dfb_tensor.reserve_back(1);
-    uint32_t end_buffer_l1_addr = dfb_tensor.get_write_ptr();
-    noc.async_read(end_tensor_accessor, dfb_tensor, tile_size, {.page_id = 0}, {.offset_bytes = 0});
+    // Read end tensor data into the staging region
+    noc.async_read(end_tensor_accessor, staging, tile_size, {.page_id = 0}, {.offset_bytes = 0});
     noc.async_read_barrier();
-    // Complete the producer/consumer handshake (reserve -> push -> wait -> pop) so the scratch buffer
-    // is left balanced after this single-tile staging read.
-    dfb_tensor.push_back(1);
-    dfb_tensor.wait_front(1);
-
-    volatile tt_l1_ptr uint32_t* end_data = (volatile tt_l1_ptr uint32_t*)end_buffer_l1_addr;
-
-    for (uint32_t i = 0; i < num_dims; i++) {
-        end_indices[i] = end_data[i];
+    {
+        auto staging_lock = staging.scoped_lock(0, num_dims);
+        for (uint32_t i = 0; i < num_dims; i++) {
+            end_indices[i] = staging[i];
+        }
     }
-    dfb_tensor.pop_front(1);
 
     uint32_t start_offset = 0;
 
@@ -103,6 +92,11 @@ void kernel_main() {
     // the host's starting position for this core (the per-core vararg block) and then mutated in
     // place, so it needs writable storage of its own; vararg values are read-only.
     Scratchpad<uint32_t> id_per_dim(scratch::id_per_dim);
+    // Keep every CPU access to the odometer inside a scoped_lock. On Quasar DM the scratchpad is reached
+    // through the DM caches: the lock drops any old lines on entry and writes the counters back on exit, so
+    // no dirty line outlives this program (a later program's flush or an eviction would otherwise write it
+    // over whatever buffer then sits at this address). No-op on WH/BH.
+    const auto id_per_dim_lock = id_per_dim.scoped_lock(0, num_dims);
     for (uint32_t j = 0; j < num_dims; ++j) {
         id_per_dim[j] = get_vararg(j);
     }
