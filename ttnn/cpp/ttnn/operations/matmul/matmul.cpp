@@ -235,6 +235,15 @@ static ttnn::Tensor bound_matmul(
             input_tensor_b.logical_shape());
     }
 
+    // A post-processed bias is added after the product has been written into the output, so a shared buffer
+    // would add the product twice.
+    if (optional_output_tensor.has_value() && bias.has_value() && optional_output_tensor->is_allocated() &&
+        bias->is_allocated()) {
+        TT_FATAL(
+            optional_output_tensor->buffer() != bias->buffer(),
+            "linear: optional_output_tensor must not alias the bias buffer");
+    }
+
     if (input_tensor_a.is_sharded() || input_tensor_b.is_sharded()) {
         TT_FATAL(
             !parameters.user_fused_activation.has_value(),
