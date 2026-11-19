@@ -592,7 +592,10 @@ Tensor unchecked_reinterpret_layout(const Tensor& input_tensor, Layout target_la
         return Tensor(host_tensor_from_buffer_with_topology(input_tensor.host_tensor().buffer(), new_spec, topology));
     }
 
-    auto new_mesh_buffer = create_view_buffer(input_tensor, new_spec);
+    // shards_from_spec: the source's config describes its own pages (tiles vs. rows), which the new layout splits
+    // differently, so keeping it would give a page size that doesn't match the spec. Building it from the spec is safe
+    // because a reinterpretation leaves every shard on the same node with the same shape.
+    auto new_mesh_buffer = create_view_buffer(input_tensor, new_spec, /*shards_from_spec=*/true);
 
     MeshTensor reinterpreted = mesh_tensor_from_buffer_with_topology(std::move(*new_mesh_buffer), new_spec, topology);
     DeviceStorage reinterpreted_storage(input_tensor.device_storage(), std::move(reinterpreted));
