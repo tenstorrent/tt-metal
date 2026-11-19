@@ -434,5 +434,10 @@ def get_tt_cache_path(model_version):
 
 
 def skip_unsupported_config(device, model_config_str, batch):
-    if device.arch() == ttnn.device.Arch.WORMHOLE_B0 and model_config_str != "BFLOAT8_B-SHARDED":
+    if device.arch() != ttnn.device.Arch.WORMHOLE_B0:
+        return
+    if model_config_str != "BFLOAT8_B-SHARDED":
         pytest.skip("Only BFLOAT8_B-SHARDED supported for WH B0")
+    # The DRAM fallback for a grid without 8 x batch cores has not been verified on Wormhole.
+    if grid.sharded_grid(batch, device.compute_with_storage_grid_size()) is None:
+        pytest.skip("Unsupported grid size for sharded test")
