@@ -12,6 +12,9 @@ alive through replay and must not be shared by concurrently executing models.
 
 import copy
 
+from ttnn.operations.qwen_mlp import qwen_mlp_partial
+from ttnn.operations.qwen_mlp.program_descriptor import BLOCK_CONFIGS
+
 import ttnn
 from models.common.tt_ccl import TT_CCL
 from models.demos.qwen38_27b_qb2.tt.decode_conv import make_actual_start
@@ -99,6 +102,7 @@ class Qwen38TPDecoder(Qwen38Decoder):
             num_links=2,
             ring=True,
             packed_mlp=True,
+            qwen_mlp_op=True,
             packed_decode_conv=True,
             persistent_ccl=True,
             direct_allreduce=True,
@@ -271,11 +275,24 @@ class Qwen38TPDecoder(Qwen38Decoder):
                     for g, u in zip(gate, up)
                 ],
             )
+        if self.policy["qwen_mlp_op"]:
+            gate, up = split(state_dict["mlp.gate_proj.weight"]), split(state_dict["mlp.up_proj.weight"])
+            self.weights["mlp.interleaved_gate_up.weight"] = upload(
+                torch.cat(
+                    [
+                        torch.stack([g.T.reshape(5120, -1, 32), u.T.reshape(5120, -1, 32)], dim=2).reshape(5120, -1)
+                        for g, u in zip(gate, up)
+                    ],
+                    dim=1,
+                ),
+                self._weight_dtype("mlp.gate_proj.weight"),
+                dim=1,
+            )
         self.dram_weights = {}
         banks = mesh_device.dram_grid_size().x
         bank_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(banks - 1, 0))})
         for name, tensor in self.weights.items():
-            if len(tensor.shape) != 2:
+            if len(tensor.shape) != 2 or name == "mlp.interleaved_gate_up.weight":
                 continue
             source = padded_dram_sources.pop(name, tensor)
             k, n = source.shape
@@ -427,6 +444,25 @@ class Qwen38TPDecoder(Qwen38Decoder):
         return ttnn.DRAM_MEMORY_CONFIG
 
     def _finish(self, x, attention):
+        if (
+            self.policy["qwen_mlp_op"]
+            and not self.sharded_residual
+            and len(x.shape) == 3
+            and x.shape[0] == 1
+            and x.shape[1] in BLOCK_CONFIGS
+        ):
+            h = ttnn.add(x, attention, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            partial = qwen_mlp_partial(
+                ttnn.reshape(h, [x.shape[1], 5120]),
+                self.weights["post_attention_layernorm.weight"],
+                self.weights["mlp.interleaved_gate_up.weight"],
+                self.weights["mlp.down_proj.weight"],
+            )
+            return ttnn.add(
+                h,
+                self._sum_across_chips(ttnn.reshape(partial, [1, x.shape[1], 5120])),
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
         if not (self.sharded_residual and self.policy.get("sharded_l1", False) and tuple(x.shape)[:2] == (1, 1)):
             return super()._finish(x, attention)
         memory = ttnn.L1_MEMORY_CONFIG
@@ -640,6 +676,10 @@ class Qwen38TPDecoder(Qwen38Decoder):
             if len(shape) == 3:
                 return self._public_rows(reduced, batch, 5120, keep_sharded=keep_sharded)
             return reduced
+        return self._sum_across_chips(output)
+
+    def _sum_across_chips(self, output):
+        shape = list(output.shape)
         collective_memory = self._collective_memory(output)
         output = ttnn.to_memory_config(output, collective_memory)
         output = ttnn.reshape(output, [1, *shape] if len(shape) == 3 else shape)
