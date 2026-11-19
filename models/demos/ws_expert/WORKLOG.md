@@ -1639,9 +1639,11 @@ speed-of-light ep4_targets.py.
   - layer in sequence: y min PCC 0.99987-0.99988 on every chip, two layers bit-identical. Per phase (ms, max over
     chips): head 0.92, exchange 0.12, dispatch 2.82, lists 0.52, experts 12.29, shared 1.61, combine 5.04, home 1.13;
     sum 24.45 (WS on this Galaxy at 302K: 22.10; EP-4 speed of light in sequence 11.6).
-- Combine: the fabric sends every partial for the opposite chip of the ring one way (its tie), so one direction's
-  ports send twice the rows of the other (chip 0: 4582 / 4588 vs 9175 / 9161 a port) and wait on the router most
-  (router-space wait 1.5-2.4 ms vs 0.8-1.0); the heavy direction carries about 3 p n rows a link pair against 2 p n
-  balanced. Splitting the opposite chip's partials over both directions needs a route other than the table's tie.
+- Combine: the fabric splits ring ties by the source's position on the axis (#63501: even E/N, odd W/S), so each X
+  link carries 2 p n partials (balanced: 70 MB a link at 302K, 2.8 ms at 25 GB/s). The limit is one port's fabric
+  connection: on the side that carries its own opposite-chip partials a port injects 2 p n / 2 rows (chip 0: 9175 /
+  9161 on X-, 4582 / 4588 on X+; chip 1 the other way) at about 16 GB/s (7.7-KB packets, a per-packet cost), 4.5 ms,
+  waiting on router space 1.5-2.4 ms. Larger packets (two partials a packet: scatter, payload >= 15360 B) or spreading
+  the injection over all four connections are the levers, not the routes.
 - Next on the critical path: G 4 (experts 12.3 -> about 6 ms; the Y lane's own experts forwarded without being
-  computed, or lanes split by direction), then the combine's direction balance (5.0 -> about 3.4 ms), then dispatch.
+  computed, or lanes split by direction), then the combine's per-connection rate (5.0 -> about 3.5 ms), then dispatch.

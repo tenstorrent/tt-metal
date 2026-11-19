@@ -53,6 +53,7 @@ class SCfg:
     fidelity: object = ttnn.MathFidelity.LoFi
     layout: str = "cols"  # "cols": rectangles of whole logical columns; "rows": of whole rows (4 a cluster, from row0)
     row0: int = 0
+    avoid: tuple = ()  # logical cores the clusters leave out (another program's, running at the same time)
 
     KT = property(lambda s: s.H // 32)
     HT = property(lambda s: s.H // 32)
@@ -73,9 +74,18 @@ def clusters(mesh, cfg: SCfg):
         # columns: the hub, the core with the largest NoC (x, y), starts its own; the others lie at smaller x, so
         # its NOC1 multicasts reach them without wrapping)
         h = -(-(cfg.GC + 1) // g.x)
+        bad = {yy for _, yy in cfg.avoid}  # (bands of whole rows: a row with an avoided core is skipped)
+        starts, y0 = [], cfg.row0
+        while y0 + h <= g.y and len(starts) < cfg.NCL:
+            if any(yy in bad for yy in range(y0, y0 + h)):
+                y0 += 1
+                continue
+            starts.append(y0)
+            y0 += h
+        assert len(starts) == cfg.NCL, f"{len(starts)} bands of {h} rows clear of {sorted(cfg.avoid)}"
         out = []
-        for c in range(cfg.NCL):
-            rect = [(x, y) for y in range(cfg.row0 + c * h, cfg.row0 + (c + 1) * h) for x in range(g.x)]
+        for ys in starts:
+            rect = [(x, y) for y in range(ys, ys + h) for x in range(g.x)]
             hub = max(rect, key=lambda cc: noc(mesh, *cc))
             act = [cc for cc in rect if cc != hub][: cfg.GC]
             out.append((rect, act, ([hub] + [cc for cc in rect if cc != hub and cc not in act])[: cfg.NF]))
@@ -84,7 +94,7 @@ def clusters(mesh, cfg: SCfg):
     out, x = [], 0
     while x + w <= g.x and len(out) < cfg.NCL:
         rect = [(xx, y) for xx in range(x, x + w) for y in range(g.y)]
-        if len(noc_rects(mesh, rect)) == 1:
+        if len(noc_rects(mesh, rect)) == 1 and not set(rect) & set(cfg.avoid):
             hub = max(rect, key=lambda c: noc(mesh, *c))
             act = [c for c in rect if c != hub][: cfg.GC]
             out.append((rect, act, ([hub] + [c for c in rect if c != hub and c not in act])[: cfg.NF]))

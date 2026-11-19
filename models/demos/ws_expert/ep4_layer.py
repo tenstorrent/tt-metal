@@ -641,3 +641,36 @@ def build_home(mesh, lc: EP4Cfg, P, tk, rcounts, cnt_t, y_t):
             mpd[ttnn.MeshCoordinateRange(mc, mc)] = ttnn.ProgramDescriptor(kernels=kernels, semaphores=sems, cbs=cbs)
     io = [P, tk, rcounts, cnt_t, y_t, rows_l1, out_l1, tks, rcs, st]
     return mpd, io, st
+
+
+# ------------------------------------------------------------------------------------------------- dispatch beside the shared expert
+def port_cores_xy(res):
+    """The logical cores of every port sparse_dispatch_2d uses (resources.port_cores, every direction and link)."""
+    return sorted({(x, y) for (x, y, _l) in res.port_cores().values()})
+
+
+def port_subdevices(mesh, res, local_l1=0):
+    """A sub-device manager of two: 0 the dispatch's port cores, 1 every other worker core. Loaded, sparse_dispatch_2d
+    (sub-device 0) and a program on the other cores (the shared expert, sub-device 1) run at once on one command
+    queue: a program waits only for the earlier programs of its own sub-device. Returns (manager, port cores)."""
+    g = mesh.compute_with_storage_grid_size()
+    pc = port_cores_xy(res)
+    pcs = set(pc)
+    one = lambda x0, x1, y: ttnn.CoreRange(ttnn.CoreCoord(x0, y), ttnn.CoreCoord(x1, y))
+    rest = []
+    for y in range(g.y):
+        x = 0
+        while x < g.x:
+            if (x, y) in pcs:
+                x += 1
+                continue
+            x1 = x
+            while x1 + 1 < g.x and (x1 + 1, y) not in pcs:
+                x1 += 1
+            rest.append(one(x, x1, y))
+            x = x1 + 1
+    ports = ttnn.CoreRangeSet({one(x, x, y) for x, y in pc})
+    mgr = mesh.create_sub_device_manager(
+        [ttnn.SubDevice([ports]), ttnn.SubDevice([ttnn.CoreRangeSet(set(rest))])], local_l1
+    )
+    return mgr, pc

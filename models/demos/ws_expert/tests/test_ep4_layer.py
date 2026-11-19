@@ -755,3 +755,94 @@ def test_ep4_layer(mesh_device, routing):
         f"{max(dev_ms['combine:adders']):.3f} / {max(dev_ms['combine:ports']):.3f}; aiclk {clk} -> {clk2} MHz"
     )
     assert same and min(pccs.values()) > 0.999
+
+
+@pytest.mark.parametrize("mesh_device", [MESH], indirect=True)
+@pytest.mark.parametrize("device_params", [FABT], indirect=True)
+def test_ep4_disp_shared(mesh_device):
+    """The shared expert beside the dispatch: sparse_dispatch_2d on its port cores (sub-device 0) and the shared expert
+    on clusters clear of them (sub-device 1), enqueued back to back. Times (wall, synchronized, median of WS_MEAS after
+    WS_WARM): each alone, the two in sequence, the two under the sub-devices (eager, then traced); outputs (P's shared
+    rows, xbuf) equal to the sequential run's."""
+    from models.demos.ws_expert.ep4_layer import port_subdevices
+    from models.demos.ws_expert.ws_shared import SCfg, build_shared, clusters, shared_span_us, shared_weights
+
+    mesh = mesh_device
+    R, C = tuple(mesh.shape)
+    N = R * C
+    n = n_per_chip(LEN)
+    lc = EP4Cfg(T=n)
+    H = lc.H
+    host, dev = make_inputs(mesh, lc, "uniform")
+    hout = head_outputs(mesh, lc)
+    run_free(head_program(mesh, lc, dev, hout))
+    res = dispatch_resources(mesh, lc)
+    xbuf0 = xbuf_tensor(mesh, lc, host["x"])
+    routes = route_pieces(lc, hout)
+    disp = lambda: dispatch(lc, xbuf0, routes, res, N)
+    disp()  # (the resources' persistent words and the dispatch's programs, before any sub-device manager)
+    ttnn.synchronize_device(mesh)
+    mgr, pc = port_subdevices(mesh, res, int(os.environ.get("EP4_SD_L1", "0")))
+    layout = os.environ.get("EP4_SH_LAYOUT", "rows")
+    scfg = SCfg(T=n, H=H, IS=lc.IS, S=S5, KSH=C, layout=layout, avoid=tuple(pc))
+    every = [c_ for rect, _, _ in clusters(mesh, scfg) for c_ in rect]
+    assert not set(every) & set(pc)
+    logger.info(f"EP4 dispshared ports {pc}; shared clusters ({layout}) rows {sorted({y for _, y in every})} cols {sorted({x for x, _ in every})}")
+    g = torch.Generator().manual_seed(7)
+    w1 = (torch.randn(H, lc.IS, generator=g) / H**0.5).to(torch.bfloat16)
+    w3 = (torch.randn(H, lc.IS, generator=g) / H**0.5).to(torch.bfloat16)
+    w2 = (torch.randn(lc.IS, H, generator=g) / lc.IS**0.5).to(torch.bfloat16)
+    w13_t, w2s_t = shared_weights(mesh, scfg, w1, w3, w2)
+    P = p_tensor(mesh, lc)
+    b = build_shared(mesh, scfg, dev["x_rm"], w13_t, w2s_t, P)
+    sh = lambda: ttnn.generic_op(b[1], b[0])
+    clk = aiclk_mhz(0)
+
+    def wall(fn, warm=WARM, meas=MEAS):
+        ws = []
+        for i in range(warm + meas):
+            ttnn.synchronize_device(mesh)
+            t0 = time.perf_counter()
+            fn()
+            ttnn.synchronize_device(mesh)
+            if i >= warm:
+                ws.append((time.perf_counter() - t0) * 1e3)
+        return statistics.median(ws)
+
+    shv = lambda: max(shared_span_us([b[2]], ci, clk) for ci in range(N)) / 1e3
+    t = {}
+    t["shared"] = wall(sh)
+    t["shared_dev"] = shv()
+    t["dispatch"] = wall(disp)
+    t["seq"] = wall(lambda: (sh(), disp()))
+    rows = torch.arange(0, n, max(1, n // 64)) * S5 + C
+    snap = lambda ci: ttnn.to_torch(ttnn.get_device_tensors(P)[ci])[rows].clone()
+    chk = [0, N - 1]
+    p_seq = {ci: snap(ci) for ci in chk}
+    x_seq = {ci: ttnn.to_torch(ttnn.get_device_tensors(xbuf0)[ci]).clone() for ci in chk}
+    t0 = time.perf_counter()
+    mesh.load_sub_device_manager(mgr)
+    t["load_ms"] = (time.perf_counter() - t0) * 1e3
+    ok = True
+    try:
+        t["par"] = wall(lambda: (sh(), disp()))
+        t["par_shared_dev"] = shv()
+        try:
+            t["par_traced"] = traced(mesh, lambda: (sh(), disp()), warm=WARM, meas=MEAS)
+        except Exception as e:  # (report and keep the eager result)
+            logger.info(f"EP4 dispshared traced under sub-devices failed: {e}")
+        for ci in chk:
+            ok &= torch.equal(snap(ci).view(torch.int16), p_seq[ci].view(torch.int16))
+            ok &= torch.equal(ttnn.to_torch(ttnn.get_device_tensors(xbuf0)[ci]).view(torch.int16), x_seq[ci].view(torch.int16))
+    finally:
+        t0 = time.perf_counter()
+        mesh.clear_loaded_sub_device_manager()
+        t["clear_ms"] = (time.perf_counter() - t0) * 1e3
+        mesh.remove_sub_device_manager(mgr)
+    t["seq_traced"] = traced(mesh, lambda: (sh(), disp()), warm=WARM, meas=MEAS)
+    clk2 = aiclk_mhz(0)
+    logger.info(
+        f"EP4 dispshared SUMMARY {LEN} (n {n}): ms { {k: round(v, 3) for k, v in t.items()} }; outputs equal to the "
+        f"sequential run's {ok}; aiclk {clk} -> {clk2} MHz"
+    )
+    assert ok
