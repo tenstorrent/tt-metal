@@ -297,3 +297,16 @@
   spread over texts.
 - F277: the canonical book's path moved (tt_transformers -> ttt_compat): fixed in prompt.py; 9 old selftest failures
   pass now. The canonical prompt's sha is unchanged.
+
+## 2026-11-19 04:50 UTC: fp8 dispatch rejected (P.80); census over texts next (X.9)
+
+- P.80 A/B (both sides on real text, prose): steady wall 142k 85.7 -> 85.4 ms, 1M 97.4 -> 96.3 (spread 3.2);
+  accuracy and determinism identical (bit-identical path). The agent's own measurement: on real text the dispatch is
+  8.8 ms a chunk (12.0 was random ids), ~3 ms of it the wait for the slowest chip's head (routing skew); fp8 rows cut
+  only the transport (~-2.5 ms device expected, ~0.3-1 ms seen in the wall). Rejected: 27 files / 430 lines in the MoE
+  forks for a gain inside the noise. Diff kept at /data/dnijemcevic/bringup/handoff_20261118/rejected_p80/; notes kept
+  in BREADCRUMBS / known_issues. Revisit after replication.
+- New baseline (real text, prose = the whole book, F276): 142k steady wall 85.7 ms = 59.7k tok/s (was 93.4 on random
+  ids); 1M 97.4 ms.
+- RAM unaccounted after P.80: 135.2 GiB of 566 GiB (119.3 before; +16 GiB this task).
+- Owner patch applied (X.9 census over texts, P.84 replication, held-out walls in P.81-P.83); validate: valid.

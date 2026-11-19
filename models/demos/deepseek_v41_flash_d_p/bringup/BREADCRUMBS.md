@@ -776,3 +776,59 @@
 - Re-run: `DS41_DECODER_SKIP=decode CENSUS_OUT=/tmp/c.json python -m models.demos.common.bringup.devjob start census
   -- scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/perf/test_expert_load_census.py -s`
   (CENSUS_POS picks the point).
+
+## P.80 perf (attempt 1): MoE dispatch in fp8 (sparse_dispatch_2d 12.0 -> <= 7 ms a chunk at 142k)
+- Expected before measuring (roofline X.7 + perf_guide sections 4 / 6): the dispatch moves 10240 B rows as two 6208 B
+  packets today; a bfp8 row (5120 sign-magnitude mantissas + 320 shared exponents = 5440 B, 85 x 64 B) is one packet
+  and 53 % of the bytes. Device: sparse_dispatch_2d 12.0 -> ~6.5 ms a chunk (its link-bound share halves; the head
+  skew it absorbs stays), the owner-side row pack +0.3-0.5 ms, the experts' x reads 10 -> 5.4 KB a row (0 to
+  -0.5 ms on the hot chips); net ~ -5 ms device. Host: + one launch a MoE layer for the owner-side pack (~0.1 ms x 20 =
+  ~2 ms host, mostly under the device after layer ~5, DS41-298), so the wall ~ -3 to -5 ms.
+- The device's "fp8" for the experts' x is bfloat8_b (GEMM_INPUTS=bfp8; the helper relays' fast_tilize packs bf16
+  rows to bfp8 tiles). A bit-identical fp8 row must therefore be the bfp8 row: the same packer's mantissas and
+  exponents, carried per token; the experts rebuild the tiles from it.
+- Measured first (tests/perf/test_dispatch_width.py, one model load, p145408 real text, DECODER_SKIP=decode; each
+  layer's dispatch followed in the profiled chunk by the same bf16 call again and a call on a uint8 5440 B-row buffer,
+  same routes): real call 8.78 ms a chunk (X.7's 12.0 was on random ids, F275), the bf16 repeat 5.74 ms, 5440 B rows
+  3.29 ms. The real call's extra ~3 ms is the wait for the slowest chip's head (its min chip equals the repeat's);
+  the fp8 row cuts only the transport: expected device -2.45 ms a chunk minus the owner-side pack (~0.3 ms), so the
+  dispatch ~8.8 -> ~6.3 ms (target <= 7 met at this point), the model ~ -2 ms device.
+- Design (MOE_DISPATCH_FP8, bool Setting, default True; False = the bf16 rows exactly): after the head, in the
+  one-call OWN_ROWS path (tt/moe_block_v2_adapter.py `_own_rows`; `_fp8_fits`: whole tile rows a chip and H % 1024,
+  else bf16), `ttnn.bringup.pack_bfp8_rows` (new, fp8_rows_ttnn/bfp8_rows.py, prepared, one program a chip for its
+  row0, CBs in the block's L1 arena - static CBs clashed with the arena) packs each chip's own rows of the head's bf16
+  dispatch buffer with the flat expert's own fast_tilize (same compute config) into a pinned uint8 [N S, 5440] buffer:
+  per 1024 columns the 1024 bfp8 mantissa bytes, then the 64 shared exponents. sparse_dispatch_2d moves that buffer
+  unchanged (row-width agnostic; 5440 B < the 6208 B payload: one packet a row). routed_experts_combine gets
+  FlatLayoutOptions(x_bfp8_rows=True) (moe_block_ttnn fork; plans / state keyed without it): the helper relays read a
+  row segment in one 1088 B read, UInt8-tilize it at a 34-tile pitch (tiles 0..31 straight into the bfp8 slots' data
+  sections, 32..33 = the exponents), transpose the exponent tiles, and the helper writer puts each tile's 64 B
+  exponent section in with 2 local NoC writes. The tiles equal the bf16 rows' fast_tilize: bit-identical.
+- Cores (rule 18): pack_bfp8_rows 100 a chip on 8x4 (25 units x 4 column parts, inside 11 x 10; other boxes loop
+  items over <= 110); the relays' new compute runs on the flat plan's 2 helper relay cores (no new cores).
+- Correctness: tests/test_dispatch_fp8.py (one load, p145408 real text, prev chunk + chunk from a fresh state, the
+  switch toggled on the loaded layers): every layer output on vs off max |diff| 0.0 (20 MoE layers + the rest).
+- Measured (same test, real-time profiler, one profiled chunk a side, ms a chunk, slowest chip a program):
+  sparse_dispatch_2d 9.20 -> 6.60; pack_bfp8_rows +0.49; routed_experts_combine 22.27 -> 22.64; the three
+  31.47 -> 29.73 (-1.74). Iterations (DS41-300): first version experts 42.9 (RISC copies of the exponent sections),
+  NoC copies 23.4, one read a row 22.7; pack 0.74 (each 32-row unit read and tilized by 4 cores) -> 0.49 (8-tile
+  column parts). Bound: the dispatch's transport went 5.74 -> 3.29 ms in the microbenchmark (bytes 53 %, one packet
+  a row: link-bound, 3.29 vs the roofline's 3.1 ms fp8 floor); the rest of the dispatch (~3 ms) is the head skew it
+  absorbs (DS41-301), so <= 7 ms is met (6.2-6.6) but the 3.1 floor needs a faster / more even head.
+- Host: +1 prepared launch a MoE layer (32 per-chip programs; ~90-100 us, DS41-263) = ~+2 ms host a chunk, under the
+  device after layer ~5 (DS41-298); the wall is the orchestrator's A/B.
+- Gotchas: (1) the MoE block's arena is allocated between the head and the combine: an op there must put its CBs in it
+  (`arena=`), and a remote chip's dispatch writes into the arena only after the fence with this chip's dispatch, i.e.
+  after this chip's pack. (2) RISC loads of L1 that the packer wrote are cache-line misses after
+  `invalidate_l1_cache`: move 16-32 B pieces with local NoC writes. (3) `tilize_block`'s index remap uses the call's
+  block width as the row pitch: a row wider than the tiles taken (the 34-tile bfp8 row) needs the LLK calls directly
+  (x_injector_bfp8_rows_compute.cpp `tilize_tiles`).
+- Re-run: `DS41_DECODER_SKIP=decode python -m models.demos.common.bringup.devjob start fp8 --
+  scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/test_dispatch_fp8.py -s`
+  (DISPATCH_FP8_POS); microbenchmark tests/perf/test_dispatch_width.py (WIDTH_POS, WIDTH_BYTES).
+- measure --task P.80 --part test (change on, MOE_DISPATCH_FP8=True): test_decoder_skip_decode, test_contract (failed
+  0 / 0), test_outside_history (max_abs_diff 0.0), test_skip_positions all rc 0; steady p145408 wall 85.4 ms (spread
+  3.2), device 71.3, host 14.1, experts section 35.67 ms; p1024000 wall 96.3 (spread 1.7), device 89.87. Final
+  measure --task P.80: determinism max_abs_diff 0.0 (state 0.0); rung last rc 0, err_final_hidden 0.13463 (limit
+  0.2422; P.78's 0.1346: bit-identical path), final hidden PCC 0.991, top1 / top5 1.0. The off side and the wall
+  A/B are the orchestrator's.

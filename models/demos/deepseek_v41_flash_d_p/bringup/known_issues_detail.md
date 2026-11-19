@@ -1624,3 +1624,21 @@ the program's per-chip time in a separate rt-profiled run with no reads in it). 
   laid-out expert cache) and 72 cores in the two rectangles, which hold at most 70 under the 11 x 10 cap.
 - The X.7 roofline's "170 GB/s = 33 % of peak" is the chunk's weight bytes over a time set by the busiest chip's
   compute; its 11 ms floor assumes uniform routing.
+
+## Rebuilding bfp8 tiles from bfp8 rows on a relay: RISC word copies of L1 doubled the routed experts
+
+The relays turn token rows into the gate/up cores' bfp8 x tiles. With bf16 rows that is one fast_tilize (the packer
+rounds each 16-value row group to bfp8). With bfp8 rows (MOE_DISPATCH_FP8: per 1024 columns, 1024 sign-magnitude
+mantissa bytes then the 64 shared exponents, as the owner's own fast_tilize packed them) no arithmetic is needed, only
+a byte shuffle: each tile row contributes 2 x 16 B of mantissas (faces 0/1 or 2/3) and 2 exponent bytes. Measured on
+the model (8x4, p145408, 20 MoE layers, routed_experts_combine re-called on the same inputs inside one profiled chunk,
+ms a chunk): bf16 rows 22.1; bfp8 rows with UInt8 tilize of the mantissas into the slots' data sections and the
+exponents tilized + transposed (UInt8, int path) then copied by the helper writer with RISC word copies 43.6; the same
+without the exponent copy 23.3; without the mantissa tilize but with the copy 44.4. The copy: 16 volatile loads +
+16 stores a tile after `invalidate_l1_cache` (each 16 B line a miss) ~200 cycles, against the hot chip's ~115 cycles a
+tile for each of the 2 helpers (P.79: 6.77 us a 32-row tile x 160 K tiles). As 2 local NoC writes of 32 B a tile the
+copy costs nothing measurable (23.35, = without it). Reading the row segment in one 1088 B read (a 34-tile tilize
+pitch: tiles 0..31 the mantissas, 32..33 the exponents) instead of a 1024 B + a 64 B read: 22.72 vs bf16 22.34.
+The owner-side pack (ttnn.bringup.pack_bfp8_rows) had the same trap twice: 32 rows read and tilized by each of 4
+cores (4x the DRAM reads) - splitting a unit by 8-tile column parts (own reads, 16 B aligned row-piece writes) took it
+0.73 -> 0.49 ms a chunk; its RISC copies -> NoC writes alone moved it 0.742 -> 0.729.
