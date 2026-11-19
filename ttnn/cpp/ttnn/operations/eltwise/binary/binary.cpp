@@ -4,6 +4,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "binary.hpp"
+#include <algorithm>
 #include <cmath>
 #include <tt-metalium/sub_device_types.hpp>
 #include <tt-logger/tt-logger.hpp>
@@ -15,6 +16,7 @@
 #include "ttnn/operations/eltwise/binary/common/binary_op_utils.hpp"
 #include "ttnn/operations/eltwise/binary_ng/device/binary_ng_device_operation.hpp"
 #include "ttnn/operations/eltwise/unary/unary.hpp"
+#include "ttnn/operations/eltwise/unary/common/unary_op_utils.hpp"
 #include "ttnn/operations/copy/typecast/typecast.hpp"
 #include "ttnn/operations/core/core.hpp"
 
@@ -854,14 +856,18 @@ inline auto invoke_binary_ng_impl(
     // ends with isclose's rtol/atol/equal_nan, the scalar one with scalar_is_lhs. No single call
     // can satisfy both, and while these were two separate call sites the flag was passed on one and
     // forgotten on the other. This lambda is the only place either overload is invoked.
-    auto dispatch = [&](const auto& a, const auto& b, DataType dt, const std::optional<Tensor>& out) {
+    auto dispatch = [&](const auto& a,
+                        const auto& b,
+                        DataType dispatch_dtype,
+                        const std::optional<Tensor>& out,
+                        const std::optional<MemoryConfig>& dispatch_memory_config) {
         if constexpr (requires { b.dtype(); }) {
             return ttnn::prim::binary_ng(
                 a,
                 b,
                 binary_op_type,
-                dt,
-                memory_config,
+                dispatch_dtype,
+                dispatch_memory_config,
                 out,
                 fast_and_approximate_mode,
                 lhs_activations,
@@ -875,8 +881,8 @@ inline auto invoke_binary_ng_impl(
                 a,
                 b,
                 binary_op_type,
-                dt,
-                memory_config,
+                dispatch_dtype,
+                dispatch_memory_config,
                 out,
                 fast_and_approximate_mode,
                 lhs_activations,
@@ -891,40 +897,79 @@ inline auto invoke_binary_ng_impl(
 
     if (input_a_rm and input_b_rm and not input_a_sharded and not input_b_sharded) {
         // is_layout_or_scalar reports a scalar as row-major, so a scalar first operand reaches here too.
-        return dispatch(lhs_eff, rhs_eff, out_dtype, output);
+        return dispatch(lhs_eff, rhs_eff, out_dtype, output, memory_config);
     }
-    // Either one or both are tiles
-    const auto input_a = operations::binary::detail::to_layout(lhs_eff, Layout::TILE, sub_core_grids);
-    const auto input_b = operations::binary::detail::to_layout(rhs_eff, Layout::TILE, sub_core_grids);
+    // A BFLOAT8_B / BFLOAT4_B pack shares one exponent per 16-lane block of a row, padding included. When a logical
+    // width is not a multiple of 16 and the op is inf or nan at the zero padding (a division by it, or an activation
+    // such as reciprocal), that value sets the exponent of the last block and its real lanes are packed as 0.
+    // Input activations (and the reciprocal fast DIV applies to b) are packed into intermediates in the input's
+    // format, so such an input is widened to BFLOAT16 first.
+    const auto tiled_a = operations::binary::detail::to_layout(lhs_eff, Layout::TILE, sub_core_grids);
+    auto cast_sub_core_grids = sub_core_grids;
+    if (sub_device_id.has_value()) {
+        cast_sub_core_grids =
+            tiled_a.device()->worker_cores(tt::tt_metal::HalProgrammableCoreType::TENSIX, *sub_device_id);
+    }
+    const bool is_div = binary_op_type == operations::binary::BinaryOpType::DIV;
+    const auto widen_if_non_finite_at_padding = [&](const auto& t, bool non_finite) {
+        if constexpr (requires { t.dtype(); }) {
+            if (non_finite && t.layout() == Layout::TILE && is_block_float(t.dtype()) &&
+                t.logical_shape()[-1] % tt::constants::FACE_WIDTH != 0) {
+                return ttnn::typecast(t, DataType::BFLOAT16, std::nullopt, std::nullopt, cast_sub_core_grids);
+            }
+        }
+        return t;
+    };
+    // Unset resolves to false for DIV, as in binary_ng's kernel selection.
+    const bool fast_div = is_div && fast_and_approximate_mode.value_or(false);
+    const auto input_a = widen_if_non_finite_at_padding(
+        tiled_a,
+        (fast_div && scalar_is_lhs) ||
+            std::ranges::any_of(lhs_activations, operations::unary::utils::is_non_finite_at_zero));
+    const auto input_b = widen_if_non_finite_at_padding(
+        operations::binary::detail::to_layout(rhs_eff, Layout::TILE, sub_core_grids),
+        (fast_div && !scalar_is_lhs) ||
+            std::ranges::any_of(rhs_activations, operations::unary::utils::is_non_finite_at_zero));
 
-    std::optional<Tensor> repadded;
-    if (binary_op_type == operations::binary::BinaryOpType::DIV &&
-        operations::binary::detail::is_block_format(out_dtype) && !sub_core_grids.has_value() &&
-        !sub_device_id.has_value() && !input_a.is_sharded() &&
-        !(memory_config.has_value() && memory_config->is_sharded()) && !(output.has_value() && output->is_sharded())) {
-        std::optional<DataType> wide;
-        if constexpr (requires { rhs.dtype(); }) {
-            const auto rhs_width = rhs_eff.logical_shape()[-1];
-            if (!input_b.is_sharded() && rhs_width % tt::constants::FACE_WIDTH != 0 &&
-                (rhs_width != 1 || lhs_eff.logical_shape()[-1] == 1)) {
-                wide = lhs_eff.dtype() == DataType::FLOAT32 || rhs_eff.dtype() == DataType::FLOAT32
-                           ? DataType::FLOAT32
-                           : DataType::BFLOAT16;
-            }
+    // The output is packed the same way, so it is produced as BFLOAT16 (FLOAT32 for an FLOAT32 input) and the
+    // typecast zeroes the padding first.
+    // DIV_FLOOR / DIV_TRUNC also divide by b but are INT32 only.
+    const bool divides_by_rhs = is_div || binary_op_type == operations::binary::BinaryOpType::REMAINDER ||
+                                binary_op_type == operations::binary::BinaryOpType::FMOD;
+    const bool divides_by_padding = divides_by_rhs && ((requires { input_b.logical_shape(); }) || scalar_is_lhs);
+    const bool non_finite_at_padding =
+        divides_by_padding || std::ranges::any_of(lhs_activations, operations::unary::utils::is_non_finite_at_zero) ||
+        std::ranges::any_of(rhs_activations, operations::unary::utils::is_non_finite_at_zero) ||
+        std::ranges::any_of(post_activations, operations::unary::utils::is_non_finite_at_zero);
+    const uint32_t out_width = [&] {
+        const uint32_t a_width = input_a.logical_shape()[-1];
+        if constexpr (requires { input_b.logical_shape(); }) {
+            return a_width == 1 ? input_b.logical_shape()[-1] : a_width;
         } else {
-            if (scalar_is_lhs && lhs_eff.logical_shape()[-1] % tt::constants::FACE_WIDTH != 0) {
-                wide = lhs_eff.dtype() == DataType::FLOAT32 ? DataType::FLOAT32 : DataType::BFLOAT16;
-            }
+            return a_width;
         }
-        if (wide.has_value()) {
-            repadded = ttnn::typecast(
-                ttnn::fill_implicit_tile_padding(dispatch(input_a, input_b, *wide, std::nullopt), 0.0f),
-                out_dtype,
-                memory_config,
-                output);
+    }();
+    auto result = [&] {
+        if (non_finite_at_padding && is_block_float(out_dtype) && out_width % tt::constants::FACE_WIDTH != 0) {
+            const auto intermediate_memory_config =
+                output.has_value() ? std::optional<MemoryConfig>{output->memory_config()} : memory_config;
+            const bool fp32_input = input_a.dtype() == DataType::FLOAT32 || [&] {
+                if constexpr (requires { input_b.dtype(); }) {
+                    return input_b.dtype() == DataType::FLOAT32;
+                } else {
+                    return false;
+                }
+            }();
+            const auto intermediate = dispatch(
+                input_a,
+                input_b,
+                fp32_input ? DataType::FLOAT32 : DataType::BFLOAT16,
+                std::nullopt,
+                intermediate_memory_config);
+            return ttnn::typecast(intermediate, out_dtype, memory_config, output, cast_sub_core_grids);
         }
-    }
-    auto result = repadded.has_value() ? *repadded : dispatch(input_a, input_b, out_dtype, output);
+        return dispatch(input_a, input_b, out_dtype, output, memory_config);
+    }();
 
     // if both inputs are in row major, convert the output to row major
     // since there's no consensus here, avoiding the conversion if we have an excuse to is likely the best option
