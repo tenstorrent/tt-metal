@@ -304,7 +304,7 @@
       timeout -k 2m 21m mpirun --bind-to none --pernode --tag-output bash -lc '
         set -e
         export OMP_NUM_THREADS=$(nproc)
-        models/demos/deepseek_v3_d_p/tests/run_subtorus_4x4_tests.sh --timeout-s 600 models/demos/deepseek_v3_d_p/tests/op_unit_tests/test_deepseek_prefill_update_padded_kv_cache.py
+        models/demos/deepseek_v3_d_p/tests/run_subtorus_4x4_tests.sh --timeout-s 600 --allow-skip "CI runs only the small padded_partial case" models/demos/deepseek_v3_d_p/tests/op_unit_tests/test_deepseek_prefill_update_padded_kv_cache.py
         models/demos/deepseek_v3_d_p/tests/run_subtorus_4x4_tests.sh --timeout-s 600 models/demos/deepseek_v3_d_p/tests/op_unit_tests/test_zero_padded_kv_cache.py
         models/demos/deepseek_v3_d_p/tests/run_subtorus_4x4_tests.sh --timeout-s 300 models/demos/deepseek_v3_d_p/tests/op_unit_tests/test_masked_bincount.py
         models/demos/deepseek_v3_d_p/tests/run_subtorus_4x4_tests.sh --timeout-s 300 --allow-skip "experts do not divide across" models/demos/deepseek_v3_d_p/tests/op_unit_tests/test_offset_cumsum.py
@@ -460,8 +460,8 @@
       export MESH_DEVICE=TG
       export GLM53_HF_MODEL=/mnt/weka/model-weights/llm/zai-org/GLM-5.3-fp8-aca966e4
       # The 4x4 TTNN caches are built into a scratch directory: the shared ones are laid out for the 8x4 mesh and read-only.
-      export TT_GLM53_PREFILL_TTNN_CACHE=${RUNNER_TEMP:-/tmp}/glm53_4x4_prefill_cache
-      export TT_GLM53_MTP_TTNN_CACHE=${RUNNER_TEMP:-/tmp}/glm53_4x4_mtp_cache
+      export TT_GLM53_PREFILL_TTNN_CACHE=/tmp/glm53_4x4_prefill_cache
+      export TT_GLM53_MTP_TTNN_CACHE=/tmp/glm53_4x4_mtp_cache
       timeout -k 2m 8m mpirun --bind-to none --pernode --tag-output bash -lc '
         set -e
         export OMP_NUM_THREADS=$(nproc)
@@ -473,8 +473,8 @@
       export MESH_DEVICE=TG
       export GLM53_HF_MODEL=/mnt/weka/model-weights/llm/zai-org/GLM-5.3-fp8-aca966e4
       # The 4x4 TTNN caches are built into a scratch directory: the shared ones are laid out for the 8x4 mesh and read-only.
-      export TT_GLM53_PREFILL_TTNN_CACHE=${RUNNER_TEMP:-/tmp}/glm53_4x4_prefill_cache
-      export TT_GLM53_MTP_TTNN_CACHE=${RUNNER_TEMP:-/tmp}/glm53_4x4_mtp_cache
+      export TT_GLM53_PREFILL_TTNN_CACHE=/tmp/glm53_4x4_prefill_cache
+      export TT_GLM53_MTP_TTNN_CACHE=/tmp/glm53_4x4_mtp_cache
       timeout -k 2m 14m mpirun --bind-to none --pernode --tag-output bash -lc '
         set -e
         export OMP_NUM_THREADS=$(nproc)

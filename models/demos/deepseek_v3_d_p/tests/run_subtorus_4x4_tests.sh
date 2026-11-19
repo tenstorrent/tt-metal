@@ -16,9 +16,10 @@
 #   models/demos/deepseek_v3_d_p/tests/run_subtorus_4x4_tests.sh [--expect N] [--timeout-s S] [--allow-skip REGEX] <pytest paths and options>
 set -uo pipefail
 
-# Row ids and test names of the 4x4 [RING, RING] rows: torus-xy-4x4-*, 4x4-torus-xy-*, SP4xTP4-torus-xy-4x4,
-# fabric2d-torus-xy-4x4-2link, torusxy-mesh-4x4-sp1, the *xy4* rows and the ring_ring_4x4 test.
-ROWS_SELECTOR="(4x4 and torus-xy) or torusxy-mesh-4x4 or xy4 or ring_ring_4x4"
+# Row ids and test names of the 4x4 [RING, RING] rows: torus-xy-4x4-*, 4x4-torus-xy-*, *SP4xTP4-torus-xy*,
+# torusxy-mesh-4x4-sp1, the *-xy4-* rows (and test_sparse_kv_push_xy4) and the ring_ring_4x4 test. A bare "xy4" would
+# also match every "galaxy4x4" id, the TorusX stage rows among them.
+ROWS_SELECTOR="torus-xy-4x4 or 4x4-torus-xy or SP4xTP4-torus-xy or torusxy-mesh-4x4 or -xy4 or _xy4 or ring_ring_4x4"
 
 expect=""
 allow_skip=""
