@@ -16,7 +16,7 @@
 #                   + post-test -glx_reset + triage (host_side + device_side)
 #                   + QSFP tests (ETH link, cabling and module state), if the host has the package
 #   weekly          3 resets (1x -r then 2x -glx_reset) + full GDDR patterns + eth link_up
-#                   + eth bandwidth + didt matmul stress (pytest, galaxy mesh)
+#                   + eth bandwidth + didt matmul and duty-cycle stress (pytest, galaxy mesh)
 #                   + post-test -glx_reset + triage (host_side + device_side)
 #                   + QSFP tests (ETH link, cabling and module state), if the host has the package
 #   full            weekly + sys-triage bundle, if the host has the package and BMC credentials:
@@ -46,7 +46,7 @@ Tiers:
   daily           2 resets + GDDR fast-pattern stress + eth link_up + eth bandwidth
                   + post-test reset + triage + QSFP tests
   weekly          3 resets + full GDDR pattern set + eth link_up + eth bandwidth
-                  + didt matmul stress (pytest) + post-test reset + triage + QSFP tests
+                  + didt matmul and duty-cycle stress (pytest) + post-test reset + triage + QSFP tests
   full            weekly + sys-triage: everything, for the logs on a DIIM ticket
   pre_bmc_reboot  Data collection before a BMC reboot: snapshot + triage + QSFP tests
                   + sys-triage. No resets, no tests.

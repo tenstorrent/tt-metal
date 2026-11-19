@@ -89,6 +89,24 @@ PYTESTS = {
             "1200",
         ],
     },
+    # didt_duty_cycle_galaxy: on all 32 chips at once, alternates a LoFi matmul with
+    # a light eltwise op, so board power steps up and down thousands of times; a
+    # bus bar or power stage that sags under those steps shows up as a chip that
+    # drops, hangs or gives a non-deterministic result.
+    "didt_duty_cycle_galaxy": {
+        "target": "tests/didt/test_duty_cycle.py::test_duty_cycle",
+        "args": [
+            "-k",
+            "galaxy and rep-100x and duty-1",
+            "--didt-workload-iterations",
+            "200",
+            "--determinism-check-interval",
+            "20",
+            "-s",
+            "--timeout",
+            "1200",
+        ],
+    },
 }
 
 
