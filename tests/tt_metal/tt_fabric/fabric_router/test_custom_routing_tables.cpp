@@ -29,7 +29,12 @@ std::unique_ptr<tt::tt_fabric::ControlPlane> make_control_plane(const std::files
     const auto& hal = tt::tt_metal::MetalContext::instance().hal();
     const auto& distributed_context = tt::tt_metal::MetalContext::instance().full_world_distributed_context();
     auto control_plane = std::make_unique<tt::tt_fabric::ControlPlane>(
-        cluster, rtoptions, hal, distributed_context, graph_desc.string(), k_FabricConfig, k_ReliabilityMode);
+        cluster,
+        rtoptions,
+        hal,
+        distributed_context,
+        graph_desc.string(),
+        tt::tt_fabric::fabric_router_tests::make_control_plane_config(k_FabricConfig, k_ReliabilityMode));
     control_plane->configure_routing_tables_for_fabric_ethernet_channels();
     return control_plane;
 }

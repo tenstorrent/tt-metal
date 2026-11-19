@@ -7,7 +7,6 @@
 #include <tt_stl/assert.hpp>
 #include <tt_stl/fmt.hpp>
 #include <tt-metalium/mesh_coord.hpp>
-#include <tt-metalium/experimental/fabric/routing_table_generator.hpp>
 #include <unordered_map>
 
 namespace tt::tt_metal::experimental::udm {

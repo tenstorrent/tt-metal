@@ -796,7 +796,7 @@ def main():
         else:
             lr_now = cosine_lr_schedule(step - 1, args.warmup_steps, total_steps, args.lr, args.min_lr)
         # Update optimizer LR
-        optimizer.set_lr(lr_now)
+        optimizer.set_group_lrs([lr_now])
 
         # Zero gradients
         t0 = time.time()

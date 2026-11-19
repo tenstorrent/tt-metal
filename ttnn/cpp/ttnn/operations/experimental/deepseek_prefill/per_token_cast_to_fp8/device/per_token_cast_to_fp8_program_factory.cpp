@@ -100,11 +100,11 @@ KernelIds build_kernels_and_cbs(
     const uint32_t output_e4m3_block_bytes = block_w;                // one 128-element row, 1 byte/elem
     const uint32_t in_tile_bytes = tile_h * tile_w * in_elem_bytes;  // cb_in page = one input tile
     const uint32_t output_e4m3_page_bytes = tile_h * tile_w;         // cb_output_e4m3 page = one tile
-    const uint32_t scale_aligned_page_bytes = output_scale.buffer()->aligned_page_size();
+    const uint32_t scale_aligned_page_bytes = output_scale.mesh_buffer().aligned_page_size();
 
-    auto* src_buffer = input.buffer();
-    auto* dst_e4m3_buffer = output_e4m3.buffer();
-    auto* dst_scale_buffer = output_scale.buffer();
+    const auto* src_buffer = &input.mesh_buffer();
+    const auto* dst_e4m3_buffer = &output_e4m3.mesh_buffer();
+    const auto* dst_scale_buffer = &output_scale.mesh_buffer();
 
     const DataFormat input_df = datatype_to_dataformat_converter(input.dtype());
     const DataFormat fp32_df = DataFormat::Float32;
@@ -242,7 +242,7 @@ ttnn::device_operation::CachedProgram<PerTokenCastToFp8SharedVariables> create_p
     const auto tile_shape = input.tensor_spec().tile().get_tile_shape();
     const uint32_t tile_h = tile_shape[0];
     const uint32_t scale_blocks_per_row = H / fp8::BLOCK_W;  // 128-wide column-blocks per row
-    const uint32_t scale_page_bytes = output_scale.buffer()->aligned_page_size();
+    const uint32_t scale_page_bytes = output_scale.mesh_buffer().aligned_page_size();
 
     // Work-split unit, scale-scratch size, and kernel define differ by layout. TILE also needs a bit of
     // extra geometry (computed here) to build its per-core args in the loop below.
@@ -288,9 +288,9 @@ ttnn::device_operation::CachedProgram<PerTokenCastToFp8SharedVariables> create_p
         attrs.round_scale_to_power_of_two,
         defines);
 
-    const uint32_t src_addr = input.buffer()->address();
-    const uint32_t dst_e4m3_addr = output_e4m3.buffer()->address();
-    const uint32_t dst_scale_addr = output_scale.buffer()->address();
+    const uint32_t src_addr = input.mesh_buffer().address();
+    const uint32_t dst_e4m3_addr = output_e4m3.mesh_buffer().address();
+    const uint32_t dst_scale_addr = output_scale.mesh_buffer().address();
 
     auto all_cores_vec = corerange_to_cores(all_cores, num_cores, true);
     uint32_t offset = 0;  // ROW_MAJOR: first row; TILE: first 128-block. Advances by this core's unit count.
@@ -326,9 +326,9 @@ void apply_io_overrides(
     std::tuple<Tensor, Tensor>& tensor_return_value) {
     const auto& [output_e4m3, output_scale] = tensor_return_value;
     const auto& shared = cached_program.shared_variables;
-    const uint32_t src_addr = tensor_args.input_tensor.buffer()->address();
-    const uint32_t dst_e4m3_addr = output_e4m3.buffer()->address();
-    const uint32_t dst_scale_addr = output_scale.buffer()->address();
+    const uint32_t src_addr = tensor_args.input_tensor.mesh_buffer().address();
+    const uint32_t dst_e4m3_addr = output_e4m3.mesh_buffer().address();
+    const uint32_t dst_scale_addr = output_scale.mesh_buffer().address();
     for (const auto& core : shared.all_cores_vec) {
         auto& reader_args = tt::tt_metal::GetRuntimeArgs(cached_program.program, shared.reader_kernel_id, core);
         reader_args[0] = src_addr;

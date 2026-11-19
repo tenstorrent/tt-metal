@@ -12,9 +12,9 @@ from tracy.process_model_log import post_process_ops_log, run_device_profiler
 import ttnn
 from models.common.utility_functions import is_blackhole
 from models.tt_dit.utils.padding import get_padded_vision_seq_len
-from tests.tests_common.cache_entries_counter import CacheEntriesCounter
-from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_pcc
-from tests.ttnn.unit_tests.operations.sdpa.sdpa_test_utils import fa_rand
+from tt_py_test_utils_common.cache_entries_counter import CacheEntriesCounter
+from tt_py_test_utils_common.comparison_funcs import comp_pcc
+from tt_py_test_utils_common.sdpa_test_utils import fa_rand
 
 
 def create_global_semaphores(mesh_device, cores, initial_value):

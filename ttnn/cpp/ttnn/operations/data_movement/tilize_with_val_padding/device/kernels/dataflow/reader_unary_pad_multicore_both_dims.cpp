@@ -56,21 +56,37 @@ void kernel_main() {
         uint32_t l1_write_addr = dfb_in0.get_write_ptr();
 
         for (uint32_t k = start_row_id; k < start_row_id + num_rows; k++) {
+            // Bytes of this row the source still holds past start_column_id. A sub-block that starts in
+            // the padding region (wide column padding splits into several sub-blocks) reads nothing and
+            // is filled with pad_value; a partial one reads only what the row has, never past the page.
+            const uint32_t this_block_size =
+                (start_column_id < unpadded_X_size)
+                    ? ((unpadded_X_size - start_column_id < width_size) ? unpadded_X_size - start_column_id
+                                                                        : width_size)
+                    : 0;
+            const uint32_t to_pad = width_size - this_block_size;
+            if (this_block_size == 0) {
+                dataflow_kernel_lib::fill_l1_range<element_size>(l1_write_addr, width_size, pad_value);
+                l1_write_addr += width_size;
+                continue;
+            }
+
             uint64_t src_noc_addr = s.get_noc_addr(size_2d + k);
             if (((src_noc_addr + (uint64_t)start_column_id) & dram_align_offset) ==
                 ((uint64_t)l1_write_addr & dram_align_offset)) {
                 // Read from DRAM to tmp buffer
                 CoreLocalMem<uint32_t> dst(l1_write_addr);
                 noc.async_read(
-                    s, dst, width_size, {.page_id = size_2d + k, .offset_bytes = start_column_id}, {.offset_bytes = 0});
+                    s,
+                    dst,
+                    this_block_size,
+                    {.page_id = size_2d + k, .offset_bytes = start_column_id},
+                    {.offset_bytes = 0});
 
                 // Block before copying data from tmp to the input buffer
                 noc.async_read_barrier();
 
-                uint32_t prev_size = start_column_id;
-                uint32_t this_block_size = unpadded_X_size - prev_size;
-                if (this_block_size < width_size) {
-                    uint32_t to_pad = width_size - this_block_size;
+                if (to_pad > 0) {
                     dataflow_kernel_lib::fill_l1_range<element_size>(
                         l1_write_addr + this_block_size, to_pad, pad_value);
                 }
@@ -83,17 +99,14 @@ void kernel_main() {
                 noc.async_read(
                     PrecomposedUnicastEndpoint{},
                     temp_dst,
-                    width_size + dram_alignment,
+                    this_block_size + dram_alignment,
                     {.noc_addr = aligned_src_noc_addr},
                     {.offset_bytes = 0});
 
                 // Block before copying data from tmp to the input buffer
                 noc.async_read_barrier();
 
-                uint32_t prev_size = start_column_id;
-                uint32_t this_block_size = unpadded_X_size - prev_size;
-                if (this_block_size < width_size) {
-                    uint32_t to_pad = width_size - this_block_size;
+                if (to_pad > 0) {
                     uint32_t fill_addr =
                         temp_addr + ((src_noc_addr + (uint64_t)start_column_id) & dram_align_offset) + this_block_size;
                     // fill_l1_range CPU-writes the pad tail into the `staging` Scratchpad; scoped_lock flushes
