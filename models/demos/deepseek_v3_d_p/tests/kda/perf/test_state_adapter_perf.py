@@ -52,7 +52,7 @@ _LAYER_IDX = 1
 # References in us per call (K3 payload). SP8xTP4 (TorusXY): session medians on one Galaxy stayed within 0.7%
 # (import); the export's medians spanned 4.90-4.93 us per call over 8 sessions (16 per replay). SP4xTP4 (one tray
 # half, TorusX; 6 heads stored per chip): import 41.39 / 41.36 us, export 5.91 / 5.92 us per call, two sessions on
-# one Galaxy (bh-glx-110-c10u20, 2026-11-19). Per-op times on two Blackhole Galaxies have differed by up to ~6%, so
+# one Blackhole Galaxy at 75 W (2026-11-19). Per-op times on two Blackhole Galaxies have differed by up to ~6%, so
 # the margin leaves room for that machine offset, as select_final_carry's Galaxy gate does (8%).
 _STATE_PATH_REFERENCE_US = {
     ("SP8xTP4", "import"): 49.7,
