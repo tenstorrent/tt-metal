@@ -120,7 +120,7 @@ class KimiK3Adapter(MLAPrefillAdapter):
     # loading all 1.5 TB -- before the supports_pretrained skip in the fixture body runs.
     shared_path = None
 
-    # Device vs upstream KimiSparseMoeBlock. Held at test_kimi_k3_moe's final_output_pcc: the two
+    # Device vs upstream KimiSparseMoeBlock. Held at the TtMoe test_kimi_k3_moe's final_output_pcc (removed): the two
     # compare the same device tensor against references that agree to 2e-5, so they measure the same
     # thing and cannot carry different bars. The 8x4 value is 0.9696 (reference 0.969567,
     # final_output 0.969585) -- 8x4 spreads 896 experts over 32 chips instead of 8, so the top-16

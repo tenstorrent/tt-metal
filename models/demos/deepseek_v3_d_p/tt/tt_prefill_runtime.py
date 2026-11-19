@@ -14,7 +14,12 @@ from transformers.configuration_utils import PretrainedConfig
 
 import ttnn
 from models.demos.common.prefill.chunk_layout import pack_forward_tokens
-from models.demos.common.prefill.prefill_chunk import PrefillChunk, metadata_size_bytes, validate_chunks
+from models.demos.common.prefill.prefill_chunk import (
+    PrefillChunk,
+    forward_metadata_words,
+    metadata_size_bytes,
+    validate_chunks,
+)
 from models.demos.common.prefill.runners.layer_completion_ring_writer import NullLayerCompletionSink
 from models.demos.common.prefill.runners.runner_utils import d2d_activation_width, num_mtp_tokens
 from models.demos.deepseek_v3_d_p.tt.dflash_prefill.dflash_drafter_config import DFlashDrafterConfig
@@ -135,6 +140,9 @@ class TtPrefillRuntimeConfig:
     overlap_shared_expert_with_dispatch: bool = True
     # KV dedup, must match the cache allocation. None: sparse dedups, dense does not.
     tp_shard_kv: Optional[bool] = None
+    # The MoE (tt/moe_impl.py): None = the model's default ($MOE_IMPL first); "block" / "ttmoe" force one. The runner
+    # opens its mesh with the block's fabric payload (moe_impl.moe_block_fabric_payload_size).
+    moe_impl: Optional[str] = None
 
     @property
     def sp_factor(self) -> int:
@@ -393,6 +401,7 @@ class TtPrefillRuntime:
             mtp_predictor=self.mtp_predictor,
             tp_shard_kv=self.config.tp_shard_kv,
             forward_chunks=self.config.forward_chunks,
+            moe_impl=self.config.moe_impl,
         )
 
     def _can_build_missing_cache(self) -> bool:
@@ -1387,6 +1396,18 @@ class TtPrefillRuntime:
         cfg = self.config
         chunk_local = cfg.chunk_size // cfg.sp_factor
         padding = self._packed_padding
+        if not isinstance(padding, PackedPadding):  # (the MoE block's: the forward's metadata words, MoEBlockPacking)
+            # (the warm pass stages only empty chunks, which have no words: every row real, as PackedPadding starts)
+            real = chunks if any(not c.is_empty for c in chunks) else [PrefillChunk(0, 0, cfg.chunk_size)] * len(chunks)
+            words = forward_metadata_words(real, cfg.forward_chunks)
+            host = ttnn.from_torch(
+                torch.tensor([w & 0xFFFFFFFF for w in words], dtype=torch.int64).reshape(1, 1, 1, -1),
+                dtype=ttnn.uint32,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+            )
+            ttnn.copy_host_to_device_tensor(host, padding.forward_metadata)
+            return
         self._write_sp_sharded(
             self._packed_padding_rows(packed_real_rows(chunks, cfg.sp_factor, chunk_local)),
             ttnn.uint32,
@@ -1467,6 +1488,25 @@ class TtPrefillRuntime:
             geometry.write(start, end, p, full=generate)
         return "generate" if generate else "provided"
 
+    def _packed_padding_tensors(self, rows_per_chip: int) -> PackedPadding:
+        """TtMoe's persistent PackedPadding. Every row real until the first _stage_packed; the first MoE layer of the
+        warm pass builds the mask's device tensor (real_rows) from row_mask; _write_packed_padding refreshes both in
+        place from then on."""
+        cfg = self.config
+        return PackedPadding(
+            config=ttnn.from_torch(
+                self._packed_padding_rows((rows_per_chip,) * cfg.sp_factor),
+                device=self.mesh_device,
+                dtype=ttnn.uint32,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                mesh_mapper=ttnn.ShardTensor2dMesh(
+                    self.mesh_device, dims=mesh_shard_dims(0, self.config.sp_axis), mesh_shape=self.mesh_device.shape
+                ),
+            ),
+            row_mask=((1,) * rows_per_chip,) * cfg.sp_factor,
+        )
+
     def _prepare_trace_packed(self, kv_caches: MlaKvCaches) -> None:
         """Packed counterpart of _prepare_trace: persistent token input, one ChunkMetadata per chunk position,
         the persistent MoE padding config and the controller; then a warm pass with every position in the
@@ -1514,21 +1554,15 @@ class TtPrefillRuntime:
             ChunkMetadata(self._meta1_dev(cfg.num_users), self._meta1_dev(0), self._meta1_dev(chunk)) for _ in range(n)
         ]
         rows_per_chip = n * chunk // cfg.sp_factor
-        # Every row real until the first _stage_packed. The first MoE layer of the warm pass builds the mask's device
-        # tensor (real_rows) from row_mask; _write_packed_padding refreshes both in place from then on.
-        self._packed_padding = PackedPadding(
-            config=ttnn.from_torch(
-                self._packed_padding_rows((rows_per_chip,) * cfg.sp_factor),
-                device=self.mesh_device,
-                dtype=ttnn.uint32,
-                layout=ttnn.ROW_MAJOR_LAYOUT,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                mesh_mapper=ttnn.ShardTensor2dMesh(
-                    self.mesh_device, dims=mesh_shard_dims(0, self.config.sp_axis), mesh_shape=self.mesh_device.shape
-                ),
-            ),
-            row_mask=((1,) * rows_per_chip,) * cfg.sp_factor,
-        )
+        if getattr(self.model, "moe_is_block", False):
+            # The MoE block reads the forward's metadata words itself (MoEBlockPacking): a persistent record of its own
+            # (not the socket record a pipeline rank forwards), which _write_packed_padding fills for every replay.
+            from models.demos.deepseek_v3_d_p.tt.kimi_k3.moe_block_ffn import MoEBlockPacking
+
+            words = self._meta_words_dev((0,) * (metadata_size_bytes(n) // 4))
+            self._packed_padding = MoEBlockPacking(forward_metadata=words)
+        else:
+            self._packed_padding = self._packed_padding_tensors(rows_per_chip)
         controller = SubDeviceTraceController(self.mesh_device)
         self.model.set_trace_controller(controller)
         self._controller = controller
