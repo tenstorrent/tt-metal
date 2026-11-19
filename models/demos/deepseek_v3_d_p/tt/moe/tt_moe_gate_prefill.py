@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 
+import os
 from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
@@ -94,6 +95,39 @@ def assert_gate_mode_matches_adapter(variant, gate_fallback_mode: GateComputeMod
 # Per-chip prefill sequence the production deployment runs at, and the depth the MoE/gate tests
 # drive. Every tuned matmul entry is keyed to it; other depths fall back to TTNN's default tiling.
 GATE_PRODUCTION_SP_DIM = PREFILL_CHUNK_TOKENS_PER_CHIP
+
+
+# V41_PREFILL_GATE_TUNED=1 (prefill TTFT plan 1.1, WS1 11-19): the DeepSeek-V4.1 gate matmul (5120 / 4 hidden, 384 experts)
+# at the V4.1 prefill's chunk 4096 (512 tokens per chip) misses the tables above (keyed at 640) and fell back to TTNN's
+# default (279 us per layer, DS41F-0163). This is Kernelize's swept 2D entry for 640 tokens (b6a6c4aaa7: 15.3 us vs 282 us,
+# bit-identical there) at 16 M-tiles: grid 6 x 8 instead of 6 x 10, everything else equal. Off by default.
+_V41_GATE_TUNED = os.environ.get("V41_PREFILL_GATE_TUNED", "0") == "1"
+_V41_GATE_TUNED_CONFIGS = {
+    (512, 1280, 384): ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+        compute_with_storage_grid_size=ttnn.CoreCoord(6, 8),
+        in0_block_w=8,
+        out_subblock_h=1,
+        out_subblock_w=2,
+        out_block_h=2,
+        out_block_w=2,
+        per_core_M=2,
+        per_core_N=2,
+        transpose_mcast=False,
+        fuse_batch=True,
+    ),
+    (640, 1280, 384): ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+        compute_with_storage_grid_size=ttnn.CoreCoord(6, 10),
+        in0_block_w=8,
+        out_subblock_h=1,
+        out_subblock_w=2,
+        out_block_h=2,
+        out_block_w=2,
+        per_core_M=2,
+        per_core_N=2,
+        transpose_mcast=False,
+        fuse_batch=True,
+    ),
+}
 
 
 def gate_mm_config_key(sp_dim: int, per_device_emb_dim: int, n_routed_experts: int) -> tuple[int, int, int]:
@@ -881,6 +915,12 @@ class TtMoEGatePrefill(LightweightModule):
             program_config = self.config.mm_configs_interleaved.get(config_key)
         if program_config is None:
             program_config = self.config.mm_configs.get(config_key)
+        if (
+            program_config is None
+            and _V41_GATE_TUNED
+            and x.memory_config().memory_layout == ttnn.TensorMemoryLayout.INTERLEAVED
+        ):
+            program_config = _V41_GATE_TUNED_CONFIGS.get(config_key)
         if program_config is None:
             logger.warning(f"[MoeGate] No matmul program config for {config_key}, using TTNN default")
 
