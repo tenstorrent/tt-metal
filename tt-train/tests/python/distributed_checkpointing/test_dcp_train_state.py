@@ -21,6 +21,7 @@ from dcp_oracle import MISREAD_RNG, WRONG_LENGTH_RNG, Loader, advance_generators
 
 import ttml
 from ttml.common.schedulers import CosineAnnealingScheduler, LinearScheduler, SequentialScheduler, StepScheduler
+from ttml.distributed_checkpointing import _train_state
 from ttml.distributed_checkpointing._errors import CheckpointError, IncompleteCheckpointError, VersionError
 from ttml.distributed_checkpointing._index import read_header_json, write_header
 from ttml.distributed_checkpointing._train_state import (
@@ -278,6 +279,26 @@ def test_misreadable_rng_state_is_refused(damage, expect_error):
     assert after[0] == before[0] and after[1] == before[1], "ttml and python untouched"
     assert np.array_equal(after[2], before[2]) and torch.equal(after[3], before[3]), "numpy and torch untouched"
     check_train_state({"rng": broken}, rng=False)  # not asked for: not decoded, so a load without rng goes ahead
+
+
+def test_the_ttml_text_must_have_the_form_this_build_writes(monkeypatch, expect_error):
+    """libstdc++ writes an mt19937 as its 624 words and its position, libc++ as the 624 words alone, and each reads
+    the other's text wrongly. The decoder expects the form the running build writes, so a build takes its own
+    checkpoints and refuses the other's."""
+    block = capture_rng(world_rank=0)
+    tokens = block["ranks"]["0"]["ttml"].split()
+    this_form = len(tokens)
+    assert this_form in (624, 625), f"an mt19937 text of {this_form} tokens"
+    other_form = 624 if this_form == 625 else 625
+    other = json.loads(json.dumps(block))
+    other["ranks"]["0"]["ttml"] = " ".join(tokens[:624] + ["0"] * (other_form - 624))
+    with expect_error(CheckpointError, f"is not the {this_form} tokens this build writes .*it has {other_form}"):
+        check_train_state({"rng": other}, rng=True, world_rank=0)
+
+    monkeypatch.setattr(_train_state, "_mt19937_text_tokens", lambda: other_form)  # a build with the other library
+    check_train_state({"rng": other}, rng=True, world_rank=0)  # its own form decodes
+    with expect_error(CheckpointError, f"is not the {other_form} tokens this build writes .*it has {this_form}"):
+        check_train_state({"rng": block}, rng=True, world_rank=0)
 
 
 class _TupleLoader(Loader):

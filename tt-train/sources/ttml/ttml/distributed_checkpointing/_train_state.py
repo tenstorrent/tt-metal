@@ -40,8 +40,9 @@ from ._index import HEADER_NAME, check_json, read_checked_header
 
 TRAIN_STATE_KEY = "train_state"
 RNG_FORMAT = 1
-# The text of a std::mt19937 (get_generator_state): its 624 state words and its position.
-_MT19937_TOKENS = 625
+# A std::mt19937's state words. get_generator_state writes them as text, the C++ standard library's form: libstdc++
+# writes the 624 words and the position in [0, 624], libc++ the 624 words alone, starting at the position.
+_MT19937_WORDS = 624
 
 
 def _hex_u32(words) -> str:
@@ -57,6 +58,11 @@ def this_world_rank() -> int:
     if ttnn.distributed_context_is_initialized():
         return int(ttnn.distributed_context_world_rank())
     return 0
+
+
+def _mt19937_text_tokens() -> int:
+    """How many tokens this build's ttml generator text has: 625 with libstdc++, 624 with libc++."""
+    return len(ttml.autograd.AutoContext.get_instance().get_generator_state().split())
 
 
 def capture_rng(world_rank: int | None = None) -> dict:
@@ -152,16 +158,21 @@ def _decode_process_rng(state: dict) -> dict[str, Any]:
             tokens = str(state["ttml"]).split()
             # The C++ setter streams the text into the live generator and stops partway at anything it cannot read,
             # leaving the generator in neither state, and no throwaway ttml generator exists to try it on. So the text
-            # is checked to be what an mt19937 writes: 624 ASCII-decimal 32-bit words and a position in [0, 624].
+            # is checked to be what this build's mt19937 writes: as many ASCII-decimal tokens as its own text, the
+            # first 624 of them 32-bit words, and a position in [0, 624] after them when its form has one. A text in
+            # the other standard library's form would be misread, so it is refused too.
+            expected = _mt19937_text_tokens()
             if (
-                len(tokens) != _MT19937_TOKENS
+                len(tokens) != expected
                 or not all(token.isascii() and token.isdigit() for token in tokens)
-                or any(int(token) > 0xFFFFFFFF for token in tokens[:-1])
-                or int(tokens[-1]) > _MT19937_TOKENS - 1
+                or any(int(token) > 0xFFFFFFFF for token in tokens[:_MT19937_WORDS])
+                or (expected > _MT19937_WORDS and int(tokens[-1]) > _MT19937_WORDS)
             ):
+                position = f" and a position in [0, {_MT19937_WORDS}]" if expected > _MT19937_WORDS else ""
                 raise ValueError(
-                    f"the ttml generator state is not the {_MT19937_TOKENS - 1} 32-bit words and position in "
-                    f"[0, {_MT19937_TOKENS - 1}] of an mt19937 ({len(tokens)} tokens)"
+                    f"the ttml generator state is not the {expected} tokens this build writes for an mt19937 "
+                    f"({_MT19937_WORDS} 32-bit words{position}); it has {len(tokens)} (a build with the other C++ "
+                    "standard library writes another form)"
                 )
             decoded["ttml"] = " ".join(tokens)
         python_state = state.get("python")
