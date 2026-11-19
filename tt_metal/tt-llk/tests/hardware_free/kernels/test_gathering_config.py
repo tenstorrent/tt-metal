@@ -573,7 +573,7 @@ GATHERING_BUILD_VARIANTS = [
     (
         "binary bcast column (broadcast helper)",
         "test_eltwise_binary_sfpu.py::test_eltwise_binary_sfpu_bcast[formats:Float16_b->Float16_b-"
-        "bcast_dim:Column-mathop:SfpuElwsub-dest_acc:No]",
+        "broadcast_type:Column-mathop:SfpuElwsub-dest_acc:No]",
         "math",
     ),
     (
