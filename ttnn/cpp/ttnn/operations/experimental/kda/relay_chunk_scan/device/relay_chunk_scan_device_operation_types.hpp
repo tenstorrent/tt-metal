@@ -14,13 +14,21 @@
 
 namespace ttnn::experimental::prim {
 
-struct RelayAffinePrefixParams {
+struct RelayChunkScanParams {
     uint32_t sequence_parallel_axis;
     uint32_t local_rows;
     uint32_t num_links;
-    // One core per head, then two sender cores per link: the relay's, and the final carry's second.
+    // The same number of cores per head, head by head (core j of a head corrects its j-th share of the chunks, and the
+    // head's first core also runs the relay's hop), then two sender cores per link: the relay's, and the final carry's
+    // second.
     std::vector<tt::tt_metal::CoreCoord> cores;
-    tt::tt_metal::MemoryConfig entry_mem_config;
+    // The gated output norm: heads per batch (the output is [B, T, H*V]), the output gate's first column in its
+    // [B, T, W] tensor, epsilon, and the output's dtype and memory.
+    uint32_t num_heads;
+    uint32_t gate_column_offset;
+    float norm_epsilon;
+    tt::tt_metal::DataType output_dtype;
+    tt::tt_metal::MemoryConfig output_mem_config;
     DeviceComputeKernelConfig compute_kernel_config;
     // L1 addresses of the caller's entry-state, final-state and final-carry arrival counters, kept alive across
     // calls: a peer counts into them before this rank's call starts, and each call subtracts what it consumed.
@@ -32,21 +40,26 @@ struct RelayAffinePrefixParams {
 // The landing buffer's K x K slots per head core: entry state, final state.
 inline constexpr uint32_t relay_landing_slots = 2;
 
-struct RelayAffinePrefixInputs {
+struct RelayChunkScanInputs {
     Tensor packed;
+    // Per chunk, the output for a zero seed F(0) and an identity seed F(I): height-sharded so each core's F(0) rows,
+    // then its F(I) rows, are in its own L1, or interleaved [B*H, 2, local rows, K] and streamed.
+    Tensor terms;
     Tensor initial_state;
     Tensor actual_start;
-    // L1, height-sharded relay_landing_slots K x K states per head core, in order: the entry state the predecessor
-    // writes and the final state the last rank writes into the first rank's. Consecutive calls need a barrier across
-    // the SP line between them: a rank's writer copies the entry and final states out at the end of its call, and its
-    // predecessor's next call overwrites them as soon as it starts.
+    // L1, height-sharded relay_landing_slots K x K states per head core (each head's first core), in order: the entry
+    // state the predecessor writes and the final state the last rank writes into the first rank's. Consecutive calls
+    // need a barrier across the SP line between them: a rank's predecessor's next call overwrites them as soon as it
+    // starts.
     Tensor landing;
-    // The rank's final transition in complement form (entry_correction's final_e and final_b), which the first rank
-    // applies to the relayed final state when the interval ends in a separated tail, and the optional exclusive valid
-    // end that decides it.
+    // The rank's final transition in complement form, which the first rank applies to the relayed final state when
+    // the interval ends in a separated tail, and the optional exclusive valid end that decides it.
     Tensor final_e;
     Tensor final_b;
     std::optional<Tensor> actual_end;
+    // The gated output norm: the [B, T, W] gate (the input projection) and the [V] weight.
+    Tensor output_gate;
+    Tensor norm_weight;
     // initial_state is then a [entries, H, K, K] slab, read at its entry (zeros at actual_start == 0); the final carry
     // is written back into the same entry, in place, and the slab is returned as the carry.
     std::optional<Tensor> slab_index;
@@ -57,7 +70,7 @@ struct RelayStateGeometry {
     uint32_t heads;
     uint32_t key_dim;
 };
-inline RelayStateGeometry relay_state_geometry(const RelayAffinePrefixInputs& in) {
+inline RelayStateGeometry relay_state_geometry(const RelayChunkScanInputs& in) {
     const auto& state = in.initial_state.logical_shape();
     return in.slab_index ? RelayStateGeometry{state[1], state[2]} : RelayStateGeometry{state[0], state[1]};
 }
