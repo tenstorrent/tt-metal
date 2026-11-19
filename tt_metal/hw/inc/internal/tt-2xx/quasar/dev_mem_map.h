@@ -433,6 +433,10 @@
 #define MEM_IERISC_PEER_CCE_BASE ETH_CCE_PEER_BASE
 // Offsets 0..63 are reset-vector registers, not SRAM. Reserve through 128 and start the mailbox there.
 #define MEM_IERISC_RESERVED_SIZE 128
+// Watcher ring buffer lock (cached view of this CCE's own SRAM). A Keraunos CCE has no NEO cluster semaphore to claim
+// slots with, so harts claim them under this lock, as a Mimir CCE does. Offsets 0..63 are registers and 64 is the
+// barrier word; the lock sits in the same reserved block, above them.
+#define MEM_IERISC_WATCHER_RING_BUFFER_LOCK 96
 #define MEM_IERISC_MAILBOX_BASE MEM_IERISC_RESERVED_SIZE
 #define MEM_IERISC_MAILBOX_SIZE 32768
 #define MEM_IERISC_MAILBOX_END (MEM_IERISC_MAILBOX_BASE + MEM_IERISC_MAILBOX_SIZE)

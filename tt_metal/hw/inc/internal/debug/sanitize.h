@@ -270,12 +270,26 @@ inline uint16_t debug_valid_eth_addr(uint64_t addr, uint64_t len, bool write) {
     if (addr + len <= addr) {
         return DebugSanitizeNocAddrZeroLength;
     }
+#if defined(ARCH_QUASAR)
+    // An HSIO tile has two CCEs, MEM_IERISC_ETH_CCES windows of MEM_IERISC_L1_SIZE each. Addresses may be CCE-relative
+    // or native (CCE1 at one window up), and a local buffer may sit in the uncached alias (8 MiB above the CCE's own
+    // base). Fold the alias away, then require the transfer to stay within one CCE's SRAM.
+    if (addr >= MEM_IERISC_UNCACHED_BASE) {
+        addr -= MEM_IERISC_UNCACHED_BASE;
+    }
+    if (addr + len > static_cast<uint64_t>(MEM_IERISC_ETH_CCES) * MEM_IERISC_L1_SIZE ||
+        (addr / MEM_IERISC_L1_SIZE) != ((addr + len - 1) / MEM_IERISC_L1_SIZE)) {
+        return DebugSanitizeNocAddrOverflow;
+    }
+    addr %= MEM_IERISC_L1_SIZE;  // offset within that CCE, for the mailbox check
+#else
     if (addr < MEM_ETH_BASE) {
         return DebugSanitizeNocAddrUnderflow;
     }
     if (addr + len > MEM_ETH_BASE + MEM_ETH_SIZE) {
         return DebugSanitizeNocAddrOverflow;
     }
+#endif
     constexpr uint64_t mem_mailbox_end = MEM_IERISC_MAILBOX_END < eth_l1_mem::address_map::ERISC_MEM_MAILBOX_END
                                              ? MEM_IERISC_MAILBOX_END
                                              : eth_l1_mem::address_map::ERISC_MEM_MAILBOX_END;

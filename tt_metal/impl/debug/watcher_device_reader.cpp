@@ -683,10 +683,12 @@ WatcherDeviceReader::Core WatcherDeviceReader::Core::Create(
     // Quasar's MPSC head lives outside the mailbox: in a semaphore register on Tensix, in its own L1 line on
     // dispatch engines. Read it here with the rest of the snapshot. Gated on the same condition as
     // DumpMpscRingBuffer(), the only consumer: on Tensix, with the ring buffer disabled the firmware never
-    // initializes semaphore 31, so touching it would fault. CCE cores (DRAM) keep the head in the mailbox.
+    // initializes semaphore 31, so touching it would fault. CCE cores (Mimir DRISC, Keraunos idle-eth) have no
+    // such register and keep the head in the mailbox.
     uint32_t ring_buf_head = 0;
     if (hal.get_arch() == tt::ARCH::QUASAR && !rtoptions.watcher_ring_buffer_disabled() &&
-        programmable_core_type != HalProgrammableCoreType::DRAM) {
+        programmable_core_type != HalProgrammableCoreType::DRAM &&
+        programmable_core_type != HalProgrammableCoreType::IDLE_ETH) {
         uint64_t head_addr = (programmable_core_type == HalProgrammableCoreType::DISPATCH)
                                  ? hal.get_dev_noc_addr(programmable_core_type, HalL1MemAddrType::RING_BUF_HEAD)
                                  : watcher_ring_buf_sem_peek_addr;
@@ -1142,9 +1144,10 @@ void WatcherDeviceReader::Core::DumpMpscRingBuffer(bool to_stdout) const {
 
     uint32_t capacity = hal.get_ring_buffer_capacity();
     uint32_t mask = capacity - 1;  // capacity is a power of two
-    // Quasar keeps head outside the mailbox, snapshotted alongside it, except on CCE cores (DRAM), which
-    // keep it in the mailbox as Blackhole does.
-    uint32_t head = (hal.get_arch() == tt::ARCH::QUASAR && programmable_core_type_ != HalProgrammableCoreType::DRAM)
+    // Quasar keeps head outside the mailbox, snapshotted alongside it, except on CCE cores (Mimir DRISC,
+    // Keraunos idle-eth), which keep it in the mailbox as Blackhole does.
+    uint32_t head = (hal.get_arch() == tt::ARCH::QUASAR && programmable_core_type_ != HalProgrammableCoreType::DRAM &&
+                     programmable_core_type_ != HalProgrammableCoreType::IDLE_ETH)
                         ? ring_buf_head_
                         : rb->head;
 
