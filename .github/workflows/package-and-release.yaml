@@ -209,7 +209,7 @@ jobs:
   blaze-merge-gate:
     needs: [build-artifact-profiler]
     # Disabled blaze merge gate until TT_BLAZE_PAT token is restored: https://tenstorrent.atlassian.net/browse/RELEASE-134
-    if: ${{ false &&!cancelled() && github.ref != 'refs/heads/stable' && needs.build-artifact-profiler.result == 'success' }}
+    if: ${{ false && !cancelled() && github.ref != 'refs/heads/stable' && needs.build-artifact-profiler.result == 'success' }}
     permissions:
       contents: read
     # TT_BLAZE_PAT -- the default GITHUB_TOKEN cannot dispatch another repo.
