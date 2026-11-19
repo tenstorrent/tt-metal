@@ -1448,6 +1448,9 @@ SfpuElwsub:
 - {input: Float16_b, output: Float32, dest: 'Yes', measured: 0, note: 'bh: max 0 ULP, 3 variants / 98k lanes'}
 - {input: Float32, output: Float16_b, dest: 'Yes', measured: 1, note: 'bh: max 1 ULP, 5 variants / 82k lanes'}
 - {input: Float32, output: Float32, dest: 'Yes', measured: 0, note: 'bh: max 0 ULP, 7 variants / 78k lanes'}
+SfpuGegluTanh:
+- {input: Float16_b, output: Float16_b, dest: 'No', measured: 1, near_zero_atol: 1.925929944387236e-34, note: 'bh: below 1 ULP of the exact result; 0 where the logistic factor underflows, as stock'}
+- {input: Float16_b, output: Float16_b, dest: 'Yes', measured: 1, near_zero_atol: 1.925929944387236e-34, note: 'bh: below 1 ULP of the exact result; 0 where the logistic factor underflows, as stock'}
 SfpuIsclose:
 - {output: Float16_b, metric: TOLERANCE, measured: 0, note: 'wh figure, no bh driver reaches this row; 0 ULP, 3 variants / 81920 lanes'}
 - {output: Float32, metric: TOLERANCE, measured: 0, note: 'wh figure, no bh driver reaches this row; 0 ULP, 3 variants / 81920 lanes'}
@@ -1798,15 +1801,15 @@ Tanhshrink:
 - {input: Float16, output: Float16_b, dest: 'Yes', domains: [{low: -.inf, high: .inf, ulp: 1}]}
 - {input: Float16, output: Float32, dest: 'Yes', domains: [{low: -.inf, high: .inf, ulp: 11}]}
 - {input: Float16_b, output: Float16, dest: 'Yes', domains: [{low: -.inf, high: -65536.0}, {low: -65536.0, high: 65536.0, ulp: 1}, {low: 65536.0, high: .inf}]}
-- {input: Float16_b, output: Float16_b, dest: 'No', near_zero_atol: 2.3161057151484775e-23, domains: [{low: -.inf, high: .inf, ulp: 2}]}
-- {input: Float16_b, output: Float16_b, dest: 'Yes', near_zero_atol: 2.3161057151484775e-23, domains: [{low: -.inf, high: .inf, ulp: 2}]}
-- {input: Float16_b, output: Float32, dest: 'No', near_zero_atol: 2.3161057151484775e-23, domains: [{low: -.inf, high: .inf, ulp: 131072}]}
-- {input: Float16_b, output: Float32, dest: 'Yes', near_zero_atol: 2.3111579795509313e-23, domains: [{low: -.inf, high: .inf, ulp: 116273}]}
+- {input: Float16_b, output: Float16_b, dest: 'No', domains: [{low: -.inf, high: .inf, ulp: 1}]}
+- {input: Float16_b, output: Float16_b, dest: 'Yes', domains: [{low: -.inf, high: .inf, ulp: 1}]}
+- {input: Float16_b, output: Float32, dest: 'No', domains: [{low: -.inf, high: .inf, ulp: 65536}]}
+- {input: Float16_b, output: Float32, dest: 'Yes', domains: [{low: -.inf, high: .inf, ulp: 7}]}
 - {input: Float32, output: Float16, dest: 'Yes', domains: [{low: -.inf, high: -65536.0}, {low: -65536.0, high: 65536.0, ulp: 0}, {low: 65536.0, high: .inf}]}
-- {input: Float32, output: Float16_b, dest: 'No', near_zero_atol: 2.3161057151484775e-23, domains: [{low: -.inf, high: .inf, ulp: 2}]}
-- {input: Float32, output: Float16_b, dest: 'Yes', near_zero_atol: 2.3161057151484775e-23, domains: [{low: -.inf, high: .inf, ulp: 4}]}
-- {input: Float32, output: Float32, dest: 'No', near_zero_atol: 2.3161057151484775e-23, domains: [{low: -.inf, high: .inf, ulp: 131072}]}
-- {input: Float32, output: Float32, dest: 'Yes', near_zero_atol: 2.461821577206006e-23, domains: [{low: -.inf, high: .inf, ulp: 159138}]}
+- {input: Float32, output: Float16_b, dest: 'No', domains: [{low: -.inf, high: .inf, ulp: 1}]}
+- {input: Float32, output: Float16_b, dest: 'Yes', domains: [{low: -.inf, high: .inf, ulp: 0}]}
+- {input: Float32, output: Float32, dest: 'No', domains: [{low: -.inf, high: .inf, ulp: 65536}]}
+- {input: Float32, output: Float32, dest: 'Yes', domains: [{low: -.inf, high: .inf, ulp: 7}]}
 Threshold:
 - {output: Float16, metric: TOLERANCE, note: '0 ULP, 116 variants / 2.10M lanes, but on uniform(-5, 5) against THRESHOLD_T=5.0 the pass-through branch never fires, so that run measured only the constant 10.0, not the pack rounding of a passed-through x (Identity reads 1 step on these keys)'}
 - {output: Float16_b, metric: TOLERANCE, note: '0 ULP, 116 variants / 2.10M lanes, but on uniform(-5, 5) against THRESHOLD_T=5.0 the pass-through branch never fires, so that run measured only the constant 10.0, not the pack rounding of a passed-through x (Identity reads 1 step on these keys)'}

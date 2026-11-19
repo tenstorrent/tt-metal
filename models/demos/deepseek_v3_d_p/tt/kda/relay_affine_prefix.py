@@ -4,23 +4,42 @@
 """The sequence-parallel prefix as a relay along the SP axis (ttnn.experimental.kda.relay_affine_prefix): each rank
 applies its own summary, in complement form [E | B] (E = A - I), to the entry state S its predecessor sends as
 S + (E S + B) and forwards the result, and the last rank hands the final state to the first. On a ring that hand-off
-is one hop; on a line it crosses the SP axis (2D routing, or sp_size - 1 hops back on a 1D fabric).
+is one hop; on a line it crosses the SP axis (2D routing, or sp_size - 1 hops back on a 1D fabric). The first rank
+then forms the chunk's final carry from it and multicasts it to every rank.
 
 The relay's landing buffer is an L1 tensor sharded one head per head core, at the same address on every device. A
-rank's predecessor writes into it before the rank's own call starts, so a layer reserves it before its first program
-(reserve) and the call frees it once the relay has consumed it: between layers that L1 is free for the other
-attention layers (ring_mla's circular buffers span nearly all of L1 on the relay's head columns).
+rank's predecessor writes into it before the rank's own call starts, so a layer reserves it before the SP barrier that
+precedes the recurrence (reserve) and the call frees it once the relay has consumed it: between layers that L1 is free
+for the other attention layers (ring_mla's circular buffers span nearly all of L1 on the relay's head columns).
 
 Load-bearing: the entry barrier of the layer's qkv convolution history exchange runs after the reservation and before
 the relay, so no rank relays until every rank has reserved its landing buffer and finished the programs before it,
 whose circular buffers may overlap that L1. A layer that drops that exchange needs another SP barrier there. Layers run
-one after another, so one relay per mesh and geometry is shared; the final carry's SP-line barrier separates
-consecutive calls.
+one after another, so one relay per mesh and geometry is shared; every rank waiting for the final carry, which the
+first rank sends after the lap, separates consecutive calls.
 """
 
 from __future__ import annotations
 
+from dataclasses import dataclass
+
 import ttnn
+
+
+@dataclass(frozen=True)
+class SlabEntry:
+    """Entry ``index * scale + offset`` of a ``[entries, ...]`` state slab; ``index`` is a replicated UINT32 device
+    scalar the KDA ops read on device, so a captured trace follows the index of each replay. The ops read the carry
+    from the entry (zeros where ``actual_start`` reads 0) and write the replacement back in place."""
+
+    slab: ttnn.Tensor
+    index: ttnn.Tensor
+    scale: int = 1
+    offset: int = 0
+
+    def op_kwargs(self) -> dict:
+        return {"slab_index": self.index, "slab_index_scale": self.scale, "slab_index_offset": self.offset}
+
 
 # A sender core's count semaphores, one per head it serves (relay_affine_prefix_max_heads_per_link).
 _MAX_HEADS_PER_LINK = 14
@@ -94,12 +113,14 @@ class RelayAffinePrefix:
         self.axis = sequence_parallel_axis
         self.num_links = num_links
         self.local_rows = local_rows
-        # One core per head, then one sender per link, in the grid's row-major order.
+        # One core per head, then two senders per link (the relay's and the final carry's second), in the grid's
+        # row-major order.
         grid = mesh_device.compute_with_storage_grid_size()
         cores = [ttnn.CoreCoord(x, y) for y in range(grid.y) for x in range(grid.x)]
-        if batch_heads + num_links > len(cores):
-            raise ValueError(f"relay prefix needs {batch_heads + num_links} cores, has {len(cores)}")
-        self.cores = cores[: batch_heads + num_links]
+        senders = 2 * num_links
+        if batch_heads + senders > len(cores):
+            raise ValueError(f"relay prefix needs {batch_heads + senders} cores, has {len(cores)}")
+        self.cores = cores[: batch_heads + senders]
         head_set = ttnn.CoreRangeSet([]).merge(ttnn.CoreRangeSet([ttnn.CoreRange(c, c) for c in cores[:batch_heads]]))
         self._landing_memory_config = ttnn.MemoryConfig(
             ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
@@ -109,8 +130,8 @@ class RelayAffinePrefix:
         # Two K x K states per head core (the entry state, the final state) while reserved.
         self._landing_shape = ttnn.Shape([2 * batch_heads * key_dim, key_dim])
         self._landing = None
-        # A peer can bump the entry and final arrival counters before this rank's call starts.
-        self.semaphores = persistent_semaphores(mesh_device, 2)
+        # A peer can bump the entry, final and carry arrival counters before this rank's call starts.
+        self.semaphores = persistent_semaphores(mesh_device, 3)
         # The hop's matmul runs at the affine prefix's fidelity, accumulating in an FP32 DST.
         self.compute_config = ttnn.init_device_compute_kernel_config(
             mesh_device.arch(), math_fidelity=math_fidelity, math_approx_mode=False, fp32_dest_acc_en=True
@@ -119,29 +140,40 @@ class RelayAffinePrefix:
         self.entry_memory_config = ttnn.L1_MEMORY_CONFIG
 
     def reserve(self):
-        """Allocate the landing buffer for the next call, before any program of its layer (a no-op while reserved)."""
+        """Allocate the landing buffer for the next call, before the SP barrier that precedes the recurrence (a no-op
+        while reserved)."""
         if self._landing is None:
             self._landing = ttnn.allocate_tensor_on_device(
                 self._landing_shape, ttnn.float32, ttnn.TILE_LAYOUT, self.mesh_device, self._landing_memory_config
             )
 
-    def __call__(self, packed, initial_state, actual_start):
-        """Return this rank's entry states (in L1) and the final state, both [BH, K, K] FP32. Frees the landing buffer
-        once the relay has run."""
+    def __call__(self, packed, initial_state: ttnn.Tensor | SlabEntry, final_e, final_b, actual_start, actual_end=None):
+        """Return this rank's entry states (in L1), the relayed final state and the chunk's final carry on every rank,
+        all [BH, K, K] FP32. Frees the landing buffer once the relay has run. A slab entry ``initial_state`` is read in
+        place (zeros at a request's head) and the final carry is written back into it: the carry returned is then the
+        slab."""
         # Reserving here suffices only when no program of this rank runs between its predecessor's relay and its own.
         self.reserve()
+        slab_kwargs = {}
+        if isinstance(initial_state, SlabEntry):
+            slab_kwargs = initial_state.op_kwargs()
+            initial_state = initial_state.slab
         result = ttnn.experimental.kda.relay_affine_prefix(
             packed,
             initial_state,
+            final_e,
+            final_b,
             actual_start,
             self._landing,
             self.semaphores,
             local_rows=self.local_rows,
             num_links=self.num_links,
             cores=self.cores,
+            actual_end=actual_end,
             sequence_parallel_axis=self.axis,
             entry_memory_config=self.entry_memory_config,
             compute_kernel_config=self.compute_config,
+            **slab_kwargs,
         )
         # Every write into it is consumed within the call: the predecessor's entry columns by this rank's heads, and
         # the last rank's final state by the first rank's writer.

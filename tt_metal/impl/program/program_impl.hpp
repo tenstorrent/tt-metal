@@ -11,6 +11,7 @@
 #include "tt-metalium/circular_buffer_constants.h"
 #include "tt-metalium/circular_buffer_config.hpp"
 #include <tt_stl/assert.hpp>
+#include <tt_stl/optional_reference.hpp>
 #include "tt-metalium/core_coord.hpp"
 #include "tt-metalium/hal_types.hpp"     // HalProgrammableCoreType
 #include "tt-metalium/kernel_types.hpp"  // KernelHandle
@@ -62,6 +63,7 @@ class HWCommandQueue;
 class EnqueueProgramCommand;
 
 class Kernel;
+struct ScratchpadBindingHandle;
 
 namespace distributed {
 class MeshDevice;
@@ -376,8 +378,12 @@ public:
         const CircularBufferConfig& config,
         const experimental::GlobalCircularBuffer& global_circular_buffer);
 
+    // Register a DFB, defaulting its allocation placement to its configuration nodes.
+    // side-effect: Invalidates program allocation.
     uint32_t add_dataflow_buffer(
-        const CoreRangeSet& core_range_set, const experimental::dfb::DataflowBufferConfig& config);
+        const CoreRangeSet& core_range_set,
+        const experimental::dfb::DataflowBufferConfig& config,
+        ttsl::optional_reference<const CoreRangeSet> allocation_core_range_set = std::nullopt);
 
     uint32_t assign_dfb_device_slot(const experimental::dfb::detail::DataflowBufferImpl& dfb) const;
 
@@ -478,7 +484,7 @@ public:
 
     // Binding a live pipe to a reserved slot on `cores` (a subset of the slot's cores whose sender /
     // receiver split matches the pipe's) is split in two so a batch of bindings can be checked in
-    // full before any of it lands (a rejected SetProgramRunArgs must leave the program untouched):
+    // full before any of it lands (a rejected Program::set_program_run_args must leave the program untouched):
     //   check_prefetcher_pipe_slot_bind validates the pipe against the slot geometry and credit
     //     lanes, the sticky per-core binding and the relay ring agreement. No mutation.
     //     `preflight` accumulates what earlier checks in the same batch would commit (ring address
@@ -561,7 +567,7 @@ public:
             bool sender_role = false;
         };
         std::vector<SlotCores> slots;
-        // identity() of the pipe SetProgramRunArgs bound, 0 until one is. Same-pipe checks compare
+        // identity() of the pipe Program::set_program_run_args bound, 0 until one is. Same-pipe checks compare
         // this, not the address: a destroyed pipe's address can be reused by a new pipe, but its
         // identity never is. The bound pipe may be destroyed while the program lives on; a later bind
         // may replace it only with a pipe of the same bound_pipe_key.
@@ -657,7 +663,7 @@ public:
 
     void generate_dispatch_commands(distributed::MeshDevice* mesh_device, bool use_prefetcher_cache);
 
-    // Dispatches detail::collect_kernel_meta, device is nullable
+    // Backs experimental::collect_kernel_meta
     std::vector<detail::KernelMeta> collect_kernel_meta(IDevice* device) const;
 
     // Metal 2.0: Mark this Program as created from ProgramSpec
@@ -701,6 +707,12 @@ public:
     // name is unknown; the caller validates known-ness separately).
     TensorSpecRelaxations get_tensor_parameter_relaxations(const std::string& name) const;
     std::vector<std::string> get_registered_tensor_parameter_names() const;
+    // Metal 2.0: GlobalSemaphoreParameters, with the mesh the program was built for (a bound
+    // GlobalSemaphore must live on it).
+    void register_global_semaphore_parameter(const std::string& name, const distributed::MeshDevice& device);
+    // Returns nullptr if name is not registered (caller validates).
+    const distributed::MeshDevice* get_global_semaphore_parameter_device(const std::string& name) const;
+    std::vector<std::string> get_registered_global_semaphore_parameter_names() const;
     // Footprint of the tensor most recently bound to a registered parameter. The setter ignores unregistered names;
     // the getter returns nullptr if no tensor has been bound.
     void set_bound_tensor_footprint(const std::string& name, const BoundTensorFootprint& footprint);
@@ -732,8 +744,8 @@ public:
 
         // Precomputed name -> slot-index maps mirroring the *_names vectors above (slot = the arg's
         // position within its dispatch-buffer section). Built once at Program construction so the
-        // hot UpdateProgramRunArgs path does O(1) lookups instead of rebuilding a map per call —
-        // that path is not bypassable via skip_validation, so per-call construction would be pure
+        // hot Program::update_program_run_args path does O(1) lookups instead of rebuilding a map per call —
+        // that path is not bypassable via ValidationMode::SKIP, so per-call construction would be pure
         // host overhead on the inner re-enqueue loop.
         std::unordered_map<std::string, size_t> runtime_arg_name_to_slot;
         std::unordered_map<std::string, size_t> common_runtime_arg_name_to_slot;
@@ -763,11 +775,81 @@ public:
     std::vector<std::string> get_registered_kernel_names() const;
 
     // Metal 2.0: Pre-size RTA/CRTA host buffers from the registered schema + CRTA layout so
-    // finalize_offsets can compute dispatch sizes before SetProgramRunArgs fills values.
+    // finalize_offsets can compute dispatch sizes before Program::set_program_run_args fills values.
     void reserve_runtime_arg_buffers();
 
     bool program_run_args_initialized() const { return program_run_args_initialized_; }
     void mark_program_run_args_initialized() { program_run_args_initialized_ = true; }
+
+    // Metal 2.0 per-device run args (MeshWorkload::update_program_run_args_for_device). A program-level set of the run
+    // args drops every per-device value, and an update drops those of the args it lists. The MeshWorkload holds the
+    // per-device values, so the program only records the drops; the workload applies them before its next per-device
+    // set and at enqueue. Nothing is recorded until the workload tracks a per-device arg of this program, so programs
+    // without per-device args pay one empty() check per set or update.
+    struct PerDeviceRunArgKey {
+        KernelHandle kernel = 0;
+        std::optional<CoreCoord> core;  // nullopt: a common run arg
+        uint32_t first_word = 0;        // the arg's slot (an array's first slot)
+        bool operator==(const PerDeviceRunArgKey&) const = default;
+    };
+    struct PerDeviceRunArgKeyHash {
+        size_t operator()(const PerDeviceRunArgKey& key) const noexcept {
+            uint64_t h = (static_cast<uint64_t>(key.kernel) << 32) ^ key.first_word;
+            if (key.core.has_value()) {
+                h ^= ((static_cast<uint64_t>(key.core->x) << 16) ^ key.core->y ^ (uint64_t{1} << 31)) *
+                     0x9E3779B97F4A7C15ull;
+            }
+            return std::hash<uint64_t>{}(h);
+        }
+    };
+    using PerDeviceRunArgKeys = std::unordered_set<PerDeviceRunArgKey, PerDeviceRunArgKeyHash>;
+    struct PerDeviceRunArgDrops {
+        PerDeviceRunArgKeys tracked;  // the args the workload holds per-device values of
+        std::unordered_map<KernelHandle, uint32_t> tracked_per_kernel;  // number of tracked args per kernel
+        // Program::set_program_run_args since the workload last applied the drops
+        bool drop_all = false;
+        // tracked args Program::update_program_run_args set since then (empty when drop_all)
+        PerDeviceRunArgKeys pending;
+        bool any_pending() const { return drop_all || !pending.empty(); }
+        // The workload entry that holds per-device args of the program (see MeshWorkloadImpl): the drops are its.
+        uint64_t owner = 0;
+    };
+    bool tracks_per_device_run_args() const { return !per_device_run_arg_drops_.tracked.empty(); }
+    bool tracks_per_device_run_args_of(KernelHandle kernel) const {
+        return per_device_run_arg_drops_.tracked_per_kernel.contains(kernel);
+    }
+    void track_per_device_run_arg(const PerDeviceRunArgKey& key) {
+        if (per_device_run_arg_drops_.tracked.insert(key).second) {
+            per_device_run_arg_drops_.tracked_per_kernel[key.kernel]++;
+        }
+    }
+    void untrack_per_device_run_arg(const PerDeviceRunArgKey& key) {
+        auto& drops = per_device_run_arg_drops_;
+        if (drops.tracked.erase(key) != 0) {
+            const auto it = drops.tracked_per_kernel.find(key.kernel);
+            TT_ASSERT(it != drops.tracked_per_kernel.end(), "Per-device run arg tracking out of sync");
+            if (--it->second == 0) {
+                drops.tracked_per_kernel.erase(it);
+            }
+        }
+    }
+    void record_per_device_run_args_drop_all() {
+        if (tracks_per_device_run_args()) {
+            per_device_run_arg_drops_.drop_all = true;
+            per_device_run_arg_drops_.pending.clear();
+        }
+    }
+    void record_per_device_run_arg_drop(const PerDeviceRunArgKey& key) {
+        auto& drops = per_device_run_arg_drops_;
+        if (!drops.drop_all && drops.tracked.contains(key)) {
+            drops.pending.insert(key);
+        }
+    }
+    PerDeviceRunArgDrops& per_device_run_arg_drops() { return per_device_run_arg_drops_; }
+    const PerDeviceRunArgDrops& per_device_run_arg_drops() const { return per_device_run_arg_drops_; }
+    // A workload entry starts holding per-device args of this program: what an earlier one tracked or left pending
+    // (the program was moved out of it) does not apply to it, and the earlier entry is no longer the owner.
+    void reset_per_device_run_arg_drops(uint64_t owner) { per_device_run_arg_drops_ = {.owner = owner}; }
 
 private:
     HWCommandQueue* last_used_command_queue_for_testing = nullptr;
@@ -781,6 +863,7 @@ private:
 
     bool finalized_{false};
     bool program_run_args_initialized_{false};
+    PerDeviceRunArgDrops per_device_run_arg_drops_;
     // Used only when devices do not have virtualization enabled and used to check that programs are only rerun on
     // the same device
     std::optional<uint64_t> cached_device_hash_;
@@ -852,6 +935,7 @@ private:
         };
         std::unordered_map<std::string, RegisteredTensorParameter> tensor_parameter_layouts;
         std::unordered_map<std::string, RegisteredSRAMArenaParameter> sram_arena_parameters;
+        std::unordered_map<std::string, const distributed::MeshDevice*> global_semaphore_parameters;
 
         std::vector<DFBStorageBinding> dfb_storage_bindings;
     };
@@ -893,6 +977,16 @@ private:
     // Scratchpad allocation occurs once on Program creation, and is re-run if the DFB layout
     // is recomputed (due to a DFB size override at runtime).
     bool scratchpads_allocated_{false};
+
+    struct ScratchpadAllocationGroup {
+        CoreRangeSet cores;
+        std::vector<std::pair<Kernel*, ScratchpadBindingHandle*>> bindings;
+    };
+    // Reconstructed from binding metadata; used consistently for registration and allocation.
+    //
+    // Function does not mutate *this, but is non-const as it needs to return constructs containing mutable pointers
+    // to subobjects of *this.
+    std::vector<ScratchpadAllocationGroup> scratchpad_allocation_groups();
 
     static constexpr uint8_t core_to_kernel_group_invalid_index = 0xff;
     std::vector<std::vector<std::shared_ptr<KernelGroup>>> kernel_groups_;

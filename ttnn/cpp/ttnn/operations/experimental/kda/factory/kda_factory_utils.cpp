@@ -139,6 +139,35 @@ void check_actual_start(const Tensor& reference, const Tensor& actual_start, std
     check_device_scalar(reference, actual_start, operation_name, "actual_start");
 }
 
+std::array<uint32_t, 4> slab_kernel_args(const Tensor* slab, uint32_t scale, uint32_t offset) {
+    if (slab == nullptr) {
+        return {0, 1, 1, 0};
+    }
+    return {1, 1 + (static_cast<uint32_t>(slab->logical_shape()[0]) - offset - 1) / scale, scale, offset};
+}
+
+void check_slab_index(
+    const Tensor& reference,
+    const Tensor& slab,
+    const Tensor& slab_index,
+    uint32_t scale,
+    uint32_t offset,
+    std::string_view operation_name) {
+    check_allocated_device_tensor(slab, operation_name, "slab");
+    // Kernels step entries by their logical size.
+    TT_FATAL(slab.padded_shape() == slab.logical_shape(), "{}: slab must not be padded", operation_name);
+    check_same_device(reference, slab, operation_name, "slab");
+    TT_FATAL(
+        slab.memory_config().buffer_type() == tt::tt_metal::BufferType::DRAM, "{}: slab not in DRAM", operation_name);
+    check_device_scalar(reference, slab_index, operation_name, "slab_index");
+    TT_FATAL(
+        scale >= 1 && offset < slab.logical_shape()[0],
+        "{}: slab_index_scale {} / slab_index_offset {} address no entry of the slab",
+        operation_name,
+        scale,
+        offset);
+}
+
 void check_output_interleaved(const tt::tt_metal::MemoryConfig& memory_config, std::string_view operation_name) {
     TT_FATAL(
         !memory_config.is_sharded(),
