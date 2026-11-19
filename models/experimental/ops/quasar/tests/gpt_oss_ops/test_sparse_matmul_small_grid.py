@@ -37,13 +37,10 @@
 # On a device on which a case needs no change (cases 00 and 02 on the 8x4 grid, where
 # (3, 4) fits), the variant skips, because the generated test runs that exact call.
 #
-# On the (2, 1) and (1, 1) grids, every case stops the craq-sim simulator, which ends the
-# whole pytest process: "UndefinedBehavior: qsr_tile_counter_check_error: tile counter
-# occupancy=... exceeds capacity=... (posted=0 acked=...)". This is the error that made
-# mlp.py exclude (6, 3). It does not depend on TT_METAL_CORE_GRID_OVERRIDE_TODEPRECATE:
-# case 01 forced to (2, 1) on the full 8x4 grid fails the same way, while (3, 1) passes.
-# A 2-core device has no other grid, so on these grids the variant is marked xfail
-# without running.
+# On Quasar, sparse_matmul must run its in0 and in1 kernels without DFB implicit sync.
+# With implicit sync on, the firmware adds tiles to a full tile counter at kernel exit, and
+# on grids such as (2, 1), (1, 1) and (6, 3) craq-sim stops with "UndefinedBehavior:
+# qsr_tile_counter_check_error" (tenstorrent/tt-metal#66114).
 #
 # The suite has no golden reference for sparse_matmul (see GOLDEN in graph_case.py),
 # so the checks are the same as in the generated test: output shape, dtype, placement
@@ -71,9 +68,6 @@ _EXCLUDED_GRIDS = ((6, 3),)
 _DRAM_OUTPUT_IDS = {"01_32x1x2880_bf8_int-l1"}
 
 _DRAM_MEM = {"layout": "INTERLEAVED", "buffer": "DRAM", "shard": None}
-
-# Grids on which every case stops the craq-sim simulator with a tile counter error (see the header).
-_STOPS_SIMULATOR_GRIDS = {(1, 1), (2, 1)}
 
 
 def _fit_case(base, mesh_device):
@@ -104,8 +98,4 @@ def test_sparse_matmul_small_grid(ttnn_mesh_device, reset_seeds, case):
     fitted = _fit_case(case, ttnn_mesh_device)
     if fitted == case:
         pytest.skip("the captured call needs no change on this device; test_sparse_matmul.py runs it")
-    grid = tuple(fitted["kwargs"]["program_config"]["fields"]["compute_with_storage_grid_size"])
-    if grid in _STOPS_SIMULATOR_GRIDS:
-        # Not run: the simulator error ends the pytest process, so a failing run cannot be caught.
-        pytest.xfail(f"sparse_matmul on a {grid} grid stops craq-sim with a tile counter error")
     G.run_case(_OP, fitted, ttnn_mesh_device)
