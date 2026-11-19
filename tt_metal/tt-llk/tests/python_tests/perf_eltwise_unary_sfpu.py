@@ -338,34 +338,11 @@ def _comp_dest_acc(formats):
 @skip_for_blackhole
 @pytest.mark.perf
 @parametrize(
-    formats=input_output_formats([DataFormat.UInt16], same=True),
+    formats=input_output_formats([DataFormat.UInt16, DataFormat.UInt32], same=True),
     mathop=_UINT_COMP_OPS,
     input_dimensions=_EXTRA_SLICE_DIMS,
 )
-def test_perf_eltwise_unary_sfpu_comp_uint16(
-    perf_report, formats, mathop, input_dimensions
-):
-    dest_acc = _comp_dest_acc(formats)
-    _extra_slice_run(
-        perf_report,
-        formats,
-        mathop,
-        dest_acc,
-        formats.input_format.is_32_bit(),
-        input_dimensions,
-    )
-
-
-@skip_for_blackhole
-@pytest.mark.perf
-@parametrize(
-    formats=input_output_formats([DataFormat.UInt32], same=True),
-    mathop=_UINT_COMP_OPS,
-    input_dimensions=_EXTRA_SLICE_DIMS,
-)
-def test_perf_eltwise_unary_sfpu_comp_uint32(
-    perf_report, formats, mathop, input_dimensions
-):
+def test_perf_eltwise_unary_sfpu_comp(perf_report, formats, mathop, input_dimensions):
     dest_acc = _comp_dest_acc(formats)
     _extra_slice_run(
         perf_report,

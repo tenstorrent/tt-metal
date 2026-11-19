@@ -6,8 +6,8 @@
 and does not carry Int32, but `calculate_comp_int` is reachable only with an
 Int32 input — so these six comparison-to-zero modes have no perf coverage
 anywhere. This module is the extra slice that supplies it, exactly as
-`test_perf_eltwise_unary_sfpu_comp_uint16` and `_comp_uint32` already do for
-their formats: a slice that bypasses `PERF_SWEEP_OPS` rather than widening it.
+`test_perf_eltwise_unary_sfpu_comp` already does for the UInt16 and UInt32
+formats: a slice that bypasses `PERF_SWEEP_OPS` rather than widening it.
 
 Nothing here duplicates the shared sweep. Every float op these kernels touch is
 already in `_OP_DOMAIN_REGISTRY`, hence in `PERF_SWEEP_OPS`, and measured at
