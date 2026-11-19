@@ -55,23 +55,6 @@ bool supported_execution_controls(
 // moving data.
 ttnn::Shape codegen_working_shape(const ttnn::Shape& logical_shape, int32_t dim);
 
-// Whether a TILE call takes the untilize -> per-stick ROW_MAJOR scatter -> tilize detour instead of
-// the TILE factory. The TILE factories split per-core work by tile row, so a low tile-row count
-// leaves most of the grid idle whatever the row width; at or below kRowMajorRerouteMaxHt the RM factory's
-// per-stick split reaches far more cores, provided the untilized stick is bounded, NOC-aligned and
-// fits the L1 left once this call's own allocations land. `working_input`/`working_index` are the
-// operands' codegen_working_shape()s; the tensors
-// supply dtype, element size, device and placement, none of which the transpose changes.
-// `output_mem_config` is the placement the call will write to: the detour lands on the ROW_MAJOR
-// factories, which supported_execution_controls() only admits when the output shares the input's
-// buffer type, so a mismatched placement keeps the TILE factory instead. The one definition both the
-// dispatch and is_demoted() read: a case this detour serves never pays the TILE factories'
-// padded-row cost that is_demoted() otherwise guards against. `pending_tile_bytes` is what the
-// routing gates (is_demoted(), codegen_plan_fits_live_l1()), which ask before the dispatch has
-// transformed the operands, still owe for the TILE tensors those transforms cut (the transposed
-// copies, or the sliced source), each at its tile-padded size; the dispatch, asking on the
-// transformed operands, owes nothing. Every evaluation thus sees the same frontier and none can
-// disagree on a unit row.
 // The L1 the dispatch still takes out of its operands before any factory runs (see the definition
 // for what is owed on and off the last axis), in `layout`; exposed so the accounting can be held to
 // what allocating those tensors actually moves the frontier by.
@@ -84,6 +67,22 @@ uint64_t pending_operand_copies_bytes(
     const ttnn::Shape& working_index,
     tt::tt_metal::Layout layout);
 
+// Whether a TILE call takes the untilize -> per-stick ROW_MAJOR scatter -> tilize detour instead of
+// the TILE factory. The TILE row split leaves most of the grid idle at a low tile-row count, and the
+// column split rescans every index tile per output tile; at or below kRowMajorRerouteMaxHt the RM
+// factory's per-stick split reaches far more cores at linear cost, provided the untilized stick is
+// bounded, NOC-aligned and fits the L1 left once this call's own allocations land. `working_input`/`working_index` are
+// the operands' codegen_working_shape()s; the tensors supply dtype, element size, device and placement, none of which
+// the transpose changes. `output_mem_config` is the placement the call will write to: the detour lands on the ROW_MAJOR
+// factories, which supported_execution_controls() only admits when the output shares the input's
+// buffer type, so a mismatched placement keeps the TILE factory instead. The one definition both the
+// dispatch and is_demoted() read: a case this detour serves never pays the TILE factories'
+// padded-row cost that is_demoted() otherwise guards against. `pending_tile_bytes` is what the
+// routing gates (is_demoted(), codegen_plan_fits_live_l1()), which ask before the dispatch has
+// transformed the operands, still owe for the TILE tensors those transforms cut (the transposed
+// copies, or the sliced source), each at its tile-padded size; the dispatch, asking on the
+// transformed operands, owes nothing. Every evaluation thus sees the same frontier and none can
+// disagree on a unit row.
 bool prefers_row_major_strategy(
     const Tensor& input_tensor,
     const Tensor& index_tensor,
@@ -94,7 +93,11 @@ bool prefers_row_major_strategy(
     uint64_t pending_tile_bytes);
 
 // Perf gate consulted only by ttnn::scatter()'s routing, and only when supported_by_codegen() is
-// true: true means fall back to native despite codegen support. `dim` is the caller's raw
+// true: true means fall back to native despite codegen support. Three rules, each with the mechanism
+// in the definition: a TILE unit row the detour declines (32x padding), a TILE row too wide for the
+// row split that the detour declines while the column split would rescan more than the row split
+// (quadratic where native is linear), and a small ROW_MAJOR call off the last axis (dispatch-bound,
+// a tie on device that loses wall clock). `dim` is the caller's raw
 // (pre-normalization) scatter axis, matching supported_by_codegen()'s convention; it is normalized
 // once inside, so the same axis spelled positive or negative demotes identically. `output_mem_config`
 // is the placement the call will write to (the caller's memory_config, else the input's own), which

@@ -311,10 +311,10 @@ def test_scatter_codegen_tile_row_too_wide_for_interleaved_streams(device):
 
 def test_scatter_codegen_streaming_rows_without_index_coverage(device):
     # Streaming splits by output column, so an input tile row the index never reaches is pushed
-    # through unscattered, and the last index tile row carries 8 valid rows of 32; three tile rows
-    # against more columns than that selects streaming, and the 12816 B stick keeps the call off the
-    # row-major detour.
-    xt, it, st = _make_case([1, 1, 96, 6408], [1, 1, 40, 100], -1, ttnn.TILE_LAYOUT, device)
+    # through unscattered, and the last index tile row carries 8 valid rows of 32; with one index tile
+    # per row the column split is cheaper than the row split on the Wormhole grid as well as the
+    # Blackhole one, and the 12816 B stick keeps the call off the row-major detour.
+    xt, it, st = _make_case([1, 1, 96, 6408], [1, 1, 40, 32], -1, ttnn.TILE_LAYOUT, device)
     assert_equal(ttnn.to_torch(_force_native(xt, -1, it, st)), ttnn.to_torch(_force_codegen(xt, -1, it, st)))
 
 

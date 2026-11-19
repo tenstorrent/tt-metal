@@ -284,7 +284,7 @@ using namespace ttnn::operations::data_movement::CMAKE_UNIQUE_NAMESPACE;
 
 // Whether the codegen path can serve this call. Evaluated on the ORIGINAL (pre
 // pre_scatter_transform_tensor) tensors and the caller's raw dim -- the same attributes the supported
-// scope is expressed in -- before any transpose/4D-fold. Correctness and caller-controlled output
+// scope is expressed in -- before any transpose or rank padding. Correctness and caller-controlled output
 // placement only; perf demotion is a separate, routing-only question.
 bool codegen_can_serve(
     const Tensor& input_tensor,
@@ -294,6 +294,10 @@ bool codegen_can_serve(
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<std::string>& opt_reduction_string) {
     const auto output_mem_config = memory_config.has_value() ? memory_config.value() : input_tensor.memory_config();
+    // An unknown reduce string routes native, which raises the one error for it on every architecture.
+    if (opt_reduction_string.has_value() && *opt_reduction_string != "add" && *opt_reduction_string != "multiply") {
+        return false;
+    }
     const uint32_t reduction_mode = scatter_reduction_mode(opt_reduction_string);
     return scatter_ns::supported_execution_controls(input_tensor, output_mem_config, std::nullopt) &&
            scatter_ns::supported_by_codegen(input_tensor, dim, index_tensor, source_tensor, reduction_mode);
@@ -533,10 +537,15 @@ Tensor scatter(
         output_memory_config.has_value() ? output_memory_config.value() : input_tensor.memory_config()};
     // Where a call lands, first match wins:
     //   - not Wormhole/Blackhole, outside the codegen scope (dtype, layout, tile, padding, sharding,
-    //     reduce, page rank, empty operand, dim range, host operand, ROW_MAJOR sticks past the
-    //     static L1 bank), or an output placement its factories cannot write
+    //     reduce, page rank, empty operand, dim range, host or deallocated operand, ROW_MAJOR sticks
+    //     past the static L1 bank), or an output placement its factories cannot write
     //                                                                      -> native
     //   - TILE with a unit pre-last working dim that the row-major detour declines
+    //                                                                      -> native (demoted)
+    //   - TILE whose row split does not fit the static L1 bank while the column split would rescan
+    //     more than it, and that the row-major detour declines
+    //                                                                      -> native (demoted)
+    //   - ROW_MAJOR off the last axis with at most kRowMajorDispatchBoundOperandBytes of operands
     //                                                                      -> native (demoted)
     //   - ROW_MAJOR whose resident input/output sticks (and FP32 accumulator for a reduce) plus the
     //     smallest index/src chunk do not fit the L1 free right now once this call's own copies and
@@ -552,7 +561,6 @@ Tensor scatter(
     //   - otherwise -> codegen: the TILE interleaved/streaming factory, or the ROW_MAJOR plain or
     //     bf16-reduce factory, chosen by the prim's select_program_factory()
     const bool use_codegen =
-        ttnn::operations::data_movement::codegen_supported_on_arch(input_tensor) &&
         detail::codegen_can_serve(
             input_tensor, dim, index_tensor, source_tensor, output_memory_config, opt_reduction_string) &&
         !scatter_ns::is_demoted(input_tensor, dim, index_tensor, source_tensor, final_memory_config) &&

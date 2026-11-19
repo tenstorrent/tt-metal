@@ -106,6 +106,8 @@ ttsl::hash::hash_t ScatterCodegenDeviceOperation::compute_program_hash(
         ttsl::hash::type_hash<ScatterCodegenDeviceOperation>, attributes, tensor_args, factory.index(), chunk_elems);
 }
 
+namespace {
+
 bool same_geometry(const ScatterCodegenParams& a, const ScatterCodegenParams& b) {
     return a.Ht == b.Ht && a.Wt_output == b.Wt_output && a.Wt_index == b.Wt_index &&
            a.output_logical_w == b.output_logical_w && a.idx_valid_h_last == b.idx_valid_h_last &&
@@ -113,6 +115,8 @@ bool same_geometry(const ScatterCodegenParams& a, const ScatterCodegenParams& b)
            a.num_sticks == b.num_sticks && a.input_stick_elems == b.input_stick_elems &&
            a.index_stick_elems == b.index_stick_elems && a.page_map == b.page_map;
 }
+
+}  // namespace
 
 void ScatterCodegenDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& attributes, const tensor_args_t& tensor_args) {
@@ -232,8 +236,7 @@ void ScatterCodegenDeviceOperation::validate_on_program_cache_miss(
         TT_FATAL(
             out.device() == input_tensor.device(),
             "scatter_codegen: preallocated output tensor must be on the same device as the input.");
-        TT_FATAL(
-            out.buffer() != nullptr, "scatter_codegen: preallocated output tensor has no device buffer allocated.");
+        TT_FATAL(out.is_allocated(), "scatter_codegen: preallocated output tensor has no device buffer allocated.");
         TT_FATAL(
             out.buffer() != src_tensor.buffer() && out.buffer() != index_tensor.buffer(),
             "scatter_codegen: preallocated output tensor must not alias src or index (the readers scan the whole "

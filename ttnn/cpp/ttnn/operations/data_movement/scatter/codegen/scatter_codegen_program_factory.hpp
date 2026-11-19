@@ -166,8 +166,8 @@ struct ScatterCodegenProgramFactoryInterleaved {
 };
 
 // TILE, split by output column. Chosen by select_program_factory() when the interleaved plan's row
-// does not fit L1, or when the tile-row count underfills the grid while more than one output column
-// exists (Ht < column_cores && Wt_output > 1), so every core gets work.
+// does not fit L1, or when scatter_prefers_column_split() finds the column split cheaper on the
+// busiest core than the row split.
 struct ScatterCodegenProgramFactoryStreaming {
     static tt::tt_metal::ProgramDescriptor create_descriptor(
         const ScatterCodegenParams& attributes, const ScatterCodegenInputs& tensor_args, Tensor& output_tensor);

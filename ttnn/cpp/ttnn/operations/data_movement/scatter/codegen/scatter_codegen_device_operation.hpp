@@ -73,8 +73,8 @@ struct ScatterCodegenDeviceOperation {
 };
 
 // Fills either the TILE or the ROW_MAJOR geometry fields (the other side's are zero) plus the page
-// map every factory shares. The only constructor of a ScatterCodegenParams, so the page map the
-// readers fold ordinals through is always the one the tensors describe.
+// map every factory shares. The one place the geometry is derived; validate holds any attributes it
+// is handed to what this builds from the operands.
 ScatterCodegenParams build_scatter_codegen_params(
     const Tensor& input_tensor,
     const Tensor& index_tensor,

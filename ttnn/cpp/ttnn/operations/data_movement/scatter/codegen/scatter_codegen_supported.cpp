@@ -41,6 +41,18 @@ bool has_standard_padding(const Tensor& tensor) {
     return standard.padded_shape() == tensor.padded_shape();
 }
 
+// The tile-row count of a working shape as the TILE factories see it: every leading dim times the
+// pre-last dim padded to the tile height. The same quantity as compute_scatter_tile_geometry()'s
+// Ht on the transposed tensor, from the shape alone so no transposed tensor has to exist.
+uint64_t working_tile_rows(const ttnn::Shape& working_input, uint32_t tile_h) {
+    const int32_t rank = static_cast<int32_t>(working_input.rank());
+    return std::accumulate(
+        working_input.cbegin(),
+        std::next(working_input.cbegin(), rank - 2),
+        static_cast<uint64_t>(tt::div_up(working_input[rank - 2], tile_h)),
+        std::multiplies<>());
+}
+
 }  // namespace
 
 bool supported_execution_controls(
@@ -103,8 +115,7 @@ bool supported_by_codegen(
     const Tensor& index_tensor,
     const Tensor& src_tensor,
     uint32_t reduction_mode) {
-    // Only bfloat16 input/src is in scope; wider dtypes reach these kernels, if at all, through a host
-    // decode->scatter->encode composition rather than directly.
+    // Only bfloat16 input/src is in scope.
     if (input_tensor.dtype() != DataType::BFLOAT16 || src_tensor.dtype() != DataType::BFLOAT16) {
         return false;
     }
@@ -191,13 +202,18 @@ bool supported_by_codegen(
     if (!on_device) {
         return false;
     }
+    // The kernels are built for Wormhole and Blackhole only. Checked inside the scope so the forced
+    // entry and the prim's validate refuse elsewhere, not only ttnn::scatter()'s routing.
+    if (!ttnn::operations::data_movement::codegen_supported_on_arch(input_tensor)) {
+        return false;
+    }
     if (layout == Layout::TILE) {
         // The streaming factory's footprint is a small, FIXED number of tile pages (2 output + 2
         // input + 1 index + 1 src, none of them scaled by Wt_output/Ht), so it always fits the
         // static bank; whether it fits the L1 free right now is codegen_plan_fits_live_l1()'s
         // question. The interleaved plan is only ever an optional upgrade select_program_factory()
-        // makes at descriptor-build time, when its row-resident footprint fits L1 AND the tile-row
-        // count does not underfill the grid. Nothing to reject here.
+        // makes at descriptor-build time, when its row-resident footprint fits L1 and
+        // scatter_prefers_column_split() does not prefer the column split. Nothing to reject here.
         return true;
     }
     // ROW_MAJOR: the input/output sticks (post-transpose axis length) stay fully resident by
@@ -243,9 +259,10 @@ namespace {
 // with Ht=64 kept on the TILE path by the same measurement, and sticks past 32768 elements were
 // never measured to win untilized -- the chunked RM plan itself would admit far wider ones.
 constexpr uint32_t kRowMajorRerouteMaxHt = 32;
-// Input bytes at or below which a ROW_MAJOR scatter off the last axis stays native (is_demoted):
-// the measured cases at 4 and 16 KiB tie native on device and lose host wall clock.
-constexpr uint64_t kRowMajorDispatchBoundInputBytes = 16 * 1024;
+// Operand bytes (input, index and src together) at or below which a ROW_MAJOR scatter off the last
+// axis stays native (is_demoted): the measured cases at 10 and 40 KiB tie native on device and lose
+// host wall clock. The index counts because it, not the input, can carry the work.
+constexpr uint64_t kRowMajorDispatchBoundOperandBytes = 48 * 1024;
 constexpr uint32_t kRowMajorRerouteMaxStickElems = 32768;
 // The untilized stick's raw byte width must sit on a 32 B boundary: the generator's own routing
 // term for the detour, kept so the detour serves exactly the cases it was measured on. Not a
@@ -331,16 +348,7 @@ bool prefers_row_major_strategy(
     if (output_mem_config.buffer_type() != input_tensor.memory_config().buffer_type()) {
         return false;
     }
-    // The tile-row count of the working shape as the TILE factories see it: every leading dim times
-    // the pre-last dim padded to the tile height. Same quantity as compute_scatter_tile_geometry()'s
-    // Ht on the transposed tensor, derived from the shape so it needs no transposed tensor to exist.
-    const uint32_t tile_h = input_tensor.tensor_spec().tile().get_height();
-    const int32_t rank = static_cast<int32_t>(working_input.rank());
-    const uint64_t Ht = std::accumulate(
-        working_input.cbegin(),
-        std::next(working_input.cbegin(), rank - 2),
-        static_cast<uint64_t>(tt::div_up(working_input[rank - 2], tile_h)),
-        std::multiplies<>());
+    const uint64_t Ht = working_tile_rows(working_input, input_tensor.tensor_spec().tile().get_height());
     if (Ht > kRowMajorRerouteMaxHt) {
         return false;
     }
@@ -459,8 +467,8 @@ bool is_demoted(
     if (input_tensor.dtype() == DataType::BFLOAT16 && input_tensor.layout() == Layout::TILE) {
         const ttnn::Shape working_input = codegen_working_shape(input_tensor.logical_shape(), axis);
         const ttnn::Shape working_index = codegen_working_shape(index_tensor.logical_shape(), axis);
-        if (working_input[-2] == 1 &&
-            !prefers_row_major_strategy(
+        const auto detour_declines = [&]() {
+            return !prefers_row_major_strategy(
                 input_tensor,
                 index_tensor,
                 src_tensor,
@@ -468,21 +476,47 @@ bool is_demoted(
                 working_index,
                 output_mem_config,
                 pending_operand_copies_bytes(
-                    input_tensor, index_tensor, src_tensor, axis, working_input, working_index, Layout::TILE))) {
+                    input_tensor, index_tensor, src_tensor, axis, working_input, working_index, Layout::TILE));
+        };
+        if (working_input[-2] == 1 && detour_declines()) {
+            return true;
+        }
+        // The streaming factory re-reads and rescans every index/src tile per output tile. When the
+        // row split would do less work per core but its row does not fit the L1 bank, and the detour
+        // declines the call, streaming is all codegen has left, and it runs quadratic where native
+        // runs linear: 38x slower than native at [1,1,2048,12800] with a 256-wide index, 5x with a
+        // 32-wide one (Blackhole). Such a call stays native.
+        const auto& tile = input_tensor.tensor_spec().tile();
+        const uint64_t Ht = working_tile_rows(working_input, tile.get_height());
+        const uint32_t Wt_output = tt::div_up(working_input[-1], tile.get_width());
+        const uint32_t Wt_index = tt::div_up(working_index[-1], tile.get_width());
+        const auto grid = input_tensor.device()->compute_with_storage_grid_size();
+        const bool row_split_fits = ttnn::prim::scatter_interleaved_fits_l1(
+            ttnn::prim::scatter_static_l1(input_tensor),
+            Wt_output,
+            ttnn::prim::scatter_output_aligned_page_size(input_tensor, output_mem_config, std::nullopt),
+            input_tensor.buffer()->aligned_page_size(),
+            index_tensor.buffer()->aligned_page_size(),
+            src_tensor.buffer()->aligned_page_size());
+        if (!row_split_fits &&
+            !ttnn::prim::scatter_prefers_column_split(
+                static_cast<uint32_t>(Ht), Wt_output, Wt_index, static_cast<uint32_t>(grid.x * grid.y)) &&
+            detour_declines()) {
             return true;
         }
     }
 
     // A small ROW_MAJOR scatter off the last axis is dispatch-bound: both legs pay the same
     // transposes around a scatter of a few microseconds, so the port's device win (5-12% on the
-    // measured cases) cannot show on wall clock, which the call loses by the same few percent under
-    // host noise. Below the bound the route is not worth a coin flip and stays native.
-    if (input_tensor.layout() == Layout::ROW_MAJOR && axis != rank - 1 &&
-        input_tensor.logical_shape().volume() * input_tensor.element_size() <= kRowMajorDispatchBoundInputBytes) {
-        return true;
-    }
-
-    return false;
+    // measured cases, Blackhole) cannot show on wall clock, which the call loses by the same few
+    // percent under host noise (Wormhole CI). Below the bound the route is not worth a coin flip and
+    // stays native.
+    const auto operand_bytes = [](const Tensor& t) {
+        return static_cast<uint64_t>(t.logical_shape().volume()) * t.element_size();
+    };
+    return input_tensor.layout() == Layout::ROW_MAJOR && axis != rank - 1 &&
+           operand_bytes(input_tensor) + operand_bytes(index_tensor) + operand_bytes(src_tensor) <=
+               kRowMajorDispatchBoundOperandBytes;
 }
 
 }  // namespace ttnn::operations::data_movement::scatter
