@@ -1357,8 +1357,6 @@ protected:
     std::filesystem::path report_dir_;
 };
 
-}  // namespace
-
 TEST_F(GraphCaptureEnd, EndingWithNoActiveCaptureThrowsAndPopsNothing) {
     auto bystander = std::make_shared<NonCaptureProcessor>();
     tracker().push_processor(bystander);
@@ -1452,3 +1450,5 @@ TEST_F(GraphCaptureEnd, CaptureUnderAnotherProcessorEndsWhenTheReportCannotBeWri
     EXPECT_EQ(tracker().get_processors().size(), depth_ + 1);
     EXPECT_EQ(tracker().get_processors().back(), above);
 }
+
+}  // namespace
