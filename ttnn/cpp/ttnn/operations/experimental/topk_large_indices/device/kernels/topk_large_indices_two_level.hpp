@@ -67,10 +67,9 @@ struct Units {
 // Row ownership, like the single-level op's split: the first num_rows - split_rows rows are whole rows, row r on core
 // r % num_cores as its local row r / num_cores (a whole number of rounds when there are split rows; without, the
 // last round may be partial). The last split_rows rows are halved across core pairs (as the single-level assignment
-// pairs them): split row
-// whole_rows + u belongs to core 2u, which runs its stage 2 and the first half of its stage 3 and merges in the
-// second half that core 2u + 1 sorts. A core's row semaphore counts the finished phase-1 units of each local row in
-// its own byte (a row has at most 64 units); a row is ready when its count reaches per_row.
+// pairs them): split row whole_rows + u belongs to core 2u, which runs its stage 2 and the first half of its stage 3
+// and merges in the second half that core 2u + 1 sorts. A core's row semaphore counts the finished phase-1 units of
+// each local row in its own byte (a row has at most 64 units); a row is ready when its count reaches per_row.
 constexpr uint32_t max_local_rows = 4;
 constexpr uint32_t ready_increment(uint32_t local_row) { return 1u << (8 * local_row); }
 constexpr uint32_t ready_count(uint32_t word, uint32_t local_row) { return (word >> (8 * local_row)) & 0xFFu; }

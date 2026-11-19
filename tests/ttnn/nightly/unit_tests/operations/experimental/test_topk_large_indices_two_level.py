@@ -404,6 +404,7 @@ def test_two_level_cores_with_several_rows(device, rows):
     pairs, whose first cores wait on byte 3."""
     width, n = 131_072, 120_000
     torch_input = generate("iid", rows, width, 17, n=n)
+    mode = _scalar(device, 7)
     out = ttnn.experimental.topk_large_indices(
         _dev(torch_input.reshape(1, 1, rows, width), device),
         k=K,
@@ -411,7 +412,9 @@ def test_two_level_cores_with_several_rows(device, rows):
         block_select=32,
         two_level_cutover=FORCE_TWO_LEVEL,
         sub_core_grids=_grid(device, 3),
+        mode_output=mode,
     )
+    assert _mode(mode) == 1
     _check_rows(torch_input, _indices(out, rows), n, range(rows))
 
 
