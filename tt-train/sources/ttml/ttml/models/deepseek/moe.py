@@ -232,6 +232,10 @@ class MoE(AbstractModuleBase):
                 ttnn.zeros(shape, device=device, dtype=ttnn.DataType.BFLOAT16, layout=ttnn.Layout.TILE)
             )
         )
+        # Both buffers are replicated: one bias and one count per expert on every device. A ttnn op on them takes the
+        # topology of its other operand (the counts are summed from the routing activations, which are sharded over
+        # the batch), so update_expert_bias writes them back with this one.
+        self._buffer_topology = self._expert_bias.tensor.get_value().tensor_topology()
 
         # Local expert-id vector [E] consumed by moe_group / moe_ungroup. It is
         # constant across forwards, so build it once here instead of per-step.
@@ -453,16 +457,38 @@ class MoE(AbstractModuleBase):
             return np.zeros_like(counts_np, dtype=np.float32)
         return (counts_np * float(self.n_activated) / total).astype(np.float32)
 
+    def _global_token_counts(self) -> ttnn.Tensor:
+        """The token counts since the last update over the whole batch, averaged over every mesh axis.
+
+        The bias is replicated, so every device must make the same update, from the counts of the whole batch. A
+        device's ``_token_counts`` cover only the tokens it routed, and under data parallelism ("dp", and "fsdp",
+        which shards the parameters but not the batch) each device routes its own slice of the batch. From its own
+        slice alone each replica would move its bias differently, and the replicas, which must hold the same model,
+        would drift apart and route the same token to different experts. Megatron-LM likewise all-reduces the
+        counts over its data, tensor and context parallel ranks before the same update. Devices along an axis that
+        routed the same tokens (tensor or expert parallelism, or ``SparseMoEEP``'s batch gathered over "dp") hold
+        equal counts, which the average returns unchanged. The average gives the update the same signs as the sum.
+        """
+        counts = self._token_counts.tensor.get_value()
+        # Each device's own counts under the buffer's replicated topology, as a replicated parameter's gradient is
+        # before it is averaged, rather than the routing activations' topology they were summed from.
+        counts.update_tensor_topology(self._buffer_topology)
+        mesh = ttml.maybe_mesh()
+        axes = [] if mesh is None else [mesh.axis_index(name) for name in mesh.axis_names if mesh.axis_size(name) > 1]
+        if not axes:
+            return counts
+        return ttml.core.distributed.synchronize_tensor(counts, axes, reduce_dtype=ttnn.DataType.FLOAT32)
+
     def update_expert_bias(self, coeff: float = 0.001) -> None:
         """Auxiliary-loss-free load balancing (DeepSeek-V3 style).
 
-        Reads accumulated token counts from device, computes bias adjustment
-        using sign(mean_count - expert_count), updates bias on device, and
-        resets the counter.
+        Reads the token counts accumulated on device over the whole batch (see ``_global_token_counts``), computes
+        the bias adjustment using sign(mean_count - expert_count), updates the bias on device, and resets the
+        counter.
 
         Call between training steps (e.g., every N steps).
         """
-        counts_val = self._token_counts.tensor.get_value()
+        counts_val = self._global_token_counts()
 
         # Compute mean token count across experts: [1,1,1,num_experts] -> scalar
         mean_count = ttnn.mean(counts_val, dim=-1, keepdim=True)  # [1,1,1,1]
@@ -478,8 +504,10 @@ class MoE(AbstractModuleBase):
 
         # Update bias
         new_bias = ttnn.add(self._expert_bias.tensor.get_value(), delta)
+        new_bias.update_tensor_topology(self._buffer_topology)
         self._expert_bias.tensor.set_value(new_bias)
 
         # Reset token counts
-        zeros = ttnn.zeros_like(counts_val)
+        zeros = ttnn.zeros_like(self._token_counts.tensor.get_value())
+        zeros.update_tensor_topology(self._buffer_topology)
         self._token_counts.tensor.set_value(zeros)
