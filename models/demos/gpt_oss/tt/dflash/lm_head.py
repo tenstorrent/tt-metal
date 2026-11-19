@@ -17,16 +17,22 @@ import ttnn
 
 from ..fused_decode.config import LM_HEAD_DECODE_WEIGHT_DTYPE
 from ..fused_decode.stream import as_stream_tensor, linear_stream_rows, mark_cache_built, stream_linear_layout
+from ..weight_source import dense_rounded_tag, env_path
 from ..fused_decode.terminal import MASK
 
 TILE = ttnn.TILE_SIZE
 
 
 def _hf_lm_head():
-    """The checkpoint's LM-head weight (HF_MODEL: a local checkpoint directory or a HuggingFace id, as
-    tt/model_config.py)."""
+    """The model's LM-head weight: GPT_OSS_DENSE_ROUNDED_DECODE's GPTQ-rounded one when set (the values the model's own
+    LM-head copies hold, utils/lazy_state_dict.py), else the checkpoint's (HF_MODEL: a local checkpoint directory or a
+    HuggingFace id, as tt/model_config.py)."""
     from huggingface_hub import snapshot_download
     from safetensors import safe_open
+
+    rounded = env_path("GPT_OSS_DENSE_ROUNDED_DECODE")
+    if rounded:
+        return torch.load(rounded, mmap=True)["lm_head.weight"]
 
     model = os.getenv("HF_MODEL", "openai/gpt-oss-20b")
 
@@ -55,7 +61,9 @@ def padded_lm_head(
     cache = (
         None
         if cache_dir is None
-        else f"{cache_dir}/dflash_lm_head_{dt}_vd{vd}_n{n}_b{banks}" + ("_rr" if round_robin else "")
+        else f"{cache_dir}/dflash_lm_head_{dt}_vd{vd}_n{n}_b{banks}"
+        + ("_rr" if round_robin else "")
+        + dense_rounded_tag()
     )
     C = n_tiles // banks
     order = [i * banks + b for b in range(banks) for i in range(C)] if round_robin else None

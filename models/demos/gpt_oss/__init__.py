@@ -17,7 +17,10 @@ on QuietBox 2 (the tt-inference-server P300X2 entry), for gpt-oss-20b only.
   weights): the rounded weights replace the checkpoint's values, so they only fit the real checkpoint.
 - The decode switches act only on the fused decode path (1x4 Blackhole mesh); elsewhere they are read and unused.
 - The rounded weights are Hugging Face Hub locations at pinned revisions (tt/weight_source.py), downloaded once into
-  the Hub cache. The experts use the K-GPTQ rounding for decode and prefill (GPT_OSS_PREFILL_KGPTQ).
+  the Hub cache. Prefill and decode read the same GPTQ-rounded values: the dense weights' GPTQ rounding
+  (GPT_OSS_DENSE_ROUNDED_DECODE; the name predates prefill reading it) and the experts' K-GPTQ rounding on layers 2-23
+  (GPT_OSS_PREFILL_KGPTQ). Prefill keeps more exact experts where decode has them: bf8 checkpoint values on layers 0
+  and 1 (experts/prefill_routed.py), while decode's exact top-1 experts (GPT_OSS_DECODE_SPLIT_RANKS) are decode-only.
 """
 
 import os
@@ -27,7 +30,7 @@ _KGPTQ = "hf://jerrywangTT/gpt-oss-20b-qb2-kgptq@110a7d8d43e2a0ec9ac12bea3f6b681
 # gpt-oss-20b's release settings (tt-inference-server workflows/model_specs/dev/llm.yaml, gpt-oss-20b on P300X2),
 # with the K-GPTQ prefill experts in place of that entry's output-grouped GPTQ expert package.
 RELEASE_DEFAULTS_20B = {
-    # dense weights (attention, router, LM head) GPTQ-rounded for the fused decode copies
+    # dense weights (attention, router, LM head) GPTQ-rounded, for prefill and decode
     "GPT_OSS_DENSE_ROUNDED_DECODE": f"{_KGPTQ}/dense/dense_gptq_device.pt",
     # decode boundary RMSNorm multiplies at HiFi3
     "GPT_OSS_BOUNDARY_FIDELITY": "HiFi3",

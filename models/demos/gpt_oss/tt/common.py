@@ -108,7 +108,6 @@ def create_tt_model(
                 weights_path=gpt_oss_model_args.model_path,
                 dummy_weights=gpt_oss_model_args.dummy_weights,
                 convert_to_meta_format=True,
-                with_decode_rounded=fused_decode,
             )
             loaded_real_weights = bool(state_dict) and not gpt_oss_model_args.dummy_weights
 

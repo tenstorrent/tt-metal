@@ -49,9 +49,10 @@ def env_path(name):
     return resolve(os.environ.get(name, ""))
 
 
-def dense_rounded_decode_tag():
-    """Cache-name tag of the decode copies made from GPT_OSS_DENSE_ROUNDED_DECODE: "_drnd" plus a hash of the source as
-    given (a pinned hf:// location includes its revision, so each revision gets its own files), "" when unset."""
+def dense_rounded_tag():
+    """Cache-name tag of every dense weight copy (prefill and decode) made from GPT_OSS_DENSE_ROUNDED_DECODE: "_drnd"
+    plus a hash of the source as given (a pinned hf:// location includes its revision, so each revision gets its own
+    files), "" when unset."""
     import hashlib
 
     spec = os.environ.get("GPT_OSS_DENSE_ROUNDED_DECODE", "").strip()

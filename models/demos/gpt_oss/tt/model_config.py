@@ -298,7 +298,7 @@ class ModelArgs:
         return encoded
 
     @staticmethod
-    def load_state_dict(weights_path, dummy_weights=False, convert_to_meta_format=True, with_decode_rounded=True):
+    def load_state_dict(weights_path, dummy_weights=False, convert_to_meta_format=True):
         """Load model state dict compatible with tt_transformers
 
         Args:
@@ -306,8 +306,6 @@ class ModelArgs:
             dummy_weights (bool): If True, returns a dummy state dict for testing purposes.
             convert_to_meta_format (bool): If True, convert HF QKV weights to Meta format for RoPE.
                 Set to False when loading for HuggingFace reference models.
-            with_decode_rounded (bool): Serve GPT_OSS_DENSE_ROUNDED_DECODE's "<key>_decode" weights (only the fused
-                decode copies read them). False skips that file, and so its download, where no fused decode is built.
         """
         if dummy_weights:
             # Return dummy state dict for testing
@@ -320,9 +318,7 @@ class ModelArgs:
             # eager path; set GPT_OSS_EAGER_HF_LOAD=1 to use the eager path instead.
             head_dim = AutoConfig.from_pretrained(weights_path, trust_remote_code=True).head_dim
             logger.info("Loading GPT-OSS weights lazily from safetensors (per-layer MXFP4 dequant)")
-            return GptOssLazyStateDict(
-                weights_path, head_dim, convert_to_meta_format=True, with_decode_rounded=with_decode_rounded
-            )
+            return GptOssLazyStateDict(weights_path, head_dim, convert_to_meta_format=True)
 
         # Eager load: HF reference models (convert_to_meta_format=False) and GPT_OSS_EAGER_HF_LOAD=1.
         # from_pretrained dequantizes the MXFP4 experts to bf16 (torch_dtype=bfloat16 makes every
@@ -372,8 +368,9 @@ class ModelArgs:
     DENSE_MOE_DECODE_WEIGHTS_VERSION = 1
     # Settings that choose which weight values or layouts the cache holds: the marker records them, so a run with other
     # values (another pinned revision of the rounded weights, say) loads the HF weights once and writes its own files
-    # instead of trusting a marker for files it does not have. Each group only for the builds that read it: the fused
-    # decode streams (QuietBox 2) and the routed prefill experts; other meshes read none of these weights.
+    # instead of trusting a marker for files it does not have. Each group only for the builds that read it: the dense
+    # weights (every build), the fused decode streams (QuietBox 2) and the routed prefill experts.
+    DENSE_SETTING_VARS = ("GPT_OSS_DENSE_ROUNDED_DECODE",)
     FUSED_DECODE_SETTING_VARS = (
         "GPT_OSS_DECODE_EXPERTS_SPLIT",
         "GPT_OSS_DECODE_SPLIT_RANKS",
@@ -421,6 +418,9 @@ class ModelArgs:
         if meta.get("format_version") != self.WEIGHT_CACHE_FORMAT_VERSION:
             return False
         if meta.get("model_name") != self.model_name or meta.get("n_layers") != self.n_layers:
+            return False
+        if meta.get("dense_settings", {}) != self._settings(self.DENSE_SETTING_VARS):
+            # the dense weights' caches (prefill and decode) are named by their values: checkpoint or GPTQ-rounded
             return False
         if fused_decode and meta.get("fused_decode_settings", {}) != self._settings(self.FUSED_DECODE_SETTING_VARS):
             return False
@@ -512,6 +512,7 @@ class ModelArgs:
                         "routed_prefill_weights": (
                             self._routed_prefill_weights_version() or previous.get("routed_prefill_weights", False)
                         ),
+                        "dense_settings": self._settings(self.DENSE_SETTING_VARS),
                         "fused_decode_settings": (
                             self._settings(self.FUSED_DECODE_SETTING_VARS)
                             if fused_decode

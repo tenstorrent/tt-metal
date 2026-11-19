@@ -10,7 +10,7 @@ from models.demos.gpt_oss.config import MeshConfig
 from models.demos.gpt_oss.utils.general_utils import get_cache_file_name
 from models.demos.gpt_oss.utils.substate import substate
 
-from ..weight_source import dense_rounded_decode_tag
+from ..weight_source import dense_rounded_tag
 
 from ..fused_decode.config import OPROJ_DECODE_WEIGHT_DTYPE, QKV_DECODE_WEIGHT_DTYPE, QKV_FUSED_ROPE_KV
 from ..fused_decode.stream import NBIAS, as_stream_tensor, linear_stream_rows, qkv_column_order, stream_linear_layout
@@ -75,7 +75,7 @@ def load_attention_weights(
     padded_local_hidden = ((local_hidden + 31) // 32) * 32  # Round up to tile boundary
     o_proj_pad_size = padded_local_hidden - local_hidden
     o_proj_cache_suffix = f"_padded" if o_proj_pad_size > 0 and mesh_config.tp > 1 else ""
-    decode_rounded_tag = dense_rounded_decode_tag()
+    decode_rounded_tag = dense_rounded_tag()
 
     if state_dict:
         # Extract projection weights from state dict
@@ -152,7 +152,7 @@ def load_attention_weights(
             ]
             qkv_decode = torch.cat(parts, dim=-1).unsqueeze(0).unsqueeze(0)
             o_proj_decode = dec["o_proj"].transpose(-1, -2)
-            decode_rounded_tag = dense_rounded_decode_tag()
+            decode_rounded_tag = dense_rounded_tag()
         if mesh_config.tp > 1:
             # Row-parallel: the bias is added once, on the first TP device.
             o_proj_bias_decode = torch.cat(
@@ -198,7 +198,7 @@ def load_attention_weights(
         layout=ttnn.TILE_LAYOUT,
         dtype=weight_dtype,
         mesh_mapper=col_mesh_mapper,
-        cache_file_name=get_cache_file_name(tensor_cache_path, "wqkv"),
+        cache_file_name=get_cache_file_name(tensor_cache_path, f"wqkv{dense_rounded_tag()}"),
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
 
@@ -218,7 +218,7 @@ def load_attention_weights(
         layout=ttnn.TILE_LAYOUT,
         dtype=weight_dtype,
         mesh_mapper=row_mesh_mapper,
-        cache_file_name=get_cache_file_name(tensor_cache_path, f"o_proj{o_proj_cache_suffix}"),
+        cache_file_name=get_cache_file_name(tensor_cache_path, f"o_proj{o_proj_cache_suffix}{dense_rounded_tag()}"),
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
 

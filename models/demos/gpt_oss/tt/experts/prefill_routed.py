@@ -108,6 +108,8 @@ ROUTED_WEIGHTS_DTYPE = ttnn.bfloat4_b
 # bf8 holds the MXFP4 checkpoint values almost exactly (weight rel. error ~1e-4 for gate/up); bf4 shares one exponent
 # per 16 values and loses 12-16% of the weight norm on every layer. Layers 0 and 1 are the smallest set that passes the
 # per-prompt accuracy guard (layer 0 alone does not); each bf8 layer costs ~0.2 ms TTFT at 1K, and "all" ~4 ms.
+# Still true with GPT_OSS_PREFILL_KGPTQ: layers 0 and 1 on the K-GPTQ bf4 values instead measured v4 KL 0.1066 vs 0.1001
+# (9,216 positions, QuietBox 2), so prefill keeps the bf8 checkpoint values there while decode reads K-GPTQ.
 ROUTED_PREFILL_BF8_LAYERS = "0,1"
 
 

@@ -3,7 +3,8 @@
 
 """Host-only checks of the weight-cache marker (ModelArgs.weight_cache_is_complete / mark_weight_cache_complete): the
 settings that choose the rounded weights are recorded per build kind, so a change of them (another pinned revision,
-say) makes the next build load the HF weights, while builds that read none of those weights are not affected."""
+say) makes the next build load the HF weights, while builds that read none of those weights are not affected. The
+GPTQ dense weights are read by every build (prefill and decode)."""
 
 import types
 
@@ -24,6 +25,7 @@ def _args(tmp_path, routed=False):
         "WEIGHT_CACHE_FORMAT_VERSION",
         "FUSED_DECODE_WEIGHTS_VERSION",
         "DENSE_MOE_DECODE_WEIGHTS_VERSION",
+        "DENSE_SETTING_VARS",
         "FUSED_DECODE_SETTING_VARS",
         "ROUTED_PREFILL_SETTING_VARS",
     ):
@@ -40,20 +42,36 @@ def _args(tmp_path, routed=False):
 
 @pytest.fixture(autouse=True)
 def _clean_env(monkeypatch):
-    for k in set(ModelArgs.FUSED_DECODE_SETTING_VARS) | set(ModelArgs.ROUTED_PREFILL_SETTING_VARS):
+    for k in (
+        set(ModelArgs.DENSE_SETTING_VARS)
+        | set(ModelArgs.FUSED_DECODE_SETTING_VARS)
+        | set(ModelArgs.ROUTED_PREFILL_SETTING_VARS)
+    ):
         monkeypatch.delenv(k, raising=False)
     monkeypatch.delenv("GPT_OSS_FORCE_MODEL_LOAD", raising=False)
 
 
 def test_fused_settings_change_invalidates(tmp_path, monkeypatch):
-    monkeypatch.setenv(DENSE, "hf://o/r@rev1/dense.pt")
+    monkeypatch.setenv(ROUND_DIR, "hf://o/r@rev1/kgptq")
     a = _args(tmp_path)
     a.mark_weight_cache_complete("bf8", fused_decode=True)
     assert a.weight_cache_is_complete("bf8", fused_decode=True)
-    monkeypatch.setenv(DENSE, "hf://o/r@rev2/dense.pt")
+    monkeypatch.setenv(ROUND_DIR, "hf://o/r@rev2/kgptq")
     assert not a.weight_cache_is_complete("bf8", fused_decode=True)
-    # A build without the fused decode reads none of these weights: still complete for it.
+    # A build without the fused decode (or the routed prefill experts) reads none of these weights: still complete.
     assert a.weight_cache_is_complete("bf8", fused_decode=False)
+
+
+def test_dense_settings_checked_for_every_build(tmp_path, monkeypatch):
+    """Prefill and decode both read the GPTQ dense weights, so a change of them invalidates every build."""
+    monkeypatch.setenv(DENSE, "hf://o/r@rev1/dense.pt")
+    a = _args(tmp_path)
+    a.mark_weight_cache_complete("bf8", fused_decode=False, dense_moe=True)
+    assert a.weight_cache_is_complete("bf8", dense_moe=True)
+    monkeypatch.setenv(DENSE, "hf://o/r@rev2/dense.pt")
+    assert not a.weight_cache_is_complete("bf8", dense_moe=True)
+    monkeypatch.delenv(DENSE)
+    assert not a.weight_cache_is_complete("bf8", dense_moe=True)
 
 
 def test_non_fused_build_keeps_fused_settings(tmp_path, monkeypatch):

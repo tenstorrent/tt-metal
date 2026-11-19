@@ -56,7 +56,6 @@ class GptOssLazyStateDict(Mapping[str, torch.Tensor]):
         weights_path: str | os.PathLike,
         head_dim: int,
         convert_to_meta_format: bool = True,
-        with_decode_rounded: bool = True,
     ):
         self._dir = resolve_checkpoint_dir(weights_path)
         self._head_dim = head_dim
@@ -82,13 +81,12 @@ class GptOssLazyStateDict(Mapping[str, torch.Tensor]):
             self._key_to_file[key] = filename
         self._mxfp4_keys = {k[: -len("_blocks")] for k in weight_map if k.endswith("_blocks")}
         # GPT_OSS_DENSE_ROUNDED_DECODE (a release setting, models/demos/gpt_oss/__init__.py) = a file of GPTQ-rounded
-        # dense weights (q / k in Meta order); each of its keys is also served as "<key>_decode", which only the fused
-        # decode stream copies read (attention/weights.py, topk.py, model.py LM head), so prefill keeps the checkpoint
-        # weights.
-        # (with_decode_rounded=False: no fused decode copy will read them, so the file is not resolved / downloaded)
-        self._decode_rounded_path = (
-            env_path("GPT_OSS_DENSE_ROUNDED_DECODE") if with_decode_rounded else ""
-        )  # a local file or hf://... (tt/weight_source.py)
+        # dense weights (attention q / k / v / o, router, LM head; q / k in Meta order) on the bfloat8_b grid. Its values
+        # replace the checkpoint ones for prefill and decode alike: each key is served under its own name and as
+        # "<key>_decode" (the name the fused decode stream copies read). Both layouts hold those values exactly in
+        # bfloat8_b, so prefill and decode compute with the same weights; tt/weight_source.py dense_rounded_tag() names
+        # every cache made from them.
+        self._decode_rounded_path = env_path("GPT_OSS_DENSE_ROUNDED_DECODE")  # a local file or hf://...
         self._decode_rounded = None
         if self._decode_rounded_path:
             self._decode_rounded = torch.load(self._decode_rounded_path, mmap=True)
@@ -103,12 +101,10 @@ class GptOssLazyStateDict(Mapping[str, torch.Tensor]):
         return handle
 
     def __getitem__(self, key: str) -> torch.Tensor:
-        if (
-            self._decode_rounded is not None
-            and key.endswith("_decode")
-            and key[: -len("_decode")] in self._decode_rounded
-        ):
-            return self._decode_rounded[key[: -len("_decode")]].clone()  # already Meta order
+        if self._decode_rounded is not None:
+            base = key[: -len("_decode")] if key.endswith("_decode") else key
+            if base in self._decode_rounded:
+                return self._decode_rounded[base].clone()  # already Meta order
         filename = self._key_to_file[key]
         handle = self._handle(filename)
         if key in self._mxfp4_keys:

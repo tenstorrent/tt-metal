@@ -32,7 +32,7 @@ from models.common.sampling.generator import SamplingGenerator
 from models.common.sampling.tt_sampling import TTSampling
 
 from .boundary import KERNEL_DIR
-from ..weight_source import dense_rounded_decode_tag
+from ..weight_source import dense_rounded_tag
 from .config import (
     DECODE_GREEDY_SAMPLER,
     DECODE_TERMINAL_EXCHANGE,
@@ -102,7 +102,7 @@ class DecodeTerminal:
             LM_HEAD_DECODE_WEIGHT_DTYPE,
             _cache_name(
                 tensor_cache_path,
-                f"lm_head.weight_stream_{dt}_vd{self.vd}_b{banks}" + dense_rounded_decode_tag(),
+                f"lm_head.weight_stream_{dt}_vd{self.vd}_b{banks}" + dense_rounded_tag(),
             ),
         )
 
