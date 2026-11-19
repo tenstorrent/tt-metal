@@ -1418,3 +1418,151 @@ All 3x3 layers of one Panoptic inference (each case x its calls): 1456 -> 1248 u
 | no helper (dataflow neighbour strip exchange) | capability | Nothing hands a d-row strip of a core's fp32 L1 buffer to a neighbour core with an absolute-count semaphore and turns arrivals into compute-visible CB tokens. NoC atomic increments for the count slowed a concurrent multicast (center_head.1 +3.3%). | n/a (recompute instead: sem dec res3 fc0 44.91) | 40970 | conv2d_3x3_writer.cpp:661 (`khx_send`), kw_fold.hpp halo gates |
 
 The n-group passes add no raw LLK beyond the existing kw-fold bypasses (Perf 6 / 7 rows).
+
+## Perf 9
+- Date: 2026-11-19
+- Scope: perf tournament (run round 4 of 5) on the 22 `[perf]` LOOSE cases (LoFi, fp32 DEST, bf8_b activation and weights except stem.conv1, bias + ReLU except aspp.convs.3, pinned shard grids). Goal: >= 70% compute utilization against an ideal on 110 cores, worked in priority order. No SUPPORTED change. Base `587aef8ec99` (end of Perf 8). Board: Blackhole p150b, 11x10 = 110 cores, AICLK 1350 MHz. DEVICE KERNEL DURATION.
+- Outcome: 6 ideas floated. 4 graduated, all bit-identical; 1 null; 1 regression. The breakdown also found two latent deadlocks, both fixed.
+  - aspp.convs.2 (priority 6): 64% -> 68% (49.70 -> 46.82 us).
+  - aspp.convs.3 (priority 1): 65% -> 66% (24.48 -> 23.95 us).
+  - res4.x (priority 3): 31% -> 32% (12.73 -> 12.46 us).
+  - No new focus case reaches 70%; sem res2 fc1 and sem dec res2 fc0 stay above it (75%, 76%).
+  - All 3x3 layers of one inference: 1248 -> 1234 us (-1.2%). No focus or guard cell regressed beyond noise.
+- Instrumentation: the Perf 1-8 zones are kept. `writer_ring_credit` now spans the credit send inside the weight-wait polls; the blocking credit wait runs inside `writer_slab_dead_wait`. The batched and dead-unit tilizes run inside `compute_tilize`.
+- Ablation hooks re-cut for this tree, plus the merge gate: `perf_experiments/ablation_r9/` (README).
+
+### Latent deadlocks (fixed first)
+- **`a51305feccb`.** The writer's split-fill weight reserve polled `serve_fill()` in one loop and `khx_poll()` in a second.
+  - Compute can hold both weight slots at a halo-exchange gate. The writer then spun on the fill loop and never pushed the halo token.
+  - It hung on every kw-fold case as soon as the `weights` ablation made the rounds land instantly. Now one loop polls both.
+- **`041c7a6ab2c`.** `khx_drain()` polled only the exchange. A writer that reached it while it still owed split-fill batches deadlocked against the reader.
+  - Found by the `height_server_read_split` optimizer with the server reads skipped (103-core cases).
+  - The drain now also serves the fill.
+
+### Measured breakdown (before, zoned, us)
+DM-first cumulative peel: full > gather > fill > weights > scatter > untilize > tilize > matmul (everything stubbed). "mm only" stubs only the matmul. kw-fold cases have no tilize / untilize hook (their pack stream and final pass run under every hook).
+
+| case | full | -gather | -fill | -weights | -scatter | -untilize | -tilize | -matmul | mm only |
+|---|---|---|---|---|---|---|---|---|---|
+| aspp.convs.3 | 25.2 | 25.4 | 23.9 | 23.8 | 22.8 | 22.0 | 19.1 | 11.5 | 22.2 |
+| res4.x | 13.9 | 14.1 | 13.9 | 14.1 | 12.9 | 12.5 | 10.2 | 7.5 | 13.5 |
+| res3.x | 11.5 | 11.3 | 11.5 | 9.4 | 9.4 | 9.4 | 9.4 | 7.0 | 9.9 |
+| stem.conv2 | 31.5 | 31.5 | 30.4 | 29.5 | 29.5 | 29.5 | 29.5 | 18.7 | 19.5 |
+| aspp.convs.2 | 50.8 | 50.9 | 48.4 | 46.2 | 45.5 | 44.9 | 37.9 | 13.3 | 35.3 |
+| aspp.convs.1 | 53.1 | 53.0 | 51.6 | 49.4 | 48.9 | 47.3 | 42.2 | 12.5 | 32.6 |
+| res2 | 11.8 | 11.8 | 11.2 | 11.1 | 11.1 | 11.1 | 11.1 | 7.1 | 7.8 |
+| center_head.1 | 10.7 | 10.7 | 9.9 | 9.8 | 9.8 | 9.8 | 9.8 | 5.6 | 7.0 |
+| res5.0 | 34.5 | 34.4 | 34.4 | 33.6 | 33.2 | 33.4 | 30.6 | 12.3 | 24.2 |
+| sem dec res3 fc0 | 37.8 | 37.9 | 37.8 | 33.4 | 33.5 | 33.5 | 33.5 | 14.2 | 31.5 |
+| sem res2 fc1 | 86.5 | 86.6 | 85.8 | 82.4 | 82.3 | 82.3 | 82.4 | 21.3 | 29.6 |
+
+All 22 cases are in `ablation_r9/peel_results.txt`. Balanced bounds, from the per-core zones (`compute_matmul_walk` on the pack thread, p50 / max):
+
+| case | full | matmul stubbed | ring writes stubbed | everything stubbed |
+|---|---|---|---|---|
+| res4.x | 7.49 / 8.28 | 7.33 / 7.63 | 7.11 / 7.13 | 4.51 / 4.79 |
+| aspp.convs.3 | 13.04 / 15.62 | 10.27 / 11.82 | 12.93 / 14.22 | 6.82 / 7.80 |
+
+Ranked:
+1. **aspp.convs.3 prelude.** Untilize 0.9-5.1 us (fill-paced), then tilize 5.2-9.7 us. About a third of the tilized units belong to kernel rows outside the image: the walk skips them (Perf 7) but the padded tilize built them from the zero block. The walk (14 us) is a balanced matmul / ring bound.
+2. **res4.x is TRISC-busy end to end.** Untilize 1.4 + tilize 2.5 + walk 7.5-8.3 + combine 1.1 of 13.9 us. The 1-wide tilize ran at ~64 cycles per tile, one DEST section and one CB sync per tile. Its walk is balanced: the matmul alone and the ring alone each give ~7.1-7.3 us. The everything-stubbed skeleton is 4.5 us.
+3. **aspp.convs.1 / .2 prelude.** The untilize ends 9.3 / 8.9 us in, against 4.7 / 4.1 us with the fill payload stubbed. After that, the walk waits on the per-column weight stream: with the fill stubbed, the aspp2 walk grows 30.7 -> 34.6 us.
+4. **HEIGHT server-fed layers.** Round 0 lands at ~3 us (res3.x compute waits 0.9-3.9 us). The weights peel saves 1.1-4.4 us on 8 HEIGHT cases; res2 and center_head.1 are flat, since their slab fill ends at the same time.
+
+### Portfolio and verdicts
+Each idea was built and measured in isolation by its own optimizer (`perf_experiments/<slug>/`).
+
+| idea | verdict | focus result (ns, isolated) | domain / notes |
+|---|---|---|---|
+| `nslice_skip_dead_tilize`: the padded tilize skips the units the ring walk never reads (out-of-image kernel rows); their pages are pushed unwritten | WIN | aspp.convs.3 25085 -> 24390 (median of 3; unzoned 24309 -> 23602) | Every `padded_tilize` (stride 1, p == d BLOCK N-slice). aspp.convs.2 -3.6% (unzoned -5.0%), HiFi4 aspp_convs3 -3.1%, aspp_convs2 -1.6%, the rest flat. A dead-unit range on every core cost res4.x's 1-wide tilize +0.2-0.3 us with nothing to skip. Making the balanced M-split model count only live units: NULL. Skipping the reader's dead center rows: NULL (res4 +0.12 us). |
+| `block_fill_untilize_overlap`: BLOCK untilize batches capped at 4 tile-rows, the reader keeps up to 8 in flight | WIN (small) | aspp.convs.2 50407 -> 49672, aspp.convs.1 53279 -> 52291 (medians of 3) | Every K split, descriptor only. The brief's premise was wrong: the fill takes ~5 us on the critical core, not 1.6 us. The whole slab was issued at once over congested NoC0 column links, so all its batches landed within 0.4 us of each other at the end. Ceiling (untilize stubbed): -0.76 / -1.7 us. Smaller windows, 1-2 row batches, own-shard reads on NoC1: flat or slower. |
+| `block_weight_read_rate`: raise the BLOCK column weight stream's rate | WIN (different mechanism) | aspp.convs.1 53.12 -> 53.02 us (flat); res5.0 35.16 -> 34.55, res5.1 35.04 -> 34.30 us (medians of 3) | Faster reads were NULL: the read issue is NIU-bound at ~42 cycles per read, and direct register writes and rotating senders did not help. The win is the ring credit: it went out only after the first weight rounds, and columns 0, 8, 9, 10 read the same DRAM bank each round, so their late rounds held their ring neighbours. Polling the credit inside every weight wait removed the whole weight cost once the fill was stubbed (aspp1 51.34 -> 49.35, aspp2 48.24 -> 46.13 us). Every N-slice K split. |
+| `height_server_read_split`: split each HEIGHT server round's DRAM reads over helper spare cores (and the server's BRISC) | NULL | res3.x 11.19 -> 11.38 us (median of 3, same position in the session) | Round 0 is multicast-bound, not read-bound: ~25-30 GB/s into the 77-core rectangle beside the slab fill. The data was ready earlier, but the chain ended at the same time. The ceiling with the server reads skipped was -0.4 to -1.2 us. Measured wins: sem dec res3 fc0 -2.6%, inst dec res3 fc0 -1.4%. Not graduated: a new helper-core kernel and protocol for ~1.3 us per inference. Micro-bench of 48 one-tile reads: one RISC 1.62 us, both RISCs of one core 1.12 us, four engines 0.81 us. Server BRISC reads regressed (+6-9%): the BRISC is the multicaster. Found the `khx_drain` deadlock. |
+| `res4_narrow_tilize_batch`: 1-wide tilizes four per fp32 half-DEST section, one CB reserve / push per section | WIN | res4.x 13494 -> 12738 (median of 3) | Every 1-wide tilize (padded, tap-direct, FIFO). HiFi4 res4 -1.4%, interleaved C_in 32 flat. Isolated: 58.1 -> 42.2 ns per tile. The BH 1-wide tilize is pack-bound. A leaner pack sequence was flat in the op, so not taken. The 1-wide untilize already packs 4 rows per section. |
+| `block_ring_bidir`: route half the owner slices each way round the ring, so a hop has two steps of slack | REGRESSION | res4.x 13489 -> 14185, aspp.convs.3 25377 -> 25951 (medians of 3) | Not bit-identical: max 1 bf8_b step, PCC unchanged to 1e-6. Hiding the hop is worth at most 0.36-0.54 us on res4.x, and merging the second chain in the combine costs +0.35 us. The -x chain has to run on the writer's NoC1, where it slows the weight multicast. res5 +1-3%. It wins -22% only on a synthetic 5-of-11-owner shape. Side finding: aspp.convs.3's ~1.7 us ring stall comes from its 3 non-owning columns sitting together at the end of the ring (`block_ring_bidir/sched_model.py`). |
+
+Not floated (cap of 6): stem.conv1 (its face-read gather, ~84 cycles per 512 B face on two RISCs), stem.conv2's kw-fold walk (matmul-unpack bound), and 110-core use for res4.x / res5.x.
+
+### Graduated (one path each, in commit order)
+1. **1-wide tilize batching** (`39dcb6c1568`). Clean apply. `NarrowTilizeBatch` serves the padded, tap-direct and FIFO tilizes at width 1.
+2. **Dead-unit tilize skip** (`d898aa3d8f9`), merged by hand onto (1): a dead run's pages are pushed only after the open batched section is closed, so CB order holds.
+3. **BLOCK fill batches and window** (`412ea2f4432`). Clean apply, descriptor only.
+4. **Ring credit in the weight waits** (`f7f6b1a5b35`). Clean apply. `writer_ring_credit` is kept and now spans the credit send.
+5. **`51d108bac8e`.** No behaviour change: (3)'s predicate is rewritten as a carve-out, and the comment records the measurement that earned it.
+
+Carve-outs, each with the reason that earned it:
+- **Fill batches and window: only under a K split.** The same values on every layout were measured unzoned, 2 alternating runs each with non-overlapping ranges (`ablation_r9/ab_results_uncond.txt`):
+  - DRAM interleaved H64 W128 C_in 128 TILE bf8_b +1.9%, H128 W256 C_in 64 TILE bf8_b +2.1%;
+  - HEIGHT stem.conv2 / res3.0 @ LoFi +1.4% / +1.7%.
+- **Dead-unit skip: only on cores where some prelude row has a dead unit.** The per-row live range on a core with nothing to skip measured res4.x's 1-wide tilize +0.2-0.3 us. The choice is made once per M-block, between two instantiations.
+- **Ring credit polling: only on the N-slice walk.** Not a guard: the ring credit exists only there.
+
+### Precision
+- Every focus case is bit-identical to the base op on the final tree. The 22 / 22 merge gate (`ablation_r9/merge_gates/test_focus_exact.py`) runs the final tree against `587aef8ec99` in one process, with 0 differing elements on every case.
+- Each optimizer's own sweep was bit-identical across its domain (17 cases for the skip, the fill and the credit).
+
+### Whole-op result (unzoned, us; base `587aef8ec99` and final `f7f6b1a5b35`, mean of 3 each, alternating; target = t_ideal / 0.7; utilization = t_ideal / measured)
+
+| prio | case | before | after | speedup | target | util before -> after |
+|---|---|---|---|---|---|---|
+| 1 | aspp.convs.3 | 24.48 | 23.95 | 1.02x | 22.7 | 65% -> 66% |
+| 2 | sem res2.fuse_conv.1 + head.{0,1} | 85.79 | 85.00 | 1.01x | 90.8 | 74% -> 75% |
+| 3 | res4.{1..5}.conv2 | 12.73 | 12.46 | 1.02x | 5.7 | 31% -> 32% |
+| 4 | res3.{1,2,3}.conv2 | 11.08 | 10.99 | 1.01x | 5.7 | 36% -> 36% |
+| 5 | stem.conv2 | 31.12 | 31.03 | 1.00x | 22.7 | 51% -> 51% |
+| 6 | aspp.convs.2 | 49.70 | 46.82 | 1.06x | 45.4 | 64% -> 68% |
+| 7 | aspp.convs.1 | 52.62 | 52.01 | 1.01x | 45.4 | 60% -> 61% |
+| 8 | res2.{0,1,2}.conv2 | 11.13 | 11.10 | 1.00x | 5.7 | 36% -> 36% |
+| 9 | center_head.1 + offset_head.1 | 10.03 | 10.02 | 1.00x | 5.7 | 40% -> 40% |
+| 10 | inst res2.fuse_conv.1 + heads.0 | 25.05 | 25.07 | 1.00x | 22.7 | 63% -> 63% |
+| 11 | stem.conv3 | 48.51 | 48.57 | 1.00x | 45.4 | 66% -> 65% |
+| 12 | sem dec res2.fuse_conv.0 | 95.22 | 94.35 | 1.01x | 102.1 | 75% -> 76% |
+| 13 | sem dec res3.fuse_conv.0 | 37.17 | 37.16 | 1.00x | 28.4 | 53% -> 53% |
+| 14 | sem dec res3.fuse_conv.1 | 30.45 | 30.19 | 1.01x | 22.7 | 52% -> 53% |
+| 15 | stem.conv1 | 22.50 | 22.70 | 0.99x | 1.1 | 3% -> 3% |
+| 16 | inst dec res3.fuse_conv.0 | 21.71 | 21.77 | 1.00x | 14.2 | 46% -> 46% |
+| 17 | inst dec res2.fuse_conv.0 | 30.23 | 30.28 | 1.00x | 28.4 | 66% -> 66% |
+| 18 | res5.2.conv2 | 33.85 | 33.88 | 1.00x | 22.7 | 47% -> 47% |
+| 19 | res5.1.conv2 | 33.70 | 33.75 | 1.00x | 22.7 | 47% -> 47% |
+| 20 | res5.0.conv2 | 34.12 | 33.70 | 1.01x | 22.7 | 47% -> 47% |
+| 21 | res3.0.conv2 | 17.47 | 17.47 | 1.00x | 5.7 | 23% -> 23% |
+| 22 | res4.0.conv2 | 15.53 | 15.52 | 1.00x | 5.7 | 26% -> 26% |
+
+All 3x3 layers of one Panoptic inference (each case x its calls): 1248 -> 1234 us (-1.2%).
+
+Smaller in the combined tree than in isolation:
+- res4.x -2.1% unzoned vs the tilize batch's -5.6% zoned. The zones alone cost res4.x ~1.2 us (13.9 zoned vs 12.73 unzoned at base).
+- res5.1 is flat (33.70 -> 33.75) against its optimizer's -1.8% unzoned.
+
+### Guard set (whole perf harness, 41 shapes plus the 22 focus cases, unzoned, same session, 3 alternating pairs; `ablation_r9/ab_results.txt`)
+- **HEIGHT (HiFi4).**
+  - kw-fold decoder / res layers: res3 -2.6%, sem res3 fuse_conv1 -2.7%, sem res3 fuse_conv0 -2.2%, inst res3 fuse_conv0 -1.2%, inst res2 fuse_conv1 -1.0%, inst res2 fuse_conv0 -0.9%, sem res2 fuse_conv1 -0.9%, sem res2 fuse_conv0 -0.7%. Of this round's changes, only the two writer fixes run there; not bisected.
+  - The rest within ±0.5%: stem_conv1 -0.5%, stem_conv3 0.0%, stem_conv2 0.0%, res2 -0.1%, res3_0 -0.3%, center_head1 +0.2%.
+- **BLOCK (HiFi4 unless noted).** aspp_convs3 -3.1%, res4 LoFi -3.0%, aspp_convs2 -2.0%, res4 -1.2%, aspp_convs1 -0.7%. res5_0/1/2 and res4_0 within +0.2%.
+- **Interleaved (18 shapes).** -0.7% to +0.4%, except H16_W16_Ci64 tile_bf8b at +2.3% (base 10.00-10.10, final 10.17-10.46 us).
+  - Bisected over the round's 7 commits, two passes (`ablation_r9/ab_guard.txt`). The cell moved 9.96-10.34 us non-monotonically, at commits that do not run on it.
+  - Final read 9.96 / 10.04 us against base 10.13 / 10.27 us.
+  - This is the same layout-noise cell as Perf 8: nothing to carve out.
+- **Golden.** `eval/golden_tests/conv2d_3x3/` on the final tree: 1518 passed, 480 skipped (INVALID), 0 failed (test_op in 4 shape chunks, plus test_op_loose and test_regression).
+- **Unit dir.** 224 / 224 (the perf file runs separately: 63 / 63 with PCC asserted, in each A/B run).
+- **`--dev`.** The BLOCK, kw-fold and HEIGHT files, 112 / 112.
+
+### Bottleneck now
+- **aspp.convs.3 (priority 1, 66%).** Tilize 4.9-7.8 us (was 5.2-9.7). The walk then runs 7.8-23.1 us: it absorbed most of the prelude gain.
+  - The walk is a balanced matmul / ring bound with 1-tile N slices.
+  - The 3 non-owning columns sitting together at the ring's end cost ~1.7 us of stall (`block_ring_bidir/sched_model.py`). Spreading them needs the output written from any column.
+- **res4.x (32%).** Tilize 1.8 us, walk 7.4-8.3 us, combine 1.5 us. Still TRISC-busy; 80 of 110 cores.
+- **aspp.convs.1 / .2 (61% / 68%).** The walk is at the ~19 cycles per tile-MAC floor of 4-tile subblocks.
+  - aspp1's prelude still ends ~15 us in: untilize to 9.4 us, tilize to 15.3 us.
+  - Next is the reader's center copy after the fill (~2.1-2.5 us, ceiling -0.76 us on aspp2).
+- **HEIGHT small configs (res3.x 11.0, res2 11.1, center_head.1 10.0 us vs 5.7).** Round 0 is multicast-bound beside the slab fill.
+- **stem.conv1 (3%).** Unchanged.
+
+### Helper bypasses
+
+| helper | kind | what was missing / hard | helper ns | raw ns | site |
+|---|---|---|---|---|---|
+| `compute_kernel_lib::tilize` | capability | It reads only at the CB read pointer. At block width 1 it runs one DEST section, one math/pack handshake and one CB reserve / push per tile. A 1-wide tilize is pack-bound, so the per-tile section release is a third of its cost. Nothing fills a fp32 half-DEST section with four 1-tile tilizes from computed L1 sources and packs them as one section. | 13494 (res4.x zoned, median of 3; one section per tile: the helper's width-1 structure, raw at computed sources) | 12738 | conv2d_3x3_compute.cpp:194 (`NarrowTilizeBatch`) |
+| `dataflow_kernel_lib` multicast (`ReceiverPipe::receive`) | capability | No polling form. The receive acks the sender and blocks on the data-ready semaphore, and the caller cannot run its own work during the wait. Here that work is giving the ring credit and serving the split fill. The op already re-implemented it once for the fill (`receive_serving`); the credit needed a second copy. | 35040 (res5.1 zoned, median of 3, isolated; credit after the first rounds; flat in the combined unzoned A/B) | 34300 | conv2d_3x3_writer.cpp:1003 (`receive_polling`) |
+
+The dead-unit skip adds no raw LLK beyond `padded_tilize`'s existing bypass (Perf 8 row). The fill batches and window are host-only.

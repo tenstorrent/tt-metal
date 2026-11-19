@@ -1,0 +1,151 @@
+diff --git a/ttnn/ttnn/operations/conv2d_3x3/kernels/conv2d_3x3_compute.cpp b/ttnn/ttnn/operations/conv2d_3x3/kernels/conv2d_3x3_compute.cpp
+index 1ed38365ecc..bcf59b6b4fa 100644
+--- a/ttnn/ttnn/operations/conv2d_3x3/kernels/conv2d_3x3_compute.cpp
++++ b/ttnn/ttnn/operations/conv2d_3x3/kernels/conv2d_3x3_compute.cpp
+@@ -254,6 +254,14 @@ ALWI void direct_tilize(DataflowBuffer& in, DataflowBuffer& out, uint32_t units,
+ // it with direct_tilize's tile loop: no reader table, no gathered blocks, no cb_im2col_rm handshake. Taps 0 and 2 only
+ // (the center taps come from cb_center_tiles), in the unit order of direct_tilize (tile-row, kernel row, tap): the same
+ // in0 tiles (bit-identical). The caller orders the unpacker after the slab's last pack and the reader's center copy.
++// Dead units (skip_dead): the ring walk reads unit (t, kh) only when kh is in [kh_lo[g], kh_hi[g]) of t's ring row
++// group g = t / group_h (every owner's walk has the same groups, at multiples of group_h: ring_group_row0 / _rt only
++// reorder them), one contiguous range, so the units it never reads are a prefix and a suffix of each tile-row's three:
++// their pages are reserved and pushed unwritten (one CB advance each), keeping the walk's wait count (bit-identical).
++// The caller takes skip_dead only where some row has a dead unit: elsewhere the loop is the plain one (the per-row
++// range costs the 1-wide res4.x tilize +0.2 us with nothing to skip). Measured (Blackhole p150b, LoFi, zoned):
++// aspp.convs.3 25085 -> 24390 ns (median of 3; the prelude tilize 3.5 -> 2.8 us, a third of its units dead),
++// aspp.convs.2 -3.6 to -5%, HiFi4 BLOCK aspp_convs3 -3.1%, aspp_convs2 -1.6%, res4.x / res5.x / aspp.convs.1 flat.
+ // Raw LLK (capability), as direct_tilize: ckl::tilize / fast_tilize_block read at the CB read pointer.
+ template <
+     uint32_t tw,
+@@ -264,7 +272,10 @@ template <
+     int32_t input_height,
+     int32_t input_width,
+     int32_t padding,
+-    int32_t dilation>
++    int32_t dilation,
++    uint32_t group_h,
++    uint32_t num_groups,
++    bool skip_dead>
+ ALWI void padded_tilize(
+     DataflowBuffer& out,
+     uint32_t rows,
+@@ -272,7 +283,9 @@ ALWI void padded_tilize(
+     [[maybe_unused]] uint32_t o_end,
+     [[maybe_unused]] const int32_t (&band_row_off)[3],
+     [[maybe_unused]] uint32_t slab_l1,
+-    [[maybe_unused]] uint32_t zero_l1) {
++    [[maybe_unused]] uint32_t zero_l1,
++    [[maybe_unused]] const uint8_t (&kh_lo)[num_groups],
++    [[maybe_unused]] const uint8_t (&kh_hi)[num_groups]) {
+     reconfig_data_format_srca(cb_in);
+     pack_reconfig_data_format(cb_out);
+     fast_tilize_init(cb_in, tw, cb_out);
+@@ -286,7 +299,17 @@ ALWI void padded_tilize(
+         [[maybe_unused]] const uint32_t o = o_first + t * 32;
+         [[maybe_unused]] const int32_t ho0 = o / output_width;
+         [[maybe_unused]] const int32_t wo0 = o % output_width;
+-        for (int32_t kh = 0; kh < 3; ++kh) {
++        int32_t live_lo = 0;
++        int32_t live_hi = 3;
++        if constexpr (skip_dead) {
++            live_lo = kh_lo[t / group_h];
++            live_hi = kh_hi[t / group_h];
++            if (live_lo > 0) {
++                out.reserve_back(2 * tw * live_lo);
++                out.push_back(2 * tw * live_lo);
++            }
++        }
++        for (int32_t kh = live_lo; kh < live_hi; ++kh) {
+             [[maybe_unused]] uint32_t row_src = 0;
+ #ifdef TRISC_UNPACK
+             {
+@@ -336,6 +359,12 @@ ALWI void padded_tilize(
+                 }
+             }
+         }
++        if constexpr (skip_dead) {
++            if (live_hi < 3) {
++                out.reserve_back(2 * tw * (3 - live_hi));
++                out.push_back(2 * tw * (3 - live_hi));
++            }
++        }
+     }
+     fast_tilize_uninit(cb_in, cb_out, tw);
+ }
+@@ -1017,12 +1046,12 @@ void kernel_main() {
+             // groups, only their order differs, so a group is r0 / slice_sb_h) multiplies kernel rows
+             // [kh_lo[g], kh_hi[g]) only, the range that is in the image for some row of the group. A kernel row
+             // outside the image for all of a group's rows is all zeros in in0 (the reader publishes the zero block and
+-            // zero center rows for it, which the prelude still tilizes: the prelude is paced by the reader's gather,
+-            // and skipping those tilizes measured flat). Only exact zero products are removed: bit-identical. The host
+-            // sends one 3-bit kernel-row mask per group, 10 per word, ceil(ring_groups / 10) words per M-block
+-            // (_nslice_kh_masks in the descriptor), always a contiguous range of at least one kernel row. The loops
+-            // keep the base loops' form: a per-kernel-row mask test measured +2.7% on a 4 + 1-row group walk with
+-            // nothing to skip.
++            // zero center rows for it; the padded-slab prelude does not tilize those units at all, see padded_tilize,
++            // while the gather-paced preludes still do: skipping there measured flat). Only exact zero products are
++            // removed: bit-identical. The host sends one 3-bit kernel-row mask per group, 10 per word,
++            // ceil(ring_groups / 10) words per M-block (_nslice_kh_masks in the descriptor), always a contiguous range
++            // of at least one kernel row. The loops keep the base loops' form: a per-kernel-row mask test measured
++            // +2.7% on a 4 + 1-row group walk with nothing to skip.
+             // Raw LLK (capability), as the rest of this walk: compute_kernel_lib::matmul_block multiplies the whole K
+             // of every subblock; it has no per-subblock K range. aspp.convs.3 @ LoFi (d = 18: 1/3 of every core's
+             // tile-MACs are out-of-image kernel rows) 33729 -> 27297 ns (Blackhole p150b, median of 3).
+@@ -1055,23 +1084,40 @@ void kernel_main() {
+                         CircularBuffer(cb_halo_slab).wait_front(slab_rows * c_in_tiles);
+                         center.wait_front(3 * block_m_tiles * c_in_tiles);
+                     }
+-                    padded_tilize<
+-                        im2col_tilize_width_tiles,
+-                        block_m_tiles,
+-                        cb_im2col_rm,
+-                        cb_im2col_tiles,
+-                        pad_out_w,
+-                        pad_in_h,
+-                        pad_in_w,
+-                        pad_p,
+-                        pad_d>(
+-                        im2col_tiles_dfb,
+-                        prelude_rows,
+-                        pad_o_first,
+-                        pad_o_end,
+-                        pad_plan.band_row_off,
+-                        pad_slab_l1,
+-                        pad_zero_l1);
++                    // Dead units (see padded_tilize): skipped only where some prelude row has one.
++                    auto run_padded_tilize = [&](auto skip_dead) {
++                        padded_tilize<
++                            im2col_tilize_width_tiles,
++                            block_m_tiles,
++                            cb_im2col_rm,
++                            cb_im2col_tiles,
++                            pad_out_w,
++                            pad_in_h,
++                            pad_in_w,
++                            pad_p,
++                            pad_d,
++                            slice_sb_h,
++                            ring_groups,
++                            decltype(skip_dead)::value>(
++                            im2col_tiles_dfb,
++                            prelude_rows,
++                            pad_o_first,
++                            pad_o_end,
++                            pad_plan.band_row_off,
++                            pad_slab_l1,
++                            pad_zero_l1,
++                            kh_lo,
++                            kh_hi);
++                    };
++                    bool any_dead = false;
++                    for (uint32_t g = 0; g * slice_sb_h < prelude_rows; ++g) {
++                        any_dead |= kh_lo[g] > 0 || kh_hi[g] < 3;
++                    }
++                    if (any_dead) {
++                        run_padded_tilize(std::true_type{});
++                    } else {
++                        run_padded_tilize(std::false_type{});
++                    }
+                     // The slab is dead: tell the reader (cb_src_table is a one-page token on this path).
+                     CircularBuffer done_token(cb_src_table);
+                     done_token.reserve_back(1);

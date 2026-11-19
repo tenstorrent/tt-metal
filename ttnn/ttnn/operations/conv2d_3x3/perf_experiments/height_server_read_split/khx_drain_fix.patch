@@ -1,0 +1,15 @@
+--- ttnn/ttnn/operations/conv2d_3x3/kernels/conv2d_3x3_writer.cpp	2026-11-18 23:35:24.619245742 +0000
++++ ttnn/ttnn/operations/conv2d_3x3/kernels/conv2d_3x3_writer.cpp	2026-11-19 00:11:48.050063458 +0000
+@@ -708,8 +708,12 @@
+     auto khx_drain = [&]() {
+         if (khx_out_i < khx_out_n || khx_in_i < khx_in_n) {
+             MaybeDeviceZoneScope("writer_khx_drain");
++            // height_server_read_split: serve the split fill too. With the rounds landing early the writer reaches
++            // this drain while it still owes the reader fill batches: compute then waits for the slab, the halo never
++            // comes, and the drain spins forever (seen on the 103-core cases with the server reads skipped).
+             while (khx_out_i < khx_out_n || khx_in_i < khx_in_n) {
+                 khx_poll();
++                serve_fill();
+             }
+         }
+     };

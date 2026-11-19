@@ -1,0 +1,1636 @@
+SAFE_PYTEST: Waiting for device lock...
+[2026-11-19 00:09:21] SAFE_PYTEST: waiting for device (20s) — holder pid=1776981 cmd="/bin/bash scripts/run_safe_pytest.sh --profile --run-all /localdev/pmilojevic/workspaces/opgen/ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_ring_bidir/test_brb.py --import-mode=prepend -q " parent pid=1776961 cmd="bash ./run.sh diag1 "
+SAFE_PYTEST: Device lock acquired
+SAFE_PYTEST: dispatch_timeout=5s
+PRECOMPILE: on — collect + parallel compile (x64) inside the pytest session, local
+SAFE_PYTEST: env UP_FRONT_INLINE=1 UP_FRONT_COLLECT=1 UP_FRONT_REAL_ALLOC=1 UP_FRONT_COLLECT_WORKERS=64 PYTHONPATH=/localdev/pmilojevic/workspaces/opgen:/localdev/pmilojevic/workspaces/opgen python -m tracy -r -m pytest -p tests.plugins.up_front_collect --import-mode=prepend ttnn/ttnn/operations/conv2d_3x3/perf_experiments/height_server_read_split/test_hsr_op.py::test_conv2d_3x3_perf_focus\[res2_\{0\,1\,2\}_conv2\] ttnn/ttnn/operations/conv2d_3x3/perf_experiments/height_server_read_split/test_hsr_op.py::test_conv2d_3x3_perf_focus\[res3_\{1\,2\,3\}_conv2\] ttnn/ttnn/operations/conv2d_3x3/perf_experiments/height_server_read_split/test_hsr_op.py::test_conv2d_3x3_perf_focus\[semantic0\] ttnn/ttnn/operations/conv2d_3x3/perf_experiments/height_server_read_split/test_hsr_op.py::test_conv2d_3x3_perf_focus\[instance0\] ttnn/ttnn/operations/conv2d_3x3/perf_experiments/height_server_read_split/test_hsr_op.py::test_conv2d_3x3_perf_focus\[semantic1\] ttnn/ttnn/operations/conv2d_3x3/perf_experiments/height_server_read_split/test_hsr_op.py::test_conv2d_3x3_perf_focus\[semantic2\] ttnn/ttnn/operations/conv2d_3x3/perf_experiments/height_server_read_split/test_hsr_op.py::test_conv2d_3x3_perf_focus\[instance1\] ttnn/ttnn/operations/conv2d_3x3/perf_experiments/height_server_read_split/test_hsr_op.py::test_conv2d_3x3_perf_focus\[semantic3\] ttnn/ttnn/operations/conv2d_3x3/perf_experiments/height_server_read_split/test_hsr_op.py::test_conv2d_3x3_perf_focus\[instance2\]
+========================================
+2026-11-19 00:09:34.654 | INFO     | __main__:main:381 - Using port 8086
+2026-11-19 00:09:34.655 | INFO     | tracy:run_report_setup:91 - Verifying tracy profiling tools
+2026-11-19 00:09:34.697 | INFO     | __main__:run_workload:416 - Test process started
+2026-11-19 00:09:37.108 | DEBUG    | ttnn:<module>:45 - Initial ttnn.CONFIG:
+Config{cache_path=/home/pmilojevic/.cache/ttnn,model_cache_path=/home/pmilojevic/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,validate_program_args=false,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_graph_python_stack_traces=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,strict_ccl_topology=false,verify_replicated_shards_on_dump=true,std::nullopt}
+============================= test session starts ==============================
+platform linux -- Python 3.10.19, pytest-9.0.3, pluggy-1.7.0 -- /localdev/pmilojevic/workspaces/opgen/python_env/bin/python
+cachedir: .pytest_cache
+benchmark: 5.2.3 (defaults: timer=time.perf_counter disable_gc=False min_rounds=5 min_time=0.000005 max_time=1.0 calibration_precision=10 warmup=False warmup_iterations=100000)
+rootdir: /localdev/pmilojevic/workspaces/opgen
+configfile: pytest.ini
+plugins: split-0.11.0, repeat-0.9.4, anyio-4.16.0, benchmark-5.2.3, github-actions-annotate-failures-0.3.0, timeout-2.4.0, cov-7.0.0, dash-2.15.0
+timeout: 300.0s
+timeout method: signal
+timeout func_only: False
+collecting ... 2026-11-19 00:09:42.084 | info     |          Device | Opening user mode device driver (tt_cluster.cpp:252)
+2026-11-19 00:09:42.084 | info     |             UMD | Cluster constructor started. (cluster.cpp:434)
+2026-11-19 00:09:42.086 | info     |             UMD | Creating TopologyDiscovery for architecture: blackhole (topology_discovery.cpp:137)
+2026-11-19 00:09:42.086 | info     |             UMD | Starting topology discovery. (topology_discovery.cpp:156)
+2026-11-19 00:09:42.109 | info     |             UMD | Established firmware bundle version: 19.16.1 (topology_discovery.cpp:700)
+2026-11-19 00:09:42.110 | info     |             UMD | Completed topology discovery. (topology_discovery.cpp:161)
+2026-11-19 00:09:42.372 | info     |             UMD | Opening local chip ids/PCIe ids: {0, 1, 2, 3, 4, 5, 6, 7}/[2, 3, 1, 0, 6, 7, 5, 4] and remote chip ids {} (cluster.cpp:174)
+2026-11-19 00:09:42.373 | info     |             UMD | IOMMU: enabled (cluster.cpp:148)
+2026-11-19 00:09:42.373 | info     |             UMD | KMD version: 2.9.0 (cluster.cpp:151)
+2026-11-19 00:09:42.373 | info     |             UMD | Cluster constructor completed. (cluster.cpp:893)
+2026-11-19 00:09:42.380 | info     |             UMD | Starting devices in cluster (cluster.cpp:1482)
+2026-11-19 00:09:42.756 | info     |             UMD | Starting devices in cluster completed. (cluster.cpp:1491)
+2026-11-19 00:09:42.906 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:571)
+2026-11-19 00:09:42.906 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:624)
+2026-11-19 00:09:43.090 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using distributed::MeshDevice::create_unit_meshes(). (device_manager.cpp:265)
+2026-11-19 00:09:43.109 | info     |           Metal | Profiler started on device 0 (profiler_initializer.cpp:49)
+collected 9 items
+
+UP_FRONT_INLINE: collect pass over 9 item(s) took 2.5s
+UP_FRONT_INLINE: compile route local (programs=9, farm_min=10)
+
+UP_FRONT_COLLECT: 9 ops stashed across 9 bodies -> 9 unique programs (swallowed 0, skipped-capture 0)
+UP_FRONT_COLLECT: fast-shallow from_torch — shape-only=27 fallback=0
+2026-11-19 00:09:44.709 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using distributed::MeshDevice::create_unit_meshes(). (device_manager.cpp:265)
+2026-11-19 00:09:44.713 | info     |           Metal | Profiler started on device 0 (profiler_initializer.cpp:49)
+2026-11-19 00:09:44.792 | info     |           Metal | Enabling program cache on MeshDevice 3 (mesh_device.cpp:1322)
+Building ncrisc, compile step:
+/localdev/pmilojevic/workspaces/opgen/runtime/sfpi/compiler/bin/riscv-tt-elf-g++ -O2 -std=c++17 -ftt-nttp -ftt-constinit -ftt-consteval -ftt-no-dyninit -flto=1 -flto-partition=one -ffast-math -fno-finite-math-only -fsigned-zeros -fno-associative-math -fno-exceptions -fno-rtti -fno-use-cxa-atexit -g -MMD -Wall -Werror -Wno-error=deprecated-declarations -Wno-error=multistatement-macros -Wno-error=parentheses -Wno-error=unused-but-set-variable -Wno-unused-variable -Wno-unused-function --param=min-pagesize=0 -mcpu=tt-bh -fno-tree-loop-distribute-patterns -Winvalid-pch -Wno-error=invalid-pch -I. -I.. -I/localdev/pmilojevic/workspaces/opgen/ -I/localdev/pmilojevic/workspaces/opgen/ttnn -I/localdev/pmilojevic/workspaces/opgen/ttnn/cpp -I/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc -I/localdev/pmilojevic/workspaces/opgen/tt_metal/tt-llk/common -I/localdev/pmilojevic/workspaces/opgen/tt_metal/tt-llk/tools/include -I/localdev/pmilojevic/workspaces/opgen/tt_metal/hostdevcommon/api -I/localdev/pmilojevic/workspaces/opgen/tt_metal/api/ -I/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/ckernels/blackhole/metal/common -I/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/ckernels/blackhole/metal/llk_io -I/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/internal/tt-1xx -I/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/internal/tt-1xx/blackhole -I/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/internal/tt-1xx/blackhole/blackhole_defines -I/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc -I/localdev/pmilojevic/workspaces/opgen/tt_metal/tt-llk/tt_llk_blackhole/common/inc -I/localdev/pmilojevic/workspaces/opgen/tt_metal/tt-llk/tt_llk_blackhole/llk_lib -I/localdev/pmilojevic/workspaces/opgen/tt_metal/tt-llk/tt_llk_blackhole/llk_lib/hal -I/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/firmware/src/tt-1xx -I/localdev/pmilojevic/workspaces/opgen/ttnn/ttnn/operations/conv2d_3x3/perf_experiments/height_server_read_split/op_copy/kernels -include /localdev/pmilojevic/tt-metal-cache/tt-metal-cache/pch/842cea1ec115824b/pch.h -DIS_NOT_POW2_NUM_L1_BANKS=1 -DLOG_BASE_2_OF_NUM_DRAM_BANKS=3 -DNUM_DRAM_BANKS=8 -DNUM_L1_BANKS=110 -DPCIE_NOC_X=19 -DPCIE_NOC_Y=24 -DTENSIX_FIRMWARE -DLOCAL_MEM_EN=0 -DPROFILE_KERNEL=1 -DPROFILER_FULL_HOST_BUFFER_SIZE_PER_RISC=48000 -DL1_ECC_HALT -DPROCESSOR_INDEX=1 -DCOMPILE_FOR_NCRISC -DPROGRAMMABLE_CORE_TYPE=0 -DARCH_BLACKHOLE -DDISPATCH_MESSAGE_ADDR=4290184248 -DKERNEL_BUILD -DNOC_INDEX=0 -DNOC_MODE=0 -DFULL_KERNEL_NAME="conv2d_3x3_weight_server_reader/3760560176565617046/" -DKERNEL_COMPILE_TIME_ARGS=3,10,12,6,3,1,8,0,40,0,0,2,1088 -c -o /localdev/pmilojevic/tt-metal-cache/tt-metal-cache9957800640679114378/kernels/conv2d_3x3_weight_server_reader/3760560176565617046/ncrisc/ncrisck.13679359497600671985_1780871.o /localdev/pmilojevic/workspaces/opgen/tt_metal/hw/firmware/src/tt-1xx/ncrisck.cc -MF /localdev/pmilojevic/tt-metal-cache/tt-metal-cache9957800640679114378/kernels/conv2d_3x3_weight_server_reader/3760560176565617046/ncrisc/ncrisck.13679359497600671985_1780871.d
+In file included from /localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/internal/dataflow/dataflow_api_raw.h:8,
+                 from /localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/api/dataflow/dataflow_api.h:16,
+                 from /localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/internal/firmware_common.h:23,
+                 from /localdev/pmilojevic/workspaces/opgen/tt_metal/hw/firmware/src/tt-1xx/ncrisck.cc:17:
+/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/api/debug/kernel_profiler.hpp: In function 'void kernel_profiler::quick_push()':
+/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:32:22: note: '#pragma message: PROFILER-NOC-QUICK-PUSH,/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/api/debug/kernel_profiler.hpp,645,KERNEL_PROFILER'
+   32 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:42:5: note: in expansion of macro 'DO_PRAGMA'
+   42 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name))); \
+      |     ^~~~~~~~~
+/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:645:5: note: in expansion of macro 'SrcLocNameToHash'
+  645 |     SrcLocNameToHash("PROFILER-NOC-QUICK-PUSH");
+      |     ^~~~~~~~~~~~~~~~
+/localdev/pmilojevic/workspaces/opgen/ttnn/ttnn/operations/conv2d_3x3/perf_experiments/height_server_read_split/op_copy/kernels/conv2d_3x3_weight_server_reader.cpp: In function 'void kernel_main()':
+/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:32:22: note: '#pragma message: server_read,/localdev/pmilojevic/workspaces/opgen/ttnn/ttnn/operations/conv2d_3x3/perf_experiments/height_server_read_split/op_copy/kernels/conv2d_3x3_weight_server_reader.cpp,67,KERNEL_PROFILER'
+   32 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:1008:5: note: in expansion of macro 'DO_PRAGMA'
+ 1008 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/localdev/pmilojevic/workspaces/opgen/ttnn/cpp/ttnn/kernel_lib/perf_instrumentation.hpp:25:36: note: in expansion of macro 'DeviceZoneScopedN'
+   25 | #define MaybeDeviceZoneScope(name) DeviceZoneScopedN(name)
+      |                                    ^~~~~~~~~~~~~~~~~
+/localdev/pmilojevic/workspaces/opgen/ttnn/ttnn/operations/conv2d_3x3/perf_experiments/height_server_read_split/op_copy/kernels/conv2d_3x3_weight_server_reader.cpp:67:9: note: in expansion of macro 'MaybeDeviceZoneScope'
+   67 |         MaybeDeviceZoneScope("server_read");
+      |         ^~~~~~~~~~~~~~~~~~~~
+/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:32:22: note: '#pragma message: hsr_wait_helpers,/localdev/pmilojevic/workspaces/opgen/ttnn/ttnn/operations/conv2d_3x3/perf_experiments/height_server_read_split/op_copy/kernels/conv2d_3x3_weight_server_reader.cpp,83,KERNEL_PROFILER'
+   32 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:1008:5: note: in expansion of macro 'DO_PRAGMA'
+ 1008 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/localdev/pmilojevic/workspaces/opgen/ttnn/cpp/ttnn/kernel_lib/perf_instrumentation.hpp:25:36: note: in expansion of macro 'DeviceZoneScopedN'
+   25 | #define MaybeDeviceZoneScope(name) DeviceZoneScopedN(name)
+      |                                    ^~~~~~~~~~~~~~~~~
+/localdev/pmilojevic/workspaces/opgen/ttnn/ttnn/operations/conv2d_3x3/perf_experiments/height_server_read_split/op_copy/kernels/conv2d_3x3_weight_server_reader.cpp:83:21: note: in expansion of macro 'MaybeDeviceZoneScope'
+   83 |                     MaybeDeviceZoneScope("hsr_wait_helpers");
+      |                     ^~~~~~~~~~~~~~~~~~~~
+/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/firmware/src/tt-1xx/ncrisck.cc: In function 'uint32_t _start()':
+/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:32:22: note: '#pragma message: NCRISC-KERNEL,/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/firmware/src/tt-1xx/ncrisck.cc,70,KERNEL_PROFILER'
+   32 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:1067:5: note: in expansion of macro 'DO_PRAGMA'
+ 1067 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/firmware/src/tt-1xx/ncrisck.cc:70:5: note: in expansion of macro 'DeviceZoneScopedMainChildN'
+   70 |     DeviceZoneScopedMainChildN("NCRISC-KERNEL");
+      |     ^~~~~~~~~~~~~~~~~~~~~~~~~~
+Building ncrisc, compile step:
+/localdev/pmilojevic/workspaces/opgen/runtime/sfpi/compiler/bin/riscv-tt-elf-g++ -O2 -std=c++17 -ftt-nttp -ftt-constinit -ftt-consteval -ftt-no-dyninit -flto=1 -flto-partition=one -ffast-math -fno-finite-math-only -fsigned-zeros -fno-associative-math -fno-exceptions -fno-rtti -fno-use-cxa-atexit -g -MMD -Wall -Werror -Wno-error=deprecated-declarations -Wno-error=multistatement-macros -Wno-error=parentheses -Wno-error=unused-but-set-variable -Wno-unused-variable -Wno-unused-function --param=min-pagesize=0 -mcpu=tt-bh -fno-tree-loop-distribute-patterns -Winvalid-pch -Wno-error=invalid-pch -I. -I.. -I/localdev/pmilojevic/workspaces/opgen/ -I/localdev/pmilojevic/workspaces/opgen/ttnn -I/localdev/pmilojevic/workspaces/opgen/ttnn/cpp -I/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc -I/localdev/pmilojevic/workspaces/opgen/tt_metal/tt-llk/common -I/localdev/pmilojevic/workspaces/opgen/tt_metal/tt-llk/tools/include -I/localdev/pmilojevic/workspaces/opgen/tt_metal/hostdevcommon/api -I/localdev/pmilojevic/workspaces/opgen/tt_metal/api/ -I/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/ckernels/blackhole/metal/common -I/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/ckernels/blackhole/metal/llk_io -I/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/internal/tt-1xx -I/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/internal/tt-1xx/blackhole -I/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/internal/tt-1xx/blackhole/blackhole_defines -I/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc -I/localdev/pmilojevic/workspaces/opgen/tt_metal/tt-llk/tt_llk_blackhole/common/inc -I/localdev/pmilojevic/workspaces/opgen/tt_metal/tt-llk/tt_llk_blackhole/llk_lib -I/localdev/pmilojevic/workspaces/opgen/tt_metal/tt-llk/tt_llk_blackhole/llk_lib/hal -I/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/firmware/src/tt-1xx -I/localdev/pmilojevic/workspaces/opgen/ttnn/ttnn/operations/conv2d_3x3/perf_experiments/height_server_read_split/op_copy/kernels -include /localdev/pmilojevic/tt-metal-cache/tt-metal-cache/pch/842cea1ec115824b/pch.h -DIS_NOT_POW2_NUM_L1_BANKS=1 -DLOG_BASE_2_OF_NUM_DRAM_BANKS=3 -DNUM_DRAM_BANKS=8 -DNUM_L1_BANKS=110 -DPCIE_NOC_X=19 -DPCIE_NOC_Y=24 -DTENSIX_FIRMWARE -DLOCAL_MEM_EN=0 -DPROFILE_KERNEL=1 -DPROFILER_FULL_HOST_BUFFER_SIZE_PER_RISC=48000 -DL1_ECC_HALT -DPROCESSOR_INDEX=1 -DCOMPILE_FOR_NCRISC -DPROGRAMMABLE_CORE_TYPE=0 -DARCH_BLACKHOLE -DDISPATCH_MESSAGE_ADDR=4290184248 -DKERNEL_BUILD -DNOC_INDEX=0 -DNOC_MODE=0 -DFULL_KERNEL_NAME="conv2d_3x3_weight_server_reader/14113556416268658635/" -DKERNEL_COMPILE_TIME_ARGS=3,10,12,3,3,1,4,0,40,0,0,2,1088 -c -o /localdev/pmilojevic/tt-metal-cache/tt-metal-cache9957800640679114378/kernels/conv2d_3x3_weight_server_reader/14113556416268658635/ncrisc/ncrisck.13679359497600671985_1780871.o /localdev/pmilojevic/workspaces/opgen/tt_metal/hw/firmware/src/tt-1xx/ncrisck.cc -MF /localdev/pmilojevic/tt-metal-cache/tt-metal-cache9957800640679114378/kernels/conv2d_3x3_weight_server_reader/14113556416268658635/ncrisc/ncrisck.13679359497600671985_1780871.d
+In file included from /localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/internal/dataflow/dataflow_api_raw.h:8,
+                 from /localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/api/dataflow/dataflow_api.h:16,
+                 from /localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/internal/firmware_common.h:23,
+                 from /localdev/pmilojevic/workspaces/opgen/tt_metal/hw/firmware/src/tt-1xx/ncrisck.cc:17:
+/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/api/debug/kernel_profiler.hpp: In function 'void kernel_profiler::quick_push()':
+/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:32:22: note: '#pragma message: PROFILER-NOC-QUICK-PUSH,/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/api/debug/kernel_profiler.hpp,645,KERNEL_PROFILER'
+   32 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:42:5: note: in expansion of macro 'DO_PRAGMA'
+   42 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name))); \
+      |     ^~~~~~~~~
+/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:645:5: note: in expansion of macro 'SrcLocNameToHash'
+  645 |     SrcLocNameToHash("PROFILER-NOC-QUICK-PUSH");
+      |     ^~~~~~~~~~~~~~~~
+/localdev/pmilojevic/workspaces/opgen/ttnn/ttnn/operations/conv2d_3x3/perf_experiments/height_server_read_split/op_copy/kernels/conv2d_3x3_weight_server_reader.cpp: In function 'void kernel_main()':
+/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:32:22: note: '#pragma message: server_read,/localdev/pmilojevic/workspaces/opgen/ttnn/ttnn/operations/conv2d_3x3/perf_experiments/height_server_read_split/op_copy/kernels/conv2d_3x3_weight_server_reader.cpp,67,KERNEL_PROFILER'
+   32 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:1008:5: note: in expansion of macro 'DO_PRAGMA'
+ 1008 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/localdev/pmilojevic/workspaces/opgen/ttnn/cpp/ttnn/kernel_lib/perf_instrumentation.hpp:25:36: note: in expansion of macro 'DeviceZoneScopedN'
+   25 | #define MaybeDeviceZoneScope(name) DeviceZoneScopedN(name)
+      |                                    ^~~~~~~~~~~~~~~~~
+/localdev/pmilojevic/workspaces/opgen/ttnn/ttnn/operations/conv2d_3x3/perf_experiments/height_server_read_split/op_copy/kernels/conv2d_3x3_weight_server_reader.cpp:67:9: note: in expansion of macro 'MaybeDeviceZoneScope'
+   67 |         MaybeDeviceZoneScope("server_read");
+      |         ^~~~~~~~~~~~~~~~~~~~
+/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:32:22: note: '#pragma message: hsr_wait_helpers,/localdev/pmilojevic/workspaces/opgen/ttnn/ttnn/operations/conv2d_3x3/perf_experiments/height_server_read_split/op_copy/kernels/conv2d_3x3_weight_server_reader.cpp,83,KERNEL_PROFILER'
+   32 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:1008:5: note: in expansion of macro 'DO_PRAGMA'
+ 1008 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/localdev/pmilojevic/workspaces/opgen/ttnn/cpp/ttnn/kernel_lib/perf_instrumentation.hpp:25:36: note: in expansion of macro 'DeviceZoneScopedN'
+   25 | #define MaybeDeviceZoneScope(name) DeviceZoneScopedN(name)
+      |                                    ^~~~~~~~~~~~~~~~~
+/localdev/pmilojevic/workspaces/opgen/ttnn/ttnn/operations/conv2d_3x3/perf_experiments/height_server_read_split/op_copy/kernels/conv2d_3x3_weight_server_reader.cpp:83:21: note: in expansion of macro 'MaybeDeviceZoneScope'
+   83 |                     MaybeDeviceZoneScope("hsr_wait_helpers");
+      |                     ^~~~~~~~~~~~~~~~~~~~
+/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/firmware/src/tt-1xx/ncrisck.cc: In function 'uint32_t _start()':
+/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:32:22: note: '#pragma message: NCRISC-KERNEL,/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/firmware/src/tt-1xx/ncrisck.cc,70,KERNEL_PROFILER'
+   32 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:1067:5: note: in expansion of macro 'DO_PRAGMA'
+ 1067 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/firmware/src/tt-1xx/ncrisck.cc:70:5: note: in expansion of macro 'DeviceZoneScopedMainChildN'
+   70 |     DeviceZoneScopedMainChildN("NCRISC-KERNEL");
+      |     ^~~~~~~~~~~~~~~~~~~~~~~~~~
+Building ncrisc, compile step:
+/localdev/pmilojevic/workspaces/opgen/runtime/sfpi/compiler/bin/riscv-tt-elf-g++ -O2 -std=c++17 -ftt-nttp -ftt-constinit -ftt-consteval -ftt-no-dyninit -flto=1 -flto-partition=one -ffast-math -fno-finite-math-only -fsigned-zeros -fno-associative-math -fno-exceptions -fno-rtti -fno-use-cxa-atexit -g -MMD -Wall -Werror -Wno-error=deprecated-declarations -Wno-error=multistatement-macros -Wno-error=parentheses -Wno-error=unused-but-set-variable -Wno-unused-variable -Wno-unused-function --param=min-pagesize=0 -mcpu=tt-bh -fno-tree-loop-distribute-patterns -Winvalid-pch -Wno-error=invalid-pch -I. -I.. -I/localdev/pmilojevic/workspaces/opgen/ -I/localdev/pmilojevic/workspaces/opgen/ttnn -I/localdev/pmilojevic/workspaces/opgen/ttnn/cpp -I/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc -I/localdev/pmilojevic/workspaces/opgen/tt_metal/tt-llk/common -I/localdev/pmilojevic/workspaces/opgen/tt_metal/tt-llk/tools/include -I/localdev/pmilojevic/workspaces/opgen/tt_metal/hostdevcommon/api -I/localdev/pmilojevic/workspaces/opgen/tt_metal/api/ -I/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/ckernels/blackhole/metal/common -I/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/ckernels/blackhole/metal/llk_io -I/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/internal/tt-1xx -I/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/internal/tt-1xx/blackhole -I/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/internal/tt-1xx/blackhole/blackhole_defines -I/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc -I/localdev/pmilojevic/workspaces/opgen/tt_metal/tt-llk/tt_llk_blackhole/common/inc -I/localdev/pmilojevic/workspaces/opgen/tt_metal/tt-llk/tt_llk_blackhole/llk_lib -I/localdev/pmilojevic/workspaces/opgen/tt_metal/tt-llk/tt_llk_blackhole/llk_lib/hal -I/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/firmware/src/tt-1xx -I/localdev/pmilojevic/workspaces/opgen/ttnn/ttnn/operations/conv2d_3x3/perf_experiments/height_server_read_split/op_copy/kernels -include /localdev/pmilojevic/tt-metal-cache/tt-metal-cache/pch/842cea1ec115824b/pch.h -DIS_NOT_POW2_NUM_L1_BANKS=1 -DLOG_BASE_2_OF_NUM_DRAM_BANKS=3 -DNUM_DRAM_BANKS=8 -DNUM_L1_BANKS=110 -DPCIE_NOC_X=19 -DPCIE_NOC_Y=24 -DTENSIX_FIRMWARE -DLOCAL_MEM_EN=0 -DPROFILE_KERNEL=1 -DPROFILER_FULL_HOST_BUFFER_SIZE_PER_RISC=48000 -DL1_ECC_HALT -DPROCESSOR_INDEX=1 -DCOMPILE_FOR_NCRISC -DPROGRAMMABLE_CORE_TYPE=0 -DARCH_BLACKHOLE -DDISPATCH_MESSAGE_ADDR=4290184248 -DKERNEL_BUILD -DNOC_INDEX=0 -DNOC_MODE=0 -DFULL_KERNEL_NAME="conv2d_3x3_weight_server_reader/9040133196368855599/" -DKERNEL_COMPILE_TIME_ARGS=3,4,12,3,3,1,4,0,16,0,0,2,1088 -c -o /localdev/pmilojevic/tt-metal-cache/tt-metal-cache9957800640679114378/kernels/conv2d_3x3_weight_server_reader/9040133196368855599/ncrisc/ncrisck.13679359497600671985_1780871.o /localdev/pmilojevic/workspaces/opgen/tt_metal/hw/firmware/src/tt-1xx/ncrisck.cc -MF /localdev/pmilojevic/tt-metal-cache/tt-metal-cache9957800640679114378/kernels/conv2d_3x3_weight_server_reader/9040133196368855599/ncrisc/ncrisck.13679359497600671985_1780871.d
+In file included from /localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/internal/dataflow/dataflow_api_raw.h:8,
+                 from /localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/api/dataflow/dataflow_api.h:16,
+                 from /localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/internal/firmware_common.h:23,
+                 from /localdev/pmilojevic/workspaces/opgen/tt_metal/hw/firmware/src/tt-1xx/ncrisck.cc:17:
+/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/api/debug/kernel_profiler.hpp: In function 'void kernel_profiler::quick_push()':
+/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:32:22: note: '#pragma message: PROFILER-NOC-QUICK-PUSH,/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/api/debug/kernel_profiler.hpp,645,KERNEL_PROFILER'
+   32 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:42:5: note: in expansion of macro 'DO_PRAGMA'
+   42 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name))); \
+      |     ^~~~~~~~~
+/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:645:5: note: in expansion of macro 'SrcLocNameToHash'
+  645 |     SrcLocNameToHash("PROFILER-NOC-QUICK-PUSH");
+      |     ^~~~~~~~~~~~~~~~
+/localdev/pmilojevic/workspaces/opgen/ttnn/ttnn/operations/conv2d_3x3/perf_experiments/height_server_read_split/op_copy/kernels/conv2d_3x3_weight_server_reader.cpp: In function 'void kernel_main()':
+/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:32:22: note: '#pragma message: server_read,/localdev/pmilojevic/workspaces/opgen/ttnn/ttnn/operations/conv2d_3x3/perf_experiments/height_server_read_split/op_copy/kernels/conv2d_3x3_weight_server_reader.cpp,67,KERNEL_PROFILER'
+   32 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:1008:5: note: in expansion of macro 'DO_PRAGMA'
+ 1008 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/localdev/pmilojevic/workspaces/opgen/ttnn/cpp/ttnn/kernel_lib/perf_instrumentation.hpp:25:36: note: in expansion of macro 'DeviceZoneScopedN'
+   25 | #define MaybeDeviceZoneScope(name) DeviceZoneScopedN(name)
+      |                                    ^~~~~~~~~~~~~~~~~
+/localdev/pmilojevic/workspaces/opgen/ttnn/ttnn/operations/conv2d_3x3/perf_experiments/height_server_read_split/op_copy/kernels/conv2d_3x3_weight_server_reader.cpp:67:9: note: in expansion of macro 'MaybeDeviceZoneScope'
+   67 |         MaybeDeviceZoneScope("server_read");
+      |         ^~~~~~~~~~~~~~~~~~~~
+/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:32:22: note: '#pragma message: hsr_wait_helpers,/localdev/pmilojevic/workspaces/opgen/ttnn/ttnn/operations/conv2d_3x3/perf_experiments/height_server_read_split/op_copy/kernels/conv2d_3x3_weight_server_reader.cpp,83,KERNEL_PROFILER'
+   32 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:1008:5: note: in expansion of macro 'DO_PRAGMA'
+ 1008 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/localdev/pmilojevic/workspaces/opgen/ttnn/cpp/ttnn/kernel_lib/perf_instrumentation.hpp:25:36: note: in expansion of macro 'DeviceZoneScopedN'
+   25 | #define MaybeDeviceZoneScope(name) DeviceZoneScopedN(name)
+      |                                    ^~~~~~~~~~~~~~~~~
+/localdev/pmilojevic/workspaces/opgen/ttnn/ttnn/operations/conv2d_3x3/perf_experiments/height_server_read_split/op_copy/kernels/conv2d_3x3_weight_server_reader.cpp:83:21: note: in expansion of macro 'MaybeDeviceZoneScope'
+   83 |                     MaybeDeviceZoneScope("hsr_wait_helpers");
+      |                     ^~~~~~~~~~~~~~~~~~~~
+/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/firmware/src/tt-1xx/ncrisck.cc: In function 'uint32_t _start()':
+/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:32:22: note: '#pragma message: NCRISC-KERNEL,/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/firmware/src/tt-1xx/ncrisck.cc,70,KERNEL_PROFILER'
+   32 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:1067:5: note: in expansion of macro 'DO_PRAGMA'
+ 1067 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/firmware/src/tt-1xx/ncrisck.cc:70:5: note: in expansion of macro 'DeviceZoneScopedMainChildN'
+   70 |     DeviceZoneScopedMainChildN("NCRISC-KERNEL");
+      |     ^~~~~~~~~~~~~~~~~~~~~~~~~~
+Building ncrisc, compile step:
+/localdev/pmilojevic/workspaces/opgen/runtime/sfpi/compiler/bin/riscv-tt-elf-g++ -O2 -std=c++17 -ftt-nttp -ftt-constinit -ftt-consteval -ftt-no-dyninit -flto=1 -flto-partition=one -ffast-math -fno-finite-math-only -fsigned-zeros -fno-associative-math -fno-exceptions -fno-rtti -fno-use-cxa-atexit -g -MMD -Wall -Werror -Wno-error=deprecated-declarations -Wno-error=multistatement-macros -Wno-error=parentheses -Wno-error=unused-but-set-variable -Wno-unused-variable -Wno-unused-function --param=min-pagesize=0 -mcpu=tt-bh -fno-tree-loop-distribute-patterns -Winvalid-pch -Wno-error=invalid-pch -I. -I.. -I/localdev/pmilojevic/workspaces/opgen/ -I/localdev/pmilojevic/workspaces/opgen/ttnn -I/localdev/pmilojevic/workspaces/opgen/ttnn/cpp -I/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc -I/localdev/pmilojevic/workspaces/opgen/tt_metal/tt-llk/common -I/localdev/pmilojevic/workspaces/opgen/tt_metal/tt-llk/tools/include -I/localdev/pmilojevic/workspaces/opgen/tt_metal/hostdevcommon/api -I/localdev/pmilojevic/workspaces/opgen/tt_metal/api/ -I/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/ckernels/blackhole/metal/common -I/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/ckernels/blackhole/metal/llk_io -I/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/internal/tt-1xx -I/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/internal/tt-1xx/blackhole -I/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/internal/tt-1xx/blackhole/blackhole_defines -I/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc -I/localdev/pmilojevic/workspaces/opgen/tt_metal/tt-llk/tt_llk_blackhole/common/inc -I/localdev/pmilojevic/workspaces/opgen/tt_metal/tt-llk/tt_llk_blackhole/llk_lib -I/localdev/pmilojevic/workspaces/opgen/tt_metal/tt-llk/tt_llk_blackhole/llk_lib/hal -I/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/firmware/src/tt-1xx -I/localdev/pmilojevic/workspaces/opgen/ttnn/ttnn/operations/conv2d_3x3/perf_experiments/height_server_read_split/op_copy/kernels -include /localdev/pmilojevic/tt-metal-cache/tt-metal-cache/pch/842cea1ec115824b/pch.h -DIS_NOT_POW2_NUM_L1_BANKS=1 -DLOG_BASE_2_OF_NUM_DRAM_BANKS=3 -DNUM_DRAM_BANKS=8 -DNUM_L1_BANKS=110 -DPCIE_NOC_X=19 -DPCIE_NOC_Y=24 -DTENSIX_FIRMWARE -DLOCAL_MEM_EN=0 -DPROFILE_KERNEL=1 -DPROFILER_FULL_HOST_BUFFER_SIZE_PER_RISC=48000 -DL1_ECC_HALT -DPROCESSOR_INDEX=1 -DCOMPILE_FOR_NCRISC -DPROGRAMMABLE_CORE_TYPE=0 -DARCH_BLACKHOLE -DDISPATCH_MESSAGE_ADDR=4290184248 -DKERNEL_BUILD -DNOC_INDEX=0 -DNOC_MODE=0 -DFULL_KERNEL_NAME="conv2d_3x3_weight_server_reader/12427941959213824954/" -DKERNEL_COMPILE_TIME_ARGS=3,8,12,6,3,1,8,0,32,0,0,2,1088 -c -o /localdev/pmilojevic/tt-metal-cache/tt-metal-cache9957800640679114378/kernels/conv2d_3x3_weight_server_reader/12427941959213824954/ncrisc/ncrisck.13679359497600671985_1780871.o /localdev/pmilojevic/workspaces/opgen/tt_metal/hw/firmware/src/tt-1xx/ncrisck.cc -MF /localdev/pmilojevic/tt-metal-cache/tt-metal-cache9957800640679114378/kernels/conv2d_3x3_weight_server_reader/12427941959213824954/ncrisc/ncrisck.13679359497600671985_1780871.d
+In file included from /localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/internal/dataflow/dataflow_api_raw.h:8,
+                 from /localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/api/dataflow/dataflow_api.h:16,
+                 from /localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/internal/firmware_common.h:23,
+                 from /localdev/pmilojevic/workspaces/opgen/tt_metal/hw/firmware/src/tt-1xx/ncrisck.cc:17:
+/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/api/debug/kernel_profiler.hpp: In function 'void kernel_profiler::quick_push()':
+/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:32:22: note: '#pragma message: PROFILER-NOC-QUICK-PUSH,/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/api/debug/kernel_profiler.hpp,645,KERNEL_PROFILER'
+   32 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:42:5: note: in expansion of macro 'DO_PRAGMA'
+   42 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name))); \
+      |     ^~~~~~~~~
+/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:645:5: note: in expansion of macro 'SrcLocNameToHash'
+  645 |     SrcLocNameToHash("PROFILER-NOC-QUICK-PUSH");
+      |     ^~~~~~~~~~~~~~~~
+/localdev/pmilojevic/workspaces/opgen/ttnn/ttnn/operations/conv2d_3x3/perf_experiments/height_server_read_split/op_copy/kernels/conv2d_3x3_weight_server_reader.cpp: In function 'void kernel_main()':
+/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:32:22: note: '#pragma message: server_read,/localdev/pmilojevic/workspaces/opgen/ttnn/ttnn/operations/conv2d_3x3/perf_experiments/height_server_read_split/op_copy/kernels/conv2d_3x3_weight_server_reader.cpp,67,KERNEL_PROFILER'
+   32 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:1008:5: note: in expansion of macro 'DO_PRAGMA'
+ 1008 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/localdev/pmilojevic/workspaces/opgen/ttnn/cpp/ttnn/kernel_lib/perf_instrumentation.hpp:25:36: note: in expansion of macro 'DeviceZoneScopedN'
+   25 | #define MaybeDeviceZoneScope(name) DeviceZoneScopedN(name)
+      |                                    ^~~~~~~~~~~~~~~~~
+/localdev/pmilojevic/workspaces/opgen/ttnn/ttnn/operations/conv2d_3x3/perf_experiments/height_server_read_split/op_copy/kernels/conv2d_3x3_weight_server_reader.cpp:67:9: note: in expansion of macro 'MaybeDeviceZoneScope'
+   67 |         MaybeDeviceZoneScope("server_read");
+      |         ^~~~~~~~~~~~~~~~~~~~
+/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:32:22: note: '#pragma message: hsr_wait_helpers,/localdev/pmilojevic/workspaces/opgen/ttnn/ttnn/operations/conv2d_3x3/perf_experiments/height_server_read_split/op_copy/kernels/conv2d_3x3_weight_server_reader.cpp,83,KERNEL_PROFILER'
+   32 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:1008:5: note: in expansion of macro 'DO_PRAGMA'
+ 1008 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/localdev/pmilojevic/workspaces/opgen/ttnn/cpp/ttnn/kernel_lib/perf_instrumentation.hpp:25:36: note: in expansion of macro 'DeviceZoneScopedN'
+   25 | #define MaybeDeviceZoneScope(name) DeviceZoneScopedN(name)
+      |                                    ^~~~~~~~~~~~~~~~~
+/localdev/pmilojevic/workspaces/opgen/ttnn/ttnn/operations/conv2d_3x3/perf_experiments/height_server_read_split/op_copy/kernels/conv2d_3x3_weight_server_reader.cpp:83:21: note: in expansion of macro 'MaybeDeviceZoneScope'
+   83 |                     MaybeDeviceZoneScope("hsr_wait_helpers");
+      |                     ^~~~~~~~~~~~~~~~~~~~
+/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/firmware/src/tt-1xx/ncrisck.cc: In function 'uint32_t _start()':
+/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:32:22: note: '#pragma message: NCRISC-KERNEL,/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/firmware/src/tt-1xx/ncrisck.cc,70,KERNEL_PROFILER'
+   32 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:1067:5: note: in expansion of macro 'DO_PRAGMA'
+ 1067 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/firmware/src/tt-1xx/ncrisck.cc:70:5: note: in expansion of macro 'DeviceZoneScopedMainChildN'
+   70 |     DeviceZoneScopedMainChildN("NCRISC-KERNEL");
+      |     ^~~~~~~~~~~~~~~~~~~~~~~~~~
+Building ncrisc, compile step:
+/localdev/pmilojevic/workspaces/opgen/runtime/sfpi/compiler/bin/riscv-tt-elf-g++ -O2 -std=c++17 -ftt-nttp -ftt-constinit -ftt-consteval -ftt-no-dyninit -flto=1 -flto-partition=one -ffast-math -fno-finite-math-only -fsigned-zeros -fno-associative-math -fno-exceptions -fno-rtti -fno-use-cxa-atexit -g -MMD -Wall -Werror -Wno-error=deprecated-declarations -Wno-error=multistatement-macros -Wno-error=parentheses -Wno-error=unused-but-set-variable -Wno-unused-variable -Wno-unused-function --param=min-pagesize=0 -mcpu=tt-bh -fno-tree-loop-distribute-patterns -Winvalid-pch -Wno-error=invalid-pch -I. -I.. -I/localdev/pmilojevic/workspaces/opgen/ -I/localdev/pmilojevic/workspaces/opgen/ttnn -I/localdev/pmilojevic/workspaces/opgen/ttnn/cpp -I/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc -I/localdev/pmilojevic/workspaces/opgen/tt_metal/tt-llk/common -I/localdev/pmilojevic/workspaces/opgen/tt_metal/tt-llk/tools/include -I/localdev/pmilojevic/workspaces/opgen/tt_metal/hostdevcommon/api -I/localdev/pmilojevic/workspaces/opgen/tt_metal/api/ -I/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/ckernels/blackhole/metal/common -I/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/ckernels/blackhole/metal/llk_io -I/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/internal/tt-1xx -I/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/internal/tt-1xx/blackhole -I/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/internal/tt-1xx/blackhole/blackhole_defines -I/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc -I/localdev/pmilojevic/workspaces/opgen/tt_metal/tt-llk/tt_llk_blackhole/common/inc -I/localdev/pmilojevic/workspaces/opgen/tt_metal/tt-llk/tt_llk_blackhole/llk_lib -I/localdev/pmilojevic/workspaces/opgen/tt_metal/tt-llk/tt_llk_blackhole/llk_lib/hal -I/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/firmware/src/tt-1xx -I/localdev/pmilojevic/workspaces/opgen/ttnn/ttnn/operations/conv2d_3x3/perf_experiments/height_server_read_split/op_copy/kernels -include /localdev/pmilojevic/tt-metal-cache/tt-metal-cache/pch/842cea1ec115824b/pch.h -DIS_NOT_POW2_NUM_L1_BANKS=1 -DLOG_BASE_2_OF_NUM_DRAM_BANKS=3 -DNUM_DRAM_BANKS=8 -DNUM_L1_BANKS=110 -DPCIE_NOC_X=19 -DPCIE_NOC_Y=24 -DTENSIX_FIRMWARE -DLOCAL_MEM_EN=0 -DPROFILE_KERNEL=1 -DPROFILER_FULL_HOST_BUFFER_SIZE_PER_RISC=48000 -DL1_ECC_HALT -DPROCESSOR_INDEX=1 -DCOMPILE_FOR_NCRISC -DPROGRAMMABLE_CORE_TYPE=0 -DARCH_BLACKHOLE -DDISPATCH_MESSAGE_ADDR=4290184248 -DKERNEL_BUILD -DNOC_INDEX=0 -DNOC_MODE=0 -DFULL_KERNEL_NAME="conv2d_3x3_weight_server_reader/11400760522476481338/" -DKERNEL_COMPILE_TIME_ARGS=3,5,12,3,3,1,4,0,20,0,0,2,1088 -c -o /localdev/pmilojevic/tt-metal-cache/tt-metal-cache9957800640679114378/kernels/conv2d_3x3_weight_server_reader/11400760522476481338/ncrisc/ncrisck.13679359497600671985_1780871.o /localdev/pmilojevic/workspaces/opgen/tt_metal/hw/firmware/src/tt-1xx/ncrisck.cc -MF /localdev/pmilojevic/tt-metal-cache/tt-metal-cache9957800640679114378/kernels/conv2d_3x3_weight_server_reader/11400760522476481338/ncrisc/ncrisck.13679359497600671985_1780871.d
+In file included from /localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/internal/dataflow/dataflow_api_raw.h:8,
+                 from /localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/api/dataflow/dataflow_api.h:16,
+                 from /localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/internal/firmware_common.h:23,
+                 from /localdev/pmilojevic/workspaces/opgen/tt_metal/hw/firmware/src/tt-1xx/ncrisck.cc:17:
+/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/api/debug/kernel_profiler.hpp: In function 'void kernel_profiler::quick_push()':
+/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:32:22: note: '#pragma message: PROFILER-NOC-QUICK-PUSH,/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/api/debug/kernel_profiler.hpp,645,KERNEL_PROFILER'
+   32 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:42:5: note: in expansion of macro 'DO_PRAGMA'
+   42 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name))); \
+      |     ^~~~~~~~~
+/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:645:5: note: in expansion of macro 'SrcLocNameToHash'
+  645 |     SrcLocNameToHash("PROFILER-NOC-QUICK-PUSH");
+      |     ^~~~~~~~~~~~~~~~
+/localdev/pmilojevic/workspaces/opgen/ttnn/ttnn/operations/conv2d_3x3/perf_experiments/height_server_read_split/op_copy/kernels/conv2d_3x3_weight_server_reader.cpp: In function 'void kernel_main()':
+/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:32:22: note: '#pragma message: server_read,/localdev/pmilojevic/workspaces/opgen/ttnn/ttnn/operations/conv2d_3x3/perf_experiments/height_server_read_split/op_copy/kernels/conv2d_3x3_weight_server_reader.cpp,67,KERNEL_PROFILER'
+   32 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:1008:5: note: in expansion of macro 'DO_PRAGMA'
+ 1008 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/localdev/pmilojevic/workspaces/opgen/ttnn/cpp/ttnn/kernel_lib/perf_instrumentation.hpp:25:36: note: in expansion of macro 'DeviceZoneScopedN'
+   25 | #define MaybeDeviceZoneScope(name) DeviceZoneScopedN(name)
+      |                                    ^~~~~~~~~~~~~~~~~
+/localdev/pmilojevic/workspaces/opgen/ttnn/ttnn/operations/conv2d_3x3/perf_experiments/height_server_read_split/op_copy/kernels/conv2d_3x3_weight_server_reader.cpp:67:9: note: in expansion of macro 'MaybeDeviceZoneScope'
+   67 |         MaybeDeviceZoneScope("server_read");
+      |         ^~~~~~~~~~~~~~~~~~~~
+/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:32:22: note: '#pragma message: hsr_wait_helpers,/localdev/pmilojevic/workspaces/opgen/ttnn/ttnn/operations/conv2d_3x3/perf_experiments/height_server_read_split/op_copy/kernels/conv2d_3x3_weight_server_reader.cpp,83,KERNEL_PROFILER'
+   32 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:1008:5: note: in expansion of macro 'DO_PRAGMA'
+ 1008 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/localdev/pmilojevic/workspaces/opgen/ttnn/cpp/ttnn/kernel_lib/perf_instrumentation.hpp:25:36: note: in expansion of macro 'DeviceZoneScopedN'
+   25 | #define MaybeDeviceZoneScope(name) DeviceZoneScopedN(name)
+      |                                    ^~~~~~~~~~~~~~~~~
+/localdev/pmilojevic/workspaces/opgen/ttnn/ttnn/operations/conv2d_3x3/perf_experiments/height_server_read_split/op_copy/kernels/conv2d_3x3_weight_server_reader.cpp:83:21: note: in expansion of macro 'MaybeDeviceZoneScope'
+   83 |                     MaybeDeviceZoneScope("hsr_wait_helpers");
+      |                     ^~~~~~~~~~~~~~~~~~~~
+/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/firmware/src/tt-1xx/ncrisck.cc: In function 'uint32_t _start()':
+/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:32:22: note: '#pragma message: NCRISC-KERNEL,/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/firmware/src/tt-1xx/ncrisck.cc,70,KERNEL_PROFILER'
+   32 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:1067:5: note: in expansion of macro 'DO_PRAGMA'
+ 1067 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/firmware/src/tt-1xx/ncrisck.cc:70:5: note: in expansion of macro 'DeviceZoneScopedMainChildN'
+   70 |     DeviceZoneScopedMainChildN("NCRISC-KERNEL");
+      |     ^~~~~~~~~~~~~~~~~~~~~~~~~~
+Building ncrisc, compile step:
+/localdev/pmilojevic/workspaces/opgen/runtime/sfpi/compiler/bin/riscv-tt-elf-g++ -O2 -std=c++17 -ftt-nttp -ftt-constinit -ftt-consteval -ftt-no-dyninit -flto=1 -flto-partition=one -ffast-math -fno-finite-math-only -fsigned-zeros -fno-associative-math -fno-exceptions -fno-rtti -fno-use-cxa-atexit -g -MMD -Wall -Werror -Wno-error=deprecated-declarations -Wno-error=multistatement-macros -Wno-error=parentheses -Wno-error=unused-but-set-variable -Wno-unused-variable -Wno-unused-function --param=min-pagesize=0 -mcpu=tt-bh -fno-tree-loop-distribute-patterns -Winvalid-pch -Wno-error=invalid-pch -I. -I.. -I/localdev/pmilojevic/workspaces/opgen/ -I/localdev/pmilojevic/workspaces/opgen/ttnn -I/localdev/pmilojevic/workspaces/opgen/ttnn/cpp -I/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc -I/localdev/pmilojevic/workspaces/opgen/tt_metal/tt-llk/common -I/localdev/pmilojevic/workspaces/opgen/tt_metal/tt-llk/tools/include -I/localdev/pmilojevic/workspaces/opgen/tt_metal/hostdevcommon/api -I/localdev/pmilojevic/workspaces/opgen/tt_metal/api/ -I/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/ckernels/blackhole/metal/common -I/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/ckernels/blackhole/metal/llk_io -I/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/internal/tt-1xx -I/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/internal/tt-1xx/blackhole -I/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/internal/tt-1xx/blackhole/blackhole_defines -I/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc -I/localdev/pmilojevic/workspaces/opgen/tt_metal/tt-llk/tt_llk_blackhole/common/inc -I/localdev/pmilojevic/workspaces/opgen/tt_metal/tt-llk/tt_llk_blackhole/llk_lib -I/localdev/pmilojevic/workspaces/opgen/tt_metal/tt-llk/tt_llk_blackhole/llk_lib/hal -I/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/firmware/src/tt-1xx -I/localdev/pmilojevic/workspaces/opgen/ttnn/ttnn/operations/conv2d_3x3/perf_experiments/height_server_read_split/op_copy/kernels -include /localdev/pmilojevic/tt-metal-cache/tt-metal-cache/pch/842cea1ec115824b/pch.h -DIS_NOT_POW2_NUM_L1_BANKS=1 -DLOG_BASE_2_OF_NUM_DRAM_BANKS=3 -DNUM_DRAM_BANKS=8 -DNUM_L1_BANKS=110 -DPCIE_NOC_X=19 -DPCIE_NOC_Y=24 -DTENSIX_FIRMWARE -DLOCAL_MEM_EN=0 -DPROFILE_KERNEL=1 -DPROFILER_FULL_HOST_BUFFER_SIZE_PER_RISC=48000 -DL1_ECC_HALT -DPROCESSOR_INDEX=1 -DCOMPILE_FOR_NCRISC -DPROGRAMMABLE_CORE_TYPE=0 -DARCH_BLACKHOLE -DDISPATCH_MESSAGE_ADDR=4290184248 -DKERNEL_BUILD -DNOC_INDEX=0 -DNOC_MODE=0 -DFULL_KERNEL_NAME="conv2d_3x3_weight_server_reader/7803219033417266854/" -DKERNEL_COMPILE_TIME_ARGS=3,2,6,3,3,1,2,0,4,0,0,2,1088 -c -o /localdev/pmilojevic/tt-metal-cache/tt-metal-cache9957800640679114378/kernels/conv2d_3x3_weight_server_reader/7803219033417266854/ncrisc/ncrisck.13679359497600671985_1780871.o /localdev/pmilojevic/workspaces/opgen/tt_metal/hw/firmware/src/tt-1xx/ncrisck.cc -MF /localdev/pmilojevic/tt-metal-cache/tt-metal-cache9957800640679114378/kernels/conv2d_3x3_weight_server_reader/7803219033417266854/ncrisc/ncrisck.13679359497600671985_1780871.d
+In file included from /localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/internal/dataflow/dataflow_api_raw.h:8,
+                 from /localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/api/dataflow/dataflow_api.h:16,
+                 from /localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/internal/firmware_common.h:23,
+                 from /localdev/pmilojevic/workspaces/opgen/tt_metal/hw/firmware/src/tt-1xx/ncrisck.cc:17:
+/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/api/debug/kernel_profiler.hpp: In function 'void kernel_profiler::quick_push()':
+/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:32:22: note: '#pragma message: PROFILER-NOC-QUICK-PUSH,/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/api/debug/kernel_profiler.hpp,645,KERNEL_PROFILER'
+   32 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:42:5: note: in expansion of macro 'DO_PRAGMA'
+   42 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name))); \
+      |     ^~~~~~~~~
+/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:645:5: note: in expansion of macro 'SrcLocNameToHash'
+  645 |     SrcLocNameToHash("PROFILER-NOC-QUICK-PUSH");
+      |     ^~~~~~~~~~~~~~~~
+/localdev/pmilojevic/workspaces/opgen/ttnn/ttnn/operations/conv2d_3x3/perf_experiments/height_server_read_split/op_copy/kernels/conv2d_3x3_weight_server_reader.cpp: In function 'void kernel_main()':
+/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:32:22: note: '#pragma message: server_read,/localdev/pmilojevic/workspaces/opgen/ttnn/ttnn/operations/conv2d_3x3/perf_experiments/height_server_read_split/op_copy/kernels/conv2d_3x3_weight_server_reader.cpp,67,KERNEL_PROFILER'
+   32 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:1008:5: note: in expansion of macro 'DO_PRAGMA'
+ 1008 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/localdev/pmilojevic/workspaces/opgen/ttnn/cpp/ttnn/kernel_lib/perf_instrumentation.hpp:25:36: note: in expansion of macro 'DeviceZoneScopedN'
+   25 | #define MaybeDeviceZoneScope(name) DeviceZoneScopedN(name)
+      |                                    ^~~~~~~~~~~~~~~~~
+/localdev/pmilojevic/workspaces/opgen/ttnn/ttnn/operations/conv2d_3x3/perf_experiments/height_server_read_split/op_copy/kernels/conv2d_3x3_weight_server_reader.cpp:67:9: note: in expansion of macro 'MaybeDeviceZoneScope'
+   67 |         MaybeDeviceZoneScope("server_read");
+      |         ^~~~~~~~~~~~~~~~~~~~
+/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:32:22: note: '#pragma message: hsr_wait_helpers,/localdev/pmilojevic/workspaces/opgen/ttnn/ttnn/operations/conv2d_3x3/perf_experiments/height_server_read_split/op_copy/kernels/conv2d_3x3_weight_server_reader.cpp,83,KERNEL_PROFILER'
+   32 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:1008:5: note: in expansion of macro 'DO_PRAGMA'
+ 1008 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/localdev/pmilojevic/workspaces/opgen/ttnn/cpp/ttnn/kernel_lib/perf_instrumentation.hpp:25:36: note: in expansion of macro 'DeviceZoneScopedN'
+   25 | #define MaybeDeviceZoneScope(name) DeviceZoneScopedN(name)
+      |                                    ^~~~~~~~~~~~~~~~~
+/localdev/pmilojevic/workspaces/opgen/ttnn/ttnn/operations/conv2d_3x3/perf_experiments/height_server_read_split/op_copy/kernels/conv2d_3x3_weight_server_reader.cpp:83:21: note: in expansion of macro 'MaybeDeviceZoneScope'
+   83 |                     MaybeDeviceZoneScope("hsr_wait_helpers");
+      |                     ^~~~~~~~~~~~~~~~~~~~
+/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/firmware/src/tt-1xx/ncrisck.cc: In function 'uint32_t _start()':
+/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:32:22: note: '#pragma message: NCRISC-KERNEL,/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/firmware/src/tt-1xx/ncrisck.cc,70,KERNEL_PROFILER'
+   32 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:1067:5: note: in expansion of macro 'DO_PRAGMA'
+ 1067 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/firmware/src/tt-1xx/ncrisck.cc:70:5: note: in expansion of macro 'DeviceZoneScopedMainChildN'
+   70 |     DeviceZoneScopedMainChildN("NCRISC-KERNEL");
+      |     ^~~~~~~~~~~~~~~~~~~~~~~~~~
+Building ncrisc, compile step:
+/localdev/pmilojevic/workspaces/opgen/runtime/sfpi/compiler/bin/riscv-tt-elf-g++ -O2 -std=c++17 -ftt-nttp -ftt-constinit -ftt-consteval -ftt-no-dyninit -flto=1 -flto-partition=one -ffast-math -fno-finite-math-only -fsigned-zeros -fno-associative-math -fno-exceptions -fno-rtti -fno-use-cxa-atexit -g -MMD -Wall -Werror -Wno-error=deprecated-declarations -Wno-error=multistatement-macros -Wno-error=parentheses -Wno-error=unused-but-set-variable -Wno-unused-variable -Wno-unused-function --param=min-pagesize=0 -mcpu=tt-bh -fno-tree-loop-distribute-patterns -Winvalid-pch -Wno-error=invalid-pch -I. -I.. -I/localdev/pmilojevic/workspaces/opgen/ -I/localdev/pmilojevic/workspaces/opgen/ttnn -I/localdev/pmilojevic/workspaces/opgen/ttnn/cpp -I/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc -I/localdev/pmilojevic/workspaces/opgen/tt_metal/tt-llk/common -I/localdev/pmilojevic/workspaces/opgen/tt_metal/tt-llk/tools/include -I/localdev/pmilojevic/workspaces/opgen/tt_metal/hostdevcommon/api -I/localdev/pmilojevic/workspaces/opgen/tt_metal/api/ -I/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/ckernels/blackhole/metal/common -I/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/ckernels/blackhole/metal/llk_io -I/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/internal/tt-1xx -I/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/internal/tt-1xx/blackhole -I/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/internal/tt-1xx/blackhole/blackhole_defines -I/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc -I/localdev/pmilojevic/workspaces/opgen/tt_metal/tt-llk/tt_llk_blackhole/common/inc -I/localdev/pmilojevic/workspaces/opgen/tt_metal/tt-llk/tt_llk_blackhole/llk_lib -I/localdev/pmilojevic/workspaces/opgen/tt_metal/tt-llk/tt_llk_blackhole/llk_lib/hal -I/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/firmware/src/tt-1xx -I/localdev/pmilojevic/workspaces/opgen/ttnn/ttnn/operations/conv2d_3x3/perf_experiments/height_server_read_split/op_copy/kernels -include /localdev/pmilojevic/tt-metal-cache/tt-metal-cache/pch/842cea1ec115824b/pch.h -DIS_NOT_POW2_NUM_L1_BANKS=1 -DLOG_BASE_2_OF_NUM_DRAM_BANKS=3 -DNUM_DRAM_BANKS=8 -DNUM_L1_BANKS=110 -DPCIE_NOC_X=19 -DPCIE_NOC_Y=24 -DTENSIX_FIRMWARE -DLOCAL_MEM_EN=0 -DPROFILE_KERNEL=1 -DPROFILER_FULL_HOST_BUFFER_SIZE_PER_RISC=48000 -DL1_ECC_HALT -DPROCESSOR_INDEX=1 -DCOMPILE_FOR_NCRISC -DPROGRAMMABLE_CORE_TYPE=0 -DARCH_BLACKHOLE -DDISPATCH_MESSAGE_ADDR=4290184248 -DKERNEL_BUILD -DNOC_INDEX=0 -DNOC_MODE=0 -DFULL_KERNEL_NAME="conv2d_3x3_weight_server_reader/5365159142862152498/" -DKERNEL_COMPILE_TIME_ARGS=3,9,12,6,3,1,8,0,36,0,0,2,1088 -c -o /localdev/pmilojevic/tt-metal-cache/tt-metal-cache9957800640679114378/kernels/conv2d_3x3_weight_server_reader/5365159142862152498/ncrisc/ncrisck.13679359497600671985_1780871.o /localdev/pmilojevic/workspaces/opgen/tt_metal/hw/firmware/src/tt-1xx/ncrisck.cc -MF /localdev/pmilojevic/tt-metal-cache/tt-metal-cache9957800640679114378/kernels/conv2d_3x3_weight_server_reader/5365159142862152498/ncrisc/ncrisck.13679359497600671985_1780871.d
+In file included from /localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/internal/dataflow/dataflow_api_raw.h:8,
+                 from /localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/api/dataflow/dataflow_api.h:16,
+                 from /localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/internal/firmware_common.h:23,
+                 from /localdev/pmilojevic/workspaces/opgen/tt_metal/hw/firmware/src/tt-1xx/ncrisck.cc:17:
+/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/api/debug/kernel_profiler.hpp: In function 'void kernel_profiler::quick_push()':
+/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:32:22: note: '#pragma message: PROFILER-NOC-QUICK-PUSH,/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/api/debug/kernel_profiler.hpp,645,KERNEL_PROFILER'
+   32 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:42:5: note: in expansion of macro 'DO_PRAGMA'
+   42 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name))); \
+      |     ^~~~~~~~~
+/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:645:5: note: in expansion of macro 'SrcLocNameToHash'
+  645 |     SrcLocNameToHash("PROFILER-NOC-QUICK-PUSH");
+      |     ^~~~~~~~~~~~~~~~
+/localdev/pmilojevic/workspaces/opgen/ttnn/ttnn/operations/conv2d_3x3/perf_experiments/height_server_read_split/op_copy/kernels/conv2d_3x3_weight_server_reader.cpp: In function 'void kernel_main()':
+/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:32:22: note: '#pragma message: server_read,/localdev/pmilojevic/workspaces/opgen/ttnn/ttnn/operations/conv2d_3x3/perf_experiments/height_server_read_split/op_copy/kernels/conv2d_3x3_weight_server_reader.cpp,67,KERNEL_PROFILER'
+   32 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:1008:5: note: in expansion of macro 'DO_PRAGMA'
+ 1008 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/localdev/pmilojevic/workspaces/opgen/ttnn/cpp/ttnn/kernel_lib/perf_instrumentation.hpp:25:36: note: in expansion of macro 'DeviceZoneScopedN'
+   25 | #define MaybeDeviceZoneScope(name) DeviceZoneScopedN(name)
+      |                                    ^~~~~~~~~~~~~~~~~
+/localdev/pmilojevic/workspaces/opgen/ttnn/ttnn/operations/conv2d_3x3/perf_experiments/height_server_read_split/op_copy/kernels/conv2d_3x3_weight_server_reader.cpp:67:9: note: in expansion of macro 'MaybeDeviceZoneScope'
+   67 |         MaybeDeviceZoneScope("server_read");
+      |         ^~~~~~~~~~~~~~~~~~~~
+/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:32:22: note: '#pragma message: hsr_wait_helpers,/localdev/pmilojevic/workspaces/opgen/ttnn/ttnn/operations/conv2d_3x3/perf_experiments/height_server_read_split/op_copy/kernels/conv2d_3x3_weight_server_reader.cpp,83,KERNEL_PROFILER'
+   32 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:1008:5: note: in expansion of macro 'DO_PRAGMA'
+ 1008 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/localdev/pmilojevic/workspaces/opgen/ttnn/cpp/ttnn/kernel_lib/perf_instrumentation.hpp:25:36: note: in expansion of macro 'DeviceZoneScopedN'
+   25 | #define MaybeDeviceZoneScope(name) DeviceZoneScopedN(name)
+      |                                    ^~~~~~~~~~~~~~~~~
+/localdev/pmilojevic/workspaces/opgen/ttnn/ttnn/operations/conv2d_3x3/perf_experiments/height_server_read_split/op_copy/kernels/conv2d_3x3_weight_server_reader.cpp:83:21: note: in expansion of macro 'MaybeDeviceZoneScope'
+   83 |                     MaybeDeviceZoneScope("hsr_wait_helpers");
+      |                     ^~~~~~~~~~~~~~~~~~~~
+/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/firmware/src/tt-1xx/ncrisck.cc: In function 'uint32_t _start()':
+/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:32:22: note: '#pragma message: NCRISC-KERNEL,/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/firmware/src/tt-1xx/ncrisck.cc,70,KERNEL_PROFILER'
+   32 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:1067:5: note: in expansion of macro 'DO_PRAGMA'
+ 1067 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/firmware/src/tt-1xx/ncrisck.cc:70:5: note: in expansion of macro 'DeviceZoneScopedMainChildN'
+   70 |     DeviceZoneScopedMainChildN("NCRISC-KERNEL");
+      |     ^~~~~~~~~~~~~~~~~~~~~~~~~~
+UP_FRONT_COLLECT: 9 collected · 9 built · 0 already compiled in 0.4s (workers=64, errors=0) -> on-disk JIT cache warm
+UP_FRONT_COLLECT_RESULT: status=ok reason=ok unique=9 programs=9 errors=0 pytest_exit=0 xpass_strict=0 other_failures=0 built=9 compile_s=0.7 collect_s=2.5 route=local
+UP_FRONT_INLINE: compile step took 0.7s; starting the real pass
+
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/height_server_read_split/test_hsr_op.py::test_conv2d_3x3_perf_focus[res2_{0,1,2}_conv2] <- tests/ttnn/unit_tests/operations/conv2d_3x3/test_conv2d_3x3_perf.py 2026-11-19 00:09:45.439 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using distributed::MeshDevice::create_unit_meshes(). (device_manager.cpp:265)
+2026-11-19 00:09:45.441 | info     |           Metal | Profiler started on device 0 (profiler_initializer.cpp:49)
+PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/height_server_read_split/test_hsr_op.py::test_conv2d_3x3_perf_focus[res3_{1,2,3}_conv2] <- tests/ttnn/unit_tests/operations/conv2d_3x3/test_conv2d_3x3_perf.py PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/height_server_read_split/test_hsr_op.py::test_conv2d_3x3_perf_focus[semantic0] <- tests/ttnn/unit_tests/operations/conv2d_3x3/test_conv2d_3x3_perf.py PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/height_server_read_split/test_hsr_op.py::test_conv2d_3x3_perf_focus[instance0] <- tests/ttnn/unit_tests/operations/conv2d_3x3/test_conv2d_3x3_perf.py PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/height_server_read_split/test_hsr_op.py::test_conv2d_3x3_perf_focus[semantic1] <- tests/ttnn/unit_tests/operations/conv2d_3x3/test_conv2d_3x3_perf.py PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/height_server_read_split/test_hsr_op.py::test_conv2d_3x3_perf_focus[semantic2] <- tests/ttnn/unit_tests/operations/conv2d_3x3/test_conv2d_3x3_perf.py PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/height_server_read_split/test_hsr_op.py::test_conv2d_3x3_perf_focus[instance1] <- tests/ttnn/unit_tests/operations/conv2d_3x3/test_conv2d_3x3_perf.py PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/height_server_read_split/test_hsr_op.py::test_conv2d_3x3_perf_focus[semantic3] <- tests/ttnn/unit_tests/operations/conv2d_3x3/test_conv2d_3x3_perf.py PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/height_server_read_split/test_hsr_op.py::test_conv2d_3x3_perf_focus[instance2] <- tests/ttnn/unit_tests/operations/conv2d_3x3/test_conv2d_3x3_perf.py PASSED2026-11-19 00:09:51.207 | error    |           Metal | Timeout detected (metal_context.cpp:803)
+2026-11-19 00:09:51.207 | info     |           Metal | Serializing Inspector RPC data (metal_context.cpp:806)
+2026-11-19 00:09:51.209 | info     |           Metal | Executing command: python3 /localdev/pmilojevic/workspaces/opgen/tools/tt-triage.py --disable-progress --skip-version-check --llm-output --llm-output-path=/localdev/pmilojevic/workspaces/opgen/generated/tt-triage/triage.txt > /tmp/safe-pytest-triage-1778232.log 2>&1 (metal_context.cpp:813)
+2026-11-19 00:09:54.380 | critical |          Always | TT_THROW: TIMEOUT: device timeout, potential hang detected, the device is unrecoverable (assert.hpp:104)
+2026-11-19 00:09:54.381 | ERROR    | ttnn.device:close_device:71 - close_device: synchronize_device failed. Continuing with device close.
+Traceback (most recent call last):
+
+  File "/home/pmilojevic/.local/share/uv/python/cpython-3.10-linux-x86_64-gnu/lib/python3.10/runpy.py", line 196, in _run_module_as_main
+    return _run_code(code, main_globals, None,
+           │         │     └ {'__name__': '__main__', '__doc__': None, '__package__': 'tracy', '__loader__': <_frozen_importlib_external.SourceFileLoader ...
+           │         └ <code object <module> at 0x7cadbe940240, file "/localdev/pmilojevic/workspaces/opgen/tools/tracy/__main__.py", line 1>
+           └ <function _run_code at 0x7cae0cb5c040>
+  File "/home/pmilojevic/.local/share/uv/python/cpython-3.10-linux-x86_64-gnu/lib/python3.10/runpy.py", line 86, in _run_code
+    exec(code, run_globals)
+         │     └ {'__name__': '__main__', '__doc__': None, '__package__': 'tracy', '__loader__': <_frozen_importlib_external.SourceFileLoader ...
+         └ <code object <module> at 0x7cadbe940240, file "/localdev/pmilojevic/workspaces/opgen/tools/tracy/__main__.py", line 1>
+
+  File "/localdev/pmilojevic/workspaces/opgen/tools/tracy/__main__.py", line 534, in <module>
+    main()
+    └ <function main at 0x7cadbe93d900>
+
+  File "/localdev/pmilojevic/workspaces/opgen/tools/tracy/__main__.py", line 372, in main
+    runctx(code, globs, None, options.partial)
+    │      │     │            │       └ False
+    │      │     │            └ <Values at 0x7cadbbfc8730: {'module': True, 'partial': False, 'lines': False, 'report': True, 'verbose': False, 'device': Tru...
+    │      │     └ {'run_module': <function run_module at 0x7cae0cb5c5e0>, 'modname': 'pytest', '__builtins__': {'__name__': 'builtins', '__doc_...
+    │      └ "run_module(modname, run_name='__main__')"
+    └ <function runctx at 0x7cadbe93d2d0>
+
+  File "/localdev/pmilojevic/workspaces/opgen/tools/tracy/__init__.py", line 84, in runctx
+    exec(cmd, globals, locals)
+         │    │        └ None
+         │    └ {'run_module': <function run_module at 0x7cae0cb5c5e0>, 'modname': 'pytest', '__builtins__': {'__name__': 'builtins', '__doc_...
+         └ "run_module(modname, run_name='__main__')"
+
+  File "<string>", line 1, in <module>
+  File "/home/pmilojevic/.local/share/uv/python/cpython-3.10-linux-x86_64-gnu/lib/python3.10/runpy.py", line 227, in run_module
+    return _run_code(code, {}, init_globals, run_name, mod_spec)
+           │         │         │             │         └ ModuleSpec(name='pytest.__main__', loader=<_frozen_importlib_external.SourceFileLoader object at 0x7cac865b34c0>, origin='/lo...
+           │         │         │             └ '__main__'
+           │         │         └ None
+           │         └ <code object <module> at 0x7cac862a1790, file "/localdev/pmilojevic/workspaces/opgen/python_env/lib/python3.10/site-packages/...
+           └ <function _run_code at 0x7cae0cb5c040>
+  File "/home/pmilojevic/.local/share/uv/python/cpython-3.10-linux-x86_64-gnu/lib/python3.10/runpy.py", line 86, in _run_code
+    exec(code, run_globals)
+         │     └ {'__name__': '__main__', '__file__': '/localdev/pmilojevic/workspaces/opgen/python_env/lib/python3.10/site-packages/pytest/__...
+         └ <code object <module> at 0x7cac862a1790, file "/localdev/pmilojevic/workspaces/opgen/python_env/lib/python3.10/site-packages/...
+  File "/localdev/pmilojevic/workspaces/opgen/python_env/lib/python3.10/site-packages/pytest/__main__.py", line 9, in <module>
+    raise SystemExit(pytest.console_main())
+                     │      └ <function console_main at 0x7cac86304310>
+                     └ <module 'pytest' from '/localdev/pmilojevic/workspaces/opgen/python_env/lib/python3.10/site-packages/pytest/__init__.py'>
+  File "/localdev/pmilojevic/workspaces/opgen/python_env/lib/python3.10/site-packages/_pytest/config/__init__.py", line 223, in console_main
+    code = main()
+           └ <function main at 0x7cac86304280>
+  File "/localdev/pmilojevic/workspaces/opgen/python_env/lib/python3.10/site-packages/_pytest/config/__init__.py", line 199, in main
+    ret: ExitCode | int = config.hook.pytest_cmdline_main(config=config)
+         │                │      │    │                          └ <_pytest.config.Config object at 0x7cac862a5570>
+         │                │      │    └ <HookCaller 'pytest_cmdline_main'>
+         │                │      └ <_pytest.config.compat.PathAwareHookProxy object at 0x7cac862a54e0>
+         │                └ <_pytest.config.Config object at 0x7cac862a5570>
+         └ <enum 'ExitCode'>
+  File "/localdev/pmilojevic/workspaces/opgen/python_env/lib/python3.10/site-packages/pluggy/_caller.py", line 197, in __call__
+    return self._hookexec(
+           │    └ <member '_hookexec' of 'HookCaller' objects>
+           └ <HookCaller 'pytest_cmdline_main'>
+  File "/localdev/pmilojevic/workspaces/opgen/python_env/lib/python3.10/site-packages/pluggy/_manager.py", line 183, in _hookexec
+    return self._inner_hookexec(hook_name, methods, kwargs, firstresult)
+           │    │               │          │        │       └ True
+           │    │               │          │        └ {'config': <_pytest.config.Config object at 0x7cac862a5570>}
+           │    │               │          └ [<HookImpl plugin_name='main', plugin=<module '_pytest.main' from '/localdev/pmilojevic/workspaces/opgen/python_env/lib/pytho...
+           │    │               └ 'pytest_cmdline_main'
+           │    └ <function _multicall at 0x7cac865e7880>
+           └ <_pytest.config.PytestPluginManager object at 0x7cac9e5331c0>
+  File "/localdev/pmilojevic/workspaces/opgen/python_env/lib/python3.10/site-packages/pluggy/_execution.py", line 147, in _multicall
+    res = hook_impl.function(*args)
+          │         │         └ [<_pytest.config.Config object at 0x7cac862a5570>]
+          │         └ <member 'function' of 'HookImpl' objects>
+          └ <HookImpl plugin_name='main', plugin=<module '_pytest.main' from '/localdev/pmilojevic/workspaces/opgen/python_env/lib/python...
+  File "/localdev/pmilojevic/workspaces/opgen/python_env/lib/python3.10/site-packages/_pytest/main.py", line 365, in pytest_cmdline_main
+    return wrap_session(config, _main)
+           │            │       └ <function _main at 0x7cac8639d480>
+           │            └ <_pytest.config.Config object at 0x7cac862a5570>
+           └ <function wrap_session at 0x7cac8639d360>
+  File "/localdev/pmilojevic/workspaces/opgen/python_env/lib/python3.10/site-packages/_pytest/main.py", line 318, in wrap_session
+    session.exitstatus = doit(config, session) or 0
+    │       │            │    │       └ <Session  exitstatus=<ExitCode.OK: 0> testsfailed=0 testscollected=9>
+    │       │            │    └ <_pytest.config.Config object at 0x7cac862a5570>
+    │       │            └ <function _main at 0x7cac8639d480>
+    │       └ <ExitCode.OK: 0>
+    └ <Session  exitstatus=<ExitCode.OK: 0> testsfailed=0 testscollected=9>
+  File "/localdev/pmilojevic/workspaces/opgen/python_env/lib/python3.10/site-packages/_pytest/main.py", line 372, in _main
+    config.hook.pytest_runtestloop(session=session)
+    │      │    │                          └ <Session  exitstatus=<ExitCode.OK: 0> testsfailed=0 testscollected=9>
+    │      │    └ <HookCaller 'pytest_runtestloop'>
+    │      └ <_pytest.config.compat.PathAwareHookProxy object at 0x7cac862a54e0>
+    └ <_pytest.config.Config object at 0x7cac862a5570>
+  File "/localdev/pmilojevic/workspaces/opgen/python_env/lib/python3.10/site-packages/pluggy/_caller.py", line 197, in __call__
+    return self._hookexec(
+           │    └ <member '_hookexec' of 'HookCaller' objects>
+           └ <HookCaller 'pytest_runtestloop'>
+  File "/localdev/pmilojevic/workspaces/opgen/python_env/lib/python3.10/site-packages/pluggy/_manager.py", line 183, in _hookexec
+    return self._inner_hookexec(hook_name, methods, kwargs, firstresult)
+           │    │               │          │        │       └ True
+           │    │               │          │        └ {'session': <Session  exitstatus=<ExitCode.OK: 0> testsfailed=0 testscollected=9>}
+           │    │               │          └ [<HookImpl plugin_name='main', plugin=<module '_pytest.main' from '/localdev/pmilojevic/workspaces/opgen/python_env/lib/pytho...
+           │    │               └ 'pytest_runtestloop'
+           │    └ <function _multicall at 0x7cac865e7880>
+           └ <_pytest.config.PytestPluginManager object at 0x7cac9e5331c0>
+  File "/localdev/pmilojevic/workspaces/opgen/python_env/lib/python3.10/site-packages/pluggy/_execution.py", line 147, in _multicall
+    res = hook_impl.function(*args)
+          │         │         └ [<Session  exitstatus=<ExitCode.OK: 0> testsfailed=0 testscollected=9>]
+          │         └ <member 'function' of 'HookImpl' objects>
+          └ <HookImpl plugin_name='tests.plugins.up_front_collect', plugin=<module 'tests.plugins.up_front_collect' from '/localdev/pmilo...
+
+  File "/localdev/pmilojevic/workspaces/opgen/tests/plugins/up_front_collect.py", line 749, in pytest_runtestloop
+    item.config.hook.pytest_runtest_protocol(item=item, nextitem=nextitem)
+    │    │                                        │              └ None
+    │    │                                        └ <Function test_conv2d_3x3_perf_focus[instance2]>
+    │    └ <member 'config' of 'Node' objects>
+    └ <Function test_conv2d_3x3_perf_focus[instance2]>
+
+  File "/localdev/pmilojevic/workspaces/opgen/python_env/lib/python3.10/site-packages/pluggy/_caller.py", line 197, in __call__
+    return self._hookexec(
+           │    └ <member '_hookexec' of 'HookCaller' objects>
+           └ <HookCaller 'pytest_runtest_protocol'>
+  File "/localdev/pmilojevic/workspaces/opgen/python_env/lib/python3.10/site-packages/pluggy/_manager.py", line 183, in _hookexec
+    return self._inner_hookexec(hook_name, methods, kwargs, firstresult)
+           │    │               │          │        │       └ True
+           │    │               │          │        └ {'item': <Function test_conv2d_3x3_perf_focus[instance2]>, 'nextitem': None}
+           │    │               │          └ [<HookImpl plugin_name='runner', plugin=<module '_pytest.runner' from '/localdev/pmilojevic/workspaces/opgen/python_env/lib/p...
+           │    │               └ 'pytest_runtest_protocol'
+           │    └ <function _multicall at 0x7cac865e7880>
+           └ <_pytest.config.PytestPluginManager object at 0x7cac9e5331c0>
+  File "/localdev/pmilojevic/workspaces/opgen/python_env/lib/python3.10/site-packages/pluggy/_execution.py", line 147, in _multicall
+    res = hook_impl.function(*args)
+          │         │         └ [<Function test_conv2d_3x3_perf_focus[instance2]>, None]
+          │         └ <member 'function' of 'HookImpl' objects>
+          └ <HookImpl plugin_name='runner', plugin=<module '_pytest.runner' from '/localdev/pmilojevic/workspaces/opgen/python_env/lib/py...
+  File "/localdev/pmilojevic/workspaces/opgen/python_env/lib/python3.10/site-packages/_pytest/runner.py", line 118, in pytest_runtest_protocol
+    runtestprotocol(item, nextitem=nextitem)
+    │               │              └ None
+    │               └ <Function test_conv2d_3x3_perf_focus[instance2]>
+    └ <function runtestprotocol at 0x7cac8639c670>
+  File "/localdev/pmilojevic/workspaces/opgen/python_env/lib/python3.10/site-packages/_pytest/runner.py", line 142, in runtestprotocol
+    reports.append(call_and_report(item, "teardown", log, nextitem=nextitem))
+    │       │      │               │                 │             └ None
+    │       │      │               │                 └ True
+    │       │      │               └ <Function test_conv2d_3x3_perf_focus[instance2]>
+    │       │      └ <function call_and_report at 0x7cac8639ca60>
+    │       └ <method 'append' of 'list' objects>
+    └ [<TestReport 'ttnn/ttnn/operations/conv2d_3x3/perf_experiments/height_server_read_split/test_hsr_op.py::test_conv2d_3x3_perf_...
+  File "/localdev/pmilojevic/workspaces/opgen/python_env/lib/python3.10/site-packages/_pytest/runner.py", line 244, in call_and_report
+    call = CallInfo.from_call(
+           │        └ <classmethod(<function CallInfo.from_call at 0x7cac8639cdc0>)>
+           └ <class '_pytest.runner.CallInfo'>
+  File "/localdev/pmilojevic/workspaces/opgen/python_env/lib/python3.10/site-packages/_pytest/runner.py", line 353, in from_call
+    result: TResult | None = func()
+            │                └ <function call_and_report.<locals>.<lambda> at 0x7cac800a77f0>
+            └ +TResult
+  File "/localdev/pmilojevic/workspaces/opgen/python_env/lib/python3.10/site-packages/_pytest/runner.py", line 245, in <lambda>
+    lambda: runtest_hook(item=item, **kwds),
+            │                 │       └ {'nextitem': None}
+            │                 └ <Function test_conv2d_3x3_perf_focus[instance2]>
+            └ <HookCaller 'pytest_runtest_teardown'>
+  File "/localdev/pmilojevic/workspaces/opgen/python_env/lib/python3.10/site-packages/pluggy/_caller.py", line 197, in __call__
+    return self._hookexec(
+           │    └ <member '_hookexec' of 'HookCaller' objects>
+           └ <HookCaller 'pytest_runtest_teardown'>
+  File "/localdev/pmilojevic/workspaces/opgen/python_env/lib/python3.10/site-packages/pluggy/_manager.py", line 183, in _hookexec
+    return self._inner_hookexec(hook_name, methods, kwargs, firstresult)
+           │    │               │          │        │       └ False
+           │    │               │          │        └ {'item': <Function test_conv2d_3x3_perf_focus[instance2]>, 'nextitem': None}
+           │    │               │          └ [<HookImpl plugin_name='threadexception', plugin=<module '_pytest.threadexception' from '/localdev/pmilojevic/workspaces/opge...
+           │    │               └ 'pytest_runtest_teardown'
+           │    └ <function _multicall at 0x7cac865e7880>
+           └ <_pytest.config.PytestPluginManager object at 0x7cac9e5331c0>
+  File "/localdev/pmilojevic/workspaces/opgen/python_env/lib/python3.10/site-packages/pluggy/_execution.py", line 147, in _multicall
+    res = hook_impl.function(*args)
+          │         │         └ [<Function test_conv2d_3x3_perf_focus[instance2]>, None]
+          │         └ <member 'function' of 'HookImpl' objects>
+          └ <HookImpl plugin_name='runner', plugin=<module '_pytest.runner' from '/localdev/pmilojevic/workspaces/opgen/python_env/lib/py...
+  File "/localdev/pmilojevic/workspaces/opgen/python_env/lib/python3.10/site-packages/_pytest/runner.py", line 194, in pytest_runtest_teardown
+    item.session._setupstate.teardown_exact(nextitem)
+    │    │                                  └ None
+    │    └ <member 'session' of 'Node' objects>
+    └ <Function test_conv2d_3x3_perf_focus[instance2]>
+  File "/localdev/pmilojevic/workspaces/opgen/python_env/lib/python3.10/site-packages/_pytest/runner.py", line 555, in teardown_exact
+    fin()
+    └ functools.partial(<bound method FixtureDef.finish of <FixtureDef argname='_device_module_impl' scope='module' baseid=''>>, re...
+  File "/localdev/pmilojevic/workspaces/opgen/python_env/lib/python3.10/site-packages/_pytest/fixtures.py", line 1042, in finish
+    fin()
+    └ functools.partial(<function _teardown_yield_fixture at 0x7cac863a9240>, <function _device_module_impl at 0x7cac85299480>, <ge...
+  File "/localdev/pmilojevic/workspaces/opgen/python_env/lib/python3.10/site-packages/_pytest/fixtures.py", line 924, in _teardown_yield_fixture
+    next(it)
+         └ <generator object _device_module_impl at 0x7cac84d46650>
+
+  File "/localdev/pmilojevic/workspaces/opgen/conftest.py", line 428, in _device_module_impl
+    ttnn.close_device(device)
+    │    │            └ MeshDevice(1x1 grid, 1 devices)
+    │    └ <function close_device at 0x7cacb5aa75b0>
+    └ <module 'ttnn' from '/localdev/pmilojevic/workspaces/opgen/ttnn/ttnn/__init__.py'>
+
+> File "/localdev/pmilojevic/workspaces/opgen/ttnn/ttnn/device.py", line 69, in close_device
+    synchronize_device(device)
+    │                  └ MeshDevice(1x1 grid, 1 devices)
+    └ <nanobind.nb_func object at 0x7cacafd68ae0>
+
+RuntimeError: TT_THROW @ /localdev/pmilojevic/workspaces/opgen/tt_metal/impl/dispatch/system_memory_manager.cpp:803: tt::exception
+info:
+TIMEOUT: device timeout, potential hang detected, the device is unrecoverable
+backtrace:
+ --- /localdev/pmilojevic/workspaces/opgen/ttnn/ttnn/../../build/lib/_ttnncpp.so(+0xc8c019) [0x7cacb288c019]
+ --- /localdev/pmilojevic/workspaces/opgen/ttnn/ttnn/../../build/lib/libtt_metal.so(+0x9c5e85) [0x7cacb0bc5e85]
+ --- tt::tt_metal::distributed::FDMeshCommandQueue::read_completion_queue_event(tt::tt_metal::distributed::MeshReadEventDescriptor&)
+ --- tt::tt_metal::distributed::FDMeshCommandQueue::read_completion_queue()
+ --- /lib/x86_64-linux-gnu/libstdc++.so.6(+0xdc253) [0x7cad5f4b0253]
+ --- /lib/x86_64-linux-gnu/libc.so.6(+0x94a83) [0x7cae0ce81a83]
+ --- /lib/x86_64-linux-gnu/libc.so.6(+0x1268e0) [0x7cae0cf138e0]
+
+2026-11-19 00:09:54.405 | critical |          Always | TT_THROW: The completion queue reader thread stopped after an earlier error. (assert.hpp:104)
+
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/height_server_read_split/test_hsr_op.py::test_conv2d_3x3_perf_focus[instance2] <- tests/ttnn/unit_tests/operations/conv2d_3x3/test_conv2d_3x3_perf.py ERRORUP_FRONT_INLINE: real pass took 9.7s
+
+
+==================================== ERRORS ====================================
+__________ ERROR at teardown of test_conv2d_3x3_perf_focus[instance2] __________
+
+request = <SubRequest '_device_module_impl' for <Function test_conv2d_3x3_perf_focus[res2_{0,1,2}_conv2]>>
+
+    @pytest.fixture(scope="module")
+    def _device_module_impl(request):
+        """
+        Internal module-scoped device fixture.
+
+        Do not request this fixture directly in test function signatures. Instead, use the
+        `device` fixture with @pytest.mark.use_module_device marker. When the marker is
+        present, the `device` fixture automatically delegates to this fixture via
+        request.getfixturevalue(), providing a module-scoped device while keeping test
+        signatures unchanged.
+
+        This optimization is intended for test modules where all tests share the same
+        device configuration. The device is created once per module and reused across
+        all tests, reducing setup/teardown overhead.
+
+        Usage in test files:
+            # Module scope, no special params:
+            pytestmark = pytest.mark.use_module_device
+
+            # Module scope WITH a single device configuration:
+            pytestmark = pytest.mark.use_module_device({"l1_small_size": 16384})
+
+            def test_something(device):  # Just use 'device' as normal
+                ...
+
+        IMPORTANT: Do NOT use this marker in test files that use parametrized device_params:
+            @pytest.mark.parametrize("device_params", [...], indirect=True)
+
+        Tests with multiple device configurations via parametrized device_params require
+        a fresh device for each parameter set and should continue using the default
+        function-scoped `device` fixture.
+
+        STATE SHARING CONSIDERATIONS:
+
+        Since the device is shared across all tests in a module, tests can affect each
+        other through accumulated device state:
+
+        - Program cache: Cached programs from earlier tests may be reused by later tests.
+          If tests require different program configurations (e.g., broadcast vs non-broadcast),
+          this can cause incorrect results. Call device.disable_and_clear_program_cache()
+          at the start of tests that are sensitive to cache state.
+
+        - Memory allocations: Tensors allocated on device persist until explicitly
+          deallocated or garbage collected. For highly parameterized tests, this can
+          exhaust device resources (TLBs, L1 memory). Tests should avoid holding
+          references to device tensors beyond what's needed.
+
+        - Device configuration: Any device configuration changes persist across tests.
+
+        WHEN TO USE MODULE SCOPE:
+
+        Module-scoped devices work best for:
+        - Tests that are stateless or don't depend on program cache state
+        - Tests that properly clean up device state when needed
+        - Test modules with many parameterized test cases (biggest time savings)
+
+        Avoid module scope for:
+        - Tests that assert on program cache entry counts
+        - Tests that require specific device initialization state
+        - Tests that use mesh_device or other multi-device fixtures
+
+        FAILURE HANDLING:
+
+        If a test fails or crashes, subsequent tests in the module will still run with
+        the same device. The device generally remains usable, but may have stale state.
+        For test isolation after failures, prefer function-scoped devices.
+        """
+        import ttnn
+
+        device_id = request.config.getoption("device_id")
+
+        # Get device_params from marker - supports both patterns:
+        #   @pytest.mark.use_module_device({"param": value})  # positional
+        #   @pytest.mark.use_module_device(device_params={"param": value})  # keyword
+        marker = request.node.get_closest_marker("use_module_device")
+        if marker and marker.args:
+            device_params = marker.args[0]
+        elif marker and marker.kwargs:
+            # Validate kwargs - only 'device_params' is allowed
+            unexpected_kwargs = set(marker.kwargs.keys()) - {"device_params"}
+            if unexpected_kwargs:
+                raise ValueError(
+                    f"@pytest.mark.use_module_device received unexpected keyword argument(s): "
+                    f"{unexpected_kwargs}. Only 'device_params' is supported. "
+                    f"Usage: @pytest.mark.use_module_device({{'l1_small_size': 16384}}) or "
+                    f"@pytest.mark.use_module_device(device_params={{'l1_small_size': 16384}})"
+                )
+            device_params = marker.kwargs.get("device_params", {})
+        else:
+            device_params = {}
+
+        # When initializing a single device on a TG system, we want to
+        # target the first user exposed device, not device 0 (one of the
+        # 4 gateway devices)
+        if is_tg_cluster() and not device_id:
+            device_id = first_available_tg_device()
+
+        # Preserve original default device to restore on teardown
+        original_default_device = ttnn.GetDefaultDevice()
+
+        updated_device_params = get_updated_device_params(device_params)
+        device = ttnn.CreateDevice(device_id=device_id, **updated_device_params)
+        request.node.pci_ids = [ttnn.GetPCIeDeviceID(device_id)]
+        ttnn.SetDefaultDevice(device)
+
+        yield device
+
+        # Restore the original default device BEFORE closing the test-specific one
+        ttnn.SetDefaultDevice(original_default_device)
+>       ttnn.close_device(device)
+
+conftest.py:428:
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+device = MeshDevice(1x1 grid, 1 devices)
+
+    def close_device(device: "ttnn.device.Device"):
+        """
+        Close the device and remove it from the device cache.
+
+        Args:
+            device (ttnn.device.Device): The device to close.
+
+        Returns:
+            `None`: the device is closed.
+
+        Example:
+            >>> device_id = 0
+            >>> device = ttnn.open_device(device_id = device_id)
+            >>> success = ttnn.close_device(device)
+            Closing device 0
+
+        """
+        # Try to synchronize first, but don't let failures prevent device close.
+        # If synchronize fails (e.g., due to device timeout/hang), we still need
+        # to close the device to release handles and allow subsequent operations.
+        try:
+            synchronize_device(device)
+        except Exception:
+            logger.exception("close_device: synchronize_device failed. Continuing with device close.")
+
+>       ttnn._ttnn.device.close_device(device)
+E       RuntimeError: TT_THROW @ /localdev/pmilojevic/workspaces/opgen/tt_metal/distributed/fd_mesh_command_queue.cpp:798: tt::exception
+E       info:
+E       The completion queue reader thread stopped after an earlier error.
+E       backtrace:
+E        --- /localdev/pmilojevic/workspaces/opgen/ttnn/ttnn/../../build/lib/_ttnncpp.so(+0xc8c019) [0x7cacb288c019]
+E        --- tt::tt_metal::distributed::FDMeshCommandQueue::throw_if_reader_failed()
+E        --- tt::tt_metal::distributed::FDMeshCommandQueue::finish_nolock(std::span<ttsl::StrongType<unsigned char, tt::tt_metal::SubDeviceIdTag> const, 18446744073709551615ul>)
+E        --- tt::tt_metal::distributed::FDMeshCommandQueue::finish(std::span<ttsl::StrongType<unsigned char, tt::tt_metal::SubDeviceIdTag> const, 18446744073709551615ul>)
+E        --- tt::tt_metal::ReadMeshDeviceProfilerResults(tt::tt_metal::distributed::MeshDevice&, tt::tt_metal::ProfilerReadState, std::optional<ProfilerOptionalMetadata> const&)
+E        --- tt::tt_metal::distributed::MeshDeviceImpl::close_impl(tt::tt_metal::distributed::MeshDevice*)
+E        --- tt::tt_metal::distributed::MeshDevice::close()
+E        --- /localdev/pmilojevic/workspaces/opgen/ttnn/ttnn/_ttnn.so(+0x6b1259) [0x7cacb56b1259]
+E        --- /localdev/pmilojevic/workspaces/opgen/ttnn/ttnn/_ttnn.so(+0x3ff0de) [0x7cacb53ff0de]
+E        --- /localdev/pmilojevic/workspaces/opgen/python_env/bin/python(+0x1a1cd4) [0x5c9673107cd4]
+E        --- /localdev/pmilojevic/workspaces/opgen/python_env/bin/python(_PyEval_EvalFrameDefault+0x3165d) [0x5c967325d6ed]
+E        --- /localdev/pmilojevic/workspaces/opgen/python_env/bin/python(_PyFunction_Vectorcall+0x202) [0x5c96731d6ec2]
+E        --- /localdev/pmilojevic/workspaces/opgen/python_env/bin/python(+0x1a1cd4) [0x5c9673107cd4]
+E        --- /localdev/pmilojevic/workspaces/opgen/python_env/bin/python(_PyEval_EvalFrameDefault+0x3165d) [0x5c967325d6ed]
+E        --- /localdev/pmilojevic/workspaces/opgen/python_env/bin/python(+0x277558) [0x5c96731dd558]
+E        --- /localdev/pmilojevic/workspaces/opgen/python_env/bin/python(+0x2c3a29) [0x5c9673229a29]
+E        --- /localdev/pmilojevic/workspaces/opgen/python_env/bin/python(+0x291cdf) [0x5c96731f7cdf]
+E        --- /localdev/pmilojevic/workspaces/opgen/python_env/bin/python(+0x1a1cd4) [0x5c9673107cd4]
+E        --- /localdev/pmilojevic/workspaces/opgen/python_env/bin/python(+0x2fced6) [0x5c9673262ed6]
+E        --- /localdev/pmilojevic/workspaces/opgen/python_env/bin/python(_PyEval_EvalFrameDefault+0x4158) [0x5c96732301e8]
+E        --- /localdev/pmilojevic/workspaces/opgen/python_env/bin/python(_PyFunction_Vectorcall+0x202) [0x5c96731d6ec2]
+E        --- /localdev/pmilojevic/workspaces/opgen/python_env/bin/python(+0x440429) [0x5c96733a6429]
+E        --- /localdev/pmilojevic/workspaces/opgen/python_env/bin/python(+0x1a1cd4) [0x5c9673107cd4]
+E        --- /localdev/pmilojevic/workspaces/opgen/python_env/bin/python(+0x2fce77) [0x5c9673262e77]
+E        --- /localdev/pmilojevic/workspaces/opgen/python_env/bin/python(_PyEval_EvalFrameDefault+0x4158) [0x5c96732301e8]
+E        --- /localdev/pmilojevic/workspaces/opgen/python_env/bin/python(_PyFunction_Vectorcall+0x202) [0x5c96731d6ec2]
+E        --- /localdev/pmilojevic/workspaces/opgen/python_env/bin/python(+0x272ec0) [0x5c96731d8ec0]
+E        --- /localdev/pmilojevic/workspaces/opgen/python_env/bin/python(PyObject_Call+0x109) [0x5c96730c1419]
+E        --- /localdev/pmilojevic/workspaces/opgen/python_env/bin/python(+0x43ff2d) [0x5c96733a5f2d]
+E        --- /localdev/pmilojevic/workspaces/opgen/python_env/bin/python(_PyObject_MakeTpCall+0x132) [0x5c96730c0782]
+E        --- /localdev/pmilojevic/workspaces/opgen/python_env/bin/python(+0x1a1cd4) [0x5c9673107cd4]
+E        --- /localdev/pmilojevic/workspaces/opgen/python_env/bin/python(+0x2fce77) [0x5c9673262e77]
+E        --- /localdev/pmilojevic/workspaces/opgen/python_env/bin/python(_PyEval_EvalFrameDefault+0x4158) [0x5c96732301e8]
+E        --- /localdev/pmilojevic/workspaces/opgen/python_env/bin/python(_PyFunction_Vectorcall+0x202) [0x5c96731d6ec2]
+E        --- /localdev/pmilojevic/workspaces/opgen/python_env/bin/python(+0x1a1cd4) [0x5c9673107cd4]
+E        --- /localdev/pmilojevic/workspaces/opgen/python_env/bin/python(_PyEval_EvalFrameDefault+0x2f1ed) [0x5c967325b27d]
+E        --- /localdev/pmilojevic/workspaces/opgen/python_env/bin/python(_PyFunction_Vectorcall+0x202) [0x5c96731d6ec2]
+E        --- /localdev/pmilojevic/workspaces/opgen/python_env/bin/python(_PyEval_EvalFrameDefault+0x85fa) [0x5c967323468a]
+E        --- /localdev/pmilojevic/workspaces/opgen/python_env/bin/python(_PyFunction_Vectorcall+0x202) [0x5c96731d6ec2]
+E        --- /localdev/pmilojevic/workspaces/opgen/python_env/bin/python(+0x1a1cd4) [0x5c9673107cd4]
+E        --- /localdev/pmilojevic/workspaces/opgen/python_env/bin/python(_PyEval_EvalFrameDefault+0x3165d) [0x5c967325d6ed]
+E        --- /localdev/pmilojevic/workspaces/opgen/python_env/bin/python(_PyFunction_Vectorcall+0x202) [0x5c96731d6ec2]
+E        --- /localdev/pmilojevic/workspaces/opgen/python_env/bin/python(+0x272ec0) [0x5c96731d8ec0]
+E        --- /localdev/pmilojevic/workspaces/opgen/python_env/bin/python(+0x1a1cd4) [0x5c9673107cd4]
+E        --- /localdev/pmilojevic/workspaces/opgen/python_env/bin/python(_PyEval_EvalFrameDefault+0x3165d) [0x5c967325d6ed]
+E        --- /localdev/pmilojevic/workspaces/opgen/python_env/bin/python(_PyFunction_Vectorcall+0x202) [0x5c96731d6ec2]
+E        --- /localdev/pmilojevic/workspaces/opgen/python_env/bin/python(_PyObject_Call_Prepend+0x115) [0x5c96732d4315]
+E        --- /localdev/pmilojevic/workspaces/opgen/python_env/bin/python(+0x3a2096) [0x5c9673308096]
+E        --- /localdev/pmilojevic/workspaces/opgen/python_env/bin/python(_PyEval_EvalFrameDefault+0xa256) [0x5c96732362e6]
+E        --- /localdev/pmilojevic/workspaces/opgen/python_env/bin/python(_PyFunction_Vectorcall+0x202) [0x5c96731d6ec2]
+E        --- /localdev/pmilojevic/workspaces/opgen/python_env/bin/python(+0x1a1cd4) [0x5c9673107cd4]
+E        --- /localdev/pmilojevic/workspaces/opgen/python_env/bin/python(+0x2fce77) [0x5c9673262e77]
+E        --- /localdev/pmilojevic/workspaces/opgen/python_env/bin/python(_PyEval_EvalFrameDefault+0x4158) [0x5c96732301e8]
+E        --- /localdev/pmilojevic/workspaces/opgen/python_env/bin/python(_PyFunction_Vectorcall+0x202) [0x5c96731d6ec2]
+E        --- /localdev/pmilojevic/workspaces/opgen/python_env/bin/python(+0x272ec0) [0x5c96731d8ec0]
+E        --- /localdev/pmilojevic/workspaces/opgen/python_env/bin/python(+0x1a1cd4) [0x5c9673107cd4]
+E        --- /localdev/pmilojevic/workspaces/opgen/python_env/bin/python(+0x2fce77) [0x5c9673262e77]
+E        --- /localdev/pmilojevic/workspaces/opgen/python_env/bin/python(_PyEval_EvalFrameDefault+0x3d37) [0x5c967322fdc7]
+E        --- /localdev/pmilojevic/workspaces/opgen/python_env/bin/python(_PyFunction_Vectorcall+0x202) [0x5c96731d6ec2]
+E        --- /localdev/pmilojevic/workspaces/opgen/python_env/bin/python(+0x1a1cd4) [0x5c9673107cd4]
+E        --- /localdev/pmilojevic/workspaces/opgen/python_env/bin/python(+0x2fce77) [0x5c9673262e77]
+E        --- /localdev/pmilojevic/workspaces/opgen/python_env/bin/python(_PyEval_EvalFrameDefault+0x3d37) [0x5c967322fdc7]
+E        --- /localdev/pmilojevic/workspaces/opgen/python_env/bin/python(_PyFunction_Vectorcall+0x202) [0x5c96731d6ec2]
+E        --- /localdev/pmilojevic/workspaces/opgen/python_env/bin/python(+0x1a1cd4) [0x5c9673107cd4]
+E        --- /localdev/pmilojevic/workspaces/opgen/python_env/bin/python(+0x2fce77) [0x5c9673262e77]
+E        --- /localdev/pmilojevic/workspaces/opgen/python_env/bin/python(_PyEval_EvalFrameDefault+0x3d37) [0x5c967322fdc7]
+E        --- /localdev/pmilojevic/workspaces/opgen/python_env/bin/python(_PyFunction_Vectorcall+0x202) [0x5c96731d6ec2]
+E        --- /localdev/pmilojevic/workspaces/opgen/python_env/bin/python(_PyEval_EvalFrameDefault+0x85fa) [0x5c967323468a]
+E        --- /localdev/pmilojevic/workspaces/opgen/python_env/bin/python(_PyFunction_Vectorcall+0x202) [0x5c96731d6ec2]
+E        --- /localdev/pmilojevic/workspaces/opgen/python_env/bin/python(+0x1a1cd4) [0x5c9673107cd4]
+E        --- /localdev/pmilojevic/workspaces/opgen/python_env/bin/python(_PyEval_EvalFrameDefault+0x3165d) [0x5c967325d6ed]
+E        --- /localdev/pmilojevic/workspaces/opgen/python_env/bin/python(_PyFunction_Vectorcall+0x202) [0x5c96731d6ec2]
+E        --- /localdev/pmilojevic/workspaces/opgen/python_env/bin/python(+0x272ec0) [0x5c96731d8ec0]
+E        --- /localdev/pmilojevic/workspaces/opgen/python_env/bin/python(+0x1a1cd4) [0x5c9673107cd4]
+E        --- /localdev/pmilojevic/workspaces/opgen/python_env/bin/python(_PyEval_EvalFrameDefault+0x3165d) [0x5c967325d6ed]
+E        --- /localdev/pmilojevic/workspaces/opgen/python_env/bin/python(_PyFunction_Vectorcall+0x202) [0x5c96731d6ec2]
+E        --- /localdev/pmilojevic/workspaces/opgen/python_env/bin/python(_PyObject_Call_Prepend+0x115) [0x5c96732d4315]
+E        --- /localdev/pmilojevic/workspaces/opgen/python_env/bin/python(+0x3a2096) [0x5c9673308096]
+E        --- /localdev/pmilojevic/workspaces/opgen/python_env/bin/python(_PyObject_MakeTpCall+0x132) [0x5c96730c0782]
+E        --- /localdev/pmilojevic/workspaces/opgen/python_env/bin/python(+0x2fce77) [0x5c9673262e77]
+E        --- /localdev/pmilojevic/workspaces/opgen/python_env/bin/python(_PyEval_EvalFrameDefault+0x3d37) [0x5c967322fdc7]
+E        --- /localdev/pmilojevic/workspaces/opgen/python_env/bin/python(_PyFunction_Vectorcall+0x202) [0x5c96731d6ec2]
+E        --- /localdev/pmilojevic/workspaces/opgen/python_env/bin/python(_PyEval_EvalFrameDefault+0x85fa) [0x5c967323468a]
+E        --- /localdev/pmilojevic/workspaces/opgen/python_env/bin/python(_PyFunction_Vectorcall+0x202) [0x5c96731d6ec2]
+E        --- /localdev/pmilojevic/workspaces/opgen/python_env/bin/python(+0x1a1cd4) [0x5c9673107cd4]
+E        --- /localdev/pmilojevic/workspaces/opgen/python_env/bin/python(_PyEval_EvalFrameDefault+0x3165d) [0x5c967325d6ed]
+E        --- /localdev/pmilojevic/workspaces/opgen/python_env/bin/python(_PyFunction_Vectorcall+0x202) [0x5c96731d6ec2]
+E        --- /localdev/pmilojevic/workspaces/opgen/python_env/bin/python(+0x272ec0) [0x5c96731d8ec0]
+E        --- /localdev/pmilojevic/workspaces/opgen/python_env/bin/python(+0x1a1cd4) [0x5c9673107cd4]
+E        --- /localdev/pmilojevic/workspaces/opgen/python_env/bin/python(_PyEval_EvalFrameDefault+0x3165d) [0x5c967325d6ed]
+E        --- /localdev/pmilojevic/workspaces/opgen/python_env/bin/python(_PyFunction_Vectorcall+0x202) [0x5c96731d6ec2]
+E        --- /localdev/pmilojevic/workspaces/opgen/python_env/bin/python(_PyObject_Call_Prepend+0x115) [0x5c96732d4315]
+E        --- /localdev/pmilojevic/workspaces/opgen/python_env/bin/python(+0x3a2096) [0x5c9673308096]
+E        --- /localdev/pmilojevic/workspaces/opgen/python_env/bin/python(_PyObject_MakeTpCall+0x132) [0x5c96730c0782]
+E        --- /localdev/pmilojevic/workspaces/opgen/python_env/bin/python(+0x2fce77) [0x5c9673262e77]
+E        --- /localdev/pmilojevic/workspaces/opgen/python_env/bin/python(_PyEval_EvalFrameDefault+0x3d37) [0x5c967322fdc7]
+E        --- /localdev/pmilojevic/workspaces/opgen/python_env/bin/python(_PyFunction_Vectorcall+0x202) [0x5c96731d6ec2]
+
+ttnn/ttnn/device.py:73: RuntimeError
+- generated xml file: /localdev/pmilojevic/workspaces/opgen/generated/test_reports/most_recent_tests.xml -
+============================= slowest 25 durations =============================
+8.30s teardown ttnn/ttnn/operations/conv2d_3x3/perf_experiments/height_server_read_split/test_hsr_op.py::test_conv2d_3x3_perf_focus[instance2]
+0.24s setup    ttnn/ttnn/operations/conv2d_3x3/perf_experiments/height_server_read_split/test_hsr_op.py::test_conv2d_3x3_perf_focus[res2_{0,1,2}_conv2]
+0.09s call     ttnn/ttnn/operations/conv2d_3x3/perf_experiments/height_server_read_split/test_hsr_op.py::test_conv2d_3x3_perf_focus[semantic2]
+0.08s call     ttnn/ttnn/operations/conv2d_3x3/perf_experiments/height_server_read_split/test_hsr_op.py::test_conv2d_3x3_perf_focus[semantic3]
+0.07s call     ttnn/ttnn/operations/conv2d_3x3/perf_experiments/height_server_read_split/test_hsr_op.py::test_conv2d_3x3_perf_focus[instance1]
+0.06s call     ttnn/ttnn/operations/conv2d_3x3/perf_experiments/height_server_read_split/test_hsr_op.py::test_conv2d_3x3_perf_focus[instance2]
+0.05s call     ttnn/ttnn/operations/conv2d_3x3/perf_experiments/height_server_read_split/test_hsr_op.py::test_conv2d_3x3_perf_focus[semantic0]
+0.05s call     ttnn/ttnn/operations/conv2d_3x3/perf_experiments/height_server_read_split/test_hsr_op.py::test_conv2d_3x3_perf_focus[instance0]
+0.05s call     ttnn/ttnn/operations/conv2d_3x3/perf_experiments/height_server_read_split/test_hsr_op.py::test_conv2d_3x3_perf_focus[semantic1]
+0.05s call     ttnn/ttnn/operations/conv2d_3x3/perf_experiments/height_server_read_split/test_hsr_op.py::test_conv2d_3x3_perf_focus[res2_{0,1,2}_conv2]
+0.04s call     ttnn/ttnn/operations/conv2d_3x3/perf_experiments/height_server_read_split/test_hsr_op.py::test_conv2d_3x3_perf_focus[res3_{1,2,3}_conv2]
+0.00s setup    ttnn/ttnn/operations/conv2d_3x3/perf_experiments/height_server_read_split/test_hsr_op.py::test_conv2d_3x3_perf_focus[instance2]
+0.00s setup    ttnn/ttnn/operations/conv2d_3x3/perf_experiments/height_server_read_split/test_hsr_op.py::test_conv2d_3x3_perf_focus[semantic3]
+0.00s setup    ttnn/ttnn/operations/conv2d_3x3/perf_experiments/height_server_read_split/test_hsr_op.py::test_conv2d_3x3_perf_focus[semantic0]
+0.00s setup    ttnn/ttnn/operations/conv2d_3x3/perf_experiments/height_server_read_split/test_hsr_op.py::test_conv2d_3x3_perf_focus[semantic2]
+0.00s setup    ttnn/ttnn/operations/conv2d_3x3/perf_experiments/height_server_read_split/test_hsr_op.py::test_conv2d_3x3_perf_focus[res3_{1,2,3}_conv2]
+0.00s setup    ttnn/ttnn/operations/conv2d_3x3/perf_experiments/height_server_read_split/test_hsr_op.py::test_conv2d_3x3_perf_focus[instance1]
+0.00s setup    ttnn/ttnn/operations/conv2d_3x3/perf_experiments/height_server_read_split/test_hsr_op.py::test_conv2d_3x3_perf_focus[semantic1]
+0.00s setup    ttnn/ttnn/operations/conv2d_3x3/perf_experiments/height_server_read_split/test_hsr_op.py::test_conv2d_3x3_perf_focus[instance0]
+0.00s teardown ttnn/ttnn/operations/conv2d_3x3/perf_experiments/height_server_read_split/test_hsr_op.py::test_conv2d_3x3_perf_focus[semantic3]
+0.00s teardown ttnn/ttnn/operations/conv2d_3x3/perf_experiments/height_server_read_split/test_hsr_op.py::test_conv2d_3x3_perf_focus[res2_{0,1,2}_conv2]
+0.00s teardown ttnn/ttnn/operations/conv2d_3x3/perf_experiments/height_server_read_split/test_hsr_op.py::test_conv2d_3x3_perf_focus[instance1]
+0.00s teardown ttnn/ttnn/operations/conv2d_3x3/perf_experiments/height_server_read_split/test_hsr_op.py::test_conv2d_3x3_perf_focus[instance0]
+0.00s teardown ttnn/ttnn/operations/conv2d_3x3/perf_experiments/height_server_read_split/test_hsr_op.py::test_conv2d_3x3_perf_focus[semantic0]
+0.00s teardown ttnn/ttnn/operations/conv2d_3x3/perf_experiments/height_server_read_split/test_hsr_op.py::test_conv2d_3x3_perf_focus[res3_{1,2,3}_conv2]
+=========================== short test summary info ============================
+ERROR ttnn/ttnn/operations/conv2d_3x3/perf_experiments/height_server_read_split/test_hsr_op.py::test_conv2d_3x3_perf_focus[instance2] - RuntimeError: TT_THROW @ /localdev/pmilojevic/workspaces/opgen/tt_metal/distributed/fd_mesh_command_queue.cpp:798: tt::exception
+info:
+The completion queue reader thread stopped after an earlier error.
+backtrace:
+ --- /localdev/pmilojevic/workspaces/opgen/ttnn/ttnn/../../build/lib/_ttnncpp.so(+0xc8c019) [0x7cacb288c019]
+ --- tt::tt_metal::distributed::FDMeshCommandQueue::throw_if_reader_failed()
+ --- tt::tt_metal::distributed::FDMeshCommandQueue::finish_nolock(std::span<ttsl::StrongType<unsigned char, tt::tt_metal::SubDeviceIdTag> const, 18446744073709551615ul>)
+ --- tt::tt_metal::distributed::FDMeshCommandQueue::finish(std::span<ttsl::StrongType<unsigned char, tt::tt_metal::SubDeviceIdTag> const, 18446744073709551615ul>)
+ --- tt::tt_metal::ReadMeshDeviceProfilerResults(tt::tt_metal::distributed::MeshDevice&, tt::tt_metal::ProfilerReadState, std::optional<ProfilerOptionalMetadata> const&)
+ --- tt::tt_metal::distributed::MeshDeviceImpl::close_impl(tt::tt_metal::distributed::MeshDevice*)
+ --- tt::tt_metal::distributed::MeshDevice::close()
+ --- /localdev/pmilojevic/workspaces/opgen/ttnn/ttnn/_ttnn.so(+0x6b1259) [0x7cacb56b1259]
+ --- /localdev/pmilojevic/workspaces/opgen/ttnn/ttnn/_ttnn.so(+0x3ff0de) [0x7cacb53ff0de]
+ --- /localdev/pmilojevic/workspaces/opgen/python_env/bin/python(+0x1a1cd4) [0x5c9673107cd4]
+ --- /localdev/pmilojevic/workspaces/opgen/python_env/bin/python(_PyEval_EvalFrameDefault+0x3165d) [0x5c967325d6ed]
+ --- /localdev/pmilojevic/workspaces/opgen/python_env/bin/python(_PyFunction_Vectorcall+0x202) [0x5c96731d6ec2]
+ --- /localdev/pmilojevic/workspaces/opgen/python_env/bin/python(+0x1a1cd4) [0x5c9673107cd4]
+ --- /localdev/pmilojevic/workspaces/opgen/python_env/bin/python(_PyEval_EvalFrameDefault+0x3165d) [0x5c967325d6ed]
+ --- /localdev/pmilojevic/workspaces/opgen/python_env/bin/python(+0x277558) [0x5c96731dd558]
+ --- /localdev/pmilojevic/workspaces/opgen/python_env/bin/python(+0x2c3a29) [0x5c9673229a29]
+ --- /localdev/pmilojevic/workspaces/opgen/python_env/bin/python(+0x291cdf) [0x5c96731f7cdf]
+ --- /localdev/pmilojevic/workspaces/opgen/python_env/bin/python(+0x1a1cd4) [0x5c9673107cd4]
+ --- /localdev/pmilojevic/workspaces/opgen/python_env/bin/python(+0x2fced6) [0x5c9673262ed6]
+ --- /localdev/pmilojevic/workspaces/opgen/python_env/bin/python(_PyEval_EvalFrameDefault+0x4158) [0x5c96732301e8]
+ --- /localdev/pmilojevic/workspaces/opgen/python_env/bin/python(_PyFunction_Vectorcall+0x202) [0x5c96731d6ec2]
+ --- /localdev/pmilojevic/workspaces/opgen/python_env/bin/python(+0x440429) [0x5c96733a6429]
+ --- /localdev/pmilojevic/workspaces/opgen/python_env/bin/python(+0x1a1cd4) [0x5c9673107cd4]
+ --- /localdev/pmilojevic/workspaces/opgen/python_env/bin/python(+0x2fce77) [0x5c9673262e77]
+ --- /localdev/pmilojevic/workspaces/opgen/python_env/bin/python(_PyEval_EvalFrameDefault+0x4158) [0x5c96732301e8]
+ --- /localdev/pmilojevic/workspaces/opgen/python_env/bin/python(_PyFunction_Vectorcall+0x202) [0x5c96731d6ec2]
+ --- /localdev/pmilojevic/workspaces/opgen/python_env/bin/python(+0x272ec0) [0x5c96731d8ec0]
+ --- /localdev/pmilojevic/workspaces/opgen/python_env/bin/python(PyObject_Call+0x109) [0x5c96730c1419]
+ --- /localdev/pmilojevic/workspaces/opgen/python_env/bin/python(+0x43ff2d) [0x5c96733a5f2d]
+ --- /localdev/pmilojevic/workspaces/opgen/python_env/bin/python(_PyObject_MakeTpCall+0x132) [0x5c96730c0782]
+ --- /localdev/pmilojevic/workspaces/opgen/python_env/bin/python(+0x1a1cd4) [0x5c9673107cd4]
+ --- /localdev/pmilojevic/workspaces/opgen/python_env/bin/python(+0x2fce77) [0x5c9673262e77]
+ --- /localdev/pmilojevic/workspaces/opgen/python_env/bin/python(_PyEval_EvalFrameDefault+0x4158) [0x5c96732301e8]
+ --- /localdev/pmilojevic/workspaces/opgen/python_env/bin/python(_PyFunction_Vectorcall+0x202) [0x5c96731d6ec2]
+ --- /localdev/pmilojevic/workspaces/opgen/python_env/bin/python(+0x1a1cd4) [0x5c9673107cd4]
+ --- /localdev/pmilojevic/workspaces/opgen/python_env/bin/python(_PyEval_EvalFrameDefault+0x2f1ed) [0x5c967325b27d]
+ --- /localdev/pmilojevic/workspaces/opgen/python_env/bin/python(_PyFunction_Vectorcall+0x202) [0x5c96731d6ec2]
+ --- /localdev/pmilojevic/workspaces/opgen/python_env/bin/python(_PyEval_EvalFrameDefault+0x85fa) [0x5c967323468a]
+ --- /localdev/pmilojevic/workspaces/opgen/python_env/bin/python(_PyFunction_Vectorcall+0x202) [0x5c96731d6ec2]
+ --- /localdev/pmilojevic/workspaces/opgen/python_env/bin/python(+0x1a1cd4) [0x5c9673107cd4]
+ --- /localdev/pmilojevic/workspaces/opgen/python_env/bin/python(_PyEval_EvalFrameDefault+0x3165d) [0x5c967325d6ed]
+ --- /localdev/pmilojevic/workspaces/opgen/python_env/bin/python(_PyFunction_Vectorcall+0x202) [0x5c96731d6ec2]
+ --- /localdev/pmilojevic/workspaces/opgen/python_env/bin/python(+0x272ec0) [0x5c96731d8ec0]
+ --- /localdev/pmilojevic/workspaces/opgen/python_env/bin/python(+0x1a1cd4) [0x5c9673107cd4]
+ --- /localdev/pmilojevic/workspaces/opgen/python_env/bin/python(_PyEval_EvalFrameDefault+0x3165d) [0x5c967325d6ed]
+ --- /localdev/pmilojevic/workspaces/opgen/python_env/bin/python(_PyFunction_Vectorcall+0x202) [0x5c96731d6ec2]
+ --- /localdev/pmilojevic/workspaces/opgen/python_env/bin/python(_PyObject_Call_Prepend+0x115) [0x5c96732d4315]
+ --- /localdev/pmilojevic/workspaces/opgen/python_env/bin/python(+0x3a2096) [0x5c9673308096]
+ --- /localdev/pmilojevic/workspaces/opgen/python_env/bin/python(_PyEval_EvalFrameDefault+0xa256) [0x5c96732362e6]
+ --- /localdev/pmilojevic/workspaces/opgen/python_env/bin/python(_PyFunction_Vectorcall+0x202) [0x5c96731d6ec2]
+ --- /localdev/pmilojevic/workspaces/opgen/python_env/bin/python(+0x1a1cd4) [0x5c9673107cd4]
+ --- /localdev/pmilojevic/workspaces/opgen/python_env/bin/python(+0x2fce77) [0x5c9673262e77]
+ --- /localdev/pmilojevic/workspaces/opgen/python_env/bin/python(_PyEval_EvalFrameDefault+0x4158) [0x5c96732301e8]
+ --- /localdev/pmilojevic/workspaces/opgen/python_env/bin/python(_PyFunction_Vectorcall+0x202) [0x5c96731d6ec2]
+ --- /localdev/pmilojevic/workspaces/opgen/python_env/bin/python(+0x272ec0) [0x5c96731d8ec0]
+ --- /localdev/pmilojevic/workspaces/opgen/python_env/bin/python(+0x1a1cd4) [0x5c9673107cd4]
+ --- /localdev/pmilojevic/workspaces/opgen/python_env/bin/python(+0x2fce77) [0x5c9673262e77]
+ --- /localdev/pmilojevic/workspaces/opgen/python_env/bin/python(_PyEval_EvalFrameDefault+0x3d37) [0x5c967322fdc7]
+ --- /localdev/pmilojevic/workspaces/opgen/python_env/bin/python(_PyFunction_Vectorcall+0x202) [0x5c96731d6ec2]
+ --- /localdev/pmilojevic/workspaces/opgen/python_env/bin/python(+0x1a1cd4) [0x5c9673107cd4]
+ --- /localdev/pmilojevic/workspaces/opgen/python_env/bin/python(+0x2fce77) [0x5c9673262e77]
+ --- /localdev/pmilojevic/workspaces/opgen/python_env/bin/python(_PyEval_EvalFrameDefault+0x3d37) [0x5c967322fdc7]
+ --- /localdev/pmilojevic/workspaces/opgen/python_env/bin/python(_PyFunction_Vectorcall+0x202) [0x5c96731d6ec2]
+ --- /localdev/pmilojevic/workspaces/opgen/python_env/bin/python(+0x1a1cd4) [0x5c9673107cd4]
+ --- /localdev/pmilojevic/workspaces/opgen/python_env/bin/python(+0x2fce77) [0x5c9673262e77]
+ --- /localdev/pmilojevic/workspaces/opgen/python_env/bin/python(_PyEval_EvalFrameDefault+0x3d37) [0x5c967322fdc7]
+ --- /localdev/pmilojevic/workspaces/opgen/python_env/bin/python(_PyFunction_Vectorcall+0x202) [0x5c96731d6ec2]
+ --- /localdev/pmilojevic/workspaces/opgen/python_env/bin/python(_PyEval_EvalFrameDefault+0x85fa) [0x5c967323468a]
+ --- /localdev/pmilojevic/workspaces/opgen/python_env/bin/python(_PyFunction_Vectorcall+0x202) [0x5c96731d6ec2]
+ --- /localdev/pmilojevic/workspaces/opgen/python_env/bin/python(+0x1a1cd4) [0x5c9673107cd4]
+ --- /localdev/pmilojevic/workspaces/opgen/python_env/bin/python(_PyEval_EvalFrameDefault+0x3165d) [0x5c967325d6ed]
+ --- /localdev/pmilojevic/workspaces/opgen/python_env/bin/python(_PyFunction_Vectorcall+0x202) [0x5c96731d6ec2]
+ --- /localdev/pmilojevic/workspaces/opgen/python_env/bin/python(+0x272ec0) [0x5c96731d8ec0]
+ --- /localdev/pmilojevic/workspaces/opgen/python_env/bin/python(+0x1a1cd4) [0x5c9673107cd4]
+ --- /localdev/pmilojevic/workspaces/opgen/python_env/bin/python(_PyEval_EvalFrameDefault+0x3165d) [0x5c967325d6ed]
+ --- /localdev/pmilojevic/workspaces/opgen/python_env/bin/python(_PyFunction_Vectorcall+0x202) [0x5c96731d6ec2]
+ --- /localdev/pmilojevic/workspaces/opgen/python_env/bin/python(_PyObject_Call_Prepend+0x115) [0x5c96732d4315]
+ --- /localdev/pmilojevic/workspaces/opgen/python_env/bin/python(+0x3a2096) [0x5c9673308096]
+ --- /localdev/pmilojevic/workspaces/opgen/python_env/bin/python(_PyObject_MakeTpCall+0x132) [0x5c96730c0782]
+ --- /localdev/pmilojevic/workspaces/opgen/python_env/bin/python(+0x2fce77) [0x5c9673262e77]
+ --- /localdev/pmilojevic/workspaces/opgen/python_env/bin/python(_PyEval_EvalFrameDefault+0x3d37) [0x5c967322fdc7]
+ --- /localdev/pmilojevic/workspaces/opgen/python_env/bin/python(_PyFunction_Vectorcall+0x202) [0x5c96731d6ec2]
+ --- /localdev/pmilojevic/workspaces/opgen/python_env/bin/python(_PyEval_EvalFrameDefault+0x85fa) [0x5c967323468a]
+ --- /localdev/pmilojevic/workspaces/opgen/python_env/bin/python(_PyFunction_Vectorcall+0x202) [0x5c96731d6ec2]
+ --- /localdev/pmilojevic/workspaces/opgen/python_env/bin/python(+0x1a1cd4) [0x5c9673107cd4]
+ --- /localdev/pmilojevic/workspaces/opgen/python_env/bin/python(_PyEval_EvalFrameDefault+0x3165d) [0x5c967325d6ed]
+ --- /localdev/pmilojevic/workspaces/opgen/python_env/bin/python(_PyFunction_Vectorcall+0x202) [0x5c96731d6ec2]
+ --- /localdev/pmilojevic/workspaces/opgen/python_env/bin/python(+0x272ec0) [0x5c96731d8ec0]
+ --- /localdev/pmilojevic/workspaces/opgen/python_env/bin/python(+0x1a1cd4) [0x5c9673107cd4]
+ --- /localdev/pmilojevic/workspaces/opgen/python_env/bin/python(_PyEval_EvalFrameDefault+0x3165d) [0x5c967325d6ed]
+ --- /localdev/pmilojevic/workspaces/opgen/python_env/bin/python(_PyFunction_Vectorcall+0x202) [0x5c96731d6ec2]
+ --- /localdev/pmilojevic/workspaces/opgen/python_env/bin/python(_PyObject_Call_Prepend+0x115) [0x5c96732d4315]
+ --- /localdev/pmilojevic/workspaces/opgen/python_env/bin/python(+0x3a2096) [0x5c9673308096]
+ --- /localdev/pmilojevic/workspaces/opgen/python_env/bin/python(_PyObject_MakeTpCall+0x132) [0x5c96730c0782]
+ --- /localdev/pmilojevic/workspaces/opgen/python_env/bin/python(+0x2fce77) [0x5c9673262e77]
+ --- /localdev/pmilojevic/workspaces/opgen/python_env/bin/python(_PyEval_EvalFrameDefault+0x3d37) [0x5c967322fdc7]
+ --- /localdev/pmilojevic/workspaces/opgen/python_env/bin/python(_PyFunction_Vectorcall+0x202) [0x5c96731d6ec2]2026-11-19 00:09:55.233 | warning  |           Metal | FDMeshCommandQueue destructor: completion reader queue is not empty. This may indicate a device hang or timeout occurred. (fd_mesh_command_queue.cpp:262)
+2026-11-19 00:09:55.233 | warning  |           Metal | FDMeshCommandQueue destructor: 1 outstanding reads remaining. This may indicate a device hang or timeout occurred. (fd_mesh_command_queue.cpp:280)
+2026-11-19 00:10:00.247 | critical |          Always | TT_THROW: Device 0: Timeout (5000 ms) waiting for physical cores to finish: 14-3, 14-2. (assert.hpp:104)
+2026-11-19 00:10:00.249 | warning  |           Metal | Device 0: Exception waiting for dispatch cores to finish during teardown. Continuing with cleanup. Error: TT_THROW @ /localdev/pmilojevic/workspaces/opgen/tt_metal/llrt/llrt.cpp:601: tt::exception
+info:
+Device 0: Timeout (5000 ms) waiting for physical cores to finish: 14-3, 14-2.
+backtrace:
+ --- /localdev/pmilojevic/workspaces/opgen/ttnn/ttnn/../../build/lib/libtt_metal.so(+0xe7535a) [0x7cacb107535a]
+ --- tt::llrt::internal_::wait_until_cores_done(tt::tt_metal::MetalContext&, int, int, std::unordered_set<tt::xy_pair, std::hash<tt::xy_pair>, std::equal_to<tt::xy_pair>, std::allocator<tt::xy_pair> >&, int)
+ --- tt::tt_metal::DispatchKernelInitializer::wait_for_dispatch_cores() const
+ --- tt::tt_metal::DispatchKernelInitializer::teardown(std::unordered_set<tt::tt_metal::InitializerKey, std::hash<tt::tt_metal::InitializerKey>, std::equal_to<tt::tt_metal::InitializerKey>, std::allocator<tt::tt_metal::InitializerKey> >&)
+ --- tt::tt_metal::DeviceManager::close_devices(std::vector<tt::tt_metal::Device*, std::allocator<tt::tt_metal::Device*> > const&, bool)
+ --- tt::tt_metal::distributed::MeshDeviceImpl::ScopedDevices::~ScopedDevices()
+ --- tt::tt_metal::distributed::MeshDeviceImpl::~MeshDeviceImpl()
+ --- tt::tt_metal::distributed::MeshDeviceImpl::~MeshDeviceImpl()
+ --- tt::tt_metal::distributed::MeshDevice::~MeshDevice()
+ --- tt::tt_metal::distributed::MeshDevice::~MeshDevice()
+ --- /localdev/pmilojevic/workspaces/opgen/ttnn/ttnn/../../build/lib/libtt_metal.so(+0x7f785f) [0x7cacb09f785f]
+ --- tt::tt_metal::distributed::MeshDeviceImpl::close_impl(tt::tt_metal::distributed::MeshDevice*)
+ --- tt::tt_metal::distributed::MeshDevice::~MeshDevice()
+ --- tt::tt_metal::distributed::MeshDevice::~MeshDevice()
+ --- /localdev/pmilojevic/workspaces/opgen/ttnn/ttnn/_ttnn.so(+0x652f1b) [0x7cacb5652f1b]
+ --- /localdev/pmilojevic/workspaces/opgen/ttnn/ttnn/_ttnn.so(+0x7473ab) [0x7cacb57473ab]
+ --- /localdev/pmilojevic/workspaces/opgen/ttnn/ttnn/_ttnn.so(+0x40286e) [0x7cacb540286e]
+ --- /localdev/pmilojevic/workspaces/opgen/python_env/bin/python(+0x28d950) [0x5c96731f3950]
+ --- /localdev/pmilojevic/workspaces/opgen/python_env/bin/python(+0x279714) [0x5c96731df714]
+ --- /localdev/pmilojevic/workspaces/opgen/python_env/bin/python(+0x31c46b) [0x5c967328246b]
+ --- /localdev/pmilojevic/workspaces/opgen/python_env/bin/python(+0x31c456) [0x5c9673282456]
+ --- /localdev/pmilojevic/workspaces/opgen/python_env/bin/python(+0x31c456) [0x5c9673282456]
+ --- /localdev/pmilojevic/workspaces/opgen/python_env/bin/python(+0x31c456) [0x5c9673282456]
+ --- /localdev/pmilojevic/workspaces/opgen/python_env/bin/python(+0x31c456) [0x5c9673282456]
+ --- /localdev/pmilojevic/workspaces/opgen/python_env/bin/python(+0x31c456) [0x5c9673282456]
+ --- /localdev/pmilojevic/workspaces/opgen/python_env/bin/python(+0x31c456) [0x5c9673282456]
+ --- /localdev/pmilojevic/workspaces/opgen/python_env/bin/python(+0x31c456) [0x5c9673282456]
+ --- /localdev/pmilojevic/workspaces/opgen/python_env/bin/python(+0x31c456) [0x5c9673282456]
+ --- /localdev/pmilojevic/workspaces/opgen/python_env/bin/python(+0x31c456) [0x5c9673282456]
+ --- /localdev/pmilojevic/workspaces/opgen/python_env/bin/python(+0x40fb5a) [0x5c9673375b5a]
+ --- /localdev/pmilojevic/workspaces/opgen/python_env/bin/python(+0x324045) [0x5c967328a045]
+ --- /localdev/pmilojevic/workspaces/opgen/python_env/bin/python(+0x4157aa) [0x5c967337b7aa]
+ --- /localdev/pmilojevic/workspaces/opgen/python_env/bin/python(+0x291db9) [0x5c96731f7db9]
+ --- /localdev/pmilojevic/workspaces/opgen/python_env/bin/python(+0x1a1cd4) [0x5c9673107cd4]
+ --- /localdev/pmilojevic/workspaces/opgen/python_env/bin/python(_PyEval_EvalFrameDefault+0x31df2) [0x5c967325de82]
+ --- /localdev/pmilojevic/workspaces/opgen/python_env/bin/python(_PyFunction_Vectorcall+0x202) [0x5c96731d6ec2]
+ --- /localdev/pmilojevic/workspaces/opgen/python_env/bin/python(+0x1a1cd4) [0x5c9673107cd4]
+ --- /localdev/pmilojevic/workspaces/opgen/python_env/bin/python(+0x2fce77) [0x5c9673262e77]
+ --- /localdev/pmilojevic/workspaces/opgen/python_env/bin/python(_PyEval_EvalFrameDefault+0x4158) [0x5c96732301e8]
+ --- /localdev/pmilojevic/workspaces/opgen/python_env/bin/python(_PyFunction_Vectorcall+0x202) [0x5c96731d6ec2]
+ --- /localdev/pmilojevic/workspaces/opgen/python_env/bin/python(PyObject_Call+0x109) [0x5c96730c1419]
+ --- /localdev/pmilojevic/workspaces/opgen/python_env/bin/python(+0x43ff2d) [0x5c96733a5f2d]
+ --- /localdev/pmilojevic/workspaces/opgen/python_env/bin/python(_PyObject_MakeTpCall+0x132) [0x5c96730c0782]
+ --- /localdev/pmilojevic/workspaces/opgen/python_env/bin/python(_PyEval_EvalFrameDefault+0x85fa) [0x5c967323468a]
+ --- /localdev/pmilojevic/workspaces/opgen/python_env/bin/python(_PyFunction_Vectorcall+0x202) [0x5c96731d6ec2]
+ --- /localdev/pmilojevic/workspaces/opgen/python_env/bin/python(_PyEval_EvalFrameDefault+0x85fa) [0x5c967323468a]
+ --- /localdev/pmilojevic/workspaces/opgen/python_env/bin/python(_PyFunction_Vectorcall+0x202) [0x5c96731d6ec2]
+ --- /localdev/pmilojevic/workspaces/opgen/python_env/bin/python(+0x1a1cd4) [0x5c9673107cd4]
+ --- /localdev/pmilojevic/workspaces/opgen/python_env/bin/python(_PyEval_EvalFrameDefault+0x2f1ed) [0x5c967325b27d]
+ --- /localdev/pmilojevic/workspaces/opgen/python_env/bin/python(_PyFunction_Vectorcall+0x202) [0x5c96731d6ec2]
+ --- /localdev/pmilojevic/workspaces/opgen/python_env/bin/python(+0x1a1cd4) [0x5c9673107cd4]
+ --- /localdev/pmilojevic/workspaces/opgen/python_env/bin/python(_PyEval_EvalFrameDefault+0x2f1ed) [0x5c967325b27d]
+ --- /localdev/pmilojevic/workspaces/opgen/python_env/bin/python(_PyFunction_Vectorcall+0x202) [0x5c96731d6ec2]
+ --- /localdev/pmilojevic/workspaces/opgen/python_env/bin/python(+0x1a1cd4) [0x5c9673107cd4]
+ --- /localdev/pmilojevic/workspaces/opgen/python_env/bin/python(_PyEval_EvalFrameDefault+0x2f1ed) [0x5c967325b27d]
+ --- /localdev/pmilojevic/workspaces/opgen/python_env/bin/python(_PyFunction_Vectorcall+0x202) [0x5c96731d6ec2]
+ --- /localdev/pmilojevic/workspaces/opgen/python_env/bin/python(+0x1a1cd4) [0x5c9673107cd4]
+ --- /localdev/pmilojevic/workspaces/opgen/python_env/bin/python(+0x2fce77) [0x5c9673262e77]
+ --- /localdev/pmilojevic/workspaces/opgen/python_env/bin/python(_PyEval_EvalFrameDefault+0x4158) [0x5c96732301e8]
+ --- /localdev/pmilojevic/workspaces/opgen/python_env/bin/python(_PyFunction_Vectorcall+0x202) [0x5c96731d6ec2]
+ --- /localdev/pmilojevic/workspaces/opgen/python_env/bin/python(_PyEval_EvalFrameDefault+0x85fa) [0x5c967323468a]
+ --- /localdev/pmilojevic/workspaces/opgen/python_env/bin/python(_PyFunction_Vectorcall+0x202) [0x5c96731d6ec2]
+ --- /localdev/pmilojevic/workspaces/opgen/python_env/bin/python(+0x1a1cd4) [0x5c9673107cd4]
+ --- /localdev/pmilojevic/workspaces/opgen/python_env/bin/python(_PyEval_EvalFrameDefault+0x3165d) [0x5c967325d6ed]
+ --- /localdev/pmilojevic/workspaces/opgen/python_env/bin/python(_PyFunction_Vectorcall+0x202) [0x5c96731d6ec2]
+ --- /localdev/pmilojevic/workspaces/opgen/python_env/bin/python(+0x272ec0) [0x5c96731d8ec0]
+ --- /localdev/pmilojevic/workspaces/opgen/python_env/bin/python(+0x1a1cd4) [0x5c9673107cd4]
+ --- /localdev/pmilojevic/workspaces/opgen/python_env/bin/python(_PyEval_EvalFrameDefault+0x3165d) [0x5c967325d6ed]
+ --- /localdev/pmilojevic/workspaces/opgen/python_env/bin/python(_PyFunction_Vectorcall+0x202) [0x5c96731d6ec2]
+ --- /localdev/pmilojevic/workspaces/opgen/python_env/bin/python(_PyObject_Call_Prepend+0x115) [0x5c96732d4315]
+ --- /localdev/pmilojevic/workspaces/opgen/python_env/bin/python(+0x3a2096) [0x5c9673308096]
+ --- /localdev/pmilojevic/workspaces/opgen/python_env/bin/python(_PyObject_MakeTpCall+0x132) [0x5c96730c0782]
+ --- /localdev/pmilojevic/workspaces/opgen/python_env/bin/python(+0x2fce77) [0x5c9673262e77]
+ --- /localdev/pmilojevic/workspaces/opgen/python_env/bin/python(_PyEval_EvalFrameDefault+0x3d37) [0x5c967322fdc7]
+ --- /localdev/pmilojevic/workspaces/opgen/python_env/bin/python(_PyFunction_Vectorcall+0x202) [0x5c96731d6ec2]
+ --- /localdev/pmilojevic/workspaces/opgen/python_env/bin/python(+0x1a1cd4) [0x5c9673107cd4]
+ --- /localdev/pmilojevic/workspaces/opgen/python_env/bin/python(+0x2fce77) [0x5c9673262e77]
+ --- /localdev/pmilojevic/workspaces/opgen/python_env/bin/python(_PyEval_EvalFrameDefault+0x4158) [0x5c96732301e8]
+ --- /localdev/pmilojevic/workspaces/opgen/python_env/bin/python(_PyFunction_Vectorcall+0x202) [0x5c96731d6ec2]
+ --- /localdev/pmilojevic/workspaces/opgen/python_env/bin/python(+0x1a1cd4) [0x5c9673107cd4]
+ --- /localdev/pmilojevic/workspaces/opgen/python_env/bin/python(_PyEval_EvalFrameDefault+0x3165d) [0x5c967325d6ed]
+ --- /localdev/pmilojevic/workspaces/opgen/python_env/bin/python(+0x3d3f94) [0x5c9673339f94]
+ --- /localdev/pmilojevic/workspaces/opgen/python_env/bin/python(+0x3d1cf9) [0x5c9673337cf9]
+ --- /localdev/pmilojevic/workspaces/opgen/python_env/bin/python(+0x291cdf) [0x5c96731f7cdf]
+ --- /localdev/pmilojevic/workspaces/opgen/python_env/bin/python(+0x1a1cd4) [0x5c9673107cd4]
+ --- /localdev/pmilojevic/workspaces/opgen/python_env/bin/python(+0x2fced6) [0x5c9673262ed6]
+ --- /localdev/pmilojevic/workspaces/opgen/python_env/bin/python(_PyEval_EvalFrameDefault+0x4158) [0x5c96732301e8]
+ --- /localdev/pmilojevic/workspaces/opgen/python_env/bin/python(_PyFunction_Vectorcall+0x202) [0x5c96731d6ec2]
+ --- /localdev/pmilojevic/workspaces/opgen/python_env/bin/python(+0x1a1cd4) [0x5c9673107cd4]
+ --- /localdev/pmilojevic/workspaces/opgen/python_env/bin/python(+0x2fce77) [0x5c9673262e77]
+ --- /localdev/pmilojevic/workspaces/opgen/python_env/bin/python(_PyEval_EvalFrameDefault+0x4158) [0x5c96732301e8]
+ --- /localdev/pmilojevic/workspaces/opgen/python_env/bin/python(_PyFunction_Vectorcall+0x202) [0x5c96731d6ec2]
+ --- /localdev/pmilojevic/workspaces/opgen/python_env/bin/python(+0x1a1cd4) [0x5c9673107cd4]
+ --- /localdev/pmilojevic/workspaces/opgen/python_env/bin/python(+0x2fce77) [0x5c9673262e77]
+ --- /localdev/pmilojevic/workspaces/opgen/python_env/bin/python(_PyEval_EvalFrameDefault+0x3d37) [0x5c967322fdc7]
+ --- /localdev/pmilojevic/workspaces/opgen/python_env/bin/python(+0x3d3f94) [0x5c9673339f94]
+ --- /localdev/pmilojevic/workspaces/opgen/python_env/bin/python(+0x409b93) [0x5c967336fb93]
+ (dispatch_kernel_initializer.cpp:256)
+
+========================= 9 passed, 1 error in 13.65s ==========================
+2026-11-19 00:10:01.482 | info     |    BuildKernels | JIT cache stats: 71/78 hits (91.0%) [71 cached, 291 build-once dedup, 0 merged artifacts, 0 merged genfiles] (build_cache_telemetry.cpp:362)
+2026-11-19 00:10:01.482 | info     |    BuildKernels | JIT telemetry: 40 registered TelemetryTokens (build_cache_telemetry.cpp:510)
+2026-11-19 00:10:01.531 | info     |          Device | Closing user mode device drivers (tt_cluster.cpp:605)
+2026-11-19 00:10:01.531 | info     |             UMD | Closing devices in cluster (cluster.cpp:1496)
+2026-11-19 00:10:02.084 | info     |             UMD | Closing devices in cluster completed. (cluster.cpp:1506)
+2026-11-19 00:10:02.084 | info     |             UMD | Cluster destructor started. (cluster.cpp:1227)
+2026-11-19 00:10:02.084 | info     |             UMD | Cluster destructor completed. (cluster.cpp:1240)
+2026-11-19 00:10:02.333 | INFO     | __main__:main:490 - Copying /localdev/pmilojevic/workspaces/opgen/generated/profiler/.logs/tracy_profile_log_host.tracy to /localdev/pmilojevic/workspaces/opgen/build/profiler/build_wasm/traces/test_hsr_op_2026_11_19_00_10_02.tracy
+2026-11-19 00:10:02.336 | INFO     | __main__:main:493 - Copied /localdev/pmilojevic/workspaces/opgen/generated/profiler/.logs/tracy_profile_log_host.tracy to /localdev/pmilojevic/workspaces/opgen/build/profiler/build_wasm/traces/test_hsr_op_2026_11_19_00_10_02.tracy
+2026-11-19 00:10:02.337 | INFO     | __main__:main:502 - embed.tracy -> traces/test_hsr_op_2026_11_19_00_10_02.tracy
+2026-11-19 00:10:02.337 | INFO     | tracy.serve_wasm:launch_server_subprocess:310 - Launching tracy web app GUI server subprocess...
+2026-11-19 00:10:02.337 | INFO     | tracy.serve_wasm:launch_server_subprocess:313 - Tracy WASM web UI (open in browser): http://localhost:8080/ (WebSocket for live reload: ws://localhost:8081/)
+2026-11-19 00:10:02.337 | INFO     | tracy.serve_wasm:launch_server_subprocess:320 - Tracy WASM server already serving port 8080; reusing it (live-reload refreshes the browser).
+2026-11-19 00:10:03.898 | INFO     | tracy:generate_report:162 - Host side ops time report generated at /localdev/pmilojevic/workspaces/opgen/generated/profiler/.logs/tracy_ops_times.csv
+2026-11-19 00:10:03.964 | INFO     | tracy:generate_report:173 - Host side ops data report generated at /localdev/pmilojevic/workspaces/opgen/generated/profiler/.logs/tracy_ops_data.csv
+2026-11-19 00:10:03.964 | INFO     | tracy.process_ops_logs:import_tracy_op_logs:430 - Importing ops logs
+2026-11-19 00:10:04.926 | INFO     | tracy.perf_counter_analysis:get_device_op_data:420 - Getting device ops
+2026-11-19 00:10:04.927 | INFO     | tracy.process_ops_logs:append_device_data:995 - Appending device data
+Traceback (most recent call last):
+  File "/home/pmilojevic/.local/share/uv/python/cpython-3.10-linux-x86_64-gnu/lib/python3.10/runpy.py", line 196, in _run_module_as_main
+    return _run_code(code, main_globals, None,
+  File "/home/pmilojevic/.local/share/uv/python/cpython-3.10-linux-x86_64-gnu/lib/python3.10/runpy.py", line 86, in _run_code
+    exec(code, run_globals)
+  File "/localdev/pmilojevic/workspaces/opgen/tools/tracy/__main__.py", line 534, in <module>
+    main()
+  File "/localdev/pmilojevic/workspaces/opgen/tools/tracy/__main__.py", line 510, in main
+    generate_report(
+  File "/localdev/pmilojevic/workspaces/opgen/tools/tracy/__init__.py", line 175, in generate_report
+    process_ops(
+  File "/localdev/pmilojevic/workspaces/opgen/tools/tracy/process_ops_logs.py", line 1859, in process_ops
+    deviceOps, traceOps = append_device_data(
+  File "/localdev/pmilojevic/workspaces/opgen/tools/tracy/process_ops_logs.py", line 1006, in append_device_data
+    host_ops_by_device = _enrich_ops_from_perf_csv(host_ops_by_device, device_perf_by_device, traceReplays)
+  File "/localdev/pmilojevic/workspaces/opgen/tools/tracy/process_ops_logs.py", line 723, in _enrich_ops_from_perf_csv
+    assert candidates, (
+AssertionError: Device data missing: Op 1024 not present in cpp_device_perf_report.csv for device 0 (trace_id=None); the report has no rows at all for this device
+========================================
+PRECOMPILE: UP_FRONT_INLINE: collect pass over 9 item(s) took 2.5s
+PRECOMPILE: UP_FRONT_INLINE: compile route local (programs=9, farm_min=10)
+PRECOMPILE: UP_FRONT_COLLECT: 9 ops stashed across 9 bodies -> 9 unique programs (swallowed 0, skipped-capture 0)
+PRECOMPILE: UP_FRONT_COLLECT: fast-shallow from_torch — shape-only=27 fallback=0
+PRECOMPILE: UP_FRONT_COLLECT: 9 collected · 9 built · 0 already compiled in 0.4s (workers=64, errors=0) -> on-disk JIT cache warm
+PRECOMPILE: UP_FRONT_INLINE: compile step took 0.7s; starting the real pass
+SAFE_PYTEST: Resetting device...
+Resetting all PCI devices: [0, 1, 2, 3, 4, 5, 6, 7]
+[95m Re-initializing boards after reset.... [0m
+SAFE_PYTEST: Device reset complete
+SAFE_PYTEST_RESULT: HANG (exit code: 1)
+
+=== TRIAGE LOG ===
+
+dump_configuration.py:
+Scope,Name,Value
+environment,TTNN_OP_PROFILER,1
+environment,TT_METAL_CACHE,/localdev/pmilojevic/tt-metal-cache
+environment,TT_METAL_DEVICE_PROFILER,1
+environment,TT_METAL_DISABLE_XIP_DUMP,1
+environment,TT_METAL_DISPATCH_TIMEOUT_COMMAND_TO_EXECUTE,python3 /localdev/pmilojevic/workspaces/opgen/tools/tt-triage.py --disable-progress --skip-version-check --llm-output --llm-output-path=/localdev/pmilojevic/workspaces/opgen/generated/tt-triage/triage.txt > /tmp/safe-pytest-triage-1778232.log 2>&1
+environment,TT_METAL_HOME,/localdev/pmilojevic/workspaces/opgen
+environment,TT_METAL_OPERATION_TIMEOUT_SECONDS,5
+environment,TT_METAL_PROFILER_CPP_POST_PROCESS,1
+environment,TT_METAL_PROFILER_TRACE_TRACKING,1
+rtOptions,arc_debug_buffer_size,0
+rtOptions,arch_name,
+rtOptions,build_map_enabled,false
+rtOptions,cache_dir,/localdev/pmilojevic/tt-metal-cache/tt-metal-cache
+rtOptions,clear_dram,false
+rtOptions,clear_l1,false
+rtOptions,compile_hash_string,0000000000000_0nulloptnulloptnulloptnulloptnulloptnullopt_false_false_false_true_false_true_0_false_false_false_0
+rtOptions,core_grid_override_todeprecate,(unset)
+rtOptions,custom_fabric_mesh_graph_desc_path,
+rtOptions,disable_dma_ops,false
+rtOptions,disable_fabric_2_erisc_mode,false
+rtOptions,disable_precompiled_fw,false
+rtOptions,disable_sfploadmacro,false
+rtOptions,dispatch_core_config_type,WORKER
+rtOptions,dispatch_data_collection_enabled,false
+rtOptions,dispatch_progress_update_ms,100
+rtOptions,dispatch_timeout_command_to_execute,python3 /localdev/pmilojevic/workspaces/opgen/tools/tt-triage.py --disable-progress --skip-version-check --llm-output --llm-output-path=/localdev/pmilojevic/workspaces/opgen/generated/tt-triage/triage.txt > /tmp/safe-pytest-triage-1778232.log 2>&1
+rtOptions,dram_backed_cq,false
+rtOptions,dump_build_commands,false
+rtOptions,enable_2_erisc_mode,true
+rtOptions,enable_channel_trimming_capture,false
+rtOptions,enable_fabric_bw_telemetry,false
+rtOptions,enable_fabric_code_profiling_rx_ch_fwd,false
+rtOptions,enable_fabric_mesh_pass_through,false
+rtOptions,enable_fabric_telemetry,false
+rtOptions,enable_fabric_vc2,false
+rtOptions,erisc_iram_enabled,false
+rtOptions,experimental_noc_debug_dump_enabled,false
+rtOptions,fabric_kernel_opt_level,(unset)
+rtOptions,fabric_router_sync_timeout_ms,(unset)
+rtOptions,fabric_telemetry_channels_monitor_all,true
+rtOptions,fabric_telemetry_chips_monitor_all,true
+rtOptions,fabric_telemetry_enabled,false
+rtOptions,fabric_telemetry_eriscs_monitor_all,true
+rtOptions,fabric_telemetry_stats_mask,15
+rtOptions,fabric_trimming_override_path,
+rtOptions,fabric_trimming_profile_path,
+rtOptions,fast_dispatch,true
+rtOptions,feature_ATOMIC_DEBUG_DELAY_all_chips,true
+rtOptions,feature_ATOMIC_DEBUG_DELAY_enabled,false
+rtOptions,feature_ATOMIC_DEBUG_DELAY_file_name,
+rtOptions,feature_ATOMIC_DEBUG_DELAY_one_file_per_risc,false
+rtOptions,feature_ATOMIC_DEBUG_DELAY_prepend_device_core_risc,true
+rtOptions,feature_DPRINT_all_chips,true
+rtOptions,feature_DPRINT_enabled,false
+rtOptions,feature_DPRINT_file_name,
+rtOptions,feature_DPRINT_one_file_per_risc,false
+rtOptions,feature_DPRINT_prepend_device_core_risc,true
+rtOptions,feature_ENABLE_L1_DATA_CACHE_all_chips,true
+rtOptions,feature_ENABLE_L1_DATA_CACHE_enabled,false
+rtOptions,feature_ENABLE_L1_DATA_CACHE_file_name,
+rtOptions,feature_ENABLE_L1_DATA_CACHE_one_file_per_risc,false
+rtOptions,feature_ENABLE_L1_DATA_CACHE_prepend_device_core_risc,true
+rtOptions,feature_READ_DEBUG_DELAY_all_chips,true
+rtOptions,feature_READ_DEBUG_DELAY_enabled,false
+rtOptions,feature_READ_DEBUG_DELAY_file_name,
+rtOptions,feature_READ_DEBUG_DELAY_one_file_per_risc,false
+rtOptions,feature_READ_DEBUG_DELAY_prepend_device_core_risc,true
+rtOptions,feature_WRITE_DEBUG_DELAY_all_chips,true
+rtOptions,feature_WRITE_DEBUG_DELAY_enabled,false
+rtOptions,feature_WRITE_DEBUG_DELAY_file_name,
+rtOptions,feature_WRITE_DEBUG_DELAY_one_file_per_risc,false
+rtOptions,feature_WRITE_DEBUG_DELAY_prepend_device_core_risc,true
+rtOptions,force_context_reinit,false
+rtOptions,force_jit_compile,false
+rtOptions,gathering_enabled,false
+rtOptions,host_transfer_stats_enabled,false
+rtOptions,hw_cache_invalidation_enabled,false
+rtOptions,inspector_capture_tensor_specs,true
+rtOptions,inspector_enabled,true
+rtOptions,inspector_initialization_is_important,false
+rtOptions,inspector_log_mesh_buffers,false
+rtOptions,inspector_log_mesh_sockets,false
+rtOptions,inspector_log_path,/localdev/pmilojevic/workspaces/opgen/generated/inspector
+rtOptions,inspector_log_runtime_entries,false
+rtOptions,inspector_rpc_server_enabled,true
+rtOptions,inspector_rpc_server_host,localhost
+rtOptions,inspector_rpc_server_port,50051
+rtOptions,inspector_warn_on_write_exceptions,true
+rtOptions,jit_analytics_enabled,false
+rtOptions,kernel_dir,(unset)
+rtOptions,kernels_early_return,false
+rtOptions,kernels_nullified,false
+rtOptions,lightweight_kernel_asserts,false
+rtOptions,llk_asserts,false
+rtOptions,log_kernels_compilation_commands,false
+rtOptions,logs_dir,/localdev/pmilojevic/workspaces/opgen/
+rtOptions,mock_cluster_desc_path,
+rtOptions,mock_enabled,false
+rtOptions,num_hw_cqs,1
+rtOptions,numa_based_affinity,false
+rtOptions,profiler_buffer_usage_enabled,false
+rtOptions,profiler_cpp_post_process,true
+rtOptions,profiler_disable_dump_to_files,false
+rtOptions,profiler_disable_push_to_tracy,false
+rtOptions,profiler_do_dispatch_cores,false
+rtOptions,profiler_enabled,true
+rtOptions,profiler_mid_run_dump,false
+rtOptions,profiler_noc_events_enabled,false
+rtOptions,profiler_noc_events_report_path,
+rtOptions,profiler_perf_counter_mode,0
+rtOptions,profiler_program_support_count,1000
+rtOptions,profiler_sum,false
+rtOptions,profiler_sync_enabled,false
+rtOptions,profiler_trace_only,false
+rtOptions,profiler_trace_tracking,true
+rtOptions,record_noc_transfers,false
+rtOptions,relaxed_memory_ordering_disabled,false
+rtOptions,reliability_mode,(unset)
+rtOptions,riscv_debug_info_enabled,true
+rtOptions,root_dir,/localdev/pmilojevic/workspaces/opgen/
+rtOptions,serialize_inspector_on_dispatch_timeout,true
+rtOptions,simulator_enabled,false
+rtOptions,simulator_path,
+rtOptions,simulator_serve_over_sockets,false
+rtOptions,skip_eth_cores_with_retrain,false
+rtOptions,skip_loading_fw,false
+rtOptions,system_kernel_dir,/usr/share/tenstorrent/kernels/
+rtOptions,target_device,0
+rtOptions,test_mode_enabled,false
+rtOptions,timeout_duration_for_operations,5s
+rtOptions,tracy_mid_run_push,false
+rtOptions,use_mesh_graph_descriptor_2_0,false
+rtOptions,validate_kernel_binaries,false
+rtOptions,visible_devices,
+rtOptions,watcher_append,false
+rtOptions,watcher_auto_unpause,false
+rtOptions,watcher_debug_delay,0
+rtOptions,watcher_disabled_features,(empty)
+rtOptions,watcher_dump_all,false
+rtOptions,watcher_enabled,false
+rtOptions,watcher_hash,0000000000000
+rtOptions,watcher_interval,0
+rtOptions,watcher_noc_sanitize_linked_transaction,false
+rtOptions,watcher_noinline,false
+rtOptions,watcher_phys_coords,false
+rtOptions,watcher_skip_logging,false
+rtOptions,watcher_text_start,false
+ttnnConfig,cache_path,/home/pmilojevic/.cache/ttnn
+ttnnConfig,comparison_mode_pcc,0.9999
+ttnnConfig,comparison_mode_should_raise_exception,false
+ttnnConfig,enable_comparison_mode,false
+ttnnConfig,enable_detailed_buffer_report,false
+ttnnConfig,enable_detailed_tensor_report,false
+ttnnConfig,enable_fast_runtime_mode,true
+ttnnConfig,enable_graph_python_stack_traces,false
+ttnnConfig,enable_graph_report,false
+ttnnConfig,enable_logging,false
+ttnnConfig,enable_model_cache,false
+ttnnConfig,model_cache_path,/home/pmilojevic/.cache/ttnn/models
+ttnnConfig,report_name,std::nullopt
+ttnnConfig,root_report_path,generated/ttnn/reports
+ttnnConfig,strict_ccl_topology,false
+ttnnConfig,throw_exception_on_fallback,false
+ttnnConfig,tmp_dir,/tmp/ttnn
+ttnnConfig,validate_program_args,false
+ttnnConfig,verify_replicated_shards_on_dump,true
+
+check_cb_inactive.py:
+  pass
+
+check_dram_health.py:
+Dev,GDDR Inst,DDR Bank,Corrected Reads,Corrected Writes,Uncorrected Reads,Uncorrected Writes,Train,BIST,Endpoints,Temp Top,Temp Bot,Speed MT/s
+0,0,0,0,0,0,0,SUCCESS,SUCCESS,"0-0 (d0,0), 0-1 (d0,1), 0-11 (d0,2)",30,32,16000
+0,1,1,0,0,0,0,SUCCESS,SUCCESS,"0-2 (d1,0), 0-10 (d1,1), 0-3 (d1,2)",32,32,16000
+0,2,2,0,0,0,0,SUCCESS,SUCCESS,"0-9 (d2,0), 0-4 (d2,1), 0-8 (d2,2)",32,34,16000
+0,3,3,0,0,0,0,SUCCESS,SUCCESS,"0-5 (d3,0), 0-7 (d3,1), 0-6 (d3,2)",32,32,16000
+0,4,4,0,0,0,0,SUCCESS,SUCCESS,"9-0 (d4,0), 9-1 (d4,1), 9-11 (d4,2)",38,36,16000
+0,5,5,0,0,0,0,SUCCESS,SUCCESS,"9-2 (d5,0), 9-10 (d5,1), 9-3 (d5,2)",36,36,16000
+0,6,6,0,0,0,0,SUCCESS,SUCCESS,"9-9 (d6,0), 9-4 (d6,1), 9-8 (d6,2)",34,36,16000
+0,7,7,0,0,0,0,SUCCESS,SUCCESS,"9-5 (d7,0), 9-7 (d7,1), 9-6 (d7,2)",34,34,16000
+
+check_eth_status.py:
+Dev,Loc,Port Status,Link,Heartbeat,Retrain Count,CRC Errors,Corr CW,Uncorr CW,RX Link Up,ERR_STAT,TXQ Resends,RXQ Drops,ETH FW,FW Stage
+0,"6-1 (e0,8)",Up,Up,Released,0,0,6080952,0,Up,0x0,0,0,1.13.0,FW loop / FW loop
+0,"12-1 (e0,7)",Up,Up,Released,0,0,1528428,0,Up,0x0,0,0,1.13.0,FW loop / FW loop
+0,"13-1 (e0,6)",Up,Up,Released,0,0,1325254,0,Up,0x0,0,0,1.13.0,FW loop / FW loop
+0,"7-1 (e0,10)",Up,Up,Released,0,0,4171295,0,Up,0x0,0,0,1.13.0,FW loop / FW loop
+0,"4-1 (e0,5)",Up,Up,Released,0,0,282512,0,Up,0x0,0,0,1.13.0,FW loop / FW loop
+0,"3-1 (e0,4)",Up,Up,Released,0,0,1988918,0,Up,0x0,0,0,1.13.0,FW loop / FW loop
+
+check_l1_status.py:
+  pass
+
+check_noc_locations.py:
+  pass
+
+device_info.py:
+Dev,Tray/Board,Chip,ASIC,Arch,Board,Bus ID,PCI BDF,Unique ID,ARC FW,Postcode
+0,Board 0x4123191f1bc,0,0,blackhole,p150,0x01,0000:01:00.0,0x8246323e3780,19.16.1,N/A
+
+device_telemetry.py:
+Dev,AI Clk,ARC Clk,ASIC Temp,Board Temp,ETH Live,DDR Status,DDR Speed,ARC Uptime
+0,1350 MHz,800 MHz,36.6 C,0.0 C,0x16D00000 (6 live),0x55555555,16000 MT/s,0:10:53
+
+dump_op_mesh.py:
+R\C,C0,C1,C2,C3
+0,(Device 1)\n(unused),(Device 0)\n1: GenericOpDeviceOperation,(Device 2)\n(unused),(Device 3)\n(unused)
+1,(Device 5)\n(unused),(Device 4)\n(unused),(Device 6)\n(unused),(Device 7)\n(unused)
+
+dump_op_window.py:
+Op Id,Status,Op Name,Devices
+1,RUNNING,GenericOpDeviceOperation,0
+2,,GenericOpDeviceOperation,
+3,,GenericOpDeviceOperation,
+4,,GenericOpDeviceOperation,
+5,,GenericOpDeviceOperation,
+6,,GenericOpDeviceOperation,
+7,,GenericOpDeviceOperation,
+8,,GenericOpDeviceOperation,
+9,,GenericOpDeviceOperation,
+
+dump_running_operations.py:
+Op Id,Op Name,Op Params,Prev Op Id,Prev Op Name,Prev Op Params,Device Cnt,Core Cnt,Devices,Cores
+1,GenericOpDeviceOperation,"Tensor[0]\n  logical_shape: [1, 1, 32768, 64]\n  dtype: BFLOAT8_B\n  tile_shape: {32, 32}\n  face_shape: {16, 16}\n  num_faces: 4\n  memory_layout: HEIGHT_SHARDED\n  buffer_type: L1\n  shard_spec: ROUND_ROBIN_1D""},created_with_nd_shard_spec=0,per_core_allocation=0,range_lockstep_allocation=0\n  alignment: Alignment([32, 32]\n\nTensor[1]\n  logical_shape: [1, 1, 576, 64]\n  dtype: BFLOAT8_B\n  tile_shape: {32, 32}\n  face_shape: {16, 16}\n  num_faces: 4\n  memory_layout: INTERLEAVED\n  buffer_type: DRAM\n  shard_spec: none\n  nd_shard_spec: none\n  created_with_nd_shard_spec: 0\n  per_core_allocation: 0\n  range_lockstep_allocation: 0\n  alignment: [32, 32]\n\nTensor[2]\n  logical_shape: [1, 1, 1, 64]\n  dtype: BFLOAT8_B\n  tile_shape: {32, 32}\n  face_shape: {16, 16}\n  num_faces: 4\n  memory_layout: INTERLEAVED\n  buffer_type: DRAM\n  shard_spec: none\n  nd_shard_spec: none\n  created_with_nd_shard_spec: 0\n  per_core_allocation: 0\n  range_lockstep_allocation: 0\n  alignment: [32, 32]\n\nTensor[3]\n  logical_shape: [1, 1, 32768, 64]\n  dtype: BFLOAT8_B\n  tile_shape: {32, 32}\n  face_shape: {16, 16}\n  num_faces: 4\n  memory_layout: HEIGHT_SHARDED\n  buffer_type: L1\n  shard_spec: ROUND_ROBIN_1D""},created_with_nd_shard_spec=0,per_core_allocation=0,range_lockstep_allocation=0\n  alignment: Alignment([32, 32]\n\nTensor[4]\n  logical_shape: [1, 1, 32768, 64]\n  dtype: BFLOAT8_B\n  tile_shape: {32, 32}\n  face_shape: {16, 16}\n  num_faces: 4\n  memory_layout: HEIGHT_SHARDED\n  buffer_type: L1\n  shard_spec: ROUND_ROBIN_1D""},created_with_nd_shard_spec=0,per_core_allocation=0,range_lockstep_allocation=0\n  alignment: Alignment([32, 32]",N/A,N/A,N/A,1,6,0,"0:1-11 (0,9)\n0:14-10 (9,8)\n0:15-10 (10,8)\n0:2-11 (1,9)\n0:3-11 (2,9)\n..."
+
+check_binary_integrity.py:
+  pass
+
+check_core_magic.py:
+  pass
+
+check_noc_status.py:
+  fail
+    Device 0: eth [11-1 (e0,9)]: Mismatched state: \nerisc1 NOC0:     NIU_MST_RD_RESP_RECEIVED noc_reads_num_issued 40147 0\n    NIU_MST_NONPOSTED_WR_REQ_SENT noc_nonposted_writes_num_issued 488 0\n    NIU_MST_WR_ACK_RECEIVED noc_nonposted_writes_acked 488 0\n    NIU_MST_POSTED_WR_REQ_SENT noc_posted_writes_num_issued 5 0\n\nEither the device is not idle and is currently processing transactions, the kernel has incorrectly modified the NOC transaction counters, or the NoC is hung.
+
+dump_callstacks.py:
+Dev,Loc,RiscV,NEO,Kernel ID,Kernel Name,Subdevice,Go Message,Preload,Waypoint,PC,Kernel Callstack
+0,"16-2 (11,0)",brisc,N/A,1,cq_prefetch,0,GO,False,X,0x10f70,"\n#0 0x00010F70 in wrap_gt () at ./tt_metal/impl/dispatch/kernels/cq_common.hpp 62:39\n#1 CBWriter<0, 0, 206, 0, 114688, 638976, 4096, (SemScope)0>::acquire_pages () at ./tt_metal/impl/dispatch/kernels/cq_common.hpp 513:25\n#2 process_relay_inline_cmd<false, DispatchRelayInlineState> () at ./tt_metal/impl/dispatch/kernels/cq_prefetch.cpp 970:46\n#3 process_cmd<false, false> () at ./tt_metal/impl/dispatch/kernels/cq_prefetch.cpp 2588:100\n#4 kernel_main_hd () at ./tt_metal/impl/dispatch/kernels/cq_prefetch.cpp 3279:41"
+0,"16-3 (11,1)",brisc,N/A,2,cq_dispatch,0,GO,False,X,0xb9a8,\n#0 0x0000B9A8 in process_wait () at ./tt_metal/impl/dispatch/kernels/cq_dispatch.cpp 1135:22\n#1 process_cmd_d () at ./tt_metal/impl/dispatch/kernels/cq_dispatch.cpp 1365:25\n#2 kernel_main () at ./tt_metal/impl/dispatch/kernels/cq_dispatch.cpp 1697:44
+0,"16-3 (11,1)",trisc0,N/A,4,cq_dispatch_subordinate_compute,0,GO,False,X,0xe470,\n#0 0x0000E470 in dispatch_subordinate_realtime_profiler () at ./tt_metal/impl/dispatch/kernels/cq_realtime_profiler_dispatch_subordinate.hpp 66:13\n#1 kernel_main () at ./tt_metal/impl/dispatch/kernels/cq_dispatch_subordinate_compute.cpp 16:43\n#2 kernel_main () at ./tt_metal/impl/dispatch/kernels/cq_dispatch_subordinate_compute.cpp 14:6\n#3 run_kernel () at ./tt_metal/hw/ckernels/blackhole/metal/common/chlkc_list.h 38:16\n#4 _start () at ./tt_metal/hw/firmware/src/tt-1xx/trisck.cc 94:15
+0,"16-3 (11,1)",trisc1,N/A,4,cq_dispatch_subordinate_compute,0,GO,False,X,0xe8d0,\n#0 0x0000E8D0 in get_timestamp () at ./tt_metal/hw/inc/internal/tt-1xx/risc_common.h 239:36\n#1 dispatch_subordinate_telemetry () at ./tt_metal/impl/dispatch/kernels/cq_telemetry_dispatch_subordinate.hpp 86:51\n#2 kernel_main () at ./tt_metal/impl/dispatch/kernels/cq_dispatch_subordinate_compute.cpp 18:35\n#3 run_kernel () at ./tt_metal/hw/ckernels/blackhole/metal/common/chlkc_list.h 38:16\n#4 _start () at ./tt_metal/hw/firmware/src/tt-1xx/trisck.cc 94:15
+0,"16-3 (11,1)",trisc2,N/A,4,cq_dispatch_subordinate_compute,0,GO,False,X,0x7fec,\n#0 0x00007FEC in main () at ./tt_metal/hw/firmware/src/tt-1xx/trisc.cc 135:27
+0,"16-3 (11,1)",ncrisc,N/A,3,cq_dispatch_subordinate,0,GO,False,X,0xdad8,"\n#0 0x0000DAD8 in invalidate_l1_cache () at ./tt_metal/hw/inc/internal/tt-1xx/cache.h 16:5\n#1 cb_acquire_pages_dispatch_s<206, 1> () at ./tt_metal/impl/dispatch/kernels/cq_dispatch_subordinate.cpp 533:28\n#2 kernel_main () at ./tt_metal/impl/dispatch/kernels/cq_dispatch_subordinate.cpp 890:70\n#3 _start () at ./tt_metal/hw/firmware/src/tt-1xx/ncrisck.cc 73:16"
+0,"14-10 (9,8)",brisc,N/A,8,conv2d_3x3_writer,0,GO,True,X,0xb290,\n#0 0x0000B290 in at ./ttnn/ttnn/operations/conv2d_3x3/perf_experiments/height_server_read_split/op_copy/kernels/conv2d_3x3_writer.cpp 701:13
+0,"14-10 (9,8)",trisc0,N/A,9,conv2d_3x3_compute,0,GO,True,X,0xe720,"\n#0 0x0000E720 in llk_wait_tiles () at ./tt_metal/hw/ckernels/blackhole/metal/llk_io/llk_io_unpack.h 32:33\n#1 CircularBuffer::wait_front () at ./tt_metal/hw/inc/api/dataflow/circular_buffer.h 57:9\n#2 conv2d_3x3::kw_fold::run<7, 3, 4, 6, 5, 9, 13, 14, 15, 2, 2, 10, 1, 8, 1, 4, 2, true, 56, 1024, false, 53760, true, true> () at ./ttnn/ttnn/operations/conv2d_3x3/perf_experiments/height_server_read_split/op_copy/kernels/conv2d_3x3_kw_fold.hpp 498:43\n#3 kernel_main () at ./ttnn/ttnn/operations/conv2d_3x3/perf_experiments/height_server_read_split/op_copy/kernels/conv2d_3x3_compute.cpp 639:23\n#4 run_kernel () at ./tt_metal/hw/ckernels/blackhole/metal/common/chlkc_list.h 38:16\n#5 _start () at ./tt_metal/hw/firmware/src/tt-1xx/trisck.cc 94:15"
+0,"14-10 (9,8)",trisc1,N/A,9,conv2d_3x3_compute,0,GO,True,X,0xf8a8,"\n#0 0x0000F8A8 in conv2d_3x3::kw_fold::run<7, 3, 4, 6, 5, 9, 13, 14, 15, 2, 2, 10, 1, 8, 1, 4, 2, true, 56, 1024, false, 53760, true, true> () at ./ttnn/ttnn/operations/conv2d_3x3/perf_experiments/height_server_read_split/op_copy/kernels/conv2d_3x3_kw_fold.hpp 505:9\n#1 kernel_main () at ./ttnn/ttnn/operations/conv2d_3x3/perf_experiments/height_server_read_split/op_copy/kernels/conv2d_3x3_compute.cpp 639:23\n#2 run_kernel () at ./tt_metal/hw/ckernels/blackhole/metal/common/chlkc_list.h 38:16\n#3 _start () at ./tt_metal/hw/firmware/src/tt-1xx/trisck.cc 94:15"
+0,"14-10 (9,8)",trisc2,N/A,9,conv2d_3x3_compute,0,GO,True,X,0x110b0,"\n#0 0x000110B0 in _llk_pack_dest_section_done_<(ckernel::DstSync)0, true> () at ./tt_metal/tt-llk/tt_llk_blackhole/llk_lib/llk_pack_common.h 70:13\n#1 llk_pack_dest_section_done<true> () at ./tt_metal/hw/ckernels/blackhole/metal/llk_api/llk_pack_common_api.h 123:69\n#2 conv2d_3x3::kw_fold::run<7, 3, 4, 6, 5, 9, 13, 14, 15, 2, 2, 10, 1, 8, 1, 4, 2, true, 56, 1024, false, 53760, true, true> () at ./ttnn/ttnn/operations/conv2d_3x3/perf_experiments/height_server_read_split/op_copy/kernels/conv2d_3x3_kw_fold.hpp 524:21\n#3 kernel_main () at ./ttnn/ttnn/operations/conv2d_3x3/perf_experiments/height_server_read_split/op_copy/kernels/conv2d_3x3_compute.cpp 639:23\n#4 run_kernel () at ./tt_metal/hw/ckernels/blackhole/metal/common/chlkc_list.h 38:16\n#5 _start () at ./tt_metal/hw/firmware/src/tt-1xx/trisck.cc 94:15"
+0,"14-10 (9,8)",ncrisc,N/A,7,conv2d_3x3_reader,0,GO,True,X,0x61f0,\n#0 0x000061F0 in wait_for_brisc_notification () at ./tt_metal/hw/firmware/src/tt-1xx/ncrisc.cc 91:9\n#1 main () at ./tt_metal/hw/firmware/src/tt-1xx/ncrisc.cc 131:36
+0,"15-10 (10,8)",brisc,N/A,8,conv2d_3x3_writer,0,GO,True,X,0xb118,\n#0 0x0000B118 in at ./ttnn/ttnn/operations/conv2d_3x3/perf_experiments/height_server_read_split/op_copy/kernels/conv2d_3x3_writer.cpp 676:13
+0,"15-10 (10,8)",trisc0,N/A,9,conv2d_3x3_compute,0,GO,True,X,0xe860,"\n#0 0x0000E860 in llk_wait_tiles () at ./tt_metal/hw/ckernels/blackhole/metal/llk_io/llk_io_unpack.h 32:33\n#1 CircularBuffer::wait_front () at ./tt_metal/hw/inc/api/dataflow/circular_buffer.h 57:9\n#2 conv2d_3x3::kw_fold::run<7, 3, 4, 6, 5, 9, 13, 14, 15, 2, 2, 10, 1, 8, 1, 4, 2, true, 56, 1024, false, 53760, true, true> () at ./ttnn/ttnn/operations/conv2d_3x3/perf_experiments/height_server_read_split/op_copy/kernels/conv2d_3x3_kw_fold.hpp 436:47\n#3 kernel_main () at ./ttnn/ttnn/operations/conv2d_3x3/perf_experiments/height_server_read_split/op_copy/kernels/conv2d_3x3_compute.cpp 639:23\n#4 run_kernel () at ./tt_metal/hw/ckernels/blackhole/metal/common/chlkc_list.h 38:16\n#5 _start () at ./tt_metal/hw/firmware/src/tt-1xx/trisck.cc 94:15"
+0,"15-10 (10,8)",trisc1,N/A,9,conv2d_3x3_compute,0,GO,True,X,0xfcf8,"\n#0 0x0000FCF8 in conv2d_3x3::kw_fold::run<7, 3, 4, 6, 5, 9, 13, 14, 15, 2, 2, 10, 1, 8, 1, 4, 2, true, 56, 1024, false, 53760, true, true>::tag (19) at offset 71738::operator() () at ./ttnn/ttnn/operations/conv2d_3x3/perf_experiments/height_server_read_split/op_copy/kernels/conv2d_3x3_kw_fold.hpp 387:5"
+0,"15-10 (10,8)",trisc2,N/A,9,conv2d_3x3_compute,0,GO,True,X,0x11a10,"\n#0 0x00011A10 in conv2d_3x3::kw_fold::pack_zst () at ./ttnn/ttnn/operations/conv2d_3x3/perf_experiments/height_server_read_split/op_copy/kernels/conv2d_3x3_kw_fold.hpp 155:32\n#1 conv2d_3x3::kw_fold::run<7, 3, 4, 6, 5, 9, 13, 14, 15, 2, 2, 10, 1, 8, 1, 4, 2, true, 56, 1024, false, 53760, true, true>::tag (19) at offset 80125::operator() () at ./ttnn/ttnn/operations/conv2d_3x3/perf_experiments/height_server_read_split/op_copy/kernels/conv2d_3x3_kw_fold.hpp 377:29\n#2 conv2d_3x3::kw_fold::run<7, 3, 4, 6, 5, 9, 13, 14, 15, 2, 2, 10, 1, 8, 1, 4, 2, true, 56, 1024, false, 53760, true, true>::tag (19) at offset 80683::operator() () at ./ttnn/ttnn/operations/conv2d_3x3/perf_experiments/height_server_read_split/op_copy/kernels/conv2d_3x3_kw_fold.hpp 388:90"
+0,"15-10 (10,8)",ncrisc,N/A,7,conv2d_3x3_reader,0,GO,True,X,0x61d8,\n#0 0x000061D8 in wait_for_brisc_notification () at ./tt_metal/hw/firmware/src/tt-1xx/ncrisc.cc 80:9\n#1 main () at ./tt_metal/hw/firmware/src/tt-1xx/ncrisc.cc 131:36
+0,"1-11 (0,9)",brisc,N/A,8,conv2d_3x3_writer,0,GO,True,X,0xc440,\n#0 0x0000C440 in kernel_main::tag (19) at offset 110208::operator() () at ./ttnn/ttnn/operations/conv2d_3x3/perf_experiments/height_server_read_split/op_copy/kernels/conv2d_3x3_writer.cpp 712:5\n#1 kernel_main () at ./ttnn/ttnn/operations/conv2d_3x3/perf_experiments/height_server_read_split/op_copy/kernels/conv2d_3x3_writer.cpp 1255:22
+0,"1-11 (0,9)",trisc0,N/A,9,conv2d_3x3_compute,0,GO,True,X,0xeb58,"\n#0 0x0000EB58 in ckernel::reg_read () at ./tt_metal/tt-llk/tt_llk_blackhole/common/inc/ckernel.h 431:44\n#1 llk_wait_tiles () at ./tt_metal/hw/ckernels/blackhole/metal/llk_io/llk_io_unpack.h 31:53\n#2 CircularBuffer::wait_front () at ./tt_metal/hw/inc/api/dataflow/circular_buffer.h 57:9\n#3 conv2d_3x3::kw_fold::run<7, 3, 4, 6, 5, 9, 13, 14, 15, 2, 2, 10, 1, 8, 1, 4, 2, true, 56, 1024, false, 53760, true, true>::tag (19) at offset 61210::operator() () at ./ttnn/ttnn/operations/conv2d_3x3/perf_experiments/height_server_read_split/op_copy/kernels/conv2d_3x3_kw_fold.hpp 336:42\n#4 conv2d_3x3::kw_fold::run<7, 3, 4, 6, 5, 9, 13, 14, 15, 2, 2, 10, 1, 8, 1, 4, 2, true, 56, 1024, false, 53760, true, true>::tag (19) at offset 61767::operator() () at ./ttnn/ttnn/operations/conv2d_3x3/perf_experiments/height_server_read_split/op_copy/kernels/conv2d_3x3_kw_fold.hpp 388:90"
+0,"1-11 (0,9)",trisc1,N/A,9,conv2d_3x3_compute,0,GO,True,X,0xfd30,"\n#0 0x0000FD30 in conv2d_3x3::kw_fold::run<7, 3, 4, 6, 5, 9, 13, 14, 15, 2, 2, 10, 1, 8, 1, 4, 2, true, 56, 1024, false, 53760, true, true>::tag (19) at offset 71181::operator() () at ./ttnn/ttnn/operations/conv2d_3x3/perf_experiments/height_server_read_split/op_copy/kernels/conv2d_3x3_kw_fold.hpp 354:31\n#1 conv2d_3x3::kw_fold::run<7, 3, 4, 6, 5, 9, 13, 14, 15, 2, 2, 10, 1, 8, 1, 4, 2, true, 56, 1024, false, 53760, true, true>::tag (19) at offset 71738::operator() () at ./ttnn/ttnn/operations/conv2d_3x3/perf_experiments/height_server_read_split/op_copy/kernels/conv2d_3x3_kw_fold.hpp 388:90"
+0,"1-11 (0,9)",trisc2,N/A,9,conv2d_3x3_compute,0,GO,True,X,0x11a60,"\n#0 0x00011A60 in _llk_pack_dest_section_done_<(ckernel::DstSync)0, true> () at ./tt_metal/tt-llk/tt_llk_blackhole/llk_lib/llk_pack_common.h 79:13\n#1 llk_pack_dest_section_done<true> () at ./tt_metal/hw/ckernels/blackhole/metal/llk_api/llk_pack_common_api.h 123:69\n#2 ckernel::tile_regs_release<> () at ./tt_metal/hw/inc/api/compute/reg_api.h 107:5\n#3 conv2d_3x3::kw_fold::run<7, 3, 4, 6, 5, 9, 13, 14, 15, 2, 2, 10, 1, 8, 1, 4, 2, true, 56, 1024, false, 53760, true, true>::tag (19) at offset 80125::operator() () at ./ttnn/ttnn/operations/conv2d_3x3/perf_experiments/height_server_read_split/op_copy/kernels/conv2d_3x3_kw_fold.hpp 381:38\n#4 conv2d_3x3::kw_fold::run<7, 3, 4, 6, 5, 9, 13, 14, 15, 2, 2, 10, 1, 8, 1, 4, 2, true, 56, 1024, false, 53760, true, true>::tag (19) at offset 80683::operator() () at ./ttnn/ttnn/operations/conv2d_3x3/perf_experiments/height_server_read_split/op_copy/kernels/conv2d_3x3_kw_fold.hpp 388:90"
+0,"1-11 (0,9)",ncrisc,N/A,7,conv2d_3x3_reader,0,GO,True,X,0xd868,\n#0 0x0000D868 in invalidate_l1_cache () at ./tt_metal/hw/inc/internal/tt-1xx/cache.h 14:44\n#1 noc_semaphore_wait_min () at ./tt_metal/hw/inc/api/dataflow/dataflow_api.h 2148:32\n#2 semaphore_detail::wait_min<(ProgrammableCoreType)0> () at ./tt_metal/hw/inc/api/dataflow/semaphore_dm_impl.h 225:31\n#3 Semaphore<(ProgrammableCoreType)0>::wait_min () at ./tt_metal/hw/inc/api/semaphore.h 137:46\n#4 kernel_main::tag (19) at offset 72124::operator() () at ./ttnn/ttnn/operations/conv2d_3x3/perf_experiments/height_server_read_split/op_copy/kernels/conv2d_3x3_reader.cpp 714:71
+0,"2-11 (1,9)",brisc,N/A,8,conv2d_3x3_writer,0,GO,True,X,0xc440,\n#0 0x0000C440 in kernel_main::tag (19) at offset 110208::operator() () at ./ttnn/ttnn/operations/conv2d_3x3/perf_experiments/height_server_read_split/op_copy/kernels/conv2d_3x3_writer.cpp 712:5\n#1 kernel_main () at ./ttnn/ttnn/operations/conv2d_3x3/perf_experiments/height_server_read_split/op_copy/kernels/conv2d_3x3_writer.cpp 1255:22
+0,"2-11 (1,9)",trisc0,N/A,9,conv2d_3x3_compute,0,GO,True,X,0xeb5c,"\n#0 0x0000EB5C in llk_wait_tiles () at ./tt_metal/hw/ckernels/blackhole/metal/llk_io/llk_io_unpack.h 32:19\n#1 CircularBuffer::wait_front () at ./tt_metal/hw/inc/api/dataflow/circular_buffer.h 57:9\n#2 conv2d_3x3::kw_fold::run<7, 3, 4, 6, 5, 9, 13, 14, 15, 2, 2, 10, 1, 8, 1, 4, 2, true, 56, 1024, false, 53760, true, true>::tag (19) at offset 61210::operator() () at ./ttnn/ttnn/operations/conv2d_3x3/perf_experiments/height_server_read_split/op_copy/kernels/conv2d_3x3_kw_fold.hpp 336:42\n#3 conv2d_3x3::kw_fold::run<7, 3, 4, 6, 5, 9, 13, 14, 15, 2, 2, 10, 1, 8, 1, 4, 2, true, 56, 1024, false, 53760, true, true>::tag (19) at offset 61767::operator() () at ./ttnn/ttnn/operations/conv2d_3x3/perf_experiments/height_server_read_split/op_copy/kernels/conv2d_3x3_kw_fold.hpp 388:90"
+0,"2-11 (1,9)",trisc1,N/A,9,conv2d_3x3_compute,0,GO,True,X,0xfd30,"\n#0 0x0000FD30 in conv2d_3x3::kw_fold::run<7, 3, 4, 6, 5, 9, 13, 14, 15, 2, 2, 10, 1, 8, 1, 4, 2, true, 56, 1024, false, 53760, true, true>::tag (19) at offset 71181::operator() () at ./ttnn/ttnn/operations/conv2d_3x3/perf_experiments/height_server_read_split/op_copy/kernels/conv2d_3x3_kw_fold.hpp 354:31\n#1 conv2d_3x3::kw_fold::run<7, 3, 4, 6, 5, 9, 13, 14, 15, 2, 2, 10, 1, 8, 1, 4, 2, true, 56, 1024, false, 53760, true, true>::tag (19) at offset 71738::operator() () at ./ttnn/ttnn/operations/conv2d_3x3/perf_experiments/height_server_read_split/op_copy/kernels/conv2d_3x3_kw_fold.hpp 388:90"
+0,"2-11 (1,9)",trisc2,N/A,9,conv2d_3x3_compute,0,GO,True,X,0x119fc,"\n#0 0x000119FC in conv2d_3x3::kw_fold::pack_zst () at ./ttnn/ttnn/operations/conv2d_3x3/perf_experiments/height_server_read_split/op_copy/kernels/conv2d_3x3_kw_fold.hpp 155:5\n#1 conv2d_3x3::kw_fold::run<7, 3, 4, 6, 5, 9, 13, 14, 15, 2, 2, 10, 1, 8, 1, 4, 2, true, 56, 1024, false, 53760, true, true>::tag (19) at offset 80125::operator() () at ./ttnn/ttnn/operations/conv2d_3x3/perf_experiments/height_server_read_split/op_copy/kernels/conv2d_3x3_kw_fold.hpp 377:29\n#2 conv2d_3x3::kw_fold::run<7, 3, 4, 6, 5, 9, 13, 14, 15, 2, 2, 10, 1, 8, 1, 4, 2, true, 56, 1024, false, 53760, true, true>::tag (19) at offset 80683::operator() () at ./ttnn/ttnn/operations/conv2d_3x3/perf_experiments/height_server_read_split/op_copy/kernels/conv2d_3x3_kw_fold.hpp 388:90"
+0,"2-11 (1,9)",ncrisc,N/A,7,conv2d_3x3_reader,0,GO,True,X,0xd870,\n#0 0x0000D870 in noc_semaphore_wait_min () at ./tt_metal/hw/inc/api/dataflow/dataflow_api.h 2149:19\n#1 semaphore_detail::wait_min<(ProgrammableCoreType)0> () at ./tt_metal/hw/inc/api/dataflow/semaphore_dm_impl.h 225:31\n#2 Semaphore<(ProgrammableCoreType)0>::wait_min () at ./tt_metal/hw/inc/api/semaphore.h 137:46\n#3 kernel_main::tag (19) at offset 72124::operator() () at ./ttnn/ttnn/operations/conv2d_3x3/perf_experiments/height_server_read_split/op_copy/kernels/conv2d_3x3_reader.cpp 714:71
+0,"3-11 (2,9)",brisc,N/A,8,conv2d_3x3_writer,0,GO,True,X,0xb368,\n#0 0x0000B368 in at ./ttnn/ttnn/operations/conv2d_3x3/perf_experiments/height_server_read_split/op_copy/kernels/conv2d_3x3_writer.cpp 696:25
+0,"3-11 (2,9)",trisc0,N/A,9,conv2d_3x3_compute,0,GO,True,X,0xeb5c,"\n#0 0x0000EB5C in llk_wait_tiles () at ./tt_metal/hw/ckernels/blackhole/metal/llk_io/llk_io_unpack.h 32:19\n#1 CircularBuffer::wait_front () at ./tt_metal/hw/inc/api/dataflow/circular_buffer.h 57:9\n#2 conv2d_3x3::kw_fold::run<7, 3, 4, 6, 5, 9, 13, 14, 15, 2, 2, 10, 1, 8, 1, 4, 2, true, 56, 1024, false, 53760, true, true>::tag (19) at offset 61210::operator() () at ./ttnn/ttnn/operations/conv2d_3x3/perf_experiments/height_server_read_split/op_copy/kernels/conv2d_3x3_kw_fold.hpp 336:42\n#3 conv2d_3x3::kw_fold::run<7, 3, 4, 6, 5, 9, 13, 14, 15, 2, 2, 10, 1, 8, 1, 4, 2, true, 56, 1024, false, 53760, true, true>::tag (19) at offset 61767::operator() () at ./ttnn/ttnn/operations/conv2d_3x3/perf_experiments/height_server_read_split/op_copy/kernels/conv2d_3x3_kw_fold.hpp 388:90"
+0,"3-11 (2,9)",trisc1,N/A,9,conv2d_3x3_compute,0,GO,True,X,0xfd30,"\n#0 0x0000FD30 in conv2d_3x3::kw_fold::run<7, 3, 4, 6, 5, 9, 13, 14, 15, 2, 2, 10, 1, 8, 1, 4, 2, true, 56, 1024, false, 53760, true, true>::tag (19) at offset 71181::operator() () at ./ttnn/ttnn/operations/conv2d_3x3/perf_experiments/height_server_read_split/op_copy/kernels/conv2d_3x3_kw_fold.hpp 354:31\n#1 conv2d_3x3::kw_fold::run<7, 3, 4, 6, 5, 9, 13, 14, 15, 2, 2, 10, 1, 8, 1, 4, 2, true, 56, 1024, false, 53760, true, true>::tag (19) at offset 71738::operator() () at ./ttnn/ttnn/operations/conv2d_3x3/perf_experiments/height_server_read_split/op_copy/kernels/conv2d_3x3_kw_fold.hpp 388:90"
+0,"3-11 (2,9)",trisc2,N/A,9,conv2d_3x3_compute,0,GO,True,X,0x119fc,"\n#0 0x000119FC in conv2d_3x3::kw_fold::pack_zst () at ./ttnn/ttnn/operations/conv2d_3x3/perf_experiments/height_server_read_split/op_copy/kernels/conv2d_3x3_kw_fold.hpp 155:5\n#1 conv2d_3x3::kw_fold::run<7, 3, 4, 6, 5, 9, 13, 14, 15, 2, 2, 10, 1, 8, 1, 4, 2, true, 56, 1024, false, 53760, true, true>::tag (19) at offset 80125::operator() () at ./ttnn/ttnn/operations/conv2d_3x3/perf_experiments/height_server_read_split/op_copy/kernels/conv2d_3x3_kw_fold.hpp 377:29\n#2 conv2d_3x3::kw_fold::run<7, 3, 4, 6, 5, 9, 13, 14, 15, 2, 2, 10, 1, 8, 1, 4, 2, true, 56, 1024, false, 53760, true, true>::tag (19) at offset 80683::operator() () at ./ttnn/ttnn/operations/conv2d_3x3/perf_experiments/height_server_read_split/op_copy/kernels/conv2d_3x3_kw_fold.hpp 388:90"
+0,"3-11 (2,9)",ncrisc,N/A,7,conv2d_3x3_reader,0,GO,True,X,0xd86c,\n#0 0x0000D86C in noc_semaphore_wait_min () at ./tt_metal/hw/inc/api/dataflow/dataflow_api.h 2149:30\n#1 semaphore_detail::wait_min<(ProgrammableCoreType)0> () at ./tt_metal/hw/inc/api/dataflow/semaphore_dm_impl.h 225:31\n#2 Semaphore<(ProgrammableCoreType)0>::wait_min () at ./tt_metal/hw/inc/api/semaphore.h 137:46\n#3 kernel_main::tag (19) at offset 72124::operator() () at ./ttnn/ttnn/operations/conv2d_3x3/perf_experiments/height_server_read_split/op_copy/kernels/conv2d_3x3_reader.cpp 714:71
+0,"4-11 (3,9)",brisc,N/A,8,conv2d_3x3_writer,0,GO,True,X,0xb208,\n#0 0x0000B208 in at ./ttnn/ttnn/operations/conv2d_3x3/perf_experiments/height_server_read_split/op_copy/kernels/conv2d_3x3_writer.cpp 691:9
+0,"4-11 (3,9)",trisc0,N/A,9,conv2d_3x3_compute,0,GO,True,X,0xe860,"\n#0 0x0000E860 in llk_wait_tiles () at ./tt_metal/hw/ckernels/blackhole/metal/llk_io/llk_io_unpack.h 32:33\n#1 CircularBuffer::wait_front () at ./tt_metal/hw/inc/api/dataflow/circular_buffer.h 57:9\n#2 conv2d_3x3::kw_fold::run<7, 3, 4, 6, 5, 9, 13, 14, 15, 2, 2, 10, 1, 8, 1, 4, 2, true, 56, 1024, false, 53760, true, true> () at ./ttnn/ttnn/operations/conv2d_3x3/perf_experiments/height_server_read_split/op_copy/kernels/conv2d_3x3_kw_fold.hpp 436:47\n#3 kernel_main () at ./ttnn/ttnn/operations/conv2d_3x3/perf_experiments/height_server_read_split/op_copy/kernels/conv2d_3x3_compute.cpp 639:23\n#4 run_kernel () at ./tt_metal/hw/ckernels/blackhole/metal/common/chlkc_list.h 38:16\n#5 _start () at ./tt_metal/hw/firmware/src/tt-1xx/trisck.cc 94:15"
+0,"4-11 (3,9)",trisc1,N/A,9,conv2d_3x3_compute,0,GO,True,X,0x101c8,"\n#0 0x000101C8 in conv2d_3x3::kw_fold::run<7, 3, 4, 6, 5, 9, 13, 14, 15, 2, 2, 10, 1, 8, 1, 4, 2, true, 56, 1024, false, 53760, true, true>::tag (19) at offset 71181::operator() () at ./ttnn/ttnn/operations/conv2d_3x3/perf_experiments/height_server_read_split/op_copy/kernels/conv2d_3x3_kw_fold.hpp 348:38\n#1 conv2d_3x3::kw_fold::run<7, 3, 4, 6, 5, 9, 13, 14, 15, 2, 2, 10, 1, 8, 1, 4, 2, true, 56, 1024, false, 53760, true, true>::tag (19) at offset 71738::operator() () at ./ttnn/ttnn/operations/conv2d_3x3/perf_experiments/height_server_read_split/op_copy/kernels/conv2d_3x3_kw_fold.hpp 388:90"
+0,"4-11 (3,9)",trisc2,N/A,9,conv2d_3x3_compute,0,GO,True,X,0x119fc,"\n#0 0x000119FC in conv2d_3x3::kw_fold::pack_zst () at ./ttnn/ttnn/operations/conv2d_3x3/perf_experiments/height_server_read_split/op_copy/kernels/conv2d_3x3_kw_fold.hpp 155:5\n#1 conv2d_3x3::kw_fold::run<7, 3, 4, 6, 5, 9, 13, 14, 15, 2, 2, 10, 1, 8, 1, 4, 2, true, 56, 1024, false, 53760, true, true>::tag (19) at offset 80125::operator() () at ./ttnn/ttnn/operations/conv2d_3x3/perf_experiments/height_server_read_split/op_copy/kernels/conv2d_3x3_kw_fold.hpp 377:29\n#2 conv2d_3x3::kw_fold::run<7, 3, 4, 6, 5, 9, 13, 14, 15, 2, 2, 10, 1, 8, 1, 4, 2, true, 56, 1024, false, 53760, true, true>::tag (19) at offset 80683::operator() () at ./ttnn/ttnn/operations/conv2d_3x3/perf_experiments/height_server_read_split/op_copy/kernels/conv2d_3x3_kw_fold.hpp 388:90"
+0,"4-11 (3,9)",ncrisc,N/A,7,conv2d_3x3_reader,0,GO,True,X,0x61f4,\n#0 0x000061F4 in wait_for_brisc_notification () at ./tt_metal/hw/firmware/src/tt-1xx/ncrisc.cc 92:5\n#1 main () at ./tt_metal/hw/firmware/src/tt-1xx/ncrisc.cc 131:36
+0,"16-11 (11,9)",brisc,N/A,5,cq_realtime_profiler,0,GO,False,X,0xa854,\n#0 0x0000A854 in realtime_profiler_drain_records () at ./tt_metal/impl/dispatch/kernels/cq_realtime_profiler.cpp 150:68
+0,"16-11 (11,9)",ncrisc,N/A,6,cq_realtime_profiler_push,0,GO,False,X,0xabe4,\n#0 0x0000ABE4 in kernel_main () at ./tt_metal/impl/dispatch/kernels/cq_realtime_profiler_push.cpp 155:30\n#1 _start () at ./tt_metal/hw/firmware/src/tt-1xx/ncrisck.cc 73:16
+
+dump_circular_buffers.py:
+Dev,Loc,CB,Kind,Address,Size,Page Size,Size (pages),Pushed,Popped,Occupancy
+0,"14-10 (9,8)",3,local,0x2a5c0,39168,1088,36,36,0,36
+0,"14-10 (9,8)",4,local,0x4eec0,2176,1088,2,2,2,0
+0,"14-10 (9,8)",5,local,0x33ec0,110592,4096,27,0,0,0
+0,"14-10 (9,8)",6,local,0x175600,21760,1088,20,0,0,0
+0,"14-10 (9,8)",7,local,0x1b7c0,60928,1088,56,56,0,56
+0,"14-10 (9,8)",9,local,0x4f740,1024,512,2,2,0,2
+0,"14-10 (9,8)",11,local,0x4fc00,4096,128,32,0,0,0
+0,"14-10 (9,8)",13,local,0x4fb40,16,16,1,1,0,1
+0,"14-10 (9,8)",14,local,0x4fb80,48,16,3,3,3,0
+0,"14-10 (9,8)",15,local,0x4fbc0,48,16,3,2,0,2
+0,"15-10 (10,8)",3,local,0x2a5c0,39168,1088,36,36,0,36
+0,"15-10 (10,8)",4,local,0x4eec0,2176,1088,2,2,2,0
+0,"15-10 (10,8)",5,local,0x33ec0,110592,4096,27,0,0,0
+0,"15-10 (10,8)",6,local,0x175600,21760,1088,20,0,0,0
+0,"15-10 (10,8)",7,local,0x1b7c0,60928,1088,56,56,0,56
+0,"15-10 (10,8)",9,local,0x4f740,1024,512,2,2,0,2
+0,"15-10 (10,8)",11,local,0x4fc00,4096,128,32,0,0,0
+0,"15-10 (10,8)",13,local,0x4fb40,16,16,1,0,0,0
+0,"15-10 (10,8)",14,local,0x4fb80,48,16,3,1,1,0
+0,"15-10 (10,8)",15,local,0x4fbc0,48,16,3,0,0,0
+0,"1-11 (0,9)",3,local,0x2a5c0,39168,1088,36,36,0,36
+0,"1-11 (0,9)",4,local,0x4eec0,2176,1088,2,2,0,2
+0,"1-11 (0,9)",5,local,0x33ec0,110592,4096,27,0,0,0
+0,"1-11 (0,9)",6,local,0x175600,21760,1088,20,0,0,0
+0,"1-11 (0,9)",7,local,0x1b7c0,60928,1088,56,32,0,32
+0,"1-11 (0,9)",9,local,0x4f740,1024,512,2,0,0,0
+0,"1-11 (0,9)",11,local,0x4fc00,4096,128,32,0,0,0
+0,"1-11 (0,9)",13,local,0x4fb40,16,16,1,0,0,0
+0,"1-11 (0,9)",14,local,0x4fb80,48,16,3,0,0,0
+0,"1-11 (0,9)",15,local,0x4fbc0,48,16,3,0,0,0
+0,"2-11 (1,9)",3,local,0x2a5c0,39168,1088,36,36,0,36
+0,"2-11 (1,9)",4,local,0x4eec0,2176,1088,2,2,0,2
+0,"2-11 (1,9)",5,local,0x33ec0,110592,4096,27,0,0,0
+0,"2-11 (1,9)",6,local,0x175600,21760,1088,20,0,0,0
+0,"2-11 (1,9)",7,local,0x1b7c0,60928,1088,56,32,0,32
+0,"2-11 (1,9)",9,local,0x4f740,1024,512,2,0,0,0
+0,"2-11 (1,9)",11,local,0x4fc00,4096,128,32,0,0,0
+0,"2-11 (1,9)",13,local,0x4fb40,16,16,1,0,0,0
+0,"2-11 (1,9)",14,local,0x4fb80,48,16,3,0,0,0
+0,"2-11 (1,9)",15,local,0x4fbc0,48,16,3,0,0,0
+0,"3-11 (2,9)",3,local,0x2a5c0,39168,1088,36,36,0,36
+0,"3-11 (2,9)",4,local,0x4eec0,2176,1088,2,2,0,2
+0,"3-11 (2,9)",5,local,0x33ec0,110592,4096,27,0,0,0
+0,"3-11 (2,9)",6,local,0x175600,21760,1088,20,0,0,0
+0,"3-11 (2,9)",7,local,0x1b7c0,60928,1088,56,32,0,32
+0,"3-11 (2,9)",9,local,0x4f740,1024,512,2,0,0,0
+0,"3-11 (2,9)",11,local,0x4fc00,4096,128,32,0,0,0
+0,"3-11 (2,9)",13,local,0x4fb40,16,16,1,0,0,0
+0,"3-11 (2,9)",14,local,0x4fb80,48,16,3,0,0,0
+0,"3-11 (2,9)",15,local,0x4fbc0,48,16,3,1,0,1
+0,"4-11 (3,9)",3,local,0x2a5c0,39168,1088,36,36,0,36
+0,"4-11 (3,9)",4,local,0x4eec0,2176,1088,2,2,2,0
+0,"4-11 (3,9)",5,local,0x33ec0,110592,4096,27,0,0,0
+0,"4-11 (3,9)",6,local,0x175600,21760,1088,20,0,0,0
+0,"4-11 (3,9)",7,local,0x1b7c0,60928,1088,56,56,0,56
+0,"4-11 (3,9)",9,local,0x4f740,1024,512,2,2,0,2
+0,"4-11 (3,9)",11,local,0x4fc00,4096,128,32,0,0,0
+0,"4-11 (3,9)",13,local,0x4fb40,16,16,1,0,0,0
+0,"4-11 (3,9)",14,local,0x4fb80,48,16,3,1,1,0
+0,"4-11 (3,9)",15,local,0x4fbc0,48,16,3,0,0,0
+
+dump_fabric_stream_regs.py:
+  pass
+
+dump_fast_dispatch.py:
+Dev,Loc,RiscV,NEO,Kernel Name,worker_type,cq_id,servicing_device_id
+0,"16-2 (11,0)",brisc,N/A,cq_prefetch,PREFETCH_HD,0,0
+0,"16-3 (11,1)",brisc,N/A,cq_dispatch,DISPATCH_HD,0,0
+
+dump_lightweight_asserts.py:
+  pass
+
+dump_mesh_sockets.py:
+  pass
+
+dump_watcher_ringbuffer.py:
+  pass
+
+firmware_versions.py:
+Dev,ETH FW,DM App FW,DM BL FW,Flash Bundle,CM FW
+0,1.13.0,0.32.1.0,0.0.0.0,19.16.1.0,0.38.1.0
+
+dump_semaphores.py:
+Dev,Loc,Kind,Id,Address,Value,Initial
+0,"16-2 (11,0)",program,0,0xa3b0,768,128
+0,"16-2 (11,0)",program,1,0xa3c0,1,0
+0,"16-2 (11,0)",program,2,0xa3d0,131,128
+0,"16-3 (11,1)",program,0,0xa3b0,765,0
+0,"16-3 (11,1)",program,1,0xa3c0,3,0
+0,"16-3 (11,1)",program,2,0xa3d0,0,0
+0,"14-10 (9,8)",program,0,0xa450,3,0
+0,"14-10 (9,8)",program,1,0xa460,3,0
+0,"14-10 (9,8)",program,2,0xa470,0,0
+0,"14-10 (9,8)",program,3,0xa480,0,0
+0,"14-10 (9,8)",program,4,0xa490,0,0
+0,"14-10 (9,8)",program,5,0xa4a0,0,0
+0,"14-10 (9,8)",program,6,0xa4b0,1,0
+0,"14-10 (9,8)",program,7,0xa4c0,1,0
+0,"14-10 (9,8)",program,8,0xa4d0,1,0
+0,"15-10 (10,8)",program,0,0xa450,3,0
+0,"15-10 (10,8)",program,1,0xa460,3,0
+0,"15-10 (10,8)",program,2,0xa470,0,0
+0,"15-10 (10,8)",program,3,0xa480,0,0
+0,"15-10 (10,8)",program,4,0xa490,0,0
+0,"15-10 (10,8)",program,5,0xa4a0,0,0
+0,"15-10 (10,8)",program,6,0xa4b0,1,0
+0,"15-10 (10,8)",program,7,0xa4c0,1,0
+0,"15-10 (10,8)",program,8,0xa4d0,0,0
+0,"1-11 (0,9)",program,0,0xa450,0,0
+0,"1-11 (0,9)",program,1,0xa460,3,0
+0,"1-11 (0,9)",program,2,0xa470,0,0
+0,"1-11 (0,9)",program,3,0xa480,0,0
+0,"1-11 (0,9)",program,4,0xa490,0,0
+0,"1-11 (0,9)",program,5,0xa4a0,0,0
+0,"1-11 (0,9)",program,6,0xa4b0,1,0
+0,"1-11 (0,9)",program,7,0xa4c0,0,0
+0,"1-11 (0,9)",program,8,0xa4d0,0,0
+0,"2-11 (1,9)",program,0,0xa450,0,0
+0,"2-11 (1,9)",program,1,0xa460,3,0
+0,"2-11 (1,9)",program,2,0xa470,0,0
+0,"2-11 (1,9)",program,3,0xa480,0,0
+0,"2-11 (1,9)",program,4,0xa490,0,0
+0,"2-11 (1,9)",program,5,0xa4a0,0,0
+0,"2-11 (1,9)",program,6,0xa4b0,1,0
+0,"2-11 (1,9)",program,7,0xa4c0,0,0
+0,"2-11 (1,9)",program,8,0xa4d0,0,0
+0,"3-11 (2,9)",program,0,0xa450,0,0
+0,"3-11 (2,9)",program,1,0xa460,2,0
+0,"3-11 (2,9)",program,2,0xa470,0,0
+0,"3-11 (2,9)",program,3,0xa480,0,0
+0,"3-11 (2,9)",program,4,0xa490,0,0
+0,"3-11 (2,9)",program,5,0xa4a0,0,0
+0,"3-11 (2,9)",program,6,0xa4b0,1,0
+0,"3-11 (2,9)",program,7,0xa4c0,0,0
+0,"3-11 (2,9)",program,8,0xa4d0,1,0
+0,"4-11 (3,9)",program,0,0xa450,0,0
+0,"4-11 (3,9)",program,1,0xa460,0,0
+0,"4-11 (3,9)",program,2,0xa470,0,0
+0,"4-11 (3,9)",program,3,0xa480,0,0
+0,"4-11 (3,9)",program,4,0xa490,0,0
+0,"4-11 (3,9)",program,5,0xa4a0,0,0
+0,"4-11 (3,9)",program,6,0xa4b0,1,0
+0,"4-11 (3,9)",program,7,0xa4c0,0,0
+0,"4-11 (3,9)",program,8,0xa4d0,0,0
+
+system_info.py:
+OS,Version,Kernel,Machine,KMD,UMD,tt-exalens
+Linux,22.04,6.8.0-101-generic,x86_64,2.9.0,0.9.12,0.4.1
+
+check_arc.py:
+Dev,Loc,Postcode,Up time,Clock MHz,Heartbeats/s
+0,"8-0 (a0,0)",N/A,0:10:55.500000,800,9.994531392187579
+
+check_broken_components.py:
+  Device 0: eth [10-1 (e0,11)]: erisc1: Was halted by triage but is no longer halted - core was broken during triage.
+  Device 0: eth [2-1 (e0,2)]: erisc1: Was halted by triage but is no longer halted - core was broken during triage.
+  Device 0: functional_workers [2-2 (1,0)]: brisc: Was halted by triage but is no longer halted - core was broken during triage.
+  Device 0: functional_workers [4-3 (3,1)]: brisc: Was halted by triage but is no longer halted - core was broken during triage.
+  Device 0: functional_workers [6-4 (5,2)]: brisc: Was halted by triage but is no longer halted - core was broken during triage.
+  Device 0: functional_workers [3-5 (2,3)]: brisc: Was halted by triage but is no longer halted - core was broken during triage.
+  Device 0: functional_workers [16-5 (11,3)]: brisc: Was halted by triage but is no longer halted - core was broken during triage.
+  Device 0: functional_workers [2-6 (1,4)]: brisc: Was halted by triage but is no longer halted - core was broken during triage.
+  Device 0: functional_workers [5-6 (4,4)]: brisc: Was halted by triage but is no longer halted - core was broken during triage.
+  Device 0: functional_workers [12-7 (7,5)]: brisc: Was halted by triage but is no longer halted - core was broken during triage.
+  Device 0: functional_workers [2-9 (1,7)]: brisc: Was halted by triage but is no longer halted - core was broken during triage.
+  Device 0: functional_workers [6-9 (5,7)]: brisc: Was halted by triage but is no longer halted - core was broken during triage.
+  Device 0: functional_workers [12-10 (7,8)]: brisc: Was halted by triage but is no longer halted - core was broken during triage.
+  Device 0: functional_workers [5-11 (4,9)]: brisc: Was halted by triage but is no longer halted - core was broken during triage.
+  Device 0: eth [2-1 (e0,2)]: erisc1: Was halted by triage but is no longer halted - core was broken during triage.
+  Device 0: eth [10-1 (e0,11)]: erisc1: Was halted by triage but is no longer halted - core was broken during triage.
+Device,Broken Cores
+0,"brisc: 12-7 (7,5), 5-6 (4,4), 2-6 (1,4), 3-5 (2,3), 6-9 (5,7), 2-9 (1,7), 16-5 (11,3), 6-4 (5,2), 2-2 (1,0), 12-10 (7,8), 5-11 (4,9), 4-3 (3,1)\nerisc1: 2-1 (e0,2), 10-1 (e0,11)"
+=== END TRIAGE LOG ===
+
+========================================
+SAFE_PYTEST_TOTAL_RUNTIME: 1m21s (81s total, device-lock-acquired -> exit)
+SAFE_PYTEST: triage report: /localdev/pmilojevic/workspaces/opgen/generated/tt-triage/triage.txt

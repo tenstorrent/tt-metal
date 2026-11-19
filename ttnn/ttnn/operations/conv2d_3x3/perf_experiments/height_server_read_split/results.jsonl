@@ -1,0 +1,39 @@
+{"label": "base_z1", "env": {}, "ids": ["res3_{1,2,3}_conv2"], "us": [11.49]}
+{"label": "w50_z1", "env": {"HSR_W_PCT": "50"}, "ids": ["res3_{1,2,3}_conv2"], "us": [12.204]}
+{"label": "dbg_skip1", "env": {"HSR_DBG_SKIP": "1"}, "ids": ["res3_{1,2,3}_conv2"], "us": [11.528]}
+{"label": "w100_z1", "env": {"HSR_W_PCT": "100"}, "ids": ["res3_{1,2,3}_conv2"], "us": [14.481]}
+{"label": "dbg_skipall", "env": {"HSR_DBG_SKIP": "99"}, "ids": ["res3_{1,2,3}_conv2"], "us": [10.852]}
+{"label": "dom_base", "env": {}, "ids": ["res2_{0,1,2}_conv2", "res3_{1,2,3}_conv2", "semantic0", "instance0", "semantic1", "semantic2", "instance1", "semantic3", "instance2", "center_head_1"], "us": [11.61, 11.514, 37.833, 22.133, 30.874, 95.263, 30.603, 85.763, 25.533, 10.642]}
+{"label": "dbg_abl_ch", "env": {}, "ids": ["center_head_1"], "us": [10.492]}
+{"label": "h1_z1", "env": {"HSR_HELPERS": "1"}, "ids": ["res3_{1,2,3}_conv2"], "us": []}
+{"label": "h1_z1", "env": {"HSR_HELPERS": "1"}, "ids": ["res3_{1,2,3}_conv2"], "us": [12.588]}
+{"label": "h1b_z1", "env": {"HSR_HELPERS": "1"}, "ids": ["res3_{1,2,3}_conv2"], "us": [12.135]}
+{"label": "dom_skipall3", "env": {"HSR_DBG_SKIP": "99"}, "ids": ["res2_{0,1,2}_conv2", "res3_{1,2,3}_conv2", "semantic0", "instance0", "semantic1", "semantic2", "instance1", "semantic3", "instance2", "center_head_1"], "us": [11.816, 10.998, 36.67, 21.056, 30.508, 94.335, 29.932, 84.595, 24.995, 10.801]}
+{"label": "h1c_z1", "env": {"HSR_HELPERS": "1"}, "ids": ["res3_{1,2,3}_conv2"], "us": [11.19]}
+{"label": "w50b_z1", "env": {"HSR_W_PCT": "50"}, "ids": ["res3_{1,2,3}_conv2"], "us": [12.273]}
+{"label": "w33b_z1", "env": {"HSR_W_PCT": "33"}, "ids": ["res3_{1,2,3}_conv2"], "us": [11.373]}
+{"label": "h2c_z1", "env": {"HSR_HELPERS": "2"}, "ids": ["res3_{1,2,3}_conv2"], "us": [11.127]}
+{"label": "h3c_z1", "env": {"HSR_HELPERS": "3"}, "ids": ["res3_{1,2,3}_conv2"], "us": [11.35]}
+{"label": "h1d_z1", "env": {"HSR_HELPERS": "1"}, "ids": ["res3_{1,2,3}_conv2"], "us": [11.407]}
+{"label": "h2d_z1", "env": {"HSR_HELPERS": "2"}, "ids": ["res3_{1,2,3}_conv2"], "us": [11.374]}
+{"label": "dom_base2", "env": {}, "ids": ["res2_{0,1,2}_conv2", "res3_{1,2,3}_conv2", "semantic0", "instance0", "semantic1", "semantic2", "instance1", "semantic3", "instance2", "center_head_1"], "us": [11.728, 11.556, 37.937, 22.196, 30.959, 95.403, 30.629, 85.443, 25.567, 10.666]}
+{"label": "dom_h1", "env": {"HSR_HELPERS": "1"}, "ids": ["res2_{0,1,2}_conv2", "res3_{1,2,3}_conv2", "semantic0", "instance0", "semantic1", "semantic2", "instance1", "semantic3", "instance2", "center_head_1"], "us": [11.709, 11.434, 37.154, 21.771, 30.832, 95.793, 30.501, 86.278, 25.373, 10.817]}
+{"label": "dom_h2", "env": {"HSR_HELPERS": "2"}, "ids": ["res2_{0,1,2}_conv2", "res3_{1,2,3}_conv2", "semantic0", "instance0", "semantic1", "semantic2", "instance1", "semantic3", "instance2", "center_head_1"], "us": [11.721, 11.379, 37.279, 21.844, 30.299, 95.943, 30.559, 85.696, 25.329, 10.689]}
+{"label": "h1_c4", "env": {"HSR_HELPERS": "1", "HSR_CHUNKS": "4"}, "ids": ["res3_{1,2,3}_conv2"], "us": [11.884]}
+{"label": "h1_s62", "env": {"HSR_HELPERS": "1", "HSR_SERVER_PCT": "62"}, "ids": ["res3_{1,2,3}_conv2"], "us": [11.178]}
+{"label": "h1_c6", "env": {"HSR_HELPERS": "1", "HSR_CHUNKS": "6"}, "ids": ["res3_{1,2,3}_conv2"], "us": [11.788]}
+{"label": "dom_s62", "env": {"HSR_HELPERS": "1", "HSR_SERVER_PCT": "62"}, "ids": ["res2_{0,1,2}_conv2", "res3_{1,2,3}_conv2", "semantic0", "instance0", "semantic1", "semantic2", "instance1", "semantic3", "instance2", "center_head_1"], "us": [12.125, 11.286, 37.508, 21.604, 30.961, 95.582, 30.302, 85.974, 25.586, 10.759]}
+{"label": "hgt_base", "env": {}, "ids": ["H:stem_conv1", "H:stem_conv3", "H:res2_conv2", "H:res3_0_conv2", "H:res3_conv2", "H:sem_res2_fuse_conv0", "H:stem_conv2", "H:sem_res3_fuse_conv0", "H:inst_res3_fuse_conv0", "H:sem_res3_fuse_conv1", "H:inst_res2_fuse_conv0", "H:sem_res2_fuse_conv1", "H:inst_res2_fuse_conv1", "H:center_head1"], "us": [25.344, 151.599, 22.984, 33.472, 26.536, 329.844, 76.14, 115.737, 61.072, 93.281, 95.865, 294.262, 77.588, 22.71]}
+{"label": "hgt_s62", "env": {"HSR_HELPERS": "1", "HSR_SERVER_PCT": "62"}, "ids": ["H:stem_conv1", "H:stem_conv3", "H:res2_conv2", "H:res3_0_conv2", "H:res3_conv2", "H:sem_res2_fuse_conv0", "H:stem_conv2", "H:sem_res3_fuse_conv0", "H:inst_res3_fuse_conv0", "H:sem_res3_fuse_conv1", "H:inst_res2_fuse_conv0", "H:sem_res2_fuse_conv1", "H:inst_res2_fuse_conv1", "H:center_head1"], "us": [25.395, 151.613, 22.953, 33.34, 26.581, 330.555, 76.07, 115.13, 60.9, 93.13, 95.433, 294.863, 77.472, 22.93]}
+{"label": "fA1", "env": {}, "ids": ["res2_{0,1,2}_conv2", "res3_{1,2,3}_conv2"], "us": [11.595, 11.187]}
+{"label": "fB1", "env": {"HSR_HELPERS": "1", "HSR_SERVER_PCT": "62"}, "ids": ["res2_{0,1,2}_conv2", "res3_{1,2,3}_conv2"], "us": [11.717, 11.383]}
+{"label": "fB2", "env": {"HSR_HELPERS": "1", "HSR_SERVER_PCT": "62"}, "ids": ["res2_{0,1,2}_conv2", "res3_{1,2,3}_conv2"], "us": [11.784, 11.278]}
+{"label": "fA2", "env": {}, "ids": ["res2_{0,1,2}_conv2", "res3_{1,2,3}_conv2"], "us": [11.731, 11.19]}
+{"label": "fA3", "env": {}, "ids": ["res2_{0,1,2}_conv2", "res3_{1,2,3}_conv2"], "us": [11.704, 11.212]}
+{"label": "fB3", "env": {"HSR_HELPERS": "1", "HSR_SERVER_PCT": "62"}, "ids": ["res2_{0,1,2}_conv2", "res3_{1,2,3}_conv2"], "us": [11.534, 11.431]}
+{"label": "dA1", "env": {}, "ids": ["semantic0", "instance0"], "us": [38.057, 22.161]}
+{"label": "dB1", "env": {"HSR_HELPERS": "1", "HSR_SERVER_PCT": "62"}, "ids": ["semantic0", "instance0"], "us": [37.373, 21.83]}
+{"label": "dB2", "env": {"HSR_HELPERS": "1", "HSR_SERVER_PCT": "62"}, "ids": ["semantic0", "instance0"], "us": [37.003, 21.827]}
+{"label": "dA2", "env": {}, "ids": ["semantic0", "instance0"], "us": [38.002, 22.131]}
+{"label": "dA3", "env": {}, "ids": ["semantic0", "instance0"], "us": [37.96, 22.144]}
+{"label": "dB3", "env": {"HSR_HELPERS": "1", "HSR_SERVER_PCT": "62"}, "ids": ["semantic0", "instance0"], "us": [37.003, 21.804]}

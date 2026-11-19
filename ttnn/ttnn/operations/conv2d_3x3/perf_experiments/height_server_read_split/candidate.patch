@@ -1,0 +1,530 @@
+--- ttnn/ttnn/operations/conv2d_3x3/conv2d_3x3_program_descriptor.py	2026-11-18 23:35:24.616245700 +0000
++++ ttnn/ttnn/operations/conv2d_3x3/conv2d_3x3_program_descriptor.py	2026-11-19 00:50:27.164786936 +0000
+@@ -1296,6 +1296,13 @@
+     return receivers
+ 
+ 
++def _hsr_env(name, default=0):
++    """height_server_read_split bench switches (environment, read at descriptor build time)."""
++    import os
++
++    return int(os.environ.get(name, default))
++
++
+ def _weight_servers(input_tensor, core_list, receivers):
+     """One spare core per rectangle of the weight channel (closest to the rectangle's NoC1 multicast start, its high
+     corner), as [(rectangle, server core)], or None when the device grid has too few spare cores. A spare core holds
+@@ -1317,6 +1324,31 @@
+     return out
+ 
+ 
++def _hsr_helpers(input_tensor, core_list, weight_servers, per_server):
++    """height_server_read_split: per_server spare cores per weight server (nearest first), or None when the grid has too
++    few. Spare = neither work, nor an input shard, nor a server."""
++    grid = input_tensor.device().compute_with_storage_grid_size()
++    used = {(c.x, c.y) for c in core_list} | {(c.x, c.y) for c in shard_cores(input_tensor)}
++    used |= {(s.x, s.y) for _, s in weight_servers}
++    spare = [(x, y) for y in range(grid.y) for x in range(grid.x) if (x, y) not in used]
++    if len(spare) < per_server * len(weight_servers):
++        return None
++    # A helper writes its parts into the server on NoC1, which routes -x then -y (wrapping): a helper at x >= the
++    # server's and y >= the server's reaches it in (dx + dy) hops; any other spends a wrap across the grid.
++    def cost(c, server):
++        dx, dy = c[0] - server.x, c[1] - server.y
++        return (0 if dx >= 0 and dy >= 0 else 1, abs(dx) + abs(dy), c[1], c[0])
++
++    out = [[] for _ in weight_servers]
++    # Round-robin over the servers, so each takes its nearest before any takes a second.
++    for _ in range(per_server):
++        for si, (_, server) in enumerate(weight_servers):
++            best = min(spare, key=lambda c: cost(c, server))
++            spare.remove(best)
++            out[si].append(ttnn.CoreCoord(*best))
++    return out
++
++
+ def _column_weight_mcast(input_tensor, work, m_blocks_per_index):
+     """K split: one weight stream per channel slice, shared by that slice's grid column. Participants are
+     the grid rows that run the most M-blocks (same rounds, as in _weight_mcast_cores); each column is one
+@@ -2322,7 +2354,23 @@
+         # The servers hold cb_weights (same index and size, so the same L1 address as the receivers' slots) and the
+         # program's semaphores; their kernels stream every participant's rounds.
+         servers = [server for _, server in weight_servers]
+-        sem_cores = _core_range_set(core_list + servers)
++        # height_server_read_split: HSR_HELPERS helper cores per server read parts of every chunk.
++        hsr_k = _hsr_env("HSR_HELPERS")
++        # Every engine needs at least one tile of every chunk (a part of zero tiles would be a zero-length write).
++        _max_chunks = _hsr_env("HSR_CHUNKS", WEIGHT_SERVER_CHUNKS)
++        _chunk = bk * bn // max(d for d in range(1, _max_chunks + 1) if (bk * bn) % d == 0)
++        _rest = _chunk - min(_chunk, (_chunk * _hsr_env("HSR_W_PCT") + 50) // 100)
++        _own = (_rest * _hsr_env("HSR_SERVER_PCT") + 50) // 100 if _hsr_env("HSR_SERVER_PCT", -1) >= 0 else None
++        while hsr_k > 0 and (
++            (_rest - (_own if _own is not None else 0)) // hsr_k < 1 or (_own is None and _rest // (1 + hsr_k) < 1)
++        ):
++            hsr_k -= 1
++        hsr_helpers = _hsr_helpers(input_tensor, core_list, weight_servers, hsr_k) if hsr_k > 0 else None
++        hsr_k = hsr_k if hsr_helpers is not None else 0
++        all_helpers = [h for hs in hsr_helpers or [] for h in hs]
++        hsr_sem_id = len(sem_ids) if hsr_k > 0 else 0
++        sem_ids += (hsr_sem_id,) if hsr_k > 0 else ()
++        sem_cores = _core_range_set(core_list + servers + all_helpers)
+         for i, cb in enumerate(cbs):
+             if cb.format_descriptors[0].buffer_index == CB_WEIGHTS:
+                 pages = cb.total_size // g.weight_tile_bytes
+@@ -2337,13 +2385,35 @@
+             if kwf and not kw_fold_kblocked(g)
+             else max(m_blocks_per_index[i] for _, i, _ in work) * b.num_k_blocks
+         )
+-        num_chunks = max(d for d in range(1, WEIGHT_SERVER_CHUNKS + 1) if (bk * bn) % d == 0)
++        max_chunks = _hsr_env("HSR_CHUNKS", WEIGHT_SERVER_CHUNKS)
++        num_chunks = max(d for d in range(1, max_chunks + 1) if (bk * bn) % d == 0)
++        # height_server_read_split: the server writer reads HSR_W_PCT % of every chunk itself on NoC1.
++        chunk_tiles = bk * bn // num_chunks
++        w_tiles = min(chunk_tiles, (chunk_tiles * _hsr_env("HSR_W_PCT") + 50) // 100)
++        # Parts of the rest: the server reader first (it takes the remainder: no extra hop), then each helper.
++        rest = chunk_tiles - w_tiles
++        part = rest // (1 + hsr_k)
++        if hsr_k > 0 and _hsr_env("HSR_SERVER_PCT", -1) >= 0:
++            own_tiles = (rest * _hsr_env("HSR_SERVER_PCT") + 50) // 100
++            part = (rest - own_tiles) // hsr_k
++        own_tiles = rest - hsr_k * part
++        helper_rt = ttnn.RuntimeArgs()
++        helper_reader_rt = ttnn.RuntimeArgs()
+         server_reader_rt = ttnn.RuntimeArgs()
+         server_writer_rt = ttnn.RuntimeArgs()
+-        for rect, server in weight_servers:
++        for si, (rect, server) in enumerate(weight_servers):
+             lo = device.worker_core_from_logical_core(rect.start)
+             hi = device.worker_core_from_logical_core(rect.end)
+-            server_reader_rt[server.x][server.y] = [weight_addr, num_rounds]
++            dbg_skip = int(_hsr_env("HSR_DBG_SKIP", -1) in (si, 99))
++            reader_args = [weight_addr, num_rounds, dbg_skip, 0, own_tiles]
++            sv = device.worker_core_from_logical_core(server)
++            for hi_, h in enumerate(hsr_helpers[si] if hsr_k > 0 else []):
++                hv = device.worker_core_from_logical_core(h)
++                reader_args += [hv.x, hv.y]
++                lo_h = own_tiles + hi_ * part
++                helper_reader_rt[h.x][h.y] = [weight_addr, num_rounds, dbg_skip, lo_h, part]
++                helper_rt[h.x][h.y] = [num_rounds, lo_h, part, sv.x, sv.y]
++            server_reader_rt[server.x][server.y] = reader_args
+             # NoC1 multicast: from the rectangle's high corner to its low corner.
+             server_writer_rt[server.x][server.y] = [
+                 num_rounds,
+@@ -2353,13 +2423,26 @@
+                 lo.x,
+                 lo.y,
+                 bias_addr if server_bias else 0,
++                weight_addr,
+             ]
+         server_cores = _core_range_set(servers)
+         server_kernels = [
+             ttnn.KernelDescriptor(
+                 kernel_source=str(KERNEL_DIR / "conv2d_3x3_weight_server_reader.cpp"),
+                 core_ranges=server_cores,
+-                compile_time_args=[CB_WEIGHTS, bk, bn, b.num_k_blocks, num_chunks, int(kwf), g.tensor_n_tiles]
++                compile_time_args=[
++                    CB_WEIGHTS,
++                    bk,
++                    bn,
++                    b.num_k_blocks,
++                    num_chunks,
++                    int(kwf),
++                    g.tensor_n_tiles,
++                    w_tiles,
++                    own_tiles,
++                    hsr_k,
++                    hsr_sem_id,
++                ]
+                 + list(ttnn.TensorAccessorArgs(weight_tensor).get_compile_time_args()),
+                 runtime_args=server_reader_rt,
+                 config=ttnn.ReaderConfigDescriptor(),
+@@ -2381,11 +2464,44 @@
+                     ttnn.TensorAccessorArgs(bias_tensor).get_compile_time_args()
+                     if server_bias
+                     else ttnn.TensorAccessorArgs().get_compile_time_args()
+-                ),
++                )
++                + [w_tiles, bk, bn, b.num_k_blocks, int(kwf), g.tensor_n_tiles]
++                + list(ttnn.TensorAccessorArgs(weight_tensor).get_compile_time_args()),
+                 runtime_args=server_writer_rt,
+                 config=ttnn.WriterConfigDescriptor(),
+             ),
+         ]
++        if hsr_k > 0:
++            helper_cores = _core_range_set(all_helpers)
++            server_kernels += [
++                ttnn.KernelDescriptor(
++                    kernel_source=str(KERNEL_DIR / "conv2d_3x3_weight_server_reader.cpp"),
++                    core_ranges=helper_cores,
++                    compile_time_args=[
++                        CB_WEIGHTS,
++                        bk,
++                        bn,
++                        b.num_k_blocks,
++                        num_chunks,
++                        int(kwf),
++                        g.tensor_n_tiles,
++                        0,
++                        0,
++                        0,
++                        hsr_sem_id,
++                    ]
++                    + list(ttnn.TensorAccessorArgs(weight_tensor).get_compile_time_args()),
++                    runtime_args=helper_reader_rt,
++                    config=ttnn.ReaderConfigDescriptor(),
++                ),
++                ttnn.KernelDescriptor(
++                    kernel_source=str(KERNEL_DIR / "conv2d_3x3_weight_server_helper.cpp"),
++                    core_ranges=helper_cores,
++                    compile_time_args=[CB_WEIGHTS, bk * bn, num_chunks, hsr_sem_id],
++                    runtime_args=helper_rt,
++                    config=ttnn.WriterConfigDescriptor(),
++                ),
++            ]
+     semaphores = [ttnn.SemaphoreDescriptor(id=sem_id, core_ranges=sem_cores, initial_value=0) for sem_id in sem_ids]
+     descriptor = ttnn.ProgramDescriptor(kernels=[], semaphores=semaphores, cbs=cbs)
+     # The writer's NoC (WriterConfigDescriptor).
+--- ttnn/ttnn/operations/conv2d_3x3/kernels/conv2d_3x3_weight_server_reader.cpp	2026-11-18 23:35:24.618245728 +0000
++++ ttnn/ttnn/operations/conv2d_3x3/kernels/conv2d_3x3_weight_server_reader.cpp	2026-11-19 00:15:15.089985575 +0000
+@@ -15,6 +15,7 @@
+ #include "api/dataflow/dataflow_api.h"
+ #include "ttnn/cpp/ttnn/kernel_lib/perf_instrumentation.hpp"
+ #include "conv2d_3x3_gather_dataflow.hpp"
++#include "conv2d_3x3_weight_server.hpp"
+ 
+ void kernel_main() {
+     constexpr uint32_t cb_weights = get_compile_time_arg_val(0);
+@@ -26,52 +27,67 @@
+     // 2)[kb % 3], [3 C_in, rw] in (kh, c, n) order (block_k_tiles = C_in, block_n_tiles = 3 rw: the same round size).
+     constexpr bool kw_fold = get_compile_time_arg_val(5) != 0;
+     constexpr uint32_t tensor_n_tiles = get_compile_time_arg_val(6);
+-    constexpr auto weight_args = TensorAccessorArgs<7>();
++    // height_server_read_split: the server writer reads the last w_tiles tiles of every chunk itself (NoC1).
++    constexpr uint32_t w_tiles = get_compile_time_arg_val(7);
++    // height_server_read_split helpers: this reader reads tiles [lo, lo + own) of every chunk (runtime args 3, 4); on
++    // a server, num_helpers helper cores read the rest (this kernel on their NCRISC, conv2d_3x3_weight_server_helper.cpp
++    // on their BRISC writes each part into the server's slot) and count their landed parts on semaphore sem_id here.
++    constexpr uint32_t num_helpers = get_compile_time_arg_val(9);
++    constexpr uint32_t hsr_sem_id = get_compile_time_arg_val(10);
++    constexpr auto weight_args = TensorAccessorArgs<11>();
+     constexpr uint32_t round_tiles = block_k_tiles * block_n_tiles;
+     static_assert(num_chunks >= 1 && num_chunks <= 8 && round_tiles % num_chunks == 0);
+     constexpr uint32_t chunk_tiles = round_tiles / num_chunks;
++    static_assert(w_tiles <= chunk_tiles);
+ 
+     const uint32_t weight_addr = get_arg_val<uint32_t>(0);
+     const uint32_t num_rounds = get_arg_val<uint32_t>(1);
++    // Debug (timing only, wrong data): this server reads nothing.
++    const bool dbg_skip = get_arg_val<uint32_t>(2) != 0;
++    const uint32_t lo = get_arg_val<uint32_t>(3);
++    const uint32_t own_tiles = dbg_skip ? 0 : get_arg_val<uint32_t>(4);
+     const uint32_t tile_bytes = get_tile_size(cb_weights);
+     const auto weights = TensorAccessor(weight_args, weight_addr, tile_bytes);
+     conv2d_3x3::TaggedReads<false> reads;
++    [[maybe_unused]] volatile tt_l1_ptr uint32_t* landed =
++        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(hsr_sem_id));
++    // Grant round r to every helper: its slot here is reserved.
++    auto grant = [&]() {
++        for (uint32_t h = 0; h < num_helpers; ++h) {
++            noc_semaphore_inc(
++                get_noc_addr(get_arg_val<uint32_t>(5 + 2 * h), get_arg_val<uint32_t>(6 + 2 * h), get_semaphore(hsr_sem_id)),
++                1);
++        }
++    };
+ 
+     for (uint32_t r = 0; r < num_rounds; ++r) {
+         cb_reserve_back(cb_weights, round_tiles);
++        if constexpr (num_helpers > 0) {
++            grant();
++        }
+         const uint32_t l1 = get_write_ptr(cb_weights);
+         MaybeDeviceZoneScope("server_read");
+-        // The K-block's tiles are consecutive pages (bn is the whole C_out on this path); kw-fold's round of column kw
+-        // reads the prepared tile ((kh * 3 + kw) C_in + c, n) for slot (kh, c, n).
+         const uint32_t kb = r % num_k_blocks;
+-        const uint32_t page0 = kb * round_tiles;
+-        auto page_of = [&](uint32_t t) -> uint32_t {
+-            if constexpr (kw_fold) {
+-                // Guarded: this branch is compiled on every shape (block_n_tiles may be < 3 off kw-fold).
+-                constexpr uint32_t rw = block_n_tiles >= 3 ? block_n_tiles / 3 : 1;
+-                const uint32_t n = t % rw;
+-                const uint32_t kc = t / rw;
+-                const uint32_t kh = kc / block_k_tiles;
+-                const uint32_t col = kb % 3;
+-                const uint32_t kw = col == 0 ? 1 : (col == 1 ? 0 : 2);  // kw_fold.hpp KW_ROUND_ORDER
+-                return ((kh * 3 + kw) * block_k_tiles + (kc - kh * block_k_tiles)) * tensor_n_tiles + (kb / 3) * rw + n;
+-            } else {
+-                return page0 + t;
+-            }
+-        };
+         // Issue chunk c, then hand over chunk c - 1.
+         for (uint32_t c = 0; c <= num_chunks; ++c) {
+             if (c < num_chunks) {
+                 reads.begin(1 + c);
+-                for (uint32_t t = c * chunk_tiles; t < (c + 1) * chunk_tiles; ++t) {
+-                    reads.read(weights.get_noc_addr(page_of(t)), l1 + t * tile_bytes, tile_bytes);
++                for (uint32_t t = c * chunk_tiles + lo; t < c * chunk_tiles + lo + own_tiles; ++t) {
++                    const uint32_t page =
++                        conv2d_3x3::server_page_of<kw_fold, block_k_tiles, block_n_tiles, tensor_n_tiles>(kb, t);
++                    reads.read(weights.get_noc_addr(page), l1 + t * tile_bytes, tile_bytes);
+                 }
+                 dataflow_kernel_lib::set_read_trid(reads.noc, 0);
+             }
+             if (c > 0) {
+                 reads.wait(c);
++                if constexpr (num_helpers > 0) {
++                    MaybeDeviceZoneScope("hsr_wait_helpers");
++                    noc_semaphore_wait_min(landed, (r * num_chunks + c) * num_helpers);
++                }
+                 cb_push_back(cb_weights, chunk_tiles);
+             }
+         }
+     }
++    noc_async_atomic_barrier();
+ }
+--- ttnn/ttnn/operations/conv2d_3x3/kernels/conv2d_3x3_weight_server_writer.cpp	2026-11-18 23:35:24.619245742 +0000
++++ ttnn/ttnn/operations/conv2d_3x3/kernels/conv2d_3x3_weight_server_writer.cpp	2026-11-19 00:21:02.137882987 +0000
+@@ -21,6 +21,8 @@
+ 
+ #include "api/dataflow/dataflow_api.h"
+ #include "ttnn/cpp/ttnn/kernel_lib/perf_instrumentation.hpp"
++#include "conv2d_3x3_gather_dataflow.hpp"
++#include "conv2d_3x3_weight_server.hpp"
+ 
+ void kernel_main() {
+     constexpr uint32_t cb_weights = get_compile_time_arg_val(0);
+@@ -33,7 +35,20 @@
+     constexpr uint32_t cb_bias = get_compile_time_arg_val(7);
+     constexpr uint32_t bias_tiles = get_compile_time_arg_val(8);
+     constexpr auto bias_args = TensorAccessorArgs<9>();
++    // height_server_read_split: this RISC reads the last w_tiles tiles of every chunk itself (NoC1), one round's share
++    // per slot as soon as the slot is free (a full round ahead of its multicast), each chunk under its own trid.
++    constexpr uint32_t w_base = bias_args.next_compile_time_args_offset();
++    constexpr uint32_t w_tiles = get_compile_time_arg_val(w_base);
++    constexpr uint32_t block_k_tiles = get_compile_time_arg_val(w_base + 1);
++    constexpr uint32_t block_n_tiles = get_compile_time_arg_val(w_base + 2);
++    constexpr uint32_t num_k_blocks = get_compile_time_arg_val(w_base + 3);
++    constexpr bool kw_fold = get_compile_time_arg_val(w_base + 4) != 0;
++    constexpr uint32_t tensor_n_tiles = get_compile_time_arg_val(w_base + 5);
++    constexpr auto weight_args = TensorAccessorArgs<w_base + 6>();
+     constexpr uint32_t chunk_tiles = round_tiles / num_chunks;
++    static_assert(w_tiles <= chunk_tiles);
++    constexpr uint32_t TRID_BIAS = 15;
++    static_assert(w_tiles == 0 || weight_depth * num_chunks < TRID_BIAS);
+     constexpr uint32_t bias_flag_sem_id = flag_sem_id + weight_depth;
+ 
+     const uint32_t num_rounds = get_arg_val<uint32_t>(0);
+@@ -44,18 +59,58 @@
+     const uint32_t ex = get_arg_val<uint32_t>(4);
+     const uint32_t ey = get_arg_val<uint32_t>(5);
+     const uint32_t tile_bytes = get_tile_size(cb_weights);
++    [[maybe_unused]] const uint32_t weight_addr = get_arg_val<uint32_t>(7);
+     volatile tt_l1_ptr uint32_t* ack = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(ack_sem_id));
+ 
++    conv2d_3x3::TaggedReads<false> own;
++    const uint32_t fifo_base = get_read_ptr(cb_weights);
++    [[maybe_unused]] const auto weights = TensorAccessor(weight_args, weight_addr, tile_bytes);
++    // Round r's share into slot r % weight_depth, chunk c under trid 1 + slot * num_chunks + c.
++    auto issue_own = [&](uint32_t r) {
++        if constexpr (w_tiles > 0) {
++            MaybeDeviceZoneScope("hsr_w_issue");
++            const uint32_t slot = r % weight_depth;
++            const uint32_t l1 = fifo_base + slot * round_tiles * tile_bytes;
++            const uint32_t kb = r % num_k_blocks;
++            for (uint32_t c = 0; c < num_chunks; ++c) {
++                own.begin(1 + slot * num_chunks + c);
++                for (uint32_t t = (c + 1) * chunk_tiles - w_tiles; t < (c + 1) * chunk_tiles; ++t) {
++                    const uint32_t page =
++                        conv2d_3x3::server_page_of<kw_fold, block_k_tiles, block_n_tiles, tensor_n_tiles>(kb, t);
++                    own.read(weights.get_noc_addr(page), l1 + t * tile_bytes, tile_bytes);
++                }
++            }
++            dataflow_kernel_lib::set_read_trid(own.noc, 0);
++        }
++    };
++    auto own_landed = [&](uint32_t r, uint32_t c) -> bool {
++        if constexpr (w_tiles > 0) {
++            return ncrisc_noc_read_with_transaction_id_flushed(
++                own.noc.get_noc_id(), 1 + (r % weight_depth) * num_chunks + c);
++        } else {
++            return true;
++        }
++    };
+     [[maybe_unused]] uint32_t bias_l1 = 0;
+     if constexpr (has_bias) {
+         const uint32_t bias_tile_bytes = get_tile_size(cb_bias);
+         const auto bias = TensorAccessor(bias_args, get_arg_val<uint32_t>(6), bias_tile_bytes);
+         bias_l1 = get_write_ptr(cb_bias);
++        if constexpr (w_tiles > 0) {
++            dataflow_kernel_lib::set_read_trid(own.noc, TRID_BIAS);
++        }
+         for (uint32_t n = 0; n < bias_tiles; ++n) {
+             noc_async_read_page(n, bias, bias_l1 + n * bias_tile_bytes);
+         }
++        if constexpr (w_tiles > 0) {
++            dataflow_kernel_lib::set_read_trid(own.noc, 0);
++        }
+         *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(bias_flag_sem_id)) = VALID;
+     }
++    // Round 0's share now; round r + 1's once round r's chain is closed (below).
++    if (num_rounds > 0) {
++        issue_own(0);
++    }
+     // The multicast source of every slot's flag.
+     for (uint32_t slot = 0; slot < weight_depth; ++slot) {
+         *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(flag_sem_id + slot)) = VALID;
+@@ -70,7 +125,11 @@
+         if constexpr (has_bias) {
+             if (r == 0) {
+                 MaybeDeviceZoneScope("server_send_bias");
+-                noc_async_read_barrier();
++                if constexpr (w_tiles > 0) {
++                    dataflow_kernel_lib::async_read_barrier_with_trid(own.noc, TRID_BIAS);
++                } else {
++                    noc_async_read_barrier();
++                }
+                 const uint32_t bias_bytes = bias_tiles * get_tile_size(cb_bias);
+                 noc_async_write_multicast(
+                     bias_l1, get_noc_multicast_addr(sx, sy, ex, ey, bias_l1), bias_bytes, num_receivers, true);
+@@ -83,12 +142,14 @@
+         const uint64_t flag_mcast = get_noc_multicast_addr(sx, sy, ex, ey, flag);
+         const uint32_t base = get_read_ptr(cb_weights);
+         auto landed = [&](uint32_t c) -> bool {
+-            return cb_pages_available_at_front(cb_weights, (c + 1) * chunk_tiles);
++            return cb_pages_available_at_front(cb_weights, (c + 1) * chunk_tiles) && own_landed(r, c);
+         };
+         for (uint32_t c = 0; c < num_chunks;) {
+             {
+                 MaybeDeviceZoneScope("server_wait_read");
+                 cb_wait_front(cb_weights, (c + 1) * chunk_tiles);
++                while (!own_landed(r, c)) {
++                }
+             }
+             MaybeDeviceZoneScope("server_send");
+             uint32_t n = 1;
+@@ -104,12 +165,20 @@
+                 noc_semaphore_set_multicast(c == num_chunks ? flag : MEM_ZEROS_BASE, flag_mcast, num_receivers, false);
+             }
+         }
++        // The chain is closed: read this RISC's share of the next round while this one drains (its slot was freed a
++        // round ago; with one slot, once this round left).
++        if (weight_depth >= 2 && r + 1 < num_rounds) {
++            issue_own(r + 1);
++        }
+         {
+             // The reader refills this slot weight_depth rounds on: the multicast must have read it.
+             MaybeDeviceZoneScope("server_flush");
+             noc_async_writes_flushed();
+         }
+         cb_pop_front(cb_weights, round_tiles);
++        if (weight_depth == 1 && r + 1 < num_rounds) {
++            issue_own(r + 1);
++        }
+     }
+     noc_async_write_barrier();
+ }
+--- ttnn/ttnn/operations/conv2d_3x3/kernels/conv2d_3x3_writer.cpp	2026-11-18 23:35:24.619245742 +0000
++++ ttnn/ttnn/operations/conv2d_3x3/kernels/conv2d_3x3_writer.cpp	2026-11-19 00:11:48.050063458 +0000
+@@ -708,8 +708,12 @@
+     auto khx_drain = [&]() {
+         if (khx_out_i < khx_out_n || khx_in_i < khx_in_n) {
+             MaybeDeviceZoneScope("writer_khx_drain");
++            // height_server_read_split: serve the split fill too. With the rounds landing early the writer reaches
++            // this drain while it still owes the reader fill batches: compute then waits for the slab, the halo never
++            // comes, and the drain spins forever (seen on the 103-core cases with the server reads skipped).
+             while (khx_out_i < khx_out_n || khx_in_i < khx_in_n) {
+                 khx_poll();
++                serve_fill();
+             }
+         }
+     };
+--- /dev/null	2026-11-16 08:53:12.079848812 +0000
++++ ttnn/ttnn/operations/conv2d_3x3/kernels/conv2d_3x3_weight_server.hpp	2026-11-18 23:44:18.827802354 +0000
+@@ -0,0 +1,32 @@
++// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
++// SPDX-License-Identifier: Apache-2.0
++
++// conv2d_3x3 weight server: the DRAM page of a round's tile, shared by every engine that reads a share of a round
++// (the server reader on NoC0, the server writer on NoC1, helper cores).
++
++#pragma once
++
++#include <cstdint>
++
++namespace conv2d_3x3 {
++
++// Round kb's tile t. The K-block's tiles are consecutive pages (bn is the whole C_out on this path); kw-fold's round of
++// column kw reads the prepared tile ((kh * 3 + kw) C_in + c, n) for slot (kh, c, n) (round kb is n-group kb / 3 of rw
++// output column tiles, weight column kw = (1, 0, 2)[kb % 3]).
++template <bool kw_fold, uint32_t block_k_tiles, uint32_t block_n_tiles, uint32_t tensor_n_tiles>
++FORCE_INLINE uint32_t server_page_of(uint32_t kb, uint32_t t) {
++    if constexpr (kw_fold) {
++        // Guarded: this branch is compiled on every shape (block_n_tiles may be < 3 off kw-fold).
++        constexpr uint32_t rw = block_n_tiles >= 3 ? block_n_tiles / 3 : 1;
++        const uint32_t n = t % rw;
++        const uint32_t kc = t / rw;
++        const uint32_t kh = kc / block_k_tiles;
++        const uint32_t col = kb % 3;
++        const uint32_t kw = col == 0 ? 1 : (col == 1 ? 0 : 2);  // kw_fold.hpp KW_ROUND_ORDER
++        return ((kh * 3 + kw) * block_k_tiles + (kc - kh * block_k_tiles)) * tensor_n_tiles + (kb / 3) * rw + n;
++    } else {
++        return kb * block_k_tiles * block_n_tiles + t;
++    }
++}
++
++}  // namespace conv2d_3x3
+--- /dev/null	2026-11-16 08:53:12.079848812 +0000
++++ ttnn/ttnn/operations/conv2d_3x3/kernels/conv2d_3x3_weight_server_helper.cpp	2026-11-19 00:15:15.094985645 +0000
+@@ -0,0 +1,52 @@
++// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
++// SPDX-License-Identifier: Apache-2.0
++
++// conv2d_3x3 weight server helper, writer half (BRISC / NoC1), height_server_read_split. A helper is a second spare core
++// per weight server: its NCRISC runs the server reader (conv2d_3x3_weight_server_reader.cpp) over its own part of every
++// chunk into its own cb_weights (same index and size as the server's, so the same slot layout and L1 address), and
++// this RISC writes each landed part into the server's slot once the server granted the round (its reader reserved
++// the slot), then bumps the server's landed counter behind it. The server reader hands a chunk to the server writer
++// only when its own part and every helper's part landed.
++
++#include <cstdint>
++
++#include "api/dataflow/dataflow_api.h"
++#include "ttnn/cpp/ttnn/kernel_lib/perf_instrumentation.hpp"
++
++void kernel_main() {
++    constexpr uint32_t cb_weights = get_compile_time_arg_val(0);
++    constexpr uint32_t round_tiles = get_compile_time_arg_val(1);
++    constexpr uint32_t num_chunks = get_compile_time_arg_val(2);
++    constexpr uint32_t sem_id = get_compile_time_arg_val(3);  // grant here, landed on the server
++    constexpr uint32_t chunk_tiles = round_tiles / num_chunks;
++
++    const uint32_t num_rounds = get_arg_val<uint32_t>(0);
++    const uint32_t part_lo = get_arg_val<uint32_t>(1);
++    const uint32_t part_tiles = get_arg_val<uint32_t>(2);
++    const uint64_t server_base = get_noc_addr(get_arg_val<uint32_t>(3), get_arg_val<uint32_t>(4), 0);
++    const uint64_t server_landed = server_base | get_semaphore(sem_id);
++    const uint32_t tile_bytes = get_tile_size(cb_weights);
++    volatile tt_l1_ptr uint32_t* grant = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(sem_id));
++
++    for (uint32_t r = 0; r < num_rounds; ++r) {
++        {
++            MaybeDeviceZoneScope("hsr_helper_grant");
++            noc_semaphore_wait_min(grant, r + 1);
++        }
++        const uint32_t base = get_read_ptr(cb_weights);
++        for (uint32_t c = 0; c < num_chunks; ++c) {
++            {
++                MaybeDeviceZoneScope("hsr_helper_wait");
++                cb_wait_front(cb_weights, (c + 1) * chunk_tiles);
++            }
++            const uint32_t src = base + (c * chunk_tiles + part_lo) * tile_bytes;
++            noc_async_write(src, server_base | src, part_tiles * tile_bytes);
++            // The count goes out behind the part on the same NoC and VC (ordered once the part left this core).
++            noc_async_writes_flushed();
++            noc_semaphore_inc(server_landed, 1);
++        }
++        cb_pop_front(cb_weights, round_tiles);
++    }
++    noc_async_write_barrier();
++    noc_async_atomic_barrier();
++}
