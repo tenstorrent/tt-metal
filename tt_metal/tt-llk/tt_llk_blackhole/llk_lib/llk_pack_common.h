@@ -31,6 +31,7 @@ inline void _llk_packer_wait_for_math_done_()
     // then waits on MATH_PACK holding the mutex the unpack thread needs every iteration: deadlock. Naming the Sync
     // class costs nothing when unmutexed.
     TTI_SEMWAIT(p_stall::STALL_TDMA | p_stall::STALL_SYNC, semaphore::t6_sem(semaphore::MATH_PACK), p_stall::STALL_ON_ZERO);
+    ckernel::packer::pack_push_drained = false;
 }
 
 /**
@@ -189,6 +190,7 @@ inline void _llk_pack_dest_section_done_()
             select_packer_dest_registers<Dst>();
         }
     }
+    ckernel::packer::pack_push_drained = true;
 }
 
 /**
