@@ -209,6 +209,7 @@ def build_rollout_batch_source(
             return AsyncRemoteRolloutBatchSource(
                 client=client,
                 num_batches=len(prompts) // batch_prompts,
+                batch_prompts=batch_prompts,
                 num_generations=config.num_generations,
                 max_completion_length=config.max_completion_length,
                 weight_sync_every=config.weight_sync_every,
