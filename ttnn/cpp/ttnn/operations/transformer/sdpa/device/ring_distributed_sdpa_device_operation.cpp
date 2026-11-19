@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include "ttnn/operations/copy/typecast/typecast.hpp"
 #include "ttnn/operations/transformer/sdpa/device/recipe/sdpa_recipe_ring_distributed.hpp"
 #include "ring_distributed_sdpa_device_operation.hpp"
 #include "ttnn/tensor/tensor_ops.hpp"
@@ -122,9 +123,14 @@ Tensor ring_distributed_sdpa(
         .v = input_tensor_v,
         .page_table = page_table,
     };
+    // The recipe kernels read Q as BF16: a BFP8 / BFP4 Q is widened (exactly) and the output narrowed back.
+    const auto q_dtype = input_tensor_q.dtype();
+    if (q_dtype != DataType::BFLOAT16) {
+        tensor_args.q = ttnn::typecast(input_tensor_q, DataType::BFLOAT16);
+    }
     ttnn::operations::transformer::sdpa::detail::resolve_ring_distributed_recipe(operation_attributes, tensor_args);
-
-    return ttnn::device_operation::launch<OperationType>(operation_attributes, tensor_args);
+    auto output = ttnn::device_operation::launch<OperationType>(operation_attributes, tensor_args);
+    return q_dtype == DataType::BFLOAT16 ? output : ttnn::typecast(output, q_dtype, output_mem_config);
 }
 
 }  // namespace ttnn::prim
