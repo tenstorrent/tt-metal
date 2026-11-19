@@ -305,17 +305,13 @@ static Tensor reduce_impl(
                 /*fast_and_approximate_mode=*/fast_and_approximate_mode,
                 output_layout);
         } else if constexpr (reduce_type == reduction_common::ReduceType::Mean) {
-            std::optional<tt::tt_metal::DataType> mean_output_dtype;
-            if (chain_final_dtype.has_value()) {
-                mean_output_dtype = is_last_in_chain ? *chain_final_dtype : tt::tt_metal::DataType::FLOAT32;
-            }
             output_tensor = ttnn::operations::reduction::generic::detail::reduce(
                 input_tensor,
                 tt::tt_metal::ReduceOpMath::AVG,
                 reduce_op_dim,
                 scalar / reduced_volume,
                 memory_config,
-                mean_output_dtype,
+                std::nullopt,
                 compute_kernel_config,
                 sub_core_grids,
                 /*negate=*/false,
@@ -655,8 +651,9 @@ Tensor reduce(
     const DataType orig_dtype = input_tensor.dtype();
     const auto& in_shape = input_tensor.logical_shape();
     const bool chain_active =
-        (reduce_type == reduction_common::ReduceType::Sum || reduce_type == reduction_common::ReduceType::Mean) &&
-        dim.size() > 1 && (orig_dtype == DataType::BFLOAT16 || orig_dtype == DataType::BFLOAT8_B) &&
+        ((reduce_type == reduction_common::ReduceType::Sum || reduce_type == reduction_common::ReduceType::Mean) &&
+         dim.size() > 1 && orig_dtype == DataType::BFLOAT16) ||
+        (reduce_type == reduction_common::ReduceType::Sum && dim.size() > 1 && orig_dtype == DataType::BFLOAT8_B) &&
         (dim.size() < static_cast<size_t>(in_shape.rank()) ||
          input_tensor.logical_volume() > static_cast<uint64_t>(in_shape[-2]) * in_shape[-1]);
     const std::optional<DataType> chain_final_dtype = chain_active ? std::optional<DataType>{orig_dtype} : std::nullopt;
