@@ -1021,7 +1021,8 @@ std::size_t run_prewarm(
         tt::LogMetal,
         "kernel prewarm: attempted={} successful={} failed={} previously-failed-skipped={} in {}ms "
         "(duplicate-targets={} device-init-entries={} build-key-mismatch-entries={} foreign-tree-entries={} "
-        "deferred-targets={} genfiles-or-lock-failures={} stale-abandoned-targets={} stop-file-targets={}); best-effort",
+        "deferred-targets={} genfiles-or-lock-failures={} stale-abandoned-targets={} "
+        "stop-file-targets={}); best-effort",
         successful.load() + failed.load(),
         successful.load(),
         failed.load(),

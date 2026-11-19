@@ -761,8 +761,9 @@ class LTXPipeline:
         if left:
             logger.warning(f"reset_for_shape: {left} trace(s) outside the pipeline are still captured")
         ccl_tensors, ccl_bytes = self._release_ccl()
-        # The program cache stays across the swap. Kept vs cleared renders were byte-identical on i2v <-> keyframe
-        # switches (ex1..ex6; seed 1 against a cleared control, seeds 2 and 3 pixel- and frame-checked).
+        # The program cache stays across the swap. Proven for i2v <-> keyframe switches through ltx-server's
+        # hotswap.reshape, which warms up right after this release (ex1..ex6, seeds 1-3 pixel- and frame-checked;
+        # seed 1 byte-identical to a cleared run). A caller that renders at a new shape before re-warming is untested.
         released = self.dram_by_category()
         t_release = clock()
         stats = {"release_s": round(t_release - t0, 3), "traces_released": traces, "ccl_freed": ccl_tensors,
