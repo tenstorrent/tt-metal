@@ -500,11 +500,12 @@ class _TraceCase:
         # ---- DRAM-sender PrefetcherPipes: one layer deep, which a batched gather needs ----
         tile_bytes = _bytes_per_tile(dtype)
         in1_block_size_bytes = k_tiles_per_shard * n_tiles_per_receiver * tile_bytes
-        bank_to_receivers = [
+        self.bank_to_receivers = [
             (b, _bank_receivers_contiguous(b, num_receivers_per_bank, ring_cols)) for b in range(num_dram_banks)
         ]
+        self.pipe_ring_bytes = ring_size * in1_block_size_bytes
         self.pipe_space, self.pipes = _make_tensor_prefetcher_pipes(
-            device, bank_to_receivers, ring_size * in1_block_size_bytes
+            device, self.bank_to_receivers, self.pipe_ring_bytes
         )
 
         self.out_mem_config = ttnn.create_sharded_memory_config(
@@ -537,14 +538,14 @@ class _TraceCase:
             self.device, [(self.weight, self.ring_size)], prefetcher_pipes=self.pipes, **kwargs
         )
 
-    def linear(self, **kwargs):
+    def linear(self, prefetcher_pipes=None, **kwargs):
         """Run the matmul over one layer in the pipes. in1 comes from the pipes, so the output
         reflects whatever the prefetcher put there, not the weight tensor passed here."""
         return ttnn.linear(
             self.act,
             self.weight,
             program_config=self.program_config,
-            prefetcher_pipes=self.pipes,
+            prefetcher_pipes=self.pipes if prefetcher_pipes is None else prefetcher_pipes,
             memory_config=self.out_mem_config,
             compute_kernel_config=self.compute_kernel_config,
             dtype=self.dtype,
@@ -603,6 +604,27 @@ def test_tensor_prefetcher_trace_replay(device, replay_count):
             assert passing, f"replay {i + 1} PCC failed: {msg}"
 
         ttnn.release_trace(device, trace_id)
+
+
+def test_tensor_prefetcher_command_list_moves_pipes(device):
+    """A recorded request and linear replay, and update_args moves the linear to other pipes, taking the
+    request with it."""
+    case = _TraceCase(device, seed_tag=b"command_list_moves_pipes")
+    _moved_space, moved = _make_tensor_prefetcher_pipes(device, case.bank_to_receivers, case.pipe_ring_bytes)
+    with tensor_prefetcher_session(device):
+        builder = ttnn.CommandListBuilder(device)
+        with builder:
+            case.queue()
+            tt_out = case.linear(prefetcher_pipes=ttnn.CmdListParam(case.pipes, "pipes"))
+        command_list = builder.build()
+        builder.deallocate()
+        for target in (case.pipes, moved):
+            command_list.update_args({"pipes": target})
+            for replay in range(2):
+                command_list.enqueue()
+                passing, msg = case.check(ttnn.to_torch(tt_out), 0)
+                assert passing, f"{'moved' if target is moved else 'recorded'} pipes, replay {replay}: {msg}"
+        command_list.deallocate()
 
 
 # The next two tests both work by overwriting the DRAM weight after recording the trace,

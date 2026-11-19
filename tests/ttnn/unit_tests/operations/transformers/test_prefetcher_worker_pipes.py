@@ -268,6 +268,51 @@ def test_worker_pipes_readers_follow_pipe_order(device):
     _check_matmuls(device, layout, num_layers=1, enable_performance_mode=False)
 
 
+@skip_for_slow_dispatch("sub-device managers need fast dispatch")
+def test_worker_pipes_command_list_moves_pipes(device, expect_error):
+    """A recorded dram_prefetcher and matmul replay concurrently, and update_args moves both to other pipes.
+
+    The ring holds 2.5 blocks, so the prefetcher finishes only while the matmul drains it.
+    """
+    layout = _Layout(device, recv_per_reader=1)
+    dtype, per_core_n = _TWO_TENSORS[0]
+    ring_size = _ring_size([layout.entry_size(dtype, per_core_n)])
+    _space, pipes = _make_pipes(device, layout, ring_size)
+    _moved_space, moved = _make_pipes(device, layout, ring_size)
+    pt_weights, tt_weights, tt_addrs = _make_weights(device, layout, [(dtype, per_core_n)], num_layers=1)
+    pt_act = torch.randn(1, 1, ttnn.TILE_SIZE, layout.k_tiles * ttnn.TILE_SIZE)
+    tt_act = ttnn.from_torch(
+        pt_act, device=device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG
+    )
+    with _prefetcher_sub_devices(device, layout) as worker_sub_device_id:
+        device.set_sub_device_stall_group([worker_sub_device_id])
+        builder = ttnn.CommandListBuilder(device)
+        with builder:
+            ttnn.dram_prefetcher(tt_weights + [tt_addrs], 1, prefetcher_pipes=ttnn.CmdListParam(pipes, "pipes"))
+            tt_out = ttnn.matmul(
+                tt_act,
+                tt_weights[0],
+                program_config=_matmul_program_config(layout, per_core_n),
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                compute_kernel_config=_compute_kernel_config(device),
+                sub_device_id=worker_sub_device_id,
+                prefetcher_pipes=ttnn.CmdListParam(pipes, "pipes"),
+            )
+        command_list = builder.build()
+        builder.deallocate()
+        with expect_error(RuntimeError, "was recorded with"):
+            command_list.update_args({"pipes": moved[:-1]})
+        with expect_error(RuntimeError, "is a PrefetcherPipe list"):
+            command_list.update_args({"pipes": 1.0})
+        for target in (pipes, moved):
+            command_list.update_args({"pipes": target})
+            for replay in range(2):
+                command_list.enqueue()
+                passing, message = comp_pcc(pt_act.float() @ pt_weights[0].float(), ttnn.to_torch(tt_out), 0.999)
+                assert passing, f"{'moved' if target is moved else 'recorded'} pipes, replay {replay}: {message}"
+        command_list.deallocate()
+
+
 def _check_matmuls(device, layout, num_layers, enable_performance_mode, recarve=False):
     """Runs dram_prefetcher over the layout's pipes into mcast_in0 matmuls and checks every output.
 
