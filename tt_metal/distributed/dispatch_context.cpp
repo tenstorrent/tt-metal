@@ -461,9 +461,8 @@ void DispatchContext::terminate_fast_dispatch(distributed::MeshDevice* mesh_devi
                 metal_context, dev->id(), dev_msgs::RUN_MSG_GO, dispatch_cores, 0);
         }
     }
-    // The dispatch kernels have exited (or halted on an L1 ECC error): free their session L1, the kernel config buffer
-    // they ran from (if a small KERNEL_CONFIG window made them need one) and their own L1 reserved in the allocator,
-    // so the dispatch cores hold no allocation again.
+
+    // Free L1 reserved by the dispatch kernels
     device_manager->release_dispatch_l1();
 
     // HWCommandQueue holds a reference to sysmem_manager_. Clear now so any future

@@ -30,28 +30,11 @@
 #include "impl/allocator/allocator.hpp"
 #include "impl/buffers/buffer_impl.hpp"
 #include "impl/context/context_types.hpp"
-#include "impl/buffers/semaphore.hpp"
 #include "impl/context/metal_context.hpp"
 #include "program_impl.hpp"
 #include "slow_dispatch.hpp"
 
 namespace tt::tt_metal::experimental {
-
-namespace {
-
-void check_no_tensix_semaphores(Program& program) {
-    for (const Semaphore& semaphore : program.impl().semaphores()) {
-        TT_FATAL(
-            semaphore.core_type() != CoreType::WORKER,
-            "A program run from a kernel config buffer cannot have Tensix program semaphores (semaphore {} on {}): "
-            "each core's block, and so each semaphore, sits at a different address, but a kernel signals a peer's "
-            "semaphore at its own address. Use a global semaphore instead.",
-            semaphore.id(),
-            semaphore.core_range_set());
-    }
-}
-
-}  // namespace
 
 KernelConfigBuffer::KernelConfigBuffer(std::shared_ptr<KernelConfigBufferImpl> impl) : impl_(std::move(impl)) {}
 
@@ -208,7 +191,7 @@ KernelConfigBuffer CreateKernelConfigBuffer(
         "buffer");
     if (!lockstep_address) {
         for (auto& [_, program] : workload.get_programs()) {
-            check_no_tensix_semaphores(program);
+            program.impl().check_no_tensix_semaphores();
         }
     }
     // Laid out as launch lays it out, so launch reuses this. Nothing to do if the caller already compiled it.
@@ -238,39 +221,6 @@ std::shared_ptr<KernelConfigBufferImpl> CreateKernelConfigBuffer(
     }
     TT_FATAL(!shards.empty(), "The programs have no Tensix kernels, so no kernel config block");
     return std::make_shared<KernelConfigBufferImpl>(std::move(shards), lockstep_address);
-}
-
-void ValidateKernelConfigBuffer(Program& program, const KernelConfigBufferImpl& buffer, ChipId device_id) {
-    TT_FATAL(buffer.is_allocated(), "Kernel config buffer was deallocated");
-    if (!buffer.lockstep_address()) {
-        check_no_tensix_semaphores(program);
-    }
-
-    // Each core holds only its kernel group's part of the block, in a shard sized for it.
-    const uint32_t tensix_index = MetalContext::instance(program.impl().get_context_id())
-                                      .hal()
-                                      .get_programmable_core_type_index(HalProgrammableCoreType::TENSIX);
-    const ProgramConfig& program_config = program.impl().get_program_config(tensix_index);
-    for (const auto& kernel_group : program.impl().get_kernel_groups(tensix_index)) {
-        const uint32_t footprint = kernel_config_footprint(*kernel_group, program_config);
-        for (const CoreCoord& core : corerange_to_cores(kernel_group->core_ranges)) {
-            const KernelConfigBufferImpl::Shards* shards = buffer.find(device_id, core);
-            TT_FATAL(
-                shards != nullptr,
-                "Kernel config buffer has no shard on device {} core {}, where the program runs a kernel",
-                device_id,
-                core);
-            TT_FATAL(
-                footprint <= shards->size,
-                "Kernel group on {} needs a {} B kernel config block, but its kernel config buffer has {} B on device "
-                "{} core {}",
-                kernel_group->core_ranges,
-                footprint,
-                shards->size,
-                device_id,
-                core);
-        }
-    }
 }
 
 void EnqueueMeshWorkload(

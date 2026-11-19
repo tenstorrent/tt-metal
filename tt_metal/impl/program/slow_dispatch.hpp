@@ -30,7 +30,7 @@ namespace tt::tt_metal::slow_dispatch {
 
 // Where `logical_core`'s kernel-config block starts on `device_id`: its shard of `kernel_config_buffer` for a Tensix
 // core when one is given, otherwise the HAL KERNEL_CONFIG address of the core type.
-uint32_t KernelConfigBase(
+uint32_t GetKernelConfigBase(
     const Hal& hal,
     uint32_t programmable_core_type_index,
     ChipId device_id,

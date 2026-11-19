@@ -110,7 +110,7 @@ bool program_targets_only_dram_cores(const Program& program, const Hal& hal) {
 
 }  // namespace
 
-uint32_t KernelConfigBase(
+uint32_t GetKernelConfigBase(
     const Hal& hal,
     uint32_t programmable_core_type_index,
     ChipId device_id,
@@ -193,16 +193,18 @@ void ConfigureDeviceWithProgram(
         throw;
     }
 
-    const auto& hal = metal_ctx.hal();
     // Where the block lands is known only now: each core type's KERNEL_CONFIG window, except Tensix when it runs
     // from a kernel config buffer.
     if (kernel_config_buffer != nullptr) {
         TT_FATAL(!is_emulated, "A kernel config buffer is not supported on emulated devices");
-        experimental::ValidateKernelConfigBuffer(program, *kernel_config_buffer, device_id);
+        if (!kernel_config_buffer->lockstep_address()) {
+            program.impl().check_no_tensix_semaphores();
+        }
     }
-    program.impl().check_kernel_config_fits_window(&device, /*tensix_from_buffer=*/kernel_config_buffer != nullptr);
+    program.impl().check_kernel_config_fits(&device, kernel_config_buffer);
 
     std::vector<std::vector<CoreCoord>> logical_cores_used_in_program = program.impl().logical_cores();
+    const auto& hal = metal_ctx.hal();
     uint32_t max_dfbs = hal.get_num_dataflow_buffers();
     auto* transfer_stats = &metal_ctx.host_transfer_stats();
     for (uint32_t index = 0; index < hal.get_programmable_core_type_count(); index++) {
@@ -212,7 +214,7 @@ void ConfigureDeviceWithProgram(
             KernelGroup* kernel_group = program.impl().kernels_on_core(logical_core, index);
             CoreCoord physical_core = device.virtual_core_from_logical_core(logical_core, core_type);
             const uint64_t kernel_config_base =
-                KernelConfigBase(hal, index, device_id, logical_core, kernel_config_buffer);
+                GetKernelConfigBase(hal, index, device_id, logical_core, kernel_config_buffer);
             // Skip binary writing for emulated mode (JIT compilation happens in execute_program_emulated)
             if (!is_emulated) {
                 ScopedHostTransfer binary_upload(
@@ -333,8 +335,6 @@ void ConfigureDeviceWithProgram(
                 transfer_stats->enabled()
                     ? program.impl().semaphores_on_core(logical_core, core_type).size() * sizeof(uint32_t)
                     : 0);
-            // In the block, wherever it lands: a program with Tensix semaphores runs only from a buffer at one address
-            // on all its cores (ValidateKernelConfigBuffer).
             program.impl().init_semaphores(device, logical_core, index, kernel_config_base);
         }
     }
@@ -357,8 +357,8 @@ void WriteRuntimeArgsToDevice(
     }
     program.impl().validate_scratchpad_bindings();
     // Some callers write runtime args before configuring the program, so check here too that the block fits where
-    // the args land. A kernel config buffer was validated when the program was configured.
-    program.impl().check_kernel_config_fits_window(&device, /*tensix_from_buffer=*/kernel_config_buffer != nullptr);
+    // the args land.
+    program.impl().check_kernel_config_fits(&device, kernel_config_buffer);
 
     const auto& hal = metal_ctx.hal();
     for (uint32_t index = 0; index < hal.get_programmable_core_type_count(); index++) {
@@ -375,7 +375,7 @@ void WriteRuntimeArgsToDevice(
                         const uint64_t kernel_config_base =
                             static_cast<uint64_t>(
                                 kernel_config_buffer != nullptr
-                                    ? KernelConfigBase(hal, index, device_id, logical_core, kernel_config_buffer)
+                                    ? GetKernelConfigBase(hal, index, device_id, logical_core, kernel_config_buffer)
                                     : kernel_config.kernel_config_base()[index]) +
                             l1_noc_offset;
                         for (auto kernel_id : kg->kernel_ids) {
@@ -496,7 +496,8 @@ void LaunchProgramAsync(
             dev_msgs::launch_msg_t launch_msg = kg->launch_msg;
             if (kernel_config_buffer != nullptr) {
                 launch_msg.view().kernel_config().kernel_config_base()[programmable_core_type_index] =
-                    KernelConfigBase(hal, programmable_core_type_index, device_id, logical_core, kernel_config_buffer);
+                    GetKernelConfigBase(
+                        hal, programmable_core_type_index, device_id, logical_core, kernel_config_buffer);
             }
 
             auto physical_core = device.virtual_core_from_logical_core(logical_core, core_type);

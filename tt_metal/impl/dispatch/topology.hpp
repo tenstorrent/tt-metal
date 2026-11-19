@@ -110,8 +110,8 @@ private:
         uint32_t address;
     };
     std::vector<DispatchL1Reservation> dispatch_l1_reservations_;
-    // Whether every dispatch core's L1 was reserved, which a kernel config buffer there needs.
-    bool dispatch_l1_fully_reserved_ = false;
+    // Reserves the dispatch kernels' L1 for the session and, when `programs` outgrow the KERNEL_CONFIG window,
+    // allocates the kernel config buffer they run from.
     void reserve_dispatch_l1(const std::vector<std::pair<IDevice*, Program*>>& programs);
     std::unordered_map<ChipId, std::unordered_set<CoreCoord>> dispatch_cores_;
     std::unordered_map<ChipId, std::unordered_set<CoreCoord>> routing_cores_;

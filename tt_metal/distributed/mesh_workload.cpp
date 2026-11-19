@@ -1066,13 +1066,13 @@ void MeshWorkloadImpl::check_kernel_config_fits_window(MeshDevice* mesh_device) 
     tt::tt_metal::detail::KernelGroupsGetter kernel_groups_getter =
         [this](uint32_t index) -> std::vector<std::shared_ptr<KernelGroup>>& { return this->get_kernel_groups(index); };
     // The programs share one layout, so any of them holds its sizes.
-    tt::tt_metal::detail::ProgramImpl::check_kernel_config_fits_window(
+    tt::tt_metal::detail::ProgramImpl::check_kernel_config_fits(
         mesh_device->impl().get_context_id(),
         mesh_device,
         kernels_getter,
         kernel_groups_getter,
         programs_.begin()->second.impl(),
-        /*tensix_from_buffer=*/false);
+        /*kernel_config_buffer=*/nullptr);
 }
 
 // MeshWorkload PIMPL Implementation

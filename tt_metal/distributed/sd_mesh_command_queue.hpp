@@ -59,7 +59,6 @@ public:
 
     WorkerConfigBufferMgr& get_config_buffer_mgr(uint32_t index) override;
     void enqueue_mesh_workload(MeshWorkload& mesh_workload, bool blocking) override;
-    // Runs the workload's Tensix kernel-config blocks from `kernel_config_buffer` (experimental::EnqueueMeshWorkload).
     void enqueue_mesh_workload(
         MeshWorkload& mesh_workload, const experimental::KernelConfigBufferImpl& kernel_config_buffer, bool blocking);
 

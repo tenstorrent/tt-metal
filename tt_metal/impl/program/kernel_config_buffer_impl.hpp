@@ -80,9 +80,5 @@ private:
 std::shared_ptr<KernelConfigBufferImpl> CreateKernelConfigBuffer(
     const std::vector<std::pair<IDevice*, Program*>>& programs, bool lockstep_address);
 
-// Checks that `program`, laid out, can run from `buffer` on `device_id`: each kernel group's block fits in the shard on
-// each of its cores there, and the program has no Tensix program semaphores unless the buffer has a lockstep address.
-void ValidateKernelConfigBuffer(Program& program, const KernelConfigBufferImpl& buffer, ChipId device_id);
-
 }  // namespace experimental
 }  // namespace tt::tt_metal

@@ -33,8 +33,7 @@ public:
     // Populate the FD kernels only. This will cause dispatch cores to be allocated in dispatch_core_manager
     void populate_fd_kernels_only(const std::vector<Device*>& devices);
 
-    // Frees the dispatch kernels' session L1: the kernel config buffer they ran from, if any, and their own L1
-    // reserved in the allocator. Only once they have exited.
+    // Frees L1 reserved by the dispatch kernels
     void release_dispatch_l1();
 
 private:
