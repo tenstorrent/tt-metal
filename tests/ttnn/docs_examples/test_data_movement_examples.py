@@ -136,7 +136,7 @@ def test_interleaved_to_sharded(device):
     )
     sharded_memory_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, shard_spec)
     sharded_tensor = ttnn.interleaved_to_sharded(input_tensor, sharded_memory_config)
-    logger.info(f"Shard Shape: {sharded_tensor.memory_config().shard_spec.shape}")  # [32, 64]
+    logger.debug(f"Shard Shape: {sharded_tensor.memory_config().shard_spec.shape}")  # [32, 64]
 
     # The same sharding, from a 4x1 core grid, the shard shape, the sharding scheme and the shard orientation
     sharded_tensor = ttnn.interleaved_to_sharded(
@@ -146,7 +146,7 @@ def test_interleaved_to_sharded(device):
         ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
         ttnn.ShardOrientation.ROW_MAJOR,
     )
-    logger.info(f"Sharded Tensor Shape: {sharded_tensor.shape}")  # Shape([1, 1, 128, 64])
+    logger.debug(f"Sharded Tensor Shape: {sharded_tensor.shape}")  # Shape([1, 1, 128, 64])
 
 
 def test_tilize(device):
