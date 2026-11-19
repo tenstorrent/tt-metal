@@ -7,7 +7,7 @@
 #include <cstdint>
 
 #include "ckernel.h"
-#include "llk_assert.h"
+#include "utils/validate.h"
 
 namespace hal::pack
 {
@@ -222,39 +222,28 @@ constexpr std::uint32_t encode(const EdgeWindow window)
     return TT_OP_SETPKEDGOF(window.y_end, window.y_start, window.x_end, window.x_start);
 }
 
-constexpr void reject_invalid_constant(const bool valid)
+inline constexpr __attribute__((always_inline)) void validate(const DataTransfer transfer)
 {
-    if (__builtin_is_constant_evaluated() && !valid)
-    {
-        __builtin_trap();
-    }
+    hal::detail::require(transfer.address_modifier < 4u, "PACR address modifier selects one of four ADDR_MOD_PACK sections");
+    hal::detail::require(static_cast<std::uint8_t>(transfer.context) < 4u, "PACR context control must be a ContextControl value");
+    hal::detail::require(transfer.configuration_context < 4u, "PACR configuration context must be in [0, 3]");
+    hal::detail::require(transfer.counter_context < 3u, "PACR address-counter context must be in [0, 2]");
+    hal::detail::require(transfer.interfaces < 16u, "PACR Dest-read interface selection is a 4-bit mask");
+    hal::detail::require(static_cast<std::uint8_t>(transfer.padding) < 4u, "PACR row padding must be a RowPadding value");
+    hal::detail::require(
+        transfer.alignment == PaddingAlignment::PerRow || transfer.padding != RowPadding::None, "16-datum padding alignment requires row padding");
 }
 
-#ifdef ENABLE_LLK_ASSERT
-inline __attribute__((always_inline)) void assert_valid(const DataTransfer transfer)
+inline constexpr __attribute__((always_inline)) void validate(const RegisterWrite write)
 {
-    LLK_ASSERT(transfer.address_modifier < 4u, "PACR address modifier selects one of four ADDR_MOD_PACK sections");
-    LLK_ASSERT(transfer.configuration_context < 4u, "PACR configuration context must be in [0, 3]");
-    LLK_ASSERT(transfer.counter_context < 3u, "PACR address-counter context must be in [0, 2]");
-    LLK_ASSERT(transfer.interfaces < 16u, "PACR Dest-read interface selection is a 4-bit mask");
-    LLK_ASSERT(transfer.alignment == PaddingAlignment::PerRow || transfer.padding != RowPadding::None, "16-datum padding alignment requires row padding");
+    hal::detail::require(write.address_slot < 4u, "PACR_SETREG address slot must be in [0, 3]");
+    hal::detail::require(write.stream_id < 64u, "PACR_SETREG stream id is 6 bits");
 }
 
-inline __attribute__((always_inline)) void assert_valid(const RegisterWrite write)
+inline constexpr __attribute__((always_inline)) void validate(const EdgeWindow window)
 {
-    LLK_ASSERT(write.address_slot < 4u, "PACR_SETREG address slot must be in [0, 3]");
-    LLK_ASSERT(write.stream_id < 64u, "PACR_SETREG stream id is 6 bits");
+    hal::detail::require(is_valid(window), "SETPKEDGOF edge offsets are four bits each");
 }
-
-inline __attribute__((always_inline)) void assert_valid(const RegisterWriteValue)
-{
-}
-
-inline __attribute__((always_inline)) void assert_valid(const EdgeWindow window)
-{
-    LLK_ASSERT(detail::is_valid(window), "SETPKEDGOF edge offsets are four bits each");
-}
-#endif
 
 } // namespace detail
 
@@ -276,25 +265,13 @@ constexpr bool is_valid(const EdgeWindow window)
 
 inline constexpr __attribute__((always_inline)) std::uint32_t DataTransfer::get_operation() const
 {
-    detail::reject_invalid_constant(detail::is_valid(*this));
-#ifdef ENABLE_LLK_ASSERT
-    if (!__builtin_is_constant_evaluated())
-    {
-        detail::assert_valid(*this);
-    }
-#endif
+    detail::validate(*this);
     return detail::encode(*this);
 }
 
 inline constexpr __attribute__((always_inline)) std::uint32_t RegisterWrite::get_operation() const
 {
-    detail::reject_invalid_constant(detail::is_valid(*this));
-#ifdef ENABLE_LLK_ASSERT
-    if (!__builtin_is_constant_evaluated())
-    {
-        detail::assert_valid(*this);
-    }
-#endif
+    detail::validate(*this);
     return detail::encode(*this);
 }
 
@@ -305,13 +282,7 @@ inline constexpr __attribute__((always_inline)) std::uint32_t RegisterWriteValue
 
 inline constexpr __attribute__((always_inline)) std::uint32_t EdgeWindow::get_operation() const
 {
-    detail::reject_invalid_constant(detail::is_valid(*this));
-#ifdef ENABLE_LLK_ASSERT
-    if (!__builtin_is_constant_evaluated())
-    {
-        detail::assert_valid(*this);
-    }
-#endif
+    detail::validate(*this);
     return detail::encode(*this);
 }
 
