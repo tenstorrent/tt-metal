@@ -194,6 +194,9 @@ def test_slice_write_fp32(ttnn_mesh_device, reset_seeds, out_shape, value_width)
 
     begins = [0, 0, 0, 0]
     ends = [*out_shape[:-1], value_width]
+    U.xfail_on_quasar(
+        "Quasar slice_write does not support interleaved input; " "https://github.com/tenstorrent/tt-metal/issues/66459"
+    )
     U.op("slice_write", experimental=True)(tt_value, tt_dst, begins, ends, [1, 1, 1, 1])
 
     ref = dst.clone()

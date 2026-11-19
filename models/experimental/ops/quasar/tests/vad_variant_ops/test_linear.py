@@ -65,9 +65,13 @@ def _program_config(spec, mesh):
         per_core_N=pn,
         fused_activation=_activation(act),
     )
+    # Quasar linear takes the experimental.quasar config types, not the mainline ones.
+    backend = ttnn.experimental.quasar if U.is_quasar() else ttnn
     if kind == "1d":
-        return ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(**common, fuse_batch=fuse_batch, mcast_in0=mcast_in0)
-    return ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(**common, transpose_mcast=True)
+        return backend.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+            **common, fuse_batch=fuse_batch, mcast_in0=mcast_in0
+        )
+    return backend.MatmulMultiCoreReuseMultiCastProgramConfig(**common, transpose_mcast=True)
 
 
 def _run_linear(
