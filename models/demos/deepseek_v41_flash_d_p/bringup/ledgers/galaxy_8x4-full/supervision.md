@@ -388,3 +388,8 @@
   checks, the P.84 census 1 (14 positions, one load), the runner demo 1 (running). Plan: the runner demo is the last
   open before a reboot; reboot at that task boundary, before P.84. I cannot reboot from here (no sudo; earlier
   reboots were the owner's / admins'): the owner is asked to reboot or say that releasing the job does it.
+- 07:45 UTC demo accounting (runner agent): 1 device open, 1 load (layers 0-20, 134.9 s); RAM unaccounted 162.7
+  before, 164.3 loaded, 163.4 after stop. The new reserve check (F284) now refuses any device open: MemAvailable
+  350.2 GiB - 200.2 GiB expected load = 149.9 < 150. The node needs its reboot before P.84 (owner asked).
+- One-load validate: FIX.11 fixed (one configuration = one group even with a non-shared unit between); FIX.13: its
+  profile unit runs with the units' mmap engram table (rows bit-identical between modes), one load.
