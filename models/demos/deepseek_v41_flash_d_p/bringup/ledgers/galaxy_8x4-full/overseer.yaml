@@ -551,6 +551,27 @@ notes:
     pure function of the chunk''s routing: deterministic, identical on every chip). Measure the split''s quality: the busiest
     chip''s tiles a layer with replicas vs the offline best split on the same chunk (census numbers), and the walls. Also:
     set MOE_REPLICAS default back to off until the owner''s accept (keep_default).'
+- id: OV-53
+  tasks:
+  - P.84
+  status: open
+  t: '2026-11-19T11:09:13'
+  text: 'Overseer 11:09, attempt 3, third item: the default replica table becomes tt/replicas/agentic_traces.json (P.85:
+    picked on the real-history session census of public agentic traces, held-out -2 ms vs agentic.json by the fit; results/P.85_offline.txt).
+    Keep agentic.json selectable (MOE_REPLICA_TABLE).'
+- id: OV-54
+  tasks:
+  - P.84
+  status: open
+  t: '2026-11-19T11:18:56'
+  text: 'Overseer 11:18, attempt 3, FIRST: attempt 2''s code measured on the runner (both units, both sides, /scratch/dnijemcevic/bringup/p84_direct):
+    steady agentic 145408 79.2 off / 79.3 on, 770048 87.6 / 87.5, prose 145408 86.5 / 85.8 ms; device 65.46 / 65.37 ms,
+    experts section 29.45 / 29.26 ms: replicas loaded (32 a layer, 13 slots) but NO gain. Before anything else find out
+    why with one runner request: the census (tests/perf/test_session_census.py on a few agentic_cc sessions, or test_expert_load_census)
+    with MOE_REPLICAS=on, per chip rows / tiles incl. the 13th slot, vs off and vs the offline best split on the same chunks:
+    are rows reaching the replicas at all, and is the busiest chip''s tile count falling? Then fix (global counts for the
+    split, OV-52), call-time switch (OV-51), table agentic_traces (OV-53). Target: experts section falls by >= 3 ms at agentic
+    145408.'
 fixes:
 - id: FIX.1
   title: 'Owner order: no padding to get around a kernel limit'

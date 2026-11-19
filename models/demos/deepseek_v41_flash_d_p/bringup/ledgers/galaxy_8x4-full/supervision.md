@@ -553,3 +553,4 @@
   0.4-0.9 ms more on the traces: the zero-history pick was usable but not the best.
 - New table: tt/replicas/agentic_traces.json; it becomes the default table in P.84 attempt 3 (with the global-count
   split), measured by the A/B on the runner.
+- 11:18 UTC P.84 direct A/B of attempt 2's code (runner, 2 opens/loads, both units both sides): NO gain (agentic 145408 steady 79.2 off / 79.3 on; experts section 29.45 / 29.26 ms) although replicas load. Attempt 3 launched: first find why (census with replicas on), then global-count split, call-time switch, P.85 table. RAM unaccounted 178.6 GiB.
