@@ -82,6 +82,11 @@
 // NSLICE_ASYNC_BIAS the bias is read without a wait right after the first weight round is issued and pushed once it
 // lands (polled in the walk's waits), so the weight stream, which paces the walk with the spare groups, starts first.
 //
+// N-slice column stream rate: the column sender and the forwarder multicast without waiting for the data to leave L1
+// (the slot is refilled, or acked for reuse, only after a flush); the forwarder acks the column's next round before it
+// forwards this one; with NSLICE_WEIGHT_PAGE_RUNS a round is one ND shard, read as one run. Measured on res4.x @ LoFi
+// (unzoned, medians of 3, bit-identical): 11636 -> 10953 ns; the round period went 1.03 -> 0.74 us.
+//
 // Every push of cb_combine_slots is its whole capacity, so its write pointer never leaves the CB base and
 // the same base address is right on every core. The counters only grow, so round j waits for
 // (j + 1) x the per-round count.
@@ -1202,10 +1207,33 @@ void kernel_main() {
     constexpr uint32_t TRID_WEIGHTS = 2;  // 2 and 3 alternate; the face gather uses 1
     uint32_t prefetched_round = 0xFFFFFFFF;
     [[maybe_unused]] auto start_weight_reads = [&](uint32_t round, uint32_t y) {
+        // The multicasts do not wait for their data to leave L1 (CallerManaged): the slot's last multicast must have
+        // left it before it is refilled (it went out rounds ago, so this returns at once).
+        noc_async_writes_flushed();
         weight_reads.begin(TRID_WEIGHTS + (round & 1));
         uint32_t l1 = weights_base + (round % nslice_weight_depth) * slice_weight_tiles * weight_tile_bytes;
         const uint32_t n0 = y * out_n_tiles;
         const uint32_t valid = tensor_n_tiles - n0 < out_n_tiles ? tensor_n_tiles - n0 : out_n_tiles;
+#ifdef NSLICE_WEIGHT_PAGE_RUNS
+        // One ND shard per (channel slice, N-slice) round (conv2d_3x3._block_weight_memory_config): its tiles are
+        // consecutive pages of one bank in slot order (k-major, out_n_tiles per k), so the round is one read. One-tile
+        // reads are NIU-issue-bound (~42 cycles each): with the multicast no longer blocking, their issue ran under
+        // it and slowed aspp.convs.3 @ LoFi by 3.1% (20493 -> 21126 ns), which the single read does not.
+        if (valid == out_n_tiles) {
+            weight_reads.read(
+                weights.get_noc_addr(weight_k_tile_start * tensor_n_tiles + n0),
+                l1,
+                slice_weight_tiles * weight_tile_bytes);
+        } else {
+            // A short last N-slice (only in a hand-placed tensor: the prepared one splits C_out evenly): a run per k.
+            for (uint32_t k = 0; k < nslice_k_tiles; ++k, l1 += out_n_tiles * weight_tile_bytes) {
+                weight_reads.read(
+                    weights.get_noc_addr((weight_k_tile_start + k) * tensor_n_tiles + n0),
+                    l1,
+                    valid * weight_tile_bytes);
+            }
+        }
+#else
         for (uint32_t k = 0; k < nslice_k_tiles; ++k) {
             const uint32_t row_page = (weight_k_tile_start + k) * tensor_n_tiles + n0;
             for (uint32_t n = 0; n < valid; ++n) {
@@ -1213,6 +1241,7 @@ void kernel_main() {
             }
             l1 += out_n_tiles * weight_tile_bytes;
         }
+#endif
         dataflow_kernel_lib::set_read_trid(weight_reads.noc, 0);
     };
     // The ring credit of M-block credit_m (see nslice_round), given from inside the weight waits as soon as it is
@@ -1289,7 +1318,8 @@ void kernel_main() {
     // The fixed-sender multicast receive (ack the sender, then the round's data-ready signal), polling while it waits.
     // Raw for the same reason as receive_serving: ReceiverPipe::receive has no poll form. ct_base_c: the channel's
     // compile-time offset (its semaphore ids), as a std::integral_constant.
-    auto receive_polling_on = [&](auto& wm, uint32_t round, auto ct_base_c) {
+    // acked: this round's ack already went out (a forwarder's early ack).
+    auto receive_polling_on = [&](auto& wm, uint32_t round, auto ct_base_c, bool acked = false) {
         using WM = std::decay_t<decltype(wm)>;
         if constexpr (WM::active) {
             static_assert(WM::transfer_mode == dataflow_kernel_lib::TransferMode::Multicast && !WM::rotating);
@@ -1298,9 +1328,16 @@ void kernel_main() {
                 dataflow_kernel_lib::detail::
                     positional_mcast_semaphore<ct_base, dataflow_kernel_lib::mcast_wire::DATA_READY>());
             if constexpr (WM::pre_handshake) {
-                Semaphore<>(dataflow_kernel_lib::detail::
-                                positional_mcast_semaphore<ct_base, dataflow_kernel_lib::mcast_wire::CONSUMER_READY>())
-                    .up(noc, wm.sender_x(), wm.sender_y(), 1);
+                if (!acked) {
+                    if (weight2_sender) {
+                        // A forwarder: the ack lets the column overwrite a slot one of its forwards read.
+                        noc_async_writes_flushed();
+                    }
+                    Semaphore<>(
+                        dataflow_kernel_lib::detail::
+                            positional_mcast_semaphore<ct_base, dataflow_kernel_lib::mcast_wire::CONSUMER_READY>())
+                        .up(noc, wm.sender_x(), wm.sender_y(), 1);
+                }
             }
             if constexpr (WM::signal == dataflow_kernel_lib::DataReadySignal::Counter) {
                 while (data_ready.value() < round + 1) {
@@ -1314,14 +1351,54 @@ void kernel_main() {
             }
         }
     };
-    auto receive_polling = [&](auto& wm, uint32_t round) {
+    auto receive_polling = [&](auto& wm, uint32_t round, bool acked = false) {
         receive_polling_on(
-            wm, round, std::integral_constant<uint32_t, get_named_compile_time_arg_val("weight_mcast_ct_offset")>{});
+            wm,
+            round,
+            std::integral_constant<uint32_t, get_named_compile_time_arg_val("weight_mcast_ct_offset")>{},
+            acked);
     };
+    // A sender's wait for every receiver's ack of its round, polling the ring credit (the helper's send then finds them
+    // at once). Generic: kernel_main is not a template, so only a generic lambda discards an absent channel's branch.
+    auto wait_acks_polling_on = [&](auto& wm, auto ct_base_c) {
+        using WM = std::decay_t<decltype(wm)>;
+        if constexpr (WM::active) {
+            if constexpr (WM::pre_handshake) {
+                Semaphore<> ready(dataflow_kernel_lib::detail::positional_mcast_semaphore<
+                                  decltype(ct_base_c)::value,
+                                  dataflow_kernel_lib::mcast_wire::CONSUMER_READY>());
+                while (ready.value() < WM::ack_count) {
+                    poll_credit();
+                }
+            }
+        }
+    };
+    // The column sender's ack of a forwarder's next round (see issue_weight_slice).
+    auto early_ack_on = [&](auto& wm, auto ct_base_c) -> bool {
+        using WM = std::decay_t<decltype(wm)>;
+        if constexpr (WM::active) {
+            if constexpr (WM::pre_handshake) {
+                noc_async_writes_flushed();
+                Semaphore<>(dataflow_kernel_lib::detail::positional_mcast_semaphore<
+                                decltype(ct_base_c)::value,
+                                dataflow_kernel_lib::mcast_wire::CONSUMER_READY>())
+                    .up(noc, wm.sender_x(), wm.sender_y(), 1);
+                return true;
+            }
+        }
+        return false;
+    };
+    // A forwarder's round whose slot it already reserved and acked.
+    uint32_t early_acked_round = 0xFFFFFFFF;
     // Weights of slice y; next_y is the M-block's next slice, or k_cols after the last.
     [[maybe_unused]] auto issue_weight_slice = [&](uint32_t y, uint32_t next_y) {
         const uint32_t round = k_blocks_issued;
+        bool column_received = false;
         MaybeDeviceZoneScope("writer_weight_fetch");
+        // Every round, not only inside the waits: once a round lands before its receiver waits for it, a forwarder that
+        // never waits gave the credit only at the blocking wait after round depth, ~2.5 us late, and its grid row's
+        // ring stalled ~2 us behind it (res4.x).
+        poll_credit();
         if (weight2_receiver) {
             // Spare-column member: the column stream's second multicast.
             if (round == 0) {
@@ -1362,7 +1439,9 @@ void kernel_main() {
             if (weight_sender && weight_mcast.should_send(round)) {
                 const uint32_t l1 =
                     weights_base + (round % nslice_weight_depth) * slice_weight_tiles * weight_tile_bytes;
-                weight_sender->send(l1, l1, slice_weight_tiles * weight_tile_bytes);
+                // Returns once the multicast is issued: the next round's reads then go out under it.
+                weight_sender->template send<dataflow_kernel_lib::SourceL1Guard::CallerManaged>(
+                    l1, l1, slice_weight_tiles * weight_tile_bytes);
             }
             poll_credit();
         } else {
@@ -1370,19 +1449,36 @@ void kernel_main() {
                 issue_async_bias();
             }
             reserve_polling(slice_weight_tiles);
-            receive_polling(weight_mcast, round);
+            receive_polling(weight_mcast, round, early_acked_round == round);
+            column_received = true;
         }
         // The round is this core's own first: the forward only reads its slot, which is reserved again (overwritten)
         // only after the forward's source reads completed, on this RISC (forwarding before the push held the
         // forwarders' own walks one forward behind: res5.0's forwarders ended ~1 us after their rows).
         cb_push_back(cb_weights, slice_weight_tiles);
         if (weight2_sender) {
-            // Spare-column groups: forward the round to the spare members of this slice. The send waits for their acks
-            // without polling: a member acks once the round's slot is free, rounds [0, depth) use fresh slots, and this
-            // core gives its ring credit before round depth, so no member waits on anything this core still owes.
+            // A forwarder acks the column's next round (its slot reserved, if already free) before it forwards this
+            // one: acking only after the forward put the forward (~0.35-0.45 us) between every two column multicasts.
+            // Safe: the next round lands in another slot, and this round's data-ready flag is already cleared.
+            if (column_received && next_y < k_cols && cb_pages_reservable_at_back(cb_weights, slice_weight_tiles)) {
+                cb_reserve_back(cb_weights, slice_weight_tiles);
+                if (early_ack_on(
+                        weight_mcast,
+                        std::integral_constant<uint32_t, get_named_compile_time_arg_val("weight_mcast_ct_offset")>{})) {
+                    early_acked_round = round + 1;
+                }
+            }
+            // Spare-column groups: forward the round to the spare members of this slice. A member acks once the
+            // round's slot is free, rounds [0, depth) use fresh slots, and this core gives its ring credit before round
+            // depth, so no member waits on anything this core still owes. The ack wait polls the credit; the send
+            // returns once the multicast is issued (the slot is acked for reuse only after a flush).
             MaybeDeviceZoneScope("writer_spare_forward");
             const uint32_t l1 = weights_base + (round % nslice_weight_depth) * slice_weight_tiles * weight_tile_bytes;
-            weight2_sender->send(l1, l1, slice_weight_tiles * weight_tile_bytes);
+            wait_acks_polling_on(
+                weight_mcast2,
+                std::integral_constant<uint32_t, get_named_compile_time_arg_val("weight_mcast2_ct_offset")>{});
+            weight2_sender->template send<dataflow_kernel_lib::SourceL1Guard::CallerManaged>(
+                l1, l1, slice_weight_tiles * weight_tile_bytes);
         }
         ++k_blocks_issued;
     };
@@ -1424,6 +1520,7 @@ void kernel_main() {
         }
         issue_weights_through(num_slices);
         try_finish_bias(true);
+        noc_async_writes_flushed();
     };
 
     // ---- fill_halo_slab, higher-shard half, and the trailing tile-rows of the face-direct gather (see the file

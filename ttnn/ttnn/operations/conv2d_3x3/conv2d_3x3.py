@@ -275,11 +275,11 @@ def prepare_conv2d_weights(
         dtype=weight_dtype,
         layout=ttnn.TILE_LAYOUT,
         device=device,
-        memory_config=weight_memory_config(c_out, input_memory_config, device),
+        memory_config=weight_memory_config(c_out, input_memory_config, device, c_in=c_in, input_layout=input_layout),
     )
 
 
-def weight_memory_config(c_out, input_memory_config, device):
+def weight_memory_config(c_out, input_memory_config, device, c_in=None, input_layout=None):
     """Where the prepared weights live. HEIGHT-sharded input on fewer cores than the device grid (where the weight
     servers can run: conv2d_3x3_program_descriptor._weight_servers): ND-sharded over the DRAM banks, round-robin, one
     shard per tile-row of one kw-fold n-group (the largest divisor of the C_out tiles up to 4), so the server reads each
@@ -289,7 +289,10 @@ def weight_memory_config(c_out, input_memory_config, device):
     fc0): res3.x 11.16 -> 10.88 us, sem dec res3 fc0 -2.7%, inst dec res3 fc0 -3.1%, inst dec res2 fc0 -2.1%, inst res2
     fc1 -1.4%, sem dec res3 fc1 -1.1%, sem res2 fc1 -0.8%, the rest flat. HEIGHT input on the whole grid leaves no
     spare core for a server (stem.conv1/2/3: their cores read the weights one tile at a time), a one-tile-wide n-group
-    has no run longer than a tile, and the other placements have no servers: those stay DRAM interleaved."""
+    has no run longer than a tile, and the other placements have no servers: those stay DRAM interleaved.
+    BLOCK-sharded input (given c_in): see _block_weight_memory_config."""
+    if input_memory_config.memory_layout == _ML.BLOCK_SHARDED and c_in is not None:
+        return _block_weight_memory_config(c_out, c_in, input_layout, input_memory_config, device)
     if input_memory_config.memory_layout != _ML.HEIGHT_SHARDED:
         return ttnn.DRAM_MEMORY_CONFIG
     grid = device.compute_with_storage_grid_size()
@@ -302,6 +305,30 @@ def weight_memory_config(c_out, input_memory_config, device):
     banks = device.dram_grid_size().x
     spec = ttnn.NdShardSpec(
         shard_shape=[1, 1, TILE, cols * TILE],
+        grid=ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(b, 0), ttnn.CoreCoord(b, 0)) for b in range(banks)]),
+        orientation=ttnn.ShardOrientation.ROW_MAJOR,
+        shard_distribution_strategy=ttnn.ShardDistributionStrategy.ROUND_ROBIN_1D,
+    )
+    return ttnn.MemoryConfig(buffer_type=ttnn.BufferType.DRAM, nd_shard_spec=spec)
+
+
+def _block_weight_memory_config(c_out, c_in, input_layout, input_memory_config, device):
+    """BLOCK-sharded input: one ND shard per N-slice weight round, [one channel slice's K rows, one column's N-slice of
+    out_n tiles], round-robin over the DRAM banks. The K split's N-slice walk reads a round (all K of a channel slice x
+    out_n tiles) as one run in slot order (the writer's NSLICE_WEIGHT_PAGE_RUNS). Page order is unchanged: every
+    TensorAccessor reads the same tile at the same page id, so the K-blocked walk reads it one tile at a time as before.
+    One channel slice (no K split), or C_out tiles that do not split into whole N-slices, keeps DRAM interleaved.
+    Measured with the non-blocking column multicast (unzoned, medians of 3): aspp.convs.3 @ LoFi 21126 ns with one-tile
+    reads vs 20437 ns with page runs (HEAD 20493 ns)."""
+    slices = channel_slices(c_in, input_layout, input_memory_config)
+    n_tiles = -(-c_out // TILE)
+    out_n = -(-n_tiles // slices)
+    if slices < 2 or n_tiles % out_n != 0:
+        return ttnn.DRAM_MEMORY_CONFIG
+    c_in_p = per_pixel_channels(c_in, input_layout, input_memory_config)
+    banks = device.dram_grid_size().x
+    spec = ttnn.NdShardSpec(
+        shard_shape=[1, 1, 3 * _round_up(3 * c_in_p, TILE), out_n * TILE],
         grid=ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(b, 0), ttnn.CoreCoord(b, 0)) for b in range(banks)]),
         orientation=ttnn.ShardOrientation.ROW_MAJOR,
         shard_distribution_strategy=ttnn.ShardDistributionStrategy.ROUND_ROBIN_1D,

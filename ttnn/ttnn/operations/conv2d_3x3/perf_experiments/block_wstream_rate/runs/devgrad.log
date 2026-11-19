@@ -1,0 +1,132 @@
+SAFE_PYTEST: Waiting for device lock...
+SAFE_PYTEST: Device lock acquired
+SAFE_PYTEST: [dev] asserts=ebreak llk_asserts=ON watcher=polling triage=ON timeout=5s
+PRECOMPILE: on — collect + parallel compile (x64) inside the pytest session, local
+SAFE_PYTEST: env UP_FRONT_INLINE=1 UP_FRONT_COLLECT=1 UP_FRONT_REAL_ALLOC=1 UP_FRONT_COLLECT_WORKERS=64 PYTHONPATH=/localdev/pmilojevic/workspaces/opgen:/localdev/pmilojevic/workspaces/opgen pytest -p tests.plugins.up_front_collect /localdev/pmilojevic/workspaces/opgen/ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_wstream_rate/test_bwr.py --import-mode=prepend -q
+========================================
+2026-11-19 18:56:38.603 | DEBUG    | ttnn:<module>:45 - Initial ttnn.CONFIG:
+Config{cache_path=/home/pmilojevic/.cache/ttnn,model_cache_path=/home/pmilojevic/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,validate_program_args=false,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_graph_python_stack_traces=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,strict_ccl_topology=false,verify_replicated_shards_on_dump=true,std::nullopt}
+============================= test session starts ==============================
+platform linux -- Python 3.10.19, pytest-9.0.3, pluggy-1.7.0 -- /localdev/pmilojevic/workspaces/opgen/python_env/bin/python
+cachedir: .pytest_cache
+benchmark: 5.2.3 (defaults: timer=time.perf_counter disable_gc=False min_rounds=5 min_time=0.000005 max_time=1.0 calibration_precision=10 warmup=False warmup_iterations=100000)
+rootdir: /localdev/pmilojevic/workspaces/opgen
+configfile: pytest.ini
+plugins: split-0.11.0, repeat-0.9.4, anyio-4.16.0, benchmark-5.2.3, github-actions-annotate-failures-0.3.0, timeout-2.4.0, cov-7.0.0, dash-2.15.0
+timeout: 300.0s
+timeout method: signal
+timeout func_only: False
+collecting ... 2026-11-19 18:56:38.836 | info     |          Device | Opening user mode device driver (tt_cluster.cpp:252)
+2026-11-19 18:56:38.836 | info     |             UMD | Cluster constructor started. (cluster.cpp:434)
+2026-11-19 18:56:38.838 | info     |             UMD | Creating TopologyDiscovery for architecture: blackhole (topology_discovery.cpp:137)
+2026-11-19 18:56:38.838 | info     |             UMD | Starting topology discovery. (topology_discovery.cpp:156)
+2026-11-19 18:56:38.861 | info     |             UMD | Established firmware bundle version: 19.16.1 (topology_discovery.cpp:700)
+2026-11-19 18:56:38.862 | info     |             UMD | Completed topology discovery. (topology_discovery.cpp:161)
+2026-11-19 18:56:39.133 | info     |             UMD | Opening local chip ids/PCIe ids: {0, 1, 2, 3, 4, 5, 6, 7}/[2, 3, 1, 0, 6, 7, 5, 4] and remote chip ids {} (cluster.cpp:174)
+2026-11-19 18:56:39.133 | info     |             UMD | IOMMU: enabled (cluster.cpp:148)
+2026-11-19 18:56:39.133 | info     |             UMD | KMD version: 2.9.0 (cluster.cpp:151)
+2026-11-19 18:56:39.133 | info     |             UMD | Cluster constructor completed. (cluster.cpp:893)
+2026-11-19 18:56:39.140 | info     |             UMD | Starting devices in cluster (cluster.cpp:1482)
+2026-11-19 18:56:39.430 | info     |             UMD | Starting devices in cluster completed. (cluster.cpp:1491)
+2026-11-19 18:56:39.567 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:571)
+2026-11-19 18:56:39.567 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:624)
+2026-11-19 18:56:39.789 | info     |       LLRuntime | Watcher log file: /localdev/pmilojevic/workspaces/opgen/generated/watcher/watcher.log (watcher_server.cpp:306)
+2026-11-19 18:56:39.789 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using distributed::MeshDevice::create_unit_meshes(). (device_manager.cpp:265)
+2026-11-19 18:56:40.529 | info     |           Metal | Disabling and clearing program cache on MeshDevice 1 (mesh_device.cpp:1332)
+2026-11-19 18:56:40.578 | info     |           Metal | Disabling and clearing program cache on MeshDevice 1 (mesh_device.cpp:1332)
+2026-11-19 18:56:40.611 | info     |           Metal | Disabling and clearing program cache on MeshDevice 1 (mesh_device.cpp:1332)
+2026-11-19 18:56:40.644 | info     |           Metal | Disabling and clearing program cache on MeshDevice 1 (mesh_device.cpp:1332)
+2026-11-19 18:56:40.671 | info     |           Metal | Disabling and clearing program cache on MeshDevice 1 (mesh_device.cpp:1332)
+2026-11-19 18:56:40.702 | info     |           Metal | Disabling and clearing program cache on MeshDevice 1 (mesh_device.cpp:1332)
+2026-11-19 18:56:40.732 | info     |           Metal | Disabling and clearing program cache on MeshDevice 1 (mesh_device.cpp:1332)
+2026-11-19 18:56:40.763 | info     |           Metal | Disabling and clearing program cache on MeshDevice 1 (mesh_device.cpp:1332)
+2026-11-19 18:56:40.792 | info     |           Metal | Disabling and clearing program cache on MeshDevice 1 (mesh_device.cpp:1332)
+2026-11-19 18:56:40.818 | info     |           Metal | Disabling and clearing program cache on MeshDevice 1 (mesh_device.cpp:1332)
+2026-11-19 18:56:40.837 | info     |           Metal | Disabling and clearing program cache on MeshDevice 1 (mesh_device.cpp:1332)
+2026-11-19 18:56:40.858 | info     |           Metal | Disabling and clearing program cache on MeshDevice 1 (mesh_device.cpp:1332)
+2026-11-19 18:56:40.883 | info     |           Metal | Disabling and clearing program cache on MeshDevice 1 (mesh_device.cpp:1332)
+2026-11-19 18:56:40.905 | info     |           Metal | Disabling and clearing program cache on MeshDevice 1 (mesh_device.cpp:1332)
+collected 14 items
+
+UP_FRONT_INLINE: collect pass over 14 item(s) took 2.1s
+UP_FRONT_INLINE: compile route local (programs=14, farm_min=10)
+
+UP_FRONT_COLLECT: 14 ops stashed across 14 bodies -> 14 unique programs (swallowed 0, skipped-capture 0)
+UP_FRONT_COLLECT: fast-shallow from_torch — shape-only=40 fallback=0
+2026-11-19 18:56:41.196 | info     |       LLRuntime | Watcher log file: /localdev/pmilojevic/workspaces/opgen/generated/watcher/watcher.log (watcher_server.cpp:306)
+2026-11-19 18:56:41.197 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using distributed::MeshDevice::create_unit_meshes(). (device_manager.cpp:265)
+2026-11-19 18:56:41.333 | info     |           Metal | Enabling program cache on MeshDevice 3 (mesh_device.cpp:1322)
+UP_FRONT_COLLECT: 14 collected · 14 built · 0 already compiled in 3.3s (workers=64, errors=0) -> on-disk JIT cache warm
+UP_FRONT_COLLECT_RESULT: status=ok reason=ok unique=14 programs=14 errors=0 pytest_exit=0 xpass_strict=0 other_failures=0 built=14 compile_s=3.7 collect_s=2.1 route=local
+UP_FRONT_INLINE: compile step took 3.7s; starting the real pass
+
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_wstream_rate/test_bwr.py::test_bwr[block:aspp_convs2-grad0] 2026-11-19 18:56:44.950 | info     |       LLRuntime | Watcher log file: /localdev/pmilojevic/workspaces/opgen/generated/watcher/watcher.log (watcher_server.cpp:306)
+2026-11-19 18:56:44.950 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using distributed::MeshDevice::create_unit_meshes(). (device_manager.cpp:265)
+2026-11-19 18:56:45.074 | info     |           Metal | Disabling and clearing program cache on MeshDevice 5 (mesh_device.cpp:1332)
+PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_wstream_rate/test_bwr.py::test_bwr[block:aspp_convs2-grad1] 2026-11-19 18:56:45.181 | info     |           Metal | Disabling and clearing program cache on MeshDevice 5 (mesh_device.cpp:1332)
+PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_wstream_rate/test_bwr.py::test_bwr[res4_{1__5}_conv2-grad0] 2026-11-19 18:56:45.304 | info     |           Metal | Disabling and clearing program cache on MeshDevice 5 (mesh_device.cpp:1332)
+PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_wstream_rate/test_bwr.py::test_bwr[res4_{1__5}_conv2-grad1] 2026-11-19 18:56:45.347 | info     |           Metal | Disabling and clearing program cache on MeshDevice 5 (mesh_device.cpp:1332)
+PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_wstream_rate/test_bwr.py::test_bwr[res5_0_conv2-grad] 2026-11-19 18:56:45.389 | info     |           Metal | Disabling and clearing program cache on MeshDevice 5 (mesh_device.cpp:1332)
+PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_wstream_rate/test_bwr.py::test_bwr[res5_1_conv2-grad] 2026-11-19 18:56:45.451 | info     |           Metal | Disabling and clearing program cache on MeshDevice 5 (mesh_device.cpp:1332)
+PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_wstream_rate/test_bwr.py::test_bwr[res5_2_conv2-grad] 2026-11-19 18:56:45.517 | info     |           Metal | Disabling and clearing program cache on MeshDevice 5 (mesh_device.cpp:1332)
+PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_wstream_rate/test_bwr.py::test_bwr[aspp_convs_3-grad] 2026-11-19 18:56:45.584 | info     |           Metal | Disabling and clearing program cache on MeshDevice 5 (mesh_device.cpp:1332)
+PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_wstream_rate/test_bwr.py::test_bwr[block:res4_0_conv2-grad] 2026-11-19 18:56:45.640 | info     |           Metal | Disabling and clearing program cache on MeshDevice 5 (mesh_device.cpp:1332)
+PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_wstream_rate/test_bwr.py::test_bwr[block:plain_k2_d8-grad] 2026-11-19 18:56:45.689 | info     |           Metal | Disabling and clearing program cache on MeshDevice 5 (mesh_device.cpp:1332)
+PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_wstream_rate/test_bwr.py::test_bwr[block:plain_k4-grad] 2026-11-19 18:56:45.711 | info     |           Metal | Disabling and clearing program cache on MeshDevice 5 (mesh_device.cpp:1332)
+PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_wstream_rate/test_bwr.py::test_bwr[block:plain_k11_o5-grad] 2026-11-19 18:56:45.738 | info     |           Metal | Disabling and clearing program cache on MeshDevice 5 (mesh_device.cpp:1332)
+PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_wstream_rate/test_bwr.py::test_bwr[block:plain_k8_co96-grad] 2026-11-19 18:56:45.775 | info     |           Metal | Disabling and clearing program cache on MeshDevice 5 (mesh_device.cpp:1332)
+PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_wstream_rate/test_bwr.py::test_bwr[block:plain_k7-grad] 2026-11-19 18:56:45.807 | info     |           Metal | Disabling and clearing program cache on MeshDevice 5 (mesh_device.cpp:1332)
+PASSEDUP_FRONT_INLINE: real pass took 1.2s
+
+
+- generated xml file: /localdev/pmilojevic/workspaces/opgen/generated/test_reports/most_recent_tests.xml -
+============================= slowest 25 durations =============================
+0.38s setup    ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_wstream_rate/test_bwr.py::test_bwr[block:aspp_convs2-grad0]
+0.12s call     ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_wstream_rate/test_bwr.py::test_bwr[block:aspp_convs2-grad1]
+0.10s call     ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_wstream_rate/test_bwr.py::test_bwr[block:aspp_convs2-grad0]
+0.06s call     ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_wstream_rate/test_bwr.py::test_bwr[res5_2_conv2-grad]
+0.06s call     ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_wstream_rate/test_bwr.py::test_bwr[res5_1_conv2-grad]
+0.06s call     ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_wstream_rate/test_bwr.py::test_bwr[res5_0_conv2-grad]
+0.05s call     ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_wstream_rate/test_bwr.py::test_bwr[aspp_convs_3-grad]
+0.05s call     ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_wstream_rate/test_bwr.py::test_bwr[block:res4_0_conv2-grad]
+0.04s call     ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_wstream_rate/test_bwr.py::test_bwr[res4_{1__5}_conv2-grad0]
+0.04s call     ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_wstream_rate/test_bwr.py::test_bwr[res4_{1__5}_conv2-grad1]
+0.03s call     ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_wstream_rate/test_bwr.py::test_bwr[block:plain_k11_o5-grad]
+0.03s call     ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_wstream_rate/test_bwr.py::test_bwr[block:plain_k7-grad]
+0.03s call     ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_wstream_rate/test_bwr.py::test_bwr[block:plain_k8_co96-grad]
+0.03s call     ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_wstream_rate/test_bwr.py::test_bwr[block:plain_k4-grad]
+0.02s teardown ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_wstream_rate/test_bwr.py::test_bwr[block:plain_k7-grad]
+0.02s call     ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_wstream_rate/test_bwr.py::test_bwr[block:plain_k2_d8-grad]
+
+(9 durations < 0.005s hidden.  Use -vv to show these durations.)
+============================== 14 passed in 7.15s ==============================
+2026-11-19 18:56:47.170 | info     |    BuildKernels | JIT cache stats: 19/83 hits (22.9%) [19 cached, 298 build-once dedup, 0 merged artifacts, 0 merged genfiles] (build_cache_telemetry.cpp:362)
+2026-11-19 18:56:47.170 | info     |    BuildKernels | JIT telemetry: 48 registered TelemetryTokens (build_cache_telemetry.cpp:510)
+2026-11-19 18:56:47.221 | info     |          Device | Closing user mode device drivers (tt_cluster.cpp:605)
+2026-11-19 18:56:47.221 | info     |             UMD | Closing devices in cluster (cluster.cpp:1496)
+2026-11-19 18:56:47.612 | info     |             UMD | Closing devices in cluster completed. (cluster.cpp:1506)
+2026-11-19 18:56:47.612 | info     |             UMD | Cluster destructor started. (cluster.cpp:1227)
+2026-11-19 18:56:47.612 | info     |             UMD | Cluster destructor completed. (cluster.cpp:1240)
+========================================
+PRECOMPILE: UP_FRONT_INLINE: collect pass over 14 item(s) took 2.1s
+PRECOMPILE: UP_FRONT_INLINE: compile route local (programs=14, farm_min=10)
+PRECOMPILE: UP_FRONT_COLLECT: 14 ops stashed across 14 bodies -> 14 unique programs (swallowed 0, skipped-capture 0)
+PRECOMPILE: UP_FRONT_COLLECT: fast-shallow from_torch — shape-only=40 fallback=0
+PRECOMPILE: UP_FRONT_COLLECT: 14 collected · 14 built · 0 already compiled in 3.3s (workers=64, errors=0) -> on-disk JIT cache warm
+PRECOMPILE: UP_FRONT_INLINE: compile step took 3.7s; starting the real pass
+SAFE_PYTEST_RESULT: PASS
+========================================
+SAFE_PYTEST_TOTAL_RUNTIME: 0m14s (14s total, device-lock-acquired -> exit)

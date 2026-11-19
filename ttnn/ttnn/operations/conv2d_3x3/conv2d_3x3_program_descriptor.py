@@ -2725,6 +2725,18 @@ def create_program_descriptor(
     # lands, so the column weight stream starts at kernel start (with the spare groups that stream paces the walk:
     # res4.x 12022 -> 11607 ns; without them flat to -1.7%).
     _async_bias_defines = [("NSLICE_ASYNC_BIAS", "1")] if g.k_split and b.nslice and has_bias and not kwf else []
+    # N-slice walk with one weight round per ND shard (conv2d_3x3._block_weight_memory_config): the writer reads a
+    # round as one run. Weights placed any other way (DRAM interleaved) keep the one-tile reads.
+    _wspec = weight_tensor.memory_config().nd_shard_spec
+    _page_run_defines = (
+        [("NSLICE_WEIGHT_PAGE_RUNS", "1")]
+        if g.k_split
+        and b.nslice
+        and not kwf
+        and _wspec is not None
+        and list(_wspec.shard_shape)[-2:] == [b.block_k_tiles * b.num_k_blocks * TILE, g.out_n_tiles * TILE]
+        else []
+    )
     readers = [
         ttnn.KernelDescriptor(
             kernel_source=str(KERNEL_DIR / "conv2d_3x3_reader.cpp"),
@@ -2742,7 +2754,7 @@ def create_program_descriptor(
             core_ranges=_core_range_set(writer_cores),
             compile_time_args=writer_ct_args_for(*slice_channels),
             runtime_args=writer_rt,
-            defines=_kwf_dm_defines + _ring_owner_defines + _sd_dm_defines + _async_bias_defines,
+            defines=_kwf_dm_defines + _ring_owner_defines + _sd_dm_defines + _async_bias_defines + _page_run_defines,
             config=ttnn.WriterConfigDescriptor(),
         )
         for slice_channels, (writer_cores, writer_rt) in writer_groups.items()
