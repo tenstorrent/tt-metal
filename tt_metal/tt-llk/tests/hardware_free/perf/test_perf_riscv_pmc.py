@@ -376,12 +376,16 @@ def _firmware(name):
     return path.read_text()
 
 
+# The Tensix hooks are in the kernel entries, so the Tensix firmware stays at its region size.
 @pytest.mark.parametrize(
     "firmware, hooked",
     (
-        ("brisc.cc", True),
-        ("ncrisc.cc", True),
-        ("trisc.cc", True),
+        ("brisck.cc", True),
+        ("ncrisck.cc", True),
+        ("trisck.cc", True),
+        ("brisc.cc", False),
+        ("ncrisc.cc", False),
+        ("trisc.cc", False),
         ("active_erisc.cc", True),
         ("idle_erisc.cc", True),
         ("subordinate_erisc.cc", False),
