@@ -23,7 +23,9 @@ RUN_NAME="${MODEL}${VARIANT}"
 # production layout; its _4x4 configs run 4x4 stages, two per galaxy.
 case "${MODEL}" in
   mistral4|gptoss120b) MODEL_CONFIGS="sc1" ;;
-  kimi_k3|kimi_k3_1)   MODEL_CONFIGS="sc4 sc1 sc4_8x4 sc1_8x4" ;;
+  kimi_k3)             MODEL_CONFIGS="sc4 sc1 sc4_8x4 sc1_8x4" ;;
+  # sc1_sp0: the sc1 4x4 stages with SP on mesh axis 0 (the tray half's LINE axis) and TP on axis 1 (its RING).
+  kimi_k3_1)           MODEL_CONFIGS="sc4 sc1 sc4_8x4 sc1_8x4 sc1_sp0" ;;
   glm53)               MODEL_CONFIGS="sc4 sc1 sc4_4x4 sc1_4x4" ;;
   *)                   MODEL_CONFIGS="sc4 sc1" ;;
 esac
@@ -52,7 +54,7 @@ manifest_env() {
 kimi_layout() {
   CHUNK_SIZE=$(manifest_env PREFILL_CHUNK_SIZE)
   case "${CONFIG}" in
-    sc4|sc1)
+    sc4|sc1|sc1_sp0)
       # Two ranks per galaxy, one per tray half, bound by tt-run discovery against the 4x4
       # descriptor: 8 stages of 12 layers (9 on the last) for sc4, and sc4's first two for sc1, at
       # sc4's slot count.
@@ -63,6 +65,14 @@ kimi_layout() {
       # non-empty: weight_cache_path mkdirs it, so a failed run leaves an empty one behind.
       PP_CACHE_DIR="$1/$2_bh_16dev/4x4_sp1"
       RUNNER_ENV+=" export PREFILL_TTNN_CACHE='$1';"
+      if [ "${CONFIG}" = sc1_sp0 ]; then
+        # SP on axis 0 (LINE), TP on axis 1 (RING): the descriptor is unchanged ([LINE, RING]); the runner's
+        # sp_axis=0 default (torus XY) would hang on it, so the fabric wraps X only. The cache is keyed by TP
+        # axis: mesh4x4.tpaxis1, linked as 4x4 (mesh_cache_key at sp_axis 0). Exported ahead of the manifest.
+        PP_CACHE_DIR="$1/$2_bh_16dev/4x4"
+        RUNNER_ENV+=" export PREFILL_SP_AXIS=0; export PREFILL_FABRIC_MODE=2d_torus_x;"
+        PRODUCER_ENV+=" export PREFILL_SP_AXIS=0;"
+      fi
       ;;
     *_8x4)
       # One 8x4 stage per galaxy, SP=8 on axis 0, at the 8x4 chunk and the slots measured for it.
