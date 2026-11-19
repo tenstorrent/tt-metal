@@ -224,43 +224,28 @@ void SliceDeviceOperation::validate_on_program_cache_miss(
     // Strided rank-1 slices and shards narrower than the row stay rejected.
     if (tensor_args.input.layout() == Layout::ROW_MAJOR && output_spec.logical_shape().volume() != 0) {
         const bool rank1_unstrided = tensor_args.input.padded_shape().rank() == 1 && !has_step;
-        const uint32_t element_size = tensor_args.input.element_size();
-        const auto check_rank1_nd_shard_aligned = [&](const tt::tt_metal::MemoryConfig& mc,
-                                                      const ttnn::Shape& padded_shape,
-                                                      const char* which,
-                                                      const uint32_t end_elements) {
-            const auto& nd = mc.nd_shard_spec();
-            if (!nd.has_value() || nd->shard_shape.rank() != 1) {
-                return;
-            }
-            const uint32_t alignment = mc.buffer_type() == tt::tt_metal::BufferType::DRAM ? ::hal::get_dram_alignment()
-                                                                                          : ::hal::get_l1_alignment();
-            const uint32_t shard_bytes = nd->shard_shape[0] * element_size;
-            if (shard_bytes % alignment == 0) {
-                return;
-            }
-            if (padded_shape.rank() > 1 && nd->shard_shape[0] == padded_shape[-1]) {
-                return;
-            }
-            if (rank1_unstrided && end_elements * element_size <= shard_bytes) {
-                return;
-            }
-            TT_FATAL(
-                false,
-                "Slice {} is ND-sharded with rank-1 shard shape {} ({} bytes), which is not a multiple of the {}-byte "
-                "buffer alignment, and the slice reaches past the shard's payload. Use a shard size whose byte size "
-                "is aligned.",
-                which,
-                nd->shard_shape,
-                shard_bytes,
-                alignment);
-        };
         // The input is read up to its slice end; the output is written from offset 0 up to its length.
         const uint32_t input_end = rank1_unstrided ? args.slice_end[0] : 0;
         const uint32_t output_end = rank1_unstrided ? args.slice_end[0] - args.slice_start[0] : 0;
-        check_rank1_nd_shard_aligned(
-            tensor_args.input.memory_config(), tensor_args.input.padded_shape(), "input", input_end);
-        check_rank1_nd_shard_aligned(output_spec.memory_config(), output_spec.padded_shape(), "output", output_end);
+        // compute_output_specs builds the output TensorSpec with input_tensor.dtype(), so the output
+        // element size is the input's; TensorSpec has no element_size() of its own.
+        const uint32_t element_size = tensor_args.input.element_size();
+        ttnn::operations::data_movement::check_rank1_nd_shard_aligned(
+            "Slice",
+            "input",
+            tensor_args.input.memory_config(),
+            tensor_args.input.padded_shape(),
+            element_size,
+            rank1_unstrided,
+            input_end);
+        ttnn::operations::data_movement::check_rank1_nd_shard_aligned(
+            "Slice",
+            "output",
+            output_spec.memory_config(),
+            output_spec.padded_shape(),
+            element_size,
+            rank1_unstrided,
+            output_end);
     }
     const auto& output_tensor_shape = output_spec.logical_shape();
     if (has_step) {  // if all ones modify before passing in to function
