@@ -293,11 +293,19 @@ class MooncakeEmbeddingReader:
             for key in keys:
                 replicas = found.get(key, [])
                 if not replicas:
-                    # A key the lookup leaves out is missing, or the master is unreachable. health_check() reads the
-                    # client's own connection state, so telling them apart costs no second round trip.
-                    if self._client.health_check() == 0:
+                    # The lookup leaves out a key with no value, but also one it failed to look up, even with the
+                    # master's heartbeat healthy. Only a key Mooncake says doesn't exist is Missing; that check is one
+                    # more round trip, on a miss only.
+                    exists = self._client.is_exist(key)
+                    if exists == 0:
                         raise Missing(key)
-                    raise StoreUnavailable(f"{key}: Mooncake master is unreachable")
+                    if self._client.health_check() != 0:
+                        raise StoreUnavailable(f"{key}: Mooncake master is unreachable")
+                    if exists == 1:
+                        raise StoreUnavailable(f"{key}: the lookup failed, though the value exists")
+                    raise StoreUnavailable(
+                        f"{key}: the lookup failed, and checking whether it exists failed ({exists})"
+                    )
                 if len(replicas) != 1:  # writers store one replica; replicated values are not supported yet
                     raise StoreUnavailable(f"{key}: {len(replicas)} replicas, expected 1")
                 (replica,) = replicas

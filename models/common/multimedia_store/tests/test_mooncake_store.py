@@ -81,6 +81,12 @@ class FakeClient:
     def health_check(self):
         return 0 if self.master_up else 2
 
+    def is_exist(self, key):
+        self.lookups += 1
+        if not self.master_up:
+            return -1
+        return 1 if key in self.objects else 0
+
     def batch_get_replica_desc(self, keys):
         self.lookups += 1
         if not self.master_up:
@@ -443,3 +449,18 @@ def test_failed_unregistration_keeps_the_read_buffer(setup, expect_error):
     assert list(client.registered) == [old] and reader.stats.snapshot()["read_buffer_bytes"] == remote.nbytes
     client.unregister_rc = 0
     assert bytes(reader.fetch(_key(3))) == bytes(2 * remote.nbytes)
+
+
+@pytest.mark.parametrize(
+    "exists, message", [(1, "though the value exists"), (-1, r"checking whether it exists failed \(-1\)")]
+)
+def test_failed_lookup_with_a_healthy_master_is_unavailable(setup, expect_error, exists, message):
+    """The batched lookup also leaves out a key it failed to look up, with the master's heartbeat healthy. That is not
+    a miss: only a key Mooncake says doesn't exist is Missing."""
+    client, reader, _, _ = setup
+    client.batch_get_replica_desc = lambda keys: {}
+    client.is_exist = lambda key: exists
+    with expect_error(StoreUnavailable, message):
+        reader.fetch(_key(1))
+    s = reader.stats.snapshot()
+    assert (s["errors"], s["misses"]) == (1, 0)
