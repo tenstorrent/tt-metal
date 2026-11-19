@@ -807,7 +807,14 @@ void kernel_main() {
             constexpr int32_t tile_rows_per_image_row = input_width >= TILE_DIM ? input_width / TILE_DIM : 1;
             const uint32_t t_first = m_tile_start + block_tiles_done;
             reads.begin(TRID_CENTER);
-            if constexpr (padded_slab) {
+#ifdef CONV2D_3X3_TAP_SHIFT
+            // Tap shift: no row-major slab (compute builds the taps from the input ring, which now sits in the slab's
+            // L1): zeroing the gaps would overwrite the ring.
+            constexpr bool zero_gaps = false;
+#else
+            constexpr bool zero_gaps = padded_slab;
+#endif
+            if constexpr (zero_gaps) {
                 // Padded slab: the gap in front of every row slot and after the last one (d pixels each, at fixed
                 // offsets), from the zero block, on the center copy's transaction id. The untilize never writes the
                 // gaps and compute's tilize reads them only after the center push below, which waits for these reads

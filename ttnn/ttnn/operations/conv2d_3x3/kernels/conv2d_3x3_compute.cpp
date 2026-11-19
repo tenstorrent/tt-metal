@@ -22,6 +22,10 @@
 // padded_tilize computes every tap block's source (a slab run or the zero block) itself, after waiting for the slab's
 // last pack and the reader's center push; a one-page token on cb_src_table then tells the reader the slab is dead.
 //
+// Tap shift (the descriptor's TAP_SHIFT, conv2d_3x3_tap_shift.hpp, on the padded-slab path with d < 32): no untilize
+// and no padded tilize; the taps are built on the FPU straight from the input ring, kernel-row major, as the fill
+// lands.
+//
 // N-slice kernel-row skip: the ring walk multiplies, per row group, only the range of kernel rows that is in the image
 // for some row of the group (runtime args 3..: the host's masks, see the ring walk). The others are all-zero K tiles of
 // in0.
@@ -66,6 +70,9 @@
 #include "conv2d_3x3_wide_untilize.hpp"
 #include "conv2d_3x3_lean_tilize.hpp"
 #include "conv2d_3x3_padded_slab.hpp"
+#ifdef CONV2D_3X3_TAP_SHIFT
+#include "conv2d_3x3_tap_shift.hpp"
+#endif
 #ifdef CONV2D_3X3_KW_FOLD
 #include "conv2d_3x3_kw_fold.hpp"
 #endif
@@ -1001,7 +1008,12 @@ void kernel_main() {
             // untilize_footprint: the reader streams slab_tile_rows input tile-rows in slab order.
             MaybeDeviceZoneScope("compute_untilize");
             pack_reconfig_l1_acc(0);
+#ifdef CONV2D_3X3_TAP_SHIFT
             if constexpr (padded_slab) {
+                // Tap shift (conv2d_3x3_tap_shift.hpp): no untilize; the prelude builds every tap from the input ring.
+            } else
+#endif
+                if constexpr (padded_slab) {
                 // Padded slab: each of the plan's tile-rows to its row slot (one M-block per core: the slab CB's
                 // pointers stay at the base). Every thread builds the table: the wide untilize's section split depends
                 // on it. The fill's unread tail rows are popped, not untilized, and their slab pages pushed unwritten.
@@ -1104,6 +1116,38 @@ void kernel_main() {
                     window_tilize<c_in_tiles, cb_im2col_rm, cb_im2col_tiles>(
                         im2col_rm_dfb, im2col_tiles_dfb, prelude_rows * num_k_blocks);
                 } else if constexpr (padded_slab) {
+#ifdef CONV2D_3X3_TAP_SHIFT
+                    // Tap shift (the descriptor's TAP_SHIFT, conv2d_3x3_tap_shift.hpp): the input ring no longer shares
+                    // in0's L1 (it sits in the slab / combine-slots region), so the taps are built as their slab rows
+                    // land, with no wait for the reader's center push (the walk waits for it). Then the ring is popped
+                    // and the slab pages pushed unwritten (the reader's slab handshake), and the slab-dead token
+                    // follows. Raw LLK (capability), see the header: no helper builds a tile from row ranges of two
+                    // tiles.
+                    conv2d_3x3::tap_shift::run<
+                        c_in_tiles,
+                        in0_k_tiles,
+                        cb_input_tiles,
+                        cb_im2col_tiles,
+                        pad_out_w,
+                        pad_in_h,
+                        pad_in_w,
+                        pad_p,
+                        pad_d,
+                        slice_sb_h,
+                        ring_groups>(
+                        input_tiles_dfb,
+                        im2col_tiles_dfb,
+                        prelude_rows,
+                        pad_o_first,
+                        pad_o_end,
+                        pad_plan,
+                        kh_lo,
+                        kh_hi);
+                    input_tiles_dfb.wait_front(slab_rows * c_in_tiles);
+                    input_tiles_dfb.pop_front(slab_rows * c_in_tiles);
+                    halo_slab_dfb.reserve_back(slab_rows * c_in_tiles);
+                    halo_slab_dfb.push_back(slab_rows * c_in_tiles);
+#else
                     {
                         // The slab's last pack landed (the push is stored after the packer drained), and the reader's
                         // center copy, with the slab gaps' zeroing, landed: it read the input ring, which shares in0's
@@ -1148,6 +1192,7 @@ void kernel_main() {
                     } else {
                         run_padded_tilize(std::false_type{});
                     }
+#endif
                     // The slab is dead: tell the reader (cb_src_table is a one-page token on this path).
                     CircularBuffer done_token(cb_src_table);
                     done_token.reserve_back(1);

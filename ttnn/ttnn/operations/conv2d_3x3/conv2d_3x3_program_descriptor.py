@@ -146,6 +146,23 @@ NSLICE_CENTER_TAPS = True
 # of 3; the prelude tilize 4.5 -> 2.4 us, now at its 1-wide payload rate), res5.x -3% to -5%, aspp.convs.x flat.
 PADDED_SLAB = True
 
+# Tap shift (kernels/conv2d_3x3_tap_shift.hpp), on the padded-slab prelude with d < 32: compute builds the kw = 0 / 2
+# taps on the FPU straight from the input ring's TILE slab (one-row SrcB -> DEST moves, 4-row where d % 8 == 0), kernel-
+# row major, each tap waiting only for the slab rows it reads: no untilize, no row-major slab, no gap zeroing. The input
+# ring leaves in0's L1 for the slab / combine-slots region (dead until the slab-dead token, as the slab was), so the
+# prelude no longer waits for the reader's center push and runs behind the fill. Taken where the region, rounded to a
+# multiple of its three page sizes, fits the L1 the padded slab left. Measured on the merged tree (Blackhole p150b,
+# LoFi, bit-identical, unzoned, 3 alternating pairs): aspp.convs.3 -6.0%, aspp.convs.2 -3.0%, res5.2 -3.4%, res5.1
+# -2.9%, res4.x -2.4%. False keeps the padded-slab untilize / tilize prelude.
+TAP_SHIFT = True
+# The shift rebuilds every tap tile (~60 ns each, against ~23-42 ns for the fast tilize it replaces) and pays by
+# removing the untilize of the halo slab rows. Where the halo is short against the slice width, the removed untilize
+# does not cover the dearer taps: carve-out at halo tile-rows per side (d * W / 32) < TAP_SHIFT_MIN_HALO_PER_TILE x
+# slice tiles, on slices of 2+ tiles. Measured losers (unzoned, 3 alternating pairs, non-overlapping): aspp.convs.1
+# (6-tile slices, halo 12) +2.7%, res5.0 (2-tile, halo 4) +1.1%. Winners sit at halo >= 4 x tiles (res5.1, aspp.convs.2)
+# or at 1-tile slices, whose padded tilize is the slow 1-wide one (res4.x). 3 is the midpoint of the unmeasured gap.
+TAP_SHIFT_MIN_HALO_PER_TILE = 3
+
 # Work-balanced BLOCK M split (balanced_block_ranges). On the N-slice ring walk a grid row's time is its prelude (fill-
 # paced untilize of its slab rows, gather-paced tilize of its tile-rows) plus its walk (in-image kernel rows of each ring
 # row group, after the kernel-row skip), so with dilation the rows whose output rows keep all three kernel rows in the
@@ -1710,6 +1727,29 @@ def create_program_descriptor(
                 )
             else:
                 slab_cb = _cb(CB_HALO_SLAB, ttnn.bfloat16, TILE_BYTES_BF16, new_bytes // TILE_BYTES_BF16, cores)
+    # Tap shift (see TAP_SHIFT): the input ring shares the slab / combine-slots region instead of in0. The region's size
+    # must be a multiple of all three page sizes.
+    tap_shift = False
+    halo_tile_rows = g.dilation * g.input_width // TILE
+    short_halo = g.c_in_tiles >= 2 and halo_tile_rows < TAP_SHIFT_MIN_HALO_PER_TILE * g.c_in_tiles
+    if TAP_SHIFT and padded_slab and b.shared_slab_bytes and g.dilation < 32 and not short_halo:
+        ring_bytes = b.slab_tile_rows * g.c_in_tiles * g.in0_tile_bytes
+        unit = math.lcm(TILE_BYTES_BF16, TILE_BYTES_FP32, g.in0_tile_bytes)
+        region = _div_up(max(slab_cb.total_size, ring_bytes), unit) * unit
+        if region - slab_cb.total_size <= leftover - (new_bytes - old_bytes):
+            tap_shift = True
+            slab_cb = ttnn.CBDescriptor(
+                total_size=region,
+                core_ranges=cores,
+                format_descriptors=[
+                    ttnn.CBFormatDescriptor(buffer_index=i, data_format=f, page_size=p)
+                    for i, f, p in (
+                        (CB_HALO_SLAB, ttnn.bfloat16, TILE_BYTES_BF16),
+                        (CB_COMBINE_SLOTS, ttnn.float32, TILE_BYTES_FP32),
+                        (CB_INPUT_TILES, input_tensor.dtype, g.in0_tile_bytes),
+                    )
+                ],
+            )
     cbs = [slab_cb]
     if not face_direct:
         im2col_rm_pages = (1 if padded_slab else b.im2col_rm_depth_rows) * bk
@@ -1762,7 +1802,7 @@ def create_program_descriptor(
     alias_ring = whole_slab_ring(in0_k_tiles)
     if alias_ring:
         input_ring_batches = b.slab_tile_rows // b.untilize_batch_rows
-    if alias_ring:
+    if alias_ring and not tap_shift:
         for i, cb in enumerate(cbs):
             if cb.format_descriptors[0].buffer_index == CB_IM2COL_TILES:
                 cbs[i] = _shared_cb(
@@ -1771,7 +1811,7 @@ def create_program_descriptor(
                     (CB_INPUT_TILES, input_tensor.dtype, g.in0_tile_bytes),
                     cores,
                 )
-    elif g.tile_input:
+    elif g.tile_input and not tap_shift:
         input_tile_pages = input_ring_batches * b.untilize_batch_rows * g.c_in_tiles
         cbs.append(_cb(CB_INPUT_TILES, input_tensor.dtype, g.in0_tile_bytes, input_tile_pages, cores))
     if b.nslice:
@@ -2342,6 +2382,8 @@ def create_program_descriptor(
     _pad_dm_defines, _pad_compute_defines = [], []
     if padded_slab:
         _pad_dm_defines = [("CONV2D_3X3_PADDED_SLAB", "1"), ("PAD_SLAB_SLOTS_MAX", str(pad_slots_max))]
+        if tap_shift:
+            _pad_dm_defines.append(("CONV2D_3X3_TAP_SHIFT", "1"))
         _pad_compute_defines = [
             ("CONV2D_3X3_PADDED_SLAB", "1"),
             ("PAD_SLAB_IN_H", str(g.input_height)),
@@ -2353,6 +2395,7 @@ def create_program_descriptor(
             ("PAD_SLAB_NUM_OUT_PX", str(g.num_out_px)),
             ("PAD_SLAB_SLOTS_MAX", str(pad_slots_max)),
             ("PAD_SLAB_CB_ZERO", str(CB_ZERO_SRC)),
+            *([("CONV2D_3X3_TAP_SHIFT", "1")] if tap_shift else []),
         ]
     # Spread N-slice ring owners (ring_owner_cols): the owning columns' mask, for the ring order of all three kernels.
     _ring_owner_defines = (
