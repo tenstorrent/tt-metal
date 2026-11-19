@@ -602,3 +602,4 @@
 - 17:35 UTC P.83 accepted (device -1.1..-1.5 ms a chunk at 142k, -1.0..-1.6 at 1M; 3 runner restarts + 3 direct probe opens incl. one hang). DEVICE OPEN (justified): the accept gate's fresh full-model accuracy process (runner steps aside).
 - 17:51 UTC P.83 gate PASS -> bdbd25c2e83 (mhc_post fast: device -1.1..-1.5 ms a chunk). RAM unaccounted 212.5 GiB. Next: P.81 attention.
 - 17:51 UTC DEVICE (justified): P.81 attention launched (fork / fuse per the owner, OV-56); op probes and A/B through the runner.
+- 18:29 UTC P.81 accepted (wo_a grouped matmul fork, bit-identical, device ~-1.0 ms a chunk; 2 runner restarts). sdpa / RoPE not built: each < 1 ms by the agent's measured estimates. DEVICE OPEN (justified): the accept gate's fresh full-model accuracy process.
