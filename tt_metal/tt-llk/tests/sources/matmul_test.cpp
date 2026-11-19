@@ -175,7 +175,7 @@ constexpr bool matmul_hoist_rows = unpack_AB_matmul_hoist_rows<MATH_FIDELITY, de
 #elif defined(ARCH_BLACKHOLE) && defined(MATMUL_PRODUCTION) && defined(MATMUL_PACK_TILES)
 // minimal_matmul's run-time calls take the compute API's unkeyed hoist (matmul_fe_unkeyed_hoist: subblock_h RT, subblock_w CT,
 // K_block_tiles KT), and above LoFi only with a 16-bit DEST. The key has no M block or bias epilogue: MATMUL_PK_M_BLOCK and
-// MATMUL_PK_BIAS (LLK_EXTRA_DEFINES) default to an M block below 8 without bias, so a 2x2 bfp8 LoFi fp32 K<4 key differs
+// MATMUL_PK_BIAS (LLK_EXTRA_DEFINES) default to an M block below 8 without bias, so a 2x2 bfp8 LoFi fp32 K<3 key differs
 // from a production kernel with M block 8 or bias unless they are set
 #ifndef MATMUL_PK_M_BLOCK
 #define MATMUL_PK_M_BLOCK 0
@@ -209,7 +209,7 @@ constexpr bool matmul_unkeyed_hoist = []
     {
         return matmul_kernel_bfp && lofi;
     }
-    return !(matmul_kernel_bfp && lofi && is_fp32_dest_acc_en && MATMUL_PK_KT < 4 && MATMUL_PK_M_BLOCK < 8 && !MATMUL_PK_BIAS);
+    return !(matmul_kernel_bfp && lofi && is_fp32_dest_acc_en && MATMUL_PK_KT < 3 && MATMUL_PK_M_BLOCK < 8 && !MATMUL_PK_BIAS);
 }();
 constexpr bool matmul_hoist_rows = (matmul_unkeyed_hoist && (MATH_FIDELITY == ckernel::MathFidelity::LoFi || !is_fp32_dest_acc_en)) ||
                                    unpack_AB_matmul_hoist_rows<MATH_FIDELITY, dest_sync, is_fp32_dest_acc_en, MATMUL_FE_FORM_KT, MATMUL_FE_FORM_OUT>();
