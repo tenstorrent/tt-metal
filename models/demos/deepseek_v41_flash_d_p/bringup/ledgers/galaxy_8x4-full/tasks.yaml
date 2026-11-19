@@ -5737,18 +5737,14 @@ tasks:
       attention, the indexer or the token-wise work, as P.87 fused the engram lookup with the history prefetch; or hidden behind the engram lookups as today). Judge by the device profile and the exposed-host
       breakdown; report exposed vs hidden gather time per segment.'
   gate:
-    cmd: BRINGUP_CHUNK=8192 scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/packed/test_chunk8192_reference.py && BRINGUP_CHUNK=8192 scripts/run_safe_pytest.sh
-      --run-all --no-precompile models/demos/common/bringup/tests/test_determinism.py && BRINGUP_CHUNK=8192 BRINGUP_POS_TOKENS=agentic_cc DS41_DECODER_SKIP=decode SKIP_POS=139264,524288 scripts/run_safe_pytest.sh
-      --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/test_skip_positions.py && BRINGUP_CHUNK=8192 BRINGUP_POS_TOKENS=agentic_cc DS41_DECODER_SKIP=decode BRINGUP_CHUNK_LAST=0 BRINGUP_POS=139264
-      scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_profile.py
+    cmd: BRINGUP_CHUNK=8192 scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/packed/test_chunk8192_reference.py && BRINGUP_CHUNK=8192 BRINGUP_POS_TOKENS=agentic_cc
+      DS41_DECODER_SKIP=decode SKIP_POS=139264,524288 scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/test_skip_positions.py
     metrics:
       err_layer_L*: <= limit
       err_final_hidden*: <= limit
       top5_overlap*: '>= limit'
-      determinism_max_abs_diff: == 0
       steady_wall_ms_p139264_tagentic_cc: '> 0'
       steady_wall_ms_p524288_tagentic_cc: '> 0'
-      device_ms_total_p139264_nonlast_tagentic_cc: '> 0'
 - id: PB.3
   title: 'OWNER 2026-11-19 packed prefill: PACKED=on, token-wise work over all 8192 rows, attention looped per segment (4 lanes x <= 2048)'
   step: perf
@@ -5802,14 +5798,13 @@ tasks:
       hidden behind the engram lookups as today). Judge by the device profile and the exposed-host breakdown; report exposed vs hidden gather time per segment.'
   gate:
     cmd: BRINGUP_CHUNK=8192 scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/packed/test_packed_oracle.py && BRINGUP_CHUNK=8192 DS41_PACKED=on scripts/run_safe_pytest.sh
-      --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/packed/test_packed_reference.py && BRINGUP_CHUNK=8192 DS41_PACKED=on scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_determinism.py
-      && BRINGUP_CHUNK=8192 DS41_PACKED=on BRINGUP_POS_TOKENS=agentic_cc DS41_DECODER_SKIP=decode scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/packed/test_packed_walls.py
+      --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/packed/test_packed_reference.py && BRINGUP_CHUNK=8192 DS41_PACKED=on BRINGUP_POS_TOKENS=agentic_cc DS41_DECODER_SKIP=decode scripts/run_safe_pytest.sh
+      --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/packed/test_packed_walls.py
     metrics:
       packed_lane_equiv_max_abs_diff: == 0
       packed_alone_vs_today_max_abs_diff: == 0
       packed_slot_digest_mismatches: == 0
       packed_determinism_max_abs_diff: == 0
-      determinism_max_abs_diff: == 0
       err_seg*: <= limit
       top5_overlap_seg*: '>= limit'
       packed_wall_ms_*: '> 0'
@@ -6014,12 +6009,11 @@ tasks:
       history) are NOT in this gate (a second geometry = a second load); PACKED=off at 8192 == today is in the oracle. The walls table goes to results/<task>_packed_walls.md; the overseer writes results/packed_20261120.md
       from it with the projection rows.
   gate:
-    cmd: BRINGUP_CHUNK=8192 DS41_PACKED=on scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_determinism.py && BRINGUP_CHUNK=8192 scripts/run_safe_pytest.sh --run-all
-      --no-precompile models/demos/deepseek_v41_flash_d_p/tests/packed/test_chunk8192_reference.py && BRINGUP_CHUNK=8192 scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/packed/test_packed_oracle.py
-      && BRINGUP_CHUNK=8192 DS41_PACKED=on scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/packed/test_packed_reference.py && BRINGUP_CHUNK=8192 DS41_PACKED=on
-      DS41_PACKED_GATHER_HIDE=on DS41_PACKED_ATTN_ONECALL=on DS41_PACKED_MOE=on BRINGUP_POS_TOKENS=agentic_cc DS41_DECODER_SKIP=decode scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/packed/test_packed_walls.py
+    cmd: BRINGUP_CHUNK=8192 scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/packed/test_chunk8192_reference.py && BRINGUP_CHUNK=8192 scripts/run_safe_pytest.sh
+      --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/packed/test_packed_oracle.py && BRINGUP_CHUNK=8192 DS41_PACKED=on scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/packed/test_packed_reference.py
+      && BRINGUP_CHUNK=8192 DS41_PACKED=on DS41_PACKED_GATHER_HIDE=on DS41_PACKED_ATTN_ONECALL=on DS41_PACKED_MOE=on BRINGUP_POS_TOKENS=agentic_cc DS41_DECODER_SKIP=decode scripts/run_safe_pytest.sh --run-all
+      --no-precompile models/demos/deepseek_v41_flash_d_p/tests/packed/test_packed_walls.py
     metrics:
-      determinism_max_abs_diff: == 0
       err_layer_L*: <= limit
       err_final_hidden*: <= limit
       top5_overlap*: '>= limit'

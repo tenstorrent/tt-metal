@@ -693,3 +693,11 @@ New overseer session after the owner's reboot (node bh-glx-110-c10u02, job 22373
   the orchestrator runs with SKIP=check-models-do-not-import-tests for the night (otherwise every gate commit stops).
 - 22:17 UTC orchestrator relaunched --until PB.5 --attempts 20. Next: PB.2 (agent: 8192 single-request chunks; the
   resident runner starts at 8192 when its first device check is ready = 1 device open, 1 model load of 40 layers).
+- 22:29 UTC DEVICE OPEN (PB.2 agent, reason in its BREADCRUMBS: resident runner start at BRINGUP_CHUNK=8192 for the fork op checks at 256 rows a chip, mesh only; then ONE 40-layer load at 8192 for the 8192 accuracy test, determinism, walls and profile). RAM before (22:18): used 45.1 GB, leaked 3.4 GB; at 22:37: used 46.6 GB leaked 5.1 GB used 0.7 GB .
+- 22:50 UTC PB.2 attempt 1: two gate --check runs, 4 model loads (21 / 40 / 21 / 40 layers), 5 process opens; determinism
+  at 8192 0.0, walls passed: steady 101.0 ms at 139264 (81.1k tok/s harness) and 109.2 ms at 524288 (75.0k); resumed
+  102.7 / 110.2. Projection (a) said 102-112 / 110-123: at its low end. But test_profile and test_chunk8192_reference were
+  refused in 3 s by the one-load rule (F283: other models: an ENGRAM_TABLE switch; a raised max_seq): MY gate design
+  error. Paused, aborted (OV-60), PB.2's gate cut to test_chunk8192_reference + test_skip_positions (the passed walls unit
+  is kept); test_determinism removed from PB.3 / PB.5 too (same conflict; the oracle's packed repeat determinism covers
+  it); note OV-61 to every PB task: one model configuration per gate class. RAM leaked 7.4 GiB after these loads.

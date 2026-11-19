@@ -622,6 +622,27 @@ notes:
   text: 'The overseer stopped attempt 3 (perf): Framework false violation: the settings lint charged the pre-existing env
     read at bringup/hooks.py:1397 (batch_call_settings, not yours) to attempt 2. Fixed in the framework (F288). Your PB.1
     work in the tree stands: check it against the brief, finish what is missing, run the gate''s CPU test, and exit.'
+- id: OV-60
+  tasks:
+  - PB.2
+  status: open
+  t: '2026-11-19T22:48:36'
+  text: 'The overseer stopped attempt 1 (perf): Overseer: your gate''s test_profile and test_chunk8192_reference units were
+    refused by the one-load rule (F283: they need other models than test_skip_positions / test_determinism: ENGRAM_TABLE
+    switch, longer max_seq). That is a gate design error of mine, not yours. PB.2''s gate is now test_chunk8192_reference
+    + test_skip_positions only (determinism 0.0 and walls 101.0 / 109.2 ms already recorded by your runs). Do not re-run
+    units that passed. Make test_chunk8192_reference pass (both cases), then exit.'
+- id: OV-61
+  tasks:
+  - PB.*
+  status: open
+  t: '2026-11-19T22:49:32'
+  text: 'One load per gate (F283, framework-enforced): every device test of one gate must run on ONE model configuration
+    of each class (accuracy: 40 layers; performance: layers 0-20): same max_seq (raise it the same way in every packed test:
+    to the largest any of them needs), same load-time switches (no ENGRAM_TABLE or other load-time env in a single test),
+    BRINGUP_CHUNK=8192. A unit refused with ''needs another model ... refused (owner rule 2026-11-19, spec tests.one_load)''
+    is a configuration mismatch to fix in the test, not a model bug. Repeat determinism is measured inside test_packed_oracle
+    (packed_determinism_max_abs_diff); test_determinism.py is not in the PB gates.'
 fixes:
 - id: FIX.1
   title: 'Owner order: no padding to get around a kernel limit'
