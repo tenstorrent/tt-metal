@@ -25,7 +25,6 @@ static constexpr std::uint32_t MAX_TILES_DEST = ckernel::get_dest_max_tiles<dest
 static_assert(BLOCK_CT_DIM <= MAX_TILES_DEST, "Block must fit in Dest register");
 static_assert(BLOCK_CT_DIM + TILE_DST_CT_OFFSET <= MAX_TILES_DEST, "Block and destination offset must fit in Dest register");
 static_assert(FULL_CT_DIM % BLOCK_CT_DIM == 0, "FULL_CT_DIM must be divisible by BLOCK_CT_DIM");
-constexpr std::uint32_t TILE_CNT = FULL_RT_DIM * FULL_CT_DIM;
 
 constexpr std::uint32_t pack_untilize_blocks_per_row()
 {
