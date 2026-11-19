@@ -239,11 +239,18 @@ def main() -> None:
         for name in ("A", "A", "U", "A2", "AP", "B"):
             res.append(run_prompt("R2", "X", "off"))
             res.append(run_prompt("R2", name, "off", digest=True))
-    if "P" in PHASES:  # PREFIX_CHECK_P_DIGEST=1 (WS2): digest every P prompt too (byte-identity at long contexts)
-        for name in PROFILE_NAMES:
-            res.append(
-                run_prompt("P", name, "off", timeout_s=7200.0, digest=os.environ.get("PREFIX_CHECK_P_DIGEST") == "1")
-            )
+    if "P" in PHASES:
+        # WS3 (11-19): PREFIX_CHECK_PROFILE_DIGEST=1 digests each long prompt (a lever A/B's byte-identity gate at depth);
+        # PREFIX_CHECK_PROFILE_REPS=N runs the list N times (timing spread); each cold, after X. WS2's PREFIX_CHECK_P_DIGEST=1
+        # (same meaning) is accepted too (WS7 integration).
+        p_digest = "1" in (
+            os.environ.get("PREFIX_CHECK_PROFILE_DIGEST", "0"),
+            os.environ.get("PREFIX_CHECK_P_DIGEST", "0"),
+        )
+        for _rep in range(int(os.environ.get("PREFIX_CHECK_PROFILE_REPS", "1"))):
+            for name in PROFILE_NAMES:
+                res.append(run_prompt("P", "X", "off"))
+                res.append(run_prompt("P", name, "off", digest=p_digest, timeout_s=7200.0))
     if "S2" in PHASES:
         log(f"S2 expected per-chunk patterns at chunk {CHUNK} (s2_plan dry run): {list(zip(S2, EXPECT_S2))}")
         res.append(run_prompt("S2", "X", "clear"))  # the store emptied, X computed (and stored)
