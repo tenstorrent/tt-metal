@@ -484,3 +484,16 @@
   once and submit (never spawn fresh processes); the A/B table said "would PASS" with both sides' only test failed.
   P.84's A/B reruns after both land. The agent's code (replica table = setting MOE_REPLICA_TABLE, tt/replicas/*.json)
   stays in the tree.
+
+## 2026-11-19 10:05 UTC: resident runner: P.84's extra device opens fixed (F286, 604d3c3e4fa)
+- Cause: a unit or A/B item of ONE shared-model run never got a batch plan (core/batch.unit_command needs two runs),
+  so it started its own safe-runner process. After the runner had stepped aside for the full process, every
+  test_skip_positions unit and A/B side opened the device again (~10 opens in P.84).
+- Now: while a runner is meant to serve the spec (up, starting or stepped aside), those go to it as a plan. A
+  stepped-aside runner is started again once. A runner that cannot come back refuses the run with the reason; it
+  never spawns a process. A gate (also `gate --check`) runs its runner units first and the fresh full-model process
+  last.
+- gate_on: a change-on A/B item that failed or did not run is a failing line (P.84's table said PASS while both sides
+  of its only test exited 1).
+- Every gate summary and A/B table now leads with "device opens of <task> so far" (safe-runner processes from
+  logs/hostmem.jsonl + runner restarts) and the runner's model loads.
