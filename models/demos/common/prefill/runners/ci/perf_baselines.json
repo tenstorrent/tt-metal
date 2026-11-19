@@ -26,6 +26,12 @@
     "glm53": {
       "sc4": {
         "probe": "@1020k",
+        "margin": {
+          "@1020k": {
+            "throughput_tok_s": 0.03,
+            "ttft_s": 0.03
+          }
+        },
         "8kw": {
           "throughput_tok_s": 31210,
           "ttft_s": 26.29,
