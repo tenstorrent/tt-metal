@@ -442,3 +442,11 @@
     served) cannot be met without 21-39.
   - Outside history: not inspected.
   Need an owner decision: which gated metrics replace top5 / final hidden, and whether the contract runs on 0-20.
+
+## 2026-11-19 08:15 UTC: OWNER DECISION (layers): accuracy loads the whole model; performance does not
+- Accept gate accuracy (ladder top5 / final hidden, determinism, contract, outside history, decoder-skip test): full
+  40 layers, once per accepted task, in the fresh-process determinism request. Every performance measurement
+  (walls, census, profiles, idle map, A/B timing sides): layers 0-20, in the resident runner. A/B sides are timing
+  only; accuracy is judged on the accept gate.
+- Framework: a per-unit layer set routes the units (runner agent, CPU work now; the device stays closed until the
+  reboot).
