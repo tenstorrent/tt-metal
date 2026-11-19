@@ -241,6 +241,7 @@ ExternalProject_Add(
     BINARY_DIR ${CMAKE_BINARY_DIR}/profiler/build_wasm
     CMAKE_ARGS
         -DCMAKE_TOOLCHAIN_FILE=${EMSCRIPTEN_TOOLCHAIN_FILE} -DCMAKE_BUILD_TYPE=MinSizeRel
+        -DCPM_SOURCE_CACHE=${CPM_SOURCE_CACHE}
     INSTALL_COMMAND
         "" # Suppress default cmake --install: artifacts stay in BINARY_DIR for CI packaging to pick up.
 )
