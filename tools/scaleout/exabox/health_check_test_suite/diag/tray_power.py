@@ -92,11 +92,10 @@ class TrayPowerReader:
     read returns None.
     """
 
-    def __init__(self, runner=None, clock=time.monotonic, budget_s=PHASE_TIMEOUT_S):
+    def __init__(self, runner=None, clock=time.monotonic):
         self.base = ["ipmitool"] if os.geteuid() == 0 else ["sudo", "-n", "ipmitool"]
         self.clock = clock
-        self.budget_s = budget_s
-        self.deadline = clock() + budget_s
+        self.deadline = clock() + PHASE_TIMEOUT_S
         self.runner = runner or self._run
         self.reads_ok = 0
         self.bus_ok: dict[int, int] = {}
@@ -119,7 +118,7 @@ class TrayPowerReader:
         if bus not in TRAY_BUS.values() or nbytes is None:
             raise ValueError(f"tray power: refusing bus 0x{bus:02x} addr 0x{addr:02x} code 0x{code:02x}")
         if not self.stopped and self.clock() >= self.deadline:
-            self.stopped = f"phase time limit of {self.budget_s:g} s spent"
+            self.stopped = f"phase time limit of {PHASE_TIMEOUT_S:g} s spent"
         if self.stopped or (self.bus_timeouts.get(bus, 0) >= NO_ROUTE_TIMEOUTS and not self.bus_ok.get(bus)):
             return None
         argv = self.base + ["raw", "0x06", "0x52"] + [f"0x{b:02x}" for b in (bus, addr, nbytes, code)]
