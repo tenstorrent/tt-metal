@@ -37,7 +37,7 @@ from loguru import logger
 import ttnn
 from models.demos.deepseek_v3_d_p.reference.hy4_config import Hy4TP32Config
 from models.demos.deepseek_v3_d_p.tests.fabric_profiles import moe_fabric_payload, torus_xy_device_params
-from models.demos.deepseek_v3_d_p.tests.test_hy4_prefill_ihc_layers import REF_DIR, _SiteRecorder
+from models.demos.deepseek_v3_d_p.tests.test_hy4_prefill_ihc_layers import MOE_UPDATE_FLOOR, REF_DIR, _SiteRecorder
 from models.demos.deepseek_v3_d_p.tt.hy4 import ihc as hy4_ihc
 
 CHECKPOINT = Path(os.environ.get("HY4_HF_MODEL", "/mnt/tt-data/Hy4-Preview"))
@@ -217,7 +217,16 @@ def test_hy4_prefill_ihc_tp32_blocks(variant, config_only, mesh_device, device_p
         )
     for b in blocks:
         b.release_sub_device_managers()
+
+    # The update of an MoE site is held to the MoE bar (#65923), as in test_hy4_prefill_ihc_layers.py.
+    def floor(name, m):
+        moe = name.endswith(".ffn") and int(name[1 : name.index(".")]) >= model_cfg.NUM_DENSE_LAYERS
+        return MOE_UPDATE_FLOOR if (moe and m == "update") else PCC_FLOOR
+
     bad = [
-        f"{k} {m}={v:.4f}" for k, r in sites.rows.items() for m, v in r.items() if m != "max_abs_out" and v < PCC_FLOOR
+        f"{k} {m}={v:.4f}"
+        for k, r in sites.rows.items()
+        for m, v in r.items()
+        if m != "max_abs_out" and v < floor(k, m)
     ]
-    assert not bad, f"below {PCC_FLOOR}: {bad}"
+    assert not bad, f"below {PCC_FLOOR} (MoE update: {MOE_UPDATE_FLOOR}): {bad}"
