@@ -24,6 +24,7 @@ field, so launch with `--mpi-args "--map-by rankfile:file=<rankfile>"`.
 """
 import argparse
 import collections
+import contextlib
 import importlib.util
 import itertools
 import os
@@ -31,20 +32,35 @@ import sys
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[4]
-sys.path.insert(0, os.environ.get("TT_METAL_HOME", str(REPO)))
-from models.demos.deepseek_v3_d_p.utils.assemble_pipeline_binding import SC4_MAPPING, Galaxy, load_mapping  # noqa: E402
-from models.demos.deepseek_v3_d_p.utils.gen_pipeline_binding import TOPO, fill_rank_bindings  # noqa: E402
 
 
-def _load_rank_table_module():
-    path = REPO / "tests/tt_metal/tt_fabric/utils/generate_rank_bindings.py"
-    spec = importlib.util.spec_from_file_location("generate_rank_bindings", path)
+@contextlib.contextmanager
+def _import_root(root):
+    """Put the tt-metal checkout first on sys.path for the imports inside the block only."""
+    sys.path.insert(0, root)
+    try:
+        yield
+    finally:
+        sys.path.remove(root)
+
+
+with _import_root(os.environ.get("TT_METAL_HOME", str(REPO))):
+    from models.demos.deepseek_v3_d_p.utils.assemble_pipeline_binding import SC4_MAPPING, Galaxy, load_mapping
+    from models.demos.deepseek_v3_d_p.utils.gen_pipeline_binding import TOPO, fill_rank_bindings
+
+
+def _load_rank_table_module(root):
+    """generate_rank_bindings.py by path: models/ may not import the tests package (pre-commit
+    check-models-do-not-import-tests)."""
+    spec = importlib.util.spec_from_file_location(
+        "generate_rank_bindings", root / "tests/tt_metal/tt_fabric/utils/generate_rank_bindings.py"
+    )
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module
 
 
-grb = _load_rank_table_module()
+grb = _load_rank_table_module(REPO)
 
 TEMPLATE_SC4 = TOPO / "pipeline_prefill_request_sc4_rr_12rank_4x4_sp1.yaml"
 TEMPLATE_SC2 = TOPO / "pipeline_prefill_request_sc2_rr_4rank_4x4_sp1.yaml"
