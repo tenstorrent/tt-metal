@@ -13,6 +13,7 @@ Put a test here only if a mock device cannot cover it. Put it elsewhere when:
 | File | Test Category |
 |---|---|
 | `binding_loopbacks.cpp` | Resource bindings: DFB, semaphore and tensor accessor names |
+| `dfb_placement.cpp` | DFB placement overrides: guarded access, different formats and tile sizes, untouched storage, and repeated enqueue on Wormhole and Blackhole; Quasar remapper startup on excluded nodes, including nodes without a consumer kernel |
 | `kernel_args_loopbacks.cpp` | Kernel arguments: named args, array args, varargs, TT_KERNEL kernels and CRTA sections |
 | `sram_arena.cpp` | SRAM arena allocation overrides for scratchpads and DFBs |
 | `scratchpad.cpp` | Scratchpads under slow dispatch |

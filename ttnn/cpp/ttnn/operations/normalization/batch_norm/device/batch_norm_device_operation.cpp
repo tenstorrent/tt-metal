@@ -93,6 +93,16 @@ void BatchNormOperation::validate_on_program_cache_miss(
     }
 
     validate_tensors(operation_attributes, tensor_args);
+
+    const bool any_float32 = input.dtype() == DataType::FLOAT32 || batch_mean.dtype() == DataType::FLOAT32 ||
+                             batch_var.dtype() == DataType::FLOAT32 ||
+                             operation_attributes.get_dtype() == DataType::FLOAT32 ||
+                             (weight.has_value() && weight->dtype() == DataType::FLOAT32) ||
+                             (bias.has_value() && bias->dtype() == DataType::FLOAT32) ||
+                             (output.has_value() && output->dtype() == DataType::FLOAT32);
+    TT_FATAL(
+        !any_float32 || ttnn::get_fp32_dest_acc_en(operation_attributes.compute_kernel_config),
+        "batch_norm with float32 tensors requires fp32_dest_acc_en=True in compute_kernel_config");
 };
 
 DataType BatchNormOperation::operation_attributes_t::get_dtype() const {

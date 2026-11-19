@@ -3,17 +3,20 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import math
+import os
 import struct
 from abc import ABC, abstractmethod
 from ctypes import c_uint32
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
+from .chip_architecture import quasar_variant
 from .format_config import DataFormat
 from .golden_generators import TILE_DIMENSIONS
 from .llk_params import (
     FPU_BINARY_OPERATIONS,
     REDUCE_OPERATIONS,
     SFPU_BINARY_OPERATIONS,
+    SFPU_TERNARY_OPERATIONS,
     SFPU_UNARY_OPERATIONS,
     ApproximationMode,
     BroadcastType,
@@ -29,6 +32,7 @@ from .llk_params import (
     MathFidelity,
     MathOperation,
     NarrowTile,
+    PackerReluType,
     PackUntilizeBenchmark,
     PerfRunType,
     ReduceOrder,
@@ -230,6 +234,10 @@ def _generate_operation_constants(mathop: MathOperation) -> list[str]:
         constants.append(
             f"constexpr auto SFPU_BINARY_OPERATION = ckernel::BinaryOp::{mathop.cpp_enum_value};"
         )
+    elif mathop in SFPU_TERNARY_OPERATIONS:
+        constants.append(
+            f"constexpr auto SFPU_TERNARY_OPERATION = SfpuType::{mathop.cpp_enum_value};"
+        )
     elif mathop in FPU_BINARY_OPERATIONS:
         constants.append(
             f"constexpr auto ELTWISE_BINARY_OP = ckernel::EltwiseBinaryType::{mathop.cpp_enum_value};"
@@ -255,10 +263,12 @@ class MATH_OP(TemplateParameter):
                 temp_header.append(
                     f"constexpr auto REDUCE_DIM = ckernel::ReduceDim::{self.mathop.cpp_enum_value};"
                 )
-                if self.pool_type:
-                    temp_header.append(
-                        f"constexpr auto POOL_TYPE = ckernel::PoolType::{self.pool_type.value};"
-                    )
+
+        # The pool applies to reduce ops, but kernels that take no mathop (multidim reduce) read it too.
+        if self.pool_type:
+            temp_header.append(
+                f"constexpr auto POOL_TYPE = ckernel::PoolType::{self.pool_type.value};"
+            )
 
         # Optional extra unary operation (used when both a binary and unary op
         # need to be present in the same kernel, e.g. binary-eltwise followed by
@@ -275,21 +285,6 @@ class MATH_OP(TemplateParameter):
             )
 
         return "\n".join(temp_header)
-
-
-@dataclass
-class SFPU_TERNARY_OP(TemplateParameter):
-    """Select the ternary SFPU op at compile time.
-
-    Emits ``constexpr auto SFPU_TERNARY_OPERATION = SfpuType::<op>;`` consumed by
-    ``sfpu_operations.h``. ``ternary_mathop.cpp_enum_value`` must match the
-    ``SfpuType`` enumerator name (e.g. ``addcmul``/``addcdiv``).
-    """
-
-    ternary_mathop: MathOperation = None
-
-    def convert_to_cpp(self) -> str:
-        return f"constexpr auto SFPU_TERNARY_OPERATION = SfpuType::{self.ternary_mathop.cpp_enum_value};"
 
 
 @dataclass
@@ -310,11 +305,49 @@ class SFPU_TERNARY_SCALAR(TemplateParameter):
 class SFPU_CLOBBER_LREGS(TemplateParameter):
     """Fill the SFPU registers with garbage before the op's init (``clobber_sfpu_lregs()``).
 
-    Honoured by ``sfpu_ternary_test.cpp`` only; other harnesses ignore it.
+    Honoured by ``sfpu_ternary_test.cpp`` only; other harnesses ignore it. ``clobber_lregs`` is
+    also a perf CSV column, so a perf row states whether it clobbered; False emits nothing.
     """
 
+    clobber_lregs: bool = True
+
     def convert_to_cpp(self) -> str:
-        return "#define SFPU_CLOBBER_LREGS"
+        return "#define SFPU_CLOBBER_LREGS" if self.clobber_lregs else ""
+
+
+@dataclass
+class QUASAR_VARIANT(TemplateParameter):
+    """The Quasar part variant this build targets, recorded as a perf CSV column.
+
+    The variant comes from ``TT_METAL_QUASAR_VARIANT`` at import time and changes which formats
+    and register hints a test sweeps, but it is invisible in the parameter tuple. This reads the
+    same variable so rows from different variants stay distinguishable; it emits no code.
+    """
+
+    quasar_variant: str = field(default_factory=lambda: quasar_variant() or "quasar")
+
+    def convert_to_cpp(self) -> str:
+        return ""
+
+
+@dataclass
+class SFPLOADMACRO(TemplateParameter):
+    """Whether the SFPLOADMACRO fast paths are compiled in, recorded as a perf CSV column.
+
+    The switch itself is ``TT_METAL_DISABLE_SFPLOADMACRO=1``, which ``TestConfig`` turns into
+    ``-DDISABLE_SFPLOADMACRO`` for every kernel part. This reads the same variable, so a macro-ON
+    and a macro-OFF capture carry different values instead of averaging together; it emits no code
+    of its own.
+    """
+
+    sfploadmacro: str = field(
+        default_factory=lambda: (
+            "Off" if os.environ.get("TT_METAL_DISABLE_SFPLOADMACRO") == "1" else "On"
+        )
+    )
+
+    def convert_to_cpp(self) -> str:
+        return ""
 
 
 @dataclass
@@ -1095,14 +1128,6 @@ class PERF_RUN_TYPE(TemplateParameter):
         return (
             f"\nconstexpr auto PERF_RUN_TYPE = PerfRunType::{self.perf_run_type.name};"
         )
-
-
-@dataclass
-class REDUCE_POOL_TYPE(TemplateParameter):
-    reduce_pool_type: ReducePool
-
-    def convert_to_cpp(self) -> str:
-        return f"constexpr auto POOL_TYPE = ckernel::PoolType::{self.reduce_pool_type.value};"
 
 
 @dataclass
@@ -1895,10 +1920,10 @@ class TILE_COUNT(RuntimeParameter):
 
 @dataclass
 class NUM_GUARD_TILES(RuntimeParameter):
-    count: int = 0
+    num_guard_tiles: int = 0
 
     def convert_to_cpp(self) -> str:
-        return f"constexpr std::uint32_t NUM_GUARD_TILES = {self.count};"
+        return f"constexpr std::uint32_t NUM_GUARD_TILES = {self.num_guard_tiles};"
 
     def convert_to_struct_fields(self) -> tuple[str, str]:
         return f"std::uint32_t NUM_GUARD_TILES;", "I"
@@ -2223,6 +2248,20 @@ class RELU_CONFIG(RuntimeParameter):
 
     def convert_to_struct_fields(self) -> tuple[str, str]:
         return "int RELU_CONFIG;", "i"
+
+
+@dataclass
+class RELU_TYPE(TemplateParameter):
+    """The packer ReLU mode by name, recorded as a perf CSV column; it emits no code.
+
+    ``RELU_CONFIG`` packs the mode together with a threshold, so this states the mode on its own.
+    It is a template, not a runtime parameter, because every runtime field is serialised to L1.
+    """
+
+    relu_type: PackerReluType = PackerReluType.NoRelu
+
+    def convert_to_cpp(self) -> str:
+        return ""
 
 
 @dataclass
