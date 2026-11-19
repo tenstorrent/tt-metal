@@ -5,6 +5,7 @@
 #pragma once
 
 #include "ttnn/operations/experimental/deepseek_prefill/combine_fabric2d/device/combine_fabric2d_types.hpp"
+#include "ttnn/operations/experimental/deepseek_prefill/combine_fabric2d/device/combine_fabric2d_program_factory.hpp"
 #include "ttnn/device_operation.hpp"
 #include "ttnn/distributed/types.hpp"
 #include <ttnn/global_semaphore.hpp>
@@ -50,8 +51,8 @@ struct CombineL1 {
     tt::tt_metal::Buffer* forwarding = nullptr;
 };
 
-// The spec of combine's forwarding buffer: one page per relayed token, the token plus its forwarding metadata.
-tt::tt_metal::TensorSpec forwarding_buffer_spec(const CombineFabric2dParams& args, uint32_t token_size_bytes);
+// The standalone op's: the fork stages the same streams and channels, so a buffer either one accepts serves both.
+using ::ttnn::operations::experimental::deepseek_prefill::combine_fabric2d::forwarding_buffer_spec;
 
 // How many GlobalSemaphores CombineL1::channels holds for a ring of `ring_extent` chips.
 //

@@ -34,6 +34,17 @@ if ttnn.get_arch_name() != "blackhole":
     pytest.skip("the moe_compute port assumes the Blackhole DRAM ring and NoC burst", allow_module_level=True)
 
 SINGLE_CHIP = [pytest.param(1, {"fabric_config": ttnn.FabricConfig.DISABLED, "l1_small_size": 16384}, id="single-chip")]
+
+
+@pytest.fixture(autouse=True)
+def _shared_op_on_the_ring(monkeypatch):
+    """MoeComputeCustom ports the shared op's ring kernels, so every shared-op reference here is the ring program.
+    Since the expert rows path (tenstorrent/tt-metal#59945) a Blackhole call that path can run takes it by default,
+    and its activation table is not the ring's bit for bit; TT_METAL_MOE_COMPUTE_KERNEL=ring keeps the reference on
+    the ring (the variable is part of the op's path-choice key)."""
+    monkeypatch.setenv("TT_METAL_MOE_COMPUTE_KERNEL", "ring")
+
+
 H, N, K, GLOBAL_EXPERTS = 2816, 704, 8, 128
 HS = 4
 
@@ -446,7 +457,7 @@ def test_mesh_block_pair_vs_shared(mesh_device, device_params):
     (the 6U harness data: 16 experts per chip, 32 tokens per chip, top-8, gemma shapes): the combine outputs
     must be bitwise equal on every chip, and both pass the harness' combine golden. NOT run in this pass (no
     multi-chip mesh was available): TT_VISIBLE_DEVICES=0,1,4,5,8,9,12,13 with the p150_x8 descriptor."""
-    from tests.nightly.tg.ccl.moe.test_moe_compute_6U import (
+    from models.common.moe.compute_helpers import (
         _build_moe_host_data,
         _build_quantized_weight_host_tensors,
         create_sharded_memory_config,

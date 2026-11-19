@@ -24,6 +24,7 @@ from tqdm import tqdm
 from transformers import AutoConfig, AutoModelForCausalLM
 
 import ttnn
+from models.common.hf_layer_type_attention import layer_type_attention
 
 _RO_ERRNOS = (errno.EROFS, errno.EACCES, errno.EPERM)
 
@@ -214,19 +215,16 @@ class Gemma4ModelArgs:
         sliding_rope = rope_params.get("sliding_attention", {})
         full_rope = rope_params.get("full_attention", {})
 
-        # num_global_key_value_heads: None means use same as sliding
-        num_global_kv = getattr(tc, "num_global_key_value_heads", None)
-        if num_global_kv is None:
-            num_global_kv = getattr(tc, "num_key_value_heads", 8)
+        attn = layer_type_attention(tc)
 
         return cls(
             hidden_size=tc.hidden_size,
             num_hidden_layers=tc.num_hidden_layers,
             num_attention_heads=tc.num_attention_heads,
-            num_key_value_heads=getattr(tc, "num_key_value_heads", 8),
-            head_dim=getattr(tc, "head_dim", 256),
-            num_global_key_value_heads=num_global_kv,
-            global_head_dim=getattr(tc, "global_head_dim", 512),
+            num_key_value_heads=attn.sliding_kv_heads,
+            head_dim=attn.sliding_head_dim,
+            num_global_key_value_heads=attn.full_kv_heads,
+            global_head_dim=attn.full_head_dim,
             attention_k_eq_v=getattr(tc, "attention_k_eq_v", False),
             sliding_window=getattr(tc, "sliding_window", 1024),
             rope_theta=sliding_rope.get("rope_theta", getattr(tc, "rope_theta", 10000.0)),

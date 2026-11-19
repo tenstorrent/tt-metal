@@ -115,6 +115,7 @@ class MiniMaxH3ViTAttention(Module):
             q_chunk_size=192,
             k_chunk_size=192,
             exp_approx_mode=False,  # False is more correct, matching wan/ltx
+            min_blocked_pack_tiles=2,
         )
         self.sdpa_compute_kernel_config = ttnn.init_device_compute_kernel_config(
             mesh_device.arch(),

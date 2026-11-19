@@ -422,6 +422,13 @@ OpConfig::OpConfig(
         case BinaryOpType::ISCLOSE: binary_op = SfpuBinaryOp::ISCLOSE; break;
         // situ_glu(gate=lhs, up=rhs) with Kimi K3's betas compiled into the LLK; see api/compute/situ_glu.h.
         case BinaryOpType::SITU_GLU: binary_op = SfpuBinaryOp::SITU_GLU; break;
+        case BinaryOpType::GEGLU_TANH:
+            if (is_sfpu_op()) {
+                binary_op = SfpuBinaryOp::GEGLU_TANH;
+            } else {
+                TT_THROW("Unsupported binary op for FPU {}", binary_op_type);
+            }
+            break;
         default: TT_THROW("Unsupported binary op {}", binary_op_type);
     }
 }
@@ -449,6 +456,9 @@ std::pair<std::string, std::string> get_sfpu_init_fn(OpConfig::SfpuBinaryOp sfpu
         case SUB:
             if (int_data_format) {
                 return {"sub_int_tile_init();", fmt::format("sub_int_tile<DataFormat::{}>", *int_data_format)};
+            }
+            if (dtype == DataType::UINT8 || dtype == DataType::INT8) {
+                return {"sub_int_tile_init();", "sub_int_tile<DataFormat::Int32>"};
             }
             return {"sub_binary_tile_init();", fmt::format("sub_binary_tile<{}>", kRneDstRoundingMode)};
         case MUL:
@@ -599,6 +609,7 @@ std::pair<std::string, std::string> get_sfpu_init_fn(OpConfig::SfpuBinaryOp sfpu
         }
         case ISCLOSE: return {"isclose_binary_tile_init();", "isclose_binary_tile<(bool)ISCLOSE_EQUAL_NAN>"};
         case SITU_GLU: return {"situ_glu_tile_init();", "situ_glu_tile"};
+        case GEGLU_TANH: return {"geglu_tanh_tile_init();", "geglu_tanh_tile"};
         default: TT_THROW("Unsupported sfpu binary op {}", sfpu_binary_op);
     }
 }
@@ -616,6 +627,12 @@ std::map<std::string, std::string> OpConfig::as_defines(DataType dtype) const {
     auto&& [tile_init, tile_fn] = get_sfpu_init_fn(std::get<SfpuBinaryOp>(binary_op), dtype);
     defines["BINARY_SFPU_INIT"] = std::move(tile_init);
     defines["BINARY_SFPU_OP"] = std::move(tile_fn);
+    // A fused activation's compute API is included through its split-include macro, so the binary SFPU
+    // kernels compile it only for the op that calls it.
+    switch (std::get<SfpuBinaryOp>(binary_op)) {
+        case SfpuBinaryOp::GEGLU_TANH: defines["SFPU_OP_GEGLU_TANH_INCLUDE"] = "1"; break;
+        default: break;
+    }
     return defines;
 }
 
@@ -670,6 +687,12 @@ std::map<std::string, std::string> make_dataflow_defines(
         defines["FILL_TILE_WITH_FIRST_ROW"] = "fill_tile_with_first_row";
         defines["FILL_TILE_WITH_FIRST_ELEMENT"] = "fill_tile_with_first_element<uint32_t>";
         defines["FILL_WITH_VALUE"] = "fill_with_val<1024, uint32_t>";
+    } else if (dtype == DataType::UINT8 || dtype == DataType::INT8) {
+        defines["FILL_TILE_WITH_FIRST_COLUMN_RM"] = "fill_tile_with_first_column_rm_uint8";
+        defines["FILL_TILE_WITH_FIRST_ROW_RM"] = "fill_tile_with_first_row_rm_uint8";
+        defines["FILL_TILE_WITH_FIRST_COLUMN"] = "fill_tile_with_first_column_uint8";
+        defines["FILL_TILE_WITH_FIRST_ROW"] = "fill_tile_with_first_row_uint8";
+        defines["FILL_TILE_WITH_FIRST_ELEMENT"] = "fill_tile_with_first_element_uint8";
     } else if (dtype == DataType::BFLOAT8_B) {
         defines["FILL_TILE_WITH_FIRST_COLUMN"] = "fill_tile_with_first_column_bfp8";
         defines["FILL_TILE_WITH_FIRST_ROW"] = "fill_tile_with_first_row_bfp8";
@@ -710,6 +733,12 @@ std::map<std::string, std::string> make_dataflow_defines(
         defines["FILL_TILE_WITH_FIRST_ROW_B"] = "fill_tile_with_first_row";
         defines["FILL_TILE_WITH_FIRST_ELEMENT_B"] = "fill_tile_with_first_element<uint32_t>";
         defines["FILL_WITH_VALUE_B"] = "fill_with_val<1024, uint32_t>";
+    } else if (b_dtype == DataType::UINT8 || b_dtype == DataType::INT8) {
+        defines["FILL_TILE_WITH_FIRST_COLUMN_B"] = "fill_tile_with_first_column_uint8";
+        defines["FILL_TILE_WITH_FIRST_COLUMN_RM_B"] = "fill_tile_with_first_column_rm_uint8";
+        defines["FILL_TILE_WITH_FIRST_ROW_RM_B"] = "fill_tile_with_first_row_rm_uint8";
+        defines["FILL_TILE_WITH_FIRST_ROW_B"] = "fill_tile_with_first_row_uint8";
+        defines["FILL_TILE_WITH_FIRST_ELEMENT_B"] = "fill_tile_with_first_element_uint8";
     } else if (b_dtype == DataType::BFLOAT8_B) {
         defines["FILL_TILE_WITH_FIRST_COLUMN_B"] = "fill_tile_with_first_column_bfp8";
         defines["FILL_TILE_WITH_FIRST_ROW_B"] = "fill_tile_with_first_row_bfp8";
@@ -756,6 +785,11 @@ std::uint32_t pack_scalar_runtime_arg(const unary::ScalarVariant scalar, const D
                 auto val = static_cast<std::uint16_t>(static_cast<float>(v));
                 return (static_cast<std::uint32_t>(val) << 16) | val;
             }
+            // There is no 8-bit packing. A caller with an 8-bit tensor must pass INT32.
+            TT_FATAL(
+                dtype != DataType::UINT8 && dtype != DataType::INT8,
+                "Cannot pack a scalar for dtype {}. Pass INT32 for an 8-bit tensor.",
+                dtype);
             auto scalar_bf16 = bfloat16(static_cast<float>(v));
             return pack_two_bfloat16_into_uint32({scalar_bf16, scalar_bf16});
         },

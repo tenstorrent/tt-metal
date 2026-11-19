@@ -4,8 +4,8 @@
 
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/constants.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
+#include <tt-metalium/workload/run_args/program_run_args.hpp>
+#include <tt-metalium/workload/specification/program_spec.hpp>
 #include "nlp_concat_heads_runtime_rows_program_factory.hpp"
 #include "nlp_concat_heads_device_operation.hpp"
 #include <tt-metalium/work_split.hpp>
@@ -159,7 +159,7 @@ ttnn::device_operation::ProgramArtifacts NLPConcatHeadsRuntimeRowsProgramFactory
     };
 }
 
-tt::tt_metal::experimental::ProgramRunArgs NLPConcatHeadsRuntimeRowsProgramFactory::override_runtime_arguments(
+tt::tt_metal::ProgramRunArgs NLPConcatHeadsRuntimeRowsProgramFactory::override_runtime_arguments(
     const NlpConcatHeadsParams& /*operation_attributes*/,
     const Tensor& input,
     Tensor& output,
