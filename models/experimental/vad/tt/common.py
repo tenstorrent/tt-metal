@@ -21,10 +21,58 @@ BF16_BYTES = 2
 # The full grid's block-sharded convs split their input channels over this many core columns, and
 # accumulate them in as many blocks.
 FULL_GRID_CHANNEL_BLOCKS = 8
+# A conv fits a core when its input and output shards and its program's own buffers take at most this
+# share of the core's L1. The rest is for tensors other modules keep alive and for the gaps L1 allocation
+# leaves between buffers.
+CONV_CORE_L1_SHARE = 0.85
+# The per-core estimate in TtConv2D._core_l1_bytes mirrors the circular buffers ttnn allocates in
+#   ttnn/cpp/ttnn/operations/conv/conv2d/conv2d_op_program_factory_common.cpp (get_cb_info), for convs
+#     other than 1x1 stride 1,
+#   ttnn/cpp/ttnn/operations/matmul/device/factory/matmul_multicore_reuse_mcast_1d_program_factory.cpp,
+#     for height-sharded 1x1 stride-1 convs, which run as matmuls,
+#   ttnn/cpp/ttnn/operations/matmul/device/factory/matmul_multicore_reuse_mcast_2d_program_factory.cpp,
+#     for block-sharded ones.
+# Bytes of one 32x32 tile; a block-float tile carries 64 bytes of shared exponents.
+TILE_BYTES = {ttnn.bfloat16: 2048, ttnn.bfloat8_b: 1088, ttnn.bfloat4_b: 576, ttnn.float32: 4096}
+# A conv that runs as a matmul with float32 accumulation keeps one output block of float32 partial sums
+# beside its output; in the output's own format they share the output buffer instead.
+PARTIALS_TILE_BYTES = TILE_BYTES[ttnn.float32]
+# A block-sharded matmul double-buffers the activation and weight blocks it multicasts.
+MCAST_BUFFERS = 2
+# The halo in front of a non-matmul conv pads its row-major input sticks to 16 bytes, 8 bfloat16 channels.
+HALO_CHANNEL_ALIGNMENT = 8
 
 
 def _pair(value):
     return tuple(value) if isinstance(value, (tuple, list)) else (value, value)
+
+
+def _tiles(n):
+    return ttnn.core.divup(n, ttnn.TILE_SIZE)
+
+
+def _row_cores(row_tiles, max_cores, block_tiles):
+    """The cores ttnn shards row_tiles rows of tiles over, and the tiles each gets.
+
+    Like ttnn, takes the most cores whose padding stays under one core's share, every share a multiple
+    of block_tiles.
+    """
+    cores = max_cores
+    while True:
+        padded = ttnn.core.roundup(row_tiles, cores * block_tiles)
+        if cores == 1 or padded - row_tiles < padded // cores:
+            return cores, padded // cores
+        cores -= 1
+
+
+def _channel_cores(channel_tiles, max_cores):
+    """The core columns ttnn splits channel_tiles tiles of channels over, by the same padding rule."""
+    cores = max_cores
+    while True:
+        padded = ttnn.core.roundup(channel_tiles, cores)
+        if padded - channel_tiles < padded // cores:
+            return cores
+        cores -= 1
 
 
 def l1_budget_bytes(device, divisor=L1_BUDGET_DIVISOR) -> int:
@@ -101,17 +149,28 @@ class TtConv2D:
         output_height, output_width = self.output_hw
         self.band_rows = None
         self.run_in_dram = False
-        grid = device.compute_with_storage_grid_size()
+        self.weights_dtype = weights_dtype
+        self.fp32_dest_acc = fp32_dest_acc
+        self.has_bias = conv_pth.bias is not None
+        self.grid = grid = device.compute_with_storage_grid_size()
+        self.l1_bank_bytes = ttnn.get_memory_view(device, ttnn.BufferType.L1).total_bytes_per_bank
         cores = grid.x * grid.y
         # Banded block-sharded convs keep the full grid's channel blocks (see below), which needs the core
         # count to divide them. Other grids, such as Wormhole's 8x8, run such a conv whole in L1.
         bandable = shard_layout != ttnn.TensorMemoryLayout.BLOCK_SHARDED or FULL_GRID_CHANNEL_BLOCKS % cores == 0
-        if exceeds_l1_budget(
+        band_layout = (
+            ttnn.TensorMemoryLayout.WIDTH_SHARDED
+            if shard_layout == ttnn.TensorMemoryLayout.BLOCK_SHARDED
+            else shard_layout
+        )
+        whole = (conv.batch_size, conv.input_height, conv.input_width, output_height, output_width)
+        fits_whole = not exceeds_l1_budget(
             device,
             conv.batch_size * conv.input_height * conv.input_width * conv.in_channels
             + conv.batch_size * output_height * output_width * conv.out_channels,
             CONV_BUDGET_DIVISOR,
-        ):
+        ) and self._fits_core(shard_layout, whole, act_block_h)
+        if not fits_whole:
             l1 = ttnn.get_memory_view(device, ttnn.BufferType.L1)
             strided_1x1 = (kh, kw) == (1, 1) and (sh, sw) != (1, 1)
             if not strided_1x1 and kh * kw * conv.in_channels * conv.out_channels > l1.total_bytes_per_bank // 2:
@@ -130,6 +189,9 @@ class TtConv2D:
                         ((rows - 1) * sh + kh) * conv.input_width * conv.in_channels
                         + rows * output_width * conv.out_channels,
                         BAND_BUDGET_DIVISOR,
+                    )
+                    and self._fits_core(
+                        band_layout, (1, (rows - 1) * sh + kh, conv.input_width, rows, output_width), act_block_h
                     )
                 ]
                 assert fitting, f"no band of the {output_height}-row output fits L1"
@@ -177,6 +239,64 @@ class TtConv2D:
 
     def _is_matmul(self):
         return self.kernel_hw == (1, 1) and self.stride_hw == (1, 1) and self.padding_hw == (0, 0)
+
+    def _core_l1_bytes(self, layout, shape, act_block_h):
+        """L1 one core needs to run this conv on a (batch, input h, input w, output h, output w) shape.
+
+        Returns the bytes of the input shard, the output shard and the buffers the conv's program
+        allocates beside them. None for width sharding, which only small grids' bands use and which this
+        does not model.
+        """
+        batch, input_height, input_width, output_height, output_width = shape
+        grid = self.grid
+        kh, kw = self.kernel_hw
+        block_tiles = act_block_h // ttnn.TILE_SIZE if act_block_h else 1
+        in_tiles, out_tiles = _tiles(self.in_channels), _tiles(self.out_channels)
+        out_rows = _tiles(batch * output_height * output_width)
+        if layout == ttnn.TensorMemoryLayout.HEIGHT_SHARDED:
+            row_cores, m = _row_cores(out_rows, grid.x * grid.y, block_tiles)
+            k, n = in_tiles, out_tiles
+        elif layout == ttnn.TensorMemoryLayout.BLOCK_SHARDED:
+            row_cores, m = _row_cores(out_rows, grid.y, block_tiles)
+            channel_cores = _channel_cores(in_tiles, grid.x)
+            k, n = ttnn.core.divup(in_tiles, channel_cores), ttnn.core.divup(out_tiles, channel_cores)
+        else:
+            return None
+        weight_tile = TILE_BYTES[self.weights_dtype]
+        bf16_tile = TILE_BYTES[ttnn.bfloat16]
+        out_tile = TILE_BYTES[self.activation_dtype]
+        in_width = k * ttnn.TILE_SIZE
+        if not self._is_matmul():
+            in_width = min(in_width, ttnn.core.roundup(self.in_channels, HALO_CHANNEL_ALIGNMENT))
+        input_bytes = ttnn.core.divup(batch * input_height * input_width, row_cores) * in_width * BF16_BYTES
+        output_bytes = m * n * out_tile
+        bias_bytes = n * weight_tile if self.has_bias else 0
+        if self._is_matmul():
+            partials_bytes = m * n * PARTIALS_TILE_BYTES if self.fp32_dest_acc else 0
+            if layout == ttnn.TensorMemoryLayout.HEIGHT_SHARDED:
+                # Every core holds all the weights and reads its activations from the input shard.
+                own_bytes = k * n * weight_tile
+            else:
+                own_bytes = MCAST_BUFFERS * (m * k * bf16_tile + k * n * weight_tile)
+            return input_bytes, output_bytes, own_bytes + bias_bytes + partials_bytes
+        act_rows = block_tiles if act_block_h else m
+        act_width = _tiles(kw * in_width)
+        if layout == ttnn.TensorMemoryLayout.HEIGHT_SHARDED:
+            # The activation block as gathered from the halo and again tilized. The block spans one kernel
+            # row; every kernel row's weights stay resident when a core computes more than one block.
+            act_tile_bytes = bf16_tile + out_tile
+            weight_rows = kh if m > act_rows else 1
+        else:
+            # The block as multicast and tilized, both in the output format, and gathered row-major when
+            # that format is not the halo's bfloat16.
+            act_tile_bytes = 2 * out_tile + (bf16_tile if self.activation_dtype != ttnn.bfloat16 else 0)
+            weight_rows = 1
+        own_bytes = act_rows * act_width * act_tile_bytes + act_width * n * weight_tile * weight_rows + bias_bytes
+        return input_bytes, output_bytes, own_bytes
+
+    def _fits_core(self, layout, shape, act_block_h):
+        needed = self._core_l1_bytes(layout, shape, act_block_h)
+        return needed is None or sum(needed) <= self.l1_bank_bytes * CONV_CORE_L1_SHARE
 
     def _dram_shard_layout(self, shard_layout):
         if not self.run_in_dram:
