@@ -12,6 +12,11 @@
 
 namespace ttnn::operations::transformer {
 
+// SDPA prefill precision recipes: the numerics of every prefill SDPA op (dense, chunked, MLA, windowed, joint,
+// ring-distributed). STANDARD is the default. Formats, fidelities and the exp are fixed per recipe; blocking may change
+// summation order but never the recipe's numerics.
+enum class SDPAPrecision : uint8_t { STANDARD, BALANCED, ACCURATE, FAST };
+
 struct SDPAProgramConfig {
     tt::tt_metal::CoreCoord compute_with_storage_grid_size;
     std::optional<tt::tt_metal::CoreRangeSet> sub_core_grids;
@@ -50,3 +55,7 @@ struct PagedCacheGeometryOverride {
 };
 
 }  // namespace ttnn::operations::transformer
+
+namespace ttnn::transformer {
+using ttnn::operations::transformer::SDPAPrecision;
+}  // namespace ttnn::transformer

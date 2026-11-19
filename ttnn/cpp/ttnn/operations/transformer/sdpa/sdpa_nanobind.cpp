@@ -281,7 +281,8 @@ ttnn::Tensor flash_mla_prefill_wrapper(
     std::optional<float> scale,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<SDPAProgramConfig>& program_config,
-    std::optional<DeviceComputeKernelConfig> compute_kernel_config) {
+    std::optional<DeviceComputeKernelConfig> compute_kernel_config,
+    std::optional<ttnn::transformer::SDPAPrecision> precision) {
     return ttnn::transformer::flash_mla_prefill(
         input_tensor_q,
         input_tensor_k,
@@ -292,7 +293,8 @@ ttnn::Tensor flash_mla_prefill_wrapper(
         scale,
         memory_config,
         program_config,
-        compute_kernel_config);
+        compute_kernel_config,
+        precision);
 }
 
 ttnn::Tensor flash_mla_prefill_wrapper_input_tensor(
@@ -304,7 +306,8 @@ ttnn::Tensor flash_mla_prefill_wrapper_input_tensor(
     std::optional<float> scale,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<SDPAProgramConfig>& program_config,
-    std::optional<DeviceComputeKernelConfig> compute_kernel_config) {
+    std::optional<DeviceComputeKernelConfig> compute_kernel_config,
+    std::optional<ttnn::transformer::SDPAPrecision> precision) {
     return ttnn::transformer::flash_mla_prefill(
         input_tensor_q,
         input_tensor_k,
@@ -315,7 +318,8 @@ ttnn::Tensor flash_mla_prefill_wrapper_input_tensor(
         scale,
         memory_config,
         program_config,
-        compute_kernel_config);
+        compute_kernel_config,
+        precision);
 }
 
 // Dispatch: chunk_start_idx_tensor present → flexible (runtime offset); else legacy (chunk_start_idx int).
@@ -335,7 +339,8 @@ ttnn::Tensor chunked_scaled_dot_product_attention_wrapper(
     std::optional<DeviceComputeKernelConfig> compute_kernel_config,
     std::optional<PagedCacheGeometryOverride> paged_cache_geometry,
     std::optional<uint32_t> sliding_window_size,
-    const std::optional<ttnn::Tensor>& attention_sink) {
+    const std::optional<ttnn::Tensor>& attention_sink,
+    std::optional<ttnn::transformer::SDPAPrecision> precision) {
     if (chunk_start_idx_tensor_opt.has_value()) {
         return ttnn::transformer::chunked_scaled_dot_product_attention(
             input_tensor_q,
@@ -349,7 +354,8 @@ ttnn::Tensor chunked_scaled_dot_product_attention_wrapper(
             compute_kernel_config,
             paged_cache_geometry,
             sliding_window_size,
-            attention_sink);
+            attention_sink,
+            precision);
     }
     if (!chunk_start_idx_arg.has_value()) {
         throw std::runtime_error(
@@ -368,12 +374,18 @@ ttnn::Tensor chunked_scaled_dot_product_attention_wrapper(
         compute_kernel_config,
         paged_cache_geometry,
         sliding_window_size,
-        attention_sink);
+        attention_sink,
+        precision);
 }
 
 }  // namespace
 
 void bind_sdpa(nb::module_& mod) {
+    nb::enum_<ttnn::transformer::SDPAPrecision>(mod, "SDPAPrecision")
+        .value("STANDARD", ttnn::transformer::SDPAPrecision::STANDARD)
+        .value("BALANCED", ttnn::transformer::SDPAPrecision::BALANCED)
+        .value("ACCURATE", ttnn::transformer::SDPAPrecision::ACCURATE)
+        .value("FAST", ttnn::transformer::SDPAPrecision::FAST);
     nb::enum_<ttnn::transformer::SparseKVFormat>(mod, "SparseKVFormat")
         .value("BF16", ttnn::transformer::SparseKVFormat::BF16)
         .value("FP8_E4M3", ttnn::transformer::SparseKVFormat::FP8_E4M3)
@@ -441,7 +453,8 @@ void bind_sdpa(nb::module_& mod) {
         nb::arg("windowed_q_token_offset") = 0,
         nb::arg("windowed_q_token_offset_tensor") = nb::none(),
         nb::arg("output_concat_heads") = false,
-        nb::arg("attn_mask_block_map") = nb::none());
+        nb::arg("attn_mask_block_map") = nb::none(),
+        nb::arg("precision") = nb::none());
 
     ttnn::bind_function<"sparse_sdpa", "ttnn.transformer.">(
         mod,
@@ -642,7 +655,8 @@ void bind_sdpa(nb::module_& mod) {
         nb::arg("compute_kernel_config").noconvert() = nb::none(),
         nb::arg("paged_cache_geometry").noconvert() = nb::none(),
         nb::arg("sliding_window_size") = nb::none(),
-        nb::arg("attention_sink").noconvert() = nb::none());
+        nb::arg("attention_sink").noconvert() = nb::none(),
+        nb::arg("precision") = nb::none());
 
     const auto* const joint_doc = R"doc(
         JointAttention operation that efficiently performs non-causal attention over two
@@ -1170,7 +1184,8 @@ void bind_sdpa(nb::module_& mod) {
             nb::arg("scale") = nb::none(),
             nb::arg("memory_config") = nb::none(),
             nb::arg("program_config") = nb::none(),
-            nb::arg("compute_kernel_config") = nb::none()),
+            nb::arg("compute_kernel_config") = nb::none(),
+            nb::arg("precision") = nb::none()),
         // Overload: input_tensor_v as Tensor (V in embedding space)
         ttnn::overload_t(
             &flash_mla_prefill_wrapper_input_tensor,
@@ -1183,7 +1198,8 @@ void bind_sdpa(nb::module_& mod) {
             nb::arg("scale") = nb::none(),
             nb::arg("memory_config") = nb::none(),
             nb::arg("program_config") = nb::none(),
-            nb::arg("compute_kernel_config") = nb::none()));
+            nb::arg("compute_kernel_config") = nb::none(),
+            nb::arg("precision") = nb::none()));
 
     const auto* const chunked_mla_doc =
         R"doc(
@@ -1224,7 +1240,8 @@ void bind_sdpa(nb::module_& mod) {
         nb::arg("scale") = nb::none(),
         nb::arg("memory_config") = nb::none(),
         nb::arg("program_config") = nb::none(),
-        nb::arg("compute_kernel_config") = nb::none());
+        nb::arg("compute_kernel_config") = nb::none(),
+        nb::arg("precision") = nb::none());
 
     const auto* const ring_distributed_doc =
         R"doc(

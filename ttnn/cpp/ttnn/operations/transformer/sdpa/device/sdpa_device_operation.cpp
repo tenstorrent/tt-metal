@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "ttnn/operations/transformer/sdpa/device/sdpa_device_operation.hpp"
+#include "ttnn/operations/transformer/sdpa/device/recipe/sdpa_recipe_dense.hpp"
 #include "ttnn/tensor/tensor_ops.hpp"
 #include "ttnn/device_operation.hpp"
 #include "ttnn/operations/transformer/sdpa/device/sdpa_perf_model.hpp"
@@ -16,6 +17,10 @@ using namespace tt::tt_metal;
 namespace ttnn::prim {
 
 void SDPAOperation::validate_on_program_cache_miss(const SDPAParams& attrs, const SDPAInputs& tensors) {
+    if (attrs.precision) {
+        // The recipe program validates the call when it is built (recipe_program).
+        return;
+    }
     const bool use_mla = attrs.use_mla;
 
     // Common validations for both modes
@@ -594,6 +599,9 @@ void SDPAOperation::validate_on_program_cache_miss(const SDPAParams& attrs, cons
 
 SDPAOperation::spec_return_value_t SDPAOperation::compute_output_specs(
     const SDPAParams& attrs, const SDPAInputs& tensors) {
+    if (attrs.precision) {
+        return ttnn::operations::transformer::sdpa::detail::dense_recipe_output_spec(attrs, tensors);
+    }
     auto shape = tensors.q.logical_shape();
     if (attrs.use_mla) {
         shape[3] = attrs.head_dim_v.value_or(shape[3]);
@@ -714,10 +722,10 @@ Tensor sdpa(
     const std::optional<Tensor>& windowed_q_token_offset_tensor,
     std::optional<ttnn::operations::transformer::PagedCacheGeometryOverride> paged_cache_geometry,
     bool output_concat_heads,
-    const std::optional<Tensor>& attn_mask_block_map) {
+    const std::optional<Tensor>& attn_mask_block_map,
+    std::optional<ttnn::operations::transformer::SDPAPrecision> precision) {
     using OperationType = ttnn::prim::SDPAOperation;
-    return ttnn::device_operation::launch<OperationType>(
-        OperationType::operation_attributes_t{
+    OperationType::operation_attributes_t attrs{
             .scale = scale,
             .output_mem_config = output_mem_config,
             .program_config = std::move(program_config),
@@ -735,8 +743,9 @@ Tensor sdpa(
             .paged_cache_geometry =
                 paged_cache_geometry.value_or(ttnn::operations::transformer::PagedCacheGeometryOverride{}),
             .output_concat_heads = output_concat_heads,
-        },
-        OperationType::tensor_args_t{
+            .precision = precision,
+        };
+    OperationType::tensor_args_t tensor_args{
             .q = input_tensor_q,
             .k = input_tensor_k,
             .v = input_tensor_v,
@@ -747,6 +756,10 @@ Tensor sdpa(
             .cu_window_seqlens = cu_window_seqlens,
             .windowed_q_token_offset_tensor = windowed_q_token_offset_tensor,
             .attn_mask_block_map = attn_mask_block_map,
-        });
+        };
+    if (attrs.precision) {
+        ttnn::operations::transformer::sdpa::detail::resolve_dense_recipe(attrs, tensor_args);
+    }
+    return ttnn::device_operation::launch<OperationType>(attrs, tensor_args);
 }
 }  // namespace ttnn::prim

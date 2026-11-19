@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include "ttnn/operations/transformer/sdpa/device/recipe/sdpa_recipe_dense.hpp"
 #include "ttnn/operations/transformer/sdpa/device/sdpa_device_operation.hpp"
 #include "ttnn/operations/transformer/sdpa/device/sdpa_interleaved_cb_ids.hpp"
 #include "ttnn/operations/transformer/sdpa/device/sdpa_subblock_utils.hpp"
@@ -1143,6 +1144,10 @@ ProgramDescriptor SDPAOperation::SDPAProgramFactory::create_descriptor(
     const operation_attributes_t& operation_attributes,
     const tensor_args_t& tensor_args,
     tensor_return_value_t& tensor_return_value) {
+    if (operation_attributes.precision) {
+        return ttnn::operations::transformer::sdpa::detail::dense_recipe_descriptor(
+            operation_attributes, tensor_args, tensor_return_value);
+    }
     // Windowed (block-diagonal) attention reuses the regular reader/writer/compute kernels. The mask is
     // synthesized on-device in the writer from cu_window_seqlens (reader streams Q/K/V only) and consumed
     // by the compute via the provided-mask path. Like regular SDPA it honors the streaming-vs-standard

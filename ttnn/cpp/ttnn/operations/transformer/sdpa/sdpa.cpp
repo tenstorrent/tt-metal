@@ -48,7 +48,8 @@ ttnn::Tensor scaled_dot_product_attention(
     uint32_t windowed_q_token_offset,
     const std::optional<ttnn::Tensor>& windowed_q_token_offset_tensor,
     bool output_concat_heads,
-    const std::optional<ttnn::Tensor>& attn_mask_block_map) {
+    const std::optional<ttnn::Tensor>& attn_mask_block_map,
+    std::optional<SDPAPrecision> precision) {
     auto kernel_config_val = init_device_compute_kernel_config(
         input_tensor_q.device()->arch(), compute_kernel_config, tt::tt_metal::MathFidelity::HiFi2, true, false, false);
 
@@ -98,7 +99,8 @@ ttnn::Tensor scaled_dot_product_attention(
         windowed_q_token_offset_tensor,
         std::nullopt,  // paged_cache_geometry
         output_concat_heads,
-        attn_mask_block_map);
+        attn_mask_block_map,
+        precision);
 }
 
 // Legacy: chunk_start_idx as scalar (part of program cache key).
@@ -114,7 +116,8 @@ ttnn::Tensor chunked_scaled_dot_product_attention(
     std::optional<DeviceComputeKernelConfig> compute_kernel_config,
     std::optional<ttnn::operations::transformer::PagedCacheGeometryOverride> paged_cache_geometry,
     std::optional<uint32_t> sliding_window_size,
-    const std::optional<ttnn::Tensor>& attention_sink) {
+    const std::optional<ttnn::Tensor>& attention_sink,
+    std::optional<SDPAPrecision> precision) {
     auto kernel_config_val = init_device_compute_kernel_config(
         input_tensor_q.device()->arch(), compute_kernel_config, tt::tt_metal::MathFidelity::HiFi2, true, false, false);
 
@@ -138,7 +141,10 @@ ttnn::Tensor chunked_scaled_dot_product_attention(
         std::nullopt,  // cu_window_seqlens
         0,             // windowed_q_token_offset (windowed mode only)
         std::nullopt,  // windowed_q_token_offset_tensor
-        paged_cache_geometry);
+        paged_cache_geometry,
+        false,         // output_concat_heads
+        std::nullopt,  // attn_mask_block_map
+        precision);
 }
 
 // Flexible: chunk_start_idx in device tensor [1]; read at runtime (for tracing).
@@ -154,7 +160,8 @@ ttnn::Tensor chunked_scaled_dot_product_attention(
     std::optional<DeviceComputeKernelConfig> compute_kernel_config,
     std::optional<ttnn::operations::transformer::PagedCacheGeometryOverride> paged_cache_geometry,
     std::optional<uint32_t> sliding_window_size,
-    const std::optional<ttnn::Tensor>& attention_sink) {
+    const std::optional<ttnn::Tensor>& attention_sink,
+    std::optional<SDPAPrecision> precision) {
     auto kernel_config_val = init_device_compute_kernel_config(
         input_tensor_q.device()->arch(), compute_kernel_config, tt::tt_metal::MathFidelity::HiFi2, true, false, false);
 
@@ -178,7 +185,10 @@ ttnn::Tensor chunked_scaled_dot_product_attention(
         std::nullopt,  // cu_window_seqlens
         0,             // windowed_q_token_offset (windowed mode only)
         std::nullopt,  // windowed_q_token_offset_tensor
-        paged_cache_geometry);
+        paged_cache_geometry,
+        false,         // output_concat_heads
+        std::nullopt,  // attn_mask_block_map
+        precision);
 }
 
 std::tuple<ttnn::Tensor, ttnn::Tensor> joint_scaled_dot_product_attention(
@@ -473,7 +483,8 @@ ttnn::Tensor flash_mla_prefill(
     std::optional<float> scale,
     const std::optional<MemoryConfig>& memory_config,
     std::optional<ttnn::operations::transformer::SDPAProgramConfig> program_config,
-    std::optional<DeviceComputeKernelConfig> compute_kernel_config) {
+    std::optional<DeviceComputeKernelConfig> compute_kernel_config,
+    std::optional<SDPAPrecision> precision) {
     auto kernel_config_val = init_device_compute_kernel_config(
         input_tensor_q.device()->arch(), compute_kernel_config, tt::tt_metal::MathFidelity::HiFi2, true, false, false);
 
@@ -493,7 +504,14 @@ ttnn::Tensor flash_mla_prefill(
         head_dim_v,
         memory_config.value_or(tt::tt_metal::operation::DEFAULT_OUTPUT_MEMORY_CONFIG),
         std::move(program_config),
-        kernel_config_val);
+        kernel_config_val,
+        std::nullopt,  // cu_window_seqlens
+        0,             // windowed_q_token_offset
+        std::nullopt,  // windowed_q_token_offset_tensor
+        std::nullopt,  // paged_cache_geometry
+        false,         // output_concat_heads
+        std::nullopt,  // attn_mask_block_map
+        precision);
 }
 
 ttnn::Tensor chunked_flash_mla_prefill(
@@ -505,7 +523,8 @@ ttnn::Tensor chunked_flash_mla_prefill(
     std::optional<float> scale,
     const std::optional<MemoryConfig>& memory_config,
     std::optional<ttnn::operations::transformer::SDPAProgramConfig> program_config,
-    std::optional<DeviceComputeKernelConfig> compute_kernel_config) {
+    std::optional<DeviceComputeKernelConfig> compute_kernel_config,
+    std::optional<SDPAPrecision> precision) {
     auto kernel_config_val = init_device_compute_kernel_config(
         input_tensor_q.device()->arch(), compute_kernel_config, tt::tt_metal::MathFidelity::HiFi2, true, false, false);
 
@@ -525,7 +544,14 @@ ttnn::Tensor chunked_flash_mla_prefill(
         head_dim_v,
         memory_config.value_or(tt::tt_metal::operation::DEFAULT_OUTPUT_MEMORY_CONFIG),
         std::move(program_config),
-        kernel_config_val);
+        kernel_config_val,
+        std::nullopt,  // cu_window_seqlens
+        0,             // windowed_q_token_offset
+        std::nullopt,  // windowed_q_token_offset_tensor
+        std::nullopt,  // paged_cache_geometry
+        false,         // output_concat_heads
+        std::nullopt,  // attn_mask_block_map
+        precision);
 }
 
 ttnn::Tensor ring_distributed_scaled_dot_product_attention(

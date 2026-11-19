@@ -669,6 +669,7 @@ Conv1dConfig = ttnn._ttnn.operations.conv.Conv2dConfig
 from ttnn.operations.transformer import (
     SDPAProgramConfig,
     PagedCacheGeometryOverride,
+    SDPAPrecision,
     SparseKVFormat,
     ChunkGdnMonoProgramConfig,
     ChunkGdnPhasedProgramConfig,
@@ -677,6 +678,7 @@ from ttnn.operations.transformer import (
 )
 
 transformer.SparseKVFormat = SparseKVFormat
+transformer.SDPAPrecision = SDPAPrecision
 
 QkvCausalConv1dSiluProgramConfig = ttnn._ttnn.operations.experimental.kda.QkvCausalConv1dSiluProgramConfig
 
